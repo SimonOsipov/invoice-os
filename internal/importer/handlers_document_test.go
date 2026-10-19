@@ -325,7 +325,7 @@ func TestImportRoutes_DocumentAndSpreadsheetDoNotCollide(t *testing.T) {
 	open := newFakeDocOpen("f.csv", "text/csv", []byte("invoice_number\nINV-1\n")).fn()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/imports", CreateHandler(sheetImp, open, noSave, nil))
+	mux.HandleFunc("POST /v1/imports", CreateHandler(sheetImp, open, noSave, alwaysVisible, nil))
 	mux.HandleFunc("POST /v1/imports/document", CreateDocumentHandler(docSpy.fn(), nil))
 
 	id := testIdentity()
@@ -831,5 +831,27 @@ func TestSupplyNumberHandler_AGateOutageStillAnswers201(t *testing.T) {
 	}
 	if got := countInvoicesCitingDocument(t, super, documentID); got != 1 {
 		t.Errorf("invoices citing document = %d, want 1", got)
+	}
+}
+
+func TestCreateDocumentHandler_InvisibleEntityIs404(t *testing.T) {
+	id := testIdentity()
+	spy := &docImpSpy{err: ErrNotFound}
+
+	rec, raw, _ := doImportDocumentPost(t, spy.fn(), &id, docJSONBody(uuid.NewString(), uuid.NewString()))
+
+	if rec.Code != http.StatusNotFound || strings.TrimSpace(string(raw)) != `{"error":"not found"}` {
+		t.Errorf("answer = %d %s, want 404 {\"error\":\"not found\"}", rec.Code, raw)
+	}
+}
+
+func TestSupplyNumberHandler_InvisibleEntityIs404(t *testing.T) {
+	id := testIdentity()
+	spy := &supplySpy{err: ErrNotFound}
+
+	rec, raw := doSupplyPost(t, spy.fn(), &id, supplyJSONBody(uuid.NewString(), uuid.NewString(), "INV-1"))
+
+	if rec.Code != http.StatusNotFound || strings.TrimSpace(string(raw)) != `{"error":"not found"}` {
+		t.Errorf("answer = %d %s, want 404 {\"error\":\"not found\"}", rec.Code, raw)
 	}
 }

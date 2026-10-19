@@ -192,7 +192,7 @@ func eeSeed(t *testing.T, ctx context.Context, filename string) eeWorld {
 	eeCleanupInfra(t, w.tenantID)
 
 	if _, err := h.super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		w.tenantID, w.subject); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
 	}

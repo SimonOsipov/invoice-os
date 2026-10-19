@@ -78,7 +78,7 @@ import {
   registerFresh,
   setMemberClients,
 } from '../api/client'
-import { browserToken, collectErrors, signInAs } from '../personaSession'
+import { browserToken, collectErrors, signInAs, signInAtFrontDoor } from '../personaSession'
 import { E2E_MEMBER_ROLES, e2eMember, ensureMember } from '../realAccounts'
 import { expectedStatusDropper } from './consoleGate'
 import { enclosesRect, gaps, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -1573,4 +1573,72 @@ test('firm Settings: an admin gives a member clients in the drawer and they surv
   }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// frontend/app/src/lib/members.ts: NO_ASSIGNED_CLIENTS.
+const NO_ASSIGNED_CLIENTS_COPY = 'An admin has not given you any clients yet.'
+
+test('firm Clients: a member with no clients sees why, on Clients and in the switcher', async ({ page, browser }) => {
+  test.setTimeout(300_000)
+  const adminErrors = collectErrors(page)
+
+  const reviewer = await ensureMember(TENANTS.a.id, 'firm', 'reviewer')
+  await signInAs(page, 'firm')
+  const token = await browserToken(page)
+  const row = (await memberships(token)).memberships.find((m) => m.email === reviewer.email)
+  expect(row, `${reviewer.email} is on the roster`).toBeTruthy()
+  const userId = row!.user_id
+  const start = row!.client_access
+  expect(start, 'an admin reads every row').not.toBeNull()
+  const isEmpty = Array.isArray(start) && start.length === 0
+
+  // Control: the row selector matches on the admin's Clients, so the reviewer's zero is not a dead selector.
+  await goTo(page, 'Clients')
+  await expect(page.getByTestId('client-row').first()).toBeVisible()
+
+  const context = await browser.newContext()
+  try {
+    if (!isEmpty) {
+      const none = await setMemberClients(token, userId, [])
+      expect(none.status, JSON.stringify(none.body)).toBe(200)
+    }
+
+    const member = await context.newPage()
+    const errors = collectErrors(member)
+    await signInAtFrontDoor(member, { ...reviewer, workspaceName: TENANTS.a.name }, '/')
+
+    await goTo(member, 'Clients')
+    await expect(member.getByText(NO_ASSIGNED_CLIENTS_COPY, { exact: true })).toBeVisible()
+    await expect(member.getByTestId('client-row')).toHaveCount(0)
+
+    await member.getByTestId('company-switcher').click()
+    const empty = member.getByTestId('company-switcher-empty')
+    await expect(empty).toHaveText(NO_ASSIGNED_CLIENTS_COPY)
+    await expect(member.getByTestId('company-switcher-option')).toHaveCount(0)
+
+    const label = member.getByText('Switch company', { exact: true })
+    const menu = label.locator('xpath=..')
+    const layout = await atEachWidth(member, async (width) => {
+      await settleAnimations(menu)
+      const menuBox = await boxOf(menu, `the switcher menu at ${width}px`)
+      const lineBox = await boxOf(empty, `the empty-state line at ${width}px`)
+      const labelBox = await boxOf(label, `the "Switch company" label at ${width}px`)
+      const viewport: Rect = { x: 0, y: 0, width, height: 1080 }
+      expect(enclosesRect(menuBox, lineBox, 1), `the line must sit inside the menu at ${width}px`).toBe(true)
+      expect(enclosesRect(viewport, menuBox, 1), `the menu must sit inside the viewport at ${width}px`).toBe(true)
+      expect(rectsOverlap(lineBox, labelBox), `the line must not overlap the "Switch company" label at ${width}px`).toBe(false)
+      return { width, menuBox, lineBox, labelBox }
+    })
+    expect(layout.map((m) => m.width)).toEqual([...WIDE_WIDTHS])
+
+    expect(errors, `console errors on the reviewer's app:\n${errors.join('\n')}`).toEqual([])
+  } finally {
+    await context.close()
+    if (!isEmpty) {
+      const restored = await setMemberClients(token, userId, start)
+      expect(restored.status, 'the shared environment must be left as it was found').toBe(200)
+    }
+  }
+
+  expect(adminErrors, `console errors on the admin's app:\n${adminErrors.join('\n')}`).toEqual([])
 })

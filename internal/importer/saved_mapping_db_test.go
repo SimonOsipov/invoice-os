@@ -231,7 +231,7 @@ func TestCreateHandler_SavesMappingOnCompletedImport(t *testing.T) {
 	r.Header.Set("Content-Type", ct)
 	r = r.WithContext(auth.WithIdentity(r.Context(), id))
 	rec := httptest.NewRecorder()
-	CreateHandler(svc.Import, open, store.SaveMapping, nil).ServeHTTP(rec, r)
+	CreateHandler(svc.Import, open, store.SaveMapping, store.EntityVisible, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
@@ -254,7 +254,7 @@ func TestCreateHandler_SavesMappingOnCompletedImport(t *testing.T) {
 	r2.Header.Set("Content-Type", ct2)
 	r2 = r2.WithContext(auth.WithIdentity(r2.Context(), id))
 	rec2 := httptest.NewRecorder()
-	CreateHandler(svc.Import, open2, store.SaveMapping, nil).ServeHTTP(rec2, r2)
+	CreateHandler(svc.Import, open2, store.SaveMapping, store.EntityVisible, nil).ServeHTTP(rec2, r2)
 
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("dry-run status = %d, want 200 (body=%s)", rec2.Code, rec2.Body.String())
@@ -285,7 +285,7 @@ func TestCreateHandler_HeaderOnlyImportSavesNothing(t *testing.T) {
 	r.Header.Set("Content-Type", ct)
 	r = r.WithContext(auth.WithIdentity(r.Context(), id))
 	rec := httptest.NewRecorder()
-	CreateHandler(svc.Import, open, store.SaveMapping, nil).ServeHTTP(rec, r)
+	CreateHandler(svc.Import, open, store.SaveMapping, store.EntityVisible, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
@@ -335,7 +335,7 @@ func TestCreateHandler_UnrememberedImportLeavesEarlierMapping(t *testing.T) {
 	r1.Header.Set("Content-Type", ct1)
 	r1 = r1.WithContext(auth.WithIdentity(r1.Context(), id))
 	rec1 := httptest.NewRecorder()
-	CreateHandler(svc.Import, docSvc.Open, store.SaveMapping, nil).ServeHTTP(rec1, r1)
+	CreateHandler(svc.Import, docSvc.Open, store.SaveMapping, store.EntityVisible, nil).ServeHTTP(rec1, r1)
 	if rec1.Code != http.StatusCreated {
 		t.Fatalf("import 1 status = %d, want 201 (body=%s)", rec1.Code, rec1.Body.String())
 	}
@@ -354,7 +354,7 @@ func TestCreateHandler_UnrememberedImportLeavesEarlierMapping(t *testing.T) {
 	r2.Header.Set("Content-Type", ct2)
 	r2 = r2.WithContext(auth.WithIdentity(r2.Context(), id))
 	rec2 := httptest.NewRecorder()
-	CreateHandler(svc.Import, docSvc.Open, store.SaveMapping, nil).ServeHTTP(rec2, r2)
+	CreateHandler(svc.Import, docSvc.Open, store.SaveMapping, store.EntityVisible, nil).ServeHTTP(rec2, r2)
 	if rec2.Code != http.StatusCreated {
 		t.Fatalf("import 2 status = %d, want 201 (body=%s)", rec2.Code, rec2.Body.String())
 	}
@@ -544,8 +544,8 @@ func TestSavedMappingHandler_FindsTheMappingACompletedImportSaved(t *testing.T) 
 	mappingJSON := mustMappingJSON(t, mapping)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/imports", CreateHandler(svc.Import, docSvc.Open, store.SaveMapping, nil))
-	mux.HandleFunc("GET /v1/imports/saved-mapping", SavedMappingHandler(docSvc.Open, store.SavedMapping, nil))
+	mux.HandleFunc("POST /v1/imports", CreateHandler(svc.Import, docSvc.Open, store.SaveMapping, store.EntityVisible, nil))
+	mux.HandleFunc("GET /v1/imports/saved-mapping", SavedMappingHandler(docSvc.Open, store.SavedMapping, store.EntityVisible, nil))
 
 	// Import doc1: a completed import saves the mapping for entityID.
 	doc1 := storeDocumentAs(t, docSvc, tenantID, "data1.csv", "", csvBody(t, header, [][]string{{"SM-DB-07-1", "119.00"}}))

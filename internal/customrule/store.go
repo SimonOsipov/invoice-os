@@ -78,11 +78,13 @@ func CurrentTx(ctx context.Context, tx pgx.Tx, entityIDs []string) ([]Rule, erro
 	return collect(rows)
 }
 
-// List returns the current, not-deleted rules (disabled included) to any active member.
+// List returns the current, not-deleted rules (disabled included): firm-wide and those of a client the caller sees.
 func (s *Store) List(ctx context.Context) ([]Rule, error) {
 	var out []Rule
 	err := db.WithinRequestTenantTxOpts(ctx, s.pool, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT `+ruleCols+` FROM `+latestRevisions+` WHERE NOT deleted ORDER BY rule_id`)
+		rows, err := tx.Query(ctx, `SELECT `+ruleCols+` FROM `+latestRevisions+` WHERE NOT deleted
+			  AND (cur.entity_id IS NULL OR EXISTS (SELECT 1 FROM business_entities e WHERE e.id = cur.entity_id))
+			ORDER BY rule_id`)
 		if err != nil {
 			return err
 		}

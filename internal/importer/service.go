@@ -719,8 +719,9 @@ func storeDuplicateRowError(headerRow int, rowIdxs []int, invoiceID string) RowE
 // domainCreateErrorMessage reports whether createErr is one of the DOMAIN
 // errors invoice.Store.Create can return for genuinely bad input --
 // invoice.ErrDuplicateNumber (a 23505 racing past ExistingNumbers's upfront
-// precheck, [dedup]) or invoice.ErrValidation (a residual bad value the
-// classify step above didn't catch) -- and, if so, a sanitized,
+// precheck, [dedup]), invoice.ErrValidation (a residual bad value the
+// classify step above didn't catch) or invoice.ErrNotFound (the client left
+// the caller's set after EntityVisible) -- and, if so, a sanitized,
 // human-readable message naming the reason (never createErr.Error()'s raw
 // Postgres text, which can leak internals). Any OTHER error (a connection
 // failure, a context cancellation, an unexpected bug) is NOT a domain error:
@@ -732,6 +733,8 @@ func domainCreateErrorMessage(createErr error) (msg string, ok bool) {
 		return "invoice number already imported", true
 	case errors.Is(createErr, invoice.ErrValidation):
 		return "one or more fields failed validation", true
+	case errors.Is(createErr, invoice.ErrNotFound):
+		return "client not found", true
 	default:
 		return "", false
 	}

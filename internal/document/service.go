@@ -86,3 +86,16 @@ func (s *Service) Open(ctx context.Context, id, rangeHeader string) (Document, O
 	}
 	return doc, obj, nil
 }
+
+// OpenLinked is Open with Store.GetLinked, for the document read routes.
+func (s *Service) OpenLinked(ctx context.Context, id, rangeHeader string) (Document, Object, error) {
+	doc, err := s.store.GetLinked(ctx, id)
+	if err != nil {
+		return Document{}, Object{}, err
+	}
+	obj, err := s.objects.Get(ctx, doc.StorageKey, rangeHeader)
+	if err != nil {
+		return Document{}, Object{}, err
+	}
+	return doc, obj, nil
+}

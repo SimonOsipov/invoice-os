@@ -275,6 +275,32 @@ describe('ClientsView: Add client follows the role (LOGFIX-06-03)', () => {
     expect((screen.getByRole('button', { name: 'Add client' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
+  const SELF_ACCESS = (role: string, clientAccess: 'all' | string[]) => [{ ...SELF(role)[0], clientAccess }]
+
+  it('ClientsView_aMemberWithNoClientsSeesTheCause', async () => {
+    mockFetchArchiveAware([])
+    render(<ClientsView ctx={clientsCtx([], { members: SELF_ACCESS('reviewer', []) })} />)
+    await screen.findByText('No clients assigned')
+    expect(screen.getByText('An admin has not given you any clients yet.')).toBeTruthy()
+    expect(screen.queryByText('No company created')).toBeNull()
+  })
+
+  it('ClientsView_anAllClientsMemberWithNoClientsKeepsTodaysCopy', async () => {
+    mockFetchArchiveAware([])
+    render(<ClientsView ctx={clientsCtx([], { members: SELF_ACCESS('preparer', 'all') })} />)
+    await screen.findByText('No company created')
+    expect(screen.queryByText('An admin has not given you any clients yet.')).toBeNull()
+  })
+
+  it('ClientsView_theFilterEmptyStateIsUnchanged', async () => {
+    mockFetchArchiveAware([])
+    render(<ClientsView ctx={clientsCtx([], { members: SELF_ACCESS('reviewer', []) })} />)
+    await screen.findByText('No clients assigned')
+    fireEvent.click(screen.getByRole('button', { name: 'Archived' }))
+    await screen.findByText('No clients match this filter')
+    expect(screen.queryByText('An admin has not given you any clients yet.')).toBeNull()
+  })
+
   it.each(['loading', 'error'])('Clients: no Add client and no note while the roster is %s; rows keep today\'s behaviour', async (membersState) => {
     mockFetchArchiveAware(ACTIVE_ROWS)
     render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS, { members: [], membersState })} />)

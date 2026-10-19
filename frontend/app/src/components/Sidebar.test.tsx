@@ -635,6 +635,40 @@ describe('BUG-17-01 company switcher corner', () => {
   })
 })
 
+describe('Sidebar switcher names why a member sees no client', () => {
+  const you = (role: string, clientAccess: 'all' | string[]) => [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role, status: 'active', isYou: true, clientAccess }]
+  const SENTENCE = 'An admin has not given you any clients yet.'
+  const ROLLUP = rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 })
+  const show = (ctx: PlatformCtx) => {
+    mockRollupFetch(ROLLUP)
+    render(<Sidebar ctx={ctx} />)
+  }
+  const noEntities = { clients: [], entities: [] }
+
+  it('switcher_aMemberWithNoClientsSeesTheCauseInTheMenu', () => {
+    show(firmCtx({ ...noEntities, members: you('reviewer', []) }))
+    expect(screen.getByTestId('company-switcher-empty').textContent).toBe(SENTENCE)
+    expect(screen.queryAllByTestId('company-switcher-option')).toHaveLength(0)
+  })
+
+  it('switcher_anAdminWithNoClientsSeesNoCauseLine', () => {
+    show(firmCtx({ ...noEntities, members: you('admin', 'all') }))
+    expect(screen.queryByTestId('company-switcher-empty')).toBeNull()
+  })
+
+  it('switcher_aListedOptionSuppressesTheCauseLine', () => {
+    show(firmCtx({ members: you('reviewer', []) }))
+    expect(screen.queryAllByTestId('company-switcher-option')).toHaveLength(1)
+    expect(screen.queryByTestId('company-switcher-empty')).toBeNull()
+  })
+
+  it('switcher_aMemberWithClientsSeesNoCauseLine', () => {
+    show(firmCtx({ members: you('reviewer', [ENTITY_ID]) }))
+    expect(screen.queryAllByTestId('company-switcher-option')).toHaveLength(1)
+    expect(screen.queryByTestId('company-switcher-empty')).toBeNull()
+  })
+})
+
 describe('Sidebar in-house chip ERP pill (AUTH-10-07, Core AC-7)', () => {
   const ROLLUP = rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 })
 

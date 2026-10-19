@@ -46,7 +46,14 @@ func suggestReqBody(entityID, documentID string) string {
 	return fmt.Sprintf(`{"entity_id":%q,"document_id":%q}`, entityID, documentID)
 }
 
+func alwaysVisible(context.Context, string) error { return nil }
+
 func doSuggestRequest(t *testing.T, open openSpec, lookup func(ctx context.Context, entityID string, header []string) (*SavedMapping, error), suggester MappingSuggester, log *slog.Logger, id *auth.Identity, body string) (*httptest.ResponseRecorder, []byte) {
+	t.Helper()
+	return doSuggestRequestVisible(t, open, lookup, alwaysVisible, suggester, log, id, body)
+}
+
+func doSuggestRequestVisible(t *testing.T, open openSpec, lookup func(ctx context.Context, entityID string, header []string) (*SavedMapping, error), entityVisible func(context.Context, string) error, suggester MappingSuggester, log *slog.Logger, id *auth.Identity, body string) (*httptest.ResponseRecorder, []byte) {
 	t.Helper()
 	r := httptest.NewRequest("POST", "/v1/imports/suggest-mapping", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -54,7 +61,7 @@ func doSuggestRequest(t *testing.T, open openSpec, lookup func(ctx context.Conte
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	SuggestMappingHandler(open, lookup, suggester, log).ServeHTTP(rec, r)
+	SuggestMappingHandler(open, lookup, entityVisible, suggester, log).ServeHTTP(rec, r)
 	return rec, rec.Body.Bytes()
 }
 
@@ -489,5 +496,33 @@ func TestSuggestHandler_AnEmptyHeaderRecordsNothing(t *testing.T) {
 	}
 	if len(rc.got) != 0 {
 		t.Errorf("recorded %d call(s), want 0: %+v", len(rc.got), rc.got)
+	}
+}
+
+func TestSuggestHandler_InvisibleEntityIs404WithoutAnAICall(t *testing.T) {
+	id := testIdentity()
+	open := newFakeDocOpen("data.csv", "text/csv", csvBody(t, []string{"Ref"}, [][]string{{"1"}}))
+	suggester := &fakeSuggester{enabled: true}
+	lookup := &lookupSpy{}
+	var seen []string
+	invisible := func(_ context.Context, entityID string) error {
+		seen = append(seen, entityID)
+		return ErrNotFound
+	}
+	entity := uuid.NewString()
+
+	rec, raw := doSuggestRequestVisible(t, open.fn(), lookup.fn(), invisible, suggester, nil, &id, suggestReqBody(entity, open.doc.ID))
+
+	if rec.Code != http.StatusNotFound || strings.TrimSpace(string(raw)) != `{"error":"not found"}` {
+		t.Errorf("answer = %d %s, want 404 {\"error\":\"not found\"}", rec.Code, raw)
+	}
+	if len(suggester.calls) != 0 {
+		t.Errorf("AI calls = %d, want 0", len(suggester.calls))
+	}
+	if len(open.ids) != 0 || len(lookup.calls) != 0 {
+		t.Errorf("open calls = %d, lookup calls = %d, want 0 and 0", len(open.ids), len(lookup.calls))
+	}
+	if len(seen) != 1 || seen[0] != entity {
+		t.Errorf("entityVisible saw %v, want [%s]", seen, entity)
 	}
 }

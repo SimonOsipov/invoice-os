@@ -238,7 +238,7 @@ func doImportUpload(t *testing.T, imp importFunc, open openSpec, id *auth.Identi
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	CreateHandler(imp, open, noSave, nil).ServeHTTP(rec, r)
+	CreateHandler(imp, open, noSave, alwaysVisible, nil).ServeHTTP(rec, r)
 
 	raw := rec.Body.Bytes()
 	var resp importBatchBody

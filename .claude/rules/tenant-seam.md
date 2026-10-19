@@ -31,3 +31,7 @@ paths:
 - Reword `NotActiveMemberMessage`, `NOT_ACTIVE_MEMBER_MESSAGE` in `authedFetch.ts` and `NOT_ACTIVE_MESSAGE` in `e2e/api/suspension.spec.ts` in one commit.
 - Source the refusal message from `db.NotActiveMemberMessage`. Never retype it as a literal in Go.
 - Build a DB test identity from a seeded membership row, never from a bare UUID.
+- Write `app.entity_scope` in the membership statement of the seam batch: `*` for an admin, an "All clients" member or an in-house tenant, else the member's client ids.
+- In product code, write `app.entity_scope` only in the seam. An unset scope means every client.
+- Read a `documents` row in a member's request through `docSvc.OpenLinked` or `document.ReadableByScope`. A limited member reads an uncited document or one cited by a visible invoice or batch.
+- Test document citations only through `public.document_link_state`. It restores `app.entity_scope` after its own queries.

@@ -175,7 +175,7 @@ func TestSubmissionFixture_MembershipSeedViaTenantTxIsActive(t *testing.T) {
 
 	if err := db.WithinTenantTx(ctx, f.mig, tenantID, func(tx pgx.Tx) error {
 		_, e := tx.Exec(ctx,
-			`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, $3, $4)`,
+			`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, $3, $4, true)`,
 			tenantID, userID, "preparer", "active")
 		return e
 	}); err != nil {

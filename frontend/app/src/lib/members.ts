@@ -381,6 +381,7 @@ export const NO_CLIENT_MATCH = 'No clients match this search.'
 export const ADMIN_ALL_CLIENTS = 'An admin sees every client.'
 export const CLIENTS_UNREADABLE = "Only an admin sees a member's clients."
 export const NO_CLIENTS_IN_WORKSPACE = 'This workspace has no clients yet.'
+export const NO_ASSIGNED_CLIENTS = 'An admin has not given you any clients yet.'
 
 export type PickerClient = { id: string; name: string }
 
@@ -700,6 +701,11 @@ export function rosterWithInvites(members: readonly Member[], invites: readonly 
 
 export function viewerIsAdmin(members: readonly Member[]): boolean {
   return members.some((m) => m.isYou && m.role === 'admin' && m.status === 'active')
+}
+
+// An empty `[]` only: undefined, `null` (in-house) and 'all' are not "no clients given".
+export function viewerHasNoClients(members: readonly Member[]): boolean {
+  return members.some((m) => m.isYou && m.status === 'active' && m.role !== 'admin' && Array.isArray(m.clientAccess) && m.clientAccess.length === 0)
 }
 
 export type CompanySetupAccess = 'add' | 'wait' | 'loading' | 'error'

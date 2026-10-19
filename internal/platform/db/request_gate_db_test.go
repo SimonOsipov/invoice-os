@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -535,7 +536,9 @@ func poisonedMembershipsPool(t *testing.T) *pgxpool.Pool {
 	cfg.MaxConns = 1
 	cfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
 		_, err := c.Exec(ctx, `CREATE TEMP VIEW memberships AS
-			SELECT (1/(random()*0)::int)::text::uuid AS user_id, 'active' AS status`)
+			SELECT (1/(random()*0)::int)::text::uuid AS user_id, 'active' AS status,
+			       nullif(current_setting('app.current_tenant', true), '')::uuid AS tenant_id,
+			       'preparer' AS role, false AS all_clients`)
 		return err
 	}
 	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
@@ -826,5 +829,692 @@ func TestRLS_RequestSeamRefusalIsIdenticalForSuspendedAndForNoRow(t *testing.T) 
 	}
 	if suspendedErr.Error() != noRowErr.Error() {
 		t.Errorf("error strings differ: suspended=%q no-row=%q, want byte-identical", suspendedErr.Error(), noRowErr.Error())
+	}
+}
+
+// rsMember seeds an active member of tenant as the superuser: its all_clients flag and
+// its membership_clients rows. It returns the user id, the subject of the request identity.
+func rsMember(t *testing.T, tenant, role string, allClients bool, clients ...*csClient) string {
+	t.Helper()
+	return rsMemberAs(t, uuid.NewString(), tenant, role, allClients, clients...)
+}
+
+// rsMemberAs is rsMember for a fixed user id, so one user can hold a membership in two tenants.
+func rsMemberAs(t *testing.T, userID, tenant, role string, allClients bool, clients ...*csClient) string {
+	t.Helper()
+	ctx := context.Background()
+	seedMembershipWithStatus(t, tenant, userID, role, "active")
+	if allClients {
+		if _, err := h.super.Exec(ctx,
+			`UPDATE memberships SET all_clients = true WHERE tenant_id = $1 AND user_id = $2`, tenant, userID); err != nil {
+			t.Fatalf("seed all_clients: %v", err)
+		}
+	}
+	for _, c := range clients {
+		if _, err := h.super.Exec(ctx,
+			`INSERT INTO membership_clients (tenant_id, user_id, entity_id) VALUES ($1, $2, $3)`,
+			tenant, userID, c.entity); err != nil {
+			t.Fatalf("seed membership_clients: %v", err)
+		}
+	}
+	// Control: the row the seam will read is the row this test meant to seed.
+	var gotFlag bool
+	var nRows int
+	if err := h.super.QueryRow(ctx,
+		`SELECT m.all_clients, (SELECT count(*) FROM membership_clients c WHERE c.tenant_id = m.tenant_id AND c.user_id = m.user_id)
+		   FROM memberships m WHERE m.tenant_id = $1 AND m.user_id = $2`, tenant, userID).Scan(&gotFlag, &nRows); err != nil {
+		t.Fatalf("read back the seeded member: %v", err)
+	}
+	if gotFlag != allClients || nRows != len(clients) {
+		t.Fatalf("seeded member has all_clients=%v and %d client rows, want %v and %d", gotFlag, nRows, allClients, len(clients))
+	}
+	return userID
+}
+
+// rsInHouse turns a seeded throwaway tenant into an in-house one.
+func rsInHouse(t *testing.T, ten *csTenant) {
+	t.Helper()
+	if _, err := h.super.Exec(context.Background(), `UPDATE tenants SET kind = 'in_house' WHERE id = $1`, ten.id); err != nil {
+		t.Fatalf("make tenant in_house: %v", err)
+	}
+}
+
+// rsSeamScope returns app.entity_scope as the seam's closure sees it.
+func rsSeamScope(t *testing.T, pool *pgxpool.Pool, userID, tenant string) string {
+	t.Helper()
+	var got string
+	if err := db.WithinRequestTenantTx(requestCtx(userID, tenant), pool, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(),
+			`SELECT coalesce(current_setting('app.entity_scope', true), '<null>')`).Scan(&got)
+	}); err != nil {
+		t.Fatalf("seam read of app.entity_scope: %v", err)
+	}
+	return got
+}
+
+// rsSeamIDs returns the sorted ids tb shows to the member through the request seam.
+func rsSeamIDs(t *testing.T, userID, tenant string, tb csTable) []string {
+	t.Helper()
+	var got []string
+	if err := db.WithinRequestTenantTx(requestCtx(userID, tenant), h.app, func(tx pgx.Tx) error {
+		ids, err := csQueryIDs(tx, tb.name)
+		got = ids
+		return err
+	}); err != nil {
+		t.Fatalf("seam read of %s: %v", tb.name, err)
+	}
+	return got
+}
+
+// rsExpectSeamIDs asserts the member reads exactly want from tb; want must be non-empty.
+func rsExpectSeamIDs(t *testing.T, userID, tenant string, tb csTable, want []string) {
+	t.Helper()
+	if len(want) == 0 {
+		t.Fatalf("%s: no expected rows, the assertion would be vacuous", tb.name)
+	}
+	if got := rsSeamIDs(t, userID, tenant, tb); !slices.Equal(got, want) {
+		t.Errorf("%s through the seam: ids = %v, want %v", tb.name, got, want)
+	}
+}
+
+// TestRLS_RequestSeamWritesTheEntityScopeInTheGateStatement: the scope rides statement 2 of
+// the one gate batch; no standalone set_config carries it.
+func TestRLS_RequestSeamWritesTheEntityScopeInTheGateStatement(t *testing.T) {
+	h := requireHarness(t)
+	pool, tr := tracedSeamPool(t)
+
+	userID := uuid.NewString()
+	seedMembershipWithStatus(t, h.tenantA, userID, "admin", "active")
+
+	if err := db.WithinRequestTenantTx(requestCtx(userID, h.tenantA), pool, func(pgx.Tx) error { return nil }); err != nil {
+		t.Fatalf("WithinRequestTenantTx: %v", err)
+	}
+
+	starts := tr.starts()
+	if len(starts) != 1 || len(starts[0]) != 2 {
+		t.Fatalf("want exactly one batch of two statements, got %q", starts)
+	}
+	if !strings.Contains(starts[0][0], "app.current_tenant") {
+		t.Errorf("batch statement 1 = %q, want the app.current_tenant set_config", starts[0][0])
+	}
+	if !strings.Contains(starts[0][1], "app.entity_scope") {
+		t.Errorf("batch statement 2 = %q, want it to write app.entity_scope", starts[0][1])
+	}
+	if strings.Contains(starts[0][0], "app.entity_scope") {
+		t.Errorf("batch statement 1 = %q writes app.entity_scope before the membership is read", starts[0][0])
+	}
+
+	standalone := tr.standaloneStmts()
+	if len(standalone) == 0 {
+		t.Fatal("the tracer recorded no standalone statement, so it is not attached")
+	}
+	if n := countContaining(standalone, "set_config"); n != 0 {
+		t.Errorf("the seam sent %d standalone set_config statement(s): %q", n, standalone)
+	}
+	if n := countContaining(standalone, "entity_scope"); n != 0 {
+		t.Errorf("the seam sent %d standalone statement(s) naming entity_scope: %q", n, standalone)
+	}
+}
+
+// TestRLS_RequestSeamScopeIsStarForAdminAllClientsAndInHouse: the seam writes '*' for an
+// admin that stores all_clients = false, for an "All clients" firm member and for an in-house member.
+func TestRLS_RequestSeamScopeIsStarForAdminAllClientsAndInHouse(t *testing.T) {
+	requireHarness(t)
+	firm := csSeedClients(t, 2)
+	inHouse := csSeedClients(t, 2)
+	rsInHouse(t, inHouse)
+
+	cases := []struct {
+		name, tenant, kind, user string
+	}{
+		{"firm admin, flag false, no rows", firm.id, "firm", rsMember(t, firm.id, "admin", false)},
+		{"firm preparer with All clients", firm.id, "firm", rsMember(t, firm.id, "preparer", true)},
+		{"in-house preparer, flag false, no rows", inHouse.id, "in_house", rsMember(t, inHouse.id, "preparer", false)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var kind string
+			if err := h.super.QueryRow(context.Background(), `SELECT kind FROM tenants WHERE id = $1`, c.tenant).Scan(&kind); err != nil || kind != c.kind {
+				t.Fatalf("tenant kind = %q (err %v), want %q", kind, err, c.kind)
+			}
+			if got := rsSeamScope(t, h.app, c.user, c.tenant); got != "*" {
+				t.Errorf("app.entity_scope in the seam = %q, want %q", got, "*")
+			}
+		})
+	}
+}
+
+// TestRLS_RequestSeamScopeIsTheMembersSet: a limited firm member gets its client ids in
+// sorted order, whatever order the rows were inserted in.
+func TestRLS_RequestSeamScopeIsTheMembersSet(t *testing.T) {
+	requireHarness(t)
+	ten := csSeedClients(t, 2)
+	lo, hi := ten.clients[0], ten.clients[1]
+	if lo.entity > hi.entity {
+		lo, hi = hi, lo
+	}
+	user := rsMember(t, ten.id, "reviewer", false, hi, lo) // hi inserted first
+
+	want := "{" + lo.entity + "," + hi.entity + "}"
+	if got := rsSeamScope(t, h.app, user, ten.id); got != want {
+		t.Errorf("app.entity_scope in the seam = %q, want %q", got, want)
+	}
+}
+
+// TestRLS_RequestSeamScopeIsEmptyForAnUnassignedMember: a firm member with the flag off and
+// no rows gets '{}', which matches no client.
+func TestRLS_RequestSeamScopeIsEmptyForAnUnassignedMember(t *testing.T) {
+	requireHarness(t)
+	ten := csSeedClients(t, 2)
+	user := rsMember(t, ten.id, "preparer", false)
+
+	if got := rsSeamScope(t, h.app, user, ten.id); got != "{}" {
+		t.Errorf("app.entity_scope in the seam = %q, want %q", got, "{}")
+	}
+}
+
+// TestRLS_RequestSeamUnassignedMemberReadsNoClient: through the seam a member with no
+// assignment reads no row of the six tables, in a tenant that holds two clients' rows.
+func TestRLS_RequestSeamUnassignedMemberReadsNoClient(t *testing.T) {
+	requireHarness(t)
+	ten := csSeedClients(t, 2)
+	a, b := ten.clients[0], ten.clients[1]
+	admin := rsMember(t, ten.id, "admin", false)
+	unassigned := rsMember(t, ten.id, "preparer", false)
+
+	for _, tb := range csTables {
+		t.Run(tb.name, func(t *testing.T) {
+			// Control: the same seam shows this tenant's rows to an admin.
+			rsExpectSeamIDs(t, admin, ten.id, tb, csWant(tb, a, b))
+			if got := rsSeamIDs(t, unassigned, ten.id, tb); len(got) != 0 {
+				t.Errorf("%s: an unassigned member reads %v, want no row", tb.name, got)
+			}
+		})
+	}
+}
+
+// TestRLS_RequestSeamLimitedMemberReadsOnlyItsClients: a reviewer holding A reads A's rows
+// and none of B's on every table; line items and history follow A's invoice.
+func TestRLS_RequestSeamLimitedMemberReadsOnlyItsClients(t *testing.T) {
+	requireHarness(t)
+	ten := csSeed(t, [2]int{2, 2}, [2]int{3, 1})
+	a, b := ten.clients[0], ten.clients[1]
+	reviewer := rsMember(t, ten.id, "reviewer", false, a)
+
+	for _, tb := range csTables {
+		t.Run(tb.name, func(t *testing.T) {
+			if len(csWant(tb, b)) == 0 {
+				t.Fatalf("%s: client B has no rows, so excluding them proves nothing", tb.name)
+			}
+			rsExpectSeamIDs(t, reviewer, ten.id, tb, csWant(tb, a))
+		})
+	}
+}
+
+// TestRLS_RequestSeamFullAccessMembersReadEveryClient: an admin, an "All clients" member and
+// an in-house member each read both clients' rows on every table.
+func TestRLS_RequestSeamFullAccessMembersReadEveryClient(t *testing.T) {
+	requireHarness(t)
+	firm := csSeedClients(t, 2)
+	inHouse := csSeedClients(t, 2)
+	rsInHouse(t, inHouse)
+
+	cases := []struct {
+		name string
+		ten  *csTenant
+		user string
+	}{
+		{"admin", firm, rsMember(t, firm.id, "admin", false)},
+		{"All clients preparer", firm, rsMember(t, firm.id, "preparer", true)},
+		{"in-house preparer", inHouse, rsMember(t, inHouse.id, "preparer", false)},
+	}
+	for _, c := range cases {
+		for _, tb := range csTables {
+			t.Run(c.name+"/"+tb.name, func(t *testing.T) {
+				rsExpectSeamIDs(t, c.user, c.ten.id, tb, csWant(tb, c.ten.clients...))
+			})
+		}
+	}
+}
+
+// TestRLS_WorkerCoreReadsEveryClient: WithinTenantTx ignores the identity in ctx, so the
+// unassigned member's identity still reads every client.
+func TestRLS_WorkerCoreReadsEveryClient(t *testing.T) {
+	requireHarness(t)
+	ten := csSeedClients(t, 2)
+	unassigned := rsMember(t, ten.id, "preparer", false)
+
+	for _, tb := range csTables {
+		t.Run(tb.name, func(t *testing.T) {
+			want := csWant(tb, ten.clients...)
+			if len(want) == 0 {
+				t.Fatalf("%s: no expected rows", tb.name)
+			}
+			var got []string
+			if err := db.WithinTenantTx(requestCtx(unassigned, ten.id), h.app, ten.id, func(tx pgx.Tx) error {
+				ids, err := csQueryIDs(tx, tb.name)
+				got = ids
+				return err
+			}); err != nil {
+				t.Fatalf("WithinTenantTx: %v", err)
+			}
+			if !slices.Equal(got, want) {
+				t.Errorf("%s through the worker core: ids = %v, want %v", tb.name, got, want)
+			}
+		})
+	}
+}
+
+// TestRLS_InProcessActorReadsEveryClient: the seam's non-UUID-subject arm writes no scope, so
+// an in-process actor reads every client, and it issues no memberships statement.
+func TestRLS_InProcessActorReadsEveryClient(t *testing.T) {
+	requireHarness(t)
+	pool, tr := tracedSeamPool(t)
+	ten := csSeedClients(t, 2)
+
+	for _, tb := range csTables {
+		want := csWant(tb, ten.clients...)
+		if len(want) == 0 {
+			t.Fatalf("%s: no expected rows", tb.name)
+		}
+		var got []string
+		if err := db.WithinRequestTenantTx(requestCtx("extraction-worker", ten.id), pool, func(tx pgx.Tx) error {
+			ids, err := csQueryIDs(tx, tb.name)
+			got = ids
+			return err
+		}); err != nil {
+			t.Fatalf("WithinRequestTenantTx as extraction-worker: %v", err)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s as an in-process actor: ids = %v, want %v", tb.name, got, want)
+		}
+	}
+
+	stmts := tr.allStmts()
+	if countContaining(stmts, "set_config") == 0 {
+		t.Fatalf("the tracer saw no set_config, so it is not observing the seam: %q", stmts)
+	}
+	if n := countContaining(stmts, "memberships"); n != 0 {
+		t.Errorf("the in-process arm issued %d memberships statement(s), want 0: %q", n, stmts)
+	}
+}
+
+// TestRLS_EntityScopeDoesNotReachTheNextBorrower: on a one-connection pool, a seam
+// transaction that set '{}' leaves nothing behind for the next WithinTenantTx.
+func TestRLS_EntityScopeDoesNotReachTheNextBorrower(t *testing.T) {
+	h := requireHarness(t)
+	cfg, err := pgxpool.ParseConfig(h.appURL)
+	if err != nil {
+		t.Fatalf("parse app url: %v", err)
+	}
+	cfg.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("new one-connection pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	ten := csSeedClients(t, 2)
+	unassigned := rsMember(t, ten.id, "preparer", false)
+	ctx := context.Background()
+
+	var seamPID int
+	var seamScope string
+	var seamEntities []string
+	if err := db.WithinRequestTenantTx(requestCtx(unassigned, ten.id), pool, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx,
+			`SELECT pg_backend_pid(), coalesce(current_setting('app.entity_scope', true), '<null>')`).Scan(&seamPID, &seamScope); err != nil {
+			return err
+		}
+		ids, err := csQueryIDs(tx, "business_entities")
+		seamEntities = ids
+		return err
+	}); err != nil {
+		t.Fatalf("seam transaction: %v", err)
+	}
+	// Precondition: the first borrower really ran with the empty set, or the read below proves nothing.
+	if seamScope != "{}" || len(seamEntities) != 0 {
+		t.Fatalf("the seam transaction ran with scope %q and read %v entities, want scope {} and none", seamScope, seamEntities)
+	}
+
+	for _, tb := range []csTable{csTables[0], csTables[1]} {
+		var pid int
+		var got []string
+		if err := db.WithinTenantTx(ctx, pool, ten.id, func(tx pgx.Tx) error {
+			if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+				return err
+			}
+			ids, err := csQueryIDs(tx, tb.name)
+			got = ids
+			return err
+		}); err != nil {
+			t.Fatalf("WithinTenantTx after the seam: %v", err)
+		}
+		if pid != seamPID {
+			t.Fatalf("the second transaction ran on backend %d, the seam on %d: not the same connection", pid, seamPID)
+		}
+		if want := csWant(tb, ten.clients...); !slices.Equal(got, want) {
+			t.Errorf("%s in the next borrower's transaction: ids = %v, want every client's %v", tb.name, got, want)
+		}
+	}
+}
+
+// rsReadsBoth asserts the member reads both clients' rows of the entity and invoice tables.
+func rsReadsBoth(t *testing.T, user string, ten *csTenant) {
+	t.Helper()
+	for _, tb := range csTables[:2] {
+		rsExpectSeamIDs(t, user, ten.id, tb, csWant(tb, ten.clients...))
+	}
+}
+
+// TestRLS_RequestSeamScopeIgnoresTheSameUsersOtherTenant: the scope is built from the
+// membership and client rows of the current tenant only; a user's rows in another tenant
+// neither widen nor narrow it.
+func TestRLS_RequestSeamScopeIgnoresTheSameUsersOtherTenant(t *testing.T) {
+	requireHarness(t)
+	home := csSeedClients(t, 2)
+	away := csSeedClients(t, 2)
+
+	// rows are indexes into the tenant's clients.
+	type seat struct {
+		role string
+		all  bool
+		rows []int
+	}
+	pick := func(ten *csTenant, idx []int) []*csClient {
+		var out []*csClient
+		for _, i := range idx {
+			out = append(out, ten.clients[i])
+		}
+		return out
+	}
+	cases := []struct {
+		name               string
+		homeSeat, awaySeat seat
+		wantAway, wantHome string
+		awayReadsAll       bool
+	}{
+		{"admin elsewhere, unassigned here", seat{"admin", true, []int{0, 1}}, seat{"preparer", false, nil},
+			"{}", "*", false},
+		{"limited elsewhere, unassigned here", seat{"reviewer", false, []int{0}}, seat{"reviewer", false, nil},
+			"{}", csSet(home.clients[0]), false},
+		{"limited elsewhere, limited here to a different client", seat{"reviewer", false, []int{0, 1}}, seat{"reviewer", false, []int{1}},
+			csSet(away.clients[1]), csSet(sortedClients(home.clients...)...), false},
+		{"All clients elsewhere, admin here", seat{"preparer", true, nil}, seat{"admin", false, nil},
+			"*", "*", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			user := uuid.NewString()
+			rsMemberAs(t, user, home.id, c.homeSeat.role, c.homeSeat.all, pick(home, c.homeSeat.rows)...)
+			rsMemberAs(t, user, away.id, c.awaySeat.role, c.awaySeat.all, pick(away, c.awaySeat.rows)...)
+			if got := rsSeamScope(t, h.app, user, away.id); got != c.wantAway {
+				t.Errorf("scope in the away tenant = %q, want %q", got, c.wantAway)
+			}
+			if got := rsSeamScope(t, h.app, user, home.id); got != c.wantHome {
+				t.Errorf("scope in the home tenant = %q, want %q", got, c.wantHome)
+			}
+			if c.wantAway == "{}" {
+				rsExpectNoSeamRows(t, user, away.id)
+			}
+			if c.awayReadsAll {
+				rsReadsBoth(t, user, away)
+			}
+		})
+	}
+}
+
+// sortedClients returns the clients ordered by entity id.
+func sortedClients(clients ...*csClient) []*csClient {
+	out := slices.Clone(clients)
+	slices.SortFunc(out, func(a, b *csClient) int { return strings.Compare(a.entity, b.entity) })
+	return out
+}
+
+// rsExpectNoSeamRows asserts the member reads no entity through the seam.
+func rsExpectNoSeamRows(t *testing.T, user, tenant string) {
+	t.Helper()
+	if got := rsSeamIDs(t, user, tenant, csTables[0]); len(got) != 0 {
+		t.Errorf("member reads entities %v through the seam, want none", got)
+	}
+}
+
+// TestRLS_RequestSeamScopeIsPerMember: two limited members of one tenant each get their own set.
+func TestRLS_RequestSeamScopeIsPerMember(t *testing.T) {
+	requireHarness(t)
+	ten := csSeedClients(t, 2)
+	a, b := ten.clients[0], ten.clients[1]
+	onA := rsMember(t, ten.id, "reviewer", false, a)
+	onB := rsMember(t, ten.id, "preparer", false, b)
+	rsMember(t, ten.id, "preparer", false)
+
+	if got := rsSeamScope(t, h.app, onA, ten.id); got != csSet(a) {
+		t.Errorf("member of A: scope = %q, want %q", got, csSet(a))
+	}
+	if got := rsSeamScope(t, h.app, onB, ten.id); got != csSet(b) {
+		t.Errorf("member of B: scope = %q, want %q", got, csSet(b))
+	}
+	for _, tb := range csTables {
+		rsExpectSeamIDs(t, onB, ten.id, tb, csWant(tb, b))
+	}
+}
+
+// TestRLS_RequestSeamScopeFollowsRoleAndKindNotStoredRows: an admin, an in-house member and an
+// "All clients" member read every client even when client rows are stored for them.
+func TestRLS_RequestSeamScopeFollowsRoleAndKindNotStoredRows(t *testing.T) {
+	requireHarness(t)
+	firm := csSeedClients(t, 2)
+	inHouse := csSeedClients(t, 2)
+	rsInHouse(t, inHouse)
+	a := func(ten *csTenant) *csClient { return ten.clients[0] }
+
+	cases := []struct {
+		name string
+		ten  *csTenant
+		user string
+	}{
+		{"firm admin, flag off, one stored row", firm, rsMember(t, firm.id, "admin", false, a(firm))},
+		{"firm admin, flag on", firm, rsMember(t, firm.id, "admin", true)},
+		{"firm reviewer, All clients with a stale row", firm, rsMember(t, firm.id, "reviewer", true, a(firm))},
+		{"in-house preparer, flag off, one stored row", inHouse, rsMember(t, inHouse.id, "preparer", false, a(inHouse))},
+		{"in-house reviewer, flag off, two stored rows", inHouse, rsMember(t, inHouse.id, "reviewer", false, inHouse.clients...)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := rsSeamScope(t, h.app, c.user, c.ten.id); got != "*" {
+				t.Errorf("scope = %q, want %q", got, "*")
+			}
+			rsReadsBoth(t, c.user, c.ten)
+		})
+	}
+}
+
+// TestRLS_RequestSeamRefusesAnInactiveMemberWhateverItsScope: a suspended or invited member
+// is refused with ErrNotActiveMember and the closure never runs, even with All clients, admin
+// or in-house standing. The same member is admitted while active. An active bystander admin sits
+// in the tenant first, so a gate that read another member's row would admit.
+func TestRLS_RequestSeamRefusesAnInactiveMemberWhateverItsScope(t *testing.T) {
+	requireHarness(t)
+
+	cases := []struct {
+		name, status string
+		inHouse      bool
+		role         string
+		all          bool
+		rows         int
+	}{
+		{"suspended preparer with All clients", "suspended", false, "preparer", true, 0},
+		{"suspended admin", "suspended", false, "admin", false, 0},
+		{"suspended limited reviewer", "suspended", false, "reviewer", false, 1},
+		{"suspended in-house preparer", "suspended", true, "preparer", false, 1},
+		{"invited preparer with All clients", "invited", false, "preparer", true, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ten := csSeedClients(t, 2)
+			if c.inHouse {
+				rsInHouse(t, ten)
+			}
+			rsMember(t, ten.id, "admin", false)
+			user := rsMember(t, ten.id, c.role, c.all, ten.clients[:c.rows]...)
+			ran := false
+			run := func() error {
+				return db.WithinRequestTenantTx(requestCtx(user, ten.id), h.app, func(pgx.Tx) error { ran = true; return nil })
+			}
+			if err := run(); err != nil || !ran {
+				t.Fatalf("control: the active member was refused (err %v, ran %v)", err, ran)
+			}
+			if _, err := h.super.Exec(context.Background(),
+				`UPDATE memberships SET status = $1 WHERE tenant_id = $2 AND user_id = $3`, c.status, ten.id, user); err != nil {
+				t.Fatalf("set status: %v", err)
+			}
+			ran = false
+			if err := run(); !errors.Is(err, db.ErrNotActiveMember) {
+				t.Errorf("err = %v, want db.ErrNotActiveMember", err)
+			}
+			if ran {
+				t.Error("the closure ran for a member who is not active")
+			}
+		})
+	}
+}
+
+// TestRLS_RequestSeamScopeSurvivesAReadOnlyTransaction: set_config is legal in a READ ONLY
+// transaction and the scope it writes limits what that transaction reads.
+func TestRLS_RequestSeamScopeSurvivesAReadOnlyTransaction(t *testing.T) {
+	requireHarness(t)
+	ten := csSeedClients(t, 2)
+	a, b := ten.clients[0], ten.clients[1]
+	opts := pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}
+
+	cases := []struct {
+		name      string
+		user      string
+		wantScope string
+		want      []*csClient
+	}{
+		{"limited to A", rsMember(t, ten.id, "reviewer", false, a), csSet(a), []*csClient{a}},
+		{"unassigned", rsMember(t, ten.id, "preparer", false), "{}", nil},
+		{"All clients", rsMember(t, ten.id, "preparer", true), "*", []*csClient{a, b}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var readOnly, scope string
+			var entities, invoices []string
+			if err := db.WithinRequestTenantTxOpts(requestCtx(c.user, ten.id), h.app, opts, func(tx pgx.Tx) error {
+				ctx := context.Background()
+				if err := tx.QueryRow(ctx, `SELECT current_setting('transaction_read_only'), current_setting('app.entity_scope')`).
+					Scan(&readOnly, &scope); err != nil {
+					return err
+				}
+				var err error
+				if entities, err = csQueryIDs(tx, "business_entities"); err != nil {
+					return err
+				}
+				invoices, err = csQueryIDs(tx, "invoices")
+				return err
+			}); err != nil {
+				t.Fatalf("READ ONLY seam transaction: %v", err)
+			}
+			if readOnly != "on" {
+				t.Fatalf("transaction_read_only = %q, the transaction is not READ ONLY", readOnly)
+			}
+			if scope != c.wantScope {
+				t.Errorf("scope = %q, want %q", scope, c.wantScope)
+			}
+			if want := csWant(csTables[0], c.want...); !slices.Equal(entities, want) {
+				t.Errorf("entities = %v, want %v", entities, want)
+			}
+			if want := csWant(csTables[1], c.want...); !slices.Equal(invoices, want) {
+				t.Errorf("invoices = %v, want %v", invoices, want)
+			}
+		})
+	}
+}
+
+// TestRLS_RequestSeamScopeIsSortedWhateverTheHeapOrder: with index scans off the planner reads
+// membership_clients in insertion order, so only the statement's own ORDER BY sorts the ids.
+func TestRLS_RequestSeamScopeIsSortedWhateverTheHeapOrder(t *testing.T) {
+	h := requireHarness(t)
+	cfg, err := pgxpool.ParseConfig(h.appURL)
+	if err != nil {
+		t.Fatalf("parse app url: %v", err)
+	}
+	cfg.ConnConfig.RuntimeParams["enable_indexscan"] = "off"
+	cfg.ConnConfig.RuntimeParams["enable_indexonlyscan"] = "off"
+	cfg.ConnConfig.RuntimeParams["enable_bitmapscan"] = "off"
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("new pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	ten := csSeedClients(t, 3)
+	sorted := sortedClients(ten.clients...)
+	user := rsMember(t, ten.id, "reviewer", false, sorted[2], sorted[0], sorted[1])
+
+	var heapOrder string
+	if err := db.WithinRequestTenantTx(requestCtx(user, ten.id), pool, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(),
+			`SELECT array_agg(entity_id)::text FROM membership_clients WHERE user_id = $1`, user).Scan(&heapOrder)
+	}); err != nil {
+		t.Fatalf("read heap order: %v", err)
+	}
+	if heapOrder != csSet(sorted[2], sorted[0], sorted[1]) {
+		t.Fatalf("control: unsorted aggregate = %q, want the insertion order, so the sort below proves nothing", heapOrder)
+	}
+	if got, want := rsSeamScope(t, pool, user, ten.id), csSet(sorted...); got != want {
+		t.Errorf("scope = %q, want sorted %q", got, want)
+	}
+}
+
+// TestRLS_EntityScopeDoesNotReachTheNextSeamBorrower: on one connection, an unassigned seam
+// transaction leaves nothing behind for the in-process arm, a limited member or an admin.
+func TestRLS_EntityScopeDoesNotReachTheNextSeamBorrower(t *testing.T) {
+	h := requireHarness(t)
+	cfg, err := pgxpool.ParseConfig(h.appURL)
+	if err != nil {
+		t.Fatalf("parse app url: %v", err)
+	}
+	cfg.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("new one-connection pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	ten := csSeedClients(t, 2)
+	a := ten.clients[0]
+	unassigned := rsMember(t, ten.id, "preparer", false)
+	limited := rsMember(t, ten.id, "reviewer", false, a)
+	admin := rsMember(t, ten.id, "admin", false)
+
+	entities := func(subject string) []string {
+		var got []string
+		if err := db.WithinRequestTenantTx(requestCtx(subject, ten.id), pool, func(tx pgx.Tx) error {
+			ids, err := csQueryIDs(tx, "business_entities")
+			got = ids
+			return err
+		}); err != nil {
+			t.Fatalf("seam transaction as %s: %v", subject, err)
+		}
+		return got
+	}
+	both, onlyA := csWant(csTables[0], ten.clients...), csWant(csTables[0], a)
+	if got := entities(unassigned); len(got) != 0 {
+		t.Fatalf("precondition: the unassigned member read %v, want none", got)
+	}
+	steps := []struct {
+		name, subject string
+		want          []string
+	}{
+		{"in-process actor after {}", "extraction-worker", both},
+		{"limited member after the actor", limited, onlyA},
+		{"admin after the limited member", admin, both},
+	}
+	for _, s := range steps {
+		if got := entities(s.subject); !slices.Equal(got, s.want) {
+			t.Errorf("%s: entities = %v, want %v", s.name, got, s.want)
+		}
 	}
 }

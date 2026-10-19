@@ -242,7 +242,7 @@ func main() {
 	aiCallStore := aicalls.NewStore(pool)
 	app.Mux.HandleFunc("GET /v1/staff/ai-calls", aicalls.StaffCallsHandler(aiCallStore.StaffCalls, app.Logger))
 	app.Mux.HandleFunc("GET /v1/staff/ai-calls/totals", aicalls.StaffTotalsHandler(aiCallStore.StaffTotals, app.Logger))
-	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.Open, impStore.SaveMapping, app.Logger))
+	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.OpenLinked, impStore.SaveMapping, impStore.EntityVisible, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler(docSvc.Store, app.Logger))
 	// POST /v1/imports/document -- the document-import route (EXTR-06-06): a stored
 	// extraction becomes an invoice with no file/mapping wire at all.
@@ -252,13 +252,13 @@ func main() {
 	app.Mux.HandleFunc("POST /v1/imports/document/invoice", importer.SupplyNumberHandler(impSvc.SupplyInvoiceNumber, app.Logger))
 	// A later import's lookup for a saved mapping. The literal path beats {id} below it
 	// (TestImportRoutes_SavedMappingIsNotSwallowedByBatchID).
-	app.Mux.HandleFunc("GET /v1/imports/saved-mapping", importer.SavedMappingHandler(docSvc.Open, impStore.SavedMapping, app.Logger))
+	app.Mux.HandleFunc("GET /v1/imports/saved-mapping", importer.SavedMappingHandler(docSvc.OpenLinked, impStore.SavedMapping, impStore.EntityVisible, app.Logger))
 	// A later import's AI-assisted first-mapping suggestion: an off/unavailable/refused AI
 	// still answers 200 source:"none", never a 5xx (TestSuggestHandler_OffAnswersNoneWithRowOne,
 	// TestSuggestHandler_AValidatedEnvelopeErrorAnswersNoneNotFiveHundred).
-	app.Mux.HandleFunc("POST /v1/imports/suggest-mapping", importer.SuggestMappingHandler(docSvc.Open, impStore.SavedMapping, aiClient, app.Logger))
+	app.Mux.HandleFunc("POST /v1/imports/suggest-mapping", importer.SuggestMappingHandler(docSvc.OpenLinked, impStore.SavedMapping, impStore.EntityVisible, aiClient, app.Logger))
 	app.Mux.HandleFunc("POST /v1/invoices/{id}/explain", invoice.ExplainHandler(invoice.NewExplainer(store.Get, aiClient).Explain, app.Logger))
-	app.Mux.HandleFunc("POST /v1/imports/check-mapping", importer.CheckMappingHandler(docSvc.Open, jevClient, app.Logger))
+	app.Mux.HandleFunc("POST /v1/imports/check-mapping", importer.CheckMappingHandler(docSvc.OpenLinked, jevClient, app.Logger))
 	// GET /v1/imports/{id} -- the import batch's own read route (INVCR-01-07).
 	// rows_total/rows_valid/rows_invalid/errors/created_at live ONLY on
 	// import_batches and, until now, reached the browser only inside the POST
@@ -272,13 +272,13 @@ func main() {
 	// GET /v1/documents/{id} -- the source-document download (DOC-01-05). Bytes are
 	// proxied through the service after an RLS-scoped row lookup rather than handed
 	// out as a presigned URL, so every read is authorised and audited.
-	app.Mux.HandleFunc("GET /v1/documents/{id}", document.DownloadHandler(docSvc.Open, app.Logger))
+	app.Mux.HandleFunc("GET /v1/documents/{id}", document.DownloadHandler(docSvc.OpenLinked, app.Logger))
 	// GET /v1/documents/{id}/sheet -- the same bytes decoded through importer.Decode
 	// for the previewer, so the evidence surface cannot disagree with the invoice it
 	// is evidence for. Lives in importer because Decode does and the reverse import
 	// edge is a cycle (TestDocument_ImportsNoRepoPackage). Go 1.22's {id} wildcard
 	// matches one segment, so /sheet cannot be swallowed by the download route above.
-	app.Mux.HandleFunc("GET /v1/documents/{id}/sheet", importer.SheetHandler(docSvc.Open, app.Logger))
+	app.Mux.HandleFunc("GET /v1/documents/{id}/sheet", importer.SheetHandler(docSvc.OpenLinked, app.Logger))
 
 	// /v1/custom-rules -- a workspace's own validation rules; writes are admin-only inside the
 	// store. The check call is injected: customrule must not import invoice.

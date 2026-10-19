@@ -106,6 +106,7 @@ func (s *Store) ApprovalRun(ctx context.Context, invoiceID string) (Run, error) 
 			`SELECT id, state, opened_at, closed_at, closed_by
 			   FROM approval_runs
 			  WHERE invoice_id = $1
+			    AND EXISTS (SELECT 1 FROM invoices i WHERE i.id = approval_runs.invoice_id)
 			  ORDER BY opened_at DESC
 			  LIMIT 1`, u.String(),
 		).Scan(&run.RunID, &run.State, &run.OpenedAt, &run.ClosedAt, &run.ClosedBy); err != nil {

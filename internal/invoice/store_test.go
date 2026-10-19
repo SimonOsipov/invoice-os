@@ -110,7 +110,7 @@ func seedTenant(t *testing.T, super *pgxpool.Pool, label string) string {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		id, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1163,8 +1163,8 @@ func TestStoreCrossTenant_UpdateGetListRefused(t *testing.T) {
 	}
 }
 
-// INV-STORE-13: a non-existent entity_id maps to ErrValidation (23503,
-// QA #4); nothing persists.
+// INV-STORE-13: a non-existent entity_id maps to ErrNotFound;
+// nothing persists.
 func TestStoreCreate_NonExistentEntityIDRejected(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -1176,8 +1176,8 @@ func TestStoreCreate_NonExistentEntityIDRejected(t *testing.T) {
 
 	bogusEntityID := uuid.NewString()
 	_, err := store.Create(c, CreateInput{EntityID: bogusEntityID, InvoiceNumber: "INV-STORE-13"})
-	if !errors.Is(err, ErrValidation) {
-		t.Fatalf("Create with a non-existent entity_id err = %v, want ErrValidation (23503 foreign_key_violation)", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Create with a non-existent entity_id err = %v, want ErrNotFound", err)
 	}
 
 	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenantID); n != 0 {
@@ -1237,25 +1237,10 @@ func TestStoreCreate_AnOversizedLineAmountIsErrValidation(t *testing.T) {
 	}
 }
 
-// M4-06-03 (QA Mode A, RED): closes the invoices->entity leg of the D8
-// cross-tenant dangling-reference residual for Store.Create. This is the
-// entity_id sibling of TestStoreCreate_CrossTenantImportBatchIDFKBypassesRLS
-// (import_batch_test.go), which pins the SAME shape of leak for
-// ImportBatchID and — per that test's own doc comment — is deliberately left
-// OPEN as an accepted residual (no AC requires a same-tenant check there,
-// and the only production caller always mints a fresh same-tenant batch id).
-// EntityID is different: M4-06 requires it be closed, so unlike the
-// import_batch leg, a caller-supplied EntityID belonging to a DIFFERENT
-// tenant must be rejected as ErrValidation rather than silently accepted.
-//
-// RED today: the entity_id foreign_key_violation check runs with RLS
-// bypassed (same mechanism TestRLS_InvoicesCrossTenantDanglingEntityRef,
-// internal/platform/db/invoices_rls_test.go, pins at the raw-SQL layer), and
-// Store.Create has no tenant-scoped ownership pre-check on EntityID, so this
-// Create call SUCCEEDS (err == nil) instead of returning ErrValidation. The
-// fix — a composite FK (tenant_id, entity_id) -> business_entities(tenant_id,
-// id) plus a friendly tenant-scoped pre-check in Store.Create — lands in a
-// later subtask; this test does not add it.
+// Closes the invoices->entity leg of the D8 cross-tenant dangling-reference residual for
+// Store.Create. The entity_id sibling of TestStoreCreate_CrossTenantImportBatchIDFKBypassesRLS
+// (import_batch_test.go), which leaves the import_batch leg open. A caller-supplied EntityID
+// of a DIFFERENT tenant must be rejected as ErrNotFound, not silently accepted.
 func TestStoreCreate_CrossTenantEntityIDRejected(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -1268,8 +1253,8 @@ func TestStoreCreate_CrossTenantEntityIDRejected(t *testing.T) {
 	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	_, err := store.Create(cA, CreateInput{EntityID: entityB, InvoiceNumber: "INV-XT-1"})
-	if !errors.Is(err, ErrValidation) {
-		t.Fatalf("Create (tenant A, entity_id = tenant B's entity) err = %v, want ErrValidation (M4-06 closes the invoices->entity leg of the D8 cross-tenant residual)", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Create (tenant A, entity_id = tenant B's entity) err = %v, want ErrNotFound", err)
 	}
 
 	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenantA); n != 0 {
@@ -1311,8 +1296,8 @@ func TestStoreCreate_CrossTenantEntityIDRejectedNoPartialLineItemsWrite(t *testi
 			{Description: &descB},
 		},
 	})
-	if !errors.Is(err, ErrValidation) {
-		t.Fatalf("Create (tenant A, entity_id = tenant B's entity, 2 line items) err = %v, want ErrValidation", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Create (tenant A, entity_id = tenant B's entity, 2 line items) err = %v, want ErrNotFound", err)
 	}
 
 	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenantA); n != 0 {

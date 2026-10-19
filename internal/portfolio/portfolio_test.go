@@ -879,7 +879,7 @@ func seedTenant(t *testing.T, super *pgxpool.Pool, label string) string {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		id, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1113,7 +1113,7 @@ func TestStoreGetByID_OwnTenant(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1153,7 +1153,7 @@ func TestStoreGetByID_CrossTenantNotFound(t *testing.T) {
 		t.Fatalf("seed tenants: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		tenantA, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1498,7 +1498,7 @@ func TestStoreList_OwnTenantOnly(t *testing.T) {
 		t.Fatalf("seed tenants: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		tenantA, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1545,7 +1545,7 @@ func TestStoreList_StatusFilter(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1590,7 +1590,7 @@ func TestStoreList_StatusOmittedReturnsBoth(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1633,7 +1633,7 @@ func TestStoreList_SearchQ(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1679,7 +1679,7 @@ func TestStoreList_SearchQMatchesTIN(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1726,7 +1726,7 @@ func TestStoreList_Pagination(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1773,7 +1773,7 @@ func TestStoreList_EmptyTenant(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1817,7 +1817,7 @@ func TestStoreList_ReverseCrossTenantIsolation(t *testing.T) {
 		t.Fatalf("seed tenants: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		tenantB, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1866,7 +1866,7 @@ func TestStoreList_CombinedStatusAndQFilter(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1908,7 +1908,7 @@ func TestStoreList_SearchQNoMatch(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -1966,7 +1966,7 @@ func TestStoreList_SearchQWildcardIsNotEscaped(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -2006,7 +2006,7 @@ func TestStoreList_PaginationPastEnd(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -2053,7 +2053,7 @@ func TestStoreList_OrderingTieBreak(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -2109,7 +2109,7 @@ func TestStoreList_LargeLimitReturnsAllRows(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		tenantID, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -3106,7 +3106,7 @@ func seedCaller(t *testing.T, super *pgxpool.Pool, kind, role, status string) (s
 		_, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
 	})
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, $3, $4)`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, $3, $4, true)`,
 		tenantID, memberSubject, role, status,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
@@ -3441,7 +3441,7 @@ func nrsCtx(t *testing.T, role string) (*pgxpool.Pool, *pgxpool.Pool, *Store, co
 	}
 	t.Cleanup(func() { _, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID) })
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, $3, 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, $3, 'active', true)`,
 		tenantID, memberSubject, role); err != nil {
 		t.Fatalf("seed caller membership: %v", err)
 	}

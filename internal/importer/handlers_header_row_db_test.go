@@ -33,7 +33,7 @@ func TestRLS_ImportFromRowThreeNumbersCSVAndXLSXAlike(t *testing.T) {
 	super, app := dbTestPools(t)
 	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
 	docSvc := document.NewService(document.NewStore(app), newMemObjects())
-	h := CreateHandler(svc.Import, docSvc.Open, NewStore(app).SaveMapping, nil)
+	h := CreateHandler(svc.Import, docSvc.Open, NewStore(app).SaveMapping, NewStore(app).EntityVisible, nil)
 
 	rowA := mkRow("INV-A", "2026-01-10", "TIN-A", "Buyer A", "NGN", "300.00", "30.00", "330.00", "Widget A", "1", "100.00")
 	rowBlank := mkRow("", "2026-01-10", "TIN-A", "Buyer A", "NGN", "300.00", "30.00", "330.00", "Widget X", "1", "100.00")

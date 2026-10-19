@@ -267,13 +267,41 @@ func TestRLS_ClientScopeTwoOfThreeClients(t *testing.T) {
 	}
 }
 
+// A fresh connection has never set the scope, so current_setting returns NULL there, not ”.
 func TestRLS_ClientScopeUnsetReadsEveryClient(t *testing.T) {
-	requireHarness(t)
+	h := requireHarness(t)
+	ctx := context.Background()
 	ten := csSeedClients(t, 2)
 
+	conn, err := pgx.Connect(ctx, h.appURL)
+	if err != nil {
+		t.Fatalf("connect as invoice_app: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, ten.id); err != nil {
+		t.Fatalf("set tenant: %v", err)
+	}
+	var scope *string
+	if err := tx.QueryRow(ctx, `SELECT current_setting('app.entity_scope', true)`).Scan(&scope); err != nil {
+		t.Fatalf("read app.entity_scope: %v", err)
+	}
+	if scope != nil {
+		t.Fatalf("app.entity_scope on a fresh connection = %q, want NULL (unset)", *scope)
+	}
 	for _, tb := range csTables {
 		t.Run(tb.name, func(t *testing.T) {
-			csExpectIDs(t, ten.id, nil, tb, csWant(tb, ten.clients...))
+			got, err := csQueryIDs(tx, tb.name)
+			if err != nil {
+				t.Fatalf("%s: %v", tb.name, err)
+			}
+			if want := csWant(tb, ten.clients...); !slices.Equal(got, want) {
+				t.Errorf("%s with scope unset: ids = %v, want every client's %v", tb.name, got, want)
+			}
 		})
 	}
 }

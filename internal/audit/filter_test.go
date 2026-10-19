@@ -3,6 +3,7 @@
 package audit_test
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -303,4 +304,64 @@ func TestAuditFilter_GenericValueArmSkipsTheNumberKey(t *testing.T) {
 				"an invoice row stops matching", where, forbidden)
 		}
 	}
+}
+
+// TestAuditFilter_CallerScopePredicate is AC 6 (D3): an unset scope and * add no entity predicate; an
+// array literal binds its ids; every other input fails closed to the empty set.
+func TestAuditFilter_CallerScopePredicate(t *testing.T) {
+	a, c := uuid.NewString(), uuid.NewString()
+	const set = "a.entity_id = ANY($1::uuid[])"
+
+	cases := []struct {
+		name     string
+		scope    string
+		wantArgs []any // nil: no entity predicate
+	}{
+		{"unset", "", nil},
+		{"all clients", "*", nil},
+		{"one id", "{" + a + "}", []any{[]string{a}}},
+		{"two ids keep their order", "{" + a + "," + c + "}", []any{[]string{a, c}}},
+		{"empty set", "{}", []any{[]string{}}},
+		{"garbage", "garbage", []any{[]string{}}},
+		{"unterminated literal", "{" + a, []any{[]string{}}},
+		{"bare uuid", a, []any{[]string{}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			where, args, err := audit.ScopedFilterSQLForTest(audit.Filter{Limit: 50}, tc.scope)
+			if err != nil {
+				t.Fatalf("scope %q: unexpected error %v", tc.scope, err)
+			}
+			if tc.wantArgs == nil {
+				if strings.Contains(where, "entity_id") || len(args) != 0 {
+					t.Errorf("scope %q produced %q with args %v, want no entity predicate", tc.scope, where, args)
+				}
+				// Positive pair: another filter still renders beside the scope.
+				other, oargs, err := audit.ScopedFilterSQLForTest(
+					audit.Filter{Limit: 50, Events: []string{"invoice.created"}}, tc.scope)
+				if err != nil || other != "a.event = ANY($1)" || len(oargs) != 1 {
+					t.Errorf("scope %q with an event filter produced %q %v (err %v), want only the event predicate",
+						tc.scope, other, oargs, err)
+				}
+				return
+			}
+			if where != set {
+				t.Errorf("scope %q produced %q, want %q", tc.scope, where, set)
+			}
+			if !reflect.DeepEqual(args, tc.wantArgs) {
+				t.Errorf("scope %q bound %#v, want %#v (an empty set must be non-nil)", tc.scope, args, tc.wantArgs)
+			}
+		})
+	}
+
+	t.Run("composes with another filter", func(t *testing.T) {
+		where, args, err := audit.ScopedFilterSQLForTest(
+			audit.Filter{Limit: 50, Events: []string{"invoice.created"}}, "{"+a+"}")
+		if err != nil {
+			t.Fatalf("unexpected error %v", err)
+		}
+		if !strings.Contains(where, "a.event = ANY(") || !strings.Contains(where, "a.entity_id = ANY(") || len(args) != 2 {
+			t.Errorf("produced %q with %d args, want the event and the scope predicates, 2 args", where, len(args))
+		}
+	})
 }

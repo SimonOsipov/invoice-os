@@ -119,6 +119,12 @@ func nightlyProblems(yml string) []string {
 	}
 	for _, j := range workflowJobsOf(yml) {
 		if j.name == "advisories" {
+			if _, ok := jobKey(j, "if"); ok {
+				problems = append(problems, "nightly has an if:")
+			}
+			if _, ok := jobKey(j, "permissions"); ok {
+				problems = append(problems, "nightly job overrides permissions; no issues permission allowed")
+			}
 			return append(problems, advisoriesJobProblems("nightly", j)...)
 		}
 	}
@@ -259,4 +265,34 @@ func TestAdvisoriesNightly_ContinueOnErrorFails(t *testing.T) {
 	t.Parallel()
 	ci, n := mutateNightly(t, "    name: advisories nightly\n", "    name: advisories nightly\n    continue-on-error: true\n")
 	requireAdvisoriesProblem(t, ci, n, "continue-on-error")
+}
+
+func TestAdvisoriesNightly_NoWorkflowDispatchFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "  workflow_dispatch:\n", "")
+	requireAdvisoriesProblem(t, ci, n, "no workflow_dispatch")
+}
+
+func TestAdvisoriesNightly_CommentedScheduleFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, nightlyScheduleYML, "  # schedule:\n  #   - cron: '23 5 * * *'\n")
+	requireAdvisoriesProblem(t, ci, n, "no schedule")
+}
+
+func TestAdvisoriesNightly_JobIssuesPermissionFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "    name: advisories nightly\n", "    name: advisories nightly\n    permissions:\n      issues: write\n")
+	requireAdvisoriesProblem(t, ci, n, "issues")
+}
+
+func TestAdvisoriesNightly_JobIfFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "    name: advisories nightly\n", "    name: advisories nightly\n    if: false\n")
+	requireAdvisoriesProblem(t, ci, n, "has an if:")
+}
+
+func TestCIAdvisories_RollupEchoMissingFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateCI(t, advisoriesEcho+"\n", "")
+	requireAdvisoriesProblem(t, ci, n, "result echo")
 }

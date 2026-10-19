@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StaffGate } from '@invoice-os/console-session'
 
 import App from './App'
+import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { KEPT_KEY } from './blog'
 import { GLYPHS } from './glyphs'
@@ -106,6 +107,11 @@ describe('App', () => {
     expect(html).toContain('width="17"')
     expect(html).toContain('height="17"')
     expect(html).toContain(GLYPHS['file-text'][0])
+  })
+
+  it('the sidebar names the Blog row Blog', () => {
+    const html = renderToStaticMarkup(<Sidebar screen="blog" onNavigate={() => undefined} />)
+    expect(html).toContain('>Blog</span>')
   })
 })
 

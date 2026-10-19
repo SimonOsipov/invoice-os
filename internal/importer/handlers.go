@@ -205,6 +205,7 @@ func CreateHandler(
 	imp func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool, defaultInvoiceKind string) (BatchResult, error),
 	open func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error),
 	save func(ctx context.Context, entityID string, header []string, mapping map[string]string) error,
+	entityVisible func(ctx context.Context, entityID string) error,
 	log *slog.Logger,
 ) http.HandlerFunc {
 	if log == nil {
@@ -287,6 +288,16 @@ func CreateHandler(
 		// the document store's own 22P02 mapping.
 		if _, err := uuid.Parse(documentID); err != nil {
 			writeError(w, http.StatusBadRequest, "document_id must be a well-formed uuid")
+			return
+		}
+
+		// Before open: a refused call must not write a document.read audit row.
+		if err := entityVisible(r.Context(), entityID); err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "importer: check entity", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
 			return
 		}
 

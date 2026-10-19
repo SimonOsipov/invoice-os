@@ -405,7 +405,7 @@ func TestClientScope_MalformedIdsAnswer400BeforeTheEntityCheck(t *testing.T) {
 func TestClientScope_ImportRouteOutsideTheSetIsNotFoundAndWritesNoBatch(t *testing.T) {
 	f := newCSFixture(t, "CS import route")
 	doc := storeDocumentAs(t, f.docSvc, f.tenant, "data.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"CS-R1"}}))
-	h := CreateHandler(f.svc.Import, f.docSvc.Open, f.store.SaveMapping, nil)
+	h := CreateHandler(f.svc.Import, f.docSvc.Open, f.store.SaveMapping, f.store.EntityVisible, nil)
 	post := func(entity, query string) *httptest.ResponseRecorder {
 		body, ct := buildImportForm(t, entity, `{"invoice_number":"Inv No"}`, doc.ID)
 		raw, _ := io.ReadAll(body)
@@ -417,6 +417,7 @@ func TestClientScope_ImportRouteOutsideTheSetIsNotFoundAndWritesNoBatch(t *testi
 		return rec
 	}
 
+	readsBefore := csDocumentReads(t, f.super, f.tenant)
 	for name, query := range map[string]string{"real": "", "dry run": "?dry_run=true"} {
 		rec := post(f.entB, query)
 		if rec.Code != http.StatusNotFound || strings.TrimSpace(rec.Body.String()) != `{"error":"not found"}` {
@@ -429,8 +430,14 @@ func TestClientScope_ImportRouteOutsideTheSetIsNotFoundAndWritesNoBatch(t *testi
 	if n := csCount(t, f.super, `SELECT count(*) FROM import_mappings WHERE entity_id = $1`, f.entB); n != 0 {
 		t.Errorf("import_mappings for B = %d, want 0", n)
 	}
+	if n := csDocumentReads(t, f.super, f.tenant) - readsBefore; n != 0 {
+		t.Errorf("document.read rows written by refused imports = %d, want 0", n)
+	}
 	if rec := post(f.entA, ""); rec.Code != http.StatusCreated {
 		t.Errorf("import for A: %d %s, want 201", rec.Code, rec.Body.String())
+	}
+	if n := csDocumentReads(t, f.super, f.tenant) - readsBefore; n != 1 {
+		t.Errorf("document.read rows after the visible import = %d, want 1", n)
 	}
 }
 

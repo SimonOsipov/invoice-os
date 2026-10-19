@@ -242,7 +242,7 @@ func main() {
 	aiCallStore := aicalls.NewStore(pool)
 	app.Mux.HandleFunc("GET /v1/staff/ai-calls", aicalls.StaffCallsHandler(aiCallStore.StaffCalls, app.Logger))
 	app.Mux.HandleFunc("GET /v1/staff/ai-calls/totals", aicalls.StaffTotalsHandler(aiCallStore.StaffTotals, app.Logger))
-	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.Open, impStore.SaveMapping, app.Logger))
+	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.Open, impStore.SaveMapping, impStore.EntityVisible, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler(docSvc.Store, app.Logger))
 	// POST /v1/imports/document -- the document-import route (EXTR-06-06): a stored
 	// extraction becomes an invoice with no file/mapping wire at all.

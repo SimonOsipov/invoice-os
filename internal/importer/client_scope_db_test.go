@@ -190,7 +190,7 @@ func TestClientScope_SavedMappingOutsideTheSetIsNotFound(t *testing.T) {
 		t.Fatalf("SaveMapping(B): %v", err)
 	}
 	doc := storeDocumentAs(t, f.docSvc, f.tenant, "data.csv", "", csvBody(t, header, [][]string{{"1"}}))
-	h := SavedMappingHandler(f.docSvc.Open, f.store.SavedMapping, f.store.EntityVisible, nil)
+	h := SavedMappingHandler(f.docSvc.OpenLinked, f.store.SavedMapping, f.store.EntityVisible, nil)
 	before := csDocumentReads(t, f.super, f.tenant)
 
 	for name, entity := range map[string]string{"client B": f.entB, "unknown": uuid.NewString()} {
@@ -212,7 +212,7 @@ func TestClientScope_SuggestOutsideTheSetIsNotFoundWithoutAnAICall(t *testing.T)
 	f := newCSFixture(t, "CS suggest")
 	doc := storeDocumentAs(t, f.docSvc, f.tenant, "data.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"1"}}))
 	suggester := &fakeSuggester{enabled: true}
-	h := SuggestMappingHandler(f.docSvc.Open, f.store.SavedMapping, f.store.EntityVisible, suggester, nil)
+	h := SuggestMappingHandler(f.docSvc.OpenLinked, f.store.SavedMapping, f.store.EntityVisible, suggester, nil)
 
 	rec := csGet(h, f.limitedID, "POST", "/v1/imports/suggest-mapping", suggestReqBody(f.entB, doc.ID))
 
@@ -292,8 +292,8 @@ func TestClientScope_MappingRoutesAnswerOneNotFoundAndWriteNothing(t *testing.T)
 		t.Fatalf("SaveMapping(A): %v", err)
 	}
 	suggester := &fakeSuggester{enabled: true, answer: map[string]any{"header_row": json.Number("1")}}
-	saved := SavedMappingHandler(f.docSvc.Open, f.store.SavedMapping, f.store.EntityVisible, nil)
-	suggest := SuggestMappingHandler(f.docSvc.Open, f.store.SavedMapping, f.store.EntityVisible, suggester, nil)
+	saved := SavedMappingHandler(f.docSvc.OpenLinked, f.store.SavedMapping, f.store.EntityVisible, nil)
+	suggest := SuggestMappingHandler(f.docSvc.OpenLinked, f.store.SavedMapping, f.store.EntityVisible, suggester, nil)
 	before := csDocumentReads(t, f.super, f.tenant)
 
 	var bodies []string
@@ -342,7 +342,7 @@ func TestClientScope_AdminAndAllClientsStillReachEveryClient(t *testing.T) {
 	if _, err := f.super.Exec(context.Background(), `UPDATE memberships SET all_clients = true WHERE user_id = $1`, allClients.Subject); err != nil {
 		t.Fatalf("set all_clients: %v", err)
 	}
-	saved := SavedMappingHandler(f.docSvc.Open, f.store.SavedMapping, f.store.EntityVisible, nil)
+	saved := SavedMappingHandler(f.docSvc.OpenLinked, f.store.SavedMapping, f.store.EntityVisible, nil)
 	for name, id := range map[string]auth.Identity{
 		"admin":       {Subject: csAdminSubject(t, f), Role: "authenticated", TenantID: f.tenant},
 		"All clients": allClients,
@@ -383,8 +383,8 @@ func TestClientScope_MalformedIdsAnswer400BeforeTheEntityCheck(t *testing.T) {
 	f := newCSFixture(t, "CS malformed")
 	doc := storeDocumentAs(t, f.docSvc, f.tenant, "data.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"1"}}))
 	suggester := &fakeSuggester{enabled: true}
-	saved := SavedMappingHandler(f.docSvc.Open, f.store.SavedMapping, f.store.EntityVisible, nil)
-	suggest := SuggestMappingHandler(f.docSvc.Open, f.store.SavedMapping, f.store.EntityVisible, suggester, nil)
+	saved := SavedMappingHandler(f.docSvc.OpenLinked, f.store.SavedMapping, f.store.EntityVisible, nil)
+	suggest := SuggestMappingHandler(f.docSvc.OpenLinked, f.store.SavedMapping, f.store.EntityVisible, suggester, nil)
 	create := CreateDocumentHandler(f.svc.ImportDocument, nil)
 
 	for name, rec := range map[string]*httptest.ResponseRecorder{
@@ -408,7 +408,7 @@ func TestClientScope_MalformedIdsAnswer400BeforeTheEntityCheck(t *testing.T) {
 func TestClientScope_ImportRouteOutsideTheSetIsNotFoundAndWritesNoBatch(t *testing.T) {
 	f := newCSFixture(t, "CS import route")
 	doc := storeDocumentAs(t, f.docSvc, f.tenant, "data.csv", "", csvBody(t, []string{"Inv No"}, [][]string{{"CS-R1"}}))
-	h := CreateHandler(f.svc.Import, f.docSvc.Open, f.store.SaveMapping, f.store.EntityVisible, nil)
+	h := CreateHandler(f.svc.Import, f.docSvc.OpenLinked, f.store.SaveMapping, f.store.EntityVisible, nil)
 	post := func(entity, query string) *httptest.ResponseRecorder {
 		body, ct := buildImportForm(t, entity, `{"invoice_number":"Inv No"}`, doc.ID)
 		raw, _ := io.ReadAll(body)
@@ -475,7 +475,7 @@ func TestClientScope_SheetRouteFollowsTheLink(t *testing.T) {
 
 	before := csDocumentReads(t, f.super, f.tenant)
 	var bodies []string
-	for name, doc := range map[string]string{"unlinked": unlinked, "B's batch": linkedB, "B's invoice": invoiceB, "unknown": uuid.NewString()} {
+	for name, doc := range map[string]string{"B's batch": linkedB, "B's invoice": invoiceB, "unknown": uuid.NewString()} {
 		rec := sheet(f.limitedID, doc)
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("limited reviewer, sheet of %s: status = %d, want 404", name, rec.Code)
@@ -500,7 +500,146 @@ func TestClientScope_SheetRouteFollowsTheLink(t *testing.T) {
 			t.Errorf("limited reviewer, sheet of %s: status = %d, want 200 (body=%s)", name, rec.Code, rec.Body.String())
 		}
 	}
-	if rec := sheet(adminID, unlinked); rec.Code != http.StatusOK {
-		t.Errorf("admin, sheet of the unlinked upload: status = %d, want 200", rec.Code)
+	for name, id := range map[string]auth.Identity{"limited reviewer": f.limitedID, "admin": adminID} {
+		if rec := sheet(id, unlinked); rec.Code != http.StatusOK {
+			t.Errorf("%s, sheet of the unlinked upload: status = %d, want 200", name, rec.Code)
+		}
+	}
+}
+
+func csLinkInvoice(t *testing.T, super *pgxpool.Pool, tenant, entity, doc, number string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, $3, $4)`,
+		tenant, entity, number, doc); err != nil {
+		t.Fatalf("seed invoice: %v", err)
+	}
+}
+
+func csLinkBatch(t *testing.T, super *pgxpool.Pool, tenant, entity, doc string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO import_batches (tenant_id, entity_id, document_id, status, rows_total, rows_valid, rows_invalid, errors)
+		 VALUES ($1, $2, $3, 'completed', 1, 1, 0, '[]'::jsonb)`, tenant, entity, doc); err != nil {
+		t.Fatalf("seed batch: %v", err)
+	}
+}
+
+func TestClientScope_ADocumentOfAHiddenClientIsRefusedOnTheImportRoutes(t *testing.T) {
+	f := newCSFixture(t, "CS hidden document imports")
+	header := []string{"Inv No"}
+	hidden := storeDocumentAs(t, f.docSvc, f.tenant, "b.csv", "text/csv", csvBody(t, header, [][]string{{"B-1"}})).ID
+	csLinkBatch(t, f.super, f.tenant, f.entB, hidden)
+	own := storeDocumentAs(t, f.docSvc, f.tenant, "a.csv", "text/csv", csvBody(t, header, [][]string{{"A-1"}})).ID
+	if err := f.store.SaveMapping(f.admin, f.entA, header, map[string]string{"invoice_number": "Inv No"}); err != nil {
+		t.Fatalf("SaveMapping(A): %v", err)
+	}
+
+	suggester := &fakeSuggester{enabled: true, answer: map[string]any{"header_row": json.Number("1")}}
+	checker := &mcStub{enabled: true, resp: mcNouls(map[string]float64{"invoice_number": 1})}
+	create := CreateHandler(f.svc.Import, f.docSvc.OpenLinked, f.store.SaveMapping, f.store.EntityVisible, nil)
+	saved := SavedMappingHandler(f.docSvc.OpenLinked, f.store.SavedMapping, f.store.EntityVisible, nil)
+	suggest := SuggestMappingHandler(f.docSvc.OpenLinked, f.store.SavedMapping, f.store.EntityVisible, suggester, nil)
+	post := func(doc, query string) *httptest.ResponseRecorder {
+		body, ct := buildImportForm(t, f.entA, `{"invoice_number":"Inv No"}`, doc)
+		raw, _ := io.ReadAll(body)
+		r := httptest.NewRequest("POST", "/v1/imports"+query, bytes.NewReader(raw))
+		r.Header.Set("Content-Type", ct)
+		r = r.WithContext(auth.WithIdentity(r.Context(), f.limitedID))
+		rec := httptest.NewRecorder()
+		create.ServeHTTP(rec, r)
+		return rec
+	}
+	check := func(doc string) *httptest.ResponseRecorder {
+		rec, _ := doCheckRequest(t, f.docSvc.OpenLinked, checker, nil, &f.limitedID, checkReqBody(t, doc, map[string]string{"invoice_number": "Inv No"}))
+		return rec
+	}
+
+	readsBefore := csDocumentReads(t, f.super, f.tenant)
+	answers := map[string]*httptest.ResponseRecorder{
+		"import":        post(hidden, ""),
+		"dry run":       post(hidden, "?dry_run=true"),
+		"saved-mapping": csGet(saved, f.limitedID, "GET", "/v1/imports/saved-mapping?entity_id="+f.entA+"&document_id="+hidden, ""),
+		"suggest":       csGet(suggest, f.limitedID, "POST", "/v1/imports/suggest-mapping", suggestReqBody(f.entA, hidden)),
+		"check":         check(hidden),
+	}
+	for name, rec := range answers {
+		if rec.Code != http.StatusNotFound || strings.TrimSpace(rec.Body.String()) != `{"error":"not found"}` {
+			t.Errorf("%s of B's document as a reviewer limited to A: %d %s, want 404 not found", name, rec.Code, rec.Body.String())
+		}
+	}
+	if n := csDocumentReads(t, f.super, f.tenant) - readsBefore; n != 0 {
+		t.Errorf("document.read rows written by refused calls = %d, want 0", n)
+	}
+	if len(suggester.calls) != 0 || len(checker.calls) != 0 {
+		t.Errorf("AI calls = %d suggest, %d check, want 0", len(suggester.calls), len(checker.calls))
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE entity_id = $1`, f.entA); n != 0 {
+		t.Errorf("import_batches for A = %d, want 0", n)
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM invoices WHERE entity_id = $1`, f.entA); n != 0 {
+		t.Errorf("invoices for A = %d, want 0", n)
+	}
+
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"dry run":       post(own, "?dry_run=true"),
+		"saved-mapping": csGet(saved, f.limitedID, "GET", "/v1/imports/saved-mapping?entity_id="+f.entA+"&document_id="+own, ""),
+		"suggest":       csGet(suggest, f.limitedID, "POST", "/v1/imports/suggest-mapping", suggestReqBody(f.entA, own)),
+		"check":         check(own),
+		"import":        post(own, ""),
+	} {
+		if rec.Code != http.StatusOK && rec.Code != http.StatusCreated {
+			t.Errorf("%s of the member's own new upload: %d %s, want 200 or 201", name, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestClientScope_ADocumentFiledUnderAHiddenClientCannotBeFiledAgain(t *testing.T) {
+	f := newCSFixture(t, "CS hidden filed document")
+	filedUnderB := docSeedDocument(t, f.super, f.tenant)
+	docSeedExtraction(t, f.super, f.tenant, filedUnderB, docNoNumberValues())
+	csLinkInvoice(t, f.super, f.tenant, f.entB, filedUnderB, "CS-FILED-B")
+	supply := SupplyNumberHandler(f.svc.SupplyInvoiceNumber, nil)
+	reading := ReadingHandler(f.svc.CarriedReading, nil)
+
+	rec := csGet(supply, f.limitedID, "POST", "/v1/imports/document/invoice", supplyJSONBody(f.entA, filedUnderB, "INV-2"))
+	if rec.Code != http.StatusNotFound || strings.TrimSpace(rec.Body.String()) != `{"error":"not found"}` {
+		t.Errorf("supply a number for a document filed under B: %d %s, want 404 not found", rec.Code, rec.Body.String())
+	}
+	if n := countInvoicesCitingDocument(t, f.super, filedUnderB); n != 1 {
+		t.Errorf("invoices citing the document = %d, want 1 (B's)", n)
+	}
+	if got, err := f.svc.CarriedReading(f.limited, filedUnderB); err != nil || got != nil {
+		t.Errorf("CarriedReading of B's document as a reviewer limited to A = %v, %v, want nil, nil", got, err)
+	}
+	if rec := csGet(reading, f.limitedID, "GET", "/v1/imports/document/reading?document_id="+filedUnderB, ""); !strings.Contains(rec.Body.String(), `"reading":null`) {
+		t.Errorf("reading route for B's document = %d %s, want reading null", rec.Code, rec.Body.String())
+	}
+	if _, err := f.svc.ImportDocument(f.limited, f.entA, filedUnderB); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ImportDocument(B's document, entity A): err = %v, want ErrNotFound", err)
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE entity_id = $1`, f.entA); n != 0 {
+		t.Errorf("import_batches for A = %d, want 0", n)
+	}
+	if _, err := f.svc.SupplyInvoiceNumber(f.admin, f.entA, filedUnderB, "INV-2"); !errors.Is(err, ErrDocumentAlreadyFiled) {
+		t.Errorf("control: admin supplying a number for the filed document: err = %v, want ErrDocumentAlreadyFiled", err)
+	}
+}
+
+func TestClientScope_AnInvoiceUnderAHiddenClientStillCountsAsFiledForAVisibleBatch(t *testing.T) {
+	f := newCSFixture(t, "CS hidden filed, visible batch")
+	doc := docSeedDocument(t, f.super, f.tenant)
+	docSeedExtraction(t, f.super, f.tenant, doc, docNoNumberValues())
+	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
+	csLinkInvoice(t, f.super, f.tenant, f.entB, doc, "CS-FILED-B2")
+
+	if _, err := f.svc.SupplyInvoiceNumber(f.limited, f.entA, doc, "INV-3"); !errors.Is(err, ErrDocumentAlreadyFiled) {
+		t.Errorf("SupplyInvoiceNumber as a reviewer limited to A: err = %v, want ErrDocumentAlreadyFiled", err)
+	}
+	if got, err := f.svc.CarriedReading(f.limited, doc); err != nil || got != nil {
+		t.Errorf("CarriedReading = %v, %v, want nil, nil (filed)", got, err)
+	}
+	if n := countInvoicesCitingDocument(t, f.super, doc); n != 1 {
+		t.Errorf("invoices citing the document = %d, want 1", n)
 	}
 }

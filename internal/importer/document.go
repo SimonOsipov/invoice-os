@@ -18,6 +18,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/invoicefields"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -52,6 +53,8 @@ type SettledExtraction struct {
 // internal/extraction (TestImporterPackage_DoesNotImportExtractionPackage) -- that edge would
 // drag go-pdfium into cmd/invoice.
 //
+// A document that fails document.ReadableByScope is ErrNotFound, as an absent one.
+//
 // Correction-blind on purpose: a human correction is written to the invoice in the same
 // transaction as the extraction_field_corrections row, so reading that table here would apply
 // the same value twice through two paths (TestSettledExtraction_IgnoresCorrectionsAndReadsRankZero).
@@ -63,7 +66,7 @@ func (s *Store) SettledExtraction(ctx context.Context, documentID string) (Settl
 			`SELECT j.id, coalesce(d.filename, '')
 			   FROM extraction_jobs j
 			   JOIN documents d ON d.id = j.document_id
-			  WHERE j.document_id = $1 AND j.state = 'succeeded'
+			  WHERE j.document_id = $1 AND j.state = 'succeeded' AND `+document.ReadableByScope+`
 			  ORDER BY j.created_at DESC, j.id DESC
 			  LIMIT 1`,
 			documentID,

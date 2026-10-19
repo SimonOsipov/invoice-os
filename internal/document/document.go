@@ -144,14 +144,14 @@ func (s *Store) Get(ctx context.Context, id string) (Document, error) {
 	return out, nil
 }
 
-// GetLinked is Get for a caller limited to a client set: such a caller reads a document only
-// through an invoice or batch it can see. Admin, "All clients" and in-house callers read any
-// tenant document. A refused read writes no document.read row.
-//
-// The rest as Get: A cross-tenant id and a genuinely absent one both 0-row, so both
-// yield ErrNotFound and neither leaves an audit row — a refused read must not
-// leak that the id exists into the trail. A malformed uuid raises 22P02, mapped
-// to ErrValidation.
+// ReadableByScope is the SQL condition (on a documents row aliased d) for the document rule: a
+// limited caller reads a document nothing cites, or one cited by a visible invoice or batch.
+const ReadableByScope = `(coalesce(current_setting('app.entity_scope', true), '') IN ('', '*')
+	     OR EXISTS (SELECT 1 FROM invoices i WHERE i.source_document_id = d.id)
+	     OR EXISTS (SELECT 1 FROM import_batches b WHERE b.document_id = d.id)
+	     OR NOT (SELECT has_link FROM public.document_link_state(d.id)))`
+
+// GetLinked is Get under ReadableByScope; a refused read writes no document.read row.
 func (s *Store) GetLinked(ctx context.Context, id string) (Document, error) {
 	var out Document
 
@@ -160,9 +160,7 @@ func (s *Store) GetLinked(ctx context.Context, id string) (Document, error) {
 
 		if err := scanDocument(tx.QueryRow(ctx,
 			`SELECT `+documentColumns+` FROM documents d WHERE d.id = $1
-			   AND (coalesce(current_setting('app.entity_scope', true), '') IN ('', '*')
-			     OR EXISTS (SELECT 1 FROM invoices i WHERE i.source_document_id = d.id)
-			     OR EXISTS (SELECT 1 FROM import_batches b WHERE b.document_id = d.id))`, id,
+			   AND `+ReadableByScope, id,
 		), &out); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound

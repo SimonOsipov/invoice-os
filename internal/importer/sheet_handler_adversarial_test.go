@@ -451,6 +451,6 @@ func TestSheetRoute_MountedInCmdInvoiceWithSheetHandler(t *testing.T) {
 	}
 	if len(handler.Args) == 0 || selectorNameForImporter(handler.Args[0]) == "" ||
 		!strings.HasSuffix(selectorNameForImporter(handler.Args[0]), ".OpenLinked") {
-		t.Errorf("SheetHandler's open argument is not an .OpenLinked method value; a limited member could read an unlinked upload")
+		t.Errorf("SheetHandler's open argument is not an .OpenLinked method value; a limited member could read a document linked only to a hidden client")
 	}
 }

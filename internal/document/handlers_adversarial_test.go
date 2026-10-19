@@ -391,7 +391,7 @@ func TestDownload_RouteIsMountedInCmdInvoice(t *testing.T) {
 	}
 	if len(handler.Args) == 0 || selectorName(handler.Args[0]) == "" ||
 		!strings.HasSuffix(selectorName(handler.Args[0]), ".OpenLinked") {
-		t.Errorf("DownloadHandler's open argument is not an .OpenLinked method value; a limited member could read an unlinked upload")
+		t.Errorf("DownloadHandler's open argument is not an .OpenLinked method value; a limited member could read a document linked only to a hidden client")
 	}
 }
 

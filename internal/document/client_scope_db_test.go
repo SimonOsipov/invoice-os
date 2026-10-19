@@ -95,13 +95,14 @@ func TestClientScope_LinkedDocumentFollowsTheSet(t *testing.T) {
 	if got, err := f.store.GetLinked(f.limited, f.docX); err != nil || got.ID != f.docX {
 		t.Errorf("GetLinked(X, linked by A's invoice) = %q, %v, want found", got.ID, err)
 	}
-	for name, id := range map[string]string{"Y, linked only by B's batch": f.docY, "Z, unlinked": f.docZ} {
-		if _, err := f.store.GetLinked(f.limited, id); !errors.Is(err, document.ErrNotFound) {
-			t.Errorf("GetLinked(%s) as a reviewer limited to A: err = %v, want ErrNotFound", name, err)
-		}
+	if got, err := f.store.GetLinked(f.limited, f.docZ); err != nil || got.ID != f.docZ {
+		t.Errorf("GetLinked(Z, unlinked) = %q, %v, want found", got.ID, err)
 	}
-	if n := auditCount(t, f.app, f.tenant, "document.read"); n != 1 {
-		t.Errorf("document.read rows = %d, want 1 (only X)", n)
+	if _, err := f.store.GetLinked(f.limited, f.docY); !errors.Is(err, document.ErrNotFound) {
+		t.Errorf("GetLinked(Y, linked only by B's batch) as a reviewer limited to A: err = %v, want ErrNotFound", err)
+	}
+	if n := auditCount(t, f.app, f.tenant, "document.read"); n != 2 {
+		t.Errorf("document.read rows = %d, want 2 (X and Z)", n)
 	}
 	if n := auditCitingCount(t, f.app, f.tenant, "document.read", f.docX); n != 1 {
 		t.Errorf("document.read rows citing X = %d, want 1", n)
@@ -150,10 +151,13 @@ func TestClientScope_LinkIsAnyVisibleInvoiceOrBatch(t *testing.T) {
 	if _, err := f.store.GetLinked(f.limited, onlyB); !errors.Is(err, document.ErrNotFound) {
 		t.Errorf("GetLinked(linked only by B's invoice): err = %v, want ErrNotFound", err)
 	}
-	for name, id := range map[string]string{"X (A's invoice)": f.docX, "W (A's batch)": f.docW, "Z (unlinked)": f.docZ} {
+	for name, id := range map[string]string{"X (A's invoice)": f.docX, "W (A's batch)": f.docW} {
 		if _, err := f.store.GetLinked(noClients, id); !errors.Is(err, document.ErrNotFound) {
 			t.Errorf("GetLinked(%s) as a reviewer with no clients: err = %v, want ErrNotFound", name, err)
 		}
+	}
+	if got, err := f.store.GetLinked(noClients, f.docZ); err != nil || got.ID != f.docZ {
+		t.Errorf("GetLinked(Z, unlinked) as a reviewer with no clients = %q, %v, want found", got.ID, err)
 	}
 	if _, err := f.store.GetLinked(f.limited, uuid.NewString()); !errors.Is(err, document.ErrNotFound) {
 		t.Errorf("GetLinked(unknown id): err = %v, want ErrNotFound", err)
@@ -184,14 +188,14 @@ func TestClientScope_DownloadRouteAnswersOneNotFoundAndAuditsOnlyServedReads(t *
 	}
 
 	var refused []string
-	for name, id := range map[string]string{"Y, B's batch": f.docY, "Z, unlinked": f.docZ, "unknown": uuid.NewString()} {
+	for name, id := range map[string]string{"Y, B's batch": f.docY, "unknown": uuid.NewString()} {
 		rec := get(f.limited, id)
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("limited reviewer, %s: status = %d, want 404", name, rec.Code)
 		}
 		refused = append(refused, rec.Body.String())
 	}
-	if len(refused) != 3 || refused[0] != refused[1] || refused[1] != refused[2] || !strings.Contains(refused[0], "not found") {
+	if len(refused) != 2 || refused[0] != refused[1] || !strings.Contains(refused[0], "not found") {
 		t.Errorf("refusal bodies = %q, want one identical not-found body", refused)
 	}
 	if n := len(objects.getKeys); n != 0 {
@@ -204,7 +208,7 @@ func TestClientScope_DownloadRouteAnswersOneNotFoundAndAuditsOnlyServedReads(t *
 		t.Errorf("malformed id: status = %d, want 400", rec.Code)
 	}
 
-	for name, id := range map[string]string{"X, A's invoice": f.docX, "W, A's batch": f.docW} {
+	for name, id := range map[string]string{"X, A's invoice": f.docX, "W, A's batch": f.docW, "Z, unlinked": f.docZ} {
 		if rec := get(f.limited, id); rec.Code != http.StatusOK || rec.Body.String() != "hello world" {
 			t.Errorf("limited reviewer, %s: %d %q, want 200 with the bytes", name, rec.Code, rec.Body.String())
 		}
@@ -214,7 +218,28 @@ func TestClientScope_DownloadRouteAnswersOneNotFoundAndAuditsOnlyServedReads(t *
 			t.Errorf("%s reading the unlinked upload: status = %d, want 200", name, rec.Code)
 		}
 	}
-	if n := auditCount(t, f.app, f.tenant, "document.read"); n != 4 {
-		t.Errorf("document.read rows = %d, want 4 (two limited reads, two full-access reads)", n)
+	if n := auditCount(t, f.app, f.tenant, "document.read"); n != 5 {
+		t.Errorf("document.read rows = %d, want 5 (three limited reads, two full-access reads)", n)
+	}
+}
+
+func TestClientScope_AHiddenInvoiceOrBatchLinkRefusesTheDocument(t *testing.T) {
+	f := newCSFixture(t)
+	byInvoice, byBoth := csDocument(t, f.super, f.tenant), csDocument(t, f.super, f.tenant)
+	csExec(t, f.super, `INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-HID-I', $3)`, f.tenant, f.entB, byInvoice)
+	csExec(t, f.super, `INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-HID-J', $3)`, f.tenant, f.entB, byBoth)
+	csExec(t, f.super, `INSERT INTO import_batches (tenant_id, entity_id, document_id, status, rows_total, rows_valid, rows_invalid, errors)
+		VALUES ($1, $2, $3, 'completed', 1, 1, 0, '[]'::jsonb)`, f.tenant, f.entB, byBoth)
+
+	for name, id := range map[string]string{"B's invoice": byInvoice, "B's invoice and batch": byBoth} {
+		if _, err := f.store.GetLinked(f.limited, id); !errors.Is(err, document.ErrNotFound) {
+			t.Errorf("GetLinked(linked only by %s) as a reviewer limited to A: err = %v, want ErrNotFound", name, err)
+		}
+		if got, err := f.store.GetLinked(f.admin, id); err != nil || got.ID != id {
+			t.Errorf("GetLinked(linked by %s) as admin = %q, %v, want found", name, got.ID, err)
+		}
+	}
+	if n := auditCount(t, f.app, f.tenant, "document.read"); n != 2 {
+		t.Errorf("document.read rows = %d, want 2 (the admin reads only)", n)
 	}
 }

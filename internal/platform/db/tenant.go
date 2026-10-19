@@ -88,8 +88,8 @@ func WithinRequestTenantTxOpts(ctx context.Context, pool *pgxpool.Pool, opts pgx
 		_ = br.Close()
 		return fmt.Errorf("db: set tenant context: %w", err)
 	}
-	var status, scope string
-	scanErr := br.QueryRow().Scan(&status, &scope)
+	var status string
+	scanErr := br.QueryRow().Scan(&status, nil) // column 2 is set_config's echo, unused
 	// Close returns the batch's stored error first, so scanErr must be classified
 	// before closeErr or the specific wrap below is unreachable.
 	closeErr := br.Close()

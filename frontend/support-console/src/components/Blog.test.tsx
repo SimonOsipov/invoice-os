@@ -183,6 +183,16 @@ describe('BlogList handlers', () => {
     expect(onRetry).toHaveBeenCalledTimes(1)
   })
 
+  it('a status chip keeps the pointer cursor and the chip transition', () => {
+    const chips = find(tree(ready([post()])), (e) => e.type === 'button' && e.props.className === 'ops-chip')
+    expect(chips).toHaveLength(3)
+    for (const c of chips) {
+      const style = c.props.style as { cursor?: string; transition?: string }
+      expect(style.cursor).toBe('pointer')
+      expect(style.transition).toBe('background 120ms, border-color 120ms, color 120ms')
+    }
+  })
+
   it('the tab strip uses the tab tokens', () => {
     const html = render(ready([post()]))
     expect(html).toContain('border-bottom:2px solid var(--tab-border)')

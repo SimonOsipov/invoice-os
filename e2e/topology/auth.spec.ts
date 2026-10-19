@@ -60,6 +60,8 @@ test('deployed app: sign-out redirects to the landing page', async ({ page }) =>
   const errors = collectErrors(page)
 
   await signInAs(page, 'firm')
+  // The app's mount reads 401 if Sign out lands mid-flight.
+  await page.waitForLoadState('networkidle')
 
   await page.getByRole('button', { name: 'Sign out' }).click()
   await page.waitForURL((url) => url.href.startsWith(LANDING_URL))

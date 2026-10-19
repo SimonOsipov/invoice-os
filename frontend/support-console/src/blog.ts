@@ -474,7 +474,7 @@ export function partialEditor(state: EditorState, post: Post, serverHasCover = s
 export type KeptStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 export type Kept = { v: 1; owner: string; draft: Draft }
 
-export const KEPT_KEY = 'invoice-os.ops-blog-draft'
+export const KEPT_KEY = 'invoice-os.support-blog-draft'
 
 export function writeKept(storage: KeptStorage, owner: string, draft: Draft): void {
   try {
@@ -487,7 +487,7 @@ export function writeKept(storage: KeptStorage, owner: string, draft: Draft): vo
   try {
     storage.setItem(KEPT_KEY, JSON.stringify({ v: 1, owner, draft: lean }))
   } catch (e) {
-    console.warn('[ops-blog] could not keep the unsaved draft:', e)
+    console.warn('[support-blog] could not keep the unsaved draft:', e)
   }
 }
 

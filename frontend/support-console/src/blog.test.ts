@@ -610,6 +610,8 @@ describe('kept copy', () => {
     const draft = d()
     writeKept(storage, 'S', draft)
     expect(map.has(KEPT_KEY)).toBe(true)
+    expect(KEPT_KEY).toBe('invoice-os.support-blog-draft')
+    expect(map.has('invoice-os.support-blog-draft')).toBe(true)
     expect(readKept(storage)).toEqual({ v: 1, owner: 'S', draft })
   })
 

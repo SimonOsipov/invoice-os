@@ -1,4 +1,4 @@
-// The deployed v2 Support Console. Its screens, Submissions, Rules, Audit, Tenants, System health and AI usage, read real data; Rules also switches real rules.
+// The deployed v2 Support Console. Its screens, Submissions, Rules, Audit, Tenants, System health and AI usage, read real data; Rules also switches real rules. The Blog is in blog-editor.spec.ts.
 // Resolved values are read at 1440; layout claims assert a relationship at every wide width.
 // Screenshots are attached for the reviewer and never asserted.
 import { randomUUID } from 'node:crypto'

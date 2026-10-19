@@ -142,6 +142,8 @@ export function BlogList({ state, filters, onFilters, onRetry, onPin, onNew, onO
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: 7,
+                      cursor: 'pointer',
+                      transition: 'background 120ms, border-color 120ms, color 120ms',
                     }}
                   >
                     {c.label}

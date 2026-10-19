@@ -233,8 +233,8 @@ func TestCIGovulncheck_UnversionedFails(t *testing.T) {
 
 func TestCIGovulncheck_RollupNeedsMissingFails(t *testing.T) {
 	yml := mutateOnce(t, readWorkflow(t, "ci.yml"),
-		"rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite, govulncheck]",
-		"rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite]")
+		"rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite, govulncheck, advisories]",
+		"rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite, advisories]")
 	requireProblem(t, yml, "ci needs lacks")
 }
 

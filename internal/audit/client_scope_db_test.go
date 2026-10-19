@@ -5,8 +5,10 @@ package audit_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -15,6 +17,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // csSuper opens a superuser pool: all_clients, membership_clients and tenants.kind are not
@@ -36,8 +39,13 @@ func csSuper(t *testing.T) *pgxpool.Pool {
 // csMember seeds an active member and returns an identity context for Store.List.
 func csMember(t *testing.T, super *pgxpool.Pool, tenant, role string, allClients bool, clients ...string) context.Context {
 	t.Helper()
+	return csMemberUser(t, super, uuid.NewString(), tenant, role, allClients, clients...)
+}
+
+// csMemberUser is csMember for a given user id, so one user can hold two tenants.
+func csMemberUser(t *testing.T, super *pgxpool.Pool, user, tenant, role string, allClients bool, clients ...string) context.Context {
+	t.Helper()
 	ctx := context.Background()
-	user := uuid.NewString()
 	if _, err := super.Exec(ctx,
 		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, $3, 'active', $4)`,
 		tenant, user, role, allClients); err != nil {
@@ -386,4 +394,223 @@ func TestClientScope_AuditFacetsCountOnlyVisibleRows(t *testing.T) {
 			t.Errorf("%s: company facet holds %v (NULL bucket %v), want A, B and the NULL bucket", label, ids, hasNull)
 		}
 	}
+}
+
+// --- QA adversarial coverage --------------------------------------------------------
+
+// csWalk pages through the log with the given page size and returns every row id and the page count.
+func csWalk(t *testing.T, f *fixture, ctx context.Context, limit int) (ids []int64, pages int, totals []int) {
+	t.Helper()
+	filter := audit.Filter{Limit: limit}
+	for pages < 10 {
+		pages++
+		got := csList(t, f, ctx, filter)
+		totals = append(totals, got.Total)
+		for _, e := range got.Events {
+			var id int64
+			if _, err := fmt.Sscan(e.ID, &id); err != nil {
+				t.Fatalf("event id %q: %v", e.ID, err)
+			}
+			ids = append(ids, id)
+		}
+		if !got.Page.HasMore {
+			return ids, pages, totals
+		}
+		cur, err := audit.DecodeCursor(*got.Page.NextCursor)
+		if err != nil {
+			t.Fatalf("decode cursor: %v", err)
+		}
+		filter.Cursor = &cur
+	}
+	t.Fatal("cursor walk did not end")
+	return nil, 0, nil
+}
+
+// Page size 1 puts A's and B's rows on separate pages, so a page that dropped the scope shows B.
+func TestClientScope_AuditCursorPagesStayScoped(t *testing.T) {
+	f := requireFixture(t)
+	c := csBuildCorpus(t, f)
+
+	ids, pages, totals := csWalk(t, f, c.limited, 1)
+	if pages != 2 {
+		t.Errorf("limited member paged %d times, want 2 (one per row of A)", pages)
+	}
+	if len(ids) == 0 {
+		t.Fatal("limited member walked no rows")
+	}
+	if got, want := csSorted(ids), csSorted(c.a.rows); !reflect.DeepEqual(got, want) {
+		t.Errorf("limited member walked rows %v, want A's %v", got, want)
+	}
+	for _, n := range totals {
+		if n != 2 {
+			t.Errorf("total on a page = %d, want 2 on every page", n)
+		}
+	}
+
+	all, allPages, _ := csWalk(t, f, c.allClients, 2)
+	if want := csSorted(c.a.rows, c.b.rows, c.ws); len(all) != len(want) || allPages != 3 {
+		t.Errorf("All clients control walked %d rows in %d pages, want %d rows in 3", len(all), allPages, len(want))
+	}
+}
+
+// The company facet omits its own filter but keeps the scope: it may list A, never B.
+func TestClientScope_AuditFacetsKeepTheScopeUnderACompanyFilter(t *testing.T) {
+	f := requireFixture(t)
+	c := csBuildCorpus(t, f)
+	count := func(fs []audit.Facet) (n int) {
+		for _, b := range fs {
+			n += b.Count
+		}
+		return n
+	}
+	hasEntity := func(fs []audit.Facet, id string) bool {
+		for _, b := range fs {
+			if b.Value != nil && *b.Value == id {
+				return true
+			}
+		}
+		return false
+	}
+
+	hidden := csList(t, f, c.limited, audit.Filter{Limit: 50, Company: audit.NamedCompany(c.b.entity)})
+	if n := count(hidden.Facets.Event) + count(hidden.Facets.Actor); n != 0 {
+		t.Errorf("limited, company=B: event and actor facets count %d rows, want 0", n)
+	}
+	if len(hidden.Facets.Company) != 1 || !hasEntity(hidden.Facets.Company, c.a.entity) || hasEntity(hidden.Facets.Company, c.b.entity) {
+		t.Errorf("limited, company=B: company facet = %+v, want only A", hidden.Facets.Company)
+	}
+
+	own := csList(t, f, c.limited, audit.Filter{Limit: 50, Company: audit.NamedCompany(c.a.entity)})
+	if n := count(own.Facets.Event); n != 2 {
+		t.Errorf("limited, company=A: event facet sums to %d, want 2", n)
+	}
+
+	adm := csList(t, f, c.admin, audit.Filter{Limit: 50, Company: audit.NamedCompany(c.b.entity)})
+	if len(adm.Facets.Company) != 3 || !hasEntity(adm.Facets.Company, c.a.entity) || !hasEntity(adm.Facets.Company, c.b.entity) {
+		t.Errorf("admin, company=B: company facet = %+v, want A, B and the NULL bucket", adm.Facets.Company)
+	}
+}
+
+func TestClientScope_AuditUnassignedMemberFacetsAreEmpty(t *testing.T) {
+	f := requireFixture(t)
+	c := csBuildCorpus(t, f)
+
+	adm := csList(t, f, c.admin, audit.Filter{Limit: 50})
+	if len(adm.Facets.Event) == 0 || len(adm.Facets.Actor) == 0 || len(adm.Facets.Company) == 0 {
+		t.Fatalf("admin control facets are empty: %+v", adm.Facets)
+	}
+
+	got := csList(t, f, c.unassigned, audit.Filter{Limit: 50})
+	if got.Facets.Event == nil || got.Facets.Actor == nil || got.Facets.Company == nil {
+		t.Errorf("unassigned facets must be empty slices, not nil: %+v", got.Facets)
+	}
+	if len(got.Facets.Event)+len(got.Facets.Actor)+len(got.Facets.Company) != 0 {
+		t.Errorf("unassigned member read facets %+v, want none", got.Facets)
+	}
+}
+
+// Search arms are OR-ed; each must stay inside the scope, workspace events included.
+func TestClientScope_AuditSearchCannotReachAWorkspaceRow(t *testing.T) {
+	f := requireFixture(t)
+	c := csBuildCorpus(t, f)
+
+	csAssertRows(t, "limited, q=suspended", csList(t, f, c.limited, audit.Filter{Limit: 50, Q: "suspended"}), nil)
+	csAssertRows(t, "admin, q=suspended", csList(t, f, c.admin, audit.Filter{Limit: 50, Q: "suspended"}), c.ws[:1])
+
+	csAssertRows(t, "limited, q=created", csList(t, f, c.limited, audit.Filter{Limit: 50, Q: "created"}), c.a.rows[:1])
+	csAssertRows(t, "admin, q=created", csList(t, f, c.admin, audit.Filter{Limit: 50, Q: "created"}),
+		csSorted(c.a.rows[:1], c.b.rows[:1], c.ws[1:]))
+}
+
+func TestClientScope_AuditFiltersComposeWithTheScope(t *testing.T) {
+	f := requireFixture(t)
+	c := csBuildCorpus(t, f)
+	bActor := "cs-actor-" + c.b.name
+
+	csAssertRows(t, "limited, event=invoice.created",
+		csList(t, f, c.limited, audit.Filter{Limit: 50, Events: []string{"invoice.created"}}), c.a.rows[:1])
+	csAssertRows(t, "limited, event=document.created (workspace)",
+		csList(t, f, c.limited, audit.Filter{Limit: 50, Events: []string{"document.created"}}), nil)
+	csAssertRows(t, "admin, event=document.created",
+		csList(t, f, c.admin, audit.Filter{Limit: 50, Events: []string{"document.created"}}), c.ws[1:])
+	csAssertRows(t, "limited, B's actor",
+		csList(t, f, c.limited, audit.Filter{Limit: 50, Actors: []string{bActor}}), nil)
+	csAssertRows(t, "admin, B's actor",
+		csList(t, f, c.admin, audit.Filter{Limit: 50, Actors: []string{bActor}}), c.b.rows)
+	csAssertRows(t, "limited, company=A and workspace-only event",
+		csList(t, f, c.limited, audit.Filter{Limit: 50, Company: audit.NamedCompany(c.a.entity), Events: []string{"membership.suspended"}}), nil)
+}
+
+// The probe applies the scope (a client with no rows reads an empty log although B has rows)
+// and no request filter (a filter that matches nothing is not an empty log).
+func TestClientScope_AuditProbeAppliesTheScopeAndNoRequestFilter(t *testing.T) {
+	f := requireFixture(t)
+	c := csBuildCorpus(t, f)
+	super := csSuper(t)
+	quiet := pageSeedEntity(t, f, c.firm, "Quiet Client Ltd")
+	onlyQuiet := csMember(t, super, c.firm.tenant, "reviewer", false, quiet)
+
+	got := csList(t, f, onlyQuiet, audit.Filter{Limit: 50})
+	if got.Total != 0 || !got.LogIsEmpty {
+		t.Errorf("member of a client with no rows: total %d, log_is_empty %v, want 0 and true", got.Total, got.LogIsEmpty)
+	}
+
+	filtered := csList(t, f, c.limited, audit.Filter{Limit: 50, Q: "no-such-text-anywhere"})
+	if filtered.Total != 0 || filtered.LogIsEmpty {
+		t.Errorf("limited member, unmatched q: total %d, log_is_empty %v, want 0 and false", filtered.Total, filtered.LogIsEmpty)
+	}
+}
+
+// The seam reads the assignment on every request: a removed client leaves the log at once.
+func TestClientScope_AuditScopeIsReadOnEveryRequest(t *testing.T) {
+	f := requireFixture(t)
+	c := csBuildCorpus(t, f)
+	super := csSuper(t)
+	user := uuid.NewString()
+	member := csMemberUser(t, super, user, c.firm.tenant, "reviewer", false, c.a.entity)
+
+	csAssertRows(t, "before the removal", csList(t, f, member, audit.Filter{Limit: 50}), c.a.rows)
+
+	if _, err := super.Exec(context.Background(), `DELETE FROM membership_clients WHERE user_id = $1`, user); err != nil {
+		t.Fatalf("remove the client: %v", err)
+	}
+	got := csList(t, f, member, audit.Filter{Limit: 50})
+	csAssertRows(t, "after the removal", got, nil)
+	if !got.LogIsEmpty {
+		t.Error("after the removal: log_is_empty = false, want true")
+	}
+
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO membership_clients (tenant_id, user_id, entity_id) VALUES ($1, $2, $3)`, c.firm.tenant, user, c.b.entity); err != nil {
+		t.Fatalf("assign B: %v", err)
+	}
+	csAssertRows(t, "after assigning B", csList(t, f, member, audit.Filter{Limit: 50}), c.b.rows)
+}
+
+// Cross-tenant: one user limited in the firm and admin of the in-house tenant. Each tenant
+// answers by its own scope; a tenant the user does not belong to is refused.
+func TestClientScope_AuditOneUserTwoTenants(t *testing.T) {
+	f := requireFixture(t)
+	c := csBuildCorpus(t, f)
+	super := csSuper(t)
+	user := uuid.NewString()
+	inFirm := csMemberUser(t, super, user, c.firm.tenant, "reviewer", false, c.a.entity)
+	inHouse := csMemberUser(t, super, user, c.house.tenant, "admin", false)
+
+	csAssertRows(t, "limited in the firm", csList(t, f, inFirm, audit.Filter{Limit: 50}), c.a.rows)
+	csAssertRows(t, "admin in-house", csList(t, f, inHouse, audit.Filter{Limit: 50}), csSorted(c.houseClient.rows, c.houseWS))
+
+	stranger := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: c.firm.tenant})
+	if _, err := audit.NewStore(f.app).List(stranger, audit.Filter{Limit: 50}); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Errorf("non-member of the firm: err = %v, want ErrNotActiveMember", err)
+	}
+}
+
+// Pinned: a non-UUID subject (in-process actors) gets no scope and reads the whole tenant (D3).
+func TestClientScope_AuditNonUUIDSubjectReadsTheWholeTenant(t *testing.T) {
+	f := requireFixture(t)
+	c := csBuildCorpus(t, f)
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: "extraction-worker", Role: "authenticated", TenantID: c.firm.tenant})
+
+	csAssertRows(t, "non-UUID subject", csList(t, f, ctx, audit.Filter{Limit: 50}), csSorted(c.a.rows, c.b.rows, c.ws))
 }

@@ -325,6 +325,17 @@ func TestAuditFilter_CallerScopePredicate(t *testing.T) {
 		{"garbage", "garbage", []any{[]string{}}},
 		{"unterminated literal", "{" + a, []any{[]string{}}},
 		{"bare uuid", a, []any{[]string{}}},
+		{"one id and one non-uuid", "{" + a + ",zzz}", []any{[]string{}}},
+		{"non-uuid element", "{zzz}", []any{[]string{}}},
+		{"trailing comma", "{" + a + ",}", []any{[]string{}}},
+		{"star inside braces", "{*}", []any{[]string{}}},
+		{"padded star", " *", []any{[]string{}}},
+		{"quoted element", `{"` + a + `"}`, []any{[]string{}}},
+		{"braced id wrapped in junk", "x{" + a + "}y", []any{[]string{}}},
+		{"single character", "{", []any{[]string{}}},
+		{"wrong opening char", "[" + a + "}", []any{[]string{}}},
+		{"wrong closing char", "{" + a + "]", []any{[]string{}}},
+		{"36 chars, not hex", "{" + strings.Repeat("z", 36) + "}", []any{[]string{}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

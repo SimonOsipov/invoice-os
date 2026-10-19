@@ -30,7 +30,7 @@ func scopeFromGUC(v string) callerScope {
 	}
 	if inner := v[1 : len(v)-1]; inner != "" {
 		for _, id := range strings.Split(inner, ",") {
-			if _, err := uuid.Parse(id); err != nil {
+			if _, err := uuid.Parse(id); err != nil || len(id) != 36 {
 				return callerScope{set: true, ids: []string{}}
 			}
 			ids = append(ids, id)

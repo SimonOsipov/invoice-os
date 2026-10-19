@@ -156,7 +156,7 @@ func decodeStoredDocument(
 	if format == "" {
 		return nil, errors.New("unrecognized file format")
 	}
-	_, rows, _, err := Decode(obj.Body, format)
+	_, rows, _, err := Decode(ctx, obj.Body, format)
 	if err != nil {
 		return nil, err
 	}

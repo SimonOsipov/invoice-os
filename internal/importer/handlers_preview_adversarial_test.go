@@ -15,6 +15,7 @@ package importer
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,8 +26,11 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
+	"unicode/utf16"
 
 	"github.com/google/uuid"
+	"github.com/xuri/excelize/v2"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -429,7 +433,7 @@ func TestPreviewHandler_ColumnsMatchDirectDecode_QuotedEmbeddedComma(t *testing.
 		t.Fatalf("columns = %v, want %v (a naive comma-split would wrongly produce 3 fields from the quoted \"Buyer, Ltd\" cell)", resp.Columns, header)
 	}
 
-	wantHeader, _, _, err := Decode(bytes.NewReader(fixture), "csv")
+	wantHeader, _, _, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err != nil {
 		t.Fatalf("direct Decode of the same fixture bytes: %v", err)
 	}
@@ -491,5 +495,104 @@ func TestPreviewHandler_ConcurrentRequestsIsolated(t *testing.T) {
 			t.Error(err)
 			_ = i
 		}
+	}
+}
+
+// A CFB container with a crafted EncryptionInfo stream size is a 400, not a
+// panic (GHSA-2j4c) or a 4 GiB allocation (GHSA-x2q3).
+func TestPreviewHandler_CraftedCFBIsRefusedWithoutAPanic(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		size uint32
+	}{
+		{"encryption_info_cut_to_8_bytes", 8},
+		{"encryption_info_declares_4_GiB", 0xFFFFFFFF},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plain := buildXLSX(t, func(f *excelize.File, sheet string) {
+				if err := f.SetCellValue(sheet, "A1", "x"); err != nil {
+					t.Fatalf("SetCellValue: %v", err)
+				}
+			})
+			enc, err := excelize.Encrypt(plain, &excelize.Options{Password: "x"})
+			if err != nil {
+				t.Fatalf("Encrypt: %v", err)
+			}
+			// The directory entry's stream size sits 120 bytes after its UTF-16LE name.
+			var name []byte
+			for _, u := range utf16.Encode([]rune("EncryptionInfo")) {
+				name = binary.LittleEndian.AppendUint16(name, u)
+			}
+			at := bytes.Index(enc, name)
+			if at < 0 {
+				t.Fatal("EncryptionInfo directory entry not found")
+			}
+			binary.LittleEndian.PutUint32(enc[at+120:], tc.size)
+
+			body, contentType := buildMultipartBody(t, "", "", "crafted.xlsx", "", enc)
+			id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
+			rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, raw)
+			}
+			if resp.Error != "could not decode uploaded file" {
+				t.Errorf("error = %q, want %q", resp.Error, "could not decode uploaded file")
+			}
+			var env struct {
+				DocumentID string `json:"document_id"`
+			}
+			if err := json.Unmarshal(raw, &env); err != nil || env.DocumentID == "" {
+				t.Errorf("document_id missing from %s (err=%v)", raw, err)
+			}
+		})
+	}
+}
+
+func TestPreviewHandler_TooManyRowsNamesTheLimit(t *testing.T) {
+	big := buildXLSX(t, func(f *excelize.File, sheet string) {
+		mustSetCellValue(t, f, sheet, "A1", "x")
+		mustSetCellValue(t, f, sheet, "A100002", "x")
+	})
+	body, contentType := buildMultipartBody(t, "", "", "big.xlsx", "", big)
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
+	rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, raw)
+	}
+	if resp.Error != "the spreadsheet has more than 100,000 data rows; split it into smaller files" {
+		t.Errorf("error = %q, want %q", resp.Error, "the spreadsheet has more than 100,000 data rows; split it into smaller files")
+	}
+	var env struct {
+		DocumentID string `json:"document_id"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil || env.DocumentID == "" {
+		t.Errorf("document_id missing from %s (err=%v)", raw, err)
+	}
+}
+
+func TestPreviewHandler_DecodeDeadlineAnswersAnError(t *testing.T) {
+	defer func(d time.Duration) { xlsxDecodeTimeout = d }(xlsxDecodeTimeout)
+	xlsxDecodeTimeout = time.Nanosecond
+	book := buildXLSX(t, func(f *excelize.File, sheet string) {
+		for i := 1; i <= 10; i++ {
+			mustSetCellValue(t, f, sheet, fmt.Sprintf("A%d", i), "x")
+		}
+	})
+	body, contentType := buildMultipartBody(t, "", "", "ten.xlsx", "", book)
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
+
+	start := time.Now()
+	rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, raw)
+	}
+	if resp.Error != "the spreadsheet took too long to read; split it into smaller files" {
+		t.Errorf("error = %q, want %q", resp.Error, "the spreadsheet took too long to read; split it into smaller files")
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Errorf("answer took %v, want < 10s", time.Since(start))
 	}
 }

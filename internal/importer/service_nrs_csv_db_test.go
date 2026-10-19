@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -37,7 +38,7 @@ func strOf(v any) string {
 
 func decodeContractCSV(t *testing.T, csv string) ([]string, [][]string) {
 	t.Helper()
-	header, rows, _, err := Decode(strings.NewReader(csv), "csv")
+	header, rows, _, err := Decode(context.Background(), strings.NewReader(csv), "csv")
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}

@@ -1,7 +1,7 @@
 // Storage suite for the client scope: app.entity_scope limits six tenant tables to a set of clients.
 //
 // Rows are seeded per test as the superuser, never in the shared harness.seed(). A skip is a failure
-// under the CI gate. Unset or ” reads every client, '*' reads every client, '{ids}' reads those clients.
+// under the CI gate. Unset or an empty string reads every client, '*' reads every client, '{ids}' reads those clients.
 package db_test
 
 import (
@@ -267,7 +267,7 @@ func TestRLS_ClientScopeTwoOfThreeClients(t *testing.T) {
 	}
 }
 
-// A fresh connection has never set the scope, so current_setting returns NULL there, not ”.
+// A fresh connection has never set the scope, so current_setting returns NULL there, not an empty string.
 func TestRLS_ClientScopeUnsetReadsEveryClient(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
@@ -306,7 +306,7 @@ func TestRLS_ClientScopeUnsetReadsEveryClient(t *testing.T) {
 	}
 }
 
-// A transaction-local set leaves ” (not NULL) behind on the connection; ” must read like unset.
+// A transaction-local set leaves an empty string (not NULL) behind on the connection; it must read like unset.
 func TestRLS_ClientScopeEmptyStringAfterALocalSetReadsEveryClient(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
@@ -770,7 +770,7 @@ func TestRLS_ClientScopeOddSetLiteralsScopeExactly(t *testing.T) {
 	}
 }
 
-// A value that is neither ” nor '*' nor a uuid array must error; it must not read every client.
+// A value that is neither empty nor '*' nor a uuid array must error; it must not read every client.
 func TestRLS_ClientScopeMalformedValuesNeverWiden(t *testing.T) {
 	requireHarness(t)
 	ten := csSeedClients(t, 2)
@@ -902,7 +902,7 @@ func TestRLS_ClientScopeBusinessEntitiesWrites(t *testing.T) {
 	}
 }
 
-// Unset, ” and '*' set no client limit on a write: a worker or an admin writes to any client.
+// Unset, empty and '*' set no client limit on a write: a worker or an admin writes to any client.
 func TestRLS_ClientScopeOpenScopesWriteToAnyClient(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()

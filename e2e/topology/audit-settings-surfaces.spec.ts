@@ -3,7 +3,7 @@
 // Layout claims assert a relationship; screenshots are attached for the reviewer and never asserted.
 // States the seed cannot reach are driven with page.route, each stub scoped to its own URL. No stub is a write.
 import { test, expect, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'
-import { archiveCustomer, createCustomer, createEntity, createInvoice, grantMembership, listCustomers, login, me, PERSONAS, provisionRealAccount, registerFresh, signInSession, subjectOf, type RealAccount } from '../api/client'
+import { archiveCustomer, createCustomer, createEntity, createInvoice, grantMembership, listCustomers, login, me, PERSONAS, provisionRealAccount, registerFresh, setMemberClients, signInSession, subjectOf, type RealAccount } from '../api/client'
 import { freshBuyerTin, freshTin } from '../api/fixtures'
 import { signInAs, signInAtFrontDoor } from '../personaSession'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
@@ -1418,6 +1418,9 @@ test.describe('Customers screen and company fields', () => {
     const member = await registerFresh('buyers-preparer')
     const userId = subjectOf((await signInSession(member.email, member.password)).access_token)
     await grantMembership({ user_id: userId, tenant_id: (await me(firmToken)).tenant.id, role: 'preparer', display_name: 'Customers E2E', email: member.email })
+    // A grant holds no clients; the Customers count reads the firm's invoices, so give this preparer all of them.
+    const all = await setMemberClients(firmToken, userId, 'all')
+    expect(all.status, JSON.stringify(all.body)).toBe(200)
     preparer = { ...member, workspaceName: firm.workspaceName, displayName: 'Customers E2E' }
   })
 

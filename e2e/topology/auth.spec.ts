@@ -15,6 +15,7 @@ import {
   grantMembership,
   inviteWithToken,
   listEntities,
+  setMemberClients,
   me,
   mintSignInState,
   provisionRealAccount,
@@ -1282,6 +1283,11 @@ async function workspaceWithMember(prefix: string, kind: TenantKind, role: 'admi
   const userId = subjectOf((await signInSession(member.email, member.password)).access_token)
   const grant = { user_id: userId, tenant_id: tenantId, display_name: 'Role E2E', email: member.email }
   await grantMembership({ ...grant, role })
+  // A grant holds no clients; a firm non-admin here tests the company journey, not scoping.
+  if (kind === 'firm' && role !== 'admin') {
+    const all = await setMemberClients(ownerToken, userId, 'all')
+    expect(all.status, JSON.stringify(all.body)).toBe(200)
+  }
   return { owner, ownerToken, member: { ...member, workspaceName: owner.workspaceName }, grant }
 }
 

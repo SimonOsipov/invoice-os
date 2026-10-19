@@ -16,6 +16,7 @@ import { libraryBase, supportBase } from '../auth'
 import { BrandMark, Icon } from '../icons'
 import { consoleStartUrl } from '../lib/consoleHandoff'
 import { entityHealth, getRollup, scopedBucket, type Rollup } from '../lib/dashboard'
+import { NO_ASSIGNED_CLIENTS, viewerHasNoClients } from '../lib/members'
 import { visibleEntityIds } from '../lib/portfolio'
 import {
   chevDownGlyph,
@@ -186,6 +187,11 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
                 <div className="label" style={{ padding: '10px 12px 6px' }}>
                   Switch company
                 </div>
+                {switcherClients.length === 0 && viewerHasNoClients(ctx.members) && (
+                  <div data-testid="company-switcher-empty" style={{ fontSize: 12, color: 'var(--fg-3)', padding: '9px 12px' }}>
+                    {NO_ASSIGNED_CLIENTS}
+                  </div>
+                )}
                 {switcherClients.map((c) => {
                   const isActive = c.entityId === active.entityId
                   return (

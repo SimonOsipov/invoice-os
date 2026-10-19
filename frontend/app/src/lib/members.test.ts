@@ -72,7 +72,9 @@ import {
   toMember,
   toPendingInvite,
   upsertInvites,
+  viewerHasNoClients,
   viewerIsAdmin,
+  NO_ASSIGNED_CLIENTS,
   type InvitationWire,
   type Member,
   type MemberStatus,
@@ -1200,6 +1202,7 @@ describe('the client picker\'s two invented sentences (T6.12, §7)', () => {
     expect(NO_CLIENTS_NOTE).toBe('No clients picked. This person sees no client until an admin picks some.')
     expect(ADMIN_ALL_CLIENTS).toBe('An admin sees every client.')
     expect(NO_CLIENTS_IN_WORKSPACE).toBe('This workspace has no clients yet.')
+    expect(NO_ASSIGNED_CLIENTS).toBe('An admin has not given you any clients yet.')
     // Deliberately the roster search's line with one noun changed. Pinned as a PAIR, so the two
     // cannot drift into phrasing the same failure two ways on one tab.
     expect(NO_CLIENT_MATCH).toBe('No clients match this search.')
@@ -1725,6 +1728,32 @@ describe('RESEND-07-02 — viewerIsAdmin (D3)', () => {
     expect(viewerIsAdmin([other, self('reviewer', 'active')])).toBe(false)
     expect(viewerIsAdmin([self('admin', 'invited')])).toBe(false)
     expect(viewerIsAdmin([])).toBe(false)
+  })
+})
+
+describe('viewerHasNoClients', () => {
+  const row = (role: Member['role'], status: MemberStatus, clientAccess: Member['clientAccess'], isYou = true): Member => ({
+    ...inhouseRow('Ada Self', status),
+    role,
+    isYou,
+    clientAccess,
+  })
+
+  it('viewerHasNoClients_trueOnlyForAnActiveNonAdminWithAnEmptySet', () => {
+    expect(viewerHasNoClients([row('reviewer', 'active', [])])).toBe(true)
+    expect(viewerHasNoClients([row('preparer', 'active', [])])).toBe(true)
+    expect(viewerHasNoClients([row('admin', 'active', 'all')])).toBe(false)
+    expect(viewerHasNoClients([row('admin', 'active', [])])).toBe(false)
+    expect(viewerHasNoClients([row('preparer', 'active', 'all')])).toBe(false)
+    expect(viewerHasNoClients([row('preparer', 'active', ['e1'])])).toBe(false)
+    expect(viewerHasNoClients([row('preparer', 'active', null)])).toBe(false)
+    expect(viewerHasNoClients([row('preparer', 'active', undefined)])).toBe(false)
+    expect(viewerHasNoClients([row('reviewer', 'suspended', [])])).toBe(false)
+    expect(viewerHasNoClients([])).toBe(false)
+  })
+
+  it('viewerHasNoClients_readsOnlyTheViewersRow', () => {
+    expect(viewerHasNoClients([row('preparer', 'active', 'all'), row('reviewer', 'active', [], false)])).toBe(false)
   })
 })
 

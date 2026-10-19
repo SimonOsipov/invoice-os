@@ -34,7 +34,7 @@ import {
   type EntityFilterPos,
   type EntityListResponse,
 } from '../lib/portfolio'
-import { CLIENT_ADMIN_ONLY, companySetupAccess } from '../lib/members'
+import { CLIENT_ADMIN_ONLY, companySetupAccess, NO_ASSIGNED_CLIENTS, viewerHasNoClients } from '../lib/members'
 import { entityHealth, getRollup, type EntityHealth, type Rollup } from '../lib/dashboard'
 import { NO_COMPANY_COPY } from './AddCompanyTask'
 import { EntityFormModal } from './EntityFormModal'
@@ -251,7 +251,11 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
 
       {filteredState === 'empty' &&
         (pos === 'all' ? (
-          <EmptyState title={noClients.title} message={noClients.message} />
+          viewerHasNoClients(ctx.members) ? (
+            <EmptyState title="No clients assigned" message={NO_ASSIGNED_CLIENTS} />
+          ) : (
+            <EmptyState title={noClients.title} message={noClients.message} />
+          )
         ) : (
           <EmptyState title="No clients match this filter" message="Try a different status filter." />
         ))}

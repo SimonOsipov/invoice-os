@@ -47,8 +47,8 @@ paths:
 - Expect `notifications` to report `contacts` `fake` on a PR and `real` or `off` on the persistent environment.
 - Write the fork's URL variables, `RECONCILIATION_URL` and `GATEWAY_TOKEN`, reconciliation's `VALIDATION_URL` and `S2S_TOKEN`, and submission's `GATEWAY_URL` on each run. A fork never inherits them.
 - Write `VITE_LIBRARY_URL` and `VITE_BLOG_URL` on `landing` on each fork.
-- Write `VITE_LIBRARY_URL` on `app` on each fork.
-- Write `VITE_APP_URL`, `VITE_LANDING_URL` and `VITE_BLOG_URL` on `library` on each fork.
+- Write `VITE_LIBRARY_URL` and `VITE_BLOG_URL` on `app` on each fork.
+- Write `VITE_APP_URL` and `VITE_LANDING_URL` on `library` on each fork.
 - Write `VITE_GATEWAY_URL` and `VITE_LANDING_URL` on `blog` on each fork.
 - Write `VITE_SUPPORT_URL` on `app` and `VITE_APP_URL` on `support-console` on each fork.
 - Expect `library` to get no `VITE_GATEWAY_URL` on a fork. The blog URL is a CORS origin; the library URL is not.

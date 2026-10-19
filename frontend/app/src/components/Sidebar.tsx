@@ -12,13 +12,15 @@
 
 import { Fragment } from 'react'
 import { gatewayBase, useAsync } from '@invoice-os/api-client'
-import { libraryBase, supportBase } from '../auth'
-import { BrandMark, Icon } from '../icons'
+import { blogBase, libraryBase, supportBase } from '../auth'
+import { Icon } from '../icons'
+import { Logo } from './Logo'
 import { consoleStartUrl } from '../lib/consoleHandoff'
 import { entityHealth, getRollup, scopedBucket, type Rollup } from '../lib/dashboard'
 import { NO_ASSIGNED_CLIENTS, viewerHasNoClients } from '../lib/members'
 import { visibleEntityIds } from '../lib/portfolio'
 import {
+  blogGlyph,
   chevDownGlyph,
   libraryGlyph,
   NAV_APPROVALS,
@@ -51,6 +53,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   // until 'ready', the same neutral posture as ClientsView's HealthCell.
   const base = gatewayBase()
   const libraryUrl = libraryBase()
+  const blogUrl = blogBase()
   const supportUrl = ctx.staff ? supportBase() : null
   const rollup = useAsync<Rollup>(
     () => (base ? getRollup(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
@@ -159,11 +162,8 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
     <aside className="pf-sidebar asc-dark" style={{ width: 252, flex: 'none', background: 'var(--surface)', borderRight: '1px solid var(--surface-panel-border)', display: 'flex', flexDirection: 'column' }}>
       <div style={{ padding: '16px 16px 14px', borderBottom: '1px solid var(--line-1)' }}>
         <a href="#" style={{ display: 'flex', alignItems: 'center', gap: 9, color: 'var(--fg-1)', marginBottom: 14 }}>
-          <BrandMark size={20} />
-          <span style={{ fontWeight: 600, fontSize: 15, letterSpacing: '-0.02em' }}>ASComply</span>
-          <span className="mono" style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 4px' }}>
-            AFRICA
-          </span>
+          <Logo />
+          <span className="mono" style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.07em', color: 'var(--action)', border: '1px solid var(--action)', borderRadius: 4, padding: '1px 5px' }}>PLATFORM</span>
         </a>
 
         {/* company switcher (firm mode) */}
@@ -283,18 +283,32 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
         ))}
       </nav>
 
-      {libraryUrl && (
-        <div style={{ flex: '0 0 auto', padding: '0 10px 8px' }}>
-          <a
-            href={libraryUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="pf-nav"
-            style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', border: 0, cursor: 'pointer', borderRadius: 'var(--radius-sm)', padding: '9px 10px', textAlign: 'left', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 500, background: 'transparent', color: 'var(--fg-2)', position: 'relative', textDecoration: 'none' }}
-          >
-            <span style={{ ...navIconColStyle, color: 'var(--fg-3)' }}>{libraryGlyph}</span>
-            <span style={{ flex: 1 }}>Feature library</span>
-          </a>
+      {(blogUrl || libraryUrl) && (
+        <div style={{ flex: '0 0 auto', padding: '0 10px 8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {blogUrl && (
+            <a
+              href={blogUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="pf-nav"
+              style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', border: 0, cursor: 'pointer', borderRadius: 'var(--radius-sm)', padding: '9px 10px', textAlign: 'left', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 500, background: 'transparent', color: 'var(--fg-2)', position: 'relative', textDecoration: 'none' }}
+            >
+              <span style={{ ...navIconColStyle, color: 'var(--fg-3)' }}>{blogGlyph}</span>
+              <span style={{ flex: 1 }}>Company Blog</span>
+            </a>
+          )}
+          {libraryUrl && (
+            <a
+              href={libraryUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="pf-nav"
+              style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', border: 0, cursor: 'pointer', borderRadius: 'var(--radius-sm)', padding: '9px 10px', textAlign: 'left', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 500, background: 'transparent', color: 'var(--fg-2)', position: 'relative', textDecoration: 'none' }}
+            >
+              <span style={{ ...navIconColStyle, color: 'var(--fg-3)' }}>{libraryGlyph}</span>
+              <span style={{ flex: 1 }}>Feature library</span>
+            </a>
+          )}
         </div>
       )}
 

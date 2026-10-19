@@ -7,7 +7,7 @@ import { createEntity, getAuditLog, login } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { collectErrors, signInAs } from '../personaSession'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
-import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { assertPageDoesNotScrollSideways, enclosesRect, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { resolveTarget } from '../targets'
 import { APP_URL, GATEWAY_URL, shardTenants } from './targets'
 
@@ -186,7 +186,7 @@ test('AS-01 firm shell at 1440: aside, header, switch, colour fixes', async ({ p
   expect(await radii(signOut), 'Sign out corners').toEqual(Array(4).fill('4px'))
   const mark = aside(page).locator('img').first()
   const markReading = await styles(mark, ['width', 'height', 'border-top-left-radius'])
-  expect(markReading, 'brand mark size and corner').toEqual({ width: '20px', height: '20px', 'border-top-left-radius': '4px' })
+  expect(markReading, 'brand mark size and corner').toEqual({ width: '28px', height: '28px', 'border-top-left-radius': '6px' })
 
   const fg1 = await resolveColor(aside(page), '--fg-1')
   const fg3 = await resolveColor(aside(page), '--fg-3')
@@ -303,34 +303,42 @@ test('AS-03 header row fits at every wide width', async ({ page }, testInfo) => 
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('AS-LIB the Feature library link sits between the nav and the identity card at every wide width', async ({ page }, testInfo) => {
+test('AS-LIB the Company Blog and Feature library links sit between the nav and the identity card at every wide and phone width', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   const bakedLibraryUrl = resolveTarget('BAKED_LIBRARY_URL')
+  const bakedBlogUrl = resolveTarget('BAKED_BLOG_URL')
   const entry = page.viewportSize()
   const measured: Record<string, unknown>[] = []
   try {
     for (const persona of ['firm', 'inhouse'] as const) {
       await signInAs(page, persona, { tenantId: tenantOf(persona) })
+      const blog = aside(page).getByRole('link', { name: 'Company Blog' })
       const link = aside(page).getByRole('link', { name: 'Feature library' })
       const nav = aside(page).locator('nav.pf-nav-list')
       const card = page.getByTestId('identity-card')
       const main = page.locator('main.pf-main')
+      await expect(blog, `${persona}: no Company Blog link (is app.VITE_BLOG_URL set?)`).toHaveCount(1)
       await expect(link, `${persona}: no Feature library link (is app.VITE_LIBRARY_URL set?)`).toHaveCount(1)
+      expect(await blog.getAttribute('href'), `${persona}: the blog link href is the baked blog URL`).toBe(bakedBlogUrl)
       expect(await link.getAttribute('href'), `${persona}: the link href is the baked library URL`).toBe(bakedLibraryUrl)
-      for (const width of WIDE_WIDTHS) {
+      for (const width of [...WIDE_WIDTHS, ...PHONE_WIDTHS]) {
         await page.setViewportSize({ width, height: 1080 })
         const read = async (): Promise<{ problems: string[]; rects: Record<string, Rect> }> => {
-          await settle(page, aside(page), link, nav, card, main)
-          const boxes = { aside: await aside(page).boundingBox(), nav: await nav.boundingBox(), link: await link.boundingBox(), card: await card.boundingBox(), main: await main.boundingBox() }
+          await settle(page, aside(page), blog, link, nav, card, main)
+          const boxes = { aside: await aside(page).boundingBox(), nav: await nav.boundingBox(), blog: await blog.boundingBox(), link: await link.boundingBox(), card: await card.boundingBox(), main: await main.boundingBox() }
           const problems = Object.entries(boxes).filter(([, b]) => !b).map(([n]) => `${n} has no box`)
           if (problems.length) return { problems, rects: {} }
           const r = boxes as Record<string, Rect>
-          if (!enclosesRect(r.aside, r.link, 1)) problems.push('link sticks out of the aside')
+          if (r.blog.y + r.blog.height > r.link.y + 1) problems.push('Company Blog is not above Feature library')
+          for (const n of ['blog', 'link'] as const) {
+            if (!enclosesRect(r.aside, r[n], 1)) problems.push(`${n} sticks out of the aside`)
+            if (r[n].y < r.nav.y + r.nav.height - 1) problems.push(`${n} starts above the nav bottom`)
+            if (r[n].y + r[n].height > r.card.y + 1) problems.push(`${n} ends below the card top`)
+            if (rectsOverlap(r[n], r.nav)) problems.push(`${n} overlaps the nav`)
+            if (rectsOverlap(r[n], r.card)) problems.push(`${n} overlaps the card`)
+          }
+          if (rectsOverlap(r.blog, r.link)) problems.push('Company Blog overlaps Feature library')
           if (!enclosesRect(r.aside, r.card, 1)) problems.push('card sticks out of the aside')
-          if (r.link.y < r.nav.y + r.nav.height - 1) problems.push('link starts above the nav bottom')
-          if (r.link.y + r.link.height > r.card.y + 1) problems.push('link ends below the card top')
-          if (rectsOverlap(r.link, r.nav)) problems.push('link overlaps the nav')
-          if (rectsOverlap(r.link, r.card)) problems.push('link overlaps the card')
           if (rectsOverlap(r.aside, r.main)) problems.push('aside overlaps main')
           return { problems, rects: r }
         }
@@ -342,6 +350,78 @@ test('AS-LIB the Feature library link sits between the nav and the identity card
     if (entry) await page.setViewportSize(entry)
   }
   await attachJson(testInfo, 'as-lib-measurements', measured)
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+const LOCKUP_MARK = ['width', 'height', 'border-top-left-radius']
+const LOCKUP_TEXT = ['font-family', 'font-size', 'font-weight', 'letter-spacing', 'text-transform', 'color']
+const LOCKUP_BADGE = ['font-family', 'font-size', 'font-weight', 'letter-spacing', 'color', 'border-top-width', 'border-top-style', 'border-top-color', 'border-top-left-radius', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left']
+
+// D12 property list of a brand lockup's four parts, plus the badge's box height.
+async function readLockup(brand: Locator, badgeText: string): Promise<Record<string, Record<string, string> | number>> {
+  const badge = brand.getByText(badgeText, { exact: true })
+  const box = await badge.boundingBox()
+  if (!box) throw new Error(`the ${badgeText} badge has no box`)
+  return {
+    mark: await styles(brand.locator('img'), LOCKUP_MARK),
+    wordmark: await styles(brand.getByText('ASComply', { exact: true }), LOCKUP_TEXT),
+    eyebrow: await styles(brand.getByText('AFRICA', { exact: true }), LOCKUP_TEXT),
+    badge: await styles(badge, LOCKUP_BADGE),
+    badgeHeight: box.height,
+  }
+}
+
+test('AS-LOGO the app lockup equals the blog lockup and fits the sidebar at every wide and phone width', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await page.addInitScript(() => {
+    window.localStorage.setItem('asc_consent', JSON.stringify({ analytics: false, ts: '2026-01-01T00:00:00Z', v: 1 }))
+  })
+  await page.goto(resolveTarget('BLOG_URL'))
+  const blogBrand = page.locator('.asc-app > aside button').first()
+  await expect(blogBrand.getByText('BLOG', { exact: true }), 'the blog brand button never drew').toBeVisible()
+  const blogLockup = await readLockup(blogBrand, 'BLOG')
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  const brand = aside(page).locator('a[href="#"]')
+  const switcher = page.getByTestId('company-switcher')
+  await settle(page, aside(page), brand, switcher)
+  const appLockup = await readLockup(brand, 'PLATFORM')
+  expect(appLockup.mark, 'mark').toEqual(blogLockup.mark)
+  expect(appLockup.wordmark, 'wordmark').toEqual(blogLockup.wordmark)
+  expect(appLockup.eyebrow, 'eyebrow').toEqual(blogLockup.eyebrow)
+  expect(appLockup.badge, 'badge').toEqual(blogLockup.badge)
+  expect(Math.abs((appLockup.badgeHeight as number) - (blogLockup.badgeHeight as number)), 'badge box height vs the blog').toBeLessThanOrEqual(1)
+
+  const entry = page.viewportSize()
+  const measured: Record<string, unknown>[] = []
+  try {
+    for (const width of [...WIDE_WIDTHS, ...PHONE_WIDTHS]) {
+      await page.setViewportSize({ width, height: 1080 })
+      const mark = brand.locator('img')
+      const badge = brand.getByText('PLATFORM', { exact: true })
+      const lockup = brand.locator('> span').first()
+      const read = async (): Promise<{ problems: string[]; rects: Record<string, Rect> }> => {
+        await settle(page, aside(page), brand, mark, badge, lockup, switcher)
+        const boxes = { aside: await aside(page).boundingBox(), brand: await brand.boundingBox(), mark: await mark.boundingBox(), badge: await badge.boundingBox(), lockup: await lockup.boundingBox(), switcher: await switcher.boundingBox() }
+        const problems = Object.entries(boxes).filter(([, b]) => !b).map(([n]) => `${n} has no box`)
+        if (problems.length) return { problems, rects: {} }
+        const r = boxes as Record<string, Rect>
+        if (!enclosesRect(r.aside, r.brand, 1)) problems.push('brand row sticks out of the aside')
+        if (r.badge.x < r.lockup.x + r.lockup.width - 1) problems.push('badge starts left of the lockup right edge')
+        if (rectsOverlap(r.badge, r.lockup)) problems.push('badge overlaps the lockup')
+        const markMid = r.mark.y + r.mark.height / 2
+        const badgeMid = r.badge.y + r.badge.height / 2
+        if (Math.abs(markMid - badgeMid) > 1) problems.push(`mark and badge centres differ by ${Math.abs(markMid - badgeMid)}px`)
+        if (r.brand.y + r.brand.height > r.switcher.y + 1) problems.push('brand row ends below the company switcher top')
+        return { problems, rects: r }
+      }
+      await expect.poll(async () => (await read()).problems, { message: `brand row at ${width}px`, timeout: 10_000 }).toEqual([])
+      measured.push({ width, ...(await read()).rects })
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  await attachJson(testInfo, 'as-logo-measurements', { blogLockup, appLockup, measured })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 

@@ -331,7 +331,7 @@ type updateEntityRequest struct {
 // identity-first-401 order as Create/GetHandler, then decodes the PATCH body
 // into updateEntityRequest (400 on decode error), rejects an all-nil body
 // as 400 ("no fields to update") before ever calling update, maps store
-// errors via statusForErr, and answers 200 + updated Entity on success.
+// errors via statusForChangeErr, and answers 200 + updated Entity on success.
 func UpdateHandler(update func(ctx context.Context, id string, in UpdateInput) (Entity, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -379,7 +379,7 @@ func UpdateHandler(update func(ctx context.Context, id string, in UpdateInput) (
 			LGA:          req.LGA,
 		})
 		if err != nil {
-			status, msg := statusForErr(err)
+			status, msg := statusForChangeErr(err)
 			if status == http.StatusInternalServerError {
 				log.ErrorContext(r.Context(), "portfolio: update entity", slog.Any("err", err))
 			}
@@ -395,7 +395,7 @@ func UpdateHandler(update func(ctx context.Context, id string, in UpdateInput) (
 // task-37). Same identity-first-401 order, reading r.PathValue("id") and
 // calling setStatus(ctx, id) -- the caller binds "archived" as the target at
 // wiring time (M3-03-05); this handler is target-agnostic. Maps ErrNotFound
-// to 404, ErrRedundantTransition to 409, else statusForErr; 200 + Entity on
+// to 404, ErrRedundantTransition to 409, else statusForChangeErr; 200 + Entity on
 // success.
 func OffboardHandler(setStatus func(ctx context.Context, id string) (Entity, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
@@ -409,7 +409,7 @@ func OffboardHandler(setStatus func(ctx context.Context, id string) (Entity, err
 
 		entity, err := setStatus(r.Context(), r.PathValue("id"))
 		if err != nil {
-			status, msg := statusForErr(err)
+			status, msg := statusForChangeErr(err)
 			if status == http.StatusInternalServerError {
 				log.ErrorContext(r.Context(), "portfolio: offboard entity", slog.Any("err", err))
 			}
@@ -436,7 +436,7 @@ func OnboardHandler(setStatus func(ctx context.Context, id string) (Entity, erro
 
 		entity, err := setStatus(r.Context(), r.PathValue("id"))
 		if err != nil {
-			status, msg := statusForErr(err)
+			status, msg := statusForChangeErr(err)
 			if status == http.StatusInternalServerError {
 				log.ErrorContext(r.Context(), "portfolio: onboard entity", slog.Any("err", err))
 			}
@@ -482,6 +482,15 @@ func statusForErr(err error) (status int, msg string) {
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}
+}
+
+// statusForChangeErr is statusForErr with the admin-only copy for update,
+// offboard and onboard.
+func statusForChangeErr(err error) (status int, msg string) {
+	if errors.Is(err, ErrNotPermitted) {
+		return http.StatusForbidden, "only an admin can change a client"
+	}
+	return statusForErr(err)
 }
 
 // pgCode extracts the SQLSTATE from err, or "" if err does not wrap a

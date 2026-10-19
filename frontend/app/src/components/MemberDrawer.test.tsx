@@ -5,6 +5,7 @@
 // own target assertion (a call count that is still 2, a sentence that never renders, a pill
 // that a second click still reaches) -- never on import/typecheck.
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
@@ -31,6 +32,10 @@ function role(over: Partial<Role> = {}): Role {
   return { key: 'cfo', title: 'CFO', desc: '', members: [], ...over }
 }
 
+function entity(id: string, name: string, status = 'active') {
+  return { id, name, status, tin: null, registration: null, sector: null, address: null, created_at: '' }
+}
+
 function drawerCtx(over: Record<string, unknown> = {}): PlatformCtx {
   return {
     members: [member(), member({ id: 'u2', name: 'Bo Person', initials: 'BP', email: 'bo@x.ng' })],
@@ -45,6 +50,11 @@ function drawerCtx(over: Record<string, unknown> = {}): PlatformCtx {
     staffRole: vi.fn().mockResolvedValue(undefined),
     renameRole: vi.fn(),
     setSettingsTab: vi.fn(),
+    entities: [entity('e1', 'Alpha Ltd'), entity('e2', 'Beta Ltd')],
+    entitiesState: 'ready',
+    entitiesError: null,
+    refetchEntities: vi.fn(),
+    setMemberClients: vi.fn().mockResolvedValue(undefined),
     ...over,
   } as unknown as PlatformCtx
 }
@@ -522,7 +532,7 @@ describe('the drawer shell and bands', () => {
   })
 
   it('the Client access scope radios share that paint and sit flush in their cards', () => {
-    open({ mode: 'firm' })
+    open({ mode: 'firm', members: [member({ id: 'u2', clientAccess: 'all' })] })
 
     const all = screen.getByTestId('drawer-scope-all').querySelector('input') as HTMLInputElement
     const selected = screen.getByTestId('drawer-scope-selected').querySelector('input') as HTMLInputElement
@@ -557,8 +567,8 @@ describe('the drawer shell and bands', () => {
     expect(idle.style.background).toBe('var(--bg-2)')
   })
 
-  it('firm dims the Client access pair', () => {
-    open({ mode: 'firm' })
+  it('an admin member dims the Client access pair', () => {
+    open({ mode: 'firm', members: [member({ id: 'u2', role: 'admin', clientAccess: 'all' })] })
 
     const drawer = screen.getByTestId('member-drawer')
     const dims: number[] = []
@@ -607,5 +617,193 @@ describe('the drawer shell and bands', () => {
     open({ members: [member({ id: 'u1', isYou: true }), member({ id: 'u2' })] }, 'u1')
     expect(screen.getByTestId('member-danger-zone')).toBeTruthy()
     expect(screen.queryByTestId('member-remove')).toBeNull()
+  })
+})
+
+describe('FIRMS-02-05: the drawer edits client access', () => {
+  const REFUSED = "only an admin can choose a member's clients"
+
+  function ticks() {
+    return screen.queryAllByTestId('drawer-client-row').map((r) => (r.querySelector('input') as HTMLInputElement).checked)
+  }
+  function tick(i: number) {
+    fireEvent.click(screen.getAllByTestId('drawer-client-row')[i].querySelector('input') as HTMLInputElement)
+  }
+  function radio(scope: 'all' | 'selected') {
+    return screen.getByTestId(`drawer-scope-${scope}`).querySelector('input') as HTMLInputElement
+  }
+  function mount(setMemberClients: unknown, access: 'all' | string[] = ['e1'], over: Record<string, unknown> = {}) {
+    const ctx = drawerCtx({ members: [member({ id: 'u2', clientAccess: access })], setMemberClients, ...over })
+    const view = render(<MemberDrawer ctx={ctx} memberId="u2" onClose={vi.fn()} onStatus={vi.fn()} statusError={null} />)
+    return { ctx, view }
+  }
+
+  it("a firm member's picker is live and each change writes once", async () => {
+    const setMemberClients = vi.fn().mockResolvedValue(undefined)
+    mount(setMemberClients)
+
+    expect(radio('selected').checked).toBe(true)
+    expect(ticks()).toEqual([true, false])
+    expect(screen.getByTestId('drawer-scope-all').closest('fieldset')?.hasAttribute('disabled')).toBe(false)
+    expect(screen.queryByRole('button', { name: /save/i })).toBeNull()
+
+    tick(1)
+    await waitFor(() => expect(setMemberClients).toHaveBeenCalledTimes(1))
+    expect(setMemberClients).toHaveBeenCalledWith('u2', ['e1', 'e2'])
+
+    fireEvent.click(radio('all'))
+    await waitFor(() => expect(setMemberClients).toHaveBeenCalledTimes(2))
+    expect(setMemberClients).toHaveBeenLastCalledWith('u2', 'all')
+  })
+
+  it('All clears the ticks, and Selected from All writes no clients', async () => {
+    const setMemberClients = vi.fn()
+    // The ctx member takes the server's answer before the write resolves, as App does.
+    function Harness({ initial }: { initial: 'all' | string[] }) {
+      const [access, setAccess] = useState(initial)
+      setMemberClients.mockImplementation(async (_id: string, next: 'all' | string[]) => setAccess(next))
+      const ctx = drawerCtx({ members: [member({ id: 'u2', clientAccess: access })], setMemberClients })
+      return <MemberDrawer ctx={ctx} memberId="u2" onClose={vi.fn()} onStatus={vi.fn()} statusError={null} />
+    }
+    render(<Harness initial={['e1']} />)
+
+    fireEvent.click(radio('all'))
+    await waitFor(() => expect(setMemberClients).toHaveBeenCalledWith('u2', 'all'))
+    await waitFor(() => expect(screen.getByTestId('drawer-scope-all').closest('fieldset')?.hasAttribute('disabled')).toBe(false))
+    fireEvent.click(radio('selected'))
+    await waitFor(() => expect(setMemberClients).toHaveBeenLastCalledWith('u2', []))
+    await waitFor(() => expect(radio('selected').checked).toBe(true))
+    expect(ticks()).toEqual([false, false])
+
+    cleanup()
+    mount(vi.fn(), [])
+    expect(radio('selected').checked).toBe(true)
+    expect(ticks()).toEqual([false, false])
+  })
+
+  it('a second change while a write is in flight sends nothing', async () => {
+    let release: () => void = () => {}
+    const setMemberClients = vi.fn(() => new Promise<void>((resolve) => { release = resolve }))
+    mount(setMemberClients, [])
+
+    tick(1)
+    tick(0)
+    expect(setMemberClients).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('drawer-scope-all').closest('fieldset')?.hasAttribute('disabled')).toBe(true)
+
+    release()
+    await waitFor(() => expect(screen.getByTestId('drawer-scope-all').closest('fieldset')?.hasAttribute('disabled')).toBe(false))
+    tick(0)
+    expect(setMemberClients).toHaveBeenCalledTimes(2)
+  })
+
+  it('a change dropped while a write is in flight remounts the picker on the stored set', async () => {
+    const entities = [entity('e1', 'Alpha Ltd'), entity('e2', 'Beta Ltd'), entity('e3', 'Gamma Ltd')]
+    let release: () => void = () => {}
+    const setMemberClients = vi.fn()
+    function Harness() {
+      const [access, setAccess] = useState<'all' | string[]>([])
+      setMemberClients.mockImplementation(
+        (_id: string, next: 'all' | string[]) => new Promise<void>((resolve) => { release = () => { setAccess(next); resolve() } }),
+      )
+      const ctx = drawerCtx({ members: [member({ id: 'u2', clientAccess: access })], setMemberClients, entities })
+      return <MemberDrawer ctx={ctx} memberId="u2" onClose={vi.fn()} onStatus={vi.fn()} statusError={null} />
+    }
+    render(<Harness />)
+
+    tick(1)
+    tick(0)
+    expect(setMemberClients).toHaveBeenCalledTimes(1)
+    release()
+    await waitFor(() => expect(screen.getByTestId('drawer-scope-all').closest('fieldset')?.hasAttribute('disabled')).toBe(false))
+    expect(ticks()).toEqual([false, true, false])
+
+    tick(2)
+    expect(setMemberClients).toHaveBeenLastCalledWith('u2', ['e2', 'e3'])
+  })
+
+  it("a refused write shows the server's reason and restores the stored set", async () => {
+    const setMemberClients = vi.fn().mockRejectedValueOnce(new ApiError('http', REFUSED, 403)).mockResolvedValue(undefined)
+    mount(setMemberClients)
+
+    tick(1)
+    await waitFor(() => expect(screen.getByTestId('member-drawer-clients-error').textContent).toBe(REFUSED))
+    expect(ticks()).toEqual([true, false])
+
+    tick(1)
+    expect(screen.queryByTestId('member-drawer-clients-error')).toBeNull()
+  })
+
+  it('an admin row shows All clients locked with the reason', () => {
+    const setMemberClients = vi.fn()
+    mount(setMemberClients, 'all', { members: [member({ id: 'u2', role: 'admin', clientAccess: 'all' })] })
+
+    expect(radio('all').checked).toBe(true)
+    const fieldset = screen.getByTestId('drawer-scope-all').closest('fieldset') as HTMLFieldSetElement
+    expect(fieldset.hasAttribute('disabled')).toBe(true)
+    expect(fieldset.style.opacity).toBe('0.45')
+    expect(screen.getByTestId('member-drawer').textContent).toContain('An admin sees every client.')
+    fireEvent.click(radio('selected'))
+    expect(setMemberClients).not.toHaveBeenCalled()
+  })
+
+  it('clients loading, failed and empty', () => {
+    mount(vi.fn(), ['e1'], { entities: [], entitiesState: 'loading' })
+    expect(screen.getByText('Loading clients…')).toBeTruthy()
+    expect(screen.queryByTestId('drawer-scope-all')).toBeNull()
+    cleanup()
+
+    const refetchEntities = vi.fn()
+    mount(vi.fn(), ['e1'], { entities: [], entitiesState: 'error', entitiesError: new ApiError('http', 'clients down', 500), refetchEntities })
+    expect(screen.getByText(/clients down/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /retry|try again/i }))
+    expect(refetchEntities).toHaveBeenCalledTimes(1)
+    cleanup()
+
+    mount(vi.fn(), [], { entities: [], entitiesState: 'empty' })
+    expect(screen.getByTestId('drawer-client-empty').textContent).toBe('This workspace has no clients yet.')
+  })
+
+  it('a member whose access the viewer cannot read gets no picker that claims a set', () => {
+    const setMemberClients = vi.fn()
+    mount(setMemberClients, [], { members: [member({ id: 'u2', clientAccess: null })] })
+
+    expect(screen.getByText('Client access')).toBeTruthy()
+    expect(screen.queryByTestId('drawer-scope-selected')).toBeNull()
+    expect(screen.queryAllByTestId('drawer-client-row')).toHaveLength(0)
+    expect(setMemberClients).not.toHaveBeenCalled()
+  })
+
+  it('an unreadable access set shows the admin-only line', () => {
+    mount(vi.fn(), [], { members: [member({ id: 'u2', clientAccess: null })] })
+    expect(screen.getByTestId('member-drawer-clients-unreadable').textContent).toBe("Only an admin sees a member's clients.")
+  })
+
+  it("the picker's search narrows the shown rows only and the count reads against the roster", () => {
+    const setMemberClients = vi.fn()
+    mount(setMemberClients, ['e1'], { entities: [entity('e1', 'Alpha Ltd'), entity('e2', 'Beta Ltd'), entity('e3', 'Gamma Ltd')] })
+    const search = screen.getByTestId('drawer-client-search') as HTMLInputElement
+    const count = () => screen.getByTestId('drawer-client-count').textContent
+
+    expect(screen.getAllByTestId('drawer-client-row')).toHaveLength(3)
+    expect(count()).toBe('1 of 3 selected')
+
+    fireEvent.change(search, { target: { value: 'beta' } })
+    expect(screen.getAllByTestId('drawer-client-row').map((r) => r.textContent)).toEqual(['Beta Ltd'])
+    expect(count()).toBe('1 of 3 selected')
+
+    fireEvent.change(search, { target: { value: 'zzz' } })
+    expect(screen.queryAllByTestId('drawer-client-row')).toHaveLength(0)
+    expect(screen.getByTestId('drawer-client-empty').textContent).toBe('No clients match this search.')
+
+    fireEvent.change(search, { target: { value: '' } })
+    expect(ticks()).toEqual([true, false, false])
+    expect(setMemberClients).not.toHaveBeenCalled()
+  })
+
+  it('lists an archived client the member already holds, ticked', () => {
+    mount(vi.fn(), ['e3'], { entities: [entity('e1', 'Alpha Ltd'), entity('e3', 'Old Ltd', 'archived'), entity('e4', 'Gone Ltd', 'archived')] })
+    expect(screen.getAllByTestId('drawer-client-row').map((r) => r.textContent)).toEqual(['Alpha Ltd', 'Old Ltd'])
+    expect(ticks()).toEqual([false, true])
   })
 })

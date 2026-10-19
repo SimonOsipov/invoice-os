@@ -318,7 +318,7 @@ describe('LOGFIX-06-02: the dashboard branch follows the role', () => {
 
 
 describe('LOGFIX-06-03: Settings and Clients follow the role', () => {
-  it('a preparer who opens /settings/company or /clients directly sees no add control', async () => {
+  it('a preparer who opens /settings/company or /clients directly sees no Add company, and a disabled Add client on /clients', async () => {
     memberReply = () => Promise.resolve([selfWire('preparer')])
     await boot('/settings/company', { gateway: true, persona: APP_PERSONAS.inhouse })
     await waitFor(() => expect(screen.getByText('No company created')).toBeTruthy())
@@ -328,6 +328,6 @@ describe('LOGFIX-06-03: Settings and Clients follow the role', () => {
     await boot('/clients', { gateway: true, persona: APP_PERSONAS.firm })
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Client portfolio' })).toBeTruthy())
     await waitFor(() => expect(screen.getByText('No company created')).toBeTruthy())
-    expect(screen.queryByRole('button', { name: 'Add client' })).toBeNull()
+    expect((screen.getByRole('button', { name: 'Add client' }) as HTMLButtonElement).disabled).toBe(true)
   })
 })

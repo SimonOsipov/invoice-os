@@ -23,7 +23,10 @@ import {
   inviteSentNotice,
   isFiltering,
   listInvitations,
+  pickerClients,
+  removeInvite,
   resendInvitation,
+  revokeInvitation,
   rosterWithInvites,
   sendInvitations,
   toPendingInvite,
@@ -109,6 +112,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   // The 404/409 reason of a resend; it outlives the refetch it triggers.
   const [staleReason, setStaleReason] = useState<string | null>(null)
   const [resending, setResending] = useState<ReadonlySet<string>>(new Set())
+  const [revoking, setRevoking] = useState<ReadonlySet<string>>(new Set())
   const [flash, setFlash] = useState<{ tone: 'ok' | 'failed'; text: string } | null>(null)
   useEffect(() => {
     if (!flash) return
@@ -125,9 +129,9 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
     setStaleReason(null)
     list.run()
   }
-  async function sendInvites(emails: readonly string[], role: AccessRole) {
+  async function sendInvites(emails: readonly string[], role: AccessRole, access?: 'all' | string[]) {
     if (!base) throw new Error('no gateway configured')
-    const items = (await sendInvitations(ctx.authedFetch, base, emails, role)).map(toPendingInvite)
+    const items = (await sendInvitations(ctx.authedFetch, base, emails, role, access)).map(toPendingInvite)
     setInvites((cur) => upsertInvites(cur, items))
     setFlash(inviteSentNotice(items))
   }
@@ -147,7 +151,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
     [setMemberStatus],
   )
   const resend = async (id: string) => {
-    if (!base || resending.has(id)) return
+    if (!base || resending.has(id) || revoking.has(id)) return
     setStaleReason(null)
     setStatusError((cur) => (cur?.id === id ? null : cur))
     setResending((cur) => new Set(cur).add(id))
@@ -166,6 +170,27 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
       }
     } finally {
       setResending((cur) => {
+        const next = new Set(cur)
+        next.delete(id)
+        return next
+      })
+    }
+  }
+  // Any failure shows on the row. 404/409 refetch members only, so the message outlives the row.
+  const revoke = async (id: string) => {
+    if (!base || resending.has(id) || revoking.has(id)) return
+    setStaleReason(null)
+    setStatusError((cur) => (cur?.id === id ? null : cur))
+    setRevoking((cur) => new Set(cur).add(id))
+    try {
+      await revokeInvitation(ctx.authedFetch, base, id)
+      setInvites((cur) => removeInvite(cur, id))
+    } catch (err) {
+      const e = toApiError(err)
+      setStatusError({ id, message: e.message })
+      if (e.status === 404 || e.status === 409) ctx.refetchMembers()
+    } finally {
+      setRevoking((cur) => {
         const next = new Set(cur)
         next.delete(id)
         return next
@@ -305,6 +330,8 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
               invites={pendingInvites}
               onResend={resend}
               resending={resending}
+              onRevoke={revoke}
+              revoking={revoking}
             />
           )}
         </>
@@ -322,7 +349,18 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
           renders no node at all, not a hidden one. */}
       {mode === 'firm' && <ClientUsersCard />}
 
-      {inviting && <InviteModal existing={roster} onSend={sendInvites} onClose={closeInvite} />}
+      {inviting && (
+        <InviteModal
+          existing={roster}
+          mode={ctx.mode}
+          clients={pickerClients(ctx.entities, [])}
+          clientsState={ctx.entitiesState}
+          clientsError={ctx.entitiesError}
+          onRetryClients={ctx.refetchEntities}
+          onSend={sendInvites}
+          onClose={closeInvite}
+        />
+      )}
 
       {/* Rendered conditionally rather than mounted-and-hidden, the ClientsView/EntityFormModal
           form — which is also what lets the drawer call `useDismiss(true, …)` and register no

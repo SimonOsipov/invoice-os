@@ -80,7 +80,7 @@ func rdTenant(t *testing.T, ctx context.Context, status string) (reqCtx context.
 	t.Helper()
 	tenantID, documentID = stTenant(t, ctx)
 	if _, err := stRequire(t).super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, $3, $4)`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, $3, $4, true)`,
 		tenantID, rdMemberSubject, rdMemberRole, status,
 	); err != nil {
 		t.Fatalf("seed membership (status %s): %v", status, err)

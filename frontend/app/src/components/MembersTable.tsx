@@ -5,29 +5,34 @@
 // CustomersView, RulesView). The one real <table>, ViolationsTable, is a shared component
 // embedded inside screens rather than a screen's own layout.
 //
-// ONE column set, both modes. The two that used to fork — firm's client scoping, in-house's
-// department — are gone with the columns themselves: a membership row carries an identity,
-// an access role and a status, and nothing else.
+// ONE column set, both modes. Firm's client access is a second line in the Access role cell,
+// not a column.
 //
 // Nothing is derived here. Every value comes from lib/members.ts or lib/roles.ts — vitest
 // is `environment: node` in this project, so a derivation written into a component is a
 // derivation no test can reach (§15.8).
 
-import { Fragment, useCallback, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   accessRoleLabel,
+  clientAccessLabel,
+  clientAccessTitle,
   emailLabel,
   inviteAccountLine,
   inviteStatusLine,
   isProtectedAdmin,
   MEMBER_UNBACKED,
   PROTECTED_ADMIN_NOTE,
+  REVOKE_CONFIRM,
+  REVOKE_CONFIRMED,
+  REVOKE_KEEP,
   type Member,
   type MemberStatus,
   type PendingInvite,
 } from '../lib/members'
 import { rosterRoleCell, stepsForMember, stepsWarning, type Role } from '../lib/roles'
+import { useDismiss } from '../lib/useDismiss'
 import type { Policy } from '../lib/workflows'
 import { InitialsChip, MemberStatusPill, MoreMenu, YouChip, type MenuAction } from './MemberParts'
 import type { PlatformCtx } from '../types'
@@ -60,7 +65,7 @@ const MENU_CLEARANCE_NOTED = 256
 // narrower than its content, so `minWidth: 0` is as load-bearing as the other three.
 const ELLIPSIS = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const
 
-export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, statusError, invites = [], onResend, resending }: {
+export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, statusError, invites = [], onResend, resending, onRevoke, revoking }: {
   ctx: PlatformCtx
   /** Already filtered by MembersView — this component never filters. */
   rows: Member[]
@@ -83,6 +88,9 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
   onResend?: (id: string) => void
   /** Invitation ids with a resend in flight. */
   resending?: ReadonlySet<string>
+  onRevoke?: (id: string) => void
+  /** Invitation ids with a revoke in flight. */
+  revoking?: ReadonlySet<string>
 }) {
   const { members } = ctx
   // One id, so only one menu can be open — the app's house pattern for dismissible
@@ -91,6 +99,19 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
   // Stable: it is a `useDismiss` dependency.
   const closeMenu = useCallback(() => setOpenMenuId(null), [])
   const minWidth = TABLE_MIN_WIDTH
+  // The invite whose revoke confirm strip is open.
+  const [revokeId, setRevokeId] = useState<string | null>(null)
+  const closeRevoke = useCallback(() => setRevokeId(null), [])
+  useDismiss(revokeId != null, closeRevoke)
+  const keepRef = useRef<HTMLButtonElement>(null)
+  // Focus the safe button on open.
+  useEffect(() => {
+    if (revokeId != null) keepRef.current?.focus()
+  }, [revokeId])
+  // A filter can drop the row; the strip must not return when it comes back.
+  useEffect(() => {
+    if (revokeId != null && !rows.some((m) => m.id === revokeId)) setRevokeId(null)
+  }, [rows, revokeId])
   // Checked against the rendered rows, not just `!= null`: a filter can narrow the list
   // out from under an open menu, and the clearance below must not be held open for a menu
   // that no longer exists.
@@ -100,11 +121,10 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
 
   function menuItems(m: Member, protectedAdmin: boolean): MenuAction[] {
     if (m.status === 'invited') {
-      // Copy and Revoke have no endpoint: rendered disabled with the reason, not hidden.
+      // Resend and Revoke exclude each other on one row while either is in flight.
       return [
-        { label: 'Resend invite', disabled: resending?.has(m.id), onSelect: () => onResend?.(m.id) },
-        { label: 'Copy invite link', disabled: true, reason: MEMBER_UNBACKED.inviteLink },
-        { label: 'Revoke invite', danger: true, disabled: true, reason: MEMBER_UNBACKED.revokeInvite },
+        { label: 'Resend invite', disabled: resending?.has(m.id) || revoking?.has(m.id), onSelect: () => onResend?.(m.id) },
+        { label: 'Revoke invite', danger: true, disabled: revoking?.has(m.id) || resending?.has(m.id), onSelect: () => setRevokeId(m.id) },
       ]
     }
     const items: MenuAction[] = [
@@ -185,6 +205,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
           const rolesLanded = ctx.rolesState === 'ready' || ctx.rolesState === 'empty'
           const roleCell = rolesLanded ? rosterRoleCell(roles, m.id) : { text: '', tooltip: '' }
           const pending = m.status === 'invited'
+          const clientLine = ctx.mode === 'firm' ? clientAccessLabel(m.clientAccess) : null
           const invite = pending ? invites.find((i) => i.id === m.id) : undefined
           const accountLine = invite ? inviteAccountLine(invite) : null
           return (
@@ -234,7 +255,17 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                   </span>
                 </span>
 
-                <span style={{ ...ELLIPSIS, fontSize: 12.5, color: 'var(--fg-2)' }}>{accessRoleLabel(m.role)}</span>
+                <span style={{ minWidth: 0 }}>
+                  <span style={{ display: 'block', ...ELLIPSIS, fontSize: 12.5, color: 'var(--fg-2)' }}>{accessRoleLabel(m.role)}</span>
+                  {clientLine && (
+                    <span
+                      data-testid="member-client-access"
+                      title={clientAccessTitle(ctx.entities, m.clientAccess)}
+                      style={{ display: 'block', ...ELLIPSIS, marginTop: 2, fontSize: 11, color: 'var(--fg-3)' }}>
+                      {clientLine}
+                    </span>
+                  )}
+                </span>
 
                 {/* Newline-joined tooltip; empty on a roleless row, which is the `—` case and
                     wants no tooltip at all. */}
@@ -272,6 +303,45 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                   note={accountLine ?? undefined}
                 />
               </div>
+
+              {pending && revokeId === m.id && (
+                <div
+                  data-testid="invite-revoke-confirm"
+                  style={{
+                    padding: '9px 16px',
+                    background: 'var(--status-red-bg)',
+                    borderTop: '1px solid var(--status-red-border)',
+                    minWidth,
+                  }}
+                >
+                  <p style={{ margin: '0 0 8px', fontSize: 12.5, lineHeight: 1.5, color: 'var(--status-red-text)' }}>{REVOKE_CONFIRM}</p>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      type="button"
+                      ref={keepRef}
+                      onClick={closeRevoke}
+                      className="v2-btn v2-btn-ghost pf-btn"
+                      data-testid="invite-revoke-keep"
+                      style={{ height: 32, fontSize: 12.5 }}
+                    >
+                      {REVOKE_KEEP}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={revoking?.has(m.id) || resending?.has(m.id)}
+                      onClick={() => {
+                        setRevokeId(null)
+                        onRevoke?.(m.id)
+                      }}
+                      className="v2-btn pf-btn"
+                      data-testid="invite-revoke-confirmed"
+                      style={{ height: 32, fontSize: 12.5, background: 'var(--status-red-text)', color: 'var(--primary-foreground)' }}
+                    >
+                      {REVOKE_CONFIRMED}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* The failed write's SERVER reason, in the slot the steps warning already
                   occupies. Here and not in the `⋯` menu because `MoreMenu` closes on select,

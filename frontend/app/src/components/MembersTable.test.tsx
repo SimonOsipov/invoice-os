@@ -35,6 +35,7 @@ function ctxWith(over: Record<string, unknown> = {}): PlatformCtx {
   return {
     members: [member()],
     rolesState: 'ready',
+    entities: [],
     ...over,
   } as unknown as PlatformCtx
 }
@@ -310,16 +311,16 @@ describe('the row menu', () => {
     expect(reason.style.fontSize).toBe('11px')
   })
 
-  it('an invited row offers Resend, and states why Copy and Revoke are disabled', () => {
+  it('an invited row offers Resend and Revoke, both enabled, with no reasons', () => {
     renderRows(ROSTER())
 
     fireEvent.click(rowOf('Cy Invited').getByTestId('member-menu-trigger'))
 
     const menu = screen.getByTestId('member-menu')
     const items = within(menu).getAllByRole('button') as HTMLButtonElement[]
-    expect(items.map((i) => i.textContent)).toEqual(['Resend invite', 'Copy invite link', 'Revoke invite'])
-    expect(items.map((i) => i.disabled)).toEqual([false, true, true])
-    expect(within(menu).getAllByTestId('member-menu-reason').map((r) => r.textContent)).toEqual([MEMBER_UNBACKED.inviteLink, MEMBER_UNBACKED.revokeInvite])
+    expect(items.map((i) => i.textContent)).toEqual(['Resend invite', 'Revoke invite'])
+    expect(items.map((i) => i.disabled)).toEqual([false, false])
+    expect(within(menu).queryByTestId('member-menu-reason')).toBeNull()
   })
 
   it('your own menu has Edit and a locked Suspend, and no Remove at all', () => {
@@ -469,7 +470,7 @@ const INVITE: PendingInvite = {
   delivery: 'sent',
 }
 
-function renderPending(over: { invites?: PendingInvite[]; onResend?: (id: string) => void; resending?: ReadonlySet<string>; onOpen?: (id: string) => void; extra?: Member[] } = {}) {
+function renderPending(over: { invites?: PendingInvite[]; onResend?: (id: string) => void; resending?: ReadonlySet<string>; onRevoke?: (id: string) => void; revoking?: ReadonlySet<string>; onOpen?: (id: string) => void; extra?: Member[] } = {}) {
   const pending = invitedMember(over.invites?.[0] ?? INVITE)
   const rows = [...(over.extra ?? []), pending]
   render(
@@ -484,6 +485,8 @@ function renderPending(over: { invites?: PendingInvite[]; onResend?: (id: string
       invites={over.invites ?? [INVITE]}
       onResend={over.onResend ?? vi.fn()}
       resending={over.resending}
+      onRevoke={over.onRevoke}
+      revoking={over.revoking}
     />,
   )
   return pending
@@ -506,32 +509,112 @@ describe('RESEND-07-04: the pending row status cell', () => {
 })
 
 describe('RESEND-07-04: the pending row menu', () => {
-  it("MembersTable: a pending row's menu offers Resend and two disabled items with their reasons", () => {
+  it("MembersTable: an invited row's menu is Resend invite and Revoke invite, both enabled, no reasons", () => {
     renderPending()
     const menu = openMenuOf(screen.getByTestId('invite-row'))
 
-    const labels = within(menu).getAllByRole('button').map((b) => b.textContent)
-    expect(labels, 'the pending menu is exactly Resend, Copy link, Revoke; no Edit, Suspend or Remove').toEqual([
-      'Resend invite',
-      'Copy invite link',
-      'Revoke invite',
-    ])
+    const items = within(menu).getAllByRole('button') as HTMLButtonElement[]
+    expect(items.map((i) => i.textContent)).toEqual(['Resend invite', 'Revoke invite'])
+    expect(items.map((i) => i.disabled)).toEqual([false, false])
+    expect(within(menu).queryByTestId('member-menu-reason')).toBeNull()
+    expect(within(menu).queryByText('Copy invite link')).toBeNull()
+  })
 
-    expect((within(menu).getByRole('button', { name: 'Resend invite' }) as HTMLButtonElement).disabled).toBe(false)
+  it('MembersTable: Revoke invite opens the confirm strip under its row and calls nothing', () => {
+    const onRevoke = vi.fn()
+    renderPending({ onRevoke })
+    const row = screen.getByTestId('invite-row')
+    fireEvent.click(within(openMenuOf(row)).getByRole('button', { name: 'Revoke invite' }))
 
-    for (const [label, reason] of [
-      ['Copy invite link', MEMBER_UNBACKED.inviteLink],
-      ['Revoke invite', MEMBER_UNBACKED.revokeInvite],
-    ] as const) {
-      const item = within(menu).getByRole('button', { name: label }) as HTMLButtonElement
-      expect(item.disabled, `${label} stays disabled`).toBe(true)
-      const note = within(menu).getByText(reason)
-      expect(note.getAttribute('data-testid'), `${label}'s reason is a visible note`).toBe('member-menu-reason')
-      expect(item.getAttribute('aria-describedby'), `${label} points at its own reason`).toBe(note.id)
-    }
-    expect(within(menu).queryByText('Edit')).toBeNull()
-    expect(within(menu).queryByText('Suspend')).toBeNull()
-    expect(within(menu).queryByText('Remove')).toBeNull()
+    const strip = screen.getByTestId('invite-revoke-confirm')
+    expect(row.nextElementSibling).toBe(strip)
+    expect(strip.textContent).toContain('Revoke this invite? The link in the email stops working at once.')
+    expect(within(strip).getByTestId('invite-revoke-keep').textContent).toBe('Keep invite')
+    expect(within(strip).getByTestId('invite-revoke-confirmed').textContent).toBe('Revoke invite')
+    expect(strip.style.minWidth).toBe('716px')
+    expect(onRevoke).not.toHaveBeenCalled()
+  })
+
+  it('MembersTable: Keep invite closes the strip and calls nothing', () => {
+    const onRevoke = vi.fn()
+    renderPending({ onRevoke })
+    fireEvent.click(within(openMenuOf(screen.getByTestId('invite-row'))).getByRole('button', { name: 'Revoke invite' }))
+
+    fireEvent.click(screen.getByTestId('invite-revoke-keep'))
+
+    expect(screen.queryByTestId('invite-revoke-confirm')).toBeNull()
+    expect(screen.getByTestId('invite-row')).toBeTruthy()
+    expect(onRevoke).not.toHaveBeenCalled()
+  })
+
+  it('MembersTable: opening the strip focuses Keep invite', () => {
+    renderPending({ onRevoke: vi.fn() })
+    fireEvent.click(within(openMenuOf(screen.getByTestId('invite-row'))).getByRole('button', { name: 'Revoke invite' }))
+
+    expect(document.activeElement).toBe(screen.getByTestId('invite-revoke-keep'))
+  })
+
+  it('MembersTable: Escape closes the strip and calls nothing', () => {
+    const onRevoke = vi.fn()
+    renderPending({ onRevoke })
+    fireEvent.click(within(openMenuOf(screen.getByTestId('invite-row'))).getByRole('button', { name: 'Revoke invite' }))
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.queryByTestId('invite-revoke-confirm')).toBeNull()
+    expect(onRevoke).not.toHaveBeenCalled()
+  })
+
+  it('MembersTable: a strip opened for a row that leaves the list does not return with the row', () => {
+    const inv = invitedMember(INVITE)
+    const base = { ctx: ctxWith({ members: [inv] }), policies: [], roles: [], onOpen: vi.fn(), onStatus: vi.fn(), statusError: null, invites: [INVITE], onResend: vi.fn(), onRevoke: vi.fn() }
+    const { rerender } = render(<MembersTable {...base} rows={[inv]} />)
+    fireEvent.click(within(openMenuOf(screen.getByTestId('invite-row'))).getByRole('button', { name: 'Revoke invite' }))
+    expect(screen.getByTestId('invite-revoke-confirm')).toBeTruthy()
+
+    rerender(<MembersTable {...base} rows={[]} />)
+    rerender(<MembersTable {...base} rows={[inv]} />)
+
+    expect(screen.getByTestId('invite-row')).toBeTruthy()
+    expect(screen.queryByTestId('invite-revoke-confirm')).toBeNull()
+  })
+
+  it('MembersTable: the strip\'s Revoke invite calls onRevoke with the id and closes the strip', () => {
+    const onRevoke = vi.fn()
+    renderPending({ onRevoke })
+    fireEvent.click(within(openMenuOf(screen.getByTestId('invite-row'))).getByRole('button', { name: 'Revoke invite' }))
+
+    fireEvent.click(screen.getByTestId('invite-revoke-confirmed'))
+
+    expect(onRevoke).toHaveBeenCalledExactlyOnceWith('inv-1')
+    expect(screen.queryByTestId('invite-revoke-confirm')).toBeNull()
+  })
+
+  it('MembersTable: Revoke is disabled while that id revokes or resends, and Resend while it revokes', () => {
+    renderPending({ revoking: new Set(['inv-1']) })
+    let items = within(openMenuOf(screen.getByTestId('invite-row'))).getAllByRole('button') as HTMLButtonElement[]
+    expect(items.map((i) => i.disabled)).toEqual([true, true])
+    cleanup()
+    renderPending({ resending: new Set(['inv-1']) })
+    items = within(openMenuOf(screen.getByTestId('invite-row'))).getAllByRole('button') as HTMLButtonElement[]
+    expect(items.map((i) => i.disabled)).toEqual([true, true])
+  })
+
+  it("MembersTable: an open strip's Revoke invite is disabled while that id resends or revokes", () => {
+    const onRevoke = vi.fn()
+    const base = { ctx: ctxWith({ members: [invitedMember(INVITE)] }), rows: [invitedMember(INVITE)], policies: [], roles: [], onOpen: vi.fn(), onStatus: vi.fn(), statusError: null, invites: [INVITE], onResend: vi.fn(), onRevoke }
+    const { rerender } = render(<MembersTable {...base} />)
+    fireEvent.click(within(openMenuOf(screen.getByTestId('invite-row'))).getByRole('button', { name: 'Revoke invite' }))
+    const confirm = () => screen.getByTestId('invite-revoke-confirmed') as HTMLButtonElement
+    expect(confirm().disabled, 'control: enabled when nothing is in flight').toBe(false)
+
+    rerender(<MembersTable {...base} resending={new Set(['inv-1'])} />)
+    expect(confirm().disabled).toBe(true)
+    fireEvent.click(confirm())
+    rerender(<MembersTable {...base} revoking={new Set(['inv-1'])} />)
+    expect(confirm().disabled).toBe(true)
+    fireEvent.click(confirm())
+    expect(onRevoke).not.toHaveBeenCalled()
   })
 
   it('MembersTable: Resend calls onResend with the invitation id, and is disabled while that id is resending', () => {
@@ -677,12 +760,87 @@ describe('LOGFIX-05-03: the invitee account state on the pending row', () => {
     expect(within(openMenuOf(screen.getByTestId('member-row'))).queryByTestId('member-menu-state')).toBeNull()
   })
 
-  it("MembersTable: a pending row's menu offers Resend and two disabled items with their reasons (confirmed row)", () => {
+  it("MembersTable: a confirmed-account pending row's menu is Resend invite and Revoke invite, both enabled, no reasons", () => {
     withState({ account: 'confirmed' })
     const menu = openMenuOf(screen.getByTestId('invite-row'))
     const items = within(menu).getAllByRole('button') as HTMLButtonElement[]
-    expect(items.map((i) => i.textContent)).toEqual(['Resend invite', 'Copy invite link', 'Revoke invite'])
-    expect(items.map((i) => i.disabled)).toEqual([false, true, true])
-    expect(within(menu).getAllByTestId('member-menu-reason')).toHaveLength(2)
+    expect(items.map((i) => i.textContent)).toEqual(['Resend invite', 'Revoke invite'])
+    expect(items.map((i) => i.disabled)).toEqual([false, false])
+    expect(within(menu).queryByTestId('member-menu-reason')).toBeNull()
+    expect(within(menu).queryByText('Copy invite link')).toBeNull()
+  })
+})
+
+describe('FIRMS-02-05: the roster shows client access under the access role', () => {
+  function renderRows(mode: 'firm' | 'inhouse', rows: Member[], invites: PendingInvite[] = [], entities: unknown[] = []) {
+    render(
+      <MembersTable
+        ctx={ctxWith({ mode, members: rows, entities })}
+        rows={rows}
+        policies={[]}
+        roles={[]}
+        onOpen={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+        invites={invites}
+      />,
+    )
+  }
+
+  it('each firm member row shows its client access under the role; an invited row shows none', () => {
+    const pending: PendingInvite = { id: 'i1', email: 'new@x.ng', role: 'preparer', expiresAt: '2099-01-01T00:00:00Z', delivery: 'sent' }
+    renderRows(
+      'firm',
+      [
+        member({ id: 'a', name: 'Adm', role: 'admin', clientAccess: 'all' }),
+        member({ id: 'p', name: 'Prep', role: 'preparer', clientAccess: [] }),
+        member({ id: 'r', name: 'Rev', role: 'reviewer', clientAccess: ['a', 'b'] }),
+        invitedMember(pending),
+      ],
+      [pending],
+    )
+
+    const rows = screen.getAllByTestId('member-row')
+    expect(rows.map((r) => within(r).getByTestId('member-client-access').textContent)).toEqual(['All clients', 'No clients', '2 clients'])
+    for (const row of rows) {
+      const cell = row.children[1] as HTMLElement
+      const line = within(row).getByTestId('member-client-access')
+      expect(cell.contains(line)).toBe(true)
+      expect(cell.textContent?.endsWith(line.textContent as string)).toBe(true)
+    }
+    expect(within(screen.getByTestId('invite-row')).queryByTestId('member-client-access')).toBeNull()
+  })
+
+  it('in-house rows show no client access line', () => {
+    renderRows('inhouse', [member({ clientAccess: null }), member({ id: 'u9', clientAccess: 'all' })])
+    expect(screen.queryByTestId('member-client-access')).toBeNull()
+  })
+
+  it('a row whose access is unknown to the viewer shows no line', () => {
+    renderRows('firm', [member({ clientAccess: null })])
+    expect(screen.queryByTestId('member-client-access')).toBeNull()
+  })
+
+  it('a client set gives the line a title naming the clients in list order; unresolvable ids are omitted', () => {
+    const ent = (id: string, name: string, status = 'active') => ({ id, name, status })
+    renderRows(
+      'firm',
+      [
+        member({ id: 'r', clientAccess: ['z', 'b', 'a'] }),
+        member({ id: 'g', clientAccess: ['ghost'] }),
+        member({ id: 'm', clientAccess: ['a', 'ghost'] }),
+      ],
+      [],
+      [ent('a', 'Acme'), ent('b', 'Beta', 'archived'), ent('z', 'Zed')],
+    )
+    const titles = screen.getAllByTestId('member-client-access').map((l) => l.getAttribute('title'))
+    expect(titles).toEqual(['Acme, Beta, Zed', null, 'Acme'])
+  })
+
+  it('"All clients" and "No clients" carry no title', () => {
+    renderRows('firm', [member({ id: 'a', clientAccess: 'all' }), member({ id: 'p', clientAccess: [] })], [], [
+      { id: 'a', name: 'Acme', status: 'active' },
+    ])
+    for (const l of screen.getAllByTestId('member-client-access')) expect(l.hasAttribute('title')).toBe(false)
   })
 })

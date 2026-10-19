@@ -72,7 +72,7 @@ func seedMember(t *testing.T, super *pgxpool.Pool, tenantID, role, status string
 	t.Helper()
 	subject := uuid.NewString()
 	if _, err := super.Exec(context.Background(),
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, $3, $4)`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, $3, $4, true)`,
 		tenantID, subject, role, status); err != nil {
 		t.Fatalf("seed membership: %v", err)
 	}

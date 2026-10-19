@@ -546,6 +546,8 @@ export type PlatformCtx = {
   // swallow it. Remove and access-role writes have no endpoint; their controls ship
   // disabled with `MEMBER_UNBACKED`'s reason rather than calling a verb that lies.
   setMemberStatus: (id: string, status: Exclude<MemberStatus, 'invited'>) => Promise<void>
+  // Replaces the member's whole client access; same reject-unreshaped contract.
+  setMemberClients: (id: string, access: 'all' | readonly string[]) => Promise<void>
   // Settings › Roles. Rename (PATCH) and staffing (PUT /members) are separate server
   // writes, so they are separate verbs rather than one funnel over a whole Role — a
   // partial failure has to say which half failed. Same reject-unreshaped contract as

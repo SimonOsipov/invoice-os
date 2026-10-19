@@ -4285,7 +4285,7 @@ func TestSeedMembershipsHaveIdentity(t *testing.T) {
 	}
 }
 
-// TestSeedMembershipCountsPerTenant: story §5 AC-1. Tenant A (firm) has 6
+// TestSeedMembershipCountsPerTenant: story §5 AC-1. Tenant A (firm) has 7
 // seeded memberships, tenant B (in-house) has 7.
 func TestSeedMembershipCountsPerTenant(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
@@ -4296,8 +4296,8 @@ func TestSeedMembershipCountsPerTenant(t *testing.T) {
 		t.Fatalf("Seed: %v", err)
 	}
 
-	if got := mustCount(t, pool, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, demoTenantID); got != 6 {
-		t.Errorf("count(memberships) for tenant A (%s) = %d, want 6", demoTenantID, got)
+	if got := mustCount(t, pool, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, demoTenantID); got != 7 {
+		t.Errorf("count(memberships) for tenant A (%s) = %d, want 7", demoTenantID, got)
 	}
 	if got := mustCount(t, pool, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, honeywellTenantID); got != 7 {
 		t.Errorf("count(memberships) for tenant B (%s) = %d, want 7", honeywellTenantID, got)
@@ -4375,6 +4375,116 @@ func TestSeedRepairsMutatedMembership(t *testing.T) {
 	}
 }
 
+const (
+	amakaEzeID   = "c0000000-0000-0000-0000-000000000014"
+	okaforAdmin  = "c0000000-0000-0000-0000-000000000001"
+	okaforAllIDs = "c0000000-0000-0000-0000-000000000003 c0000000-0000-0000-0000-000000000004 c0000000-0000-0000-0000-000000000005 c0000000-0000-0000-0000-000000000006 c0000000-0000-0000-0000-000000000007"
+)
+
+// clientAccess returns a member's all_clients flag and membership_clients row count.
+func clientAccess(t *testing.T, pool *pgxpool.Pool, tenantID, userID string) (bool, int) {
+	t.Helper()
+	var flag bool
+	if err := pool.QueryRow(context.Background(),
+		`SELECT all_clients FROM memberships WHERE tenant_id = $1 AND user_id = $2`, tenantID, userID).Scan(&flag); err != nil {
+		t.Fatalf("read all_clients of %s: %v", userID, err)
+	}
+	return flag, mustCount(t, pool, `SELECT count(*) FROM membership_clients WHERE tenant_id = $1 AND user_id = $2`, tenantID, userID)
+}
+
+func TestSeedAssignsTheDemoFirmClientAccess(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	// The seed never deletes, so rows left by an earlier run would hide a missing one.
+	if _, err := pool.Exec(context.Background(), `DELETE FROM membership_clients WHERE tenant_id = $1 AND user_id = $2`, demoTenantID, amakaEzeID); err != nil {
+		t.Fatalf("clear Amaka Eze rows: %v", err)
+	}
+	if err := db.Seed(context.Background(), superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	if flag, rows := clientAccess(t, pool, demoTenantID, okaforAdmin); flag || rows != 0 {
+		t.Errorf("admin ...0001: all_clients=%v rows=%d, want false and 0", flag, rows)
+	}
+	for _, id := range strings.Fields(okaforAllIDs) {
+		if flag, rows := clientAccess(t, pool, demoTenantID, id); !flag || rows != 0 {
+			t.Errorf("member %s: all_clients=%v rows=%d, want true and 0", id, flag, rows)
+		}
+	}
+	var role, status string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT role, status FROM memberships WHERE tenant_id = $1 AND user_id = $2`, demoTenantID, amakaEzeID).Scan(&role, &status); err != nil {
+		t.Fatalf("read Amaka Eze: %v", err)
+	}
+	if role != "reviewer" || status != "active" {
+		t.Errorf("Amaka Eze = %s/%s, want reviewer/active", role, status)
+	}
+	if flag, rows := clientAccess(t, pool, demoTenantID, amakaEzeID); flag || rows != 2 {
+		t.Errorf("Amaka Eze: all_clients=%v rows=%d, want false and 2", flag, rows)
+	}
+	tins, err := pool.Query(context.Background(),
+		`SELECT e.tin FROM membership_clients mc JOIN business_entities e ON e.id = mc.entity_id
+		  WHERE mc.tenant_id = $1 AND mc.user_id = $2 ORDER BY e.tin`, demoTenantID, amakaEzeID)
+	if err != nil {
+		t.Fatalf("read Amaka Eze entities: %v", err)
+	}
+	defer tins.Close()
+	var got []string
+	for tins.Next() {
+		var tin string
+		if err := tins.Scan(&tin); err != nil {
+			t.Fatalf("scan tin: %v", err)
+		}
+		got = append(got, tin)
+	}
+	if want := []string{"10012345-0001", "10023456-0002"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Amaka Eze entity TINs = %v, want %v", got, want)
+	}
+}
+
+func TestSeedStoresNoClientAccessInHouse(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	if err := db.Seed(context.Background(), superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	if n := mustCount(t, pool, `SELECT count(*) FROM memberships WHERE tenant_id = $1 AND all_clients`, honeywellTenantID); n != 0 {
+		t.Errorf("%d in-house members have all_clients, want 0", n)
+	}
+	if n := mustCount(t, pool, `SELECT count(*) FROM membership_clients WHERE tenant_id = $1`, honeywellTenantID); n != 0 {
+		t.Errorf("%d in-house membership_clients rows, want 0", n)
+	}
+	if n := mustCount(t, pool, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, honeywellTenantID); n != 7 {
+		t.Errorf("in-house memberships = %d, want 7, the zero checks above are vacuous", n)
+	}
+}
+
+func TestSeedRepairsClientAccess(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed: %v", err)
+	}
+	const preparer = "c0000000-0000-0000-0000-000000000003"
+	if _, err := pool.Exec(ctx, `UPDATE memberships SET all_clients = false WHERE tenant_id = $1 AND user_id = $2`, demoTenantID, preparer); err != nil {
+		t.Fatalf("clear flag: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM membership_clients WHERE ctid IN (
+		SELECT ctid FROM membership_clients WHERE tenant_id = $1 AND user_id = $2 LIMIT 1)`, demoTenantID, amakaEzeID); err != nil {
+		t.Fatalf("delete a row: %v", err)
+	}
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed: %v", err)
+	}
+	if flag, _ := clientAccess(t, pool, demoTenantID, preparer); !flag {
+		t.Error("all_clients of ...0003 not restored")
+	}
+	if _, rows := clientAccess(t, pool, demoTenantID, amakaEzeID); rows != 2 {
+		t.Errorf("Amaka Eze rows after re-seed = %d, want 2", rows)
+	}
+}
+
 // TestSeedMembershipsAreIdempotent: story §5 AC-2. Running Seed twice leaves
 // the two persona tenants' membership rows byte-identical across both runs.
 func TestSeedMembershipsAreIdempotent(t *testing.T) {
@@ -4386,16 +4496,16 @@ func TestSeedMembershipsAreIdempotent(t *testing.T) {
 		t.Fatalf("first Seed: %v", err)
 	}
 	first := fetchAllPersonaMemberships(t, pool)
-	if len(first) != 13 {
-		t.Fatalf("count(memberships) across the two persona tenants after the FIRST Seed = %d, want 13 (6 + 7)", len(first))
+	if len(first) != 14 {
+		t.Fatalf("count(memberships) across the two persona tenants after the FIRST Seed = %d, want 14 (7 + 7)", len(first))
 	}
 
 	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
 		t.Fatalf("second Seed (idempotency): %v", err)
 	}
 	second := fetchAllPersonaMemberships(t, pool)
-	if len(second) != 13 {
-		t.Fatalf("count(memberships) across the two persona tenants after the SECOND Seed = %d, want 13 (no duplication)", len(second))
+	if len(second) != 14 {
+		t.Fatalf("count(memberships) across the two persona tenants after the SECOND Seed = %d, want 14 (no duplication)", len(second))
 	}
 
 	if !reflect.DeepEqual(first, second) {
@@ -4503,8 +4613,8 @@ func TestSeedMembershipUpsertNeverTouchesNonSeedRow(t *testing.T) {
 	if !reflect.DeepEqual(before, after) {
 		t.Errorf("tenant A membership rows (including the real, non-seed one) differ after 2 re-seeds, want byte-identical\nbefore: %+v\nafter:  %+v", before, after)
 	}
-	if got := mustCount(t, pool, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, demoTenantID); got != 7 {
-		t.Errorf("count(memberships) for tenant A after re-seed = %d, want 7 (6 curated + 1 real)", got)
+	if got := mustCount(t, pool, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, demoTenantID); got != 8 {
+		t.Errorf("count(memberships) for tenant A after re-seed = %d, want 8 (7 curated + 1 real)", got)
 	}
 }
 

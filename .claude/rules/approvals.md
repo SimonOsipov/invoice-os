@@ -31,7 +31,7 @@ paths:
 - Start every policy write with `requireActiveAdmin` inside its transaction.
 - Refuse a non-admin in portfolio `Store.Create` before the input check. A non-admin gets 403 whatever the input.
 - Decide a step on two axes. The caller is an active admin or reviewer, and holds the pending step's workflow role.
-- Answer an unknown, cross-tenant or malformed id with the same 404.
+- Answer an unknown, cross-tenant, outside-the-client-set or malformed id with the same 404.
 - Accept only `All invoices` as a policy `scope`. The `CHECK` constraint enforces it.
 - Key approval policies by workspace, not by client company.
 - Return the draft's steps from `GET /v1/approval-policies/{id}` once a draft exists. Never label them active.

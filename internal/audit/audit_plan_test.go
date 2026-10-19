@@ -1490,3 +1490,153 @@ func TestAudit_PlanCorpusNumberMatchesTheResolvedInvoice(t *testing.T) {
 			"invoice_id's; payload and column must agree", disagree, joined)
 	}
 }
+
+// --- the caller scope on the plan corpus ---
+//
+// Corpus: the plan corpus above (20 tenants x 1,000 rows, 8 entities, ~7% NULL entity_id).
+// The members are seeded in the corpus tenant; the statements are those of a real Store.List.
+
+// planScopedMember seeds a member limited to the named entities of the corpus tenant.
+func planScopedMember(t *testing.T, p planFixture, entities ...string) context.Context {
+	t.Helper()
+	return csMember(t, csSuper(t), p.tenant, "reviewer", false, entities...)
+}
+
+// planCorpusEntities returns n entities of the corpus tenant that carry audit rows.
+func planCorpusEntities(t *testing.T, f *fixture, p planFixture, n int) []string {
+	t.Helper()
+	ctx := context.Background()
+	var ids []string
+	if err := db.WithinTenantTx(ctx, f.app, p.tenant, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id::text FROM business_entities ORDER BY name LIMIT $1`, n)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		return rows.Err()
+	}); err != nil || len(ids) != n {
+		t.Fatalf("read %d corpus entities: got %d, err %v", n, len(ids), err)
+	}
+	return ids
+}
+
+// planTraceList runs Store.List as ctx on a traced single-connection pool and returns the
+// response with every statement that names audit_log, keyed by kind plus "probe".
+func planTraceList(t *testing.T, ctx context.Context, filter audit.Filter) (audit.Response, map[string]planStmt) {
+	t.Helper()
+	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("parse DATABASE_URL: %v", err)
+	}
+	tr := &planTracer{}
+	cfg.ConnConfig.Tracer = tr
+	cfg.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("traced pool: %v", err)
+	}
+	defer pool.Close()
+
+	got, err := audit.NewStore(pool).List(ctx, filter)
+	if err != nil {
+		t.Fatalf("Store.List: %v", err)
+	}
+	out := map[string]planStmt{}
+	for _, s := range tr.stmts {
+		switch {
+		case strings.HasPrefix(s.sql, "SELECT 1 FROM audit_log"):
+			out["probe"] = s
+		case strings.Contains(s.sql, "GROUP BY a.event"):
+			out[planKindFacetEvent] = s
+		case strings.Contains(s.sql, "GROUP BY a.actor"):
+			out[planKindFacetActor] = s
+		case strings.Contains(s.sql, "GROUP BY a.entity_id"):
+			out[planKindFacetCompany] = s
+		case strings.Contains(s.sql, "SELECT count(*) FROM audit_log a"):
+			out[planKindCount] = s
+		case strings.Contains(s.sql, "FROM audit_log a"):
+			out[planKindPage] = s
+		}
+	}
+	return got, out
+}
+
+// The member holds 2 of the 8 entities. Page and count carry entity_id in the Index Cond;
+// the facets visit the heap, so they assert no Seq Scan and tenant_id only.
+func TestAudit_ScopedCallerStatementsAreIndexServed(t *testing.T) {
+	f, p := requirePlanCorpus(t)
+	held := planCorpusEntities(t, f, p, 2)
+	member := planScopedMember(t, p, held...)
+
+	got, stmts := planTraceList(t, member, audit.Filter{Limit: 50})
+	if got.Total == 0 || got.Total >= planRowsPerTenant {
+		t.Fatalf("the member read %d of the tenant's %d rows, want a proper non-empty subset", got.Total, planRowsPerTenant)
+	}
+
+	for _, kind := range []string{planKindPage, planKindCount} {
+		t.Run(kind, func(t *testing.T) {
+			st, ok := stmts[kind]
+			if !ok {
+				t.Fatalf("Store.List issued no %s statement", kind)
+			}
+			assertServedByIndex(t, f, p.tenant, "", []string{"entity_id"}, st.sql, st.args...)
+		})
+	}
+	for _, kind := range []string{planKindFacetEvent, planKindFacetActor, planKindFacetCompany} {
+		t.Run(kind, func(t *testing.T) {
+			st, ok := stmts[kind]
+			if !ok {
+				t.Fatalf("Store.List issued no %s statement", kind)
+			}
+			assertServedByIndex(t, f, p.tenant, "", nil, st.sql, st.args...)
+		})
+	}
+}
+
+// The member's one entity has no audit row, so the probe returns no row and
+// assertServedByIndex's row floor cannot apply: assert the plan shape directly.
+func TestAudit_ScopedEmptyProbeIsIndexServed(t *testing.T) {
+	f, p := requirePlanCorpus(t)
+	fresh := uuid.NewString()
+	ctx := context.Background()
+	if err := db.WithinTenantTx(ctx, f.app, p.tenant, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `INSERT INTO business_entities (id, tenant_id, name) VALUES ($1, $2, 'ent-fresh')`, fresh, p.tenant)
+		return e
+	}); err != nil {
+		t.Fatalf("seed the fresh entity: %v", err)
+	}
+	member := planScopedMember(t, p, fresh)
+
+	got, stmts := planTraceList(t, member, audit.Filter{Limit: 50})
+	if got.Total != 0 || len(got.Events) != 0 {
+		t.Fatalf("the member of an entity with no rows read %d rows, want none", got.Total)
+	}
+	probe, ok := stmts["probe"]
+	if !ok {
+		t.Fatal("Store.List issued no empty probe for a request that matched nothing")
+	}
+
+	plan := explainAsApp(t, f, p.tenant, probe.sql, probe.args...)
+	if !strings.Contains(plan, "audit_log") {
+		t.Fatalf("plan = %q, want a plan mentioning audit_log", plan)
+	}
+	if strings.Contains(plan, "Seq Scan on audit_log") {
+		t.Errorf("plan = %s\nthe scoped probe must not Seq Scan audit_log", plan)
+	}
+	if planHasSort(plan) {
+		t.Errorf("plan = %s\nthe scoped probe has a Sort node; it must carry no ORDER BY (P20)", plan)
+	}
+	cond := indexCond(plan)
+	for _, col := range []string{"tenant_id", "entity_id"} {
+		if !strings.Contains(cond, col) {
+			t.Errorf("Index Cond = %q, want %s in it\nplan = %s", cond, col, plan)
+		}
+	}
+}

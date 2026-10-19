@@ -486,7 +486,7 @@ func (w inviteWorld) inviteAnother(t *testing.T, prefix string) string {
 		_, _ = superConn(t).Exec(context.Background(), `DELETE FROM auth.users WHERE email = $1`, email)
 	})
 	inviter := &tenancy.Inviter{Store: w.store, Sender: accountmail.NewResend(w.resend.URL, "k_test", nil), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	if res, err := inviter.Invite(w.adminCtx, []string{email}, "preparer"); err != nil || len(res) != 1 {
+	if res, err := inviter.Invite(w.adminCtx, []string{email}, "preparer", nil); err != nil || len(res) != 1 {
 		t.Fatalf("invite %s: %+v, err %v", email, res, err)
 	}
 	return email

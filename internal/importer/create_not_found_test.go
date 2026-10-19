@@ -1,0 +1,43 @@
+package importer
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/SimonOsipov/invoice-os/internal/invoice"
+)
+
+// invoice.Store.Create answers ErrNotFound when the client left the caller's set after EntityVisible.
+func TestStatusForErr_InvoiceNotFoundIs404(t *testing.T) {
+	for name, err := range map[string]error{
+		"bare":    invoice.ErrNotFound,
+		"wrapped": fmt.Errorf("create: %w", invoice.ErrNotFound),
+	} {
+		status, msg := statusForErr(err)
+		if status != http.StatusNotFound || msg != "not found" {
+			t.Errorf("%s: statusForErr = %d %q, want 404 \"not found\"", name, status, msg)
+		}
+	}
+}
+
+func TestDomainCreateErrorMessage_InvoiceNotFoundQuarantinesTheRow(t *testing.T) {
+	msg, ok := domainCreateErrorMessage(fmt.Errorf("create: %w", invoice.ErrNotFound))
+	if !ok || msg == "" {
+		t.Errorf("domainCreateErrorMessage(invoice.ErrNotFound) = %q, %v, want a quarantine message", msg, ok)
+	}
+}
+
+func TestSupplyNumberHandler_InvoiceNotFoundFromCreateAnswers404(t *testing.T) {
+	id := testIdentity()
+	supply := func(context.Context, string, string, string) (invoice.Invoice, error) {
+		return invoice.Invoice{}, fmt.Errorf("create: %w", invoice.ErrNotFound)
+	}
+	rec, _ := doSupplyPost(t, supply, &id, supplyJSONBody(uuid.NewString(), uuid.NewString(), "INV-1"))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d %s, want 404", rec.Code, rec.Body.String())
+	}
+}

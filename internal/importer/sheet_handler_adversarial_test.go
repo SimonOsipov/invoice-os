@@ -450,7 +450,7 @@ func TestSheetRoute_MountedInCmdInvoiceWithSheetHandler(t *testing.T) {
 		t.Errorf("%q is served by %q, want importer.SheetHandler", pattern, got)
 	}
 	if len(handler.Args) == 0 || selectorNameForImporter(handler.Args[0]) == "" ||
-		!strings.HasSuffix(selectorNameForImporter(handler.Args[0]), ".Open") {
-		t.Errorf("SheetHandler's open argument is not an .Open method value; the route would not resolve a stored key")
+		!strings.HasSuffix(selectorNameForImporter(handler.Args[0]), ".OpenLinked") {
+		t.Errorf("SheetHandler's open argument is not an .OpenLinked method value; a limited member could read a document linked only to a hidden client")
 	}
 }

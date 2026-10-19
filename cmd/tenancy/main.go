@@ -63,6 +63,9 @@ func main() {
 	// gateway proxies it unchanged: its mount carries no method.
 	app.Mux.HandleFunc("PATCH /v1/memberships/{user_id}", tenancy.SetMembershipStatusHandler(store.SetMembershipStatus, app.Logger))
 
+	// PUT /v1/memberships/{user_id}/clients — admin-only whole-set replace of a member's client access.
+	app.Mux.HandleFunc("PUT /v1/memberships/{user_id}/clients", tenancy.SetMemberClientsHandler(store.SetMemberClients, app.Logger))
+
 	// POST /v1/workspaces — a tenant-less caller provisions their first workspace;
 	// the gateway lets a token without a tenant reach this route only.
 	app.Mux.HandleFunc("POST /v1/workspaces", tenancy.ProvisionHandler(store.ProvisionWorkspace, app.Logger))
@@ -76,6 +79,7 @@ func main() {
 	app.Mux.HandleFunc("POST /v1/invitations", tenancy.InvitationsCreateHandler(inviter.Invite, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invitations", tenancy.InvitationsListHandler(store.ListInvitations, app.Logger))
 	app.Mux.HandleFunc("POST /v1/invitations/{id}/resend", tenancy.InvitationResendHandler(inviter.Resend, app.Logger))
+	app.Mux.HandleFunc("POST /v1/invitations/{id}/revoke", tenancy.InvitationRevokeHandler(store.RevokeInvitation, app.Logger))
 	// The invitee holds no membership (or no tenant) yet: accept is the caller's own act; preview is token-only.
 	app.Mux.HandleFunc("POST /v1/invitations/accept", tenancy.AcceptInvitationHandler(store.AcceptInvitation, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invitations/mine", tenancy.InvitationsMineHandler(store.MyPendingInvitations, app.Logger))

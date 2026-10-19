@@ -17,9 +17,13 @@ import {
   CAPABILITY_FOOTNOTE,
   CAPABILITY_ROWS,
   classifyInvites,
+  ADMIN_ALL_CLIENTS,
+  clientAccessLabel,
   clientSelectionCount,
+  NO_CLIENTS_IN_WORKSPACE,
+  pickerClients,
+  setMembershipClients,
   companySetupAccess,
-  CLIENT_ROSTER,
   CLIENT_USERS_COPY,
   delegateCandidates,
   emailLabel,
@@ -29,6 +33,8 @@ import {
   inhouseNotifyTargets,
   initialsFrom,
   chipVerdicts,
+  CLIENT_ADMIN_ONLY,
+  COMPANY_ADMIN_ONLY,
   INVITE_ADMIN_ONLY,
   INVITE_ERROR,
   invitedMember,
@@ -52,10 +58,12 @@ import {
   parseEmailInput,
   PROTECTED_ADMIN_NOTE,
   removeConfirmQuestion,
+  removeInvite,
   removeMember,
   REMOVE_EXPLANATION,
   replaceMember,
   resendInvitation,
+  revokeInvitation,
   rosterWithInvites,
   sendInvitations,
   serverRefusedAddresses,
@@ -64,7 +72,9 @@ import {
   toMember,
   toPendingInvite,
   upsertInvites,
+  viewerHasNoClients,
   viewerIsAdmin,
+  NO_ASSIGNED_CLIENTS,
   type InvitationWire,
   type Member,
   type MemberStatus,
@@ -464,17 +474,8 @@ describe('constants (T1.39–T1.40, §3/§6)', () => {
 // SURVIVED that set: it names a behaviour §5/§6/§15.5/§15.6 states but nothing yet
 // pins. Nothing here re-asserts a T1 spec.
 
-describe('CLIENT_ROSTER (QA1, §14.5)', () => {
-  it('is the six CFG companies, ids equal to their CFG index, in CFG order (QA1)', () => {
-    // The roster had no spec of its own. Its ids ARE the CFG indices — every stored
-    // `clientAccess` subset in the seed indexes into this array by position.
-    expect(CLIENT_ROSTER).toHaveLength(6)
-    expect(CLIENT_ROSTER.map((c) => c.id)).toEqual([0, 1, 2, 3, 4, 5])
-    expect(CLIENT_ROSTER.map((c) => c.name)).toEqual(CFG.map((c) => c.name))
-    expect(CLIENT_ROSTER[0].name).toBe('Lagos Freight & Logistics Ltd')
-    expect(CLIENT_ROSTER[5].name).toBe('Kano Textile Mills Plc')
-  })
-})
+/** A fixture roster of the six CFG companies, string ids. */
+const ROSTER = CFG.map((c, i) => ({ id: `e${i}`, name: c.name }))
 
 describe('inhouseNotifyTargets — empty current (QA13, §11.4)', () => {
   it('appends nothing when the node carries no stored target (QA13)', () => {
@@ -1132,47 +1133,31 @@ describe('hasDerivableName — DEFECT D1 settled without moving QA35 (T6.3-T6.4,
 })
 
 describe('the firm client picker (T6.5-T6.7, §7)', () => {
-  it("matches filterMembers' rule — trimmed, case-insensitive substring (T6.5)", () => {
-    // Deliberately the same rule as the roster search box eight inches away (QA36). Two search
-    // inputs on one tab that disagreed about a trailing space would be indefensible.
-    expect(filterClientRoster('lagos').map((c) => c.id)).toEqual([0])
-    expect(filterClientRoster('LAGOS').map((c) => c.id)).toEqual([0])
-    expect(filterClientRoster('  foods  ').map((c) => c.id)).toEqual([1])
-    // A substring, not a prefix — and one that spans two rows, so the filter is really running.
-    expect(filterClientRoster('ltd').map((c) => c.name)).toEqual([
+  it('filterClientRoster narrows the shown clients only: trimmed, case-insensitive substring', () => {
+    expect(filterClientRoster(ROSTER, 'lagos').map((c) => c.id)).toEqual(['e0'])
+    expect(filterClientRoster(ROSTER, 'LAGOS').map((c) => c.id)).toEqual(['e0'])
+    expect(filterClientRoster(ROSTER, '  foods  ').map((c) => c.id)).toEqual(['e1'])
+    expect(filterClientRoster(ROSTER, 'ltd').map((c) => c.name)).toEqual([
       'Lagos Freight & Logistics Ltd',
       'Sahara Foods Distribution Ltd',
     ])
-    expect(filterClientRoster('zzz')).toEqual([])
+    expect(filterClientRoster(ROSTER, 'zzz')).toEqual([])
   })
 
-  it('treats a whitespace-only query as an EMPTY one, and always allocates (T6.6)', () => {
-    expect(filterClientRoster('')).toHaveLength(CLIENT_ROSTER.length)
-    expect(filterClientRoster('   ')).toHaveLength(CLIENT_ROSTER.length)
-    expect(filterClientRoster(' \n\t ').map((c) => c.id)).toEqual([0, 1, 2, 3, 4, 5])
-
-    // Never the module constant itself: `CLIENT_ROSTER` is readonly at the TYPE level only, and
-    // a caller handed the real array could sort or splice the roster for the whole session.
-    const all = filterClientRoster('')
-    expect(all).not.toBe(CLIENT_ROSTER)
+  it('treats a whitespace-only query as empty and always allocates', () => {
+    expect(filterClientRoster(ROSTER, '  ')).toHaveLength(ROSTER.length)
+    expect(filterClientRoster(ROSTER, ' \n\t ').map((c) => c.id)).toEqual(ROSTER.map((c) => c.id))
+    const all = filterClientRoster(ROSTER, '')
+    expect(all).not.toBe(ROSTER)
     all.length = 0
-    expect(CLIENT_ROSTER).toHaveLength(6)
+    expect(ROSTER).toHaveLength(6)
   })
 
-  it('counts against the ROSTER, not against what the search left showing (T6.7)', () => {
-    // §7's shape verbatim. The seed's roster is 6, which is the number §7 itself writes.
-    expect(CLIENT_ROSTER).toHaveLength(6)
-    expect(clientSelectionCount(3)).toBe('3 of 6 selected')
-
-    // The one that matters: filtering must not restate the denominator. A 3-client invite with
-    // "lagos" typed into the box still grants 3 of 6, not 1 of 1.
-    expect(filterClientRoster('lagos')).toHaveLength(1)
-    expect(clientSelectionCount(3)).toBe('3 of 6 selected')
-
-    // Both ends, including the zero that disables `Send invites` and the all-ticked case that
-    // is deliberately NOT collapsed into `All clients` — the user picked six, not "everyone".
-    expect(clientSelectionCount(0)).toBe('0 of 6 selected')
-    expect(clientSelectionCount(6)).toBe('6 of 6 selected')
+  it('clientSelectionCount counts against the roster, not the filter', () => {
+    expect(clientSelectionCount(2, 3)).toBe('2 of 3 selected')
+    expect(filterClientRoster(ROSTER, 'lagos')).toHaveLength(1)
+    expect(clientSelectionCount(3, ROSTER.length)).toBe('3 of 6 selected')
+    expect(clientSelectionCount(0, 6)).toBe('0 of 6 selected')
   })
 })
 
@@ -1213,10 +1198,11 @@ describe('mergeChips — the de-dupe nothing upstream performs (T6.9-T6.11, §7)
 })
 
 describe('the client picker\'s two invented sentences (T6.12, §7)', () => {
-  it('explains the disabled Send, and echoes the roster search word for word (T6.12)', () => {
-    // INVENTED COPY. §7 gives the zero-selected state a BEHAVIOUR (nothing to grant, nothing to
-    // send) and no sentence, so the sentence is pinned here rather than left in the component.
-    expect(NO_CLIENTS_NOTE).toBe('Pick at least one client, or switch to All clients.')
+  it('states the empty pick, and echoes the roster search word for word (T6.12)', () => {
+    expect(NO_CLIENTS_NOTE).toBe('No clients picked. This person sees no client until an admin picks some.')
+    expect(ADMIN_ALL_CLIENTS).toBe('An admin sees every client.')
+    expect(NO_CLIENTS_IN_WORKSPACE).toBe('This workspace has no clients yet.')
+    expect(NO_ASSIGNED_CLIENTS).toBe('An admin has not given you any clients yet.')
     // Deliberately the roster search's line with one noun changed. Pinned as a PAIR, so the two
     // cannot drift into phrasing the same failure two ways on one tab.
     expect(NO_CLIENT_MATCH).toBe('No clients match this search.')
@@ -1290,14 +1276,14 @@ describe('MEMB-01-06 QA — the picker filter is literal (QA47)', () => {
     // word, so `includes(q)` and `new RegExp(q).test(name)` agree on all of them and the
     // spec cannot tell them apart. These two can:
     //   '.' — a literal dot matches ONE roster name; as a pattern it matches all six.
-    expect(filterClientRoster('.').map((c) => c.name)).toEqual(['Nigerian Delta Supplies Co.'])
+    expect(filterClientRoster(ROSTER, '.').map((c) => c.name)).toEqual(['Nigerian Delta Supplies Co.'])
     //   '(' — a literal paren matches nothing; as a pattern it THROWS SyntaxError, taking
     //   the modal down mid-keystroke (AC#10) rather than showing NO_CLIENT_MATCH.
-    expect(filterClientRoster('(')).toEqual([])
-    expect(filterClientRoster('[a-z]')).toEqual([])
+    expect(filterClientRoster(ROSTER, '(')).toEqual([])
+    expect(filterClientRoster(ROSTER, '[a-z]')).toEqual([])
     // And the ampersand two roster names actually contain, so "literal" is proven in both
     // directions rather than only by what it refuses.
-    expect(filterClientRoster('&').map((c) => c.id)).toEqual([0, 3])
+    expect(filterClientRoster(ROSTER, '&').map((c) => c.id)).toEqual(['e0', 'e3'])
   })
 })
 
@@ -1360,16 +1346,6 @@ describe("§8's danger-zone copy — the most important text in the story (T7.1�
     expect(src, 'the e2e transcription drifted from lib/members.ts').toContain(SUSPEND_EXPLANATION)
   })
 
-  it('the e2e transcription carries the two invite reasons', () => {
-    const src = readFileSync(
-      fileURLToPath(new URL('../../../../e2e/topology/settingsFixtures.ts', import.meta.url)),
-      'utf8',
-    )
-    expect(src, 'the scan read the wrong file').toContain('export const UNBACKED')
-    expect(src, 'the e2e inviteLink drifted from lib/members.ts').toContain(MEMBER_UNBACKED.inviteLink)
-    expect(src, 'the e2e revokeInvite drifted from lib/members.ts').toContain(MEMBER_UNBACKED.revokeInvite)
-  })
-
   it('AC8: the shared audit-trail clause survives the rewrite in both explanations', () => {
     // SUSPEND_EXPLANATION's clause ends the sentence with a full stop, both before and
     // after the rewrite -- this guards the rewrite from dropping it.
@@ -1411,21 +1387,12 @@ describe("§8's danger-zone copy — the most important text in the story (T7.1�
   })
 })
 
-describe('needsClientPick — §7\'s zero-selected rule, now read by two components (T7.8)', () => {
-  it("treats 'all' and [] as the discriminated union they are (T7.8)", () => {
-    // It moved into this module when MEMB-01-07 extracted `ClientAccessPicker`: the picker
-    // shows NO_CLIENTS_NOTE and the modal disables `Send invites` off ONE rule, and the
-    // modal can no longer see the picker's internal scope.
+describe('needsClientPick — true for an empty set only', () => {
+  it("is false for 'all' and a non-empty set, true for []", () => {
     expect(needsClientPick('all')).toBe(false)
     expect(needsClientPick([])).toBe(true)
-    expect(needsClientPick([0])).toBe(false)
-    expect(needsClientPick([0, 1, 3])).toBe(false)
-
-    // `[]` is representable and meaningful — it is simply not sendable.
-    const scoped = [0, 1, 3]
-    expect(needsClientPick(scoped)).toBe(false)
-    expect(needsClientPick(scoped.slice(0, 1))).toBe(false)
-    expect(needsClientPick(scoped.slice(0, 0))).toBe(true)
+    expect(needsClientPick(['e0'])).toBe(false)
+    expect(needsClientPick(['e0', 'e1', 'e3'])).toBe(false)
   })
 })
 
@@ -1553,6 +1520,20 @@ describe('RESEND-07-02 — the invitations wire', () => {
     expect(got).toEqual([w])
   })
 
+  it('sendInvitations sends client_access only when given', async () => {
+    const af = vi.fn().mockResolvedValue({ invitations: [w] }) as unknown as AuthedFetch
+    const bodyOf = () => (af as unknown as ReturnType<typeof vi.fn>).mock.lastCall![1].body
+
+    await sendInvitations(af, base, ['e1'], 'preparer', ['e1'])
+    expect(bodyOf()).toEqual({ emails: ['e1'], role: 'preparer', client_access: ['e1'] })
+    await sendInvitations(af, base, ['e1'], 'preparer', 'all')
+    expect(bodyOf().client_access).toBe('all')
+    await sendInvitations(af, base, ['e1'], 'preparer', [])
+    expect(bodyOf().client_access).toEqual([])
+    await sendInvitations(af, base, ['e1'], 'admin')
+    expect('client_access' in bodyOf()).toBe(false)
+  })
+
   it("resendInvitation POSTs to the id's resend path with no body", async () => {
     const af = vi.fn().mockResolvedValue(w) as unknown as AuthedFetch
 
@@ -1564,6 +1545,26 @@ describe('RESEND-07-02 — the invitations wire', () => {
     expect(opts).toEqual({ method: 'POST' })
     expect(opts).not.toHaveProperty('body')
     expect(got).toEqual(w)
+  })
+
+  it('revokeInvitation posts to the revoke url and removeInvite drops only that id', async () => {
+    const wire = { id: 'i-1', status: 'revoked' as const }
+    const af = vi.fn().mockResolvedValue(wire) as unknown as AuthedFetch
+
+    const got = await revokeInvitation(af, 'https://gw', 'i-1')
+
+    expect(af).toHaveBeenCalledWith('https://gw/api/tenancy/v1/invitations/i-1/revoke', { method: 'POST' })
+    expect(got).toEqual(wire)
+
+    const a = toPendingInvite(w)
+    const b = { ...a, id: 'other' }
+    const list = [a, b]
+    const out = removeInvite(list, a.id)
+    expect(out).toEqual([b])
+    expect(out).not.toBe(list)
+    const same = removeInvite(list, 'nope')
+    expect(same).toEqual(list)
+    expect(same).not.toBe(list)
   })
 
   it('the invitation calls propagate the ApiError unreshaped', async () => {
@@ -1676,6 +1677,7 @@ describe('RESEND-07-02 — the pending-invite projection and reducers', () => {
       role: 'admin',
       status: 'invited',
       isYou: false,
+      clientAccess: null,
     })
   })
 
@@ -1726,6 +1728,32 @@ describe('RESEND-07-02 — viewerIsAdmin (D3)', () => {
     expect(viewerIsAdmin([other, self('reviewer', 'active')])).toBe(false)
     expect(viewerIsAdmin([self('admin', 'invited')])).toBe(false)
     expect(viewerIsAdmin([])).toBe(false)
+  })
+})
+
+describe('viewerHasNoClients', () => {
+  const row = (role: Member['role'], status: MemberStatus, clientAccess: Member['clientAccess'], isYou = true): Member => ({
+    ...inhouseRow('Ada Self', status),
+    role,
+    isYou,
+    clientAccess,
+  })
+
+  it('viewerHasNoClients_trueOnlyForAnActiveNonAdminWithAnEmptySet', () => {
+    expect(viewerHasNoClients([row('reviewer', 'active', [])])).toBe(true)
+    expect(viewerHasNoClients([row('preparer', 'active', [])])).toBe(true)
+    expect(viewerHasNoClients([row('admin', 'active', 'all')])).toBe(false)
+    expect(viewerHasNoClients([row('admin', 'active', [])])).toBe(false)
+    expect(viewerHasNoClients([row('preparer', 'active', 'all')])).toBe(false)
+    expect(viewerHasNoClients([row('preparer', 'active', ['e1'])])).toBe(false)
+    expect(viewerHasNoClients([row('preparer', 'active', null)])).toBe(false)
+    expect(viewerHasNoClients([row('preparer', 'active', undefined)])).toBe(false)
+    expect(viewerHasNoClients([row('reviewer', 'suspended', [])])).toBe(false)
+    expect(viewerHasNoClients([])).toBe(false)
+  })
+
+  it('viewerHasNoClients_readsOnlyTheViewersRow', () => {
+    expect(viewerHasNoClients([row('preparer', 'active', 'all'), row('reviewer', 'active', [], false)])).toBe(false)
   })
 })
 
@@ -1931,6 +1959,11 @@ describe('RESEND-07-02 — INVITE_ADMIN_ONLY', () => {
   it('INVITE_ADMIN_ONLY is the admin-only sentence', () => {
     expect(INVITE_ADMIN_ONLY).toBe('Only an admin can invite people.')
   })
+
+  it('CLIENT_ADMIN_ONLY and COMPANY_ADMIN_ONLY are the admin-only sentences', () => {
+    expect(CLIENT_ADMIN_ONLY).toBe('Only an admin can change a client.')
+    expect(COMPANY_ADMIN_ONLY).toBe('Only an admin can change the company.')
+  })
 })
 
 describe('AC-2 — toMember maps the wire row to a Member', () => {
@@ -1968,6 +2001,70 @@ describe('AC-2 — toMember maps the wire row to a Member', () => {
   it('resolves isYou from the passed self subject', () => {
     expect(toMember(wire({ user_id: SELF_SUBJECT }), SELF_SUBJECT).isYou).toBe(true)
     expect(toMember(wire({ user_id: 'c0000000-0000-0000-0000-000000000099' }), SELF_SUBJECT).isYou).toBe(false)
+  })
+})
+
+describe('FIRMS-02-05 — client access on the wire and the roster', () => {
+  const entity = (id: string, status: 'active' | 'archived') =>
+    ({ id, name: `Client ${id}`, status, tin: null, registration: null, sector: null, address: null, created_at: '' }) as const
+
+  it('pickerClients lists active clients plus assigned archived ones', () => {
+    const entities = [entity('a', 'active'), entity('b', 'archived'), entity('c', 'active')]
+    expect(pickerClients(entities, ['b'])).toEqual([
+      { id: 'a', name: 'Client a' },
+      { id: 'b', name: 'Client b' },
+      { id: 'c', name: 'Client c' },
+    ])
+    expect(pickerClients(entities, 'all').map((c) => c.id)).toEqual(['a', 'c'])
+    const none = pickerClients(entities, [])
+    expect(none.map((c) => c.id)).toEqual(['a', 'c'])
+    expect(pickerClients(entities, [])).not.toBe(none)
+  })
+
+  it('setMembershipClients puts the whole access', async () => {
+    const af = vi.fn().mockResolvedValue(wire({})) as unknown as AuthedFetch
+    await setMembershipClients(af, 'https://gw', 'u1', ['e1'])
+    expect(af).toHaveBeenCalledWith('https://gw/api/tenancy/v1/memberships/u1/clients', {
+      method: 'PUT',
+      body: { client_access: ['e1'] },
+    })
+    await setMembershipClients(af, 'https://gw', 'u1', 'all')
+    expect(af).toHaveBeenLastCalledWith('https://gw/api/tenancy/v1/memberships/u1/clients', {
+      method: 'PUT',
+      body: { client_access: 'all' },
+    })
+  })
+
+  it('toMember copies client_access and never aliases it', () => {
+    const ids = ['e1']
+    const m = toMember(wire({ client_access: ids }), SELF_SUBJECT)
+    expect(m.clientAccess).toEqual(['e1'])
+    expect(m.clientAccess).not.toBe(ids)
+    expect(toMember(wire({ client_access: 'all' }), SELF_SUBJECT).clientAccess).toBe('all')
+    expect(toMember(wire({ client_access: null }), SELF_SUBJECT).clientAccess).toBeNull()
+    expect(invitedMember(invite()).clientAccess).toBeNull()
+  })
+
+  it('toMember maps a wire without client_access to null, so the roster shows no line', () => {
+    const m = toMember(wire({}), SELF_SUBJECT)
+    expect(m.clientAccess).toBeNull()
+    expect(clientAccessLabel(m.clientAccess)).toBeNull()
+  })
+
+  it('clientAccessLabel names all, none, one and many', () => {
+    expect(clientAccessLabel('all')).toBe('All clients')
+    expect(clientAccessLabel([])).toBe('No clients')
+    expect(clientAccessLabel(['a'])).toBe('1 client')
+    expect(clientAccessLabel(['a', 'b', 'c'])).toBe('3 clients')
+    expect(clientAccessLabel(null)).toBeNull()
+    expect(clientAccessLabel(undefined)).toBeNull()
+  })
+
+  it('clientAccessLabel counts every stored client, archived included', () => {
+    const held = ['a', 'b']
+    const entities = [entity('a', 'active'), entity('b', 'archived')]
+    expect(clientAccessLabel(held)).toBe('2 clients')
+    expect(pickerClients(entities, held).map((c) => c.id)).toEqual(['a', 'b'])
   })
 })
 
@@ -2028,16 +2125,15 @@ describe('AC-5 — filterMembers and classifyInvites tolerate a null email', () 
 
 describe('AC-7 — MEMBER_UNBACKED', () => {
   it('supplies one distinct, non-empty sentence per unbacked control', () => {
-    const keys = ['remove', 'role', 'department', 'clientAccess', 'inviteLink', 'revokeInvite'] as const
+    const keys = ['remove', 'role', 'department'] as const
     for (const k of keys) expect(MEMBER_UNBACKED[k]).toBeTruthy()
+    expect((MEMBER_UNBACKED as Record<string, string>).clientAccess).toBeUndefined()
     const values = keys.map((k) => MEMBER_UNBACKED[k])
     expect(new Set(values).size).toBe(keys.length)
     expect(Object.keys(MEMBER_UNBACKED).sort()).toEqual([...keys].sort())
     expect('invite' in MEMBER_UNBACKED, 'the invite endpoint exists; its "not yet" sentence is retired').toBe(false)
-    expect(MEMBER_UNBACKED.inviteLink).toBe('The invite link exists only in the email. The server keeps only a hash of it.')
-    expect(MEMBER_UNBACKED.revokeInvite).toBe(
-      'There is no way to revoke an invite yet. An unused invite expires 7 days after it was sent.',
-    )
+    expect('inviteLink' in MEMBER_UNBACKED).toBe(false)
+    expect('revokeInvite' in MEMBER_UNBACKED).toBe(false)
   })
 })
 

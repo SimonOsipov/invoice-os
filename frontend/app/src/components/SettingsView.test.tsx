@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { CERTS, ENDPOINTS, WEBHOOKS } from '../data'
 import { initialConnectors } from '../lib/connectors'
+import { COMPANY_ADMIN_ONLY } from '../lib/members'
 import type { PlatformCtx, SettingsTab } from '../types'
 import { SettingsView } from './SettingsView'
 
@@ -217,10 +218,37 @@ describe('Settings > Company card', () => {
     expect(screen.queryByText('No company set up yet')).toBeNull()
   })
 
-  it('Company tab: Edit company shows for a preparer when the company exists', () => {
-    const members = [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role: 'preparer', status: 'active', isYou: true }]
+  it.each(['preparer', 'reviewer'])('Company tab: Edit company is disabled with the reason for a non-admin (%s)', (role) => {
+    const members = [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role, status: 'active', isYou: true }]
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
     render(<SettingsView ctx={inhouse({ activeEntity: ENTITY, members })} />)
-    expect(screen.getByRole('button', { name: 'Edit company' })).toBeTruthy()
+    const edit = screen.getByRole('button', { name: 'Edit company' }) as HTMLButtonElement
+    expect(edit.disabled).toBe(true)
+    expect(edit.title).toBe(COMPANY_ADMIN_ONLY)
+    expect(document.getElementById(edit.getAttribute('aria-describedby') as string)?.textContent).toBe(COMPANY_ADMIN_ONLY)
+    expect(edit.style.opacity).toBe('0.45')
+    fireEvent.click(edit)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    vi.unstubAllEnvs()
+  })
+
+  it('Company tab: an admin keeps Edit company enabled, with no note', () => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
+    render(<SettingsView ctx={inhouse({ activeEntity: ENTITY })} />)
+    expect((screen.getByRole('button', { name: 'Edit company' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByTestId('settings-company-admin-only')).toBeNull()
+    vi.unstubAllEnvs()
+  })
+
+  it.each([
+    ['loading', []],
+    ['error', []],
+  ])('Company tab: Edit company stays enabled while the roster is %s', (membersState, members) => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
+    render(<SettingsView ctx={inhouse({ activeEntity: ENTITY, membersState, members })} />)
+    expect((screen.getByRole('button', { name: 'Edit company' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByTestId('settings-company-admin-only')).toBeNull()
+    vi.unstubAllEnvs()
   })
 
   it.each([

@@ -1,4 +1,4 @@
-// Human labels for every audit event the Go tree emits: 48 identifiers across 11 domains.
+// Human labels for every audit event the Go tree emits, in 11 domains.
 // auditVocabulary.test.ts scans audit.Record( call sites, so a new writer without a label
 // here fails the suite rather than rendering a raw identifier at the user.
 //
@@ -36,6 +36,7 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
   'invoice.unkept_as_is': { label: 'Kept-as-is withdrawn', domain: 'invoices' },
   'invoice.resolved_outside': { label: 'Resolved outside the system', domain: 'invoices' },
   'invoice.unresolved_outside': { label: 'Outside resolution withdrawn', domain: 'invoices' },
+  'invoice_register.exported': { label: 'Invoice register exported', domain: 'invoices' },
 
   'invoice.approval_armed': { label: 'Approval requested', domain: 'approvals' },
   'invoice.approval_approved': { label: 'Approved', domain: 'approvals', outcome: 'good' },
@@ -67,10 +68,12 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
 
   'membership.suspended': { label: 'Member suspended', domain: 'memberships', outcome: 'neutral' },
   'membership.reactivated': { label: 'Member reactivated', domain: 'memberships', outcome: 'neutral' },
+  'membership.client_access_set': { label: 'Client access changed', domain: 'memberships', outcome: 'neutral' },
   'workspace.provisioned': { label: 'Workspace created', domain: 'memberships' },
   'invitation.sent': { label: 'Invite sent', domain: 'memberships' },
   'invitation.resent': { label: 'Invite resent', domain: 'memberships' },
   'invitation.accepted': { label: 'Invite accepted', domain: 'memberships' },
+  'invitation.revoked': { label: 'Invite revoked', domain: 'memberships' },
 
   'validation.rule.enabled': { label: 'Rule enabled', domain: 'validation' },
   'validation.rule.disabled': { label: 'Rule disabled', domain: 'validation' },

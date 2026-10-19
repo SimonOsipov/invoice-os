@@ -29,6 +29,12 @@ func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 func (s *Store) List(ctx context.Context, f Filter) (Response, error) {
 	var out Response
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var scope string
+		if err := tx.QueryRow(ctx,
+			`SELECT coalesce(current_setting('app.entity_scope', true), '')`).Scan(&scope); err != nil {
+			return fmt.Errorf("audit: read client scope: %w", err)
+		}
+		f.scope = scopeFromGUC(scope)
 		var err error
 		out, err = Query(ctx, tx, f)
 		if err != nil {
@@ -38,7 +44,7 @@ func (s *Store) List(ctx context.Context, f Filter) (Response, error) {
 		// probing on a populated request is dead work on the common path
 		// (TestAuditStore_SkipsTheEmptyProbeWhenRowsMatched).
 		if out.Total == 0 {
-			out.LogIsEmpty, err = logIsEmpty(ctx, tx)
+			out.LogIsEmpty, err = logIsEmpty(ctx, tx, f.scope)
 		}
 		return err
 	})
@@ -48,18 +54,25 @@ func (s *Store) List(ctx context.Context, f Filter) (Response, error) {
 	return out, nil
 }
 
-// logIsEmpty reports whether the caller's log holds any row at all. It applies NO filter:
-// the whole point is to tell a workspace with no history from one whose filters excluded
-// everything, and a filtered probe would just re-answer total
-// (TestAuditRead_LogIsEmptyIgnoresEveryFilter).
+// logIsEmpty reports whether the caller's log holds any row at all. It applies the caller
+// scope and no request filter (TestAuditRead_LogIsEmptyIgnoresEveryFilter).
 //
 // The ORDER BY is what makes the planner choose audit_log_tenant_created_idx; measured,
 // the unordered form and SELECT EXISTS are index-served too, so this shape is the story's
-// choice rather than the only fast one.
-func logIsEmpty(ctx context.Context, tx pgx.Tx) (bool, error) {
+// choice rather than the only fast one. The scoped probe has no ORDER BY: it would sort.
+func logIsEmpty(ctx context.Context, tx pgx.Tx, scope callerScope) (bool, error) {
 	var one int
-	err := tx.QueryRow(ctx,
-		`SELECT 1 FROM audit_log ORDER BY created_at DESC, id DESC LIMIT 1`).Scan(&one)
+	sql := `SELECT 1 FROM audit_log ORDER BY created_at DESC, id DESC LIMIT 1`
+	var args []any
+	if scope.set {
+		where, scopeArgs, err := filterPredicates(Filter{scope: scope}, searchTargets{})
+		if err != nil {
+			return false, fmt.Errorf("audit: probe scope: %w", err)
+		}
+		sql = `SELECT 1 FROM audit_log a WHERE ` + where + ` LIMIT 1`
+		args = scopeArgs
+	}
+	err := tx.QueryRow(ctx, sql, args...).Scan(&one)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return true, nil
 	}

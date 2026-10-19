@@ -15,6 +15,7 @@ import {
   grantMembership,
   inviteWithToken,
   listEntities,
+  setMemberClients,
   me,
   mintSignInState,
   provisionRealAccount,
@@ -59,6 +60,8 @@ test('deployed app: sign-out redirects to the landing page', async ({ page }) =>
   const errors = collectErrors(page)
 
   await signInAs(page, 'firm')
+  // The app's mount reads 401 if Sign out lands mid-flight.
+  await page.waitForLoadState('networkidle')
 
   await page.getByRole('button', { name: 'Sign out' }).click()
   await page.waitForURL((url) => url.href.startsWith(LANDING_URL))
@@ -1282,6 +1285,11 @@ async function workspaceWithMember(prefix: string, kind: TenantKind, role: 'admi
   const userId = subjectOf((await signInSession(member.email, member.password)).access_token)
   const grant = { user_id: userId, tenant_id: tenantId, display_name: 'Role E2E', email: member.email }
   await grantMembership({ ...grant, role })
+  // A grant holds no clients; a firm non-admin here tests the company journey, not scoping.
+  if (kind === 'firm' && role !== 'admin') {
+    const all = await setMemberClients(ownerToken, userId, 'all')
+    expect(all.status, JSON.stringify(all.body)).toBe(200)
+  }
   return { owner, ownerToken, member: { ...member, workspaceName: owner.workspaceName }, grant }
 }
 
@@ -1294,7 +1302,7 @@ async function expectWaitingOverview(page: Page): Promise<void> {
   await expect(page.getByTestId('add-company-task')).toHaveCount(0)
 }
 
-test('deployed app: a firm Preparer of a workspace with no company sees no add control, is refused by the server, and sees the company once it exists', async ({ page }) => {
+test('deployed app: a firm Preparer of a workspace with no company sees no add control on Overview and Upload, a disabled Add client on Clients, is refused by the server, and sees the company once it exists', async ({ page }) => {
   test.setTimeout(240_000)
   const { owner, ownerToken, member } = await workspaceWithMember('role-firm-prep', 'firm', 'preparer')
   const errors = collectErrors(page)
@@ -1310,7 +1318,8 @@ test('deployed app: a firm Preparer of a workspace with no company sees no add c
   await sidebarNav(page).getByRole('button', { name: 'Clients' }).click()
   await expect(page.getByRole('heading', { level: 1, name: 'Client portfolio', exact: true })).toBeVisible()
   await expect(page.getByText(NO_COMPANY, { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Add client' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Add client' })).toBeDisabled()
+  await expect(page.getByText('Only an admin can change a client.', { exact: true })).toBeVisible()
 
   const refused = await rawFetch('/api/portfolio/v1/entities', {
     method: 'POST',

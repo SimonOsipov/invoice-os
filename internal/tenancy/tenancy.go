@@ -28,9 +28,8 @@ type Tenant struct {
 }
 
 // Membership is one row of the caller's tenant's memberships. JSON tags are
-// snake_case (user_id, role, status, display_name, email) -- the GET
-// /v1/memberships wire contract (A3). display_name/email are nullable and
-// serialize as JSON null, never omitted.
+// snake_case. display_name/email are nullable and serialize as JSON null,
+// never omitted.
 type Membership struct {
 	UserID      string  `json:"user_id"`
 	Role        string  `json:"role"`
@@ -176,7 +175,7 @@ type provisionResponse struct {
 // depends on this narrow function type rather than a pool, so its HTTP
 // contract is unit-testable without a database; the production loader
 // (Store.ListMemberships) runs the real, RLS-scoped query.
-type MembershipsLoader func(ctx context.Context) ([]Membership, error)
+type MembershipsLoader func(ctx context.Context) ([]MemberAccess, error)
 
 // MembershipsHandler returns GET /v1/memberships. It reads the verified
 // identity from context (401 if absent, before the loader ever runs -- same
@@ -212,22 +211,22 @@ func MembershipsHandler(load MembershipsLoader, log *slog.Logger) http.HandlerFu
 		}
 
 		if memberships == nil {
-			memberships = []Membership{}
+			memberships = []MemberAccess{}
 		}
 		writeJSON(w, http.StatusOK, membershipsResponse{Memberships: memberships})
 	}
 }
 
 // membershipsResponse is the GET /v1/memberships body: the caller's tenant's
-// memberships, each as {user_id, role, status, display_name, email} (A3).
+// memberships, each as {user_id, role, status, display_name, email, client_access}.
 type membershipsResponse struct {
-	Memberships []Membership `json:"memberships"`
+	Memberships []MemberAccess `json:"memberships"`
 }
 
 // MembershipStatusSetter applies an admin-directed status change to one
 // membership row, returning the updated row. Store.SetMembershipStatus is
 // the production implementation.
-type MembershipStatusSetter func(ctx context.Context, userID, status string) (Membership, error)
+type MembershipStatusSetter func(ctx context.Context, userID, status string) (MemberAccess, error)
 
 // maxSetStatusBodyBytes bounds the PATCH body BEFORE it is decoded — the
 // platform server applies no request body limit of its own. A legitimate body
@@ -244,7 +243,7 @@ type setMembershipStatusRequest struct {
 // SetMembershipStatusHandler returns PATCH /v1/memberships/{user_id}: identity
 // (401, before anything else) -> capped decode (400 on any decode error) ->
 // status vocabulary (400) -> path user_id -> set -> 200 with the updated
-// membership in the same five-key shape as a list element.
+// membership in the same six-key shape as a list element.
 //
 // The body is validated before the path id so a malformed request reads as 400
 // rather than 404 (TestMembership_InvalidStatusRejected). Admin-only-ness and
@@ -406,6 +405,16 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "this is the tenant's last active admin — make another member an active admin first"
 	case errors.Is(err, ErrInviteNotPermitted):
 		return http.StatusForbidden, "only an admin can invite people"
+	case errors.Is(err, ErrClientAccessNotPermitted):
+		return http.StatusForbidden, "only an admin can choose a member's clients"
+	case errors.Is(err, ErrClientAccessAdmin):
+		return http.StatusConflict, "an admin sees every client"
+	case errors.Is(err, ErrClientAccessNotFirm):
+		return http.StatusConflict, "client access applies to accounting firm workspaces only"
+	case errors.Is(err, ErrUnknownClient):
+		return http.StatusBadRequest, "a client in the list is not in this workspace"
+	case errors.Is(err, ErrInvalidClientAccess):
+		return http.StatusBadRequest, `client_access must be "all" or a list of client ids`
 	case errors.Is(err, ErrInvitationNotFound):
 		return http.StatusNotFound, "invitation not found"
 	case errors.Is(err, ErrInvitationNotPending):

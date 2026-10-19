@@ -52,27 +52,29 @@ WHERE id IN ('fifty-more-pilot', 'what-changes', 'recognition-learns', 'sage-con
 -- production (env-name-gating-trap) -- safe because ON CONFLICT (tenant_id, user_id)
 -- confines it to these demo rows, whose state here is authoritative: a live edit to
 -- one is reverted on the next deploy.
-INSERT INTO memberships (tenant_id, user_id, role, display_name, email, status) VALUES
+INSERT INTO memberships (tenant_id, user_id, role, display_name, email, status, all_clients) VALUES
     -- Okafor & Partners (firm) -- all three roles, one suspended, quality_reviewer unstaffed
-    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000001', 'admin',    'Chinedu Okafor',                   'c.okafor@okafor.ng',                           'active'),
-    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000003', 'preparer', 'Folake Adesina',                   'f.adesina@okafor.ng',                          'active'),
-    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000004', 'reviewer', 'Musa Danjuma',                     'm.danjuma@okafor.ng',                          'active'),
-    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000005', 'reviewer', 'Chiamaka Nwosu',                   'c.nwosu@okafor.ng',                            'active'),
-    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000006', 'preparer', 'Oluwaseyifunmi Adebanjo-Ogunleye', 'o.adebanjo-ogunleye@okaforandpartners.com.ng', 'active'),
-    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000007', 'reviewer', 'Halima Yusuf',                     'h.yusuf@okafor.ng',                            'suspended'),
+    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000001', 'admin',    'Chinedu Okafor',                   'c.okafor@okafor.ng',                           'active', false),
+    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000003', 'preparer', 'Folake Adesina',                   'f.adesina@okafor.ng',                          'active', true),
+    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000004', 'reviewer', 'Musa Danjuma',                     'm.danjuma@okafor.ng',                          'active', true),
+    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000005', 'reviewer', 'Chiamaka Nwosu',                   'c.nwosu@okafor.ng',                            'active', true),
+    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000006', 'preparer', 'Oluwaseyifunmi Adebanjo-Ogunleye', 'o.adebanjo-ogunleye@okaforandpartners.com.ng', 'active', true),
+    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000007', 'reviewer', 'Halima Yusuf',                     'h.yusuf@okafor.ng',                            'suspended', true),
+    ('11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000014', 'reviewer', 'Amaka Eze',                         'a.eze@okafor.ng',                              'active', false),
     -- Honeywell Group (in-house) -- all three roles, one suspended (sole cfo holder)
-    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000002', 'admin',    'Ngozi Balogun',                    'n.balogun@honeywell.ng',                       'active'),
-    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000008', 'reviewer', 'Yetunde Fashola',                  'y.fashola@honeywell.ng',                       'active'),
-    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000009', 'reviewer', 'Emeka Uzowulu',                    'e.uzowulu@honeywell.ng',                       'active'),
-    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000010', 'reviewer', 'Tunde Adeyemi',                    't.adeyemi@honeywell.ng',                       'active'),
-    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000011', 'reviewer', 'Ibrahim Bello',                    'i.bello@honeywell.ng',                         'active'),
-    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000012', 'reviewer', 'Adebayo Ogunlesi',                 'a.ogunlesi@honeywell.ng',                      'suspended'),
-    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000013', 'preparer', 'Zainab Lawal',                     'z.lawal@honeywell.ng',                         'active')
+    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000002', 'admin',    'Ngozi Balogun',                    'n.balogun@honeywell.ng',                       'active', false),
+    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000008', 'reviewer', 'Yetunde Fashola',                  'y.fashola@honeywell.ng',                       'active', false),
+    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000009', 'reviewer', 'Emeka Uzowulu',                    'e.uzowulu@honeywell.ng',                       'active', false),
+    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000010', 'reviewer', 'Tunde Adeyemi',                    't.adeyemi@honeywell.ng',                       'active', false),
+    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000011', 'reviewer', 'Ibrahim Bello',                    'i.bello@honeywell.ng',                         'active', false),
+    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000012', 'reviewer', 'Adebayo Ogunlesi',                 'a.ogunlesi@honeywell.ng',                      'suspended', false),
+    ('22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000013', 'preparer', 'Zainab Lawal',                     'z.lawal@honeywell.ng',                         'active', false)
 ON CONFLICT (tenant_id, user_id) DO UPDATE SET
     role         = EXCLUDED.role,
     display_name = EXCLUDED.display_name,
     email        = EXCLUDED.email,
-    status       = EXCLUDED.status;
+    status       = EXCLUDED.status,
+    all_clients  = EXCLUDED.all_clients;
 
 -- Workflow roles (Settings > Roles) for both persona tenants -- key/title/description
 -- verbatim from lib/roles.ts's SEED_FIRM_ROLES/SEED_INHOUSE_ROLES. created_at is
@@ -185,6 +187,14 @@ INSERT INTO business_entities (tenant_id, name, tin, sector, status) VALUES
   ('11111111-1111-1111-1111-111111111111', 'Halima Boutique Ltd',              '10234567-0023', 'Retail',                   'archived')
 ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
     DO UPDATE SET name = EXCLUDED.name, sector = EXCLUDED.sector, status = EXCLUDED.status;
+
+-- Amaka Eze (reviewer, not all_clients) works on two Okafor clients.
+INSERT INTO membership_clients (tenant_id, user_id, entity_id)
+SELECT e.tenant_id, 'c0000000-0000-0000-0000-000000000014'::uuid, e.id
+FROM business_entities e
+WHERE e.tenant_id = '11111111-1111-1111-1111-111111111111'
+  AND e.tin IN ('10012345-0001', '10023456-0002')
+ON CONFLICT ON CONSTRAINT membership_clients_pk DO NOTHING;
 
 -- task-304 (INVCR-01-19): ONE business_entities row for the in-house tenant
 -- (Honeywell Group, 2222...) -- previously zero, which was the second half of why

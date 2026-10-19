@@ -93,7 +93,7 @@ func TestAuditNumber_SearchFindsASubmissionWorkersRow(t *testing.T) {
 	if err := db.WithinTenantTx(context.Background(), f.mig, tenantID, func(tx pgx.Tx) error {
 		userID := uuid.NewString()
 		_, e := tx.Exec(context.Background(),
-			`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, $3, $4)`,
+			`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, $3, $4, true)`,
 			tenantID, userID, "preparer", "active")
 		ctx = auth.WithIdentity(context.Background(), auth.Identity{
 			Subject: userID, Role: "authenticated", TenantID: tenantID,

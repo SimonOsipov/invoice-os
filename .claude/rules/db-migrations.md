@@ -72,3 +72,5 @@ CREATE POLICY invitee_account_state_read ON auth.users FOR SELECT TO auth_hook_r
 - Add each table with a `staff_reader` policy to the seed map of `TestRLS_AppStaysIsolatedOnEveryStaffReaderTable`.
 - Run the `staff_reader` statements of `db/bootstrap.sql` by hand on production before the first migration that names the role.
 - Treat `invoice_migrator` as able to read every column granted to `staff_reader`, in every tenant, through `SET ROLE staff_reader`.
+- Scope a client table by `app.entity_scope` as the `tenant_isolation` policy of `invoices` does. Unset or `''` means every client.
+- Scope a child table by the visibility of its parent row, as the `tenant_isolation` policy of `line_items` does.

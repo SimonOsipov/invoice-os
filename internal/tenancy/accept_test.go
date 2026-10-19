@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -352,6 +353,12 @@ func TestAccept_AnotherAddressIsRefused(t *testing.T) {
 // failAcceptAudit makes the tenant's invitation.accepted insert raise; the returned func drops the trigger.
 func failAcceptAudit(t *testing.T, super *pgxpool.Pool, tenant string) (drop func()) {
 	t.Helper()
+	return failAudit(t, super, tenant, "invitation.accepted")
+}
+
+// failAudit makes the tenant's insert of one audit event raise; the returned func drops the trigger.
+func failAudit(t *testing.T, super *pgxpool.Pool, tenant, event string) (drop func()) {
+	t.Helper()
 	ctx := context.Background()
 	name := "accept_audit_fail_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	if _, err := super.Exec(ctx,
@@ -362,7 +369,7 @@ func failAcceptAudit(t *testing.T, super *pgxpool.Pool, tenant string) (drop fun
 	t.Cleanup(func() { _, _ = super.Exec(context.Background(), `DROP FUNCTION IF EXISTS `+name+`() CASCADE`) })
 	if _, err := super.Exec(ctx,
 		`CREATE TRIGGER `+name+` BEFORE INSERT ON audit_log FOR EACH ROW
-		 WHEN (NEW.tenant_id = `+quoteLiteral(tenant)+`::uuid AND NEW.event = 'invitation.accepted') EXECUTE FUNCTION `+name+`()`); err != nil {
+		 WHEN (NEW.tenant_id = `+quoteLiteral(tenant)+`::uuid AND NEW.event = `+quoteLiteral(event)+`) EXECUTE FUNCTION `+name+`()`); err != nil {
 		t.Fatalf("create the forced-failure trigger: %v", err)
 	}
 	return func() {
@@ -626,5 +633,355 @@ func TestAccept_AMalformedTokenOrSubjectSendsNoStatement(t *testing.T) {
 				t.Errorf("sent %d statements, want none", n)
 			}
 		})
+	}
+}
+
+func TestInvitations_RevokedLinkIsDeadOnEveryPath(t *testing.T) {
+	w := newAcceptWorld(t, "reviewer")
+	live := mustIssue(t, w.adminCtx(), w.store, []string{"second@obi.test"}, "preparer")[0]
+	user := uuid.NewString()
+	invitee := tenantless(user, inviteeAddr)
+
+	// Controls: before the revoke every path works, so a refusal afterwards is the revoke's doing.
+	if _, err := w.store.PreviewInvitation(context.Background(), w.invite.Token); err != nil {
+		t.Fatalf("control: preview of the invite before the revoke: %v", err)
+	}
+	if _, err := w.store.PreviewInvitation(context.Background(), live.Token); err != nil {
+		t.Fatalf("control: preview of the second invite: %v", err)
+	}
+	if _, first, err := w.store.ClaimInvitationRegistration(context.Background(), live.Token); err != nil || !first {
+		t.Fatalf("control: claim of the second invite = first %v, err %v; want first, nil", first, err)
+	}
+	if got, err := w.store.MyPendingInvitations(invitee); err != nil || len(got) != 1 || got[0].ID != w.invite.ID {
+		t.Fatalf("control: MyPendingInvitations = %+v, %v; want the one invite", got, err)
+	}
+
+	if err := w.store.RevokeInvitation(w.adminCtx(), w.invite.ID); err != nil {
+		t.Fatalf("RevokeInvitation: %v", err)
+	}
+
+	if _, err := w.store.PreviewInvitation(context.Background(), w.invite.Token); !errors.Is(err, ErrInvitationNotValid) {
+		t.Errorf("PreviewInvitation err = %v, want ErrInvitationNotValid", err)
+	}
+	if _, _, _, err := w.store.AcceptInvitation(invitee, w.invite.Token); !errors.Is(err, ErrInvitationNotValid) {
+		t.Errorf("AcceptInvitation err = %v, want ErrInvitationNotValid", err)
+	}
+	if _, _, _, err := w.store.AcceptInvitationByID(invitee, w.invite.ID); !errors.Is(err, ErrInvitationNotValid) {
+		t.Errorf("AcceptInvitationByID err = %v, want ErrInvitationNotValid", err)
+	}
+	if _, _, err := w.store.ClaimInvitationRegistration(context.Background(), w.invite.Token); !errors.Is(err, ErrInvitationNotValid) {
+		t.Errorf("ClaimInvitationRegistration err = %v, want ErrInvitationNotValid", err)
+	}
+	if got, err := w.store.MyPendingInvitations(invitee); err != nil || len(got) != 0 {
+		t.Errorf("MyPendingInvitations = %+v, %v; want empty", got, err)
+	}
+	if got := len(membersOf(t, w.super, user)); got != 0 {
+		t.Errorf("memberships of the invitee = %d, want 0", got)
+	}
+	if n := len(acceptedAudits(t, w.super, w.tenant)); n != 0 {
+		t.Errorf("invitation.accepted rows = %d, want 0", n)
+	}
+	requireStatus(t, w, "revoked")
+}
+
+func TestInvitations_RevokeTouchesOnlyInvitationsMembershipsAndAudit(t *testing.T) {
+	w := newInvWorld(t, "Revoke Trace Tenant", "Ada Obi")
+	store, tr := tracedStore(t)
+	issued := mustIssue(t, w.adminCtx(), w.store, []string{inviteeAddr}, "reviewer")[0]
+	if _, first, err := store.ClaimInvitationRegistration(context.Background(), issued.Token); err != nil || !first {
+		t.Fatalf("claim: first %v, err %v; want first, nil", first, err)
+	}
+	var claimed []byte
+	readClaim := func() {
+		t.Helper()
+		if err := w.super.QueryRow(context.Background(),
+			`SELECT registered_token_hash FROM invitations WHERE id = $1`, issued.ID).Scan(&claimed); err != nil {
+			t.Fatalf("read registered_token_hash: %v", err)
+		}
+	}
+	readClaim()
+	if len(claimed) == 0 {
+		t.Fatal("control: the claim stored no registered_token_hash")
+	}
+	stored := claimed
+	mark := tr.count()
+
+	if err := store.RevokeInvitation(w.adminCtx(), issued.ID); err != nil {
+		t.Fatalf("RevokeInvitation: %v", err)
+	}
+
+	tr.mu.Lock()
+	stmts := append([]tracedStmt(nil), tr.stmts[mark:]...)
+	tr.mu.Unlock()
+	if len(stmts) < 3 {
+		t.Fatalf("traced %d statements for the revoke, want at least 3 (the pool is not being observed)", len(stmts))
+	}
+	sawUpdate := false
+	for _, st := range stmts {
+		low := strings.Join(strings.Fields(strings.ToLower(st.sql)), " ")
+		if strings.Contains(low, "auth.") {
+			t.Errorf("a revoke statement names an auth relation: %s", st.sql)
+		}
+		if strings.Contains(low, "delete") {
+			t.Errorf("a revoke statement deletes: %s", st.sql)
+		}
+		if strings.Contains(low, "update invitations") {
+			sawUpdate = true
+		}
+	}
+	if !sawUpdate {
+		t.Error("no revoke statement updates invitations")
+	}
+	readClaim()
+	if string(claimed) != string(stored) {
+		t.Errorf("registered_token_hash = %x, want the stored claim %x left in place", claimed, stored)
+	}
+	if rows := invRows(t, w.super, w.tenant, "id = $2", issued.ID); len(rows) != 1 || rows[0].Status != "revoked" {
+		t.Errorf("rows = %+v, want one with status revoked", rows)
+	}
+}
+
+// setInviteClients stores an invite's choice as superuser: the flag, plus these rows.
+func setInviteClients(t *testing.T, super *pgxpool.Pool, tenant, invite string, all bool, entities ...string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := super.Exec(ctx, `UPDATE invitations SET all_clients = $2 WHERE id = $1`, invite, all); err != nil {
+		t.Fatalf("set invitation all_clients: %v", err)
+	}
+	for _, e := range entities {
+		if _, err := super.Exec(ctx,
+			`INSERT INTO invitation_clients (tenant_id, invitation_id, entity_id) VALUES ($1, $2, $3)`, tenant, invite, e); err != nil {
+			t.Fatalf("seed invitation_clients: %v", err)
+		}
+	}
+}
+
+func inviteClientRows(t *testing.T, super *pgxpool.Pool, invite string) []string {
+	t.Helper()
+	rows, err := super.Query(context.Background(),
+		`SELECT entity_id::text FROM invitation_clients WHERE invitation_id = $1 ORDER BY entity_id::text`, invite)
+	if err != nil {
+		t.Fatalf("read invitation_clients: %v", err)
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan invitation_clients: %v", err)
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+func memberClientRows(t *testing.T, super *pgxpool.Pool, tenant string) int {
+	t.Helper()
+	var n int
+	if err := super.QueryRow(context.Background(), `SELECT count(*) FROM membership_clients WHERE tenant_id = $1`, tenant).Scan(&n); err != nil {
+		t.Fatalf("count membership_clients: %v", err)
+	}
+	return n
+}
+
+func sorted(ids ...string) []string {
+	out := slices.Clone(ids)
+	slices.Sort(out)
+	return out
+}
+
+func TestAccept_ByTokenCopiesTheClientSet(t *testing.T) {
+	w := newAcceptWorld(t, "reviewer")
+	e1, e2 := seedEntity(t, w.super, w.tenant), seedEntity(t, w.super, w.tenant)
+	setInviteClients(t, w.super, w.tenant, w.invite.ID, false, e1, e2)
+	user := uuid.NewString()
+
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); err != nil {
+		t.Fatalf("AcceptInvitation: %v", err)
+	}
+	w.requireStored(t, "the new member", user, false, e1, e2)
+	requireAccess(t, "list as admin", w.listAs(t, w.admin)[user], quoted(sorted(e1, e2)...))
+}
+
+func TestAccept_InviteWithoutChoiceGivesNoClients(t *testing.T) {
+	w := newAcceptWorld(t, "preparer")
+	user := uuid.NewString()
+
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); err != nil {
+		t.Fatalf("AcceptInvitation: %v", err)
+	}
+	if got := len(membersOf(t, w.super, user)); got != 1 {
+		t.Fatalf("memberships after the accept = %d, want 1", got)
+	}
+	w.requireStored(t, "the new member", user, false)
+	requireAccess(t, "list as admin", w.listAs(t, w.admin)[user], "[]")
+}
+
+func TestAccept_CopyRollsBackWithTheAccept(t *testing.T) {
+	w := newAcceptWorld(t, "reviewer")
+	e1 := seedEntity(t, w.super, w.tenant)
+	setInviteClients(t, w.super, w.tenant, w.invite.ID, false, e1)
+	user := uuid.NewString()
+	drop := failAcceptAudit(t, w.super, w.tenant)
+
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); err == nil {
+		t.Fatal("AcceptInvitation succeeded although its audit write fails")
+	}
+	requireNothingWritten(t, w, user, 0)
+	if n := memberClientRows(t, w.super, w.tenant); n != 0 {
+		t.Errorf("membership_clients rows after the failed accept = %d, want 0", n)
+	}
+	if got := inviteClientRows(t, w.super, w.invite.ID); !slices.Equal(got, []string{e1}) {
+		t.Errorf("the invite's set after the failed accept = %v, want [%s]", got, e1)
+	}
+
+	// The retry proves the copy runs at all, so the rollback above is not vacuous.
+	drop()
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); err != nil {
+		t.Fatalf("accept after the trigger is gone: %v", err)
+	}
+	w.requireStored(t, "the member after the retry", user, false, e1)
+}
+
+func TestAccept_CopiesOnlyTheAcceptedInvitesSet(t *testing.T) {
+	w := newAcceptWorld(t, "preparer")
+	e1, e2, e3 := seedEntity(t, w.super, w.tenant), seedEntity(t, w.super, w.tenant), seedEntity(t, w.super, w.tenant)
+	// Two others, one "all": a copy that missed the invitation filter would leak a set or the flag.
+	b := mustIssue(t, w.adminCtx(), w.store, []string{"y@obi.test"}, "reviewer")[0]
+	c := mustIssue(t, w.adminCtx(), w.store, []string{"z@obi.test"}, "reviewer")[0]
+	setInviteClients(t, w.super, w.tenant, w.invite.ID, false, e1)
+	setInviteClients(t, w.super, w.tenant, b.ID, false, e2, e3)
+	setInviteClients(t, w.super, w.tenant, c.ID, true)
+	prep := w.addMember(t, "preparer", "active", "Pia Preparer")
+	giveClients(t, w.super, w.tenant, prep, e2)
+	everyone := w.addMember(t, "reviewer", "active", "Rex Reviewer")
+	giveAllClients(t, w.super, w.tenant, everyone)
+	user := uuid.NewString()
+
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); err != nil {
+		t.Fatalf("AcceptInvitation: %v", err)
+	}
+	w.requireStored(t, "the new member", user, false, e1)
+	w.requireStored(t, "an existing member's set is not touched", prep, false, e2)
+	w.requireStored(t, "the admin is not touched", w.admin, false)
+	w.requireStored(t, "an all-clients member keeps the flag", everyone, true)
+	if got := inviteClientRows(t, w.super, b.ID); !slices.Equal(got, sorted(e2, e3)) {
+		t.Errorf("the other invite's set = %v, want %v intact", got, sorted(e2, e3))
+	}
+	if got := len(invRows(t, w.super, w.tenant, "status = 'pending'")); got != 2 {
+		t.Errorf("pending invites = %d, want the other 2 still pending", got)
+	}
+}
+
+func TestAccept_DeletedEntityIsNotCopied(t *testing.T) {
+	w := newAcceptWorld(t, "reviewer")
+	e1, e2 := seedEntity(t, w.super, w.tenant), seedEntity(t, w.super, w.tenant)
+	setInviteClients(t, w.super, w.tenant, w.invite.ID, false, e1, e2)
+	if _, err := w.super.Exec(context.Background(), `DELETE FROM business_entities WHERE id = $1`, e2); err != nil {
+		t.Fatalf("delete the entity: %v", err)
+	}
+	user := uuid.NewString()
+
+	tenant, _, role, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token)
+	if err != nil {
+		t.Fatalf("AcceptInvitation: %v", err)
+	}
+	if tenant.ID != w.tenant || role != "reviewer" {
+		t.Errorf("accept answered tenant %s role %q, want %s reviewer", tenant.ID, role, w.tenant)
+	}
+	w.requireStored(t, "the new member", user, false, e1)
+}
+
+func TestAccept_AReplayedLinkLeavesTheMembersSetAlone(t *testing.T) {
+	w := newAcceptWorld(t, "reviewer")
+	e1, e2 := seedEntity(t, w.super, w.tenant), seedEntity(t, w.super, w.tenant)
+	setInviteClients(t, w.super, w.tenant, w.invite.ID, false, e1)
+	user := uuid.NewString()
+
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); err != nil {
+		t.Fatalf("first accept: %v", err)
+	}
+	w.requireStored(t, "after the first accept", user, false, e1)
+	if _, err := w.set(w.admin, user, setIDs(e2)); err != nil {
+		t.Fatalf("admin sets the member's clients: %v", err)
+	}
+
+	_, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token)
+	if !errors.Is(err, ErrInvitationNotValid) {
+		t.Fatalf("replayed token err = %v, want ErrInvitationNotValid", err)
+	}
+	w.requireStored(t, "after the replay by token", user, false, e2)
+
+	if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, inviteeAddr), w.invite.ID); !errors.Is(err, ErrInvitationNotValid) {
+		t.Errorf("replay by id err = %v, want ErrInvitationNotValid", err)
+	}
+	w.requireStored(t, "after the replay by id", user, false, e2)
+}
+
+func TestAccept_ARevokedOrExpiredLinkCopiesNothing(t *testing.T) {
+	w := newAcceptWorld(t, "reviewer")
+	e1 := seedEntity(t, w.super, w.tenant)
+	expired := mustIssue(t, w.adminCtx(), w.store, []string{"late@obi.test"}, "reviewer")[0]
+	live := mustIssue(t, w.adminCtx(), w.store, []string{"live@obi.test"}, "reviewer")[0]
+	for _, id := range []string{w.invite.ID, expired.ID, live.ID} {
+		setInviteClients(t, w.super, w.tenant, id, false, e1)
+	}
+	if err := w.store.RevokeInvitation(w.adminCtx(), w.invite.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	setExpiry(t, w.super, expired.ID, time.Now().Add(-time.Hour))
+
+	for _, c := range []struct{ name, email, token string }{
+		{"revoked", inviteeAddr, w.invite.Token},
+		{"expired", "late@obi.test", expired.Token},
+	} {
+		user := uuid.NewString()
+		if _, _, _, err := w.store.AcceptInvitation(tenantless(user, c.email), c.token); !errors.Is(err, ErrInvitationNotValid) {
+			t.Errorf("%s link err = %v, want ErrInvitationNotValid", c.name, err)
+		}
+		if got := len(membersOf(t, w.super, user)); got != 0 {
+			t.Errorf("%s link left %d memberships, want 0", c.name, got)
+		}
+	}
+	if n := memberClientRows(t, w.super, w.tenant); n != 0 {
+		t.Fatalf("membership_clients rows after the two refused links = %d, want 0", n)
+	}
+
+	// The live link proves the copy is wired, so the zero above is not vacuous.
+	user := uuid.NewString()
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, "live@obi.test"), live.Token); err != nil {
+		t.Fatalf("live accept: %v", err)
+	}
+	w.requireStored(t, "the live invitee", user, false, e1)
+	if n := memberClientRows(t, w.super, w.tenant); n != 1 {
+		t.Errorf("membership_clients rows after the live accept = %d, want 1", n)
+	}
+}
+
+func TestAccept_ARefusedAcceptCopiesNothing(t *testing.T) {
+	w := newAcceptWorld(t, "reviewer")
+	other := newInvWorld(t, "Elsewhere Ltd", "Bola Eze")
+	setInviteClients(t, w.super, w.tenant, w.invite.ID, true)
+	member := other.addMember(t, "preparer", "active", "Already Here")
+
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(uuid.NewString(), "wrong@obi.test"), w.invite.Token); !errors.Is(err, ErrInvitationEmailMismatch) {
+		t.Fatalf("wrong address err = %v, want ErrInvitationEmailMismatch", err)
+	}
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(member, inviteeAddr), w.invite.Token); !errors.Is(err, ErrAlreadyMember) {
+		t.Fatalf("member of another workspace err = %v, want ErrAlreadyMember", err)
+	}
+	other.requireStored(t, "the member's own workspace row", member, false)
+	if all, _ := storedAccess(t, w.super, w.tenant, w.admin); all {
+		t.Error("the admin's flag turned true after a refused accept")
+	}
+
+	// Control: the same invite, accepted by its invitee, copies the flag.
+	user := uuid.NewString()
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); err != nil {
+		t.Fatalf("accept by the invitee: %v", err)
+	}
+	w.requireStored(t, "the invitee", user, true)
+	if all, _ := storedAccess(t, w.super, w.tenant, w.admin); all {
+		t.Error("the admin's flag turned true when an all-clients invite was accepted")
 	}
 }

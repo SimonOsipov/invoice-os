@@ -211,14 +211,32 @@ func (s *Store) ExistingNumbers(ctx context.Context, entityID string, numbers []
 	return found, nil
 }
 
-// DocumentHasInvoice reports whether any invoice cites documentID. RLS scopes it to the
-// caller's tenant.
+// DocumentHasInvoice reports whether any invoice of the tenant cites documentID, whatever
+// client it is filed under.
 func (s *Store) DocumentHasInvoice(ctx context.Context, documentID string) (bool, error) {
 	var has bool
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM invoices WHERE source_document_id = $1)`, documentID).Scan(&has)
+		return tx.QueryRow(ctx, `SELECT has_invoice FROM public.document_link_state($1)`, documentID).Scan(&has)
 	})
 	return has, err
+}
+
+// EntityVisible answers ErrNotFound for an entity the caller cannot see: unknown, another
+// tenant's, or outside a limited member's client set. A malformed id is ErrValidation.
+func (s *Store) EntityVisible(ctx context.Context, entityID string) error {
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var one int
+		return tx.QueryRow(ctx, `SELECT 1 FROM business_entities WHERE id = $1`, entityID).Scan(&one)
+	})
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, pgx.ErrNoRows):
+		return ErrNotFound
+	case pgCode(err) == "22P02":
+		return ErrValidation
+	}
+	return err
 }
 
 // EntitySupplier returns the (name, tin, contact) of the business_entities row

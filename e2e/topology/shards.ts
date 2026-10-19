@@ -33,11 +33,11 @@ export const UNITS: Unit[] = [
       'auth.spec.ts':
         'Tests the real sign-in front door and stored-session rules, which the SPA binds to the seeded tenants 1111 / 2222 (the e2e members it signs in as).',
       'isolation.spec.ts':
-        'Asserts the exact seeded membership subsets (firm: 6 seeded members, plus the e2e member of each role that exists) and tenant identities of 1111 and 2222.',
+        'Asserts the exact seeded membership subsets (firm: 7 seeded members, plus the e2e member of each role that exists) and tenant identities of 1111 and 2222.',
       'persona-surfaces.spec.ts':
         "Builds the in-house approval queue and badge on the active policy `internal/demopolicy` seeds only on 1111 / 2222. Needs 2222's seeded `Honeywell Group` entity as its first client (the subtitle assertion).",
       'portfolio-workflow-surfaces.spec.ts':
-        'Reads the `Standard approval policy` that `internal/demopolicy` seeds only on 1111 / 2222 (`planFor`), without saving it; creates its own entity and invoice in 1111.',
+        'Reads the `Standard approval policy` that `internal/demopolicy` seeds only on 1111 / 2222 (`planFor`), without saving it; creates its own entity and invoice in 1111. Downloads one invoice register, which appends one audit row in 1111.',
       'roles.spec.ts':
         'Asserts the exact seeded roles, staffing and rosters of both tenants (the seeded rows plus the e2e member of each role that exists), derived by hand from `db/seed.dev.sql`, and the demopolicy-sealed policies. Its last test invites on 1111, whose invitations every deploy purges; no other spec in the lane reads them.',
       'support-console.spec.ts':

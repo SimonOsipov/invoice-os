@@ -56,9 +56,11 @@ export interface EntityFormModalProps {
   base: string
   onClose: () => void
   onSuccess: () => void
+  /** Edit mode only: locks the form and shows this reason. */
+  readOnlyReason?: string
 }
 
-export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }: EntityFormModalProps) {
+export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess, readOnlyReason }: EntityFormModalProps) {
   const [form, setForm] = useState<EntityFormState>(() => (mode === 'edit' && entity ? entityFormFrom(entity) : emptyEntityForm()))
   const [fieldErrors, setFieldErrors] = useState<EntityFormErrors>({})
   const [formError, setFormError] = useState<string | null>(null)
@@ -70,7 +72,9 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
   // confusingly named `noun`/`callerMode`. ctx is already threaded through for
   // authedFetch, so this reads it rather than growing EntityFormModalProps.
   const noun = ctx.mode === 'inhouse' ? 'company' : 'client'
-  const title = mode === 'create' ? `Add ${noun}` : `Edit ${noun}`
+  const readOnly = mode === 'edit' && readOnlyReason != null
+  const Noun = noun === 'company' ? 'Company' : 'Client'
+  const title = mode === 'create' ? `Add ${noun}` : readOnly ? `${Noun} details` : `Edit ${noun}`
 
   function updateField<K extends keyof EntityFormState>(field: K, value: string) {
     setForm((f) => ({ ...f, [field]: value }))
@@ -92,7 +96,7 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (submitting) return // double-submit guard
+    if (submitting || readOnly) return // double-submit guard
 
     const result = validateEntityForm(form)
     if (!result.valid) {
@@ -115,6 +119,7 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
         await updateEntity(ctx.authedFetch, base, entity.id, diff)
         onSuccess()
       } catch (err) {
+        if (err instanceof ApiError && err.status === 403) ctx.refetchMembers()
         handleError(err)
       } finally {
         setSubmitting(false)
@@ -166,6 +171,11 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
 
         <form onSubmit={handleSubmit} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
+            {readOnly && (
+              <div data-testid="entity-readonly-note" style={{ marginBottom: 14, fontSize: 12.5, color: 'var(--fg-3)' }}>
+                {readOnlyReason}
+              </div>
+            )}
             {formError && (
               <div style={{ marginBottom: 16, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12.5, color: 'var(--status-red-text)' }}>
                 {formError}
@@ -174,7 +184,7 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Name</div>
-              <input className="pf-input" value={form.name} onChange={(e) => updateField('name', e.target.value)} disabled={submitting} />
+              <input className="pf-input" value={form.name} onChange={(e) => updateField('name', e.target.value)} disabled={submitting || readOnly} />
               {fieldErrors.name && <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--status-red-text)' }}>{fieldErrors.name}</div>}
             </div>
 
@@ -184,7 +194,7 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
                 className="pf-input"
                 value={form.tin}
                 onChange={(e) => updateField('tin', e.target.value)}
-                disabled={submitting}
+                disabled={submitting || readOnly}
                 placeholder="########-####"
                 aria-describedby="entity-tin-hint"
                 style={{ fontFamily: 'var(--font-mono)' }}
@@ -195,67 +205,69 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Registration (optional)</div>
-              <input className="pf-input" value={form.registration} onChange={(e) => updateField('registration', e.target.value)} disabled={submitting} />
+              <input className="pf-input" value={form.registration} onChange={(e) => updateField('registration', e.target.value)} disabled={submitting || readOnly} />
             </div>
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Sector (optional)</div>
-              <input className="pf-input" value={form.sector} onChange={(e) => updateField('sector', e.target.value)} disabled={submitting} />
+              <input className="pf-input" value={form.sector} onChange={(e) => updateField('sector', e.target.value)} disabled={submitting || readOnly} />
             </div>
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Address (optional)</div>
-              <input className="pf-input" value={form.address} onChange={(e) => updateField('address', e.target.value)} disabled={submitting} />
+              <input className="pf-input" value={form.address} onChange={(e) => updateField('address', e.target.value)} disabled={submitting || readOnly} />
             </div>
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Email (optional)</div>
-              <input className="pf-input" value={form.email} onChange={(e) => updateField('email', e.target.value)} disabled={submitting} />
+              <input className="pf-input" value={form.email} onChange={(e) => updateField('email', e.target.value)} disabled={submitting || readOnly} />
             </div>
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Phone (optional)</div>
-              <input className="pf-input" value={form.telephone} onChange={(e) => updateField('telephone', e.target.value)} disabled={submitting} />
+              <input className="pf-input" value={form.telephone} onChange={(e) => updateField('telephone', e.target.value)} disabled={submitting || readOnly} />
             </div>
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Street (optional)</div>
-              <input className="pf-input" value={form.street} onChange={(e) => updateField('street', e.target.value)} disabled={submitting} />
+              <input className="pf-input" value={form.street} onChange={(e) => updateField('street', e.target.value)} disabled={submitting || readOnly} />
             </div>
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>City (optional)</div>
-              <input className="pf-input" value={form.city} onChange={(e) => updateField('city', e.target.value)} disabled={submitting} />
+              <input className="pf-input" value={form.city} onChange={(e) => updateField('city', e.target.value)} disabled={submitting || readOnly} />
             </div>
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Postal zone (optional)</div>
-              <input className="pf-input" value={form.postalZone} onChange={(e) => updateField('postalZone', e.target.value)} disabled={submitting} />
+              <input className="pf-input" value={form.postalZone} onChange={(e) => updateField('postalZone', e.target.value)} disabled={submitting || readOnly} />
             </div>
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Country (optional)</div>
-              <input className="pf-input" value={form.country} onChange={(e) => updateField('country', e.target.value)} disabled={submitting} placeholder="NG" />
+              <input className="pf-input" value={form.country} onChange={(e) => updateField('country', e.target.value)} disabled={submitting || readOnly} placeholder="NG" />
             </div>
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>State (optional)</div>
-              <input className="pf-input" value={form.state} onChange={(e) => updateField('state', e.target.value)} disabled={submitting} placeholder="NG-XX" />
+              <input className="pf-input" value={form.state} onChange={(e) => updateField('state', e.target.value)} disabled={submitting || readOnly} placeholder="NG-XX" />
             </div>
 
             <div>
               <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>LGA (optional)</div>
-              <input className="pf-input" value={form.lga} onChange={(e) => updateField('lga', e.target.value)} disabled={submitting} placeholder="NG-XX-XXX" />
+              <input className="pf-input" value={form.lga} onChange={(e) => updateField('lga', e.target.value)} disabled={submitting || readOnly} placeholder="NG-XX-XXX" />
             </div>
           </div>
 
           <div style={{ flex: 'none', display: 'flex', justifyContent: 'flex-end', gap: 9, padding: '14px 20px', borderTop: '1px solid var(--line-1)' }}>
             <button type="button" onClick={onClose} disabled={submitting} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, fontSize: 13 }}>
-              Cancel
+              {readOnly ? 'Close' : 'Cancel'}
             </button>
-            <button type="submit" disabled={submitting} className="v2-btn v2-btn-primary pf-btn" style={{ height: 36, fontSize: 13 }}>
-              {submitting ? 'Saving…' : mode === 'create' ? `Add ${noun}` : 'Save changes'}
-            </button>
+            {!readOnly && (
+              <button type="submit" disabled={submitting} className="v2-btn v2-btn-primary pf-btn" style={{ height: 36, fontSize: 13 }}>
+                {submitting ? 'Saving…' : mode === 'create' ? `Add ${noun}` : 'Save changes'}
+              </button>
+            )}
           </div>
         </form>
       </div>

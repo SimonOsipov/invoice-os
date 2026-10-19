@@ -747,3 +747,39 @@ func TestJoin_AcceptNamesTheInviteNotTheFirstOfTheAddress(t *testing.T) {
 		t.Errorf("the other invite = %+v, want pending", got)
 	}
 }
+
+func TestAccept_ByIDCopiesAllClients(t *testing.T) {
+	t.Run("all", func(t *testing.T) {
+		w, addr := newJoinWorld(t, "preparer")
+		setInviteClients(t, w.super, w.tenant, w.invite.ID, true)
+		user := uuid.NewString()
+
+		if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, addr), w.invite.ID); err != nil {
+			t.Fatalf("AcceptInvitationByID: %v", err)
+		}
+		w.requireStored(t, "the new member", user, true)
+		requireAccess(t, "list as admin", w.listAs(t, w.admin)[user], `"all"`)
+	})
+	t.Run("a set", func(t *testing.T) {
+		w, addr := newJoinWorld(t, "reviewer")
+		e1, e2 := seedEntity(t, w.super, w.tenant), seedEntity(t, w.super, w.tenant)
+		setInviteClients(t, w.super, w.tenant, w.invite.ID, false, e2, e1)
+		user := uuid.NewString()
+
+		if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, addr), w.invite.ID); err != nil {
+			t.Fatalf("AcceptInvitationByID: %v", err)
+		}
+		w.requireStored(t, "the new member", user, false, e1, e2)
+		requireAccess(t, "list as admin", w.listAs(t, w.admin)[user], quoted(sorted(e1, e2)...))
+	})
+	t.Run("no choice", func(t *testing.T) {
+		w, addr := newJoinWorld(t, "preparer")
+		user := uuid.NewString()
+
+		if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, addr), w.invite.ID); err != nil {
+			t.Fatalf("AcceptInvitationByID: %v", err)
+		}
+		w.requireStored(t, "the new member", user, false)
+		requireAccess(t, "list as admin", w.listAs(t, w.admin)[user], "[]")
+	})
+}

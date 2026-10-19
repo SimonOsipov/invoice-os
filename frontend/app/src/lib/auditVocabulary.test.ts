@@ -24,6 +24,7 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'invoice.unkept_as_is',
     'invoice.resolved_outside',
     'invoice.unresolved_outside',
+    'invoice_register.exported',
   ],
   approvals: [
     'invoice.approval_armed',
@@ -56,10 +57,12 @@ const EXPECTED: Record<AuditDomain, string[]> = {
   memberships: [
     'membership.suspended',
     'membership.reactivated',
+    'membership.client_access_set',
     'workspace.provisioned',
     'invitation.sent',
     'invitation.resent',
     'invitation.accepted',
+    'invitation.revoked',
   ],
   validation: [
     'validation.rule.enabled',
@@ -155,9 +158,11 @@ describe('audit vocabulary', () => {
       'extraction.field_corrected',
       'extraction.anchor.learned',
       'workspace.provisioned',
+      'membership.client_access_set',
       'invitation.sent',
       'invitation.resent',
       'invitation.accepted',
+      'invitation.revoked',
       'custom_rule.created',
       'custom_rule.updated',
       'custom_rule.deleted',
@@ -188,6 +193,15 @@ describe('audit vocabulary', () => {
     // No outcome key: a learned rule is neither good nor bad news.
     expect(view.tone).toBeNull()
     // Control: the same view function does return a tone for an outcome-bearing event.
+    expect(auditEventView('submission.failed').tone).not.toBeNull()
+  })
+
+  it('auditVocabulary_clientAccessSetIsLabelledInMemberships', () => {
+    const view = auditEventView('membership.client_access_set')
+    expect(view.domain).toBe('memberships')
+    expect(view.label).toBe('Client access changed')
+    expect(AUDIT_EVENTS['membership.client_access_set'].outcome).toBe('neutral')
+    expect(view.tone).toBe('amber')
     expect(auditEventView('submission.failed').tone).not.toBeNull()
   })
 
@@ -255,6 +269,7 @@ describe('audit vocabulary', () => {
     for (const [id, label] of [
       ['invitation.sent', 'Invite sent'],
       ['invitation.resent', 'Invite resent'],
+      ['invitation.revoked', 'Invite revoked'],
     ]) {
       const view = auditEventView(id)
       // humanise() answers a null domain for an unknown id, so the domain tells labelled from unknown.
@@ -269,7 +284,8 @@ describe('audit vocabulary', () => {
       'invitation.Sent',
       'invitation.sent ',
       'invitation.resend',
-      'invitation.revoked',
+      'invitation.Revoked',
+      'invitation.revoked ',
       'invitation.Accepted',
       'invitation.accepted ',
       'invitation.accept',
@@ -277,7 +293,7 @@ describe('audit vocabulary', () => {
       const near = auditEventView(id)
       expect(near.domain, `${id} must not resolve to a labelled event`).toBeNull()
       expect(near.label).not.toBe(id)
-      expect(near.label).not.toMatch(/^Invite (sent|resent|accepted)$/)
+      expect(near.label).not.toMatch(/^Invite (sent|resent|accepted|revoked)$/)
       expect(near.tone).toBeNull()
     }
   })

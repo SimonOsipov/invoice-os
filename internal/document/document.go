@@ -143,3 +143,38 @@ func (s *Store) Get(ctx context.Context, id string) (Document, error) {
 	}
 	return out, nil
 }
+
+// ReadableByScope is the SQL condition (on a documents row aliased d) for the document rule: a
+// limited caller reads a document nothing cites, or one cited by a visible invoice or batch.
+const ReadableByScope = `(coalesce(current_setting('app.entity_scope', true), '') IN ('', '*')
+	     OR EXISTS (SELECT 1 FROM invoices i WHERE i.source_document_id = d.id)
+	     OR EXISTS (SELECT 1 FROM import_batches b WHERE b.document_id = d.id)
+	     OR NOT (SELECT has_link FROM public.document_link_state(d.id)))`
+
+// GetLinked is Get under ReadableByScope; a refused read writes no document.read row.
+func (s *Store) GetLinked(ctx context.Context, id string) (Document, error) {
+	var out Document
+
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		caller, _ := auth.IdentityFromContext(ctx)
+
+		if err := scanDocument(tx.QueryRow(ctx,
+			`SELECT `+documentColumns+` FROM documents d WHERE d.id = $1
+			   AND `+ReadableByScope, id,
+		), &out); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
+			return err
+		}
+
+		return audit.Record(ctx, tx, caller.Subject, "document.read", map[string]any{"id": out.ID})
+	})
+	if err != nil {
+		return Document{}, err
+	}
+	return out, nil
+}

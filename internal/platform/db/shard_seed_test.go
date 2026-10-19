@@ -407,7 +407,7 @@ func TestShardTenantsHoldOnlyTheirSeededEntitiesAndInvoice(t *testing.T) {
 		}
 		for tenantID, wantOwn := range wantInvoices {
 			err := db.WithinTenantTx(context.Background(), appPool, tenantID, func(tx pgx.Tx) error {
-				for _, table := range []string{"memberships", "workflow_roles", "business_entities", "invoices", "approval_policies"} {
+				for _, table := range []string{"memberships", "workflow_roles", "business_entities", "membership_clients", "invoices", "approval_policies"} {
 					if n := mustCount(t, tx, `SELECT count(*) FROM `+table+` WHERE tenant_id <> $1`, tenantID); n != 0 {
 						t.Errorf("tenant %s sees %d foreign %s rows, want 0", tenantID, n, table)
 					}
@@ -429,6 +429,39 @@ func TestShardTenantsHoldOnlyTheirSeededEntitiesAndInvoice(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestShardClientAccessMirrorsTheSourceTenant(t *testing.T) {
+	e := newShardEnv(t)
+	e.provisionReset(t)
+
+	const flags = `SELECT user_id, all_clients FROM memberships WHERE tenant_id = $1 AND user_id::text LIKE 'c0000000-%'`
+	const amaka = "c0000000-0000-0000-0000-000000000014"
+	// A re-provision must restore a flag changed by hand.
+	if _, err := e.super.Exec(context.Background(), `UPDATE memberships SET all_clients = NOT all_clients WHERE user_id::text LIKE 'c0000000-%' AND tenant_id::text = ANY($1::text[])`, shardIDs()); err != nil {
+		t.Fatalf("flip shard flags: %v", err)
+	}
+	e.provisionReset(t)
+	for _, s := range firmShards {
+		mirrorRows(t, e.super, "all_clients flags", flags, s)
+		// A shard holds one entity, so only the Adeyemi TIN of Amaka's two source TINs maps.
+		got := queryTexts(t, e.super, `SELECT e.tin FROM membership_clients mc JOIN business_entities e ON e.id = mc.entity_id
+			WHERE mc.tenant_id = $1 AND mc.user_id = $2 AND e.tenant_id = $1`, s.id, amaka)
+		if want := []string{"10012345-0001"}; !slices.Equal(got, want) {
+			t.Errorf("firm shard %s Amaka Eze TINs = %q, want %q", s.id, got, want)
+		}
+		if n := mustCount(t, e.super, `SELECT count(*) FROM membership_clients WHERE tenant_id = $1`, s.id); n != 1 {
+			t.Errorf("firm shard %s membership_clients rows = %d, want 1", s.id, n)
+		}
+	}
+	for _, s := range inhouseShards {
+		if n := mustCount(t, e.super, `SELECT count(*) FROM membership_clients WHERE tenant_id = $1`, s.id); n != 0 {
+			t.Errorf("in-house shard %s membership_clients rows = %d, want 0", s.id, n)
+		}
+		if n := mustCount(t, e.super, `SELECT count(*) FROM memberships WHERE tenant_id = $1 AND all_clients`, s.id); n != 0 {
+			t.Errorf("in-house shard %s all_clients members = %d, want 0", s.id, n)
+		}
+	}
 }
 
 func TestProvisionSeedsNoShardTenantWithoutReset(t *testing.T) {

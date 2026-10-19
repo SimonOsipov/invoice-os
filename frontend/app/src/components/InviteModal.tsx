@@ -2,25 +2,43 @@
 
 import { useCallback, useState } from 'react'
 
-import { toApiError } from '@invoice-os/api-client'
+import { ErrorState, Loading, toApiError, type ApiError, type AsyncStatus } from '@invoice-os/api-client'
 import { closeGlyph } from '../glyphs'
-import { chipVerdicts, INVITE_ERROR, mergeChips, parseEmailInput, serverRefusedAddresses, type AccessRole, type Member } from '../lib/members'
+import {
+  ADMIN_ALL_CLIENTS,
+  chipVerdicts,
+  INVITE_ERROR,
+  mergeChips,
+  parseEmailInput,
+  serverRefusedAddresses,
+  type AccessRole,
+  type Member,
+} from '../lib/members'
 import { useDismiss } from '../lib/useDismiss'
-import { RoleCards } from './MemberParts'
+import type { Mode } from '../types'
+import { ClientAccessPicker, RoleCards } from './MemberParts'
 
 export type InviteModalProps = {
   /** The roster with pending invites; chips are judged against it. */
   existing: readonly Member[]
-  onSend: (emails: readonly string[], role: AccessRole) => Promise<void>
+  mode: Mode
+  /** The pickable clients; read only in a firm workspace. */
+  clients: readonly { id: string; name: string }[]
+  clientsState: AsyncStatus
+  clientsError: ApiError | null
+  onRetryClients: () => void
+  /** `clientAccess` is `undefined` unless a firm invite is for a preparer or reviewer. */
+  onSend: (emails: readonly string[], role: AccessRole, clientAccess?: 'all' | string[]) => Promise<void>
   /** Must be stable: it is a `useDismiss` dependency. */
   onClose: () => void
 }
 
-export function InviteModal({ existing, onSend, onClose }: InviteModalProps) {
+export function InviteModal({ existing, mode, clients, clientsState, clientsError, onRetryClients, onSend, onClose }: InviteModalProps) {
   const [chips, setChips] = useState<string[]>([])
   const [refused, setRefused] = useState<string[]>([])
   const [draft, setDraft] = useState('')
   const [role, setRole] = useState<AccessRole>('preparer')
+  const [access, setAccess] = useState<'all' | string[]>([])
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -28,6 +46,9 @@ export function InviteModal({ existing, onSend, onClose }: InviteModalProps) {
     if (!sending) onClose()
   }, [sending, onClose])
   useDismiss(true, closeIfIdle)
+
+  const firmPick = mode === 'firm' && role !== 'admin'
+  const clientsLanded = clientsState === 'ready' || clientsState === 'empty'
 
   const verdicts = chipVerdicts(existing, chips, refused)
   const hasOk = verdicts.includes('ok')
@@ -54,7 +75,7 @@ export function InviteModal({ existing, onSend, onClose }: InviteModalProps) {
     setError(null)
     try {
       try {
-        await onSend(sent, role)
+        await onSend(sent, role, firmPick ? access : undefined)
       } catch (err) {
         // Layer 2: the server named addresses the client accepted. Mark them, re-send once.
         const bad = serverRefusedAddresses(toApiError(err).message, all)
@@ -62,7 +83,7 @@ export function InviteModal({ existing, onSend, onClose }: InviteModalProps) {
         const nextRefused = [...refused, ...bad]
         setRefused(nextRefused)
         sent = okOf(all, nextRefused)
-        if (sent.length > 0) await onSend(sent, role)
+        if (sent.length > 0) await onSend(sent, role, firmPick ? access : undefined)
       }
       const left = all.filter((c) => !sent.includes(c))
       setChips(left)
@@ -169,6 +190,26 @@ export function InviteModal({ existing, onSend, onClose }: InviteModalProps) {
 
           <div className="label" style={{ margin: '16px 0 6px' }}>Access role</div>
           <RoleCards value={role} onChange={setRole} idPrefix="invite" />
+
+          {mode === 'firm' && (
+            <>
+              <div className="label" style={{ margin: '16px 0 6px' }}>Client access</div>
+              {role === 'admin' ? (
+                <>
+                  <fieldset disabled style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0, pointerEvents: 'none', opacity: 0.45, cursor: 'not-allowed' }}>
+                    <ClientAccessPicker idPrefix="invite" value="all" clients={[]} />
+                  </fieldset>
+                  <div style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>{ADMIN_ALL_CLIENTS}</div>
+                </>
+              ) : clientsLanded ? (
+                <ClientAccessPicker key={role} idPrefix="invite" value={access} clients={clients} onChange={setAccess} />
+              ) : clientsState === 'error' ? (
+                <ErrorState error={clientsError ?? toApiError(new Error('Could not load clients.'))} onRetry={onRetryClients} />
+              ) : (
+                <Loading label="Loading clients…" />
+              )}
+            </>
+          )}
         </div>
 
         <div style={{ flex: 'none', padding: '14px 20px', borderTop: '1px solid var(--line-1)' }}>

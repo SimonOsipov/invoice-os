@@ -17,11 +17,18 @@
 // unknown id's 404 and change nothing.
 import { test, expect } from '@playwright/test'
 import {
+  apiBase,
   login,
   me,
   memberships,
   createEntity,
   getEntity,
+  listEntities,
+  listInvoices,
+  listCustomers,
+  createCustomer,
+  getAuditLog,
+  rollup,
   updateEntity,
   offboardEntity,
   createInvoice,
@@ -95,7 +102,7 @@ test.describe('cross-tenant isolation (API E2E, over the deployed gateway)', () 
     const userIdsA = membersA.map((m) => m.user_id).sort()
     const userIdsB = membersB.map((m) => m.user_id).sort()
 
-    // Positive: the seeded subset is exactly the tenant's seeded members (A: 6, B: 7); any other
+    // Positive: the seeded subset is exactly the tenant's seeded members (A: 7, B: 7); any other
     // member must be one of the tenant's e2e role accounts (realAccounts.ts).
     expect(userIdsA.filter(isSeededMember)).toEqual([...TENANTS.a.members].sort())
     expect(userIdsB.filter(isSeededMember)).toEqual([...TENANTS.b.members].sort())
@@ -320,5 +327,205 @@ test.describe('cross-tenant invoice writes (API E2E)', () => {
     expect(after.invoice, "A's invoice (Invoice keys) after B's six writes").toEqual(before.invoice)
     expect(after.history, "A's status history after B's six writes").toEqual(before.history)
     expect(after.approval, "A's approval run after B's six writes").toEqual(before.approval)
+  })
+})
+
+// db/seed.dev.sql: Amaka Eze (…0014, a reviewer on 1111) holds the first two; the third is a
+// client of the same firm she does not hold.
+const LIMITED_REVIEWER = 'c0000000-0000-0000-0000-000000000014'
+const OWN_CLIENT = 'Adeyemi & Sons Trading Ltd'
+const OTHER_OWN_CLIENT = 'Chukwu Global Ventures Ltd'
+const NOT_HELD_CLIENT = 'Okonkwo Textiles Nigeria Ltd'
+const EVIDENCE_PERIOD = { from: '2020-01-01T00:00:00Z', to: '2035-01-01T00:00:00Z' }
+const REGISTER_PERIOD = { from: '2026-01-01', to: '2026-12-31' }
+
+test.describe('a limited member of one firm reads only its clients (FIRMS-03)', () => {
+  let limited: string
+  let admin: string
+  let ownEntityId: string
+  let otherOwnEntityId: string
+  let notHeldEntityId: string
+  let ownInvoiceId: string
+  let notHeldInvoiceId: string
+  let freshEntityId: string
+
+  test.beforeAll(async () => {
+    limited = await login({ ...PERSONAS.A, subject: LIMITED_REVIEWER })
+    admin = await login(PERSONAS.A)
+    const idOf = async (name: string) => {
+      const { entities } = await listEntities(admin, { q: name, limit: 200 })
+      const found = entities.find((e) => e.name === name)
+      expect(found, `${name} is a seeded client of 1111`).toBeTruthy()
+      return found!.id
+    }
+    ownEntityId = await idOf(OWN_CLIENT)
+    otherOwnEntityId = await idOf(OTHER_OWN_CLIENT)
+    notHeldEntityId = await idOf(NOT_HELD_CLIENT)
+    const firstInvoice = async (entityId: string) => {
+      const { invoices } = await listInvoices(admin, { entity_id: entityId, limit: 1 })
+      expect(invoices.length, `the seed gives client ${entityId} an invoice`).toBeGreaterThan(0)
+      return invoices[0].id
+    }
+    ownInvoiceId = await firstInvoice(ownEntityId)
+    // The seed arms no approval run, so validate a fresh invoice of a client she does not hold.
+    const fresh = await createEntity(admin, { name: `Zz FIRMS-03 not held ${freshTin()}`, tin: freshTin() })
+    freshEntityId = fresh.id
+    const created = await createInvoice(admin, { entity_id: fresh.id, ...cleanInvoiceFields(`INV-FIRMS-03-${freshTin()}`) })
+    expect((await validateInvoice(admin, created.id)).status, 'the clean fixture must promote draft -> validated').toBe('validated')
+    notHeldInvoiceId = created.id
+    expect((await getInvoiceApproval(admin, notHeldInvoiceId)).steps.length, 'positive control: the admin reads its approval run').toBeGreaterThan(0)
+  })
+
+  test('FIRMS-03: the limited reviewer lists exactly its two clients', async () => {
+    const { entities, pagination } = await listEntities(limited, { limit: 200 })
+    expect(entities.map((e) => e.name).sort()).toEqual([OWN_CLIENT, OTHER_OWN_CLIENT].sort())
+    expect(pagination.total).toBe(2)
+  })
+
+  test('FIRMS-03: the limited reviewer reads its client and gets 404 for the other client', async () => {
+    const before = await snapshotInvoice(admin, notHeldInvoiceId)
+
+    expect((await getEntity(limited, ownEntityId)).id, 'positive control: its own client').toBe(ownEntityId)
+    expect((await getInvoice(limited, ownInvoiceId)).id, 'positive control: its own invoice').toBe(ownInvoiceId)
+
+    await assertNotFoundAcrossTenant(() => getEntity(limited, notHeldEntityId), 'entity of a client it does not hold')
+    await assertNotFoundAcrossTenant(() => getInvoice(limited, notHeldInvoiceId), 'invoice of a client it does not hold')
+    await assertNotFoundAcrossTenant(() => getInvoiceHistory(limited, notHeldInvoiceId), 'history of that invoice')
+    await assertNotFoundAcrossTenant(() => getInvoiceApproval(limited, notHeldInvoiceId), 'approval run of that invoice')
+    await assertNotFoundAcrossTenant(() => listInvoices(limited, { entity_id: notHeldEntityId }), 'invoice list filtered to that client')
+    await assertNotFoundAcrossTenant(() => getEntity(limited, freshEntityId), 'entity of the client holding that invoice')
+
+    const preview = new URLSearchParams({ entity_id: notHeldEntityId, ...EVIDENCE_PERIOD })
+    const control = await rawFetch(`/api/invoice/v1/evidence-bundle/preview?${preview}`, { headers: { Authorization: `Bearer ${admin}` } })
+    expect(control.status, 'positive control: the admin reads the same preview').toBe(200)
+    assertErrorEnvelope(
+      await rawFetch(`/api/invoice/v1/evidence-bundle/preview?${preview}`, { headers: { Authorization: `Bearer ${limited}` } }),
+      404,
+      'bundle preview of that client',
+    )
+
+    expect(await snapshotInvoice(admin, notHeldInvoiceId), "the other client's invoice is unchanged").toEqual(before)
+  })
+
+  test("FIRMS-03: the limited reviewer's register of the other client is 404", async () => {
+    const params = new URLSearchParams({ entity_id: notHeldEntityId, ...REGISTER_PERIOD })
+    const control = await fetch(`${apiBase()}/api/invoice/v1/invoice-register?${params}`, { headers: { Authorization: `Bearer ${admin}` } })
+    expect(control.status, 'positive control: the admin downloads the same register').toBe(200)
+    const res = await rawFetch(`/api/invoice/v1/invoice-register?${params}`, { headers: { Authorization: `Bearer ${limited}` } })
+    assertErrorEnvelope(res, 404, 'register of a client it does not hold')
+  })
+
+  test("FIRMS-03: the unfiltered invoice list holds only the limited reviewer's clients", async () => {
+    const { invoices } = await listInvoices(limited, {})
+    expect(invoices.length, 'its two clients carry invoices').toBeGreaterThan(0)
+    const held = new Set([ownEntityId, otherOwnEntityId])
+    for (const inv of invoices) expect(held.has(inv.entity_id), `invoice ${inv.id} belongs to one of its clients`).toBe(true)
+  })
+})
+
+// db/seed.dev.sql: Folake Adesina (...0003, a preparer on 1111) holds "All clients".
+const ALL_CLIENTS_PREPARER = 'c0000000-0000-0000-0000-000000000003'
+
+test.describe("screens that span clients stop at a limited member's clients (FIRMS-04)", () => {
+  let limited: string
+  let admin: string
+  let allClients: string
+  let held: string[]
+  let ownInvoiceId: string
+  let notHeldInvoiceId: string
+  let tin: string
+  let customerId: string
+
+  const COUNT_KEYS = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed'] as const
+
+  test.beforeAll(async () => {
+    limited = await login({ ...PERSONAS.A, subject: LIMITED_REVIEWER })
+    admin = await login(PERSONAS.A)
+    allClients = await login({ ...PERSONAS.A, subject: ALL_CLIENTS_PREPARER })
+    const idOf = async (name: string) => {
+      const { entities } = await listEntities(admin, { q: name, limit: 200 })
+      const found = entities.find((e) => e.name === name)
+      expect(found, `${name} is a seeded client of 1111`).toBeTruthy()
+      return found!.id
+    }
+    const ownEntityId = await idOf(OWN_CLIENT)
+    const otherOwnEntityId = await idOf(OTHER_OWN_CLIENT)
+    held = [ownEntityId, otherOwnEntityId]
+    for (const entityId of held) {
+      const { invoices } = await listInvoices(admin, { entity_id: entityId, limit: 1 })
+      expect(invoices.length, `the seed gives client ${entityId} an invoice`).toBeGreaterThan(0)
+    }
+    const validated = async (entityId: string, label: string) => {
+      const created = await createInvoice(admin, { entity_id: entityId, ...cleanInvoiceFields(`INV-FIRMS-04-${label}-${freshTin()}`) })
+      expect((await validateInvoice(admin, created.id)).status, 'the clean fixture must promote draft -> validated').toBe('validated')
+      return created.id
+    }
+    const fresh = await createEntity(admin, { name: `Zz FIRMS-04 not held ${freshTin()}`, tin: freshTin() })
+    notHeldInvoiceId = await validated(fresh.id, 'NH')
+    ownInvoiceId = await validated(ownEntityId, 'OWN')
+    tin = freshTin()
+    customerId = (await createCustomer(admin, { tin, name: `FIRMS-04 buyer ${tin}` })).id
+  })
+
+  test("FIRMS-04: the limited reviewer's rollup counts only its clients", async () => {
+    const [mine, all] = await Promise.all([rollup(limited), rollup(admin)])
+    expect(mine.clients.map((c) => c.entity_id).sort()).toEqual([...held].sort())
+    expect(all.clients.map((c) => c.entity_id), 'positive control: the admin rollup holds the not-held client').toContain(
+      (await getInvoice(admin, notHeldInvoiceId)).entity_id,
+    )
+    const adminIds = all.clients.map((c) => c.entity_id)
+    for (const id of held) expect(adminIds, `the admin rollup holds ${id}`).toContain(id)
+    expect(adminIds.length, 'the admin rollup is a strict superset').toBeGreaterThan(held.length)
+    expect(mine.clients.length, 'its own clients are listed').toBeGreaterThan(0)
+    for (const k of COUNT_KEYS) {
+      expect(mine.totals.counts[k], `totals.counts.${k}`).toBe(mine.clients.reduce((n, c) => n + c.counts[k], 0))
+    }
+  })
+
+  test("FIRMS-04: the limited reviewer's audit log holds no other client's and no workspace row", async () => {
+    expect((await getAuditLog(admin, { invoice_id: notHeldInvoiceId })).events.length, 'positive control: the admin reads the not-held invoice rows').toBeGreaterThan(0)
+    expect((await getAuditLog(limited, { invoice_id: notHeldInvoiceId })).events).toEqual([])
+    expect((await getAuditLog(limited, { invoice_id: ownInvoiceId })).events.length, 'its own invoice rows').toBeGreaterThan(0)
+
+    expect((await getAuditLog(admin, { company: 'workspace' })).events.length, 'positive control: the admin reads workspace rows').toBeGreaterThan(0)
+    expect((await getAuditLog(limited, { company: 'workspace' })).events).toEqual([])
+
+    const adminTin = await getAuditLog(admin, { q: tin })
+    expect(
+      adminTin.events.find((e) => e.event === 'customers.customer.created' && e.entity_id === null),
+      'positive control: the admin reads the customer row',
+    ).toBeTruthy()
+    expect((await getAuditLog(limited, { q: tin })).events).toEqual([])
+
+    const page = await getAuditLog(limited, { limit: 100 })
+    expect(page.events.length, 'its first page is not empty').toBeGreaterThan(0)
+    for (const e of page.events) expect(held, `event ${e.id} belongs to one of its clients`).toContain(e.entity_id)
+  })
+
+  test('FIRMS-04: an All clients member keeps workspace rows', async () => {
+    const byTin = await getAuditLog(allClients, { q: tin })
+    expect(byTin.events.find((e) => e.event === 'customers.customer.created' && e.entity_id === null), 'the customer row').toBeTruthy()
+
+    const workspace = await getAuditLog(allClients, { company: 'workspace' })
+    expect(workspace.events.length, 'workspace rows').toBeGreaterThan(0)
+    for (const e of workspace.events) expect(e.entity_id, `workspace event ${e.id}`).toBeNull()
+
+    expect((await getAuditLog(allClients, { invoice_id: notHeldInvoiceId })).events.length, 'the not-held invoice rows').toBeGreaterThan(0)
+  })
+
+  test("FIRMS-04: the limited reviewer's Approvals queue holds only its clients", async () => {
+    const mine = await listInvoices(limited, { awaiting_approval: true, limit: 200 })
+    const ids = mine.invoices.map((i) => i.id)
+    expect(ids, 'its own validated invoice').toContain(ownInvoiceId)
+    for (const i of mine.invoices) expect(held, `invoice ${i.id} belongs to one of its clients`).toContain(i.entity_id)
+    expect(ids).not.toContain(notHeldInvoiceId)
+
+    const all = await listInvoices(admin, { awaiting_approval: true, limit: 200 })
+    expect(all.invoices.map((i) => i.id), 'positive control: the admin queue holds the not-held invoice').toContain(notHeldInvoiceId)
+  })
+
+  test('FIRMS-04: the buyer directory stays shared', async () => {
+    const { customers } = await listCustomers(limited, { tin })
+    expect(customers.map((c) => c.id)).toContain(customerId)
   })
 })

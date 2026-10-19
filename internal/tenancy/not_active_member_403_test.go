@@ -75,7 +75,7 @@ func TestProvisionHandler_NotActiveMemberIs403(t *testing.T) {
 
 func TestMembershipsHandler_NotActiveMemberIs403(t *testing.T) {
 	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
-	load := MembershipsLoader(func(context.Context) ([]Membership, error) {
+	load := MembershipsLoader(func(context.Context) ([]MemberAccess, error) {
 		return nil, db.ErrNotActiveMember
 	})
 	rec, body := doMemberships(t, load, &id)

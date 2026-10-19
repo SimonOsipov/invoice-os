@@ -3,7 +3,7 @@
 // Layout claims assert a relationship; screenshots are attached for the reviewer and never asserted.
 // States the seed cannot reach are driven with page.route, each stub scoped to its own URL. No stub is a write.
 import { test, expect, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'
-import { archiveCustomer, createCustomer, createEntity, createInvoice, grantMembership, listCustomers, login, me, PERSONAS, provisionRealAccount, registerFresh, signInSession, subjectOf, type RealAccount } from '../api/client'
+import { archiveCustomer, createCustomer, createEntity, createInvoice, grantMembership, listCustomers, login, me, PERSONAS, provisionRealAccount, registerFresh, setMemberClients, signInSession, subjectOf, type RealAccount } from '../api/client'
 import { freshBuyerTin, freshTin } from '../api/fixtures'
 import { signInAs, signInAtFrontDoor } from '../personaSession'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
@@ -1071,7 +1071,7 @@ test('ST-07 Reports exports are dimmed, not-allowed and unfilled', async ({ page
   await navButton(page, /^Reports/).click()
   await expect(h1Of(page, 'Reports & analytics'), 'the Reports screen drew no h1').toBeVisible()
   const exportsList = page.locator('button[disabled][aria-describedby="exports-blocked-reason-text"]')
-  await expect(exportsList, 'the export row draws four disabled buttons').toHaveCount(4, { timeout: 20_000 })
+  await expect(exportsList, 'the export row draws three disabled buttons').toHaveCount(3, { timeout: 20_000 })
   await settle(page, main(page))
   const reads: Record<string, string>[] = []
   for (const btn of await exportsList.all()) {
@@ -1079,7 +1079,11 @@ test('ST-07 Reports exports are dimmed, not-allowed and unfilled', async ({ page
     expect(paint, 'export paint').toEqual({ opacity: '0.45', cursor: 'not-allowed', 'background-color': 'rgba(0, 0, 0, 0)' })
     reads.push(paint)
   }
-  await attachJson(testInfo, 'st-07-measurements', reads)
+  const registerButton = page.getByRole('button', { name: /^Invoice register/ })
+  await expect(registerButton, 'the Invoice register button never enabled (no active client resolved)').toBeEnabled()
+  const register = await styles(registerButton, ['opacity', 'cursor'])
+  expect(register, 'the live Invoice register button is neither dimmed nor not-allowed').toEqual({ opacity: '1', cursor: 'pointer' })
+  await attachJson(testInfo, 'st-07-measurements', { reads, register })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
@@ -1414,6 +1418,9 @@ test.describe('Customers screen and company fields', () => {
     const member = await registerFresh('buyers-preparer')
     const userId = subjectOf((await signInSession(member.email, member.password)).access_token)
     await grantMembership({ user_id: userId, tenant_id: (await me(firmToken)).tenant.id, role: 'preparer', display_name: 'Customers E2E', email: member.email })
+    // A grant holds no clients; the Customers count reads the firm's invoices, so give this preparer all of them.
+    const all = await setMemberClients(firmToken, userId, 'all')
+    expect(all.status, JSON.stringify(all.body)).toBe(200)
     preparer = { ...member, workspaceName: firm.workspaceName, displayName: 'Customers E2E' }
   })
 

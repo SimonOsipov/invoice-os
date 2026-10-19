@@ -2,14 +2,19 @@
 paths:
   - "internal/archive/**"
   - "frontend/app/src/lib/evidenceBundle.ts"
+  - "frontend/app/src/lib/fetchAttachment.ts"
   - "internal/gateway/cors.go"
 ---
 # Evidence bundle
 
-- Run both routes under `bundleTxOptions`: `REPEATABLE READ`, `READ ONLY`. `WithinRequestTenantTx` alone gives one snapshot per statement.
-- Mount both routes on the invoice service. The gateway needs no route change.
+- Run the two bundle routes under `bundleTxOptions`: `REPEATABLE READ`, `READ ONLY`. `WithinRequestTenantTx` alone gives one snapshot per statement.
+- Mount the two bundle routes and `GET /v1/invoice-register` on the invoice service. The gateway needs no route change.
 - Check identity first. Parse every parameter before any database call.
 - Return every 4xx and 5xx JSON error before the first ZIP byte.
+- Run `GET /v1/invoice-register` under `registerTxOptions`: `REPEATABLE READ`, read-write. Write `invoice_register.exported` in that transaction.
+- Build the register workbook whole and commit. Then write the first byte.
+- Count register invoices against `maxBundleInvoices` before the first byte. The register returns 400 over the cap.
+- Refuse a register cell over 32,767 UTF-16 units with 400 before the first byte.
 - After the first ZIP byte, return without calling `bw.Close()`. A missing central directory makes every ZIP reader refuse the file.
 - Read child rows with `= ANY($1::uuid[])` in chunks of 500. Never JOIN `invoices`.
 - Stream rows and bodies. Never call `CollectRows`.

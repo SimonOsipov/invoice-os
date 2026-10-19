@@ -14,6 +14,12 @@ func FilterSQLForTest(f Filter, subjects, companies, invoices []string) (string,
 	return filterPredicates(f, searchTargets{subjects: subjects, companies: companies, invoices: invoices})
 }
 
+// ScopedFilterSQLForTest renders f's predicates under the caller scope string.
+func ScopedFilterSQLForTest(f Filter, scope string) (string, []any, error) {
+	f.scope = scopeFromGUC(scope)
+	return filterPredicates(f, searchTargets{})
+}
+
 // FacetSQLForTest exposes the three built facet statements — event, actor, company, in
 // that order — for the same reason: a facet's ORDER BY is invisible to a behavioural test,
 // because Postgres returns a small GROUP BY in a stable order whether or not one is

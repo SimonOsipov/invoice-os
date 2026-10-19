@@ -355,16 +355,17 @@ func activeVersionOf(t *testing.T, super *pgxpool.Pool, tenantID string) version
 	return v
 }
 
-// anyActiveMember finds one active member of a real (not throwaway) tenant,
-// for rollupFor's subject — the real demo tenants carry no fixture-captured
-// memberID.
-func anyActiveMember(t *testing.T, super *pgxpool.Pool, tenantID string) string {
+// activeAdmin finds the lowest-id active admin of a real (not throwaway) tenant,
+// for rollupFor's subject. An admin reads every client; a limited member reads
+// only its own, so the tenant-wide totals need an admin.
+func activeAdmin(t *testing.T, super *pgxpool.Pool, tenantID string) string {
 	t.Helper()
 	var id string
 	if err := super.QueryRow(context.Background(),
-		`SELECT user_id FROM memberships WHERE tenant_id = $1 AND status = 'active' LIMIT 1`,
+		`SELECT user_id FROM memberships WHERE tenant_id = $1 AND status = 'active' AND role = 'admin'
+		  ORDER BY user_id LIMIT 1`,
 		tenantID).Scan(&id); err != nil {
-		t.Fatalf("find an active member of %s: %v", tenantID, err)
+		t.Fatalf("find an active admin of %s: %v", tenantID, err)
 	}
 	return id
 }
@@ -1502,11 +1503,11 @@ func TestSeed_ArmsOnlyTheDemoTenants(t *testing.T) {
 
 	// AC-9: in-house discriminates (3 of 4), the firm cannot (7 of 7) — expected,
 	// not a bug, per the measured oracle.
-	inRollup := rollupFor(t, app, inhouseDemoTenantID, anyActiveMember(t, super, inhouseDemoTenantID))
+	inRollup := rollupFor(t, app, inhouseDemoTenantID, activeAdmin(t, super, inhouseDemoTenantID))
 	if inRollup.Totals.AwaitingApproval != 3 || inRollup.Totals.Counts.Validated != 4 {
 		t.Errorf("in-house awaiting_approval/validated = %d/%d, want 3/4", inRollup.Totals.AwaitingApproval, inRollup.Totals.Counts.Validated)
 	}
-	firmRollup := rollupFor(t, app, firmDemoTenantID, anyActiveMember(t, super, firmDemoTenantID))
+	firmRollup := rollupFor(t, app, firmDemoTenantID, activeAdmin(t, super, firmDemoTenantID))
 	if firmRollup.Totals.AwaitingApproval != 7 || firmRollup.Totals.Counts.Validated != 7 {
 		t.Errorf("firm awaiting_approval/validated = %d/%d, want 7/7 — the firm badge cannot discriminate, and that is expected",
 			firmRollup.Totals.AwaitingApproval, firmRollup.Totals.Counts.Validated)

@@ -2,6 +2,7 @@ package importer
 
 import (
 	"bytes"
+	"context"
 	"math"
 	"strings"
 	"testing"
@@ -12,7 +13,7 @@ import (
 func TestDecodeFrom_BOMThenTitleRows(t *testing.T) {
 	fixture := append([]byte{0xEF, 0xBB, 0xBF}, "Title\nInv No;Total\nINV-1;5\n"...)
 
-	header, rows, facts, err := DecodeFrom(bytes.NewReader(fixture), "csv", 2)
+	header, rows, facts, err := DecodeFrom(context.Background(), bytes.NewReader(fixture), "csv", 2)
 	if err != nil {
 		t.Fatalf("DecodeFrom: %v", err)
 	}
@@ -30,7 +31,7 @@ func TestDecodeFrom_UTF16TitleRowsCountDecodedLines(t *testing.T) {
 		t.Fatalf("encode: %v", err)
 	}
 
-	header, rows, facts, err := DecodeFrom(bytes.NewReader(fixture), "csv", 3)
+	header, rows, facts, err := DecodeFrom(context.Background(), bytes.NewReader(fixture), "csv", 3)
 	if err != nil {
 		t.Fatalf("DecodeFrom: %v", err)
 	}
@@ -44,7 +45,7 @@ func TestDecodeFrom_UTF16TitleRowsCountDecodedLines(t *testing.T) {
 func TestDecodeFrom_Windows1252TitleRow(t *testing.T) {
 	fixture := []byte("Caf\xe9 register\nInv No,Caf\xe9\nINV-1,5\n")
 
-	header, rows, facts, err := DecodeFrom(bytes.NewReader(fixture), "csv", 2)
+	header, rows, facts, err := DecodeFrom(context.Background(), bytes.NewReader(fixture), "csv", 2)
 	if err != nil {
 		t.Fatalf("DecodeFrom: %v", err)
 	}
@@ -57,7 +58,7 @@ func TestDecodeFrom_Windows1252TitleRow(t *testing.T) {
 
 func TestDecodeFrom_HeaderOnTheLastLine(t *testing.T) {
 	for _, fixture := range []string{"Title\nh1,h2\n", "Title\nh1,h2"} {
-		header, rows, _, err := DecodeFrom(strings.NewReader(fixture), "csv", 2)
+		header, rows, _, err := DecodeFrom(context.Background(), strings.NewReader(fixture), "csv", 2)
 		if err != nil {
 			t.Fatalf("%q N=2: %v", fixture, err)
 		}
@@ -66,7 +67,7 @@ func TestDecodeFrom_HeaderOnTheLastLine(t *testing.T) {
 			t.Errorf("%q N=2: rows = %#v, want none", fixture, rows)
 		}
 
-		_, _, _, err = DecodeFrom(strings.NewReader(fixture), "csv", 3)
+		_, _, _, err = DecodeFrom(context.Background(), strings.NewReader(fixture), "csv", 3)
 		if err != ErrHeaderRowPastEnd {
 			t.Errorf("%q N=3: err = %v, want the unwrapped ErrHeaderRowPastEnd", fixture, err)
 		}
@@ -74,7 +75,7 @@ func TestDecodeFrom_HeaderOnTheLastLine(t *testing.T) {
 }
 
 func TestDecodeFrom_BlankLastLineIsAnEmptyHeader(t *testing.T) {
-	header, rows, _, err := DecodeFrom(strings.NewReader("Title\n\n"), "csv", 2)
+	header, rows, _, err := DecodeFrom(context.Background(), strings.NewReader("Title\n\n"), "csv", 2)
 	if err != nil {
 		t.Fatalf("DecodeFrom: %v", err)
 	}
@@ -87,10 +88,10 @@ func TestDecodeFrom_BlankLastLineIsAnEmptyHeader(t *testing.T) {
 func TestDecodeFrom_CROnlyFileIsOneLine(t *testing.T) {
 	fixture := "Title\rInv No,Total\rINV-1,5\r"
 
-	if _, _, _, err := DecodeFrom(strings.NewReader(fixture), "csv", 1); err != nil {
+	if _, _, _, err := DecodeFrom(context.Background(), strings.NewReader(fixture), "csv", 1); err != nil {
 		t.Errorf("N=1: err = %v, want nil (today's reading)", err)
 	}
-	if _, _, _, err := DecodeFrom(strings.NewReader(fixture), "csv", 2); err != ErrHeaderRowPastEnd {
+	if _, _, _, err := DecodeFrom(context.Background(), strings.NewReader(fixture), "csv", 2); err != ErrHeaderRowPastEnd {
 		t.Errorf("N=2: err = %v, want ErrHeaderRowPastEnd", err)
 	}
 }
@@ -103,10 +104,10 @@ func TestDecodeFrom_ExtremeHeaderRows(t *testing.T) {
 		format  string
 		fixture []byte
 	}{{"csv", csvFixture}, {"xlsx", xlsxFixture}} {
-		if _, _, _, err := DecodeFrom(bytes.NewReader(tc.fixture), tc.format, math.MaxInt); err != ErrHeaderRowPastEnd {
+		if _, _, _, err := DecodeFrom(context.Background(), bytes.NewReader(tc.fixture), tc.format, math.MaxInt); err != ErrHeaderRowPastEnd {
 			t.Errorf("%s MaxInt: err = %v, want ErrHeaderRowPastEnd", tc.format, err)
 		}
-		_, _, _, err := DecodeFrom(bytes.NewReader(tc.fixture), tc.format, math.MinInt)
+		_, _, _, err := DecodeFrom(context.Background(), bytes.NewReader(tc.fixture), tc.format, math.MinInt)
 		if err == nil || err == ErrHeaderRowPastEnd {
 			t.Errorf("%s MinInt: err = %v, want the below-1 error", tc.format, err)
 		}
@@ -114,22 +115,22 @@ func TestDecodeFrom_ExtremeHeaderRows(t *testing.T) {
 }
 
 func TestDecodeFrom_BelowOneIsCheckedBeforeTheFormat(t *testing.T) {
-	_, _, _, err := DecodeFrom(strings.NewReader("a\n"), "tsv", 0)
+	_, _, _, err := DecodeFrom(context.Background(), strings.NewReader("a\n"), "tsv", 0)
 	if err == nil || !strings.Contains(err.Error(), "below 1") {
 		t.Errorf("err = %v, want the below-1 error", err)
 	}
-	_, _, _, err = DecodeFrom(strings.NewReader("a\n"), "tsv", 2)
+	_, _, _, err = DecodeFrom(context.Background(), strings.NewReader("a\n"), "tsv", 2)
 	if err == nil || !strings.Contains(err.Error(), `unsupported format "tsv"`) {
 		t.Errorf("err = %v, want the unsupported-format error", err)
 	}
 }
 
 func TestDecodeFrom_LeadingGapRowsMatchLeadingBlankLines(t *testing.T) {
-	csvHeader, csvRows, _, err := DecodeFrom(strings.NewReader("\n\nInv No,Total\nINV-1,5\n"), "csv", 3)
+	csvHeader, csvRows, _, err := DecodeFrom(context.Background(), strings.NewReader("\n\nInv No,Total\nINV-1,5\n"), "csv", 3)
 	if err != nil {
 		t.Fatalf("csv: %v", err)
 	}
-	xlsxHeader, xlsxRows, _, err := DecodeFrom(bytes.NewReader(xlsxOf(t, [][]string{nil, nil, {"Inv No", "Total"}, {"INV-1", "5"}})), "xlsx", 3)
+	xlsxHeader, xlsxRows, _, err := DecodeFrom(context.Background(), bytes.NewReader(xlsxOf(t, [][]string{nil, nil, {"Inv No", "Total"}, {"INV-1", "5"}})), "xlsx", 3)
 	if err != nil {
 		t.Fatalf("xlsx: %v", err)
 	}
@@ -142,7 +143,7 @@ func TestDecodeFrom_LeadingGapRowsMatchLeadingBlankLines(t *testing.T) {
 func TestDecodeFrom_TitleWithAnotherDelimiterDoesNotSteerTheSniff(t *testing.T) {
 	fixture := "Report; March, 2026 | FY;Q1;Q2\nInv No\tTotal\nINV-1\t5\n"
 
-	header, rows, facts, err := DecodeFrom(strings.NewReader(fixture), "csv", 2)
+	header, rows, facts, err := DecodeFrom(context.Background(), strings.NewReader(fixture), "csv", 2)
 	if err != nil {
 		t.Fatalf("DecodeFrom: %v", err)
 	}
@@ -156,10 +157,10 @@ func TestDecodeFrom_TitleWithAnotherDelimiterDoesNotSteerTheSniff(t *testing.T) 
 func TestDecodeFrom_UnclosedQuoteInATitleIsNeverParsed(t *testing.T) {
 	fixture := "\"Sales register\nInv No,Total\nINV-1,5\n"
 
-	if _, _, _, err := DecodeFrom(strings.NewReader(fixture), "csv", 1); err == nil {
+	if _, _, _, err := DecodeFrom(context.Background(), strings.NewReader(fixture), "csv", 1); err == nil {
 		t.Error("N=1: err = nil, want today's parse error")
 	}
-	header, rows, _, err := DecodeFrom(strings.NewReader(fixture), "csv", 2)
+	header, rows, _, err := DecodeFrom(context.Background(), strings.NewReader(fixture), "csv", 2)
 	if err != nil {
 		t.Fatalf("N=2: %v", err)
 	}
@@ -171,7 +172,7 @@ func TestDecodeFrom_UnclosedQuoteInATitleIsNeverParsed(t *testing.T) {
 func TestDecodeFrom_MultiLineTitleCellCountsEachLine(t *testing.T) {
 	fixture := "\"Sales\nregister\"\nInv No,Total\nINV-1,5\n"
 
-	header, _, _, err := DecodeFrom(strings.NewReader(fixture), "csv", 3)
+	header, _, _, err := DecodeFrom(context.Background(), strings.NewReader(fixture), "csv", 3)
 	if err != nil {
 		t.Fatalf("DecodeFrom: %v", err)
 	}
@@ -182,7 +183,7 @@ func TestDecodeFrom_MultiLineTitleCellCountsEachLine(t *testing.T) {
 func TestDecodeFrom_ControlByteInATitleRefusesTheFile(t *testing.T) {
 	fixture := "Title\x01\nInv No,Total\nINV-1,5\n"
 
-	_, _, _, err := DecodeFrom(strings.NewReader(fixture), "csv", 2)
+	_, _, _, err := DecodeFrom(context.Background(), strings.NewReader(fixture), "csv", 2)
 	if err == nil || !strings.Contains(err.Error(), "disallowed control byte 0x01 at offset 5") {
 		t.Errorf("err = %v, want the control-byte refusal at offset 5", err)
 	}
@@ -191,7 +192,7 @@ func TestDecodeFrom_ControlByteInATitleRefusesTheFile(t *testing.T) {
 func TestDecodeFrom_BadDataBelowTheHeaderStillFails(t *testing.T) {
 	fixture := "Title\nInv No,Total\nINV-1,5 \"x\"\n"
 
-	if _, _, _, err := DecodeFrom(strings.NewReader(fixture), "csv", 2); err == nil {
+	if _, _, _, err := DecodeFrom(context.Background(), strings.NewReader(fixture), "csv", 2); err == nil {
 		t.Error("err = nil, want the bare-quote parse error from the data row")
 	}
 }
@@ -199,7 +200,7 @@ func TestDecodeFrom_BadDataBelowTheHeaderStillFails(t *testing.T) {
 func TestDecodeFrom_XLSXHeaderOnTheLastRow(t *testing.T) {
 	fixture := xlsxOf(t, [][]string{{"Title"}, nil, {"Inv No", "Total"}})
 
-	header, rows, facts, err := DecodeFrom(bytes.NewReader(fixture), "xlsx", 3)
+	header, rows, facts, err := DecodeFrom(context.Background(), bytes.NewReader(fixture), "xlsx", 3)
 	if err != nil {
 		t.Fatalf("DecodeFrom: %v", err)
 	}

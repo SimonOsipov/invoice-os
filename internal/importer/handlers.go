@@ -168,7 +168,22 @@ const (
 	headerRowMalformed        = "header_row must be a whole number of 1 or more"
 	headerRowPastEnd          = "header_row is past the last row of the file"
 	defaultInvoiceKindInvalid = "default_invoice_kind must be B2B, B2G or B2C"
+	tooManyRowsMessage        = "the spreadsheet has more than 100,000 data rows; split it into smaller files"
+	decodeDeadlineMessage     = "the spreadsheet took too long to read; split it into smaller files"
 )
+
+// decodeErrorMessage is the 400 text every decode route writes for err.
+func decodeErrorMessage(err error) string {
+	switch {
+	case errors.Is(err, ErrHeaderRowPastEnd):
+		return headerRowPastEnd
+	case errors.Is(err, ErrTooManyRows):
+		return tooManyRowsMessage
+	case errors.Is(err, context.DeadlineExceeded):
+		return decodeDeadlineMessage
+	}
+	return "could not decode uploaded file"
+}
 
 // parseHeaderRow reads the optional header_row value; "" is row 1.
 func parseHeaderRow(raw string) (int, error) {
@@ -343,12 +358,9 @@ func CreateHandler(
 			return
 		}
 
-		header, rows, facts, err := DecodeFrom(obj.Body, format, headerRow)
+		header, rows, facts, err := DecodeFrom(r.Context(), obj.Body, format, headerRow)
 		if err != nil {
-			msg := "could not decode uploaded file"
-			if errors.Is(err, ErrHeaderRowPastEnd) {
-				msg = headerRowPastEnd
-			}
+			msg := decodeErrorMessage(err)
 			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
@@ -503,12 +515,9 @@ func PreviewHandler(
 			return
 		}
 
-		header, rows, facts, err := DecodeFrom(file, format, headerRow)
+		header, rows, facts, err := DecodeFrom(r.Context(), file, format, headerRow)
 		if err != nil {
-			msg := "could not decode uploaded file"
-			if errors.Is(err, ErrHeaderRowPastEnd) {
-				msg = headerRowPastEnd
-			}
+			msg := decodeErrorMessage(err)
 			writeJSON(w, http.StatusBadRequest, previewError{Error: msg, DocumentID: doc.ID})
 			return
 		}
@@ -735,12 +744,9 @@ func SheetHandler(
 			return
 		}
 
-		header, rows, facts, err := DecodeFrom(obj.Body, format, headerRow)
+		header, rows, facts, err := DecodeFrom(r.Context(), obj.Body, format, headerRow)
 		if err != nil {
-			msg := "could not decode uploaded file"
-			if errors.Is(err, ErrHeaderRowPastEnd) {
-				msg = headerRowPastEnd
-			}
+			msg := decodeErrorMessage(err)
 			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
@@ -874,9 +880,9 @@ func SavedMappingHandler(
 			return
 		}
 
-		header, _, _, err := Decode(obj.Body, format)
+		header, _, _, err := Decode(r.Context(), obj.Body, format)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "could not decode uploaded file")
+			writeError(w, http.StatusBadRequest, decodeErrorMessage(err))
 			return
 		}
 

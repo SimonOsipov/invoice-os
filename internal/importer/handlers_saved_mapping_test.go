@@ -915,6 +915,22 @@ func TestSavedMappingHandler_UndecodableFileIs400(t *testing.T) {
 	}
 }
 
+func TestSavedMappingHandler_ReadsTheHeaderOfARealXLSX(t *testing.T) {
+	id := testIdentity()
+	entityID := uuid.NewString()
+	open := newFakeDocOpen("data.xlsx", xlsxContentType, xlsxOf(t, [][]string{{"Inv No", "Total"}, {"INV-1", "5"}}))
+	lookup := &lookupSpy{}
+
+	rec, raw, _ := doSavedMappingRequest(t, open.fn(), lookup.fn(), nil, &id, "?entity_id="+entityID+"&document_id="+open.doc.ID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, raw)
+	}
+	if len(lookup.calls) != 1 || !reflect.DeepEqual(lookup.calls[0].header, []string{"Inv No", "Total"}) {
+		t.Errorf("lookup calls = %+v, want one with header [Inv No Total]", lookup.calls)
+	}
+}
+
 func TestSavedMappingHandler_NilObjectBodyIs500(t *testing.T) {
 	id := testIdentity()
 	entityID := uuid.NewString()

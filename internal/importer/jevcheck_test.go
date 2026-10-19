@@ -135,7 +135,7 @@ func TestMappingCheck_OneRequestAsksOneNoulPerPlacement(t *testing.T) {
 	for i := 1; i <= 11; i++ {
 		fmt.Fprintf(&b, "INV-%d,75,row %d\n", i, i)
 	}
-	header, rows, _, err := Decode(strings.NewReader(b.String()), "csv")
+	header, rows, _, err := Decode(context.Background(), strings.NewReader(b.String()), "csv")
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}

@@ -26,6 +26,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf16"
 
 	"github.com/google/uuid"
@@ -432,7 +433,7 @@ func TestPreviewHandler_ColumnsMatchDirectDecode_QuotedEmbeddedComma(t *testing.
 		t.Fatalf("columns = %v, want %v (a naive comma-split would wrongly produce 3 fields from the quoted \"Buyer, Ltd\" cell)", resp.Columns, header)
 	}
 
-	wantHeader, _, _, err := Decode(bytes.NewReader(fixture), "csv")
+	wantHeader, _, _, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err != nil {
 		t.Fatalf("direct Decode of the same fixture bytes: %v", err)
 	}
@@ -545,5 +546,53 @@ func TestPreviewHandler_CraftedCFBIsRefusedWithoutAPanic(t *testing.T) {
 				t.Errorf("document_id missing from %s (err=%v)", raw, err)
 			}
 		})
+	}
+}
+
+func TestPreviewHandler_TooManyRowsNamesTheLimit(t *testing.T) {
+	big := buildXLSX(t, func(f *excelize.File, sheet string) {
+		mustSetCellValue(t, f, sheet, "A1", "x")
+		mustSetCellValue(t, f, sheet, "A100002", "x")
+	})
+	body, contentType := buildMultipartBody(t, "", "", "big.xlsx", "", big)
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
+	rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, raw)
+	}
+	if resp.Error != tooManyRowsMessage {
+		t.Errorf("error = %q, want %q", resp.Error, tooManyRowsMessage)
+	}
+	var env struct {
+		DocumentID string `json:"document_id"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil || env.DocumentID == "" {
+		t.Errorf("document_id missing from %s (err=%v)", raw, err)
+	}
+}
+
+func TestPreviewHandler_DecodeDeadlineAnswersAnError(t *testing.T) {
+	defer func(d time.Duration) { xlsxDecodeTimeout = d }(xlsxDecodeTimeout)
+	xlsxDecodeTimeout = time.Nanosecond
+	book := buildXLSX(t, func(f *excelize.File, sheet string) {
+		for i := 1; i <= 10; i++ {
+			mustSetCellValue(t, f, sheet, fmt.Sprintf("A%d", i), "x")
+		}
+	})
+	body, contentType := buildMultipartBody(t, "", "", "ten.xlsx", "", book)
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
+
+	start := time.Now()
+	rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, raw)
+	}
+	if resp.Error != decodeDeadlineMessage {
+		t.Errorf("error = %q, want %q", resp.Error, decodeDeadlineMessage)
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Errorf("answer took %v, want < 10s", time.Since(start))
 	}
 }

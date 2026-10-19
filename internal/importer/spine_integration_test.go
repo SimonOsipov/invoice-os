@@ -123,7 +123,7 @@ func TestSpineIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read green_500.csv: %v", err)
 	}
-	header, rows, _, err := Decode(bytes.NewReader(data), "csv")
+	header, rows, _, err := Decode(context.Background(), bytes.NewReader(data), "csv")
 	if err != nil {
 		t.Fatalf("Decode green_500.csv: %v", err)
 	}

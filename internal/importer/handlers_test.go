@@ -718,6 +718,8 @@ func TestImporterHandlers_NoSecondSentinel(t *testing.T) {
 		"ErrDocumentAlreadyFiled": true,
 		// Header-row refusal, a 400; not a membership error.
 		"ErrHeaderRowPastEnd": true,
+		// Row-cap refusal, a 400; not a membership error.
+		"ErrTooManyRows": true,
 	}
 
 	found := map[string]bool{"CreateHandler": false, "PreviewHandler": false, "SheetHandler": false}

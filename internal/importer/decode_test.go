@@ -26,6 +26,7 @@ package importer
 
 import (
 	"bytes"
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -94,7 +95,7 @@ func buildXLSX(t *testing.T, build func(f *excelize.File, sheet string)) []byte 
 func TestDecode_CommaCSVSplitsColumns(t *testing.T) {
 	fixture := []byte("invoice_number,total,buyer_name\nINV-1,100.00,Acme\nINV-2,200.00,Globex\n")
 
-	header, rows, facts, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, facts, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -115,7 +116,7 @@ func TestDecode_CommaCSVSplitsColumns(t *testing.T) {
 func TestDecode_SemicolonCSVSplitsColumns(t *testing.T) {
 	fixture := []byte("invoice_number;total;buyer_name\nINV-1;100.00;Acme\nINV-2;200.00;Globex\n")
 
-	header, rows, facts, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, facts, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -134,7 +135,7 @@ func TestDecode_UTF8BOMStripped(t *testing.T) {
 	body := []byte("invoice_number,total\nINV-1,100.00\n")
 	fixture := append([]byte{0xEF, 0xBB, 0xBF}, body...)
 
-	header, rows, facts, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, facts, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -178,7 +179,7 @@ func TestDecode_UTF16LEBOMDecodesSameAsUTF8Twin(t *testing.T) {
 
 	// The UTF-8 twin, decoded directly, must match the ground-truth literal
 	// (guards against a vacuous nil==nil compare between the two decodes).
-	twinHeader, twinRows, _, err := Decode(bytes.NewReader(utf8Twin), "csv")
+	twinHeader, twinRows, _, err := Decode(context.Background(), bytes.NewReader(utf8Twin), "csv")
 	if err != nil {
 		t.Fatalf("Decode(utf8Twin): %v", err)
 	}
@@ -186,7 +187,7 @@ func TestDecode_UTF16LEBOMDecodesSameAsUTF8Twin(t *testing.T) {
 	assertRows(t, twinRows, wantRows)
 
 	// The UTF-16LE-BOM fixture must decode to the identical content.
-	header, rows, facts, err := Decode(bytes.NewReader(utf16Fixture), "csv")
+	header, rows, facts, err := Decode(context.Background(), bytes.NewReader(utf16Fixture), "csv")
 	if err != nil {
 		t.Fatalf("Decode(utf16Fixture): %v", err)
 	}
@@ -217,7 +218,7 @@ func TestDecode_Windows1252NonUTF8Decodes(t *testing.T) {
 		t.Fatalf("test fixture setup: encoded bytes still contain UTF-8 'é' (2 bytes) -- fixture is not really Windows-1252")
 	}
 
-	header, rows, facts, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, facts, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err != nil {
 		t.Fatalf("Decode: %v, want no error (Windows-1252 must never be rejected)", err)
 	}
@@ -238,7 +239,7 @@ func TestDecode_Windows1252NonUTF8Decodes(t *testing.T) {
 func TestDecode_RaggedRowNoError(t *testing.T) {
 	fixture := []byte("invoice_number,total,buyer_name\nINV-1,100.00,Acme\nINV-2,200.00\n")
 
-	header, rows, _, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, _, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err != nil {
 		t.Fatalf("Decode: %v, want no error (ragged rows are the service's problem, not decode's)", err)
 	}
@@ -284,7 +285,7 @@ func TestDecode_XLSXTwinMatchesCSVTwin(t *testing.T) {
 		must(f.SetCellValue(sheet, "C3", csvTwinRows[1][2]))
 	})
 
-	header, rows, facts, err := Decode(bytes.NewReader(fixture), "xlsx")
+	header, rows, facts, err := Decode(context.Background(), bytes.NewReader(fixture), "xlsx")
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -337,7 +338,7 @@ func TestDecode_XLSXDateCellFormattedNotSerial(t *testing.T) {
 		}
 	})
 
-	header, rows, _, err := Decode(bytes.NewReader(fixture), "xlsx")
+	header, rows, _, err := Decode(context.Background(), bytes.NewReader(fixture), "xlsx")
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -387,7 +388,7 @@ func TestDecode_XLSXAccountingNumericCellKeepsSeparators(t *testing.T) {
 		}
 	})
 
-	header, rows, _, err := Decode(bytes.NewReader(fixture), "xlsx")
+	header, rows, _, err := Decode(context.Background(), bytes.NewReader(fixture), "xlsx")
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}

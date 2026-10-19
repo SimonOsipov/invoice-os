@@ -34,10 +34,12 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/xuri/excelize/v2"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -374,5 +376,26 @@ func TestCreateHandler_MappingMissingInvoiceNumber400(t *testing.T) {
 	}
 	if resp.Error == "" {
 		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+func TestDecodeErrorMessage_MapsEachDecodeError(t *testing.T) {
+	const generic = "could not decode uploaded file"
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"header_row_past_end", ErrHeaderRowPastEnd, headerRowPastEnd},
+		{"too_many_rows", fmt.Errorf("wrap: %w", ErrTooManyRows), tooManyRowsMessage},
+		{"deadline", fmt.Errorf("wrap: %w", context.DeadlineExceeded), decodeDeadlineMessage},
+		{"caller_gone", fmt.Errorf("wrap: %w", context.Canceled), generic},
+		{"bad_workbook", excelize.ErrWorkbookFileFormat, generic},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := decodeErrorMessage(tc.err); got != tc.want {
+				t.Errorf("decodeErrorMessage(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
 	}
 }

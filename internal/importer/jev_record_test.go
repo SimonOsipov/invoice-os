@@ -65,7 +65,7 @@ func jrWindow(t *testing.T, dir, id string) [][]string {
 		t.Fatalf("open csv for %s: %v", id, err)
 	}
 	defer func() { _ = f.Close() }()
-	header, rows, _, err := Decode(f, "csv")
+	header, rows, _, err := Decode(context.Background(), f, "csv")
 	if err != nil {
 		t.Fatalf("Decode csv for %s: %v", id, err)
 	}
@@ -368,7 +368,7 @@ func TestJevRecord_SendsTheShippedWindow(t *testing.T) {
 		t.Fatalf("open titled_01.csv: %v", err)
 	}
 	defer func() { _ = f.Close() }()
-	header, rows, _, err := Decode(f, "csv")
+	header, rows, _, err := Decode(context.Background(), f, "csv")
 	if err != nil {
 		t.Fatalf("Decode titled_01.csv: %v", err)
 	}
@@ -488,7 +488,7 @@ func TestJevRecord_ARecordedLayoutIsNotAskedAgain(t *testing.T) {
 		t.Fatalf("open mix_01.csv: %v", err)
 	}
 	defer func() { _ = f.Close() }()
-	header, rows, _, err := Decode(f, "csv")
+	header, rows, _, err := Decode(context.Background(), f, "csv")
 	if err != nil {
 		t.Fatalf("Decode mix_01.csv: %v", err)
 	}

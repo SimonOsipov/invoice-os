@@ -38,7 +38,7 @@ func seedMembership(t *testing.T, super *pgxpool.Pool, tenantID, userID, role st
 	ctx := context.Background()
 	var id string
 	if err := super.QueryRow(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3) RETURNING id`,
+		`INSERT INTO memberships (tenant_id, user_id, role, all_clients) VALUES ($1, $2, $3, true) RETURNING id`,
 		tenantID, userID, role,
 	).Scan(&id); err != nil {
 		t.Fatalf("seed memberships: %v", err)
@@ -57,7 +57,7 @@ func seedMembershipWithStatus(t *testing.T, super *pgxpool.Pool, tenantID, userI
 	ctx := context.Background()
 	var id string
 	if err := super.QueryRow(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, $3, $4, true) RETURNING id`,
 		tenantID, userID, role, status,
 	).Scan(&id); err != nil {
 		t.Fatalf("seed memberships: %v", err)

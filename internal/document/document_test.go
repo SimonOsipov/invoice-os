@@ -79,7 +79,7 @@ func seedTenantWithID(t *testing.T, super *pgxpool.Pool, id, label string) strin
 		t.Fatalf("seed tenant: %v", err)
 	}
 	if _, err := super.Exec(ctx,
-		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'active')`,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'active', true)`,
 		id, memberSubject,
 	); err != nil {
 		t.Fatalf("seed caller membership: %v", err)

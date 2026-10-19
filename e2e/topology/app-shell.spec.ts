@@ -361,6 +361,12 @@ const LOCKUP_BADGE = ['font-family', 'font-size', 'font-weight', 'letter-spacing
 
 // Computed properties of a brand lockup's four parts, plus the badge's box height.
 async function readLockup(brand: Locator, badgeText: string): Promise<Record<string, Record<string, string> | number>> {
+  // Lazy faces load only on request; fonts.ready alone would measure fallback metrics.
+  await brand.evaluate(async (el) => {
+    const fonts = [...el.querySelectorAll('span')].map((s) => getComputedStyle(s).font)
+    await Promise.all(fonts.map((f) => document.fonts.load(f)))
+    await document.fonts.ready
+  })
   const badge = brand.getByText(badgeText, { exact: true })
   const box = await badge.boundingBox()
   if (!box) throw new Error(`the ${badgeText} badge has no box`)

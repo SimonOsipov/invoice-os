@@ -65,11 +65,20 @@ describe('App', () => {
     expect(set.props.landing).toBe('https://land.example')
 
     vi.stubEnv('VITE_GATEWAY_URL', '')
-    vi.stubEnv('VITE_LANDING_URL', '')
     const unset = renderApp()
     expect(unset.type).toBe(StaffGate)
     expect(unset.props.gateway).toBeNull()
-    expect(unset.props.landing).toBeNull()
+    expect(unset.props.landing).toBe('https://land.example')
+  })
+
+  it('the console renders nothing without a landing URL', () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://land.example/')
+    expect(renderToStaticMarkup(<App />)).toContain('asc-app')
+
+    for (const unset of ['', '   ', '/', undefined]) {
+      vi.stubEnv('VITE_LANDING_URL', unset)
+      expect(renderToStaticMarkup(<App />), JSON.stringify(unset)).toBe('')
+    }
   })
 
   it('App_passesTheAppBaseToTheGate', () => {

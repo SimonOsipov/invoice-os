@@ -3,7 +3,6 @@ import { fileURLToPath } from 'node:url'
 
 import { ApiError } from '@invoice-os/api-client'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
-import { expireConsole } from '@invoice-os/console-session'
 import { captureApiFailure } from '@invoice-os/monitoring/report'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -31,10 +30,6 @@ import {
   type PostInput,
 } from './blogApi'
 
-vi.mock('@invoice-os/console-session', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
-  expireConsole: vi.fn(),
-}))
 vi.mock('@invoice-os/monitoring/report', () => ({ captureApiFailure: vi.fn() }))
 
 const GW = 'https://gw.test'
@@ -78,7 +73,6 @@ afterEach(() => {
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
-  vi.mocked(expireConsole).mockClear()
   vi.mocked(captureApiFailure).mockClear()
 })
 

@@ -56,6 +56,7 @@ import type { BlogFilters, DrawerState, Env, Rule, Screen, ToastState, ToastTone
 // every screen relies on. A full-height app shell: fixed sidebar + scrolling main column,
 // with drawers/modals/toast layered on top.
 export default function App() {
+  if (landingBase() === null) return null
   return (
     <StaffGate storageKey={SESSION_KEY} target="support" gateway={gatewayBase()} landing={landingBase()} app={appBase()}>
       <Console />

@@ -15,8 +15,8 @@ func FilterSQLForTest(f Filter, subjects, companies, invoices []string) (string,
 }
 
 // ScopedFilterSQLForTest renders f's predicates under the caller scope string.
-// Red stub: ignores scope until the scope mapping exists.
 func ScopedFilterSQLForTest(f Filter, scope string) (string, []any, error) {
+	f.scope = scopeFromGUC(scope)
 	return filterPredicates(f, searchTargets{})
 }
 

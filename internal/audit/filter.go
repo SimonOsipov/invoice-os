@@ -8,8 +8,36 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
+
+// callerScope is the reader's client scope: the whole tenant, or only the listed clients.
+type callerScope struct {
+	set bool
+	ids []string
+}
+
+// scopeFromGUC maps app.entity_scope: ”/'*' is full, an array literal is a set, anything
+// else is the empty set (fail closed).
+func scopeFromGUC(v string) callerScope {
+	if v == "" || v == "*" {
+		return callerScope{}
+	}
+	ids := []string{}
+	if len(v) < 2 || v[0] != '{' || v[len(v)-1] != '}' {
+		return callerScope{set: true, ids: ids}
+	}
+	if inner := v[1 : len(v)-1]; inner != "" {
+		for _, id := range strings.Split(inner, ",") {
+			if _, err := uuid.Parse(id); err != nil {
+				return callerScope{set: true, ids: []string{}}
+			}
+			ids = append(ids, id)
+		}
+	}
+	return callerScope{set: true, ids: ids}
+}
 
 // searchTargets holds the three fold-in lookups: the subjects whose display name matches
 // q, the companies whose name does, and the invoices whose number does. All come back as
@@ -109,6 +137,9 @@ func filterPredicates(f Filter, s searchTargets) (string, []any, error) {
 		return fmt.Sprintf("$%d", len(args))
 	}
 
+	if f.scope.set {
+		conditions = append(conditions, "a.entity_id = ANY("+bind(f.scope.ids)+"::uuid[])")
+	}
 	if !f.From.IsZero() {
 		conditions = append(conditions, "a.created_at >= "+bind(f.From))
 	}

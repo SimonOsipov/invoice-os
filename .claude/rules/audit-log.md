@@ -26,6 +26,7 @@ paths:
 - Run the page, the count, the facets and the empty probe in one transaction.
 - Read a NULL `entity_id` as workspace-level or unattributed. Never render it as unknown.
 - Classify a NULL-`entity_id` event as `workspace` only when it is in `firmWideEvents`. Add every new firm-wide event to that map.
+- Limit a member who is not admin, "All clients" or in-house to their clients' `entity_id` rows. They read no NULL-`entity_id` row. Apply the scope from `app.entity_scope` in `Store.List`, never in `Query`.
 - Offer three company filters: all, one company and workspace-level. Never write `entity_id = $1 OR entity_id IS NULL`.
 - Resolve company names with a `LEFT JOIN`. Show a dangling `entity_id` as a deleted company.
 - The UUID grammar has several live copies: the resolver, the generated column and `actor.Resolve`. Change all live copies together.

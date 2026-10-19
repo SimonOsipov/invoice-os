@@ -53,7 +53,7 @@ const shutdownTimeout = 10 * time.Second
 
 // run serves until ctx is done, then lets in-flight requests finish within grace.
 func run(ctx context.Context, ln net.Listener, h http.Handler, grace time.Duration) error {
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	srv := platform.NewServer("", h)
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(ln) }()
 	select {

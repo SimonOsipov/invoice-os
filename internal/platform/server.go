@@ -91,6 +91,26 @@ func (a *App) Handler() http.Handler {
 	)
 }
 
+// Server timeouts outlast Railway's edge limits (5 min body, 15 min request, 60 s idle) so no
+// request the edge admits is cut. Vars so tests can lower them.
+var (
+	ServerReadTimeout  = 6 * time.Minute
+	ServerWriteTimeout = 16 * time.Minute
+	ServerIdleTimeout  = 2 * time.Minute
+)
+
+// NewServer builds the http.Server every service uses; it reads the timeout vars at call time.
+func NewServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       ServerReadTimeout,
+		WriteTimeout:      ServerWriteTimeout,
+		IdleTimeout:       ServerIdleTimeout,
+	}
+}
+
 // Run serves HTTP until the process receives SIGINT/SIGTERM (or ctx is
 // cancelled), then shuts down gracefully within ShutdownTimeout and flushes
 // Sentry. Any registered background workers (AddBackgroundWorker) start alongside
@@ -115,11 +135,7 @@ func (a *App) Run(ctx context.Context) error {
 		started = append(started, w)
 	}
 
-	srv := &http.Server{
-		Addr:              ":" + strconv.Itoa(a.Config.Port),
-		Handler:           a.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	srv := NewServer(":"+strconv.Itoa(a.Config.Port), a.Handler())
 
 	errCh := make(chan error, 1)
 	go func() {

@@ -629,6 +629,8 @@ func TestInvoiceMain_RegistersTheCheckMappingRoute(t *testing.T) {
 			foundCreate = true
 			if !isSelectorCall(call.Args[1], "importer", "CreateHandler") {
 				t.Error(`the control needle "POST /v1/imports" no longer names importer.CreateHandler`)
+			} else if hc := call.Args[1].(*ast.CallExpr); len(hc.Args) != 5 || !isSelector(hc.Args[3], "impStore", "EntityVisible") {
+				t.Errorf("importer.CreateHandler's fourth of five arguments is not impStore.EntityVisible, got %d argument(s)", len(hc.Args))
 			}
 		case "POST /v1/imports/check-mapping":
 			foundCheck = true

@@ -264,6 +264,9 @@ func TestClientScope_DocumentRoutesAnswerOneNotFoundAndWriteNothing(t *testing.T
 	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE tenant_id IN ($1, $2)`, f.tenant, other); n != 0 {
 		t.Errorf("import_batches after refusals = %d, want 0", n)
 	}
+	if n := csDocumentReads(t, f.super, f.tenant); n != 0 {
+		t.Errorf("document.read rows after refusals = %d, want 0", n)
+	}
 	if n := csCount(t, f.super, `SELECT count(*) FROM invoices WHERE tenant_id IN ($1, $2)`, f.tenant, other); n != 0 {
 		t.Errorf("invoices after refusals = %d, want 0", n)
 	}

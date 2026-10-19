@@ -4,7 +4,6 @@
 interface ImportMetaEnv {
   readonly VITE_APP_URL?: string
   readonly VITE_LANDING_URL?: string
-  readonly VITE_BLOG_URL?: string
   readonly VITE_GA_MEASUREMENT_ID?: string
 }
 

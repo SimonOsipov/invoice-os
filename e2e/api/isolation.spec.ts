@@ -488,6 +488,7 @@ test.describe("screens that span clients stop at a limited member's clients (FIR
     expect((await getAuditLog(limited, { invoice_id: notHeldInvoiceId })).events).toEqual([])
     expect((await getAuditLog(limited, { invoice_id: ownInvoiceId })).events.length, 'its own invoice rows').toBeGreaterThan(0)
 
+    expect((await getAuditLog(admin, { company: 'workspace' })).events.length, 'positive control: the admin reads workspace rows').toBeGreaterThan(0)
     expect((await getAuditLog(limited, { company: 'workspace' })).events).toEqual([])
 
     const adminTin = await getAuditLog(admin, { q: tin })

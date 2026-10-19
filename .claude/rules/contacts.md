@@ -3,6 +3,7 @@ paths:
   - "internal/notifications/**"
   - "cmd/notifications/**"
   - "internal/gateway/contacts*.go"
+  - "internal/gateway/blog_subscribe*.go"
   - "migrations/*contacts*"
 ---
 # Contact sync
@@ -19,8 +20,18 @@ paths:
 - Record a delivery with `WHERE version = <version read>`. A miss is not an error.
 - Send product and service email to segment "Registered".
 - Send marketing email to topic "Marketing" only. The segment holds every registrant and is not consent.
-- Set the topic to `opt_in` once, for a ticked person. Record it in `resend_opt_in_sent_at`.
-- Never send Resend `unsubscribed`, `opt_out` or a second `opt_in`.
+- Send the blog newsletter to segment "Blog" with topic "Blog". Never send it to segment "General" or "Registered".
+- Put `{{{RESEND_UNSUBSCRIBE_URL}}}` in every blog broadcast.
+- Write blog subscribers to Resend only, never HubSpot.
+- Never touch Resend before the confirm click.
+- Never send `unsubscribed` (true or false) or any `opt_out` (Marketing or Blog topic) for a blog subscriber.
+- Never add or remove a Resend suppression.
+- Delete unconfirmed blog requests within an hour of expiry.
+- A Resend broadcast cannot filter on a contact property. Send every blog broadcast to all of segment "Blog". Use `blog_categories` and `blog_frequency` to choose content only.
+- Ask the PM before adding per-category segments.
+- Set the Marketing topic to `opt_in` once, for a ticked person. Record it in `resend_opt_in_sent_at`.
+- Never send Resend `unsubscribed`, `opt_out` or a second `opt_in` for registration and Marketing consent.
+- Send a repeat Blog-topic `opt_in` after each confirmed double opt-in.
 - Queue no Resend job for a demo booker who did not tick.
 - Pick the mode from the vendor keys and `CONTACTS_FAKE`: `real`, `fake` or `off`. The worker does not start in `off`.
 - Refuse to boot when `CONTACTS_FAKE` is true and any key is set, or when only some keys are set.

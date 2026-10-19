@@ -156,6 +156,11 @@ export function trackTourStart(): void {
   send('tour_start', {})
 }
 
+// Blog sender.
+export function trackBlogPageView(): void {
+  send('page_view', {})
+}
+
 export function trackOpenInPlatform(target: { feature_id: string } | { group_id: string }): void {
   send('open_in_platform', target)
 }

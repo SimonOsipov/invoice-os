@@ -22,22 +22,23 @@ const (
 	batchOpsURL     = "https://ops-console-pr-900.up.railway.app"
 	batchSupportURL = "https://support-console-pr-900.up.railway.app"
 	batchLibraryURL = "https://library-pr-900.up.railway.app"
-	// reconcile_url_variables: origins="$app_url,$landing_url,$ops_url,$support_url".
-	batchOrigins = batchAppURL + "," + batchLandingURL + "," + batchOpsURL + "," + batchSupportURL
+	batchBlogURL    = "https://blog-pr-900.up.railway.app"
+	// reconcile_url_variables: origins="$app_url,$landing_url,$ops_url,$support_url,$blog_url".
+	batchOrigins = batchAppURL + "," + batchLandingURL + "," + batchOpsURL + "," + batchSupportURL + "," + batchBlogURL
 
 	// What a fork inherits from production.
 	batchProdAppURL     = "https://app.ascomply.com"
 	batchProdLandingURL = "https://www.ascomply.com"
 
-	batchAllConfirmed = "All 18 environment variables confirmed" // reconcile_url_variables
+	batchAllConfirmed = "All 22 environment variables confirmed" // reconcile_url_variables
 )
 
 // Secret names print `= <redacted>` (Design, "Variable writes").
 var (
 	forkAuthSecrets    = map[string][]string{"auth": {"GOTRUE_JWT_KEYS", "GOTRUE_JWT_SECRET"}, "gateway": {"AUTH_ADMIN_PASSWORD"}}
 	sentrySecretNames  = []string{"SENTRY_DSN", "VITE_SENTRY_DSN", "SENTRY_AUTH_TOKEN"}
-	batchSvcIDExports  = map[string]string{"RAILWAY_SVC_GATEWAY_ID": "gateway", "RAILWAY_SVC_APP_ID": "app", "RAILWAY_SVC_LANDING_ID": "landing", "RAILWAY_SVC_OPS_CONSOLE_ID": "ops-console", "RAILWAY_SVC_SUPPORT_CONSOLE_ID": "support-console", "RAILWAY_SVC_LIBRARY_ID": "library", "RAILWAY_SVC_POSTGRES_ID": "Postgres"}
-	reconcileURLLabels = []string{"gateway", "app", "landing", "ops-console", "support-console", "library"}
+	batchSvcIDExports  = map[string]string{"RAILWAY_SVC_GATEWAY_ID": "gateway", "RAILWAY_SVC_APP_ID": "app", "RAILWAY_SVC_LANDING_ID": "landing", "RAILWAY_SVC_OPS_CONSOLE_ID": "ops-console", "RAILWAY_SVC_SUPPORT_CONSOLE_ID": "support-console", "RAILWAY_SVC_LIBRARY_ID": "library", "RAILWAY_SVC_BLOG_ID": "blog", "RAILWAY_SVC_POSTGRES_ID": "Postgres"}
+	reconcileURLLabels = []string{"gateway", "app", "landing", "ops-console", "support-console", "library", "blog"}
 )
 
 func batchExports() string {
@@ -54,10 +55,11 @@ func reconcileIntended() map[string]map[string]string {
 	return map[string]map[string]string{
 		sentrySvcID("gateway"):         {"CORS_ALLOWED_ORIGINS": batchOrigins},
 		sentrySvcID("app"):             {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL, "VITE_LIBRARY_URL": batchLibraryURL, "VITE_SUPPORT_URL": batchSupportURL},
-		sentrySvcID("landing"):         {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_APP_URL": batchAppURL, "VITE_OPS_URL": batchOpsURL, "VITE_SUPPORT_URL": batchSupportURL, "VITE_LIBRARY_URL": batchLibraryURL, "VITE_REGISTRATION_OPEN": "true"},
+		sentrySvcID("landing"):         {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_APP_URL": batchAppURL, "VITE_OPS_URL": batchOpsURL, "VITE_SUPPORT_URL": batchSupportURL, "VITE_LIBRARY_URL": batchLibraryURL, "VITE_BLOG_URL": batchBlogURL, "VITE_REGISTRATION_OPEN": "true"},
 		sentrySvcID("ops-console"):     {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
 		sentrySvcID("support-console"): {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL, "VITE_APP_URL": batchAppURL},
-		sentrySvcID("library"):         {"VITE_APP_URL": batchAppURL, "VITE_LANDING_URL": batchLandingURL},
+		sentrySvcID("library"):         {"VITE_APP_URL": batchAppURL, "VITE_LANDING_URL": batchLandingURL, "VITE_BLOG_URL": batchBlogURL},
+		sentrySvcID("blog"):            {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
 	}
 }
 
@@ -74,7 +76,7 @@ func reconcileStale() map[string]map[string]string {
 
 func runReconcileURLs(t *testing.T, s authShim) (stdout, stderr string, code int) {
 	t.Helper()
-	return s.run(t, batchExports(), "reconcile-urls", forkEnvID, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL, batchLibraryURL)
+	return s.run(t, batchExports(), "reconcile-urls", forkEnvID, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL, batchLibraryURL, batchBlogURL)
 }
 
 // fleetShim lists every Sentry service (gateway, submission, invoice among them) in forkEnvID.
@@ -296,7 +298,7 @@ func TestSetSentryOff_SteadyStateWritesNothing(t *testing.T) {
 	}
 	slices.Sort(read)
 	slices.Sort(all)
-	if len(all) != 15 || !slices.Equal(read, all) {
+	if len(all) != 16 || !slices.Equal(read, all) {
 		t.Errorf("variable reads = %v, want exactly one per service %v", read, all)
 	}
 	if e := upsertEcho.FindAllString(out, -1); len(e) != 0 {
@@ -466,7 +468,7 @@ func TestSetSentryOff_InheritedValuesOneWritePerService(t *testing.T) {
 	}
 	ws := collectionWrites(t, s)
 	if len(ws) != 15 {
-		t.Errorf("%d write input(s) %v, want 15: one per Sentry service", len(ws), writeNames(ws))
+		t.Errorf("%d write input(s) %v, want 15: one per Sentry service but the blog, whose references are deleted", len(ws), writeNames(ws))
 	}
 	if n := opCount(t, s, "varsWrite"); n != 1 {
 		t.Errorf("%d varsWrite call(s), want 1: every Sentry service in one request", n)
@@ -482,6 +484,7 @@ func TestSetSentryOff_InheritedValuesOneWritePerService(t *testing.T) {
 		want[sentrySvcID(sp)] = []string{"SENTRY_AUTH_TOKEN", "VITE_SENTRY_DSN"}
 	}
 	want[sentrySvcID("landing")] = []string{"VITE_SENTRY_DSN"}
+	delete(want, sentrySvcID("blog"))
 
 	seen := map[string]int{}
 	for _, w := range ws {
@@ -539,7 +542,7 @@ func TestSetServiceVars_OnlyChangedNamesAreWritten(t *testing.T) {
 	if ups := s.upserts(t); len(ups) != 1 {
 		t.Errorf("writes = %v, want app.VITE_LANDING_URL only: every other value is already intended", names(ups))
 	}
-	wantHeld := map[string]string{"gateway": "1 of 1", "app": "3 of 4", "landing": "6 of 6", "ops-console": "2 of 2", "support-console": "3 of 3", "library": "2 of 2"}
+	wantHeld := map[string]string{"gateway": "1 of 1", "app": "3 of 4", "landing": "7 of 7", "ops-console": "2 of 2", "support-console": "3 of 3", "library": "3 of 3", "blog": "2 of 2"}
 	if got := heldLines(out); !reflect.DeepEqual(got, wantHeld) {
 		t.Errorf("held lines = %v, want %v", got, wantHeld)
 	}
@@ -583,11 +586,36 @@ func TestReconcileURLs_WritesTheRegistrationFlag(t *testing.T) {
 	}
 }
 
+// A fork that inherited production's origins gets the blog URL last, and never the library URL.
+func TestReconcileURLsWritesTheBlogOriginOnTheFork(t *testing.T) {
+	gw := sentrySvcID("gateway")
+	stores := reconcileIntended()
+	stores[gw]["CORS_ALLOWED_ORIGINS"] = batchProdAppURL
+	s := fleetShim(t, stores)
+	stdout, stderr, code := runReconcileURLs(t, s)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; output = %q", code, stdout+stderr)
+	}
+	got := oneUpsert(t, s.upserts(t), gw, "CORS_ALLOWED_ORIGINS")
+	if !strings.HasSuffix(got, ","+batchBlogURL) || strings.Contains(got, "library") {
+		t.Errorf("gateway CORS_ALLOWED_ORIGINS = %q, want it to end with ,%s and omit the library URL", got, batchBlogURL)
+	}
+	if got != batchOrigins {
+		t.Errorf("gateway CORS_ALLOWED_ORIGINS = %q, want %q", got, batchOrigins)
+	}
+	if n := len(s.upserts(t)); n == 0 {
+		t.Fatal("control: the stale fork produced no upserts")
+	}
+	if v := upsertsOf(s.upserts(t), sentrySvcID("library"), "VITE_GATEWAY_URL"); len(v) != 0 {
+		t.Errorf("library was given VITE_GATEWAY_URL = %q; the SPA has no gateway wiring", v[0].Value)
+	}
+}
+
 // guard, passes at HEAD: the flag write must not widen the refusal of the persistent environment.
 func TestReconcileURLs_RefusesThePersistentEnvironment(t *testing.T) {
 	t.Parallel()
 	s := fleetShim(t, reconcileIntended())
-	stdout, stderr, code := s.run(t, batchExports(), "reconcile-urls", persistentEnvironmentID, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL, batchLibraryURL)
+	stdout, stderr, code := s.run(t, batchExports(), "reconcile-urls", persistentEnvironmentID, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL, batchLibraryURL, batchBlogURL)
 	out := stdout + stderr
 	if code != 1 {
 		t.Errorf("exit %d, want 1; output = %q", code, out)
@@ -641,6 +669,8 @@ func TestSetServiceVars_StaleValueIsRewritten(t *testing.T) {
 		stale           string // "" deletes the name from the store
 	}{
 		{"landing", "VITE_APP_URL", batchAppURL, batchProdAppURL},
+		{"landing", "VITE_BLOG_URL", batchBlogURL, batchProdLandingURL},
+		{"library", "VITE_BLOG_URL", batchBlogURL, batchProdLandingURL},
 		{"ops-console", "VITE_GATEWAY_URL", batchGatewayURL, ""},
 		{"support-console", "VITE_GATEWAY_URL", batchGatewayURL, ""},
 		{"ops-console", "VITE_GATEWAY_URL", batchGatewayURL, batchProdAppURL},
@@ -884,8 +914,12 @@ func TestSetServiceVars_ReReadMismatchFails(t *testing.T) {
 		{"support-console", "VITE_GATEWAY_URL"},
 		{"library", "VITE_LANDING_URL"},
 		{"library", "VITE_APP_URL"},
+		{"blog", "VITE_GATEWAY_URL"},
+		{"blog", "VITE_LANDING_URL"},
 		{"app", "VITE_LIBRARY_URL"},
 		{"landing", "VITE_LIBRARY_URL"},
+		{"landing", "VITE_BLOG_URL"},
+		{"library", "VITE_BLOG_URL"},
 		{"app", "VITE_SUPPORT_URL"},
 		{"support-console", "VITE_APP_URL"},
 	} {
@@ -1050,6 +1084,34 @@ func TestSetServiceVars_SecretsNeverOnArgvOrInOutput(t *testing.T) {
 			}
 		}
 	}
+	// deleted: the blog's inherited reference is deleted; the request names the variable and carries no value.
+	deleted := func(t *testing.T, s authShim, out, label, name string) {
+		t.Helper()
+		if !strings.Contains(out, "  "+label+"."+name+" deleted (inherited reference)") {
+			t.Errorf("no deleted line for %s.%s", label, name)
+		}
+		n := 0
+		for _, c := range s.calls(t) {
+			if !strings.Contains(c.Query, "variableDelete(") {
+				continue
+			}
+			for k, v := range c.Variables {
+				in, _ := v.(map[string]any)
+				if in == nil || in["name"] != name || in["serviceId"] != sentrySvcID(label) {
+					continue
+				}
+				n++
+				for f := range in {
+					if !slices.Contains([]string{"projectId", "environmentId", "serviceId", "name"}, f) {
+						t.Errorf("delete input %s carries field %q, want no value", k, f)
+					}
+				}
+			}
+		}
+		if n != 1 {
+			t.Errorf("%d delete request(s) for %s.%s, want 1", n, label, name)
+		}
+	}
 	redacted := func(t *testing.T, out, label, name string) {
 		t.Helper()
 		lines := echoLines(out, label, name)
@@ -1143,9 +1205,11 @@ func TestSetServiceVars_SecretsNeverOnArgvOrInOutput(t *testing.T) {
 			t.Fatalf("exit %d, want 0; output = %q", code, out)
 		}
 		scan(t, s, jqLog, out, map[string]string{
-			"the inherited DSN":        sentryDSNSentinel,
-			"the inherited auth token": sentryTokenSentinel,
-			"the sibling DATABASE_URL": sentryDBSentinel,
+			"the inherited DSN":          sentryDSNSentinel,
+			"the inherited auth token":   sentryTokenSentinel,
+			"the sibling DATABASE_URL":   sentryDBSentinel,
+			"the blog's DSN reference":   sentryBlogDSNRef,
+			"the blog's token reference": sentryBlogTokenRef,
 		})
 		if strings.Contains(out, forkToken) {
 			t.Error("the output carries the API token")
@@ -1155,6 +1219,10 @@ func TestSetServiceVars_SecretsNeverOnArgvOrInOutput(t *testing.T) {
 		}
 		for _, sp := range sentrySPAs {
 			for _, n := range sentrySPANames {
+				if sp == "blog" {
+					deleted(t, s, out, sp, n)
+					continue
+				}
 				redacted(t, out, sp, n)
 			}
 		}
@@ -1181,6 +1249,10 @@ func TestSetServiceVars_SecretsNeverOnArgvOrInOutput(t *testing.T) {
 		}
 		for _, sp := range sentrySPAs {
 			for _, n := range sentrySPANames {
+				if sp == "blog" {
+					deleted(t, s, out, sp, n)
+					continue
+				}
 				redacted(t, out, sp, n)
 			}
 		}

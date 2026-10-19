@@ -1,0 +1,429 @@
+{
+  "post_id": [
+    {
+      "title": "Subscribe",
+      "taken": [],
+      "want": "subscribe-2"
+    },
+    {
+      "title": "Category",
+      "taken": [],
+      "want": "category-2"
+    },
+    {
+      "title": "Health",
+      "taken": [],
+      "want": "health-2"
+    },
+    {
+      "title": "Subscribe",
+      "taken": [
+        "subscribe-2"
+      ],
+      "want": "subscribe-3"
+    },
+    {
+      "title": "A & B",
+      "taken": [],
+      "want": "a-and-b"
+    },
+    {
+      "title": "Über Zölle",
+      "taken": [],
+      "want": "ber-z-lle"
+    },
+    {
+      "title": "İstanbul",
+      "taken": [],
+      "want": "istanbul"
+    },
+    {
+      "title": "!!!",
+      "taken": [],
+      "want": "post"
+    },
+    {
+      "title": "Structured e-invoicing changes for every Nigerian business in twenty t",
+      "taken": [],
+      "want": "structured-e-invoicing-changes-for-every-nigerian-business-in-tw"
+    },
+    {
+      "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bcccccccccc",
+      "taken": [],
+      "want": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-"
+    },
+    {
+      "title": "x",
+      "taken": [
+        "x",
+        "x-2"
+      ],
+      "want": "x-3"
+    },
+    {
+      "title": "New post",
+      "taken": [
+        "new-post"
+      ],
+      "want": "new-post-2"
+    },
+    {
+      "title": "Category",
+      "taken": [
+        "category-2"
+      ],
+      "want": "category-3"
+    },
+    {
+      "title": "SUBSCRIBE!",
+      "taken": [],
+      "want": "subscribe-2"
+    },
+    {
+      "title": "  Hello  World  ",
+      "taken": [],
+      "want": "hello-world"
+    },
+    {
+      "title": "&",
+      "taken": [],
+      "want": "and"
+    },
+    {
+      "title": "Kelvin",
+      "taken": [],
+      "want": "kelvin"
+    },
+    {
+      "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "taken": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "want": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-2"
+    }
+  ],
+  "clean_body": [
+    {
+      "body": [],
+      "want": []
+    },
+    {
+      "body": [
+        {
+          "type": "p",
+          "text": "  "
+        },
+        {
+          "type": "p",
+          "text": " x "
+        }
+      ],
+      "want": [
+        {
+          "type": "p",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "body": [
+        {
+          "type": "ul",
+          "items": [
+            "",
+            " x "
+          ]
+        },
+        {
+          "type": "ul",
+          "items": [
+            " "
+          ]
+        }
+      ],
+      "want": [
+        {
+          "type": "ul",
+          "items": [
+            "x"
+          ]
+        }
+      ]
+    },
+    {
+      "body": [
+        {
+          "type": "note",
+          "kind": "deadline",
+          "title": " only a title ",
+          "text": ""
+        }
+      ],
+      "want": [
+        {
+          "type": "note",
+          "kind": "deadline",
+          "title": "only a title",
+          "text": ""
+        }
+      ]
+    },
+    {
+      "body": [
+        {
+          "type": "quote",
+          "text": "",
+          "who": "someone"
+        }
+      ],
+      "want": []
+    },
+    {
+      "body": [
+        {
+          "type": "quote",
+          "text": " q ",
+          "who": " w "
+        }
+      ],
+      "want": [
+        {
+          "type": "quote",
+          "text": "q",
+          "who": "w"
+        }
+      ]
+    },
+    {
+      "body": [
+        {
+          "type": "demo",
+          "demo": "import"
+        }
+      ],
+      "want": [
+        {
+          "type": "demo",
+          "demo": "import"
+        }
+      ]
+    },
+    {
+      "body": [
+        {
+          "type": "h",
+          "text": ""
+        },
+        {
+          "type": "h",
+          "text": " H "
+        }
+      ],
+      "want": [
+        {
+          "type": "h",
+          "text": "H"
+        }
+      ]
+    },
+    {
+      "body": [
+        {
+          "type": "p",
+          "text": "hi",
+          "items": [
+            "z"
+          ],
+          "who": "w",
+          "title": "t"
+        }
+      ],
+      "want": [
+        {
+          "type": "p",
+          "text": "hi"
+        }
+      ]
+    },
+    {
+      "body": [
+        {
+          "type": "ul",
+          "items": [
+            "a"
+          ],
+          "text": "stray"
+        }
+      ],
+      "want": [
+        {
+          "type": "ul",
+          "items": [
+            "a"
+          ]
+        }
+      ]
+    },
+    {
+      "body": [
+        {
+          "type": "note",
+          "kind": "product",
+          "title": "",
+          "text": " t "
+        }
+      ],
+      "want": [
+        {
+          "type": "note",
+          "kind": "product",
+          "title": "",
+          "text": "t"
+        }
+      ]
+    },
+    {
+      "body": [
+        {
+          "type": "note",
+          "kind": "deadline",
+          "title": " ",
+          "text": " ",
+          "items": [
+            "z"
+          ],
+          "who": "w"
+        }
+      ],
+      "want": []
+    },
+    {
+      "body": [
+        {
+          "type": "note",
+          "title": "x"
+        }
+      ],
+      "want": [
+        {
+          "type": "note",
+          "kind": "",
+          "title": "x",
+          "text": ""
+        }
+      ]
+    },
+    {
+      "body": [
+        {
+          "type": "quote",
+          "text": "q",
+          "who": "",
+          "items": [
+            "z"
+          ],
+          "title": "t"
+        }
+      ],
+      "want": [
+        {
+          "type": "quote",
+          "text": "q",
+          "who": ""
+        }
+      ]
+    },
+    {
+      "body": [
+        {
+          "type": "demo",
+          "demo": "approval",
+          "text": "stray",
+          "items": [
+            "z"
+          ]
+        }
+      ],
+      "want": [
+        {
+          "type": "demo",
+          "demo": "approval"
+        }
+      ]
+    },
+    {
+      "body": [
+        {
+          "type": "demo"
+        }
+      ],
+      "want": [
+        {
+          "type": "demo",
+          "demo": ""
+        }
+      ]
+    },
+    {
+      "body": [
+        {
+          "type": "zzz",
+          "text": " odd "
+        }
+      ],
+      "want": [
+        {
+          "type": "zzz",
+          "text": "odd"
+        }
+      ]
+    },
+    {
+      "body": [
+        {
+          "type": "h",
+          "text": "H",
+          "items": [
+            "z"
+          ],
+          "title": "t"
+        },
+        {
+          "type": "ul",
+          "items": [
+            "a",
+            " ",
+            "b"
+          ]
+        }
+      ],
+      "want": [
+        {
+          "type": "h",
+          "text": "H"
+        },
+        {
+          "type": "ul",
+          "items": [
+            "a",
+            "b"
+          ]
+        }
+      ]
+    },
+    {
+      "body": [
+        {
+          "type": "p",
+          "text": "  nbsp  "
+        }
+      ],
+      "want": [
+        {
+          "type": "p",
+          "text": "nbsp"
+        }
+      ]
+    }
+  ]
+}

@@ -4,9 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net"
 	"net/http"
@@ -23,6 +27,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 )
 
@@ -871,5 +876,282 @@ func TestNotificationsMain_FakeModeCompletesADemoDealJob(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The staff blog routes decide who may write posts. AST over the registration calls, so a comment
+// or gofmt cannot satisfy it; a mis-bound method (SetCover on the featured route) fails by pattern.
+func TestNotificationsMain_RegistersTheBlogRoutes(t *testing.T) {
+	want := map[string][2]string{
+		"GET /v1/staff/blog/categories":            {"ListCategoriesHandler", "ListCategories"},
+		"POST /v1/staff/blog/categories":           {"AddCategoryHandler", "AddCategory"},
+		"PUT /v1/staff/blog/categories/{id}":       {"UpdateCategoryHandler", "UpdateCategory"},
+		"POST /v1/staff/blog/categories/{id}/move": {"MoveCategoryHandler", "MoveCategory"},
+		"DELETE /v1/staff/blog/categories/{id}":    {"DeleteCategoryHandler", "DeleteCategory"},
+		"GET /v1/staff/blog/authors":               {"AuthorsHandler", "Authors"},
+		"GET /v1/staff/blog/posts":                 {"ListPostsHandler", "ListPosts"},
+		"POST /v1/staff/blog/posts":                {"CreatePostHandler", "CreatePost"},
+		"PUT /v1/staff/blog/posts/{id}":            {"UpdatePostHandler", "UpdatePost"},
+		"DELETE /v1/staff/blog/posts/{id}":         {"DeletePostHandler", "DeletePost"},
+		"PUT /v1/staff/blog/posts/{id}/featured":   {"SetFeaturedHandler", "SetFeatured"},
+		"PUT /v1/staff/blog/posts/{id}/cover":      {"SetCoverHandler", "SetCover"},
+		"DELETE /v1/staff/blog/posts/{id}/cover":   {"RemoveCoverHandler", "RemoveCover"},
+		"GET /v1/staff/blog/posts/{id}/cover":      {"GetCoverHandler", "GetCover"},
+		"GET /internal/blog/categories":            {"PublicCategoriesHandler", "PublicCategories"},
+		"GET /internal/blog/posts":                 {"PublicPostsHandler", "PublicPosts"},
+		"GET /internal/blog/posts/{id}":            {"PublicPostHandler", "PublicPost"},
+		"GET /internal/blog/covers/{id}/{version}": {"PublicCoverHandler", "PublicCover"},
+	}
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/notifications/main.go: %v", err)
+	}
+	found := map[string]int{}
+	var scanned int
+	var control bool
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || (sel.Sel.Name != "HandleFunc" && sel.Sel.Name != "Handle") || len(call.Args) < 2 {
+			return true
+		}
+		// A blog handler outside the table sits outside the /v1/staff class: no staff check guards it.
+		mentionsBlog := false
+		ast.Inspect(call.Args[1], func(m ast.Node) bool {
+			if id, ok := m.(*ast.Ident); ok && (id.Name == "blog" || id.Name == "blogStore") {
+				mentionsBlog = true
+			}
+			return true
+		})
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			if mentionsBlog {
+				t.Errorf("a blog handler is registered under a non-literal pattern at %d", call.Pos())
+			}
+			return true
+		}
+		scanned++
+		pattern := strings.Trim(lit.Value, "\"`")
+		if pattern == "GET /v1/contacts/me" {
+			control = true
+		}
+		exp, ok := want[pattern]
+		if !ok {
+			if strings.Contains(pattern, "/v1/staff/blog") || mentionsBlog {
+				t.Errorf("%q is registered; it is not a route of the blog Route wiring table", pattern)
+			}
+			return true
+		}
+		found[pattern]++
+		hc, ok := call.Args[1].(*ast.CallExpr)
+		if !ok {
+			t.Errorf("%s's second argument is %T, want a call expression", pattern, call.Args[1])
+			return true
+		}
+		hsel, ok := hc.Fun.(*ast.SelectorExpr)
+		if !ok {
+			t.Errorf("%s is not served by blog.%s(...)", pattern, exp[0])
+			return true
+		}
+		if pkg, ok := hsel.X.(*ast.Ident); !ok || pkg.Name != "blog" || hsel.Sel.Name != exp[0] {
+			t.Errorf("%s is not served by blog.%s(...)", pattern, exp[0])
+		}
+		if len(hc.Args) == 0 {
+			t.Errorf("%s: blog.%s has no store method argument", pattern, exp[0])
+			return true
+		}
+		msel, ok := hc.Args[0].(*ast.SelectorExpr)
+		if !ok {
+			t.Errorf("%s: first handler argument is %T, want blogStore.%s", pattern, hc.Args[0], exp[1])
+			return true
+		}
+		if recv, ok := msel.X.(*ast.Ident); !ok || recv.Name != "blogStore" || msel.Sel.Name != exp[1] {
+			t.Errorf("%s is not bound to blogStore.%s", pattern, exp[1])
+		}
+		return true
+	})
+	if scanned == 0 || !control {
+		t.Fatalf("control needle: scanned %d HandleFunc calls, GET /v1/contacts/me found=%v -- the AST walk is broken", scanned, control)
+	}
+	for pattern := range want {
+		switch found[pattern] {
+		case 1:
+		case 0:
+			t.Errorf("no app.Mux.HandleFunc(%q, ...) registration found in cmd/notifications/main.go", pattern)
+		default:
+			t.Errorf("%q is registered %d times", pattern, found[pattern])
+		}
+	}
+}
+
+func qaWiring(t *testing.T, env string, vars map[string]string) newsletterWiring {
+	t.Helper()
+	contacts, _, _, err := deliveryClients(qaGetenv(vars), env, nil)
+	if err != nil {
+		t.Fatalf("deliveryClients: %v", err)
+	}
+	w, err := newsletterClients(qaGetenv(vars), env, contacts, nil)
+	if err != nil {
+		t.Fatalf("newsletterClients: %v", err)
+	}
+	return w
+}
+
+func TestNotificationsNewsletterWiring_PreviewIsCaptureAndFake(t *testing.T) {
+	vars := qaFourKeys("RESEND_BLOG_TOPIC_ID", "bt", "RESEND_BLOG_SEGMENT_ID", "bs", "RESEND_SENDING_KEY", "sk")
+	w := qaWiring(t, "pr-7", vars)
+	if _, ok := w.Sender.(*accountmail.Capture); !ok || w.MailMode != accountmail.ModeCapture || w.Mode != notifications.ModeFake || !w.Enabled {
+		t.Errorf("wiring = %+v, want capture mail, fake newsletter, enabled", w)
+	}
+	if _, ok := w.Resend.(notifications.FakeBlogResend); !ok {
+		t.Errorf("resend client = %T, want FakeBlogResend", w.Resend)
+	}
+}
+
+func TestNotificationsNewsletterWiring_ProductionWithoutBlogKeysIsDisabled(t *testing.T) {
+	w := qaWiring(t, "production", qaFourKeys("RESEND_SENDING_KEY", "sk"))
+	if w.Enabled || w.Mode != notifications.ModeOff {
+		t.Errorf("wiring = %+v, want disabled", w)
+	}
+}
+
+func TestNotificationsNewsletterWiring_NoSendingKeyIsDisabled(t *testing.T) {
+	w := qaWiring(t, "production", qaFourKeys("RESEND_BLOG_TOPIC_ID", "bt", "RESEND_BLOG_SEGMENT_ID", "bs"))
+	if w.Enabled || w.Mode != notifications.ModeReal || w.MailMode != accountmail.ModeOff {
+		t.Errorf("wiring = %+v, want real newsletter, mail off, disabled", w)
+	}
+}
+
+// A PR fork has no blog keys and no sending key: both routes must work in capture and fake
+// mode, the boot purge must run, and nothing may dial a vendor.
+func TestNotificationsMain_PreviewServesTheBlogSubscriptionRoutes(t *testing.T) {
+	admin, appURL := qaAdminPool(t)
+	bin := qaBuildNotifications(t)
+	ctx := t.Context()
+	suffix := uuid.NewString()[:8]
+	cat := "pv-" + suffix
+	expired, live, fresh := "pv-exp-"+suffix+"@worker.example", "pv-live-"+suffix+"@worker.example", "pv-new-"+suffix+"@worker.example"
+	member := "pv-member-" + suffix + "@worker.example"
+	token := "preview-token-" + suffix
+	hash := func(s string) []byte { h := sha256.Sum256([]byte(s)); return h[:] }
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = admin.Exec(bg, `DELETE FROM blog_subscription_requests WHERE email = ANY($1)`, []string{expired, live, fresh})
+		_, _ = admin.Exec(bg, `DELETE FROM river_job WHERE kind = 'blog_subscriber_sync' AND args->>'email' = ANY($1)`, []string{live, member})
+		_, _ = admin.Exec(bg, `DELETE FROM blog_subscribers WHERE email = ANY($1)`, []string{live, member})
+		_, _ = admin.Exec(bg, `DELETE FROM blog_categories WHERE id = $1`, cat)
+	})
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO blog_categories (id, name, headline, icon, tone, position) VALUES ($1, 'Preview', 'h', 'package', 0, $2)`, []any{cat, 2_000_000_000 + int(time.Now().UnixNano()%1_000_000)}},
+		{`INSERT INTO blog_subscription_requests (email, category_ids, frequency, token_hash, expires_at) VALUES ($1, ARRAY[$2]::text[], 'weekly', $3, now() - interval '1 second')`, []any{expired, cat, hash("old-" + suffix)}},
+		{`INSERT INTO blog_subscription_requests (email, category_ids, frequency, token_hash, expires_at) VALUES ($1, ARRAY[$2]::text[], 'weekly', $3, now() + interval '1 hour')`, []any{live, cat, hash(token)}},
+		{`INSERT INTO blog_subscribers (email, category_ids, frequency, confirmed_at) VALUES ($1, ARRAY[$2]::text[], 'weekly', now())`, []any{member, cat}},
+	} {
+		if _, err := admin.Exec(ctx, q.sql, q.args...); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	proxy := qaStartProxy(t)
+	p := qaStart(t, bin, qaMerge(proxy.vars(), map[string]string{"DATABASE_URL": appURL, "RAILWAY_ENVIRONMENT_NAME": "pr-7"}))
+	p.waitFor(t, "/readyz")
+
+	count := func(email string) (n int) {
+		if err := admin.QueryRow(ctx, `SELECT count(*) FROM blog_subscription_requests WHERE email = $1`, email).Scan(&n); err != nil {
+			t.Fatalf("count request: %v", err)
+		}
+		return n
+	}
+	for deadline := time.Now().Add(15 * time.Second); count(expired) != 0; time.Sleep(100 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the boot purge never deleted the expired request\n%s", p.out)
+		}
+	}
+	if count(live) != 1 {
+		t.Error("the purge deleted a live request")
+	}
+	var members int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM blog_subscribers WHERE email = $1`, member).Scan(&members); err != nil || members != 1 {
+		t.Errorf("the purge touched blog_subscribers: count=%d err=%v", members, err)
+	}
+
+	body := fmt.Sprintf(`{"email":%q,"category_ids":[%q],"frequency":"monthly"}`, fresh, cat)
+	if code, out := p.call(t, http.MethodPost, "/internal/blog/subscriptions", body, qaViaGateway); code != http.StatusAccepted {
+		t.Fatalf("subscribe in a fork = %d (%s), want 202\n%s", code, out, p.out)
+	}
+	if count(fresh) != 1 {
+		t.Error("subscribe stored no request in a fork")
+	}
+	if code, out := p.call(t, http.MethodPost, "/internal/blog/subscriptions/confirm", fmt.Sprintf(`{"token":%q}`, token), qaViaGateway); code != http.StatusOK ||
+		!strings.Contains(out, `"unsubscribed_everywhere":false`) {
+		t.Fatalf("confirm in a fork = %d (%s), want 200 false\n%s", code, out, p.out)
+	}
+	var mode *string
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		var at *time.Time
+		if err := admin.QueryRow(ctx, `SELECT resend_delivered_at, delivery_mode FROM blog_subscribers WHERE email = $1`, live).Scan(&at, &mode); err != nil {
+			t.Fatalf("read subscriber: %v", err)
+		}
+		if at != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the blog sync job never completed in a fork\n%s", p.out)
+		}
+	}
+	if mode == nil || *mode != "fake" {
+		t.Errorf("delivery_mode = %v, want fake", mode)
+	}
+	if got := proxy.seen(); len(got) != 0 {
+		t.Errorf("the fork dialled %v, want no vendor call", got)
+	}
+	if out := p.out.String(); strings.Contains(out, live) || strings.Contains(out, fresh) || strings.Contains(out, token) {
+		t.Errorf("service output carries an email or token\n%s", out)
+	}
+}
+
+func TestNotificationsMain_PurgesExpiredRequestsWhileNewsletterIsOff(t *testing.T) {
+	admin, appURL := qaAdminPool(t)
+	bin := qaBuildNotifications(t)
+	ctx := t.Context()
+	suffix := uuid.NewString()[:8]
+	cat := "off-" + suffix
+	expired := "off-exp-" + suffix + "@worker.example"
+	h := sha256.Sum256([]byte("off-" + suffix))
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = admin.Exec(bg, `DELETE FROM blog_subscription_requests WHERE email = $1`, expired)
+		_, _ = admin.Exec(bg, `DELETE FROM blog_categories WHERE id = $1`, cat)
+	})
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO blog_categories (id, name, headline, icon, tone, position) VALUES ($1, 'Off', 'h', 'package', 0, $2)`, []any{cat, 2_000_000_000 + int(time.Now().UnixNano()%1_000_000)}},
+		{`INSERT INTO blog_subscription_requests (email, category_ids, frequency, token_hash, expires_at) VALUES ($1, ARRAY[$2]::text[], 'weekly', $3, now() - interval '1 second')`, []any{expired, cat, h[:]}},
+	} {
+		if _, err := admin.Exec(ctx, q.sql, q.args...); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	p := qaStart(t, bin, map[string]string{"DATABASE_URL": appURL})
+	p.waitFor(t, "/readyz")
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		var n int
+		if err := admin.QueryRow(ctx, `SELECT count(*) FROM blog_subscription_requests WHERE email = $1`, expired).Scan(&n); err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("newsletter off: the expired request was never purged\n%s", p.out)
+		}
 	}
 }

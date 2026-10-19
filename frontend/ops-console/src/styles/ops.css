@@ -185,3 +185,21 @@ pre.ops-json {
     grid-template-columns: minmax(0, 1fr) !important;
   }
 }
+.blog-back:hover {
+  color: var(--teal);
+}
+.blog-drop:hover {
+  border-color: var(--primary);
+}
+.blog-icon-btn:hover {
+  background: var(--bg-2);
+}
+.blog-icon-btn-danger:hover {
+  background: var(--status-red-bg);
+}
+.ops-cat-btn:hover {
+  background: var(--bg-3);
+}
+.ops-cat-del:hover {
+  background: var(--status-red-bg);
+}

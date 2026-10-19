@@ -35,6 +35,17 @@ ON CONFLICT (id) DO UPDATE SET kind = EXCLUDED.kind;
 INSERT INTO house_company (tenant_id) VALUES ('a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0')
 ON CONFLICT DO NOTHING;
 
+-- Seed author: a house member with no sign-in, so dev and PR envs show published posts.
+INSERT INTO memberships (tenant_id, user_id, role, display_name, email, status) VALUES
+    ('a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0', 'b1000000-0000-0000-0000-000000000001', 'reviewer', 'ASComply Editorial', 'blog-seed@ascomply.invalid', 'active')
+ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role, display_name = EXCLUDED.display_name, email = EXCLUDED.email, status = EXCLUDED.status;
+
+-- Authorless drafts only: a post a staff member unpublished keeps its author and stays a draft.
+UPDATE blog_posts SET status = 'published', author_id = 'b1000000-0000-0000-0000-000000000001',
+    author_name = 'ASComply Editorial', updated_at = now()
+WHERE id IN ('fifty-more-pilot', 'what-changes', 'recognition-learns', 'sage-connector', 'phased-rollout', 'approval-thresholds', 'sealed-rules', 'lagos-office', 'tin-errors', 'submission-retries', 'firm-portfolio', 'csv-import', 'si-app-partners', 'lagos-freight', 'evidence-bundles', 'readiness-assessment', 'records-retention', 'audit-log', 'consultant-programme', 'sahara-foods')
+  AND author_id IS NULL AND status = 'draft';
+
 -- Widened demo memberships: identity (display_name/email) + status, carried over
 -- from lib/members.ts's deleted SEED_*_MEMBERS. DO UPDATE (not DO NOTHING)
 -- converges the new columns on an already-seeded environment, including

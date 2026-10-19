@@ -1,4 +1,4 @@
-// go_pins_test.go pins go.mod's go version and the Dockerfile golang tag to one full x.y.z.
+// go_pins_test.go pins go.mod's go version and the golang tag of the root and blog Dockerfiles to one full x.y.z.
 package main
 
 import (
@@ -64,17 +64,19 @@ func TestGoPins_RepoAgree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dockerfile, err := os.ReadFile(filepath.Join(root, "Dockerfile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p := goPinProblems(string(goMod), string(dockerfile)); len(p) != 0 {
-		t.Errorf("go pin problems: %q", p)
-	}
-	v := goDirectiveRE.FindStringSubmatch(string(goMod))
-	f := golangFromRE.FindStringSubmatch(string(dockerfile))
-	if v == nil || f == nil || v[1] == "" || strings.TrimSuffix(f[1], "-alpine") != v[1] {
-		t.Errorf("control: parsed go version %q and Dockerfile tag %q, want equal and non-empty", v, f)
+	for _, df := range []string{"Dockerfile", "frontend/blog/Dockerfile"} {
+		dockerfile, err := os.ReadFile(filepath.Join(root, df))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p := goPinProblems(string(goMod), string(dockerfile)); len(p) != 0 {
+			t.Errorf("%s: go pin problems: %q", df, p)
+		}
+		v := goDirectiveRE.FindStringSubmatch(string(goMod))
+		f := golangFromRE.FindStringSubmatch(string(dockerfile))
+		if v == nil || f == nil || v[1] == "" || strings.TrimSuffix(f[1], "-alpine") != v[1] {
+			t.Errorf("%s: control: parsed go version %q and Dockerfile tag %q, want equal and non-empty", df, v, f)
+		}
 	}
 }
 

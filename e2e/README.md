@@ -31,11 +31,12 @@ shared `development` fleet (Decision `[fail-loud-targets]`, `targets.ts`):
 | landing         | `LANDING_URL`         | smoke, topology      |
 | ops-console     | `OPS_CONSOLE_URL`     | smoke                |
 | support-console | `SUPPORT_CONSOLE_URL` | smoke                |
-| library         | `LIBRARY_URL`         | smoke                |
+| library         | `LIBRARY_URL`         | smoke, topology      |
+| blog            | `BLOG_URL`            | smoke, api, topology |
 | app             | `APP_URL`             | smoke, topology      |
 | gateway         | `GATEWAY_URL`         | smoke, api, topology |
 
-CI sets all six for the whole `e2e` job, so this table matters mainly when running a
+CI sets all seven for the whole `e2e` job, so this table matters mainly when running a
 suite by hand. Most are resolved at module scope and throw during collection; a few
 resolve lazily and throw on the first test that needs them.
 
@@ -43,15 +44,15 @@ resolve lazily and throw on the first test that needs them.
 
 `playwright.config.ts` → `testDir: './smoke'`, `fullyParallel: true`.
 
-Covers four SPAs — `landing`, `ops-console`,
-`support-console` and `library`. It is no longer only a render check:
+Covers five SPAs — `landing`, `ops-console`,
+`support-console`, `library` and `blog`. It is no longer only a render check:
 
-- **Render** (`smoke/apps.ts`, `smoke.spec.ts`): landing and library are opened bare and each console on a
+- **Render** (`smoke/apps.ts`, `smoke.spec.ts`): landing, library and blog are opened bare and each console on a
   seeded real staff session (`staffSession.ts`, which needs `GATEWAY_URL`). Each asserts a
   signature element of its main view, failing on any console error or uncaught page error.
 - **Behaviour on backend-less surfaces** (`landing-nav.spec.ts`, `ops-console.spec.ts`): the
   landing nav's scroll-spy, and functional navigation over what the ops console is *for*. Its
-  data is mock with no backend, so these assertions pin fixture behaviour rather than a
+  data is mock except the Blog screen, so these assertions pin fixture behaviour rather than a
   contract — `.claude/rules/e2e.md` says when that is allowed. `support-console.spec.ts` drives
   the console's real screens.
 - **Boundary matrix** (`persona-boundaries.spec.ts`): every destination visited with
@@ -62,7 +63,7 @@ Covers four SPAs — `landing`, `ops-console`,
 
 ```bash
 pnpm --filter @invoice-os/e2e exec playwright install chromium   # first run only
-LANDING_URL=... OPS_CONSOLE_URL=... SUPPORT_CONSOLE_URL=... LIBRARY_URL=... APP_URL=... GATEWAY_URL=... \
+LANDING_URL=... OPS_CONSOLE_URL=... SUPPORT_CONSOLE_URL=... LIBRARY_URL=... BLOG_URL=... APP_URL=... GATEWAY_URL=... \
   pnpm --filter @invoice-os/e2e test:smoke    # `test` is the same command
 ```
 
@@ -88,7 +89,7 @@ GATEWAY_URL=... pnpm --filter @invoice-os/e2e test:api
 
 `playwright.topology.config.ts` → `testDir: './topology'`, `fullyParallel: false`,
 `workers: 1`, one Playwright project per unit in `topology/shards.ts`: `serial-lane`,
-`import-wizard`, `import-wizard-2`, `invoice-surfaces`, `ui-surfaces` and `library`. CI runs each unit on its own runner in parallel;
+`import-wizard`, `import-wizard-2`, `invoice-surfaces`, `ui-surfaces`, `library` and `blog`. CI runs each unit on its own runner in parallel;
 `--project=<unit>` runs one. A spec file not assigned to exactly one unit fails the run at
 config load.
 
@@ -161,7 +162,7 @@ ctl login firm --env pr-348 --role reviewer     # sign in, save a storage state,
 ctl measure '[data-testid="evidence-bundle-drawer"]' --props width,padding-left --viewport 1440
 ```
 
-- **`env <pr-N|production>`** resolves the six service URLs from Railway and lists dark domains in `dark` (exit 1). It reads `~/.railway/config.json`, whose token expires after about an hour: run `railway whoami`, else `railway login`.
+- **`env <pr-N|production>`** resolves the seven service URLs from Railway and lists dark domains in `dark` (exit 1). It reads `~/.railway/config.json`, whose token expires after about an hour: run `railway whoami`, else `railway login`.
 - **`login <firm|inhouse|developer|support> --env <pr-N> [--role admin|preparer|reviewer]`** creates the 8 demo accounts once per environment (admin, preparer and reviewer on tenants 1111 and 2222, plus a developer and a support staff account), signs in and saves a storage state. `--role` applies to `firm` and `inhouse` only. A repeat call reuses the account and the state (`reused: true`, `gatewayWrites: 0`). `--env production` exits 1: production has no demo account, so use read-only probes there.
 - **`measure <selector> --props <p1,p2> [--viewport <width>]`** prints the box and computed styles of every match in the open `playwright-cli` session, after animations settle. Write a custom property as `--props=--x`. A selector with no match exits 1. `--viewport` leaves the open page at that width.
 - **Session:** `--session`, else `$PLAYWRIGHT_CLI_SESSION`, else `default`.

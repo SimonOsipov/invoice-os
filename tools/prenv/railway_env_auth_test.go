@@ -150,7 +150,9 @@ case "$q" in
         continue
       fi
       st="$dir/store-$s.json"; [ -f "$st" ] || echo '{}' > "$st"
-      printf '%s' "$data" | jq -c --arg v "$v" --slurpfile st "$st" '$st[0] + .variables[$v].variables' > "$st.tmp" && mv "$st.tmp" "$st"
+      # keepref-on-blank models Railway: a "" written over a reference leaves the reference.
+      kr=0; [ -f "$dir/keepref-on-blank" ] && kr=1
+      printf '%s' "$data" | jq -c --arg v "$v" --argjson kr "$kr" --slurpfile st "$st" '$st[0] as $o | $o + (.variables[$v].variables | with_entries(select(($kr == 1 and .value == "" and (($o[.key] // "") | tostring | startswith("${{"))) | not)))' > "$st.tmp" && mv "$st.tmp" "$st"
       out=$(printf '%s' "$out" | jq -c --arg k "$k" '. + {($k): true}')
     done
     if [ -z "$failed" ]; then printf '{"data":%s}' "$out"; exit 0; fi
@@ -158,6 +160,21 @@ case "$q" in
     [ "$mode" = abort ] && out=null
     printf '%s' "$out" | jq -c --arg k "$failed" --rawfile m "$msg" \
       '{data: ., errors: [{message: ($m | rtrimstr("\n")), path: [$k], extensions: {code: "INTERNAL_SERVER_ERROR", traceId: "'"$trace"'"}}]}' ;;
+  *"mutation varsDelete("*)
+    # One dK: variableDelete(input: $dK) per name; touches wrote. delete-<NAME>.fail fails the transport.
+    for n in $(printf '%s' "$data" | jq -r '.variables | to_entries[] | select(.key | test("^d[0-9]+$")) | .value.name'); do
+      if [ -f "$dir/delete-$n.fail" ]; then cat "$dir/delete-$n.fail" >&2; exit 22; fi
+    done
+    : > "$dir/wrote"
+    out='{}'
+    for k in $(printf '%s' "$data" | jq -r '.variables | keys[] | select(test("^d[0-9]+$"))'); do
+      s=$(printf '%s' "$data" | jq -r --arg k "$k" '.variables[$k].serviceId')
+      n=$(printf '%s' "$data" | jq -r --arg k "$k" '.variables[$k].name')
+      st="$dir/store-$s.json"; [ -f "$st" ] || echo '{}' > "$st"
+      jq -c --arg n "$n" 'del(.[$n])' "$st" > "$st.tmp" && mv "$st.tmp" "$st"
+      out=$(printf '%s' "$out" | jq -c --arg k "$k" '. + {($k): true}')
+    done
+    printf '{"data":%s}' "$out" ;;
   *"variableUpsert("*)
     n=$(printf '%s' "$data" | jq -r '.variables.input.name')
     # upsert-<NAME>.fail fails the transport; upsert-<NAME>.json is the reply and nothing is stored.

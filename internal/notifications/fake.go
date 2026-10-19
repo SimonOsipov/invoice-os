@@ -12,3 +12,9 @@ func (FakeHubSpot) OpenDemoDeal(context.Context, Contact, string) error { return
 type FakeResend struct{}
 
 func (FakeResend) Sync(context.Context, Contact, bool) error { return nil }
+
+type FakeBlogResend struct{}
+
+func (FakeBlogResend) SyncBlog(context.Context, BlogSubscriber) error { return nil }
+
+func (FakeBlogResend) ContactUnsubscribed(context.Context, string) (bool, error) { return false, nil }

@@ -421,13 +421,14 @@ var upVerdicts = map[string]string{
 	"ops-console":     "SPA build",
 	"support-console": "SPA build",
 	"library":         "SPA build",
+	"blog":            "SPA build",
 }
 
 func TestRailwayUpCI_LostPollIsToleratedForEveryService(t *testing.T) {
 	t.Parallel()
 	services := upServices(t)
-	if len(services) != 16 {
-		t.Fatalf("dev-env.yml deploys %d services through railway-up-ci.sh, want 16: %q", len(services), services)
+	if len(services) != 17 {
+		t.Fatalf("dev-env.yml deploys %d services through railway-up-ci.sh, want 17: %q", len(services), services)
 	}
 	for _, svc := range services {
 		t.Run(svc, func(t *testing.T) {

@@ -14,7 +14,10 @@ export const PRODUCTION_HOSTNAMES: readonly string[] = ['www.ascomply.com']
 /** The Feature Library's host. */
 export const LIBRARY_HOSTNAMES: readonly string[] = ['library.ascomply.com']
 
-/** The parent domain the production landing and Library share. */
+/** The Blog's host. */
+export const BLOG_HOSTNAMES: readonly string[] = ['blog.ascomply.com']
+
+/** The parent domain the production landing, Library and Blog share. */
 export const SHARED_COOKIE_DOMAIN = 'ascomply.com'
 
 export type HubSpotTarget = { portalId: string; formGuid: string }

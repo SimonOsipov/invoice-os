@@ -3,6 +3,10 @@ package document_test
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -122,5 +126,95 @@ func TestClientScope_FullAccessReadsAnUnlinkedUpload(t *testing.T) {
 				t.Errorf("GetLinked(%s) as %s = %q, %v, want found", label, name, got.ID, err)
 			}
 		}
+	}
+}
+
+func TestClientScope_LinkIsAnyVisibleInvoiceOrBatch(t *testing.T) {
+	f := newCSFixture(t)
+	both := csDocument(t, f.super, f.tenant)
+	csExec(t, f.super, `INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-BOTH-A', $3)`, f.tenant, f.entA, both)
+	csExec(t, f.super, `INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-BOTH-B', $3)`, f.tenant, f.entB, both)
+	onlyB := csDocument(t, f.super, f.tenant)
+	csExec(t, f.super, `INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-ONLY-B', $3)`, f.tenant, f.entB, onlyB)
+	bothMixed := csDocument(t, f.super, f.tenant)
+	csExec(t, f.super, `INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-MIX-B', $3)`, f.tenant, f.entB, bothMixed)
+	csExec(t, f.super, `INSERT INTO import_batches (tenant_id, entity_id, document_id, status, rows_total, rows_valid, rows_invalid, errors)
+		VALUES ($1, $2, $3, 'completed', 1, 1, 0, '[]'::jsonb)`, f.tenant, f.entA, bothMixed)
+	noClients := csMember(t, f.super, f.tenant, "reviewer", false)
+
+	for name, id := range map[string]string{"linked to A's and B's invoice": both, "B's invoice plus A's batch": bothMixed} {
+		if got, err := f.store.GetLinked(f.limited, id); err != nil || got.ID != id {
+			t.Errorf("GetLinked(%s) as a reviewer limited to A = %q, %v, want found", name, got.ID, err)
+		}
+	}
+	if _, err := f.store.GetLinked(f.limited, onlyB); !errors.Is(err, document.ErrNotFound) {
+		t.Errorf("GetLinked(linked only by B's invoice): err = %v, want ErrNotFound", err)
+	}
+	for name, id := range map[string]string{"X (A's invoice)": f.docX, "W (A's batch)": f.docW, "Z (unlinked)": f.docZ} {
+		if _, err := f.store.GetLinked(noClients, id); !errors.Is(err, document.ErrNotFound) {
+			t.Errorf("GetLinked(%s) as a reviewer with no clients: err = %v, want ErrNotFound", name, err)
+		}
+	}
+	if _, err := f.store.GetLinked(f.limited, uuid.NewString()); !errors.Is(err, document.ErrNotFound) {
+		t.Errorf("GetLinked(unknown id): err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestClientScope_InHouseMemberReadsAnUnlinkedUpload(t *testing.T) {
+	f := newCSFixture(t)
+	csExec(t, f.super, `UPDATE tenants SET kind = 'in_house' WHERE id = $1`, f.tenant)
+	inHouse := csMember(t, f.super, f.tenant, "reviewer", false)
+	if got, err := f.store.GetLinked(inHouse, f.docZ); err != nil || got.ID != f.docZ {
+		t.Errorf("GetLinked(unlinked) as an in-house reviewer = %q, %v, want found", got.ID, err)
+	}
+}
+
+func TestClientScope_DownloadRouteAnswersOneNotFoundAndAuditsOnlyServedReads(t *testing.T) {
+	f := newCSFixture(t)
+	objects := &fakeObjects{}
+	svc := document.NewService(f.store, objects)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/documents/{id}", document.DownloadHandler(svc.OpenLinked, nil))
+	get := func(ctx context.Context, id string) *httptest.ResponseRecorder {
+		objects.getObject = document.Object{Body: io.NopCloser(strings.NewReader("hello world")), Size: 11}
+		r := httptest.NewRequest("GET", "/v1/documents/"+id, nil).WithContext(ctx)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+		return rec
+	}
+
+	var refused []string
+	for name, id := range map[string]string{"Y, B's batch": f.docY, "Z, unlinked": f.docZ, "unknown": uuid.NewString()} {
+		rec := get(f.limited, id)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("limited reviewer, %s: status = %d, want 404", name, rec.Code)
+		}
+		refused = append(refused, rec.Body.String())
+	}
+	if len(refused) != 3 || refused[0] != refused[1] || refused[1] != refused[2] || !strings.Contains(refused[0], "not found") {
+		t.Errorf("refusal bodies = %q, want one identical not-found body", refused)
+	}
+	if n := len(objects.getKeys); n != 0 {
+		t.Errorf("object-store reads for refused ids = %d, want 0", n)
+	}
+	if n := auditCount(t, f.app, f.tenant, "document.read"); n != 0 {
+		t.Errorf("document.read rows after refusals = %d, want 0", n)
+	}
+	if rec := get(f.limited, "nope"); rec.Code != http.StatusBadRequest {
+		t.Errorf("malformed id: status = %d, want 400", rec.Code)
+	}
+
+	for name, id := range map[string]string{"X, A's invoice": f.docX, "W, A's batch": f.docW} {
+		if rec := get(f.limited, id); rec.Code != http.StatusOK || rec.Body.String() != "hello world" {
+			t.Errorf("limited reviewer, %s: %d %q, want 200 with the bytes", name, rec.Code, rec.Body.String())
+		}
+	}
+	for name, ctx := range map[string]context.Context{"admin": f.admin, "All clients": f.allCli} {
+		if rec := get(ctx, f.docZ); rec.Code != http.StatusOK {
+			t.Errorf("%s reading the unlinked upload: status = %d, want 200", name, rec.Code)
+		}
+	}
+	if n := auditCount(t, f.app, f.tenant, "document.read"); n != 4 {
+		t.Errorf("document.read rows = %d, want 4 (two limited reads, two full-access reads)", n)
 	}
 }

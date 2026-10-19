@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -13,26 +14,31 @@ import (
 	"testing"
 )
 
-const railwayTokenRef = "secrets.RAILWAY_API_TOKEN"
-
 var (
-	// Flags of pnpm, npm and yarn that consume the next field as their value.
+	// Flags of the package managers that consume the next field as their value.
 	installValueFlags = map[string]bool{
 		"--filter": true, "-F": true, "--dir": true, "-C": true, "--prefix": true, "--cwd": true,
 		"--workspace": true, "--registry": true, "--reporter": true, "--config": true,
+		"--store-dir": true, "--cache": true, "--cache-dir": true, "--loglevel": true, "--userconfig": true,
 	}
-	jsInstallSubs  = []string{"install", "i", "ci", "add", "update", "up", "upgrade", "rebuild"}
-	trustedOnRE    = regexp.MustCompile(`\b(pull_request_target|workflow_run|workflow_call)\b`)
-	secretsInherit = regexp.MustCompile(`^secrets:\s*inherit\s*$`)
+	jsInstallSubs = []string{"install", "i", "ci", "add", "update", "up", "upgrade", "rebuild", "install-test", "it", "ic", "cit", "install-ci-test"}
+	// Words that run the next command: its tool is the next field.
+	wrapperWords = map[string]bool{"corepack": true, "env": true, "command": true, "nohup": true}
+	pythonRE     = regexp.MustCompile(`^python[0-9.]*$`)
+	pipRE        = regexp.MustCompile(`^pip[0-9.]*$`)
+	// The secrets context is case-insensitive and takes the bracket form.
+	tokenRefRE     = regexp.MustCompile(`(?i)\bsecrets(\.|\[\s*['"])RAILWAY_API_TOKEN\b`)
+	trustedOnRE    = regexp.MustCompile(`(?i)\b(pull_request_target|workflow_run|workflow_call)\b`)
+	secretsInherit = regexp.MustCompile(`^secrets:\s*['"]?inherit['"]?\s*$`)
 	localUses      = regexp.MustCompile(`^uses:\s*['"]?\./`)
 )
 
 // subcommandOf returns the first field that is not a flag, skipping the value of a value flag, and the fields after it.
-func subcommandOf(fields []string) (string, []string) {
+func subcommandOf(fields []string, extraValueFlags ...string) (string, []string) {
 	for i := 0; i < len(fields); i++ {
 		f := fields[i]
 		switch {
-		case installValueFlags[f]:
+		case installValueFlags[f] || slices.Contains(extraValueFlags, f):
 			i++
 		case strings.HasPrefix(f, "-"):
 		default:
@@ -42,29 +48,58 @@ func subcommandOf(fields []string) (string, []string) {
 	return "", nil
 }
 
+// stripWrappers drops shell lead words, assignments, sudo, corepack and `python -m` so f[0] is the tool.
+func stripWrappers(f []string) []string {
+	for len(f) > 0 {
+		f[0] = strings.TrimLeft(f[0], "(")
+		switch {
+		case f[0] == "":
+			f = f[1:]
+		case f[0] == "sudo":
+			f = f[1:]
+			for len(f) > 0 && strings.HasPrefix(f[0], "-") {
+				n := 1
+				if f[0] == "-u" || f[0] == "-g" {
+					n = 2
+				}
+				f = f[min(n, len(f)):]
+			}
+		case shellLeadWords[f[0]] || shellAssignment.MatchString(f[0]) || wrapperWords[f[0]]:
+			f = f[1:]
+		case pythonRE.MatchString(f[0]) && len(f) > 2 && f[1] == "-m":
+			f = f[2:]
+		default:
+			return f
+		}
+	}
+	return f
+}
+
 // classifyInstall reports whether cmd installs dependencies and whether it passes --ignore-scripts.
 func classifyInstall(cmd string) (install, safe bool) {
-	f := strings.Fields(cmd)
-	for len(f) > 0 && (shellLeadWords[f[0]] || shellAssignment.MatchString(f[0])) {
-		f = f[1:]
-	}
+	f := stripWrappers(strings.Fields(strings.TrimRight(cmd, ") ")))
 	if len(f) == 0 {
 		return false, false
 	}
-	sub, rest := subcommandOf(f[1:])
-	switch f[0] {
-	case "pnpm", "npm", "bun":
+	name := path.Base(f[0])
+	var extra []string
+	if name == "npm" {
+		extra = []string{"-w"}
+	}
+	sub, rest := subcommandOf(f[1:], extra...)
+	switch {
+	case name == "pnpm" || name == "npm" || name == "bun":
 		install = slices.Contains(jsInstallSubs, sub)
-	case "yarn":
+	case name == "yarn":
 		install = sub == "" || slices.Contains(jsInstallSubs, sub)
-	case "pip", "pip3":
+	case pipRE.MatchString(name):
 		return sub == "install", false
-	case "poetry":
-		return sub == "install" || sub == "add" || sub == "update", false
-	case "uv":
-		if sub == "pip" {
-			sub, _ = subcommandOf(rest)
-			return sub == "install" || sub == "sync", false
+	case name == "poetry":
+		return sub == "install" || sub == "add" || sub == "update" || sub == "sync", false
+	case name == "uv":
+		if sub == "pip" || sub == "tool" {
+			sub2, _ := subcommandOf(rest)
+			return sub2 == "install" || sub2 == "sync", false
 		}
 		return sub == "sync" || sub == "add", false
 	}
@@ -79,7 +114,7 @@ type tokenInstall struct {
 // tokenInstalls lists every dependency install in a job that holds the Railway token at workflow, job or step level.
 func tokenInstalls(yaml string) []tokenInstall {
 	lines := strings.Split(yaml, "\n")
-	hasToken := func(l string) bool { return strings.Contains(l, railwayTokenRef) }
+	hasToken := tokenRefRE.MatchString
 	workflowToken := slices.ContainsFunc(blockLines(lines, 0, "env"), hasToken)
 	var out []tokenInstall
 	for _, job := range workflowJobsOf(yaml) {
@@ -356,6 +391,50 @@ func TestInstallTokenFaultsSeeEachShape(t *testing.T) {
 			"uv sync":                               1,
 			"poetry install":                        1,
 			"pip --version":                         0,
+			"uv pip install x":                      1,
+			"uv tool install x":                     1,
+			"uv tool run x":                         0,
+			"uv run pytest":                         0,
+			"poetry sync":                           1,
+			"poetry lock":                           0,
+		}},
+		{"wrapped_install", map[string]int{
+			"python -m pip install -r r.txt":                 1,
+			"python3 -m pip install x":                       1,
+			"python3.12 -m pip install x":                    1,
+			"python -m pip --version":                        0,
+			"python script.py install":                       0,
+			"sudo pip install x":                             1,
+			"sudo -E pnpm install":                           1,
+			"sudo -u root pip install x":                     1,
+			"sudo pnpm install --ignore-scripts":             0,
+			"corepack pnpm install":                          1,
+			"corepack pnpm install --ignore-scripts":         0,
+			"corepack enable":                                0,
+			"env CI=1 pnpm install":                          1,
+			"(pnpm install)":                                 1,
+			"./node_modules/.bin/pnpm install":               1,
+			"/usr/bin/pip3 install x":                        1,
+			"pnpm --filter x exec playwright install chrome": 0,
+		}},
+		{"value_flag_before_install", map[string]int{
+			"npm -w pkg install":                   1,
+			"npm -w pkg install --ignore-scripts":  0,
+			"npm -w pkg test":                      0,
+			"pnpm -w install":                      1,
+			"pnpm --store-dir /x install":          1,
+			"npm --cache /x ci":                    1,
+			"pip --cache-dir /x install y":         1,
+			"npm --workspace pkg install":          1,
+			"npm install-test":                     1,
+			"npm cit":                              1,
+			"bun i":                                1,
+			"bun add x":                            1,
+			"pnpm install --ignore-scripts=false":  1,
+			"pnpm install --no-ignore-scripts":     1,
+			"pnpm install --ignore-scripts=true":   0,
+			"pnpm run build":                       0,
+			"pnpm --filter x run install-browsers": 0,
 		}},
 	}
 	for _, s := range shapes {
@@ -378,6 +457,64 @@ func TestInstallTokenFaultsSeeEachShape(t *testing.T) {
 		one(t, installTokenFaults(job("true")), "a")
 		if got := installTokenFaults(job("false")); len(got) != 0 {
 			t.Fatalf("run_install: false faulted: %q", got)
+		}
+	})
+
+	t.Run("token_reference_forms", func(t *testing.T) {
+		t.Parallel()
+		job := func(env string) string {
+			return "on: pull_request\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pnpm install\n        env:\n          X: " + env + "\n"
+		}
+		for _, ref := range []string{
+			"${{ secrets.RAILWAY_API_TOKEN }}",
+			"${{ secrets['RAILWAY_API_TOKEN'] }}",
+			`${{ secrets["RAILWAY_API_TOKEN"] }}`,
+			"${{ secrets.railway_api_token }}",
+			"${{ github.event_name != 'workflow_dispatch' && secrets.RAILWAY_API_TOKEN || '' }}",
+		} {
+			one(t, installTokenFaults(job(ref)), "a")
+		}
+		if got := installTokenFaults(job("${{ secrets.OTHER_TOKEN }}")); len(got) != 0 {
+			t.Fatalf("another secret faulted: %q", got)
+		}
+	})
+	t.Run("comments_do_not_count", func(t *testing.T) {
+		t.Parallel()
+		head := "on: pull_request\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n"
+		const token = "        env:\n          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}\n"
+		// the flag only in a trailing comment is not a flag
+		one(t, installTokenFaults(head+"      - run: pnpm install # --ignore-scripts\n"+token), "a")
+		if got := installTokenFaults(head + "      - run: pnpm install --ignore-scripts # note\n" + token); len(got) != 0 {
+			t.Fatalf("a flagged install with a trailing comment faulted: %q", got)
+		}
+		// a token only in a comment does not make the job a token job
+		if got := installTokenFaults(head + "      - run: pnpm install\n        # RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}\n"); len(got) != 0 {
+			t.Fatalf("a token in a comment faulted: %q", got)
+		}
+		// an install named only in a shell comment is not an install
+		if got := installTokenFaults(head + "      - run: |\n          # pnpm install\n          bash x.sh\n" + token); len(got) != 0 {
+			t.Fatalf("an install in a shell comment faulted: %q", got)
+		}
+		one(t, installTokenFaults(head+"      - run: |\n          # pnpm install --ignore-scripts\n          pnpm install\n"+token), "a")
+	})
+	t.Run("real_e2e_playwright_install_is_not_an_install", func(t *testing.T) {
+		t.Parallel()
+		var seen int
+		for _, job := range workflowJobsOf(devEnvE2EInstall(t, true)) {
+			if job.name != "e2e" {
+				continue
+			}
+			for _, s := range job.steps() {
+				for _, cmd := range invocations(s.keys["run"], "playwright install") {
+					seen++
+					if install, _ := classifyInstall(cmd); install {
+						t.Errorf("%q classified as an install", cmd)
+					}
+				}
+			}
+		}
+		if seen == 0 {
+			t.Fatal("control: the e2e job runs no playwright install command")
 		}
 	})
 }
@@ -434,6 +571,39 @@ func TestTrustedTriggerFaultsSeeEachShape(t *testing.T) {
 		}
 		one(t, "on:\n  pull_request:\n  pull_request_target:\n"+jobs)
 	})
+	t.Run("comments_inside_the_on_block", func(t *testing.T) {
+		t.Parallel()
+		for _, on := range []string{
+			"on:\n  pull_request: # pull_request_target is off\n  # workflow_run is off\n",
+			"on: pull_request # workflow_call is off\n",
+			"on:\n  pull_request:\n    types: [closed] # not workflow_run\n",
+		} {
+			if got := trustedTriggerFaults(on + jobs); len(got) != 0 {
+				t.Fatalf("a comment in %q faulted: %q", on, got)
+			}
+		}
+		one(t, "on:\n  pull_request: # pull_request_target is off\n  pull_request_target:\n"+jobs)
+		one(t, "on: [pull_request, workflow_call] # note\n"+jobs)
+	})
+	t.Run("other_trigger_forms", func(t *testing.T) {
+		t.Parallel()
+		one(t, "on:\n  workflow_run:\n    workflows: [CI]\n"+jobs)
+		one(t, "on: pull_request_target\n"+jobs)
+		one(t, "on:\n  Pull_Request_Target:\n"+jobs)
+		one(t, "on: pull_request\njobs:\n  a:\n    uses: o/r/.github/workflows/x.yml@main\n    secrets: \"inherit\"\n")
+		one(t, "on: pull_request\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: \"./.github/actions/x\"\n")
+		one(t, "on: pull_request\njobs:\n  a:\n    uses: ./.github/workflows/x.yml\n")
+		// a trailing comment does not hide an inherited secret or a local action
+		one(t, "on: pull_request\njobs:\n  a:\n    uses: o/r/.github/workflows/x.yml@main\n    secrets: inherit # why\n")
+		one(t, "on: pull_request\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ./.github/actions/x # local\n")
+		if got := trustedTriggerFaults("on: pull_request\njobs:\n  a:\n    # secrets: inherit\n    runs-on: ubuntu-latest\n    steps:\n      # - uses: ./.github/actions/x\n      - run: echo hi\n"); len(got) != 0 {
+			t.Fatalf("commented-out lines faulted: %q", got)
+		}
+		// an event name in a condition or an echo is not a trigger
+		if got := trustedTriggerFaults("on: pull_request\njobs:\n  a:\n    if: github.event_name == 'workflow_run'\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo workflow_call\n"); len(got) != 0 {
+			t.Fatalf("a condition or an echo faulted: %q", got)
+		}
+	})
 }
 
 func TestGoFilterCoversEveryTokenWorkflow(t *testing.T) {
@@ -442,7 +612,7 @@ func TestGoFilterCoversEveryTokenWorkflow(t *testing.T) {
 	requireScanned(t, names)
 	var tokenFiles []string
 	for _, n := range names {
-		if slices.ContainsFunc(stripHashComments(strings.Split(texts[n], "\n")), func(l string) bool { return strings.Contains(l, railwayTokenRef) }) {
+		if slices.ContainsFunc(stripHashComments(strings.Split(texts[n], "\n")), tokenRefRE.MatchString) {
 			tokenFiles = append(tokenFiles, n)
 		}
 	}
@@ -458,6 +628,18 @@ func TestGoFilterCoversEveryTokenWorkflow(t *testing.T) {
 		t.Error(f)
 	}
 
+	t.Run("listed_under_another_filter", func(t *testing.T) {
+		t.Parallel()
+		const filters = "      - uses: dorny/paths-filter@v3\n        with:\n          filters: |\n"
+		const goOnly = "            go:\n              - '.github/workflows/dev-env-sweeper.yml'\n"
+		const other = "            other:\n              - '.github/workflows/dev-env-sweeper.yml'\n"
+		if got := goFilterFaults(filters+goOnly, []string{"dev-env-sweeper.yml"}); len(got) != 0 {
+			t.Fatalf("a listed workflow faulted: %q", got)
+		}
+		if got := goFilterFaults(filters+"            go:\n              - 'tools/**'\n"+other, []string{"dev-env-sweeper.yml"}); len(got) != 1 {
+			t.Fatalf("a workflow under another filter key: faults = %q, want 1", got)
+		}
+	})
 	t.Run("mutate_filter_drops_a_workflow", func(t *testing.T) {
 		t.Parallel()
 		const (

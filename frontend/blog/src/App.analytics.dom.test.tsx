@@ -96,4 +96,17 @@ describe('blog events', () => {
     click(crumb('Blog'))
     expect((window as TestWindow).dataLayer).toBeUndefined()
   })
+
+  it('EV-05 Book the Demo sends demo_open with cta_location blog', async () => {
+    localStorage.setItem(KEY, GRANT)
+    await mount('/')
+    click(byText('aside a', 'Book the Demo'))
+    expect(events()).toEqual([['event', 'demo_open', { cta_location: 'blog' }]])
+  })
+
+  it('EV-06 Book the Demo sends nothing before consent', async () => {
+    await mount('/')
+    click(byText('aside a', 'Book the Demo'))
+    expect((window as TestWindow).dataLayer).toBeUndefined()
+  })
 })

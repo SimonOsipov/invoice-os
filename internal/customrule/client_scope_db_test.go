@@ -92,3 +92,17 @@ func TestClientScope_ARuleMovedFromFirmWideToAnotherClientLeavesTheList(t *testi
 		t.Errorf("limited reviewer List = %v, want none", got)
 	}
 }
+
+func TestClientScope_ARuleMovedIntoTheSetOrToFirmWideAppears(t *testing.T) {
+	super, app := dbTestPools(t)
+	x := newCSRules(t, super, app, "CS rules moved in")
+	into, wide := uuid.NewString(), uuid.NewString()
+	insertRev(t, super, seedRev{Tenant: x.ws.id, RuleID: into, Revision: 1, Entity: &x.entB, Severity: "error", Message: "into-a", Enabled: true})
+	insertRev(t, super, seedRev{Tenant: x.ws.id, RuleID: into, Revision: 2, Entity: &x.entA, Severity: "error", Message: "into-a", Enabled: true})
+	insertRev(t, super, seedRev{Tenant: x.ws.id, RuleID: wide, Revision: 1, Entity: &x.entB, Severity: "error", Message: "to-firm", Enabled: true})
+	insertRev(t, super, seedRev{Tenant: x.ws.id, RuleID: wide, Revision: 2, Severity: "error", Message: "to-firm", Enabled: true})
+
+	if got, want := x.listed(t, x.limited), []string{"into-a@2", "to-firm@2"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("limited reviewer List = %v, want %v", got, want)
+	}
+}

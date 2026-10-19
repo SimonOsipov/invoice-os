@@ -3,6 +3,9 @@ package approval
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -78,5 +81,53 @@ func TestClientScope_DecideOnAnotherClientIsNotFound(t *testing.T) {
 	}
 	if _, err := store.DecideSeam(x.limited, x.f.invoiceID, "approved", ""); err != nil {
 		t.Errorf("DecideSeam(own invoice) control: %v", err)
+	}
+}
+
+func TestClientScope_RunAndDecideRoutesAnswerOneNotFound(t *testing.T) {
+	super, app := dbTestPools(t)
+	x := newCSApproval(t, super, app, "CS approval 404")
+	foreign := newApproveFixture(t, super, app, "CS approval foreign", "cs-role-foreign")
+	store := NewStore(app, stubFingerprinter, nil)
+	routes := map[string]http.HandlerFunc{"GET approval": RunHandler(store.ApprovalRun, nil), "POST approvals": DecideHandler(store.DecideSeam, nil)}
+
+	serve := func(h http.HandlerFunc, method, id string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "/", strings.NewReader(`{"decision":"approved"}`)).WithContext(x.limited)
+		r.SetPathValue("id", id)
+		w := httptest.NewRecorder()
+		h(w, r)
+		return w
+	}
+	for name, h := range routes {
+		method := strings.Fields(name)[0]
+		outside := serve(h, method, x.invB)
+		if outside.Code != http.StatusNotFound || !strings.Contains(outside.Body.String(), "no approval run for this invoice") {
+			t.Errorf("%s on client B's invoice: %d %s, want 404 no approval run for this invoice", name, outside.Code, outside.Body.String())
+			continue
+		}
+		for who, id := range map[string]string{"unknown": uuid.NewString(), "another tenant's": foreign.invoiceID} {
+			if got := serve(h, method, id); got.Code != outside.Code || got.Body.String() != outside.Body.String() {
+				t.Errorf("%s on %s id: %d %s, differs from outside-the-set %d %s", name, who, got.Code, got.Body.String(), outside.Code, outside.Body.String())
+			}
+		}
+	}
+	if n := len(decisionsForRun(t, super, x.runB)); n != 0 {
+		t.Errorf("decision rows for client B's run = %d, want 0", n)
+	}
+	if w := serve(routes["GET approval"], "GET", x.f.invoiceID); w.Code != http.StatusOK {
+		t.Errorf("GET approval on own invoice: %d %s, want 200", w.Code, w.Body.String())
+	}
+}
+
+func TestClientScope_AdminAndAllClientsMemberStillReadEveryRun(t *testing.T) {
+	super, app := dbTestPools(t)
+	x := newCSApproval(t, super, app, "CS approval full")
+	store := NewStore(app, stubFingerprinter, nil)
+	for _, role := range []string{"admin", "preparer"} {
+		ctx, _ := callerCtx(t, super, x.f.tenantID, role, "active")
+		run, err := store.ApprovalRun(ctx, x.invB)
+		if err != nil || run.RunID != x.runB {
+			t.Errorf("%s ApprovalRun(client B's invoice) = %q, %v, want run %s", role, run.RunID, err, x.runB)
+		}
 	}
 }

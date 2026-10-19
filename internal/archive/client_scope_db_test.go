@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -75,5 +78,43 @@ func TestClientScope_BundlePreviewAndRegisterRefuseAnotherClient(t *testing.T) {
 	}
 	if n := exported(); n != 1 {
 		t.Errorf("invoice_register.exported rows after the control = %d, want 1", n)
+	}
+
+	// Each route answers one 404 body for a client outside the set, an unknown id and another tenant's.
+	var foreign string
+	mustCommitFixture(t, super, func(tx pgx.Tx) string {
+		tid := mustCreateTenant(t, tx, "archive-client-scope-foreign")
+		foreign = mustCreateEntity(t, tx, tid, "Foreign", "")
+		return tid
+	})
+	now := time.Now().UTC()
+	routes := map[string]struct {
+		h        http.HandlerFunc
+		from, to string
+	}{
+		"bundle":   {DownloadHandler(s.Assemble, nil), now.Add(-time.Hour).Format(time.RFC3339), now.Add(time.Hour).Format(time.RFC3339)},
+		"preview":  {PreviewHandler(s.Preview, nil), now.Add(-time.Hour).Format(time.RFC3339), now.Add(time.Hour).Format(time.RFC3339)},
+		"register": {RegisterHandler(s.Register, nil), now.AddDate(0, 0, -1).Format(time.DateOnly), now.AddDate(0, 0, 1).Format(time.DateOnly)},
+	}
+	for name, rt := range routes {
+		serve := func(entity string) *httptest.ResponseRecorder {
+			q := url.Values{"entity_id": {entity}, "from": {rt.from}, "to": {rt.to}}
+			w := httptest.NewRecorder()
+			rt.h(w, httptest.NewRequest(http.MethodGet, "/?"+q.Encode(), nil).WithContext(ctx))
+			return w
+		}
+		outside := serve(entB)
+		if outside.Code != http.StatusNotFound {
+			t.Errorf("%s for client B: %d %s, want 404", name, outside.Code, outside.Body.String())
+			continue
+		}
+		for who, id := range map[string]string{"unknown": uuid.NewString(), "another tenant's": foreign} {
+			if got := serve(id); got.Code != outside.Code || got.Body.String() != outside.Body.String() {
+				t.Errorf("%s for %s id: %d %s, differs from outside-the-set %d %s", name, who, got.Code, got.Body.String(), outside.Code, outside.Body.String())
+			}
+		}
+		if w := serve(entA); w.Code != http.StatusOK {
+			t.Errorf("%s for client A control: %d, want 200", name, w.Code)
+		}
 	}
 }

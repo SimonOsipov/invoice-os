@@ -547,6 +547,36 @@ func TestRLS_ChildScopeInsertInsideTheSetAllowed(t *testing.T) {
 	}
 }
 
+// A policy WITH CHECK that kept only the scope term would pass this INSERT and hide it from reads.
+func TestRLS_ChildScopeInsertForAnotherTenantRefused(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	one, two := cpSeed(t), cpSeed(t)
+	insert := func(tc cpInsert) error {
+		return csTx(one.ten.id, csScope("*"), func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, tc.sql, tc.args...)
+			return e
+		})
+	}
+
+	own := cpInserts(one, one.a, one.ten.clients[0].invoice, one.doc["X"])
+	foreign := cpInserts(two, two.b, two.ten.clients[1].invoice, two.doc["Y"])
+	if len(own) != 4 || len(foreign) != 4 {
+		t.Fatalf("insert cases = %d own, %d foreign, want 4 each", len(own), len(foreign))
+	}
+	for i, tc := range foreign {
+		t.Run(tc.table, func(t *testing.T) {
+			if err := insert(own[i]); err != nil {
+				t.Fatalf("control: INSERT into %s for the caller's own tenant under *: %v", tc.table, err)
+			}
+			csAssertRLSRefusal(t, "INSERT into "+tc.table+" for another tenant under *", insert(tc))
+			if n := mustCount(t, h.super, `SELECT count(*) FROM `+tc.table+` WHERE id = $1`, tc.args[0]); n != 0 {
+				t.Errorf("%s: rows left by the refused INSERT = %d, want 0", tc.table, n)
+			}
+		})
+	}
+}
+
 // Control: green before the migration.
 func TestRLS_ChildScopeKeepsTheTenantPredicate(t *testing.T) {
 	requireHarness(t)
@@ -627,8 +657,12 @@ func TestRLS_ChildScopePoliciesDeclared(t *testing.T) {
 			continue
 		}
 		if p := ps[0]; p.cmd != "SELECT" || p.roles != want.role || p.qual == nil || *p.qual != "true" {
-			t.Errorf("%s on submission_jobs = cmd %s roles %s qual %v, want SELECT for %s USING true",
-				want.name, p.cmd, p.roles, p.qual, want.role)
+			qual := "<none>"
+			if p.qual != nil {
+				qual = *p.qual
+			}
+			t.Errorf("%s on submission_jobs = cmd %s roles %s qual %s, want SELECT for %s USING true",
+				want.name, p.cmd, p.roles, qual, want.role)
 		}
 	}
 
@@ -666,8 +700,29 @@ func TestRLS_ChildScopeMigrationIsReversible(t *testing.T) {
 		return out
 	}
 
+	// Everything but the qual: a Down that drops and recreates a policy changes one of these.
+	shape := func() string {
+		t.Helper()
+		rows, err := tx.Query(ctx, `SELECT tablename, policyname, permissive, roles::text, cmd, coalesce(with_check, '<none>'),
+				CASE WHEN policyname = 'tenant_isolation' THEN '' ELSE coalesce(qual, '') END
+			FROM pg_policies WHERE schemaname = 'public' AND tablename = ANY($1) ORDER BY 1, 2`, cpFiveTables)
+		if err != nil {
+			t.Fatalf("read policy shapes: %v", err)
+		}
+		lines, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (string, error) {
+			var parts [7]string
+			err := r.Scan(&parts[0], &parts[1], &parts[2], &parts[3], &parts[4], &parts[5], &parts[6])
+			return strings.Join(parts[:], "|"), err
+		})
+		if err != nil || len(lines) < len(cpFiveTables)+2 {
+			t.Fatalf("policy shapes = %v (%v), want one tenant_isolation per table plus staff_read_lookup and health_sample_count", lines, err)
+		}
+		return strings.Join(lines, "\n")
+	}
+
 	// First, so the failure before the migration lands on the qual text and not on a file lookup.
 	scoped := quals()
+	shapeBefore := shape()
 	for _, table := range cpFiveTables {
 		if !strings.Contains(scoped[table], "app.entity_scope") {
 			t.Fatalf("before Down, %s qual lacks app.entity_scope (migration not applied?): %s", table, scoped[table])
@@ -696,6 +751,9 @@ func TestRLS_ChildScopeMigrationIsReversible(t *testing.T) {
 			t.Errorf("after Down, %s qual = %s\nwant the tenant-only text %s", table, down[table], tenantOnly)
 		}
 	}
+	if got := shape(); got != shapeBefore {
+		t.Errorf("after Down, policy shapes differ from before:\n%s\nwant\n%s", got, shapeBefore)
+	}
 
 	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, migration, "Up")); err != nil {
 		t.Fatalf("Up body of %s failed: %v", migration, err)
@@ -705,6 +763,9 @@ func TestRLS_ChildScopeMigrationIsReversible(t *testing.T) {
 		if up[table] != scoped[table] {
 			t.Errorf("after Up, %s qual = %s\nwant the scoped text applied before Down: %s", table, up[table], scoped[table])
 		}
+	}
+	if got := shape(); got != shapeBefore {
+		t.Errorf("after Up, policy shapes differ from before:\n%s\nwant\n%s", got, shapeBefore)
 	}
 	if up["membership_clients"] != tenantOnly {
 		t.Errorf("membership_clients qual changed across the migration: %s", up["membership_clients"])

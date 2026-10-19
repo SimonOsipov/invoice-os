@@ -297,7 +297,7 @@ func TestRLS_ChildScopeExtractionScopeIsRestoredAfterTheCitationCheck(t *testing
 }
 
 // cpReadFreshConn reads the five tables on a connection that never set app.entity_scope; with
-// localSetFirst an earlier committed transaction set it locally, which leaves ” behind.
+// localSetFirst an earlier committed transaction set it locally, which leaves an empty string behind.
 func cpReadFreshConn(t *testing.T, f *cpFix, localSetFirst bool) {
 	t.Helper()
 	ctx := context.Background()

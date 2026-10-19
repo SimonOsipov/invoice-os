@@ -46,6 +46,7 @@ func WithinRequestTenantTx(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.
 // current tenant, or whose row exists and is not 'active', is refused with
 // ErrNotActiveMember before the closure runs (AUDIT-12; supersedes D-17's NARROW
 // no-row exception) — TestRLS_RequestSeamRefusesACallerWithNoMembershipRow.
+// The same statement sets app.entity_scope: '*' or the member's client ids.
 func WithinRequestTenantTxOpts(ctx context.Context, pool *pgxpool.Pool, opts pgx.TxOptions, fn func(pgx.Tx) error) error {
 	id, ok := auth.IdentityFromContext(ctx)
 	if !ok {
@@ -68,19 +69,27 @@ func WithinRequestTenantTxOpts(ctx context.Context, pool *pgxpool.Pool, opts pgx
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// One round trip: the gate rides the set_config the seam already sends (D-1).
+	// One round trip: statement 2 gates the caller and writes the client scope.
 	// set_config is queued first because the membership select is RLS-scoped by
-	// the GUC it sets — TestRLS_RequestSeamIssuesOneRoundTripForTheGate.
+	// the GUC it sets - TestRLS_RequestSeamIssuesOneRoundTripForTheGate.
 	b := &pgx.Batch{}
 	b.Queue("SELECT set_config('app.current_tenant', $1, true)", id.TenantID)
-	b.Queue("SELECT status FROM memberships WHERE user_id = $1", id.Subject)
+	b.Queue(`SELECT m.status,
+       set_config('app.entity_scope',
+         CASE WHEN t.kind <> 'firm' OR m.role = 'admin' OR m.all_clients THEN '*'
+              ELSE (SELECT coalesce(array_agg(c.entity_id ORDER BY c.entity_id), '{}')::text
+                      FROM membership_clients c WHERE c.user_id = m.user_id)
+         END, true)
+  FROM memberships m
+  JOIN tenants t ON t.id = m.tenant_id
+ WHERE m.user_id = $1`, id.Subject)
 	br := tx.SendBatch(ctx, b)
 	if _, err := br.Exec(); err != nil {
 		_ = br.Close()
 		return fmt.Errorf("db: set tenant context: %w", err)
 	}
-	var status string
-	scanErr := br.QueryRow().Scan(&status)
+	var status, scope string
+	scanErr := br.QueryRow().Scan(&status, &scope)
 	// Close returns the batch's stored error first, so scanErr must be classified
 	// before closeErr or the specific wrap below is unreachable.
 	closeErr := br.Close()

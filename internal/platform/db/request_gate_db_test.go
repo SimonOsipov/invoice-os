@@ -1215,44 +1215,39 @@ func TestRLS_RequestSeamScopeIgnoresTheSameUsersOtherTenant(t *testing.T) {
 	home := csSeedClients(t, 2)
 	away := csSeedClients(t, 2)
 
+	// rows are indexes into the tenant's clients.
+	type seat struct {
+		role string
+		all  bool
+		rows []int
+	}
+	pick := func(ten *csTenant, idx []int) []*csClient {
+		var out []*csClient
+		for _, i := range idx {
+			out = append(out, ten.clients[i])
+		}
+		return out
+	}
 	cases := []struct {
-		name         string
-		homeSeed     func(user string)
-		awaySeed     func(user string)
-		wantAway     string
-		wantHome     string
-		awayReadsAll bool
+		name               string
+		homeSeat, awaySeat seat
+		wantAway, wantHome string
+		awayReadsAll       bool
 	}{
-		{
-			name:     "admin elsewhere, unassigned here",
-			homeSeed: func(u string) { rsMemberAs(t, u, home.id, "admin", true, home.clients...) },
-			awaySeed: func(u string) { rsMemberAs(t, u, away.id, "preparer", false) },
-			wantAway: "{}", wantHome: "*",
-		},
-		{
-			name:     "limited elsewhere, unassigned here",
-			homeSeed: func(u string) { rsMemberAs(t, u, home.id, "reviewer", false, home.clients[0]) },
-			awaySeed: func(u string) { rsMemberAs(t, u, away.id, "reviewer", false) },
-			wantAway: "{}", wantHome: csSet(home.clients[0]),
-		},
-		{
-			name:     "limited elsewhere, limited here to a different client",
-			homeSeed: func(u string) { rsMemberAs(t, u, home.id, "reviewer", false, home.clients[0], home.clients[1]) },
-			awaySeed: func(u string) { rsMemberAs(t, u, away.id, "reviewer", false, away.clients[1]) },
-			wantAway: csSet(away.clients[1]), wantHome: csSet(sortedClients(home.clients...)...),
-		},
-		{
-			name:     "All clients elsewhere, admin here",
-			homeSeed: func(u string) { rsMemberAs(t, u, home.id, "preparer", true) },
-			awaySeed: func(u string) { rsMemberAs(t, u, away.id, "admin", false) },
-			wantAway: "*", wantHome: "*", awayReadsAll: true,
-		},
+		{"admin elsewhere, unassigned here", seat{"admin", true, []int{0, 1}}, seat{"preparer", false, nil},
+			"{}", "*", false},
+		{"limited elsewhere, unassigned here", seat{"reviewer", false, []int{0}}, seat{"reviewer", false, nil},
+			"{}", csSet(home.clients[0]), false},
+		{"limited elsewhere, limited here to a different client", seat{"reviewer", false, []int{0, 1}}, seat{"reviewer", false, []int{1}},
+			csSet(away.clients[1]), csSet(sortedClients(home.clients...)...), false},
+		{"All clients elsewhere, admin here", seat{"preparer", true, nil}, seat{"admin", false, nil},
+			"*", "*", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			user := uuid.NewString()
-			c.homeSeed(user)
-			c.awaySeed(user)
+			rsMemberAs(t, user, home.id, c.homeSeat.role, c.homeSeat.all, pick(home, c.homeSeat.rows)...)
+			rsMemberAs(t, user, away.id, c.awaySeat.role, c.awaySeat.all, pick(away, c.awaySeat.rows)...)
 			if got := rsSeamScope(t, h.app, user, away.id); got != c.wantAway {
 				t.Errorf("scope in the away tenant = %q, want %q", got, c.wantAway)
 			}

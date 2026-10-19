@@ -1098,3 +1098,32 @@ func TestGetHandler_BodyCarriesTheBatchDocumentID(t *testing.T) {
 		t.Errorf("body = %s, want it to contain %s -- GetHandler must copy Batch.DocumentID into batchResponse", rec.Body.String(), want)
 	}
 }
+
+func TestSavedMappingHandler_BodyChecksPrecedeTheEntityCheck(t *testing.T) {
+	id := testIdentity()
+	cases := []struct {
+		name, query, want string
+	}{
+		{"missing entity_id", "?document_id=" + uuid.NewString(), "entity_id is required"},
+		{"malformed entity_id", "?entity_id=nope&document_id=" + uuid.NewString(), "entity_id must be a well-formed uuid"},
+		{"missing document_id", "?entity_id=" + uuid.NewString(), "document_id is required"},
+		{"malformed document_id", "?entity_id=" + uuid.NewString() + "&document_id=nope", "document_id must be a well-formed uuid"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			called := 0
+			visible := func(context.Context, string) error { called++; return ErrNotFound }
+			r := httptest.NewRequest("GET", "/v1/imports/saved-mapping"+tc.query, nil)
+			r = r.WithContext(auth.WithIdentity(r.Context(), id))
+			rec := httptest.NewRecorder()
+			SavedMappingHandler((&fakeDocOpen{}).fn(), (&lookupSpy{}).fn(), visible, nil).ServeHTTP(rec, r)
+
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), tc.want) {
+				t.Errorf("answer = %d %s, want 400 %q", rec.Code, rec.Body.String(), tc.want)
+			}
+			if called != 0 {
+				t.Errorf("entityVisible calls = %d, want 0", called)
+			}
+		})
+	}
+}

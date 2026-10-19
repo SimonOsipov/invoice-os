@@ -429,7 +429,7 @@ func doSavedMappingRequest(t *testing.T, open openSpec, lookup func(ctx context.
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	SavedMappingHandler(open, lookup, log).ServeHTTP(rec, r)
+	SavedMappingHandler(open, lookup, alwaysVisible, log).ServeHTTP(rec, r)
 
 	raw := rec.Body.Bytes()
 	var resp map[string]json.RawMessage
@@ -971,7 +971,7 @@ func TestImportRoutes_SavedMappingIsNotSwallowedByBatchID(t *testing.T) {
 	lookup := &lookupSpy{}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/imports/saved-mapping", SavedMappingHandler(open.fn(), lookup.fn(), nil))
+	mux.HandleFunc("GET /v1/imports/saved-mapping", SavedMappingHandler(open.fn(), lookup.fn(), alwaysVisible, nil))
 	mux.HandleFunc("GET /v1/imports/{id}", GetHandler(get, nil))
 
 	r := httptest.NewRequest("GET", "/v1/imports/saved-mapping", nil)

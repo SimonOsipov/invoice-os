@@ -221,6 +221,24 @@ func (s *Store) DocumentHasInvoice(ctx context.Context, documentID string) (bool
 	return has, err
 }
 
+// EntityVisible answers ErrNotFound for an entity the caller cannot see: unknown, another
+// tenant's, or outside a limited member's client set. A malformed id is ErrValidation.
+func (s *Store) EntityVisible(ctx context.Context, entityID string) error {
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var one int
+		return tx.QueryRow(ctx, `SELECT 1 FROM business_entities WHERE id = $1`, entityID).Scan(&one)
+	})
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, pgx.ErrNoRows):
+		return ErrNotFound
+	case pgCode(err) == "22P02":
+		return ErrValidation
+	}
+	return err
+}
+
 // EntitySupplier returns the (name, tin, contact) of the business_entities row
 // identified by entityID, for use as an import batch's supplier defaults
 // ([supplier-from-entity]). tin is nullable and scans into a nil *string

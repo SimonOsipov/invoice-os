@@ -262,8 +262,8 @@ func TestInvoiceMain_RegistersTheSavedMappingRoute(t *testing.T) {
 			if pkg, ok := hsel.X.(*ast.Ident); !ok || pkg.Name != "importer" {
 				t.Error("GET /v1/imports/saved-mapping's handler is not importer.SavedMappingHandler(...)")
 			}
-			if len(handlerCall.Args) != 3 {
-				t.Fatalf("importer.SavedMappingHandler has %d argument(s), want 3 (open, lookup, logger)", len(handlerCall.Args))
+			if len(handlerCall.Args) != 4 {
+				t.Fatalf("importer.SavedMappingHandler has %d argument(s), want 4 (open, lookup, entityVisible, logger)", len(handlerCall.Args))
 			}
 			openArg, ok := handlerCall.Args[0].(*ast.SelectorExpr)
 			if !ok || openArg.Sel.Name != "Open" {
@@ -276,6 +276,12 @@ func TestInvoiceMain_RegistersTheSavedMappingRoute(t *testing.T) {
 				t.Errorf("SavedMappingHandler's second argument is not ....SavedMapping, got %#v", handlerCall.Args[1])
 			} else if recv, ok := lookupArg.X.(*ast.Ident); !ok || recv.Name != "impStore" {
 				t.Errorf("SavedMappingHandler's second argument is not impStore.SavedMapping")
+			}
+			visibleArg, ok := handlerCall.Args[2].(*ast.SelectorExpr)
+			if !ok || visibleArg.Sel.Name != "EntityVisible" {
+				t.Errorf("SavedMappingHandler's third argument is not ....EntityVisible, got %#v", handlerCall.Args[2])
+			} else if recv, ok := visibleArg.X.(*ast.Ident); !ok || recv.Name != "impStore" {
+				t.Errorf("SavedMappingHandler's third argument is not impStore.EntityVisible")
 			}
 		}
 		return true
@@ -431,8 +437,8 @@ func TestInvoiceMain_RegistersTheSuggestMappingRoute(t *testing.T) {
 			if pkg, ok := hsel.X.(*ast.Ident); !ok || pkg.Name != "importer" {
 				t.Error("POST /v1/imports/suggest-mapping's handler is not importer.SuggestMappingHandler(...)")
 			}
-			if len(handlerCall.Args) != 4 {
-				t.Fatalf("importer.SuggestMappingHandler has %d argument(s), want 4 (open, lookup, ai client, logger)", len(handlerCall.Args))
+			if len(handlerCall.Args) != 5 {
+				t.Fatalf("importer.SuggestMappingHandler has %d argument(s), want 5 (open, lookup, entityVisible, ai client, logger)", len(handlerCall.Args))
 			}
 			openArg, ok := handlerCall.Args[0].(*ast.SelectorExpr)
 			if !ok || openArg.Sel.Name != "Open" {
@@ -446,14 +452,20 @@ func TestInvoiceMain_RegistersTheSuggestMappingRoute(t *testing.T) {
 			} else if recv, ok := lookupArg.X.(*ast.Ident); !ok || recv.Name != "impStore" {
 				t.Errorf("SuggestMappingHandler's second argument is not impStore.SavedMapping")
 			}
-			if _, ok := handlerCall.Args[2].(*ast.Ident); !ok {
-				t.Errorf("SuggestMappingHandler's third argument is not a plain identifier (the ai client variable), got %#v", handlerCall.Args[2])
+			visibleArg, ok := handlerCall.Args[2].(*ast.SelectorExpr)
+			if !ok || visibleArg.Sel.Name != "EntityVisible" {
+				t.Errorf("SuggestMappingHandler's third argument is not ....EntityVisible, got %#v", handlerCall.Args[2])
+			} else if recv, ok := visibleArg.X.(*ast.Ident); !ok || recv.Name != "impStore" {
+				t.Errorf("SuggestMappingHandler's third argument is not impStore.EntityVisible")
 			}
-			loggerArg, ok := handlerCall.Args[3].(*ast.SelectorExpr)
+			if _, ok := handlerCall.Args[3].(*ast.Ident); !ok {
+				t.Errorf("SuggestMappingHandler's fourth argument is not a plain identifier (the ai client variable), got %#v", handlerCall.Args[3])
+			}
+			loggerArg, ok := handlerCall.Args[4].(*ast.SelectorExpr)
 			if !ok || loggerArg.Sel.Name != "Logger" {
-				t.Errorf("SuggestMappingHandler's fourth argument is not ....Logger, got %#v", handlerCall.Args[3])
+				t.Errorf("SuggestMappingHandler's fifth argument is not ....Logger, got %#v", handlerCall.Args[4])
 			} else if recv, ok := loggerArg.X.(*ast.Ident); !ok || recv.Name != "app" {
-				t.Errorf("SuggestMappingHandler's fourth argument is not app.Logger")
+				t.Errorf("SuggestMappingHandler's fifth argument is not app.Logger")
 			}
 		}
 		return true

@@ -107,6 +107,7 @@ func respondSuggestion(w http.ResponseWriter, source string, headerRow int, head
 func SuggestMappingHandler(
 	open func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error),
 	lookup func(ctx context.Context, entityID string, header []string) (*SavedMapping, error),
+	entityVisible func(ctx context.Context, entityID string) error,
 	suggester MappingSuggester,
 	log *slog.Logger,
 ) http.HandlerFunc {
@@ -144,6 +145,15 @@ func SuggestMappingHandler(
 		}
 		if _, err := uuid.Parse(req.DocumentID); err != nil {
 			writeError(w, http.StatusBadRequest, "document_id must be a well-formed uuid")
+			return
+		}
+
+		if err := entityVisible(r.Context(), req.EntityID); err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "importer: check entity", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
 			return
 		}
 

@@ -545,7 +545,7 @@ func TestSavedMappingHandler_FindsTheMappingACompletedImportSaved(t *testing.T) 
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/imports", CreateHandler(svc.Import, docSvc.Open, store.SaveMapping, nil))
-	mux.HandleFunc("GET /v1/imports/saved-mapping", SavedMappingHandler(docSvc.Open, store.SavedMapping, nil))
+	mux.HandleFunc("GET /v1/imports/saved-mapping", SavedMappingHandler(docSvc.Open, store.SavedMapping, store.EntityVisible, nil))
 
 	// Import doc1: a completed import saves the mapping for entityID.
 	doc1 := storeDocumentAs(t, docSvc, tenantID, "data1.csv", "", csvBody(t, header, [][]string{{"SM-DB-07-1", "119.00"}}))

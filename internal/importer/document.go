@@ -365,6 +365,9 @@ func carriedReading(documentID, jobID string, in invoice.CreateInput) *CarriedRe
 // invoice_number still leaves an auditable, completed-and-quarantined batch (D-17/D-9) rather
 // than a silent no-op.
 func (s *Service) ImportDocument(ctx context.Context, entityID, documentID string) (BatchResult, error) {
+	if err := s.batch.EntityVisible(ctx, entityID); err != nil {
+		return BatchResult{}, err
+	}
 	ex, err := s.batch.SettledExtraction(ctx, documentID)
 	if err != nil {
 		return BatchResult{}, err
@@ -501,6 +504,9 @@ func (s *Service) SupplyInvoiceNumber(ctx context.Context, entityID, documentID,
 	number = strings.TrimSpace(number)
 	if number == "" {
 		return invoice.Invoice{}, fmt.Errorf("%w: invoice_number is required", ErrValidation)
+	}
+	if err := s.batch.EntityVisible(ctx, entityID); err != nil {
+		return invoice.Invoice{}, err
 	}
 	ex, err := s.batch.SettledExtraction(ctx, documentID)
 	if err != nil {

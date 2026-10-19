@@ -176,8 +176,8 @@ func TestRLS_SupplyUnderAnotherTenantsEntityWritesNothing(t *testing.T) {
 	svc := newTestServiceWithGate(app, g)
 	ctxA := sxIdentity(ctx, tenantA)
 
-	if _, err := svc.SupplyInvoiceNumber(ctxA, entityB, doc, "ADV-03-INV"); !errors.Is(err, invoice.ErrNotFound) {
-		t.Fatalf("supply under B's entity: err = %v, want invoice.ErrNotFound", err)
+	if _, err := svc.SupplyInvoiceNumber(ctxA, entityB, doc, "ADV-03-INV"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("supply under B's entity: err = %v, want ErrNotFound", err)
 	}
 	if got := countInvoicesCitingDocument(t, super, doc); got != 0 {
 		t.Errorf("invoices citing the document = %d, want 0", got)

@@ -390,8 +390,8 @@ func TestDownload_RouteIsMountedInCmdInvoice(t *testing.T) {
 		t.Errorf("%q is served by %q, want document.DownloadHandler", pattern, got)
 	}
 	if len(handler.Args) == 0 || selectorName(handler.Args[0]) == "" ||
-		!strings.HasSuffix(selectorName(handler.Args[0]), ".Open") {
-		t.Errorf("DownloadHandler's open argument is not an .Open method value; the route would not resolve a stored key")
+		!strings.HasSuffix(selectorName(handler.Args[0]), ".OpenLinked") {
+		t.Errorf("DownloadHandler's open argument is not an .OpenLinked method value; a limited member could read an unlinked upload")
 	}
 }
 

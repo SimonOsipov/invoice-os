@@ -772,8 +772,8 @@ func SheetHandler(
 	}
 }
 
-// savedMappingResponse is GET /v1/imports/saved-mapping's body. A miss is an explicit null,
-// never a 404, so the route is no existence oracle.
+// savedMappingResponse is GET /v1/imports/saved-mapping's body. No saved mapping for a visible
+// client is an explicit null; an invisible client is a 404 before the lookup.
 type savedMappingResponse struct {
 	SavedMapping *SavedMapping `json:"saved_mapping"`
 }
@@ -783,6 +783,7 @@ type savedMappingResponse struct {
 func SavedMappingHandler(
 	open func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error),
 	lookup func(ctx context.Context, entityID string, header []string) (*SavedMapping, error),
+	entityVisible func(ctx context.Context, entityID string) error,
 	log *slog.Logger,
 ) http.HandlerFunc {
 	if log == nil {
@@ -813,6 +814,15 @@ func SavedMappingHandler(
 		documentID, err := uuid.Parse(documentIDRaw)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "document_id must be a well-formed uuid")
+			return
+		}
+
+		if err := entityVisible(r.Context(), entityID.String()); err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "importer: check entity", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
 			return
 		}
 

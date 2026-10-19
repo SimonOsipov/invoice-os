@@ -373,7 +373,7 @@ test('OPS-01 shell at 1440: aside, header, env switch, banner', async ({ page },
       word: aside(page).getByText('ASComply', { exact: true }),
       quota: aside(page).getByText('Requests this month', { exact: true }).locator('xpath=../..'),
     })
-    const navs = await boxList(page, aside(page).locator('nav button.ops-nav'), 'nav button', 7)
+    const navs = await boxList(page, aside(page).locator('nav button.ops-nav'), 'nav button', 6)
     const problems = [
       ...within(r.track, r.sandbox, 'SANDBOX in track'),
       ...within(r.track, r.live, 'LIVE in track'),

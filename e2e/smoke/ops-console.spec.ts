@@ -6,7 +6,7 @@ import { seedStaffSession, test } from '../staffSession'
 // The Ops Console, driven as the integration developer it is for (PERSONA-01-05, Backlog
 // task-274), on a seeded real staff session (staffSession.ts).
 //
-// The Blog screen reads real data through the gateway; every other screen is fixture-only.
+// Every screen is fixture-only.
 // Assertions on those pin this console's CLIENT-SIDE BEHAVIOUR over the fixtures in
 // src/data.tsx. They are not a contract test and say nothing about any server. Counts are
 // read from the rendered UI rather than hardcoded, so a seed edit does not break these —
@@ -51,7 +51,6 @@ const SCREENS: { nav: string; h1: string }[] = [
   { nav: 'Evidence', h1: 'Compliance evidence' },
   { nav: 'API & webhooks', h1: 'API & webhooks' },
   { nav: 'Usage & billing', h1: 'Usage & billing' },
-  { nav: 'Blog', h1: 'Blog' },
   { nav: 'Status', h1: 'API status' },
   { nav: 'Overview', h1: 'Overview' },
 ]

@@ -5,10 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StaffGate } from '@invoice-os/console-session'
 
 import App from './App'
-import { TopBar } from './components/TopBar'
-import { KEPT_KEY } from './blog'
 import { NAV_ITEMS } from './data'
-import { GLYPHS } from './glyphs'
 
 vi.mock('@invoice-os/console-session', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
@@ -40,7 +37,10 @@ function renderApp(): ReactElement<GateProps> {
 }
 
 describe('App', () => {
-  afterEach(() => vi.unstubAllEnvs())
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
 
   it('App_wrapsTheConsoleInTheSharedStaffGate', () => {
     vi.stubEnv('VITE_LANDING_URL', 'https://land.example/')
@@ -96,54 +96,18 @@ describe('App', () => {
     expect(html.match(/aria-label="Sign out"/g)).toHaveLength(1)
   })
 
-  it('NAV_ITEMS puts Blog between Usage & billing and Status', () => {
-    expect(NAV_ITEMS.map((n) => n.key)).toEqual(['overview', 'submissions', 'evidence', 'api', 'billing', 'blog', 'status'])
-    expect(NAV_ITEMS.find((n) => n.key === 'blog')?.label).toBe('Blog')
+  it('NAV_ITEMS holds the six partner screens', () => {
+    expect(NAV_ITEMS.map((n) => n.key)).toEqual(['overview', 'submissions', 'evidence', 'api', 'billing', 'status'])
   })
 
-  it('the Blog crumb is Blog', () => {
-    const html = renderToStaticMarkup(<TopBar screen="blog" env="sandbox" onSetEnv={() => undefined} />)
-    expect(html).toContain('>Blog<')
-  })
-
-  it('the Blog nav row carries the file-text glyph at size 17', () => {
-    const blog = NAV_ITEMS.find((n) => n.key === 'blog')
-    expect(blog).toBeDefined()
-    const html = renderToStaticMarkup(<>{blog!.glyph}</>)
-    expect(html).toContain('width="17"')
-    expect(html).toContain('height="17"')
-    expect(html).toContain(GLYPHS['file-text'][0])
-  })
-})
-
-describe('boot screen', () => {
-  const jwt = (c: object) => `${btoa('{"alg":"x"}')}.${btoa(JSON.stringify(c)).replace(/=+$/, '')}.s`
-  const store = (sub: string | null, owner: string | null) => {
-    const map = new Map<string, string>()
-    if (sub !== null) map.set(OPS_SESSION_KEY, JSON.stringify({ v: 2, token: jwt({ sub }), refresh_token: 'R' }))
-    if (owner) map.set(KEPT_KEY, JSON.stringify({ v: 1, owner, draft: { id: '', status: 'draft', title: '', summary: '', featured: false, serverHasCover: false, cover: { kind: 'none' }, body: [] } }))
-    vi.stubGlobal('localStorage', { getItem: (k: string) => map.get(k) ?? null })
+  it('opens on Overview whatever localStorage holds', () => {
+    const jwt = (c: object) => `${btoa('{"alg":"x"}')}.${btoa(JSON.stringify(c)).replace(/=+$/, '')}.s`
+    const kept = { v: 1, owner: 'S', draft: { id: '', status: 'draft', title: '', summary: '', featured: false, serverHasCover: false, cover: { kind: 'none' }, body: [] } }
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) =>
+        JSON.stringify(k === OPS_SESSION_KEY ? { v: 2, token: jwt({ sub: 'S' }), refresh_token: 'R' } : kept),
+    })
     vi.stubEnv('VITE_LANDING_URL', 'https://land.example/')
-  }
-  afterEach(() => {
-    vi.unstubAllGlobals()
-    vi.unstubAllEnvs()
-  })
-
-  it('starts on Blog with a kept copy of the signed-in member', () => {
-    store('S', 'S')
-    expect(renderToStaticMarkup(<App />)).toContain('07 — CONTENT')
-  })
-
-  it('starts on Overview for another owner or with no kept copy', () => {
-    store('S', 'T')
-    expect(renderToStaticMarkup(<App />)).toMatch(/<h1[^>]*>Overview<\/h1>/)
-    store('S', null)
-    expect(renderToStaticMarkup(<App />)).toMatch(/<h1[^>]*>Overview<\/h1>/)
-  })
-
-  it('starts on Overview when a kept copy exists but no session is stored', () => {
-    store(null, 'S')
     expect(renderToStaticMarkup(<App />)).toMatch(/<h1[^>]*>Overview<\/h1>/)
   })
 })

@@ -363,14 +363,13 @@ describe('transport inventory', () => {
       'frontend/app/src/lib/sourceDocument.ts': 1,
       'frontend/landing/src/hubspot.ts': 1,
       'frontend/landing/src/signIn.ts': 1,
-      'frontend/ops-console/src/blogApi.ts': 1,
       'frontend/support-console/src/auditApi.ts': 1,
       'frontend/support-console/src/blogApi.ts': 1,
       'packages/api-client/src/client.ts': 1,
     })
 
     const reported = Object.keys(hits)
-    expect(reported.length).toBe(10)
+    expect(reported.length).toBe(9)
     expect(reported.filter((f) => !code[f].includes('reportApiFailure('))).toEqual([])
   })
 })

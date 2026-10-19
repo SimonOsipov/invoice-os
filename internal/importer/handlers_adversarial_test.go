@@ -389,6 +389,7 @@ func TestDecodeErrorMessage_MapsEachDecodeError(t *testing.T) {
 	}{
 		{"header_row_past_end", ErrHeaderRowPastEnd, headerRowPastEnd},
 		{"too_many_rows", fmt.Errorf("wrap: %w", ErrTooManyRows), "the spreadsheet has more than 100,000 data rows; split it into smaller files"},
+		{"too_many_cells", fmt.Errorf("wrap: %w", ErrTooManyCells), "the spreadsheet has too many cells; remove blank columns or split it into smaller files"},
 		{"deadline", fmt.Errorf("wrap: %w", context.DeadlineExceeded), "the spreadsheet took too long to read; split it into smaller files"},
 		{"caller_gone", fmt.Errorf("wrap: %w", context.Canceled), generic},
 		{"bad_workbook", excelize.ErrWorkbookFileFormat, generic},

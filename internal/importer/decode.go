@@ -276,6 +276,13 @@ const maxXLSXDataRows = 100_000
 // ErrTooManyRows: the sheet has more than maxXLSXDataRows data rows.
 var ErrTooManyRows = errors.New("importer: spreadsheet has more than 100,000 data rows")
 
+// maxXLSXCells caps the cells (padded blanks included) one decode holds.
+// ceiling: 3x the 1.5M-cell legitimate 100,000 x 15 sheet; raise it if a real sheet is refused.
+const maxXLSXCells = 5_000_000
+
+// ErrTooManyCells: the sheet holds more than maxXLSXCells cells once each row is padded to its last column.
+var ErrTooManyCells = errors.New("importer: spreadsheet has too many cells")
+
 // xlsxDecodeTimeout bounds one xlsxRows call; a var so a test can lower it.
 // ceiling: one Columns call is uninterruptible (up to ~8s at maxXLSXUnzipBytes), revisit if a trace shows a preview over 30s.
 var xlsxDecodeTimeout = 30 * time.Second
@@ -303,6 +310,9 @@ func xlsxRows(ctx context.Context, r io.Reader, headerRow int) ([][]string, erro
 	}
 	defer rowsIter.Close()
 
+	// Physical rows read stay bounded for any headerRow; clamping first avoids overflow.
+	maxRows := min(headerRow, maxXLSXDataRows) + maxXLSXDataRows
+	cells := 0
 	var all [][]string
 	for {
 		if err := ctx.Err(); err != nil {
@@ -316,8 +326,11 @@ func xlsxRows(ctx context.Context, r io.Reader, headerRow int) ([][]string, erro
 			return nil, err
 		}
 		all = append(all, cols)
-		if len(all)-headerRow > maxXLSXDataRows {
+		if len(all) > maxRows {
 			return nil, ErrTooManyRows
+		}
+		if cells += len(cols); cells > maxXLSXCells {
+			return nil, ErrTooManyCells
 		}
 	}
 	if err := rowsIter.Error(); err != nil {

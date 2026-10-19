@@ -169,6 +169,7 @@ const (
 	headerRowPastEnd          = "header_row is past the last row of the file"
 	defaultInvoiceKindInvalid = "default_invoice_kind must be B2B, B2G or B2C"
 	tooManyRowsMessage        = "the spreadsheet has more than 100,000 data rows; split it into smaller files"
+	tooManyCellsMessage       = "the spreadsheet has too many cells; remove blank columns or split it into smaller files"
 	decodeDeadlineMessage     = "the spreadsheet took too long to read; split it into smaller files"
 )
 
@@ -179,6 +180,8 @@ func decodeErrorMessage(err error) string {
 		return headerRowPastEnd
 	case errors.Is(err, ErrTooManyRows):
 		return tooManyRowsMessage
+	case errors.Is(err, ErrTooManyCells):
+		return tooManyCellsMessage
 	case errors.Is(err, context.DeadlineExceeded):
 		return decodeDeadlineMessage
 	}

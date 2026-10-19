@@ -720,6 +720,8 @@ func TestImporterHandlers_NoSecondSentinel(t *testing.T) {
 		"ErrHeaderRowPastEnd": true,
 		// Row-cap refusal, a 400; not a membership error.
 		"ErrTooManyRows": true,
+		// Cell-budget refusal, a 400; not a membership error.
+		"ErrTooManyCells": true,
 	}
 
 	found := map[string]bool{"CreateHandler": false, "PreviewHandler": false, "SheetHandler": false}

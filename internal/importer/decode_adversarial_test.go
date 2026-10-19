@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -717,7 +718,7 @@ func TestXLSXRows_DeadlineStopsDecodeMidSheet(t *testing.T) {
 	full := time.Since(start)
 
 	defer func(d time.Duration) { xlsxDecodeTimeout = d }(xlsxDecodeTimeout)
-	xlsxDecodeTimeout = full / 2
+	xlsxDecodeTimeout = max(full/20, time.Millisecond)
 	start = time.Now()
 	_, err = xlsxRows(context.Background(), bytes.NewReader(buf.Bytes()), 1)
 	elapsed := time.Since(start)
@@ -726,6 +727,71 @@ func TestXLSXRows_DeadlineStopsDecodeMidSheet(t *testing.T) {
 	}
 	if elapsed > 2*full+10*time.Second {
 		t.Errorf("deadline run took %v, full decode %v: hang", elapsed, full)
+	}
+}
+
+// wideRowsBook has n rows, each holding one cell in column col, so Columns pads every row to col strings.
+func wideRowsBook(t *testing.T, n, col int) []byte {
+	t.Helper()
+	name, err := excelize.ColumnNumberToName(col)
+	if err != nil {
+		t.Fatalf("ColumnNumberToName: %v", err)
+	}
+	var sb strings.Builder
+	for r := 1; r <= n; r++ {
+		fmt.Fprintf(&sb, `<row r="%d"><c r="%s%d"><v>1</v></c></row>`, r, name, r)
+	}
+	return withSheetXML(t, cellsAt(t, "A1"), func(x string) string {
+		i := strings.Index(x, "<sheetData")
+		j := strings.Index(x, "</sheetData>")
+		return x[:i] + "<sheetData>" + sb.String() + x[j:]
+	})
+}
+
+func TestXLSXRows_PaddedCellsAreBudgeted(t *testing.T) {
+	start := time.Now()
+	_, err := xlsxRows(context.Background(), bytes.NewReader(wideRowsBook(t, 1_000, 16384)), 1)
+	if !errors.Is(err, ErrTooManyCells) {
+		t.Fatalf("XFD rows: err = %v, want ErrTooManyCells", err)
+	}
+	if elapsed := time.Since(start); elapsed > 20*time.Second {
+		t.Errorf("refusal took %v, want fast", elapsed)
+	}
+	if msg := decodeErrorMessage(err); msg == "" || msg == "could not decode uploaded file" {
+		t.Errorf("message = %q, want the cell-budget sentence", msg)
+	}
+}
+
+func TestXLSXRows_SheetJustUnderTheCellBudgetPasses(t *testing.T) {
+	const col = 1000
+	rows, err := xlsxRows(context.Background(), bytes.NewReader(wideRowsBook(t, maxXLSXCells/col, col)), 1)
+	if err != nil {
+		t.Fatalf("err = %v, want nil at exactly %d cells", err, maxXLSXCells)
+	}
+	if len(rows) != maxXLSXCells/col {
+		t.Errorf("rows = %d, want %d", len(rows), maxXLSXCells/col)
+	}
+	_, err = xlsxRows(context.Background(), bytes.NewReader(wideRowsBook(t, maxXLSXCells/col+1, col)), 1)
+	if !errors.Is(err, ErrTooManyCells) {
+		t.Errorf("one row past the budget: err = %v, want ErrTooManyCells", err)
+	}
+}
+
+func TestXLSXRows_RowCapHoldsForAnyHeaderRow(t *testing.T) {
+	book := cellsAt(t, "A1", "A250000")
+	for _, hr := range []int{1_048_576, math.MaxInt} {
+		start := time.Now()
+		_, err := xlsxRows(context.Background(), bytes.NewReader(book), hr)
+		if !errors.Is(err, ErrTooManyRows) {
+			t.Errorf("header_row %d: err = %v, want ErrTooManyRows", hr, err)
+		}
+		if elapsed := time.Since(start); elapsed > 20*time.Second {
+			t.Errorf("header_row %d took %v", hr, elapsed)
+		}
+	}
+	_, _, _, err := DecodeFrom(context.Background(), bytes.NewReader(cellsAt(t, "A1", "A150")), "xlsx", math.MaxInt)
+	if !errors.Is(err, ErrHeaderRowPastEnd) {
+		t.Errorf("short sheet, MaxInt: err = %v, want ErrHeaderRowPastEnd", err)
 	}
 }
 

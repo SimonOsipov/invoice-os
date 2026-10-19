@@ -55,11 +55,27 @@ test('deployed app: a real sign-in into 1111 renders the backend-verified tenant
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// The app fires these four reads on mount; a Sign out mid-flight turns any of them into a 401.
+const MOUNT_READ_PATHS = [
+  '/api/portfolio/v1/entities',
+  '/api/invoice/v1/approval-policies',
+  '/api/tenancy/v1/memberships',
+  '/api/invoice/v1/workflow-roles',
+]
+
 // Sign-out clears the session and navigates to landingBase() (Decision [signout-asserts-landing-redirect]).
 test('deployed app: sign-out redirects to the landing page', async ({ page }) => {
   const errors = collectErrors(page)
 
+  // Armed before sign-in: the reads fire on mount, inside signInAs.
+  const mountReads = Promise.all(
+    MOUNT_READ_PATHS.map((path) =>
+      page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === path, { timeout: 60_000 }),
+    ),
+  )
+  mountReads.catch(() => {}) // a failed signInAs must not leave an unhandled rejection
   await signInAs(page, 'firm')
+  await mountReads
 
   await page.getByRole('button', { name: 'Sign out' }).click()
   await page.waitForURL((url) => url.href.startsWith(LANDING_URL))

@@ -17,6 +17,7 @@ import (
 	"io"
 	"math"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -774,6 +775,40 @@ func TestXLSXRows_SheetJustUnderTheCellBudgetPasses(t *testing.T) {
 	_, err = xlsxRows(context.Background(), bytes.NewReader(wideRowsBook(t, maxXLSXCells/col+1, col)), 1)
 	if !errors.Is(err, ErrTooManyCells) {
 		t.Errorf("one row past the budget: err = %v, want ErrTooManyCells", err)
+	}
+}
+
+func TestXLSXRows_XFDRowsAreRefusedFastWithoutLargeAllocation(t *testing.T) {
+	book := wideRowsBook(t, 100_000, 16384)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	start := time.Now()
+	_, err := xlsxRows(context.Background(), bytes.NewReader(book), 1)
+	elapsed := time.Since(start)
+	runtime.ReadMemStats(&after)
+	if !errors.Is(err, ErrTooManyCells) {
+		t.Fatalf("err = %v, want ErrTooManyCells", err)
+	}
+	if elapsed > 20*time.Second {
+		t.Errorf("refusal took %v, want fast", elapsed)
+	}
+	// Reading all 100,000 padded rows would allocate ~26 GiB.
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > 2<<30 {
+		t.Errorf("allocated %d MiB before refusing, want < 2048", grew>>20)
+	}
+}
+
+func TestXLSXRows_Legitimate100kRowSheetsPassTheCellBudget(t *testing.T) {
+	const rows = 100_000
+	for _, cols := range []int{15, 50} {
+		got, err := xlsxRows(context.Background(), bytes.NewReader(wideRowsBook(t, rows, cols)), 1)
+		if err != nil || len(got) != rows {
+			t.Fatalf("%d x %d: rows = %d, err = %v, want pass", rows, cols, len(got), err)
+		}
+	}
+	_, err := xlsxRows(context.Background(), bytes.NewReader(wideRowsBook(t, rows, 51)), 1)
+	if !errors.Is(err, ErrTooManyCells) {
+		t.Errorf("51 columns: err = %v, want ErrTooManyCells", err)
 	}
 }
 

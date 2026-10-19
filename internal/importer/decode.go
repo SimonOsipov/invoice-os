@@ -255,7 +255,7 @@ func sniffDelimiter(header []byte) rune {
 // maxXLSXUnzipBytes bounds excelize's Options.UnzipSizeLimit: the total
 // uncompressed size excelize will unpack across an .xlsx archive's entries
 // before it errors out, rather than the ~16 GiB it defaults to
-// (xuri/excelize/v2@v2.11.0's UnzipSizeLimit constant, templates.go). The
+// (excelize's UnzipSizeLimit constant, templates.go). The
 // maxUploadBytes cap ([upload-cap], handlers.go) only bounds the COMPRESSED
 // request body -- it does nothing to stop a small, maliciously crafted zip
 // from unzipping to gigabytes in memory (a zip bomb -> DoS). 10x

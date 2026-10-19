@@ -17,6 +17,7 @@
 // unknown id's 404 and change nothing.
 import { test, expect } from '@playwright/test'
 import {
+  apiBase,
   login,
   me,
   memberships,
@@ -332,7 +333,7 @@ const OWN_CLIENT = 'Adeyemi & Sons Trading Ltd'
 const OTHER_OWN_CLIENT = 'Chukwu Global Ventures Ltd'
 const NOT_HELD_CLIENT = 'Okonkwo Textiles Nigeria Ltd'
 const EVIDENCE_PERIOD = { from: '2020-01-01T00:00:00Z', to: '2035-01-01T00:00:00Z' }
-const REGISTER_PERIOD = { from: '2025-03-01', to: '2025-03-31' }
+const REGISTER_PERIOD = { from: '2026-01-01', to: '2026-12-31' }
 
 test.describe('a limited member of one firm reads only its clients (FIRMS-03)', () => {
   let limited: string
@@ -346,15 +347,15 @@ test.describe('a limited member of one firm reads only its clients (FIRMS-03)', 
   test.beforeAll(async () => {
     limited = await login({ ...PERSONAS.A, subject: LIMITED_REVIEWER })
     admin = await login(PERSONAS.A)
-    const { entities } = await listEntities(admin, { limit: 200 })
-    const idOf = (name: string) => {
+    const idOf = async (name: string) => {
+      const { entities } = await listEntities(admin, { q: name, limit: 200 })
       const found = entities.find((e) => e.name === name)
       expect(found, `${name} is a seeded client of 1111`).toBeTruthy()
       return found!.id
     }
-    ownEntityId = idOf(OWN_CLIENT)
-    otherOwnEntityId = idOf(OTHER_OWN_CLIENT)
-    notHeldEntityId = idOf(NOT_HELD_CLIENT)
+    ownEntityId = await idOf(OWN_CLIENT)
+    otherOwnEntityId = await idOf(OTHER_OWN_CLIENT)
+    notHeldEntityId = await idOf(NOT_HELD_CLIENT)
     const firstInvoice = async (entityId: string) => {
       const { invoices } = await listInvoices(admin, { entity_id: entityId, limit: 1 })
       expect(invoices.length, `the seed gives client ${entityId} an invoice`).toBeGreaterThan(0)
@@ -383,6 +384,8 @@ test.describe('a limited member of one firm reads only its clients (FIRMS-03)', 
     await assertNotFoundAcrossTenant(() => listInvoices(limited, { entity_id: notHeldEntityId }), 'invoice list filtered to that client')
 
     const preview = new URLSearchParams({ entity_id: notHeldEntityId, ...EVIDENCE_PERIOD })
+    const control = await rawFetch(`/api/invoice/v1/evidence-bundle/preview?${preview}`, { headers: { Authorization: `Bearer ${admin}` } })
+    expect(control.status, 'positive control: the admin reads the same preview').toBe(200)
     assertErrorEnvelope(
       await rawFetch(`/api/invoice/v1/evidence-bundle/preview?${preview}`, { headers: { Authorization: `Bearer ${limited}` } }),
       404,
@@ -394,6 +397,8 @@ test.describe('a limited member of one firm reads only its clients (FIRMS-03)', 
 
   test("FIRMS-03: the limited reviewer's register of the other client is 404", async () => {
     const params = new URLSearchParams({ entity_id: notHeldEntityId, ...REGISTER_PERIOD })
+    const control = await fetch(`${apiBase()}/api/invoice/v1/invoice-register?${params}`, { headers: { Authorization: `Bearer ${admin}` } })
+    expect(control.status, 'positive control: the admin downloads the same register').toBe(200)
     const res = await rawFetch(`/api/invoice/v1/invoice-register?${params}`, { headers: { Authorization: `Bearer ${limited}` } })
     assertErrorEnvelope(res, 404, 'register of a client it does not hold')
   })

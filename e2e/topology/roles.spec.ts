@@ -1592,6 +1592,10 @@ test('firm Clients: a member with no clients sees why, on Clients and in the swi
   expect(start, 'an admin reads every row').not.toBeNull()
   const isEmpty = Array.isArray(start) && start.length === 0
 
+  // Control: the row selector matches on the admin's Clients, so the reviewer's zero is not a dead selector.
+  await goTo(page, 'Clients')
+  await expect(page.getByTestId('client-row').first()).toBeVisible()
+
   const context = await browser.newContext()
   try {
     if (!isEmpty) {

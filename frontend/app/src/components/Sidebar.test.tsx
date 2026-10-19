@@ -494,6 +494,7 @@ describe('Sidebar brand mark', () => {
     const word = within(link as HTMLElement).getByText('ASComply')
     expect(word.style.fontSize).toBe('16px')
     expect(word.style.fontFamily).toBe('var(--font-display)')
+    expect(word.style.fontWeight).toBe('var(--fw-bold)')
     const eyebrow = within(link as HTMLElement).getByText('AFRICA')
     expect(eyebrow.style.fontSize).toBe('8px')
     expect(eyebrow.style.color).toBe('var(--eyebrow-on-dark)')

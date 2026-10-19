@@ -400,15 +400,19 @@ test('AS-LOGO the app lockup equals the blog lockup and fits the sidebar at ever
       const mark = brand.locator('img')
       const badge = brand.getByText('PLATFORM', { exact: true })
       const lockup = brand.locator('> span').first()
+      const wordmark = brand.getByText('ASComply', { exact: true })
+      const eyebrow = brand.getByText('AFRICA', { exact: true })
       const read = async (): Promise<{ problems: string[]; rects: Record<string, Rect> }> => {
-        await settle(page, aside(page), brand, mark, badge, lockup, switcher)
-        const boxes = { aside: await aside(page).boundingBox(), brand: await brand.boundingBox(), mark: await mark.boundingBox(), badge: await badge.boundingBox(), lockup: await lockup.boundingBox(), switcher: await switcher.boundingBox() }
+        await settle(page, aside(page), brand, mark, badge, lockup, wordmark, eyebrow, switcher)
+        const boxes = { aside: await aside(page).boundingBox(), brand: await brand.boundingBox(), mark: await mark.boundingBox(), badge: await badge.boundingBox(), lockup: await lockup.boundingBox(), wordmark: await wordmark.boundingBox(), eyebrow: await eyebrow.boundingBox(), switcher: await switcher.boundingBox() }
         const problems = Object.entries(boxes).filter(([, b]) => !b).map(([n]) => `${n} has no box`)
         if (problems.length) return { problems, rects: {} }
         const r = boxes as Record<string, Rect>
         if (!enclosesRect(r.aside, r.brand, 1)) problems.push('brand row sticks out of the aside')
         if (r.badge.x < r.lockup.x + r.lockup.width - 1) problems.push('badge starts left of the lockup right edge')
         if (rectsOverlap(r.badge, r.lockup)) problems.push('badge overlaps the lockup')
+        if (r.eyebrow.y < r.wordmark.y + r.wordmark.height - 1) problems.push('AFRICA is not under ASComply')
+        if (Math.abs(r.eyebrow.x - r.wordmark.x) > 1) problems.push('AFRICA does not start under ASComply')
         const markMid = r.mark.y + r.mark.height / 2
         const badgeMid = r.badge.y + r.badge.height / 2
         if (Math.abs(markMid - badgeMid) > 1) problems.push(`mark and badge centres differ by ${Math.abs(markMid - badgeMid)}px`)

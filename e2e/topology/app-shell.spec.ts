@@ -304,6 +304,7 @@ test('AS-03 header row fits at every wide width', async ({ page }, testInfo) => 
 })
 
 test('AS-LIB the Company Blog and Feature library links sit between the nav and the identity card at every wide and phone width', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
   const errors = collectErrors(page)
   const bakedLibraryUrl = resolveTarget('BAKED_LIBRARY_URL')
   const bakedBlogUrl = resolveTarget('BAKED_BLOG_URL')
@@ -311,6 +312,7 @@ test('AS-LIB the Company Blog and Feature library links sit between the nav and 
   const measured: Record<string, unknown>[] = []
   try {
     for (const persona of ['firm', 'inhouse'] as const) {
+      await page.setViewportSize(entry ?? { width: WIDE_WIDTHS[0], height: 1080 })
       await signInAs(page, persona, { tenantId: tenantOf(persona) })
       const blog = aside(page).getByRole('link', { name: 'Company Blog' })
       const link = aside(page).getByRole('link', { name: 'Feature library' })

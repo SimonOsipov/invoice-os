@@ -52,12 +52,7 @@ jobs:
               - 'go.sum'
               - 'Dockerfile'
               - 'Dockerfile.dockerignore'
-              - '.github/workflows/ci.yml'
-              - '.github/workflows/dev-env.yml'
-              - '.github/workflows/railway-invariants.yml'
-              - '.github/workflows/idp-release-watch.yml'
-              - '.github/workflows/dev-env-teardown.yml'
-              - '.github/workflows/dev-env-sweeper.yml'
+              - '.github/workflows/**'
             migrations:
               - 'migrations/**'
               - 'db/**'

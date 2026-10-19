@@ -948,7 +948,7 @@ func TestCIGoFilterCoversTheDeployWorkflows(t *testing.T) {
 		items := goPathsFilter(yaml)
 		var out []string
 		for _, w := range deployWorkflows {
-			if !slices.Contains(items, w) {
+			if !slices.Contains(items, w) && !slices.Contains(items, ".github/workflows/**") {
 				out = append(out, w)
 			}
 		}
@@ -979,8 +979,8 @@ func TestCIGoFilterCoversTheDeployWorkflows(t *testing.T) {
 
 	ci := readWorkflow(t, "ci.yml")
 	// Control: the parser reads the real go filter.
-	if items := goPathsFilter(ci); !slices.Contains(items, "cmd/**") || !slices.Contains(items, ".github/workflows/ci.yml") {
-		t.Fatalf("control: the go filter parses as %v, without cmd/** or ci.yml; the scan is broken", items)
+	if items := goPathsFilter(ci); !slices.Contains(items, "cmd/**") || !slices.Contains(items, ".github/workflows/**") {
+		t.Fatalf("control: the go filter parses as %v, without cmd/** or the workflows glob; the scan is broken", items)
 	}
 	for _, w := range missing(ci) {
 		t.Errorf("ci.yml's go paths filter does not list %s; an edit to it alone skips the go job that holds its pins", w)

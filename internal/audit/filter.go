@@ -18,7 +18,7 @@ type callerScope struct {
 	ids []string
 }
 
-// scopeFromGUC maps app.entity_scope: ”/'*' is full, an array literal is a set, anything
+// scopeFromGUC maps app.entity_scope: an empty or "*" value is full, an array literal is a set, anything
 // else is the empty set (fail closed).
 func scopeFromGUC(v string) callerScope {
 	if v == "" || v == "*" {

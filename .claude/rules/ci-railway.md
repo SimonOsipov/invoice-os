@@ -16,6 +16,8 @@ paths:
 - Run E2E only on `pull_request`. The api suite writes data, so it never runs against the persistent environment.
 - Gate every fork-only step on `github.event_name == 'pull_request'`, never on `!= 'workflow_dispatch'`. A push must never write live variables.
 - Use `RAILWAY_API_TOKEN` on `pull_request` and `push`. Use the project token `RAILWAY_API_DEV_TOKEN` on `workflow_dispatch`.
+- Install dependencies with `--ignore-scripts` in any job that holds `RAILWAY_API_TOKEN`. `TestNoInstallJobHoldsTheRailwayToken` pins it.
+- Reach `RAILWAY_API_TOKEN` only through `pull_request`. Never use `pull_request_target` or `workflow_run`. `TestNoWorkflowReachesSecretsThroughATrustedTrigger` pins it.
 - Pass `--project` and `--environment` on every call made with the account token. It has no implicit scope.
 - Keep every service's Watch Paths empty. `prepare-env` fails and names a service that has one.
 - Re-clear Watch Paths when you recreate a service. Railway ignores `build.watchPatterns` in `railway.json`.

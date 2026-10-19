@@ -130,6 +130,17 @@ func TestClientScope_AnAdminHoldingOneClientWritesForAnyClientAndALimitedMemberI
 	if _, err := x.store.Create(x.limited, input(&x.entB, "limited-b")); !errors.Is(err, customrule.ErrNotPermitted) {
 		t.Errorf("reviewer limited to A, Create for client B: err = %v, want ErrNotPermitted", err)
 	}
+	ruleB := uuid.NewString()
+	insertRev(t, super, seedRev{Tenant: x.ws.id, RuleID: ruleB, Revision: 1, Entity: &x.entB, Severity: "error", Message: "rule-b", Enabled: true})
+	if _, err := x.store.Update(x.limited, ruleB, input(&x.entA, "stolen")); !errors.Is(err, customrule.ErrNotPermitted) {
+		t.Errorf("reviewer limited to A, Update of B's rule: err = %v, want ErrNotPermitted", err)
+	}
+	if err := x.store.Delete(x.limited, ruleB); !errors.Is(err, customrule.ErrNotPermitted) {
+		t.Errorf("reviewer limited to A, Delete of B's rule: err = %v, want ErrNotPermitted", err)
+	}
+	if _, err := x.store.Update(admin, ruleB, input(&x.entB, "rule-b2")); err != nil {
+		t.Errorf("admin holding only client A, Update of B's rule: %v, want success", err)
+	}
 	unknown := uuid.NewString()
 	_, errUnknown := x.store.Create(admin, input(&unknown, "unknown"))
 	if ie, ok := asInvalid(errUnknown); !ok || ie.Msg != entityMsg {

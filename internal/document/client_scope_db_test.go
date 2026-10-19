@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/document"
@@ -241,5 +242,131 @@ func TestClientScope_AHiddenInvoiceOrBatchLinkRefusesTheDocument(t *testing.T) {
 	}
 	if n := auditCount(t, f.app, f.tenant, "document.read"); n != 2 {
 		t.Errorf("document.read rows = %d, want 2 (the admin reads only)", n)
+	}
+}
+
+type linkState struct{ hasInvoice, hasLink bool }
+
+func csLinkState(t *testing.T, ctx context.Context, tx pgx.Tx, doc string) linkState {
+	t.Helper()
+	var s linkState
+	if err := tx.QueryRow(ctx, `SELECT has_invoice, has_link FROM public.document_link_state($1)`, doc).Scan(&s.hasInvoice, &s.hasLink); err != nil {
+		t.Fatalf("document_link_state(%s): %v", doc, err)
+	}
+	return s
+}
+
+func csScope(t *testing.T, ctx context.Context, tx pgx.Tx) *string {
+	t.Helper()
+	var s *string
+	if err := tx.QueryRow(ctx, `SELECT current_setting('app.entity_scope', true)`).Scan(&s); err != nil {
+		t.Fatalf("read scope: %v", err)
+	}
+	return s
+}
+
+func TestClientScope_DocumentLinkStateAnswersOnlyTheBooleanPairInsideTheTenantAndRestoresTheScope(t *testing.T) {
+	f := newCSFixture(t)
+	ctx := context.Background()
+	byInvoiceB, other := csDocument(t, f.super, f.tenant), csDocument(t, f.super, f.tenant)
+	csExec(t, f.super, `INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-LS-B', $3)`, f.tenant, f.entB, byInvoiceB)
+	foreignTenant := seedTenant(t, f.super, "doc link state foreign")
+	foreignDoc := csDocument(t, f.super, foreignTenant)
+	csExec(t, f.super, `INSERT INTO invoices (tenant_id, entity_id, invoice_number, source_document_id) VALUES ($1, $2, 'CS-LS-F', $3)`,
+		foreignTenant, csEntity(t, f.super, foreignTenant, "Foreign client"), foreignDoc)
+
+	want := map[string]struct {
+		doc string
+		out linkState
+	}{
+		"B's batch only":        {f.docY, linkState{false, true}},
+		"B's invoice only":      {byInvoiceB, linkState{true, true}},
+		"A's invoice":           {f.docX, linkState{true, true}},
+		"unlinked":              {f.docZ, linkState{false, false}},
+		"another tenant's":      {foreignDoc, linkState{false, false}},
+		"an id that is no row":  {uuid.NewString(), linkState{false, false}},
+		"unlinked, a second id": {other, linkState{false, false}},
+	}
+	priors := map[string]*string{"unset": nil, "empty": ptr(""), "braces": ptr("{}"), "star": ptr("*"), "client A": ptr("{" + f.entA + "}")}
+	if len(want) == 0 || len(priors) == 0 {
+		t.Fatal("no cases")
+	}
+
+	for pname, prior := range priors {
+		conn, err := f.app.Acquire(ctx)
+		if err != nil {
+			t.Fatalf("acquire: %v", err)
+		}
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, f.tenant); err != nil {
+			t.Fatalf("set tenant: %v", err)
+		}
+		if prior != nil {
+			if _, err := tx.Exec(ctx, `SELECT set_config('app.entity_scope', $1, true)`, *prior); err != nil {
+				t.Fatalf("set scope: %v", err)
+			}
+		}
+		for dname, c := range want {
+			if got := csLinkState(t, ctx, tx, c.doc); got != c.out {
+				t.Errorf("prior scope %s, %s: document_link_state = %+v, want %+v", pname, dname, got, c.out)
+			}
+			after := csScope(t, ctx, tx)
+			switch {
+			case prior == nil && (after == nil || *after == ""):
+			case prior != nil && after != nil && *after == *prior:
+			default:
+				t.Errorf("prior scope %s, %s: scope after = %v, want it as before", pname, dname, after)
+			}
+		}
+		if prior != nil && *prior == "{"+f.entA+"}" {
+			if n := csTxCount(t, ctx, tx, `SELECT count(*) FROM invoices WHERE source_document_id = $1`, byInvoiceB); n != 0 {
+				t.Errorf("after the call the scope is back: B's invoice rows visible = %d, want 0", n)
+			}
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+		var left string
+		if err := conn.QueryRow(ctx, `SELECT coalesce(current_setting('app.entity_scope', true), '')`).Scan(&left); err != nil {
+			t.Fatalf("read scope after rollback: %v", err)
+		}
+		if left != "" {
+			t.Errorf("prior scope %s: the connection keeps scope %q after the transaction, want none", pname, left)
+		}
+		conn.Release()
+	}
+}
+
+func csTxCount(t *testing.T, ctx context.Context, tx pgx.Tx, q string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := tx.QueryRow(ctx, q, args...).Scan(&n); err != nil {
+		t.Fatalf("count (%s): %v", q, err)
+	}
+	return n
+}
+
+func TestClientScope_DocumentLinkStateIsExecutableByTheAppRoleOnly(t *testing.T) {
+	f := newCSFixture(t)
+	rows, err := f.super.Query(context.Background(),
+		`SELECT a.grantee::regrole::text FROM pg_proc p, aclexplode(p.proacl) a
+		  WHERE p.proname = 'document_link_state' AND a.privilege_type = 'EXECUTE' AND a.grantee <> p.proowner`)
+	if err != nil {
+		t.Fatalf("read grants: %v", err)
+	}
+	defer rows.Close()
+	var grantees []string
+	for rows.Next() {
+		var g string
+		if err := rows.Scan(&g); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		grantees = append(grantees, g)
+	}
+	if len(grantees) != 1 || grantees[0] != "invoice_app" {
+		t.Errorf("EXECUTE grantees besides the owner = %v, want [invoice_app] (a PUBLIC grant reads as \"-\")", grantees)
 	}
 }

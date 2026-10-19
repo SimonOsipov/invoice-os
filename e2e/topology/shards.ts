@@ -74,6 +74,7 @@ export const UNITS: Unit[] = [
     name: 'ui-surfaces',
     specs: [
       'app-shell.spec.ts',
+      'blog-editor.spec.ts',
       'design-system.spec.ts',
       'environment-posture.spec.ts',
       'ops-console.spec.ts',

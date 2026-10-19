@@ -8,7 +8,6 @@ vi.mock('@invoice-os/console-session', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
   StaffGate: () => null,
   signOutConsole: vi.fn(),
-  expireConsole: vi.fn(),
 }))
 
 // the key the console already stores under (moves from session.ts to auth.ts)

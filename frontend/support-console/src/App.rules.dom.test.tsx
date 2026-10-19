@@ -10,7 +10,8 @@ import { expireSession, signOut } from './auth'
 import { SAMPLE_INVOICE, addDraftRule, editDraftRule, fetchCodeListSummary, fetchCodeListSyncs, fetchRules, fetchVersions, openDraft, publishDraft, removeDraftRule, switchRule, testDraft, type RuleVersion } from './rulesApi'
 import type { Rule } from './types'
 
-vi.mock('@invoice-os/console-session', () => ({
+vi.mock('@invoice-os/console-session', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
   StaffGate: ({ children }: { children: ReactNode }) => children,
   signOutConsole: vi.fn(),
   expireConsole: vi.fn(),

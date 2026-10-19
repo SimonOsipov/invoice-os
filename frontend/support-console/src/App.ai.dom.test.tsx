@@ -10,7 +10,8 @@ import { expireSession } from './auth'
 import { fetchCodeListSummary, fetchRules, fetchVersions } from './rulesApi'
 import { fetchStaffTenants, type StaffTenant } from './tenantsApi'
 
-vi.mock('@invoice-os/console-session', () => ({
+vi.mock('@invoice-os/console-session', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
   StaffGate: ({ children }: { children: ReactNode }) => children,
   signOutConsole: vi.fn(),
   expireConsole: vi.fn(),

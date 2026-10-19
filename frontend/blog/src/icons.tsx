@@ -32,7 +32,7 @@ export type GlyphName =
   | 'x'
 
 // lucide-static@1.8.0 path data for the shell glyphs; the category and article glyphs are
-// lucide-static@0.428.0 (frontend/ops-console/src/glyphs.ts; rotate-cw, x from frontend/library/src/icons.tsx).
+// lucide-static@0.428.0 (rotate-cw, x from frontend/library/src/icons.tsx).
 export const GLYPHS: Record<GlyphName, readonly string[]> = {
   'chevron-right': ['m9 18 6-6-6-6'],
   'layout-dashboard': [

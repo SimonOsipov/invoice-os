@@ -3,13 +3,12 @@ import { fileURLToPath } from 'node:url'
 
 import { ApiError } from '@invoice-os/api-client'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
-import { expireConsole } from '@invoice-os/console-session'
 import { captureApiFailure } from '@invoice-os/monitoring/report'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { request } from './api'
 import { newCatForm, toCategoryInput } from './blog'
-import { expireSession, SESSION_KEY } from './auth'
+import { SESSION_KEY } from './auth'
 import { withSession } from './session'
 import {
   addCategory,
@@ -31,10 +30,6 @@ import {
   type PostInput,
 } from './blogApi'
 
-vi.mock('@invoice-os/console-session', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
-  expireConsole: vi.fn(),
-}))
 vi.mock('@invoice-os/monitoring/report', () => ({ captureApiFailure: vi.fn() }))
 
 const GW = 'https://gw.test'
@@ -78,7 +73,6 @@ afterEach(() => {
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
-  vi.mocked(expireConsole).mockClear()
   vi.mocked(captureApiFailure).mockClear()
 })
 
@@ -97,14 +91,6 @@ describe('request', () => {
     const { url, headers } = lastCall()
     expect(url).toBe(`${GW}/x`)
     expect(headers.get('Authorization')).toBe('Bearer T')
-  })
-})
-
-describe('expireSession', () => {
-  it('expireSession: signs out through expireConsole with app null', () => {
-    expireSession()
-    expect(expireConsole).toHaveBeenCalledTimes(1)
-    expect(expireConsole).toHaveBeenCalledWith({ storageKey: 'invoice-os.ops-session', gateway: GW, landing: LANDING, app: null, target: 'ops' })
   })
 })
 

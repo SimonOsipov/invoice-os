@@ -384,3 +384,64 @@ func TestClientScope_BatchSubmitRefusesAnotherClientsInvoice(t *testing.T) {
 		t.Errorf("queued history rows for client B's invoice = %d, want 0", n)
 	}
 }
+
+func TestClientScope_ViolationSummaryCountsOnlyTheSet(t *testing.T) {
+	f := newCSFixture(t, "CS violation summary")
+	bA := seedImportBatch(t, f.super, f.tenant, f.entA)
+	bB := seedImportBatch(t, f.super, f.tenant, f.entB)
+	r1 := `[{"rule_key":"cs-r1","severity":"error","message":"a"}]`
+	seedInvoiceWithBatchAndStatus(t, f.super, f.tenant, f.entA, "CS-VS-A1", bA, string(StatusDraft), r1)
+	seedInvoiceWithBatchAndStatus(t, f.super, f.tenant, f.entA, "CS-VS-A2", bA, string(StatusDraft), r1)
+	seedInvoiceWithBatchAndStatus(t, f.super, f.tenant, f.entB, "CS-VS-B1", bB, string(StatusDraft),
+		`[{"rule_key":"cs-rB","severity":"error","message":"b"}]`)
+
+	got, err := f.store.ViolationSummary(f.limited, []string{bA, bB})
+	if err != nil {
+		t.Fatalf("limited ViolationSummary([bA, bB]): %v", err)
+	}
+	if len(got) != 1 || got[0] != (RuleCount{RuleKey: "cs-r1", Invoices: 2}) {
+		t.Errorf("limited ViolationSummary([bA, bB]) = %+v, want [{cs-r1 2}] (client A only)", got)
+	}
+	got, err = f.store.ViolationSummary(f.limited, []string{bB})
+	if err != nil || len(got) != 0 {
+		t.Errorf("limited ViolationSummary([bB]) = %+v, err %v, want []", got, err)
+	}
+	got, err = f.store.ViolationSummary(f.admin, []string{bA, bB})
+	if err != nil {
+		t.Fatalf("admin ViolationSummary: %v", err)
+	}
+	want := []RuleCount{{RuleKey: "cs-r1", Invoices: 2}, {RuleKey: "cs-rB", Invoices: 1}}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("admin ViolationSummary([bA, bB]) = %+v, want %+v", got, want)
+	}
+}
+
+func TestClientScope_AwaitingApprovalListStopsAtTheSet(t *testing.T) {
+	f := newCSFixture(t, "CS awaiting approval")
+	policy := seedApprovalPolicyFor(t, f.super, f.tenant, "CS policy")
+	version := seedApprovalPolicyVersionFor(t, f.super, f.tenant, policy)
+	seedApprovalStepFor(t, f.super, f.tenant, version, approvalStepSpecFor{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: strPtr("finance-lead"),
+	})
+	activateApprovalPolicyVersionFor(t, f.super, version)
+	validA := seedInvoiceAtStatus(t, f.super, f.tenant, f.entA, "CS-AW-A", StatusValidated)
+
+	awaiting := func(ctx context.Context) ([]Invoice, int) {
+		items, total, err := f.store.List(ctx, ListFilter{Limit: 50, AwaitingApproval: true})
+		if err != nil {
+			t.Fatalf("List(awaiting approval): %v", err)
+		}
+		return items, total
+	}
+	items, total := awaiting(f.limited)
+	if total != 1 || len(items) != 1 || items[0].ID != validA {
+		t.Errorf("limited awaiting = %d items, total %d, want [%s]", len(items), total, validA)
+	}
+	if items, total := awaiting(f.unassigned); total != 0 || len(items) != 0 {
+		t.Errorf("unassigned awaiting = %d items, total %d, want 0", len(items), total)
+	}
+	items, total = awaiting(f.admin)
+	if total != 2 || len(items) != 2 || !idSet(items)[validA] || !idSet(items)[f.invB] {
+		t.Errorf("admin awaiting = %v, total %d, want [%s %s]", sortedIDs(idSet(items)), total, validA, f.invB)
+	}
+}

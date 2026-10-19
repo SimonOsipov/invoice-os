@@ -117,46 +117,17 @@ func TestRun_ServerCutsStalledAndIdleConnections(t *testing.T) {
 			}
 		}
 	}
+	// The free port is probed then released, so Run can lose it to another
+	// process; a failed Run is retried on a fresh port.
 	start := func(t *testing.T) string {
 		t.Setenv("SENTRY_DSN", "")
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
-		_ = ln.Close()
-		t.Setenv("PORT", port)
-		app, err := New("svc")
-		if err != nil {
-			t.Fatal(err)
-		}
-		app.Mux.HandleFunc("GET /ping", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
-		app.Mux.HandleFunc("POST /body", func(w http.ResponseWriter, r *http.Request) {
-			if _, err := io.Copy(io.Discard, r.Body); err != nil {
-				http.Error(w, "read: "+err.Error(), http.StatusBadRequest)
-			}
-		})
-		app.Mux.HandleFunc("GET /slow", func(w http.ResponseWriter, _ *http.Request) {
-			time.Sleep(3 * time.Second)
-			_, _ = io.WriteString(w, "late")
-		})
-		ctx, cancel := context.WithCancel(context.Background())
-		done := make(chan error, 1)
-		go func() { done <- app.Run(ctx) }()
-		t.Cleanup(func() { cancel(); <-done })
-		addr := "127.0.0.1:" + port
-		deadline := time.Now().Add(bound)
-		for {
-			c, err := net.Dial("tcp", addr)
-			if err == nil {
-				_ = c.Close()
+		for attempt := 0; attempt < 5; attempt++ {
+			if addr, ok := tryStart(t, bound); ok {
 				return addr
 			}
-			if time.Now().After(deadline) {
-				t.Fatalf("server did not listen: %v", err)
-			}
-			time.Sleep(20 * time.Millisecond)
 		}
+		t.Fatal("server did not start on any of 5 ports")
+		return ""
 	}
 	dial := func(t *testing.T, addr string) net.Conn {
 		c, err := net.Dial("tcp", addr)
@@ -226,4 +197,54 @@ func TestRun_ServerCutsStalledAndIdleConnections(t *testing.T) {
 			t.Errorf("cut took %v, want < %v", time.Since(began), bound)
 		}
 	})
+}
+
+// tryStart runs an App on a probed free port; ok is false when Run fails (port lost).
+func tryStart(t *testing.T, bound time.Duration) (addr string, ok bool) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	_ = ln.Close()
+	t.Setenv("PORT", port)
+	app, err := New("svc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.Mux.HandleFunc("GET /ping", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
+	app.Mux.HandleFunc("POST /body", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			http.Error(w, "read: "+err.Error(), http.StatusBadRequest)
+		}
+	})
+	app.Mux.HandleFunc("GET /slow", func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(3 * time.Second)
+		_, _ = io.WriteString(w, "late")
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- app.Run(ctx) }()
+	addr = "127.0.0.1:" + port
+	deadline := time.Now().Add(bound)
+	for {
+		select {
+		case <-done:
+			cancel()
+			return "", false
+		default:
+		}
+		c, err := net.Dial("tcp", addr)
+		if err == nil {
+			_ = c.Close()
+			t.Cleanup(func() { cancel(); <-done })
+			return addr, true
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatalf("server did not listen: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }

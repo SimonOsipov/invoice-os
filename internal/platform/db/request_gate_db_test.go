@@ -1322,7 +1322,7 @@ func TestRLS_RequestSeamScopeFollowsRoleAndKindNotStoredRows(t *testing.T) {
 		{"firm admin, flag on", firm, rsMember(t, firm.id, "admin", true)},
 		{"firm reviewer, All clients with a stale row", firm, rsMember(t, firm.id, "reviewer", true, a(firm))},
 		{"in-house preparer, flag off, one stored row", inHouse, rsMember(t, inHouse.id, "preparer", false, a(inHouse))},
-		{"in-house reviewer, flag on, one stored row", inHouse, rsMember(t, inHouse.id, "reviewer", true, a(inHouse))},
+		{"in-house reviewer, flag off, two stored rows", inHouse, rsMember(t, inHouse.id, "reviewer", false, inHouse.clients...)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1336,38 +1336,41 @@ func TestRLS_RequestSeamScopeFollowsRoleAndKindNotStoredRows(t *testing.T) {
 
 // TestRLS_RequestSeamRefusesAnInactiveMemberWhateverItsScope: a suspended or invited member
 // is refused with ErrNotActiveMember and the closure never runs, even with All clients, admin
-// or in-house standing. The same member is admitted while active.
+// or in-house standing. The same member is admitted while active. An active bystander admin sits
+// in the tenant first, so a gate that read another member's row would admit.
 func TestRLS_RequestSeamRefusesAnInactiveMemberWhateverItsScope(t *testing.T) {
 	requireHarness(t)
-	firm := csSeedClients(t, 2)
-	inHouse := csSeedClients(t, 2)
-	rsInHouse(t, inHouse)
 
 	cases := []struct {
 		name, status string
-		ten          *csTenant
+		inHouse      bool
 		role         string
 		all          bool
 		rows         int
 	}{
-		{"suspended preparer with All clients", "suspended", firm, "preparer", true, 0},
-		{"suspended admin", "suspended", firm, "admin", false, 0},
-		{"suspended limited reviewer", "suspended", firm, "reviewer", false, 1},
-		{"suspended in-house preparer", "suspended", inHouse, "preparer", false, 1},
-		{"invited preparer with All clients", "invited", firm, "preparer", true, 0},
+		{"suspended preparer with All clients", "suspended", false, "preparer", true, 0},
+		{"suspended admin", "suspended", false, "admin", false, 0},
+		{"suspended limited reviewer", "suspended", false, "reviewer", false, 1},
+		{"suspended in-house preparer", "suspended", true, "preparer", false, 1},
+		{"invited preparer with All clients", "invited", false, "preparer", true, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			user := rsMember(t, c.ten.id, c.role, c.all, c.ten.clients[:c.rows]...)
+			ten := csSeedClients(t, 2)
+			if c.inHouse {
+				rsInHouse(t, ten)
+			}
+			rsMember(t, ten.id, "admin", false)
+			user := rsMember(t, ten.id, c.role, c.all, ten.clients[:c.rows]...)
 			ran := false
 			run := func() error {
-				return db.WithinRequestTenantTx(requestCtx(user, c.ten.id), h.app, func(pgx.Tx) error { ran = true; return nil })
+				return db.WithinRequestTenantTx(requestCtx(user, ten.id), h.app, func(pgx.Tx) error { ran = true; return nil })
 			}
 			if err := run(); err != nil || !ran {
 				t.Fatalf("control: the active member was refused (err %v, ran %v)", err, ran)
 			}
 			if _, err := h.super.Exec(context.Background(),
-				`UPDATE memberships SET status = $1 WHERE tenant_id = $2 AND user_id = $3`, c.status, c.ten.id, user); err != nil {
+				`UPDATE memberships SET status = $1 WHERE tenant_id = $2 AND user_id = $3`, c.status, ten.id, user); err != nil {
 				t.Fatalf("set status: %v", err)
 			}
 			ran = false

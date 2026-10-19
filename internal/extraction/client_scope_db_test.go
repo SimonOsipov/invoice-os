@@ -164,3 +164,41 @@ func TestClientScope_ExtractionAdminReadsEveryDocument(t *testing.T) {
 		}
 	}
 }
+
+func TestClientScope_ExtractionAdminWritesOnEveryJob(t *testing.T) {
+	f := newCSEFixture(t)
+	ctx := t.Context()
+
+	for _, c := range []struct{ name, job, inv string }{{"X", f.jobX, f.invX}, {"Y", f.jobY, f.invY}} {
+		if before := lixLineRows(t, ctx, c.inv); len(before) != 0 {
+			t.Fatalf("fixture: %s's invoice already has lines %v", c.name, before)
+		}
+		w := cxServe(t, f.admin, c.job, "total", cxBody(cxTotalAfter), cxApplier(true, nil), cxAuditor(nil))
+		if w.Code != http.StatusCreated {
+			t.Errorf("admin correction on %s's job = %d %s, want 201", c.name, w.Code, w.Body.String())
+		}
+		if n := cxCorrectionRows(t, ctx, c.job); n != 1 {
+			t.Errorf("correction rows on %s's job = %d, want 1", c.name, n)
+		}
+		if got := cxTotal(t, ctx, c.inv); got != cxTotalAfter {
+			t.Errorf("%s's invoice total = %s, want %s", c.name, got, cxTotalAfter)
+		}
+		w = lixDBServe(t, f.admin, c.job, lixLinesBody(2), lixApplier(lixApplyOpts{write: true}), cxAuditor(nil))
+		if w.Code/100 != 2 {
+			t.Errorf("admin line-items on %s's job = %d %s, want 2xx", c.name, w.Code, w.Body.String())
+		}
+		if after := lixLineRows(t, ctx, c.inv); len(after) != 2 {
+			t.Errorf("%s's invoice lines = %v, want 2", c.name, after)
+		}
+	}
+
+	// Z is cited by nothing: the admin reaches the job and is refused for want of an invoice.
+	w := cxServe(t, f.admin, f.jobZ, "total", cxBody(cxTotalAfter), cxApplier(true, nil), cxAuditor(nil))
+	if w.Code != http.StatusConflict {
+		t.Errorf("admin correction on Z's job = %d %s, want 409 (reached, no invoice)", w.Code, w.Body.String())
+	}
+	w = lixDBServe(t, f.admin, f.jobZ, lixLinesBody(2), lixApplier(lixApplyOpts{write: true}), cxAuditor(nil))
+	if w.Code == http.StatusNotFound || w.Code/100 == 2 {
+		t.Errorf("admin line-items on Z's job = %d %s, want a no-invoice refusal, not 404 or 2xx", w.Code, w.Body.String())
+	}
+}

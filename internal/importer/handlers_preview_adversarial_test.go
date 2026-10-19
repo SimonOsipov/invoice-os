@@ -561,8 +561,8 @@ func TestPreviewHandler_TooManyRowsNamesTheLimit(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, raw)
 	}
-	if resp.Error != tooManyRowsMessage {
-		t.Errorf("error = %q, want %q", resp.Error, tooManyRowsMessage)
+	if resp.Error != "the spreadsheet has more than 100,000 data rows; split it into smaller files" {
+		t.Errorf("error = %q, want %q", resp.Error, "the spreadsheet has more than 100,000 data rows; split it into smaller files")
 	}
 	var env struct {
 		DocumentID string `json:"document_id"`
@@ -589,8 +589,8 @@ func TestPreviewHandler_DecodeDeadlineAnswersAnError(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, raw)
 	}
-	if resp.Error != decodeDeadlineMessage {
-		t.Errorf("error = %q, want %q", resp.Error, decodeDeadlineMessage)
+	if resp.Error != "the spreadsheet took too long to read; split it into smaller files" {
+		t.Errorf("error = %q, want %q", resp.Error, "the spreadsheet took too long to read; split it into smaller files")
 	}
 	if time.Since(start) > 10*time.Second {
 		t.Errorf("answer took %v, want < 10s", time.Since(start))

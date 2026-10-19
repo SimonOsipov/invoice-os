@@ -529,3 +529,18 @@ func TestBackfill_RowNumberingMatchesImporterAcrossBlankLinesAndQuotedNewlines(t
 		t.Errorf("source_rows = %v, want %v (the importer's own recorded range)", got, want)
 	}
 }
+
+func TestDecodeStoredDocument_PassesItsContextToTheDecode(t *testing.T) {
+	book := cellsAt(t, "A1", "A2")
+	open := newFakeDocOpen("d.xlsx", xlsxContentType, book)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := decodeStoredDocument(ctx, open.fn(), open.doc.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled ctx: err = %v, want context.Canceled", err)
+	}
+	open = newFakeDocOpen("d.xlsx", xlsxContentType, book)
+	rows, err := decodeStoredDocument(context.Background(), open.fn(), open.doc.ID)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("live ctx: rows=%d err=%v, want 1 data row, nil", len(rows), err)
+	}
+}

@@ -471,7 +471,7 @@ func TestSheetHandler_StoredXLSXOverTheRowCapIs400(t *testing.T) {
 	var body struct {
 		Error string `json:"error"`
 	}
-	if err := json.Unmarshal(raw, &body); err != nil || body.Error != tooManyRowsMessage {
-		t.Errorf("body = %s (err=%v), want error %q", raw, err, tooManyRowsMessage)
+	if err := json.Unmarshal(raw, &body); err != nil || body.Error != "the spreadsheet has more than 100,000 data rows; split it into smaller files" {
+		t.Errorf("body = %s (err=%v), want error %q", raw, err, "the spreadsheet has more than 100,000 data rows; split it into smaller files")
 	}
 }

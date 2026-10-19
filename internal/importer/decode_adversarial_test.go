@@ -735,8 +735,9 @@ func TestXLSXRows_NonRowTokensAreBoundedByTheUnzipLimit(t *testing.T) {
 	})
 	defer func(n int64) { maxXLSXUnzipBytes = n }(maxXLSXUnzipBytes)
 	maxXLSXUnzipBytes = 32 << 20
-	if _, err := xlsxRows(context.Background(), bytes.NewReader(crafted), 1); err == nil {
-		t.Fatal("err = nil, want the unzip-limit error for 40 MiB of non-row tokens")
+	_, err := xlsxRows(context.Background(), bytes.NewReader(crafted), 1)
+	if err == nil || !strings.Contains(err.Error(), "unzip size exceeds") {
+		t.Fatalf("err = %v, want the unzip-limit error for 40 MiB of non-row tokens", err)
 	}
 }
 

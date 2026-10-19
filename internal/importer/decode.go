@@ -280,7 +280,7 @@ var ErrTooManyRows = errors.New("importer: spreadsheet has more than 100,000 dat
 // ceiling: one Columns call is uninterruptible (up to ~8s at maxXLSXUnzipBytes), revisit if a trace shows a preview over 30s.
 var xlsxDecodeTimeout = 30 * time.Second
 
-// xlsxRows returns every row of the first sheet from row 1 via excelize's
+// xlsxRows returns the rows of the first sheet from row 1 via excelize's
 // row iterator, so display values (formatted dates, grouped numbers) come
 // back exactly as a human would see them in Excel — no normalization, that
 // is the service's job. A gap row comes back nil. OpenReader is bounded by

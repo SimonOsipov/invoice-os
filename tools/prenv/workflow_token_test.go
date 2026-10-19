@@ -131,8 +131,7 @@ func classifyInstall(cmd string) (install, safe bool) {
 	case name == "pnpm" || name == "npm" || name == "bun":
 		install = slices.Contains(jsInstallSubs, sub)
 	case name == "yarn":
-		help := slices.ContainsFunc(f, func(a string) bool { return slices.Contains([]string{"--version", "-v", "--help", "-h"}, a) })
-		install = (sub == "" && !help) || slices.Contains(jsInstallSubs, sub)
+		install = sub == "" || slices.Contains(jsInstallSubs, sub)
 	case pipRE.MatchString(name):
 		return sub == "install", false
 	case name == "poetry":

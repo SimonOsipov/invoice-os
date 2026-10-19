@@ -20,7 +20,7 @@ import { Footer } from './components/Footer'
 import { Privacy } from './components/Privacy'
 import { CookieNotice } from './components/CookieNotice'
 import { isScrollable, scrollDepthPercent, trackDemoOpen, trackScrollDepth, type DemoCtaSource } from './analytics'
-import { libraryBase } from './auth'
+import { blogBase, libraryBase } from './auth'
 import { readConsent, type ConsentRecord } from './consent'
 import { applyChoice, syncConsent } from './consentActions'
 import { INVITE_PARAM, readInviteOutcome } from './invite'
@@ -193,7 +193,7 @@ export default function App() {
         overflowX: 'clip',
       }}
     >
-      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} hrefPrefix={privacy ? '/' : ''} libraryHref={libraryBase()} />
+      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} hrefPrefix={privacy ? '/' : ''} libraryHref={libraryBase()} blogHref={blogBase()} />
       {notice && (
         <VerifyNotice
           outcome={notice}
@@ -220,7 +220,7 @@ export default function App() {
           <ClosingCta onBookDemo={book('closing')} />
         </>
       )}
-      <Footer onBookDemo={book('footer')} onSignIn={onSignIn} hrefPrefix={privacy ? '/' : ''} onCookieChoices={() => {
+      <Footer onBookDemo={book('footer')} onSignIn={onSignIn} hrefPrefix={privacy ? '/' : ''} blogHref={blogBase()} onCookieChoices={() => {
         const next = syncConsent()
         if (next) setConsent(next)
         setReopened(true)

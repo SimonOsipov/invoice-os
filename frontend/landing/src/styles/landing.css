@@ -151,7 +151,7 @@ button {
   align-items: center;
   gap: 24px;
 }
-/* Room for the Library link before the burger edge. */
+/* Room for the Library and Blog links before the burger edge. */
 @media (max-width: 1279px) {
   .a-nav {
     gap: 16px;

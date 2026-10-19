@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -83,7 +84,7 @@ func TestReconcileURLVariablesSetsAndVerifiesLandingGateway(t *testing.T) {
 // Every label's plan line names the id of the service of that name.
 func TestReconcileURLVariablesGatewayURLNotOnOtherServices(t *testing.T) {
 	t.Parallel()
-	known := map[string]bool{"gateway": true, "app": true, "landing": true, "ops-console": true, "support-console": true, "library": true}
+	known := map[string]bool{"gateway": true, "app": true, "landing": true, "ops-console": true, "support-console": true, "library": true, "blog": true}
 	resolved := map[string]string{}
 	for _, m := range serviceIDByName.FindAllStringSubmatch(strings.Join(stripHashComments(strings.Split(reconcileURLVariablesBody(t), "\n")), "\n"), -1) {
 		resolved[m[1]] = m[2]
@@ -110,7 +111,7 @@ func TestReconcileURLVariablesGatewayURLNotOnOtherServices(t *testing.T) {
 	if landingLines == 0 {
 		t.Fatalf("control: no landing-labelled call parsed")
 	}
-	if len(resolved) < 6 {
+	if len(resolved) < 7 {
 		t.Fatalf("control: %d service ids resolved by name in reconcile_url_variables (%v), want one per service", len(resolved), resolved)
 	}
 
@@ -119,8 +120,8 @@ func TestReconcileURLVariablesGatewayURLNotOnOtherServices(t *testing.T) {
 		got = append(got, l)
 	}
 	sort.Strings(got)
-	if strings.Join(got, ",") != "app,landing,ops-console,support-console" {
-		t.Errorf("pass_plan_add writes VITE_GATEWAY_URL on %v, want exactly [app landing ops-console support-console]", got)
+	if strings.Join(got, ",") != "app,blog,landing,ops-console,support-console" {
+		t.Errorf("pass_plan_add writes VITE_GATEWAY_URL on %v, want exactly [app blog landing ops-console support-console]", got)
 	}
 }
 
@@ -134,7 +135,7 @@ func TestReconcileURLVariablesWritesTheLibraryURLs(t *testing.T) {
 		got[c.label][c.name] = c.value
 	}
 	for label, want := range map[string]map[string]string{
-		"library": {"VITE_APP_URL": "$app_url", "VITE_LANDING_URL": "$landing_url"},
+		"library": {"VITE_APP_URL": "$app_url", "VITE_LANDING_URL": "$landing_url", "VITE_BLOG_URL": "$blog_url"},
 		"app":     {"VITE_LIBRARY_URL": "$library_url"},
 		"landing": {"VITE_LIBRARY_URL": "$library_url", "VITE_APP_URL": "$app_url"}, // VITE_APP_URL is the control
 	} {
@@ -144,8 +145,43 @@ func TestReconcileURLVariablesWritesTheLibraryURLs(t *testing.T) {
 			}
 		}
 	}
-	if len(got["library"]) != 2 {
-		t.Errorf("library row = %v, want exactly VITE_APP_URL and VITE_LANDING_URL", got["library"])
+	if len(got["library"]) != 3 {
+		t.Errorf("library row = %v, want exactly VITE_APP_URL, VITE_LANDING_URL and VITE_BLOG_URL", got["library"])
+	}
+}
+
+func TestReconcileURLVariablesWritesTheBlogURLOnLandingAndLibrary(t *testing.T) {
+	t.Parallel()
+	got := map[string]map[string]string{}
+	for _, c := range reconcileCalls(t) {
+		if got[c.label] == nil {
+			got[c.label] = map[string]string{}
+		}
+		got[c.label][c.name] = c.value
+	}
+	for _, label := range []string{"landing", "library"} {
+		if got[label]["VITE_BLOG_URL"] != "$blog_url" {
+			t.Errorf("%s writes VITE_BLOG_URL=%q, want $blog_url", label, got[label]["VITE_BLOG_URL"])
+		}
+	}
+}
+
+func TestReconcileURLVariablesWritesTheBlogURLs(t *testing.T) {
+	got := map[string]map[string]string{}
+	for _, c := range reconcileCalls(t) {
+		if got[c.label] == nil {
+			got[c.label] = map[string]string{}
+		}
+		got[c.label][c.name] = c.value
+	}
+	if want := map[string]string{"VITE_GATEWAY_URL": "$gateway_url", "VITE_LANDING_URL": "$landing_url"}; !reflect.DeepEqual(got["blog"], want) {
+		t.Errorf("blog row = %v, want exactly %v", got["blog"], want)
+	}
+	if len(got["library"]) != 3 {
+		t.Errorf("control: library row = %v, want its three variables", got["library"])
+	}
+	if _, ok := got["app"]["VITE_BLOG_URL"]; ok {
+		t.Errorf("app row = %v, want no VITE_BLOG_URL (no app link to the blog)", got["app"])
 	}
 }
 
@@ -170,11 +206,11 @@ func TestReconcileURLVariablesWritesTheConsoleHandoffURLs(t *testing.T) {
 	}
 }
 
-func TestReconcileURLVariablesKeepsTheLibraryOutOfCORS(t *testing.T) {
+func TestReconcileURLVariablesPutsTheBlogInCORS(t *testing.T) {
 	t.Parallel()
 	body := strings.Join(stripHashComments(strings.Split(reconcileURLVariablesBody(t), "\n")), "\n")
-	if !strings.Contains(body, `local origins="$app_url,$landing_url,$ops_url,$support_url"`) {
-		t.Errorf("origins is not exactly $app_url,$landing_url,$ops_url,$support_url")
+	if !strings.Contains(body, `local origins="$app_url,$landing_url,$ops_url,$support_url,$blog_url"`) {
+		t.Errorf("origins is not exactly $app_url,$landing_url,$ops_url,$support_url,$blog_url")
 	}
 	cors := 0
 	for _, c := range reconcileCalls(t) {
@@ -183,6 +219,9 @@ func TestReconcileURLVariablesKeepsTheLibraryOutOfCORS(t *testing.T) {
 		}
 		if strings.Contains(c.value, "library") {
 			t.Errorf("gateway write %s=%s names the library URL", c.name, c.value)
+		}
+		if strings.Contains(c.value, "blog") && c.name != "CORS_ALLOWED_ORIGINS" {
+			t.Errorf("gateway write %s=%s names the blog URL", c.name, c.value)
 		}
 		if c.name == "CORS_ALLOWED_ORIGINS" && c.value == "$origins" {
 			cors++

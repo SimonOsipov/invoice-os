@@ -199,17 +199,18 @@ func TestForkAuthRefusalsPrecedeServiceResolution(t *testing.T) {
 	}
 }
 
-// Both URL commands refuse a missing or empty <library-url> before any Railway call.
-func TestURLCommandsRequireTheLibraryURL(t *testing.T) {
+// Both URL commands refuse a missing or empty <blog-url> before any Railway call.
+func TestForkPassURLArgumentsAreEight(t *testing.T) {
 	t.Parallel()
-	seven := append([]string{authForkEnvID}, afterArgs()[1:]...)
+	eight := append([]string{authForkEnvID}, afterArgs()[1:]...)
 	for _, sub := range []string{"reconcile-urls", afterSub} {
 		for _, c := range []struct {
 			name string
 			args []string
 		}{
-			{"six arguments", seven[:6]},
-			{"empty seventh", append(slices.Clone(seven[:6]), "")},
+			{"seven arguments", eight[:7]},
+			{"empty eighth", append(slices.Clone(eight[:7]), "")},
+			{"nine arguments", append(slices.Clone(eight), "https://extra")},
 		} {
 			t.Run(sub+" "+c.name, func(t *testing.T) {
 				t.Parallel()
@@ -218,8 +219,8 @@ func TestURLCommandsRequireTheLibraryURL(t *testing.T) {
 				if code != 2 {
 					t.Errorf("exit %d, want 2; output = %q", code, clip(out))
 				}
-				if !strings.Contains(out, "<library-url>") {
-					t.Errorf("usage line does not name <library-url>: %q", clip(out))
+				if !strings.Contains(out, "<blog-url>") {
+					t.Errorf("usage line does not name <blog-url>: %q", clip(out))
 				}
 				if n := len(operations(s.calls(t))); n != 0 {
 					t.Errorf("%d Railway calls recorded before the usage refusal", n)
@@ -228,9 +229,9 @@ func TestURLCommandsRequireTheLibraryURL(t *testing.T) {
 		}
 		t.Run(sub+" control", func(t *testing.T) {
 			s := newAuthShim(t, forkAuthRailway(), forkAuthStores(freshJWK(t)))
-			out, code := forkAuthRun(t, s, sub, seven...)
+			out, code := forkAuthRun(t, s, sub, eight...)
 			if code == 2 || len(operations(s.calls(t))) == 0 {
-				t.Errorf("seven URLs did not proceed past the argument check: exit %d, output = %q", code, clip(out))
+				t.Errorf("eight URLs did not proceed past the argument check: exit %d, output = %q", code, clip(out))
 			}
 		})
 	}

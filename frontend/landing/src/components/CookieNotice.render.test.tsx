@@ -42,7 +42,7 @@ const DENIED: ConsentRecord = { analytics: false, ts: '2026-01-01T00:00:00.000Z'
 // Verbatim from the story's Final copy table. Not paraphrased, punctuation untouched.
 const BODY_COPY =
   'We use Google Analytics to see how people find and use this page. That is the only non-essential cookie we set: no advertising, no remarketing, no data sold to anyone. ' +
-  `Your choice applies to ${SHARED_COOKIE_DOMAIN} and the Feature Library.`
+  `Your choice applies to ${SHARED_COOKIE_DOMAIN}, the Feature Library and the Blog.`
 const LINK_TEXT = 'Read the privacy &amp; cookie policy'
 const SETTING_ON = 'Analytics cookies are on.'
 const SETTING_OFF = 'Analytics cookies are off.'
@@ -86,6 +86,19 @@ describe('CookieNotice SSR render (LAND-05-02)', () => {
   it('T2-2: the body copy is verbatim', async () => {
     const html = await render()
     expect(html).toContain(BODY_COPY)
+  })
+
+  it('CookieNotice body names the Blog', async () => {
+    const html = await render()
+    expect(html).toContain(BODY_COPY)
+    expect(html).toContain('the Feature Library and the Blog.')
+    expect(html).not.toContain('and the Feature Library.')
+  })
+
+  it('CookieNotice body is host-neutral: the reopened state keeps the body', async () => {
+    const html = await render({ current: GRANTED })
+    expect(html).toContain(BODY_COPY)
+    expect(html).toMatch(/class="cn-setting"[^>]*>Analytics cookies are on\.</)
   })
 
   it('T2-3 / AC-4: exactly two buttons, both type="button", labelled Accept and Reject', async () => {

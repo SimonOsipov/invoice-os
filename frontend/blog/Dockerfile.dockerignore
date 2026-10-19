@@ -1,0 +1,35 @@
+# Ignore-file for frontend/blog/Dockerfile: the root .dockerignore plus the Go sources of cmd/blog.
+# BuildKit reads a Dockerfile-adjacent ignore file first.
+
+# Node
+node_modules
+**/node_modules
+**/dist
+**/build
+**/.vite
+**/.verify
+*.tsbuildinfo
+
+# VCS / CI / tooling
+.git
+.github
+.claude
+
+# Go backend: only the blog server's sources (the Go stage of this image)
+cmd
+!cmd/blog
+internal
+!internal/blogweb
+!internal/platform
+migrations
+db
+# Python sidecar (sidecar/docling/Dockerfile is its own image, own build context)
+sidecar
+Makefile
+docker-compose.yml
+.env
+.env.example
+
+# Editor / OS
+.DS_Store
+**/.DS_Store

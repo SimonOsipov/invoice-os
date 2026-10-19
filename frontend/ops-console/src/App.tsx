@@ -6,6 +6,7 @@ import { Submissions } from './components/Submissions'
 import { Evidence } from './components/Evidence'
 import { ApiWebhooks } from './components/ApiWebhooks'
 import { Billing } from './components/Billing'
+import { Blog } from './components/Blog'
 import { Status } from './components/Status'
 import { JobDrawer } from './components/JobDrawer'
 import { EvidenceDrawer } from './components/EvidenceDrawer'
@@ -15,18 +16,27 @@ import { EVIDENCE_DATA, SEED_SUBMISSIONS } from './data'
 import { gatewayBase } from '@invoice-os/api-client'
 import { StaffGate } from '@invoice-os/console-session'
 import { SESSION_KEY, landingBase } from './auth'
-import type { DrawerState, Env, JobFilter, Range, Screen, ToastState, ToastTone } from './types'
+import { keptFor } from './blog'
+import { currentSub } from './session'
+import type { BlogFilters, DrawerState, Env, JobFilter, Range, Screen, ToastState, ToastTone } from './types'
 
 // The whole console lives under `.asc-app` — that scope defines the design-system
 // tokens (--accent, --bg-*, --fg-*, …) and the utility classes (.v2-btn, .label,
 // .mono) that every screen relies on. It's a full-height app shell: a fixed
 // sidebar + a scrolling main column, with drawers/modals/toast layered on top.
 export default function App() {
+  if (landingBase() === null) return null
   return (
     <StaffGate storageKey={SESSION_KEY} target="ops" gateway={gatewayBase()} landing={landingBase()}>
       <Console />
     </StaffGate>
   )
+}
+
+// Opens on Blog when the signed-in member has a draft kept from a lost session.
+function initialScreen(): Screen {
+  if (typeof localStorage === 'undefined') return 'overview'
+  return keptFor(localStorage, currentSub()) ? 'blog' : 'overview'
 }
 
 function Console() {
@@ -35,7 +45,7 @@ function Console() {
   // state that nothing consumes yet. `subQuery` arrived with its two consumers on
   // Submissions (the search input and the empty state), `evQuery` likewise with
   // Evidence, and `reveal`/`confirmRotate` with API & webhooks.
-  const [screen, setScreen] = useState<Screen>('overview')
+  const [screen, setScreen] = useState<Screen>(initialScreen)
   const [env, setEnv] = useState<Env>('sandbox')
   const [range, setRange] = useState<Range>('30d')
   const [filter, setFilter] = useState<JobFilter>('all')
@@ -51,6 +61,7 @@ function Console() {
   // proto:755 — holds the env LABEL of the key being rotated ('LIVE' | 'SANDBOX'), which
   // doubles as the modal heading and the toast subject. null = modal closed.
   const [confirmRotate, setConfirmRotate] = useState<string | null>(null)
+  const [blogFilters, setBlogFilters] = useState<BlogFilters>({ tab: 'posts', q: '', status: 'all', cat: 'all' })
   const [toast, setToast] = useState<ToastState>(null)
   const [jobs, setJobs] = useState(SEED_SUBMISSIONS)
 
@@ -149,6 +160,7 @@ function Console() {
               onDownloadInvoice={(id) => showToast('Invoice ' + id + ' downloaded', 'PDF')}
             />
           )}
+          {screen === 'blog' && <Blog filters={blogFilters} onFilters={setBlogFilters} onToast={showToast} />}
           {screen === 'status' && <Status />}
         </div>
       </main>

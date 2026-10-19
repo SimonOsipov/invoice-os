@@ -167,6 +167,7 @@ describe('RESKIN-01-03 (AC 5): the former --gradient-hero sites render the v2 fl
 const primaryNav = (html: string) => /<nav\b[^>]*aria-label="Primary"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? ''
 const navHashes = (html: string) => [...primaryNav(html).matchAll(/href="(#[^"]+)"/g)].map((m) => m[1])
 const LIB = 'https://lib.x'
+const BLOG = 'https://blog.x'
 afterEach(() => void vi.unstubAllEnvs())
 const navHrefs = (html: string) => [...primaryNav(html).matchAll(/href="([^"]*)"/g)].map((m) => m[1])
 
@@ -195,10 +196,11 @@ describe('AN-01 every nav in-page link resolves to one section', () => {
     expect(unresolvedNavLinks(html)).toEqual([])
   })
 
-  it('AN-01 holds with the Library link rendered', () => {
+  it('AN-01 holds with the Blog link rendered', () => {
     vi.stubEnv('VITE_LIBRARY_URL', LIB)
+    vi.stubEnv('VITE_BLOG_URL', BLOG)
     const html = renderAppAt('/')
-    expect(navHrefs(html), 'control: the Library link rendered').toContain(LIB)
+    expect(navHrefs(html), 'control: both external links rendered').toEqual(expect.arrayContaining([LIB, BLOG]))
     expect(navHashes(html)).toHaveLength(5)
     expect(unresolvedNavLinks(html)).toEqual([])
   })
@@ -212,15 +214,20 @@ describe('AN-02 on /privacy every nav link carries the prefix', () => {
     expect(hrefs.filter((h) => h.startsWith('//'))).toEqual([])
   })
 
-  it('AN-02 names the one external link', () => {
+  it('AN-02 names the two external links', () => {
     vi.stubEnv('VITE_LIBRARY_URL', LIB)
+    vi.stubEnv('VITE_BLOG_URL', BLOG)
     const hrefs = navHrefs(renderAppAt('/privacy'))
     expect(hrefs.filter((h) => h === LIB)).toHaveLength(1)
-    const others = hrefs.filter((h) => h !== LIB)
+    expect(hrefs.filter((h) => h === BLOG)).toHaveLength(1)
+    const others = hrefs.filter((h) => h !== LIB && h !== BLOG)
     expect(others.filter((h) => !h.startsWith('/#'))).toEqual([])
-    expect(others.filter((h) => h.startsWith('//'))).toEqual([])
+    expect(hrefs.filter((h) => h.startsWith('//'))).toEqual([])
     vi.stubEnv('VITE_LIBRARY_URL', '')
-    expect(navHrefs(renderAppAt('/privacy')), 'control: no stub, no Library link').not.toContain(LIB)
+    vi.stubEnv('VITE_BLOG_URL', '')
+    const bare = navHrefs(renderAppAt('/privacy'))
+    expect(bare, 'control: no stub, no Library link').not.toContain(LIB)
+    expect(bare, 'control: no stub, no Blog link').not.toContain(BLOG)
   })
 })
 
@@ -327,6 +334,16 @@ describe('AN-03 every footer in-page link resolves to one section', () => {
     expect(hashes, 'the footer hashes are not the PLATFORM_LINKS population').toHaveLength(PLATFORM_LINKS.length)
     expect(hashes, 'the footer links Solutions for partners').toContain('#solutions')
     expect(unresolvedHashes(html, hashes)).toEqual([])
+  })
+
+  it('AN-03 holds with the Blog footer link rendered', () => {
+    vi.stubEnv('VITE_BLOG_URL', BLOG)
+    const html = renderAppAt('/')
+    const hrefs = footerHrefs(footerSlice(html))
+    const hashes = hrefs.filter((h) => h.startsWith('#') && h.length > 1)
+    expect(hashes).toHaveLength(PLATFORM_LINKS.length)
+    expect(unresolvedHashes(html, hashes)).toEqual([])
+    expect(hrefs.filter((h) => h === BLOG), 'the footer holds the Blog href once').toHaveLength(1)
   })
 })
 

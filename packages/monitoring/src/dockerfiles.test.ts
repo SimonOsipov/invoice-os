@@ -13,7 +13,7 @@ const NO_GATEWAY = ['library']
 describe('dockerfiles', () => {
   it('dockerfiles_everyMonitoredSpaBakesTheDsnAndReleaseFallback', () => {
     const monitored = monitoredSpas()
-    expect(monitored).toEqual(['app', 'landing', 'library', 'ops-console', 'support-console'])
+    expect(monitored).toEqual(['app', 'blog', 'landing', 'library', 'ops-console', 'support-console'])
 
     // Control: the line finder sees a pre-existing app ARG, so a miss below is a real miss.
     const appLines = codeLines(readFileSync(join(FRONTEND, 'app/Dockerfile'), 'utf8'))
@@ -79,18 +79,28 @@ describe('dockerfiles', () => {
     expect(swap(library, 'x')).toEqual(swap(landing, 'x'))
   })
 
+  it('dockerfiles_theBlogRailwayJsonIsLandingsButForTheDockerfilePath', () => {
+    const read = (n: string) => JSON.parse(readFileSync(join(FRONTEND, n, 'railway.json'), 'utf8'))
+    const landing = read('landing')
+    expect(landing.build.dockerfilePath).toBe('frontend/landing/Dockerfile')
+    const blog = read('blog')
+    expect(blog.build.dockerfilePath).toBe('frontend/blog/Dockerfile')
+    const swap = (j: { build: object }, dockerfilePath: string) => ({ ...j, build: { ...j.build, dockerfilePath } })
+    expect(swap(blog, 'x')).toEqual(swap(landing, 'x'))
+  })
+
   it('dockerfiles_theAuthTokenReachesOnlyTheBuildStage', () => {
     const monitored = monitoredSpas()
-    expect(monitored).toEqual(['app', 'landing', 'library', 'ops-console', 'support-console'])
+    expect(monitored).toEqual(['app', 'blog', 'landing', 'library', 'ops-console', 'support-console'])
 
     for (const name of monitored) {
       const lines = codeLines(readFileSync(join(FRONTEND, name, 'Dockerfile'), 'utf8'))
       const froms = lines.flatMap((l, i) => (/^FROM\s/i.test(l) ? [i] : []))
-      expect(froms, `${name}: expected a build FROM and a serve FROM`).toHaveLength(2)
-      const [buildFrom, serveFrom] = froms
+      expect(froms.length, `${name}: expected a build FROM and a serve FROM`).toBeGreaterThanOrEqual(2)
+      const buildFrom = froms[0]
       const build = lines.findIndex((l) => /^RUN\s+pnpm\s+--filter/i.test(l))
       expect(build, `${name}: no build RUN`).toBeGreaterThan(buildFrom)
-      expect(build, `${name}: build RUN is not in the build stage`).toBeLessThan(serveFrom)
+      expect(build, `${name}: build RUN is not in the build stage`).toBeLessThan(froms[1])
 
       // Control: the same finder locates a pre-existing ARG inside the build stage.
       const dsn = lines.findIndex((l) => /^ARG\s+VITE_SENTRY_DSN$/i.test(l))
@@ -106,7 +116,7 @@ describe('dockerfiles', () => {
       expect(lines.filter((l) => /^ENV\b.*SENTRY_AUTH_TOKEN/i.test(l)), `${name}: ENV names the token`).toEqual([])
       expect(lines.filter((l) => /SENTRY_AUTH_TOKEN=/i.test(l)), `${name}: token assigned`).toEqual([])
 
-      const serve = lines.slice(serveFrom + 1)
+      const serve = lines.slice(froms[1] + 1)
       expect(serve.length, `${name}: serve stage is empty`).toBeGreaterThan(0)
       expect(serve.filter((l) => /SENTRY_AUTH_TOKEN/i.test(l)), `${name}: serve stage names the token`).toEqual([])
     }

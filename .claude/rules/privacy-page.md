@@ -14,6 +14,7 @@ paths:
   - "internal/notifications/resend.go"
   - "internal/notifications/worker.go"
   - "internal/notifications/store.go"
+  - "internal/notifications/newsletter*.go"
   - "internal/platform/ai/**"
   - "internal/platform/jev/**"
   - "internal/extraction/aiimage.go"
@@ -42,13 +43,23 @@ paths:
 - Claim no compliance with a named data-protection law. The page says it is not legal advice.
 - Disclose each new browser network sender on the page. List the external hosts the landing contacts.
 - Treat an ungated flow as a page fact. Fonts and error reports load whatever the visitor chooses about analytics.
-- Scope each analytics sentence to the landing and the Feature Library, never to the landing alone.
-- Say that one analytics choice covers the landing and the Library. A choice made on either site applies to both.
+- Scope each analytics sentence outside the Library section to the landing, the Feature Library and the Blog, never to the landing alone.
+- Keep the Library section as pinned (`LIBRARY_SECTION`). It names the landing and the Library only.
+- Say in the Blog section that one analytics choice covers the landing, the Library and the Blog. A choice made on any of the three applies to all.
 - Name `asc_consent` in one paragraph only, the cookie-notice paragraph. Say there that it is our own cookie on `SHARED_COOKIE_DOMAIN`.
 - List what the Library sends Google: each page viewed, Book the Demo, the tour start and Open in Platform.
 - Say that Open in Platform carries the feature or group. It is a content id, never visitor input.
-- Say that Reject on either site deletes the shared `_ga` cookies. Google's script can re-create them until reload.
-- Name the Library's own "Cookie choices" control at the foot of its sidebar. It brings the notice back.
+- Say in the Blog section that Reject on any of the three sites deletes the shared `_ga` cookies. Google's script can re-create them until reload.
+- Name the "Cookie choices" control in the Blog section. The Blog's control sits at the foot of its sidebar, beside the Library's. It brings the notice back.
+
+## Blog newsletter
+
+- Write a newsletter sentence only when `privacyCodeFacts.test.util.ts` reads its fact from `internal/notifications/newsletter*.go`. A sentence without a reader does not ship.
+- Say that every newsletter email carries a one-click unsubscribe only while `contacts.md` puts `{{{RESEND_UNSUBSCRIBE_URL}}}` in every blog broadcast and `Confirm.tsx` says it.
+- Say that staff follow the chosen frequency when they send by hand. The source is BLOG-00 Decision Log Q7. No test can read it.
+- Name HubSpot in the Blog section only to say the newsletter sends it nothing. No `newsletter*.go` file names HubSpot.
+- Quote the stop route from `PRIVACY_CONTACT`. The 48-hour expiry follows the interval in `newsletter.go`.
+- Resend vendor documents were checked 2026-10-18. The privacy policy names no storage region. The audience-hygiene page has no data-residency statement.
 
 ## AI processing of invoice documents
 

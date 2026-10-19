@@ -9,6 +9,7 @@ const TARGETS = [
   { name: 'ops-console', env: 'OPS_CONSOLE_URL' },
   { name: 'support-console', env: 'SUPPORT_CONSOLE_URL' },
   { name: 'library', env: 'LIBRARY_URL' },
+  { name: 'blog', env: 'BLOG_URL' },
 ]
 
 const SCRIPT_REF = /(?:src|href)="(\/assets\/[^"]+\.js)"/g
@@ -31,6 +32,7 @@ for (const target of TARGETS) {
       expect(/\/\/[#@]\s*sourceMappingURL=/.test(await script.text()), `${path} still carries a sourceMappingURL comment`).toBe(false)
       const map = await request.get(`${base}${path}.map`)
       expect(map.status(), `${path}.map`).toBe(404)
+      if (target.name === 'blog') expect(map.headers()['content-type'] ?? '', `${path}.map`).not.toContain('text/html')
     }
 
     const entry = html.match(ENTRY_SRC)?.[1]
@@ -40,8 +42,9 @@ for (const target of TARGETS) {
     expect(entryBody.includes('sentry-dbid-'), `${entry} carries no Sentry debug id`).toBe(true)
 
     // Controls: the fallback still serves index.html, so the 404s above come from the .map rule.
+    // The blog server answers an unknown path with its 404 page, not index.html; the .map 404 has no text/html.
     const fallback = await request.get(`${base}/assets/sentry08-no-such-file.js`)
-    expect(fallback.status()).toBe(200)
+    expect(fallback.status()).toBe(target.name === 'blog' ? 404 : 200)
     expect(fallback.headers()['content-type']).toContain('text/html')
     expect((await request.get(`${base}/sentry08/no-such.map`)).status()).toBe(404)
     expect((await request.get(`${base}/health`)).status()).toBe(200)

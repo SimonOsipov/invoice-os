@@ -52,16 +52,24 @@ paths:
 - Run a bash script from a `tools/prenv` test through `runToFiles`, not a pipe. Under parallel load `/bin/bash` 3.2 fails an `echo` on a blocked pipe with EINTR.
 - Re-run the whole workflow to retry an `E2E gate`, never "Re-run failed jobs". The database reset runs only when the gateway deploys.
 - Run `spa-build-gate` on a full-scope push and dispatch. Each SPA must serve `/health` and a `/build.txt` that names the commit.
-- Give a PR the small lane when every changed path is under `frontend/library/`. `scripts/ci/lane.sh` decides.
-- On the small lane, CI runs the `Library` job in place of `Frontend`. Dev Env prepares no fork and runs no E2E.
-- Keep the small lane to `frontend/library/`. `TestLane_OnlyANamedPackageTakesTheSmallLane` fails when another package takes it.
+- Give a PR the library lane when every changed path is under `frontend/library/` and none is in `SHARED_WITH_BLOG` in `scripts/ci/lane.sh`.
+- Give a PR the blog lane when every changed path is under `frontend/blog/`.
+- `frontend/blog/index.html`, `frontend/blog/Dockerfile` and `frontend/blog/Dockerfile.dockerignore` give the full lane. They are inputs of `cmd/blog`.
+- Give a PR that touches both prefixes, or any other path, the full lane.
+- Give a PR or push range that touches a `SHARED_WITH_BLOG` file the full lane. The blog compiles those library files.
+- On the library lane, CI runs the `Library` job in place of `Frontend`. On the blog lane, CI runs the `Blog` job in place of `Frontend`.
+- On a small lane, Dev Env prepares no fork and runs no E2E.
+- Keep the small lanes to `frontend/library/` and `frontend/blog/`. `TestLane_OnlyANamedPackageTakesTheSmallLane` fails when another package takes one.
 - On a `main` push, deploy only the library when every path since the last full deploy is under `frontend/library/`.
+- On a `main` push, deploy only the blog when every path since the last full deploy is under `frontend/blog/`.
+- Deploy the full fleet when the range touches both prefixes.
 - Take the last full deploy from the newest push run whose gateway deploy, fleet gate and SPA build gate succeeded.
-- A library-only deploy never counts as a full deploy.
-- Deploy the full fleet on a lookup failure, a non-ancestor base, or any path outside the library.
+- A small-lane deploy never counts as a full deploy.
+- Deploy the full fleet on a lookup failure, a non-ancestor base, or any path outside the one small-lane prefix.
 - Let the push scope step fail to `full`. It runs with `continue-on-error`, and the output defaults to `full`.
-- On a library-only deploy, `library-build-gate` checks only the library's `/build.txt`.
-- After a dispatch or a rollback, a library-only push leaves the fleet as it is. Dispatch Dev Env on `main` to reconverge it.
+- On a library-only deploy, `deploy-library` deploys the library and `library-build-gate` checks only the library's `/build.txt`.
+- On a blog-only deploy, `deploy-blog` deploys the blog and `blog-build-gate` checks only the blog's `/build.txt`.
+- After a dispatch or a rollback, a small-lane push leaves the fleet as it is. Dispatch Dev Env on `main` to reconverge it.
 - Run "Gate on the account-mail templates" on `pull_request` and `push`, not `workflow_dispatch`. A project token cannot read variables.
 - Roll back the gateway and every guarded service together. A split rollback logs `request refused: no gateway token`.
 - Start the `topology` job only when the `e2e` job succeeded. A red `e2e` job (smoke, api or its retry-pass check) skips topology and fails the gate.

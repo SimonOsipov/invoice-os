@@ -357,7 +357,7 @@ const LOCKUP_MARK = ['width', 'height', 'border-top-left-radius']
 const LOCKUP_TEXT = ['font-family', 'font-size', 'font-weight', 'letter-spacing', 'text-transform', 'color']
 const LOCKUP_BADGE = ['font-family', 'font-size', 'font-weight', 'letter-spacing', 'color', 'border-top-width', 'border-top-style', 'border-top-color', 'border-top-left-radius', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left']
 
-// D12 property list of a brand lockup's four parts, plus the badge's box height.
+// Computed properties of a brand lockup's four parts, plus the badge's box height.
 async function readLockup(brand: Locator, badgeText: string): Promise<Record<string, Record<string, string> | number>> {
   const badge = brand.getByText(badgeText, { exact: true })
   const box = await badge.boundingBox()

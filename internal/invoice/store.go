@@ -154,7 +154,7 @@ func scanWithCauses(row scanner, lead []any, cause **HistoryCause, custom **Cust
 // (M4-06-03 -- mirrors the importer's EntitySupplier idiom,
 // internal/importer/store.go, and closes the direct-path gap the "22P02 does
 // not disambiguate" note below used to accept: a cross-tenant OR nonexistent
-// entity_id now returns ErrValidation HERE, before any row is written), WIDENED
+// entity_id, or one outside the caller's client set, now returns ErrNotFound HERE, before any row is written), WIDENED
 // by INVCR-01-17 (C7 fix) to also resolve the entity's name/tin and OVERWRITE
 // in.SupplierTIN/in.SupplierName with them (MBSSupplierTIN-restored for a
 // 12-bare-digit FIRS tin, unchanged for a 10-digit JTB tin or no tin at all) --
@@ -180,7 +180,7 @@ func scanWithCauses(row scanner, lead []any, cause **HistoryCause, custom **Cust
 // The pre-check query and the invoices INSERT are the only pg errors mapped: a
 // unique_violation (23505) on invoices_tenant_entity_number_uq -> ErrDuplicateNumber
 // (INSERT only), a foreign_key_violation (23503, a non-existent entity_id or
-// import_batch_id -- the pre-check turns the entity_id case into ErrValidation
+// import_batch_id -- the pre-check turns the entity_id case into ErrNotFound
 // earlier via its own zero-rows (pgx.ErrNoRows) branch, so this INSERT-time 23503
 // in practice now only fires for import_batch_id) or an invalid_text_representation
 // (22P02, a malformed entity_id/import_batch_id uuid, OR a malformed numeric
@@ -214,20 +214,8 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 		// db.ErrNoTenant otherwise.
 		id, _ := auth.IdentityFromContext(ctx)
 
-		// Tenant-scoped ownership pre-check, WIDENED by INVCR-01-17 (C7 fix)
-		// to also resolve the entity's name/tin: RLS scopes this SELECT to
-		// the caller's tenant (same mechanism EntitySupplier relies on,
-		// internal/importer/store.go), so a foreign OR nonexistent entity_id
-		// both come back zero rows -- pgx.ErrNoRows, mapped to ErrValidation
-		// exactly as the old bare EXISTS check's !exists branch was. This
-		// rejects the cross-tenant case EARLY, as a friendly ErrValidation
-		// with NO row written and NO audit row -- the composite (tenant_id,
-		// entity_id) FK below is the DB-authoritative backstop (see this
-		// func's doc comment; M4-06-03 closes the direct-path gap noted
-		// there). Widening this query's SELECT list (rather than adding a
-		// SECOND lookup) means AC #9's cross-tenant refusal is still the
-		// pre-existing coverage (TestStoreCreate_CrossTenantEntityIDRejected
-		// and its no-partial-write sibling) -- no new lookup was introduced.
+		// RLS scopes this read to the caller's tenant and client set: a foreign, unknown or
+		// outside-the-set entity_id all answer ErrNotFound with nothing written.
 		var entityName string
 		var entityTIN *string
 		var contact SupplierContact
@@ -236,7 +224,7 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 		).Scan(&entityName, &entityTIN, &contact.Email, &contact.Telephone, &contact.Street, &contact.City,
 			&contact.PostalZone, &contact.Country, &contact.State, &contact.LGA); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrValidation
+				return ErrNotFound
 			}
 			if pgCode(err) == "22P02" {
 				return ErrValidation
@@ -771,9 +759,8 @@ func escapeLike(s string) string {
 // member reaches Postgres's own uuid parser (string_to_uuid) rather than
 // failing client-side in pgx, and pgCode(err) == "22P02" below already
 // catches it -- no ::uuid[] cast needed. A cross-tenant (or nonexistent)
-// batch id is NOT an error and NOT a 404: RLS has already scoped the row
-// set, so it narrows to an empty page with total 0 -- a 404 would be an
-// existence oracle for another tenant's data.
+// batch id is NOT an error: RLS narrows it to an empty page with total 0.
+// An unknown, foreign or outside-the-set entity_id answers ErrNotFound alike.
 func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
 	items := []Invoice{}
 	var total int
@@ -782,6 +769,16 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 		var args []any
 
 		if f.EntityID != "" {
+			var one int
+			if err := tx.QueryRow(ctx, `SELECT 1 FROM business_entities WHERE id = $1`, f.EntityID).Scan(&one); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrNotFound
+				}
+				if pgCode(err) == "22P02" {
+					return ErrValidation
+				}
+				return err
+			}
 			args = append(args, f.EntityID)
 			conditions = append(conditions, fmt.Sprintf("entity_id = $%d", len(args)))
 		}

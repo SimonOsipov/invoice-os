@@ -1,0 +1,94 @@
+package customrule_test
+
+import (
+	"context"
+	"reflect"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/customrule"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+)
+
+// csRules is a firm tenant with clients A and B, an admin and a reviewer limited to A.
+type csRules struct {
+	ws         workspace
+	entA, entB string
+	limited    context.Context
+	store      *customrule.Store
+}
+
+func newCSRules(t *testing.T, super, app *pgxpool.Pool, label string) csRules {
+	t.Helper()
+	x := csRules{ws: seedWorkspace(t, super, label)}
+	x.entA = seedEntity(t, super, x.ws.id, "A")
+	x.entB = seedEntity(t, super, x.ws.id, "B")
+	user := uuid.NewString()
+	for _, q := range []string{
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'reviewer', 'active', false)`,
+		`INSERT INTO membership_clients (tenant_id, user_id, entity_id) VALUES ($1, $2, '` + x.entA + `')`,
+	} {
+		if _, err := super.Exec(context.Background(), q, x.ws.id, user); err != nil {
+			t.Fatalf("seed limited reviewer: %v", err)
+		}
+	}
+	x.limited = auth.WithIdentity(context.Background(), auth.Identity{Subject: user, Role: "authenticated", TenantID: x.ws.id})
+	x.store = customrule.NewStore(app, nil)
+	return x
+}
+
+func (x csRules) listed(t *testing.T, ctx context.Context) []string {
+	t.Helper()
+	rules, err := x.store.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	return messages(rules)
+}
+
+func TestClientScope_RuleListShowsFirmWideAndOwnClientRules(t *testing.T) {
+	super, app := dbTestPools(t)
+	x := newCSRules(t, super, app, "CS rules list")
+	insertRev(t, super, seedRev{Tenant: x.ws.id, RuleID: uuid.NewString(), Revision: 1, Severity: "error", Message: "firm", Enabled: true})
+	insertRev(t, super, seedRev{Tenant: x.ws.id, RuleID: uuid.NewString(), Revision: 1, Entity: &x.entA, Severity: "error", Message: "client-a", Enabled: true})
+	insertRev(t, super, seedRev{Tenant: x.ws.id, RuleID: uuid.NewString(), Revision: 1, Entity: &x.entB, Severity: "error", Message: "client-b", Enabled: true})
+
+	if got, want := x.listed(t, x.limited), []string{"client-a@1", "firm@1"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("limited reviewer List = %v, want %v", got, want)
+	}
+	if got, want := x.listed(t, x.ws.admin), []string{"client-a@1", "client-b@1", "firm@1"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("admin List = %v, want %v", got, want)
+	}
+}
+
+func TestClientScope_ARuleMovedToAnotherClientLeavesTheList(t *testing.T) {
+	super, app := dbTestPools(t)
+	x := newCSRules(t, super, app, "CS rules moved")
+	rule := uuid.NewString()
+	insertRev(t, super, seedRev{Tenant: x.ws.id, RuleID: rule, Revision: 1, Entity: &x.entA, Severity: "error", Message: "moved", Enabled: true})
+	insertRev(t, super, seedRev{Tenant: x.ws.id, RuleID: rule, Revision: 2, Entity: &x.entB, Severity: "error", Message: "moved", Enabled: true})
+
+	if got := x.listed(t, x.limited); len(got) != 0 {
+		t.Errorf("limited reviewer List = %v, want none", got)
+	}
+	if got := currentTx(t, app, x.limited, []string{x.entA}); len(got) != 0 {
+		t.Errorf("CurrentTx([A]) = %v, want none", messages(got))
+	}
+	if got, want := x.listed(t, x.ws.admin), []string{"moved@2"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("admin List = %v, want %v", got, want)
+	}
+}
+
+func TestClientScope_ARuleMovedFromFirmWideToAnotherClientLeavesTheList(t *testing.T) {
+	super, app := dbTestPools(t)
+	x := newCSRules(t, super, app, "CS rules firm to client")
+	rule := uuid.NewString()
+	insertRev(t, super, seedRev{Tenant: x.ws.id, RuleID: rule, Revision: 1, Severity: "error", Message: "was-firm", Enabled: true})
+	insertRev(t, super, seedRev{Tenant: x.ws.id, RuleID: rule, Revision: 2, Entity: &x.entB, Severity: "error", Message: "was-firm", Enabled: true})
+
+	if got := x.listed(t, x.limited); len(got) != 0 {
+		t.Errorf("limited reviewer List = %v, want none", got)
+	}
+}

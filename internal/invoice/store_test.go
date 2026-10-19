@@ -1163,8 +1163,8 @@ func TestStoreCrossTenant_UpdateGetListRefused(t *testing.T) {
 	}
 }
 
-// INV-STORE-13: a non-existent entity_id maps to ErrValidation (23503,
-// QA #4); nothing persists.
+// INV-STORE-13: a non-existent entity_id maps to ErrNotFound;
+// nothing persists.
 func TestStoreCreate_NonExistentEntityIDRejected(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -1176,8 +1176,8 @@ func TestStoreCreate_NonExistentEntityIDRejected(t *testing.T) {
 
 	bogusEntityID := uuid.NewString()
 	_, err := store.Create(c, CreateInput{EntityID: bogusEntityID, InvoiceNumber: "INV-STORE-13"})
-	if !errors.Is(err, ErrValidation) {
-		t.Fatalf("Create with a non-existent entity_id err = %v, want ErrValidation (23503 foreign_key_violation)", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Create with a non-existent entity_id err = %v, want ErrNotFound", err)
 	}
 
 	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenantID); n != 0 {
@@ -1268,8 +1268,8 @@ func TestStoreCreate_CrossTenantEntityIDRejected(t *testing.T) {
 	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 
 	_, err := store.Create(cA, CreateInput{EntityID: entityB, InvoiceNumber: "INV-XT-1"})
-	if !errors.Is(err, ErrValidation) {
-		t.Fatalf("Create (tenant A, entity_id = tenant B's entity) err = %v, want ErrValidation (M4-06 closes the invoices->entity leg of the D8 cross-tenant residual)", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Create (tenant A, entity_id = tenant B's entity) err = %v, want ErrNotFound", err)
 	}
 
 	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenantA); n != 0 {
@@ -1311,8 +1311,8 @@ func TestStoreCreate_CrossTenantEntityIDRejectedNoPartialLineItemsWrite(t *testi
 			{Description: &descB},
 		},
 	})
-	if !errors.Is(err, ErrValidation) {
-		t.Fatalf("Create (tenant A, entity_id = tenant B's entity, 2 line items) err = %v, want ErrValidation", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Create (tenant A, entity_id = tenant B's entity, 2 line items) err = %v, want ErrNotFound", err)
 	}
 
 	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenantA); n != 0 {

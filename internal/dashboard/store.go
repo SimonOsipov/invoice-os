@@ -25,7 +25,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// Rollup runs the per-entity rollup query AND the per-rule top-violations
+// Rollup runs queryClients (the per-entity rollup query) AND the per-rule top-violations
 // breakdown inside ONE db.WithinRequestTenantTx closure (RLS scopes
 // invoices/business_entities to the caller's tenant, so neither query needs
 // `WHERE tenant_id`), scans the per-entity rows into Clients (pre-declared as
@@ -55,110 +55,11 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 	ruleSums := map[string]int{}
 
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx,
-			`WITH flagged AS (
-			    SELECT i.id, i.entity_id, e.name AS entity_name, i.status, i.vat, i.kept_as_is_at, i.violations,
-			           (i.status = 'draft' AND i.rule_set_version_id IS NULL)                       AS is_never_validated,
-			           (i.status = 'draft' AND i.violations @> '[{"severity": "error"}]'::jsonb)    AS is_blocked_by_rules,
-			           (i.status = 'rejected' OR (i.status = 'failed' AND i.kept_as_is_at IS NULL)) AS is_failed_in_transmission,
-			           coalesce(cf.f_field, false) AS fails_field,
-			           coalesce(cf.f_tax,   false) AS fails_tax,
-			           coalesce(cf.f_ident, false) AS fails_ident
-			    FROM invoices i
-			    JOIN business_entities e ON e.id = i.entity_id
-			    -- CASE (not WHERE) guards a non-array violations value: jsonb_array_elements
-			    -- errors on non-array input, and a WHERE here would drop the whole invoice
-			    -- row instead of just zeroing its bar contribution.
-			    LEFT JOIN LATERAL (
-			        SELECT bool_or(v->>'rule_key' = ANY($1::text[])) AS f_field,
-			               bool_or(v->>'rule_key' = ANY($2::text[])) AS f_tax,
-			               bool_or(v->>'rule_key' = ANY($3::text[])) AS f_ident
-			        FROM jsonb_array_elements(
-			                 CASE WHEN jsonb_typeof(i.violations) = 'array' THEN i.violations ELSE '[]'::jsonb END) AS v
-			        WHERE v->>'severity' = 'error'
-			    ) cf ON true
-			)
-			-- needs_attention below keeps its exact literal disjunction (i.-qualified,
-			-- no IN(...)), and its fourth arm reads the LATEST run only, through a
-			-- derived table: TestStoreRollup_NeedsAttentionSQLRejectedArmIsBare pins
-			-- both, which is why the CTE is aliased i.
-			SELECT i.entity_id, i.entity_name,
-			       count(*) FILTER (WHERE i.status = 'draft')     AS draft,
-			       count(*) FILTER (WHERE i.status = 'validated') AS validated,
-			       count(*) FILTER (WHERE i.status = 'queued')    AS queued,
-			       count(*) FILTER (WHERE i.status = 'submitted') AS submitted,
-			       count(*) FILTER (WHERE i.status = 'accepted')  AS accepted,
-			       count(*) FILTER (WHERE i.status = 'rejected')  AS rejected,
-			       count(*) FILTER (WHERE i.status = 'failed')    AS failed,
-			       count(*) FILTER (
-			           WHERE i.status = 'rejected'
-			              OR (i.status = 'failed' AND i.kept_as_is_at IS NULL)
-			              OR (i.status = 'draft' AND i.violations @> '[{"severity": "error"}]'::jsonb)
-			              OR (i.status = 'draft' AND EXISTS (
-			                      SELECT 1 FROM (SELECT r.state FROM approval_runs r
-			                                      WHERE r.invoice_id = i.id
-			                                      ORDER BY r.opened_at DESC LIMIT 1) lr
-			                       WHERE lr.state = 'rejected'))
-			       ) AS needs_attention,
-			       -- Copied from the awaiting_approval list filter (internal/invoice/store.go),
-			       -- alias added. i.id is qualified: approval_runs has its own id, and a bare
-			       -- id binds there and silently never matches.
-			       count(*) FILTER (
-			           WHERE i.status = 'validated'
-			             AND EXISTS (SELECT 1 FROM approval_policy_versions WHERE is_active)
-			             AND NOT EXISTS (SELECT 1 FROM approval_runs r
-			                              WHERE r.invoice_id = i.id AND r.state = 'approved')
-			       ) AS awaiting_approval,
-			       count(*)                                            AS total,
-			       count(*) FILTER (WHERE i.is_never_validated)        AS never_validated,
-			       count(*) FILTER (WHERE i.is_blocked_by_rules)       AS blocked_by_rules,
-			       count(*) FILTER (WHERE i.is_failed_in_transmission) AS failed_in_transmission,
-			       count(*) FILTER (WHERE NOT i.is_blocked_by_rules
-			                          AND NOT i.is_failed_in_transmission
-			                          AND NOT i.is_never_validated)    AS readiness_num,
-			       count(*) FILTER (WHERE NOT i.is_never_validated AND NOT i.fails_field) AS bar_field_num,
-			       count(*) FILTER (WHERE NOT i.is_never_validated AND NOT i.fails_tax)   AS bar_tax_num,
-			       count(*) FILTER (WHERE NOT i.is_never_validated AND NOT i.fails_ident) AS bar_ident_num,
-			       coalesce(sum(round(i.vat * 100)), 0)::bigint                           AS vat_kobo
-			FROM flagged i
-			GROUP BY i.entity_id, i.entity_name
-			ORDER BY needs_attention DESC, i.entity_name ASC, i.entity_id ASC`,
-			categoryKeys(CategoryFieldCompleteness), categoryKeys(CategoryTaxAccuracy), categoryKeys(CategoryIdentifiers),
-		)
+		cs, err := queryClients(ctx, tx)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var c Client
-			var total, neverValidated, blockedByRules, failedInTransmission int64
-			var readinessNum, barFieldNum, barTaxNum, barIdentNum, vatKobo int64
-			if err := rows.Scan(
-				&c.EntityID, &c.EntityName,
-				&c.Counts.Draft, &c.Counts.Validated, &c.Counts.Queued, &c.Counts.Submitted,
-				&c.Counts.Accepted, &c.Counts.Rejected, &c.Counts.Failed,
-				&c.NeedsAttention, &c.AwaitingApproval, &total,
-				&neverValidated, &blockedByRules, &failedInTransmission,
-				&readinessNum, &barFieldNum, &barTaxNum, &barIdentNum, &vatKobo,
-			); err != nil {
-				return err
-			}
-			c.Metrics = map[string]Metric{
-				MetricReadiness:            {Num: readinessNum, Den: total},
-				MetricBarFieldCompleteness: {Num: barFieldNum, Den: total},
-				MetricBarTaxAccuracy:       {Num: barTaxNum, Den: total},
-				MetricBarIdentifiersFormat: {Num: barIdentNum, Den: total},
-				MetricBlockedByRules:       {Num: blockedByRules, Den: total},
-				MetricFailedInTransmission: {Num: failedInTransmission, Den: total},
-				MetricNeverValidated:       {Num: neverValidated, Den: total},
-				MetricVATTracked:           {Num: vatKobo, Den: total},
-			}
-			c.TopViolations = []RuleCount{}
-			clients = append(clients, c)
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
+		clients = cs
 
 		// jsonb_typeof(...) = 'array' guards jsonb_array_elements below: unlike
 		// the per-entity query's `@>` predicate (which just returns false on a
@@ -238,6 +139,116 @@ func (s *Store) Rollup(ctx context.Context) (Rollup, error) {
 	return Rollup{Totals: totals, Clients: clients, TopViolations: topViolations}, nil
 }
 
+// queryClients runs the per-company rollup query and scans one Client per entity.
+func queryClients(ctx context.Context, tx pgx.Tx) ([]Client, error) {
+	clients := []Client{}
+	rows, err := tx.Query(ctx,
+		`WITH flagged AS (
+		    SELECT i.id, i.entity_id, e.name AS entity_name, i.status, i.vat, i.kept_as_is_at, i.violations,
+		           (i.status = 'draft' AND i.rule_set_version_id IS NULL)                       AS is_never_validated,
+		           (i.status = 'draft' AND i.violations @> '[{"severity": "error"}]'::jsonb)    AS is_blocked_by_rules,
+		           (i.status = 'rejected' OR (i.status = 'failed' AND i.kept_as_is_at IS NULL)) AS is_failed_in_transmission,
+		           coalesce(cf.f_field, false) AS fails_field,
+		           coalesce(cf.f_tax,   false) AS fails_tax,
+		           coalesce(cf.f_ident, false) AS fails_ident
+		    FROM invoices i
+		    JOIN business_entities e ON e.id = i.entity_id
+		    -- CASE (not WHERE) guards a non-array violations value: jsonb_array_elements
+		    -- errors on non-array input, and a WHERE here would drop the whole invoice
+		    -- row instead of just zeroing its bar contribution.
+		    LEFT JOIN LATERAL (
+		        SELECT bool_or(v->>'rule_key' = ANY($1::text[])) AS f_field,
+		               bool_or(v->>'rule_key' = ANY($2::text[])) AS f_tax,
+		               bool_or(v->>'rule_key' = ANY($3::text[])) AS f_ident
+		        FROM jsonb_array_elements(
+		                 CASE WHEN jsonb_typeof(i.violations) = 'array' THEN i.violations ELSE '[]'::jsonb END) AS v
+		        WHERE v->>'severity' = 'error'
+		    ) cf ON true
+		)
+		-- needs_attention below keeps its exact literal disjunction (i.-qualified,
+		-- no IN(...)), and its fourth arm reads the LATEST run only, through a
+		-- derived table: TestStoreRollup_NeedsAttentionSQLRejectedArmIsBare pins
+		-- both, which is why the CTE is aliased i.
+		SELECT i.entity_id, i.entity_name,
+		       count(*) FILTER (WHERE i.status = 'draft')     AS draft,
+		       count(*) FILTER (WHERE i.status = 'validated') AS validated,
+		       count(*) FILTER (WHERE i.status = 'queued')    AS queued,
+		       count(*) FILTER (WHERE i.status = 'submitted') AS submitted,
+		       count(*) FILTER (WHERE i.status = 'accepted')  AS accepted,
+		       count(*) FILTER (WHERE i.status = 'rejected')  AS rejected,
+		       count(*) FILTER (WHERE i.status = 'failed')    AS failed,
+		       count(*) FILTER (
+		           WHERE i.status = 'rejected'
+		              OR (i.status = 'failed' AND i.kept_as_is_at IS NULL)
+		              OR (i.status = 'draft' AND i.violations @> '[{"severity": "error"}]'::jsonb)
+		              OR (i.status = 'draft' AND EXISTS (
+		                      SELECT 1 FROM (SELECT r.state FROM approval_runs r
+		                                      WHERE r.invoice_id = i.id
+		                                      ORDER BY r.opened_at DESC LIMIT 1) lr
+		                       WHERE lr.state = 'rejected'))
+		       ) AS needs_attention,
+		       -- Copied from the awaiting_approval list filter (internal/invoice/store.go),
+		       -- alias added. i.id is qualified: approval_runs has its own id, and a bare
+		       -- id binds there and silently never matches.
+		       count(*) FILTER (
+		           WHERE i.status = 'validated'
+		             AND EXISTS (SELECT 1 FROM approval_policy_versions WHERE is_active)
+		             AND NOT EXISTS (SELECT 1 FROM approval_runs r
+		                              WHERE r.invoice_id = i.id AND r.state = 'approved')
+		       ) AS awaiting_approval,
+		       count(*)                                            AS total,
+		       count(*) FILTER (WHERE i.is_never_validated)        AS never_validated,
+		       count(*) FILTER (WHERE i.is_blocked_by_rules)       AS blocked_by_rules,
+		       count(*) FILTER (WHERE i.is_failed_in_transmission) AS failed_in_transmission,
+		       count(*) FILTER (WHERE NOT i.is_blocked_by_rules
+		                          AND NOT i.is_failed_in_transmission
+		                          AND NOT i.is_never_validated)    AS readiness_num,
+		       count(*) FILTER (WHERE NOT i.is_never_validated AND NOT i.fails_field) AS bar_field_num,
+		       count(*) FILTER (WHERE NOT i.is_never_validated AND NOT i.fails_tax)   AS bar_tax_num,
+		       count(*) FILTER (WHERE NOT i.is_never_validated AND NOT i.fails_ident) AS bar_ident_num,
+		       coalesce(sum(round(i.vat * 100)), 0)::bigint                           AS vat_kobo
+		FROM flagged i
+		GROUP BY i.entity_id, i.entity_name
+		ORDER BY needs_attention DESC, i.entity_name ASC, i.entity_id ASC`,
+		categoryKeys(CategoryFieldCompleteness), categoryKeys(CategoryTaxAccuracy), categoryKeys(CategoryIdentifiers),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var c Client
+		var total, neverValidated, blockedByRules, failedInTransmission int64
+		var readinessNum, barFieldNum, barTaxNum, barIdentNum, vatKobo int64
+		if err := rows.Scan(
+			&c.EntityID, &c.EntityName,
+			&c.Counts.Draft, &c.Counts.Validated, &c.Counts.Queued, &c.Counts.Submitted,
+			&c.Counts.Accepted, &c.Counts.Rejected, &c.Counts.Failed,
+			&c.NeedsAttention, &c.AwaitingApproval, &total,
+			&neverValidated, &blockedByRules, &failedInTransmission,
+			&readinessNum, &barFieldNum, &barTaxNum, &barIdentNum, &vatKobo,
+		); err != nil {
+			return nil, err
+		}
+		c.Metrics = map[string]Metric{
+			MetricReadiness:            {Num: readinessNum, Den: total},
+			MetricBarFieldCompleteness: {Num: barFieldNum, Den: total},
+			MetricBarTaxAccuracy:       {Num: barTaxNum, Den: total},
+			MetricBarIdentifiersFormat: {Num: barIdentNum, Den: total},
+			MetricBlockedByRules:       {Num: blockedByRules, Den: total},
+			MetricFailedInTransmission: {Num: failedInTransmission, Den: total},
+			MetricNeverValidated:       {Num: neverValidated, Den: total},
+			MetricVATTracked:           {Num: vatKobo, Den: total},
+		}
+		c.TopViolations = []RuleCount{}
+		clients = append(clients, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return clients, nil
+}
+
 // addMetrics sums src into dst element-wise, keyed by metric name -- a
 // future metric costs one SQL FILTER and one map entry, never a change here.
 func addMetrics(dst, src map[string]Metric) {
@@ -247,4 +258,31 @@ func addMetrics(dst, src map[string]Metric) {
 		d.Den += m.Den
 		dst[k] = d
 	}
+}
+
+// History returns the caller's snapshot rows from since (YYYY-MM-DD, inclusive), oldest first.
+// No WHERE tenant_id: RLS scopes the tenant and a limited member's clients.
+func (s *Store) History(ctx context.Context, since string) ([]HistoryRow, error) {
+	rows := []HistoryRow{}
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		r, err := tx.Query(ctx,
+			`SELECT to_char(day, 'YYYY-MM-DD'), entity_id::text, total, readiness_num, needs_attention, not_submitted, vat_kobo
+			 FROM rollup_snapshots WHERE day >= $1::date ORDER BY day, entity_id`, since)
+		if err != nil {
+			return err
+		}
+		defer r.Close()
+		for r.Next() {
+			var h HistoryRow
+			if err := r.Scan(&h.Day, &h.EntityID, &h.Total, &h.ReadinessNum, &h.NeedsAttention, &h.NotSubmitted, &h.VATKobo); err != nil {
+				return err
+			}
+			rows = append(rows, h)
+		}
+		return r.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
 }

@@ -368,8 +368,13 @@ func TestStoreRollup_AllSevenStatesReported(t *testing.T) {
 	tenantID := seedTenant(t, super, "DASH-01 tenant")
 	entityID := seedEntity(t, super, tenantID, "DASH-01 entity")
 
+	// Distinct counts per state (1..7): a swapped FILTER column cannot hide behind equal counts.
+	n := 0
 	for i, status := range []string{"draft", "validated", "queued", "submitted", "accepted", "rejected", "failed"} {
-		seedInvoiceAtStatus(t, super, tenantID, entityID, fmt.Sprintf("DASH-01-%d", i), status)
+		for j := 0; j <= i; j++ {
+			n++
+			seedInvoiceAtStatus(t, super, tenantID, entityID, fmt.Sprintf("DASH-01-%d", n), status)
+		}
 	}
 
 	store := NewStore(app)
@@ -386,9 +391,17 @@ func TestStoreRollup_AllSevenStatesReported(t *testing.T) {
 	if row.EntityID != entityID {
 		t.Errorf("EntityID = %q, want %q", row.EntityID, entityID)
 	}
-	want := Counts{Draft: 1, Validated: 1, Queued: 1, Submitted: 1, Accepted: 1, Rejected: 1, Failed: 1}
+	want := Counts{Draft: 1, Validated: 2, Queued: 3, Submitted: 4, Accepted: 5, Rejected: 6, Failed: 7}
 	if row.Counts != want {
 		t.Errorf("Counts = %+v, want %+v", row.Counts, want)
+	}
+	if len(row.Metrics) != 8 {
+		t.Errorf("Metrics = %d entries, want 8", len(row.Metrics))
+	}
+	for name, m := range row.Metrics {
+		if m.Den != 28 {
+			t.Errorf("Metrics[%s].Den = %d, want 28 (every invoice)", name, m.Den)
+		}
 	}
 }
 

@@ -19,8 +19,7 @@
 // internal/dashboard/store.go's TopViolations query has no LIMIT, so a containment
 // assertion can't be pushed out by other specs' concurrent fixture data.
 //
-// Seven tests (DASH-40..46), one test.describe, no helper framework beyond
-// assertErrorEnvelope(), imported from ./contract-helpers, shared across the
+// No helper framework beyond assertErrorEnvelope(), imported from ./contract-helpers, shared across the
 // api/ contract specs (contract-portfolio.spec.ts, contract-validation.spec.ts,
 // auth-contract.spec.ts).
 import { test, expect } from '@playwright/test'
@@ -284,7 +283,7 @@ test.describe('dashboard rollup history contract (API E2E, over the deployed gat
     const tokenB = await login(PERSONAS.B)
     const rowsA = await nonEmptyHistory(tokenA)
     const idsA = new Set(rowsA.map((r) => r.entity_id))
-    const idsB = new Set((await rollupHistory(tokenB)).history.map((r) => r.entity_id))
+    const idsB = new Set((await nonEmptyHistory(tokenB)).map((r) => r.entity_id))
     expect(idsA.size).toBeGreaterThan(0)
     for (const id of idsA) {
       const entity = await getEntity(tokenA, id)

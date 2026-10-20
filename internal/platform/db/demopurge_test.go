@@ -291,6 +291,11 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO import_mappings (id, tenant_id, entity_id, column_signature, mapping)
 		 VALUES ($1,$2,$3,$4,$5::jsonb)`,
 		mappingID, tenantID, entityID, contentHash, `{"invoice_number":"Invoice No"}`)
+	requireRollupSnapshotsTable(t, pool)
+	plant("rollup_snapshots", "entity_id", entityID,
+		`INSERT INTO rollup_snapshots (tenant_id, entity_id, day, total, readiness_num, needs_attention, not_submitted, vat_kobo)
+		 VALUES ($1,$2,'2026-10-21',1,1,0,0,0)`,
+		tenantID, entityID)
 	plant("customers", "id", customerID,
 		`INSERT INTO customers (id, tenant_id, tin) VALUES ($1,$2,'90000000-0001')`,
 		customerID, tenantID)

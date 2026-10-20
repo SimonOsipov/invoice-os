@@ -690,6 +690,93 @@ test('OV-05 recent activity rows stay inside their tile', async ({ page }, testI
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
+// Fixture check: the history call is rewritten onto the live rollup and answered with 40 stubbed WAT days
+// for the rollup's first client, so the sparkline and chart markup is reached. A real PR environment holds one recorded day.
+test('OV-07 the curves keep inside their tiles at every wide width (fixture check)', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+  const isHistory = (url: URL): boolean => onPath(url, '/api/dashboard/v1/rollup/history')
+  const todayMs = Date.parse(new Date(Date.now() + 3_600_000).toISOString().slice(0, 10) + 'T00:00:00Z')
+  await stubGet(page, isHistory, {
+    mode: 'transform',
+    source: (url) => {
+      const rollup = new URL(url.toString())
+      rollup.pathname = rollup.pathname.replace(/\/history$/, '')
+      rollup.search = ''
+      return rollup
+    },
+    transform: (b) => ({
+      history: Array.from({ length: 40 }, (_, i) => ({
+        day: new Date(todayMs - (39 - i) * 86_400_000).toISOString().slice(0, 10),
+        entity_id: b.clients[0].entity_id,
+        total: 20 + i,
+        readiness_num: 8 + Math.floor(i / 2),
+        needs_attention: 3 + (i % 5),
+        not_submitted: 5 + (i % 7),
+        vat_kobo: 100_000 + i * 5_000,
+      })),
+    }),
+  })
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+
+  const kpis = page.locator('.pf-dash-row-a .pf-grid-2 > div')
+  await expect(kpis, 'the dashboard drew its four KPI tiles').toHaveCount(4, { timeout: 20_000 })
+  const trend = page.getByText('Readiness trend', { exact: true }).locator('xpath=../..')
+  const chart = trend.locator('svg')
+  const months = trend.locator('> :last-child > div:last-child > span')
+  // Counted so a missing draw cannot pass the relations below vacuously.
+  await expect(kpis.locator('svg'), 'one sparkline per KPI tile').toHaveCount(4, { timeout: 20_000 })
+  await expect(chart, 'one trend chart').toHaveCount(1)
+  expect(await months.count(), 'the 40 days span two months, so two month labels').toBeGreaterThanOrEqual(2)
+  const tiles = await kpis.all()
+  const labels = await months.all()
+
+  const widths = await atWidths(page, 'sparklines, trend chart and month labels', async () => {
+    const problems: string[] = []
+    const rects: Record<string, unknown> = {}
+    for (const [i, tile] of tiles.entries()) {
+      const b = await boxes(page, { tile, spark: tile.locator('svg'), delta: tile.locator('span.mono') })
+      problems.push(...within(b.tile, b.spark, `KPI tile ${i} sparkline in the tile`), ...leftOf(b.delta, b.spark, `KPI tile ${i} delta vs sparkline`))
+      if (b.tile.height < 138) problems.push(`KPI tile ${i} is ${b.tile.height}px tall, under 138px`)
+      const lines = await tile.locator('span.mono').evaluate((el) => {
+        const range = document.createRange()
+        range.selectNodeContents(el)
+        return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size
+      })
+      if (lines !== 1) problems.push(`KPI tile ${i} delta draws on ${lines} lines`)
+      rects[`KPI tile ${i}`] = { ...b, lines }
+    }
+    const t = await boxes(page, {
+      tile: trend,
+      head: trend.locator('> :first-child'),
+      meta: trend.locator('> :first-child .mono'),
+      headline: trend.locator('.money'),
+      chart,
+      row: trend.locator('> :last-child > div:last-child'),
+    })
+    problems.push(
+      ...within(t.tile, t.chart, 'chart in the trend tile'),
+      ...below(t.headline, t.chart, 'chart vs headline'),
+      ...below(t.chart, t.row, 'months row vs chart'),
+      ...within(t.tile, t.row, 'months row in the trend tile'),
+      ...within(t.head, t.meta, 'meta in the head'),
+    )
+    let prev: Rect | null = null
+    for (const [i, label] of labels.entries()) {
+      const l = (await boxes(page, { label })).label
+      problems.push(...within(t.tile, l, `month label ${i} in the trend tile`))
+      if (prev) problems.push(...leftOf(prev, l, `month label ${i - 1} vs ${i}`))
+      prev = l
+      rects[`month label ${i}`] = l
+    }
+    await assertPageDoesNotScrollSideways(page, 'overview')
+    return { problems, rects: { ...rects, trend: t } }
+  })
+
+  await attachJson(testInfo, 'ov-07-measurements', widths)
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
 test('IN-01 invoices register: heading, card, badge, toggle, bulk bar, header and pager relations', async ({ page }, testInfo) => {
   test.setTimeout(180_000)
   const errors = collectErrors(page)

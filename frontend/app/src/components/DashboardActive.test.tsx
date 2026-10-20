@@ -10,7 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AuditEvent, AuditResponse } from '../lib/audit'
 import { createAuthedFetch } from '../lib/authedFetch'
-import type { Counts, Metrics, Rollup } from '../lib/dashboard'
+import { sparkPath } from '../lib/chartPath'
+import type { Counts, HistoryRow, Metrics, Rollup } from '../lib/dashboard'
 import type { PlatformCtx } from '../types'
 import { DashboardActive } from './DashboardActive'
 
@@ -85,9 +86,13 @@ type AuditReply = AuditResponse | ((url: string) => Promise<MockResponse>)
 const auditPending: AuditReply = () => new Promise<MockResponse>(() => {})
 const auditFails: AuditReply = () => Promise.resolve<MockResponse>({ ok: false, status: 500, json: () => Promise.resolve({}) })
 
-// Routes by URL: /audit-log answers `audit` (default: an empty log), anything else the rollup.
-function mockRollupFetch(data: Rollup, audit: AuditReply = auditResponse()) {
+type HistoryReply = unknown | (() => Promise<MockResponse>)
+
+// Routes by URL: /audit-log answers `audit` (default: an empty log), /rollup/history answers
+// `history` (default: no rows), anything else the rollup.
+function mockRollupFetch(data: Rollup, audit: AuditReply = auditResponse(), history: HistoryReply = { history: [] }) {
   const fetchMock = vi.fn((url: string) => {
+    if (String(url).includes('/rollup/history')) return typeof history === 'function' ? (history as () => Promise<MockResponse>)() : ok(history)
     if (!String(url).includes('/audit-log')) return ok(data)
     return typeof audit === 'function' ? audit(String(url)) : ok(audit)
   })
@@ -1450,5 +1455,211 @@ describe('DashboardActive states sit inside the page wrapper (D-37)', () => {
     expect(card.style.background).toBe('transparent')
     expect(title.style.fontSize).toBe('15px')
     expect(card.querySelector('button'), 'control: the idle card has no action').toBeNull()
+  })
+})
+
+// OVER-04: KPI sparklines and the Readiness trend draw recorded history.
+describe('DashboardActive draws recorded history', () => {
+  const TODAY = '2026-10-29'
+  const urls = (m: ReturnType<typeof mockRollupFetch>, part: string) =>
+    m.mock.calls.filter((c) => String(c[0]).includes(part))
+  const day = (n: number) => `2026-10-${String(n).padStart(2, '0')}`
+  const row = (d: string, entity = 'ent-a', total = 10, num = 5): HistoryRow => ({
+    day: d, entity_id: entity, total, readiness_num: num, needs_attention: total % 7, not_submitted: total % 5, vat_kobo: total * 100,
+  })
+  // 21..29 Oct, rising totals, readiness 50%.
+  const nineDays = (entity = 'ent-a') => Array.from({ length: 9 }, (_, i) => row(day(21 + i), entity, 10 + i))
+  const KPI = ['Invoices', 'VAT tracked', 'Exceptions', 'Not yet submitted']
+  const STROKES = ['var(--action)', 'var(--action)', 'var(--status-red-text)', 'var(--status-amber-text)']
+  const live = () => rollup(0, { accepted: 100 }, { readiness: { num: 67, den: 100 } })
+  const firmLive = (): Rollup => {
+    const c = (id: string) => ({ entity_id: id, entity_name: id, counts: { ...ZERO_COUNTS, accepted: 100 }, needs_attention: 0, awaiting_approval: 0, metrics: { readiness: { num: 67, den: 100 } }, top_violations: [] })
+    return { ...live(), clients: [c('ent-a'), c('ent-b')] }
+  }
+  const noKpiSvg = () => KPI.forEach((l) => expect(kpiTile(l).querySelector('svg'), l).toBeNull())
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(`${TODAY}T12:00:00Z`))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('reads history once per mount, not blocking the tiles', async () => {
+    const m = mockRollupFetch(live(), auditResponse(), () => new Promise<MockResponse>(() => {}))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+
+    expect(within(kpiTile('Invoices')).getByText('100')).toBeDefined()
+    expect(within(kpiTile('Exceptions')).getByText('0')).toBeDefined()
+    expect(urls(m, '/rollup/history')).toHaveLength(1)
+    expect(urls(m, '/dashboard/v1/rollup').filter((c) => !String(c[0]).includes('/history'))).toHaveLength(1)
+  })
+
+  it('KPI tiles draw a sparkline from two recorded days', async () => {
+    const rows = [row(day(27), 'ent-a', 10), row(day(28), 'ent-a', 20), row(day(29), 'ent-a', 30)]
+    mockRollupFetch(live(), auditResponse(), { history: rows })
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+
+    await waitFor(() => expect(kpiTile('Invoices').querySelector('svg')).not.toBeNull())
+    // today's row is replaced by the live value (total 100).
+    const totals = [10, 20, 100]
+    const fields = [
+      totals,
+      [1000, 2000, 0],
+      [3, 6, 0],
+      [0, 0, 0],
+    ]
+    KPI.forEach((l, i) => {
+      const paths = kpiTile(l).querySelectorAll('svg path')
+      expect(paths, l).toHaveLength(1)
+      expect(paths[0].getAttribute('d'), l).toBe(sparkPath(fields[i]))
+      expect(paths[0].getAttribute('stroke'), l).toBe(STROKES[i])
+    })
+  })
+
+  it('KPI tiles draw nothing from one recorded day', async () => {
+    mockRollupFetch(live(), auditResponse(), { history: [row(day(29))] })
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+    await Promise.resolve()
+
+    noKpiSvg()
+  })
+
+  it('firm mode draws only the active client\'s rows', async () => {
+    const rows = [row(day(27), 'ent-a', 10), row(day(28), 'ent-a', 20), row(day(27), 'ent-b', 500), row(day(28), 'ent-b', 900)]
+    mockRollupFetch(firmLive(), auditResponse(), { history: rows })
+    render(<DashboardActive ctx={firmCtx('ent-a', 'Client A')} />)
+    await settle()
+
+    await waitFor(() => expect(kpiTile('Invoices').querySelector('svg')).not.toBeNull())
+    expect(kpiTile('Invoices').querySelector('path')!.getAttribute('d')).toBe(sparkPath([10, 20, 100]))
+  })
+
+  it('trend draws headline, delta, chart, months and span meta', async () => {
+    mockRollupFetch(live(), auditResponse(), { history: nineDays() })
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+
+    await waitFor(() => expect(trendTile().querySelector('svg')).not.toBeNull())
+    const t = trendTile()
+    expect(within(t).getByText('67%')).toBeDefined()
+    expect(within(t).getByText('▲ +17 pts since 21 Oct')).toBeDefined()
+    expect(within(t).getByText('SINCE 21 OCT · 9 DAYS')).toBeDefined()
+    expect(within(t).getByText('OCT')).toBeDefined()
+    expect(t.querySelectorAll('svg')).toHaveLength(1)
+    expect(within(t).queryByText('No history yet')).toBeNull()
+    expect(document.body.textContent).not.toContain('SAMPLE')
+  })
+
+  it('trend meta reads 12 WEEKS at an 84-day span', async () => {
+    // 84 days ending today: 2026-08-07 .. 2026-10-29.
+    const start = Date.UTC(2026, 7, 7)
+    const rows = Array.from({ length: 84 }, (_, i) => row(new Date(start + i * 86400000).toISOString().slice(0, 10)))
+    mockRollupFetch(live(), auditResponse(), { history: rows })
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+
+    await waitFor(() => expect(trendTile().querySelector('svg')).not.toBeNull())
+    expect(within(trendTile()).getByText('12 WEEKS')).toBeDefined()
+  })
+
+  it('trend keeps the empty state on one recorded day', async () => {
+    mockRollupFetch(live(), auditResponse(), { history: [row(day(29))] })
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+    await Promise.resolve()
+
+    expect(trendBody().textContent).toBe(NO_HISTORY)
+    expect(within(trendTile()).getByText('12 WEEKS')).toBeDefined()
+    expect(trendTile().querySelector('svg')).toBeNull()
+  })
+
+  it('a null live score wins over history', async () => {
+    mockRollupFetch(rollup(0), auditResponse(), { history: nineDays().slice(0, 5) })
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+    await Promise.resolve()
+
+    expect(trendBody().textContent).toBe('—No invoices yet')
+    expect(trendTile().querySelector('svg')).toBeNull()
+  })
+
+  it('a failed history call leaves the OVER-02 states and no banner', async () => {
+    mockRollupFetch(live(), auditResponse(), () => Promise.resolve<MockResponse>({ ok: false, status: 500, json: () => Promise.resolve({}) }))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+    await Promise.resolve()
+
+    expect(within(kpiTile('Invoices')).getByText('100')).toBeDefined()
+    noKpiSvg()
+    expect(within(trendTile()).getByText('No history yet')).toBeDefined()
+    expect(screen.queryByText('Retry')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('a history body without a history array behaves as no history', async () => {
+    mockRollupFetch(live(), auditResponse(), live())
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+    await Promise.resolve()
+
+    noKpiSvg()
+    expect(within(trendTile()).getByText('No history yet')).toBeDefined()
+  })
+
+  it('late history draws the curves and fetches nothing again', async () => {
+    let release!: (v: MockResponse) => void
+    const pending = new Promise<MockResponse>((r) => (release = r))
+    const m = mockRollupFetch(live(), auditResponse(), () => pending)
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+    noKpiSvg()
+
+    release({ ok: true, status: 200, json: () => Promise.resolve({ history: nineDays() }) })
+    await waitFor(() => expect(kpiTile('Invoices').querySelector('svg')).not.toBeNull())
+
+    expect(within(kpiTile('Invoices')).getByText('100')).toBeDefined()
+    expect(urls(m, '/dashboard/v1/rollup').filter((c) => !String(c[0]).includes('/history'))).toHaveLength(1)
+  })
+
+  it('a client switch follows the new client without a refetch', async () => {
+    const rows = [row(day(29), 'ent-a'), ...Array.from({ length: 40 }, (_, i) => row(new Date(Date.UTC(2026, 9, 29) - i * 86400000).toISOString().slice(0, 10), 'ent-b'))]
+    const m = mockRollupFetch(firmLive(), auditResponse(), { history: rows })
+    const { rerender } = render(<DashboardActive ctx={firmCtx('ent-a', 'Client A')} />)
+    await settle()
+    await Promise.resolve()
+    noKpiSvg()
+
+    rerender(<DashboardActive ctx={firmCtx('ent-b', 'Client B')} />)
+    await waitFor(() => expect(kpiTile('Invoices').querySelector('svg')).not.toBeNull())
+    expect(urls(m, '/rollup/history')).toHaveLength(1)
+  })
+
+  it('one client\'s long history does not draw on a client with one recorded day', async () => {
+    const rows = [row(day(29), 'ent-a'), ...Array.from({ length: 40 }, (_, i) => row(new Date(Date.UTC(2026, 9, 29) - i * 86400000).toISOString().slice(0, 10), 'ent-b'))]
+    mockRollupFetch(firmLive(), auditResponse(), { history: rows })
+    render(<DashboardActive ctx={firmCtx('ent-a', 'Client A')} />)
+    await settle()
+    await Promise.resolve()
+
+    noKpiSvg()
+    expect(within(trendTile()).getByText('No history yet')).toBeDefined()
+  })
+
+  it('a history rejection after the rollup rendered leaves no trace', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockRollupFetch(live(), auditResponse(), () => Promise.reject(new Error('boom')))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+    await Promise.resolve()
+
+    noKpiSvg()
+    expect(screen.queryByText(/boom/)).toBeNull()
+    expect(err).not.toHaveBeenCalled()
+    err.mockRestore()
   })
 })

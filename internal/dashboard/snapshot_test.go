@@ -264,6 +264,38 @@ func TestSnapshot_FailingTenantDoesNotStopTheLoop(t *testing.T) {
 	}
 }
 
+func TestSnapshot_CancelledContextStopsTheLoopQuietly(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenA := seedTenant(t, super, "snapshot cancel A")
+	tenB := seedTenant(t, super, "snapshot cancel B")
+	seedInvoiceAtStatus(t, super, tenA, seedEntity(t, super, tenA, "Snap A"), "SN-A-1", "draft")
+	seedInvoiceAtStatus(t, super, tenB, seedEntity(t, super, tenB, "Snap B"), "SN-B-1", "draft")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var logs strings.Builder
+	seen := map[string]bool{}
+	s := snapAt(time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC), tenA, tenB)
+	s.Pool = app
+	s.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	s.afterTenant = func(id string) error {
+		seen[id] = true
+		cancel()
+		return nil
+	}
+
+	err := s.RunOnce(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunOnce error = %v, want it to wrap context.Canceled", err)
+	}
+	if seen[tenB] {
+		t.Errorf("tenant B was attempted after cancel")
+	}
+	if logs.Len() != 0 {
+		t.Errorf("cancel logged %q, want no error lines", logs.String())
+	}
+}
+
 func TestSnapshot_EnumerationErrorWritesNothing(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenant := seedTenant(t, super, "snapshot enumeration error")

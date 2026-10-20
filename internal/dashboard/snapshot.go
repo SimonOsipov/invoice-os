@@ -32,7 +32,7 @@ type Snapshotter struct {
 	afterTenant func(tenantID string) error
 }
 
-// RunOnce snapshots every tenant. One tenant's failure does not stop the others.
+// RunOnce snapshots every tenant. One tenant's failure does not stop the others; a done ctx does.
 func (s *Snapshotter) RunOnce(ctx context.Context) error {
 	tenants, err := s.Tenants(ctx)
 	if err != nil {
@@ -49,12 +49,21 @@ func (s *Snapshotter) RunOnce(ctx context.Context) error {
 
 	var failures []error
 	for _, id := range tenants {
+		if ctx.Err() != nil {
+			break
+		}
 		if err := db.WithinTenantTx(ctx, s.Pool, id, func(tx pgx.Tx) error {
 			return s.snapshotTenant(ctx, tx, id, day)
 		}); err != nil {
+			if ctx.Err() != nil { // shutdown, not a tenant fault
+				break
+			}
 			log.ErrorContext(ctx, "dashboard: tenant snapshot failed", "tenant_id", id, "error", err)
 			failures = append(failures, fmt.Errorf("dashboard: snapshot tenant %s: %w", id, err))
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		failures = append(failures, fmt.Errorf("dashboard: snapshot interrupted: %w", err))
 	}
 	return errors.Join(failures...)
 }

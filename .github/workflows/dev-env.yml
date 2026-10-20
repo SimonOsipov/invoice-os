@@ -1149,7 +1149,8 @@ jobs:
           shards="$(node e2e/topology/shards.ts)"
           echo "shards=$shards" >> "$GITHUB_OUTPUT"
       - name: Install deps
-        run: pnpm install --frozen-lockfile
+        # --ignore-scripts: this job holds the Railway token (TestNoInstallJobHoldsTheRailwayToken).
+        run: pnpm install --frozen-lockfile --ignore-scripts
       # A domain record can exist, report syncStatus ACTIVE and still not route — see
       # railway-env.sh, "Domain reachability: a record is not a route". Repair that here,
       # before the wait below spends its whole 600s budget on a hostname the edge has no

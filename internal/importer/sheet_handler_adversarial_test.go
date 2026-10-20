@@ -310,7 +310,7 @@ func TestSheetHandler_RowNumberingIndependentlyMatchesImporterSheetRows(t *testi
 	}
 	resp := mustUnmarshalSheet(t, raw)
 
-	wantHeader, wantRows, _, err := Decode(bytes.NewReader(content), "csv")
+	wantHeader, wantRows, _, err := Decode(context.Background(), bytes.NewReader(content), "csv")
 	if err != nil {
 		t.Fatalf("direct Decode: %v", err)
 	}
@@ -452,5 +452,26 @@ func TestSheetRoute_MountedInCmdInvoiceWithSheetHandler(t *testing.T) {
 	if len(handler.Args) == 0 || selectorNameForImporter(handler.Args[0]) == "" ||
 		!strings.HasSuffix(selectorNameForImporter(handler.Args[0]), ".OpenLinked") {
 		t.Errorf("SheetHandler's open argument is not an .OpenLinked method value; a limited member could read a document linked only to a hidden client")
+	}
+}
+
+func TestSheetHandler_StoredXLSXOverTheRowCapIs400(t *testing.T) {
+	id := testIdentity()
+	big := buildXLSX(t, func(f *excelize.File, sheet string) {
+		mustSetCellValue(t, f, sheet, "A1", "x")
+		mustSetCellValue(t, f, sheet, "A100002", "x")
+	})
+	open := newFakeDocOpen("data.xlsx", xlsxContentType, big)
+
+	rec, raw := doSheetRequest(t, open.fn(), &id, open.doc.ID)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, raw)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil || body.Error != "the spreadsheet has more than 100,000 data rows; split it into smaller files" {
+		t.Errorf("body = %s (err=%v), want error %q", raw, err, "the spreadsheet has more than 100,000 data rows; split it into smaller files")
 	}
 }

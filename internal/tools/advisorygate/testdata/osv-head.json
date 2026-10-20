@@ -1,0 +1,697 @@
+{
+ "results": [
+  {
+   "packages": [
+    {
+     "groups": [
+      {
+       "aliases": [
+        "GHSA-gcjh-h69q-9w9g",
+        "GO-2026-6094"
+       ],
+       "ids": [
+        "GO-2026-6094"
+       ],
+       "max_severity": ""
+      }
+     ],
+     "package": {
+      "ecosystem": "Go",
+      "name": "github.com/google/cel-go",
+      "purl": "pkg:golang/github.com/google/cel-go@0.29.2",
+      "version": "0.29.2"
+     },
+     "vulnerabilities": [
+      {
+       "aliases": [
+        "GHSA-gcjh-h69q-9w9g"
+       ],
+       "database_specific": {
+        "review_status": "REVIEWED",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6094"
+       },
+       "id": "GO-2026-6094"
+      }
+     ]
+    },
+    {
+     "groups": [
+      {
+       "aliases": [
+        "CVE-2026-63209",
+        "GHSA-259r-337f-4rfw",
+        "GO-2026-5841"
+       ],
+       "ids": [
+        "GO-2026-5841"
+       ],
+       "max_severity": ""
+      }
+     ],
+     "package": {
+      "ecosystem": "Go",
+      "name": "github.com/klauspost/compress",
+      "purl": "pkg:golang/github.com/klauspost/compress@1.18.5",
+      "version": "1.18.5"
+     },
+     "vulnerabilities": [
+      {
+       "aliases": [
+        "CVE-2026-63209",
+        "GHSA-259r-337f-4rfw"
+       ],
+       "database_specific": {
+        "review_status": "REVIEWED",
+        "url": "https://pkg.go.dev/vuln/GO-2026-5841"
+       },
+       "id": "GO-2026-5841"
+      }
+     ]
+    },
+    {
+     "groups": [
+      {
+       "aliases": [
+        "GO-2026-5932"
+       ],
+       "ids": [
+        "GO-2026-5932"
+       ],
+       "max_severity": ""
+      }
+     ],
+     "package": {
+      "ecosystem": "Go",
+      "name": "golang.org/x/crypto",
+      "purl": "pkg:golang/golang.org/x/crypto@0.57.0",
+      "version": "0.57.0"
+     },
+     "vulnerabilities": [
+      {
+       "database_specific": {
+        "review_status": "REVIEWED",
+        "url": "https://pkg.go.dev/vuln/GO-2026-5932"
+       },
+       "id": "GO-2026-5932"
+      }
+     ]
+    },
+    {
+     "groups": [
+      {
+       "aliases": [
+        "BIT-golang-2026-78659",
+        "CVE-2026-78659",
+        "GO-2026-6603"
+       ],
+       "ids": [
+        "GO-2026-6603"
+       ],
+       "max_severity": ""
+      },
+      {
+       "aliases": [
+        "BIT-golang-2026-78660",
+        "CVE-2026-78660",
+        "GO-2026-6610"
+       ],
+       "ids": [
+        "GO-2026-6610"
+       ],
+       "max_severity": ""
+      },
+      {
+       "aliases": [
+        "BIT-golang-2026-78669",
+        "CVE-2026-78669",
+        "GO-2026-6611"
+       ],
+       "ids": [
+        "GO-2026-6611"
+       ],
+       "max_severity": ""
+      },
+      {
+       "aliases": [
+        "BIT-golang-2026-78663",
+        "CVE-2026-78663",
+        "GO-2026-6612"
+       ],
+       "ids": [
+        "GO-2026-6612"
+       ],
+       "max_severity": ""
+      },
+      {
+       "aliases": [
+        "BIT-golang-2026-97032",
+        "CVE-2026-97032",
+        "GO-2026-6617"
+       ],
+       "ids": [
+        "GO-2026-6617"
+       ],
+       "max_severity": ""
+      }
+     ],
+     "package": {
+      "ecosystem": "Go",
+      "name": "golang.org/x/net",
+      "purl": "pkg:golang/golang.org/x/net@0.59.0",
+      "version": "0.59.0"
+     },
+     "vulnerabilities": [
+      {
+       "aliases": [
+        "BIT-golang-2026-78659",
+        "CVE-2026-78659"
+       ],
+       "credits": [
+        {
+         "name": "RyotaK (https://ryotak.net) of GMO Flatt Security Inc."
+        }
+       ],
+       "database_specific": {
+        "review_status": "REVIEWED",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6603"
+       },
+       "id": "GO-2026-6603"
+      },
+      {
+       "aliases": [
+        "BIT-golang-2026-78660",
+        "CVE-2026-78660"
+       ],
+       "credits": [
+        {
+         "name": "TJ Barton"
+        }
+       ],
+       "database_specific": {
+        "review_status": "REVIEWED",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6610"
+       },
+       "id": "GO-2026-6610"
+      },
+      {
+       "aliases": [
+        "BIT-golang-2026-78669",
+        "CVE-2026-78669"
+       ],
+       "credits": [
+        {
+         "name": "Jakub Ciolek (https://ciolek.dev)"
+        }
+       ],
+       "database_specific": {
+        "review_status": "REVIEWED",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6611"
+       },
+       "id": "GO-2026-6611"
+      },
+      {
+       "aliases": [
+        "BIT-golang-2026-78663",
+        "CVE-2026-78663"
+       ],
+       "credits": [
+        {
+         "name": "Ali Sherif (https://www.linkedin.com/in/ali-sherif-13812b276/)"
+        }
+       ],
+       "database_specific": {
+        "review_status": "REVIEWED",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6612"
+       },
+       "id": "GO-2026-6612"
+      },
+      {
+       "aliases": [
+        "BIT-golang-2026-97032",
+        "CVE-2026-97032"
+       ],
+       "credits": [
+        {
+         "name": "RyotaK (https://ryotak.net) of GMO Flatt Security Inc."
+        }
+       ],
+       "database_specific": {
+        "review_status": "REVIEWED",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6617"
+       },
+       "id": "GO-2026-6617"
+      }
+     ]
+    }
+   ],
+   "source": {
+    "path": "go.mod",
+    "type": "lockfile"
+   }
+  },
+  {
+   "packages": [
+    {
+     "groups": [
+      {
+       "aliases": [
+        "CVE-2026-84373",
+        "GHSA-82fw-gwwq-j7x9"
+       ],
+       "ids": [
+        "GHSA-82fw-gwwq-j7x9"
+       ],
+       "max_severity": "5.9"
+      }
+     ],
+     "package": {
+      "ecosystem": "npm",
+      "name": "@vitest/mocker",
+      "purl": "pkg:npm/%40vitest/mocker@4.1.10",
+      "version": "4.1.10"
+     },
+     "vulnerabilities": [
+      {
+       "aliases": [
+        "CVE-2026-84373"
+       ],
+       "database_specific": {
+        "cwe_ids": [
+         "CWE-22"
+        ],
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-09-08T20:46:45Z",
+        "nvd_published_at": "2026-09-01T22:17:19Z",
+        "severity": "MODERATE"
+       },
+       "id": "GHSA-82fw-gwwq-j7x9",
+       "severity": [
+        {
+         "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
+         "type": "CVSS_V3"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "groups": [
+      {
+       "aliases": [
+        "CVE-2026-84373",
+        "GHSA-82fw-gwwq-j7x9"
+       ],
+       "ids": [
+        "GHSA-82fw-gwwq-j7x9"
+       ],
+       "max_severity": "5.9"
+      }
+     ],
+     "package": {
+      "ecosystem": "npm",
+      "name": "vitest",
+      "purl": "pkg:npm/vitest@4.1.10",
+      "version": "4.1.10"
+     },
+     "vulnerabilities": [
+      {
+       "aliases": [
+        "CVE-2026-84373"
+       ],
+       "database_specific": {
+        "cwe_ids": [
+         "CWE-22"
+        ],
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-09-08T20:46:45Z",
+        "nvd_published_at": "2026-09-01T22:17:19Z",
+        "severity": "MODERATE"
+       },
+       "id": "GHSA-82fw-gwwq-j7x9",
+       "severity": [
+        {
+         "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
+         "type": "CVSS_V3"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "source": {
+    "path": "pnpm-lock.yaml",
+    "type": "lockfile"
+   }
+  },
+  {
+   "packages": [
+    {
+     "groups": [
+      {
+       "aliases": [
+        "CVE-2026-105742",
+        "GHSA-p3fw-7699-7926",
+        "PYSEC-2026-4189",
+        "PYSEC-2026-4212"
+       ],
+       "ids": [
+        "PYSEC-2026-4189",
+        "GHSA-p3fw-7699-7926"
+       ],
+       "max_severity": "5.3"
+      },
+      {
+       "aliases": [
+        "CVE-2026-105743",
+        "GHSA-pc36-qwjq-x68c",
+        "PYSEC-2026-4190",
+        "PYSEC-2026-4214"
+       ],
+       "ids": [
+        "PYSEC-2026-4190",
+        "GHSA-pc36-qwjq-x68c"
+       ],
+       "max_severity": "5.8"
+      },
+      {
+       "aliases": [
+        "CVE-2026-105745",
+        "GHSA-9jxx-vjrv-h2rq",
+        "PYSEC-2026-4192",
+        "PYSEC-2026-4210"
+       ],
+       "ids": [
+        "PYSEC-2026-4192",
+        "GHSA-9jxx-vjrv-h2rq"
+       ],
+       "max_severity": "7.8"
+      },
+      {
+       "aliases": [
+        "CVE-2026-105746",
+        "GHSA-h42j-9hcc-3cwc",
+        "PYSEC-2026-4193"
+       ],
+       "ids": [
+        "PYSEC-2026-4193"
+       ],
+       "max_severity": "5.3"
+      },
+      {
+       "aliases": [
+        "CVE-2026-105747",
+        "GHSA-3cr3-8m4c-fpxw",
+        "PYSEC-2026-4194",
+        "PYSEC-2026-4209"
+       ],
+       "ids": [
+        "PYSEC-2026-4194",
+        "GHSA-3cr3-8m4c-fpxw"
+       ],
+       "max_severity": "4.3"
+      },
+      {
+       "aliases": [
+        "CVE-2026-105749",
+        "GHSA-cgc7-9qp3-86m3",
+        "PYSEC-2026-4195",
+        "PYSEC-2026-4211"
+       ],
+       "ids": [
+        "PYSEC-2026-4195",
+        "GHSA-cgc7-9qp3-86m3"
+       ],
+       "max_severity": "6.5"
+      },
+      {
+       "aliases": [
+        "CVE-2026-105748",
+        "GHSA-p944-4xh2-x776",
+        "PYSEC-2026-4208",
+        "PYSEC-2026-4213"
+       ],
+       "ids": [
+        "PYSEC-2026-4208",
+        "GHSA-p944-4xh2-x776"
+       ],
+       "max_severity": "4.3"
+      }
+     ],
+     "package": {
+      "ecosystem": "PyPI",
+      "name": "docling",
+      "purl": "pkg:pypi/docling@2.123.1",
+      "version": "2.123.1"
+     },
+     "vulnerabilities": [
+      {
+       "aliases": [
+        "CVE-2026-105742",
+        "GHSA-p3fw-7699-7926",
+        "PYSEC-2026-4212"
+       ],
+       "id": "PYSEC-2026-4189",
+       "severity": [
+        {
+         "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+         "type": "CVSS_V3"
+        }
+       ]
+      },
+      {
+       "aliases": [
+        "CVE-2026-105743",
+        "GHSA-pc36-qwjq-x68c",
+        "PYSEC-2026-4214"
+       ],
+       "id": "PYSEC-2026-4190",
+       "severity": [
+        {
+         "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:L/I:N/A:N",
+         "type": "CVSS_V3"
+        }
+       ]
+      },
+      {
+       "aliases": [
+        "CVE-2026-105745",
+        "GHSA-9jxx-vjrv-h2rq",
+        "PYSEC-2026-4210"
+       ],
+       "id": "PYSEC-2026-4192",
+       "severity": [
+        {
+         "score": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H",
+         "type": "CVSS_V3"
+        }
+       ]
+      },
+      {
+       "aliases": [
+        "CVE-2026-105746",
+        "GHSA-h42j-9hcc-3cwc"
+       ],
+       "id": "PYSEC-2026-4193",
+       "severity": [
+        {
+         "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+         "type": "CVSS_V3"
+        }
+       ]
+      },
+      {
+       "aliases": [
+        "CVE-2026-105747",
+        "GHSA-3cr3-8m4c-fpxw",
+        "PYSEC-2026-4209"
+       ],
+       "id": "PYSEC-2026-4194",
+       "severity": [
+        {
+         "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:L",
+         "type": "CVSS_V3"
+        }
+       ]
+      },
+      {
+       "aliases": [
+        "CVE-2026-105749",
+        "GHSA-cgc7-9qp3-86m3",
+        "PYSEC-2026-4211"
+       ],
+       "id": "PYSEC-2026-4195",
+       "severity": [
+        {
+         "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H",
+         "type": "CVSS_V3"
+        }
+       ]
+      },
+      {
+       "aliases": [
+        "CVE-2026-105748",
+        "GHSA-p944-4xh2-x776",
+        "PYSEC-2026-4213"
+       ],
+       "id": "PYSEC-2026-4208",
+       "severity": [
+        {
+         "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:N/A:N",
+         "type": "CVSS_V3"
+        }
+       ]
+      },
+      {
+       "aliases": [
+        "CVE-2026-105747",
+        "PYSEC-2026-4194",
+        "PYSEC-2026-4209"
+       ],
+       "database_specific": {
+        "cwe_ids": [
+         "CWE-409",
+         "CWE-770"
+        ],
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-10-06T13:41:16Z",
+        "nvd_published_at": null,
+        "severity": "MODERATE"
+       },
+       "id": "GHSA-3cr3-8m4c-fpxw",
+       "severity": [
+        {
+         "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:L",
+         "type": "CVSS_V3"
+        }
+       ]
+      },
+      {
+       "aliases": [
+        "CVE-2026-105745",
+        "PYSEC-2026-4192",
+        "PYSEC-2026-4210"
+       ],
+       "database_specific": {
+        "cwe_ids": [
+         "CWE-696",
+         "CWE-829"
+        ],
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-10-07T20:40:56Z",
+        "nvd_published_at": "2026-10-05T22:16:57Z",
+        "severity": "MODERATE"
+       },
+       "id": "GHSA-9jxx-vjrv-h2rq",
+       "severity": [
+        {
+         "score": "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:H",
+         "type": "CVSS_V3"
+        }
+       ]
+      },
+      {
+       "aliases": [
+        "CVE-2026-105749",
+        "PYSEC-2026-4195",
+        "PYSEC-2026-4211"
+       ],
+       "database_specific": {
+        "cwe_ids": [
+         "CWE-400",
+         "CWE-789"
+        ],
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-10-07T20:41:02Z",
+        "nvd_published_at": "2026-10-05T22:16:57Z",
+        "severity": "MODERATE"
+       },
+       "id": "GHSA-cgc7-9qp3-86m3",
+       "severity": [
+        {
+         "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H",
+         "type": "CVSS_V3"
+        }
+       ]
+      },
+      {
+       "aliases": [
+        "CVE-2026-105742",
+        "PYSEC-2026-4189",
+        "PYSEC-2026-4212"
+       ],
+       "database_specific": {
+        "cwe_ids": [
+         "CWE-201",
+         "CWE-522"
+        ],
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-10-07T20:42:24Z",
+        "nvd_published_at": "2026-10-05T22:16:56Z",
+        "severity": "LOW"
+       },
+       "id": "GHSA-p3fw-7699-7926",
+       "severity": [
+        {
+         "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N",
+         "type": "CVSS_V3"
+        }
+       ]
+      },
+      {
+       "aliases": [
+        "CVE-2026-105748",
+        "PYSEC-2026-4208",
+        "PYSEC-2026-4213"
+       ],
+       "database_specific": {
+        "cwe_ids": [
+         "CWE-200",
+         "CWE-73"
+        ],
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-10-07T20:41:08Z",
+        "nvd_published_at": "2026-10-05T22:16:57Z",
+        "severity": "MODERATE"
+       },
+       "id": "GHSA-p944-4xh2-x776",
+       "severity": [
+        {
+         "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:N/A:N",
+         "type": "CVSS_V3"
+        }
+       ]
+      },
+      {
+       "aliases": [
+        "CVE-2026-105743",
+        "PYSEC-2026-4190",
+        "PYSEC-2026-4214"
+       ],
+       "database_specific": {
+        "cwe_ids": [
+         "CWE-367",
+         "CWE-918"
+        ],
+        "github_reviewed": true,
+        "github_reviewed_at": "2026-10-07T20:42:19Z",
+        "nvd_published_at": "2026-10-05T22:16:57Z",
+        "severity": "MODERATE"
+       },
+       "id": "GHSA-pc36-qwjq-x68c",
+       "severity": [
+        {
+         "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:C/C:L/I:N/A:N",
+         "type": "CVSS_V3"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "source": {
+    "path": "requirements.txt",
+    "type": "lockfile"
+   }
+  }
+ ]
+}

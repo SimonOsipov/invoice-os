@@ -2,10 +2,12 @@ package importer
 
 import (
 	"bytes"
+	"context"
 	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
+	"time"
 	"unicode/utf8"
 
 	"github.com/xuri/excelize/v2"
@@ -24,8 +26,8 @@ type DecodeFacts struct {
 }
 
 // Decode reads the column names from row 1.
-func Decode(r io.Reader, format string) (header []string, rows [][]string, facts DecodeFacts, err error) {
-	return DecodeFrom(r, format, 1)
+func Decode(ctx context.Context, r io.Reader, format string) (header []string, rows [][]string, facts DecodeFacts, err error) {
+	return DecodeFrom(ctx, r, format, 1)
 }
 
 // ErrHeaderRowPastEnd: the header row names a row the file does not have.
@@ -34,7 +36,7 @@ var ErrHeaderRowPastEnd = errors.New("importer: header row is past the last row 
 // DecodeFrom is Decode with the column names on 1-based physical row
 // headerRow. Pure and DB-free; no header/column normalization happens here.
 // Row 1 runs today's reading unchanged.
-func DecodeFrom(r io.Reader, format string, headerRow int) (header []string, rows [][]string, facts DecodeFacts, err error) {
+func DecodeFrom(ctx context.Context, r io.Reader, format string, headerRow int) (header []string, rows [][]string, facts DecodeFacts, err error) {
 	if headerRow < 1 {
 		return nil, nil, DecodeFacts{}, fmt.Errorf("importer: header row %d is below 1", headerRow)
 	}
@@ -46,9 +48,9 @@ func DecodeFrom(r io.Reader, format string, headerRow int) (header []string, row
 		return decodeCSVFrom(r, headerRow)
 	case "xlsx":
 		if headerRow == 1 {
-			return decodeXLSX(r)
+			return decodeXLSX(ctx, r)
 		}
-		return decodeXLSXFrom(r, headerRow)
+		return decodeXLSXFrom(ctx, r, headerRow)
 	default:
 		return nil, nil, DecodeFacts{}, fmt.Errorf("importer: unsupported format %q", format)
 	}
@@ -255,7 +257,7 @@ func sniffDelimiter(header []byte) rune {
 // maxXLSXUnzipBytes bounds excelize's Options.UnzipSizeLimit: the total
 // uncompressed size excelize will unpack across an .xlsx archive's entries
 // before it errors out, rather than the ~16 GiB it defaults to
-// (xuri/excelize/v2@v2.11.0's UnzipSizeLimit constant, templates.go). The
+// (excelize's UnzipSizeLimit constant, templates.go). The
 // maxUploadBytes cap ([upload-cap], handlers.go) only bounds the COMPRESSED
 // request body -- it does nothing to stop a small, maliciously crafted zip
 // from unzipping to gigabytes in memory (a zip bomb -> DoS). 10x
@@ -268,13 +270,33 @@ func sniffDelimiter(header []byte) rune {
 // OpenReader without needing a real oversized fixture.
 var maxXLSXUnzipBytes int64 = 10 * maxUploadBytes // 150 MiB
 
-// xlsxRows returns every row of the first sheet from row 1 via excelize's
+// maxXLSXDataRows caps the rows after the header row; gap rows count.
+const maxXLSXDataRows = 100_000
+
+// ErrTooManyRows: the sheet has more than maxXLSXDataRows data rows.
+var ErrTooManyRows = errors.New("importer: spreadsheet has more than 100,000 data rows")
+
+// maxXLSXCells caps the cells (padded blanks included) one decode holds.
+// ceiling: 3x the 1.5M-cell legitimate 100,000 x 15 sheet; raise it if a real sheet is refused.
+const maxXLSXCells = 5_000_000
+
+// ErrTooManyCells: the sheet holds more than maxXLSXCells cells once each row is padded to its last column.
+var ErrTooManyCells = errors.New("importer: spreadsheet has too many cells")
+
+// xlsxDecodeTimeout bounds one xlsxRows call; a var so a test can lower it.
+// ceiling: one Columns call is uninterruptible (up to ~8s at maxXLSXUnzipBytes), revisit if a trace shows a preview over 30s.
+var xlsxDecodeTimeout = 30 * time.Second
+
+// xlsxRows returns the rows of the first sheet from row 1 via excelize's
 // row iterator, so display values (formatted dates, grouped numbers) come
 // back exactly as a human would see them in Excel — no normalization, that
 // is the service's job. A gap row comes back nil. OpenReader is bounded by
 // maxXLSXUnzipBytes ([upload-cap]) so a small upload cannot decompress to an
 // unbounded size.
-func xlsxRows(r io.Reader) ([][]string, error) {
+func xlsxRows(ctx context.Context, r io.Reader, headerRow int) ([][]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, xlsxDecodeTimeout)
+	defer cancel()
+
 	f, err := excelize.OpenReader(r, excelize.Options{UnzipSizeLimit: maxXLSXUnzipBytes})
 	if err != nil {
 		return nil, err
@@ -288,13 +310,28 @@ func xlsxRows(r io.Reader) ([][]string, error) {
 	}
 	defer rowsIter.Close()
 
+	// Physical rows read stay bounded for any headerRow; clamping first avoids overflow.
+	maxRows := min(headerRow, maxXLSXDataRows) + maxXLSXDataRows
+	cells := 0
 	var all [][]string
-	for rowsIter.Next() {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("importer: xlsx decode stopped: %w", err)
+		}
+		if !rowsIter.Next() {
+			break
+		}
 		cols, err := rowsIter.Columns()
 		if err != nil {
 			return nil, err
 		}
 		all = append(all, cols)
+		if len(all) > maxRows {
+			return nil, ErrTooManyRows
+		}
+		if cells += len(cols); cells > maxXLSXCells {
+			return nil, ErrTooManyCells
+		}
 	}
 	if err := rowsIter.Error(); err != nil {
 		return nil, err
@@ -304,8 +341,8 @@ func xlsxRows(r io.Reader) ([][]string, error) {
 
 // decodeXLSX implements the XLSX half of Decode: xlsxRows' first row is the
 // header, the rest are data.
-func decodeXLSX(r io.Reader) ([]string, [][]string, DecodeFacts, error) {
-	all, err := xlsxRows(r)
+func decodeXLSX(ctx context.Context, r io.Reader) ([]string, [][]string, DecodeFacts, error) {
+	all, err := xlsxRows(ctx, r, 1)
 	if err != nil {
 		return nil, nil, DecodeFacts{}, err
 	}
@@ -321,8 +358,8 @@ func decodeXLSX(r io.Reader) ([]string, [][]string, DecodeFacts, error) {
 }
 
 // decodeXLSXFrom is decodeXLSX with the header on sheet row headerRow (>= 2).
-func decodeXLSXFrom(r io.Reader, headerRow int) ([]string, [][]string, DecodeFacts, error) {
-	all, err := xlsxRows(r)
+func decodeXLSXFrom(ctx context.Context, r io.Reader, headerRow int) ([]string, [][]string, DecodeFacts, error) {
+	all, err := xlsxRows(ctx, r, headerRow)
 	if err != nil {
 		return nil, nil, DecodeFacts{}, err
 	}

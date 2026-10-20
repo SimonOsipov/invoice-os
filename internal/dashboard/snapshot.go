@@ -49,9 +49,6 @@ func (s *Snapshotter) RunOnce(ctx context.Context) error {
 
 	var failures []error
 	for _, id := range tenants {
-		if ctx.Err() != nil {
-			break
-		}
 		if err := db.WithinTenantTx(ctx, s.Pool, id, func(tx pgx.Tx) error {
 			return s.snapshotTenant(ctx, tx, id, day)
 		}); err != nil {

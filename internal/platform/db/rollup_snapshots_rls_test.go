@@ -386,6 +386,53 @@ func TestRLS_RollupSnapshotsInsertOutsideTheScopeRefused(t *testing.T) {
 	}
 }
 
+// The grant allows UPDATE, so the policy alone keeps another tenant, or a client out of scope, from editing a row.
+func TestRLS_RollupSnapshotsUpdateIsTenantAndScopeBound(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	x, cleanupX := seedBusinessEntity(t, h.tenantA, "rs-upd-x")
+	defer cleanupX()
+	y, cleanupY := seedBusinessEntity(t, h.tenantA, "rs-upd-y")
+	defer cleanupY()
+	defer rsSeed(t, h.tenantA, x, "2026-10-21", 1)()
+	defer rsSeed(t, h.tenantA, y, "2026-10-21", 1)()
+
+	update := func(tenant, scope, entity string) (int64, error) {
+		var n int64
+		err := db.WithinTenantTx(ctx, h.app, tenant, func(tx pgx.Tx) error {
+			if scope != "" {
+				if _, e := tx.Exec(ctx, `SELECT set_config('app.entity_scope', $1, true)`, scope); e != nil {
+					return e
+				}
+			}
+			tag, e := tx.Exec(ctx, `UPDATE rollup_snapshots SET total = 99 WHERE entity_id = $1`, entity)
+			n = tag.RowsAffected()
+			return e
+		})
+		return n, err
+	}
+	// Control: the own tenant inside its scope updates the row, so the zeros below are the policy.
+	if n, err := update(h.tenantA, "{"+x+"}", x); err != nil || n != 1 {
+		t.Fatalf("control UPDATE in the own tenant and scope = %d rows (err %v), want 1", n, err)
+	}
+	if n, err := update(h.tenantB, "", x); err != nil || n != 0 {
+		t.Errorf("UPDATE of A's row from tenant B = %d rows (err %v), want 0", n, err)
+	}
+	if n, err := update(h.tenantA, "{"+x+"}", y); err != nil || n != 0 {
+		t.Errorf("UPDATE of an out-of-scope client's row = %d rows (err %v), want 0", n, err)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM rollup_snapshots WHERE entity_id = $1 AND total = 99`, y); n != 0 {
+		t.Errorf("out-of-scope row changed: %d rows have total 99, want 0", n)
+	}
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `UPDATE rollup_snapshots SET tenant_id = $1 WHERE entity_id = $2`, h.tenantB, y)
+		return e
+	})
+	assertRLSViolation(t, err)
+}
+
 // RI checks bypass RLS, so only a composite FK on (tenant_id, entity_id) refuses B's entity.
 func TestRLS_RollupSnapshotsCrossTenantEntityRefused(t *testing.T) {
 	h := requireHarness(t)

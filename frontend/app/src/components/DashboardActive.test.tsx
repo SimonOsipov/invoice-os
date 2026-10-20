@@ -1476,7 +1476,16 @@ describe('DashboardActive draws recorded history', () => {
     const c = (id: string) => ({ entity_id: id, entity_name: id, counts: { ...ZERO_COUNTS, accepted: 100 }, needs_attention: 0, awaiting_approval: 0, metrics: { readiness: { num: 67, den: 100 } }, top_violations: [] })
     return { ...live(), clients: [c('ent-a'), c('ent-b')] }
   }
-  const noKpiSvg = () => KPI.forEach((l) => expect(kpiTile(l).querySelector('svg'), l).toBeNull())
+  const kpiRow = (l: string) => kpiTile(l).lastElementChild!.lastElementChild as HTMLElement
+  const noKpiSvg = () =>
+    KPI.forEach((l) => {
+      const tile = kpiTile(l)
+      expect(tile.querySelector('svg'), l).toBeNull()
+      expect(tile.textContent, l).not.toContain('SAMPLE')
+      const row = kpiRow(l)
+      expect(row.children.length, l).toBe(1)
+      expect(row.firstElementChild, l).toBe(kpiDeltaEl(l))
+    })
 
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -1618,9 +1627,15 @@ describe('DashboardActive draws recorded history', () => {
     render(<DashboardActive ctx={dashCtx()} />)
     await settle()
     noKpiSvg()
+    const held = kpiRow('Invoices')
+    const delta = kpiDelta('Invoices')
 
     release({ ok: true, status: 200, json: () => Promise.resolve({ history: nineDays() }) })
     await waitFor(() => expect(kpiTile('Invoices').querySelector('svg')).not.toBeNull())
+
+    expect(kpiRow('Invoices')).toBe(held)
+    expect(Array.from(held.children)).toEqual([kpiDeltaEl('Invoices'), kpiTile('Invoices').querySelector('svg')])
+    expect(kpiDelta('Invoices')).toBe(delta)
 
     expect(within(kpiTile('Invoices')).getByText('100')).toBeDefined()
     expect(urls(m, '/dashboard/v1/rollup').filter((c) => !String(c[0]).includes('/history'))).toHaveLength(1)

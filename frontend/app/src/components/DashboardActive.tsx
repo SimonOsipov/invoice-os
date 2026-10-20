@@ -127,6 +127,9 @@ const TILE_CARD = {
   overflow: 'hidden',
 } as const
 
+// Reserved sparkline row height: the tile does not grow when the history arrives.
+const SPARK_H = 30
+
 const TILE_BODY = { padding: '22px 20px 24px' } as const
 
 // meta is optional: the four KPI tiles' head is the title alone. The strip keeps its height either way.
@@ -220,20 +223,16 @@ function DashboardTiles({ data, ctx, history }: { data: Rollup; ctx: PlatformCtx
                 <span className="money" style={{ fontSize: 'clamp(22px, 3.2vw, 32px)', fontWeight: 700, margin: '0 0 12px', whiteSpace: 'nowrap' }}>
                   {k.value}
                 </span>
-                {sparks ? (
-                  <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
-                    <span className="mono" style={{ fontSize: 12, fontWeight: 500, color: k.deltaColor }}>
-                      {k.delta}
-                    </span>
-                    <svg viewBox="0 0 88 30" height="30" preserveAspectRatio="none" style={{ overflow: 'visible', flex: 1, width: '100%', minWidth: 0 }}>
-                      <path d={sparks[i]} fill="none" stroke={k.stroke} strokeWidth="1.6" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </div>
-                ) : (
+                <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, minHeight: SPARK_H }}>
                   <span className="mono" style={{ fontSize: 12, fontWeight: 500, color: k.deltaColor }}>
                     {k.delta}
                   </span>
-                )}
+                  {sparks && (
+                    <svg viewBox="0 0 88 30" height={SPARK_H} preserveAspectRatio="none" style={{ overflow: 'visible', flex: 1, width: '100%', minWidth: 0 }}>
+                      <path d={sparks[i]} fill="none" stroke={k.stroke} strokeWidth="1.6" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  )}
+                </div>
               </div>
             </div>
           ))}

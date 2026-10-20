@@ -8,6 +8,8 @@ DoclingParseV4DocumentBackend aliases the threaded backend since docling 2.128.0
 Needs docling importable -- run only via the Docker `test` stage.
 """
 
+import io
+
 import pypdfium2
 import pytest
 from conftest import repo_root
@@ -66,13 +68,38 @@ def test_each_page_image_is_its_own_pdfium_page():
 
 
 def test_a_pdfium_open_failure_is_unreadable(client, monkeypatch):
+    opened = []
+
     def boom(*args, **kwargs):
+        opened.append(True)
         raise pypdfium2.PdfiumError("forced")
 
     monkeypatch.setattr(pypdfium2, "PdfDocument", boom)
     fixture = repo_root().joinpath("internal", "extraction", "testdata", "native_invoice.pdf")
     resp = client.post("/v1/read", content=fixture.read_bytes(), headers={"content-type": PDF_CONTENT_TYPE})
+    assert opened, "the backend never opened the document through pypdfium2"
     assert resp.status_code == 422
+
+
+def test_a_failed_docling_parse_open_closes_the_pdfium_document(monkeypatch):
+    closed = []
+
+    class FakePdfDocument:
+        def __init__(self, src):
+            pass
+
+        def close(self):
+            closed.append(True)
+
+    def boom(self, *args, **kwargs):
+        raise RuntimeError("docling-parse refused")
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", FakePdfDocument)
+    monkeypatch.setattr(ThreadedDoclingParseDocumentBackend, "__init__", boom)
+    backend = convert._pdfium_image_backend()
+    with pytest.raises(RuntimeError, match="refused"):
+        backend(None, io.BytesIO(b"%PDF"))
+    assert closed == [True]
 
 
 def test_a_scanned_page_reaches_the_wire_with_text(client):

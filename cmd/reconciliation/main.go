@@ -5,19 +5,23 @@
 // path, and flagging every other drift as an append-only reconciliation.* audit record
 // (internal/reconciliation). A second Sweeper ticks invoice.Rechecker.RunOnce, which re-checks
 // each tenant's validated invoices once a rule-set version's start date arrives; it needs
-// VALIDATION_URL and S2S_TOKEN.
+// VALIDATION_URL and S2S_TOKEN. A third worker writes each company's daily rollup snapshot
+// (dashboard.Snapshotter).
 package main
 
 import (
 	"context"
 	"log/slog"
 	"os"
+	"time"
 
+	"github.com/SimonOsipov/invoice-os/internal/dashboard"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 	"github.com/SimonOsipov/invoice-os/internal/reconciliation"
+	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 func main() {
@@ -116,6 +120,14 @@ func main() {
 	}
 	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, rechecker.RunOnce))
 	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, rechecker.RunCustomOnce))
+
+	snap := &dashboard.Snapshotter{
+		Pool:    appPool,
+		Tenants: func(ctx context.Context) ([]string, error) { return reconciliation.EnumerateTenants(ctx, readerPool) },
+		Now:     time.Now,
+		Logger:  app.Logger,
+	}
+	app.AddBackgroundWorker(codelist.NewWorker(dashboard.SnapshotInterval, snap.RunOnce))
 
 	if err := app.Run(ctx); err != nil {
 		platform.Fatal(app.Logger, "reconciliation: %v", err)

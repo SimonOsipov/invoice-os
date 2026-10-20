@@ -986,8 +986,16 @@ test('OV-06 the Overview draws recorded history only: one day keeps the empty st
   type HistoryRow = { day: string; entity_id: string }
   type Client = { entity_id: string; entity_name: string; total: number }
   const captured = async (load: () => Promise<unknown>): Promise<{ history: HistoryRow[]; clients: Client[] }> => {
-    const [history, rollup] = await Promise.all([page.waitForResponse(isHistoryRes, { timeout: 30_000 }), page.waitForResponse(isRollupRes, { timeout: 30_000 }), load()])
-    return { history: (await history.json()).history, clients: (await rollup.json()).clients }
+    const [history, rollup] = await Promise.all([
+      page.waitForResponse(isHistoryRes, { timeout: 30_000 }).catch(() => { throw new Error('the Overview sent no GET /rollup/history within 30 s') }),
+      page.waitForResponse(isRollupRes, { timeout: 30_000 }).catch(() => { throw new Error('the Overview sent no GET /rollup within 30 s') }),
+      load(),
+    ])
+    const rows = (await history.json()).history
+    const clients = (await rollup.json()).clients
+    expect(Array.isArray(rows), 'the history response carries no history array').toBe(true)
+    expect(Array.isArray(clients) && clients.length > 0, 'the rollup response lists no client').toBe(true)
+    return { history: rows, clients }
   }
   const kpis = page.locator('.pf-dash-row-a .pf-grid-2 > div')
 
@@ -998,18 +1006,19 @@ test('OV-06 the Overview draws recorded history only: one day keeps the empty st
   expect(historyReads, 'the first Overview load reads the history once').toHaveLength(1)
 
   // The SPA's active client is the one the h1 names, not the rollup's first.
-  const clientName = (await heading(page).innerText()).trim()
+  let clientName = (await heading(page).innerText()).trim()
   const rowsOf = (): HistoryRow[] => seen.history.filter((r) => r.entity_id === seen.clients.find((c) => c.entity_name === clientName)?.entity_id)
   const deadline = Date.now() + 30_000
   while (rowsOf().length === 0 && Date.now() < deadline) {
     await page.waitForTimeout(3_000)
     seen = await captured(() => page.reload())
     await expect(kpis, 'the dashboard drew its four KPI tiles').toHaveCount(4, { timeout: 20_000 })
+    clientName = (await heading(page).innerText()).trim()
   }
   const client = seen.clients.find((c) => c.entity_name === clientName)
   expect(client, `the rollup holds no client named "${clientName}" (the h1)`).toBeDefined()
   expect(client!.total, `client "${clientName}" holds no invoice: the shard invoice copy in db/seed.e2e-shards.sql did not run`).toBeGreaterThanOrEqual(1)
-  const days = rowsOf().map((r) => r.day).sort()
+  const days = [...new Set(rowsOf().map((r) => r.day))].sort()
   expect(days.length, `no history row for "${clientName}": the reconciliation snapshot worker did not run at boot`).toBeGreaterThanOrEqual(1)
 
   const trend = page.getByText('Readiness trend', { exact: true }).locator('xpath=../..')

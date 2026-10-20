@@ -941,6 +941,27 @@ describe('DashboardActive Recent activity (OVER-01)', () => {
     expect(frames[0]).not.toContain('Old Actor')
   })
 
+  it('no committed frame after an in-house to firm switch shows the old rows', async () => {
+    mockRollupFetch(rollup(0), (url) =>
+      ok(auditResponse([auditEvent({ id: 'x', actor_name: new URL(url).searchParams.has('company') ? 'Firm Actor' : 'House Actor' })])),
+    )
+    const frames: string[] = []
+    const Probe = () => {
+      useLayoutEffect(() => { frames.push(document.body.textContent ?? '') })
+      return null
+    }
+    const inhouse = { ...dashCtx(), active: { entityId: 'ent-1' } } as unknown as PlatformCtx
+    const { rerender } = render(<><DashboardActive ctx={inhouse} /><Probe /></>)
+    await screen.findByText('House Actor')
+
+    frames.length = 0
+    rerender(<><DashboardActive ctx={firmWith('ent-1')} /><Probe /></>)
+    await screen.findByText('Firm Actor')
+
+    expect(frames.length).toBeGreaterThan(0)
+    expect(frames[0]).not.toContain('House Actor')
+  })
+
   it('a late response for the old client is dropped', async () => {
     const resolvers: Record<string, (v: MockResponse) => void> = {}
     mockRollupFetch(rollup(0), (url) => new Promise<MockResponse>((res) => { resolvers[new URL(url).searchParams.get('company')!] = res }))

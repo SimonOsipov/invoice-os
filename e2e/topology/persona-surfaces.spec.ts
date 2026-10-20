@@ -354,8 +354,8 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   await expect(page.getByText('tax summary, period to date', { exact: false })).toContainText(INHOUSE_PERSONA.tenantName)
 
   // --- Settings -------------------------------------------------------------------------
-  // Pins STATIC COPY (SETTINGS_TABS, data.tsx:285-290), not a backend contract --
-  // members/connectors/API keys/certificates are all mock. [workflows-included]'s trade-off.
+  // Pins STATIC COPY (SETTINGS_TABS in data.tsx), not a backend contract --
+  // members/connectors/certificates are all mock. [workflows-included]'s trade-off.
   //
   // Members arrived as a FOURTH tab, first in the strip and the default one Settings opens
   // on; Roles is the FIFTH, sitting directly after it. The subtitle moved with each of them

@@ -30,10 +30,13 @@ import {
   createInvoice,
   validateInvoice,
   rollup,
+  rollupHistory,
+  getEntity,
   rawFetch,
   apiBase,
   PERSONAS,
   type Entity,
+  type RollupHistoryRow,
 } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope } from './contract-helpers'
@@ -204,5 +207,117 @@ test.describe('dashboard rollup contract (API E2E, over the deployed gateway)', 
     // tenancy/portfolio/validation.
     const res = await rawFetch('/api/dashboard/v1/rollup')
     assertErrorEnvelope(res, 401, 'unauthenticated rollup')
+  })
+})
+
+// WAT is UTC+1 with no DST; the snapshotter keys rows by the WAT day (dashboard.WATDay).
+function watDay(offsetDays = 0): string {
+  return new Date(Date.now() + 3600_000 + offsetDays * 86_400_000).toISOString().slice(0, 10)
+}
+
+// The boot snapshot runs at reconciliation start (P16); poll until persona A has a row.
+async function nonEmptyHistory(token: string, days?: number): Promise<RollupHistoryRow[]> {
+  let rows: RollupHistoryRow[] = []
+  await expect
+    .poll(
+      async () => {
+        rows = (await rollupHistory(token, days)).history
+        return rows.length
+      },
+      { message: 'history holds at least one snapshot row', timeout: 30_000 },
+    )
+    .toBeGreaterThanOrEqual(1)
+  return rows
+}
+
+const HISTORY_KEYS = ['day', 'entity_id', 'needs_attention', 'not_submitted', 'readiness_num', 'total', 'vat_kobo']
+
+test.describe('dashboard rollup history contract (API E2E, over the deployed gateway)', () => {
+  let tokenA: string
+
+  test.beforeAll(async () => {
+    tokenA = await login(PERSONAS.A)
+  })
+
+  test('DASH-47: history is reachable through the gateway and holds the boot snapshot', async () => {
+    await nonEmptyHistory(tokenA)
+    const res = await fetch(`${apiBase()}/api/dashboard/v1/rollup/history`, {
+      headers: { Authorization: `Bearer ${tokenA}` },
+    })
+    expect(res.status, 'history should return 200').toBe(200)
+    expect(res.headers.get('content-type'), 'history should respond with JSON').toContain('application/json')
+    const body = (await res.json()) as { history: unknown[] }
+    expect(Object.keys(body)).toEqual(['history'])
+    expect(Array.isArray(body.history)).toBe(true)
+    expect(body.history.length).toBeGreaterThanOrEqual(1)
+  })
+
+  test('DASH-48: every row carries exactly the seven keys, integers bounded by total', async () => {
+    const rows = await nonEmptyHistory(tokenA)
+    for (const row of rows) {
+      expect(Object.keys(row).sort()).toEqual(HISTORY_KEYS)
+      expect(row.day).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+      expect(typeof row.entity_id).toBe('string')
+      for (const n of [row.total, row.readiness_num, row.needs_attention, row.not_submitted, row.vat_kobo]) {
+        expect(Number.isInteger(n), `${n} should be an integer`).toBe(true)
+        expect(n).toBeGreaterThanOrEqual(0)
+      }
+      expect(row.readiness_num).toBeLessThanOrEqual(row.total)
+      expect(row.needs_attention).toBeLessThanOrEqual(row.total)
+      expect(row.not_submitted).toBeLessThanOrEqual(row.total)
+    }
+  })
+
+  test('DASH-49: rows are oldest first and the latest day is today or yesterday in WAT', async () => {
+    const rows = await nonEmptyHistory(tokenA)
+    for (let i = 1; i < rows.length; i++) {
+      const prev = rows[i - 1]!
+      const cur = rows[i]!
+      const ordered = prev.day < cur.day || (prev.day === cur.day && prev.entity_id <= cur.entity_id)
+      expect(ordered, `row ${i} (${cur.day}, ${cur.entity_id}) must not precede row ${i - 1}`).toBe(true)
+    }
+    const latest = rows.reduce((max, r) => (r.day > max ? r.day : max), '')
+    expect([watDay(), watDay(-1)]).toContain(latest)
+  })
+
+  test('DASH-50: history stays inside the caller\'s tenant', async () => {
+    const tokenB = await login(PERSONAS.B)
+    const rowsA = await nonEmptyHistory(tokenA)
+    const idsA = new Set(rowsA.map((r) => r.entity_id))
+    const idsB = new Set((await rollupHistory(tokenB)).history.map((r) => r.entity_id))
+    expect(idsA.size).toBeGreaterThan(0)
+    for (const id of idsA) {
+      const entity = await getEntity(tokenA, id)
+      expect(entity.id).toBe(id)
+    }
+    for (const id of idsA) expect(idsB.has(id), `B must not see A entity ${id}`).toBe(false)
+  })
+
+  test('DASH-51: days is validated and bounds the window', async () => {
+    const auth = { Authorization: `Bearer ${tokenA}` }
+    for (const bad of ['0', 'abc']) {
+      const res = await rawFetch(`/api/dashboard/v1/rollup/history?days=${bad}`, { headers: auth })
+      assertErrorEnvelope(res, 400, `history days=${bad}`)
+    }
+
+    const full = await nonEmptyHistory(tokenA)
+    const today = watDay()
+    const one = (await rollupHistory(tokenA, 1)).history
+    for (const row of one) expect(row.day >= today, `days=1 row ${row.day} must be today or later`).toBe(true)
+    const fullKeys = new Set(full.map((r) => `${r.day}|${r.entity_id}`))
+    for (const row of one) expect(fullKeys.has(`${row.day}|${row.entity_id}`), 'days=1 rows are a subset of the default read').toBe(true)
+    if (one.length === 0) {
+      const latest = full.reduce((max, r) => (r.day > max ? r.day : max), '')
+      expect(latest < today, 'an empty days=1 read is allowed only when the newest snapshot day is before today').toBe(true)
+    }
+
+    // 500 clamps to dashboard.HistoryWindowDays rather than failing.
+    const big = await rawFetch('/api/dashboard/v1/rollup/history?days=500', { headers: auth })
+    expect(big.status).toBe(200)
+  })
+
+  test('DASH-52: unauthenticated request is refused at the gateway edge', async () => {
+    const res = await rawFetch('/api/dashboard/v1/rollup/history')
+    assertErrorEnvelope(res, 401, 'unauthenticated rollup history')
   })
 })

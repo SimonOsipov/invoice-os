@@ -26,6 +26,7 @@ jobs:
       sidecar: ${{ steps.filter.outputs.sidecar }}
       idp: ${{ steps.filter.outputs.idp }}
       hooks: ${{ steps.filter.outputs.hooks }}
+      caddy: ${{ steps.filter.outputs.caddy }}
       lane: ${{ steps.lane.outputs.lane }}
     steps:
       - uses: actions/checkout@v4
@@ -98,6 +99,10 @@ jobs:
               - 'Makefile'
               - 'go.mod'
               - 'go.sum'
+              - '.github/workflows/ci.yml'
+            caddy:
+              - 'Caddyfile'
+              - 'scripts/ci/caddy-headers.sh'
               - '.github/workflows/ci.yml'
             hooks:
               - '.claude/hooks/**'
@@ -1310,13 +1315,23 @@ jobs:
           go version
           go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
+  # Runs the root Caddyfile in the SPA image and asserts the frame headers on every response.
+  caddy-headers:
+    name: Caddyfile frame headers
+    needs: changes
+    if: needs.changes.outputs.caddy == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/ci/caddy-headers.sh
+
   # Single always-running gate. Mark THIS check ("CI") required in branch
   # protection (M1-05): it passes when the triggered jobs pass or are skipped,
   # and fails only when a job that actually ran failed — so path-filtered
   # skips never leave a required check stuck pending.
   ci:
     name: CI
-    needs: [changes, go, frontend, library, blog, clean-clone, migrations, docker-canary, docling-canary, docling-test, rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite, govulncheck, advisories]
+    needs: [changes, go, frontend, library, blog, clean-clone, migrations, docker-canary, caddy-headers, docling-canary, docling-test, rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite, govulncheck, advisories]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1325,6 +1340,7 @@ jobs:
           echo "changes:       ${{ needs.changes.result }}"
           echo "go:            ${{ needs.go.result }}"
           echo "docker-canary: ${{ needs.docker-canary.result }}"
+          echo "caddy-headers: ${{ needs.caddy-headers.result }}"
           echo "docling-canary: ${{ needs.docling-canary.result }}"
           echo "docling-test:  ${{ needs.docling-test.result }}"
           echo "migrations:    ${{ needs.migrations.result }}"
@@ -1350,6 +1366,9 @@ jobs:
           fi
           if [ "${{ needs.docker-canary.result }}" = "failure" ] || [ "${{ needs.docker-canary.result }}" = "cancelled" ]; then
             echo "::error::Docker canary build failed"; exit 1
+          fi
+          if [ "${{ needs.caddy-headers.result }}" = "failure" ] || [ "${{ needs.caddy-headers.result }}" = "cancelled" ]; then
+            echo "::error::Caddyfile frame headers check failed"; exit 1
           fi
           if [ "${{ needs.docling-canary.result }}" = "failure" ] || [ "${{ needs.docling-canary.result }}" = "cancelled" ]; then
             echo "::error::Docling canary build/boot failed"; exit 1

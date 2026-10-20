@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // A real (hand-off) session's Settings shows empty states, not the demo tenant. ctx-cast idiom of Sidebar.test.tsx.
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { CERTS, ENDPOINTS, WEBHOOKS } from '../data'
@@ -85,8 +85,7 @@ describe('Settings > API & webhooks', () => {
     expect(title.parentElement?.textContent).toBe('No webhooks yet')
   })
 
-  // D21: API keys and Endpoints stay in a hand-off session. Control: green before and after.
-  it('hand-off: the API keys and Endpoints cards are unchanged', () => {
+  it('hand-off: the API keys and Endpoints card headers render', () => {
     render(<SettingsView ctx={settingsCtx('api', true)} />)
     expect(screen.getByText('API keys')).toBeTruthy()
     expect(screen.getByText('Endpoints')).toBeTruthy()
@@ -319,16 +318,16 @@ describe('Settings > API & webhooks paint', () => {
   it('the base URL box is radius-md and the copy buttons are radius-btn', () => {
     render(<SettingsView ctx={settingsCtx('api', false)} />)
     const copies = screen.getAllByText('Copy', { exact: false }).map((c) => c.closest('button') as HTMLElement)
-    expect(copies).toHaveLength(3)
+    expect(copies).toHaveLength(1)
     copies.forEach((b) => expect(b.style.borderRadius).toBe('var(--radius-btn)'))
     expect((copies[0].previousElementSibling as HTMLElement).style.borderRadius).toBe('var(--radius-md)')
     expect(screen.getByRole('button', { name: /Add endpoint/ }).style.borderRadius).toBe('var(--radius-btn)')
     for (const b of [...copies, screen.getByRole('button', { name: /Add endpoint/ })]) expect(b.style.fontFamily, 'bare buttons take the app face').toBe('var(--font-sans)')
   })
 
-  it('key env pills and method pills are radius-md', () => {
+  it('method pills are radius-md', () => {
     render(<SettingsView ctx={settingsCtx('api', false)} />)
-    for (const t of ['LIVE', 'TEST', 'GET', 'POST']) {
+    for (const t of ['GET', 'POST']) {
       const el = screen.getAllByText(t, { exact: true })[0]
       expect(el.parentElement!.style.borderRadius).toBe('var(--radius-md)')
     }
@@ -354,15 +353,57 @@ describe('Settings > API & webhooks paint', () => {
       expect(el.style.fontWeight).toBe('600')
     }
   })
+})
 
-  it('the key for the other environment dims to 0.45 and the active one stays 1', () => {
-    const { rerender } = render(<SettingsView ctx={settingsCtx('api', false)} />)
-    const row = (env: string) => screen.getByText(env, { exact: true }).parentElement!.parentElement as HTMLElement
-    expect(row('LIVE').style.opacity).toBe('0.45')
-    expect(row('TEST').style.opacity).toBe('1')
-    rerender(<SettingsView ctx={settingsCtx('api', false, { sandbox: false })} />)
-    expect(row('LIVE').style.opacity).toBe('1')
-    expect(row('TEST').style.opacity).toBe('0.45')
+describe('Settings > API keys', () => {
+  const TITLE = 'No API keys yet'
+  const MESSAGE = 'API access opens after NRS accreditation.'
+
+  it('hand-off: the API keys card shows the empty state', () => {
+    render(<SettingsView ctx={settingsCtx('api', true)} />)
+    expect(screen.getByText(TITLE)).toBeTruthy()
+    expect(screen.getByText(MESSAGE)).toBeTruthy()
+  })
+
+  it('persona: the API keys card shows the same empty state', () => {
+    render(<SettingsView ctx={settingsCtx('api', false)} />)
+    expect(screen.getByText(TITLE)).toBeTruthy()
+    expect(screen.getByText(MESSAGE)).toBeTruthy()
+  })
+
+  it('the empty state does not follow the sandbox flag', () => {
+    render(<SettingsView ctx={settingsCtx('api', false, { sandbox: false })} />)
+    expect(screen.getByText(TITLE)).toBeTruthy()
+    expect(screen.getByText(MESSAGE)).toBeTruthy()
+  })
+
+  it('the API keys empty state sits in the Webhooks wrapper', () => {
+    render(<SettingsView ctx={settingsCtx('api', true)} />)
+    const wrap = (t: string) => screen.getByText(t).parentElement!.parentElement as HTMLElement
+    expect(wrap(TITLE).style.padding).toBe('20px')
+    expect(wrap(TITLE).style.padding).toBe(wrap('No webhooks yet').style.padding)
+  })
+
+  it.each([true, false])('the API keys card has no Copy button and no env pill (handoff=%s)', (handoff) => {
+    render(<SettingsView ctx={settingsCtx('api', handoff)} />)
+    const card = screen.getByText('API keys').closest('div[style*="overflow"]') as HTMLElement | null
+    expect(card).not.toBeNull()
+    expect(card!.textContent).toContain(TITLE)
+    expect(within(card!).queryAllByRole('button')).toHaveLength(0)
+    expect(screen.queryByText('LIVE')).toBeNull()
+    expect(screen.queryByText('TEST')).toBeNull()
+    expect(screen.getAllByText('Copy', { exact: false })).toHaveLength(1)
+  })
+
+  it.each([
+    [true, true],
+    [true, false],
+    [false, true],
+    [false, false],
+  ])('no invented API key text renders (handoff=%s, sandbox=%s)', (handoff, sandbox) => {
+    const { container } = render(<SettingsView ctx={settingsCtx('api', handoff, { sandbox })} />)
+    expect(container.textContent).not.toContain('sk_live_')
+    expect(container.textContent).not.toContain('sk_test_')
   })
 })
 
@@ -387,6 +428,9 @@ describe('Settings > empty states stay EmptyState', () => {
     const w = screen.getByText('No webhooks yet').parentElement as HTMLElement
     expect(w.style.border).toContain('dashed')
     expect(w.querySelector('svg')).toBeTruthy()
+    const k = screen.getByText('No API keys yet').parentElement as HTMLElement
+    expect(k.style.border).toContain('dashed')
+    expect(k.querySelector('svg')).toBeTruthy()
     cleanup()
     render(<SettingsView ctx={settingsCtx('signing', true)} />)
     const s = screen.getByText('No signing certificate yet').parentElement as HTMLElement

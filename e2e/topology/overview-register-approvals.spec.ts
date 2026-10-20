@@ -821,6 +821,7 @@ test('OV-07 a KPI tile keeps its height while the history arrives, and the curve
       head: trend.locator('> :first-child'),
       meta: trend.locator('> :first-child .mono'),
       headline: trend.locator('.money'),
+      headRow: trend.locator('> :last-child > div:first-child'),
       chart,
       row: trend.locator('> :last-child > div:last-child'),
     })
@@ -830,6 +831,7 @@ test('OV-07 a KPI tile keeps its height while the history arrives, and the curve
       ...below(t.chart, t.row, 'months row vs chart'),
       ...within(t.tile, t.row, 'months row in the trend tile'),
       ...within(t.head, t.meta, 'meta in the head'),
+      ...within(t.headRow, t.headline, 'headline in its pinned row'),
     )
     let prev: Rect | null = null
     for (const [i, label] of labels.entries()) {

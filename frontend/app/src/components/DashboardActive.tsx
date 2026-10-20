@@ -38,6 +38,7 @@ import {
   type Rollup,
   type RollupHistory,
 } from '../lib/dashboard'
+import { TREND_CHART_H } from '../lib/chartPath'
 import { historyView, watToday } from '../lib/dashboardHistory'
 import { ruleKeyLabel } from '../lib/rulesApi'
 import type { PlatformCtx } from '../types'
@@ -130,10 +131,16 @@ const TILE_CARD = {
 // Reserved sparkline row height: the tile does not grow when the history arrives.
 const SPARK_H = 30
 
-// Reserved trend body height (padding 42 + head + 14 + chart + 10 + months 14): the rows below do not move.
-const TREND_CHART_H = 176
-const TREND_HEAD_H = 32
-const TREND_BODY_H = 42 + TREND_HEAD_H + 14 + TREND_CHART_H + 10 + 14
+// Trend body metrics, shared by the curve JSX and the reserved height so the rows below do not move.
+// TREND_HEAD_H is Manrope's normal line box at 26px (1.366em = 35.5, rounded up), pinned as line-height.
+const TREND_PAD_TOP = 20
+const TREND_PAD_BOTTOM = 22
+const TREND_HEAD_H = 36
+const TREND_HEAD_GAP = 14
+const TREND_MONTHS_GAP = 10
+const TREND_MONTHS_H = 14
+const TREND_BODY_H =
+  TREND_PAD_TOP + TREND_HEAD_H + TREND_HEAD_GAP + TREND_CHART_H + TREND_MONTHS_GAP + TREND_MONTHS_H + TREND_PAD_BOTTOM
 
 const TILE_BODY = { padding: '22px 20px 24px' } as const
 
@@ -338,21 +345,21 @@ function DashboardTiles({ data, ctx, history }: { data: Rollup; ctx: PlatformCtx
             </div>
           </div>
         ) : trend ? (
-          <div style={{ padding: '20px 20px 22px' }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 14, height: TREND_HEAD_H }}>
+          <div style={{ padding: `${TREND_PAD_TOP}px 20px ${TREND_PAD_BOTTOM}px` }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: TREND_HEAD_GAP, height: TREND_HEAD_H, lineHeight: `${TREND_HEAD_H}px` }}>
               <span className="money" style={{ fontSize: 26, fontWeight: 700 }}>
                 {trend.now}%
               </span>
               <span className="label">{trend.deltaLabel}</span>
             </div>
-            <svg viewBox="0 0 680 176" width="100%" height={TREND_CHART_H} preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
+            <svg viewBox={`0 0 680 ${TREND_CHART_H}`} width="100%" height={TREND_CHART_H} preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
               {trend.grid.map((g) => (
                 <line key={g} x1="0" y1={g} x2="680" y2={g} stroke="var(--line-1)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
               ))}
               <path d={trend.area} fill="var(--action-tint)" />
               <path d={trend.line} fill="none" stroke="var(--action)" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-            <div style={{ position: 'relative', height: 14, marginTop: 10 }}>
+            <div style={{ position: 'relative', height: TREND_MONTHS_H, marginTop: TREND_MONTHS_GAP }}>
               {trend.months.map((mo) => (
                 <span
                   key={mo.label + mo.at}

@@ -17,10 +17,12 @@ export function sparkPath(vals: number[]): string {
     .join(' ')
 }
 
+export const TREND_CHART_H = 176
+
 // 680x176 trend line and area for a 0-100 series; values clamp to that range.
 export function trendPath(vals: number[]): { line: string; area: string } {
   const cw = 680
-  const ch = 176
+  const ch = TREND_CHART_H
   const last = vals.length - 1
   const pts = vals.map((v, i): [number, number] => [
     (i / last) * cw,

@@ -53,7 +53,7 @@ def pipeline_options():
 
     opts = PdfPipelineOptions()
     opts.do_ocr = True
-    # lang explicit: RapidOcrOptions() defaults to ["chinese"] (T-03-2).
+    # lang explicit: RapidOcrOptions() defaults to ["ch"] (T-03-2).
     opts.ocr_options = RapidOcrOptions(lang=["en"], backend="onnxruntime")
     opts.accelerator_options = AcceleratorOptions(
         device=AcceleratorDevice.CPU, num_threads=DOCLING_NUM_THREADS
@@ -72,14 +72,10 @@ def pipeline_options():
 def _construct_converter():
     """The real, expensive DocumentConverter build (torch/onnxruntime imports + model load).
 
-    The backend is named EXPLICITLY. PdfFormatOption's default is
-    ThreadedDoclingParseDocumentBackend -- the v1 parser -- which hands the OCR stage no
-    bitmap region for a scanned page and yields ZERO text for a document RapidOCR reads
-    fine on its own (test_backend.py). Measured on dense_invoice.pdf: default 0 cells,
-    v4 55, pypdfium2 55. v4 is the maintained docling-parse line and measured marginally
-    cheaper than pypdfium2 on both latency and peak RSS.
+    docling-parse text, pypdfium2 page images: docling-parse paints a /RunLengthDecode scan
+    blank (test_backend.py).
     """
-    from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
+    from docling.datamodel.backend_options import ThreadedDoclingParseBackendOptions
     from docling.datamodel.base_models import InputFormat
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
@@ -87,10 +83,74 @@ def _construct_converter():
         format_options={
             InputFormat.PDF: PdfFormatOption(
                 pipeline_options=pipeline_options(),
-                backend=DoclingParseV4DocumentBackend,
+                backend=_pdfium_image_backend(),
+                backend_options=ThreadedDoclingParseBackendOptions(render_pages=False),
             )
         }
     )
+
+
+def _pdfium_image_backend():
+    """docling-parse text, pypdfium2 page images (docling-parse paints a /RunLengthDecode
+    scan blank)."""
+    import pypdfium2 as pdfium
+    from docling.backend.docling_parse_backend import (
+        ThreadedDoclingParseDocumentBackend,
+        ThreadedDoclingParsePageBackend,
+    )
+    from docling.utils.locks import pypdfium2_lock
+    from docling_core.types.doc import BoundingBox, CoordOrigin
+
+    class PdfiumImagePage(ThreadedDoclingParsePageBackend):
+        def __init__(self, result, ppage):
+            super().__init__(result)
+            self._ppage = ppage
+
+        def get_page_image(self, scale=1, cropbox=None):
+            size = self.get_size()
+            if not cropbox:
+                cropbox = BoundingBox(
+                    l=0, r=size.width, t=0, b=size.height, coord_origin=CoordOrigin.TOPLEFT
+                )
+                padbox = BoundingBox(l=0, r=0, t=0, b=0, coord_origin=CoordOrigin.BOTTOMLEFT)
+            else:
+                padbox = cropbox.to_bottom_left_origin(size.height).model_copy()
+                padbox.r = size.width - padbox.r
+                padbox.t = size.height - padbox.t
+            with pypdfium2_lock:
+                bitmap = self._ppage.render(scale=scale * 1.5, rotation=0, crop=padbox.as_tuple())
+                image = bitmap.to_pil().copy()
+                bitmap.close()
+            return image.resize(size=(round(cropbox.width * scale), round(cropbox.height * scale)))
+
+    class PdfiumImageBackend(ThreadedDoclingParseDocumentBackend):
+        def __init__(self, in_doc, path_or_stream, options=None):
+            # Own bytes: pypdfium2 must not share the stream cursor docling-parse reads.
+            has_bytes = hasattr(path_or_stream, "getvalue")
+            src = path_or_stream.getvalue() if has_bytes else path_or_stream
+            with pypdfium2_lock:
+                self._pdoc = pdfium.PdfDocument(src)
+            try:
+                super().__init__(in_doc, path_or_stream, options)
+            except Exception:
+                with pypdfium2_lock:
+                    self._pdoc.close()
+                raise
+
+        def iter_pages(self):
+            for page in super().iter_pages():
+                with pypdfium2_lock:
+                    ppage = self._pdoc[page.page_no - 1]
+                yield PdfiumImagePage(page._result, ppage)
+
+        def unload(self):
+            super().unload()
+            with pypdfium2_lock:
+                if self._pdoc is not None:
+                    self._pdoc.close()
+                    self._pdoc = None
+
+    return PdfiumImageBackend
 
 
 def get_converter():
@@ -143,19 +203,61 @@ def _page_tokens(parsed_page, width: float, height: float) -> list[dict]:
     """
     if parsed_page is None or not width or not height:
         return []
+    words = [(w.text, w.rect.to_bounding_box()) for w in parsed_page.word_cells]
     tokens = []
     for cell in parsed_page.textline_cells:
-        box = cell.rect.to_bounding_box()
-        tokens.append(
-            {
-                "text": cell.text,
-                "x0": _clamp01(box.l / width),
-                "y0": _clamp01(box.t / height),
-                "x1": _clamp01(box.r / width),
-                "y1": _clamp01(box.b / height),
-            }
-        )
+        for text, box in _split_line(cell, words):
+            tokens.append(
+                {
+                    "text": text,
+                    "x0": _clamp01(box.l / width),
+                    "y0": _clamp01(box.t / height),
+                    "x1": _clamp01(box.r / width),
+                    "y1": _clamp01(box.b / height),
+                }
+            )
     return tokens
+
+
+# A word gap wider than this many line heights starts a new token (docling-parse 7.20 behaviour).
+# ceiling: measured window (0.9, 1.26); re-measure when a golden splits or merges.
+SPLIT_GAP_HEIGHTS = 1.0
+
+
+def _split_line(cell, words):
+    box = cell.rect.to_bounding_box()
+    top, bottom = min(box.t, box.b), max(box.t, box.b)
+    inside = sorted(
+        (
+            (t, b)
+            for t, b in words
+            if b.l >= box.l - 0.01 and b.r <= box.r + 0.01
+            and min(b.t, b.b) >= top - 0.01 and max(b.t, b.b) <= bottom + 0.01
+        ),
+        key=lambda wb: wb[1].l,
+    )
+    groups = []
+    for t, b in inside:
+        if groups and b.l - groups[-1][-1][1].r <= SPLIT_GAP_HEIGHTS * (bottom - top):
+            groups[-1].append((t, b))
+        else:
+            groups.append([(t, b)])
+    if len(groups) < 2:
+        return [(cell.text, box)]
+    return [
+        (" ".join(t for t, _ in g), _union([b for _, b in g]))
+        for g in groups
+    ]
+
+
+def _union(boxes):
+    from docling_core.types.doc import BoundingBox
+
+    return BoundingBox(
+        l=min(b.l for b in boxes), t=min(b.t for b in boxes),
+        r=max(b.r for b in boxes), b=max(b.b for b in boxes),
+        coord_origin=boxes[0].coord_origin,
+    )
 
 
 def _pdf_wire_pages(result, doc) -> list[dict]:

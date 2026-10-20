@@ -85,7 +85,7 @@ describe('Settings > API & webhooks', () => {
     expect(title.parentElement?.textContent).toBe('No webhooks yet')
   })
 
-  it('hand-off: the API keys and Endpoints cards are unchanged', () => {
+  it('hand-off: the API keys and Endpoints card headers render', () => {
     render(<SettingsView ctx={settingsCtx('api', true)} />)
     expect(screen.getByText('API keys')).toBeTruthy()
     expect(screen.getByText('Endpoints')).toBeTruthy()

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AuditEvent } from './audit'
 import { activityQuery, activityRow, relativeAgo } from './dashboardActivity'
-import { fmtDate } from './format'
+import { fmtDate, fmtDateTime } from './format'
 
 const NOW = Date.parse('2026-10-20T12:00:00Z')
 const ago = (sec: number) => new Date(NOW - sec * 1000).toISOString()
@@ -55,6 +55,19 @@ describe('activityRow', () => {
   })
   it('workspace-scope row omits the company', () => {
     expect(activityRow(ev({ company_scope: 'workspace', company_name: null }), NOW).company).toBeNull()
+  })
+  it('a workspace-scope row never shows a company, even when a name is present', () => {
+    expect(activityRow(ev({ company_scope: 'workspace', company_name: 'Acme Ltd' }), NOW).company).toBeNull()
+  })
+  it('an empty company name omits the company', () => {
+    expect(activityRow(ev({ company_scope: 'company', company_name: '' }), NOW).company).toBeNull()
+  })
+  it('row carries the id as key and the full time as title', () => {
+    const e = ev({ id: 'row-9' })
+    const r = activityRow(e, NOW)
+    expect(r.key).toBe('row-9')
+    expect(r.whenTitle).toBe(fmtDateTime(e.created_at))
+    expect(r.whenTitle).not.toBe('—')
   })
   it('dot follows tone', () => {
     const dot = (event: string) => activityRow(ev({ event }), NOW).dot

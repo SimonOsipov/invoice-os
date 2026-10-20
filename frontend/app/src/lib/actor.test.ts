@@ -304,7 +304,7 @@ describe('actorLabel adversarial coverage (AUDIT-02-04 QA)', () => {
 
   // AC #6 (D-23/D-24), mechanically, over the WHOLE app tree: five call sites pass the
   // resolved pair, four pass the subject alone. Scanning a hand-picked file list cannot see
-  // a FIFTH surface acquiring a pair silently, so the caller set is asserted too -- a new
+  // another surface acquiring a pair silently, so the caller set is asserted too -- a new
   // caller fails here instead of hiding.
   it('every actorLabel call site under src: five pass a resolved pair, four pass one argument', () => {
     const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..')

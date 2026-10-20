@@ -450,7 +450,7 @@ test('OV-02 in-house overview: tiles hold their head and body, columns align, fa
   expect(kpis.length, 'four KPI tiles to measure').toBe(4)
   for (const [name, tile] of kpis) await expect(tile.locator('svg'), `${name} draws no sparkline`).toHaveCount(0)
   const trend = tiles.find(([name]) => name === 'trend tile 0')![1]
-  await expect(trend, 'the trend tile is labelled 12 WEEKS').toContainText('12 WEEKS')
+  await expect(trend.locator('> :first-child .mono'), 'the trend tile meta is exactly 12 WEEKS').toHaveText('12 WEEKS')
   await expect(trend, 'the trend tile carries no sample label').not.toContainText('SAMPLE')
 
   const needs = page.locator('.pf-dash-row-b > div:first-child')

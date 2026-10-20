@@ -214,7 +214,7 @@ function watDay(offsetDays = 0): string {
   return new Date(Date.now() + 3600_000 + offsetDays * 86_400_000).toISOString().slice(0, 10)
 }
 
-// The boot snapshot runs at reconciliation start (P16); poll until persona A has a row.
+// The boot snapshot runs at reconciliation start ; poll until persona A has a row.
 async function nonEmptyHistory(token: string, days?: number): Promise<RollupHistoryRow[]> {
   let rows: RollupHistoryRow[] = []
   await expect
@@ -268,7 +268,9 @@ test.describe('dashboard rollup history contract (API E2E, over the deployed gat
   })
 
   test('DASH-49: rows are oldest first and the latest day is today or yesterday in WAT', async () => {
+    const before = watDay(-1)
     const rows = await nonEmptyHistory(tokenA)
+    const after = watDay()
     for (let i = 1; i < rows.length; i++) {
       const prev = rows[i - 1]!
       const cur = rows[i]!
@@ -276,7 +278,8 @@ test.describe('dashboard rollup history contract (API E2E, over the deployed gat
       expect(ordered, `row ${i} (${cur.day}, ${cur.entity_id}) must not precede row ${i - 1}`).toBe(true)
     }
     const latest = rows.reduce((max, r) => (r.day > max ? r.day : max), '')
-    expect([watDay(), watDay(-1)]).toContain(latest)
+    // The window brackets the request, so a run across WAT midnight cannot flip the bound.
+    expect(latest >= before && latest <= after, `latest ${latest} should lie in [${before}, ${after}]`).toBe(true)
   })
 
   test('DASH-50: history stays inside the caller\'s tenant', async () => {
@@ -300,14 +303,16 @@ test.describe('dashboard rollup history contract (API E2E, over the deployed gat
     }
 
     const full = await nonEmptyHistory(tokenA)
-    const today = watDay()
+    // The server picks its own WAT today during the call, so bracket the request with the client's.
+    const todayBefore = watDay()
     const one = (await rollupHistory(tokenA, 1)).history
-    for (const row of one) expect(row.day >= today, `days=1 row ${row.day} must be today or later`).toBe(true)
+    const todayAfter = watDay()
+    for (const row of one) expect(row.day >= todayBefore, `days=1 row ${row.day} must be ${todayBefore} or later`).toBe(true)
     const fullKeys = new Set(full.map((r) => `${r.day}|${r.entity_id}`))
     for (const row of one) expect(fullKeys.has(`${row.day}|${row.entity_id}`), 'days=1 rows are a subset of the default read').toBe(true)
     if (one.length === 0) {
       const latest = full.reduce((max, r) => (r.day > max ? r.day : max), '')
-      expect(latest < today, 'an empty days=1 read is allowed only when the newest snapshot day is before today').toBe(true)
+      expect(latest < todayAfter, 'an empty days=1 read is allowed only when the newest snapshot day is before today').toBe(true)
     }
 
     // 500 clamps to dashboard.HistoryWindowDays rather than failing.

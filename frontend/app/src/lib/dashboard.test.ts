@@ -29,6 +29,7 @@ import {
   entityHealth,
   formatMetric,
   getRollup,
+  getRollupHistory,
   isEmptyRollup,
   metricRatio,
   readinessBars,
@@ -112,6 +113,28 @@ describe('getRollup', () => {
     const err = await captureRejection(() => getRollup(af, base))
 
     expect(err).toBe(genericErr)
+  })
+})
+
+describe('getRollupHistory', () => {
+  it('getRollupHistory GETs the history path once and returns the body', async () => {
+    const body = { history: [] }
+    const fetchMock = vi.fn().mockResolvedValue(body)
+
+    const result = await getRollupHistory(fetchMock as unknown as AuthedFetch, base)
+
+    expect(result).toEqual(body)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledWith('https://gw/api/dashboard/v1/rollup/history')
+  })
+
+  it('getRollupHistory propagates the same rejection instance', async () => {
+    const apiErr = new ApiError('http', 'boom', 500)
+    const fetchMock = vi.fn().mockRejectedValue(apiErr)
+
+    const err = await captureRejection(() => getRollupHistory(fetchMock as unknown as AuthedFetch, base))
+
+    expect(err).toBe(apiErr)
   })
 })
 

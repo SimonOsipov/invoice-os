@@ -1,6 +1,6 @@
 import { actorLabel } from './actor'
 import type { AuditEvent, AuditLogQuery } from './audit'
-import { auditEventView, type AuditTone } from './auditVocabulary'
+import { auditEventView, TONE_TEXT } from './auditVocabulary'
 import { fmtDate, fmtDateTime } from './format'
 
 export const ACTIVITY_LIMIT = 5
@@ -8,17 +8,12 @@ export const ACTIVITY_LIMIT = 5
 export interface ActivityRowView {
   key: string
   who: string
+  mono: boolean
   label: string
   company: string | null
   when: string
   whenTitle: string
   dot: string
-}
-
-const DOT: Record<NonNullable<AuditTone>, string> = {
-  green: 'var(--status-green-text)',
-  red: 'var(--status-red-text)',
-  amber: 'var(--status-amber-text)',
 }
 
 // null: a firm with no resolved client. Sending no company would list every client.
@@ -30,18 +25,20 @@ export function activityQuery(isInhouse: boolean, entityId: string | null): Audi
 
 export function activityRow(e: AuditEvent, now: number): ActivityRowView {
   const view = auditEventView(e.event)
+  const actor = actorLabel(e.actor, { name: e.actor_name, kind: e.actor_kind })
   return {
     key: e.id,
-    who: actorLabel(e.actor, { name: e.actor_name, kind: e.actor_kind }).text,
+    who: actor.text,
+    mono: actor.mono,
     label: view.label,
-    company: e.company_scope === 'company' && e.company_name ? e.company_name : null,
+    company: e.company_scope === 'company' ? e.company_name || '—' : null,
     when: relativeAgo(e.created_at, now),
     whenTitle: fmtDateTime(e.created_at),
-    dot: view.tone ? DOT[view.tone] : 'var(--line-3)',
+    dot: view.tone ? TONE_TEXT[view.tone] : 'var(--line-3)',
   }
 }
 
-// ceiling: computed at render, does not tick; re-renders only on mount or client switch.
+// ceiling: relative times freeze between renders (no timer), add a tick if the tile stays open for hours.
 export function relativeAgo(iso: string, now: number): string {
   const t = new Date(iso).getTime()
   if (Number.isNaN(t)) return '—'

@@ -1,9 +1,7 @@
 // Mock feed for the dashboard panels that have no backend source.
 //
-// M4-10 removed the readiness ring, readiness bars, 12-week trend, KPI sparklines
-// and VAT KPI because GET /api/dashboard/v1/rollup carries none of
-// them ([hide-sourceless]). They are restored here by explicit product decision, on
-// mock data, until the rollup grows the corresponding fields.
+// The rollup has no fields for the readiness ring and bars, 12-week trend, KPI sparklines
+// or VAT KPI, so they run on this mock until it does.
 //
 // This module fabricates the trend's shape/history and the sparkline shapes. The trend's
 // endpoint is live, derived from liveScorePct. Panels that CAN be

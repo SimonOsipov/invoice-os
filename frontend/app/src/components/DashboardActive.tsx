@@ -395,7 +395,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
 
         <div style={TILE_CARD}>
           <TileHead title="Recent activity" />
-          <RecentActivityBody key={`${ctx.mode}:${ctx.active.entityId ?? ''}`} ctx={ctx} />
+          <RecentActivityBody key={ctx.mode === 'inhouse' ? 'inhouse' : `firm:${ctx.active.entityId ?? ''}`} ctx={ctx} />
         </div>
       </div>
     </>

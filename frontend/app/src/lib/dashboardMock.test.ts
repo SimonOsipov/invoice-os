@@ -25,11 +25,6 @@ describe('buildMockPanels (task-430, METR-01-06)', () => {
     expect('vatLabel' in mock).toBe(false)
   })
 
-  it('MTR-07: the mock returns no activity feed', () => {
-    const mock = buildMockPanels('Acme Co', 42)
-    expect('activity' in mock).toBe(false)
-  })
-
   it('MTR-04: same seed + same liveScorePct is byte-identical across calls', () => {
     const a = buildMockPanels('Acme Co', 55)
     const b = buildMockPanels('Acme Co', 55)

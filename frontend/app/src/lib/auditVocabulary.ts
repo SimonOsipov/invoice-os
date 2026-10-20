@@ -21,6 +21,12 @@ export type AuditDomain =
 export type AuditOutcome = 'good' | 'bad' | 'neutral'
 export type AuditTone = 'green' | 'red' | 'amber' | null
 
+export const TONE_TEXT: Record<NonNullable<AuditTone>, string> = {
+  green: 'var(--status-green-text)',
+  red: 'var(--status-red-text)',
+  amber: 'var(--status-amber-text)',
+}
+
 export interface AuditEventDef {
   label: string
   domain: AuditDomain

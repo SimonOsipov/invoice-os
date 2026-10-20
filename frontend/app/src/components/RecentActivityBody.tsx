@@ -23,11 +23,9 @@ export function RecentActivityBody({ ctx }: { ctx: PlatformCtx }) {
 
   const log = useAsync<AuditResponse>(
     () => (base && query ? getAuditLog(ctx.authedFetch, base, query) : Promise.reject(new Error('no gateway configured'))),
-    { immediate: base != null && query != null, isEmpty: (r) => r.events.length === 0, deps: [ctx.mode, entityId] },
+    { immediate: base != null && query != null, isEmpty: (r) => r.events.length === 0 },
   )
 
-  // A null query never fetches, so useAsync keeps the previous client's state; show empty instead.
-  if (query == null) return <EmptyActivity />
   if (log.status === 'loading') return <div style={PAD}><Loading label="Loading activity…" /></div>
   if (log.status === 'error' && log.error) return <div style={PAD}><ErrorState error={log.error} onRetry={log.run} /></div>
   if (log.status !== 'ready' || !log.data) return <EmptyActivity />
@@ -44,7 +42,7 @@ export function RecentActivityBody({ ctx }: { ctx: PlatformCtx }) {
           </div>
           <div style={{ paddingBottom: 16, flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13, lineHeight: 1.4, overflowWrap: 'anywhere' }}>
-              <span style={{ fontWeight: 600 }}>{r.who}</span> <span style={{ color: 'var(--fg-2)' }}>{r.label}</span>
+              <span className={r.mono ? 'mono' : undefined} style={{ fontWeight: 600 }}>{r.who}</span> <span style={{ color: 'var(--fg-2)' }}>{r.label}</span>
               {r.company && (
                 <>
                   {' '}

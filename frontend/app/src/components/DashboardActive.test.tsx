@@ -1001,6 +1001,27 @@ describe('DashboardActive Recent activity (OVER-01)', () => {
     expect(within(activityTile()).getByText('No activity yet')).toBeDefined()
   })
 
+  it('in-house: entity id landing after the rollup keeps the rows and makes no second call', async () => {
+    const m = mockRollupFetch(rollup(0), auditResponse(fiveEvents()))
+    const inhouse = (entityId: string | null) => ({ ...dashCtx(), active: { entityId, name: 'x' } }) as unknown as PlatformCtx
+    const { rerender } = render(<DashboardActive ctx={inhouse(null)} />)
+    await screen.findByText('Invoice created')
+
+    rerender(<DashboardActive ctx={inhouse('ent-1')} />)
+    expect(screen.getByText('Invoice created')).toBeDefined()
+    expect(within(activityTile()).queryByText('Loading activity…')).toBeNull()
+    await settleTile()
+    expect(auditUrls(m)).toHaveLength(1)
+  })
+
+  it('a raw subject with no actor name renders in the mono font', async () => {
+    mockRollupFetch(rollup(0), auditResponse([auditEvent({ actor_name: '', actor: 'sys-x' })]))
+    render(<DashboardActive ctx={dashCtx()} />)
+    const who = await screen.findByText('sys-x')
+
+    expect(who.classList.contains('mono')).toBe(true)
+  })
+
   it('a row reads actor, label, company, time', async () => {
     mockRollupFetch(rollup(0), auditResponse([auditEvent()]))
     render(<DashboardActive ctx={dashCtx()} />)

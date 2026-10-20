@@ -50,8 +50,8 @@ describe('activityRow', () => {
   it('empty actor name falls back to the subject', () => {
     expect(activityRow(ev({ actor_name: '', actor: 'sys-x' }), NOW).who).toBe('sys-x')
   })
-  it('null company name omits the company', () => {
-    expect(activityRow(ev({ company_scope: 'company', company_name: null }), NOW).company).toBeNull()
+  it('a company-scope row with no name shows a dash', () => {
+    expect(activityRow(ev({ company_scope: 'company', company_name: null }), NOW).company).toBe('—')
   })
   it('workspace-scope row omits the company', () => {
     expect(activityRow(ev({ company_scope: 'workspace', company_name: null }), NOW).company).toBeNull()
@@ -59,8 +59,8 @@ describe('activityRow', () => {
   it('a workspace-scope row never shows a company, even when a name is present', () => {
     expect(activityRow(ev({ company_scope: 'workspace', company_name: 'Acme Ltd' }), NOW).company).toBeNull()
   })
-  it('an empty company name omits the company', () => {
-    expect(activityRow(ev({ company_scope: 'company', company_name: '' }), NOW).company).toBeNull()
+  it('an empty company name shows a dash', () => {
+    expect(activityRow(ev({ company_scope: 'company', company_name: '' }), NOW).company).toBe('—')
   })
   it('row carries the id as key and the full time as title', () => {
     const e = ev({ id: 'row-9' })

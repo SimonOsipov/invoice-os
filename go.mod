@@ -17,7 +17,7 @@ require (
 	github.com/google/cel-go v0.29.2
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/klauspost/compress v1.18.5
+	github.com/klauspost/compress v1.18.7
 	github.com/klippa-app/go-pdfium v1.19.8
 	github.com/pressly/goose/v3 v3.27.2
 	github.com/riverqueue/river v0.40.0

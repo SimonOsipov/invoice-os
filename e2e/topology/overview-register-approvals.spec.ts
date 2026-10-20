@@ -602,6 +602,81 @@ test('OV-04 empty workspace: loading, task card, error, placement', async ({ pag
   expect(errors, `console errors beyond the deliberate 503:\n${errors.join('\n')}`).toEqual([])
 })
 
+test('OV-05 recent activity rows stay inside their tile', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+  const ago = (min: number): string => new Date(Date.now() - min * 60_000).toISOString()
+  // Codes are in AUDIT_EVENTS (lib/auditVocabulary.ts); the 50-character one is unrecognised.
+  const event = (i: number, code: string, over: Record<string, unknown> = {}) => ({
+    id: `00000000-0000-4000-8000-00000000050${i}`,
+    created_at: ago(i + 1),
+    event: code,
+    actor: `user-${i}`,
+    actor_name: `Person ${i}`,
+    actor_kind: 'person',
+    entity_id: `00000000-0000-4000-8000-00000000051${i}`,
+    company_name: `Company ${i}`,
+    company_scope: 'company',
+    payload: {},
+    ...over,
+  })
+  const events = [
+    event(0, 'invoice.created', { actor_name: 'A'.repeat(60) }),
+    event(1, 'invoice.created', { company_name: 'B'.repeat(60) }),
+    event(2, 'x'.repeat(50)),
+    event(3, 'invoice.updated'),
+    event(4, 'portfolio.entity.created'),
+  ]
+  const body = {
+    events,
+    page: { limit: 5, has_more: false, next_cursor: null },
+    total: events.length,
+    log_is_empty: false,
+    facets: { event: [], actor: [], company: [] },
+  }
+  const requests: string[] = []
+  await routeGet(page, (url) => onPath(url, '/api/invoice/v1/audit-log'), async (route, url) => {
+    requests.push(url.toString())
+    await fulfil(route, body)
+  })
+  await signInAs(page, 'inhouse', { tenantId: SHARD.b.id })
+
+  const tile = page.getByText('Recent activity', { exact: true }).locator('xpath=ancestor::div[2]')
+  const rowsLoc = tile.locator('> :last-child > div')
+  await expect(rowsLoc, 'the stubbed events drew as rows').toHaveCount(events.length, { timeout: 20_000 })
+  expect(requests.length, 'the tile read the audit log').toBeGreaterThan(0)
+  for (const u of requests) {
+    const q = new URL(u).searchParams
+    expect(q.get('limit'), `limit in ${u}`).toBe('5')
+    expect(q.has('company'), `no company in ${u}`).toBe(false)
+  }
+
+  const widths = await atWidths(page, 'recent activity rows', async () => {
+    const problems: string[] = []
+    const rects: Record<string, unknown> = {}
+    const b = await boxes(page, { tile, body: tile.locator('> :last-child') })
+    problems.push(...within(b.tile, b.body, 'tile body in tile'))
+    rects.tile = b
+    let prev: Rect | null = null
+    for (const [i, row] of (await rowsLoc.all()).entries()) {
+      const text = row.locator('> div:last-child')
+      const r = await boxes(page, { row, dot: row.locator('> div:first-child > span:first-child'), text })
+      problems.push(...within(b.body, r.row, `row ${i} in body`), ...within(r.row, r.dot, `row ${i} dot in row`), ...within(r.row, r.text, `row ${i} text in row`), ...leftOf(r.dot, r.text, `row ${i} dot vs text`))
+      // A block's box never grows with an unbreakable word: its content overflows it.
+      const spill = await text.evaluate((el) => el.scrollWidth - el.clientWidth)
+      if (spill > 1) problems.push(`row ${i} text spills ${spill}px past its block`)
+      if (prev) problems.push(...below(prev, r.row, `row ${i} vs previous`))
+      prev = r.row
+      rects[`row ${i}`] = { ...r, spill }
+    }
+    await assertPageDoesNotScrollSideways(page, 'overview')
+    return { problems, rects }
+  })
+
+  await attachJson(testInfo, 'ov-05-measurements', { requests, widths })
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
 test('IN-01 invoices register: heading, card, badge, toggle, bulk bar, header and pager relations', async ({ page }, testInfo) => {
   test.setTimeout(180_000)
   const errors = collectErrors(page)

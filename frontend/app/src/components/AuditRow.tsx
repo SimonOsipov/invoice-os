@@ -10,7 +10,7 @@
 
 import { chevDownGlyph14 } from '../glyphs'
 import type { AuditEvent } from '../lib/audit'
-import { auditEventView } from '../lib/auditVocabulary'
+import { auditEventView, TONE_TEXT } from '../lib/auditVocabulary'
 import { fmtDateTime } from '../lib/format'
 
 import { ActorCell } from './ActorCell'
@@ -27,12 +27,6 @@ export const AUDIT_GRID_GAP = 12
 
 const EVIDENCE_REASON_ID = 'audit-evidence-blocked-reason'
 const EVIDENCE_REASON = 'The evidence bundle is not reachable from this screen yet.'
-
-const TONE_TEXT: Record<string, string> = {
-  green: 'var(--status-green-text)',
-  red: 'var(--status-red-text)',
-  amber: 'var(--status-amber-text)',
-}
 
 // Both keys are real: `id` from internal/invoice/* and approval/engine.go, `invoice_id`
 // from approval/decision.go and submission/verdict_audit.go.

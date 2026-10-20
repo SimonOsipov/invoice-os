@@ -4,9 +4,11 @@
 // untested in both directions. Mirrors InvoiceDetail.test.tsx's fetch-mock + ctx-cast
 // idiom (single-endpoint mock: DashboardActive fires only getRollup, unlike
 // InvoiceDetail's two concurrent effects).
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useLayoutEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { AuditEvent, AuditResponse } from '../lib/audit'
 import { createAuthedFetch } from '../lib/authedFetch'
 import type { Counts, Metrics, Rollup } from '../lib/dashboard'
 import type { PlatformCtx } from '../types'
@@ -47,11 +49,53 @@ function dashCtx(): PlatformCtx {
   return ctx as unknown as PlatformCtx
 }
 
-function mockRollupFetch(data: Rollup) {
-  const fetchMock = vi.fn(() => Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(data) }))
+const ok = (body: unknown) => Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(body) })
+
+function auditResponse(events: AuditEvent[] = []): AuditResponse {
+  return {
+    events,
+    page: { limit: 5, has_more: false, next_cursor: null },
+    total: events.length,
+    log_is_empty: events.length === 0,
+    facets: { event: [], actor: [], company: [] },
+  }
+}
+
+const NOW_MS = Date.now()
+function auditEvent(over: Partial<AuditEvent> = {}): AuditEvent {
+  return {
+    id: 'ev-1',
+    created_at: new Date(NOW_MS - 300_000).toISOString(),
+    event: 'invoice.created',
+    actor: 'sub-1',
+    actor_name: 'Ada Obi',
+    actor_kind: 'person',
+    entity_id: 'ent-1',
+    company_name: 'Acme Ltd',
+    company_scope: 'company',
+    payload: null,
+    ...over,
+  }
+}
+const EVENTS = ['invoice.created', 'invoice.validated', 'invoice.approval_approved', 'invoice.updated', 'invoice.approval_armed']
+const LABELS = ['Invoice created', 'Invoice validated', 'Approved', 'Invoice updated', 'Approval requested']
+const fiveEvents = (): AuditEvent[] => EVENTS.map((event, i) => auditEvent({ id: `ev-${i}`, event }))
+
+type AuditReply = AuditResponse | ((url: string) => Promise<MockResponse>)
+const auditPending: AuditReply = () => new Promise<MockResponse>(() => {})
+const auditFails: AuditReply = () => Promise.resolve<MockResponse>({ ok: false, status: 500, json: () => Promise.resolve({}) })
+
+// Routes by URL: /audit-log answers `audit` (default: an empty log), anything else the rollup.
+function mockRollupFetch(data: Rollup, audit: AuditReply = auditResponse()) {
+  const fetchMock = vi.fn((url: string) => {
+    if (!String(url).includes('/audit-log')) return ok(data)
+    return typeof audit === 'function' ? audit(String(url)) : ok(audit)
+  })
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
 }
+const auditUrls = (m: ReturnType<typeof mockRollupFetch>) =>
+  m.mock.calls.map((c) => new URL(String(c[0]))).filter((u) => u.pathname.includes('/audit-log'))
 
 beforeEach(() => {
   vi.stubEnv('VITE_GATEWAY_URL', 'https://gw')
@@ -139,7 +183,7 @@ function firmCtx(entityId: string, name: string): PlatformCtx {
 }
 
 describe('DashboardActive live panels (task-429, METR-01-05)', () => {
-  it('(a) the Readiness tile drops its SAMPLE chip; trend and activity panels keep theirs', async () => {
+  it('(a) the Readiness and activity tiles carry no SAMPLE chip; the trend keeps its own', async () => {
     mockRollupFetch(rollup(0))
 
     render(<DashboardActive ctx={dashCtx()} />)
@@ -148,7 +192,7 @@ describe('DashboardActive live panels (task-429, METR-01-05)', () => {
     expect(within(readinessHead!).queryByText('SAMPLE')).toBeNull()
     expect(screen.getByText('12 WEEKS · SAMPLE')).toBeDefined()
     const activityHead = screen.getByText('Recent activity').parentElement
-    expect(within(activityHead!).getByText('SAMPLE')).toBeDefined()
+    expect(within(activityHead!).queryByText('SAMPLE')).toBeNull()
   })
 
   it('(b) Top validation failures drops its FIRM-WIDE chip', async () => {
@@ -821,41 +865,262 @@ describe('DashboardActive failures panel before any invoice is validated (AUTH-1
   })
 })
 
-describe('DashboardActive Recent activity (AUTH-10-07, Core AC-7)', () => {
-  const handoffCtx = () => ({ ...dashCtx(), handoff: true }) as unknown as PlatformCtx
-  const personaCtx = () => ({ ...dashCtx(), handoff: false }) as unknown as PlatformCtx
-
-  it('hand-off: Recent activity is empty, not a sample', async () => {
-    mockRollupFetch(rollup(0))
-    render(<DashboardActive ctx={handoffCtx()} />)
-
+describe('DashboardActive Recent activity (OVER-01)', () => {
+  const activityTile = () => screen.getByText('Recent activity').parentElement!.parentElement as HTMLElement
+  const settleTile = async () => {
     await screen.findByText('Readiness score')
-    const head = screen.getByText('Recent activity').parentElement as HTMLElement
-    expect(screen.getByText('No activity to show')).toBeDefined()
-    expect(within(head).queryByText('SAMPLE'), 'no SAMPLE badge on the activity head').toBeNull()
+  }
+  const firmWith = (id: string) => firmCtx(id, `Client ${id}`)
+
+  it('in-house requests five rows and no company', async () => {
+    const m = mockRollupFetch(rollup(0), auditResponse(fiveEvents()))
+    render(<DashboardActive ctx={{ ...dashCtx(), active: { entityId: 'ent-1' } } as unknown as PlatformCtx} />)
+    await screen.findByText('Invoice created')
+
+    const urls = auditUrls(m)
+    expect(urls).toHaveLength(1)
+    expect(urls[0].pathname).toBe('/api/invoice/v1/audit-log')
+    expect(urls[0].searchParams.get('limit')).toBe('5')
+    expect(urls[0].searchParams.has('company')).toBe(false)
+  })
+
+  it('firm mode sends the active entity', async () => {
+    const m = mockRollupFetch(rollup(0), auditResponse(fiveEvents()))
+    render(<DashboardActive ctx={firmWith('ent-1')} />)
+    await screen.findByText('Invoice created')
+
+    const u = auditUrls(m)[0]
+    expect(u.searchParams.get('company')).toBe('ent-1')
+    expect(u.searchParams.get('limit')).toBe('5')
+  })
+
+  it('the request carries no client filter beyond limit and company', async () => {
+    const m = mockRollupFetch(rollup(0), auditResponse(fiveEvents()))
+    render(<DashboardActive ctx={firmWith('ent-1')} />)
+    await screen.findByText('Invoice created')
+
+    expect([...auditUrls(m)[0].searchParams.keys()].sort()).toEqual(['company', 'limit'])
+  })
+
+  const byCompany = (replies: Record<string, AuditResponse>): AuditReply => (url) =>
+    ok(replies[new URL(url).searchParams.get('company') ?? ''])
+
+  it('switching client refetches, shows Loading between, and never shows the old rows', async () => {
+    const one = auditResponse([auditEvent({ id: 'a', actor_name: 'Old Actor' })])
+    const m = mockRollupFetch(rollup(0), byCompany({ 'ent-1': one, 'ent-2': auditResponse([auditEvent({ id: 'b', actor_name: 'New Actor' })]) }))
+    const { rerender } = render(<DashboardActive ctx={firmWith('ent-1')} />)
+    await screen.findByText('Old Actor')
+
+    rerender(<DashboardActive ctx={firmWith('ent-2')} />)
+    expect(screen.queryByText('Old Actor')).toBeNull()
+    expect(within(activityTile()).getByText('Loading activity…')).toBeDefined()
+    await screen.findByText('New Actor')
+    expect(auditUrls(m).map((u) => u.searchParams.get('company'))).toEqual(['ent-1', 'ent-2'])
+  })
+
+  it('no committed frame after a client switch shows the old rows', async () => {
+    mockRollupFetch(rollup(0), byCompany({
+      'ent-1': auditResponse([auditEvent({ id: 'a', actor_name: 'Old Actor' })]),
+      'ent-2': auditResponse([auditEvent({ id: 'b', actor_name: 'New Actor' })]),
+    }))
+    const frames: string[] = []
+    // Sibling layout effects run in the commit, after the DOM is mutated and before any paint.
+    const Probe = () => {
+      useLayoutEffect(() => { frames.push(document.body.textContent ?? '') })
+      return null
+    }
+    const ui = (id: string) => <><DashboardActive ctx={firmWith(id)} /><Probe /></>
+    const { rerender } = render(ui('ent-1'))
+    await screen.findByText('Old Actor')
+
+    frames.length = 0
+    rerender(ui('ent-2'))
+    await screen.findByText('New Actor')
+
+    expect(frames.length).toBeGreaterThan(0)
+    expect(frames[0]).not.toContain('Old Actor')
+  })
+
+  it('no committed frame after an in-house to firm switch shows the old rows', async () => {
+    mockRollupFetch(rollup(0), (url) =>
+      ok(auditResponse([auditEvent({ id: 'x', actor_name: new URL(url).searchParams.has('company') ? 'Firm Actor' : 'House Actor' })])),
+    )
+    const frames: string[] = []
+    const Probe = () => {
+      useLayoutEffect(() => { frames.push(document.body.textContent ?? '') })
+      return null
+    }
+    const inhouse = { ...dashCtx(), active: { entityId: 'ent-1' } } as unknown as PlatformCtx
+    const { rerender } = render(<><DashboardActive ctx={inhouse} /><Probe /></>)
+    await screen.findByText('House Actor')
+
+    frames.length = 0
+    rerender(<><DashboardActive ctx={firmWith('ent-1')} /><Probe /></>)
+    await screen.findByText('Firm Actor')
+
+    expect(frames.length).toBeGreaterThan(0)
+    expect(frames[0]).not.toContain('House Actor')
+  })
+
+  it('a late response for the old client is dropped', async () => {
+    const resolvers: Record<string, (v: MockResponse) => void> = {}
+    mockRollupFetch(rollup(0), (url) => new Promise<MockResponse>((res) => { resolvers[new URL(url).searchParams.get('company')!] = res }))
+    const reply = (name: string) => ({ ok: true, status: 200, json: () => Promise.resolve(auditResponse([auditEvent({ id: name, actor_name: name })])) })
+
+    const { rerender } = render(<DashboardActive ctx={firmWith('ent-1')} />)
+    await screen.findByText('Readiness score')
+    await waitFor(() => expect(resolvers['ent-1']).toBeDefined())
+    rerender(<DashboardActive ctx={firmWith('ent-2')} />)
+    await waitFor(() => expect(resolvers['ent-2']).toBeDefined())
+
+    resolvers['ent-2'](reply('Actor Two'))
+    await screen.findByText('Actor Two')
+    resolvers['ent-1'](reply('Actor One'))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.queryByText('Actor One')).toBeNull()
+    expect(screen.getByText('Actor Two')).toBeDefined()
+  })
+
+  it('a client going to null clears the rows and makes no further call', async () => {
+    const m = mockRollupFetch(rollup(0), auditResponse(fiveEvents()))
+    const { rerender } = render(<DashboardActive ctx={firmWith('ent-1')} />)
+    await screen.findByText('Invoice created')
+
+    rerender(<DashboardActive ctx={{ ...firmWith('ent-1'), active: { entityId: null, name: 'x' } } as unknown as PlatformCtx} />)
+    expect(screen.queryByText('Invoice created')).toBeNull()
+    expect(within(activityTile()).getByText('No activity yet')).toBeDefined()
+    expect(auditUrls(m)).toHaveLength(1)
+  })
+
+  it('firm with no resolved client makes no call', async () => {
+    const m = mockRollupFetch(rollup(0))
+    render(<DashboardActive ctx={{ ...firmWith('x'), active: { entityId: null, name: 'x' } } as unknown as PlatformCtx} />)
+    await settleTile()
+
+    expect(auditUrls(m)).toHaveLength(0)
+    expect(within(activityTile()).getByText('No activity yet')).toBeDefined()
+  })
+
+  it('in-house: entity id landing after the rollup keeps the rows and makes no second call', async () => {
+    const m = mockRollupFetch(rollup(0), auditResponse(fiveEvents()))
+    const inhouse = (entityId: string | null) => ({ ...dashCtx(), active: { entityId, name: 'x' } }) as unknown as PlatformCtx
+    const { rerender } = render(<DashboardActive ctx={inhouse(null)} />)
+    await screen.findByText('Invoice created')
+
+    rerender(<DashboardActive ctx={inhouse('ent-1')} />)
+    expect(screen.getByText('Invoice created')).toBeDefined()
+    expect(within(activityTile()).queryByText('Loading activity…')).toBeNull()
+    await settleTile()
+    expect(auditUrls(m)).toHaveLength(1)
+  })
+
+  it('a raw subject with no actor name renders in the mono font', async () => {
+    mockRollupFetch(rollup(0), auditResponse([auditEvent({ actor_name: '', actor: 'sys-x' })]))
+    render(<DashboardActive ctx={dashCtx()} />)
+    const who = await screen.findByText('sys-x')
+
+    expect(who.classList.contains('mono')).toBe(true)
+  })
+
+  it('a row reads actor, label, company, time', async () => {
+    mockRollupFetch(rollup(0), auditResponse([auditEvent()]))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await screen.findByText('Ada Obi')
+
+    const tile = within(activityTile())
+    expect(tile.getByText('Invoice created')).toBeDefined()
+    expect(tile.getByText('Acme Ltd')).toBeDefined()
+    expect(tile.getByText('5m ago')).toBeDefined()
+  })
+
+  it('five rows keep the response order', async () => {
+    mockRollupFetch(rollup(0), auditResponse(fiveEvents()))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await screen.findByText('Invoice created')
+
+    const text = activityTile().textContent!
+    const at = LABELS.map((l) => text.indexOf(l))
+    expect(at.every((i) => i >= 0)).toBe(true)
+    expect(at).toEqual([...at].sort((x, y) => x - y))
+  })
+
+  it('a workspace-level row omits the company', async () => {
+    mockRollupFetch(rollup(0), auditResponse([auditEvent({ company_scope: 'workspace', company_name: null })]))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await screen.findByText('Ada Obi')
+
+    const row = screen.getByText('Ada Obi').parentElement as HTMLElement
+    expect(row.textContent).toBe('Ada Obi Invoice created')
+  })
+
+  it('empty log shows the empty state and no mock row', async () => {
+    mockRollupFetch(rollup(0))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settleTile()
+
+    const tile = within(activityTile())
+    await tile.findByText('No activity yet')
+    expect(tile.getByText('Edits, validations, approvals and submissions appear here as they happen.')).toBeDefined()
+    expect(screen.queryByText('No activity to show')).toBeNull()
     expect(screen.queryByText('INV-2026-00481')).toBeNull()
   })
 
-  it('hand-off: Recent activity stays empty with invoices present, and the tile holds only its title and the empty line', async () => {
+  it('the empty tile holds only title and empty copy', async () => {
     mockRollupFetch(rollup(0, { validated: 5 }))
-    render(<DashboardActive ctx={handoffCtx()} />)
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settleTile()
+    await within(activityTile()).findByText('No activity yet')
 
-    await screen.findByText('Readiness score')
-    const tile = screen.getByText('Recent activity').parentElement!.parentElement as HTMLElement
-    expect(within(tile).getByText('No activity to show')).toBeDefined()
-    expect(tile.textContent).toBe('Recent activityNo activity to show')
+    expect(activityTile().textContent).toBe(
+      'Recent activityNo activity yetEdits, validations, approvals and submissions appear here as they happen.',
+    )
   })
 
-  // Control: green before and after.
-  it('persona: Recent activity keeps the SAMPLE feed', async () => {
-    mockRollupFetch(rollup(0))
-    render(<DashboardActive ctx={personaCtx()} />)
+  it('a failed call shows the error, not the empty state', async () => {
+    mockRollupFetch(rollup(0), auditFails)
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settleTile()
 
-    await screen.findByText('Readiness score')
+    const tile = within(activityTile())
+    expect(await tile.findByText(/Something went wrong/)).toBeDefined()
+    expect(tile.queryByText('No activity yet')).toBeNull()
+  })
+
+  it('Retry refetches', async () => {
+    let n = 0
+    mockRollupFetch(rollup(0), () => (n++ === 0 ? auditFails('') : ok(auditResponse(fiveEvents()))))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settleTile()
+
+    fireEvent.click(await within(activityTile()).findByRole('button', { name: 'Retry' }))
+    await screen.findByText('Invoice created')
+    expect(within(activityTile()).queryByText(/Something went wrong/)).toBeNull()
+  })
+
+  it('a pending call shows Loading', async () => {
+    mockRollupFetch(rollup(0), auditPending)
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settleTile()
+
+    expect(within(activityTile()).getByText('Loading activity…')).toBeDefined()
+  })
+
+  it.each([true, false])('the head carries no SAMPLE and no mock row (handoff %s)', async (handoff) => {
+    mockRollupFetch(rollup(0))
+    render(<DashboardActive ctx={{ ...dashCtx(), handoff } as unknown as PlatformCtx} />)
+    await settleTile()
+
     const head = screen.getByText('Recent activity').parentElement as HTMLElement
-    expect(within(head).getByText('SAMPLE')).toBeDefined()
-    expect(screen.getByText('INV-2026-00481')).toBeDefined()
-    expect(screen.queryByText('No activity to show')).toBeNull()
+    expect(within(head).queryByText('SAMPLE')).toBeNull()
+    expect(screen.queryByText('INV-2026-00481')).toBeNull()
+  })
+
+  it('a failed rollup still shows no tile', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve<MockResponse>({ ok: false, status: 500, json: () => Promise.resolve({}) })))
+    render(<DashboardActive ctx={dashCtx()} />)
+
+    await screen.findByRole('button', { name: 'Retry' })
+    expect(screen.queryByText('Recent activity')).toBeNull()
   })
 })
 
@@ -905,10 +1170,11 @@ describe('DashboardActive DA-LOOK (D-29)', () => {
     expect(tick.style.height).toBe('40px')
   })
 
-  it('every Recent activity dot is a 50% circle at 8x8', async () => {
-    mockRollupFetch(rollup(0))
+  it('every activity dot is a 50% circle at 8x8', async () => {
+    mockRollupFetch(rollup(0), auditResponse(fiveEvents()))
     render(<DashboardActive ctx={dashCtx()} />)
     await settle()
+    await screen.findByText('Invoice created')
 
     const tile = cardOf('Recent activity')
     const dots = [...tile.querySelectorAll<HTMLElement>('span')].filter((s) => s.style.width === '8px' && s.style.height === '8px')

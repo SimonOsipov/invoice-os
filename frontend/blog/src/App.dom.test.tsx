@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { TEST_DATA } from './testData'
 
@@ -29,6 +29,7 @@ async function mountReady(path: string) {
 afterEach(() => {
   act(() => root.unmount())
   container.remove()
+  vi.unstubAllEnvs()
 })
 
 const q = <T extends HTMLElement>(sel: string) => container.querySelector<T>(sel)!
@@ -54,10 +55,25 @@ describe('shell', () => {
     expect(aside.textContent).toContain('CATEGORIES')
     expect(byText('aside button', 'Subscribe')).toBeDefined()
     expect(byText('aside button', 'All posts')).toBeDefined()
-    expect(byText('aside a', 'Go to ascomply.com')).toBeDefined()
+    expect(byText('aside a', 'Book the Demo')).toBeDefined()
+    expect(container.querySelector('aside')!.textContent).not.toContain('Go to ascomply.com')
     const header = q('#blog-header')
     expect(header.querySelector('nav[aria-label="Breadcrumb"]')).not.toBeNull()
     expect(header.querySelector('input[aria-label="Search posts"]')).not.toBeNull()
+  })
+
+  it('SH-07 the sidebar Book the Demo matches the library button', () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing-pr-1.up.railway.app/')
+    mount('/')
+    const a = byText('aside a', 'Book the Demo') as HTMLAnchorElement
+    expect(a.getAttribute('href')).toBe('https://landing-pr-1.up.railway.app/?demo')
+    expect(a.className).toBe('ds-btn ds-btn--outlineDark ds-btn--sm')
+    expect(a.style.width).toBe('100%')
+    act(() => root.unmount())
+    container.remove()
+    vi.stubEnv('VITE_LANDING_URL', '')
+    mount('/')
+    expect(byText('aside a', 'Book the Demo').getAttribute('href')).toBe('https://www.ascomply.com/?demo')
   })
 
   it.each([

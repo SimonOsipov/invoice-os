@@ -65,9 +65,9 @@ export function Article({ post, cat, onCategory, onSubscribe }: ArticleProps) {
       <article
         className="blog-px"
         data-view="post"
-        style={{ padding: '40px 40px 72px', maxWidth: 1080, display: 'flex', flexDirection: 'column', gap: 36 }}
+        style={{ padding: '40px 40px 72px', display: 'flex', flexDirection: 'column', gap: 36 }}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 780 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           {cat && (
             <button
               type="button"
@@ -105,12 +105,12 @@ export function Article({ post, cat, onCategory, onSubscribe }: ArticleProps) {
           >
             {post.title}
           </h1>
-          <p className="t-lead" style={{ margin: 0, textWrap: 'pretty' }}>{post.summary}</p>
+          <p className="t-lead" style={{ margin: 0, maxWidth: 700, textWrap: 'pretty' }}>{post.summary}</p>
         </div>
         <div style={{ aspectRatio: '21 / 9', position: 'relative', background: 'var(--muted)', borderRadius: 10, overflow: 'hidden' }}>
           <Cover post={post} cat={cat} />
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 56, alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 56, alignItems: 'flex-start' }}>
           <div style={{ flex: '1 1 520px', minWidth: 0, maxWidth: 700, display: 'flex', flexDirection: 'column', gap: 22 }}>
             <Blocks blocks={post.body} />
           </div>
@@ -120,7 +120,6 @@ export function Article({ post, cat, onCategory, onSubscribe }: ArticleProps) {
       <section className="blog-px" style={{ background: 'var(--peach-band)', padding: '72px 40px' }}>
         <div
           style={{
-            maxWidth: 1080,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',

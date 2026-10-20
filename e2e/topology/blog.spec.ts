@@ -233,6 +233,29 @@ test.describe('blog home, category and search at wide widths', () => {
   }
 })
 
+const ARTICLE_WIDTHS = [...WIDE_WIDTHS, 1600]
+const BAND_EDGE_MIN_WIDTH = 1440 // below it the row is narrower than the body measure and the band may wrap
+
+type Pads = { left: number; right: number }
+
+// Content edge of #blog-main: its box less the scrollbar.
+async function contentRight(page: Page): Promise<number> {
+  return main(page).evaluate((el) => el.getBoundingClientRect().left + el.clientWidth)
+}
+
+async function paddingsOf(loc: Locator): Promise<Pads> {
+  return loc.evaluate((el) => {
+    const cs = getComputedStyle(el)
+    return { left: parseFloat(cs.paddingLeft), right: parseFloat(cs.paddingRight) }
+  })
+}
+
+async function maxWidthOf(loc: Locator): Promise<number> {
+  return loc.evaluate((el) => parseFloat(getComputedStyle(el).maxWidth))
+}
+
+const rightOf = (r: Rect) => r.x + r.width
+
 test.describe('blog article at wide widths', () => {
   const article = (page: Page) => main(page).locator('article')
   const row = (page: Page) => article(page).locator(':scope > div').nth(2)
@@ -297,6 +320,108 @@ test.describe('blog article at wide widths', () => {
       expect(enclosesRect(b, demo, SLACK_PX), 'Book a demo leaves the band').toBe(true)
       expect(enclosesRect(b, sub, SLACK_PX), 'Subscribe leaves the band').toBe(true)
       expect(rectsOverlap(demo, sub), 'the band buttons overlap').toBe(false)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+  }
+
+  for (const width of ARTICLE_WIDTHS) {
+    test(`blog article: the header, cover, body row and band reach the content edge (${width})`, async ({ page }, testInfo) => {
+      const errors = collectErrors(page)
+      await open(page, width)
+      const edge = await contentRight(page)
+      const a = await rectOf(article(page), 'the article')
+      const pad = await paddingsOf(article(page))
+      const parts = {
+        header: await rectOf(article(page).locator(':scope > div').nth(0), 'the header block'),
+        cover: await rectOf(article(page).locator(':scope > div').nth(1), 'the cover'),
+        row: await rectOf(row(page), 'the body row'),
+      }
+      const band = main(page).locator('section').filter({ has: page.getByRole('link', { name: 'Book a demo' }) })
+      const b = await rectOf(band, 'the band')
+      const inner = await rectOf(band.locator(':scope > div'), 'the band inner row')
+      const bandPad = await paddingsOf(band)
+      await attachJson(testInfo, `blog-article-edge-${width}`, { edge, article: a, pad, ...parts, band: b, inner, bandPad })
+      expect(Math.abs(rightOf(a) - edge), 'the article stops short of the content edge').toBeLessThanOrEqual(SLACK_PX)
+      for (const [name, r] of Object.entries(parts)) {
+        expect(Math.abs(rightOf(r) - (rightOf(a) - pad.right)), `${name} stops short of the article padding edge`).toBeLessThanOrEqual(SLACK_PX)
+        expect(Math.abs(r.x - (a.x + pad.left)), `${name} does not start at the article padding edge`).toBeLessThanOrEqual(SLACK_PX)
+      }
+      expect(Math.abs(rightOf(b) - edge), 'the band stops short of the content edge').toBeLessThanOrEqual(SLACK_PX)
+      expect(Math.abs(rightOf(inner) - (rightOf(b) - bandPad.right)), 'the band inner row stops short of the band padding edge').toBeLessThanOrEqual(SLACK_PX)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+
+    test(`blog article: the contents list ends at the row's right edge (${width})`, async ({ page }, testInfo) => {
+      const errors = collectErrors(page)
+      await open(page, width)
+      const body = await rectOf(row(page).locator(':scope > div').first(), 'the body column')
+      const t = await rectOf(toc(page), 'the TOC')
+      const r = await rectOf(row(page), 'the body row')
+      await attachJson(testInfo, `blog-article-toc-edge-${width}`, { body, toc: t, row: r })
+      expect(Math.abs(rightOf(t) - rightOf(r)), 'the TOC does not end at the row right edge').toBeLessThanOrEqual(SLACK_PX)
+      expect(Math.abs(body.x - r.x), 'the body does not start at the row left edge').toBeLessThanOrEqual(SLACK_PX)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+
+    test(`blog article: the body column keeps its measure (${width})`, async ({ page }, testInfo) => {
+      const errors = collectErrors(page)
+      await open(page, width)
+      const bodyLoc = row(page).locator(':scope > div').first()
+      const body = await rectOf(bodyLoc, 'the body column')
+      const maxWidth = await maxWidthOf(bodyLoc)
+      const summary = await rectOf(article(page).locator('p.t-lead'), 'the summary')
+      const r = await rectOf(row(page), 'the body row')
+      await attachJson(testInfo, `blog-article-measure-${width}`, { body, maxWidth, summary, row: r })
+      if (width >= BAND_EDGE_MIN_WIDTH) {
+        expect(Math.abs(body.width - maxWidth), 'the body is narrower than its measure').toBeLessThanOrEqual(SLACK_PX)
+      } else {
+        expect(body.width, 'the body is wider than its measure').toBeLessThanOrEqual(maxWidth + SLACK_PX)
+      }
+      expect(summary.width, 'the summary is wider than the body measure').toBeLessThanOrEqual(maxWidth + SLACK_PX)
+      expect(body.width, 'the body fills the whole row').toBeLessThan(r.width)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+  }
+
+  for (const width of ARTICLE_WIDTHS.filter((w) => w >= BAND_EDGE_MIN_WIDTH)) {
+    test(`blog article: the band buttons reach the band's right edge (${width})`, async ({ page }, testInfo) => {
+      const errors = collectErrors(page)
+      await open(page, width)
+      const band = main(page).locator('section').filter({ has: page.getByRole('link', { name: 'Book a demo' }) })
+      const inner = await rectOf(band.locator(':scope > div'), 'the band inner row')
+      const demo = await rectOf(band.getByRole('link', { name: 'Book a demo' }), 'Book a demo')
+      const sub = await rectOf(band.getByRole('button', { name: 'Subscribe' }), 'Subscribe')
+      await attachJson(testInfo, `blog-article-band-edge-${width}`, { inner, demo, sub })
+      expect(Math.abs(Math.max(rightOf(demo), rightOf(sub)) - rightOf(inner)), 'the band buttons stop short of the inner row edge').toBeLessThanOrEqual(SLACK_PX)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+  }
+})
+
+test.describe('blog article without a contents list at wide widths', () => {
+  const article = (page: Page) => main(page).locator('article')
+  const row = (page: Page) => article(page).locator(':scope > div').nth(2)
+
+  for (const width of ARTICLE_WIDTHS) {
+    test(`blog article without a contents list: the row reaches the content edge (${width})`, async ({ page }, testInfo) => {
+      const errors = collectErrors(page)
+      await prepare(page)
+      await resize(page, width, 1080)
+      await visit(page, '/lagos-office')
+      await expect(article(page).locator('h1')).toBeVisible()
+      expect(await main(page).locator('aside[aria-label="On this page"]').count(), 'control: the post has no contents list').toBe(0)
+      const a = await rectOf(article(page), 'the article')
+      const pad = await paddingsOf(article(page))
+      const r = await rectOf(row(page), 'the body row')
+      const bodyLoc = row(page).locator(':scope > div').first()
+      const body = await rectOf(bodyLoc, 'the body column')
+      const maxWidth = await maxWidthOf(bodyLoc)
+      await attachJson(testInfo, `blog-article-no-toc-${width}`, { article: a, pad, row: r, body, maxWidth })
+      expect(Math.abs(rightOf(r) - (rightOf(a) - pad.right)), 'the row stops short of the article padding edge').toBeLessThanOrEqual(SLACK_PX)
+      expect(Math.abs(body.x - r.x), 'the body does not start at the row left edge').toBeLessThanOrEqual(SLACK_PX)
+      if (width >= BAND_EDGE_MIN_WIDTH) {
+        expect(Math.abs(body.width - maxWidth), 'the body is narrower than its measure').toBeLessThanOrEqual(SLACK_PX)
+      }
       expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
     })
   }

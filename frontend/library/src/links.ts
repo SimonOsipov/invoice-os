@@ -28,10 +28,6 @@ export function demoHref(): string | null {
   return base === null ? null : `${base}/?demo`
 }
 
-export function blogHref(): string | null {
-  return resolveBase(import.meta.env.VITE_BLOG_URL)
-}
-
 export function privacyHref(): string {
   return `${landingBase() ?? `https://${PRODUCTION_HOSTNAMES[0]}`}/privacy`
 }

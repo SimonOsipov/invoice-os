@@ -5,7 +5,7 @@ import { demoHref, landingHref, privacyHref } from './links'
 afterEach(() => vi.unstubAllEnvs())
 
 describe('links', () => {
-  it('links_goToAscomplyUsesTheLandingUrl', () => {
+  it('links_landingHrefUsesTheLandingUrl', () => {
     vi.stubEnv('VITE_LANDING_URL', 'https://landing-pr-1.up.railway.app/')
     expect(landingHref()).toBe('https://landing-pr-1.up.railway.app')
     for (const v of ['', '   ']) {

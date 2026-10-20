@@ -7,7 +7,7 @@ import { JourneyStepper } from './components/JourneyStepper'
 import { Sidebar } from './components/Sidebar'
 import { TourOverlay } from './components/TourOverlay'
 import { chooseConsent, CookieNotice, readConsent, syncLibraryConsent, trackLibraryPageView, trackTourStart } from './analytics'
-import { blogHref, demoHref, featurePlatformHref, groupPlatformHref, privacyHref } from './links'
+import { demoHref, featurePlatformHref, groupPlatformHref, privacyHref } from './links'
 import { libraryPath, parseLibraryPath, type Route } from './route'
 import { TOUR_START, tourBack, tourButtonLabel, tourNext, tourStage, type TourState } from './tour'
 import type { Feature, Group } from './types'
@@ -78,7 +78,6 @@ export function App() {
     go({ view: 'feature', group, feature })
   }
   const demo = demoHref()
-  const blog = blogHref()
 
   // The sender stays out of the state updater: StrictMode runs updaters twice.
   const startTour = () => {
@@ -124,7 +123,6 @@ export function App() {
       <Sidebar
         route={route}
         demoHref={demo}
-        blogHref={blog}
         onHome={goHome}
         onGroup={goGroup}
         onFeature={goFeature}

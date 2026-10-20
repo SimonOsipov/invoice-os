@@ -9,7 +9,7 @@
 //   LIVE (rollup)   needs-attention KPI · invoice-status donut · readiness ring + bars ·
 //                   top validation failures · all four KPI tile VALUES
 //   LIVE (audit)    recent activity (RecentActivityBody)
-//   Readiness trend renders a fixed empty state until recorded history exists.
+//   LIVE (history)  KPI sparklines + Readiness trend; empty state under two recorded days.
 //
 // [dashboard-scope-per-client] (persona-handoff-fix step 2): this page is a CLIENT-scoped
 // surface (Sidebar.tsx's CLIENT nav group), so every LIVE panel above scopes to the
@@ -26,6 +26,7 @@ import {
   donutSegments,
   formatMetric,
   getRollup,
+  getRollupHistory,
   readinessBars,
   readinessNote,
   readinessRing,
@@ -33,8 +34,11 @@ import {
   scopedBucket,
   topFailures,
   type Counts,
+  type HistoryRow,
   type Rollup,
+  type RollupHistory,
 } from '../lib/dashboard'
+import { historyView, watToday } from '../lib/dashboardHistory'
 import { ruleKeyLabel } from '../lib/rulesApi'
 import type { PlatformCtx } from '../types'
 import { RecentActivityBody } from './RecentActivityBody'
@@ -52,6 +56,11 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
     // carry content regardless of invoice volume, and each live panel has its own zero
     // treatment, so a zero-count rollup is 'ready', not empty. isEmptyRollup stays
     // exported and tested for other callers.
+    { immediate: base != null },
+  )
+  // A failed or pending history read draws nothing and shows no error.
+  const hist = useAsync<RollupHistory>(
+    () => (base ? getRollupHistory(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
     { immediate: base != null },
   )
   const state = dashboardViewState(base, roll)
@@ -79,7 +88,7 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
 
       {state === 'loading' && <Loading label="Loading dashboard…" />}
 
-      {state === 'error' && roll.error && <ErrorState error={roll.error} onRetry={roll.run} />}
+      {state === 'error' && roll.error && <ErrorState error={roll.error} onRetry={() => { void roll.run(); void hist.run() }} />}
 
       {/* 'idle' is the no-gateway build: nothing live to draw, so keep the zero-state. */}
       {state === 'idle' && (
@@ -87,7 +96,7 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
       )}
 
       {state === 'ready' && roll.data && (
-        <DashboardTiles data={roll.data} ctx={ctx} />
+        <DashboardTiles data={roll.data} ctx={ctx} history={hist.data?.history ?? null} />
       )}
     </div>
   )
@@ -99,10 +108,10 @@ function kpiValues(counts: Counts, needsAttention: number, vatLabel: string, awa
   const transmitted = counts.submitted + counts.accepted
   const awaiting = counts.draft + counts.validated
   return [
-    { label: 'Invoices', value: String(total), delta: `${transmitted} transmitted`, deltaColor: 'var(--fg-3)' },
-    { label: 'VAT tracked', value: vatLabel, delta: 'output VAT', deltaColor: 'var(--fg-3)' },
-    { label: 'Exceptions', value: String(needsAttention), delta: needsAttention ? 'to resolve' : 'all clear', deltaColor: needsAttention ? 'var(--status-red-text)' : 'var(--status-green-text)' },
-    { label: 'Not yet submitted', value: String(awaiting), delta: awaiting ? `${awaitingApproval} awaiting approval` : 'none waiting', deltaColor: awaiting ? 'var(--status-amber-text)' : 'var(--fg-3)' },
+    { label: 'Invoices', value: String(total), delta: `${transmitted} transmitted`, deltaColor: 'var(--fg-3)', stroke: 'var(--action)' },
+    { label: 'VAT tracked', value: vatLabel, delta: 'output VAT', deltaColor: 'var(--fg-3)', stroke: 'var(--action)' },
+    { label: 'Exceptions', value: String(needsAttention), delta: needsAttention ? 'to resolve' : 'all clear', deltaColor: needsAttention ? 'var(--status-red-text)' : 'var(--status-green-text)', stroke: 'var(--status-red-text)' },
+    { label: 'Not yet submitted', value: String(awaiting), delta: awaiting ? `${awaitingApproval} awaiting approval` : 'none waiting', deltaColor: awaiting ? 'var(--status-amber-text)' : 'var(--fg-3)', stroke: 'var(--status-amber-text)' },
   ]
 }
 
@@ -143,7 +152,7 @@ function TileHead({ title, meta }: { title: string; meta?: string }) {
   )
 }
 
-function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
+function DashboardTiles({ data, ctx, history }: { data: Rollup; ctx: PlatformCtx; history: HistoryRow[] | null }) {
   // [dashboard-scope-per-client]: every LIVE number below is the SELECTED client's own
   // bucket (see the file-header comment) — never data.totals directly in firm mode.
   const bucket = scopedBucket(ctx.mode === 'inhouse', ctx.active.entityId, data)
@@ -156,6 +165,7 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
   const note = readinessNote(bucket.metrics)
   const bars = readinessBars(bucket.metrics)
   const kpis = kpiValues(bucket.counts, needsAttention, formatMetric(bucket.metrics, 'vat_tracked'), bucket.awaiting_approval)
+  const { sparks, trend } = historyView(history, ctx.mode === 'inhouse', ctx.active.entityId, bucket, watToday(new Date()))
 
   return (
     <>
@@ -203,16 +213,27 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
         </div>
 
         <div className="pf-grid-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(140px, 1fr))', gap: 18 }}>
-          {kpis.map((k) => (
+          {kpis.map((k, i) => (
             <div key={k.label} style={{ ...TILE_CARD, display: 'flex', flexDirection: 'column', minHeight: 138, minWidth: 0 }}>
               <TileHead title={k.label} />
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '18px 20px 20px' }}>
                 <span className="money" style={{ fontSize: 'clamp(22px, 3.2vw, 32px)', fontWeight: 700, margin: '0 0 12px', whiteSpace: 'nowrap' }}>
                   {k.value}
                 </span>
-                <span className="mono" style={{ fontSize: 12, fontWeight: 500, color: k.deltaColor }}>
-                  {k.delta}
-                </span>
+                {sparks ? (
+                  <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
+                    <span className="mono" style={{ fontSize: 12, fontWeight: 500, color: k.deltaColor }}>
+                      {k.delta}
+                    </span>
+                    <svg viewBox="0 0 88 30" height="30" preserveAspectRatio="none" style={{ overflow: 'visible', flex: 1, width: '100%', minWidth: 0 }}>
+                      <path d={sparks[i]} fill="none" stroke={k.stroke} strokeWidth="1.6" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </div>
+                ) : (
+                  <span className="mono" style={{ fontSize: 12, fontWeight: 500, color: k.deltaColor }}>
+                    {k.delta}
+                  </span>
+                )}
               </div>
             </div>
           ))}
@@ -300,9 +321,9 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
         </div>
       </div>
 
-      {/* Row C: 12-week readiness trend. The rollup carries no time series, so a live score gets the empty state. */}
+      {/* Row C: readiness trend from recorded days; under two of them (or no live score) the empty state. */}
       <div style={{ ...TILE_CARD, marginBottom: 18 }}>
-        <TileHead title="Readiness trend" meta="12 WEEKS" />
+        <TileHead title="Readiness trend" meta={ring.score !== null && trend ? trend.meta : '12 WEEKS'} />
         {ring.score === null ? (
           <div style={{ padding: '20px 20px 22px' }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
@@ -310,6 +331,33 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
                 —
               </span>
               <span style={{ fontSize: 13, color: 'var(--fg-3)' }}>No invoices yet</span>
+            </div>
+          </div>
+        ) : trend ? (
+          <div style={{ padding: '20px 20px 22px' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 14 }}>
+              <span className="money" style={{ fontSize: 26, fontWeight: 700 }}>
+                {trend.now}%
+              </span>
+              <span className="label">{trend.deltaLabel}</span>
+            </div>
+            <svg viewBox="0 0 680 176" width="100%" height="176" preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
+              {trend.grid.map((g) => (
+                <line key={g} x1="0" y1={g} x2="680" y2={g} stroke="var(--line-1)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+              ))}
+              <path d={trend.area} fill="var(--action-tint)" />
+              <path d={trend.line} fill="none" stroke="var(--action)" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <div style={{ position: 'relative', height: 14, marginTop: 10 }}>
+              {trend.months.map((mo) => (
+                <span
+                  key={mo.label + mo.at}
+                  className="mono"
+                  style={{ position: 'absolute', ...(mo.at > 0.9 ? { right: 0 } : { left: `${mo.at * 100}%` }), fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}
+                >
+                  {mo.label}
+                </span>
+              ))}
             </div>
           </div>
         ) : (

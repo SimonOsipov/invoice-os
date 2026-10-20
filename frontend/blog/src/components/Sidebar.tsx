@@ -1,5 +1,6 @@
 import { Icon } from '../icons'
-import { landingHref } from '../links'
+import { trackBlogDemoOpen } from '../analytics'
+import { demoHref } from '../links'
 import type { BlogData } from '../data'
 import { postsOf } from '../model'
 import { Button } from './Button'
@@ -173,8 +174,8 @@ export function Sidebar({ data, homeActive, activeCat, onHome, onCategory, onSub
         })}
       </nav>
       <div style={{ flex: 'none', padding: '14px 16px 16px', borderTop: '1px solid var(--line-1)' }}>
-        <Button variant="outlineDark" size="sm" href={landingHref()} style={{ width: '100%' }}>
-          Go to ascomply.com
+        <Button variant="outlineDark" size="sm" href={demoHref()} onClick={trackBlogDemoOpen} style={{ width: '100%' }}>
+          Book the Demo
         </Button>
         <button
           type="button"

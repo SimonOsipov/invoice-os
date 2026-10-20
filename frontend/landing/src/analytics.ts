@@ -156,9 +156,13 @@ export function trackTourStart(): void {
   send('tour_start', {})
 }
 
-// Blog sender.
+// Blog senders.
 export function trackBlogPageView(): void {
   send('page_view', {})
+}
+
+export function trackBlogDemoOpen(): void {
+  send('demo_open', { cta_location: 'blog' })
 }
 
 export function trackOpenInPlatform(target: { feature_id: string } | { group_id: string }): void {

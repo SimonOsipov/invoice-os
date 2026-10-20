@@ -187,9 +187,9 @@ func TestEveryLibraryViteVariableHasADockerfileArg(t *testing.T) {
 			names[c.name] = true
 		}
 	}
-	// APP, LANDING and BLOG.
-	if len(names) < 3 {
-		t.Fatalf("found %d distinct VITE_* upserts on the library service (%v), want >= 3", len(names), names)
+	// APP and LANDING.
+	if len(names) < 2 {
+		t.Fatalf("found %d distinct VITE_* upserts on the library service (%v), want >= 2", len(names), names)
 	}
 
 	assertViteArgsBeforeBuild(t, "library", names, "RUN pnpm --filter @invoice-os/library build")

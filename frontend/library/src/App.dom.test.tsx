@@ -224,16 +224,12 @@ describe('App', () => {
     expect(links('Open in Platform')).toHaveLength(0)
   })
 
-  it('App_passesBlogHrefToTheSidebar', () => {
+  it('App_rendersNoBlogLink', () => {
     vi.stubEnv('VITE_BLOG_URL', 'https://b.example/')
-    mount('/')
-    expect(links('Blog').map((a) => a.getAttribute('href'))).toEqual(['https://b.example'])
-    act(() => root.unmount())
-    container.remove()
-
-    vi.stubEnv('VITE_BLOG_URL', '')
+    vi.stubEnv('VITE_LANDING_URL', 'https://l.example')
     mount('/')
     expect(links('Blog')).toHaveLength(0)
+    expect(links('Book the Demo').length).toBeGreaterThan(0)
   })
 
   it('featurePath_showsOpenInPlatformOnlyForShippedFeatures', () => {

@@ -52,7 +52,7 @@ buildsha)
 
 models)
   # T-02-1: layout, TableFormer and all three RapidOCR-en checkpoints are present.
-  # Substrings/names traced from the pinned docling-slim==2.123.1 source, not
+  # Substrings/names traced from the pinned docling-slim==2.132.0 source, not
   # guessed: model_downloader.download_models() names its HF snapshot dirs after
   # the repo_id (`docling-project--docling-layout-heron[-onnx]` for layout;
   # `docling-project--docling-models/model_artifacts/tableformer/...` for

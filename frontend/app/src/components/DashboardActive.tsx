@@ -210,11 +210,9 @@ function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
                 <span className="money" style={{ fontSize: 'clamp(22px, 3.2vw, 32px)', fontWeight: 700, margin: '0 0 12px', whiteSpace: 'nowrap' }}>
                   {k.value}
                 </span>
-                <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
-                  <span className="mono" style={{ fontSize: 12, fontWeight: 500, color: k.deltaColor }}>
-                    {k.delta}
-                  </span>
-                </div>
+                <span className="mono" style={{ fontSize: 12, fontWeight: 500, color: k.deltaColor }}>
+                  {k.delta}
+                </span>
               </div>
             </div>
           ))}

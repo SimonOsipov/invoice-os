@@ -4,13 +4,12 @@
 // Structurally mirrors ClientsView.tsx (typed API module + useAsync +
 // no-gateway short-circuit). Markup ported from Platform.dc.html ~L147-310.
 //
-// M4-10 stripped this to three live panels because the rest had no backend
-// source ([hide-sourceless]). All nine are restored by explicit product
-// decision. Which panel is which:
+// Which panel is which:
 //
 //   LIVE (rollup)   needs-attention KPI · invoice-status donut · readiness ring + bars ·
 //                   top validation failures · all four KPI tile VALUES
 //   LIVE (audit)    recent activity (RecentActivityBody)
+//   Readiness trend renders a fixed empty state until recorded history exists.
 //
 // [dashboard-scope-per-client] (persona-handoff-fix step 2): this page is a CLIENT-scoped
 // surface (Sidebar.tsx's CLIENT nav group), so every LIVE panel above scopes to the

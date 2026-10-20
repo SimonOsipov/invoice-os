@@ -5,6 +5,7 @@
 // idiom (single-endpoint mock: DashboardActive fires only getRollup, unlike
 // InvoiceDetail's two concurrent effects).
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useLayoutEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AuditEvent, AuditResponse } from '../lib/audit'
@@ -873,7 +874,7 @@ describe('DashboardActive Recent activity (OVER-01)', () => {
 
   it('in-house requests five rows and no company', async () => {
     const m = mockRollupFetch(rollup(0), auditResponse(fiveEvents()))
-    render(<DashboardActive ctx={dashCtx()} />)
+    render(<DashboardActive ctx={{ ...dashCtx(), active: { entityId: 'ent-1' } } as unknown as PlatformCtx} />)
     await screen.findByText('Invoice created')
 
     const urls = auditUrls(m)
@@ -915,6 +916,29 @@ describe('DashboardActive Recent activity (OVER-01)', () => {
     expect(within(activityTile()).getByText('Loading activity…')).toBeDefined()
     await screen.findByText('New Actor')
     expect(auditUrls(m).map((u) => u.searchParams.get('company'))).toEqual(['ent-1', 'ent-2'])
+  })
+
+  it('no committed frame after a client switch shows the old rows', async () => {
+    mockRollupFetch(rollup(0), byCompany({
+      'ent-1': auditResponse([auditEvent({ id: 'a', actor_name: 'Old Actor' })]),
+      'ent-2': auditResponse([auditEvent({ id: 'b', actor_name: 'New Actor' })]),
+    }))
+    const frames: string[] = []
+    // Sibling layout effects run in the commit, after the DOM is mutated and before any paint.
+    const Probe = () => {
+      useLayoutEffect(() => { frames.push(document.body.textContent ?? '') })
+      return null
+    }
+    const ui = (id: string) => <><DashboardActive ctx={firmWith(id)} /><Probe /></>
+    const { rerender } = render(ui('ent-1'))
+    await screen.findByText('Old Actor')
+
+    frames.length = 0
+    rerender(ui('ent-2'))
+    await screen.findByText('New Actor')
+
+    expect(frames.length).toBeGreaterThan(0)
+    expect(frames[0]).not.toContain('Old Actor')
   })
 
   it('a late response for the old client is dropped', async () => {

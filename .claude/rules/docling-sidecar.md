@@ -14,7 +14,9 @@ paths:
 - Install the CPU torch wheel from the PyTorch CPU index. Torch is unavoidable and the CPU wheel drops the CUDA payload.
 - Bake every model into the image at build time. The image runs with `--network none`.
 - Fetch the RapidOCR checkpoints with `fetch_rapidocr_models.py`, not Docling's own prefetch. It verifies SHA-256.
-- Name `DoclingParseV4DocumentBackend` explicitly in `convert.py`. The default v1 backend returns zero tokens for a scan.
+- Render PDF page images through pypdfium2 (`PdfiumImageBackend` in `convert.py`). docling-parse paints a `/RunLengthDecode` image blank, and OCR then reads nothing.
+- Keep `pypdfium2` pinned in `requirements.txt`. It renders every image that OCR and the layout model read.
+- Split a line cell at a word gap wider than `SPLIT_GAP_HEIGHTS` line heights. docling-parse 7.21+ joins a label and its value up to 4 character advances apart.
 - Keep `test_backend.py` green. It locks the backend and asserts a scanned page reaches the wire with text.
 - Add no Surya or olmOCR weights.
 - Normalise every table box in `geometry.py` by its own `coord_origin` to a top-left `[0,1]` box.

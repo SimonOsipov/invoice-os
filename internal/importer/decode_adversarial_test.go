@@ -9,9 +9,18 @@
 package importer
 
 import (
+	"archive/zip"
 	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/xuri/excelize/v2"
@@ -22,7 +31,7 @@ import (
 func TestDecode_HeaderOnlyCSVNoDataRows(t *testing.T) {
 	fixture := []byte("invoice_number,total,buyer_name\n")
 
-	header, rows, _, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, _, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err != nil {
 		t.Fatalf("Decode: %v, want no error for a header-only CSV", err)
 	}
@@ -36,7 +45,7 @@ func TestDecode_HeaderOnlyCSVNoDataRows(t *testing.T) {
 // encoding/csv.ReadAll on a fully empty reader returns (nil, nil), so Decode
 // returns an empty header, empty rows, and no error.
 func TestDecode_EmptyInputNoPanic(t *testing.T) {
-	header, rows, facts, err := Decode(bytes.NewReader(nil), "csv")
+	header, rows, facts, err := Decode(context.Background(), bytes.NewReader(nil), "csv")
 	if err != nil {
 		t.Fatalf("Decode(empty input): %v, want no error", err)
 	}
@@ -57,7 +66,7 @@ func TestDecode_EmptyInputNoPanic(t *testing.T) {
 func TestDecode_QuotedFieldContainingDelimiterRespected(t *testing.T) {
 	fixture := []byte("buyer_name,total,invoice_number\n" + `"Shoprite, Inc.",100.00,INV-1` + "\n")
 
-	header, rows, facts, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, facts, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -75,7 +84,7 @@ func TestDecode_QuotedFieldContainingDelimiterRespected(t *testing.T) {
 func TestDecode_CRLFLineEndingsNoStrayCR(t *testing.T) {
 	fixture := []byte("invoice_number,total\r\nINV-1,100.00\r\nINV-2,200.00\r\n")
 
-	header, rows, _, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, _, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -108,7 +117,7 @@ func TestDecode_UTF16BEBOMDecodesSameAsUTF8Twin(t *testing.T) {
 	wantHeader := []string{"invoice_number", "total"}
 	wantRows := [][]string{{"INV-1", "100.00"}}
 
-	header, rows, facts, err := Decode(bytes.NewReader(utf16Fixture), "csv")
+	header, rows, facts, err := Decode(context.Background(), bytes.NewReader(utf16Fixture), "csv")
 	if err != nil {
 		t.Fatalf("Decode(utf16BEFixture): %v", err)
 	}
@@ -125,7 +134,7 @@ func TestDecode_UTF16BEBOMDecodesSameAsUTF8Twin(t *testing.T) {
 func TestDecode_DelimiterSniffPicksSemicolonDespiteEmbeddedComma(t *testing.T) {
 	fixture := []byte("Buyer, Ltd;total;invoice_number\nAcme Inc;100.00;INV-1\n")
 
-	header, rows, facts, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, facts, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -170,7 +179,7 @@ func TestDecode_XLSXOnlyFirstSheetDecoded(t *testing.T) {
 		t.Fatalf("WriteToBuffer: %v", err)
 	}
 
-	header, rows, _, err := Decode(bytes.NewReader(buf.Bytes()), "xlsx")
+	header, rows, _, err := Decode(context.Background(), bytes.NewReader(buf.Bytes()), "xlsx")
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -193,7 +202,7 @@ func TestDecode_XLSXOnlyFirstSheetDecoded(t *testing.T) {
 // expected to detect format upstream, but Decode must still be defensive.
 func TestDecode_UnknownFormatReturnsError(t *testing.T) {
 	for _, format := range []string{"", "pdf"} {
-		header, rows, facts, err := Decode(bytes.NewReader([]byte("a,b\n1,2\n")), format)
+		header, rows, facts, err := Decode(context.Background(), bytes.NewReader([]byte("a,b\n1,2\n")), format)
 		if err == nil {
 			t.Errorf("Decode(format=%q): err = nil, want a clear error for an unsupported format", format)
 		}
@@ -227,7 +236,7 @@ func TestDecode_XLSXUnzipSizeLimitEnforced(t *testing.T) {
 	maxXLSXUnzipBytes = 16 // far below even a minimal workbook's real uncompressed size
 	defer func() { maxXLSXUnzipBytes = original }()
 
-	if _, _, _, err := Decode(bytes.NewReader(fixture), "xlsx"); err == nil {
+	if _, _, _, err := Decode(context.Background(), bytes.NewReader(fixture), "xlsx"); err == nil {
 		t.Fatal("Decode: err = nil, want an unzip-size-limit error once maxXLSXUnzipBytes is set below the workbook's real uncompressed size")
 	}
 }
@@ -250,7 +259,7 @@ func TestDecode_DelimiterSniffPicksSemicolonDespiteMoreCommasInsideQuotedFields(
 	fixture := []byte(`"Buyer, Inc, Ltd";"Address, Line, Two";total` + "\n" +
 		`"Acme, Global, Corp";"1 Main, St, Suite 2";100.00` + "\n")
 
-	header, rows, facts, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, facts, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -282,7 +291,7 @@ func TestDecode_DelimiterSniffPicksSemicolonDespiteMoreCommasInsideQuotedFields(
 func TestDecode_CleanHeaderGarbageDataRejected(t *testing.T) {
 	fixture := []byte("a,b\nfoo,\x01bar\n")
 
-	header, rows, _, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, _, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err == nil {
 		t.Fatalf("Decode: err = nil, want a decode error for a data cell containing raw control byte 0x01 (header=%#v rows=%#v)", header, rows)
 	}
@@ -297,7 +306,7 @@ func TestDecode_CleanHeaderGarbageDataRejected(t *testing.T) {
 func TestDecode_NULByteRejected(t *testing.T) {
 	fixture := []byte("a,b\nfoo,\x00bar\n")
 
-	header, rows, _, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, _, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err == nil {
 		t.Fatalf("Decode: err = nil, want a decode error for a data cell containing a NUL byte (header=%#v rows=%#v)", header, rows)
 	}
@@ -318,7 +327,7 @@ func TestDecode_UTF16LENoBOMRejectedViaGate(t *testing.T) {
 		raw = append(raw, b, 0x00)
 	}
 
-	header, rows, _, err := Decode(bytes.NewReader(raw), "csv")
+	header, rows, _, err := Decode(context.Background(), bytes.NewReader(raw), "csv")
 	if err == nil {
 		t.Fatalf("Decode: err = nil, want a decode error for BOM-less UTF-16LE content (embedded NUL bytes) (header=%#v rows=%#v)", header, rows)
 	}
@@ -331,7 +340,7 @@ func TestDecode_UTF16LENoBOMRejectedViaGate(t *testing.T) {
 func TestDecode_TabDelimitedCRLFNotRejected(t *testing.T) {
 	fixture := []byte("a\tb\r\n1\t2\r\n")
 
-	header, rows, facts, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, facts, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err != nil {
 		t.Fatalf("Decode: %v, want no error -- tab delimiter and CRLF line endings must never be rejected by the control-byte gate", err)
 	}
@@ -406,7 +415,7 @@ func TestDecode_C0BoundaryPrecise(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			header, rows, _, err := Decode(bytes.NewReader(tt.fixture), "csv")
+			header, rows, _, err := Decode(context.Background(), bytes.NewReader(tt.fixture), "csv")
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("Decode: err = nil, want a decode error (header=%#v rows=%#v)", header, rows)
@@ -436,7 +445,7 @@ func TestDecode_C0BoundaryPrecise(t *testing.T) {
 func TestDecode_DELByteNotRejected(t *testing.T) {
 	fixture := []byte("a,b\nfoo,\x7fbar\n")
 
-	header, rows, _, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, _, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err != nil {
 		t.Fatalf("Decode: %v, want no error -- DEL (0x7F) is out of [reject-byte-scope] (below 0x20 only)", err)
 	}
@@ -454,7 +463,7 @@ func TestDecode_DELByteNotRejected(t *testing.T) {
 func TestDecode_GateFiresOnUTF8BOMBranch(t *testing.T) {
 	fixture := append([]byte{0xEF, 0xBB, 0xBF}, []byte("a,b\nfoo,\x00bar\n")...)
 
-	header, rows, _, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, _, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err == nil {
 		t.Fatalf("Decode: err = nil, want a decode error -- a NUL byte after a stripped UTF-8 BOM must still be rejected (header=%#v rows=%#v)", header, rows)
 	}
@@ -477,7 +486,7 @@ func TestDecode_GateFiresOnWindows1252FallbackBranch(t *testing.T) {
 		t.Fatalf("test fixture setup: fixture is valid UTF-8, want invalid so Decode routes to the Windows-1252 fallback branch")
 	}
 
-	header, rows, _, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, _, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err == nil {
 		t.Fatalf("Decode: err = nil, want a decode error -- 0x01 survives the Windows-1252 fallback decode unchanged and must still be rejected (header=%#v rows=%#v)", header, rows)
 	}
@@ -494,7 +503,7 @@ func TestDecode_GateFiresOnWindows1252FallbackBranch(t *testing.T) {
 // nothing is the one input shape most likely to be broken by an off-by-one
 // in a hand-rolled byte-scan loop).
 func TestDecode_EmptyInputNotRejectedByGate(t *testing.T) {
-	header, rows, facts, err := Decode(bytes.NewReader(nil), "csv")
+	header, rows, facts, err := Decode(context.Background(), bytes.NewReader(nil), "csv")
 	if err != nil {
 		t.Fatalf("Decode(empty input): %v, want no error -- the gate must not fire on an empty byte slice", err)
 	}
@@ -520,7 +529,7 @@ func TestDecode_EmptyInputNotRejectedByGate(t *testing.T) {
 func TestDecode_AllWhitelistedControlsAccepted(t *testing.T) {
 	fixture := []byte("a,b\n\"foo\nbar\",baz\n")
 
-	header, rows, _, err := Decode(bytes.NewReader(fixture), "csv")
+	header, rows, _, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err != nil {
 		t.Fatalf("Decode: %v, want no error -- an embedded LF inside a quoted field must not be rejected", err)
 	}
@@ -529,4 +538,322 @@ func TestDecode_AllWhitelistedControlsAccepted(t *testing.T) {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
 	}
 	assertHeader(t, rows[0], []string{"foo\nbar", "baz"})
+}
+
+// withSheetXML rewrites xl/worksheets/sheet1.xml inside the xlsx zip.
+func withSheetXML(t *testing.T, xlsx []byte, edit func(string) string) []byte {
+	t.Helper()
+	zr, err := zip.NewReader(bytes.NewReader(xlsx), int64(len(xlsx)))
+	if err != nil {
+		t.Fatalf("open zip: %v", err)
+	}
+	var out bytes.Buffer
+	zw := zip.NewWriter(&out)
+	for _, f := range zr.File {
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatalf("open %s: %v", f.Name, err)
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatalf("read %s: %v", f.Name, err)
+		}
+		if f.Name == "xl/worksheets/sheet1.xml" {
+			data = []byte(edit(string(data)))
+		}
+		w, err := zw.Create(f.Name)
+		if err != nil {
+			t.Fatalf("create %s: %v", f.Name, err)
+		}
+		if _, err := w.Write(data); err != nil {
+			t.Fatalf("write %s: %v", f.Name, err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close zip: %v", err)
+	}
+	return out.Bytes()
+}
+
+// An empty <row r="N"> past Excel's 1,048,576 limit must be refused fast
+// (GHSA-jw42); v2.11.0 materialised 5M rows and ~700 MB instead.
+func TestXLSXRows_RowPastTheExcelLimitIsRefusedFast(t *testing.T) {
+	for _, tc := range []struct{ name, row string }{
+		{"five_million", "5000000"},
+		{"first_past_limit", "1048577"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := buildXLSX(t, func(f *excelize.File, sheet string) {
+				if err := f.SetCellValue(sheet, "A1", "x"); err != nil {
+					t.Fatalf("SetCellValue: %v", err)
+				}
+			})
+			crafted := withSheetXML(t, base, func(x string) string {
+				return strings.Replace(x, "</sheetData>", `<row r="`+tc.row+`"></row></sheetData>`, 1)
+			})
+
+			start := time.Now()
+			_, err := xlsxRows(context.Background(), bytes.NewReader(crafted), 1)
+			elapsed := time.Since(start)
+
+			if !errors.Is(err, excelize.ErrMaxRows) {
+				t.Fatalf("err = %v, want excelize.ErrMaxRows", err)
+			}
+			if elapsed >= time.Second {
+				t.Errorf("refusal took %v, want < 1s", elapsed)
+			}
+		})
+	}
+}
+
+// cellsAt builds a workbook with "x" at each named cell.
+func cellsAt(t *testing.T, cells ...string) []byte {
+	t.Helper()
+	return buildXLSX(t, func(f *excelize.File, sheet string) {
+		for _, c := range cells {
+			mustSetCellValue(t, f, sheet, c, "x")
+		}
+	})
+}
+
+func TestXLSXRows_StopsPastTheRowCap(t *testing.T) {
+	_, err := xlsxRows(context.Background(), bytes.NewReader(cellsAt(t, "A1", "A100002")), 1)
+	if !errors.Is(err, ErrTooManyRows) {
+		t.Fatalf("err = %v, want ErrTooManyRows", err)
+	}
+}
+
+func TestXLSXRows_AcceptsExactlyTheRowCap(t *testing.T) {
+	rows, err := xlsxRows(context.Background(), bytes.NewReader(cellsAt(t, "A1", "A100001")), 1)
+	if err != nil {
+		t.Fatalf("err = %v, want nil at exactly %d data rows", err, maxXLSXDataRows)
+	}
+	if len(rows) != maxXLSXDataRows+1 {
+		t.Errorf("rows = %d, want %d", len(rows), maxXLSXDataRows+1)
+	}
+}
+
+func TestDecodeFrom_RowCapCountsDataRowsBelowTheHeader(t *testing.T) {
+	_, rows, _, err := DecodeFrom(context.Background(), bytes.NewReader(cellsAt(t, "A3", "A100003")), "xlsx", 3)
+	if err != nil {
+		t.Fatalf("100,000 data rows under header row 3: err = %v, want nil", err)
+	}
+	if len(rows) != maxXLSXDataRows {
+		t.Errorf("rows = %d, want %d", len(rows), maxXLSXDataRows)
+	}
+	_, _, _, err = DecodeFrom(context.Background(), bytes.NewReader(cellsAt(t, "A3", "A100004")), "xlsx", 3)
+	if !errors.Is(err, ErrTooManyRows) {
+		t.Errorf("100,001 data rows: err = %v, want ErrTooManyRows", err)
+	}
+}
+
+func TestXLSXRows_GapRowsCountTowardTheCap(t *testing.T) {
+	crafted := withSheetXML(t, cellsAt(t, "A1"), func(x string) string {
+		return strings.Replace(x, "</sheetData>", `<row r="1048576"></row></sheetData>`, 1)
+	})
+	_, err := xlsxRows(context.Background(), bytes.NewReader(crafted), 1)
+	if !errors.Is(err, ErrTooManyRows) {
+		t.Fatalf("err = %v, want ErrTooManyRows", err)
+	}
+}
+
+func TestXLSXRows_EmptyAndHeaderOnlySheetsPassTheNewLoop(t *testing.T) {
+	header, rows, _, err := Decode(context.Background(), bytes.NewReader(cellsAt(t)), "xlsx")
+	if err != nil || header != nil || rows != nil {
+		t.Errorf("empty sheet: header=%v rows=%v err=%v, want nil, nil, nil", header, rows, err)
+	}
+	header, rows, _, err = Decode(context.Background(), bytes.NewReader(cellsAt(t, "A1")), "xlsx")
+	if err != nil || !reflect.DeepEqual(header, []string{"x"}) || rows != nil {
+		t.Errorf("header-only sheet: header=%v rows=%v err=%v, want [x], nil, nil", header, rows, err)
+	}
+}
+
+func TestXLSXRows_StopsAtTheDecodeDeadline(t *testing.T) {
+	defer func(d time.Duration) { xlsxDecodeTimeout = d }(xlsxDecodeTimeout)
+	xlsxDecodeTimeout = time.Nanosecond
+	_, err := xlsxRows(context.Background(), bytes.NewReader(tenRowBook(t)), 1)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+func tenRowBook(t *testing.T) []byte {
+	t.Helper()
+	cells := make([]string, 10)
+	for i := range cells {
+		cells[i] = fmt.Sprintf("A%d", i+1)
+	}
+	return cellsAt(t, cells...)
+}
+
+func TestXLSXRows_DeadlineStopsDecodeMidSheet(t *testing.T) {
+	const nRows, nCols = 50_000, 15
+	f := excelize.NewFile()
+	sw, err := f.NewStreamWriter("Sheet1")
+	if err != nil {
+		t.Fatalf("NewStreamWriter: %v", err)
+	}
+	vals := make([]any, nCols)
+	for c := range vals {
+		vals[c] = "cell value"
+	}
+	for r := 1; r <= nRows; r++ {
+		cell, _ := excelize.CoordinatesToCellName(1, r)
+		if err := sw.SetRow(cell, vals); err != nil {
+			t.Fatalf("SetRow: %v", err)
+		}
+	}
+	if err := sw.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	buf, err := f.WriteToBuffer()
+	if err != nil {
+		t.Fatalf("WriteToBuffer: %v", err)
+	}
+
+	start := time.Now()
+	if _, err := xlsxRows(context.Background(), bytes.NewReader(buf.Bytes()), 1); err != nil {
+		t.Fatalf("full decode: %v", err)
+	}
+	full := time.Since(start)
+
+	defer func(d time.Duration) { xlsxDecodeTimeout = d }(xlsxDecodeTimeout)
+	xlsxDecodeTimeout = max(full/20, time.Millisecond)
+	start = time.Now()
+	_, err = xlsxRows(context.Background(), bytes.NewReader(buf.Bytes()), 1)
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed > 2*full+10*time.Second {
+		t.Errorf("deadline run took %v, full decode %v: hang", elapsed, full)
+	}
+}
+
+// wideRowsBook has n rows, each holding one cell in column col, so Columns pads every row to col strings.
+func wideRowsBook(t *testing.T, n, col int) []byte {
+	t.Helper()
+	name, err := excelize.ColumnNumberToName(col)
+	if err != nil {
+		t.Fatalf("ColumnNumberToName: %v", err)
+	}
+	var sb strings.Builder
+	for r := 1; r <= n; r++ {
+		fmt.Fprintf(&sb, `<row r="%d"><c r="%s%d"><v>1</v></c></row>`, r, name, r)
+	}
+	return withSheetXML(t, cellsAt(t, "A1"), func(x string) string {
+		i := strings.Index(x, "<sheetData")
+		j := strings.Index(x, "</sheetData>")
+		return x[:i] + "<sheetData>" + sb.String() + x[j:]
+	})
+}
+
+func TestXLSXRows_PaddedCellsAreBudgeted(t *testing.T) {
+	start := time.Now()
+	_, err := xlsxRows(context.Background(), bytes.NewReader(wideRowsBook(t, 1_000, 16384)), 1)
+	if !errors.Is(err, ErrTooManyCells) {
+		t.Fatalf("XFD rows: err = %v, want ErrTooManyCells", err)
+	}
+	if elapsed := time.Since(start); elapsed > 20*time.Second {
+		t.Errorf("refusal took %v, want fast", elapsed)
+	}
+	if msg := decodeErrorMessage(err); msg == "" || msg == "could not decode uploaded file" {
+		t.Errorf("message = %q, want the cell-budget sentence", msg)
+	}
+}
+
+func TestXLSXRows_SheetJustUnderTheCellBudgetPasses(t *testing.T) {
+	const col = 1000
+	rows, err := xlsxRows(context.Background(), bytes.NewReader(wideRowsBook(t, maxXLSXCells/col, col)), 1)
+	if err != nil {
+		t.Fatalf("err = %v, want nil at exactly %d cells", err, maxXLSXCells)
+	}
+	if len(rows) != maxXLSXCells/col {
+		t.Errorf("rows = %d, want %d", len(rows), maxXLSXCells/col)
+	}
+	_, err = xlsxRows(context.Background(), bytes.NewReader(wideRowsBook(t, maxXLSXCells/col+1, col)), 1)
+	if !errors.Is(err, ErrTooManyCells) {
+		t.Errorf("one row past the budget: err = %v, want ErrTooManyCells", err)
+	}
+}
+
+func TestXLSXRows_XFDRowsAreRefusedFastWithoutLargeAllocation(t *testing.T) {
+	book := wideRowsBook(t, 100_000, 16384)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	start := time.Now()
+	_, err := xlsxRows(context.Background(), bytes.NewReader(book), 1)
+	elapsed := time.Since(start)
+	runtime.ReadMemStats(&after)
+	if !errors.Is(err, ErrTooManyCells) {
+		t.Fatalf("err = %v, want ErrTooManyCells", err)
+	}
+	if elapsed > 20*time.Second {
+		t.Errorf("refusal took %v, want fast", elapsed)
+	}
+	// Reading all 100,000 padded rows would allocate ~26 GiB.
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > 2<<30 {
+		t.Errorf("allocated %d MiB before refusing, want < 2048", grew>>20)
+	}
+}
+
+func TestXLSXRows_Legitimate100kRowSheetsPassTheCellBudget(t *testing.T) {
+	const rows = 100_000
+	for _, cols := range []int{15, 50} {
+		got, err := xlsxRows(context.Background(), bytes.NewReader(wideRowsBook(t, rows, cols)), 1)
+		if err != nil || len(got) != rows {
+			t.Fatalf("%d x %d: rows = %d, err = %v, want pass", rows, cols, len(got), err)
+		}
+	}
+	_, err := xlsxRows(context.Background(), bytes.NewReader(wideRowsBook(t, rows, 51)), 1)
+	if !errors.Is(err, ErrTooManyCells) {
+		t.Errorf("51 columns: err = %v, want ErrTooManyCells", err)
+	}
+}
+
+func TestXLSXRows_RowCapHoldsForAnyHeaderRow(t *testing.T) {
+	book := cellsAt(t, "A1", "A250000")
+	for _, hr := range []int{1_048_576, math.MaxInt} {
+		start := time.Now()
+		_, err := xlsxRows(context.Background(), bytes.NewReader(book), hr)
+		if !errors.Is(err, ErrTooManyRows) {
+			t.Errorf("header_row %d: err = %v, want ErrTooManyRows", hr, err)
+		}
+		if elapsed := time.Since(start); elapsed > 20*time.Second {
+			t.Errorf("header_row %d took %v", hr, elapsed)
+		}
+	}
+	_, _, _, err := DecodeFrom(context.Background(), bytes.NewReader(cellsAt(t, "A1", "A150")), "xlsx", math.MaxInt)
+	if !errors.Is(err, ErrHeaderRowPastEnd) {
+		t.Errorf("short sheet, MaxInt: err = %v, want ErrHeaderRowPastEnd", err)
+	}
+}
+
+func TestXLSXRows_NonRowTokensAreBoundedByTheUnzipLimit(t *testing.T) {
+	crafted := withSheetXML(t, cellsAt(t, "A1"), func(x string) string {
+		return strings.Replace(x, "</sheetData>", strings.Repeat("<x/>", 10<<20)+"</sheetData>", 1)
+	})
+	defer func(n int64) { maxXLSXUnzipBytes = n }(maxXLSXUnzipBytes)
+	maxXLSXUnzipBytes = 32 << 20
+	_, err := xlsxRows(context.Background(), bytes.NewReader(crafted), 1)
+	if err == nil || !strings.Contains(err.Error(), "unzip size exceeds") {
+		t.Fatalf("err = %v, want the unzip-limit error for 40 MiB of non-row tokens", err)
+	}
+}
+
+func TestXLSXRows_StopsWhenTheCallerIsGone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := xlsxRows(ctx, bytes.NewReader(tenRowBook(t)), 1)
+	if !errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.Canceled only", err)
+	}
+}
+
+func TestXLSXRows_DecodesWithinTheDeadline(t *testing.T) {
+	rows, err := xlsxRows(context.Background(), bytes.NewReader(tenRowBook(t)), 1)
+	if err != nil || len(rows) != 10 {
+		t.Fatalf("rows=%d err=%v, want 10, nil", len(rows), err)
+	}
 }

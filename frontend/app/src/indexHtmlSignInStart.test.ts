@@ -1,5 +1,5 @@
-// Runs the inline script(s) of the real index.html against a fake window. A fake location
-// is used because jsdom's location.replace cannot be spied.
+// Runs the inline script(s) of the real index.html in a vm context with a fake location
+// (jsdom's location.replace cannot be spied).
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import vm from 'node:vm'

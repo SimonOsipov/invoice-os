@@ -819,3 +819,12 @@ func TestIgnore_HeaderTrailingCommentIsAccepted(t *testing.T) {
 }
 
 func init() { lookupBackoff = time.Millisecond }
+
+func TestCounted_HighLookupAfterModerateLookupStillCounts(t *testing.T) {
+	raw := synth(nil, grp{ids: []string{"PYSEC-1"}, aliases: []string{"GHSA-aaaa-aaaa-aaaa", "GHSA-bbbb-bbbb-bbbb"}, max: "0"})
+	answers := map[string]string{"GHSA-aaaa-aaaa-aaaa": "MODERATE", "GHSA-bbbb-bbbb-bbbb": "HIGH"}
+	lookup := func(id string) (string, error) { return answers[id], nil }
+	if got := countedIDs(t, raw, lookup); len(got) != 1 {
+		t.Fatalf("a HIGH lookup after a MODERATE one must count, got %v", got)
+	}
+}

@@ -328,7 +328,7 @@ func TestBackfill_XLSXGapRowDoesNotShiftRecoveredRowNumbers(t *testing.T) {
 		mkRow("GAP-2", "2026-01-11", "TIN-2", "Buyer B", "NGN", "200.00", "20.00", "220.00", "Item B", "1", "200.00"),
 	}
 	xlsxBytes := xlsxBody(t, stdHeader, rows)
-	_, decodedRows, _, err := Decode(bytes.NewReader(xlsxBytes), "xlsx")
+	_, decodedRows, _, err := Decode(context.Background(), bytes.NewReader(xlsxBytes), "xlsx")
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -498,7 +498,7 @@ func TestBackfill_RowNumberingMatchesImporterAcrossBlankLinesAndQuotedNewlines(t
 	row2 := mkRow("INV-MULTI", "2026-01-12", "TIN-2", "Buyer B", "NGN", "200.00", "20.00", "220.00", "Multi\nLine", "1", "200.00")
 	content := multilineCSVBytes(t, stdHeader, row1, row2)
 
-	_, decodedRows, _, err := Decode(bytes.NewReader(content), "csv")
+	_, decodedRows, _, err := Decode(context.Background(), bytes.NewReader(content), "csv")
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -527,5 +527,20 @@ func TestBackfill_RowNumberingMatchesImporterAcrossBlankLinesAndQuotedNewlines(t
 	}
 	if got := sourceRowsOf(t, super, invMulti); !intSliceEqual(got, want) {
 		t.Errorf("source_rows = %v, want %v (the importer's own recorded range)", got, want)
+	}
+}
+
+func TestDecodeStoredDocument_PassesItsContextToTheDecode(t *testing.T) {
+	book := cellsAt(t, "A1", "A2")
+	open := newFakeDocOpen("d.xlsx", xlsxContentType, book)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := decodeStoredDocument(ctx, open.fn(), open.doc.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled ctx: err = %v, want context.Canceled", err)
+	}
+	open = newFakeDocOpen("d.xlsx", xlsxContentType, book)
+	rows, err := decodeStoredDocument(context.Background(), open.fn(), open.doc.ID)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("live ctx: rows=%d err=%v, want 1 data row, nil", len(rows), err)
 	}
 }

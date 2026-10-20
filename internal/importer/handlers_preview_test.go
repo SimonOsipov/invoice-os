@@ -555,7 +555,7 @@ func TestPreviewHandler_ColumnsRowsTotalMatchDirectDecode(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, raw)
 	}
 
-	wantHeader, wantRows, _, err := Decode(bytes.NewReader(fixture), "csv")
+	wantHeader, wantRows, _, err := Decode(context.Background(), bytes.NewReader(fixture), "csv")
 	if err != nil {
 		t.Fatalf("direct Decode of the same fixture bytes: %v", err)
 	}

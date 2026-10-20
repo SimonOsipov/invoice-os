@@ -3,6 +3,7 @@ package importer
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"go/format"
 	"io/fs"
@@ -427,11 +428,11 @@ func TestGuardPlacements_FakeBlankAnswerPlacesNothing(t *testing.T) {
 func TestGuardPlacements_PlacesOnlyNamesPresentInTheHeaderItIsGiven(t *testing.T) {
 	csvBytes := []byte("InvA,BuyA\nTitle Row\nInvB;BuyB\n1;2\n")
 
-	header1, _, _, err := Decode(bytes.NewReader(csvBytes), "csv")
+	header1, _, _, err := Decode(context.Background(), bytes.NewReader(csvBytes), "csv")
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
-	header3, _, _, err := DecodeFrom(bytes.NewReader(csvBytes), "csv", 3)
+	header3, _, _, err := DecodeFrom(context.Background(), bytes.NewReader(csvBytes), "csv", 3)
 	if err != nil {
 		t.Fatalf("DecodeFrom: %v", err)
 	}

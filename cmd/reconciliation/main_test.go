@@ -148,3 +148,74 @@ func TestReconciliationMain_TicksTheCustomRuleRecheck(t *testing.T) {
 	}
 	t.Errorf("the pending revision was not marked within 20s of boot\n%s", out.String())
 }
+
+// A booted binary writes the day's rollup snapshot. The run enumerates the whole dev DB, so rows for other tenants are expected.
+func TestReconciliationMain_SnapshotsAtBoot(t *testing.T) {
+	appURL, adminURL, readerURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_SUPERUSER_URL"), os.Getenv("DATABASE_READER_URL")
+	if appURL == "" || adminURL == "" || readerURL == "" {
+		t.Skip("reconciliation boot test skipped: set DATABASE_URL, DATABASE_READER_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+	}
+	admin, err := pgxpool.New(t.Context(), adminURL)
+	if err != nil {
+		t.Fatalf("superuser pool: %v", err)
+	}
+	t.Cleanup(admin.Close)
+	tenant := uuid.NewString()
+	if _, err := admin.Exec(t.Context(), `INSERT INTO tenants (id, name, kind) VALUES ($1, 'OVER-03-02 snapshot wiring', 'firm')`, tenant); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() { _, _ = admin.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant) })
+	var entity string
+	if err := admin.QueryRow(t.Context(),
+		`INSERT INTO business_entities (tenant_id, name) VALUES ($1, 'Snapshot wiring client') RETURNING id`, tenant).Scan(&entity); err != nil {
+		t.Fatalf("seed entity: %v", err)
+	}
+	if _, err := admin.Exec(t.Context(),
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number) VALUES ($1, $2, 'OVER-03-02-1')`, tenant, entity); err != nil {
+		t.Fatalf("seed invoice: %v", err)
+	}
+
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) }))
+	t.Cleanup(down.Close)
+	var out bytes.Buffer
+	cmd := exec.Command(buildReconciliation(t))
+	cmd.Env = []string{"HOME=" + os.Getenv("HOME"), "PORT=" + strconv.Itoa(freePort(t)),
+		"DATABASE_URL=" + appURL, "DATABASE_READER_URL=" + readerURL,
+		"VALIDATION_URL=" + down.URL, "S2S_TOKEN=tok"}
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start reconciliation: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		_ = cmd.Wait()
+	})
+
+	// WAT is UTC+1 all year; computed here so the test does not lean on dashboard.WATDay.
+	wat := time.FixedZone("WAT", 3600)
+	before := time.Now().In(wat).Format(time.DateOnly)
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		var days []string
+		rows, err := admin.Query(t.Context(), `SELECT to_char(day, 'YYYY-MM-DD') FROM rollup_snapshots WHERE tenant_id = $1 AND entity_id = $2`, tenant, entity)
+		if err != nil {
+			t.Fatalf("read rollup_snapshots: %v", err)
+		}
+		for rows.Next() {
+			var d string
+			if err := rows.Scan(&d); err != nil {
+				t.Fatalf("scan day: %v", err)
+			}
+			days = append(days, d)
+		}
+		rows.Close()
+		after := time.Now().In(wat).Format(time.DateOnly)
+		for _, d := range days {
+			if d == before || d == after {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Errorf("no rollup_snapshots row for the entity and today's WAT day within 20s of boot\n%s", out.String())
+}

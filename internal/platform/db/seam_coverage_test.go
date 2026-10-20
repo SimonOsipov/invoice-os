@@ -710,6 +710,7 @@ func (e scCoreExemption) covers(s scCoreSite) bool {
 var scCoreAllowlist = []scCoreExemption{
 	{pkg: "internal/submission"},                                                           // River job workers; the job row carries its tenant and there is no request identity to gate
 	{pkg: "internal/reconciliation"},                                                       // the sweep worker, same shape: a schedule opened it, not a caller
+	{file: "internal/dashboard/snapshot.go", fn: "RunOnce"},                                // the daily snapshot ticker in cmd/reconciliation; a schedule opened it, not a caller
 	{pkg: "internal/demodocs"},                                                             // boot-time document seeder; it runs to completion before the first request is served
 	{pkg: "internal/demopolicy"},                                                           // boot-time approval-policy seeder, on the same pre-request boot phase
 	{file: "internal/extraction/store.go"},                                                 // the extraction worker's store; a River job carries its own tenant and there is no request identity to gate
@@ -1024,6 +1025,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/memberships":                                 {verdict: scCovered},
 	"GET /v1/ping":                                        {verdict: scExempt, reason: "a liveness echo; it opens no transaction and reads no table"},
 	"GET /v1/rollup":                                      {verdict: scCovered},
+	"GET /v1/rollup/history":                              {verdict: scCovered},
 	"GET /v1/workflow-roles":                              {verdict: scCovered},
 	"OPTIONS /auth/console-handoff":                       {verdict: scExempt, reason: "no database; in-process code store"},
 	"OPTIONS /auth/exchange":                              {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},

@@ -34,7 +34,7 @@ func importGreenFixture(t *testing.T, path, tenantLabel, entityName string) (res
 	if err != nil {
 		t.Fatalf("read fixture %s: %v", path, err)
 	}
-	header, rows, _, err := Decode(bytes.NewReader(data), "csv")
+	header, rows, _, err := Decode(context.Background(), bytes.NewReader(data), "csv")
 	if err != nil {
 		t.Fatalf("Decode %s: %v", path, err)
 	}

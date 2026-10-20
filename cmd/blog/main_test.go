@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
@@ -97,4 +100,89 @@ func TestRun_LetsAnInFlightRequestFinishWhenTheContextIsCancelled(t *testing.T) 
 	if err := <-runErr; err != nil {
 		t.Errorf("run: %v", err)
 	}
+}
+
+func TestRun_BlogServerCutsStalledAndIdleConnections(t *testing.T) {
+	const bound = 10 * time.Second
+	lower := func(t *testing.T, d *time.Duration) {
+		r, w, i := platform.ServerReadTimeout, platform.ServerWriteTimeout, platform.ServerIdleTimeout
+		t.Cleanup(func() { platform.ServerReadTimeout, platform.ServerWriteTimeout, platform.ServerIdleTimeout = r, w, i })
+		*d = 200 * time.Millisecond
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /ping", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
+	mux.HandleFunc("POST /body", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			http.Error(w, "read: "+err.Error(), http.StatusBadRequest)
+		}
+	})
+	mux.HandleFunc("GET /slow", func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(3 * time.Second)
+		_, _ = io.WriteString(w, "late")
+	})
+	start := func(t *testing.T) net.Conn {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- run(ctx, ln, mux, 5*time.Second) }()
+		t.Cleanup(func() { cancel(); <-done })
+		c, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		_ = c.SetDeadline(time.Now().Add(bound))
+		return c
+	}
+	timedOut := func(err error) bool {
+		var ne net.Error
+		return errors.As(err, &ne) && ne.Timeout()
+	}
+
+	t.Run("stalled_body", func(t *testing.T) {
+		lower(t, &platform.ServerReadTimeout)
+		c := start(t)
+		began := time.Now()
+		_, _ = io.WriteString(c, "POST /body HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\n")
+		resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+		if err == nil && resp.StatusCode/100 == 2 {
+			t.Fatalf("stalled body answered %d, want a cut", resp.StatusCode)
+		}
+		if timedOut(err) || time.Since(began) >= bound {
+			t.Fatalf("server did not cut the stalled body within %v: %v", bound, err)
+		}
+	})
+
+	t.Run("slow_handler", func(t *testing.T) {
+		lower(t, &platform.ServerWriteTimeout)
+		c := start(t)
+		began := time.Now()
+		_, _ = io.WriteString(c, "GET /slow HTTP/1.1\r\nHost: x\r\n\r\n")
+		resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			t.Fatal("slow handler answered 200, want the write cut")
+		}
+		if timedOut(err) || time.Since(began) >= bound {
+			t.Fatalf("no cut within %v: %v", bound, err)
+		}
+	})
+
+	t.Run("idle_keepalive", func(t *testing.T) {
+		lower(t, &platform.ServerIdleTimeout)
+		c := start(t)
+		br := bufio.NewReader(c)
+		_, _ = io.WriteString(c, "GET /ping HTTP/1.1\r\nHost: x\r\n\r\n")
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		time.Sleep(3 * time.Second)
+		if _, err := br.ReadByte(); !errors.Is(err, io.EOF) {
+			t.Errorf("read after idle = %v, want EOF", err)
+		}
+	})
 }

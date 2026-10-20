@@ -53,7 +53,7 @@ def pipeline_options():
 
     opts = PdfPipelineOptions()
     opts.do_ocr = True
-    # lang explicit: RapidOcrOptions() defaults to ["chinese"] (T-03-2).
+    # lang explicit: RapidOcrOptions() defaults to ["ch"] (T-03-2).
     opts.ocr_options = RapidOcrOptions(lang=["en"], backend="onnxruntime")
     opts.accelerator_options = AcceleratorOptions(
         device=AcceleratorDevice.CPU, num_threads=DOCLING_NUM_THREADS
@@ -72,14 +72,10 @@ def pipeline_options():
 def _construct_converter():
     """The real, expensive DocumentConverter build (torch/onnxruntime imports + model load).
 
-    The backend is named EXPLICITLY. PdfFormatOption's default is
-    ThreadedDoclingParseDocumentBackend -- the v1 parser -- which hands the OCR stage no
-    bitmap region for a scanned page and yields ZERO text for a document RapidOCR reads
-    fine on its own (test_backend.py). Measured on dense_invoice.pdf: default 0 cells,
-    v4 55, pypdfium2 55. v4 is the maintained docling-parse line and measured marginally
-    cheaper than pypdfium2 on both latency and peak RSS.
+    docling-parse text, pypdfium2 page images: docling-parse paints a /RunLengthDecode scan
+    blank (test_backend.py).
     """
-    from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
+    from docling.datamodel.backend_options import ThreadedDoclingParseBackendOptions
     from docling.datamodel.base_models import InputFormat
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
@@ -87,10 +83,73 @@ def _construct_converter():
         format_options={
             InputFormat.PDF: PdfFormatOption(
                 pipeline_options=pipeline_options(),
-                backend=DoclingParseV4DocumentBackend,
+                backend=_pdfium_image_backend(),
+                backend_options=ThreadedDoclingParseBackendOptions(
+                    render_pages=False, parser_threads=DOCLING_NUM_THREADS
+                ),
             )
         }
     )
+
+
+def _pdfium_image_backend():
+    """docling-parse text, pypdfium2 page images (docling-parse paints a /RunLengthDecode
+    scan blank)."""
+    import pypdfium2 as pdfium
+    from docling.backend.docling_parse_backend import (
+        ThreadedDoclingParseDocumentBackend,
+        ThreadedDoclingParsePageBackend,
+    )
+    from docling.backend.pypdfium2_backend import PyPdfiumPageBackend
+    from docling.exceptions import DocumentLoadError
+    from docling.utils.locks import pypdfium2_lock
+
+    class PdfiumImagePage(ThreadedDoclingParsePageBackend):
+        # Sizes stay docling-parse's (token coordinates); the image is docling's own pdfium render.
+        def __init__(self, result, pdfium_page):
+            super().__init__(result)
+            self._pdfium_page = pdfium_page
+
+        def get_page_image(self, scale=1, cropbox=None):
+            return self._pdfium_page.get_page_image(scale=scale, cropbox=cropbox)
+
+        def unload(self):
+            self._pdfium_page.unload()
+
+    class PdfiumImageBackend(ThreadedDoclingParseDocumentBackend):
+        def __init__(self, in_doc, path_or_stream, options=None):
+            # Own bytes: pypdfium2 must not share the stream cursor docling-parse reads.
+            has_bytes = hasattr(path_or_stream, "getvalue")
+            src = path_or_stream.getvalue() if has_bytes else path_or_stream
+            password = options.password.get_secret_value() if options and options.password else None
+            try:
+                with pypdfium2_lock:
+                    self._pdoc = pdfium.PdfDocument(src, password=password)
+            except pdfium.PdfiumError as e:
+                raise DocumentLoadError(
+                    f"pypdfium could not load document with hash {in_doc.document_hash}"
+                ) from e
+            try:
+                super().__init__(in_doc, path_or_stream, options)
+            except Exception:
+                with pypdfium2_lock:
+                    self._pdoc.close()
+                raise
+
+        def iter_pages(self):
+            for page in super().iter_pages():
+                with pypdfium2_lock:
+                    pdfium_page = PyPdfiumPageBackend(self._pdoc, self.document_hash, page.page_no - 1)
+                yield PdfiumImagePage(page._result, pdfium_page)
+
+        def unload(self):
+            super().unload()
+            with pypdfium2_lock:
+                if self._pdoc is not None:
+                    self._pdoc.close()
+                    self._pdoc = None
+
+    return PdfiumImageBackend
 
 
 def get_converter():
@@ -138,24 +197,69 @@ def _clamp01(value: float) -> float:
 
 
 def _page_tokens(parsed_page, width: float, height: float) -> list[dict]:
-    """One token per OCR/text line (parsed_page.textline_cells). Its rect is already
-    top-left origin -- matches EXTR-02's Region convention directly, no flip needed.
+    """One token per line (parsed_page.textline_cells), or per word group on a native line.
+    Rects are already top-left origin -- matches EXTR-02's Region convention, no flip needed.
     """
     if parsed_page is None or not width or not height:
         return []
+    words = [(w.text, w.rect.to_bounding_box()) for w in parsed_page.word_cells if not w.from_ocr]
     tokens = []
     for cell in parsed_page.textline_cells:
-        box = cell.rect.to_bounding_box()
-        tokens.append(
-            {
-                "text": cell.text,
-                "x0": _clamp01(box.l / width),
-                "y0": _clamp01(box.t / height),
-                "x1": _clamp01(box.r / width),
-                "y1": _clamp01(box.b / height),
-            }
-        )
+        for text, box in _split_line(cell, words):
+            tokens.append(
+                {
+                    "text": text,
+                    "x0": _clamp01(box.l / width),
+                    "y0": _clamp01(box.t / height),
+                    "x1": _clamp01(box.r / width),
+                    "y1": _clamp01(box.b / height),
+                }
+            )
     return tokens
+
+
+# A word gap wider than this many line heights starts a new token (docling-parse 7.20 behaviour).
+# ceiling: measured window (0.9, 1.26); re-measure when a golden splits or merges.
+SPLIT_GAP_HEIGHTS = 1.0
+
+
+def _split_line(cell, words):
+    from docling_core.types.doc import BoundingBox
+
+    box = cell.rect.to_bounding_box()
+    # OCR lines carry their own text; page words belong to the native layer.
+    if cell.from_ocr:
+        return [(cell.text, box)]
+    top, bottom = min(box.t, box.b), max(box.t, box.b)
+    inside = sorted(
+        (
+            (t, b)
+            for t, b in words
+            if t.strip()
+            and b.l >= box.l - 0.01 and b.r <= box.r + 0.01
+            and min(b.t, b.b) >= top - 0.01 and max(b.t, b.b) <= bottom + 0.01
+        ),
+        key=lambda wb: wb[1].l,
+    )
+    # Unsplit unless the words reproduce the line's text: none may be dropped or reordered.
+    if "".join("".join(t.split()) for t, _ in inside) != "".join(cell.text.split()):
+        return [(cell.text, box)]
+    groups = []
+    for t, b in inside:
+        if groups and b.l - groups[-1][-1][1].r <= SPLIT_GAP_HEIGHTS * (bottom - top):
+            groups[-1].append((t, b))
+        else:
+            groups.append([(t, b)])
+    if len(groups) < 2:
+        return [(cell.text, box)]
+    # Token text is sliced from the line, so a split inside a word never adds a space.
+    offsets = [i for i, c in enumerate(cell.text) if not c.isspace()]
+    out, n = [], 0
+    for g in groups:
+        k = sum(len("".join(t.split())) for t, _ in g)
+        out.append((cell.text[offsets[n] : offsets[n + k - 1] + 1], BoundingBox.enclosing_bbox([b for _, b in g])))
+        n += k
+    return out
 
 
 def _pdf_wire_pages(result, doc) -> list[dict]:

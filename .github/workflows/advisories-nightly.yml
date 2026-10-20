@@ -1,0 +1,28 @@
+name: Advisories nightly
+
+# A finding fails the run and opens no issue (Q6).
+# schedule and workflow_dispatch run only from main; pull_request is the pre-merge run.
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/advisories-nightly.yml'
+      - 'scripts/ci/advisories.sh'
+      - 'internal/tools/advisorygate/**'
+
+permissions:
+  contents: read
+
+jobs:
+  advisories:
+    name: advisories nightly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Scan for high or critical advisories
+        run: bash scripts/ci/advisories.sh

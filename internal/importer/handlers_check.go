@@ -127,9 +127,9 @@ func CheckMappingHandler(
 			return
 		}
 
-		hdr1, rows1, _, err := Decode(bytes.NewReader(raw), format)
+		hdr1, rows1, _, err := Decode(r.Context(), bytes.NewReader(raw), format)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "could not decode uploaded file")
+			writeError(w, http.StatusBadRequest, decodeErrorMessage(err))
 			return
 		}
 

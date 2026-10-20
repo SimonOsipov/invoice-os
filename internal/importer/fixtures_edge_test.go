@@ -37,7 +37,7 @@ func importEdgeFixture(t *testing.T, path, tenantLabel, entityName string) (res 
 	if readErr != nil {
 		t.Fatalf("read fixture %s: %v", path, readErr)
 	}
-	header, rows, _, decErr := Decode(bytes.NewReader(data), "csv")
+	header, rows, _, decErr := Decode(context.Background(), bytes.NewReader(data), "csv")
 	if decErr != nil {
 		t.Fatalf("Decode %s: %v", path, decErr)
 	}
@@ -156,7 +156,7 @@ func TestFixtures_BadEncodingRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
-	if _, _, _, err := Decode(bytes.NewReader(data), "csv"); err == nil {
+	if _, _, _, err := Decode(context.Background(), bytes.NewReader(data), "csv"); err == nil {
 		t.Fatal("Decode edge_bad_encoding.csv: err = nil, want a decode error -- BOM-less UTF-16LE content embeds raw NUL bytes the control-byte gate must reject")
 	}
 }

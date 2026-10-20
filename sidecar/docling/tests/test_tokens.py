@@ -48,10 +48,35 @@ def test_a_line_takes_only_the_words_on_its_own_line():
     assert [(t["text"], t["y0"]) for t in toks] == [("A", 0.125), ("B", 0.125), ("C", 0.25), ("D", 0.25)]
 
 
-def test_an_ocr_line_keeps_its_own_text_over_native_words():
-    words = [_cell("HIDDEN", 0, 20), _cell("LAYER", 60, 80)]
-    page = _page([_cell("Visible scan text", 0, 80, from_ocr=True)], words)
-    assert [t["text"] for t in convert._page_tokens(page, 600.0, 800.0)] == ["Visible scan text"]
+@pytest.mark.parametrize(
+    "words, text",
+    [
+        ([_cell("HIDDEN", 0, 20), _cell("LAYER", 60, 80)], "Visible scan text"),
+        ([_cell("Visible", 0, 20), _cell("scan", 60, 80)], "Visible scan"),
+    ],
+    ids=["words differ", "words reproduce"],
+)
+def test_an_ocr_line_keeps_its_own_text_over_native_words(words, text):
+    page = _page([_cell(text, 0, 80, from_ocr=True)], words)
+    assert [t["text"] for t in convert._page_tokens(page, 600.0, 800.0)] == [text]
+
+
+def test_an_ocr_word_never_splits_a_native_line():
+    words = [_cell("A", 0, 10), _cell("X", 20, 30, from_ocr=True), _cell("B", 40, 50)]
+    page = _page([_cell("A B", 0, 50)], words)
+    assert [t["text"] for t in convert._page_tokens(page, 600.0, 800.0)] == ["A", "B"]
+
+
+def test_an_empty_word_never_makes_a_token():
+    words = [_cell("A", 0, 10), _cell("", 20, 30), _cell("B", 40, 50)]
+    page = _page([_cell("A B", 0, 50)], words)
+    assert [t["text"] for t in convert._page_tokens(page, 600.0, 800.0)] == ["A", "B"]
+
+
+def test_words_out_of_the_lines_order_leave_it_unsplit():
+    words = [_cell("A", 0, 10), _cell("B", 40, 50)]
+    page = _page([_cell("B A", 0, 50)], words)
+    assert [t["text"] for t in convert._page_tokens(page, 600.0, 800.0)] == ["B A"]
 
 
 def test_a_font_change_inside_a_word_adds_no_space():

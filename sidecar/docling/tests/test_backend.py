@@ -179,6 +179,27 @@ def test_a_failed_docling_parse_open_closes_the_pdfium_document(monkeypatch):
     assert closed == [True]
 
 
+def test_the_document_password_reaches_pdfium(monkeypatch):
+    passwords = []
+
+    class FakePdfDocument:
+        def __init__(self, src, password=None):
+            passwords.append(password)
+
+        def close(self):
+            pass
+
+    def boom(self, *args, **kwargs):
+        raise RuntimeError("docling-parse refused")
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", FakePdfDocument)
+    monkeypatch.setattr(ThreadedDoclingParseDocumentBackend, "__init__", boom)
+    options = ThreadedDoclingParseBackendOptions(password="s3cret")
+    with pytest.raises(RuntimeError, match="refused"):
+        convert._pdfium_image_backend()(None, io.BytesIO(b"%PDF"), options)
+    assert passwords == ["s3cret"]
+
+
 def test_a_scanned_page_reaches_the_wire_with_text(client):
     # The regression this file exists for. Under the library default this returns 0 tokens.
     fixture = repo_root().joinpath(*DENSE)

@@ -197,8 +197,8 @@ def _clamp01(value: float) -> float:
 
 
 def _page_tokens(parsed_page, width: float, height: float) -> list[dict]:
-    """One token per OCR/text line (parsed_page.textline_cells). Its rect is already
-    top-left origin -- matches EXTR-02's Region convention directly, no flip needed.
+    """One token per line (parsed_page.textline_cells), or per word group on a native line.
+    Rects are already top-left origin -- matches EXTR-02's Region convention, no flip needed.
     """
     if parsed_page is None or not width or not height:
         return []

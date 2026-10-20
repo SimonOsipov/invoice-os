@@ -74,7 +74,7 @@ function bucket(
 }
 
 const view = (
-  rows: unknown,
+  rows: HistoryRow[] | null,
   b: RollupBucket = bucket(),
   today = TODAY,
   inhouse = false,
@@ -161,8 +161,8 @@ describe("scopedDays", () => {
 
   it("scopedDays treats a non-array as no rows", () => {
     for (const bad of [undefined, null, {}]) {
-      expect(scopedDays(false, "E1", bad)).toEqual([]);
-      expect(scopedDays(true, null, bad)).toEqual([]);
+      expect(scopedDays(false, "E1", bad as never)).toEqual([]);
+      expect(scopedDays(true, null, bad as never)).toEqual([]);
     }
   });
 });
@@ -387,10 +387,15 @@ describe("historyView trend", () => {
     ]);
   });
 
-  it("trend drops a month label that would overlap the previous one", () => {
+  it("trend drops the earlier month label when two overlap, keeping the later", () => {
     const m = view(run("2026-12-28", 60), bucket(), "2026-12-28").trend?.months;
-    // 60 days ending 12-28 start 10-30: NOV starts at index 2 (2/59 < 0.1), DEC at index 32
-    expect(m?.map((x) => x.label)).toEqual(["OCT", "DEC"]);
+    // 60 days ending 12-28 start 10-30: NOV starts at index 2 (2/59 < 0.1) and replaces OCT, DEC at index 32
+    expect(m?.map((x) => x.label)).toEqual(["NOV", "DEC"]);
+  });
+
+  it("a window of 29 Sep..29 Oct reads OCT, not SEP", () => {
+    const m = view(run("2026-10-29", 31), bucket(), "2026-10-29").trend?.months;
+    expect(m?.map((x) => x.label)).toEqual(["OCT"]);
   });
 
   it("trend meta names the real span", () => {

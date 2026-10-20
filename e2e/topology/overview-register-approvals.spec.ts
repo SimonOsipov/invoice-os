@@ -3,6 +3,7 @@
 // The api-client Loading and ErrorState assert placement only; the in-card and dense empties assert resolved values (OV-04, IN-02).
 // Screenshots are attached for the reviewer and never asserted.
 import { test, expect, type Locator, type Page, type Response, type Route, type TestInfo } from '@playwright/test'
+import type { DashboardClient, RollupHistoryRow } from '../api/client'
 import { collectErrors, signInAs } from '../personaSession'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -983,16 +984,16 @@ test('OV-06 the Overview draws recorded history only: one day keeps the empty st
   const gateway = recordGateway(page)
   const isHistoryRes = (r: Response): boolean => r.request().method() === 'GET' && onPath(new URL(r.url()), '/api/dashboard/v1/rollup/history')
   const isRollupRes = (r: Response): boolean => r.request().method() === 'GET' && isRollup(new URL(r.url()))
-  type HistoryRow = { day: string; entity_id: string }
-  type Client = { entity_id: string; entity_name: string; total: number }
+  type HistoryRow = RollupHistoryRow
+  type Client = DashboardClient
   const captured = async (load: () => Promise<unknown>): Promise<{ history: HistoryRow[]; clients: Client[] }> => {
     const [history, rollup] = await Promise.all([
       page.waitForResponse(isHistoryRes, { timeout: 30_000 }).catch(() => { throw new Error('the Overview sent no GET /rollup/history within 30 s') }),
       page.waitForResponse(isRollupRes, { timeout: 30_000 }).catch(() => { throw new Error('the Overview sent no GET /rollup within 30 s') }),
       load(),
     ])
-    const rows = (await history.json()).history
-    const clients = (await rollup.json()).clients
+    const rows: HistoryRow[] = (await history.json()).history
+    const clients: Client[] = (await rollup.json()).clients
     expect(Array.isArray(rows), 'the history response carries no history array').toBe(true)
     expect(Array.isArray(clients) && clients.length > 0, 'the rollup response lists no client').toBe(true)
     return { history: rows, clients }
@@ -1017,7 +1018,8 @@ test('OV-06 the Overview draws recorded history only: one day keeps the empty st
   }
   const client = seen.clients.find((c) => c.entity_name === clientName)
   expect(client, `the rollup holds no client named "${clientName}" (the h1)`).toBeDefined()
-  expect(client!.total, `client "${clientName}" holds no invoice: the shard invoice copy in db/seed.e2e-shards.sql did not run`).toBeGreaterThanOrEqual(1)
+  const invoiceCount = Object.values(client!.counts).reduce((a, b) => a + b, 0)
+  expect(invoiceCount, `client "${clientName}" holds no invoice: the shard invoice copy in db/seed.e2e-shards.sql did not run`).toBeGreaterThanOrEqual(1)
   const days = [...new Set(rowsOf().map((r) => r.day))].sort()
   expect(days.length, `no history row for "${clientName}": the reconciliation snapshot worker did not run at boot`).toBeGreaterThanOrEqual(1)
 

@@ -1,4 +1,4 @@
-// Pure series helpers for the Overview sparklines and Readiness trend (OVER-04).
+// Pure series helpers for the Overview sparklines and Readiness trend.
 import { sparkPath, trendPath } from './chartPath'
 import { metricCount, metricRatio, type HistoryRow, type RollupBucket } from './dashboard'
 
@@ -26,10 +26,10 @@ export function watToday(now: Date): string {
 }
 
 // Firm: the active client's rows. In-house: raw fields summed per day (divide after, never before).
-export function scopedDays(isInhouse: boolean, entityId: string | null, rows: unknown): DayTotals[] {
+export function scopedDays(isInhouse: boolean, entityId: string | null, rows: HistoryRow[] | null): DayTotals[] {
   if (!Array.isArray(rows)) return []
   const byDay = new Map<string, DayTotals>()
-  for (const r of rows as HistoryRow[]) {
+  for (const r of rows) {
     if (!isInhouse && r.entity_id !== entityId) continue
     const d = byDay.get(r.day)
     if (d) {
@@ -67,7 +67,7 @@ function dayLabel(day: string): string {
 }
 
 export function historyView(
-  rows: unknown,
+  rows: HistoryRow[] | null,
   isInhouse: boolean,
   entityId: string | null,
   bucket: RollupBucket,
@@ -108,7 +108,7 @@ export function historyView(
     if (ym === prevMonth) return
     prevMonth = ym
     const at = i / (pts.length - 1)
-    if (months.length && at - months[months.length - 1].at < 0.1) return
+    while (months.length && at - months[months.length - 1].at < 0.1) months.pop()
     months.push({ label: MONTHS[Number(ym.slice(5, 7)) - 1], at })
   })
 

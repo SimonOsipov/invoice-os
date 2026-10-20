@@ -36,6 +36,7 @@ import {
   type Counts,
   type HistoryRow,
   type Rollup,
+  type RollupHistory,
 } from '../lib/dashboard'
 import { historyView, watToday } from '../lib/dashboardHistory'
 import { ruleKeyLabel } from '../lib/rulesApi'
@@ -58,7 +59,7 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
     { immediate: base != null },
   )
   // A failed or pending history read draws nothing and shows no error.
-  const hist = useAsync<{ history: HistoryRow[] }>(
+  const hist = useAsync<RollupHistory>(
     () => (base ? getRollupHistory(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
     { immediate: base != null },
   )
@@ -87,7 +88,7 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
 
       {state === 'loading' && <Loading label="Loading dashboard…" />}
 
-      {state === 'error' && roll.error && <ErrorState error={roll.error} onRetry={roll.run} />}
+      {state === 'error' && roll.error && <ErrorState error={roll.error} onRetry={() => { void roll.run(); void hist.run() }} />}
 
       {/* 'idle' is the no-gateway build: nothing live to draw, so keep the zero-state. */}
       {state === 'idle' && (

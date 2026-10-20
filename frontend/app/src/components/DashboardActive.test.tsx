@@ -1458,7 +1458,7 @@ describe('DashboardActive states sit inside the page wrapper (D-37)', () => {
   })
 })
 
-// OVER-04: KPI sparklines and the Readiness trend draw recorded history.
+// KPI sparklines and the Readiness trend draw recorded history.
 describe('DashboardActive draws recorded history', () => {
   const TODAY = '2026-10-29'
   const urls = (m: ReturnType<typeof mockRollupFetch>, part: string) =>
@@ -1624,6 +1624,22 @@ describe('DashboardActive draws recorded history', () => {
 
     expect(within(kpiTile('Invoices')).getByText('100')).toBeDefined()
     expect(urls(m, '/dashboard/v1/rollup').filter((c) => !String(c[0]).includes('/history'))).toHaveLength(1)
+  })
+
+  it('Retry after both calls failed re-reads the history and draws the curves', async () => {
+    let failing = true
+    const fail = () => Promise.resolve<MockResponse>({ ok: false, status: 503, json: () => Promise.resolve({}) })
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (failing) return fail()
+      if (String(url).includes('/rollup/history')) return ok({ history: nineDays() })
+      if (String(url).includes('/audit-log')) return ok(auditResponse())
+      return ok(live())
+    }))
+    render(<DashboardActive ctx={dashCtx()} />)
+    const retry = await screen.findByRole('button', { name: 'Retry' })
+    failing = false
+    fireEvent.click(retry)
+    await waitFor(() => expect(kpiTile('Invoices').querySelector('svg')).not.toBeNull())
   })
 
   it('a client switch follows the new client without a refetch', async () => {

@@ -1629,9 +1629,12 @@ describe('DashboardActive draws recorded history', () => {
     noKpiSvg()
     const held = kpiRow('Invoices')
     const delta = kpiDelta('Invoices')
+    const heldTrend = trendBody()
 
     release({ ok: true, status: 200, json: () => Promise.resolve({ history: nineDays() }) })
     await waitFor(() => expect(kpiTile('Invoices').querySelector('svg')).not.toBeNull())
+    await waitFor(() => expect(trendTile().querySelector('svg')).not.toBeNull())
+    expect(trendBody()).toBe(heldTrend)
 
     expect(kpiRow('Invoices')).toBe(held)
     expect(Array.from(held.children)).toEqual([kpiDeltaEl('Invoices'), kpiTile('Invoices').querySelector('svg')])

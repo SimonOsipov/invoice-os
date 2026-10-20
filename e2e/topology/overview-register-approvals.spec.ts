@@ -730,19 +730,27 @@ test('OV-07 a KPI tile keeps its height while the history arrives, and the curve
   const kpis = page.locator('.pf-dash-row-a .pf-grid-2 > div')
   await expect(kpis, 'the dashboard drew its four KPI tiles').toHaveCount(4, { timeout: 20_000 })
 
-  // Per width and KPI tile: tile and delta rects, and the first row B tile's offset from the KPI grid top.
+  const trend = page.getByText('Readiness trend', { exact: true }).locator('xpath=../..')
+  // Per width and KPI tile: tile and delta rects; the row B, trend tile and failures row offsets from the KPI grid top.
   type KpiRead = { tile: Rect; delta: Rect }
-  type KpiPhase = { width: number; rowB: number; tiles: KpiRead[] }
+  type KpiPhase = { width: number; rowB: number; rowC: number; trend: Rect; trendText: string; trendSvgs: number; tiles: KpiRead[] }
   const readKpis = async (label: string): Promise<KpiPhase[]> => {
     await expect(kpis.locator('svg'), `${label}: sparklines`).toHaveCount(label.startsWith('curve') ? 4 : 0)
     const phase = await atWidths(page, `KPI tiles ${label}`, async () => {
-      const grid = await boxes(page, { grid: page.locator('.pf-dash-row-a .pf-grid-2'), rowB: page.locator('.pf-dash-row-b > div:first-child') })
+      const grid = await boxes(page, {
+        grid: page.locator('.pf-dash-row-a .pf-grid-2'),
+        rowB: page.locator('.pf-dash-row-b > div:first-child'),
+        rowC: page.locator('.pf-dash-row-c'),
+        trend,
+      })
+      const trendText = (await trend.textContent()) ?? ''
+      const trendSvgs = await trend.locator('svg').count()
       const tiles: KpiRead[] = []
       for (let i = 0; i < 4; i++) {
         const b = await boxes(page, { tile: kpis.nth(i), delta: kpis.nth(i).locator('span.mono') })
         tiles.push({ tile: b.tile, delta: b.delta })
       }
-      return { problems: [], rects: { rowB: grid.rowB.y - grid.grid.y, tiles } }
+      return { problems: [], rects: { rowB: grid.rowB.y - grid.grid.y, rowC: grid.rowC.y - grid.grid.y, trend: grid.trend, trendText, trendSvgs, tiles } }
     })
     return phase as KpiPhase[]
   }
@@ -764,6 +772,14 @@ test('OV-07 a KPI tile keeps its height while the history arrives, and the curve
     const e = empty[w]
     const c = curve[w]
     relations.push(...close(p.rowB, e.rowB, `${p.width}px row B offset, pending vs empty`), ...close(e.rowB, c.rowB, `${p.width}px row B offset, empty vs curve`))
+    relations.push(
+      ...close(p.trend.height, e.trend.height, `${p.width}px trend tile height, pending vs empty`),
+      ...close(e.trend.height, c.trend.height, `${p.width}px trend tile height, empty vs curve`),
+      ...close(p.rowC, e.rowC, `${p.width}px failures row offset, pending vs empty`),
+      ...close(e.rowC, c.rowC, `${p.width}px failures row offset, empty vs curve`),
+    )
+    if (!p.trendText.includes('No history yet') || !e.trendText.includes('No history yet')) relations.push(`${p.width}px trend tile does not show "No history yet" while pending or empty`)
+    if ([p.trendSvgs, e.trendSvgs, c.trendSvgs].join() !== '0,0,1') relations.push(`${p.width}px trend svg counts ${[p.trendSvgs, e.trendSvgs, c.trendSvgs]} are not 0,0,1`)
     for (const [i, t] of p.tiles.entries()) {
       relations.push(
         ...close(t.tile.height, e.tiles[i].tile.height, `${p.width}px KPI tile ${i} height, pending vs empty`),
@@ -773,10 +789,9 @@ test('OV-07 a KPI tile keeps its height while the history arrives, and the curve
       )
     }
   }
-  expect(relations, 'a KPI tile and its delta keep their place while the history arrives').toEqual([])
+  expect(relations, 'a KPI tile, its delta and the trend tile keep their place while the history arrives').toEqual([])
   await attachJson(testInfo, 'ov-07-kpi-phases', { pending, empty, curve })
 
-  const trend = page.getByText('Readiness trend', { exact: true }).locator('xpath=../..')
   const chart = trend.locator('svg')
   const months = trend.locator('> :last-child > div:last-child > span')
   // Counted so a missing draw cannot pass the relations below vacuously.

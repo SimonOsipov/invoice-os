@@ -130,6 +130,11 @@ const TILE_CARD = {
 // Reserved sparkline row height: the tile does not grow when the history arrives.
 const SPARK_H = 30
 
+// Reserved trend body height (padding 42 + head + 14 + chart + 10 + months 14): the rows below do not move.
+const TREND_CHART_H = 176
+const TREND_HEAD_H = 32
+const TREND_BODY_H = 42 + TREND_HEAD_H + 14 + TREND_CHART_H + 10 + 14
+
 const TILE_BODY = { padding: '22px 20px 24px' } as const
 
 // meta is optional: the four KPI tiles' head is the title alone. The strip keeps its height either way.
@@ -334,13 +339,13 @@ function DashboardTiles({ data, ctx, history }: { data: Rollup; ctx: PlatformCtx
           </div>
         ) : trend ? (
           <div style={{ padding: '20px 20px 22px' }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 14, height: TREND_HEAD_H }}>
               <span className="money" style={{ fontSize: 26, fontWeight: 700 }}>
                 {trend.now}%
               </span>
               <span className="label">{trend.deltaLabel}</span>
             </div>
-            <svg viewBox="0 0 680 176" width="100%" height="176" preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
+            <svg viewBox="0 0 680 176" width="100%" height={TREND_CHART_H} preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
               {trend.grid.map((g) => (
                 <line key={g} x1="0" y1={g} x2="680" y2={g} stroke="var(--line-1)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
               ))}
@@ -360,7 +365,7 @@ function DashboardTiles({ data, ctx, history }: { data: Rollup; ctx: PlatformCtx
             </div>
           </div>
         ) : (
-          <div style={{ padding: '40px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+          <div style={{ padding: '40px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', minHeight: TREND_BODY_H }}>
             <div className="card-title" style={{ marginBottom: 3 }}>No history yet</div>
             <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>The trend starts on the first day this workspace records.</div>
           </div>

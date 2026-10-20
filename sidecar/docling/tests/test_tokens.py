@@ -11,9 +11,9 @@ import convert
 from app import app
 
 
-def _cell(text, l, r, t=100.0, b=110.0):
+def _cell(text, l, r, t=100.0, b=110.0, from_ocr=False):
     box = BoundingBox(l=l, r=r, t=t, b=b, coord_origin=CoordOrigin.TOPLEFT)
-    return SimpleNamespace(text=text, rect=SimpleNamespace(to_bounding_box=lambda: box))
+    return SimpleNamespace(text=text, from_ocr=from_ocr, rect=SimpleNamespace(to_bounding_box=lambda: box))
 
 
 def _page(lines, words):
@@ -46,6 +46,24 @@ def test_a_line_takes_only_the_words_on_its_own_line():
     lines = [_cell("A B", 0, 50), _cell("C D", 0, 50, t=200.0, b=210.0)]
     toks = convert._page_tokens(_page(lines, top + low), 600.0, 800.0)
     assert [(t["text"], t["y0"]) for t in toks] == [("A", 0.125), ("B", 0.125), ("C", 0.25), ("D", 0.25)]
+
+
+def test_an_ocr_line_keeps_its_own_text_over_native_words():
+    words = [_cell("HIDDEN", 0, 20), _cell("LAYER", 60, 80)]
+    page = _page([_cell("Visible scan text", 0, 80, from_ocr=True)], words)
+    assert [t["text"] for t in convert._page_tokens(page, 600.0, 800.0)] == ["Visible scan text"]
+
+
+def test_a_font_change_inside_a_word_adds_no_space():
+    words = [_cell("INV", 0, 20), _cell("-001", 20, 40), _cell("Date:", 70, 100)]
+    page = _page([_cell("INV-001 Date:", 0, 100)], words)
+    assert [t["text"] for t in convert._page_tokens(page, 600.0, 800.0)] == ["INV-001", "Date:"]
+
+
+def test_a_word_outside_the_line_box_is_not_lost():
+    words = [_cell("A", 0, 10), _cell("B", 40, 50), _cell("C", 90, 100)]
+    page = _page([_cell("A B C", 0, 60)], words)
+    assert [t["text"] for t in convert._page_tokens(page, 600.0, 800.0)] == ["A B C"]
 
 
 def test_an_ocr_line_with_no_words_passes_through():

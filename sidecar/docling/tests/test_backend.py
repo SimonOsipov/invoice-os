@@ -3,7 +3,6 @@
 docling-parse paints a /RunLengthDecode image blank, so a scan reaches the OCR stage as an
 empty page and /v1/read returns ZERO tokens for a scan RapidOCR reads fine directly.
 PdfiumImageBackend keeps docling-parse text and renders page images through pypdfium2.
-DoclingParseV4DocumentBackend aliases the threaded backend since docling 2.128.0.
 
 Needs docling importable -- run only via the Docker `test` stage.
 """
@@ -16,7 +15,8 @@ from conftest import repo_root
 from docling.backend.docling_parse_backend import ThreadedDoclingParseDocumentBackend
 from docling.datamodel.backend_options import ThreadedDoclingParseBackendOptions
 from docling.datamodel.base_models import InputFormat
-from docling.datamodel.document import InputDocument
+from docling.datamodel.document import InputDocument, get_input_rejection_cause
+from docling.exceptions import DocumentLoadError
 from fastapi.testclient import TestClient
 
 import convert
@@ -88,6 +88,62 @@ def test_each_page_image_is_its_own_pdfium_page_when_pages_arrive_out_of_order(m
     assert len(set(images.values())) == 3, "the three page images must differ pairwise"
 
 
+def test_the_parser_runs_on_the_pinned_thread_count():
+    opt = convert._construct_converter().format_to_options[InputFormat.PDF]
+    assert opt.backend_options.parser_threads == convert.DOCLING_NUM_THREADS
+
+
+def _rotated_pdf(tmp_path, degrees):
+    src = pypdfium2.PdfDocument(
+        repo_root().joinpath("internal", "extraction", "testdata", "native_invoice.pdf")
+    )
+    src[0].set_rotation(degrees)
+    path = tmp_path / "rotated.pdf"
+    src.save(path)
+    return path
+
+
+def _first_page_backend(path):
+    in_doc = InputDocument(
+        path_or_stream=path,
+        format=InputFormat.PDF,
+        backend=convert._pdfium_image_backend(),
+        backend_options=ThreadedDoclingParseBackendOptions(render_pages=False),
+    )
+    return in_doc, next(iter(in_doc._backend.iter_pages()))
+
+
+def test_a_rotated_page_image_has_the_rotated_dimensions(tmp_path):
+    in_doc, page = _first_page_backend(_rotated_pdf(tmp_path, 90))
+    image = page.get_page_image(scale=1)
+    size = page.get_size()
+    in_doc._backend.unload()
+    assert (round(size.width), round(size.height)) == (792, 612)
+    assert image.size == (792, 612)
+
+
+def test_unloading_a_page_closes_its_pdfium_page(tmp_path):
+    in_doc, page = _first_page_backend(_rotated_pdf(tmp_path, 0))
+    ppage = page._pdfium_page._ppage
+    page.unload()
+    assert page._pdfium_page._ppage is None
+    assert ppage.raw is None
+    in_doc._backend.unload()
+
+
+def test_a_pdfium_open_failure_is_a_backend_failure(monkeypatch):
+    def boom(*args, **kwargs):
+        raise pypdfium2.PdfiumError("forced")
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", boom)
+    pdf = repo_root().joinpath("internal", "extraction", "testdata", "native_invoice.pdf")
+    in_doc = InputDocument(
+        path_or_stream=pdf, format=InputFormat.PDF, backend=convert._pdfium_image_backend()
+    )
+    assert not in_doc.valid
+    assert isinstance(get_input_rejection_cause(in_doc), DocumentLoadError)
+
+
 def test_a_pdfium_open_failure_is_unreadable(client, monkeypatch):
     opened = []
 
@@ -106,7 +162,7 @@ def test_a_failed_docling_parse_open_closes_the_pdfium_document(monkeypatch):
     closed = []
 
     class FakePdfDocument:
-        def __init__(self, src):
+        def __init__(self, src, password=None):
             pass
 
         def close(self):

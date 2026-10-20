@@ -98,15 +98,14 @@ func rate(ids, aliases []string, maxSev string, recs map[string]string, lookup f
 			}
 		}
 		if sev != "" {
-			rated = append(rated, strings.ToUpper(sev))
+			sev = strings.ToUpper(sev)
+			if sev == "HIGH" || sev == "CRITICAL" {
+				return "GHSA " + sev, true, nil
+			}
+			rated = append(rated, sev)
 		}
 	}
 	if len(rated) > 0 {
-		for _, s := range rated {
-			if s == "HIGH" || s == "CRITICAL" {
-				return "GHSA " + s, true, nil
-			}
-		}
 		return "", false, nil
 	}
 	if maxSev == "" {
@@ -191,6 +190,9 @@ func checkIgnoreFile(path, text string, today time.Time) []string {
 		}
 		if strings.HasPrefix(line, "[") {
 			finish()
+			if i := strings.Index(line, "#"); i >= 0 {
+				line = strings.TrimSpace(line[:i])
+			}
 			if line != "[[IgnoredVulns]]" {
 				bad(n, "unsupported table %s (only [[IgnoredVulns]])", line)
 				continue
@@ -375,8 +377,12 @@ func Run(osv, root, osvAPI string, today time.Time, stdout, stderr io.Writer) in
 	if err != nil {
 		return fail("%v", err)
 	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return fail("%v", err)
+	}
 	for _, f := range found {
-		if rel, err := filepath.Rel(root, f.Manifest); err == nil && !strings.HasPrefix(rel, "..") {
+		if rel, err := filepath.Rel(rootAbs, f.Manifest); err == nil && !strings.HasPrefix(rel, "..") {
 			f.Manifest = rel
 		}
 		fmt.Fprintln(stdout, f)
@@ -386,7 +392,13 @@ func Run(osv, root, osvAPI string, today time.Time, stdout, stderr io.Writer) in
 	return code
 }
 
+// lookupBackoff is the pause before a lookup retry; tests shrink it.
+var lookupBackoff = 500 * time.Millisecond
+
+const lookupAttempts = 3
+
 // newLookup rates a GHSA id through the OSV API, once per id.
+// 429, 5xx and transport errors retry; the last failure stays an error (fail closed).
 func newLookup(base string) func(string) (string, error) {
 	client := &http.Client{Timeout: 20 * time.Second}
 	cache := map[string]string{}
@@ -394,26 +406,43 @@ func newLookup(base string) func(string) (string, error) {
 		if sev, ok := cache[id]; ok {
 			return sev, nil
 		}
-		resp, err := client.Get(strings.TrimRight(base, "/") + "/v1/vulns/" + url.PathEscape(id))
-		if err != nil {
-			return "", fmt.Errorf("lookup %s: %w", id, err)
+		var sev string
+		var err error
+		for a := 0; a < lookupAttempts; a++ {
+			if a > 0 {
+				time.Sleep(lookupBackoff * time.Duration(a))
+			}
+			var retry bool
+			if sev, retry, err = fetchSeverity(client, base, id); !retry {
+				break
+			}
 		}
-		defer resp.Body.Close()
-		sev := ""
-		switch resp.StatusCode {
-		case http.StatusOK:
-			var v struct {
-				DatabaseSpecific struct{ Severity string } `json:"database_specific"`
-			}
-			if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
-				return "", fmt.Errorf("lookup %s: %w", id, err)
-			}
-			sev = strings.ToUpper(v.DatabaseSpecific.Severity)
-		case http.StatusNotFound:
-		default:
-			return "", fmt.Errorf("lookup %s: HTTP %d", id, resp.StatusCode)
+		if err != nil {
+			return "", err
 		}
 		cache[id] = sev
 		return sev, nil
+	}
+}
+
+func fetchSeverity(client *http.Client, base, id string) (sev string, retry bool, err error) {
+	resp, err := client.Get(strings.TrimRight(base, "/") + "/v1/vulns/" + url.PathEscape(id))
+	if err != nil {
+		return "", true, fmt.Errorf("lookup %s: %w", id, err)
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		var v struct {
+			DatabaseSpecific struct{ Severity string } `json:"database_specific"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+			return "", false, fmt.Errorf("lookup %s: %w", id, err)
+		}
+		return strings.ToUpper(v.DatabaseSpecific.Severity), false, nil
+	case resp.StatusCode == http.StatusNotFound:
+		return "", false, nil
+	default:
+		return "", resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500, fmt.Errorf("lookup %s: HTTP %d", id, resp.StatusCode)
 	}
 }

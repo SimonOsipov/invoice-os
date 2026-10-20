@@ -583,7 +583,7 @@ func TestIgnore_ExpiredEntryPasses(t *testing.T) {
 }
 
 func TestIgnore_RealRepoRootHasNoProblems(t *testing.T) {
-	p, err := IgnoreProblems("../../..", time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC))
+	p, err := IgnoreProblems("../../..", time.Now().UTC())
 	if err != nil || len(p) != 0 {
 		t.Fatalf("problems %v err %v", p, err)
 	}
@@ -722,3 +722,100 @@ func TestRun_EpicHeadWithStubAPIIsClean(t *testing.T) {
 		t.Fatalf("code %d\n%s", code, out)
 	}
 }
+
+func fastBackoff(t *testing.T) {
+	old := lookupBackoff
+	lookupBackoff = time.Millisecond
+	t.Cleanup(func() { lookupBackoff = old })
+}
+
+// flaky answers the first n requests with status, then 200 HIGH.
+func flaky(t *testing.T, n, status int) (*httptest.Server, *int) {
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if hits <= n {
+			w.WriteHeader(status)
+			return
+		}
+		fmt.Fprint(w, `{"database_specific":{"severity":"HIGH"}}`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &hits
+}
+
+func TestLookup_RetriesTransientStatus(t *testing.T) {
+	fastBackoff(t)
+	for _, st := range []int{429, 503} {
+		srv, hits := flaky(t, 2, st)
+		sev, err := newLookup(srv.URL)("GHSA-aaaa-aaaa-aaaa")
+		if err != nil || sev != "HIGH" || *hits != 3 {
+			t.Errorf("status %d: sev %q err %v hits %d", st, sev, err, *hits)
+		}
+	}
+}
+
+func TestLookup_FailsClosedAfterLastAttempt(t *testing.T) {
+	fastBackoff(t)
+	srv, hits := flaky(t, 99, 503)
+	if _, err := newLookup(srv.URL)("GHSA-aaaa-aaaa-aaaa"); err == nil || *hits != 3 {
+		t.Fatalf("err %v hits %d", err, *hits)
+	}
+}
+
+func TestLookup_Permanent4xxIsNotRetried(t *testing.T) {
+	fastBackoff(t)
+	srv, hits := flaky(t, 99, 403)
+	if _, err := newLookup(srv.URL)("GHSA-aaaa-aaaa-aaaa"); err == nil || *hits != 1 {
+		t.Fatalf("err %v hits %d", err, *hits)
+	}
+}
+
+func TestLookup_NotFoundIsNotRetried(t *testing.T) {
+	fastBackoff(t)
+	srv, hits := flaky(t, 99, 404)
+	if sev, err := newLookup(srv.URL)("GHSA-aaaa-aaaa-aaaa"); err != nil || sev != "" || *hits != 1 {
+		t.Fatalf("sev %q err %v hits %d", sev, err, *hits)
+	}
+}
+
+func TestRun_AbsoluteManifestPathWithRelativeRootPrintsRelative(t *testing.T) {
+	abs, err := filepath.Abs("go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := strings.Replace(string(fixture(t, "osv-pre-deps04.json")), `"path": "go.mod"`, `"path": "`+abs+`"`, -1)
+	if raw == string(fixture(t, "osv-pre-deps04.json")) {
+		t.Skip("fixture has no go.mod source path to rewrite")
+	}
+	_, out, _ := gate(t, fakeScanner(t, 1, raw, ""), ".", nil)
+	if strings.Contains(out, abs) || !strings.Contains(out, "(go.mod)") {
+		t.Fatalf("output:\n%s", out)
+	}
+}
+
+func TestCounted_NoLookupAfterHighRecord(t *testing.T) {
+	raw := synth(map[string]string{"GHSA-aaaa-aaaa-aaaa": "HIGH"},
+		grp{ids: []string{"GHSA-aaaa-aaaa-aaaa"}, aliases: []string{"GHSA-bbbb-bbbb-bbbb"}})
+	var asked []string
+	if got := countedIDs(t, raw, lookupAnswering("LOW", &asked)); len(got) != 1 || len(asked) != 0 {
+		t.Fatalf("counted %v asked %v", got, asked)
+	}
+}
+
+func TestCounted_NoLookupAfterHighLookup(t *testing.T) {
+	raw := synth(nil, grp{ids: []string{"GHSA-aaaa-aaaa-aaaa"}, aliases: []string{"GHSA-bbbb-bbbb-bbbb"}})
+	var asked []string
+	if got := countedIDs(t, raw, lookupAnswering("CRITICAL", &asked)); len(got) != 1 || len(asked) != 1 {
+		t.Fatalf("counted %v asked %v", got, asked)
+	}
+}
+
+func TestIgnore_HeaderTrailingCommentIsAccepted(t *testing.T) {
+	body := "[[IgnoredVulns]]  # docling\nid = \"X\"\nreason = \"r\"\nignoreUntil = 2026-11-01\n"
+	if p := problemsOf(t, body); len(p) != 0 {
+		t.Fatalf("%v", p)
+	}
+}
+
+func init() { lookupBackoff = time.Millisecond }

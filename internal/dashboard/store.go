@@ -25,7 +25,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// Rollup runs the per-entity rollup query AND the per-rule top-violations
+// Rollup runs queryClients (the per-entity rollup query) AND the per-rule top-violations
 // breakdown inside ONE db.WithinRequestTenantTx closure (RLS scopes
 // invoices/business_entities to the caller's tenant, so neither query needs
 // `WHERE tenant_id`), scans the per-entity rows into Clients (pre-declared as

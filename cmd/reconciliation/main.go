@@ -5,7 +5,7 @@
 // path, and flagging every other drift as an append-only reconciliation.* audit record
 // (internal/reconciliation). A second Sweeper ticks invoice.Rechecker.RunOnce, which re-checks
 // each tenant's validated invoices once a rule-set version's start date arrives; it needs
-// VALIDATION_URL and S2S_TOKEN. A third worker writes each company's daily rollup snapshot
+// VALIDATION_URL and S2S_TOKEN. Another worker writes each company's daily rollup snapshot
 // (dashboard.Snapshotter).
 package main
 

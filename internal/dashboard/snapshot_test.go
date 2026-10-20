@@ -188,6 +188,10 @@ func TestWATDay_Boundaries(t *testing.T) {
 		{time.Date(2026, 10, 20, 22, 59, 59, 0, time.UTC), "2026-10-20"},
 		{time.Date(2026, 10, 20, 23, 0, 0, 0, time.UTC), "2026-10-21"},
 		{time.Date(2026, 10, 20, 23, 30, 0, 0, time.UTC), "2026-10-21"},
+		{time.Date(2026, 12, 31, 22, 59, 59, 0, time.UTC), "2026-12-31"},
+		{time.Date(2026, 12, 31, 23, 0, 0, 0, time.UTC), "2027-01-01"},
+		{time.Date(2026, 10, 20, 18, 30, 0, 0, time.FixedZone("UTC-5", -5*3600)), "2026-10-21"}, // 23:30 UTC
+		{time.Date(2026, 10, 21, 0, 30, 0, 0, time.FixedZone("UTC+2", 2*3600)), "2026-10-20"},   // 22:30 UTC
 	} {
 		if got := WATDay(tc.at); got != tc.want {
 			t.Errorf("WATDay(%s) = %q, want %q", tc.at.Format(time.RFC3339), got, tc.want)
@@ -282,4 +286,123 @@ func TestSnapshot_EnumerationErrorWritesNothing(t *testing.T) {
 	if n := snapCount(snapRows(t, super, tenant)); n != 1 {
 		t.Errorf("control run wrote %d row(s), want 1", n)
 	}
+}
+
+func TestSnapshot_ReplaceUpdatesEveryValue(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "snapshot replace all values")
+	ent := seedEntity(t, super, tenant, "Snap A")
+	inv := seedInvoiceAtStatus(t, super, tenant, ent, "SN-A-1", "draft")
+
+	snapRun(t, snapAt(time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC), tenant), app)
+	if want, got := (snapRow{Total: 1, ReadinessNum: 0, NeedsAttention: 0, NotSubmitted: 1, VATKobo: 0}), snapRows(t, super, tenant)[ent]["2026-10-20"]; got != want {
+		t.Fatalf("first run row = %+v, want %+v", got, want)
+	}
+
+	// Move all five values off their first-run numbers.
+	if _, err := super.Exec(context.Background(), `UPDATE invoices SET status = 'accepted', vat = 12.34 WHERE id = $1`, inv); err != nil {
+		t.Fatalf("update invoice: %v", err)
+	}
+	seedInvoiceAtStatus(t, super, tenant, ent, "SN-A-2", "rejected")
+	seedInvoiceAtStatus(t, super, tenant, ent, "SN-A-3", "validated")
+	seedInvoiceAtStatus(t, super, tenant, ent, "SN-A-4", "draft")
+	snapRun(t, snapAt(time.Date(2026, 10, 20, 16, 0, 0, 0, time.UTC), tenant), app)
+
+	got := snapRows(t, super, tenant)
+	if n := snapCount(got); n != 1 {
+		t.Fatalf("rows = %d, want 1", n)
+	}
+	want := snapRow{Total: 4, ReadinessNum: 2, NeedsAttention: 1, NotSubmitted: 2, VATKobo: 1234}
+	if g := got[ent]["2026-10-20"]; g != want {
+		t.Errorf("second run row = %+v, want %+v", g, want)
+	}
+}
+
+func TestSnapshot_CoversEveryCompanyWhateverAMembersScope(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "snapshot ignores member scope")
+	entA := seedEntity(t, super, tenant, "Snap A")
+	entB := seedEntity(t, super, tenant, "Snap B")
+	seedInvoiceAtStatus(t, super, tenant, entA, "SN-A-1", "draft")
+	seedInvoiceAtStatus(t, super, tenant, entB, "SN-B-1", "draft")
+
+	limited, err := NewStore(app).Rollup(csMember(t, super, tenant, "reviewer", entA))
+	if err != nil {
+		t.Fatalf("limited Rollup: %v", err)
+	}
+	if len(limited.Clients) != 1 {
+		t.Fatalf("limited Rollup clients = %d, want 1 (control: the scope is real)", len(limited.Clients))
+	}
+
+	snapRun(t, snapAt(time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC), tenant), app)
+	got := snapRows(t, super, tenant)
+	if len(got[entA]) != 1 || len(got[entB]) != 1 {
+		t.Errorf("rows per company = A:%d B:%d, want 1 each (the snapshot is the whole tenant)", len(got[entA]), len(got[entB]))
+	}
+}
+
+func TestSnapshot_EachTenantWritesOnlyItsOwnCompanies(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenA := seedTenant(t, super, "snapshot isolation A")
+	tenB := seedTenant(t, super, "snapshot isolation B")
+	entA := seedEntity(t, super, tenA, "Snap A")
+	entB := seedEntity(t, super, tenB, "Snap B")
+	seedInvoiceAtStatus(t, super, tenA, entA, "SN-A-1", "draft")
+	seedInvoiceAtStatus(t, super, tenB, entB, "SN-B-1", "draft")
+	seedInvoiceAtStatus(t, super, tenB, entB, "SN-B-2", "validated")
+
+	snapRun(t, snapAt(time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC), tenA, tenB), app)
+
+	a, b := snapRows(t, super, tenA), snapRows(t, super, tenB)
+	if len(a) != 1 || len(b) != 1 {
+		t.Fatalf("companies with rows: A=%d B=%d, want 1 each", len(a), len(b))
+	}
+	if r := a[entA]["2026-10-20"]; r.Total != 1 {
+		t.Errorf("tenant A row = %+v, want total 1", r)
+	}
+	if r := b[entB]["2026-10-20"]; r.Total != 2 {
+		t.Errorf("tenant B row = %+v, want total 2", r)
+	}
+}
+
+func TestSnapshot_ConcurrentRunsLeaveOneRow(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "snapshot concurrent")
+	ent := seedEntity(t, super, tenant, "Snap A")
+	seedInvoiceAtStatus(t, super, tenant, ent, "SN-A-1", "draft")
+
+	now := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	errs := make(chan error, 4)
+	for range 4 {
+		go func() {
+			s := snapAt(now, tenant)
+			s.Pool = app
+			errs <- s.RunOnce(context.Background())
+		}()
+	}
+	for range 4 {
+		if err := <-errs; err != nil {
+			t.Errorf("concurrent RunOnce: %v", err)
+		}
+	}
+	got := snapRows(t, super, tenant)
+	if n := snapCount(got); n != 1 {
+		t.Errorf("rows after 4 concurrent runs = %d, want 1", n)
+	}
+	if r := got[ent]["2026-10-20"]; r.Total != 1 {
+		t.Errorf("row = %+v, want total 1", r)
+	}
+}
+
+func TestSnapshot_TenantWithoutInvoicesIsANoop(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "snapshot no invoices at all")
+	seedEntity(t, super, tenant, "Snap empty")
+
+	snapRun(t, snapAt(time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC), tenant), app)
+	if n := snapCount(snapRows(t, super, tenant)); n != 0 {
+		t.Errorf("rows for a tenant without invoices = %d, want 0", n)
+	}
+	// No tenants at all is also a clean run.
+	snapRun(t, snapAt(time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)), app)
 }

@@ -6,13 +6,11 @@
 //
 // M4-10 stripped this to three live panels because the rest had no backend
 // source ([hide-sourceless]). All nine are restored by explicit product
-// decision; the sourceless ones run on lib/dashboardMock.ts until the rollup
-// grows the fields. Which panel is which:
+// decision. Which panel is which:
 //
 //   LIVE (rollup)   needs-attention KPI · invoice-status donut · readiness ring + bars ·
 //                   top validation failures · all four KPI tile VALUES
 //   LIVE (audit)    recent activity (RecentActivityBody)
-//   MOCK            12-week trend (shape only — endpoint is live) · sparkline shapes
 //
 // [dashboard-scope-per-client] (persona-handoff-fix step 2): this page is a CLIENT-scoped
 // surface (Sidebar.tsx's CLIENT nav group), so every LIVE panel above scopes to the
@@ -38,7 +36,6 @@ import {
   type Counts,
   type Rollup,
 } from '../lib/dashboard'
-import { buildMockPanels } from '../lib/dashboardMock'
 import { ruleKeyLabel } from '../lib/rulesApi'
 import type { PlatformCtx } from '../types'
 import { RecentActivityBody } from './RecentActivityBody'
@@ -91,23 +88,22 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
       )}
 
       {state === 'ready' && roll.data && (
-        <DashboardTiles data={roll.data} ctx={ctx} seed={ctx.user.tenantName ?? 'workspace'} />
+        <DashboardTiles data={roll.data} ctx={ctx} />
       )}
     </div>
   )
 }
 
-// KPI tile values come off the live counts; only the sparkline SHAPE is mocked, so a
-// tile never contradicts the donut beside it.
+// KPI tile values come off the live counts, so a tile never contradicts the donut beside it.
 function kpiValues(counts: Counts, needsAttention: number, vatLabel: string, awaitingApproval: number) {
   const total = Object.values(counts).reduce((a, b) => a + b, 0)
   const transmitted = counts.submitted + counts.accepted
   const awaiting = counts.draft + counts.validated
   return [
-    { label: 'Invoices', value: String(total), delta: `${transmitted} transmitted`, deltaColor: 'var(--fg-3)', stroke: 'var(--action)' },
-    { label: 'VAT tracked', value: vatLabel, delta: 'output VAT', deltaColor: 'var(--fg-3)', stroke: 'var(--action)' },
-    { label: 'Exceptions', value: String(needsAttention), delta: needsAttention ? 'to resolve' : 'all clear', deltaColor: needsAttention ? 'var(--status-red-text)' : 'var(--status-green-text)', stroke: 'var(--status-red-text)' },
-    { label: 'Not yet submitted', value: String(awaiting), delta: awaiting ? `${awaitingApproval} awaiting approval` : 'none waiting', deltaColor: awaiting ? 'var(--status-amber-text)' : 'var(--fg-3)', stroke: 'var(--status-amber-text)' },
+    { label: 'Invoices', value: String(total), delta: `${transmitted} transmitted`, deltaColor: 'var(--fg-3)' },
+    { label: 'VAT tracked', value: vatLabel, delta: 'output VAT', deltaColor: 'var(--fg-3)' },
+    { label: 'Exceptions', value: String(needsAttention), delta: needsAttention ? 'to resolve' : 'all clear', deltaColor: needsAttention ? 'var(--status-red-text)' : 'var(--status-green-text)' },
+    { label: 'Not yet submitted', value: String(awaiting), delta: awaiting ? `${awaitingApproval} awaiting approval` : 'none waiting', deltaColor: awaiting ? 'var(--status-amber-text)' : 'var(--fg-3)' },
   ]
 }
 
@@ -125,8 +121,7 @@ const TILE_CARD = {
 
 const TILE_BODY = { padding: '22px 20px 24px' } as const
 
-// meta is optional: the four KPI tiles carry their delta down beside the sparkline,
-// so their head is the title alone. The strip keeps its height either way.
+// meta is optional: the four KPI tiles' head is the title alone. The strip keeps its height either way.
 function TileHead({ title, meta }: { title: string; meta?: string }) {
   return (
     <div
@@ -149,7 +144,7 @@ function TileHead({ title, meta }: { title: string; meta?: string }) {
   )
 }
 
-function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; seed: string }) {
+function DashboardTiles({ data, ctx }: { data: Rollup; ctx: PlatformCtx }) {
   // [dashboard-scope-per-client]: every LIVE number below is the SELECTED client's own
   // bucket (see the file-header comment) — never data.totals directly in firm mode.
   const bucket = scopedBucket(ctx.mode === 'inhouse', ctx.active.entityId, data)
@@ -161,14 +156,11 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
   const ring = readinessRing(bucket.metrics)
   const note = readinessNote(bucket.metrics)
   const bars = readinessBars(bucket.metrics)
-  // Trend endpoint anchors to the SAME ring.score read above -- AC-1 (headline ==
-  // ring score) holds structurally, not by convention: both come from one metricRatio call.
-  const mock = buildMockPanels(seed, ring.score)
   const kpis = kpiValues(bucket.counts, needsAttention, formatMetric(bucket.metrics, 'vat_tracked'), bucket.awaiting_approval)
 
   return (
     <>
-      {/* Row A: readiness ring + bars (live) | four KPI tiles (live values, mock sparks) */}
+      {/* Row A: readiness ring + bars (live) | four KPI tiles (live values) */}
       <div
         className="pf-dash-row-a"
         style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 360px) minmax(0, 1fr)', gap: 18, marginBottom: 18 }}
@@ -212,7 +204,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
         </div>
 
         <div className="pf-grid-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(140px, 1fr))', gap: 18 }}>
-          {kpis.map((k, i) => (
+          {kpis.map((k) => (
             <div key={k.label} style={{ ...TILE_CARD, display: 'flex', flexDirection: 'column', minHeight: 138, minWidth: 0 }}>
               <TileHead title={k.label} />
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '18px 20px 20px' }}>
@@ -223,9 +215,6 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
                   <span className="mono" style={{ fontSize: 12, fontWeight: 500, color: k.deltaColor }}>
                     {k.delta}
                   </span>
-                  <svg viewBox="0 0 88 30" height="30" preserveAspectRatio="none" style={{ overflow: 'visible', flex: 1, width: '100%', minWidth: 0 }}>
-                    <path d={mock.sparks[i]} fill="none" stroke={k.stroke} strokeWidth="1.6" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
                 </div>
               </div>
             </div>
@@ -314,45 +303,24 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
         </div>
       </div>
 
-      {/* Row C: 12-week readiness trend (mock — the rollup carries no time series).
-          The headline % used to sit INSIDE the header beside the title; the shared
-          head is a single title/meta line, so it moved down into the body. */}
+      {/* Row C: 12-week readiness trend. The rollup carries no time series, so a live score gets the empty state. */}
       <div style={{ ...TILE_CARD, marginBottom: 18 }}>
-        <TileHead title="Readiness trend" meta="12 WEEKS · SAMPLE" />
-        <div style={{ padding: '20px 20px 22px' }}>
-          {mock.chart ? (
-            <>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 14 }}>
-                <span className="money" style={{ fontSize: 26, fontWeight: 700 }}>
-                  {mock.chart.now}%
-                </span>
-                <span className="label">{mock.chart.deltaLabel}</span>
-              </div>
-              <svg viewBox="0 0 680 176" width="100%" height="176" preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
-                {mock.chart.grid.map((g) => (
-                  <line key={g} x1="0" y1={g} x2="680" y2={g} stroke="var(--line-1)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-                ))}
-                <path d={mock.chart.area} fill="var(--action-tint)" />
-                <path d={mock.chart.line} fill="none" stroke="var(--action)" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
-                {mock.chart.months.map((mo) => (
-                  <span key={mo} className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
-                    {mo}
-                  </span>
-                ))}
-              </div>
-            </>
-          ) : (
-            // No live score to anchor on -- an em-dash headline, not a curve ending at a fabricated 0.
+        <TileHead title="Readiness trend" meta="12 WEEKS" />
+        {ring.score === null ? (
+          <div style={{ padding: '20px 20px 22px' }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
               <span className="money" style={{ fontSize: 26, fontWeight: 700 }}>
                 —
               </span>
               <span style={{ fontSize: 13, color: 'var(--fg-3)' }}>No invoices yet</span>
             </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div style={{ padding: '40px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+            <div className="card-title" style={{ marginBottom: 3 }}>No history yet</div>
+            <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>The trend starts on the first day this workspace records.</div>
+          </div>
+        )}
       </div>
 
       {/* Row D: top validation failures (live) | recent activity. Same

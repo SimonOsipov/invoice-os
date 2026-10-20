@@ -2,6 +2,24 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Answers ?auth=start before the bundle loads; App.tsx stays the fallback. Mirrors mintSignInState.
+      // Stays first in <head>: a stylesheet ahead of it holds the redirect until the sheet loads.
+      // An unset var stays a literal "%...%" after Vite's replacement.
+      ;(function () {
+        try {
+          var q = new URLSearchParams(location.search)
+          var l = '%VITE_LANDING_URL%'.trim().replace(/\/+$/, '')
+          if (q.get('auth') === 'start' && !q.has('handoff') && !new URLSearchParams(location.hash.replace(/^#/, '')).has('invite') && l && l.charAt(0) !== '%') {
+            var s = btoa(String.fromCharCode.apply(null, crypto.getRandomValues(new Uint8Array(32))))
+              .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+            sessionStorage.removeItem('invoice-os.pendingInvite')
+            sessionStorage.setItem('invoice-os.signInState', JSON.stringify({ v: 1, s: s, at: Date.now() }))
+            location.replace(l + '/?state=' + s + '&signin=ready')
+          }
+        } catch (e) {}
+      })()
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="/favicon.ico" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -19,20 +37,6 @@
   </head>
   <body>
     <div id="root"></div>
-    <script>
-      // Answers ?auth=start before the bundle loads; App.tsx stays the fallback. Mirrors mintSignInState.
-      // An unset var stays a literal "%...%" after Vite's replacement.
-      try {
-        var q = new URLSearchParams(location.search)
-        var l = '%VITE_LANDING_URL%'.trim().replace(/\/+$/, '')
-        if (q.get('auth') === 'start' && !q.has('handoff') && !new URLSearchParams(location.hash.replace(/^#/, '')).has('invite') && l && l.charAt(0) !== '%') {
-          var s = btoa(String.fromCharCode.apply(null, crypto.getRandomValues(new Uint8Array(32))))
-            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-          sessionStorage.setItem('invoice-os.signInState', JSON.stringify({ v: 1, s: s, at: Date.now() }))
-          location.replace(l + '/?state=' + s + '&signin=ready')
-        }
-      } catch (e) {}
-    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

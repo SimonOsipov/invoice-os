@@ -1025,6 +1025,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/memberships":                                 {verdict: scCovered},
 	"GET /v1/ping":                                        {verdict: scExempt, reason: "a liveness echo; it opens no transaction and reads no table"},
 	"GET /v1/rollup":                                      {verdict: scCovered},
+	"GET /v1/rollup/history":                              {verdict: scCovered},
 	"GET /v1/workflow-roles":                              {verdict: scCovered},
 	"OPTIONS /auth/console-handoff":                       {verdict: scExempt, reason: "no database; in-process code store"},
 	"OPTIONS /auth/exchange":                              {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},

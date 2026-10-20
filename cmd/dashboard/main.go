@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/dashboard"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
@@ -48,6 +49,7 @@ func main() {
 	// the gateway as /api/dashboard/v1/rollup (the prefix is stripped upstream).
 	store := dashboard.NewStore(pool)
 	app.Mux.HandleFunc("GET /v1/rollup", dashboard.RollupHandler(store.Rollup, app.Logger))
+	app.Mux.HandleFunc("GET /v1/rollup/history", dashboard.HistoryHandler(store.History, time.Now, app.Logger))
 
 	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
 

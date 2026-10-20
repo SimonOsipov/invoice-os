@@ -259,3 +259,30 @@ func addMetrics(dst, src map[string]Metric) {
 		dst[k] = d
 	}
 }
+
+// History returns the caller's snapshot rows from since (YYYY-MM-DD, inclusive), oldest first.
+// No WHERE tenant_id: RLS scopes the tenant and a limited member's clients.
+func (s *Store) History(ctx context.Context, since string) ([]HistoryRow, error) {
+	rows := []HistoryRow{}
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		r, err := tx.Query(ctx,
+			`SELECT to_char(day, 'YYYY-MM-DD'), entity_id::text, total, readiness_num, needs_attention, not_submitted, vat_kobo
+			 FROM rollup_snapshots WHERE day >= $1::date ORDER BY day, entity_id`, since)
+		if err != nil {
+			return err
+		}
+		defer r.Close()
+		for r.Next() {
+			var h HistoryRow
+			if err := r.Scan(&h.Day, &h.EntityID, &h.Total, &h.ReadinessNum, &h.NeedsAttention, &h.NotSubmitted, &h.VATKobo); err != nil {
+				return err
+			}
+			rows = append(rows, h)
+		}
+		return r.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
+}

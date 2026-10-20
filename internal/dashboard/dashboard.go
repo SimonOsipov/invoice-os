@@ -79,3 +79,19 @@ type Rollup struct {
 	Clients       []Client    `json:"clients"`
 	TopViolations []RuleCount `json:"top_violations"`
 }
+
+// HistoryRow is one company's snapshot for one WAT day.
+type HistoryRow struct {
+	Day            string `json:"day"`
+	EntityID       string `json:"entity_id"`
+	Total          int64  `json:"total"`
+	ReadinessNum   int64  `json:"readiness_num"`
+	NeedsAttention int64  `json:"needs_attention"`
+	NotSubmitted   int64  `json:"not_submitted"`
+	VATKobo        int64  `json:"vat_kobo"`
+}
+
+// History is the GET /v1/rollup/history body. History is never nil.
+type History struct {
+	History []HistoryRow `json:"history"`
+}

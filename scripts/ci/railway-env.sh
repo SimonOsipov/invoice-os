@@ -1700,11 +1700,11 @@ reconcile_url_variables() {
   blog_id=$(service_id_by_name "$PASS_SETTLE" blog "environment $env_id" URL_VARIABLES) || exit 1
 
   pass_plan_add "$gw_id" gateway "" "CORS_ALLOWED_ORIGINS=$origins"
-  pass_plan_add "$app_id" app "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url" "VITE_LIBRARY_URL=$library_url" "VITE_SUPPORT_URL=$support_url"
+  pass_plan_add "$app_id" app "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url" "VITE_LIBRARY_URL=$library_url" "VITE_SUPPORT_URL=$support_url" "VITE_BLOG_URL=$blog_url"
   pass_plan_add "$landing_id" landing "" "VITE_GATEWAY_URL=$gateway_url" "VITE_APP_URL=$app_url" "VITE_OPS_URL=$ops_url" "VITE_SUPPORT_URL=$support_url" "VITE_LIBRARY_URL=$library_url" "VITE_BLOG_URL=$blog_url" VITE_REGISTRATION_OPEN=true
   pass_plan_add "$ops_id" ops-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
   pass_plan_add "$support_id" support-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url" "VITE_APP_URL=$app_url"
-  pass_plan_add "$library_id" library "" "VITE_APP_URL=$app_url" "VITE_LANDING_URL=$landing_url" "VITE_BLOG_URL=$blog_url"
+  pass_plan_add "$library_id" library "" "VITE_APP_URL=$app_url" "VITE_LANDING_URL=$landing_url"
   pass_plan_add "$blog_id" blog "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
 }
 

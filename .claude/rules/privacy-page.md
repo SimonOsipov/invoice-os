@@ -48,6 +48,7 @@ paths:
 - Say in the Blog section that one analytics choice covers the landing, the Library and the Blog. A choice made on any of the three applies to all.
 - Name `asc_consent` in one paragraph only, the cookie-notice paragraph. Say there that it is our own cookie on `SHARED_COOKIE_DOMAIN`.
 - List what the Library sends Google: each page viewed, Book the Demo, the tour start and Open in Platform.
+- List what the Blog sends Google: each page viewed and Book the Demo.
 - Say that Open in Platform carries the feature or group. It is a content id, never visitor input.
 - Say in the Blog section that Reject on any of the three sites deletes the shared `_ga` cookies. Google's script can re-create them until reload.
 - Name the "Cookie choices" control in the Blog section. The Blog's control sits at the foot of its sidebar, beside the Library's. It brings the notice back.

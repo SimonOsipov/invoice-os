@@ -9,7 +9,6 @@ import { enclosesRect, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS
 const LIBRARY_URL = resolveTarget('LIBRARY_URL')
 const BAKED_APP_URL = resolveTarget('BAKED_APP_URL')
 const BAKED_LANDING_URL = resolveTarget('BAKED_LANDING_URL')
-const BAKED_BLOG_URL = resolveTarget('BAKED_BLOG_URL')
 
 const MIN_GROUPS = 11
 const MIN_FEATURES = 26
@@ -361,11 +360,6 @@ test.describe('library layout at wide widths', () => {
     measured.demo = demoHrefs
     for (const href of demoHrefs) expect.soft(href, '/: Book the Demo href').toBe(`${BAKED_LANDING_URL}/?demo`)
 
-    const blog = aside(page).getByRole('link', { name: 'Blog' })
-    await expect(blog, '/: Blog links').toHaveCount(1)
-    measured.blog = await blog.getAttribute('href')
-    expect.soft(measured.blog, '/: Blog href').toBe(BAKED_BLOG_URL)
-
     await visit(page, '/rules/validate')
     const open = page.getByRole('link', { name: 'Open in Platform' })
     await expect(open, '/rules/validate: Open in Platform links').toHaveCount(1)
@@ -375,13 +369,13 @@ test.describe('library layout at wide widths', () => {
     await visit(page, '/notifications/alerts')
     await expect(page.getByRole('link', { name: 'Open in Platform' }), '/notifications/alerts: a coming-soon feature has no platform link').toHaveCount(0)
 
-    await attachJson(testInfo, 'library-links', { ...measured, BAKED_APP_URL, BAKED_LANDING_URL, BAKED_BLOG_URL })
+    await attachJson(testInfo, 'library-links', { ...measured, BAKED_APP_URL, BAKED_LANDING_URL })
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 })
 
 test.describe('library sidebar links', () => {
-  test('library sidebar: the Blog link sits between Book the Demo and Cookie choices', async ({ page }, testInfo) => {
+  test('library sidebar: no Blog link; Book the Demo sits above Cookie choices', async ({ page }, testInfo) => {
     test.setTimeout(120_000)
     const errors = collectErrors(page)
     await prepare(page)
@@ -392,17 +386,16 @@ test.describe('library sidebar links', () => {
       await settleAnimations(aside(page), main(page))
       const side = await rectOf(aside(page), 'aside')
       const demo = await rectOf(aside(page).getByRole('link', { name: 'Book the Demo' }), 'Book the Demo')
-      const blog = await rectOf(aside(page).getByRole('link', { name: 'Blog' }), 'Blog')
       const cookie = await rectOf(aside(page).getByRole('button', { name: 'Cookie choices' }), 'Cookie choices')
-      measured.push({ width, aside: side, demo, blog, cookie })
+      measured.push({ width, aside: side, demo, cookie })
       const at = `@${width}`
-      expect.soft(enclosesRect(side, blog, 0.5), `${at}: Blog is outside the sidebar`).toBe(true)
-      expect.soft(demo.y + demo.height, `${at}: Book the Demo is not above Blog`).toBeLessThanOrEqual(blog.y + 1)
-      expect.soft(blog.y + blog.height, `${at}: Blog is not above Cookie choices`).toBeLessThanOrEqual(cookie.y + 1)
-      expect.soft(rectsOverlap(demo, blog), `${at}: Blog overlaps Book the Demo`).toBe(false)
-      expect.soft(rectsOverlap(blog, cookie), `${at}: Blog overlaps Cookie choices`).toBe(false)
+      await expect(aside(page).getByRole('link', { name: 'Blog' }), `${at}: the sidebar has no Blog link`).toHaveCount(0)
+      expect.soft(enclosesRect(side, demo, 0.5), `${at}: Book the Demo is outside the sidebar`).toBe(true)
+      expect.soft(enclosesRect(side, cookie, 0.5), `${at}: Cookie choices is outside the sidebar`).toBe(true)
+      expect.soft(demo.y + demo.height, `${at}: Book the Demo is not above Cookie choices`).toBeLessThanOrEqual(cookie.y + 1)
+      expect.soft(rectsOverlap(demo, cookie), `${at}: Book the Demo overlaps Cookie choices`).toBe(false)
     }
-    await attachJson(testInfo, 'library-sidebar-blog', measured)
+    await attachJson(testInfo, 'library-sidebar-links', measured)
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 })

@@ -81,6 +81,14 @@ export const libraryGlyph = (
   />
 )
 
+// Newspaper glyph; the sidebar's Company Blog link, not a NavDef (it leaves the app).
+export const blogGlyph = (
+  <Icon
+    paths={['M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2', 'M18 14h-8', 'M15 18h-5', 'M10 6h8v4h-8V6Z']}
+    size={NAV_ICON_SIZE}
+  />
+)
+
 export const NAV_DASHBOARD: NavDef = { id: 'dashboard', label: 'Overview', glyph: <Icon paths={['M3 13h8V3H3zM13 21h8V11h-8zM13 3v6h8V3zM3 21h8v-6H3z']} size={17} /> }
 export const NAV_INVOICES: NavDef = {
   id: 'invoices',

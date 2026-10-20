@@ -40,6 +40,7 @@ paths:
 - Send the library `page_view` by hand through `trackLibraryPageView`, once per later path change. The first view comes from `gtag('config')`.
 - Send the blog `page_view` by hand through `trackBlogPageView`, once per later path change. The first view comes from `gtag('config')`.
 - Keep GA4 history-event page views off in the web stream, or each navigation counts twice.
+- Send `demo_open` from the blog with `cta_location` `blog`.
 - Send `demo_open` from the library with `cta_location` `library`. Send `tour_start` with no parameter.
 - Send `open_in_platform` with `feature_id` or `group_id`. Both are content ids, never visitor input.
 - Send no HubSpot form and no `generate_lead` from the library. It has no forms.

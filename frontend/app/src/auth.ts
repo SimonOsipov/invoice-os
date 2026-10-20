@@ -78,6 +78,12 @@ export const libraryBase = (): string | null => {
   return v || null
 }
 
+// Base URL of the Company Blog; null when unset, so the sidebar link is not rendered.
+export const blogBase = (): string | null => {
+  const v = (import.meta.env.VITE_BLOG_URL ?? '').trim().replace(/\/+$/, '')
+  return v || null
+}
+
 // Base URL of the Support Console; null when unset, so the sidebar icon is not rendered.
 export const supportBase = (): string | null => {
   const v = (import.meta.env.VITE_SUPPORT_URL ?? '').trim().replace(/\/+$/, '')

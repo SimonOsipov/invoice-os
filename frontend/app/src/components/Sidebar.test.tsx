@@ -426,12 +426,83 @@ describe('Sidebar Feature library link (LIB-06)', () => {
   })
 })
 
+describe('Sidebar Company Blog link (BUG-39)', () => {
+  const blog = () => screen.queryByRole('link', { name: 'Company Blog' })
+  const library = () => screen.queryByRole('link', { name: 'Feature library' })
+  const R = () => rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 })
+
+  it('sidebar_blogLinkOpensANewTabAboveTheLibraryLink', async () => {
+    vi.stubEnv('VITE_BLOG_URL', 'https://blog.x/')
+    vi.stubEnv('VITE_LIBRARY_URL', 'https://lib.x')
+    const bucket = { validated: 1, awaitingApproval: 1, needsAttention: 1 }
+    for (const ctx of [sidebarCtx(), firmCtx()]) {
+      await renderSidebar(rollup({ ...bucket, entity: bucket }), ctx)
+      const a = screen.getAllByRole('link', { name: 'Company Blog' })
+      expect(a).toHaveLength(1)
+      expect(a[0].getAttribute('href')).toBe('https://blog.x')
+      expect(a[0].getAttribute('target')).toBe('_blank')
+      expect(a[0].getAttribute('rel')).toContain('noopener')
+      expect(a[0].getAttribute('rel')).toContain('noreferrer')
+      expect(a[0].closest('nav.pf-nav-list')).toBeNull()
+      expect(a[0].compareDocumentPosition(library()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(a[0].compareDocumentPosition(screen.getByTestId('identity-card')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      cleanup()
+    }
+  })
+
+  it('sidebar_noBlogLinkWhenUnset', async () => {
+    vi.stubEnv('VITE_LIBRARY_URL', 'https://lib.x')
+    await renderSidebar(R())
+    expect(blog()).toBeNull()
+    expect(library()).toBeTruthy()
+    cleanup()
+    vi.stubEnv('VITE_BLOG_URL', '  ')
+    await renderSidebar(R())
+    expect(blog()).toBeNull()
+    expect(library()).toBeTruthy()
+  })
+
+  it('sidebar_blogLinkWithoutTheLibraryLink', async () => {
+    vi.stubEnv('VITE_BLOG_URL', 'https://blog.x')
+    await renderSidebar(R())
+    expect(blog()).toBeTruthy()
+    expect(library()).toBeNull()
+  })
+
+  it('sidebar_blogLinkMatchesTheLibraryLink', async () => {
+    vi.stubEnv('VITE_BLOG_URL', 'https://blog.x')
+    vi.stubEnv('VITE_LIBRARY_URL', 'https://lib.x')
+    await renderSidebar(R())
+    const a = blog()!
+    const lib = library()!
+    expect(a.classList.contains('pf-nav')).toBe(true)
+    for (const prop of ['fontSize', 'fontWeight', 'color', 'padding', 'gap', 'borderRadius'] as const) {
+      expect(a.style[prop], prop).not.toBe('')
+      expect(a.style[prop], prop).toBe(lib.style[prop])
+    }
+  })
+})
+
 describe('Sidebar brand mark', () => {
-  it('the wordmark link carries the 20px mark', async () => {
+  it('the wordmark link carries the blog lockup and the PLATFORM badge', async () => {
     await renderSidebar(rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 }))
-    const mark = document.querySelector('aside.pf-sidebar a[href="#"] img')
-    expect(mark?.getAttribute('width')).toBe('20')
-    expect(mark?.getAttribute('height')).toBe('20')
+    const link = document.querySelector('aside.pf-sidebar a[href="#"]')!
+    const mark = link.querySelector('img')!
+    expect(mark.getAttribute('width')).toBe('28')
+    expect(mark.getAttribute('height')).toBe('28')
+    expect(mark.style.borderRadius).toBe('var(--radius-md)')
+    const word = within(link as HTMLElement).getByText('ASComply')
+    expect(word.style.fontSize).toBe('16px')
+    expect(word.style.fontFamily).toBe('var(--font-display)')
+    expect(word.style.fontWeight).toBe('var(--fw-bold)')
+    const eyebrow = within(link as HTMLElement).getByText('AFRICA')
+    expect(eyebrow.style.fontSize).toBe('8px')
+    expect(eyebrow.style.color).toBe('var(--eyebrow-on-dark)')
+    expect(eyebrow.style.border).toBe('')
+    const badge = within(link as HTMLElement).getByText('PLATFORM')
+    expect(badge.classList.contains('mono')).toBe(true)
+    expect(badge.style.color).toBe('var(--action)')
+    expect(badge.style.border).toBe('1px solid var(--action)')
   })
 })
 

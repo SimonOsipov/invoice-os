@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
-import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from '../topology/layout'
+import { enclosesRect, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from '../topology/layout'
 import { consentRecordOf, consoleGate, routeProductionHosts, seedConsent } from './landingConsent'
 
 // The consent notice and GA4 tag on the deployed blog. The tag loads after Accept on the
@@ -45,6 +45,19 @@ async function rectOf(locator: Locator, label: string): Promise<Rect> {
   return box!
 }
 
+// The footer is the Cookie choices button's parent; the link must fill its content box.
+async function expectDemoFillsFooter(aside: Locator): Promise<void> {
+  const demo = aside.getByRole('link', { name: 'Book the Demo' })
+  const footer = aside.getByRole('button', { name: 'Cookie choices' }).locator('xpath=..')
+  const d = await rectOf(demo, 'Book the Demo')
+  const f = await rectOf(footer, 'the sidebar footer')
+  const pad = await footer.evaluate((el) => {
+    const s = getComputedStyle(el)
+    return parseFloat(s.paddingLeft) + parseFloat(s.paddingRight)
+  })
+  expect(Math.abs(d.width - (f.width - pad)), `Book the Demo is ${d.width}px wide, the footer content box ${f.width - pad}px`).toBeLessThanOrEqual(0.5)
+}
+
 async function setWidth(page: Page, width: number): Promise<void> {
   await page.setViewportSize({ width, height: 1080 })
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
@@ -84,9 +97,9 @@ test('blog consent: the policy link goes to the landing privacy page', async ({ 
   const policy = new URL(href!) // throws on a relative href: the link must be absolute
   expect(policy.pathname).toBe('/privacy')
 
-  const home = await page.locator('aside').getByRole('link', { name: 'Go to ascomply.com' }).getAttribute('href')
-  expect(home, 'the sidebar has no Go to ascomply.com link').not.toBeNull()
-  expect(policy.origin, 'the policy link is not on the origin of the Go to ascomply.com link').toBe(new URL(home!).origin)
+  const home = await page.locator('aside').getByRole('link', { name: 'Book the Demo' }).getAttribute('href')
+  expect(home, 'the sidebar has no Book the Demo link').not.toBeNull()
+  expect(policy.origin, 'the policy link is not on the origin of the Book the Demo link').toBe(new URL(home!).origin)
 
   await page.goto(policy.href)
   await expect(page.getByRole('heading', { level: 1, name: 'Privacy and cookies' })).toBeVisible()
@@ -158,14 +171,32 @@ for (const width of WIDE_WIDTHS) {
     const c = await rectOf(control, 'Cookie choices')
     expect(enclosesRect(await rectOf(aside, 'the sidebar'), c, SLACK_PX), 'Cookie choices is outside the sidebar').toBe(true)
 
-    const home = await rectOf(aside.getByRole('link', { name: 'Go to ascomply.com' }), 'Go to ascomply.com')
-    expect(home.y + home.height, 'Go to ascomply.com is not above Cookie choices').toBeLessThanOrEqual(c.y + SLACK_PX)
-    expect(rectsOverlap(home, c), 'Cookie choices overlaps Go to ascomply.com').toBe(false)
+    const home = await rectOf(aside.getByRole('link', { name: 'Book the Demo' }), 'Book the Demo')
+    expect(home.y + home.height, 'Book the Demo is not above Cookie choices').toBeLessThanOrEqual(c.y + SLACK_PX)
+    expect(rectsOverlap(home, c), 'Cookie choices overlaps Book the Demo').toBe(false)
+    await expectDemoFillsFooter(aside)
 
     await control.click()
     await expect(notice(page).locator('.cn-setting')).toBeVisible()
     const n = await rectOf(notice(page), 'the reopened notice')
     expect(rectsOverlap(c, n), 'the reopened notice covers Cookie choices').toBe(false)
+  })
+}
+
+for (const width of PHONE_WIDTHS) {
+  test(`blog consent: Book the Demo sits in the stacked sidebar footer (${width})`, async ({ page }) => {
+    await setWidth(page, width)
+    await seedConsent(page, true)
+    await openBlog(page, '/', false)
+    const aside = page.locator('aside')
+    const sidebar = await rectOf(aside, 'the sidebar')
+    const demo = await rectOf(aside.getByRole('link', { name: 'Book the Demo' }), 'Book the Demo')
+    const c = await rectOf(aside.getByRole('button', { name: 'Cookie choices' }), 'Cookie choices')
+    expect(enclosesRect(sidebar, demo, SLACK_PX), 'Book the Demo is outside the sidebar').toBe(true)
+    expect(enclosesRect(sidebar, c, SLACK_PX), 'Cookie choices is outside the sidebar').toBe(true)
+    expect(demo.y + demo.height, 'Book the Demo is not above Cookie choices').toBeLessThanOrEqual(c.y + SLACK_PX)
+    expect(rectsOverlap(demo, c), 'Cookie choices overlaps Book the Demo').toBe(false)
+    await expectDemoFillsFooter(aside)
   })
 }
 

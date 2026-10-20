@@ -138,15 +138,6 @@ describe('library events', () => {
     ])
   })
 
-  it('the Blog link sends no event', async () => {
-    vi.stubEnv('VITE_BLOG_URL', 'https://b.example')
-    await mount('/')
-    const blog = link('Blog')
-    expect(blog).toHaveLength(1)
-    click(blog[0])
-    expect(events()).toEqual([])
-  })
-
   it('EV-06 Open in Platform carries the group or the feature id', async () => {
     await mount('/rules')
     click(link('Open in Platform')[0])

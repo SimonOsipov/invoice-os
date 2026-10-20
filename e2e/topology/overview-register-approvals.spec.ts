@@ -695,13 +695,14 @@ test('OV-05 recent activity rows stay inside their tile', async ({ page }, testI
 
 // Fixture check: the history call is rewritten onto the live rollup and answered with 40 stubbed WAT days
 // for every rollup client, so the sparkline and chart markup is reached.
-test('OV-07 the curves keep inside their tiles at every wide width (fixture check)', async ({ page }, testInfo) => {
+test('OV-07 a KPI tile keeps its height while the history arrives, and the curves keep inside their tiles (fixture check)', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors = collectErrors(page)
   const isHistory = (url: URL): boolean => onPath(url, '/api/dashboard/v1/rollup/history')
   const todayMs = Date.parse(new Date(Date.now() + 3_600_000).toISOString().slice(0, 10) + 'T00:00:00Z')
-  await stubGet(page, isHistory, {
+  const stub = await stubGet(page, isHistory, {
     mode: 'transform',
+    empty: { history: [] },
     source: (url) => {
       const rollup = new URL(url.toString())
       rollup.pathname = rollup.pathname.replace(/\/history$/, '')
@@ -723,11 +724,74 @@ test('OV-07 the curves keep inside their tiles at every wide width (fixture chec
       ),
     }),
   })
+  stub.hold()
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
 
   const kpis = page.locator('.pf-dash-row-a .pf-grid-2 > div')
   await expect(kpis, 'the dashboard drew its four KPI tiles').toHaveCount(4, { timeout: 20_000 })
+
   const trend = page.getByText('Readiness trend', { exact: true }).locator('xpath=../..')
+  // Per width and KPI tile: tile and delta rects; the row B, trend tile and failures row offsets from the KPI grid top.
+  type KpiRead = { tile: Rect; delta: Rect }
+  type KpiPhase = { width: number; rowB: number; rowC: number; trend: Rect; trendText: string; trendSvgs: number; tiles: KpiRead[] }
+  const readKpis = async (label: string): Promise<KpiPhase[]> => {
+    await expect(kpis.locator('svg'), `${label}: sparklines`).toHaveCount(label.startsWith('curve') ? 4 : 0)
+    const phase = await atWidths(page, `KPI tiles ${label}`, async () => {
+      const grid = await boxes(page, {
+        grid: page.locator('.pf-dash-row-a .pf-grid-2'),
+        rowB: page.locator('.pf-dash-row-b > div:first-child'),
+        rowC: page.locator('.pf-dash-row-c'),
+        trend,
+      })
+      const trendText = (await trend.textContent()) ?? ''
+      const trendSvgs = await trend.locator('svg').count()
+      const tiles: KpiRead[] = []
+      for (let i = 0; i < 4; i++) {
+        const b = await boxes(page, { tile: kpis.nth(i), delta: kpis.nth(i).locator('span.mono') })
+        tiles.push({ tile: b.tile, delta: b.delta })
+      }
+      return { problems: [], rects: { rowB: grid.rowB.y - grid.grid.y, rowC: grid.rowC.y - grid.grid.y, trend: grid.trend, trendText, trendSvgs, tiles } }
+    })
+    return phase as KpiPhase[]
+  }
+  const pending = await readKpis('pending')
+  const historyResponse = page.waitForResponse((res) => onPath(new URL(res.url()), '/api/dashboard/v1/rollup/history'))
+  stub.release('empty')
+  await historyResponse
+  const empty = await readKpis('empty')
+  stub.mode = 'transform'
+  await page.reload()
+  await expect(kpis, 'the dashboard drew its four KPI tiles after the reload').toHaveCount(4, { timeout: 20_000 })
+  await expect(kpis.locator('svg'), 'one sparkline per KPI tile').toHaveCount(4, { timeout: 20_000 })
+  const curve = await readKpis('curve')
+
+  const close = (a: number, b: number, what: string): string[] => (Math.abs(a - b) <= 1 ? [] : [`${what}: ${a} vs ${b}`])
+  const fromBottom = (k: KpiRead): number => k.tile.y + k.tile.height - (k.delta.y + k.delta.height)
+  const relations: string[] = []
+  for (const [w, p] of pending.entries()) {
+    const e = empty[w]
+    const c = curve[w]
+    relations.push(...close(p.rowB, e.rowB, `${p.width}px row B offset, pending vs empty`), ...close(e.rowB, c.rowB, `${p.width}px row B offset, empty vs curve`))
+    relations.push(
+      ...close(p.trend.height, e.trend.height, `${p.width}px trend tile height, pending vs empty`),
+      ...close(e.trend.height, c.trend.height, `${p.width}px trend tile height, empty vs curve`),
+      ...close(p.rowC, e.rowC, `${p.width}px failures row offset, pending vs empty`),
+      ...close(e.rowC, c.rowC, `${p.width}px failures row offset, empty vs curve`),
+    )
+    if (!p.trendText.includes('No history yet') || !e.trendText.includes('No history yet')) relations.push(`${p.width}px trend tile does not show "No history yet" while pending or empty`)
+    if ([p.trendSvgs, e.trendSvgs, c.trendSvgs].join() !== '0,0,1') relations.push(`${p.width}px trend svg counts ${[p.trendSvgs, e.trendSvgs, c.trendSvgs]} are not 0,0,1`)
+    for (const [i, t] of p.tiles.entries()) {
+      relations.push(
+        ...close(t.tile.height, e.tiles[i].tile.height, `${p.width}px KPI tile ${i} height, pending vs empty`),
+        ...close(e.tiles[i].tile.height, c.tiles[i].tile.height, `${p.width}px KPI tile ${i} height, empty vs curve`),
+        ...close(e.tiles[i].delta.x, c.tiles[i].delta.x, `${p.width}px KPI tile ${i} delta x, empty vs curve`),
+        ...close(fromBottom(e.tiles[i]), fromBottom(c.tiles[i]), `${p.width}px KPI tile ${i} delta offset from the tile bottom, empty vs curve`),
+      )
+    }
+  }
+  expect(relations, 'a KPI tile, its delta and the trend tile keep their place while the history arrives').toEqual([])
+  await attachJson(testInfo, 'ov-07-kpi-phases', { pending, empty, curve })
+
   const chart = trend.locator('svg')
   const months = trend.locator('> :last-child > div:last-child > span')
   // Counted so a missing draw cannot pass the relations below vacuously.
@@ -757,6 +821,7 @@ test('OV-07 the curves keep inside their tiles at every wide width (fixture chec
       head: trend.locator('> :first-child'),
       meta: trend.locator('> :first-child .mono'),
       headline: trend.locator('.money'),
+      headRow: trend.locator('> :last-child > div:first-child'),
       chart,
       row: trend.locator('> :last-child > div:last-child'),
     })
@@ -766,6 +831,7 @@ test('OV-07 the curves keep inside their tiles at every wide width (fixture chec
       ...below(t.chart, t.row, 'months row vs chart'),
       ...within(t.tile, t.row, 'months row in the trend tile'),
       ...within(t.head, t.meta, 'meta in the head'),
+      ...within(t.headRow, t.headline, 'headline in its pinned row'),
     )
     let prev: Rect | null = null
     for (const [i, label] of labels.entries()) {

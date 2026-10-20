@@ -5,6 +5,7 @@ import { resolve } from 'node:path'
 import vm from 'node:vm'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { holdPendingInvite, PENDING_INVITE_KEY } from './lib/pendingInvite'
 import { BASE64URL_43, consumeSignInState, SIGN_IN_STATE_KEY, SIGN_IN_STATE_SCHEMA_VERSION } from './lib/signInState'
 
 const LANDING = 'https://landing.test'
@@ -67,6 +68,16 @@ function load(url: string, env: Record<string, string>, over: Overrides = {}) {
   }
   const leaked = Object.keys(globals).filter((k) => !declared.has(k))
   return { inline, beforeModule: inline.every((s) => s.at < moduleAt), replace, storage, location, threw, leaked, startHref: u.href }
+}
+
+// A live held invite as the app writes it, so the key and schema come from pendingInvite.ts.
+function heldInvite(): Record<string, string> {
+  const probe = makeStorage()
+  vi.stubGlobal('sessionStorage', probe)
+  holdPendingInvite('B'.repeat(43))
+  vi.unstubAllGlobals()
+  expect(probe.store.has(PENDING_INVITE_KEY)).toBe(true)
+  return { [PENDING_INVITE_KEY]: probe.getItem(PENDING_INVITE_KEY) as string }
 }
 
 beforeEach(() => vi.unstubAllGlobals())
@@ -139,7 +150,7 @@ describe('index.html ?auth=start answered before the bundle (BUG-41 A)', () => {
     })
 
     it('a second mint replaces the held blob, as mintSignInState does', () => {
-      const held = JSON.stringify({ v: 1, s: 'A'.repeat(43), at: Date.now() - 1000 })
+      const held = JSON.stringify({ v: SIGN_IN_STATE_SCHEMA_VERSION, s: 'A'.repeat(43), at: Date.now() - 1000 })
       const { storage, replace } = load('https://app.test/?auth=start', { VITE_LANDING_URL: LANDING }, { held: { [SIGN_IN_STATE_KEY]: held } })
       const s = (JSON.parse(storage.getItem(SIGN_IN_STATE_KEY) as string) as { s: string }).s
       expect(s).not.toBe('A'.repeat(43))
@@ -147,18 +158,18 @@ describe('index.html ?auth=start answered before the bundle (BUG-41 A)', () => {
     })
 
     it('drops a held pending invite, as the React bounce does for a start without an invite', () => {
-      const held = { 'invoice-os.pendingInvite': JSON.stringify({ v: 1, t: 'B'.repeat(43), at: Date.now() }) }
+      const held = heldInvite()
       const { storage, replace } = load('https://app.test/?auth=start', { VITE_LANDING_URL: LANDING }, { held })
       expect(replace).toHaveBeenCalledTimes(1)
-      expect(storage.getItem('invoice-os.pendingInvite')).toBeNull()
+      expect(storage.getItem(PENDING_INVITE_KEY)).toBeNull()
     })
 
     it('keeps a held pending invite when it leaves the start to React (invite fragment)', () => {
-      const held = { 'invoice-os.pendingInvite': JSON.stringify({ v: 1, t: 'B'.repeat(43), at: Date.now() }) }
+      const held = heldInvite()
       const { inline, storage, replace } = load('https://app.test/?auth=start#invite=tok', { VITE_LANDING_URL: LANDING }, { held })
       expect(inline.length).toBeGreaterThan(0)
       expect(replace).not.toHaveBeenCalled()
-      expect(storage.getItem('invoice-os.pendingInvite')).not.toBeNull()
+      expect(storage.getItem(PENDING_INVITE_KEY)).not.toBeNull()
     })
 
     it('storage that throws: no replace, nothing thrown, React path takes over', () => {

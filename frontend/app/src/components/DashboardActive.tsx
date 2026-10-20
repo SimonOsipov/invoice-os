@@ -11,6 +11,7 @@
 //
 //   LIVE (rollup)   needs-attention KPI · invoice-status donut · readiness ring + bars ·
 //                   top validation failures · all four KPI tile VALUES
+//   LIVE (audit)    recent activity (RecentActivityBody)
 //   MOCK            12-week trend (shape only — endpoint is live) · sparkline shapes
 //
 // [dashboard-scope-per-client] (persona-handoff-fix step 2): this page is a CLIENT-scoped
@@ -40,6 +41,7 @@ import {
 import { buildMockPanels } from '../lib/dashboardMock'
 import { ruleKeyLabel } from '../lib/rulesApi'
 import type { PlatformCtx } from '../types'
+import { RecentActivityBody } from './RecentActivityBody'
 
 export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
@@ -392,34 +394,8 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
       </div>
 
         <div style={TILE_CARD}>
-          <TileHead title="Recent activity" meta={ctx.handoff ? undefined : 'SAMPLE'} />
-          {ctx.handoff ? (
-            <div style={{ padding: '40px 20px', textAlign: 'center' }}>
-              <div className="card-title">No activity to show</div>
-            </div>
-          ) : (
-          <div style={{ padding: '18px 20px 6px' }}>
-            {mock.activity.map((a, i) => (
-              <div key={i} style={{ display: 'flex', gap: 12 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 'none' }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: a.dot, marginTop: 4 }} />
-                  <span style={{ width: 1, flex: 1, background: 'var(--line-2)', minHeight: a.line }} />
-                </div>
-                <div style={{ paddingBottom: 16, flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, lineHeight: 1.4 }}>
-                    <span style={{ fontWeight: 600 }}>{a.who}</span> <span style={{ color: 'var(--fg-2)' }}>{a.action}</span>{' '}
-                    <span className="mono" style={{ fontSize: 12, color: 'var(--action)' }}>
-                      {a.target}
-                    </span>
-                  </div>
-                  <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>
-                    {a.time}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-          )}
+          <TileHead title="Recent activity" />
+          <RecentActivityBody ctx={ctx} />
         </div>
       </div>
     </>

@@ -4,14 +4,12 @@
 // Structurally mirrors ClientsView.tsx (typed API module + useAsync +
 // no-gateway short-circuit). Markup ported from Platform.dc.html ~L147-310.
 //
-// M4-10 stripped this to three live panels because the rest had no backend
-// source ([hide-sourceless]). All nine are restored by explicit product
-// decision; the sourceless ones run on lib/dashboardMock.ts until the rollup
-// grows the fields. Which panel is which:
+// Which panel is which:
 //
 //   LIVE (rollup)   needs-attention KPI · invoice-status donut · readiness ring + bars ·
 //                   top validation failures · all four KPI tile VALUES
-//   MOCK            12-week trend (shape only — endpoint is live) · sparkline shapes
+//   LIVE (audit)    recent activity (RecentActivityBody)
+//   LIVE (history)  KPI sparklines + Readiness trend; empty state under two recorded days.
 //
 // [dashboard-scope-per-client] (persona-handoff-fix step 2): this page is a CLIENT-scoped
 // surface (Sidebar.tsx's CLIENT nav group), so every LIVE panel above scopes to the
@@ -28,6 +26,7 @@ import {
   donutSegments,
   formatMetric,
   getRollup,
+  getRollupHistory,
   readinessBars,
   readinessNote,
   readinessRing,
@@ -35,11 +34,14 @@ import {
   scopedBucket,
   topFailures,
   type Counts,
+  type HistoryRow,
   type Rollup,
+  type RollupHistory,
 } from '../lib/dashboard'
-import { buildMockPanels } from '../lib/dashboardMock'
+import { historyView, watToday } from '../lib/dashboardHistory'
 import { ruleKeyLabel } from '../lib/rulesApi'
 import type { PlatformCtx } from '../types'
+import { RecentActivityBody } from './RecentActivityBody'
 
 export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
@@ -54,6 +56,11 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
     // carry content regardless of invoice volume, and each live panel has its own zero
     // treatment, so a zero-count rollup is 'ready', not empty. isEmptyRollup stays
     // exported and tested for other callers.
+    { immediate: base != null },
+  )
+  // A failed or pending history read draws nothing and shows no error.
+  const hist = useAsync<RollupHistory>(
+    () => (base ? getRollupHistory(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
     { immediate: base != null },
   )
   const state = dashboardViewState(base, roll)
@@ -81,7 +88,7 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
 
       {state === 'loading' && <Loading label="Loading dashboard…" />}
 
-      {state === 'error' && roll.error && <ErrorState error={roll.error} onRetry={roll.run} />}
+      {state === 'error' && roll.error && <ErrorState error={roll.error} onRetry={() => { void roll.run(); void hist.run() }} />}
 
       {/* 'idle' is the no-gateway build: nothing live to draw, so keep the zero-state. */}
       {state === 'idle' && (
@@ -89,14 +96,13 @@ export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
       )}
 
       {state === 'ready' && roll.data && (
-        <DashboardTiles data={roll.data} ctx={ctx} seed={ctx.user.tenantName ?? 'workspace'} />
+        <DashboardTiles data={roll.data} ctx={ctx} history={hist.data?.history ?? null} />
       )}
     </div>
   )
 }
 
-// KPI tile values come off the live counts; only the sparkline SHAPE is mocked, so a
-// tile never contradicts the donut beside it.
+// KPI tile values come off the live counts, so a tile never contradicts the donut beside it.
 function kpiValues(counts: Counts, needsAttention: number, vatLabel: string, awaitingApproval: number) {
   const total = Object.values(counts).reduce((a, b) => a + b, 0)
   const transmitted = counts.submitted + counts.accepted
@@ -123,8 +129,7 @@ const TILE_CARD = {
 
 const TILE_BODY = { padding: '22px 20px 24px' } as const
 
-// meta is optional: the four KPI tiles carry their delta down beside the sparkline,
-// so their head is the title alone. The strip keeps its height either way.
+// meta is optional: the four KPI tiles' head is the title alone. The strip keeps its height either way.
 function TileHead({ title, meta }: { title: string; meta?: string }) {
   return (
     <div
@@ -147,7 +152,7 @@ function TileHead({ title, meta }: { title: string; meta?: string }) {
   )
 }
 
-function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; seed: string }) {
+function DashboardTiles({ data, ctx, history }: { data: Rollup; ctx: PlatformCtx; history: HistoryRow[] | null }) {
   // [dashboard-scope-per-client]: every LIVE number below is the SELECTED client's own
   // bucket (see the file-header comment) — never data.totals directly in firm mode.
   const bucket = scopedBucket(ctx.mode === 'inhouse', ctx.active.entityId, data)
@@ -159,14 +164,12 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
   const ring = readinessRing(bucket.metrics)
   const note = readinessNote(bucket.metrics)
   const bars = readinessBars(bucket.metrics)
-  // Trend endpoint anchors to the SAME ring.score read above -- AC-1 (headline ==
-  // ring score) holds structurally, not by convention: both come from one metricRatio call.
-  const mock = buildMockPanels(seed, ring.score)
   const kpis = kpiValues(bucket.counts, needsAttention, formatMetric(bucket.metrics, 'vat_tracked'), bucket.awaiting_approval)
+  const { sparks, trend } = historyView(history, ctx.mode === 'inhouse', ctx.active.entityId, bucket, watToday(new Date()))
 
   return (
     <>
-      {/* Row A: readiness ring + bars (live) | four KPI tiles (live values, mock sparks) */}
+      {/* Row A: readiness ring + bars (live) | four KPI tiles (live values) */}
       <div
         className="pf-dash-row-a"
         style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 360px) minmax(0, 1fr)', gap: 18, marginBottom: 18 }}
@@ -217,14 +220,20 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
                 <span className="money" style={{ fontSize: 'clamp(22px, 3.2vw, 32px)', fontWeight: 700, margin: '0 0 12px', whiteSpace: 'nowrap' }}>
                   {k.value}
                 </span>
-                <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
+                {sparks ? (
+                  <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
+                    <span className="mono" style={{ fontSize: 12, fontWeight: 500, color: k.deltaColor }}>
+                      {k.delta}
+                    </span>
+                    <svg viewBox="0 0 88 30" height="30" preserveAspectRatio="none" style={{ overflow: 'visible', flex: 1, width: '100%', minWidth: 0 }}>
+                      <path d={sparks[i]} fill="none" stroke={k.stroke} strokeWidth="1.6" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </div>
+                ) : (
                   <span className="mono" style={{ fontSize: 12, fontWeight: 500, color: k.deltaColor }}>
                     {k.delta}
                   </span>
-                  <svg viewBox="0 0 88 30" height="30" preserveAspectRatio="none" style={{ overflow: 'visible', flex: 1, width: '100%', minWidth: 0 }}>
-                    <path d={mock.sparks[i]} fill="none" stroke={k.stroke} strokeWidth="1.6" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </div>
+                )}
               </div>
             </div>
           ))}
@@ -312,45 +321,51 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
         </div>
       </div>
 
-      {/* Row C: 12-week readiness trend (mock — the rollup carries no time series).
-          The headline % used to sit INSIDE the header beside the title; the shared
-          head is a single title/meta line, so it moved down into the body. */}
+      {/* Row C: readiness trend from recorded days; under two of them (or no live score) the empty state. */}
       <div style={{ ...TILE_CARD, marginBottom: 18 }}>
-        <TileHead title="Readiness trend" meta="12 WEEKS · SAMPLE" />
-        <div style={{ padding: '20px 20px 22px' }}>
-          {mock.chart ? (
-            <>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 14 }}>
-                <span className="money" style={{ fontSize: 26, fontWeight: 700 }}>
-                  {mock.chart.now}%
-                </span>
-                <span className="label">{mock.chart.deltaLabel}</span>
-              </div>
-              <svg viewBox="0 0 680 176" width="100%" height="176" preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
-                {mock.chart.grid.map((g) => (
-                  <line key={g} x1="0" y1={g} x2="680" y2={g} stroke="var(--line-1)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-                ))}
-                <path d={mock.chart.area} fill="var(--action-tint)" />
-                <path d={mock.chart.line} fill="none" stroke="var(--action)" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
-                {mock.chart.months.map((mo) => (
-                  <span key={mo} className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
-                    {mo}
-                  </span>
-                ))}
-              </div>
-            </>
-          ) : (
-            // No live score to anchor on -- an em-dash headline, not a curve ending at a fabricated 0.
+        <TileHead title="Readiness trend" meta={ring.score !== null && trend ? trend.meta : '12 WEEKS'} />
+        {ring.score === null ? (
+          <div style={{ padding: '20px 20px 22px' }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
               <span className="money" style={{ fontSize: 26, fontWeight: 700 }}>
                 —
               </span>
               <span style={{ fontSize: 13, color: 'var(--fg-3)' }}>No invoices yet</span>
             </div>
-          )}
-        </div>
+          </div>
+        ) : trend ? (
+          <div style={{ padding: '20px 20px 22px' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 14 }}>
+              <span className="money" style={{ fontSize: 26, fontWeight: 700 }}>
+                {trend.now}%
+              </span>
+              <span className="label">{trend.deltaLabel}</span>
+            </div>
+            <svg viewBox="0 0 680 176" width="100%" height="176" preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
+              {trend.grid.map((g) => (
+                <line key={g} x1="0" y1={g} x2="680" y2={g} stroke="var(--line-1)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+              ))}
+              <path d={trend.area} fill="var(--action-tint)" />
+              <path d={trend.line} fill="none" stroke="var(--action)" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <div style={{ position: 'relative', height: 14, marginTop: 10 }}>
+              {trend.months.map((mo) => (
+                <span
+                  key={mo.label + mo.at}
+                  className="mono"
+                  style={{ position: 'absolute', ...(mo.at > 0.9 ? { right: 0 } : { left: `${mo.at * 100}%` }), fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.06em' }}
+                >
+                  {mo.label}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div style={{ padding: '40px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+            <div className="card-title" style={{ marginBottom: 3 }}>No history yet</div>
+            <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>The trend starts on the first day this workspace records.</div>
+          </div>
+        )}
       </div>
 
       {/* Row D: top validation failures (live) | recent activity. Same
@@ -392,34 +407,8 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
       </div>
 
         <div style={TILE_CARD}>
-          <TileHead title="Recent activity" meta={ctx.handoff ? undefined : 'SAMPLE'} />
-          {ctx.handoff ? (
-            <div style={{ padding: '40px 20px', textAlign: 'center' }}>
-              <div className="card-title">No activity to show</div>
-            </div>
-          ) : (
-          <div style={{ padding: '18px 20px 6px' }}>
-            {mock.activity.map((a, i) => (
-              <div key={i} style={{ display: 'flex', gap: 12 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 'none' }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: a.dot, marginTop: 4 }} />
-                  <span style={{ width: 1, flex: 1, background: 'var(--line-2)', minHeight: a.line }} />
-                </div>
-                <div style={{ paddingBottom: 16, flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, lineHeight: 1.4 }}>
-                    <span style={{ fontWeight: 600 }}>{a.who}</span> <span style={{ color: 'var(--fg-2)' }}>{a.action}</span>{' '}
-                    <span className="mono" style={{ fontSize: 12, color: 'var(--action)' }}>
-                      {a.target}
-                    </span>
-                  </div>
-                  <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 2 }}>
-                    {a.time}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-          )}
+          <TileHead title="Recent activity" />
+          <RecentActivityBody key={ctx.mode === 'inhouse' ? 'inhouse' : `firm:${ctx.active.entityId ?? ''}`} ctx={ctx} />
         </div>
       </div>
     </>

@@ -111,6 +111,26 @@ export async function getRollup(authedFetch: AuthedFetch, base: string): Promise
   return authedFetch<Rollup>(`${base}/api/dashboard/v1/rollup`)
 }
 
+// dashboard.go HistoryRow: one stored snapshot per company per WAT day.
+export interface HistoryRow {
+  day: string
+  entity_id: string
+  total: number
+  readiness_num: number
+  needs_attention: number
+  not_submitted: number
+  vat_kobo: number
+}
+
+// GET /api/dashboard/v1/rollup/history response envelope (dashboard.go History).
+export interface RollupHistory {
+  history: HistoryRow[]
+}
+
+export async function getRollupHistory(authedFetch: AuthedFetch, base: string): Promise<RollupHistory> {
+  return authedFetch<RollupHistory>(`${base}/api/dashboard/v1/rollup/history`)
+}
+
 // Canonical 7-state order for the donut and any other verbatim state listing. Keys are the
 // lowercase InvoiceStatus (== the rollup's Counts keys); the human label is the key with
 // its first letter capitalized (Draft, Validated, …), and the segment colour comes from
@@ -298,8 +318,7 @@ export function formatMetric(m: Metrics, key: string): string {
   return '—'
 }
 
-// Ring geometry and colour bands ported verbatim from dashboardMock.ts's shipped tile
-// (R=50) so the real data doesn't visually shift it.
+// Ring geometry (R=50) and colour bands.
 export function readinessRing(m: Metrics): { score: number | null; circ: string; offset: string; color: string } {
   const circ = 2 * Math.PI * 50
   const score = metricRatio(m, 'readiness')

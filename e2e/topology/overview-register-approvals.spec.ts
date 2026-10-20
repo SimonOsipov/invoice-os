@@ -2,7 +2,8 @@
 // Every state is reached with page.route (D-12); no tenant data is written and no confirm button is clicked (D-13).
 // The api-client Loading and ErrorState assert placement only; the in-card and dense empties assert resolved values (OV-04, IN-02).
 // Screenshots are attached for the reviewer and never asserted.
-import { test, expect, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'
+import { test, expect, type Locator, type Page, type Response, type Route, type TestInfo } from '@playwright/test'
+import type { DashboardClient, RollupHistoryRow } from '../api/client'
 import { collectErrors, signInAs } from '../personaSession'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -429,6 +430,8 @@ test('OV-02 in-house overview: tiles hold their head and body, columns align, fa
       clients: (b.clients ?? []).map((c: object) => ({ ...c, top_violations: VIOLATIONS })),
     }),
   })
+  // Fixture check: the snapshot worker records a row per day, so a gate re-run on a later WAT day holds two.
+  await stubGet(page, (url) => onPath(url, '/api/dashboard/v1/rollup/history'), { mode: 'empty', empty: { history: [] } })
   await signInAs(page, 'inhouse', { tenantId: SHARD.b.id })
   await expect(page.locator('.pf-dash-row-a .pf-grid-2 > div'), 'the dashboard drew its four KPI tiles').toHaveCount(4, { timeout: 20_000 })
 
@@ -446,6 +449,13 @@ test('OV-02 in-house overview: tiles hold their head and body, columns align, fa
   }
   expect(tiles.length, 'ten tiles on the overview').toBe(10)
 
+  const kpis = (await groups[1][1].all()).map((tile, i) => [`KPI tile ${i}`, tile] as const)
+  expect(kpis.length, 'four KPI tiles to measure').toBe(4)
+  for (const [name, tile] of kpis) await expect(tile.locator('svg'), `${name} draws no sparkline`).toHaveCount(0)
+  const trend = tiles.find(([name]) => name === 'trend tile 0')![1]
+  await expect(trend.locator('> :first-child .mono'), 'the trend tile meta is exactly 12 WEEKS').toHaveText('12 WEEKS')
+  await expect(trend, 'the trend tile carries no sample label').not.toContainText('SAMPLE')
+
   const needs = page.locator('.pf-dash-row-b > div:first-child')
   const sentence = needs.locator('p')
   const needsCta = needs.getByRole('button')
@@ -462,6 +472,12 @@ test('OV-02 in-house overview: tiles hold their head and body, columns align, fa
       const b = await boxes(page, { tile, head: tile.locator('> :first-child'), body: tile.locator('> :last-child') })
       problems.push(...within(b.tile, b.head, `${name} head`), ...within(b.tile, b.body, `${name} body`), ...below(b.head, b.body, `${name} body vs head`))
       rects[name] = b
+    }
+    // 138 is the KPI tile minHeight in DashboardActive.tsx.
+    for (const [name, tile] of kpis) {
+      const k = (await boxes(page, { tile })).tile
+      if (k.height < 138) problems.push(`${name} is ${k.height}px tall, under 138px`)
+      rects[`${name} height`] = k
     }
     const e = await boxes(page, { a: edges[0], b: edges[1], c: edges[2] })
     problems.push(...sameLeft(e.a, e.b, 'row B vs row C right column'), ...sameLeft(e.a, e.c, 'row B right column vs KPI column'))
@@ -600,6 +616,171 @@ test('OV-04 empty workspace: loading, task card, error, placement', async ({ pag
 
   await attachJson(testInfo, 'ov-04-measurements', { h1, task: t, cardRead, tileRead, titleRead, messageRead, loadingRoot, errorCard, h1Box })
   expect(errors, `console errors beyond the deliberate 503:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('OV-05 recent activity rows stay inside their tile', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+  const ago = (min: number): string => new Date(Date.now() - min * 60_000).toISOString()
+  // Codes are in AUDIT_EVENTS (lib/auditVocabulary.ts); the 50-character one is unrecognised.
+  const event = (i: number, code: string, over: Record<string, unknown> = {}) => ({
+    id: `00000000-0000-4000-8000-00000000050${i}`,
+    created_at: ago(i + 1),
+    event: code,
+    actor: `user-${i}`,
+    actor_name: `Person ${i}`,
+    actor_kind: 'person',
+    entity_id: `00000000-0000-4000-8000-00000000051${i}`,
+    company_name: `Company ${i}`,
+    company_scope: 'company',
+    payload: {},
+    ...over,
+  })
+  const events = [
+    event(0, 'invoice.created', { actor_name: 'A'.repeat(60) }),
+    event(1, 'invoice.created', { company_name: 'B'.repeat(60) }),
+    event(2, 'x'.repeat(50)),
+    event(3, 'invoice.updated'),
+    event(4, 'portfolio.entity.created'),
+  ]
+  const body = {
+    events,
+    page: { limit: 5, has_more: false, next_cursor: null },
+    total: events.length,
+    log_is_empty: false,
+    facets: { event: [], actor: [], company: [] },
+  }
+  const requests: string[] = []
+  await routeGet(page, (url) => onPath(url, '/api/invoice/v1/audit-log'), async (route, url) => {
+    requests.push(url.toString())
+    await fulfil(route, body)
+  })
+  await signInAs(page, 'inhouse', { tenantId: SHARD.b.id })
+
+  const tile = page.getByText('Recent activity', { exact: true }).locator('xpath=ancestor::div[2]')
+  const rowsLoc = tile.locator('> :last-child > div')
+  await expect(rowsLoc, 'the stubbed events drew as rows').toHaveCount(events.length, { timeout: 20_000 })
+  expect(requests.length, 'the tile read the audit log').toBeGreaterThan(0)
+  for (const u of requests) {
+    const q = new URL(u).searchParams
+    expect(q.get('limit'), `limit in ${u}`).toBe('5')
+    expect(q.has('company'), `no company in ${u}`).toBe(false)
+  }
+
+  const widths = await atWidths(page, 'recent activity rows', async () => {
+    const problems: string[] = []
+    const rects: Record<string, unknown> = {}
+    const b = await boxes(page, { tile, body: tile.locator('> :last-child') })
+    problems.push(...within(b.tile, b.body, 'tile body in tile'))
+    rects.tile = b
+    let prev: Rect | null = null
+    for (const [i, row] of (await rowsLoc.all()).entries()) {
+      const text = row.locator('> div:last-child')
+      const r = await boxes(page, { row, dot: row.locator('> div:first-child > span:first-child'), text })
+      problems.push(...within(b.body, r.row, `row ${i} in body`), ...within(r.row, r.dot, `row ${i} dot in row`), ...within(r.row, r.text, `row ${i} text in row`), ...leftOf(r.dot, r.text, `row ${i} dot vs text`))
+      // A block's box never grows with an unbreakable word: its content overflows it.
+      const spill = await text.evaluate((el) => el.scrollWidth - el.clientWidth)
+      if (spill > 1) problems.push(`row ${i} text spills ${spill}px past its block`)
+      if (prev) problems.push(...below(prev, r.row, `row ${i} vs previous`))
+      prev = r.row
+      rects[`row ${i}`] = { ...r, spill }
+    }
+    await assertPageDoesNotScrollSideways(page, 'overview')
+    return { problems, rects }
+  })
+
+  await attachJson(testInfo, 'ov-05-measurements', { requests, widths })
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Fixture check: the history call is rewritten onto the live rollup and answered with 40 stubbed WAT days
+// for every rollup client, so the sparkline and chart markup is reached.
+test('OV-07 the curves keep inside their tiles at every wide width (fixture check)', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+  const isHistory = (url: URL): boolean => onPath(url, '/api/dashboard/v1/rollup/history')
+  const todayMs = Date.parse(new Date(Date.now() + 3_600_000).toISOString().slice(0, 10) + 'T00:00:00Z')
+  await stubGet(page, isHistory, {
+    mode: 'transform',
+    source: (url) => {
+      const rollup = new URL(url.toString())
+      rollup.pathname = rollup.pathname.replace(/\/history$/, '')
+      rollup.search = ''
+      return rollup
+    },
+    // Every client gets rows: the SPA's active client comes from the entities list, whose order differs from the rollup's.
+    transform: (b) => ({
+      history: b.clients.flatMap((c: { entity_id: string }) =>
+        Array.from({ length: 40 }, (_, i) => ({
+          day: new Date(todayMs - (39 - i) * 86_400_000).toISOString().slice(0, 10),
+          entity_id: c.entity_id,
+          total: 20 + i,
+          readiness_num: 8 + Math.floor(i / 2),
+          needs_attention: 3 + (i % 5),
+          not_submitted: 5 + (i % 7),
+          vat_kobo: 100_000 + i * 5_000,
+        })),
+      ),
+    }),
+  })
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+
+  const kpis = page.locator('.pf-dash-row-a .pf-grid-2 > div')
+  await expect(kpis, 'the dashboard drew its four KPI tiles').toHaveCount(4, { timeout: 20_000 })
+  const trend = page.getByText('Readiness trend', { exact: true }).locator('xpath=../..')
+  const chart = trend.locator('svg')
+  const months = trend.locator('> :last-child > div:last-child > span')
+  // Counted so a missing draw cannot pass the relations below vacuously.
+  await expect(kpis.locator('svg'), 'one sparkline per KPI tile').toHaveCount(4, { timeout: 20_000 })
+  await expect(chart, 'one trend chart').toHaveCount(1)
+  expect(await months.count(), 'the 40 days span two months, so two month labels').toBeGreaterThanOrEqual(2)
+  const tiles = await kpis.all()
+  const labels = await months.all()
+
+  const widths = await atWidths(page, 'sparklines, trend chart and month labels', async () => {
+    const problems: string[] = []
+    const rects: Record<string, unknown> = {}
+    for (const [i, tile] of tiles.entries()) {
+      const b = await boxes(page, { tile, spark: tile.locator('svg'), delta: tile.locator('span.mono') })
+      problems.push(...within(b.tile, b.spark, `KPI tile ${i} sparkline in the tile`), ...leftOf(b.delta, b.spark, `KPI tile ${i} delta vs sparkline`))
+      if (b.tile.height < 138) problems.push(`KPI tile ${i} is ${b.tile.height}px tall, under 138px`)
+      const lines = await tile.locator('span.mono').evaluate((el) => {
+        const range = document.createRange()
+        range.selectNodeContents(el)
+        return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size
+      })
+      if (lines !== 1) problems.push(`KPI tile ${i} delta draws on ${lines} lines`)
+      rects[`KPI tile ${i}`] = { ...b, lines }
+    }
+    const t = await boxes(page, {
+      tile: trend,
+      head: trend.locator('> :first-child'),
+      meta: trend.locator('> :first-child .mono'),
+      headline: trend.locator('.money'),
+      chart,
+      row: trend.locator('> :last-child > div:last-child'),
+    })
+    problems.push(
+      ...within(t.tile, t.chart, 'chart in the trend tile'),
+      ...below(t.headline, t.chart, 'chart vs headline'),
+      ...below(t.chart, t.row, 'months row vs chart'),
+      ...within(t.tile, t.row, 'months row in the trend tile'),
+      ...within(t.head, t.meta, 'meta in the head'),
+    )
+    let prev: Rect | null = null
+    for (const [i, label] of labels.entries()) {
+      const l = (await boxes(page, { label })).label
+      problems.push(...within(t.tile, l, `month label ${i} in the trend tile`))
+      if (prev) problems.push(...leftOf(prev, l, `month label ${i - 1} vs ${i}`))
+      prev = l
+      rects[`month label ${i}`] = l
+    }
+    await assertPageDoesNotScrollSideways(page, 'overview')
+    return { problems, rects: { ...rects, trend: t } }
+  })
+
+  await attachJson(testInfo, 'ov-07-measurements', widths)
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
 test('IN-01 invoices register: heading, card, badge, toggle, bulk bar, header and pager relations', async ({ page }, testInfo) => {
@@ -793,4 +974,72 @@ test('AP-02 approvals states: loading, error, empty, empty page', async ({ page 
 
   await attachJson(testInfo, 'ap-02-measurements', { empty: e, emptyPage: p })
   expect(errors, `console errors beyond the deliberate 503:\n${errors.join('\n')}`).toEqual([])
+})
+
+// No stubs. The first gate run holds one recorded day (the boot snapshot); a re-run on a later WAT day holds two or more.
+// The branch follows the captured history, never a clock. Last in the file so a data failure hides no layout test.
+test('OV-06 the Overview draws recorded history only: one day keeps the empty states, two draw the curves, no SAMPLE', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+  const gateway = recordGateway(page)
+  const isHistoryRes = (r: Response): boolean => r.request().method() === 'GET' && onPath(new URL(r.url()), '/api/dashboard/v1/rollup/history')
+  const isRollupRes = (r: Response): boolean => r.request().method() === 'GET' && isRollup(new URL(r.url()))
+  type HistoryRow = RollupHistoryRow
+  type Client = DashboardClient
+  const captured = async (load: () => Promise<unknown>): Promise<{ history: HistoryRow[]; clients: Client[] }> => {
+    const [history, rollup] = await Promise.all([
+      page.waitForResponse(isHistoryRes, { timeout: 30_000 }).catch(() => { throw new Error('the Overview sent no GET /rollup/history within 30 s') }),
+      page.waitForResponse(isRollupRes, { timeout: 30_000 }).catch(() => { throw new Error('the Overview sent no GET /rollup within 30 s') }),
+      load(),
+    ])
+    const rows: HistoryRow[] = (await history.json()).history
+    const clients: Client[] = (await rollup.json()).clients
+    expect(Array.isArray(rows), 'the history response carries no history array').toBe(true)
+    expect(Array.isArray(clients) && clients.length > 0, 'the rollup response lists no client').toBe(true)
+    return { history: rows, clients }
+  }
+  const kpis = page.locator('.pf-dash-row-a .pf-grid-2 > div')
+
+  let seen = await captured(() => signInAs(page, 'firm', { tenantId: SHARD.a.id }))
+  await expect(kpis, 'the dashboard drew its four KPI tiles').toHaveCount(4, { timeout: 20_000 })
+  await expect(heading(page)).toBeVisible()
+  const historyReads = gateway.reads.filter((u) => onPath(new URL(u), '/api/dashboard/v1/rollup/history'))
+  expect(historyReads, 'the first Overview load reads the history once').toHaveLength(1)
+
+  // The SPA's active client is the one the h1 names, not the rollup's first.
+  let clientName = (await heading(page).innerText()).trim()
+  const rowsOf = (): HistoryRow[] => seen.history.filter((r) => r.entity_id === seen.clients.find((c) => c.entity_name === clientName)?.entity_id)
+  const deadline = Date.now() + 30_000
+  while (rowsOf().length === 0 && Date.now() < deadline) {
+    await page.waitForTimeout(3_000)
+    seen = await captured(() => page.reload())
+    await expect(kpis, 'the dashboard drew its four KPI tiles').toHaveCount(4, { timeout: 20_000 })
+    clientName = (await heading(page).innerText()).trim()
+  }
+  const client = seen.clients.find((c) => c.entity_name === clientName)
+  expect(client, `the rollup holds no client named "${clientName}" (the h1)`).toBeDefined()
+  const invoiceCount = Object.values(client!.counts).reduce((a, b) => a + b, 0)
+  expect(invoiceCount, `client "${clientName}" holds no invoice: the shard invoice copy in db/seed.e2e-shards.sql did not run`).toBeGreaterThanOrEqual(1)
+  const days = [...new Set(rowsOf().map((r) => r.day))].sort()
+  expect(days.length, `no history row for "${clientName}": the reconciliation snapshot worker did not run at boot`).toBeGreaterThanOrEqual(1)
+
+  const trend = page.getByText('Readiness trend', { exact: true }).locator('xpath=../..')
+  await expect(trend).toBeVisible()
+  const meta = trend.locator('> :first-child .mono')
+  if (days.length < 2) {
+    for (const [i, tile] of (await kpis.all()).entries()) await expect(tile.locator('svg'), `KPI tile ${i} draws no sparkline from one recorded day`).toHaveCount(0)
+    await expect(trend).toContainText('No history yet')
+    await expect(trend).toContainText('The trend starts on the first day this workspace records.')
+    await expect(meta).toHaveText('12 WEEKS')
+  } else {
+    for (const [i, tile] of (await kpis.all()).entries()) await expect(tile.locator('svg'), `KPI tile ${i} draws one sparkline`).toHaveCount(1)
+    await expect(trend.locator('svg'), 'the trend tile draws its chart').toHaveCount(1)
+    const today = new Date(Date.now() + 3_600_000).toISOString().slice(0, 10)
+    const span = Math.round((Date.parse(today) - Date.parse(days[0])) / 86_400_000) + 1
+    const mon = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'][Number(days[0].slice(5, 7)) - 1]
+    await expect(meta).toHaveText(span >= 84 ? '12 WEEKS' : `SINCE ${Number(days[0].slice(8, 10))} ${mon} · ${span} DAYS`)
+  }
+
+  await expect(page.locator('body'), 'the Overview carries no sample label').not.toContainText('SAMPLE')
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })

@@ -22,11 +22,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -284,6 +287,140 @@ func TestRollupHandler_NilLoggerDoesNotPanic(t *testing.T) {
 			rec, _ := doRollup(t, tc.rollup, tc.id)
 			if !json.Valid(rec.Body.Bytes()) {
 				t.Fatalf("response body is not valid JSON: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+var historyNow = time.Date(2026, 10, 20, 23, 30, 0, 0, time.UTC) // WAT 2026-10-21
+
+// doHistory issues GET /v1/rollup/history?<query> and returns the recorder, the `since` the
+// store received ("" when it was not called) and the call count.
+func doHistory(t *testing.T, query string, rows []HistoryRow, storeErr error, id *auth.Identity) (rec *httptest.ResponseRecorder, since string, calls int) {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodGet, "/v1/rollup/history?"+query, nil)
+	if id != nil {
+		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
+	}
+	rec = httptest.NewRecorder()
+	fake := func(_ context.Context, s string) ([]HistoryRow, error) {
+		since, calls = s, calls+1
+		return rows, storeErr
+	}
+	HistoryHandler(fake, func() time.Time { return historyNow }, nil).ServeHTTP(rec, r)
+	return rec, since, calls
+}
+
+func historyID() *auth.Identity {
+	return &auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+}
+
+func TestHistoryHandler_ReturnsRowsWithExactKeys(t *testing.T) {
+	rows := []HistoryRow{
+		{Day: "2026-10-19", EntityID: "e1", Total: 5, ReadinessNum: 4, NeedsAttention: 1, NotSubmitted: 2, VATKobo: 750},
+		{Day: "2026-10-20", EntityID: "e1", Total: 6},
+	}
+	rec, _, _ := doHistory(t, "", rows, nil, historyID())
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("status %d, content-type %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	var top map[string][]map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &top); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(top) != 1 || len(top["history"]) != 2 {
+		t.Fatalf("body = %s, want only a two-row history", rec.Body.String())
+	}
+	want := []string{"day", "entity_id", "needs_attention", "not_submitted", "readiness_num", "total", "vat_kobo"}
+	for i, row := range top["history"] {
+		var keys []string
+		for k := range row {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		if !reflect.DeepEqual(keys, want) {
+			t.Errorf("row %d keys = %v, want %v", i, keys, want)
+		}
+	}
+	if top["history"][0]["vat_kobo"] != float64(750) {
+		t.Errorf("vat_kobo = %v, want 750", top["history"][0]["vat_kobo"])
+	}
+}
+
+func TestHistoryHandler_EmptyIsAnArrayNotNull(t *testing.T) {
+	rec, _, _ := doHistory(t, "", nil, nil, historyID())
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"history":[]}` {
+		t.Errorf("body = %s, want {\"history\":[]}", got)
+	}
+}
+
+func TestHistoryHandler_SinceWindow(t *testing.T) {
+	cases := []struct{ name, query, since string }{
+		{"DefaultDaysIs84", "", "2026-07-30"},
+		{"OneDayIsToday", "days=1", "2026-10-21"},
+		{"TwoDaysIsTodayAndYesterday", "days=2", "2026-10-20"},
+		{"DaysAbove84Clamps", "days=500", "2026-07-30"},
+		{"Clamp84", "days=84", "2026-07-30"},
+		{"Clamp85", "days=85", "2026-07-30"},
+		{"Clamp83", "days=83", "2026-07-31"},
+		{"EmptyDaysIsTheDefault", "days=", "2026-07-30"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rec, since, calls := doHistory(t, c.query, nil, nil, historyID())
+			if rec.Code != http.StatusOK || calls != 1 || since != c.since {
+				t.Errorf("status %d, calls %d, since %q; want 200, 1, %q", rec.Code, calls, since, c.since)
+			}
+		})
+	}
+}
+
+func TestHistoryHandler_BadDaysIs400(t *testing.T) {
+	cases := []struct{ name, query, msg string }{
+		{"OverflowDaysIs400", "days=99999999999999999999", "days must be an integer"},
+		{"Zero", "days=0", "days must be >= 1"},
+		{"Negative", "days=-3", "days must be >= 1"},
+		{"Letters", "days=abc", "days must be an integer"},
+		{"Fraction", "days=1.5", "days must be an integer"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rec, _, calls := doHistory(t, c.query, nil, nil, historyID())
+			var body map[string]string
+			_ = json.Unmarshal(rec.Body.Bytes(), &body)
+			if rec.Code != http.StatusBadRequest || body["error"] != c.msg || calls != 0 {
+				t.Errorf("status %d, body %s, calls %d; want 400, %q, 0", rec.Code, rec.Body.String(), calls, c.msg)
+			}
+		})
+	}
+}
+
+func TestHistoryHandler_NoIdentityIs401(t *testing.T) {
+	rec, _, calls := doHistory(t, "", nil, nil, nil)
+	if rec.Code != http.StatusUnauthorized || strings.TrimSpace(rec.Body.String()) != `{"error":"unauthorized"}` || calls != 0 {
+		t.Errorf("status %d, body %s, calls %d", rec.Code, rec.Body.String(), calls)
+	}
+}
+
+func TestHistoryHandler_StoreErrorsMapToStatus(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		status int
+		msg    string
+	}{
+		{"NoTenant", db.ErrNoTenant, 401, "unauthorized"},
+		{"NotActiveMember", db.ErrNotActiveMember, 403, db.NotActiveMemberMessage},
+		{"WrappedNotActiveMember", fmt.Errorf("seam: %w", db.ErrNotActiveMember), 403, db.NotActiveMemberMessage},
+		{"Boom", errors.New("boom"), 500, "internal server error"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rec, _, _ := doHistory(t, "", nil, c.err, historyID())
+			var body map[string]string
+			_ = json.Unmarshal(rec.Body.Bytes(), &body)
+			if rec.Code != c.status || body["error"] != c.msg {
+				t.Errorf("status %d, body %s; want %d, %q", rec.Code, rec.Body.String(), c.status, c.msg)
 			}
 		})
 	}

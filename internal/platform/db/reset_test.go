@@ -164,7 +164,7 @@ func TestResetTargetTablesParsedFromResetTables(t *testing.T) {
 // seedFullResetFixture inserts one row into every table db.Reset truncates,
 // chained through the real FK graph (business_entities -> invoices ->
 // line_items / invoice_status_history / submission_jobs -> app_exchange;
-// import_batches -> business_entities; import_mappings -> business_entities; customers -> tenants),
+// import_batches -> business_entities; import_mappings -> business_entities; rollup_snapshots -> business_entities; customers -> tenants),
 // plus one independent row in each of
 // idempotency_keys/audit_log/the four River tables. Connects as the
 // superuser (BYPASSRLS; several of these tables are FORCE RLS) and returns
@@ -225,6 +225,15 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		tenantID, entityID, strings.Repeat(strings.ReplaceAll(uuid.NewString(), "-", ""), 2), `{"invoice_number":"Invoice No"}`,
 	); err != nil {
 		t.Fatalf("seed import_mappings fixture: %v", err)
+	}
+
+	requireRollupSnapshotsTable(t, pool)
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO rollup_snapshots (tenant_id, entity_id, day, total, readiness_num, needs_attention, not_submitted, vat_kobo)
+		 VALUES ($1, $2, '2026-10-21', 1, 1, 0, 0, 0)`,
+		tenantID, entityID,
+	); err != nil {
+		t.Fatalf("seed rollup_snapshots fixture: %v", err)
 	}
 
 	crrRequireTable(t, pool)

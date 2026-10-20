@@ -1225,6 +1225,27 @@ export function rollup(token: string): Promise<Rollup> {
   return apiFetch<Rollup>(`${apiBase()}/api/dashboard/v1/rollup`, { token })
 }
 
+// RollupHistoryRow / RollupHistory mirror internal/dashboard/dashboard.go's HistoryRow / History.
+export interface RollupHistoryRow {
+  day: string
+  entity_id: string
+  total: number
+  readiness_num: number
+  needs_attention: number
+  not_submitted: number
+  vat_kobo: number
+}
+
+export interface RollupHistory {
+  history: RollupHistoryRow[]
+}
+
+// rollupHistory(): GET /v1/rollup/history -- the daily snapshots; `days` bounds the window.
+export function rollupHistory(token: string, days?: number): Promise<RollupHistory> {
+  const query = days === undefined ? '' : `?days=${days}`
+  return apiFetch<RollupHistory>(`${apiBase()}/api/dashboard/v1/rollup/history${query}`, { token })
+}
+
 // ---- Workflow-role wire types, mirrored from internal/approval/approval.go's Role:
 // exactly four keys, none tagged omitempty, so `desc` is an explicit "" and `members`
 // an explicit [] rather than absent. `desc`, NOT `description`. ----

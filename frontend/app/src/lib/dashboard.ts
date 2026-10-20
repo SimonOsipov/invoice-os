@@ -298,8 +298,7 @@ export function formatMetric(m: Metrics, key: string): string {
   return '—'
 }
 
-// Ring geometry and colour bands ported verbatim from dashboardMock.ts's shipped tile
-// (R=50) so the real data doesn't visually shift it.
+// Ring geometry (R=50) and colour bands.
 export function readinessRing(m: Metrics): { score: number | null; circ: string; offset: string; color: string } {
   const circ = 2 * Math.PI * 50
   const score = metricRatio(m, 'readiness')

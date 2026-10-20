@@ -183,16 +183,17 @@ function firmCtx(entityId: string, name: string): PlatformCtx {
 }
 
 describe('DashboardActive live panels (task-429, METR-01-05)', () => {
-  it('(a) the Readiness and activity tiles carry no SAMPLE chip; the trend keeps its own', async () => {
-    mockRollupFetch(rollup(0))
+  it.each([
+    ['no invoices', rollup(0)],
+    ['readiness 67', rollup(0, {}, { readiness: { num: 67, den: 100 } })],
+  ])('no SAMPLE text on the Overview, trend meta reads 12 WEEKS (%s)', async (_, data) => {
+    mockRollupFetch(data)
 
     render(<DashboardActive ctx={dashCtx()} />)
 
-    const readinessHead = (await screen.findByText('Readiness score')).parentElement
-    expect(within(readinessHead!).queryByText('SAMPLE')).toBeNull()
-    expect(screen.getByText('12 WEEKS · SAMPLE')).toBeDefined()
-    const activityHead = screen.getByText('Recent activity').parentElement
-    expect(within(activityHead!).queryByText('SAMPLE')).toBeNull()
+    await screen.findByText('No activity yet') // the audit tile settled
+    expect(document.body.textContent).not.toMatch(/SAMPLE/)
+    expect(screen.getByText('Readiness trend').parentElement!.textContent).toBe('Readiness trend12 WEEKS')
   })
 
   it('(b) Top validation failures drops its FIRM-WIDE chip', async () => {
@@ -413,78 +414,51 @@ describe('DashboardActive live panels — adversarial (QA task-429)', () => {
   })
 })
 
-describe('DashboardActive trend re-anchor (task-430, METR-01-06)', () => {
-  it('the readiness ring and the trend headline show the same live score', async () => {
-    // 67 sits below buildMockPanels' fabricated range (72-95) for any seed, so a
-    // not-yet-anchored trend is guaranteed to show a different number here.
-    mockRollupFetch(rollup(0, {}, { readiness: { num: 67, den: 100 } }))
+const trendTile = () => cardOf('Readiness trend')
+const trendBody = () => headOf('Readiness trend').nextElementSibling as HTMLElement
+const NO_HISTORY = 'No history yetThe trend starts on the first day this workspace records.'
 
-    render(<DashboardActive ctx={dashCtx()} />)
-
-    const ringTile = (await screen.findByText('Readiness score')).parentElement!.parentElement!
-    expect(within(ringTile).getByText('67')).toBeDefined()
-    const trendTile = screen.getByText('Readiness trend').parentElement!.parentElement!
-    expect(within(trendTile).getByText('67%')).toBeDefined()
-  })
-
-  it('null live score renders the trend empty state, no fabricated curve, chip stays', async () => {
-    mockRollupFetch(rollup(0)) // metrics: {} -- no invoices, no live score
-
-    render(<DashboardActive ctx={dashCtx()} />)
-
-    const trendTile = (await screen.findByText('Readiness trend')).parentElement!.parentElement!
-    expect(trendTile.querySelectorAll('svg').length).toBe(0)
-    expect(within(trendTile).getByText('—')).toBeDefined()
-    expect(within(trendTile).getByText('No invoices yet')).toBeDefined()
-    expect(within(trendTile).getByText('12 WEEKS · SAMPLE')).toBeDefined()
-  })
-})
-
-// QA Mode B adversarial coverage (task-430, METR-01-06). MTR-01..06 in dashboardMock.test.ts
-// prove buildMockPanels is correct in isolation; these prove the RENDERED page never lets
-// the ring and the trend headline drift apart, at the boundary scores and across a client
-// switch, which is the actual product guarantee the story cares about.
-describe('DashboardActive trend re-anchor — adversarial (QA task-430)', () => {
-  it.each([0, 45, 100])('the ring and the trend headline show the same live value at score %i', async (score) => {
+describe('DashboardActive readiness trend draws no curve', () => {
+  it.each([0, 45, 100])('a live score draws the empty state in the trend tile (score %i)', async (score) => {
     mockRollupFetch(rollup(0, {}, { readiness: { num: score, den: 100 } }))
 
     render(<DashboardActive ctx={dashCtx()} />)
 
     const ringTile = (await screen.findByText('Readiness score')).parentElement!.parentElement!
     expect(within(ringTile).getByText(String(score))).toBeDefined()
-    const trendTile = screen.getByText('Readiness trend').parentElement!.parentElement!
-    expect(within(trendTile).getByText(`${score}%`)).toBeDefined()
-    // The SAMPLE chip stays even once the headline goes live -- only the endpoint is
-    // real, the 12-week series behind it is still fabricated.
-    expect(within(trendTile).getByText('12 WEEKS · SAMPLE')).toBeDefined()
+    expect(trendBody().textContent).toBe(NO_HISTORY)
+    expect(trendTile().querySelector('svg')).toBeNull()
+    expect(within(trendTile()).queryByText(`${score}%`)).toBeNull()
   })
 
-  // chartScore's last point is pinned to finalScore verbatim (dashboardMock.ts) and its
-  // y-coordinate is `168 - 1.5 * finalScore` (ch=176, top pad 8, plot height 150) --
-  // asserting the RENDERED <path d> ending, not just chart.now, catches a regression that
-  // anchors the headline number but leaves the curve itself still ending on the old
-  // fabricated score.
-  it('score 100 draws a curve whose rendered SVG path actually ends at the live score', async () => {
-    mockRollupFetch(rollup(0, {}, { readiness: { num: 100, den: 100 } }))
+  it('the trend empty state uses the sibling empty-state markup', async () => {
+    mockRollupFetch(rollup(0, {}, { readiness: { num: 67, den: 100 } }))
 
     render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
 
-    const trendTile = (await screen.findByText('Readiness trend')).parentElement!.parentElement!
-    const linePath = trendTile.querySelector('path[stroke="var(--action)"]')
-    expect(linePath?.getAttribute('d')?.endsWith(' L 680.0 18.0')).toBe(true)
+    const body = trendBody()
+    expect(body.style.padding).toBe('40px 20px')
+    expect(body.children[0].classList.contains('card-title')).toBe(true)
+    const msg = body.children[1] as HTMLElement
+    expect(msg.style.fontSize).toBe('13px')
+    expect(msg.style.color).toBe('var(--fg-3)')
   })
 
-  it('score 0 draws a curve whose rendered SVG path actually ends at the live score -- 0 is a score, not an absence', async () => {
-    mockRollupFetch(rollup(0, {}, { readiness: { num: 0, den: 100 } }))
+  it('null live score keeps the em-dash and "No invoices yet"', async () => {
+    mockRollupFetch(rollup(0)) // metrics: {} -- no invoices, no live score
 
     render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
 
-    const trendTile = (await screen.findByText('Readiness trend')).parentElement!.parentElement!
-    const linePath = trendTile.querySelector('path[stroke="var(--action)"]')
-    expect(linePath?.getAttribute('d')?.endsWith(' L 680.0 168.0')).toBe(true)
+    expect(trendTile().querySelector('svg')).toBeNull()
+    expect(within(trendTile()).getByText('—')).toBeDefined()
+    expect(within(trendTile()).getByText('No invoices yet')).toBeDefined()
+    expect(within(trendTile()).getByText('12 WEEKS')).toBeDefined()
+    expect(within(trendTile()).queryByText('No history yet')).toBeNull()
   })
 
-  it('switching the selected client updates BOTH the ring and the trend together, with no stale value left behind', async () => {
+  it('switching the selected client moves the ring; the trend stays the empty state', async () => {
     const data: Rollup = {
       totals: { counts: ZERO_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
       clients: [
@@ -497,19 +471,39 @@ describe('DashboardActive trend re-anchor — adversarial (QA task-430)', () => 
 
     const { rerender } = render(<DashboardActive ctx={firmCtx('ent-a', 'Client A')} />)
 
-    const ringTileA = (await screen.findByText('Readiness score')).parentElement!.parentElement!
-    expect(within(ringTileA).getByText('30')).toBeDefined()
-    const trendTileA = screen.getByText('Readiness trend').parentElement!.parentElement!
-    expect(within(trendTileA).getByText('30%')).toBeDefined()
+    await settle()
+    expect(within(cardOf('Readiness score')).getByText('30')).toBeDefined()
+    expect(within(trendTile()).getByText('No history yet')).toBeDefined()
 
     rerender(<DashboardActive ctx={firmCtx('ent-b', 'Client B')} />)
 
-    const ringTileB = screen.getByText('Readiness score').parentElement!.parentElement!
-    expect(within(ringTileB).getByText('95')).toBeDefined()
-    expect(within(ringTileB).queryByText('30')).toBeNull()
-    const trendTileB = screen.getByText('Readiness trend').parentElement!.parentElement!
-    expect(within(trendTileB).getByText('95%')).toBeDefined()
-    expect(within(trendTileB).queryByText('30%')).toBeNull()
+    expect(within(cardOf('Readiness score')).getByText('95')).toBeDefined()
+    expect(within(cardOf('Readiness score')).queryByText('30')).toBeNull()
+    expect(within(trendTile()).getByText('No history yet')).toBeDefined()
+  })
+
+  it('switching from a live-score client to a no-invoices client flips the trend branch, and back', async () => {
+    const data: Rollup = {
+      totals: { counts: ZERO_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
+      clients: [
+        { entity_id: 'ent-a', entity_name: 'Client A', counts: ZERO_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: { readiness: { num: 30, den: 100 } }, top_violations: [] },
+        { entity_id: 'ent-b', entity_name: 'Client B', counts: ZERO_COUNTS, needs_attention: 0, awaiting_approval: 0, metrics: {}, top_violations: [] },
+      ],
+      top_violations: [],
+    }
+    mockRollupFetch(data)
+
+    const { rerender } = render(<DashboardActive ctx={firmCtx('ent-a', 'Client A')} />)
+
+    await settle()
+    expect(trendBody().textContent).toBe(NO_HISTORY)
+
+    rerender(<DashboardActive ctx={firmCtx('ent-b', 'Client B')} />)
+    expect(trendBody().textContent).toBe('—No invoices yet')
+    expect(within(trendTile()).queryByText('No history yet')).toBeNull()
+
+    rerender(<DashboardActive ctx={firmCtx('ent-a', 'Client A')} />)
+    expect(trendBody().textContent).toBe(NO_HISTORY)
   })
 })
 
@@ -1330,13 +1324,13 @@ describe('DashboardActive small clearances (D-24)', () => {
     }
   })
 
-  it('the trend body pads 20px 20px 22px with a live score, and with none', async () => {
+  it('the trend body pads 20px 20px 22px with no score, and 40px 20px with a live score', async () => {
     mockRollupFetch(rollup(0, { validated: 1 }, { readiness: { num: 85, den: 100 } }))
     const { unmount } = render(<DashboardActive ctx={dashCtx()} />)
     await settle()
     const live = headOf('Readiness trend').nextElementSibling as HTMLElement
-    expect(live.querySelector('svg[viewBox="0 0 680 176"]')).not.toBeNull()
-    expect(live.style.padding).toBe('20px 20px 22px')
+    expect(live.querySelector('svg')).toBeNull()
+    expect(live.style.padding).toBe('40px 20px')
     unmount()
 
     mockRollupFetch(rollup(0))
@@ -1376,6 +1370,25 @@ describe('DashboardActive small clearances (D-24)', () => {
       expect(count.style.whiteSpace).toBe('nowrap')
       expect(count.style.flex).toBe('0 0 auto')
       expect(count.style.textAlign).toBe('right')
+    }
+  })
+
+  it('the four KPI tiles draw no svg and keep value and delta', async () => {
+    mockRollupFetch(rollup(0, { validated: 3, draft: 2 }))
+    render(<DashboardActive ctx={dashCtx()} />)
+    await settle()
+
+    const expected: Record<string, [string, string]> = {
+      Invoices: ['5', '0 transmitted'],
+      'VAT tracked': ['—', 'output VAT'],
+      Exceptions: ['0', 'all clear'],
+      'Not yet submitted': ['5', '0 awaiting approval'],
+    }
+    for (const [label, [value, delta]] of Object.entries(expected)) {
+      const tile = kpiTile(label)
+      expect(tile.querySelector('svg'), label).toBeNull()
+      expect(within(tile).getByText(value), label).toBeDefined()
+      expect(kpiDelta(label), label).toBe(delta)
     }
   })
 

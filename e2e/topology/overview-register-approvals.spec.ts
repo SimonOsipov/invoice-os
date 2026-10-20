@@ -446,6 +446,13 @@ test('OV-02 in-house overview: tiles hold their head and body, columns align, fa
   }
   expect(tiles.length, 'ten tiles on the overview').toBe(10)
 
+  const kpis = (await groups[1][1].all()).map((tile, i) => [`KPI tile ${i}`, tile] as const)
+  expect(kpis.length, 'four KPI tiles to measure').toBe(4)
+  for (const [name, tile] of kpis) await expect(tile.locator('svg'), `${name} draws no sparkline`).toHaveCount(0)
+  const trend = tiles.find(([name]) => name === 'trend tile 0')![1]
+  await expect(trend.locator('> :first-child .mono'), 'the trend tile meta is exactly 12 WEEKS').toHaveText('12 WEEKS')
+  await expect(trend, 'the trend tile carries no sample label').not.toContainText('SAMPLE')
+
   const needs = page.locator('.pf-dash-row-b > div:first-child')
   const sentence = needs.locator('p')
   const needsCta = needs.getByRole('button')
@@ -462,6 +469,12 @@ test('OV-02 in-house overview: tiles hold their head and body, columns align, fa
       const b = await boxes(page, { tile, head: tile.locator('> :first-child'), body: tile.locator('> :last-child') })
       problems.push(...within(b.tile, b.head, `${name} head`), ...within(b.tile, b.body, `${name} body`), ...below(b.head, b.body, `${name} body vs head`))
       rects[name] = b
+    }
+    // 138 is the KPI tile minHeight in DashboardActive.tsx.
+    for (const [name, tile] of kpis) {
+      const k = (await boxes(page, { tile })).tile
+      if (k.height < 138) problems.push(`${name} is ${k.height}px tall, under 138px`)
+      rects[`${name} height`] = k
     }
     const e = await boxes(page, { a: edges[0], b: edges[1], c: edges[2] })
     problems.push(...sameLeft(e.a, e.b, 'row B vs row C right column'), ...sameLeft(e.a, e.c, 'row B right column vs KPI column'))

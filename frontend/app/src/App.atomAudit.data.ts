@@ -280,7 +280,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     resetBySwitchClient: false,
     routes: [...ALL_13, '/settings/<tab>'],
     verdict: 'correctly-reset',
-    note: 'A client-side constant (App.tsx#Workspace), never fetched, so it carries no company dimension. Read by the always-mounted env banner and by SettingsView.',
+    note: 'A client-side constant (App.tsx#Workspace), never fetched, so it carries no company dimension. Read by the always-mounted env banner and the Header env pill.',
   },
   {
     binding: 'settingsTab, setSettingsTab_',

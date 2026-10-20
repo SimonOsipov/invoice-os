@@ -1,7 +1,7 @@
 // Settings — tabbed: Members (the workspace's people — MembersView, MEMB-01), Roles (the
 // approval seats those people hold — RolesView), ERP
 // connectors (toggle connect/disconnect, plus a per-connector detail view behind Manage),
-// API & webhooks (base URL, keys dimmed by sandbox mode, endpoints, webhooks), and
+// API & webhooks (base URL, keys, endpoints, webhooks), and
 // signing & certificates. The last three are ported from Platform.dc.html ~L847-951 +
 // the settings slices of renderVals() (~L1397-1435).
 //
@@ -26,7 +26,7 @@ import { useId, useState } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, Loading } from '@invoice-os/api-client'
 
-import { API_BASE, API_KEYS, CERTS, CONNECTOR_DEFS, ENDPOINTS, SETTINGS_TABS, WEBHOOKS } from '../data'
+import { API_BASE, CERTS, CONNECTOR_DEFS, ENDPOINTS, SETTINGS_TABS, WEBHOOKS } from '../data'
 import { copyGlyph, plusGlyph, shieldGlyph } from '../glyphs'
 import { COMPANY_ADMIN_ONLY, companySetupAccess } from '../lib/members'
 import { NO_COMPANY_COPY } from './AddCompanyTask'
@@ -48,7 +48,7 @@ function methodColor(m: 'POST' | 'GET'): { bg: string; color: string } {
 }
 
 export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
-  const { settingsTab, sandbox, connectors, mode, activeEntity, entitiesState, refetchEntities } = ctx
+  const { settingsTab, connectors, mode, activeEntity, entitiesState, refetchEntities } = ctx
   const companyAccess = companySetupAccess(ctx.membersState, ctx.members)
   const adminOnly = companyAccess === 'wait'
   const companyNoteId = useId()
@@ -282,23 +282,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)' }}>
               <span style={{ fontSize: 14, fontWeight: 600 }}>API keys</span>
             </div>
-            {API_KEYS.map((k) => {
-              const dim = k.env === 'LIVE' ? (sandbox ? 0.45 : 1) : sandbox ? 1 : 0.45
-              return (
-                <div key={k.env} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '15px 20px', borderBottom: '1px solid var(--line-1)', opacity: dim }}>
-                  <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', background: k.envBg, borderRadius: 'var(--radius-md)', padding: '3px 8px' }}>
-                    <span className="mono" style={{ fontSize: 9, fontWeight: 700, color: k.envColor, letterSpacing: '0.06em' }}>{k.env}</span>
-                  </span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <code className="mono" style={{ fontSize: 12.5, color: 'var(--fg-1)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.key}</code>
-                    <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 3 }}>{k.note}</div>
-                  </div>
-                  <button className="pf-btn" style={{ flex: 'none', height: 32, padding: '0 11px', borderRadius: 'var(--radius-btn)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', fontFamily: 'var(--font-sans)', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
-                    {copyGlyph} Copy
-                  </button>
-                </div>
-              )
-            })}
+            <div style={{ padding: 20 }}><EmptyState title="No API keys yet" message="API access opens after NRS accreditation." /></div>
           </div>
           <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line-1)' }}>

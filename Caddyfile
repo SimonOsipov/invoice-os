@@ -8,6 +8,12 @@
 :{$PORT:8080} {
 	encode gzip
 
+	# No site may frame the apps; the header block covers every response, /health and the .map 404 included.
+	header {
+		Content-Security-Policy "frame-ancestors 'none'"
+		X-Frame-Options "DENY"
+	}
+
 	# Liveness endpoint for Railway's healthcheck — answered before the filesystem.
 	handle /health {
 		respond "OK" 200

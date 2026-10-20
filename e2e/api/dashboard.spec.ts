@@ -214,7 +214,7 @@ function watDay(offsetDays = 0): string {
   return new Date(Date.now() + 3600_000 + offsetDays * 86_400_000).toISOString().slice(0, 10)
 }
 
-// The boot snapshot runs at reconciliation start ; poll until persona A has a row.
+// The boot snapshot runs at reconciliation start; poll until persona A has a row.
 async function nonEmptyHistory(token: string, days?: number): Promise<RollupHistoryRow[]> {
   let rows: RollupHistoryRow[] = []
   await expect

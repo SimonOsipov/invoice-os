@@ -2,7 +2,7 @@
 // Every state is reached with page.route (D-12); no tenant data is written and no confirm button is clicked (D-13).
 // The api-client Loading and ErrorState assert placement only; the in-card and dense empties assert resolved values (OV-04, IN-02).
 // Screenshots are attached for the reviewer and never asserted.
-import { test, expect, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'
+import { test, expect, type Locator, type Page, type Response, type Route, type TestInfo } from '@playwright/test'
 import { collectErrors, signInAs } from '../personaSession'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -973,4 +973,62 @@ test('AP-02 approvals states: loading, error, empty, empty page', async ({ page 
 
   await attachJson(testInfo, 'ap-02-measurements', { empty: e, emptyPage: p })
   expect(errors, `console errors beyond the deliberate 503:\n${errors.join('\n')}`).toEqual([])
+})
+
+// No stubs. The first gate run holds one recorded day (the boot snapshot); a re-run on a later WAT day holds two or more.
+// The branch follows the captured history, never a clock. Last in the file so a data failure hides no layout test.
+test('OV-06 the Overview draws recorded history only: one day keeps the empty states, two draw the curves, no SAMPLE', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+  const gateway = recordGateway(page)
+  const isHistoryRes = (r: Response): boolean => r.request().method() === 'GET' && onPath(new URL(r.url()), '/api/dashboard/v1/rollup/history')
+  const isRollupRes = (r: Response): boolean => r.request().method() === 'GET' && isRollup(new URL(r.url()))
+  type HistoryRow = { day: string; entity_id: string }
+  type Client = { entity_id: string; entity_name: string; total: number }
+  const captured = async (load: () => Promise<unknown>): Promise<{ history: HistoryRow[]; clients: Client[] }> => {
+    const [history, rollup] = await Promise.all([page.waitForResponse(isHistoryRes, { timeout: 30_000 }), page.waitForResponse(isRollupRes, { timeout: 30_000 }), load()])
+    return { history: (await history.json()).history, clients: (await rollup.json()).clients }
+  }
+  const kpis = page.locator('.pf-dash-row-a .pf-grid-2 > div')
+
+  let seen = await captured(() => signInAs(page, 'firm', { tenantId: SHARD.a.id }))
+  await expect(kpis, 'the dashboard drew its four KPI tiles').toHaveCount(4, { timeout: 20_000 })
+  await expect(heading(page)).toBeVisible()
+  const historyReads = gateway.reads.filter((u) => onPath(new URL(u), '/api/dashboard/v1/rollup/history'))
+  expect(historyReads, 'the first Overview load reads the history once').toHaveLength(1)
+
+  // The SPA's active client is the one the h1 names, not the rollup's first.
+  const clientName = (await heading(page).innerText()).trim()
+  const rowsOf = (): HistoryRow[] => seen.history.filter((r) => r.entity_id === seen.clients.find((c) => c.entity_name === clientName)?.entity_id)
+  const deadline = Date.now() + 30_000
+  while (rowsOf().length === 0 && Date.now() < deadline) {
+    await page.waitForTimeout(3_000)
+    seen = await captured(() => page.reload())
+    await expect(kpis, 'the dashboard drew its four KPI tiles').toHaveCount(4, { timeout: 20_000 })
+  }
+  const client = seen.clients.find((c) => c.entity_name === clientName)
+  expect(client, `the rollup holds no client named "${clientName}" (the h1)`).toBeDefined()
+  expect(client!.total, `client "${clientName}" holds no invoice: the shard invoice copy in db/seed.e2e-shards.sql did not run`).toBeGreaterThanOrEqual(1)
+  const days = rowsOf().map((r) => r.day).sort()
+  expect(days.length, `no history row for "${clientName}": the reconciliation snapshot worker did not run at boot`).toBeGreaterThanOrEqual(1)
+
+  const trend = page.getByText('Readiness trend', { exact: true }).locator('xpath=../..')
+  await expect(trend).toBeVisible()
+  const meta = trend.locator('> :first-child .mono')
+  if (days.length < 2) {
+    for (const [i, tile] of (await kpis.all()).entries()) await expect(tile.locator('svg'), `KPI tile ${i} draws no sparkline from one recorded day`).toHaveCount(0)
+    await expect(trend).toContainText('No history yet')
+    await expect(trend).toContainText('The trend starts on the first day this workspace records.')
+    await expect(meta).toHaveText('12 WEEKS')
+  } else {
+    for (const [i, tile] of (await kpis.all()).entries()) await expect(tile.locator('svg'), `KPI tile ${i} draws one sparkline`).toHaveCount(1)
+    await expect(trend.locator('svg'), 'the trend tile draws its chart').toHaveCount(1)
+    const today = new Date(Date.now() + 3_600_000).toISOString().slice(0, 10)
+    const span = Math.round((Date.parse(today) - Date.parse(days[0])) / 86_400_000) + 1
+    const mon = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'][Number(days[0].slice(5, 7)) - 1]
+    await expect(meta).toHaveText(span >= 84 ? '12 WEEKS' : `SINCE ${Number(days[0].slice(8, 10))} ${mon} · ${span} DAYS`)
+  }
+
+  await expect(page.locator('body'), 'the Overview carries no sample label').not.toContainText('SAMPLE')
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })

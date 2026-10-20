@@ -1,7 +1,7 @@
 // Package dashboard is M4-07's per-tenant rollup: one query across a
 // tenant's invoices, grouped by business entity, that answers "which clients
 // need attention right now" (System Design, M4-07 story). This file holds
-// the domain types only — Store.Rollup (store.go) is what populates them.
+// the domain types only.
 package dashboard
 
 // Counts is the per-state invoice count block — always all seven states,

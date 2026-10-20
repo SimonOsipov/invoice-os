@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -132,5 +133,33 @@ func TestStoreHistory_NoIdentityFailsClosed(t *testing.T) {
 	_, err := NewStore(app).History(context.Background(), "2026-10-01")
 	if !errors.Is(err, db.ErrNoTenant) {
 		t.Errorf("err = %v, want ErrNoTenant", err)
+	}
+}
+
+func TestStoreHistory_NonActiveCallerRefusedWithNoRows(t *testing.T) {
+	super, app := dbTestPools(t)
+	ta, tb := seedTenant(t, super, "history refuse A"), seedTenant(t, super, "history refuse B")
+	seedSnap(t, super, tb, seedEntity(t, super, tb, "H B"), "2026-10-20", 1)
+	st := NewStore(app)
+
+	memberOfA := csMember(t, super, ta, "admin")
+	id, _ := auth.IdentityFromContext(memberOfA)
+	asB := auth.WithIdentity(context.Background(), auth.Identity{Subject: id.Subject, Role: "authenticated", TenantID: tb})
+
+	suspended := csMember(t, super, tb, "admin")
+	sid, _ := auth.IdentityFromContext(suspended)
+	if _, err := super.Exec(context.Background(), `UPDATE memberships SET status = 'suspended' WHERE user_id = $1`, sid.Subject); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+
+	for name, ctx := range map[string]context.Context{"member of another tenant": asB, "suspended member": suspended} {
+		got, err := st.History(ctx, "2026-10-01")
+		if !errors.Is(err, db.ErrNotActiveMember) || len(got) != 0 {
+			t.Errorf("%s: rows %d, err %v; want no rows, ErrNotActiveMember", name, len(got), err)
+		}
+	}
+	// control: tenant B's own admin does see the row, so the refusals above are not an empty table
+	if got, err := st.History(csMember(t, super, tb, "admin"), "2026-10-01"); err != nil || len(got) != 1 {
+		t.Fatalf("control: rows %d, err %v; want 1, nil", len(got), err)
 	}
 }

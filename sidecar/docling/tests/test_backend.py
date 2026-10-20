@@ -43,8 +43,17 @@ def test_backend_is_pinned_not_defaulted():
     assert issubclass(opt.backend, ThreadedDoclingParseDocumentBackend)
 
 
-def test_each_page_image_is_its_own_pdfium_page():
+def _page_images_by_number(monkeypatch=None, order=None):
     pdf = repo_root().joinpath("internal", "extraction", "testdata", "native_3page.pdf")
+    if order:
+        orig = ThreadedDoclingParseDocumentBackend.iter_pages
+
+        def shuffled(self):
+            pages = list(orig(self))
+            for i in order:
+                yield pages[i]
+
+        monkeypatch.setattr(ThreadedDoclingParseDocumentBackend, "iter_pages", shuffled)
     in_doc = InputDocument(
         path_or_stream=pdf,
         format=InputFormat.PDF,
@@ -52,7 +61,7 @@ def test_each_page_image_is_its_own_pdfium_page():
         backend_options=ThreadedDoclingParseBackendOptions(render_pages=False),
     )
     ref = pypdfium2.PdfDocument(pdf)
-    images = {}
+    seen, images = [], {}
     for page in in_doc._backend.iter_pages():
         got = page.get_page_image(scale=1)
         size = page.get_size()
@@ -61,9 +70,21 @@ def test_each_page_image_is_its_own_pdfium_page():
             (round(size.width), round(size.height))
         )
         assert got.tobytes() == want.tobytes(), f"page {page.page_no} is not pdfium page index"
+        seen.append(page.page_no)
         images[page.page_no] = got.tobytes()
     in_doc._backend.unload()
+    return seen, images
+
+
+def test_each_page_image_is_its_own_pdfium_page():
+    _, images = _page_images_by_number()
     assert sorted(images) == [1, 2, 3]
+    assert len(set(images.values())) == 3, "the three page images must differ pairwise"
+
+
+def test_each_page_image_is_its_own_pdfium_page_when_pages_arrive_out_of_order(monkeypatch):
+    seen, images = _page_images_by_number(monkeypatch, order=[2, 0, 1])
+    assert seen == [3, 1, 2]
     assert len(set(images.values())) == 3, "the three page images must differ pairwise"
 
 

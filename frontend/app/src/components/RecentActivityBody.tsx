@@ -43,7 +43,7 @@ export function RecentActivityBody({ ctx }: { ctx: PlatformCtx }) {
             <span style={{ width: 1, flex: 1, background: 'var(--line-2)', minHeight: i === rows.length - 1 ? '0px' : '18px' }} />
           </div>
           <div style={{ paddingBottom: 16, flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, lineHeight: 1.4 }}>
+            <div style={{ fontSize: 13, lineHeight: 1.4, overflowWrap: 'anywhere' }}>
               <span style={{ fontWeight: 600 }}>{r.who}</span> <span style={{ color: 'var(--fg-2)' }}>{r.label}</span>
               {r.company && (
                 <>

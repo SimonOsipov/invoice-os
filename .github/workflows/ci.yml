@@ -1281,6 +1281,17 @@ jobs:
             | jq -s '.' > timeline.json
           go run ./internal/tools/forcepushgate -pr pr.json -timeline timeline.json
 
+  advisories:
+    name: advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Scan for high or critical advisories
+        run: bash scripts/ci/advisories.sh
+
   # Unconditional: a new advisory against unchanged code turns every PR red.
   govulncheck:
     name: govulncheck
@@ -1305,7 +1316,7 @@ jobs:
   # skips never leave a required check stuck pending.
   ci:
     name: CI
-    needs: [changes, go, frontend, library, blog, clean-clone, migrations, docker-canary, docling-canary, docling-test, rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite, govulncheck]
+    needs: [changes, go, frontend, library, blog, clean-clone, migrations, docker-canary, docling-canary, docling-test, rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite, govulncheck, advisories]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1330,6 +1341,7 @@ jobs:
           echo "cite-refs:     ${{ needs.cite-refs.result }}"
           echo "history-rewrite: ${{ needs.history-rewrite.result }}"
           echo "govulncheck:   ${{ needs.govulncheck.result }}"
+          echo "advisories:    ${{ needs.advisories.result }}"
           if [ "${{ needs.changes.result }}" != "success" ]; then
             echo "::error::'changes' job did not succeed"; exit 1
           fi
@@ -1393,5 +1405,9 @@ jobs:
           # Unconditional, so a skip would read like a clean scan.
           if [ "${{ needs.govulncheck.result }}" != "success" ]; then
             echo "::error::govulncheck job failed"; exit 1
+          fi
+          # A skipped or cancelled scan must fail CI too.
+          if [ "${{ needs.advisories.result }}" != "success" ]; then
+            echo "::error::advisories job failed"; exit 1
           fi
           echo "All triggered CI jobs passed (skipped jobs are OK)."

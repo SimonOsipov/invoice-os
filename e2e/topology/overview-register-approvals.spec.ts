@@ -429,6 +429,8 @@ test('OV-02 in-house overview: tiles hold their head and body, columns align, fa
       clients: (b.clients ?? []).map((c: object) => ({ ...c, top_violations: VIOLATIONS })),
     }),
   })
+  // Fixture check: the snapshot worker records a row per day, so a gate re-run on a later WAT day holds two.
+  await stubGet(page, (url) => onPath(url, '/api/dashboard/v1/rollup/history'), { mode: 'empty', empty: { history: [] } })
   await signInAs(page, 'inhouse', { tenantId: SHARD.b.id })
   await expect(page.locator('.pf-dash-row-a .pf-grid-2 > div'), 'the dashboard drew its four KPI tiles').toHaveCount(4, { timeout: 20_000 })
 
@@ -691,7 +693,7 @@ test('OV-05 recent activity rows stay inside their tile', async ({ page }, testI
 })
 
 // Fixture check: the history call is rewritten onto the live rollup and answered with 40 stubbed WAT days
-// for the rollup's first client, so the sparkline and chart markup is reached. A real PR environment holds one recorded day.
+// for every rollup client, so the sparkline and chart markup is reached.
 test('OV-07 the curves keep inside their tiles at every wide width (fixture check)', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors = collectErrors(page)
@@ -705,16 +707,19 @@ test('OV-07 the curves keep inside their tiles at every wide width (fixture chec
       rollup.search = ''
       return rollup
     },
+    // Every client gets rows: the SPA's active client comes from the entities list, whose order differs from the rollup's.
     transform: (b) => ({
-      history: Array.from({ length: 40 }, (_, i) => ({
-        day: new Date(todayMs - (39 - i) * 86_400_000).toISOString().slice(0, 10),
-        entity_id: b.clients[0].entity_id,
-        total: 20 + i,
-        readiness_num: 8 + Math.floor(i / 2),
-        needs_attention: 3 + (i % 5),
-        not_submitted: 5 + (i % 7),
-        vat_kobo: 100_000 + i * 5_000,
-      })),
+      history: b.clients.flatMap((c: { entity_id: string }) =>
+        Array.from({ length: 40 }, (_, i) => ({
+          day: new Date(todayMs - (39 - i) * 86_400_000).toISOString().slice(0, 10),
+          entity_id: c.entity_id,
+          total: 20 + i,
+          readiness_num: 8 + Math.floor(i / 2),
+          needs_attention: 3 + (i % 5),
+          not_submitted: 5 + (i % 7),
+          vat_kobo: 100_000 + i * 5_000,
+        })),
+      ),
     }),
   })
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })

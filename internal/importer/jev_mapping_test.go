@@ -129,7 +129,7 @@ func jpWindow(t *testing.T, dir, id string) [][]string {
 	t.Helper()
 	f := jpOpenCSV(t, dir, id)
 	defer func() { _ = f.Close() }()
-	header, rows, _, err := Decode(f, "csv")
+	header, rows, _, err := Decode(context.Background(), f, "csv")
 	if err != nil {
 		t.Fatalf("Decode csv for %s: %v", id, err)
 	}
@@ -159,7 +159,7 @@ func jpAISet(t *testing.T, dir string, layouts []jpLayout) map[string]map[string
 	out := map[string]map[string]string{}
 	for _, a := range answers {
 		f1 := jpOpenCSV(t, dir, a.Layout)
-		hdr1, rows1, _, err := Decode(f1, "csv")
+		hdr1, rows1, _, err := Decode(context.Background(), f1, "csv")
 		_ = f1.Close()
 		if err != nil {
 			t.Fatalf("Decode csv for %s: %v", a.Layout, err)
@@ -170,7 +170,7 @@ func jpAISet(t *testing.T, dir string, layouts []jpLayout) map[string]map[string
 		header := hdr1
 		if headerRow != defaultHeaderRow {
 			f2 := jpOpenCSV(t, dir, a.Layout)
-			h, _, _, derr := DecodeFrom(f2, "csv", headerRow)
+			h, _, _, derr := DecodeFrom(context.Background(), f2, "csv", headerRow)
 			_ = f2.Close()
 			// Production's own fallback, literally: a re-parse failure or a blank header at
 			// that row falls back to row 1, never fails the layout.

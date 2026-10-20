@@ -199,9 +199,9 @@ func SuggestMappingHandler(
 			return
 		}
 
-		hdr1, rows1, _, err := Decode(bytes.NewReader(raw), format)
+		hdr1, rows1, _, err := Decode(r.Context(), bytes.NewReader(raw), format)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "could not decode uploaded file")
+			writeError(w, http.StatusBadRequest, decodeErrorMessage(err))
 			return
 		}
 
@@ -218,7 +218,7 @@ func SuggestMappingHandler(
 
 		header, rows := hdr1, rows1
 		if headerRow != defaultHeaderRow {
-			h, rs, _, derr := DecodeFrom(bytes.NewReader(raw), format, headerRow)
+			h, rs, _, derr := DecodeFrom(r.Context(), bytes.NewReader(raw), format, headerRow)
 			// The AI's row choice is never the caller's fault: a re-parse failure or a
 			// blank header at that row falls back to row 1 rather than 400ing
 			// (TestSuggestHandler_AnUndecodableTailAtTheAnsweredRowFallsBackToRowOne,

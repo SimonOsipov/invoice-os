@@ -34,10 +34,13 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/xuri/excelize/v2"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -374,5 +377,94 @@ func TestCreateHandler_MappingMissingInvoiceNumber400(t *testing.T) {
 	}
 	if resp.Error == "" {
 		t.Error("expected a non-empty error message in the body")
+	}
+}
+
+func TestDecodeErrorMessage_MapsEachDecodeError(t *testing.T) {
+	const generic = "could not decode uploaded file"
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"header_row_past_end", ErrHeaderRowPastEnd, headerRowPastEnd},
+		{"too_many_rows", fmt.Errorf("wrap: %w", ErrTooManyRows), "the spreadsheet has more than 100,000 data rows; split it into smaller files"},
+		{"too_many_cells", fmt.Errorf("wrap: %w", ErrTooManyCells), "the spreadsheet has too many cells; remove blank columns or split it into smaller files"},
+		{"deadline", fmt.Errorf("wrap: %w", context.DeadlineExceeded), "the spreadsheet took too long to read; split it into smaller files"},
+		{"caller_gone", fmt.Errorf("wrap: %w", context.Canceled), generic},
+		{"bad_workbook", excelize.ErrWorkbookFileFormat, generic},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := decodeErrorMessage(tc.err); got != tc.want {
+				t.Errorf("decodeErrorMessage(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// Create, saved-mapping, suggest and check each write the cap and deadline
+// text; preview and sheet have their own tests.
+func TestDecodeRoutes_CapAndDeadlineAnswerThroughDecodeErrorMessage(t *testing.T) {
+	over := buildXLSX(t, func(f *excelize.File, sheet string) {
+		mustSetCellValue(t, f, sheet, "A1", "x")
+		mustSetCellValue(t, f, sheet, "A100002", "x")
+	})
+	ten := buildXLSX(t, func(f *excelize.File, sheet string) {
+		for i := 1; i <= 10; i++ {
+			mustSetCellValue(t, f, sheet, fmt.Sprintf("A%d", i), "x")
+		}
+	})
+	id := testIdentity()
+	entityID := uuid.NewString()
+	errText := func(raw []byte) string {
+		var e struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(raw, &e); err != nil {
+			t.Fatalf("decode %s: %v", raw, err)
+		}
+		return e.Error
+	}
+	routes := []struct {
+		name string
+		call func(open *fakeDocOpen) (int, []byte)
+	}{
+		{"create", func(open *fakeDocOpen) (int, []byte) {
+			imp := func(context.Context, string, string, string, int, map[string]string, []string, [][]string, bool, string) (BatchResult, error) {
+				t.Error("import ran after a decode failure")
+				return BatchResult{}, nil
+			}
+			body, ct := buildImportForm(t, entityID, `{"invoice_number":"x"}`, open.doc.ID)
+			rec, raw, _ := doImportUpload(t, imp, open.fn(), &id, "", ct, body)
+			return rec.Code, raw
+		}},
+		{"saved_mapping", func(open *fakeDocOpen) (int, []byte) {
+			rec, raw, _ := doSavedMappingRequest(t, open.fn(), (&lookupSpy{}).fn(), nil, &id, "?entity_id="+entityID+"&document_id="+open.doc.ID)
+			return rec.Code, raw
+		}},
+		{"suggest", func(open *fakeDocOpen) (int, []byte) {
+			rec, raw := doSuggestRequest(t, open.fn(), (&lookupSpy{}).fn(), &fakeSuggester{enabled: true}, nil, &id, suggestReqBody(entityID, open.doc.ID))
+			return rec.Code, raw
+		}},
+		{"check", func(open *fakeDocOpen) (int, []byte) {
+			rec, raw := doCheckRequest(t, open.fn(), &mcStub{enabled: true}, nil, &id, checkReqBody(t, open.doc.ID, chkOnePlacement))
+			return rec.Code, raw
+		}},
+	}
+	for _, rt := range routes {
+		t.Run(rt.name+"/row_cap", func(t *testing.T) {
+			code, raw := rt.call(newFakeDocOpen("big.xlsx", xlsxContentType, over))
+			if code != http.StatusBadRequest || errText(raw) != "the spreadsheet has more than 100,000 data rows; split it into smaller files" {
+				t.Errorf("status %d body %s, want 400 %q", code, raw, "the spreadsheet has more than 100,000 data rows; split it into smaller files")
+			}
+		})
+		t.Run(rt.name+"/deadline", func(t *testing.T) {
+			defer func(d time.Duration) { xlsxDecodeTimeout = d }(xlsxDecodeTimeout)
+			xlsxDecodeTimeout = time.Nanosecond
+			code, raw := rt.call(newFakeDocOpen("ten.xlsx", xlsxContentType, ten))
+			if code != http.StatusBadRequest || errText(raw) != "the spreadsheet took too long to read; split it into smaller files" {
+				t.Errorf("status %d body %s, want 400 %q", code, raw, "the spreadsheet took too long to read; split it into smaller files")
+			}
+		})
 	}
 }

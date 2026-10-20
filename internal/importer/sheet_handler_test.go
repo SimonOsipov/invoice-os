@@ -139,7 +139,7 @@ func TestSheetHandler_MatchesDirectDecode(t *testing.T) {
 		t.Fatalf("columns/rows empty, want non-empty before comparing against a direct Decode")
 	}
 
-	wantHeader, wantRows, _, err := Decode(bytes.NewReader(content), "csv")
+	wantHeader, wantRows, _, err := Decode(context.Background(), bytes.NewReader(content), "csv")
 	if err != nil {
 		t.Fatalf("direct Decode: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestSheetHandler_TruncationWindowIsTheFirstRows(t *testing.T) {
 	}
 	resp := mustUnmarshalSheet(t, raw)
 
-	_, wantRows, _, err := Decode(bytes.NewReader(content), "csv")
+	_, wantRows, _, err := Decode(context.Background(), bytes.NewReader(content), "csv")
 	if err != nil {
 		t.Fatalf("direct Decode: %v", err)
 	}

@@ -1,12 +1,10 @@
 // Mock feed for the dashboard panels that have no backend source.
 //
-// M4-10 removed the readiness ring, readiness bars, 12-week trend, KPI sparklines,
-// VAT KPI and activity feed because GET /api/dashboard/v1/rollup carries none of
-// them ([hide-sourceless]). They are restored here by explicit product decision, on
-// mock data, until the rollup grows the corresponding fields.
+// The rollup has no fields for the readiness ring and bars, 12-week trend, KPI sparklines
+// or VAT KPI, so they run on this mock until it does.
 //
-// This module fabricates the trend's shape/history, sparkline shapes and the activity
-// feed — the trend's endpoint is live, derived from liveScorePct. Panels that CAN be
+// This module fabricates the trend's shape/history and the sparkline shapes. The trend's
+// endpoint is live, derived from liveScorePct. Panels that CAN be
 // sourced from the live rollup are not built here — DashboardActive reads those off
 // Rollup directly, so the KPI tiles show real counts with only their sparkline shape
 // mocked.
@@ -44,19 +42,9 @@ export type TrendChart = {
   deltaLabel: string
 }
 
-export type ActivityRow = {
-  who: string
-  action: string
-  target: string
-  time: string
-  dot: string
-  line: string
-}
-
 export type MockPanels = {
   sparks: string[]
   chart: TrendChart | null
-  activity: ActivityRow[]
 }
 
 // 88x30 sparkline path. Verbatim from pre-M4-10 lib/charts.ts.
@@ -106,14 +94,6 @@ function chartScore(rnd: () => number, finalScore: number): TrendChart {
   }
 }
 
-const ACTIVITY_DOT: Record<string, string> = {
-  green: 'var(--status-green-text)',
-  red: 'var(--status-red-text)',
-  teal: 'var(--action)',
-  amber: 'var(--status-amber-text)',
-  muted: 'var(--line-3)',
-}
-
 // `seed` keys every fabricated value; pass the tenant name so a workspace is stable.
 // liveScorePct anchors the trend's endpoint to the real readiness score; null (no
 // invoices yet) yields chart: null rather than a curve ending at a fabricated 0.
@@ -124,21 +104,5 @@ export function buildMockPanels(seed: string, liveScorePct: number | null): Mock
     // One per KPI tile, in render order; the last trends down (failures should fall).
     sparks: [spark(trend(rnd, 1)), spark(trend(rnd, 1)), spark(trend(rnd, -1)), spark(trend(rnd, 1))],
     chart: liveScorePct !== null ? chartScore(rnd, liveScorePct) : null,
-    activity: (
-      [
-        ['You', 'approved', 'INV-2026-00481', '2m ago', 'teal'],
-        ['Engine', 'validated', 'INV-2026-00480', '24m ago', 'green'],
-        ['T. Adeyemi', 'transmitted', 'INV-2026-00478', '1h ago', 'green'],
-        ['Import', 'added 12 invoices', 'via CSV', '3h ago', 'muted'],
-        ['Engine', 'flagged errors on', 'INV-2026-00475', '5h ago', 'red'],
-      ] as [string, string, string, string, string][]
-    ).map((a, i) => ({
-      who: a[0],
-      action: a[1],
-      target: a[2],
-      time: a[3],
-      dot: ACTIVITY_DOT[a[4]],
-      line: i === 4 ? '0px' : '18px',
-    })),
   }
 }

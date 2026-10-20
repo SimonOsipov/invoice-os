@@ -1152,13 +1152,17 @@ async function placeInvoiceNumberAndExpectImportEnabled(page: Page): Promise<voi
   await expect(page.getByRole('button', { name: /^Import \d+ rows$/ })).toBeEnabled()
 }
 
-// CF2: each absence has its visible control in the same step.
-async function expectNoDemoActivity(page: Page): Promise<void> {
+// Real rows by label and company (no count); the demo feed and the empty copy are absent.
+async function expectOverviewActivity(page: Page, rows: Array<{ label: string; company: string }>): Promise<void> {
   await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
   const tile = page.getByText('Recent activity', { exact: true }).locator('xpath=ancestor::div[2]')
-  await expect(tile.getByText('No activity to show')).toBeVisible()
-  await expect(tile.getByText('SAMPLE')).toHaveCount(0)
-  await expect(tile.getByText('INV-2026-00481')).toHaveCount(0)
+  for (const { label, company } of rows) {
+    await expect(tile.getByText(label, { exact: true }).first(), `activity row ${label}`).toBeVisible()
+    await expect(tile.getByText(company, { exact: true }).first(), `activity company ${company}`).toBeVisible()
+  }
+  for (const gone of ['No activity to show', 'No activity yet', 'SAMPLE', 'INV-2026-00481']) {
+    await expect(tile.getByText(gone), `tile has no ${gone}`).toHaveCount(0)
+  }
 }
 
 test('deployed app: a new in-house workspace lands on Add your company, and adding it opens the import', async ({ page }) => {
@@ -1206,8 +1210,26 @@ test('deployed app: a new in-house workspace lands on Add your company, and addi
   await expect(dialog).toHaveCount(0)
   await expect(page.getByText(name, { exact: true }).first()).toBeVisible()
 
+  // The invoice is created before Overview mounts, so the tile's first read sees it.
+  const token = await browserToken(page)
+  const entity = (await listEntities(token)).entities.find((e) => e.name === name)
+  expect(entity, `the new company ${name} is listed`).toBeDefined()
+  await createInvoice(token, {
+    entity_id: entity!.id,
+    invoice_number: `INV-OVER01-${Date.now()}`,
+    issue_date: '2026-01-01T00:00:00Z',
+    supplier_tin: freshTin(),
+    supplier_name: 'Acme Nigeria Ltd',
+    buyer_tin: '87654321-0002',
+    buyer_name: 'Buyer Ltd',
+    currency: 'NGN',
+    subtotal: '1000',
+    vat: '75',
+    total: '1075',
+    line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+  })
   await sidebarNav(page).getByRole('button', { name: 'Overview' }).click()
-  await expectNoDemoActivity(page)
+  await expectOverviewActivity(page, [{ label: 'Invoice created', company: name }])
   const chip = page.getByTestId('company-chip')
   await expect(chip).toContainText('WORKSPACE')
   await expect(chip.getByText('ERP', { exact: true })).toHaveCount(0)
@@ -1245,11 +1267,12 @@ test('deployed app: a new firm lands on Add your first client, and the import st
   await expectAddCompanyTask(page, 'Add your first client')
   await page.getByTestId('add-company-task').getByRole('button').click()
   const dialog = page.getByRole('dialog', { name: 'Add client' })
-  await dialog.getByRole('textbox').first().fill(`Add Client ${Date.now()}`)
+  const clientName = `Add Client ${Date.now()}`
+  await dialog.getByRole('textbox').first().fill(clientName)
   await dialog.getByPlaceholder('########-####').fill(freshTin())
   await dialog.getByRole('button', { name: 'Add client' }).click()
   await expect(page.getByTestId('add-company-task')).toHaveCount(0)
-  await expectNoDemoActivity(page)
+  await expectOverviewActivity(page, [{ label: 'Company added', company: clientName }])
 
   await sidebarNav(page).getByRole('button', { name: 'Rules' }).click()
   await expect(page.getByText('No custom rules yet — the golden ruleset alone is running.', { exact: true })).toBeVisible()

@@ -85,6 +85,7 @@ describe('library package', () => {
 
   it('form_everyOpenTagOptsOutOfHubSpotCapture', () => {
     expect(sources().map(({ f }) => f), 'control: the source list is read').toContain('App.tsx')
+    expect(sources().length, 'floor: the scan covers the library source').toBeGreaterThanOrEqual(20)
     expect(formsOptOut('<form onSubmit={x}>'), 'control: a bare form is rejected').toBe(false)
     expect(formsOptOut('<form data-hs-do-not-collect="true">')).toBe(true)
     for (const { f, src } of sources()) expect(formsOptOut(src), f).toBe(true)

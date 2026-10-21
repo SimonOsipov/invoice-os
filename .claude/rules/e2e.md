@@ -37,6 +37,9 @@ paths:
 - Cover the library consent notice, the stored answer, the privacy link and the production-host-only tag in `e2e/smoke/library-consent.spec.ts`.
 - Cover the blog consent in `e2e/smoke/blog-consent.spec.ts`.
 - Cover the landing chat gate in `e2e/smoke/landing-chat.spec.ts`. Its live arm runs only against `https://www.ascomply.com`.
+- Cover the app cookie notice, its layout, the PR-host chat gate and the sign-out cookie wipe in `e2e/topology/app-consent.spec.ts`.
+- `passFrontDoor` seeds a denied consent record on the app origin when none is stored. Pass `consent: 'none'` to see the app notice.
+- `ctl login` passes `consent: 'none'`. It writes no consent record.
 - Stub every HubSpot chat host in `isStubbedHost`. A routed spec never reaches HubSpot.
 - Never publish a policy in a topology spec. A topology spec may restore the tenant's own seeded policy through `ensureFirmPolicyActive`.
 - Put the UI-driven approve and reject journey in `e2e/api/contract-invoice.spec.ts`, not in a topology spec.

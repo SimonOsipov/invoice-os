@@ -112,6 +112,7 @@ import {
   endAppChat,
   privacyHref,
   readConsent,
+  reportAppPage,
   syncAppConsent,
 } from './chat'
 import { Sidebar } from './components/Sidebar'
@@ -716,6 +717,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
         setReviewBatchIds([])
         setCreateStep((prev) => (prev === 'review' ? 'upload' : prev))
       }
+      reportAppPage()
     }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
@@ -762,6 +764,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     setEditingPolicyId(policyNext)
     const url = routeUrl(view, { id: params?.id, settingsTab: tabNext, q: qNext, auditInvoice: auditNext })
     window.history.pushState({ e: active.entityId, m: mountKey }, '', url)
+    reportAppPage()
   }
 
   function nav(id: View, params?: RouteParams) {
@@ -2029,6 +2032,7 @@ export default function App() {
     // Wipes a destination captured before this session — the pathname reset above only
     // stops a NEW one being captured on the way out.
     clearDestination()
+    endAppChat()
     // landingBase() is null when VITE_LANDING_URL isn't configured (e.g. the default
     // standalone showcase build) — never navigate to `null` (stringifies to "null").
     // With it unset we now land on the app's own persona-picker, which is a front door;
@@ -2073,6 +2077,7 @@ export default function App() {
     window.history.replaceState(null, '', '/')
     if (!keep) clearSession()
     clearDestination()
+    endAppChat()
     const dest = landingBase()
     if (dest) {
       signingOut.current = true

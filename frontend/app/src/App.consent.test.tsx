@@ -355,4 +355,50 @@ describe('App cookie notice and chat (CHAT-03-04)', () => {
     expect(notice()).toBeNull()
     expect(storedConsent()?.analytics).toBe(false)
   })
+  describe('route changes (CHAT-03-05)', () => {
+    const goInvoices = () => click(screen.getByRole('button', { name: 'Invoices' }))
+
+    it('app_aNavigationReportsOnePageViewWhileTheChatIsLoaded', async () => {
+      setConsent(true)
+      await mount(handoffRecord())
+      const n = hsq().length
+      await goInvoices()
+      expect(hsq().slice(n)).toEqual([['setPath', '/invoices'], ['trackPageView']])
+    })
+
+    it('app_aBackReportsOnePageViewAndWritesNoHistory', async () => {
+      setConsent(true)
+      await mount(handoffRecord())
+      await goInvoices()
+      const n = hsq().length
+      const push = vi.spyOn(window.history, 'pushState')
+      const replace = vi.spyOn(window.history, 'replaceState')
+      const popped = new Promise((r) => window.addEventListener('popstate', r, { once: true }))
+      await act(async () => {
+        window.history.back()
+        await popped
+      })
+      expect(hsq().slice(n)).toEqual([['setPath', '/'], ['trackPageView']])
+      expect(push).not.toHaveBeenCalled()
+      expect(replace).not.toHaveBeenCalled()
+    })
+
+    it('app_noPageViewWithoutTheChat', async () => {
+      setConsent(false)
+      await mount(handoffRecord())
+      await goInvoices()
+      expect(w._hsq).toBeUndefined()
+    })
+
+    it('app_noPageViewAfterReject', async () => {
+      setConsent(true)
+      await mount(handoffRecord())
+      installSdk()
+      await cookieChoices()
+      await choose('Reject')
+      const n = hsq().length
+      await goInvoices()
+      expect(hsq().length).toBe(n)
+    })
+  })
 })

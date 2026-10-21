@@ -63,7 +63,7 @@ function isHubSpotChatHost(host: string): boolean {
 
 /**
  * Serves the production hostnames from the fork, so Chromium applies real cookie rules to the
- * deployed bundles, and answers every GA and Sentry request with an empty 200. Needs no
+ * deployed bundles, and answers every `isStubbedHost` request with an empty 200. Needs no
  * local server; on a production target the forward is the identity.
  */
 export async function routeProductionHosts(

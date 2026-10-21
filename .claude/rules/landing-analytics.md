@@ -50,7 +50,7 @@ paths:
 - Load the HubSpot chat only through `loadChat` in `hubspotChat.ts`. It needs an allowlisted host and a record that allows analytics.
 - Read no `VITE_*` value in the chat code. `HUBSPOT_PORTAL_ID` is the only portal-id literal in landing source.
 - Call `loadChat` and `removeChat` from `applyChoice` and `syncConsent` with no host list. Call `bootChat()` from `main.tsx` with no host list.
-- Run the chat on `PRODUCTION_HOSTNAMES` only. The library and the blog pass their own host lists, so the chat never loads there.
+- Run the chat on `PRODUCTION_HOSTNAMES` only. The library and the blog never load it.
 - Pass a host list to a chat function only in the story that adds the chat to that site.
 - On Accept, push `['doNotTrack', {track: true}]` before the loader when `__hs_do_not_track` is present.
 - On Reject, `removeChat` sets `loadImmediately` false, calls `widget.remove()` and `clear()`, and pushes `doNotTrack` when the chat was loaded.

@@ -1980,6 +1980,7 @@ export default function App() {
     keepStoredRecord.current = keepStorage
     setSeat(null)
     if (!keepStorage) clearSession()
+    endAppChat()
   }, [])
   if (renewerRef.current === null) {
     renewerRef.current = createRenewer({

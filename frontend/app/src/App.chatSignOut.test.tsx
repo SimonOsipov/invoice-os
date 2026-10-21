@@ -141,6 +141,7 @@ beforeEach(() => {
     vi.fn((url: string) => {
       if (url === `${GATEWAY}/auth/sign-out`) return Promise.resolve(new Response(null, { status: 204 }))
       if (url === `${GATEWAY}/api/tenancy/v1/me`) return answer(200, ME)
+      if (url === `${GATEWAY}/auth/refresh`) return answer(401, { error: 'unauthorized' })
       if (url.startsWith(REVOKED)) return answer(401, { error: 'unauthorized' })
       return answer(200, {
         entities: [], policies: [], members: [], roles: [], invoices: [], pagination: { limit: 50, offset: 0, total: 0 },
@@ -185,6 +186,18 @@ describe('sign-out ends the chat (CHAT-03-05)', () => {
     expectChatGone()
     expect(log.indexOf('remove')).toBeGreaterThanOrEqual(0)
     expect(log.indexOf('remove')).toBeLessThan(log.indexOf('href'))
+  })
+
+  it('expireSession_endsTheChat', async () => {
+    grant()
+    await mountWorkspace()
+    armChat()
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2 * 60 * MIN)
+    await act(async () => {
+      await capturedCtx!.authedFetch(`${GATEWAY}/api/anything`).catch(() => {})
+    })
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull())
+    expectChatGone()
   })
 
   it('joinSignOut_deletesTheHubSpotCookies', async () => {

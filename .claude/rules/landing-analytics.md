@@ -53,7 +53,6 @@ paths:
 - Read no `VITE_*` value in the chat code. `HUBSPOT_PORTAL_ID` is the only portal-id literal in landing source.
 - Call `loadChat` and `removeChat` from `applyChoice` and `syncConsent` with no host list. Call `bootChat()` from `main.tsx` with no host list.
 - Run the chat on `PRODUCTION_HOSTNAMES` and `APP_HOSTNAMES` only. The library and the blog never load it.
-- Pass a host list to a chat function only in the story that adds the chat to that site.
 - On Accept, push `['doNotTrack', {track: true}]` before the loader when `__hs_do_not_track` is present or a Reject queued `doNotTrack`. On every site, Accept expires `__hs_do_not_track` through `clearOptOutCookie`.
 - On Reject, `removeChat` sets `loadImmediately` false, calls `widget.remove()` and `clear()`, and pushes `doNotTrack` when the chat was loaded.
 - Never call `clear({resetWidget: true})` for a Reject. It builds a new widget.

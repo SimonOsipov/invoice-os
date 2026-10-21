@@ -68,6 +68,6 @@ paths:
 - Take the identify email from `session.me.user.email` of a verified session. Never read `user_metadata`. Push no identify for a blank email.
 - Send the path without its query in every app `setPath`.
 - Report an app route change through `reportAppPage`. It pushes nothing while `chatIsLoaded()` is false.
-- Call `endAppChat` in `leaveToLanding` and in `endRevokedSession`, before the navigation. `endChat` pushes no `doNotTrack`. `App.chatSignOut.test.tsx` enforces it.
+- Call `endAppChat` in `leaveToLanding`, in `endRevokedSession` and in `expireSession`. In the first two, call it before the navigation. `endChat` pushes no `doNotTrack`. `App.chatSignOut.test.tsx` enforces it, `expireSession_endsTheChat` included.
 - On Reject in the app, expire the `_ga` cookies and the HubSpot cookies.
 - Put `data-hs-do-not-collect="true"` on every app `<form>`. `chatSeam.test.ts` enforces it.

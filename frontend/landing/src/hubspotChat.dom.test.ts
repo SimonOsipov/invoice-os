@@ -556,13 +556,14 @@ describe('endChat', () => {
   it('endChat leaves a queue the tracker already took over, and re-Accept builds a new loader', async () => {
     const { loadChat, endChat } = await fresh()
     loadChat(WWW, GRANTED)
-    const taken = { push: vi.fn(), length: 3 }
-    w._hsq = taken as unknown as unknown[]
+    const taken = Object.assign([1, 2, 3], { push: vi.fn() }) as unknown as unknown[]
+    w._hsq = taken
     installSdk()
 
     endChat(WWW)
 
     expect(w._hsq).toBe(taken)
+    expect(taken).toHaveLength(3)
     expect(taken.push).not.toHaveBeenCalled()
     expect(document.getElementById('hs-script-loader')).not.toBeNull()
     expect(loadChat(WWW, GRANTED)).toBe(true)

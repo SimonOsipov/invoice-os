@@ -337,6 +337,7 @@ describe('App cookie notice and chat (CHAT-03-04)', () => {
     setConsent(true)
     await mount(handoffRecord())
     installSdk()
+    expect(hsq().filter((e) => e[0] === 'trackPageView')).toHaveLength(1)
     await suspend()
     expect(container()).toBeNull()
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')

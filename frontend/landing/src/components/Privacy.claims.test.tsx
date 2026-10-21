@@ -449,6 +449,8 @@ describe('CHAT-01-03: the page describes the HubSpot chat', () => {
     const names = [...HUBSPOT_COOKIE_NAMES, '__hs_do_not_track']
     const hits = html.split('</p>').filter((seg) => names.every((n) => seg.includes(n)))
     expect(hits.length, 'expected exactly one paragraph naming every HubSpot cookie').toBe(1)
+    const count = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight'][HUBSPOT_COOKIE_NAMES.length]
+    expect(hits[0], 'the Reject count matches the cookie list').toContain(`deletes all ${count}.`)
     const at = html.indexOf(hits[0])
     expect(at).toBeGreaterThan(html.indexOf('>Cookies on your device</h2>'))
     expect(at).toBeLessThan(html.indexOf(privacyParagraphs('asc_consent')[0]))

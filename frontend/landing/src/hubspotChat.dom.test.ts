@@ -517,6 +517,19 @@ describe('endChat', () => {
     expect(jarNames()).not.toContain('__hstc')
     expect(jarNames()).not.toContain('messagesUtk')
     expect(w._hsq).toBeUndefined()
+    expect(w.hsConversationsSettings).toBeUndefined()
+  })
+
+  it('endChat then loadChat re-opens the chat and lifts the opt-out', async () => {
+    const { loadChat, endChat, chatIsLoaded } = await fresh()
+    loadChat(WWW, GRANTED)
+    installSdk()
+    endChat(WWW)
+    expect(chatIsLoaded()).toBe(false)
+
+    expect(loadChat(WWW, GRANTED)).toBe(true)
+    expect(chatIsLoaded()).toBe(true)
+    expect(w.hsConversationsSettings?.loadImmediately).toBe(true)
   })
 
   it('endChat without an SDK still deletes the cookies', async () => {

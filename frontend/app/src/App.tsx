@@ -264,9 +264,6 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   const [consent, setConsent] = useState(() => readConsent())
   const [consentReopened, setConsentReopened] = useState(false)
   useEffect(() => {
-    if (!suspended) bootAppChat(chatEmail)
-  }, [suspended, chatEmail])
-  useEffect(() => {
     if (suspended) return
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return
@@ -649,6 +646,10 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     window.history.replaceState({ e: active.entityId, m: mountKey }, '', url)
     clearDestination()
   }, [])
+  // After the mount alignment above: the first page view reads the aligned path.
+  useEffect(() => {
+    if (!suspended) bootAppChat(chatEmail)
+  }, [suspended, chatEmail])
   // Backfills the boot entry's stamp once the portfolio resolves, and keeps the popstate
   // handler's view of the active company current. The alignment above runs before the
   // entities fetch lands, so it stamps null and a cold deep link would be permanently

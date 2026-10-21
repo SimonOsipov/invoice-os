@@ -15,6 +15,7 @@ import { COOKIES, container, installSdk, jarNames, resetJar, seed, w } from '../
 import { sliceCookieNoticeCss } from '../../library/src/cookieNoticeCss'
 import type { Me } from './auth'
 import { EMPTY_BUCKET } from './lib/dashboard'
+import { captureDestination } from './lib/deepLink'
 import { NOT_ACTIVE_MEMBER_MESSAGE } from './lib/authedFetch'
 import { SESSION_KEY } from './lib/session'
 import type { PlatformCtx } from './types'
@@ -344,7 +345,7 @@ describe('App cookie notice and chat (CHAT-03-04)', () => {
     })
     expect(screen.getByTestId('suspended-notice')).toBeTruthy()
     expect(notice()).toBeNull()
-    expect(hsq().filter((e) => e[0] === 'trackPageView')).toHaveLength(1)
+    expect(hsq().filter((e) => e[0] === 'trackPageView')).toHaveLength(0)
   })
 
   it('app_answeringTheReopenedNoticeClosesIt', async () => {
@@ -364,6 +365,15 @@ describe('App cookie notice and chat (CHAT-03-04)', () => {
       const n = hsq().length
       await goInvoices()
       expect(hsq().slice(n)).toEqual([['setPath', '/invoices'], ['trackPageView']])
+    })
+
+    it('app_theFirstReportNamesTheRestoredPathNotTheBootUrl', async () => {
+      setConsent(true)
+      captureDestination('/audit')
+      await mount(handoffRecord())
+      expect(window.location.pathname).toBe('/audit')
+      const paths = hsq().filter((e) => e[0] === 'setPath')
+      expect(paths).toEqual([['setPath', '/audit']])
     })
 
     it('app_aBackReportsOnePageViewAndWritesNoHistory', async () => {

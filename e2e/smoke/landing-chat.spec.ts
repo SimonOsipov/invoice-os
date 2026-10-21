@@ -1,6 +1,6 @@
-import { expect, test as base, type Locator, type Page, type Response } from '@playwright/test'
+import { expect, test as base, type Locator, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
-import { consoleGate, HUBSPOT_CHAT_DOMAINS, isStubbedHost, routeProductionHosts, STUB_HEADER } from './landingConsent'
+import { consentCookie, consoleGate, isHubSpotChatRequest, isStubbedHost, routeProductionHosts, STUB_HEADER, watchChatLoader } from './landingConsent'
 import { isSentryHost } from './sentryHost'
 
 // The HubSpot chat on the landing: dark on every preview host, loaded after Accept on the
@@ -12,20 +12,11 @@ const LIBRARY_URL = resolveTarget('LIBRARY_URL')
 const LIVE = new URL(LANDING_URL).hostname.toLowerCase() === 'www.ascomply.com'
 const WWW = 'https://www.ascomply.com'
 const LIB = 'https://library.ascomply.com'
-const LOADER_URL = 'https://js-eu1.hs-scripts.com/148915098.js' // CHAT_SCRIPT_URL in frontend/landing/src/hubspotChat.ts
 const COOKIE_NAMES = ['__hstc', 'hubspotutk', '__hssrc', '__hssc', 'messagesUtk', 'hs-messages-is-open', 'hs-messages-hide-welcome-message'] // HUBSPOT_COOKIE_NAMES in hubspotChat.ts
 const OPT_OUT_COOKIE = '__hs_do_not_track'
 const WIDGET = '#hubspot-messages-iframe-container'
 const GOOGLE_DOMAINS = ['google.com', 'google-analytics.com', 'googletagmanager.com', 'doubleclick.net', 'gstatic.com', 'googleapis.com']
 
-const consent = (analytics: boolean) => ({
-  name: 'asc_consent',
-  value: encodeURIComponent(JSON.stringify({ analytics, ts: new Date().toISOString(), v: 1 })),
-  domain: '.ascomply.com',
-  path: '/',
-  secure: true,
-  sameSite: 'Lax' as const,
-})
 const hubspotCookies = COOKIE_NAMES.map((name) => ({ name, value: 'x', domain: '.ascomply.com', path: '/', secure: true }))
 
 const notice = (page: Page): Locator => page.getByRole('region', { name: 'Cookie notice' })
@@ -33,24 +24,6 @@ const landingChoices = (page: Page): Locator => page.getByRole('contentinfo').ge
 const libraryChoices = (page: Page): Locator => page.locator('aside').getByRole('button', { name: 'Cookie choices' })
 const hubspotNames = async (page: Page): Promise<string[]> =>
   (await page.context().cookies(WWW)).map((c) => c.name).filter((n) => COOKIE_NAMES.includes(n))
-
-const isHubSpotHost = (rawUrl: string): boolean => {
-  try {
-    const host = new URL(rawUrl).hostname.toLowerCase()
-    return HUBSPOT_CHAT_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`))
-  } catch {
-    return false
-  }
-}
-
-/** Collects the loader requests and their responses; attach before navigating. */
-function watchLoader(page: Page): Response[] {
-  const loaded: Response[] = []
-  page.on('response', (res) => {
-    if (res.url() === LOADER_URL) loaded.push(res)
-  })
-  return loaded
-}
 
 async function openWww(page: Page): Promise<void> {
   await page.goto(`${WWW}/`)
@@ -84,7 +57,7 @@ base('landing chat: Accept on the PR host loads no HubSpot chat', async ({ page 
   let seen = 0
   page.on('request', (req) => {
     seen++
-    if (isHubSpotHost(req.url())) hubspot.push(req.url())
+    if (isHubSpotChatRequest(req.url())) hubspot.push(req.url())
   })
   await page.goto(`${LANDING_URL}/`)
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
@@ -103,7 +76,7 @@ base('landing chat: Accept on the PR host loads no HubSpot chat', async ({ page 
 routedTest('landing chat: Accept on the production host requests the loader', async ({ routed: page }) => {
   await controlRouting(page)
   const errors = consoleGate(page)
-  const loaded = watchLoader(page)
+  const loaded = watchChatLoader(page)
   const leaked: string[] = []
   page.on('response', (res) => {
     if (isStubbedHost(res.url()) && res.headers()[STUB_HEADER] !== '1') leaked.push(res.url())
@@ -123,8 +96,8 @@ routedTest('landing chat: Accept on the production host requests the loader', as
 
 routedTest('landing chat: a returning visitor gets the loader at boot', async ({ routed: page }) => {
   await controlRouting(page)
-  const loaded = watchLoader(page)
-  await page.context().addCookies([consent(true)])
+  const loaded = watchChatLoader(page)
+  await page.context().addCookies([consentCookie(true)])
   await openWww(page)
   await expect(notice(page)).toHaveCount(0)
   await expect.poll(() => loaded.length, 'a granted record did not request the loader').toBe(1)
@@ -133,8 +106,8 @@ routedTest('landing chat: a returning visitor gets the loader at boot', async ({
 routedTest('landing chat: Reject after Accept deletes the HubSpot cookies on the parent domain', async ({ routed: page }) => {
   await controlRouting(page)
   const errors = consoleGate(page)
-  const loaded = watchLoader(page)
-  await page.context().addCookies([consent(true), ...hubspotCookies])
+  const loaded = watchChatLoader(page)
+  await page.context().addCookies([consentCookie(true), ...hubspotCookies])
   await openWww(page)
   await expect.poll(() => loaded.length, 'control: the chat never loaded, so Reject has nothing to remove').toBe(1)
   expect(await hubspotNames(page), 'control: the HubSpot cookies must exist before Reject').toHaveLength(COOKIE_NAMES.length)
@@ -150,8 +123,8 @@ routedTest('landing chat: Reject after Accept deletes the HubSpot cookies on the
 
 routedTest('landing chat: a denied record requests no loader', async ({ routed: page }) => {
   await controlRouting(page)
-  const loaded = watchLoader(page)
-  await page.context().addCookies([consent(false)])
+  const loaded = watchChatLoader(page)
+  await page.context().addCookies([consentCookie(false)])
   await openWww(page)
   await expect(notice(page)).toHaveCount(0)
   await page.waitForLoadState('networkidle')
@@ -161,7 +134,7 @@ routedTest('landing chat: a denied record requests no loader', async ({ routed: 
 
 routedTest('landing chat: Reject on the routed Library deletes the shared HubSpot cookies', async ({ routed: page }) => {
   await controlRouting(page)
-  await page.context().addCookies([consent(true), ...hubspotCookies])
+  await page.context().addCookies([consentCookie(true), ...hubspotCookies])
   await page.goto(`${LIB}/`)
   await expect(page.locator('#lib-main').getByRole('heading').first()).toBeVisible()
   expect(await hubspotNames(page), 'control: the HubSpot cookies must exist before Reject').toHaveLength(COOKIE_NAMES.length)
@@ -175,7 +148,7 @@ base.describe('live', () => {
   base.skip(!LIVE, 'live arm: runs only when LANDING_URL is https://www.ascomply.com')
 
   base('landing chat: live — Accept shows the widget and Reject removes it', async ({ page }) => {
-    const loaded = watchLoader(page)
+    const loaded = watchChatLoader(page)
     await openWww(page)
     await notice(page).getByRole('button', { name: 'Accept' }).click()
     await expect.poll(() => loaded.length, 'Accept never requested the loader').toBeGreaterThan(0)
@@ -222,7 +195,7 @@ base.describe('live', () => {
     const named = [...hosts].filter(
       (h) => !h.endsWith('.ascomply.com') && h !== 'ascomply.com' && !GOOGLE_DOMAINS.includes(lastTwo(h)) && !isSentryHost(`https://${h}/`),
     )
-    expect(named.some(isHubSpotHost), 'control: no HubSpot host was recorded').toBe(true)
+    expect(named.some(isHubSpotChatRequest), 'control: no HubSpot host was recorded').toBe(true)
 
     await page.goto(`${WWW}/privacy`)
     const text = await page.locator('body').innerText()

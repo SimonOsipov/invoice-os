@@ -34,8 +34,8 @@ paths:
 - Test the `library` SPA for render and consent only. It is static content with no backend.
 - Test the `blog` SPA for render, layout and consent. It reads published posts from the gateway's public blog routes and its newsletter form posts to the gateway's public subscribe routes.
 - Cover the blog's crawler HTML, sitemap and robots in `e2e/api/contract-blog-crawler.spec.ts`.
-- Cover the library consent notice, the stored answer, the privacy link and the production-host-only tag in `e2e/smoke/library-consent.spec.ts`.
-- Cover the blog consent in `e2e/smoke/blog-consent.spec.ts`.
+- Cover the library consent notice, the stored answer, the privacy link, the production-host-only tag and the chat gate in `e2e/smoke/library-consent.spec.ts`.
+- Cover the blog consent and the blog chat gate in `e2e/smoke/blog-consent.spec.ts`.
 - Cover the landing chat gate in `e2e/smoke/landing-chat.spec.ts`. Its live arm runs only against `https://www.ascomply.com`.
 - Cover the app cookie notice, its layout, the PR-host chat gate and the sign-out cookie wipe in `e2e/topology/app-consent.spec.ts`.
 - `passFrontDoor` seeds a denied consent record on the app origin when none is stored. Pass `consent: 'none'` to see the app notice.

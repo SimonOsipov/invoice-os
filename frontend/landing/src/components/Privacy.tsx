@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { CONSENT_TEXT } from './demoForm'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
+import { CHAT_SCRIPT_HOST, HUBSPOT_CHAT_DOMAINS } from '../hubspotChat'
 import { BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
 
 export const GA_RETENTION_MONTHS = 14
@@ -19,6 +20,8 @@ const ITEM = { margin: '0 0 10px' } as const
 // The v2 `a` rule sets no underline, so an unstyled link would not read as a link.
 // overflowWrap lets the long gaoptout URL break instead of overhanging its column at 390px.
 const LINK = { color: 'var(--action)', textDecoration: 'underline', overflowWrap: 'anywhere' } as const
+
+const joinList = (items: readonly string[]): string => `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
 
 export function Privacy() {
   // index.html carries one static title, written for the sales page.
@@ -49,7 +52,7 @@ export function Privacy() {
           <p style={P}>
             Three other companies receive information about your visit. Google serves the fonts this site is typeset
             in, and measures how the site is used if you have allowed analytics. HubSpot stores the answers you give
-            if you book a demo. Sentry receives a report when a page fails, and measures how long pages take to load.
+            if you book a demo, and runs our live chat and records the pages you visit if you have allowed analytics. Sentry receives a report when a page fails, and measures how long pages take to load.
             Your browser loads nothing on this site from, and sends nothing to, any other company.
           </p>
 
@@ -93,6 +96,13 @@ export function Privacy() {
             These two are set by Google, not by our own code. They appear only once you have allowed analytics; until
             then your cookie list for this site holds neither of them. The only change our code ever makes to them is
             the instruction that deletes them, which is what choosing Reject does.
+          </p>
+          <p style={P}>
+            If you have allowed analytics, HubSpot's code sets cookies of its own too. Four of them, __hstc, hubspotutk,
+            __hssc and __hssrc, let HubSpot tell a returning visit from a new one and group your page views into
+            visits. The fifth, messagesUtk, lets the chat recognise your browser and keep your conversation. Choosing
+            Reject deletes all five. If HubSpot's code was running, it then sets one more, __hs_do_not_track, which
+            tells it to send HubSpot nothing more. Choosing Accept later removes it.
           </p>
           <p style={P}>
             Your answer itself is stored on your device too, in a small cookie of our own named asc_consent. It holds
@@ -229,8 +239,28 @@ export function Privacy() {
           </p>
           <p style={P}>HubSpot holds what it receives from you on their EU servers.</p>
           <p style={P}>
-            We do not send HubSpot your browsing history, the pages you visited, or HubSpot's own tracking cookie. The
-            form carries your answers and nothing else.
+            The form carries your answers and nothing else: it does not send HubSpot the pages you visited or HubSpot's
+            tracking cookie. What HubSpot's own code records when you allow analytics is described under Live chat
+            below.
+          </p>
+
+          <h2 style={H2}>Live chat</h2>
+          <p style={P}>
+            If you have allowed analytics, {PRODUCTION_HOSTNAMES[0]} shows HubSpot's live chat, so that you can write to
+            us from any page. Its code loads from {CHAT_SCRIPT_HOST} only after you choose Accept. Before you choose, or
+            if you choose Reject, HubSpot's chat and tracking code does not load. Our preview and test builds never load
+            it.
+          </p>
+          <p style={P}>
+            Whatever you type into the chat, including any name or email address you give there, goes to HubSpot, where
+            we read it and reply. HubSpot's code also records which pages of this site you open, the address you arrived
+            from, your screen size and language, and a fingerprint it computes from your browser, under a randomly
+            generated identifier kept in its cookies. It sends all of this to HubSpot addresses at{' '}
+            {joinList(HUBSPOT_CHAT_DOMAINS)}.
+          </p>
+          <p style={P}>
+            Choosing Reject removes the chat from the page, deletes HubSpot's cookies and tells HubSpot's code to send
+            nothing more. The code itself stays loaded in any of our pages you have open until you reload them.
           </p>
 
           <h2 style={H2}>If you create an account</h2>
@@ -293,7 +323,7 @@ export function Privacy() {
           <h2 style={H2}>How to stop being measured</h2>
           <p style={P}>
             <strong>{ANALYTICS_DEFAULT_SENTENCE}</strong> The cookie notice on this site is where you choose: Accept
-            allows Google Analytics, Reject leaves it off. You can change your answer whenever you like: Cookie
+            allows Google Analytics and the HubSpot live chat, Reject leaves both off. You can change your answer whenever you like: Cookie
             choices, at the foot of every page, brings the notice back with the setting you last chose. If you choose
             Reject after having accepted earlier, we delete the _ga cookies described above and our own code sends
             Google nothing more. If analytics was running, though, Google's script is still loaded into the page you

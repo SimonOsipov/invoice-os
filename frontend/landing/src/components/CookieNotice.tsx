@@ -32,8 +32,8 @@ export function CookieNotice({
           </p>
         ) : null}
         <p className="cn-body">
-          We use Google Analytics to see how people find and use this page. That is the only non-essential cookie we
-          set: no advertising, no remarketing, no data sold to anyone. Your choice applies to {SHARED_COOKIE_DOMAIN}, the Feature Library and the Blog.
+          We use Google Analytics to see how people use this page. Accept also turns on our HubSpot live chat, which
+          sets its own cookies. No advertising, no data sold to anyone. Your choice applies to {SHARED_COOKIE_DOMAIN}, the Feature Library and the Blog.
         </p>
         <a className="lnk cn-link" href={privacyHref}>
           Read the privacy &amp; cookie policy

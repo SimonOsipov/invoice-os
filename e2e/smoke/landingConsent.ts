@@ -8,8 +8,8 @@ import { isProductionHost, isSentryHost } from './sentryHost'
 
 const CONSENT_KEY = 'asc_consent' // retyped from frontend/landing/src/consent.ts
 export const STUB_HEADER = 'x-asc-stub'
-// retyped from HUBSPOT_CHAT_DOMAINS in frontend/landing/src/hubspotChat.ts
 export const CHAT_LOADER_URL = 'https://js-eu1.hs-scripts.com/148915098.js' // CHAT_SCRIPT_URL in frontend/landing/src/hubspotChat.ts
+// retyped from HUBSPOT_CHAT_DOMAINS in frontend/landing/src/hubspotChat.ts
 export const HUBSPOT_CHAT_DOMAINS = ['hs-scripts.com', 'hs-analytics.net', 'hs-banner.com', 'hscollectedforms.net', 'hsappstatic.net', 'usemessages.com', 'hubspot.com']
 
 /**

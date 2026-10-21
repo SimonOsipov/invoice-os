@@ -13,7 +13,7 @@ const LIVE = new URL(LANDING_URL).hostname.toLowerCase() === 'www.ascomply.com'
 const WWW = 'https://www.ascomply.com'
 const LIB = 'https://library.ascomply.com'
 const LOADER_URL = 'https://js-eu1.hs-scripts.com/148915098.js' // CHAT_SCRIPT_URL in frontend/landing/src/hubspotChat.ts
-const COOKIE_NAMES = ['__hstc', 'hubspotutk', '__hssrc', '__hssc', 'messagesUtk'] // HUBSPOT_COOKIE_NAMES in hubspotChat.ts
+const COOKIE_NAMES = ['__hstc', 'hubspotutk', '__hssrc', '__hssc', 'messagesUtk', 'hs-messages-is-open', 'hs-messages-hide-welcome-message'] // HUBSPOT_COOKIE_NAMES in hubspotChat.ts
 const OPT_OUT_COOKIE = '__hs_do_not_track'
 const WIDGET = '#hubspot-messages-iframe-container'
 const GOOGLE_DOMAINS = ['google.com', 'google-analytics.com', 'googletagmanager.com', 'doubleclick.net', 'gstatic.com', 'googleapis.com']
@@ -137,7 +137,7 @@ routedTest('landing chat: Reject after Accept deletes the HubSpot cookies on the
   await page.context().addCookies([consent(true), ...hubspotCookies])
   await openWww(page)
   await expect.poll(() => loaded.length, 'control: the chat never loaded, so Reject has nothing to remove').toBe(1)
-  expect(await hubspotNames(page), 'control: the five cookies must exist before Reject').toHaveLength(COOKIE_NAMES.length)
+  expect(await hubspotNames(page), 'control: the HubSpot cookies must exist before Reject').toHaveLength(COOKIE_NAMES.length)
 
   await landingChoices(page).click()
   await notice(page).getByRole('button', { name: 'Reject' }).click()
@@ -164,7 +164,7 @@ routedTest('landing chat: Reject on the routed Library deletes the shared HubSpo
   await page.context().addCookies([consent(true), ...hubspotCookies])
   await page.goto(`${LIB}/`)
   await expect(page.locator('#lib-main').getByRole('heading').first()).toBeVisible()
-  expect(await hubspotNames(page), 'control: the five cookies must exist before Reject').toHaveLength(COOKIE_NAMES.length)
+  expect(await hubspotNames(page), 'control: the HubSpot cookies must exist before Reject').toHaveLength(COOKIE_NAMES.length)
 
   await libraryChoices(page).click()
   await notice(page).getByRole('button', { name: 'Reject' }).click()

@@ -11,6 +11,7 @@ type TestWindow = Window & {
   _hsq?: unknown[]
   HubSpotConversations?: Sdk
   hsConversationsSettings?: Record<string, unknown>
+  hsConversationsOnReady?: Array<() => void>
 }
 type ChatModule = typeof import('./hubspotChat')
 
@@ -18,7 +19,7 @@ const GRANTED: ConsentRecord = { analytics: true, ts: '2026-01-01T00:00:00.000Z'
 const DENIED: ConsentRecord = { analytics: false, ts: '2026-01-01T00:00:00.000Z', v: CONSENT_VERSION }
 const WWW = 'www.ascomply.com'
 const PR_HOST = 'landing-pr-42.up.railway.app'
-const FIVE = ['__hstc', 'hubspotutk', '__hssrc', '__hssc', 'messagesUtk']
+const COOKIES = ['__hstc', 'hubspotutk', '__hssrc', '__hssc', 'messagesUtk', 'hs-messages-is-open', 'hs-messages-hide-welcome-message']
 const CONTAINER_ID = 'hubspot-messages-iframe-container'
 
 const w = window as TestWindow
@@ -76,6 +77,7 @@ beforeEach(() => {
   delete w._hsq
   delete w.HubSpotConversations
   delete w.hsConversationsSettings
+  delete w.hsConversationsOnReady
   resetJar()
   vi.resetModules()
 })
@@ -158,11 +160,11 @@ describe('removeChat', () => {
     return mod
   }
 
-  it('AC4: Reject after Accept removes the widget, mutes tracking and deletes the five cookies', async () => {
+  it('AC4: Reject after Accept removes the widget, mutes tracking and deletes the HubSpot cookies', async () => {
     const { removeChat } = await loaded()
     const sdk = installSdk()
-    seed(...FIVE)
-    expect(jarNames().sort(), 'seed did not land').toEqual([...FIVE].sort())
+    seed(...COOKIES)
+    expect(jarNames().sort(), 'seed did not land').toEqual([...COOKIES].sort())
 
     removeChat(WWW, DENIED)
 
@@ -172,7 +174,7 @@ describe('removeChat', () => {
     expect(vi.mocked(sdk.clear).mock.calls[0]).toEqual([])
     expect(w._hsq?.at(-1)).toEqual(['doNotTrack'])
     expect(w.hsConversationsSettings?.loadImmediately).toBe(false)
-    for (const name of FIVE) expect(jarNames()).not.toContain(name)
+    for (const name of COOKIES) expect(jarNames()).not.toContain(name)
   })
 
   it('AC4: the order is settings, remove, clear, doNotTrack, cookies', async () => {
@@ -205,10 +207,10 @@ describe('removeChat', () => {
 
   it('AC4: an absent SDK is skipped without a throw', async () => {
     const { removeChat } = await loaded()
-    seed(...FIVE)
+    seed(...COOKIES)
     expect(() => removeChat(WWW, DENIED)).not.toThrow()
     expect(w._hsq).toEqual([['doNotTrack']])
-    for (const name of FIVE) expect(jarNames()).not.toContain(name)
+    for (const name of COOKIES) expect(jarNames()).not.toContain(name)
   })
 
   it('a Reject with nothing loaded pushes no doNotTrack', async () => {
@@ -233,7 +235,7 @@ describe('removeChat', () => {
   it('a repeated Reject writes no cookie', async () => {
     const { removeChat } = await loaded()
     removeChat(WWW, DENIED)
-    expect(jarNames().filter((n) => FIVE.includes(n))).toEqual([])
+    expect(jarNames().filter((n) => COOKIES.includes(n))).toEqual([])
     const setter = vi.spyOn(document, 'cookie', 'set')
     removeChat(WWW, DENIED)
     expect(setter).not.toHaveBeenCalled()
@@ -281,6 +283,65 @@ describe('state machine', () => {
     w.HubSpotConversations = { widget: { load, remove: vi.fn() }, clear: vi.fn() }
     loadChat(WWW, GRANTED)
     expect(load).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('re-Accept races', () => {
+  it('Accept, Reject, Accept before the loader runs ends on doNotTrack track:true', async () => {
+    const { loadChat, removeChat } = await fresh()
+    loadChat(WWW, GRANTED)
+    removeChat(WWW, DENIED)
+    loadChat(WWW, GRANTED)
+    const last = (w._hsq ?? []).filter((c) => (c as unknown[])[0] === 'doNotTrack').at(-1)
+    expect(last).toEqual(['doNotTrack', { track: true }])
+  })
+
+  it('a widget.load that throws does not escape loadChat', async () => {
+    const { loadChat, removeChat } = await fresh()
+    loadChat(WWW, GRANTED)
+    removeChat(WWW, DENIED)
+    w.HubSpotConversations = {
+      widget: { load: vi.fn(() => { throw new Error('vendor') }), remove: vi.fn() },
+      clear: vi.fn(),
+    }
+    expect(loadChat(WWW, GRANTED)).toBe(true)
+  })
+
+  it('re-Accept with the SDK absent queues widget.load on hsConversationsOnReady', async () => {
+    const { loadChat, removeChat } = await fresh()
+    loadChat(WWW, GRANTED)
+    removeChat(WWW, DENIED)
+    loadChat(WWW, GRANTED)
+    const load = vi.fn()
+    const queue = w.hsConversationsOnReady ?? []
+    expect(queue.length, 'a callback is queued').toBe(1)
+    w.HubSpotConversations = { widget: { load, remove: vi.fn() }, clear: vi.fn() }
+    queue.forEach((fn) => fn())
+    expect(load).toHaveBeenCalledTimes(1)
+  })
+
+  it('a queued widget.load does nothing when the visitor rejected again', async () => {
+    const { loadChat, removeChat } = await fresh()
+    loadChat(WWW, GRANTED)
+    removeChat(WWW, DENIED)
+    loadChat(WWW, GRANTED)
+    removeChat(WWW, DENIED)
+    const load = vi.fn()
+    w.HubSpotConversations = { widget: { load, remove: vi.fn() }, clear: vi.fn() }
+    w.hsConversationsOnReady?.forEach((fn) => fn())
+    expect(load).not.toHaveBeenCalled()
+  })
+
+  it('a queued widget.load that throws does not escape', async () => {
+    const { loadChat, removeChat } = await fresh()
+    loadChat(WWW, GRANTED)
+    removeChat(WWW, DENIED)
+    loadChat(WWW, GRANTED)
+    w.HubSpotConversations = {
+      widget: { load: vi.fn(() => { throw new Error('vendor') }), remove: vi.fn() },
+      clear: vi.fn(),
+    }
+    expect(() => w.hsConversationsOnReady?.forEach((fn) => fn())).not.toThrow()
   })
 })
 
@@ -344,7 +405,7 @@ describe('adversarial', () => {
     expect(m.CHAT_SCRIPT_HOST).toBe('js-eu1.hs-scripts.com')
     expect(m.CHAT_SCRIPT_URL).toBe('https://js-eu1.hs-scripts.com/148915098.js')
     expect(m.CHAT_SCRIPT_ID).toBe('hs-script-loader')
-    expect(m.HUBSPOT_COOKIE_NAMES).toEqual(FIVE)
+    expect(m.HUBSPOT_COOKIE_NAMES).toEqual(COOKIES)
     expect(m.HUBSPOT_CHAT_DOMAINS.length).toBeGreaterThan(0)
     expect(m.HUBSPOT_CHAT_DOMAINS).toContain('usemessages.com')
   })
@@ -392,10 +453,10 @@ describe('adversarial', () => {
     vi.mocked(sdk.widget.remove).mockImplementation(() => {
       throw new Error('vendor')
     })
-    seed(...FIVE)
+    seed(...COOKIES)
     expect(() => removeChat(WWW, DENIED)).not.toThrow()
     expect(w._hsq).toEqual([['doNotTrack']])
-    for (const name of FIVE) expect(jarNames()).not.toContain(name)
+    for (const name of COOKIES) expect(jarNames()).not.toContain(name)
   })
 
   it('a second Reject adds no second doNotTrack and no second remove', async () => {

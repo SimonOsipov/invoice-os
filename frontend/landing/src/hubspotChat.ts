@@ -21,7 +21,15 @@ export const HUBSPOT_CHAT_DOMAINS: readonly string[] = [
   'hubspot.com',
 ]
 
-export const HUBSPOT_COOKIE_NAMES: readonly string[] = ['__hstc', 'hubspotutk', '__hssrc', '__hssc', 'messagesUtk']
+export const HUBSPOT_COOKIE_NAMES: readonly string[] = [
+  '__hstc',
+  'hubspotutk',
+  '__hssrc',
+  '__hssc',
+  'messagesUtk',
+  'hs-messages-is-open',
+  'hs-messages-hide-welcome-message',
+]
 
 const OPT_OUT_COOKIE = '__hs_do_not_track'
 
@@ -30,6 +38,7 @@ type ChatWindow = Window & {
   _hsq?: unknown[]
   HubSpotConversations?: ChatSdk
   hsConversationsSettings?: Record<string, unknown>
+  hsConversationsOnReady?: Array<() => void>
 }
 
 type State = 'idle' | 'loaded' | 'removed'
@@ -51,14 +60,24 @@ function setLoadImmediately(w: ChatWindow, value: boolean): void {
   w.hsConversationsSettings = { ...w.hsConversationsSettings, loadImmediately: value }
 }
 
+function showWidget(w: ChatWindow): void {
+  if (state !== 'loaded') return
+  try {
+    w.HubSpotConversations?.widget.load()
+  } catch {
+    // The vendor SDK is best-effort.
+  }
+}
+
 /** Idempotent. Returns whether the chat is loaded AFTER the call. */
 export function loadChat(hostname: string, record: ConsentRecord | null, hosts?: readonly string[]): boolean {
   if (state === 'loaded') return true
   if (!shouldLoadChat(hostname, analyticsAllowed(record), hosts)) return false
 
   const w = window as ChatWindow
-  // Lift a stored opt-out before the loader's preamble sends its first page view.
-  if (cookieNamesIn(document.cookie).includes(OPT_OUT_COOKIE)) pushHsq(w, ['doNotTrack', { track: true }])
+  // Lift an opt-out before the loader's preamble sends its first page view. After a Reject the
+  // queued `doNotTrack` may still be unread, with no cookie yet.
+  if (state === 'removed' || cookieNamesIn(document.cookie).includes(OPT_OUT_COOKIE)) pushHsq(w, ['doNotTrack', { track: true }])
 
   if (state === 'idle') {
     const s = document.createElement('script')
@@ -68,9 +87,11 @@ export function loadChat(hostname: string, record: ConsentRecord | null, hosts?:
     s.src = CHAT_SCRIPT_URL
     document.head.appendChild(s)
   } else {
+    state = 'loaded'
     setLoadImmediately(w, true)
-    // Absent SDK: the embed reads loadImmediately when it starts and shows the widget.
-    w.HubSpotConversations?.widget.load()
+    // Absent SDK: the queue runs once the embed is ready, whatever loadImmediately it read.
+    if (w.HubSpotConversations) showWidget(w)
+    else (w.hsConversationsOnReady ??= []).push(() => showWidget(w))
   }
   state = 'loaded'
   return true
@@ -82,6 +103,11 @@ export function clearHubSpotCookies(hostname: string, doc: Pick<Document, 'cooki
   const names = HUBSPOT_COOKIE_NAMES.filter((name) => present.has(name))
   if (names.length > 0) expireCookies(names, hostname, doc)
   return names
+}
+
+/** Expires `__hs_do_not_track`, which HubSpot writes on the registrable domain; the tracker only runs on www. */
+export function clearOptOutCookie(hostname: string, doc: Pick<Document, 'cookie'> = document): void {
+  if (cookieNamesIn(doc.cookie).includes(OPT_OUT_COOKIE)) expireCookies([OPT_OUT_COOKIE], hostname, doc)
 }
 
 /** Removes the widget in place. `clear({resetWidget: true})` would build a new one. */

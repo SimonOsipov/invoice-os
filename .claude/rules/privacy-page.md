@@ -55,7 +55,7 @@ paths:
 - Describe the chat in the "Live chat" section: what HubSpot receives, that it loads only after Accept on the production landing, and its domains.
 - Quote the chat domains from `HUBSPOT_CHAT_DOMAINS` and the script host from `CHAT_SCRIPT_HOST`. Never retype them.
 - Claim no region for chat data. HubSpot's data-hosting FAQ does not name chat data (checked 2026-10-21).
-- Name HubSpot's five cookies and `__hs_do_not_track` in the cookie section, by purpose.
+- Name HubSpot's seven cookies and `__hs_do_not_track` in the cookie section, by purpose.
 
 ## Blog newsletter
 

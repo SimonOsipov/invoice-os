@@ -52,10 +52,10 @@ paths:
 - Call `loadChat` and `removeChat` from `applyChoice` and `syncConsent` with no host list. Call `bootChat()` from `main.tsx` with no host list.
 - Run the chat on `PRODUCTION_HOSTNAMES` only. The library and the blog never load it.
 - Pass a host list to a chat function only in the story that adds the chat to that site.
-- On Accept, push `['doNotTrack', {track: true}]` before the loader when `__hs_do_not_track` is present.
+- On Accept, push `['doNotTrack', {track: true}]` before the loader when `__hs_do_not_track` is present or a Reject queued `doNotTrack`. On every site, Accept expires `__hs_do_not_track` through `clearOptOutCookie`.
 - On Reject, `removeChat` sets `loadImmediately` false, calls `widget.remove()` and `clear()`, and pushes `doNotTrack` when the chat was loaded.
 - Never call `clear({resetWidget: true})` for a Reject. It builds a new widget.
-- On Reject on the landing, the library and the blog, `applyChoice` and `syncConsent` expire the five HubSpot cookies through `clearHubSpotCookies`.
-- Expire `__hstc`, `hubspotutk`, `__hssrc`, `__hssc` and `messagesUtk` on the host and every parent domain. HubSpot writes them on `.ascomply.com`.
+- On Reject on the landing, the library and the blog, `applyChoice` and `syncConsent` expire the seven HubSpot cookies through `clearHubSpotCookies`.
+- Expire the cookies in `HUBSPOT_COOKIE_NAMES` (`__hstc`, `hubspotutk`, `__hssrc`, `__hssc`, `messagesUtk`, `hs-messages-is-open` and `hs-messages-hide-welcome-message`) on the host and every parent domain. HubSpot writes them on `.ascomply.com`.
 - Clear the HubSpot cookies in `bootChat` when the stored record rejects analytics.
 - Put `data-hs-do-not-collect="true"` on every landing `<form>`. The HubSpot loader brings collected forms, and the portal has form capture on.

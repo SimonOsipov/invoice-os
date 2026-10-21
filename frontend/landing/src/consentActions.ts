@@ -3,7 +3,7 @@
 import { ensureTag, setAnalyticsRevoked, tagIsLoaded } from './analytics'
 import { analyticsAllowed, readConsent, writeConsent, type ConsentRecord, type ConsentStore } from './consent'
 import { clearGaCookies } from './gaCookies'
-import { clearHubSpotCookies, loadChat, removeChat } from './hubspotChat'
+import { clearHubSpotCookies, clearOptOutCookie, loadChat, removeChat } from './hubspotChat'
 import type { ConsentChoice } from './components/CookieNotice'
 
 export function applyChoice(
@@ -23,6 +23,7 @@ export function applyChoice(
   if (accepted) {
     ensureTag(hostname, record, opts?.hosts)
     loadChat(hostname, record)
+    clearOptOutCookie(hostname)
   } else {
     clearGaCookies(hostname)
     removeChat(hostname, record)
@@ -42,6 +43,7 @@ export function syncConsent(opts?: { hostname?: string; hosts?: readonly string[
   if (allowed) {
     ensureTag(hostname, record, opts?.hosts)
     loadChat(hostname, record)
+    clearOptOutCookie(hostname)
   } else {
     if (tagIsLoaded()) clearGaCookies(hostname)
     removeChat(hostname, record)

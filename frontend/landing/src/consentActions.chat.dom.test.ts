@@ -13,7 +13,7 @@ type Actions = typeof import('./consentActions')
 
 const w = window as TestWindow
 const WWW = 'www.ascomply.com'
-const FIVE = ['__hstc', 'hubspotutk', '__hssrc', '__hssc', 'messagesUtk']
+const COOKIES = ['__hstc', 'hubspotutk', '__hssrc', '__hssc', 'messagesUtk', 'hs-messages-is-open', 'hs-messages-hide-welcome-message']
 const CONTAINER_ID = 'hubspot-messages-iframe-container'
 const LOADER = 'script#hs-script-loader'
 const GTAG = 'script[src^="https://www.googletagmanager.com/"]'
@@ -127,12 +127,48 @@ describe('applyChoice', () => {
   })
 
   it('DC-20: Reject on the blog host deletes the shared HubSpot cookies and loads nothing', async () => {
-    seed(...FIVE)
+    seed(...COOKIES)
     const { applyChoice } = await fresh()
     applyChoice('reject', { hostname: 'blog.ascomply.com', hosts: BLOG_HOSTNAMES })
-    expect(jarNames().filter((n) => FIVE.includes(n))).toEqual([])
+    expect(jarNames().filter((n) => COOKIES.includes(n))).toEqual([])
     expect(loaders()).toBe(0)
     expect(w._hsq).toBeUndefined()
+  })
+})
+
+describe('opt-out cookie on Accept', () => {
+  it.each([
+    ['www.ascomply.com', undefined],
+    ['library.ascomply.com', LIBRARY_HOSTNAMES],
+    ['blog.ascomply.com', BLOG_HOSTNAMES],
+  ] as const)('Accept on %s expires __hs_do_not_track', async (hostname, hosts) => {
+    seed('__hs_do_not_track')
+    expect(jarNames(), 'seed did not land').toContain('__hs_do_not_track')
+    const { applyChoice } = await fresh()
+    applyChoice('accept', { hostname, hosts })
+    expect(jarNames()).not.toContain('__hs_do_not_track')
+  })
+
+  it('syncConsent with a granted record on the library host expires it', async () => {
+    writeConsent(true, null, undefined, undefined, WWW)
+    seed('__hs_do_not_track')
+    const { syncConsent } = await fresh()
+    syncConsent({ hostname: 'library.ascomply.com', hosts: LIBRARY_HOSTNAMES })
+    expect(jarNames()).not.toContain('__hs_do_not_track')
+  })
+
+  it('Accept on www still pushes track:true for the running tracker', async () => {
+    seed('__hs_do_not_track')
+    const { applyChoice } = await fresh()
+    applyChoice('accept')
+    expect(w._hsq?.[0]).toEqual(['doNotTrack', { track: true }])
+  })
+
+  it('Reject leaves the opt-out cookie alone', async () => {
+    seed('__hs_do_not_track')
+    const { applyChoice } = await fresh()
+    applyChoice('reject')
+    expect(jarNames()).toContain('__hs_do_not_track')
   })
 })
 

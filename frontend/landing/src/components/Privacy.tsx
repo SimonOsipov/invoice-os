@@ -100,8 +100,9 @@ export function Privacy() {
           <p style={P}>
             If you have allowed analytics, HubSpot's code sets cookies of its own too. Four of them, __hstc, hubspotutk,
             __hssc and __hssrc, let HubSpot tell a returning visit from a new one and group your page views into
-            visits. The fifth, messagesUtk, lets the chat recognise your browser and keep your conversation. Choosing
-            Reject deletes all five. If HubSpot's code was running, it then sets one more, __hs_do_not_track, which
+            visits. The fifth, messagesUtk, lets the chat recognise your browser and keep your conversation. Two more,
+            hs-messages-is-open and hs-messages-hide-welcome-message, remember for a short while that you opened the
+            chat or dismissed its welcome message. Choosing Reject deletes all seven. If HubSpot's code was running, it then sets one more, __hs_do_not_track, which
             tells it to send HubSpot nothing more. Choosing Accept later removes it.
           </p>
           <p style={P}>

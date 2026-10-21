@@ -110,22 +110,37 @@ export function clearOptOutCookie(hostname: string, doc: Pick<Document, 'cookie'
   if (cookieNamesIn(doc.cookie).includes(OPT_OUT_COOKIE)) expireCookies([OPT_OUT_COOKIE], hostname, doc)
 }
 
-/** Removes the widget in place. `clear({resetWidget: true})` would build a new one. */
+/** Takes the loaded widget out in place, with no `doNotTrack`. `clear({resetWidget: true})` would build a new one. */
+function teardownWidget(): void {
+  const w = window as ChatWindow
+  setLoadImmediately(w, false)
+  try {
+    w.HubSpotConversations?.widget.remove()
+    w.HubSpotConversations?.clear()
+  } catch {
+    // The vendor SDK is best-effort; the cookies still go.
+  }
+  state = 'removed'
+}
+
+export function chatIsLoaded(): boolean {
+  return state === 'loaded'
+}
+
+/** Removes the widget in place. */
 export function removeChat(hostname: string, record: ConsentRecord | null, hosts?: readonly string[]): void {
   if (!isProductionHost(hostname, hosts) || analyticsAllowed(record)) return
 
   if (state === 'loaded') {
-    const w = window as ChatWindow
-    setLoadImmediately(w, false)
-    try {
-      w.HubSpotConversations?.widget.remove()
-      w.HubSpotConversations?.clear()
-    } catch {
-      // The vendor SDK is best-effort; the cookies below still go.
-    }
-    pushHsq(w, ['doNotTrack'])
-    state = 'removed'
+    teardownWidget()
+    pushHsq(window as ChatWindow, ['doNotTrack'])
   }
+  clearHubSpotCookies(hostname)
+}
+
+/** Sign-out: ends a loaded chat and expires the cookies in any state. The consent record stays; no `doNotTrack`. */
+export function endChat(hostname: string): void {
+  if (state === 'loaded') teardownWidget()
   clearHubSpotCookies(hostname)
 }
 

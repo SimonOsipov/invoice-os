@@ -5,66 +5,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CONSENT_VERSION, type ConsentRecord } from './consent'
+import { COOKIES, container, installSdk, jarNames, resetJar, seed, w } from './hubspotChat.test.util'
 
-type Sdk = { widget: { load: () => void; remove: () => void }; clear: (opts?: { resetWidget?: boolean }) => void }
-type TestWindow = Window & {
-  _hsq?: unknown[]
-  HubSpotConversations?: Sdk
-  hsConversationsSettings?: Record<string, unknown>
-  hsConversationsOnReady?: Array<() => void>
-}
 type ChatModule = typeof import('./hubspotChat')
 
 const GRANTED: ConsentRecord = { analytics: true, ts: '2026-01-01T00:00:00.000Z', v: CONSENT_VERSION }
 const DENIED: ConsentRecord = { analytics: false, ts: '2026-01-01T00:00:00.000Z', v: CONSENT_VERSION }
 const WWW = 'www.ascomply.com'
 const PR_HOST = 'landing-pr-42.up.railway.app'
-const COOKIES = ['__hstc', 'hubspotutk', '__hssrc', '__hssc', 'messagesUtk', 'hs-messages-is-open', 'hs-messages-hide-welcome-message']
-const CONTAINER_ID = 'hubspot-messages-iframe-container'
-
-const w = window as TestWindow
-
-function jarNames(): string[] {
-  return document.cookie
-    .split(';')
-    .map((pair) => pair.split('=')[0].trim())
-    .filter(Boolean)
-}
-
-function resetJar() {
-  for (const name of jarNames()) {
-    document.cookie = `${name}=; Max-Age=0; path=/`
-    document.cookie = `${name}=; Max-Age=0; path=/; domain=.ascomply.com`
-  }
-}
-
-function seed(...names: string[]) {
-  for (const name of names) document.cookie = `${name}=v; path=/; domain=.ascomply.com`
-}
 
 function loaderScripts() {
   return document.head.querySelectorAll('script[src*="hs-scripts.com"]')
-}
-
-function container() {
-  return document.getElementById(CONTAINER_ID)
-}
-
-/** Mirrors the vendor document: remove() deletes the container, load() re-creates it. */
-function installSdk(): Sdk {
-  const make = () => {
-    if (container()) return
-    const el = document.createElement('div')
-    el.id = CONTAINER_ID
-    document.body.appendChild(el)
-  }
-  make()
-  const sdk: Sdk = {
-    widget: { load: vi.fn(make), remove: vi.fn(() => container()?.remove()) },
-    clear: vi.fn(),
-  }
-  w.HubSpotConversations = sdk
-  return sdk
 }
 
 async function fresh(): Promise<ChatModule> {
@@ -519,5 +470,60 @@ describe('adversarial', () => {
     loadChat(WWW, GRANTED)
     expect(sdk.widget.load).not.toHaveBeenCalled()
     expect(w.hsConversationsSettings).toBeUndefined()
+  })
+})
+
+describe('chatIsLoaded', () => {
+  it('chatIsLoaded follows the state', async () => {
+    const a = await fresh()
+    expect(a.chatIsLoaded()).toBe(false)
+    a.loadChat(WWW, GRANTED)
+    expect(a.chatIsLoaded()).toBe(true)
+    a.removeChat(WWW, DENIED)
+    expect(a.chatIsLoaded()).toBe(false)
+    a.loadChat(WWW, GRANTED)
+    expect(a.chatIsLoaded()).toBe(true)
+
+    vi.resetModules()
+    const b = await fresh()
+    b.loadChat(PR_HOST, GRANTED)
+    expect(b.chatIsLoaded()).toBe(false)
+  })
+})
+
+describe('endChat', () => {
+  it('endChat removes the widget and the cookies and pushes no doNotTrack', async () => {
+    const { loadChat, endChat, chatIsLoaded } = await fresh()
+    loadChat(WWW, GRANTED)
+    const sdk = installSdk()
+    seed(...COOKIES)
+
+    endChat(WWW)
+
+    expect(container()).toBeNull()
+    expect(sdk.widget.remove).toHaveBeenCalledTimes(1)
+    expect(sdk.clear).toHaveBeenCalledTimes(1)
+    expect(sdk.clear).toHaveBeenCalledWith()
+    expect(w.hsConversationsSettings?.loadImmediately).toBe(false)
+    expect(w._hsq ?? []).not.toContainEqual(['doNotTrack'])
+    for (const name of COOKIES) expect(jarNames()).not.toContain(name)
+    expect(chatIsLoaded()).toBe(false)
+  })
+
+  it('endChat with nothing loaded deletes the cookies and creates no queue', async () => {
+    const { endChat } = await fresh()
+    seed('__hstc', 'messagesUtk')
+    expect(() => endChat(WWW)).not.toThrow()
+    expect(jarNames()).not.toContain('__hstc')
+    expect(jarNames()).not.toContain('messagesUtk')
+    expect(w._hsq).toBeUndefined()
+  })
+
+  it('endChat without an SDK still deletes the cookies', async () => {
+    const { loadChat, endChat } = await fresh()
+    loadChat(WWW, GRANTED)
+    seed(...COOKIES)
+    expect(() => endChat(WWW)).not.toThrow()
+    for (const name of COOKIES) expect(jarNames()).not.toContain(name)
   })
 })

@@ -41,6 +41,7 @@ function handoffRecord(token = jwt()): string {
   return JSON.stringify({ v: 1, personaId: 'firm', token, me: ME, verified: true, handoff: true, refresh_token: 'R1', received_at: Date.now() - MIN })
 }
 const UNVERIFIED = JSON.stringify({ v: 1, personaId: 'firm', token: null, me: null, verified: false })
+const UNVERIFIED_WITH_ME = JSON.stringify({ v: 1, personaId: 'firm', token: null, me: ME, verified: false })
 
 function setConsent(analytics: boolean) {
   const rec = { analytics, ts: new Date().toISOString(), v: CONSENT_VERSION }
@@ -290,5 +291,68 @@ describe('App cookie notice and chat (CHAT-03-04)', () => {
     expect(screen.getByTestId('suspended-notice')).toBeTruthy()
     expect(notice()).toBeNull()
     expect(loaders()).toHaveLength(0)
+  })
+
+  it('app_anUnverifiedSessionCarryingAMeEmailPushesNoIdentify', async () => {
+    setConsent(true)
+    await mount(UNVERIFIED_WITH_ME)
+    expect(loaders()).toHaveLength(1)
+    expect(hsq().some((e) => e[0] === 'identify')).toBe(false)
+  })
+
+  it('app_aHiddenTabIgnoresAChoiceFromAnotherTab', async () => {
+    setConsent(true)
+    await mount(handoffRecord())
+    installSdk()
+    setConsent(false)
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(container()).not.toBeNull()
+  })
+
+  it('app_cookieChoicesFollowsAChoiceMadeInAnotherTab', async () => {
+    setConsent(true)
+    await mount(handoffRecord())
+    installSdk()
+    setConsent(false)
+    await cookieChoices()
+    expect(container()).toBeNull()
+    expect(within(notice()!).getByText('Analytics cookies are off.').classList.contains('cn-setting')).toBe(true)
+  })
+
+  it('app_visibilityWithNoRecordKeepsTheNotice', async () => {
+    await mount(handoffRecord())
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(notice()).not.toBeNull()
+    expect(loaders()).toHaveLength(0)
+  })
+
+  it('app_aSuspendedMemberIgnoresALaterGrantOnVisibility', async () => {
+    setConsent(true)
+    await mount(handoffRecord())
+    installSdk()
+    await suspend()
+    expect(container()).toBeNull()
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(screen.getByTestId('suspended-notice')).toBeTruthy()
+    expect(notice()).toBeNull()
+    expect(hsq().filter((e) => e[0] === 'trackPageView')).toHaveLength(1)
+  })
+
+  it('app_answeringTheReopenedNoticeClosesIt', async () => {
+    setConsent(true)
+    await mount(handoffRecord())
+    await cookieChoices()
+    await choose('Reject')
+    expect(notice()).toBeNull()
+    expect(storedConsent()?.analytics).toBe(false)
   })
 })

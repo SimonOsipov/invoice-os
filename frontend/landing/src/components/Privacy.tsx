@@ -155,7 +155,9 @@ export function Privacy() {
             measurements of its own and re-create those cookies.
           </p>
           <p style={P}>
-            The Library has no forms, so it sends HubSpot nothing. It is typeset in the same Google fonts. When a
+            If you have allowed analytics, the Library shows HubSpot's live chat, which loads only after you choose
+            Accept, sends HubSpot, about its own pages, what is described under Live chat below, and is removed, with
+            HubSpot's cookies, when you choose Reject on either site. It is typeset in the same Google fonts. When a
             Library page fails, your browser sends Sentry a report as described below; the Library does not send Sentry
             how long its pages take to load.
           </p>
@@ -171,6 +173,11 @@ export function Privacy() {
             script is still loaded into any of our pages you have open, and until you reload them it can send
             measurements of its own and re-create those cookies. The Blog is typeset in the same Google fonts. When a
             Blog page fails, your browser sends Sentry a report as described below.
+          </p>
+          <p style={P}>
+            If you have allowed analytics, the Blog shows HubSpot's live chat, which loads only after you choose Accept,
+            sends HubSpot, about its own pages, what is described under Live chat below, and is removed, with HubSpot's
+            cookies, when you choose Reject on any of our sites.
           </p>
           <p style={P}>
             The Blog has a newsletter sign-up. You give us your work email address, the topics you want and how often

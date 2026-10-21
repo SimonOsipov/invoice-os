@@ -57,13 +57,15 @@ paths:
 - Quote the chat domains from `HUBSPOT_CHAT_DOMAINS` and the script host from `CHAT_SCRIPT_HOST`. Never retype them.
 - Claim no region for chat data. HubSpot's data-hosting FAQ does not name chat data (checked 2026-10-21).
 - Name HubSpot's seven cookies and `__hs_do_not_track` in the cookie section, by purpose.
+- Say in the Library section and in the Blog section that each shows the chat after Accept, and point to Live chat for what HubSpot receives. `LIBRARY_SECTION` and `BLOG_SECTION` pin the words.
+- Put `data-hs-do-not-collect="true"` on any `<form>` in the library or the blog, or add none. `frontend/blog/src/package.test.ts` and `frontend/library/src/package.test.ts` enforce it.
 
 ## Blog newsletter
 
 - Write a newsletter sentence only when `privacyCodeFacts.test.util.ts` reads its fact from `internal/notifications/newsletter*.go`. A sentence without a reader does not ship.
 - Say that every newsletter email carries a one-click unsubscribe only while `contacts.md` puts `{{{RESEND_UNSUBSCRIBE_URL}}}` in every blog broadcast and `Confirm.tsx` says it.
 - Say that staff follow the chosen frequency when they send by hand. The source is BLOG-00 Decision Log Q7. No test can read it.
-- Name HubSpot in the Blog section only to say the newsletter sends it nothing. No `newsletter*.go` file names HubSpot.
+- Name HubSpot in the Blog section for the chat and to say the newsletter sends it nothing. No `newsletter*.go` file names HubSpot.
 - Quote the stop route from `PRIVACY_CONTACT`. The 48-hour expiry follows the interval in `newsletter.go`.
 - Resend vendor documents were checked 2026-10-18. The privacy policy names no storage region. The audience-hygiene page has no data-residency statement.
 

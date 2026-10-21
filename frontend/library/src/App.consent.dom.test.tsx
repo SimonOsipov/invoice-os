@@ -324,6 +324,7 @@ describe('library chat', () => {
   it('CH-01 Accept loads the chat once on the library host', async () => {
     await mount()
     click(byText('Accept'))
+    expect(loaders()).toHaveLength(1)
     click(byText('Cookie choices'))
     click(byText('Accept'))
     expect(loaders()).toHaveLength(1)

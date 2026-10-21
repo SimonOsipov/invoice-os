@@ -12,9 +12,11 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 
 import { ANALYTICS_DEFAULT_SENTENCE, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { CONSENT_TEXT } from './demoForm'
@@ -41,6 +43,7 @@ const SRC_DIR = fileURLToPath(new URL('.', import.meta.url))
 const PRIVACY_TSX = join(SRC_DIR, 'Privacy.tsx')
 const INDEX_HTML = join(SRC_DIR, '..', '..', 'index.html')
 const APP_SRC = join(SRC_DIR, '..', '..', '..', 'app', 'src')
+const PACKAGES_DIR = join(SRC_DIR, '..', '..', '..', '..', 'packages')
 const OPS_CONSOLE_SRC = join(SRC_DIR, '..', '..', '..', 'ops-console', 'src')
 const SUPPORT_CONSOLE_SRC = join(SRC_DIR, '..', '..', '..', 'support-console', 'src')
 
@@ -230,40 +233,86 @@ describe('Privacy SSR render (LAND-04-02)', () => {
   })
 })
 
-// The signed-in product and its relative-import closure carry no Google Analytics;
-// the consoles carry no GA and no chat. The page publishes both claims.
+// The signed-in product and its import closure (relative and @invoice-os/* workspace
+// imports) carry no Google Analytics; the consoles carry no GA and no chat.
+// The page publishes both claims. Scans read code with comments stripped.
 const GA_NEEDLES = ['gtag', 'googletagmanager', 'google-analytics', 'vite_ga_']
 const CHAT_NEEDLES = ['hs-scripts', '_hsq', 'hubspotconversations', 'hubspotchat']
 const RESOLVE_SUFFIXES = ['.ts', '.tsx', '/index.ts']
 
-function importClosure(roots: string[]): Set<string> {
+const code = (file: string) => stripComments(readFileSync(file, 'utf8'))
+
+// Maps `@invoice-os/<pkg>[/sub]` to the source file its package.json exports name.
+function workspaceImport(spec: string, packagesDir: string): string | null {
+  const m = spec.match(/^@invoice-os\/([^/]+)(\/.+)?$/)
+  if (!m) return null
+  const pkgDir = join(packagesDir, m[1])
+  const manifest = join(pkgDir, 'package.json')
+  if (!existsSync(manifest)) return null
+  const target = JSON.parse(readFileSync(manifest, 'utf8')).exports?.[m[2] ? `.${m[2]}` : '.']
+  if (typeof target !== 'string' || !/\.tsx?$/.test(target)) return null
+  const file = join(pkgDir, target)
+  return existsSync(file) ? file : null
+}
+
+function importClosure(roots: string[], packagesDir = PACKAGES_DIR): Set<string> {
   const seen = new Set<string>()
   const queue = [...roots]
   while (queue.length > 0) {
     const file = queue.pop()!
     if (seen.has(file)) continue
     seen.add(file)
-    for (const m of readFileSync(file, 'utf8').matchAll(/(?:from|import)\s*\(?\s*['"](\.[^'"]*)['"]/g)) {
-      const base = join(dirname(file), m[1])
-      const hit = RESOLVE_SUFFIXES.map((x) => base + x).find((c) => existsSync(c) && statSync(c).isFile())
+    for (const m of code(file).matchAll(/(?:from|import)\s*\(?\s*['"]([^'"]+)['"]/g)) {
+      let hit: string | null | undefined
+      if (m[1].startsWith('.')) {
+        const base = join(dirname(file), m[1])
+        hit = RESOLVE_SUFFIXES.map((x) => base + x).find((c) => existsSync(c) && statSync(c).isFile())
+      } else {
+        hit = workspaceImport(m[1], packagesDir)
+      }
       if (hit && !/\.test\.tsx?$/.test(hit)) queue.push(hit)
     }
   }
   return seen
 }
 
+function gaHits(files: string[]): string[] {
+  const combined = files.map(code).join('\n').toLowerCase()
+  return GA_NEEDLES.filter((n) => combined.includes(n))
+}
+
 describe('C2: the app and the consoles against the page claims', () => {
-  it('C2: the signed-in product and the landing files it imports carry no Google Analytics reference', () => {
+  it('C2: the signed-in product and the files it imports carry no Google Analytics reference', () => {
     const appFiles = sourceFiles(APP_SRC)
     expect(appFiles.length, 'scan found too few app files').toBeGreaterThanOrEqual(20)
     const files = [...importClosure(appFiles)]
-    const combined = files.map((f) => readFileSync(f, 'utf8').toLowerCase()).join('\n')
+    const combined = files.map(code).join('\n').toLowerCase()
     expect(combined, 'control: createRoot not found').toContain('createroot')
     const names = files.map((f) => f.slice(f.lastIndexOf('/') + 1))
     expect(names, 'control: the closure reaches hubspotChat.ts').toContain('hubspotChat.ts')
     expect(names, 'control: the closure reaches consent.ts').toContain('consent.ts')
     expect(names, 'control: the closure must not reach analytics.ts').not.toContain('analytics.ts')
-    for (const needle of GA_NEEDLES) expect(combined, `references "${needle}"`).not.toContain(needle)
+    expect(files.some((f) => f.startsWith(join(PACKAGES_DIR, 'monitoring'))), 'control: the closure reaches @invoice-os/monitoring').toBe(true)
+    expect(files.some((f) => f.startsWith(join(PACKAGES_DIR, 'api-client'))), 'control: the closure reaches @invoice-os/api-client').toBe(true)
+    expect(gaHits(files)).toEqual([])
+  })
+
+  it('C2: a Google Analytics reference in a workspace package the app imports is found', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'c2-walk-'))
+    try {
+      const pkgs = join(dir, 'packages')
+      mkdirSync(join(pkgs, 'fake', 'src'), { recursive: true })
+      writeFileSync(join(pkgs, 'fake', 'package.json'), JSON.stringify({ exports: { '.': './src/index.ts' } }))
+      writeFileSync(join(pkgs, 'fake', 'src', 'index.ts'), "// gtag in a comment\nexport const x = () => window.gtag('config')\n")
+      writeFileSync(join(dir, 'main.ts'), "import { x } from '@invoice-os/fake'\nx()\n")
+      const files = [...importClosure([join(dir, 'main.ts')], pkgs)]
+      expect(files.some((f) => f.endsWith('fake/src/index.ts')), 'walk did not follow the workspace import').toBe(true)
+      expect(gaHits(files)).toEqual(['gtag'])
+      writeFileSync(join(pkgs, 'fake', 'src', 'index.ts'), "// gtag in a comment only\nexport const x = 1\n")
+      expect(gaHits([...importClosure([join(dir, 'main.ts')], pkgs)])).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it.each([
@@ -272,7 +321,7 @@ describe('C2: the app and the consoles against the page claims', () => {
   ])('C2: the consoles carry no Google Analytics and no HubSpot chat reference (%s)', (label, dir) => {
     const files = sourceFiles(dir)
     expect(files.length, `${label}: scan found too few files`).toBeGreaterThanOrEqual(20)
-    const combined = files.map((f) => readFileSync(f, 'utf8').toLowerCase()).join('\n')
+    const combined = files.map(code).join('\n').toLowerCase()
     expect(combined, `${label}: createRoot not found`).toContain('createroot')
     for (const needle of [...GA_NEEDLES, ...CHAT_NEEDLES]) expect(combined, `${label} references "${needle}"`).not.toContain(needle)
   })

@@ -140,7 +140,14 @@ export function removeChat(hostname: string, record: ConsentRecord | null, hosts
 
 /** Sign-out: ends a loaded chat and expires the cookies in any state. The consent record stays; no `doNotTrack`. */
 export function endChat(hostname: string): void {
+  const w = window as ChatWindow
   if (state === 'loaded') teardownWidget()
+  // A queue the tracker has not taken over would replay `identify` and the page view once it loads.
+  if (Array.isArray(w._hsq) && w._hsq.push === Array.prototype.push) w._hsq.length = 0
+  if (!w.HubSpotConversations) {
+    document.getElementById(CHAT_SCRIPT_ID)?.remove()
+    state = 'idle'
+  }
   clearHubSpotCookies(hostname)
 }
 

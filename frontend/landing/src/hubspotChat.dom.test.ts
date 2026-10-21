@@ -539,4 +539,40 @@ describe('endChat', () => {
     expect(() => endChat(WWW)).not.toThrow()
     for (const name of COOKIES) expect(jarNames()).not.toContain(name)
   })
+
+  it('endChat before the loader ran empties the queued commands and removes the loader script', async () => {
+    const { loadChat, endChat, chatIsLoaded } = await fresh()
+    ;(w._hsq = []).push(['identify', { email: 'a@b.co' }], ['trackPageView'])
+    loadChat(WWW, GRANTED)
+    expect(document.getElementById('hs-script-loader')).not.toBeNull()
+
+    endChat(WWW)
+
+    expect(w._hsq).toEqual([])
+    expect(document.getElementById('hs-script-loader')).toBeNull()
+    expect(chatIsLoaded()).toBe(false)
+  })
+
+  it('endChat leaves a queue the tracker already took over, and re-Accept builds a new loader', async () => {
+    const { loadChat, endChat } = await fresh()
+    loadChat(WWW, GRANTED)
+    const taken = { push: vi.fn(), length: 3 }
+    w._hsq = taken as unknown as unknown[]
+    installSdk()
+
+    endChat(WWW)
+
+    expect(w._hsq).toBe(taken)
+    expect(taken.push).not.toHaveBeenCalled()
+    expect(document.getElementById('hs-script-loader')).not.toBeNull()
+    expect(loadChat(WWW, GRANTED)).toBe(true)
+  })
+
+  it('endChat before the loader ran, then loadChat, loads a fresh loader', async () => {
+    const { loadChat, endChat } = await fresh()
+    loadChat(WWW, GRANTED)
+    endChat(WWW)
+    expect(loadChat(WWW, GRANTED)).toBe(true)
+    expect(document.querySelectorAll('#hs-script-loader')).toHaveLength(1)
+  })
 })

@@ -1,6 +1,6 @@
 module github.com/SimonOsipov/invoice-os
 
-go 1.26.9
+go 1.26.10
 
 tool (
 	github.com/pressly/goose/v3/cmd/goose

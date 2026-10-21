@@ -3,7 +3,7 @@ import { CONSENT_TEXT } from './demoForm'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
 import { CHAT_SCRIPT_HOST, HUBSPOT_CHAT_DOMAINS } from '../hubspotChat'
-import { BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
+import { APP_HOSTNAMES, BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
 
 export const GA_RETENTION_MONTHS = 14
 export const AI_PROVIDER_HOST = 'openrouter.ai'
@@ -62,7 +62,8 @@ export function Privacy() {
             visitors do next, and where the site is confusing. It runs only if you have allowed analytics.
           </p>
           <p style={P}>
-            It runs on this public site, on our public Feature Library and on our public Blog only. There is no analytics code anywhere inside the signed-in ASComply product.
+            It runs on this public site, on our public Feature Library and on our public Blog only. The signed-in ASComply product at {APP_HOSTNAMES[0]} runs no Google Analytics. If you have allowed
+            analytics, it loads HubSpot's live chat and tracking code, as described under Live chat below.
           </p>
           <p style={P}>
             It is active on {PRODUCTION_HOSTNAMES[0]}, on our Feature Library at {LIBRARY_HOSTNAMES[0]} and on our Blog at {BLOG_HOSTNAMES[0]}, and nowhere else. Our preview and test builds run the same code,
@@ -108,7 +109,7 @@ export function Privacy() {
           <p style={P}>
             Your answer itself is stored on your device too, in a small cookie of our own named asc_consent. It holds
             whether you allowed analytics, when you chose, and which version of the record it is. It is set for{' '}
-            {SHARED_COOKIE_DOMAIN}, so this site, our Feature Library at {LIBRARY_HOSTNAMES[0]} and our Blog at {BLOG_HOSTNAMES[0]} read the same answer. Your browser therefore
+            {SHARED_COOKIE_DOMAIN}, so this site, our Feature Library at {LIBRARY_HOSTNAMES[0]}, our Blog at {BLOG_HOSTNAMES[0]} and the signed-in product at {APP_HOSTNAMES[0]} read the same answer. Your browser therefore
             sends it with each request to our {SHARED_COOKIE_DOMAIN} addresses; our servers do not read it. It is what
             stops the cookie notice asking you again on every visit, and, apart from the deletions described above and
             the invite link's token, which is kept in this tab's session storage on the invite page only and cleared
@@ -258,6 +259,12 @@ export function Privacy() {
             from, your screen size and language, and a fingerprint it computes from your browser, under a randomly
             generated identifier kept in its cookies. It sends all of this to HubSpot addresses at{' '}
             {joinList(HUBSPOT_CHAT_DOMAINS)}.
+          </p>
+          <p style={P}>
+            In the signed-in ASComply product at {APP_HOSTNAMES[0]}, the chat loads the same way, only if you have allowed analytics. There it also tells HubSpot the email address of the account you are
+            signed in with, so that we know who is writing to us. HubSpot files the screens of the product you open, and anything you type into the chat, under a contact record with that address. Cookie
+            choices, at the foot of the product's sidebar, brings the cookie notice back. Signing out removes the chat from the page and deletes HubSpot's cookies, so the next person to use your browser
+            does not see your conversation.
           </p>
           <p style={P}>
             Choosing Reject removes the chat from the page, deletes HubSpot's cookies and tells HubSpot's code to send

@@ -19,7 +19,7 @@ import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
 import { sentryOptions } from '@invoice-os/monitoring'
 import { CHAT_SCRIPT_HOST, HUBSPOT_CHAT_DOMAINS, HUBSPOT_COOKIE_NAMES } from '../hubspotChat'
-import { PRODUCTION_HOSTNAMES } from '../hubspot'
+import { APP_HOSTNAMES, PRODUCTION_HOSTNAMES } from '../hubspot'
 import {
   aiModelVendors,
   aiProviderHosts,
@@ -47,7 +47,7 @@ const html = renderToStaticMarkup(createElement(Privacy))
 // One row per ledger claim that had no render assertion.
 const LEDGER_NEEDLES: readonly (readonly [string, string])[] = [
   ['C1 consent-gated', 'It runs only if you have allowed analytics'],
-  ['C2 not in the signed-in product', 'There is no analytics code anywhere inside the signed-in ASComply product'],
+  ['C2 the product runs no Google Analytics', `The signed-in ASComply product at ${APP_HOSTNAMES[0]} runs no Google Analytics`],
   ['C5 no identifying detail', 'We never send Google your name, your email address, your company'],
   ['C6 two cookies', 'Google Analytics sets two cookies on your device'],
   ['C6 the _ga names', 'One is named _ga; the other starts _ga_'],
@@ -60,6 +60,8 @@ const LEDGER_NEEDLES: readonly (readonly [string, string])[] = [
   ['C17 no advertising network', 'We run no advertising network on this site'],
   ['C18 the notice is the control', 'The cookie notice on this site is where you choose'],
   ['C32 Accept covers the chat', 'Accept allows Google Analytics and the HubSpot live chat'],
+  ['C33 the app identifies by account email', 'There it also tells HubSpot the email address of the account you are signed in with'],
+  ['C34 sign-out deletes the chat', 'Signing out removes the chat from the page and deletes HubSpot'],
   ['E1 optional answers are pre-selected', 'come with an answer already selected when the form opens'],
   ['E2 the separate marketing box is quoted from code', MARKETING_CONSENT_TEXT],
   ['E3 Google sets the _ga cookies', 'These two are set by Google, not by our own code'],
@@ -415,6 +417,9 @@ const PROPOSED_CHAT_SECTION = [
   "Choosing Reject removes the chat from the page, deletes HubSpot's cookies and tells HubSpot's code to send nothing more. The code itself stays loaded in any of our pages you have open until you reload them.",
 ]
 
+// Pending the user's copy sign-off (Q15).
+const PROPOSED_APP_CHAT_PARAGRAPH = `In the signed-in ASComply product at ${APP_HOSTNAMES[0]}, the chat loads the same way, only if you have allowed analytics. There it also tells HubSpot the email address of the account you are signed in with, so that we know who is writing to us. HubSpot files the screens of the product you open, and anything you type into the chat, under a contact record with that address. Cookie choices, at the foot of the product's sidebar, brings the cookie notice back. Signing out removes the chat from the page and deletes HubSpot's cookies, so the next person to use your browser does not see your conversation.`
+
 const CHAT_H2 = />Live chat<\/h2>/g
 const chatSectionHtml = (): string => {
   const at = html.search(CHAT_H2)
@@ -431,7 +436,18 @@ describe('CHAT-01-03: the page describes the HubSpot chat', () => {
     expect(html.indexOf('>If you book a demo</h2>')).toBeGreaterThan(-1)
     expect(at).toBeLessThan(html.indexOf('>If you create an account</h2>'))
     const paragraphs = Array.from(chatSectionHtml().matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g), (m) => plainText(m[1]))
-    expect(paragraphs).toEqual(PROPOSED_CHAT_SECTION)
+    expect(paragraphs).toEqual([PROPOSED_CHAT_SECTION[0], PROPOSED_CHAT_SECTION[1], PROPOSED_APP_CHAT_PARAGRAPH, PROPOSED_CHAT_SECTION[2]])
+  })
+
+  it('PC-07 the no-analytics-anywhere sentence is gone', () => {
+    expect(html).not.toContain('There is no analytics code anywhere inside the signed-in ASComply product')
+  })
+
+  it('PC-09 the app host is quoted from APP_HOSTNAMES', () => {
+    const src = readFileSync(PRIVACY_TSX, 'utf8')
+    expect(src).toMatch(/import\s*\{[^}]*APP_HOSTNAMES[^}]*\}\s*from\s*['"]\.\.\/hubspot['"]/)
+    expect(src, 'the app host is retyped').not.toContain('app.ascomply.com')
+    expect(plainText(html)).toContain(APP_HOSTNAMES[0])
   })
 
   it('PC-02 the chat hosts are quoted from hubspotChat', () => {

@@ -36,6 +36,8 @@ paths:
 - Cover the blog's crawler HTML, sitemap and robots in `e2e/api/contract-blog-crawler.spec.ts`.
 - Cover the library consent notice, the stored answer, the privacy link and the production-host-only tag in `e2e/smoke/library-consent.spec.ts`.
 - Cover the blog consent in `e2e/smoke/blog-consent.spec.ts`.
+- Cover the landing chat gate in `e2e/smoke/landing-chat.spec.ts`. Its live arm runs only against `https://www.ascomply.com`.
+- Stub every HubSpot chat host in `isStubbedHost`. A routed spec never reaches HubSpot.
 - Never publish a policy in a topology spec. A topology spec may restore the tenant's own seeded policy through `ensureFirmPolicyActive`.
 - Put the UI-driven approve and reject journey in `e2e/api/contract-invoice.spec.ts`, not in a topology spec.
 - Treat the persona as an axis. Register personas, surfaces and coverage in `e2e/personas.ts`.

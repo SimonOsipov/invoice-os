@@ -490,7 +490,8 @@ describe('T3-15/T3-17/T3-18: the page describes the control that now exists', ()
   })
 
   it('PC-06 the Live chat section carries the consent qualifier', () => {
-    const chat = paragraphContaining(`${PRODUCTION_HOSTNAMES[0]} shows HubSpot`)
+    const para = paragraphContaining(`${PRODUCTION_HOSTNAMES[0]} shows HubSpot`)
+    const chat = para.split(/(?<=[.!?])\s+/).find((x) => x.includes(`${PRODUCTION_HOSTNAMES[0]} shows HubSpot`)) ?? ''
     expect(carriesConsentQualifier(chat), `no consent condition in: ${chat}`).toBe(true)
   })
 

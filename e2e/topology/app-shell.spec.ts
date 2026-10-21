@@ -316,9 +316,11 @@ test('AS-LIB the Company Blog and Feature library links sit between the nav and 
       await signInAs(page, persona, { tenantId: tenantOf(persona) })
       const blog = aside(page).getByRole('link', { name: 'Company Blog' })
       const link = aside(page).getByRole('link', { name: 'Feature library' })
+      const choices = aside(page).getByRole('button', { name: 'Cookie choices' })
       const nav = aside(page).locator('nav.pf-nav-list')
       const card = page.getByTestId('identity-card')
       const main = page.locator('main.pf-main')
+      await expect(choices, `${persona}: no Cookie choices row`).toHaveCount(1)
       await expect(blog, `${persona}: no Company Blog link (is app.VITE_BLOG_URL set?)`).toHaveCount(1)
       await expect(link, `${persona}: no Feature library link (is app.VITE_LIBRARY_URL set?)`).toHaveCount(1)
       expect(await blog.getAttribute('href'), `${persona}: the blog link href is the baked blog URL`).toBe(bakedBlogUrl)
@@ -326,8 +328,8 @@ test('AS-LIB the Company Blog and Feature library links sit between the nav and 
       for (const width of [...WIDE_WIDTHS, ...PHONE_WIDTHS]) {
         await page.setViewportSize({ width, height: 1080 })
         const read = async (): Promise<{ problems: string[]; rects: Record<string, Rect> }> => {
-          await settle(page, aside(page), blog, link, nav, card, main)
-          const boxes = { aside: await aside(page).boundingBox(), nav: await nav.boundingBox(), blog: await blog.boundingBox(), link: await link.boundingBox(), card: await card.boundingBox(), main: await main.boundingBox() }
+          await settle(page, aside(page), blog, link, choices, nav, card, main)
+          const boxes = { aside: await aside(page).boundingBox(), nav: await nav.boundingBox(), blog: await blog.boundingBox(), link: await link.boundingBox(), choices: await choices.boundingBox(), card: await card.boundingBox(), main: await main.boundingBox() }
           const problems = Object.entries(boxes).filter(([, b]) => !b).map(([n]) => `${n} has no box`)
           if (problems.length) return { problems, rects: {} }
           const r = boxes as Record<string, Rect>
@@ -340,6 +342,12 @@ test('AS-LIB the Company Blog and Feature library links sit between the nav and 
             if (rectsOverlap(r[n], r.card)) problems.push(`${n} overlaps the card`)
           }
           if (rectsOverlap(r.blog, r.link)) problems.push('Company Blog overlaps Feature library')
+          if (!enclosesRect(r.aside, r.choices, 1)) problems.push('Cookie choices sticks out of the aside')
+          if (r.choices.y < r.link.y + r.link.height - 1) problems.push('Cookie choices is not below Feature library')
+          if (r.choices.y + r.choices.height > r.card.y + 1) problems.push('Cookie choices ends below the card top')
+          for (const n of ['nav', 'blog', 'link', 'card'] as const) {
+            if (rectsOverlap(r.choices, r[n])) problems.push(`Cookie choices overlaps ${n}`)
+          }
           if (!enclosesRect(r.aside, r.card, 1)) problems.push('card sticks out of the aside')
           if (rectsOverlap(r.aside, r.main)) problems.push('aside overlaps main')
           return { problems, rects: r }

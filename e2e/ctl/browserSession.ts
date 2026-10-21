@@ -51,7 +51,7 @@ export async function signInFresh(key: AccountKey, account: Account, _urls: Urls
   const { DESTINATION_READY, passFrontDoor } = await import('../personaSession')
   return withContext(undefined, async (context, page) => {
     if (dest === 'app') {
-      await passFrontDoor(page, account, '/')
+      await passFrontDoor(page, account, '/', { consent: 'none' })
       await DESTINATION_READY.app(page, READY_TIMEOUT)
       const role = await browserRole(page, account.tenantId as string)
       await save(context, statePath)

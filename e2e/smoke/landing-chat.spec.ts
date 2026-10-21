@@ -81,7 +81,9 @@ base('landing chat: Accept on the PR host loads no HubSpot chat', async ({ page 
   base.skip(LIVE, 'the production host loads the chat by design; arm (c) covers it')
   const errors = consoleGate(page)
   const hubspot: string[] = []
+  let seen = 0
   page.on('request', (req) => {
+    seen++
     if (isHubSpotHost(req.url())) hubspot.push(req.url())
   })
   await page.goto(`${LANDING_URL}/`)
@@ -91,6 +93,7 @@ base('landing chat: Accept on the PR host loads no HubSpot chat', async ({ page 
   await page.waitForLoadState('networkidle')
 
   expect(await page.evaluate(() => window.localStorage.getItem('asc_consent')), 'Accept stored nothing, so the gate was never tested').toContain('"analytics":true')
+  expect(seen, 'control: the recorder saw no request, so zero HubSpot requests proves nothing').toBeGreaterThan(0)
   expect(hubspot, `the PR host requested HubSpot:\n${hubspot.join('\n')}`).toEqual([])
   await expect(page.locator('#hs-script-loader')).toHaveCount(0)
   await expect(page.locator(WIDGET)).toHaveCount(0)
@@ -102,8 +105,8 @@ routedTest('landing chat: Accept on the production host requests the loader', as
   const errors = consoleGate(page)
   const loaded = watchLoader(page)
   const leaked: string[] = []
-  page.on('requestfinished', async (r) => {
-    if (isStubbedHost(r.url()) && (await r.response())?.headers()[STUB_HEADER] !== '1') leaked.push(r.url())
+  page.on('response', (res) => {
+    if (isStubbedHost(res.url()) && res.headers()[STUB_HEADER] !== '1') leaked.push(res.url())
   })
   await openWww(page)
   await notice(page).getByRole('button', { name: 'Accept' }).click()
@@ -178,6 +181,7 @@ base.describe('live', () => {
     await expect.poll(() => loaded.length, 'Accept never requested the loader').toBeGreaterThan(0)
     await expect(page.locator(WIDGET)).toBeVisible({ timeout: 15_000 })
 
+    await expect.poll(() => hubspotNames(page), 'control: HubSpot set no cookie, so the removal check proves nothing').not.toEqual([])
     await landingChoices(page).click()
     await notice(page).getByRole('button', { name: 'Reject' }).click()
     await expect(page.locator(WIDGET)).toHaveCount(0)
@@ -192,12 +196,12 @@ base.describe('live', () => {
     await notice(page).getByRole('button', { name: 'Reject' }).click()
     await expect(page.locator(WIDGET)).toHaveCount(0)
 
+    const optedOut = async (): Promise<boolean> => (await page.context().cookies(WWW)).some((c) => c.name === OPT_OUT_COOKIE)
     await page.reload()
+    await expect.poll(optedOut, { message: 'control: Reject set no opt-out cookie, so the lift proves nothing', timeout: 10_000 }).toBe(true)
     await landingChoices(page).click()
     await notice(page).getByRole('button', { name: 'Accept' }).click()
-    await expect
-      .poll(async () => (await page.context().cookies(WWW)).some((c) => c.name === OPT_OUT_COOKIE), { timeout: 10_000 })
-      .toBe(false)
+    await expect.poll(optedOut, { timeout: 10_000 }).toBe(false)
     await expect(page.locator(WIDGET)).toBeVisible({ timeout: 15_000 })
   })
 

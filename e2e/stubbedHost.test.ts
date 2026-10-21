@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { HUBSPOT_CHAT_DOMAINS, isStubbedHost } from './smoke/landingConsent'
+import { HUBSPOT_CHAT_DOMAINS as LANDING_DOMAINS } from '../frontend/landing/src/hubspotChat'
 
 describe('isStubbedHost', () => {
   it('stubs the GA tag host', () => {
@@ -35,5 +36,9 @@ describe('isStubbedHost', () => {
     expect(isStubbedHost('https://evilhubspot.com/')).toBe(false)
     expect(isStubbedHost('https://evil.example/?x=hs-scripts.com')).toBe(false)
     expect(isStubbedHost('https://www.ascomply.com/')).toBe(false)
+  })
+
+  it('keeps the retyped HubSpot domain list equal to the landing constant', () => {
+    expect([...HUBSPOT_CHAT_DOMAINS]).toEqual([...LANDING_DOMAINS])
   })
 })

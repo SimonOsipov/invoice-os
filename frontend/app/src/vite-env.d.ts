@@ -25,3 +25,5 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv
 }
+
+declare const __COOKIE_NOTICE_CSS__: string

@@ -1,8 +1,9 @@
 // The landing's consent and GA4 code, bound to this host. The only importer of landing source.
 import { bootAnalytics } from '../../landing/src/analytics'
-import { readConsent } from '../../landing/src/consent'
+import { readConsent, type ConsentRecord } from '../../landing/src/consent'
 import { applyChoice, syncConsent } from '../../landing/src/consentActions'
 import { clearGaCookies } from '../../landing/src/gaCookies'
+import { bootChat, loadChat, removeChat } from '../../landing/src/hubspotChat'
 import type { ConsentChoice } from '../../landing/src/components/CookieNotice'
 import { LIBRARY_HOSTNAMES } from '../../landing/src/hubspot'
 
@@ -17,5 +18,19 @@ export const bootLibraryAnalytics = (): boolean => {
   if (record && !record.analytics) clearGaCookies(window.location.hostname)
   return bootAnalytics(LIBRARY_HOSTNAMES)
 }
-export const chooseConsent = (choice: ConsentChoice) => applyChoice(choice, { hosts: LIBRARY_HOSTNAMES })
-export const syncLibraryConsent = () => syncConsent({ hosts: LIBRARY_HOSTNAMES })
+
+const applyChat = (record: ConsentRecord | null): void => {
+  loadChat(window.location.hostname, record, LIBRARY_HOSTNAMES)
+  removeChat(window.location.hostname, record, LIBRARY_HOSTNAMES)
+}
+export const chooseConsent = (choice: ConsentChoice) => {
+  const record = applyChoice(choice, { hosts: LIBRARY_HOSTNAMES })
+  applyChat(record)
+  return record
+}
+export const syncLibraryConsent = () => {
+  const record = syncConsent({ hosts: LIBRARY_HOSTNAMES })
+  if (record) applyChat(record)
+  return record
+}
+export const bootLibraryChat = (): boolean => bootChat(LIBRARY_HOSTNAMES)

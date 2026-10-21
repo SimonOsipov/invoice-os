@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readConsentCookie } from '../../landing/src/consent'
 import { sliceCookieNoticeCss } from './cookieNoticeCss'
+import { COOKIES, container as hsContainer, installSdk, jarNames, resetJar, seed, w } from '../../landing/src/hubspotChat.test.util'
+import { CHAT_SCRIPT_URL } from '../../landing/src/hubspotChat'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -58,6 +60,11 @@ async function mount(path = '/') {
 
 beforeEach(() => {
   document.head.innerHTML = ''
+  delete w._hsq
+  delete w.HubSpotConversations
+  delete w.hsConversationsSettings
+  document.body.innerHTML = ''
+  resetJar()
   delete (window as TestWindow).dataLayer
   vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
 })
@@ -306,5 +313,122 @@ describe('library consent', () => {
     const styles = container.querySelectorAll('style')
     expect(styles).toHaveLength(1)
     expect(styles[0].textContent).toBe(sliceCookieNoticeCss(readFileSync(LANDING_CSS, 'utf8')))
+  })
+})
+
+describe('library chat', () => {
+  const loaders = () => document.querySelectorAll<HTMLScriptElement>('script#hs-script-loader')
+  const grantCookie = () => void (document.cookie = `${KEY}=${encodeURIComponent(GRANT)}; Domain=ascomply.com; Path=/; Secure`)
+  const denyCookie = () => void (document.cookie = `${KEY}=${encodeURIComponent(DENY)}; Domain=ascomply.com; Path=/; Secure`)
+
+  it('CH-01 Accept loads the chat once on the library host', async () => {
+    await mount()
+    click(byText('Accept'))
+    click(byText('Cookie choices'))
+    click(byText('Accept'))
+    expect(loaders()).toHaveLength(1)
+    expect(loaders()[0].src).toBe(CHAT_SCRIPT_URL)
+  })
+
+  it('CH-02 Reject after Accept removes the chat in place', async () => {
+    await mount()
+    click(byText('Accept'))
+    const sdk = installSdk()
+    seed('__hstc', 'messagesUtk')
+    click(byText('Cookie choices'))
+    click(byText('Reject'))
+    expect(hsContainer()).toBeNull()
+    expect(sdk.widget.remove).toHaveBeenCalledTimes(1)
+    expect(sdk.clear).toHaveBeenCalledWith()
+    expect(w._hsq?.at(-1)).toEqual(['doNotTrack'])
+    expect(jarNames()).not.toContain('__hstc')
+    expect(jarNames()).not.toContain('messagesUtk')
+  })
+
+  it('CH-03 Accept, Reject, Accept in one page shows the widget again with one loader', async () => {
+    await mount()
+    click(byText('Accept'))
+    const sdk = installSdk()
+    click(byText('Cookie choices'))
+    click(byText('Reject'))
+    const n = w._hsq!.length
+    click(byText('Cookie choices'))
+    click(byText('Accept'))
+    expect(w._hsq!.slice(n)).toContainEqual(['doNotTrack', { track: true }])
+    expect(sdk.widget.load).toHaveBeenCalledTimes(1)
+    expect(loaders()).toHaveLength(1)
+    expect(hsContainer()).not.toBeNull()
+  })
+
+  it('CH-04 an Accept from another tab loads the chat once', async () => {
+    await mount()
+    expect(notices()).toHaveLength(1)
+    grantCookie()
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    expect(notices()).toHaveLength(0)
+    expect(loaders()).toHaveLength(1)
+  })
+
+  it('CH-05 a Reject from another tab removes the chat', async () => {
+    grantCookie()
+    const m = await mount()
+    m.analytics.bootLibraryChat()
+    installSdk()
+    seed('__hssc')
+    denyCookie()
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    expect(hsContainer()).toBeNull()
+    expect(w._hsq?.at(-1)).toEqual(['doNotTrack'])
+    expect(jarNames()).not.toContain('__hssc')
+  })
+
+  it('CH-06 boot loads the chat for a stored grant', async () => {
+    grantCookie()
+    const m = await mount()
+    expect(m.analytics.bootLibraryChat()).toBe(true)
+    expect(loaders()).toHaveLength(1)
+  })
+
+  it('CH-07 boot with a stored Reject loads nothing and clears HubSpot cookies', async () => {
+    denyCookie()
+    seed(...COOKIES)
+    const m = await mount()
+    expect(m.analytics.bootLibraryChat()).toBe(false)
+    expect(loaders()).toHaveLength(0)
+    expect(jarNames().filter((n) => COOKIES.includes(n))).toEqual([])
+    expect(w._hsq).toBeUndefined()
+  })
+
+  it('CH-08 a first Reject loads nothing and pushes nothing', async () => {
+    await mount()
+    click(byText('Reject'))
+    expect(loaders()).toHaveLength(0)
+    expect(w._hsq).toBeUndefined()
+  })
+
+  it('CH-11 Accept on a fresh page lifts a stale opt-out', async () => {
+    seed('__hs_do_not_track')
+    expect(jarNames()).toContain('__hs_do_not_track')
+    await mount()
+    click(byText('Accept'))
+    expect(loaders()).toHaveLength(1)
+    expect(jarNames()).not.toContain('__hs_do_not_track')
+    expect((w._hsq ?? []).filter((c) => Array.isArray(c) && c[0] === 'doNotTrack' && c.length === 1)).toEqual([])
+  })
+
+  it('CH-12 boot with a stored grant and a stale opt-out lifts it before the loader', async () => {
+    grantCookie()
+    seed('__hs_do_not_track')
+    const m = await mount()
+    let atLoader: unknown[] | undefined
+    const append = document.head.appendChild.bind(document.head)
+    vi.spyOn(document.head, 'appendChild').mockImplementation(((node: Node) => {
+      if ((node as HTMLElement).id === 'hs-script-loader') atLoader = [...(w._hsq ?? [])]
+      return append(node)
+    }) as typeof document.head.appendChild)
+    m.analytics.bootLibraryChat()
+    expect(atLoader?.[0]).toEqual(['doNotTrack', { track: true }])
+    expect(loaders()).toHaveLength(1)
   })
 })

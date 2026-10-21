@@ -490,8 +490,11 @@ describe('T3-15/T3-17/T3-18: the page describes the control that now exists', ()
   })
 
   it('PC-06 the Live chat section carries the consent qualifier', () => {
-    const para = paragraphContaining(`${PRODUCTION_HOSTNAMES[0]} shows HubSpot`)
-    const chat = para.split(/(?<=[.!?])\s+/).find((x) => x.includes(`${PRODUCTION_HOSTNAMES[0]} shows HubSpot`)) ?? ''
+    const para = paragraphContaining(`${BLOG_HOSTNAMES[0]} show HubSpot`)
+    const chat = para.split(/(?<=[.!?])\s+/).find((x) => x.includes(`${BLOG_HOSTNAMES[0]} show HubSpot`)) ?? ''
+    for (const host of [PRODUCTION_HOSTNAMES[0], LIBRARY_HOSTNAMES[0], BLOG_HOSTNAMES[0]]) {
+      expect(chat, `the lede does not name ${host}`).toContain(host)
+    }
     expect(carriesConsentQualifier(chat), `no consent condition in: ${chat}`).toBe(true)
   })
 
@@ -731,7 +734,7 @@ describe('the Library shares the landing\'s choice', () => {
   const LIBRARY_SECTION = [
     `Our Feature Library at ${LIBRARY_HOSTNAMES[0]} follows this policy too. One analytics choice covers this site and the Library: whatever you choose on either applies to both, and the other does not ask you again. Cookie choices, at the foot of this site's pages and of the Library's sidebar, brings the notice back on either, and a change made there applies to both.`,
     `If you allow analytics there, Google Analytics measures the Library in the same way and under the same property. Google also receives each Library page you view, when you choose Book the Demo, when you start the tour, and when you choose Open in Platform, with the feature or group it was for. The Library shares the _ga cookies with this site, so Google can tell that a visit to both came from the same browser. Choosing Reject on either site deletes those shared _ga cookies. If analytics was running, though, Google's script is still loaded into any of our pages you have open, and until you reload them it can send measurements of its own and re-create those cookies.`,
-    "If you have allowed analytics, the Library shows HubSpot's live chat, which loads only after you choose Accept, sends HubSpot, about its own pages, what is described under Live chat below, and is removed, with HubSpot's cookies, when you choose Reject on either site. It is typeset in the same Google fonts. When a Library page fails, your browser sends Sentry a report as described below; the Library does not send Sentry how long its pages take to load.",
+    "If you have allowed analytics, the Library shows HubSpot's live chat, which loads only after you choose Accept, sends HubSpot, about its own pages, what is described under Live chat below, and is removed, with HubSpot's cookies, when you choose Reject on any of our sites. The Library is typeset in the same Google fonts. When a Library page fails, your browser sends Sentry a report as described below; the Library does not send Sentry how long its pages take to load.",
   ]
 
   it('PL-01 the active-on sentence names all three hosts from the lists', () => {
@@ -792,7 +795,8 @@ describe('the Library shares the landing\'s choice', () => {
       'a change made there applies to both',
       'Choosing Reject on either site deletes those shared _ga cookies',
       'the Library shows HubSpot',
-      "is removed, with HubSpot's cookies, when you choose Reject on either site",
+      "is removed, with HubSpot's cookies, when you choose Reject on any of our sites",
+      'The Library is typeset in the same Google fonts',
       'does not send Sentry how long',
     ]) {
       expect(section, `missing "${needle}"`).toContain(needle)

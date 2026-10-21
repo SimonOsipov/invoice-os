@@ -542,7 +542,7 @@ describe('endChat', () => {
 
   it('endChat before the loader ran empties the queued commands and removes the loader script', async () => {
     const { loadChat, endChat, chatIsLoaded } = await fresh()
-    ;(w._hsq = []).push(['identify', { email: 'a@b.co' }], ['trackPageView'])
+    w._hsq = [['identify', { email: 'a@b.co' }], ['trackPageView']]
     loadChat(WWW, GRANTED)
     expect(document.getElementById('hs-script-loader')).not.toBeNull()
 

@@ -258,7 +258,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   const [suspended, setSuspended] = useState(false)
   const onSuspended = useCallback(() => setSuspended(true), [])
 
-  // DC-7: the identify email is the verified /me email, never a token claim.
+  // The identify email is the verified /me email, never a token claim.
   const meEmail = session.verified ? session.me?.user?.email : null
   const chatEmail = typeof meEmail === 'string' ? meEmail.trim() || null : null
   const [consent, setConsent] = useState(() => readConsent())
@@ -273,7 +273,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
   }, [suspended, chatEmail])
-  // DC-26: a suspended screen carries no chat.
+  // A suspended screen carries no chat.
   useEffect(() => {
     if (suspended) endAppChat()
   }, [suspended])

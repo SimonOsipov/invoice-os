@@ -84,7 +84,7 @@ const ROUTES = ['/', '/invoices', '/approvals', '/rules', '/customers', '/report
 const SIZES = [{ width: 1280, height: 720 }, { width: 390, height: 844 }]
 const SELECTOR = 'button, a[href], input, select, textarea'
 
-// Every visible control outside the notice, clipped to its overflow ancestors. DC-18 exclusions: the notice itself and tooltip, status and dialog roles.
+// Every visible control outside the notice, clipped to its overflow ancestors. Exclusions: the notice itself and tooltip, status and dialog roles.
 async function controlRects(page: Page): Promise<{ notice: Rect | null; controls: { label: string; rect: Rect }[] }> {
   return page.evaluate((selector) => {
     const note = document.querySelector('[role="region"][aria-label="Cookie notice"]')

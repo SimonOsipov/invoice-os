@@ -2,6 +2,7 @@
 // The DOM behaviour is hubspotChat.dom.test.ts.
 /// <reference types="node" />
 import { describe, expect, it } from 'vitest'
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -48,7 +49,7 @@ describe('form collection opt-out', () => {
   const opted = (tag: string) => tag.includes('data-hs-do-not-collect="true"')
 
   it('every landing form tells HubSpot not to collect it', () => {
-    const tags = sourceFiles(HERE).flatMap((path) => readFileSync(path, 'utf8').match(OPENS_FORM) ?? [])
+    const tags = sourceFiles(HERE).flatMap((path) => stripComments(readFileSync(path, 'utf8')).match(OPENS_FORM) ?? [])
     expect(tags.length, 'control: at least one form found').toBeGreaterThan(0)
     expect(tags.filter((tag) => !opted(tag))).toEqual([])
     expect(opted('<form noValidate>'), 'control: the predicate rejects a bare form').toBe(false)

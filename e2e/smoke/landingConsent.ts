@@ -8,6 +8,8 @@ import { isProductionHost, isSentryHost } from './sentryHost'
 
 const CONSENT_KEY = 'asc_consent' // retyped from frontend/landing/src/consent.ts
 export const STUB_HEADER = 'x-asc-stub'
+// retyped from HUBSPOT_CHAT_DOMAINS in frontend/landing/src/hubspotChat.ts
+export const HUBSPOT_CHAT_DOMAINS = ['hs-scripts.com', 'hs-analytics.net', 'hs-banner.com', 'hscollectedforms.net', 'hsappstatic.net', 'usemessages.com', 'hubspot.com']
 
 /**
  * Seeds a cookie answer before the first navigation, so the notice never renders.
@@ -44,7 +46,7 @@ export function consoleGate(page: Page): string[] {
   return errors
 }
 
-/** The hosts the routed tests must never reach: the GA tag, GA collection and Sentry. */
+/** The hosts the routed tests must never reach: the GA tag, GA collection, Sentry and HubSpot chat. */
 export function isStubbedHost(rawUrl: string): boolean {
   let host: string
   try {
@@ -52,7 +54,11 @@ export function isStubbedHost(rawUrl: string): boolean {
   } catch {
     return false
   }
-  return host === 'www.googletagmanager.com' || host === 'google-analytics.com' || host.endsWith('.google-analytics.com') || isSentryHost(rawUrl)
+  return host === 'www.googletagmanager.com' || host === 'google-analytics.com' || host.endsWith('.google-analytics.com') || isSentryHost(rawUrl) || isHubSpotChatHost(host)
+}
+
+function isHubSpotChatHost(host: string): boolean {
+  return HUBSPOT_CHAT_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`))
 }
 
 /**

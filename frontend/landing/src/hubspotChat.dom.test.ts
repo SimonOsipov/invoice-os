@@ -336,3 +336,127 @@ describe('HubSpot cookie cleanup', () => {
     expect(jarNames()).not.toContain('hubspotutk')
   })
 })
+
+describe('adversarial', () => {
+  it('the exported constants hold the vendor values', async () => {
+    const m = await fresh()
+    expect(m.HUBSPOT_PORTAL_ID).toBe('148915098')
+    expect(m.CHAT_SCRIPT_HOST).toBe('js-eu1.hs-scripts.com')
+    expect(m.CHAT_SCRIPT_URL).toBe('https://js-eu1.hs-scripts.com/148915098.js')
+    expect(m.CHAT_SCRIPT_ID).toBe('hs-script-loader')
+    expect(m.HUBSPOT_COOKIE_NAMES).toEqual(FIVE)
+    expect(m.HUBSPOT_CHAT_DOMAINS.length).toBeGreaterThan(0)
+    expect(m.HUBSPOT_CHAT_DOMAINS).toContain('usemessages.com')
+  })
+
+  it('bootChat with no stored record loads nothing', async () => {
+    const { bootChat } = await fresh()
+    expect(bootChat()).toBe(false)
+    expect(loaderScripts().length).toBe(0)
+  })
+
+  it('bootChat on a host outside its list loads nothing even when granted', async () => {
+    document.cookie = `asc_consent=${encodeURIComponent(JSON.stringify(GRANTED))}; path=/; domain=.ascomply.com`
+    const { bootChat } = await fresh()
+    expect(bootChat(['blog.ascomply.com'])).toBe(false)
+    expect(loaderScripts().length).toBe(0)
+  })
+
+  it('a lookalike host and a mixed-case production host on Reject', async () => {
+    const { loadChat, removeChat } = await fresh()
+    loadChat(WWW, GRANTED)
+    const sdk = installSdk()
+    seed('__hstc')
+    removeChat('www.ascomply.com.attacker.example', DENIED)
+    expect(sdk.widget.remove).not.toHaveBeenCalled()
+    expect(jarNames()).toContain('__hstc')
+    removeChat('WWW.Ascomply.com', DENIED)
+    expect(sdk.widget.remove).toHaveBeenCalledTimes(1)
+    expect(jarNames()).not.toContain('__hstc')
+  })
+
+  it('removeChat honours a host list argument', async () => {
+    const { loadChat, removeChat } = await fresh()
+    loadChat('blog.ascomply.com', GRANTED, ['blog.ascomply.com'])
+    const sdk = installSdk()
+    removeChat('blog.ascomply.com', DENIED)
+    expect(sdk.widget.remove).not.toHaveBeenCalled()
+    removeChat('blog.ascomply.com', DENIED, ['blog.ascomply.com'])
+    expect(sdk.widget.remove).toHaveBeenCalledTimes(1)
+  })
+
+  it('a throwing SDK still mutes tracking and deletes the cookies', async () => {
+    const { loadChat, removeChat } = await fresh()
+    loadChat(WWW, GRANTED)
+    const sdk = installSdk()
+    vi.mocked(sdk.widget.remove).mockImplementation(() => {
+      throw new Error('vendor')
+    })
+    seed(...FIVE)
+    expect(() => removeChat(WWW, DENIED)).not.toThrow()
+    expect(w._hsq).toEqual([['doNotTrack']])
+    for (const name of FIVE) expect(jarNames()).not.toContain(name)
+  })
+
+  it('a second Reject adds no second doNotTrack and no second remove', async () => {
+    const { loadChat, removeChat } = await fresh()
+    loadChat(WWW, GRANTED)
+    const sdk = installSdk()
+    removeChat(WWW, DENIED)
+    removeChat(WWW, DENIED)
+    expect(w._hsq).toEqual([['doNotTrack']])
+    expect(sdk.widget.remove).toHaveBeenCalledTimes(1)
+  })
+
+  it('Accept, Reject, Accept, Reject removes the widget both times with one script', async () => {
+    const { loadChat, removeChat } = await fresh()
+    loadChat(WWW, GRANTED)
+    const sdk = installSdk()
+    removeChat(WWW, DENIED)
+    loadChat(WWW, GRANTED)
+    loadChat(WWW, GRANTED)
+    removeChat(WWW, DENIED)
+    expect(sdk.widget.load).toHaveBeenCalledTimes(1)
+    expect(sdk.widget.remove).toHaveBeenCalledTimes(2)
+    expect(container()).toBeNull()
+    expect(w.hsConversationsSettings?.loadImmediately).toBe(false)
+    expect(loaderScripts().length).toBe(1)
+  })
+
+  it('the opt-out lift is pushed before widget.load on a re-Accept', async () => {
+    const { loadChat, removeChat } = await fresh()
+    loadChat(WWW, GRANTED)
+    const sdk = installSdk()
+    removeChat(WWW, DENIED)
+    seed('__hs_do_not_track')
+    let hsqAtLoad: unknown[] | undefined
+    vi.mocked(sdk.widget.load).mockImplementation(() => {
+      hsqAtLoad = [...(w._hsq ?? [])]
+    })
+    loadChat(WWW, GRANTED)
+    expect(hsqAtLoad?.at(-1)).toEqual(['doNotTrack', { track: true }])
+  })
+
+  it('the opt-out cookie is matched by exact name', async () => {
+    seed('x__hs_do_not_track_y')
+    const { loadChat } = await fresh()
+    loadChat(WWW, GRANTED)
+    expect(w._hsq).toBeUndefined()
+  })
+
+  it('a denied loadChat does not lift the opt-out', async () => {
+    seed('__hs_do_not_track')
+    const { loadChat } = await fresh()
+    loadChat(WWW, DENIED)
+    expect(w._hsq).toBeUndefined()
+  })
+
+  it('a repeated Accept while loaded does not call widget.load or touch the settings', async () => {
+    const { loadChat } = await fresh()
+    loadChat(WWW, GRANTED)
+    const sdk = installSdk()
+    loadChat(WWW, GRANTED)
+    expect(sdk.widget.load).not.toHaveBeenCalled()
+    expect(w.hsConversationsSettings).toBeUndefined()
+  })
+})

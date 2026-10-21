@@ -42,3 +42,15 @@ describe('shouldLoadChat', () => {
     expect(shouldLoadChat('blog.ascomply.com', true, BLOG_HOSTNAMES)).toBe(true)
   })
 })
+
+describe('form collection opt-out', () => {
+  const OPENS_FORM = /<form\b[^>]*>/g
+  const opted = (tag: string) => tag.includes('data-hs-do-not-collect="true"')
+
+  it('every landing form tells HubSpot not to collect it', () => {
+    const tags = sourceFiles(HERE).flatMap((path) => readFileSync(path, 'utf8').match(OPENS_FORM) ?? [])
+    expect(tags.length, 'control: at least one form found').toBeGreaterThan(0)
+    expect(tags.filter((tag) => !opted(tag))).toEqual([])
+    expect(opted('<form noValidate>'), 'control: the predicate rejects a bare form').toBe(false)
+  })
+})

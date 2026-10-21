@@ -29,7 +29,7 @@ export function ForgotPasswordForm({ onBack }: { onBack: () => void }) {
   }
 
   return (
-    <form noValidate onSubmit={handleSubmit}>
+    <form noValidate data-hs-do-not-collect="true" onSubmit={handleSubmit}>
       <style>{DEMO_FORM_CSS}</style>
       <p className="t-body-sm" style={{ margin: '0 0 12px', lineHeight: 1.55 }}>Enter your work email. If it has an account, we will send a link to choose a new password.</p>
       <label htmlFor={`${ID}-email`} className="label" style={{ display: 'block', marginBottom: 6 }}>Work email</label>

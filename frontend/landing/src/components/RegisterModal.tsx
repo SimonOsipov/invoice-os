@@ -122,7 +122,7 @@ export function RegisterModal({ onClose }: { onClose: () => void }) {
           ) : (
             <>
               <h3 style={{ ...HEADING_STYLE, margin: '0 0 16px' }}>Create your workspace</h3>
-              <form noValidate onSubmit={handleSubmit}>
+              <form noValidate data-hs-do-not-collect="true" onSubmit={handleSubmit}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   {field('email', 'Work email', 'email', 'email', 'you@company.com')}
                   {field('password', 'Password', 'password', 'new-password')}

@@ -3,6 +3,7 @@
 import { ensureTag, setAnalyticsRevoked, tagIsLoaded } from './analytics'
 import { analyticsAllowed, readConsent, writeConsent, type ConsentRecord, type ConsentStore } from './consent'
 import { clearGaCookies } from './gaCookies'
+import { clearHubSpotCookies, loadChat, removeChat } from './hubspotChat'
 import type { ConsentChoice } from './components/CookieNotice'
 
 export function applyChoice(
@@ -18,8 +19,15 @@ export function applyChoice(
   // muted and the visitor's consent silently ignored. Pinned by T3-14.
   setAnalyticsRevoked(!accepted)
 
-  if (accepted) ensureTag(hostname, record, opts?.hosts)
-  else clearGaCookies(hostname)
+  // The chat gets no `opts.hosts`: the blog and library lists never load it.
+  if (accepted) {
+    ensureTag(hostname, record, opts?.hosts)
+    loadChat(hostname, record)
+  } else {
+    clearGaCookies(hostname)
+    removeChat(hostname, record)
+    clearHubSpotCookies(hostname)
+  }
 
   return record
 }
@@ -31,7 +39,13 @@ export function syncConsent(opts?: { hostname?: string; hosts?: readonly string[
   if (!record) return null
   const allowed = analyticsAllowed(record)
   setAnalyticsRevoked(!allowed)
-  if (allowed) ensureTag(hostname, record, opts?.hosts)
-  else if (tagIsLoaded()) clearGaCookies(hostname)
+  if (allowed) {
+    ensureTag(hostname, record, opts?.hosts)
+    loadChat(hostname, record)
+  } else {
+    if (tagIsLoaded()) clearGaCookies(hostname)
+    removeChat(hostname, record)
+    clearHubSpotCookies(hostname)
+  }
   return record
 }

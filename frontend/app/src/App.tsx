@@ -104,6 +104,16 @@ import {
 import { removePolicy, replacePolicy, type Policy } from './lib/workflows'
 import { flaskGlyph, shieldGlyph15 } from './glyphs'
 import { BrandMark } from './icons'
+import {
+  APP_NOTICE_BODY,
+  CookieNotice,
+  bootAppChat,
+  chooseAppConsent,
+  endAppChat,
+  privacyHref,
+  readConsent,
+  syncAppConsent,
+} from './chat'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { DashboardActive } from './components/DashboardActive'
@@ -246,6 +256,29 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // nothing for a retry to discover (AUDIT-10-07).
   const [suspended, setSuspended] = useState(false)
   const onSuspended = useCallback(() => setSuspended(true), [])
+
+  // DC-7: the identify email is the verified /me email, never a token claim.
+  const meEmail = session.verified ? session.me?.user?.email : null
+  const chatEmail = typeof meEmail === 'string' ? meEmail.trim() || null : null
+  const [consent, setConsent] = useState(() => readConsent())
+  const [consentReopened, setConsentReopened] = useState(false)
+  useEffect(() => {
+    if (!suspended) bootAppChat(chatEmail)
+  }, [suspended, chatEmail])
+  useEffect(() => {
+    if (suspended) return
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      const next = syncAppConsent(chatEmail)
+      if (next) setConsent(next)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [suspended, chatEmail])
+  // DC-26: a suspended screen carries no chat.
+  useEffect(() => {
+    if (suspended) endAppChat()
+  }, [suspended])
 
   const authedFetch = useMemo(
     () => makeAuthedFetch(session, onUnauthorized, onSuspended, freshToken),
@@ -1792,6 +1825,11 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     staffRole,
     deleteRole,
     signOut: onSignOut,
+    cookieChoices: () => {
+      const next = syncAppConsent(chatEmail)
+      if (next) setConsent(next)
+      setConsentReopened(true)
+    },
   }
 
   // Below every hook, so latching does not change the hook order. The whole workspace goes,
@@ -1809,6 +1847,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
       className="asc-app pf-shell"
       style={{ height: '100vh', display: 'flex', background: 'var(--bg-1)', fontFamily: 'var(--font-sans)', color: 'var(--fg-1)', overflow: 'hidden' }}
     >
+      <style>{__COOKIE_NOTICE_CSS__}</style>
       <Sidebar ctx={ctx} />
       <main className="pf-main" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <Header ctx={ctx} />
@@ -1838,6 +1877,18 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
           {view === 'approvals' && <ApprovalsView ctx={ctx} />}
           {view === 'audit' && <AuditView ctx={ctx} />}
           {view === 'extraction' && extractionJobId != null && <ExtractionReview ctx={ctx} jobId={extractionJobId} onOpenInvoice={openReviewedInvoice} />}
+          {(consent === null || consentReopened) && (
+            <CookieNotice
+              current={consent}
+              suppressed={false}
+              privacyHref={privacyHref()}
+              body={APP_NOTICE_BODY}
+              onChoose={(c) => {
+                setConsent(chooseAppConsent(c, chatEmail))
+                setConsentReopened(false)
+              }}
+            />
+          )}
         </div>
       </main>
     </div>

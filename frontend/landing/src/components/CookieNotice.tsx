@@ -10,11 +10,13 @@ export function CookieNotice({
   suppressed,
   onChoose,
   privacyHref = '/privacy',
+  body,
 }: {
   current: ConsentRecord | null
   suppressed: boolean
   onChoose: (choice: ConsentChoice) => void
   privacyHref?: string
+  body?: string
 }) {
   return (
     <>
@@ -32,8 +34,8 @@ export function CookieNotice({
           </p>
         ) : null}
         <p className="cn-body">
-          We use Google Analytics to see how people use this page. Accept also turns on our HubSpot live chat, which
-          sets its own cookies. No advertising, no data sold to anyone. Your choice applies to {SHARED_COOKIE_DOMAIN}, the Feature Library and the Blog.
+          {body ??
+            `We use Google Analytics to see how people use this page. Accept also turns on our HubSpot live chat, which sets its own cookies. No advertising, no data sold to anyone. Your choice applies to ${SHARED_COOKIE_DOMAIN}, the Feature Library and the Blog.`}
         </p>
         <a className="lnk cn-link" href={privacyHref}>
           Read the privacy &amp; cookie policy

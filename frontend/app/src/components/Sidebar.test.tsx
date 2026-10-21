@@ -74,6 +74,7 @@ function sidebarCtx(over: Record<string, unknown> = {}): PlatformCtx {
     switchClient: vi.fn(),
     nav: vi.fn(),
     signOut: vi.fn(),
+    cookieChoices: vi.fn(),
     ...over,
   }
   return ctx as unknown as PlatformCtx
@@ -480,6 +481,53 @@ describe('Sidebar Company Blog link (BUG-39)', () => {
       expect(a.style[prop], prop).not.toBe('')
       expect(a.style[prop], prop).toBe(lib.style[prop])
     }
+  })
+})
+
+describe('Sidebar Cookie choices row (CHAT-03-04)', () => {
+  const R = () => rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 })
+  const row = () => screen.getByRole('button', { name: 'Cookie choices' })
+
+  it('sidebar_cookieChoicesSitsBelowTheLinksAndAboveTheCard', async () => {
+    vi.stubEnv('VITE_BLOG_URL', 'https://blog.x')
+    vi.stubEnv('VITE_LIBRARY_URL', 'https://lib.x')
+    const bucket = { validated: 1, awaitingApproval: 1, needsAttention: 1 }
+    for (const ctx of [sidebarCtx(), firmCtx()]) {
+      await renderSidebar(rollup({ ...bucket, entity: bucket }), ctx)
+      const b = screen.getAllByRole('button', { name: 'Cookie choices' })
+      expect(b).toHaveLength(1)
+      expect(b[0].closest('nav.pf-nav-list')).toBeNull()
+      const lib = screen.getByRole('link', { name: 'Feature library' })
+      expect(lib.compareDocumentPosition(b[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(b[0].compareDocumentPosition(screen.getByTestId('identity-card')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      cleanup()
+    }
+  })
+
+  it('sidebar_cookieChoicesRendersWithNoLinkConfigured', async () => {
+    await renderSidebar(R())
+    expect(row()).toBeTruthy()
+  })
+
+  it('sidebar_cookieChoicesMatchesTheLibraryLink', async () => {
+    vi.stubEnv('VITE_LIBRARY_URL', 'https://lib.x')
+    await renderSidebar(R())
+    const b = row()
+    const lib = screen.getByRole('link', { name: 'Feature library' })
+    expect(b.classList.contains('pf-nav')).toBe(true)
+    expect(b.getAttribute('type')).toBe('button')
+    expect(b.hasAttribute('disabled')).toBe(false)
+    for (const prop of ['fontSize', 'fontWeight', 'color', 'padding', 'gap', 'borderRadius'] as const) {
+      expect(b.style[prop], prop).not.toBe('')
+      expect(b.style[prop], prop).toBe(lib.style[prop])
+    }
+  })
+
+  it('sidebar_cookieChoicesCallsTheContext', async () => {
+    const cookieChoices = vi.fn()
+    await renderSidebar(R(), sidebarCtx({ cookieChoices }))
+    fireEvent.click(row())
+    expect(cookieChoices).toHaveBeenCalledTimes(1)
   })
 })
 

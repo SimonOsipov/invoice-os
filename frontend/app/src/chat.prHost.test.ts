@@ -32,4 +32,11 @@ describe('app chat on a PR host', () => {
     endAppChat()
     expect(jarNames()).not.toContain('__hstc')
   })
+
+  it('Reject on a PR host deletes host cookies', async () => {
+    const { chooseAppConsent } = await import('./chat')
+    document.cookie = '__hstc=v; path=/'
+    chooseAppConsent('reject', 'ada@example.com')
+    expect(jarNames()).not.toContain('__hstc')
+  })
 })

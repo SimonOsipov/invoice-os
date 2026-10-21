@@ -82,6 +82,13 @@ describe('bootAppChat', () => {
     }
   })
 
+  it('a padded email is trimmed before identify', async () => {
+    const { bootAppChat } = await fresh()
+    setConsent(true)
+    bootAppChat(`  ${EMAIL} `)
+    expect(hsq()[0]).toEqual(IDENTIFY)
+  })
+
   it('a second boot queues nothing twice', async () => {
     const { bootAppChat } = await fresh()
     setConsent(true)
@@ -170,9 +177,11 @@ describe('chooseAppConsent', () => {
 
   it('a first Reject loads nothing and pushes nothing', async () => {
     const { chooseAppConsent } = await fresh()
+    seed(...COOKIES, '_ga')
     chooseAppConsent('reject', EMAIL)
     expect(loaders().length).toBe(0)
     expect(w._hsq).toBeUndefined()
+    for (const name of [...COOKIES, '_ga']) expect(jarNames()).not.toContain(name)
   })
 })
 
@@ -204,6 +213,20 @@ describe('syncAppConsent', () => {
     clearConsent()
     const n = hsq().length
     expect(syncAppConsent(EMAIL)).toBeNull()
+    expect(hsq().length).toBe(n)
+  })
+})
+
+describe('syncAppConsent with no record', () => {
+  it('sync with no record leaves a loaded chat in place', async () => {
+    const { bootAppChat, syncAppConsent } = await fresh()
+    setConsent(true)
+    bootAppChat(EMAIL)
+    installSdk()
+    clearConsent()
+    const n = hsq().length
+    expect(syncAppConsent(EMAIL)).toBeNull()
+    expect(container()).not.toBeNull()
     expect(hsq().length).toBe(n)
   })
 })

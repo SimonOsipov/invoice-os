@@ -1,4 +1,4 @@
-// govulncheck_workflow_test.go pins the govulncheck job of ci.yml and its place in the CI rollup.
+// govulncheck_workflow_test.go pins the govulncheck job of ci.yml and its place in the CI rollup; the nightly reuses its job checks.
 package main
 
 import (
@@ -20,6 +20,69 @@ var (
 
 var unquote = strings.NewReplacer(`"`, "", "'", "")
 
+// govulncheckCommand returns the pinned govulncheck line of the job's run steps, or "".
+func govulncheckCommand(job workflowJob) string {
+	cmd := ""
+	for _, s := range job.steps() {
+		for _, l := range strings.Split(s.keys["run"], "\n") {
+			if govulncheckPinRE.MatchString(l) {
+				cmd = l
+			}
+		}
+	}
+	return cmd
+}
+
+// govulncheckJobProblems checks the job shape that ci.yml and the nightly share.
+func govulncheckJobProblems(label string, job workflowJob) []string {
+	var problems []string
+	if _, ok := jobKey(job, "if"); ok {
+		problems = append(problems, label+" has an if:")
+	}
+	if _, ok := jobKey(job, "needs"); ok {
+		problems = append(problems, label+" has needs:")
+	}
+	if strings.Contains(strings.Join(job.lines, "\n"), "continue-on-error") {
+		problems = append(problems, label+" has continue-on-error")
+	}
+	if !slices.Contains(strings.Split(strings.Join(job.lines, "\n"), "\n"), "          go-version-file: go.mod") {
+		problems = append(problems, label+" does not use go-version-file: go.mod")
+	}
+	if !slices.ContainsFunc(job.lines, func(l string) bool { return unquote.Replace(strings.TrimSpace(l)) == "CGO_ENABLED: 0" }) {
+		problems = append(problems, label+` lacks CGO_ENABLED: "0" (the production build)`)
+	}
+	var run string
+	for _, s := range job.steps() {
+		if _, ok := s.keys["if"]; ok {
+			problems = append(problems, label+" has a step-level if:")
+		}
+		run += s.keys["run"] + "\n"
+	}
+	if slices.ContainsFunc(job.lines, func(l string) bool { return strings.HasPrefix(strings.TrimSpace(l), "go-version:") }) {
+		problems = append(problems, label+" sets go-version beside the version file")
+	}
+	if first, _, _ := strings.Cut(strings.TrimSpace(run), "\n"); first != "go version" {
+		problems = append(problems, label+" run lacks go version as its first line")
+	}
+	cmd := govulncheckCommand(job)
+	if cmd == "" {
+		return append(problems, label+" is not pinned to @vX.Y.Z")
+	}
+	if govulncheckJSONRE.MatchString(unquote.Replace(cmd)) {
+		problems = append(problems, label+" uses -json or -format json|sarif|openvex|sbom (exit 0 on a finding)")
+	}
+	scan, _, swallowed := strings.Cut(cmd, "||")
+	if swallowed {
+		problems = append(problems, label+" run swallows the exit code (||)")
+	}
+	if f := strings.Fields(scan); len(f) == 0 {
+		problems = append(problems, label+" run has no command before ||")
+	} else if f[len(f)-1] != "./..." {
+		problems = append(problems, label+" does not scan ./...")
+	}
+	return problems
+}
+
 func govulncheckProblems(ciYAML string) []string {
 	var job, ci *workflowJob
 	jobs := workflowJobsOf(ciYAML)
@@ -34,57 +97,7 @@ func govulncheckProblems(ciYAML string) []string {
 	if job == nil {
 		return []string{"no govulncheck job"}
 	}
-	var problems []string
-	if _, ok := jobKey(*job, "if"); ok {
-		problems = append(problems, "govulncheck has an if:")
-	}
-	if _, ok := jobKey(*job, "needs"); ok {
-		problems = append(problems, "govulncheck has needs:")
-	}
-	if strings.Contains(strings.Join(job.lines, "\n"), "continue-on-error") {
-		problems = append(problems, "govulncheck has continue-on-error")
-	}
-	if !slices.Contains(strings.Split(strings.Join(job.lines, "\n"), "\n"), "          go-version-file: go.mod") {
-		problems = append(problems, "govulncheck does not use go-version-file: go.mod")
-	}
-	if !slices.ContainsFunc(job.lines, func(l string) bool { return unquote.Replace(strings.TrimSpace(l)) == "CGO_ENABLED: 0" }) {
-		problems = append(problems, `govulncheck lacks CGO_ENABLED: "0" (the production build)`)
-	}
-	var run string
-	for _, s := range job.steps() {
-		if _, ok := s.keys["if"]; ok {
-			problems = append(problems, "govulncheck has a step-level if:")
-		}
-		run += s.keys["run"] + "\n"
-	}
-	if slices.ContainsFunc(job.lines, func(l string) bool { return strings.HasPrefix(strings.TrimSpace(l), "go-version:") }) {
-		problems = append(problems, "govulncheck sets go-version beside the version file")
-	}
-	if first, _, _ := strings.Cut(strings.TrimSpace(run), "\n"); first != "go version" {
-		problems = append(problems, "govulncheck run lacks go version as its first line")
-	}
-	cmd := ""
-	for _, l := range strings.Split(run, "\n") {
-		if govulncheckPinRE.MatchString(l) {
-			cmd = l
-		}
-	}
-	if cmd == "" {
-		problems = append(problems, "govulncheck is not pinned to @vX.Y.Z")
-	} else {
-		if govulncheckJSONRE.MatchString(unquote.Replace(cmd)) {
-			problems = append(problems, "govulncheck uses -json or -format json|sarif|openvex|sbom (exit 0 on a finding)")
-		}
-		scan, _, swallowed := strings.Cut(cmd, "||")
-		if swallowed {
-			problems = append(problems, "govulncheck run swallows the exit code (||)")
-		}
-		if f := strings.Fields(scan); len(f) == 0 {
-			problems = append(problems, "govulncheck run has no command before ||")
-		} else if f[len(f)-1] != "./..." {
-			problems = append(problems, "govulncheck does not scan ./...")
-		}
-	}
+	problems := govulncheckJobProblems("govulncheck", *job)
 	if ci == nil {
 		return append(problems, "no ci job")
 	}
@@ -105,7 +118,7 @@ func govulncheckProblems(ciYAML string) []string {
 func mutateOnce(t *testing.T, yml, old, repl string) string {
 	t.Helper()
 	if n := strings.Count(yml, old); n != 1 {
-		t.Fatalf("mutation needle %q occurs %d times in ci.yml, want 1", old, n)
+		t.Fatalf("mutation needle %q occurs %d times in the workflow, want 1", old, n)
 	}
 	return strings.Replace(yml, old, repl, 1)
 }

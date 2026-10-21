@@ -1,4 +1,4 @@
-// advisories_workflow_test.go pins the advisories job of ci.yml, its place in the CI rollup and advisories-nightly.yml.
+// advisories_workflow_test.go pins the advisories job of ci.yml, its place in the CI rollup and the two jobs of advisories-nightly.yml.
 package main
 
 import (
@@ -81,7 +81,25 @@ func advisoriesProblems(ciYAML, nightlyYAML string) []string {
 	if !strings.Contains(rollup, advisoriesGuard) {
 		problems = append(problems, `ci rollup lacks the != "success" exit for advisories`)
 	}
-	return append(problems, nightlyProblems(nightlyYAML)...)
+	problems = append(problems, nightlyProblems(nightlyYAML)...)
+	return append(problems, govulncheckDriftProblems(jobs, workflowJobsOf(nightlyYAML))...)
+}
+
+// govulncheckDriftProblems requires the nightly scan line to equal the ci.yml one.
+func govulncheckDriftProblems(ciJobs, nightlyJobs []workflowJob) []string {
+	find := func(jobs []workflowJob) *workflowJob {
+		for i := range jobs {
+			if jobs[i].name == "govulncheck" {
+				return &jobs[i]
+			}
+		}
+		return nil
+	}
+	ci, nightly := find(ciJobs), find(nightlyJobs)
+	if ci != nil && nightly != nil && govulncheckCommand(*ci) != govulncheckCommand(*nightly) {
+		return []string{"nightly govulncheck command differs from ci.yml"}
+	}
+	return nil
 }
 
 func nightlyProblems(yml string) []string {
@@ -117,18 +135,37 @@ func nightlyProblems(yml string) []string {
 	if strings.Contains(text, "gh issue") {
 		problems = append(problems, "nightly opens an issue (gh issue)")
 	}
-	for _, j := range workflowJobsOf(yml) {
-		if j.name == "advisories" {
-			if _, ok := jobKey(j, "if"); ok {
-				problems = append(problems, "nightly has an if:")
-			}
-			if _, ok := jobKey(j, "permissions"); ok {
-				problems = append(problems, "nightly job overrides permissions; no issues permission allowed")
-			}
-			return append(problems, advisoriesJobProblems("nightly", j)...)
+	var advisories, vuln *workflowJob
+	jobs := workflowJobsOf(yml)
+	for i := range jobs {
+		switch jobs[i].name {
+		case "advisories":
+			advisories = &jobs[i]
+		case "govulncheck":
+			vuln = &jobs[i]
 		}
 	}
-	return append(problems, "nightly has no advisories job")
+	if advisories == nil {
+		problems = append(problems, "nightly has no advisories job")
+	} else {
+		if _, ok := jobKey(*advisories, "if"); ok {
+			problems = append(problems, "nightly has an if:")
+		}
+		if _, ok := jobKey(*advisories, "needs"); ok {
+			problems = append(problems, "nightly has needs:")
+		}
+		if _, ok := jobKey(*advisories, "permissions"); ok {
+			problems = append(problems, "nightly job overrides permissions; no issues permission allowed")
+		}
+		problems = append(problems, advisoriesJobProblems("nightly", *advisories)...)
+	}
+	if vuln == nil {
+		return append(problems, "nightly has no govulncheck job")
+	}
+	if _, ok := jobKey(*vuln, "permissions"); ok {
+		problems = append(problems, "nightly govulncheck job overrides permissions; no issues permission allowed")
+	}
+	return append(problems, govulncheckJobProblems("nightly govulncheck", *vuln)...)
 }
 
 func requireAdvisoriesProblem(t *testing.T, ciYML, nightlyYML, want string) {
@@ -149,6 +186,17 @@ func mutateNightly(t *testing.T, old, repl string) (ci, nightly string) {
 	return readWorkflow(t, "ci.yml"), mutateOnce(t, readWorkflow(t, "advisories-nightly.yml"), old, repl)
 }
 
+func nightlyJob(t *testing.T, id string) workflowJob {
+	t.Helper()
+	for _, j := range workflowJobsOf(readWorkflow(t, "advisories-nightly.yml")) {
+		if j.name == id {
+			return j
+		}
+	}
+	t.Fatalf("advisories-nightly.yml has no job %q", id)
+	return workflowJob{}
+}
+
 func TestCIAdvisories_RepoIsWired(t *testing.T) {
 	t.Parallel()
 	if got := advisoriesProblems(readWorkflow(t, "ci.yml"), readWorkflow(t, "advisories-nightly.yml")); len(got) != 0 {
@@ -156,6 +204,9 @@ func TestCIAdvisories_RepoIsWired(t *testing.T) {
 	}
 	if n := len(ciJob(t, "advisories").steps()); n < 3 {
 		t.Errorf("control: advisories has %d steps, want at least 3", n)
+	}
+	if n := len(nightlyJob(t, "govulncheck").steps()); n < 3 {
+		t.Errorf("control: nightly govulncheck has %d steps, want at least 3", n)
 	}
 }
 
@@ -295,4 +346,82 @@ func TestCIAdvisories_RollupEchoMissingFails(t *testing.T) {
 	t.Parallel()
 	ci, n := mutateCI(t, advisoriesEcho+"\n", "")
 	requireAdvisoriesProblem(t, ci, n, "result echo")
+}
+
+func TestAdvisoriesNightly_MissingGovulncheckJobFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "  govulncheck:\n    name:", "  govulnscan:\n    name:")
+	requireAdvisoriesProblem(t, ci, n, "nightly has no govulncheck job")
+}
+
+func TestAdvisoriesNightly_GovulncheckIfFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "    name: govulncheck nightly\n", "    name: govulncheck nightly\n    if: github.event_name == 'schedule'\n")
+	requireAdvisoriesProblem(t, ci, n, "nightly govulncheck has an if:")
+}
+
+func TestAdvisoriesNightly_GovulncheckStepIfFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "      - name: Scan for reachable vulnerabilities\n", "      - name: Scan for reachable vulnerabilities\n        if: github.event_name == 'schedule'\n")
+	requireAdvisoriesProblem(t, ci, n, "nightly govulncheck has a step-level if:")
+}
+
+func TestAdvisoriesNightly_GovulncheckOrTrueFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, govulncheckCmd, govulncheckCmd+" || true")
+	requireAdvisoriesProblem(t, ci, n, "swallows the exit code")
+}
+
+func TestAdvisoriesNightly_GovulncheckJSONFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, govulncheckCmd, "go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -json ./...")
+	requireAdvisoriesProblem(t, ci, n, "-json or -format")
+}
+
+func TestAdvisoriesNightly_GovulncheckContinueOnErrorFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "    name: govulncheck nightly\n", "    name: govulncheck nightly\n    continue-on-error: true\n")
+	requireAdvisoriesProblem(t, ci, n, "nightly govulncheck has continue-on-error")
+}
+
+func TestAdvisoriesNightly_GovulncheckVersionDriftFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "govulncheck@v1.9.0", "govulncheck@v1.8.0")
+	requireAdvisoriesProblem(t, ci, n, "differs from ci.yml")
+}
+
+func TestAdvisoriesNightly_GovulncheckCgoFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, `CGO_ENABLED: "0"`, `CGO_ENABLED: "1"`)
+	requireAdvisoriesProblem(t, ci, n, "CGO_ENABLED")
+}
+
+func TestAdvisoriesNightly_GovulncheckNoGoVersionLineFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "          go version\n          "+govulncheckCmd, "          "+govulncheckCmd)
+	requireAdvisoriesProblem(t, ci, n, "lacks go version")
+}
+
+func TestAdvisoriesNightly_GovulncheckGoVersionFileFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "          go-version-file: go.mod\n      - name: Scan for reachable vulnerabilities", "          go-version: stable\n      - name: Scan for reachable vulnerabilities")
+	requireAdvisoriesProblem(t, ci, n, "go-version-file")
+}
+
+func TestAdvisoriesNightly_GovulncheckNeedsFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "    name: govulncheck nightly\n", "    name: govulncheck nightly\n    needs: advisories\n")
+	requireAdvisoriesProblem(t, ci, n, "nightly govulncheck has needs:")
+}
+
+func TestAdvisoriesNightly_AdvisoriesNeedsFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "    name: advisories nightly\n", "    name: advisories nightly\n    needs: govulncheck\n")
+	requireAdvisoriesProblem(t, ci, n, "nightly has needs:")
+}
+
+func TestAdvisoriesNightly_GovulncheckJobPermissionsFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "    name: govulncheck nightly\n", "    name: govulncheck nightly\n    permissions:\n      issues: write\n")
+	requireAdvisoriesProblem(t, ci, n, "overrides permissions")
 }

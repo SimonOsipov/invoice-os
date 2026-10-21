@@ -58,6 +58,8 @@ test('AC-03 the PR app host loads no HubSpot chat and no Google tag after Accept
   await accept(page).click()
   await expect(notice(page)).toBeHidden()
   await page.waitForLoadState('networkidle')
+  expect(hosts.length, 'the request log is empty').toBeGreaterThan(0)
+  expect(hosts, 'the log holds no request to the app host').toContain(new URL(APP_URL).hostname.toLowerCase())
   expect(hosts.filter((h) => hostMatches(h, [...HUBSPOT_CHAT_DOMAINS, ...TAG_HOSTS])), 'a chat or tag host was requested').toEqual([])
   await expect(page.locator('#hs-script-loader')).toHaveCount(0)
   expect(await page.evaluate(() => typeof (window as Window & { _hsq?: unknown })._hsq)).toBe('undefined')
@@ -129,7 +131,9 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
       await page.setViewportSize({ width, height })
       await page.goto(`${APP_URL}${route}`)
       await expect(notice(page), `${at}: no notice`).toBeVisible({ timeout: 30_000 })
-      await expect(page.locator('main.pf-main .pf-scroll h1:visible').first(), `${at}: the screen drew no h1`).toBeVisible({ timeout: 30_000 })
+      // CreateFlow draws no h1; its step label is the landmark.
+      const ready = route === '/create' ? page.getByText('New invoice ·').first() : page.locator('main.pf-main .pf-scroll h1:visible').first()
+      await expect(ready, `${at}: the screen drew no landmark`).toBeVisible({ timeout: 30_000 })
       await settleAnimations(notice(page))
       await page.evaluate((wide) => {
         if (wide) document.querySelector('main.pf-main .pf-scroll')?.scrollTo(0, 1e9)

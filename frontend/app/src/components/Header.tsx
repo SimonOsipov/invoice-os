@@ -68,6 +68,7 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <form
+          data-hs-do-not-collect="true"
           onSubmit={(e) => {
             e.preventDefault()
             ctx.searchInvoices(clampFilterText(query))

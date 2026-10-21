@@ -1491,7 +1491,7 @@ function InvoiceEditBody({
   }
 
   return (
-    <form data-testid="edit-invoice" onSubmit={handleSubmit}>
+    <form data-testid="edit-invoice" data-hs-do-not-collect="true" onSubmit={handleSubmit}>
       <div style={{ padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         {formError && (
           <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>

@@ -645,32 +645,32 @@ func TestLoadUpstreamsRequiresAuthURL(t *testing.T) {
 	}
 }
 
-// TestLoadUpstreamsRequiresReconciliationURL: `reconciliation` is probed, never routed,
+// TestLoadUpstreamsRequiresWorkerURL: `worker` is probed, never routed,
 // so the deploy gate sees it running; a gateway that cannot see it must not boot.
-func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
-	if !slices.Contains(probedServices, "reconciliation") {
-		t.Errorf("probedServices = %v, want it to carry `reconciliation`", probedServices)
+func TestLoadUpstreamsRequiresWorkerURL(t *testing.T) {
+	if !slices.Contains(probedServices, "worker") {
+		t.Errorf("probedServices = %v, want it to carry `worker`", probedServices)
 	}
 
 	setUpstreamEnv(t, "http://127.0.0.1:1")
-	t.Setenv("RECONCILIATION_URL", "")
+	t.Setenv("WORKER_URL", "")
 	_, _, err := loadUpstreams()
 	if err == nil {
-		t.Error("loadUpstreams succeeded with RECONCILIATION_URL unset, want a named boot failure")
-	} else if !strings.Contains(err.Error(), "RECONCILIATION_URL") {
-		t.Errorf("error %q does not name RECONCILIATION_URL", err)
+		t.Error("loadUpstreams succeeded with WORKER_URL unset, want a named boot failure")
+	} else if !strings.Contains(err.Error(), "WORKER_URL") {
+		t.Errorf("error %q does not name WORKER_URL", err)
 	}
 
-	t.Setenv("RECONCILIATION_URL", "http://127.0.0.1:2")
+	t.Setenv("WORKER_URL", "http://127.0.0.1:2")
 	routed, probed, err := loadUpstreams()
 	if err != nil {
-		t.Fatalf("loadUpstreams with RECONCILIATION_URL set: %v", err)
+		t.Fatalf("loadUpstreams with WORKER_URL set: %v", err)
 	}
-	if u, ok := probed["reconciliation"]; !ok || u.String() != "http://127.0.0.1:2" {
-		t.Errorf("probed[reconciliation] = %v (present %v), want http://127.0.0.1:2", u, ok)
+	if u, ok := probed["worker"]; !ok || u.String() != "http://127.0.0.1:2" {
+		t.Errorf("probed[worker] = %v (present %v), want http://127.0.0.1:2", u, ok)
 	}
-	if _, ok := routed["reconciliation"]; ok {
-		t.Error("reconciliation is in the routed map -- it would get a public /api/reconciliation/* proxy route")
+	if _, ok := routed["worker"]; ok {
+		t.Error("worker is in the routed map -- it would get a public /api/worker/* proxy route")
 	}
 
 	t.Run("rollup_names_it", func(t *testing.T) {
@@ -679,11 +679,11 @@ func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
 		if !seen["gateway"] {
 			t.Fatalf("control: /healthz/fleet omits the gateway itself; names = %v", seen)
 		}
-		if !seen["reconciliation"] {
-			t.Errorf("/healthz/fleet omits \"reconciliation\"; names = %v", seen)
+		if !seen["worker"] {
+			t.Errorf("/healthz/fleet omits \"worker\"; names = %v", seen)
 		}
-		if got := get("/api/reconciliation/x"); got != http.StatusNotFound {
-			t.Errorf("GET /api/reconciliation/x = %d, want 404 -- a probed service is exposed as a public proxy route", got)
+		if got := get("/api/worker/x"); got != http.StatusNotFound {
+			t.Errorf("GET /api/worker/x = %d, want 404 -- a probed service is exposed as a public proxy route", got)
 		}
 		// Control: a 404 proves nothing if the mux routes no service at all.
 		if got := get("/api/tenancy/x"); got != http.StatusBadGateway {
@@ -691,7 +691,7 @@ func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
 		}
 	})
 
-	// A down reconciliation must degrade the roll-up, never be skipped or tolerated.
+	// A down worker must degrade the roll-up, never be skipped or tolerated.
 	t.Run("down_degrades_rollup", func(t *testing.T) {
 		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(`{"status":"ok"}`))
@@ -709,7 +709,7 @@ func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
 		t.Cleanup(recon.Close)
 
 		setUpstreamEnv(t, up.URL)
-		t.Setenv("RECONCILIATION_URL", recon.URL)
+		t.Setenv("WORKER_URL", recon.URL)
 		routed, probed, err := loadUpstreams()
 		if err != nil {
 			t.Fatalf("loadUpstreams: %v", err)
@@ -734,29 +734,29 @@ func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
 			return rec.Code, body.Status, st
 		}
 
-		// Positive control: every backend up, reconciliation probed at its platform /healthz.
+		// Positive control: every backend up, worker probed at its platform /healthz.
 		code, status, st := rollup()
-		if code != http.StatusOK || status != "ok" || st["reconciliation"] != "up" {
-			t.Fatalf("all up: code=%d status=%q reconciliation=%q, want 200 ok up; services=%v", code, status, st["reconciliation"], st)
+		if code != http.StatusOK || status != "ok" || st["worker"] != "up" {
+			t.Fatalf("all up: code=%d status=%q worker=%q, want 200 ok up; services=%v", code, status, st["worker"], st)
 		}
 		mu.Lock()
 		paths := slices.Clone(reconPaths)
 		reconCode = http.StatusServiceUnavailable
 		mu.Unlock()
 		if !slices.Equal(paths, []string{"/healthz", "/readyz"}) {
-			t.Errorf("reconciliation probed at %v, want exactly [/healthz /readyz]", paths)
+			t.Errorf("worker probed at %v, want exactly [/healthz /readyz]", paths)
 		}
 
 		code, status, st = rollup()
 		if code != http.StatusServiceUnavailable || status != "degraded" {
-			t.Errorf("reconciliation down: code=%d status=%q, want 503 degraded", code, status)
+			t.Errorf("worker down: code=%d status=%q, want 503 degraded", code, status)
 		}
-		if st["reconciliation"] != "down" {
-			t.Errorf("reconciliation = %q, want down; services=%v", st["reconciliation"], st)
+		if st["worker"] != "down" {
+			t.Errorf("worker = %q, want down; services=%v", st["worker"], st)
 		}
 		for name, s := range st {
-			if name != "reconciliation" && s != "up" {
-				t.Errorf("%s = %q, want up -- only reconciliation is down", name, s)
+			if name != "worker" && s != "up" {
+				t.Errorf("%s = %q, want up -- only the worker is down", name, s)
 			}
 		}
 	})

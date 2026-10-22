@@ -23,21 +23,21 @@ const platformPath = "github.com/SimonOsipov/invoice-os/internal/platform"
 
 var nineMains = []string{
 	"dashboard", "gateway", "invoice", "notifications", "portfolio",
-	"reconciliation", "submission", "tenancy", "validation",
+	"submission", "tenancy", "validation", "worker",
 }
 
 // Boot exit sites per file; a file may gain sites but not lose one.
 var minFatalSites = map[string]int{
-	"cmd/dashboard/main.go":      4,
-	"cmd/gateway/main.go":        9,
-	"cmd/gateway/mockissuer.go":  1,
-	"cmd/invoice/main.go":        9,
-	"cmd/notifications/main.go":  2,
-	"cmd/portfolio/main.go":      4,
-	"cmd/reconciliation/main.go": 8,
-	"cmd/submission/main.go":     14,
-	"cmd/tenancy/main.go":        4,
-	"cmd/validation/main.go":     4,
+	"cmd/dashboard/main.go":     4,
+	"cmd/gateway/main.go":       9,
+	"cmd/gateway/mockissuer.go": 1,
+	"cmd/invoice/main.go":       9,
+	"cmd/notifications/main.go": 2,
+	"cmd/portfolio/main.go":     4,
+	"cmd/submission/main.go":    9,
+	"cmd/tenancy/main.go":       4,
+	"cmd/validation/main.go":    4,
+	"cmd/worker/main.go":        19,
 }
 
 const totalFatalSites = 59

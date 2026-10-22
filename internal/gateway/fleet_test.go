@@ -648,10 +648,10 @@ func readyUpstream(t *testing.T, code int, body string) *url.URL {
 func TestFleetReportsEachServicesReadinessWithoutChangingTheVerdict(t *testing.T) {
 	leak := "failed to connect to `user=invoice_app database=railway`: 10.168.8.165:5432 (postgres.railway.internal)"
 	rec, body := doFleet(t, map[string]*url.URL{
-		"invoice":        readyUpstream(t, http.StatusOK, `{"status":"ready"}`),
-		"reconciliation": readyUpstream(t, http.StatusServiceUnavailable, `{"status":"not ready","failures":{"reader-database":"`+leak+`","database":"`+leak+`"}}`),
-		"tenancy":        readyUpstream(t, http.StatusInternalServerError, `oops`),
-		"docling":        healthzUpstream(t, false), // serves no /readyz
+		"invoice": readyUpstream(t, http.StatusOK, `{"status":"ready"}`),
+		"worker":  readyUpstream(t, http.StatusServiceUnavailable, `{"status":"not ready","failures":{"reader-database":"`+leak+`","database":"`+leak+`"}}`),
+		"tenancy": readyUpstream(t, http.StatusInternalServerError, `oops`),
+		"docling": healthzUpstream(t, false), // serves no /readyz
 	})
 	if rec.Code != http.StatusOK || body.Status != fleetOK {
 		t.Fatalf("a not-ready service changed the verdict: %d %s", rec.Code, rec.Body.String())
@@ -664,11 +664,11 @@ func TestFleetReportsEachServicesReadinessWithoutChangingTheVerdict(t *testing.T
 		ready    *bool
 		notReady []string
 	}{
-		"invoice":        {ptr(true), nil},
-		"reconciliation": {ptr(false), []string{"database", "reader-database"}},
-		"tenancy":        {ptr(false), []string{"readyz"}},
-		"docling":        {nil, nil},
-		"gateway":        {nil, nil},
+		"invoice": {ptr(true), nil},
+		"worker":  {ptr(false), []string{"database", "reader-database"}},
+		"tenancy": {ptr(false), []string{"readyz"}},
+		"docling": {nil, nil},
+		"gateway": {nil, nil},
 	} {
 		s := by[name]
 		if s.Status != statusUp || (s.Ready == nil) != (want.ready == nil) || (s.Ready != nil && *s.Ready != *want.ready) || !slices.Equal(s.NotReady, want.notReady) {
@@ -700,7 +700,7 @@ func deref(b *bool) any {
 }
 
 func TestFleetServiceHealthLogsItsReadinessValue(t *testing.T) {
-	got := fmt.Sprintf("%+v", []ServiceHealth{{Name: "reconciliation", Status: statusUp, Ready: ptr(false), NotReady: []string{"database"}}})
+	got := fmt.Sprintf("%+v", []ServiceHealth{{Name: "worker", Status: statusUp, Ready: ptr(false), NotReady: []string{"database"}}})
 	if !strings.Contains(got, `"ready":false`) || strings.Contains(got, "0x") {
 		t.Fatalf("logged as %s", got)
 	}

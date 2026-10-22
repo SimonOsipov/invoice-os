@@ -36,9 +36,9 @@ const (
 	pxPoolFile    = "pdfium_pool.go"
 	pxPoolFileRel = "internal/extraction/" + pxPoolFile
 
-	pxSubmissionMain = "cmd/submission/main.go"
+	pxWorkerMain = "cmd/worker/main.go"
 
-	// The extraction queue key as cmd/submission/main.go writes it.
+	// The extraction queue key as cmd/worker/main.go writes it.
 	pxExtractionQueueKey = "extraction.QueueName"
 )
 
@@ -186,20 +186,20 @@ func TestPDFiumSourceHasNoAmbientDependency(t *testing.T) {
 // holds an instance no worker can ever ask for.
 func TestPDFiumMaxTotalMatchesTheQueueWorkerCount(t *testing.T) {
 	root := rxRepoRoot(t)
-	main := filepath.Join(root, filepath.FromSlash(pxSubmissionMain))
+	main := filepath.Join(root, filepath.FromSlash(pxWorkerMain))
 
 	workers := pxQueueMaxWorkers(t, main)
 	if len(workers) == 0 {
-		t.Fatalf("the parse found no MaxWorkers in %s; the comparison below would be vacuous", pxSubmissionMain)
+		t.Fatalf("the parse found no MaxWorkers in %s; the comparison below would be vacuous", pxWorkerMain)
 	}
 	want, ok := workers[pxExtractionQueueKey]
 	if !ok {
-		t.Fatalf("%s sets MaxWorkers for %s but not for %s; the extraction queue has been renamed or moved", pxSubmissionMain, strings.Join(pxSortedKeys(workers), ", "), pxExtractionQueueKey)
+		t.Fatalf("%s sets MaxWorkers for %s but not for %s; the extraction queue has been renamed or moved", pxWorkerMain, strings.Join(pxSortedKeys(workers), ", "), pxExtractionQueueKey)
 	}
 
 	got := pxConfigMaxTotal(t, pxPoolFile)
 	if got != want {
-		t.Errorf("%s builds the pool with MaxTotal %d, but %s runs the %s queue with MaxWorkers %d: a smaller pool blocks a worker, and a larger one holds an instance no worker can ask for", pxPoolFile, got, pxSubmissionMain, pxExtractionQueueKey, want)
+		t.Errorf("%s builds the pool with MaxTotal %d, but %s runs the %s queue with MaxWorkers %d: a smaller pool blocks a worker, and a larger one holds an instance no worker can ask for", pxPoolFile, got, pxWorkerMain, pxExtractionQueueKey, want)
 	}
 }
 

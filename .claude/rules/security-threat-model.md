@@ -42,7 +42,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 ## Network
 
 - Only the gateway and the static sites have a public domain. Every other service is on the private network only.
-- `probedServices` in `cmd/gateway/main.go` (docling, auth, reconciliation) get no public proxy route. `TestGatewayHandlersPublishNoProxyRouteForAProbedService` asserts this.
+- `probedServices` in `cmd/gateway/main.go` (docling, auth, worker) get no public proxy route. `TestGatewayHandlersPublishNoProxyRouteForAProbedService` asserts this.
 - The docling sidecar has no authentication. It relies on the private network. A public route to it is HIGH.
 
 ## Untrusted entry points
@@ -57,6 +57,6 @@ The security reviewer reads this file before each review. Treat a break of a gua
 
 - `ceiling:` in `migrations/20261006162416_invitation_accept.sql`: `invoice_app` can name one invite per known token across tenants.
 - `ceiling:` in `migrations/20261006162416_invitation_accept.sql`: `provision_workspace` and `accept_invitation` are the only membership writers behind the identity lock.
-- `ceiling:` in `cmd/gateway/main.go` and `cmd/submission/main.go`: a boot error quotes a raw internal service URL.
+- `ceiling:` in `cmd/gateway/main.go` and `cmd/worker/main.go`: a boot error quotes a raw internal service URL.
 - `ceiling:` in `internal/accountmail/accountmail.go`: the account-mail token rides in the query string.
 - Any other `ceiling:` comment on a path above. List them with `git grep -n "ceiling:"`.

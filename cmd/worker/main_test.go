@@ -22,13 +22,13 @@ import (
 
 const unreachableDB = "postgres://invoice_app:app@127.0.0.1:1/invoice_os?sslmode=disable"
 
-func buildReconciliation(t *testing.T) string {
+func buildWorker(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "reconciliation")
+	bin := filepath.Join(t.TempDir(), "worker")
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 	if out, err := exec.CommandContext(ctx, "go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("go build cmd/reconciliation: %v\n%s", err, out)
+		t.Fatalf("go build cmd/worker: %v\n%s", err, out)
 	}
 	return bin
 }
@@ -41,6 +41,24 @@ func freePort(t *testing.T) int {
 	}
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port
+}
+
+// bootVars are the variables every worker boot needs besides the databases; none reaches a network.
+var bootVars = map[string]string{
+	"GATEWAY_URL": "http://gateway.invalid", "APP_ADAPTER": "mock",
+	"DOCUMENT_BUCKET": "b", "DOCUMENT_ENDPOINT": "http://127.0.0.1:1", "DOCUMENT_REGION": "r",
+	"DOCUMENT_ACCESS_KEY_ID": "k", "DOCUMENT_SECRET_ACCESS_KEY": "s",
+}
+
+func bootEnv(vars map[string]string) []string {
+	env := []string{"HOME=" + os.Getenv("HOME")}
+	for k, v := range bootVars {
+		env = append(env, k+"="+v)
+	}
+	for k, v := range vars {
+		env = append(env, k+"="+v)
+	}
+	return env
 }
 
 // run boots the binary with exactly vars as its environment and returns its combined output.
@@ -59,9 +77,9 @@ func run(t *testing.T, bin string, vars map[string]string) (string, error) {
 	return out.String(), err
 }
 
-func TestReconciliationMain_RequiresTheValidationConfig(t *testing.T) {
-	bin := buildReconciliation(t)
-	base := map[string]string{"DATABASE_URL": unreachableDB, "DATABASE_READER_URL": unreachableDB}
+func TestWorkerMain_RequiresTheValidationConfig(t *testing.T) {
+	bin := buildWorker(t)
+	base := map[string]string{"DATABASE_URL": unreachableDB, "DATABASE_READER_URL": unreachableDB, "GATEWAY_URL": "http://gateway.invalid"}
 
 	for _, tc := range []struct{ name, set, missing string }{
 		{"VALIDATION_URL unset", "S2S_TOKEN", "VALIDATION_URL"},
@@ -83,23 +101,23 @@ func TestReconciliationMain_RequiresTheValidationConfig(t *testing.T) {
 		})
 	}
 
-	// Control: with both set the validation refusal is gone (the unreachable DB stops the boot instead).
+	// Control: with both set the validation refusal is gone (a later required variable stops the boot instead).
 	vars := map[string]string{"VALIDATION_URL": "http://validation.invalid", "S2S_TOKEN": "tok"}
 	for k, v := range base {
 		vars[k] = v
 	}
 	out, _ := run(t, bin, vars)
-	if strings.Contains(out, "is required") {
-		t.Errorf("a refusal remains with both variables set\n%s", out)
+	if strings.Contains(out, "VALIDATION_URL is required") || strings.Contains(out, "S2S_TOKEN is required") {
+		t.Errorf("a validation refusal remains with both variables set\n%s", out)
 	}
 }
 
 // A booted binary ticks the custom-rule re-check: nothing else marks a pending revision, and
 // a pending one refuses queueing until it is marked.
-func TestReconciliationMain_TicksTheCustomRuleRecheck(t *testing.T) {
+func TestWorkerMain_TicksTheCustomRuleRecheck(t *testing.T) {
 	appURL, adminURL, readerURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_SUPERUSER_URL"), os.Getenv("DATABASE_READER_URL")
 	if appURL == "" || adminURL == "" || readerURL == "" {
-		t.Skip("reconciliation boot test skipped: set DATABASE_URL, DATABASE_READER_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+		t.Skip("worker boot test skipped: set DATABASE_URL, DATABASE_READER_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
 	}
 	admin, err := pgxpool.New(t.Context(), adminURL)
 	if err != nil {
@@ -122,13 +140,11 @@ func TestReconciliationMain_TicksTheCustomRuleRecheck(t *testing.T) {
 	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) }))
 	t.Cleanup(down.Close)
 	var out bytes.Buffer
-	cmd := exec.Command(buildReconciliation(t))
-	cmd.Env = []string{"HOME=" + os.Getenv("HOME"), "PORT=" + strconv.Itoa(freePort(t)),
-		"DATABASE_URL=" + appURL, "DATABASE_READER_URL=" + readerURL,
-		"VALIDATION_URL=" + down.URL, "S2S_TOKEN=tok", "RECONCILE_INTERVAL=200ms"}
+	cmd := exec.Command(buildWorker(t))
+	cmd.Env = bootEnv(map[string]string{"PORT": strconv.Itoa(freePort(t)), "DATABASE_URL": appURL, "DATABASE_READER_URL": readerURL, "VALIDATION_URL": down.URL, "S2S_TOKEN": "tok", "RECONCILE_INTERVAL": "200ms"})
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Start(); err != nil {
-		t.Fatalf("start reconciliation: %v", err)
+		t.Fatalf("start worker: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = cmd.Process.Signal(syscall.SIGTERM)
@@ -150,10 +166,10 @@ func TestReconciliationMain_TicksTheCustomRuleRecheck(t *testing.T) {
 }
 
 // A booted binary writes the day's rollup snapshot. The run enumerates the whole dev DB, so rows for other tenants are expected.
-func TestReconciliationMain_SnapshotsAtBoot(t *testing.T) {
+func TestWorkerMain_SnapshotsAtBoot(t *testing.T) {
 	appURL, adminURL, readerURL := os.Getenv("DATABASE_URL"), os.Getenv("DATABASE_SUPERUSER_URL"), os.Getenv("DATABASE_READER_URL")
 	if appURL == "" || adminURL == "" || readerURL == "" {
-		t.Skip("reconciliation boot test skipped: set DATABASE_URL, DATABASE_READER_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
+		t.Skip("worker boot test skipped: set DATABASE_URL, DATABASE_READER_URL and DATABASE_SUPERUSER_URL (or run `make test-rls`)")
 	}
 	admin, err := pgxpool.New(t.Context(), adminURL)
 	if err != nil {
@@ -178,13 +194,11 @@ func TestReconciliationMain_SnapshotsAtBoot(t *testing.T) {
 	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) }))
 	t.Cleanup(down.Close)
 	var out bytes.Buffer
-	cmd := exec.Command(buildReconciliation(t))
-	cmd.Env = []string{"HOME=" + os.Getenv("HOME"), "PORT=" + strconv.Itoa(freePort(t)),
-		"DATABASE_URL=" + appURL, "DATABASE_READER_URL=" + readerURL,
-		"VALIDATION_URL=" + down.URL, "S2S_TOKEN=tok"}
+	cmd := exec.Command(buildWorker(t))
+	cmd.Env = bootEnv(map[string]string{"PORT": strconv.Itoa(freePort(t)), "DATABASE_URL": appURL, "DATABASE_READER_URL": readerURL, "VALIDATION_URL": down.URL, "S2S_TOKEN": "tok"})
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Start(); err != nil {
-		t.Fatalf("start reconciliation: %v", err)
+		t.Fatalf("start worker: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = cmd.Process.Signal(syscall.SIGTERM)

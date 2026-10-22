@@ -35,7 +35,7 @@ const (
 	fcPoolArg     = "pool"
 	fcLoggerArg   = "app.Logger"
 	fcPageOneFn   = "extraction.PageOneReader"
-	fcOpenerFn    = "newDocumentOpener"
+	fcOpenerFn    = "docadapter.Opener"
 	fcOpenerArg   = "docSvc.Open"
 	fcPDFiumFn    = "extraction.NewPDFiumReader"
 

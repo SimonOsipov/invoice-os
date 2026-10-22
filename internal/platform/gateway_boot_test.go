@@ -103,12 +103,15 @@ func gwBootEnv(svc string, port int) []string {
 		env = append(env, "VALIDATION_URL=http://127.0.0.1:1", "S2S_TOKEN="+gwS2SToken)
 	case "validation":
 		env = append(env, "S2S_TOKEN="+gwS2SToken)
-	case "reconciliation":
-		env = append(env, "VALIDATION_URL=http://127.0.0.1:1", "S2S_TOKEN="+gwS2SToken)
+	case "worker":
+		env = append(env, docs...)
+		env = append(env, fakes...)
+		env = append(env, "VALIDATION_URL=http://127.0.0.1:1", "S2S_TOKEN="+gwS2SToken,
+			"APP_ADAPTER=mock", "EXTRACTOR=mock", "GATEWAY_URL=http://127.0.0.1:1")
 	case "submission":
 		env = append(env, docs...)
 		env = append(env, fakes...)
-		env = append(env, "APP_ADAPTER=mock", "EXTRACTOR=mock", "GATEWAY_URL=http://127.0.0.1:1")
+		env = append(env, "GATEWAY_URL=http://127.0.0.1:1")
 	}
 	return env
 }
@@ -654,13 +657,13 @@ func TestRLS_EveryContextServiceRefusesAForgedRequest(t *testing.T) {
 		})
 	}
 
-	t.Run("reconciliation is not guarded and still serves health", func(t *testing.T) {
-		if slices.Contains(services, "reconciliation") {
-			t.Fatal("routedServices names reconciliation; D4 says the gateway gives it no proxy route")
+	t.Run("the worker is not guarded and still serves health", func(t *testing.T) {
+		if slices.Contains(services, "worker") {
+			t.Fatal("routedServices names the worker; D4 says the gateway gives it no proxy route")
 		}
 		port := gwFreePort(t)
 		reader := cmp.Or(os.Getenv("DATABASE_READER_URL"), os.Getenv("DATABASE_URL"))
-		p := gwStart(t, buildMain(t, "reconciliation"), port, append(gwBootEnv("reconciliation", port), "DATABASE_READER_URL="+reader))
+		p := gwStart(t, buildMain(t, "worker"), port, append(gwBootEnv("worker", port), "DATABASE_READER_URL="+reader))
 		gwWaitHealthy(t, p, 90*time.Second)
 		if code, body := p.do(t, "GET", "/v1/ping", "", gwForged()); code != http.StatusNotFound {
 			t.Errorf("GET /v1/ping, forged identity, no token = %d %q, want the mux's 404: no guard (D4)", code, body)

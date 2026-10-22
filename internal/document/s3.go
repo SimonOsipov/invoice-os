@@ -13,6 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	"github.com/aws/smithy-go/middleware"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
 // Sentinels for the document error model — mirrors internal/importer's naming.
@@ -91,8 +93,37 @@ func NewS3Store(cfg Config, hc *http.Client) (ObjectStore, error) {
 		// UsePathStyle is deliberately left unset: against a hostname endpoint the
 		// SDK addresses the bucket as a subdomain, matching the credential's
 		// virtual-host url style.
+		o.APIOptions = append(o.APIOptions, unsignAcceptEncoding)
 	})
 	return &s3Store{client: client, bucket: cfg.Bucket}, nil
+}
+
+type acceptEncodingKey struct{}
+
+// unsignAcceptEncoding keeps Accept-Encoding out of the SigV4 signature. Google's front end
+// rewrites the header, so GCS refuses a signature that covers it (GKE-01 P6).
+func unsignAcceptEncoding(stack *middleware.Stack) error {
+	hide := middleware.FinalizeMiddlewareFunc("HideAcceptEncoding", func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (middleware.FinalizeOutput, middleware.Metadata, error) {
+		if req, ok := in.Request.(*smithyhttp.Request); ok {
+			if v := req.Header.Get("Accept-Encoding"); v != "" {
+				ctx = middleware.WithStackValue(ctx, acceptEncodingKey{}, v)
+				req.Header.Del("Accept-Encoding")
+			}
+		}
+		return next.HandleFinalize(ctx, in)
+	})
+	restore := middleware.FinalizeMiddlewareFunc("RestoreAcceptEncoding", func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (middleware.FinalizeOutput, middleware.Metadata, error) {
+		if req, ok := in.Request.(*smithyhttp.Request); ok {
+			if v, _ := middleware.GetStackValue(ctx, acceptEncodingKey{}).(string); v != "" {
+				req.Header.Set("Accept-Encoding", v)
+			}
+		}
+		return next.HandleFinalize(ctx, in)
+	})
+	if err := stack.Finalize.Insert(hide, "Signing", middleware.Before); err != nil {
+		return err
+	}
+	return stack.Finalize.Insert(restore, "Signing", middleware.After)
 }
 
 func (s *s3Store) Put(ctx context.Context, key string, body io.ReadSeeker, size int64) error {

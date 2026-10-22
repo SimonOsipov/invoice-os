@@ -285,6 +285,30 @@ func TestS3Store_UsesVirtualHostStyle(t *testing.T) {
 	}
 }
 
+// GCS refuses a SigV4 signature that covers Accept-Encoding (GKE-01 P6); the header still goes on the wire.
+func TestS3Store_AcceptEncodingIsSentButNotSigned(t *testing.T) {
+	rt := &fakeRoundTripper{respond: okBody(0)}
+	store := newWireStore(t, rt)
+	if err := store.Put(context.Background(), wireKey, strings.NewReader("abc"), 3); err != nil {
+		t.Fatalf("Put() returned unexpected error: %v", err)
+	}
+	auth := rt.lastReq.Header.Get("Authorization")
+	_, signed, ok := strings.Cut(auth, "SignedHeaders=")
+	if !ok {
+		t.Fatalf("Authorization = %q, want a SigV4 header with SignedHeaders", auth)
+	}
+	signed, _, _ = strings.Cut(signed, ",")
+	if !strings.Contains(signed, "host") {
+		t.Fatalf("SignedHeaders = %q, want it to list host", signed)
+	}
+	if strings.Contains(signed, "accept-encoding") {
+		t.Errorf("SignedHeaders = %q, want no accept-encoding", signed)
+	}
+	if got := rt.lastReq.Header.Get("Accept-Encoding"); got != "identity" {
+		t.Errorf("Accept-Encoding on the wire = %q, want identity", got)
+	}
+}
+
 // AC-4. The second row is the discriminator: with no ContentLength forwarded
 // the SDK derives one from the seeker, so an implementation that drops `size`
 // still shows 1234 on a 1234-byte body. Only a body LONGER than `size` proves

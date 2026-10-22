@@ -27,7 +27,7 @@ A subtask is **risky** when it changes tenant isolation (RLS, `tenant_id`), mone
 | Plan review (Phase 0.6b), Test-Spec (Mode A), QA Verify (Mode B), deploy-gate verification | `product-qa-spec` |
 | Execution | `product-executor` |
 
-## CRITICAL RULES
+## Core rules
 
 ### 1. Separation of duties
 The lead orchestrates. It may read, search and run commands directly to orient itself and to check evidence. It never edits product code or tests: `product-executor` writes code, `product-qa-spec` writes tests and verifies. Keep suite output in log files, not in this context (Stage 3).
@@ -432,7 +432,7 @@ An agent parses these instructions with no one to ask. Write for that reader.
 
 ## Completion Rules
 
-1. Both gates green on the PR head (Core Rule 3). Local tests green ≠ done.
+1. Both gates green on the PR head (Core rule 3). Local tests green ≠ done.
 2. Subtask status: todo → doing (its first stage starts) → done (its QA Verify passes).
 3. Output `<promise>ALL_TASKS_COMPLETE</promise>` only after Phase 3.5 passes and every subtask is `done`.
 4. A story that changes a sign-up, invite, verify or reset flow owes one walk-through. It runs on the deployed build with a real mail client. The user runs it after the merge. It does not block `ALL_TASKS_COMPLETE`. Global `CLAUDE.md` rule 5, "Audit the Surface", defines done for surface work.

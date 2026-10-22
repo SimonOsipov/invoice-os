@@ -55,7 +55,7 @@ gh pr checks [PR_NUMBER]
 #   deploy-context ×7 + deploy-spas ×3 → fleet-gate → e2e (smoke + api) → topology ×6 (serial-lane, import-wizard, import-wizard-2, invoice-surfaces, ui-surfaces, library).
 ```
 
-Not part of the gate: `dev-env-teardown.yml` (deletes the PR environment on close), `dev-env-sweeper.yml` (daily reaper of orphaned PR environments), `railway-invariants.yml` (asserts Railway PR Environments stay OFF). CI tears environments down; never use destructive Railway MCP calls.
+Not part of the gate: `dev-env-teardown.yml` (deletes the PR environment on close), `dev-env-sweeper.yml` (daily reaper of orphaned PR environments). CI tears environments down; never use destructive Railway MCP calls.
 
 ### 4. One branch, one PR per story
 All subtasks share one feature branch, one draft PR and one worktree.

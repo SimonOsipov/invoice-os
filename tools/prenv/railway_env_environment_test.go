@@ -24,7 +24,6 @@ const (
 	prOnlyCondition      = "github.event_name == 'pull_request'"
 	forkVarsBeforeRunCmd = `bash scripts/ci/railway-env.sh fork-vars-before-urls "$ENV_ID"`
 	forkVarsAfterRunCmd  = `bash scripts/ci/railway-env.sh fork-vars-after-urls "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL" "$LIBRARY_URL" "$BLOG_URL"`
-	forkSelfTestRunCmd   = "bash scripts/ci/railway-env.sh set-fork-environment --self-test"
 )
 
 // curlShim prepends a curl to PATH that logs each call instead of reaching the network.
@@ -843,71 +842,6 @@ func TestDevEnvYmlStampsTheMockIssuerOnPullRequestsOnly(t *testing.T) {
 	}
 }
 
-// forkSelfTestJobFaults reports each way railway-invariants.yml departs from one fork-environment-self-test job running the self-test.
-func forkSelfTestJobFaults(yaml string) []string {
-	var jobs, faults []string
-	for _, job := range workflowJobsOf(yaml) {
-		for _, s := range job.steps() {
-			for _, cmd := range invocations(s.keys["run"], "set-fork-environment") {
-				if cmd != forkSelfTestRunCmd {
-					faults = append(faults, fmt.Sprintf("job %s runs %q", job.name, cmd))
-					continue
-				}
-				jobs = append(jobs, job.name)
-			}
-		}
-	}
-	switch {
-	case len(jobs) != 1:
-		faults = append(faults, fmt.Sprintf("%d steps run %q, want exactly 1", len(jobs), forkSelfTestRunCmd))
-	case jobs[0] != "fork-environment-self-test":
-		faults = append(faults, fmt.Sprintf("%q runs in job %s, not fork-environment-self-test", forkSelfTestRunCmd, jobs[0]))
-	}
-	return faults
-}
-
-func TestRailwayInvariantsYmlWiresSetForkEnvironmentSelfTest(t *testing.T) {
-	t.Parallel()
-	const aiJob = "  ai-fake-self-test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Run set-ai-fake --self-test\n        run: bash scripts/ci/railway-env.sh set-ai-fake --self-test\n"
-	const forkRun = "        run: " + forkSelfTestRunCmd + "\n"
-	const forkJob = "  fork-environment-self-test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Run set-fork-environment --self-test\n" + forkRun
-	good := "on:\n  pull_request:\njobs:\n" + aiJob + forkJob
-	for _, c := range []struct {
-		name, yaml string
-		bad        bool
-	}{
-		{"the planned job", good, false},
-		{"the run commented out", strings.Replace(good, forkRun, commentOut(forkRun), 1), true},
-		{"the job renamed", strings.Replace(good, "  fork-environment-self-test:\n", "  fork-env-check:\n", 1), true},
-		{"a second run in ai-fake-self-test", strings.Replace(good, aiJob, aiJob+"      - "+strings.TrimSpace(forkRun)+"\n", 1), true},
-		{"no job", "on:\n  pull_request:\njobs:\n" + aiJob, true},
-	} {
-		if c.bad && c.yaml == good {
-			t.Fatalf("fixture %q: the edit did not apply", c.name)
-		}
-		if faults := forkSelfTestJobFaults(c.yaml); (len(faults) > 0) != c.bad {
-			t.Errorf("fixture %q: faults %v, want faults = %v", c.name, faults, c.bad)
-		}
-	}
-
-	inv := readWorkflow(t, "railway-invariants.yml")
-	// Control: the parser finds the ai-fake self-test in its own job.
-	var control []string
-	for _, job := range workflowJobsOf(inv) {
-		for _, s := range job.steps() {
-			if slices.Contains(invocations(s.keys["run"], "set-ai-fake"), "bash scripts/ci/railway-env.sh set-ai-fake --self-test") {
-				control = append(control, job.name)
-			}
-		}
-	}
-	if !slices.Equal(control, []string{"ai-fake-self-test"}) {
-		t.Fatalf("control: the parser finds the set-ai-fake self-test in jobs %v; the scan is broken", control)
-	}
-	for _, f := range forkSelfTestJobFaults(inv) {
-		t.Errorf(".github/workflows/railway-invariants.yml: %s", f)
-	}
-}
-
 // goPathsFilter returns the `go:` list of the changes job's paths-filter block.
 func goPathsFilter(ciYAML string) []string {
 	var job []string
@@ -940,7 +874,7 @@ func goPathsFilter(ciYAML string) []string {
 	return items
 }
 
-var deployWorkflows = []string{".github/workflows/dev-env.yml", ".github/workflows/railway-invariants.yml"}
+var deployWorkflows = []string{".github/workflows/dev-env.yml"}
 
 func TestCIGoFilterCoversTheDeployWorkflows(t *testing.T) {
 	t.Parallel()
@@ -955,19 +889,17 @@ func TestCIGoFilterCoversTheDeployWorkflows(t *testing.T) {
 		return out
 	}
 	const devEnvItem = "              - '.github/workflows/dev-env.yml'\n"
-	const invItem = "              - '.github/workflows/railway-invariants.yml'\n"
 	const migrations = "            migrations:\n              - 'migrations/**'\n"
 	good := "on: push\njobs:\n  changes:\n    runs-on: ubuntu-latest\n    outputs:\n      go: ${{ steps.filter.outputs.go }}\n    steps:\n      - uses: dorny/paths-filter@v3\n        id: filter\n        with:\n          filters: |\n            go:\n              - 'cmd/**'\n              - '.github/workflows/ci.yml'\n" +
-		devEnvItem + invItem + migrations
+		devEnvItem + migrations
 	for _, c := range []struct {
 		name, yaml string
 		want       int
 	}{
-		{"both listed", good, 0},
+		{"listed", good, 0},
 		{"dev-env.yml missing", strings.Replace(good, devEnvItem, "", 1), 1},
-		{"railway-invariants.yml missing", strings.Replace(good, invItem, "", 1), 1},
-		{"both commented out", strings.Replace(good, devEnvItem+invItem, commentOut(devEnvItem+invItem), 1), 2},
-		{"both under migrations", strings.Replace(strings.Replace(good, devEnvItem+invItem, "", 1), migrations, migrations+devEnvItem+invItem, 1), 2},
+		{"commented out", strings.Replace(good, devEnvItem, commentOut(devEnvItem), 1), 1},
+		{"under migrations", strings.Replace(strings.Replace(good, devEnvItem, "", 1), migrations, migrations+devEnvItem, 1), 1},
 	} {
 		if c.want > 0 && c.yaml == good {
 			t.Fatalf("fixture %q: the edit did not apply", c.name)

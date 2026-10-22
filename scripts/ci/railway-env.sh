@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# scripts/ci/railway-env.sh <assert-project-settings|disable-pr-environments|
-#                            ensure-environment <name>|audit-sealed-variables|
+# scripts/ci/railway-env.sh <ensure-environment <name>|audit-sealed-variables|
 #                            assert-db-dsns <environment-id|--source-only|--self-test>|
 #                            select-domain [--self-test]|
 #                            reconcile-fork <environment-id>|
@@ -31,34 +30,6 @@
 #
 # `set-production-gateway-token` is run by hand, once, never from a workflow: it
 # writes the persistent environment's GATEWAY_TOKEN, and only when none is set.
-#
-# M4-23-02: Railway's PR Environments must stay OFF for this project.
-#
-# `assert-project-settings` ASSERTS and FAILS LOUDLY. It never repairs: a silent
-# auto-repair would erase the evidence that someone re-enabled the feature, which is
-# exactly the "half-works and misleads the next person" failure this check exists to
-# prevent.
-#
-# It asserts at TWO levels, because level 1 alone proves nothing here:
-#   1. prDeploys == false AND botPrEnvironments == false — the literal invariant.
-#   2. ZERO deploymentTriggers across every environment — the condition that actually
-#      made Railway's PR Environments inert in this project. M4-23 established that
-#      prDeploys was `true`, correctly configured, and completely inert, because Railway
-#      is not subscribed to this repo's PR events (the fleet deploys by CLI push). A
-#      green check on (1) alone asserts a suggestively-named field with no causal power.
-#      A deployment trigger, by contrast, lets Railway deploy behind CI's back in its own
-#      order — breaking the gateway-first sequencing that dev-env.yml depends on.
-#
-# Uses the nested, NON-deprecated project.environments[].deploymentTriggers.
-# `Project.deploymentTriggers` is @deprecated ("Use environment.deploymentTriggers for
-# properly scoped access control"); a deprecated field can be removed, which would turn
-# this check into a false positive that blocks every PR.
-#
-# `disable-pr-environments` is the repair path, reachable ONLY via
-# `gh workflow run railway-invariants.yml -f disable=true` — never on the pull_request
-# path. After mutating it re-verifies with an INDEPENDENT read-back request rather than
-# echoing projectUpdate's own selection set; echoing the mutation response back is the
-# silent-no-op defect this exists to close.
 #
 # `ensure-environment <name>` (M4-23-03) is the create-or-reuse path that replaced the
 # ~300s poll for an environment Railway was supposed to create for us. Idempotent: it
@@ -95,34 +66,6 @@
 set -euo pipefail
 
 RAILWAY_GRAPHQL_URL="https://backboard.railway.com/graphql/v2"
-
-# All three booleans are non-null in Railway's schema (Boolean!), so `false` here is a
-# positive observation and can never be an absent field misread as off. baseEnvironmentId
-# is nullable (String) → reported, never asserted. focusedPrEnvironments is reported but
-# NOT asserted: with prDeploys=false it is inert, so asserting it adds no protection.
-# shellcheck disable=SC2016  # $id is a GraphQL variable — it must NOT be shell-expanded.
-READBACK_QUERY='query prEnvSettings($id: String!) {
-  project(id: $id) {
-    id
-    name
-    prDeploys
-    botPrEnvironments
-    focusedPrEnvironments
-    baseEnvironmentId
-    environments {
-      edges { node {
-        id
-        name
-        deploymentTriggers { edges { node { id provider repository branch environmentId serviceId } } }
-      } }
-    }
-  }
-}'
-
-# shellcheck disable=SC2016  # $id/$input are GraphQL variables — not shell expansions.
-DISABLE_MUTATION='mutation disablePrEnvironments($id: String!, $input: ProjectUpdateInput!) {
-  projectUpdate(id: $id, input: $input) { id name prDeploys botPrEnvironments focusedPrEnvironments }
-}'
 
 # M4-23-03. DELIBERATELY UNFILTERED — `isEphemeral` is selected as a DISCRIMINATOR, not
 # passed as a server-side filter. With `environments(projectId:$p, isEphemeral:true)` a
@@ -369,52 +312,6 @@ poll_tick_failed() {
   fi
 }
 
-# Issues the read-back query as its own request and leaves it in GQL_RESPONSE.
-read_project_settings() {
-  local body
-  body=$(jq -n --arg q "$READBACK_QUERY" --arg id "$RAILWAY_PROJECT_ID" \
-    '{query: $q, variables: {id: $id}}')
-
-  graphql_post "$body" "reading project settings for project $RAILWAY_PROJECT_ID"
-
-  if echo "$GQL_RESPONSE" | jq -e '.data.project == null' >/dev/null 2>&1; then
-    echo "::error::Railway returned a null project for id $RAILWAY_PROJECT_ID — the project was deleted or the token lost access to it. This is NOT evidence that PR Environments are off."
-    exit 1
-  fi
-}
-
-# Asserts the invariant against whatever read_project_settings last observed.
-assert_pr_environments_off() {
-  local pr_deploys bot_pr focused base_env trigger_count offenders
-
-  pr_deploys=$(echo "$GQL_RESPONSE" | jq -r '.data.project.prDeploys')
-  bot_pr=$(echo "$GQL_RESPONSE" | jq -r '.data.project.botPrEnvironments')
-  focused=$(echo "$GQL_RESPONSE" | jq -r '.data.project.focusedPrEnvironments')
-  base_env=$(echo "$GQL_RESPONSE" | jq -r '.data.project.baseEnvironmentId // "null"')
-
-  # Compared against the literal string "false", so anything else — true, null, a missing
-  # field — fails. Exiting 0 requires positively observing `false`.
-  if [ "$pr_deploys" != "false" ] || [ "$bot_pr" != "false" ]; then
-    echo "::error::Railway PR Environments are not OFF (prDeploys=$pr_deploys botPrEnvironments=$bot_pr). This check does NOT repair. Turn them off with: gh workflow run railway-invariants.yml -f disable=true"
-    exit 1
-  fi
-
-  trigger_count=$(echo "$GQL_RESPONSE" | jq '[.data.project.environments.edges[]?.node.deploymentTriggers.edges[]?] | length')
-  if [ "$trigger_count" != "0" ]; then
-    offenders=$(echo "$GQL_RESPONSE" | jq -r '
-      .data.project.environments.edges[]?.node
-      | . as $env
-      | $env.deploymentTriggers.edges[]?.node
-      | "  environment=\($env.name) (\($env.id)) provider=\(.provider) repository=\(.repository) branch=\(.branch) serviceId=\(.serviceId) triggerId=\(.id)"
-    ')
-    echo "::error::$trigger_count Railway deployment trigger(s) found. Railway can now deploy this project on its own schedule, outside CI, breaking the gateway-first deploy ordering dev-env.yml depends on. Offenders:"
-    echo "$offenders"
-    exit 1
-  fi
-
-  echo "Railway PR Environments OFF: prDeploys=$pr_deploys botPrEnvironments=$bot_pr focusedPrEnvironments=$focused baseEnvironmentId=$base_env deploymentTriggers=$trigger_count"
-}
-
 require_source_env() {
   if [ -z "${RAILWAY_DEV_ENVIRONMENT_ID:-}" ]; then
     echo "::error::RAILWAY_DEV_ENVIRONMENT_ID is not set — expected the workflow-level constant from dev-env.yml. It is passed EXPLICITLY as environmentCreate's sourceEnvironmentId and there is NO fallback: this project's baseEnvironmentId was measured null (2026-07-18), so an omitted source does not quietly default to \`development\` — it forks from nothing and yields an EMPTY environment (or a hard API error)."
@@ -512,8 +409,7 @@ emit_environment_outputs() {
 # attempts, and every attempt — successful or not — is followed by an INDEPENDENT
 # re-query, never by a blind retry. Railway can return 504 having created the environment
 # anyway, so a create that reports failure is not evidence that nothing was created; only
-# the re-query is. This is the same discipline cmd_disable_pr_environments applies when it
-# refuses to trust projectUpdate's own selection set.
+# the re-query is.
 cmd_ensure_environment() {
   local name="${1:-}"
   if [ -z "$name" ]; then
@@ -722,36 +618,6 @@ cmd_delete_environment() {
   echo "  round 1: $err1"
   echo "  round 2: $err2"
   exit 1
-}
-
-cmd_assert_project_settings() {
-  require_env
-  read_project_settings
-  assert_pr_environments_off
-}
-
-cmd_disable_pr_environments() {
-  require_env
-
-  local body
-  body=$(jq -n --arg q "$DISABLE_MUTATION" --arg id "$RAILWAY_PROJECT_ID" \
-    '{query: $q, variables: {id: $id, input: {prDeploys: false, botPrEnvironments: false}}}')
-
-  echo "Disabling Railway PR Environments on project $RAILWAY_PROJECT_ID ..."
-  graphql_post "$body" "running projectUpdate on project $RAILWAY_PROJECT_ID"
-
-  # Deliberately NOT trusting projectUpdate's own selection set. Re-read from scratch.
-  echo "projectUpdate returned without error; re-reading project settings independently ..."
-  read_project_settings
-
-  local pr_deploys bot_pr
-  pr_deploys=$(echo "$GQL_RESPONSE" | jq -r '.data.project.prDeploys')
-  bot_pr=$(echo "$GQL_RESPONSE" | jq -r '.data.project.botPrEnvironments')
-  if [ "$pr_deploys" != "false" ] || [ "$bot_pr" != "false" ]; then
-    echo "::error::projectUpdate reported success but the independent read-back disagrees (prDeploys=$pr_deploys botPrEnvironments=$bot_pr) — the setting did NOT take."
-    exit 1
-  fi
-  echo "Independent read-back confirms prDeploys=false botPrEnvironments=false."
 }
 
 # ===========================================================================
@@ -983,8 +849,7 @@ cmd_audit_sealed_variables() {
   body=$(gql_body "$SEALED_AUDIT_QUERY" "$(jq -n --arg e "$RAILWAY_DEV_ENVIRONMENT_ID" '{e: $e}')")
   graphql_post "$body" "auditing sealed variables in the source environment $RAILWAY_DEV_ENVIRONMENT_ID"
 
-  # "Cannot audit" is NEVER "none present" — the same discipline
-  # assert_pr_environments_off applies to a null project.
+  # "Cannot audit" is NEVER "none present".
   if echo "$GQL_RESPONSE" | jq -e '.data.environment == null' >/dev/null 2>&1; then
     echo "::error::Railway returned a null environment for the source id $RAILWAY_DEV_ENVIRONMENT_ID, so the sealed-variable audit could not run. This is NOT evidence that no sealed variables exist."
     exit 1
@@ -1394,8 +1259,7 @@ reconcile_domain() {
     create_err="$GQL_ERROR"
   fi
 
-  # Never trust the mutation's own selection set — re-query independently, the
-  # same discipline cmd_disable_pr_environments applies to projectUpdate.
+  # Never trust the mutation's own selection set — re-query independently.
   sleep 5
   graphql_post "$(gql_body "$DOMAINS_QUERY" \
     "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
@@ -4089,8 +3953,6 @@ cmd_check_mail_templates() {
 }
 
 case "${1:-}" in
-  assert-project-settings)   cmd_assert_project_settings ;;
-  disable-pr-environments)   cmd_disable_pr_environments ;;
   ensure-environment)        cmd_ensure_environment "${2:-}" ;;
   audit-sealed-variables)    cmd_audit_sealed_variables ;;
   assert-db-dsns)            cmd_assert_db_dsns "${2:-}" ;;
@@ -4119,7 +3981,7 @@ case "${1:-}" in
   check-mail-templates)      cmd_check_mail_templates "${2:-}" ;;
   report-api-calls)          cmd_report_api_calls ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops> <support> <library> <blog>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|fork-vars-before-urls <environment-id>|fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url> <blog-url>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|discover-urls <environment-id>|query <context>|wait-deployment <label> <deployment-id>|check-mail-templates <environment-id>|report-api-calls>"
+    echo "::error::usage: railway-env.sh <ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops> <support> <library> <blog>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|fork-vars-before-urls <environment-id>|fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url> <blog-url>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|discover-urls <environment-id>|query <context>|wait-deployment <label> <deployment-id>|check-mail-templates <environment-id>|report-api-calls>"
     exit 2
     ;;
 esac

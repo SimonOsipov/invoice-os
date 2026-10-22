@@ -27,7 +27,7 @@ paths:
 - Keep secrets in Railway service variables only. Never put one in the repo, in `railway.json` or in an example file.
 - Keep every service's Watch Paths empty. Set the service instance `watchPatterns` to `[]` after you create the service.
 - Add no `build.watchPatterns` to `railway.json`. Railway ignores it.
-- Delete any deployment trigger right after `serviceCreate`, before you do anything else. Any trigger in any environment fails `railway-invariants.yml` on every PR.
+- Delete any deployment trigger right after `serviceCreate`, before you do anything else.
 - Give a public domain only to the gateway and the SPAs. Context services, `docling`, `auth` and Postgres stay private.
 - Create a custom domain for a new public service on production. Railway-generated domains exist only on PR environments.
 - Call `app.RequireGateway(token)` before `app.Run` in each service the gateway routes to. Read the token with `mustEnv("GATEWAY_TOKEN")`.

@@ -1,0 +1,55 @@
+# Throwaway check for GKE-01 AC3; the PR is closed unmerged.
+name: gke-01-wif-refusal
+
+on:
+  pull_request:
+    paths: [".github/workflows/gke-01-wif-refusal.yml"]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  WIF_PROVIDER: projects/428987361227/locations/global/workloadIdentityPools/github/providers/github-actions
+
+jobs:
+  preview-allowed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: deploy-preview@ascomply-preview.iam.gserviceaccount.com
+          token_format: access_token
+
+  prod-refused:
+    runs-on: ubuntu-latest
+    steps:
+      - id: prod
+        continue-on-error: true
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: deploy-prod@ascomply-prod.iam.gserviceaccount.com
+          token_format: access_token
+      - if: steps.prod.outcome != 'failure'
+        run: |
+          echo "A pull request got a production token"
+          exit 1
+      - run: echo "Refused, as required"
+
+  applier-refused:
+    runs-on: ubuntu-latest
+    steps:
+      - id: applier
+        continue-on-error: true
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: tf-applier@ascomply-prod.iam.gserviceaccount.com
+          token_format: access_token
+      - if: steps.applier.outcome != 'failure'
+        run: |
+          echo "A pull request got the Terraform applier token"
+          exit 1
+      - run: echo "Refused, as required"

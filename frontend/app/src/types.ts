@@ -557,4 +557,5 @@ export type PlatformCtx = {
   staffRole: (key: string, members: readonly string[]) => Promise<Role>
   deleteRole: (key: string) => Promise<void>
   signOut: () => void
+  cookieChoices: () => void
 }

@@ -161,7 +161,7 @@ func TestBlogRoutesRegisteredOutsideAPI(t *testing.T) {
 }
 
 func TestBlogRoutes_PreflightGrantsAnAllowedOrigin(t *testing.T) {
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	t.Setenv("DEPLOY_ENV", "production")
 	mux, calls := blogMux(t, slog.New(slog.DiscardHandler))
 
 	rec := preflight(mux, "/blog/posts", blogAllowedOrigin)
@@ -239,7 +239,7 @@ func TestBlogHandlers_PostureTable(t *testing.T) {
 		{"PR-7", true},
 	} {
 		t.Run("env="+c.env, func(t *testing.T) {
-			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
+			t.Setenv("DEPLOY_ENV", c.env)
 			var mu sync.Mutex
 			var enforced []string
 			up, calls := blogUpstreamServer(t)
@@ -268,7 +268,7 @@ func TestBlogHandlers_PostureTable(t *testing.T) {
 }
 
 func TestBlogRoutes_OptionsWithoutOriginIsNotARead(t *testing.T) {
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	t.Setenv("DEPLOY_ENV", "production")
 	mux, calls := blogMux(t, slog.New(slog.DiscardHandler))
 
 	for _, p := range []string{"/blog/categories", "/blog/posts", "/blog/posts/abc"} {
@@ -313,7 +313,7 @@ func TestBlogRoutes_OptionsWithoutOriginIsNotARead(t *testing.T) {
 }
 
 func TestBlogHandlers_HaveTheirOwnBucket(t *testing.T) {
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	t.Setenv("DEPLOY_ENV", "production")
 	site, _ := url.Parse("https://site.example")
 	reg := registrationHandlers(goTrueAnswering(t, cwSession), site, 0, slog.New(slog.DiscardHandler), &demoRecSink{}, noPendingInvite)
 	up, _ := blogUpstreamServer(t)
@@ -345,7 +345,7 @@ func TestBlogHandlers_HaveTheirOwnBucket(t *testing.T) {
 }
 
 func TestBlogRoutes_VaryOriginIsNamedOnceBehindCORS(t *testing.T) {
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	t.Setenv("DEPLOY_ENV", "production")
 	mux, _ := blogMux(t, slog.New(slog.DiscardHandler))
 	for _, p := range []string{"/blog/categories", "/blog/posts", "/blog/posts/abc", "/blog/posts/Bad_Slug"} {
 		rec := blogGet(mux, p, "203.0.113.7:4000", blogAllowedOrigin)

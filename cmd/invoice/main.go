@@ -218,7 +218,7 @@ func main() {
 	cancelSeed()
 	// Own deadline: demopolicy.Seed may have spent all of seedCtx.
 	custCtx, cancelCust := context.WithTimeout(context.Background(), 2*time.Minute)
-	if err := customer.SeedDemo(custCtx, pool, os.Getenv("RAILWAY_ENVIRONMENT_NAME"), app.Logger); err != nil {
+	if err := customer.SeedDemo(custCtx, pool, platform.DeployEnv(), app.Logger); err != nil {
 		app.Logger.Error("invoice: demo customers", "error", err)
 	}
 	cancelCust()

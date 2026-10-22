@@ -8,7 +8,7 @@ import { sourcemapUploadOptions } from './upload'
 
 const REPO = fileURLToPath(new URL('../../../', import.meta.url))
 const SHA = '0123456789abcdef'.repeat(3).slice(0, 40)
-const ENV = 'VITE_RAILWAY_GIT_COMMIT_SHA'
+const ENV = 'VITE_BUILD_SHA'
 
 const roots: string[] = []
 
@@ -56,10 +56,10 @@ describe('sourcemapUploadOptions', () => {
 
   it('uploadRelease_readsTheVariableTheSdkReads', () => {
     const { appDir } = tree('dev')
-    expect(sourcemapUploadOptions(appDir, { RAILWAY_GIT_COMMIT_SHA: 'zzz', [ENV]: 'abc' }).release.name).toBe(
+    expect(sourcemapUploadOptions(appDir, { BUILD_SHA: 'zzz', [ENV]: 'abc' }).release.name).toBe(
       'unstamped-abc',
     )
-    expect(sourcemapUploadOptions(appDir, { RAILWAY_GIT_COMMIT_SHA: 'zzz' }).release.name).toBe('unstamped')
+    expect(sourcemapUploadOptions(appDir, { BUILD_SHA: 'zzz' }).release.name).toBe('unstamped')
   })
 
   it('uploadRelease_missingStampFileThrows', () => {

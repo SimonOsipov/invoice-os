@@ -12,15 +12,17 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 
 import { ANALYTICS_DEFAULT_SENTENCE, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { CONSENT_TEXT } from './demoForm'
 import { CookieNotice } from './CookieNotice'
 import { PRODUCTION_HOSTNAMES, submissionUrl } from '../hubspot'
-import { BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
+import { APP_HOSTNAMES, BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
 import { CONSENT_DEFAULT_ANALYTICS } from '../consent'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import {
@@ -41,6 +43,7 @@ const SRC_DIR = fileURLToPath(new URL('.', import.meta.url))
 const PRIVACY_TSX = join(SRC_DIR, 'Privacy.tsx')
 const INDEX_HTML = join(SRC_DIR, '..', '..', 'index.html')
 const APP_SRC = join(SRC_DIR, '..', '..', '..', 'app', 'src')
+const PACKAGES_DIR = join(SRC_DIR, '..', '..', '..', '..', 'packages')
 const OPS_CONSOLE_SRC = join(SRC_DIR, '..', '..', '..', 'ops-console', 'src')
 const SUPPORT_CONSOLE_SRC = join(SRC_DIR, '..', '..', '..', 'support-console', 'src')
 
@@ -230,33 +233,106 @@ describe('Privacy SSR render (LAND-04-02)', () => {
   })
 })
 
-// The one cross-package assertion — it lives here because this is where the
-// no-analytics-outside-landing claim is published to the public. Independent
-// of Privacy.tsx's own content, so it does not require the GREEN commit.
-describe('C2 (NEW): no analytics reference exists in the three signed-in SPAs', () => {
-  const FORBIDDEN = ['gtag', 'googletagmanager', 'google-analytics', 'vite_ga_']
-  // Present in every package's main.tsx — proves the scan actually reads file
-  // contents rather than silently matching nothing.
-  const CONTROL_NEEDLE = 'createroot'
+// The signed-in product and its import closure (relative and @invoice-os/* workspace
+// imports) carry no Google Analytics; the consoles carry no GA and no chat.
+// The page publishes both claims. Scans read code with comments stripped.
+const GA_NEEDLES = ['gtag', 'googletagmanager', 'google-analytics', 'vite_ga_']
+const CHAT_NEEDLES = ['hs-scripts', '_hsq', 'hubspotconversations', 'hubspotchat']
+const RESOLVE_SUFFIXES = ['.ts', '.tsx', '/index.ts']
 
-  it.each([
-    ['frontend/app/src', APP_SRC],
-    ['frontend/ops-console/src', OPS_CONSOLE_SRC],
-    ['frontend/support-console/src', SUPPORT_CONSOLE_SRC],
-  ])('%s carries no analytics reference', (label, dir) => {
-    const files = sourceFiles(dir)
-    expect(files.length, `${label}: scan found nothing to read`).toBeGreaterThanOrEqual(20)
+const code = (file: string) => stripComments(readFileSync(file, 'utf8'))
 
-    const combined = files.map((f) => readFileSync(f, 'utf8').toLowerCase()).join('\n')
-    expect(combined, `${label}: control needle "createRoot" not found — scan is not reading files`).toContain(
-      CONTROL_NEEDLE,
-    )
-    for (const needle of FORBIDDEN) {
-      expect(combined, `${label} references "${needle}"`).not.toContain(needle)
+// Maps `@invoice-os/<pkg>[/sub]` to the source file its package.json exports name.
+function workspaceImport(spec: string, packagesDir: string): string | null {
+  const m = spec.match(/^@invoice-os\/([^/]+)(\/.+)?$/)
+  if (!m) return null
+  const pkgDir = join(packagesDir, m[1])
+  const manifest = join(pkgDir, 'package.json')
+  if (!existsSync(manifest)) return null
+  const target = JSON.parse(readFileSync(manifest, 'utf8')).exports?.[m[2] ? `.${m[2]}` : '.']
+  if (typeof target !== 'string' || !/\.tsx?$/.test(target)) return null
+  const file = join(pkgDir, target)
+  return existsSync(file) ? file : null
+}
+
+function importClosure(roots: string[], packagesDir = PACKAGES_DIR): Set<string> {
+  const seen = new Set<string>()
+  const queue = [...roots]
+  while (queue.length > 0) {
+    const file = queue.pop()!
+    if (seen.has(file)) continue
+    seen.add(file)
+    for (const m of code(file).matchAll(/(?:from|import)\s*\(?\s*['"]([^'"]+)['"]/g)) {
+      let hit: string | null | undefined
+      if (m[1].startsWith('.')) {
+        const base = join(dirname(file), m[1])
+        hit = RESOLVE_SUFFIXES.map((x) => base + x).find((c) => existsSync(c) && statSync(c).isFile())
+      } else {
+        hit = workspaceImport(m[1], packagesDir)
+      }
+      if (hit && !/\.test\.tsx?$/.test(hit)) queue.push(hit)
+    }
+  }
+  return seen
+}
+
+function gaHits(files: string[]): string[] {
+  const combined = files.map(code).join('\n').toLowerCase()
+  return GA_NEEDLES.filter((n) => combined.includes(n))
+}
+
+describe('C2: the app and the consoles against the page claims', () => {
+  it('C2: the signed-in product and the files it imports carry no Google Analytics reference', () => {
+    const appFiles = sourceFiles(APP_SRC)
+    expect(appFiles.length, 'scan found too few app files').toBeGreaterThanOrEqual(20)
+    const files = [...importClosure(appFiles)]
+    const combined = files.map(code).join('\n').toLowerCase()
+    expect(combined, 'control: createRoot not found').toContain('createroot')
+    const names = files.map((f) => f.slice(f.lastIndexOf('/') + 1))
+    expect(names, 'control: the closure reaches hubspotChat.ts').toContain('hubspotChat.ts')
+    expect(names, 'control: the closure reaches consent.ts').toContain('consent.ts')
+    expect(names, 'control: the closure must not reach analytics.ts').not.toContain('analytics.ts')
+    expect(files.some((f) => f.startsWith(join(PACKAGES_DIR, 'monitoring'))), 'control: the closure reaches @invoice-os/monitoring').toBe(true)
+    expect(files.some((f) => f.startsWith(join(PACKAGES_DIR, 'api-client'))), 'control: the closure reaches @invoice-os/api-client').toBe(true)
+    expect(gaHits(files)).toEqual([])
+  })
+
+  it('C2: a Google Analytics reference in a workspace package the app imports is found', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'c2-walk-'))
+    try {
+      const pkgs = join(dir, 'packages')
+      mkdirSync(join(pkgs, 'fake', 'src'), { recursive: true })
+      writeFileSync(join(pkgs, 'fake', 'package.json'), JSON.stringify({ exports: { '.': './src/index.ts' } }))
+      writeFileSync(join(pkgs, 'fake', 'src', 'index.ts'), "// gtag in a comment\nexport const x = () => window.gtag('config')\n")
+      writeFileSync(join(dir, 'main.ts'), "import { x } from '@invoice-os/fake'\nx()\n")
+      const files = [...importClosure([join(dir, 'main.ts')], pkgs)]
+      expect(files.some((f) => f.endsWith('fake/src/index.ts')), 'walk did not follow the workspace import').toBe(true)
+      expect(gaHits(files)).toEqual(['gtag'])
+      writeFileSync(join(pkgs, 'fake', 'src', 'index.ts'), "// gtag in a comment only\nexport const x = 1\n")
+      expect(gaHits([...importClosure([join(dir, 'main.ts')], pkgs)])).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
   })
-})
 
+  it.each([
+    ['frontend/ops-console/src', OPS_CONSOLE_SRC],
+    ['frontend/support-console/src', SUPPORT_CONSOLE_SRC],
+  ])('C2: the consoles carry no Google Analytics and no HubSpot chat reference (%s)', (label, dir) => {
+    const files = sourceFiles(dir)
+    expect(files.length, `${label}: scan found too few files`).toBeGreaterThanOrEqual(20)
+    const combined = files.map(code).join('\n').toLowerCase()
+    expect(combined, `${label}: createRoot not found`).toContain('createroot')
+    for (const needle of [...GA_NEEDLES, ...CHAT_NEEDLES]) expect(combined, `${label} references "${needle}"`).not.toContain(needle)
+  })
+
+  it('C2: the signed-in product loads the chat the page names', () => {
+    const imports = sourceFiles(APP_SRC).flatMap((f) =>
+      Array.from(readFileSync(f, 'utf8').matchAll(/from\s*['"]([^'"]+)['"]/g), (m) => m[1]),
+    )
+    expect(imports.some((i) => i.endsWith('landing/src/hubspotChat')), 'no app source imports the chat module').toBe(true)
+  })
+})
 
 // T1-7 (LAND-05-01). The two pins above compare ANALYTICS_DEFAULT_SENTENCE to
 // itself, so the published page can state the opposite of the code's actual
@@ -753,11 +829,11 @@ describe('the Library shares the landing\'s choice', () => {
     }
   })
 
-  it('the asc_consent paragraph names this site, the Library and the Blog host from the constants', () => {
+  it('the asc_consent paragraph names this site, the Library, the Blog and the app host from the constants', () => {
     const para = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g))
       .map((m) => text(m[1]))
       .find((t) => t.includes('asc_consent'))
-    expect(para).toContain(`so this site, our Feature Library at ${LIBRARY_HOSTNAMES[0]} and our Blog at ${BLOG_HOSTNAMES[0]} read the same answer`)
+    expect(para).toContain(`so this site, our Feature Library at ${LIBRARY_HOSTNAMES[0]}, our Blog at ${BLOG_HOSTNAMES[0]} and the signed-in product at ${APP_HOSTNAMES[0]} read the same answer`)
   })
 
   // Pending the user's copy sign-off.

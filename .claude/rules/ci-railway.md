@@ -7,9 +7,7 @@ paths:
 # CI and Railway deploys
 
 - Deploy to Railway only from CI, with `railway up`. Never enable a Railway deployment trigger.
-- Keep Railway PR Environments off. `railway-invariants.yml` runs on every `pull_request`, drafts included, with no paths filter.
-- Let `assert-project-settings` assert and fail. Repair runs only by `workflow_dispatch` with `disable=true`, never on `pull_request`.
-- Read the nested `project.environments[].deploymentTriggers`. The `Project.deploymentTriggers` field is deprecated.
+- Keep Railway PR Environments off.
 - Give each PR one ephemeral environment `pr-<N>`, forked from the persistent environment. Build the name only with `prenv.Name`.
 - Address the persistent environment by ID, never by name. `RAILWAY_DEV_ENVIRONMENT_ID` holds it.
 - Deploy the persistent environment on a `main` push after a green `CI` check. `workflow_dispatch` also targets it and skips that gate.

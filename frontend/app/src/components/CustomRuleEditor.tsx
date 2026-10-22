@@ -174,6 +174,7 @@ export function CustomRuleEditor({ ctx, base, rule, onClose, onSaved }: Props) {
         </div>
 
         <form
+          data-hs-do-not-collect="true"
           onSubmit={(e) => {
             e.preventDefault()
             void save()

@@ -30,7 +30,7 @@ interface ImportMetaEnv {
   readonly VITE_REGISTRATION_OPEN?: string
   readonly VITE_SENTRY_DSN?: string
   readonly VITE_SENTRY_TEST_DIGEST?: string
-  readonly VITE_RAILWAY_GIT_COMMIT_SHA?: string
+  readonly VITE_BUILD_SHA?: string
 }
 
 interface ImportMeta {

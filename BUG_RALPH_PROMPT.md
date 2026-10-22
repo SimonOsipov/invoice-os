@@ -10,7 +10,7 @@ In every shared rule, `<STORY>` means `<BUG-ID>`.
 
 | Shared rule in `RALPH_PROMPT.md` | Use in `/bug-ralph` |
 |---|---|
-| Agents and models; CRITICAL RULES 1, 2, 3 and 5 | As written. |
+| Agents and models; Core rules 1, 2, 3 and 5 | As written. |
 | Phase 0.5: Worktree bootstrap | As written. `BASE=main`. |
 | Phase 1: the screen playbook | As written, with `STORY_SOURCE=obsidian`. |
 | Stage 3: the orientation rules and the suite run | As written. |

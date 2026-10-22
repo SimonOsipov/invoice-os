@@ -1,6 +1,6 @@
 // Versioned consent record: a cookie on the production hosts, `localStorage` elsewhere.
 // The notice calls writeConsent; this module only owns the storage contract.
-import { BLOG_HOSTNAMES, isProductionHost, LIBRARY_HOSTNAMES, SHARED_COOKIE_DOMAIN } from './hubspot'
+import { APP_HOSTNAMES, BLOG_HOSTNAMES, isProductionHost, LIBRARY_HOSTNAMES, SHARED_COOKIE_DOMAIN } from './hubspot'
 
 export const CONSENT_STORAGE_KEY = 'asc_consent'
 export const CONSENT_VERSION = 1
@@ -16,7 +16,10 @@ const COOKIE_MAX_AGE_S = 400 * 24 * 60 * 60 // Chrome's cap
 
 /** The shared cookie domain for an exact production host, else `null`. */
 export function sharedConsentDomain(hostname: string): string | null {
-  return isProductionHost(hostname) || isProductionHost(hostname, LIBRARY_HOSTNAMES) || isProductionHost(hostname, BLOG_HOSTNAMES)
+  return isProductionHost(hostname) ||
+    isProductionHost(hostname, LIBRARY_HOSTNAMES) ||
+    isProductionHost(hostname, BLOG_HOSTNAMES) ||
+    isProductionHost(hostname, APP_HOSTNAMES)
     ? SHARED_COOKIE_DOMAIN
     : null
 }

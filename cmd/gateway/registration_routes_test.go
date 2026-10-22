@@ -455,7 +455,7 @@ func TestRegistrationRoutes_InvitationPasswordIsMounted(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
 	log := slog.New(slog.DiscardHandler)
 	mux := http.NewServeMux()
-	mux.Handle("POST /auth/invitation/password", handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil).InvitationPassword)
+	mux.Handle("POST /auth/invitation/password", handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil).InvitationPassword)
 
 	rec := serveForm(mux, "/auth/invitation/password", "type=signup&password=new-password-1")
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verify=failed" {
@@ -945,7 +945,7 @@ func TestDemoRequest_OptionsWithoutOriginIsNotADemoRequest(t *testing.T) {
 }
 
 func TestDemoRequest_LimitAnswerIsReadableFromTheLandingOrigin(t *testing.T) {
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	t.Setenv("DEPLOY_ENV", "production")
 	mux, _ := demoMux(t)
 	const good = `{"email":"ada@corp.example","name":"Ada Lovelace","company":"Analytical Engines Ltd"}`
 	for i := range gateway.DemoRequestPerIP {

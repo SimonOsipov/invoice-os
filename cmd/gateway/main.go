@@ -71,19 +71,13 @@ func main() {
 	// APP_PASSWORD / READER_PASSWORD / AUTH_ADMIN_PASSWORD (nor their deprecated INVOICE_*_PASSWORD
 	// fallbacks, see resolveRolePassword below) are required — production boots
 	// without any of them set. The reset guard is separate — see
-	// RailwayEnvironmentName/ResetFlag below and db.ResetEnabled's doc comment.
+	// DeployEnv/ResetFlag below and db.ResetEnabled's doc comment.
 	provisionCfg := db.ProvisionConfig{
 		Environment:   os.Getenv("ENVIRONMENT"),
 		BootstrapFlag: os.Getenv("GATEWAY_DB_BOOTSTRAP"),
-		// RAILWAY_ENVIRONMENT_NAME, NOT ENVIRONMENT: the destructive reset step
-		// (db.Reset, gated by db.ResetEnabled) keys on a name no one hand-sets.
-		// ENVIRONMENT is an ordinary app variable that CI writes in every fork
-		// (.claude/rules/ci-railway.md).
-		// RAILWAY_ENVIRONMENT_NAME is a Railway-injected system variable
-		// (.claude/rules/add-service.md; never set manually): "pr-<N>" inside a fork,
-		// the persistent environment's real name on that environment. See
-		// db.ResetEnabled's doc comment for the full reasoning.
-		RailwayEnvironmentName: os.Getenv("RAILWAY_ENVIRONMENT_NAME"),
+		// DeployEnv, NOT ENVIRONMENT: CI writes ENVIRONMENT=development in every fork,
+		// so only the deployment name tells a fork from production. See db.ResetEnabled.
+		DeployEnv: platform.DeployEnv(),
 		// A SEPARATE opt-in from GATEWAY_DB_BOOTSTRAP: Reset is strictly more
 		// dangerous than Bootstrap/Seed (it destroys data before recreating it),
 		// so it gets its own explicit switch rather than piggybacking on the
@@ -97,6 +91,7 @@ func main() {
 			Reader:   resolveRolePassword("READER_PASSWORD", "INVOICE_TENANT_READER_PASSWORD", app.Logger),
 			// No deprecated name ever existed, so no fallback to resolve.
 			AuthAdmin: os.Getenv("AUTH_ADMIN_PASSWORD"),
+			Gateway:   os.Getenv("GATEWAY_PASSWORD"),
 		},
 		BootstrapFS:  dbsql.FS,
 		MigrationsFS: migrations.FS,
@@ -108,7 +103,7 @@ func main() {
 		platform.Fatal(app.Logger, "gateway: provision: %v", err)
 	}
 
-	startAccountStateGrant(os.Getenv("RAILWAY_ENVIRONMENT_NAME"), provisionCfg.MigrationDSN, provisionCfg.Passwords.AuthAdmin, app.Logger, func(dsn string) {
+	startAccountStateGrant(platform.DeployEnv(), provisionCfg.MigrationDSN, provisionCfg.Passwords.AuthAdmin, app.Logger, func(dsn string) {
 		go grantAccountStateRead(context.Background(), dsn, db.GrantAccountStateRead, 10*time.Second, 60, app.Logger)
 	})
 
@@ -222,7 +217,7 @@ func main() {
 
 	// Public sign-in hand-off, renewal and sign-out, outside the verifier; console-handoff verifies its own bearer.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
-	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier)
+	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier, handoffStore(app.Logger))
 	app.Mux.Handle("POST /auth/verify", h.Verify)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
@@ -328,7 +323,7 @@ func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, pe
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
+	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
 	return invitation, gateway.InvitationRegisterHandler(authURL, client, minResponse, perIP, enforce, log, preview, registrations)
 }
 
@@ -342,7 +337,7 @@ func invitationResendHandler(authURL, siteURL *url.URL, perAddress, perIP *gatew
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
+	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
 	return gateway.InvitationResendHandler(authURL, client, perAddress, perIP, enforce, log, preview)
 }
 
@@ -355,7 +350,7 @@ func newJWKSClient() *http.Client {
 // A nil authURL or siteURL (AUTH_SITE_URL unset) makes Register, ResendVerification and RequestPasswordReset answer 503 (TestRegistrationHandlers_NotConfigured503). A nil pending lookup makes Register alone answer 503 (TestRegistrationHandlers_NilPendingLookupIsNotConfigured).
 // On a PR preview the per-client limits (register, resend, reset, demo-request) log but do not refuse: a preview sends no mail (TestRegistrationHandlers_PreviewOnlyLogs).
 func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink, pending gateway.PendingInviteLookup) registration {
-	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
+	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
 	demoPerIP := gateway.NewSignInThrottle("demo-request", gateway.DemoRequestPerIP, gateway.DemoRequestMaxKeys, gateway.DemoRequestWindow, time.Now)
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
@@ -382,14 +377,14 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 
 // blogHandlers builds the public blog reads; the limit logs only on a PR fork, as the demo route does.
 func blogHandlers(notifications *url.URL, gatewayToken string, log *slog.Logger) gateway.BlogRoutes {
-	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
+	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
 	perIP := gateway.NewSignInThrottle("blog-read", gateway.BlogReadPerIP, gateway.BlogReadMaxKeys, gateway.BlogReadWindow, time.Now)
 	return gateway.BlogHandlers(notifications, &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken, perIP, enforce, log)
 }
 
 // blogSubscribeHandlers builds the public newsletter routes; the caps log and admit on a PR fork, as the demo route does.
 func blogSubscribeHandlers(notifications *url.URL, gatewayToken string, minResponse time.Duration, log *slog.Logger) gateway.BlogSubscribeRoutes {
-	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
+	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
 	perIP := gateway.NewSignInThrottle("blog-subscribe-ip", gateway.BlogSubscribePerIP, gateway.BlogSubscribeMaxKeys, gateway.BlogSubscribeWindow, time.Now)
 	perEmail := gateway.NewSignInThrottle("blog-subscribe-email", gateway.BlogSubscribePerEmail, gateway.BlogSubscribeMaxKeys, gateway.BlogSubscribeWindow, time.Now)
 	confirmPerIP := gateway.NewSignInThrottle("blog-confirm-ip", gateway.BlogConfirmPerIP, gateway.BlogSubscribeMaxKeys, gateway.BlogSubscribeWindow, time.Now)
@@ -405,6 +400,23 @@ func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionCh
 	return gateway.ResetPasswordHandler(authURL, siteURL, client, sessions, signIn, log)
 }
 
+// handoffStore shares hand-off codes through Postgres when DATABASE_GATEWAY_URL is set.
+// Cloud Run runs several instances, so it requires the URL there.
+func handoffStore(log *slog.Logger) gateway.Handoffs {
+	dsn := os.Getenv("DATABASE_GATEWAY_URL")
+	if dsn == "" {
+		if os.Getenv("K_SERVICE") != "" {
+			platform.Fatal(log, "gateway: DATABASE_GATEWAY_URL is required on Cloud Run")
+		}
+		return nil
+	}
+	pool, err := db.NewPool(context.Background(), dsn)
+	if err != nil {
+		platform.Fatal(log, "gateway: hand-off store: %v", err)
+	}
+	return gateway.NewPGHandoffStore(pool, gateway.HandoffTTL, log)
+}
+
 // handoff holds the public sign-in hand-off, renewal and sign-out handlers main mounts outside /api/.
 type handoff struct {
 	SignIn, Exchange, Refresh, SignOut, Verify, InvitationPassword, ConsoleHandoff http.Handler
@@ -415,8 +427,11 @@ type handoff struct {
 // Sign-out evicts from sessions, the API's own checker.
 // Every minter and exchange share one code store: a code is redeemable only through exchange.
 // A nil siteURL makes Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
-func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink, verifier *auth.Verifier) handoff {
-	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
+// A nil store means the in-process one.
+func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink, verifier *auth.Verifier, store gateway.Handoffs) handoff {
+	if store == nil {
+		store = gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
+	}
 	throttle := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
 	// Same settings as registrationHandlers; TestRegistrationClientTimeoutAndNoFollow pins that literal in place.
 	client := &http.Client{

@@ -21,6 +21,7 @@ paths:
 - Reject a review path with a bad id or more than `REVIEW_PATH_MAX_IDS` ids. Never truncate the list.
 - Render the policy list for a `/workflows/:id` that names nothing. Leave the address bar alone.
 - Push on navigation through `navigate`. Replace on a correction.
+- Call `reportAppPage` after the `pushState` in `navigate` and at the end of the `popstate` handler. It writes no history.
 - Write nothing in the `popstate` handler except the identity-clamp `replaceState`.
 - Stamp every `Workspace` write of `active.entityId` with `{ e: active.entityId, m: mountKey }`. `guard_everyWorkspaceCompanyStampCarriesTheMountKey` checks `m`. `guard_everyWorkspaceHistoryWriteCarriesTheStamp` counts the writes.
 - Stamp a known id with `{ e }` in `switchClient`, the clamp and `adoptBatchClient`. Stamp the backfill with `{ e, m: mountKey, p: true }`.

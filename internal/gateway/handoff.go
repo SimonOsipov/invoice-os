@@ -15,8 +15,16 @@ const HandoffTTL = 60 * time.Second
 // HandoffMaxLive caps live codes; a full store refuses Put.
 const HandoffMaxLive = 10_000
 
-// HandoffStore holds single-use exchange codes, each bound to a sign-in state.
-// ceiling: in-process, so a restart drops live codes and replicas do not share them; move to a shared store before scaling out.
+// Handoffs holds single-use exchange codes, each bound to a sign-in state.
+type Handoffs interface {
+	// Put stores answer and returns a fresh exchange code; false means the store is full or failed.
+	Put(answer string, stateHash [32]byte) (string, bool)
+	// Take redeems code once for its stored answer; a wrong state or expired code still spends it.
+	Take(code, state string) (string, bool)
+}
+
+// HandoffStore is the in-process Handoffs.
+// ceiling: in-process, so instances do not share codes; only for a single-instance deployment (Railway), delete in GKE-12.
 type HandoffStore struct {
 	mu      sync.Mutex
 	ttl     time.Duration
@@ -37,11 +45,14 @@ func NewHandoffStore(ttl time.Duration, now func() time.Time) *HandoffStore {
 	return &HandoffStore{ttl: ttl, now: now, entries: make(map[[32]byte]handoffEntry)}
 }
 
-// Put stores answer and returns a fresh exchange code; false means the store is full.
-func (s *HandoffStore) Put(answer string, stateHash [32]byte) (string, bool) {
+func newCode() string {
 	b := make([]byte, 32)
 	rand.Read(b) // never fails on Go 1.24+
-	code := base64.RawURLEncoding.EncodeToString(b)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func (s *HandoffStore) Put(answer string, stateHash [32]byte) (string, bool) {
+	code := newCode()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -74,7 +85,6 @@ func (s *HandoffStore) sweep(now time.Time) {
 	}
 }
 
-// Take redeems code once for its stored answer; a wrong state or expired code still spends it.
 func (s *HandoffStore) Take(code, state string) (string, bool) {
 	key := sha256.Sum256([]byte(code))
 	s.mu.Lock()

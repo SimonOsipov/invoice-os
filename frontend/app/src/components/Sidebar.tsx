@@ -22,6 +22,7 @@ import { visibleEntityIds } from '../lib/portfolio'
 import {
   blogGlyph,
   chevDownGlyph,
+  cookieGlyph,
   libraryGlyph,
   NAV_APPROVALS,
   NAV_AUDIT,
@@ -283,34 +284,41 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
         ))}
       </nav>
 
-      {(blogUrl || libraryUrl) && (
-        <div style={{ flex: '0 0 auto', padding: '0 10px 8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {blogUrl && (
-            <a
-              href={blogUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="pf-nav"
-              style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', border: 0, cursor: 'pointer', borderRadius: 'var(--radius-sm)', padding: '9px 10px', textAlign: 'left', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 500, background: 'transparent', color: 'var(--fg-2)', position: 'relative', textDecoration: 'none' }}
-            >
-              <span style={{ ...navIconColStyle, color: 'var(--fg-3)' }}>{blogGlyph}</span>
-              <span style={{ flex: 1 }}>Company Blog</span>
-            </a>
-          )}
-          {libraryUrl && (
-            <a
-              href={libraryUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="pf-nav"
-              style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', border: 0, cursor: 'pointer', borderRadius: 'var(--radius-sm)', padding: '9px 10px', textAlign: 'left', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 500, background: 'transparent', color: 'var(--fg-2)', position: 'relative', textDecoration: 'none' }}
-            >
-              <span style={{ ...navIconColStyle, color: 'var(--fg-3)' }}>{libraryGlyph}</span>
-              <span style={{ flex: 1 }}>Feature library</span>
-            </a>
-          )}
-        </div>
-      )}
+      <div style={{ flex: '0 0 auto', padding: '0 10px 8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {blogUrl && (
+          <a
+            href={blogUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="pf-nav"
+            style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', border: 0, cursor: 'pointer', borderRadius: 'var(--radius-sm)', padding: '9px 10px', textAlign: 'left', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 500, background: 'transparent', color: 'var(--fg-2)', position: 'relative', textDecoration: 'none' }}
+          >
+            <span style={{ ...navIconColStyle, color: 'var(--fg-3)' }}>{blogGlyph}</span>
+            <span style={{ flex: 1 }}>Company Blog</span>
+          </a>
+        )}
+        {libraryUrl && (
+          <a
+            href={libraryUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="pf-nav"
+            style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', border: 0, cursor: 'pointer', borderRadius: 'var(--radius-sm)', padding: '9px 10px', textAlign: 'left', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 500, background: 'transparent', color: 'var(--fg-2)', position: 'relative', textDecoration: 'none' }}
+          >
+            <span style={{ ...navIconColStyle, color: 'var(--fg-3)' }}>{libraryGlyph}</span>
+            <span style={{ flex: 1 }}>Feature library</span>
+          </a>
+        )}
+        <button
+          type="button"
+          className="pf-nav"
+          onClick={ctx.cookieChoices}
+          style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', border: 0, cursor: 'pointer', borderRadius: 'var(--radius-sm)', padding: '9px 10px', textAlign: 'left', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 500, background: 'transparent', color: 'var(--fg-2)', position: 'relative' }}
+        >
+          <span style={{ ...navIconColStyle, color: 'var(--fg-3)' }}>{cookieGlyph}</span>
+          <span style={{ flex: 1 }}>Cookie choices</span>
+        </button>
+      </div>
 
       {/* `flex: 0 0 auto` — the user card is the one thing that must stay pinned when the
           nav above it scrolls. */}

@@ -4,12 +4,14 @@ paths:
   - "frontend/landing/src/consent*"
   - "frontend/landing/src/gaCookies*"
   - "frontend/landing/src/hubspot*"
+  - "frontend/app/src/chat*"
   - "frontend/landing/Dockerfile"
   - "e2e/smoke/landing-*.spec.ts"
   - "frontend/library/**"
   - "e2e/smoke/library-consent.spec.ts"
   - "frontend/blog/**"
   - "e2e/smoke/blog-consent.spec.ts"
+  - "e2e/topology/app-consent.spec.ts"
 ---
 # Landing analytics
 
@@ -50,8 +52,7 @@ paths:
 - Load the HubSpot chat only through `loadChat` in `hubspotChat.ts`. It needs an allowlisted host and a record that allows analytics.
 - Read no `VITE_*` value in the chat code. `HUBSPOT_PORTAL_ID` is the only portal-id literal in landing source.
 - Call `loadChat` and `removeChat` from `applyChoice` and `syncConsent` with no host list. Call `bootChat()` from `main.tsx` with no host list.
-- Run the chat on `PRODUCTION_HOSTNAMES` only. The library and the blog never load it.
-- Pass a host list to a chat function only in the story that adds the chat to that site.
+- Run the chat on `PRODUCTION_HOSTNAMES` and `APP_HOSTNAMES` only. The library and the blog never load it.
 - On Accept, push `['doNotTrack', {track: true}]` before the loader when `__hs_do_not_track` is present or a Reject queued `doNotTrack`. On every site, Accept expires `__hs_do_not_track` through `clearOptOutCookie`.
 - On Reject, `removeChat` sets `loadImmediately` false, calls `widget.remove()` and `clear()`, and pushes `doNotTrack` when the chat was loaded.
 - Never call `clear({resetWidget: true})` for a Reject. It builds a new widget.
@@ -59,3 +60,14 @@ paths:
 - Expire the cookies in `HUBSPOT_COOKIE_NAMES` (`__hstc`, `hubspotutk`, `__hssrc`, `__hssc`, `messagesUtk`, `hs-messages-is-open` and `hs-messages-hide-welcome-message`) on the host and every parent domain. HubSpot writes them on `.ascomply.com`.
 - Clear the HubSpot cookies in `bootChat` when the stored record rejects analytics.
 - Put `data-hs-do-not-collect="true"` on every landing `<form>`. The HubSpot loader brings collected forms, and the portal has form capture on.
+- Load the app chat only through `frontend/app/src/chat.ts`. It calls `loadChat`, `removeChat` and `endChat` with `APP_HOSTNAMES`.
+- Import landing source into the app only in `chat.ts`. Never import `analytics.ts` or `consentActions.ts` into the app. `chatSeam.test.ts` enforces it.
+- Push `['identify', {email}]`, `['setPath', pathname]` and `['trackPageView']`, in that order, each time the app chat goes from not loaded to loaded.
+- Push them before the loader when `#hs-script-loader` is not in the page. Push them after `loadChat` lifts the opt-out when the loader is in the page.
+- Load no app chat for a suspended member. Call `endAppChat` when the member turns suspended.
+- Take the identify email from `session.me.user.email` of a verified session. Never read `user_metadata`. Push no identify for a blank email.
+- Send the path without its query in every app `setPath`.
+- Report an app route change through `reportAppPage`. It pushes nothing while `chatIsLoaded()` is false.
+- Call `endAppChat` in `leaveToLanding`, in `endRevokedSession` and in `expireSession`. In the first two, call it before the navigation. `endChat` pushes no `doNotTrack`. `App.chatSignOut.test.tsx` enforces it, `expireSession_endsTheChat` included.
+- On Reject in the app, expire the `_ga` cookies and the HubSpot cookies.
+- Put `data-hs-do-not-collect="true"` on every app `<form>`. `chatSeam.test.ts` enforces it.

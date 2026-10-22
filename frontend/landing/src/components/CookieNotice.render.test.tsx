@@ -31,6 +31,7 @@ type NoticeProps = {
   current: ConsentRecord | null
   suppressed: boolean
   onChoose: (choice: ConsentChoice) => void
+  body?: string
 }
 type CookieNoticeModule = { CookieNotice: (props: NoticeProps) => ReactElement }
 
@@ -306,5 +307,16 @@ describe('CookieNotice adversarial (LAND-05-02)', () => {
       })
     }
     expect(calls).toEqual([])
+  })
+
+  it('the body prop replaces the body text only', async () => {
+    const html = await render({ body: 'X' })
+    expect(html).toMatch(/<p class="cn-body">X<\/p>/)
+    expect(html).not.toContain('We use Google Analytics')
+    expect(html).toContain('data-consent="accept"')
+    expect(html).toContain('data-consent="reject"')
+    expect(html).toContain('class="lnk cn-link"')
+    expect(html).toContain('cn-spacer')
+    expect(await render()).toContain(BODY_COPY)
   })
 })

@@ -42,12 +42,13 @@ def sentry_options(env):
         return None
     return {
         "dsn": dsn,
+        # ceiling: the RAILWAY_* names are fallbacks, delete with Railway in GKE-12.
         "environment": _first(
-            env, "RAILWAY_ENVIRONMENT_NAME", "ENVIRONMENT", default="development"
+            env, "DEPLOY_ENV", "RAILWAY_ENVIRONMENT_NAME", "ENVIRONMENT", default="development"
         ),
         "release": release_name(
             buildinfo.read_build_sha(buildinfo.BUILD_FILE),
-            env.get("RAILWAY_GIT_COMMIT_SHA", ""),
+            _first(env, "BUILD_SHA", "RAILWAY_GIT_COMMIT_SHA"),
         ),
         "server_name": "docling",
         "send_default_pii": False,

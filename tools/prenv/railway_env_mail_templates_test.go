@@ -13,7 +13,7 @@ import (
 const (
 	mailTemplateVar = "GOTRUE_MAILER_TEMPLATES_CONFIRMATION"
 	mailSiteURLVar  = "GOTRUE_SITE_URL"
-	mailUsage       = "usage: railway-env.sh <assert-project-settings"
+	mailUsage       = "usage: railway-env.sh <ensure-environment"
 )
 
 var mailNoticeRE = regexp.MustCompile(`GOTRUE_MAILER_TEMPLATES`)

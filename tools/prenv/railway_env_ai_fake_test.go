@@ -216,38 +216,7 @@ func TestAIFakeSelfTestCoversEveryVerdictShape(t *testing.T) {
 	}
 }
 
-// T08: railway-invariants.yml must run set-ai-fake --self-test exactly once,
-// in job ai-fake-self-test (AC #7).
-//
-// KILLS: the job renamed away; the job removed; the run line pointing at a
-// different subcommand.
-func TestRailwayInvariantsYmlWiresSetAIFakeSelfTest(t *testing.T) {
-	t.Parallel()
-	path := filepath.Join(repoRoot(t), ".github", "workflows", "railway-invariants.yml")
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading %s: %v", path, err)
-	}
-	content := string(raw)
-
-	callSites := regexp.MustCompile(`run: bash scripts/ci/railway-env\.sh set-ai-fake --self-test`).FindAllStringIndex(content, -1)
-	if len(callSites) == 0 {
-		t.Fatalf("%s never runs `set-ai-fake --self-test` — the self-test job is not wired up", path)
-	}
-	if len(callSites) > 1 {
-		t.Fatalf("%s runs `set-ai-fake --self-test` %d times, want exactly 1 — two call sites is two places to keep in sync", path, len(callSites))
-	}
-
-	jobAt := strings.Index(content, "\n  ai-fake-self-test:")
-	if jobAt == -1 {
-		t.Fatalf("%s has no `ai-fake-self-test:` job header", path)
-	}
-	if callSites[0][0] < jobAt {
-		t.Errorf("set-ai-fake --self-test is called at byte %d, before its own job header at byte %d — it belongs to a different job", callSites[0][0], jobAt)
-	}
-}
-
-// R6: set-ai-fake --self-test runs the shared service selector's 11 fixtures, so the ai-fake-self-test job keeps service_id_by_name under CI.
+// R6: set-ai-fake --self-test runs the shared service selector's 11 fixtures.
 func TestSetAIFakeSelfTestRunsTheServiceSelectorFixtures(t *testing.T) {
 	t.Parallel()
 	stdout, stderr, code := runAIFakeCmd(t, []string{"--self-test"}, nil,

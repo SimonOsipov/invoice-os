@@ -43,11 +43,13 @@ def test_no_dsn_means_off(monkeypatch):
 @pytest.mark.parametrize(
     ("env", "want"),
     [
-        ({"RAILWAY_ENVIRONMENT_NAME": "production", "ENVIRONMENT": "development"}, "production"),
-        ({"RAILWAY_ENVIRONMENT_NAME": "", "ENVIRONMENT": "staging"}, "staging"),
+        ({"DEPLOY_ENV": "production", "ENVIRONMENT": "development"}, "production"),
+        ({"DEPLOY_ENV": "", "ENVIRONMENT": "staging"}, "staging"),
         ({"ENVIRONMENT": "staging"}, "staging"),
-        ({"RAILWAY_ENVIRONMENT_NAME": "production"}, "production"),
-        ({"RAILWAY_ENVIRONMENT_NAME": "", "ENVIRONMENT": ""}, "development"),
+        ({"DEPLOY_ENV": "production"}, "production"),
+        ({"DEPLOY_ENV": "", "ENVIRONMENT": ""}, "development"),
+        ({"DEPLOY_ENV": "pr-7", "RAILWAY_ENVIRONMENT_NAME": "production"}, "pr-7"),
+        ({"RAILWAY_ENVIRONMENT_NAME": "production", "ENVIRONMENT": "development"}, "production"),
         ({}, "development"),
     ],
 )
@@ -81,7 +83,7 @@ def test_release_comes_from_the_build_file(monkeypatch, tmp_path):
     assert opts.get("release") == "abc123"
 
     monkeypatch.setattr(buildinfo, "BUILD_FILE", tmp_path / "missing.txt")
-    opts = sentry_setup.sentry_options({"SENTRY_DSN": FAKE_DSN, "RAILWAY_GIT_COMMIT_SHA": "f00"})
+    opts = sentry_setup.sentry_options({"SENTRY_DSN": FAKE_DSN, "BUILD_SHA": "f00"})
     assert opts is not None
     assert opts.get("release") == "unstamped-f00"
 
@@ -95,8 +97,21 @@ def test_release_comes_from_the_build_file(monkeypatch, tmp_path):
         build_file.write_text(stamp)
         monkeypatch.setattr(buildinfo, "BUILD_FILE", build_file)
         opts = sentry_setup.sentry_options(
-            {"SENTRY_DSN": FAKE_DSN, "RAILWAY_GIT_COMMIT_SHA": railway}
+            {"SENTRY_DSN": FAKE_DSN, "BUILD_SHA": railway}
         )
+        assert opts is not None
+        assert opts.get("release") == want
+
+
+def test_release_falls_back_to_the_railway_sha(monkeypatch, tmp_path):
+    build_file = tmp_path / "build.txt"
+    build_file.write_text("dev\n")
+    monkeypatch.setattr(buildinfo, "BUILD_FILE", build_file)
+    for env, want in [
+        ({"BUILD_SHA": "f00", "RAILWAY_GIT_COMMIT_SHA": "bar"}, "unstamped-f00"),
+        ({"RAILWAY_GIT_COMMIT_SHA": "bar"}, "unstamped-bar"),
+    ]:
+        opts = sentry_setup.sentry_options({"SENTRY_DSN": FAKE_DSN, **env})
         assert opts is not None
         assert opts.get("release") == want
 
@@ -109,7 +124,7 @@ def test_events_carry_the_go_labels(monkeypatch, tmp_path):
         convert._warmup_thread.join()
     transport = CapturingTransport()
     options = sentry_setup.sentry_options(
-        {"SENTRY_DSN": FAKE_DSN, "RAILWAY_ENVIRONMENT_NAME": "production"}
+        {"SENTRY_DSN": FAKE_DSN, "DEPLOY_ENV": "production"}
     )
     assert options is not None
     try:
@@ -234,7 +249,7 @@ def test_scrub_hooks_run_on_events_transactions_logs_and_breadcrumbs(sentry_capt
 def test_event_environment_follows_railway_not_the_sdk_default(environment):
     transport = CapturingTransport()
     options = sentry_setup.sentry_options(
-        {"SENTRY_DSN": FAKE_DSN, "RAILWAY_ENVIRONMENT_NAME": environment}
+        {"SENTRY_DSN": FAKE_DSN, "DEPLOY_ENV": environment}
     )
     assert options is not None
     if convert._warmup_thread is not None:
@@ -277,7 +292,7 @@ def test_init_sentry_starts_the_client_from_the_environment(monkeypatch):
     started = []
     monkeypatch.setattr(sentry_sdk, "init", lambda **kw: started.append(kw))
     monkeypatch.setenv("SENTRY_DSN", FAKE_DSN)
-    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+    monkeypatch.setenv("DEPLOY_ENV", "production")
     sentry_setup.init_sentry()
     assert len(started) == 1
     assert started[0]["dsn"] == FAKE_DSN
@@ -373,9 +388,9 @@ def boot(monkeypatch, tmp_path):
     build_file = tmp_path / "build.txt"
     build_file.write_text("abc123\n")
     monkeypatch.setattr(buildinfo, "BUILD_FILE", build_file)
-    for key in ("ENVIRONMENT", "RAILWAY_GIT_COMMIT_SHA"):
+    for key in ("ENVIRONMENT", "BUILD_SHA"):
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+    monkeypatch.setenv("DEPLOY_ENV", "production")
     if convert._warmup_thread is not None:
         convert._warmup_thread.join()
     real_init = sentry_sdk.init

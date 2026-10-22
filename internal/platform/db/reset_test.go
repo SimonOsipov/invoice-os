@@ -873,7 +873,7 @@ func TestResetIsIdempotent(t *testing.T) {
 // demo portfolio + its fixture invoices after one Provision call, not the
 // residue plus the curated set. Uses the REAL field shape cmd/gateway/main.go
 // constructs: Environment is "development" (set-fork-environment writes it into
-// every fork — see ResetEnabled's doc comment), and RailwayEnvironmentName is the
+// every fork — see ResetEnabled's doc comment), and DeployEnv is the
 // PR-shaped value that actually distinguishes the fork.
 func TestProvisionResetWipesResidueThenReseedsCuratedDemo(t *testing.T) {
 	superDSN, migDSN := requireProvisionDSNs(t)
@@ -908,16 +908,16 @@ func TestProvisionResetWipesResidueThenReseedsCuratedDemo(t *testing.T) {
 	}
 
 	cfg := db.ProvisionConfig{
-		Environment:            "development", // set-fork-environment writes this into every fork
-		BootstrapFlag:          "true",
-		RailwayEnvironmentName: "pr-110",
-		ResetFlag:              "true",
-		SuperuserDSN:           superDSN,
-		MigrationDSN:           migDSN,
-		Passwords:              devRolePasswords(),
-		BootstrapFS:            dbsql.FS,
-		MigrationsFS:           migrations.FS,
-		SeedFS:                 dbsql.FS,
+		Environment:   "development", // set-fork-environment writes this into every fork
+		BootstrapFlag: "true",
+		DeployEnv:     "pr-110",
+		ResetFlag:     "true",
+		SuperuserDSN:  superDSN,
+		MigrationDSN:  migDSN,
+		Passwords:     devRolePasswords(),
+		BootstrapFS:   dbsql.FS,
+		MigrationsFS:  migrations.FS,
+		SeedFS:        dbsql.FS,
 	}
 	if err := db.Provision(ctx, cfg); err != nil {
 		t.Fatalf("Provision (pr-110-shaped, ResetFlag=true): %v", err)
@@ -951,7 +951,7 @@ func TestProvisionResetWipesResidueThenReseedsCuratedDemo(t *testing.T) {
 // "A test asserting the reset does NOT run for production/development/empty
 // is more important than a test asserting it does run for pr-110." Each case
 // below seeds a distinctive residue row, runs Provision with ResetFlag="true"
-// but a RailwayEnvironmentName that must NOT satisfy the gate, and asserts
+// but a DeployEnv that must NOT satisfy the gate, and asserts
 // the residue survives untouched.
 
 // newNonDemoProbeTenant creates a throwaway tenant and asserts it is outside
@@ -1014,21 +1014,21 @@ func assertResidueSurvivesProvision(t *testing.T, cfg db.ProvisionConfig, caseLa
 	}
 }
 
-// TestProvisionResetRefusesPersistentEnvironmentName: RailwayEnvironmentName
+// TestProvisionResetRefusesPersistentEnvironmentName: DeployEnv
 // = "production" (the persistent environment's real post-rename name) with
 // ResetFlag="true" must never trigger Reset.
 func TestProvisionResetRefusesPersistentEnvironmentName(t *testing.T) {
 	superDSN, migDSN := requireProvisionDSNs(t)
 	cfg := db.ProvisionConfig{
 		Environment: "development", BootstrapFlag: "true",
-		RailwayEnvironmentName: "production", ResetFlag: "true",
+		DeployEnv: "production", ResetFlag: "true",
 		SuperuserDSN: superDSN, MigrationDSN: migDSN, Passwords: devRolePasswords(),
 		BootstrapFS: dbsql.FS, MigrationsFS: migrations.FS, SeedFS: dbsql.FS,
 	}
-	assertResidueSurvivesProvision(t, cfg, "RailwayEnvironmentName=production")
+	assertResidueSurvivesProvision(t, cfg, "DeployEnv=production")
 }
 
-// TestProvisionResetRefusesDevelopmentEnvironmentName: RailwayEnvironmentName
+// TestProvisionResetRefusesDevelopmentEnvironmentName: DeployEnv
 // = "development" (a stale/misnamed environment, or the pre-2026-07-27 name)
 // with ResetFlag="true" must never trigger Reset — the exact case the brief
 // calls out as the safety margin ResetEnabled exists to provide.
@@ -1036,30 +1036,30 @@ func TestProvisionResetRefusesDevelopmentEnvironmentName(t *testing.T) {
 	superDSN, migDSN := requireProvisionDSNs(t)
 	cfg := db.ProvisionConfig{
 		Environment: "development", BootstrapFlag: "true",
-		RailwayEnvironmentName: "development", ResetFlag: "true",
+		DeployEnv: "development", ResetFlag: "true",
 		SuperuserDSN: superDSN, MigrationDSN: migDSN, Passwords: devRolePasswords(),
 		BootstrapFS: dbsql.FS, MigrationsFS: migrations.FS, SeedFS: dbsql.FS,
 	}
-	assertResidueSurvivesProvision(t, cfg, "RailwayEnvironmentName=development")
+	assertResidueSurvivesProvision(t, cfg, "DeployEnv=development")
 }
 
-// TestProvisionResetRefusesEmptyRailwayEnvironmentName: an unset
-// RAILWAY_ENVIRONMENT_NAME (empty string) with ResetFlag="true" must never
+// TestProvisionResetRefusesEmptyDeployEnv: an unset
+// DEPLOY_ENV (empty string) with ResetFlag="true" must never
 // trigger Reset — fail-closed on missing signal, exactly like BootstrapEnabled's
 // own empty-environment case.
-func TestProvisionResetRefusesEmptyRailwayEnvironmentName(t *testing.T) {
+func TestProvisionResetRefusesEmptyDeployEnv(t *testing.T) {
 	superDSN, migDSN := requireProvisionDSNs(t)
 	cfg := db.ProvisionConfig{
 		Environment: "development", BootstrapFlag: "true",
-		RailwayEnvironmentName: "", ResetFlag: "true",
+		DeployEnv: "", ResetFlag: "true",
 		SuperuserDSN: superDSN, MigrationDSN: migDSN, Passwords: devRolePasswords(),
 		BootstrapFS: dbsql.FS, MigrationsFS: migrations.FS, SeedFS: dbsql.FS,
 	}
-	assertResidueSurvivesProvision(t, cfg, "RailwayEnvironmentName=<empty>")
+	assertResidueSurvivesProvision(t, cfg, "DeployEnv=<empty>")
 }
 
 // TestProvisionResetRefusesWhenFlagNotExactlyTrue: a PR-shaped
-// RailwayEnvironmentName with ResetFlag anything other than the exact string
+// DeployEnv with ResetFlag anything other than the exact string
 // "true" (unset, "TRUE", "1") must never trigger Reset.
 func TestProvisionResetRefusesWhenFlagNotExactlyTrue(t *testing.T) {
 	superDSN, migDSN := requireProvisionDSNs(t)
@@ -1067,7 +1067,7 @@ func TestProvisionResetRefusesWhenFlagNotExactlyTrue(t *testing.T) {
 		t.Run("ResetFlag="+flag, func(t *testing.T) {
 			cfg := db.ProvisionConfig{
 				Environment: "development", BootstrapFlag: "true",
-				RailwayEnvironmentName: "pr-999", ResetFlag: flag,
+				DeployEnv: "pr-999", ResetFlag: flag,
 				SuperuserDSN: superDSN, MigrationDSN: migDSN, Passwords: devRolePasswords(),
 				BootstrapFS: dbsql.FS, MigrationsFS: migrations.FS, SeedFS: dbsql.FS,
 			}
@@ -1077,7 +1077,7 @@ func TestProvisionResetRefusesWhenFlagNotExactlyTrue(t *testing.T) {
 }
 
 // TestProvisionResetRefusesWhenBootstrapDisabled: a PR-shaped
-// RailwayEnvironmentName with ResetFlag="true" but BootstrapFlag NOT "true"
+// DeployEnv with ResetFlag="true" but BootstrapFlag NOT "true"
 // must never trigger Reset — Reset is nested under the bootstrap/seed guard
 // (provision.go) so a reset is never left unpaired from the Seed call that
 // would repopulate the database (see Provision's doc comment).
@@ -1085,7 +1085,7 @@ func TestProvisionResetRefusesWhenBootstrapDisabled(t *testing.T) {
 	superDSN, migDSN := requireProvisionDSNs(t)
 	cfg := db.ProvisionConfig{
 		Environment: "development", BootstrapFlag: "false",
-		RailwayEnvironmentName: "pr-999", ResetFlag: "true",
+		DeployEnv: "pr-999", ResetFlag: "true",
 		SuperuserDSN: superDSN, MigrationDSN: migDSN, Passwords: devRolePasswords(),
 		BootstrapFS: dbsql.FS, MigrationsFS: migrations.FS, SeedFS: dbsql.FS,
 	}

@@ -52,7 +52,8 @@ paths:
 - Say that Open in Platform carries the feature or group. It is a content id, never visitor input.
 - Say in the Blog section that Reject on any of the three sites deletes the shared `_ga` cookies. Google's script can re-create them until reload.
 - Name the "Cookie choices" control in the Blog section. The Blog's control sits at the foot of its sidebar, beside the Library's. It brings the notice back.
-- Describe the chat in the "Live chat" section: what HubSpot receives, that it loads only after Accept on the production landing, and its domains.
+- Describe the chat in the "Live chat" section: what HubSpot receives, that it loads only after Accept on the production landing and the production app, and its domains.
+- Say in the Live chat section that the app tells HubSpot the account email and that a sign-out deletes HubSpot's cookies. Quote the app host from `APP_HOSTNAMES`.
 - Quote the chat domains from `HUBSPOT_CHAT_DOMAINS` and the script host from `CHAT_SCRIPT_HOST`. Never retype them.
 - Claim no region for chat data. HubSpot's data-hosting FAQ does not name chat data (checked 2026-10-21).
 - Name HubSpot's seven cookies and `__hs_do_not_track` in the cookie section, by purpose.

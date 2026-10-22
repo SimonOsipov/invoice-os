@@ -114,16 +114,16 @@ func newShardEnv(t *testing.T) shardEnv {
 // prConfig is the pr-110 shape of TestProvisionResetWipesResidueThenReseedsCuratedDemo.
 func (e shardEnv) prConfig() db.ProvisionConfig {
 	return db.ProvisionConfig{
-		Environment:            "development",
-		BootstrapFlag:          "true",
-		RailwayEnvironmentName: "pr-110",
-		ResetFlag:              "true",
-		SuperuserDSN:           e.superDSN,
-		MigrationDSN:           e.migDSN,
-		Passwords:              devRolePasswords(),
-		BootstrapFS:            dbsql.FS,
-		MigrationsFS:           migrations.FS,
-		SeedFS:                 dbsql.FS,
+		Environment:   "development",
+		BootstrapFlag: "true",
+		DeployEnv:     "pr-110",
+		ResetFlag:     "true",
+		SuperuserDSN:  e.superDSN,
+		MigrationDSN:  e.migDSN,
+		Passwords:     devRolePasswords(),
+		BootstrapFS:   dbsql.FS,
+		MigrationsFS:  migrations.FS,
+		SeedFS:        dbsql.FS,
 	}
 }
 
@@ -475,7 +475,7 @@ func TestProvisionSeedsNoShardTenantWithoutReset(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := e.prConfig()
-			cfg.RailwayEnvironmentName, cfg.ResetFlag = tc.railwayEnv, tc.resetFlag
+			cfg.DeployEnv, cfg.ResetFlag = tc.railwayEnv, tc.resetFlag
 			if err := db.Provision(context.Background(), cfg); err != nil {
 				t.Fatalf("Provision: %v", err)
 			}
@@ -618,7 +618,7 @@ func TestProvisionFailsWhenShardSeedFileIsMissing(t *testing.T) {
 		t.Errorf("error = %q, want it to name %s", err, shardSeedFile)
 	}
 
-	cfg.RailwayEnvironmentName, cfg.ResetFlag = "", ""
+	cfg.DeployEnv, cfg.ResetFlag = "", ""
 	if err := db.Provision(context.Background(), cfg); err != nil {
 		t.Errorf("reset-off Provision without %s = %v, want nil", shardSeedFile, err)
 	}

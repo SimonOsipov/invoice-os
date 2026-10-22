@@ -317,7 +317,7 @@ func TestProvisionSeedsNoHouseRowInProduction(t *testing.T) {
 
 	cfg := e.prConfig()
 	cfg.Environment = "production"
-	cfg.RailwayEnvironmentName = "production"
+	cfg.DeployEnv = "production"
 	cfg.ResetFlag = ""
 	if err := db.Provision(context.Background(), cfg); err != nil {
 		t.Fatalf("Provision (production): %v", err)

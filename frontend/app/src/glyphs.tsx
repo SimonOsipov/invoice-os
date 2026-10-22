@@ -89,6 +89,14 @@ export const blogGlyph = (
   />
 )
 
+// Cookie glyph; the sidebar's Cookie choices row, not a NavDef.
+export const cookieGlyph = (
+  <Icon
+    paths={['M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5', 'M8.5 8.5v.01', 'M16 15.5v.01', 'M12 12v.01', 'M11 17v.01', 'M7 14v.01']}
+    size={NAV_ICON_SIZE}
+  />
+)
+
 export const NAV_DASHBOARD: NavDef = { id: 'dashboard', label: 'Overview', glyph: <Icon paths={['M3 13h8V3H3zM13 21h8V11h-8zM13 3v6h8V3zM3 21h8v-6H3z']} size={17} /> }
 export const NAV_INVOICES: NavDef = {
   id: 'invoices',

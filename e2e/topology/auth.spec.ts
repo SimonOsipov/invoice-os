@@ -732,6 +732,7 @@ test('deployed app: a real sign-in from the front door returns to its destinatio
   const account = await provisionRealAccount('handoff-door')
   const errors = collectErrors(page)
   const urls = recordUrls(page)
+  await seedConsent(page, false)
 
   await page.goto(`${APP_URL}/audit`)
   await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
@@ -791,6 +792,7 @@ test('deployed app: a real sign-in from a direct landing visit bounces for a sta
   const account = await provisionRealAccount('handoff-direct')
   const errors = gatedErrors(page, [expectedStatusDropper(page, 401, /\/auth\/sign-in$/)])
   const urls = recordUrls(page)
+  await seedConsent(page, false)
 
   await page.goto(LANDING_URL)
   const dialog = signInDialog(page)

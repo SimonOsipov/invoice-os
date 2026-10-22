@@ -104,6 +104,17 @@ import {
 import { removePolicy, replacePolicy, type Policy } from './lib/workflows'
 import { flaskGlyph, shieldGlyph15 } from './glyphs'
 import { BrandMark } from './icons'
+import {
+  APP_NOTICE_BODY,
+  CookieNotice,
+  bootAppChat,
+  chooseAppConsent,
+  endAppChat,
+  privacyHref,
+  readConsent,
+  reportAppPage,
+  syncAppConsent,
+} from './chat'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { DashboardActive } from './components/DashboardActive'
@@ -246,6 +257,26 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // nothing for a retry to discover (AUDIT-10-07).
   const [suspended, setSuspended] = useState(false)
   const onSuspended = useCallback(() => setSuspended(true), [])
+
+  // The identify email is the verified /me email, never a token claim.
+  const meEmail = session.verified ? session.me?.user?.email : null
+  const chatEmail = typeof meEmail === 'string' ? meEmail.trim() || null : null
+  const [consent, setConsent] = useState(() => readConsent())
+  const [consentReopened, setConsentReopened] = useState(false)
+  useEffect(() => {
+    if (suspended) return
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      const next = syncAppConsent(chatEmail)
+      if (next) setConsent(next)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [suspended, chatEmail])
+  // A suspended screen carries no chat.
+  useEffect(() => {
+    if (suspended) endAppChat()
+  }, [suspended])
 
   const authedFetch = useMemo(
     () => makeAuthedFetch(session, onUnauthorized, onSuspended, freshToken),
@@ -615,6 +646,10 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     window.history.replaceState({ e: active.entityId, m: mountKey }, '', url)
     clearDestination()
   }, [])
+  // After the mount alignment above: the first page view reads the aligned path.
+  useEffect(() => {
+    if (!suspended) bootAppChat(chatEmail)
+  }, [suspended, chatEmail])
   // Backfills the boot entry's stamp once the portfolio resolves, and keeps the popstate
   // handler's view of the active company current. The alignment above runs before the
   // entities fetch lands, so it stamps null and a cold deep link would be permanently
@@ -683,6 +718,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
         setReviewBatchIds([])
         setCreateStep((prev) => (prev === 'review' ? 'upload' : prev))
       }
+      reportAppPage()
     }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
@@ -729,6 +765,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     setEditingPolicyId(policyNext)
     const url = routeUrl(view, { id: params?.id, settingsTab: tabNext, q: qNext, auditInvoice: auditNext })
     window.history.pushState({ e: active.entityId, m: mountKey }, '', url)
+    reportAppPage()
   }
 
   function nav(id: View, params?: RouteParams) {
@@ -1792,6 +1829,11 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     staffRole,
     deleteRole,
     signOut: onSignOut,
+    cookieChoices: () => {
+      const next = syncAppConsent(chatEmail)
+      if (next) setConsent(next)
+      setConsentReopened(true)
+    },
   }
 
   // Below every hook, so latching does not change the hook order. The whole workspace goes,
@@ -1809,6 +1851,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
       className="asc-app pf-shell"
       style={{ height: '100vh', display: 'flex', background: 'var(--bg-1)', fontFamily: 'var(--font-sans)', color: 'var(--fg-1)', overflow: 'hidden' }}
     >
+      <style>{__COOKIE_NOTICE_CSS__}</style>
       <Sidebar ctx={ctx} />
       <main className="pf-main" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <Header ctx={ctx} />
@@ -1838,6 +1881,18 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
           {view === 'approvals' && <ApprovalsView ctx={ctx} />}
           {view === 'audit' && <AuditView ctx={ctx} />}
           {view === 'extraction' && extractionJobId != null && <ExtractionReview ctx={ctx} jobId={extractionJobId} onOpenInvoice={openReviewedInvoice} />}
+          {(consent === null || consentReopened) && (
+            <CookieNotice
+              current={consent}
+              suppressed={false}
+              privacyHref={privacyHref()}
+              body={APP_NOTICE_BODY}
+              onChoose={(c) => {
+                setConsent(chooseAppConsent(c, chatEmail))
+                setConsentReopened(false)
+              }}
+            />
+          )}
         </div>
       </main>
     </div>
@@ -1926,6 +1981,7 @@ export default function App() {
     keepStoredRecord.current = keepStorage
     setSeat(null)
     if (!keepStorage) clearSession()
+    endAppChat()
   }, [])
   if (renewerRef.current === null) {
     renewerRef.current = createRenewer({
@@ -1978,6 +2034,7 @@ export default function App() {
     // Wipes a destination captured before this session — the pathname reset above only
     // stops a NEW one being captured on the way out.
     clearDestination()
+    endAppChat()
     // landingBase() is null when VITE_LANDING_URL isn't configured (e.g. the default
     // standalone showcase build) — never navigate to `null` (stringifies to "null").
     // With it unset we now land on the app's own persona-picker, which is a front door;
@@ -2022,6 +2079,7 @@ export default function App() {
     window.history.replaceState(null, '', '/')
     if (!keep) clearSession()
     clearDestination()
+    endAppChat()
     const dest = landingBase()
     if (dest) {
       signingOut.current = true

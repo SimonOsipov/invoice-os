@@ -42,13 +42,18 @@ func LoadConfig(service string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	deployEnv := DeployEnv()
+	// Cloud Run sets K_SERVICE; a hosted service must never fall back to Local.
+	if deployEnv == "" && os.Getenv("K_SERVICE") != "" {
+		return Config{}, fmt.Errorf("platform: DEPLOY_ENV is required on Cloud Run")
+	}
 	environment := envString("ENVIRONMENT", "development")
 	return Config{
 		Service:     service,
 		Environment: environment,
-		// Production runs ENVIRONMENT=development, so only Sentry's label follows Railway.
-		SentryEnvironment: envString("RAILWAY_ENVIRONMENT_NAME", environment),
-		Release:           releaseName(BuildSHA, os.Getenv("RAILWAY_GIT_COMMIT_SHA")),
+		// Production runs ENVIRONMENT=development, so only Sentry's label follows DEPLOY_ENV.
+		SentryEnvironment: firstNonEmpty(deployEnv, environment),
+		Release:           releaseName(BuildSHA, firstNonEmpty(os.Getenv("BUILD_SHA"), os.Getenv("RAILWAY_GIT_COMMIT_SHA"))),
 		Port:              port,
 		LogLevel:          envString("LOG_LEVEL", "info"),
 		SentryDSN:         envString("SENTRY_DSN", ""),
@@ -58,16 +63,24 @@ func LoadConfig(service string) (Config, error) {
 }
 
 // releaseName is the Sentry release for a build. The "unstamped" prefix keeps a
-// Railway rebuild apart from the CI build of the same commit.
-func releaseName(buildSHA, railwaySHA string) string {
+// platform rebuild apart from the CI build of the same commit.
+func releaseName(buildSHA, platformSHA string) string {
 	switch {
 	case buildSHA != "" && buildSHA != "dev":
 		return buildSHA
-	case railwaySHA != "":
-		return "unstamped-" + railwaySHA
+	case platformSHA != "":
+		return "unstamped-" + platformSHA
 	default:
 		return "unstamped"
 	}
+}
+
+// ceiling: second value is the Railway fallback, delete with Railway in GKE-12.
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 func envString(key, def string) string {

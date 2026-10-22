@@ -43,7 +43,7 @@ describe('releaseName', () => {
 })
 
 const RAW = '../../../internal/platform/buildsha.txt?raw'
-const ENV = 'VITE_RAILWAY_GIT_COMMIT_SHA'
+const ENV = 'VITE_BUILD_SHA'
 
 describe('RELEASE', () => {
   afterEach(() => {

@@ -11,6 +11,7 @@ paths:
 - Send Go services and `docling` to project `asc-backend`. Send the SPAs to project `asc-frontend`.
 - Name every deployable in its events: `server_name` for a Go service and `docling`, tag `service` for an SPA.
 - Treat an empty DSN as off. The SDK becomes a no-op.
+- Label the Sentry environment from `DEPLOY_ENV` and the unstamped release from `BUILD_SHA`. `RAILWAY_ENVIRONMENT_NAME` and `RAILWAY_GIT_COMMIT_SHA` are fallbacks until GKE-12.
 - Call `sentry.Init` only in `initSentry`. Its `BeforeSend` hooks scrub every event.
 - Set the Sentry variables in the Railway production environment only.
 - Never seal a Sentry variable. A sealed variable does not fork, and `audit-sealed-variables` fails every PR run.

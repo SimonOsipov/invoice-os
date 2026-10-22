@@ -57,7 +57,7 @@ func TestInviteSender_PreviewCapturesAndDiscardsTheKey(t *testing.T) {
 		t.Run(env, func(t *testing.T) {
 			spy := &spyTransport{}
 			var logs bytes.Buffer
-			env := getenvOf(map[string]string{"RAILWAY_ENVIRONMENT_NAME": env, "RESEND_SENDING_KEY": "k_live"})
+			env := getenvOf(map[string]string{"DEPLOY_ENV": env, "RESEND_SENDING_KEY": "k_live"})
 
 			s := inviteSender(env, spy, textLogger(&logs))
 
@@ -85,7 +85,7 @@ func TestInviteSender_PreviewCapturesAndDiscardsTheKey(t *testing.T) {
 func TestInviteSender_ProductionWithKeySendsThroughTheTransport(t *testing.T) {
 	spy := &spyTransport{}
 	var logs bytes.Buffer
-	env := getenvOf(map[string]string{"RAILWAY_ENVIRONMENT_NAME": "production", "RESEND_SENDING_KEY": "k_live"})
+	env := getenvOf(map[string]string{"DEPLOY_ENV": "production", "RESEND_SENDING_KEY": "k_live"})
 
 	s := inviteSender(env, spy, textLogger(&logs))
 
@@ -111,7 +111,7 @@ func TestInviteSender_ProductionWithKeySendsThroughTheTransport(t *testing.T) {
 func TestInviteSender_ProductionWithoutKeyIsOff(t *testing.T) {
 	spy := &spyTransport{}
 	var logs bytes.Buffer
-	env := getenvOf(map[string]string{"RAILWAY_ENVIRONMENT_NAME": "production"})
+	env := getenvOf(map[string]string{"DEPLOY_ENV": "production"})
 
 	s := inviteSender(env, spy, textLogger(&logs))
 
@@ -144,7 +144,7 @@ func TestInviteSender_EnvironmentNamesThatAreNotAPullRequestFork(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			spy := &spyTransport{}
 			var logs bytes.Buffer
-			env := getenvOf(map[string]string{"RAILWAY_ENVIRONMENT_NAME": c.env, "RESEND_SENDING_KEY": c.key})
+			env := getenvOf(map[string]string{"DEPLOY_ENV": c.env, "RESEND_SENDING_KEY": c.key})
 
 			s := inviteSender(env, spy, textLogger(&logs))
 

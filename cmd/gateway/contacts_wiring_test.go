@@ -311,7 +311,7 @@ func demoPost(h http.Handler, remoteAddr string) *httptest.ResponseRecorder {
 }
 
 func TestRegistrationHandlers_DemoRequestIsLimitedPerIP(t *testing.T) {
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	t.Setenv("DEPLOY_ENV", "production")
 	site, _ := url.Parse("https://site.example")
 	sink := &demoRecSink{}
 	reg := registrationHandlers(goTrueAnswering(t, cwSession), site, 0, slog.New(slog.DiscardHandler), sink, noPendingInvite)
@@ -332,7 +332,7 @@ func TestRegistrationHandlers_DemoRequestIsLimitedPerIP(t *testing.T) {
 }
 
 func TestRegistrationHandlers_DemoRequestIsLimitedWithoutAuthConfig(t *testing.T) {
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	t.Setenv("DEPLOY_ENV", "production")
 	sink := &demoRecSink{}
 	reg := registrationHandlers(nil, nil, 0, slog.New(slog.DiscardHandler), sink, noPendingInvite)
 	for range gateway.DemoRequestPerIP {
@@ -383,7 +383,7 @@ func TestRegistrationHandlers_DemoRequestPostureTable(t *testing.T) {
 		{"PR-7", true},
 	} {
 		t.Run("env="+c.env, func(t *testing.T) {
-			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
+			t.Setenv("DEPLOY_ENV", c.env)
 			var mu sync.Mutex
 			var enforced []string
 			sink := &demoRecSink{}
@@ -410,7 +410,7 @@ func TestRegistrationHandlers_DemoRequestPostureTable(t *testing.T) {
 }
 
 func TestRegistrationHandlers_DemoRequestHasItsOwnBucket(t *testing.T) {
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	t.Setenv("DEPLOY_ENV", "production")
 	site, _ := url.Parse("https://site.example")
 	reg := registrationHandlers(goTrueAnswering(t, cwSession), site, 0, slog.New(slog.DiscardHandler), &demoRecSink{}, noPendingInvite)
 	for range gateway.RegisterPerIP {

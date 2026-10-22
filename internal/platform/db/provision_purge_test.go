@@ -29,21 +29,21 @@ import (
 )
 
 // productionShapedProvisionConfig is a non-PR name with ENVIRONMENT=development:
-// RAILWAY_ENVIRONMENT_NAME is "production" and GATEWAY_DB_RESET is unset, so the
+// DEPLOY_ENV is "production" and GATEWAY_DB_RESET is unset, so the
 // purge runs where Reset refuses. The deployed production gateway reads
 // ENVIRONMENT=production and no longer has this shape.
 func productionShapedProvisionConfig(superDSN, migDSN string) db.ProvisionConfig {
 	return db.ProvisionConfig{
-		Environment:            "development",
-		BootstrapFlag:          "true",
-		RailwayEnvironmentName: "production",
-		ResetFlag:              "",
-		SuperuserDSN:           superDSN,
-		MigrationDSN:           migDSN,
-		Passwords:              devRolePasswords(),
-		BootstrapFS:            dbsql.FS,
-		MigrationsFS:           migrations.FS,
-		SeedFS:                 dbsql.FS,
+		Environment:   "development",
+		BootstrapFlag: "true",
+		DeployEnv:     "production",
+		ResetFlag:     "",
+		SuperuserDSN:  superDSN,
+		MigrationDSN:  migDSN,
+		Passwords:     devRolePasswords(),
+		BootstrapFS:   dbsql.FS,
+		MigrationsFS:  migrations.FS,
+		SeedFS:        dbsql.FS,
 	}
 }
 
@@ -144,7 +144,7 @@ func TestProvisionPurgeRunsAgainstThePersistentEnvironmentName(t *testing.T) {
 	demoTIN := plantDemoResidue(t, pool, "persistent-env")
 
 	if err := db.Provision(ctx, cfg); err != nil {
-		t.Fatalf("Provision (RailwayEnvironmentName=production, ResetFlag unset): %v", err)
+		t.Fatalf("Provision (DeployEnv=production, ResetFlag unset): %v", err)
 	}
 
 	if n := countEntityTIN(t, pool, probeTenant, probeTIN); n != 1 {
@@ -324,7 +324,7 @@ func TestProvisionPurgeAndResetTogetherAreHarmless(t *testing.T) {
 	})
 
 	cfg := productionShapedProvisionConfig(superDSN, migDSN)
-	cfg.RailwayEnvironmentName = "pr-110"
+	cfg.DeployEnv = "pr-110"
 	cfg.ResetFlag = "true"
 	if !cfg.ResetWillRun() {
 		t.Fatal("test setup: ResetWillRun() is false for the pr-110 shape, so half A would exercise the purge alone")

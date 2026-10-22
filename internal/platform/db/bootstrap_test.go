@@ -335,11 +335,10 @@ func TestBootstrapSQLCreatesRolesWithGivenPasswords(t *testing.T) {
 	}
 }
 
-// TestBootstrapSQLAssertsSecurityAttributes: Test Spec row 2 / Core AC-2. Pre-mutates
-// all four login roles to the WRONG attributes (SUPERUSER, BYPASSRLS, CREATEDB, CREATEROLE
-// all granted) then applies db/bootstrap.sql; every role must come back exactly
-// NOSUPERUSER, NOBYPASSRLS, NOCREATEDB, NOCREATEROLE, LOGIN — the attribute
-// re-assertion db/bootstrap.sql's step 2 performs unconditionally on every run.
+// TestBootstrapSQLAssertsSecurityAttributes: Core AC-2. Pre-mutates all four login roles to
+// BYPASSRLS, CREATEDB and CREATEROLE; bootstrap.sql's step 2 must restore NOBYPASSRLS,
+// NOCREATEDB, NOCREATEROLE and LOGIN. SUPERUSER is refused, not reset:
+// TestBootstrapSQLRefusesASuperuserRole.
 func TestBootstrapSQLAssertsSecurityAttributes(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
@@ -353,7 +352,7 @@ func TestBootstrapSQLAssertsSecurityAttributes(t *testing.T) {
 	ctx := context.Background()
 	for _, role := range bootstrapRoles {
 		if _, err := pool.Exec(ctx,
-			`ALTER ROLE `+role+` WITH SUPERUSER BYPASSRLS CREATEDB CREATEROLE`,
+			`ALTER ROLE `+role+` WITH BYPASSRLS CREATEDB CREATEROLE`,
 		); err != nil {
 			t.Fatalf("pre-mutate %s to the wrong attributes: %v", role, err)
 		}
@@ -365,9 +364,6 @@ func TestBootstrapSQLAssertsSecurityAttributes(t *testing.T) {
 
 	for _, role := range bootstrapRoles {
 		attrs := readRoleAttrs(t, pool, role)
-		if attrs.super {
-			t.Errorf("%s: rolsuper = true, want false (NOSUPERUSER)", role)
-		}
 		if attrs.bypassRLS {
 			t.Errorf("%s: rolbypassrls = true, want false (NOBYPASSRLS)", role)
 		}
@@ -380,6 +376,77 @@ func TestBootstrapSQLAssertsSecurityAttributes(t *testing.T) {
 		if !attrs.canLogin {
 			t.Errorf("%s: rolcanlogin = false, want true (LOGIN)", role)
 		}
+	}
+}
+
+// TestBootstrapSQLRefusesASuperuserRole: bootstrap.sql no longer demotes SUPERUSER (Cloud SQL
+// refuses the clause), so its guard must fail the run and name the role.
+func TestBootstrapSQLRefusesASuperuserRole(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	t.Cleanup(func() { restoreSafeAttributes(t, pool) })
+
+	if _, err := pool.Exec(context.Background(), `ALTER ROLE invoice_app WITH SUPERUSER`); err != nil {
+		t.Fatalf("make invoice_app a superuser: %v", err)
+	}
+	err := applyBootstrap(t, pool, devDefaultGUCs(), readBootstrapSQL(t))
+	if err == nil || !strings.Contains(err.Error(), "invoice_app") || !strings.Contains(err.Error(), "SUPERUSER or BYPASSRLS") {
+		t.Fatalf("bootstrap with a superuser invoice_app = %v, want the guard naming invoice_app", err)
+	}
+}
+
+// TestBootstrapSQLRunsAsANonSuperuserPostgres runs bootstrap.sql as Cloud SQL's postgres is
+// shaped (GKE-01 P1, P2): CREATEROLE, not SUPERUSER, ADMIN on the roles it created.
+func TestBootstrapSQLRunsAsANonSuperuserPostgres(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+	t.Cleanup(func() { restoreSafeAttributes(t, pool) })
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool) })
+
+	const sim = "cloudsql_postgres_sim"
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DROP OWNED BY `+sim+` CASCADE`)
+		_, _ = pool.Exec(ctx, `DROP ROLE IF EXISTS `+sim)
+	})
+	var dbName string
+	if err := pool.QueryRow(ctx, `SELECT current_database()`).Scan(&dbName); err != nil {
+		t.Fatalf("read database name: %v", err)
+	}
+	setup := []string{
+		`DROP OWNED BY ` + sim + ` CASCADE`,
+		`DROP ROLE IF EXISTS ` + sim,
+		// BYPASSRLS: vanilla Postgres needs it to set NOBYPASSRLS; Cloud SQL's postgres does not (GKE-01 P1c).
+		`CREATE ROLE ` + sim + ` LOGIN CREATEROLE CREATEDB BYPASSRLS PASSWORD 'sim'`,
+		`GRANT CREATE ON DATABASE ` + dbName + ` TO ` + sim,
+		`GRANT ALL ON SCHEMA public TO ` + sim + ` WITH GRANT OPTION`,
+	}
+	for _, role := range []string{"invoice_migrator", "invoice_app", "invoice_tenant_reader", "supabase_auth_admin", "invoice_gateway", "auth_hook_reader", "staff_reader"} {
+		setup = append(setup, `GRANT `+role+` TO `+sim+` WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`)
+	}
+	for i, stmt := range setup {
+		if _, err := pool.Exec(ctx, stmt); err != nil && i > 1 {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+
+	cfg, err := pgxpool.ParseConfig(superDSN)
+	if err != nil {
+		t.Fatalf("parse superuser DSN: %v", err)
+	}
+	cfg.ConnConfig.User, cfg.ConnConfig.Password = sim, "sim"
+	simPool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("connect as %s: %v", sim, err)
+	}
+	defer simPool.Close()
+
+	if err := applyBootstrap(t, simPool, devDefaultGUCs(), readBootstrapSQL(t)); err != nil {
+		t.Fatalf("bootstrap.sql as a non-superuser postgres: %v", err)
+	}
+	var owner string
+	if err := pool.QueryRow(ctx, `SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'auth'`).Scan(&owner); err != nil || owner != authAdminRole {
+		t.Errorf("schema auth owner = %q (err %v), want %s", owner, err, authAdminRole)
 	}
 }
 
@@ -1479,7 +1546,7 @@ func TestBootstrapCreatesAuthAdminRoleWithSafeAttributes(t *testing.T) {
 
 	// A role left by an earlier bootstrap would pass unaided; elevate it so only re-assertion passes.
 	if roleExists(t, pool, authAdminRole) {
-		mustExecSQL(t, pool, `ALTER ROLE supabase_auth_admin WITH NOLOGIN SUPERUSER BYPASSRLS CREATEDB CREATEROLE`)
+		mustExecSQL(t, pool, `ALTER ROLE supabase_auth_admin WITH NOLOGIN BYPASSRLS CREATEDB CREATEROLE`)
 		mustExecSQL(t, pool, `ALTER ROLE supabase_auth_admin RESET search_path`)
 	}
 
@@ -1585,7 +1652,7 @@ func TestBootstrapCreatesAuthHookReaderAsNologinSetOnlyMember(t *testing.T) {
 	// Put every asserted property in its wrong state, so only this run can fix it.
 	revokePublicSchemaUsage(t, pool)
 	if roleExists(t, pool, hookReaderRole) {
-		mustExecSQL(t, pool, `ALTER ROLE auth_hook_reader WITH LOGIN SUPERUSER BYPASSRLS CREATEDB CREATEROLE`)
+		mustExecSQL(t, pool, `ALTER ROLE auth_hook_reader WITH LOGIN BYPASSRLS CREATEDB CREATEROLE`)
 		mustExecSQL(t, pool, `REVOKE USAGE, CREATE ON SCHEMA public FROM auth_hook_reader`)
 		mustExecSQL(t, pool, `REVOKE auth_hook_reader FROM invoice_migrator`)
 		if n := mustCount(t, pool, `SELECT count(*) FROM (`+hookReaderMembershipSQL+`) m`); n != 0 {

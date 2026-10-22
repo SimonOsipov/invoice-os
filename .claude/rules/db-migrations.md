@@ -28,6 +28,8 @@ paths:
 - Loop over tenants one at a time for cross-tenant work.
 - Enumerate tenants only through `invoice_tenant_reader` or a `staff_read_` function.
 - Install a trusted extension in a migration. Install an untrusted extension in `db/bootstrap.sql`.
+- Write `db/bootstrap.sql` so that Cloud SQL's `postgres` can run it: it is not a superuser. Set no SUPERUSER attribute; the guard refuses a superuser role.
+- Run `db/restore-check.sql` on Cloud SQL as `restore_auditor`: apply `db/restore-auditor.sql` once, then `SET ROLE restore_auditor`.
 - Grant `EXECUTE` on `public.invitation_by_token`, `public.pending_invites_for_email`, `public.accept_invitation_by_id` and `public.invitee_account_state` to `invoice_app` only.
 - Grant `auth_hook_reader` SELECT on the `auth.users` columns `email`, `email_confirmed_at` and `is_sso_user` only.
 - Never grant `auth_hook_reader` a table-level privilege on `auth.users`.

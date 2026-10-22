@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -21,12 +22,53 @@ const (
 	ResendMaxKeys    = 10_000
 )
 
-// clientKey keys the per-IP limit and names its source: Railway's edge sets X-Real-IP; IPv6 is keyed by its /64.
-// RemoteAddr, the fallback, is normalised the same way.
-// ceiling: the header is trusted only while the gateway is served straight from Railway's edge; a proxy in front makes every key the proxy's IP.
+// TrustedProxy names what sits in front of the gateway and so which header carries the client IP.
+type TrustedProxy string
+
+const (
+	// ProxyRailway (TRUSTED_PROXY unset off Cloud Run) trusts X-Real-IP, which Railway's edge sets.
+	// ceiling: Railway mode, delete with Railway in GKE-12.
+	ProxyRailway  TrustedProxy = ""
+	ProxyGoogleLB TrustedProxy = "google-lb"
+	ProxyNone     TrustedProxy = "none"
+)
+
+var trustedProxy = ProxyRailway
+
+// ParseTrustedProxy reads TRUSTED_PROXY. Unset is Railway mode, refused on Cloud Run.
+func ParseTrustedProxy(value string, onCloudRun bool) (TrustedProxy, error) {
+	switch p := TrustedProxy(value); p {
+	case ProxyGoogleLB, ProxyNone:
+		return p, nil
+	case ProxyRailway:
+		if onCloudRun {
+			return "", fmt.Errorf("TRUSTED_PROXY is required on Cloud Run (google-lb or none)")
+		}
+		return p, nil
+	default:
+		return "", fmt.Errorf("TRUSTED_PROXY %q: want google-lb or none", value)
+	}
+}
+
+// SetTrustedProxy fixes the client-IP source for the process. The gateway calls it once at boot.
+func SetTrustedProxy(p TrustedProxy) { trustedProxy = p }
+
+// clientKey keys the per-IP limit and logs and names its source; IPv6 is keyed by its /64.
+// Behind Google's load balancer the client is the second-from-right X-Forwarded-For entry
+// (the LB appends "<client>,<lb>"; anything left of them is client-supplied). X-Real-IP is
+// trusted only in Railway mode. RemoteAddr, the fallback, is normalised the same way.
 func clientKey(r *http.Request) (key, source string) {
-	if ip, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("X-Real-IP"))); err == nil {
-		return normalizeIP(ip), "header"
+	switch trustedProxy {
+	case ProxyRailway:
+		if ip, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("X-Real-IP"))); err == nil {
+			return normalizeIP(ip), "header"
+		}
+	case ProxyGoogleLB:
+		if parts := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ","); len(parts) >= 2 {
+			if ip, err := netip.ParseAddr(strings.TrimSpace(parts[len(parts)-2])); err == nil {
+				return normalizeIP(ip), "x_forwarded_for"
+			}
+		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

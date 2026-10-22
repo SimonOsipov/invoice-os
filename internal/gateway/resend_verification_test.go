@@ -958,3 +958,75 @@ func TestResendVerification_FullMapsFailClosed(t *testing.T) {
 		t.Errorf("limit lines = %v, want one limit=address then one limit=ip", lines)
 	}
 }
+
+// useProxy sets the client-IP source for one test. Serial: it writes a package variable.
+func useProxy(t *testing.T, p TrustedProxy) {
+	t.Helper()
+	prev := trustedProxy
+	SetTrustedProxy(p)
+	t.Cleanup(func() { SetTrustedProxy(prev) })
+}
+
+func TestClientKey_TrustedProxy(t *testing.T) {
+	const remote = "192.0.2.1:4444"
+	rows := []struct {
+		name   string
+		proxy  TrustedProxy
+		realIP string
+		xff    []string
+		key    string
+		source string
+	}{
+		{name: "google-lb: client is second from right", proxy: ProxyGoogleLB, xff: []string{"203.0.113.9, 34.120.0.1"}, key: "203.0.113.9", source: "x_forwarded_for"},
+		{name: "google-lb: forged X-Real-IP is ignored", proxy: ProxyGoogleLB, realIP: "198.51.100.1", xff: []string{"203.0.113.9,34.120.0.1"}, key: "203.0.113.9", source: "x_forwarded_for"},
+		{name: "google-lb: forged leftmost entry is ignored", proxy: ProxyGoogleLB, xff: []string{"198.51.100.1, 203.0.113.9, 34.120.0.1"}, key: "203.0.113.9", source: "x_forwarded_for"},
+		{name: "google-lb: forged entries split across header lines", proxy: ProxyGoogleLB, xff: []string{"198.51.100.1", "203.0.113.9, 34.120.0.1"}, key: "203.0.113.9", source: "x_forwarded_for"},
+		{name: "google-lb: one entry falls back to RemoteAddr", proxy: ProxyGoogleLB, xff: []string{"203.0.113.9"}, key: "192.0.2.1", source: "remote_addr"},
+		{name: "google-lb: no header falls back to RemoteAddr", proxy: ProxyGoogleLB, realIP: "198.51.100.1", key: "192.0.2.1", source: "remote_addr"},
+		{name: "google-lb: unparseable client entry falls back to RemoteAddr", proxy: ProxyGoogleLB, xff: []string{"garbage, 34.120.0.1"}, key: "192.0.2.1", source: "remote_addr"},
+		{name: "google-lb: IPv6 client keyed by its /64", proxy: ProxyGoogleLB, xff: []string{"2001:db8:1:2::1, 34.120.0.1"}, key: "2001:db8:1:2::/64", source: "x_forwarded_for"},
+		{name: "none: both headers ignored", proxy: ProxyNone, realIP: "198.51.100.1", xff: []string{"203.0.113.9, 34.120.0.1"}, key: "192.0.2.1", source: "remote_addr"},
+		{name: "railway: X-Real-IP keys, X-Forwarded-For does not", proxy: ProxyRailway, realIP: "198.51.100.1", xff: []string{"203.0.113.9, 34.120.0.1"}, key: "198.51.100.1", source: "header"},
+	}
+	for _, c := range rows {
+		t.Run(c.name, func(t *testing.T) {
+			useProxy(t, c.proxy)
+			req := httptest.NewRequest(http.MethodPost, "/auth/resend-verification", nil)
+			req.RemoteAddr = remote
+			if c.realIP != "" {
+				req.Header.Set("X-Real-IP", c.realIP)
+			}
+			for _, v := range c.xff {
+				req.Header.Add("X-Forwarded-For", v)
+			}
+			if key, source := clientKey(req); key != c.key || source != c.source {
+				t.Errorf("clientKey = (%q, %q), want (%q, %q)", key, source, c.key, c.source)
+			}
+		})
+	}
+}
+
+func TestParseTrustedProxy(t *testing.T) {
+	rows := []struct {
+		value      string
+		onCloudRun bool
+		want       TrustedProxy
+		wantErr    bool
+	}{
+		{"google-lb", true, ProxyGoogleLB, false},
+		{"none", true, ProxyNone, false},
+		{"", false, ProxyRailway, false},
+		{"", true, "", true},
+		{"Google-LB", false, "", true},
+		{"railway", false, "", true},
+	}
+	for _, c := range rows {
+		got, err := ParseTrustedProxy(c.value, c.onCloudRun)
+		if (err != nil) != c.wantErr || got != c.want {
+			t.Errorf("ParseTrustedProxy(%q, %v) = (%q, %v), want (%q, err=%v)", c.value, c.onCloudRun, got, err, c.want, c.wantErr)
+		}
+		if err != nil && !strings.Contains(err.Error(), "TRUSTED_PROXY") {
+			t.Errorf("error %q does not name TRUSTED_PROXY", err)
+		}
+	}
+}

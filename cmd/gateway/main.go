@@ -52,6 +52,11 @@ func main() {
 	siteURL := mustParseSiteURL(os.Getenv("AUTH_SITE_URL"), app.Logger)
 	registerMinResponse := mustParseRegisterMinResponse(os.Getenv("AUTH_REGISTER_MIN_RESPONSE"), app.Logger)
 	gatewayToken := mustEnv("GATEWAY_TOKEN")
+	proxy, err := gateway.ParseTrustedProxy(os.Getenv("TRUSTED_PROXY"), os.Getenv("K_SERVICE") != "")
+	if err != nil {
+		platform.Fatal(app.Logger, "gateway: %v", err)
+	}
+	gateway.SetTrustedProxy(proxy)
 
 	// Bootstrap (gated) -> migrate (unconditional) -> reset (gated, PR
 	// environments only, persona-handoff-fix Decision [pr-only-reset]) -> purge

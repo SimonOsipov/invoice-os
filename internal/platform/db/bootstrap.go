@@ -13,13 +13,14 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// RolePasswords carries the four ascomply.*_password values Bootstrap sets
-// via set_config before executing db/bootstrap.sql. All four are required —
+// RolePasswords carries the ascomply.*_password values Bootstrap sets
+// via set_config before executing db/bootstrap.sql. All but Gateway are required —
 // Bootstrap validates them before opening any connection (AC-4).
 type RolePasswords struct {
 	Migrator string
 	App      string
 	Reader   string
+	Gateway  string // optional: empty leaves invoice_gateway's password unchanged
 	// AuthAdmin is the supabase_auth_admin login password.
 	AuthAdmin string
 }
@@ -177,6 +178,7 @@ func Bootstrap(ctx context.Context, superuserDSN string, pw RolePasswords, fsys 
 		{"ascomply.app_password", pw.App},
 		{"ascomply.reader_password", pw.Reader},
 		{"ascomply.auth_admin_password", pw.AuthAdmin},
+		{"ascomply.gateway_password", pw.Gateway},
 	} {
 		if _, err := conn.Exec(ctx, `SELECT set_config($1, $2, false)`, kv.name, kv.value); err != nil {
 			return fmt.Errorf("db: set_config(%s): %w", kv.name, err)

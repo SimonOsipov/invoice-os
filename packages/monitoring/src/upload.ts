@@ -24,7 +24,7 @@ export function sourcemapUploadOptions(
     url: 'https://de.sentry.io',
     telemetry: false,
     release: {
-      name: releaseName(stamp, env.VITE_RAILWAY_GIT_COMMIT_SHA ?? ''),
+      name: releaseName(stamp, env.VITE_BUILD_SHA ?? ''),
       inject: false,
       setCommits: false,
     },

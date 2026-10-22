@@ -193,7 +193,8 @@ func TestCIRunFiltersReachEveryTestInThePackage(t *testing.T) {
 				strings.HasPrefix(n, "TestAuthAdminDSN") ||
 				strings.HasPrefix(n, "TestGrantAccountStateRead") ||
 				n == "TestBootstrapRotatesAuthAdminPasswordIdempotently" ||
-				n == "TestBootstrapRefusesEmptyAuthAdminBeforeDialing"
+				n == "TestBootstrapRefusesEmptyAuthAdminBeforeDialing" ||
+				n == "TestBootstrapLeavesAnUnsetGatewayPasswordAlone"
 		}
 		var historical []string
 		for _, n := range names {

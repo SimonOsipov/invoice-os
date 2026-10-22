@@ -555,6 +555,7 @@ jobs:
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader
+      GATEWAY_PASSWORD: gateway
       AUTH_ADMIN_PASSWORD: auth_admin
       DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
@@ -670,9 +671,11 @@ jobs:
       DATABASE_MIGRATION_URL: postgres://invoice_migrator:migrator@localhost:5432/invoice_os?sslmode=disable
       DATABASE_URL: postgres://invoice_app:app@localhost:5432/invoice_os?sslmode=disable
       DATABASE_READER_URL: postgres://invoice_tenant_reader:reader@localhost:5432/invoice_os?sslmode=disable
+      DATABASE_GATEWAY_URL: postgres://invoice_gateway:gateway@localhost:5432/invoice_os?sslmode=disable
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader
+      GATEWAY_PASSWORD: gateway
       AUTH_ADMIN_PASSWORD: auth_admin
       DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
@@ -715,6 +718,8 @@ jobs:
         run: scripts/ci/rls-test-gate.sh -count=1 ./cmd/notifications/...
       - name: Gateway hand-off boot test (main wires one notifications sink into verify and sign-in; it must not skip) + per-test visibility & skip gate
         run: scripts/ci/rls-test-gate.sh -count=1 ./cmd/gateway/...
+      - name: Gateway hand-off code store (shared by every instance, as invoice_gateway) + per-test visibility & skip gate
+        run: scripts/ci/rls-test-gate.sh -count=1 -run TestRLS_GatewayHandoff ./internal/gateway
       - name: Invoice /v1 suite (RLS-scoped store CRUD + genesis history + audit as invoice_app) + per-test visibility & skip gate
         # M4-02: proves the invoice store's Create/Get/List/Update resolve to exactly
         # the caller's tenant under RLS and write the genesis invoice_status_history +
@@ -826,6 +831,7 @@ jobs:
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader
+      GATEWAY_PASSWORD: gateway
       AUTH_ADMIN_PASSWORD: auth_admin
       DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
@@ -889,9 +895,11 @@ jobs:
       # M5-06: internal/reconciliation's suite also connects as invoice_tenant_reader
       # (tenant enumeration) — same DSN shape as the `rls` job above.
       DATABASE_READER_URL: postgres://invoice_tenant_reader:reader@localhost:5432/invoice_os?sslmode=disable
+      DATABASE_GATEWAY_URL: postgres://invoice_gateway:gateway@localhost:5432/invoice_os?sslmode=disable
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader
+      GATEWAY_PASSWORD: gateway
       AUTH_ADMIN_PASSWORD: auth_admin
       DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
@@ -980,6 +988,7 @@ jobs:
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader
+      GATEWAY_PASSWORD: gateway
       AUTH_ADMIN_PASSWORD: auth_admin
       DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:

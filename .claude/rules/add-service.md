@@ -27,7 +27,7 @@ paths:
 - Keep secrets in Railway service variables only. Never put one in the repo, in `railway.json` or in an example file.
 - Keep every service's Watch Paths empty. Set the service instance `watchPatterns` to `[]` after you create the service.
 - Add no `build.watchPatterns` to `railway.json`. Railway ignores it.
-- Delete any deployment trigger right after `serviceCreate`, before you do anything else. Any trigger in any environment fails `railway-invariants.yml` on every PR.
+- Delete any deployment trigger right after `serviceCreate`, before you do anything else.
 - Give a public domain only to the gateway and the SPAs. Context services, `docling`, `auth` and Postgres stay private.
 - Create a custom domain for a new public service on production. Railway-generated domains exist only on PR environments.
 - Call `app.RequireGateway(token)` before `app.Run` in each service the gateway routes to. Read the token with `mustEnv("GATEWAY_TOKEN")`.
@@ -42,7 +42,8 @@ paths:
 - Wrap a new outbound client to another first-party service in `platform.TraceTransport`. Never wrap a third-party client.
 - Build a new Go service on `platform.New`. It gets Sentry labels, 5xx and panic capture, tracing and the `SENTRY_TEST_EVENT` trigger.
 - Call `initMonitoring` from `src/instrument.ts` in a new SPA. Add its name to the `Service` union in `packages/monitoring/src/options.ts`.
-- Declare `ARG` and `ENV` for `VITE_SENTRY_DSN`, `VITE_SENTRY_TEST_DIGEST` and `RAILWAY_GIT_COMMIT_SHA` in a new SPA Dockerfile build stage.
+- Declare `ARG` and `ENV` for `VITE_SENTRY_DSN` and `VITE_SENTRY_TEST_DIGEST` in a new SPA Dockerfile build stage.
+- Declare `ARG BUILD_SHA` and `ARG RAILWAY_GIT_COMMIT_SHA`, then `ENV VITE_BUILD_SHA=${BUILD_SHA:-$RAILWAY_GIT_COMMIT_SHA}`, in the same stage.
 - Declare `ARG SENTRY_AUTH_TOKEN` in the SPA Dockerfile with no `ENV`. `packages/monitoring/src/dockerfiles.test.ts` pins both.
 - Add `sentryVitePlugin(sourcemapUploadOptions(appDir))` and `build.sourcemap: 'hidden'` to the SPA `vite.config.ts`.
 - Serve a `.map` file as 404 from the shared `Caddyfile`. A new SPA inherits it.

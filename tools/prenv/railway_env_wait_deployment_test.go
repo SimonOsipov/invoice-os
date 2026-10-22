@@ -15,7 +15,7 @@ const (
 	waitDepLabel = "auth"
 	waitDepToken = "tok-project-wait-not-real"
 	// dep.seq feeds one body per call; dep.json answers once the sequence is empty.
-	waitDepUsage = "usage: railway-env.sh <assert-project-settings"
+	waitDepUsage = "usage: railway-env.sh <ensure-environment"
 )
 
 // Status values: story INFRA-02 [wait-deployment] (terminal and passing), and the in-flight set in

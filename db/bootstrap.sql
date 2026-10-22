@@ -10,6 +10,8 @@
 --     — see every tenant row, while invoice_app still sees only its current tenant.
 --     Still NOBYPASSRLS: its reach is exactly what its policies+grants allow, no more.
 --   supabase_auth_admin    — GoTrue's login role; owns schema `auth`, nothing in `public`.
+--   invoice_gateway        — the gateway's runtime identity; reads and writes the sign-in
+--     hand-off codes only. Its password GUC is optional: unset leaves the password unchanged.
 -- And two NOLOGIN roles:
 --   auth_hook_reader       — invoice_migrator may SET ROLE to it but does not inherit it,
 --     so the migrator's own reads stay scoped.
@@ -55,6 +57,9 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_auth_admin') THEN
     CREATE ROLE supabase_auth_admin LOGIN;
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'invoice_gateway') THEN
+    CREATE ROLE invoice_gateway LOGIN;
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'auth_hook_reader') THEN
     CREATE ROLE auth_hook_reader NOLOGIN;
   END IF;
@@ -72,6 +77,7 @@ ALTER ROLE invoice_migrator      WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB N
 ALTER ROLE invoice_app           WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
 ALTER ROLE invoice_tenant_reader WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
 ALTER ROLE supabase_auth_admin   WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+ALTER ROLE invoice_gateway       WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
 ALTER ROLE auth_hook_reader      WITH NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
 ALTER ROLE staff_reader          WITH NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD NULL;
 
@@ -107,6 +113,10 @@ BEGIN
   EXECUTE format('ALTER ROLE invoice_app           PASSWORD %L', current_setting('ascomply.app_password'));
   EXECUTE format('ALTER ROLE invoice_tenant_reader PASSWORD %L', current_setting('ascomply.reader_password'));
   EXECUTE format('ALTER ROLE supabase_auth_admin   PASSWORD %L', current_setting('ascomply.auth_admin_password'));
+  -- Optional: unset leaves the password as it is (none for a new role, so no login).
+  IF coalesce(current_setting('ascomply.gateway_password', true), '') <> '' THEN
+    EXECUTE format('ALTER ROLE invoice_gateway       PASSWORD %L', current_setting('ascomply.gateway_password'));
+  END IF;
 END
 $$;
 
@@ -118,6 +128,7 @@ GRANT USAGE, CREATE ON SCHEMA public TO invoice_migrator;
 --    granted SELECT on (that per-table SELECT — e.g. on `tenants` — is granted in the
 --    migration, per the convention below). USAGE alone touches no data.
 GRANT USAGE ON SCHEMA public TO invoice_tenant_reader;
+GRANT USAGE ON SCHEMA public TO invoice_gateway;
 
 --    GoTrue migrates its own tables into `auth`; in `public` it only calls the hook.
 CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION supabase_auth_admin;

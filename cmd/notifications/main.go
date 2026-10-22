@@ -34,12 +34,12 @@ func main() {
 	}
 
 	ctx := context.Background()
-	mode, hubspot, resend, err := deliveryClients(os.Getenv, os.Getenv("RAILWAY_ENVIRONMENT_NAME"), realTransport())
+	mode, hubspot, resend, err := deliveryClients(os.Getenv, platform.DeployEnv(), realTransport())
 	if err != nil {
 		platform.Fatal(app.Logger, "notifications: %v", err)
 	}
 	platform.Contacts = string(mode)
-	nl, err := newsletterClients(os.Getenv, os.Getenv("RAILWAY_ENVIRONMENT_NAME"), mode, realTransport())
+	nl, err := newsletterClients(os.Getenv, platform.DeployEnv(), mode, realTransport())
 	if err != nil {
 		platform.Fatal(app.Logger, "notifications: %v", err)
 	}

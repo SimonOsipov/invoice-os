@@ -59,7 +59,7 @@ import (
 // Consequence of (2): resettableEnvironment must NEVER be fed
 // os.Getenv("ENVIRONMENT") the way BootstrapEnabled is — see
 // ResetEnabled's doc comment and cmd/gateway/main.go's call site for the
-// actually-varying signal (RAILWAY_ENVIRONMENT_NAME) this is fed instead.
+// actually-varying signal (platform.DeployEnv) this is fed instead.
 func resettableEnvironment(environment string) bool {
 	return prEnvironmentPattern.MatchString(environment)
 }
@@ -74,15 +74,12 @@ func resettableEnvironment(environment string) bool {
 // never the reverse ("development" satisfies BootstrapEnabled, never
 // ResetEnabled).
 //
-// callers MUST pass os.Getenv("RAILWAY_ENVIRONMENT_NAME") — the Railway-injected
-// system variable that reflects the CURRENT environment's real name
-// (.claude/rules/add-service.md) — NOT os.Getenv("ENVIRONMENT") / app.Config.Environment. ENVIRONMENT is an ordinary app variable that CI or a
-// human writes: CI's fork-vars-after-urls sets `development` in every fork, and
-// production's gateway reads `production`. RAILWAY_ENVIRONMENT_NAME is exactly
-// "pr-<N>" inside a fork and exactly whatever the persistent environment is
-// actually named ("production", post-rename) on that environment, and nobody
-// sets it, so no lost or wrong write can make the persistent environment look
-// like a fork. See
+// callers MUST pass platform.DeployEnv(), NOT os.Getenv("ENVIRONMENT"): CI writes
+// ENVIRONMENT=development in every fork. DeployEnv is "pr-<N>" in a fork and
+// "production" in production.
+// ceiling: DEPLOY_ENV is hand-set (Terraform on Cloud Run), unlike Railway's injected
+// name; a production DEPLOY_ENV=pr-<N> plus GATEWAY_DB_RESET=true would reset production.
+// See
 // resettableEnvironment's doc comment for the full reasoning and
 // cmd/gateway/main.go's ProvisionConfig construction for the call site this
 // pins.
@@ -339,7 +336,7 @@ RESTART IDENTITY`
 // transaction, then returns. It is the PR-environment-only counterpart to
 // Seed (bootstrap.go): Provision (provision.go) runs it AFTER MigrateUp and
 // BEFORE the demo-tenant purge and Seed, and ONLY when
-// ResetEnabled(cfg.RailwayEnvironmentName,
+// ResetEnabled(cfg.DeployEnv,
 // cfg.ResetFlag) is true — see that function's doc comment for the exact
 // (narrower-than-Seed, differently-sourced) gate.
 //

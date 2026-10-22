@@ -43,8 +43,6 @@ const (
 	authProdPassword  = "0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9"
 	authProdJWTSecret = "f9e8d7c6b5a4938271605f4e3d2c1b0af9e8d7c6b5a4938271605f4e3d2c1b0a"
 	authProdResendKey = "re_planted_production_resend_key"
-
-	forkAuthSelfTestRunCmd = "bash scripts/ci/railway-env.sh set-fork-auth --self-test"
 )
 
 var (
@@ -1465,30 +1463,4 @@ func TestSetForkAuthSelfTest(t *testing.T) {
 			t.Errorf("no ::error:: line names the issuer; error lines = %q", errorLines(out))
 		}
 	})
-}
-
-func TestRailwayInvariantsRunsForkAuthSelfTest(t *testing.T) {
-	t.Parallel()
-	inv := readWorkflow(t, "railway-invariants.yml")
-	var control, jobs []string
-	for _, job := range workflowJobsOf(inv) {
-		for _, s := range job.steps() {
-			if slices.Contains(invocations(s.keys["run"], "set-fork-environment"), forkSelfTestRunCmd) {
-				control = append(control, job.name)
-			}
-			for _, cmd := range invocations(s.keys["run"], "set-fork-auth") {
-				if cmd != forkAuthSelfTestRunCmd {
-					t.Errorf("job %s runs %q; the invariants workflow runs only the self-test", job.name, cmd)
-					continue
-				}
-				jobs = append(jobs, job.name)
-			}
-		}
-	}
-	if !slices.Equal(control, []string{"fork-environment-self-test"}) {
-		t.Fatalf("control: the parser finds the set-fork-environment self-test in jobs %v; the scan is broken", control)
-	}
-	if !slices.Equal(jobs, []string{"fork-auth-self-test"}) {
-		t.Errorf("%q runs in jobs %v, want exactly [fork-auth-self-test]", forkAuthSelfTestRunCmd, jobs)
-	}
 }

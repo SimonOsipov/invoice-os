@@ -21,6 +21,7 @@ APP_PASSWORD      ?= app
 # its first consumer). NOTE: an inline `# comment` here would land trailing spaces in
 # the value and produce an invalid connection URL — keep the comment on its own line.
 READER_PASSWORD   ?= reader
+GATEWAY_PASSWORD  ?= gateway
 AUTH_ADMIN_PASSWORD ?= auth_admin
 
 # Migrator URL for the local docker-compose Postgres (make dev-db). Kept separate
@@ -39,6 +40,7 @@ DEV_DB_MIGRATION_URL := postgres://invoice_migrator:$(MIGRATOR_PASSWORD)@localho
 # after `make dev-db` with no .env edits.
 DEV_DB_APP_URL       := postgres://invoice_app:$(APP_PASSWORD)@localhost:$(DEV_DB_PORT)/invoice_os?sslmode=disable
 DEV_DB_READER_URL    := postgres://invoice_tenant_reader:$(READER_PASSWORD)@localhost:$(DEV_DB_PORT)/invoice_os?sslmode=disable
+DEV_DB_GATEWAY_URL   := postgres://invoice_gateway:$(GATEWAY_PASSWORD)@localhost:$(DEV_DB_PORT)/invoice_os?sslmode=disable
 DEV_DB_SUPERUSER_URL := postgres://postgres:postgres@localhost:$(DEV_DB_PORT)/invoice_os?sslmode=disable
 DEV_DB_AUTH_ADMIN_URL := postgres://supabase_auth_admin:$(AUTH_ADMIN_PASSWORD)@localhost:$(DEV_DB_PORT)/invoice_os?sslmode=disable
 
@@ -65,6 +67,7 @@ db-bootstrap: ## Create/rotate the non-superuser roles (runs as SUPERUSER; needs
 		-c "SELECT set_config('ascomply.app_password', '$(APP_PASSWORD)', false)" \
 		-c "SELECT set_config('ascomply.reader_password', '$(READER_PASSWORD)', false)" \
 		-c "SELECT set_config('ascomply.auth_admin_password', '$(AUTH_ADMIN_PASSWORD)', false)" \
+		-c "SELECT set_config('ascomply.gateway_password', '$(GATEWAY_PASSWORD)', false)" \
 		-f db/bootstrap.sql
 
 migrate-up: guard-migration-url ## Apply all pending migrations (as migrator)
@@ -96,6 +99,7 @@ dev-db: ## One command: local Postgres up (compose) -> bootstrap roles -> migrat
 		-c "SELECT set_config('ascomply.app_password', '$(APP_PASSWORD)', false)" \
 		-c "SELECT set_config('ascomply.reader_password', '$(READER_PASSWORD)', false)" \
 		-c "SELECT set_config('ascomply.auth_admin_password', '$(AUTH_ADMIN_PASSWORD)', false)" \
+		-c "SELECT set_config('ascomply.gateway_password', '$(GATEWAY_PASSWORD)', false)" \
 		-f - \
 		< db/bootstrap.sql
 	$(MAKE) migrate-up DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)"
@@ -126,7 +130,8 @@ test-rls: ## Run the M2-07 adversarial RLS suite against the local dev DB (run `
 	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
 	DATABASE_READER_URL="$(DEV_DB_READER_URL)" \
 	DATABASE_AUTH_ADMIN_URL="$(DEV_DB_AUTH_ADMIN_URL)" \
-	go test -p 1 -count=1 -run TestRLS ./internal/platform/db/...
+	DATABASE_GATEWAY_URL="$(DEV_DB_GATEWAY_URL)" \
+	go test -p 1 -count=1 -run TestRLS ./internal/platform/db/... ./internal/gateway/
 
 test-queue: ## Run the M2-08 smoke + M2-09 exactly-once queue suites against the local dev DB (run `make dev-db` first)
 	DATABASE_URL="$(DEV_DB_APP_URL)" \

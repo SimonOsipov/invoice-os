@@ -100,7 +100,7 @@ def test_marker_in_json_body_never_leaves(sentry_capture, monkeypatch):
 
 def test_json_body_is_not_collected_without_the_scrub_hooks(monkeypatch):
     options = sentry_setup.sentry_options(
-        {"SENTRY_DSN": FAKE_DSN, "RAILWAY_ENVIRONMENT_NAME": "production"}
+        {"SENTRY_DSN": FAKE_DSN, "DEPLOY_ENV": "production"}
     )
     transport = CapturingTransport()
     if convert._warmup_thread is not None:

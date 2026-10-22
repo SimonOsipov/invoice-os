@@ -30,17 +30,17 @@ var fileVersionRE = regexp.MustCompile(`^(\d+)_.*\.sql$`)
 // recreateConfig is a pr-452 preview: every gate of the recreate on.
 func recreateConfig(superDSN, migDSN string, fsys fs.FS, logger *slog.Logger) db.ProvisionConfig {
 	return db.ProvisionConfig{
-		Environment:            "development",
-		BootstrapFlag:          "true",
-		RailwayEnvironmentName: "pr-452",
-		ResetFlag:              "true",
-		SuperuserDSN:           superDSN,
-		MigrationDSN:           migDSN,
-		Passwords:              devRolePasswords(),
-		BootstrapFS:            dbsql.FS,
-		MigrationsFS:           fsys,
-		SeedFS:                 dbsql.FS,
-		Logger:                 logger,
+		Environment:   "development",
+		BootstrapFlag: "true",
+		DeployEnv:     "pr-452",
+		ResetFlag:     "true",
+		SuperuserDSN:  superDSN,
+		MigrationDSN:  migDSN,
+		Passwords:     devRolePasswords(),
+		BootstrapFS:   dbsql.FS,
+		MigrationsFS:  fsys,
+		SeedFS:        dbsql.FS,
+		Logger:        logger,
 	}
 }
 
@@ -239,7 +239,7 @@ func TestProvisionRecreateNeverRunsOutsideAPreview(t *testing.T) {
 			relBefore, rtnBefore := publicObjectCounts(t, superDSN)
 
 			cfg := recreateConfig(superDSN, migDSN, migrations.FS, nil)
-			cfg.Environment, cfg.BootstrapFlag, cfg.RailwayEnvironmentName, cfg.ResetFlag = c.env, c.bootstrap, c.railway, c.rs
+			cfg.Environment, cfg.BootstrapFlag, cfg.DeployEnv, cfg.ResetFlag = c.env, c.bootstrap, c.railway, c.rs
 			err := provisionWithin(t, cfg)
 
 			if err == nil || !strings.Contains(err.Error(), "out-of-order") {
@@ -267,7 +267,7 @@ func TestProvisionRecreateNeverRunsOutsideAPreview(t *testing.T) {
 			superDSN, migDSN := migratedScratchDB(t, fsWithout(migrations.FS, outOfOrderFile))
 			addCanary(t, superDSN, "public")
 			cfg := recreateConfig(superDSN, migDSN, migrations.FS, nil)
-			cfg.Environment, cfg.RailwayEnvironmentName = c.env, c.railway
+			cfg.Environment, cfg.DeployEnv = c.env, c.railway
 
 			mustProvision(t, c.name, cfg)
 

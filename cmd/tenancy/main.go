@@ -98,7 +98,7 @@ func main() {
 
 // inviteSender picks the invite mail sender: capture in a preview, Resend with a key, else off.
 func inviteSender(getenv func(string) string, rt http.RoundTripper, logger *slog.Logger) accountmail.Sender {
-	mode, key := accountmail.ModeFromEnv(getenv, platform.Posture(getenv("RAILWAY_ENVIRONMENT_NAME")) == platform.PosturePreview)
+	mode, key := accountmail.ModeFromEnv(getenv, platform.Posture(platform.DeployEnvFrom(getenv)) == platform.PosturePreview)
 	logger.Info("tenancy: invite mail mode", slog.String("mode", string(mode)))
 	return accountmail.NewSender(mode, key, rt)
 }

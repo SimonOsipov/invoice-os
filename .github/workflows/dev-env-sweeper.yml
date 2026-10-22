@@ -12,7 +12,7 @@ name: Dev Env Sweeper (reap orphaned per-PR environments)
 # `schedule:` runs only from the DEFAULT BRANCH, so the cron cannot be proven before this
 # merges. `workflow_dispatch` is how M4-23-09 exercises it — measured 2026-07-19 that
 # dispatch DOES fire for a workflow absent from the default branch when given --ref
-# (railway-invariants.yml, run 29661851443, event=workflow_dispatch, success).
+# (run 29661851443, event=workflow_dispatch, success).
 on:
   schedule:
     # 04:17 not 04:00: GitHub warns on-the-hour crons are oversubscribed and get delayed

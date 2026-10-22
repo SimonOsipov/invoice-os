@@ -1242,7 +1242,7 @@ func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 			if unset == "AUTH_SITE_URL" {
 				answers["Verify"] = serveForm(handoffVerify(authURL, nil, nil), "/auth/verify", "token=T&type=signup")
 				log := slog.New(slog.DiscardHandler)
-				invitee := handoffHandlers(authURL, nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil).InvitationPassword
+				invitee := handoffHandlers(authURL, nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil).InvitationPassword
 				answers["InvitationPassword"] = serveForm(invitee, "/auth/invitation/password", "token=T&type=signup&password=n3w-Passw0rd")
 			}
 			for name, rec := range answers {
@@ -1388,7 +1388,7 @@ const resendToken = "Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T"
 
 // AUTH_URL, AUTH_SITE_URL or either resend throttle missing: the token resend route refuses and reaches neither tenancy nor GoTrue.
 func TestInvitationResendHandler_NotConfigured503(t *testing.T) {
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "")
+	t.Setenv("DEPLOY_ENV", "")
 	site, _ := url.Parse("https://site.example")
 	throttle := func(name string) *gateway.SignInThrottle {
 		return gateway.NewSignInThrottle(name, gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
@@ -1447,7 +1447,7 @@ func TestInvitationResendHandler_NotConfigured503(t *testing.T) {
 
 // The budgets the token resend route spends are the ones ResendVerification spends, and they exist only when GoTrue and the site URL are set.
 func TestRegistrationHandlers_ResendBudgetsAreSharedWithTheInviteResend(t *testing.T) {
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "")
+	t.Setenv("DEPLOY_ENV", "")
 	const remote = "203.0.113.7:4000"
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
@@ -1550,7 +1550,7 @@ func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
 		{"upper-case PR-7", "PR-7", gateway.RegisterPerIP, gateway.ResendPerAddress},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
+			t.Setenv("DEPLOY_ENV", c.env)
 			authURL, calls := fakeAuth(t)
 			site, _ := url.Parse("https://site.example")
 			log := slog.New(slog.DiscardHandler)
@@ -1734,7 +1734,7 @@ func TestRegistrationHandlers_ResetPreviewOnlyLogsPerAddress(t *testing.T) {
 		wantEnforced bool
 	}{{"pr-7", 4, false}, {"production", 3, true}} {
 		t.Run(c.env, func(t *testing.T) {
-			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
+			t.Setenv("DEPLOY_ENV", c.env)
 			authURL, calls := fakeAuth(t)
 			site, _ := url.Parse("https://site.example")
 			var logs bytes.Buffer
@@ -1858,7 +1858,7 @@ func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 	} {
 		for _, rt := range routes {
 			t.Run(c.name+"/"+rt.name, func(t *testing.T) {
-				t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
+				t.Setenv("DEPLOY_ENV", c.env)
 				authURL, calls := fakeAuth(t)
 				site, _ := url.Parse("https://site.example")
 				var logs bytes.Buffer
@@ -2084,8 +2084,8 @@ func TestGatewayMainStartsTheAccountStateGrantAfterProvision(t *testing.T) {
 	if len(start.Args) != 5 {
 		t.Fatalf("startAccountStateGrant has %d arguments, want 5", len(start.Args))
 	}
-	if c, is := isCallTo(start.Args[0], "os", "Getenv"); !is || len(c.Args) != 1 || !isStringLit(c.Args[0], "RAILWAY_ENVIRONMENT_NAME") {
-		t.Errorf("argument 1 is not os.Getenv(\"RAILWAY_ENVIRONMENT_NAME\")")
+	if c, is := isCallTo(start.Args[0], "platform", "DeployEnv"); !is || len(c.Args) != 0 {
+		t.Errorf("argument 1 is not platform.DeployEnv()")
 	}
 	if got := selector(start.Args[1]); got != "provisionCfg.MigrationDSN" {
 		t.Errorf("argument 2 = %q, want provisionCfg.MigrationDSN", got)

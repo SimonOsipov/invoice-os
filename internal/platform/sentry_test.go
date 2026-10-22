@@ -196,7 +196,7 @@ func TestNewServesSentryStateFromTheDSN(t *testing.T) {
 func TestInitSentry_LabelsEveryEvent(t *testing.T) {
 	setBuildSHA(t, "dev")
 	t.Setenv("SENTRY_DSN", "https://public@example.com/1")
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	t.Setenv("DEPLOY_ENV", "production")
 	t.Setenv("ENVIRONMENT", "development")
 	t.Setenv("RAILWAY_GIT_COMMIT_SHA", fakeRailwaySHA)
 	sentry.CurrentHub().BindClient(nil)
@@ -253,7 +253,7 @@ func TestInitSentry_LabelsEveryEvent(t *testing.T) {
 // queued. A timing test cannot fail on that race every run, so this pins the resolved transport.
 func TestInitSentry_EventsGoThroughTheSynchronousTransport(t *testing.T) {
 	t.Setenv("SENTRY_DSN", "https://public@example.com/1")
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	t.Setenv("DEPLOY_ENV", "production")
 	sentry.CurrentHub().BindClient(nil)
 	t.Cleanup(func() { sentry.CurrentHub().BindClient(nil) })
 

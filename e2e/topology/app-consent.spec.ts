@@ -5,6 +5,7 @@ import { freshTin } from '../api/fixtures'
 import { browserToken, collectErrors, signInAs } from '../personaSession'
 import { HUBSPOT_CHAT_DOMAINS } from '../smoke/landingConsent'
 import { resolveTarget } from '../targets'
+import { approvalRun404Dropper, collectSourcedErrors } from './consoleGate'
 import { rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { APP_URL, shardTenants } from './targets'
 
@@ -113,7 +114,8 @@ async function controlRects(page: Page): Promise<{ notice: Rect | null; controls
 
 test('AC-L the cookie notice overlaps no app control on every screen at 1280 and 390', async ({ page }, testInfo) => {
   test.setTimeout(600_000)
-  const errors = collectErrors(page)
+  // The detail page's approval-run GET 404s for an invoice with no run (consoleGate.ts).
+  const errors = collectSourcedErrors(page, approvalRun404Dropper(page))
   await signInAs(page, 'firm', { tenantId: SHARD.a.id, consent: 'none' })
   const token = await browserToken(page)
   const entity = await createEntity(token, { name: `APP-CONSENT ${Date.now()}`, tin: freshTin() })

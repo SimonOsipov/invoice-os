@@ -1,6 +1,9 @@
 package platform
 
-import "regexp"
+import (
+	"os"
+	"regexp"
+)
 
 // PostureKind is a deployment posture.
 type PostureKind string
@@ -15,15 +18,26 @@ const (
 // one is unexported and its package must not be touched here.
 var prNamePattern = regexp.MustCompile(`^(?:.+-)?pr-[0-9]+$`)
 
-// Posture derives deployment posture from RAILWAY_ENVIRONMENT_NAME. Railway injects it
-// per environment instead of forking it as a value, so unlike ENVIRONMENT it still tells
-// a PR fork from its source after an environment is renamed. Empty (local, CI, go test)
-// is the only input reaching the permissive value; any unrecognized name is Hosted.
-func Posture(railwayEnvironmentName string) PostureKind {
+// DeployEnv names the deployment: "production", "pr-<N>", or empty when local.
+// It reads DEPLOY_ENV, else Railway's injected name.
+// ceiling: Railway fallback, delete with Railway in GKE-12.
+func DeployEnv() string { return DeployEnvFrom(os.Getenv) }
+
+// DeployEnvFrom is DeployEnv over an injected environment.
+func DeployEnvFrom(getenv func(string) string) string {
+	if v := getenv("DEPLOY_ENV"); v != "" {
+		return v
+	}
+	return getenv("RAILWAY_ENVIRONMENT_NAME")
+}
+
+// Posture derives deployment posture from DeployEnv. Empty (local, CI, go test) is the
+// only input reaching the permissive value; any unrecognized name is Hosted.
+func Posture(deployEnv string) PostureKind {
 	switch {
-	case railwayEnvironmentName == "":
+	case deployEnv == "":
 		return PostureLocal
-	case prNamePattern.MatchString(railwayEnvironmentName):
+	case prNamePattern.MatchString(deployEnv):
 		return PosturePreview
 	default:
 		return PostureHosted

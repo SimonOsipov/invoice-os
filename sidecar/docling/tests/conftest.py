@@ -52,7 +52,7 @@ def sentry_capture():
     options = sentry_setup.sentry_options(
         {
             "SENTRY_DSN": "https://public@o0.ingest.sentry.io/1",
-            "RAILWAY_ENVIRONMENT_NAME": "production",
+            "DEPLOY_ENV": "production",
         }
     )
     transport = CapturingTransport()

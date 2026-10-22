@@ -44,8 +44,8 @@ paths:
 - Create a role that you add to `db/bootstrap.sql` by hand on production. Production runs no boot-time bootstrap.
 - Gate deploy-time provisioning with an allowlist of environment names, never a blocklist.
 - Pass the raw `ENVIRONMENT` value to `BootstrapEnabled`.
-- Gate `db.Reset` on `RAILWAY_ENVIRONMENT_NAME`, never on `ENVIRONMENT`.
-- Gate the gateway's account-state boot grant on `platform.Posture(RAILWAY_ENVIRONMENT_NAME)`. Start it only for the `local` and `preview` postures.
+- Gate `db.Reset` on `platform.DeployEnv()`, never on `ENVIRONMENT`.
+- Gate the gateway's account-state boot grant on `platform.Posture(platform.DeployEnv())`. Start it only for the `local` and `preview` postures.
 - Connect as `supabase_auth_admin` only from GoTrue and from `db.GrantAccountStateRead`.
 - Grant the account-state read on production by hand, as the superuser or `supabase_auth_admin`. The production gateway never runs it.
 

@@ -41,8 +41,10 @@ ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
 ARG VITE_SENTRY_TEST_DIGEST
 ENV VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST
 # The release fallback when no release is stamped.
+ARG BUILD_SHA
+# ceiling: Railway fallback, delete with Railway in GKE-12.
 ARG RAILWAY_GIT_COMMIT_SHA
-ENV VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA
+ENV VITE_BUILD_SHA=${BUILD_SHA:-$RAILWAY_GIT_COMMIT_SHA}
 # Build stage only, never ENV; empty skips the source-map upload.
 ARG SENTRY_AUTH_TOKEN
 RUN pnpm --filter @invoice-os/landing build

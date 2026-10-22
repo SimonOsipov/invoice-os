@@ -26,17 +26,13 @@ func newReset(authURL *url.URL, client *http.Client, floor time.Duration, log *s
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	perAddress, perIP := resendThrottles(time.Now)
-	return RequestPasswordResetHandler(authURL, client, floor, perAddress, perIP, true, log)
+	return RequestPasswordResetHandler(authURL, client, floor, resendThrottle(time.Now), true, log)
 }
 
-// serveReset posts body (with X-Real-IP when realIP is set) and times ServeHTTP.
-func serveReset(ctx context.Context, h http.Handler, body, realIP string) (*httptest.ResponseRecorder, time.Duration) {
+// serveReset posts body and times ServeHTTP.
+func serveReset(ctx context.Context, h http.Handler, body string) (*httptest.ResponseRecorder, time.Duration) {
 	req := httptest.NewRequest(http.MethodPost, "/auth/request-password-reset", strings.NewReader(body)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
-	if realIP != "" {
-		req.Header.Set("X-Real-IP", realIP)
-	}
 	rec := httptest.NewRecorder()
 	start := time.Now()
 	h.ServeHTTP(rec, req)
@@ -56,7 +52,7 @@ func callsTo(f *fakeGoTrue, path string) int {
 func TestRequestPasswordReset_PostsTheEmailToRecover(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
 
-	rec, _ := serveReset(t.Context(), newReset(fake.URL, testClient(), 0, nil), `{"email":"  Ada@Corp.example "}`, "")
+	rec, _ := serveReset(t.Context(), newReset(fake.URL, testClient(), 0, nil), `{"email":"  Ada@Corp.example "}`)
 
 	requireAccepted(t, rec, "reset")
 	calls := fake.Calls()
@@ -101,7 +97,7 @@ func TestRequestPasswordReset_EveryUpstreamAnswerIsTheSame202(t *testing.T) {
 			}
 			log, buf := captureLog()
 
-			rec, _ := serveReset(t.Context(), newReset(auth, testClient(), 0, log), resendBody("ada@corp.example"), "")
+			rec, _ := serveReset(t.Context(), newReset(auth, testClient(), 0, log), resendBody("ada@corp.example"))
 
 			requireAccepted(t, rec, c.name)
 			if first == nil {
@@ -153,7 +149,7 @@ func TestRequestPasswordReset_BadRequestsAre400AtOnce(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
 
-			rec, elapsed := serveReset(ctx, newReset(fake.URL, testClient(), time.Hour, nil), c.body, "")
+			rec, elapsed := serveReset(ctx, newReset(fake.URL, testClient(), time.Hour, nil), c.body)
 
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d after %v, want 400: %s", rec.Code, elapsed, rec.Body.String())
@@ -178,7 +174,7 @@ func TestRequestPasswordReset_EmailAtTheByteCapIsSent(t *testing.T) {
 	}
 	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
 
-	rec, _ := serveReset(t.Context(), newReset(fake.URL, testClient(), 0, nil), resendBody(email), "")
+	rec, _ := serveReset(t.Context(), newReset(fake.URL, testClient(), 0, nil), resendBody(email))
 
 	requireAccepted(t, rec, "254-byte email")
 	if n := len(fake.Calls()); n != 1 {
@@ -191,7 +187,7 @@ func TestRequestPasswordReset_GoTrueValidationFailedIs400AtOnce(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
-	rec, elapsed := serveReset(ctx, newReset(fake.URL, testClient(), time.Hour, nil), resendBody("not-an-address"), "")
+	rec, elapsed := serveReset(ctx, newReset(fake.URL, testClient(), time.Hour, nil), resendBody("not-an-address"))
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d after %v, want 400: %s", rec.Code, elapsed, rec.Body.String())
@@ -227,11 +223,11 @@ func TestRequestPasswordReset_EveryNon400AnswerWaitsTheFloor(t *testing.T) {
 		{"500", viaFake(http.StatusInternalServerError, gtInternal), 1},
 		{"over the address limit", func(t *testing.T, log *slog.Logger) (http.Handler, *fakeGoTrue) {
 			f := newFakeGoTrue(t, http.StatusOK, `{}`)
-			perAddress, perIP := resendThrottles(time.Now)
+			perAddress := resendThrottle(time.Now)
 			for range ResendPerAddress {
 				perAddress.Reserve(addr)
 			}
-			return RequestPasswordResetHandler(f.URL, testClient(), floor, perAddress, perIP, true, log), f
+			return RequestPasswordResetHandler(f.URL, testClient(), floor, perAddress, true, log), f
 		}, 0},
 		{"refused connection", func(t *testing.T, log *slog.Logger) (http.Handler, *fakeGoTrue) {
 			return newReset(closedURL(t), testClient(), floor, log), nil
@@ -242,7 +238,7 @@ func TestRequestPasswordReset_EveryNon400AnswerWaitsTheFloor(t *testing.T) {
 			log, buf := captureLog()
 			h, fake := c.build(t, log)
 
-			rec, elapsed := serveReset(t.Context(), h, resendBody(addr), "")
+			rec, elapsed := serveReset(t.Context(), h, resendBody(addr))
 
 			requireAccepted(t, rec, c.name)
 			if elapsed < floor {
@@ -289,14 +285,14 @@ func TestRequestPasswordReset_ClientGoneWritesNothing(t *testing.T) {
 }
 
 func TestRequestPasswordReset_SharesTheResendLimits(t *testing.T) {
-	// pair builds both handlers over one fake; shared passes one throttle pair to both.
+	// pair builds both handlers over one fake; shared passes one throttle to both.
 	pair := func(fake *fakeGoTrue, log *slog.Logger, shared bool) (resend, reset http.Handler) {
-		perAddress, perIP := resendThrottles(time.Now)
-		resend = ResendVerificationHandler(fake.URL, testClient(), 0, perAddress, perIP, true, log)
+		perAddress := resendThrottle(time.Now)
+		resend = ResendVerificationHandler(fake.URL, testClient(), 0, perAddress, true, log)
 		if !shared {
-			perAddress, perIP = resendThrottles(time.Now)
+			perAddress = resendThrottle(time.Now)
 		}
-		return resend, RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, perIP, true, log)
+		return resend, RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, true, log)
 	}
 	for _, shared := range []bool{true, false} {
 		name := "shared instances"
@@ -317,7 +313,7 @@ func TestRequestPasswordReset_SharesTheResendLimits(t *testing.T) {
 						if kind == 'T' {
 							h, serve = reset, serveReset
 						}
-						rec, _ := serve(t.Context(), h, resendBody(spellings[i]), "")
+						rec, _ := serve(t.Context(), h, resendBody(spellings[i]))
 						if first == nil {
 							first = rec
 							requireAccepted(t, first, "first request")
@@ -330,7 +326,7 @@ func TestRequestPasswordReset_SharesTheResendLimits(t *testing.T) {
 						t.Fatalf("%d calls to /recover after the mix %s, want %d", got, mix, want)
 					}
 
-					fourth, _ := serveReset(t.Context(), reset, resendBody(" ADA@corp.example"), "")
+					fourth, _ := serveReset(t.Context(), reset, resendBody(" ADA@corp.example"))
 
 					requireSameAnswer(t, "fourth mail-link request", fourth, first)
 					if !shared {
@@ -345,48 +341,9 @@ func TestRequestPasswordReset_SharesTheResendLimits(t *testing.T) {
 					if n := len(fake.Calls()); n != 3 {
 						t.Errorf("GoTrue saw %d calls, want 3 (the fourth refused)", n)
 					}
-					requireLimitLine(t, buf, resetLimitMsg, "address", "remote_addr", true)
+					requireLimitLine(t, buf, resetLimitMsg, "address", true)
 				})
 			}
-			t.Run("ip", func(t *testing.T) {
-				fake := newFakeGoTrue(t, http.StatusOK, `{}`)
-				log, buf := captureLog()
-				resend, reset := pair(fake, log, shared)
-				var first *httptest.ResponseRecorder
-				// The AC names the numbers: ten sent, the eleventh refused.
-				for i := range 10 {
-					serve := func() (*httptest.ResponseRecorder, time.Duration) {
-						if i%2 == 1 {
-							return serveReset(t.Context(), reset, resendBody(businessAddress(i)), "203.0.113.7")
-						}
-						return serveResend(t.Context(), resend, resendBody(businessAddress(i)), "203.0.113.7")
-					}
-					rec, _ := serve()
-					if first == nil {
-						first = rec
-					}
-				}
-				if n := len(fake.Calls()); n != 10 {
-					t.Fatalf("GoTrue saw %d calls after 10 requests, want 10", n)
-				}
-
-				eleventh, _ := serveReset(t.Context(), reset, resendBody(businessAddress(10)), "203.0.113.7")
-
-				requireSameAnswer(t, "eleventh mail-link request", eleventh, first)
-				if !shared {
-					if n := len(fake.Calls()); n != 11 {
-						t.Errorf("GoTrue saw %d calls, want 11: separate counts must not refuse", n)
-					}
-					if n := len(recordsNamed(t, buf, resetLimitMsg)); n != 0 {
-						t.Errorf("%d limit lines, want 0: %s", n, buf.String())
-					}
-					return
-				}
-				if n := len(fake.Calls()); n != 10 {
-					t.Errorf("GoTrue saw %d calls, want 10 (the eleventh refused)", n)
-				}
-				requireLimitLine(t, buf, resetLimitMsg, "ip", "header", true)
-			})
 		})
 	}
 }
@@ -395,74 +352,63 @@ func TestRequestPasswordReset_CooldownRefusalsAreRefunded(t *testing.T) {
 	ok, cooldown := gtAnswer{http.StatusOK, `{}`}, gtAnswer{http.StatusTooManyRequests, gtOverEmailSendRateLimit}
 	fake := sequenceGoTrue(t, ok, cooldown, cooldown, ok, ok, ok)
 	log, buf := captureLog()
-	perAddress, perIP := resendThrottles(time.Now)
-	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, perIP, true, log)
+	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), true, log)
 
 	for range 6 {
-		rec, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"), "")
+		rec, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"))
 		requireAccepted(t, rec, "reset")
 	}
 
 	if n := len(fake.Calls()); n != 5 {
 		t.Errorf("GoTrue saw %d calls, want 5 (the two cooldown answers refunded)", n)
 	}
-	requireLimitLine(t, buf, resetLimitMsg, "address", "remote_addr", true)
+	requireLimitLine(t, buf, resetLimitMsg, "address", true)
 }
 
 func TestRequestPasswordReset_UnenforcedLimitOnlyLogs(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
 	log, buf := captureLog()
-	perAddress, perIP := resendThrottles(time.Now)
-	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, perIP, false, log)
+	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), false, log)
 
 	for range ResendPerAddress + 1 {
-		rec, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"), "")
+		rec, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"))
 		requireAccepted(t, rec, "reset")
 	}
 
 	if n := len(fake.Calls()); n != ResendPerAddress+1 {
 		t.Errorf("GoTrue saw %d calls, want %d", n, ResendPerAddress+1)
 	}
-	requireLimitLine(t, buf, resetLimitMsg, "address", "remote_addr", false)
+	requireLimitLine(t, buf, resetLimitMsg, "address", false)
 }
 
-func TestRequestPasswordReset_LogsCarryNoAddressOrIP(t *testing.T) {
-	const email, ip = "leak-probe@corp.example", "203.0.113.77"
+func TestRequestPasswordReset_LogsCarryNoAddress(t *testing.T) {
+	const email = "leak-probe@corp.example"
 	const floor = 50 * time.Millisecond
 	echo := func(code string) string {
 		return `{"code":0,"error_code":"` + code + `","msg":"for ` + email + `","email":"` + email + `"}`
 	}
 	log, buf := captureLog()
-	run := func(auth *url.URL, perAddress, perIP *SignInThrottle) {
+	run := func(auth *url.URL, perAddress *SignInThrottle) {
 		t.Helper()
-		serveReset(t.Context(), RequestPasswordResetHandler(auth, testClient(), floor, perAddress, perIP, true, log), resendBody(email), ip)
+		serveReset(t.Context(), RequestPasswordResetHandler(auth, testClient(), floor, perAddress, true, log), resendBody(email))
 	}
 
-	a, i := resendThrottles(time.Now)
-	run(newFakeGoTrue(t, http.StatusOK, echo("ok")).URL, a, i)
-	a, i = resendThrottles(time.Now)
-	run(newFakeGoTrue(t, http.StatusTooManyRequests, echo("over_email_send_rate_limit")).URL, a, i)
-	a, i = resendThrottles(time.Now)
-	run(newFakeGoTrue(t, http.StatusInternalServerError, echo("unexpected_failure")).URL, a, i)
-	a, i = resendThrottles(time.Now)
-	run(closedURL(t), a, i)
-	a, i = resendThrottles(time.Now)
+	run(newFakeGoTrue(t, http.StatusOK, echo("ok")).URL, resendThrottle(time.Now))
+	run(newFakeGoTrue(t, http.StatusTooManyRequests, echo("over_email_send_rate_limit")).URL, resendThrottle(time.Now))
+	run(newFakeGoTrue(t, http.StatusInternalServerError, echo("unexpected_failure")).URL, resendThrottle(time.Now))
+	run(closedURL(t), resendThrottle(time.Now))
+	a := resendThrottle(time.Now)
 	for range ResendPerAddress {
 		a.Reserve(email)
 	}
-	run(newFakeGoTrue(t, http.StatusOK, `{}`).URL, a, i)
-	a, i = resendThrottles(time.Now)
-	for range ResendPerIP {
-		i.Reserve(ip)
-	}
-	run(newFakeGoTrue(t, http.StatusOK, `{}`).URL, a, i)
+	run(newFakeGoTrue(t, http.StatusOK, `{}`).URL, a)
 
 	for _, msg := range []string{resetRateLimitMsg, resetFailedMsg, resetUnreachableMsg, resetLimitMsg, resetTimingMsg} {
 		if len(recordsNamed(t, buf, msg)) == 0 {
 			t.Errorf("no %q line: the outcome did not log, so the leak scan below proves nothing: %s", msg, buf.String())
 		}
 	}
-	for _, secret := range []string{"leak-probe", ip} {
+	for _, secret := range []string{"leak-probe"} {
 		if strings.Contains(buf.String(), secret) {
 			t.Errorf("log carries %q: %s", secret, buf.String())
 		}
@@ -500,59 +446,48 @@ func TestRequestPasswordReset_NonPostIs405AtOnce(t *testing.T) {
 	}
 
 	// Control: the same fake is reached by a POST, so the zero above is not a dead fake.
-	if rec, _ := serveReset(t.Context(), newReset(fake.URL, testClient(), 0, nil), resendBody("ada@corp.example"), ""); rec.Code != http.StatusAccepted || len(fake.Calls()) != 1 {
+	if rec, _ := serveReset(t.Context(), newReset(fake.URL, testClient(), 0, nil), resendBody("ada@corp.example")); rec.Code != http.StatusAccepted || len(fake.Calls()) != 1 {
 		t.Errorf("control POST: status %d, %d GoTrue calls; want 202 and 1", rec.Code, len(fake.Calls()))
 	}
 }
 
-func TestRequestPasswordReset_ValidationFailedRefundsBothCounts(t *testing.T) {
-	for _, limit := range []string{"address", "ip"} {
-		t.Run(limit, func(t *testing.T) {
-			fake := newFakeGoTrue(t, http.StatusBadRequest, gtValidationFailed)
-			log, buf := captureLog()
-			perAddress := NewSignInThrottle("resend-address", 2, ResendMaxKeys, ResendWindow, time.Now)
-			perIP := NewSignInThrottle("resend-ip", 100, ResendMaxKeys, ResendWindow, time.Now)
-			if limit == "ip" {
-				perAddress, perIP = perIP, perAddress
-			}
-			h := RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, perIP, true, log)
+func TestRequestPasswordReset_ValidationFailedRefundsTheAddressCount(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusBadRequest, gtValidationFailed)
+	log, buf := captureLog()
+	perAddress := NewSignInThrottle("resend-address", 2, ResendMaxKeys, ResendWindow, time.Now)
+	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, true, log)
 
-			for range 3 {
-				rec, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"), "")
-				if rec.Code != http.StatusBadRequest {
-					t.Fatalf("status = %d, want 400", rec.Code)
-				}
-			}
+	for range 3 {
+		rec, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", rec.Code)
+		}
+	}
 
-			if n := len(fake.Calls()); n != 3 {
-				t.Errorf("GoTrue saw %d calls against a cap of 2, want 3: a validation_failed answer must refund", n)
-			}
-			if n := len(recordsNamed(t, buf, resetLimitMsg)); n != 0 {
-				t.Errorf("%d limit lines, want 0: %s", n, buf.String())
-			}
-		})
+	if n := len(fake.Calls()); n != 3 {
+		t.Errorf("GoTrue saw %d calls against a cap of 2, want 3: a validation_failed answer must refund", n)
+	}
+	if n := len(recordsNamed(t, buf, resetLimitMsg)); n != 0 {
+		t.Errorf("%d limit lines, want 0: %s", n, buf.String())
 	}
 }
 
-func TestRequestPasswordReset_FullMapsFailClosed(t *testing.T) {
+func TestRequestPasswordReset_FullMapFailsClosed(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
 	log, buf := captureLog()
 	perAddress := NewSignInThrottle("resend-address", ResendPerAddress, 1, ResendWindow, time.Now)
-	perIP := NewSignInThrottle("resend-ip", ResendPerIP, 1, ResendWindow, time.Now)
-	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, perIP, true, log)
+	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, true, log)
 
-	first, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"), "203.0.113.7")
-	newAddress, _ := serveReset(t.Context(), h, resendBody("bob@corp.example"), "203.0.113.7")
-	newKey, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"), "203.0.113.8")
+	first, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"))
+	newAddress, _ := serveReset(t.Context(), h, resendBody("bob@corp.example"))
 
 	requireAccepted(t, first, "first request")
 	requireSameAnswer(t, "new address on a full map", newAddress, first)
-	requireSameAnswer(t, "new key on a full map", newKey, first)
 	if n := len(fake.Calls()); n != 1 {
 		t.Errorf("GoTrue saw %d calls, want 1: a full map must refuse new keys", n)
 	}
 	lines := recordsNamed(t, buf, resetLimitMsg)
-	if len(lines) != 2 || lines[0]["limit"] != "address" || lines[1]["limit"] != "ip" {
-		t.Errorf("limit lines = %v, want one limit=address then one limit=ip", lines)
+	if len(lines) != 1 || lines[0]["limit"] != "address" {
+		t.Errorf("limit lines = %v, want one limit=address", lines)
 	}
 }

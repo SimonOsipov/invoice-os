@@ -40,7 +40,6 @@ func startInviteGateway(t *testing.T, authBase string, store *tenancy.Store) str
 	}
 	mux, _ := gatewayMux(t, authBase, 0, nil)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	limit := gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
 	notValid := func(err error) error {
 		if errors.Is(err, tenancy.ErrInvitationNotValid) {
 			return gateway.ErrInvitationNotValid
@@ -59,10 +58,9 @@ func startInviteGateway(t *testing.T, authBase string, store *tenancy.Store) str
 		Release: store.ReleaseInvitationRegistration,
 	}
 	mux.Handle("POST /auth/invitation", gateway.InvitationHandler(preview, log))
-	mux.Handle("POST /auth/invitation/register", gateway.InvitationRegisterHandler(authURL, noRedirect, 0, limit, true, log, preview, registrations))
+	mux.Handle("POST /auth/invitation/register", gateway.InvitationRegisterHandler(authURL, noRedirect, 0, log, preview, registrations))
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
-	perIP := gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
-	mux.Handle("POST /auth/invitation/resend", gateway.InvitationResendHandler(authURL, noRedirect, perAddress, perIP, true, log, preview))
+	mux.Handle("POST /auth/invitation/resend", gateway.InvitationResendHandler(authURL, noRedirect, perAddress, true, log, preview))
 	return serveGateway(t, mux)
 }
 

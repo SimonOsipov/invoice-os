@@ -98,29 +98,19 @@ func blogAnswers(status int, contentType, body string) http.HandlerFunc {
 }
 
 type blogCfg struct {
-	unenforced   bool
-	max, maxKeys int // 0: BlogReadPerIP, BlogReadMaxKeys
-	client       *http.Client
+	client *http.Client
 }
 
 type blogRig struct {
-	up       *blogUpstream
-	routes   BlogRoutes
-	clk      *testClock
-	throttle *SignInThrottle
-	logs     *logStore
-	mux      *http.ServeMux
+	up     *blogUpstream
+	routes BlogRoutes
+	logs   *logStore
+	mux    *http.ServeMux
 }
 
 func newBlogRig(t *testing.T, cfg blogCfg) *blogRig {
 	t.Helper()
 	up := newBlogUpstream(t)
-	if cfg.max == 0 {
-		cfg.max = BlogReadPerIP
-	}
-	if cfg.maxKeys == 0 {
-		cfg.maxKeys = BlogReadMaxKeys
-	}
 	if cfg.client == nil {
 		cfg.client = up.srv.Client()
 	}
@@ -128,10 +118,8 @@ func newBlogRig(t *testing.T, cfg blogCfg) *blogRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clk := newTestClock()
-	th := NewSignInThrottle("blog-read", cfg.max, cfg.maxKeys, BlogReadWindow, clk.Now)
 	log, logs := newCaptureLog()
-	routes := BlogHandlers(base, cfg.client, blogTestToken, th, !cfg.unenforced, log)
+	routes := BlogHandlers(base, cfg.client, blogTestToken, log)
 	// No method in the patterns: the handler itself must refuse a method that is not a read.
 	mux := http.NewServeMux()
 	mux.Handle("/blog/categories", routes.Categories)
@@ -140,7 +128,7 @@ func newBlogRig(t *testing.T, cfg blogCfg) *blogRig {
 	mux.Handle("/blog/covers/{id}/{version}", routes.Cover)
 	mux.Handle("/blog/posts/", routes.NotFound)
 	mux.Handle("/blog/covers/", routes.NotFound)
-	return &blogRig{up: up, routes: routes, clk: clk, throttle: th, logs: logs, mux: mux}
+	return &blogRig{up: up, routes: routes, logs: logs, mux: mux}
 }
 
 const blogIP = "203.0.113.7:4000"
@@ -600,156 +588,6 @@ func TestBlogRead_VaryOriginWithoutAnOrigin(t *testing.T) {
 	}
 }
 
-func TestBlogRead_PerIPLimitSpansTheFourRoutes(t *testing.T) {
-	rig := newBlogRig(t, blogCfg{})
-	rig.spend(t, blogIP, BlogReadPerIP)
-	if n := rig.up.count(); n != BlogReadPerIP {
-		t.Fatalf("upstream calls = %d, want %d", n, BlogReadPerIP)
-	}
-	for _, path := range blogPaths {
-		rec := rig.get(path, blogIP)
-		requireJSONError(t, rec, http.StatusTooManyRequests, "too many requests")
-		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
-			t.Errorf("GET %s: Cache-Control = %q, want no-store", path, got)
-		}
-	}
-	if n := rig.up.count(); n != BlogReadPerIP {
-		t.Errorf("upstream calls = %d after the refusals, want %d", n, BlogReadPerIP)
-	}
-}
-
-func TestBlogRead_OtherIPAndNextWindowPass(t *testing.T) {
-	rig := newBlogRig(t, blogCfg{})
-	rig.spend(t, blogIP, BlogReadPerIP)
-	if rec := rig.get("/blog/posts", blogIP); rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("over the budget = %d, want 429", rec.Code)
-	}
-	if rec := rig.get("/blog/posts", "198.51.100.9:4000"); rec.Code != http.StatusOK {
-		t.Errorf("another IP = %d, want 200", rec.Code)
-	}
-	rig.clk.Advance(BlogReadWindow - time.Nanosecond)
-	if rec := rig.get("/blog/posts", blogIP); rec.Code != http.StatusTooManyRequests {
-		t.Errorf("1ns before the window ends = %d, want 429", rec.Code)
-	}
-	rig.clk.Advance(time.Nanosecond)
-	if rec := rig.get("/blog/posts", blogIP); rec.Code != http.StatusOK {
-		t.Errorf("at the window end = %d, want 200", rec.Code)
-	}
-}
-
-func TestBlogRead_IPv6SubnetSharesOneBudget(t *testing.T) {
-	rig := newBlogRig(t, blogCfg{})
-	rig.spend(t, "[2001:db8::1]:4000", BlogReadPerIP)
-	if rec := rig.get("/blog/posts", "[2001:db8::2]:4000"); rec.Code != http.StatusTooManyRequests {
-		t.Errorf("same /64 = %d, want 429", rec.Code)
-	}
-	if rec := rig.get("/blog/posts", "[2001:db8:0:1::1]:4000"); rec.Code != http.StatusOK {
-		t.Errorf("another /64 = %d, want 200", rec.Code)
-	}
-}
-
-func TestBlogRead_LimitIsSpentBeforeThePathCheck(t *testing.T) {
-	rig := newBlogRig(t, blogCfg{})
-	rig.spend(t, blogIP, BlogReadPerIP)
-	for _, p := range []string{"/blog/posts/Bad_Slug", "/blog/covers/abc/0", "/blog/covers/abc/%2B5", "/blog/posts/%00", "/blog/posts/", "/blog/covers/x"} {
-		if rec := rig.get(p, blogIP); rec.Code != http.StatusTooManyRequests {
-			t.Errorf("GET %s over the budget = %d, want 429, not 404", p, rec.Code)
-		}
-	}
-
-	// A malformed request spends budget: a scanner cannot probe for free.
-	const other = "198.51.100.9:4000"
-	for range BlogReadPerIP {
-		if rec := rig.get("/blog/posts/Bad_Slug", other); rec.Code != http.StatusNotFound {
-			t.Fatalf("malformed within the budget = %d, want 404", rec.Code)
-		}
-	}
-	if rec := rig.get("/blog/posts", other); rec.Code != http.StatusTooManyRequests {
-		t.Errorf("valid request after %d malformed ones = %d, want 429", BlogReadPerIP, rec.Code)
-	}
-}
-
-func TestBlogRead_UnenforcedLimitLogsAndForwards(t *testing.T) {
-	rig := newBlogRig(t, blogCfg{unenforced: true})
-	rig.spend(t, blogIP, BlogReadPerIP)
-	for range 3 {
-		if rec := rig.get("/blog/posts", blogIP); rec.Code != http.StatusOK {
-			t.Fatalf("over the budget, unenforced = %d, want 200", rec.Code)
-		}
-	}
-	if n := rig.up.count(); n != BlogReadPerIP+3 {
-		t.Errorf("upstream calls = %d, want %d", n, BlogReadPerIP+3)
-	}
-	ws := rig.warns("blog-read: limit reached")
-	if len(ws) != 1 {
-		t.Fatalf("limit WARNs = %d, want 1 (once a minute)", len(ws))
-	}
-	for k, want := range map[string]string{"enforced": "false", "limit": "ip", "key_source": "remote_addr"} {
-		if got := ws[0].attrs[k]; got != want {
-			t.Errorf("WARN %s = %q, want %q", k, got, want)
-		}
-	}
-	for _, rec := range rig.logs.all() {
-		if strings.Contains(rec.text, "203.0.113.7") {
-			t.Errorf("a log line holds the client IP: %s", rec.text)
-		}
-	}
-}
-
-func TestBlogRead_FullMapAdmitsNewVisitors(t *testing.T) {
-	rig := newBlogRig(t, blogCfg{max: 3, maxKeys: 2})
-	const a, b, c = "203.0.113.7:4000", "198.51.100.9:4000", "192.0.2.33:4000"
-	rig.spend(t, a, 3)
-	rig.spend(t, b, 1)
-	for i := range 5 {
-		if rec := rig.get("/blog/posts", c); rec.Code != http.StatusOK {
-			t.Fatalf("new visitor %d on a full map = %d, want 200", i+1, rec.Code)
-		}
-	}
-	if rec := rig.get("/blog/posts", a); rec.Code != http.StatusTooManyRequests {
-		t.Errorf("held visitor over its budget on a full map = %d, want 429", rec.Code)
-	}
-	if rec := rig.get("/blog/posts", b); rec.Code != http.StatusOK {
-		t.Errorf("held visitor within its budget on a full map = %d, want 200", rec.Code)
-	}
-}
-
-func TestBlogRead_LimitWarnIsAtMostOncePerMinute(t *testing.T) {
-	const msg = "blog-read: limit reached"
-	rig := newBlogRig(t, blogCfg{max: 3})
-	rig.spend(t, blogIP, 3)
-	if rec := rig.get("/blog/posts", blogIP); rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("first refusal = %d, want 429", rec.Code)
-	}
-	if n := len(rig.warns(msg)); n != 1 {
-		t.Fatalf("WARNs after the first refusal = %d, want 1", n)
-	}
-	// The capture log blocks after 32 WARNs, so assert before the burst can reach that.
-	for i := range 50 {
-		if rec := rig.get(blogPaths[i%len(blogPaths)], blogIP); rec.Code != http.StatusTooManyRequests {
-			t.Fatalf("refusal %d = %d, want 429", i+2, rec.Code)
-		}
-		if i == 19 {
-			if n := len(rig.warns(msg)); n != 1 {
-				t.Fatalf("WARNs after 21 refusals in one minute = %d, want 1", n)
-			}
-		}
-	}
-	if n := len(rig.warns(msg)); n != 1 {
-		t.Errorf("WARNs after 51 refusals in one minute = %d, want 1", n)
-	}
-	rig.clk.Advance(59 * time.Second)
-	rig.get("/blog/posts", blogIP)
-	if n := len(rig.warns(msg)); n != 1 {
-		t.Errorf("WARNs 59s after the first = %d, want 1", n)
-	}
-	rig.clk.Advance(time.Second)
-	rig.get("/blog/posts", blogIP)
-	if n := len(rig.warns(msg)); n != 2 {
-		t.Errorf("WARNs 60s after the first = %d, want 2", n)
-	}
-}
-
 func TestBlogRead_OnlyGetAndHeadAreReads(t *testing.T) {
 	rig := newBlogRig(t, blogCfg{})
 	for _, path := range blogPaths {
@@ -766,12 +604,6 @@ func TestBlogRead_OnlyGetAndHeadAreReads(t *testing.T) {
 	}
 	if n := rig.up.count(); n != 0 {
 		t.Fatalf("upstream calls = %d after non-reads, want 0", n)
-	}
-
-	// The 20 refusals spent nothing: the full budget is still there.
-	rig.spend(t, blogIP, BlogReadPerIP)
-	if rec := rig.get("/blog/posts", blogIP); rec.Code != http.StatusTooManyRequests {
-		t.Errorf("request %d = %d, want 429", BlogReadPerIP+1, rec.Code)
 	}
 }
 
@@ -907,13 +739,6 @@ func TestBlogRead_VaryOriginIsOnEveryJSONAnswer(t *testing.T) {
 			}
 			vary(t, "upstream "+name+" "+path, rig.get(path, blogIP))
 		}
-		rig := newBlogRig(t, blogCfg{max: 1})
-		rig.get(path, blogIP)
-		rec := rig.get(path, blogIP)
-		if rec.Code != http.StatusTooManyRequests {
-			t.Fatalf("second request on %s = %d, want 429", path, rec.Code)
-		}
-		vary(t, "429 "+path, rec)
 	}
 	rig := newBlogRig(t, blogCfg{})
 	rec := rig.get("/blog/posts/Bad_Slug", blogIP)
@@ -921,86 +746,6 @@ func TestBlogRead_VaryOriginIsOnEveryJSONAnswer(t *testing.T) {
 		t.Fatalf("malformed slug = %d, want 404", rec.Code)
 	}
 	vary(t, "malformed slug", rec)
-}
-
-func TestBlogRead_ClientKeyFollowsClientKeyRules(t *testing.T) {
-	type hit struct{ remote, realIP, xff string }
-	// each case: requests that must share one budget of 3, then a request that must not share it.
-	cases := []struct {
-		name   string
-		shared []hit
-		other  hit
-	}{
-		{"X-Real-IP keys, the peer does not", []hit{{"10.0.0.1:1", "203.0.113.7", ""}, {"10.0.0.2:1", "203.0.113.7", ""}, {"10.0.0.3:1", "203.0.113.7", ""}}, hit{"10.0.0.1:1", "198.51.100.9", ""}},
-		{"a rotating X-Forwarded-For does not evade", []hit{{"203.0.113.7:1", "", "1.1.1.1"}, {"203.0.113.7:2", "", "2.2.2.2"}, {"203.0.113.7:3", "", "3.3.3.3"}}, hit{"198.51.100.9:1", "", "1.1.1.1"}},
-		{"X-Forwarded-For does not override X-Real-IP", []hit{{"10.0.0.1:1", "203.0.113.7", "9.9.9.1"}, {"10.0.0.1:1", "203.0.113.7", "9.9.9.2"}, {"10.0.0.1:1", "203.0.113.7", "9.9.9.3"}}, hit{"10.0.0.1:1", "198.51.100.9", "9.9.9.1"}},
-		{"no X-Real-IP: the peer address, port ignored", []hit{{"203.0.113.7:1", "", ""}, {"203.0.113.7:2", "", ""}, {"203.0.113.7:3", "", ""}}, hit{"203.0.113.8:1", "", ""}},
-		{"an unparsable X-Real-IP falls back to the peer", []hit{{"203.0.113.7:1", "not-an-ip", ""}, {"203.0.113.7:2", "garbage", ""}, {"203.0.113.7:3", "", ""}}, hit{"203.0.113.8:1", "not-an-ip", ""}},
-		{"an IPv4-mapped IPv6 address is the IPv4 address", []hit{{"10.0.0.1:1", "203.0.113.7", ""}, {"10.0.0.1:1", "::ffff:203.0.113.7", ""}, {"[::ffff:203.0.113.7]:1", "", ""}}, hit{"10.0.0.1:1", "203.0.113.8", ""}},
-		{"X-Real-IP IPv6 is keyed by its /64", []hit{{"10.0.0.1:1", "2001:db8:0:1::1", ""}, {"10.0.0.1:1", "2001:db8:0:1:ffff::2", ""}, {"10.0.0.1:1", "2001:db8:0:1::3", ""}}, hit{"10.0.0.1:1", "2001:db8:0:2::1", ""}},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			rig := newBlogRig(t, blogCfg{max: 3})
-			do := func(h hit) int {
-				req := httptest.NewRequest(http.MethodGet, "/blog/posts", nil)
-				req.RemoteAddr = h.remote
-				if h.realIP != "" {
-					req.Header.Set("X-Real-IP", h.realIP)
-				}
-				if h.xff != "" {
-					req.Header.Set("X-Forwarded-For", h.xff)
-				}
-				rec := httptest.NewRecorder()
-				rig.mux.ServeHTTP(rec, req)
-				return rec.Code
-			}
-			for i, h := range c.shared {
-				if got := do(h); got != http.StatusOK {
-					t.Fatalf("shared request %d = %d, want 200", i+1, got)
-				}
-			}
-			if got := do(c.shared[0]); got != http.StatusTooManyRequests {
-				t.Errorf("4th request of the shared budget = %d, want 429", got)
-			}
-			if got := do(c.other); got != http.StatusOK {
-				t.Errorf("a different client = %d, want 200", got)
-			}
-		})
-	}
-}
-
-func TestBlogRead_LimitRefusalLogsNoIP(t *testing.T) {
-	for _, ip := range []string{"203.0.113.7", "2001:db8:abcd:1::77"} {
-		rig := newBlogRig(t, blogCfg{max: 1})
-		do := func() *httptest.ResponseRecorder {
-			req := httptest.NewRequest(http.MethodGet, "/blog/posts", nil)
-			req.RemoteAddr = "[2001:db8:ffff::9]:5000"
-			req.Header.Set("X-Real-IP", ip)
-			rec := httptest.NewRecorder()
-			rig.mux.ServeHTTP(rec, req)
-			return rec
-		}
-		do()
-		rec := do()
-		if rec.Code != http.StatusTooManyRequests {
-			t.Fatalf("%s: second request = %d, want 429", ip, rec.Code)
-		}
-		ws := rig.warns("blog-read: limit reached")
-		if len(ws) != 1 || ws[0].attrs["key_source"] != "header" || ws[0].attrs["enforced"] != "true" {
-			t.Fatalf("%s: limit WARNs = %v, want one with key_source=header enforced=true", ip, ws)
-		}
-		for _, needle := range []string{ip, "203.0.113", "2001:db8"} {
-			for _, l := range rig.logs.all() {
-				if strings.Contains(l.text, needle) {
-					t.Errorf("%s: a log line holds %q: %s", ip, needle, l.text)
-				}
-			}
-			if strings.Contains(rec.Body.String(), needle) {
-				t.Errorf("%s: the 429 body holds %q", ip, needle)
-			}
-		}
-	}
 }
 
 func TestBlogRead_PathTraversalNeverReachesUpstream(t *testing.T) {

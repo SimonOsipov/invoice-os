@@ -86,17 +86,15 @@ func gatewayMux(t *testing.T, authBase string, minResponse time.Duration, sink g
 	logs := &bytes.Buffer{}
 	log := slog.New(slog.NewJSONHandler(&syncWriter{w: logs}, nil))
 	mux := http.NewServeMux()
-	registerLimit := gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
 	pool, err := db.NewPool(context.Background(), mailEnv(t, "DATABASE_URL"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, registerLimit, true, log, tenancy.NewStore(pool).InvitationPendingForEmail))
+	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, log, tenancy.NewStore(pool).InvitationPendingForEmail))
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
-	perIP := gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
-	mux.Handle("POST /auth/resend-verification", gateway.ResendVerificationHandler(authURL, noRedirect, minResponse, perAddress, perIP, true, log))
-	mux.Handle("POST /auth/request-password-reset", gateway.RequestPasswordResetHandler(authURL, noRedirect, minResponse, perAddress, perIP, true, log))
+	mux.Handle("POST /auth/resend-verification", gateway.ResendVerificationHandler(authURL, noRedirect, minResponse, perAddress, true, log))
+	mux.Handle("POST /auth/request-password-reset", gateway.RequestPasswordResetHandler(authURL, noRedirect, minResponse, perAddress, true, log))
 	verifyPage, err := gateway.VerifyPageHandler(site)
 	if err != nil {
 		t.Fatal(err)

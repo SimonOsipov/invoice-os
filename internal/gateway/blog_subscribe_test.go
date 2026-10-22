@@ -90,11 +90,8 @@ func subRoutes(t *testing.T, base string, minResponse time.Duration, enforce boo
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	mk := func(name string, max int) *SignInThrottle {
-		return NewSignInThrottle(name, max, BlogSubscribeMaxKeys, BlogSubscribeWindow, time.Now)
-	}
-	return BlogSubscribeHandlers(u, http.DefaultClient, subTestToken, minResponse,
-		mk("ip", BlogSubscribePerIP), mk("email", BlogSubscribePerEmail), mk("confirm", BlogConfirmPerIP), enforce, log)
+	perEmail := NewSignInThrottle("email", BlogSubscribePerEmail, BlogSubscribeMaxKeys, BlogSubscribeWindow, time.Now)
+	return BlogSubscribeHandlers(u, http.DefaultClient, subTestToken, minResponse, perEmail, enforce, log)
 }
 
 func subBody(email string) string {
@@ -118,26 +115,17 @@ func confirmBody(token string) string {
 func TestBlogSubscribe_SameAnswerForEveryValidRequest(t *testing.T) {
 	up := newSubUpstream(t, http.StatusAccepted, `{"status":"accepted"}`)
 	rt := subRoutes(t, up.srv.URL, 0, true, nil)
-	for i := range BlogSubscribePerIP - 1 { // leave one IP slot so the email cap is what refuses
-		subPost(rt.Subscribe, "203.0.113.1:1", subBody(fmt.Sprintf("fill%d@x.co", i)))
-	}
-	base := up.calls()
-
 	fwd := subPost(rt.Subscribe, "203.0.113.2:1", subBody("e@x.co"))
 	for range BlogSubscribePerEmail - 1 {
 		subPost(rt.Subscribe, "203.0.113.3:1", subBody("e@x.co"))
 	}
 	emailCapped := subPost(rt.Subscribe, "203.0.113.4:1", subBody("e@x.co"))
-	subPost(rt.Subscribe, "203.0.113.1:1", subBody("last@x.co"))
-	ipCapped := subPost(rt.Subscribe, "203.0.113.1:1", subBody("other@x.co"))
 
-	if got := up.calls() - base; got != 1+(BlogSubscribePerEmail-1)+1 {
+	if got := up.calls(); got != BlogSubscribePerEmail {
 		t.Fatalf("upstream calls = %d; a capped request reached it", got)
 	}
-	for name, rec := range map[string]*httptest.ResponseRecorder{"email-capped": emailCapped, "ip-capped": ipCapped} {
-		if rec.Code != http.StatusAccepted || rec.Body.String() != fwd.Body.String() {
-			t.Errorf("%s = %d %q, want %d %q", name, rec.Code, rec.Body.String(), fwd.Code, fwd.Body.String())
-		}
+	if emailCapped.Code != http.StatusAccepted || emailCapped.Body.String() != fwd.Body.String() {
+		t.Errorf("email-capped = %d %q, want %d %q", emailCapped.Code, emailCapped.Body.String(), fwd.Code, fwd.Body.String())
 	}
 	if fwd.Code != http.StatusAccepted {
 		t.Errorf("forwarded = %d, want 202", fwd.Code)
@@ -148,10 +136,7 @@ func TestBlogSubscribe_HoldsTheFloor(t *testing.T) {
 	const floor = 80 * time.Millisecond
 	up := newSubUpstream(t, http.StatusAccepted, `{}`)
 	rt := subRoutes(t, up.srv.URL, floor, true, nil)
-	// Fill the caps first (no timing asserted), then time each answer.
-	for i := range BlogSubscribePerIP {
-		subPost(rt.Subscribe, "198.51.100.1:1", subBody(fmt.Sprintf("f%d@x.co", i)))
-	}
+	// Fill the cap first (no timing asserted), then time each answer.
 	for range BlogSubscribePerEmail {
 		subPost(rt.Subscribe, "198.51.100.2:1", subBody("cap@x.co"))
 	}
@@ -161,7 +146,6 @@ func TestBlogSubscribe_HoldsTheFloor(t *testing.T) {
 		want          int
 	}{
 		"202":          {"198.51.100.3:1", "ok@x.co", http.StatusAccepted, http.StatusAccepted},
-		"ip-capped":    {"198.51.100.1:1", "n1@x.co", http.StatusAccepted, http.StatusAccepted},
 		"email-capped": {"198.51.100.4:1", "cap@x.co", http.StatusAccepted, http.StatusAccepted},
 		"502":          {"198.51.100.5:1", "e502@x.co", http.StatusInternalServerError, http.StatusBadGateway},
 		"503":          {"198.51.100.6:1", "e503@x.co", http.StatusServiceUnavailable, http.StatusServiceUnavailable},
@@ -189,32 +173,16 @@ func TestBlogSubscribe_BadFieldIs400AtOnce(t *testing.T) {
 	if up.calls() != 0 {
 		t.Fatalf("upstream calls = %d, want 0", up.calls())
 	}
-	// Same throttles, no floor: the 400 spent no cap, so all 10 valid requests forward.
+	// Same throttle, no floor: the 400s spent no cap, so every valid request for the address forwards.
 	rt := subRoutes(t, up.srv.URL, 0, true, nil)
-	subPost(rt.Subscribe, "203.0.113.9:1", subBody("nope"))
 	subPost(rt.Subscribe, "203.0.113.9:1", `{"email":"a@x.co","category_ids":[],"frequency":"weekly"}`)
 	subPost(rt.Subscribe, "203.0.113.9:1", `{"email":"a@x.co","category_ids":["a"],"frequency":"daily"}`)
 	subPost(rt.Subscribe, "203.0.113.9:1", `not json`)
-	for i := range BlogSubscribePerIP {
-		subPost(rt.Subscribe, "203.0.113.9:1", subBody(fmt.Sprintf("v%d@x.co", i)))
+	for range BlogSubscribePerEmail {
+		subPost(rt.Subscribe, "203.0.113.9:1", subBody("a@x.co"))
 	}
-	if up.calls() != BlogSubscribePerIP {
-		t.Fatalf("upstream calls = %d, want %d: a 400 spent a cap", up.calls(), BlogSubscribePerIP)
-	}
-}
-
-func TestBlogSubscribe_IPCapAdmitsTenThenForwardsNothing(t *testing.T) {
-	up := newSubUpstream(t, http.StatusAccepted, `{"status":"accepted"}`)
-	rt := subRoutes(t, up.srv.URL, 0, true, nil)
-	var last *httptest.ResponseRecorder
-	for i := range BlogSubscribePerIP + 1 {
-		last = subPost(rt.Subscribe, "203.0.113.5:1", subBody(fmt.Sprintf("u%d@x.co", i)))
-	}
-	if up.calls() != BlogSubscribePerIP {
-		t.Errorf("upstream calls = %d, want %d", up.calls(), BlogSubscribePerIP)
-	}
-	if last.Code != http.StatusAccepted {
-		t.Errorf("11th = %d, want 202", last.Code)
+	if up.calls() != BlogSubscribePerEmail {
+		t.Fatalf("upstream calls = %d, want %d: a 400 spent a cap", up.calls(), BlogSubscribePerEmail)
 	}
 }
 
@@ -231,25 +199,7 @@ func TestBlogSubscribe_EmailCapAdmitsThreeThenForwardsNothing(t *testing.T) {
 	}
 }
 
-func TestBlogSubscribe_IPRefusalSpendsNoEmailCount(t *testing.T) {
-	up := newSubUpstream(t, http.StatusAccepted, `{}`)
-	rt := subRoutes(t, up.srv.URL, 0, true, nil)
-	for i := range BlogSubscribePerIP {
-		subPost(rt.Subscribe, "203.0.113.20:1", subBody(fmt.Sprintf("f%d@x.co", i)))
-	}
-	subPost(rt.Subscribe, "203.0.113.20:1", subBody("e@x.co"))
-	if up.calls() != BlogSubscribePerIP {
-		t.Fatalf("refused request reached upstream: %d calls", up.calls())
-	}
-	for i := range BlogSubscribePerEmail {
-		subPost(rt.Subscribe, fmt.Sprintf("203.0.113.%d:1", 30+i), subBody("e@x.co"))
-	}
-	if got := up.calls() - BlogSubscribePerIP; got != BlogSubscribePerEmail {
-		t.Errorf("calls for E from fresh IPs = %d, want %d: the IP refusal spent an email count", got, BlogSubscribePerEmail)
-	}
-}
-
-func TestBlogSubscribe_Upstream400RefundsBoth(t *testing.T) {
+func TestBlogSubscribe_Upstream400RefundsTheEmailCount(t *testing.T) {
 	up := newSubUpstream(t, http.StatusBadRequest, `{"error":"unknown category"}`)
 	rt := subRoutes(t, up.srv.URL, 0, true, nil)
 	for range 3 {
@@ -262,42 +212,20 @@ func TestBlogSubscribe_Upstream400RefundsBoth(t *testing.T) {
 	if up.calls() != 4 {
 		t.Errorf("upstream calls = %d, want 4: a 400 kept its reservation", up.calls())
 	}
-	// The IP count came back too: nine more distinct emails still forward.
-	for i := range BlogSubscribePerIP - 1 {
-		subPost(rt.Subscribe, "203.0.113.40:1", subBody(fmt.Sprintf("z%d@x.co", i)))
-	}
-	if up.calls() != 4+BlogSubscribePerIP-1 {
-		t.Errorf("upstream calls = %d, want %d", up.calls(), 4+BlogSubscribePerIP-1)
-	}
 }
 
 func TestBlogSubscribe_PreviewLogsAndAdmits(t *testing.T) {
 	up := newSubUpstream(t, http.StatusAccepted, `{}`)
 	buf := &safeBuf{}
 	rt := subRoutes(t, up.srv.URL, 0, false, slog.New(slog.NewTextHandler(buf, nil)))
-	for i := range 12 {
-		subPost(rt.Subscribe, "203.0.113.50:1", subBody(fmt.Sprintf("p%d@x.co", i)))
+	for range BlogSubscribePerEmail + 2 {
+		subPost(rt.Subscribe, "203.0.113.50:1", subBody("p@x.co"))
 	}
-	if up.calls() != 12 {
-		t.Errorf("upstream calls = %d, want 12", up.calls())
+	if up.calls() != BlogSubscribePerEmail+2 {
+		t.Errorf("upstream calls = %d, want %d", up.calls(), BlogSubscribePerEmail+2)
 	}
 	if out := buf.String(); !strings.Contains(out, "limit reached") || !strings.Contains(out, "enforced=false") {
 		t.Errorf("no `limit reached` WARN with enforced=false in %q", out)
-	}
-}
-
-func TestBlogSubscribe_IPv6KeyedBySlash64(t *testing.T) {
-	up := newSubUpstream(t, http.StatusAccepted, `{}`)
-	rt := subRoutes(t, up.srv.URL, 0, true, nil)
-	for i := range BlogSubscribePerIP + 2 {
-		remote := "[2001:db8:1:2::1]:1"
-		if i%2 == 1 {
-			remote = "[2001:db8:1:2:ffff::7]:1"
-		}
-		subPost(rt.Subscribe, remote, subBody(fmt.Sprintf("v6%d@x.co", i)))
-	}
-	if up.calls() != BlogSubscribePerIP {
-		t.Errorf("upstream calls = %d, want %d across one /64", up.calls(), BlogSubscribePerIP)
 	}
 }
 
@@ -422,18 +350,6 @@ func TestBlogConfirm_RelaysUnsubscribedEverywhere(t *testing.T) {
 	}
 }
 
-func TestBlogConfirm_IPCapIs429(t *testing.T) {
-	up := newSubUpstream(t, http.StatusOK, `{}`)
-	rt := subRoutes(t, up.srv.URL, 0, true, nil)
-	var last *httptest.ResponseRecorder
-	for range BlogConfirmPerIP + 1 {
-		last = confirmPost(rt.Confirm, "203.0.113.82:1", subGoodToken)
-	}
-	if last.Code != http.StatusTooManyRequests || up.calls() != BlogConfirmPerIP {
-		t.Errorf("31st = %d with %d upstream calls, want 429 with %d", last.Code, up.calls(), BlogConfirmPerIP)
-	}
-}
-
 func TestBlogSubscribeRoutes_MethodNotAllowed(t *testing.T) {
 	up := newSubUpstream(t, http.StatusOK, `{}`)
 	rt := subRoutes(t, up.srv.URL, 0, true, nil)
@@ -461,20 +377,15 @@ func TestBlogSubscribe_LogsCarryNoEmailOrToken(t *testing.T) {
 	for range BlogSubscribePerEmail + 1 { // the 4th is email-capped
 		subPost(rt.Subscribe, "203.0.113.91:1", subBody(email))
 	}
-	for i := range BlogSubscribePerIP { // fills the IP, then the last is IP-capped
-		subPost(rt.Subscribe, "203.0.113.92:1", subBody(fmt.Sprintf("%d%s", i, email)))
-	}
 	up.set(http.StatusInternalServerError, `{"echo":"`+email+`"}`)
 	subPost(rt.Subscribe, "203.0.113.93:1", subBody("x"+email))
-	for range BlogConfirmPerIP + 1 {
-		confirmPost(rt.Confirm, "203.0.113.94:1", token)
-	}
+	confirmPost(rt.Confirm, "203.0.113.94:1", token)
 	up.srv.Close()
 	subPost(rt.Subscribe, "203.0.113.95:1", subBody("y"+email))
 	confirmPost(rt.Confirm, "203.0.113.96:1", token)
 
 	prev := subRoutes(t, "http://127.0.0.1:1", 0, false, log)
-	for range BlogSubscribePerIP + 1 {
+	for range BlogSubscribePerEmail + 1 {
 		subPost(prev.Subscribe, "203.0.113.97:1", subBody(email))
 	}
 
@@ -497,17 +408,11 @@ func TestBlogSubscribe_UniformAnswerCarriesSameHeaders(t *testing.T) {
 		subPost(rt.Subscribe, "203.0.113.101:1", subBody("e@x.co"))
 	}
 	emailCapped := subPost(rt.Subscribe, "203.0.113.102:1", subBody("e@x.co"))
-	for i := range BlogSubscribePerIP {
-		subPost(rt.Subscribe, "203.0.113.103:1", subBody(fmt.Sprintf("h%d@x.co", i)))
-	}
-	ipCapped := subPost(rt.Subscribe, "203.0.113.103:1", subBody("other@x.co"))
 	if len(fwd.Header()) == 0 {
 		t.Fatal("control: the forwarded answer carries no headers")
 	}
-	for name, rec := range map[string]*httptest.ResponseRecorder{"email-capped": emailCapped, "ip-capped": ipCapped} {
-		if !reflect.DeepEqual(rec.Header(), fwd.Header()) {
-			t.Errorf("%s headers = %v, want %v", name, rec.Header(), fwd.Header())
-		}
+	if !reflect.DeepEqual(emailCapped.Header(), fwd.Header()) {
+		t.Errorf("email-capped headers = %v, want %v", emailCapped.Header(), fwd.Header())
 	}
 	if fwd.Header().Get("Cache-Control") != "no-store" {
 		t.Errorf("Cache-Control = %q, want no-store", fwd.Header().Get("Cache-Control"))
@@ -586,34 +491,6 @@ func TestBlogConfirm_BodyShapes(t *testing.T) {
 	}
 }
 
-func TestBlogConfirm_MalformedTokensSpendNoCap(t *testing.T) {
-	up := newSubUpstream(t, http.StatusOK, `{}`)
-	rt := subRoutes(t, up.srv.URL, 0, true, nil)
-	for range BlogConfirmPerIP * 2 {
-		confirmPost(rt.Confirm, "203.0.113.130:1", "short")
-	}
-	if rec := confirmPost(rt.Confirm, "203.0.113.130:1", subGoodToken); rec.Code != http.StatusOK {
-		t.Errorf("good token after malformed ones = %d, want 200", rec.Code)
-	}
-}
-
-func TestBlogConfirm_PreviewLogsAndAdmits(t *testing.T) {
-	up := newSubUpstream(t, http.StatusOK, `{}`)
-	buf := &safeBuf{}
-	rt := subRoutes(t, up.srv.URL, 0, false, slog.New(slog.NewTextHandler(buf, nil)))
-	for range BlogConfirmPerIP + 2 {
-		if rec := confirmPost(rt.Confirm, "203.0.113.131:1", subGoodToken); rec.Code != http.StatusOK {
-			t.Fatalf("confirm = %d, want 200", rec.Code)
-		}
-	}
-	if up.calls() != BlogConfirmPerIP+2 {
-		t.Errorf("upstream calls = %d, want %d", up.calls(), BlogConfirmPerIP+2)
-	}
-	if out := buf.String(); !strings.Contains(out, "blog-confirm: limit reached") || !strings.Contains(out, "enforced=false") {
-		t.Errorf("no confirm `limit reached` WARN with enforced=false in %q", out)
-	}
-}
-
 func TestBlogSubscribeRoutes_OnlyPostIsServed(t *testing.T) {
 	up := newSubUpstream(t, http.StatusOK, `{"status":"confirmed"}`)
 	rt := subRoutes(t, up.srv.URL, 0, true, nil)
@@ -634,51 +511,6 @@ func TestBlogSubscribeRoutes_OnlyPostIsServed(t *testing.T) {
 	}
 }
 
-func TestBlogSubscribe_ClientKeyHandling(t *testing.T) {
-	post := func(rt BlogSubscribeRoutes, remote string, hdr map[string]string, i int) {
-		req := httptest.NewRequest(http.MethodPost, "/blog/subscriptions", strings.NewReader(subBody(fmt.Sprintf("k%d@x.co", i))))
-		req.RemoteAddr = remote
-		for k, v := range hdr {
-			req.Header.Set(k, v)
-		}
-		rt.Subscribe.ServeHTTP(httptest.NewRecorder(), req)
-	}
-	// X-Real-IP wins over RemoteAddr: varying RemoteAddr behind one edge-set header shares one bucket.
-	up := newSubUpstream(t, http.StatusAccepted, `{}`)
-	rt := subRoutes(t, up.srv.URL, 0, true, nil)
-	for i := range BlogSubscribePerIP + 3 {
-		post(rt, fmt.Sprintf("10.0.0.%d:1", i+1), map[string]string{"X-Real-IP": "198.51.100.7"}, i)
-	}
-	if up.calls() != BlogSubscribePerIP {
-		t.Errorf("shared X-Real-IP: upstream calls = %d, want %d", up.calls(), BlogSubscribePerIP)
-	}
-	// X-Forwarded-For is not a key; an invalid X-Real-IP falls back to RemoteAddr.
-	up2 := newSubUpstream(t, http.StatusAccepted, `{}`)
-	rt2 := subRoutes(t, up2.srv.URL, 0, true, nil)
-	for i := range BlogSubscribePerIP + 3 {
-		post(rt2, "203.0.113.140:1", map[string]string{"X-Forwarded-For": fmt.Sprintf("192.0.2.%d", i+1), "X-Real-IP": "not-an-ip"}, i)
-	}
-	if up2.calls() != BlogSubscribePerIP {
-		t.Errorf("spoofed X-Forwarded-For: upstream calls = %d, want %d", up2.calls(), BlogSubscribePerIP)
-	}
-}
-
-func TestBlogConfirm_ClientKeyHandling(t *testing.T) {
-	up := newSubUpstream(t, http.StatusOK, `{}`)
-	rt := subRoutes(t, up.srv.URL, 0, true, nil)
-	var last *httptest.ResponseRecorder
-	for i := range BlogConfirmPerIP + 1 {
-		req := httptest.NewRequest(http.MethodPost, "/blog/subscriptions/confirm", strings.NewReader(confirmBody(subGoodToken)))
-		req.RemoteAddr = fmt.Sprintf("10.0.1.%d:1", i+1)
-		req.Header.Set("X-Real-IP", "198.51.100.8")
-		last = httptest.NewRecorder()
-		rt.Confirm.ServeHTTP(last, req)
-	}
-	if last.Code != http.StatusTooManyRequests || up.calls() != BlogConfirmPerIP {
-		t.Errorf("31st = %d with %d calls, want 429 with %d", last.Code, up.calls(), BlogConfirmPerIP)
-	}
-}
-
 func TestBlogSubscribe_UpstreamErrorBodyIsNotRelayed(t *testing.T) {
 	up := newSubUpstream(t, http.StatusServiceUnavailable, `{"error":"already subscribed a@x.co"}`)
 	rt := subRoutes(t, up.srv.URL, 0, true, nil)
@@ -693,28 +525,14 @@ func TestBlogSubscribe_UpstreamErrorBodyIsNotRelayed(t *testing.T) {
 	}
 }
 
-// The other cap tests loop on the constants; this one pins the values the AC states.
-func TestBlogSubscribe_CapValuesAreTenThreeThirty(t *testing.T) {
+// The other cap tests loop on the constant; this one pins the value the AC states.
+func TestBlogSubscribe_EmailCapValueIsThree(t *testing.T) {
 	up := newSubUpstream(t, http.StatusOK, `{}`)
 	rt := subRoutes(t, up.srv.URL, 0, true, nil)
-	for i := 0; i < 11; i++ {
-		subPost(rt.Subscribe, "203.0.113.160:1", subBody(fmt.Sprintf("n%d@x.co", i)))
-	}
-	if up.calls() != 10 {
-		t.Errorf("per-IP: %d subscribes forwarded, want 10", up.calls())
-	}
-	before := up.calls()
 	for i := 0; i < 4; i++ {
 		subPost(rt.Subscribe, fmt.Sprintf("203.0.113.%d:1", 161+i), subBody("same@x.co"))
 	}
-	if got := up.calls() - before; got != 3 {
+	if got := up.calls(); got != 3 {
 		t.Errorf("per-email: %d subscribes forwarded, want 3", got)
-	}
-	before = up.calls()
-	for i := 0; i < 31; i++ {
-		confirmPost(rt.Confirm, "203.0.113.170:1", subGoodToken)
-	}
-	if got := up.calls() - before; got != 30 {
-		t.Errorf("confirm per-IP: %d forwarded, want 30", got)
 	}
 }

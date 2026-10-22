@@ -41,6 +41,7 @@ paths:
 - Report `sentry` from a service probed through `/healthz/fleet`, or exempt it by name in the fleet gate. Only `auth` is exempt.
 - Wrap a new outbound client to another first-party service in `platform.TraceTransport`. Never wrap a third-party client.
 - Run background work only in `cmd/worker`: River workers, tickers and sweeps. A request-driven service enqueues on an insert-only `queue.Config{}`. `TestOnlyTheWorkerRunsBackgroundWork` fails otherwise.
+- Wrap each periodic task in `leader.Lead("<task>", fn)` with its own name. `TestWorkerMain_EveryPeriodicTaskHasOneLeader` fails otherwise.
 - Run one worker instance. The submission rate limiter is in memory.
 - Build a new Go service on `platform.New`. It gets Sentry labels, 5xx and panic capture, tracing and the `SENTRY_TEST_EVENT` trigger.
 - Call `initMonitoring` from `src/instrument.ts` in a new SPA. Add its name to the `Service` union in `packages/monitoring/src/options.ts`.

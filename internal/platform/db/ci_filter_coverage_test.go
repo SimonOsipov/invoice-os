@@ -192,6 +192,7 @@ func TestCIRunFiltersReachEveryTestInThePackage(t *testing.T) {
 				strings.HasPrefix(n, "TestRestoreCheck") ||
 				strings.HasPrefix(n, "TestAuthAdminDSN") ||
 				strings.HasPrefix(n, "TestGrantAccountStateRead") ||
+				strings.HasPrefix(n, "TestLeader") ||
 				n == "TestBootstrapRotatesAuthAdminPasswordIdempotently" ||
 				n == "TestBootstrapRefusesEmptyAuthAdminBeforeDialing" ||
 				n == "TestBootstrapLeavesAnUnsetGatewayPasswordAlone"

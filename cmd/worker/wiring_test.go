@@ -1658,7 +1658,7 @@ func TestWorkerMain_RunsTheHealthSampler(t *testing.T) {
 			controlQueue = true
 		}
 		if w, ok := call.Args[0].(*ast.CallExpr); ok && wtCallName(w.Fun) == "codelist.NewWorker" && len(w.Args) == 2 &&
-			isSelector(w.Args[0], "systemhealth", "SampleInterval") && wtRender(w.Args[1]) == "sampler.Sample" {
+			isSelector(w.Args[0], "systemhealth", "SampleInterval") && wtLedTask(w.Args[1]) == "sampler.Sample" {
 			samplers++
 		}
 		return true
@@ -1667,7 +1667,7 @@ func TestWorkerMain_RunsTheHealthSampler(t *testing.T) {
 		t.Fatal("control needle: no app.AddBackgroundWorker(q) found -- the AST walk is broken, so the count below is vacuous")
 	}
 	if samplers != 1 {
-		t.Errorf("codelist.NewWorker(systemhealth.SampleInterval, sampler.Sample) is registered %d time(s), want exactly 1", samplers)
+		t.Errorf("codelist.NewWorker(systemhealth.SampleInterval, leader.Lead(_, sampler.Sample)) is registered %d time(s), want exactly 1", samplers)
 	}
 }
 
@@ -1754,5 +1754,62 @@ func TestOnlyTheWorkerRunsBackgroundWork(t *testing.T) {
 		if adds, fetching := scan(path); adds != 0 || fetching != 0 {
 			t.Errorf("%s: %d AddBackgroundWorker call(s), %d queue.Config Workers/Queues key(s); want none -- move the work to cmd/worker and keep an insert-only queue.Config{}", path, adds, fetching)
 		}
+	}
+}
+
+// wtLedTask renders the task a leader.Lead(name, task) call wraps, or "" for any other expression.
+func wtLedTask(e ast.Expr) string {
+	call, ok := e.(*ast.CallExpr)
+	if !ok || wtCallName(call.Fun) != "leader.Lead" || len(call.Args) != 2 {
+		return ""
+	}
+	return wtRender(call.Args[1])
+}
+
+// AC 3 (GKE-05): every periodic task runs under its own leader lock, so a second worker
+// instance runs none of them twice.
+func TestWorkerMain_EveryPeriodicTaskHasOneLeader(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/worker/main.go: %v", err)
+	}
+	names := map[string]int{}
+	tasks, leaderLast := 0, false
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || wtCallName(call.Fun) != "app.AddBackgroundWorker" || len(call.Args) != 1 {
+			return true
+		}
+		id, isIdent := call.Args[0].(*ast.Ident)
+		leaderLast = isIdent && id.Name == "leader"
+		w, ok := call.Args[0].(*ast.CallExpr)
+		if !ok || (wtCallName(w.Fun) != "codelist.NewWorker" && wtCallName(w.Fun) != "reconciliation.NewSweeper") || len(w.Args) != 2 {
+			return true
+		}
+		tasks++
+		lead, ok := w.Args[1].(*ast.CallExpr)
+		if !ok || wtLedTask(lead) == "" {
+			t.Errorf("%s(_, %s) runs without leader.Lead", wtCallName(w.Fun), wtRender(w.Args[1]))
+			return true
+		}
+		lit, ok := lead.Args[0].(*ast.BasicLit)
+		if !ok {
+			t.Errorf("leader.Lead(%s, ...) names its lock with a non-literal", wtRender(lead.Args[0]))
+			return true
+		}
+		names[lit.Value]++
+		return true
+	})
+	// sampler, purge, code-list sync, sweep, two re-checks, snapshot
+	if tasks < 7 {
+		t.Fatalf("found %d periodic task(s), want at least 7; the walk misses registrations", tasks)
+	}
+	for name, n := range names {
+		if n > 1 {
+			t.Errorf("lock %s is shared by %d tasks; one leader would starve the others' instances", name, n)
+		}
+	}
+	if !leaderLast {
+		t.Error("app.AddBackgroundWorker(leader) is not the last registration; its Stop would release locks while tasks still run")
 	}
 }

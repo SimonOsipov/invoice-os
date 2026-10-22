@@ -82,6 +82,10 @@ paths:
 - Hand an invitee's session off from `POST /auth/invitation/password` only after the global sign-out, as a password grant with the password just set. Reserve no throttle attempt for it.
 - Carry a hand-off code in the URL, never a token. A code is single use and expires in `HandoffTTL`.
 - Bind a hand-off code to the `state` that minted it.
+- Share hand-off codes between gateway instances through `gateway_handoff_codes`, as `invoice_gateway` (`DATABASE_GATEWAY_URL`). Store `sha256(code)`, never the code.
+- Expect the gateway to refuse boot on Cloud Run without `DATABASE_GATEWAY_URL`. Elsewhere an unset URL keeps the in-process store, for a single instance only.
+- Expect a signed-out session to stay valid on another gateway instance for up to `SessionCheckTTL` (30 s). `EvictSubject` clears only the local cache. A shared revocation store was rejected (GKE-00 Q12).
+- Expect the sign-in and resend-by-address limits to count per instance. Their ceiling is the limit times the instance count (GKE-00 Q11).
 - Mint a console hand-off code on `POST /auth/console-handoff` only for a verified, session-checked bearer whose `app_metadata.staff` is true.
 - Store only the caller's access token as that code's answer. Never store a refresh token.
 - Bind that code to the `state` in the request body.

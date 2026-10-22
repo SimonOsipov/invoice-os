@@ -83,7 +83,7 @@ func TestBlogSubscribeRoutesRegisteredOutsideAPI(t *testing.T) {
 }
 
 func TestBlogSubscribePreflightGrantsTheBlogOrigin(t *testing.T) {
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	t.Setenv("DEPLOY_ENV", "production")
 	var calls atomic.Int32
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -141,7 +141,7 @@ func TestBlogSubscribePreviewPostureAdmits(t *testing.T) {
 	t.Cleanup(stub.Close)
 	up, _ := url.Parse(stub.URL)
 	send := func(env string, n int) int32 {
-		t.Setenv("RAILWAY_ENVIRONMENT_NAME", env)
+		t.Setenv("DEPLOY_ENV", env)
 		calls.Store(0)
 		sub := blogSubscribeHandlers(up, "gw-token", 0, slog.New(slog.DiscardHandler))
 		for i := range n {

@@ -222,7 +222,7 @@ func runChild(t *testing.T, scenario string, env ...string) (exit int, stdout, s
 func productionEnv(dsn string) []string {
 	return []string{
 		"SENTRY_DSN=" + dsn,
-		"RAILWAY_ENVIRONMENT_NAME=production",
+		"DEPLOY_ENV=production",
 		"ENVIRONMENT=development",
 		"RAILWAY_GIT_COMMIT_SHA=" + fatalRailwaySHA,
 	}

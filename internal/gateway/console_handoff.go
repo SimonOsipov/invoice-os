@@ -11,7 +11,7 @@ import (
 
 // ConsoleHandoffHandler answers POST /auth/console-handoff with a code whose answer is the caller's own access token.
 // It runs behind the verifier, the session check and auth.RequireStaff; it reads no staff claim itself.
-func ConsoleHandoffHandler(store *HandoffStore, log *slog.Logger) http.Handler {
+func ConsoleHandoffHandler(store Handoffs, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !postOnly(w, r) {
 			return

@@ -700,7 +700,7 @@ func TestNotificationsMain_PreviewEnvironmentBootsFake(t *testing.T) {
 			proxy := qaStartProxy(t)
 			email := fmt.Sprintf("preview-%s@worker.example", uuid.NewString()[:8])
 			qaCleanupContact(t, admin, email)
-			p := qaStart(t, bin, qaMerge(tc.vars, proxy.vars(), map[string]string{"DATABASE_URL": appURL, "RAILWAY_ENVIRONMENT_NAME": "pr-7"}))
+			p := qaStart(t, bin, qaMerge(tc.vars, proxy.vars(), map[string]string{"DATABASE_URL": appURL, "DEPLOY_ENV": "pr-7"}))
 			p.waitFor(t, "/readyz")
 			if got := p.healthz(t)["contacts"]; got != "fake" {
 				t.Fatalf("/healthz contacts = %q, want fake in a pr-7 environment", got)
@@ -1059,7 +1059,7 @@ func TestNotificationsMain_PreviewServesTheBlogSubscriptionRoutes(t *testing.T) 
 	}
 
 	proxy := qaStartProxy(t)
-	p := qaStart(t, bin, qaMerge(proxy.vars(), map[string]string{"DATABASE_URL": appURL, "RAILWAY_ENVIRONMENT_NAME": "pr-7"}))
+	p := qaStart(t, bin, qaMerge(proxy.vars(), map[string]string{"DATABASE_URL": appURL, "DEPLOY_ENV": "pr-7"}))
 	p.waitFor(t, "/readyz")
 
 	count := func(email string) (n int) {

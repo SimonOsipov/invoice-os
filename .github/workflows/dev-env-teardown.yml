@@ -89,8 +89,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           # Account-scoped token. A Railway PROJECT token is pinned to one environment and
           # could not reach an ephemeral PR environment at all. A fork PR receives no
-          # secrets and fails at require_env with a message that says exactly that — the
-          # same deliberate posture as railway-invariants.yml.
+          # secrets and fails at require_env with a message that says exactly that.
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
         run: |
           set -euo pipefail

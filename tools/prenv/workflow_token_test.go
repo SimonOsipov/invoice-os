@@ -282,7 +282,7 @@ func workflowTexts(t *testing.T) (names []string, texts map[string]string) {
 	return names, texts
 }
 
-var knownWorkflows = []string{"ci.yml", "dev-env-sweeper.yml", "dev-env-teardown.yml", "dev-env.yml", "idp-release-watch.yml", "railway-invariants.yml"}
+var knownWorkflows = []string{"ci.yml", "dev-env-sweeper.yml", "dev-env-teardown.yml", "dev-env.yml", "idp-release-watch.yml"}
 
 func requireScanned(t *testing.T, names []string) {
 	t.Helper()

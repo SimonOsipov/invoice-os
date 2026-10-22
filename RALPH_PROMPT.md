@@ -27,7 +27,7 @@ A subtask is **risky** when it changes tenant isolation (RLS, `tenant_id`), mone
 | Plan review (Phase 0.6b), Test-Spec (Mode A), QA Verify (Mode B), deploy-gate verification | `product-qa-spec` |
 | Execution | `product-executor` |
 
-## CRITICAL RULES
+## Core rules
 
 ### 1. Separation of duties
 The lead orchestrates. It may read, search and run commands directly to orient itself and to check evidence. It never edits product code or tests: `product-executor` writes code, `product-qa-spec` writes tests and verifies. Keep suite output in log files, not in this context (Stage 3).
@@ -55,7 +55,7 @@ gh pr checks [PR_NUMBER]
 #   deploy-context ×7 + deploy-spas ×3 → fleet-gate → e2e (smoke + api) → topology ×6 (serial-lane, import-wizard, import-wizard-2, invoice-surfaces, ui-surfaces, library).
 ```
 
-Not part of the gate: `dev-env-teardown.yml` (deletes the PR environment on close), `dev-env-sweeper.yml` (daily reaper of orphaned PR environments), `railway-invariants.yml` (asserts Railway PR Environments stay OFF). CI tears environments down; never use destructive Railway MCP calls.
+Not part of the gate: `dev-env-teardown.yml` (deletes the PR environment on close), `dev-env-sweeper.yml` (daily reaper of orphaned PR environments). CI tears environments down; never use destructive Railway MCP calls.
 
 ### 4. One branch, one PR per story
 All subtasks share one feature branch, one draft PR and one worktree.
@@ -432,25 +432,7 @@ An agent parses these instructions with no one to ask. Write for that reader.
 
 ## Completion Rules
 
-1. Both gates green on the PR head (Core Rule 3). Local tests green ≠ done.
+1. Both gates green on the PR head (Core rule 3). Local tests green ≠ done.
 2. Subtask status: todo → doing (its first stage starts) → done (its QA Verify passes).
 3. Output `<promise>ALL_TASKS_COMPLETE</promise>` only after Phase 3.5 passes and every subtask is `done`.
 4. A story that changes a sign-up, invite, verify or reset flow owes one walk-through. It runs on the deployed build with a real mail client. The user runs it after the merge. It does not block `ALL_TASKS_COMPLETE`. Global `CLAUDE.md` rule 5, "Audit the Surface", defines done for surface work.
-
-## Anti-Patterns
-
-| Anti-Pattern | Correct Approach |
-|-------------|------------------|
-| Lead editing product code or tests | Delegate to `product-executor` / `product-qa-spec` |
-| Skipping QA Verify or a required Test-Spec stage | Every stage runs; Test-Spec is skipped only for `Test-first: no` |
-| Weakening, skipping or deleting a red test | Fix the implementation; flag a wrong test |
-| A tenant-owned table without RLS + a cross-tenant refusal test | `tenant_id` + FORCE-RLS policy at birth; QA adds the refusal test |
-| Hand-setting a goose migration order or an untested `Down` | `make migrate-create` in the worktree; verify up + round-trip locally |
-| Querying as superuser to get past RLS | `WithinTenantTx` as `invoice_app` |
-| Working in the main checkout | Always `$WORKTREE_PATH`; main is the user's space |
-| Blocking in an unattended phase | Default + `## Decisions`; only Phase 0.6d and Phase 3.5 send questions, to the coordinator |
-| Architect inventing scope | Every derived AC traces to the Objective / a Core AC |
-| Bouncing the executor on uncited taste | Cite a design-system or prototype rule; taste is advisory |
-| Renaming a variable and checking only the rename | Search every other variable's rendered value for the old name before merge |
-| Running the deploy gate only before a variable deletion | Re-run it after the deletion is applied |
-| Leaving the worktree after merge | `/post-merge-cleanup <STORY>` |

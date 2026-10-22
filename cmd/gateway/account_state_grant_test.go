@@ -326,7 +326,7 @@ func TestStartAccountStateGrant_StartsOnceWithTheOwnersDSN(t *testing.T) {
 	}
 }
 
-// Names are RAILWAY_ENVIRONMENT_NAME values; the posture each maps to comes from
+// Names are DEPLOY_ENV values; the posture each maps to comes from
 // platform.Posture (PostureHosted for all of them, PostureLocal for "", PosturePreview for a PR name).
 func TestStartAccountStateGrant_AHostedEnvironmentStartsNothing(t *testing.T) {
 	for _, name := range []string{"production", "Production", "development", "staging", "pr-12 ", "pr-", "PR-12", " pr-12", "pr-12\n", "pr-12-b", "invoice-os-PR-12"} {

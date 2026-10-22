@@ -30,7 +30,6 @@ describe('dockerfiles', () => {
       for (const key of [
         'VITE_SENTRY_DSN=$VITE_SENTRY_DSN',
         'VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST',
-        'VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA',
         ...(gateway ? ['VITE_GATEWAY_URL=$VITE_GATEWAY_URL'] : []),
       ]) {
         const arg = lines.indexOf(`ARG ${key.split('=$')[1]}`)
@@ -38,13 +37,20 @@ describe('dockerfiles', () => {
         expect(arg, `${name}: ARG for ${key} is not inside the build stage`).toBeGreaterThan(from)
         expect(env, `${name}: ENV ${key} is not after its ARG`).toBeGreaterThan(arg)
       }
+      const sha = lines.indexOf('ENV VITE_BUILD_SHA=${BUILD_SHA:-$RAILWAY_GIT_COMMIT_SHA}')
+      for (const arg of ['ARG BUILD_SHA', 'ARG RAILWAY_GIT_COMMIT_SHA']) {
+        const at = lines.indexOf(arg)
+        expect(at, `${name}: ${arg} is not inside the build stage`).toBeGreaterThan(from)
+        expect(sha, `${name}: ENV VITE_BUILD_SHA is not after ${arg}`).toBeGreaterThan(at)
+      }
       for (const want of [
         'ARG VITE_SENTRY_DSN',
         'ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN',
         'ARG VITE_SENTRY_TEST_DIGEST',
         'ENV VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST',
+        'ARG BUILD_SHA',
         'ARG RAILWAY_GIT_COMMIT_SHA',
-        'ENV VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA',
+        'ENV VITE_BUILD_SHA=${BUILD_SHA:-$RAILWAY_GIT_COMMIT_SHA}',
         ...(gateway ? ['ARG VITE_GATEWAY_URL', 'ENV VITE_GATEWAY_URL=$VITE_GATEWAY_URL'] : []),
       ]) {
         const at = lines.indexOf(want)

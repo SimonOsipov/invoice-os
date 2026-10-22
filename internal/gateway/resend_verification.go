@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -21,11 +22,23 @@ const (
 	ResendMaxKeys    = 10_000
 )
 
-// clientKey keys the per-IP limit and names its source: Railway's edge sets X-Real-IP; IPv6 is keyed by its /64.
-// RemoteAddr, the fallback, is normalised the same way.
-// ceiling: the header is trusted only while the gateway is served straight from Railway's edge; a proxy in front makes every key the proxy's IP.
+// onCloudRun selects the client-IP rule: Cloud Run sets K_SERVICE and sits behind Google's load balancer.
+var onCloudRun = os.Getenv("K_SERVICE") != ""
+
+// clientKey keys the per-IP limit and logs and names its source; IPv6 is keyed by its /64.
+// Behind Google's load balancer the client is the second-from-right X-Forwarded-For entry
+// (the LB appends "<client>,<lb>"; anything left of them is client-supplied). X-Real-IP is
+// trusted only off Cloud Run, where Railway's edge sets it. RemoteAddr, the fallback, is
+// normalised the same way.
+// ceiling: the X-Real-IP branch is Railway's, delete with Railway in GKE-12.
 func clientKey(r *http.Request) (key, source string) {
-	if ip, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("X-Real-IP"))); err == nil {
+	if onCloudRun {
+		if parts := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ","); len(parts) >= 2 {
+			if ip, err := netip.ParseAddr(strings.TrimSpace(parts[len(parts)-2])); err == nil {
+				return normalizeIP(ip), "x_forwarded_for"
+			}
+		}
+	} else if ip, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("X-Real-IP"))); err == nil {
 		return normalizeIP(ip), "header"
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)

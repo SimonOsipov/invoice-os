@@ -452,7 +452,7 @@ func TestNoFileCallsTheForkENVIRONMENTDecorative(t *testing.T) {
 	t.Parallel()
 	pattern := `(?i)decorative` + ` in a`
 	planted := "### `ENVIRONMENT` is " + "decorative" + " in a fork\n"
-	assertBreaklistFindsNothing(t, pattern, planted, "RAILWAY_ENVIRONMENT_NAME", "cmd/", "internal/")
+	assertBreaklistFindsNothing(t, pattern, planted, "DEPLOY_ENV", "cmd/", "internal/")
 }
 
 // A rule file holding the phrase fails the guard: the whole-repo walk skips .claude/.

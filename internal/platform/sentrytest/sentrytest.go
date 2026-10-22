@@ -176,7 +176,7 @@ func Boot(t testing.TB, service string) (*platform.App, *Recorder, Labels) {
 	t.Setenv("SENTRY_DSN", fakeDSN)
 	t.Setenv("DEPLOY_ENV", "production")
 	t.Setenv("ENVIRONMENT", "development")
-	t.Setenv("RAILWAY_GIT_COMMIT_SHA", fakeRailwaySHA)
+	t.Setenv("BUILD_SHA", fakeRailwaySHA)
 
 	prevLogger := slog.Default()
 	hub := sentry.CurrentHub()

@@ -23,6 +23,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/migrations"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // routedServices are the seven context services the gateway fronts, in wedge
@@ -171,8 +172,10 @@ func main() {
 		platform.Fatal(app.Logger, "gateway: verify page: %v", err)
 	}
 
+	gwPool := gatewayPool(app.Logger)
+
 	// One sink for both hand-off paths; the sink bounds each call and never follows a redirect.
-	sink := gateway.NewHTTPContactSink(routed["notifications"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
+	sink := registrantSink(gwPool, gateway.NewHTTPContactSink(routed["notifications"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken))
 
 	pending := gateway.NewHTTPPendingInviteLookup(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
 
@@ -217,7 +220,7 @@ func main() {
 
 	// Public sign-in hand-off, renewal and sign-out, outside the verifier; console-handoff verifies its own bearer.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
-	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier, handoffStore(app.Logger))
+	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier, handoffStore(gwPool, app.Logger))
 	app.Mux.Handle("POST /auth/verify", h.Verify)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
@@ -400,9 +403,9 @@ func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionCh
 	return gateway.ResetPasswordHandler(authURL, siteURL, client, sessions, signIn, log)
 }
 
-// handoffStore shares hand-off codes through Postgres when DATABASE_GATEWAY_URL is set.
-// Cloud Run runs several instances, so it requires the URL there.
-func handoffStore(log *slog.Logger) gateway.Handoffs {
+// gatewayPool connects as invoice_gateway when DATABASE_GATEWAY_URL is set, else nil.
+// Cloud Run runs several instances and pauses idle ones, so it requires the URL there.
+func gatewayPool(log *slog.Logger) *pgxpool.Pool {
 	dsn := os.Getenv("DATABASE_GATEWAY_URL")
 	if dsn == "" {
 		if os.Getenv("K_SERVICE") != "" {
@@ -414,7 +417,23 @@ func handoffStore(log *slog.Logger) gateway.Handoffs {
 	if err != nil {
 		platform.Fatal(log, "gateway: hand-off store: %v", err)
 	}
+	return pool
+}
+
+// handoffStore shares hand-off codes through Postgres when pool is set; nil means the in-process store.
+func handoffStore(pool *pgxpool.Pool, log *slog.Logger) gateway.Handoffs {
+	if pool == nil {
+		return nil
+	}
 	return gateway.NewPGHandoffStore(pool, gateway.HandoffTTL, log)
+}
+
+// registrantSink writes registrants to the outbox when pool is set; without it they go to sink in the background.
+func registrantSink(pool *pgxpool.Pool, sink gateway.ContactSink) gateway.ContactSink {
+	if pool == nil {
+		return sink
+	}
+	return gateway.NewRegistrantOutbox(pool, sink)
 }
 
 // handoff holds the public sign-in hand-off, renewal and sign-out handlers main mounts outside /api/.

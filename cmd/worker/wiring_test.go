@@ -230,6 +230,9 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 		{"submission_poll", func(b *river.Workers) error {
 			return river.AddWorkerSafely(b, &submission.PollWorker{})
 		}},
+		{"registrant_intake", func(b *river.Workers) error {
+			return river.AddWorkerSafely(b, &notifications.RegistrantWorker{})
+		}},
 	}
 	contactProbes := []struct {
 		kind string
@@ -260,14 +263,14 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	if err := probes[0].add(base); err != nil {
 		t.Fatalf("submission.Workers already carries %q (%v); the positive arm below could then pass without extraction.AddTo being called at all", probes[0].kind, err)
 	}
-	for _, p := range probes[1:] {
+	for _, p := range probes[1:3] {
 		if err := p.add(submission.Workers(&submission.SubmitWorker{}, &submission.PollWorker{})); err == nil {
 			t.Fatalf("submission.Workers does not carry %q; the probe is looking at the wrong kind", p.kind)
 		}
 	}
 
 	cw := &contactWorkerSet{deliver: &notifications.DeliverWorker{}, deal: &notifications.DemoDealWorker{}, blog: &notifications.BlogSyncWorker{}}
-	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, cw)
+	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw)
 	if bundle == nil {
 		t.Fatal("workerBundle returned nil; a River client takes exactly one bundle")
 	}
@@ -282,8 +285,11 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 		}
 	}
 
-	// Contacts off: no contact kind is registered, so its queued jobs wait untouched.
-	off := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, nil)
+	// Contacts off: no contact kind is registered, so its queued jobs wait untouched. Intake still records.
+	off := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, nil)
+	if err := probes[3].add(off); err == nil {
+		t.Errorf("workerBundle with contacts off does not carry %q; the gateway's registrants would never be recorded", probes[3].kind)
+	}
 	for _, p := range contactProbes {
 		if err := p.add(off); err != nil {
 			t.Errorf("workerBundle with contacts off carries %q (%v), want it absent", p.kind, err)
@@ -291,7 +297,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 	// The newsletter off: the blog sync worker is absent, the other two are not.
 	cw.blog = nil
-	noBlog := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, cw)
+	noBlog := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw)
 	for i, p := range contactProbes {
 		if err := p.add(noBlog); (err == nil) != (i == 2) {
 			t.Errorf("workerBundle with the newsletter off: probing %q returned %v", p.kind, err)
@@ -640,8 +646,8 @@ func TestWorkerMain_WiresTheQueueSeams(t *testing.T) {
 	// 1. The worker on the bundle is the one newExtractWorker built. A bare
 	//    &extraction.ExtractWorker{} here compiles, registers the kind, and fails job one on
 	//    Work's nil-Audit guard before its nil pool can panic.
-	if len(bundleArgs) != 4 {
-		t.Fatalf("workerBundle is called with %d argument(s), want 4 (sw, pw, ew, cw)", len(bundleArgs))
+	if len(bundleArgs) != 5 {
+		t.Fatalf("workerBundle is called with %d argument(s), want 5 (sw, pw, ew, rw, cw)", len(bundleArgs))
 	}
 	if id, ok := bundleArgs[2].(*ast.Ident); !ok || id.Name != ewName {
 		t.Errorf("workerBundle's third argument is %s, want %s -- the worker newExtractWorker built. Any other value here registers the kind with nil collaborators and works no job", wtRender(bundleArgs[2]), ewName)
@@ -1800,13 +1806,14 @@ func TestWorkerMain_EveryPeriodicTaskHasOneLeader(t *testing.T) {
 		names[lit.Value]++
 		return true
 	})
-	// sampler, purge, code-list sync, sweep, two re-checks, snapshot
-	if tasks < 7 {
-		t.Fatalf("found %d periodic task(s), want at least 7; the walk misses registrations", tasks)
+	want := []string{`"health-sample"`, `"registrant-handoff"`, `"newsletter-purge"`, `"codelist-sync"`,
+		`"reconciliation-sweep"`, `"recheck"`, `"recheck-custom"`, `"rollup-snapshot"`}
+	if tasks != len(want) {
+		t.Errorf("found %d periodic task(s), want %d %v", tasks, len(want), want)
 	}
-	for name, n := range names {
-		if n > 1 {
-			t.Errorf("lock %s is shared by %d tasks; one leader would starve the others' instances", name, n)
+	for _, name := range want {
+		if names[name] != 1 {
+			t.Errorf("lock %s names %d task(s), want 1", name, names[name])
 		}
 	}
 	if !leaderLast {

@@ -121,6 +121,30 @@ describe('T3-3: cookieDomainVariants stops at two labels and dots each', () => {
   })
 })
 
+describe('expireCookies', () => {
+  it('AC4: expireCookies writes the host-only form and every variant', async () => {
+    const { expireCookies, cookieDomainVariants } = (await import(MODULE_SPECIFIER)) as GaCookiesModule & {
+      expireCookies: (names: string[], hostname: string, doc: Pick<Document, 'cookie'>) => void
+    }
+    const writes: string[] = []
+    const jar = {
+      get cookie() {
+        return ''
+      },
+      set cookie(v: string) {
+        writes.push(v)
+      },
+    }
+    expireCookies(['__hstc'], 'www.ascomply.com', jar)
+
+    const expired = '=; Max-Age=0; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+    expect(writes).toEqual([
+      `__hstc${expired}`,
+      ...cookieDomainVariants('www.ascomply.com').map((d) => `__hstc${expired}; domain=${d}`),
+    ])
+  })
+})
+
 describe('AC-8: the pure functions are console-silent', () => {
   it('control: the console spies detect a call', () => {
     console.error('x')

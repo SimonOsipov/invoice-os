@@ -162,7 +162,7 @@ export function InvitePage({ token }: { token: string | null }) {
         <p className="t-body-sm" style={{ ...TEXT, margin: '0 0 16px' }}>
           We will email {invite.email} a link to confirm the address and choose your password.
         </p>
-        <form noValidate onSubmit={handleSubmit}>
+        <form noValidate data-hs-do-not-collect="true" onSubmit={handleSubmit}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div>
               <label htmlFor="inv-email" className="label" style={{ display: 'block', marginBottom: 6 }}>Work email</label>

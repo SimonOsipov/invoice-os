@@ -25,7 +25,7 @@ ARG SERVICE
 # Pulled through mirror.gcr.io, not docker.io: Railway Metal builders intermittently
 # lose egress to registry-1.docker.io, which fails the build at `load metadata` while
 # gcr.io keeps resolving. Same image -- the manifest digests were compared and match.
-FROM mirror.gcr.io/library/golang:1.26.9-alpine AS build
+FROM mirror.gcr.io/library/golang:1.26.10-alpine AS build
 WORKDIR /src
 # Modules first: this COPY+download layer is reused across source-only changes
 # via normal Docker layer caching. A BuildKit `--mount=type=cache` is deliberately

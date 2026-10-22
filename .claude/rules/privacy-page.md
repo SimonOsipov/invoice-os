@@ -38,7 +38,7 @@ paths:
 - Promise no preference centre and no per-category toggle. Neither exists.
 - Add no "last updated" date. Nothing keeps such a date true.
 - Add no claim about first-party server logs. Nothing in the repository establishes their retention.
-- Add no cookie table and no per-category breakdown. The site sets one non-essential cookie family for one purpose.
+- Add no cookie table and no per-category breakdown. One Accept covers the two non-essential cookie families, Google's and HubSpot's.
 - Add no step-by-step tour of the cookie notice. Name the control and say what each button does.
 - Claim no compliance with a named data-protection law. The page says it is not legal advice.
 - Disclose each new browser network sender on the page. List the external hosts the landing contacts.
@@ -52,6 +52,10 @@ paths:
 - Say that Open in Platform carries the feature or group. It is a content id, never visitor input.
 - Say in the Blog section that Reject on any of the three sites deletes the shared `_ga` cookies. Google's script can re-create them until reload.
 - Name the "Cookie choices" control in the Blog section. The Blog's control sits at the foot of its sidebar, beside the Library's. It brings the notice back.
+- Describe the chat in the "Live chat" section: what HubSpot receives, that it loads only after Accept on the production landing, and its domains.
+- Quote the chat domains from `HUBSPOT_CHAT_DOMAINS` and the script host from `CHAT_SCRIPT_HOST`. Never retype them.
+- Claim no region for chat data. HubSpot's data-hosting FAQ does not name chat data (checked 2026-10-21).
+- Name HubSpot's seven cookies and `__hs_do_not_track` in the cookie section, by purpose.
 
 ## Blog newsletter
 

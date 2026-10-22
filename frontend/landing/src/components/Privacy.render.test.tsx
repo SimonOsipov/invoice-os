@@ -412,6 +412,11 @@ describe('T3-15/T3-17/T3-18: the page describes the control that now exists', ()
     expect(carriesConsentQualifier(lede), `no consent condition in the lede: ${lede}`).toBe(true)
   })
 
+  it('PC-06 the Live chat section carries the consent qualifier', () => {
+    const chat = paragraphContaining('shows HubSpot')
+    expect(carriesConsentQualifier(chat), `no consent condition in: ${chat}`).toBe(true)
+  })
+
   it('T3-17 (AC-10): the collection-endpoint sentence carries the consent qualifier', () => {
     const endpoint = paragraphContaining('region1.google-analytics.com')
     expect(carriesConsentQualifier(endpoint), `no consent condition in: ${endpoint}`).toBe(true)

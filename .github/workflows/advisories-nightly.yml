@@ -1,6 +1,7 @@
 name: Advisories nightly
 
 # A finding fails the run and opens no issue (Q6).
+# govulncheck covers GO-only ids the advisories gate does not count.
 # schedule and workflow_dispatch run only from main; pull_request is the pre-merge run.
 on:
   schedule:
@@ -26,3 +27,18 @@ jobs:
           go-version-file: go.mod
       - name: Scan for high or critical advisories
         run: bash scripts/ci/advisories.sh
+
+  govulncheck:
+    name: govulncheck nightly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Scan for reachable vulnerabilities
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go version
+          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...

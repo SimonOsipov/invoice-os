@@ -600,7 +600,7 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 	}
 	pw := http.NewServeMux()
 	pwLog := slog.New(slog.DiscardHandler)
-	pw.Handle("POST /auth/invitation/password", handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, pwLog), pwLog, nil, nil).InvitationPassword)
+	pw.Handle("POST /auth/invitation/password", handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, pwLog), pwLog, nil, nil, nil).InvitationPassword)
 	for _, method := range []string{http.MethodOptions, http.MethodPost} {
 		req := httptest.NewRequest(method, "/auth/invitation/password", strings.NewReader("type=signup"))
 		req.Header.Set("Origin", origin)

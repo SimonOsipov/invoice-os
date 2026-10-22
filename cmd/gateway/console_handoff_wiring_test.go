@@ -37,7 +37,7 @@ func TestHandoffHandlers_ConsoleHandoffIsStaffOnlyAndRedeemsThroughExchange(t *t
 		t.Fatal(err)
 	}
 	log := slog.New(slog.DiscardHandler)
-	h := handoffHandlers(goTrueAnswering(t, `{}`), nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, verifier)
+	h := handoffHandlers(goTrueAnswering(t, `{}`), nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, verifier, nil)
 	staff, _ := mock.Mint(auth.MintOptions{Subject: "11111111-1111-1111-1111-111111111111", Staff: true})
 	customer, _ := mock.Mint(auth.MintOptions{Subject: "11111111-1111-1111-1111-111111111111", TenantID: "tenant-a"})
 
@@ -110,7 +110,7 @@ func TestHandoffHandlers_ConsoleHandoffRefusesARevokedSession(t *testing.T) {
 		defer gotrue.Close()
 		authURL, _ := url.Parse(gotrue.URL)
 		log := slog.New(slog.DiscardHandler)
-		h := handoffHandlers(authURL, nil, gateway.NewSessionChecker(authURL, http.DefaultClient, time.Now, log), log, nil, verifier)
+		h := handoffHandlers(authURL, nil, gateway.NewSessionChecker(authURL, http.DefaultClient, time.Now, log), log, nil, verifier, nil)
 		req := httptest.NewRequest(http.MethodPost, "/auth/console-handoff", strings.NewReader(`{"state":"`+handoffState+`"}`))
 		req.Header.Set("Authorization", "Bearer "+staff)
 		rec := httptest.NewRecorder()

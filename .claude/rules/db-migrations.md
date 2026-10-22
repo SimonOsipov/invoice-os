@@ -47,6 +47,8 @@ paths:
 - Gate `db.Reset` on `platform.DeployEnv()`, never on `ENVIRONMENT`.
 - Gate the gateway's account-state boot grant on `platform.Posture(platform.DeployEnv())`. Start it only for the `local` and `preview` postures.
 - Connect as `supabase_auth_admin` only from GoTrue and from `db.GrantAccountStateRead`.
+- Connect as `invoice_gateway` only from the gateway's hand-off store. Grant it `SELECT`, `INSERT` and `DELETE` on `gateway_handoff_codes` and nothing else.
+- Create `invoice_gateway` on production by hand before setting `DATABASE_GATEWAY_URL`, then grant it the three verbs on `gateway_handoff_codes`. The migration grants only when the role already exists.
 - Grant the account-state read on production by hand, as the superuser or `supabase_auth_admin`. The production gateway never runs it.
 
 ```sql

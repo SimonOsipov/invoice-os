@@ -91,6 +91,7 @@ func main() {
 			Reader:   resolveRolePassword("READER_PASSWORD", "INVOICE_TENANT_READER_PASSWORD", app.Logger),
 			// No deprecated name ever existed, so no fallback to resolve.
 			AuthAdmin: os.Getenv("AUTH_ADMIN_PASSWORD"),
+			Gateway:   os.Getenv("GATEWAY_PASSWORD"),
 		},
 		BootstrapFS:  dbsql.FS,
 		MigrationsFS: migrations.FS,
@@ -216,7 +217,7 @@ func main() {
 
 	// Public sign-in hand-off, renewal and sign-out, outside the verifier; console-handoff verifies its own bearer.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
-	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier)
+	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier, handoffStore(app.Logger))
 	app.Mux.Handle("POST /auth/verify", h.Verify)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
@@ -399,6 +400,23 @@ func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionCh
 	return gateway.ResetPasswordHandler(authURL, siteURL, client, sessions, signIn, log)
 }
 
+// handoffStore shares hand-off codes through Postgres when DATABASE_GATEWAY_URL is set.
+// Cloud Run runs several instances, so it requires the URL there.
+func handoffStore(log *slog.Logger) gateway.Handoffs {
+	dsn := os.Getenv("DATABASE_GATEWAY_URL")
+	if dsn == "" {
+		if os.Getenv("K_SERVICE") != "" {
+			platform.Fatal(log, "gateway: DATABASE_GATEWAY_URL is required on Cloud Run")
+		}
+		return nil
+	}
+	pool, err := db.NewPool(context.Background(), dsn)
+	if err != nil {
+		platform.Fatal(log, "gateway: hand-off store: %v", err)
+	}
+	return gateway.NewPGHandoffStore(pool, gateway.HandoffTTL, log)
+}
+
 // handoff holds the public sign-in hand-off, renewal and sign-out handlers main mounts outside /api/.
 type handoff struct {
 	SignIn, Exchange, Refresh, SignOut, Verify, InvitationPassword, ConsoleHandoff http.Handler
@@ -409,8 +427,11 @@ type handoff struct {
 // Sign-out evicts from sessions, the API's own checker.
 // Every minter and exchange share one code store: a code is redeemable only through exchange.
 // A nil siteURL makes Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
-func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink, verifier *auth.Verifier) handoff {
-	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
+// A nil store means the in-process one.
+func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink, verifier *auth.Verifier, store gateway.Handoffs) handoff {
+	if store == nil {
+		store = gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
+	}
 	throttle := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
 	// Same settings as registrationHandlers; TestRegistrationClientTimeoutAndNoFollow pins that literal in place.
 	client := &http.Client{

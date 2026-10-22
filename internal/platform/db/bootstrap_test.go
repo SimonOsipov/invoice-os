@@ -212,6 +212,9 @@ func restoreDevDefaultPasswords(t *testing.T, pool *pgxpool.Pool) {
 	if roleExists(t, pool, authAdminRole) {
 		alterRolePassword(t, pool, authAdminRole, def.authAdmin.value)
 	}
+	if roleExists(t, pool, "invoice_gateway") {
+		alterRolePassword(t, pool, "invoice_gateway", envOr("GATEWAY_PASSWORD", "gateway"))
+	}
 }
 
 // restoreSafeAttributes re-asserts the exact safe attribute set db/bootstrap.sql itself
@@ -949,6 +952,25 @@ func acquireAdvisoryLockRoundTrip(t *testing.T, pool *pgxpool.Pool, key int64) {
 // create-or-converge path with unique per-run passwords and proves them via an
 // actual login, which is exactly what a genuinely fresh/empty DB's first boot
 // would also exercise.
+// An unset gateway password leaves invoice_gateway's password as it was.
+func TestBootstrapLeavesAnUnsetGatewayPasswordAlone(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
+	gw := "boot-keep-gw-" + uuid.NewString()
+	pw := db.RolePasswords{Migrator: "boot-keep-mig-" + uuid.NewString(), App: "boot-keep-app-" + uuid.NewString(), Reader: "boot-keep-rdr-" + uuid.NewString(), AuthAdmin: "boot-keep-adm-" + uuid.NewString(), Gateway: gw}
+	if err := db.Bootstrap(context.Background(), superDSN, pw, dbsql.FS); err != nil {
+		t.Fatalf("Bootstrap with a gateway password: %v", err)
+	}
+	pw.Gateway = ""
+	if err := db.Bootstrap(context.Background(), superDSN, pw, dbsql.FS); err != nil {
+		t.Fatalf("Bootstrap without a gateway password: %v", err)
+	}
+	if err := attemptLogin(t, loginDSN(t, superDSN, "invoice_gateway", gw)); err != nil {
+		t.Errorf("invoice_gateway lost its password to a bootstrap without one: %v", err)
+	}
+}
+
 func TestBootstrapFromEmbedded(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
@@ -959,6 +981,7 @@ func TestBootstrapFromEmbedded(t *testing.T) {
 		App:       "boot-embed-app-" + uuid.NewString(),
 		Reader:    "boot-embed-rdr-" + uuid.NewString(),
 		AuthAdmin: "boot-embed-adm-" + uuid.NewString(),
+		Gateway:   "boot-embed-gw-" + uuid.NewString(),
 	}
 
 	if err := db.Bootstrap(context.Background(), superDSN, pw, dbsql.FS); err != nil {
@@ -970,6 +993,7 @@ func TestBootstrapFromEmbedded(t *testing.T) {
 		{"invoice_app", pw.App},
 		{"invoice_tenant_reader", pw.Reader},
 		{"supabase_auth_admin", pw.AuthAdmin},
+		{"invoice_gateway", pw.Gateway},
 	} {
 		if err := attemptLogin(t, loginDSN(t, superDSN, tc.role, tc.password)); err != nil {
 			t.Errorf("%s: login with the Bootstrap-injected password failed: %v", tc.role, err)

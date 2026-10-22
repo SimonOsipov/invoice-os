@@ -5,7 +5,7 @@ import { CrashBoundary } from '@invoice-os/monitoring'
 
 const h = vi.hoisted(() => {
   const render = vi.fn()
-  return { render, boot: vi.fn(), initMonitoring: vi.fn(), createRoot: vi.fn(() => ({ render })), initsBeforeMark: -1, initsBeforeCapture: -1 }
+  return { render, boot: vi.fn(), bootChat: vi.fn(), initMonitoring: vi.fn(), createRoot: vi.fn(() => ({ render })), initsBeforeMark: -1, initsBeforeCapture: -1 }
 })
 
 vi.mock('@invoice-os/monitoring', () => ({
@@ -17,7 +17,7 @@ vi.mock('./confirmLink', () => {
   h.initsBeforeCapture = h.initMonitoring.mock.calls.length
   return { confirmToken: () => null }
 })
-vi.mock('./analytics', () => ({ bootBlogAnalytics: h.boot }))
+vi.mock('./analytics', () => ({ bootBlogAnalytics: h.boot, bootBlogChat: h.bootChat }))
 vi.mock('react-dom/client', () => ({ createRoot: h.createRoot }))
 // Evaluated when main.tsx's own import runs: counts inits that ran before it.
 vi.mock('@invoice-os/design-tokens/v2/assets/mark.png', () => {
@@ -39,6 +39,9 @@ describe('main', () => {
     expect(h.render).toHaveBeenCalledTimes(1)
     expect(h.boot).toHaveBeenCalledTimes(1)
     expect(h.render.mock.invocationCallOrder[0]).toBeLessThan(h.boot.mock.invocationCallOrder[0])
+    expect(h.bootChat).toHaveBeenCalledTimes(1)
+    expect(h.render.mock.invocationCallOrder[0]).toBeLessThan(h.bootChat.mock.invocationCallOrder[0])
+    expect(h.boot.mock.invocationCallOrder[0]).toBeLessThan(h.bootChat.mock.invocationCallOrder[0])
     const root = h.render.mock.calls[0][0] as ReactElement<{ children: ReactElement<{ brand: ReactElement<{ src?: unknown }> }> }>
     expect(root.type).toBe(StrictMode)
     const boundary = root.props.children

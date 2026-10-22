@@ -19,7 +19,7 @@ import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
 import { sentryOptions } from '@invoice-os/monitoring'
 import { CHAT_SCRIPT_HOST, HUBSPOT_CHAT_DOMAINS, HUBSPOT_COOKIE_NAMES } from '../hubspotChat'
-import { APP_HOSTNAMES, PRODUCTION_HOSTNAMES } from '../hubspot'
+import { APP_HOSTNAMES, BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES } from '../hubspot'
 import {
   aiModelVendors,
   aiProviderHosts,
@@ -33,6 +33,7 @@ import {
   newsletterIntakeFields,
   newsletterPendingHours,
   newsletterResendPropertyKeys,
+  BLOG_CHAT_PARAGRAPH,
   resubscribeReplacesRequest,
   rulePutsUnsubscribeInEveryBroadcast,
   syncBlogAddsSegmentAndTopic,
@@ -62,6 +63,8 @@ const LEDGER_NEEDLES: readonly (readonly [string, string])[] = [
   ['C32 Accept covers the chat', 'Accept allows Google Analytics and the HubSpot live chat'],
   ['C33 the app identifies by account email', 'There it also tells HubSpot the email address of the account you are signed in with'],
   ['C34 sign-out deletes the chat', 'Signing out removes the chat from the page and deletes HubSpot'],
+  ['C35 the Library shows the chat', 'If you have allowed analytics, the Library shows HubSpot'],
+  ['C36 the Blog shows the chat', 'If you have allowed analytics, the Blog shows HubSpot'],
   ['E1 optional answers are pre-selected', 'come with an answer already selected when the form opens'],
   ['E2 the separate marketing box is quoted from code', MARKETING_CONSENT_TEXT],
   ['E3 Google sets the _ga cookies', 'These two are set by Google, not by our own code'],
@@ -412,8 +415,8 @@ describe('AUTH-17-09: the page quotes the consent copy from code', () => {
 
 // Pending the user's copy sign-off (Q15).
 const PROPOSED_CHAT_SECTION = [
-  `If you have allowed analytics, ${PRODUCTION_HOSTNAMES[0]} shows HubSpot's live chat, so that you can write to us from any page. Its code loads from ${CHAT_SCRIPT_HOST} only after you choose Accept. Before you choose, or if you choose Reject, HubSpot's chat and tracking code does not load. Our preview and test builds never load it.`,
-  `Whatever you type into the chat, including any name or email address you give there, goes to HubSpot, where we read it and reply. HubSpot's code also records which pages of this site you open, the address you arrived from, your screen size and language, and a fingerprint it computes from your browser, under a randomly generated identifier kept in its cookies. It sends all of this to HubSpot addresses at ${HUBSPOT_CHAT_DOMAINS.slice(0, -1).join(', ')} and ${HUBSPOT_CHAT_DOMAINS[HUBSPOT_CHAT_DOMAINS.length - 1]}.`,
+  `If you have allowed analytics, ${PRODUCTION_HOSTNAMES[0]}, our Feature Library at ${LIBRARY_HOSTNAMES[0]} and our Blog at ${BLOG_HOSTNAMES[0]} show HubSpot's live chat, so that you can write to us from any page. Its code loads from ${CHAT_SCRIPT_HOST} only after you choose Accept. Before you choose, or if you choose Reject, HubSpot's chat and tracking code does not load. Our preview and test builds never load it.`,
+  `Whatever you type into the chat, including any name or email address you give there, goes to HubSpot, where we read it and reply. HubSpot's code also records which pages of those sites you open, the address you arrived from, your screen size and language, and a fingerprint it computes from your browser, under a randomly generated identifier kept in its cookies. It sends all of this to HubSpot addresses at ${HUBSPOT_CHAT_DOMAINS.slice(0, -1).join(', ')} and ${HUBSPOT_CHAT_DOMAINS[HUBSPOT_CHAT_DOMAINS.length - 1]}.`,
   "Choosing Reject removes the chat from the page, deletes HubSpot's cookies and tells HubSpot's code to send nothing more. The code itself stays loaded in any of our pages you have open until you reload them.",
 ]
 
@@ -710,12 +713,17 @@ describe('BLOG-10: the Blog section matches the newsletter code', () => {
     expect(blogText()).toContain(`within ${hours} hours expires`)
   })
 
-  it('PB-05 no newsletter code names HubSpot, and the section names it only in a negation', () => {
+  it('PB-05 no newsletter code names HubSpot, and the Blog section names it for the chat sentence and one negation', () => {
     expect(newsletterGoFiles(), 'population: every newsletter*.go is scanned').toEqual(['newsletter.go', 'newsletter_handlers.go', 'newsletter_mode.go', 'newsletter_resend.go', 'newsletter_worker.go'])
     expect(workerNamesHubSpot(), 'control: worker.go names HubSpot').toBe(true)
     expect(newsletterCodeNamesHubSpot()).toBe(false)
-    const named = blogText().split(/(?<=[.!?])\s+/).filter((s) => s.includes('HubSpot'))
-    expect(named).toEqual(['Nothing from the newsletter goes to HubSpot.'])
+    const hubspotSentences = (t: string): string[] => t.split(/(?<=[.!?])\s+/).filter((s) => s.includes('HubSpot'))
+    const blogSentences = (): string[] =>
+      Array.from(blogSectionHtml().matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)).flatMap((m) => hubspotSentences(plainText(m[1])))
+    const expected = [...hubspotSentences(BLOG_CHAT_PARAGRAPH), 'Nothing from the newsletter goes to HubSpot.']
+    expect(expected, 'control: the pinned paragraph has one HubSpot sentence').toHaveLength(2)
+    expect(blogSentences()).toEqual(expected)
+    expect([...blogSentences(), 'Another sentence names HubSpot.'], 'control: a third HubSpot sentence is rejected').not.toEqual(expected)
   })
 
   it('PB-09 the link is single-use and expires, a second sign-up replaces it, and confirmed_at is stored', () => {

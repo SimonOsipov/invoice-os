@@ -105,7 +105,7 @@ export function clearHubSpotCookies(hostname: string, doc: Pick<Document, 'cooki
   return names
 }
 
-/** Expires `__hs_do_not_track`, which HubSpot writes on the registrable domain; the tracker only runs on www. */
+/** Expires `__hs_do_not_track`, which HubSpot writes on the registrable domain. */
 export function clearOptOutCookie(hostname: string, doc: Pick<Document, 'cookie'> = document): void {
   if (cookieNamesIn(doc.cookie).includes(OPT_OUT_COOKIE)) expireCookies([OPT_OUT_COOKIE], hostname, doc)
 }

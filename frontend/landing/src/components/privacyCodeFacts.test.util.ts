@@ -182,3 +182,7 @@ export function rulePutsUnsubscribeInEveryBroadcast(): boolean {
 export function confirmPageSaysOneClickUnsubscribe(): boolean {
   return readFileSync(join(REPO, 'frontend/blog/src/components/Confirm.tsx'), 'utf8').includes('Every email has a one-click unsubscribe.')
 }
+
+// The pinned Blog chat paragraph; Privacy.render.test.tsx pins it in place, Privacy.claims.test.tsx reads its HubSpot sentence.
+export const BLOG_CHAT_PARAGRAPH =
+  "If you have allowed analytics, the Blog shows HubSpot's live chat, which loads only after you choose Accept, sends HubSpot, about its own pages, what is described under Live chat below, and is removed, with HubSpot's cookies, when you choose Reject on any of our sites."

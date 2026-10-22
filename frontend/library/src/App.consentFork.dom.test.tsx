@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://pr-12-library.up.railway.app/" }
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { w } from '../../landing/src/hubspotChat.test.util'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -50,6 +51,8 @@ async function mount(path = '/') {
 
 beforeEach(() => {
   document.head.innerHTML = ''
+  delete w._hsq
+  delete w.HubSpotConversations
   delete (window as TestWindow).dataLayer
   vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
 })
@@ -89,5 +92,24 @@ describe('library consent off the library host', () => {
     expect(m.analytics.bootLibraryAnalytics()).toBe(false)
     expect(document.querySelectorAll(ANY_TAG)).toHaveLength(0)
     expect(JSON.parse(localStorage.getItem(KEY)!).analytics).toBe(false)
+  })
+})
+
+describe('library chat off the library host', () => {
+  const loaders = () => document.querySelectorAll('script#hs-script-loader')
+
+  it('CH-09 Accept loads no chat on a PR fork host', async () => {
+    await mount()
+    click(byText('Accept'))
+    expect(loaders()).toHaveLength(0)
+    expect(w._hsq).toBeUndefined()
+  })
+
+  it('CH-10 a stored grant boots and syncs no chat on a PR fork host', async () => {
+    localStorage.setItem(KEY, GRANT)
+    const m = await mount()
+    expect(m.analytics.bootLibraryChat()).toBe(false)
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    expect(loaders()).toHaveLength(0)
   })
 })

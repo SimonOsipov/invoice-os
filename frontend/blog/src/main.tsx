@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client'
 import { CrashBoundary } from '@invoice-os/monitoring'
 import markUrl from '@invoice-os/design-tokens/v2/assets/mark.png'
 import { App } from './App'
-import { bootBlogAnalytics } from './analytics'
+import { bootBlogAnalytics, bootBlogChat } from './analytics'
 
 // v2 tokens, then the .asc-app layer, then the blog rules.
 import '@invoice-os/design-tokens/v2/styles.css'
@@ -23,3 +23,4 @@ createRoot(document.getElementById('root')!).render(
 
 // After render, outside React: StrictMode's double effects cannot reach it.
 bootBlogAnalytics()
+bootBlogChat()

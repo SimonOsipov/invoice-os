@@ -114,7 +114,7 @@ describe('applyChoice', () => {
     expect(w._hsq).toBeUndefined()
   })
 
-  it('the blog and library host lists load no chat', async () => {
+  it('applyChoice and syncConsent alone load no chat for the blog and library lists; their analytics.ts binds it', async () => {
     const { applyChoice, syncConsent } = await fresh()
     for (const [hostname, hosts] of [
       ['blog.ascomply.com', BLOG_HOSTNAMES],

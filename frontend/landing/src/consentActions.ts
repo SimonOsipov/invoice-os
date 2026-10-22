@@ -19,7 +19,7 @@ export function applyChoice(
   // muted and the visitor's consent silently ignored. Pinned by T3-14.
   setAnalyticsRevoked(!accepted)
 
-  // The chat gets no `opts.hosts`: the blog and library lists never load it.
+  // The chat gets no `opts.hosts`: the blog and library bind their own list in their `analytics.ts`.
   if (accepted) {
     ensureTag(hostname, record, opts?.hosts)
     loadChat(hostname, record)

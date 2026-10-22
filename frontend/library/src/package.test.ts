@@ -76,4 +76,18 @@ describe('library package', () => {
     expect(arg).toBeGreaterThan(stage)
     expect(run).toBeGreaterThan(arg)
   })
+
+  // Every <form open tag must opt out; an open tag the matcher cannot read counts as a failure.
+  const formsOptOut = (src: string) =>
+    [...src.matchAll(/<form\b/g)].every((m) =>
+      /^<form\b(?:[^>{]|\{[^}]*\})*>/.exec(src.slice(m.index))?.[0].includes('data-hs-do-not-collect="true"'),
+    )
+
+  it('form_everyOpenTagOptsOutOfHubSpotCapture', () => {
+    expect(sources().map(({ f }) => f), 'control: the source list is read').toContain('App.tsx')
+    expect(sources().length, 'floor: the scan covers the library source').toBeGreaterThanOrEqual(20)
+    expect(formsOptOut('<form onSubmit={x}>'), 'control: a bare form is rejected').toBe(false)
+    expect(formsOptOut('<form data-hs-do-not-collect="true">')).toBe(true)
+    for (const { f, src } of sources()) expect(formsOptOut(src), f).toBe(true)
+  })
 })

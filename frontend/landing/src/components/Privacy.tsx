@@ -155,7 +155,9 @@ export function Privacy() {
             measurements of its own and re-create those cookies.
           </p>
           <p style={P}>
-            The Library has no forms, so it sends HubSpot nothing. It is typeset in the same Google fonts. When a
+            If you have allowed analytics, the Library shows HubSpot's live chat, which loads only after you choose
+            Accept, sends HubSpot, about its own pages, what is described under Live chat below, and is removed, with
+            HubSpot's cookies, when you choose Reject on any of our sites. The Library is typeset in the same Google fonts. When a
             Library page fails, your browser sends Sentry a report as described below; the Library does not send Sentry
             how long its pages take to load.
           </p>
@@ -171,6 +173,11 @@ export function Privacy() {
             script is still loaded into any of our pages you have open, and until you reload them it can send
             measurements of its own and re-create those cookies. The Blog is typeset in the same Google fonts. When a
             Blog page fails, your browser sends Sentry a report as described below.
+          </p>
+          <p style={P}>
+            If you have allowed analytics, the Blog shows HubSpot's live chat, which loads only after you choose Accept,
+            sends HubSpot, about its own pages, what is described under Live chat below, and is removed, with HubSpot's
+            cookies, when you choose Reject on any of our sites.
           </p>
           <p style={P}>
             The Blog has a newsletter sign-up. You give us your work email address, the topics you want and how often
@@ -248,14 +255,14 @@ export function Privacy() {
 
           <h2 style={H2}>Live chat</h2>
           <p style={P}>
-            If you have allowed analytics, {PRODUCTION_HOSTNAMES[0]} shows HubSpot's live chat, so that you can write to
-            us from any page. Its code loads from {CHAT_SCRIPT_HOST} only after you choose Accept. Before you choose, or
+            If you have allowed analytics, {PRODUCTION_HOSTNAMES[0]}, our Feature Library at {LIBRARY_HOSTNAMES[0]} and our Blog at {BLOG_HOSTNAMES[0]} show
+            HubSpot's live chat, so that you can write to us from any page. Its code loads from {CHAT_SCRIPT_HOST} only after you choose Accept. Before you choose, or
             if you choose Reject, HubSpot's chat and tracking code does not load. Our preview and test builds never load
             it.
           </p>
           <p style={P}>
             Whatever you type into the chat, including any name or email address you give there, goes to HubSpot, where
-            we read it and reply. HubSpot's code also records which pages of this site you open, the address you arrived
+            we read it and reply. HubSpot's code also records which pages of those sites you open, the address you arrived
             from, your screen size and language, and a fingerprint it computes from your browser, under a randomly
             generated identifier kept in its cookies. It sends all of this to HubSpot addresses at{' '}
             {joinList(HUBSPOT_CHAT_DOMAINS)}.

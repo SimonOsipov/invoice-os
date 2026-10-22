@@ -37,6 +37,7 @@ import {
   hubspotFormsKeys,
   resendContactKeys,
   resendSkipsUntickedDemoBooker,
+  BLOG_CHAT_PARAGRAPH,
 } from './privacyCodeFacts.test.util'
 
 const SRC_DIR = fileURLToPath(new URL('.', import.meta.url))
@@ -489,7 +490,11 @@ describe('T3-15/T3-17/T3-18: the page describes the control that now exists', ()
   })
 
   it('PC-06 the Live chat section carries the consent qualifier', () => {
-    const chat = paragraphContaining('shows HubSpot')
+    const para = paragraphContaining(`${BLOG_HOSTNAMES[0]} show HubSpot`)
+    const chat = para.split(/(?<=[.!?])\s+/).find((x) => x.includes(`${BLOG_HOSTNAMES[0]} show HubSpot`)) ?? ''
+    for (const host of [PRODUCTION_HOSTNAMES[0], LIBRARY_HOSTNAMES[0], BLOG_HOSTNAMES[0]]) {
+      expect(chat, `the lede does not name ${host}`).toContain(host)
+    }
     expect(carriesConsentQualifier(chat), `no consent condition in: ${chat}`).toBe(true)
   })
 
@@ -729,7 +734,7 @@ describe('the Library shares the landing\'s choice', () => {
   const LIBRARY_SECTION = [
     `Our Feature Library at ${LIBRARY_HOSTNAMES[0]} follows this policy too. One analytics choice covers this site and the Library: whatever you choose on either applies to both, and the other does not ask you again. Cookie choices, at the foot of this site's pages and of the Library's sidebar, brings the notice back on either, and a change made there applies to both.`,
     `If you allow analytics there, Google Analytics measures the Library in the same way and under the same property. Google also receives each Library page you view, when you choose Book the Demo, when you start the tour, and when you choose Open in Platform, with the feature or group it was for. The Library shares the _ga cookies with this site, so Google can tell that a visit to both came from the same browser. Choosing Reject on either site deletes those shared _ga cookies. If analytics was running, though, Google's script is still loaded into any of our pages you have open, and until you reload them it can send measurements of its own and re-create those cookies.`,
-    'The Library has no forms, so it sends HubSpot nothing. It is typeset in the same Google fonts. When a Library page fails, your browser sends Sentry a report as described below; the Library does not send Sentry how long its pages take to load.',
+    "If you have allowed analytics, the Library shows HubSpot's live chat, which loads only after you choose Accept, sends HubSpot, about its own pages, what is described under Live chat below, and is removed, with HubSpot's cookies, when you choose Reject on any of our sites. The Library is typeset in the same Google fonts. When a Library page fails, your browser sends Sentry a report as described below; the Library does not send Sentry how long its pages take to load.",
   ]
 
   it('PL-01 the active-on sentence names all three hosts from the lists', () => {
@@ -789,11 +794,14 @@ describe('the Library shares the landing\'s choice', () => {
       'Cookie choices',
       'a change made there applies to both',
       'Choosing Reject on either site deletes those shared _ga cookies',
-      'sends HubSpot nothing',
+      'the Library shows HubSpot',
+      "is removed, with HubSpot's cookies, when you choose Reject on any of our sites",
+      'The Library is typeset in the same Google fonts',
       'does not send Sentry how long',
     ]) {
       expect(section, `missing "${needle}"`).toContain(needle)
     }
+    expect(section).not.toContain('sends HubSpot nothing')
     expect(section).not.toContain('ascomply.com as a whole')
     expect(section).not.toContain('either address')
   })
@@ -840,6 +848,7 @@ describe('the Library shares the landing\'s choice', () => {
   const BLOG_HEADING = '>The Blog and its newsletter</h2>'
   const BLOG_SECTION = [
     `Our Blog at ${BLOG_HOSTNAMES[0]} follows this policy too. One analytics choice covers this site, the Feature Library and the Blog: whatever you choose on any of them applies to all three. Cookie choices, at the foot of each site's pages or sidebar, brings the notice back, and a change made there applies to all three. If you allow analytics, Google Analytics measures the Blog in the same way and under the same property, and Google receives each Blog page you view and when you choose Book the Demo. The Blog shares the _ga cookies with this site and the Library. Choosing Reject on any of them deletes those shared _ga cookies. If analytics was running, though, Google's script is still loaded into any of our pages you have open, and until you reload them it can send measurements of its own and re-create those cookies. The Blog is typeset in the same Google fonts. When a Blog page fails, your browser sends Sentry a report as described below.`,
+    BLOG_CHAT_PARAGRAPH,
     'The Blog has a newsletter sign-up. You give us your work email address, the topics you want and how often you want to hear from us. Nothing is kept for good until you confirm. We first hold your request on our own server with a one-time link, and we send the link to your address in a confirmation email. Resend, the service we use to send email, receives your address to deliver that email. A request you do not confirm within 48 hours expires, and its link stops working.',
     'When you click the link, we store your email address, your topics, how often you want to hear from us and the time you confirmed, on our own server. We also add you to our Blog list in Resend, with the same three details. Nothing from the newsletter goes to HubSpot. We send the newsletter by hand, and we follow the frequency you chose.',
     `To change your topics or how often you hear from us, sign up again with the new choices. Every newsletter email we send you carries a one-click unsubscribe link from Resend. To have your details deleted from our server and from Resend, email ${PRIVACY_CONTACT} and we will act on it.`,

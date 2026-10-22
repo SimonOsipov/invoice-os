@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -25,12 +26,19 @@ import (
 // rather than risk an unscoped (cross-tenant) query.
 var ErrNoTenant = errors.New("db: missing or invalid tenant id")
 
+// DefaultMaxConns caps a pool whose DSN sets no pool_max_conns. pgx's own default follows
+// the host CPU count, which Cloud Run does not bound; .claude/rules/db-migrations.md holds the budget.
+const DefaultMaxConns = 4
+
 // NewPool opens a pgx connection pool for the given connection string (the app
 // role's DATABASE_URL). The caller owns the pool and must Close it on shutdown.
 func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("db: open pool: %w", err)
+	}
+	if !strings.Contains(dsn, "pool_max_conns=") {
+		cfg.MaxConns = DefaultMaxConns
 	}
 	cfg.ConnConfig.Tracer = queryTracer{}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)

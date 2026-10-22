@@ -186,6 +186,27 @@ func TestNewPool_InstallsTheQueryTracer(t *testing.T) {
 	}
 }
 
+func TestNewPool_CapsConnectionsUnlessTheDSNSetsACap(t *testing.T) {
+	for _, c := range []struct {
+		dsn  string
+		want int32
+	}{
+		{"postgres://u:p@127.0.0.1:1/x", DefaultMaxConns},
+		{"postgres://u:p@127.0.0.1:1/x?sslmode=disable", DefaultMaxConns},
+		{"postgres://u:p@127.0.0.1:1/x?pool_max_conns=9", 9},
+		{"postgres://u:p@127.0.0.1:1/x?sslmode=disable&pool_max_conns=2", 2},
+	} {
+		pool, err := NewPool(context.Background(), c.dsn)
+		if err != nil {
+			t.Fatalf("NewPool(%q): %v", c.dsn, err)
+		}
+		if got := pool.Config().MaxConns; got != c.want {
+			t.Errorf("NewPool(%q) MaxConns = %d, want %d", c.dsn, got, c.want)
+		}
+		pool.Close()
+	}
+}
+
 func TestNewPool_BadDSNErrorIsWrapped(t *testing.T) {
 	pool, err := NewPool(context.Background(), "postgres://u:p@[::1")
 	if pool != nil {

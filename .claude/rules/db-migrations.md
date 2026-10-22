@@ -75,3 +75,31 @@ paths:
 - Treat `invoice_migrator` as able to read every column granted to `staff_reader`, in every tenant, through `SET ROLE staff_reader`.
 - Scope a client table by `app.entity_scope` as the `tenant_isolation` policy of `invoices` does. Unset or `''` means every client.
 - Scope a child table by the visibility of its parent row, as the `tenant_isolation` policy of `line_items` does.
+
+## Connection budget
+
+Cloud SQL 1 vCPU / 3.75 GB allows 100 connections (GKE-01 P5); 3 are reserved for superusers.
+
+- `db.NewPool` caps a pool at `DefaultMaxConns` (4) when the DSN sets no `pool_max_conns`.
+- Set `pool_max_conns` in every hosted DSN, as the table says.
+- Cap each Cloud Run service's max instances at the table's value.
+- Recompute the total before you add a service, a pool or an instance. Keep it at 80 or below.
+
+| Holder | DSN | `pool_max_conns` | Max instances | Connections |
+|---|---|---|---|---|
+| gateway | `DATABASE_GATEWAY_URL` | 4 | 2 | 8 |
+| tenancy | `DATABASE_URL` | 4 | 2 | 8 |
+| portfolio | `DATABASE_URL` | 4 | 1 | 4 |
+| invoice | `DATABASE_URL` | 4 | 2 | 8 |
+| validation | `DATABASE_URL` | 4 | 1 | 4 |
+| dashboard | `DATABASE_URL` | 4 | 1 | 4 |
+| submission | `DATABASE_URL` | 4 | 2 | 8 |
+| notifications | `DATABASE_URL` | 4 | 1 | 4 |
+| worker | `DATABASE_URL` (River runs 14 jobs at once) | 16 | 1 | 16 |
+| worker | `DATABASE_READER_URL` | 2 | 1 | 2 |
+| worker | leader connection | – | 1 | 1 |
+| GoTrue | `GOTRUE_DB_MAX_POOL_SIZE` | 10 | 1 | 10 |
+| migrate job | goose, the lock and one provisioning connection | – | 1 | 3 |
+| **Total** | | | | **80** |
+
+ceiling: a rollout runs old and new revisions together; one new instance per service at a full pool adds up to 36. Revisit when `pg_stat_activity` passes 80 or a pool waits: a larger tier or a pooler.

@@ -45,7 +45,7 @@ func freePort(t *testing.T) int {
 
 // bootVars are the variables every worker boot needs besides the databases; none reaches a network.
 var bootVars = map[string]string{
-	"GATEWAY_URL": "http://gateway.invalid", "APP_ADAPTER": "mock",
+	"GATEWAY_URL": "http://gateway.invalid", "GATEWAY_TOKEN": "gw-token", "APP_ADAPTER": "mock",
 	"DOCUMENT_BUCKET": "b", "DOCUMENT_ENDPOINT": "http://127.0.0.1:1", "DOCUMENT_REGION": "r",
 	"DOCUMENT_ACCESS_KEY_ID": "k", "DOCUMENT_SECRET_ACCESS_KEY": "s",
 }

@@ -629,7 +629,7 @@ func readyUpstream(t *testing.T, code int, body string) *url.URL {
 			_, _ = w.Write([]byte(`{"status":"ok","build":"abc1234"}`))
 		case "/readyz":
 			if code == 0 {
-				time.Sleep(probeTimeout + time.Second) // a hung dependency check
+				time.Sleep(readyzTimeout + time.Second) // a hung dependency check
 				return
 			}
 			w.WriteHeader(code)
@@ -687,7 +687,7 @@ func TestFleetAHungReadinessCheckIsNotReadyWithinItsTimeout(t *testing.T) {
 	if rec.Code != http.StatusOK || s.Status != statusUp || s.Ready == nil || *s.Ready || !slices.Equal(s.NotReady, []string{"readyz"}) {
 		t.Fatalf("invoice = %+v, code %d", s, rec.Code)
 	}
-	if d := time.Since(start); d > 2*probeTimeout {
+	if d := time.Since(start); d > 2*readyzTimeout {
 		t.Fatalf("the roll-up took %v", d)
 	}
 }

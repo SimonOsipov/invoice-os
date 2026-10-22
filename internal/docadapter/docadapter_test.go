@@ -247,8 +247,7 @@ func (o *psObjects) Get(context.Context, string, string) (document.Object, error
 }
 
 // TestPageSink_PutsToTheDocumentStore: the offset assertion is the load-bearing one.
-// document.Service.Store rewinds before its own Put for the reason recorded at
-// internal/document/service.go:45 -- Put transmits from the reader's CURRENT offset, so an
+// document.Service.Store rewinds before its own Put for the reason recorded there -- Put transmits from the reader's CURRENT offset, so an
 // already-read reader sends zero bytes under a declared length and the object lands empty.
 func TestPageSink_PutsToTheDocumentStore(t *testing.T) {
 	objects := &psObjects{}

@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	// The literal by value, matching internal/submission/verdict_audit.go:25.
+	// The literal by value, matching recordSubmissionAudit in internal/submission.
 	eaActor = "system"
 
 	eaAuditPath = "github.com/SimonOsipov/invoice-os/internal/audit"
@@ -228,7 +228,7 @@ func eaSitesIn(fset *token.FileSet, rel string, f *ast.File) (sites []eaSite, fu
 }
 
 // eaProdFiles lists every non-test .go file under cmd/ and internal/, floored on both roots the
-// way internal/platform/db/seam_coverage_test.go:148 floors the same walk.
+// way internal/platform/db/seam_coverage_test.go floors the same walk.
 func eaProdFiles(t *testing.T) (string, []string) {
 	t.Helper()
 

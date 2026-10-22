@@ -170,14 +170,17 @@ func main() {
 	sw.Queue, pw.Queue = q, q
 	app.AddBackgroundWorker(q)
 
+	// Each periodic task runs in one worker instance only.
+	leader := db.NewLeader(mustEnv("DATABASE_URL"))
+
 	fleet := systemhealth.NewFleetReader(gw, &http.Client{Transport: platform.TraceTransport(nil)})
 	sampler := &systemhealth.Sampler{Store: &systemhealth.Store{Pool: pool}, Fleet: fleet, Now: time.Now, Logger: app.Logger}
-	app.AddBackgroundWorker(codelist.NewWorker(systemhealth.SampleInterval, sampler.Sample))
+	app.AddBackgroundWorker(codelist.NewWorker(systemhealth.SampleInterval, leader.Lead("health-sample", sampler.Sample)))
 
-	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, notifications.NewNewsletterStore(pool, q.River()).PurgeExpired))
+	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("newsletter-purge", notifications.NewNewsletterStore(pool, q.River()).PurgeExpired)))
 
 	app.AddBackgroundWorker(codelist.NewWorker(codelist.SyncInterval,
-		codelist.NewSyncer(pool, codelist.DefaultBaseURL, nil, app.Logger).SyncAll))
+		leader.Lead("codelist-sync", codelist.NewSyncer(pool, codelist.DefaultBaseURL, nil, app.Logger).SyncAll)))
 
 	cfg, err := reconciliation.ConfigFromEnv()
 	if err != nil {
@@ -185,7 +188,7 @@ func main() {
 	}
 	tenants := func(ctx context.Context) ([]string, error) { return reconciliation.EnumerateTenants(ctx, readerPool) }
 	rec := &reconciliation.Reconciler{ReaderPool: readerPool, AppPool: pool, Queue: q, Cfg: cfg, Logger: app.Logger}
-	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, rec.SweepOnce))
+	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, leader.Lead("reconciliation-sweep", rec.SweepOnce)))
 
 	// The re-check runs as invoice_app: RecheckCovered refuses a privileged role.
 	rechecker := &invoice.Rechecker{
@@ -195,11 +198,12 @@ func main() {
 		Tenants: tenants,
 		Logger:  app.Logger,
 	}
-	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, rechecker.RunOnce))
-	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, rechecker.RunCustomOnce))
+	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, leader.Lead("recheck", rechecker.RunOnce)))
+	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, leader.Lead("recheck-custom", rechecker.RunCustomOnce)))
 
 	snap := &dashboard.Snapshotter{Pool: pool, Tenants: tenants, Now: time.Now, Logger: app.Logger}
-	app.AddBackgroundWorker(codelist.NewWorker(dashboard.SnapshotInterval, snap.RunOnce))
+	app.AddBackgroundWorker(codelist.NewWorker(dashboard.SnapshotInterval, leader.Lead("rollup-snapshot", snap.RunOnce)))
+	app.AddBackgroundWorker(leader) // last: Stop releases the locks after every task has stopped
 
 	if err := app.Run(ctx); err != nil {
 		platform.Fatal(app.Logger, "worker: %v", err)

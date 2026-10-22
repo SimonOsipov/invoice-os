@@ -42,12 +42,9 @@ type ProvisionConfig struct {
 	Environment   string // raw os.Getenv("ENVIRONMENT")
 	BootstrapFlag string // raw os.Getenv("GATEWAY_DB_BOOTSTRAP")
 
-	// RailwayEnvironmentName is the raw os.Getenv("RAILWAY_ENVIRONMENT_NAME") —
-	// deliberately NOT Environment/ENVIRONMENT. See ResetEnabled's doc comment
-	// (reset.go) for why the destructive reset below needs a variable that
-	// actually varies between a PR fork and its persistent source, which
-	// ENVIRONMENT (forked verbatim) cannot provide.
-	RailwayEnvironmentName string
+	// DeployEnv is platform.DeployEnv(), deliberately NOT ENVIRONMENT, which is
+	// forked verbatim. See ResetEnabled.
+	DeployEnv string
 	// ResetFlag is the raw os.Getenv("GATEWAY_DB_RESET") — a SEPARATE opt-in
 	// from BootstrapFlag/GATEWAY_DB_BOOTSTRAP for the strictly more dangerous
 	// Reset step (reset.go). See ResetEnabled's doc comment.
@@ -95,7 +92,7 @@ type ProvisionConfig struct {
 // nothing red anywhere to say so.
 func (cfg ProvisionConfig) ResetWillRun() bool {
 	return BootstrapEnabled(cfg.Environment, cfg.BootstrapFlag) &&
-		ResetEnabled(cfg.RailwayEnvironmentName, cfg.ResetFlag)
+		ResetEnabled(cfg.DeployEnv, cfg.ResetFlag)
 }
 
 // unrenderedReference is the opening delimiter of a Railway variable reference.
@@ -227,7 +224,7 @@ func lockProvisionTail(ctx context.Context, superuserDSN string) (func(), error)
 // superuser DSN cannot fail a guard-off boot (AC-3).
 //
 // Reset's own guard (cfg.ResetWillRun, which folds in ResetEnabled's
-// cfg.RailwayEnvironmentName/cfg.ResetFlag pair — see reset.go for why that
+// cfg.DeployEnv/cfg.ResetFlag pair — see reset.go for why that
 // pair, not cfg.Environment/cfg.BootstrapFlag) is checked ONLY when the
 // bootstrap/seed guard is already on: resetting a database Provision is not otherwise
 // about to (re)seed would leave a PR environment's Postgres empty rather than

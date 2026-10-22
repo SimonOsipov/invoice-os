@@ -195,7 +195,7 @@ func TestProvisionResetAndPurgeErrorInOneBoot(t *testing.T) {
 	holdAccessExclusive(t, superDSN, "invitations")
 
 	cfg := productionShapedProvisionConfig(superDSN, migDSN)
-	cfg.RailwayEnvironmentName = "pr-111"
+	cfg.DeployEnv = "pr-111"
 	cfg.ResetFlag = "true"
 	if !cfg.ResetWillRun() {
 		t.Fatal("test setup: ResetWillRun() is false, so Reset would not fire and this case proves nothing")
@@ -238,7 +238,7 @@ func TestProvisionPurgeOutcomeIsRanWhenItDeletesNothing(t *testing.T) {
 	}
 
 	cfg := productionShapedProvisionConfig(superDSN, migDSN)
-	cfg.RailwayEnvironmentName = "pr-112"
+	cfg.DeployEnv = "pr-112"
 	cfg.ResetFlag = "true" // Reset keeps the tables empty up to the purge.
 	if err := db.Provision(ctx, cfg); err != nil {
 		t.Fatalf("Provision over an empty demo set: %v", err)

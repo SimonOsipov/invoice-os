@@ -174,7 +174,7 @@ func AssertNoLeak(t testing.TB, events []*sentry.Event) {
 func Boot(t testing.TB, service string) (*platform.App, *Recorder, Labels) {
 	t.Helper()
 	t.Setenv("SENTRY_DSN", fakeDSN)
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	t.Setenv("DEPLOY_ENV", "production")
 	t.Setenv("ENVIRONMENT", "development")
 	t.Setenv("RAILWAY_GIT_COMMIT_SHA", fakeRailwaySHA)
 

@@ -32,14 +32,14 @@ import (
 // TestResetWillRun pins the predicate both Provision and the gateway branch on.
 // The two rows that matter most are the two real deployments: a PR fork, where
 // ENVIRONMENT is the literal "development" it inherited and only
-// RAILWAY_ENVIRONMENT_NAME distinguishes the fork, and the persistent
+// DEPLOY_ENV distinguishes the fork, and the persistent
 // environment, where the same ENVIRONMENT value must NOT produce a reset.
 func TestResetWillRun(t *testing.T) {
 	cases := []struct {
 		name        string
 		environment string // ENVIRONMENT — forked verbatim, hence "development" in both live rows
 		bootstrap   string // GATEWAY_DB_BOOTSTRAP
-		railwayName string // RAILWAY_ENVIRONMENT_NAME — the only input that differs live
+		railwayName string // DEPLOY_ENV — the only input that differs live
 		reset       string // GATEWAY_DB_RESET
 		want        bool
 	}{
@@ -56,13 +56,13 @@ func TestResetWillRun(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := db.ProvisionConfig{
-				Environment:            c.environment,
-				BootstrapFlag:          c.bootstrap,
-				RailwayEnvironmentName: c.railwayName,
-				ResetFlag:              c.reset,
+				Environment:   c.environment,
+				BootstrapFlag: c.bootstrap,
+				DeployEnv:     c.railwayName,
+				ResetFlag:     c.reset,
 			}
 			if got := cfg.ResetWillRun(); got != c.want {
-				t.Errorf("ResetWillRun() = %v, want %v (ENVIRONMENT=%q GATEWAY_DB_BOOTSTRAP=%q RAILWAY_ENVIRONMENT_NAME=%q GATEWAY_DB_RESET=%q)",
+				t.Errorf("ResetWillRun() = %v, want %v (ENVIRONMENT=%q GATEWAY_DB_BOOTSTRAP=%q DEPLOY_ENV=%q GATEWAY_DB_RESET=%q)",
 					got, c.want, c.environment, c.bootstrap, c.railwayName, c.reset)
 			}
 		})

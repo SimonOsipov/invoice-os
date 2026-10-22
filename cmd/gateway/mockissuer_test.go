@@ -189,8 +189,8 @@ func TestTaggedMockIssuerRoutesKeepTheirWiring(t *testing.T) {
 		}
 	})
 
-	t.Run("an empty body mints whatever RAILWAY_ENVIRONMENT_NAME says", func(t *testing.T) {
-		t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	t.Run("an empty body mints whatever DEPLOY_ENV says", func(t *testing.T) {
+		t.Setenv("DEPLOY_ENV", "production")
 		_, hosted := mockIssuerRoutes("development", "true", gateway.CORS([]string{origin}), logger)
 		if hosted == nil {
 			t.Fatal("mockIssuerRoutes returned no login handler")
@@ -198,7 +198,7 @@ func TestTaggedMockIssuerRoutesKeepTheirWiring(t *testing.T) {
 		rec := httptest.NewRecorder()
 		hosted.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader("")))
 		if rec.Code != http.StatusOK {
-			t.Fatalf("POST empty body under RAILWAY_ENVIRONMENT_NAME=production = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			t.Fatalf("POST empty body under DEPLOY_ENV=production = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 		}
 		var tok struct {
 			AccessToken string `json:"access_token"`
@@ -210,9 +210,9 @@ func TestTaggedMockIssuerRoutesKeepTheirWiring(t *testing.T) {
 }
 
 // The mint serves any identity wherever MockIssuerEnabled is set; the Railway environment name must not gate it.
-func TestTaggedMockLoginIgnoresRailwayEnvironmentName(t *testing.T) {
+func TestTaggedMockLoginIgnoresDeployEnv(t *testing.T) {
 	t.Setenv("AUTH_ISSUER", mountTestIssuer)
-	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	t.Setenv("DEPLOY_ENV", "production")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	_, login := mockIssuerRoutes("preview", "true", gateway.CORS([]string{"https://app.ascomply.test"}), logger)
 	if login == nil {
@@ -221,7 +221,7 @@ func TestTaggedMockLoginIgnoresRailwayEnvironmentName(t *testing.T) {
 	rec := httptest.NewRecorder()
 	login.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{}`)))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("POST {} under RAILWAY_ENVIRONMENT_NAME=production = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		t.Fatalf("POST {} under DEPLOY_ENV=production = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 

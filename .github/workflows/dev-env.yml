@@ -57,8 +57,7 @@ name: Dev Env (deploy full fleet + verify)
 # Human-applied prerequisites (see .claude/rules/ci-railway.md):
 #  - Railway PR Environments are OFF and MUST STAY OFF (M4-23-02) — do NOT turn
 #    them on. They never worked here (Railway is not subscribed to this repo's PR
-#    events), and railway-invariants.yml now fails every PR if they are re-enabled
-#    or if any deployment trigger appears. See .claude/rules/ci-railway.md.
+#    events). See .claude/rules/ci-railway.md.
 #  - RAILWAY_API_TOKEN from Account Settings → Tokens, NOT Project Settings:
 #    a project token is pinned to one env and cannot reach a PR env.
 #  - Railway Watch Paths empty on all 17 non-Postgres services, or `railway up`

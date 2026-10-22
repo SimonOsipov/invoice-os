@@ -2450,10 +2450,9 @@ func TestWorkflowTimeoutsCoverTheRateLimitWaits(t *testing.T) {
 	t.Parallel()
 	const extraMinutes = 600 / 60
 	oldBudget := map[string]int{
-		"dev-env.yml/prepare-env":                    20,
-		"dev-env-teardown.yml/teardown":              10,
-		"dev-env-sweeper.yml/sweep":                  20,
-		"railway-invariants.yml/pr-environments-off": 5,
+		"dev-env.yml/prepare-env":       20,
+		"dev-env-teardown.yml/teardown": 10,
+		"dev-env-sweeper.yml/sweep":     20,
 	}
 	timeoutRE := regexp.MustCompile(`^    timeout-minutes:\s*(\d+)\s*$`)
 	seen := map[string]bool{}

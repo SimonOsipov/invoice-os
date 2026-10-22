@@ -23,7 +23,7 @@
 -- migrator (table owner) and the app (query identity) are deliberately distinct, and
 -- neither is the Railway superuser. See .claude/rules/db-migrations.md.
 --
--- Run ONCE as the Postgres superuser. Password values come from four session GUCs
+-- Run ONCE as the Postgres superuser or Cloud SQL's postgres (`migrate bootstrap`). Password values come from four session GUCs
 -- the caller sets on the SAME connection before this file runs — no psql-only
 -- meta-commands or client-side interpolation, so both psql and a pgx caller (the
 -- migration runner, M4-21-03) execute this identical file (Decision
@@ -69,17 +69,30 @@ BEGIN
 END
 $$;
 
--- 2. Re-assert the security attributes on every run (fixes drift if a role
---    pre-existed with different attributes). NOBYPASSRLS is the load-bearing one —
---    it applies to invoice_tenant_reader too: that role sees all tenants only because
---    a policy grants it, never by bypassing RLS.
-ALTER ROLE invoice_migrator      WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
-ALTER ROLE invoice_app           WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
-ALTER ROLE invoice_tenant_reader WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
-ALTER ROLE supabase_auth_admin   WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
-ALTER ROLE invoice_gateway       WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
-ALTER ROLE auth_hook_reader      WITH NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
-ALTER ROLE staff_reader          WITH NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD NULL;
+-- 2. Re-assert the security attributes on every run. NOSUPERUSER is not set here: Cloud SQL's
+--    postgres may not change the SUPERUSER attribute (42501). The guard below refuses one instead.
+ALTER ROLE invoice_migrator      WITH LOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+ALTER ROLE invoice_app           WITH LOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+ALTER ROLE invoice_tenant_reader WITH LOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+ALTER ROLE supabase_auth_admin   WITH LOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+ALTER ROLE invoice_gateway       WITH LOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+ALTER ROLE auth_hook_reader      WITH NOLOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+ALTER ROLE staff_reader          WITH NOLOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD NULL;
+
+DO $$
+DECLARE
+  bad text;
+BEGIN
+  SELECT string_agg(rolname, ', ' ORDER BY rolname) INTO bad
+    FROM pg_roles
+   WHERE rolname IN ('invoice_migrator', 'invoice_app', 'invoice_tenant_reader', 'supabase_auth_admin',
+                     'invoice_gateway', 'auth_hook_reader', 'staff_reader')
+     AND (rolsuper OR rolbypassrls);
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION 'bootstrap: roles % are SUPERUSER or BYPASSRLS; RLS would not bind them', bad;
+  END IF;
+END
+$$;
 
 -- 3. Set / rotate passwords, read from four session GUCs the caller sets beforehand
 --    (`ascomply.migrator_password` / `.app_password` / `.reader_password` /
@@ -131,6 +144,9 @@ GRANT USAGE ON SCHEMA public TO invoice_tenant_reader;
 GRANT USAGE ON SCHEMA public TO invoice_gateway;
 
 --    GoTrue migrates its own tables into `auth`; in `public` it only calls the hook.
+--    AUTHORIZATION and OWNER TO need the caller to SET ROLE supabase_auth_admin; Cloud SQL's
+--    postgres is not a superuser.
+GRANT supabase_auth_admin TO CURRENT_USER WITH INHERIT FALSE, SET TRUE;
 CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION supabase_auth_admin;
 --    IF NOT EXISTS skips a pre-existing schema, so re-assert the owner.
 ALTER SCHEMA auth OWNER TO supabase_auth_admin;

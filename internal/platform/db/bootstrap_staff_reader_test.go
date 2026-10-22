@@ -95,8 +95,8 @@ func TestBootstrapSQLStaffReaderDriftIsReasserted(t *testing.T) {
 	ensureStaffReaderForDrift(t, pool)
 	t.Cleanup(func() { restoreAuthRoles(t, pool); restoreDevDefaultPasswords(t, pool) })
 
-	mustExecSQL(t, pool, `ALTER ROLE staff_reader WITH LOGIN SUPERUSER BYPASSRLS CREATEDB CREATEROLE`)
-	if a := readRoleAttrs(t, pool, staffReaderRole); !a.canLogin || !a.super || !a.bypassRLS || !a.createDB || !a.createRole {
+	mustExecSQL(t, pool, `ALTER ROLE staff_reader WITH LOGIN BYPASSRLS CREATEDB CREATEROLE`)
+	if a := readRoleAttrs(t, pool, staffReaderRole); !a.canLogin || !a.bypassRLS || !a.createDB || !a.createRole {
 		t.Fatalf("pre-mutation did not drift %s: %+v", staffReaderRole, a)
 	}
 
@@ -105,9 +105,6 @@ func TestBootstrapSQLStaffReaderDriftIsReasserted(t *testing.T) {
 	a := readRoleAttrs(t, pool, staffReaderRole)
 	if a.canLogin {
 		t.Errorf("%s: rolcanlogin = true after bootstrap, want false", staffReaderRole)
-	}
-	if a.super {
-		t.Errorf("%s: rolsuper = true after bootstrap, want false", staffReaderRole)
 	}
 	if a.bypassRLS {
 		t.Errorf("%s: rolbypassrls = true after bootstrap, want false", staffReaderRole)
@@ -312,7 +309,6 @@ func TestBootstrapSQLStaffReaderEachAttributeDriftedAloneIsReasserted(t *testing
 		bad   func(roleAttrs) bool
 	}{
 		{"LOGIN", "LOGIN", func(a roleAttrs) bool { return a.canLogin }},
-		{"SUPERUSER", "SUPERUSER", func(a roleAttrs) bool { return a.super }},
 		{"BYPASSRLS", "BYPASSRLS", func(a roleAttrs) bool { return a.bypassRLS }},
 		{"CREATEDB", "CREATEDB", func(a roleAttrs) bool { return a.createDB }},
 		{"CREATEROLE", "CREATEROLE", func(a roleAttrs) bool { return a.createRole }},

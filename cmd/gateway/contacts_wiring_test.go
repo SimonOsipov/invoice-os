@@ -91,7 +91,7 @@ func TestRegistrationHandlers_VerifyHandsOffToTheSink(t *testing.T) {
 func TestHandoffHandlers_SignInHandsOffToTheSink(t *testing.T) {
 	sink := newChanSink()
 	log := slog.New(slog.DiscardHandler)
-	h := handoffHandlers(goTrueAnswering(t, cwSession), nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, sink, nil)
+	h := handoffHandlers(goTrueAnswering(t, cwSession), nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, sink, nil, nil)
 
 	rec := httptest.NewRecorder()
 	h.SignIn.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/sign-in",

@@ -1,11 +1,4 @@
-// main_test.go: role-password rename fallback shim tests (M4-22-09/task-168).
-// cmd/gateway/ had no test files before this one (main() itself isn't
-// unit-testable -- it calls platform.Fatal and opens a real listener).
-// Deliberately does NOT re-author TestBootstrapRejectsEmptyPasswords
-// (internal/platform/db/bootstrap_test.go) or
-// TestGatewayMainPassesRawEnvironmentToProvisioningGuard
-// (internal/platform/db/provision_test.go, AC #6's named regression guard)
-// -- both already cover what their names say.
+// main_test.go: source scans of the gateway's func main wiring.
 package main
 
 import (
@@ -35,109 +28,6 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"golang.org/x/net/html"
 )
-
-// TestGatewayMainPrefersUnprefixedPasswordVars: Test Spec #1. Static
-// source-scan of main.go's RolePasswords literal. Deprecated var names are
-// built via ToUpper(prefix) + suffix, never as a literal substring -- this
-// file is itself grepped by TestRepoHasNoStrayInvoicePrefixedVars below
-// (AC #4), and a literal deprecated "*PASSWORD" string here would trip it.
-func TestGatewayMainPrefersUnprefixedPasswordVars(t *testing.T) {
-	b, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatalf("read cmd/gateway/main.go: %v", err)
-	}
-	src := string(b)
-
-	idx := strings.Index(src, "Passwords: db.RolePasswords{")
-	if idx == -1 {
-		t.Fatal(`cmd/gateway/main.go no longer builds Passwords via a "Passwords: db.RolePasswords{" literal -- this test's anchor moved`)
-	}
-	end := idx + 500
-	if end > len(src) {
-		end = len(src)
-	}
-	window := src[idx:end]
-
-	deprecatedPrefix := strings.ToUpper("invoice_")
-
-	for _, tc := range []struct {
-		field     string
-		newName   string
-		oldSuffix string
-	}{
-		{"Migrator", `"MIGRATOR_PASSWORD"`, "MIGRATOR_PASSWORD"},
-		{"App", `"APP_PASSWORD"`, "APP_PASSWORD"},
-		{"Reader", `"READER_PASSWORD"`, "TENANT_READER_PASSWORD"},
-	} {
-		t.Run(tc.field, func(t *testing.T) {
-			oldName := `"` + deprecatedPrefix + tc.oldSuffix + `"`
-
-			newIdx := strings.Index(window, tc.newName)
-			oldIdx := strings.Index(window, oldName)
-
-			if newIdx == -1 {
-				t.Errorf("%s: preferred var %s is not read anywhere in the RolePasswords literal:\n%s", tc.field, tc.newName, window)
-			}
-			if oldIdx == -1 {
-				t.Errorf("%s: deprecated fallback var %s is not present in the RolePasswords literal:\n%s", tc.field, oldName, window)
-			}
-			if newIdx != -1 && oldIdx != -1 && newIdx > oldIdx {
-				t.Errorf("%s: preferred var %s must be read before deprecated fallback %s (new name wins) -- window:\n%s", tc.field, tc.newName, oldName, window)
-			}
-
-			// The deprecated name must never be the sole, unconditional
-			// os.Getenv(...) argument feeding the field directly -- that would
-			// mean the field is populated straight from the deprecated
-			// variable with no resolution/fallback logic at all.
-			bareOldRead := tc.field + ": os.Getenv(" + oldName + ")"
-			if strings.Contains(window, bareOldRead) {
-				t.Errorf("%s is populated by a bare os.Getenv(%s) with no resolution/fallback to the preferred name -- window:\n%s", tc.field, oldName, window)
-			}
-		})
-	}
-}
-
-// TestGatewayMainWiresEachRoleToItsOwnVarPair: adversarial coverage.
-// TestGatewayMainPrefersUnprefixedPasswordVars above only proves each
-// var-name pair appears somewhere in the RolePasswords window, in order --
-// it can't tell one field's resolveRolePassword call from another's.
-// Mutation-verified: swapping Migrator/App's arguments left that test green
-// while silently misconfiguring both roles' passwords on every boot. This
-// test requires the exact literal call, field name included, per role.
-func TestGatewayMainWiresEachRoleToItsOwnVarPair(t *testing.T) {
-	b, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatalf("read cmd/gateway/main.go: %v", err)
-	}
-	src := string(b)
-
-	// Built by concatenation, not as a literal, for the same self-grep reason
-	// documented on TestGatewayMainPrefersUnprefixedPasswordVars above.
-	deprecatedPrefix := strings.ToUpper("invoice_")
-
-	for _, tc := range []struct {
-		field     string
-		newName   string
-		oldSuffix string
-	}{
-		{"Migrator", "MIGRATOR_PASSWORD", "MIGRATOR_PASSWORD"},
-		{"App", "APP_PASSWORD", "APP_PASSWORD"},
-		{"Reader", "READER_PASSWORD", "TENANT_READER_PASSWORD"},
-	} {
-		t.Run(tc.field, func(t *testing.T) {
-			oldName := deprecatedPrefix + tc.oldSuffix
-			// \s+ (not a literal single space) because gofmt column-aligns
-			// these three struct-literal lines, padding the shorter field
-			// names ("App:", "Reader:") with extra spaces to match
-			// "Migrator:"'s width.
-			pattern := regexp.QuoteMeta(tc.field+":") + `\s*` + regexp.QuoteMeta(`resolveRolePassword("`+tc.newName+`", "`+oldName+`", app.Logger),`)
-			re := regexp.MustCompile(pattern)
-			if !re.MatchString(src) {
-				t.Errorf("cmd/gateway/main.go does not contain the exact wiring %q -- the %s field must resolve from its own (%s, %s) var pair, not a swapped or mismatched one", pattern, tc.field, tc.newName, oldName)
-			}
-		})
-	}
-}
 
 // TestRepoHasNoStrayInvoicePrefixedVars: Test Spec #3 / AC #4. Walks every
 // git-tracked file (git ls-files) and enforces the bounded blast radius:
@@ -191,105 +81,6 @@ func TestRepoHasNoStrayInvoicePrefixedVars(t *testing.T) {
 	}
 	if len(dsnHits) > 0 {
 		t.Errorf("deprecated *DATABASE_URL var referenced, want zero hits repo-wide: %v", dsnHits)
-	}
-}
-
-// TestRolePasswordResolutionPrecedence: Test Spec #4 (table-driven).
-// Exercises resolveRolePassword with synthetic env var names, not the real
-// MIGRATOR_PASSWORD/etc. triples: its logic is generic over whatever two
-// names it's given, so a fixture pair proves resolution/precedence/warning
-// behavior without coupling to production names (and sidesteps the same
-// self-grep concern above, since fixture names contain neither "PASSWORD"
-// nor the deprecated prefix). TestGatewayMainPrefersUnprefixedPasswordVars
-// proves main.go calls this with the three real pairs, in order.
-//
-// Case 3 (both set) still warns even though the deprecated value goes
-// unused -- an operator should still know to clean up the stale var.
-func TestRolePasswordResolutionPrecedence(t *testing.T) {
-	const (
-		newVar = "GATEWAY_TEST_ROLE_PW_NEW"
-		oldVar = "GATEWAY_TEST_ROLE_PW_OLD"
-	)
-
-	cases := []struct {
-		name      string
-		newVal    string
-		oldVal    string
-		wantValue string
-		wantWarn  bool
-	}{
-		{
-			name:      "new set, old unset",
-			newVal:    "new-secret",
-			oldVal:    "",
-			wantValue: "new-secret",
-			wantWarn:  false,
-		},
-		{
-			name:      "new unset, old set",
-			newVal:    "",
-			oldVal:    "old-secret",
-			wantValue: "old-secret",
-			wantWarn:  true,
-		},
-		{
-			name:      "both set: new wins, old ignored but still flagged for cleanup",
-			newVal:    "new-secret",
-			oldVal:    "old-secret",
-			wantValue: "new-secret",
-			wantWarn:  true,
-		},
-		{
-			name:      "neither set: empty, no warning (fail-fast is validateRolePasswords' job, not this function's)",
-			newVal:    "",
-			oldVal:    "",
-			wantValue: "",
-			wantWarn:  false,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv(newVar, tc.newVal)
-			t.Setenv(oldVar, tc.oldVal)
-
-			var buf bytes.Buffer
-			logger := slog.New(slog.NewJSONHandler(&buf, nil))
-
-			got := resolveRolePassword(newVar, oldVar, logger)
-			if got != tc.wantValue {
-				t.Errorf("resolveRolePassword(%q, %q, ...) = %q, want %q", newVar, oldVar, got, tc.wantValue)
-			}
-
-			logged := buf.String()
-			if !tc.wantWarn {
-				if logged != "" {
-					t.Errorf("expected no warning logged, got: %s", logged)
-				}
-				return
-			}
-
-			if logged == "" {
-				t.Fatalf("expected a deprecation warning to be logged naming %s and %s, got none", oldVar, newVar)
-			}
-			var entry map[string]any
-			if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
-				t.Fatalf("log line is not valid JSON: %v\nraw: %s", err, logged)
-			}
-			if level, _ := entry["level"].(string); level != "WARN" {
-				t.Errorf("log level = %q, want WARN", level)
-			}
-			msg, _ := entry["msg"].(string)
-			if !strings.Contains(msg, oldVar) {
-				t.Errorf("warning message %q does not name the deprecated variable %s", msg, oldVar)
-			}
-			if !strings.Contains(msg, newVar) {
-				t.Errorf("warning message %q does not name the replacement variable %s", msg, newVar)
-			}
-			if !strings.Contains(strings.ToLower(msg), "deprecated") {
-				t.Errorf("warning message %q does not say the variable is deprecated, so an operator reading Railway logs would not know it needs cleanup", msg)
-			}
-		})
 	}
 }
 
@@ -530,89 +321,6 @@ func TestGatewayMainFatalsOnAnUpstreamError(t *testing.T) {
 	})
 	if fatals != 1 {
 		t.Errorf("%s: the `%s != nil` guard calls platform.Fatal %d time(s), want 1 -- boot must stop, and it must stop at ERROR", path, errName, fatals)
-	}
-}
-
-// TestGatewayMainPassesAuthAdminPassword accepts either wiring the plan allows:
-// resolveRolePassword("AUTH_ADMIN_PASSWORD", "", app.Logger) or os.Getenv("AUTH_ADMIN_PASSWORD").
-func TestGatewayMainPassesAuthAdminPassword(t *testing.T) {
-	const path = "main.go"
-	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
-	}
-
-	var lits []*ast.CompositeLit
-	ast.Inspect(f, func(n ast.Node) bool {
-		cl, ok := n.(*ast.CompositeLit)
-		if !ok {
-			return true
-		}
-		if sel, ok := cl.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "RolePasswords" {
-			if x, ok := sel.X.(*ast.Ident); ok && x.Name == "db" {
-				lits = append(lits, cl)
-			}
-		}
-		return true
-	})
-	if len(lits) != 1 {
-		t.Fatalf("%s: found %d db.RolePasswords literal(s), want exactly 1", path, len(lits))
-	}
-
-	fields := map[string]ast.Expr{}
-	for _, e := range lits[0].Elts {
-		if kv, ok := e.(*ast.KeyValueExpr); ok {
-			if id, ok := kv.Key.(*ast.Ident); ok {
-				fields[id.Name] = kv.Value
-			}
-		}
-	}
-	if _, ok := fields["Reader"]; !ok {
-		t.Fatalf("%s: the db.RolePasswords literal has no Reader field -- this scan found the wrong literal", path)
-	}
-	val, ok := fields["AuthAdmin"]
-	if !ok {
-		t.Fatalf("%s: the db.RolePasswords literal has no AuthAdmin field", path)
-	}
-
-	call, ok := val.(*ast.CallExpr)
-	if !ok {
-		t.Fatalf("%s: AuthAdmin is %T, want a call reading AUTH_ADMIN_PASSWORD", path, val)
-	}
-	strArg := func(i int) (string, bool) {
-		if i >= len(call.Args) {
-			return "", false
-		}
-		lit, ok := call.Args[i].(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			return "", false
-		}
-		s, err := strconv.Unquote(lit.Value)
-		return s, err == nil
-	}
-
-	switch fn := call.Fun.(type) {
-	case *ast.Ident:
-		if fn.Name != "resolveRolePassword" {
-			t.Fatalf("%s: AuthAdmin calls %s, want resolveRolePassword or os.Getenv", path, fn.Name)
-		}
-		if name, ok := strArg(0); !ok || name != "AUTH_ADMIN_PASSWORD" {
-			t.Errorf("%s: AuthAdmin's resolveRolePassword first argument = %q, want \"AUTH_ADMIN_PASSWORD\"", path, name)
-		}
-		// No deprecated name exists for this variable.
-		if old, ok := strArg(1); !ok || old != "" {
-			t.Errorf("%s: AuthAdmin's resolveRolePassword fallback = %q, want \"\"", path, old)
-		}
-	case *ast.SelectorExpr:
-		pkg, ok := fn.X.(*ast.Ident)
-		if !ok || pkg.Name != "os" || fn.Sel.Name != "Getenv" {
-			t.Fatalf("%s: AuthAdmin calls a selector other than os.Getenv", path)
-		}
-		if name, ok := strArg(0); !ok || name != "AUTH_ADMIN_PASSWORD" {
-			t.Errorf("%s: AuthAdmin reads os.Getenv(%q), want \"AUTH_ADMIN_PASSWORD\"", path, name)
-		}
-	default:
-		t.Fatalf("%s: AuthAdmin calls %T, want resolveRolePassword or os.Getenv", path, call.Fun)
 	}
 }
 
@@ -941,41 +649,13 @@ func TestGatewayAuthIssuersCountsPrimaryPlusAdditional(t *testing.T) {
 	}
 }
 
-// A malformed AUTH_ADDITIONAL_ISSUERS must stop boot before Provision bootstraps, resets or seeds.
-func TestGatewayMainParsesIssuersBeforeProvision(t *testing.T) {
-	_, body := parseMain(t)
-
-	parseAt, provisionAt := -1, -1
-	for i, st := range body.List {
-		ast.Inspect(st, func(n ast.Node) bool {
-			e, ok := n.(ast.Expr)
-			if !ok {
-				return true
-			}
-			if _, ok := isCallTo(e, "", "mustParseIssuers"); ok && parseAt < 0 {
-				parseAt = i
-			}
-			if _, ok := isCallTo(e, "db", "Provision"); ok && provisionAt < 0 {
-				provisionAt = i
-			}
-			return true
-		})
-	}
-	if parseAt < 0 || provisionAt < 0 {
-		t.Fatalf("main calls mustParseIssuers at statement %d and db.Provision at %d, want both", parseAt, provisionAt)
-	}
-	if parseAt >= provisionAt {
-		t.Errorf("mustParseIssuers runs at statement %d, want it before db.Provision (%d)", parseAt, provisionAt)
-	}
-}
-
-// A gateway that boots without its token signs nothing; the read must stop boot before Provision.
-func TestGatewayMainReadsGatewayTokenBeforeProvision(t *testing.T) {
+// A gateway that boots without its token signs nothing; it reads the token once and signs with it.
+func TestGatewayMainReadsGatewayTokenOnce(t *testing.T) {
 	f, body := parseMain(t)
 
-	readAt, provisionAt, reads := -1, -1, 0
+	reads := 0
 	tokenVar := ""
-	for i, st := range body.List {
+	for _, st := range body.List {
 		ast.Inspect(st, func(n ast.Node) bool {
 			e, ok := n.(ast.Expr)
 			if !ok {
@@ -983,12 +663,6 @@ func TestGatewayMainReadsGatewayTokenBeforeProvision(t *testing.T) {
 			}
 			if c, ok := isCallTo(e, "", "mustEnv"); ok && len(c.Args) == 1 && isStringLit(c.Args[0], "GATEWAY_TOKEN") {
 				reads++
-				if readAt < 0 {
-					readAt = i
-				}
-			}
-			if _, ok := isCallTo(e, "db", "Provision"); ok && provisionAt < 0 {
-				provisionAt = i
 			}
 			return true
 		})
@@ -1002,12 +676,6 @@ func TestGatewayMainReadsGatewayTokenBeforeProvision(t *testing.T) {
 	}
 	if reads != 1 {
 		t.Fatalf("main reads mustEnv(\"GATEWAY_TOKEN\") %d time(s), want once", reads)
-	}
-	if provisionAt < 0 {
-		t.Fatal("main has no db.Provision call -- the ordering check has no anchor")
-	}
-	if readAt >= provisionAt {
-		t.Errorf("GATEWAY_TOKEN is read at statement %d, want it before db.Provision (%d)", readAt, provisionAt)
 	}
 	if tokenVar == "" {
 		t.Fatal("main does not assign mustEnv(\"GATEWAY_TOKEN\") to a variable")
@@ -2010,117 +1678,5 @@ func TestApiMountPreflightGrantsTraceHeaders(t *testing.T) {
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "" {
 		t.Errorf("disallowed-origin preflight Access-Control-Allow-Headers = %q, want none", got)
-	}
-}
-
-// TestGatewayMainStartsTheAccountStateGrantAfterProvision pins main's wiring of the boot-grant gate:
-// main needs Postgres, so it is scanned, not run. The gate itself is tested in account_state_grant_test.go.
-func TestGatewayMainStartsTheAccountStateGrantAfterProvision(t *testing.T) {
-	f, body := parseMain(t)
-
-	selector := func(e ast.Expr) string {
-		var parts []string
-		for {
-			switch x := e.(type) {
-			case *ast.SelectorExpr:
-				parts = append([]string{x.Sel.Name}, parts...)
-				e = x.X
-			case *ast.Ident:
-				return strings.Join(append([]string{x.Name}, parts...), ".")
-			default:
-				return ""
-			}
-		}
-	}
-	stmtHolding := func(match func(*ast.CallExpr) bool) (idx, n int) {
-		idx = -1
-		for i, s := range body.List {
-			ast.Inspect(s, func(nd ast.Node) bool {
-				if c, ok := nd.(*ast.CallExpr); ok && match(c) {
-					idx = i
-					n++
-				}
-				return true
-			})
-		}
-		return idx, n
-	}
-
-	starts := 0
-	ast.Inspect(f, func(nd ast.Node) bool {
-		if c, ok := nd.(*ast.CallExpr); ok {
-			if _, is := isCallTo(c, "", "startAccountStateGrant"); is {
-				starts++
-			}
-		}
-		return true
-	})
-	if starts != 1 {
-		t.Fatalf("main.go calls startAccountStateGrant %d times, want exactly 1", starts)
-	}
-
-	var start *ast.CallExpr
-	startIdx := -1
-	for i, s := range body.List {
-		if es, ok := s.(*ast.ExprStmt); ok {
-			if c, is := isCallTo(es.X, "", "startAccountStateGrant"); is {
-				start, startIdx = c, i
-			}
-		}
-	}
-	if start == nil {
-		t.Fatal("startAccountStateGrant is not a statement of its own directly in func main (not inside an if, go or func literal)")
-	}
-
-	provIdx, provN := stmtHolding(func(c *ast.CallExpr) bool { _, is := isCallTo(c, "db", "Provision"); return is })
-	runIdx, runN := stmtHolding(func(c *ast.CallExpr) bool { _, is := isCallTo(c, "app", "Run"); return is })
-	if provN != 1 || runN != 1 {
-		t.Fatalf("main calls db.Provision %d times and app.Run %d times, want 1 each", provN, runN)
-	}
-	if !(provIdx < startIdx && startIdx < runIdx) {
-		t.Errorf("statement order: db.Provision at %d, startAccountStateGrant at %d, app.Run at %d; want Provision < start < Run", provIdx, startIdx, runIdx)
-	}
-
-	if len(start.Args) != 5 {
-		t.Fatalf("startAccountStateGrant has %d arguments, want 5", len(start.Args))
-	}
-	if c, is := isCallTo(start.Args[0], "platform", "DeployEnv"); !is || len(c.Args) != 0 {
-		t.Errorf("argument 1 is not platform.DeployEnv()")
-	}
-	if got := selector(start.Args[1]); got != "provisionCfg.MigrationDSN" {
-		t.Errorf("argument 2 = %q, want provisionCfg.MigrationDSN", got)
-	}
-	if got := selector(start.Args[2]); got != "provisionCfg.Passwords.AuthAdmin" {
-		t.Errorf("argument 3 = %q, want provisionCfg.Passwords.AuthAdmin", got)
-	}
-	if got := selector(start.Args[3]); got != "app.Logger" {
-		t.Errorf("argument 4 = %q, want app.Logger", got)
-	}
-	lit, ok := start.Args[4].(*ast.FuncLit)
-	if !ok || len(lit.Body.List) != 1 {
-		t.Fatalf("argument 5 is not a func literal holding exactly one statement")
-	}
-	gs, ok := lit.Body.List[0].(*ast.GoStmt)
-	if !ok {
-		t.Fatalf("argument 5's statement is %T, want a go statement", lit.Body.List[0])
-	}
-	if _, is := isCallTo(gs.Call, "", "grantAccountStateRead"); !is || len(gs.Call.Args) < 3 {
-		t.Fatalf("argument 5's go statement does not call grantAccountStateRead with at least 3 arguments")
-	}
-	if got := selector(gs.Call.Args[2]); got != "db.GrantAccountStateRead" {
-		t.Errorf("grantAccountStateRead's third argument = %q, want db.GrantAccountStateRead", got)
-	}
-
-	reads := 0
-	ast.Inspect(f, func(nd ast.Node) bool {
-		if c, ok := nd.(*ast.CallExpr); ok {
-			if _, is := isCallTo(c, "os", "Getenv"); is && len(c.Args) == 1 && isStringLit(c.Args[0], "AUTH_ADMIN_PASSWORD") {
-				reads++
-			}
-		}
-		return true
-	})
-	if reads != 1 {
-		t.Errorf("main.go reads os.Getenv(\"AUTH_ADMIN_PASSWORD\") %d times, want 1 (the grant takes provisionCfg.Passwords.AuthAdmin)", reads)
 	}
 }

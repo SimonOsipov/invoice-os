@@ -6,9 +6,11 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
 
 	db "github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/migrations"
@@ -181,4 +183,33 @@ func TestMigrateUpFromEmbedded(t *testing.T) {
 	if len(again) != 0 {
 		t.Fatalf("second Up applied %d migration(s), want 0 — MigrateUp left work pending", len(again))
 	}
+
+	// goose checks for pending work before it locks, so leave one migration pending.
+	t.Run("waits for the migration lock", func(t *testing.T) {
+		if _, err := provider.Down(ctx); err != nil {
+			t.Fatalf("roll back one migration: %v", err)
+		}
+		holder, err := pgx.Connect(ctx, dsn)
+		if err != nil {
+			t.Fatalf("connect lock holder: %v", err)
+		}
+		defer func() { _ = holder.Close(context.Background()) }()
+		if _, err := holder.Exec(ctx, `SELECT pg_advisory_lock($1)`, lock.DefaultLockID); err != nil {
+			t.Fatalf("take the goose lock: %v", err)
+		}
+		short, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if err := db.MigrateUp(short, dsn, migrations.FS); err == nil {
+			t.Fatal("MigrateUp returned nil while a peer held the migration lock, want it to wait")
+		}
+		if _, err := holder.Exec(ctx, `SELECT pg_advisory_unlock($1)`, lock.DefaultLockID); err != nil {
+			t.Fatalf("release the goose lock: %v", err)
+		}
+		if err := db.MigrateUp(ctx, dsn, migrations.FS); err != nil {
+			t.Fatalf("MigrateUp after the lock is free: %v", err)
+		}
+		if pending, err := provider.HasPending(ctx); err != nil || pending {
+			t.Fatalf("after the lock is free: pending %v (err %v), want the migration applied", pending, err)
+		}
+	})
 }

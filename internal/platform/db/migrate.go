@@ -7,25 +7,14 @@ import (
 	"io/fs"
 
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 )
 
-// MigrateUp applies every pending migration in fsys to the database at dsn. It is
-// the single on-deploy migration entry point: the gateway calls it at boot,
-// before it starts serving, so the schema is fully migrated before the fleet
-// answers traffic.
-//
-// dsn MUST be the migrator connection string (DATABASE_MIGRATION_URL). Never the
-// app role (it holds no DDL privileges) and never the superuser (BYPASSRLS would
-// let a migration silently defeat RLS). The context services never call this;
-// they boot against an already-migrated schema (AC #4/#5).
-//
-// It opens a dedicated database/sql connection through the pgx v5 stdlib driver —
-// the same driver `go tool goose` uses locally and in CI — runs goose's Provider
-// Up, and closes the connection. goose applies only what is pending, so a redeploy
-// with no new migrations is a clean no-op. Any error is returned so the caller
-// can fail fast (a gateway that cannot migrate must not come up healthy).
+// MigrateUp applies every pending migration in fsys to the database at dsn, as the migrator
+// (DATABASE_MIGRATION_URL). Never pass the app role (no DDL) or the superuser (BYPASSRLS).
+// goose's session advisory lock serializes concurrent runs: TestMigrateUp_WaitsForTheMigrationLock.
 func MigrateUp(ctx context.Context, dsn string, fsys fs.FS) error {
 	sqlDB, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -33,7 +22,11 @@ func MigrateUp(ctx context.Context, dsn string, fsys fs.FS) error {
 	}
 	defer func() { _ = sqlDB.Close() }()
 
-	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, fsys)
+	locker, err := lock.NewPostgresSessionLocker()
+	if err != nil {
+		return fmt.Errorf("db: build migration locker: %w", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, fsys, goose.WithSessionLocker(locker))
 	if err != nil {
 		return fmt.Errorf("db: build migration provider: %w", err)
 	}

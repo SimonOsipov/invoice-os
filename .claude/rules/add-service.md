@@ -13,7 +13,8 @@ paths:
 - Create a new service once, in the persistent environment. Every PR fork inherits it.
 - Name a Go service `<svc>` identically in `cmd/<svc>`, the Railway service name and the host `<svc>.railway.internal`.
 - Build every Go service from the root `Dockerfile` with the repo root as build context. Add no per-service Dockerfile.
-- `cmd/blog` is the one Go binary outside the fleet. It runs in the `blog` SPA image from `frontend/blog/Dockerfile`, answers `/health`, and boots through `platform.ReportBootPanic` and `platform.Fatal` without `platform.New`.
+- `cmd/migrate` is the pre-deploy job. It opens no listener and boots through `platform.ReportBootPanic` and `platform.Fatal` without `platform.New`.
+- `cmd/blog` is the other Go binary outside the fleet. It runs in the `blog` SPA image from `frontend/blog/Dockerfile`, answers `/health`, and boots through `platform.ReportBootPanic` and `platform.Fatal` without `platform.New`.
 - Select the binary with the build argument `SERVICE`. Set `SERVICE=<svc>` as a Railway service variable, because `railway.json` has no `buildArgs`.
 - Add no BuildKit `--mount=type=cache` to the shared Dockerfile. Railway requires each cache id to embed the building service's own id.
 - Copy `cmd/<svc>/railway.json` from an existing service. Use the `DOCKERFILE` builder, health path `/healthz` and restart policy `ON_FAILURE`.

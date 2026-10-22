@@ -26,7 +26,7 @@
 //     reset the schema to empty — restore the RLS harness's fixtures in
 //     t.Cleanup exactly as TestMigrateUpFromEmbedded does (migrate_test.go), so
 //     the rest of the package's run stays green.
-//   - TestGatewayMainPassesRawEnvironmentToProvisioningGuard is the static
+//   - TestMigrateMainPassesRawEnvironmentToProvisioningGuard is the static
 //     counterpart to the crux test: it reads cmd/gateway/main.go's own source
 //     text, the same no-database technique
 //     TestMakefileDevDBPipesBootstrapViaExplicitFileFlag (above, in
@@ -130,40 +130,26 @@ func TestProvisionGuardReadsRawEnvironment(t *testing.T) {
 	}
 }
 
-// TestGatewayMainPassesRawEnvironmentToProvisioningGuard is the static
-// counterpart to TestProvisionGuardReadsRawEnvironment. That test proves
-// Provision behaves correctly WHEN GIVEN the raw environment value; it cannot
-// prove main.go's call site actually SUPPLIES that raw value rather than
-// app.Config.Environment — no test in this package can invoke func main()
-// directly. This closes that gap the same way
-// TestMakefileDevDBPipesBootstrapViaExplicitFileFlag (above, in
-// bootstrap_test.go) pins the Makefile: a no-database source-text assertion
-// against cmd/gateway/main.go itself.
-func TestGatewayMainPassesRawEnvironmentToProvisioningGuard(t *testing.T) {
-	b, err := os.ReadFile("../../../cmd/gateway/main.go")
+// TestMigrateMainPassesRawEnvironmentToProvisioningGuard pins cmd/migrate/main.go's call site:
+// TestProvisionGuardReadsRawEnvironment proves Provision with a raw value, not that main passes one.
+func TestMigrateMainPassesRawEnvironmentToProvisioningGuard(t *testing.T) {
+	b, err := os.ReadFile("../../../cmd/migrate/main.go")
 	if err != nil {
-		t.Fatalf("read cmd/gateway/main.go: %v", err)
+		t.Fatalf("read cmd/migrate/main.go: %v", err)
 	}
 	src := string(b)
 
-	// The window is the config literal ITSELF — from `db.ProvisionConfig{` to the
-	// line that closes it — not a character count around the call. A fixed count
-	// broke the moment the literal was hoisted into a variable so its
-	// ResetWillRun could be published on /healthz, and it had a standing
-	// fragility besides: main.go names app.Config.Environment in the prose above
-	// the literal (explaining why NOT to use it), so shrinking that comment
-	// pulled the prose in and false-failed the negative assertion below. Bounding
-	// on the literal excludes every comment outside it at any size.
+	// The window is the config literal itself, so prose outside it cannot satisfy or fail a check.
 	idx := strings.Index(src, "db.ProvisionConfig{")
 	if idx == -1 {
 		idx = strings.Index(src, "BootstrapEnabled(")
 	}
 	if idx == -1 {
-		t.Fatal("cmd/gateway/main.go does not yet build a db.ProvisionConfig or call db.BootstrapEnabled(...) — task-128's boot-sequence wiring is not in place yet")
+		t.Fatal("cmd/migrate/main.go does not build a db.ProvisionConfig or call db.BootstrapEnabled(...) — task-128's boot-sequence wiring is not in place yet")
 	}
 	rel := strings.Index(src[idx:], "\n\t}\n")
 	if rel == -1 {
-		t.Fatalf("cannot find the end of cmd/gateway/main.go's db.ProvisionConfig literal from offset %d — reindented or reshaped; re-anchor this window rather than deleting it", idx)
+		t.Fatalf("cannot find the end of cmd/migrate/main.go's db.ProvisionConfig literal from offset %d — reindented or reshaped; re-anchor this window rather than deleting it", idx)
 	}
 	window := src[idx : idx+rel]
 
@@ -172,17 +158,17 @@ func TestGatewayMainPassesRawEnvironmentToProvisioningGuard(t *testing.T) {
 	// every assertion below passing on nothing — the exact way a source scan
 	// reports a clean repo when it has stopped reading the source at all.
 	if !strings.Contains(window, "MigrationDSN:") {
-		t.Fatalf("the extracted window does not contain MigrationDSN, so it is not cmd/gateway/main.go's ProvisionConfig literal and the checks below would pass having examined nothing — window:\n%s", window)
+		t.Fatalf("the extracted window does not contain MigrationDSN, so it is not cmd/migrate/main.go's ProvisionConfig literal and the checks below would pass having examined nothing — window:\n%s", window)
 	}
 
 	if !strings.Contains(window, `os.Getenv("ENVIRONMENT")`) {
-		t.Errorf("cmd/gateway/main.go's provisioning-guard call site does not read the raw os.Getenv(\"ENVIRONMENT\") near the call — window:\n%s", window)
+		t.Errorf("cmd/migrate/main.go's provisioning-guard call site does not read the raw os.Getenv(\"ENVIRONMENT\") near the call — window:\n%s", window)
 	}
 	if strings.Contains(window, "app.Config.Environment") {
-		t.Errorf("cmd/gateway/main.go's provisioning-guard call site reads app.Config.Environment (QA F1) — internal/platform/config.go:44 substitutes \"development\" for an unset ENVIRONMENT, silently re-opening the fail-open hole the allowlist guard exists to close. Window:\n%s", window)
+		t.Errorf("cmd/migrate/main.go's provisioning-guard call site reads app.Config.Environment (QA F1) — internal/platform/config.go:44 substitutes \"development\" for an unset ENVIRONMENT, silently re-opening the fail-open hole the allowlist guard exists to close. Window:\n%s", window)
 	}
 	if !strings.Contains(window, `os.Getenv("GATEWAY_DB_BOOTSTRAP")`) {
-		t.Errorf("cmd/gateway/main.go's provisioning-guard call site does not read os.Getenv(\"GATEWAY_DB_BOOTSTRAP\") near the call — window:\n%s", window)
+		t.Errorf("cmd/migrate/main.go's provisioning-guard call site does not read os.Getenv(\"GATEWAY_DB_BOOTSTRAP\") near the call — window:\n%s", window)
 	}
 }
 

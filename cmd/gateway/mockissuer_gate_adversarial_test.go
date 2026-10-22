@@ -108,29 +108,29 @@ func TestMintRouteProbeReportsTheLastCodeOfTheWindow(t *testing.T) {
 	}
 }
 
-// gateTail returns, as runnable shell, the top-level blocks after the build wait: the
-// db_reset branch, the purge/mock expectation, both assertions and the probe block.
+// gateTail returns, as runnable shell, the top-level blocks after the build wait: the mock
+// expectation, its assertion and the probe block.
 func gateTail(run string) string {
 	return topLevelIfs(run, func(b []gateStmt) bool {
 		return strings.HasPrefix(b[0].text, `if [ "$IS_PR"`) ||
 			slices.ContainsFunc(b, func(s gateStmt) bool {
 				w := stmtWord(s.text)
-				return (w == "if" || w == "elif") && (strings.Contains(s.text, `"$purge"`) || strings.Contains(s.text, `"$mock"`))
+				return (w == "if" || w == "elif") && strings.Contains(s.text, `"$mock"`)
 			})
 	})
 }
 
 func TestHealthGateFailsClosedWhenIS_PRIsNotTrue(t *testing.T) {
 	tail := gateTail(runText(devEnvHealthGate(t)))
-	for _, part := range []string{`"$reset" != "true"`, `elif [ "$reset" = "true" ]`, "want_purge=false", `"$purge" != "$want_purge"`, `"$mock" != "$want_mock"`, "curl "} {
+	for _, part := range []string{"want_mock=absent", `"$mock" != "$want_mock"`, "curl "} {
 		if !strings.Contains(tail, part) {
 			t.Fatalf("the extracted gate tail carries no %q; the runs below would test a partial gate:\n%s", part, tail)
 		}
 	}
 	allNotFound := map[string][]string{"jwks": repeat("404"), "login": repeat("404")}
 	stillServed := map[string][]string{"jwks": repeat("200"), "login": repeat("403")}
-	fork := []string{"reset=true", "purge=true", "mock=on"}
-	production := []string{"reset=false", "purge=false", "mock=absent"}
+	fork := []string{"mock=on"}
+	production := []string{"mock=absent"}
 
 	// Controls: each target passes with its own healthz values.
 	if r := runShimmed(t, tail, allNotFound, append([]string{"IS_PR=true"}, fork...)...); r.code != 0 || len(r.calls) != 0 {
@@ -144,7 +144,7 @@ func TestHealthGateFailsClosedWhenIS_PRIsNotTrue(t *testing.T) {
 	// real fork's values must fail it before any probe runs.
 	notTrue := map[string][]string{"unset": nil, "empty": {"IS_PR="}, "True": {"IS_PR=True"}, "1": {"IS_PR=1"}}
 	for name, isPR := range notTrue {
-		for _, values := range [][]string{fork, {"reset=false", "purge=true", "mock=on"}, {"reset=false", "purge=false", "mock=on"}} {
+		for _, values := range [][]string{fork, {"mock=off"}} {
 			r := runShimmed(t, tail, stillServed, append(slices.Clone(isPR), values...)...)
 			if r.code == 0 {
 				t.Errorf("IS_PR %s with a PR fork's %v exits 0; a fork read as production must go red (output %q)", name, values, r.out)

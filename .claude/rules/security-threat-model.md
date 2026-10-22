@@ -45,13 +45,14 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - Only the gateway and the static sites have a public domain. Every other service is on the private network only.
 - `probedServices` in `cmd/gateway/main.go` (docling, auth, worker) get no public proxy route. `TestGatewayHandlersPublishNoProxyRouteForAProbedService` asserts this.
 - The docling sidecar has no authentication. It relies on the private network. A public route to it is HIGH.
+- On Cloud Run every service but the gateway and the static sites is ingress-internal and admits only a caller with a Google ID token. `platform.IDTokenTransport` adds it in `X-Serverless-Authorization`; `TraceTransport` includes it.
 
 ## Untrusted entry points
 
 - `POST /v1/documents` (`extraction.UploadHandler`, submission): uploaded file bytes.
 - docling `POST /v1/read` (`sidecar/docling/app.py`): document bytes forwarded by submission.
 - `/v1/imports*` (`importer` handlers, invoice): CSV, spreadsheet and document input.
-- Public gateway routes in `cmd/gateway/main.go` outside `/api/`: `/auth/*`, `/contacts/demo-request`, `/blog/*`, `/emails/*`, `/healthz/fleet`. They run without the verifier.
+- Public gateway routes in `cmd/gateway/main.go` outside `/api/`: `/auth/*`, `/contacts/demo-request`, `/blog/*`, `/emails/*`. They run without the verifier. `/healthz/fleet` runs without the verifier and needs `X-Gateway-Token`.
 - `POST /v1/validate/batch` and `POST /v1/custom-rules/check` (validation): open past `RequireGateway`, guarded by `S2SMiddleware` with the shared `S2S_TOKEN`. They carry no identity and read no tenant.
 
 ## Accepted ceilings

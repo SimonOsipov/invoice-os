@@ -18,11 +18,14 @@ import (
 )
 
 // Fleet-health probe bounds. A dead or slow backend must never hang the endpoint: each
-// probe carries its own short timeout, and no more than maxProbeConcurrency run at once —
-// so the whole roll-up is bounded regardless of how many upstreams are unreachable.
+// probe carries its own timeout, and every upstream is probed at once, so the roll-up
+// takes at most healthzTimeout plus readyzTimeout.
+// ceiling: a guess above a Cloud Run cold start (docling loads its models); GKE-09 measures it.
+var healthzTimeout = 30 * time.Second
+
 const (
-	probeTimeout        = 3 * time.Second
-	maxProbeConcurrency = 8
+	readyzTimeout       = 3 * time.Second
+	maxProbeConcurrency = 16
 	// A /healthz body is a few short keys; the cap only stops a malfunctioning
 	// upstream from streaming into the gateway.
 	maxHealthzBody = 4 << 10
@@ -75,8 +78,8 @@ type FleetHealth struct {
 	Services []ServiceHealth `json:"services"`
 }
 
-// FleetHealthHandler returns GET /healthz/fleet: a public, unauthenticated roll-up of
-// every backend's health path. Every upstream is private-network-only, so only
+// FleetHealthHandler returns GET /healthz/fleet: a roll-up of every backend's health path,
+// served only to a holder of the gateway token (cmd/gateway), because each call wakes the fleet. Every upstream is private-network-only, so only
 // the gateway can reach them — this route is how CI (and a future status page) observes
 // fleet health through the one public backend surface. The gateway reports itself up (it
 // is answering this request); each upstream is probed at <base>/<healthPaths[name]>,
@@ -90,7 +93,7 @@ func FleetHealthHandler(upstreams map[string]*url.URL, healthPaths map[string]st
 	if log == nil {
 		log = slog.Default()
 	}
-	client := &http.Client{Timeout: probeTimeout}
+	client := &http.Client{Timeout: healthzTimeout, Transport: platform.IDTokenTransport(nil)}
 
 	// Stable order — the context services sorted by name — so the payload is deterministic
 	// for tests and reads consistently on a status page. The gateway is prepended per-request.
@@ -154,7 +157,7 @@ func FleetHealthHandler(upstreams map[string]*url.URL, healthPaths map[string]st
 // timeout and maps the outcome to up/down. Any transport error or non-2xx status is down,
 // with the reason recorded so the body names why the service failed.
 func probeService(parent context.Context, client *http.Client, name string, base *url.URL, path string) ServiceHealth {
-	ctx, cancel := context.WithTimeout(parent, probeTimeout)
+	ctx, cancel := context.WithTimeout(parent, healthzTimeout)
 	defer cancel()
 
 	custom := path != ""
@@ -194,7 +197,7 @@ func probeService(parent context.Context, client *http.Client, name string, base
 // probeReady issues GET <base>/readyz. A 404 means the service serves no /readyz (docling):
 // readiness unknown. A failure names the checks the body lists, or "readyz" when it lists none.
 func probeReady(parent context.Context, client *http.Client, base *url.URL) (*bool, []string) {
-	ctx, cancel := context.WithTimeout(parent, probeTimeout)
+	ctx, cancel := context.WithTimeout(parent, readyzTimeout)
 	defer cancel()
 	ready, notReady := true, false
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base.JoinPath("readyz").String(), nil)

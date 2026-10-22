@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Leader elects one process per periodic task with session advisory locks on one dedicated
@@ -43,7 +44,12 @@ func (l *Leader) claim(ctx context.Context, name string) (bool, error) {
 		l.conn = nil
 	}
 	if l.conn == nil {
-		conn, err := pgx.Connect(ctx, l.dsn)
+		// The pool's DSN may carry pool_max_conns, which pgx.Connect would send to Postgres.
+		cfg, err := pgxpool.ParseConfig(l.dsn)
+		if err != nil {
+			return false, fmt.Errorf("db: leader connect: %w", err)
+		}
+		conn, err := pgx.ConnectConfig(ctx, cfg.ConnConfig)
 		if err != nil {
 			return false, fmt.Errorf("db: leader connect: %w", err)
 		}

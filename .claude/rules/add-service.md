@@ -40,7 +40,7 @@ paths:
 - Set `SENTRY_DSN` on production only. Never seal a Sentry variable.
 - Add a new service to the lists in `set-sentry-off`. `TestSentryOffListsMatchTheDeployedFleet` pins them.
 - Report `sentry` from a service probed through `/healthz/fleet`, or exempt it by name in the fleet gate. Only `auth` is exempt.
-- Wrap a new outbound client to another first-party service in `platform.TraceTransport`. Never wrap a third-party client.
+- Wrap a new outbound client to another first-party service in `platform.TraceTransport`. Never wrap a third-party client. A first-party client without `TraceTransport` (GoTrue) takes `platform.IDTokenTransport`.
 - Run background work only in `cmd/worker`: River workers, tickers and sweeps. A request-driven service enqueues on an insert-only `queue.Config{}`. `TestOnlyTheWorkerRunsBackgroundWork` fails otherwise.
 - Wrap each periodic task in `leader.Lead("<task>", fn)` with its own name. `TestWorkerMain_EveryPeriodicTaskHasOneLeader` fails otherwise.
 - Run one worker instance. The submission rate limiter is in memory.

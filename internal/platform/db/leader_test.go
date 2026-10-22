@@ -2,6 +2,7 @@ package db_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -65,5 +66,21 @@ func TestLeader_OneInstanceRunsEachTask(t *testing.T) {
 	ldStop(t, b)
 	if err := a.Lead(task, fnA)(ctx); err != nil || *runsA != 4 {
 		t.Fatalf("a after b stopped: runs=%d err=%v, want 4", *runsA, err)
+	}
+}
+
+// The worker's DATABASE_URL carries pool_max_conns (db-migrations.md, Connection budget);
+// Postgres refuses it as a startup parameter.
+func TestLeader_ConnectsWithAPoolParameterInTheDSN(t *testing.T) {
+	dsn := requireHarness(t).appURL
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	l := db.NewLeader(dsn + sep + "pool_max_conns=16")
+	t.Cleanup(func() { ldStop(t, l) })
+	fn, runs := ldRuns()
+	if err := l.Lead("test-"+uuid.NewString(), fn)(context.Background()); err != nil || *runs != 1 {
+		t.Fatalf("Lead with pool_max_conns in the DSN: runs=%d err=%v, want 1 run", *runs, err)
 	}
 }

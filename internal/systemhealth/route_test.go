@@ -376,7 +376,7 @@ func TestStaffHealthRoute_AGatewayOutageStillServesCountsAndTrend(t *testing.T) 
 	}
 	reader := func(base string) FleetReader {
 		u, _ := url.Parse(base)
-		return NewFleetReader(u, &http.Client{Timeout: 2 * time.Second})
+		return NewFleetReader(u, &http.Client{Timeout: 2 * time.Second}, "gw-token")
 	}
 	for name, base := range servers {
 		t.Run(name, func(t *testing.T) {

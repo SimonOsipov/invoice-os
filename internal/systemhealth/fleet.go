@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
 const maxFleetBody = 64 << 10
@@ -20,13 +21,13 @@ const maxFleetBody = 64 << 10
 type FleetReader func(context.Context) (gateway.FleetHealth, error)
 
 // NewFleetReader reads base/healthz/fleet with the FleetTimeout deadline.
-func NewFleetReader(base *url.URL, client *http.Client) FleetReader {
-	return NewFleetReaderTimeout(base, client, FleetTimeout)
+func NewFleetReader(base *url.URL, client *http.Client, gatewayToken string) FleetReader {
+	return NewFleetReaderTimeout(base, client, gatewayToken, FleetTimeout)
 }
 
 // NewFleetReaderTimeout reads base/healthz/fleet; the gateway answers 503 with a body when degraded.
 // The reader owns the deadline so a gateway that never answers cannot hang the sampler.
-func NewFleetReaderTimeout(base *url.URL, client *http.Client, timeout time.Duration) FleetReader {
+func NewFleetReaderTimeout(base *url.URL, client *http.Client, gatewayToken string, timeout time.Duration) FleetReader {
 	target := base.JoinPath("healthz/fleet").String()
 	return func(ctx context.Context) (gateway.FleetHealth, error) {
 		var f gateway.FleetHealth
@@ -36,6 +37,7 @@ func NewFleetReaderTimeout(base *url.URL, client *http.Client, timeout time.Dura
 		if err != nil {
 			return f, err
 		}
+		req.Header.Set(platform.HeaderGatewayToken, gatewayToken)
 		resp, err := client.Do(req)
 		if err != nil {
 			return f, fmt.Errorf("systemhealth: fleet read: %w", err)

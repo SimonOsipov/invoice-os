@@ -127,13 +127,17 @@ func TestFleetSlowAuthTimesOutWithinProbeTimeout(t *testing.T) {
 	slowURL, _ := url.Parse(slow.URL)
 	invoiceURL, _ := healthzWithBuild(t, "abc1234")
 
+	saved := healthzTimeout
+	healthzTimeout = 2 * time.Second
+	t.Cleanup(func() { healthzTimeout = saved })
+
 	start := time.Now()
 	rec, body := doFleetWithPaths(t, map[string]*url.URL{"auth": slowURL, "invoice": invoiceURL}, authPaths)
 	elapsed := time.Since(start)
 
-	// 3s is the probe timeout this subtask shipped with; 1s is scheduling slack.
-	if elapsed > 4*time.Second {
-		t.Errorf("roll-up took %v, want under 4s", elapsed)
+	// 1s is scheduling slack.
+	if elapsed > healthzTimeout+time.Second {
+		t.Errorf("roll-up took %v, want under %v", elapsed, healthzTimeout+time.Second)
 	}
 	byName := statusByName(body)
 	if a := byName["auth"]; a.Status != statusDown || a.Error == "" {

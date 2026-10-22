@@ -138,7 +138,7 @@ func TestRegistrationClientTimeoutAndNoFollow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	for _, name := range []string{"registrationHandlers", "resetPasswordHandler", "invitationHandlers", "handoffHandlers"} {
+	for _, name := range []string{"registrationHandlers", "resetPasswordHandler", "invitationHandlers", "invitationResendHandler", "handoffHandlers"} {
 		var fn *ast.FuncDecl
 		for _, d := range f.Decls {
 			if d, ok := d.(*ast.FuncDecl); ok && d.Name.Name == name {
@@ -188,6 +188,10 @@ func TestRegistrationClientTimeoutAndNoFollow(t *testing.T) {
 		}
 		if got := clients[0]["CheckRedirect"]; got != "return http.ErrUseLastResponse" {
 			t.Errorf("%s CheckRedirect returns %q, want only http.ErrUseLastResponse", name, got)
+		}
+		// GKE-08: GoTrue is ingress-internal; Cloud Run admits only a call with an ID token.
+		if got := clients[0]["Transport"]; got != "platform.IDTokenTransport(nil)" {
+			t.Errorf("%s Transport = %q, want platform.IDTokenTransport(nil)", name, got)
 		}
 	}
 }

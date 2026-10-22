@@ -76,13 +76,13 @@ func main() {
 	// (comma-separated); empty grants no browser origin (the production default).
 	withCORS := gateway.CORS(strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ","))
 
-	sessions := gateway.NewSessionChecker(probed["auth"], &http.Client{Timeout: gateway.SessionCheckTimeout}, time.Now, app.Logger)
+	sessions := gateway.NewSessionChecker(probed["auth"], &http.Client{Timeout: gateway.SessionCheckTimeout, Transport: platform.IDTokenTransport(nil)}, time.Now, app.Logger)
 	apiHandler, fleetHandler := gatewayHandlers(verifier, sessions, routed, probed, map[string]string{"auth": ".well-known/jwks.json"}, app.Logger, gatewayToken)
 	app.Mux.Handle(routePrefix, withCORS(apiHandler))
 
-	// Public fleet-health roll-up, outside /api/ and outside the verifier —
-	// operational, not tenant data.
-	app.Mux.HandleFunc("GET /healthz/fleet", fleetHandler)
+	// Fleet-health roll-up, outside /api/ and the verifier. It needs the gateway token: each call
+	// wakes every scaled-to-zero service.
+	app.Mux.Handle("GET /healthz/fleet", platform.RequireToken(platform.HeaderGatewayToken, gatewayToken)(fleetHandler))
 
 	// Public account-mail template and logo for GoTrue and mail clients; static, no CORS.
 	confirmationMail, err := gateway.MailTemplate("confirmation")
@@ -237,6 +237,7 @@ func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, pe
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport:     platform.IDTokenTransport(nil),
 	}
 	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
 	return invitation, gateway.InvitationRegisterHandler(authURL, client, minResponse, perIP, enforce, log, preview, registrations)
@@ -251,6 +252,7 @@ func invitationResendHandler(authURL, siteURL *url.URL, perAddress, perIP *gatew
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport:     platform.IDTokenTransport(nil),
 	}
 	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
 	return gateway.InvitationResendHandler(authURL, client, perAddress, perIP, enforce, log, preview)
@@ -274,6 +276,7 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport:     platform.IDTokenTransport(nil),
 	}
 	// Resend and reset share both throttles: one budget per address and per client.
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
@@ -311,6 +314,7 @@ func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionCh
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport:     platform.IDTokenTransport(nil),
 	}
 	return gateway.ResetPasswordHandler(authURL, siteURL, client, sessions, signIn, log)
 }
@@ -368,6 +372,7 @@ func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport:     platform.IDTokenTransport(nil),
 	}
 	return handoff{
 		SignIn:   gateway.SignInHandler(authURL, client, store, throttle, log, sink),

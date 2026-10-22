@@ -175,7 +175,7 @@ func main() {
 	// Each periodic task runs in one worker instance only.
 	leader := db.NewLeader(mustEnv("DATABASE_URL"))
 
-	fleet := systemhealth.NewFleetReader(gw, &http.Client{Transport: platform.TraceTransport(nil)})
+	fleet := systemhealth.NewFleetReader(gw, &http.Client{Transport: platform.TraceTransport(nil)}, mustEnv("GATEWAY_TOKEN"))
 	sampler := &systemhealth.Sampler{Store: &systemhealth.Store{Pool: pool}, Fleet: fleet, Now: time.Now, Logger: app.Logger}
 	app.AddBackgroundWorker(codelist.NewWorker(systemhealth.SampleInterval, leader.Lead("health-sample", sampler.Sample)))
 

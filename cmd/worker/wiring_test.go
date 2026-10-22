@@ -789,11 +789,11 @@ func TestWorkerMain_AddsNoNewBinary(t *testing.T) {
 	}
 	sort.Strings(dirs)
 	wantDirs := []string{
-		"blog", "dashboard", "gateway", "invoice", "notifications", "opsconsole",
+		"blog", "dashboard", "gateway", "invoice", "migrate", "notifications", "opsconsole",
 		"portfolio", "submission", "tenancy", "validation", "worker",
 	}
 	if !reflect.DeepEqual(dirs, wantDirs) {
-		t.Errorf("cmd/ holds %v, want exactly %v: extraction runs inside the worker binary, and a new service directory is a new service nobody provisioned (blog is the binary of the existing blog service)", dirs, wantDirs)
+		t.Errorf("cmd/ holds %v, want exactly %v: extraction runs inside the worker binary, and a new service directory is a new service nobody provisioned (blog is the binary of the existing blog service; migrate is the pre-deploy job)", dirs, wantDirs)
 	}
 
 	const (

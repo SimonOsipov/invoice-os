@@ -1,23 +1,12 @@
 package main
 
 import (
-	"bytes"
-	"context"
-	"errors"
-	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -134,101 +123,4 @@ func keys(m map[string][]recordedCall) []string {
 		out = append(out, k)
 	}
 	return out
-}
-
-// A gateway without its token must stop at boot before it touches Postgres. The listener stands in for the
-// database: an accepted connection is DB contact, and the control run proves the binary reaches it.
-func TestGatewayBootReadsGatewayTokenBeforeAnyDBContact(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "gateway")
-	buildCtx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
-	defer cancel()
-	if out, err := exec.CommandContext(buildCtx, "go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
-	}
-
-	boot := func(t *testing.T, withToken bool) (accepted int32, exit int, output string) {
-		t.Helper()
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("listen: %v", err)
-		}
-		t.Cleanup(func() { _ = ln.Close() })
-		var n atomic.Int32
-		go func() {
-			for {
-				c, err := ln.Accept()
-				if err != nil {
-					return
-				}
-				n.Add(1)
-				_ = c.Close()
-			}
-		}()
-		dsn := fmt.Sprintf("postgres://u:p@%s/db?sslmode=disable", ln.Addr())
-		env := []string{
-			"HOME=" + os.Getenv("HOME"),
-			"PORT=0",
-			"DATABASE_MIGRATION_URL=" + dsn,
-			"DATABASE_SUPERUSER_URL=" + dsn,
-		}
-		if withToken {
-			env = append(env, "GATEWAY_TOKEN=gw-boot-token")
-		}
-
-		ctx, stop := context.WithTimeout(t.Context(), 20*time.Second)
-		defer stop()
-		cmd := exec.CommandContext(ctx, bin)
-		cmd.Env = env
-		var out bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &out, &out
-		if err := cmd.Start(); err != nil {
-			t.Fatalf("start: %v", err)
-		}
-		done := make(chan error, 1)
-		go func() { done <- cmd.Wait() }()
-		deadline := time.After(15 * time.Second)
-		for waiting := true; waiting; {
-			select {
-			case err := <-done:
-				var ee *exec.ExitError
-				if errors.As(err, &ee) {
-					exit = ee.ExitCode()
-				}
-				waiting = false
-			case <-deadline:
-				_ = cmd.Process.Kill()
-				<-done
-				exit = -1
-				waiting = false
-			case <-time.After(50 * time.Millisecond):
-				if withToken && n.Load() > 0 {
-					_ = cmd.Process.Kill()
-					<-done
-					exit = -1
-					waiting = false
-				}
-			}
-		}
-		return n.Load(), exit, out.String()
-	}
-
-	t.Run("control: with the token set the binary reaches the database", func(t *testing.T) {
-		accepted, _, out := boot(t, true)
-		if accepted == 0 {
-			t.Fatalf("the binary never connected to the stand-in database, so the run below proves nothing:\n%s", out)
-		}
-	})
-
-	t.Run("without the token it exits on the token and contacts no database", func(t *testing.T) {
-		accepted, exit, out := boot(t, false)
-		if exit != 1 {
-			t.Errorf("exit code = %d, want 1:\n%s", exit, out)
-		}
-		if !strings.Contains(out, "gateway: GATEWAY_TOKEN is required") {
-			t.Errorf("output does not name GATEWAY_TOKEN:\n%s", out)
-		}
-		if accepted != 0 {
-			t.Errorf("the gateway made %d database connection(s) before it read GATEWAY_TOKEN", accepted)
-		}
-	})
 }

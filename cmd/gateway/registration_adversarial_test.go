@@ -107,36 +107,25 @@ func TestMustParseSiteURLFatalsOnAMalformedValue(t *testing.T) {
 	}
 }
 
-// main parses AUTH_SITE_URL before db.Provision and hands that value to registrationHandlers.
+// main parses AUTH_SITE_URL and hands that value to registrationHandlers.
 func TestGatewayMainWiresAuthSiteURLIntoRegistration(t *testing.T) {
 	_, body := parseMain(t)
 
-	siteVar, parseAt, provisionAt, wiredArg := "", -1, -1, ""
-	for i, st := range body.List {
+	siteVar, wiredArg := "", ""
+	for _, st := range body.List {
 		if as, ok := st.(*ast.AssignStmt); ok && len(as.Lhs) == 1 && len(as.Rhs) == 1 {
 			if call, ok := isCallTo(as.Rhs[0], "", "mustParseSiteURL"); ok && len(call.Args) == 2 {
 				if env, ok := isCallTo(call.Args[0], "os", "Getenv"); ok && len(env.Args) == 1 && isStringLit(env.Args[0], "AUTH_SITE_URL") {
-					siteVar, parseAt = types.ExprString(as.Lhs[0]), i
+					siteVar = types.ExprString(as.Lhs[0])
 				}
 			}
 			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 6 {
 				wiredArg = types.ExprString(call.Args[1])
 			}
 		}
-		ast.Inspect(st, func(n ast.Node) bool {
-			if e, ok := n.(ast.Expr); ok {
-				if _, ok := isCallTo(e, "db", "Provision"); ok && provisionAt < 0 {
-					provisionAt = i
-				}
-			}
-			return true
-		})
 	}
 	if siteVar == "" {
 		t.Fatal(`main has no top-level x := mustParseSiteURL(os.Getenv("AUTH_SITE_URL"), ...)`)
-	}
-	if provisionAt < 0 || parseAt >= provisionAt {
-		t.Errorf("mustParseSiteURL at statement %d, db.Provision at %d, want the parse first", parseAt, provisionAt)
 	}
 	if wiredArg != siteVar {
 		t.Errorf("registrationHandlers site argument = %q, want %q", wiredArg, siteVar)

@@ -36,27 +36,6 @@ func (rd *readiness) snapshot() map[string]ReadyCheck {
 	return out
 }
 
-// DBReset is "true" or "false" once a process has run boot-time database
-// provisioning, and empty on every process that does not — which is every
-// service except the gateway. /healthz omits the field entirely while it is
-// empty.
-//
-// The gateway sets it from db.ProvisionConfig.ResetWillRun — the same predicate
-// db.Provision branched on, never a second copy. It is published because the
-// PR-environment reset is armed by a hand-set Railway variable
-// (GATEWAY_DB_RESET) that fails CLOSED AND SILENT: lose it when a service is
-// recreated and the E2E suites go quietly back to running against inherited
-// residue, with a green fleet and nothing to say otherwise. dev-env.yml's
-// health-gate asserts this field on every PR run.
-var DBReset string
-
-// DemoPurge is "true", "false" or "error" once a process has run boot-time
-// provisioning, and empty on every process that does not. It carries
-// db.PurgeOutcome's value verbatim; the purge is deliberately non-fatal, so
-// "error" is the only signal a swallowed failure ever gives. dev-env.yml's
-// health-gate asserts this field on every trigger, not only on PRs.
-var DemoPurge string
-
 // MockIssuer is "absent", "off" or "on" on the gateway and empty elsewhere: a
 // 404 on the mint routes cannot tell an untagged build from a gated-off one.
 var MockIssuer string
@@ -70,12 +49,6 @@ var AuthIssuers string
 // healthzHandler is a liveness probe: 200 as long as the process is running.
 func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 	body := map[string]string{"status": "ok", "build": BuildSHA, "sentry": SentryState()}
-	if DBReset != "" {
-		body["db_reset"] = DBReset
-	}
-	if DemoPurge != "" {
-		body["demo_purge"] = DemoPurge
-	}
 	if MockIssuer != "" {
 		body["mock_issuer"] = MockIssuer
 	}

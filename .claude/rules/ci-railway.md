@@ -23,7 +23,7 @@ paths:
 - Write fork variables in the two batched passes `fork-vars-before-urls` and `fork-vars-after-urls`. Write only names that differ, with `skipDeploys`.
 - Let `fork-vars-after-urls` set the fork gateway `ENVIRONMENT` to the constant `development`. Production's gateway reads `production`.
 - Set the production `ENVIRONMENT` by hand with `set-production-environment`. No workflow writes it.
-- Expect `/healthz` on the persistent gateway to report `demo_purge` false, `mock_issuer` absent and `auth_issuers` 1. A fork reports true, on and 2.
+- Expect `/healthz` on the persistent gateway to report `mock_issuer` absent and `auth_issuers` 1. A fork reports on and 2.
 - Blank `WAL_ARCHIVE_*` on a fork's Postgres through `reconcile-fork`. A kept `WAL_ARCHIVE_BUCKET` must differ from production's, or the step fails.
 - Create the fork's Postgres volume in CI. A Postgres without a volume reaches `SUCCESS` and never answers.
 - Never treat a TCP connect as proof that a service is healthy. Gate on the gateway `/healthz`.

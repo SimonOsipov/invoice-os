@@ -13,7 +13,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/aicalls"
 	"github.com/SimonOsipov/invoice-os/internal/approval"
@@ -21,8 +20,6 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/customer"
 	"github.com/SimonOsipov/invoice-os/internal/customrule"
-	"github.com/SimonOsipov/invoice-os/internal/demodocs"
-	"github.com/SimonOsipov/invoice-os/internal/demopolicy"
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/importer"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
@@ -181,47 +178,10 @@ func main() {
 	// ([upload-once]): it writes the uploaded bytes to object storage and a row
 	// to documents, then previews them. POST /v1/imports takes the id it returns
 	// instead of a second copy of the file. Two other writers exist, both off
-	// this mux: demodocs.Seed below (seed tenants only) and, since EXTR-09,
+	// this mux: demodocs.Seed in the migrate job (seed tenants only) and, since EXTR-09,
 	// POST /v1/documents on the submission service.
 	docSvc := document.NewService(document.NewStore(pool), docObjects)
 
-	// Give the SQL-seeded demo invoices the file they would have been imported
-	// from -- db/seed.dev.sql runs in the gateway and cannot reach object
-	// storage, so without this every demo invoice reads "no source document".
-	// Runs before app.Run, so a green /healthz means the documents exist; the
-	// gateway's own /healthz gates the SQL seed that this reads, and dev-env.yml
-	// waits for it before deploying this service. Non-fatal: demo evidence is
-	// not worth refusing to serve over.
-	if res, err := demodocs.Seed(context.Background(), pool, docSvc.Store, app.Logger); err != nil {
-		app.Logger.Error("invoice: demo source documents", "error", err,
-			"documents", res.DocumentsStored, "invoices", res.InvoicesLinked)
-	}
-
-	// Give each demo tenant one active approval policy and re-arm its validated
-	// backlog, so awaiting_approval is non-zero and the Approvals badge is
-	// observable on the deploy gate. Runs on EVERY boot, not just the first: the
-	// gateway's db.PurgeDemoTenants empties approval_runs on every gated boot
-	// (.claude/rules/approvals.md) and leaves the policy tables standing; db.Reset truncates
-	// the same rows, but only in a pr-<N> environment. Here rather than in the
-	// gateway, which is a different process.
-	// Non-fatal, matching demodocs above -- a crash-loop costs an environment, a
-	// missing demo policy costs one assertion.
-	// Bounded because this runs BEFORE app.Run: the sweep takes FOR UPDATE row
-	// locks, and an unbounded wait would keep /healthz from ever answering, which
-	// hangs the deploy gate rather than failing it. On expiry the tenant rolls
-	// back whole and the next boot arms the backlog, same as the sweep cap.
-	seedCtx, cancelSeed := context.WithTimeout(context.Background(), 2*time.Minute)
-	if res, err := demopolicy.Seed(seedCtx, pool, app.Logger); err != nil {
-		app.Logger.Error("invoice: demo approval policy", "error", err,
-			"outcome", res.Note, "backlog_found", res.BacklogFound, "runs_armed", res.RunsArmed)
-	}
-	cancelSeed()
-	// Own deadline: demopolicy.Seed may have spent all of seedCtx.
-	custCtx, cancelCust := context.WithTimeout(context.Background(), 2*time.Minute)
-	if err := customer.SeedDemo(custCtx, pool, platform.DeployEnv(), app.Logger); err != nil {
-		app.Logger.Error("invoice: demo customers", "error", err)
-	}
-	cancelCust()
 	impStore := importer.NewStore(pool)
 	impSvc := importer.NewService(impStore, store, gate)
 	// aiClient is off when OPENROUTER_API_KEY is unset: FromEnv never exits, only an

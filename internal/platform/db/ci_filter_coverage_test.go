@@ -134,7 +134,7 @@ var preFixOrphans = []string{
 	"TestBootstrapEnabledAllowlist",
 	"TestBootstrapEnabledAllowlistAcceptsArbitrarilyLargePRNumber",
 	"TestMakefileDevDBPipesBootstrapViaExplicitFileFlag",
-	"TestGatewayMainPassesRawEnvironmentToProvisioningGuard",
+	"TestMigrateMainPassesRawEnvironmentToProvisioningGuard",
 	"TestBootstrapConcurrentCallsSerialiseUnderAdvisoryLock",
 	"TestBootstrapConvergesWhenRolesAlreadyHaveDifferentPasswords",
 	"TestBootstrapFromEmbedded",

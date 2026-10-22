@@ -17,12 +17,10 @@ import (
 	"strings"
 	"time"
 
-	dbsql "github.com/SimonOsipov/invoice-os/db"
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
-	"github.com/SimonOsipov/invoice-os/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -48,79 +46,10 @@ func main() {
 		platform.Fatal(slog.Default(), "gateway: startup: %v", err)
 	}
 
-	// Parsed before Provision so a malformed value stops boot before any bootstrap, reset or seed.
 	additional := mustParseIssuers(os.Getenv("AUTH_ADDITIONAL_ISSUERS"))
 	siteURL := mustParseSiteURL(os.Getenv("AUTH_SITE_URL"), app.Logger)
 	registerMinResponse := mustParseRegisterMinResponse(os.Getenv("AUTH_REGISTER_MIN_RESPONSE"), app.Logger)
 	gatewayToken := mustEnv("GATEWAY_TOKEN")
-
-	// Bootstrap (gated) -> migrate (unconditional) -> reset (gated, PR
-	// environments only, persona-handoff-fix Decision [pr-only-reset]) -> purge
-	// (gated, DEMO-04) -> seed (gated), all complete before
-	// app.Run opens the listener, so a green /healthz continues to mean "fully
-	// provisioned" (task-128). Every step is fatal on error except the purge,
-	// which logs and continues — see db.Provision's doc comment. The gateway remains the fleet's single in-network migrator:
-	// migrate is unconditional regardless of the
-	// guard below, exactly as before.
-	//
-	// The bootstrap/seed guard reads the RAW
-	// os.Getenv("ENVIRONMENT")/os.Getenv("GATEWAY_DB_BOOTSTRAP") — never
-	// app.Config.Environment. internal/platform/config.go:44 substitutes
-	// "development" for an unset ENVIRONMENT, which would silently re-open the
-	// fail-open hole BootstrapEnabled's allowlist exists to close (QA F1). With
-	// the guard off, none of DATABASE_SUPERUSER_URL / MIGRATOR_PASSWORD /
-	// APP_PASSWORD / READER_PASSWORD / AUTH_ADMIN_PASSWORD (nor their deprecated INVOICE_*_PASSWORD
-	// fallbacks, see resolveRolePassword below) are required — production boots
-	// without any of them set. The reset guard is separate — see
-	// DeployEnv/ResetFlag below and db.ResetEnabled's doc comment.
-	provisionCfg := db.ProvisionConfig{
-		Environment:   os.Getenv("ENVIRONMENT"),
-		BootstrapFlag: os.Getenv("GATEWAY_DB_BOOTSTRAP"),
-		// DeployEnv, NOT ENVIRONMENT: CI writes ENVIRONMENT=development in every fork,
-		// so only the deployment name tells a fork from production. See db.ResetEnabled.
-		DeployEnv: platform.DeployEnv(),
-		// A SEPARATE opt-in from GATEWAY_DB_BOOTSTRAP: Reset is strictly more
-		// dangerous than Bootstrap/Seed (it destroys data before recreating it),
-		// so it gets its own explicit switch rather than piggybacking on the
-		// existing one.
-		ResetFlag:    os.Getenv("GATEWAY_DB_RESET"),
-		SuperuserDSN: os.Getenv("DATABASE_SUPERUSER_URL"),
-		MigrationDSN: mustEnv("DATABASE_MIGRATION_URL"),
-		Passwords: db.RolePasswords{
-			Migrator: resolveRolePassword("MIGRATOR_PASSWORD", "INVOICE_MIGRATOR_PASSWORD", app.Logger),
-			App:      resolveRolePassword("APP_PASSWORD", "INVOICE_APP_PASSWORD", app.Logger),
-			Reader:   resolveRolePassword("READER_PASSWORD", "INVOICE_TENANT_READER_PASSWORD", app.Logger),
-			// No deprecated name ever existed, so no fallback to resolve.
-			AuthAdmin: os.Getenv("AUTH_ADMIN_PASSWORD"),
-			Gateway:   os.Getenv("GATEWAY_PASSWORD"),
-		},
-		BootstrapFS:  dbsql.FS,
-		MigrationsFS: migrations.FS,
-		SeedFS:       dbsql.FS,
-		ConnectWait:  dbConnectWait,
-		Logger:       app.Logger,
-	}
-	if err := db.Provision(context.Background(), provisionCfg); err != nil {
-		platform.Fatal(app.Logger, "gateway: provision: %v", err)
-	}
-
-	startAccountStateGrant(platform.DeployEnv(), provisionCfg.MigrationDSN, provisionCfg.Passwords.AuthAdmin, app.Logger, func(dsn string) {
-		go grantAccountStateRead(context.Background(), dsn, db.GrantAccountStateRead, 10*time.Second, 60, app.Logger)
-	})
-
-	// Publish what the sequence above actually did, off the same predicate it
-	// branched on, before app.Run opens the listener — so the first /healthz any
-	// caller can reach already carries it. Both of the reset's inputs are
-	// hand-set Railway variables that fail closed and silent, so without this
-	// the destructive PR-environment reset can stop happening with no failure
-	// anywhere: the fleet greens, the E2E suites run against a fork still
-	// holding every row prior runs left in the persistent environment, and the
-	// only symptom is tests that get harder to keep passing. dev-env.yml's
-	// health-gate asserts db_reset on every PR run.
-	platform.DBReset = strconv.FormatBool(provisionCfg.ResetWillRun())
-	// The purge is the one non-fatal step in Provision, so this field is the
-	// only thing that tells a green boot from a swallowed purge failure.
-	platform.DemoPurge = string(db.DemoPurgeOutcome)
 
 	verifier, err := auth.NewVerifier(auth.Config{
 		Issuer:     mustEnv("AUTH_ISSUER"),
@@ -245,8 +174,8 @@ func main() {
 		// OPTIONS too: a POST-only route would 405 the CORS preflight.
 		app.Mux.Handle("POST /auth/login", login)
 		app.Mux.Handle("OPTIONS /auth/login", login)
-		app.Mux.Handle("POST /auth/mock/member", mockMemberRoute(provisionCfg.MigrationDSN, app.Logger))
-		app.Mux.Handle("POST /auth/mock/invitation-token", mockInvitationTokenRoute(provisionCfg.MigrationDSN, app.Logger))
+		app.Mux.Handle("POST /auth/mock/member", mockMemberRoute(os.Getenv("DATABASE_MIGRATION_URL"), app.Logger))
+		app.Mux.Handle("POST /auth/mock/invitation-token", mockInvitationTokenRoute(os.Getenv("DATABASE_MIGRATION_URL"), app.Logger))
 		platform.MockIssuer = "on"
 	}
 
@@ -257,23 +186,6 @@ func main() {
 
 // routePrefix must match the gateway package's mount point.
 const routePrefix = "/api/"
-
-// dbConnectWait is how long boot-time provisioning waits for Postgres to accept
-// its first connection before giving up (db.ProvisionConfig.ConnectWait).
-//
-// The gateway is the ONE binary that boots against a Postgres which may not be
-// serving yet: in a freshly forked PR environment its database container has
-// only just been deployed onto a brand-new volume and is still running initdb.
-// Before this, provisioning gave that container 2.5s (db/bootstrap.go's 5
-// attempts x 500ms) and MigrateUp gave it none at all, then exited via platform.Fatal — a
-// crash before the listener opens, which Railway can only report as "service
-// unavailable" for the whole healthcheck window.
-//
-// 120s is chosen to sit comfortably INSIDE Railway's 300s healthcheck window, so
-// a Postgres that is genuinely broken (rather than merely slow) still produces a
-// named, readable failure with time to spare instead of being reported as a
-// healthcheck timeout with no cause attached.
-const dbConnectWait = 120 * time.Second
 
 // gatewayHandlers builds the two public handlers. Proxy routes come from
 // `routed` alone — that argument, not a filter, is what keeps a probed service
@@ -548,33 +460,4 @@ func mustEnv(key string) string {
 		platform.Fatal(slog.Default(), "gateway: %s is required", key)
 	}
 	return v
-}
-
-// resolveRolePassword resolves one role's password, preferring newName
-// (the unprefixed variable Makefile/CI already set) and falling back to
-// oldName (the deprecated INVOICE_-prefixed variable) when newName is unset
-// or empty (M4-22-09/task-168). When the fallback fires -- or the deprecated
-// name is merely present alongside the new one, even though unused -- it
-// logs a warning naming both variables, so a stale Railway variable is
-// observable in gateway logs and gets cleaned up (escalation E3/E4). Empty
-// input from both leaves the value empty: validateRolePasswords
-// (internal/platform/db/bootstrap.go) is the single source of fail-fast on
-// an empty password and is intentionally NOT duplicated here.
-//
-// This fallback is temporary. Once escalations E3/E4 confirm every Railway
-// environment sets the new unprefixed name and no longer sets the deprecated
-// INVOICE_-prefixed one, delete the oldName argument and this function's
-// fallback branch from each of the three call sites above.
-func resolveRolePassword(newName, oldName string, logger *slog.Logger) string {
-	newVal := os.Getenv(newName)
-	oldVal := os.Getenv(oldName)
-
-	if oldVal != "" {
-		logger.Warn(oldName + " is deprecated; set " + newName + " instead")
-	}
-
-	if newVal != "" {
-		return newVal
-	}
-	return oldVal
 }

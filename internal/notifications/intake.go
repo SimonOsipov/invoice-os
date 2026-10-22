@@ -76,23 +76,38 @@ func RegistrantsHandler(store IntakeStore, log *slog.Logger) http.HandlerFunc {
 			writeJSONBody(w, http.StatusBadRequest, map[string]string{"error": "email is required"})
 			return
 		}
-		if b.UserID != "" {
-			if _, err := uuid.Parse(b.UserID); err != nil || len(b.UserID) != 36 {
-				writeJSONBody(w, http.StatusBadRequest, map[string]string{"error": "user_id is invalid"})
-				return
-			}
+		if !validUserID(b.UserID) {
+			writeJSONBody(w, http.StatusBadRequest, map[string]string{"error": "user_id is invalid"})
+			return
 		}
 		in := RegistrantIntake{UserID: b.UserID, Email: b.Email, DisplayName: b.DisplayName, WorkspaceName: b.WorkspaceName}
-		if b.Consent != nil && b.Consent.Text != "" {
-			// Fail closed: consent without a readable time is not recorded.
-			if at, err := time.Parse(time.RFC3339, b.Consent.At); err != nil {
-				log.WarnContext(r.Context(), "contacts: marketing consent time unreadable; consent dropped", slog.String("user_id", b.UserID))
-			} else {
-				in.ConsentText, in.ConsentAt = b.Consent.Text, at
-			}
+		if b.Consent != nil {
+			in.ConsentText, in.ConsentAt = consent(r.Context(), log, b.UserID, b.Consent.Text, b.Consent.At)
 		}
 		intakeResult(w, r, log, store.Registrant(r.Context(), in))
 	}
+}
+
+// validUserID: empty is NULL; anything else must be a canonical uuid.
+func validUserID(id string) bool {
+	if id == "" {
+		return true
+	}
+	_, err := uuid.Parse(id)
+	return err == nil && len(id) == 36
+}
+
+// consent fails closed: a tick without a readable time is not recorded.
+func consent(ctx context.Context, log *slog.Logger, userID, text, at string) (string, time.Time) {
+	if text == "" {
+		return "", time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, at)
+	if err != nil {
+		log.WarnContext(ctx, "contacts: marketing consent time unreadable; consent dropped", slog.String("user_id", userID))
+		return "", time.Time{}
+	}
+	return text, t
 }
 
 func DemoRequestsHandler(store IntakeStore, log *slog.Logger) http.HandlerFunc {

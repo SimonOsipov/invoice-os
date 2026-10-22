@@ -117,7 +117,7 @@ func failureStatus(err error) int {
 	return 0
 }
 
-// handOffRegistrant delivers user to the sink in the background: up to three attempts, one WARN after the last fails.
+// handOffRegistrant writes user to the outbox before returning, or, without one, delivers it to the sink in the background: up to three attempts, one WARN after the last fails.
 // A nil sink is a no-op; a blank email logs one WARN naming source and skips. The log carries the user id and the failing status only.
 func handOffRegistrant(ctx context.Context, log *slog.Logger, source string, sink ContactSink, user RegistrantContact) {
 	if sink == nil {
@@ -128,6 +128,13 @@ func handOffRegistrant(ctx context.Context, log *slog.Logger, source string, sin
 		return
 	}
 	ctx = context.WithoutCancel(ctx)
+	if outbox, ok := sink.(*RegistrantOutbox); ok {
+		// One durable write before the response; River retries the delivery.
+		if err := outbox.Registrant(ctx, user); err != nil {
+			log.WarnContext(ctx, "contacts: registrant hand-off failed", slog.String("user_id", user.UserID), slog.Int("attempts", 1), slog.Int("status", 0))
+		}
+		return
+	}
 	delays := slices.Clone(handOffDelays)
 	go func() {
 		var err error

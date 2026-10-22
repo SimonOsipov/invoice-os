@@ -9,7 +9,8 @@ paths:
 # Contact sync
 
 - Never put an email address or a name in a log line or an error.
-- Never wait on a vendor in signup, sign-in or the demo route. Hand off in the background.
+- Never wait on a vendor in signup, sign-in or the demo route.
+- Write a registrant to `registrant_handoffs` before the response, once. The worker moves the row into a `registrant_intake` River job. Without `DATABASE_GATEWAY_URL` the gateway posts to notifications in the background.
 - Hand a registrant off after `POST /auth/verify`, after `POST /auth/invitation/password` and after a sign-in whose user has `user_metadata.registration`.
 - Send the demo route's call once, with no retry. Answer 502 when the sink fails.
 - Store a contact with no `tenant_id` and no RLS. Write no tenant predicate.

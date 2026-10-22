@@ -158,16 +158,18 @@ func main() {
 		platform.Fatal(app.Logger, "worker: %v", err)
 	}
 	cw := contactWorkers(pool, mode, hubspot, resend, nl, app.Logger)
+	rw := &notifications.RegistrantWorker{Logger: app.Logger}
 
 	q, err := queue.New(pool, queue.Config{
 		Queues:  queueConfigs(cw != nil),
-		Workers: workerBundle(sw, pw, ew, cw),
+		Workers: workerBundle(sw, pw, ew, rw, cw),
 		Logger:  app.Logger,
 	})
 	if err != nil {
 		platform.Fatal(app.Logger, "worker: queue: %v", err)
 	}
 	sw.Queue, pw.Queue = q, q
+	rw.Store = notifications.NewStore(pool, q.River())
 	app.AddBackgroundWorker(q)
 
 	// Each periodic task runs in one worker instance only.
@@ -176,6 +178,8 @@ func main() {
 	fleet := systemhealth.NewFleetReader(gw, &http.Client{Transport: platform.TraceTransport(nil)})
 	sampler := &systemhealth.Sampler{Store: &systemhealth.Store{Pool: pool}, Fleet: fleet, Now: time.Now, Logger: app.Logger}
 	app.AddBackgroundWorker(codelist.NewWorker(systemhealth.SampleInterval, leader.Lead("health-sample", sampler.Sample)))
+
+	app.AddBackgroundWorker(codelist.NewWorker(notifications.HandoffInterval, leader.Lead("registrant-handoff", notifications.MoveRegistrantHandoffs(pool, q.River()))))
 
 	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("newsletter-purge", notifications.NewNewsletterStore(pool, q.River()).PurgeExpired)))
 
@@ -336,9 +340,10 @@ func queueConfigs(contacts bool) map[string]river.QueueConfig {
 
 // workerBundle is the ONE bundle queue.New reads. A River client takes exactly one, so a second
 // bundle would leave its workers unfetched (TestWorkerBundle_CarriesEveryKind).
-func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, cw *contactWorkerSet) *river.Workers {
+func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet) *river.Workers {
 	bundle := submission.Workers(sw, pw)
 	extraction.AddTo(bundle, ew)
+	notifications.AddRegistrantTo(bundle, rw)
 	if cw != nil {
 		notifications.AddTo(bundle, cw.deliver, cw.deal, cw.blog)
 	}

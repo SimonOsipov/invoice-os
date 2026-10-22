@@ -37,7 +37,7 @@ var routedServices = []string{
 // none of them has a public domain, so the roll-up is CI's only view of them, and
 // nothing outside the private network should be able to call them.
 // TestGatewayHandlersPublishNoProxyRouteForAProbedService holds that line.
-var probedServices = []string{"docling", "auth", "reconciliation"}
+var probedServices = []string{"docling", "auth", "worker"}
 
 func main() {
 	defer platform.ReportBootPanic()

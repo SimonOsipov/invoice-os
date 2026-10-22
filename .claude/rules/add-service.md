@@ -40,6 +40,8 @@ paths:
 - Add a new service to the lists in `set-sentry-off`. `TestSentryOffListsMatchTheDeployedFleet` pins them.
 - Report `sentry` from a service probed through `/healthz/fleet`, or exempt it by name in the fleet gate. Only `auth` is exempt.
 - Wrap a new outbound client to another first-party service in `platform.TraceTransport`. Never wrap a third-party client.
+- Run background work only in `cmd/worker`: River workers, tickers and sweeps. A request-driven service enqueues on an insert-only `queue.Config{}`. `TestOnlyTheWorkerRunsBackgroundWork` fails otherwise.
+- Run one worker instance. The submission rate limiter is in memory.
 - Build a new Go service on `platform.New`. It gets Sentry labels, 5xx and panic capture, tracing and the `SENTRY_TEST_EVENT` trigger.
 - Call `initMonitoring` from `src/instrument.ts` in a new SPA. Add its name to the `Service` union in `packages/monitoring/src/options.ts`.
 - Declare `ARG` and `ENV` for `VITE_SENTRY_DSN` and `VITE_SENTRY_TEST_DIGEST` in a new SPA Dockerfile build stage.

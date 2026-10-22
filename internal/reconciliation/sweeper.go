@@ -1,4 +1,4 @@
-// M5-06-06: Sweeper is the platform.BackgroundWorker cmd/reconciliation registers via
+// M5-06-06: Sweeper is the platform.BackgroundWorker cmd/worker registers via
 // app.AddBackgroundWorker (M5-06-07) — it drives sweepFn on a time.Ticker, single-flight
 // (a slow sweep is never overlapped by the next tick), and stops within the platform
 // shutdown window (M5-06 System Design).
@@ -13,7 +13,7 @@ import (
 
 // Sweeper implements platform.BackgroundWorker (Start/Stop). sweepFn and Interval are the
 // test seams TestSweeper* use to run with no DB and a short tick period — production
-// wiring (cmd/reconciliation) points each Sweeper's sweepFn at one sweep and Interval at Cfg.Interval.
+// wiring (cmd/worker) points each Sweeper's sweepFn at one sweep and Interval at Cfg.Interval.
 type Sweeper struct {
 	// Interval is the tick period between sweeps.
 	Interval time.Duration
@@ -33,7 +33,7 @@ type Sweeper struct {
 
 var _ platform.BackgroundWorker = (*Sweeper)(nil)
 
-// NewSweeper builds a Sweeper that invokes fn on each interval tick. cmd/reconciliation
+// NewSweeper builds a Sweeper that invokes fn on each interval tick. cmd/worker
 // passes one sweep per Sweeper.
 func NewSweeper(interval time.Duration, fn func(context.Context) error) *Sweeper {
 	return &Sweeper{Interval: interval, sweepFn: fn}

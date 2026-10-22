@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -72,9 +73,21 @@ func New(pool *pgxpool.Pool, cfg Config) (*Client, error) {
 // Stop, satisfies platform.BackgroundWorker. An insert-only client never calls Start.
 func (c *Client) Start(ctx context.Context) error { return c.river.Start(ctx) }
 
-// Stop drains in-flight jobs, blocking until they finish or ctx expires. Satisfies
-// platform.BackgroundWorker.
-func (c *Client) Stop(ctx context.Context) error { return c.river.Stop(ctx) }
+// Stop drains in-flight jobs for the first three quarters of ctx's window, then cancels the rest
+// so River records them retryable. A job still running when the process exits would stay
+// "running" until River's rescuer finds it, an hour later. Satisfies platform.BackgroundWorker.
+func (c *Client) Stop(ctx context.Context) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return c.river.Stop(ctx)
+	}
+	soft, cancel := context.WithDeadline(ctx, deadline.Add(-time.Until(deadline)/4))
+	defer cancel()
+	if err := c.river.Stop(soft); err == nil || ctx.Err() != nil {
+		return err
+	}
+	return c.river.StopAndCancel(ctx)
+}
 
 // River exposes the underlying client for the paths this thin wrapper deliberately does
 // not re-abstract — non-transactional Insert, Subscribe, and rivertest in tests.

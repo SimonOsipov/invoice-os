@@ -26,52 +26,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/SimonOsipov/invoice-os/internal/accountmail"
-	"github.com/SimonOsipov/invoice-os/internal/notifications"
 )
-
-type qaSpied struct {
-	Method, Host, Path, Auth string
-	Remaining                time.Duration // time left on the request context; 0 without a deadline
-}
-
-// qaSpyTransport records every request and answers 200 unless respond says otherwise.
-type qaSpyTransport struct {
-	mu      sync.Mutex
-	reqs    []qaSpied
-	respond func(n int, r *http.Request) *http.Response
-}
-
-func qaReply(r *http.Request, code int, header http.Header) *http.Response {
-	if header == nil {
-		header = http.Header{}
-	}
-	return &http.Response{StatusCode: code, Status: strconv.Itoa(code), Header: header, Body: io.NopCloser(strings.NewReader("{}")), Request: r}
-}
-
-func (s *qaSpyTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	var left time.Duration
-	if d, ok := r.Context().Deadline(); ok {
-		left = time.Until(d)
-	}
-	s.mu.Lock()
-	s.reqs = append(s.reqs, qaSpied{r.Method, r.URL.Host, r.URL.Path, r.Header.Get("Authorization"), left})
-	n := len(s.reqs)
-	s.mu.Unlock()
-	if s.respond != nil {
-		return s.respond(n, r), nil
-	}
-	return qaReply(r, http.StatusOK, nil), nil
-}
-
-func (s *qaSpyTransport) seen() []qaSpied {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]qaSpied(nil), s.reqs...)
-}
-
-func qaGetenv(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 
 func qaFourKeys(extra ...string) map[string]string {
 	m := map[string]string{
@@ -82,189 +37,6 @@ func qaFourKeys(extra ...string) map[string]string {
 		m[extra[i]] = extra[i+1]
 	}
 	return m
-}
-
-var qaAda = notifications.Contact{Email: "ada@corp.example", FirstName: "Ada", Tags: []string{"registered"}, MarketingEligible: true}
-
-func TestDeliveryClients_PreviewNeverUsesTheTransport(t *testing.T) {
-	for _, tc := range []struct {
-		name, env string
-		vars      map[string]string
-	}{
-		{"pr-7 with four keys", "pr-7", qaFourKeys()},
-		{"a named fork with four keys", "ascomply-pr-12", qaFourKeys()},
-		{"pr-7 with the flag and four keys", "pr-7", qaFourKeys("CONTACTS_FAKE", "true")},
-		{"pr-7 with a bad flag and a partial key set", "pr-7", map[string]string{"CONTACTS_FAKE": "banana", "HUBSPOT_TOKEN": "x"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			spy := &qaSpyTransport{}
-			mode, hs, rs, err := deliveryClients(qaGetenv(tc.vars), tc.env, spy)
-			if err != nil {
-				t.Fatalf("deliveryClients err = %v, want nil: a preview environment never refuses to boot", err)
-			}
-			if mode != notifications.ModeFake {
-				t.Fatalf("mode = %q, want fake", mode)
-			}
-			if hs == nil || rs == nil {
-				t.Fatalf("clients = %v, %v, want a fake HubSpot and a fake Resend", hs, rs)
-			}
-			if err := hs.Upsert(t.Context(), qaAda); err != nil {
-				t.Errorf("Upsert err = %v, want nil", err)
-			}
-			for _, optIn := range []bool{true, false} {
-				if err := rs.Sync(t.Context(), qaAda, optIn); err != nil {
-					t.Errorf("Sync(optIn=%v) err = %v, want nil", optIn, err)
-				}
-			}
-			if got := spy.seen(); len(got) != 0 {
-				t.Errorf("the transport saw %d request(s) %+v, want none", len(got), got)
-			}
-		})
-	}
-}
-
-func TestDeliveryClients_FakeFlagUsesNoTransport(t *testing.T) {
-	spy := &qaSpyTransport{}
-	mode, hs, rs, err := deliveryClients(qaGetenv(map[string]string{"CONTACTS_FAKE": "true"}), "production", spy)
-	if err != nil || mode != notifications.ModeFake || hs == nil || rs == nil {
-		t.Fatalf("deliveryClients = %q, %v, %v, %v, want fake with both clients", mode, hs, rs, err)
-	}
-	_ = hs.Upsert(t.Context(), qaAda)
-	_ = rs.Sync(t.Context(), qaAda, true)
-	if got := spy.seen(); len(got) != 0 {
-		t.Errorf("the transport saw %+v, want no request in fake mode", got)
-	}
-}
-
-func TestDeliveryClients_RealUsesTheTransport(t *testing.T) {
-	for _, env := range []string{"production", ""} {
-		t.Run("env_"+env, func(t *testing.T) {
-			spy := &qaSpyTransport{}
-			mode, hs, rs, err := deliveryClients(qaGetenv(qaFourKeys()), env, spy)
-			if err != nil || mode != notifications.ModeReal {
-				t.Fatalf("deliveryClients = %q, err %v, want real", mode, err)
-			}
-			if hs == nil || rs == nil {
-				t.Fatalf("clients = %v, %v, want both", hs, rs)
-			}
-			if err := hs.Upsert(t.Context(), qaAda); err != nil {
-				t.Fatalf("Upsert err = %v", err)
-			}
-			got := spy.seen()
-			if len(got) != 1 || got[0].Method != http.MethodPatch || got[0].Host != "api.hubapi.com" ||
-				!strings.HasPrefix(got[0].Path, "/crm/v3/objects/contacts/") || got[0].Auth != "Bearer hs-secret-token" {
-				t.Fatalf("Upsert reached the transport as %+v, want one authorised PATCH to api.hubapi.com", got)
-			}
-			if err := rs.Sync(t.Context(), qaAda, true); err != nil {
-				t.Fatalf("Sync err = %v", err)
-			}
-			got = spy.seen()[1:]
-			if len(got) == 0 {
-				t.Fatal("Sync never reached the transport")
-			}
-			for _, r := range got {
-				if r.Host != "api.resend.com" || r.Auth != "Bearer rs-secret-key" {
-					t.Errorf("Sync request %+v, want api.resend.com with the Resend key", r)
-				}
-			}
-		})
-	}
-}
-
-func TestDeliveryClients_OffReturnsNoClients(t *testing.T) {
-	for _, env := range []string{"production", ""} {
-		spy := &qaSpyTransport{}
-		mode, hs, rs, err := deliveryClients(qaGetenv(nil), env, spy)
-		if err != nil || mode != notifications.ModeOff {
-			t.Fatalf("env %q: deliveryClients = %q, err %v, want off", env, mode, err)
-		}
-		if hs != nil || rs != nil {
-			t.Errorf("env %q: clients = %v, %v, want nil interfaces", env, hs, rs)
-		}
-	}
-}
-
-func TestDeliveryClients_ModeErrorIsReturned(t *testing.T) {
-	for name, vars := range map[string]map[string]string{
-		"partial keys":        {"HUBSPOT_TOKEN": "hs-secret-token"},
-		"flag plus a key":     {"CONTACTS_FAKE": "true", "RESEND_API_KEY": "rs-secret-key"},
-		"unreadable flag":     {"CONTACTS_FAKE": "banana"},
-		"flag plus four keys": qaFourKeys("CONTACTS_FAKE", "true"),
-	} {
-		t.Run(name, func(t *testing.T) {
-			spy := &qaSpyTransport{}
-			mode, hs, rs, err := deliveryClients(qaGetenv(vars), "production", spy)
-			if err == nil {
-				t.Fatalf("deliveryClients = %q, %v, %v, want an error", mode, hs, rs)
-			}
-			if hs != nil || rs != nil {
-				t.Errorf("clients = %v, %v alongside an error, want nil", hs, rs)
-			}
-			for _, secret := range []string{"hs-secret-token", "rs-secret-key"} {
-				if strings.Contains(err.Error(), secret) {
-					t.Errorf("error %q carries a secret value", err)
-				}
-			}
-		})
-	}
-}
-
-// A 301 on a PATCH is the response, never followed as a GET to the Location.
-func TestDeliveryClients_RealDoesNotFollowRedirects(t *testing.T) {
-	redirect := func(n int, r *http.Request) *http.Response {
-		if n == 1 {
-			return qaReply(r, http.StatusMovedPermanently, http.Header{"Location": {"https://evil.example/steal"}})
-		}
-		return qaReply(r, http.StatusOK, nil)
-	}
-	for name, call := range map[string]func(hs notifications.HubSpotClient, rs notifications.ResendClient) error{
-		"hubspot PATCH": func(hs notifications.HubSpotClient, _ notifications.ResendClient) error {
-			return hs.Upsert(t.Context(), qaAda)
-		},
-		"resend GET": func(_ notifications.HubSpotClient, rs notifications.ResendClient) error {
-			return rs.Sync(t.Context(), qaAda, false)
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			spy := &qaSpyTransport{respond: redirect}
-			mode, hs, rs, err := deliveryClients(qaGetenv(qaFourKeys()), "production", spy)
-			if err != nil || mode != notifications.ModeReal || hs == nil || rs == nil {
-				t.Fatalf("deliveryClients = %q, %v, %v, %v, want real with both clients", mode, hs, rs, err)
-			}
-			cerr := call(hs, rs)
-			var de *notifications.DeliveryError
-			if !errors.As(cerr, &de) || de.Status != http.StatusMovedPermanently {
-				t.Errorf("err = %v, want a *DeliveryError with status 301: a redirect is not a delivery", cerr)
-			}
-			for _, r := range spy.seen() {
-				if r.Host == "evil.example" {
-					t.Errorf("the client followed the redirect to %+v", r)
-				}
-			}
-			if n := len(spy.seen()); n != 1 {
-				t.Errorf("the transport saw %d requests, want 1", n)
-			}
-		})
-	}
-}
-
-func TestDeliveryClients_RealTimesOutAfterTenSeconds(t *testing.T) {
-	spy := &qaSpyTransport{}
-	_, hs, rs, err := deliveryClients(qaGetenv(qaFourKeys()), "production", spy)
-	if err != nil || hs == nil || rs == nil {
-		t.Fatalf("deliveryClients err = %v, clients %v %v", err, hs, rs)
-	}
-	_ = hs.Upsert(t.Context(), qaAda)
-	_ = rs.Sync(t.Context(), qaAda, false)
-	got := spy.seen()
-	if len(got) < 2 {
-		t.Fatalf("the transport saw %d requests, want at least one per vendor", len(got))
-	}
-	for _, r := range got {
-		if r.Remaining <= 8*time.Second || r.Remaining > 10*time.Second {
-			t.Errorf("%s %s%s carried %v of deadline, want a client timeout of 10s", r.Method, r.Host, r.Path, r.Remaining)
-		}
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -346,6 +118,56 @@ func qaStart(t *testing.T, bin string, vars map[string]string) *qaProc {
 		case <-time.After(10 * time.Second):
 			_ = p.cmd.Process.Kill()
 			<-p.done
+		}
+	})
+	return p
+}
+
+// qaWorkerBin builds cmd/worker once per test binary: it runs every delivery job.
+var qaWorkerBin = sync.OnceValues(func() (string, error) {
+	dir, err := os.MkdirTemp("", "qa-worker-")
+	if err != nil {
+		return "", err
+	}
+	bin := filepath.Join(dir, "worker")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o", bin, "../worker").CombinedOutput(); err != nil {
+		return "", fmt.Errorf("go build cmd/worker: %v\n%s", err, out)
+	}
+	return bin, nil
+})
+
+// qaStartWithWorker boots notifications and the worker on the same vars; both write to one
+// buffer, so every output assertion covers the delivering process too.
+func qaStartWithWorker(t *testing.T, bin string, vars map[string]string) *qaProc {
+	t.Helper()
+	wbin, err := qaWorkerBin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := qaStart(t, bin, vars)
+	wvars := qaMerge(map[string]string{
+		"DATABASE_READER_URL": os.Getenv("DATABASE_READER_URL"),
+		"GATEWAY_URL":         "http://gateway.invalid", "VALIDATION_URL": "http://validation.invalid", "S2S_TOKEN": "tok",
+		"APP_ADAPTER": "mock", "DOCUMENT_BUCKET": "b", "DOCUMENT_ENDPOINT": "http://127.0.0.1:1", "DOCUMENT_REGION": "r",
+		"DOCUMENT_ACCESS_KEY_ID": "k", "DOCUMENT_SECRET_ACCESS_KEY": "s",
+	}, vars)
+	w := exec.Command(wbin)
+	w.Env = qaBootEnv(qaFreePort(t), wvars)
+	w.Stdout, w.Stderr = p.out, p.out
+	if err := w.Start(); err != nil {
+		t.Fatalf("start worker: %v", err)
+	}
+	done := make(chan struct{})
+	go func() { _ = w.Wait(); close(done) }()
+	t.Cleanup(func() {
+		_ = w.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			_ = w.Process.Kill()
+			<-done
 		}
 	})
 	return p
@@ -478,7 +300,7 @@ func TestNotificationsMain_WorkerRunsOnlyWhenDelivering(t *testing.T) {
 			for k, v := range tc.vars {
 				vars[k] = v
 			}
-			p := qaStart(t, bin, vars)
+			p := qaStartWithWorker(t, bin, vars)
 			p.waitFor(t, "/readyz")
 			if got := p.healthz(t)["contacts"]; got != tc.mode {
 				t.Fatalf("/healthz contacts = %q, want %q", got, tc.mode)
@@ -595,6 +417,21 @@ func qaStartProxy(t *testing.T) *qaProxy {
 	return p
 }
 
+// qaVendorHosts are the contact vendors. The worker's code-list sync also dials NRS through the
+// same proxy; that call is not a contact delivery.
+var qaVendorHosts = map[string]bool{"api.hubapi.com:443": true, "api.resend.com:443": true}
+
+// vendors returns the vendor CONNECT targets seen so far.
+func (p *qaProxy) vendors() []string {
+	var out []string
+	for _, target := range p.seen() {
+		if qaVendorHosts[target] {
+			out = append(out, target)
+		}
+	}
+	return out
+}
+
 func (p *qaProxy) seen() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -700,7 +537,7 @@ func TestNotificationsMain_PreviewEnvironmentBootsFake(t *testing.T) {
 			proxy := qaStartProxy(t)
 			email := fmt.Sprintf("preview-%s@worker.example", uuid.NewString()[:8])
 			qaCleanupContact(t, admin, email)
-			p := qaStart(t, bin, qaMerge(tc.vars, proxy.vars(), map[string]string{"DATABASE_URL": appURL, "DEPLOY_ENV": "pr-7"}))
+			p := qaStartWithWorker(t, bin, qaMerge(tc.vars, proxy.vars(), map[string]string{"DATABASE_URL": appURL, "DEPLOY_ENV": "pr-7"}))
 			p.waitFor(t, "/readyz")
 			if got := p.healthz(t)["contacts"]; got != "fake" {
 				t.Fatalf("/healthz contacts = %q, want fake in a pr-7 environment", got)
@@ -713,7 +550,7 @@ func TestNotificationsMain_PreviewEnvironmentBootsFake(t *testing.T) {
 			if mode := qaWaitDelivered(t, admin, p, email, true); mode != "fake" {
 				t.Errorf("delivery_mode = %q, want fake", mode)
 			}
-			if got := proxy.seen(); len(got) != 0 {
+			if got := proxy.vendors(); len(got) != 0 {
 				t.Errorf("the service dialled %v through the proxy, want no network call in a preview environment", got)
 			}
 			if strings.Contains(p.out.String(), "hs-secret-token") || strings.Contains(p.out.String(), "rs-secret-key") {
@@ -731,7 +568,7 @@ func TestNotificationsMain_RealModeHonoursTheProxy(t *testing.T) {
 	email := fmt.Sprintf("proxy-%s@worker.example", uuid.NewString()[:8])
 	qaCleanupContact(t, admin, email)
 
-	p := qaStart(t, bin, qaMerge(qaFourKeys(), proxy.vars(), map[string]string{"DATABASE_URL": appURL}))
+	p := qaStartWithWorker(t, bin, qaMerge(qaFourKeys(), proxy.vars(), map[string]string{"DATABASE_URL": appURL}))
 	p.waitFor(t, "/readyz")
 	if got := p.healthz(t)["contacts"]; got != "real" {
 		t.Fatalf("/healthz contacts = %q, want real", got)
@@ -740,13 +577,15 @@ func TestNotificationsMain_RealModeHonoursTheProxy(t *testing.T) {
 	if code, out := p.call(t, http.MethodPost, "/internal/contacts/registrants", body, qaViaGateway); code != http.StatusAccepted {
 		t.Fatalf("POST registrants status %d (%s), want 202\n%s", code, out, p.out)
 	}
-	select {
-	case target := <-proxy.connects:
-		if target != "api.hubapi.com:443" && target != "api.resend.com:443" {
-			t.Errorf("the proxy was asked for %q, want a vendor host", target)
+	for deadline := time.After(30 * time.Second); ; {
+		select {
+		case target := <-proxy.connects:
+			if qaVendorHosts[target] {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("no vendor request reached the proxy in real mode (saw %v)\n%s", proxy.seen(), p.out)
 		}
-	case <-time.After(30 * time.Second):
-		t.Fatalf("no vendor request reached the proxy in real mode\n%s", p.out)
 	}
 }
 
@@ -848,7 +687,7 @@ func TestNotificationsMain_FakeModeCompletesADemoDealJob(t *testing.T) {
 		t.Run(tc.mode, func(t *testing.T) {
 			email := fmt.Sprintf("deal-%s-%s@worker.example", tc.mode, uuid.NewString()[:8])
 			qaCleanupContact(t, admin, email)
-			p := qaStart(t, bin, qaMerge(tc.vars, map[string]string{"DATABASE_URL": appURL}))
+			p := qaStartWithWorker(t, bin, qaMerge(tc.vars, map[string]string{"DATABASE_URL": appURL}))
 			p.waitFor(t, "/readyz")
 
 			body := fmt.Sprintf(`{"email":%q,"name":"Grace Hopper","company":"Navy"}`, email)
@@ -987,44 +826,6 @@ func TestNotificationsMain_RegistersTheBlogRoutes(t *testing.T) {
 	}
 }
 
-func qaWiring(t *testing.T, env string, vars map[string]string) newsletterWiring {
-	t.Helper()
-	contacts, _, _, err := deliveryClients(qaGetenv(vars), env, nil)
-	if err != nil {
-		t.Fatalf("deliveryClients: %v", err)
-	}
-	w, err := newsletterClients(qaGetenv(vars), env, contacts, nil)
-	if err != nil {
-		t.Fatalf("newsletterClients: %v", err)
-	}
-	return w
-}
-
-func TestNotificationsNewsletterWiring_PreviewIsCaptureAndFake(t *testing.T) {
-	vars := qaFourKeys("RESEND_BLOG_TOPIC_ID", "bt", "RESEND_BLOG_SEGMENT_ID", "bs", "RESEND_SENDING_KEY", "sk")
-	w := qaWiring(t, "pr-7", vars)
-	if _, ok := w.Sender.(*accountmail.Capture); !ok || w.MailMode != accountmail.ModeCapture || w.Mode != notifications.ModeFake || !w.Enabled {
-		t.Errorf("wiring = %+v, want capture mail, fake newsletter, enabled", w)
-	}
-	if _, ok := w.Resend.(notifications.FakeBlogResend); !ok {
-		t.Errorf("resend client = %T, want FakeBlogResend", w.Resend)
-	}
-}
-
-func TestNotificationsNewsletterWiring_ProductionWithoutBlogKeysIsDisabled(t *testing.T) {
-	w := qaWiring(t, "production", qaFourKeys("RESEND_SENDING_KEY", "sk"))
-	if w.Enabled || w.Mode != notifications.ModeOff {
-		t.Errorf("wiring = %+v, want disabled", w)
-	}
-}
-
-func TestNotificationsNewsletterWiring_NoSendingKeyIsDisabled(t *testing.T) {
-	w := qaWiring(t, "production", qaFourKeys("RESEND_BLOG_TOPIC_ID", "bt", "RESEND_BLOG_SEGMENT_ID", "bs"))
-	if w.Enabled || w.Mode != notifications.ModeReal || w.MailMode != accountmail.ModeOff {
-		t.Errorf("wiring = %+v, want real newsletter, mail off, disabled", w)
-	}
-}
-
 // A PR fork has no blog keys and no sending key: both routes must work in capture and fake
 // mode, the boot purge must run, and nothing may dial a vendor.
 func TestNotificationsMain_PreviewServesTheBlogSubscriptionRoutes(t *testing.T) {
@@ -1059,7 +860,7 @@ func TestNotificationsMain_PreviewServesTheBlogSubscriptionRoutes(t *testing.T) 
 	}
 
 	proxy := qaStartProxy(t)
-	p := qaStart(t, bin, qaMerge(proxy.vars(), map[string]string{"DATABASE_URL": appURL, "DEPLOY_ENV": "pr-7"}))
+	p := qaStartWithWorker(t, bin, qaMerge(proxy.vars(), map[string]string{"DATABASE_URL": appURL, "DEPLOY_ENV": "pr-7"}))
 	p.waitFor(t, "/readyz")
 
 	count := func(email string) (n int) {
@@ -1108,7 +909,7 @@ func TestNotificationsMain_PreviewServesTheBlogSubscriptionRoutes(t *testing.T) 
 	if mode == nil || *mode != "fake" {
 		t.Errorf("delivery_mode = %v, want fake", mode)
 	}
-	if got := proxy.seen(); len(got) != 0 {
+	if got := proxy.vendors(); len(got) != 0 {
 		t.Errorf("the fork dialled %v, want no vendor call", got)
 	}
 	if out := p.out.String(); strings.Contains(out, live) || strings.Contains(out, fresh) || strings.Contains(out, token) {
@@ -1140,7 +941,7 @@ func TestNotificationsMain_PurgesExpiredRequestsWhileNewsletterIsOff(t *testing.
 			t.Fatalf("seed: %v", err)
 		}
 	}
-	p := qaStart(t, bin, map[string]string{"DATABASE_URL": appURL})
+	p := qaStartWithWorker(t, bin, map[string]string{"DATABASE_URL": appURL})
 	p.waitFor(t, "/readyz")
 	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(100 * time.Millisecond) {
 		var n int

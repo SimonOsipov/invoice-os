@@ -33,7 +33,7 @@ paths:
 - Never send Resend `unsubscribed`, `opt_out` or a second `opt_in` for registration and Marketing consent.
 - Send a repeat Blog-topic `opt_in` after each confirmed double opt-in.
 - Queue no Resend job for a demo booker who did not tick.
-- Pick the mode from the vendor keys and `CONTACTS_FAKE`: `real`, `fake` or `off`. The worker does not start in `off`.
+- Pick the mode from the vendor keys and `CONTACTS_FAKE`: `real`, `fake` or `off`. In `off` the worker fetches no `contacts` job.
 - Refuse to boot when `CONTACTS_FAKE` is true and any key is set, or when only some keys are set.
 - Name variables in a boot error, never their values.
 - Run a preview environment in `fake` mode and discard its vendor keys.

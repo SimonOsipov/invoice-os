@@ -140,3 +140,13 @@ func logDeliveryFailure(ctx context.Context, log *slog.Logger, dest string, err 
 	}
 	log.WarnContext(ctx, "contacts: "+dest+" delivery failed", slog.String("destination", dest), slog.Int("status", status))
 }
+
+// AddTo registers the contact workers on the worker's one bundle. A nil blog worker means the
+// newsletter is off.
+func AddTo(bundle *river.Workers, deliver *DeliverWorker, deal *DemoDealWorker, blog *BlogSyncWorker) {
+	river.AddWorker(bundle, deliver)
+	river.AddWorker(bundle, deal)
+	if blog != nil {
+		river.AddWorker(bundle, blog)
+	}
+}

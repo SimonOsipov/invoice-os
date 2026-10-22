@@ -3,6 +3,7 @@ package systemhealth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -69,4 +70,16 @@ func ServicesDown(f gateway.FleetHealth) int {
 		}
 	}
 	return n
+}
+
+// GatewayURL parses GATEWAY_URL, the in-network gateway base the fleet reader calls.
+func GatewayURL(raw string) (*url.URL, error) {
+	if raw == "" {
+		return nil, errors.New("GATEWAY_URL is required")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, fmt.Errorf("GATEWAY_URL must be an absolute http(s) URL, got %q", raw)
+	}
+	return u, nil
 }

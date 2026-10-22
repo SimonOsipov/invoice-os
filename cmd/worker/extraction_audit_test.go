@@ -1,5 +1,5 @@
 // extraction_audit_test.go: the terminal-outcome audit adapter, read from both ends. What it
-// WRITES comes from a recording pgx.Tx -- cmd/submission opens no database, and audit.Record's
+// WRITES comes from a recording pgx.Tx -- this test opens no database, and audit.Record's
 // whole observable effect is one INSERT. Where it is SPELLED comes from an AST scan: a const
 // event name or a helper-built payload drops the site out of the repo-wide audit.Record
 // partition in internal/platform/db/audit_number_scan_test.go, which no behavioural test sees.
@@ -46,17 +46,15 @@ const (
 	eaPayloadArg = 4
 
 	// Floors. The file walk mirrors internal/platform/db/seam_coverage_test.go:148 (151 files,
-	// 9 under cmd/, measured here). main.go holds 4 function literals today: the two closures
-	// newDocumentOpener and newPageSink return, the deferred Close inside the first, and the
-	// /v1/ping handler.
+	// 9 under cmd/, measured here). main.go holds 2 function literals today: the closure
+	// newExtractionAuditor returns and the tenants enumerator.
 	eaMinProdFiles = 130
 	eaMinCmdFiles  = 8
-	eaMinFuncLits  = 4
+	eaMinFuncLits  = 2
 
-	// main.go's audit.Record sites: two in newExtractionAuditor plus newDocumentReadAuditor's.
-	// A floor, because this file classifies the outcome adapter only -- the repo-wide partition
+	// main.go's audit.Record sites: the two in newExtractionAuditor. A floor, because this file classifies the outcome adapter only -- the repo-wide partition
 	// in internal/platform/db/audit_number_scan_test.go is what accounts for every writer.
-	eaMinMainSites = 3
+	eaMinMainSites = 2
 
 	// Spelled once as a production string literal, measured. The classifier must still find it,
 	// or every "spelled exactly once" clearance below is a broken walk reporting an empty set.
@@ -492,14 +490,14 @@ func eaMainSites(t *testing.T) []eaSite {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "main.go", nil, 0)
 	if err != nil {
-		t.Fatalf("parse cmd/submission/main.go: %v -- a file the scan cannot read is a file it reports clean on", err)
+		t.Fatalf("parse cmd/worker/main.go: %v -- a file the scan cannot read is a file it reports clean on", err)
 	}
-	sites, lits := eaSitesIn(fset, "cmd/submission/main.go", f)
+	sites, lits := eaSitesIn(fset, "cmd/worker/main.go", f)
 	if lits < eaMinFuncLits {
-		t.Fatalf("walked %d function literal(s) in cmd/submission/main.go, want at least %d (newDocumentOpener's closure, its deferred Close, newPageSink's closure, the /v1/ping handler) -- a walk that descends into nothing finds no call site either", lits, eaMinFuncLits)
+		t.Fatalf("walked %d function literal(s) in cmd/worker/main.go, want at least %d (newExtractionAuditor's closure, the tenants enumerator) -- a walk that descends into nothing finds no call site either", lits, eaMinFuncLits)
 	}
 	if len(sites) < eaMinMainSites {
-		t.Fatalf("cmd/submission/main.go holds %d audit.Record call site(s) %v, want at least %d -- a walk that finds fewer has lost sites rather than found a shrinking file", len(sites), sites, eaMinMainSites)
+		t.Fatalf("cmd/worker/main.go holds %d audit.Record call site(s) %v, want at least %d -- a walk that finds fewer has lost sites rather than found a shrinking file", len(sites), sites, eaMinMainSites)
 	}
 	var adapter []eaSite
 	for _, s := range sites {
@@ -769,8 +767,8 @@ func TestExtractionAuditor_EventNameHasOneConstructionSiteEach(t *testing.T) {
 			t.Errorf("%q is spelled as a production string literal at %v, want exactly 1 site -- zero means nothing emits it and the frontend label guard has nothing to find; two means a rename can land in one branch only", event, got)
 			continue
 		}
-		if !strings.HasPrefix(got[0], "cmd/submission/main.go:") {
-			t.Errorf("%q is spelled at %s, want cmd/submission/main.go -- internal/extraction is fenced off internal/audit, so the adapter is the composition root's job", event, got[0])
+		if !strings.HasPrefix(got[0], "cmd/worker/main.go:") {
+			t.Errorf("%q is spelled at %s, want cmd/worker/main.go -- internal/extraction is fenced off internal/audit, so the adapter is the composition root's job", event, got[0])
 		}
 	}
 }

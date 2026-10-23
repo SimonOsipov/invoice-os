@@ -789,6 +789,60 @@ func TestRestoreCheck_RunsUnderSetRoleToTheAuditor(t *testing.T) {
 	}
 }
 
+// TestRestoreAuditor_GrantsAsAPostgresThatOwnsNothing applies db/restore-auditor.sql as Cloud SQL's
+// postgres is shaped: not a superuser, not the table owner, ADMIN on invoice_migrator.
+func TestRestoreAuditor_GrantsAsAPostgresThatOwnsNothing(t *testing.T) {
+	ctx := context.Background()
+	f := newRCFixture(t)
+	f.invoice(t, "RC-1", "draft", f.cutoff.Add(-time.Hour))
+	const sim = "cloudsql_auditor_sim"
+	t.Cleanup(func() {
+		_, _ = f.pool.Exec(ctx, `DROP OWNED BY restore_auditor`)
+		_, _ = f.pool.Exec(ctx, `DROP ROLE IF EXISTS restore_auditor`)
+		_, _ = f.pool.Exec(ctx, `REVOKE invoice_migrator FROM `+sim)
+		_, _ = f.pool.Exec(ctx, `DROP OWNED BY `+sim)
+		_, _ = f.pool.Exec(ctx, `DROP ROLE IF EXISTS `+sim)
+	})
+	for _, stmt := range []string{
+		`DROP ROLE IF EXISTS restore_auditor`,
+		`CREATE ROLE ` + sim + ` LOGIN CREATEROLE CREATEDB BYPASSRLS PASSWORD 'sim'`,
+		`GRANT ALL ON SCHEMA public TO ` + sim + ` WITH GRANT OPTION`,
+		`GRANT invoice_migrator TO ` + sim + ` WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`,
+	} {
+		if _, err := f.pool.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	b, err := os.ReadFile("../../../db/restore-auditor.sql")
+	if err != nil {
+		t.Fatalf("read db/restore-auditor.sql: %v", err)
+	}
+	cfg, err := pgx.ParseConfig(f.dsn)
+	if err != nil {
+		t.Fatalf("parse DSN: %v", err)
+	}
+	cfg.User, cfg.Password = sim, "sim"
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("connect as %s: %v", sim, err)
+	}
+	defer conn.Close(ctx)
+	if _, err := conn.Exec(ctx, string(b)); err != nil {
+		t.Fatalf("apply db/restore-auditor.sql as %s: %v", sim, err)
+	}
+	var who string
+	if err := conn.QueryRow(ctx, `SELECT current_user`).Scan(&who); err != nil || who != sim {
+		t.Fatalf("current_user after the file = %q (err %v), want %s: the file must reset its role", who, err, sim)
+	}
+	if _, err := conn.Exec(ctx, `SET ROLE restore_auditor`); err != nil {
+		t.Fatalf("SET ROLE restore_auditor: %v", err)
+	}
+	var n int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, f.tenant).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("invoices as restore_auditor = %d (err %v), want 1", n, err)
+	}
+}
+
 // --- AC-6 -------------------------------------------------------------------
 
 func TestRestoreCheck_RecentRows(t *testing.T) {

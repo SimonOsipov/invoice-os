@@ -25,7 +25,7 @@ run_job() {
   echo "== job $1 ${2:-}"
   local args=()
   [ -n "${2:-}" ] && args=(--args "$2")
-  gcloud run jobs execute "$1" --project "$PROJECT" --region "$REGION" --wait "${args[@]}"
+  gcloud run jobs execute "$1" --project "$PROJECT" --region "$REGION" --wait ${args[@]+"${args[@]}"}
 }
 
 # fingerprint <dir> <tenant>: db/restore-check.sql on Railway. The role line names the caller and differs by side.

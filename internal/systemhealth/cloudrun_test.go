@@ -197,3 +197,153 @@ func TestRunLists_RefuseABadAnswer(t *testing.T) {
 		}
 	}
 }
+
+func svcJSON(name, cpu string) string {
+	return fmt.Sprintf(`{"name":"projects/p1/locations/r1/services/%s","template":{"scaling":{"maxInstanceCount":1},"containers":[{"resources":{"limits":{"cpu":%q,"memory":"1Gi"}}}]}}`, name, cpu)
+}
+
+func TestLimits_FollowsPagesAndFiltersAcrossThem(t *testing.T) {
+	f, g := newRunFake(t, func(r *http.Request, n int) (int, string) {
+		if r.URL.Query().Get("pageToken") == "" {
+			return 200, `{"services":[` + svcJSON("zeta", "1") + `,` + svcJSON("app", "2") + `],"nextPageToken":"p2"}`
+		}
+		return 200, `{"services":[` + svcJSON("mid", "4") + `]}`
+	})
+	got, err := g.limits(t.Context(), "tok", "p1", "r1", "")
+	if err != nil || len(got) != 3 || got[0].Name != "app" || got[1].Name != "mid" || got[2].Name != "zeta" {
+		t.Fatalf("limits = %+v, %v", got, err)
+	}
+	if len(f.reqs) != 2 || f.reqs[1].token != "p2" || !strings.Contains(f.reqs[0].query, "pageSize=100") {
+		t.Fatalf("requests = %+v", f.reqs)
+	}
+	got, err = g.limits(t.Context(), "tok", "p1", "r1", "mid")
+	if err != nil || len(got) != 1 || got[0].CPU != "4" {
+		t.Fatalf("filtered limits = %+v, %v", got, err)
+	}
+}
+
+// The limits list has no page cap today; a server that never stops paging loops until the caller gives up.
+func TestLimits_RefusesAListThatNeverEnds(t *testing.T) {
+	f, g := newRunFake(t, func(_ *http.Request, n int) (int, string) {
+		if n > 200 {
+			return 500, ""
+		}
+		return 200, `{"services":[` + svcJSON("app", "1") + `],"nextPageToken":"same"}`
+	})
+	if _, err := g.limits(t.Context(), "tok", "p1", "r1", ""); err == nil {
+		t.Fatal("want an error for an endless list")
+	}
+	if len(f.reqs) > 50 {
+		t.Fatalf("limits made %d requests for a list that never ends", len(f.reqs))
+	}
+}
+
+func TestDeploys_TwentyPagesAreAllowed(t *testing.T) {
+	f, g := newRunFake(t, func(_ *http.Request, n int) (int, string) {
+		body := `{"revisions":[` + rev("app", fmt.Sprintf("r-%02d", n), "2026-10-23T10:00:00Z")
+		if n < deploysMaxPages {
+			body += `],"nextPageToken":"t"}`
+		} else {
+			body += `]}`
+		}
+		return 200, body
+	})
+	start := time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC)
+	got, err := g.deploys(t.Context(), "tok", "p1", "r1", "", start, start.Add(24*time.Hour))
+	if err != nil || len(got) != deploysMaxPages || len(f.reqs) != deploysMaxPages {
+		t.Fatalf("deploys = %d, %v, requests %d", len(got), err, len(f.reqs))
+	}
+	if !strings.Contains(f.reqs[0].query, "pageSize=1000") {
+		t.Fatalf("query = %s", f.reqs[0].query)
+	}
+}
+
+func TestDeploys_SortsOldestFirstAndShuffledAcrossPages(t *testing.T) {
+	start := time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC)
+	now := start.Add(24 * time.Hour)
+	for name, pages := range map[string][2][]string{
+		"newest first": {{rev("app", "c", "2026-10-23T12:00:00Z"), rev("app", "b", "2026-10-23T11:00:00Z")}, {rev("app", "a", "2026-10-23T10:00:00Z")}},
+		"oldest first": {{rev("app", "a", "2026-10-23T10:00:00Z"), rev("app", "b", "2026-10-23T11:00:00Z")}, {rev("app", "c", "2026-10-23T12:00:00Z")}},
+		"shuffled":     {{rev("app", "b", "2026-10-23T11:00:00Z"), rev("app", "c", "2026-10-23T12:00:00Z")}, {rev("app", "a", "2026-10-23T10:00:00Z")}},
+		"equal times":  {{rev("app", "b", "2026-10-23T10:00:00Z")}, {rev("app", "a", "2026-10-23T10:00:00Z"), rev("app", "c", "2026-10-23T10:00:01Z")}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, g := newRunFake(t, func(r *http.Request, _ int) (int, string) {
+				if r.URL.Query().Get("pageToken") == "" {
+					return 200, `{"revisions":[` + strings.Join(pages[0], ",") + `],"nextPageToken":"p2"}`
+				}
+				return 200, `{"revisions":[` + strings.Join(pages[1], ",") + `]}`
+			})
+			got, err := g.deploys(t.Context(), "tok", "p1", "r1", "", start, now)
+			if err != nil || len(got) != 3 {
+				t.Fatalf("deploys = %+v, %v", got, err)
+			}
+			for i, want := range []string{"a", "b", "c"} {
+				if got[i].Revision != want {
+					t.Fatalf("order = %+v, want a,b,c", got)
+				}
+			}
+		})
+	}
+}
+
+func TestDeploys_BadAndMissingCreateTime(t *testing.T) {
+	start := time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC)
+	now := start.Add(24 * time.Hour)
+	_, g := newRunFake(t, func(*http.Request, int) (int, string) {
+		return 200, `{"revisions":[` + rev("app", "ok", "2026-10-23T10:00:00Z") + `,` + rev("app", "bad", "yesterday") + `]}`
+	})
+	if _, err := g.deploys(t.Context(), "tok", "p1", "r1", "", start, now); err == nil {
+		t.Fatal("want an error for an unparsable createTime")
+	}
+	_, g = newRunFake(t, func(*http.Request, int) (int, string) {
+		return 200, `{"revisions":[` + rev("app", "ok", "2026-10-23T10:00:00Z") + `,{"name":"projects/p1/locations/r1/services/app/revisions/none","service":"projects/p1/locations/r1/services/app"}]}`
+	})
+	got, err := g.deploys(t.Context(), "tok", "p1", "r1", "", start, now)
+	if err != nil || len(got) != 1 || got[0].Revision != "ok" {
+		t.Fatalf("a revision without createTime must be dropped: %+v, %v", got, err)
+	}
+}
+
+func TestRunLists_BodyCapBoundary(t *testing.T) {
+	pad := func(base string, size int) string { return base + strings.Repeat(" ", size-len(base)) }
+	start := time.Now().Add(-time.Hour)
+	now := time.Now()
+	for _, tc := range []struct {
+		name, base string
+		cap        int
+		call       func(g *Google) error
+	}{
+		{"limits", `{"services":[]}`, 1 << 20, func(g *Google) error { _, err := g.limits(t.Context(), "tok", "p1", "r1", ""); return err }},
+		{"deploys", `{"revisions":[]}`, 16 << 20, func(g *Google) error { _, err := g.deploys(t.Context(), "tok", "p1", "r1", "", start, now); return err }},
+	} {
+		for _, over := range []bool{false, true} {
+			size := tc.cap
+			if over {
+				size++
+			}
+			t.Run(fmt.Sprintf("%s/over=%v", tc.name, over), func(t *testing.T) {
+				_, g := newRunFake(t, func(*http.Request, int) (int, string) { return 200, pad(tc.base, size) })
+				if err := tc.call(g); (err != nil) != over {
+					t.Fatalf("size %d (cap %d): err = %v", size, tc.cap, err)
+				}
+			})
+		}
+	}
+}
+
+func TestRunLists_Refuse500AndEmptyBody(t *testing.T) {
+	start := time.Now().Add(-time.Hour)
+	for name, ans := range map[string]struct {
+		code int
+		body string
+	}{"500": {500, `{}`}, "empty 200": {200, ``}} {
+		_, g := newRunFake(t, func(*http.Request, int) (int, string) { return ans.code, ans.body })
+		if _, err := g.limits(t.Context(), "tok", "p1", "r1", ""); err == nil {
+			t.Fatalf("limits %s: want an error", name)
+		}
+		if _, err := g.deploys(t.Context(), "tok", "p1", "r1", "", start, time.Now()); err == nil {
+			t.Fatalf("deploys %s: want an error", name)
+		}
+	}
+}

@@ -14,8 +14,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +34,9 @@ var sites = []string{"app", "landing", "library", "blog", "ops-console", "suppor
 const (
 	deadline = 15 * time.Minute
 	interval = 5 * time.Second
+	// Four targets at a time: each wakes a cold revision with a CPU boost, and africa-south1 allows
+	// 20 vCPU of allocation per minute.
+	parallel = 4
 )
 
 func main() {
@@ -57,6 +62,7 @@ func check() []string {
 			return "https://" + os.Args[2] + "---" + svc + "-" + os.Getenv("RUN_HOST_SUFFIX")
 		},
 		interval: interval,
+		parallel: parallel,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
@@ -68,57 +74,63 @@ type checker struct {
 	client   *http.Client
 	url      func(svc string) string
 	interval time.Duration
+	parallel int
 }
 
-// run checks every target in parallel and returns one line per failed target.
+// run checks every target in rounds until each passes or ctx ends: one attempt per pending target
+// per round, at most c.parallel at once. It returns one line per target that never passed.
 func (c checker) run(ctx context.Context) []string {
-	type target struct {
-		name  string
-		check func() error
+	pending := map[string]func() error{
+		"auth": func() error {
+			return c.status(ctx, http.MethodGet, c.url("auth")+"/.well-known/jwks.json", http.StatusOK)
+		},
 	}
-	var targets []target
 	for _, svc := range backends {
-		targets = append(targets, target{svc, func() error { return c.backend(ctx, svc) }})
+		pending[svc] = func() error { return c.backend(ctx, svc) }
 	}
-	targets = append(targets, target{"auth", func() error {
-		return c.status(ctx, http.MethodGet, c.url("auth")+"/.well-known/jwks.json", http.StatusOK)
-	}})
+	pending["gateway"] = func() error {
+		if err := c.backend(ctx, "gateway"); err != nil {
+			return err
+		}
+		return c.gatewayPosture(ctx)
+	}
 	for _, site := range sites {
-		targets = append(targets, target{site, func() error { return c.site(ctx, site) }})
+		pending[site] = func() error { return c.site(ctx, site) }
 	}
 
-	var mu sync.Mutex
-	var failed []string
-	var wg sync.WaitGroup
-	for _, t := range targets {
-		wg.Go(func() {
-			err := c.poll(ctx, t.check)
-			if err == nil && t.name == "gateway" {
-				err = c.gatewayPosture(ctx)
-			}
-			if err != nil {
-				mu.Lock()
-				failed = append(failed, t.name+": "+err.Error())
-				mu.Unlock()
-			} else {
-				fmt.Println("ok", t.name)
-			}
-		})
-	}
-	wg.Wait()
-	return failed
-}
-
-// poll repeats check until it passes or ctx ends, and returns the last error.
-func (c checker) poll(ctx context.Context, check func() error) error {
+	last := map[string]error{}
 	for {
-		err := check()
-		if err == nil {
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		slots := make(chan struct{}, c.parallel)
+		round := maps.Clone(pending)
+		for name, check := range round {
+			wg.Go(func() {
+				slots <- struct{}{}
+				defer func() { <-slots }()
+				err := check()
+				mu.Lock()
+				defer mu.Unlock()
+				if err != nil {
+					last[name] = err
+					return
+				}
+				delete(pending, name)
+				fmt.Println("ok", name)
+			})
+		}
+		wg.Wait()
+		if len(pending) == 0 {
 			return nil
 		}
 		select {
 		case <-ctx.Done():
-			return err
+			var failed []string
+			for name := range pending {
+				failed = append(failed, name+": "+last[name].Error())
+			}
+			sort.Strings(failed)
+			return failed
 		case <-time.After(c.interval):
 		}
 	}

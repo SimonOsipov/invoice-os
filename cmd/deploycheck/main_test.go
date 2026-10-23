@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -38,7 +39,7 @@ func fleet(t *testing.T, sha string, override func(svc, path string, w http.Resp
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return checker{sha: sha, client: srv.Client(), url: func(svc string) string { return srv.URL + "/" + svc }, interval: time.Millisecond}
+	return checker{sha: sha, client: srv.Client(), url: func(svc string) string { return srv.URL + "/" + svc }, interval: time.Millisecond, parallel: 4}
 }
 
 func runFor(c checker, d time.Duration) []string {
@@ -107,5 +108,29 @@ func TestRun_GatewayMustServeNoMintRouteAndOneIssuer(t *testing.T) {
 				t.Fatalf("failed = %v, want only the gateway", failed)
 			}
 		})
+	}
+}
+
+func TestRun_ChecksAtMostParallelTargetsAtOnce(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var inFlight, peak int
+	c := fleet(t, "abc", func(svc, path string, w http.ResponseWriter) bool {
+		mu.Lock()
+		inFlight++
+		peak = max(peak, inFlight)
+		mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		return false
+	})
+	c.parallel = 2
+	if failed := runFor(c, 5*time.Second); len(failed) > 0 {
+		t.Fatalf("failed = %v, want none", failed)
+	}
+	if peak != 2 {
+		t.Fatalf("peak concurrent requests = %d, want 2", peak)
 	}
 }

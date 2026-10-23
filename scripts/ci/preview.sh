@@ -59,8 +59,11 @@ secret() { printf 'pr-%s-%s' "$1" "$2"; }
 shared() { gcloud secrets versions access latest --secret "$1" --project "$PROJECT"; }
 
 # put <name> <pr>: stdin is the value; argv never carries it.
+# put stores stdin without its trailing newline: a service reads the secret byte for byte.
 put() {
-  gcloud secrets create "$1" --project "$PROJECT" --replication-policy user-managed --locations "$REGION" \
+  local value
+  value=$(cat)
+  printf '%s' "$value" | gcloud secrets create "$1" --project "$PROJECT" --replication-policy user-managed --locations "$REGION" \
     --labels "$LABEL=$2" --data-file=- >/dev/null
   echo "created $1"
 }

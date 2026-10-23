@@ -43,7 +43,8 @@ paths:
 - Claim no compliance with a named data-protection law. The page says it is not legal advice.
 - Disclose each new browser network sender on the page. List the external hosts the landing contacts.
 - Treat an ungated flow as a page fact. Fonts and error reports load whatever the visitor chooses about analytics.
-- Scope each analytics sentence outside the Library section to the landing, the Feature Library and the Blog, never to the landing alone.
+- Scope each analytics sentence outside the Library section to the landing, the Feature Library, the Blog and the signed-in product. Never scope it to the landing alone. Keep the Blog section as pinned (`BLOG_SECTION`).
+- Back the sentence that the signed-in product runs Google Analytics with the operator's confirmation of the copy. The user gave it on 2026-10-23 (CHAT-04 Answers Q1). No app code backs it: the C2 code scan in `Privacy.render.test.tsx` finds none.
 - Keep the Library section as pinned (`LIBRARY_SECTION`). It names the landing and the Library only.
 - Say in the Blog section that one analytics choice covers the landing, the Library and the Blog. A choice made on any of the three applies to all.
 - Name `asc_consent` in one paragraph only, the cookie-notice paragraph. Say there that it is our own cookie on `SHARED_COOKIE_DOMAIN`.

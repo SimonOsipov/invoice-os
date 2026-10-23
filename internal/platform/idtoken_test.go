@@ -76,6 +76,30 @@ func TestIDTokenTransport_SignsOnlyRunAppHosts(t *testing.T) {
 	}
 }
 
+func TestIDTokenTransport_TagURLUsesTheServiceAudience(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	var audiences []string
+	md := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		audiences = append(audiences, r.URL.Query().Get("audience"))
+		fmt.Fprint(w, fakeJWT(now.Add(time.Hour)))
+	}))
+	defer md.Close()
+	tr := newIDTokenTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.HasPrefix(req.URL.String(), md.URL) {
+			return http.DefaultTransport.RoundTrip(req)
+		}
+		return (&recordRT{}).RoundTrip(req)
+	}), md.URL, func() time.Time { return now })
+
+	req, _ := http.NewRequest(http.MethodGet, "https://c-abc1234---tenancy-123.africa-south1.run.app/healthz", nil)
+	if _, err := tr.RoundTrip(req); err != nil {
+		t.Fatal(err)
+	}
+	if len(audiences) != 1 || audiences[0] != "https://tenancy-123.africa-south1.run.app" {
+		t.Errorf("metadata audiences = %v, want the service URL", audiences)
+	}
+}
+
 func TestIDTokenTransport_RefetchesNearExpiry(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	fetches := 0

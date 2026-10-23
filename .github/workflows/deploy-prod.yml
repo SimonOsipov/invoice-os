@@ -1,0 +1,329 @@
+# Production on Google Cloud (GKE-09): build each image once, migrate, start new revisions at 0 %,
+# check them from inside the production network, then move traffic. A failed step leaves traffic on
+# the previous revisions. Workload Identity admits only a run on main (invoice-os-infra deployers.tf).
+# Rollback: rollback-prod.yml.
+name: Deploy production (GCP)
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit on main to deploy (empty = the head of main)
+        required: false
+      break_check:
+        description: Check against a wrong commit, to prove a failed check moves no traffic
+        type: boolean
+        default: false
+
+# Runs never overlap and never cancel: production converges on the last commit merged.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PROJECT: ascomply-prod
+  REGION: africa-south1
+  REGISTRY: africa-south1-docker.pkg.dev/ascomply-preview/images
+  WIF_PROVIDER: projects/428987361227/locations/global/workloadIdentityPools/github/providers/github-actions
+  DEPLOYER: deploy-prod@ascomply-prod.iam.gserviceaccount.com
+  LB_IP: 136.68.179.228
+
+jobs:
+  # Resolves the commit and waits for its green CI, on push and dispatch alike.
+  await-ci:
+    name: Await green CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+      tag: ${{ steps.sha.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - id: sha
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+        run: |
+          sha=$(git rev-parse --verify "${INPUT_SHA:-$GITHUB_SHA}^{commit}")
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error::$sha is not on main; production deploys only commits on main."
+            exit 1
+          fi
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+          echo "tag=c-${sha:0:12}" >>"$GITHUB_OUTPUT"
+      - name: Wait for the CI check to succeed on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: bash scripts/ci/await-ci.sh "${{ steps.sha.outputs.sha }}"
+
+  # One image per service and commit. A re-run or a dispatch of a built commit reuses the image.
+  build:
+    name: Build ${{ matrix.image }}
+    needs: [await-ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { image: gateway, dockerfile: Dockerfile, service: gateway }
+          - { image: tenancy, dockerfile: Dockerfile, service: tenancy }
+          - { image: portfolio, dockerfile: Dockerfile, service: portfolio }
+          - { image: invoice, dockerfile: Dockerfile, service: invoice }
+          - { image: validation, dockerfile: Dockerfile, service: validation }
+          - { image: dashboard, dockerfile: Dockerfile, service: dashboard }
+          - { image: submission, dockerfile: Dockerfile, service: submission }
+          - { image: notifications, dockerfile: Dockerfile, service: notifications }
+          - { image: worker, dockerfile: Dockerfile, service: worker }
+          - { image: migrate, dockerfile: Dockerfile, service: migrate }
+          - { image: deploycheck, dockerfile: Dockerfile, service: deploycheck }
+          - { image: auth, dockerfile: sidecar/auth/Dockerfile }
+          - { image: docling, dockerfile: sidecar/docling/Dockerfile }
+          - { image: app, dockerfile: frontend/app/Dockerfile, spa: true }
+          - { image: landing, dockerfile: frontend/landing/Dockerfile, spa: true }
+          - { image: library, dockerfile: frontend/library/Dockerfile, spa: true }
+          - { image: blog, dockerfile: frontend/blog/Dockerfile, spa: true }
+          - { image: ops-console, dockerfile: frontend/ops-console/Dockerfile, spa: true }
+          - { image: support-console, dockerfile: frontend/support-console/Dockerfile, spa: true }
+    env:
+      SHA: ${{ needs.await-ci.outputs.sha }}
+      IMAGE: africa-south1-docker.pkg.dev/ascomply-preview/images/${{ matrix.image }}:${{ needs.await-ci.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.await-ci.outputs.sha }}
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      - run: gcloud auth configure-docker africa-south1-docker.pkg.dev --quiet
+      - id: exists
+        run: |
+          if gcloud artifacts docker images describe "$IMAGE" --quiet >/dev/null 2>&1; then
+            echo "built=true" >>"$GITHUB_OUTPUT"
+            echo "$IMAGE exists; not rebuilt."
+          fi
+      - name: Stamp the build sha into the image
+        if: steps.exists.outputs.built != 'true'
+        run: sh scripts/ci/stamp-build-sha.sh "$SHA"
+      # Vite bakes VITE_* in at build time; these are production's public values.
+      - name: Build and push
+        if: steps.exists.outputs.built != 'true'
+        env:
+          SERVICE: ${{ matrix.service }}
+          SPA: ${{ matrix.spa }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+        run: |
+          args=(--build-arg "BUILD_SHA=$SHA")
+          if [ -n "$SERVICE" ]; then args+=(--build-arg "SERVICE=$SERVICE"); fi
+          if [ "$SPA" = "true" ]; then
+            token=$(gcloud secrets versions access latest --secret sentry-auth-token --project "$PROJECT")
+            echo "::add-mask::$token"
+            export SENTRY_AUTH_TOKEN="$token"
+            args+=(
+              --build-arg SENTRY_AUTH_TOKEN
+              --build-arg VITE_GATEWAY_URL=https://api.ascomply.com
+              --build-arg VITE_APP_URL=https://app.ascomply.com
+              --build-arg VITE_LANDING_URL=https://www.ascomply.com
+              --build-arg VITE_LIBRARY_URL=https://library.ascomply.com
+              --build-arg VITE_BLOG_URL=https://blog.ascomply.com
+              --build-arg VITE_OPS_URL=https://ops.ascomply.com
+              --build-arg VITE_SUPPORT_URL=https://sup.ascomply.com
+              --build-arg VITE_GA_MEASUREMENT_ID=G-E409H76XYY
+              --build-arg VITE_HUBSPOT_PORTAL_ID=148915098
+              --build-arg VITE_HUBSPOT_FORM_GUID=8e9cf78f-e6a6-4128-9b3d-8c09d5710daf
+              --build-arg VITE_REGISTRATION_OPEN=true
+              --build-arg VITE_SENTRY_DSN=https://ec0e762d84725a6c2f7d6a167373607e@o4512131304980480.ingest.de.sentry.io/4512190354554960
+            )
+          fi
+          docker build -f "$DOCKERFILE" "${args[@]}" -t "$IMAGE" .
+          docker push "$IMAGE"
+
+  # Migrations are expand-only, so the old revisions keep working on the migrated schema.
+  migrate:
+    name: Migrate
+    needs: [await-ci, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SHA: ${{ needs.await-ci.outputs.sha }}
+    steps:
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      - name: Point the jobs at this commit
+        run: |
+          for job in migrate migrate-bootstrap; do
+            gcloud run jobs update "$job" --image "$REGISTRY/migrate:$SHA" --project "$PROJECT" --region "$REGION" --quiet
+          done
+          gcloud run jobs update deploy-check --image "$REGISTRY/deploycheck:$SHA" --project "$PROJECT" --region "$REGION" --quiet
+      - name: Run the migrate job
+        run: gcloud run jobs execute migrate --wait --project "$PROJECT" --region "$REGION" --quiet
+
+  deploy:
+    name: Deploy revisions at 0 %
+    needs: [await-ci, migrate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SHA: ${{ needs.await-ci.outputs.sha }}
+      TAG: ${{ needs.await-ci.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      - name: Record the serving revisions
+        run: bash scripts/ci/gcp-traffic.sh snapshot serving.txt && cat serving.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: serving
+          path: serving.txt
+      - name: Start the new revisions without traffic
+        run: |
+          pids=()
+          for svc in gateway auth tenancy portfolio invoice validation dashboard submission notifications worker docling \
+            app landing library blog ops-console support-console; do
+            gcloud run deploy "$svc" --image "$REGISTRY/$svc:$SHA" --no-traffic --tag "$TAG" \
+              --project "$PROJECT" --region "$REGION" --quiet >"deploy-$svc.log" 2>&1 &
+            pids+=($!)
+          done
+          failed=0
+          for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
+          for log in deploy-*.log; do echo "--- $log"; cat "$log"; done
+          if [ "$failed" != 0 ]; then
+            echo "::error::a revision did not deploy; traffic stays on the previous revisions."
+            exit 1
+          fi
+
+  # The new revisions are reachable only inside the production network, through their tag.
+  check:
+    name: Check the new revisions
+    needs: [await-ci, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SHA: ${{ inputs.break_check && '0000000000000000000000000000000000000000' || needs.await-ci.outputs.sha }}
+      TAG: ${{ needs.await-ci.outputs.tag }}
+    steps:
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      - name: Run the deploy-check job
+        run: |
+          if ! gcloud run jobs execute deploy-check --args "$SHA,$TAG" --wait --project "$PROJECT" --region "$REGION" --quiet; then
+            echo "::error::deploy-check failed; traffic stays on the previous revisions. Its log names each failed service."
+            exit 1
+          fi
+
+  promote:
+    name: Move traffic and check the fleet
+    needs: [await-ci, check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SHA: ${{ needs.await-ci.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: serving
+      - name: Send 100 % to the new revisions
+        run: bash scripts/ci/gcp-traffic.sh promote serving.txt
+      # Through the load balancer: --resolve reaches it before and after DNS moves (GKE-10).
+      - name: Poll /healthz/fleet until every backend serves the commit
+        id: fleet
+        run: |
+          token=$(gcloud secrets versions access latest --secret gateway-token --project "$PROJECT")
+          echo "::add-mask::$token"
+          code=000
+          stale="(never polled)"
+          for _ in $(seq 1 120); do
+            code=$(curl -sS --connect-timeout 5 --max-time 40 --resolve "api.ascomply.com:443:$LB_IP" \
+              -H "X-Gateway-Token: $token" -o fleet.json -w '%{http_code}' https://api.ascomply.com/healthz/fleet 2>/dev/null || echo 000)
+            if [ "$code" = 200 ]; then
+              stale=$(jq -r --arg b "$SHA" '[.services[] | select(.name != "auth" and .build != $b) | "\(.name)=\(.build // "none")"]
+                + [.services[] | select(.name == "notifications" and (.contacts | IN("real", "off") | not)) | "notifications contacts=\(.contacts // "none")"]
+                | join(", ")' fleet.json 2>/dev/null || echo unparseable)
+              if [ -z "$stale" ]; then break; fi
+            fi
+            sleep 5
+          done
+          jq . fleet.json 2>/dev/null || true
+          if [ "$code" != 200 ] || [ -n "$stale" ]; then
+            echo "::error::/healthz/fleet is HTTP $code after 600s; not on $SHA: ${stale:-n/a}."
+            exit 1
+          fi
+          echo "Every backend serves $SHA."
+      - name: Wait for each site to serve the commit
+        run: |
+          for host in app www library blog ops sup; do
+            seen=""
+            for _ in $(seq 1 60); do
+              seen=$(curl -fsS --max-time 10 --resolve "$host.ascomply.com:443:$LB_IP" "https://$host.ascomply.com/build.txt" 2>/dev/null | tr -d '[:space:]' || true)
+              if [ "$seen" = "$SHA" ]; then break; fi
+              sleep 5
+            done
+            if [ "$seen" != "$SHA" ]; then
+              echo "::error::$host.ascomply.com serves build '${seen:-none}', want $SHA."
+              exit 1
+            fi
+            echo "$host.ascomply.com serves $SHA."
+          done
+      - name: Send traffic back to the previous revisions
+        if: failure()
+        run: |
+          bash scripts/ci/gcp-traffic.sh restore serving.txt
+          echo "::error::the fleet check failed after traffic moved; traffic is back on the previous revisions."
+
+  untag:
+    name: Remove the deploy tag
+    needs: [await-ci, deploy, check, promote]
+    if: always() && needs.deploy.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      - run: bash scripts/ci/gcp-traffic.sh untag "${{ needs.await-ci.outputs.tag }}"

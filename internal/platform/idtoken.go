@@ -59,6 +59,10 @@ func (t *idTokenTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	if !strings.HasSuffix(host, ".run.app") {
 		return t.base.RoundTrip(req)
 	}
+	// A revision tag URL (<tag>---<service host>) still takes the service URL as its audience.
+	if _, svc, ok := strings.Cut(host, "---"); ok {
+		host = svc
+	}
 	tok, err := t.cache.token(req.Context(), t.base, "https://"+host)
 	if err != nil {
 		if req.Body != nil {

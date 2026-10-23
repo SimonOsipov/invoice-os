@@ -204,16 +204,15 @@ jobs:
           name: serving
           path: serving.txt
       - name: Start the new revisions without traffic
+        # Four at a time: africa-south1 allows 20 vCPU of allocation per minute, and each new
+        # instance starts with a CPU boost. Seventeen at once exceeded it.
         run: |
-          pids=()
-          for svc in gateway auth tenancy portfolio invoice validation dashboard submission notifications worker docling \
-            app landing library blog ops-console support-console; do
-            gcloud run deploy "$svc" --image "$REGISTRY/$svc:$SHA" --no-traffic --tag "$TAG" \
-              --project "$PROJECT" --region "$REGION" --quiet >"deploy-$svc.log" 2>&1 &
-            pids+=($!)
-          done
           failed=0
-          for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
+          # shellcheck disable=SC2016 # the child sh expands the job's env
+          printf '%s\n' gateway auth tenancy portfolio invoice validation dashboard submission notifications worker docling \
+            app landing library blog ops-console support-console |
+            xargs -P 4 -I{} sh -c 'gcloud run deploy {} --image "$REGISTRY/{}:$SHA" --no-traffic --tag "$TAG" \
+              --project "$PROJECT" --region "$REGION" --quiet >"deploy-{}.log" 2>&1' || failed=1
           for log in deploy-*.log; do echo "--- $log"; cat "$log"; done
           if [ "$failed" != 0 ]; then
             echo "::error::a revision did not deploy; traffic stays on the previous revisions."

@@ -71,6 +71,8 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("OK"))
 		return
 	case strings.HasSuffix(p, ".map"):
+		// Cloud Run labels a typeless response text/html.
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusNotFound)
 		return
 	case p == "/robots.txt":

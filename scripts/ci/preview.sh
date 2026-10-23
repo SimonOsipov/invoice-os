@@ -169,7 +169,7 @@ env_file() {
 secrets_of() {
   local pr=$1 s=()
   case "$2" in
-    gateway) s=(GATEWAY_TOKEN=gateway-token DATABASE_GATEWAY_URL=database-gateway-url) ;;
+    gateway) s=(GATEWAY_TOKEN=gateway-token DATABASE_GATEWAY_URL=database-gateway-url DATABASE_MIGRATION_URL=database-migration-url) ;;
     auth) s=(DATABASE_URL=database-auth-url GOTRUE_JWT_KEYS=gotrue-jwt-keys GOTRUE_JWT_SECRET=gotrue-jwt-secret) ;;
     tenancy | portfolio | dashboard | notifications) s=(DATABASE_URL=database-app-url GATEWAY_TOKEN=gateway-token) ;;
     validation) s=(DATABASE_URL=database-app-url GATEWAY_TOKEN=gateway-token S2S_TOKEN=s2s-token) ;;

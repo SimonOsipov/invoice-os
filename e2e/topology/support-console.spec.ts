@@ -685,7 +685,7 @@ async function submissionsReads(page: Page, testInfo: TestInfo): Promise<void> {
 async function selectAtRightEnd(filterBar: Locator, bar: Rect, select: Rect, others: Rect[]): Promise<string[]> {
   const padRight = await filterBar.evaluate((el) => parseFloat(getComputedStyle(el).paddingRight))
   const right = (r: Rect): number => r.x + r.width
-  const problems = others.filter((o) => right(o) > right(select) + 1).map((_, i) => `tenant select: not rightmost, #${i} ends later`)
+  const problems = others.flatMap((o, i) => (right(o) > right(select) + 1 ? [`tenant select: not rightmost, #${i} ends later`] : []))
   if (!near(right(select), right(bar) - padRight, 1)) problems.push(`tenant select right ${right(select)} vs filter bar content edge ${right(bar) - padRight}`)
   return problems
 }

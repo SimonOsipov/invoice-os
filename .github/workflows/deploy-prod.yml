@@ -325,4 +325,4 @@ jobs:
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
-      - run: bash scripts/ci/gcp-traffic.sh untag "${{ needs.await-ci.outputs.tag }}"
+      - run: bash scripts/ci/gcp-traffic.sh untag

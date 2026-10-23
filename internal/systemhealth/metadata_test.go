@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -90,10 +91,13 @@ func TestMetadata_TokenRefusesABadAnswerAndCachesNothing(t *testing.T) {
 		code int
 		body string
 	}{
-		"500":          {500, "boom"},
-		"not json":     {200, "<html>"},
-		"empty token":  {200, `{"access_token":"","expires_in":3599}`},
-		"zero expires": {200, `{"access_token":"t","expires_in":0}`},
+		"500":                         {500, "boom"},
+		"not json":                    {200, "<html>"},
+		"empty token":                 {200, `{"access_token":"","expires_in":3599}`},
+		"zero expires":                {200, `{"access_token":"t","expires_in":0}`},
+		"negative expires":            {200, `{"access_token":"t","expires_in":-5}`},
+		"500 with a valid token body": {500, `{"access_token":"t","expires_in":3599}`},
+		"body over the 8 KiB cap":     {200, `{"access_token":"t","expires_in":3599,"pad":"` + strings.Repeat("x", 9<<10) + `"}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, srv := newMetaFake(t, func(string, int) (int, string) { return tc.code, tc.body })
@@ -129,25 +133,78 @@ func TestMetadata_LocationReadsProjectAndRegionOnce(t *testing.T) {
 	}
 }
 
-func TestMetadata_LocationFailureIsRetried(t *testing.T) {
-	f, srv := newMetaFake(t, func(p string, n int) (int, string) {
-		if p == projPath {
-			return 200, "ascomply-prod"
-		}
-		if n == 1 {
-			return 200, "africa-south1"
-		}
-		return 200, "projects/123/regions/africa-south1"
+func TestMetadata_LocationFailureIsNotCached(t *testing.T) {
+	const okRegion = "projects/123/regions/africa-south1"
+	for name, tc := range map[string]struct {
+		badPath string
+		code    int
+		body    string
+	}{
+		"project 500":        {projPath, 500, "boom"},
+		"region 500":         {regionPath, 500, okRegion},
+		"region no regions/": {regionPath, 200, "africa-south1"},
+		"region empty seg":   {regionPath, 200, "projects/123/regions/"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, srv := newMetaFake(t, func(p string, n int) (int, string) {
+				if p == tc.badPath && n == 1 {
+					return tc.code, tc.body
+				}
+				if p == projPath {
+					return 200, "ascomply-prod"
+				}
+				return 200, okRegion
+			})
+			m := NewMetadata(srv.URL, srv.Client(), time.Now)
+			if _, _, err := m.Location(context.Background()); err == nil {
+				t.Fatal("want an error")
+			}
+			p, r, err := m.Location(context.Background())
+			if err != nil || p != "ascomply-prod" || r != "africa-south1" {
+				t.Fatalf("second Location = %q, %q, %v", p, r, err)
+			}
+			if f.count(tc.badPath) != 2 {
+				t.Fatalf("%s hits = %d, want 2", tc.badPath, f.count(tc.badPath))
+			}
+		})
+	}
+}
+
+func TestMetadata_ConcurrentTokenCallersShareOneFetch(t *testing.T) {
+	f, srv := newMetaFake(t, func(string, int) (int, string) {
+		time.Sleep(100 * time.Millisecond)
+		return 200, `{"access_token":"tok","expires_in":3600}`
 	})
 	m := NewMetadata(srv.URL, srv.Client(), time.Now)
-	if _, _, err := m.Location(context.Background()); err == nil {
-		t.Fatal("want an error for a region without regions/")
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if got, err := m.Token(context.Background()); err != nil || got != "tok" {
+				t.Errorf("Token = %q, %v", got, err)
+			}
+		}()
 	}
-	if _, r, err := m.Location(context.Background()); err != nil || r != "africa-south1" {
-		t.Fatalf("second Location = %q, %v", r, err)
+	wg.Wait()
+	if f.count(tokenPath) != 1 {
+		t.Fatalf("token hits = %d, want 1", f.count(tokenPath))
 	}
-	if f.count(regionPath) != 2 {
-		t.Fatalf("region hits = %d, want 2", f.count(regionPath))
+}
+
+func TestMetadata_CallHasItsOwnFiveSecondDeadline(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	m := NewMetadata(srv.URL, &http.Client{}, time.Now)
+	start := time.Now()
+	if _, err := m.Token(context.Background()); err == nil {
+		t.Fatal("want a timeout error")
+	}
+	if d := time.Since(start); d < 4*time.Second || d > 7*time.Second {
+		t.Fatalf("took %v, want about 5s", d)
 	}
 }
 

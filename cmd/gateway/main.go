@@ -121,12 +121,12 @@ func main() {
 	app.Mux.Handle("GET /auth/verify", verifyPage)
 	previewer := gateway.NewHTTPInvitationPreviewer(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
 	registrations := gateway.NewHTTPInvitationRegistrations(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
-	invitation, inviteeRegister := invitationHandlers(probed["auth"], siteURL, registerMinResponse, reg.RegisterPerIP, previewer, registrations, app.Logger)
+	invitation, inviteeRegister := invitationHandlers(probed["auth"], siteURL, registerMinResponse, previewer, registrations, app.Logger)
 	app.Mux.Handle("POST /auth/invitation", withCORS(invitation))
 	app.Mux.Handle("OPTIONS /auth/invitation", withCORS(invitation))
 	app.Mux.Handle("POST /auth/invitation/register", withCORS(inviteeRegister))
 	app.Mux.Handle("OPTIONS /auth/invitation/register", withCORS(inviteeRegister))
-	inviteResend := invitationResendHandler(probed["auth"], siteURL, reg.ResendByAddress, reg.ResendByIP, previewer, app.Logger)
+	inviteResend := invitationResendHandler(probed["auth"], siteURL, reg.ResendByAddress, previewer, app.Logger)
 	app.Mux.Handle("POST /auth/invitation/resend", withCORS(inviteResend))
 	app.Mux.Handle("OPTIONS /auth/invitation/resend", withCORS(inviteResend))
 	app.Mux.Handle("POST /contacts/demo-request", withCORS(reg.DemoRequest))
@@ -221,17 +221,15 @@ func gatewayHandlers(
 // registration holds the public registration handlers main mounts outside /api/.
 type registration struct {
 	Register, DemoRequest, ResendVerification, RequestPasswordReset http.Handler
-	// RegisterPerIP is the register throttle, nil when unconfigured; invitee registration shares it.
-	RegisterPerIP *gateway.SignInThrottle
-	// ResendByAddress and ResendByIP are the resend budgets that ResendVerification and RequestPasswordReset share; nil when unconfigured.
-	ResendByAddress, ResendByIP *gateway.SignInThrottle
+	// ResendByAddress is the resend budget that ResendVerification and RequestPasswordReset share; nil when unconfigured.
+	ResendByAddress *gateway.SignInThrottle
 }
 
 // invitationHandlers builds the accept-page preview handler and the invitee-registration handler.
-// Registration shares perIP with /auth/register and answers 503 while any of authURL, siteURL, perIP, registrations.Claim or registrations.Release is nil; the preview needs none of them.
-func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, perIP *gateway.SignInThrottle, preview gateway.InvitationPreviewer, registrations gateway.InvitationRegistrations, log *slog.Logger) (invitation, register http.Handler) {
+// Registration answers 503 while any of authURL, siteURL, registrations.Claim or registrations.Release is nil; the preview needs none of them.
+func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, preview gateway.InvitationPreviewer, registrations gateway.InvitationRegistrations, log *slog.Logger) (invitation, register http.Handler) {
 	invitation = gateway.InvitationHandler(preview, log)
-	if authURL == nil || siteURL == nil || perIP == nil || registrations.Claim == nil || registrations.Release == nil {
+	if authURL == nil || siteURL == nil || registrations.Claim == nil || registrations.Release == nil {
 		return invitation, gateway.RegistrationNotConfigured()
 	}
 	client := &http.Client{
@@ -239,14 +237,13 @@ func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, pe
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Transport:     platform.IDTokenTransport(nil),
 	}
-	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
-	return invitation, gateway.InvitationRegisterHandler(authURL, client, minResponse, perIP, enforce, log, preview, registrations)
+	return invitation, gateway.InvitationRegisterHandler(authURL, client, minResponse, log, preview, registrations)
 }
 
-// invitationResendHandler builds POST /auth/invitation/resend on the resend budgets that ResendVerification shares.
-// It answers 503 while any of authURL, siteURL or the throttles is nil.
-func invitationResendHandler(authURL, siteURL *url.URL, perAddress, perIP *gateway.SignInThrottle, preview gateway.InvitationPreviewer, log *slog.Logger) http.Handler {
-	if authURL == nil || siteURL == nil || perAddress == nil || perIP == nil {
+// invitationResendHandler builds POST /auth/invitation/resend on the resend budget that ResendVerification shares.
+// It answers 503 while any of authURL, siteURL or the throttle is nil.
+func invitationResendHandler(authURL, siteURL *url.URL, perAddress *gateway.SignInThrottle, preview gateway.InvitationPreviewer, log *slog.Logger) http.Handler {
+	if authURL == nil || siteURL == nil || perAddress == nil {
 		return gateway.RegistrationNotConfigured()
 	}
 	client := &http.Client{
@@ -255,7 +252,7 @@ func invitationResendHandler(authURL, siteURL *url.URL, perAddress, perIP *gatew
 		Transport:     platform.IDTokenTransport(nil),
 	}
 	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
-	return gateway.InvitationResendHandler(authURL, client, perAddress, perIP, enforce, log, preview)
+	return gateway.InvitationResendHandler(authURL, client, perAddress, enforce, log, preview)
 }
 
 // newJWKSClient builds the JWKS fetch client.
@@ -265,48 +262,39 @@ func newJWKSClient() *http.Client {
 
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
 // A nil authURL or siteURL (AUTH_SITE_URL unset) makes Register, ResendVerification and RequestPasswordReset answer 503 (TestRegistrationHandlers_NotConfigured503). A nil pending lookup makes Register alone answer 503 (TestRegistrationHandlers_NilPendingLookupIsNotConfigured).
-// On a PR preview the per-client limits (register, resend, reset, demo-request) log but do not refuse: a preview sends no mail (TestRegistrationHandlers_PreviewOnlyLogs).
+// On a PR preview the per-address limit (resend, reset) logs but does not refuse: a preview sends no mail (TestRegistrationHandlers_PreviewOnlyLogs).
 func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink, pending gateway.PendingInviteLookup) registration {
-	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
-	demoPerIP := gateway.NewSignInThrottle("demo-request", gateway.DemoRequestPerIP, gateway.DemoRequestMaxKeys, gateway.DemoRequestWindow, time.Now)
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
-		return registration{Register: nc, ResendVerification: nc, RequestPasswordReset: nc, DemoRequest: gateway.DemoRequestHandler(sink, demoPerIP, enforce, log)}
+		return registration{Register: nc, ResendVerification: nc, RequestPasswordReset: nc, DemoRequest: gateway.DemoRequestHandler(sink, log)}
 	}
+	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Transport:     platform.IDTokenTransport(nil),
 	}
-	// Resend and reset share both throttles: one budget per address and per client.
+	// Resend and reset share one budget per address.
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
-	perIP := gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
-	registerPerIP := gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
 	return registration{
-		Register:             gateway.RegisterHandler(authURL, client, minResponse, registerPerIP, enforce, log, pending),
-		RegisterPerIP:        registerPerIP,
+		Register:             gateway.RegisterHandler(authURL, client, minResponse, log, pending),
 		ResendByAddress:      perAddress,
-		ResendByIP:           perIP,
-		ResendVerification:   gateway.ResendVerificationHandler(authURL, client, minResponse, perAddress, perIP, enforce, log),
-		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, perIP, enforce, log),
-		DemoRequest:          gateway.DemoRequestHandler(sink, demoPerIP, enforce, log),
+		ResendVerification:   gateway.ResendVerificationHandler(authURL, client, minResponse, perAddress, enforce, log),
+		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, enforce, log),
+		DemoRequest:          gateway.DemoRequestHandler(sink, log),
 	}
 }
 
-// blogHandlers builds the public blog reads; the limit logs only on a PR fork, as the demo route does.
+// blogHandlers builds the public blog reads.
 func blogHandlers(notifications *url.URL, gatewayToken string, log *slog.Logger) gateway.BlogRoutes {
-	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
-	perIP := gateway.NewSignInThrottle("blog-read", gateway.BlogReadPerIP, gateway.BlogReadMaxKeys, gateway.BlogReadWindow, time.Now)
-	return gateway.BlogHandlers(notifications, &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken, perIP, enforce, log)
+	return gateway.BlogHandlers(notifications, &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken, log)
 }
 
-// blogSubscribeHandlers builds the public newsletter routes; the caps log and admit on a PR fork, as the demo route does.
+// blogSubscribeHandlers builds the public newsletter routes; the per-email cap logs and admits on a PR fork.
 func blogSubscribeHandlers(notifications *url.URL, gatewayToken string, minResponse time.Duration, log *slog.Logger) gateway.BlogSubscribeRoutes {
 	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
-	perIP := gateway.NewSignInThrottle("blog-subscribe-ip", gateway.BlogSubscribePerIP, gateway.BlogSubscribeMaxKeys, gateway.BlogSubscribeWindow, time.Now)
 	perEmail := gateway.NewSignInThrottle("blog-subscribe-email", gateway.BlogSubscribePerEmail, gateway.BlogSubscribeMaxKeys, gateway.BlogSubscribeWindow, time.Now)
-	confirmPerIP := gateway.NewSignInThrottle("blog-confirm-ip", gateway.BlogConfirmPerIP, gateway.BlogSubscribeMaxKeys, gateway.BlogSubscribeWindow, time.Now)
-	return gateway.BlogSubscribeHandlers(notifications, &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken, minResponse, perIP, perEmail, confirmPerIP, enforce, log)
+	return gateway.BlogSubscribeHandlers(notifications, &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken, minResponse, perEmail, enforce, log)
 }
 
 // resetPasswordHandler builds the reset-form handler; a nil authURL or siteURL makes it answer 503.

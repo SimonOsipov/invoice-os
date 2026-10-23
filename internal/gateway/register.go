@@ -26,15 +26,9 @@ const (
 // DefaultRegisterMinResponse is the shortest time any non-400 register answer takes.
 const DefaultRegisterMinResponse = 2 * time.Second
 
-const (
-	RegisterPerIP   = 10
-	RegisterWindow  = time.Hour
-	RegisterMaxKeys = 10_000
-)
-
 // RegisterHandler answers POST /auth/register by calling GoTrue's /signup under authURL, except for an invited address (TestRegister_InvitedAddressCreatesNothing).
 // Every answer except a 400 arrives no earlier than minResponse after the request; 0 means no wait.
-func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, pending PendingInviteLookup) http.Handler {
+func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, log *slog.Logger, pending PendingInviteLookup) http.Handler {
 	signup := authURL.JoinPath("signup").String()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Not postOnly: it sets headers on a POST, and a gone client must see no write.
@@ -92,29 +86,21 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 		}
 
 		invited := func(ctx context.Context) (bool, error) { return pending(ctx, in.Email) }
-		_ = signUp(w, r, client, signup, body, start, minResponse, perIP, enforce, log, invited, nil)
+		_ = signUp(w, r, client, signup, body, start, minResponse, log, invited, nil)
 	})
 }
 
-// signUp spends the per-IP budget, posts body to GoTrue's /signup and answers with the floor held.
+// signUp posts body to GoTrue's /signup and answers with the floor held.
 // RegisterHandler and InvitationRegisterHandler share it.
-// A non-nil invited runs after the reservation: true answers as a new address without calling GoTrue.
+// When invited reports true, it answers as for a new address without calling GoTrue.
 // A non-nil existing is sent instead of the 202 when GoTrue reports an address that already has an account.
 // It reports whether an account may exist for the address afterwards: GoTrue 200, an existing address or the 23505 race.
-func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, invited func(context.Context) (bool, error), existing func()) (accountMayExist bool) {
-	key, held, proceed := reserveSignUp(w, r, perIP, enforce, log, start, minResponse)
-	if !proceed {
-		return false
-	}
-
+func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, log *slog.Logger, invited func(context.Context) (bool, error), existing func()) (accountMayExist bool) {
 	if invited != nil {
 		yes, lerr := invited(r.Context())
 		if lerr != nil || yes {
 			send := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
 			if lerr != nil {
-				if held {
-					perIP.Refund(key)
-				}
 				log.WarnContext(r.Context(), "registration: pending invite lookup failed", slog.String("error", lerr.Error()))
 				send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
 			}
@@ -136,10 +122,6 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 	upstream := time.Since(start)
 	// Sent only on the invite route: the public route cannot tell an existing address from a new one.
 	existingAccount := existing != nil && status == http.StatusOK && sanitized.Identities != nil && len(*sanitized.Identities) == 0
-	// GoTrue mails nothing when it answers 4xx or reports an existing account with 200 and no identities; other 2xx, 5xx and transport errors may have mailed.
-	if held && err == nil && (existingAccount || status >= http.StatusBadRequest && status < http.StatusInternalServerError) {
-		perIP.Refund(key)
-	}
 	pending := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
 	var send func()
 	mayExist := false
@@ -187,23 +169,6 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 		send()
 	}
 	return mayExist
-}
-
-// reserveSignUp takes a per-IP register slot. Over budget and enforced, it holds the floor, answers the uniform 202 and reports false.
-func reserveSignUp(w http.ResponseWriter, r *http.Request, perIP *SignInThrottle, enforce bool, log *slog.Logger, start time.Time, minResponse time.Duration) (key string, held, proceed bool) {
-	key, source := clientKey(r)
-	held = perIP.Reserve(key)
-	if !held {
-		log.WarnContext(r.Context(), "registration: limit reached",
-			slog.String("limit", "ip"), slog.String("key_source", source), slog.Bool("enforced", enforce))
-		if enforce {
-			if holdMinimum(r.Context(), log, "registration: signup timing", start, 0, minResponse) {
-				writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
-			}
-			return key, held, false
-		}
-	}
-	return key, held, true
 }
 
 // registrationAnswers trims and validates the answers with tenancy.ProvisionHandler's rules and

@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -970,12 +969,9 @@ func invitationRegistrationsStub(address string) (gateway.InvitationRegistration
 		}
 }
 
-// AUTH_URL, AUTH_SITE_URL or the register throttle missing: invitee registration refuses, and the preview still answers.
+// AUTH_URL or AUTH_SITE_URL missing: invitee registration refuses, and the preview still answers.
 func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
-	perIP := func() *gateway.SignInThrottle {
-		return gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
-	}
 	const registerBody = `{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T","password":"Corr3ct-Horse"}`
 
 	// Control: configured, the same call signs the invited address up, so the 503s below are the unset input.
@@ -983,7 +979,7 @@ func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 		authURL, calls := fakeAuth(t)
 		preview, _ := invitationPreviewerStub("tunde@obi.test")
 		regs, registered := invitationRegistrationsStub("tunde@obi.test")
-		_, register := invitationHandlers(authURL, site, 0, perIP(), preview, regs, slog.New(slog.DiscardHandler))
+		_, register := invitationHandlers(authURL, site, 0, preview, regs, slog.New(slog.DiscardHandler))
 
 		rec := serveRegistration(register, http.MethodPost, "/auth/invitation/register", registerBody)
 
@@ -995,20 +991,17 @@ func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 		}
 	})
 
-	for _, unset := range []string{"AUTH_URL", "AUTH_SITE_URL", "register throttle"} {
+	for _, unset := range []string{"AUTH_URL", "AUTH_SITE_URL"} {
 		t.Run(unset, func(t *testing.T) {
 			authURL, calls := fakeAuth(t)
 			preview, previewed := invitationPreviewerStub("tunde@obi.test")
 			regs, registered := invitationRegistrationsStub("tunde@obi.test")
 			log := slog.New(slog.DiscardHandler)
 			var invitation, register http.Handler
-			switch unset {
-			case "AUTH_URL":
-				invitation, register = invitationHandlers(nil, site, 0, perIP(), preview, regs, log)
-			case "AUTH_SITE_URL":
-				invitation, register = invitationHandlers(authURL, nil, 0, perIP(), preview, regs, log)
-			default:
-				invitation, register = invitationHandlers(authURL, site, 0, nil, preview, regs, log)
+			if unset == "AUTH_URL" {
+				invitation, register = invitationHandlers(nil, site, 0, preview, regs, log)
+			} else {
+				invitation, register = invitationHandlers(authURL, nil, 0, preview, regs, log)
 			}
 
 			rec := serveRegistration(register, http.MethodPost, "/auth/invitation/register", registerBody)
@@ -1054,12 +1047,12 @@ func unconfirmedPreviewer(address string) (gateway.InvitationPreviewer, func() i
 
 const resendToken = "Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T"
 
-// AUTH_URL, AUTH_SITE_URL or either resend throttle missing: the token resend route refuses and reaches neither tenancy nor GoTrue.
+// AUTH_URL, AUTH_SITE_URL or the resend throttle missing: the token resend route refuses and reaches neither tenancy nor GoTrue.
 func TestInvitationResendHandler_NotConfigured503(t *testing.T) {
 	t.Setenv("DEPLOY_ENV", "")
 	site, _ := url.Parse("https://site.example")
-	throttle := func(name string) *gateway.SignInThrottle {
-		return gateway.NewSignInThrottle(name, gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
+	throttle := func() *gateway.SignInThrottle {
+		return gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	}
 	const body = `{"token":"` + resendToken + `"}`
 
@@ -1067,7 +1060,7 @@ func TestInvitationResendHandler_NotConfigured503(t *testing.T) {
 	t.Run("configured", func(t *testing.T) {
 		authURL, calls := fakeAuth(t)
 		preview, previewed := unconfirmedPreviewer("tunde@obi.test")
-		h := invitationResendHandler(authURL, site, throttle("resend-address"), throttle("resend-ip"), preview, slog.New(slog.DiscardHandler))
+		h := invitationResendHandler(authURL, site, throttle(), preview, slog.New(slog.DiscardHandler))
 
 		rec := serveRegistration(h, http.MethodPost, "/auth/invitation/resend", body)
 
@@ -1079,22 +1072,19 @@ func TestInvitationResendHandler_NotConfigured503(t *testing.T) {
 		}
 	})
 
-	for _, unset := range []string{"AUTH_URL", "AUTH_SITE_URL", "address throttle", "ip throttle"} {
+	for _, unset := range []string{"AUTH_URL", "AUTH_SITE_URL", "address throttle"} {
 		t.Run(unset, func(t *testing.T) {
 			authURL, calls := fakeAuth(t)
 			preview, previewed := unconfirmedPreviewer("tunde@obi.test")
 			log := slog.New(slog.DiscardHandler)
-			perAddress, perIP := throttle("resend-address"), throttle("resend-ip")
 			var h http.Handler
 			switch unset {
 			case "AUTH_URL":
-				h = invitationResendHandler(nil, site, perAddress, perIP, preview, log)
+				h = invitationResendHandler(nil, site, throttle(), preview, log)
 			case "AUTH_SITE_URL":
-				h = invitationResendHandler(authURL, nil, perAddress, perIP, preview, log)
-			case "address throttle":
-				h = invitationResendHandler(authURL, site, nil, perIP, preview, log)
+				h = invitationResendHandler(authURL, nil, throttle(), preview, log)
 			default:
-				h = invitationResendHandler(authURL, site, perAddress, nil, preview, log)
+				h = invitationResendHandler(authURL, site, nil, preview, log)
 			}
 
 			rec := serveRegistration(h, http.MethodPost, "/auth/invitation/resend", body)
@@ -1113,27 +1103,25 @@ func TestInvitationResendHandler_NotConfigured503(t *testing.T) {
 	}
 }
 
-// The budgets the token resend route spends are the ones ResendVerification spends, and they exist only when GoTrue and the site URL are set.
+// The budget the token resend route spends is the one ResendVerification spends, and it exists only when GoTrue and the site URL are set.
 func TestRegistrationHandlers_ResendBudgetsAreSharedWithTheInviteResend(t *testing.T) {
 	t.Setenv("DEPLOY_ENV", "")
-	const remote = "203.0.113.7:4000"
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	log := slog.New(slog.DiscardHandler)
 
 	reg := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite)
-	if reg.ResendByAddress == nil || reg.ResendByIP == nil {
-		t.Fatal("ResendByAddress or ResendByIP is nil with AUTH_URL and AUTH_SITE_URL configured")
+	if reg.ResendByAddress == nil {
+		t.Fatal("ResendByAddress is nil with AUTH_URL and AUTH_SITE_URL configured")
 	}
 	for range gateway.ResendPerAddress {
-		if rec := resendFrom(reg.ResendVerification, "tunde@obi.test", remote); rec.Code != http.StatusAccepted {
+		if rec := resendFrom(reg.ResendVerification, "tunde@obi.test"); rec.Code != http.StatusAccepted {
 			t.Fatalf("anonymous resend = %d, want 202: %s", rec.Code, rec.Body.String())
 		}
 	}
 	preview, _ := unconfirmedPreviewer("tunde@obi.test")
-	h := invitationResendHandler(authURL, site, reg.ResendByAddress, reg.ResendByIP, preview, log)
+	h := invitationResendHandler(authURL, site, reg.ResendByAddress, preview, log)
 	req := httptest.NewRequest(http.MethodPost, "/auth/invitation/resend", strings.NewReader(`{"token":"`+resendToken+`"}`))
-	req.RemoteAddr = remote
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTooManyRequests {
@@ -1143,20 +1131,17 @@ func TestRegistrationHandlers_ResendBudgetsAreSharedWithTheInviteResend(t *testi
 		t.Errorf("GoTrue /resend calls = %d, want %d: the invite route was not refused by the shared budget", got, gateway.ResendPerAddress)
 	}
 
-	if got := registrationHandlers(nil, site, 0, log, nil, noPendingInvite); got.ResendByAddress != nil || got.ResendByIP != nil {
-		t.Error("a resend throttle is non-nil with AUTH_URL unset")
+	if got := registrationHandlers(nil, site, 0, log, nil, noPendingInvite); got.ResendByAddress != nil {
+		t.Error("the resend throttle is non-nil with AUTH_URL unset")
 	}
-	if got := registrationHandlers(authURL, nil, 0, log, nil, noPendingInvite); got.ResendByAddress != nil || got.ResendByIP != nil {
-		t.Error("a resend throttle is non-nil with AUTH_SITE_URL unset")
+	if got := registrationHandlers(authURL, nil, 0, log, nil, noPendingInvite); got.ResendByAddress != nil {
+		t.Error("the resend throttle is non-nil with AUTH_SITE_URL unset")
 	}
 }
 
 // A claim without a release would strand the invitee, so a missing half refuses before any claim.
 func TestInvitationHandlers_NilRegistrationsIsNotConfigured(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
-	perIP := func() *gateway.SignInThrottle {
-		return gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
-	}
 	const registerBody = `{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T"}`
 	preview, previewed := invitationPreviewerStub("tunde@obi.test")
 
@@ -1175,7 +1160,7 @@ func TestInvitationHandlers_NilRegistrationsIsNotConfigured(t *testing.T) {
 			authURL, calls := fakeAuth(t)
 			regs, registered := invitationRegistrationsStub("tunde@obi.test")
 			c.strip(&regs)
-			invitation, register := invitationHandlers(authURL, site, 0, perIP(), preview, regs, slog.New(slog.DiscardHandler))
+			invitation, register := invitationHandlers(authURL, site, 0, preview, regs, slog.New(slog.DiscardHandler))
 
 			rec := serveRegistration(register, http.MethodPost, "/auth/invitation/register", registerBody)
 
@@ -1204,18 +1189,17 @@ func TestInvitationHandlers_NilRegistrationsIsNotConfigured(t *testing.T) {
 	}
 }
 
-// Invitee registration enforces its per-client limit exactly where /auth/register does: not on a PR preview.
-func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
+// The token resend route enforces its address budget off a PR preview only.
+func TestInvitationResendHandler_EnforcementFollowsThePosture(t *testing.T) {
 	for _, c := range []struct {
 		name, env  string
-		wantCalls  int
 		wantResend int
 	}{
-		{"pr-7", "pr-7", 11, 11},
-		{"production", "production", gateway.RegisterPerIP, gateway.ResendPerAddress},
-		{"development", "development", gateway.RegisterPerIP, gateway.ResendPerAddress},
-		{"empty", "", gateway.RegisterPerIP, gateway.ResendPerAddress},
-		{"upper-case PR-7", "PR-7", gateway.RegisterPerIP, gateway.ResendPerAddress},
+		{"pr-7", "pr-7", 11},
+		{"production", "production", gateway.ResendPerAddress},
+		{"development", "development", gateway.ResendPerAddress},
+		{"empty", "", gateway.ResendPerAddress},
+		{"upper-case PR-7", "PR-7", gateway.ResendPerAddress},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv("DEPLOY_ENV", c.env)
@@ -1223,30 +1207,11 @@ func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
 			site, _ := url.Parse("https://site.example")
 			log := slog.New(slog.DiscardHandler)
 			reg := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite)
-			preview, _ := invitationPreviewerStub("tunde@obi.test")
-			regs, _ := invitationRegistrationsStub("tunde@obi.test")
-			_, register := invitationHandlers(authURL, site, 0, reg.RegisterPerIP, preview, regs, log)
-
-			for range 11 {
-				req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(`{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T","password":"Corr3ct-Horse"}`))
-				req.RemoteAddr = "203.0.113.7:4000"
-				rec := httptest.NewRecorder()
-				register.ServeHTTP(rec, req)
-				if rec.Code != http.StatusAccepted {
-					t.Fatalf("invitee register = %d, want 202: %s", rec.Code, rec.Body.String())
-				}
-			}
-			if got := countCalls(calls(), "POST /signup"); got != c.wantCalls {
-				t.Errorf("GoTrue /signup calls = %d, want %d", got, c.wantCalls)
-			}
-
-			// The token resend route follows the same posture: its address budget refuses off a PR preview only.
-			resend := invitationResendHandler(authURL, site, reg.ResendByAddress, reg.ResendByIP, func(context.Context, string) (gateway.InvitationPreview, error) {
+			resend := invitationResendHandler(authURL, site, reg.ResendByAddress, func(context.Context, string) (gateway.InvitationPreview, error) {
 				return gateway.InvitationPreview{Email: "tunde@obi.test", Account: "unconfirmed"}, nil
 			}, log)
 			for range 11 {
 				req := httptest.NewRequest(http.MethodPost, "/auth/invitation/resend", strings.NewReader(`{"token":"`+resendToken+`"}`))
-				req.RemoteAddr = "203.0.113.7:4000"
 				resend.ServeHTTP(httptest.NewRecorder(), req)
 			}
 			if got := countCalls(calls(), "POST /resend"); got != c.wantResend {
@@ -1256,50 +1221,9 @@ func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
 	}
 }
 
-// The throttle invitee registration shares is the one /auth/register spends.
-func TestRegistrationHandlers_ExposesTheRegisterThrottle(t *testing.T) {
-	const remote = "203.0.113.7:4000"
-	authURL, _ := fakeAuth(t)
-	site, _ := url.Parse("https://site.example")
-	log := slog.New(slog.DiscardHandler)
-
-	reg := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite)
-	if reg.RegisterPerIP == nil {
-		t.Fatal("RegisterPerIP is nil with AUTH_URL and AUTH_SITE_URL configured")
-	}
-	if !reg.RegisterPerIP.Reserve("198.51.100.1") {
-		t.Fatal("a fresh throttle refused its first reservation")
-	}
-	for _, email := range distinctAddresses(gateway.RegisterPerIP) {
-		if rec := registerFrom(reg.Register, email, remote); rec.Code != http.StatusAccepted {
-			t.Fatalf("register = %d, want 202: %s", rec.Code, rec.Body.String())
-		}
-	}
-	if reg.RegisterPerIP.Reserve("203.0.113.7") {
-		t.Errorf("RegisterPerIP still has budget for a client that spent all %d register attempts: it is not the throttle Register uses", gateway.RegisterPerIP)
-	}
-
-	if got := registrationHandlers(nil, site, 0, log, nil, noPendingInvite).RegisterPerIP; got != nil {
-		t.Error("RegisterPerIP is non-nil with AUTH_URL unset")
-	}
-	if got := registrationHandlers(authURL, nil, 0, log, nil, noPendingInvite).RegisterPerIP; got != nil {
-		t.Error("RegisterPerIP is non-nil with AUTH_SITE_URL unset")
-	}
-}
-
-// resendFrom posts one resend for email as the client behind remote.
-func resendFrom(h http.Handler, email, remote string) *httptest.ResponseRecorder {
+// resendFrom posts one resend for email.
+func resendFrom(h http.Handler, email string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/auth/resend-verification", strings.NewReader(`{"email":"`+email+`"}`))
-	req.RemoteAddr = remote
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	return rec
-}
-
-// registerFrom posts one register for email as the client behind remote.
-func registerFrom(h http.Handler, email, remote string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(`{"email":"`+email+`","password":"Corr3ct-Horse"}`))
-	req.RemoteAddr = remote
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -1316,10 +1240,9 @@ func countCalls(calls []string, want string) int {
 	return n
 }
 
-// resetFrom posts one reset request for email as the client behind remote.
-func resetFrom(h http.Handler, email, remote string) *httptest.ResponseRecorder {
+// resetFrom posts one reset request for email.
+func resetFrom(h http.Handler, email string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/auth/request-password-reset", strings.NewReader(`{"email":"`+email+`"}`))
-	req.RemoteAddr = remote
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -1358,9 +1281,8 @@ func TestResetPasswordHandler_NotConfigured503(t *testing.T) {
 	}
 }
 
-// Resend and reset spend one budget: 3 per address and 10 per client (D4). Separate throttles would double both.
+// Resend and reset spend one budget: 3 per address (D4). Separate throttles would double it.
 func TestRegistrationHandlers_ResetSharesTheResendLimits(t *testing.T) {
-	const remote = "203.0.113.7:4000"
 	mailCalls := func(calls []string) int {
 		return countCalls(calls, "POST /resend") + countCalls(calls, "POST /recover")
 	}
@@ -1370,26 +1292,11 @@ func TestRegistrationHandlers_ResetSharesTheResendLimits(t *testing.T) {
 		site, _ := url.Parse("https://site.example")
 		reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 		for range 2 {
-			resendFrom(reg.ResendVerification, "ada@corp.example", remote)
-			resetFrom(reg.RequestPasswordReset, "ada@corp.example", remote)
+			resendFrom(reg.ResendVerification, "ada@corp.example")
+			resetFrom(reg.RequestPasswordReset, "ada@corp.example")
 		}
 		if got := mailCalls(calls()); got != 3 {
 			t.Errorf("GoTrue /resend + /recover calls for one address = %d, want 3", got)
-		}
-	})
-	t.Run("per client", func(t *testing.T) {
-		authURL, calls := fakeAuth(t)
-		site, _ := url.Parse("https://site.example")
-		reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
-		for i, email := range distinctAddresses(11) {
-			if i%2 == 0 {
-				resendFrom(reg.ResendVerification, email, remote)
-			} else {
-				resetFrom(reg.RequestPasswordReset, email, remote)
-			}
-		}
-		if got := mailCalls(calls()); got != 10 {
-			t.Errorf("GoTrue /resend + /recover calls from one client = %d, want 10", got)
 		}
 	})
 }
@@ -1409,7 +1316,7 @@ func TestRegistrationHandlers_ResetPreviewOnlyLogsPerAddress(t *testing.T) {
 			reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil, noPendingInvite)
 
 			for range 4 {
-				resetFrom(reg.RequestPasswordReset, "ada@corp.example", "203.0.113.7:4000")
+				resetFrom(reg.RequestPasswordReset, "ada@corp.example")
 			}
 			if got := countCalls(calls(), "POST /recover"); got != c.wantCalls {
 				t.Errorf("GoTrue /recover calls = %d, want %d", got, c.wantCalls)
@@ -1433,7 +1340,6 @@ func TestRegistrationHandlers_ResetPreviewOnlyLogsPerAddress(t *testing.T) {
 }
 
 func TestRegistrationHandlers_ResendWaitsAndLimits(t *testing.T) {
-	const remote = "203.0.113.7:4000"
 	for _, c := range []struct {
 		name      string
 		floor     time.Duration
@@ -1443,7 +1349,6 @@ func TestRegistrationHandlers_ResendWaitsAndLimits(t *testing.T) {
 		{"waits", 300 * time.Millisecond, []string{"ada@corp.example"}, 1},
 		{"three", 0, []string{"ada@corp.example", "ada@corp.example", "ada@corp.example"}, 3},
 		{"four", 0, []string{"ada@corp.example", "ada@corp.example", "ada@corp.example", "ada@corp.example"}, 3},
-		{"per key", 0, distinctAddresses(11), 10},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			authURL, calls := fakeAuth(t)
@@ -1452,7 +1357,7 @@ func TestRegistrationHandlers_ResendWaitsAndLimits(t *testing.T) {
 
 			start := time.Now()
 			for _, email := range c.addresses {
-				rec := resendFrom(reg.ResendVerification, email, remote)
+				rec := resendFrom(reg.ResendVerification, email)
 				if rec.Code != http.StatusAccepted {
 					t.Errorf("resend = %d, want 202 whether or not it was sent: %s", rec.Code, rec.Body.String())
 				}
@@ -1475,38 +1380,13 @@ func distinctAddresses(n int) []string {
 	return out
 }
 
-// Register's per-key bucket is its own: not removed, not shared with resend, not resend's per-address one.
-func TestRegistrationHandlers_RegisterHasItsOwnLimit(t *testing.T) {
-	const remote = "203.0.113.7:4000"
-	authURL, calls := fakeAuth(t)
-	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
-
-	for _, email := range distinctAddresses(11) {
-		if rec := registerFrom(reg.Register, email, remote); rec.Code != http.StatusAccepted {
-			t.Errorf("register = %d, want 202 over the limit too: %s", rec.Code, rec.Body.String())
-		}
-	}
-	if got := countCalls(calls(), "POST /signup"); got != 10 {
-		t.Errorf("GoTrue /signup calls = %d, want 10", got)
-	}
-
-	if rec := resendFrom(reg.ResendVerification, "ada@corp.example", remote); rec.Code != http.StatusAccepted {
-		t.Errorf("resend = %d, want 202: %s", rec.Code, rec.Body.String())
-	}
-	if got := countCalls(calls(), "POST /resend"); got != 1 {
-		t.Errorf("GoTrue /resend calls after a spent register bucket = %d, want 1", got)
-	}
-}
-
-// A PR fork counts and logs each limited route's limits but does not refuse; every other posture refuses the eleventh.
+// A PR fork counts and logs each limited route's per-address limit but does not refuse; every other posture refuses the fourth.
 func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 	routes := []struct {
 		name, path, limitMsg string
-		send                 func(h http.Handler, email, remote string) *httptest.ResponseRecorder
+		send                 func(h http.Handler, email string) *httptest.ResponseRecorder
 		handler              func(reg registration) http.Handler
 	}{
-		{"register", "POST /signup", "registration: limit reached", registerFrom, func(r registration) http.Handler { return r.Register }},
 		{"resend", "POST /resend", "resend-verification: limit reached", resendFrom, func(r registration) http.Handler { return r.ResendVerification }},
 		{"reset", "POST /recover", "reset-request: limit reached", resetFrom, func(r registration) http.Handler { return r.RequestPasswordReset }},
 	}
@@ -1515,14 +1395,14 @@ func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 		wantCalls    int
 		wantEnforced bool
 	}{
-		{"pr-7", "pr-7", 11, false},
-		{"production", "production", 10, true},
-		{"development", "development", 10, true},
-		{"empty", "", 10, true},
-		{"bare pr-", "pr-", 10, true},
-		{"lookalike prod-7", "prod-7", 10, true},
-		{"upper-case PR-7", "PR-7", 10, true},
-		{"trailing text pr-7x", "pr-7x", 10, true},
+		{"pr-7", "pr-7", 4, false},
+		{"production", "production", 3, true},
+		{"development", "development", 3, true},
+		{"empty", "", 3, true},
+		{"bare pr-", "pr-", 3, true},
+		{"lookalike prod-7", "prod-7", 3, true},
+		{"upper-case PR-7", "PR-7", 3, true},
+		{"trailing text pr-7x", "pr-7x", 3, true},
 	} {
 		for _, rt := range routes {
 			t.Run(c.name+"/"+rt.name, func(t *testing.T) {
@@ -1532,8 +1412,8 @@ func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 				var logs bytes.Buffer
 				reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil, noPendingInvite)
 
-				for _, email := range distinctAddresses(11) {
-					rt.send(rt.handler(reg), email, "203.0.113.7:4000")
+				for range 4 {
+					rt.send(rt.handler(reg), "ada@corp.example")
 				}
 				if got := countCalls(calls(), rt.path); got != c.wantCalls {
 					t.Errorf("GoTrue %s calls = %d, want %d", rt.path, got, c.wantCalls)
@@ -1550,14 +1430,14 @@ func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 					}
 				}
 				if limited != 1 {
-					t.Errorf("%d limit lines, want exactly 1 for the eleventh request", limited)
+					t.Errorf("%d limit lines, want exactly 1 for the fourth request", limited)
 				}
 			})
 		}
 	}
 }
 
-// A full map warns under the name of its own throttle: register's, resend's per-address and resend's per-key.
+// A full map warns under the name of its own throttle.
 func TestRegistrationHandlers_FullMapWarningNamesTheMap(t *testing.T) {
 	var logs bytes.Buffer
 	prev := slog.Default()
@@ -1568,22 +1448,13 @@ func TestRegistrationHandlers_FullMapWarningNamesTheMap(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
 	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 
-	remote := func(i int) string { return fmt.Sprintf("10.%d.%d.%d:4000", i>>16&255, i>>8&255, i&255) }
-	for i := range gateway.RegisterMaxKeys {
-		registerFrom(reg.Register, "user"+strconv.Itoa(i)+"@corp.example", remote(i))
-	}
-	registerFrom(reg.Register, "one-more@corp.example", remote(gateway.RegisterMaxKeys))
 	for i := range gateway.ResendMaxKeys {
-		resendFrom(reg.ResendVerification, "user"+strconv.Itoa(i)+"@corp.example", remote(i))
+		resendFrom(reg.ResendVerification, "user"+strconv.Itoa(i)+"@corp.example")
 	}
-	// A known client with a new address fills the per-address map; a new client fills the per-key map.
-	resendFrom(reg.ResendVerification, "one-more@corp.example", remote(0))
-	resendFrom(reg.ResendVerification, "another@corp.example", remote(gateway.ResendMaxKeys))
+	resendFrom(reg.ResendVerification, "one-more@corp.example")
 
-	for _, name := range []string{"register", "resend-address", "resend-ip"} {
-		if want := name + " throttle full; refusing new addresses"; strings.Count(logs.String(), want) != 1 {
-			t.Errorf("WARN %q appears %d times, want once: %s", want, strings.Count(logs.String(), want), logs.String())
-		}
+	if want := "resend-address throttle full; refusing new addresses"; strings.Count(logs.String(), want) != 1 {
+		t.Errorf("WARN %q appears %d times, want once: %s", want, strings.Count(logs.String(), want), logs.String())
 	}
 }
 

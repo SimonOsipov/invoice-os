@@ -178,7 +178,7 @@ func TestSignInThrottle_FullWarnsOncePerMinute(t *testing.T) {
 }
 
 func TestSignInThrottle_FullWarningNamesTheInstance(t *testing.T) {
-	for _, name := range []string{"sign-in", "register", "resend-address", "resend-ip"} {
+	for _, name := range []string{"sign-in", "resend-address", "blog-subscribe-email"} {
 		t.Run(name, func(t *testing.T) {
 			var buf bytes.Buffer
 			prev := slog.Default()

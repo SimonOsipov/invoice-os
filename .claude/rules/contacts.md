@@ -45,5 +45,6 @@ paths:
 - Retry a delivery with River's default policy. Any non-nil worker error retries.
 - Log a vendor 4xx other than 408 and 429 as ERROR. Log every other failure as WARN.
 - Reject a present `marketing_consent_text` that is blank or over 500 characters, on register and on the demo route.
-- Limit the demo route to `DemoRequestPerIP` requests per client IP per hour. Answer 429 over the limit and log no IP.
+- Expect Cloud Armor on the production load balancer to throttle the demo route per client IP. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
+- Log no client IP on the demo route.
 - `ceiling:` the demo route has no double opt-in step. Add one before you send marketing email to its contacts.

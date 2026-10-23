@@ -8,15 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
-	"sync"
 	"time"
-)
-
-// ceiling: in-process counts per replica; a full map (100,000 keys) admits new IPs unlimited until keys expire. Revisit when the blog-read full-map WARN fires.
-const (
-	BlogReadPerIP   = 600
-	BlogReadWindow  = 10 * time.Minute
-	BlogReadMaxKeys = 100_000
 )
 
 const (
@@ -35,11 +27,10 @@ var (
 type BlogRoutes struct{ Categories, Posts, Post, Cover, NotFound http.Handler }
 
 // BlogHandlers serves the anonymous blog reads by forwarding to notifications at base.
-// One per-IP budget covers the four routes.
-func BlogHandlers(base *url.URL, client *http.Client, gatewayToken string, perIP *SignInThrottle, enforce bool, log *slog.Logger) BlogRoutes {
+func BlogHandlers(base *url.URL, client *http.Client, gatewayToken string, log *slog.Logger) BlogRoutes {
 	c := *client
 	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	b := &blogReader{base: base, client: &c, token: gatewayToken, perIP: perIP, enforce: enforce, log: log}
+	b := &blogReader{base: base, client: &c, token: gatewayToken, log: log}
 	return BlogRoutes{
 		Categories: b.handler(true, true, func(*http.Request) ([]string, bool) { return []string{"categories"}, true }),
 		Posts:      b.handler(true, true, func(*http.Request) ([]string, bool) { return []string{"posts"}, true }),
@@ -56,27 +47,10 @@ func BlogHandlers(base *url.URL, client *http.Client, gatewayToken string, perIP
 }
 
 type blogReader struct {
-	base    *url.URL
-	client  *http.Client
-	token   string
-	perIP   *SignInThrottle
-	enforce bool
-	log     *slog.Logger
-
-	mu       sync.Mutex
-	lastWarn time.Time
-}
-
-// warnLimit reports whether the limit WARN is due; at most one a minute, on the throttle's clock.
-func (b *blogReader) warnLimit() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	now := b.perIP.now()
-	if now.Sub(b.lastWarn) < time.Minute {
-		return false
-	}
-	b.lastWarn = now
-	return true
+	base   *url.URL
+	client *http.Client
+	token  string
+	log    *slog.Logger
 }
 
 func (b *blogReader) notFound(w http.ResponseWriter) {
@@ -113,19 +87,6 @@ func (b *blogReader) handler(json, listRoute bool, target func(*http.Request) ([
 		}
 		if json {
 			addVary()
-		}
-
-		key, source := clientKey(r)
-		if !b.perIP.ReserveOrAdmit(key) {
-			if b.warnLimit() {
-				b.log.WarnContext(r.Context(), "blog-read: limit reached",
-					slog.String("limit", "ip"), slog.String("key_source", source), slog.Bool("enforced", b.enforce))
-			}
-			if b.enforce {
-				h.Set("Cache-Control", "no-store")
-				writeError(w, http.StatusTooManyRequests, "too many requests")
-				return
-			}
 		}
 
 		segs, ok := target(r)

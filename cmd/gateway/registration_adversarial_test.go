@@ -427,18 +427,15 @@ func TestResetPasswordRoute_OpeningNeverReachesGoTrue(t *testing.T) {
 	}
 }
 
-// Invitee registration and /auth/register spend one per-IP budget: main hands the register throttle on.
-func TestGatewayMainSharesTheRegisterBudgetWithInvitations(t *testing.T) {
+// main hands invitationHandlers the tenancy previewer and registrations.
+func TestGatewayMainWiresTheInvitationHandlers(t *testing.T) {
 	_, body := parseMain(t)
 
-	regVar, previewerVar, registrationsVar, regAt, invAt := "", "", "", -1, -1
+	previewerVar, registrationsVar := "", ""
 	var invCalls []*ast.CallExpr
 	var previewerCall, registrationsCall *ast.CallExpr
-	for i, st := range body.List {
+	for _, st := range body.List {
 		if as, ok := st.(*ast.AssignStmt); ok && len(as.Rhs) == 1 {
-			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 6 && len(as.Lhs) == 1 {
-				regVar, regAt = types.ExprString(as.Lhs[0]), i
-			}
 			if call, ok := isCallTo(as.Rhs[0], "gateway", "NewHTTPInvitationPreviewer"); ok && len(as.Lhs) == 1 {
 				previewerVar, previewerCall = types.ExprString(as.Lhs[0]), call
 			}
@@ -450,31 +447,23 @@ func TestGatewayMainSharesTheRegisterBudgetWithInvitations(t *testing.T) {
 			if call, ok := n.(*ast.CallExpr); ok {
 				if _, ok := isCallTo(call, "", "invitationHandlers"); ok {
 					invCalls = append(invCalls, call)
-					invAt = i
 				}
 			}
 			return true
 		})
 	}
-	if regVar == "" {
-		t.Fatal("main has no top-level `x := registrationHandlers(...)` with 6 arguments")
-	}
 	if len(invCalls) != 1 {
 		t.Fatalf("main calls invitationHandlers %d times, want exactly once", len(invCalls))
 	}
 	call := invCalls[0]
-	if len(call.Args) != 7 {
-		t.Fatalf("invitationHandlers call has %d arguments, want 7", len(call.Args))
-	}
-	if invAt <= regAt {
-		t.Errorf("invitationHandlers is statement %d, registrationHandlers %d; the throttle is read before it exists", invAt, regAt)
+	if len(call.Args) != 6 {
+		t.Fatalf("invitationHandlers call has %d arguments, want 6", len(call.Args))
 	}
 	for i, want := range map[int]string{
 		0: `probed["auth"]`,
 		1: "siteURL",
 		2: "registerMinResponse",
-		3: regVar + ".RegisterPerIP",
-		6: "app.Logger",
+		5: "app.Logger",
 	} {
 		if got := types.ExprString(call.Args[i]); got != want {
 			t.Errorf("invitationHandlers argument %d = %s, want %s", i+1, got, want)
@@ -483,7 +472,7 @@ func TestGatewayMainSharesTheRegisterBudgetWithInvitations(t *testing.T) {
 	if previewerCall == nil {
 		t.Fatal("main has no top-level `x := gateway.NewHTTPInvitationPreviewer(...)`")
 	}
-	if got := types.ExprString(call.Args[4]); got != previewerVar {
+	if got := types.ExprString(call.Args[3]); got != previewerVar {
 		t.Errorf("invitationHandlers previewer argument = %s, want %s", got, previewerVar)
 	}
 	if len(previewerCall.Args) != 3 || types.ExprString(previewerCall.Args[0]) != `routed["tenancy"]` || types.ExprString(previewerCall.Args[2]) != "gatewayToken" {
@@ -492,7 +481,7 @@ func TestGatewayMainSharesTheRegisterBudgetWithInvitations(t *testing.T) {
 	if registrationsCall == nil {
 		t.Fatal("main has no top-level `x := gateway.NewHTTPInvitationRegistrations(...)`")
 	}
-	if got := types.ExprString(call.Args[5]); got != registrationsVar {
+	if got := types.ExprString(call.Args[4]); got != registrationsVar {
 		t.Errorf("invitationHandlers registrations argument = %s, want %s", got, registrationsVar)
 	}
 	if len(registrationsCall.Args) != 3 || types.ExprString(registrationsCall.Args[0]) != `routed["tenancy"]` || types.ExprString(registrationsCall.Args[2]) != "gatewayToken" {
@@ -537,14 +526,13 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	perIP := gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
 	preview := func(context.Context, string) (gateway.InvitationPreview, error) {
 		return gateway.InvitationPreview{Workspace: "Obi Partners", Role: "reviewer", Email: "tunde@obi.test"}, nil
 	}
 	regs, _ := invitationRegistrationsStub("tunde@obi.test")
-	invitation, register := invitationHandlers(authURL, site, 0, perIP, preview, regs, slog.New(slog.DiscardHandler))
+	invitation, register := invitationHandlers(authURL, site, 0, preview, regs, slog.New(slog.DiscardHandler))
 	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
-	resend := invitationResendHandler(authURL, site, reg.ResendByAddress, reg.ResendByIP, preview, slog.New(slog.DiscardHandler))
+	resend := invitationResendHandler(authURL, site, reg.ResendByAddress, preview, slog.New(slog.DiscardHandler))
 	withCORS := gateway.CORS([]string{origin})
 	mux := http.NewServeMux()
 	for _, p := range patterns {

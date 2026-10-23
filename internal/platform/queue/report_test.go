@@ -162,6 +162,35 @@ func TestErrorReporter_NonUUIDTenantIsNotTagged(t *testing.T) {
 	}
 }
 
+// uuid.Parse accepts braced, urn and unhyphenated forms; the tag stays canonical. Nested keys are not the job's tenant; the last duplicate wins (encoding/json).
+func TestErrorReporter_TenantTagFormsAndPlacement(t *testing.T) {
+	u := tenantUUID
+	for name, tc := range map[string]struct{ args, want string }{
+		"braced":        {`{"tenant_id":"{` + strings.ToUpper(u) + `}"}`, u},
+		"urn":           {`{"tenant_id":"urn:uuid:` + u + `"}`, u},
+		"unhyphenated":  {`{"tenant_id":"` + strings.ReplaceAll(u, "-", "") + `"}`, u},
+		"duplicate key": {`{"tenant_id":"` + argsTIN + `","tenant_id":"` + u + `"}`, u},
+		"nested only":   {`{"inner":{"tenant_id":"` + u + `"}}`, ""},
+		"padded":        {`{"tenant_id":" ` + u + `"}`, ""},
+		"null":          {`{"tenant_id":null}`, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := finalEvent(t, []byte(tc.args))
+			got, ok := e.Tags["tenant_id"]
+			if tc.want == "" {
+				if ok {
+					t.Errorf("tags = %v, want no tenant_id", e.Tags)
+				}
+			} else if got != tc.want {
+				t.Errorf("tag tenant_id = %q, want %q", got, tc.want)
+			}
+			if e.Tags["job_kind"] != "k" {
+				t.Errorf("tag job_kind = %q, want k", e.Tags["job_kind"])
+			}
+		})
+	}
+}
+
 func TestErrorReporter_FinalAttemptOpensOneIssue(t *testing.T) {
 	_, rec, want := sentrytest.Boot(t, "submission")
 

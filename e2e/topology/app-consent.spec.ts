@@ -155,3 +155,44 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
   await attachJson(testInfo, 'app-consent-layout', measured)
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
+
+test('AC-L2 the band clears the notice, first visit and reopened, at 1280 and 390', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id, consent: 'none' })
+  const entry = page.viewportSize()
+  const measured: unknown[] = []
+  // The inset is measured (viewport height minus card bottom), not retyped from landing.css.
+  const read = async (at: string, height: number) => {
+    await settleAnimations(notice(page))
+    const card = await notice(page).boundingBox()
+    const spacer = await page.locator('.cn-spacer').boundingBox()
+    expect(card, `${at}: the notice has no box`).not.toBeNull()
+    expect(spacer, `${at}: the spacer has no box`).not.toBeNull()
+    const inset = height - (card!.y + card!.height)
+    expect(inset, `${at}: the card is not anchored inside the viewport bottom`).toBeGreaterThan(0)
+    expect(spacer!.height, `${at}: the spacer is ${spacer!.height}px for a ${card!.height + inset}px band`).toBeGreaterThanOrEqual(card!.height + inset)
+    measured.push({ at, card, spacer, inset })
+  }
+  try {
+    for (const { width, height } of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize({ width, height })
+      await page.goto(`${APP_URL}/`)
+      await expect(notice(page)).toBeVisible({ timeout: 30_000 })
+      await expect(notice(page).locator('.cn-setting')).toHaveCount(0)
+      await read(`first visit at ${width}`, height)
+      await accept(page).click()
+      await expect(notice(page)).toBeHidden()
+      await page.locator('aside').getByRole('button', { name: 'Cookie choices' }).click()
+      await expect(notice(page).locator('.cn-setting')).toHaveText('Analytics cookies are on.')
+      await read(`reopened at ${width}`, height)
+      // Hosts under ascomply.com keep the choice in the cookie of the same name too.
+      await page.evaluate((key) => localStorage.removeItem(key), CONSENT_KEY)
+      await page.context().clearCookies({ name: CONSENT_KEY })
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  await attachJson(testInfo, 'app-consent-band', measured)
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})

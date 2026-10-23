@@ -275,12 +275,23 @@ describe('privacy', () => {
     for (const spy of spies) for (const call of spy.mock.calls) expect(JSON.stringify(call)).not.toContain(EMAIL)
   })
 
-  it('APP_NOTICE_BODY names the email, the product and no Google Analytics on the product', async () => {
+  it("APP_NOTICE_BODY is the user's words, byte for byte", async () => {
     const { APP_NOTICE_BODY } = await fresh()
-    expect(APP_NOTICE_BODY).toContain('tells HubSpot the email address of your account')
-    expect(APP_NOTICE_BODY).toContain('The product runs no Google Analytics')
-    expect(APP_NOTICE_BODY).toContain(`${SHARED_COOKIE_DOMAIN}, the Feature Library, the Blog and this product`)
+    expect(APP_NOTICE_BODY).toBe(
+      'We use Google Analytics to see how people use the product. Accept also turns on our HubSpot live chat, which sets its own cookies and tells HubSpot the email address of your account. No advertising, no data sold to anyone. Your choice applies to ascomply.com, the Feature Library, the Blog and this product.',
+    )
+  })
+
+  it('APP_NOTICE_BODY drops the old claim', async () => {
+    const { APP_NOTICE_BODY } = await fresh()
+    expect(APP_NOTICE_BODY).not.toContain('runs no Google Analytics')
     expect(APP_NOTICE_BODY).not.toContain('this page')
+  })
+
+  it('app_noticeBodyIsTheLandingConstant', async () => {
+    const { APP_NOTICE_BODY } = await fresh()
+    const landing = await import('../../landing/src/components/CookieNotice')
+    expect(APP_NOTICE_BODY).toBe(landing.APP_NOTICE_BODY)
   })
 
   it('privacyHref points at the landing privacy page', async () => {

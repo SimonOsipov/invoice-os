@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { CONSENT_TEXT } from './demoForm'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
+import { APP_NOTICE_BODY } from './CookieNotice'
 import { CHAT_SCRIPT_HOST, HUBSPOT_CHAT_DOMAINS } from '../hubspotChat'
 import { APP_HOSTNAMES, BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
 
@@ -58,16 +59,19 @@ export function Privacy() {
 
           <h2 style={H2}>Google Analytics</h2>
           <p style={P}>
-            We use Google Analytics 4 to measure how people use this marketing site, our Feature Library and our Blog — which pages get read, what
+            We use Google Analytics 4 to measure how people use this marketing site, our Feature Library, our Blog and the signed-in ASComply product — which pages get read, what
             visitors do next, and where the site is confusing. It runs only if you have allowed analytics.
           </p>
           <p style={P}>
-            It runs on this public site, on our public Feature Library and on our public Blog only. The signed-in ASComply product at {APP_HOSTNAMES[0]} runs no Google Analytics. If you have allowed
+            It runs on this public site, on our public Feature Library and on our public Blog. The signed-in ASComply product at {APP_HOSTNAMES[0]} runs Google Analytics too. If you have allowed
             analytics, it loads HubSpot's live chat and tracking code, as described under Live chat below.
           </p>
           <p style={P}>
-            It is active on {PRODUCTION_HOSTNAMES[0]}, on our Feature Library at {LIBRARY_HOSTNAMES[0]} and on our Blog at {BLOG_HOSTNAMES[0]}, and nowhere else. Our preview and test builds run the same code,
+            It is active on {PRODUCTION_HOSTNAMES[0]}, on our Feature Library at {LIBRARY_HOSTNAMES[0]}, on our Blog at {BLOG_HOSTNAMES[0]} and in the signed-in product at {APP_HOSTNAMES[0]}, and nowhere else. Our preview and test builds of this site, the Library and the Blog run the same code,
             but that code only measures on the live address, so those builds send Google nothing.
+          </p>
+          <p style={P}>
+            The cookie notice in the signed-in product reads: <em>{APP_NOTICE_BODY}</em>
           </p>
 
           <h2 style={H2}>What Google receives</h2>

@@ -789,9 +789,9 @@ func TestRestoreCheck_RunsUnderSetRoleToTheAuditor(t *testing.T) {
 	}
 }
 
-// TestRestoreAuditor_GrantsAsAPostgresThatOwnsNothing applies db/restore-auditor.sql as Cloud SQL's
+// TestRestoreCheck_AuditorGrantsAsAPostgresThatOwnsNothing applies db/restore-auditor.sql as Cloud SQL's
 // postgres is shaped: not a superuser, not the table owner, ADMIN on invoice_migrator.
-func TestRestoreAuditor_GrantsAsAPostgresThatOwnsNothing(t *testing.T) {
+func TestRestoreCheck_AuditorGrantsAsAPostgresThatOwnsNothing(t *testing.T) {
 	ctx := context.Background()
 	f := newRCFixture(t)
 	f.invoice(t, "RC-1", "draft", f.cutoff.Add(-time.Hour))

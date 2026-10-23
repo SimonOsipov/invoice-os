@@ -162,13 +162,13 @@ func (c checker) gatewayPosture(ctx context.Context) error {
 	}
 	var h struct {
 		MockIssuer  string `json:"mock_issuer"`
-		AuthIssuers int    `json:"auth_issuers"`
+		AuthIssuers string `json:"auth_issuers"`
 	}
 	if err := json.Unmarshal(body, &h); err != nil {
 		return fmt.Errorf("/health is not JSON: %w", err)
 	}
-	if h.MockIssuer != "absent" || h.AuthIssuers != 1 {
-		return fmt.Errorf("mock_issuer %q and auth_issuers %d, want absent and 1", h.MockIssuer, h.AuthIssuers)
+	if h.MockIssuer != "absent" || h.AuthIssuers != "1" {
+		return fmt.Errorf("mock_issuer %q and auth_issuers %q, want absent and 1", h.MockIssuer, h.AuthIssuers)
 	}
 	if err := c.status(ctx, http.MethodGet, c.url("gateway")+"/.well-known/jwks.json", http.StatusNotFound); err != nil {
 		return err

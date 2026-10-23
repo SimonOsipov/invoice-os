@@ -23,7 +23,7 @@ func fleet(t *testing.T, sha string, override func(svc, path string, w http.Resp
 		}
 		switch {
 		case svc == "gateway" && path == "/health":
-			fmt.Fprintf(w, `{"build":%q,"mock_issuer":"absent","auth_issuers":1}`, sha)
+			fmt.Fprintf(w, `{"build":%q,"mock_issuer":"absent","auth_issuers":"1"}`, sha)
 		case svc == "gateway":
 			http.NotFound(w, r)
 		case svc == "auth" && path == "/.well-known/jwks.json":
@@ -88,7 +88,7 @@ func TestRun_GatewayMustServeNoMintRouteAndOneIssuer(t *testing.T) {
 	for name, override := range map[string]func(svc, path string, w http.ResponseWriter) bool{
 		"mock issuer on": func(svc, path string, w http.ResponseWriter) bool {
 			if svc == "gateway" && path == "/health" {
-				fmt.Fprint(w, `{"build":"abc","mock_issuer":"on","auth_issuers":2}`)
+				fmt.Fprint(w, `{"build":"abc","mock_issuer":"on","auth_issuers":"2"}`)
 				return true
 			}
 			return false

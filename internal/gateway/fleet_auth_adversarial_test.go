@@ -168,8 +168,8 @@ func TestFleetHealthPathForAnUnprobedServiceIsIgnored(t *testing.T) {
 	if !slices.Equal(names, []string{"gateway", "invoice"}) {
 		t.Errorf("roll-up names %v, want [gateway invoice]", names)
 	}
-	if h := hits(); !slices.Equal(h, []string{"/healthz", "/readyz"}) {
-		t.Errorf("invoice was asked for %v, want /healthz then /readyz only", h)
+	if h := hits(); !slices.Equal(h, []string{"/health", "/readyz"}) {
+		t.Errorf("invoice was asked for %v, want /health then /readyz only", h)
 	}
 	if rec.Code != http.StatusOK {
 		t.Errorf("roll-up = %d, want 200", rec.Code)

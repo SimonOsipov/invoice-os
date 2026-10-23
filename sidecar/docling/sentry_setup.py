@@ -27,7 +27,7 @@ def _first(env, *keys, default=""):
 
 
 def _is_probe(path):
-    return path in ("/healthz", "/readyz") or path.startswith("/healthz/")
+    return path in ("/healthz", "/health", "/readyz") or path.startswith("/healthz/")
 
 
 def traces_sampler(sampling_context):

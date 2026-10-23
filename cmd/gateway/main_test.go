@@ -441,7 +441,7 @@ func TestLoadUpstreamsRequiresWorkerURL(t *testing.T) {
 			return rec.Code, body.Status, st
 		}
 
-		// Positive control: every backend up, worker probed at its platform /healthz.
+		// Positive control: every backend up, worker probed at its platform /health.
 		code, status, st := rollup()
 		if code != http.StatusOK || status != "ok" || st["worker"] != "up" {
 			t.Fatalf("all up: code=%d status=%q worker=%q, want 200 ok up; services=%v", code, status, st["worker"], st)
@@ -450,8 +450,8 @@ func TestLoadUpstreamsRequiresWorkerURL(t *testing.T) {
 		paths := slices.Clone(reconPaths)
 		reconCode = http.StatusServiceUnavailable
 		mu.Unlock()
-		if !slices.Equal(paths, []string{"/healthz", "/readyz"}) {
-			t.Errorf("worker probed at %v, want exactly [/healthz /readyz]", paths)
+		if !slices.Equal(paths, []string{"/health", "/readyz"}) {
+			t.Errorf("worker probed at %v, want exactly [/health /readyz]", paths)
 		}
 
 		code, status, st = rollup()

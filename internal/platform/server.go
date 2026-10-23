@@ -62,6 +62,8 @@ func New(service string) (*App, error) {
 		Mux:    http.NewServeMux(),
 	}
 	app.Mux.HandleFunc("GET /healthz", healthzHandler)
+	// Cloud Run's front end answers /healthz itself on a run.app host, so callers there use /health.
+	app.Mux.HandleFunc("GET /health", healthzHandler)
 	app.Mux.HandleFunc("GET /readyz", app.readiness.readyzHandler)
 	return app, nil
 }

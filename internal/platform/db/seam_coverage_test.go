@@ -992,6 +992,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /emails/confirmation.html":                       {verdict: scExempt, reason: "no database; static account-mail template"},
 	"GET /emails/mark.png":                                {verdict: scExempt, reason: "no database; static account-mail logo"},
 	"GET /emails/recovery.html":                           {verdict: scExempt, reason: "no database; static account-mail template"},
+	"GET /health":                                         {verdict: scExempt, reason: "alias of /healthz for run.app hosts, which reserve /healthz"},
 	"GET /healthz":                                        {verdict: scExempt, reason: "must answer while the database is down; a membership lookup would invert its meaning"},
 	"GET /healthz/fleet":                                  {verdict: scExempt, reason: "fleet roll-up across services, deliberately outside the verifier"},
 	"GET /readyz":                                         {verdict: scExempt, reason: "readiness reports on the database, so it cannot depend on reaching it"},

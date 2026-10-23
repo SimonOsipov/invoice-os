@@ -65,7 +65,7 @@ func tracingMiddleware(mux *http.ServeMux) middleware {
 
 // isProbePath reports the health endpoints, including the gateway's /healthz/fleet.
 func isProbePath(p string) bool {
-	return p == "/healthz" || p == "/readyz" || strings.HasPrefix(p, "/healthz/")
+	return p == "/healthz" || p == "/health" || p == "/readyz" || strings.HasPrefix(p, "/healthz/")
 }
 
 // methodLabel maps a request method into a closed set so a client cannot choose name text.

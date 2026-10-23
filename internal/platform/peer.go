@@ -71,7 +71,7 @@ func (a *App) gatewayGuard(next http.Handler) http.Handler {
 func (a *App) isOpen(r *http.Request) bool {
 	_, pattern := a.Mux.Handler(r)
 	switch pattern {
-	case "GET /healthz", "GET /readyz":
+	case "GET /healthz", "GET /health", "GET /readyz":
 		return true
 	}
 	for _, p := range a.openPatterns {

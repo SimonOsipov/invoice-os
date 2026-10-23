@@ -25,7 +25,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
-// backends answer /healthz with their build; auth (GoTrue) has no build and answers its JWKS.
+// backends answer /health with their build (a run.app host reserves /healthz); auth (GoTrue) has no build and answers its JWKS.
 var backends = []string{"gateway", "tenancy", "portfolio", "invoice", "validation", "dashboard", "submission", "notifications", "worker", "docling"}
 
 // sites serve /build.txt and their page at /.
@@ -137,7 +137,7 @@ func (c checker) run(ctx context.Context) []string {
 }
 
 func (c checker) backend(ctx context.Context, svc string) error {
-	body, err := c.get(ctx, c.url(svc)+"/healthz")
+	body, err := c.get(ctx, c.url(svc)+"/health")
 	if err != nil {
 		return err
 	}
@@ -145,10 +145,10 @@ func (c checker) backend(ctx context.Context, svc string) error {
 		Build string `json:"build"`
 	}
 	if err := json.Unmarshal(body, &h); err != nil {
-		return fmt.Errorf("/healthz is not JSON: %w", err)
+		return fmt.Errorf("/health is not JSON: %w", err)
 	}
 	if h.Build != c.sha {
-		return fmt.Errorf("/healthz build %q, want %s", h.Build, c.sha)
+		return fmt.Errorf("/health build %q, want %s", h.Build, c.sha)
 	}
 	return nil
 }
@@ -156,7 +156,7 @@ func (c checker) backend(ctx context.Context, svc string) error {
 // gatewayPosture runs once the gateway serves the commit: production trusts one issuer and serves
 // no mint route.
 func (c checker) gatewayPosture(ctx context.Context) error {
-	body, err := c.get(ctx, c.url("gateway")+"/healthz")
+	body, err := c.get(ctx, c.url("gateway")+"/health")
 	if err != nil {
 		return err
 	}
@@ -165,7 +165,7 @@ func (c checker) gatewayPosture(ctx context.Context) error {
 		AuthIssuers int    `json:"auth_issuers"`
 	}
 	if err := json.Unmarshal(body, &h); err != nil {
-		return fmt.Errorf("/healthz is not JSON: %w", err)
+		return fmt.Errorf("/health is not JSON: %w", err)
 	}
 	if h.MockIssuer != "absent" || h.AuthIssuers != 1 {
 		return fmt.Errorf("mock_issuer %q and auth_issuers %d, want absent and 1", h.MockIssuer, h.AuthIssuers)

@@ -408,6 +408,84 @@ func TestStaffHealthRoute_ATenantBearingHouseMemberIsServed(t *testing.T) {
 	})
 }
 
+// Validation runs before the database check and after the platform: a refused caller never learns what is a valid query.
+func TestStaffMetricsRoute_ABadQueryIs400OnlyForAStaffCallerAndNeverReadsTheDatabase(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
+	const bad = "/v1/staff/metrics?range=2h"
+	staff := healthCaller{subject: houseMember(t, super), staff: true}
+
+	rec := rig.get(bad, staff)
+	if rec.Code != http.StatusBadRequest || strings.TrimSpace(rec.Body.String()) != `{"error":"unknown range"}` {
+		t.Errorf("staff caller, bad range = %d %q, want 400 unknown range", rec.Code, rec.Body.String())
+	}
+	if rec := rig.get("/v1/staff/metrics", staff); rec.Code != http.StatusBadRequest {
+		t.Errorf("staff caller, no range = %d %q, want 400", rec.Code, rec.Body.String())
+	}
+	forged := healthCaller{subject: customerMember(t, super), staff: true}
+	if rec := rig.get(bad, forged); rec.Code != http.StatusBadRequest {
+		t.Errorf("forged staff caller, bad range = %d %q, want 400: validation runs before the database check", rec.Code, rec.Body.String())
+	}
+	if loads, sources := rig.loads.Load(), rig.sources.Load(); loads != 0 || sources != 0 {
+		t.Fatalf("check ran %d time(s), source %d, for bad queries, want 0 and 0", loads, sources)
+	}
+
+	for name, c := range map[string]healthCaller{
+		"customer":                    {subject: customerMember(t, super)},
+		"house member, no staff flag": {subject: staff.subject},
+		"no identity":                 {},
+	} {
+		t.Run(name, func(t *testing.T) { wantForbidden(t, rig.get(bad, c)) })
+	}
+	if rec := rig.do(http.MethodGet, bad, "", staff); rec.Code != http.StatusUnauthorized {
+		t.Errorf("no gateway token, bad range = %d %q, want 401", rec.Code, rec.Body.String())
+	}
+	if loads := rig.loads.Load(); loads != 0 {
+		t.Errorf("check ran %d time(s) for callers the platform refuses, want 0", loads)
+	}
+
+	// Control: the same staff caller with a valid range reaches the check and the source.
+	rec = rig.get(metricsPath, staff)
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" || rig.loads.Load() != 1 || rig.sources.Load() != 1 {
+		t.Errorf("valid query = %d %q (%s), check %d, source %d, want 200 JSON and 1, 1", rec.Code, rec.Body.String(), rec.Header().Get("Content-Type"), rig.loads.Load(), rig.sources.Load())
+	}
+}
+
+// Only GET is registered: another method gets 405 from the mux and no database or Google read.
+func TestStaffMetricsRoute_OtherMethodsAreRefusedWithoutARead(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
+	staff := healthCaller{subject: houseMember(t, super), staff: true}
+	for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		t.Run(m, func(t *testing.T) {
+			if rec := rig.do(m, metricsPath, routeGatewayToken, staff); rec.Code != http.StatusMethodNotAllowed {
+				t.Errorf("%s = %d %q, want 405", m, rec.Code, rec.Body.String())
+			}
+		})
+	}
+	if loads, sources := rig.loads.Load(), rig.sources.Load(); loads != 0 || sources != 0 {
+		t.Errorf("check ran %d time(s), source %d, for other methods, want 0 and 0", loads, sources)
+	}
+	if rec := rig.get(metricsPath, staff); rec.Code != http.StatusOK {
+		t.Errorf("GET control = %d %q, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// A database fault in the check is a 500 with a fixed body, not a 403 and not a read.
+func TestStaffMetricsRoute_ADatabaseFaultInTheCheckIs500(t *testing.T) {
+	rig := newHealthRig(t, &Store{Pool: unreachablePool(t)}, routeFleet())
+	rec := rig.get(metricsPath, healthCaller{subject: uuid.NewString(), staff: true})
+	if rec.Code != http.StatusInternalServerError || strings.TrimSpace(rec.Body.String()) != `{"error":"internal server error"}` {
+		t.Errorf("got %d %q, want 500 with the fixed body", rec.Code, rec.Body.String())
+	}
+	if got := rig.loads.Load(); got != 1 {
+		t.Errorf("check ran %d time(s), want 1", got)
+	}
+	if got := rig.sources.Load(); got != 0 {
+		t.Errorf("metrics source ran %d time(s) after a check fault, want 0", got)
+	}
+}
+
 // A real fleet reader against each way the gateway can fail: the database parts still arrive.
 func TestStaffHealthRoute_AGatewayOutageStillServesCountsAndTrend(t *testing.T) {
 	super, app := dbTestPools(t)

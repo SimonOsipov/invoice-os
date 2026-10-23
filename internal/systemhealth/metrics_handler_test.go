@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -52,6 +53,9 @@ func wantBody(t *testing.T, rec *httptest.ResponseRecorder, status int, body str
 	if rec.Code != status || strings.TrimSpace(rec.Body.String()) != body {
 		t.Errorf("got %d %q, want %d %s", rec.Code, rec.Body.String(), status, body)
 	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
 }
 
 func wantServed(t *testing.T, rec *httptest.ResponseRecorder, want Metrics) {
@@ -59,6 +63,9 @@ func wantServed(t *testing.T, rec *httptest.ResponseRecorder, want Metrics) {
 	raw, _ := json.Marshal(want)
 	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != string(raw) {
 		t.Errorf("got %d %q, want 200 %s", rec.Code, rec.Body.String(), raw)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
 	}
 }
 
@@ -70,6 +77,12 @@ func TestMetricsHandler_RefusesABadQueryBeforeAnyRead(t *testing.T) {
 		{"range is case-sensitive", "range=1H", badRange},
 		{"unknown service", "range=1h&service=nope", badService},
 		{"service is case-sensitive", "range=1h&service=APP", badService},
+		{"service with a capital", "range=1h&service=Submission", badService},
+		{"service with a trailing space", "range=1h&service=app%20", badService},
+		{"empty range", "range=", badRange},
+		{"range wins over service", "range=2h&service=nope", badRange},
+		{"the first range value counts", "range=2h&range=1h", badRange},
+		{"the first service value counts", "range=1h&service=nope&service=app", badService},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -149,6 +162,44 @@ func TestMetricsHandler_ACheckFaultIs500AndSkipsTheSource(t *testing.T) {
 	if len(f.calls) != 0 || f.checks != 1 {
 		t.Errorf("not-staff: check ran %d time(s), source %d, want 1 and 0", f.checks, len(f.calls))
 	}
+
+	// A wrapped sentinel is still a refusal.
+	w := newMhRig()
+	w.checkErr = fmt.Errorf("staff check: %w", db.ErrNotStaff)
+	wantBody(t, w.get("range=1h"), http.StatusForbidden, `{"error":"forbidden"}`)
+	if len(w.calls) != 0 {
+		t.Errorf("wrapped not-staff: source ran %d time(s), want 0", len(w.calls))
+	}
+}
+
+// A fault answers 500 with a fixed body: the cause (a Google error text, a project id, a SQL message) goes to the log only.
+func TestMetricsHandler_AFaultBodyCarriesNoCause(t *testing.T) {
+	const google = `googleapi: Error 403: Permission monitoring.timeSeries.list denied on projects/ascomply-prod`
+	cases := []struct {
+		name     string
+		checkErr error
+		srcErr   error
+		wantLog  string
+	}{
+		{"source fault with Google text", nil, errors.New(google), "Permission monitoring"},
+		{"source fault wrapped", nil, fmt.Errorf("fetch: %w", errors.New(google)), "Permission monitoring"},
+		{"joiner of an aborted fetch", nil, errFetchAborted, "fetch aborted"},
+		{"check fault with SQL text", errors.New(`ERROR: permission denied for table health_samples (SQLSTATE 42501)`), nil, "SQLSTATE 42501"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newMhRig()
+			h.checkErr, h.srcErr = c.checkErr, c.srcErr
+			rec := h.get("range=1h")
+			wantBody(t, rec, http.StatusInternalServerError, `{"error":"internal server error"}`)
+			if !strings.Contains(h.logs.String(), c.wantLog) || !strings.Contains(h.logs.String(), "level=ERROR") {
+				t.Errorf("log = %q, want an Error line carrying %q", h.logs.String(), c.wantLog)
+			}
+			if c.checkErr != nil && len(h.calls) != 0 {
+				t.Errorf("source ran %d time(s) after a check fault, want 0", len(h.calls))
+			}
+		})
+	}
 }
 
 // writeSpy records whether the handler wrote anything at all: a recorder reports 200 by default.
@@ -171,5 +222,21 @@ func TestMetricsHandler_ACallerThatLeftGetsNothingWritten(t *testing.T) {
 	}
 	if w.wrote {
 		t.Error("the handler wrote a status or body for a caller whose source call ended in context.Canceled, want nothing")
+	}
+}
+
+// The request's own context ending is the departure, whatever error the source reports.
+func TestMetricsHandler_ARequestThatEndedGetsNothingWrittenForAnyError(t *testing.T) {
+	h := newMhRig()
+	h.srcErr = errors.New("transport closed")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w := &writeSpy{header: http.Header{}}
+	h.handler()(w, httptest.NewRequest(http.MethodGet, "/v1/staff/metrics?range=1h", nil).WithContext(ctx))
+	if h.checks != 1 || len(h.calls) != 1 {
+		t.Errorf("check ran %d time(s), source %d time(s), want 1 and 1", h.checks, len(h.calls))
+	}
+	if w.wrote {
+		t.Error("the handler wrote for a request whose context had ended, want nothing")
 	}
 }

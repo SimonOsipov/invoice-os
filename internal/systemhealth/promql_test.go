@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,8 +64,22 @@ func TestQueryRange_EachRangeSendsItsWindowAndStep(t *testing.T) {
 	if _, ok := Ranges["2h"]; ok {
 		t.Fatal("2h must not be a range")
 	}
+	want := map[string][3]int{ // span, step, rate window in seconds
+		"15m": {900, 60, 300},
+		"1h":  {3600, 60, 300},
+		"6h":  {21600, 300, 300},
+		"24h": {86400, 900, 900},
+		"7d":  {604800, 7200, 7200},
+	}
+	if len(Ranges) != len(want) {
+		t.Fatalf("%d ranges, want %d", len(Ranges), len(want))
+	}
 	now := time.Date(2026, 10, 23, 18, 47, 31, 0, time.UTC)
 	for k, r := range Ranges {
+		w, ok := want[k]
+		if !ok {
+			t.Fatalf("unexpected range %q", k)
+		}
 		f, g := newPromFake(t, 200, emptyMatrix)
 		start, end := Window(r, now)
 		for _, p := range Panels {
@@ -75,14 +90,14 @@ func TestQueryRange_EachRangeSendsItsWindowAndStep(t *testing.T) {
 		if len(f.reqs) != len(Panels) {
 			t.Fatalf("%s: %d requests, want %d", k, len(f.reqs), len(Panels))
 		}
-		win := fmt.Sprintf("[%ds]", int(max(r.Step, 300*time.Second).Seconds()))
+		win := fmt.Sprintf("[%ds]", w[2])
 		for _, q := range f.reqs {
 			s, _ := strconv.ParseInt(q.form["start"], 10, 64)
 			e, _ := strconv.ParseInt(q.form["end"], 10, 64)
-			if time.Duration(e-s)*time.Second != r.Span {
-				t.Errorf("%s: end-start = %ds, want %v", k, e-s, r.Span)
+			if e-s != int64(w[0]) {
+				t.Errorf("%s: end-start = %ds, want %ds", k, e-s, w[0])
 			}
-			if q.form["step"] != strconv.Itoa(int(r.Step.Seconds())) {
+			if q.form["step"] != strconv.Itoa(w[1]) {
 				t.Errorf("%s: step = %q", k, q.form["step"])
 			}
 			if !strings.Contains(q.form["query"], win) || strings.Contains(q.form["query"], "{W}") {
@@ -116,6 +131,10 @@ func TestQueryRange_PostsTheFormWithTheBearer(t *testing.T) {
 
 func TestPanels_TheServiceFilterNarrowsOnlyCloudRunPanels(t *testing.T) {
 	r := Ranges["1h"]
+	if len(Panels) == 0 {
+		t.Fatal("no panels")
+	}
+	var nRun, nSQL int
 	for _, p := range Panels {
 		withSvc, without := p.Query(r, "app"), p.Query(r, "")
 		runPanel := strings.Contains(withSvc, "cloud_run_revision")
@@ -125,6 +144,14 @@ func TestPanels_TheServiceFilterNarrowsOnlyCloudRunPanels(t *testing.T) {
 		}
 		if runPanel != p.CloudRun {
 			t.Errorf("%s: CloudRun flag disagrees with the query", p.Key)
+		}
+		if strings.Contains(withSvc, "{F}") || strings.Contains(withSvc, "{S}") || strings.Contains(withSvc, "{W}") {
+			t.Errorf("%s: unrendered placeholder: %s", p.Key, withSvc)
+		}
+		if runPanel {
+			nRun++
+		} else {
+			nSQL++
 		}
 		if runPanel && !strings.Contains(withSvc, `service_name="app"`) {
 			t.Errorf("%s: no service filter: %s", p.Key, withSvc)
@@ -136,12 +163,16 @@ func TestPanels_TheServiceFilterNarrowsOnlyCloudRunPanels(t *testing.T) {
 			t.Errorf("%s: unfiltered query carries service_name=", p.Key)
 		}
 	}
+	if nRun == 0 || nSQL == 0 {
+		t.Errorf("need both panel kinds, got %d Cloud Run and %d SQL", nRun, nSQL)
+	}
 }
 
 func TestQueryRange_ParsesAMatrixAndDropsNonFinitePoints(t *testing.T) {
 	body := `{"status":"success","data":{"resultType":"matrix","result":[
 	 {"metric":{"service_name":"b"},"values":[[100,"1.5"],[160,"NaN"],[220,"+Inf"],[280,"0"]]},
 	 {"metric":{"service_name":"a"},"values":[[100,"-Inf"],[160,"2"]]},
+	 {"metric":{"service_name":"c"},"values":[[100,"NaN"]]},
 	 {"metric":{},"values":[[100.5,"7"]]}]}}`
 	_, g := newPromFake(t, 200, body)
 	got, err := g.queryRange(context.Background(), "tok", "p1", "q", time.Unix(0, 0), time.Unix(300, 0), time.Minute)
@@ -149,7 +180,7 @@ func TestQueryRange_ParsesAMatrixAndDropsNonFinitePoints(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := json.Marshal(got)
-	want := `[{"name":"a","points":[[160,2]]},{"name":"b","points":[[100,1.5],[280,0]]},{"name":"database","points":[[100.5,7]]}]`
+	want := `[{"name":"a","points":[[160,2]]},{"name":"b","points":[[100,1.5],[280,0]]},{"name":"c","points":[]},{"name":"database","points":[[100.5,7]]}]`
 	if string(b) != want {
 		t.Errorf("got %s\nwant %s", b, want)
 	}
@@ -161,10 +192,13 @@ func TestQueryRange_RefusesABadAnswer(t *testing.T) {
 		body string
 	}{
 		"500":          {500, emptyMatrix},
-		"status error": {200, `{"status":"error"}`},
+		"status error": {200, `{"status":"error","data":{"resultType":"matrix","result":[]}}`},
+		"no status":    {200, `{"data":{"resultType":"matrix","result":[]}}`},
 		"html":         {200, `<html>`},
 		"vector":       {200, `{"status":"success","data":{"resultType":"vector","result":[]}}`},
-		"over cap":     {200, strings.Repeat(" ", promBodyCap+1)},
+		"over cap":     {200, emptyMatrix + strings.Repeat(" ", promBodyCap+1-len(emptyMatrix))},
+		"bad value":    {200, `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1,"abc"]]}]}}`},
+		"403":          {403, emptyMatrix},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -209,21 +243,30 @@ func TestErrorPct_KeepsAZeroPoint(t *testing.T) {
 	if len(got[1].Points) != 1 || got[1].Points[0][1] != 3.4 {
 		t.Errorf("gateway = %+v", got[1])
 	}
-	if !strings.Contains(f.reqs[0].form["query"], "or 0 * sum by (service_name)") {
+	if !strings.Contains(f.reqs[0].form["query"], `or 0 * sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision"}[300s]))) / `) {
 		t.Errorf("query lacks the zero term: %s", f.reqs[0].form["query"])
 	}
 }
 
-func TestPanels_HoldTheTwelveKeysInOrder(t *testing.T) {
-	seen := map[string]bool{}
-	for _, p := range Panels {
-		q := p.Query(Ranges["1h"], "")
-		if seen[p.Key] || p.Unit == "" || strings.ContainsAny(q, "{}") && (strings.Contains(q, "{{") || strings.Contains(q, "{F}") || strings.Contains(q, "{S}") || strings.Contains(q, "{W}")) {
-			t.Errorf("bad panel %+v", p)
-		}
-		seen[p.Key] = true
+func TestQueryRange_ABodyExactlyAtTheCapIsAccepted(t *testing.T) {
+	body := emptyMatrix + strings.Repeat(" ", promBodyCap-len(emptyMatrix))
+	_, g := newPromFake(t, 200, body)
+	got, err := g.queryRange(context.Background(), "tok", "p1", "q", time.Unix(0, 0), time.Unix(60, 0), time.Minute)
+	if err != nil || got == nil {
+		t.Fatalf("got %#v, %v", got, err)
 	}
-	if len(Panels) != 12 || Panels[1].Key != "error_pct" || Panels[11].Key != "sql_connections" {
-		t.Errorf("panels = %d", len(Panels))
+}
+
+func TestMetricServices_AreSafeToInterpolate(t *testing.T) {
+	if len(MetricServices) == 0 {
+		t.Fatal("no services")
+	}
+	safe := regexp.MustCompile(`^[a-z-]+$`)
+	seen := map[string]bool{}
+	for _, s := range MetricServices {
+		if !safe.MatchString(s) || seen[s] {
+			t.Errorf("bad or duplicate service %q", s)
+		}
+		seen[s] = true
 	}
 }

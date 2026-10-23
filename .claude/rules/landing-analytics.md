@@ -1,6 +1,7 @@
 ---
 paths:
   - "frontend/landing/src/analytics*"
+  - "frontend/landing/src/components/CookieNotice*"
   - "frontend/landing/src/consent*"
   - "frontend/landing/src/gaCookies*"
   - "frontend/landing/src/hubspot*"
@@ -15,7 +16,7 @@ paths:
 ---
 # Landing analytics
 
-- Ship GA4 on the public landing page, the public Feature Library and the public blog. The app notice and the Privacy page say that the signed-in product (app.ascomply.com) runs Google Analytics too. Keep that copy: the user chose it on 2026-10-23 (CHAT-04 Answers Q1). The app loads no Google tag, and the C2 code scan in `Privacy.render.test.tsx` and `app-consent.spec.ts` pin that. Add no Google tag to the app without a story. Never add GA to the consoles.
+- Ship GA4 on the public landing page, the public Feature Library and the public blog. The app notice and the Privacy page say that the signed-in product (app.ascomply.com) runs Google Analytics too. Keep that copy. `privacy-page.md` records its backing. Add no Google tag to the app without a story. Never add GA to the consoles.
 - Load the `gtag.js` tag only when `shouldLoadTag` holds: a production hostname, granted analytics consent and a baked measurement id.
 - Match the landing hostname exactly against `PRODUCTION_HOSTNAMES` in `hubspot.ts`. That gate does not depend on the measurement id.
 - Keep `CONSENT_DEFAULT_ANALYTICS` false. A visitor with no stored record loads no tag.

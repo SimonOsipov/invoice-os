@@ -45,6 +45,7 @@ import {
   login,
   createEntity,
   apiBase,
+  fleetHeaders,
   rawFetch,
   PERSONAS,
   listInvoices,
@@ -306,12 +307,10 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
     ])
   })
 
-  // PERF-06: the fleet is healthy after deploy -- 04 booted with S2S_TOKEN set
-  // ([env-wiring]), nothing crash-looping. GET /healthz/fleet is registered
-  // OUTSIDE /api/ and outside the JWT verifier (internal/gateway/fleet.go's
-  // doc: "a public, unauthenticated roll-up"), so no token here.
+  // PERF-06: the fleet is healthy after deploy, nothing crash-looping. GET /healthz/fleet is
+  // outside the JWT verifier and needs the gateway token.
   test('PERF-06: GET /healthz/fleet is 200 "ok"', async () => {
-    const res = await fetch(`${apiBase()}/healthz/fleet`)
+    const res = await fetch(`${apiBase()}/healthz/fleet`, { headers: fleetHeaders() })
     const body = (await res.json()) as { status: string; services: { name: string; status: string; error?: string }[] }
     expect(res.status, `fleet-health body: ${JSON.stringify(body)}`).toBe(200)
     expect(body.status).toBe('ok')

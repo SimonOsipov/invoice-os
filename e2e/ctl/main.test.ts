@@ -242,7 +242,7 @@ describe('ctl entry under node', () => {
     const r = spawnSync(process.execPath, ['--import', './ctl/tsResolve.mjs', '--input-type=module', '-e', script], { cwd: E2E_DIR, env, encoding: 'utf8' })
     expect(r.status, r.stderr).toBe(0)
     const out = JSON.parse(r.stdout.trim().split('\n').pop() as string)
-    expect(Object.keys(out.exportsOf)).toEqual(expect.arrayContaining(['login.ts', 'railway.ts', 'browserSession.ts', 'personaSession.ts']))
+    expect(Object.keys(out.exportsOf)).toEqual(expect.arrayContaining(['login.ts', 'envUrls.ts', 'browserSession.ts', 'personaSession.ts']))
     // login.ts loads no URL-resolving helper at import time.
     expect(out.early).toEqual([])
     // browserSession drives the front door and the handoff check that personaSession must export.
@@ -258,12 +258,12 @@ describe('ctl entry under node', () => {
       registerHooks({ load(url, ctx, next) { loaded.push(url); return next(url, ctx) } })
       const has = (name) => loaded.some((u) => u.endsWith('/ctl/' + name + '.ts'))
       const main = await import('./ctl/main')
-      const afterImport = has('railway')
+      const afterImport = has('envUrls')
       await main.run(['--help'])
       await main.run(['env', '--help'])
-      const afterHelp = has('railway')
+      const afterHelp = has('envUrls')
       await main.run(['env', 'staging'])
-      console.log(JSON.stringify({ main: has('main'), afterImport, afterHelp, afterRun: has('railway') }))`
+      console.log(JSON.stringify({ main: has('main'), afterImport, afterHelp, afterRun: has('envUrls') }))`
     const r = spawnSync(process.execPath, ['--import', './ctl/tsResolve.mjs', '--input-type=module', '-e', script], { cwd: E2E_DIR, env, encoding: 'utf8' })
     expect(r.status, r.stderr).toBe(0)
     expect(JSON.parse(r.stdout.trim().split('\n').pop() as string)).toEqual({ main: true, afterImport: false, afterHelp: false, afterRun: true })

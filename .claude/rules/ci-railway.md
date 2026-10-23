@@ -6,6 +6,8 @@ paths:
 ---
 # CI and Railway deploys
 
+Railway deploys nothing since GKE-10 and GKE-11. `dev-env.yml` deploys PR previews to Google Cloud: see `ci-preview.md`. GKE-12 deletes the Railway rules below.
+
 - Deploy to Railway only from CI, with `railway up`. Never enable a Railway deployment trigger.
 - Keep Railway PR Environments off.
 - Give each PR one ephemeral environment `pr-<N>`, forked from the persistent environment. Build the name only with `prenv.Name`.

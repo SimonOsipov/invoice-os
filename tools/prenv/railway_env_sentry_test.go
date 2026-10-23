@@ -652,47 +652,6 @@ func TestSetSentryOffSelfTestPassesWithNoTokenAndNoNetwork(t *testing.T) {
 	shim.requireOnPath(t)
 }
 
-// The failure no runtime test sees: a service added to the fleet but not here keeps production's DSN in every fork.
-func TestSentryOffListsMatchTheDeployedFleet(t *testing.T) {
-	t.Parallel()
-	root := repoRoot(t)
-	script, err := os.ReadFile(filepath.Join(root, "scripts", "ci", "railway-env.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	devEnv, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "dev-env.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := stripHashComments(strings.Split(string(script), "\n"))
-
-	contextMatrix := sentryMatrixList(t, string(devEnv), "deploy-context")
-	wantBackends := []string{"gateway"}
-	for _, n := range contextMatrix {
-		if n != "auth" {
-			wantBackends = append(wantBackends, n)
-		}
-	}
-	wantSPAs := sentryMatrixList(t, string(devEnv), "deploy-spas")
-
-	for _, c := range []struct {
-		array string
-		want  []string
-	}{{"SENTRY_BACKENDS", wantBackends}, {"SENTRY_SPAS", wantSPAs}} {
-		got, ok := bashArray(lines, c.array)
-		if !ok {
-			t.Errorf("railway-env.sh defines no %s=(...) array", c.array)
-			continue
-		}
-		slices.Sort(got)
-		want := slices.Clone(c.want)
-		slices.Sort(want)
-		if !slices.Equal(got, want) {
-			t.Errorf("%s = %v, want %v (from dev-env.yml)", c.array, got, want)
-		}
-	}
-}
-
 // bashArray returns the words of a top-level NAME=(...) assignment, which may span lines.
 func bashArray(lines []string, name string) ([]string, bool) {
 	for i, l := range lines {

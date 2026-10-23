@@ -22,6 +22,8 @@ describe('Submissions', () => {
     expect(a).toContain('target="_blank"')
     expect(a).toContain('rel="noopener noreferrer"')
     expect(a).toMatch(/Open in Sentry<\/a>$/)
+    expect(render('T1')).toContain('tenant_id:T1&amp;')
+    expect(render('x&project=1')).toContain('tenant_id:x%26project%3D1&amp;project=4512190351474768&amp;')
   })
 
   it('Submissions shows no Sentry link for All tenants', () => {

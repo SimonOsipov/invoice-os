@@ -3,7 +3,7 @@ import { SHARED_COOKIE_DOMAIN } from '../hubspot'
 
 export type ConsentChoice = 'accept' | 'reject'
 
-// The signed-in product's notice words.
+// The signed-in product's notice words; the Privacy page quotes this constant.
 export const APP_NOTICE_BODY =
   'We use Google Analytics to see how people use the product. Accept also turns on our HubSpot live chat, ' +
   'which sets its own cookies and tells HubSpot the email address of your account. No advertising, no data sold to anyone. ' +

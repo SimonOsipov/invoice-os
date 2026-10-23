@@ -48,7 +48,7 @@ const html = renderToStaticMarkup(createElement(Privacy))
 // One row per ledger claim that had no render assertion.
 const LEDGER_NEEDLES: readonly (readonly [string, string])[] = [
   ['C1 consent-gated', 'It runs only if you have allowed analytics'],
-  ['C2 the product runs no Google Analytics', `The signed-in ASComply product at ${APP_HOSTNAMES[0]} runs no Google Analytics`],
+  ['C2 the product runs Google Analytics', `The signed-in ASComply product at ${APP_HOSTNAMES[0]} runs Google Analytics too`],
   ['C5 no identifying detail', 'We never send Google your name, your email address, your company'],
   ['C6 two cookies', 'Google Analytics sets two cookies on your device'],
   ['C6 the _ga names', 'One is named _ga; the other starts _ga_'],
@@ -95,6 +95,10 @@ const WITHDRAWAL_NEEDLES: readonly (readonly [string, string])[] = [
 describe('AC1: every ledger claim survives on the page', () => {
   it.each(LEDGER_NEEDLES)('%s', (_id, needle) => {
     expect(html).toContain(needle)
+  })
+
+  it('C2 no sentence says the product runs no Google Analytics', () => {
+    expect(html).not.toContain('runs no Google Analytics')
   })
 })
 

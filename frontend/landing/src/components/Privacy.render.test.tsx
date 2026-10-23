@@ -20,7 +20,7 @@ import { stripComments } from '@invoice-os/api-client/strip-comments'
 
 import { ANALYTICS_DEFAULT_SENTENCE, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { CONSENT_TEXT } from './demoForm'
-import { CookieNotice } from './CookieNotice'
+import { APP_NOTICE_BODY, CookieNotice } from './CookieNotice'
 import { PRODUCTION_HOSTNAMES, submissionUrl } from '../hubspot'
 import { APP_HOSTNAMES, BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
 import { CONSENT_DEFAULT_ANALYTICS } from '../consent'
@@ -236,7 +236,7 @@ describe('Privacy SSR render (LAND-04-02)', () => {
 
 // The signed-in product and its import closure (relative and @invoice-os/* workspace
 // imports) carry no Google Analytics; the consoles carry no GA and no chat.
-// The page publishes both claims. Scans read code with comments stripped.
+// The page publishes the consoles claim; the app scan records the measured code. Scans read code with comments stripped.
 const GA_NEEDLES = ['gtag', 'googletagmanager', 'google-analytics', 'vite_ga_']
 const CHAT_NEEDLES = ['hs-scripts', '_hsq', 'hubspotconversations', 'hubspotchat']
 const RESOLVE_SUFFIXES = ['.ts', '.tsx', '/index.ts']
@@ -282,8 +282,8 @@ function gaHits(files: string[]): string[] {
   return GA_NEEDLES.filter((n) => combined.includes(n))
 }
 
-describe('C2: the app and the consoles against the page claims', () => {
-  it('C2: the signed-in product and the files it imports carry no Google Analytics reference', () => {
+describe('C2 code scan: the app and the consoles carry no Google Analytics (the consoles claim is on the page; the app scan records the measured code)', () => {
+  it('C2 code scan: the signed-in product and the files it imports carry no Google Analytics reference', () => {
     const appFiles = sourceFiles(APP_SRC)
     expect(appFiles.length, 'scan found too few app files').toBeGreaterThanOrEqual(20)
     const files = [...importClosure(appFiles)]
@@ -737,7 +737,7 @@ describe('the Library shares the landing\'s choice', () => {
     "If you have allowed analytics, the Library shows HubSpot's live chat, which loads only after you choose Accept, sends HubSpot, about its own pages, what is described under Live chat below, and is removed, with HubSpot's cookies, when you choose Reject on any of our sites. The Library is typeset in the same Google fonts. When a Library page fails, your browser sends Sentry a report as described below; the Library does not send Sentry how long its pages take to load.",
   ]
 
-  it('PL-01 the active-on sentence names all three hosts from the lists', () => {
+  it('PL-01 the active-on sentence names all four hosts from the lists', () => {
     const para = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g))
       .map((m) => text(m[1]))
       .find((t) => t.includes('and nowhere else'))
@@ -745,7 +745,10 @@ describe('the Library shares the landing\'s choice', () => {
     expect(para).toContain(PRODUCTION_HOSTNAMES[0])
     expect(para).toContain(LIBRARY_HOSTNAMES[0])
     expect(para).toContain(BLOG_HOSTNAMES[0])
+    expect(para).toContain(APP_HOSTNAMES[0])
     const src = readFileSync(PRIVACY_TSX, 'utf8')
+    expect(src).toMatch(/import\s*\{[^}]*APP_HOSTNAMES[^}]*\}\s*from\s*['"]\.\.\/hubspot['"]/)
+    expect(src).not.toContain('app.ascomply.com')
     expect(src).toMatch(/import\s*\{[^}]*LIBRARY_HOSTNAMES[^}]*\}\s*from\s*['"]\.\.\/hubspot['"]/)
     expect(src).toMatch(/import\s*\{[^}]*BLOG_HOSTNAMES[^}]*\}\s*from\s*['"]\.\.\/hubspot['"]/)
     expect(src).not.toContain('library.ascomply.com')
@@ -893,7 +896,24 @@ describe('the Library shares the landing\'s choice', () => {
       .find((t) => t.includes('These two are set by Google, not by our own code'))
     expect(cookies).toContain('until then your cookie list for this site holds neither of them')
     const body = text(html)
-    expect(body).toContain('to measure how people use this marketing site, our Feature Library and our Blog')
-    expect(body).toContain('It runs on this public site, on our public Feature Library and on our public Blog only.')
+    expect(body).toContain('to measure how people use this marketing site, our Feature Library, our Blog and the signed-in ASComply product')
+    expect(body).toContain('on our public Feature Library and on our public Blog. The signed-in ASComply product')
+    expect(body).not.toContain('on our public Blog only.')
+  })
+
+  it('PL-09 the page quotes the app notice from the shared constant', () => {
+    const para = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g))
+      .map((m) => text(m[1]))
+      .find((t) => t.startsWith('The cookie notice in the signed-in product reads: '))
+    expect(para).toBe(`The cookie notice in the signed-in product reads: ${APP_NOTICE_BODY}`)
+    const src = readFileSync(PRIVACY_TSX, 'utf8')
+    expect(src).toMatch(/import\s*\{[^}]*APP_NOTICE_BODY[^}]*\}\s*from\s*['"]\.\/CookieNotice['"]/)
+    expect(src).not.toContain('to see how people use the product')
+  })
+
+  it('PL-10 the preview sentence names the three gated sites', () => {
+    const body = text(html)
+    expect(body).toContain('Our preview and test builds of this site, the Library and the Blog run the same code')
+    expect(body).not.toContain('Our preview and test builds run the same code')
   })
 })

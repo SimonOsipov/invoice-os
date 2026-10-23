@@ -2,6 +2,7 @@ package systemhealth
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -46,6 +47,8 @@ type Metrics struct {
 	Deploys          DeploysSection `json:"deploys"`
 }
 
+var errFetchAborted = errors.New("systemhealth: metrics fetch aborted")
+
 type metricsKey struct{ rangeName, service string }
 
 type metricsEntry struct {
@@ -57,6 +60,7 @@ type metricsEntry struct {
 type metricsCall struct {
 	done chan struct{}
 	body Metrics
+	err  error // errFetchAborted when the leader did not finish
 }
 
 // MetricsSource serves Metrics from a 60 s cache with one shared fetch per key.
@@ -95,7 +99,7 @@ func (s *MetricsSource) Get(ctx context.Context, rangeName, service string) (Met
 	if shared {
 		select {
 		case <-call.done:
-			return call.body, nil
+			return call.body, call.err
 		case <-ctx.Done():
 			return Metrics{}, ctx.Err()
 		}
@@ -110,11 +114,14 @@ func (s *MetricsSource) Get(ctx context.Context, rangeName, service string) (Met
 
 // run performs the shared fetch. The cleanup is deferred so a panic still releases the waiters.
 func (s *MetricsSource) run(ctx context.Context, key metricsKey, call *metricsCall, start time.Time) {
+	completed := false
 	defer func() {
 		s.mu.Lock()
 		delete(s.inflight, key)
-		if call.body.Panels != nil {
+		if completed {
 			s.entries[key] = metricsEntry{body: call.body, fetchedAt: start}
+		} else {
+			call.err = errFetchAborted
 		}
 		s.mu.Unlock()
 		close(call.done)
@@ -122,6 +129,7 @@ func (s *MetricsSource) run(ctx context.Context, key metricsKey, call *metricsCa
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), MetricsFetchTimeout)
 	defer cancel()
 	call.body = s.fetch(ctx, key, start)
+	completed = true
 }
 
 // fetch asks Google for every section; a failed call marks only its own section unavailable.

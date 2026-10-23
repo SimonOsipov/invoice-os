@@ -505,18 +505,29 @@ func TestMetricsSource_APanickingFetchReleasesWaitersAndCachesNothing(t *testing
 		_, _ = s.Get(t.Context(), "1h", "")
 	}()
 	<-f.entered
-	joined := make(chan error, 1)
+	type joinRes struct {
+		err      error
+		panicked bool
+	}
+	joined := make(chan joinRes, 1)
 	go func() {
-		_, err := s.Get(t.Context(), "1h", "")
-		joined <- err
+		var r joinRes
+		defer func() {
+			r.panicked = recover() != nil
+			joined <- r
+		}()
+		_, r.err = s.Get(t.Context(), "1h", "")
 	}()
 	f.release()
 	if r := <-leader; r == nil {
 		t.Fatal("leader did not panic")
 	}
-	// the joiner either joined (released by the deferred close) or arrived after cleanup and led its own fetch
+	// a joiner released by the aborted leader gets an error; one that arrived after cleanup led its own fetch and panicked too
 	select {
-	case <-joined:
+	case r := <-joined:
+		if r.err == nil && !r.panicked {
+			t.Fatal("joiner of an aborted fetch got a body and a nil error")
+		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("waiter hung after the leader panicked")
 	}

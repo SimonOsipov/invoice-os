@@ -27,7 +27,7 @@ import (
 // Select now normalizes (trim + lowercase) before comparing, so every variant below must
 // be refused with ErrAdapterNotInProd, exactly like the canonical "production" case.
 func TestSelect_ProductionCheckIsCaseAndWhitespaceInsensitive(t *testing.T) {
-	reg, err := submission.NewRegistry(fakeAdapter{name: "mock", version: "v1"})
+	reg, err := submission.NewRegistry(fakeAdapter{name: "real", version: "v1"})
 	if err != nil {
 		t.Fatalf("NewRegistry setup failed: %v", err)
 	}
@@ -35,12 +35,12 @@ func TestSelect_ProductionCheckIsCaseAndWhitespaceInsensitive(t *testing.T) {
 	variants := []string{"Production", "PRODUCTION", " production", "production "}
 	for _, environment := range variants {
 		t.Run(environment, func(t *testing.T) {
-			adapter, err := submission.Select(reg, environment, "mock")
+			adapter, err := submission.Select(reg, environment, "real")
 			if !errors.Is(err, submission.ErrAdapterNotInProd) {
-				t.Fatalf(`Select(reg, %q, "mock") error = %v, want errors.Is(err, ErrAdapterNotInProd)`, environment, err)
+				t.Fatalf(`Select(reg, %q, "real") error = %v, want errors.Is(err, ErrAdapterNotInProd)`, environment, err)
 			}
 			if adapter != nil {
-				t.Errorf(`Select(reg, %q, "mock") adapter = %+v, want nil`, environment, adapter)
+				t.Errorf(`Select(reg, %q, "real") adapter = %+v, want nil`, environment, adapter)
 			}
 		})
 	}
@@ -116,7 +116,7 @@ func TestSelect_NilRegistryInProductionStillRefusesFirst(t *testing.T) {
 // every dev/staging deploy that used such a name, which is worse than the bug this fix
 // corrects.
 func TestSelect_ProductionNormalizationEdgeCases(t *testing.T) {
-	reg, err := submission.NewRegistry(fakeAdapter{name: "mock", version: "v1"})
+	reg, err := submission.NewRegistry(fakeAdapter{name: "real", version: "v1"})
 	if err != nil {
 		t.Fatalf("NewRegistry setup failed: %v", err)
 	}
@@ -136,13 +136,13 @@ func TestSelect_ProductionNormalizationEdgeCases(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			adapter, err := submission.Select(reg, c.environment, "mock")
+			adapter, err := submission.Select(reg, c.environment, "real")
 			if c.wantProduction {
 				if !errors.Is(err, submission.ErrAdapterNotInProd) {
-					t.Fatalf("Select(reg, %q, \"mock\") error = %v, want errors.Is(err, ErrAdapterNotInProd) -- %q must normalize to production", c.environment, err, c.environment)
+					t.Fatalf("Select(reg, %q, \"real\") error = %v, want errors.Is(err, ErrAdapterNotInProd) -- %q must normalize to production", c.environment, err, c.environment)
 				}
 				if adapter != nil {
-					t.Errorf("Select(reg, %q, \"mock\") adapter = %+v, want nil", c.environment, adapter)
+					t.Errorf("Select(reg, %q, \"real\") adapter = %+v, want nil", c.environment, adapter)
 				}
 				return
 			}
@@ -151,13 +151,13 @@ func TestSelect_ProductionNormalizationEdgeCases(t *testing.T) {
 			// the "non-production"/"production-eu" cases would mean the gate fires on a
 			// mere substring match, refusing a legitimate non-production boot.
 			if err != nil {
-				t.Fatalf("Select(reg, %q, \"mock\") error = %v, want nil -- %q must NOT normalize to production", c.environment, err, c.environment)
+				t.Fatalf("Select(reg, %q, \"real\") error = %v, want nil -- %q must NOT normalize to production", c.environment, err, c.environment)
 			}
 			if adapter == nil {
-				t.Fatalf("Select(reg, %q, \"mock\") adapter = nil, want the registered adapter", c.environment)
+				t.Fatalf("Select(reg, %q, \"real\") adapter = nil, want the registered adapter", c.environment)
 			}
-			if adapter.Name() != "mock" {
-				t.Errorf("Select(reg, %q, \"mock\") adapter.Name() = %q, want %q", c.environment, adapter.Name(), "mock")
+			if adapter.Name() != "real" {
+				t.Errorf("Select(reg, %q, \"real\") adapter.Name() = %q, want %q", c.environment, adapter.Name(), "real")
 			}
 		})
 	}

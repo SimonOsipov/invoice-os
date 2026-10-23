@@ -51,10 +51,9 @@ func NewDefaultRegistry(cfg MockConfig) Registry {
 }
 
 // productionAdapters is the FAIL-CLOSED allowlist of names permitted when
-// ENVIRONMENT=production. Empty through M5-02 and M5-03. Adding a name here is a
-// deliberate, reviewable act performed by the story that owns that adapter (M6), never by
-// the story that merely registers it (M5-03).
-var productionAdapters = map[string]struct{}{}
+// ENVIRONMENT=production. Adding a name here is a deliberate, reviewable act.
+// ceiling: the mock serves production until the first real adapter ships (user, 2026-10-23); remove it then.
+var productionAdapters = map[string]struct{}{mockAdapterName: {}}
 
 var (
 	ErrNoAdapterConfigured = errors.New("submission: APP_ADAPTER is not set")

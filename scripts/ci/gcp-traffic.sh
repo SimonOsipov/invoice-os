@@ -5,7 +5,7 @@
 #   gcp-traffic.sh snapshot <file>        write "<service> <revision>" for the revision serving each service
 #   gcp-traffic.sh promote <file>         send 100 % to the latest revision; tag each revision in <file> `rollback`
 #   gcp-traffic.sh restore <file>         send 100 % of each service in <file> to its revision
-#   gcp-traffic.sh untag <tag>            remove a deploy tag from every service
+#   gcp-traffic.sh untag                  remove every deploy tag (c-*) from every service
 #   gcp-traffic.sh rollback <file>        send 100 % to the revision tagged `rollback`; write "<service> <from> <to>"
 set -euo pipefail
 
@@ -30,10 +30,11 @@ serving() {
   printf '%s\n' "$rev"
 }
 
-# tagged <service> <tag>: the revision that carries <tag>, or nothing.
+# tagged <service> <tag>: the revision that carries <tag>, or nothing. It reads the configured
+# traffic: a revision that never became ready is absent from the status.
 tagged() {
   gcloud run services describe "$1" "${gc[@]}" --format=json |
-    jq -r --arg t "$2" '[.status.traffic[] | select(.tag == $t)][0].revisionName // ""'
+    jq -r --arg t "$2" '[.spec.traffic[] | select(.tag == $t)][0].revisionName // ""'
 }
 
 case "${1:-}" in
@@ -61,10 +62,13 @@ case "${1:-}" in
     exit "$failed"
     ;;
   untag)
-    tag="${2:?usage: gcp-traffic.sh untag <tag>}"
+    # Runs never overlap, so every c-* tag is this run's or a failed run's.
     for svc in "${SERVICES[@]}"; do
-      if [ -n "$(tagged "$svc" "$tag")" ]; then
-        gcloud run services update-traffic "$svc" "${gc[@]}" --remove-tags "$tag" >/dev/null
+      tags=$(gcloud run services describe "$svc" "${gc[@]}" --format=json |
+        jq -r '[.spec.traffic[].tag // empty | select(startswith("c-"))] | join(",")')
+      if [ -n "$tags" ]; then
+        gcloud run services update-traffic "$svc" "${gc[@]}" --remove-tags "$tags" >/dev/null
+        echo "$svc: removed $tags"
       fi
     done
     ;;

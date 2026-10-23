@@ -253,7 +253,7 @@ func TestStaffHealthRoute_TrendIsTheLastSevenDays(t *testing.T) {
 	}
 }
 
-// Regression pin, green at head: platform.App refuses these callers before the handler runs.
+// platform.App refuses these callers before the handler runs.
 func TestStaffHealthRoute_RefusesEveryNonStaffCaller(t *testing.T) {
 	super, app := dbTestPools(t)
 	custSubject := customerMember(t, super)

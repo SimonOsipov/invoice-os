@@ -1407,7 +1407,6 @@ func TestRLS_EveryRegisteredRouteHasAVerdict(t *testing.T) {
 	}
 }
 
-// The total test above cannot go red before cmd/submission registers the route; this pins the entry itself.
 func TestRLS_StaffMetricsRouteIsExempt(t *testing.T) {
 	const route = "GET /v1/staff/metrics"
 	v, ok := scRouteVerdicts[route]

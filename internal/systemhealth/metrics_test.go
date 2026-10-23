@@ -26,10 +26,21 @@ type comboFake struct {
 	mu   sync.Mutex
 	hits map[string]int // by path, "query_range" for every Prometheus call
 	// gate, when set, holds the token request until it is closed; entered gets one send per held request.
-	gate    chan struct{}
-	entered chan struct{}
+	gate     chan struct{}
+	released bool
+	entered  chan struct{}
 	// override answers a request instead of the default; ok false falls through.
 	override func(path, query string) (code int, body string, ok bool)
+}
+
+// release opens the gate once; cleanup calls it so a failed test cannot leave a request held.
+func (f *comboFake) release() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.gate != nil && !f.released {
+		f.released = true
+		close(f.gate)
+	}
 }
 
 func (f *comboFake) count(path string) int {
@@ -88,6 +99,7 @@ func newComboFake(t *testing.T, clock func() time.Time) (*comboFake, *MetricsSou
 		}
 	}))
 	t.Cleanup(srv.Close)
+	t.Cleanup(f.release)
 	g := &Google{Monitoring: srv.URL, Run: srv.URL, Client: srv.Client(), Meta: NewMetadata(srv.URL, srv.Client(), clock)}
 	var logs bytes.Buffer
 	return f, NewMetricsSource(g, clock, slog.New(slog.NewTextHandler(&logs, nil))), &logs
@@ -219,7 +231,7 @@ func TestMetricsSource_ConcurrentCallersShareOneFetch(t *testing.T) {
 		}()
 	}
 	<-f.entered
-	close(f.gate)
+	f.release()
 	wg.Wait()
 	for i := 1; i < callers; i++ {
 		if !reflect.DeepEqual(bodies[i], bodies[0]) {
@@ -252,7 +264,7 @@ func TestMetricsSource_AWaiterThatLeavesDoesNotFailTheOthers(t *testing.T) {
 	if _, err := s.Get(ctx, "1h", ""); err != context.Canceled {
 		t.Fatalf("leaving joiner err = %v, want context.Canceled", err)
 	}
-	close(f.gate)
+	f.release()
 	r := <-a
 	if r.err != nil {
 		t.Fatal(r.err)
@@ -283,7 +295,7 @@ func TestMetricsSource_ALeaderThatLeavesStillFillsTheCache(t *testing.T) {
 		b <- res{m, err}
 	}()
 	cancelA()
-	close(f.gate)
+	f.release()
 	if r := <-a; r.err != context.Canceled {
 		t.Fatalf("leader err = %v, want context.Canceled", r.err)
 	}
@@ -403,5 +415,132 @@ func TestMetricsSource_AnUnavailableSectionEncodesEmptyArrays(t *testing.T) {
 				t.Fatalf("body has null: %s", raw)
 			}
 		})
+	}
+}
+
+func TestMetricsSource_APartialResultIsCachedAndLeaksNoGoogleText(t *testing.T) {
+	clk := newClock()
+	f, s, _ := newComboFake(t, clk.now)
+	f.override = func(_, query string) (int, string, bool) {
+		return 500, "boom secret", strings.Contains(query, "num_backends")
+	}
+	m, err := s.Get(t.Context(), "1h", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(m)
+	if len(raw) == 0 || bytes.Contains(raw, []byte("boom")) || bytes.Contains(raw, []byte("secret")) || bytes.Contains(raw, []byte("500")) {
+		t.Fatalf("body leaks Google text: %s", raw)
+	}
+	prom, run := f.googleHits()
+	clk.advance(MetricsTTL - time.Second)
+	again, err := s.Get(t.Context(), "1h", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p2, r2 := f.googleHits(); p2 != prom || r2 != run {
+		t.Fatalf("partial result refetched inside 60 s: prom %d->%d run %d->%d", prom, p2, run, r2)
+	}
+	if !reflect.DeepEqual(again, m) {
+		t.Fatal("cached partial body differs")
+	}
+}
+
+func TestMetricsSource_ALimitsFailureMarksOnlyItsSection(t *testing.T) {
+	f, s, _ := newComboFake(t, newClock().now)
+	f.override = func(path, _ string) (int, string, bool) {
+		return 403, "", strings.HasSuffix(path, "/services")
+	}
+	m, err := s.Get(t.Context(), "1h", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Limits.Available || m.Limits.Services == nil || len(m.Limits.Services) != 0 {
+		t.Fatalf("limits = %+v", m.Limits)
+	}
+	if !m.Deploys.Available || m.Deploys.Revisions == nil {
+		t.Fatalf("deploys = %+v", m.Deploys)
+	}
+	if len(m.Panels) == 0 {
+		t.Fatal("no panels")
+	}
+	for _, p := range m.Panels {
+		if !p.Available {
+			t.Fatalf("panel %s unavailable", p.Key)
+		}
+	}
+}
+
+func TestMetricsSource_DifferentKeysFetchSeparately(t *testing.T) {
+	f, s, _ := newComboFake(t, newClock().now)
+	var wg sync.WaitGroup
+	for _, k := range [][2]string{{"1h", ""}, {"6h", ""}, {"1h", "app"}} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := s.Get(t.Context(), k[0], k[1]); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if prom, _ := f.googleHits(); prom != 3*len(Panels) {
+		t.Fatalf("prometheus hits = %d, want %d", prom, 3*len(Panels))
+	}
+}
+
+type panicHandler struct{ slog.Handler }
+
+func (panicHandler) Enabled(context.Context, slog.Level) bool  { return true }
+func (panicHandler) Handle(context.Context, slog.Record) error { panic("log boom") }
+
+func TestMetricsSource_APanickingFetchReleasesWaitersAndCachesNothing(t *testing.T) {
+	f, s, _ := newComboFake(t, newClock().now)
+	s.log = slog.New(panicHandler{})
+	f.override = func(path, _ string) (int, string, bool) { return 500, "", path == tokenPath }
+	f.gate = make(chan struct{})
+	leader := make(chan any, 1)
+	go func() {
+		defer func() { leader <- recover() }()
+		_, _ = s.Get(t.Context(), "1h", "")
+	}()
+	<-f.entered
+	joined := make(chan error, 1)
+	go func() {
+		_, err := s.Get(t.Context(), "1h", "")
+		joined <- err
+	}()
+	f.release()
+	if r := <-leader; r == nil {
+		t.Fatal("leader did not panic")
+	}
+	// the joiner either joined (released by the deferred close) or arrived after cleanup and led its own fetch
+	select {
+	case <-joined:
+	case <-time.After(10 * time.Second):
+		t.Fatal("waiter hung after the leader panicked")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.inflight) != 0 || len(s.entries) != 0 {
+		t.Fatalf("inflight=%d entries=%d, want 0/0", len(s.inflight), len(s.entries))
+	}
+}
+
+func TestMetricsSource_AnEmptyAnswerFromRunEncodesEmptyArrays(t *testing.T) {
+	f, s, _ := newComboFake(t, newClock().now)
+	f.override = func(path, _ string) (int, string, bool) {
+		return 200, `{}`, strings.HasPrefix(path, "/v2/")
+	}
+	m, err := s.Get(t.Context(), "1h", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.Limits.Available || !m.Deploys.Available {
+		t.Fatalf("limits/deploys = %+v / %+v, want available", m.Limits, m.Deploys)
+	}
+	raw, _ := json.Marshal(m)
+	if !bytes.Contains(raw, []byte(`"services":[]`)) || !bytes.Contains(raw, []byte(`"revisions":[]`)) || bytes.Contains(raw, []byte("null")) {
+		t.Fatalf("body = %s", raw)
 	}
 }

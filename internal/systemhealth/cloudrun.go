@@ -18,6 +18,7 @@ const (
 	runTimeout      = 10 * time.Second
 	limitsBodyCap   = 1 << 20
 	limitsPageSize  = 100
+	limitsMaxPages  = 5
 	deploysBodyCap  = 16 << 20
 	deploysPageSize = 1000
 	deploysMaxPages = 20
@@ -41,7 +42,7 @@ type Deploy struct {
 // limits returns the template limits of each service, or of service alone, sorted by name.
 func (g *Google) limits(ctx context.Context, token, project, region, service string) ([]ServiceLimits, error) {
 	var out []ServiceLimits
-	err := g.runPages(ctx, token, project, region, "services", limitsPageSize, limitsBodyCap, 0, func(body []byte) (string, error) {
+	err := g.runPages(ctx, token, project, region, "services", limitsPageSize, limitsBodyCap, limitsMaxPages, func(body []byte) (string, error) {
 		var page struct {
 			Services []struct {
 				Name     string `json:"name"`
@@ -120,12 +121,12 @@ func (g *Google) deploys(ctx context.Context, token, project, region, service st
 }
 
 // runPages GETs each page of a Run Admin list and hands its body to parse, which returns the next page token.
-// maxPages 0 means no limit; past it the list is an error.
+// Past maxPages the list is an error.
 func (g *Google) runPages(ctx context.Context, token, project, region, tail string, pageSize, bodyCap, maxPages int, parse func([]byte) (string, error)) error {
 	base := strings.TrimSuffix(g.Run, "/") + "/v2/projects/" + url.PathEscape(project) + "/locations/" + url.PathEscape(region) + "/" + tail
 	next := ""
 	for page := 1; ; page++ {
-		if maxPages > 0 && page > maxPages {
+		if page > maxPages {
 			return fmt.Errorf("systemhealth: run %s: over %d pages", tail, maxPages)
 		}
 		q := url.Values{"pageSize": {strconv.Itoa(pageSize)}}

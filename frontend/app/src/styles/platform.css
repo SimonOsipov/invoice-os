@@ -329,3 +329,14 @@ pre.pf-json {
     display: none !important;
   }
 }
+
+/* The app notice is longer than the landing's, so the app reserves a taller band.
+   app-consent.spec.ts AC-L2 measures it; (0,1,1) beats landing.css's :root. */
+html:has(.pf-shell) {
+  --cn-band: 345px;
+}
+@media (max-width: 640px) {
+  html:has(.pf-shell) {
+    --cn-band: 380px;
+  }
+}

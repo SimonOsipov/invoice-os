@@ -18,6 +18,7 @@ const SCANNED: readonly (readonly [string, string])[] = [
   ['analytics.ts', join(HERE, 'analytics.ts')],
   ['App.tsx', join(HERE, 'App.tsx')],
   ['components/CookieNotice.tsx', join(HERE, 'components', 'CookieNotice.tsx')],
+  ['hubspotChat.ts', join(HERE, 'hubspotChat.ts')],
 ]
 
 // The property enforced is "these four files navigate nothing and disable nothing",
@@ -134,7 +135,7 @@ describe('T3-9: no page reload and no ga-disable (USER DECISION 1)', () => {
     expect(src.match(/\bhistory\.replaceState\(/g)?.length).toBe(1)
   })
 
-  it('AC-5: none of the four files reloads the page or sets ga-disable', () => {
+  it('AC-5: none of the scanned files reloads the page or sets ga-disable', () => {
     const files = readScanned()
     // Durable control needle: present in App.tsx and analytics.ts today and after
     // the change, so it proves the reads resolved rather than the seam existing.
@@ -178,6 +179,7 @@ describe('module-scope purity of the two new modules', () => {
     for (const [label, path, specifier] of [
       ['gaCookies.ts', join(HERE, 'gaCookies.ts'), './gaCookies'],
       ['consentActions.ts', join(HERE, 'consentActions.ts'), './consentActions'],
+      ['hubspotChat.ts', join(HERE, 'hubspotChat.ts'), './hubspotChat'],
     ] as const) {
       expect(existsSync(path), `expected ${label} to exist at ${path}`).toBe(true)
       await expect(import(specifier), `${label} threw on import under node`).resolves.toBeDefined()

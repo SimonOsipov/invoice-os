@@ -12,15 +12,17 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 
 import { ANALYTICS_DEFAULT_SENTENCE, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { CONSENT_TEXT } from './demoForm'
-import { CookieNotice } from './CookieNotice'
+import { APP_NOTICE_BODY, CookieNotice } from './CookieNotice'
 import { PRODUCTION_HOSTNAMES, submissionUrl } from '../hubspot'
-import { BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
+import { APP_HOSTNAMES, BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
 import { CONSENT_DEFAULT_ANALYTICS } from '../consent'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import {
@@ -35,12 +37,14 @@ import {
   hubspotFormsKeys,
   resendContactKeys,
   resendSkipsUntickedDemoBooker,
+  BLOG_CHAT_PARAGRAPH,
 } from './privacyCodeFacts.test.util'
 
 const SRC_DIR = fileURLToPath(new URL('.', import.meta.url))
 const PRIVACY_TSX = join(SRC_DIR, 'Privacy.tsx')
 const INDEX_HTML = join(SRC_DIR, '..', '..', 'index.html')
 const APP_SRC = join(SRC_DIR, '..', '..', '..', 'app', 'src')
+const PACKAGES_DIR = join(SRC_DIR, '..', '..', '..', '..', 'packages')
 const OPS_CONSOLE_SRC = join(SRC_DIR, '..', '..', '..', 'ops-console', 'src')
 const SUPPORT_CONSOLE_SRC = join(SRC_DIR, '..', '..', '..', 'support-console', 'src')
 
@@ -230,33 +234,106 @@ describe('Privacy SSR render (LAND-04-02)', () => {
   })
 })
 
-// The one cross-package assertion — it lives here because this is where the
-// no-analytics-outside-landing claim is published to the public. Independent
-// of Privacy.tsx's own content, so it does not require the GREEN commit.
-describe('C2 (NEW): no analytics reference exists in the three signed-in SPAs', () => {
-  const FORBIDDEN = ['gtag', 'googletagmanager', 'google-analytics', 'vite_ga_']
-  // Present in every package's main.tsx — proves the scan actually reads file
-  // contents rather than silently matching nothing.
-  const CONTROL_NEEDLE = 'createroot'
+// The signed-in product and its import closure (relative and @invoice-os/* workspace
+// imports) carry no Google Analytics; the consoles carry no GA and no chat.
+// The page publishes the consoles claim; the app scan records the measured code. Scans read code with comments stripped.
+const GA_NEEDLES = ['gtag', 'googletagmanager', 'google-analytics', 'vite_ga_']
+const CHAT_NEEDLES = ['hs-scripts', '_hsq', 'hubspotconversations', 'hubspotchat']
+const RESOLVE_SUFFIXES = ['.ts', '.tsx', '/index.ts']
 
-  it.each([
-    ['frontend/app/src', APP_SRC],
-    ['frontend/ops-console/src', OPS_CONSOLE_SRC],
-    ['frontend/support-console/src', SUPPORT_CONSOLE_SRC],
-  ])('%s carries no analytics reference', (label, dir) => {
-    const files = sourceFiles(dir)
-    expect(files.length, `${label}: scan found nothing to read`).toBeGreaterThanOrEqual(20)
+const code = (file: string) => stripComments(readFileSync(file, 'utf8'))
 
-    const combined = files.map((f) => readFileSync(f, 'utf8').toLowerCase()).join('\n')
-    expect(combined, `${label}: control needle "createRoot" not found — scan is not reading files`).toContain(
-      CONTROL_NEEDLE,
-    )
-    for (const needle of FORBIDDEN) {
-      expect(combined, `${label} references "${needle}"`).not.toContain(needle)
+// Maps `@invoice-os/<pkg>[/sub]` to the source file its package.json exports name.
+function workspaceImport(spec: string, packagesDir: string): string | null {
+  const m = spec.match(/^@invoice-os\/([^/]+)(\/.+)?$/)
+  if (!m) return null
+  const pkgDir = join(packagesDir, m[1])
+  const manifest = join(pkgDir, 'package.json')
+  if (!existsSync(manifest)) return null
+  const target = JSON.parse(readFileSync(manifest, 'utf8')).exports?.[m[2] ? `.${m[2]}` : '.']
+  if (typeof target !== 'string' || !/\.tsx?$/.test(target)) return null
+  const file = join(pkgDir, target)
+  return existsSync(file) ? file : null
+}
+
+function importClosure(roots: string[], packagesDir = PACKAGES_DIR): Set<string> {
+  const seen = new Set<string>()
+  const queue = [...roots]
+  while (queue.length > 0) {
+    const file = queue.pop()!
+    if (seen.has(file)) continue
+    seen.add(file)
+    for (const m of code(file).matchAll(/(?:from|import)\s*\(?\s*['"]([^'"]+)['"]/g)) {
+      let hit: string | null | undefined
+      if (m[1].startsWith('.')) {
+        const base = join(dirname(file), m[1])
+        hit = RESOLVE_SUFFIXES.map((x) => base + x).find((c) => existsSync(c) && statSync(c).isFile())
+      } else {
+        hit = workspaceImport(m[1], packagesDir)
+      }
+      if (hit && !/\.test\.tsx?$/.test(hit)) queue.push(hit)
+    }
+  }
+  return seen
+}
+
+function gaHits(files: string[]): string[] {
+  const combined = files.map(code).join('\n').toLowerCase()
+  return GA_NEEDLES.filter((n) => combined.includes(n))
+}
+
+describe('C2 code scan: the app and the consoles carry no Google Analytics (the consoles claim is on the page; the app scan records the measured code)', () => {
+  it('C2 code scan: the signed-in product and the files it imports carry no Google Analytics reference', () => {
+    const appFiles = sourceFiles(APP_SRC)
+    expect(appFiles.length, 'scan found too few app files').toBeGreaterThanOrEqual(20)
+    const files = [...importClosure(appFiles)]
+    const combined = files.map(code).join('\n').toLowerCase()
+    expect(combined, 'control: createRoot not found').toContain('createroot')
+    const names = files.map((f) => f.slice(f.lastIndexOf('/') + 1))
+    expect(names, 'control: the closure reaches hubspotChat.ts').toContain('hubspotChat.ts')
+    expect(names, 'control: the closure reaches consent.ts').toContain('consent.ts')
+    expect(names, 'control: the closure must not reach analytics.ts').not.toContain('analytics.ts')
+    expect(files.some((f) => f.startsWith(join(PACKAGES_DIR, 'monitoring'))), 'control: the closure reaches @invoice-os/monitoring').toBe(true)
+    expect(files.some((f) => f.startsWith(join(PACKAGES_DIR, 'api-client'))), 'control: the closure reaches @invoice-os/api-client').toBe(true)
+    expect(gaHits(files)).toEqual([])
+  })
+
+  it('C2: a Google Analytics reference in a workspace package the app imports is found', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'c2-walk-'))
+    try {
+      const pkgs = join(dir, 'packages')
+      mkdirSync(join(pkgs, 'fake', 'src'), { recursive: true })
+      writeFileSync(join(pkgs, 'fake', 'package.json'), JSON.stringify({ exports: { '.': './src/index.ts' } }))
+      writeFileSync(join(pkgs, 'fake', 'src', 'index.ts'), "// gtag in a comment\nexport const x = () => window.gtag('config')\n")
+      writeFileSync(join(dir, 'main.ts'), "import { x } from '@invoice-os/fake'\nx()\n")
+      const files = [...importClosure([join(dir, 'main.ts')], pkgs)]
+      expect(files.some((f) => f.endsWith('fake/src/index.ts')), 'walk did not follow the workspace import').toBe(true)
+      expect(gaHits(files)).toEqual(['gtag'])
+      writeFileSync(join(pkgs, 'fake', 'src', 'index.ts'), "// gtag in a comment only\nexport const x = 1\n")
+      expect(gaHits([...importClosure([join(dir, 'main.ts')], pkgs)])).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
   })
-})
 
+  it.each([
+    ['frontend/ops-console/src', OPS_CONSOLE_SRC],
+    ['frontend/support-console/src', SUPPORT_CONSOLE_SRC],
+  ])('C2: the consoles carry no Google Analytics and no HubSpot chat reference (%s)', (label, dir) => {
+    const files = sourceFiles(dir)
+    expect(files.length, `${label}: scan found too few files`).toBeGreaterThanOrEqual(20)
+    const combined = files.map(code).join('\n').toLowerCase()
+    expect(combined, `${label}: createRoot not found`).toContain('createroot')
+    for (const needle of [...GA_NEEDLES, ...CHAT_NEEDLES]) expect(combined, `${label} references "${needle}"`).not.toContain(needle)
+  })
+
+  it('C2: the signed-in product loads the chat the page names', () => {
+    const imports = sourceFiles(APP_SRC).flatMap((f) =>
+      Array.from(readFileSync(f, 'utf8').matchAll(/from\s*['"]([^'"]+)['"]/g), (m) => m[1]),
+    )
+    expect(imports.some((i) => i.endsWith('landing/src/hubspotChat')), 'no app source imports the chat module').toBe(true)
+  })
+})
 
 // T1-7 (LAND-05-01). The two pins above compare ANALYTICS_DEFAULT_SENTENCE to
 // itself, so the published page can state the opposite of the code's actual
@@ -410,6 +487,15 @@ describe('T3-15/T3-17/T3-18: the page describes the control that now exists', ()
       'Your browser loads nothing on this site from, and sends nothing to, any other company',
     )
     expect(carriesConsentQualifier(lede), `no consent condition in the lede: ${lede}`).toBe(true)
+  })
+
+  it('PC-06 the Live chat section carries the consent qualifier', () => {
+    const para = paragraphContaining(`${BLOG_HOSTNAMES[0]} show HubSpot`)
+    const chat = para.split(/(?<=[.!?])\s+/).find((x) => x.includes(`${BLOG_HOSTNAMES[0]} show HubSpot`)) ?? ''
+    for (const host of [PRODUCTION_HOSTNAMES[0], LIBRARY_HOSTNAMES[0], BLOG_HOSTNAMES[0]]) {
+      expect(chat, `the lede does not name ${host}`).toContain(host)
+    }
+    expect(carriesConsentQualifier(chat), `no consent condition in: ${chat}`).toBe(true)
   })
 
   it('T3-17 (AC-10): the collection-endpoint sentence carries the consent qualifier', () => {
@@ -648,10 +734,10 @@ describe('the Library shares the landing\'s choice', () => {
   const LIBRARY_SECTION = [
     `Our Feature Library at ${LIBRARY_HOSTNAMES[0]} follows this policy too. One analytics choice covers this site and the Library: whatever you choose on either applies to both, and the other does not ask you again. Cookie choices, at the foot of this site's pages and of the Library's sidebar, brings the notice back on either, and a change made there applies to both.`,
     `If you allow analytics there, Google Analytics measures the Library in the same way and under the same property. Google also receives each Library page you view, when you choose Book the Demo, when you start the tour, and when you choose Open in Platform, with the feature or group it was for. The Library shares the _ga cookies with this site, so Google can tell that a visit to both came from the same browser. Choosing Reject on either site deletes those shared _ga cookies. If analytics was running, though, Google's script is still loaded into any of our pages you have open, and until you reload them it can send measurements of its own and re-create those cookies.`,
-    'The Library has no forms, so it sends HubSpot nothing. It is typeset in the same Google fonts. When a Library page fails, your browser sends Sentry a report as described below; the Library does not send Sentry how long its pages take to load.',
+    "If you have allowed analytics, the Library shows HubSpot's live chat, which loads only after you choose Accept, sends HubSpot, about its own pages, what is described under Live chat below, and is removed, with HubSpot's cookies, when you choose Reject on any of our sites. The Library is typeset in the same Google fonts. When a Library page fails, your browser sends Sentry a report as described below; the Library does not send Sentry how long its pages take to load.",
   ]
 
-  it('PL-01 the active-on sentence names all three hosts from the lists', () => {
+  it('PL-01 the active-on sentence names all four hosts from the lists', () => {
     const para = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g))
       .map((m) => text(m[1]))
       .find((t) => t.includes('and nowhere else'))
@@ -659,7 +745,10 @@ describe('the Library shares the landing\'s choice', () => {
     expect(para).toContain(PRODUCTION_HOSTNAMES[0])
     expect(para).toContain(LIBRARY_HOSTNAMES[0])
     expect(para).toContain(BLOG_HOSTNAMES[0])
+    expect(para).toContain(APP_HOSTNAMES[0])
     const src = readFileSync(PRIVACY_TSX, 'utf8')
+    expect(src).toMatch(/import\s*\{[^}]*APP_HOSTNAMES[^}]*\}\s*from\s*['"]\.\.\/hubspot['"]/)
+    expect(src).not.toContain('app.ascomply.com')
     expect(src).toMatch(/import\s*\{[^}]*LIBRARY_HOSTNAMES[^}]*\}\s*from\s*['"]\.\.\/hubspot['"]/)
     expect(src).toMatch(/import\s*\{[^}]*BLOG_HOSTNAMES[^}]*\}\s*from\s*['"]\.\.\/hubspot['"]/)
     expect(src).not.toContain('library.ascomply.com')
@@ -708,11 +797,14 @@ describe('the Library shares the landing\'s choice', () => {
       'Cookie choices',
       'a change made there applies to both',
       'Choosing Reject on either site deletes those shared _ga cookies',
-      'sends HubSpot nothing',
+      'the Library shows HubSpot',
+      "is removed, with HubSpot's cookies, when you choose Reject on any of our sites",
+      'The Library is typeset in the same Google fonts',
       'does not send Sentry how long',
     ]) {
       expect(section, `missing "${needle}"`).toContain(needle)
     }
+    expect(section).not.toContain('sends HubSpot nothing')
     expect(section).not.toContain('ascomply.com as a whole')
     expect(section).not.toContain('either address')
   })
@@ -748,17 +840,18 @@ describe('the Library shares the landing\'s choice', () => {
     }
   })
 
-  it('the asc_consent paragraph names this site, the Library and the Blog host from the constants', () => {
+  it('the asc_consent paragraph names this site, the Library, the Blog and the app host from the constants', () => {
     const para = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g))
       .map((m) => text(m[1]))
       .find((t) => t.includes('asc_consent'))
-    expect(para).toContain(`so this site, our Feature Library at ${LIBRARY_HOSTNAMES[0]} and our Blog at ${BLOG_HOSTNAMES[0]} read the same answer`)
+    expect(para).toContain(`so this site, our Feature Library at ${LIBRARY_HOSTNAMES[0]}, our Blog at ${BLOG_HOSTNAMES[0]} and the signed-in product at ${APP_HOSTNAMES[0]} read the same answer`)
   })
 
   // Pending the user's copy sign-off.
   const BLOG_HEADING = '>The Blog and its newsletter</h2>'
   const BLOG_SECTION = [
     `Our Blog at ${BLOG_HOSTNAMES[0]} follows this policy too. One analytics choice covers this site, the Feature Library and the Blog: whatever you choose on any of them applies to all three. Cookie choices, at the foot of each site's pages or sidebar, brings the notice back, and a change made there applies to all three. If you allow analytics, Google Analytics measures the Blog in the same way and under the same property, and Google receives each Blog page you view and when you choose Book the Demo. The Blog shares the _ga cookies with this site and the Library. Choosing Reject on any of them deletes those shared _ga cookies. If analytics was running, though, Google's script is still loaded into any of our pages you have open, and until you reload them it can send measurements of its own and re-create those cookies. The Blog is typeset in the same Google fonts. When a Blog page fails, your browser sends Sentry a report as described below.`,
+    BLOG_CHAT_PARAGRAPH,
     'The Blog has a newsletter sign-up. You give us your work email address, the topics you want and how often you want to hear from us. Nothing is kept for good until you confirm. We first hold your request on our own server with a one-time link, and we send the link to your address in a confirmation email. Resend, the service we use to send email, receives your address to deliver that email. A request you do not confirm within 48 hours expires, and its link stops working.',
     'When you click the link, we store your email address, your topics, how often you want to hear from us and the time you confirmed, on our own server. We also add you to our Blog list in Resend, with the same three details. Nothing from the newsletter goes to HubSpot. We send the newsletter by hand, and we follow the frequency you chose.',
     `To change your topics or how often you hear from us, sign up again with the new choices. Every newsletter email we send you carries a one-click unsubscribe link from Resend. To have your details deleted from our server and from Resend, email ${PRIVACY_CONTACT} and we will act on it.`,
@@ -803,7 +896,24 @@ describe('the Library shares the landing\'s choice', () => {
       .find((t) => t.includes('These two are set by Google, not by our own code'))
     expect(cookies).toContain('until then your cookie list for this site holds neither of them')
     const body = text(html)
-    expect(body).toContain('to measure how people use this marketing site, our Feature Library and our Blog')
-    expect(body).toContain('It runs on this public site, on our public Feature Library and on our public Blog only.')
+    expect(body).toContain('to measure how people use this marketing site, our Feature Library, our Blog and the signed-in ASComply product')
+    expect(body).toContain('on our public Feature Library and on our public Blog. The signed-in ASComply product')
+    expect(body).not.toContain('on our public Blog only.')
+  })
+
+  it('PL-09 the page quotes the app notice from the shared constant', () => {
+    const para = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g))
+      .map((m) => text(m[1]))
+      .find((t) => t.startsWith('The cookie notice in the signed-in product reads: '))
+    expect(para).toBe(`The cookie notice in the signed-in product reads: ${APP_NOTICE_BODY}`)
+    const src = readFileSync(PRIVACY_TSX, 'utf8')
+    expect(src).toMatch(/import\s*\{[^}]*APP_NOTICE_BODY[^}]*\}\s*from\s*['"]\.\/CookieNotice['"]/)
+    expect(src).not.toContain('to see how people use the product')
+  })
+
+  it('PL-10 the preview sentence names the three gated sites', () => {
+    const body = text(html)
+    expect(body).toContain('Our preview and test builds of this site, the Library and the Blog run the same code')
+    expect(body).not.toContain('Our preview and test builds run the same code')
   })
 })

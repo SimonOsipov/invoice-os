@@ -65,7 +65,21 @@ export async function expectInWorkspace(page: Page, account: { workspaceName: st
 // A stored session is rehydrated at boot and suppresses the front-door bounce (App.tsx resolveBootSession,
 // the `activeSession` guard of the bounce effect), so a page already on the app drops it first.
 // ceiling: a page parked on another origin keeps its stored session, sign out there first.
-export async function passFrontDoor(page: Page, account: { email: string; password: string }, path: string): Promise<void> {
+// `consent: 'denied'` (default) seeds a denied app choice so no notice or chat loads; 'none' leaves the notice to show.
+export type FrontDoorOpts = { consent?: 'denied' | 'none' }
+
+export async function passFrontDoor(page: Page, account: { email: string; password: string }, path: string, opts: FrontDoorOpts = {}): Promise<void> {
+  if ((opts.consent ?? 'denied') === 'denied') {
+    await page.addInitScript((appOrigin: string) => {
+      // `asc_consent` / `v: 1` retyped from frontend/landing/src/consent.ts.
+      if (location.origin !== appOrigin) return
+      try {
+        if (localStorage.getItem('asc_consent') === null) localStorage.setItem('asc_consent', JSON.stringify({ analytics: false, ts: new Date().toISOString(), v: 1 }))
+      } catch {
+        // an opaque origin has no storage
+      }
+    }, new URL(resolveTarget('APP_URL')).origin)
+  }
   if (new URL(page.url(), 'about:blank').origin === new URL(resolveTarget('APP_URL')).origin) {
     await page.evaluate((key) => localStorage.removeItem(key), SESSION_KEY)
   }
@@ -78,8 +92,8 @@ export async function passFrontDoor(page: Page, account: { email: string; passwo
   ])
 }
 
-export async function signInAtFrontDoor(page: Page, account: { email: string; password: string; workspaceName: string }, path: string): Promise<void> {
-  await passFrontDoor(page, account, path)
+export async function signInAtFrontDoor(page: Page, account: { email: string; password: string; workspaceName: string }, path: string, opts: FrontDoorOpts = {}): Promise<void> {
+  await passFrontDoor(page, account, path, opts)
   await expectInWorkspace(page, account)
 }
 
@@ -95,7 +109,7 @@ function assertShardTenant(tenantId: string | undefined): void {
 // `tenantId` defaults to the seeded 1111 (firm) / 2222 (inhouse); `path` is where the app lands.
 // Postcondition: the stored session is a hand-off session for the tenant, and no main-frame navigation carried `persona=` (the app ignores it).
 // ceiling: about two extra SPA loads per test, revisit with per-worker storageState above +3 min per unit.
-export async function signInAs(page: Page, id: PersonaId, opts: { tenantId?: string; path?: string } = {}): Promise<void> {
+export async function signInAs(page: Page, id: PersonaId, opts: { tenantId?: string; path?: string } & FrontDoorOpts = {}): Promise<void> {
   assertShardTenant(opts.tenantId)
   if (id !== 'firm' && id !== 'inhouse') throw new Error(`signInAs: persona "${id}" has no e2e member`)
   const { TENANTS } = await import('./topology/targets')
@@ -109,7 +123,7 @@ export async function signInAs(page: Page, id: PersonaId, opts: { tenantId?: str
   }
   page.on('request', onRequest)
   try {
-    await passFrontDoor(page, member, opts.path ?? '/')
+    await passFrontDoor(page, member, opts.path ?? '/', { consent: opts.consent })
     await DESTINATION_READY.app(page)
   } finally {
     page.off('request', onRequest)

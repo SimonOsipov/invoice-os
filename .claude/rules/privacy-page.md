@@ -38,12 +38,13 @@ paths:
 - Promise no preference centre and no per-category toggle. Neither exists.
 - Add no "last updated" date. Nothing keeps such a date true.
 - Add no claim about first-party server logs. Nothing in the repository establishes their retention.
-- Add no cookie table and no per-category breakdown. The site sets one non-essential cookie family for one purpose.
+- Add no cookie table and no per-category breakdown. One Accept covers the two non-essential cookie families, Google's and HubSpot's.
 - Add no step-by-step tour of the cookie notice. Name the control and say what each button does.
 - Claim no compliance with a named data-protection law. The page says it is not legal advice.
 - Disclose each new browser network sender on the page. List the external hosts the landing contacts.
 - Treat an ungated flow as a page fact. Fonts and error reports load whatever the visitor chooses about analytics.
-- Scope each analytics sentence outside the Library section to the landing, the Feature Library and the Blog, never to the landing alone.
+- Scope each analytics sentence outside the Library section to the landing, the Feature Library, the Blog and the signed-in product. Never scope it to the landing alone. Keep the Blog section as pinned (`BLOG_SECTION`).
+- Back the sentence that the signed-in product runs Google Analytics with the operator's confirmation of the copy. The user gave it on 2026-10-23 (CHAT-04 Answers Q1). No app code backs it: the C2 code scan in `Privacy.render.test.tsx` finds none.
 - Keep the Library section as pinned (`LIBRARY_SECTION`). It names the landing and the Library only.
 - Say in the Blog section that one analytics choice covers the landing, the Library and the Blog. A choice made on any of the three applies to all.
 - Name `asc_consent` in one paragraph only, the cookie-notice paragraph. Say there that it is our own cookie on `SHARED_COOKIE_DOMAIN`.
@@ -52,13 +53,20 @@ paths:
 - Say that Open in Platform carries the feature or group. It is a content id, never visitor input.
 - Say in the Blog section that Reject on any of the three sites deletes the shared `_ga` cookies. Google's script can re-create them until reload.
 - Name the "Cookie choices" control in the Blog section. The Blog's control sits at the foot of its sidebar, beside the Library's. It brings the notice back.
+- Describe the chat in the "Live chat" section: what HubSpot receives, that it loads only after Accept, and its domains.
+- Say in the Live chat section that the app tells HubSpot the account email and that a sign-out deletes HubSpot's cookies. Quote the app host from `APP_HOSTNAMES`.
+- Quote the chat domains from `HUBSPOT_CHAT_DOMAINS` and the script host from `CHAT_SCRIPT_HOST`. Never retype them.
+- Claim no region for chat data. HubSpot's data-hosting FAQ does not name chat data (checked 2026-10-21).
+- Name HubSpot's seven cookies and `__hs_do_not_track` in the cookie section, by purpose.
+- Say in the Library section and in the Blog section that each shows the chat after Accept, and point to Live chat for what HubSpot receives. `LIBRARY_SECTION` and `BLOG_SECTION` pin the words.
+- Put `data-hs-do-not-collect="true"` on any `<form>` in the library or the blog, or add none. `frontend/blog/src/package.test.ts` and `frontend/library/src/package.test.ts` enforce it.
 
 ## Blog newsletter
 
 - Write a newsletter sentence only when `privacyCodeFacts.test.util.ts` reads its fact from `internal/notifications/newsletter*.go`. A sentence without a reader does not ship.
 - Say that every newsletter email carries a one-click unsubscribe only while `contacts.md` puts `{{{RESEND_UNSUBSCRIBE_URL}}}` in every blog broadcast and `Confirm.tsx` says it.
 - Say that staff follow the chosen frequency when they send by hand. The source is BLOG-00 Decision Log Q7. No test can read it.
-- Name HubSpot in the Blog section only to say the newsletter sends it nothing. No `newsletter*.go` file names HubSpot.
+- Name HubSpot in the Blog section for the chat and to say the newsletter sends it nothing. No `newsletter*.go` file names HubSpot.
 - Quote the stop route from `PRIVACY_CONTACT`. The 48-hour expiry follows the interval in `newsletter.go`.
 - Resend vendor documents were checked 2026-10-18. The privacy policy names no storage region. The audience-hygiene page has no data-residency statement.
 

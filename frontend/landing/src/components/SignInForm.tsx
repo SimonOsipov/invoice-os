@@ -96,7 +96,7 @@ export function SignInForm({ heldState, initialError, consoleTarget, onForgot }:
   }
 
   return (
-    <form noValidate onSubmit={handleSubmit}>
+    <form noValidate data-hs-do-not-collect="true" onSubmit={handleSubmit}>
       <style>{DEMO_FORM_CSS}</style>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div>

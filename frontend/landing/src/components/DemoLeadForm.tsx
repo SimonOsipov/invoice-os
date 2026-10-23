@@ -205,7 +205,7 @@ export function DemoLeadForm({
   return (
     <>
       {(demoStep === 'form' || demoStep === 'submitting') && (
-        <form noValidate onSubmit={handleSubmit} style={{ padding: '24px 24px 22px' }}>
+        <form noValidate data-hs-do-not-collect="true" onSubmit={handleSubmit} style={{ padding: '24px 24px 22px' }}>
           {heading}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>

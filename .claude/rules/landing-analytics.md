@@ -1,19 +1,22 @@
 ---
 paths:
   - "frontend/landing/src/analytics*"
+  - "frontend/landing/src/components/CookieNotice*"
   - "frontend/landing/src/consent*"
   - "frontend/landing/src/gaCookies*"
   - "frontend/landing/src/hubspot*"
+  - "frontend/app/src/chat*"
   - "frontend/landing/Dockerfile"
   - "e2e/smoke/landing-*.spec.ts"
   - "frontend/library/**"
   - "e2e/smoke/library-consent.spec.ts"
   - "frontend/blog/**"
   - "e2e/smoke/blog-consent.spec.ts"
+  - "e2e/topology/app-consent.spec.ts"
 ---
 # Landing analytics
 
-- Ship GA4 on the public landing page, the public Feature Library and the public blog. Never add GA to the app or the consoles.
+- Ship GA4 on the public landing page, the public Feature Library and the public blog. The app notice and the Privacy page say that the signed-in product (app.ascomply.com) runs Google Analytics too. Keep that copy. `privacy-page.md` records its backing. Add no Google tag to the app without a story. Never add GA to the consoles.
 - Load the `gtag.js` tag only when `shouldLoadTag` holds: a production hostname, granted analytics consent and a baked measurement id.
 - Match the landing hostname exactly against `PRODUCTION_HOSTNAMES` in `hubspot.ts`. That gate does not depend on the measurement id.
 - Keep `CONSENT_DEFAULT_ANALYTICS` false. A visitor with no stored record loads no tag.
@@ -28,7 +31,7 @@ paths:
 - Report no event for a honeypot or closed-gate submission. Only a HubSpot outcome reports.
 - Add a new CTA source to `DEMO_CTA_SOURCES` and to its `book(source)` call site.
 - Fire each scroll milestone once per page load, ascending.
-- Apply a consent choice in `applyChoice` on every choice, not only when it injects the tag. A reject sets the revoked flag and clears the `_ga` cookies.
+- Apply a consent choice in `applyChoice` on every choice, not only when it injects the tag. A reject sets the revoked flag, clears the `_ga` cookies, calls `removeChat` and clears the HubSpot cookies.
 - Ship no `gtag('consent', ...)` call. Google Consent Mode is out of scope.
 - Seed a granted consent record in `openLanding()` before the landing e2e navigates. A denied default makes the production-host assertion false.
 - Gate the library tag on `LIBRARY_HOSTNAMES` in `hubspot.ts`. A fork of either host sends nothing.
@@ -44,3 +47,29 @@ paths:
 - Send `demo_open` from the library with `cta_location` `library`. Send `tour_start` with no parameter.
 - Send `open_in_platform` with `feature_id` or `group_id`. Both are content ids, never visitor input.
 - Send no HubSpot form and no `generate_lead` from the library. It has no forms.
+
+## HubSpot chat
+
+- Load the HubSpot chat only through `loadChat` in `hubspotChat.ts`. It needs an allowlisted host and a record that allows analytics.
+- Read no `VITE_*` value in the chat code. `HUBSPOT_PORTAL_ID` is the only portal-id literal in landing source.
+- Call `loadChat` and `removeChat` from `applyChoice` and `syncConsent` with no host list. Call `bootChat()` from landing `main.tsx` with no host list.
+- Run the chat on `PRODUCTION_HOSTNAMES`, `LIBRARY_HOSTNAMES`, `BLOG_HOSTNAMES` and `APP_HOSTNAMES` only.
+- Bind the library and blog chat in each site's `analytics.ts`: `chooseConsent` and `sync…Consent` call `loadChat` and `removeChat` with the site's list after `applyChoice` or `syncConsent`, and `main.tsx` calls `bootLibraryChat` or `bootBlogChat`.
+- On Accept, push `['doNotTrack', {track: true}]` before the loader when `__hs_do_not_track` is present or a Reject queued `doNotTrack`. On every site, Accept expires `__hs_do_not_track` through `clearOptOutCookie`.
+- On Reject, `removeChat` sets `loadImmediately` false, calls `widget.remove()` and `clear()`, and pushes `doNotTrack` when the chat was loaded.
+- Never call `clear({resetWidget: true})` for a Reject. It builds a new widget.
+- On Reject on the landing, the library and the blog, `applyChoice` and `syncConsent` expire the seven HubSpot cookies through `clearHubSpotCookies`.
+- Expire the cookies in `HUBSPOT_COOKIE_NAMES` (`__hstc`, `hubspotutk`, `__hssrc`, `__hssc`, `messagesUtk`, `hs-messages-is-open` and `hs-messages-hide-welcome-message`) on the host and every parent domain. HubSpot writes them on `.ascomply.com`.
+- Clear the HubSpot cookies in `bootChat` when the stored record rejects analytics.
+- Put `data-hs-do-not-collect="true"` on every landing `<form>`. The HubSpot loader brings collected forms, and the portal has form capture on.
+- Load the app chat only through `frontend/app/src/chat.ts`. It calls `loadChat`, `removeChat` and `endChat` with `APP_HOSTNAMES`.
+- Import landing source into the app only in `chat.ts`. Never import `analytics.ts` or `consentActions.ts` into the app. `chatSeam.test.ts` enforces it.
+- Push `['identify', {email}]`, `['setPath', pathname]` and `['trackPageView']`, in that order, each time the app chat goes from not loaded to loaded.
+- Push them before the loader when `#hs-script-loader` is not in the page. Push them after `loadChat` lifts the opt-out when the loader is in the page.
+- Load no app chat for a suspended member. Call `endAppChat` when the member turns suspended.
+- Take the identify email from `session.me.user.email` of a verified session. Never read `user_metadata`. Push no identify for a blank email.
+- Send the path without its query in every app `setPath`.
+- Report an app route change through `reportAppPage`. It pushes nothing while `chatIsLoaded()` is false.
+- Call `endAppChat` in `leaveToLanding`, in `endRevokedSession` and in `expireSession`. In the first two, call it before the navigation. `endChat` pushes no `doNotTrack`. `App.chatSignOut.test.tsx` enforces it, `expireSession_endsTheChat` included.
+- On Reject in the app, expire the `_ga` cookies and the HubSpot cookies.
+- Put `data-hs-do-not-collect="true"` on every app `<form>`. `chatSeam.test.ts` enforces it.

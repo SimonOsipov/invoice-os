@@ -3,11 +3,14 @@
 //
 // Imports only Playwright's types and ./sentryHost on purpose: test:unit runs with no deploy URLs, so
 // pulling in a module that resolves a target at import time would break it (e2e/README.md).
-import type { BrowserContext, Page, Route } from '@playwright/test'
+import type { BrowserContext, Page, Response, Route } from '@playwright/test'
 import { isProductionHost, isSentryHost } from './sentryHost'
 
 const CONSENT_KEY = 'asc_consent' // retyped from frontend/landing/src/consent.ts
 export const STUB_HEADER = 'x-asc-stub'
+export const CHAT_LOADER_URL = 'https://js-eu1.hs-scripts.com/148915098.js' // CHAT_SCRIPT_URL in frontend/landing/src/hubspotChat.ts
+// retyped from HUBSPOT_CHAT_DOMAINS in frontend/landing/src/hubspotChat.ts
+export const HUBSPOT_CHAT_DOMAINS = ['hs-scripts.com', 'hs-analytics.net', 'hs-banner.com', 'hscollectedforms.net', 'hsappstatic.net', 'usemessages.com', 'hubspot.com']
 
 /**
  * Seeds a cookie answer before the first navigation, so the notice never renders.
@@ -44,7 +47,7 @@ export function consoleGate(page: Page): string[] {
   return errors
 }
 
-/** The hosts the routed tests must never reach: the GA tag, GA collection and Sentry. */
+/** The hosts the routed tests must never reach: the GA tag, GA collection, Sentry and HubSpot chat. */
 export function isStubbedHost(rawUrl: string): boolean {
   let host: string
   try {
@@ -52,12 +55,43 @@ export function isStubbedHost(rawUrl: string): boolean {
   } catch {
     return false
   }
-  return host === 'www.googletagmanager.com' || host === 'google-analytics.com' || host.endsWith('.google-analytics.com') || isSentryHost(rawUrl)
+  return host === 'www.googletagmanager.com' || host === 'google-analytics.com' || host.endsWith('.google-analytics.com') || isSentryHost(rawUrl) || isHubSpotChatHost(host)
 }
+
+function isHubSpotChatHost(host: string): boolean {
+  return HUBSPOT_CHAT_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`))
+}
+
+export function isHubSpotChatRequest(rawUrl: string): boolean {
+  try {
+    return isHubSpotChatHost(new URL(rawUrl).hostname.toLowerCase())
+  } catch {
+    return false
+  }
+}
+
+/** Collects the responses for the chat loader; attach before navigating. */
+export function watchChatLoader(page: Page): Response[] {
+  const loaded: Response[] = []
+  page.on('response', (res) => {
+    if (res.url() === CHAT_LOADER_URL) loaded.push(res)
+  })
+  return loaded
+}
+
+/** The shared `asc_consent` cookie; add it to the context before the first navigation. */
+export const consentCookie = (analytics: boolean) => ({
+  name: CONSENT_KEY,
+  value: encodeURIComponent(JSON.stringify({ analytics, ts: new Date().toISOString(), v: 1 })),
+  domain: '.ascomply.com',
+  path: '/',
+  secure: true,
+  sameSite: 'Lax' as const,
+})
 
 /**
  * Serves the production hostnames from the fork, so Chromium applies real cookie rules to the
- * deployed bundles, and answers every GA and Sentry request with an empty 200. Needs no
+ * deployed bundles, and answers every `isStubbedHost` request with an empty 200. Needs no
  * local server; on a production target the forward is the identity.
  */
 export async function routeProductionHosts(

@@ -17,6 +17,7 @@ import './styles/landing.css'
 
 import App from './App'
 import { bootAnalytics } from './analytics'
+import { bootChat } from './hubspotChat'
 import { BrandMark } from './icons'
 import { InvitePage } from './components/InvitePage'
 import { inviteToken } from './inviteLink'
@@ -34,4 +35,5 @@ if (!forwarding) {
   // Outside React and after render: StrictMode's double-invoked effects cannot reach it,
   // and nothing sits in front of first paint.
   bootAnalytics()
+  bootChat()
 }

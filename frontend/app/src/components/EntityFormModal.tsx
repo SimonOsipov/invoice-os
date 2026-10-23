@@ -169,7 +169,7 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess, r
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <form data-hs-do-not-collect="true" onSubmit={handleSubmit} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
             {readOnly && (
               <div data-testid="entity-readonly-note" style={{ marginBottom: 14, fontSize: 12.5, color: 'var(--fg-3)' }}>

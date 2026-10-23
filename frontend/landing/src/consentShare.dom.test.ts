@@ -15,11 +15,13 @@ import {
   type ConsentStore,
 } from './consent'
 import { applyChoice } from './consentActions'
-import { BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES, SHARED_COOKIE_DOMAIN } from './hubspot'
+import { APP_HOSTNAMES, BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES, SHARED_COOKIE_DOMAIN } from './hubspot'
 
 const WWW_URL = 'https://www.ascomply.com/'
 const LIB_URL = 'https://library.ascomply.com/'
+const APP_URL = 'https://app.ascomply.com/'
 const WWW = 'www.ascomply.com'
+const APP = 'app.ascomply.com'
 const LIB = 'library.ascomply.com'
 const KEY = CONSENT_STORAGE_KEY
 
@@ -103,10 +105,34 @@ describe('shared consent cookie', () => {
   })
 
   it('CS-04 only an exact production host shares', () => {
-    for (const h of [WWW, ' WWW.ASCOMPLY.COM ', LIB, 'blog.ascomply.com']) expect(sharedConsentDomain(h)).toBe('ascomply.com')
-    for (const h of ['ascomply.com', 'app.ascomply.com', 'www.ascomply.com.evil.example', 'library.ascomply.com.', 'blog.ascomply.com.', 'blog-pr-1.up.railway.app', 'localhost', '']) {
+    for (const h of [WWW, ' WWW.ASCOMPLY.COM ', LIB, 'blog.ascomply.com', 'app.ascomply.com', ' APP.ASCOMPLY.COM ']) {
+      expect(sharedConsentDomain(h)).toBe('ascomply.com')
+    }
+    for (const h of ['ascomply.com', 'app.ascomply.com.', 'app.ascomply.com.evil.example', 'www.ascomply.com.evil.example', 'library.ascomply.com.', 'blog.ascomply.com.', 'blog-pr-1.up.railway.app', 'app-pr-1.up.railway.app', 'localhost', '']) {
       expect(sharedConsentDomain(h)).toBeNull()
     }
+  })
+
+  it('CS-15 Accept on www is read on the app', () => {
+    const { cookieJar, wwwDoc, storeW } = setup()
+    const appDoc = win(APP_URL, cookieJar)
+    const storeA = memStore()
+    const written = writeConsent(true, storeW, new Date('2026-03-01T00:00:00.000Z'), wwwDoc, WWW)
+
+    expect(readConsent(storeA, appDoc, APP)).toEqual(written)
+    expect(storeA.map.has(KEY)).toBe(false)
+  })
+
+  it('CS-16 Reject on the app is read on www', () => {
+    const { cookieJar, wwwDoc, storeW } = setup()
+    const appDoc = win(APP_URL, cookieJar)
+    const storeA = memStore()
+    writeConsent(true, storeW, new Date('2026-03-01T00:00:00.000Z'), wwwDoc, WWW)
+    const denied = writeConsent(false, storeA, new Date('2026-03-02T00:00:00.000Z'), appDoc, APP)
+
+    expect(readConsent(storeW, wwwDoc, WWW)).toEqual(denied)
+    expect(denied.analytics).toBe(false)
+    expect(jarCookies(cookieJar, WWW_URL)[0]).toMatchObject({ domain: 'ascomply.com' })
   })
 
   it('CS-05 a local record moves into the cookie', () => {
@@ -258,7 +284,7 @@ describe('shared consent cookie', () => {
   })
 
   it('CS-13 every production host sits under the shared domain', () => {
-    for (const h of [...PRODUCTION_HOSTNAMES, ...LIBRARY_HOSTNAMES, ...BLOG_HOSTNAMES]) expect(h.endsWith(`.${SHARED_COOKIE_DOMAIN}`)).toBe(true)
+    for (const h of [...PRODUCTION_HOSTNAMES, ...LIBRARY_HOSTNAMES, ...BLOG_HOSTNAMES, ...APP_HOSTNAMES]) expect(h.endsWith(`.${SHARED_COOKIE_DOMAIN}`)).toBe(true)
     expect(SHARED_COOKIE_DOMAIN.split('.')).toHaveLength(2)
   })
 

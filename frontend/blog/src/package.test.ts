@@ -159,4 +159,19 @@ describe('blog package', () => {
       expect(html, `index.html carries ${tag}`).not.toContain(tag)
     }
   })
+
+  // Every <form open tag must opt out; an open tag the matcher cannot read counts as a failure.
+  const formsOptOut = (src: string) =>
+    [...src.matchAll(/<form\b/g)].every((m) =>
+      /^<form\b(?:[^>{]|\{[^}]*\})*>/.exec(src.slice(m.index))?.[0].includes('data-hs-do-not-collect="true"'),
+    )
+
+  it('form_everyOpenTagOptsOutOfHubSpotCapture', () => {
+    const files = srcFiles()
+    expect(files.length, 'control: the source list is read').toBeGreaterThanOrEqual(20)
+    expect(files.map((f) => relative(HERE, f))).toContain('components/Subscribe.tsx')
+    expect(formsOptOut('<form onSubmit={x}>'), 'control: a bare form is rejected').toBe(false)
+    expect(formsOptOut('<form data-hs-do-not-collect="true">')).toBe(true)
+    for (const f of files) expect(formsOptOut(stripComments(read(f))), relative(HERE, f)).toBe(true)
+  })
 })

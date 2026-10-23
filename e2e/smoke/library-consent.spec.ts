@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from '../topology/layout'
-import { consentRecordOf, consoleGate, isStubbedHost, routeProductionHosts, seedConsent, STUB_HEADER } from './landingConsent'
+import { consentCookie, consentRecordOf, consoleGate, isHubSpotChatRequest, isStubbedHost, routeProductionHosts, seedConsent, STUB_HEADER, watchChatLoader } from './landingConsent'
 
 // The consent notice and GA4 tag on the deployed Feature Library. The tag loads after Accept on
 // the production library host only; on a fork it stays dark whatever the visitor answers.
@@ -122,6 +122,28 @@ test('library consent: the tag is requested after Accept on the production host 
   } else {
     expect(tagRequests, 'the library requested the GA4 tag on a non-production host').toEqual([])
   }
+})
+
+test('library consent: Accept on the PR host loads no HubSpot chat', async ({ page }) => {
+  test.skip(EXPECT_TAG, 'the production host loads the chat by design; the routed tests cover it')
+  const errors = consoleGate(page)
+  const hubspot: string[] = []
+  let seen = 0
+  page.on('request', (req) => {
+    seen++
+    if (isHubSpotChatRequest(req.url())) hubspot.push(req.url())
+  })
+  await openLibrary(page)
+  await notice(page).getByRole('button', { name: 'Accept' }).click()
+  await expect(notice(page)).toHaveCount(0)
+  await page.waitForLoadState('networkidle')
+
+  expect(await consentRecordOf(page), 'Accept stored nothing, so the gate was never tested').toContain('"analytics":true')
+  expect(seen, 'control: the recorder saw no request, so zero HubSpot requests proves nothing').toBeGreaterThan(0)
+  expect(hubspot, `the PR host requested HubSpot:\n${hubspot.join('\n')}`).toEqual([])
+  await expect(page.locator('#hs-script-loader')).toHaveCount(0)
+  await expect(page.locator('#hubspot-messages-iframe-container')).toHaveCount(0)
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
 for (const width of WIDE_WIDTHS) {
@@ -371,4 +393,30 @@ routedTest('SC-04 shared consent: a landing Reject reaches the leftover _ga at t
   await expect(notice(page)).toHaveCount(0)
   await expect.poll(async () => (await cookiesNamed(page, GA_NAME)).length, 'the Library did not expire the leftover _ga').toBe(0)
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+routedTest('library consent: Accept on the production Library host requests the chat loader', async ({ routed: page, request }) => {
+  await controlRouting(page, request)
+  const errors = consoleGate(page)
+  const loaded = watchChatLoader(page)
+  await openRoutedLibrary(page)
+  await expect(notice(page)).toBeVisible()
+  await notice(page).getByRole('button', { name: 'Accept' }).click()
+  await expect(notice(page)).toHaveCount(0)
+
+  await expect.poll(() => loaded.length, 'Accept never requested the chat loader').toBe(1)
+  expect(loaded[0].headers()[STUB_HEADER], 'the loader was not answered by the stub').toBe('1')
+  await expect(page.locator('#hs-script-loader')).toHaveCount(1)
+  await page.waitForLoadState('networkidle')
+  expect(loaded).toHaveLength(1)
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+routedTest('library consent: a returning visitor gets the chat loader at boot', async ({ routed: page, request }) => {
+  await controlRouting(page, request)
+  const loaded = watchChatLoader(page)
+  await page.context().addCookies([consentCookie(true)])
+  await openRoutedLibrary(page)
+  await expect(notice(page)).toHaveCount(0)
+  await expect.poll(() => loaded.length, 'a granted record did not request the chat loader').toBe(1)
 })

@@ -31,6 +31,7 @@ type NoticeProps = {
   current: ConsentRecord | null
   suppressed: boolean
   onChoose: (choice: ConsentChoice) => void
+  body?: string
 }
 type CookieNoticeModule = { CookieNotice: (props: NoticeProps) => ReactElement }
 
@@ -41,7 +42,7 @@ const DENIED: ConsentRecord = { analytics: false, ts: '2026-01-01T00:00:00.000Z'
 
 // Verbatim from the story's Final copy table. Not paraphrased, punctuation untouched.
 const BODY_COPY =
-  'We use Google Analytics to see how people find and use this page. That is the only non-essential cookie we set: no advertising, no remarketing, no data sold to anyone. ' +
+  'We use Google Analytics to see how people use this page. Accept also turns on our HubSpot live chat, which sets its own cookies. No advertising, no data sold to anyone. ' +
   `Your choice applies to ${SHARED_COOKIE_DOMAIN}, the Feature Library and the Blog.`
 const LINK_TEXT = 'Read the privacy &amp; cookie policy'
 const SETTING_ON = 'Analytics cookies are on.'
@@ -86,6 +87,14 @@ describe('CookieNotice SSR render (LAND-05-02)', () => {
   it('T2-2: the body copy is verbatim', async () => {
     const html = await render()
     expect(html).toContain(BODY_COPY)
+  })
+
+  it('the notice names the chat and drops the only-cookie claim', async () => {
+    for (const current of [null, GRANTED]) {
+      const html = await render({ current })
+      expect(html).toContain('Accept also turns on our HubSpot live chat')
+      expect(html).not.toContain('only non-essential')
+    }
   })
 
   it('CookieNotice body names the Blog', async () => {
@@ -298,5 +307,16 @@ describe('CookieNotice adversarial (LAND-05-02)', () => {
       })
     }
     expect(calls).toEqual([])
+  })
+
+  it('the body prop replaces the body text only', async () => {
+    const html = await render({ body: 'X' })
+    expect(html).toMatch(/<p class="cn-body">X<\/p>/)
+    expect(html).not.toContain('We use Google Analytics')
+    expect(html).toContain('data-consent="accept"')
+    expect(html).toContain('data-consent="reject"')
+    expect(html).toContain('class="lnk cn-link"')
+    expect(html).toContain('cn-spacer')
+    expect(await render()).toContain(BODY_COPY)
   })
 })

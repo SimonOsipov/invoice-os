@@ -18,6 +18,8 @@ import { Footer } from './Footer'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
 import { sentryOptions } from '@invoice-os/monitoring'
+import { CHAT_SCRIPT_HOST, HUBSPOT_CHAT_DOMAINS, HUBSPOT_COOKIE_NAMES } from '../hubspotChat'
+import { APP_HOSTNAMES, BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES } from '../hubspot'
 import {
   aiModelVendors,
   aiProviderHosts,
@@ -31,6 +33,7 @@ import {
   newsletterIntakeFields,
   newsletterPendingHours,
   newsletterResendPropertyKeys,
+  BLOG_CHAT_PARAGRAPH,
   resubscribeReplacesRequest,
   rulePutsUnsubscribeInEveryBroadcast,
   syncBlogAddsSegmentAndTopic,
@@ -45,7 +48,7 @@ const html = renderToStaticMarkup(createElement(Privacy))
 // One row per ledger claim that had no render assertion.
 const LEDGER_NEEDLES: readonly (readonly [string, string])[] = [
   ['C1 consent-gated', 'It runs only if you have allowed analytics'],
-  ['C2 not in the signed-in product', 'There is no analytics code anywhere inside the signed-in ASComply product'],
+  ['C2 the product runs Google Analytics', `The signed-in ASComply product at ${APP_HOSTNAMES[0]} runs Google Analytics too`],
   ['C5 no identifying detail', 'We never send Google your name, your email address, your company'],
   ['C6 two cookies', 'Google Analytics sets two cookies on your device'],
   ['C6 the _ga names', 'One is named _ga; the other starts _ga_'],
@@ -54,9 +57,14 @@ const LEDGER_NEEDLES: readonly (readonly [string, string])[] = [
   ['C11 HubSpot receives the answers', 'Booking a demo sends your answers to HubSpot'],
   ['C12 the name is split', 'split from the single full name you typed'],
   ['C13 empties are dropped', 'Anything left empty is not sent at all'],
-  ['C16 no browsing history to HubSpot', 'We do not send HubSpot your browsing history, the pages you visited'],
+  ['C16 the form sends HubSpot no pages', 'The form carries your answers and nothing else: it does not send HubSpot the pages you visited'],
   ['C17 no advertising network', 'We run no advertising network on this site'],
   ['C18 the notice is the control', 'The cookie notice on this site is where you choose'],
+  ['C32 Accept covers the chat', 'Accept allows Google Analytics and the HubSpot live chat'],
+  ['C33 the app identifies by account email', 'There it also tells HubSpot the email address of the account you are signed in with'],
+  ['C34 sign-out deletes the chat', 'Signing out removes the chat from the page and deletes HubSpot'],
+  ['C35 the Library shows the chat', 'If you have allowed analytics, the Library shows HubSpot'],
+  ['C36 the Blog shows the chat', 'If you have allowed analytics, the Blog shows HubSpot'],
   ['E1 optional answers are pre-selected', 'come with an answer already selected when the form opens'],
   ['E2 the separate marketing box is quoted from code', MARKETING_CONSENT_TEXT],
   ['E3 Google sets the _ga cookies', 'These two are set by Google, not by our own code'],
@@ -87,6 +95,10 @@ const WITHDRAWAL_NEEDLES: readonly (readonly [string, string])[] = [
 describe('AC1: every ledger claim survives on the page', () => {
   it.each(LEDGER_NEEDLES)('%s', (_id, needle) => {
     expect(html).toContain(needle)
+  })
+
+  it('C2 no sentence says the product runs no Google Analytics', () => {
+    expect(html).not.toContain('runs no Google Analytics')
   })
 })
 
@@ -293,7 +305,7 @@ describe('T4-13 (AC-13): the page says WHY a reload matters after a Reject that 
 
 // pm-approved copy: change these strings only with a new approval.
 const APPROVED_INTRO =
-  'Three other companies receive information about your visit. Google serves the fonts this site is typeset in, and measures how the site is used if you have allowed analytics. HubSpot stores the answers you give if you book a demo. Sentry receives a report when a page fails, and measures how long pages take to load. Your browser loads nothing on this site from, and sends nothing to, any other company.'
+  'Three other companies receive information about your visit. Google serves the fonts this site is typeset in, and measures how the site is used if you have allowed analytics. HubSpot stores the answers you give if you book a demo, and runs our live chat and records the pages you visit if you have allowed analytics. Sentry receives a report when a page fails, and measures how long pages take to load. Your browser loads nothing on this site from, and sends nothing to, any other company.'
 const APPROVED_MONITORING =
   "We use Sentry to find out when something breaks or runs slowly. When a page on this site or in the signed-in ASComply product shows an error, your browser sends Sentry a report. Each page you open also sends Sentry how long it took to load. These reports say what went wrong or how long it took, which page it happened on (the address without anything after a '?'), and your browser, operating system and device type. This happens on every visit to the live site, whatever you chose on the cookie notice. It is how we keep the site working. It is not analytics, and it is not used to measure how you use the site. Sentry does not store your IP address. It sets no cookies and writes nothing to your browser's storage. It never receives what you type into the demo form. Sentry stores these reports in the EU. Our preview and test builds send Sentry nothing."
 const APPROVED_FONTS =
@@ -405,6 +417,77 @@ describe('AUTH-17-09: the page quotes the consent copy from code', () => {
   })
 })
 
+// Pending the user's copy sign-off (Q15).
+const PROPOSED_CHAT_SECTION = [
+  `If you have allowed analytics, ${PRODUCTION_HOSTNAMES[0]}, our Feature Library at ${LIBRARY_HOSTNAMES[0]} and our Blog at ${BLOG_HOSTNAMES[0]} show HubSpot's live chat, so that you can write to us from any page. Its code loads from ${CHAT_SCRIPT_HOST} only after you choose Accept. Before you choose, or if you choose Reject, HubSpot's chat and tracking code does not load. Our preview and test builds never load it.`,
+  `Whatever you type into the chat, including any name or email address you give there, goes to HubSpot, where we read it and reply. HubSpot's code also records which pages of those sites you open, the address you arrived from, your screen size and language, and a fingerprint it computes from your browser, under a randomly generated identifier kept in its cookies. It sends all of this to HubSpot addresses at ${HUBSPOT_CHAT_DOMAINS.slice(0, -1).join(', ')} and ${HUBSPOT_CHAT_DOMAINS[HUBSPOT_CHAT_DOMAINS.length - 1]}.`,
+  "Choosing Reject removes the chat from the page, deletes HubSpot's cookies and tells HubSpot's code to send nothing more. The code itself stays loaded in any of our pages you have open until you reload them.",
+]
+
+// Pending the user's copy sign-off (Q15).
+const PROPOSED_APP_CHAT_PARAGRAPH = `In the signed-in ASComply product at ${APP_HOSTNAMES[0]}, the chat loads the same way, only if you have allowed analytics. There it also tells HubSpot the email address of the account you are signed in with, so that we know who is writing to us. HubSpot files the screens of the product you open, and anything you type into the chat, under a contact record with that address. Cookie choices, at the foot of the product's sidebar, brings the cookie notice back. Signing out removes the chat from the page and deletes HubSpot's cookies, so the next person to use your browser does not see your conversation.`
+
+const CHAT_H2 = />Live chat<\/h2>/g
+const chatSectionHtml = (): string => {
+  const at = html.search(CHAT_H2)
+  const rest = html.slice(at).replace(CHAT_H2, '')
+  const next = rest.indexOf('<h2')
+  return next < 0 ? rest : rest.slice(0, next)
+}
+
+describe('CHAT-01-03: the page describes the HubSpot chat', () => {
+  it('PC-01 one Live chat section between the demo section and the account section', () => {
+    expect(html.match(CHAT_H2) ?? [], 'expected exactly one Live chat h2').toHaveLength(1)
+    const at = html.search(CHAT_H2)
+    expect(at).toBeGreaterThan(html.indexOf('>If you book a demo</h2>'))
+    expect(html.indexOf('>If you book a demo</h2>')).toBeGreaterThan(-1)
+    expect(at).toBeLessThan(html.indexOf('>If you create an account</h2>'))
+    const paragraphs = Array.from(chatSectionHtml().matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g), (m) => plainText(m[1]))
+    expect(paragraphs).toEqual([PROPOSED_CHAT_SECTION[0], PROPOSED_CHAT_SECTION[1], PROPOSED_APP_CHAT_PARAGRAPH, PROPOSED_CHAT_SECTION[2]])
+  })
+
+  it('PC-07 the no-analytics-anywhere sentence is gone', () => {
+    expect(html).not.toContain('There is no analytics code anywhere inside the signed-in ASComply product')
+  })
+
+  it('PC-09 the app host is quoted from APP_HOSTNAMES', () => {
+    const src = readFileSync(PRIVACY_TSX, 'utf8')
+    expect(src).toMatch(/import\s*\{[^}]*APP_HOSTNAMES[^}]*\}\s*from\s*['"]\.\.\/hubspot['"]/)
+    expect(src, 'the app host is retyped').not.toContain('app.ascomply.com')
+    expect(plainText(html)).toContain(APP_HOSTNAMES[0])
+  })
+
+  it('PC-02 the chat hosts are quoted from hubspotChat', () => {
+    const text = plainText(html)
+    expect(text).toContain(CHAT_SCRIPT_HOST)
+    for (const domain of HUBSPOT_CHAT_DOMAINS) expect(text, domain).toContain(domain)
+    const src = readFileSync(PRIVACY_TSX, 'utf8')
+    expect(src).toMatch(/import\s*\{[^}]*CHAT_SCRIPT_HOST[^}]*\}\s*from\s*['"]\.\.\/hubspotChat['"]/)
+    expect(src).toMatch(/import\s*\{[^}]*HUBSPOT_CHAT_DOMAINS[^}]*\}\s*from\s*['"]\.\.\/hubspotChat['"]/)
+    expect(src, 'a chat host is retyped').not.toContain('hs-scripts.com')
+    expect(src, 'a chat host is retyped').not.toContain('usemessages.com')
+  })
+
+  it('PC-04 the cookie section names the HubSpot cookies before asc_consent, with no table', () => {
+    const names = [...HUBSPOT_COOKIE_NAMES, '__hs_do_not_track']
+    const hits = html.split('</p>').filter((seg) => names.every((n) => seg.includes(n)))
+    expect(hits.length, 'expected exactly one paragraph naming every HubSpot cookie').toBe(1)
+    const count = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight'][HUBSPOT_COOKIE_NAMES.length]
+    expect(hits[0], 'the Reject count matches the cookie list').toContain(`deletes all ${count}.`)
+    const at = html.indexOf(hits[0])
+    expect(at).toBeGreaterThan(html.indexOf('>Cookies on your device</h2>'))
+    expect(at).toBeLessThan(html.indexOf(privacyParagraphs('asc_consent')[0]))
+    expect(html).not.toContain('<table')
+  })
+
+  it('PC-05 the demo paragraph no longer denies the tracking cookie', () => {
+    expect(html).not.toContain('We do not send HubSpot your browsing history')
+    const anchor = html.indexOf('The form carries your answers and nothing else')
+    expect(anchor).toBeGreaterThan(-1)
+    expect(anchor).toBeLessThan(html.search(MONITORING_H2))
+  })
+})
+
 describe('AUTH-17-09: no Resend region claim without a vendor citation', () => {
   const REGION =
     /\b(?:regions?|located|locations?|countr(?:y|ies)|EU|EEA|Europe|European|US|USA|U\.S\.|United States|America|Ireland|Frankfurt|Germany|data cent(?:er|re)s?)\b/
@@ -420,6 +503,13 @@ describe('AUTH-17-09: no Resend region claim without a vendor citation', () => {
     expect(claimsRegion('The page makes no Resend region claim.')).toBe(false)
     expect(claimsRegion('HubSpot holds all of this on their EU servers.')).toBe(false)
     expect(claimsRegion('Resend receives your email address.')).toBe(false)
+  })
+
+  it('PC-03 the Live chat section claims no region', () => {
+    const chatSentences = sentencesOf(plainText(chatSectionHtml()))
+    expect(chatSentences.length, 'control: the chat section has sentences').toBeGreaterThan(5)
+    expect(REGION.test('HubSpot stores chat messages in the EU.'), 'control: the detector fires').toBe(true)
+    expect(chatSentences.filter((sentence) => REGION.test(sentence))).toEqual([])
   })
 
   it('no Resend region claim without a vendor citation', () => {
@@ -627,12 +717,17 @@ describe('BLOG-10: the Blog section matches the newsletter code', () => {
     expect(blogText()).toContain(`within ${hours} hours expires`)
   })
 
-  it('PB-05 no newsletter code names HubSpot, and the section names it only in a negation', () => {
+  it('PB-05 no newsletter code names HubSpot, and the Blog section names it for the chat sentence and one negation', () => {
     expect(newsletterGoFiles(), 'population: every newsletter*.go is scanned').toEqual(['newsletter.go', 'newsletter_handlers.go', 'newsletter_mode.go', 'newsletter_resend.go', 'newsletter_worker.go'])
     expect(workerNamesHubSpot(), 'control: worker.go names HubSpot').toBe(true)
     expect(newsletterCodeNamesHubSpot()).toBe(false)
-    const named = blogText().split(/(?<=[.!?])\s+/).filter((s) => s.includes('HubSpot'))
-    expect(named).toEqual(['Nothing from the newsletter goes to HubSpot.'])
+    const hubspotSentences = (t: string): string[] => t.split(/(?<=[.!?])\s+/).filter((s) => s.includes('HubSpot'))
+    const blogSentences = (): string[] =>
+      Array.from(blogSectionHtml().matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)).flatMap((m) => hubspotSentences(plainText(m[1])))
+    const expected = [...hubspotSentences(BLOG_CHAT_PARAGRAPH), 'Nothing from the newsletter goes to HubSpot.']
+    expect(expected, 'control: the pinned paragraph has one HubSpot sentence').toHaveLength(2)
+    expect(blogSentences()).toEqual(expected)
+    expect([...blogSentences(), 'Another sentence names HubSpot.'], 'control: a third HubSpot sentence is rejected').not.toEqual(expected)
   })
 
   it('PB-09 the link is single-use and expires, a second sign-up replaces it, and confirmed_at is stored', () => {

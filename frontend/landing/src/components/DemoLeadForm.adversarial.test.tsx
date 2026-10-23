@@ -112,10 +112,10 @@ describe('the popup DOM survives the extraction (A1-A3)', () => {
 describe('the form and both panels carry the modal padding (A4)', () => {
   it('A4: the form and both panels are padded', async () => {
     const modalForm = renderToStaticMarkup(createElement(DemoLeadForm, { idPrefix: 'dm' }))
-    expect(modalForm.startsWith('<form noValidate="" style="padding:24px 24px 22px">')).toBe(true)
+    expect(modalForm.startsWith('<form noValidate="" data-hs-do-not-collect="true" style="padding:24px 24px 22px">')).toBe(true)
     // Through DemoModal too: the popup is the form's only production mount.
     expect(renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))).toContain(
-      '<form noValidate="" style="padding:24px 24px 22px">',
+      '<form noValidate="" data-hs-do-not-collect="true" style="padding:24px 24px 22px">',
     )
 
     for (const step of ['success', 'error'] as const) {
@@ -142,10 +142,10 @@ describe('the heading is a slot with no wrapper (A6)', () => {
     const withHeading = renderToStaticMarkup(
       createElement(DemoLeadForm, { idPrefix: 'zz', heading: createElement('h9' as 'h1', null, 'SLOT') }),
     )
-    expect(withHeading.startsWith('<form noValidate="" style="padding:24px 24px 22px"><h9>SLOT</h9><div style="display:flex')).toBe(true)
+    expect(withHeading.startsWith('<form noValidate="" data-hs-do-not-collect="true" style="padding:24px 24px 22px"><h9>SLOT</h9><div style="display:flex')).toBe(true)
 
     const without = renderToStaticMarkup(createElement(DemoLeadForm, { idPrefix: 'zz' }))
-    expect(without.startsWith('<form noValidate="" style="padding:24px 24px 22px"><div style="display:flex')).toBe(true)
+    expect(without.startsWith('<form noValidate="" data-hs-do-not-collect="true" style="padding:24px 24px 22px"><div style="display:flex')).toBe(true)
   })
 
   it('A10: the form still closes on the submit button and the reassurance line', () => {

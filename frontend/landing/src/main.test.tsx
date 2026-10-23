@@ -19,6 +19,7 @@ const h = vi.hoisted(() => {
     inviteLinkEvaluated: vi.fn(),
     verifyLinkEvaluated: vi.fn(),
     forwarding: false,
+    bootChat: vi.fn(),
     bootAnalytics: vi.fn(() => {
       seen.atAnalytics = snapshot()
     }),
@@ -53,6 +54,7 @@ function mockModules() {
     return real
   })
   vi.doMock('./analytics', () => ({ bootAnalytics: h.bootAnalytics }))
+  vi.doMock('./hubspotChat', () => ({ bootChat: h.bootChat }))
 }
 
 // Browser globals for the node environment; replaceState moves the fake address bar as the real one does.
@@ -122,6 +124,14 @@ describe('main', () => {
     expect(h.render.mock.invocationCallOrder[0]).toBeLessThan(h.bootAnalytics.mock.invocationCallOrder[0])
   })
 
+  it('main_bootsTheChatAfterRenderBesideAnalytics', async () => {
+    await bootMain('/')
+
+    expect(h.bootChat).toHaveBeenCalledTimes(1)
+    expect(h.render.mock.invocationCallOrder[0]).toBeLessThan(h.bootChat.mock.invocationCallOrder[0])
+    expect(h.bootAnalytics.mock.invocationCallOrder[0]).toBeLessThan(h.bootChat.mock.invocationCallOrder[0])
+  })
+
   it('main_capturesTheInviteBeforeMonitoringAndAnalytics', async () => {
     await bootMain(`/invite?x=1#token=${T}`)
 
@@ -186,5 +196,6 @@ describe('main', () => {
     expect(h.verifyLinkEvaluated, 'control: the mocked module ran').toHaveBeenCalledTimes(1)
     expect(h.createRoot).not.toHaveBeenCalled()
     expect(h.bootAnalytics).not.toHaveBeenCalled()
+    expect(h.bootChat).not.toHaveBeenCalled()
   })
 })

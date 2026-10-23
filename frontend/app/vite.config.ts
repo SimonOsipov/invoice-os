@@ -3,9 +3,12 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { sentryVitePlugin } from '@sentry/vite-plugin'
 import { sourcemapUploadOptions } from '../../packages/monitoring/src/upload'
+// ceiling: Library slicer imported, move it into landing after CHAT-02 merges
+import { cookieNoticeDefine } from '../library/src/cookieNoticeCss'
 
 // PLAT-01 — local-only platform app showcase. No proxy/backend; all content is static/hardcoded.
 export default defineConfig({
+  define: cookieNoticeDefine(),
   plugins: [react(), sentryVitePlugin(sourcemapUploadOptions(fileURLToPath(new URL('.', import.meta.url))))],
   // Maps go to Sentry, never to browsers.
   build: { sourcemap: 'hidden' },

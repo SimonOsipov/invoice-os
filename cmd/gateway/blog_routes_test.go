@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"go/ast"
 	"go/types"
 	"log/slog"
@@ -11,7 +10,6 @@ import (
 	"os"
 	"reflect"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -202,71 +200,6 @@ func TestBlogRoutes_PreflightGrantsAnAllowedOrigin(t *testing.T) {
 	}
 }
 
-// blogLimitWarns keeps the enforced attribute of each limit WARN.
-type blogLimitWarns struct {
-	mu       *sync.Mutex
-	enforced *[]string
-}
-
-func (h blogLimitWarns) Enabled(context.Context, slog.Level) bool { return true }
-func (h blogLimitWarns) WithAttrs([]slog.Attr) slog.Handler       { return h }
-func (h blogLimitWarns) WithGroup(string) slog.Handler            { return h }
-func (h blogLimitWarns) Handle(_ context.Context, r slog.Record) error {
-	if r.Message != "blog-read: limit reached" {
-		return nil
-	}
-	r.Attrs(func(a slog.Attr) bool {
-		if a.Key == "enforced" {
-			h.mu.Lock()
-			*h.enforced = append(*h.enforced, a.Value.String())
-			h.mu.Unlock()
-		}
-		return true
-	})
-	return nil
-}
-
-func TestBlogHandlers_PostureTable(t *testing.T) {
-	for _, c := range []struct {
-		env     string
-		refused bool
-	}{
-		{"pr-7", false},
-		{"production", true},
-		{"development", true},
-		{"", true},
-		{"pr-", true},
-		{"PR-7", true},
-	} {
-		t.Run("env="+c.env, func(t *testing.T) {
-			t.Setenv("DEPLOY_ENV", c.env)
-			var mu sync.Mutex
-			var enforced []string
-			up, calls := blogUpstreamServer(t)
-			routes := blogHandlers(up, "gw-token", slog.New(blogLimitWarns{&mu, &enforced}))
-			for i := range gateway.BlogReadPerIP {
-				if rec := blogGet(routes.Posts, "/blog/posts", "203.0.113.7:4000", ""); rec.Code != http.StatusOK {
-					t.Fatalf("request %d within the budget = %d, want 200", i+1, rec.Code)
-				}
-			}
-			rec := blogGet(routes.Posts, "/blog/posts", "203.0.113.7:4000", "")
-			wantCode, wantCalls, wantEnforced := http.StatusOK, int32(gateway.BlogReadPerIP+1), "false"
-			if c.refused {
-				wantCode, wantCalls, wantEnforced = http.StatusTooManyRequests, int32(gateway.BlogReadPerIP), "true"
-			}
-			if rec.Code != wantCode {
-				t.Errorf("request %d = %d, want %d", gateway.BlogReadPerIP+1, rec.Code, wantCode)
-			}
-			if n := calls.Load(); n != wantCalls {
-				t.Errorf("upstream saw %d calls, want %d", n, wantCalls)
-			}
-			if !reflect.DeepEqual(enforced, []string{wantEnforced}) {
-				t.Errorf("limit WARN enforced = %v, want [%s]", enforced, wantEnforced)
-			}
-		})
-	}
-}
-
 func TestBlogRoutes_OptionsWithoutOriginIsNotARead(t *testing.T) {
 	t.Setenv("DEPLOY_ENV", "production")
 	mux, calls := blogMux(t, slog.New(slog.DiscardHandler))
@@ -309,38 +242,6 @@ func TestBlogRoutes_OptionsWithoutOriginIsNotARead(t *testing.T) {
 	}
 	if n := calls.Load(); n != 1 {
 		t.Errorf("upstream saw %d calls after one GET, want 1", n)
-	}
-}
-
-func TestBlogHandlers_HaveTheirOwnBucket(t *testing.T) {
-	t.Setenv("DEPLOY_ENV", "production")
-	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(goTrueAnswering(t, cwSession), site, 0, slog.New(slog.DiscardHandler), &demoRecSink{}, noPendingInvite)
-	up, _ := blogUpstreamServer(t)
-	routes := blogHandlers(up, "gw-token", slog.New(slog.DiscardHandler))
-
-	const first, second = "203.0.113.7:4000", "198.51.100.9:4000"
-	for range gateway.DemoRequestPerIP + 1 {
-		demoPost(reg.DemoRequest, first)
-	}
-	if rec := demoPost(reg.DemoRequest, first); rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("demo budget not spent: %d", rec.Code)
-	}
-	if rec := blogGet(routes.Posts, "/blog/posts", first, ""); rec.Code != http.StatusOK {
-		t.Errorf("blog read after the demo budget is spent = %d, want 200", rec.Code)
-	}
-
-	for range gateway.BlogReadPerIP {
-		blogGet(routes.Posts, "/blog/posts", second, "")
-	}
-	if rec := blogGet(routes.Posts, "/blog/posts", second, ""); rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("blog budget not spent: %d", rec.Code)
-	}
-	if !reg.RegisterPerIP.Reserve("198.51.100.9") {
-		t.Error("spending the blog budget limited register")
-	}
-	if rec := demoPost(reg.DemoRequest, second); rec.Code != http.StatusAccepted {
-		t.Errorf("demo request after the blog budget is spent = %d, want 202", rec.Code)
 	}
 }
 

@@ -1636,7 +1636,7 @@ func TestSeedOutcomeCoverageAtTheEvidenceLayer(t *testing.T) {
 // STRUCTURALLY NEW (Stage-1 correction C2) -- it cannot extend the firm INSERT, whose
 // CTE carries no tenant column and whose fiscal derivation is hardcoded to 1111....  A
 // copied block that drops the derivation makes every accepted in-house row trip
-// accepted_without_irn on cmd/reconciliation's live 5-minute sweep. Mirrors
+// accepted_without_irn on cmd/worker's live 5-minute sweep. Mirrors
 // TestSeedPopulatesFiscalIdentifiersOnAcceptedInvoices, scoped to Honeywell.
 func TestSeedPopulatesFiscalIdentifiersOnAcceptedInHouseInvoices(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
@@ -1769,7 +1769,7 @@ func TestSeedStatusHistoryConsistentWithFinalStatus(t *testing.T) {
 
 // TestSeedTripsNoReconciliationDrift: "no reconciliation predicate matches any seeded
 // row". Reads all eight drift signatures directly off internal/reconciliation.Scan (the
-// same query cmd/reconciliation runs on its live 5-minute sweep) and asserts none of
+// same query cmd/worker runs on its live 5-minute sweep) and asserts none of
 // them flags a seeded invoice. Today queued_never_sent = 3 on the un-fixed seed; this
 // subtask must take it to 0 without introducing a new one (accepted_without_irn is the
 // one real hazard the in-house block risks -- Stage-1 correction C2).
@@ -1811,7 +1811,7 @@ func TestSeedTripsNoReconciliationDrift(t *testing.T) {
 	}
 	defer tx.Rollback(ctx)
 
-	// Matches cmd/reconciliation's own documented defaults (sweep.go) -- irrelevant to a
+	// Matches cmd/worker's own documented defaults (sweep.go) -- irrelevant to a
 	// fully-terminal seed, but keeps this test honest about what production runs.
 	th := reconciliation.Thresholds{Grace: 15 * time.Minute, MaxPendingAge: 24 * time.Hour, HopCeiling: 20}
 	findings, err := reconciliation.Scan(ctx, tx, th)
@@ -1821,7 +1821,7 @@ func TestSeedTripsNoReconciliationDrift(t *testing.T) {
 
 	for _, f := range findings {
 		if seededInvoiceIDs[f.InvoiceID] {
-			t.Errorf("reconciliation.Scan flagged seeded invoice %s: kind=%s -- cmd/reconciliation sweeps every 5 minutes and would write a real reconciliation.drift_detected audit row for this", f.InvoiceID, f.Kind)
+			t.Errorf("reconciliation.Scan flagged seeded invoice %s: kind=%s -- cmd/worker sweeps every 5 minutes and would write a real reconciliation.drift_detected audit row for this", f.InvoiceID, f.Kind)
 		}
 	}
 }

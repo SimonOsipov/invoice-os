@@ -428,7 +428,7 @@ ON CONFLICT (tenant_id, entity_id, invoice_number) DO UPDATE SET
 -- Reports all rendered an empty state on a fresh in-house sign-in. A SEPARATE block, not
 -- more rows in invoice_seed above: that CTE carries no tenant column and its INSERT
 -- hardcodes the firm's uuid. The fiscal derivation is copied from it verbatim -- without it
--- every accepted row here trips reconciliation's accepted_without_irn on cmd/reconciliation's
+-- every accepted row here trips reconciliation's accepted_without_irn on cmd/worker's
 -- live 5-minute sweep. supplier_tin/supplier_name come off the entity row itself: a company
 -- filing for itself IS its own supplier.
 --

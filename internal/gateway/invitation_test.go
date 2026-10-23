@@ -484,9 +484,9 @@ func (r *recordingRegistrations) releases() []string {
 	return slices.Clone(r.released)
 }
 
-func inviteeHandler(authURL *url.URL, floor time.Duration, perIP *SignInThrottle, p *recordingPreviewer, r *recordingRegistrations) http.Handler {
+func inviteeHandler(authURL *url.URL, floor time.Duration, p *recordingPreviewer, r *recordingRegistrations) http.Handler {
 	log, _ := captureLog()
-	return InvitationRegisterHandler(authURL, testClient(), floor, perIP, true, log, p.preview, r.registrations())
+	return InvitationRegisterHandler(authURL, testClient(), floor, log, p.preview, r.registrations())
 }
 
 // newDroppingGoTrue records the request, then closes the connection without answering.
@@ -541,7 +541,7 @@ func TestInvitationRegister_SignsUpWithAPasswordNobodyKeeps(t *testing.T) {
 	const bodyPassword = "body-pw"
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	r := claiming("e@x.test", true, nil)
-	h := inviteeHandler(fake.URL, 0, freshRegisterLimit(), previewing(liveInvite, nil), r)
+	h := inviteeHandler(fake.URL, 0, previewing(liveInvite, nil), r)
 
 	for _, token := range []string{inviteToken, otherInviteToken} {
 		rec, _ := postInvitee(h, inviteeBody(token, bodyPassword, map[string]string{"email": inviteeEmailFromBody}))
@@ -588,7 +588,7 @@ func TestInvitationRegister_SignsUpWithAPasswordNobodyKeeps(t *testing.T) {
 // Seeding crypto/rand twice gives the same password only if the password is read from it.
 func TestInvitationRegister_PasswordComesFromCryptoRand(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
-	h := inviteeHandler(fake.URL, 0, freshRegisterLimit(), previewing(liveInvite, nil), claiming("e@x.test", true, nil))
+	h := inviteeHandler(fake.URL, 0, previewing(liveInvite, nil), claiming("e@x.test", true, nil))
 
 	for range 2 {
 		cryptotest.SetGlobalRandom(t, 7)
@@ -632,7 +632,7 @@ func TestInvitationRegister_GeneratedPasswordIsNeverEchoedOrLogged(t *testing.T)
 			fake := c.fake(t)
 			log, buf := captureLog()
 			r := claiming("e@x.test", true, nil)
-			h := InvitationRegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), true, log, previewing(liveInvite, nil).preview, r.registrations())
+			h := InvitationRegisterHandler(fake.URL, testClient(), 0, log, previewing(liveInvite, nil).preview, r.registrations())
 
 			rec, _ := postInvitee(h, inviteeBody(inviteToken, "body-pw", nil))
 
@@ -658,14 +658,14 @@ func TestInvitationRegister_GeneratedPasswordIsNeverEchoedOrLogged(t *testing.T)
 func TestInvitationRegister_SecondRegistrationOfATokenCreatesNothing(t *testing.T) {
 	const floor = 200 * time.Millisecond
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
-	first, _ := postInvitee(inviteeHandler(fake.URL, 0, freshRegisterLimit(), previewing(liveInvite, nil), claiming("e@x.test", true, nil)), tokenBody(inviteToken))
+	first, _ := postInvitee(inviteeHandler(fake.URL, 0, previewing(liveInvite, nil), claiming("e@x.test", true, nil)), tokenBody(inviteToken))
 	requirePending202(t, first)
 	if n := len(fake.Calls()); n != 1 {
 		t.Fatalf("control: the first registration made %d GoTrue calls, want 1", n)
 	}
 
 	r := claiming("e@x.test", false, nil)
-	rec, elapsed := postInvitee(inviteeHandler(fake.URL, floor, freshRegisterLimit(), previewing(liveInvite, nil), r), tokenBody(inviteToken))
+	rec, elapsed := postInvitee(inviteeHandler(fake.URL, floor, previewing(liveInvite, nil), r), tokenBody(inviteToken))
 
 	requirePending202(t, rec)
 	if rec.Body.String() != first.Body.String() || rec.Header().Get("Content-Type") != first.Header().Get("Content-Type") {
@@ -705,7 +705,7 @@ func TestInvitationRegister_TokenIsTheOnlyRequiredField(t *testing.T) {
 			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 			r := claiming("e@x.test", true, nil)
 
-			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, freshRegisterLimit(), previewing(liveInvite, nil), r), c.body)
+			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, previewing(liveInvite, nil), r), c.body)
 
 			if rec.Code != c.status {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, c.status, rec.Body.String())
@@ -761,10 +761,10 @@ func TestInvitationRegister_MapsGoTrueLikeRegister(t *testing.T) {
 			log, _ := captureLog()
 			reg := httptest.NewRecorder()
 			regReq := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
-			RegisterHandler(authURL, testClient(), 0, freshRegisterLimit(), true, log, noPendingInvite).ServeHTTP(reg, regReq)
+			RegisterHandler(authURL, testClient(), 0, log, noPendingInvite).ServeHTTP(reg, regReq)
 
 			p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: regEmail, Account: "none"}, nil)
-			inv, _ := postInvitee(inviteeHandler(authURL, 0, freshRegisterLimit(), p, claiming(regEmail, true, nil)), tokenBody(inviteToken))
+			inv, _ := postInvitee(inviteeHandler(authURL, 0, p, claiming(regEmail, true, nil)), tokenBody(inviteToken))
 
 			if reg.Code != c.want {
 				t.Fatalf("control: /auth/register = %d, want %d: %s", reg.Code, c.want, reg.Body.String())
@@ -791,11 +791,10 @@ func TestInvitationRegister_AnExistingAccountIsRefusedBeforeGoTrue(t *testing.T)
 	} {
 		t.Run(c.account, func(t *testing.T) {
 			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
-			perIP := freshRegisterLimit()
 			p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: inviteAddress, Account: c.account}, nil)
 
 			for range 2 {
-				rec, elapsed := postInvitee(inviteeHandler(fake.URL, floor, perIP, p, claiming(inviteAddress, true, nil)), inviteeBody(inviteToken, "pw-123456", nil))
+				rec, elapsed := postInvitee(inviteeHandler(fake.URL, floor, p, claiming(inviteAddress, true, nil)), inviteeBody(inviteToken, "pw-123456", nil))
 				if rec.Code != http.StatusConflict || errorBody(t, rec) != c.want {
 					t.Fatalf("answer = %d %s, want 409 %s", rec.Code, rec.Body.String(), c.want)
 				}
@@ -809,73 +808,7 @@ func TestInvitationRegister_AnExistingAccountIsRefusedBeforeGoTrue(t *testing.T)
 			if n := len(fake.Calls()); n != 0 {
 				t.Errorf("GoTrue saw %d calls, want 0", n)
 			}
-
-			fresh := previewing(liveInvite, nil)
-			for i := range RegisterPerIP {
-				rec, _ := postInvitee(inviteeHandler(fake.URL, 0, perIP, fresh, claiming(inviteAddress, true, nil)), inviteeBody(inviteToken, "pw-123456", nil))
-				if rec.Code != http.StatusAccepted {
-					t.Fatalf("request %d after the refusals = %d, want 202 from the full per-IP budget", i+1, rec.Code)
-				}
-			}
-			if n := len(fake.Calls()); n != RegisterPerIP {
-				t.Errorf("GoTrue saw %d calls, want %d", n, RegisterPerIP)
-			}
 		})
-	}
-}
-
-// A preview refusal takes the register budget check as the 202 path does: a spent IP gets the uniform 202 after the floor, not the 409.
-func TestInvitationRegister_PreviewRefusalTakesTheBudgetCheck(t *testing.T) {
-	const floor = 150 * time.Millisecond
-	for _, account := range []string{"confirmed", "unconfirmed"} {
-		t.Run(account, func(t *testing.T) {
-			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
-			perIP := NewSignInThrottle("register", 1, RegisterMaxKeys, RegisterWindow, time.Now)
-			perIP.Reserve("192.0.2.1")
-			r := claiming(inviteAddress, true, nil)
-			p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: inviteAddress, Account: account}, nil)
-			log, _ := captureLog()
-			req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(tokenBody(inviteToken)))
-			req.RemoteAddr = "192.0.2.1:5555"
-			rec := httptest.NewRecorder()
-			start := time.Now()
-
-			InvitationRegisterHandler(fake.URL, testClient(), floor, perIP, true, log, p.preview, r.registrations()).ServeHTTP(rec, req)
-
-			requirePending202(t, rec)
-			if elapsed := time.Since(start); elapsed < floor {
-				t.Errorf("answered after %v, want no earlier than the %v floor", elapsed, floor)
-			}
-			if len(r.claims()) != 0 || len(fake.Calls()) != 0 {
-				t.Errorf("claims = %d, GoTrue calls = %d, want 0 and 0", len(r.claims()), len(fake.Calls()))
-			}
-		})
-	}
-}
-
-func TestInvitationRegister_PreviewRefusalOnASpentIPIsNotEnforcedWhenOff(t *testing.T) {
-	const floor = 150 * time.Millisecond
-	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
-	perIP := NewSignInThrottle("register", 1, RegisterMaxKeys, RegisterWindow, time.Now)
-	perIP.Reserve("192.0.2.1")
-	r := claiming(inviteAddress, true, nil)
-	p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: inviteAddress, Account: "confirmed"}, nil)
-	log, _ := captureLog()
-	req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(tokenBody(inviteToken)))
-	req.RemoteAddr = "192.0.2.1:5555"
-	rec := httptest.NewRecorder()
-	start := time.Now()
-
-	InvitationRegisterHandler(fake.URL, testClient(), floor, perIP, false, log, p.preview, r.registrations()).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusConflict || errorBody(t, rec) != msgAccountExists {
-		t.Fatalf("answer = %d %s, want 409 %s", rec.Code, rec.Body.String(), msgAccountExists)
-	}
-	if elapsed := time.Since(start); elapsed < floor {
-		t.Errorf("answered after %v, want no earlier than the %v floor", elapsed, floor)
-	}
-	if len(r.claims()) != 0 || len(fake.Calls()) != 0 {
-		t.Errorf("claims = %d, GoTrue calls = %d, want 0 and 0", len(r.claims()), len(fake.Calls()))
 	}
 }
 
@@ -896,7 +829,7 @@ func TestInvitationRegister_ExistingAccountWaitsTheFloor(t *testing.T) {
 				fake := newFakeGoTrue(t, c.status, c.body)
 				p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: inviteAddress, Account: account}, nil)
 
-				rec, elapsed := postInvitee(inviteeHandler(fake.URL, floor, freshRegisterLimit(), p, claiming(inviteAddress, true, nil)), inviteeBody(inviteToken, "pw-123456", nil))
+				rec, elapsed := postInvitee(inviteeHandler(fake.URL, floor, p, claiming(inviteAddress, true, nil)), inviteeBody(inviteToken, "pw-123456", nil))
 
 				if rec.Code != http.StatusConflict || strings.TrimSpace(rec.Body.String()) != `{"error":"`+msgAccountExists+`"}` {
 					t.Fatalf("answer = %d %s, want 409 %s", rec.Code, rec.Body.String(), msgAccountExists)
@@ -912,51 +845,6 @@ func TestInvitationRegister_ExistingAccountWaitsTheFloor(t *testing.T) {
 	}
 }
 
-func TestInvitationRegister_RefundsTheSlotOnlyForAnExistingAccount(t *testing.T) {
-	cases := []struct {
-		name       string
-		public     bool
-		status     int
-		body       string
-		wantCalls  int
-		wantStatus int
-	}{
-		{"200 empty identities", false, http.StatusOK, gtSanitizedUser, 2, http.StatusConflict},
-		{"user_already_exists", false, http.StatusUnprocessableEntity, gtUserAlreadyExists, 2, http.StatusConflict},
-		{"email_exists", false, http.StatusUnprocessableEntity, gtEmailExists, 2, http.StatusConflict},
-		{"real signup spends the slot", false, http.StatusOK, gtNewUser, 1, http.StatusAccepted},
-		{"public route: 200 empty identities still spends the slot", true, http.StatusOK, gtSanitizedUser, 1, http.StatusAccepted},
-		{"public route: user_already_exists is refunded by the 4xx rule", true, http.StatusUnprocessableEntity, gtUserAlreadyExists, 2, http.StatusAccepted},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			perIP := NewSignInThrottle("register", 1, RegisterMaxKeys, RegisterWindow, time.Now)
-			fake := newFakeGoTrue(t, c.status, c.body)
-			post := func() *httptest.ResponseRecorder {
-				if c.public {
-					log, _ := captureLog()
-					rec := httptest.NewRecorder()
-					RegisterHandler(fake.URL, testClient(), 0, perIP, true, log, noPendingInvite).ServeHTTP(rec,
-						httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword))))
-					return rec
-				}
-				rec, _ := postInvitee(inviteeHandler(fake.URL, 0, perIP, previewing(liveInvite, nil), claiming(inviteAddress, true, nil)), inviteeBody(inviteToken, "pw-123456", nil))
-				return rec
-			}
-
-			first := post()
-			if first.Code != c.wantStatus {
-				t.Fatalf("first answer = %d %s, want %d", first.Code, first.Body.String(), c.wantStatus)
-			}
-			post()
-
-			if n := len(fake.Calls()); n != c.wantCalls {
-				t.Errorf("GoTrue saw %d calls after two posts on a budget of 1, want %d", n, c.wantCalls)
-			}
-		})
-	}
-}
-
 func TestInvitationRegister_NewAccountShapesStay202(t *testing.T) {
 	const autoconfirm = `{"access_token":"a.b.c","token_type":"bearer","expires_in":3600,"refresh_token":"r","user":{"id":"7f3c2a1e-0b7d-4f51-9a0e-5d1c2b3a4e5f","identities":[]}}`
 	noIdentities := `{"id":"7f3c2a1e-0b7d-4f51-9a0e-5d1c2b3a4e5f"}`
@@ -965,7 +853,7 @@ func TestInvitationRegister_NewAccountShapesStay202(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			fake := newFakeGoTrue(t, http.StatusOK, body)
 
-			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, freshRegisterLimit(), previewing(liveInvite, nil), claiming(inviteAddress, true, nil)), inviteeBody(inviteToken, "pw-123456", nil))
+			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, previewing(liveInvite, nil), claiming(inviteAddress, true, nil)), inviteeBody(inviteToken, "pw-123456", nil))
 
 			requirePending202(t, rec)
 		})
@@ -994,7 +882,7 @@ func TestInvitationRegister_RefusesBeforeGoTrue(t *testing.T) {
 			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 			r := claiming("e@x.test", true, c.result)
 			log, buf := captureLog()
-			h := InvitationRegisterHandler(fake.URL, testClient(), floor, freshRegisterLimit(), true, log, previewing(liveInvite, nil).preview, r.registrations())
+			h := InvitationRegisterHandler(fake.URL, testClient(), floor, log, previewing(liveInvite, nil).preview, r.registrations())
 
 			rec, elapsed := postInvitee(h, c.body)
 
@@ -1039,7 +927,7 @@ func TestInvitationRegister_NilClaimOrReleaseIsNotConfigured(t *testing.T) {
 			strip(&regs)
 			log, _ := captureLog()
 
-			rec, _ := postInvitee(InvitationRegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), true, log, previewing(liveInvite, nil).preview, regs), tokenBody(inviteToken))
+			rec, _ := postInvitee(InvitationRegisterHandler(fake.URL, testClient(), 0, log, previewing(liveInvite, nil).preview, regs), tokenBody(inviteToken))
 
 			if rec.Code != http.StatusServiceUnavailable || errorBody(t, rec) != "registration is not configured" {
 				t.Errorf("answer = %d %s, want 503 registration is not configured", rec.Code, rec.Body.String())
@@ -1054,7 +942,7 @@ func TestInvitationRegister_NilClaimOrReleaseIsNotConfigured(t *testing.T) {
 func TestInvitationRegister_OnlyPostClaims(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	r := claiming("e@x.test", true, nil)
-	h := inviteeHandler(fake.URL, 0, freshRegisterLimit(), previewing(liveInvite, nil), r)
+	h := inviteeHandler(fake.URL, 0, previewing(liveInvite, nil), r)
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(method, "/auth/invitation/register", strings.NewReader(tokenBody(inviteToken))))
@@ -1067,38 +955,6 @@ func TestInvitationRegister_OnlyPostClaims(t *testing.T) {
 	}
 	rec, _ := postInvitee(h, tokenBody(inviteToken))
 	requirePending202(t, rec)
-}
-
-func TestInvitationRegister_SharesTheRegisterBudget(t *testing.T) {
-	const floor = 150 * time.Millisecond
-	perIP := NewSignInThrottle("register", 3, RegisterMaxKeys, RegisterWindow, time.Now)
-	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
-	log, _ := captureLog()
-	postRegister := func() *httptest.ResponseRecorder {
-		rec := httptest.NewRecorder()
-		RegisterHandler(fake.URL, testClient(), 0, perIP, true, log, noPendingInvite).ServeHTTP(rec,
-			httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword))))
-		return rec
-	}
-	r := &recordingRegistrations{claim: func(token string) (string, bool, error) { return "e@x.test", token == inviteToken, nil }}
-	h := inviteeHandler(fake.URL, floor, perIP, previewing(liveInvite, nil), r)
-
-	requirePending202(t, postRegister())
-	first, firstElapsed := postInvitee(h, tokenBody(inviteToken))
-	repeat, repeatElapsed := postInvitee(h, tokenBody(otherInviteToken))
-
-	requirePending202(t, first)
-	requirePending202(t, repeat)
-	if firstElapsed < floor || repeatElapsed < floor {
-		t.Errorf("invitee answers after %v and %v, want each no earlier than the %v floor", firstElapsed, repeatElapsed, floor)
-	}
-	if n := len(fake.Calls()); n != 2 {
-		t.Fatalf("GoTrue saw %d calls, want 2 (the /auth/register signup and the first invitee signup)", n)
-	}
-	requirePending202(t, postRegister())
-	if n := len(fake.Calls()); n != 2 {
-		t.Errorf("GoTrue saw %d calls after the budget was spent on invite registrations, want still 2: /auth/register reached GoTrue", n)
-	}
 }
 
 // The free-mail refusal belongs to /auth/register; an invite names an address an admin chose.
@@ -1120,7 +976,7 @@ func TestInvitationRegister_FreeMailRule(t *testing.T) {
 
 	t.Run("a live invite to a free-mail address is signed up", func(t *testing.T) {
 		fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
-		rec, _ := postInvitee(inviteeHandler(fake.URL, 0, freshRegisterLimit(), previewing(liveInvite, nil), p), tokenBody(inviteToken))
+		rec, _ := postInvitee(inviteeHandler(fake.URL, 0, previewing(liveInvite, nil), p), tokenBody(inviteToken))
 		requirePending202(t, rec)
 		calls := fake.Calls()
 		if len(calls) != 1 || calls[0].Path != "/signup" || !strings.Contains(string(calls[0].Body), `"email":"`+freeMail+`"`) {
@@ -1137,7 +993,7 @@ func TestInvitationRegister_FreeMailRule(t *testing.T) {
 	for _, token := range []string{expiredToken, spentToken} {
 		t.Run("an expired or spent invite answers 404 without GoTrue: "+token[:2], func(t *testing.T) {
 			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
-			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, freshRegisterLimit(), previewing(liveInvite, nil), p), tokenBody(token))
+			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, previewing(liveInvite, nil), p), tokenBody(token))
 			if rec.Code != http.StatusNotFound {
 				t.Fatalf("status = %d, want 404: %s", rec.Code, rec.Body.String())
 			}
@@ -1162,15 +1018,13 @@ func TestInvitationRegister_LogsCarryNoTokenOrPassword(t *testing.T) {
 		status      int
 		body        string
 		unreachable bool
-		spent       bool
 		wantLogged  bool // the case must log something, or the secret check proves nothing
 	}{
-		{"unreachable GoTrue", 0, ``, true, false, true},
-		{"500 unexpected_failure", http.StatusInternalServerError, gtInternal, false, false, true},
-		{"over_email_send_rate_limit", http.StatusTooManyRequests, gtOverEmailSendRateLimit, false, false, true},
-		{"500 SQLSTATE 23505", http.StatusInternalServerError, gtDuplicateKey, false, false, true},
-		{"budget spent", http.StatusOK, gtNewUser, false, true, true},
-		{"200 new account", http.StatusOK, gtNewUser, false, false, false},
+		{"unreachable GoTrue", 0, ``, true, true},
+		{"500 unexpected_failure", http.StatusInternalServerError, gtInternal, false, true},
+		{"over_email_send_rate_limit", http.StatusTooManyRequests, gtOverEmailSendRateLimit, false, true},
+		{"500 SQLSTATE 23505", http.StatusInternalServerError, gtDuplicateKey, false, true},
+		{"200 new account", http.StatusOK, gtNewUser, false, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1178,15 +1032,9 @@ func TestInvitationRegister_LogsCarryNoTokenOrPassword(t *testing.T) {
 			if !c.unreachable {
 				authURL = newFakeGoTrue(t, c.status, c.body).URL
 			}
-			perIP := freshRegisterLimit()
-			if c.spent {
-				perIP = NewSignInThrottle("register", 1, RegisterMaxKeys, RegisterWindow, time.Now)
-				perIP.Reserve("192.0.2.1")
-			}
 			log, buf := captureLog()
-			h := InvitationRegisterHandler(authURL, testClient(), 0, perIP, true, log, previewing(liveInvite, nil).preview, claiming("e@x.test", true, nil).registrations())
+			h := InvitationRegisterHandler(authURL, testClient(), 0, log, previewing(liveInvite, nil).preview, claiming("e@x.test", true, nil).registrations())
 			req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(inviteeBody(inviteToken, password, nil)))
-			req.RemoteAddr = "192.0.2.1:5555"
 			rec := httptest.NewRecorder()
 
 			h.ServeHTTP(rec, req)
@@ -1227,7 +1075,7 @@ func TestInvitation_MalformedTokenMakesNoTenancyCall(t *testing.T) {
 		fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 		r := claiming("e@x.test", true, nil)
 
-		rec, _ := postInvitee(inviteeHandler(fake.URL, 0, freshRegisterLimit(), previewing(liveInvite, nil), r), tokenBody(inviteToken))
+		rec, _ := postInvitee(inviteeHandler(fake.URL, 0, previewing(liveInvite, nil), r), tokenBody(inviteToken))
 
 		requirePending202(t, rec)
 		if n := len(r.claims()); n != 1 {
@@ -1254,7 +1102,7 @@ func TestInvitation_MalformedTokenMakesNoTenancyCall(t *testing.T) {
 			r := claiming("e@x.test", true, nil)
 			p := previewing(liveInvite, nil)
 
-			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, freshRegisterLimit(), p, r), tokenBody(token))
+			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, p, r), tokenBody(token))
 
 			if rec.Code != 404 {
 				t.Fatalf("status = %d, want 404: %s", rec.Code, rec.Body.String())
@@ -1319,7 +1167,7 @@ func TestInvitationRegister_ReleasesTheClaimWhenNoAccountWasCreated(t *testing.T
 				return nil
 			}
 			log, _ := captureLog()
-			h := InvitationRegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), true, log, previewing(liveInvite, nil).preview, r.registrations())
+			h := InvitationRegisterHandler(fake.URL, testClient(), 0, log, previewing(liveInvite, nil).preview, r.registrations())
 
 			h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(tokenBody(inviteToken))))
 
@@ -1358,7 +1206,7 @@ func TestInvitationRegister_KeepsTheClaimWhenAnAccountMayExist(t *testing.T) {
 			fake := newFakeGoTrue(t, c.status, c.body)
 			r := claiming("e@x.test", true, nil)
 
-			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, freshRegisterLimit(), previewing(liveInvite, nil), r), tokenBody(inviteToken))
+			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, previewing(liveInvite, nil), r), tokenBody(inviteToken))
 
 			if c.want == http.StatusAccepted {
 				requirePending202(t, rec)
@@ -1394,7 +1242,7 @@ func TestInvitationRegister_PreviewRefusalComesBeforeTheClaim(t *testing.T) {
 			r := claiming(inviteAddress, true, nil)
 			p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: inviteAddress, Account: c.account}, nil)
 
-			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, freshRegisterLimit(), p, r), tokenBody(inviteToken))
+			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, p, r), tokenBody(inviteToken))
 
 			wantClaims, wantCalls := 0, 0
 			if c.want == http.StatusAccepted {
@@ -1433,7 +1281,7 @@ func TestInvitationRegister_PreviewFailureAnswersBeforeTheClaim(t *testing.T) {
 			r := claiming(inviteAddress, true, nil)
 			p := previewing(InvitationPreview{}, c.err)
 
-			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, freshRegisterLimit(), p, r), tokenBody(inviteToken))
+			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, p, r), tokenBody(inviteToken))
 
 			if rec.Code != c.want || errorBody(t, rec) != c.msg {
 				t.Errorf("answer = %d %s, want %d %s", rec.Code, rec.Body.String(), c.want, c.msg)
@@ -1451,65 +1299,13 @@ func TestInvitationRegister_PreviewFailureAnswersBeforeTheClaim(t *testing.T) {
 	}
 }
 
-func TestInvitationRegister_PerIPRefusalReleasesTheClaim(t *testing.T) {
-	const floor = 200 * time.Millisecond
-	spent := func() *SignInThrottle {
-		perIP := NewSignInThrottle("register", 1, RegisterMaxKeys, RegisterWindow, time.Now)
-		perIP.Reserve("192.0.2.1")
-		return perIP
-	}
-	post := func(h http.Handler) (*httptest.ResponseRecorder, time.Duration) {
-		req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(tokenBody(inviteToken)))
-		req.RemoteAddr = "192.0.2.1:5555"
-		rec := httptest.NewRecorder()
-		start := time.Now()
-		h.ServeHTTP(rec, req)
-		return rec, time.Since(start)
-	}
-
-	t.Run("enforced", func(t *testing.T) {
-		fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
-		r := claiming("e@x.test", true, nil)
-		log, _ := captureLog()
-
-		rec, elapsed := post(InvitationRegisterHandler(fake.URL, testClient(), floor, spent(), true, log, previewing(liveInvite, nil).preview, r.registrations()))
-
-		requirePending202(t, rec)
-		if elapsed < floor {
-			t.Errorf("answered after %v, want no earlier than the %v floor", elapsed, floor)
-		}
-		if n := len(fake.Calls()); n != 0 {
-			t.Errorf("GoTrue saw %d calls, want 0", n)
-		}
-		if got := r.releases(); !slices.Equal(got, []string{inviteToken}) {
-			t.Errorf("releases = %v, want the claimed token once: no account was created", got)
-		}
-	})
-
-	t.Run("not enforced, the sign-up proceeds and the claim stays", func(t *testing.T) {
-		fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
-		r := claiming("e@x.test", true, nil)
-		log, _ := captureLog()
-
-		rec, _ := post(InvitationRegisterHandler(fake.URL, testClient(), 0, spent(), false, log, previewing(liveInvite, nil).preview, r.registrations()))
-
-		requirePending202(t, rec)
-		if n := len(fake.Calls()); n != 1 {
-			t.Errorf("GoTrue saw %d calls, want 1", n)
-		}
-		if got := r.releases(); len(got) != 0 {
-			t.Errorf("releases = %v, want none", got)
-		}
-	})
-}
-
 func TestInvitationRegister_ReleaseFailureIsLoggedAndTheAnswerStands(t *testing.T) {
 	run := func(release func(context.Context, string) error) (*httptest.ResponseRecorder, *bytes.Buffer, *recordingRegistrations) {
 		fake := newFakeGoTrue(t, http.StatusTooManyRequests, gtOverEmailSendRateLimit)
 		r := claiming("e@x.test", true, nil)
 		r.release = release
 		log, buf := captureLog()
-		h := InvitationRegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), true, log, previewing(liveInvite, nil).preview, r.registrations())
+		h := InvitationRegisterHandler(fake.URL, testClient(), 0, log, previewing(liveInvite, nil).preview, r.registrations())
 		rec, _ := postInvitee(h, tokenBody(inviteToken))
 		return rec, buf, r
 	}
@@ -1566,7 +1362,7 @@ func TestInvitationRegister_ReleaseOutlivesTheRequestContext(t *testing.T) {
 	}
 	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/auth/invitation/register", strings.NewReader(tokenBody(inviteToken)))
 
-	inviteeHandler(authURL, 0, freshRegisterLimit(), previewing(liveInvite, nil), r).ServeHTTP(httptest.NewRecorder(), req)
+	inviteeHandler(authURL, 0, previewing(liveInvite, nil), r).ServeHTTP(httptest.NewRecorder(), req)
 
 	if ctx.Err() == nil {
 		t.Fatal("the request context was never cancelled: the case proves nothing")
@@ -1580,29 +1376,20 @@ func TestInvitationRegister_ReleaseOutlivesTheRequestContext(t *testing.T) {
 }
 
 func TestInvitationRegister_SecondRegistrationReleasesNothing(t *testing.T) {
-	for _, exhausted := range []bool{false, true} {
-		t.Run(map[bool]string{false: "budget left", true: "budget spent"}[exhausted], func(t *testing.T) {
-			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
-			r := claiming("e@x.test", false, nil)
-			perIP := freshRegisterLimit()
-			if exhausted {
-				perIP = NewSignInThrottle("register", 1, RegisterMaxKeys, RegisterWindow, time.Now)
-				perIP.Reserve("192.0.2.1")
-			}
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	r := claiming("e@x.test", false, nil)
 
-			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, perIP, previewing(liveInvite, nil), r), tokenBody(inviteToken))
+	rec, _ := postInvitee(inviteeHandler(fake.URL, 0, previewing(liveInvite, nil), r), tokenBody(inviteToken))
 
-			requirePending202(t, rec)
-			if got := r.claims(); !slices.Equal(got, []string{inviteToken}) {
-				t.Errorf("claims = %v, want one", got)
-			}
-			if got := r.releases(); len(got) != 0 {
-				t.Errorf("releases = %v, want none: this registration claimed nothing", got)
-			}
-			if n := len(fake.Calls()); n != 0 {
-				t.Errorf("GoTrue saw %d calls, want 0", n)
-			}
-		})
+	requirePending202(t, rec)
+	if got := r.claims(); !slices.Equal(got, []string{inviteToken}) {
+		t.Errorf("claims = %v, want one", got)
+	}
+	if got := r.releases(); len(got) != 0 {
+		t.Errorf("releases = %v, want none: this registration claimed nothing", got)
+	}
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
 	}
 }
 
@@ -1624,7 +1411,7 @@ func TestInvitationRegister_UnroutedTenancyIsUnavailableNotInvalid(t *testing.T)
 	}
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	log, _ := captureLog()
-	h := InvitationRegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), true, log, previewing(liveInvite, nil).preview,
+	h := InvitationRegisterHandler(fake.URL, testClient(), 0, log, previewing(liveInvite, nil).preview,
 		NewHTTPInvitationRegistrations(base, &http.Client{}, inviteGatewayToken))
 
 	rec, elapsed := postInvitee(h, tokenBody(inviteToken))

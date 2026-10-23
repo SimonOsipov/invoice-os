@@ -117,7 +117,7 @@ func failureStatus(err error) int {
 	return 0
 }
 
-// handOffRegistrant delivers user to the sink in the background: up to three attempts, one WARN after the last fails.
+// handOffRegistrant writes user to the outbox before returning, or, without one, delivers it to the sink in the background: up to three attempts, one WARN after the last fails.
 // A nil sink is a no-op; a blank email logs one WARN naming source and skips. The log carries the user id and the failing status only.
 func handOffRegistrant(ctx context.Context, log *slog.Logger, source string, sink ContactSink, user RegistrantContact) {
 	if sink == nil {
@@ -128,6 +128,13 @@ func handOffRegistrant(ctx context.Context, log *slog.Logger, source string, sin
 		return
 	}
 	ctx = context.WithoutCancel(ctx)
+	if outbox, ok := sink.(*RegistrantOutbox); ok {
+		// One durable write before the response; River retries the delivery.
+		if err := outbox.Registrant(ctx, user); err != nil {
+			log.WarnContext(ctx, "contacts: registrant hand-off failed", slog.String("user_id", user.UserID), slog.Int("attempts", 1), slog.Int("status", 0))
+		}
+		return
+	}
 	delays := slices.Clone(handOffDelays)
 	go func() {
 		var err error
@@ -170,18 +177,9 @@ func (u gotrueUser) contact() RegistrantContact {
 
 const maxDemoBodyBytes = 4096
 
-// ceiling: in-process counts; one office behind a NAT shares 5 requests an hour. Raise it when a visitor reports the 429.
-// ceiling: a full key map (10,000) refuses every new IP for up to an hour. Revisit when the demo-request full-map WARN fires.
-const (
-	DemoRequestPerIP   = 5
-	DemoRequestWindow  = time.Hour
-	DemoRequestMaxKeys = 10_000
-)
-
 // DemoRequestHandler takes the landing's demo-request form and hands it to the sink once, with no retry.
-// perIP is spent per valid request and refunded only when the sink answers 4xx (it stored nothing); enforce=false logs the miss and lets the request through.
 // ceiling: any address can be ticked; no marketing email to demo-route contacts until double opt-in exists.
-func DemoRequestHandler(sink ContactSink, perIP *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
+func DemoRequestHandler(sink ContactSink, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		if r.Method != http.MethodPost {
@@ -204,25 +202,11 @@ func DemoRequestHandler(sink ContactSink, perIP *SignInThrottle, enforce bool, l
 			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
-		key, source := clientKey(r)
-		held := perIP.Reserve(key)
-		if !held {
-			log.WarnContext(r.Context(), "demo-request: limit reached",
-				slog.String("limit", "ip"), slog.String("key_source", source), slog.Bool("enforced", enforce))
-			if enforce {
-				writeError(w, http.StatusTooManyRequests, "too many requests")
-				return
-			}
-		}
 		if in.Text != nil {
 			d.MarketingConsentText = *in.Text
 		}
 		if err := sink.DemoRequest(r.Context(), d); err != nil {
-			status := failureStatus(err)
-			if held && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
-				perIP.Refund(key)
-			}
-			log.WarnContext(r.Context(), "contacts: demo request hand-off failed", slog.Int("status", status))
+			log.WarnContext(r.Context(), "contacts: demo request hand-off failed", slog.Int("status", failureStatus(err)))
 			writeError(w, http.StatusBadGateway, "demo request is unavailable")
 			return
 		}

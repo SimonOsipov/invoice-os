@@ -1,21 +1,7 @@
-// provision.go — the gateway boot-time provisioning sequence: recreate
-// stuck schema (previews only) → bootstrap → migrate → reset (PR environments
-// only) → purge → seed, gated by BootstrapEnabled and all complete before the
-// gateway's listener opens (so a green /healthz continues to mean "fully
-// provisioned" — the purge excepted, being non-fatal, a failed one greens
-// identically).
-// Every step is fatal on error except the demo-tenant purge — see Provision's
-// doc comment. See db.go for the package doc and bootstrap.go for the
-// underlying BootstrapEnabled/Bootstrap/Seed primitives this composes;
-// MigrateUp (migrate.go) and PurgeDemoTenants (demopurge.go) are the others.
-//
-// cmd/gateway/main.go calls Provision with Environment set to the RAW
-// os.Getenv("ENVIRONMENT") — never app.Config.Environment, which substitutes
-// "development" for an unset var (internal/platform/config.go:44) and would
-// silently re-open the fail-open hole BootstrapEnabled's allowlist exists to
-// close (QA F1, task-128's crux requirement — see
-// TestProvisionGuardReadsRawEnvironment and
-// TestGatewayMainPassesRawEnvironmentToProvisioningGuard in provision_test.go).
+// provision.go — the pre-deploy sequence cmd/migrate runs: recreate stuck schema (previews
+// only) → bootstrap → migrate → reset (previews only) → purge → seed. Every step but the purge
+// is fatal. Environment must be the raw ENVIRONMENT value:
+// TestMigrateMainPassesRawEnvironmentToProvisioningGuard.
 package db
 
 import (
@@ -29,15 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ProvisionConfig bundles everything Provision needs to run the boot-time
-// boot-time provisioning sequence.
-//
-// Environment MUST be the raw os.Getenv("ENVIRONMENT") value (see
-// BootstrapEnabled's doc comment) — Provision applies no substitution of its
-// own, so passing app.Config.Environment here would defeat the allowlist guard
-// one layer up. That call-site contract is what
-// TestGatewayMainPassesRawEnvironmentToProvisioningGuard pins directly against
-// cmd/gateway/main.go's source.
+// ProvisionConfig is Provision's input. Environment is the raw ENVIRONMENT; see BootstrapEnabled.
 type ProvisionConfig struct {
 	Environment   string // raw os.Getenv("ENVIRONMENT")
 	BootstrapFlag string // raw os.Getenv("GATEWAY_DB_BOOTSTRAP")
@@ -51,45 +29,22 @@ type ProvisionConfig struct {
 	ResetFlag string
 
 	SuperuserDSN string // DATABASE_SUPERUSER_URL; read once per gated step, never retained (QA F3)
-	MigrationDSN string // DATABASE_MIGRATION_URL; always required, guard-independent (unchanged gateway-as-migrator behavior)
+	MigrationDSN string // DATABASE_MIGRATION_URL; always required
 
 	Passwords    RolePasswords // ascomply.*_password GUCs Bootstrap sets
 	BootstrapFS  fs.FS         // db/bootstrap.sql (db.FS)
 	MigrationsFS fs.FS         // embedded migrations (migrations.FS)
 	SeedFS       fs.FS         // db/seed.dev.sql (db.FS)
 
-	// ConnectWait bounds how long Provision waits for Postgres to accept its
-	// FIRST connection before running the sequence. Zero (the default, and what
-	// every non-gateway caller and every unit test uses) disables the wait
-	// entirely and preserves the original fail-immediately behaviour.
-	//
-	// cmd/gateway/main.go sets it, because the gateway is the one caller that
-	// boots against a Postgres that may not be serving yet. See waitForPostgres
-	// for why that wait replaced an out-of-network probe (M4-22-08).
+	// ConnectWait bounds the wait for Postgres's first connection. Zero disables it.
 	ConnectWait time.Duration
 
-	// Logger receives the wait's progress lines. Nil falls back to
-	// slog.Default(), which platform.New has already pointed at the process's
-	// JSON logger by the time the gateway calls Provision.
+	// Logger receives the wait's progress lines; nil means slog.Default().
 	Logger *slog.Logger
 }
 
-// ResetWillRun reports whether Provision's sequence runs the destructive
-// PR-environment Reset for this config: both guards on, in the nesting Provision
-// actually applies (see Provision's doc comment for why the reset guard is
-// consulted only inside the bootstrap/seed one).
-//
-// Provision branches on THIS method rather than on the two guards inline, so the
-// answer a caller can ask for either side of the call is the same expression
-// that decided — not a second copy of it that a later edit to the nesting could
-// leave quietly disagreeing.
-//
-// cmd/gateway/main.go publishes the result on /healthz as `db_reset`
-// (platform.DBReset), which dev-env.yml's health-gate asserts on every PR run.
-// That gate exists because both inputs are hand-set Railway variables and both
-// fail CLOSED AND SILENT: lose GATEWAY_DB_RESET when a service is recreated and
-// every E2E run goes quietly back to testing against inherited residue, with
-// nothing red anywhere to say so.
+// ResetWillRun reports whether Provision runs the destructive preview Reset. Provision
+// branches on this method, so a caller's answer never drifts from the decision.
 func (cfg ProvisionConfig) ResetWillRun() bool {
 	return BootstrapEnabled(cfg.Environment, cfg.BootstrapFlag) &&
 		ResetEnabled(cfg.DeployEnv, cfg.ResetFlag)
@@ -114,7 +69,7 @@ const postgresWaitInterval = 3 * time.Second
 // credential, and the variable name is what the operator has to go fix.
 func validateDSN(envVar, dsn string) error {
 	if strings.TrimSpace(dsn) == "" {
-		return fmt.Errorf("db: %s is empty — the gateway cannot reach Postgres without it", envVar)
+		return fmt.Errorf("db: %s is empty — the job cannot reach Postgres without it", envVar)
 	}
 	if strings.Contains(dsn, unrenderedReference) {
 		return fmt.Errorf("db: %s is an UNRENDERED variable reference — the variable is set on this service but the value it points at did not resolve in this environment", envVar)
@@ -198,44 +153,10 @@ func lockProvisionTail(ctx context.Context, superuserDSN string) (func(), error)
 	}, nil
 }
 
-// Provision runs the gateway's boot-time provisioning sequence: recreate stuck
-// schema (previews only, when ResetWillRun) → bootstrap
-// (gated by BootstrapEnabled) → migrate (unconditional — the existing
-// gateway-as-migrator behavior, unchanged) → reset (gated by ResetEnabled,
-// PR-environments only — persona-handoff-fix, Decision [pr-only-reset]) →
-// purge (gated by BootstrapEnabled, Decision [purge-non-fatal]) → seed (gated
-// by BootstrapEnabled) → shard seed (only when ResetWillRun;
-// TestProvisionSeedsNoShardTenantWithoutReset), short-circuiting fatally on the first error so a
-// partially provisioned database is never served. The purge is the one
-// exception to that: it runs as a single transaction that rolls back whole, so
-// a failed purge leaves the database exactly as it was and the boot continues
-// to Seed. Bootstrap, Reset, PurgeDemoTenants, Seed and SeedShards each open/close their
-// own dedicated superuser connection (bootstrap.go, reset.go, demopurge.go),
-// and Provision opens one more of its own to hold the advisory lock across the
-// reset/purge/seed tail (lockProvisionTail). All of them are closed before
-// Provision returns; it retains no DSN or connection past the call that used it.
-//
-// The bootstrap/seed guard is evaluated exactly once, from
-// cfg.Environment/cfg.BootstrapFlag — never re-read from the process
-// environment — so bootstrap and seed are gated identically even though
-// migrate runs unconditionally between them. When the guard is false,
-// cfg.Passwords/cfg.SuperuserDSN are never even looked at: Bootstrap/Seed are
-// not called at all, so an empty/zero RolePasswords or an unreachable
-// superuser DSN cannot fail a guard-off boot (AC-3).
-//
-// Reset's own guard (cfg.ResetWillRun, which folds in ResetEnabled's
-// cfg.DeployEnv/cfg.ResetFlag pair — see reset.go for why that
-// pair, not cfg.Environment/cfg.BootstrapFlag) is checked ONLY when the
-// bootstrap/seed guard is already on: resetting a database Provision is not otherwise
-// about to (re)seed would leave a PR environment's Postgres empty rather than
-// demo-ready, which is worse than leaving the old residue in place. Every
-// environment ResetEnabled ever permits is a strict subset of what
-// BootstrapEnabled permits (see ResetEnabled's doc comment), so this nesting
-// never silently skips a reset that should have run.
-//
-// The purge has no such second gate: it is not gated on the environment name,
-// and is narrowed only by the tenants DemoTenants names (demopurge.go) —
-// see TestProvisionPurgeRunsAgainstThePersistentEnvironmentName.
+// Provision runs the pre-deploy sequence. Bootstrap, reset, purge and seed run only when
+// BootstrapEnabled allows the environment; Reset also needs ResetWillRun. Migrate always runs.
+// The purge is the one non-fatal step: it is one transaction that rolls back whole.
+// Provision retains no DSN or connection after it returns.
 func Provision(ctx context.Context, cfg ProvisionConfig) error {
 	// Set before the early returns below, so "false" is truthful on every path
 	// that never reaches the purge.
@@ -283,9 +204,6 @@ func Provision(ctx context.Context, cfg ProvisionConfig) error {
 		}
 	}
 
-	// Unconditional and unchanged: the gateway is the fleet's single in-network
-	// migrator regardless of whether deploy-time provisioning is enabled for
-	// this environment.
 	if err := MigrateUp(ctx, cfg.MigrationDSN, cfg.MigrationsFS); err != nil {
 		return fmt.Errorf("db: provision: migrate: %w", err)
 	}

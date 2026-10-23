@@ -617,8 +617,6 @@ jobs:
           echo "Waiting for $GATEWAY_URL/healthz to report build $EXPECTED_BUILD ..."
           ok=0
           seen=""
-          reset=""
-          purge=""
           mock=""
           issuers=""
           # 900s (180 x 5s): EVERY environment is now a cold build of all 17
@@ -638,15 +636,10 @@ jobs:
             body=$(curl -fsS --connect-timeout 5 --max-time 10 "$GATEWAY_URL/healthz" 2>/dev/null || echo '')
             seen=$(printf '%s' "$body" | jq -r '.build // empty' 2>/dev/null || echo '')
             if [ -n "$seen" ] && [ "$seen" = "$EXPECTED_BUILD" ]; then
-              # Read db_reset out of the SAME body that carried the matching
-              # build. A second curl can land on a different container while a
-              # rolling deploy is still in progress, which is the whole reason
-              # the build field exists.
-              reset=$(printf '%s' "$body" | jq -r '.db_reset // empty' 2>/dev/null || echo '')
-              purge=$(printf '%s' "$body" | jq -r '.demo_purge // empty' 2>/dev/null || echo '')
+              # Read the fields out of the SAME body that carried the matching build.
               mock=$(printf '%s' "$body" | jq -r '.mock_issuer // empty' 2>/dev/null || echo '')
               issuers=$(printf '%s' "$body" | jq -r '.auth_issuers // empty' 2>/dev/null || echo '')
-              echo "  gateway healthy on $seen (schema migrated; db_reset=${reset:-none}, demo_purge=${purge:-none}, mock_issuer=${mock:-none}, auth_issuers=${issuers:-none})"
+              echo "  gateway healthy on $seen (mock_issuer=${mock:-none}, auth_issuers=${issuers:-none})"
               ok=1
               break
             fi
@@ -657,49 +650,10 @@ jobs:
             exit 1
           fi
 
-          # The reset barrier, asserted in both directions from one field.
-          #
-          # A PR environment is a FORK of the persistent environment's Postgres
-          # VOLUME, so it is born holding every row that environment holds — the
-          # gateway TRUNCATEs and re-seeds it at boot (Decision [pr-only-reset],
-          # internal/platform/db/reset.go) and the E2E suites downstream assume
-          # that happened. Both of that reset's inputs are hand-set Railway
-          # variables (GATEWAY_DB_RESET on the gateway service, plus the
-          # Railway-injected environment name) and BOTH fail closed and silent:
-          # lose the variable when a service is recreated and every later run
-          # tests against inherited residue with a green fleet and nothing red.
-          # This is the only place that becomes visible.
-          #
-          # And the mirror image, on the push/dispatch path: db_reset must be
-          # false against the PERSISTENT environment, whose data has no fork
-          # underneath it to fall back to. db.ResetEnabled already excludes it by
-          # environment-name shape; this is what would notice if that stopped
-          # being true.
-          if [ "$IS_PR" = "true" ]; then
-            if [ "$reset" != "true" ]; then
-              echo "::error::gateway is serving $EXPECTED_BUILD but reports db_reset='${reset:-none}' — the PR fork was NOT reset, so it still holds whatever the persistent environment's Postgres held when this environment was forked. 'none' means the gateway predates the /healthz db_reset field; 'false' means a guard said no: check GATEWAY_DB_RESET=true is still set on the gateway service (it fails closed and is lost when a service is recreated) and that RAILWAY_ENVIRONMENT_NAME is the pr-<N> shape db.ResetEnabled allowlists. Running E2E here would verify against residue."
-              exit 1
-            fi
-          elif [ "$reset" = "true" ]; then
-            echo "::error::gateway reports db_reset=true against the PERSISTENT environment. db.ResetEnabled is supposed to make that impossible by environment-name shape — its allowlist has been widened, or this run is not targeting the environment it thinks it is. The next boot TRUNCATEs live tenant data that has no fork underneath it."
-            exit 1
-          fi
-
-          # The purge and mock-issuer barriers, directional like db_reset.
-          # fork-vars-after-urls sets a fork gateway's ENVIRONMENT to development,
-          # so its purge runs and its tagged binary serves the mock issuer.
-          # Production's gateway reads ENVIRONMENT=production, which
-          # db.provisionableEnvironment refuses, and its binary is untagged.
-          # "true" proves one purge transaction committed, not that the demo is right.
-          if [ "$IS_PR" = "true" ]; then
-            want_purge=true;  want_mock=on
-          else
-            want_purge=false; want_mock=absent
-          fi
-          if [ "$purge" != "$want_purge" ]; then
-            echo "::error::gateway is serving $EXPECTED_BUILD but reports demo_purge='${purge:-none}', want '$want_purge'. 'error' means PurgeDemoTenants failed and Provision swallowed it (look for 'demo-tenant purge failed'). 'none' means the gateway predates the field. On a PR, 'false' means a guard said no: check GATEWAY_DB_BOOTSTRAP=true on the gateway and that fork-vars-after-urls set ENVIRONMENT=development. On the persistent environment, 'true' means a purge ran against live data: its gateway ENVIRONMENT no longer reads 'production'."
-            exit 1
-          fi
+          # The mock-issuer barrier, directional. fork-vars-after-urls sets a fork
+          # gateway's ENVIRONMENT to development, so its tagged binary serves the
+          # mock issuer. Production's binary is untagged.
+          if [ "$IS_PR" = "true" ]; then want_mock=on; else want_mock=absent; fi
           if [ "$mock" != "$want_mock" ]; then
             echo "::error::gateway is serving $EXPECTED_BUILD but reports mock_issuer='${mock:-none}', want '$want_mock'. On a PR, 'absent' means scripts/ci/stamp-mock-issuer.sh did not tag the build, and 'off' means ENVIRONMENT or GATEWAY_MOCK_ISSUER gated it off. On the persistent environment, anything but 'absent' means a tagged gateway binary was deployed there. 'none' means the gateway predates the field."
             exit 1

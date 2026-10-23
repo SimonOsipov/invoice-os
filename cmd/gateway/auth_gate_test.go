@@ -773,7 +773,7 @@ type fleetEntry struct {
 // fleetBody is a roll-up with every deploy-context backend up on deadbeef; extra replaces or adds.
 func fleetBody(extra ...fleetEntry) map[string][]fleetEntry {
 	var s []fleetEntry
-	for _, n := range []string{"tenancy", "portfolio", "invoice", "validation", "submission", "dashboard", "notifications", "reconciliation", "docling"} {
+	for _, n := range []string{"tenancy", "portfolio", "invoice", "validation", "submission", "dashboard", "notifications", "worker", "docling"} {
 		s = append(s, fleetEntry{n, "up", "deadbeef"})
 	}
 	for _, e := range extra {

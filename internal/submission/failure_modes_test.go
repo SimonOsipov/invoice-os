@@ -734,3 +734,83 @@ func requireStableState(t *testing.T, pool *pgxpool.Pool, id int64, want string,
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+// blockArgs → blockWorker: holds the job until its context is cancelled, or for Hold when set.
+type blockArgs struct {
+	TenantID string        `json:"tenant_id"`
+	Note     string        `json:"note"`
+	Hold     time.Duration `json:"hold"`
+}
+
+func (blockArgs) Kind() string     { return "test_block" }
+func (a blockArgs) Tenant() string { return a.TenantID }
+
+type blockWorker struct {
+	river.WorkerDefaults[blockArgs]
+	started chan struct{}
+}
+
+func (w *blockWorker) Work(ctx context.Context, job *river.Job[blockArgs]) error {
+	w.started <- struct{}{}
+	if job.Args.Hold > 0 {
+		time.Sleep(job.Args.Hold) // deaf to ctx: only a graceful drain finishes it
+		return nil
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// AC 6 (GKE-05): on SIGTERM the worker finishes a short job and releases a stuck one within the
+// shutdown window. A released job is retryable at once, not "running" until the rescuer's hour.
+func TestShutdown_FinishesAShortJobAndReleasesAStuckOne(t *testing.T) {
+	f := requireEffects(t)
+	// A released job goes back to the queue; clear every test_block row so no run fetches another's.
+	clear := func() {
+		_, _ = f.app.Exec(context.Background(), `DELETE FROM river_job WHERE kind = $1`, blockArgs{}.Kind())
+	}
+	clear()
+	t.Cleanup(clear)
+	for _, tc := range []struct {
+		name  string
+		hold  time.Duration
+		state rivertype.JobState
+	}{
+		{"short job finishes", 300 * time.Millisecond, rivertype.JobStateCompleted},
+		// newWorkerClient's immediateRetry reschedules at once, so released reads available.
+		{"stuck job is released", 0, rivertype.JobStateAvailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			bw := &blockWorker{started: make(chan struct{}, 1)}
+			work := newWorkerClient(t, f.app, func(w *river.Workers) { river.AddWorker(w, bw) })
+			if err := work.Start(ctx); err != nil {
+				t.Fatalf("start worker pool: %v", err)
+			}
+			tenant, note := uuid.NewString(), uuid.NewString()
+			enqueueEffect(t, ctx, newInsertClient(t, f.app), f.app, tenant, uuid.NewString(),
+				blockArgs{TenantID: tenant, Note: note, Hold: tc.hold}, nil)
+			select {
+			case <-bw.started:
+			case <-time.After(30 * time.Second):
+				t.Fatal("the job never started")
+			}
+
+			const window = 2 * time.Second
+			stopCtx, cancel := context.WithTimeout(ctx, window)
+			defer cancel()
+			began := time.Now()
+			if err := work.Stop(stopCtx); err != nil {
+				t.Fatalf("Stop = %v after %v, want nil inside the %v window", err, time.Since(began), window)
+			}
+			var state string
+			if err := f.app.QueryRow(ctx, `SELECT state FROM river_job WHERE kind = $1 AND args->>'note' = $2`,
+				blockArgs{}.Kind(), note).Scan(&state); err != nil {
+				t.Fatalf("read job: %v", err)
+			}
+			if state != string(tc.state) {
+				t.Errorf("job state after Stop = %q, want %q", state, tc.state)
+			}
+			clear()
+		})
+	}
+}

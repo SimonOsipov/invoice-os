@@ -1,18 +1,10 @@
-// main_test.go: role-password rename fallback shim tests (M4-22-09/task-168).
-// cmd/gateway/ had no test files before this one (main() itself isn't
-// unit-testable -- it calls platform.Fatal and opens a real listener).
-// Deliberately does NOT re-author TestBootstrapRejectsEmptyPasswords
-// (internal/platform/db/bootstrap_test.go) or
-// TestGatewayMainPassesRawEnvironmentToProvisioningGuard
-// (internal/platform/db/provision_test.go, AC #6's named regression guard)
-// -- both already cover what their names say.
+// main_test.go: source scans of the gateway's func main wiring.
 package main
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -35,109 +27,6 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"golang.org/x/net/html"
 )
-
-// TestGatewayMainPrefersUnprefixedPasswordVars: Test Spec #1. Static
-// source-scan of main.go's RolePasswords literal. Deprecated var names are
-// built via ToUpper(prefix) + suffix, never as a literal substring -- this
-// file is itself grepped by TestRepoHasNoStrayInvoicePrefixedVars below
-// (AC #4), and a literal deprecated "*PASSWORD" string here would trip it.
-func TestGatewayMainPrefersUnprefixedPasswordVars(t *testing.T) {
-	b, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatalf("read cmd/gateway/main.go: %v", err)
-	}
-	src := string(b)
-
-	idx := strings.Index(src, "Passwords: db.RolePasswords{")
-	if idx == -1 {
-		t.Fatal(`cmd/gateway/main.go no longer builds Passwords via a "Passwords: db.RolePasswords{" literal -- this test's anchor moved`)
-	}
-	end := idx + 500
-	if end > len(src) {
-		end = len(src)
-	}
-	window := src[idx:end]
-
-	deprecatedPrefix := strings.ToUpper("invoice_")
-
-	for _, tc := range []struct {
-		field     string
-		newName   string
-		oldSuffix string
-	}{
-		{"Migrator", `"MIGRATOR_PASSWORD"`, "MIGRATOR_PASSWORD"},
-		{"App", `"APP_PASSWORD"`, "APP_PASSWORD"},
-		{"Reader", `"READER_PASSWORD"`, "TENANT_READER_PASSWORD"},
-	} {
-		t.Run(tc.field, func(t *testing.T) {
-			oldName := `"` + deprecatedPrefix + tc.oldSuffix + `"`
-
-			newIdx := strings.Index(window, tc.newName)
-			oldIdx := strings.Index(window, oldName)
-
-			if newIdx == -1 {
-				t.Errorf("%s: preferred var %s is not read anywhere in the RolePasswords literal:\n%s", tc.field, tc.newName, window)
-			}
-			if oldIdx == -1 {
-				t.Errorf("%s: deprecated fallback var %s is not present in the RolePasswords literal:\n%s", tc.field, oldName, window)
-			}
-			if newIdx != -1 && oldIdx != -1 && newIdx > oldIdx {
-				t.Errorf("%s: preferred var %s must be read before deprecated fallback %s (new name wins) -- window:\n%s", tc.field, tc.newName, oldName, window)
-			}
-
-			// The deprecated name must never be the sole, unconditional
-			// os.Getenv(...) argument feeding the field directly -- that would
-			// mean the field is populated straight from the deprecated
-			// variable with no resolution/fallback logic at all.
-			bareOldRead := tc.field + ": os.Getenv(" + oldName + ")"
-			if strings.Contains(window, bareOldRead) {
-				t.Errorf("%s is populated by a bare os.Getenv(%s) with no resolution/fallback to the preferred name -- window:\n%s", tc.field, oldName, window)
-			}
-		})
-	}
-}
-
-// TestGatewayMainWiresEachRoleToItsOwnVarPair: adversarial coverage.
-// TestGatewayMainPrefersUnprefixedPasswordVars above only proves each
-// var-name pair appears somewhere in the RolePasswords window, in order --
-// it can't tell one field's resolveRolePassword call from another's.
-// Mutation-verified: swapping Migrator/App's arguments left that test green
-// while silently misconfiguring both roles' passwords on every boot. This
-// test requires the exact literal call, field name included, per role.
-func TestGatewayMainWiresEachRoleToItsOwnVarPair(t *testing.T) {
-	b, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatalf("read cmd/gateway/main.go: %v", err)
-	}
-	src := string(b)
-
-	// Built by concatenation, not as a literal, for the same self-grep reason
-	// documented on TestGatewayMainPrefersUnprefixedPasswordVars above.
-	deprecatedPrefix := strings.ToUpper("invoice_")
-
-	for _, tc := range []struct {
-		field     string
-		newName   string
-		oldSuffix string
-	}{
-		{"Migrator", "MIGRATOR_PASSWORD", "MIGRATOR_PASSWORD"},
-		{"App", "APP_PASSWORD", "APP_PASSWORD"},
-		{"Reader", "READER_PASSWORD", "TENANT_READER_PASSWORD"},
-	} {
-		t.Run(tc.field, func(t *testing.T) {
-			oldName := deprecatedPrefix + tc.oldSuffix
-			// \s+ (not a literal single space) because gofmt column-aligns
-			// these three struct-literal lines, padding the shorter field
-			// names ("App:", "Reader:") with extra spaces to match
-			// "Migrator:"'s width.
-			pattern := regexp.QuoteMeta(tc.field+":") + `\s*` + regexp.QuoteMeta(`resolveRolePassword("`+tc.newName+`", "`+oldName+`", app.Logger),`)
-			re := regexp.MustCompile(pattern)
-			if !re.MatchString(src) {
-				t.Errorf("cmd/gateway/main.go does not contain the exact wiring %q -- the %s field must resolve from its own (%s, %s) var pair, not a swapped or mismatched one", pattern, tc.field, tc.newName, oldName)
-			}
-		})
-	}
-}
 
 // TestRepoHasNoStrayInvoicePrefixedVars: Test Spec #3 / AC #4. Walks every
 // git-tracked file (git ls-files) and enforces the bounded blast radius:
@@ -191,105 +80,6 @@ func TestRepoHasNoStrayInvoicePrefixedVars(t *testing.T) {
 	}
 	if len(dsnHits) > 0 {
 		t.Errorf("deprecated *DATABASE_URL var referenced, want zero hits repo-wide: %v", dsnHits)
-	}
-}
-
-// TestRolePasswordResolutionPrecedence: Test Spec #4 (table-driven).
-// Exercises resolveRolePassword with synthetic env var names, not the real
-// MIGRATOR_PASSWORD/etc. triples: its logic is generic over whatever two
-// names it's given, so a fixture pair proves resolution/precedence/warning
-// behavior without coupling to production names (and sidesteps the same
-// self-grep concern above, since fixture names contain neither "PASSWORD"
-// nor the deprecated prefix). TestGatewayMainPrefersUnprefixedPasswordVars
-// proves main.go calls this with the three real pairs, in order.
-//
-// Case 3 (both set) still warns even though the deprecated value goes
-// unused -- an operator should still know to clean up the stale var.
-func TestRolePasswordResolutionPrecedence(t *testing.T) {
-	const (
-		newVar = "GATEWAY_TEST_ROLE_PW_NEW"
-		oldVar = "GATEWAY_TEST_ROLE_PW_OLD"
-	)
-
-	cases := []struct {
-		name      string
-		newVal    string
-		oldVal    string
-		wantValue string
-		wantWarn  bool
-	}{
-		{
-			name:      "new set, old unset",
-			newVal:    "new-secret",
-			oldVal:    "",
-			wantValue: "new-secret",
-			wantWarn:  false,
-		},
-		{
-			name:      "new unset, old set",
-			newVal:    "",
-			oldVal:    "old-secret",
-			wantValue: "old-secret",
-			wantWarn:  true,
-		},
-		{
-			name:      "both set: new wins, old ignored but still flagged for cleanup",
-			newVal:    "new-secret",
-			oldVal:    "old-secret",
-			wantValue: "new-secret",
-			wantWarn:  true,
-		},
-		{
-			name:      "neither set: empty, no warning (fail-fast is validateRolePasswords' job, not this function's)",
-			newVal:    "",
-			oldVal:    "",
-			wantValue: "",
-			wantWarn:  false,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv(newVar, tc.newVal)
-			t.Setenv(oldVar, tc.oldVal)
-
-			var buf bytes.Buffer
-			logger := slog.New(slog.NewJSONHandler(&buf, nil))
-
-			got := resolveRolePassword(newVar, oldVar, logger)
-			if got != tc.wantValue {
-				t.Errorf("resolveRolePassword(%q, %q, ...) = %q, want %q", newVar, oldVar, got, tc.wantValue)
-			}
-
-			logged := buf.String()
-			if !tc.wantWarn {
-				if logged != "" {
-					t.Errorf("expected no warning logged, got: %s", logged)
-				}
-				return
-			}
-
-			if logged == "" {
-				t.Fatalf("expected a deprecation warning to be logged naming %s and %s, got none", oldVar, newVar)
-			}
-			var entry map[string]any
-			if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
-				t.Fatalf("log line is not valid JSON: %v\nraw: %s", err, logged)
-			}
-			if level, _ := entry["level"].(string); level != "WARN" {
-				t.Errorf("log level = %q, want WARN", level)
-			}
-			msg, _ := entry["msg"].(string)
-			if !strings.Contains(msg, oldVar) {
-				t.Errorf("warning message %q does not name the deprecated variable %s", msg, oldVar)
-			}
-			if !strings.Contains(msg, newVar) {
-				t.Errorf("warning message %q does not name the replacement variable %s", msg, newVar)
-			}
-			if !strings.Contains(strings.ToLower(msg), "deprecated") {
-				t.Errorf("warning message %q does not say the variable is deprecated, so an operator reading Railway logs would not know it needs cleanup", msg)
-			}
-		})
 	}
 }
 
@@ -533,89 +323,6 @@ func TestGatewayMainFatalsOnAnUpstreamError(t *testing.T) {
 	}
 }
 
-// TestGatewayMainPassesAuthAdminPassword accepts either wiring the plan allows:
-// resolveRolePassword("AUTH_ADMIN_PASSWORD", "", app.Logger) or os.Getenv("AUTH_ADMIN_PASSWORD").
-func TestGatewayMainPassesAuthAdminPassword(t *testing.T) {
-	const path = "main.go"
-	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
-	}
-
-	var lits []*ast.CompositeLit
-	ast.Inspect(f, func(n ast.Node) bool {
-		cl, ok := n.(*ast.CompositeLit)
-		if !ok {
-			return true
-		}
-		if sel, ok := cl.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "RolePasswords" {
-			if x, ok := sel.X.(*ast.Ident); ok && x.Name == "db" {
-				lits = append(lits, cl)
-			}
-		}
-		return true
-	})
-	if len(lits) != 1 {
-		t.Fatalf("%s: found %d db.RolePasswords literal(s), want exactly 1", path, len(lits))
-	}
-
-	fields := map[string]ast.Expr{}
-	for _, e := range lits[0].Elts {
-		if kv, ok := e.(*ast.KeyValueExpr); ok {
-			if id, ok := kv.Key.(*ast.Ident); ok {
-				fields[id.Name] = kv.Value
-			}
-		}
-	}
-	if _, ok := fields["Reader"]; !ok {
-		t.Fatalf("%s: the db.RolePasswords literal has no Reader field -- this scan found the wrong literal", path)
-	}
-	val, ok := fields["AuthAdmin"]
-	if !ok {
-		t.Fatalf("%s: the db.RolePasswords literal has no AuthAdmin field", path)
-	}
-
-	call, ok := val.(*ast.CallExpr)
-	if !ok {
-		t.Fatalf("%s: AuthAdmin is %T, want a call reading AUTH_ADMIN_PASSWORD", path, val)
-	}
-	strArg := func(i int) (string, bool) {
-		if i >= len(call.Args) {
-			return "", false
-		}
-		lit, ok := call.Args[i].(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			return "", false
-		}
-		s, err := strconv.Unquote(lit.Value)
-		return s, err == nil
-	}
-
-	switch fn := call.Fun.(type) {
-	case *ast.Ident:
-		if fn.Name != "resolveRolePassword" {
-			t.Fatalf("%s: AuthAdmin calls %s, want resolveRolePassword or os.Getenv", path, fn.Name)
-		}
-		if name, ok := strArg(0); !ok || name != "AUTH_ADMIN_PASSWORD" {
-			t.Errorf("%s: AuthAdmin's resolveRolePassword first argument = %q, want \"AUTH_ADMIN_PASSWORD\"", path, name)
-		}
-		// No deprecated name exists for this variable.
-		if old, ok := strArg(1); !ok || old != "" {
-			t.Errorf("%s: AuthAdmin's resolveRolePassword fallback = %q, want \"\"", path, old)
-		}
-	case *ast.SelectorExpr:
-		pkg, ok := fn.X.(*ast.Ident)
-		if !ok || pkg.Name != "os" || fn.Sel.Name != "Getenv" {
-			t.Fatalf("%s: AuthAdmin calls a selector other than os.Getenv", path)
-		}
-		if name, ok := strArg(0); !ok || name != "AUTH_ADMIN_PASSWORD" {
-			t.Errorf("%s: AuthAdmin reads os.Getenv(%q), want \"AUTH_ADMIN_PASSWORD\"", path, name)
-		}
-	default:
-		t.Fatalf("%s: AuthAdmin calls %T, want resolveRolePassword or os.Getenv", path, call.Fun)
-	}
-}
-
 // TestLoadUpstreamsRequiresAuthURL: `auth` is probed, never routed, and a gateway
 // that cannot see it must not boot.
 func TestLoadUpstreamsRequiresAuthURL(t *testing.T) {
@@ -645,32 +352,32 @@ func TestLoadUpstreamsRequiresAuthURL(t *testing.T) {
 	}
 }
 
-// TestLoadUpstreamsRequiresReconciliationURL: `reconciliation` is probed, never routed,
+// TestLoadUpstreamsRequiresWorkerURL: `worker` is probed, never routed,
 // so the deploy gate sees it running; a gateway that cannot see it must not boot.
-func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
-	if !slices.Contains(probedServices, "reconciliation") {
-		t.Errorf("probedServices = %v, want it to carry `reconciliation`", probedServices)
+func TestLoadUpstreamsRequiresWorkerURL(t *testing.T) {
+	if !slices.Contains(probedServices, "worker") {
+		t.Errorf("probedServices = %v, want it to carry `worker`", probedServices)
 	}
 
 	setUpstreamEnv(t, "http://127.0.0.1:1")
-	t.Setenv("RECONCILIATION_URL", "")
+	t.Setenv("WORKER_URL", "")
 	_, _, err := loadUpstreams()
 	if err == nil {
-		t.Error("loadUpstreams succeeded with RECONCILIATION_URL unset, want a named boot failure")
-	} else if !strings.Contains(err.Error(), "RECONCILIATION_URL") {
-		t.Errorf("error %q does not name RECONCILIATION_URL", err)
+		t.Error("loadUpstreams succeeded with WORKER_URL unset, want a named boot failure")
+	} else if !strings.Contains(err.Error(), "WORKER_URL") {
+		t.Errorf("error %q does not name WORKER_URL", err)
 	}
 
-	t.Setenv("RECONCILIATION_URL", "http://127.0.0.1:2")
+	t.Setenv("WORKER_URL", "http://127.0.0.1:2")
 	routed, probed, err := loadUpstreams()
 	if err != nil {
-		t.Fatalf("loadUpstreams with RECONCILIATION_URL set: %v", err)
+		t.Fatalf("loadUpstreams with WORKER_URL set: %v", err)
 	}
-	if u, ok := probed["reconciliation"]; !ok || u.String() != "http://127.0.0.1:2" {
-		t.Errorf("probed[reconciliation] = %v (present %v), want http://127.0.0.1:2", u, ok)
+	if u, ok := probed["worker"]; !ok || u.String() != "http://127.0.0.1:2" {
+		t.Errorf("probed[worker] = %v (present %v), want http://127.0.0.1:2", u, ok)
 	}
-	if _, ok := routed["reconciliation"]; ok {
-		t.Error("reconciliation is in the routed map -- it would get a public /api/reconciliation/* proxy route")
+	if _, ok := routed["worker"]; ok {
+		t.Error("worker is in the routed map -- it would get a public /api/worker/* proxy route")
 	}
 
 	t.Run("rollup_names_it", func(t *testing.T) {
@@ -679,11 +386,11 @@ func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
 		if !seen["gateway"] {
 			t.Fatalf("control: /healthz/fleet omits the gateway itself; names = %v", seen)
 		}
-		if !seen["reconciliation"] {
-			t.Errorf("/healthz/fleet omits \"reconciliation\"; names = %v", seen)
+		if !seen["worker"] {
+			t.Errorf("/healthz/fleet omits \"worker\"; names = %v", seen)
 		}
-		if got := get("/api/reconciliation/x"); got != http.StatusNotFound {
-			t.Errorf("GET /api/reconciliation/x = %d, want 404 -- a probed service is exposed as a public proxy route", got)
+		if got := get("/api/worker/x"); got != http.StatusNotFound {
+			t.Errorf("GET /api/worker/x = %d, want 404 -- a probed service is exposed as a public proxy route", got)
 		}
 		// Control: a 404 proves nothing if the mux routes no service at all.
 		if got := get("/api/tenancy/x"); got != http.StatusBadGateway {
@@ -691,7 +398,7 @@ func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
 		}
 	})
 
-	// A down reconciliation must degrade the roll-up, never be skipped or tolerated.
+	// A down worker must degrade the roll-up, never be skipped or tolerated.
 	t.Run("down_degrades_rollup", func(t *testing.T) {
 		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(`{"status":"ok"}`))
@@ -709,7 +416,7 @@ func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
 		t.Cleanup(recon.Close)
 
 		setUpstreamEnv(t, up.URL)
-		t.Setenv("RECONCILIATION_URL", recon.URL)
+		t.Setenv("WORKER_URL", recon.URL)
 		routed, probed, err := loadUpstreams()
 		if err != nil {
 			t.Fatalf("loadUpstreams: %v", err)
@@ -734,29 +441,29 @@ func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
 			return rec.Code, body.Status, st
 		}
 
-		// Positive control: every backend up, reconciliation probed at its platform /healthz.
+		// Positive control: every backend up, worker probed at its platform /healthz.
 		code, status, st := rollup()
-		if code != http.StatusOK || status != "ok" || st["reconciliation"] != "up" {
-			t.Fatalf("all up: code=%d status=%q reconciliation=%q, want 200 ok up; services=%v", code, status, st["reconciliation"], st)
+		if code != http.StatusOK || status != "ok" || st["worker"] != "up" {
+			t.Fatalf("all up: code=%d status=%q worker=%q, want 200 ok up; services=%v", code, status, st["worker"], st)
 		}
 		mu.Lock()
 		paths := slices.Clone(reconPaths)
 		reconCode = http.StatusServiceUnavailable
 		mu.Unlock()
 		if !slices.Equal(paths, []string{"/healthz", "/readyz"}) {
-			t.Errorf("reconciliation probed at %v, want exactly [/healthz /readyz]", paths)
+			t.Errorf("worker probed at %v, want exactly [/healthz /readyz]", paths)
 		}
 
 		code, status, st = rollup()
 		if code != http.StatusServiceUnavailable || status != "degraded" {
-			t.Errorf("reconciliation down: code=%d status=%q, want 503 degraded", code, status)
+			t.Errorf("worker down: code=%d status=%q, want 503 degraded", code, status)
 		}
-		if st["reconciliation"] != "down" {
-			t.Errorf("reconciliation = %q, want down; services=%v", st["reconciliation"], st)
+		if st["worker"] != "down" {
+			t.Errorf("worker = %q, want down; services=%v", st["worker"], st)
 		}
 		for name, s := range st {
-			if name != "reconciliation" && s != "up" {
-				t.Errorf("%s = %q, want up -- only reconciliation is down", name, s)
+			if name != "worker" && s != "up" {
+				t.Errorf("%s = %q, want up -- only the worker is down", name, s)
 			}
 		}
 	})
@@ -941,41 +648,13 @@ func TestGatewayAuthIssuersCountsPrimaryPlusAdditional(t *testing.T) {
 	}
 }
 
-// A malformed AUTH_ADDITIONAL_ISSUERS must stop boot before Provision bootstraps, resets or seeds.
-func TestGatewayMainParsesIssuersBeforeProvision(t *testing.T) {
-	_, body := parseMain(t)
-
-	parseAt, provisionAt := -1, -1
-	for i, st := range body.List {
-		ast.Inspect(st, func(n ast.Node) bool {
-			e, ok := n.(ast.Expr)
-			if !ok {
-				return true
-			}
-			if _, ok := isCallTo(e, "", "mustParseIssuers"); ok && parseAt < 0 {
-				parseAt = i
-			}
-			if _, ok := isCallTo(e, "db", "Provision"); ok && provisionAt < 0 {
-				provisionAt = i
-			}
-			return true
-		})
-	}
-	if parseAt < 0 || provisionAt < 0 {
-		t.Fatalf("main calls mustParseIssuers at statement %d and db.Provision at %d, want both", parseAt, provisionAt)
-	}
-	if parseAt >= provisionAt {
-		t.Errorf("mustParseIssuers runs at statement %d, want it before db.Provision (%d)", parseAt, provisionAt)
-	}
-}
-
-// A gateway that boots without its token signs nothing; the read must stop boot before Provision.
-func TestGatewayMainReadsGatewayTokenBeforeProvision(t *testing.T) {
+// A gateway that boots without its token signs nothing; it reads the token once and signs with it.
+func TestGatewayMainReadsGatewayTokenOnce(t *testing.T) {
 	f, body := parseMain(t)
 
-	readAt, provisionAt, reads := -1, -1, 0
+	reads := 0
 	tokenVar := ""
-	for i, st := range body.List {
+	for _, st := range body.List {
 		ast.Inspect(st, func(n ast.Node) bool {
 			e, ok := n.(ast.Expr)
 			if !ok {
@@ -983,12 +662,6 @@ func TestGatewayMainReadsGatewayTokenBeforeProvision(t *testing.T) {
 			}
 			if c, ok := isCallTo(e, "", "mustEnv"); ok && len(c.Args) == 1 && isStringLit(c.Args[0], "GATEWAY_TOKEN") {
 				reads++
-				if readAt < 0 {
-					readAt = i
-				}
-			}
-			if _, ok := isCallTo(e, "db", "Provision"); ok && provisionAt < 0 {
-				provisionAt = i
 			}
 			return true
 		})
@@ -1002,12 +675,6 @@ func TestGatewayMainReadsGatewayTokenBeforeProvision(t *testing.T) {
 	}
 	if reads != 1 {
 		t.Fatalf("main reads mustEnv(\"GATEWAY_TOKEN\") %d time(s), want once", reads)
-	}
-	if provisionAt < 0 {
-		t.Fatal("main has no db.Provision call -- the ordering check has no anchor")
-	}
-	if readAt >= provisionAt {
-		t.Errorf("GATEWAY_TOKEN is read at statement %d, want it before db.Provision (%d)", readAt, provisionAt)
 	}
 	if tokenVar == "" {
 		t.Fatal("main does not assign mustEnv(\"GATEWAY_TOKEN\") to a variable")
@@ -1302,12 +969,9 @@ func invitationRegistrationsStub(address string) (gateway.InvitationRegistration
 		}
 }
 
-// AUTH_URL, AUTH_SITE_URL or the register throttle missing: invitee registration refuses, and the preview still answers.
+// AUTH_URL or AUTH_SITE_URL missing: invitee registration refuses, and the preview still answers.
 func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
-	perIP := func() *gateway.SignInThrottle {
-		return gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
-	}
 	const registerBody = `{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T","password":"Corr3ct-Horse"}`
 
 	// Control: configured, the same call signs the invited address up, so the 503s below are the unset input.
@@ -1315,7 +979,7 @@ func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 		authURL, calls := fakeAuth(t)
 		preview, _ := invitationPreviewerStub("tunde@obi.test")
 		regs, registered := invitationRegistrationsStub("tunde@obi.test")
-		_, register := invitationHandlers(authURL, site, 0, perIP(), preview, regs, slog.New(slog.DiscardHandler))
+		_, register := invitationHandlers(authURL, site, 0, preview, regs, slog.New(slog.DiscardHandler))
 
 		rec := serveRegistration(register, http.MethodPost, "/auth/invitation/register", registerBody)
 
@@ -1327,20 +991,17 @@ func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 		}
 	})
 
-	for _, unset := range []string{"AUTH_URL", "AUTH_SITE_URL", "register throttle"} {
+	for _, unset := range []string{"AUTH_URL", "AUTH_SITE_URL"} {
 		t.Run(unset, func(t *testing.T) {
 			authURL, calls := fakeAuth(t)
 			preview, previewed := invitationPreviewerStub("tunde@obi.test")
 			regs, registered := invitationRegistrationsStub("tunde@obi.test")
 			log := slog.New(slog.DiscardHandler)
 			var invitation, register http.Handler
-			switch unset {
-			case "AUTH_URL":
-				invitation, register = invitationHandlers(nil, site, 0, perIP(), preview, regs, log)
-			case "AUTH_SITE_URL":
-				invitation, register = invitationHandlers(authURL, nil, 0, perIP(), preview, regs, log)
-			default:
-				invitation, register = invitationHandlers(authURL, site, 0, nil, preview, regs, log)
+			if unset == "AUTH_URL" {
+				invitation, register = invitationHandlers(nil, site, 0, preview, regs, log)
+			} else {
+				invitation, register = invitationHandlers(authURL, nil, 0, preview, regs, log)
 			}
 
 			rec := serveRegistration(register, http.MethodPost, "/auth/invitation/register", registerBody)
@@ -1386,12 +1047,12 @@ func unconfirmedPreviewer(address string) (gateway.InvitationPreviewer, func() i
 
 const resendToken = "Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T"
 
-// AUTH_URL, AUTH_SITE_URL or either resend throttle missing: the token resend route refuses and reaches neither tenancy nor GoTrue.
+// AUTH_URL, AUTH_SITE_URL or the resend throttle missing: the token resend route refuses and reaches neither tenancy nor GoTrue.
 func TestInvitationResendHandler_NotConfigured503(t *testing.T) {
 	t.Setenv("DEPLOY_ENV", "")
 	site, _ := url.Parse("https://site.example")
-	throttle := func(name string) *gateway.SignInThrottle {
-		return gateway.NewSignInThrottle(name, gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
+	throttle := func() *gateway.SignInThrottle {
+		return gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	}
 	const body = `{"token":"` + resendToken + `"}`
 
@@ -1399,7 +1060,7 @@ func TestInvitationResendHandler_NotConfigured503(t *testing.T) {
 	t.Run("configured", func(t *testing.T) {
 		authURL, calls := fakeAuth(t)
 		preview, previewed := unconfirmedPreviewer("tunde@obi.test")
-		h := invitationResendHandler(authURL, site, throttle("resend-address"), throttle("resend-ip"), preview, slog.New(slog.DiscardHandler))
+		h := invitationResendHandler(authURL, site, throttle(), preview, slog.New(slog.DiscardHandler))
 
 		rec := serveRegistration(h, http.MethodPost, "/auth/invitation/resend", body)
 
@@ -1411,22 +1072,19 @@ func TestInvitationResendHandler_NotConfigured503(t *testing.T) {
 		}
 	})
 
-	for _, unset := range []string{"AUTH_URL", "AUTH_SITE_URL", "address throttle", "ip throttle"} {
+	for _, unset := range []string{"AUTH_URL", "AUTH_SITE_URL", "address throttle"} {
 		t.Run(unset, func(t *testing.T) {
 			authURL, calls := fakeAuth(t)
 			preview, previewed := unconfirmedPreviewer("tunde@obi.test")
 			log := slog.New(slog.DiscardHandler)
-			perAddress, perIP := throttle("resend-address"), throttle("resend-ip")
 			var h http.Handler
 			switch unset {
 			case "AUTH_URL":
-				h = invitationResendHandler(nil, site, perAddress, perIP, preview, log)
+				h = invitationResendHandler(nil, site, throttle(), preview, log)
 			case "AUTH_SITE_URL":
-				h = invitationResendHandler(authURL, nil, perAddress, perIP, preview, log)
-			case "address throttle":
-				h = invitationResendHandler(authURL, site, nil, perIP, preview, log)
+				h = invitationResendHandler(authURL, nil, throttle(), preview, log)
 			default:
-				h = invitationResendHandler(authURL, site, perAddress, nil, preview, log)
+				h = invitationResendHandler(authURL, site, nil, preview, log)
 			}
 
 			rec := serveRegistration(h, http.MethodPost, "/auth/invitation/resend", body)
@@ -1445,27 +1103,25 @@ func TestInvitationResendHandler_NotConfigured503(t *testing.T) {
 	}
 }
 
-// The budgets the token resend route spends are the ones ResendVerification spends, and they exist only when GoTrue and the site URL are set.
+// The budget the token resend route spends is the one ResendVerification spends, and it exists only when GoTrue and the site URL are set.
 func TestRegistrationHandlers_ResendBudgetsAreSharedWithTheInviteResend(t *testing.T) {
 	t.Setenv("DEPLOY_ENV", "")
-	const remote = "203.0.113.7:4000"
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	log := slog.New(slog.DiscardHandler)
 
 	reg := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite)
-	if reg.ResendByAddress == nil || reg.ResendByIP == nil {
-		t.Fatal("ResendByAddress or ResendByIP is nil with AUTH_URL and AUTH_SITE_URL configured")
+	if reg.ResendByAddress == nil {
+		t.Fatal("ResendByAddress is nil with AUTH_URL and AUTH_SITE_URL configured")
 	}
 	for range gateway.ResendPerAddress {
-		if rec := resendFrom(reg.ResendVerification, "tunde@obi.test", remote); rec.Code != http.StatusAccepted {
+		if rec := resendFrom(reg.ResendVerification, "tunde@obi.test"); rec.Code != http.StatusAccepted {
 			t.Fatalf("anonymous resend = %d, want 202: %s", rec.Code, rec.Body.String())
 		}
 	}
 	preview, _ := unconfirmedPreviewer("tunde@obi.test")
-	h := invitationResendHandler(authURL, site, reg.ResendByAddress, reg.ResendByIP, preview, log)
+	h := invitationResendHandler(authURL, site, reg.ResendByAddress, preview, log)
 	req := httptest.NewRequest(http.MethodPost, "/auth/invitation/resend", strings.NewReader(`{"token":"`+resendToken+`"}`))
-	req.RemoteAddr = remote
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTooManyRequests {
@@ -1475,20 +1131,17 @@ func TestRegistrationHandlers_ResendBudgetsAreSharedWithTheInviteResend(t *testi
 		t.Errorf("GoTrue /resend calls = %d, want %d: the invite route was not refused by the shared budget", got, gateway.ResendPerAddress)
 	}
 
-	if got := registrationHandlers(nil, site, 0, log, nil, noPendingInvite); got.ResendByAddress != nil || got.ResendByIP != nil {
-		t.Error("a resend throttle is non-nil with AUTH_URL unset")
+	if got := registrationHandlers(nil, site, 0, log, nil, noPendingInvite); got.ResendByAddress != nil {
+		t.Error("the resend throttle is non-nil with AUTH_URL unset")
 	}
-	if got := registrationHandlers(authURL, nil, 0, log, nil, noPendingInvite); got.ResendByAddress != nil || got.ResendByIP != nil {
-		t.Error("a resend throttle is non-nil with AUTH_SITE_URL unset")
+	if got := registrationHandlers(authURL, nil, 0, log, nil, noPendingInvite); got.ResendByAddress != nil {
+		t.Error("the resend throttle is non-nil with AUTH_SITE_URL unset")
 	}
 }
 
 // A claim without a release would strand the invitee, so a missing half refuses before any claim.
 func TestInvitationHandlers_NilRegistrationsIsNotConfigured(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
-	perIP := func() *gateway.SignInThrottle {
-		return gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
-	}
 	const registerBody = `{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T"}`
 	preview, previewed := invitationPreviewerStub("tunde@obi.test")
 
@@ -1507,7 +1160,7 @@ func TestInvitationHandlers_NilRegistrationsIsNotConfigured(t *testing.T) {
 			authURL, calls := fakeAuth(t)
 			regs, registered := invitationRegistrationsStub("tunde@obi.test")
 			c.strip(&regs)
-			invitation, register := invitationHandlers(authURL, site, 0, perIP(), preview, regs, slog.New(slog.DiscardHandler))
+			invitation, register := invitationHandlers(authURL, site, 0, preview, regs, slog.New(slog.DiscardHandler))
 
 			rec := serveRegistration(register, http.MethodPost, "/auth/invitation/register", registerBody)
 
@@ -1536,18 +1189,17 @@ func TestInvitationHandlers_NilRegistrationsIsNotConfigured(t *testing.T) {
 	}
 }
 
-// Invitee registration enforces its per-client limit exactly where /auth/register does: not on a PR preview.
-func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
+// The token resend route enforces its address budget off a PR preview only.
+func TestInvitationResendHandler_EnforcementFollowsThePosture(t *testing.T) {
 	for _, c := range []struct {
 		name, env  string
-		wantCalls  int
 		wantResend int
 	}{
-		{"pr-7", "pr-7", 11, 11},
-		{"production", "production", gateway.RegisterPerIP, gateway.ResendPerAddress},
-		{"development", "development", gateway.RegisterPerIP, gateway.ResendPerAddress},
-		{"empty", "", gateway.RegisterPerIP, gateway.ResendPerAddress},
-		{"upper-case PR-7", "PR-7", gateway.RegisterPerIP, gateway.ResendPerAddress},
+		{"pr-7", "pr-7", 11},
+		{"production", "production", gateway.ResendPerAddress},
+		{"development", "development", gateway.ResendPerAddress},
+		{"empty", "", gateway.ResendPerAddress},
+		{"upper-case PR-7", "PR-7", gateway.ResendPerAddress},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv("DEPLOY_ENV", c.env)
@@ -1555,30 +1207,11 @@ func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
 			site, _ := url.Parse("https://site.example")
 			log := slog.New(slog.DiscardHandler)
 			reg := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite)
-			preview, _ := invitationPreviewerStub("tunde@obi.test")
-			regs, _ := invitationRegistrationsStub("tunde@obi.test")
-			_, register := invitationHandlers(authURL, site, 0, reg.RegisterPerIP, preview, regs, log)
-
-			for range 11 {
-				req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(`{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T","password":"Corr3ct-Horse"}`))
-				req.RemoteAddr = "203.0.113.7:4000"
-				rec := httptest.NewRecorder()
-				register.ServeHTTP(rec, req)
-				if rec.Code != http.StatusAccepted {
-					t.Fatalf("invitee register = %d, want 202: %s", rec.Code, rec.Body.String())
-				}
-			}
-			if got := countCalls(calls(), "POST /signup"); got != c.wantCalls {
-				t.Errorf("GoTrue /signup calls = %d, want %d", got, c.wantCalls)
-			}
-
-			// The token resend route follows the same posture: its address budget refuses off a PR preview only.
-			resend := invitationResendHandler(authURL, site, reg.ResendByAddress, reg.ResendByIP, func(context.Context, string) (gateway.InvitationPreview, error) {
+			resend := invitationResendHandler(authURL, site, reg.ResendByAddress, func(context.Context, string) (gateway.InvitationPreview, error) {
 				return gateway.InvitationPreview{Email: "tunde@obi.test", Account: "unconfirmed"}, nil
 			}, log)
 			for range 11 {
 				req := httptest.NewRequest(http.MethodPost, "/auth/invitation/resend", strings.NewReader(`{"token":"`+resendToken+`"}`))
-				req.RemoteAddr = "203.0.113.7:4000"
 				resend.ServeHTTP(httptest.NewRecorder(), req)
 			}
 			if got := countCalls(calls(), "POST /resend"); got != c.wantResend {
@@ -1588,50 +1221,9 @@ func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
 	}
 }
 
-// The throttle invitee registration shares is the one /auth/register spends.
-func TestRegistrationHandlers_ExposesTheRegisterThrottle(t *testing.T) {
-	const remote = "203.0.113.7:4000"
-	authURL, _ := fakeAuth(t)
-	site, _ := url.Parse("https://site.example")
-	log := slog.New(slog.DiscardHandler)
-
-	reg := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite)
-	if reg.RegisterPerIP == nil {
-		t.Fatal("RegisterPerIP is nil with AUTH_URL and AUTH_SITE_URL configured")
-	}
-	if !reg.RegisterPerIP.Reserve("198.51.100.1") {
-		t.Fatal("a fresh throttle refused its first reservation")
-	}
-	for _, email := range distinctAddresses(gateway.RegisterPerIP) {
-		if rec := registerFrom(reg.Register, email, remote); rec.Code != http.StatusAccepted {
-			t.Fatalf("register = %d, want 202: %s", rec.Code, rec.Body.String())
-		}
-	}
-	if reg.RegisterPerIP.Reserve("203.0.113.7") {
-		t.Errorf("RegisterPerIP still has budget for a client that spent all %d register attempts: it is not the throttle Register uses", gateway.RegisterPerIP)
-	}
-
-	if got := registrationHandlers(nil, site, 0, log, nil, noPendingInvite).RegisterPerIP; got != nil {
-		t.Error("RegisterPerIP is non-nil with AUTH_URL unset")
-	}
-	if got := registrationHandlers(authURL, nil, 0, log, nil, noPendingInvite).RegisterPerIP; got != nil {
-		t.Error("RegisterPerIP is non-nil with AUTH_SITE_URL unset")
-	}
-}
-
-// resendFrom posts one resend for email as the client behind remote.
-func resendFrom(h http.Handler, email, remote string) *httptest.ResponseRecorder {
+// resendFrom posts one resend for email.
+func resendFrom(h http.Handler, email string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/auth/resend-verification", strings.NewReader(`{"email":"`+email+`"}`))
-	req.RemoteAddr = remote
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	return rec
-}
-
-// registerFrom posts one register for email as the client behind remote.
-func registerFrom(h http.Handler, email, remote string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(`{"email":"`+email+`","password":"Corr3ct-Horse"}`))
-	req.RemoteAddr = remote
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -1648,10 +1240,9 @@ func countCalls(calls []string, want string) int {
 	return n
 }
 
-// resetFrom posts one reset request for email as the client behind remote.
-func resetFrom(h http.Handler, email, remote string) *httptest.ResponseRecorder {
+// resetFrom posts one reset request for email.
+func resetFrom(h http.Handler, email string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/auth/request-password-reset", strings.NewReader(`{"email":"`+email+`"}`))
-	req.RemoteAddr = remote
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -1690,9 +1281,8 @@ func TestResetPasswordHandler_NotConfigured503(t *testing.T) {
 	}
 }
 
-// Resend and reset spend one budget: 3 per address and 10 per client (D4). Separate throttles would double both.
+// Resend and reset spend one budget: 3 per address (D4). Separate throttles would double it.
 func TestRegistrationHandlers_ResetSharesTheResendLimits(t *testing.T) {
-	const remote = "203.0.113.7:4000"
 	mailCalls := func(calls []string) int {
 		return countCalls(calls, "POST /resend") + countCalls(calls, "POST /recover")
 	}
@@ -1702,26 +1292,11 @@ func TestRegistrationHandlers_ResetSharesTheResendLimits(t *testing.T) {
 		site, _ := url.Parse("https://site.example")
 		reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 		for range 2 {
-			resendFrom(reg.ResendVerification, "ada@corp.example", remote)
-			resetFrom(reg.RequestPasswordReset, "ada@corp.example", remote)
+			resendFrom(reg.ResendVerification, "ada@corp.example")
+			resetFrom(reg.RequestPasswordReset, "ada@corp.example")
 		}
 		if got := mailCalls(calls()); got != 3 {
 			t.Errorf("GoTrue /resend + /recover calls for one address = %d, want 3", got)
-		}
-	})
-	t.Run("per client", func(t *testing.T) {
-		authURL, calls := fakeAuth(t)
-		site, _ := url.Parse("https://site.example")
-		reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
-		for i, email := range distinctAddresses(11) {
-			if i%2 == 0 {
-				resendFrom(reg.ResendVerification, email, remote)
-			} else {
-				resetFrom(reg.RequestPasswordReset, email, remote)
-			}
-		}
-		if got := mailCalls(calls()); got != 10 {
-			t.Errorf("GoTrue /resend + /recover calls from one client = %d, want 10", got)
 		}
 	})
 }
@@ -1741,7 +1316,7 @@ func TestRegistrationHandlers_ResetPreviewOnlyLogsPerAddress(t *testing.T) {
 			reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil, noPendingInvite)
 
 			for range 4 {
-				resetFrom(reg.RequestPasswordReset, "ada@corp.example", "203.0.113.7:4000")
+				resetFrom(reg.RequestPasswordReset, "ada@corp.example")
 			}
 			if got := countCalls(calls(), "POST /recover"); got != c.wantCalls {
 				t.Errorf("GoTrue /recover calls = %d, want %d", got, c.wantCalls)
@@ -1765,7 +1340,6 @@ func TestRegistrationHandlers_ResetPreviewOnlyLogsPerAddress(t *testing.T) {
 }
 
 func TestRegistrationHandlers_ResendWaitsAndLimits(t *testing.T) {
-	const remote = "203.0.113.7:4000"
 	for _, c := range []struct {
 		name      string
 		floor     time.Duration
@@ -1775,7 +1349,6 @@ func TestRegistrationHandlers_ResendWaitsAndLimits(t *testing.T) {
 		{"waits", 300 * time.Millisecond, []string{"ada@corp.example"}, 1},
 		{"three", 0, []string{"ada@corp.example", "ada@corp.example", "ada@corp.example"}, 3},
 		{"four", 0, []string{"ada@corp.example", "ada@corp.example", "ada@corp.example", "ada@corp.example"}, 3},
-		{"per key", 0, distinctAddresses(11), 10},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			authURL, calls := fakeAuth(t)
@@ -1784,7 +1357,7 @@ func TestRegistrationHandlers_ResendWaitsAndLimits(t *testing.T) {
 
 			start := time.Now()
 			for _, email := range c.addresses {
-				rec := resendFrom(reg.ResendVerification, email, remote)
+				rec := resendFrom(reg.ResendVerification, email)
 				if rec.Code != http.StatusAccepted {
 					t.Errorf("resend = %d, want 202 whether or not it was sent: %s", rec.Code, rec.Body.String())
 				}
@@ -1807,38 +1380,13 @@ func distinctAddresses(n int) []string {
 	return out
 }
 
-// Register's per-key bucket is its own: not removed, not shared with resend, not resend's per-address one.
-func TestRegistrationHandlers_RegisterHasItsOwnLimit(t *testing.T) {
-	const remote = "203.0.113.7:4000"
-	authURL, calls := fakeAuth(t)
-	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
-
-	for _, email := range distinctAddresses(11) {
-		if rec := registerFrom(reg.Register, email, remote); rec.Code != http.StatusAccepted {
-			t.Errorf("register = %d, want 202 over the limit too: %s", rec.Code, rec.Body.String())
-		}
-	}
-	if got := countCalls(calls(), "POST /signup"); got != 10 {
-		t.Errorf("GoTrue /signup calls = %d, want 10", got)
-	}
-
-	if rec := resendFrom(reg.ResendVerification, "ada@corp.example", remote); rec.Code != http.StatusAccepted {
-		t.Errorf("resend = %d, want 202: %s", rec.Code, rec.Body.String())
-	}
-	if got := countCalls(calls(), "POST /resend"); got != 1 {
-		t.Errorf("GoTrue /resend calls after a spent register bucket = %d, want 1", got)
-	}
-}
-
-// A PR fork counts and logs each limited route's limits but does not refuse; every other posture refuses the eleventh.
+// A PR fork counts and logs each limited route's per-address limit but does not refuse; every other posture refuses the fourth.
 func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 	routes := []struct {
 		name, path, limitMsg string
-		send                 func(h http.Handler, email, remote string) *httptest.ResponseRecorder
+		send                 func(h http.Handler, email string) *httptest.ResponseRecorder
 		handler              func(reg registration) http.Handler
 	}{
-		{"register", "POST /signup", "registration: limit reached", registerFrom, func(r registration) http.Handler { return r.Register }},
 		{"resend", "POST /resend", "resend-verification: limit reached", resendFrom, func(r registration) http.Handler { return r.ResendVerification }},
 		{"reset", "POST /recover", "reset-request: limit reached", resetFrom, func(r registration) http.Handler { return r.RequestPasswordReset }},
 	}
@@ -1847,14 +1395,14 @@ func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 		wantCalls    int
 		wantEnforced bool
 	}{
-		{"pr-7", "pr-7", 11, false},
-		{"production", "production", 10, true},
-		{"development", "development", 10, true},
-		{"empty", "", 10, true},
-		{"bare pr-", "pr-", 10, true},
-		{"lookalike prod-7", "prod-7", 10, true},
-		{"upper-case PR-7", "PR-7", 10, true},
-		{"trailing text pr-7x", "pr-7x", 10, true},
+		{"pr-7", "pr-7", 4, false},
+		{"production", "production", 3, true},
+		{"development", "development", 3, true},
+		{"empty", "", 3, true},
+		{"bare pr-", "pr-", 3, true},
+		{"lookalike prod-7", "prod-7", 3, true},
+		{"upper-case PR-7", "PR-7", 3, true},
+		{"trailing text pr-7x", "pr-7x", 3, true},
 	} {
 		for _, rt := range routes {
 			t.Run(c.name+"/"+rt.name, func(t *testing.T) {
@@ -1864,8 +1412,8 @@ func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 				var logs bytes.Buffer
 				reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil, noPendingInvite)
 
-				for _, email := range distinctAddresses(11) {
-					rt.send(rt.handler(reg), email, "203.0.113.7:4000")
+				for range 4 {
+					rt.send(rt.handler(reg), "ada@corp.example")
 				}
 				if got := countCalls(calls(), rt.path); got != c.wantCalls {
 					t.Errorf("GoTrue %s calls = %d, want %d", rt.path, got, c.wantCalls)
@@ -1882,14 +1430,14 @@ func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 					}
 				}
 				if limited != 1 {
-					t.Errorf("%d limit lines, want exactly 1 for the eleventh request", limited)
+					t.Errorf("%d limit lines, want exactly 1 for the fourth request", limited)
 				}
 			})
 		}
 	}
 }
 
-// A full map warns under the name of its own throttle: register's, resend's per-address and resend's per-key.
+// A full map warns under the name of its own throttle.
 func TestRegistrationHandlers_FullMapWarningNamesTheMap(t *testing.T) {
 	var logs bytes.Buffer
 	prev := slog.Default()
@@ -1900,22 +1448,13 @@ func TestRegistrationHandlers_FullMapWarningNamesTheMap(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
 	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 
-	remote := func(i int) string { return fmt.Sprintf("10.%d.%d.%d:4000", i>>16&255, i>>8&255, i&255) }
-	for i := range gateway.RegisterMaxKeys {
-		registerFrom(reg.Register, "user"+strconv.Itoa(i)+"@corp.example", remote(i))
-	}
-	registerFrom(reg.Register, "one-more@corp.example", remote(gateway.RegisterMaxKeys))
 	for i := range gateway.ResendMaxKeys {
-		resendFrom(reg.ResendVerification, "user"+strconv.Itoa(i)+"@corp.example", remote(i))
+		resendFrom(reg.ResendVerification, "user"+strconv.Itoa(i)+"@corp.example")
 	}
-	// A known client with a new address fills the per-address map; a new client fills the per-key map.
-	resendFrom(reg.ResendVerification, "one-more@corp.example", remote(0))
-	resendFrom(reg.ResendVerification, "another@corp.example", remote(gateway.ResendMaxKeys))
+	resendFrom(reg.ResendVerification, "one-more@corp.example")
 
-	for _, name := range []string{"register", "resend-address", "resend-ip"} {
-		if want := name + " throttle full; refusing new addresses"; strings.Count(logs.String(), want) != 1 {
-			t.Errorf("WARN %q appears %d times, want once: %s", want, strings.Count(logs.String(), want), logs.String())
-		}
+	if want := "resend-address throttle full; refusing new addresses"; strings.Count(logs.String(), want) != 1 {
+		t.Errorf("WARN %q appears %d times, want once: %s", want, strings.Count(logs.String(), want), logs.String())
 	}
 }
 
@@ -2010,117 +1549,5 @@ func TestApiMountPreflightGrantsTraceHeaders(t *testing.T) {
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "" {
 		t.Errorf("disallowed-origin preflight Access-Control-Allow-Headers = %q, want none", got)
-	}
-}
-
-// TestGatewayMainStartsTheAccountStateGrantAfterProvision pins main's wiring of the boot-grant gate:
-// main needs Postgres, so it is scanned, not run. The gate itself is tested in account_state_grant_test.go.
-func TestGatewayMainStartsTheAccountStateGrantAfterProvision(t *testing.T) {
-	f, body := parseMain(t)
-
-	selector := func(e ast.Expr) string {
-		var parts []string
-		for {
-			switch x := e.(type) {
-			case *ast.SelectorExpr:
-				parts = append([]string{x.Sel.Name}, parts...)
-				e = x.X
-			case *ast.Ident:
-				return strings.Join(append([]string{x.Name}, parts...), ".")
-			default:
-				return ""
-			}
-		}
-	}
-	stmtHolding := func(match func(*ast.CallExpr) bool) (idx, n int) {
-		idx = -1
-		for i, s := range body.List {
-			ast.Inspect(s, func(nd ast.Node) bool {
-				if c, ok := nd.(*ast.CallExpr); ok && match(c) {
-					idx = i
-					n++
-				}
-				return true
-			})
-		}
-		return idx, n
-	}
-
-	starts := 0
-	ast.Inspect(f, func(nd ast.Node) bool {
-		if c, ok := nd.(*ast.CallExpr); ok {
-			if _, is := isCallTo(c, "", "startAccountStateGrant"); is {
-				starts++
-			}
-		}
-		return true
-	})
-	if starts != 1 {
-		t.Fatalf("main.go calls startAccountStateGrant %d times, want exactly 1", starts)
-	}
-
-	var start *ast.CallExpr
-	startIdx := -1
-	for i, s := range body.List {
-		if es, ok := s.(*ast.ExprStmt); ok {
-			if c, is := isCallTo(es.X, "", "startAccountStateGrant"); is {
-				start, startIdx = c, i
-			}
-		}
-	}
-	if start == nil {
-		t.Fatal("startAccountStateGrant is not a statement of its own directly in func main (not inside an if, go or func literal)")
-	}
-
-	provIdx, provN := stmtHolding(func(c *ast.CallExpr) bool { _, is := isCallTo(c, "db", "Provision"); return is })
-	runIdx, runN := stmtHolding(func(c *ast.CallExpr) bool { _, is := isCallTo(c, "app", "Run"); return is })
-	if provN != 1 || runN != 1 {
-		t.Fatalf("main calls db.Provision %d times and app.Run %d times, want 1 each", provN, runN)
-	}
-	if !(provIdx < startIdx && startIdx < runIdx) {
-		t.Errorf("statement order: db.Provision at %d, startAccountStateGrant at %d, app.Run at %d; want Provision < start < Run", provIdx, startIdx, runIdx)
-	}
-
-	if len(start.Args) != 5 {
-		t.Fatalf("startAccountStateGrant has %d arguments, want 5", len(start.Args))
-	}
-	if c, is := isCallTo(start.Args[0], "platform", "DeployEnv"); !is || len(c.Args) != 0 {
-		t.Errorf("argument 1 is not platform.DeployEnv()")
-	}
-	if got := selector(start.Args[1]); got != "provisionCfg.MigrationDSN" {
-		t.Errorf("argument 2 = %q, want provisionCfg.MigrationDSN", got)
-	}
-	if got := selector(start.Args[2]); got != "provisionCfg.Passwords.AuthAdmin" {
-		t.Errorf("argument 3 = %q, want provisionCfg.Passwords.AuthAdmin", got)
-	}
-	if got := selector(start.Args[3]); got != "app.Logger" {
-		t.Errorf("argument 4 = %q, want app.Logger", got)
-	}
-	lit, ok := start.Args[4].(*ast.FuncLit)
-	if !ok || len(lit.Body.List) != 1 {
-		t.Fatalf("argument 5 is not a func literal holding exactly one statement")
-	}
-	gs, ok := lit.Body.List[0].(*ast.GoStmt)
-	if !ok {
-		t.Fatalf("argument 5's statement is %T, want a go statement", lit.Body.List[0])
-	}
-	if _, is := isCallTo(gs.Call, "", "grantAccountStateRead"); !is || len(gs.Call.Args) < 3 {
-		t.Fatalf("argument 5's go statement does not call grantAccountStateRead with at least 3 arguments")
-	}
-	if got := selector(gs.Call.Args[2]); got != "db.GrantAccountStateRead" {
-		t.Errorf("grantAccountStateRead's third argument = %q, want db.GrantAccountStateRead", got)
-	}
-
-	reads := 0
-	ast.Inspect(f, func(nd ast.Node) bool {
-		if c, ok := nd.(*ast.CallExpr); ok {
-			if _, is := isCallTo(c, "os", "Getenv"); is && len(c.Args) == 1 && isStringLit(c.Args[0], "AUTH_ADMIN_PASSWORD") {
-				reads++
-			}
-		}
-		return true
-	})
-	if reads != 1 {
-		t.Errorf("main.go reads os.Getenv(\"AUTH_ADMIN_PASSWORD\") %d times, want 1 (the grant takes provisionCfg.Passwords.AuthAdmin)", reads)
 	}
 }

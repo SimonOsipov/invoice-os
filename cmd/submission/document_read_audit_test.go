@@ -50,7 +50,7 @@ func drExtractionFiles(t *testing.T, files []string) []string {
 
 // AC 8's placement half. The event literal belongs in cmd/, never in internal/extraction: a
 // const identifier inside the package reads as a non-literal to internal/platform/db's repo-wide
-// audit.Record scan and lands the call site in no bucket (newExtractionAuditor's own rule).
+// audit.Record scan and lands the call site in no bucket (cmd/worker's newExtractionAuditor has the same rule).
 func TestNewDocumentReadAuditor_SpellsTheEventInCmd(t *testing.T) {
 	root, files := eaProdFiles(t)
 	extractionFiles := drExtractionFiles(t, files)
@@ -150,10 +150,8 @@ var drSubjects = []string{
 
 const drDocumentID = "9ab1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d"
 
-// AC 8's actor, read off the row the adapter writes. eaMainSites drops this site out of
-// TestExtractionAuditor_ActorIsSystemByValue's population -- rightly, its actor is a parameter --
-// and internal/extraction's audit specs inject their own recorder, so none of them sees the
-// argument THIS adapter binds. Without this, the actor and the payload key are both unread.
+// AC 8's actor, read off the row the adapter writes. internal/extraction's audit specs inject
+// their own recorder, so none of them sees the argument THIS adapter binds. Without this, the actor and the payload key are both unread.
 func TestNewDocumentReadAuditor_WritesTheCallersSubjectAsActor(t *testing.T) {
 	if len(drSubjects) < 2 {
 		t.Fatalf("the subject table holds %d entry(ies), want at least 2 -- one fixture cannot tell a pass-through from a constant", len(drSubjects))
@@ -187,13 +185,10 @@ func TestNewDocumentReadAuditor_WritesTheCallersSubjectAsActor(t *testing.T) {
 
 // drWantAuditWriters is cmd/submission/main.go's COMPLETE audit.Record population, keyed on the
 // enclosing func.
-var drWantAuditWriters = map[string]int{eaAdapterFn: 2, drAdapterFn: 1, fcAdapterFn: 1, alAdapterFn: 1}
+var drWantAuditWriters = map[string]int{drAdapterFn: 1, fcAdapterFn: 1, alAdapterFn: 1}
 
-// eaMainSites floors main.go's site count and then narrows to newExtractionAuditor, so every
-// assertion in extraction_audit_test.go is blind to a writer added elsewhere in the file --
-// including a second one inside newDocumentReadAuditor, which would write two rows per screen
-// open while every injected-recorder count in internal/extraction still read 1. The file-wide
-// equality that filter gave up lives here.
+// A second writer inside newDocumentReadAuditor would write two rows per screen open while every
+// injected-recorder count in internal/extraction still read 1; this file-wide equality sees it.
 func TestSubmissionMain_AuditWritersAreEachAccountedFor(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "main.go", nil, 0)

@@ -1,5 +1,5 @@
 // Command notifications is the 07 Notifications context service: it takes contact intake
-// from the gateway and delivers each contact to HubSpot and Resend through River.
+// from the gateway and queues each delivery to HubSpot and Resend; cmd/worker runs them.
 package main
 
 import (
@@ -7,22 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"time"
 
-	"github.com/riverqueue/river"
-
-	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/blog"
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
-	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
-)
-
-const (
-	hubspotBaseURL = "https://api.hubapi.com"
-	resendBaseURL  = "https://api.resend.com"
 )
 
 func main() {
@@ -34,12 +24,12 @@ func main() {
 	}
 
 	ctx := context.Background()
-	mode, hubspot, resend, err := deliveryClients(os.Getenv, platform.DeployEnv(), realTransport())
+	mode, _, _, err := notifications.DeliveryClients(os.Getenv, platform.DeployEnv(), notifications.RealTransport())
 	if err != nil {
 		platform.Fatal(app.Logger, "notifications: %v", err)
 	}
 	platform.Contacts = string(mode)
-	nl, err := newsletterClients(os.Getenv, platform.DeployEnv(), mode, realTransport())
+	nl, err := notifications.NewsletterClients(os.Getenv, platform.DeployEnv(), mode, notifications.RealTransport())
 	if err != nil {
 		platform.Fatal(app.Logger, "notifications: %v", err)
 	}
@@ -51,25 +41,10 @@ func main() {
 	defer pool.Close()
 	app.Ready("database", pool.Ping)
 
-	qcfg := queue.Config{Logger: app.Logger}
-	if mode != notifications.ModeOff {
-		workers := river.NewWorkers()
-		river.AddWorker(workers, &notifications.DeliverWorker{
-			Pool: pool, HubSpot: hubspot, Resend: resend, Mode: mode, Logger: app.Logger,
-		})
-		river.AddWorker(workers, &notifications.DemoDealWorker{Pool: pool, HubSpot: hubspot, Logger: app.Logger})
-		if nl.Enabled {
-			river.AddWorker(workers, &notifications.BlogSyncWorker{Pool: pool, Resend: nl.Resend, Mode: nl.Mode, Logger: app.Logger})
-		}
-		qcfg.Workers = workers
-		qcfg.Queues = map[string]river.QueueConfig{notifications.QueueContacts: {MaxWorkers: 2}}
-	}
-	q, err := queue.New(pool, qcfg)
+	// Insert-only: cmd/worker delivers every contact job and purges expired blog requests.
+	q, err := queue.New(pool, queue.Config{})
 	if err != nil {
 		platform.Fatal(app.Logger, "notifications: queue: %v", err)
-	}
-	if mode != notifications.ModeOff {
-		app.AddBackgroundWorker(q)
 	}
 
 	store := notifications.NewStore(pool, q.River())
@@ -79,7 +54,6 @@ func main() {
 
 	newsletterStore := notifications.NewNewsletterStore(pool, q.River())
 	newsletter := notifications.Newsletter{Store: newsletterStore, Sender: nl.Sender, Resend: nl.Resend, Enabled: nl.Enabled}
-	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, newsletterStore.PurgeExpired))
 
 	blogStore := blog.NewStore(pool)
 	app.Mux.HandleFunc("GET /v1/staff/blog/categories", blog.ListCategoriesHandler(blogStore.ListCategories, app.Logger))
@@ -123,52 +97,4 @@ func mustEnv(key string) string {
 		platform.Fatal(slog.Default(), "notifications: %s is required", key)
 	}
 	return v
-}
-
-// realTransport clones the default transport so HTTPS_PROXY and NO_PROXY still apply.
-func realTransport() http.RoundTripper { return http.DefaultTransport.(*http.Transport).Clone() }
-
-// deliveryClients returns fakes in fake mode, vendor clients on transport in real mode, and
-// nil clients when off.
-func deliveryClients(getenv func(string) string, railwayEnvName string, transport http.RoundTripper) (notifications.Mode, notifications.HubSpotClient, notifications.ResendClient, error) {
-	mode, keys, err := notifications.ModeFromEnv(getenv, platform.Posture(railwayEnvName))
-	if err != nil {
-		return "", nil, nil, err
-	}
-	switch mode {
-	case notifications.ModeFake:
-		return mode, notifications.FakeHubSpot{}, notifications.FakeResend{}, nil
-	case notifications.ModeReal:
-		hc := notifications.NewHTTPClient(transport)
-		return mode, notifications.NewHubSpot(hubspotBaseURL, keys, hc), notifications.NewResend(resendBaseURL, keys, hc), nil
-	}
-	return mode, nil, nil, nil
-}
-
-// newsletterWiring is the blog subscription setup. Enabled needs a newsletter mode and a mail
-// sender that are both on; otherwise both routes answer 503 and the service still boots.
-type newsletterWiring struct {
-	Mode     notifications.Mode
-	MailMode accountmail.Mode
-	Sender   accountmail.Sender
-	Resend   notifications.BlogResendClient
-	Enabled  bool
-}
-
-func newsletterClients(getenv func(string) string, railwayEnvName string, contacts notifications.Mode, transport http.RoundTripper) (newsletterWiring, error) {
-	posture := platform.Posture(railwayEnvName)
-	mode, keys, err := notifications.NewsletterModeFromEnv(getenv, posture, contacts)
-	if err != nil {
-		return newsletterWiring{}, err
-	}
-	mailMode, mailKey := accountmail.ModeFromEnv(getenv, posture == platform.PosturePreview)
-	w := newsletterWiring{Mode: mode, MailMode: mailMode, Sender: accountmail.NewSender(mailMode, mailKey, transport)}
-	switch mode {
-	case notifications.ModeFake:
-		w.Resend = notifications.FakeBlogResend{}
-	case notifications.ModeReal:
-		w.Resend = notifications.NewBlogResend(resendBaseURL, getenv("RESEND_API_KEY"), keys, notifications.NewHTTPClient(transport))
-	}
-	w.Enabled = mode != notifications.ModeOff && mailMode != accountmail.ModeOff
-	return w, nil
 }

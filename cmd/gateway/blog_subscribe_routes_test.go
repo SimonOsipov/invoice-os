@@ -144,18 +144,17 @@ func TestBlogSubscribePreviewPostureAdmits(t *testing.T) {
 		t.Setenv("DEPLOY_ENV", env)
 		calls.Store(0)
 		sub := blogSubscribeHandlers(up, "gw-token", 0, slog.New(slog.DiscardHandler))
-		for i := range n {
+		for range n {
 			req := httptest.NewRequest(http.MethodPost, "/blog/subscriptions",
-				strings.NewReader(`{"email":"p`+strings.Repeat("x", i)+`@x.co","category_ids":["a"],"frequency":"weekly"}`))
-			req.RemoteAddr = "203.0.113.200:1"
+				strings.NewReader(`{"email":"p@x.co","category_ids":["a"],"frequency":"weekly"}`))
 			sub.Subscribe.ServeHTTP(httptest.NewRecorder(), req)
 		}
 		return calls.Load()
 	}
-	if got := send("production", 12); got != 10 {
-		t.Fatalf("hosted posture forwarded %d of 12, want 10 (the cap enforces)", got)
+	if got := send("production", 5); got != 3 {
+		t.Fatalf("hosted posture forwarded %d of 5, want 3 (the cap enforces)", got)
 	}
-	if got := send("ascomply-pr-1", 12); got != 12 {
-		t.Errorf("PR fork forwarded %d of 12, want 12 (the caps log and admit)", got)
+	if got := send("ascomply-pr-1", 5); got != 5 {
+		t.Errorf("PR fork forwarded %d of 5, want 5 (the cap logs and admits)", got)
 	}
 }

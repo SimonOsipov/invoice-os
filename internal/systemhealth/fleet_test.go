@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
 func readFrom(t *testing.T, h http.HandlerFunc, timeout time.Duration) (gateway.FleetHealth, error) {
@@ -27,7 +28,7 @@ func readServer(t *testing.T, srv *httptest.Server, timeout time.Duration) (gate
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewFleetReader(base, &http.Client{Timeout: timeout})(context.Background())
+	return NewFleetReader(base, &http.Client{Timeout: timeout}, "gw-token")(context.Background())
 }
 
 func TestFleetReader_DecodesOKAndDegraded(t *testing.T) {
@@ -176,7 +177,7 @@ func TestFleetReader_OwnsItsDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	_, err = NewFleetReaderTimeout(base, &http.Client{}, 100*time.Millisecond)(context.Background())
+	_, err = NewFleetReaderTimeout(base, &http.Client{}, "gw-token", 100*time.Millisecond)(context.Background())
 	if err == nil {
 		t.Fatal("a gateway that never answers must be an error")
 	}
@@ -185,10 +186,14 @@ func TestFleetReader_OwnsItsDeadline(t *testing.T) {
 	}
 }
 
-type deadlineSeen struct{ deadline time.Time }
+type deadlineSeen struct {
+	deadline time.Time
+	token    string
+}
 
 func (d *deadlineSeen) RoundTrip(r *http.Request) (*http.Response, error) {
 	d.deadline, _ = r.Context().Deadline()
+	d.token = r.Header.Get(platform.HeaderGatewayToken)
 	return nil, context.DeadlineExceeded
 }
 
@@ -197,11 +202,33 @@ func TestFleetReader_TheProductionConstructorSetsTheFleetTimeoutDeadline(t *test
 	seen := &deadlineSeen{}
 	base, _ := url.Parse("http://gateway.invalid:8080")
 	start := time.Now()
-	_, _ = NewFleetReader(base, &http.Client{Transport: seen})(context.Background())
+	_, _ = NewFleetReader(base, &http.Client{Transport: seen}, "gw-token")(context.Background())
+	if seen.token != "gw-token" {
+		t.Errorf("%s = %q, want the gateway token: /healthz/fleet refuses a call without it", platform.HeaderGatewayToken, seen.token)
+	}
 	if seen.deadline.IsZero() {
 		t.Fatal("the request carried no deadline")
 	}
 	if got := seen.deadline.Sub(start); got < FleetTimeout-time.Second || got > FleetTimeout+time.Second {
 		t.Errorf("deadline %v after the call began, want about FleetTimeout %v", got, FleetTimeout)
+	}
+}
+
+func TestGatewayURL_RequiresAnAbsoluteHTTPURL(t *testing.T) {
+	for _, raw := range []string{"", "gateway.railway.internal:8080", "ftp://x", "http://"} {
+		u, err := GatewayURL(raw)
+		if err == nil || u != nil {
+			t.Errorf("GatewayURL(%q) = %v, %v; want nil and an error", raw, u, err)
+			continue
+		}
+		if raw == "" && !strings.Contains(err.Error(), "GATEWAY_URL is required") {
+			t.Errorf("GatewayURL(%q) error = %q, want it to say GATEWAY_URL is required", raw, err)
+		}
+	}
+	for _, raw := range []string{"http://gateway.railway.internal:8080", "https://gateway.example.com"} {
+		u, err := GatewayURL(raw)
+		if err != nil || u == nil || u.String() != raw {
+			t.Errorf("GatewayURL(%q) = %v, %v; want the URL and no error", raw, u, err)
+		}
 	}
 }

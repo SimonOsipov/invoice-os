@@ -9,7 +9,8 @@ paths:
 # Contact sync
 
 - Never put an email address or a name in a log line or an error.
-- Never wait on a vendor in signup, sign-in or the demo route. Hand off in the background.
+- Never wait on a vendor in signup, sign-in or the demo route.
+- Write a registrant to `registrant_handoffs` before the response, once. The worker moves the row into a `registrant_intake` River job. Without `DATABASE_GATEWAY_URL` the gateway posts to notifications in the background.
 - Hand a registrant off after `POST /auth/verify`, after `POST /auth/invitation/password` and after a sign-in whose user has `user_metadata.registration`.
 - Send the demo route's call once, with no retry. Answer 502 when the sink fails.
 - Store a contact with no `tenant_id` and no RLS. Write no tenant predicate.
@@ -33,7 +34,7 @@ paths:
 - Never send Resend `unsubscribed`, `opt_out` or a second `opt_in` for registration and Marketing consent.
 - Send a repeat Blog-topic `opt_in` after each confirmed double opt-in.
 - Queue no Resend job for a demo booker who did not tick.
-- Pick the mode from the vendor keys and `CONTACTS_FAKE`: `real`, `fake` or `off`. The worker does not start in `off`.
+- Pick the mode from the vendor keys and `CONTACTS_FAKE`: `real`, `fake` or `off`. In `off` the worker fetches no `contacts` job.
 - Refuse to boot when `CONTACTS_FAKE` is true and any key is set, or when only some keys are set.
 - Name variables in a boot error, never their values.
 - Run a preview environment in `fake` mode and discard its vendor keys.
@@ -44,5 +45,6 @@ paths:
 - Retry a delivery with River's default policy. Any non-nil worker error retries.
 - Log a vendor 4xx other than 408 and 429 as ERROR. Log every other failure as WARN.
 - Reject a present `marketing_consent_text` that is blank or over 500 characters, on register and on the demo route.
-- Limit the demo route to `DemoRequestPerIP` requests per client IP per hour. Answer 429 over the limit and log no IP.
+- Expect Cloud Armor on the production load balancer to throttle the demo route per client IP. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
+- Log no client IP on the demo route.
 - `ceiling:` the demo route has no double opt-in step. Add one before you send marketing email to its contacts.

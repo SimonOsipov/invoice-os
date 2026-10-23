@@ -3,74 +3,31 @@ package gateway
 import (
 	"encoding/json"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 )
 
 // ceiling: counts are in-process; a restart clears them and replicas do not share them.
 // ceiling: an attacker can spend a victim address's 3 per hour; a full map (10,000 keys) refuses every new key, so a flood switches resend off for new addresses.
-// ceiling: clients behind one NAT share 10 resends an hour; GoTrue 4xx answers are refunded, so one client can repeat them without bound (no mail goes out).
 const (
 	ResendPerAddress = 3
-	ResendPerIP      = 10
 	ResendWindow     = time.Hour
 	ResendMaxKeys    = 10_000
 )
 
-// onCloudRun selects the client-IP rule: Cloud Run sets K_SERVICE and sits behind Google's load balancer.
-var onCloudRun = os.Getenv("K_SERVICE") != ""
-
-// clientKey keys the per-IP limit and logs and names its source; IPv6 is keyed by its /64.
-// Behind Google's load balancer the client is the second-from-right X-Forwarded-For entry
-// (the LB appends "<client>,<lb>"; anything left of them is client-supplied). X-Real-IP is
-// trusted only off Cloud Run, where Railway's edge sets it. RemoteAddr, the fallback, is
-// normalised the same way.
-// ceiling: the X-Real-IP branch is Railway's, delete with Railway in GKE-12.
-func clientKey(r *http.Request) (key, source string) {
-	if onCloudRun {
-		if parts := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ","); len(parts) >= 2 {
-			if ip, err := netip.ParseAddr(strings.TrimSpace(parts[len(parts)-2])); err == nil {
-				return normalizeIP(ip), "x_forwarded_for"
-			}
-		}
-	} else if ip, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("X-Real-IP"))); err == nil {
-		return normalizeIP(ip), "header"
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	if ip, err := netip.ParseAddr(host); err == nil {
-		return normalizeIP(ip), "remote_addr"
-	}
-	return host, "remote_addr"
-}
-
-func normalizeIP(ip netip.Addr) string {
-	ip = ip.Unmap()
-	if ip.Is6() {
-		// A /64 is one subscriber; per-address keys would give an attacker 2^64 of them.
-		return netip.PrefixFrom(ip.WithZone(""), 64).Masked().String()
-	}
-	return ip.String()
-}
-
 // ResendVerificationHandler answers POST /auth/resend-verification with one answer for every account state.
 // Every answer except a 400 arrives no earlier than minResponse after the request; 0 means no wait.
-func ResendVerificationHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perAddress, perIP *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
+func ResendVerificationHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perAddress *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
 	return mailLinkHandler("resend-verification", "resend", authURL.JoinPath("resend").String(),
 		func(email string) map[string]string { return map[string]string{"type": "signup", "email": email} },
-		client, minResponse, perAddress, perIP, enforce, log)
+		client, minResponse, perAddress, enforce, log)
 }
 
-// mailLinkHandler serves the mail-link routes (resend, reset); both share one pair of throttles.
+// mailLinkHandler serves the mail-link routes (resend, reset); both share one per-address throttle.
 // name prefixes every log line; verb names the GoTrue call in the failure line.
-func mailLinkHandler(name, verb, endpoint string, payload func(email string) map[string]string, client *http.Client, minResponse time.Duration, perAddress, perIP *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
+func mailLinkHandler(name, verb, endpoint string, payload func(email string) map[string]string, client *http.Client, minResponse time.Duration, perAddress *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Not postOnly: it sets headers on a POST, and a gone client must see no write.
 		if r.Method != http.MethodPost {
@@ -96,20 +53,12 @@ func mailLinkHandler(name, verb, endpoint string, payload func(email string) map
 			return
 		}
 
-		// IP first: a request refused for its IP spends no address count.
-		key, source := clientKey(r)
-		ipHeld := perIP.Reserve(key)
-		addrHeld := false
-		limited := func(limit string) bool {
-			log.WarnContext(r.Context(), name+": limit reached",
-				slog.String("limit", limit), slog.String("key_source", source), slog.Bool("enforced", enforce))
-			return enforce
-		}
+		addrHeld := perAddress.Reserve(email)
 		refused := false
-		if !ipHeld {
-			refused = limited("ip")
-		} else if addrHeld = perAddress.Reserve(email); !addrHeld {
-			refused = limited("address")
+		if !addrHeld {
+			log.WarnContext(r.Context(), name+": limit reached",
+				slog.String("limit", "address"), slog.Bool("enforced", enforce))
+			refused = enforce
 		}
 
 		var upstream time.Duration
@@ -117,13 +66,8 @@ func mailLinkHandler(name, verb, endpoint string, payload func(email string) map
 			status, gt, err := postGoTrue(r, client, endpoint, payload(email), nil)
 			upstream = time.Since(start)
 			// GoTrue mails nothing when it answers 4xx; 2xx, 5xx and transport errors may have mailed.
-			if err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
-				if ipHeld {
-					perIP.Refund(key)
-				}
-				if addrHeld {
-					perAddress.Refund(email)
-				}
+			if addrHeld && err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+				perAddress.Refund(email)
 			}
 			switch {
 			case err != nil:

@@ -22,7 +22,7 @@ var exemptClauseRE = regexp.MustCompile(`\([^)]*exempt[^)]*\)`)
 var pushDirectionRE = regexp.MustCompile(`\bon( or |\|)off\b`)
 
 // sentryCheckedNames are the roll-up entries the step checks: every name except auth.
-var sentryCheckedNames = []string{"gateway", "tenancy", "portfolio", "invoice", "validation", "submission", "dashboard", "notifications", "reconciliation", "docling"}
+var sentryCheckedNames = []string{"gateway", "tenancy", "portfolio", "invoice", "validation", "submission", "dashboard", "notifications", "worker", "docling"}
 
 // sentryFleetEntries is a deployed-shape roll-up: each checked entry on deadbeef reporting sentry,
 // auth as its custom-path [name status] entry.
@@ -108,8 +108,8 @@ func TestSentryGateIsDirectional(t *testing.T) {
 		{name: "pr_all_off", isPR: true, body: withSentry("off", nil), wantExit: 0},
 		{name: "pr_invoice_on", isPR: true, body: withSentry("off", setField("invoice", "sentry", "on")), wantExit: 1,
 			named: []string{"invoice=on@deadbeef", "fork-vars-after-urls"}, notNamed: []string{"gateway=", "tenancy="}},
-		{name: "pr_reconciliation_on", isPR: true, body: withSentry("off", setField("reconciliation", "sentry", "on")), wantExit: 1,
-			named: []string{"reconciliation=on@deadbeef", "fork-vars-after-urls"}, notNamed: []string{"gateway=", "invoice="}},
+		{name: "pr_worker_on", isPR: true, body: withSentry("off", setField("worker", "sentry", "on")), wantExit: 1,
+			named: []string{"worker=on@deadbeef", "fork-vars-after-urls"}, notNamed: []string{"gateway=", "invoice="}},
 		{name: "pr_tenancy_missing", isPR: true, body: withSentry("off", setField("tenancy", "sentry", nil)), wantExit: 1,
 			named: []string{"tenancy=none@deadbeef"}, notNamed: []string{"portfolio="}},
 		{name: "push_tenancy_missing", isPR: false, body: withSentry("on", setField("tenancy", "sentry", nil)), wantExit: 1,
@@ -364,8 +364,8 @@ func TestSentryGateRetriesTheRollUp(t *testing.T) {
 				t.Errorf("the curl shim saw %v, want %d /healthz/fleet fetches", urls, r.wantFetch)
 			}
 			if r.wantExit == 0 {
-				if len(errs) != 0 || !strings.Contains(out, "reconciliation") || !strings.Contains(out, "docling") {
-					t.Errorf("a passing run printed errors %q or no success line naming reconciliation and docling (output %q)", errs, out)
+				if len(errs) != 0 || !strings.Contains(out, "worker") || !strings.Contains(out, "docling") {
+					t.Errorf("a passing run printed errors %q or no success line naming worker and docling (output %q)", errs, out)
 				}
 				return
 			}

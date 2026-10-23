@@ -158,27 +158,6 @@ func TestAuthIssuersFailureNamesItsLikelyCause(t *testing.T) {
 	}
 }
 
-// The demo_purge failure points an operator at the step that runs; set-fork-environment no longer does.
-func TestPurgeFailureNamesTheForkPassThatSetsEnvironment(t *testing.T) {
-	run := healthGateWaitRun(t)
-	body := healthzBody(true, "2")
-	body["demo_purge"] = "false"
-	code, out, _ := runWithGateShim(t, run, "healthz", body, "IS_PR=true")
-	errs := errorLines(out)
-	if code == 0 || len(errs) == 0 {
-		t.Fatalf("a fork reporting demo_purge=false: health-gate exits %d with no ::error:: line", code)
-	}
-	joined := strings.Join(errs, "\n")
-	if !strings.Contains(joined, "demo_purge='false'") || !strings.Contains(joined, "fork-vars-after-urls set ENVIRONMENT=development") {
-		t.Errorf("no ::error:: line names demo_purge='false' and the fork-vars-after-urls write: %q", errs)
-	}
-	for _, removed := range []string{"set-fork-environment", "set-fork-auth", "set-sentry-off", "set-ai-fake", "reconcile-urls"} {
-		if strings.Contains(joined, removed) {
-			t.Errorf("an ::error:: line sends the operator to %s, a step prepare-env no longer runs: %q", removed, errs)
-		}
-	}
-}
-
 // fleetDownShim serves $SHIM_DIR/fleet.json with the status code in $SHIM_DIR/code.
 const fleetDownShim = `#!/bin/sh
 out=""; w=""

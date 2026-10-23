@@ -16,11 +16,9 @@ import (
 )
 
 // ceiling: in-process counts; a restart clears them and replicas do not share them. Revisit when the gateway runs more than one replica.
-// ceiling: clients behind one NAT share the per-IP caps; an attacker can spend a victim address's 3 subscribes an hour. Revisit if abuse reports name a shared-IP block or a victim address.
+// ceiling: an attacker can spend a victim address's 3 subscribes an hour. Revisit if abuse reports name a victim address.
 const (
-	BlogSubscribePerIP    = 10
 	BlogSubscribePerEmail = 3
-	BlogConfirmPerIP      = 30
 	BlogSubscribeWindow   = time.Hour
 	BlogSubscribeMaxKeys  = 10_000
 )
@@ -46,22 +44,22 @@ type BlogSubscribeRoutes struct{ Subscribe, Confirm http.Handler }
 // BlogSubscribeHandlers serves POST /blog/subscriptions and its confirm by forwarding to notifications at base.
 // Subscribe answers every valid request alike, no earlier than minResponse after it arrives.
 // Neither the email nor the token reaches a log line.
-func BlogSubscribeHandlers(base *url.URL, client *http.Client, gatewayToken string, minResponse time.Duration, perIP, perEmail, confirmPerIP *SignInThrottle, enforce bool, log *slog.Logger) BlogSubscribeRoutes {
+func BlogSubscribeHandlers(base *url.URL, client *http.Client, gatewayToken string, minResponse time.Duration, perEmail *SignInThrottle, enforce bool, log *slog.Logger) BlogSubscribeRoutes {
 	c := *client
 	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	s := &blogSubscriber{base: base, client: &c, token: gatewayToken, minResponse: minResponse,
-		perIP: perIP, perEmail: perEmail, confirmPerIP: confirmPerIP, enforce: enforce, log: log}
+		perEmail: perEmail, enforce: enforce, log: log}
 	return BlogSubscribeRoutes{Subscribe: http.HandlerFunc(s.subscribe), Confirm: http.HandlerFunc(s.confirm)}
 }
 
 type blogSubscriber struct {
-	base                          *url.URL
-	client                        *http.Client
-	token                         string
-	minResponse                   time.Duration
-	perIP, perEmail, confirmPerIP *SignInThrottle
-	enforce                       bool
-	log                           *slog.Logger
+	base        *url.URL
+	client      *http.Client
+	token       string
+	minResponse time.Duration
+	perEmail    *SignInThrottle
+	enforce     bool
+	log         *slog.Logger
 }
 
 type blogSubscribeBody struct {
@@ -142,20 +140,12 @@ func (s *blogSubscriber) subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// IP first: a request refused for its IP spends no email count.
-	key, source := clientKey(r)
-	ipHeld := s.perIP.Reserve(key)
-	emailHeld := false
-	limited := func(limit string) bool {
-		s.log.WarnContext(r.Context(), "blog-subscribe: limit reached",
-			slog.String("limit", limit), slog.String("key_source", source), slog.Bool("enforced", s.enforce))
-		return s.enforce
-	}
+	emailHeld := s.perEmail.Reserve(in.Email)
 	refused := false
-	if !ipHeld {
-		refused = limited("ip")
-	} else if emailHeld = s.perEmail.Reserve(in.Email); !emailHeld {
-		refused = limited("email")
+	if !emailHeld {
+		s.log.WarnContext(r.Context(), "blog-subscribe: limit reached",
+			slog.String("limit", "email"), slog.Bool("enforced", s.enforce))
+		refused = s.enforce
 	}
 
 	status, answer := http.StatusAccepted, `{"status":"accepted"}`
@@ -166,10 +156,7 @@ func (s *blogSubscriber) subscribe(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case code == http.StatusAccepted:
 		case code == http.StatusBadRequest:
-			// notifications mailed nothing, so both reservations come back.
-			if ipHeld {
-				s.perIP.Refund(key)
-			}
+			// notifications mailed nothing, so the reservation comes back.
 			if emailHeld {
 				s.perEmail.Refund(in.Email)
 			}
@@ -206,16 +193,6 @@ func (s *blogSubscriber) confirm(w http.ResponseWriter, r *http.Request) {
 		gone()
 		return
 	}
-	key, source := clientKey(r)
-	if !s.confirmPerIP.Reserve(key) {
-		s.log.WarnContext(r.Context(), "blog-confirm: limit reached",
-			slog.String("limit", "ip"), slog.String("key_source", source), slog.Bool("enforced", s.enforce))
-		if s.enforce {
-			writeError(w, http.StatusTooManyRequests, "too many requests")
-			return
-		}
-	}
-
 	code, answer := s.post(r, "subscriptions/confirm", blogUpstreamTimeout, map[string]string{"token": in.Token})
 	switch code {
 	case http.StatusOK:

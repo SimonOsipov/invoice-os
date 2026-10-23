@@ -4,7 +4,7 @@ import { ApiError, apiFetch, gatewayBase } from '@invoice-os/api-client/client'
 import { MARKETING_CONSENT_TEXT } from './components/MarketingConsent'
 import type { DemoLead } from './hubspot'
 
-// The gateway's per-IP limit answered 429 (http.StatusTooManyRequests in internal/gateway/contacts.go).
+// Cloud Armor's per-client-IP limit answered 429 (invoice-os-infra terraform/armor.tf).
 export class DemoRateLimited extends Error {}
 
 // Null when no gateway is configured, so the caller can skip it without a rejection.

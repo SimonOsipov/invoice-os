@@ -1,4 +1,5 @@
 -- Restore fingerprint of one tenant. Needs a BYPASSRLS role; set restore_check.tenant and restore_check.cutoff first.
+-- On Cloud SQL run db/restore-auditor.sql once, then SET ROLE restore_auditor before this file.
 -- Output is text rows, independent of the caller's TimeZone and DateStyle.
 -- BEGIN READ ONLY makes the file's own statements read-only; the SET keeps the session read-only afterwards.
 BEGIN READ ONLY;

@@ -70,7 +70,8 @@ paths:
 - Answer it with 200 `maybe` when the account state is `unknown`.
 - Answer 502 `invitation resend is unavailable` for any other GoTrue failure.
 - Answer `/auth/invitation/resend` with 409 `account_exists` when the preview reads `confirmed` and 409 `account_missing` when it reads `none`. Send both before the GoTrue call.
-- Spend the resend per-address and per-IP budgets on `/auth/invitation/resend` and refund a GoTrue 4xx.
+- Spend the resend per-address budget on `/auth/invitation/resend` and refund a GoTrue 4xx.
+- Expect Cloud Armor on the production load balancer to throttle register, invitation register, resend, reset and invitation resend per client IP. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
 - Wait `AUTH_REGISTER_MIN_RESPONSE` before each register, resend or reset answer that passes the 400 checks. `/auth/invitation/resend` does not wait.
 - Spend one shared budget on resend and password-reset requests.
 - Log no email address, password, token, code or client IP.

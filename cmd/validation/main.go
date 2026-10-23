@@ -17,7 +17,6 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/validation"
-	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 func main() {
@@ -97,9 +96,6 @@ func main() {
 
 	app.Mux.Handle("POST /v1/custom-rules/check", validation.S2SMiddleware(mustEnv("S2S_TOKEN"))(
 		validation.CheckCustomRuleHandler(engine)))
-
-	app.AddBackgroundWorker(codelist.NewWorker(codelist.SyncInterval,
-		codelist.NewSyncer(pool, codelist.DefaultBaseURL, nil, app.Logger).SyncAll))
 
 	app.RequireGateway(mustEnv("GATEWAY_TOKEN"), "POST /v1/validate/batch", "POST /v1/custom-rules/check")
 

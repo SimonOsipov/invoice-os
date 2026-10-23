@@ -28,7 +28,7 @@ func serveFloor(t *testing.T, authURL *url.URL, floor time.Duration, log *slog.L
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	start := time.Now()
-	RegisterHandler(authURL, testClient(), floor, freshRegisterLimit(), true, log, noPendingInvite).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), floor, log, noPendingInvite).ServeHTTP(rec, req)
 	return rec, time.Since(start)
 }
 
@@ -234,7 +234,7 @@ func TestRegister_ClientGoneEndsTheWaitWithoutWriting(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword))).WithContext(ctx)
 
 	start := time.Now()
-	RegisterHandler(authURL, testClient(), 3*time.Second, freshRegisterLimit(), true, slog.New(slog.DiscardHandler), noPendingInvite).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), 3*time.Second, slog.New(slog.DiscardHandler), noPendingInvite).ServeHTTP(rec, req)
 	elapsed := time.Since(start)
 
 	if elapsed >= time.Second {
@@ -336,7 +336,7 @@ func TestRegister_FreeMailVariantsStayPromptUnderALargeMinimum(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(email, regPassword))).WithContext(ctx)
 
 			start := time.Now()
-			RegisterHandler(fake.URL, testClient(), time.Hour, freshRegisterLimit(), true, slog.New(slog.DiscardHandler), noPendingInvite).ServeHTTP(rec, req)
+			RegisterHandler(fake.URL, testClient(), time.Hour, slog.New(slog.DiscardHandler), noPendingInvite).ServeHTTP(rec, req)
 			elapsed := time.Since(start)
 
 			if rec.Code != http.StatusBadRequest {
@@ -357,7 +357,7 @@ func TestRegister_ConcurrentRequestsWaitIndependently(t *testing.T) {
 	const floor = 300 * time.Millisecond
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	log, buf := captureLog()
-	h := RegisterHandler(fake.URL, testClient(), floor, freshRegisterLimit(), true, log, noPendingInvite)
+	h := RegisterHandler(fake.URL, testClient(), floor, log, noPendingInvite)
 	serve := func(rec *httptest.ResponseRecorder) time.Duration {
 		req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
 		start := time.Now()
@@ -454,7 +454,7 @@ func TestRegister_UpstreamTimeoutWaitsOutTheRestOfTheMinimum(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
 
 	start := time.Now()
-	RegisterHandler(authURL, client, floor, freshRegisterLimit(), true, log, noPendingInvite).ServeHTTP(rec, req)
+	RegisterHandler(authURL, client, floor, log, noPendingInvite).ServeHTTP(rec, req)
 	elapsed := time.Since(start)
 
 	if rec.Code != http.StatusBadGateway {
@@ -488,7 +488,7 @@ func TestRegister_ClientGoneDuringTheUpstreamCallWritesNothing(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword))).WithContext(ctx)
 
 	start := time.Now()
-	RegisterHandler(authURL, testClient(), 3*time.Second, freshRegisterLimit(), true, slog.New(slog.DiscardHandler), noPendingInvite).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), 3*time.Second, slog.New(slog.DiscardHandler), noPendingInvite).ServeHTTP(rec, req)
 	elapsed := time.Since(start)
 
 	if elapsed >= time.Second {
@@ -598,7 +598,7 @@ func serveFloorWith(t *testing.T, authURL *url.URL, floor time.Duration, p *pend
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
 	start := time.Now()
-	RegisterHandler(authURL, testClient(), floor, freshRegisterLimit(), true, slog.New(slog.DiscardHandler), p.lookup).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), floor, slog.New(slog.DiscardHandler), p.lookup).ServeHTTP(rec, req)
 	return rec, time.Since(start)
 }
 

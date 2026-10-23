@@ -39,4 +39,4 @@ paths:
 - Send no message from a notify step. No transport exists.
 - Rewrite the `notify-not-delivered` sentence in `WorkflowInspector.tsx` and the `sim-notify-not-delivered` sentence in `WorkflowSimulator.tsx` when you add a transport.
 - Let `internal/demopolicy` supersede only a version with `published_by = 'system'`.
-- Re-run the demo backlog sweep on every invoice-service boot. The gateway purge empties `approval_runs`.
+- The migrate job re-runs the demo backlog sweep after its purge, which empties `approval_runs`.

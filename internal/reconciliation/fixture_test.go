@@ -67,7 +67,7 @@ var rcThresholds = Thresholds{
 var errNoDB = errors.New("reconciliation: DATABASE_* env not set")
 
 // harness holds one pool per role plus an insert-only queue.Client on the app pool — the
-// exact shape `cmd/reconciliation` builds (M5-06 System Design).
+// exact shape `cmd/worker` builds (M5-06 System Design).
 type harness struct {
 	super  *pgxpool.Pool // superuser: BYPASSRLS, seeds fixtures + cross-checks river_job/audit_log
 	mig    *pgxpool.Pool // invoice_migrator: schema owner, used only for the pg_indexes checks

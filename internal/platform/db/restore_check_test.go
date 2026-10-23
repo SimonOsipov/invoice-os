@@ -737,6 +737,58 @@ func TestRestoreCheck_BypassRLSRoleWithoutSuperuserPasses(t *testing.T) {
 	}
 }
 
+// TestRestoreCheck_RunsUnderSetRoleToTheAuditor: on Cloud SQL postgres does not bypass RLS
+// (GKE-01 P3), so the check runs after SET ROLE restore_auditor (db/restore-auditor.sql).
+func TestRestoreCheck_RunsUnderSetRoleToTheAuditor(t *testing.T) {
+	ctx := context.Background()
+	f := newRCFixture(t)
+	f.invoice(t, "RC-1", "draft", f.cutoff.Add(-time.Hour))
+	t.Cleanup(func() {
+		_, _ = f.pool.Exec(ctx, `DROP OWNED BY restore_auditor`)
+		_, _ = f.pool.Exec(ctx, `DROP ROLE IF EXISTS restore_auditor`)
+	})
+	b, err := os.ReadFile("../../../db/restore-auditor.sql")
+	if err != nil {
+		t.Fatalf("read db/restore-auditor.sql: %v", err)
+	}
+	conn, err := pgx.Connect(ctx, f.dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.Close(ctx)
+	for range 2 { // idempotent
+		if _, err := conn.Exec(ctx, string(b)); err != nil {
+			t.Fatalf("apply db/restore-auditor.sql: %v", err)
+		}
+	}
+	var login, bypass bool
+	if err := conn.QueryRow(ctx, `SELECT rolcanlogin, rolbypassrls FROM pg_roles WHERE rolname = 'restore_auditor'`).Scan(&login, &bypass); err != nil {
+		t.Fatalf("read restore_auditor: %v", err)
+	}
+	if login || !bypass {
+		t.Fatalf("restore_auditor rolcanlogin %v, rolbypassrls %v, want false and true", login, bypass)
+	}
+
+	if _, err := conn.Exec(ctx, `SET ROLE restore_auditor`); err != nil {
+		t.Fatalf("SET ROLE restore_auditor: %v", err)
+	}
+	out, err := rcRunOn(ctx, t, conn, rcInputs(f.tenant, f.cutoff))
+	if err != nil {
+		t.Fatalf("restore-check as restore_auditor: %v", err)
+	}
+	rows := out.kind("role")
+	if len(rows) != 1 || strings.Join(rows[0][1:], " | ") != "restore_auditor | f | t" {
+		t.Errorf("role rows = %v, want restore_auditor | f | t", rows)
+	}
+	counted := false
+	for _, r := range out.kind("table") {
+		counted = counted || (r[1] == "invoices" && r[2] == "1")
+	}
+	if !counted {
+		t.Errorf("table rows = %v, want invoices counted 1 under the auditor", out.kind("table"))
+	}
+}
+
 // --- AC-6 -------------------------------------------------------------------
 
 func TestRestoreCheck_RecentRows(t *testing.T) {

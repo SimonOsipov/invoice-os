@@ -13,7 +13,8 @@ paths:
 - Create a new service once, in the persistent environment. Every PR fork inherits it.
 - Name a Go service `<svc>` identically in `cmd/<svc>`, the Railway service name and the host `<svc>.railway.internal`.
 - Build every Go service from the root `Dockerfile` with the repo root as build context. Add no per-service Dockerfile.
-- `cmd/blog` is the one Go binary outside the fleet. It runs in the `blog` SPA image from `frontend/blog/Dockerfile`, answers `/health`, and boots through `platform.ReportBootPanic` and `platform.Fatal` without `platform.New`.
+- `cmd/migrate` is the pre-deploy job. It opens no listener and boots through `platform.ReportBootPanic` and `platform.Fatal` without `platform.New`.
+- `cmd/blog` is the other Go binary outside the fleet. It runs in the `blog` SPA image from `frontend/blog/Dockerfile`, answers `/health`, and boots through `platform.ReportBootPanic` and `platform.Fatal` without `platform.New`.
 - Select the binary with the build argument `SERVICE`. Set `SERVICE=<svc>` as a Railway service variable, because `railway.json` has no `buildArgs`.
 - Add no BuildKit `--mount=type=cache` to the shared Dockerfile. Railway requires each cache id to embed the building service's own id.
 - Copy `cmd/<svc>/railway.json` from an existing service. Use the `DOCKERFILE` builder, health path `/healthz` and restart policy `ON_FAILURE`.
@@ -39,7 +40,10 @@ paths:
 - Set `SENTRY_DSN` on production only. Never seal a Sentry variable.
 - Add a new service to the lists in `set-sentry-off`. `TestSentryOffListsMatchTheDeployedFleet` pins them.
 - Report `sentry` from a service probed through `/healthz/fleet`, or exempt it by name in the fleet gate. Only `auth` is exempt.
-- Wrap a new outbound client to another first-party service in `platform.TraceTransport`. Never wrap a third-party client.
+- Wrap a new outbound client to another first-party service in `platform.TraceTransport`. Never wrap a third-party client. A first-party client without `TraceTransport` (GoTrue) takes `platform.IDTokenTransport`.
+- Run background work only in `cmd/worker`: River workers, tickers and sweeps. A request-driven service enqueues on an insert-only `queue.Config{}`. `TestOnlyTheWorkerRunsBackgroundWork` fails otherwise.
+- Wrap each periodic task in `leader.Lead("<task>", fn)` with its own name. `TestWorkerMain_EveryPeriodicTaskHasOneLeader` fails otherwise.
+- Run one worker instance. The submission rate limiter is in memory.
 - Build a new Go service on `platform.New`. It gets Sentry labels, 5xx and panic capture, tracing and the `SENTRY_TEST_EVENT` trigger.
 - Call `initMonitoring` from `src/instrument.ts` in a new SPA. Add its name to the `Service` union in `packages/monitoring/src/options.ts`.
 - Declare `ARG` and `ENV` for `VITE_SENTRY_DSN` and `VITE_SENTRY_TEST_DIGEST` in a new SPA Dockerfile build stage.

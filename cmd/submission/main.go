@@ -1,49 +1,32 @@
-// Command submission is the 05 Submission context service. M2-08 booted the River worker
-// pool (the async job spine) alongside the platform kit's /healthz + /readyz and drains
-// in-flight jobs within the shutdown window on SIGINT/SIGTERM. The worker connects as the
-// app role (invoice_app) and re-establishes tenant context per job — the worker-role
-// pattern, .claude/rules/tenant-seam.md. M5-04 wires the real handlers onto that spine:
-// SubmitWorker drives the tx1 / adapter / tx2 submit flow and PollWorker follows a
-// deferred verdict the same way (internal/submission/worker.go) — both registered, with
-// ExtractWorker, on the single bundle workerBundle builds below.
-//
-// The domain HTTP surface is GET /v1/extractions (EXTR-07), GET /v1/extractions/{id} — the
-// review screen's read, which audits document.read — GET /v1/extractions/{id}/pages/{n}, which
-// streams one rendered page image, and POST /v1/documents (EXTR-09), which stores the upload
-// and enqueues its extraction on this service's own River client.
+// Command submission is the 05 Submission context service: the extraction review routes, the
+// source-document upload, the staff jobs and health reads. It enqueues on an insert-only River
+// client; cmd/worker runs every job.
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/riverqueue/river"
 
-	"github.com/SimonOsipov/invoice-os/internal/aicalls"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
+	"github.com/SimonOsipov/invoice-os/internal/docadapter"
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
-	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
-	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 	"github.com/SimonOsipov/invoice-os/internal/staffjobs"
-	"github.com/SimonOsipov/invoice-os/internal/submission"
 	"github.com/SimonOsipov/invoice-os/internal/systemhealth"
-	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 func main() {
@@ -54,7 +37,7 @@ func main() {
 		platform.Fatal(slog.Default(), "submission: startup: %v", err)
 	}
 
-	gw, err := gatewayURL(os.Getenv("GATEWAY_URL"))
+	gw, err := systemhealth.GatewayURL(os.Getenv("GATEWAY_URL"))
 	if err != nil {
 		platform.Fatal(app.Logger, "submission: %v", err)
 	}
@@ -62,8 +45,7 @@ func main() {
 	ctx := context.Background()
 
 	// Connect as the app role (invoice_app, NOBYPASSRLS) — never the migrator or
-	// superuser (.claude/rules/db-migrations.md). The worker uses this pool both to operate River's
-	// queue and, per job, to open tenant-scoped transactions via db.WithinTenantTx.
+	// superuser (.claude/rules/db-migrations.md).
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		// pgx would otherwise build a config from ambient libpq env/defaults for an empty
@@ -76,13 +58,11 @@ func main() {
 	}
 	defer pool.Close()
 
-	// /readyz now reflects the DB dependency the worker carries.
+	// /readyz reflects the DB dependency.
 	app.Ready("database", pool.Ping)
 
-	// The five DOCUMENT_* variables are required unconditionally, the way PORT and
-	// MockConfigFromEnv are: gating this on whether extraction ever runs would defer the
-	// failure to the moment a job first needs the store
-	// (TestSubmissionMain_FatalOnDocumentConfigError).
+	// The five DOCUMENT_* variables are required unconditionally: the upload and page routes
+	// read the store (TestSubmissionMain_FatalOnDocumentConfigError).
 	docCfg, err := document.ConfigFromEnv()
 	if err != nil {
 		platform.Fatal(app.Logger, "submission: document config: %v", err)
@@ -92,112 +72,17 @@ func main() {
 		platform.Fatal(app.Logger, "submission: document object store: %v", err)
 	}
 
-	// M5-02-04: resolve the configured adapter against the fail-closed production
-	// allowlist before the queue starts.
-	//
-	// M5-03-05: the mock's latency baseline is read from the environment BEFORE the registry is
-	// built, and a malformed value is fatal. The fatal is UNCONDITIONAL -- it fires even when
-	// APP_ADAPTER is unset and the mock is never selected -- deliberately, matching how PORT
-	// behaves: gating it on `appAdapter == "mock"` would defer the failure to the moment someone
-	// flips the adapter on a fleet, the worst time to discover a typo.
-	mockCfg, err := submission.MockConfigFromEnv()
-	if err != nil {
-		platform.Fatal(app.Logger, "submission: adapter config: %v", err)
-	}
-	reg := submission.NewDefaultRegistry(mockCfg)
-	appAdapter := os.Getenv("APP_ADAPTER")
-	// M5-04-08 tightens this: a failed Select is fatal in EVERY environment, not just
-	// production -- SubmitWorker/PollWorker below need a real Adapter to do anything, so
-	// booting with none configured is no longer a viable "continue anyway" state for any
-	// fleet, dev included.
-	adapter, err := submission.Select(reg, app.Config.Environment, appAdapter)
-	if err != nil {
-		platform.Fatal(app.Logger, "submission: adapter: %v", err)
-	}
-
-	rateLimit, err := submission.RateLimitConfigFromEnv()
-	if err != nil {
-		platform.Fatal(app.Logger, "submission: rate limit config: %v", err)
-	}
-	limiter := submission.NewRateLimiter()
 	invStore := invoice.NewStore(pool)
-
-	// SubmitWorker/PollWorker are built with every field except Queue, which does not exist
-	// yet -- queue.New (below) needs their bundle (submission.Workers(sw, pw)) to construct
-	// the client in the first place. Queue is backfilled onto these same pointers once
-	// queue.New returns, before the client is registered as a background worker.
-	sw := &submission.SubmitWorker{
-		Pool:        pool,
-		Adapter:     adapter,
-		InvoicePort: invStore,
-		Limiter:     limiter,
-		RateLimit:   rateLimit,
-		Logger:      app.Logger,
-	}
-	pw := &submission.PollWorker{
-		Pool:        pool,
-		Adapter:     adapter,
-		InvoicePort: invStore,
-		Logger:      app.Logger,
-	}
-
-	// Fatal in every environment, matching the Select call above: a fleet that names an
-	// extractor it cannot build should not boot and quietly extract nothing. One read, two
-	// seams: the same EXTRACTOR value picks the Extractor and the text reader, so the two
-	// cannot drift apart (TestSubmissionMain_WiresTheQueueSeams).
-	extractorName, doclingURL := os.Getenv("EXTRACTOR"), os.Getenv("DOCLING_URL")
-	extractor, err := selectExtractor(extractorName, doclingURL)
-	if err != nil {
-		// ceiling: the error quotes the raw DOCLING_URL; internal host, no credentials today
-		platform.Fatal(app.Logger, "submission: %v", err)
-	}
-	textReader, err := selectTextReader(extractorName, doclingURL)
-	if err != nil {
-		// ceiling: the error quotes the raw DOCLING_URL; internal host, no credentials today
-		platform.Fatal(app.Logger, "submission: %v", err)
-	}
-
-	// ExtractWorker has no Queue field, so unlike sw/pw it needs no backfill. PageStore.Reader
-	// stays go-pdfium whatever EXTRACTOR selects: it yields both the page images and the
-	// tokens Fingerprint and AnchorObservations are built from.
 	docSvc := document.NewService(document.NewStore(pool), docObjects)
-	// Text is nil under mock and unset, which is what keeps Work on the Extractor branch; under
-	// docling it is the sidecar reader and Work reads text through it instead. Rules is real in
-	// every case and reachable only on the text branch.
-	aiClient, err := ai.FromEnv(app.Logger)
-	if err != nil {
-		platform.Fatal(app.Logger, "submission: %v", err)
-	}
-	jevClient, err := jev.FromEnv(app.Logger)
-	if err != nil {
-		platform.Fatal(app.Logger, "submission: %v", err)
-	}
-	aiRecorder := aicalls.NewRecorder(pool, app.Logger)
-	defer aiRecorder.Wait() // runs before pool.Close
-	aiClient.SetRecorder(aiRecorder.Record)
-	jevClient.SetRecorder(aiRecorder.Record)
-	ew := newExtractWorker(pool, extractor, newDocumentOpener(docSvc.Open),
-		&extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: newPageSink(docObjects)},
-		newExtractionAuditor(), textReader, (&extraction.Store{Pool: pool}).AnchorRulesFor, aiClient, jevClient,
-		newPageObjectReader(docObjects), app.Logger)
 
-	// Build the working River client and register it on the platform kit's lifecycle, so it
-	// starts alongside /healthz and drains on shutdown (decision #3).
-	q, err := queue.New(pool, queue.Config{
-		Queues:  queueConfigs(),
-		Workers: workerBundle(sw, pw, ew),
-		Logger:  app.Logger,
-	})
+	// Insert-only: the worker (cmd/worker) fetches and runs every job this service enqueues.
+	q, err := queue.New(pool, queue.Config{})
 	if err != nil {
 		platform.Fatal(app.Logger, "submission: queue: %v", err)
 	}
-	sw.Queue, pw.Queue = q, q
-	app.AddBackgroundWorker(q)
 
 	healthStore := &systemhealth.Store{Pool: pool}
-	fleet := systemhealth.NewFleetReader(gw, &http.Client{Transport: platform.TraceTransport(nil)})
-	sampler := &systemhealth.Sampler{Store: healthStore, Fleet: fleet, Now: time.Now, Logger: app.Logger}
-	app.AddBackgroundWorker(codelist.NewWorker(systemhealth.SampleInterval, sampler.Sample))
+	fleet := systemhealth.NewFleetReader(gw, &http.Client{Transport: platform.TraceTransport(nil)}, mustEnv("GATEWAY_TOKEN"))
 	app.Mux.HandleFunc("GET /v1/staff/health", systemhealth.Handler(healthStore.StaffSnapshot, fleet, time.Now, app.Logger))
 
 	// Stub endpoint — proves routing end to end.
@@ -215,10 +100,10 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/extractions/{id}", extraction.DetailHandler(reader.Detail, app.Logger))
 
 	// GET /v1/extractions/{id}/pages/{n} streams one rendered page from the same bucket
-	// newPageSink writes to. It audits nothing: one open screen owes one document.read row,
+	// the worker's docadapter.PageSink writes to. It audits nothing: one open screen owes one document.read row,
 	// from the detail route above, not one per page.
 	app.Mux.HandleFunc("GET /v1/extractions/{id}/pages/{n}",
-		extraction.PageImageHandler(reader.PageImageKey, newPageObjectReader(docObjects), app.Logger))
+		extraction.PageImageHandler(reader.PageImageKey, docadapter.PageObjectReader(docObjects), app.Logger))
 
 	// POST /v1/extractions/{id}/fields/{name}/corrections -- one transaction that appends the
 	// correction row, writes the value onto the invoice filed from the job's document, and
@@ -226,7 +111,7 @@ func main() {
 	app.Mux.HandleFunc("POST /v1/extractions/{id}/fields/{name}/corrections",
 		extraction.CorrectionHandler(pool, newInvoiceFieldApplier(invStore.EditBySourceDocumentTx),
 			newFieldCorrectedAuditor(), newAnchorLearnedAuditor(),
-			extraction.PageOneReader(newDocumentOpener(docSvc.Open), extraction.NewPDFiumReader()), app.Logger))
+			extraction.PageOneReader(docadapter.Opener(docSvc.Open), extraction.NewPDFiumReader()), app.Logger))
 
 	// POST /v1/extractions/{id}/line-items -- the same transaction shape as the correction
 	// route, replacing the invoice's whole line set
@@ -256,67 +141,12 @@ func main() {
 	}
 }
 
-// gatewayURL parses GATEWAY_URL, the in-network gateway base the fleet reader calls.
-func gatewayURL(raw string) (*url.URL, error) {
-	if raw == "" {
-		return nil, errors.New("GATEWAY_URL is required")
-	}
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, fmt.Errorf("GATEWAY_URL must be an absolute http(s) URL, got %q", raw)
-	}
-	return u, nil
-}
-
-// documents.size_bytes CHECKs <= this (migrations/20260802163544_documents.sql).
-const maxDocumentBytes = 15 << 20
-
-// documentOpen is document.Service.Open's shape, so a test can substitute one.
-type documentOpen func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error)
-
-// newDocumentOpener adapts the document service to the extraction seam: whole object, no
-// range, capped read, body closed exactly once on every path. ctx is forwarded untouched --
-// the worker or the correction route has already put the tenant identity on it, and RLS scopes
-// the row lookup by that identity (TestNewDocumentOpener_ForwardsContextVerbatim).
-func newDocumentOpener(open documentOpen) extraction.OpenDocument {
-	return func(ctx context.Context, documentID string) (extraction.Document, error) {
-		doc, obj, err := open(ctx, documentID, "")
-		// Registered before the error branch: an open that hands back both a body and an
-		// error still closes (TestNewDocumentOpener_ClosesBodyWhenOpenErrors).
-		if obj.Body != nil {
-			defer func() { _ = obj.Body.Close() }()
-		}
-		if err != nil {
-			return extraction.Document{}, err
-		}
-		if obj.Body == nil {
-			return extraction.Document{}, fmt.Errorf("submission: document %s opened with no body", documentID)
-		}
-		// +1 so an at-the-cap document still reads whole and only an over-cap one is
-		// detectable. The cap bounds the READ, never obj.Size, which a ranged or lying
-		// store understates (TestNewDocumentOpener_CapsAtDocumentSizeCeiling).
-		b, err := io.ReadAll(io.LimitReader(obj.Body, maxDocumentBytes+1))
-		if err != nil {
-			return extraction.Document{}, err
-		}
-		if len(b) > maxDocumentBytes {
-			return extraction.Document{}, fmt.Errorf(
-				"submission: document %s exceeds the %d-byte ceiling", documentID, maxDocumentBytes)
-		}
-		var ct string
-		if doc.DeclaredContentType != nil {
-			ct = *doc.DeclaredContentType
-		}
-		return extraction.Document{Bytes: b, ContentType: ct}, nil
-	}
-}
-
 // documentStore is document.Service.Store's shape, so a test can substitute one.
 type documentStore func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (document.Document, bool, error)
 
 // newDocumentStorer adapts the document service to the upload seam: internal/extraction never
 // imports internal/document, so the stored row is projected into its own shape here, the way
-// newDocumentOpener projects an opened one. Every field comes off the STORED row -- filename
+// docadapter.Opener projects an opened one. Every field comes off the STORED row -- filename
 // and size are the sanitized, server-computed values, not what the caller declared.
 func newDocumentStorer(store documentStore) func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (extraction.StoredDocument, error) {
 	return func(ctx context.Context, filename, contentType string, size int64, body io.ReadSeeker) (extraction.StoredDocument, error) {
@@ -351,70 +181,6 @@ func newExtractionEnqueuer(pool *pgxpool.Pool, q *queue.Client) func(ctx context
 			return e
 		})
 		return skipped, err
-	}
-}
-
-// newPageSink adapts the document object store to the extraction seam. bytes.Reader is handed
-// over at offset 0 because Put transmits from the reader's CURRENT position, the same trap
-// document.Service.Store rewinds for (TestNewPageSink_PutsToTheDocumentStore).
-func newPageSink(objects document.ObjectStore) extraction.PageSink {
-	return func(ctx context.Context, key string, body []byte) error {
-		return objects.Put(ctx, key, bytes.NewReader(body), int64(len(body)))
-	}
-}
-
-// newPageObjectReader adapts the document object store to the page-image read seam: whole
-// object, no range, body handed over UNREAD so the handler streams it. The key arrives already
-// selected off an RLS-visible row, so nothing here rewrites it
-// (TestNewPageObjectReader_ReadsTheKeyItIsGiven).
-func newPageObjectReader(objects document.ObjectStore) extraction.PageObject {
-	return func(ctx context.Context, key string) (io.ReadCloser, int64, error) {
-		obj, err := objects.Get(ctx, key, "")
-		// Closed ON the error branch: a Get that hands back both a body and an error still owes
-		// a close (TestNewPageObjectReader_ClosesBodyWhenGetErrors).
-		if err != nil {
-			if obj.Body != nil {
-				_ = obj.Body.Close()
-			}
-			return nil, 0, err
-		}
-		if obj.Body == nil {
-			return nil, 0, fmt.Errorf("submission: page object %s opened with no body", key)
-		}
-		return obj.Body, obj.Size, nil
-	}
-}
-
-// newExtractionAuditor adapts the audit module to the extraction seam. Two call sites, each
-// with its event name spelled once: a const identifier here reads as a non-literal to
-// internal/platform/db's audit.Record scan and lands the site in no bucket.
-func newExtractionAuditor() extraction.RecordExtractionAudit {
-	return func(ctx context.Context, tx pgx.Tx, ev extraction.ExtractionAudit) error {
-		if ev.Succeeded {
-			return audit.Record(ctx, tx, "system", "extraction.succeeded", map[string]any{
-				"document_id":       ev.DocumentID,
-				"extraction_job_id": ev.ExtractionJobID,
-				"extractor":         ev.Extractor,
-				"extractor_version": ev.ExtractorVersion,
-				"field_count":       ev.FieldCount,
-				"flagged_count":     ev.FlaggedCount,
-			})
-		}
-		// audit_log is append-only, so a failure_kind written wrong is wrong forever. Work()
-		// assigns a kind on every error path, making "" unreachable today; this is what keeps
-		// it unreachable (TestNewExtractionAuditor_FailedRefusesAnInvalidFailureKind).
-		if !ev.FailureKind.Valid() {
-			return fmt.Errorf("extraction audit: job %s reports failure with failure kind %q",
-				ev.ExtractionJobID, ev.FailureKind)
-		}
-		return audit.Record(ctx, tx, "system", "extraction.failed", map[string]any{
-			"document_id":       ev.DocumentID,
-			"extraction_job_id": ev.ExtractionJobID,
-			"extractor":         ev.Extractor,
-			"extractor_version": ev.ExtractorVersion,
-			"state":             ev.State,
-			"failure_kind":      string(ev.FailureKind),
-		})
 	}
 }
 
@@ -607,85 +373,6 @@ func invoiceEditFor(field string, value *string) (invoice.EditInput, error) {
 		*column = value
 	}
 	return invoice.EditInput{UpdateInput: in}, nil
-}
-
-// selectExtractor resolves EXTRACTOR to an extraction.Extractor, the shape submission.Select
-// already uses for APP_ADAPTER. Unset means mock, so a fleet that sets nothing behaves exactly
-// as it did before the sidecar existed. An unrecognised value is an error, never a silent fall
-// back to mock: a typo that quietly downgrades extraction is the failure this shape exists to
-// prevent, and main() makes it fatal in every environment (M5-04-08's posture).
-func selectExtractor(extractorName, doclingURL string) (extraction.Extractor, error) {
-	switch extractorName {
-	case "", "mock":
-		return extraction.NewMockExtractor(), nil
-	case "docling":
-		if doclingURL == "" {
-			return nil, errors.New("extractor: EXTRACTOR=docling requires DOCLING_URL")
-		}
-		// NewDoclingExtractor validates the URL, so a malformed one fails here at boot rather
-		// than on the first job with a client pointed at nothing. This arm stays a
-		// *DoclingExtractor even though Extract is unreachable once Text is wired: Name() and
-		// Version() still write extraction_jobs.extractor, and a MockExtractor here would label
-		// every docling job mock-extracted.
-		ext, err := extraction.NewDoclingExtractor(doclingURL)
-		if err != nil {
-			return nil, fmt.Errorf("extractor: DOCLING_URL %q: %w", doclingURL, err)
-		}
-		return ext, nil
-	default:
-		return nil, fmt.Errorf("extractor: unrecognised EXTRACTOR %q, want mock or docling", extractorName)
-	}
-}
-
-// selectTextReader resolves the SAME EXTRACTOR value to ExtractWorker.Text, so one variable
-// selects both seams. mock and unset select no reader at all: a nil Text is what keeps Work on
-// the Extractor branch. The *DoclingReader is declared inside its own case and every other arm
-// returns the literal nil -- a typed nil compares non-nil as a PageReader and would panic on the
-// first job (TestSelectTextReader_MockAndUnsetSelectNoReader).
-func selectTextReader(extractorName, doclingURL string) (extraction.PageReader, error) {
-	switch extractorName {
-	case "", "mock":
-		return nil, nil
-	case "docling":
-		if doclingURL == "" {
-			return nil, errors.New("extractor: EXTRACTOR=docling requires DOCLING_URL")
-		}
-		r, err := extraction.NewDoclingReader(doclingURL)
-		if err != nil {
-			return nil, fmt.Errorf("extractor: DOCLING_URL %q: %w", doclingURL, err)
-		}
-		return r, nil
-	default:
-		return nil, fmt.Errorf("extractor: unrecognised EXTRACTOR %q, want mock or docling", extractorName)
-	}
-}
-
-// newExtractWorker keeps every collaborator at one call site: a nil field compiles and fails
-// only on the first job (TestNewExtractWorker_SetsEveryCollaborator).
-func newExtractWorker(pool *pgxpool.Pool, ext extraction.Extractor, open extraction.OpenDocument,
-	pages *extraction.PageStore, auditor extraction.RecordExtractionAudit,
-	text extraction.PageReader, rules extraction.LoadAnchorRules,
-	aiReader extraction.AIReader, jevAsker extraction.JevAsker, pageBytes extraction.PageObject,
-	logger *slog.Logger) *extraction.ExtractWorker {
-	return &extraction.ExtractWorker{Pool: pool, Extractor: ext, Open: open, Pages: pages,
-		Audit: auditor, Text: text, Rules: rules, AI: aiReader, Jev: jevAsker, PageBytes: pageBytes, Logger: logger}
-}
-
-// queueConfigs is the one map the client fetches from. Extraction gets its own queue so a slow
-// read cannot starve submission; river.NewClient refuses MaxWorkers < 1.
-func queueConfigs() map[string]river.QueueConfig {
-	return map[string]river.QueueConfig{
-		river.QueueDefault:   {MaxWorkers: 10},
-		extraction.QueueName: {MaxWorkers: 2},
-	}
-}
-
-// workerBundle is the ONE bundle queue.New reads. A River client takes exactly one, so a
-// second bundle would leave its workers unfetched (TestWorkerBundle_CarriesAllThreeKinds).
-func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker) *river.Workers {
-	bundle := submission.Workers(sw, pw)
-	extraction.AddTo(bundle, ew)
-	return bundle
 }
 
 func mustEnv(key string) string {

@@ -32,7 +32,7 @@ paths:
 - Persist the ref from each `Pending` into `submission_jobs.poll_ref`. A caller that re-polls the first ref never converges.
 - Reject a foreign ref with an error that wraps `ErrMockUnknownRef`. `Poll` then reports `Retryable` with `ReachedWire` false.
 - Select the mock with `APP_ADAPTER=mock`. An unset `APP_ADAPTER` is fatal in every environment.
-- Keep `productionAdapters` empty. `APP_ADAPTER=mock` with `ENVIRONMENT=production` fails with `ErrAdapterNotInProd`.
+- Keep `productionAdapters` to the mock alone until the first real adapter ships, then remove the mock. Any other name with `ENVIRONMENT=production` fails with `ErrAdapterNotInProd`.
 - Read `APP_ADAPTER_MOCK_LATENCY` through `MockConfigFromEnv`. The default is `800ms`, and `0s` means instant.
 - Fail boot on a negative or unparseable latency, even when `APP_ADAPTER` is unset.
 - Read `SUBMISSION_RATE_LIMIT_PER_MINUTE` through `RateLimitConfigFromEnv`. Fail boot on a value of zero or less.

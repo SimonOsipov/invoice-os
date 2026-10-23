@@ -3390,44 +3390,18 @@ func TestSelect_MockIsSelectableOutsideProduction(t *testing.T) {
 	}
 }
 
-// S35 (AC-4, row 7): the mock is REFUSED in production, for every casing/padding variant of the
-// environment string -- Core AC-6's fail-closed boot gate.
-//
-// THIS SPEC IS VACUOUS ON ITS OWN and the development control below is not optional. Select
-// checks IsProduction BEFORE the registry lookup (registry.go:62-66), so
-// `Select(Registry{}, "production", "mock")` ALREADY returns ErrAdapterNotInProd against an
-// empty registry -- i.e. the refusal half passes today, before the mock is registered at all,
-// and would keep passing if the registration were later deleted. Asserting the development case
-// in the SAME function is what makes the refusal mean "registered AND refused".
-//
-// The mutual-exclusion assertion (`!errors.Is(err, ErrUnknownAdapter)`) pins WHICH gate refused:
-// without it, a registry that never registered the mock refuses for the wrong reason and looks
-// identical at the `err != nil` level.
-func TestSelect_MockIsRefusedInProduction(t *testing.T) {
+// The mock serves production until a real adapter ships (productionAdapters' ceiling), for every
+// casing and padding of the environment.
+func TestSelect_MockIsSelectableInProduction(t *testing.T) {
 	reg := submission.NewDefaultRegistry(submission.MockConfig{})
-
-	// The control. Not a separate test: see this spec's comment.
-	if a, err := submission.Select(reg, "development", "mock"); err != nil || a == nil {
-		t.Fatalf(`control: Select(NewDefaultRegistry(cfg), "development", "mock") = (%v, %v), want the `+
-			`mock and no error -- until the mock is really REGISTERED, the production refusals below `+
-			`are passed by an empty registry and prove nothing`, a, err)
-	}
-
 	for _, environment := range []string{"production", "Production", "PRODUCTION", " production", "production "} {
 		t.Run("environment="+strings.ReplaceAll(environment, " ", "_"), func(t *testing.T) {
 			a, err := submission.Select(reg, environment, "mock")
-			if !errors.Is(err, submission.ErrAdapterNotInProd) {
-				t.Fatalf("Select(NewDefaultRegistry(cfg), %q, \"mock\") error = %v, want "+
-					"errors.Is(err, ErrAdapterNotInProd) -- productionAdapters must stay empty; M5-03 "+
-					"registers the mock but never authorises it in production", environment, err)
+			if err != nil {
+				t.Fatalf("Select(NewDefaultRegistry(cfg), %q, \"mock\") error = %v, want the mock", environment, err)
 			}
-			if errors.Is(err, submission.ErrUnknownAdapter) {
-				t.Errorf("Select(..., %q, \"mock\") also satisfies errors.Is(_, ErrUnknownAdapter) -- "+
-					"the refusal must come from the production allowlist, not from the mock being "+
-					"absent from the registry", environment)
-			}
-			if a != nil {
-				t.Errorf("Select(..., %q, \"mock\") adapter = %+v, want nil", environment, a)
+			if _, isMock := a.(*submission.MockAdapter); !isMock {
+				t.Errorf("Select(..., %q, \"mock\") returned %T, want *submission.MockAdapter", environment, a)
 			}
 		})
 	}

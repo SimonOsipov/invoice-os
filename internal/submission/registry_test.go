@@ -172,19 +172,19 @@ func maRegistryKeys(reg submission.Registry) []string {
 }
 
 // AC-3 / Core AC-6: Select refuses a name in production even when that name IS registered
-// in the Registry passed in, because productionAdapters is empty in this subtask.
+// in the Registry passed in, because it is not in productionAdapters.
 func TestSelect_ProductionRefusesNonAllowlistedAdapter(t *testing.T) {
-	reg, err := submission.NewRegistry(fakeAdapter{name: "mock", version: "v1"})
+	reg, err := submission.NewRegistry(fakeAdapter{name: "real", version: "v1"})
 	if err != nil {
 		t.Fatalf("NewRegistry setup failed: %v", err)
 	}
 
-	adapter, err := submission.Select(reg, "production", "mock")
+	adapter, err := submission.Select(reg, "production", "real")
 	if !errors.Is(err, submission.ErrAdapterNotInProd) {
-		t.Fatalf(`Select(reg, "production", "mock") error = %v, want errors.Is(err, ErrAdapterNotInProd)`, err)
+		t.Fatalf(`Select(reg, "production", "real") error = %v, want errors.Is(err, ErrAdapterNotInProd)`, err)
 	}
 	if adapter != nil {
-		t.Errorf(`Select(reg, "production", "mock") adapter = %+v, want nil`, adapter)
+		t.Errorf(`Select(reg, "production", "real") adapter = %+v, want nil`, adapter)
 	}
 }
 
@@ -278,12 +278,9 @@ func TestSelect_NeverReturnsNilAdapterWithNilError(t *testing.T) {
 	}
 }
 
-// AC-3: with the package tests living in submission_test (external), the unexported
-// productionAdapters map can't be read directly -- so this proves its emptiness
-// behaviourally: several distinct registered names all still refuse in production. This
-// is the documented cost of [mock-refuses-production].
-func TestSelect_ProductionRefusesEveryNameToday(t *testing.T) {
-	names := []string{"mock", "sandbox", "partner-a", "partner-b"}
+// AC-3: productionAdapters admits only the mock; every other registered name refuses in production.
+func TestSelect_ProductionRefusesEveryNameButTheMock(t *testing.T) {
+	names := []string{"sandbox", "partner-a", "partner-b"}
 	var adapters []submission.Adapter
 	for _, n := range names {
 		adapters = append(adapters, fakeAdapter{name: n, version: "v1"})
@@ -297,7 +294,7 @@ func TestSelect_ProductionRefusesEveryNameToday(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			adapter, err := submission.Select(reg, "production", name)
 			if !errors.Is(err, submission.ErrAdapterNotInProd) {
-				t.Errorf(`Select(reg, "production", %q) error = %v, want errors.Is(err, ErrAdapterNotInProd) -- productionAdapters must be empty in M5-02`, name, err)
+				t.Errorf(`Select(reg, "production", %q) error = %v, want errors.Is(err, ErrAdapterNotInProd) -- productionAdapters admits only the mock`, name, err)
 			}
 			if adapter != nil {
 				t.Errorf(`Select(reg, "production", %q) adapter = %+v, want nil`, name, adapter)

@@ -48,6 +48,9 @@ func (s *Store) Record(ctx context.Context, slot time.Time, fleetStatus string, 
 	return tag.RowsAffected() == 1, nil
 }
 
+// StaffCheck is the red-commit stub: it refuses nobody.
+func (s *Store) StaffCheck(ctx context.Context) error { return nil }
+
 // StaffSnapshot reads the live per-state counts and the samples since the given time, oldest first.
 func (s *Store) StaffSnapshot(ctx context.Context, since time.Time) (map[string]int64, []Sample, error) {
 	id, ok := auth.StaffFromContext(ctx)

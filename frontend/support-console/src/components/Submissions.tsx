@@ -2,6 +2,8 @@ import type { CSSProperties } from 'react'
 import { CHEVRON_RIGHT_ICON } from '../icons'
 import { JOB_STATES, jobAge, jobStateStyle, type JobState, type StaffJob } from '../jobsApi'
 import type { StaffTenant } from '../tenantsApi'
+import { sentryTenantUrl } from '../helpers'
+import { G } from './BlogList'
 import { Badge } from './StatusBadge'
 import { CARD, Note, ONE_LINE, STAFF_ONLY } from './Tenants'
 
@@ -117,14 +119,28 @@ export function Submissions({ status, errorText, jobs, state, onState, tenant, o
             </button>
           )
         })}
-        <select className="ops-input" aria-label="Tenant" value={tenant} onChange={(e) => onTenant(e.target.value)} style={{ marginLeft: 'auto', maxWidth: 260 }}>
-          <option value="">All tenants</option>
-          {tenants.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-            </option>
-          ))}
-        </select>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
+          {tenant !== '' && (
+            <a
+              href={sentryTenantUrl(tenant)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ops-btn v2-btn v2-btn-ghost"
+              style={{ height: 34, padding: '0 12px', fontSize: 12, textDecoration: 'none' }}
+            >
+              <G name="external-link" size={15} />
+              Open in Sentry
+            </a>
+          )}
+          <select className="ops-input" aria-label="Tenant" value={tenant} onChange={(e) => onTenant(e.target.value)} style={{ maxWidth: 260 }}>
+            <option value="">All tenants</option>
+            {tenants.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
       {tenantsError && <Note text={tenantsError.text} onRetry={tenantsError.onRetry} />}
 

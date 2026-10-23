@@ -109,6 +109,22 @@ describe('Console submissions wiring', () => {
     expect(jobsRead.mock.calls[3].slice(0, 2)).toEqual([undefined, 'T2'])
   })
 
+  it('the Open in Sentry link follows the tenant select and adds no read', async () => {
+    render(<App />)
+    await openSubmissions()
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    await screen.findByRole('option', { name: 'Yaba Freight' })
+    expect(screen.queryByRole('link', { name: /Open in Sentry/ })).toBeNull()
+    fireEvent.change(screen.getByLabelText('Tenant'), { target: { value: 'T2' } })
+    await waitFor(() => expect(jobsRead).toHaveBeenCalledTimes(2))
+    expect(screen.getByRole('link', { name: /Open in Sentry/ }).getAttribute('href')).toContain('tenant_id:T2')
+    fireEvent.change(screen.getByLabelText('Tenant'), { target: { value: '' } })
+    await waitFor(() => expect(jobsRead).toHaveBeenCalledTimes(3))
+    expect(screen.queryByRole('link', { name: /Open in Sentry/ })).toBeNull()
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(jobsRead).toHaveBeenCalledTimes(3)
+  })
+
   it('empty, forbidden, error and expired states', async () => {
     jobsRead.mockResolvedValueOnce([])
     render(<App />)

@@ -716,6 +716,23 @@ async function submissionsLayout(page: Page): Promise<Read> {
   return { problems, rects: { top, chipRects, headCells } }
 }
 
+// With a tenant chosen the Sentry link joins the filter bar beside the select; no job rows needed.
+async function submissionsLinkLayout(page: Page): Promise<Read> {
+  const mn = mainOf(page)
+  const filterBar = parent(mn.getByRole('button', { name: 'ALL', exact: true }))
+  const chips = filterBar.locator('button.ops-chip')
+  const link = filterBar.getByRole('link', { name: 'Open in Sentry' })
+  const top = await boxes(page, { filterBar, select: filterBar.locator('select'), link })
+  const chipRects = await rectsOf(page, chips, 'state chip')
+  const problems = [
+    ...within(top.filterBar, top.link, 'Sentry link in the filter bar'),
+    ...sameTops([top.link, top.select], 'Sentry link and tenant select'),
+    ...pairwiseApart([top.link, top.select, ...chipRects], 'Sentry link, tenant select and state chips'),
+  ]
+  await noSidewaysScroll(page, 'Submissions with a tenant')
+  return { problems, rects: { top, chipRects } }
+}
+
 // The house tenant is selected: View jobs opens Submissions with that tenant preset and no state filter.
 async function viewJobsLands(page: Page): Promise<void> {
   const mn = mainOf(page)
@@ -1190,6 +1207,13 @@ const SCREENS: Screen[] = [
     rowUp: 1,
     reads: submissionsReads,
     layout: submissionsLayout,
+    after: async (page) => {
+      const select = mainOf(page).locator('select[aria-label="Tenant"]')
+      const value = await select.locator('option:not([value=""])').first().getAttribute('value')
+      expect(value, 'a real tenant option').toBeTruthy()
+      await select.selectOption(value!)
+      await atWidths(page, 'SUP-03 Submissions Sentry link layout', () => submissionsLinkLayout(page))
+    },
   },
   {
     nav: 'Rules',

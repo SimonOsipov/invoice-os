@@ -48,3 +48,6 @@ export function healthTone(tone: 'green' | 'amber' | 'red'): { dot: string; stro
   }
   return { dot: 'var(--status-green-text)', stroke: 'var(--action)', fill: 'var(--action-tint)' }
 }
+
+const SENTRY_ISSUES = 'https://as-comply.sentry.io/issues/'
+export const sentryTenantUrl = (id: string) => `${SENTRY_ISSUES}?query=tenant_id:${encodeURIComponent(id)}&project=4512190351474768&statsPeriod=14d`

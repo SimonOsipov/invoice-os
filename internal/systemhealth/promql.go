@@ -69,10 +69,11 @@ const (
 )
 
 // Panels are the 12 panels in wire order.
-// The error_pct "or 0 *" term gives a service with requests and no 5xx a 0 instead of a gap.
+// error_pct: the "or 0 *" term reads 0 for a service with no 5xx series; clamp_min makes an idle step 0, not NaN.
+// A step with no request series still has no point.
 var Panels = []Panel{
 	{"req_per_min", "req/min", `60 * ` + reqRate, true},
-	{"error_pct", "%", `100 * (` + req5xx + ` or 0 * ` + reqRate + `) / ` + reqRate, true},
+	{"error_pct", "%", `100 * (` + req5xx + ` or 0 * ` + reqRate + `) / clamp_min(` + reqRate + `, 1e-9)`, true},
 	{"latency_p50_ms", "ms", `histogram_quantile(0.5, ` + latRate + `)`, true},
 	{"latency_p95_ms", "ms", `histogram_quantile(0.95, ` + latRate + `)`, true},
 	{"cpu_pct", "% of limit", `100 * histogram_quantile(0.95, ` + cpuRate + `)`, true},

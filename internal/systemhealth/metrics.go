@@ -70,7 +70,7 @@ type MetricsSource struct {
 	log *slog.Logger
 
 	mu       sync.Mutex
-	entries  map[metricsKey]metricsEntry // ceiling: len(Ranges) x (len(MetricServices)+1) keys, never evicted
+	entries  map[metricsKey]metricsEntry // ceiling: len(Ranges) x (len(MetricServices)+1) keys, never evicted; add eviction if keys become caller-supplied
 	inflight map[metricsKey]*metricsCall
 }
 

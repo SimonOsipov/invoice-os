@@ -270,3 +270,16 @@ func TestMetricServices_AreSafeToInterpolate(t *testing.T) {
 		seen[s] = true
 	}
 }
+
+func TestErrorPct_ClampsTheDenominatorSoAnIdleStepIsNotNaN(t *testing.T) {
+	var q string
+	for _, p := range Panels {
+		if p.Key == "error_pct" {
+			q = p.Query(Ranges["1h"], "")
+		}
+	}
+	want := `/ clamp_min(sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision"}[300s])), 1e-9)`
+	if !strings.HasSuffix(q, want) {
+		t.Errorf("denominator is not clamped: %s", q)
+	}
+}

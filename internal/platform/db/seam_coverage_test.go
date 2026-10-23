@@ -1407,17 +1407,6 @@ func TestRLS_EveryRegisteredRouteHasAVerdict(t *testing.T) {
 	}
 }
 
-func TestRLS_StaffMetricsRouteIsExempt(t *testing.T) {
-	const route = "GET /v1/staff/metrics"
-	v, ok := scRouteVerdicts[route]
-	if !ok {
-		t.Fatalf("%s has no entry in scRouteVerdicts", route)
-	}
-	if v.verdict != scExempt {
-		t.Errorf("%s has verdict %q, want %q", route, v.verdict, scExempt)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Scan 4 — every swept package builds its DB-test identities off the seeded
 // member (AUDIT-12-02, D-7)

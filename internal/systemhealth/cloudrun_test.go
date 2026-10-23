@@ -347,3 +347,31 @@ func TestRunLists_Refuse500AndEmptyBody(t *testing.T) {
 		}
 	}
 }
+
+func TestLimits_FivePagesAllowedAndSixthRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		pages int
+		fail  bool
+	}{{"five pages", 5, false}, {"endless", 1000, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, g := newRunFake(t, func(_ *http.Request, n int) (int, string) {
+				body := `{"services":[` + svcJSON(fmt.Sprintf("s%d", n), "1") + `]`
+				if n < tc.pages {
+					body += `,"nextPageToken":"t"`
+				}
+				return 200, body + `}`
+			})
+			got, err := g.limits(t.Context(), "tok", "p1", "r1", "")
+			if (err != nil) != tc.fail {
+				t.Fatalf("err = %v, want failure %v", err, tc.fail)
+			}
+			if tc.fail && len(f.reqs) != 5 {
+				t.Fatalf("requests = %d, want 5", len(f.reqs))
+			}
+			if !tc.fail && len(got) != 5 {
+				t.Fatalf("limits = %d services, want 5", len(got))
+			}
+		})
+	}
+}

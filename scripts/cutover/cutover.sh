@@ -62,6 +62,7 @@ SQL
     run_job cutover "/cutover/$run/restore.sh,recreate"
     run_job migrate-bootstrap
     run_job cutover "/cutover/$run/restore.sh,restore"
+    run_job cutover "/cutover/$run/restore.sh,grants"
     run_job cutover "/cutover/$run/restore.sh,check"
     rm -rf "$dir/gcp" && mkdir -p "$dir/gcp"
     gcloud storage cp --project "$PROJECT" "gs://$BUCKET/$run/check/*" "$dir/gcp/"

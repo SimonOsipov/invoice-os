@@ -4,6 +4,7 @@
 #
 #   restore.sh recreate   drop and recreate the invoice_os database (as postgres)
 #   restore.sh restore    restore auth as supabase_auth_admin, then public as invoice_migrator
+#   restore.sh grants     re-apply grants Railway skipped because the role did not exist yet
 #   restore.sh check      run db/restore-check.sql for each tenant in tenants.txt; write check/<tenant>.txt
 #
 # The job's environment holds DATABASE_SUPERUSER_URL, DATABASE_MIGRATION_URL and DATABASE_AUTH_URL.
@@ -32,6 +33,10 @@ case "${1:-}" in
     pg_restore --single-transaction --exit-on-error -L /tmp/public.list -d "$DATABASE_MIGRATION_URL" "$dump"
     echo "restored"
     ;;
+  grants)
+    # 20261022102834_gateway_handoff_codes grants only when invoice_gateway exists; on Railway it did not.
+    psql "$DATABASE_MIGRATION_URL" -v ON_ERROR_STOP=1 -c 'GRANT SELECT, INSERT, DELETE ON gateway_handoff_codes TO invoice_gateway'
+    ;;
   check)
     cutoff=$(cat "$dir/cutoff.txt")
     psql "$DATABASE_SUPERUSER_URL" -v ON_ERROR_STOP=1 -q -f "$dir/restore-auditor.sql"
@@ -47,7 +52,7 @@ case "${1:-}" in
     echo "checked $(wc -l <"$dir/tenants.txt") tenants"
     ;;
   *)
-    echo "usage: restore.sh recreate|restore|check" >&2
+    echo "usage: restore.sh recreate|restore|grants|check" >&2
     exit 2
     ;;
 esac

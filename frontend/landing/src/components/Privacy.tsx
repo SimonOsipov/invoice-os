@@ -8,6 +8,8 @@ import { APP_HOSTNAMES, BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES,
 
 export const GA_RETENTION_MONTHS = 14
 export const AI_PROVIDER_HOST = 'openrouter.ai'
+// The production region; privacyCodeFacts reads it from deploy-prod.yml.
+export const HOSTING_REGION = 'africa-south1'
 export const PROSE_MAX_WIDTH = 720
 export const PRIVACY_CONTACT = 'sam@ascomply.com'
 export const ANALYTICS_DEFAULT_SENTENCE = 'Analytics is off unless you turn it on.'
@@ -324,6 +326,12 @@ export function Privacy() {
             our server sends that invoice's details and the rule's result to the same AI provider, so that it can explain
             the problem in plain words and suggest a correction. Nothing is sent until you click Explain, and a suggested
             correction is saved only when you accept it.
+          </p>
+
+          <h2 style={H2}>Where the product stores your data</h2>
+          <p style={P}>
+            The signed-in ASComply product stores your account, your workspace's data and the documents you upload on
+            Google Cloud, in its South Africa region ({HOSTING_REGION}, Johannesburg).
           </p>
 
           <h2 style={H2}>Error and performance monitoring</h2>

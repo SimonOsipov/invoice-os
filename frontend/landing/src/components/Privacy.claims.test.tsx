@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { AI_PROVIDER_HOST, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
+import { AI_PROVIDER_HOST, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { Footer } from './Footer'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
@@ -33,6 +33,7 @@ import {
   newsletterIntakeFields,
   newsletterPendingHours,
   newsletterResendPropertyKeys,
+  productionRegion,
   BLOG_CHAT_PARAGRAPH,
   resubscribeReplacesRequest,
   rulePutsUnsubscribeInEveryBroadcast,
@@ -68,6 +69,7 @@ const LEDGER_NEEDLES: readonly (readonly [string, string])[] = [
   ['E1 optional answers are pre-selected', 'come with an answer already selected when the form opens'],
   ['E2 the separate marketing box is quoted from code', MARKETING_CONSENT_TEXT],
   ['E3 Google sets the _ga cookies', 'These two are set by Google, not by our own code'],
+  ['C37 the product is hosted in South Africa', `the documents you upload on Google Cloud, in its South Africa region (${HOSTING_REGION}, Johannesburg)`],
   ['lede: no third company', 'Your browser loads nothing on this site from, and sends nothing to, any other company'],
 ]
 
@@ -93,6 +95,10 @@ const WITHDRAWAL_NEEDLES: readonly (readonly [string, string])[] = [
 ]
 
 describe('AC1: every ledger claim survives on the page', () => {
+  it('C37 the region on the page is the one production deploys to', () => {
+    expect(HOSTING_REGION).toBe(productionRegion())
+  })
+
   it.each(LEDGER_NEEDLES)('%s', (_id, needle) => {
     expect(html).toContain(needle)
   })

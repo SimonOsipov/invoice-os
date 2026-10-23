@@ -51,6 +51,11 @@ export function resendSkipsUntickedDemoBooker(): boolean {
   return /if !registered && !consent \{\s*return nil/.test(readSource('internal/notifications/worker.go'))
 }
 
+// The region deploy-prod.yml deploys production to.
+export function productionRegion(): string {
+  return found(/^\s+REGION: (\S+)$/m.exec(readFileSync(join(REPO, '.github/workflows/deploy-prod.yml'), 'utf8'))?.[1], 'REGION in deploy-prod.yml')
+}
+
 // GoTrue sends the verification email through this SMTP host (sidecar/auth/Dockerfile).
 export function authSmtpHost(): string {
   return found(/GOTRUE_SMTP_HOST=(\S+)/.exec(readFileSync(join(REPO, 'sidecar/auth/Dockerfile'), 'utf8'))?.[1], 'GOTRUE_SMTP_HOST')

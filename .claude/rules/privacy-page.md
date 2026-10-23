@@ -91,3 +91,4 @@ Each row holds the URL, one finding and the plan. The PR body holds the full ven
 | OpenRouter routing | https://openrouter.ai/docs/guides/routing/provider-selection | `data_collection` defaults to `allow`. Our request leaves it unset. | No claim. Only `require_parameters` is set. |
 | Google, Gemini 3.5 Flash Lite | https://ai.google.dev/gemini-api/terms | AI Studio unpaid terms permit product training. Vertex terms do not. | No claim. The serving endpoint is unknown. |
 | TypeSafe, Jev | https://typesafe.ai/legal/privacy-policy | The policy forbids training on Input. It does not name Jev. | No claim. The user decides. |
+- Quote the hosting region from `HOSTING_REGION`. `productionRegion` reads the same value from `deploy-prod.yml`, and C37 fails when they differ.

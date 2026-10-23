@@ -2,7 +2,7 @@
 import { analyticsAllowed, readConsent, writeConsent, type ConsentRecord } from '../../landing/src/consent'
 import type { ConsentChoice } from '../../landing/src/components/CookieNotice'
 import { clearGaCookies } from '../../landing/src/gaCookies'
-import { APP_HOSTNAMES, PRODUCTION_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../../landing/src/hubspot'
+import { APP_HOSTNAMES, PRODUCTION_HOSTNAMES } from '../../landing/src/hubspot'
 import {
   CHAT_SCRIPT_ID,
   chatIsLoaded,
@@ -15,17 +15,12 @@ import {
 } from '../../landing/src/hubspotChat'
 import { landingBase } from './auth'
 
-export { CookieNotice, type ConsentChoice } from '../../landing/src/components/CookieNotice'
+export { APP_NOTICE_BODY, CookieNotice, type ConsentChoice } from '../../landing/src/components/CookieNotice'
 export { readConsent, type ConsentRecord } from '../../landing/src/consent'
 
 export function privacyHref(): string {
   return `${landingBase() ?? `https://${PRODUCTION_HOSTNAMES[0]}`}/privacy`
 }
-
-export const APP_NOTICE_BODY =
-  'The product runs no Google Analytics. Accept turns on our HubSpot live chat, which sets its own cookies ' +
-  'and tells HubSpot the email address of your account. No advertising, no data sold to anyone. ' +
-  `Your choice applies to ${SHARED_COOKIE_DOMAIN}, the Feature Library, the Blog and this product.`
 
 const hsq = (): unknown[] => ((window as Window & { _hsq?: unknown[] })._hsq ??= [])
 

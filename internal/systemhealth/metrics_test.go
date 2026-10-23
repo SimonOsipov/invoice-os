@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -489,44 +492,65 @@ func TestMetricsSource_DifferentKeysFetchSeparately(t *testing.T) {
 	}
 }
 
-type panicHandler struct{ slog.Handler }
+// panicHandler blocks the first log call until proceed closes, then panics.
+type panicHandler struct {
+	slog.Handler
+	proceed chan struct{}
+}
 
-func (panicHandler) Enabled(context.Context, slog.Level) bool  { return true }
-func (panicHandler) Handle(context.Context, slog.Record) error { panic("log boom") }
+func (panicHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h panicHandler) Handle(context.Context, slog.Record) error {
+	<-h.proceed
+	panic("log boom")
+}
 
 func TestMetricsSource_APanickingFetchReleasesWaitersAndCachesNothing(t *testing.T) {
-	f, s, _ := newComboFake(t, newClock().now)
-	s.log = slog.New(panicHandler{})
+	clk := newClock()
+	f, s, _ := newComboFake(t, clk.now)
+	proceed := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-proceed:
+		default:
+			close(proceed)
+		}
+	})
+	s.log = slog.New(panicHandler{proceed: proceed})
+	// Get reads the clock under s.mu, so the second read means the joiner has registered on the call.
+	var reads atomic.Int32
+	s.now = func() time.Time { reads.Add(1); return clk.now() }
 	f.override = func(path, _ string) (int, string, bool) { return 500, "", path == tokenPath }
-	f.gate = make(chan struct{})
 	leader := make(chan any, 1)
 	go func() {
 		defer func() { leader <- recover() }()
 		_, _ = s.Get(t.Context(), "1h", "")
 	}()
-	<-f.entered
-	type joinRes struct {
-		err      error
-		panicked bool
+	for reads.Load() < 1 {
+		runtime.Gosched()
 	}
-	joined := make(chan joinRes, 1)
+	joined := make(chan error, 1)
 	go func() {
-		var r joinRes
 		defer func() {
-			r.panicked = recover() != nil
-			joined <- r
+			if r := recover(); r != nil {
+				joined <- errors.New("joiner panicked: it led its own fetch instead of joining")
+			}
 		}()
-		_, r.err = s.Get(t.Context(), "1h", "")
+		_, err := s.Get(t.Context(), "1h", "")
+		joined <- err
 	}()
-	f.release()
+	for reads.Load() < 2 {
+		runtime.Gosched()
+	}
+	s.mu.Lock()
+	s.mu.Unlock()
+	close(proceed)
 	if r := <-leader; r == nil {
 		t.Fatal("leader did not panic")
 	}
-	// a joiner released by the aborted leader gets an error; one that arrived after cleanup led its own fetch and panicked too
 	select {
-	case r := <-joined:
-		if r.err == nil && !r.panicked {
-			t.Fatal("joiner of an aborted fetch got a body and a nil error")
+	case err := <-joined:
+		if !errors.Is(err, errFetchAborted) {
+			t.Fatalf("joiner err = %v, want errFetchAborted", err)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("waiter hung after the leader panicked")

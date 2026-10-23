@@ -207,8 +207,8 @@ func TestGatewayTrace_FleetIsUntracedAndProbesCarryNoHeader(t *testing.T) {
 
 	for name, probe := range map[string]*sentrytest.HeaderStub{"alpha": alpha, "beta": beta} {
 		calls := probe.Calls()
-		if len(calls) != 2 || calls[0].Path != "/healthz" || calls[1].Path != "/readyz" {
-			t.Errorf("%s probed at %+v, want /healthz then /readyz", name, calls)
+		if len(calls) != 2 || calls[0].Path != "/health" || calls[1].Path != "/readyz" {
+			t.Errorf("%s probed at %+v, want /health then /readyz", name, calls)
 		}
 		for _, call := range calls {
 			call.AssertUntraced(t)

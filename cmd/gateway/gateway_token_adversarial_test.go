@@ -16,7 +16,7 @@ type recordedCall struct {
 	header http.Header
 }
 
-// recordingStub answers like GoTrue and like a context service's /healthz, and records every request.
+// recordingStub answers like GoTrue and like a context service's /health, and records every request.
 func recordingStub(t *testing.T) (*url.URL, func() []recordedCall) {
 	t.Helper()
 	var mu sync.Mutex
@@ -31,7 +31,7 @@ func recordingStub(t *testing.T) (*url.URL, func() []recordedCall) {
 			_, _ = w.Write([]byte(`{"access_token":"` + handoffAccessToken("user-r") + `","refresh_token":"ref-r"}`))
 		case "/logout":
 			w.WriteHeader(http.StatusNoContent)
-		case "/healthz":
+		case "/health":
 			_, _ = w.Write([]byte(`{"status":"ok"}`))
 		default:
 			_, _ = w.Write([]byte(`{}`))
@@ -99,7 +99,7 @@ func TestGatewayOwnRoutesSendNoGatewayToken(t *testing.T) {
 	for _, c := range calls() {
 		byPath[c.path] = append(byPath[c.path], c)
 	}
-	for _, p := range []string{"/signup", "/verify", "/token", "/logout", "/healthz"} {
+	for _, p := range []string{"/signup", "/verify", "/token", "/logout", "/health"} {
 		if len(byPath[p]) == 0 {
 			t.Errorf("the stub saw no call on %s, so that route is unproven (saw %v)", p, keys(byPath))
 		}

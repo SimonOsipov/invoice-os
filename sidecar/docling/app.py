@@ -31,6 +31,7 @@ MAX_DOCUMENT_BYTES = 15 * 1024 * 1024
 
 
 @app.get("/healthz")
+@app.get("/health")  # Cloud Run's front end answers /healthz itself on a run.app host.
 async def healthz() -> dict[str, str]:
     """Body is exactly {"status": "ok", "build": "<sha>", "sentry": "on"|"off"} --
     internal/platform/health.go's shape. No lock, no I/O beyond the build file -- stays on the

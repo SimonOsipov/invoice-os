@@ -22,13 +22,13 @@ func fleet(t *testing.T, sha string, override func(svc, path string, w http.Resp
 			return
 		}
 		switch {
-		case svc == "gateway" && path == "/healthz":
+		case svc == "gateway" && path == "/health":
 			fmt.Fprintf(w, `{"build":%q,"mock_issuer":"absent","auth_issuers":1}`, sha)
 		case svc == "gateway":
 			http.NotFound(w, r)
 		case svc == "auth" && path == "/.well-known/jwks.json":
 			fmt.Fprint(w, `{"keys":[]}`)
-		case path == "/healthz":
+		case path == "/health":
 			fmt.Fprintf(w, `{"build":%q}`, sha)
 		case path == "/build.txt":
 			fmt.Fprintln(w, sha)
@@ -59,7 +59,7 @@ func TestRun_NamesEachFailedTarget(t *testing.T) {
 	t.Parallel()
 	c := fleet(t, "abc", func(svc, path string, w http.ResponseWriter) bool {
 		switch {
-		case svc == "docling" && path == "/healthz":
+		case svc == "docling" && path == "/health":
 			fmt.Fprint(w, `{"build":"old"}`)
 		case svc == "blog" && path == "/build.txt":
 			fmt.Fprintln(w, "old")
@@ -87,7 +87,7 @@ func TestRun_GatewayMustServeNoMintRouteAndOneIssuer(t *testing.T) {
 	t.Parallel()
 	for name, override := range map[string]func(svc, path string, w http.ResponseWriter) bool{
 		"mock issuer on": func(svc, path string, w http.ResponseWriter) bool {
-			if svc == "gateway" && path == "/healthz" {
+			if svc == "gateway" && path == "/health" {
 				fmt.Fprint(w, `{"build":"abc","mock_issuer":"on","auth_issuers":2}`)
 				return true
 			}

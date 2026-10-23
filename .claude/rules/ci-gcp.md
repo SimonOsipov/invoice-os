@@ -18,3 +18,4 @@ paths:
 - After the move, poll `/healthz/fleet` through the load balancer. On failure, `gcp-traffic.sh restore` sends traffic back.
 - Roll back with `rollback-prod.yml`. It moves every service to its `rollback` revision together.
 - Keep the deploy read-only after migrate. It writes no data.
+- Probe a service at `/health` on a run.app host. Cloud Run's front end answers `/healthz` itself there, and the container never sees it.

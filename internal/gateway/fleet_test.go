@@ -21,7 +21,7 @@ import (
 func healthzUpstream(t *testing.T, down bool) *url.URL {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/healthz" {
+		if r.URL.Path != "/health" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -148,7 +148,7 @@ func TestFleetHealthUnreachableIsDown(t *testing.T) {
 func buildUpstream(t *testing.T, build string, body string) *url.URL {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/healthz" {
+		if r.URL.Path != "/health" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -268,7 +268,7 @@ func pathRecordingUpstream(t *testing.T, okPath string, status int, body string)
 
 func healthzWithBuild(t *testing.T, build string) (*url.URL, func() []string) {
 	t.Helper()
-	return pathRecordingUpstream(t, "/healthz", http.StatusOK, `{"status":"ok","build":"`+build+`"}`)
+	return pathRecordingUpstream(t, "/health", http.StatusOK, `{"status":"ok","build":"`+build+`"}`)
 }
 
 func doFleetWithPaths(t *testing.T, upstreams map[string]*url.URL, paths map[string]string) (*httptest.ResponseRecorder, FleetHealth) {
@@ -299,7 +299,7 @@ func TestFleetProbesAuthAtJWKSPath(t *testing.T) {
 	if a.Build != "" {
 		t.Errorf("auth build = %q, want empty: a JWKS body carries no build", a.Build)
 	}
-	if hits := authHits(); !slices.Contains(hits, jwksPath) || slices.Contains(hits, "/healthz") {
+	if hits := authHits(); !slices.Contains(hits, jwksPath) || slices.Contains(hits, "/health") {
 		t.Errorf("auth upstream was asked for %v, want %s and never /healthz", hits, jwksPath)
 	}
 
@@ -307,8 +307,8 @@ func TestFleetProbesAuthAtJWKSPath(t *testing.T) {
 	if inv := byName["invoice"]; inv.Status != statusUp || inv.Build != "abc1234" {
 		t.Errorf("invoice = %+v, want up with build abc1234", inv)
 	}
-	if hits := invoiceHits(); !slices.Equal(hits, []string{"/healthz", "/readyz"}) {
-		t.Errorf("invoice upstream was asked for %v, want /healthz then /readyz only", hits)
+	if hits := invoiceHits(); !slices.Equal(hits, []string{"/health", "/readyz"}) {
+		t.Errorf("invoice upstream was asked for %v, want /health then /readyz only", hits)
 	}
 	if rec.Code != http.StatusOK || body.Status != fleetOK {
 		t.Errorf("roll-up = %d %q, want 200 %q", rec.Code, body.Status, fleetOK)
@@ -359,8 +359,8 @@ func TestFleetDefaultHealthPathUnchanged(t *testing.T) {
 					t.Errorf("%s was never probed", svc)
 				}
 				// /healthz is the liveness probe; /readyz is the report-only readiness probe.
-				if !slices.Equal(hits, []string{"/healthz", "/readyz"}) {
-					t.Errorf("%s was probed at %q, want /healthz then /readyz", svc, hits)
+				if !slices.Equal(hits, []string{"/health", "/readyz"}) {
+					t.Errorf("%s was probed at %q, want /health then /readyz", svc, hits)
 				}
 			}
 			for _, svc := range []string{"invoice", "tenancy"} {
@@ -543,7 +543,7 @@ func TestFleetRollupCarriesEachServicesSentryState(t *testing.T) {
 	}
 
 	t.Run("down_upstream_carries_no_sentry", func(t *testing.T) {
-		down, _ := pathRecordingUpstream(t, "/healthz", http.StatusServiceUnavailable, `{"status":"ok","build":"abc1234","sentry":"on"}`)
+		down, _ := pathRecordingUpstream(t, "/health", http.StatusServiceUnavailable, `{"status":"ok","build":"abc1234","sentry":"on"}`)
 		rec, body := doFleet(t, map[string]*url.URL{"invoice": down})
 		inv, ok := rawFleetEntries(t, rec)["invoice"]
 		if !ok {
@@ -625,7 +625,7 @@ func readyUpstream(t *testing.T, code int, body string) *url.URL {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/healthz":
+		case "/health":
 			_, _ = w.Write([]byte(`{"status":"ok","build":"abc1234"}`))
 		case "/readyz":
 			if code == 0 {

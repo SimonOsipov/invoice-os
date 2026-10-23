@@ -83,7 +83,7 @@ type FleetHealth struct {
 // the gateway can reach them — this route is how CI (and a future status page) observes
 // fleet health through the one public backend surface. The gateway reports itself up (it
 // is answering this request); each upstream is probed at <base>/<healthPaths[name]>,
-// defaulting to healthz. Overall 200 when
+// defaulting to health. Overall 200 when
 // all are up, 503 when any is down, with the culprit(s) named in the body. Fan-out is
 // bounded (per-probe timeout + concurrency cap) so one dead backend cannot hang it.
 //
@@ -153,7 +153,7 @@ func FleetHealthHandler(upstreams map[string]*url.URL, healthPaths map[string]st
 	}
 }
 
-// probeService issues GET <base>/<path> (healthz when path is empty) with a per-probe
+// probeService issues GET <base>/<path> (health when path is empty) with a per-probe
 // timeout and maps the outcome to up/down. Any transport error or non-2xx status is down,
 // with the reason recorded so the body names why the service failed.
 func probeService(parent context.Context, client *http.Client, name string, base *url.URL, path string) ServiceHealth {
@@ -162,7 +162,8 @@ func probeService(parent context.Context, client *http.Client, name string, base
 
 	custom := path != ""
 	if !custom {
-		path = "healthz"
+		// Not healthz: Cloud Run's front end answers /healthz itself on a run.app host.
+		path = "health"
 	}
 	target := base.JoinPath(path).String()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)

@@ -20,17 +20,24 @@ const (
 	// An unquoted value survives ScrubText, so it still shows args attached after the scrub.
 	argsSeq    = "918273645001"
 	errorsSeq  = "918273645002"
+	tenantUUID = "3f2c1a9e-0b7d-4c55-9a1e-6d2f8b7a4c10"
 	panicTrace = "goroutine 9 [running]:\nexample.work()"
 )
 
 func jobRow(attempt, maxAttempts int) *rivertype.JobRow {
+	row := jobRowArgs(attempt, maxAttempts, nil)
+	row.EncodedArgs = []byte(`{"tenant_id":"` + tenantUUID + `","buyer_tin":"` + argsTIN + `","seq":` + argsSeq + `}`)
+	return row
+}
+
+func jobRowArgs(attempt, maxAttempts int, args []byte) *rivertype.JobRow {
 	return &rivertype.JobRow{
 		ID:          7,
 		Kind:        "k",
 		Queue:       "default",
 		Attempt:     attempt,
 		MaxAttempts: maxAttempts,
-		EncodedArgs: []byte(`{"tenant_id":"` + argsTIN + `","seq":` + argsSeq + `}`),
+		EncodedArgs: args,
 		Errors:      []rivertype.AttemptError{{Attempt: 1, Error: "adapter: 503 for seq " + errorsSeq}},
 	}
 }
@@ -64,6 +71,94 @@ func assertJobEvent(t *testing.T, e *sentry.Event, fingerprint string, attempt, 
 		if strings.Contains(string(raw), marker) {
 			t.Errorf("event JSON holds the job's encoded args or earlier errors (%s): %s", marker, raw)
 		}
+	}
+	if got := e.Tags["tenant_id"]; got != tenantUUID {
+		t.Errorf("tag tenant_id = %q, want %q", got, tenantUUID)
+	}
+	untagged := *e
+	untagged.Tags = nil
+	rest, err := json.Marshal(&untagged)
+	if err != nil {
+		t.Fatalf("marshal event without tags: %v", err)
+	}
+	if strings.Contains(string(rest), tenantUUID) {
+		t.Errorf("tenant id appears outside Tags: %s", rest)
+	}
+}
+
+// finalEvent reports a final-attempt error for a job with the given args and returns the one event.
+func finalEvent(t *testing.T, args []byte) *sentry.Event {
+	t.Helper()
+	_, rec, want := sentrytest.Boot(t, "submission")
+	(errorReporter{}).HandleError(context.Background(), jobRowArgs(8, 8, args), errors.New("adapter: 503"))
+	return rec.One(t, want)
+}
+
+func TestErrorReporter_FinalAttemptTagsTheJobsTenant(t *testing.T) {
+	t.Run("error", func(t *testing.T) {
+		e := finalEvent(t, []byte(`{"tenant_id":"`+tenantUUID+`"}`))
+		if e.Tags["tenant_id"] != tenantUUID || e.Tags["job_kind"] != "k" {
+			t.Errorf("tags = %v, want tenant_id %s and job_kind k", e.Tags, tenantUUID)
+		}
+	})
+	t.Run("panic", func(t *testing.T) {
+		_, rec, want := sentrytest.Boot(t, "submission")
+		(errorReporter{}).HandlePanic(context.Background(), jobRowArgs(8, 8, []byte(`{"tenant_id":"`+tenantUUID+`"}`)), "boom", panicTrace)
+		e := rec.One(t, want)
+		if e.Tags["tenant_id"] != tenantUUID || e.Tags["job_kind"] != "k" {
+			t.Errorf("tags = %v, want tenant_id %s and job_kind k", e.Tags, tenantUUID)
+		}
+	})
+}
+
+func TestErrorReporter_TenantTagIsCanonical(t *testing.T) {
+	e := finalEvent(t, []byte(`{"tenant_id":"`+strings.ToUpper(tenantUUID)+`"}`))
+	if got := e.Tags["tenant_id"]; got != tenantUUID {
+		t.Errorf("tag tenant_id = %q, want %q", got, tenantUUID)
+	}
+}
+
+func TestErrorReporter_NoTenantMeansNoTenantTag(t *testing.T) {
+	for name, args := range map[string][]byte{
+		"empty object": []byte(`{}`),
+		"other field":  []byte(`{"invoice_id":"x"}`),
+		"empty string": []byte(`{"tenant_id":""}`),
+		"non-string":   []byte(`{"tenant_id":7}`),
+		"nil args":     nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := finalEvent(t, args)
+			if _, ok := e.Tags["tenant_id"]; ok {
+				t.Errorf("tags = %v, want no tenant_id", e.Tags)
+			}
+			if e.Tags["job_kind"] != "k" {
+				t.Errorf("tag job_kind = %q, want k", e.Tags["job_kind"])
+			}
+		})
+	}
+}
+
+func TestErrorReporter_NonUUIDTenantIsNotTagged(t *testing.T) {
+	for name, args := range map[string][]byte{
+		"tin-shaped": []byte(`{"tenant_id":"` + argsTIN + `"}`),
+		"free text":  []byte(`{"tenant_id":"not-a-uuid"}`),
+		"bad json":   []byte(`{bad json`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := finalEvent(t, args)
+			if _, ok := e.Tags["tenant_id"]; ok {
+				t.Errorf("tags = %v, want no tenant_id", e.Tags)
+			}
+			raw, err := json.Marshal(e)
+			if err != nil {
+				t.Fatalf("marshal event: %v", err)
+			}
+			for _, leak := range []string{argsTIN, "not-a-uuid"} {
+				if strings.Contains(string(raw), leak) {
+					t.Errorf("event JSON holds the args value %q: %s", leak, raw)
+				}
+			}
+		})
 	}
 }
 

@@ -4,6 +4,7 @@ package extraction
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -23,6 +24,23 @@ import (
 func TestExtractArgs_KindIsStable(t *testing.T) {
 	if got, want := (extractArgs{}).Kind(), "extraction_extract"; got != want {
 		t.Errorf("Kind() = %q, want %q", got, want)
+	}
+}
+
+// errorReporter tags Sentry events from the args' tenant_id key (queue.TenantScoped).
+func TestExtractArgs_TenantMatchesTheEncodedTenantID(t *testing.T) {
+	const u = "3f2c1a9e-0b7d-4c55-9a1e-6d2f8b7a4c10"
+	a := extractArgs{TenantID: u}
+	raw, err := json.Marshal(a)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := m["tenant_id"]; got != a.Tenant() || got != u {
+		t.Errorf("encoded tenant_id = %v, Tenant() = %q, want %q", got, a.Tenant(), u)
 	}
 }
 

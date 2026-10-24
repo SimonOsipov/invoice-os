@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { unzipSync } from 'fflate'
-import { apiBase, getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, provisionStaffAccount, rawFetch, signInSession, type AuditEvent, type StaffAccount } from '../api/client'
+import { apiBase, fleetHeaders, getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, provisionStaffAccount, rawFetch, signInSession, type AuditEvent, type StaffAccount } from '../api/client'
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -800,8 +800,8 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
   await expect(mn.getByText(/APP latency|APP error rate|throughput|Recon backlog/i), 'no unmeasured tile').toHaveCount(0)
   await expectStyles(parent(mn.locator('[data-service]').first().getByText(/^(UP|DOWN)$/)), 'service badge', { radius: '4px' })
 
-  // Core AC 2: the public fleet route still answers without a token and grants the console no CORS.
-  const fleet = await page.request.get(`${apiBase()}/healthz/fleet`, { headers: { Origin: new URL(page.url()).origin } })
+  // Core AC 2: the fleet route grants the console no CORS.
+  const fleet = await page.request.get(`${apiBase()}/healthz/fleet`, { headers: { ...fleetHeaders(), Origin: new URL(page.url()).origin } })
   expect([200, 503], '/healthz/fleet status').toContain(fleet.status())
   expect(Array.isArray((await fleet.json()).services), '/healthz/fleet carries services').toBe(true)
   expect(fleet.headers()['access-control-allow-origin'], '/healthz/fleet CORS header').toBeUndefined()

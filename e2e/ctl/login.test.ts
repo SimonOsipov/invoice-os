@@ -8,7 +8,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Account, AccountKey, LoginDeps, LoginRequest, Persona, Role, StoredAccounts } from './login'
-import type { EnvResult } from './railway'
+import type { EnvResult } from './envUrls'
 
 type Login = typeof import('./login')
 

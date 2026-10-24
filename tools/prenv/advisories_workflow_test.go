@@ -425,3 +425,20 @@ func TestAdvisoriesNightly_GovulncheckJobPermissionsFails(t *testing.T) {
 	ci, n := mutateNightly(t, "    name: govulncheck nightly\n", "    name: govulncheck nightly\n    permissions:\n      issues: write\n")
 	requireAdvisoriesProblem(t, ci, n, "overrides permissions")
 }
+
+// jobKey returns a job-level key's value, folded onto one line.
+func jobKey(j workflowJob, key string) (string, bool) {
+	for i, l := range j.lines {
+		if strings.HasPrefix(l, "    "+key+":") && !strings.HasPrefix(l, "     ") {
+			parts := []string{strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l), key+":"))}
+			for _, n := range j.lines[i+1:] {
+				if strings.TrimSpace(n) != "" && !strings.HasPrefix(n, "     ") {
+					break
+				}
+				parts = append(parts, strings.TrimSpace(n))
+			}
+			return strings.TrimSpace(strings.Join(parts, " ")), true
+		}
+	}
+	return "", false
+}

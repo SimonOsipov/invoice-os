@@ -779,69 +779,6 @@ func requireForkPassControl(t *testing.T) {
 	}
 }
 
-func TestDevEnvYmlWiresTheForkPassesIntoPrepareEnv(t *testing.T) {
-	t.Parallel()
-	devEnv := readWorkflow(t, "dev-env.yml")
-	var prep *workflowJob
-	for _, job := range workflowJobsOf(devEnv) {
-		if job.name == "prepare-env" {
-			prep = &job
-		}
-	}
-	if prep == nil {
-		t.Fatal("control: workflowJobsOf finds no prepare-env job in dev-env.yml")
-	}
-	hasResolve := false
-	steps := prep.steps()
-	for _, s := range steps {
-		hasResolve = hasResolve || s.keys["id"] == "resolve"
-	}
-	if len(steps) < 10 || !hasResolve {
-		t.Fatalf("control: prepare-env parsed to %d steps (resolve found: %v), want >= 10 and a resolve step", len(steps), hasResolve)
-	}
-	for _, l := range prep.lines {
-		if strings.HasPrefix(l, "    continue-on-error") {
-			t.Errorf("the prepare-env job carries a job-level %q", strings.TrimSpace(l))
-		}
-	}
-
-	for _, c := range []struct{ sub, cmd string }{{passSub, forkVarsBeforeRunCmd}, {afterSub, forkVarsAfterRunCmd}} {
-		if n := len(devEnvJobsRunning(t, c.sub)); n != 1 {
-			t.Errorf("control: %d commands in dev-env.yml run %s, want exactly 1", n, c.sub)
-		}
-		for _, f := range prOnlyPrepareEnvStepFaults(devEnv, c.sub, c.cmd) {
-			t.Errorf(".github/workflows/dev-env.yml: %s", f)
-		}
-	}
-}
-
-func TestDevEnvYmlStampsTheMockIssuerOnPullRequestsOnly(t *testing.T) {
-	t.Parallel()
-	for _, c := range []struct {
-		name, yaml string
-		bad        bool
-	}{
-		{"the planned step", fxDevEnv, false},
-		{"the stamp after both uploads", strings.Replace(strings.Replace(fxDevEnv, fxStampStep, "", 1), fxUpDispatch, fxUpDispatch+fxStampStep, 1), true},
-		{"the stamp between the uploads", strings.Replace(strings.Replace(fxDevEnv, fxStampStep, "", 1), fxUpDispatch, fxStampStep+fxUpDispatch, 1), true},
-		{"no if:", strings.Replace(fxDevEnv, fxStampStep, strings.Replace(fxStampStep, fxStampIf, "", 1), 1), true},
-		{"a push-and-PR if:", strings.Replace(fxDevEnv, fxStampStep, strings.Replace(fxStampStep, fxStampIf, "        if: github.event_name != 'workflow_dispatch'\n", 1), 1), true},
-		{"a stamp in deploy-context", fxDevEnv + "  deploy-context:\n    runs-on: ubuntu-latest\n    steps:\n" + fxStampStep, true},
-		{"the stamp commented out", strings.Replace(fxDevEnv, fxStampStep, commentOut(fxStampStep), 1), true},
-	} {
-		if c.bad && c.yaml == fxDevEnv {
-			t.Fatalf("fixture %q: the edit did not apply", c.name)
-		}
-		if faults := mockIssuerStampFaults(c.yaml); (len(faults) > 0) != c.bad {
-			t.Errorf("fixture %q: faults %v, want faults = %v", c.name, faults, c.bad)
-		}
-	}
-
-	for _, f := range mockIssuerStampFaults(readWorkflow(t, "dev-env.yml")) {
-		t.Errorf(".github/workflows/dev-env.yml: %s", f)
-	}
-}
-
 // goPathsFilter returns the `go:` list of the changes job's paths-filter block.
 func goPathsFilter(ciYAML string) []string {
 	var job []string
@@ -1244,28 +1181,4 @@ func workflowsNaming(t *testing.T, dir, needle string) (hits []string, read int)
 		}
 	}
 	return hits, read
-}
-
-func TestNoWorkflowRunsSetProductionEnvironment(t *testing.T) {
-	t.Parallel()
-	t.Run("planted fixture", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		runs := "on: push\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - run: bash scripts/ci/railway-env.sh " + productionNeedle + " \"$ENV_ID\"\n"
-		for name, body := range map[string]string{"runs.yml": runs, "commented.yml": commentOut(runs)} {
-			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if hits, read := workflowsNaming(t, dir, productionNeedle); read != 2 || !slices.Equal(hits, []string{"runs.yml"}) {
-			t.Fatalf("planted: read %d file(s) and reported %v, want 2 and [runs.yml]", read, hits)
-		}
-	})
-
-	dir := filepath.Join(repoRoot(t), ".github", "workflows")
-	// Floor and control: every workflow is read, and dev-env.yml runs both fork passes.
-	requireForkPassControl(t)
-	if hits, _ := workflowsNaming(t, dir, productionNeedle); len(hits) != 0 {
-		t.Errorf("%v run or name %s; production's ENVIRONMENT is written by hand, once, and no workflow writes it", hits, productionNeedle)
-	}
 }

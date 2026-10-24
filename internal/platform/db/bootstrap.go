@@ -107,6 +107,40 @@ func connectSuperuser(ctx context.Context, dsn string) (*pgx.Conn, error) {
 	return nil, fmt.Errorf("db: connect to superuser dsn after %d attempts: %w", bootstrapConnectAttempts, lastErr)
 }
 
+// seedWriterSQL lets a connection that is not a superuser (Cloud SQL's postgres) write the seeds:
+// it sets the session role to seed_writer, NOLOGIN BYPASSRLS and a member of every public table's
+// owner. A superuser session is left as it is. The seeds run only where BootstrapEnabled allows.
+const seedWriterSQL = `DO $$
+DECLARE
+  table_owner name;
+BEGIN
+  IF (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
+    RETURN;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'seed_writer') THEN
+    CREATE ROLE seed_writer NOLOGIN BYPASSRLS;
+  END IF;
+  FOR table_owner IN SELECT DISTINCT tableowner FROM pg_tables WHERE schemaname = 'public' LOOP
+    EXECUTE format('GRANT %I TO seed_writer', table_owner);
+  END LOOP;
+  GRANT seed_writer TO CURRENT_USER WITH INHERIT FALSE, SET TRUE;
+  SET ROLE seed_writer;
+END
+$$`
+
+// connectSeeder is connectSuperuser for the seed and purge steps; see seedWriterSQL.
+func connectSeeder(ctx context.Context, dsn string) (*pgx.Conn, error) {
+	conn, err := connectSuperuser(ctx, dsn)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := conn.Exec(ctx, seedWriterSQL); err != nil {
+		_ = conn.Close(ctx)
+		return nil, fmt.Errorf("db: assume seed_writer: %w", err)
+	}
+	return conn, nil
+}
+
 // validateRolePasswords rejects a RolePasswords with any empty field, naming
 // the offending field, BEFORE Bootstrap opens any connection (AC-4).
 func validateRolePasswords(pw RolePasswords) error {
@@ -204,7 +238,7 @@ func Bootstrap(ctx context.Context, superuserDSN string, pw RolePasswords, fsys 
 // RLS, so invoice_app cannot insert the fixtures). Like Bootstrap, it connects
 // on a single dedicated connection that is closed before Seed returns.
 func Seed(ctx context.Context, superuserDSN string, fsys fs.FS) error {
-	conn, err := connectSuperuser(ctx, superuserDSN)
+	conn, err := connectSeeder(ctx, superuserDSN)
 	if err != nil {
 		return err
 	}
@@ -224,7 +258,7 @@ func Seed(ctx context.Context, superuserDSN string, fsys fs.FS) error {
 // SeedShards applies db/seed.e2e-shards.sql as the superuser: the per-shard
 // tenant pairs of the parallel topology E2E. One dedicated connection, like Seed.
 func SeedShards(ctx context.Context, superuserDSN string, fsys fs.FS) error {
-	conn, err := connectSuperuser(ctx, superuserDSN)
+	conn, err := connectSeeder(ctx, superuserDSN)
 	if err != nil {
 		return err
 	}

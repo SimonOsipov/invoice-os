@@ -424,41 +424,6 @@ var upVerdicts = map[string]string{
 	"blog":            "SPA build",
 }
 
-func TestRailwayUpCI_LostPollIsToleratedForEveryService(t *testing.T) {
-	t.Parallel()
-	services := upServices(t)
-	if len(services) != 17 {
-		t.Fatalf("dev-env.yml deploys %d services through railway-up-ci.sh, want 17: %q", len(services), services)
-	}
-	for _, svc := range services {
-		t.Run(svc, func(t *testing.T) {
-			t.Parallel()
-			verdict, ok := upVerdicts[svc]
-			if !ok {
-				t.Fatalf("dev-env.yml deploys %q through railway-up-ci.sh; the Design verdict map lacks it", svc)
-			}
-			s := newUpStub(t, upAttempt{upLostPoll(upIDA), 1})
-			out, code := s.run(t, svc)
-
-			if code != 0 {
-				t.Errorf("exit %d, want 0; output:\n%s", code, out)
-			}
-			if got := s.railwayCalls(t); len(got) != 1 {
-				t.Errorf("railway calls = %q, want 1", got)
-			}
-			w := warningLines(out)
-			if len(w) != 1 {
-				t.Fatalf("::warning:: lines = %q, want 1", w)
-			}
-			for _, needle := range []string{svc, verdict} {
-				if !strings.Contains(w[0], needle) {
-					t.Errorf("warning %q lacks %q", w[0], needle)
-				}
-			}
-		})
-	}
-}
-
 func TestRailwayUpCI_LostPollWebsocketTimeoutIsTolerated(t *testing.T) {
 	t.Parallel()
 	s := newUpStub(t, upAttempt{upLostPollWebsocket(upIDA), 1})

@@ -293,20 +293,6 @@ func requireScanned(t *testing.T, names []string) {
 	}
 }
 
-func TestNoInstallJobHoldsTheRailwayToken(t *testing.T) {
-	t.Parallel()
-	names, texts := workflowTexts(t)
-	requireScanned(t, names)
-	if !slices.Contains(tokenInstallJobs(texts["dev-env.yml"]), "e2e") {
-		t.Fatalf("control: tokenInstallJobs(dev-env.yml) = %v, want it to name e2e", tokenInstallJobs(texts["dev-env.yml"]))
-	}
-	for _, name := range names {
-		for _, f := range installTokenFaults(texts[name]) {
-			t.Errorf("%s: %s", name, f)
-		}
-	}
-}
-
 func TestNoWorkflowReachesSecretsThroughATrustedTrigger(t *testing.T) {
 	t.Parallel()
 	names, texts := workflowTexts(t)

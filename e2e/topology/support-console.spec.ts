@@ -787,9 +787,18 @@ const armHealth = async (page: Page): Promise<Armed> => {
   const health = (await h.json()) as SeenHealth
   // `latest` follows every later health read: the screen renders the body it last got.
   const latest = { body: health }
+  // r.json() settles out of order: the sequence is taken at arrival, and only a newer response writes.
+  let seq = 0
+  let written = 0
   page.on('response', (r) => {
     if (r.request().method() !== 'GET' || new URL(r.url()).pathname !== STAFF_HEALTH || r.status() !== 200) return
-    void r.json().then((b: SeenHealth) => (latest.body = b), () => {})
+    const mine = ++seq
+    void r.json().then((b: SeenHealth) => {
+      if (mine > written) {
+        written = mine
+        latest.body = b
+      }
+    }, () => {})
   })
   return { health, metrics: (await m.json()) as SeenMetrics, metricsUrl: new URL(m.url()), latest }
 }

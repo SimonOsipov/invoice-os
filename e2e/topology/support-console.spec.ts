@@ -9,6 +9,7 @@ import { apiBase, fleetHeaders, getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, p
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { scopeStrays } from './metricsScope'
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
@@ -821,16 +822,7 @@ const statHasData = (m: SeenMetrics, key: string): boolean => {
 
 // Every Cloud Run series, limits and deploy name is a fleet service, and is `only` when given.
 function scopeMatch(m: SeenMetrics, what: string, only?: string): void {
-  const names = [
-    ...m.panels.filter((p) => !p.key.startsWith('sql_')).flatMap((p) => p.series.map((s) => s.name)),
-    ...(m.limits.services ?? []).map((s) => s.name),
-    ...(m.deploys.revisions ?? []).map((r) => r.service),
-  ]
-  const allowed = only ? [only] : METRIC_SERVICES
-  expect(
-    names.filter((n) => !allowed.includes(n)),
-    `${what}: every Cloud Run series, limits and deploy name is ${only ?? 'in METRIC_SERVICES'}`,
-  ).toEqual([])
+  expect(scopeStrays(m, only ? [only] : METRIC_SERVICES), `${what}: every Cloud Run series, limits and deploy name is ${only ?? 'in METRIC_SERVICES'}`).toEqual([])
 }
 
 // Per panel key, the series names and point counts: evidence for the preview-scope check.
@@ -900,11 +892,11 @@ async function metricsReads(page: Page, testInfo: TestInfo, health: SeenHealth, 
   const [, one] = await Promise.all([sent('6h', name), read('6h', name), select.selectOption(name)]).then((r) => [r[0], r[1]] as const)
   expect(one.status(), `${name} read status`).toBe(200)
   const oneBody = (await one.json()) as SeenMetrics
+  await testInfo.attach('health-metrics-draw', { body: JSON.stringify({ fleet1h: drawSummary(first), narrowed: { service: name, panels: drawSummary(oneBody) } }, null, 2), contentType: 'application/json' })
   expect(oneBody.service, 'the answer names the selected service').toBe(name)
   scopeMatch(oneBody, `service ${name}`, name)
   if (drawn) expect(panelSeries(oneBody, 'req_per_min').map((s) => s.name), `service ${name} draws its own req_per_min series`).toEqual([name])
   await metricsMatch(page, oneBody, `service ${name}`)
-  await testInfo.attach('health-metrics-draw', { body: JSON.stringify({ fleet1h: drawSummary(first), narrowed: { service: name, panels: drawSummary(oneBody) } }, null, 2), contentType: 'application/json' })
 
   // Back to the default view: the fixture step clicks 6h and needs a changed range.
   await Promise.all([read('1h', name), mn.getByRole('button', { name: '1h', exact: true }).click()])

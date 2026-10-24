@@ -63,14 +63,19 @@ export function chartY(v: number, yMax: number): number {
 }
 
 export function chartPath(points: [number, number][], o: { start: number; end: number; step: number; yMax: number }): string {
-  let d = ''
+  const runs: string[][] = []
   let prev: number | null = null
   for (const [t, v] of points) {
-    const cmd = prev === null || t - prev > 1.5 * o.step ? 'M' : 'L'
-    d += `${d ? ' ' : ''}${cmd}${chartX(t, o.start, o.end).toFixed(1)} ${chartY(v, o.yMax).toFixed(1)}`
+    const xy = `${chartX(t, o.start, o.end).toFixed(1)} ${chartY(v, o.yMax).toFixed(1)}`
+    if (prev === null || t - prev > 1.5 * o.step) {
+      runs.push([`M${xy}`])
+    } else {
+      runs[runs.length - 1].push(`L${xy}`)
+    }
     prev = t
   }
-  return d
+  // a one-point run gets a zero-length segment so the round cap paints a dot
+  return runs.map((r) => (r.length === 1 ? `${r[0]} h0` : r.join(' '))).join(' ')
 }
 
 // Dot, stroke and fill derive from one tone so a tile cannot mix them.

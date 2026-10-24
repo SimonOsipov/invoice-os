@@ -688,4 +688,8 @@ describe('TimeChart', () => {
     expect(dep).toHaveLength(1)
     expect(attr(dep[0], 'x1')).toBe('600')
   })
+  it('TimeChart lines have round caps', () => {
+    const ts = parse(renderToStaticMarkup(createElement(TimeChart, { ...base, lines })))
+    expect(ts.filter((t) => attr(t, 'data-line')).map((t) => attr(t, 'stroke-linecap'))).toEqual(['round', 'round'])
+  })
 })

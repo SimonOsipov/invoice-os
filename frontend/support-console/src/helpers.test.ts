@@ -118,9 +118,12 @@ describe('chart geometry', () => {
   it('chartPath keeps one line across a step of exactly 1.5 steps', () => {
     expect(chartPath([[1000, 1], [1090, 1]], o).match(/M/g)).toHaveLength(1)
   })
-  it('chartPath draws nothing for no points and a lone M for one point', () => {
+  it('chartPath draws nothing for no points and a drawable segment for one point', () => {
     expect(chartPath([], o)).toBe('')
-    expect(chartPath([[1150, 10]], o)).toBe('M300.0 0.0')
+    expect(chartPath([[1150, 10]], o)).toBe('M300.0 0.0 h0')
+  })
+  it('chartPath gives a point isolated between two gaps a drawable segment', () => {
+    expect(chartPath([[1000, 1], [1150, 1], [1300, 1]], o)).toBe('M0.0 144.0 h0 M300.0 144.0 h0 M600.0 144.0 h0')
   })
   it('chartPath breaks the line just over 1.5 steps', () => {
     expect(chartPath([[1000, 1], [1091, 1]], o).match(/M/g)).toHaveLength(2)

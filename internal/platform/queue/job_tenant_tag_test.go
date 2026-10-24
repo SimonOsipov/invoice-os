@@ -19,7 +19,8 @@ import (
 
 // argsOf builds the zero args value of w's Work method (so unexported types are reachable),
 // sets its tenant_id field to tenant when non-empty, and returns it with its JSON.
-func argsOf(t *testing.T, w any, tenant string) (river.JobArgs, []byte) {
+// With fillStrings, every string field holds a UUID, so a tenant_id field added to a company-free type shows.
+func argsOf(t *testing.T, w any, tenant string, fillStrings bool) (river.JobArgs, []byte) {
 	t.Helper()
 	m, ok := reflect.TypeOf(w).MethodByName("Work")
 	if !ok || m.Type.NumIn() != 3 {
@@ -34,6 +35,13 @@ func argsOf(t *testing.T, w any, tenant string) (river.JobArgs, []byte) {
 		t.Fatalf("%s has no Args field", job)
 	}
 	v := reflect.New(argsField.Type).Elem()
+	if fillStrings {
+		for i := 0; i < v.NumField(); i++ {
+			if v.Field(i).Kind() == reflect.String {
+				v.Field(i).SetString(uuid.NewString())
+			}
+		}
+	}
 	if tenant != "" {
 		set := false
 		for i := 0; i < v.NumField(); i++ {
@@ -77,7 +85,7 @@ func TestJobTenantTag_CompanyKindsTagTheirTenant(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.kind, func(t *testing.T) {
 			tenant := uuid.NewString()
-			ja, raw := argsOf(t, c.w, tenant)
+			ja, raw := argsOf(t, c.w, tenant, false)
 			if ja.Kind() != c.kind {
 				t.Fatalf("Kind() = %q, want %q", ja.Kind(), c.kind)
 			}
@@ -103,7 +111,7 @@ func TestJobTenantTag_CompanyFreeKindsCarryNoTenantTag(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.kind, func(t *testing.T) {
-			ja, raw := argsOf(t, c.w, "")
+			ja, raw := argsOf(t, c.w, "", true)
 			if ja.Kind() != c.kind {
 				t.Fatalf("Kind() = %q, want %q", ja.Kind(), c.kind)
 			}

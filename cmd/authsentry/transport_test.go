@@ -465,3 +465,50 @@ func TestTransport_DroppingTheInFlightHeadKeepsTheRest(t *testing.T) {
 		}
 	}
 }
+
+func TestTransport_FlushCutsARetryWaitShortToSendTheExitEvent(t *testing.T) {
+	in := newIngest(t, func(id string) int {
+		if id == eventID(1) {
+			return 429
+		}
+		return 200
+	})
+	in.headers = http.Header{"Retry-After": {"600"}}
+	tr := newBufferedTransport(http.DefaultClient, time.Now, nil)
+	tr.Configure(sentry.ClientOptions{Dsn: in.dsn()})
+	t.Cleanup(tr.Close)
+
+	tr.SendEvent(ev(1))
+	eventually(t, "head attempted", func() bool { return in.attemptsFor(eventID(1)) == 1 })
+	tr.SendEvent(ev(2))
+
+	done := make(chan struct{})
+	go func() {
+		tr.Flush(5 * time.Second)
+		close(done)
+	}()
+	eventually(t, "exit event delivered", func() bool { return len(in.received()) == 1 })
+	if got := in.received()[0]; got != eventID(2) {
+		t.Fatalf("delivered %s, want the exit event", got)
+	}
+	<-done
+	if n := in.attemptsFor(eventID(1)); n > 2 {
+		t.Errorf("rate-limited head attempted %d times, want at most 2", n)
+	}
+}
+
+func TestTransport_AStaleFlushDoesNotCutALaterWait(t *testing.T) {
+	in := newIngest(t, func(string) int { return 200 })
+	tr := newBufferedTransport(http.DefaultClient, time.Now, nil)
+	tr.Configure(sentry.ClientOptions{Dsn: in.dsn()})
+	t.Cleanup(tr.Close)
+	tr.SendEvent(ev(1))
+	if !tr.Flush(2 * time.Second) {
+		t.Fatal("Flush returned false with the ingest up")
+	}
+	eventually(t, "idle", func() bool { tr.mu.Lock(); defer tr.mu.Unlock(); return len(tr.queue) == 0 })
+	time.Sleep(50 * time.Millisecond)
+	if len(tr.kick) != 0 {
+		t.Error("a Flush that found the queue empty left a pending kick")
+	}
+}

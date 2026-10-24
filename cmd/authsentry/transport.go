@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,10 +40,11 @@ type bufferedTransport struct {
 	dsn    *sentry.Dsn
 	closed bool
 	done   chan struct{}
+	kick   chan struct{}
 }
 
 func newBufferedTransport(client *http.Client, now func() time.Time, sleep func(time.Duration)) *bufferedTransport {
-	t := &bufferedTransport{client: client, now: now, sleep: sleep, done: make(chan struct{})}
+	t := &bufferedTransport{client: client, now: now, sleep: sleep, done: make(chan struct{}), kick: make(chan struct{}, 1)}
 	t.cond = sync.NewCond(&t.mu)
 	if sleep == nil {
 		t.sleep = func(d time.Duration) {
@@ -90,12 +92,20 @@ func (t *bufferedTransport) Flush(timeout time.Duration) bool {
 func (t *bufferedTransport) FlushWithContext(ctx context.Context) bool {
 	tick := time.NewTicker(flushPollStep)
 	defer tick.Stop()
+	kicked := false
 	for {
 		t.mu.Lock()
 		empty := len(t.queue) == 0
 		t.mu.Unlock()
 		if empty {
 			return true
+		}
+		if !kicked {
+			kicked = true
+			select {
+			case t.kick <- struct{}{}:
+			default:
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -130,6 +140,10 @@ func (t *bufferedTransport) run() {
 	for {
 		t.mu.Lock()
 		for len(t.queue) == 0 && !t.closed {
+			select {
+			case <-t.kick:
+			default:
+			}
 			t.cond.Wait()
 		}
 		if t.closed {
@@ -146,13 +160,57 @@ func (t *bufferedTransport) run() {
 		if res == retry {
 			d := min(backoffBase<<min(failures, 20), backoffCap)
 			failures++
-			t.sleep(max(d, min(wait, rateLimitCap)))
+			for t.wait(max(d, min(wait, rateLimitCap))) {
+				t.flushPass()
+			}
 			continue
 		}
 		failures = 0
 		t.mu.Lock()
 		if len(t.queue) > 0 && t.queue[0] == head {
 			t.queue = append(t.queue[:0], t.queue[1:]...)
+		}
+		t.mu.Unlock()
+	}
+}
+
+// wait sleeps d and reports whether a Flush cut it short.
+func (t *bufferedTransport) wait(d time.Duration) bool {
+	over := make(chan struct{})
+	go func() {
+		defer close(over)
+		t.sleep(d)
+	}()
+	select {
+	case <-over:
+	case <-t.kick:
+		return true
+	case <-t.done:
+	}
+	return false
+}
+
+// flushPass makes one attempt at each queued event, newest first, ignoring any wait.
+// The exit event is the newest, and a Flush has only seconds to deliver it.
+func (t *bufferedTransport) flushPass() {
+	t.mu.Lock()
+	snap, dsn := append([]*sentry.Event(nil), t.queue...), t.dsn
+	t.mu.Unlock()
+	if dsn == nil {
+		return
+	}
+	for i := len(snap) - 1; i >= 0; i-- {
+		select {
+		case <-t.done:
+			return
+		default:
+		}
+		if res, _ := t.deliver(snap[i], dsn); res == retry {
+			continue
+		}
+		t.mu.Lock()
+		if j := slices.Index(t.queue, snap[i]); j >= 0 {
+			t.queue = slices.Delete(t.queue, j, j+1)
 		}
 		t.mu.Unlock()
 	}

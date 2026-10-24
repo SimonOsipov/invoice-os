@@ -950,15 +950,23 @@ async function healthNarrowing(page: Page, latest: { body: SeenHealth }): Promis
     }
     await expect(card.getByText(/Loading/), `${at} Services card is not loading`).toHaveCount(0)
 
-    const rollup = latest.body.fleet
-    const listed = rollup.status === 'unknown' ? [] : rollup.services.map((s) => s.name).filter((n) => name === '' || n === name)
+    // Rows follow the latest roll-up, re-read per try so a 60 s refresh cannot race them.
+    const listed = (): string[] => {
+      const r = latest.body.fleet
+      return r.status === 'unknown' ? [] : r.services.map((s) => s.name).filter((n) => name === '' || n === name).sort()
+    }
     const rows = mn.locator('[data-service]')
-    await expect(rows, `${at} Services rows`).toHaveCount(listed.length)
-    expect(await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-service')).sort()), `${at} Services row names`).toEqual([...listed].sort())
-    if (rollup.status === 'unknown') await expect(mn.getByText(ROLLUP_DOWN), `${at} roll-up unavailable copy`).toHaveCount(1)
-    else await expect(mn.locator('[data-ping-note]'), `${at} ping note`).toHaveCount(listed.length === 0 && name !== '' ? 1 : 0)
-    if (rollup.status !== 'unknown' && listed.length === 0 && name !== '') await expect(mn.locator('[data-ping-note]'), `${at} ping note text`).toHaveText(NO_PING_NOTE(name))
-    if (name === 'auth' && listed.length > 0) await expect(rows.getByRole('link'), 'auth row has no Sentry link').toHaveCount(0)
+    await expect.poll(async () => JSON.stringify((await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-service')).sort()))), { message: `${at} Services row names` }).toBe(JSON.stringify(listed()))
+    const known = latest.body.fleet.status !== 'unknown'
+    // probedServices (auth, worker) are always in a known roll-up, so these picks cannot pass with zero rows
+    if (known && (name === 'worker' || name === 'auth')) expect(listed(), `${at} is in the known roll-up`).toEqual([name])
+    if (!known) {
+      await expect(mn.getByText(ROLLUP_DOWN), `${at} roll-up unavailable copy`).toHaveCount(1)
+      await expect(mn.locator('[data-ping-note]'), `${at} no ping note when the roll-up is unknown`).toHaveCount(0)
+    } else if (listed().length === 0 && name !== '') {
+      await expect(mn.locator('[data-ping-note]'), `${at} ping note`).toHaveText(NO_PING_NOTE(name))
+    } else await expect(mn.locator('[data-ping-note]'), `${at} has no ping note`).toHaveCount(0)
+    if (name === 'auth' && listed().length > 0) await expect(rows.getByRole('link'), 'auth row has no Sentry link').toHaveCount(0)
 
     for (const key of SCOPED) await expect(tile(key).locator('[data-scope]'), `${key} tag at ${at}`).toHaveText('All services')
   }

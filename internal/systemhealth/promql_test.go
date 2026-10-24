@@ -366,3 +366,38 @@ func TestPanels_FleetP95KeepsTheServiceFilterAndPreviewMatcher(t *testing.T) {
 		}
 	}
 }
+
+func TestPanels_TheTwelveExistingPanelsKeepKeyOrderUnitAndQueryAndTheFleetPanelFollows(t *testing.T) {
+	const run = `run_googleapis_com:`
+	const sel = `{monitored_resource="cloud_run_revision"}[300s]`
+	const lat = `sum by (service_name, le) (rate(` + run + `request_latencies_bucket` + sel + `))`
+	const req = `sum by (service_name) (rate(` + run + `request_count` + sel + `))`
+	const req5 = `sum by (service_name) (rate(` + run + `request_count{monitored_resource="cloud_run_revision",response_code_class="5xx"}[300s]))`
+	const sql = `{monitored_resource="cloudsql_database"}[300s]`
+	want := []struct{ key, unit, query string }{
+		{"req_per_min", "req/min", `60 * ` + req},
+		{"error_pct", "%", `100 * (` + req5 + ` or 0 * ` + req + `) / clamp_min(` + req + `, 1e-9)`},
+		{"latency_p50_ms", "ms", `histogram_quantile(0.5, ` + lat + `)`},
+		{"latency_p95_ms", "ms", `histogram_quantile(0.95, ` + lat + `)`},
+		{"cpu_pct", "% of limit", `100 * histogram_quantile(0.95, sum by (service_name, le) (rate(` + run + `container_cpu_utilizations_bucket` + sel + `)))`},
+		{"ram_pct", "% of limit", `100 * histogram_quantile(0.95, sum by (service_name, le) (rate(` + run + `container_memory_utilizations_bucket` + sel + `)))`},
+		{"instances", "count", `sum by (service_name) (max_over_time(` + run + `container_instance_count` + sel + `))`},
+		{"cold_starts_per_min", "/min", `60 * sum by (service_name) (rate(` + run + `container_startup_latencies_count` + sel + `))`},
+		{"sql_cpu_pct", "%", `100 * max(max_over_time(cloudsql_googleapis_com:database_cpu_utilization` + sql + `))`},
+		{"sql_ram_pct", "%", `100 * max(max_over_time(cloudsql_googleapis_com:database_memory_utilization` + sql + `))`},
+		{"sql_disk_pct", "%", `100 * max(max_over_time(cloudsql_googleapis_com:database_disk_utilization` + sql + `))`},
+		{"sql_connections", "count", `max(sum by (database_id) (max_over_time(cloudsql_googleapis_com:database_postgresql_num_backends` + sql + `)))`},
+	}
+	if len(Panels) != len(want)+1 {
+		t.Fatalf("panels = %d, want %d", len(Panels), len(want)+1)
+	}
+	for i, w := range want {
+		p := Panels[i]
+		if p.Key != w.key || p.Unit != w.unit || p.Query(Ranges["1h"], "", "") != w.query {
+			t.Errorf("panel %d = %s %s %s, want %s %s %s", i, p.Key, p.Unit, p.Query(Ranges["1h"], "", ""), w.key, w.unit, w.query)
+		}
+	}
+	if last := Panels[len(want)]; last.Key != FleetP95Key || last.Unit != "ms" || !last.CloudRun {
+		t.Errorf("last panel = %+v, want the Cloud Run fleet p95 in ms", last)
+	}
+}

@@ -823,8 +823,8 @@ func TestMetricsSource_AnUnlabelledFleetAnswerIsNamedFleet(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := panelByKey(t, m, FleetP95Key)
-	if len(fp.Series) != 1 || fp.Series[0].Name != FleetSeriesName {
-		t.Fatalf("fleet series = %+v, want one named %s", fp.Series, FleetSeriesName)
+	if len(fp.Series) != 1 || fp.Series[0].Name != "fleet" {
+		t.Fatalf("fleet series = %+v, want one named fleet", fp.Series)
 	}
 }
 

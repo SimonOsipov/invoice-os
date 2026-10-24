@@ -20,6 +20,6 @@ describe('scopeStrays', () => {
   })
 
   it('still reports a stray under another panel', () => {
-    expect(scopeStrays(body({ req_per_min: ['fleet'], error_pct: ['other'] }, ['ghost']), ['app'])).toEqual(['fleet', 'other', 'ghost'])
+    expect(scopeStrays(body({ req_per_min: ['fleet'], error_pct: ['other'] }, ['ghost'], ['app', 'phantom']), ['app'])).toEqual(['fleet', 'other', 'ghost', 'phantom'])
   })
 })

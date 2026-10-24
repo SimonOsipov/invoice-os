@@ -87,6 +87,7 @@ jobs:
               - 'cmd/authsentry/**'
               - 'internal/platform/auth/**'
               - 'internal/platform/*.go'
+              - 'internal/platform/**'
               - 'internal/platform/db/**'
               - 'internal/gateway/**'
               - 'internal/accountmail/**'

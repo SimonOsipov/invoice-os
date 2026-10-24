@@ -513,7 +513,7 @@ func TestIdpUpRefusesANonAuthAdminDSN(t *testing.T) {
 // plannedIdPFilter is the idp paths filter the plan lists; the job must run when any of them changes.
 var plannedIdPFilter = []string{
 	"sidecar/auth/**", "cmd/authsentry/**", "internal/platform/auth/**", "migrations/**", "db/**", "tools/prenv/**",
-	"internal/gateway/**", "internal/accountmail/**", "packages/design-tokens/v2/assets/**", "internal/tenancy/**", "internal/platform/*.go", "internal/platform/db/**",
+	"internal/gateway/**", "internal/accountmail/**", "packages/design-tokens/v2/assets/**", "internal/tenancy/**", "internal/platform/*.go", "internal/platform/**", "internal/platform/db/**",
 	"internal/tools/idppin/**", "scripts/ci/idp-*.sh", "Makefile", ".github/workflows/ci.yml", "go.mod", "go.sum",
 }
 

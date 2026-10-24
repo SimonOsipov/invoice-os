@@ -243,6 +243,10 @@ func TestStore_RecordWritesKindCounts(t *testing.T) {
 	seedRiverJobs(t, super, kind, "available", 1)
 	seedRiverJobs(t, super, kind, "running", 2)
 	seedRiverJobs(t, super, kind, "discarded", 1)
+	other := "shtest_" + uuid.NewString()[:8]
+	seedRiverJobs(t, super, other, "pending", 2)
+	seedRiverJobs(t, super, other, "completed", 3)
+	seedRiverJobs(t, super, other, "cancelled", 4)
 	slot := testSlot(t, super, 2004, 0)
 	zero := 0
 	if _, err := (&Store{Pool: app}).Record(context.Background(), slot, "ok", &zero); err != nil {
@@ -254,6 +258,16 @@ func TestStore_RecordWritesKindCounts(t *testing.T) {
 	}
 	if want := (map[string]int64{"available": 1, "running": 2, "discarded": 1}); !reflect.DeepEqual(got[kind], want) {
 		t.Errorf("kind_counts[%s] = %v, want %v", kind, got[kind], want)
+	}
+	if want := (map[string]int64{"pending": 2, "completed": 3, "cancelled": 4}); !reflect.DeepEqual(got[other], want) {
+		t.Errorf("kind_counts[%s] = %v, want %v", other, got[other], want)
+	}
+	if _, err := (&Store{Pool: app}).Record(context.Background(), slot, "ok", &zero); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := super.QueryRow(context.Background(), `SELECT count(*) FROM public.health_samples WHERE taken_at = $1`, slot).Scan(&n); err != nil || n != 1 {
+		t.Errorf("rows in the slot after a second Record = %d (%v), want 1", n, err)
 	}
 }
 

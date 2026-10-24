@@ -80,6 +80,9 @@ func TestJobViewOf_AnUnmappedKindCountsInTheTotalAndWorkerOnly(t *testing.T) {
 	wantTotals(t, "worker", v.Services["worker"], 4, 0)
 	wantTotals(t, "submission", v.Services["submission"], 0, 0)
 	wantTotals(t, "notifications", v.Services["notifications"], 0, 0)
+	if got := sortedKeys(v.Services); !slices.Equal(got, []string{"notifications", "submission", "worker"}) {
+		t.Errorf("services keys = %v, want an unmapped kind to add none", got)
+	}
 }
 
 func TestJobViewOf_NoRowsGivesEveryOwnerAtZero(t *testing.T) {
@@ -96,8 +99,32 @@ func TestJobViewOf_NoRowsGivesEveryOwnerAtZero(t *testing.T) {
 }
 
 func TestJobViewOf_PendingIsNotQueued(t *testing.T) {
-	v := JobViewOf(kinds{"demo_deal": {"pending": 3}}, 0)
+	v := JobViewOf(kinds{"demo_deal": {"pending": 3, "completed": 4, "cancelled": 5}, "nl_other": {"pending": 1, "completed": 1}}, 0)
 	wantTotals(t, "notifications", v.Services["notifications"], 0, 0)
+	wantTotals(t, "worker", v.Services["worker"], 0, 0)
+	wantTotals(t, "total", v.Total, 0, 0)
+}
+
+func TestJobViewOf_SubmissionKindDiscardsAreSkippedWhenNoSubmissionJobIsDead(t *testing.T) {
+	v := JobViewOf(kinds{"submission_submit": {"discarded": 5}, "submission_poll": {"discarded": 6}}, 0)
+	wantTotals(t, "submission", v.Services["submission"], 0, 0)
+	wantTotals(t, "total", v.Total, 0, 0)
+}
+
+func TestJobViewOf_WorkerEqualsTotalAndOwnersPartitionMappedKinds(t *testing.T) {
+	v := JobViewOf(kinds{
+		"submission_poll":      {"retryable": 1, "discarded": 2},
+		"extraction_extract":   {"scheduled": 3, "discarded": 4},
+		"registrant_intake":    {"running": 5, "discarded": 6},
+		"blog_subscriber_sync": {"available": 7},
+		"nl_other":             {"available": 8, "discarded": 9},
+	}, 10)
+	if v.Services["worker"] != v.Total {
+		t.Errorf("worker = %+v, total = %+v, want equal", v.Services["worker"], v.Total)
+	}
+	wantTotals(t, "total", v.Total, 24, 10+4+6+9)
+	wantTotals(t, "submission", v.Services["submission"], 4, 10+4)
+	wantTotals(t, "notifications", v.Services["notifications"], 12, 6)
 }
 
 func TestJobOwners_MapEachKindToItsService(t *testing.T) {

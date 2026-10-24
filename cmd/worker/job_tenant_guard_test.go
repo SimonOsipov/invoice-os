@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -18,7 +19,7 @@ import (
 )
 
 // companyFreeKinds: job kinds that run for no company, each with its reason.
-// Lives here because only cmd/worker can import submission, extraction and notifications.
+// Lives here because the real bundle (contactWorkers, workerBundle) is built in package main.
 var companyFreeKinds = map[string]string{
 	"contact_deliver":      "args hold a contact email, destination and version; contacts are global",
 	"demo_deal":            "args hold a demo requester's email, name and company text; no tenant",
@@ -41,28 +42,45 @@ func registeredJobArgs(t *testing.T, b *river.Workers) map[string]reflect.Type {
 	return out
 }
 
-// carriesTenantID matches what tenantOf tags: a JSON string field named tenant_id.
+// fillIDs sets every settable string and uuid.UUID leaf to id, descending through struct fields.
+// Pointers stay nil, as encoding/json leaves a nil embedded pointer out.
+func fillIDs(v reflect.Value, id uuid.UUID) {
+	switch {
+	case v.Type() == reflect.TypeOf(uuid.UUID{}):
+		if v.CanSet() {
+			v.Set(reflect.ValueOf(id))
+		}
+	case v.Kind() == reflect.String:
+		if v.CanSet() {
+			v.SetString(id.String())
+		}
+	case v.Kind() == reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			fillIDs(v.Field(i), id)
+		}
+	}
+}
+
+// carriesTenantID encodes a filled args value and reads the top-level tenant_id as tenantOf does.
 func carriesTenantID(t reflect.Type) bool {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	if t.Kind() != reflect.Struct {
+	id := uuid.MustParse("6f1c2a3e-8b4d-4c5e-9a7f-0123456789ab")
+	v := reflect.New(t).Elem()
+	fillIDs(v, id)
+	raw, err := json.Marshal(v.Interface())
+	if err != nil {
 		return false
 	}
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		if f.Anonymous && carriesTenantID(f.Type) {
-			return true
-		}
-		if !f.IsExported() {
-			continue
-		}
-		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
-		if name == "tenant_id" && (f.Type.Kind() == reflect.String || f.Type == reflect.TypeOf(uuid.UUID{})) {
-			return true
-		}
+	var a struct {
+		TenantID string `json:"tenant_id"`
 	}
-	return false
+	if json.Unmarshal(raw, &a) != nil {
+		return false
+	}
+	got, err := uuid.Parse(a.TenantID)
+	return err == nil && got == id
 }
 
 func tenantTagProblems(kinds map[string]reflect.Type, free map[string]string) []string {

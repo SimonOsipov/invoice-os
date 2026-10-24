@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -17,10 +16,29 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
+// fillIDs sets every settable string and uuid.UUID leaf to id, descending through struct fields.
+// Pointers stay nil, as encoding/json leaves a nil embedded pointer out.
+func fillIDs(v reflect.Value, id uuid.UUID) {
+	switch {
+	case v.Type() == reflect.TypeOf(uuid.UUID{}):
+		if v.CanSet() {
+			v.Set(reflect.ValueOf(id))
+		}
+	case v.Kind() == reflect.String:
+		if v.CanSet() {
+			v.SetString(id.String())
+		}
+	case v.Kind() == reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			fillIDs(v.Field(i), id)
+		}
+	}
+}
+
 // argsOf builds the zero args value of w's Work method (so unexported types are reachable),
-// sets its tenant_id field to tenant when non-empty, and returns it with its JSON.
-// With fillStrings, every string field holds a UUID, so a tenant_id field added to a company-free type shows.
-func argsOf(t *testing.T, w any, tenant string, fillStrings bool) (river.JobArgs, []byte) {
+// fills every string and uuid field with id, and returns it with its JSON.
+// A tenant_id anywhere that json flattens then carries id, so the tag test follows the real encoding.
+func argsOf(t *testing.T, w any, id uuid.UUID) (river.JobArgs, []byte) {
 	t.Helper()
 	m, ok := reflect.TypeOf(w).MethodByName("Work")
 	if !ok || m.Type.NumIn() != 3 {
@@ -35,33 +53,7 @@ func argsOf(t *testing.T, w any, tenant string, fillStrings bool) (river.JobArgs
 		t.Fatalf("%s has no Args field", job)
 	}
 	v := reflect.New(argsField.Type).Elem()
-	if fillStrings {
-		for i := 0; i < v.NumField(); i++ {
-			if v.Field(i).Kind() == reflect.String {
-				v.Field(i).SetString(uuid.NewString())
-			}
-		}
-	}
-	if tenant != "" {
-		set := false
-		for i := 0; i < v.NumField(); i++ {
-			if strings.Split(argsField.Type.Field(i).Tag.Get("json"), ",")[0] != "tenant_id" {
-				continue
-			}
-			switch f := v.Field(i); f.Type() {
-			case reflect.TypeOf(""):
-				f.SetString(tenant)
-			case reflect.TypeOf(uuid.UUID{}):
-				f.Set(reflect.ValueOf(uuid.MustParse(tenant)))
-			default:
-				t.Fatalf("%s tenant_id has type %s", argsField.Type, f.Type())
-			}
-			set = true
-		}
-		if !set {
-			t.Fatalf("%s has no tenant_id field", argsField.Type)
-		}
-	}
+	fillIDs(v, id)
 	ja, ok := v.Interface().(river.JobArgs)
 	if !ok {
 		t.Fatalf("%s is not river.JobArgs", argsField.Type)
@@ -84,8 +76,9 @@ func TestJobTenantTag_CompanyKindsTagTheirTenant(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.kind, func(t *testing.T) {
-			tenant := uuid.NewString()
-			ja, raw := argsOf(t, c.w, tenant, false)
+			id := uuid.New()
+			tenant := id.String()
+			ja, raw := argsOf(t, c.w, id)
 			if ja.Kind() != c.kind {
 				t.Fatalf("Kind() = %q, want %q", ja.Kind(), c.kind)
 			}
@@ -111,7 +104,7 @@ func TestJobTenantTag_CompanyFreeKindsCarryNoTenantTag(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.kind, func(t *testing.T) {
-			ja, raw := argsOf(t, c.w, "", true)
+			ja, raw := argsOf(t, c.w, uuid.New())
 			if ja.Kind() != c.kind {
 				t.Fatalf("Kind() = %q, want %q", ja.Kind(), c.kind)
 			}

@@ -874,6 +874,76 @@ async function tileRowRead(page: Page, row: Locator, keys: string[], what: strin
   return { problems, rects }
 }
 
+const PANEL_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'sql_util', 'sql_connections']
+
+// The panels grid: panels apart, a row sharing one top, title row, word and content inside each panel; the grid between the Jobs row and the Services card.
+async function panelsRead(page: Page, grid: Locator, jobs: Rect, card: Rect): Promise<{ problems: string[]; rects: Rect[] }> {
+  const panels = grid.locator(':scope > [data-panel]')
+  expect(await panels.evaluateAll((els) => els.map((e) => e.getAttribute('data-panel'))), 'panel keys').toEqual(PANEL_KEYS)
+  const rects = await rectsOf(page, panels, 'panel')
+  const gridBox = (await boxes(page, { grid })).grid
+  const problems = [...pairwiseApart(rects, 'panels'), ...below(jobs, gridBox, 'panels grid below the Jobs row'), ...below(gridBox, card, 'Services card below the panels grid')]
+  for (let i = 0; i + 1 < rects.length; i += 2) problems.push(...sameTops([rects[i], rects[i + 1]], `panel row ${i / 2}`))
+  for (const [i, key] of PANEL_KEYS.entries()) {
+    const p = panels.nth(i)
+    const titleRow = kid(p, 1)
+    const word = p.locator('[data-word]')
+    const noData = p.locator('[data-no-data]')
+    const named: Record<string, Locator> = { titleRow, title: kid(titleRow, 1), content: kid(p, 2) }
+    if ((await word.count()) > 0) named.word = word
+    const r = await boxes(page, named)
+    problems.push(...within(rects[i], r.titleRow, `${key} title row`), ...within(rects[i], r.title, `${key} title`), ...within(rects[i], r.content, `${key} chart`), ...below(r.titleRow, r.content, `${key} chart below the title row`))
+    if (r.word) problems.push(...within(rects[i], r.word, `${key} word`), ...apart(r.title, r.word, `${key} title / word`))
+    if ((await noData.count()) > 0) {
+      await expect(noData, `${key} note`).toHaveText('No data')
+      problems.push(...within(rects[i], (await boxes(page, { noData })).noData, `${key} No data`))
+    }
+  }
+  return { problems, rects }
+}
+
+// fixture check: pins the chart, legend and marker layout of a wire-shaped body, not the metrics contract
+async function fixturePanelsRead(page: Page): Promise<Read> {
+  const panels = mainOf(page).locator('.ops-health-panels > [data-panel]')
+  const rects = await rectsOf(page, panels, 'panel')
+  const problems: string[] = []
+  const legendCounts: Record<string, number> = { sql_util: 3, sql_connections: 1 }
+  for (const [i, key] of PANEL_KEYS.entries()) {
+    const p = panels.nth(i)
+    const chart = kid(p, 2)
+    const legend = kid(p, 3)
+    const svg = chart.locator('svg')
+    await expect(svg, `${key} draws a chart`).toHaveCount(1)
+    const axis = { yMax: kid(kid(chart, 1), 1), yZero: kid(kid(chart, 1), 2), xStart: kid(kid(chart, 4), 1), xEnd: kid(kid(chart, 4), 2) }
+    const r = await boxes(page, { chart, legend, svg, ...axis })
+    problems.push(...within(rects[i], r.chart, `${key} chart`), ...below(r.chart, r.legend, `${key} legend below the chart`), ...within(rects[i], r.legend, `${key} legend`))
+    for (const k of Object.keys(axis) as (keyof typeof axis)[]) problems.push(...within(rects[i], r[k], `${key} axis label ${k}`))
+    problems.push(...leftOf(r.yMax, r.svg, `${key} y labels / chart`), ...below(r.svg, r.xStart, `${key} x labels under the chart`), ...pairwiseApart([r.yMax, r.yZero], `${key} y labels`), ...pairwiseApart([r.xStart, r.xEnd], `${key} x labels`))
+
+    const entries = legend.locator(':scope > span')
+    const want = legendCounts[key] ?? 8
+    await expect(entries, `${key} legend entries`).toHaveCount(want)
+    const entryRects = await rectsOf(page, entries, `${key} legend entry`)
+    problems.push(...pairwiseApart(entryRects, `${key} legend entries`))
+    for (const [j, e] of entryRects.entries()) problems.push(...within(rects[i], e, `${key} legend entry ${j}`))
+    if (want === 8) {
+      await expect(legend.locator('[data-series]'), `${key} coloured entries`).toHaveCount(7)
+      await expect(legend.locator('[data-series-other]'), `${key} folded entry`).toHaveText('+10 other services')
+    }
+
+    const marks = svg.locator('line[data-deploy]')
+    await expect(marks, `${key} deploy markers`).toHaveCount(2)
+    const markRects = await marks.evaluateAll((els) => els.map((e) => { const b = e.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height } }))
+    for (const [j, m] of markRects.entries()) problems.push(...within(rects[i], m, `${key} deploy marker ${j}`))
+  }
+  const word = (key: string): Locator => panels.nth(PANEL_KEYS.indexOf(key)).locator('[data-word]')
+  await expect(word('error_pct'), 'error_pct word').toHaveText('HIGH')
+  await expect(word('cpu_pct'), 'cpu_pct word').toHaveText('HIGH')
+  await expect(word('latency_p95_ms'), 'latency_p95_ms word').toHaveText('PEAKED')
+  await expect(word('ram_pct'), 'ram_pct has no word').toHaveCount(0)
+  return { problems, rects: { panels: rects } }
+}
+
 async function healthLayout(page: Page): Promise<Read> {
   const mn = mainOf(page)
   const problems: string[] = []
@@ -908,7 +978,9 @@ async function healthLayout(page: Page): Promise<Read> {
   const stats = await tileRowRead(page, statsRow, STAT_KEYS, 'stat')
   const jobs = await tileRowRead(page, jobsRow, JOB_KEYS, 'jobs')
   const grids = await boxes(page, { stats: statsRow, jobs: jobsRow, card: mn.locator('.ops-screen-pad > div:last-child') })
-  problems.push(...stats.problems, ...jobs.problems, ...below(bar.filterBar, grids.stats, 'stat row below the filter bar'), ...below(grids.stats, grids.jobs, 'Jobs row below the stat row'), ...below(grids.jobs, grids.card, 'Services card below the Jobs row'))
+  const panelsGrid = mn.locator('.ops-health-panels')
+  const panelRead = (await panelsGrid.count()) > 0 ? await panelsRead(page, panelsGrid, grids.jobs, grids.card) : null
+  problems.push(...(panelRead?.problems ?? []), ...stats.problems, ...jobs.problems, ...below(bar.filterBar, grids.stats, 'stat row below the filter bar'), ...below(grids.stats, grids.jobs, 'Jobs row below the stat row'), ...below(grids.jobs, grids.card, 'Services card below the Jobs row'))
 
   const rows = mn.locator('[data-service]')
   const nRows = Math.min(await rows.count(), 20)
@@ -925,7 +997,7 @@ async function healthLayout(page: Page): Promise<Read> {
   }
 
   await noSidewaysScroll(page, 'System health')
-  return { problems, rects: { head, bar, chipRects, stats: stats.rects, jobs: jobs.rects, grids } }
+  return { problems, rects: { head, bar, chipRects, stats: stats.rects, jobs: jobs.rects, panels: panelRead?.rects, grids } }
 }
 
 const STAFF_METRICS = /\/api\/submission\/v1\/staff\/metrics(\?|$)/
@@ -992,7 +1064,11 @@ async function healthFixtureLayout(page: Page): Promise<void> {
   await expect(word('errors')).toHaveText('HIGH')
   await expect(word('p95')).toHaveText('PEAKED')
   await expect(word('connections')).toHaveText('OK')
-  await atWidths(page, 'SUP-03 System health fixture layout', () => healthLayout(page))
+  await expect(mn.locator('.ops-health-panels > [data-panel]'), 'the panels grid holds ten panels').toHaveCount(10)
+  await atWidths(page, 'SUP-03 System health fixture layout', async () => {
+    const [base, charts] = [await healthLayout(page), await fixturePanelsRead(page)]
+    return { problems: [...base.problems, ...charts.problems], rects: { base: base.rects, charts: charts.rects } }
+  })
 }
 
 const STAFF_AUDIT = '/api/invoice/v1/staff/audit-log'

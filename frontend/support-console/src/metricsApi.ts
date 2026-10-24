@@ -72,7 +72,7 @@ export const DASHBOARDS = {
 } as const
 
 // HEALTH-00 Q7 defaults; strict ">".
-export const THRESHOLDS = { error: 1, p95: 1000 } as const
+export const THRESHOLDS = { error: 1, p95: 1000, cpu: 80, ram: 80 } as const
 export const CONNECTION_SHARE = 0.8
 
 // auth is GoTrue and has no Sentry DSN.
@@ -150,7 +150,7 @@ export const latestOf = (points: Point[]): number | null => {
 
 export const peakOf = (points: Point[]): number | null => (points.length ? Math.max(...points.map((p) => p[1])) : null)
 
-export type Stat = 'error' | 'p95' | 'connections'
+export type Stat = 'error' | 'p95' | 'cpu' | 'ram' | 'connections'
 export type Verdict = 'high' | 'peaked' | 'ok'
 
 // latest and peak are the displayed numbers (formatValue(...).n), so the word agrees with the printed value.
@@ -160,7 +160,7 @@ export function judge(stat: Stat, latest: number, peak: number, budget: number):
   return peak > limit ? 'peaked' : 'ok'
 }
 
-const SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)', 'var(--series-6)', 'var(--series-7)']
+export const SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)', 'var(--series-6)', 'var(--series-7)']
 const SLOTS = SERIES.length
 
 // A service keeps one colour on every panel: the 7 busiest by peak req/min, slots in name order.

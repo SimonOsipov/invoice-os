@@ -827,6 +827,195 @@ describe('System health markup', () => {
   })
 })
 
+describe('System health panels', () => {
+  const ORDER = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'sql_util', 'sql_connections']
+  const TITLES = ['Requests / min', '5xx %', 'Latency p50 (ms)', 'Latency p95 (ms)', 'CPU % of limit', 'RAM % of limit', 'Instances', 'Cold starts / min', 'Cloud SQL CPU, RAM, disk (%)', 'Cloud SQL connections']
+  const FLAT: [number, number][] = [[0, 5], [60, 6]]
+  const db = (v: [number, number][] = FLAT) => ({ database: v })
+  const svcs = (names: string[], f: (i: number) => [number, number][] = () => FLAT) => Object.fromEntries(names.map((n, i) => [n, f(i)]))
+  const ALL: PanelSeries = {
+    req_per_min: svcs(['a', 'b']),
+    error_pct: svcs(['a', 'b']),
+    latency_p50_ms: svcs(['a', 'b']),
+    latency_p95_ms: svcs(['a', 'b']),
+    cpu_pct: svcs(['a', 'b']),
+    ram_pct: svcs(['a', 'b']),
+    instances: svcs(['a', 'b']),
+    cold_starts_per_min: svcs(['a', 'b']),
+    sql_cpu_pct: db(),
+    sql_ram_pct: db(),
+    sql_disk_pct: db(),
+    sql_connections: db(),
+  }
+  const full = (over: PanelSeries = {}) => metricsWith({ ...ALL, ...over })
+  const renderPanels = (m: StaffMetrics, service = '') => parse(healthWith({ metrics: m, service }))
+  const panelTags = (ts: Tag[], key: string) => {
+    const at = ts.findIndex((t) => attr(t, 'data-panel') === key)
+    expect(at, `panel ${key}`).toBeGreaterThan(-1)
+    const next = ts.findIndex((t, i) => i > at && (attr(t, 'data-panel') !== '' || t.text === 'Services'))
+    return ts.slice(at, next === -1 ? undefined : next)
+  }
+  const lines = (p: Tag[]) => p.filter((t) => attr(t, 'data-line'))
+  const guides = (p: Tag[]) => p.filter((t) => t.name === 'line' && t.attrs.includes('data-guide'))
+  const words = (p: Tag[]) => p.filter((t) => t.attrs.includes('data-word'))
+  const entries = (p: Tag[]) => p.filter((t) => attr(t, 'data-series'))
+  const patch = (m: StaffMetrics, key: PanelKey, f: (p: StaffMetrics['panels'][number]) => void) => {
+    f(m.panels.find((p) => p.key === key)!)
+    return m
+  }
+
+  it('the panels grid holds the ten panels in order', () => {
+    const html = healthWith({ metrics: full() })
+    const ts = parse(html)
+    const panels = ts.filter((t) => attr(t, 'data-panel'))
+    expect(panels.map((t) => attr(t, 'data-panel'))).toEqual(ORDER)
+    expect(ORDER.map((k) => panelTags(ts, k).find((t) => classes(t).includes('label'))!.text)).toEqual(TITLES)
+    expect(html).not.toContain('throughput')
+    expect(withClass(ts, 'ops-health-panels')).toHaveLength(1)
+  })
+
+  it('a panel draws one line per service in its page colour', () => {
+    const names = ['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9']
+    const rising = (i: number): [number, number][] => [[0, (i + 1) * 10], [60, (i + 1) * 10]]
+    const ts = renderPanels(full({ req_per_min: svcs(names, rising), cpu_pct: svcs(names, rising) }))
+    const strokes = (key: string) => Object.fromEntries(lines(panelTags(ts, key)).map((t) => [attr(t, 'data-line'), attr(t, 'stroke')]))
+    const req = strokes('req_per_min')
+    expect(Object.keys(req)).toHaveLength(9)
+    expect(Object.values(req).filter((c) => c.startsWith('var(--series-'))).toHaveLength(7)
+    expect(Object.entries(req).filter(([, c]) => c === 'var(--fg-4)').map(([n]) => n).sort()).toEqual(['s1', 's2'])
+    expect(strokes('cpu_pct')).toEqual(req)
+    const cpu = panelTags(ts, 'cpu_pct')
+    expect(entries(cpu)).toHaveLength(7)
+    expect(cpu.some((t) => t.text === '+2 other services')).toBe(true)
+  })
+
+  it('every panel marks each deploy', () => {
+    const m = full()
+    m.deploys.revisions = [
+      { service: 'a', revision: 'rev-1', created_at: '2026-10-14T10:05:00Z' },
+      { service: 'b', revision: 'rev-2', created_at: '2026-10-14T10:40:00Z' },
+    ]
+    const ts = renderPanels(m)
+    for (const key of ORDER) {
+      const p = panelTags(ts, key)
+      const marks = p.map((t, i) => (t.name === 'line' && t.attrs.includes('data-deploy') ? p[i + 1].text : null)).filter(Boolean)
+      expect(marks, key).toEqual(['rev-1 · 10:05 UTC', 'rev-2 · 10:40 UTC'])
+    }
+    expect(ts.some((t) => t.text === 'Deploy markers unavailable')).toBe(false)
+  })
+
+  it('unavailable deploys draw no marker and say so', () => {
+    const m = full()
+    m.deploys = { available: false, revisions: [] }
+    const ts = renderPanels(m)
+    expect(ts.filter((t) => t.attrs.includes('data-deploy'))).toHaveLength(0)
+    withText(ts, 'Deploy markers unavailable')
+    expect(parse(healthWith({ metrics: full() })).some((t) => t.text === 'Deploy markers unavailable')).toBe(false)
+  })
+
+  it('threshold panels draw the guide and flag HIGH', () => {
+    const ts = renderPanels(full({ cpu_pct: svcs(['a'], () => [[0, 30], [60, 85]]), error_pct: svcs(['a'], () => [[0, 0.5], [60, 0.5]]) }))
+    const cpu = panelTags(ts, 'cpu_pct')
+    expect(guides(cpu).map((t) => attr(t, 'data-guide'))).toEqual(['80 %'])
+    expect(attr(guides(cpu)[0], 'stroke-dasharray')).not.toBe('')
+    expect(words(cpu).map((t) => t.text)).toEqual(['HIGH'])
+    expect(style(words(cpu)[0]).color).toBe('var(--status-red-text)')
+    const err = panelTags(ts, 'error_pct')
+    expect(guides(err).map((t) => attr(t, 'data-guide'))).toEqual(['1 %'])
+    expect(words(err)).toHaveLength(0)
+    expect(guides(panelTags(ts, 'latency_p95_ms')).map((t) => attr(t, 'data-guide'))).toEqual(['1 s'])
+    expect(guides(panelTags(ts, 'req_per_min'))).toHaveLength(0)
+  })
+
+  it('a panel that peaked over its threshold reads PEAKED', () => {
+    const ts = renderPanels(full({ ram_pct: svcs(['a'], () => [[0, 90], [60, 40]]) }))
+    const ram = panelTags(ts, 'ram_pct')
+    expect(words(ram).map((t) => t.text)).toEqual(['PEAKED'])
+    expect(style(words(ram)[0]).color).toBe('var(--status-amber-text)')
+  })
+
+  it('the instances panel reads each service\'s max', () => {
+    const m = full({ req_per_min: svcs(['submission']), instances: svcs(['submission'], () => [[0, 1], [60, 2]]) })
+    m.limits.services = [{ name: 'submission', cpu: '1', memory: '512Mi', max_instances: 2 }]
+    const one = panelTags(renderPanels(m, 'submission'), 'instances')
+    expect(entries(one).map((t) => attr(t, 'data-series'))).toEqual(['submission'])
+    expect(one.filter((t) => t.text === '· max 2')).toHaveLength(1)
+    expect(guides(one).map((t) => attr(t, 'data-guide'))).toEqual(['max 2'])
+    expect(attr(guides(one)[0], 'stroke-dasharray')).not.toBe('')
+    const all = panelTags(renderPanels(m, ''), 'instances')
+    expect(guides(all)).toHaveLength(0)
+    expect(all.filter((t) => t.text === '· max 2')).toHaveLength(1)
+  })
+
+  it('unavailable limits drop the instances max', () => {
+    const m = full({ instances: svcs(['submission']) })
+    m.limits = { available: false, services: [{ name: 'submission', cpu: '1', memory: '512Mi', max_instances: 2 }] }
+    const p = panelTags(renderPanels(m, 'submission'), 'instances')
+    expect(p.some((t) => t.text.includes('max'))).toBe(false)
+    expect(guides(p)).toHaveLength(0)
+  })
+
+  it('the Cloud SQL panels draw utilisation and connections against the budget', () => {
+    const ts = renderPanels(full({ sql_connections: db([[0, 60], [60, 70]]) }))
+    const util = panelTags(ts, 'sql_util')
+    expect(lines(util).map((t) => attr(t, 'data-line'))).toEqual(['CPU', 'RAM', 'Disk'])
+    expect(lines(util).map((t) => attr(t, 'stroke'))).toEqual(['var(--series-1)', 'var(--series-2)', 'var(--series-3)'])
+    const conn = panelTags(ts, 'sql_connections')
+    expect(lines(conn).map((t) => attr(t, 'data-line'))).toEqual(['connections'])
+    expect(guides(conn).map((t) => attr(t, 'data-guide'))).toEqual(['budget 80'])
+    expect(attr(guides(conn)[0], 'stroke-dasharray')).toBe('')
+    expect(words(conn).map((t) => t.text)).toEqual(['HIGH'])
+    for (const p of [util, conn]) expect(p.filter((t) => t.text === 'All services')).toHaveLength(1)
+    expect(panelTags(ts, 'cpu_pct').some((t) => t.text === 'All services')).toBe(false)
+  })
+
+  it('an unavailable panel shows No data and the others draw', () => {
+    const m = full()
+    patch(m, 'cpu_pct', (p) => (p.available = false))
+    patch(m, 'ram_pct', (p) => (p.series = []))
+    const ts = renderPanels(m)
+    for (const key of ['cpu_pct', 'ram_pct']) {
+      const p = panelTags(ts, key)
+      expect(p.filter((t) => t.attrs.includes('data-no-data')).map((t) => t.text), key).toEqual(['No data'])
+      expect(p.some((t) => t.name === 'svg'), key).toBe(false)
+    }
+    expect(lines(panelTags(ts, 'req_per_min'))).toHaveLength(2)
+  })
+
+  it('a missing SQL source leaves the other two lines', () => {
+    const m = full()
+    patch(m, 'sql_disk_pct', (p) => (p.available = false))
+    const util = panelTags(renderPanels(m), 'sql_util')
+    expect(lines(util).map((t) => attr(t, 'data-line'))).toEqual(['CPU', 'RAM'])
+    expect(entries(util).map((t) => attr(t, 'data-series'))).toEqual(['CPU', 'RAM', 'Disk'])
+    const disk = util.slice(util.findIndex((t) => attr(t, 'data-series') === 'Disk'))
+    expect(disk.some((t) => t.text === 'No data')).toBe(true)
+    expect(util.some((t) => t.attrs.includes('data-no-data'))).toBe(false)
+    const none = full()
+    for (const k of ['sql_cpu_pct', 'sql_ram_pct', 'sql_disk_pct'] as const) patch(none, k, (p) => (p.available = false))
+    expect(panelTags(renderPanels(none), 'sql_util').some((t) => t.attrs.includes('data-no-data'))).toBe(true)
+  })
+
+  it('the panels grid holds two tracks and collapses', () => {
+    const grid = withClass(parse(healthWith({ metrics: full() })), 'ops-health-panels')
+    expect(grid).toHaveLength(1)
+    expect(style(grid[0])['grid-template-columns']).toBe('repeat(2, minmax(0, 1fr))')
+    const css = readFileSync(new URL('./styles/support.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const rule = css.match(/@media \(max-width: 1024px\) \{([\s\S]*?)\n\}/i)![1]
+    expect(rule.match(/\.ops-health-panels[^{]*\{\s*grid-template-columns:\s*([^;]*);/i)?.[1]).toBe('minmax(0, 1fr) !important')
+  })
+
+  it('the panels sit between the Jobs row and the Services card', () => {
+    const ts = parse(healthWith({ metrics: full() }))
+    const at = (f: (t: Tag) => boolean) => ts.findIndex(f)
+    const jobs = at((t) => attr(t, 'data-tile') === 'dead-lettered')
+    const grid = at((t) => classes(t).includes('ops-health-panels'))
+    const card = at((t) => t.text === 'Services')
+    expect(jobs).toBeLessThan(grid)
+    expect(grid).toBeLessThan(card)
+  })
+})
+
 describe('TimeChart', () => {
   const base = { start: 0, end: 600, step: 60 }
   const lines = [

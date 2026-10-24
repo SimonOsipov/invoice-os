@@ -83,7 +83,8 @@ ON CONFLICT (email) DO UPDATE SET
     resend_delivered_at    = CASE WHEN ` + newFactSQL + ` THEN NULL ELSE contacts.resend_delivered_at END,
     updated_at             = now()
 RETURNING email, version, hubspot_delivered_at IS NULL,
-          resend_delivered_at IS NULL AND (registered_at IS NOT NULL OR marketing_consented_at IS NOT NULL)`
+          resend_delivered_at IS NULL AND (registered_at IS NOT NULL OR marketing_consented_at IS NOT NULL),
+          old.registered_at IS NULL AND new.registered_at IS NOT NULL`
 
 type intake struct {
 	email, userID, first, last, company string
@@ -97,7 +98,7 @@ func (s *Store) Registrant(ctx context.Context, in RegistrantIntake) error {
 	first, last := splitName(in.DisplayName)
 	return s.merge(ctx, intake{
 		email: in.Email, userID: in.UserID, first: first, last: last, company: strings.TrimSpace(in.WorkspaceName),
-		registered: true, consentText: in.ConsentText, consentAt: in.ConsentAt,
+		name: strings.TrimSpace(in.DisplayName), registered: true, consentText: in.ConsentText, consentAt: in.ConsentAt,
 	})
 }
 
@@ -130,9 +131,9 @@ func (s *Store) merge(ctx context.Context, in intake) error {
 
 	var email string
 	var version int64
-	var hubspotPending, resendPending bool
+	var hubspotPending, resendPending, newlyRegistered bool
 	err = tx.QueryRow(ctx, mergeSQL, in.email, userID, in.first, in.last, in.company,
-		in.registered, in.demo, consentText, consentAt).Scan(&email, &version, &hubspotPending, &resendPending)
+		in.registered, in.demo, consentText, consentAt).Scan(&email, &version, &hubspotPending, &resendPending, &newlyRegistered)
 	if err != nil {
 		return fmt.Errorf("notifications: merge contact: %w", err)
 	}
@@ -149,8 +150,9 @@ func (s *Store) merge(ctx context.Context, in intake) error {
 			return fmt.Errorf("notifications: queue %s delivery: %w", dest, err)
 		}
 	}
-	if in.demo {
-		if _, err := s.river.InsertTx(ctx, tx, DemoDealArgs{Email: email, Name: in.name, Company: in.company}, nil); err != nil {
+	// RETURNING old/new (Postgres 18) sees the prior row, so exactly one concurrent sign-up wins.
+	if in.demo || newlyRegistered {
+		if _, err := s.river.InsertTx(ctx, tx, DemoDealArgs{Email: email, Name: in.name, Company: in.company, SignUp: !in.demo}, nil); err != nil {
 			return fmt.Errorf("notifications: queue demo deal: %w", err)
 		}
 	}

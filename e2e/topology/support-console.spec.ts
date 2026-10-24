@@ -771,23 +771,41 @@ type SeenHealth = {
   fleet: { status: string; services: SeenService[] }
   jobs: Record<string, number>
   queue_depth: number
-  trend: { services_down: number | null; queue_depth: number; dead_lettered: number }[]
+  // systemhealth.JobView: total and per owning service
+  river_jobs: { total: { queue_depth: number; dead_lettered: number }; services: Record<string, { queue_depth: number; dead_lettered: number }> }
+  trend: { services_down: number | null; queue_depth: number; dead_lettered: number; river_jobs: SeenHealth['river_jobs'] | null }[]
 }
 
 type SeenPanel = { key: string; available: boolean; series: { name: string; points: [number, number][] }[] }
 // internal/systemhealth PanelData, DeploysSection, LimitsSection
 type SeenMetrics = { range: string; service: string; connection_budget: number; panels: SeenPanel[]; limits: { available: boolean; services: { name: string }[] }; deploys: { available: boolean; revisions: { service: string }[] } }
-type Armed = { health: SeenHealth; metrics: SeenMetrics; metricsUrl: URL }
+type Armed = { health: SeenHealth; metrics: SeenMetrics; metricsUrl: URL; latest: { body: SeenHealth } }
 
 // Armed before the nav click: the screen's own reads are the comparison, so a shard moving the queue cannot race them.
 const armHealth = async (page: Page): Promise<Armed> => {
   const first = (path: string) => page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === path, { timeout: 30_000 })
   const [h, m] = await Promise.all([first(STAFF_HEALTH), first('/api/submission/v1/staff/metrics')])
-  return { health: (await h.json()) as SeenHealth, metrics: (await m.json()) as SeenMetrics, metricsUrl: new URL(m.url()) }
+  const health = (await h.json()) as SeenHealth
+  // `latest` follows every later health read: the screen renders the body it last got.
+  const latest = { body: health }
+  // r.json() settles out of order: the sequence is taken at arrival, and only a newer response writes.
+  let seq = 0
+  let written = 0
+  page.on('response', (r) => {
+    if (r.request().method() !== 'GET' || new URL(r.url()).pathname !== STAFF_HEALTH || r.status() !== 200) return
+    const mine = ++seq
+    void r.json().then((b: SeenHealth) => {
+      if (mine > written) {
+        written = mine
+        latest.body = b
+      }
+    }, () => {})
+  })
+  return { health, metrics: (await m.json()) as SeenMetrics, metricsUrl: new URL(m.url()), latest }
 }
 
 const shortOf = (build?: string): string => (build ? build.slice(0, 7) : '—')
-const nonNull = (trend: SeenHealth['trend'], key: 'services_down' | 'queue_depth' | 'dead_lettered'): number => trend.filter((p) => p[key] !== null).length
+const nonNull = (trend: SeenHealth['trend'], key: 'services_down' | 'river_jobs'): number => trend.filter((p) => p[key] !== null).length
 
 // systemhealth.Panels, in wire order.
 const METRIC_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'sql_cpu_pct', 'sql_ram_pct', 'sql_disk_pct', 'sql_connections']
@@ -928,20 +946,78 @@ async function healthLinks(page: Page, seen: SeenHealth): Promise<void> {
   }
 }
 
+// Polls until the locator matches what the latest health body implies; `want` is re-read on each try.
+async function readsLatest(loc: Locator, want: () => string, what: string, mode: 'text' | 'count' = 'text'): Promise<void> {
+  const got = async (): Promise<string> => (mode === 'count' ? String(await loc.count()) : ((await loc.textContent()) ?? ''))
+  await expect.poll(async () => ((await got()) === want() ? 'match' : `${await got()} != ${want()}`), { message: what }).toBe('match')
+}
+
+const NO_JOBS_NOTE = (name: string): string => `${name} owns no background jobs. Pick submission, notifications, worker or All services to see them.`
+const NO_PING_NOTE = (name: string): string => `${name} has no live ping. The live ping covers the backend services.`
+const ROLLUP_DOWN = 'The gateway roll-up is unavailable.'
+
+// Picks each service in turn: jobs tiles, Services rows and the All services tags follow the pick.
+async function healthNarrowing(page: Page, latest: { body: SeenHealth }): Promise<void> {
+  const mn = mainOf(page)
+  const select = mn.locator('select[aria-label="Service"]')
+  const tile = (key: string): Locator => mn.locator(`[data-tile="${key}"]`)
+  const card = mn.locator('.ops-screen-pad > div:last-child')
+  const jobsOwned = (name: string) => latest.body.river_jobs.services[name]
+  // systemhealth.JobOwners and JobRunner: these three always serve totals
+  for (const name of ['submission', 'notifications', 'worker']) expect(jobsOwned(name), `${name} totals are served`).toBeDefined()
+
+  const pick = async (name: string): Promise<void> => {
+    await select.selectOption(name)
+    const at = name === '' ? 'All services' : name
+    const totals = name === '' ? latest.body.river_jobs.total : jobsOwned(name)
+    if (totals) {
+      await readsLatest(tile('queue').locator('.money'), () => String((name === '' ? latest.body.river_jobs.total : jobsOwned(name)).queue_depth), `${at} queue value`)
+      await readsLatest(tile('dead-lettered').locator('.money'), () => String((name === '' ? latest.body.river_jobs.total : jobsOwned(name)).dead_lettered), `${at} dead-lettered value`)
+      await expect(mn.locator('[data-jobs-note]'), `${at} has no jobs note`).toHaveCount(0)
+      await expect(mn.locator('.ops-health-jobs').getByText(/Loading/), `${at} jobs row is not loading`).toHaveCount(0)
+    } else {
+      await expect(mn.locator('[data-jobs-note]'), `${at} jobs note`).toHaveText(NO_JOBS_NOTE(name))
+      await expect(mn.locator('[data-tile="queue"], [data-tile="dead-lettered"]'), `${at} has no jobs tiles`).toHaveCount(0)
+    }
+    await expect(card.getByText(/Loading/), `${at} Services card is not loading`).toHaveCount(0)
+
+    // Rows follow the latest roll-up, re-read per try so a 60 s refresh cannot race them.
+    const listed = (): string[] => {
+      const r = latest.body.fleet
+      return r.status === 'unknown' ? [] : r.services.map((s) => s.name).filter((n) => name === '' || n === name).sort()
+    }
+    const rows = mn.locator('[data-service]')
+    await expect.poll(async () => JSON.stringify((await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-service')).sort()))), { message: `${at} Services row names` }).toBe(JSON.stringify(listed()))
+    const known = latest.body.fleet.status !== 'unknown'
+    // probedServices (auth, worker) are always in a known roll-up, so these picks cannot pass with zero rows
+    if (known && (name === 'worker' || name === 'auth')) expect(listed(), `${at} is in the known roll-up`).toEqual([name])
+    if (!known) {
+      await expect(mn.getByText(ROLLUP_DOWN), `${at} roll-up unavailable copy`).toHaveCount(1)
+      await expect(mn.locator('[data-ping-note]'), `${at} no ping note when the roll-up is unknown`).toHaveCount(0)
+    } else if (listed().length === 0 && name !== '') {
+      await expect(mn.locator('[data-ping-note]'), `${at} ping note`).toHaveText(NO_PING_NOTE(name))
+    } else await expect(mn.locator('[data-ping-note]'), `${at} has no ping note`).toHaveCount(0)
+    if (name === 'auth' && listed().length > 0) await expect(rows.getByRole('link'), 'auth row has no Sentry link').toHaveCount(0)
+
+    for (const key of SCOPED) await expect(tile(key).locator('[data-scope]'), `${key} tag at ${at}`).toHaveText('All services')
+  }
+  for (const name of ['submission', 'notifications', 'worker', 'auth', 'app', '']) await pick(name)
+}
+
 async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Promise<void> {
   const mn = mainOf(page)
-  const { health: seen, metrics, metricsUrl } = await (armed as Promise<Armed>)
+  const { health: seen, metrics, metricsUrl, latest } = await (armed as Promise<Armed>)
   const tile = (key: string): Locator => mn.locator(`[data-tile="${key}"]`)
   await expect(tile('fleet'), 'the health tiles have loaded').toBeVisible()
 
   const known = seen.fleet.status !== 'unknown'
   const up = seen.fleet.services.filter((s) => s.status === 'up').length
   await expect(tile('fleet').locator('.money')).toHaveText(known ? `${up}/${seen.fleet.services.length}` : '—')
-  await expect(tile('queue').locator('.money')).toHaveText(String(seen.queue_depth))
-  await expect(tile('dead-lettered').locator('.money')).toHaveText(String(seen.jobs.dead_lettered ?? 0))
+  await readsLatest(tile('queue').locator('.money'), () => String(latest.body.river_jobs.total.queue_depth), 'queue value')
+  await readsLatest(tile('dead-lettered').locator('.money'), () => String(latest.body.river_jobs.total.dead_lettered), 'dead-lettered value')
   const fleetWord = { ok: 'HEALTHY', degraded: 'DEGRADED', unknown: 'UNKNOWN' }[seen.fleet.status as 'ok' | 'degraded' | 'unknown']
   await expect(tile('fleet').getByText(fleetWord, { exact: true }), 'fleet status word').toHaveCount(1)
-  await expect(tile('dead-lettered').getByText((seen.jobs.dead_lettered ?? 0) > 0 ? 'ATTENTION' : 'CLEAR', { exact: true }), 'dead-lettered status word').toHaveCount(1)
+  await readsLatest(tile('dead-lettered').locator('[data-word]'), () => (latest.body.river_jobs.total.dead_lettered > 0 ? 'ATTENTION' : 'CLEAR'), 'dead-lettered status word')
 
   if (known) {
     expect(seen.fleet.services.length, 'the fleet read names services').toBeGreaterThan(0)
@@ -953,12 +1029,15 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
   }
   await expect(mn.locator('[data-service]'), 'one row per service').toHaveCount(known ? seen.fleet.services.length : 0)
 
-  const series: [string, 'services_down' | 'queue_depth' | 'dead_lettered'][] = [
+  const series: [string, 'services_down' | 'river_jobs'][] = [
     ['fleet', 'services_down'],
-    ['queue', 'queue_depth'],
-    ['dead-lettered', 'dead_lettered'],
+    ['queue', 'river_jobs'],
+    ['dead-lettered', 'river_jobs'],
   ]
-  for (const [key, field] of series) await expect(tile(key).locator('svg'), `${key} sparkline`).toHaveCount(nonNull(seen.trend, field) >= 2 ? 1 : 0)
+  for (const [key, field] of series) {
+    if (field === 'river_jobs') await readsLatest(tile(key).locator('svg'), () => String(nonNull(latest.body.trend, field) >= 2 ? 1 : 0), `${key} sparkline count`, 'count')
+    else await expect(tile(key).locator('svg'), `${key} sparkline`).toHaveCount(nonNull(seen.trend, field) >= 2 ? 1 : 0)
+  }
 
   // Stable parts only: a failed gateway probe empties a build, and a read can be unknown with no services.
   const live = await liveStaffGet<SeenHealth>(STAFF_HEALTH)
@@ -978,6 +1057,7 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
   await expectStyles(parent(mn.locator('[data-service]').first().getByText(/^(UP|DOWN)$/)), 'service badge', { radius: '4px' })
 
   await metricsReads(page, testInfo, metrics, metricsUrl)
+  await healthNarrowing(page, latest)
   await healthLinks(page, seen)
 
   // Core AC 2: the fleet route grants the console no CORS.
@@ -991,6 +1071,8 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
 
 const STAT_KEYS = ['fleet', 'req', 'errors', 'p95', 'connections']
 const JOB_KEYS = ['queue', 'dead-lettered']
+// Which tiles carry the All services tag (the fleet-wide ones).
+const SCOPED = ['fleet', 'connections']
 // Which tiles carry a status word: always, only NO DATA, or never.
 const WORD_RULE: Record<string, 'always' | 'no-data' | 'never'> = { fleet: 'always', req: 'no-data', errors: 'always', p95: 'always', connections: 'always', queue: 'never', 'dead-lettered': 'always' }
 
@@ -1003,8 +1085,10 @@ async function tileRowRead(page: Page, row: Locator, keys: string[], what: strin
   for (const [i, key] of keys.entries()) {
     const t = tiles.nth(i)
     const head = kid(t, 1)
-    const word = kid(head, 2)
+    const word = t.locator('[data-word]')
+    const tag = t.locator('[data-scope]')
     const hasWord = (await word.count()) > 0
+    await expect(tag, `${key} tag`).toHaveCount(SCOPED.includes(key) ? 1 : 0)
     const rule = WORD_RULE[key]
     if (rule === 'always') expect(hasWord, `${key} has a status word`).toBe(true)
     if (rule === 'never') expect(hasWord, `${key} has no status word`).toBe(false)
@@ -1015,6 +1099,12 @@ async function tileRowRead(page: Page, row: Locator, keys: string[], what: strin
     if (hasWord) {
       const w = (await boxes(page, { word }))['word']
       problems.push(...within(r.tile, w, `${key} status word`), ...apart(r.label, w, `${key} label / status word`))
+    }
+    if (SCOPED.includes(key)) {
+      await expect(tag, `${key} tag text`).toHaveText('All services')
+      const g = (await boxes(page, { tag }))['tag']
+      problems.push(...within(r.tile, g, `${key} tag`), ...apart(r.label, g, `${key} label / tag`))
+      if (hasWord) problems.push(...apart(g, (await boxes(page, { word }))['word'], `${key} tag / status word`))
     }
     const svg = t.locator('svg')
     if ((await svg.count()) > 0) {
@@ -1127,15 +1217,22 @@ async function healthLayout(page: Page): Promise<Read> {
   const statsRow = mn.locator('.ops-health-stats')
   const jobsRow = mn.locator('.ops-health-jobs')
   const stats = await tileRowRead(page, statsRow, STAT_KEYS, 'stat')
-  const jobs = await tileRowRead(page, jobsRow, JOB_KEYS, 'jobs')
-  const grids = await boxes(page, { stats: statsRow, jobs: jobsRow, card: mn.locator('.ops-screen-pad > div:last-child') })
+  const jobsNote = mn.locator('[data-jobs-note]')
+  const noJobs = (await jobsNote.count()) > 0
+  const jobs = noJobs ? { problems: [], rects: [] as Rect[] } : await tileRowRead(page, jobsRow, JOB_KEYS, 'jobs')
+  const grids = await boxes(page, { stats: statsRow, jobs: noJobs ? jobsNote : jobsRow, card: mn.locator('.ops-screen-pad > div:last-child'), pad: mn.locator('.ops-screen-pad') })
   const panelsGrid = mn.locator('.ops-health-panels')
   const panelRead = (await panelsGrid.count()) > 0 ? await panelsRead(page, panelsGrid, grids.jobs, grids.card) : null
+  if (noJobs) problems.push(...withinX(grids.pad, grids.jobs, 'jobs note in the content column'), ...below(grids.stats, grids.jobs, 'jobs note below the stat row'))
   problems.push(...(panelRead?.problems ?? []), ...stats.problems, ...jobs.problems, ...below(bar.filterBar, grids.stats, 'stat row below the filter bar'), ...below(grids.stats, grids.jobs, 'Jobs row below the stat row'), ...below(grids.jobs, grids.card, 'Services card below the Jobs row'))
 
   const rows = mn.locator('[data-service]')
   const nRows = Math.min(await rows.count(), 20)
-  if (nRows === 0) await expect(mn.getByText('The gateway roll-up is unavailable.'), 'no rows only when the roll-up is unavailable').toHaveCount(1)
+  const pingNote = mn.locator('[data-ping-note]')
+  if (nRows === 0 && (await pingNote.count()) > 0) {
+    const n = (await boxes(page, { pingNote })).pingNote
+    problems.push(...within(grids.card, n, 'no-ping note in the Services card'))
+  } else if (nRows === 0) await expect(mn.getByText('The gateway roll-up is unavailable.'), 'no rows only when the roll-up is unavailable').toHaveCount(1)
   for (let i = 0; i < nRows; i++) {
     const row = rows.nth(i)
     const name = (await row.getAttribute('data-service')) ?? ''
@@ -1209,7 +1306,7 @@ async function healthFixtureLayout(page: Page): Promise<void> {
   await mn.getByRole('button', { name: '6h', exact: true }).click()
   await answered
   const tile = (key: string): Locator => mn.locator(`[data-tile="${key}"]`)
-  const word = (key: string): Locator => kid(kid(tile(key), 1), 2)
+  const word = (key: string): Locator => tile(key).locator('[data-word]')
   await expect(tile('req').locator('.money'), 'requests value').not.toHaveText('—')
   await expect(word('req'), 'requests carry no word').toHaveCount(0)
   await expect(word('errors')).toHaveText('HIGH')
@@ -1220,6 +1317,21 @@ async function healthFixtureLayout(page: Page): Promise<void> {
     const [base, charts] = [await healthLayout(page), await fixturePanelsRead(page)]
     return { problems: [...base.problems, ...charts.problems], rects: { base: base.rects, charts: charts.rects } }
   })
+
+  // app owns no job kind and has no live ping row: both notes show; the metrics route answers any query
+  await mn.locator('select[aria-label="Service"]').selectOption('app')
+  await expect(mn.locator('[data-jobs-note]'), 'app jobs note').toHaveText('app owns no background jobs. Pick submission, notifications, worker or All services to see them.')
+  await expect(mn.locator('[data-service]'), 'app has no service row').toHaveCount(0)
+  const pinged = (await mn.locator('[data-ping-note]').count()) > 0
+  if (!pinged) await expect(mn.getByText('The gateway roll-up is unavailable.'), 'app pass keeps the roll-up copy').toHaveCount(1)
+  if (pinged) await expect(mn.locator('[data-ping-note]'), 'app ping note').toHaveText('app has no live ping. The live ping covers the backend services.')
+  await expect(mn.locator('[data-tile="queue"], [data-tile="dead-lettered"]'), 'no jobs tiles for app').toHaveCount(0)
+  await atWidths(page, 'SUP-03 System health fixture layout, app pick', async () => {
+    const base = await healthLayout(page)
+    return { problems: base.problems, rects: { base: base.rects } }
+  })
+  await mn.locator('select[aria-label="Service"]').selectOption('')
+  await expect(mn.locator('[data-tile="queue"]'), 'All services restores the jobs tiles').toHaveCount(1)
 }
 
 const STAFF_AUDIT = '/api/invoice/v1/staff/audit-log'

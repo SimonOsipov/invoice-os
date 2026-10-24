@@ -1059,7 +1059,10 @@ func TestRLS_StaffReadRiverJobCountsCountsByKindAndState(t *testing.T) {
 	}
 }
 
-func TestRLS_RiverJobCountsOfAnEmptyQueue(t *testing.T) {
+// jobKindsScratchDB migrates a scratch database from migrations.FS, seeds an active house member there,
+// and returns a superuser and an invoice_app connection to it. Each run applies the migration SQL afresh.
+func jobKindsScratchDB(t *testing.T) (super, app *pgx.Conn, member string) {
+	t.Helper()
 	requireHarness(t)
 	superDSN, _ := migratedScratchDB(t, migrations.FS)
 	ctx := context.Background()
@@ -1069,7 +1072,7 @@ func TestRLS_RiverJobCountsOfAnEmptyQueue(t *testing.T) {
 	}
 	scratch := strings.TrimPrefix(u.Path, "/")
 
-	super, err := pgx.Connect(ctx, superDSN)
+	super, err = pgx.Connect(ctx, superDSN)
 	if err != nil {
 		t.Fatalf("connect superuser to %s: %v", scratch, err)
 	}
@@ -1087,16 +1090,21 @@ func TestRLS_RiverJobCountsOfAnEmptyQueue(t *testing.T) {
 			t.Fatalf("seed the scratch database: %v", err)
 		}
 	}
-	var jobs int
-	if err := super.QueryRow(ctx, `SELECT count(*) FROM public.river_job`).Scan(&jobs); err != nil || jobs != 0 {
-		t.Fatalf("control: scratch river_job holds %d rows (err %v), want 0", jobs, err)
-	}
-
-	app, err := pgx.Connect(ctx, dsnForDB(t, os.Getenv("DATABASE_URL"), scratch))
+	app, err = pgx.Connect(ctx, dsnForDB(t, os.Getenv("DATABASE_URL"), scratch))
 	if err != nil {
 		t.Fatalf("connect invoice_app to %s: %v", scratch, err)
 	}
 	t.Cleanup(func() { _ = app.Close(ctx) })
+	return super, app, member
+}
+
+func TestRLS_RiverJobCountsOfAnEmptyQueue(t *testing.T) {
+	super, app, member := jobKindsScratchDB(t)
+	ctx := context.Background()
+	var jobs int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM public.river_job`).Scan(&jobs); err != nil || jobs != 0 {
+		t.Fatalf("control: scratch river_job holds %d rows (err %v), want 0", jobs, err)
+	}
 
 	t.Run("staff read is an empty object", func(t *testing.T) {
 		var got *string
@@ -1199,4 +1207,182 @@ func TestRLS_HealthSamplesJobKindsDownAndUp(t *testing.T) {
 	if again := readJobKindsFootprint(t); !reflect.DeepEqual(again, before) {
 		t.Errorf("after the Up: footprint = %+v, want %+v", again, before)
 	}
+}
+
+func scratchStrings(t *testing.T, c *pgx.Conn, sql string, args ...any) []string {
+	t.Helper()
+	rows, err := c.Query(context.Background(), sql, args...)
+	if err != nil {
+		t.Fatalf("read %q: %v", sql, err)
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("collect %q: %v", sql, err)
+	}
+	return got
+}
+
+// The migration SQL runs on a fresh database here, so a break in its Up is visible to every subtest.
+func TestRLS_JobKindsMigrationOnAFreshDatabase(t *testing.T) {
+	super, app, member := jobKindsScratchDB(t)
+	ctx := context.Background()
+	const samplesFn, riverFn = "public.staff_read_health_samples(uuid, timestamptz)", "public.staff_read_river_job_counts(uuid)"
+
+	t.Run("staff_reader reads kind and state of river_job and nothing else", func(t *testing.T) {
+		columnGrants := func(table string) []string {
+			return scratchStrings(t, super, `SELECT a.attname || '/' || x.privilege_type FROM pg_attribute a, aclexplode(a.attacl) x
+				 WHERE a.attrelid = $1::regclass AND a.attnum > 0 AND NOT a.attisdropped
+				   AND x.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'staff_reader') ORDER BY 1`, table)
+		}
+		if got, want := columnGrants("public.river_job"), []string{"kind/SELECT", "state/SELECT"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("staff_reader column grants on river_job = %v, want exactly %v", got, want)
+		}
+		if got, want := columnGrants("public.health_samples"), []string{"fleet_status/SELECT", "job_counts/SELECT", "kind_counts/SELECT", "services_down/SELECT", "taken_at/SELECT"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("staff_reader column grants on health_samples = %v, want exactly %v", got, want)
+		}
+		for _, table := range []string{"public.river_job", "public.health_samples"} {
+			if got := scratchStrings(t, super, `SELECT x.privilege_type FROM pg_class c, aclexplode(c.relacl) x
+				 WHERE c.oid = $1::regclass AND x.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'staff_reader')`, table); len(got) != 0 {
+				t.Errorf("staff_reader table-level grants on %s = %v, want none", table, got)
+			}
+		}
+		var args, selectKind bool
+		if err := super.QueryRow(ctx, `SELECT has_column_privilege('staff_reader', 'public.river_job', 'args', 'SELECT'),
+			has_column_privilege('staff_reader', 'public.river_job', 'kind', 'SELECT')`).Scan(&args, &selectKind); err != nil {
+			t.Fatalf("has_column_privilege: %v", err)
+		}
+		if args || !selectKind {
+			t.Errorf("staff_reader SELECT on river_job.args = %v, on river_job.kind = %v, want false and true", args, selectKind)
+		}
+	})
+
+	t.Run("both functions are definer-owned with an empty search_path and run for invoice_app only", func(t *testing.T) {
+		for _, sig := range []string{samplesFn, riverFn} {
+			var owner string
+			var definer bool
+			var config []string
+			if err := super.QueryRow(ctx, `SELECT pg_get_userbyid(proowner), prosecdef, coalesce(proconfig, '{}') FROM pg_proc WHERE oid = $1::regprocedure`, sig).Scan(&owner, &definer, &config); err != nil {
+				t.Fatalf("read %s: %v", sig, err)
+			}
+			if owner != "staff_reader" || !definer || !reflect.DeepEqual(config, []string{`search_path=""`}) {
+				t.Errorf("%s = owner %s, definer %v, config %v, want staff_reader, true, [search_path=\"\"]", sig, owner, definer, config)
+			}
+			got := scratchStrings(t, super, `SELECT coalesce(r.rolname, 'PUBLIC') FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+				   LEFT JOIN pg_roles r ON r.oid = a.grantee WHERE p.oid = $1::regprocedure AND a.privilege_type = 'EXECUTE' ORDER BY 1`, sig)
+			if want := []string{"invoice_app", "staff_reader"}; !reflect.DeepEqual(got, want) {
+				t.Errorf("%s executable by %v, want exactly %v", sig, got, want)
+			}
+		}
+	})
+
+	t.Run("kind_counts is jsonb and invoice_app inserts it but cannot read it", func(t *testing.T) {
+		var typ, nullable string
+		var def *string
+		if err := super.QueryRow(ctx, kindCountsColumn).Scan(&typ, &nullable, &def); err != nil {
+			t.Fatalf("read kind_counts column: %v", err)
+		}
+		if typ != "jsonb" || nullable != "YES" || def != nil {
+			t.Errorf("kind_counts = (%s, nullable %s, default %v), want (jsonb, YES, no default)", typ, nullable, def)
+		}
+		got := scratchStrings(t, super, `SELECT privilege_type FROM information_schema.role_table_grants WHERE grantee = 'invoice_app' AND table_name = 'health_samples' ORDER BY 1`)
+		if want := []string{"DELETE", "INSERT"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("invoice_app table privileges on health_samples = %v, want %v", got, want)
+		}
+		cols := scratchStrings(t, super, `SELECT a.attname || '/' || x.privilege_type FROM pg_attribute a, aclexplode(a.attacl) x
+			 WHERE a.attrelid = 'public.health_samples'::regclass AND a.attnum > 0 AND NOT a.attisdropped
+			   AND x.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'invoice_app') ORDER BY 1`)
+		if want := []string{"taken_at/SELECT"}; !reflect.DeepEqual(cols, want) {
+			t.Errorf("invoice_app column privileges on health_samples = %v, want %v", cols, want)
+		}
+		if _, err := app.Exec(ctx, `SELECT kind_counts FROM public.health_samples`); err == nil {
+			t.Error("invoice_app read kind_counts directly, want permission denied")
+		}
+	})
+
+	t.Run("staff_read_health_samples returns five columns oldest first and keeps the four-column read", func(t *testing.T) {
+		old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		for _, q := range []string{
+			`INSERT INTO public.health_samples (taken_at, fleet_status, services_down, job_counts, kind_counts) VALUES ('2026-01-01T00:05Z', 'ok', 0, '{}', '{"k":{"available":2}}')`,
+			`INSERT INTO public.health_samples (taken_at, fleet_status, services_down, job_counts) VALUES ('2026-01-01T00:00Z', 'ok', 0, '{}')`,
+		} {
+			if _, err := super.Exec(ctx, q); err != nil {
+				t.Fatalf("seed a sample: %v", err)
+			}
+		}
+		var n int
+		if err := app.QueryRow(ctx, `SELECT count(*) FROM (SELECT taken_at, fleet_status, services_down, job_counts FROM public.staff_read_health_samples($1::uuid, $2::timestamptz)) q`, member, old).Scan(&n); err != nil || n != 2 {
+			t.Errorf("four-column read returned %d rows (err %v), want 2", n, err)
+		}
+		rows, err := app.Query(ctx, `SELECT * FROM public.staff_read_health_samples($1::uuid, $2::timestamptz)`, member, old)
+		if err != nil {
+			t.Fatalf("staff_read_health_samples: %v", err)
+		}
+		var cols []string
+		for _, f := range rows.FieldDescriptions() {
+			cols = append(cols, f.Name)
+		}
+		var kinds []*string
+		var ats []time.Time
+		for rows.Next() {
+			var at time.Time
+			var status string
+			var down *int
+			var jobs []byte
+			var k *string
+			if err := rows.Scan(&at, &status, &down, &jobs, &k); err != nil {
+				t.Fatalf("scan a row: %v", err)
+			}
+			ats, kinds = append(ats, at), append(kinds, k)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("collect rows: %v", err)
+		}
+		if want := []string{"taken_at", "fleet_status", "services_down", "job_counts", "kind_counts"}; !reflect.DeepEqual(cols, want) {
+			t.Fatalf("columns = %v, want %v", cols, want)
+		}
+		if len(ats) != 2 || !ats[0].Equal(old) || !ats[1].Equal(old.Add(5*time.Minute)) {
+			t.Fatalf("slots = %v, want the 00:00 row then the 00:05 row", ats)
+		}
+		if kinds[0] != nil || kinds[1] == nil || strings.ReplaceAll(*kinds[1], " ", "") != `{"k":{"available":2}}` {
+			t.Errorf("kind_counts = %v, want NULL then {\"k\":{\"available\":2}}", kinds)
+		}
+
+		_, err = app.Exec(ctx, `SELECT * FROM public.staff_read_health_samples($1::uuid, $2::timestamptz)`, uuid.NewString(), old)
+		requireNotStaffRefusal(t, "staff_read_health_samples as a stranger", err, "staff_read_health_samples")
+	})
+
+	t.Run("staff_read_river_job_counts groups every kind and state and refuses a non-staff actor", func(t *testing.T) {
+		for _, j := range []struct {
+			kind, state string
+			n           int
+		}{{"alpha", "available", 2}, {"alpha", "retryable", 1}, {"alpha", "discarded", 1}, {"beta", "available", 5}, {"beta", "completed", 3}} {
+			for range j.n {
+				if _, err := super.Exec(ctx, `INSERT INTO public.river_job (kind, queue, state, max_attempts, args, finalized_at)
+					VALUES ($1, 'scratchq', $2::text::river_job_state, 25, '{}', CASE WHEN $2::text IN ('cancelled', 'completed', 'discarded') THEN now() END)`, j.kind, j.state); err != nil {
+					t.Fatalf("seed river_job %s/%s: %v", j.kind, j.state, err)
+				}
+			}
+		}
+		var raw []byte
+		if err := app.QueryRow(ctx, `SELECT public.staff_read_river_job_counts($1::uuid)`, member).Scan(&raw); err != nil {
+			t.Fatalf("staff_read_river_job_counts: %v", err)
+		}
+		want := map[string]map[string]int64{
+			"alpha": {"available": 2, "retryable": 1, "discarded": 1},
+			"beta":  {"available": 5, "completed": 3},
+		}
+		if got := decodeRiverCounts(t, raw); !reflect.DeepEqual(got, want) {
+			t.Errorf("counts = %v, want %v", got, want)
+		}
+
+		var suspended string
+		if err := super.QueryRow(ctx, `INSERT INTO memberships (id, tenant_id, user_id, role, status)
+			SELECT $1, tenant_id, $2, 'reviewer', 'suspended' FROM public.house_company LIMIT 1 RETURNING user_id`, uuid.NewString(), uuid.NewString()).Scan(&suspended); err != nil {
+			t.Fatalf("seed a suspended house member: %v", err)
+		}
+		for name, actor := range map[string]any{"stranger": uuid.NewString(), "suspended house member": suspended, "null actor": nil} {
+			err := app.QueryRow(ctx, `SELECT public.staff_read_river_job_counts($1::uuid)`, actor).Scan(&raw)
+			requireNotStaffRefusal(t, "staff_read_river_job_counts as a "+name, err, "staff_read_river_job_counts")
+		}
+	})
 }

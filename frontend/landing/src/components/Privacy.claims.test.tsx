@@ -313,7 +313,7 @@ describe('T4-13 (AC-13): the page says WHY a reload matters after a Reject that 
 const APPROVED_INTRO =
   'Three other companies receive information about your visit. Google serves the fonts this site is typeset in, and measures how the site is used if you have allowed analytics. HubSpot stores the answers you give if you book a demo, and runs our live chat and records the pages you visit if you have allowed analytics. Sentry receives a report when a page fails, and measures how long pages take to load. Your browser loads nothing on this site from, and sends nothing to, any other company.'
 const APPROVED_MONITORING =
-  "We use Sentry to find out when something breaks or runs slowly. When a page on this site or in the signed-in ASComply product shows an error, your browser sends Sentry a report. Each page you open also sends Sentry how long it took to load. These reports say what went wrong or how long it took, which page it happened on (the address without anything after a '?'), and your browser, operating system and device type. This happens on every visit to the live site, whatever you chose on the cookie notice. It is how we keep the site working. It is not analytics, and it is not used to measure how you use the site. Sentry does not store your IP address. It sets no cookies and writes nothing to your browser's storage. It never receives what you type into the demo form. Sentry stores these reports in the EU. Our preview and test builds send Sentry nothing."
+  "We use Sentry to find out when something breaks or runs slowly. When a page on this site or in the signed-in ASComply product shows an error, your browser sends Sentry a report. Each page you open also sends Sentry how long it took to load. These reports say what went wrong or how long it took, which page it happened on (the address without anything after a '?'), and your browser, operating system and device type. This happens on every visit to the live site, whatever you chose on the cookie notice. It is how we keep the site working. It is not analytics, and it is not used to measure how you use the site. Sentry does not store your IP address. It sets no cookies and writes nothing to your browser's storage. It never receives what you type into the demo form. When signing in, signing up, resetting a password or keeping you signed in fails on our side, our sign-in service sends Sentry a report that may include the email address of the account involved. Sentry stores these reports in the EU. Our preview and test builds send Sentry nothing."
 const APPROVED_FONTS =
   "This happens on every page of this site, every time, whatever you decide about analytics. It is not behind the analytics switch and it is not behind any consent check, and none of the controls further down stops it. Sentry's error and performance reports, described below, are the only other flow on this site with no consent gate."
 
@@ -780,5 +780,38 @@ describe('BLOG-10: the Blog section matches the newsletter code', () => {
     const blogSrc = src.slice(src.indexOf(`<h2 style={H2}>${BLOG_H2}</h2>`), src.indexOf('<h2 style={H2}>Google Fonts</h2>'))
     expect(blogSrc, 'control: the Blog source slice is empty').toContain('PRIVACY_CONTACT')
     expect(blogSrc, 'the Blog section retypes an address').not.toContain('@ascomply.com')
+  })
+})
+
+describe("HEALTH-07: the sign-in service's reports", () => {
+  const SIGN_IN_SENTENCE =
+    'our sign-in service sends Sentry a report that may include the email address of the account involved.'
+  const sentences = (text: string): string[] => text.split(/(?<=\.)\s+/)
+  const DENIAL = /(never|not|no)\b[^.]*(email|name|identif)/i
+
+  it('the sign-in sentence sits before the EU sentence', () => {
+    const text = plainText(html)
+    const at = text.indexOf(SIGN_IN_SENTENCE)
+    expect(at, 'the sign-in sentence is missing').toBeGreaterThan(-1)
+    expect(at).toBeGreaterThan(text.indexOf('what you type into the demo form'))
+    expect(at).toBeLessThan(text.indexOf('stores these reports in the EU'))
+  })
+
+  it('no sentence denies the email', () => {
+    expect(DENIAL.test('Sentry never receives your email.'), 'control: the matcher misses a denial').toBe(true)
+    const hits = sentences(plainText(html)).filter((s) => s.includes('Sentry') && DENIAL.test(s))
+    expect(hits).toEqual([])
+  })
+
+  it('the records paragraph names Sentry', () => {
+    // The records sentence sits in a list item, not a <p>.
+    const hits = html.split('</li>').filter((segment) => segment.includes('records we hold'))
+    expect(hits).toHaveLength(1)
+    const para = plainText(hits[0].slice(hits[0].lastIndexOf('<li')))
+    expect(para).toContain('Sentry')
+    expect(para).toContain('email address')
+    const sentry = sentences(para).find((s) => s.includes('Sentry error report')) ?? ''
+    expect(sentry, 'control: the Sentry sentence is missing').not.toBe('')
+    expect(sentry).not.toMatch(/delete|days|months/i)
   })
 })

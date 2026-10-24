@@ -76,24 +76,21 @@ func TestRunGracefulShutdown(t *testing.T) {
 	}
 }
 
-// Edge limits from docs.railway.com/networking/public-networking/specs-and-limits.
-const (
-	railwayEdgeBodyLimit    = 5 * time.Minute
-	railwayEdgeRequestLimit = 15 * time.Minute
-)
+// Cloud Run's default request timeout; Terraform sets no override.
+const cloudRunRequestTimeout = 300 * time.Second
 
-func TestNewServer_TimeoutsOutlastTheRailwayEdge(t *testing.T) {
+func TestNewServer_TimeoutsOutlastTheCloudRunRequestTimeout(t *testing.T) {
 	h := http.NewServeMux()
 	srv := NewServer(":0", h)
 	idleLimit := http.DefaultTransport.(*http.Transport).IdleConnTimeout
 	if srv.ReadHeaderTimeout != 10*time.Second {
 		t.Errorf("ReadHeaderTimeout = %v, want 10s", srv.ReadHeaderTimeout)
 	}
-	if srv.ReadTimeout <= railwayEdgeBodyLimit {
-		t.Errorf("ReadTimeout = %v, want > %v", srv.ReadTimeout, railwayEdgeBodyLimit)
+	if srv.ReadTimeout <= cloudRunRequestTimeout {
+		t.Errorf("ReadTimeout = %v, want > %v", srv.ReadTimeout, cloudRunRequestTimeout)
 	}
-	if srv.WriteTimeout <= railwayEdgeRequestLimit {
-		t.Errorf("WriteTimeout = %v, want > %v", srv.WriteTimeout, railwayEdgeRequestLimit)
+	if srv.WriteTimeout <= cloudRunRequestTimeout {
+		t.Errorf("WriteTimeout = %v, want > %v", srv.WriteTimeout, cloudRunRequestTimeout)
 	}
 	if srv.WriteTimeout <= srv.ReadTimeout {
 		t.Errorf("WriteTimeout = %v, want > ReadTimeout %v", srv.WriteTimeout, srv.ReadTimeout)

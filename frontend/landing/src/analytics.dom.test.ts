@@ -47,7 +47,7 @@ describe('ensureTag — closed gate', () => {
   it('AC-2: no script element is appended off the live hostname', async () => {
     vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
     const mod = await import('./analytics')
-    mod.ensureTag('landing-pr-42.up.railway.app', GRANTED)
+    mod.ensureTag('landing-pr-42-944095690109.africa-south1.run.app', GRANTED)
     expect(document.querySelectorAll('script[src^="https://www.googletagmanager.com/"]').length).toBe(0)
     expect((window as TestWindow).dataLayer).toBeUndefined()
   })
@@ -154,7 +154,7 @@ describe('ensureTag — adversarial and edge cases', () => {
     vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
     const mod = await import('./analytics')
 
-    expect(mod.ensureTag('landing-pr-42.up.railway.app', GRANTED)).toBe(false)
+    expect(mod.ensureTag('landing-pr-42-944095690109.africa-south1.run.app', GRANTED)).toBe(false)
     expect(document.head.querySelectorAll('script').length).toBe(0)
 
     expect(mod.ensureTag('www.ascomply.com', GRANTED)).toBe(true)
@@ -167,7 +167,7 @@ describe('ensureTag — adversarial and edge cases', () => {
     const mod = await import('./analytics')
 
     expect(mod.ensureTag('www.ascomply.com', GRANTED)).toBe(true)
-    expect(mod.ensureTag('landing-pr-42.up.railway.app', GRANTED)).toBe(true)
+    expect(mod.ensureTag('landing-pr-42-944095690109.africa-south1.run.app', GRANTED)).toBe(true)
     expect(document.head.querySelectorAll('script').length).toBe(1)
   })
 
@@ -384,7 +384,7 @@ describe('trackedHubSpotSubmit', () => {
     const mod = await import('./analytics')
     // Distinct from the "never called ensureTag" row below: this path exercises
     // ensureTag's early return, not merely an untouched `loaded` flag.
-    expect(mod.ensureTag('landing-pr-42.up.railway.app', GRANTED)).toBe(false)
+    expect(mod.ensureTag('landing-pr-42-944095690109.africa-south1.run.app', GRANTED)).toBe(false)
 
     const err = new Error('closed gate')
     await expect(mod.trackedHubSpotSubmit(() => Promise.reject(err))).rejects.toBe(err)
@@ -562,7 +562,7 @@ describe('console silence', () => {
     // Closed: off-hostname, denied consent, unset id.
     vi.stubEnv('VITE_GA_MEASUREMENT_ID', ID)
     let mod = await import('./analytics')
-    mod.ensureTag('landing-pr-42.up.railway.app', GRANTED)
+    mod.ensureTag('landing-pr-42-944095690109.africa-south1.run.app', GRANTED)
     mod.ensureTag('www.ascomply.com', DENIED)
 
     vi.unstubAllEnvs()

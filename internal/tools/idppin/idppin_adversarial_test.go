@@ -155,7 +155,7 @@ func TestDockerfileCommitsTheD3EnvBlockAndNoSecret(t *testing.T) {
 		names := slices.Sorted(maps.Keys(env))
 		for _, n := range names {
 			if want, ok := d3Env[n]; !ok {
-				t.Errorf("ENV %s=%s is not in D3; a secret or per-environment value belongs in Railway", n, env[n])
+				t.Errorf("ENV %s=%s is not in D3; a secret or per-environment value belongs in the deploy environment", n, env[n])
 			} else if env[n] != want {
 				t.Errorf("ENV %s=%s, want %s", n, env[n], want)
 			}
@@ -168,7 +168,7 @@ func TestDockerfileCommitsTheD3EnvBlockAndNoSecret(t *testing.T) {
 	}
 	for _, secret := range []string{"GOTRUE_JWT_KEYS", "GOTRUE_JWT_SECRET", "GOTRUE_SMTP_PASS", "DATABASE_URL", "API_EXTERNAL_URL", "GOTRUE_JWT_ISSUER"} {
 		if strings.Contains(body, secret) {
-			t.Errorf("the Dockerfile names %s; it is a Railway variable, never baked into the image", secret)
+			t.Errorf("the Dockerfile names %s; it is a deploy-time variable, never baked into the image", secret)
 		}
 	}
 	if strings.Contains(body, "# syntax=") {

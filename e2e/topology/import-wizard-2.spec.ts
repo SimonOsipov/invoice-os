@@ -2345,7 +2345,7 @@ test('EXTR15-E2E-01 (AC-10): the hand-off row sits inside its card, and its gutt
 // Three claims EXTR-15 makes that have no honest unit oracle, and can only be settled here:
 //   1. the DEPLOYED sidecar reads a real DOCX -- the Go golden was recorded through a LOCAL
 //      docling, and this project has already been burned by that once (a local canary read
-//      55 OCR tokens where Railway read zero);
+//      55 OCR tokens where the deployed sidecar read zero);
 //   2. a hand-off from a MULTI-document run attaches the row's own document -- every other
 //      guard on this is a mocked fixture, and a mock cannot catch an id-mapping defect
 //      because the mock is where the id mapping is asserted;

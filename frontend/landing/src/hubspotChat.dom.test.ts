@@ -12,7 +12,7 @@ type ChatModule = typeof import('./hubspotChat')
 const GRANTED: ConsentRecord = { analytics: true, ts: '2026-01-01T00:00:00.000Z', v: CONSENT_VERSION }
 const DENIED: ConsentRecord = { analytics: false, ts: '2026-01-01T00:00:00.000Z', v: CONSENT_VERSION }
 const WWW = 'www.ascomply.com'
-const PR_HOST = 'landing-pr-42.up.railway.app'
+const PR_HOST = 'landing-pr-42-944095690109.africa-south1.run.app'
 
 function loaderScripts() {
   return document.head.querySelectorAll('script[src*="hs-scripts.com"]')

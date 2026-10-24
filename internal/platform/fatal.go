@@ -16,7 +16,7 @@ const fatalFlushTimeout = 2 * time.Second
 // fingerprint holds the format string, never the arguments.
 //
 // ceiling: no report before initSentry; parse the DSN first if a boot-config typo ever goes unseen
-// ceiling: a crash loop sends one event per restart, bounded by Railway's restart cap
+// ceiling: a crash loop sends one event per restart, bounded by Cloud Run's restart backoff
 func Fatal(logger *slog.Logger, format string, args ...any) {
 	if logger == nil {
 		logger = slog.Default()

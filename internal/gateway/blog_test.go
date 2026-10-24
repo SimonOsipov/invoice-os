@@ -632,7 +632,7 @@ func TestBlogRead_UpstreamHeadersOtherThanContentTypeAreNotPassedThrough(t *test
 				blogDefaultAnswer(w, r)
 				w.Header().Set("Set-Cookie", "session=stolen; Path=/")
 				w.Header().Set("Server", "notifications/1.2")
-				w.Header().Set("X-Internal-Host", "notifications.railway.internal")
+				w.Header().Set("X-Internal-Host", "notifications.internal")
 				w.Header().Set("Access-Control-Allow-Origin", "*")
 				w.Header().Set("Content-Disposition", "attachment")
 				w.Header().Set("Cache-Control", "private, max-age=1")

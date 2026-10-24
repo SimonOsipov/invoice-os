@@ -18,7 +18,7 @@ func TestResetWillRun(t *testing.T) {
 		name        string
 		environment string // ENVIRONMENT — forked verbatim, hence "development" in both live rows
 		bootstrap   string // GATEWAY_DB_BOOTSTRAP
-		railwayName string // DEPLOY_ENV — the only input that differs live
+		deployEnv   string // DEPLOY_ENV — the only input that differs live
 		reset       string // GATEWAY_DB_RESET
 		want        bool
 	}{
@@ -37,12 +37,12 @@ func TestResetWillRun(t *testing.T) {
 			cfg := db.ProvisionConfig{
 				Environment:   c.environment,
 				BootstrapFlag: c.bootstrap,
-				DeployEnv:     c.railwayName,
+				DeployEnv:     c.deployEnv,
 				ResetFlag:     c.reset,
 			}
 			if got := cfg.ResetWillRun(); got != c.want {
 				t.Errorf("ResetWillRun() = %v, want %v (ENVIRONMENT=%q GATEWAY_DB_BOOTSTRAP=%q DEPLOY_ENV=%q GATEWAY_DB_RESET=%q)",
-					got, c.want, c.environment, c.bootstrap, c.railwayName, c.reset)
+					got, c.want, c.environment, c.bootstrap, c.deployEnv, c.reset)
 			}
 		})
 	}

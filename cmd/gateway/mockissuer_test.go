@@ -209,7 +209,7 @@ func TestTaggedMockIssuerRoutesKeepTheirWiring(t *testing.T) {
 	})
 }
 
-// The mint serves any identity wherever MockIssuerEnabled is set; the Railway environment name must not gate it.
+// The mint serves any identity wherever MockIssuerEnabled is set; DEPLOY_ENV must not gate it.
 func TestTaggedMockLoginIgnoresDeployEnv(t *testing.T) {
 	t.Setenv("AUTH_ISSUER", mountTestIssuer)
 	t.Setenv("DEPLOY_ENV", "production")

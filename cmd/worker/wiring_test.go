@@ -1182,7 +1182,7 @@ func TestSelectExtractor_MockIsTheDefault(t *testing.T) {
 
 // TestSelectExtractor_DoclingWithValidURL: T-07-3.
 func TestSelectExtractor_DoclingWithValidURL(t *testing.T) {
-	const doclingURL = "http://docling.railway.internal:8080"
+	const doclingURL = "http://docling.internal:8080"
 	got, err := selectExtractor("docling", doclingURL)
 	if err != nil {
 		t.Fatalf("selectExtractor(\"docling\", %q) returned error %v, want a *DoclingExtractor and no error", doclingURL, err)
@@ -1295,7 +1295,7 @@ func TestSelectTextReader_MockAndUnsetSelectNoReader(t *testing.T) {
 // cmd/gateway/main.go loadUpstreams already ships for an unrouted <NAME>_URL. Every other mock
 // and unset row in this file passes "" for the URL, so nothing else here exercises the pair.
 func TestSelectors_IgnoreDoclingURLUnderMockAndUnset(t *testing.T) {
-	const valid = "http://docling.railway.internal:8080"
+	const valid = "http://docling.internal:8080"
 	for _, name := range []string{"", "mock"} {
 		t.Run("EXTRACTOR="+name, func(t *testing.T) {
 			got, err := selectTextReader(name, valid)
@@ -1320,7 +1320,7 @@ func TestSelectors_IgnoreDoclingURLUnderMockAndUnset(t *testing.T) {
 // TestSelectTextReader_DoclingSelectsTheSidecarReader: AC-3. EXTRACTOR=docling with a usable
 // DOCLING_URL selects the sidecar reader itself, not the DoclingExtractor that wraps one.
 func TestSelectTextReader_DoclingSelectsTheSidecarReader(t *testing.T) {
-	const doclingURL = "http://docling.railway.internal:8080"
+	const doclingURL = "http://docling.internal:8080"
 	got, err := selectTextReader("docling", doclingURL)
 	if err != nil {
 		t.Fatalf("selectTextReader(\"docling\", %q) returned error %v, want a *DoclingReader and no error", doclingURL, err)
@@ -1380,7 +1380,7 @@ func TestSelectTextReader_DoclingRequiresAUsableURL(t *testing.T) {
 // near-miss both selectors must reject. wantErr is asserted beside the agreement check so two
 // selectors that rejected everything could not pass merely by agreeing.
 func TestSelectors_AcceptTheSameValueSet(t *testing.T) {
-	const valid = "http://docling.railway.internal:8080"
+	const valid = "http://docling.internal:8080"
 	cases := []struct {
 		name, extractor, url string
 		wantErr              bool
@@ -1392,7 +1392,7 @@ func TestSelectors_AcceptTheSameValueSet(t *testing.T) {
 		{"docling with a malformed URL", "docling", "://nope", true},
 		{"unrecognised", "nonsense", "", true},
 		{"capitalised near-miss", "Docling", valid, true},
-		// A pasted Railway value. Trimming inside both selectors leaves their case sets equal,
+		// A pasted env value. Trimming inside both selectors leaves their case sets equal,
 		// so TestSelectors_ShareOneCaseSet stays green and only this row reds.
 		{"whitespace near-miss", " docling", valid, true},
 	}

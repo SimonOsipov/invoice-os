@@ -21,7 +21,7 @@
 -- if the roles it applies to cannot bypass it and do not own the tables (an owner
 -- bypasses RLS unless the table is FORCE'd — proven adversarially in M2-07). So the
 -- migrator (table owner) and the app (query identity) are deliberately distinct, and
--- neither is the Railway superuser. See .claude/rules/db-migrations.md.
+-- neither is the database superuser. See .claude/rules/db-migrations.md.
 --
 -- Run ONCE as the Postgres superuser or Cloud SQL's postgres (`migrate bootstrap`). Password values come from four session GUCs
 -- the caller sets on the SAME connection before this file runs — no psql-only

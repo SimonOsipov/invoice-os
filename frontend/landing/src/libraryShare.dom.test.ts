@@ -55,7 +55,7 @@ describe('shouldLoadTag with a host list', () => {
     }
     for (const h of [
       'www.ascomply.com',
-      'pr-12-library.up.railway.app',
+      'library-pr-12-944095690109.africa-south1.run.app',
       'library.ascomply.com.evil.example',
       'library.ascomply.com.',
       'localhost',

@@ -4,7 +4,7 @@
 // passes on its second attempt leaves the job GREEN. Until this reporter existed
 // the only trace was one word in the run log — the HTML report was uploaded
 // `if: failure()`, which by definition never fires on a retry-pass. Measured over
-// the 7 most recent green Dev Env runs: 5 of them contained a retry-pass, across
+// the 7 most recent green preview runs: 5 of them contained a retry-pass, across
 // 6 distinct specs, none of it surfaced anywhere a reader would look.
 //
 // This reporter does not change what passes. It writes the flaky specs to the job

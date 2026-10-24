@@ -335,3 +335,34 @@ func TestPanels_ProductionQueriesAreUnchanged(t *testing.T) {
 		t.Errorf("picked = %s", got)
 	}
 }
+
+func fleetPanel(t *testing.T) Panel {
+	t.Helper()
+	for _, p := range Panels {
+		if p.Key == FleetP95Key {
+			return p
+		}
+	}
+	t.Fatalf("no panel %s", FleetP95Key)
+	return Panel{}
+}
+
+func TestPanels_FleetP95DropsServiceNameFromTheAggregation(t *testing.T) {
+	got := fleetPanel(t).Query(Ranges["1h"], "", "")
+	want := `histogram_quantile(0.95, sum by (le) (rate(run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision"}[300s])))`
+	if got != want {
+		t.Fatalf("query = %s\nwant    %s", got, want)
+	}
+}
+
+func TestPanels_FleetP95KeepsTheServiceFilterAndPreviewMatcher(t *testing.T) {
+	p, r := fleetPanel(t), Ranges["1h"]
+	for q, want := range map[string]string{
+		p.Query(r, "app", ""):     `service_name="app"`,
+		p.Query(r, "", "-pr-545"): `service_name=~".+-pr-545"`,
+	} {
+		if !strings.Contains(q, want) || !strings.Contains(q, "sum by (le)") || strings.Contains(q, "sum by (service_name") {
+			t.Errorf("query = %s, want %s and a le-only aggregation", q, want)
+		}
+	}
+}

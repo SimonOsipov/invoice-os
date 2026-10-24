@@ -58,17 +58,24 @@ type Panel struct {
 	CloudRun            bool // the service filter narrows this panel
 }
 
+// FleetP95Key is the one panel whose answer has no service_name label.
+const FleetP95Key = "latency_p95_fleet_ms"
+
+// FleetSeriesName names the fleet series; parseMatrix would call an unlabelled one "database".
+const FleetSeriesName = "fleet"
+
 const (
 	reqRate  = `sum by (service_name) (rate(run_googleapis_com:request_count{{F}}[{W}]))`
 	req5xx   = `sum by (service_name) (rate(run_googleapis_com:request_count{{F},response_code_class="5xx"}[{W}]))`
 	latRate  = `sum by (service_name, le) (rate(run_googleapis_com:request_latencies_bucket{{F}}[{W}]))`
+	latFleet = `sum by (le) (rate(run_googleapis_com:request_latencies_bucket{{F}}[{W}]))`
 	cpuRate  = `sum by (service_name, le) (rate(run_googleapis_com:container_cpu_utilizations_bucket{{F}}[{W}]))`
 	ramRate  = `sum by (service_name, le) (rate(run_googleapis_com:container_memory_utilizations_bucket{{F}}[{W}]))`
 	sqlMax   = `max(max_over_time(cloudsql_googleapis_com:%s{{S}}[{W}]))`
 	connsSQL = `max(sum by (database_id) (max_over_time(cloudsql_googleapis_com:database_postgresql_num_backends{{S}}[{W}])))`
 )
 
-// Panels are the 12 panels in wire order.
+// Panels are the panels in wire order.
 // error_pct: the "or 0 *" term reads 0 for a service with no 5xx series; clamp_min makes an idle step 0, not NaN.
 // A step with no request series still has no point.
 var Panels = []Panel{
@@ -84,6 +91,7 @@ var Panels = []Panel{
 	{"sql_ram_pct", "%", `100 * ` + fmt.Sprintf(sqlMax, "database_memory_utilization"), false},
 	{"sql_disk_pct", "%", `100 * ` + fmt.Sprintf(sqlMax, "database_disk_utilization"), false},
 	{"sql_connections", "count", connsSQL, false},
+	{FleetP95Key, "ms", `histogram_quantile(0.95, ` + latFleet + `)`, true},
 }
 
 // Query renders the template for r, service and a preview suffix; service reaches it only after the handler matched MetricServices.

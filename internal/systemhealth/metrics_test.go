@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +35,7 @@ type comboFake struct {
 	entered  chan struct{}
 	// override answers a request instead of the default; ok false falls through.
 	override func(path, query string) (code int, body string, ok bool)
+	forms    []map[string]string // query, start, end, step of each query_range
 }
 
 // release opens the gate once; cleanup calls it so a failed test cannot leave a request held.
@@ -71,6 +73,9 @@ func newComboFake(t *testing.T, clock func() time.Time) (*comboFake, *MetricsSou
 		}
 		f.mu.Lock()
 		f.hits[key]++
+		if key == "query_range" {
+			f.forms = append(f.forms, map[string]string{"query": query, "start": r.PostForm.Get("start"), "end": r.PostForm.Get("end"), "step": r.PostForm.Get("step")})
+		}
 		gate, ov := f.gate, f.override
 		if r.URL.Path == tokenPath && gate != nil {
 			f.entered <- struct{}{}
@@ -168,6 +173,10 @@ func TestMetricsSource_BodyCarriesEverySection(t *testing.T) {
 		if p.Key != Panels[i].Key || p.Unit != Panels[i].Unit || !p.Available || len(p.Series) == 0 {
 			t.Fatalf("panel %d = %+v, want %s available with data", i, p, Panels[i].Key)
 		}
+	}
+	fp := panelByKey(t, m, FleetP95Key)
+	if fp.Unit != "ms" || !fp.Available || len(fp.Series) != 1 {
+		t.Fatalf("fleet panel = %+v, want ms, available, one series", fp)
 	}
 	if m.StepSeconds != int(Ranges["1h"].Step.Seconds()) || m.ConnectionBudget != ConnectionBudget || m.Range != "1h" {
 		t.Fatalf("header = %+v", m)
@@ -617,7 +626,7 @@ func previewFake(t *testing.T, suffix string, runNames ...string) (*MetricsSourc
 func panelNames(m Metrics, cloudRun bool) map[string][]string {
 	out := map[string][]string{}
 	for i, p := range Panels {
-		if p.CloudRun != cloudRun {
+		if p.CloudRun != cloudRun || p.Key == FleetP95Key {
 			continue
 		}
 		for _, s := range m.Panels[i].Series {
@@ -757,5 +766,134 @@ func TestMetricsSource_APreviewFleetListsOnlyItsOwnLimitsAndDeploys(t *testing.T
 	}
 	if len(m.Deploys.Revisions) != 1 || m.Deploys.Revisions[0].Service != "gateway" || m.Deploys.Revisions[0].Revision != "gateway-pr-54-00001-bbb" {
 		t.Errorf("deploys = %+v", m.Deploys.Revisions)
+	}
+}
+
+func panelByKey(t *testing.T, m Metrics, key string) PanelData {
+	t.Helper()
+	for _, p := range m.Panels {
+		if p.Key == key {
+			return p
+		}
+	}
+	t.Fatalf("no panel %s", key)
+	return PanelData{}
+}
+
+func (f *comboFake) formOf(t *testing.T, match func(q string) bool) map[string]string {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.forms {
+		if match(m["query"]) {
+			return m
+		}
+	}
+	t.Fatal("no matching query_range form")
+	return nil
+}
+
+func isFleetQuery(q string) bool { return strings.Contains(q, "sum by (le)") }
+
+func TestMetricsSource_FleetP95UsesTheWindowAndStepOfTheLatencyPanel(t *testing.T) {
+	clk := newClock()
+	f, s, _ := newComboFake(t, clk.now)
+	if _, err := s.Get(t.Context(), "6h", ""); err != nil {
+		t.Fatal(err)
+	}
+	fleet := f.formOf(t, isFleetQuery)
+	lat := f.formOf(t, func(q string) bool {
+		return strings.Contains(q, "0.95") && strings.Contains(q, "sum by (service_name, le)") && !strings.Contains(q, "100 *")
+	})
+	for _, k := range []string{"start", "end", "step"} {
+		if fleet[k] != lat[k] || fleet[k] == "" {
+			t.Errorf("%s: fleet %q, latency %q", k, fleet[k], lat[k])
+		}
+	}
+	if want := strconv.FormatInt(clk.now().Add(-windowLag).Unix(), 10); fleet["end"] != want {
+		t.Errorf("fleet end = %q, want now-4m %q", fleet["end"], want)
+	}
+}
+
+func TestMetricsSource_AnUnlabelledFleetAnswerIsNamedFleet(t *testing.T) {
+	f, s, _ := newComboFake(t, newClock().now)
+	f.override = func(_, query string) (int, string, bool) { return 200, matrixOf(""), isFleetQuery(query) }
+	m, err := s.Get(t.Context(), "1h", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := panelByKey(t, m, FleetP95Key)
+	if len(fp.Series) != 1 || fp.Series[0].Name != FleetSeriesName {
+		t.Fatalf("fleet series = %+v, want one named %s", fp.Series, FleetSeriesName)
+	}
+}
+
+func TestMetricsSource_APreviewFleetSeriesKeepsItsName(t *testing.T) {
+	s, seen := previewFake(t, "-pr-545", "gateway-pr-545")
+	m, err := s.Get(t.Context(), "1h", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := panelByKey(t, m, FleetP95Key)
+	if len(fp.Series) == 0 {
+		t.Fatal("no fleet series")
+	}
+	for _, sr := range fp.Series {
+		if sr.Name != FleetSeriesName {
+			t.Errorf("fleet series name = %q", sr.Name)
+		}
+	}
+	var sawFleet bool
+	for _, r := range seen() {
+		if isFleetQuery(r) && strings.Contains(r, "cloud_run_revision") {
+			sawFleet = true
+			if !strings.Contains(r, `service_name=~".+-pr-545"`) {
+				t.Errorf("fleet query without the PR matcher: %s", r)
+			}
+		}
+	}
+	if !sawFleet {
+		t.Fatal("no fleet query recorded")
+	}
+}
+
+func TestMetricsSource_AFailedFleetPanelIsUnavailableAndTheRestServe(t *testing.T) {
+	f, s, logs := newComboFake(t, newClock().now)
+	f.override = func(_, query string) (int, string, bool) { return 500, "boom secret", isFleetQuery(query) }
+	m, err := s.Get(t.Context(), "1h", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range m.Panels {
+		if p.Key == FleetP95Key {
+			if p.Available || p.Series == nil || len(p.Series) != 0 {
+				t.Fatalf("fleet panel = %+v", p)
+			}
+		} else if !p.Available || len(p.Series) == 0 {
+			t.Fatalf("panel %s = %+v, want available with data", p.Key, p)
+		}
+	}
+	raw, _ := json.Marshal(m)
+	if !bytes.Contains(raw, []byte(`"series":[]`)) || bytes.Contains(raw, []byte("null")) || bytes.Contains(raw, []byte("boom secret")) {
+		t.Fatalf("body = %s", raw)
+	}
+	if !strings.Contains(logs.String(), FleetP95Key) {
+		t.Fatalf("log = %q, want it to name %s", logs.String(), FleetP95Key)
+	}
+}
+
+func TestMetricsSource_AnEmptyFleetAnswerIsAvailableWithNoSeries(t *testing.T) {
+	f, s, _ := newComboFake(t, newClock().now)
+	f.override = func(_, query string) (int, string, bool) { return 200, emptyMatrix, isFleetQuery(query) }
+	m, err := s.Get(t.Context(), "1h", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := panelByKey(t, m, FleetP95Key)
+	if !fp.Available || fp.Series == nil || len(fp.Series) != 0 {
+		t.Fatalf("fleet panel = %+v", fp)
+	}
+	if raw, _ := json.Marshal(m); bytes.Contains(raw, []byte("null")) {
+		t.Fatalf("body holds null: %s", raw)
 	}
 }

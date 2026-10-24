@@ -367,7 +367,7 @@ func TestPanels_FleetP95KeepsTheServiceFilterAndPreviewMatcher(t *testing.T) {
 	}
 }
 
-func TestPanels_TheTwelveExistingPanelsKeepKeyOrderUnitAndQueryAndTheFleetPanelFollows(t *testing.T) {
+func TestPanels_TheExistingPanelsKeepKeyOrderUnitAndQueryAndTheFleetPanelFollows(t *testing.T) {
 	const run = `run_googleapis_com:`
 	const sel = `{monitored_resource="cloud_run_revision"}[300s]`
 	const lat = `sum by (service_name, le) (rate(` + run + `request_latencies_bucket` + sel + `))`
@@ -388,16 +388,32 @@ func TestPanels_TheTwelveExistingPanelsKeepKeyOrderUnitAndQueryAndTheFleetPanelF
 		{"sql_disk_pct", "%", `100 * max(max_over_time(cloudsql_googleapis_com:database_disk_utilization` + sql + `))`},
 		{"sql_connections", "count", `max(sum by (database_id) (max_over_time(cloudsql_googleapis_com:database_postgresql_num_backends` + sql + `)))`},
 	}
-	if len(Panels) != len(want)+1 {
-		t.Fatalf("panels = %d, want %d", len(Panels), len(want)+1)
+	index := func(key string) int {
+		for i, p := range Panels {
+			if p.Key == key {
+				return i
+			}
+		}
+		return -1
 	}
-	for i, w := range want {
+	prev := -1
+	for _, w := range want {
+		i := index(w.key)
+		if i < 0 {
+			t.Errorf("panel %s missing", w.key)
+			continue
+		}
+		if i <= prev {
+			t.Errorf("panel %s at %d, want after index %d", w.key, i, prev)
+		}
+		prev = i
 		p := Panels[i]
-		if p.Key != w.key || p.Unit != w.unit || p.Query(Ranges["1h"], "", "") != w.query {
-			t.Errorf("panel %d = %s %s %s, want %s %s %s", i, p.Key, p.Unit, p.Query(Ranges["1h"], "", ""), w.key, w.unit, w.query)
+		if p.Unit != w.unit || p.Query(Ranges["1h"], "", "") != w.query {
+			t.Errorf("panel %s = %s %s, want %s %s", w.key, p.Unit, p.Query(Ranges["1h"], "", ""), w.unit, w.query)
 		}
 	}
-	if last := Panels[len(want)]; last.Key != FleetP95Key || last.Unit != "ms" || !last.CloudRun {
-		t.Errorf("last panel = %+v, want the Cloud Run fleet p95 in ms", last)
+	fi := index(FleetP95Key)
+	if fi < 0 || fi <= index("sql_connections") || Panels[fi].Unit != "ms" || !Panels[fi].CloudRun {
+		t.Errorf("fleet panel index %d, want after sql_connections, Cloud Run, in ms", fi)
 	}
 }

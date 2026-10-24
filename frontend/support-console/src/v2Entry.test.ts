@@ -108,7 +108,10 @@ const scanCorners = (files: Record<string, string>, stays: [string, string, numb
   }
 }
 
-const FG4_STAYS: [file: string, needle: string][] = [['components/BlogList.tsx', "featured ? 'var(--primary-foreground)' : 'var(--fg-4)'"]]
+const FG4_STAYS: [file: string, needle: string][] = [
+  ['components/BlogList.tsx', "featured ? 'var(--primary-foreground)' : 'var(--fg-4)'"],
+  ['components/Health.tsx', "const OTHER_LINE = 'var(--fg-4)'"],
+]
 const scanFg4 = (files: Record<string, string>, stays: [string, string][]) => {
   const lines = Object.entries(files).flatMap(([file, raw]) =>
     stripFile(file, raw)

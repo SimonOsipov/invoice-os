@@ -38,13 +38,60 @@ export function sparkline(points: number[]): { line: string; area: string } {
   return { line, area }
 }
 
+export const CHART_W = 600
+export const CHART_H = 160
+
+export function niceCeil(v: number): number {
+  if (!(v > 0)) {
+    return 1
+  }
+  const mag = 10 ** Math.floor(Math.log10(v))
+  const m = v / mag
+  const n = m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10
+  return n * mag
+}
+
+export function chartX(t: number, start: number, end: number): number {
+  if (end <= start) {
+    return 0
+  }
+  return Math.min(CHART_W, Math.max(0, ((t - start) / (end - start)) * CHART_W))
+}
+
+export function chartY(v: number, yMax: number): number {
+  return CHART_H - (v / yMax) * CHART_H
+}
+
+export function chartPath(points: [number, number][], o: { start: number; end: number; step: number; yMax: number }): string {
+  const runs: string[][] = []
+  let prev: number | null = null
+  for (const [t, v] of points) {
+    const xy = `${chartX(t, o.start, o.end).toFixed(1)} ${chartY(v, o.yMax).toFixed(1)}`
+    if (prev === null || t - prev > 1.5 * o.step) {
+      runs.push([`M${xy}`])
+    } else {
+      runs[runs.length - 1].push(`L${xy}`)
+    }
+    prev = t
+  }
+  // a one-point run gets a zero-length segment so the round cap paints a dot
+  return runs.map((r) => (r.length === 1 ? `${r[0]} h0` : r.join(' '))).join(' ')
+}
+
 // Dot, stroke and fill derive from one tone so a tile cannot mix them.
-export function healthTone(tone: 'green' | 'amber' | 'red'): { dot: string; stroke: string; fill: string } {
+export function healthTone(tone: 'green' | 'amber' | 'red' | 'muted'): { dot: string; stroke: string; fill: string } {
   if (tone === 'amber') {
     return { dot: 'var(--status-amber-text)', stroke: 'var(--status-amber-text)', fill: 'var(--status-amber-bg)' }
   }
   if (tone === 'red') {
     return { dot: 'var(--status-red-text)', stroke: 'var(--status-red-text)', fill: 'var(--status-red-bg)' }
   }
+  if (tone === 'muted') {
+    return { dot: 'var(--status-muted-text)', stroke: 'var(--status-muted-text)', fill: 'var(--status-muted-bg)' }
+  }
   return { dot: 'var(--status-green-text)', stroke: 'var(--action)', fill: 'var(--action-tint)' }
 }
+
+const SENTRY_ISSUES = 'https://as-comply.sentry.io/issues/'
+export const sentryTenantUrl = (id: string) => `${SENTRY_ISSUES}?query=tenant_id:${encodeURIComponent(id)}&project=4512190351474768&statsPeriod=14d`
+export const sentryServiceUrl = (name: string) => `${SENTRY_ISSUES}?query=server_name:${encodeURIComponent(name)}&project=4512190351474768&statsPeriod=14d`

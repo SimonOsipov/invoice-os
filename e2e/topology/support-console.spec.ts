@@ -681,6 +681,15 @@ async function submissionsReads(page: Page, testInfo: TestInfo): Promise<void> {
   await attachShot(page, testInfo, 'submissions')
 }
 
+// The select ends the filter bar: rightmost of `others` and flush with the bar's content edge.
+async function selectAtRightEnd(filterBar: Locator, bar: Rect, select: Rect, others: Rect[]): Promise<string[]> {
+  const padRight = await filterBar.evaluate((el) => parseFloat(getComputedStyle(el).paddingRight))
+  const right = (r: Rect): number => r.x + r.width
+  const problems = others.flatMap((o, i) => (right(o) > right(select) + 1 ? [`select: not rightmost, #${i} ends later`] : []))
+  if (!near(right(select), right(bar) - padRight, 1)) problems.push(`select right ${right(select)} vs filter bar content edge ${right(bar) - padRight}`)
+  return problems
+}
+
 async function submissionsLayout(page: Page): Promise<Read> {
   const mn = mainOf(page)
   const filterBar = parent(mn.getByRole('button', { name: 'ALL', exact: true }))
@@ -695,6 +704,7 @@ async function submissionsLayout(page: Page): Promise<Read> {
   ]
 
   const chipRects = await rectsOf(page, chips, 'state chip')
+  problems.push(...(await selectAtRightEnd(filterBar, top.filterBar, top.select, chipRects)))
   problems.push(...sameTops(chipRects, 'state chips'), ...pairwiseApart([...chipRects, top.select], 'state chips and tenant select'))
   for (const [i, c] of chipRects.entries()) problems.push(...within(top.filterBar, c, `chip ${i} in the filter bar`))
 
@@ -714,6 +724,25 @@ async function submissionsLayout(page: Page): Promise<Read> {
 
   await noSidewaysScroll(page, 'Submissions')
   return { problems, rects: { top, chipRects, headCells } }
+}
+
+// With a tenant chosen the Sentry link joins the filter bar beside the select; no job rows needed.
+async function submissionsLinkLayout(page: Page): Promise<Read> {
+  const mn = mainOf(page)
+  const filterBar = parent(mn.getByRole('button', { name: 'ALL', exact: true }))
+  const chips = filterBar.locator('button.ops-chip')
+  const link = filterBar.getByRole('link', { name: 'Open in Sentry' })
+  const top = await boxes(page, { filterBar, select: filterBar.locator('select'), link })
+  const chipRects = await rectsOf(page, chips, 'state chip')
+  const problems = [
+    ...within(top.filterBar, top.link, 'Sentry link in the filter bar'),
+    ...sameTops([top.link, top.select], 'Sentry link and tenant select'),
+    ...pairwiseApart([top.link, top.select, ...chipRects], 'Sentry link, tenant select and state chips'),
+    ...leftOf(top.link, top.select, 'Sentry link / tenant select'),
+    ...(await selectAtRightEnd(filterBar, top.filterBar, top.select, [top.link, ...chipRects])),
+  ]
+  await noSidewaysScroll(page, 'Submissions with a tenant')
+  return { problems, rects: { top, chipRects } }
 }
 
 // The house tenant is selected: View jobs opens Submissions with that tenant preset and no state filter.
@@ -744,16 +773,142 @@ type SeenHealth = {
   trend: { services_down: number | null; queue_depth: number; dead_lettered: number }[]
 }
 
-// Armed before the nav click: the screen's own read is the comparison, so a shard moving the queue cannot race it.
-const armHealth = (page: Page): Promise<SeenHealth> =>
-  page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === STAFF_HEALTH, { timeout: 30_000 }).then((r) => r.json() as Promise<SeenHealth>)
+type SeenPanel = { key: string; available: boolean; series: { name: string; points: [number, number][] }[] }
+// internal/systemhealth PanelData, DeploysSection, LimitsSection
+type SeenMetrics = { range: string; service: string; connection_budget: number; panels: SeenPanel[]; limits: { available: boolean }; deploys: { available: boolean } }
+type Armed = { health: SeenHealth; metrics: SeenMetrics; metricsUrl: URL }
+
+// Armed before the nav click: the screen's own reads are the comparison, so a shard moving the queue cannot race them.
+const armHealth = async (page: Page): Promise<Armed> => {
+  const first = (path: string) => page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === path, { timeout: 30_000 })
+  const [h, m] = await Promise.all([first(STAFF_HEALTH), first('/api/submission/v1/staff/metrics')])
+  return { health: (await h.json()) as SeenHealth, metrics: (await m.json()) as SeenMetrics, metricsUrl: new URL(m.url()) }
+}
 
 const shortOf = (build?: string): string => (build ? build.slice(0, 7) : '—')
 const nonNull = (trend: SeenHealth['trend'], key: 'services_down' | 'queue_depth' | 'dead_lettered'): number => trend.filter((p) => p[key] !== null).length
 
+// systemhealth.Panels, in wire order.
+const METRIC_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'sql_cpu_pct', 'sql_ram_pct', 'sql_disk_pct', 'sql_connections']
+// systemhealth.ConnectionBudget
+const CONNECTION_BUDGET = 80
+// systemhealth.MetricServices
+const METRIC_SERVICES = ['app', 'auth', 'blog', 'dashboard', 'docling', 'gateway', 'invoice', 'landing', 'library', 'notifications', 'ops-console', 'portfolio', 'submission', 'support-console', 'tenancy', 'validation', 'worker']
+// Terraform output dashboard_urls in invoice-os-infra.
+const DASHBOARD_HREFS: Record<string, string> = {
+  'Services dashboard': 'https://console.cloud.google.com/monitoring/dashboards/builder/27155b37-f324-478d-9e9d-c91ede1837f9?project=ascomply-prod',
+  'Database and edge dashboard': 'https://console.cloud.google.com/monitoring/dashboards/builder/3c070f78-6025-432a-b178-5cde3fe08514?project=ascomply-prod',
+}
+const SENTRY_PROJECT = '4512190351474768'
+
+type SeenPoints = [number, number][]
+const panelSeries = (m: SeenMetrics, key: string): SeenPanel['series'] => m.panels.find((p) => p.key === key && p.available)?.series.filter((s) => s.points.length > 0) ?? []
+// The series the SQL panels draw: the "database" series, else the first.
+const sqlSeries = (m: SeenMetrics, key: string): SeenPoints => {
+  const all = m.panels.find((p) => p.key === key && p.available)?.series ?? []
+  return (all.find((s) => s.name === 'database') ?? all[0])?.points ?? []
+}
+const panelHasData = (m: SeenMetrics, key: string): boolean =>
+  key === 'sql_util' ? ['sql_cpu_pct', 'sql_ram_pct', 'sql_disk_pct'].some((k) => sqlSeries(m, k).length > 0) : key === 'sql_connections' ? sqlSeries(m, key).length > 0 : panelSeries(m, key).length > 0
+// Stat source has a point: the 5xx tile needs an error point with a request point on the same series and step.
+const statHasData = (m: SeenMetrics, key: string): boolean => {
+  if (key === 'req') return panelSeries(m, 'req_per_min').length > 0
+  if (key === 'p95') return panelSeries(m, 'latency_p95_ms').length > 0
+  if (key === 'connections') return sqlSeries(m, 'sql_connections').length > 0
+  const req = new Map(panelSeries(m, 'req_per_min').map((s) => [s.name, new Set(s.points.map((p) => p[0]))]))
+  return panelSeries(m, 'error_pct').some((s) => s.points.some((p) => req.get(s.name)?.has(p[0])))
+}
+
+// Panels and stat tiles equal one metrics answer: No data iff no point, else a line.
+async function metricsMatch(page: Page, m: SeenMetrics, what: string): Promise<void> {
+  const mn = mainOf(page)
+  await expect(mn.getByText('Loading metrics…'), `${what}: metrics have loaded`).toHaveCount(0)
+  const panels = mn.locator('.ops-health-panels > [data-panel]')
+  await expect(panels, `${what}: panels`).toHaveCount(PANEL_KEYS.length)
+  for (const key of PANEL_KEYS) {
+    const p = mn.locator(`[data-panel="${key}"]`)
+    const has = panelHasData(m, key)
+    await expect(p.locator('[data-no-data]'), `${what}: ${key} No data`).toHaveCount(has ? 0 : 1)
+    if (!has) await expect(p.locator('[data-no-data]'), `${what}: ${key} note`).toHaveText('No data')
+    if (has) await expect(p.locator('svg [data-line]').first(), `${what}: ${key} draws a line`).toBeAttached()
+    else await expect(p.locator('[data-line]'), `${what}: ${key} draws no line`).toHaveCount(0)
+  }
+  for (const key of STAT_KEYS.filter((k) => k !== 'fleet')) {
+    const t = mn.locator(`[data-tile="${key}"]`)
+    const has = statHasData(m, key)
+    await expect(t.getByText('NO DATA', { exact: true }), `${what}: ${key} NO DATA`).toHaveCount(has ? 0 : 1)
+    if (has) await expect(t.locator('.money'), `${what}: ${key} value`).not.toHaveText('—')
+    else await expect(t.locator('.money'), `${what}: ${key} value`).toHaveText('—')
+  }
+}
+
+// The armed answers drive the first comparison; the chip and the select each send a fresh read.
+async function metricsReads(page: Page, health: SeenHealth, first: SeenMetrics, firstUrl: URL): Promise<void> {
+  const mn = mainOf(page)
+  expect(firstUrl.searchParams.get('range'), 'first metrics request range').toBe('1h')
+  expect(firstUrl.searchParams.has('service'), 'first metrics request names no service').toBe(false)
+  expect(first.panels.map((p) => p.key), 'metrics panel keys are the systemhealth panels').toEqual(METRIC_KEYS)
+  expect(first.connection_budget, 'systemhealth.ConnectionBudget').toBe(CONNECTION_BUDGET)
+  await expect(mn.getByRole('button', { name: '1h', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await metricsMatch(page, first, 'range 1h')
+  await expect(mn.locator('[data-tile="connections"]').getByText(`of ${CONNECTION_BUDGET}`), 'connections tile shows the budget').toHaveCount(1)
+
+  const read = (range: string, service: string | null) =>
+    page.waitForResponse((r) => {
+      const u = new URL(r.url())
+      return r.request().method() === 'GET' && u.pathname === '/api/submission/v1/staff/metrics' && u.searchParams.get('range') === range && u.searchParams.get('service') === service
+    })
+  const sent = (range: string, service: string | null) =>
+    page.waitForRequest((r) => {
+      const u = new URL(r.url())
+      return u.pathname === '/api/submission/v1/staff/metrics' && u.searchParams.get('range') === range && u.searchParams.get('service') === service
+    })
+
+  const [, six] = await Promise.all([sent('6h', null), read('6h', null), mn.getByRole('button', { name: '6h', exact: true }).click()]).then((r) => [r[0], r[1]] as const)
+  await expect(mn.getByRole('button', { name: '6h', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  expect(six.status(), '6h read status').toBe(200)
+  await metricsMatch(page, (await six.json()) as SeenMetrics, 'range 6h')
+
+  const name = health.fleet.services.map((s) => s.name).find((n) => METRIC_SERVICES.includes(n)) ?? METRIC_SERVICES[0]
+  const select = mn.locator('select[aria-label="Service"]')
+  const options = await select.locator('option').evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value))
+  expect(options, 'the service select lists systemhealth.MetricServices after All services').toEqual(['', ...METRIC_SERVICES])
+  const [, one] = await Promise.all([sent('6h', name), read('6h', name), select.selectOption(name)]).then((r) => [r[0], r[1]] as const)
+  expect(one.status(), `${name} read status`).toBe(200)
+  const oneBody = (await one.json()) as SeenMetrics
+  expect(oneBody.service, 'the answer names the selected service').toBe(name)
+  await metricsMatch(page, oneBody, `service ${name}`)
+
+  // Back to the default view: the fixture step clicks 6h and needs a changed range.
+  await Promise.all([read('1h', name), mn.getByRole('button', { name: '1h', exact: true }).click()])
+  await Promise.all([read('1h', null), select.selectOption('')])
+  await expect(mn.getByRole('button', { name: '1h', exact: true })).toHaveAttribute('aria-pressed', 'true')
+}
+
+async function healthLinks(page: Page, seen: SeenHealth): Promise<void> {
+  const mn = mainOf(page)
+  const attrs = async (link: Locator, what: string, href: string): Promise<void> => {
+    await expect(link, `${what} href`).toHaveAttribute('href', href)
+    await expect(link, `${what} target`).toHaveAttribute('target', '_blank')
+    await expect(link, `${what} rel`).toHaveAttribute('rel', 'noopener noreferrer')
+  }
+  for (const [label, href] of Object.entries(DASHBOARD_HREFS)) await attrs(mn.getByRole('link', { name: label }), label, href)
+  if (seen.fleet.status === 'unknown') return
+  expect(seen.fleet.services.length, 'services with links').toBeGreaterThan(0)
+  for (const s of seen.fleet.services) {
+    const row = mn.locator(`[data-service="${s.name}"]`)
+    const link = row.getByRole('link')
+    if (s.name === 'auth') {
+      await expect(link, 'auth has no Sentry link').toHaveCount(0)
+      continue
+    }
+    await attrs(link, `${s.name} Sentry link`, `https://as-comply.sentry.io/issues/?query=server_name:${s.name}&project=${SENTRY_PROJECT}&statsPeriod=14d`)
+  }
+}
+
 async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Promise<void> {
   const mn = mainOf(page)
-  const seen = await (armed as Promise<SeenHealth>)
+  const { health: seen, metrics, metricsUrl } = await (armed as Promise<Armed>)
   const tile = (key: string): Locator => mn.locator(`[data-tile="${key}"]`)
   await expect(tile('fleet'), 'the health tiles have loaded').toBeVisible()
 
@@ -800,6 +955,9 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
   await expect(mn.getByText(/APP latency|APP error rate|throughput|Recon backlog/i), 'no unmeasured tile').toHaveCount(0)
   await expectStyles(parent(mn.locator('[data-service]').first().getByText(/^(UP|DOWN)$/)), 'service badge', { radius: '4px' })
 
+  await metricsReads(page, seen, metrics, metricsUrl)
+  await healthLinks(page, seen)
+
   // Core AC 2: the fleet route grants the console no CORS.
   const fleet = await page.request.get(`${apiBase()}/healthz/fleet`, { headers: { ...fleetHeaders(), Origin: new URL(page.url()).origin } })
   expect([200, 503], '/healthz/fleet status').toContain(fleet.status())
@@ -809,48 +967,237 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
   await attachShot(page, testInfo, 'health')
 }
 
-async function healthLayout(page: Page): Promise<Read> {
-  const mn = mainOf(page)
-  const tiles = mn.locator('.ops-health-grid > div')
-  const n = await tiles.count()
-  expect(n, 'health tiles').toBe(3)
-  const tileRects = await rectsOf(page, tiles, 'health tile')
-  const problems = [...pairwiseApart(tileRects, 'health tiles'), ...sameTops(tileRects, 'health tiles')]
+const STAT_KEYS = ['fleet', 'req', 'errors', 'p95', 'connections']
+const JOB_KEYS = ['queue', 'dead-lettered']
+// Which tiles carry a status word: always, only NO DATA, or never.
+const WORD_RULE: Record<string, 'always' | 'no-data' | 'never'> = { fleet: 'always', req: 'no-data', errors: 'always', p95: 'always', connections: 'always', queue: 'never', 'dead-lettered': 'always' }
 
-  for (let i = 0; i < n; i++) {
+// Reads one tile row by key: its tiles sit in order, share a top and stay apart; each tile holds its label, word, value and unit.
+async function tileRowRead(page: Page, row: Locator, keys: string[], what: string): Promise<{ problems: string[]; rects: Rect[] }> {
+  const tiles = row.locator(':scope > [data-tile]')
+  expect(await tiles.evaluateAll((els) => els.map((e) => e.getAttribute('data-tile'))), `${what} tile keys`).toEqual(keys)
+  const rects = await rectsOf(page, tiles, `${what} tile`)
+  const problems = [...pairwiseApart(rects, `${what} tiles`), ...sameTops(rects, `${what} tiles`)]
+  for (const [i, key] of keys.entries()) {
     const t = tiles.nth(i)
     const head = kid(t, 1)
     const word = kid(head, 2)
     const hasWord = (await word.count()) > 0
-    if (i !== 1) expect(hasWord, `tile ${i} has a status word`).toBe(true)
-    const svg = t.locator('svg')
-    const hasSvg = (await svg.count()) > 0
-    const r = await boxes(page, { tile: t, label: kid(head, 1), value: kid(t, 2) })
-    problems.push(...within(r.tile, r.label, `tile ${i} label`), ...within(r.tile, r.value, `tile ${i} value row`))
+    const rule = WORD_RULE[key]
+    if (rule === 'always') expect(hasWord, `${key} has a status word`).toBe(true)
+    if (rule === 'never') expect(hasWord, `${key} has no status word`).toBe(false)
+    if (rule === 'no-data' && hasWord) await expect(word, `${key} word`).toHaveText('NO DATA')
+    const valueRow = kid(t, 2)
+    const r = await boxes(page, { tile: t, label: kid(head, 1), valueRow, value: kid(valueRow, 1), unit: kid(valueRow, 2) })
+    problems.push(...within(r.tile, r.label, `${key} label`), ...within(r.tile, r.valueRow, `${key} value row`), ...within(r.tile, r.value, `${key} value`), ...within(r.tile, r.unit, `${key} unit`), ...apart(r.value, r.unit, `${key} value / unit`))
     if (hasWord) {
       const w = (await boxes(page, { word }))['word']
-      problems.push(...within(r.tile, w, `tile ${i} status word`), ...apart(r.label, w, `tile ${i} label / status word`))
+      problems.push(...within(r.tile, w, `${key} status word`), ...apart(r.label, w, `${key} label / status word`))
     }
-    if (hasSvg) {
+    const svg = t.locator('svg')
+    if ((await svg.count()) > 0) {
       const v = (await boxes(page, { svg }))['svg']
-      problems.push(...within(r.tile, v, `tile ${i} sparkline`), ...below(r.value, v, `tile ${i} sparkline under the value row`))
+      problems.push(...within(r.tile, v, `${key} sparkline`), ...below(r.valueRow, v, `${key} sparkline under the value row`))
     }
   }
+  return { problems, rects }
+}
 
-  const grid = await boxes(page, { grid: mn.locator('.ops-health-grid'), card: mn.locator('.ops-health-grid + div') })
-  problems.push(...below(grid.grid, grid.card, 'Services card under the grid'))
+const PANEL_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'sql_util', 'sql_connections']
+
+// The panels grid: panels apart, a row sharing one top, title row, word and content inside each panel; the grid between the Jobs row and the Services card.
+async function panelsRead(page: Page, grid: Locator, jobs: Rect, card: Rect): Promise<{ problems: string[]; rects: Rect[] }> {
+  const panels = grid.locator(':scope > [data-panel]')
+  expect(await panels.evaluateAll((els) => els.map((e) => e.getAttribute('data-panel'))), 'panel keys').toEqual(PANEL_KEYS)
+  const rects = await rectsOf(page, panels, 'panel')
+  const gridBox = (await boxes(page, { grid })).grid
+  const problems = [...pairwiseApart(rects, 'panels'), ...below(jobs, gridBox, 'panels grid below the Jobs row'), ...below(gridBox, card, 'Services card below the panels grid')]
+  for (let i = 0; i + 1 < rects.length; i += 2) problems.push(...sameTops([rects[i], rects[i + 1]], `panel row ${i / 2}`))
+  for (const [i, key] of PANEL_KEYS.entries()) {
+    const p = panels.nth(i)
+    const titleRow = kid(p, 1)
+    const word = p.locator('[data-word]')
+    const noData = p.locator('[data-no-data]')
+    const named: Record<string, Locator> = { titleRow, title: kid(titleRow, 1), content: kid(p, 2) }
+    if ((await word.count()) > 0) named.word = word
+    const r = await boxes(page, named)
+    problems.push(...within(rects[i], r.titleRow, `${key} title row`), ...within(rects[i], r.title, `${key} title`), ...within(rects[i], r.content, `${key} chart`), ...below(r.titleRow, r.content, `${key} chart below the title row`))
+    if (r.word) problems.push(...within(rects[i], r.word, `${key} word`), ...apart(r.title, r.word, `${key} title / word`))
+    if ((await noData.count()) > 0) {
+      await expect(noData, `${key} note`).toHaveText('No data')
+      problems.push(...within(rects[i], (await boxes(page, { noData })).noData, `${key} No data`))
+    }
+  }
+  return { problems, rects }
+}
+
+// fixture check: pins the chart, legend and marker layout of a wire-shaped body, not the metrics contract
+async function fixturePanelsRead(page: Page): Promise<Read> {
+  const panels = mainOf(page).locator('.ops-health-panels > [data-panel]')
+  const rects = await rectsOf(page, panels, 'panel')
+  const problems: string[] = []
+  const legendCounts: Record<string, number> = { sql_util: 3, sql_connections: 1 }
+  for (const [i, key] of PANEL_KEYS.entries()) {
+    const p = panels.nth(i)
+    const chart = kid(p, 2)
+    const legend = kid(p, 3)
+    const svg = chart.locator('svg')
+    await expect(svg, `${key} draws a chart`).toHaveCount(1)
+    const axis = { yMax: kid(kid(chart, 1), 1), yZero: kid(kid(chart, 1), 2), xStart: kid(kid(chart, 4), 1), xEnd: kid(kid(chart, 4), 2) }
+    const r = await boxes(page, { chart, legend, svg, ...axis })
+    problems.push(...within(rects[i], r.chart, `${key} chart`), ...below(r.chart, r.legend, `${key} legend below the chart`), ...within(rects[i], r.legend, `${key} legend`))
+    for (const k of Object.keys(axis) as (keyof typeof axis)[]) problems.push(...within(rects[i], r[k], `${key} axis label ${k}`))
+    problems.push(...leftOf(r.yMax, r.svg, `${key} y labels / chart`), ...below(r.svg, r.xStart, `${key} x labels under the chart`), ...pairwiseApart([r.yMax, r.yZero], `${key} y labels`), ...pairwiseApart([r.xStart, r.xEnd], `${key} x labels`))
+
+    const entries = legend.locator(':scope > span')
+    const want = legendCounts[key] ?? 8
+    await expect(entries, `${key} legend entries`).toHaveCount(want)
+    const entryRects = await rectsOf(page, entries, `${key} legend entry`)
+    problems.push(...pairwiseApart(entryRects, `${key} legend entries`))
+    for (const [j, e] of entryRects.entries()) problems.push(...within(rects[i], e, `${key} legend entry ${j}`))
+    if (want === 8) {
+      await expect(legend.locator('[data-series]'), `${key} coloured entries`).toHaveCount(7)
+      await expect(legend.locator('[data-series-other]'), `${key} folded entry`).toHaveText('+10 other services')
+    }
+
+    const marks = svg.locator('line[data-deploy]')
+    await expect(marks, `${key} deploy markers`).toHaveCount(2)
+    const markRects = await marks.evaluateAll((els) => els.map((e) => { const b = e.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height } }))
+    for (const [j, m] of markRects.entries()) problems.push(...within(rects[i], m, `${key} deploy marker ${j}`))
+  }
+  const word = (key: string): Locator => panels.nth(PANEL_KEYS.indexOf(key)).locator('[data-word]')
+  await expect(word('error_pct'), 'error_pct word').toHaveText('HIGH')
+  await expect(word('cpu_pct'), 'cpu_pct word').toHaveText('HIGH')
+  await expect(word('latency_p95_ms'), 'latency_p95_ms word').toHaveText('PEAKED')
+  await expect(word('ram_pct'), 'ram_pct has no word').toHaveCount(0)
+  return { problems, rects: { panels: rects } }
+}
+
+async function healthLayout(page: Page): Promise<Read> {
+  const mn = mainOf(page)
+  const problems: string[] = []
+
+  const titleBlock = parent(mn.getByRole('heading', { level: 1, name: 'System health' }))
+  const headRow = parent(titleBlock)
+  const failed = mn.getByText('REFRESH FAILED', { exact: true })
+  const headNamed: Record<string, Locator> = {
+    headRow,
+    titleBlock,
+    stamp: headRow.getByText(/^CHECKED /),
+    servicesLink: headRow.getByRole('link', { name: 'Services dashboard' }),
+    databaseLink: headRow.getByRole('link', { name: 'Database and edge dashboard' }),
+  }
+  if ((await failed.count()) > 0) headNamed.failed = failed
+  const head = await boxes(page, headNamed)
+  const { headRow: headBox, ...headParts } = head
+  for (const [k, r] of Object.entries(headParts)) problems.push(...within(headBox, r, `header ${k}`))
+  problems.push(...pairwiseApart(Object.values(headParts), 'header title block, stamp and links'))
+
+  const filterBar = parent(mn.getByRole('button', { name: '15m', exact: true }))
+  const chips = filterBar.locator('button.ops-chip')
+  const bar = await boxes(page, { filterBar, select: filterBar.locator('select') })
+  const chipRects = await rectsOf(page, chips, 'range chip')
+  problems.push(...below(head.headRow, bar.filterBar, 'filter bar below the header row'), ...within(bar.filterBar, bar.select, 'service select in the filter bar'))
+  problems.push(...sameTops(chipRects, 'range chips'), ...pairwiseApart([...chipRects, bar.select], 'range chips and service select'))
+  for (const [i, c] of chipRects.entries()) problems.push(...within(bar.filterBar, c, `range chip ${i} in the filter bar`))
+  problems.push(...(await selectAtRightEnd(filterBar, bar.filterBar, bar.select, chipRects)))
+
+  const statsRow = mn.locator('.ops-health-stats')
+  const jobsRow = mn.locator('.ops-health-jobs')
+  const stats = await tileRowRead(page, statsRow, STAT_KEYS, 'stat')
+  const jobs = await tileRowRead(page, jobsRow, JOB_KEYS, 'jobs')
+  const grids = await boxes(page, { stats: statsRow, jobs: jobsRow, card: mn.locator('.ops-screen-pad > div:last-child') })
+  const panelsGrid = mn.locator('.ops-health-panels')
+  const panelRead = (await panelsGrid.count()) > 0 ? await panelsRead(page, panelsGrid, grids.jobs, grids.card) : null
+  problems.push(...(panelRead?.problems ?? []), ...stats.problems, ...jobs.problems, ...below(bar.filterBar, grids.stats, 'stat row below the filter bar'), ...below(grids.stats, grids.jobs, 'Jobs row below the stat row'), ...below(grids.jobs, grids.card, 'Services card below the Jobs row'))
 
   const rows = mn.locator('[data-service]')
   const nRows = Math.min(await rows.count(), 20)
   if (nRows === 0) await expect(mn.getByText('The gateway roll-up is unavailable.'), 'no rows only when the roll-up is unavailable').toHaveCount(1)
   for (let i = 0; i < nRows; i++) {
     const row = rows.nth(i)
-    const p = await boxes(page, { row, name: kid(row, 1), badge: kid(row, 2), build: kid(row, 3) })
-    problems.push(...within(grid.card, p.row, `service row ${i} in the Services card`), ...within(p.row, p.name, `service ${i} name`), ...within(p.row, p.badge, `service ${i} badge`), ...within(p.row, p.build, `service ${i} build`), ...pairwiseApart([p.name, p.badge, p.build], `service ${i} name, badge, build`))
+    const name = (await row.getAttribute('data-service')) ?? ''
+    const parts: Record<string, Locator> = { row, name: kid(row, 1), badge: kid(row, 2), build: kid(row, 3) }
+    if (name !== 'auth') parts.sentry = kid(row, 4)
+    const p = await boxes(page, parts)
+    const { row: rowBox, ...cells } = p
+    problems.push(...within(grids.card, rowBox, `service row ${i} in the Services card`), ...pairwiseApart(Object.values(cells), `service ${i} name, badge, build and Sentry link`))
+    for (const [k, r] of Object.entries(cells)) problems.push(...within(rowBox, r, `service ${i} ${k}`))
   }
 
   await noSidewaysScroll(page, 'System health')
-  return { problems, rects: { tiles: tileRects, grid } }
+  return { problems, rects: { head, bar, chipRects, stats: stats.rects, jobs: jobs.rects, panels: panelRead?.rects, grids } }
+}
+
+const STAFF_METRICS = /\/api\/submission\/v1\/staff\/metrics(\?|$)/
+const FIXTURE_STEPS = 61
+// frontend/support-console/src/metricsApi.ts METRIC_SERVICES
+const METRIC_SERVICES_FIXTURE = ['app', 'auth', 'blog', 'dashboard', 'docling', 'gateway', 'invoice', 'landing', 'library', 'notifications', 'ops-console', 'portfolio', 'submission', 'support-console', 'tenancy', 'validation', 'worker']
+
+// Wire-shaped body of systemhealth.Metrics: every Cloud Run panel full, 5xx over 1, p95 peaked then back under, CPU over 80, one gap, one deploy after the end.
+function metricsFixture() {
+  const end = Math.floor(Date.now() / 60_000) * 60
+  const start = end - (FIXTURE_STEPS - 1) * 60
+  const ts = Array.from({ length: FIXTURE_STEPS }, (_, i) => start + i * 60)
+  const line = (f: (i: number) => number, gapAt?: number): [number, number][] => ts.flatMap((t, i): [number, number][] => (i === gapAt ? [] : [[t, f(i)]]))
+  const names = METRIC_SERVICES_FIXTURE
+  const per = (f: (i: number, n: number) => number) => names.map((name, n) => ({ name, points: line((i) => f(i, n), n === 1 ? 30 : undefined) }))
+  const panel = (key: string, unit: string, series: { name: string; points: [number, number][] }[]) => ({ key, unit, available: true, series })
+  const database = (f: (i: number) => number) => [{ name: 'database', points: line(f) }]
+  return {
+    range: '6h',
+    service: '',
+    start: new Date(start * 1000).toISOString(),
+    end: new Date(end * 1000).toISOString(),
+    step_seconds: 60,
+    connection_budget: 80,
+    panels: [
+      panel('req_per_min', 'req/min', per((i, n) => 20 + n + (i % 7))),
+      panel('error_pct', '%', per(() => 2)),
+      panel('latency_p50_ms', 'ms', per(() => 120)),
+      panel('latency_p95_ms', 'ms', per((i) => (i === 10 ? 1500 : 400))),
+      panel('cpu_pct', '% of limit', per((i, n) => (n === 0 ? 85 : 30 + (i % 5)))),
+      panel('ram_pct', '% of limit', per(() => 55)),
+      panel('instances', 'count', per((i) => 1 + (i % 3))),
+      panel('cold_starts_per_min', '/min', per((i) => (i % 9 === 0 ? 1 : 0))),
+      panel('sql_cpu_pct', '%', database((i) => 20 + (i % 10))),
+      panel('sql_ram_pct', '%', database(() => 60)),
+      panel('sql_disk_pct', '%', database(() => 35)),
+      panel('sql_connections', 'count', database(() => 23)),
+    ],
+    limits: { available: true, services: names.map((name) => ({ name, cpu: '1', memory: '512Mi', max_instances: 3 })) },
+    deploys: {
+      available: true,
+      revisions: [
+        { service: 'gateway', revision: 'gateway-00042', created_at: new Date((start + 1800) * 1000).toISOString() },
+        { service: 'worker', revision: 'worker-00017', created_at: new Date((end + 120) * 1000).toISOString() },
+      ],
+    },
+  }
+}
+
+// fixture check: pins layout of a wire-shaped body, not the metrics contract
+async function healthFixtureLayout(page: Page): Promise<void> {
+  const mn = mainOf(page)
+  const cors = { 'access-control-allow-origin': new URL(page.url()).origin, 'access-control-allow-headers': 'authorization, content-type', 'access-control-allow-methods': 'GET, OPTIONS' }
+  await page.route(STAFF_METRICS, (route) =>
+    route.request().method() === 'OPTIONS' ? route.fulfill({ status: 204, headers: cors }) : route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify(metricsFixture()) }),
+  )
+  const answered = page.waitForResponse((r) => STAFF_METRICS.test(new URL(r.url()).pathname + new URL(r.url()).search) && r.request().method() === 'GET')
+  await mn.getByRole('button', { name: '6h', exact: true }).click()
+  await answered
+  const tile = (key: string): Locator => mn.locator(`[data-tile="${key}"]`)
+  const word = (key: string): Locator => kid(kid(tile(key), 1), 2)
+  await expect(tile('req').locator('.money'), 'requests value').not.toHaveText('—')
+  await expect(word('req'), 'requests carry no word').toHaveCount(0)
+  await expect(word('errors')).toHaveText('HIGH')
+  await expect(word('p95')).toHaveText('PEAKED')
+  await expect(word('connections')).toHaveText('OK')
+  await expect(mn.locator('.ops-health-panels > [data-panel]'), 'the panels grid holds ten panels').toHaveCount(10)
+  await atWidths(page, 'SUP-03 System health fixture layout', async () => {
+    const [base, charts] = [await healthLayout(page), await fixturePanelsRead(page)]
+    return { problems: [...base.problems, ...charts.problems], rects: { base: base.rects, charts: charts.rects } }
+  })
 }
 
 const STAFF_AUDIT = '/api/invoice/v1/staff/audit-log'
@@ -1190,6 +1537,13 @@ const SCREENS: Screen[] = [
     rowUp: 1,
     reads: submissionsReads,
     layout: submissionsLayout,
+    after: async (page) => {
+      const select = mainOf(page).locator('select[aria-label="Tenant"]')
+      const value = await select.locator('option:not([value=""])').first().getAttribute('value')
+      expect(value, 'a real tenant option').toBeTruthy()
+      await select.selectOption(value!)
+      await atWidths(page, 'SUP-03 Submissions Sentry link layout', () => submissionsLinkLayout(page))
+    },
   },
   {
     nav: 'Rules',
@@ -1241,6 +1595,7 @@ const SCREENS: Screen[] = [
     arm: armHealth,
     reads: healthReads,
     layout: healthLayout,
+    after: healthFixtureLayout,
   },
   {
     nav: 'AI usage',

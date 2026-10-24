@@ -15,6 +15,9 @@ var (
 	QueueStates = []string{"queued", "submitting", "pending"}
 )
 
+// ceiling: hand-kept list of the Cloud Run fleet; add a new service here or it is not selectable
+var MetricServices = []string{"app", "auth", "blog", "dashboard", "docling", "gateway", "invoice", "landing", "library", "notifications", "ops-console", "portfolio", "submission", "support-console", "tenancy", "validation", "worker"}
+
 // Counts returns a copy of raw with every JobStates entry present.
 func Counts(raw map[string]int64) map[string]int64 {
 	out := make(map[string]int64, len(raw)+len(JobStates))

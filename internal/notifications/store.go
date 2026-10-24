@@ -84,7 +84,7 @@ ON CONFLICT (email) DO UPDATE SET
     updated_at             = now()
 RETURNING email, version, hubspot_delivered_at IS NULL,
           resend_delivered_at IS NULL AND (registered_at IS NOT NULL OR marketing_consented_at IS NOT NULL),
-          COALESCE(registered_at = now(), false)`
+          old.registered_at IS NULL AND new.registered_at IS NOT NULL`
 
 type intake struct {
 	email, userID, first, last, company string
@@ -150,7 +150,7 @@ func (s *Store) merge(ctx context.Context, in intake) error {
 			return fmt.Errorf("notifications: queue %s delivery: %w", dest, err)
 		}
 	}
-	// now() is the transaction start, so registered_at matches it only on the first registration.
+	// RETURNING old/new (Postgres 18) sees the prior row, so exactly one concurrent sign-up wins.
 	if in.demo || (in.registered && newlyRegistered) {
 		if _, err := s.river.InsertTx(ctx, tx, DemoDealArgs{Email: email, Name: in.name, Company: in.company, SignUp: !in.demo}, nil); err != nil {
 			return fmt.Errorf("notifications: queue demo deal: %w", err)

@@ -860,7 +860,7 @@ async function metricsReads(page: Page, testInfo: TestInfo, first: SeenMetrics, 
   expect(first.connection_budget, 'systemhealth.ConnectionBudget').toBe(CONNECTION_BUDGET)
   await expect(mn.getByRole('button', { name: '1h', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await metricsMatch(page, first, 'range 1h')
-  // Cloud SQL series fill every step, so a granted preview passes before its own series land (4-minute lag).
+  // Cloud SQL series fill every step, so this holds even before the PR's own series land (4-minute lag).
   expect(await mn.locator('[data-panel] [data-no-data]').count(), 'some metric panel draws: all No data means run-preview lacks roles/monitoring.viewer on ascomply-preview, or the metrics path broke').toBeLessThan(PANEL_KEYS.length)
   scopeMatch(first, 'range 1h')
   // A wrong PreviewSuffix empties every PR-scoped read; the unscoped Cloud SQL panels would still pass above.

@@ -838,48 +838,161 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
   await attachShot(page, testInfo, 'health')
 }
 
-async function healthLayout(page: Page): Promise<Read> {
-  const mn = mainOf(page)
-  const tiles = mn.locator('.ops-health-grid > div')
-  const n = await tiles.count()
-  expect(n, 'health tiles').toBe(3)
-  const tileRects = await rectsOf(page, tiles, 'health tile')
-  const problems = [...pairwiseApart(tileRects, 'health tiles'), ...sameTops(tileRects, 'health tiles')]
+const STAT_KEYS = ['fleet', 'req', 'errors', 'p95', 'connections']
+const JOB_KEYS = ['queue', 'dead-lettered']
+// Which tiles carry a status word: always, only NO DATA, or never.
+const WORD_RULE: Record<string, 'always' | 'no-data' | 'never'> = { fleet: 'always', req: 'no-data', errors: 'always', p95: 'always', connections: 'always', queue: 'never', 'dead-lettered': 'always' }
 
-  for (let i = 0; i < n; i++) {
+// Reads one tile row by key: its tiles sit in order, share a top and stay apart; each tile holds its label, word, value and unit.
+async function tileRowRead(page: Page, row: Locator, keys: string[], what: string): Promise<{ problems: string[]; rects: Rect[] }> {
+  const tiles = row.locator(':scope > [data-tile]')
+  expect(await tiles.evaluateAll((els) => els.map((e) => e.getAttribute('data-tile'))), `${what} tile keys`).toEqual(keys)
+  const rects = await rectsOf(page, tiles, `${what} tile`)
+  const problems = [...pairwiseApart(rects, `${what} tiles`), ...sameTops(rects, `${what} tiles`)]
+  for (const [i, key] of keys.entries()) {
     const t = tiles.nth(i)
     const head = kid(t, 1)
     const word = kid(head, 2)
     const hasWord = (await word.count()) > 0
-    if (i !== 1) expect(hasWord, `tile ${i} has a status word`).toBe(true)
-    const svg = t.locator('svg')
-    const hasSvg = (await svg.count()) > 0
-    const r = await boxes(page, { tile: t, label: kid(head, 1), value: kid(t, 2) })
-    problems.push(...within(r.tile, r.label, `tile ${i} label`), ...within(r.tile, r.value, `tile ${i} value row`))
+    const rule = WORD_RULE[key]
+    if (rule === 'always') expect(hasWord, `${key} has a status word`).toBe(true)
+    if (rule === 'never') expect(hasWord, `${key} has no status word`).toBe(false)
+    if (rule === 'no-data' && hasWord) await expect(word, `${key} word`).toHaveText('NO DATA')
+    const valueRow = kid(t, 2)
+    const r = await boxes(page, { tile: t, label: kid(head, 1), valueRow, value: kid(valueRow, 1), unit: kid(valueRow, 2) })
+    problems.push(...within(r.tile, r.label, `${key} label`), ...within(r.tile, r.valueRow, `${key} value row`), ...within(r.tile, r.value, `${key} value`), ...within(r.tile, r.unit, `${key} unit`), ...apart(r.value, r.unit, `${key} value / unit`))
     if (hasWord) {
       const w = (await boxes(page, { word }))['word']
-      problems.push(...within(r.tile, w, `tile ${i} status word`), ...apart(r.label, w, `tile ${i} label / status word`))
+      problems.push(...within(r.tile, w, `${key} status word`), ...apart(r.label, w, `${key} label / status word`))
     }
-    if (hasSvg) {
+    const svg = t.locator('svg')
+    if ((await svg.count()) > 0) {
       const v = (await boxes(page, { svg }))['svg']
-      problems.push(...within(r.tile, v, `tile ${i} sparkline`), ...below(r.value, v, `tile ${i} sparkline under the value row`))
+      problems.push(...within(r.tile, v, `${key} sparkline`), ...below(r.valueRow, v, `${key} sparkline under the value row`))
     }
   }
+  return { problems, rects }
+}
 
-  const grid = await boxes(page, { grid: mn.locator('.ops-health-grid'), card: mn.locator('.ops-health-grid + div') })
-  problems.push(...below(grid.grid, grid.card, 'Services card under the grid'))
+async function healthLayout(page: Page): Promise<Read> {
+  const mn = mainOf(page)
+  const problems: string[] = []
+
+  const titleBlock = parent(mn.getByRole('heading', { level: 1, name: 'System health' }))
+  const headRow = parent(titleBlock)
+  const failed = mn.getByText('REFRESH FAILED', { exact: true })
+  const headNamed: Record<string, Locator> = {
+    headRow,
+    titleBlock,
+    stamp: headRow.getByText(/^CHECKED /),
+    servicesLink: headRow.getByRole('link', { name: 'Services dashboard' }),
+    databaseLink: headRow.getByRole('link', { name: 'Database and edge dashboard' }),
+  }
+  if ((await failed.count()) > 0) headNamed.failed = failed
+  const head = await boxes(page, headNamed)
+  const { headRow: headBox, ...headParts } = head
+  for (const [k, r] of Object.entries(headParts)) problems.push(...within(headBox, r, `header ${k}`))
+  problems.push(...pairwiseApart(Object.values(headParts), 'header title block, stamp and links'))
+
+  const filterBar = parent(mn.getByRole('button', { name: '15m', exact: true }))
+  const chips = filterBar.locator('button.ops-chip')
+  const bar = await boxes(page, { filterBar, select: filterBar.locator('select') })
+  const chipRects = await rectsOf(page, chips, 'range chip')
+  problems.push(...below(head.headRow, bar.filterBar, 'filter bar below the header row'), ...within(bar.filterBar, bar.select, 'service select in the filter bar'))
+  problems.push(...sameTops(chipRects, 'range chips'), ...pairwiseApart([...chipRects, bar.select], 'range chips and service select'))
+  for (const [i, c] of chipRects.entries()) problems.push(...within(bar.filterBar, c, `range chip ${i} in the filter bar`))
+  problems.push(...(await selectAtRightEnd(filterBar, bar.filterBar, bar.select, chipRects)))
+
+  const statsRow = mn.locator('.ops-health-stats')
+  const jobsRow = mn.locator('.ops-health-jobs')
+  const stats = await tileRowRead(page, statsRow, STAT_KEYS, 'stat')
+  const jobs = await tileRowRead(page, jobsRow, JOB_KEYS, 'jobs')
+  const grids = await boxes(page, { stats: statsRow, jobs: jobsRow, card: mn.locator('.ops-screen-pad > div:last-child') })
+  problems.push(...stats.problems, ...jobs.problems, ...below(bar.filterBar, grids.stats, 'stat row below the filter bar'), ...below(grids.stats, grids.jobs, 'Jobs row below the stat row'), ...below(grids.jobs, grids.card, 'Services card below the Jobs row'))
 
   const rows = mn.locator('[data-service]')
   const nRows = Math.min(await rows.count(), 20)
   if (nRows === 0) await expect(mn.getByText('The gateway roll-up is unavailable.'), 'no rows only when the roll-up is unavailable').toHaveCount(1)
   for (let i = 0; i < nRows; i++) {
     const row = rows.nth(i)
-    const p = await boxes(page, { row, name: kid(row, 1), badge: kid(row, 2), build: kid(row, 3) })
-    problems.push(...within(grid.card, p.row, `service row ${i} in the Services card`), ...within(p.row, p.name, `service ${i} name`), ...within(p.row, p.badge, `service ${i} badge`), ...within(p.row, p.build, `service ${i} build`), ...pairwiseApart([p.name, p.badge, p.build], `service ${i} name, badge, build`))
+    const name = (await row.getAttribute('data-service')) ?? ''
+    const parts: Record<string, Locator> = { row, name: kid(row, 1), badge: kid(row, 2), build: kid(row, 3) }
+    if (name !== 'auth') parts.sentry = kid(row, 4)
+    const p = await boxes(page, parts)
+    const { row: rowBox, ...cells } = p
+    problems.push(...within(grids.card, rowBox, `service row ${i} in the Services card`), ...pairwiseApart(Object.values(cells), `service ${i} name, badge, build and Sentry link`))
+    for (const [k, r] of Object.entries(cells)) problems.push(...within(rowBox, r, `service ${i} ${k}`))
   }
 
   await noSidewaysScroll(page, 'System health')
-  return { problems, rects: { tiles: tileRects, grid } }
+  return { problems, rects: { head, bar, chipRects, stats: stats.rects, jobs: jobs.rects, grids } }
+}
+
+const STAFF_METRICS = /\/api\/submission\/v1\/staff\/metrics(\?|$)/
+const FIXTURE_STEPS = 61
+// frontend/support-console/src/metricsApi.ts METRIC_SERVICES
+const METRIC_SERVICES_FIXTURE = ['app', 'auth', 'blog', 'dashboard', 'docling', 'gateway', 'invoice', 'landing', 'library', 'notifications', 'ops-console', 'portfolio', 'submission', 'support-console', 'tenancy', 'validation', 'worker']
+
+// Wire-shaped body of systemhealth.Metrics: every Cloud Run panel full, 5xx over 1, p95 peaked then back under, CPU over 80, one gap, one deploy after the end.
+function metricsFixture() {
+  const end = Math.floor(Date.now() / 60_000) * 60
+  const start = end - (FIXTURE_STEPS - 1) * 60
+  const ts = Array.from({ length: FIXTURE_STEPS }, (_, i) => start + i * 60)
+  const line = (f: (i: number) => number, gapAt?: number): [number, number][] => ts.flatMap((t, i): [number, number][] => (i === gapAt ? [] : [[t, f(i)]]))
+  const names = METRIC_SERVICES_FIXTURE
+  const per = (f: (i: number, n: number) => number) => names.map((name, n) => ({ name, points: line((i) => f(i, n), n === 1 ? 30 : undefined) }))
+  const panel = (key: string, unit: string, series: { name: string; points: [number, number][] }[]) => ({ key, unit, available: true, series })
+  const database = (f: (i: number) => number) => [{ name: 'database', points: line(f) }]
+  return {
+    range: '6h',
+    service: '',
+    start: new Date(start * 1000).toISOString(),
+    end: new Date(end * 1000).toISOString(),
+    step_seconds: 60,
+    connection_budget: 80,
+    panels: [
+      panel('req_per_min', 'req/min', per((i, n) => 20 + n + (i % 7))),
+      panel('error_pct', '%', per(() => 2)),
+      panel('latency_p50_ms', 'ms', per(() => 120)),
+      panel('latency_p95_ms', 'ms', per((i) => (i === 10 ? 1500 : 400))),
+      panel('cpu_pct', '% of limit', per((i, n) => (n === 0 ? 85 : 30 + (i % 5)))),
+      panel('ram_pct', '% of limit', per(() => 55)),
+      panel('instances', 'count', per((i) => 1 + (i % 3))),
+      panel('cold_starts_per_min', '/min', per((i) => (i % 9 === 0 ? 1 : 0))),
+      panel('sql_cpu_pct', '%', database((i) => 20 + (i % 10))),
+      panel('sql_ram_pct', '%', database(() => 60)),
+      panel('sql_disk_pct', '%', database(() => 35)),
+      panel('sql_connections', 'count', database(() => 23)),
+    ],
+    limits: { available: true, services: names.map((name) => ({ name, cpu: '1', memory: '512Mi', max_instances: 3 })) },
+    deploys: {
+      available: true,
+      revisions: [
+        { service: 'gateway', revision: 'gateway-00042', created_at: new Date((start + 1800) * 1000).toISOString() },
+        { service: 'worker', revision: 'worker-00017', created_at: new Date((end + 120) * 1000).toISOString() },
+      ],
+    },
+  }
+}
+
+// fixture check: pins layout of a wire-shaped body, not the metrics contract
+async function healthFixtureLayout(page: Page): Promise<void> {
+  const mn = mainOf(page)
+  const cors = { 'access-control-allow-origin': new URL(page.url()).origin, 'access-control-allow-headers': '*' }
+  await page.route(STAFF_METRICS, (route) =>
+    route.request().method() === 'OPTIONS' ? route.fulfill({ status: 204, headers: cors }) : route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify(metricsFixture()) }),
+  )
+  const answered = page.waitForResponse((r) => STAFF_METRICS.test(new URL(r.url()).pathname + new URL(r.url()).search) && r.request().method() === 'GET')
+  await mn.getByRole('button', { name: '6h', exact: true }).click()
+  await answered
+  const tile = (key: string): Locator => mn.locator(`[data-tile="${key}"]`)
+  const word = (key: string): Locator => kid(kid(tile(key), 1), 2)
+  await expect(tile('req').locator('.money'), 'requests value').not.toHaveText('—')
+  await expect(word('req'), 'requests carry no word').toHaveCount(0)
+  await expect(word('errors')).toHaveText('HIGH')
+  await expect(word('p95')).toHaveText('PEAKED')
+  await expect(word('connections')).toHaveText('OK')
+  await atWidths(page, 'SUP-03 System health fixture layout', () => healthLayout(page))
 }
 
 const STAFF_AUDIT = '/api/invoice/v1/staff/audit-log'
@@ -1277,6 +1390,7 @@ const SCREENS: Screen[] = [
     arm: armHealth,
     reads: healthReads,
     layout: healthLayout,
+    after: healthFixtureLayout,
   },
   {
     nav: 'AI usage',

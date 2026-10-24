@@ -44,6 +44,7 @@ import { cancelJob, fetchJob, fetchJobs, redriveJob, type JobDetail, type JobSta
 import { defaultBundlePeriod, downloadBundle, fetchAuditEvents, fetchBundlePreview, fetchStaffChanges, fetchStaffEntities, rangeInverted, staffChangeLink, type AuditFilters, type StaffAuditPage, type StaffAuditRow, type StaffChangeLink } from './auditApi'
 import { fetchAiCalls, fetchAiTotals, type AiCallsPage, type AiFilters, type AiTotalsPage } from './aiUsageApi'
 import { fetchStaffHealth } from './healthApi'
+import { DEFAULT_RANGE, fetchStaffMetrics, type RangeKey } from './metricsApi'
 import { detailStatus, fetchStaffTenant, fetchStaffTenants } from './tenantsApi'
 import { StaffGate } from '@invoice-os/console-session'
 import { SESSION_KEY, appBase, expireSession, landingBase } from './auth'
@@ -152,6 +153,10 @@ function Console() {
   const onHealth = screen === 'health'
   const healthRead = useAsync(fetchStaffHealth, { immediate: onHealth, deps: [onHealth], isEmpty: () => false })
   const healthStatus = healthRead.status === 'error' ? (healthRead.error?.status === 403 ? 'forbidden' : 'error') : healthRead.status === 'ready' ? 'ready' : 'loading'
+  const [healthRange, setHealthRange] = useState<RangeKey>(DEFAULT_RANGE)
+  const [healthService, setHealthService] = useState('')
+  const metricsRead = useAsync(() => fetchStaffMetrics(healthRange, healthService), { immediate: onHealth, deps: [onHealth, healthRange, healthService], isEmpty: () => false })
+  const metricsStatus = metricsRead.status === 'error' ? (metricsRead.error?.status === 403 ? 'forbidden' : 'error') : metricsRead.status === 'ready' ? 'ready' : 'loading'
   const onSubmissions = screen === 'submissions'
   const jobsRead = useAsync(() => fetchJobs(jobState, jobTenant || undefined), { immediate: onSubmissions, deps: [onSubmissions, jobState, jobTenant], isEmpty: () => false })
   const jobTenantsRead = useAsync(fetchStaffTenants, { immediate: onSubmissions, deps: [onSubmissions] })
@@ -333,7 +338,7 @@ function Console() {
   const jobDetail = freshJob ?? (jobRead.status === 'loading' && lastJob.current?.job.id === openJob ? lastJob.current : null)
   const jobNote = jobRead.status === 'error' ? { text: jobRead.error?.status === 403 ? 'Your account is not ASComply staff.' : (jobRead.error?.message ?? 'Unavailable'), onRetry: jobRead.run } : { text: 'Loading job…' }
   const jobInFlight = useRef(false)
-  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, healthRead, auditRead, auditTenantsRead, aiRead, totalsRead, aiTenantsRead, changesRead, entitiesRead, previewRead].some((r) => r.error?.status === 401)
+  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, healthRead, metricsRead, auditRead, auditTenantsRead, aiRead, totalsRead, aiTenantsRead, changesRead, entitiesRead, previewRead].some((r) => r.error?.status === 401)
   useEffect(() => {
     if (expired) void expireSession()
   }, [expired])
@@ -635,7 +640,22 @@ function Console() {
             />
           )}
           {screen === 'blog' && <Blog filters={blogFilters} onFilters={setBlogFilters} onToast={showToast} />}
-          {screen === 'health' && <Health status={healthStatus} errorText={healthRead.error?.message} data={healthRead.data ?? null} onRetry={healthRead.run} />}
+          {screen === 'health' && (
+            <Health
+              status={healthStatus}
+              errorText={healthRead.error?.message}
+              data={healthRead.data ?? null}
+              onRetry={healthRead.run}
+              metricsStatus={metricsStatus}
+              metricsErrorText={metricsRead.error?.message}
+              metrics={metricsRead.data ?? null}
+              onRetryMetrics={metricsRead.run}
+              range={healthRange}
+              onRange={setHealthRange}
+              service={healthService}
+              onService={setHealthService}
+            />
+          )}
         </div>
       </main>
 

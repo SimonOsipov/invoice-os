@@ -11,6 +11,9 @@ import { TimeChart } from './components/TimeChart'
 import { Tenants } from './components/Tenants'
 import type { AiCall } from './aiUsageApi'
 import type { FleetHealth, ServiceHealth, StaffHealth, TrendPoint } from './healthApi'
+import { sentryServiceUrl } from './helpers'
+import { DASHBOARDS, METRIC_SERVICES, type PanelKey, type Point, type StaffMetrics } from './metricsApi'
+import { chipStyle } from './components/Submissions'
 import { SEED_RULES } from './rulesFixture'
 import type { RuleVersion } from './rulesApi'
 import type { StaffInvoice, StaffMember, StaffTenant, StaffTenantDetail } from './tenantsApi'
@@ -132,7 +135,60 @@ const HEALTH: StaffHealth = {
   queue_depth: 3,
   trend: [point(0, null, 1, 0), point(5, 0, 2, 1), point(10, 1, 3, 2)],
 }
-const HEALTH_PROPS: Parameters<typeof Health>[0] = { status: 'ready', data: HEALTH, onRetry: noop }
+const PANEL_UNITS: Record<PanelKey, string> = {
+  req_per_min: 'req/min',
+  error_pct: '%',
+  latency_p50_ms: 'ms',
+  latency_p95_ms: 'ms',
+  cpu_pct: '% of limit',
+  ram_pct: '% of limit',
+  instances: 'count',
+  cold_starts_per_min: '/min',
+  sql_cpu_pct: '%',
+  sql_ram_pct: '%',
+  sql_disk_pct: '%',
+  sql_connections: 'count',
+}
+type PanelSeries = Partial<Record<PanelKey, Record<string, Point[]>>>
+// Defaults: two services; fleet req 100, 5xx 1.00 %, p95 1200 ms, 23 connections of 80.
+const metricsWith = (over: PanelSeries = {}, available = true): StaffMetrics => {
+  const base: PanelSeries = {
+    req_per_min: { a: [[0, 10]], b: [[0, 90]] },
+    error_pct: { a: [[0, 10]], b: [[0, 0]] },
+    latency_p95_ms: { a: [[0, 300]], b: [[0, 1200]] },
+    sql_connections: { database: [[0, 23]] },
+  }
+  const by = { ...base, ...over }
+  return {
+    range: '1h',
+    service: '',
+    start: '2026-10-14T10:00:00Z',
+    end: '2026-10-14T11:00:00Z',
+    step_seconds: 60,
+    connection_budget: 80,
+    panels: (Object.keys(PANEL_UNITS) as PanelKey[]).map((key) => ({
+      key,
+      unit: PANEL_UNITS[key],
+      available,
+      series: Object.entries(by[key] ?? {}).map(([name, points]) => ({ name, points })),
+    })),
+    limits: { available: true, services: [] },
+    deploys: { available: true, revisions: [] },
+  }
+}
+const METRICS = metricsWith()
+const HEALTH_PROPS: Parameters<typeof Health>[0] = {
+  status: 'ready',
+  data: HEALTH,
+  onRetry: noop,
+  metricsStatus: 'ready',
+  metrics: METRICS,
+  onRetryMetrics: noop,
+  range: '1h',
+  onRange: noop,
+  service: '',
+  onService: noop,
+}
 const healthWith = (over: Partial<Parameters<typeof Health>[0]>) => renderToStaticMarkup(createElement(Health, { ...HEALTH_PROPS, ...over }))
 const healthData = (over: Partial<StaffHealth>) => healthWith({ data: { ...HEALTH, ...over } })
 
@@ -535,7 +591,7 @@ describe('System health markup', () => {
   const tileOf = (ts: Tag[], key: string) => {
     const at = ts.findIndex((t) => attr(t, 'data-tile') === key)
     expect(at, `tile ${key}`).toBeGreaterThan(-1)
-    const next = ts.findIndex((t, i) => i > at && attr(t, 'data-tile') !== '')
+    const next = ts.findIndex((t, i) => i > at && (attr(t, 'data-tile') !== '' || attr(t, 'data-panels') !== '' || t.text === 'Services'))
     return ts.slice(at, next === -1 ? undefined : next)
   }
   const tilesOf = (html: string) => {
@@ -547,7 +603,7 @@ describe('System health markup', () => {
   it('Health tiles show fleet, queue depth and dead-lettered', () => {
     const html = healthWith({})
     const { all, fleet, queue, dead } = tilesOf(html)
-    expect(all.filter((t) => attr(t, 'data-tile')).map((t) => attr(t, 'data-tile'))).toEqual(['fleet', 'queue', 'dead-lettered'])
+    expect(all.filter((t) => attr(t, 'data-tile')).map((t) => attr(t, 'data-tile'))).toEqual(['fleet', 'req', 'errors', 'p95', 'connections', 'queue', 'dead-lettered'])
     expect(texts(fleet)).toEqual(expect.arrayContaining(['Fleet', '1/3', 'services up', 'DEGRADED', 'Down: docling, auth']))
     expect(texts(queue)).toEqual(expect.arrayContaining(['Queue depth', '3', 'jobs']))
     expect(texts(queue).filter((x) => /^[A-Z]+$/.test(x)), 'queue has no status word').toEqual([])
@@ -614,18 +670,140 @@ describe('System health markup', () => {
     const failed = healthWith({ status: 'error', errorText: 'boom', data: null })
     expect(failed).toContain('boom')
     expect(buttonByText(failed, 'Retry').attrs).toContain('v2-btn-ghost')
+    const metricsFailed = healthWith({ metricsStatus: 'error', metricsErrorText: 'metrics boom', metrics: null })
+    const ts = parse(metricsFailed)
+    for (const key of ['fleet', 'queue', 'dead-lettered']) tileOf(ts, key)
+    expect(ts.filter((t) => attr(t, 'data-service'))).toHaveLength(3)
+    expect(metricsFailed).toContain('metrics boom')
+    expect(buttonByText(metricsFailed, 'Retry').attrs).toContain('v2-btn-ghost')
+    expect(healthWith({ metricsStatus: 'forbidden', metrics: null })).toContain('Your account is not ASComply staff.')
   })
 
-  it('the health grid holds three columns and collapses', () => {
-    const grids = withClass(parse(healthWith({})), 'ops-health-grid')
-    expect(grids).toHaveLength(1)
-    expect(style(grids[0])['grid-template-columns']).toBe('repeat(3, minmax(0, 1fr))')
+  it('the stat and jobs grids hold their tracks and collapse', () => {
+    const ts = parse(healthWith({}))
+    const stats = withClass(ts, 'ops-health-stats')
+    const jobs = withClass(ts, 'ops-health-jobs')
+    expect(stats).toHaveLength(1)
+    expect(jobs).toHaveLength(1)
+    expect(withClass(ts, 'ops-health-grid')).toHaveLength(0)
+    expect(style(stats[0])['grid-template-columns']).toBe('repeat(5, minmax(0, 1fr))')
+    expect(style(jobs[0])['grid-template-columns']).toBe('repeat(2, minmax(0, 1fr))')
     const css = readFileSync(new URL('./styles/support.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
     const rule = (width: number) => css.match(new RegExp(`@media \\(max-width: ${width}px\\) \\{([\\s\\S]*?)\\n\\}`, 'i'))![1]
-    const cols = (width: number) => rule(width).match(/\.ops-health-grid\s*\{\s*grid-template-columns:\s*([^;]*);/i)?.[1]
-    expect(cols(1024)).toBe('repeat(2, minmax(0, 1fr)) !important')
-    expect(cols(768)).toBe('repeat(2, minmax(0, 1fr)) !important')
-    expect(cols(480)).toBe('minmax(0, 1fr) !important')
+    const cols = (width: number, cls: string) => rule(width).match(new RegExp(`\\.${cls}[^{]*\\{\\s*grid-template-columns:\\s*([^;]*);`, 'i'))?.[1]
+    expect(cols(1024, 'ops-health-stats')).toBe('repeat(3, minmax(0, 1fr)) !important')
+    expect(cols(768, 'ops-health-stats')).toBe('repeat(2, minmax(0, 1fr)) !important')
+    expect(cols(480, 'ops-health-stats')).toBe('minmax(0, 1fr) !important')
+    expect(rule(480)).toMatch(/\.ops-health-jobs\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\) !important;/)
+    expect(rule(1024)).not.toContain('ops-health-jobs')
+    expect(rule(768)).not.toContain('ops-health-jobs')
+  })
+
+  it('the range bar holds the five ranges with 1h pressed', () => {
+    const chips = withClass(parse(healthWith({})), 'ops-chip')
+    expect(chips.map((c) => c.text)).toEqual(['15m', '1h', '6h', '24h', '7d'])
+    expect(chips.map((c) => attr(c, 'aria-pressed'))).toEqual(['false', 'true', 'false', 'false', 'false'])
+    const painted = (on: boolean) => style(parse(renderToStaticMarkup(createElement('i', { style: chipStyle(on, null) })))[0])
+    expect(chips.map((c) => style(c))).toEqual([painted(false), painted(true), painted(false), painted(false), painted(false)])
+  })
+
+  it('the service select lists All services then every metric service', () => {
+    const html = healthWith({})
+    const sel = html.match(/<select\b[^>]*aria-label="Service"[^>]*>([\s\S]*?)<\/select>/)![1]
+    const opts = [...sel.matchAll(/<option value="([^"]*)"[^>]*>([^<]*)</g)]
+    expect(opts.map((o) => o[1])).toEqual(['', ...METRIC_SERVICES])
+    expect(opts[0][2]).toBe('All services')
+  })
+
+  it('the stat row shows fleet, requests, 5xx, p95 and connections', () => {
+    const ts = parse(healthWith({}))
+    expect(ts.filter((t) => attr(t, 'data-tile')).map((t) => attr(t, 'data-tile')).slice(0, 5)).toEqual(['fleet', 'req', 'errors', 'p95', 'connections'])
+    expect(texts(tileOf(ts, 'req'))).toEqual(expect.arrayContaining(['Requests', '100', 'req/min']))
+    expect(texts(tileOf(ts, 'req')).filter((x) => /^[A-Z ]+$/.test(x))).toEqual([])
+    expect(texts(tileOf(ts, 'errors'))).toEqual(expect.arrayContaining(['1.00', '%', 'OK']))
+    expect(texts(tileOf(ts, 'p95'))).toEqual(expect.arrayContaining(['1.20', 's', 'HIGH']))
+    expect(texts(tileOf(ts, 'connections'))).toEqual(expect.arrayContaining(['23', 'of 80', 'OK']))
+  })
+
+  const dotOf = (ts: Tag[]) => ts.map((t) => style(t).background).find((b) => b?.includes('--status-'))
+
+  it('a stat over its threshold reads HIGH in red', () => {
+    const ts = parse(healthWith({ metrics: metricsWith({ error_pct: { a: [[0, 1.5]] }, req_per_min: { a: [[0, 10]] }, sql_connections: { database: [[0, 70]] } }) }))
+    for (const key of ['errors', 'connections']) {
+      const t = tileOf(ts, key)
+      expect(texts(t), key).toContain('HIGH')
+      expect(dotOf(t), key).toBe('var(--status-red-text)')
+    }
+  })
+
+  it('a stat that peaked over its threshold reads PEAKED in amber', () => {
+    const ts = parse(healthWith({ metrics: metricsWith({ error_pct: { a: [[0, 3], [60, 0.2]] }, req_per_min: { a: [[0, 10], [60, 10]] } }) }))
+    const t = tileOf(ts, 'errors')
+    expect(texts(t)).toEqual(expect.arrayContaining(['0.20', 'PEAKED']))
+    expect(dotOf(t)).toBe('var(--status-amber-text)')
+  })
+
+  it('a stat with no data reads NO DATA in the muted tone', () => {
+    const ts = parse(healthWith({ metrics: metricsWith({}, false) }))
+    for (const key of ['req', 'errors', 'p95', 'connections']) {
+      const t = tileOf(ts, key)
+      expect(texts(t), key).toEqual(expect.arrayContaining(['—', 'NO DATA']))
+      expect(dotOf(t), key).toBe('var(--status-muted-text)')
+    }
+  })
+
+  it('metric tiles carry no word while the metrics read loads', () => {
+    const html = healthWith({ metricsStatus: 'loading', metrics: null })
+    const ts = parse(html)
+    for (const key of ['req', 'errors', 'p95', 'connections']) {
+      const t = tileOf(ts, key)
+      expect(texts(t), key).toContain('—')
+      expect(texts(t).filter((x) => /^[A-Z ]+$/.test(x)), key).toEqual([])
+    }
+    expect(html).toContain('Loading metrics…')
+  })
+
+  it('the jobs row keeps queue depth and dead-lettered', () => {
+    const ts = parse(healthWith({}))
+    for (const [key, value, word] of [['queue', '3', ''], ['dead-lettered', '2', 'ATTENTION']]) {
+      const t = tileOf(ts, key)
+      expect(texts(t), key).toContain(value)
+      if (word) expect(texts(t)).toContain(word)
+      expect(t.filter((x) => x.name === 'svg'), key).toHaveLength(1)
+    }
+  })
+
+  it('the header links open both Cloud Monitoring dashboards in a new tab', () => {
+    const links = [...healthWith({}).matchAll(/<a\b([^>]*)>(?:<svg[\s\S]*?<\/svg>)?([^<]*)<\/a>/g)]
+      .map((m) => ({ attrs: ` ${m[1]}`, text: m[2] }))
+      .filter((l) => l.text.endsWith('dashboard'))
+    expect(links.map((l) => l.text)).toEqual(['Services dashboard', 'Database and edge dashboard'])
+    expect(links.map((l) => decode(attr(l, 'href')))).toEqual([DASHBOARDS.services, DASHBOARDS.database_edge])
+    for (const l of links) {
+      expect(attr(l, 'target')).toBe('_blank')
+      expect(attr(l, 'rel')).toBe('noopener noreferrer')
+    }
+  })
+
+  it('each service row links to its Sentry issues', () => {
+    const ts = parse(healthData({ fleet: { status: 'ok', services: [svc('gateway', 'up'), svc('docling', 'up')] } }))
+    for (const name of ['gateway', 'docling']) {
+      const row = ts.indexOf(ts.find((t) => attr(t, 'data-service') === name)!)
+      const link = ts.slice(row).find((t) => t.name === 'a')!
+      expect(decode(attr(link, 'href'))).toBe(sentryServiceUrl(name))
+      expect(attr(link, 'aria-label')).toBe(`Open ${name} in Sentry`)
+      expect(attr(link, 'target')).toBe('_blank')
+      expect(attr(link, 'rel')).toBe('noopener noreferrer')
+    }
+  })
+
+  it('the auth row has no Sentry link', () => {
+    const html = healthData({ fleet: { status: 'ok', services: [svc('gateway', 'up'), svc('auth', 'up')] } })
+    const rows = [...html.matchAll(/<div data-service="([^"]*)"[^>]*>([\s\S]*?)(?=<div data-service=|$)/g)]
+    const [gateway, auth] = rows.map((r) => r[2])
+    expect(gateway).toContain('aria-label="Open gateway in Sentry"')
+    expect(auth).not.toContain('<a ')
+    expect(auth).not.toContain('Sentry')
   })
 
   it('long names stay on one line', () => {

@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { ApiError } from '@invoice-os/api-client'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
 import { expireSession } from './auth'
 import { fetchStaffHealth, type StaffHealth } from './healthApi'
+import { fetchStaffMetrics, type StaffMetrics } from './metricsApi'
 import { fetchCodeListSummary, fetchRules, fetchVersions } from './rulesApi'
 import { fetchStaffTenants } from './tenantsApi'
 
@@ -37,10 +38,27 @@ vi.mock('./healthApi', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./healthApi')>()),
   fetchStaffHealth: vi.fn(),
 }))
+vi.mock('./metricsApi', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./metricsApi')>()),
+  fetchStaffMetrics: vi.fn(),
+}))
 
 const rulesRead = vi.mocked(fetchRules)
 const versionsRead = vi.mocked(fetchVersions)
 const health = vi.mocked(fetchStaffHealth)
+const metrics = vi.mocked(fetchStaffMetrics)
+
+const METRICS: StaffMetrics = {
+  range: '1h',
+  service: '',
+  start: '2026-10-14T10:00:00Z',
+  end: '2026-10-14T11:00:00Z',
+  step_seconds: 60,
+  connection_budget: 80,
+  panels: [],
+  limits: { available: true, services: [] },
+  deploys: { available: true, revisions: [] },
+}
 
 const HEALTH: StaffHealth = {
   checked_at: '2026-10-14T10:05:31Z',
@@ -56,6 +74,7 @@ beforeEach(() => {
   vi.mocked(fetchCodeListSummary).mockResolvedValue([])
   vi.mocked(fetchStaffTenants).mockResolvedValue([])
   health.mockResolvedValue(HEALTH)
+  metrics.mockResolvedValue(METRICS)
 })
 afterEach(() => {
   cleanup()
@@ -111,5 +130,36 @@ describe('Console system health wiring', () => {
     expect(versionsRead).toHaveBeenCalledTimes(2)
     await openHealth()
     await waitFor(() => expect(health).toHaveBeenCalledTimes(2))
+  })
+
+  it('a range and a service narrow the metrics read', async () => {
+    render(<App />)
+    await openHealth()
+    await screen.findByText('1/1')
+    await waitFor(() => expect(metrics).toHaveBeenLastCalledWith('1h', ''))
+    fireEvent.click(screen.getByRole('button', { name: '6h' }))
+    await waitFor(() => expect(metrics).toHaveBeenLastCalledWith('6h', ''))
+    fireEvent.change(screen.getByLabelText('Service'), { target: { value: 'submission' } })
+    await waitFor(() => expect(metrics).toHaveBeenLastCalledWith('6h', 'submission'))
+    expect(health).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed metrics read leaves the health blocks and retries', async () => {
+    metrics.mockRejectedValueOnce(new ApiError('http', 'metrics boom', 500))
+    render(<App />)
+    await openHealth()
+    const note = await screen.findByText('metrics boom')
+    expect(screen.getByText('1/1')).toBeTruthy()
+    fireEvent.click(within(note.closest('[data-panels]') as HTMLElement).getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(metrics).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.queryByText('metrics boom')).toBeNull())
+    expect(screen.getByText('1/1')).toBeTruthy()
+  })
+
+  it('a 401 on the metrics read expires the session', async () => {
+    metrics.mockRejectedValueOnce(new ApiError('http', 'expired', 401))
+    render(<App />)
+    await openHealth()
+    await waitFor(() => expect(expireSession).toHaveBeenCalledTimes(1))
   })
 })

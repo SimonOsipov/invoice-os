@@ -773,16 +773,141 @@ type SeenHealth = {
   trend: { services_down: number | null; queue_depth: number; dead_lettered: number }[]
 }
 
-// Armed before the nav click: the screen's own read is the comparison, so a shard moving the queue cannot race it.
-const armHealth = (page: Page): Promise<SeenHealth> =>
-  page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === STAFF_HEALTH, { timeout: 30_000 }).then((r) => r.json() as Promise<SeenHealth>)
+type SeenPanel = { key: string; available: boolean; series: { name: string; points: [number, number][] }[] }
+// internal/systemhealth PanelData, DeploysSection, LimitsSection
+type SeenMetrics = { range: string; service: string; connection_budget: number; panels: SeenPanel[]; limits: { available: boolean }; deploys: { available: boolean } }
+type Armed = { health: SeenHealth; metrics: SeenMetrics; metricsUrl: URL }
+
+// Armed before the nav click: the screen's own reads are the comparison, so a shard moving the queue cannot race them.
+const armHealth = async (page: Page): Promise<Armed> => {
+  const first = (path: string) => page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === path, { timeout: 30_000 })
+  const [h, m] = await Promise.all([first(STAFF_HEALTH), first('/api/submission/v1/staff/metrics')])
+  return { health: (await h.json()) as SeenHealth, metrics: (await m.json()) as SeenMetrics, metricsUrl: new URL(m.url()) }
+}
 
 const shortOf = (build?: string): string => (build ? build.slice(0, 7) : '—')
 const nonNull = (trend: SeenHealth['trend'], key: 'services_down' | 'queue_depth' | 'dead_lettered'): number => trend.filter((p) => p[key] !== null).length
 
+// systemhealth.Panels, in wire order.
+const METRIC_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'sql_cpu_pct', 'sql_ram_pct', 'sql_disk_pct', 'sql_connections']
+// systemhealth.ConnectionBudget
+const CONNECTION_BUDGET = 80
+// systemhealth.MetricServices
+const METRIC_SERVICES = ['app', 'auth', 'blog', 'dashboard', 'docling', 'gateway', 'invoice', 'landing', 'library', 'notifications', 'ops-console', 'portfolio', 'submission', 'support-console', 'tenancy', 'validation', 'worker']
+// Terraform output dashboard_urls in invoice-os-infra.
+const DASHBOARD_HREFS: Record<string, string> = {
+  'Services dashboard': 'https://console.cloud.google.com/monitoring/dashboards/builder/27155b37-f324-478d-9e9d-c91ede1837f9?project=ascomply-prod',
+  'Database and edge dashboard': 'https://console.cloud.google.com/monitoring/dashboards/builder/3c070f78-6025-432a-b178-5cde3fe08514?project=ascomply-prod',
+}
+const SENTRY_PROJECT = '4512190351474768'
+
+type SeenPoints = [number, number][]
+const panelSeries = (m: SeenMetrics, key: string): SeenPanel['series'] => m.panels.find((p) => p.key === key && p.available)?.series.filter((s) => s.points.length > 0) ?? []
+// The series the SQL panels draw: the "database" series, else the first.
+const sqlSeries = (m: SeenMetrics, key: string): SeenPoints => {
+  const all = panelSeries(m, key)
+  return (all.find((s) => s.name === 'database') ?? all[0])?.points ?? []
+}
+const panelHasData = (m: SeenMetrics, key: string): boolean =>
+  key === 'sql_util' ? ['sql_cpu_pct', 'sql_ram_pct', 'sql_disk_pct'].some((k) => sqlSeries(m, k).length > 0) : key === 'sql_connections' ? sqlSeries(m, key).length > 0 : panelSeries(m, key).length > 0
+// Stat source has a point: the 5xx tile needs an error point with a request point on the same series and step.
+const statHasData = (m: SeenMetrics, key: string): boolean => {
+  if (key === 'req') return panelSeries(m, 'req_per_min').length > 0
+  if (key === 'p95') return panelSeries(m, 'latency_p95_ms').length > 0
+  if (key === 'connections') return sqlSeries(m, 'sql_connections').length > 0
+  const req = new Map(panelSeries(m, 'req_per_min').map((s) => [s.name, new Set(s.points.map((p) => p[0]))]))
+  return panelSeries(m, 'error_pct').some((s) => s.points.some((p) => req.get(s.name)?.has(p[0])))
+}
+
+// Panels and stat tiles equal one metrics answer: No data iff no point, else a line.
+async function metricsMatch(page: Page, m: SeenMetrics, what: string): Promise<void> {
+  const mn = mainOf(page)
+  await expect(mn.getByText('Loading metrics…'), `${what}: metrics have loaded`).toHaveCount(0)
+  const panels = mn.locator('.ops-health-panels > [data-panel]')
+  await expect(panels, `${what}: panels`).toHaveCount(PANEL_KEYS.length)
+  for (const key of PANEL_KEYS) {
+    const p = mn.locator(`[data-panel="${key}"]`)
+    const has = panelHasData(m, key)
+    await expect(p.getByText('No data', { exact: true }), `${what}: ${key} No data`).toHaveCount(has ? 0 : 1)
+    if (has) await expect(p.locator('svg [data-line]').first(), `${what}: ${key} draws a line`).toBeAttached()
+    else await expect(p.locator('[data-line]'), `${what}: ${key} draws no line`).toHaveCount(0)
+  }
+  for (const key of STAT_KEYS.filter((k) => k !== 'fleet')) {
+    const t = mn.locator(`[data-tile="${key}"]`)
+    const has = statHasData(m, key)
+    await expect(t.getByText('NO DATA', { exact: true }), `${what}: ${key} NO DATA`).toHaveCount(has ? 0 : 1)
+    if (has) await expect(t.locator('.money'), `${what}: ${key} value`).not.toHaveText('—')
+    else await expect(t.locator('.money'), `${what}: ${key} value`).toHaveText('—')
+  }
+}
+
+// The armed answers drive the first comparison; the chip and the select each send a fresh read.
+async function metricsReads(page: Page, health: SeenHealth, first: SeenMetrics, firstUrl: URL): Promise<void> {
+  const mn = mainOf(page)
+  expect(firstUrl.searchParams.get('range'), 'first metrics request range').toBe('1h')
+  expect(firstUrl.searchParams.has('service'), 'first metrics request names no service').toBe(false)
+  expect(first.panels.map((p) => p.key), 'metrics panel keys are the systemhealth panels').toEqual(METRIC_KEYS)
+  expect(first.connection_budget, 'systemhealth.ConnectionBudget').toBe(CONNECTION_BUDGET)
+  await expect(mn.getByRole('button', { name: '1h', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await metricsMatch(page, first, 'range 1h')
+  await expect(mn.locator('[data-tile="connections"]').getByText(`of ${CONNECTION_BUDGET}`), 'connections tile shows the budget').toHaveCount(1)
+
+  const read = (range: string, service: string | null) =>
+    page.waitForResponse((r) => {
+      const u = new URL(r.url())
+      return r.request().method() === 'GET' && u.pathname === '/api/submission/v1/staff/metrics' && u.searchParams.get('range') === range && u.searchParams.get('service') === service
+    })
+  const sent = (range: string, service: string | null) =>
+    page.waitForRequest((r) => {
+      const u = new URL(r.url())
+      return u.pathname === '/api/submission/v1/staff/metrics' && u.searchParams.get('range') === range && u.searchParams.get('service') === service
+    })
+
+  const [, six] = await Promise.all([sent('6h', null), read('6h', null), mn.getByRole('button', { name: '6h', exact: true }).click()]).then((r) => [r[0], r[1]] as const)
+  await expect(mn.getByRole('button', { name: '6h', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  expect(six.status(), '6h read status').toBe(200)
+  await metricsMatch(page, (await six.json()) as SeenMetrics, 'range 6h')
+
+  const name = health.fleet.services.map((s) => s.name).find((n) => METRIC_SERVICES.includes(n)) ?? METRIC_SERVICES[0]
+  const select = mn.locator('select[aria-label="Service"]')
+  const options = await select.locator('option').evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value))
+  expect(options, 'the service select lists systemhealth.MetricServices after All services').toEqual(['', ...METRIC_SERVICES])
+  const [, one] = await Promise.all([sent('6h', name), read('6h', name), select.selectOption(name)]).then((r) => [r[0], r[1]] as const)
+  expect(one.status(), `${name} read status`).toBe(200)
+  const oneBody = (await one.json()) as SeenMetrics
+  expect(oneBody.service, 'the answer names the selected service').toBe(name)
+  await metricsMatch(page, oneBody, `service ${name}`)
+
+  // Back to the default view: the fixture step clicks 6h and needs a changed range.
+  await Promise.all([read('1h', name), mn.getByRole('button', { name: '1h', exact: true }).click()])
+  await Promise.all([read('1h', null), select.selectOption('')])
+  await expect(mn.getByRole('button', { name: '1h', exact: true })).toHaveAttribute('aria-pressed', 'true')
+}
+
+async function healthLinks(page: Page, seen: SeenHealth): Promise<void> {
+  const mn = mainOf(page)
+  const attrs = async (link: Locator, what: string, href: string): Promise<void> => {
+    await expect(link, `${what} href`).toHaveAttribute('href', href)
+    await expect(link, `${what} target`).toHaveAttribute('target', '_blank')
+    await expect(link, `${what} rel`).toHaveAttribute('rel', 'noopener noreferrer')
+  }
+  for (const [label, href] of Object.entries(DASHBOARD_HREFS)) await attrs(mn.getByRole('link', { name: label }), label, href)
+  if (seen.fleet.status === 'unknown') return
+  expect(seen.fleet.services.length, 'services with links').toBeGreaterThan(0)
+  for (const s of seen.fleet.services) {
+    const row = mn.locator(`[data-service="${s.name}"]`)
+    const link = row.getByRole('link')
+    if (s.name === 'auth') {
+      await expect(link, 'auth has no Sentry link').toHaveCount(0)
+      continue
+    }
+    await attrs(link, `${s.name} Sentry link`, `https://as-comply.sentry.io/issues/?query=server_name:${s.name}&project=${SENTRY_PROJECT}&statsPeriod=14d`)
+  }
+}
+
 async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Promise<void> {
   const mn = mainOf(page)
-  const seen = await (armed as Promise<SeenHealth>)
+  const { health: seen, metrics, metricsUrl } = await (armed as Promise<Armed>)
   const tile = (key: string): Locator => mn.locator(`[data-tile="${key}"]`)
   await expect(tile('fleet'), 'the health tiles have loaded').toBeVisible()
 
@@ -828,6 +953,9 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
 
   await expect(mn.getByText(/APP latency|APP error rate|throughput|Recon backlog/i), 'no unmeasured tile').toHaveCount(0)
   await expectStyles(parent(mn.locator('[data-service]').first().getByText(/^(UP|DOWN)$/)), 'service badge', { radius: '4px' })
+
+  await metricsReads(page, seen, metrics, metricsUrl)
+  await healthLinks(page, seen)
 
   // Core AC 2: the fleet route grants the console no CORS.
   const fleet = await page.request.get(`${apiBase()}/healthz/fleet`, { headers: { ...fleetHeaders(), Origin: new URL(page.url()).origin } })

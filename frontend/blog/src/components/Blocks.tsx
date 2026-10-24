@@ -2,6 +2,7 @@ import type { Block } from '../data'
 import { Icon } from '../icons'
 import { noteKindOf } from '../model'
 import { DemoBlock } from './DemoBlock'
+import { Linked } from '@invoice-os/api-client/linked'
 
 // An unknown block type renders nothing.
 export function Blocks({ blocks }: { blocks: Block[] }) {
@@ -14,7 +15,7 @@ export function Blocks({ blocks }: { blocks: Block[] }) {
           <div key={k} style={{ display: 'flex', flexDirection: 'column' }}>
             {b.type === 'p' && (
               <p className="t-body" style={{ margin: 0, fontSize: 17, color: 'var(--foreground)', textWrap: 'pretty' }}>
-                {b.text}
+                <Linked text={b.text} />
               </p>
             )}
             {b.type === 'h' && (
@@ -39,7 +40,7 @@ export function Blocks({ blocks }: { blocks: Block[] }) {
                     <span style={{ color: 'var(--teal)', display: 'inline-flex', marginTop: 4 }}>
                       <Icon name="circle-check" size={18} />
                     </span>
-                    <span className="t-body" style={{ fontSize: 17, color: 'var(--foreground)' }}>{it}</span>
+                    <span className="t-body" style={{ fontSize: 17, color: 'var(--foreground)' }}><Linked text={it} /></span>
                   </div>
                 ))}
               </div>
@@ -69,7 +70,7 @@ export function Blocks({ blocks }: { blocks: Block[] }) {
                     textWrap: 'pretty',
                   }}
                 >
-                  “{b.text}”
+                  “<Linked text={b.text} />”
                 </blockquote>
                 <figcaption className="t-step">{b.who}</figcaption>
               </figure>
@@ -112,7 +113,7 @@ function Note({ kind, title, text }: { kind: string; title: string; text: string
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
         <span className="t-step" style={{ color: n.labelColor }}>{n.label}</span>
         <span className="blog-wrap" style={{ fontSize: 17, fontWeight: 700, letterSpacing: '-0.01em', lineHeight: 1.35 }}>{title}</span>
-        <span className="t-body-sm" style={{ color: 'var(--foreground)' }}>{text}</span>
+        <span className="t-body-sm" style={{ color: 'var(--foreground)' }}><Linked text={text} /></span>
       </div>
     </div>
   )

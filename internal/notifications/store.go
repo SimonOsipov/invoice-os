@@ -151,7 +151,7 @@ func (s *Store) merge(ctx context.Context, in intake) error {
 		}
 	}
 	// RETURNING old/new (Postgres 18) sees the prior row, so exactly one concurrent sign-up wins.
-	if in.demo || (in.registered && newlyRegistered) {
+	if in.demo || newlyRegistered {
 		if _, err := s.river.InsertTx(ctx, tx, DemoDealArgs{Email: email, Name: in.name, Company: in.company, SignUp: !in.demo}, nil); err != nil {
 			return fmt.Errorf("notifications: queue demo deal: %w", err)
 		}

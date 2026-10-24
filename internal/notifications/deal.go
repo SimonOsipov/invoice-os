@@ -6,8 +6,6 @@ import (
 	"log/slog"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -31,18 +29,15 @@ func (DemoDealArgs) Kind() string { return "demo_deal" }
 
 func (DemoDealArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: QueueContacts} }
 
-func dealName(company, name, label string) string {
+func dealName(company, name, label, fallback string) string {
 	if c := strings.TrimSpace(company); c != "" {
 		return c + " — " + label
 	}
 	if n := strings.TrimSpace(name); n != "" {
 		return n + " — " + label
 	}
-	r, size := utf8.DecodeRuneInString(label)
-	return string(unicode.ToUpper(r)) + label[size:]
+	return fallback
 }
-
-func demoDealName(company, name string) string { return dealName(company, name, "demo request") }
 
 // DemoDealWorker opens one HubSpot deal for a demo request or a first sign-up.
 type DemoDealWorker struct {
@@ -69,11 +64,11 @@ func (w *DemoDealWorker) Work(ctx context.Context, job *river.Job[DemoDealArgs])
 
 	first, last := splitName(job.Args.Name)
 	c := Contact{Email: job.Args.Email, FirstName: first, LastName: last, Company: job.Args.Company}
-	label := "demo request"
+	label, fallback := "demo request", "Demo request"
 	if job.Args.SignUp {
-		label = "sign-up"
+		label, fallback = "sign-up", "Sign-up"
 	}
-	if err = w.HubSpot.OpenDemoDeal(ctx, c, dealName(job.Args.Company, job.Args.Name, label)); err != nil {
+	if err = w.HubSpot.OpenDemoDeal(ctx, c, dealName(job.Args.Company, job.Args.Name, label, fallback)); err != nil {
 		logDeliveryFailure(ctx, w.Logger, destHubSpotDeal, err)
 		return err
 	}

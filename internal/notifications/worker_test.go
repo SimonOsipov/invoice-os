@@ -1208,8 +1208,8 @@ func TestDemoDealName(t *testing.T) {
 		{"  Navy  ", "", "Navy — demo request"},
 		{long, "", long + " — demo request"},
 	} {
-		if got := demoDealName(c.company, c.name); got != c.want {
-			t.Errorf("demoDealName(%q, %q) = %q, want %q", c.company, c.name, got, c.want)
+		if got := dealName(c.company, c.name, "demo request", "Demo request"); got != c.want {
+			t.Errorf("dealName(%q, %q, demo request) = %q, want %q", c.company, c.name, got, c.want)
 		}
 	}
 }
@@ -1237,6 +1237,9 @@ func (r *qaRig) dealRows(t *testing.T, email string) []*rivertype.JobRow {
 			t.Fatalf("scan job id: %v", err)
 		}
 		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read the demo_deal jobs for %s: %v", email, err)
 	}
 	rows.Close()
 	var out []*rivertype.JobRow
@@ -1301,7 +1304,7 @@ func TestSignUpDealName(t *testing.T) {
 		{"  Navy  ", "", "Navy — sign-up"},
 		{long, "", long + " — sign-up"},
 	} {
-		if got := dealName(c.company, c.name, "sign-up"); got != c.want {
+		if got := dealName(c.company, c.name, "sign-up", "Sign-up"); got != c.want {
 			t.Errorf("dealName(%q, %q, sign-up) = %q, want %q", c.company, c.name, got, c.want)
 		}
 	}

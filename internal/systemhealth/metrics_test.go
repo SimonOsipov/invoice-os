@@ -734,3 +734,28 @@ func TestMetricsSource_APreviewReadsOnlyItsMetadataProject(t *testing.T) {
 		t.Fatalf("saw %d Google requests, want at least %d", n, len(Panels)+2)
 	}
 }
+
+func TestMetricsSource_APreviewFleetListsOnlyItsOwnLimitsAndDeploys(t *testing.T) {
+	f, s, _ := newComboFake(t, newClock().now)
+	s.g.Suffix = "-pr-54"
+	f.override = func(path, _ string) (int, string, bool) {
+		switch {
+		case strings.HasSuffix(path, "/revisions"):
+			return 200, `{"revisions":[` + rev("gateway-pr-545", "gateway-pr-545-00001-aaa", "2026-10-23T11:00:00Z") + `,` +
+				rev("gateway-pr-54", "gateway-pr-54-00001-bbb", "2026-10-23T11:10:00Z") + `]}`, true
+		case strings.HasPrefix(path, "/v2/"):
+			return 200, svcBody("gateway-pr-545", "gateway-pr-54", "app"), true
+		}
+		return 0, "", false
+	}
+	m, err := s.Get(t.Context(), "1h", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := limitNames(m.Limits.Services); !reflect.DeepEqual(got, []string{"gateway"}) {
+		t.Errorf("limits = %v", got)
+	}
+	if len(m.Deploys.Revisions) != 1 || m.Deploys.Revisions[0].Service != "gateway" || m.Deploys.Revisions[0].Revision != "gateway-pr-54-00001-bbb" {
+		t.Errorf("deploys = %+v", m.Deploys.Revisions)
+	}
+}

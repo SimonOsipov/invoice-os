@@ -19,8 +19,7 @@
 // invoice still carries a blocking violation; run it bare, so it covers every
 // tenant.
 //
-// Against a deployed environment, run it under `railway run`. Not a service:
-// no railway.json, no Dockerfile target.
+// Not a service: no Dockerfile target.
 package main
 
 import (

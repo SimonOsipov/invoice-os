@@ -2,9 +2,6 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -225,17 +222,6 @@ func rawSteps(j workflowJob) [][]string {
 	return out
 }
 
-// checkoutsWhen returns the checkout steps of j whose if: equals cond.
-func checkoutsWhen(j workflowJob, cond string) [][]string {
-	var out [][]string
-	for _, s := range rawSteps(j) {
-		if strings.HasPrefix(s[0], "uses: actions/checkout@") && slices.Contains(s, "if: "+cond) {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
 func TestDevEnvE2EFilterKeepsEveryFrontendPackage(t *testing.T) {
 	t.Parallel()
 	var filter []string
@@ -250,37 +236,6 @@ func TestDevEnvE2EFilterKeepsEveryFrontendPackage(t *testing.T) {
 	for _, want := range []string{"- 'frontend/**'", "- 'internal/**'"} {
 		if !slices.Contains(filter, want) {
 			t.Errorf("e2e filter lacks %s", want)
-		}
-	}
-}
-
-// laneConst reads a single-quoted shell constant from scripts/ci/lane.sh.
-func laneConst(t *testing.T, name string) string {
-	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "ci", "lane.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := regexp.MustCompile(`(?m)^` + name + `='([^']*)'$`).FindStringSubmatch(string(raw))
-	if m == nil || m[1] == "" {
-		t.Fatalf("lane.sh has no non-empty %s", name)
-	}
-	return m[1]
-}
-
-func TestDevEnvBaseJobNamesMatchTheLaneLookup(t *testing.T) {
-	t.Parallel()
-	want := map[string]string{
-		"deploy-gateway": laneConst(t, "GATEWAY_JOB_PREFIX"),
-		"fleet-gate":     laneConst(t, "FLEET_GATE_JOB_PREFIX"),
-		"spa-build-gate": laneConst(t, "SPA_GATE_JOB_PREFIX"),
-	}
-	for _, j := range workflowJobsOf(readWorkflow(t, "dev-env.yml")) {
-		name, _ := jobKey(j, "name")
-		for id, prefix := range want {
-			if got := strings.HasPrefix(name, prefix); got != (j.name == id) {
-				t.Errorf("job %s name %q: starts with %q = %v, want %v", j.name, name, prefix, got, j.name == id)
-			}
 		}
 	}
 }

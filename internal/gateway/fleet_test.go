@@ -646,7 +646,7 @@ func readyUpstream(t *testing.T, code int, body string) *url.URL {
 // Readiness is reported per service and never changes the verdict: the deploy gate reads
 // only status and the HTTP code. A failure names the checks, never their errors.
 func TestFleetReportsEachServicesReadinessWithoutChangingTheVerdict(t *testing.T) {
-	leak := "failed to connect to `user=invoice_app database=railway`: 10.168.8.165:5432 (postgres.railway.internal)"
+	leak := "failed to connect to `user=invoice_app database=invoice`: 10.168.8.165:5432 (postgres.internal)"
 	rec, body := doFleet(t, map[string]*url.URL{
 		"invoice": readyUpstream(t, http.StatusOK, `{"status":"ready"}`),
 		"worker":  readyUpstream(t, http.StatusServiceUnavailable, `{"status":"not ready","failures":{"reader-database":"`+leak+`","database":"`+leak+`"}}`),

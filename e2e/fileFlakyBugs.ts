@@ -148,7 +148,7 @@ flaky_key: ${JSON.stringify(storyKey(first))}
 
 ## Objective
 
-The E2E spec \`${spec}\` (\`${first.repoFile}:${first.line}\`) failed its first attempt and passed on retry in the Dev Env runs below.${link}
+The E2E spec \`${spec}\` (\`${first.repoFile}:${first.line}\`) failed its first attempt and passed on retry in the preview runs below.${link}
 
 ## Evidence
 
@@ -270,7 +270,7 @@ export function main(argv: string[], deps: Deps = { gh: ghDefault }): number {
     if (rows.length === 0) {
       const n = expired.reduce((t, e) => t + e.count, 0)
       console.log(
-        `no retry-pass in the Dev Env runs of PR #${pr} (${runs} runs read)${n > 0 ? `; ${n} flaky artifacts expired` : ''}; wrote nothing`,
+        `no retry-pass in the preview runs of PR #${pr} (${runs} runs read)${n > 0 ? `; ${n} flaky artifacts expired` : ''}; wrote nothing`,
       )
       return 0
     }

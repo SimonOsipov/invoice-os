@@ -103,7 +103,7 @@ func (s ciShim) argv(t *testing.T) []string {
 
 func (s ciShim) sleeps(t *testing.T) []string {
 	t.Helper()
-	return railwayShim{dir: s.dir}.sleeps(t)
+	return sleepsIn(t, s.dir)
 }
 
 // outputLines is what the script appended to $GITHUB_OUTPUT; an absent file is empty.

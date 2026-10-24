@@ -1,45 +1,31 @@
 ---
 paths:
-  - "cmd/*/railway.json"
   - "cmd/*/main.go"
   - "sidecar/**"
   - "frontend/*/Dockerfile"
-  - "frontend/*/railway.json"
   - "Dockerfile"
   - "packages/monitoring/src/options.ts"
+  - "scripts/ci/preview.sh"
+  - "scripts/ci/gcp-traffic.sh"
+  - "cmd/deploycheck/**"
 ---
 # Add a service
 
-- Create a new service once, in the persistent environment. Every PR fork inherits it.
-- Name a Go service `<svc>` identically in `cmd/<svc>`, the Railway service name and the host `<svc>.railway.internal`.
+- Name a Go service `<svc>` identically in `cmd/<svc>`, the Cloud Run service `<svc>` and the image `<svc>`.
 - Build every Go service from the root `Dockerfile` with the repo root as build context. Add no per-service Dockerfile.
-- `cmd/migrate` is the pre-deploy job. It opens no listener and boots through `platform.ReportBootPanic` and `platform.Fatal` without `platform.New`.
+- Select the binary with the build argument `SERVICE`.
+- `cmd/migrate` is the pre-deploy Cloud Run job. It opens no listener and boots through `platform.ReportBootPanic` and `platform.Fatal` without `platform.New`.
 - `cmd/blog` is the other Go binary outside the fleet. It runs in the `blog` SPA image from `frontend/blog/Dockerfile`, answers `/health`, and boots through `platform.ReportBootPanic` and `platform.Fatal` without `platform.New`.
-- Select the binary with the build argument `SERVICE`. Set `SERVICE=<svc>` as a Railway service variable, because `railway.json` has no `buildArgs`.
-- Add no BuildKit `--mount=type=cache` to the shared Dockerfile. Railway requires each cache id to embed the building service's own id.
-- Copy `cmd/<svc>/railway.json` from an existing service. Use the `DOCKERFILE` builder, health path `/healthz` and restart policy `ON_FAILURE`.
-- Set `dockerfilePath`, `healthcheckPath` and `restartPolicyType` on the instance of a new service. Railway rejects `railwayConfigFile` for new services.
-- Use health path `/health` for an SPA and for `auth`. Use `/healthz` for every Go service and for `docling`.
-- Leave the Railway Root Directory at `/`. The build needs the root `go.mod` and shared `internal/`.
-- Set `PORT=8080` on every service and bind all interfaces (`:PORT`). Railway private networking is IPv6, so a loopback listener is unreachable.
-- Write a cross-service port as a literal. `${{<svc>.PORT}}` renders an empty port when `PORT` is unset.
-- Use reference variables for cross-service values, such as `${{Postgres.DATABASE_URL}}`. Never hardcode them.
-- Never set `RAILWAY_*` variables by hand. Railway injects them.
-- Keep secrets in Railway service variables only. Never put one in the repo, in `railway.json` or in an example file.
-- Keep every service's Watch Paths empty. Set the service instance `watchPatterns` to `[]` after you create the service.
-- Add no `build.watchPatterns` to `railway.json`. Railway ignores it.
-- Delete any deployment trigger right after `serviceCreate`, before you do anything else.
-- Give a public domain only to the gateway and the SPAs. Context services, `docling`, `auth` and Postgres stay private.
-- Create a custom domain for a new public service on production. Railway-generated domains exist only on PR environments.
+- Bind all interfaces on `:$PORT`. Cloud Run injects `PORT`.
+- Probe a service at `/health` on a run.app host. Cloud Run answers `/healthz` itself there.
+- Add a new service in invoice-os-infra first: `terraform/run.tf` (`services` or `site`, `invokers`, the gateway's `urls`), `identities.tf`, and the secret lists in `secrets.tf`.
+- Then add it to every deploy list in this repo: the build matrix and the service list of `deploy-prod.yml` and `dev-env.yml`, `SERVICES` in `scripts/ci/gcp-traffic.sh`, `BACKENDS` or `SITES` and the `env_file` and `secrets_of` cases in `scripts/ci/preview.sh`, and `backends` in `cmd/deploycheck/main.go` for a backend.
+- Keep secrets in Secret Manager only. Never put one in the repo or in an example file.
+- Give public ingress only to the gateway and the SPAs. Every other service takes `INGRESS_TRAFFIC_INTERNAL_ONLY` and an ID token from its listed invokers.
 - Call `app.RequireGateway(token)` before `app.Run` in each service the gateway routes to. Read the token with `mustEnv("GATEWAY_TOKEN")`.
 - Declare only peer routes as open arguments of `RequireGateway`. `TestRLS_EveryContextServiceRefusesAForgedRequest` pins the guard.
-- Add a routed service to `routedServices` in `cmd/gateway/main.go` and to `GATEWAY_TOKEN_SERVICES` in `scripts/ci/railway-env.sh`.
-- Add a routed service to `e2e/api/service-auth.spec.ts`. `TestGatewayTokenServicesMatchTheRoutedFleet` pins the script list.
-- Set `GATEWAY_TOKEN` unsealed and equal to the gateway's value. Never seal it, because sealed variables do not fork.
-- Write the first production `GATEWAY_TOKEN` with `set-production-gateway-token`, by hand. It refuses a partly set state.
-- Set `SENTRY_DSN` on production only. Never seal a Sentry variable.
-- Add a new service to the lists in `set-sentry-off`. `TestSentryOffListsMatchTheDeployedFleet` pins them.
-- Report `sentry` from a service probed through `/healthz/fleet`, or exempt it by name in the fleet gate. Only `auth` is exempt.
+- Add a routed service to `routedServices` in `cmd/gateway/main.go`, to the `gateway-token` secret list in invoice-os-infra and to `e2e/api/service-auth.spec.ts`.
+- Report `sentry` from a service probed through `/healthz/fleet`, or exempt it by name in the fleet gates. Only `auth` is exempt.
 - Wrap a new outbound client to another first-party service in `platform.TraceTransport`. Never wrap a third-party client. A first-party client without `TraceTransport` (GoTrue) takes `platform.IDTokenTransport`.
 - Run background work only in `cmd/worker`: River workers, tickers and sweeps. A request-driven service enqueues on an insert-only `queue.Config{}`. `TestOnlyTheWorkerRunsBackgroundWork` fails otherwise.
 - Wrap each periodic task in `leader.Lead("<task>", fn)` with its own name. `TestWorkerMain_EveryPeriodicTaskHasOneLeader` fails otherwise.
@@ -47,12 +33,11 @@ paths:
 - Build a new Go service on `platform.New`. It gets Sentry labels, 5xx and panic capture, tracing and the `SENTRY_TEST_EVENT` trigger.
 - Call `initMonitoring` from `src/instrument.ts` in a new SPA. Add its name to the `Service` union in `packages/monitoring/src/options.ts`.
 - Declare `ARG` and `ENV` for `VITE_SENTRY_DSN` and `VITE_SENTRY_TEST_DIGEST` in a new SPA Dockerfile build stage.
-- Declare `ARG BUILD_SHA` and `ARG RAILWAY_GIT_COMMIT_SHA`, then `ENV VITE_BUILD_SHA=${BUILD_SHA:-$RAILWAY_GIT_COMMIT_SHA}`, in the same stage.
+- Declare `ARG BUILD_SHA`, then `ENV VITE_BUILD_SHA=${BUILD_SHA}`, in the same stage.
 - Declare `ARG SENTRY_AUTH_TOKEN` in the SPA Dockerfile with no `ENV`. `packages/monitoring/src/dockerfiles.test.ts` pins both.
 - Add `sentryVitePlugin(sourcemapUploadOptions(appDir))` and `build.sourcemap: 'hidden'` to the SPA `vite.config.ts`.
 - Serve a `.map` file as 404 from the shared `Caddyfile`. A new SPA inherits it.
-- The blog serves `.map` as 404 from `internal/blogweb`.
-- Give a Python sidecar its own `sidecar/<svc>/Dockerfile` and `railway.json`. Declare no `ARG SERVICE` and set no `SERVICE` variable.
+- The blog serves `.map` as 404 from `internal/blogweb`, typed `text/plain`. Cloud Run labels a typeless response `text/html`.
+- Give a Python sidecar its own `sidecar/<svc>/Dockerfile`. Declare no `ARG SERVICE`.
 - Pin a third-party sidecar image by digest in the `FROM` line. `sidecar/auth/Dockerfile` is the example.
-- Verify a new service with three reads: deployment `SUCCESS`, `/healthz` answers, and instance `watchPatterns` is `[]`.
-- Prove always-rebuild with a `dev-env.yml` run whose diff does not touch the service. The service must still build.
+- Prove a new service with a green `dev-env.yml` preview run, then a green `deploy-prod.yml` run.

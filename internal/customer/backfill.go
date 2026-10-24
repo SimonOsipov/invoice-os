@@ -186,8 +186,8 @@ func Backfill(ctx context.Context, pool *pgxpool.Pool, tenantID string, dryRun b
 
 // SeedDemo backfills every db.DemoTenants tenant at boot, except on the hosted posture,
 // where it returns before touching pool. A failed tenant does not stop the others.
-func SeedDemo(ctx context.Context, pool *pgxpool.Pool, railwayEnvironmentName string, logger *slog.Logger) error {
-	if platform.Posture(railwayEnvironmentName) == platform.PostureHosted {
+func SeedDemo(ctx context.Context, pool *pgxpool.Pool, deployEnv string, logger *slog.Logger) error {
+	if platform.Posture(deployEnv) == platform.PostureHosted {
 		return nil
 	}
 	var failed []string

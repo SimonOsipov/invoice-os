@@ -215,7 +215,7 @@ func TestFleetReader_TheProductionConstructorSetsTheFleetTimeoutDeadline(t *test
 }
 
 func TestGatewayURL_RequiresAnAbsoluteHTTPURL(t *testing.T) {
-	for _, raw := range []string{"", "gateway.railway.internal:8080", "ftp://x", "http://"} {
+	for _, raw := range []string{"", "gateway-123456789.africa-south1.run.app:443", "ftp://x", "http://"} {
 		u, err := GatewayURL(raw)
 		if err == nil || u != nil {
 			t.Errorf("GatewayURL(%q) = %v, %v; want nil and an error", raw, u, err)
@@ -225,7 +225,7 @@ func TestGatewayURL_RequiresAnAbsoluteHTTPURL(t *testing.T) {
 			t.Errorf("GatewayURL(%q) error = %q, want it to say GATEWAY_URL is required", raw, err)
 		}
 	}
-	for _, raw := range []string{"http://gateway.railway.internal:8080", "https://gateway.example.com"} {
+	for _, raw := range []string{"https://gateway-123456789.africa-south1.run.app", "https://gateway.example.com"} {
 		u, err := GatewayURL(raw)
 		if err != nil || u == nil || u.String() != raw {
 			t.Errorf("GatewayURL(%q) = %v, %v; want the URL and no error", raw, u, err)

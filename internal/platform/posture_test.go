@@ -89,15 +89,12 @@ func TestPRNamePatternPinnedAgainstDBTwin(t *testing.T) {
 }
 
 func TestDeployEnv(t *testing.T) {
-	for _, c := range []struct{ name, deployEnv, railway, want string }{
-		{"deploy_env", "production", "", "production"},
-		{"deploy_env_wins_over_railway", "pr-7", "production", "pr-7"},
-		{"railway_fallback", "", "pr-7", "pr-7"},
-		{"neither", "", "", ""},
+	for _, c := range []struct{ name, deployEnv, want string }{
+		{"deploy_env", "production", "production"},
+		{"unset", "", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv("DEPLOY_ENV", c.deployEnv)
-			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.railway)
 			if got := DeployEnv(); got != c.want {
 				t.Errorf("DeployEnv() = %q, want %q", got, c.want)
 			}

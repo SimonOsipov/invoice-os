@@ -25,8 +25,7 @@ import (
 )
 
 // routedServices are the seven context services the gateway fronts, in wedge
-// order. Each has a corresponding <NAME>_URL env var giving its base URL over
-// Railway private networking (wired in M2-12). opsconsole joins at M7.
+// order. Each has a corresponding <NAME>_URL env var giving its Cloud Run base URL.
 var routedServices = []string{
 	"tenancy", "portfolio", "invoice", "validation",
 	"submission", "dashboard", "notifications",

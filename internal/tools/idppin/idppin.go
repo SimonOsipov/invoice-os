@@ -37,10 +37,10 @@ func ParsePin(dockerfile string) (string, error) {
 	host, rest, ok := strings.Cut(name, "/")
 	// Docker reads a first component without "." or ":" as a Docker Hub namespace.
 	if !ok || !(strings.ContainsAny(host, ".:") || host == "localhost") {
-		return "", fmt.Errorf("FROM %q names a Docker Hub image; the Railway builder cannot reach Docker Hub", ref)
+		return "", fmt.Errorf("FROM %q names a Docker Hub image", ref)
 	}
 	if host == "docker.io" || strings.HasSuffix(host, ".docker.io") {
-		return "", fmt.Errorf("FROM %q is on Docker Hub; the Railway builder cannot reach Docker Hub", ref)
+		return "", fmt.Errorf("FROM %q is on Docker Hub", ref)
 	}
 	i := strings.LastIndex(rest, ":")
 	if i < 0 || i == len(rest)-1 {

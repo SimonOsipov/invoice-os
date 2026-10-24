@@ -152,7 +152,7 @@ func main() {
 	// Both vars are REQUIRED ([env-wiring]) -- mustEnv's platform.Fatal exits on an unset
 	// one, so an invoice service that cannot reach 04 fails fast at boot rather
 	// than serving a surface that silently cannot validate. This service needs
-	// its OWN copy of each: Railway vars are per-service, and the gateway's
+	// its OWN copy of each: env vars are per-service, and the gateway's
 	// VALIDATION_URL is not inherited here.
 	//
 	// VALIDATION_URL must carry NO trailing slash -- the client concatenates

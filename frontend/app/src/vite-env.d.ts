@@ -6,9 +6,8 @@ interface ImportMetaEnv {
   // app runs as a pure client-side showcase mock with no backend calls.
   readonly VITE_GATEWAY_URL?: string
   // Base URL of the marketing landing page (the real sign-in front door). Sign out
-  // sends the browser here instead of the app's own minimal persona-picker. Each PR now
-  // deploys to its own ephemeral Railway environment with an unpredictable domain suffix
-  // (M4-23), so there is no hardcoded default — unset means Sign out stays put rather
+  // sends the browser here instead of the app's own minimal persona-picker. Each PR
+  // deploys its own preview on per-PR hostnames, so there is no hardcoded default — unset means Sign out stays put rather
   // than routing to the wrong environment (see `landingBase()` in auth.ts).
   readonly VITE_LANDING_URL?: string
   // Base URL of the Feature library; unset hides the sidebar link (see `libraryBase()` in auth.ts).

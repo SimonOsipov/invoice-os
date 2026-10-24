@@ -11,9 +11,9 @@ describe('isProductionHost', () => {
   })
 
   it('refuses a PR environment host and a lookalike', () => {
-    expect(isProductionHost('https://library-pr-365.up.railway.app')).toBe(false)
+    expect(isProductionHost('https://library-pr-365-944095690109.africa-south1.run.app')).toBe(false)
     expect(isProductionHost('https://library.ascomply.com.evil.example')).toBe(false)
-    expect(isProductionHost('https://blog-pr-1.up.railway.app')).toBe(false)
+    expect(isProductionHost('https://blog-pr-1-944095690109.africa-south1.run.app')).toBe(false)
     expect(isProductionHost('https://blog.ascomply.com.evil.example')).toBe(false)
     expect(isProductionHost('https://sup.ascomply.com')).toBe(false)
   })

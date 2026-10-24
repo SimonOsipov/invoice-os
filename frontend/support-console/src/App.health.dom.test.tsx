@@ -404,6 +404,48 @@ describe('Console system health refresh', () => {
     expect(metrics).toHaveBeenCalledTimes(2)
   })
 
+  it('leaving System health drops the visibility listener', async () => {
+    await open()
+    setHidden(true)
+    await tick()
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    await tick(0)
+    setHidden(false)
+    await tick(0)
+    expect(health).toHaveBeenCalledTimes(1)
+    expect(metrics).toHaveBeenCalledTimes(1)
+  })
+
+  it('a 401 or a metrics-only 403 stops the refresh of both reads', async () => {
+    for (const status of [401, 403]) {
+      cleanup()
+      vi.clearAllMocks()
+      health.mockResolvedValue(HEALTH)
+      metrics.mockResolvedValue(WITH_REQ)
+      await open()
+      metrics.mockRejectedValueOnce(new ApiError('http', 'denied', status))
+      await tick()
+      expect(metrics, `${status}`).toHaveBeenCalledTimes(2)
+      await tick()
+      await tick()
+      expect(metrics, `${status}`).toHaveBeenCalledTimes(2)
+      expect(health, `${status}`).toHaveBeenCalledTimes(2)
+    }
+  })
+
+  it('a metrics 403 stops polling and a range change restarts it', async () => {
+    await open()
+    metrics.mockRejectedValueOnce(new ApiError('http', 'forbidden', 403))
+    await tick()
+    await tick()
+    expect(metrics).toHaveBeenCalledTimes(2)
+    fireEvent.click(screen.getByRole('button', { name: '6h' }))
+    await tick(0)
+    expect(metrics).toHaveBeenCalledTimes(3)
+    await tick()
+    expect(metrics).toHaveBeenCalledTimes(4)
+  })
+
   it('a 403 on a refresh tick shows the staff line', async () => {
     await open()
     health.mockRejectedValueOnce(new ApiError('http', 'forbidden', 403))

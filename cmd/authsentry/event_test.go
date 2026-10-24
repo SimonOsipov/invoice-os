@@ -308,14 +308,14 @@ func TestAuthEvent_CarriesNoUserIdOrName(t *testing.T) {
 
 func TestAuthEvent_ErrorTextCarriesNoIdOrDetail(t *testing.T) {
 	raw := wireJSON(t, completed(500, map[string]any{
-		"error": `ERROR: duplicate key value violates unique constraint "users_email_key" (SQLSTATE 23505): user ` + testUUID + ` phone 2348000000000`,
+		"error": `ERROR: duplicate key value violates unique constraint "users_email_key" (SQLSTATE 23505): user ` + testUUID + ` org aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee phone 2348000000000`,
 	}))
-	for _, bad := range []string{testUUID, "2348000000000", "users_email_key"} {
+	for _, bad := range []string{testUUID, "aaaaaaaa-bbbb-cccc", "2348000000000", "users_email_key"} {
 		if strings.Contains(raw, bad) {
 			t.Errorf("event carries %q: %s", bad, raw)
 		}
 	}
-	for _, want := range []string{"SQLSTATE 23505", "[redacted]"} {
+	for _, want := range []string{"SQLSTATE 23505", "[redacted]", "{id}"} {
 		if !strings.Contains(raw, want) {
 			t.Errorf("event lacks %q: %s", want, raw)
 		}
@@ -477,5 +477,75 @@ func TestClassify_AStartFailureHasItsOwnFingerprint(t *testing.T) {
 	b := strings.Join(newClassifier().exit(127, errors.New("not found")).Fingerprint, "|")
 	if a == b {
 		t.Error("a start failure shares the fingerprint of a boot failure")
+	}
+}
+
+func TestAuthEvent_AnInvalidEmailNeverReachesTheUser(t *testing.T) {
+	bad := map[string]string{
+		"space":  "a b@example.com",
+		"quote":  `a"b@example.com`,
+		"two at": "a@b@example.com",
+		"long":   strings.Repeat("a", 250) + "@example.com",
+		"no at":  "ok.example.com",
+	}
+	for name, addr := range bad {
+		t.Run(name, func(t *testing.T) {
+			events := wire(t, emailEvent(map[string]any{"auth_event": map[string]any{"actor_username": addr}}))
+			if len(events) != 1 {
+				t.Fatalf("recorded %d events, want 1", len(events))
+			}
+			if !events[0].User.IsEmpty() {
+				t.Errorf("user = %+v, want empty", events[0].User)
+			}
+		})
+	}
+}
+
+func TestAuthEvent_AnExitEventCarriesNoUser(t *testing.T) {
+	rec := authBoot(t)
+	c := newClassifier()
+	c.line(jl(map[string]any{"level": "fatal", "msg": "bad config: x", "auth_event": map[string]any{"actor_username": "ok@example.com"}}))
+	sentry.CaptureEvent(c.exit(1, nil))
+	events := rec.Events()
+	if len(events) != 1 || !events[0].User.IsEmpty() {
+		t.Fatalf("events = %d, user = %+v", len(events), events)
+	}
+}
+
+func TestClassify_AnIncompleteRequestLineOpensNone(t *testing.T) {
+	c := newClassifier()
+	for _, l := range []string{`{"msg":"request completed","status":"x"}`, `{"msg":"request completed"}`, `{"msg":"request completed","status":null,"error":5}`} {
+		if ev := c.line([]byte(l)); ev != nil {
+			t.Errorf("line %q opened an event", l)
+		}
+	}
+}
+
+func TestClassify_PruningKeepsTheHourlyLimit(t *testing.T) {
+	c := newClassifier()
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	for i := 0; i < memoSize*4+10; i++ {
+		if c.line(completed(500, map[string]any{"error": fmt.Sprintf("cause %c%c%c", 'a'+i%26, 'a'+i/26%26, 'a'+i/676)})) == nil {
+			t.Fatalf("distinct failure %d sent nothing", i)
+		}
+	}
+	if c.line(completed(500, map[string]any{"error": "cause aaa"})) != nil {
+		t.Error("a repeat within the hour sent an event after the table was pruned")
+	}
+}
+
+func TestAuthEvent_DroppedFieldsNeverReachTheWire(t *testing.T) {
+	extra := map[string]any{}
+	for _, k := range []string{"remote_addr", "referer", "body", "cookie", "password", "user_id", "user_agent", "stack", "traits", "access_token", "refresh_token", "ip_address"} {
+		extra[k] = sentrytest.MarkerCred
+	}
+	extra["auth_event"] = map[string]any{"actor_id": sentrytest.MarkerTIN, "actor_name": sentrytest.MarkerIRN, "traits": sentrytest.MarkerAmt}
+	extra["auth_audit_event"] = map[string]any{"ip_address": sentrytest.MarkerCred}
+	raw := wireJSON(t, completed(500, extra))
+	for _, m := range []string{sentrytest.MarkerCred, sentrytest.MarkerTIN, sentrytest.MarkerIRN, sentrytest.MarkerAmt} {
+		if strings.Contains(raw, m) {
+			t.Errorf("event carries %q: %s", m, raw)
+		}
 	}
 }

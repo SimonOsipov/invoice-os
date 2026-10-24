@@ -100,18 +100,18 @@ describe('shell', () => {
     await mountReady('/')
     const before = window.history.length
     click(byText('aside button', 'Subscribe'))
-    expect(window.location.pathname).toBe('/subscribe')
+    expect(window.location.pathname).toBe('/blog/subscribe')
     expect(window.history.length).toBe(before + 1)
     expect(crumbs()).toEqual(['Blog', 'Subscribe'])
 
     click(crumbButtons()[0])
-    expect(window.location.pathname).toBe('/')
+    expect(window.location.pathname).toBe('/blog/')
     expect(crumbs()).toEqual(['Blog'])
 
     const entries = window.history.length
     click(q('aside button'))
     click(q('aside nav button'))
-    expect(window.location.pathname).toBe('/')
+    expect(window.location.pathname).toBe('/blog/')
     expect(window.history.length).toBe(entries)
   })
 
@@ -119,7 +119,7 @@ describe('shell', () => {
     mount('/subscribe/')
     const before = window.history.length
     click(byText('aside button', 'Subscribe'))
-    expect(window.location.pathname).toBe('/subscribe')
+    expect(window.location.pathname).toBe('/blog/subscribe')
     expect(window.history.length).toBe(before)
   })
 

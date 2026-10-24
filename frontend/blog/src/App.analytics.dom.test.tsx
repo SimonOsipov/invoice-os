@@ -67,9 +67,9 @@ describe('blog events', () => {
     localStorage.setItem(KEY, GRANT)
     await mount('/')
     click(byText('aside button', 'Subscribe'))
-    expect(window.location.pathname).toBe('/subscribe')
+    expect(window.location.pathname).toBe('/blog/subscribe')
     click(crumb('Blog'))
-    expect(window.location.pathname).toBe('/')
+    expect(window.location.pathname).toBe('/blog/')
     expect(events()).toEqual([
       ['event', 'page_view', {}],
       ['event', 'page_view', {}],
@@ -86,7 +86,7 @@ describe('blog events', () => {
 
     await mount('/subscribe/')
     click(byText('aside button', 'Subscribe'))
-    expect(window.location.pathname).toBe('/subscribe')
+    expect(window.location.pathname).toBe('/blog/subscribe')
     expect(events()).toEqual([])
   })
 

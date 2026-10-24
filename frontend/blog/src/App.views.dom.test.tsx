@@ -84,12 +84,12 @@ describe('sidebar', () => {
 
 describe('search', () => {
   it('VW-03 typing switches to search and clear returns', async () => {
-    await mount('/category/c1')
+    await mount('/blog/category/c1')
     expect(clearButton()).toBeNull()
     type('sage')
     expect(crumbs()).toEqual(['Blog', 'Search'])
     expect(all('#blog-main button.blog-row').length).toBeGreaterThan(0)
-    expect(window.location.pathname).toBe('/category/c1')
+    expect(window.location.pathname).toBe('/blog/category/c1')
     click(clearButton()!)
     expect(main().querySelector('h2')?.textContent).toBe('Regulation')
     expect(input().value).toBe('')
@@ -100,7 +100,7 @@ describe('search', () => {
     await mount('/')
     type('sage')
     click(q('#blog-main button.blog-row'))
-    expect(window.location.pathname).toBe('/sage-rules')
+    expect(window.location.pathname).toBe('/blog/sage-rules')
     expect(input().value).toBe('')
   })
 
@@ -155,7 +155,7 @@ describe('search', () => {
     const chips = all('#blog-main button.blog-chip')
     expect(chips.map((c) => c.textContent)).toEqual(['Regulation', 'Product'])
     click(chips[0])
-    expect(window.location.pathname).toBe('/category/c1')
+    expect(window.location.pathname).toBe('/blog/category/c1')
   })
 })
 
@@ -193,7 +193,7 @@ describe('home', () => {
     await mount('/')
     const sub = all('#blog-main button.ds-btn').find((b) => b.textContent === 'Subscribe')!
     click(sub)
-    expect(window.location.pathname).toBe('/subscribe')
+    expect(window.location.pathname).toBe('/blog/subscribe')
     expect(crumbs()).toEqual(['Blog', 'Subscribe'])
   })
 })
@@ -223,7 +223,7 @@ describe('category page', () => {
     const cards = all('#blog-main button').filter((b) => b.textContent?.includes('Read the post'))
     expect(cards).toHaveLength(2)
     click(cards[0])
-    expect(window.location.pathname).toBe('/sage-rules')
+    expect(window.location.pathname).toBe('/blog/sage-rules')
   })
 })
 

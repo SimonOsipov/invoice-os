@@ -10,6 +10,7 @@ import { BLOG_HOSTNAMES } from '../../landing/src/hubspot'
 export { CookieNotice } from '../../landing/src/components/CookieNotice'
 export { readConsent } from '../../landing/src/consent'
 export { PRODUCTION_HOSTNAMES } from '../../landing/src/hubspot'
+export { BLOG_BASE } from '../../landing/src/sitePaths'
 export { trackBlogDemoOpen, trackBlogPageView } from '../../landing/src/analytics'
 
 // A Reject made on www reaches a blog-host _ga at the next Blog load.

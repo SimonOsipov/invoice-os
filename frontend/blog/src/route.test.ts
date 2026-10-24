@@ -27,17 +27,41 @@ describe('route', () => {
 
   it('parse_emptyPathIsHome', () => expect(parseBlogPath('')).toEqual({ view: 'home' }))
 
-  it('path_aMissingRouteKeepsItsPath', () => expect(blogPath(parseBlogPath('/a/b'))).toBe('/a/b'))
+  it('path_aMissingRouteKeepsItsPath', () => expect(blogPath(parseBlogPath('/blog/a/b'))).toBe('/blog/a/b'))
 
-  it('path_roundTripsEveryRoute', () => {
+  it('parse_stripsTheBase', () => {
+    for (const p of ['/blog', '/blog/']) expect(parseBlogPath(p), p).toEqual({ view: 'home' })
+    expect(parseBlogPath('/blog/einvoicing-2026')).toEqual({ view: 'post', slug: 'einvoicing-2026' })
+    expect(parseBlogPath('/blog/category/compliance')).toEqual({ view: 'category', id: 'compliance' })
+    expect(parseBlogPath('/blog/subscribe')).toEqual({ view: 'subscribe' })
+    expect(parseBlogPath('/blog/subscribe/confirm')).toEqual({ view: 'confirm' })
+    expect(parseBlogPath('/blog/a/b')).toEqual({ view: 'missing', path: '/a/b' })
+  })
+
+  it('parse_aPathOutsideTheBaseIsBaseRelative', () => {
+    expect(parseBlogPath('/p')).toEqual({ view: 'post', slug: 'p' })
+    expect(parseBlogPath('/category/c')).toEqual({ view: 'category', id: 'c' })
+  })
+
+  it('parse_aBaseLookalikeIsNotStripped', () => {
+    expect(parseBlogPath('/blogger')).toEqual({ view: 'post', slug: 'blogger' })
+    expect(parseBlogPath('/blog/blog')).toEqual({ view: 'post', slug: 'blog' })
+    expect(parseBlogPath('/blogs/x')).toEqual({ view: 'missing', path: '/blogs/x' })
+  })
+
+  it('path_everyRouteIsUnderTheBase', () => {
     const routes: Route[] = [
       { view: 'home' },
       { view: 'subscribe' },
       { view: 'confirm' },
       { view: 'category', id: 'compliance' },
       { view: 'post', slug: 'einvoicing-2026' },
+      { view: 'missing', path: '/a/b' },
     ]
-    for (const r of routes) expect(parseBlogPath(blogPath(r)), r.view).toEqual(r)
-    expect(blogPath({ view: 'home' })).toBe('/')
+    for (const r of routes) {
+      expect(blogPath(r).startsWith('/blog/'), r.view).toBe(true)
+      expect(parseBlogPath(blogPath(r)), r.view).toEqual(r)
+    }
+    expect(blogPath({ view: 'home' })).toBe('/blog/')
   })
 })

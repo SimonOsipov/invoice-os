@@ -76,7 +76,7 @@ describe('article', () => {
   it('AR-02 the back link opens the category', async () => {
     await mount('/sage-rules', dataWith(H))
     click(q('article button.blog-back'))
-    expect(path()).toBe('/category/c1')
+    expect(path()).toBe('/blog/category/c1')
   })
 
   it('AR-03 each block type renders', async () => {
@@ -168,7 +168,7 @@ describe('article', () => {
     const demo = [...band().querySelectorAll('a')].find((a) => a.textContent === 'Book a demo')!
     expect(demo.getAttribute('href')).toBe('https://landing-pr-1-944095690109.africa-south1.run.app/?demo')
     click([...band().querySelectorAll('button')].find((b) => b.textContent === 'Subscribe')!)
-    expect(path()).toBe('/subscribe')
+    expect(path()).toBe('/blog/subscribe')
   })
 
   it('AR-08b Book a demo falls back to the production host', async () => {
@@ -181,7 +181,7 @@ describe('article', () => {
     await mount('/sage-rules', dataWith(H))
     expect(crumbs()).toEqual(['Blog', 'Regulation', 'New sage rules for invoices'])
     click(all('#blog-header nav[aria-label="Breadcrumb"] button')[1])
-    expect(path()).toBe('/category/c1')
+    expect(path()).toBe('/blog/category/c1')
   })
 
   it('AR-12 a post without a category has no back link', async () => {
@@ -240,7 +240,7 @@ describe('article', () => {
     act(() => q('#blog-main').dispatchEvent(new Event('scroll')))
     expect(tocButtons()[1].style.color).toBe('var(--ink)')
     act(() => {
-      window.history.pushState(null, '', '/tin-checks')
+      window.history.pushState(null, '', '/blog/tin-checks')
       window.dispatchEvent(new PopStateEvent('popstate'))
     })
     expect(article().querySelector('h1')!.textContent).toBe('TIN checks explained')

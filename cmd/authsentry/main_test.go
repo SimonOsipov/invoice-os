@@ -22,12 +22,13 @@ const line500 = `{"level":"info","msg":"request completed","status":500,"error":
 
 // op is one step of the fake GoTrue.
 type op struct {
-	Stderr string `json:"stderr,omitempty"`
-	Stdout string `json:"stdout,omitempty"`
-	Repeat int    `json:"repeat,omitempty"`
-	Trap   bool   `json:"trap,omitempty"` // print ready, wait for SIGTERM, print the shutdown line
-	Kill   bool   `json:"kill,omitempty"`
-	Exit   int    `json:"exit,omitempty"`
+	Stderr   string `json:"stderr,omitempty"`
+	Stdout   string `json:"stdout,omitempty"`
+	Repeat   int    `json:"repeat,omitempty"`
+	Trap     bool   `json:"trap,omitempty"`      // print ready, wait for TERM, INT or HUP, print the shutdown line
+	TrapExit int    `json:"trap_exit,omitempty"` // exit code after the shutdown line
+	Kill     bool   `json:"kill,omitempty"`
+	Exit     int    `json:"exit,omitempty"`
 }
 
 func TestMain(m *testing.M) {
@@ -54,11 +55,16 @@ func helperGoTrue(spec string) {
 		}
 		if o.Trap {
 			ch := make(chan os.Signal, 1)
-			signal.Notify(ch, syscall.SIGTERM)
+			signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 			fmt.Fprintln(os.Stderr, `{"msg":"GoTrue API started on: :9999"}`)
-			<-ch
-			fmt.Fprintln(os.Stderr, `{"msg":"received graceful shutdown signal"}`)
-			os.Exit(0)
+			select {
+			case sig := <-ch:
+				fmt.Fprintf(os.Stderr, "{\"msg\":\"received graceful shutdown signal\",\"sig\":%q}\n", sig.String())
+				os.Exit(o.TrapExit)
+			case <-time.After(5 * time.Second):
+				fmt.Fprintln(os.Stderr, "no signal reached GoTrue")
+				os.Exit(99)
+			}
 		}
 		if o.Kill {
 			_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
@@ -124,8 +130,15 @@ func runHelper(t *testing.T, ops []op, env map[string]string, tr sentry.Transpor
 	}
 	var out, errb bytes.Buffer
 	start := time.Now()
-	code := run([]string{os.Args[0]}, os.Getenv, &out, &errb)
-	return result{out.String(), errb.String(), code, time.Since(start)}
+	done := make(chan int, 1)
+	go func() { done <- run([]string{os.Args[0]}, os.Getenv, &out, &errb) }()
+	select {
+	case code := <-done:
+		return result{out.String(), errb.String(), code, time.Since(start)}
+	case <-time.After(30 * time.Second):
+		t.Fatal("run did not return within 30s")
+		return result{}
+	}
 }
 
 const fakeDSN = "http://public@127.0.0.1:1/1"
@@ -164,17 +177,30 @@ func TestRun_ExitsWithGoTrueCode(t *testing.T) {
 }
 
 func TestRun_ForwardsSIGTERM(t *testing.T) {
-	rec := &recorder{}
-	go func() {
-		time.Sleep(800 * time.Millisecond)
-		_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
-	}()
-	r := runHelper(t, []op{{Trap: true}}, dsnEnv(), rec)
-	if !strings.Contains(r.stderr, "received graceful shutdown signal") || r.code != 0 {
-		t.Fatalf("stderr %q code %d", r.stderr, r.code)
-	}
-	if n := len(rec.got()); n != 0 {
-		t.Fatalf("%d events, want 0", n)
+	for _, tc := range []struct {
+		name string
+		sig  syscall.Signal
+		exit int
+	}{
+		{"SIGTERM", syscall.SIGTERM, 0},
+		{"SIGINT", syscall.SIGINT, 0},
+		{"SIGHUP", syscall.SIGHUP, 0},
+		{"SIGTERM then non-zero exit", syscall.SIGTERM, 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &recorder{}
+			go func() {
+				time.Sleep(800 * time.Millisecond)
+				_ = syscall.Kill(os.Getpid(), tc.sig)
+			}()
+			r := runHelper(t, []op{{Trap: true, TrapExit: tc.exit}}, dsnEnv(), rec)
+			if !strings.Contains(r.stderr, "received graceful shutdown signal") || r.code != tc.exit {
+				t.Fatalf("stderr %q code %d", r.stderr, r.code)
+			}
+			if n := len(rec.got()); n != 0 {
+				t.Fatalf("%d events, want 0", n)
+			}
+		})
 	}
 }
 
@@ -192,11 +218,23 @@ func TestRun_A5xxLineReachesSentryLabelled(t *testing.T) {
 }
 
 func TestRun_BootFailureIsOneFatalEvent(t *testing.T) {
-	rec := &recorder{}
-	r := runHelper(t, []op{{Stderr: `{"level":"fatal","msg":"Failed to load configuration: bad"}` + "\n"}, {Exit: 1}}, dsnEnv(), rec)
-	evs := rec.got()
-	if r.code != 1 || len(evs) != 1 || evs[0].Level != sentry.LevelFatal || evs[0].Tags["auth.phase"] != "boot" {
-		t.Fatalf("code %d events %+v", r.code, evs)
+	fatal := `{"level":"fatal","msg":"Failed to load configuration: bad"}` + "\n"
+	ready := `{"msg":"GoTrue API started on: :9999"}` + "\n"
+	for _, tc := range []struct {
+		name, phase string
+		ops         []op
+	}{
+		{"boot", "boot", []op{{Stderr: fatal}, {Exit: 1}}},
+		{"crash after ready", "run", []op{{Stderr: ready}, {Exit: 1}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &recorder{}
+			r := runHelper(t, tc.ops, dsnEnv(), rec)
+			evs := rec.got()
+			if r.code != 1 || len(evs) != 1 || evs[0].Level != sentry.LevelFatal || evs[0].Tags["auth.phase"] != tc.phase {
+				t.Fatalf("code %d events %+v", r.code, evs)
+			}
+		})
 	}
 }
 
@@ -221,6 +259,15 @@ func TestRun_ABlockedSentryNeverSlowsGoTrue(t *testing.T) {
 	r := runHelper(t, []op{{Stderr: line500, Repeat: 10000}}, dsnEnv(), rec)
 	if r.code != 0 || strings.Count(r.stderr, "\n") != 10000 {
 		t.Fatalf("code %d, %d lines", r.code, strings.Count(r.stderr, "\n"))
+	}
+}
+
+func TestRun_ABlockedSentryNeverHoldsTheExit(t *testing.T) {
+	rec := &recorder{block: make(chan struct{})}
+	t.Cleanup(func() { close(rec.block) })
+	r := runHelper(t, []op{{Stderr: `{"msg":"GoTrue API started on: :9999"}` + "\n"}, {Exit: 1}}, dsnEnv(), rec)
+	if r.code != 1 || r.took > 7*time.Second {
+		t.Fatalf("code %d took %s", r.code, r.took)
 	}
 }
 

@@ -126,6 +126,7 @@ describe('judge', () => {
     expect([judge('error', 1, 1, 80), judge('error', 1.01, 1.01, 80)]).toEqual(['ok', 'high'])
     expect([judge('p95', 1000, 1000, 80), judge('p95', 1010, 1010, 80)]).toEqual(['ok', 'high'])
     expect([judge('connections', 64, 64, 80), judge('connections', 65, 65, 80)]).toEqual(['ok', 'high'])
+    expect([judge('cpu', 80, 80, 80), judge('cpu', 80.1, 80.1, 80), judge('ram', 80, 80, 80), judge('ram', 80.1, 80.1, 80)]).toEqual(['ok', 'high', 'ok', 'high'])
   })
 
   it('judge reads peaked when only the range peak is over', () => {

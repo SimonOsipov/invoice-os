@@ -887,6 +887,8 @@ describe('System health panels', () => {
     const cpu = panelTags(ts, 'cpu_pct')
     expect(entries(cpu)).toHaveLength(7)
     expect(cpu.some((t) => t.text === '+2 other services')).toBe(true)
+    const eight = renderPanels(full({ req_per_min: svcs(names.slice(0, 8), rising) }))
+    expect(panelTags(eight, 'req_per_min').some((t) => t.text === '+1 other service')).toBe(true)
   })
 
   it('every panel marks each deploy', () => {
@@ -948,7 +950,7 @@ describe('System health panels', () => {
   })
 
   it('unavailable limits drop the instances max', () => {
-    const m = full({ instances: svcs(['submission']) })
+    const m = full({ req_per_min: svcs(['submission']), instances: svcs(['submission']) })
     m.limits = { available: false, services: [{ name: 'submission', cpu: '1', memory: '512Mi', max_instances: 2 }] }
     const p = panelTags(renderPanels(m, 'submission'), 'instances')
     expect(p.some((t) => t.text.includes('max'))).toBe(false)
@@ -966,6 +968,9 @@ describe('System health panels', () => {
     expect(attr(guides(conn)[0], 'stroke-dasharray')).toBe('')
     expect(words(conn).map((t) => t.text)).toEqual(['HIGH'])
     for (const p of [util, conn]) expect(p.filter((t) => t.text === 'All services')).toHaveLength(1)
+    const narrowed = renderPanels(full({ sql_connections: db([[0, 60], [60, 70]]) }), 'a')
+    expect(lines(panelTags(narrowed, 'sql_util')).map((t) => attr(t, 'data-line'))).toEqual(['CPU', 'RAM', 'Disk'])
+    expect(lines(panelTags(narrowed, 'sql_connections'))).toHaveLength(1)
     expect(panelTags(ts, 'cpu_pct').some((t) => t.text === 'All services')).toBe(false)
   })
 

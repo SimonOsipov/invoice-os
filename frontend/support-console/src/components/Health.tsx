@@ -197,7 +197,7 @@ function Panel({ spec, m, colours, service, markers }: { spec: PanelSpec; m: Sta
             {e.extra && <span className="mono">{e.extra}</span>}
           </span>
         ))}
-        {grey > 0 && <span data-series-other="" style={LEGEND_TEXT}>{`+${grey} other services`}</span>}
+        {grey > 0 && <span data-series-other="" style={LEGEND_TEXT}>{`+${grey} other ${grey === 1 ? 'service' : 'services'}`}</span>}
       </div>
     </div>
   )

@@ -39,6 +39,18 @@ func TestQueueDepth_SumsTheThreeLiveStates(t *testing.T) {
 	}
 }
 
+func TestPreviewSuffix_IsThePRNumberOnAPreviewOnly(t *testing.T) {
+	for in, want := range map[string]string{
+		"pr-545": "-pr-545", "invoice-os-pr-7": "-pr-7",
+		"production": "", "": "", "staging": "", "pr-": "", "pr-abc": "", "PR-5": "",
+		"pr-5": "-pr-5", "xpr-5": "", "pr-545-x": "", "pr-5\n": "", "invoice-os-pr-": "", "x-pr-pr-7": "-pr-7",
+	} {
+		if got := PreviewSuffix(in); got != want {
+			t.Errorf("PreviewSuffix(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 type kinds = map[string]map[string]int64
 
 func wantTotals(t *testing.T, name string, got JobTotals, depth, dead int64) {

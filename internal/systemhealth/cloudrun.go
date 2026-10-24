@@ -42,6 +42,7 @@ type Deploy struct {
 // limits returns the template limits of each service, or of service alone, sorted by name.
 func (g *Google) limits(ctx context.Context, token, project, region, service string) ([]ServiceLimits, error) {
 	var out []ServiceLimits
+	// ceiling: a preview lists every PR's services (cap 5×100) and filters here; filter server-side if previews near 25 open PRs
 	err := g.runPages(ctx, token, project, region, "services", limitsPageSize, limitsBodyCap, limitsMaxPages, func(body []byte) (string, error) {
 		var page struct {
 			Services []struct {
@@ -63,7 +64,14 @@ func (g *Google) limits(ctx context.Context, token, project, region, service str
 			return "", fmt.Errorf("systemhealth: run services: bad body")
 		}
 		for _, s := range page.Services {
-			l := ServiceLimits{Name: path.Base(s.Name), MaxInstances: s.Template.Scaling.MaxInstanceCount}
+			name := path.Base(s.Name)
+			if g.Suffix != "" {
+				var ok bool
+				if name, ok = strings.CutSuffix(name, g.Suffix); !ok {
+					continue
+				}
+			}
+			l := ServiceLimits{Name: name, MaxInstances: s.Template.Scaling.MaxInstanceCount}
 			if len(s.Template.Containers) > 0 {
 				lim := s.Template.Containers[0].Resources.Limits
 				l.CPU, l.Memory = lim["cpu"], lim["memory"]
@@ -85,9 +93,12 @@ func (g *Google) limits(ctx context.Context, token, project, region, service str
 func (g *Google) deploys(ctx context.Context, token, project, region, service string, start, now time.Time) ([]Deploy, error) {
 	if service == "" {
 		service = "-"
+	} else {
+		service += g.Suffix
 	}
 	var out []Deploy
 	// ceiling: reads every revision page; stop at the first page older than the range above ~3k revisions
+	// ceiling: a preview's wildcard lists every PR's revisions (cap 20×1000); filter server-side above ~15k preview revisions
 	err := g.runPages(ctx, token, project, region, "services/"+url.PathEscape(service)+"/revisions", deploysPageSize, deploysBodyCap, deploysMaxPages, func(body []byte) (string, error) {
 		var page struct {
 			Revisions []struct {
@@ -104,7 +115,14 @@ func (g *Google) deploys(ctx context.Context, token, project, region, service st
 			if r.CreateTime.Before(start) || r.CreateTime.After(now) {
 				continue
 			}
-			out = append(out, Deploy{Service: path.Base(r.Service), Revision: path.Base(r.Name), CreatedAt: r.CreateTime})
+			svc := path.Base(r.Service)
+			if g.Suffix != "" {
+				var ok bool
+				if svc, ok = strings.CutSuffix(svc, g.Suffix); !ok {
+					continue
+				}
+			}
+			out = append(out, Deploy{Service: svc, Revision: path.Base(r.Name), CreatedAt: r.CreateTime})
 		}
 		return page.NextPageToken, nil
 	})

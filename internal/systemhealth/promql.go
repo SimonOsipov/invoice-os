@@ -86,11 +86,14 @@ var Panels = []Panel{
 	{"sql_connections", "count", connsSQL, false},
 }
 
-// Query renders the template for r and service; service reaches it only after the handler matched MetricServices.
-func (p Panel) Query(r Range, service string) string {
+// Query renders the template for r, service and a preview suffix; service reaches it only after the handler matched MetricServices.
+func (p Panel) Query(r Range, service, suffix string) string {
 	sel := `monitored_resource="cloud_run_revision"`
-	if service != "" {
-		sel += `,service_name="` + service + `"`
+	switch {
+	case service != "":
+		sel += `,service_name="` + service + suffix + `"`
+	case suffix != "":
+		sel += `,service_name=~".+` + suffix + `"`
 	}
 	return strings.NewReplacer(
 		"{F}", sel,

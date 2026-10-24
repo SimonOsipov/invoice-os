@@ -579,3 +579,183 @@ func TestMetricsSource_AnEmptyAnswerFromRunEncodesEmptyArrays(t *testing.T) {
 		t.Fatalf("body = %s", raw)
 	}
 }
+
+func matrixOf(names ...string) string {
+	var rs []string
+	for _, n := range names {
+		m := `{}`
+		if n != "" {
+			m = `{"service_name":"` + n + `"}`
+		}
+		rs = append(rs, `{"metric":`+m+`,"values":[[1000,"1.5"]]}`)
+	}
+	return `{"status":"success","data":{"resultType":"matrix","result":[` + strings.Join(rs, ",") + `]}}`
+}
+
+// previewFake answers Cloud Run queries with runNames and SQL queries with an unnamed series, and records every request.
+func previewFake(t *testing.T, suffix string, runNames ...string) (*MetricsSource, func() []string) {
+	t.Helper()
+	f, s, _ := newComboFake(t, newClock().now)
+	s.g.Suffix = suffix
+	var mu sync.Mutex
+	var seen []string
+	f.override = func(path, query string) (int, string, bool) {
+		mu.Lock()
+		seen = append(seen, path+" "+query)
+		mu.Unlock()
+		if strings.HasSuffix(path, "/query_range") {
+			if strings.Contains(query, "cloud_run_revision") {
+				return 200, matrixOf(runNames...), true
+			}
+			return 200, matrixOf(""), true
+		}
+		return 0, "", false
+	}
+	return s, func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), seen...) }
+}
+
+func panelNames(m Metrics, cloudRun bool) map[string][]string {
+	out := map[string][]string{}
+	for i, p := range Panels {
+		if p.CloudRun != cloudRun {
+			continue
+		}
+		for _, s := range m.Panels[i].Series {
+			out[p.Key] = append(out[p.Key], s.Name)
+		}
+	}
+	return out
+}
+
+func TestMetricsSource_APreviewTrimsItsSuffixFromSeriesNames(t *testing.T) {
+	s, seen := previewFake(t, "-pr-545", "gateway-pr-545", "app-pr-545")
+	m, err := s.Get(t.Context(), "1h", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, names := range panelNames(m, true) {
+		if sort.Strings(names); !reflect.DeepEqual(names, []string{"app", "gateway"}) {
+			t.Errorf("%s names = %v", k, names)
+		}
+	}
+	for k, names := range panelNames(m, false) {
+		if !reflect.DeepEqual(names, []string{"database"}) {
+			t.Errorf("%s names = %v", k, names)
+		}
+	}
+	for _, r := range seen() {
+		if strings.Contains(r, "cloud_run_revision") && !strings.Contains(r, `service_name=~".+-pr-545"`) {
+			t.Errorf("Cloud Run query without the PR matcher: %s", r)
+		}
+	}
+}
+
+func TestMetricsSource_APreviewTrimsOnlyItsOwnSuffix(t *testing.T) {
+	s, _ := previewFake(t, "-pr-54", "gateway-pr-54", "gateway-pr-545", "gateway-pr-546")
+	m, err := s.Get(t.Context(), "1h", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, names := range panelNames(m, true) {
+		if want := []string{"gateway", "gateway-pr-545", "gateway-pr-546"}; !reflect.DeepEqual(names, want) {
+			t.Errorf("%s names = %v, want %v", k, names, want)
+		}
+	}
+}
+
+func TestMetricsSource_APreviewPickTargetsItsPRService(t *testing.T) {
+	s, seen := previewFake(t, "-pr-545", "gateway-pr-545")
+	m, err := s.Get(t.Context(), "6h", "gateway")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Service != "gateway" {
+		t.Fatalf("service = %q", m.Service)
+	}
+	var sawRevs bool
+	for _, r := range seen() {
+		switch {
+		case strings.Contains(r, "cloud_run_revision"):
+			if !strings.Contains(r, `service_name="gateway-pr-545"`) {
+				t.Errorf("query: %s", r)
+			}
+		case strings.HasSuffix(strings.Fields(r)[0], "/revisions"):
+			sawRevs = true
+			if p := strings.Fields(r)[0]; p != "/v2/projects/p1/locations/r1/services/gateway-pr-545/revisions" {
+				t.Errorf("revisions path = %s", p)
+			}
+		}
+	}
+	if !sawRevs {
+		t.Fatal("no revisions request")
+	}
+}
+
+func TestMetricsSource_ProductionNamesAreUnchanged(t *testing.T) {
+	s, seen := previewFake(t, "", "gateway")
+	m, err := s.Get(t.Context(), "1h", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, names := range panelNames(m, true) {
+		if !reflect.DeepEqual(names, []string{"gateway"}) {
+			t.Errorf("%s names = %v", k, names)
+		}
+	}
+	for _, r := range seen() {
+		if strings.Contains(r, "=~") {
+			t.Errorf("production query holds =~: %s", r)
+		}
+	}
+}
+
+func TestMetricsSource_APreviewReadsOnlyItsMetadataProject(t *testing.T) {
+	s, seen := previewFake(t, "-pr-545", "gateway-pr-545")
+	if _, err := s.Get(t.Context(), "1h", ""); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	for _, r := range seen() {
+		p := strings.Fields(r)[0]
+		switch {
+		case strings.HasSuffix(p, "/query_range"):
+			n++
+			if !strings.HasPrefix(p, "/v1/projects/p1/") {
+				t.Errorf("query_range path = %s", p)
+			}
+		case strings.HasPrefix(p, "/v2/"):
+			n++
+			if !strings.HasPrefix(p, "/v2/projects/p1/") {
+				t.Errorf("run path = %s", p)
+			}
+		}
+	}
+	if n < len(Panels)+2 {
+		t.Fatalf("saw %d Google requests, want at least %d", n, len(Panels)+2)
+	}
+}
+
+func TestMetricsSource_APreviewFleetListsOnlyItsOwnLimitsAndDeploys(t *testing.T) {
+	f, s, _ := newComboFake(t, newClock().now)
+	s.g.Suffix = "-pr-54"
+	f.override = func(path, _ string) (int, string, bool) {
+		switch {
+		case strings.HasSuffix(path, "/revisions"):
+			return 200, `{"revisions":[` + rev("gateway-pr-545", "gateway-pr-545-00001-aaa", "2026-10-23T11:00:00Z") + `,` +
+				rev("gateway-pr-54", "gateway-pr-54-00001-bbb", "2026-10-23T11:10:00Z") + `]}`, true
+		case strings.HasPrefix(path, "/v2/"):
+			return 200, svcBody("gateway-pr-545", "gateway-pr-54", "app"), true
+		}
+		return 0, "", false
+	}
+	m, err := s.Get(t.Context(), "1h", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := limitNames(m.Limits.Services); !reflect.DeepEqual(got, []string{"gateway"}) {
+		t.Errorf("limits = %v", got)
+	}
+	if len(m.Deploys.Revisions) != 1 || m.Deploys.Revisions[0].Service != "gateway" || m.Deploys.Revisions[0].Revision != "gateway-pr-54-00001-bbb" {
+		t.Errorf("deploys = %+v", m.Deploys.Revisions)
+	}
+}

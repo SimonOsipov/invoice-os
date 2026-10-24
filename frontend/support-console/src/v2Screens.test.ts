@@ -754,6 +754,18 @@ describe('System health markup', () => {
     }
   })
 
+  it('a failed metrics read reads UNAVAILABLE on the tiles, not NO DATA', () => {
+    for (const metricsStatus of ['error', 'forbidden'] as const) {
+      const html = healthWith({ metricsStatus, metrics: null })
+      const ts = parse(html)
+      for (const key of ['req', 'errors', 'p95', 'connections']) {
+        const t = tileOf(ts, key)
+        expect(texts(t), `${metricsStatus} ${key}`).toEqual(expect.arrayContaining(['—', 'UNAVAILABLE']))
+        expect(texts(t), `${metricsStatus} ${key}`).not.toContain('NO DATA')
+      }
+    }
+  })
+
   it('metric tiles carry no word while the metrics read loads', () => {
     const html = healthWith({ metricsStatus: 'loading', metrics: null })
     const ts = parse(html)
@@ -1029,6 +1041,13 @@ describe('TimeChart', () => {
     { name: 'api', color: 'var(--series-1)', points: [[0, 1], [60, 2]] as [number, number][] },
     { name: 'web', color: 'var(--series-2)', points: [[0, 3], [60, 5]] as [number, number][] },
   ]
+  it('TimeChart prints dated, distinct end labels for a 24 h range and clock labels for 6 h', () => {
+    const labels = (start: number, end: number) => [...renderToStaticMarkup(createElement(TimeChart, { lines, start, end, step: 60 })).matchAll(/<span[^>]*>(\d\d[-:]\d\d[^<]*)<\/span>/g)].map((m) => m[1])
+    const t0 = Date.UTC(2026, 9, 14, 10, 0) / 1000
+    expect(labels(t0 - 86400, t0)).toEqual(['10-13 10:00', '10-14 10:00'])
+    expect(labels(t0 - 6 * 3600, t0)).toEqual(['04:00 UTC', '10:00 UTC'])
+  })
+
   it('TimeChart draws each line, guide and deploy marker', () => {
     const ts = parse(renderToStaticMarkup(createElement(TimeChart, { ...base, lines, guides: [{ value: 80, label: 'limit', dashed: true }], markers: [{ t: 120, title: 'rev-1 · 10:00 UTC' }, { t: 240, title: 'rev-2 · 11:00 UTC' }] })))
     const paths = ts.filter((t) => attr(t, 'data-line'))

@@ -370,6 +370,40 @@ describe('Console system health refresh', () => {
     expect(screen.queryByText(/Loading/)).toBeNull()
   })
 
+  const setHidden = (hidden: boolean) => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
+    document.dispatchEvent(new Event('visibilitychange'))
+  }
+  afterEach(() => { Reflect.deleteProperty(document, 'hidden') })
+
+  it('a hidden tab skips the refresh ticks and reads once when it is visible again', async () => {
+    await open()
+    setHidden(true)
+    await tick()
+    await tick()
+    await tick()
+    expect(health).toHaveBeenCalledTimes(1)
+    expect(metrics).toHaveBeenCalledTimes(1)
+    setHidden(false)
+    await tick(0)
+    expect(health).toHaveBeenCalledTimes(2)
+    expect(metrics).toHaveBeenCalledTimes(2)
+    setHidden(false)
+    await tick(0)
+    expect(health).toHaveBeenCalledTimes(2)
+  })
+
+  it('a 403 stops the refresh', async () => {
+    await open()
+    health.mockRejectedValueOnce(new ApiError('http', 'forbidden', 403))
+    await tick()
+    expect(health).toHaveBeenCalledTimes(2)
+    await tick()
+    await tick()
+    expect(health).toHaveBeenCalledTimes(2)
+    expect(metrics).toHaveBeenCalledTimes(2)
+  })
+
   it('a 403 on a refresh tick shows the staff line', async () => {
     await open()
     health.mockRejectedValueOnce(new ApiError('http', 'forbidden', 403))

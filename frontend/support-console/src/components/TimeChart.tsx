@@ -12,7 +12,7 @@ const DAY = 86400
 
 const pad = (n: number) => String(n).padStart(2, '0')
 
-// t is epoch seconds; ranges over two days show the date.
+// t is epoch seconds; ranges of a day or more show the date.
 function clock(t: number, long: boolean): string {
   const d = new Date(t * 1000)
   const hm = `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`
@@ -22,7 +22,7 @@ function clock(t: number, long: boolean): string {
 export function TimeChart({ lines, start, end, step, guides = [], markers = [] }: Props) {
   const values = [...lines.flatMap((l) => l.points.map(([, v]) => v)), ...guides.map((g) => g.value)]
   const yMax = niceCeil(Math.max(0, ...values))
-  const long = end - start > 2 * DAY
+  const long = end - start >= DAY
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', columnGap: 8 }}>
       <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: CHART_H }}>

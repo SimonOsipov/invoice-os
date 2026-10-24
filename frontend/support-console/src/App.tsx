@@ -183,11 +183,21 @@ function Console() {
   const metricsStatus = metrics ? 'ready' : metricsRead.status === 'error' ? (metricsRead.error?.status === 403 ? 'forbidden' : 'error') : 'loading'
   const refreshHealth = useRef(() => {})
   refreshHealth.current = () => { healthRead.run(); metricsRead.run() }
+  const denied = [healthRead, metricsRead].some((r) => r.status === 'error' && (r.error?.status === 401 || r.error?.status === 403))
   useEffect(() => {
-    if (!onHealth) return
-    const id = setInterval(() => refreshHealth.current(), HEALTH_REFRESH_MS)
-    return () => clearInterval(id)
-  }, [onHealth])
+    if (!onHealth || denied) return
+    // A background tab must not wake the scale-to-zero fleet: skip hidden ticks, read once on return.
+    let skipped = false
+    const id = setInterval(() => {
+      if (document.hidden) skipped = true
+      else refreshHealth.current()
+    }, HEALTH_REFRESH_MS)
+    const onVisible = () => {
+      if (!document.hidden && skipped) { skipped = false; refreshHealth.current() }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible) }
+  }, [onHealth, denied])
   const onSubmissions = screen === 'submissions'
   const jobsRead = useAsync(() => fetchJobs(jobState, jobTenant || undefined), { immediate: onSubmissions, deps: [onSubmissions, jobState, jobTenant], isEmpty: () => false })
   const jobTenantsRead = useAsync(fetchStaffTenants, { immediate: onSubmissions, deps: [onSubmissions] })

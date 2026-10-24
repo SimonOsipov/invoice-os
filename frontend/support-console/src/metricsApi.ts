@@ -195,13 +195,15 @@ export function formatValue(unit: string, v: number): Formatted {
     return { value: s, unit: 's', n: Math.round(Number(s) * 1000) }
   }
   if (unit === 'req/min' || unit === '/min') {
-    if (v < 10) return { value: v.toFixed(1), unit, n: Number(v.toFixed(1)) }
-    if (v < 1000) return { value: String(Math.round(v)), unit, n: Math.round(v) }
+    const t = v.toFixed(1)
+    if (Number(t) < 10) return { value: t, unit, n: Number(t) }
+    if (Math.round(v) < 1000) return { value: String(Math.round(v)), unit, n: Math.round(v) }
     const k = (v / 1000).toFixed(1)
     return { value: `${k}k`, unit, n: Math.round(Number(k) * 1000) }
   }
   if (unit === '%' || unit === '% of limit') {
-    const s = v < 10 ? v.toFixed(2) : v.toFixed(1)
+    const two = v.toFixed(2)
+    const s = Number(two) < 10 ? two : v.toFixed(1)
     return { value: s, unit, n: Number(s) }
   }
   const r = Math.round(v)

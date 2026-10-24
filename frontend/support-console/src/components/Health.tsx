@@ -69,14 +69,14 @@ const METRIC_STATS: MetricStat[] = [
   { key: 'connections', label: 'DB connections', unit: 'count', stat: 'connections', read: (f) => f.connections },
 ]
 
-// Without metrics the tile is blank while loading and NO DATA once the read has settled.
-function metricTiles(m: StaffMetrics | null, loading: boolean): Tile[] {
+// Without metrics the tile is blank while loading, UNAVAILABLE after a failed read and NO DATA once an answer has no value.
+function metricTiles(m: StaffMetrics | null, status: HealthStatus): Tile[] {
   const f = m ? fleetSeries(m) : null
   return METRIC_STATS.map((s) => {
     const points = f ? s.read(f) : []
     const latest = latestOf(points)
     const tail = s.stat === 'connections' ? (m ? `of ${m.connection_budget}` : '') : s.unit
-    if (latest === null) return { key: s.key, label: s.label, value: '—', unit: tail, word: loading && !m ? undefined : 'NO DATA', tone: 'muted', points: [] }
+    if (latest === null) return { key: s.key, label: s.label, value: '—', unit: tail, word: !m && status === 'loading' ? undefined : !m && status !== 'ready' ? 'UNAVAILABLE' : 'NO DATA', tone: 'muted', points: [] }
     const shown = formatValue(s.unit, latest)
     const base = { key: s.key, label: s.label, value: shown.value, unit: s.stat === 'connections' ? tail : shown.unit, points: points.map((p) => p[1]) }
     if (!s.stat) return { ...base, tone: 'green' }
@@ -350,7 +350,7 @@ export function Health({ status, errorText, data, healthStale, metricsStale, onR
           </div>
         </div>
         <div className="ops-health-stats" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 16 }}>
-          {[fleet, ...metricTiles(metrics, metricsStatus === 'loading')].map((t) => (
+          {[fleet, ...metricTiles(metrics, metricsStatus)].map((t) => (
             <TileCard key={t.key} t={t} />
           ))}
         </div>

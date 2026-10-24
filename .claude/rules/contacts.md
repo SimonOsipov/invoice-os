@@ -40,7 +40,7 @@ paths:
 - Run a preview environment in `fake` mode and discard its vendor keys.
 - Answer 404 to an intake request that carries `X-User-ID`. Require the gateway token on every intake route.
 - Answer 404 at the gateway for any `/api/<service>/internal/...` path, raw and cleaned.
-- Open one HubSpot deal per demo request. A registration opens none.
+- Open one HubSpot deal per demo request and one per first registration.
 - Open no deal while the contact has an open one, decided by HubSpot `hs_is_closed`.
 - Retry a delivery with River's default policy. Any non-nil worker error retries.
 - Log a vendor 4xx other than 408 and 429 as ERROR. Log every other failure as WARN.

@@ -32,7 +32,7 @@ import (
 // git-tracked file (git ls-files) and enforces the bounded blast radius:
 // every deprecated-prefix "*PASSWORD" hit must live in cmd/gateway/main.go
 // and nowhere else; every deprecated-prefix "*DATABASE_URL" hit must be
-// zero. Those two DSN vars are Railway-console-only, no Go code reads them.
+// zero. No Go code reads those two DSN vars.
 func TestRepoHasNoStrayInvoicePrefixedVars(t *testing.T) {
 	rootOut, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
@@ -1370,14 +1370,6 @@ func TestRegistrationHandlers_ResendWaitsAndLimits(t *testing.T) {
 			}
 		})
 	}
-}
-
-func distinctAddresses(n int) []string {
-	out := make([]string, n)
-	for i := range out {
-		out[i] = "user" + strconv.Itoa(i) + "@corp.example"
-	}
-	return out
 }
 
 // A PR fork counts and logs each limited route's per-address limit but does not refuse; every other posture refuses the fourth.

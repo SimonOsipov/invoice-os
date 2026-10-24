@@ -467,14 +467,14 @@ func TestShardClientAccessMirrorsTheSourceTenant(t *testing.T) {
 func TestProvisionSeedsNoShardTenantOutsideAPreview(t *testing.T) {
 	e := newShardEnv(t)
 
-	for _, tc := range []struct{ name, railwayEnv, resetFlag string }{
+	for _, tc := range []struct{ name, deployEnv, resetFlag string }{
 		{"empty environment name", "", "true"},
 		{"development", "development", "true"},
 		{"production", "production", "true"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := e.prConfig()
-			cfg.DeployEnv, cfg.ResetFlag = tc.railwayEnv, tc.resetFlag
+			cfg.DeployEnv, cfg.ResetFlag = tc.deployEnv, tc.resetFlag
 			if err := db.Provision(context.Background(), cfg); err != nil {
 				t.Fatalf("Provision: %v", err)
 			}

@@ -89,7 +89,7 @@ describe('isProductionHost', () => {
   })
 
   it('U12: PR/dev/local hostnames all fail', () => {
-    for (const h of ['landing-pr-142-a3f9.up.railway.app', 'localhost', '127.0.0.1', '']) {
+    for (const h of ['landing-pr-142-944095690109.africa-south1.run.app', 'localhost', '127.0.0.1', '']) {
       expect(isProductionHost(h), h).toBe(false)
     }
   })
@@ -138,7 +138,7 @@ describe('resolveSubmitTarget', () => {
   it('U17: needs BOTH the build ids and a production hostname', () => {
     vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '148915098')
     vi.stubEnv('VITE_HUBSPOT_FORM_GUID', 'abc-123')
-    expect(resolveSubmitTarget('landing-pr-142-a3f9.up.railway.app')).toBeNull()
+    expect(resolveSubmitTarget('landing-pr-142-944095690109.africa-south1.run.app')).toBeNull()
 
     vi.unstubAllEnvs()
     expect(resolveSubmitTarget('www.ascomply.com')).toBeNull()

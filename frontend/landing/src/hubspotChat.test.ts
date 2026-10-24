@@ -39,7 +39,7 @@ describe('shouldLoadChat', () => {
   it('AC2: shouldLoadChat truth table', () => {
     expect(shouldLoadChat('www.ascomply.com', true)).toBe(true)
     expect(shouldLoadChat('www.ascomply.com', false)).toBe(false)
-    expect(shouldLoadChat('landing-pr-42.up.railway.app', true)).toBe(false)
+    expect(shouldLoadChat('landing-pr-42-944095690109.africa-south1.run.app', true)).toBe(false)
     expect(shouldLoadChat('blog.ascomply.com', true, BLOG_HOSTNAMES)).toBe(true)
   })
 })

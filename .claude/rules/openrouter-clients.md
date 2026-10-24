@@ -17,13 +17,10 @@ paths:
 ---
 # OpenRouter clients
 
-- Keep `OPENROUTER_API_KEY` in Railway service variables on `submission` and `invoice` only. The AI client and the Jev client share it.
-- Never put the key in the repo, in `railway.json` or in an example file.
-- Keep the production key unsealed. `audit-sealed-variables` fails `prepare-env` on a sealed variable, because forks copy the source environment.
-- Run `set-ai-fake` in every PR `prepare-env`, through `fork-vars-after-urls`. It blanks the key and sets `AI_FAKE=true` and `JEV_FAKE=true` on `submission` and `invoice`.
-- Never remove `set-ai-fake` and never add `continue-on-error` to it. It refuses a persistent environment.
-- Read every `set-ai-fake` write back. Fail the job when a key survives on either service.
-- Accept an absent key or exactly `""` as a blanked key. Railway stores an empty-string variable.
+- Keep `OPENROUTER_API_KEY` in the production secret `openrouter-api-key`, mounted on `invoice` and `worker` only (invoice-os-infra `secrets.tf`). The AI client and the Jev client share it.
+- Never put the key in the repo or in an example file.
+- Give no PR preview the key. `scripts/ci/preview.sh` sets `AI_FAKE=true` and `JEV_FAKE=true`, and the `Preview invariants` job fails on an OpenRouter secret or env var.
+- Accept an absent key or exactly `""` as a blanked key.
 - Match the key variable name exactly. Never print its value.
 - Read the model, the endpoint and the retry budget from constants. Add no variable for any of them.
 - Treat an unset or empty key as off when fake mode is off. `Enabled()` is false on both clients.

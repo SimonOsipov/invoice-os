@@ -9,7 +9,7 @@ WORKDIR /repo
 RUN corepack enable
 COPY . .
 RUN pnpm install --frozen-lockfile
-# Vite bakes VITE_* at build time. Railway injects the service variable as a build arg
+# Vite bakes VITE_* at build time. CI passes each value as a build arg
 # (same mechanism the shared Go Dockerfile uses for SERVICE); declare it and promote it
 # to an env var so `vite build` sees it. Unset → empty → the app runs as a pure
 # client-side mock (frontend/app/src/auth.ts: gatewayBase() returns null), so the
@@ -34,9 +34,7 @@ ARG VITE_SENTRY_TEST_DIGEST
 ENV VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST
 # The release fallback when no release is stamped.
 ARG BUILD_SHA
-# ceiling: Railway fallback, delete with Railway in GKE-12.
-ARG RAILWAY_GIT_COMMIT_SHA
-ENV VITE_BUILD_SHA=${BUILD_SHA:-$RAILWAY_GIT_COMMIT_SHA}
+ENV VITE_BUILD_SHA=${BUILD_SHA}
 # Build stage only, never ENV; empty skips the source-map upload.
 ARG SENTRY_AUTH_TOKEN
 RUN pnpm --filter @invoice-os/app build
@@ -45,7 +43,7 @@ RUN pnpm --filter @invoice-os/app build
 FROM caddy:2-alpine AS serve
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /repo/frontend/app/dist /srv
-# The commit under test, stamped by scripts/ci/stamp-build-sha.sh before `railway up`
+# The commit under test, stamped by scripts/ci/stamp-build-sha.sh before the image build
 # and served at /build.txt. Caddy answers /health from memory before touching the
 # filesystem, so it can never carry a build; the deploy gate reads this instead and
 # blocks until the SPA under test is the one actually being served.

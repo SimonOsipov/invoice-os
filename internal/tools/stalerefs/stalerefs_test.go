@@ -329,7 +329,7 @@ func TestRole(t *testing.T) {
 	for path, want := range map[string]string{
 		"e2e/smoke/support-console.spec.ts":    "consumer",
 		"e2e/topology/roleFixtures.ts":         "consumer",
-		".claude/rules/ci-railway.md":          "consumer",
+		".claude/rules/ci-gcp.md":              "consumer",
 		"notes/deploy-model.txt":               "producer",
 		"internal/gateway/verify_page.html":    "producer",
 		"scripts/seed.sh":                      "producer",

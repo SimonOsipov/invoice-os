@@ -3,8 +3,8 @@
 // it verifies the caller's JWT (via the platform auth Verifier), authorizes the
 // route, injects the verified tenant/user/role and request id as headers the
 // services trust, and forwards the request to the owning service. It is the
-// D1/D3 chokepoint — the only public backend surface. Deploying it over Railway
-// private networking is M2-12; this package is the behavior, tested in-process.
+// D1/D3 chokepoint — the only public backend surface. This package is the
+// behavior, tested in-process.
 package gateway
 
 import (

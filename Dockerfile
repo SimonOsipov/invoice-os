@@ -11,28 +11,18 @@
 # excludes all Go source), so this build sees cmd/ and internal/ while the SPA
 # builds keep their lean context.
 #
-# No `# syntax=` directive on purpose: it makes BuildKit fetch the frontend image
-# from Docker Hub before the build, which strands the whole fleet whenever a
-# Railway builder loses egress to registry-1.docker.io. Nothing here needs a
-# frontend newer than the built-in one. Re-adding it re-arms that outage.
+# No `# syntax=` directive: it makes BuildKit fetch its frontend from Docker Hub
+# before every build. Nothing here needs a frontend newer than the built-in one.
 
 ARG SERVICE
 
 # ---- Build: compile ./cmd/${SERVICE} into a static, CGO-free binary ----
 # Pinned to the go.mod version; TestGoPins_RepoAgree fails when the two differ.
 # Go never downloads a toolchain at build time.
-#
-# Pulled through mirror.gcr.io, not docker.io: Railway Metal builders intermittently
-# lose egress to registry-1.docker.io, which fails the build at `load metadata` while
-# gcr.io keeps resolving. Same image -- the manifest digests were compared and match.
+# Pulled through mirror.gcr.io, not docker.io: no Docker Hub rate limit.
 FROM mirror.gcr.io/library/golang:1.26.10-alpine AS build
 WORKDIR /src
-# Modules first: this COPY+download layer is reused across source-only changes
-# via normal Docker layer caching. A BuildKit `--mount=type=cache` is deliberately
-# NOT used: Railway's Metal builder requires every cache-mount id to embed the
-# building service's own id (`id=s/<service-id>-<target>`) and forbids env vars in
-# the id, which cannot be expressed in the ONE Dockerfile shared by every service
-# (.claude/rules/add-service.md). Plain layers keep the build portable (Railway + local).
+# Modules first: this COPY+download layer is reused across source-only changes.
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
@@ -42,8 +32,7 @@ RUN test -n "${SERVICE}" || { echo "Dockerfile: SERVICE build arg is required" >
     CGO_ENABLED=0 go build -tags "$(cat "cmd/${SERVICE}/build.tags" 2>/dev/null)" -o /out/service ./cmd/${SERVICE}
 
 # ---- Run: distroless static (CA certs + nonroot user), binary only ----
-# The service binds :$PORT on all interfaces (Railway private networking is
-# IPv6); Railway health-checks /healthz (registered by the platform kit).
+# The service binds :$PORT on all interfaces; Cloud Run injects PORT.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/service /service
 EXPOSE 8080

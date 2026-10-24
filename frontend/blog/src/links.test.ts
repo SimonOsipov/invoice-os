@@ -6,8 +6,8 @@ afterEach(() => vi.unstubAllEnvs())
 
 describe('links', () => {
   it('links_landingHrefUsesTheLandingUrl', () => {
-    vi.stubEnv('VITE_LANDING_URL', 'https://landing-pr-1.up.railway.app/')
-    expect(landingHref()).toBe('https://landing-pr-1.up.railway.app')
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing-pr-1-944095690109.africa-south1.run.app/')
+    expect(landingHref()).toBe('https://landing-pr-1-944095690109.africa-south1.run.app')
     for (const v of ['', '   ']) {
       vi.stubEnv('VITE_LANDING_URL', v)
       expect(landingHref(), JSON.stringify(v)).toBe(`https://${PRODUCTION_HOSTNAMES[0]}`)
@@ -15,15 +15,15 @@ describe('links', () => {
   })
 
   it('links_privacyHrefIsOnTheLandingOrigin', () => {
-    vi.stubEnv('VITE_LANDING_URL', 'https://landing-pr-1.up.railway.app/')
-    expect(privacyHref()).toBe('https://landing-pr-1.up.railway.app/privacy')
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing-pr-1-944095690109.africa-south1.run.app/')
+    expect(privacyHref()).toBe('https://landing-pr-1-944095690109.africa-south1.run.app/privacy')
     vi.stubEnv('VITE_LANDING_URL', '')
     expect(privacyHref()).toBe(`https://${PRODUCTION_HOSTNAMES[0]}/privacy`)
   })
 
   it('links_demoHrefIsTheLandingDeepLink', () => {
-    vi.stubEnv('VITE_LANDING_URL', 'https://landing-pr-1.up.railway.app/')
-    expect(demoHref()).toBe('https://landing-pr-1.up.railway.app/?demo')
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing-pr-1-944095690109.africa-south1.run.app/')
+    expect(demoHref()).toBe('https://landing-pr-1-944095690109.africa-south1.run.app/?demo')
     vi.stubEnv('VITE_LANDING_URL', '')
     expect(demoHref()).toBe(`https://${PRODUCTION_HOSTNAMES[0]}/?demo`)
   })

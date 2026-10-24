@@ -11,11 +11,11 @@ import buildinfo
 import sentryfilter
 
 
-def release_name(build_sha, railway_sha):
+def release_name(build_sha, platform_sha):
     if build_sha not in ("", "dev"):
         return build_sha
-    if railway_sha:
-        return f"unstamped-{railway_sha}"
+    if platform_sha:
+        return f"unstamped-{platform_sha}"
     return "unstamped"
 
 
@@ -42,13 +42,9 @@ def sentry_options(env):
         return None
     return {
         "dsn": dsn,
-        # ceiling: the RAILWAY_* names are fallbacks, delete with Railway in GKE-12.
-        "environment": _first(
-            env, "DEPLOY_ENV", "RAILWAY_ENVIRONMENT_NAME", "ENVIRONMENT", default="development"
-        ),
+        "environment": _first(env, "DEPLOY_ENV", "ENVIRONMENT", default="development"),
         "release": release_name(
-            buildinfo.read_build_sha(buildinfo.BUILD_FILE),
-            _first(env, "BUILD_SHA", "RAILWAY_GIT_COMMIT_SHA"),
+            buildinfo.read_build_sha(buildinfo.BUILD_FILE), env.get("BUILD_SHA", "")
         ),
         "server_name": "docling",
         "send_default_pii": False,

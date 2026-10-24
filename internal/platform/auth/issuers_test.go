@@ -16,15 +16,15 @@ func TestParseTrustedIssuers(t *testing.T) {
 		{name: "whitespace", raw: "  \n\t "},
 		{
 			name: "one entry",
-			raw:  `[{"issuer":"urn:ascomply:auth:pr-1","jwks_url":"http://auth.railway.internal:8080/.well-known/jwks.json"}]`,
-			want: []TrustedIssuer{{Issuer: "urn:ascomply:auth:pr-1", JWKSURL: "http://auth.railway.internal:8080/.well-known/jwks.json"}},
+			raw:  `[{"issuer":"urn:ascomply:auth:pr-1","jwks_url":"https://auth-pr-1.africa-south1.run.app/.well-known/jwks.json"}]`,
+			want: []TrustedIssuer{{Issuer: "urn:ascomply:auth:pr-1", JWKSURL: "https://auth-pr-1.africa-south1.run.app/.well-known/jwks.json"}},
 		},
 		{
 			name: "two entries",
-			raw: `[{"issuer":"urn:ascomply:auth:pr-1","jwks_url":"http://auth.railway.internal:8080/.well-known/jwks.json"},` +
+			raw: `[{"issuer":"urn:ascomply:auth:pr-1","jwks_url":"https://auth-pr-1.africa-south1.run.app/.well-known/jwks.json"},` +
 				`{"issuer":"urn:ascomply:auth:production","jwks_url":"https://auth.example/.well-known/jwks.json"}]`,
 			want: []TrustedIssuer{
-				{Issuer: "urn:ascomply:auth:pr-1", JWKSURL: "http://auth.railway.internal:8080/.well-known/jwks.json"},
+				{Issuer: "urn:ascomply:auth:pr-1", JWKSURL: "https://auth-pr-1.africa-south1.run.app/.well-known/jwks.json"},
 				{Issuer: "urn:ascomply:auth:production", JWKSURL: "https://auth.example/.well-known/jwks.json"},
 			},
 		},

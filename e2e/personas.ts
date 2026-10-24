@@ -17,8 +17,8 @@ export type PersonaId = 'developer' | 'support' | 'firm' | 'inhouse'
 // `developer` persona id labels.
 export type Destination = 'app' | 'ops' | 'support'
 
-// Which environment variable carries each destination's base URL on this run's ephemeral
-// Railway environment (M4-23). Callers resolve it lazily.
+// Which environment variable carries each destination's base URL on this run's PR
+// preview. Callers resolve it lazily.
 export const DESTINATION_ENV: Record<Destination, string> = {
   app: 'APP_URL',
   ops: 'OPS_CONSOLE_URL',

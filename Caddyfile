@@ -4,7 +4,7 @@
 	auto_https off
 }
 
-# Railway injects $PORT; default to 8080 for local `docker run` smoke tests.
+# Cloud Run injects $PORT; default to 8080 for local `docker run` smoke tests.
 :{$PORT:8080} {
 	encode gzip
 
@@ -14,7 +14,7 @@
 		X-Frame-Options "DENY"
 	}
 
-	# Liveness endpoint for Railway's healthcheck — answered before the filesystem.
+	# Liveness endpoint, answered before the filesystem. Cloud Run reserves /healthz on run.app.
 	handle /health {
 		respond "OK" 200
 	}

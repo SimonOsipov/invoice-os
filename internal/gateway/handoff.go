@@ -24,7 +24,7 @@ type Handoffs interface {
 }
 
 // HandoffStore is the in-process Handoffs.
-// ceiling: in-process, so instances do not share codes; only for a single-instance deployment (Railway), delete in GKE-12.
+// ceiling: in-process, so instances do not share codes; only for local runs and tests (DATABASE_GATEWAY_URL unset).
 type HandoffStore struct {
 	mu      sync.Mutex
 	ttl     time.Duration

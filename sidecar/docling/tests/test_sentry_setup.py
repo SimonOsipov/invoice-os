@@ -48,19 +48,17 @@ def test_no_dsn_means_off(monkeypatch):
         ({"ENVIRONMENT": "staging"}, "staging"),
         ({"DEPLOY_ENV": "production"}, "production"),
         ({"DEPLOY_ENV": "", "ENVIRONMENT": ""}, "development"),
-        ({"DEPLOY_ENV": "pr-7", "RAILWAY_ENVIRONMENT_NAME": "production"}, "pr-7"),
-        ({"RAILWAY_ENVIRONMENT_NAME": "production", "ENVIRONMENT": "development"}, "production"),
         ({}, "development"),
     ],
 )
-def test_environment_from_railway_then_environment_then_default(env, want):
+def test_environment_from_deploy_env_then_environment_then_default(env, want):
     opts = sentry_setup.sentry_options({"SENTRY_DSN": FAKE_DSN, **env})
     assert opts is not None
     assert opts.get("environment") == want
 
 
 @pytest.mark.parametrize(
-    ("build", "railway", "want"),
+    ("build", "platform", "want"),
     [
         ("abc123", "", "abc123"),
         ("abc123", "f00", "abc123"),
@@ -70,8 +68,8 @@ def test_environment_from_railway_then_environment_then_default(env, want):
         ("", "", "unstamped"),
     ],
 )
-def test_release_name(build, railway, want):
-    assert sentry_setup.release_name(build, railway) == want
+def test_release_name(build, platform, want):
+    assert sentry_setup.release_name(build, platform) == want
 
 
 def test_release_comes_from_the_build_file(monkeypatch, tmp_path):
@@ -87,8 +85,8 @@ def test_release_comes_from_the_build_file(monkeypatch, tmp_path):
     assert opts is not None
     assert opts.get("release") == "unstamped-f00"
 
-    # Stamped build wins over the Railway sha; a "dev" or empty file falls back to it.
-    for stamp, railway, want in [
+    # Stamped build wins over BUILD_SHA; a "dev" or empty file falls back to it.
+    for stamp, build_sha, want in [
         ("abc123\n", "f00", "abc123"),
         ("dev\n", "f00", "unstamped-f00"),
         ("\n", "f00", "unstamped-f00"),
@@ -97,21 +95,8 @@ def test_release_comes_from_the_build_file(monkeypatch, tmp_path):
         build_file.write_text(stamp)
         monkeypatch.setattr(buildinfo, "BUILD_FILE", build_file)
         opts = sentry_setup.sentry_options(
-            {"SENTRY_DSN": FAKE_DSN, "BUILD_SHA": railway}
+            {"SENTRY_DSN": FAKE_DSN, "BUILD_SHA": build_sha}
         )
-        assert opts is not None
-        assert opts.get("release") == want
-
-
-def test_release_falls_back_to_the_railway_sha(monkeypatch, tmp_path):
-    build_file = tmp_path / "build.txt"
-    build_file.write_text("dev\n")
-    monkeypatch.setattr(buildinfo, "BUILD_FILE", build_file)
-    for env, want in [
-        ({"BUILD_SHA": "f00", "RAILWAY_GIT_COMMIT_SHA": "bar"}, "unstamped-f00"),
-        ({"RAILWAY_GIT_COMMIT_SHA": "bar"}, "unstamped-bar"),
-    ]:
-        opts = sentry_setup.sentry_options({"SENTRY_DSN": FAKE_DSN, **env})
         assert opts is not None
         assert opts.get("release") == want
 
@@ -246,7 +231,7 @@ def test_scrub_hooks_run_on_events_transactions_logs_and_breadcrumbs(sentry_capt
 
 
 @pytest.mark.parametrize("environment", ["pr-12", "staging"])
-def test_event_environment_follows_railway_not_the_sdk_default(environment):
+def test_event_environment_follows_deploy_env_not_the_sdk_default(environment):
     transport = CapturingTransport()
     options = sentry_setup.sentry_options(
         {"SENTRY_DSN": FAKE_DSN, "DEPLOY_ENV": environment}

@@ -67,7 +67,7 @@ describe('shouldLoadTag', () => {
   it('AC-2: the gate is closed on every non-production hostname', () => {
     for (const h of [
       'localhost',
-      'landing-pr-42.up.railway.app',
+      'landing-pr-42-944095690109.africa-south1.run.app',
       'ascomply.com',
       'WWW.ASCOMPLY.COM.attacker.example',
       '',

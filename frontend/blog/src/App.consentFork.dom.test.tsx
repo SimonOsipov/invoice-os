@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// @vitest-environment-options { "url": "https://blog-pr-1.up.railway.app/" }
+// @vitest-environment-options { "url": "https://blog-pr-1-944095690109.africa-south1.run.app/" }
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import './testStorage'
 import { w } from '../../landing/src/hubspotChat.test.util'

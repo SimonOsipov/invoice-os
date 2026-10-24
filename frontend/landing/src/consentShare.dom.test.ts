@@ -91,14 +91,14 @@ describe('shared consent cookie', () => {
     writeConsent(true, storeW, new Date('2026-03-01T00:00:00.000Z'), wwwDoc, WWW)
     const wwwBefore = jarCookies(cookieJar, WWW_URL)[0].value
 
-    const forkUrl = 'https://pr-12-library.up.railway.app/'
+    const forkUrl = 'https://library-pr-12-944095690109.africa-south1.run.app/'
     const forkDoc = win(forkUrl, cookieJar)
     const localDoc = win('http://localhost/', cookieJar)
     const storeF = memStore()
-    expect(readConsent(memStore(), forkDoc, 'pr-12-library.up.railway.app')).toBeNull()
+    expect(readConsent(memStore(), forkDoc, 'library-pr-12-944095690109.africa-south1.run.app')).toBeNull()
     expect(readConsent(memStore(), localDoc, 'localhost')).toBeNull()
 
-    writeConsent(true, storeF, new Date('2026-03-02T00:00:00.000Z'), forkDoc, 'pr-12-library.up.railway.app')
+    writeConsent(true, storeF, new Date('2026-03-02T00:00:00.000Z'), forkDoc, 'library-pr-12-944095690109.africa-south1.run.app')
     expect(storeF.map.has(KEY)).toBe(true)
     expect(jarCookies(cookieJar, forkUrl)).toEqual([])
     expect(jarCookies(cookieJar, WWW_URL)[0].value).toBe(wwwBefore)
@@ -108,7 +108,7 @@ describe('shared consent cookie', () => {
     for (const h of [WWW, ' WWW.ASCOMPLY.COM ', LIB, 'blog.ascomply.com', 'app.ascomply.com', ' APP.ASCOMPLY.COM ']) {
       expect(sharedConsentDomain(h)).toBe('ascomply.com')
     }
-    for (const h of ['ascomply.com', 'app.ascomply.com.', 'app.ascomply.com.evil.example', 'www.ascomply.com.evil.example', 'library.ascomply.com.', 'blog.ascomply.com.', 'blog-pr-1.up.railway.app', 'app-pr-1.up.railway.app', 'localhost', '']) {
+    for (const h of ['ascomply.com', 'app.ascomply.com.', 'app.ascomply.com.evil.example', 'www.ascomply.com.evil.example', 'library.ascomply.com.', 'blog.ascomply.com.', 'blog-pr-1-944095690109.africa-south1.run.app', 'app-pr-1-944095690109.africa-south1.run.app', 'localhost', '']) {
       expect(sharedConsentDomain(h)).toBeNull()
     }
   })
@@ -305,7 +305,7 @@ describe('shared consent cookie', () => {
 
   it('QA-01 a non-production host ignores a cookie it can see and never migrates into it', () => {
     const { cookieJar } = setup()
-    const forkUrl = 'https://pr-12-library.up.railway.app/'
+    const forkUrl = 'https://library-pr-12-944095690109.africa-south1.run.app/'
     const forkDoc = win(forkUrl, cookieJar)
     forkDoc.cookie = `${KEY}=${enc(rec(false, '2026-05-01T00:00:00.000Z'))}; Path=/; Secure`
     expect(jarCookies(cookieJar, forkUrl)).toHaveLength(1)
@@ -314,7 +314,7 @@ describe('shared consent cookie', () => {
     seed(store, local)
     const before = forkDoc.cookie
 
-    expect(readConsent(store, forkDoc, 'pr-12-library.up.railway.app')).toEqual(local)
+    expect(readConsent(store, forkDoc, 'library-pr-12-944095690109.africa-south1.run.app')).toEqual(local)
     expect(store.map.has(KEY)).toBe(true)
     expect(forkDoc.cookie).toBe(before)
   })

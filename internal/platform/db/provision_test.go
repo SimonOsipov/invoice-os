@@ -629,7 +629,7 @@ func TestProvisionGuardOffStillMigratesAgainstRealDB(t *testing.T) {
 // The tests below were added during QA verification of task-128, on top of the
 // architect's pre-authored Test Specs above. They target failure modes the
 // brief called out explicitly: an unreachable (not just unparseable) superuser
-// DSN, the OTHER allowlisted shape (a Railway PR environment) exercised through
+// DSN, the OTHER allowlisted shape (a PR-preview environment) exercised through
 // the full sequence rather than BootstrapEnabled alone, a mid-sequence failure
 // (bootstrap succeeds, migrate fails) recovering cleanly on the next boot, two
 // replicas racing Provision concurrently against one DB, and the data-loss risk
@@ -672,8 +672,8 @@ func TestProvisionUnreachableSuperuserDSNFailsBounded(t *testing.T) {
 }
 
 // TestProvisionPRShapedEnvironmentEndToEnd: AC-2's OTHER allowlisted shape
-// (BootstrapEnabled's provisionableEnvironment also accepts a Railway
-// PR-environment name, e.g. "pr-42") exercised through the FULL boot sequence
+// (BootstrapEnabled's provisionableEnvironment also accepts a PR-preview
+// environment name, e.g. "pr-42") exercised through the FULL boot sequence
 // against a real Postgres — not just the pure BootstrapEnabled unit check
 // elsewhere in this package. Runs against the shared dev/CI DB every other
 // test in this package depends on, so it also doubles as an idempotency check
@@ -694,7 +694,7 @@ func TestProvisionPRShapedEnvironmentEndToEnd(t *testing.T) {
 		SeedFS:        dbsql.FS,
 	}
 	if err := db.Provision(ctx, cfg); err != nil {
-		t.Fatalf("Provision with ENVIRONMENT=pr-42 (a Railway PR-environment name): %v", err)
+		t.Fatalf("Provision with ENVIRONMENT=pr-42 (a PR-preview environment name): %v", err)
 	}
 
 	for _, role := range bootstrapRoles {
@@ -750,7 +750,7 @@ func TestProvisionCreatesAuthAdminOnAPREnvironment(t *testing.T) {
 // fail loudly naming the migrate step, AND a follow-up boot with a real
 // migration DSN must succeed cleanly: bootstrap.sql's create-or-converge
 // idempotency means the earlier partial success (roles created/reasserted)
-// left no half-state that blocks the next deploy from a Railway restart.
+// left no half-state that blocks the next deploy from a restart.
 func TestProvisionMigrateFailureAfterBootstrapSuccessRecoversCleanly(t *testing.T) {
 	superDSN, migDSN := requireProvisionDSNs(t)
 	ctx := context.Background()
@@ -794,7 +794,7 @@ func TestProvisionMigrateFailureAfterBootstrapSuccessRecoversCleanly(t *testing.
 
 // TestProvisionConcurrentBootsSerializeCleanly: simulates two-or-more gateway
 // replicas racing Provision against the SAME database at boot — the realistic
-// Railway multi-replica scenario, not just db.Bootstrap in isolation (already
+// multi-replica scenario, not just db.Bootstrap in isolation (already
 // covered by TestBootstrapConcurrentCallsSerialiseUnderAdvisoryLock in
 // bootstrap_test.go). Every concurrent Provision call must succeed (the
 // advisory lock serializes bootstrap; migrate/seed are naturally idempotent),

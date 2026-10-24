@@ -82,3 +82,7 @@ resend-verification: timing
 # auth.spec.ts passes it to provisionRealAccount and reads it back from the card.
 # The test is its own producer; the console fixture only shared the name.
 Ada Nwosu
+
+# --- gh CLI subcommand (GKE-12) -------------------------------------------
+# A GitHub CLI command, not a string the app produces; prenv's sweep only shelled out to it.
+gh pr view

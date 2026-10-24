@@ -14,15 +14,14 @@
 // fork underneath it to fall back to; see db/reset.dev.sql's history (deleted
 // by M4-22-07 — it TRUNCATEd `tenants` unconditionally against whatever the
 // workflow happened to be targeting). Reset here is reachable ONLY for a
-// Railway PR-environment name (resettableEnvironment below) and is invoked
+// PR-preview environment name (resettableEnvironment below) and is invoked
 // from the exact same boot-time seam Seed already runs from (Provision,
 // provision.go) — it is a narrowing of what M4-22-07 shut off, not a
 // reopening of it.
 //
 // The paragraph above still describes Reset exactly, but Reset is no longer the
 // only boot-time destruction here: DEMO-04's demo-tenant purge (demopurge.go)
-// runs from the same seam, gated like Seed on ENVIRONMENT, not on the Railway
-// name. It is narrowed by allowlist instead — only the tenants DemoTenants
+// runs from the same seam, gated like Seed on ENVIRONMENT, not on DEPLOY_ENV. It is narrowed by allowlist instead — only the tenants DemoTenants
 // names, and db.Seed restores them in the same call.
 package db
 
@@ -32,8 +31,8 @@ import (
 )
 
 // resettableEnvironment reports whether environment is one the destructive
-// PR-env reset (Reset, below) is ever permitted against: a Railway
-// PR-environment name (prEnvironmentPattern, bootstrap.go) — and NOTHING ELSE.
+// PR-env reset (Reset, below) is ever permitted against: a PR-preview
+// environment name (prEnvironmentPattern, bootstrap.go) — and NOTHING ELSE.
 //
 // This is DELIBERATELY NARROWER than provisionableEnvironment (bootstrap.go),
 // which additionally treats "development" as allowed. Two independent reasons,
@@ -46,9 +45,8 @@ import (
 //  2. It would be actively WRONG even ignoring (1): `provisionableEnvironment`'s
 //     "development" branch is what makes Bootstrap/Seed fire inside a REAL PR
 //     fork today, because ENVIRONMENT reads the literal string "development"
-//     inside every PR environment (.claude/rules/ci-railway.md;
-//     CI's fork-vars-after-urls sets it to `development` in every
-//     fork, Decision [env-name-is-convention]).
+//     inside every PR preview (scripts/ci/preview.sh sets it,
+//     Decision [env-name-is-convention]).
 //     If Reset's gate accepted that same "development" branch, it would fire
 //     on every PR fork under the SAME string that also matches the persistent
 //     environment's own pre-rename name — the one string this function must
@@ -65,7 +63,7 @@ func resettableEnvironment(environment string) bool {
 }
 
 // ResetEnabled reports whether the destructive PR-env reset (Reset) is
-// permitted: flag == "true" AND environment matches a Railway PR-environment
+// permitted: flag == "true" AND environment matches a PR-preview environment
 // name shape, and NOTHING ELSE (resettableEnvironment above). Mirrors
 // BootstrapEnabled's shape (bootstrap.go) — ALLOWLIST, not blocklist, same
 // rationale — but is the narrower of the two allowlists: every environment
@@ -77,8 +75,8 @@ func resettableEnvironment(environment string) bool {
 // callers MUST pass platform.DeployEnv(), NOT os.Getenv("ENVIRONMENT"): CI writes
 // ENVIRONMENT=development in every fork. DeployEnv is "pr-<N>" in a fork and
 // "production" in production.
-// ceiling: DEPLOY_ENV is hand-set (Terraform on Cloud Run), unlike Railway's injected
-// name; a production DEPLOY_ENV=pr-<N> plus GATEWAY_DB_RESET=true would reset production.
+// ceiling: DEPLOY_ENV is hand-set (Terraform in prod, scripts/ci/preview.sh in previews);
+// a production DEPLOY_ENV=pr-<N> plus GATEWAY_DB_RESET=true would reset production.
 // See
 // resettableEnvironment's doc comment for the full reasoning and
 // cmd/gateway/main.go's ProvisionConfig construction for the call site this

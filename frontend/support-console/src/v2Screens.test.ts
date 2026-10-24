@@ -637,6 +637,16 @@ describe('System health markup', () => {
     expect(texts(not.dead)).toEqual(expect.arrayContaining(['3', 'ATTENTION']))
   })
 
+  it('a health body without river_jobs still renders, with the jobs tiles unavailable', () => {
+    const { river_jobs: _drop, ...old } = HEALTH
+    const html = healthWith({ data: old as StaffHealth })
+    expect(html).toContain('System health')
+    expect(html).toContain('data-service="gateway"')
+    const { queue, dead } = tilesOf(html)
+    expect(texts(queue)).toEqual(expect.arrayContaining(['Queue depth', '—', 'UNAVAILABLE']))
+    expect(texts(dead)).toEqual(expect.arrayContaining(['Dead-lettered', '—', 'UNAVAILABLE']))
+  })
+
   it('a service without jobs shows one note in place of the jobs tiles', () => {
     const html = healthWith({ service: 'app' })
     const note = 'app owns no background jobs. Pick submission, notifications, worker or All services to see them.'

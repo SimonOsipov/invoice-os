@@ -51,6 +51,10 @@ function tiles(d: StaffHealth, service: string): { fleet: Tile; jobs: Tile[] | n
   const { up, total, down } = fleetSummary(d.fleet)
   const fleet = FLEET_WORD[d.fleet.status]
   const fleetTile: Tile = { key: 'fleet', label: 'Fleet', value: d.fleet.status === 'unknown' ? '—' : `${up}/${total}`, unit: 'services up', word: fleet.word, scope: ALL_SERVICES_TAG, tone: fleet.tone, down, points: series(d.trend, 'services_down') }
+  if (!d.river_jobs) {
+    const gap: Omit<Tile, 'key' | 'label'> = { value: '—', unit: 'jobs', word: 'UNAVAILABLE', tone: 'muted', points: [] }
+    return { fleet: fleetTile, jobs: [{ key: 'queue', label: 'Queue depth', ...gap }, { key: 'dead-lettered', label: 'Dead-lettered', ...gap }] }
+  }
   const j = jobsOf(d.river_jobs, service)
   if (!j) return { fleet: fleetTile, jobs: null }
   return {

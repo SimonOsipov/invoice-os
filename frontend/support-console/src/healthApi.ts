@@ -42,7 +42,7 @@ export interface StaffHealth {
   fleet: FleetHealth
   jobs: Record<string, number>
   queue_depth: number
-  river_jobs: JobView
+  river_jobs?: JobView // absent from a submission older than the support-console
   trend: TrendPoint[]
 }
 

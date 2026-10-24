@@ -20,6 +20,7 @@ const (
 	resendWindow = time.Hour
 	maxLabel     = 80
 	maxText      = 500
+	sentCap      = memoSize * 4
 )
 
 var (
@@ -27,7 +28,11 @@ var (
 	uuidRE  = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 	digitRE = regexp.MustCompile(`[0-9]{7,}`)
 	tokenRE = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+	emailRE = regexp.MustCompile(`[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+`)
 )
+
+// emailPaths are GoTrue's sign-in, sign-up, password-reset and refresh routes (supabase/auth v2.197.0 internal/api/api.go).
+var emailPaths = map[string]bool{"/token": true, "/signup": true, "/recover": true, "/verify": true}
 
 // reqMemo is what an earlier line of one request left behind.
 type reqMemo struct {
@@ -39,13 +44,19 @@ type reqMemo struct {
 type classifier struct {
 	now func() time.Time
 
-	mu        sync.Mutex
-	ready     bool
-	jsonLabel string
-	rawLabel  string
-	memo      map[string]*reqMemo
-	order     []string
-	sent      map[string]time.Time
+	mu         sync.Mutex
+	ready      bool
+	crashLabel string
+	rawLabel   string
+	memo       map[string]*reqMemo
+	order      []string
+	sent       map[string]time.Time
+	sentOrder  []sentAt
+}
+
+type sentAt struct {
+	key string
+	at  time.Time
 }
 
 func newClassifier() *classifier {
@@ -63,10 +74,10 @@ func (c *classifier) line(b []byte) *sentry.Event {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(b, &m); err != nil || m == nil {
-		if c.rawLabel == "" {
-			c.rawLabel = label(string(b))
+		if m = jsonPrefix(b); m["msg"] == nil {
+			c.rawLine(string(b))
+			return nil
 		}
-		return nil
 	}
 	msg, _ := m["msg"].(string)
 	level, _ := m["level"].(string)
@@ -76,7 +87,7 @@ func (c *classifier) line(b []byte) *sentry.Event {
 		return nil
 	}
 	if level == "fatal" || level == "panic" {
-		c.jsonLabel = label(msg)
+		c.crashLabel = label(msg)
 	}
 
 	rid := requestID(m)
@@ -101,6 +112,16 @@ func (c *classifier) line(b []byte) *sentry.Event {
 	return nil
 }
 
+// rawLine labels a non-JSON stderr line: a Go crash marker always, anything else only as the first.
+func (c *classifier) rawLine(s string) {
+	switch {
+	case strings.HasPrefix(s, "panic:") || strings.HasPrefix(s, "fatal error:"):
+		c.crashLabel = label(s)
+	case c.rawLabel == "":
+		c.rawLabel = label(s)
+	}
+}
+
 func (c *classifier) request(m map[string]any, rid, email, typ, value string) *sentry.Event {
 	if value == "" {
 		value = "request failed"
@@ -109,6 +130,9 @@ func (c *classifier) request(m map[string]any, rid, email, typ, value string) *s
 		email = c.memo[rid].email
 	}
 	path := normPath(str(m["path"]))
+	if !emailPaths[path] || (path == "/token" && str(m["grant_type"]) != "password" && str(m["grant_type"]) != "refresh_token") {
+		email = ""
+	}
 	fp := []string{"gotrue", typ, path, value}
 	if !c.allow(fp) {
 		return nil
@@ -143,7 +167,7 @@ func (c *classifier) exit(code int, startErr error) *sentry.Event {
 	if !c.ready {
 		phase = "boot"
 	}
-	value, lbl := "", c.jsonLabel
+	value, lbl := "", c.crashLabel
 	switch {
 	case startErr != nil:
 		value, lbl = "GoTrue did not start", "did not start"
@@ -167,20 +191,22 @@ func (c *classifier) exit(code int, startErr error) *sentry.Event {
 }
 
 // allow admits one event per fingerprint per hour.
+// The table holds at most sentCap keys: expired keys leave first, then the oldest, so a flood of new fingerprints costs O(1) per line.
 // ceiling: no daily cap, so many distinct failures can spend the shared quota; revisit if auth spends more than 500 errors in a month
 func (c *classifier) allow(fp []string) bool {
 	key, now := strings.Join(fp, "\x00"), c.now()
 	if at, ok := c.sent[key]; ok && now.Sub(at) < resendWindow {
 		return false
 	}
-	if len(c.sent) >= memoSize*4 {
-		for k, at := range c.sent {
-			if now.Sub(at) >= resendWindow {
-				delete(c.sent, k)
-			}
+	for len(c.sentOrder) > 0 && (now.Sub(c.sentOrder[0].at) >= resendWindow || len(c.sentOrder) >= sentCap) {
+		old := c.sentOrder[0]
+		c.sentOrder = c.sentOrder[1:]
+		if c.sent[old.key].Equal(old.at) {
+			delete(c.sent, old.key)
 		}
 	}
 	c.sent[key] = now
+	c.sentOrder = append(c.sentOrder, sentAt{key, now})
 	return true
 }
 
@@ -238,6 +264,7 @@ func text(v any) string {
 
 // normText drops tokens, ids and phone numbers from GoTrue's error text.
 func normText(s string) string {
+	s = emailRE.ReplaceAllString(s, "{email}")
 	s = jwtRE.ReplaceAllString(s, "[redacted]")
 	s = uuidRE.ReplaceAllString(s, "{id}")
 	s = digitRE.ReplaceAllString(s, "{n}")
@@ -253,18 +280,42 @@ func normPath(p string) string {
 	if i := strings.IndexAny(p, "?#"); i >= 0 {
 		p = p[:i]
 	}
-	p = uuidRE.ReplaceAllString(p, "{id}")
+	p = emailRE.ReplaceAllString(uuidRE.ReplaceAllString(p, "{id}"), "{email}")
 	if len(p) > 200 {
 		p = p[:200]
 	}
 	return p
 }
 
-// label is the text before the first ": ". D-7: nothing after it can leave.
+// label is the text before the first ": "; nothing after it can leave.
 func label(s string) string {
-	s, _, _ = strings.Cut(s, ": ")
+	s, _, _ = strings.Cut(emailRE.ReplaceAllString(s, "{email}"), ": ")
 	if len(s) > maxLabel {
 		s = s[:maxLabel]
 	}
 	return platform.ScrubText(s)
+}
+
+// jsonPrefix reads the complete top-level fields of a JSON object cut off mid-value.
+func jsonPrefix(b []byte) map[string]any {
+	m := map[string]any{}
+	if len(b) == 0 || b[0] != '{' {
+		return m
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	if _, err := dec.Token(); err != nil {
+		return m
+	}
+	for {
+		k, err := dec.Token()
+		key, ok := k.(string)
+		if err != nil || !ok {
+			return m
+		}
+		var v any
+		if dec.Decode(&v) != nil {
+			return m
+		}
+		m[key] = v
+	}
 }

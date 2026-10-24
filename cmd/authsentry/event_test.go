@@ -521,17 +521,161 @@ func TestClassify_AnIncompleteRequestLineOpensNone(t *testing.T) {
 	}
 }
 
+func distinctCause(i int) []byte {
+	return completed(500, map[string]any{"error": fmt.Sprintf("cause %c%c%c", 'a'+i%26, 'a'+i/26%26, 'a'+i/676)})
+}
+
 func TestClassify_PruningKeepsTheHourlyLimit(t *testing.T) {
 	c := newClassifier()
 	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 	c.now = func() time.Time { return now }
-	for i := 0; i < memoSize*4+10; i++ {
-		if c.line(completed(500, map[string]any{"error": fmt.Sprintf("cause %c%c%c", 'a'+i%26, 'a'+i/26%26, 'a'+i/676)})) == nil {
+	for i := 0; i < sentCap+10; i++ {
+		if c.line(distinctCause(i)) == nil {
 			t.Fatalf("distinct failure %d sent nothing", i)
 		}
 	}
-	if c.line(completed(500, map[string]any{"error": "cause aaa"})) != nil {
-		t.Error("a repeat within the hour sent an event after the table was pruned")
+	if c.line(distinctCause(sentCap+9)) != nil {
+		t.Error("a repeat of the newest failure within the hour sent an event after the table was pruned")
+	}
+}
+
+func TestClassify_SentTableIsBounded(t *testing.T) {
+	c := newClassifier()
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	for i := 0; i < 5000; i++ {
+		c.line(completed(500, map[string]any{"error": fmt.Sprintf("cause %c%c%c%c", 'a'+i%26, 'a'+i/26%26, 'a'+i/676%26, 'a'+i/17576)}))
+		if len(c.sent) > sentCap || len(c.sentOrder) > sentCap {
+			t.Fatalf("after %d fingerprints the table holds %d keys, cap %d", i+1, len(c.sent), sentCap)
+		}
+	}
+}
+
+func TestClassify_AnExpiredFingerprintSendsAgain(t *testing.T) {
+	c := newClassifier()
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	if c.line(distinctCause(0)) == nil {
+		t.Fatal("first failure sent nothing")
+	}
+	now = now.Add(resendWindow)
+	if c.line(distinctCause(0)) == nil {
+		t.Error("the same failure an hour later sent nothing")
+	}
+	if len(c.sent) != 1 || len(c.sentOrder) != 1 {
+		t.Errorf("table holds %d keys, %d order entries, want 1 each", len(c.sent), len(c.sentOrder))
+	}
+}
+
+func TestClassify_ALaterCrashBeatsABootWarning(t *testing.T) {
+	c := newClassifier()
+	c.line([]byte("WARNING: deprecated setting: x"))
+	c.line(jl(map[string]any{"level": "info", "msg": "GoTrue API started on: :9999"}))
+	c.line([]byte("panic: runtime error: index out of range"))
+	c.line([]byte("goroutine 1 [running]:"))
+	if v := c.exit(2, nil).Exception[0].Value; v != "GoTrue exited with code 2: panic" {
+		t.Errorf("value = %q", v)
+	}
+	if fp := c.exit(2, nil).Fingerprint; fp[3] != "panic" {
+		t.Errorf("fingerprint = %v", fp)
+	}
+}
+
+func TestClassify_ALaterJSONFatalBeatsAnEarlierOne(t *testing.T) {
+	c := newClassifier()
+	c.line(jl(map[string]any{"level": "fatal", "msg": "first: x"}))
+	c.line(jl(map[string]any{"level": "fatal", "msg": "second: y"}))
+	if v := c.exit(1, nil).Exception[0].Value; v != "GoTrue exited with code 1: second" {
+		t.Errorf("value = %q", v)
+	}
+}
+
+func TestAuthEvent_OnlyTheFourFlowsCarryTheEmail(t *testing.T) {
+	ae := map[string]any{"actor_username": "ok@example.com"}
+	cases := []struct {
+		name  string
+		extra map[string]any
+		want  string
+	}{
+		{"password sign-in", map[string]any{"path": "/token", "grant_type": "password"}, "ok@example.com"},
+		{"refresh", map[string]any{"path": "/token", "grant_type": "refresh_token"}, "ok@example.com"},
+		{"sign-up", map[string]any{"path": "/signup"}, "ok@example.com"},
+		{"recover", map[string]any{"path": "/recover"}, "ok@example.com"},
+		{"verify", map[string]any{"path": "/verify"}, "ok@example.com"},
+		{"other grant", map[string]any{"path": "/token", "grant_type": "id_token"}, ""},
+		{"user update", map[string]any{"path": "/user", "method": "PUT"}, ""},
+		{"logout", map[string]any{"path": "/logout"}, ""},
+		{"resend", map[string]any{"path": "/resend"}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			c.extra["auth_event"] = ae
+			events := wire(t, emailEvent(c.extra))
+			if len(events) != 1 {
+				t.Fatalf("recorded %d events, want 1", len(events))
+			}
+			if got := events[0].User.Email; got != c.want {
+				t.Errorf("User.Email = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestAuthEvent_AnotherPersonsEmailInTextIsRedacted(t *testing.T) {
+	raw := wireJSON(t, emailEvent(map[string]any{"error": "failed for other@x.com in time"}))
+	if strings.Contains(raw, "other@x.com") || !strings.Contains(raw, "failed for {email} in time") {
+		t.Errorf("event = %s", raw)
+	}
+	raw = wireJSON(t, jl(map[string]any{
+		"level": "error", "msg": "request panicked", "path": "/user/a.b+c@x.co.uk", "panic": "no row for Other.Person@Sub.Example.org", "request_id": "r1",
+	}))
+	for _, leak := range []string{"Other.Person", "a.b+c@x.co.uk"} {
+		if strings.Contains(raw, leak) {
+			t.Errorf("event carries %q: %s", leak, raw)
+		}
+	}
+}
+
+func TestClassify_AnOversizePanicLineStillOpensTheEvent(t *testing.T) {
+	stack := strings.Repeat("goroutine 1 [running]:\n", 3000)
+	panicLine := jl(map[string]any{
+		"level": "error", "msg": "request panicked", "path": "/token", "method": "POST", "grant_type": "password",
+		"request_id": "rid-9", "panic": "boom", "stack": stack, "component": "api",
+	})
+	done := jl(map[string]any{
+		"level": "error", "msg": "request completed", "path": "/token", "method": "POST", "grant_type": "password",
+		"request_id": "rid-9", "panic": "boom", "stack": stack, "status": 500, "component": "api",
+	})
+	if len(panicLine) <= maxClassifiedLine {
+		t.Fatalf("fixture is %d bytes, not oversize", len(panicLine))
+	}
+	in := string(panicLine) + "\n" + string(done) + "\n"
+	lines := make(chan []byte, 8)
+	var out strings.Builder
+	pumpStderr(strings.NewReader(in), &out, lines)
+	if out.String() != in {
+		t.Fatal("stderr copy is not byte-identical")
+	}
+	c := newClassifier()
+	var events []*sentry.Event
+	for l := range lines {
+		if ev := c.line(l); ev != nil {
+			events = append(events, ev)
+		}
+	}
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if e := events[0]; e.Exception[0].Type != "GoTrue panic" || e.Exception[0].Value != "boom" || e.Tags["request_id"] != "rid-9" || e.Tags["path"] != "/token" {
+		t.Errorf("event = %+v", e)
+	}
+}
+
+func TestClassify_ATruncatedNonRequestLineIsRawText(t *testing.T) {
+	c := newClassifier()
+	c.line([]byte(`{"level":"info","component":"api","tail":"cut off`))
+	if v := c.exit(1, nil).Exception[0].Value; !strings.HasPrefix(v, "GoTrue exited with code 1: ") {
+		t.Errorf("value = %q", v)
 	}
 }
 

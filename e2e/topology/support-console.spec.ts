@@ -778,13 +778,20 @@ type SeenHealth = {
 type SeenPanel = { key: string; available: boolean; series: { name: string; points: [number, number][] }[] }
 // internal/systemhealth PanelData, DeploysSection, LimitsSection
 type SeenMetrics = { range: string; service: string; connection_budget: number; panels: SeenPanel[]; limits: { available: boolean }; deploys: { available: boolean } }
-type Armed = { health: SeenHealth; metrics: SeenMetrics; metricsUrl: URL }
+type Armed = { health: SeenHealth; metrics: SeenMetrics; metricsUrl: URL; latest: { body: SeenHealth } }
 
 // Armed before the nav click: the screen's own reads are the comparison, so a shard moving the queue cannot race them.
 const armHealth = async (page: Page): Promise<Armed> => {
   const first = (path: string) => page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === path, { timeout: 30_000 })
   const [h, m] = await Promise.all([first(STAFF_HEALTH), first('/api/submission/v1/staff/metrics')])
-  return { health: (await h.json()) as SeenHealth, metrics: (await m.json()) as SeenMetrics, metricsUrl: new URL(m.url()) }
+  const health = (await h.json()) as SeenHealth
+  // `latest` follows every later health read: the screen renders the body it last got.
+  const latest = { body: health }
+  page.on('response', (r) => {
+    if (r.request().method() !== 'GET' || new URL(r.url()).pathname !== STAFF_HEALTH || r.status() !== 200) return
+    void r.json().then((b: SeenHealth) => (latest.body = b), () => {})
+  })
+  return { health, metrics: (await m.json()) as SeenMetrics, metricsUrl: new URL(m.url()), latest }
 }
 
 const shortOf = (build?: string): string => (build ? build.slice(0, 7) : '—')
@@ -908,21 +915,70 @@ async function healthLinks(page: Page, seen: SeenHealth): Promise<void> {
   }
 }
 
+// Polls until the locator matches what the latest health body implies; `want` is re-read on each try.
+async function readsLatest(loc: Locator, want: () => string, what: string, mode: 'text' | 'count' = 'text'): Promise<void> {
+  const got = async (): Promise<string> => (mode === 'count' ? String(await loc.count()) : ((await loc.textContent()) ?? ''))
+  await expect.poll(async () => ((await got()) === want() ? 'match' : `${await got()} != ${want()}`), { message: what }).toBe('match')
+}
+
+const NO_JOBS_NOTE = (name: string): string => `${name} owns no background jobs. Pick submission, notifications, worker or All services to see them.`
+const NO_PING_NOTE = (name: string): string => `${name} has no live ping. The live ping covers the backend services.`
+const ROLLUP_DOWN = 'The gateway roll-up is unavailable.'
+
+// Picks each service in turn: jobs tiles, Services rows and the All services tags follow the pick.
+async function healthNarrowing(page: Page, latest: { body: SeenHealth }): Promise<void> {
+  const mn = mainOf(page)
+  const select = mn.locator('select[aria-label="Service"]')
+  const tile = (key: string): Locator => mn.locator(`[data-tile="${key}"]`)
+  const card = mn.locator('.ops-screen-pad > div:last-child')
+  const jobsOwned = (name: string) => latest.body.river_jobs.services[name]
+  // systemhealth.JobOwners and JobRunner: these three always serve totals
+  for (const name of ['submission', 'notifications', 'worker']) expect(jobsOwned(name), `${name} totals are served`).toBeDefined()
+
+  const pick = async (name: string): Promise<void> => {
+    await select.selectOption(name)
+    const at = name === '' ? 'All services' : name
+    const totals = name === '' ? latest.body.river_jobs.total : jobsOwned(name)
+    if (totals) {
+      await readsLatest(tile('queue').locator('.money'), () => String((name === '' ? latest.body.river_jobs.total : jobsOwned(name)).queue_depth), `${at} queue value`)
+      await readsLatest(tile('dead-lettered').locator('.money'), () => String((name === '' ? latest.body.river_jobs.total : jobsOwned(name)).dead_lettered), `${at} dead-lettered value`)
+      await expect(mn.locator('[data-jobs-note]'), `${at} has no jobs note`).toHaveCount(0)
+      await expect(mn.locator('.ops-health-jobs').getByText(/Loading/), `${at} jobs row is not loading`).toHaveCount(0)
+    } else {
+      await expect(mn.locator('[data-jobs-note]'), `${at} jobs note`).toHaveText(NO_JOBS_NOTE(name))
+      await expect(mn.locator('[data-tile="queue"], [data-tile="dead-lettered"]'), `${at} has no jobs tiles`).toHaveCount(0)
+    }
+    await expect(card.getByText(/Loading/), `${at} Services card is not loading`).toHaveCount(0)
+
+    const rollup = latest.body.fleet
+    const listed = rollup.status === 'unknown' ? [] : rollup.services.map((s) => s.name).filter((n) => name === '' || n === name)
+    const rows = mn.locator('[data-service]')
+    await expect(rows, `${at} Services rows`).toHaveCount(listed.length)
+    expect(await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-service')).sort()), `${at} Services row names`).toEqual([...listed].sort())
+    if (rollup.status === 'unknown') await expect(mn.getByText(ROLLUP_DOWN), `${at} roll-up unavailable copy`).toHaveCount(1)
+    else await expect(mn.locator('[data-ping-note]'), `${at} ping note`).toHaveCount(listed.length === 0 && name !== '' ? 1 : 0)
+    if (rollup.status !== 'unknown' && listed.length === 0 && name !== '') await expect(mn.locator('[data-ping-note]'), `${at} ping note text`).toHaveText(NO_PING_NOTE(name))
+    if (name === 'auth' && listed.length > 0) await expect(rows.getByRole('link'), 'auth row has no Sentry link').toHaveCount(0)
+
+    for (const key of SCOPED) await expect(tile(key).locator('[data-scope]'), `${key} tag at ${at}`).toHaveText('All services')
+  }
+  for (const name of ['submission', 'notifications', 'worker', 'auth', 'app', '']) await pick(name)
+}
+
 async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Promise<void> {
   const mn = mainOf(page)
-  const { health: seen, metrics, metricsUrl } = await (armed as Promise<Armed>)
+  const { health: seen, metrics, metricsUrl, latest } = await (armed as Promise<Armed>)
   const tile = (key: string): Locator => mn.locator(`[data-tile="${key}"]`)
   await expect(tile('fleet'), 'the health tiles have loaded').toBeVisible()
 
   const known = seen.fleet.status !== 'unknown'
   const up = seen.fleet.services.filter((s) => s.status === 'up').length
   await expect(tile('fleet').locator('.money')).toHaveText(known ? `${up}/${seen.fleet.services.length}` : '—')
-  const total = seen.river_jobs.total
-  await expect(tile('queue').locator('.money')).toHaveText(String(total.queue_depth))
-  await expect(tile('dead-lettered').locator('.money')).toHaveText(String(total.dead_lettered))
+  await readsLatest(tile('queue').locator('.money'), () => String(latest.body.river_jobs.total.queue_depth), 'queue value')
+  await readsLatest(tile('dead-lettered').locator('.money'), () => String(latest.body.river_jobs.total.dead_lettered), 'dead-lettered value')
   const fleetWord = { ok: 'HEALTHY', degraded: 'DEGRADED', unknown: 'UNKNOWN' }[seen.fleet.status as 'ok' | 'degraded' | 'unknown']
   await expect(tile('fleet').getByText(fleetWord, { exact: true }), 'fleet status word').toHaveCount(1)
-  await expect(tile('dead-lettered').getByText(total.dead_lettered > 0 ? 'ATTENTION' : 'CLEAR', { exact: true }), 'dead-lettered status word').toHaveCount(1)
+  await readsLatest(tile('dead-lettered').locator('[data-word]'), () => (latest.body.river_jobs.total.dead_lettered > 0 ? 'ATTENTION' : 'CLEAR'), 'dead-lettered status word')
 
   if (known) {
     expect(seen.fleet.services.length, 'the fleet read names services').toBeGreaterThan(0)
@@ -939,7 +995,10 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
     ['queue', 'river_jobs'],
     ['dead-lettered', 'river_jobs'],
   ]
-  for (const [key, field] of series) await expect(tile(key).locator('svg'), `${key} sparkline`).toHaveCount(nonNull(seen.trend, field) >= 2 ? 1 : 0)
+  for (const [key, field] of series) {
+    if (field === 'river_jobs') await readsLatest(tile(key).locator('svg'), () => String(nonNull(latest.body.trend, field) >= 2 ? 1 : 0), `${key} sparkline count`, 'count')
+    else await expect(tile(key).locator('svg'), `${key} sparkline`).toHaveCount(nonNull(seen.trend, field) >= 2 ? 1 : 0)
+  }
 
   // Stable parts only: a failed gateway probe empties a build, and a read can be unknown with no services.
   const live = await liveStaffGet<SeenHealth>(STAFF_HEALTH)
@@ -959,6 +1018,7 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
   await expectStyles(parent(mn.locator('[data-service]').first().getByText(/^(UP|DOWN)$/)), 'service badge', { radius: '4px' })
 
   await metricsReads(page, seen, metrics, metricsUrl)
+  await healthNarrowing(page, latest)
   await healthLinks(page, seen)
 
   // Core AC 2: the fleet route grants the console no CORS.
@@ -972,9 +1032,9 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
 
 const STAT_KEYS = ['fleet', 'req', 'errors', 'p95', 'connections']
 const JOB_KEYS = ['queue', 'dead-lettered']
-// Which tiles carry a status word: always, only NO DATA, or never.
 // Which tiles carry the All services tag (the fleet-wide ones).
 const SCOPED = ['fleet', 'connections']
+// Which tiles carry a status word: always, only NO DATA, or never.
 const WORD_RULE: Record<string, 'always' | 'no-data' | 'never'> = { fleet: 'always', req: 'no-data', errors: 'always', p95: 'always', connections: 'always', queue: 'never', 'dead-lettered': 'always' }
 
 // Reads one tile row by key: its tiles sit in order, share a top and stay apart; each tile holds its label, word, value and unit.

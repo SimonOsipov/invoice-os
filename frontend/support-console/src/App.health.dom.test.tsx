@@ -65,6 +65,7 @@ const HEALTH: StaffHealth = {
   fleet: { status: 'ok', services: [{ name: 'gateway', status: 'up', build: '541ac755c7a1' }] },
   jobs: { dead_lettered: 0 },
   queue_depth: 4,
+  river_jobs: { total: { queue_depth: 4, dead_lettered: 0 }, services: { submission: { queue_depth: 0, dead_lettered: 0 }, notifications: { queue_depth: 0, dead_lettered: 0 }, worker: { queue_depth: 4, dead_lettered: 0 } } },
   trend: [],
 }
 
@@ -178,14 +179,14 @@ describe('Console system health refresh', () => {
   const WITH_REQ: StaffMetrics = { ...METRICS, panels: [{ key: 'req_per_min', unit: 'req/min', available: true, series: [{ name: 'gateway', points: [[1, 42]] }] }] }
   const tick = (ms = HEALTH_REFRESH_MS) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
   const reqTile = () => (document.querySelector('[data-tile="req"]') as HTMLElement).textContent ?? ''
-  const open = async () => {
+  const open = async (up = '1/1') => {
     vi.useFakeTimers()
     metrics.mockResolvedValue(WITH_REQ)
     render(<App />)
     await act(async () => {})
     fireEvent.click(screen.getByRole('button', { name: /^System health$/ }))
     await tick(0)
-    expect(screen.getByText('1/1')).toBeTruthy()
+    expect(screen.getByText(up)).toBeTruthy()
     expect(reqTile()).toContain('42')
   }
   const pending = () => new Promise<never>(() => {})
@@ -391,6 +392,61 @@ describe('Console system health refresh', () => {
     setHidden(false)
     await tick(0)
     expect(health).toHaveBeenCalledTimes(2)
+  })
+
+  const jobsHealth = (sub: number, notif: number, total = 9): StaffHealth => ({
+    ...HEALTH,
+    fleet: { status: 'ok', services: [{ name: 'gateway', status: 'up', build: '541ac755c7a1' }, { name: 'submission', status: 'up', build: 'abcdef1234' }] },
+    river_jobs: { total: { queue_depth: total, dead_lettered: 1 }, services: { submission: { queue_depth: sub, dead_lettered: 0 }, notifications: { queue_depth: notif, dead_lettered: 0 }, worker: { queue_depth: 4, dead_lettered: 0 } } },
+  })
+  const queueTile = () => (document.querySelector('[data-tile="queue"]') as HTMLElement).textContent ?? ''
+  const rowNames = () => [...document.querySelectorAll('[data-service]')].map((e) => e.getAttribute('data-service'))
+  const pick = (v: string) => act(() => { fireEvent.change(screen.getByLabelText('Service'), { target: { value: v } }) })
+
+  it('a pick narrows the jobs tiles and the ping list at once', async () => {
+    health.mockResolvedValue(jobsHealth(2, 0))
+    await open('2/2')
+    expect(rowNames()).toEqual(['gateway', 'submission'])
+    expect(queueTile()).toContain('9')
+    const reads = health.mock.calls.length
+    pick('submission')
+    expect(queueTile()).toContain('2')
+    expect(rowNames()).toEqual(['submission'])
+    expect(screen.queryByText('Loading system health…')).toBeNull()
+    expect(document.querySelector('.ops-health-jobs')?.textContent).not.toContain('Loading')
+    expect(document.querySelector('[data-tile="fleet"]')).not.toBeNull()
+    expect(health).toHaveBeenCalledTimes(reads)
+    pick('app')
+    expect(document.querySelector('[data-jobs-note]')?.textContent).toContain('app owns no background jobs.')
+    expect(document.querySelector('[data-ping-note]')?.textContent).toContain('app has no live ping.')
+    expect(rowNames()).toEqual([])
+    pick('')
+    expect(queueTile()).toContain('9')
+    expect(rowNames()).toEqual(['gateway', 'submission'])
+  })
+
+  it('the pick holds through the 60 s refresh', async () => {
+    health.mockResolvedValue(jobsHealth(2, 0))
+    await open('2/2')
+    pick('notifications')
+    expect(queueTile()).toContain('0')
+    health.mockResolvedValue(jobsHealth(2, 7))
+    await tick()
+    expect(queueTile()).toContain('7')
+    expect(queueTile()).not.toContain('9')
+    expect((screen.getByLabelText('Service') as HTMLSelectElement).value).toBe('notifications')
+  })
+
+  it('a failed refresh keeps the narrowed view', async () => {
+    health.mockResolvedValue(jobsHealth(2, 0))
+    await open('2/2')
+    pick('submission')
+    expect(queueTile()).toContain('2')
+    health.mockRejectedValueOnce(new ApiError('http', 'boom', 500))
+    await tick()
+    expect(queueTile()).toContain('2')
+    expect(rowNames()).toEqual(['submission'])
+    expect(screen.getByText('REFRESH FAILED')).toBeTruthy()
   })
 
   it('a 403 stops the refresh', async () => {

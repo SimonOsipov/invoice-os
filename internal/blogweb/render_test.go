@@ -489,3 +489,17 @@ func TestRenderPost_JavascriptAddressStaysTextAndMarkupStaysEscaped(t *testing.T
 	has(t, page, "&lt;script&gt;alert(1)&lt;/script&gt; ")
 	lacks(t, page, "<script>alert")
 }
+
+func TestRenderPost_AddressWithQuoteAmpersandOrAngleCannotBreakTheTag(t *testing.T) {
+	page := linkPage(t,
+		Block{Type: "p", Text: `a https://e.com/x?a=1&b=2#f"onmouseover="x z`},
+		Block{Type: "ul", Items: []string{`<https://e.com/l><b>`}},
+		Block{Type: "p", Text: "HTTPS://E.com/Up and https://e.com/w/A_(b)."},
+	)
+	has(t, page, `<a href="https://e.com/x?a=1&amp;b=2#f" target="_blank" rel="noopener noreferrer">https://e.com/x?a=1&amp;b=2#f</a>&#34;onmouseover=&#34;x z`)
+	has(t, page, `&lt;<a href="https://e.com/l" target="_blank" rel="noopener noreferrer">https://e.com/l</a>&gt;&lt;b&gt;`)
+	lacks(t, page, `"onmouseover`)
+	has(t, page, `<a href="HTTPS://E.com/Up" target`)
+	// html/template percent-encodes parens in href; the visible text keeps them.
+	has(t, page, `<a href="https://e.com/w/A_%28b%29" target="_blank" rel="noopener noreferrer">https://e.com/w/A_(b)</a>.</p>`)
+}

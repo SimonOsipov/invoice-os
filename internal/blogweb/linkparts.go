@@ -8,7 +8,8 @@ import (
 // Part is a run of post text; Href is set for an http(s) address.
 type Part struct{ Text, Href string }
 
-var address = regexp.MustCompile(`(?i)https?://[^\s<>"]+`)
+// The excluded set is JavaScript's \s, so both splitters end an address at the same character.
+var address = regexp.MustCompile(`(?i)https?://[^\s\x0B\x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}<>"]+`)
 
 // Mirrors packages/api-client/src/linkParts.ts.
 func linkParts(s string) []Part {

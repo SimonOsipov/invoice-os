@@ -64,4 +64,15 @@ describe('post addresses render as links', () => {
     expect(container.querySelector('script')).toBeNull()
     expect(container.textContent).toContain('<script>alert(1)</script>')
   })
+
+  it('BUG-42 an attribute-breaking quote, a balanced paren and an uppercase scheme', async () => {
+    await mount([
+      { type: 'p', text: `${URL_}"onmouseover="x HTTPS://E.com/W_(b).` },
+      { type: 'ul', items: [`<${URL_}/l>`] },
+    ])
+    const a = links()
+    expect(a.map((x) => x.getAttribute('href'))).toEqual([URL_, 'HTTPS://E.com/W_(b)', `${URL_}/l`])
+    for (const x of a) expect(x.getAttributeNames().sort()).toEqual(['href', 'rel', 'style', 'target'])
+    expect(container.querySelector('p')!.textContent).toBe(`${URL_}"onmouseover="x HTTPS://E.com/W_(b).`)
+  })
 })

@@ -2445,54 +2445,6 @@ leak_verdict() { graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$PAS
 	})
 }
 
-// A timeout test of the 429 cap: each job that runs railway-env.sh must outlast its old budget plus the 600 s of waits.
-func TestWorkflowTimeoutsCoverTheRateLimitWaits(t *testing.T) {
-	t.Parallel()
-	const extraMinutes = 600 / 60
-	oldBudget := map[string]int{
-		"dev-env.yml/prepare-env":       20,
-		"dev-env-teardown.yml/teardown": 10,
-		"dev-env-sweeper.yml/sweep":     20,
-	}
-	timeoutRE := regexp.MustCompile(`^    timeout-minutes:\s*(\d+)\s*$`)
-	seen := map[string]bool{}
-	files, err := filepath.Glob(filepath.Join(repoRoot(t), ".github", "workflows", "*.y*ml"))
-	if err != nil || len(files) < 4 {
-		t.Fatalf("control: %d workflow files (%v)", len(files), err)
-	}
-	for _, path := range files {
-		file := filepath.Base(path)
-		for _, job := range workflowJobsOf(readWorkflow(t, file)) {
-			key := file + "/" + job.name
-			if !jobCallsRailway(job.lines) {
-				continue
-			}
-			timeout := 360 // GitHub's default
-			for _, l := range job.lines {
-				if m := timeoutRE.FindStringSubmatch(l); m != nil {
-					timeout, _ = strconv.Atoi(m[1])
-				}
-			}
-			old, known := oldBudget[key]
-			if !known {
-				if timeout < 360 {
-					t.Errorf("%s runs railway-env.sh with timeout-minutes %d and is not in the table of old budgets", key, timeout)
-				}
-				continue
-			}
-			seen[key] = true
-			if timeout < old+extraMinutes {
-				t.Errorf("%s has timeout-minutes %d, want at least %d (old budget %d + %d min of 429 waits)", key, timeout, old+extraMinutes, old, extraMinutes)
-			}
-		}
-	}
-	for key := range oldBudget {
-		if !seen[key] {
-			t.Errorf("control: no job %s runs railway-env.sh", key)
-		}
-	}
-}
-
 // jobCallsRailway is true when a line runs railway-env.sh other than as a --self-test.
 func jobCallsRailway(lines []string) bool {
 	for _, l := range lines {

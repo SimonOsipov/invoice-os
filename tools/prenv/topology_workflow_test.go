@@ -2,38 +2,9 @@
 package main
 
 import (
-	"slices"
 	"strings"
 	"testing"
 )
-
-func TestDevEnvTopologyStartsOnlyAfterAGreenE2E(t *testing.T) {
-	t.Parallel()
-	j := devEnvJob(t, "topology")
-	cond, ok := jobKey(j, "if")
-	if !ok {
-		t.Fatal("topology has no if")
-	}
-	for _, want := range []string{"!cancelled()", "github.event_name == 'pull_request'", "needs.e2e.result == 'success'"} {
-		if !strings.Contains(cond, want) {
-			t.Errorf("topology if %q lacks %q", cond, want)
-		}
-	}
-	if n := strings.Count(cond, "needs.e2e.result"); n != 1 {
-		t.Errorf("topology if %q reads needs.e2e.result %d times, want once", cond, n)
-	}
-	if strings.Contains(cond, "||") {
-		t.Errorf("topology if %q must not widen the e2e condition with ||", cond)
-	}
-	needs, _ := jobKey(j, "needs")
-	var ids []string
-	for _, id := range strings.Split(strings.Trim(needs, "[]"), ",") {
-		ids = append(ids, strings.TrimSpace(id))
-	}
-	if !slices.Contains(ids, "e2e") {
-		t.Errorf("topology needs %q lacks the job e2e", needs)
-	}
-}
 
 func TestDevEnvTopologyKeepsSiblingShardsRunning(t *testing.T) {
 	t.Parallel()

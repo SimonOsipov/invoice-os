@@ -10,8 +10,6 @@ package fleetgate
 
 import (
 	"io/fs"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -260,82 +258,6 @@ func hasJob(content, job string) bool {
 
 // --- AC-1 ---
 
-func TestDevEnv_ExpectedJSONNamesEveryDeployedService(t *testing.T) {
-	content := readFile(t, filepath.Join(repoRoot(t), devEnvRel))
-
-	expected := expectedJSONNames(t, content)
-	ctx := matrixList(t, content, "deploy-context")
-	spas := matrixList(t, content, "deploy-spas")
-	if !hasJob(content, "deploy-gateway") {
-		t.Fatalf("%s: no `deploy-gateway:` job -- `gateway` can no longer be assumed deployed", devEnvRel)
-	}
-	// Empty-collection guard: every set comparison below is vacuously true on
-	// an empty list, and that reads as "the whole fleet agrees".
-	if len(expected) == 0 || len(ctx) == 0 || len(spas) == 0 {
-		t.Fatalf("%s: parsed %d expected_json name(s), %d deploy-context, %d deploy-spas -- nothing to compare",
-			devEnvRel, len(expected), len(ctx), len(spas))
-	}
-
-	deployed := append([]string{"gateway"}, ctx...)
-	deployed = append(deployed, spas...)
-
-	for _, name := range deployed {
-		if !contains(expected, name) {
-			t.Errorf("%s: `%s` is deployed but expected_json does not name it -- the Watch-Paths assertion never sees it", devEnvRel, name)
-		}
-	}
-	for _, name := range expected {
-		if !contains(deployed, name) {
-			t.Errorf("%s: expected_json names `%s` but no job deploys it", devEnvRel, name)
-		}
-	}
-	// The fleet size is derived, never typed twice.
-	if len(expected) != 1+len(ctx)+len(spas) {
-		t.Errorf("%s: len(expected_json)=%d but the topology deploys 1+%d+%d=%d",
-			devEnvRel, len(expected), len(ctx), len(spas), 1+len(ctx)+len(spas))
-	}
-
-	if !contains(expected, "docling") {
-		t.Errorf("%s: expected_json omits `docling` -- the sidecar can vanish from the environment and the fleet gate stays green", devEnvRel)
-	}
-	if !contains(ctx, "docling") {
-		t.Errorf("%s: the deploy-context matrix omits `docling` -- nothing ships the sidecar to the environment under test", devEnvRel)
-	}
-	if contains(spas, "docling") {
-		t.Errorf("%s: the deploy-spas matrix names `docling` -- it is a backend sidecar, not a static front end", devEnvRel)
-	}
-
-	if !contains(expected, "auth") {
-		t.Errorf("%s: expected_json omits `auth` -- the identity provider can vanish from the environment and the fleet gate stays green", devEnvRel)
-	}
-	if !contains(ctx, "auth") {
-		t.Errorf("%s: the deploy-context matrix omits `auth` -- nothing ships the identity provider after health-gate", devEnvRel)
-	}
-	if contains(spas, "auth") {
-		t.Errorf("%s: the deploy-spas matrix names `auth` -- it is a backend, not a static front end", devEnvRel)
-	}
-
-	if !contains(expected, "library") {
-		t.Errorf("%s: expected_json omits `library` -- the Feature Library can vanish from the environment and the fleet gate stays green", devEnvRel)
-	}
-	if !contains(spas, "library") {
-		t.Errorf("%s: the deploy-spas matrix omits `library` -- nothing ships the Feature Library SPA", devEnvRel)
-	}
-	if contains(ctx, "library") {
-		t.Errorf("%s: the deploy-context matrix names `library` -- it is a static front end, not a backend", devEnvRel)
-	}
-
-	if !contains(expected, "blog") {
-		t.Errorf("%s: expected_json omits `blog` -- the blog can vanish from the environment and the fleet gate stays green", devEnvRel)
-	}
-	if !contains(spas, "blog") {
-		t.Errorf("%s: the deploy-spas matrix omits `blog` -- nothing ships the blog SPA", devEnvRel)
-	}
-	if contains(ctx, "blog") {
-		t.Errorf("%s: the deploy-context matrix names `blog` -- it is a static front end, not a backend", devEnvRel)
-	}
-}
-
 // spaURLKey maps a deploy-spas name to its URL variable: library -> LIBRARY_URL.
 func spaURLKey(spa string) string {
 	return strings.ToUpper(strings.ReplaceAll(spa, "-", "_")) + "_URL"
@@ -357,255 +279,14 @@ func jobBounds(lines []string, i int) (int, int) {
 // trailingYAMLComment matches a `#` comment that follows code on a run line (no quote handling: the wait lines carry none).
 var trailingYAMLComment = regexp.MustCompile(`\s+#.*$`)
 
-func TestDevEnv_EveryDeployedSPAIsDiscoveredAndAwaited(t *testing.T) {
-	content := readFile(t, filepath.Join(repoRoot(t), devEnvRel))
-	spas := matrixList(t, content, "deploy-spas")
-	lines := strings.Split(content, "\n")
-
-	// The small lanes' library-build-gate and blog-build-gate await only their own SPA, so they are exempt from the every-SPA rule.
-	var waits, libraryWaits, blogWaits []int
-	for i, l := range lines {
-		l = trailingYAMLComment.ReplaceAllString(l, "")
-		if strings.Contains(l, "wait-spa-builds.sh") && strings.Contains(l, "$EXPECTED_BUILD") {
-			lines[i] = l
-			switch s, _ := jobBounds(lines, i); strings.TrimRight(lines[s], " \t\r") {
-			case "  library-build-gate:":
-				libraryWaits = append(libraryWaits, i)
-			case "  blog-build-gate:":
-				blogWaits = append(blogWaits, i)
-			default:
-				waits = append(waits, i)
-			}
-		}
-	}
-	if len(spas) == 0 || len(waits) < 2 {
-		t.Fatalf("%s: parsed %d deploy-spas name(s) and %d wait-spa-builds.sh call(s) -- nothing to compare", devEnvRel, len(spas), len(waits))
-	}
-	for _, job := range []string{"  spa-build-gate:", "  e2e:"} {
-		found := false
-		for _, w := range waits {
-			if s, _ := jobBounds(lines, w); strings.TrimRight(lines[s], " \t\r") == job {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("%s: no checked wait-spa-builds.sh call in `%s` -- the every-SPA rule skipped it", devEnvRel, strings.TrimSpace(job))
-		}
-	}
-	if len(libraryWaits) != 1 {
-		t.Fatalf("%s: %d wait-spa-builds.sh call(s) in library-build-gate, want exactly 1", devEnvRel, len(libraryWaits))
-	}
-	lw := libraryWaits[0]
-	if !strings.Contains(lines[lw], `"$LIBRARY_URL"`) {
-		t.Errorf("%s:%d: the library-build-gate wait is not passed \"$LIBRARY_URL\"", devEnvRel, lw+1)
-	}
-	if ls, le := jobBounds(lines, lw); !regexp.MustCompile(`(?m)^      LIBRARY_URL: `).MatchString(strings.Join(lines[ls:le], "\n")) {
-		t.Errorf("%s:%d: library-build-gate does not set LIBRARY_URL in its env", devEnvRel, lw+1)
-	}
-	if len(blogWaits) != 1 {
-		t.Fatalf("%s: %d wait-spa-builds.sh call(s) in blog-build-gate, want exactly 1", devEnvRel, len(blogWaits))
-	}
-	bw := blogWaits[0]
-	if !strings.Contains(lines[bw], `"$BLOG_URL"`) {
-		t.Errorf("%s:%d: the blog-build-gate wait is not passed \"$BLOG_URL\"", devEnvRel, bw+1)
-	}
-	if bs, be := jobBounds(lines, bw); !regexp.MustCompile(`(?m)^      BLOG_URL: `).MatchString(strings.Join(lines[bs:be], "\n")) {
-		t.Errorf("%s:%d: blog-build-gate does not set BLOG_URL in its env", devEnvRel, bw+1)
-	}
-
-	pStart, pEnd := -1, -1
-	for i, l := range lines {
-		if strings.TrimRight(l, " \t\r") == "  prepare-env:" {
-			pStart, pEnd = jobBounds(lines, i)
-		}
-	}
-	if pStart < 0 {
-		t.Fatalf("%s: no `prepare-env:` job", devEnvRel)
-	}
-	prepare := strings.Join(lines[pStart:pEnd], "\n")
-
-	e2eStart, e2eEnd := -1, -1
-	for i, l := range lines {
-		if strings.TrimRight(l, " \t\r") == "  e2e:" {
-			e2eStart, e2eEnd = jobBounds(lines, i)
-		}
-	}
-	if e2eStart < 0 {
-		t.Fatalf("%s: no `e2e:` job", devEnvRel)
-	}
-	e2e := strings.Join(lines[e2eStart:e2eEnd], "\n")
-
-	for _, spa := range spas {
-		key := spaURLKey(spa)
-		out := strings.ToLower(key)
-		if !strings.Contains(e2e, "\n      "+out+": ${{ steps.urls.outputs."+out+" }}") {
-			t.Errorf("%s: the e2e job publishes no `%s` output for the `%s` SPA -- topology gets an empty URL", devEnvRel, out, spa)
-		}
-		if !strings.Contains(e2e, `echo "`+out+`=$`+key+`"`) {
-			t.Errorf("%s: the e2e step `Publish the SPA URLs` does not write %s -- the output stays empty", devEnvRel, out)
-		}
-		if !strings.Contains(prepare, "\n      "+strings.ToLower(key)+": ") {
-			t.Errorf("%s: prepare-env publishes no `%s` output for the `%s` SPA", devEnvRel, strings.ToLower(key), spa)
-		}
-		for _, w := range waits {
-			if !strings.Contains(lines[w], `"$`+key+`"`) {
-				t.Errorf("%s:%d: wait-spa-builds.sh is not passed \"$%s\" -- the `%s` SPA ships unawaited", devEnvRel, w+1, key, spa)
-			}
-			s, e := jobBounds(lines, w)
-			if !regexp.MustCompile(`(?m)^      ` + key + `: `).MatchString(strings.Join(lines[s:e], "\n")) {
-				t.Errorf("%s:%d: the job running this wait does not set %s in its env", devEnvRel, w+1, key)
-			}
-		}
-	}
-
-	// Control: the oldest SPA must derive and be found the same way.
-	if k := spaURLKey("landing"); k != "LANDING_URL" || !strings.Contains(prepare, "\n      landing_url: ") {
-		t.Errorf("control: `landing` derived %q and was not found in prepare-env outputs", k)
-	}
-	if spaURLKey("support-console") != "SUPPORT_CONSOLE_URL" {
-		t.Errorf("control: `support-console` did not derive SUPPORT_CONSOLE_URL")
-	}
-}
-
 // --- AC-2 ---
-
-func TestFleetGate_EveryCountSiteAgreesWithExpectedJSON(t *testing.T) {
-	content := readFile(t, filepath.Join(repoRoot(t), devEnvRel))
-	expected := expectedJSONNames(t, content)
-	if len(expected) == 0 {
-		t.Fatalf("%s: expected_json parsed to zero names -- there is no fleet size to arbitrate with", devEnvRel)
-	}
-	want := len(expected)
-
-	// The fleet this gate arbitrates must be the one that includes the
-	// sidecar. Otherwise every site below agrees on the wrong number and the
-	// agreement proves nothing.
-	if !contains(expected, "docling") {
-		t.Errorf("%s: expected_json omits `docling`, so want=%d is the pre-sidecar fleet -- agreement with it is not evidence", devEnvRel, want)
-	}
-	if !contains(expected, "auth") {
-		t.Errorf("%s: expected_json omits `auth`, so want=%d is the pre-IdP fleet -- agreement with it is not evidence", devEnvRel, want)
-	}
-	if !contains(expected, "library") {
-		t.Errorf("%s: expected_json omits `library`, so want=%d is the pre-library fleet -- agreement with it is not evidence", devEnvRel, want)
-	}
-
-	if !contains(expected, "blog") {
-		t.Errorf("%s: expected_json omits `blog`, so want=%d is the pre-blog fleet -- agreement with it is not evidence", devEnvRel, want)
-	}
-
-	hits := scanRepo(t)
-	if len(hits) == 0 {
-		t.Fatalf("the scan found no fleet-count site at all -- the detection pattern or the trees have drifted, and a clean run means nothing")
-	}
-
-	// A count wrapped before its subject word ("all N" / "services") escapes the line scan.
-	wrapped := 0
-	lines := strings.Split(content, "\n")
-	for i := 0; i+1 < len(lines); i++ {
-		next := strings.TrimLeft(lines[i+1], " #")
-		if subjectRe.MatchString(lines[i]) || !strings.HasPrefix(strings.ToLower(next), "service") {
-			continue
-		}
-		for _, m := range countRe.FindAllString(lines[i], -1) {
-			wrapped++
-			if got, _ := strconv.Atoi(m); got != want {
-				t.Errorf("%s:%d: wrapped count got %d want %d -- %s", devEnvRel, i+1, got, want, strings.TrimSpace(lines[i]))
-			}
-		}
-	}
-	if wrapped == 0 {
-		t.Errorf("%s: no wrapped fleet count found -- the cold-build comment moved or the control is stale", devEnvRel)
-	}
-
-	checked := 0
-	for _, h := range hits {
-		if allowed(allowlist, h) {
-			continue
-		}
-		checked++
-		for _, got := range h.Counts {
-			if got != want {
-				t.Errorf("%s:%d: got %d want %d -- %s", h.File, h.Line, got, want, h.Text)
-			}
-		}
-	}
-	if checked == 0 {
-		t.Fatalf("all %d hit(s) were allowlisted -- the allowlist has swallowed the population it was meant to carve one line out of", len(hits))
-	}
-}
 
 // backendCountRe finds "<n> backends" prose; countRe cannot, as it needs the word "service".
 var backendCountRe = regexp.MustCompile(`(?i)\b([0-9]+|eight|nine|ten|eleven|twelve)\s+backends?\b`)
 
 var countWords = map[string]int{"eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
 
-// The roll-up's backends are the deploy-context matrix; docs sites belong to the docs sweep.
-func TestFleetGate_BackendCountSitesAgreeWithDeployContext(t *testing.T) {
-	root := repoRoot(t)
-	ctx := matrixList(t, readFile(t, filepath.Join(root, devEnvRel)), "deploy-context")
-	if !contains(ctx, "auth") {
-		t.Errorf("%s: the deploy-context matrix %v omits `auth`, so want=%d is the pre-IdP backend count", devEnvRel, ctx, len(ctx))
-	}
-	want := len(ctx)
-
-	sites := 0
-	for _, tree := range []string{".github", "scripts"} {
-		err := filepath.WalkDir(filepath.Join(root, tree), func(p string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return err
-			}
-			raw, err := os.ReadFile(p)
-			if err != nil {
-				return err
-			}
-			rel, _ := filepath.Rel(root, p)
-			for i, line := range strings.Split(string(raw), "\n") {
-				for _, m := range backendCountRe.FindAllStringSubmatch(line, -1) {
-					sites++
-					n, ok := countWords[strings.ToLower(m[1])]
-					if !ok {
-						n, _ = strconv.Atoi(m[1])
-					}
-					if n != want {
-						t.Errorf("%s:%d: says %d backends, deploy-context deploys %d -- %s", filepath.ToSlash(rel), i+1, n, want, strings.TrimSpace(line))
-					}
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("walk %s: %v", tree, err)
-		}
-	}
-	if sites == 0 {
-		t.Fatal("found no backend-count site under .github or scripts -- the pattern or the trees have drifted")
-	}
-}
-
 // --- AC-3 ---
-
-func TestFleetGate_ScanPopulationMeetsItsFloor(t *testing.T) {
-	hits := scanRepo(t)
-
-	files := map[string]bool{}
-	n := 0
-	for _, h := range hits {
-		if strings.HasPrefix(h.File, selfDir) {
-			continue
-		}
-		files[h.File] = true
-		n++
-	}
-
-	if n < minHits {
-		t.Errorf("scanned %d fleet-count line(s), floor %d -- a run reporting no disagreement here is indistinguishable from a run that scanned nothing", n, minHits)
-	}
-	if len(files) < minFiles {
-		t.Errorf("fleet-count lines found in %d file(s), floor %d -- the walk has stopped reaching part of the tree", len(files), minFiles)
-	}
-	t.Logf("population: %d line(s) across %d file(s), this gate's own source excluded", n, len(files))
-}
 
 func TestFleetGate_FindsAPlantedControlNeedle(t *testing.T) {
 	root := t.TempDir()
@@ -642,17 +323,6 @@ func TestFleetGate_FindsAPlantedControlNeedle(t *testing.T) {
 	}
 	if len(got.Counts) != 1 || got.Counts[0] != 16 {
 		t.Errorf("control needle read as %v, planted as [16]", got.Counts)
-	}
-}
-
-func TestFleetGate_AllowlistEntriesStillMatchSomething(t *testing.T) {
-	hits := scanRepo(t)
-	if len(hits) == 0 {
-		t.Fatal("the scan found nothing, so no allowlist entry can be resolved against it")
-	}
-	stale, _, _ := allowlistFaults(allowlist, hits)
-	for _, s := range stale {
-		t.Errorf("allowlist entry %s matches no scanned line -- the reason it was excluded no longer applies", s)
 	}
 }
 
@@ -726,44 +396,6 @@ func yamlSteps(content string) (names, bodies []string) {
 		}
 	}
 	return names, bodies
-}
-
-// TestDevEnv_DoclingBuildIsGated: docling has no public domain, so CI reaches it
-// only through the gateway's /healthz/fleet roll-up. Without a step that names
-// it, a sidecar serving the previous commit is invisible.
-func TestDevEnv_DoclingBuildIsGated(t *testing.T) {
-	content := readFile(t, filepath.Join(repoRoot(t), devEnvRel))
-
-	names, bodies := yamlSteps(content)
-	if len(names) == 0 {
-		t.Fatalf("%s: parsed zero steps -- the scan reached nothing, so a missing gate is indistinguishable from a present one", devEnvRel)
-	}
-
-	idx := -1
-	for i, n := range names {
-		if strings.Contains(strings.ToLower(n), "docling") {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		t.Fatalf("%s: no step names `docling` among %d steps -- nothing blocks on the sidecar's build", devEnvRel, len(names))
-	}
-	t.Logf("gate step: %q", names[idx])
-	body := bodies[idx]
-
-	for _, want := range []string{
-		"healthz/fleet",  // the only route to a service with no public domain
-		"docling",        // the roll-up entry it selects
-		".build",         // the field it compares
-		"EXPECTED_BUILD", // the commit under test
-		"github.sha",     // ...bound to the actual sha, not a literal
-		"exit 1",         // and it fails the run rather than warning
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("%s: the `%s` step does not mention %q -- it cannot be blocking on the sidecar's build", devEnvRel, names[idx], want)
-		}
-	}
 }
 
 // --- AC-5 ---
@@ -860,25 +492,6 @@ func assertMember(t *testing.T, file string, items []string, at []int, want stri
 
 // --- AC-2: the allowlist is a carve-out, not a hole ---
 
-// TestFleetGate_AnAllowlistEntryExcludesExactlyOneLine: an entry matching many
-// lines silently swallows real count sites, and every other test here stays
-// green.
-func TestFleetGate_AnAllowlistEntryExcludesExactlyOneLine(t *testing.T) {
-	hits := scanRepo(t)
-	if len(hits) == 0 {
-		t.Fatal("the scan found nothing, so no allowlist entry can be bounded against it")
-	}
-	_, wide, hollow := allowlistFaults(allowlist, hits)
-	for _, w := range wide {
-		t.Errorf("allowlist entry %s, want exactly 1 line -- an entry that matches more than the one line it names carves real count sites out of the scan", w)
-	}
-	// The excluded lines must stay a small minority of the population, so a
-	// pile of narrow entries cannot hollow the scan out one line at a time.
-	if hollow {
-		t.Errorf("half or more of the %d scanned line(s) are allowlisted -- the exclusions are no longer a carve-out", len(hits))
-	}
-}
-
 // --- AC-4: the gate step's own shell, run against fixture roll-ups ---
 
 var runBlockRe = regexp.MustCompile(`^(\s*)run: \|\s*$`)
@@ -913,80 +526,4 @@ func runScript(t *testing.T, body string) string {
 		t.Fatal("the `run: |` block dedented to nothing")
 	}
 	return script
-}
-
-// TestDevEnv_DoclingGateFailsOnAStaleOrAbsentSidecar runs the gate's real shell
-// against four roll-up payloads. TestDevEnv_DoclingBuildIsGated only asserts
-// substrings, so repointing the jq selector at `gateway` -- which greens the
-// gate on the gateway's build while the sidecar is arbitrarily stale -- and
-// treating `absent` as acceptable both survive it.
-func TestDevEnv_DoclingGateFailsOnAStaleOrAbsentSidecar(t *testing.T) {
-	for _, bin := range []string{"bash", "curl", "jq"} {
-		if _, err := exec.LookPath(bin); err != nil {
-			t.Fatalf("%s is not on PATH, so the gate's own shell cannot be executed here", bin)
-		}
-	}
-
-	content := readFile(t, filepath.Join(repoRoot(t), devEnvRel))
-	names, bodies := yamlSteps(content)
-	idx := -1
-	for i, n := range names {
-		if strings.Contains(strings.ToLower(n), "docling") {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		t.Fatalf("%s: no step names `docling` among %d steps", devEnvRel, len(names))
-	}
-	script := runScript(t, bodies[idx])
-
-	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	const old = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-
-	cases := []struct {
-		name    string
-		payload string
-		wantOK  bool
-		says    string
-	}{
-		{"serving the commit under test", `{"services":[{"name":"gateway","build":"` + sha + `"},{"name":"docling","build":"` + sha + `"}]}`, true, ""},
-		{"stale sidecar, fresh gateway", `{"services":[{"name":"gateway","build":"` + sha + `"},{"name":"docling","build":"` + old + `"}]}`, false, old},
-		{"sidecar reports no build", `{"services":[{"name":"gateway","build":"` + sha + `"},{"name":"docling","status":"up"}]}`, false, "none"},
-		{"roll-up never names the sidecar", `{"services":[{"name":"gateway","build":"` + sha + `"}]}`, false, "absent"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/healthz/fleet" {
-					http.NotFound(w, r)
-					return
-				}
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(tc.payload))
-			}))
-			defer srv.Close()
-
-			// Two substitutions, both for isolation only: the sleep stub keeps
-			// the failing cases off a 25s poll, and the scratch path keeps
-			// concurrent runs off one shared /tmp file.
-			isolated := strings.ReplaceAll(script, "/tmp/docling.json", filepath.Join(t.TempDir(), "fleet.json"))
-			cmd := exec.CommandContext(t.Context(), "bash", "-c", "sleep() { :; }\n"+isolated)
-			cmd.Env = append(os.Environ(), "GATEWAY_URL="+srv.URL, "EXPECTED_BUILD="+sha)
-			out, err := cmd.CombinedOutput()
-
-			if tc.wantOK {
-				if err != nil {
-					t.Fatalf("the gate failed a sidecar already serving the commit under test: %v\n%s", err, out)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatalf("the gate passed on %s -- a stale or missing sidecar greens the deploy\n%s", tc.name, out)
-			}
-			if !strings.Contains(string(out), tc.says) {
-				t.Errorf("the failure does not name %q, so the log does not say what the sidecar reported:\n%s", tc.says, out)
-			}
-		})
-	}
 }

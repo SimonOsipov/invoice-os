@@ -1,7 +1,7 @@
 // Contact sync over the deployed fork: a pr-<N> fork's notifications runs in fake mode, so
 // nothing reaches HubSpot or Resend. Every run uses fresh addresses; contacts rows survive the reset.
 import { test, expect } from '@playwright/test'
-import { apiBase, claimsOf, contactsMe, demoRequest, rawFetch, registerFormAccount, type ContactMe } from './client'
+import { apiBase, claimsOf, fleetHeaders, contactsMe, demoRequest, rawFetch, registerFormAccount, type ContactMe } from './client'
 
 const CONSENT = 'Yes, send me product news and offers.'
 const POLL = { timeout: 30_000, intervals: [500, 1000, 2000] }
@@ -31,7 +31,7 @@ async function delivered(token: string): Promise<ContactMe> {
 
 test.describe('contact sync (API E2E, over the deployed gateway)', () => {
   test('/healthz/fleet reports notifications contacts "fake" on the fork', async () => {
-    const res = await fetch(`${apiBase()}/healthz/fleet`)
+    const res = await fetch(`${apiBase()}/healthz/fleet`, { headers: fleetHeaders() })
     const body = (await res.json()) as { services: { name: string; contacts?: string }[] }
     expect(body.services.length).toBeGreaterThan(0)
     const notifications = body.services.find((s) => s.name === 'notifications')

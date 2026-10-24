@@ -23,6 +23,13 @@ export function apiBase(): string {
   return resolveTarget('GATEWAY_URL')
 }
 
+// fleetHeaders(): /healthz/fleet answers only with the gateway token (GKE-08); CI reads the PR's token.
+export function fleetHeaders(): Record<string, string> {
+  const token = process.env.GATEWAY_TOKEN
+  if (!token) throw new Error('GATEWAY_TOKEN is not set; /healthz/fleet needs X-Gateway-Token')
+  return { 'X-Gateway-Token': token }
+}
+
 // rawFetch(): a raw HTTP seam for M3-15's malformed-request contract specs
 // (M3-15-02..05), which need byte-level control over headers/body that the
 // typed apiFetch wrapper normalizes away (e.g. a malformed-scheme

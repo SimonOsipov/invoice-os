@@ -464,14 +464,13 @@ func TestShardClientAccessMirrorsTheSourceTenant(t *testing.T) {
 	}
 }
 
-func TestProvisionSeedsNoShardTenantWithoutReset(t *testing.T) {
+func TestProvisionSeedsNoShardTenantOutsideAPreview(t *testing.T) {
 	e := newShardEnv(t)
 
 	for _, tc := range []struct{ name, railwayEnv, resetFlag string }{
 		{"empty environment name", "", "true"},
 		{"development", "development", "true"},
 		{"production", "production", "true"},
-		{"pr environment, reset flag unset", "pr-110", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := e.prConfig()
@@ -482,12 +481,26 @@ func TestProvisionSeedsNoShardTenantWithoutReset(t *testing.T) {
 			if n := mustCount(t, e.super, `SELECT count(*) FROM tenants WHERE id = $1`, firmSource); n != 1 {
 				t.Fatalf("seed.dev.sql did not run (1111 tenants = %d), the no-shard assertion below is vacuous", n)
 			}
-			e.requireNoShardTenants(t, "reset did not run")
+			e.requireNoShardTenants(t, "not a pr-<N> preview")
 		})
 	}
 
 	e.provisionReset(t)
 	e.requireAllShardTenants(t, "positive control: a reset-on Provision")
+}
+
+// A GCP preview recreates pr_<N> on each deploy and never sets GATEWAY_DB_RESET.
+func TestProvisionSeedsShardTenantsInAPreviewWithoutReset(t *testing.T) {
+	e := newShardEnv(t)
+	cfg := e.prConfig()
+	cfg.ResetFlag = ""
+	if cfg.ResetWillRun() {
+		t.Fatal("test setup: ResetWillRun() is true, so this case would not isolate the preview gate")
+	}
+	if err := db.Provision(context.Background(), cfg); err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	e.requireAllShardTenants(t, "a pr-<N> preview with the reset flag unset")
 }
 
 func TestProvisionGuardOffSeedsNoShardTenant(t *testing.T) {

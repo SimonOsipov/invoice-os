@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import path from 'node:path'
 
 import { CtlError } from './main'
-import type { EnvResult, ServiceLabel } from './railway'
+import type { EnvResult, ServiceLabel } from './envUrls'
 
 export type Persona = 'firm' | 'inhouse' | 'developer' | 'support'
 export type Role = 'admin' | 'preparer' | 'reviewer'
@@ -349,7 +349,7 @@ async function runLogin(req: LoginRequest, deps: LoginDeps, secrets: Set<string>
 
 // Real dependencies, loaded when the command runs. root = the repo root that holds .ralph/.
 export async function defaultDeps(root: string): Promise<LoginDeps> {
-  const { resolveEnvByName } = await import('./railway')
+  const { resolveEnvByName } = await import('./envUrls')
   const { signInFresh, checkSavedState } = await import('./browserSession')
   return { resolveEnv: resolveEnvByName, store: createStore(root), provisionAll, apiRole, credentialsValid, regrant, signInFresh, checkSavedState }
 }

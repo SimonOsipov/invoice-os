@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -187,7 +188,7 @@ func purgeStmt(table string) string {
 func PurgeDemoTenants(ctx context.Context, superuserDSN string) (PurgeResult, error) {
 	started := time.Now()
 
-	conn, err := connectSuperuser(ctx, superuserDSN)
+	conn, err := connectSeeder(ctx, superuserDSN)
 	if err != nil {
 		return PurgeResult{}, err
 	}
@@ -199,6 +200,21 @@ func PurgeDemoTenants(ctx context.Context, superuserDSN string) (PurgeResult, er
 	}
 	// Rolled back on any early return; a no-op after a successful Commit.
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// A fresh preview database holds no demo row, and Cloud SQL refuses the guards'
+	// session_replication_role (GKE-01 P4). The timeouts bound the look as they bound the purge.
+	for _, stmt := range purgeGuards[1:] {
+		if err := setLocal(ctx, tx, stmt); err != nil {
+			return PurgeResult{}, err
+		}
+	}
+	found, err := demoRowsExist(ctx, tx, DemoTenants)
+	if err != nil {
+		return PurgeResult{}, err
+	}
+	if !found {
+		return PurgeResult{ByTable: map[string]int64{}, Duration: time.Since(started)}, nil
+	}
 
 	res, err := purgeWithin(ctx, tx, DemoTenants)
 	if err != nil {
@@ -254,6 +270,19 @@ func purgeWithin(ctx context.Context, tx pgx.Tx, tenants []string) (PurgeResult,
 		}
 	}
 	return res, nil
+}
+
+// demoRowsExist reports whether any purge table holds a row of tenants.
+func demoRowsExist(ctx context.Context, tx pgx.Tx, tenants []string) (bool, error) {
+	checks := make([]string, len(purgeTables))
+	for i, table := range purgeTables {
+		checks[i] = fmt.Sprintf("EXISTS (SELECT 1 FROM %s WHERE tenant_id = ANY($1))", table)
+	}
+	var found bool
+	if err := tx.QueryRow(ctx, "SELECT "+strings.Join(checks, " OR "), tenants).Scan(&found); err != nil {
+		return false, fmt.Errorf("db: purge: look for demo rows: %w", err)
+	}
+	return found, nil
 }
 
 func setLocal(ctx context.Context, tx pgx.Tx, stmt string) error {

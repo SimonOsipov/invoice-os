@@ -50,6 +50,12 @@ func (cfg ProvisionConfig) ResetWillRun() bool {
 		ResetEnabled(cfg.DeployEnv, cfg.ResetFlag)
 }
 
+// ShardsWillSeed reports whether Provision seeds the topology E2E shards: in a pr-<N> preview
+// that allows bootstrap. A GCP preview recreates its database instead of resetting it.
+func (cfg ProvisionConfig) ShardsWillSeed() bool {
+	return BootstrapEnabled(cfg.Environment, cfg.BootstrapFlag) && resettableEnvironment(cfg.DeployEnv)
+}
+
 // unrenderedReference is the opening delimiter of a Railway variable reference.
 // A DSN that still contains it was never rendered: the variable EXISTS on the
 // service, so a bare non-empty check passes, but the value it points at did not
@@ -247,7 +253,7 @@ func Provision(ctx context.Context, cfg ProvisionConfig) error {
 			return fmt.Errorf("db: provision: seed: %w", err)
 		}
 
-		if cfg.ResetWillRun() {
+		if cfg.ShardsWillSeed() {
 			if err := SeedShards(ctx, cfg.SuperuserDSN, cfg.SeedFS); err != nil {
 				return fmt.Errorf("db: provision: seed shards: %w", err)
 			}

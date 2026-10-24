@@ -5,7 +5,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from '@playwri
 
 import { CtlError } from './main'
 import type { Account, AccountKey } from './login'
-import type { EnvResult } from './railway'
+import type { EnvResult } from './envUrls'
 
 type Urls = EnvResult['urls']
 type Destination = 'app' | 'ops' | 'support'

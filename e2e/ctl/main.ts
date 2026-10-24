@@ -27,7 +27,7 @@ export const HELP: Record<'ctl' | 'env' | 'login' | 'measure', string> = {
   ctl: `Usage: ctl <command> [options]
 
 Commands:
-  env      Resolve the seven service URLs of a Railway environment and report dark domains
+  env      Print the seven service URLs of a PR preview or production
   login    Sign in as a demo persona on a PR environment and save a browser storage state
   measure  Report the box and computed styles of every element matching a selector
 
@@ -37,8 +37,7 @@ Example: ${CTL} env pr-348`,
   env: `Usage: ctl env <pr-N|production>
 
 Prints { env, environmentId, urls, dark }. urls holds GATEWAY_URL, APP_URL, LANDING_URL,
-OPS_CONSOLE_URL, SUPPORT_CONSOLE_URL, LIBRARY_URL and BLOG_URL. A dark domain exits 1 and is listed in dark.
-Needs a Railway CLI login (~/.railway/config.json).
+OPS_CONSOLE_URL, SUPPORT_CONSOLE_URL, LIBRARY_URL and BLOG_URL.
 Example: ${CTL} env pr-348`,
   login: `Usage: ctl login <firm|inhouse|developer|support> --env <pr-N> [--role admin|preparer|reviewer] [--session S]
 
@@ -57,7 +56,7 @@ Example: ${CTL} measure '[data-testid="evidence-bundle-drawer"]' --props width,p
 
 // Lazy so --help loads no command module.
 const DEFAULTS: Commands = {
-  env: async (p, f) => (await import('./railway')).envCommand(p, f),
+  env: async (p, f) => (await import('./envUrls')).envCommand(p, f),
   login: async (p, f) => (await import('./login')).loginCommand(p, f),
   measure: async (p, f) => (await import('./measure')).measureCommand(p, f),
 }
@@ -112,7 +111,7 @@ export async function run(
 }
 
 if (import.meta.main) {
-  // No top-level await: railway.ts imports CtlError from this module and would deadlock on it.
+  // No top-level await: envUrls.ts imports CtlError from this module and would deadlock on it.
   void run(process.argv.slice(2)).then((r) => {
     process.stdout.write(r.stdout)
     process.stderr.write(r.stderr)

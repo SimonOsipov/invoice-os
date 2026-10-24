@@ -9,6 +9,7 @@ import { apiBase, fleetHeaders, getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, p
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { scopeStrays } from './metricsScope'
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
@@ -777,7 +778,7 @@ type SeenHealth = {
 
 type SeenPanel = { key: string; available: boolean; series: { name: string; points: [number, number][] }[] }
 // internal/systemhealth PanelData, DeploysSection, LimitsSection
-type SeenMetrics = { range: string; service: string; connection_budget: number; panels: SeenPanel[]; limits: { available: boolean }; deploys: { available: boolean } }
+type SeenMetrics = { range: string; service: string; connection_budget: number; panels: SeenPanel[]; limits: { available: boolean; services: { name: string }[] }; deploys: { available: boolean; revisions: { service: string }[] } }
 type Armed = { health: SeenHealth; metrics: SeenMetrics; metricsUrl: URL; latest: { body: SeenHealth } }
 
 // Armed before the nav click: the screen's own reads are the comparison, so a shard moving the queue cannot race them.
@@ -837,6 +838,14 @@ const statHasData = (m: SeenMetrics, key: string): boolean => {
   return panelSeries(m, 'error_pct').some((s) => s.points.some((p) => req.get(s.name)?.has(p[0])))
 }
 
+// Every Cloud Run series, limits and deploy name is a fleet service, and is `only` when given.
+function scopeMatch(m: SeenMetrics, what: string, only?: string): void {
+  expect(scopeStrays(m, only ? [only] : METRIC_SERVICES), `${what}: every Cloud Run series, limits and deploy name is ${only ?? 'in METRIC_SERVICES'}`).toEqual([])
+}
+
+// Per panel key, the series names and point counts: evidence for the preview-scope check.
+const drawSummary = (m: SeenMetrics) => Object.fromEntries(m.panels.map((p) => [p.key, p.series.map((s) => ({ name: s.name, points: s.points.length }))]))
+
 // Panels and stat tiles equal one metrics answer: No data iff no point, else a line.
 async function metricsMatch(page: Page, m: SeenMetrics, what: string): Promise<void> {
   const mn = mainOf(page)
@@ -861,7 +870,7 @@ async function metricsMatch(page: Page, m: SeenMetrics, what: string): Promise<v
 }
 
 // The armed answers drive the first comparison; the chip and the select each send a fresh read.
-async function metricsReads(page: Page, health: SeenHealth, first: SeenMetrics, firstUrl: URL): Promise<void> {
+async function metricsReads(page: Page, testInfo: TestInfo, first: SeenMetrics, firstUrl: URL): Promise<void> {
   const mn = mainOf(page)
   expect(firstUrl.searchParams.get('range'), 'first metrics request range').toBe('1h')
   expect(firstUrl.searchParams.has('service'), 'first metrics request names no service').toBe(false)
@@ -869,6 +878,12 @@ async function metricsReads(page: Page, health: SeenHealth, first: SeenMetrics, 
   expect(first.connection_budget, 'systemhealth.ConnectionBudget').toBe(CONNECTION_BUDGET)
   await expect(mn.getByRole('button', { name: '1h', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await metricsMatch(page, first, 'range 1h')
+  // Cloud SQL series fill every step, so this holds even before the PR's own series land (4-minute lag).
+  expect(await mn.locator('[data-panel] [data-no-data]').count(), 'some metric panel draws: all No data means run-preview lacks roles/monitoring.viewer on ascomply-preview, or the metrics path broke').toBeLessThan(PANEL_KEYS.length)
+  scopeMatch(first, 'range 1h')
+  // A wrong PreviewSuffix empties every PR-scoped read; the unscoped Cloud SQL panels would still pass above.
+  expect(first.limits.available, 'Core AC 2: limits are available; unavailable means run-preview lacks roles/run.viewer on ascomply-preview or the PR suffix matched nothing').toBe(true)
+  expect(first.limits.services.map((s) => s.name).sort(), 'Core AC 2: limits list the PR\'s own services (scripts/ci/preview.sh BACKENDS + SITES = systemhealth.MetricServices); missing names mean the PR suffix matched nothing').toEqual([...METRIC_SERVICES].sort())
   await expect(mn.locator('[data-tile="connections"]').getByText(`of ${CONNECTION_BUDGET}`), 'connections tile shows the budget').toHaveCount(1)
 
   const read = (range: string, service: string | null) =>
@@ -885,16 +900,23 @@ async function metricsReads(page: Page, health: SeenHealth, first: SeenMetrics, 
   const [, six] = await Promise.all([sent('6h', null), read('6h', null), mn.getByRole('button', { name: '6h', exact: true }).click()]).then((r) => [r[0], r[1]] as const)
   await expect(mn.getByRole('button', { name: '6h', exact: true })).toHaveAttribute('aria-pressed', 'true')
   expect(six.status(), '6h read status').toBe(200)
-  await metricsMatch(page, (await six.json()) as SeenMetrics, 'range 6h')
+  const sixBody = (await six.json()) as SeenMetrics
+  scopeMatch(sixBody, 'range 6h')
+  await metricsMatch(page, sixBody, 'range 6h')
 
-  const name = health.fleet.services.map((s) => s.name).find((n) => METRIC_SERVICES.includes(n)) ?? METRIC_SERVICES[0]
+  const drawn = METRIC_SERVICES.find((n) => panelSeries(first, 'req_per_min').some((s) => s.name === n))
+  expect(drawn, 'Core AC 2 and 3: req_per_min draws a series for one of the PR\'s services; none means run-preview lacks roles/monitoring.viewer on ascomply-preview or the PR suffix matched nothing').toBeDefined()
+  const name = drawn as string
   const select = mn.locator('select[aria-label="Service"]')
   const options = await select.locator('option').evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value))
   expect(options, 'the service select lists systemhealth.MetricServices after All services').toEqual(['', ...METRIC_SERVICES])
   const [, one] = await Promise.all([sent('6h', name), read('6h', name), select.selectOption(name)]).then((r) => [r[0], r[1]] as const)
   expect(one.status(), `${name} read status`).toBe(200)
   const oneBody = (await one.json()) as SeenMetrics
+  await testInfo.attach('health-metrics-draw', { body: JSON.stringify({ fleet1h: drawSummary(first), narrowed: { service: name, panels: drawSummary(oneBody) } }, null, 2), contentType: 'application/json' })
   expect(oneBody.service, 'the answer names the selected service').toBe(name)
+  scopeMatch(oneBody, `service ${name}`, name)
+  expect(panelSeries(oneBody, 'req_per_min').map((s) => s.name), `service ${name} draws its own req_per_min series`).toEqual([name])
   await metricsMatch(page, oneBody, `service ${name}`)
 
   // Back to the default view: the fixture step clicks 6h and needs a changed range.
@@ -1030,7 +1052,7 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
   await expect(mn.getByText(/APP latency|APP error rate|throughput|Recon backlog/i), 'no unmeasured tile').toHaveCount(0)
   await expectStyles(parent(mn.locator('[data-service]').first().getByText(/^(UP|DOWN)$/)), 'service badge', { radius: '4px' })
 
-  await metricsReads(page, seen, metrics, metricsUrl)
+  await metricsReads(page, testInfo, metrics, metricsUrl)
   await healthNarrowing(page, latest)
   await healthLinks(page, seen)
 

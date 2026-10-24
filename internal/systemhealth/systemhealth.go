@@ -3,7 +3,10 @@ package systemhealth
 
 import (
 	"slices"
+	"strings"
 	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
 const (
@@ -56,6 +59,14 @@ func QueueDepth(c map[string]int64) int64 {
 		n += c[s]
 	}
 	return n
+}
+
+// PreviewSuffix is "-pr-<N>" on a PR preview, else "".
+func PreviewSuffix(deployEnv string) string {
+	if platform.Posture(deployEnv) != platform.PosturePreview {
+		return ""
+	}
+	return "-" + deployEnv[strings.LastIndex(deployEnv, "pr-"):]
 }
 
 // JobTotals is queue depth and dead-lettered over a set of River kinds.

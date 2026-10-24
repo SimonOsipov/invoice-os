@@ -71,7 +71,7 @@ func newHealthRigWith(t *testing.T, store *Store, fleet FleetReader, now func() 
 		t.Fatal(err)
 	}
 	rig := &healthRig{}
-	app.Mux.HandleFunc("GET /v1/staff/health", Handler(func(ctx context.Context, since time.Time) (map[string]int64, []Sample, error) {
+	app.Mux.HandleFunc("GET /v1/staff/health", Handler(func(ctx context.Context, since time.Time) (Live, []Sample, error) {
 		rig.loads.Add(1)
 		return store.StaffSnapshot(ctx, since)
 	}, fleet, now, slog.Default()))
@@ -185,6 +185,26 @@ func TestStaffHealthRoute_ReturnsFleetCountsAndDepth(t *testing.T) {
 	var checked time.Time
 	if err := json.Unmarshal(body["checked_at"], &checked); err != nil || time.Since(checked) > time.Minute || time.Since(checked) < -time.Minute {
 		t.Errorf("checked_at = %s (%v), want now", body["checked_at"], err)
+	}
+}
+
+func TestStaffHealthRoute_ServesRiverJobs(t *testing.T) {
+	super, app := dbTestPools(t)
+	seedRiverJobs(t, super, "shtest_"+uuid.NewString()[:8], "available", 1)
+	rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
+	rec := rig.get(healthPath, healthCaller{subject: houseMember(t, super), staff: true})
+	wantStatus(t, rec, http.StatusOK)
+	var body struct {
+		RiverJobs JobView `json:"river_jobs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if got := sortedKeys(body.RiverJobs.Services); !slices.Equal(got, []string{"notifications", "submission", "worker"}) {
+		t.Errorf("river_jobs.services keys = %v", got)
+	}
+	if body.RiverJobs.Total.QueueDepth < 1 {
+		t.Errorf("river_jobs.total.queue_depth = %d, want >= 1", body.RiverJobs.Total.QueueDepth)
 	}
 }
 

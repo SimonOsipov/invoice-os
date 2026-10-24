@@ -19,7 +19,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/systemhealth"
 	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
@@ -1116,6 +1118,26 @@ func TestRLS_RiverJobCountsOfAnEmptyQueue(t *testing.T) {
 		}
 		if s := strings.ReplaceAll(*got, " ", ""); s != "{}" {
 			t.Errorf("staff_read_river_job_counts over an empty river_job = %s, want {}", *got)
+		}
+	})
+
+	t.Run("Record writes an empty object, not NULL", func(t *testing.T) {
+		slot := time.Date(2006, 1, 1, 0, 0, 0, 0, time.UTC)
+		zero := 0
+		pool, err := pgxpool.New(ctx, app.Config().ConnString())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		if _, err := (&systemhealth.Store{Pool: pool}).Record(ctx, slot, "ok", &zero); err != nil {
+			t.Fatalf("Record over an empty river_job: %v", err)
+		}
+		var empty, isNull bool
+		if err := super.QueryRow(ctx, `SELECT kind_counts = '{}'::jsonb, kind_counts IS NULL FROM public.health_samples WHERE taken_at = $1`, slot).Scan(&empty, &isNull); err != nil {
+			t.Fatal(err)
+		}
+		if !empty || isNull {
+			t.Errorf("kind_counts = '{}' is %v, IS NULL is %v, want true, false", empty, isNull)
 		}
 	})
 }

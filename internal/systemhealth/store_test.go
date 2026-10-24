@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -223,6 +224,84 @@ func TestStore_RecordWritesTheCountsOnce(t *testing.T) {
 	}
 }
 
+// seedRiverJobs seeds n river_job rows of one kind and state on a queue no worker reads, deleted on cleanup.
+func seedRiverJobs(t *testing.T, super *pgxpool.Pool, kind, state string, n int) {
+	t.Helper()
+	ctx := context.Background()
+	t.Cleanup(func() { _, _ = super.Exec(context.Background(), `DELETE FROM public.river_job WHERE kind = $1`, kind) })
+	for range n {
+		if _, err := super.Exec(ctx, `INSERT INTO public.river_job (kind, queue, state, max_attempts, args, finalized_at)
+			VALUES ($1, 'systemhealth_test', $2::text::river_job_state, 25, '{}', CASE WHEN $2::text IN ('cancelled', 'completed', 'discarded') THEN now() END)`, kind, state); err != nil {
+			t.Fatalf("seed river_job %s/%s: %v", kind, state, err)
+		}
+	}
+}
+
+func TestStore_RecordWritesKindCounts(t *testing.T) {
+	super, app := dbTestPools(t)
+	kind := "shtest_" + uuid.NewString()[:8]
+	seedRiverJobs(t, super, kind, "available", 1)
+	seedRiverJobs(t, super, kind, "running", 2)
+	seedRiverJobs(t, super, kind, "discarded", 1)
+	slot := testSlot(t, super, 2004, 0)
+	zero := 0
+	if _, err := (&Store{Pool: app}).Record(context.Background(), slot, "ok", &zero); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]map[string]int64
+	if err := super.QueryRow(context.Background(), `SELECT kind_counts FROM public.health_samples WHERE taken_at = $1`, slot).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if want := (map[string]int64{"available": 1, "running": 2, "discarded": 1}); !reflect.DeepEqual(got[kind], want) {
+		t.Errorf("kind_counts[%s] = %v, want %v", kind, got[kind], want)
+	}
+}
+
+func TestStore_StaffSnapshotReadsRiverKindsAndKindCounts(t *testing.T) {
+	super, app := dbTestPools(t)
+	kind := "shtest_" + uuid.NewString()[:8]
+	seedRiverJobs(t, super, kind, "available", 3)
+	base := testSlot(t, super, 2005, 0)
+	old := base.Add(SampleInterval)
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO public.health_samples (taken_at, fleet_status, services_down, job_counts) VALUES ($1, 'ok', 0, '{}')`, old); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM public.health_samples WHERE taken_at = $1`, old)
+	})
+	zero := 0
+	st := &Store{Pool: app}
+	if _, err := st.Record(context.Background(), base, "ok", &zero); err != nil {
+		t.Fatal(err)
+	}
+	live, samples, err := st.StaffSnapshot(staffCtx(houseMember(t, super)), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (map[string]int64{"available": 3}); !reflect.DeepEqual(live.Kinds[kind], want) {
+		t.Errorf("Live.Kinds[%s] = %v, want %v", kind, live.Kinds[kind], want)
+	}
+	var withKinds, without *Sample
+	for i := range samples {
+		switch {
+		case samples[i].TakenAt.Equal(base):
+			withKinds = &samples[i]
+		case samples[i].TakenAt.Equal(old):
+			without = &samples[i]
+		}
+	}
+	if withKinds == nil || without == nil {
+		t.Fatalf("own samples missing from %d rows: %v %v", len(samples), withKinds, without)
+	}
+	if want := (map[string]int64{"available": 3}); !reflect.DeepEqual(withKinds.KindCounts[kind], want) {
+		t.Errorf("sample KindCounts[%s] = %v, want %v", kind, withKinds.KindCounts[kind], want)
+	}
+	if without.KindCounts != nil {
+		t.Errorf("a sample without kind_counts reads %v, want nil", without.KindCounts)
+	}
+}
+
 func TestStore_RecordDeletesSamplesOlderThanTheWindow(t *testing.T) {
 	super, app := dbTestPools(t)
 	s := &Store{Pool: app}
@@ -300,10 +379,11 @@ func TestStore_StaffSnapshotReadsCountsAndWindow(t *testing.T) {
 		}
 	}
 	ctx := staffCtx(houseMember(t, super))
-	jobs, samples, err := st.StaffSnapshot(ctx, s1)
+	live, samples, err := st.StaffSnapshot(ctx, s1)
 	if err != nil {
 		t.Fatal(err)
 	}
+	jobs := live.Jobs
 	for _, state := range JobStates {
 		if _, ok := Counts(jobs)[state]; !ok {
 			t.Errorf("state %q missing", state)

@@ -1,6 +1,10 @@
 package systemhealth
 
-import "testing"
+import (
+	"reflect"
+	"slices"
+	"testing"
+)
 
 func TestCounts_ZeroFillsEveryStateAndKeepsOthers(t *testing.T) {
 	raw := map[string]int64{"accepted": 2, "weird": 1}
@@ -32,5 +36,89 @@ func TestQueueDepth_SumsTheThreeLiveStates(t *testing.T) {
 	}
 	if got := QueueDepth(weighted); got != 1+2+4 {
 		t.Errorf("QueueDepth with distinct weights = %d, want 7", got)
+	}
+}
+
+type kinds = map[string]map[string]int64
+
+func wantTotals(t *testing.T, name string, got JobTotals, depth, dead int64) {
+	t.Helper()
+	if got.QueueDepth != depth || got.DeadLettered != dead {
+		t.Errorf("%s = %+v, want queue_depth %d dead_lettered %d", name, got, depth, dead)
+	}
+}
+
+func TestJobViewOf_SumsQueueStatesAndDiscardedPerOwner(t *testing.T) {
+	v := JobViewOf(kinds{
+		"submission_submit":  {"available": 1, "scheduled": 2, "retryable": 3, "running": 4, "discarded": 5, "completed": 9, "cancelled": 9},
+		"extraction_extract": {"discarded": 2},
+		"contact_deliver":    {"available": 7, "discarded": 1},
+	}, 4)
+	wantTotals(t, "submission", v.Services["submission"], 10, 6)
+	wantTotals(t, "notifications", v.Services["notifications"], 7, 1)
+	wantTotals(t, "worker", v.Services["worker"], 17, 7)
+	wantTotals(t, "total", v.Total, 17, 7)
+}
+
+func TestJobViewOf_SubmissionDeadLettersCountWithNoRiverRow(t *testing.T) {
+	v := JobViewOf(nil, 3)
+	wantTotals(t, "submission", v.Services["submission"], 0, 3)
+	wantTotals(t, "worker", v.Services["worker"], 0, 3)
+	wantTotals(t, "total", v.Total, 0, 3)
+	wantTotals(t, "notifications", v.Services["notifications"], 0, 0)
+}
+
+func TestJobViewOf_SubmissionPollDiscardsAreNotCountedTwice(t *testing.T) {
+	v := JobViewOf(kinds{"submission_poll": {"discarded": 2}}, 2)
+	wantTotals(t, "submission", v.Services["submission"], 0, 2)
+	wantTotals(t, "total", v.Total, 0, 2)
+}
+
+func TestJobViewOf_AnUnmappedKindCountsInTheTotalAndWorkerOnly(t *testing.T) {
+	v := JobViewOf(kinds{"nl_other": {"available": 4}}, 0)
+	wantTotals(t, "total", v.Total, 4, 0)
+	wantTotals(t, "worker", v.Services["worker"], 4, 0)
+	wantTotals(t, "submission", v.Services["submission"], 0, 0)
+	wantTotals(t, "notifications", v.Services["notifications"], 0, 0)
+}
+
+func TestJobViewOf_NoRowsGivesEveryOwnerAtZero(t *testing.T) {
+	for name, in := range map[string]kinds{"nil": nil, "empty": {}} {
+		v := JobViewOf(in, 0)
+		if got := sortedKeys(v.Services); !slices.Equal(got, []string{"notifications", "submission", "worker"}) {
+			t.Errorf("%s: services keys = %v", name, got)
+		}
+		wantTotals(t, name+" total", v.Total, 0, 0)
+		for k, s := range v.Services {
+			wantTotals(t, name+" "+k, s, 0, 0)
+		}
+	}
+}
+
+func TestJobViewOf_PendingIsNotQueued(t *testing.T) {
+	v := JobViewOf(kinds{"demo_deal": {"pending": 3}}, 0)
+	wantTotals(t, "notifications", v.Services["notifications"], 0, 0)
+}
+
+func TestJobOwners_MapEachKindToItsService(t *testing.T) {
+	want := map[string]string{
+		"submission_submit": "submission", "submission_poll": "submission", "extraction_extract": "submission",
+		"contact_deliver": "notifications", "demo_deal": "notifications", "blog_subscriber_sync": "notifications", "registrant_intake": "notifications",
+	}
+	if !reflect.DeepEqual(JobOwners, want) {
+		t.Errorf("JobOwners = %v, want %v", JobOwners, want)
+	}
+}
+
+func TestDeadFromSubmissionJobs_AreTheSubmissionWriters(t *testing.T) {
+	got := slices.Clone(DeadFromSubmissionJobs)
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"submission_poll", "submission_submit"}) {
+		t.Errorf("DeadFromSubmissionJobs = %v", got)
+	}
+	for _, k := range DeadFromSubmissionJobs {
+		if JobOwners[k] != "submission" {
+			t.Errorf("JobOwners[%s] = %q, want submission", k, JobOwners[k])
+		}
 	}
 }

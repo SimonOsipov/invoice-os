@@ -33,6 +33,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
+	"github.com/SimonOsipov/invoice-os/internal/systemhealth"
 )
 
 // TestWorkerMain_FatalsOnAdapterSelectError: AC-6 / AC-7 (Core AC-6's binary-level
@@ -1818,5 +1819,31 @@ func TestWorkerMain_EveryPeriodicTaskHasOneLeader(t *testing.T) {
 	}
 	if !leaderLast {
 		t.Error("app.AddBackgroundWorker(leader) is not the last registration; its Stop would release locks while tasks still run")
+	}
+}
+
+func kindOf[T river.JobArgs](river.Worker[T]) string {
+	var a T
+	return a.Kind()
+}
+
+func TestJobOwners_NameEveryWorkerKind(t *testing.T) {
+	kinds := []string{
+		kindOf(&extraction.ExtractWorker{}),
+		kindOf(&submission.SubmitWorker{}),
+		kindOf(&submission.PollWorker{}),
+		kindOf(&notifications.RegistrantWorker{}),
+		kindOf(&notifications.DeliverWorker{}),
+		kindOf(&notifications.DemoDealWorker{}),
+		kindOf(&notifications.BlogSyncWorker{}),
+	}
+	owners := make([]string, 0, len(systemhealth.JobOwners))
+	for k := range systemhealth.JobOwners {
+		owners = append(owners, k)
+	}
+	slices.Sort(kinds)
+	slices.Sort(owners)
+	if !slices.Equal(kinds, owners) {
+		t.Errorf("worker kinds = %v, JobOwners keys = %v", kinds, owners)
 	}
 }

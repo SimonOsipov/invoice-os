@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"math/rand/v2"
+	"net/url"
+	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -16,6 +19,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
 const (
@@ -26,6 +31,11 @@ const (
 )
 
 var healthFunctionSigs = []string{samplerCountSig, staffCountSig, staffSamplesSig}
+
+const staffRiverCountsSig = "public.staff_read_river_job_counts(uuid)"
+
+// healthFunctionSigsWithRiver adds the per-kind River count; the older tests keep the three they were written for.
+var healthFunctionSigsWithRiver = append(slices.Clone(healthFunctionSigs), staffRiverCountsSig)
 
 // jobStates are the submission_jobs states a count key may name.
 var jobStates = map[string]bool{
@@ -69,6 +79,42 @@ func healthSlots(t *testing.T, n int) []time.Time {
 		_, _ = h.super.Exec(context.Background(), `DELETE FROM public.health_samples WHERE taken_at = ANY($1)`, slots)
 	})
 	return slots
+}
+
+const kindCountsColumn = `SELECT data_type, is_nullable, column_default FROM information_schema.columns
+	WHERE table_schema = 'public' AND table_name = 'health_samples' AND column_name = 'kind_counts'`
+
+// requireKindCountsColumn fails the test when the per-kind migration is not applied.
+func requireKindCountsColumn(t *testing.T) {
+	t.Helper()
+	var n int
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'health_samples' AND column_name = 'kind_counts'`).Scan(&n); err != nil {
+		t.Fatalf("read health_samples columns: %v", err)
+	}
+	if n != 1 {
+		t.Fatal("column public.health_samples.kind_counts not found: the per-kind health_samples migration is not applied")
+	}
+}
+
+func requireRiverCountsFunction(t *testing.T) {
+	t.Helper()
+	var reg *string
+	if err := h.super.QueryRow(context.Background(), `SELECT to_regprocedure($1)::text`, staffRiverCountsSig).Scan(&reg); err != nil {
+		t.Fatalf("read to_regprocedure %s: %v", staffRiverCountsSig, err)
+	}
+	if reg == nil {
+		t.Fatalf("function %s not found: the per-kind health_samples migration is not applied", staffRiverCountsSig)
+	}
+}
+
+func healthInsertSampleKinds(t *testing.T, slot time.Time, kinds string) {
+	t.Helper()
+	if _, err := h.super.Exec(context.Background(),
+		`INSERT INTO public.health_samples (taken_at, fleet_status, services_down, job_counts, kind_counts) VALUES ($1, 'ok', 0, '{}'::jsonb, $2::jsonb)`,
+		slot, kinds); err != nil {
+		t.Fatalf("seed sample %s with kind_counts: %v", slot.Format(time.RFC3339), err)
+	}
 }
 
 func healthInsertSample(t *testing.T, slot time.Time, status string, down any, counts string) {
@@ -278,6 +324,7 @@ func TestRLS_StaffReadFunctionsIncludeTheHealthReads(t *testing.T) {
 	for name, argTypes := range map[string][]string{
 		"staff_read_submission_job_counts": {"uuid"},
 		"staff_read_health_samples":        {"uuid", "timestamp with time zone"},
+		"staff_read_river_job_counts":      {"uuid"},
 	} {
 		fn, ok := byName[name]
 		if !ok {
@@ -441,8 +488,12 @@ func TestRLS_HealthSamplesPrivileges(t *testing.T) {
 		[]string{"staff_read_lookup/SELECT/true/{staff_reader}"})
 	check("staff_reader table privileges on health_samples", healthTableGrants(t, "staff_reader", healthSamplesTable), nil)
 	check("staff_reader column privileges on health_samples", healthColumnGrants(t, "staff_reader", healthSamplesTable),
-		[]string{"fleet_status/SELECT", "job_counts/SELECT", "services_down/SELECT", "taken_at/SELECT"})
+		[]string{"fleet_status/SELECT", "job_counts/SELECT", "kind_counts/SELECT", "services_down/SELECT", "taken_at/SELECT"})
 	check("staff_reader policies on health_samples", healthPolicies(t, "staff_reader", healthSamplesTable), nil)
+
+	check("staff_reader table privileges on river_job", healthTableGrants(t, "staff_reader", "public.river_job"), nil)
+	check("staff_reader column privileges on river_job", healthColumnGrants(t, "staff_reader", "public.river_job"), []string{"kind/SELECT", "state/SELECT"})
+	check("staff_reader policies on river_job", healthPolicies(t, "staff_reader", "public.river_job"), nil)
 
 	var rls bool
 	if err := h.super.QueryRow(ctx, `SELECT relrowsecurity FROM pg_class WHERE oid = $1::regclass`, healthSamplesTable).Scan(&rls); err != nil {
@@ -452,7 +503,8 @@ func TestRLS_HealthSamplesPrivileges(t *testing.T) {
 		t.Error("health_samples has row-level security, want none (a global table like staff_audit_log)")
 	}
 
-	for _, sig := range healthFunctionSigs {
+	requireRiverCountsFunction(t)
+	for _, sig := range healthFunctionSigsWithRiver {
 		var app, public bool
 		if err := h.super.QueryRow(ctx,
 			`SELECT has_function_privilege('invoice_app', $1::regprocedure, 'EXECUTE'),
@@ -484,6 +536,7 @@ func TestRLS_HealthSamplesPrivileges(t *testing.T) {
 		`SELECT fleet_status FROM public.health_samples LIMIT 1`,
 		`SELECT services_down FROM public.health_samples LIMIT 1`,
 		`SELECT job_counts FROM public.health_samples LIMIT 1`,
+		`SELECT kind_counts FROM public.health_samples LIMIT 1`,
 		`SELECT * FROM public.health_samples LIMIT 1`,
 	} {
 		_, err := h.app.Exec(ctx, q)
@@ -527,6 +580,7 @@ func readHealthFootprint(t *testing.T) healthFootprint {
 func TestRLS_HealthSamplesDownAndUp(t *testing.T) {
 	requireHarness(t)
 	version := migrationVersion(t, "*_health_samples.sql")
+	kindsVersion := migrationVersion(t, "*_health_samples_job_kinds.sql")
 	member := seedHouseMember(t, "reviewer", "active")
 
 	before := readHealthFootprint(t)
@@ -535,7 +589,8 @@ func TestRLS_HealthSamplesDownAndUp(t *testing.T) {
 		t.Fatalf("before the Down: footprint = %+v, want the table, 3 functions, both policies beside tenant_isolation, the staff_reader column grants, one auth_hook_reader grant, invoice_app INSERT", before)
 	}
 
-	reapply := rollBackMigrations(t, staffMigrationProvider(t), version)
+	// The per-kind migration's Down runs first: it leaves the four-column function this Down drops.
+	reapply := rollBackMigrations(t, staffMigrationProvider(t), kindsVersion, version)
 	after := readHealthFootprint(t)
 	if after.table || after.functions != 0 || after.staffJobGrants != len(staffReaderJobGrants) || after.hookJobGrants != 0 || after.appHealthInsertable ||
 		!reflect.DeepEqual(after.jobPolicies, []string{"staff_read_lookup", "tenant_isolation"}) {
@@ -721,11 +776,12 @@ func TestRLS_InvoiceAppCanTrimHealthSamplesButNotReadOrRewriteThem(t *testing.T)
 	}
 }
 
-// Only the owner and invoice_app may execute the three functions: no other role through a stray grant.
+// Only the owner and invoice_app may execute the four functions: no other role through a stray grant.
 func TestRLS_HealthFunctionsAreExecutableByTheOwnerAndInvoiceAppOnly(t *testing.T) {
 	requireHarness(t)
 	requireHealthFunctions(t)
-	for _, sig := range healthFunctionSigs {
+	requireRiverCountsFunction(t)
+	for _, sig := range healthFunctionSigsWithRiver {
 		got := collectStrings(t,
 			`SELECT coalesce(r.rolname, 'PUBLIC') FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
 			   LEFT JOIN pg_roles r ON r.oid = a.grantee
@@ -792,4 +848,355 @@ func containsAll(have []string, want ...string) bool {
 		}
 	}
 	return true
+}
+
+func TestRLS_HealthSamplesKindCountsIsANullableJSONColumn(t *testing.T) {
+	requireHarness(t)
+	requireHealthSamples(t)
+	requireKindCountsColumn(t)
+	ctx := context.Background()
+
+	var dataType, nullable string
+	var def *string
+	if err := h.super.QueryRow(ctx, kindCountsColumn).Scan(&dataType, &nullable, &def); err != nil {
+		t.Fatalf("read kind_counts column: %v", err)
+	}
+	if dataType != "jsonb" || nullable != "YES" || def != nil {
+		t.Errorf("kind_counts = (%s, nullable %s, default %v), want (jsonb, YES, no default)", dataType, nullable, def)
+	}
+
+	slots := healthSlots(t, 2)
+	const without = `INSERT INTO public.health_samples (taken_at, fleet_status, services_down, job_counts) VALUES ($1, 'ok', 0, '{}'::jsonb)`
+	const with = `INSERT INTO public.health_samples (taken_at, fleet_status, services_down, job_counts, kind_counts) VALUES ($1, 'ok', 0, '{}'::jsonb, '{"k":{"available":1}}'::jsonb)`
+	if _, err := h.app.Exec(ctx, without, slots[0]); err != nil {
+		t.Fatalf("invoice_app insert without kind_counts: %v", err)
+	}
+	if _, err := h.app.Exec(ctx, with, slots[1]); err != nil {
+		t.Fatalf("invoice_app insert with kind_counts: %v", err)
+	}
+	var first, second *string
+	if err := h.super.QueryRow(ctx, `SELECT kind_counts::text FROM public.health_samples WHERE taken_at = $1`, slots[0]).Scan(&first); err != nil {
+		t.Fatalf("read the first row: %v", err)
+	}
+	if err := h.super.QueryRow(ctx, `SELECT kind_counts::text FROM public.health_samples WHERE taken_at = $1`, slots[1]).Scan(&second); err != nil {
+		t.Fatalf("read the second row: %v", err)
+	}
+	if first != nil {
+		t.Errorf("row inserted without kind_counts reads %s, want NULL", *first)
+	}
+	if second == nil || strings.ReplaceAll(*second, " ", "") != `{"k":{"available":1}}` {
+		t.Errorf("row inserted with kind_counts reads %v, want {\"k\":{\"available\":1}}", second)
+	}
+}
+
+// healthKindRows seeds two samples in fresh slots, the first with kind_counts NULL, and returns the slots.
+func healthKindRows(t *testing.T) []time.Time {
+	t.Helper()
+	requireHealthSamples(t)
+	requireKindCountsColumn(t)
+	s := healthSlots(t, 2)
+	healthInsertSample(t, s[0], "ok", 0, `{}`)
+	healthInsertSampleKinds(t, s[1], `{"k":{"available":2}}`)
+	return s
+}
+
+func TestRLS_StaffReadHealthSamplesReturnsKindCounts(t *testing.T) {
+	requireHarness(t)
+	requireHealthFunctions(t)
+	member := seedHouseMember(t, "reviewer", "active")
+	s := healthKindRows(t)
+
+	rows, err := h.app.Query(context.Background(), `SELECT * FROM public.staff_read_health_samples($1::uuid, $2::timestamptz)`, member, s[0])
+	if err != nil {
+		t.Fatalf("staff_read_health_samples: %v", err)
+	}
+	var cols []string
+	for _, f := range rows.FieldDescriptions() {
+		cols = append(cols, f.Name)
+	}
+	var own [][]any
+	for rows.Next() {
+		vals, err := rows.Values()
+		if err != nil {
+			t.Fatalf("read a row: %v", err)
+		}
+		if at, ok := vals[0].(time.Time); ok && (at.Equal(s[0]) || at.Equal(s[1])) {
+			own = append(own, vals)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("collect rows: %v", err)
+	}
+
+	if want := []string{"taken_at", "fleet_status", "services_down", "job_counts", "kind_counts"}; !reflect.DeepEqual(cols, want) {
+		t.Fatalf("columns = %v, want %v", cols, want)
+	}
+	if len(own) != 2 || !own[0][0].(time.Time).Equal(s[0]) || !own[1][0].(time.Time).Equal(s[1]) {
+		t.Fatalf("the test's slots in the result = %v, want [%s, %s] in that order", own, s[0], s[1])
+	}
+	if own[0][4] != nil {
+		t.Errorf("old row kind_counts = %v, want NULL", own[0][4])
+	}
+	if want := map[string]any{"k": map[string]any{"available": float64(2)}}; !reflect.DeepEqual(own[1][4], want) {
+		t.Errorf("new row kind_counts = %v, want %v", own[1][4], want)
+	}
+}
+
+// The statement is the one internal/systemhealth/store.go issues today: a running revision must keep working.
+func TestRLS_StaffReadHealthSamplesKeepsTheFourColumnRead(t *testing.T) {
+	requireHarness(t)
+	requireHealthFunctions(t)
+	member := seedHouseMember(t, "reviewer", "active")
+	s := healthKindRows(t)
+
+	rows, err := h.app.Query(context.Background(), `SELECT taken_at, fleet_status, services_down, job_counts
+			FROM public.staff_read_health_samples($1, $2)`, member, s[0])
+	if err != nil {
+		t.Fatalf("four-column read: %v", err)
+	}
+	got, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (time.Time, error) {
+		var at time.Time
+		var status string
+		var down *int
+		var jobs []byte
+		return at, r.Scan(&at, &status, &down, &jobs)
+	})
+	if err != nil {
+		t.Fatalf("collect the four-column read: %v", err)
+	}
+	var seen int
+	for _, at := range got {
+		if at.Equal(s[0]) || at.Equal(s[1]) {
+			seen++
+		}
+	}
+	if seen != 2 {
+		t.Errorf("the four-column read returned %d of the 2 seeded rows, want 2", seen)
+	}
+}
+
+// riverCountsForActor calls staff_read_river_job_counts as invoice_app inside tx.
+func riverCountsForActor(t *testing.T, tx pgx.Tx, actor any) (map[string]map[string]int64, error) {
+	t.Helper()
+	var raw []byte
+	sp, err := tx.Begin(context.Background())
+	if err != nil {
+		t.Fatalf("savepoint: %v", err)
+	}
+	if err := sp.QueryRow(context.Background(), `SELECT public.staff_read_river_job_counts($1::uuid)`, actor).Scan(&raw); err != nil {
+		_ = sp.Rollback(context.Background())
+		return nil, err
+	}
+	if err := sp.Commit(context.Background()); err != nil {
+		t.Fatalf("release savepoint: %v", err)
+	}
+	return decodeRiverCounts(t, raw), nil
+}
+
+func decodeRiverCounts(t *testing.T, raw []byte) map[string]map[string]int64 {
+	t.Helper()
+	if raw == nil {
+		t.Fatal("staff_read_river_job_counts returned NULL, want a JSON object")
+	}
+	var out map[string]map[string]int64
+	if err := json.Unmarshal(raw, &out); err != nil || out == nil {
+		t.Fatalf("result %q is not an object of {state: count} objects: %v", raw, err)
+	}
+	return out
+}
+
+// healthSeedRiverJob inserts n River rows of kind in state on a per-run queue, in tx.
+func healthSeedRiverJob(t *testing.T, tx pgx.Tx, kind, queue, state string, n int) {
+	t.Helper()
+	for range n {
+		txExec(t, tx, `INSERT INTO public.river_job (kind, queue, state, max_attempts, args, finalized_at)
+			VALUES ($1, $2, $3::text::river_job_state, 25, '{}', CASE WHEN $3::text IN ('cancelled', 'completed', 'discarded') THEN now() END)`,
+			kind, queue, state)
+	}
+}
+
+func TestRLS_StaffReadRiverJobCountsCountsByKindAndState(t *testing.T) {
+	requireHarness(t)
+	requireRiverCountsFunction(t)
+	house := adoptHouseTenant(t)
+	tx := healthRepeatableReadTx(t)
+	member := seedMembershipTx(t, tx, house, "reviewer", "active")
+	// A per-run kind on a per-run queue: no River client fetches it and the count for it is exact.
+	suffix := uuid.NewString()[:8]
+	kind, queue := "h08_"+suffix, "h08q_"+suffix
+	for state, n := range map[string]int{"available": 2, "retryable": 1, "discarded": 1} {
+		healthSeedRiverJob(t, tx, kind, queue, state, n)
+	}
+
+	rows, err := tx.Query(context.Background(), `SELECT kind, state::text, count(*) FROM public.river_job GROUP BY 1, 2`)
+	if err != nil {
+		t.Fatalf("superuser GROUP BY kind, state: %v", err)
+	}
+	want := map[string]map[string]int64{}
+	for rows.Next() {
+		var k, s string
+		var n int64
+		if err := rows.Scan(&k, &s, &n); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if want[k] == nil {
+			want[k] = map[string]int64{}
+		}
+		want[k][s] = n
+	}
+	rows.Close()
+
+	ruleDraftAsApp(t, tx)
+	got, err := riverCountsForActor(t, tx, member)
+	if err != nil {
+		t.Fatalf("staff_read_river_job_counts as a house member: %v", err)
+	}
+	if wantKind := map[string]int64{"available": 2, "retryable": 1, "discarded": 1}; !reflect.DeepEqual(got[kind], wantKind) {
+		t.Errorf("counts for kind %s = %v, want exactly %v", kind, got[kind], wantKind)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("staff_read_river_job_counts = %v, superuser GROUP BY kind, state in the same snapshot = %v, want equal", got, want)
+	}
+}
+
+func TestRLS_RiverJobCountsOfAnEmptyQueue(t *testing.T) {
+	requireHarness(t)
+	superDSN, _ := migratedScratchDB(t, migrations.FS)
+	ctx := context.Background()
+	u, err := url.Parse(superDSN)
+	if err != nil {
+		t.Fatalf("parse the scratch dsn: %v", err)
+	}
+	scratch := strings.TrimPrefix(u.Path, "/")
+
+	super, err := pgx.Connect(ctx, superDSN)
+	if err != nil {
+		t.Fatalf("connect superuser to %s: %v", scratch, err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	tenant, member := uuid.NewString(), uuid.NewString()
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO tenants (id, name) VALUES ($1, 'house (scratch)')`, []any{tenant}},
+		{`INSERT INTO public.house_company (tenant_id) VALUES ($1)`, []any{tenant}},
+		{`INSERT INTO memberships (id, tenant_id, user_id, role, status) VALUES ($1, $2, $3, 'reviewer', 'active')`, []any{uuid.NewString(), tenant, member}},
+	} {
+		if _, err := super.Exec(ctx, q.sql, q.args...); err != nil {
+			t.Fatalf("seed the scratch database: %v", err)
+		}
+	}
+	var jobs int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM public.river_job`).Scan(&jobs); err != nil || jobs != 0 {
+		t.Fatalf("control: scratch river_job holds %d rows (err %v), want 0", jobs, err)
+	}
+
+	app, err := pgx.Connect(ctx, dsnForDB(t, os.Getenv("DATABASE_URL"), scratch))
+	if err != nil {
+		t.Fatalf("connect invoice_app to %s: %v", scratch, err)
+	}
+	t.Cleanup(func() { _ = app.Close(ctx) })
+
+	t.Run("staff read is an empty object", func(t *testing.T) {
+		var got *string
+		if err := app.QueryRow(ctx, `SELECT public.staff_read_river_job_counts($1::uuid)::text`, member).Scan(&got); err != nil {
+			t.Fatalf("staff_read_river_job_counts over an empty river_job: %v", err)
+		}
+		if got == nil {
+			t.Fatal("staff_read_river_job_counts over an empty river_job = NULL, want {}")
+		}
+		if s := strings.ReplaceAll(*got, " ", ""); s != "{}" {
+			t.Errorf("staff_read_river_job_counts over an empty river_job = %s, want {}", *got)
+		}
+	})
+}
+
+func TestRLS_StaffReadRiverJobCountsRefusesANonStaffActor(t *testing.T) {
+	requireHarness(t)
+	requireRiverCountsFunction(t)
+	house := adoptHouseTenant(t)
+	tx := revokeProbeTx(t)
+	active := seedMembershipTx(t, tx, house, "reviewer", "active")
+	actors := []struct {
+		name string
+		id   any
+	}{
+		{"stranger", uuid.NewString()},
+		{"suspended_house_member", seedMembershipTx(t, tx, house, "reviewer", "suspended")},
+		{"customer_active_member", seedMembershipTx(t, tx, h.tenantA, "admin", "active")},
+		{"invited_house_member", seedMembershipTx(t, tx, house, "reviewer", "invited")},
+		{"null_actor", nil},
+	}
+	ruleDraftAsApp(t, tx)
+
+	if _, err := riverCountsForActor(t, tx, active); err != nil {
+		t.Fatalf("control: an active house member is refused: %v", err)
+	}
+	for _, a := range actors {
+		got, err := riverCountsForActor(t, tx, a.id)
+		if got != nil {
+			t.Errorf("%s: refused call returned %v", a.name, got)
+		}
+		requireNotStaffRefusal(t, "staff_read_river_job_counts as "+a.name, err, "staff_read_river_job_counts")
+	}
+}
+
+// jobKindsFootprint is what the per-kind migration adds.
+type jobKindsFootprint struct {
+	column          bool
+	riverFn         bool
+	sampleColumns   int
+	riverGrants     []string
+	kindCountsGrant bool
+}
+
+func readJobKindsFootprint(t *testing.T) jobKindsFootprint {
+	t.Helper()
+	var f jobKindsFootprint
+	if err := h.super.QueryRow(context.Background(), `
+		SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'health_samples' AND column_name = 'kind_counts'),
+		       to_regprocedure($1) IS NOT NULL,
+		       coalesce((SELECT count(*) FROM pg_proc p, unnest(p.proargmodes) m WHERE p.oid = to_regprocedure($2) AND m = 't'), 0)`,
+		staffRiverCountsSig, staffSamplesSig).Scan(&f.column, &f.riverFn, &f.sampleColumns); err != nil {
+		t.Fatalf("read the per-kind footprint: %v", err)
+	}
+	f.riverGrants = healthColumnGrants(t, "staff_reader", "public.river_job")
+	if len(f.riverGrants) == 0 {
+		f.riverGrants = nil
+	}
+	f.kindCountsGrant = slices.Contains(healthColumnGrants(t, "staff_reader", healthSamplesTable), "kind_counts/SELECT")
+	return f
+}
+
+func TestRLS_HealthSamplesJobKindsDownAndUp(t *testing.T) {
+	requireHarness(t)
+	kindsVersion := migrationVersion(t, "*_health_samples_job_kinds.sql")
+	member := seedHouseMember(t, "reviewer", "active")
+
+	wantUp := jobKindsFootprint{column: true, riverFn: true, sampleColumns: 5, riverGrants: []string{"kind/SELECT", "state/SELECT"}, kindCountsGrant: true}
+	before := readJobKindsFootprint(t)
+	if !reflect.DeepEqual(before, wantUp) {
+		t.Fatalf("before the Down: footprint = %+v, want %+v", before, wantUp)
+	}
+
+	const fourColumns = `SELECT taken_at, fleet_status, services_down, job_counts FROM public.staff_read_health_samples($1::uuid, '2000-01-01T00:00Z'::timestamptz)`
+	reapply := rollBackMigrations(t, staffMigrationProvider(t), kindsVersion)
+	after := readJobKindsFootprint(t)
+	if wantDown := (jobKindsFootprint{sampleColumns: 4}); !reflect.DeepEqual(after, wantDown) {
+		t.Errorf("after the Down: footprint = %+v, want %+v", after, wantDown)
+	}
+	rows, err := h.app.Query(context.Background(), fourColumns, member)
+	if err != nil {
+		t.Fatalf("after the Down: four-column read as a house member: %v", err)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Errorf("after the Down: four-column read as a house member: %v", err)
+	}
+
+	reapply()
+	if again := readJobKindsFootprint(t); !reflect.DeepEqual(again, before) {
+		t.Errorf("after the Up: footprint = %+v, want %+v", again, before)
+	}
 }

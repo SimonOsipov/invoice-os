@@ -156,6 +156,15 @@ describe('Console system health wiring', () => {
     expect(screen.getByText('1/1')).toBeTruthy()
   })
 
+  it('a 403 on the metrics read shows the staff line in the panels and keeps the health blocks', async () => {
+    metrics.mockRejectedValueOnce(new ApiError('http', 'forbidden', 403))
+    render(<App />)
+    await openHealth()
+    const note = await screen.findByText('Your account is not ASComply staff.')
+    expect(within(note.closest('[data-panels]') as HTMLElement).queryByRole('button', { name: 'Retry' })).toBeNull()
+    expect(screen.getByText('1/1')).toBeTruthy()
+  })
+
   it('a 401 on the metrics read expires the session', async () => {
     metrics.mockRejectedValueOnce(new ApiError('http', 'expired', 401))
     render(<App />)

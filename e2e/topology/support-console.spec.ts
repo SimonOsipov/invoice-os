@@ -681,12 +681,12 @@ async function submissionsReads(page: Page, testInfo: TestInfo): Promise<void> {
   await attachShot(page, testInfo, 'submissions')
 }
 
-// The tenant select ends the filter bar: rightmost of `others` and flush with the bar's content edge.
+// The select ends the filter bar: rightmost of `others` and flush with the bar's content edge.
 async function selectAtRightEnd(filterBar: Locator, bar: Rect, select: Rect, others: Rect[]): Promise<string[]> {
   const padRight = await filterBar.evaluate((el) => parseFloat(getComputedStyle(el).paddingRight))
   const right = (r: Rect): number => r.x + r.width
-  const problems = others.flatMap((o, i) => (right(o) > right(select) + 1 ? [`tenant select: not rightmost, #${i} ends later`] : []))
-  if (!near(right(select), right(bar) - padRight, 1)) problems.push(`tenant select right ${right(select)} vs filter bar content edge ${right(bar) - padRight}`)
+  const problems = others.flatMap((o, i) => (right(o) > right(select) + 1 ? [`select: not rightmost, #${i} ends later`] : []))
+  if (!near(right(select), right(bar) - padRight, 1)) problems.push(`select right ${right(select)} vs filter bar content edge ${right(bar) - padRight}`)
   return problems
 }
 
@@ -978,7 +978,7 @@ function metricsFixture() {
 // fixture check: pins layout of a wire-shaped body, not the metrics contract
 async function healthFixtureLayout(page: Page): Promise<void> {
   const mn = mainOf(page)
-  const cors = { 'access-control-allow-origin': new URL(page.url()).origin, 'access-control-allow-headers': '*' }
+  const cors = { 'access-control-allow-origin': new URL(page.url()).origin, 'access-control-allow-headers': 'authorization, content-type', 'access-control-allow-methods': 'GET, OPTIONS' }
   await page.route(STAFF_METRICS, (route) =>
     route.request().method() === 'OPTIONS' ? route.fulfill({ status: 204, headers: cors }) : route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify(metricsFixture()) }),
   )

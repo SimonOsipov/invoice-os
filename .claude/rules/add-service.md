@@ -16,6 +16,7 @@ paths:
 - Select the binary with the build argument `SERVICE`.
 - `cmd/migrate` is the pre-deploy Cloud Run job. It opens no listener and boots through `platform.ReportBootPanic` and `platform.Fatal` without `platform.New`.
 - `cmd/blog` is the other Go binary outside the fleet. It runs in the `blog` SPA image from `frontend/blog/Dockerfile`, answers `/health`, and boots through `platform.ReportBootPanic` and `platform.Fatal` without `platform.New`.
+- `cmd/authsentry` is the third Go binary outside the fleet. It runs in the auth image, boots through `platform.ReportBootPanic` and `platform.Fatal`, and exits with GoTrue's code through its one exempted `os.Exit`.
 - Bind all interfaces on `:$PORT`. Cloud Run injects `PORT`.
 - Probe a service at `/health` on a run.app host. Cloud Run answers `/healthz` itself there.
 - Add a new service in invoice-os-infra first: `terraform/run.tf` (`services` or `site`, `invokers`, the gateway's `urls`), `identities.tf`, and the secret lists in `secrets.tf`.

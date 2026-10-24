@@ -443,6 +443,15 @@ describe('BlogPreview', () => {
   const view = (m: ReturnType<typeof model>, tab: 'article' | 'card' = 'article', cover = 'none') =>
     renderToStaticMarkup(<BlogPreview model={m} tab={tab} cover={cover} onTab={() => {}} />)
 
+  it('BUG-42 an address in a paragraph renders as a new-tab link', () => {
+    const html = view(model(blocks({ type: 'p', text: 'see https://example.com/a.' })))
+    const tag = html.match(/<a [^>]*>/)?.[0] ?? ''
+    expect(tag).toContain('href="https://example.com/a"')
+    expect(tag).toContain('target="_blank"')
+    expect(tag).toContain('rel="noopener noreferrer"')
+    expect(html).toMatch(/>https:\/\/example\.com\/a<\/a>\./)
+  })
+
   it('the article renders blocks, TOC and quote marks', () => {
     const body = blocks(
       { type: 'h', text: 'First' },

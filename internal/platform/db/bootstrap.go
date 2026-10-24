@@ -36,7 +36,7 @@ type RolePasswords struct {
 // hardcoding the key a second time.
 const BootstrapAdvisoryLockKey int64 = 84210001
 
-// prEnvironmentPattern matches a Railway PR-environment name in either
+// prEnvironmentPattern matches a PR-preview environment name in either
 // documented shape: the bare "pr-<N>" or the repo-qualified "<repo>-pr-<N>"
 // (QA F5), where <N> is one or more digits. Case-sensitive and fully anchored:
 // "PR-42", "pr-", "pr-abc", "pr-42x" and "pr-42 " (trailing whitespace) must all
@@ -44,8 +44,8 @@ const BootstrapAdvisoryLockKey int64 = 84210001
 var prEnvironmentPattern = regexp.MustCompile(`^(?:.+-)?pr-[0-9]+$`)
 
 // provisionableEnvironment reports whether environment is one deploy-time DB
-// provisioning is ever permitted against: exactly "development", or a Railway
-// PR-environment name (see prEnvironmentPattern). Everything else — including
+// provisioning is ever permitted against: exactly "development", or a PR-preview
+// environment name (see prEnvironmentPattern). Everything else — including
 // "", "staging", "prod", "Production", "production", and any value with
 // surrounding whitespace — is false. This is an ALLOWLIST, deliberately: see
 // BootstrapEnabled's doc comment for the rationale.
@@ -59,7 +59,7 @@ func provisionableEnvironment(environment string) bool {
 // BootstrapEnabled reports whether deploy-time DB provisioning is permitted.
 //
 // ALLOWLIST, deliberately (QA F1, BLOCKER): flag == "true" AND environment is
-// exactly "development" or a Railway PR-environment name in either documented
+// exactly "development" or a PR-preview environment name in either documented
 // shape (pr-<N> / <repo>-pr-<N>, QA F5) — never a blocklist. Deliberately NOT
 // gateway.MockIssuerEnabled's `!= "production"` shape; see task-127 / Decision
 // [allowlist-guard]. Blast radius of a false positive = superuser password

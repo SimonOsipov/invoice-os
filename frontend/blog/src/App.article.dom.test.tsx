@@ -163,10 +163,10 @@ describe('article', () => {
   })
 
   it('AR-08 Book a demo opens the landing demo form', async () => {
-    vi.stubEnv('VITE_LANDING_URL', 'https://landing-pr-1.up.railway.app/')
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing-pr-1-944095690109.africa-south1.run.app/')
     await mount('/sage-rules', dataWith(H))
     const demo = [...band().querySelectorAll('a')].find((a) => a.textContent === 'Book a demo')!
-    expect(demo.getAttribute('href')).toBe('https://landing-pr-1.up.railway.app/?demo')
+    expect(demo.getAttribute('href')).toBe('https://landing-pr-1-944095690109.africa-south1.run.app/?demo')
     click([...band().querySelectorAll('button')].find((b) => b.textContent === 'Subscribe')!)
     expect(path()).toBe('/subscribe')
   })

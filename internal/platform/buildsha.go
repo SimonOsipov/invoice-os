@@ -5,12 +5,9 @@ import (
 	"strings"
 )
 
-// buildSHAFile is overwritten by CI immediately before `railway up`, so the
-// commit travels inside the uploaded tarball and ends up compiled into the
-// binary. `railway up` returns after the BUILD, not after the new container is
-// serving, and /healthz answers 200 from the OLD container throughout a rolling
-// deploy -- so "the fleet is healthy" never meant "the fleet is running this
-// commit", and the E2E suite could and did verify the previous one.
+// buildSHAFile is overwritten by CI before the image build, so the commit is
+// compiled into the binary. During a rolling deploy /healthz answers 200 from the
+// OLD revision, so only this stamp tells which commit the fleet is serving.
 //
 // Committed as "dev" so a local build, `go test ./...` and any non-CI path all
 // work unchanged; only CI ever writes a real sha here.

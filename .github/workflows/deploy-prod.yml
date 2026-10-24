@@ -310,6 +310,44 @@ jobs:
           bash scripts/ci/gcp-traffic.sh restore serving.txt
           echo "::error::the fleet check failed after traffic moved; traffic is back on the previous revisions."
 
+  # Runs after traffic moves: GoTrue reads these from api.ascomply.com, which the new gateway serves.
+  mail:
+    name: Check the account-mail settings
+    needs: [promote]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      - name: Check auth's mail templates and subjects, and the logo
+        run: |
+          gcloud run services describe auth --project "$PROJECT" --region "$REGION" --format=json \
+            | jq -r '.spec.template.spec.containers[0].env[] | select(.value != null) | [.name, .value] | @tsv' >auth.env
+          templates=$(awk -F'\t' '$1 ~ /^GOTRUE_MAILER_TEMPLATES_/ {print $2}' auth.env)
+          if [ -z "$templates" ]; then
+            echo "::error::auth sets no GOTRUE_MAILER_TEMPLATES_*; GoTrue would send its default mail."
+            exit 1
+          fi
+          go build -o prenv ./tools/prenv
+          rc=0
+          # shellcheck disable=SC2086 # one URL per word
+          ./prenv mail-template-check $templates || rc=1
+          while IFS=$'\t' read -r name value; do
+            ./prenv mail-subject-check "$value" | sed "s/^::error::/::error::$name: /" || rc=1
+          done < <(awk -F'\t' '$1 ~ /^GOTRUE_MAILER_SUBJECTS_/' auth.env)
+          ./prenv mail-logo-check || rc=1
+          exit $rc
+
   untag:
     name: Remove the deploy tag
     needs: [await-ci, deploy, check, promote]

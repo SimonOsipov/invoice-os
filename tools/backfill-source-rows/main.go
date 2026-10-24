@@ -10,8 +10,7 @@
 //	DOCUMENT_ACCESS_KEY_ID=… DOCUMENT_SECRET_ACCESS_KEY=… \
 //	  go run ./tools/backfill-source-rows --tenant <uuid> [--tenant <uuid> …] [--dry-run=false]
 //
-// Against a deployed environment, run it under `railway run`. Not a service:
-// no railway.json, no Dockerfile target.
+// Not a service: no Dockerfile target.
 //
 // Anything ambiguous writes nothing and is reported instead: a tied or
 // partially-covering invoice-number column, an invoice number shared within

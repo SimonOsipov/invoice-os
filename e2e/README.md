@@ -21,10 +21,9 @@ When the two disagree, the rule file wins and this file is the one to correct.
 
 ## Target URLs
 
-Each target's URL is a **required** env var — there is no hardcoded default. Every PR now
-deploys to its own ephemeral Railway environment with an unpredictable domain suffix
-(M4-23), so a missing var throws naming itself rather than silently falling back to the
-shared `development` fleet (Decision `[fail-loud-targets]`, `targets.ts`):
+Each target's URL is a **required** env var — there is no hardcoded default. A missing var
+throws naming itself rather than silently pointing at another deployment (`targets.ts`).
+A PR preview's URLs are `https://<svc>-pr-<N>-944095690109.africa-south1.run.app`:
 
 | Target          | Env var               | Needed by            |
 | --------------- | --------------------- | -------------------- |
@@ -162,8 +161,8 @@ ctl login firm --env pr-348 --role reviewer     # sign in, save a storage state,
 ctl measure '[data-testid="evidence-bundle-drawer"]' --props width,padding-left --viewport 1440
 ```
 
-- **`env <pr-N|production>`** resolves the seven service URLs from Railway and lists dark domains in `dark` (exit 1). It reads `~/.railway/config.json`, whose token expires after about an hour: run `railway whoami`, else `railway login`.
-- **`login <firm|inhouse|developer|support> --env <pr-N> [--role admin|preparer|reviewer]`** creates the 8 demo accounts once per environment (admin, preparer and reviewer on tenants 1111 and 2222, plus a developer and a support staff account), signs in and saves a storage state. `--role` applies to `firm` and `inhouse` only. A repeat call reuses the account and the state (`reused: true`, `gatewayWrites: 0`). `--env production` exits 1: production has no demo account, so use read-only probes there.
+- **`env <pr-N|production>`** prints the seven service URLs: the PR's run.app services, or production's hosts. It needs no login.
+- **`login <firm|inhouse|developer|support> --env <pr-N> [--role admin|preparer|reviewer]`** creates the 8 demo accounts once per environment (admin, preparer and reviewer on tenants 1111 and 2222, plus a developer and a support staff account), signs in and saves a storage state. `--role` applies to `firm` and `inhouse` only. A repeat call reuses the account and the state (`reused: true`, `gatewayWrites: 0`). Each preview deploy recreates the database; `login` then re-creates the accounts. `--env production` exits 1: production has no demo account, so use read-only probes there.
 - **`measure <selector> --props <p1,p2> [--viewport <width>]`** prints the box and computed styles of every match in the open `playwright-cli` session, after animations settle. Write a custom property as `--props=--x`. A selector with no match exits 1. `--viewport` leaves the open page at that width.
 - **Session:** `--session`, else `$PLAYWRIGHT_CLI_SESSION`, else `default`.
 - **Store:** `<worktree>/.ralph/ctl/<env>/`, gitignored. `accounts.json` (mode 0600) holds the passwords; `<persona>-<role>.json` (`developer.json`, `support.json` for staff) are the storage states. Output never prints a password. Delete the directory to re-create the accounts.
@@ -174,7 +173,7 @@ ctl measure '[data-testid="evidence-bundle-drawer"]' --props width,padding-left 
 pwc list --json
 pwc -s=s1 open
 pwc -s=s1 state-load "$PWD/.ralph/ctl/pr-348/firm-reviewer.json"
-pwc -s=s1 goto https://app-pr-348.up.railway.app
+pwc -s=s1 goto https://app-pr-348-944095690109.africa-south1.run.app
 ctl measure 'h1' --props font-size --session s1
 ```
 

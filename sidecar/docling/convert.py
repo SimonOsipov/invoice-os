@@ -15,7 +15,7 @@ import geometry
 logger = logging.getLogger(__name__)
 
 # Pinned per story sec. 4: AcceleratorOptions.num_threads defaults to 4 (auto-detected core
-# count), and a shared Railway CPU reports far more cores than it grants. 2 matches the
+# count), and a shared container host can report far more cores than it grants. 2 matches the
 # MaxWorkers: 2 concurrency bound already imposed upstream (cmd/submission/main.go:213) --
 # two in-flight /v1/read calls at 2 threads each is 4 OS threads, sane on a modest shared vCPU
 # allocation. Revisit once the service is actually provisioned and its real limit is known.

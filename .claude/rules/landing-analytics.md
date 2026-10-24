@@ -20,9 +20,9 @@ paths:
 - Load the `gtag.js` tag only when `shouldLoadTag` holds: a production hostname, granted analytics consent and a baked measurement id.
 - Match the landing hostname exactly against `PRODUCTION_HOSTNAMES` in `hubspot.ts`. That gate does not depend on the measurement id.
 - Keep `CONSENT_DEFAULT_ANALYTICS` false. A visitor with no stored record loads no tag.
-- Set `VITE_GA_MEASUREMENT_ID` on the `landing`, `library` and `blog` services. A fork inherits it, so the hostname gate keeps previews dark.
-- Declare `ARG` and `ENV` for every `VITE_*` variable in `frontend/landing/Dockerfile`, `frontend/library/Dockerfile` and `frontend/blog/Dockerfile`. Railway drops a build arg that has no `ARG`.
-- Redeploy the `landing`, `library` or `blog` service to change its `VITE_*` value. Vite bakes it at build time.
+- Pass `VITE_GA_MEASUREMENT_ID` as a build arg of the `landing`, `library` and `blog` images in `deploy-prod.yml` and `dev-env.yml`. Previews carry the production id, so the hostname gate keeps them dark.
+- Declare `ARG` and `ENV` for every `VITE_*` variable in `frontend/landing/Dockerfile`, `frontend/library/Dockerfile` and `frontend/blog/Dockerfile`. Docker drops a build arg that has no `ARG`.
+- Rebuild the `landing`, `library` or `blog` image to change its `VITE_*` value. Vite bakes it at build time.
 - Never send `page_view` by hand on the landing. `gtag('config', id)` sends it, and a manual event double-counts.
 - Push an `arguments` object to `dataLayer`, never an array. GA4 ignores an array.
 - Send fixed literals as event parameters: `cta_location`, `form_name`, `percent_scrolled`, `feature_id` and `group_id`. Never send form data.

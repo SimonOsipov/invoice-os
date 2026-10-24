@@ -53,7 +53,7 @@ func LoadConfig(service string) (Config, error) {
 		Environment: environment,
 		// Production runs ENVIRONMENT=development, so only Sentry's label follows DEPLOY_ENV.
 		SentryEnvironment: firstNonEmpty(deployEnv, environment),
-		Release:           releaseName(BuildSHA, firstNonEmpty(os.Getenv("BUILD_SHA"), os.Getenv("RAILWAY_GIT_COMMIT_SHA"))),
+		Release:           releaseName(BuildSHA, os.Getenv("BUILD_SHA")),
 		Port:              port,
 		LogLevel:          envString("LOG_LEVEL", "info"),
 		SentryDSN:         envString("SENTRY_DSN", ""),
@@ -75,7 +75,6 @@ func releaseName(buildSHA, platformSHA string) string {
 	}
 }
 
-// ceiling: second value is the Railway fallback, delete with Railway in GKE-12.
 func firstNonEmpty(a, b string) string {
 	if a != "" {
 		return a

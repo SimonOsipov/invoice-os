@@ -37,20 +37,17 @@ describe('dockerfiles', () => {
         expect(arg, `${name}: ARG for ${key} is not inside the build stage`).toBeGreaterThan(from)
         expect(env, `${name}: ENV ${key} is not after its ARG`).toBeGreaterThan(arg)
       }
-      const sha = lines.indexOf('ENV VITE_BUILD_SHA=${BUILD_SHA:-$RAILWAY_GIT_COMMIT_SHA}')
-      for (const arg of ['ARG BUILD_SHA', 'ARG RAILWAY_GIT_COMMIT_SHA']) {
-        const at = lines.indexOf(arg)
-        expect(at, `${name}: ${arg} is not inside the build stage`).toBeGreaterThan(from)
-        expect(sha, `${name}: ENV VITE_BUILD_SHA is not after ${arg}`).toBeGreaterThan(at)
-      }
+      const sha = lines.indexOf('ENV VITE_BUILD_SHA=${BUILD_SHA}')
+      const shaArg = lines.indexOf('ARG BUILD_SHA')
+      expect(shaArg, `${name}: ARG BUILD_SHA is not inside the build stage`).toBeGreaterThan(from)
+      expect(sha, `${name}: ENV VITE_BUILD_SHA is not after ARG BUILD_SHA`).toBeGreaterThan(shaArg)
       for (const want of [
         'ARG VITE_SENTRY_DSN',
         'ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN',
         'ARG VITE_SENTRY_TEST_DIGEST',
         'ENV VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST',
         'ARG BUILD_SHA',
-        'ARG RAILWAY_GIT_COMMIT_SHA',
-        'ENV VITE_BUILD_SHA=${BUILD_SHA:-$RAILWAY_GIT_COMMIT_SHA}',
+        'ENV VITE_BUILD_SHA=${BUILD_SHA}',
         ...(gateway ? ['ARG VITE_GATEWAY_URL', 'ENV VITE_GATEWAY_URL=$VITE_GATEWAY_URL'] : []),
       ]) {
         const at = lines.indexOf(want)
@@ -72,27 +69,6 @@ describe('dockerfiles', () => {
       const lines = codeLines(readFileSync(join(FRONTEND, name, 'Dockerfile'), 'utf8'))
       expect(lines.filter((l) => l.includes('VITE_GATEWAY_URL')), `${name} names VITE_GATEWAY_URL`).toEqual([])
     }
-  })
-
-  it('dockerfiles_theLibraryRailwayJsonIsLandingsButForTheDockerfilePath', () => {
-    const read = (n: string) => JSON.parse(readFileSync(join(FRONTEND, n, 'railway.json'), 'utf8'))
-    const landing = read('landing')
-    // Control: landing's file names its own Dockerfile, so a copy that kept the path would show.
-    expect(landing.build.dockerfilePath).toBe('frontend/landing/Dockerfile')
-    const library = read('library')
-    expect(library.build.dockerfilePath).toBe('frontend/library/Dockerfile')
-    const swap = (j: { build: object }, dockerfilePath: string) => ({ ...j, build: { ...j.build, dockerfilePath } })
-    expect(swap(library, 'x')).toEqual(swap(landing, 'x'))
-  })
-
-  it('dockerfiles_theBlogRailwayJsonIsLandingsButForTheDockerfilePath', () => {
-    const read = (n: string) => JSON.parse(readFileSync(join(FRONTEND, n, 'railway.json'), 'utf8'))
-    const landing = read('landing')
-    expect(landing.build.dockerfilePath).toBe('frontend/landing/Dockerfile')
-    const blog = read('blog')
-    expect(blog.build.dockerfilePath).toBe('frontend/blog/Dockerfile')
-    const swap = (j: { build: object }, dockerfilePath: string) => ({ ...j, build: { ...j.build, dockerfilePath } })
-    expect(swap(blog, 'x')).toEqual(swap(landing, 'x'))
   })
 
   it('dockerfiles_theAuthTokenReachesOnlyTheBuildStage', () => {

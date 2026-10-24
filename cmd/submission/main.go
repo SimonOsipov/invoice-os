@@ -84,7 +84,9 @@ func main() {
 	healthStore := &systemhealth.Store{Pool: pool}
 	fleet := systemhealth.NewFleetReader(gw, &http.Client{Transport: platform.TraceTransport(nil)}, mustEnv("GATEWAY_TOKEN"))
 	app.Mux.HandleFunc("GET /v1/staff/health", systemhealth.Handler(healthStore.StaffSnapshot, fleet, time.Now, app.Logger))
-	metricsSource := systemhealth.NewMetricsSource(systemhealth.NewGoogle(&http.Client{}), time.Now, app.Logger)
+	google := systemhealth.NewGoogle(&http.Client{})
+	google.Suffix = systemhealth.PreviewSuffix(platform.DeployEnv())
+	metricsSource := systemhealth.NewMetricsSource(google, time.Now, app.Logger)
 	app.Mux.HandleFunc("GET /v1/staff/metrics", systemhealth.MetricsHandler(healthStore.StaffCheck, metricsSource.Get, app.Logger))
 
 	// Stub endpoint — proves routing end to end.

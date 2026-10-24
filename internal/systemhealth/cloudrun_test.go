@@ -375,3 +375,103 @@ func TestLimits_FivePagesAllowedAndSixthRefused(t *testing.T) {
 		})
 	}
 }
+
+func svcBody(names ...string) string {
+	var parts []string
+	for _, n := range names {
+		parts = append(parts, fmt.Sprintf(`{"name":"projects/p1/locations/r1/services/%s","template":{"scaling":{"maxInstanceCount":%d},"containers":[{"resources":{"limits":{"cpu":"1","memory":"%dMi"}}}]}}`, n, len(n), len(n)))
+	}
+	return `{"services":[` + strings.Join(parts, ",") + `]}`
+}
+
+func previewLimits(t *testing.T, suffix, svc string, names ...string) []ServiceLimits {
+	t.Helper()
+	_, g := newRunFake(t, func(*http.Request, int) (int, string) { return 200, svcBody(names...) })
+	g.Suffix = suffix
+	got, err := g.limits(t.Context(), "tok", "p1", "r1", svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func limitNames(l []ServiceLimits) []string {
+	var out []string
+	for _, x := range l {
+		out = append(out, x.Name)
+	}
+	return out
+}
+
+func TestLimits_APreviewKeepsOnlyItsPRServices(t *testing.T) {
+	got := previewLimits(t, "-pr-545", "", "gateway-pr-545", "gateway-pr-546", "app-pr-545", "gateway")
+	if want := []string{"app", "gateway"}; !reflect.DeepEqual(limitNames(got), want) {
+		t.Fatalf("names = %v, want %v", limitNames(got), want)
+	}
+}
+
+func TestLimits_APreviewSuffixIsNotAPrefixOfALongerPR(t *testing.T) {
+	got := previewLimits(t, "-pr-54", "", "gateway-pr-545", "gateway-pr-54")
+	if len(got) != 1 || got[0].Name != "gateway" || got[0].Memory != "13Mi" {
+		t.Fatalf("limits = %+v, want gateway from gateway-pr-54", got)
+	}
+}
+
+func TestLimits_APreviewPickKeepsItsPRService(t *testing.T) {
+	got := previewLimits(t, "-pr-545", "gateway", "gateway-pr-545", "gateway-pr-546", "app-pr-545")
+	want := []ServiceLimits{{"gateway", "1", "14Mi", 14}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("limits = %+v, want %+v", got, want)
+	}
+}
+
+func TestDeploys_APreviewAsksForItsPRService(t *testing.T) {
+	f, g := newRunFake(t, func(*http.Request, int) (int, string) {
+		return 200, `{"revisions":[` + rev("gateway-pr-545", "gateway-pr-545-00003-pqf", "2026-10-23T10:00:00Z") + `]}`
+	})
+	g.Suffix = "-pr-545"
+	start := time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC)
+	got, err := g.deploys(t.Context(), "tok", "p1", "r1", "gateway", start, start.Add(24*time.Hour))
+	if err != nil || len(got) != 1 || got[0].Service != "gateway" {
+		t.Fatalf("deploys = %+v, %v", got, err)
+	}
+	if p := f.reqs[0].path; p != "/v2/projects/p1/locations/r1/services/gateway-pr-545/revisions" {
+		t.Fatalf("path = %s", p)
+	}
+}
+
+func previewDeploys(t *testing.T, suffix string, revs ...string) (string, []Deploy) {
+	t.Helper()
+	f, g := newRunFake(t, func(*http.Request, int) (int, string) {
+		return 200, `{"revisions":[` + strings.Join(revs, ",") + `]}`
+	})
+	g.Suffix = suffix
+	start := time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC)
+	got, err := g.deploys(t.Context(), "tok", "p1", "r1", "", start, start.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f.reqs[0].path, got
+}
+
+func TestDeploys_APreviewSuffixIsNotAPrefixOfALongerPR(t *testing.T) {
+	_, got := previewDeploys(t, "-pr-54",
+		rev("gateway-pr-545", "gateway-pr-545-00001-aaa", "2026-10-23T10:00:00Z"),
+		rev("gateway-pr-54", "gateway-pr-54-00001-bbb", "2026-10-23T11:00:00Z"))
+	if len(got) != 1 || got[0].Service != "gateway" || got[0].Revision != "gateway-pr-54-00001-bbb" {
+		t.Fatalf("deploys = %+v", got)
+	}
+}
+
+func TestDeploys_APreviewWildcardKeepsOnlyItsPR(t *testing.T) {
+	path, got := previewDeploys(t, "-pr-545",
+		rev("gateway-pr-545", "gateway-pr-545-00003-pqf", "2026-10-23T10:00:00Z"),
+		rev("gateway-pr-546", "gateway-pr-546-00001-xyz", "2026-10-23T11:00:00Z"),
+		rev("gateway", "gateway-00001-abc", "2026-10-23T12:00:00Z"))
+	if path != "/v2/projects/p1/locations/r1/services/-/revisions" {
+		t.Fatalf("path = %s", path)
+	}
+	if len(got) != 1 || got[0].Service != "gateway" || got[0].Revision != "gateway-pr-545-00003-pqf" {
+		t.Fatalf("deploys = %+v", got)
+	}
+}

@@ -34,3 +34,14 @@ func TestQueueDepth_SumsTheThreeLiveStates(t *testing.T) {
 		t.Errorf("QueueDepth with distinct weights = %d, want 7", got)
 	}
 }
+
+func TestPreviewSuffix_IsThePRNumberOnAPreviewOnly(t *testing.T) {
+	for in, want := range map[string]string{
+		"pr-545": "-pr-545", "invoice-os-pr-7": "-pr-7",
+		"production": "", "": "", "staging": "", "pr-": "", "pr-abc": "", "PR-5": "",
+	} {
+		if got := PreviewSuffix(in); got != want {
+			t.Errorf("PreviewSuffix(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

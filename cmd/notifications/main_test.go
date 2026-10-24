@@ -682,7 +682,7 @@ func TestNotificationsMain_RefusesToBootWithoutADatabase(t *testing.T) {
 	}
 }
 
-// A demo request queues a deal job: fake mode completes it with no network call, off mode leaves it queued.
+// A demo request or a first sign-up queues a deal job: fake mode completes it with no network call, off mode leaves it queued.
 func TestNotificationsMain_FakeModeCompletesADemoDealJob(t *testing.T) {
 	admin, appURL := qaAdminPool(t)
 	bin := qaBuildNotifications(t)

@@ -1173,6 +1173,36 @@ func TestStore_RegistrantOfAnAlreadyRegisteredRowQueuesNoDealJob(t *testing.T) {
 	}
 }
 
+func TestStore_ConcurrentRegistrantsQueueOneSignUpDealJob(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	for round := 0; round < 5; round++ {
+		email := uniqueEmail(t, e, "regrace")
+		errs := make([]error, 6)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := range errs {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				errs[i] = e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: email, DisplayName: "Ada Lovelace"})
+			}()
+		}
+		close(start)
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("round %d registrant %d: %v", round, i, err)
+			}
+		}
+		got := dealJobsFor(t, e, email)
+		if len(got) != 1 || !got[0].SignUp {
+			t.Errorf("round %d: demo_deal jobs = %+v, want exactly one sign-up job", round, got)
+		}
+	}
+}
+
 func TestStore_RegistrantAfterDemoQueuesASecondDealJob(t *testing.T) {
 	e := newEnv(t)
 	email := uniqueEmail(t, e, "demothenreg")

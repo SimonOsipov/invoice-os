@@ -805,7 +805,7 @@ type SeenPoints = [number, number][]
 const panelSeries = (m: SeenMetrics, key: string): SeenPanel['series'] => m.panels.find((p) => p.key === key && p.available)?.series.filter((s) => s.points.length > 0) ?? []
 // The series the SQL panels draw: the "database" series, else the first.
 const sqlSeries = (m: SeenMetrics, key: string): SeenPoints => {
-  const all = panelSeries(m, key)
+  const all = m.panels.find((p) => p.key === key && p.available)?.series ?? []
   return (all.find((s) => s.name === 'database') ?? all[0])?.points ?? []
 }
 const panelHasData = (m: SeenMetrics, key: string): boolean =>
@@ -828,7 +828,8 @@ async function metricsMatch(page: Page, m: SeenMetrics, what: string): Promise<v
   for (const key of PANEL_KEYS) {
     const p = mn.locator(`[data-panel="${key}"]`)
     const has = panelHasData(m, key)
-    await expect(p.getByText('No data', { exact: true }), `${what}: ${key} No data`).toHaveCount(has ? 0 : 1)
+    await expect(p.locator('[data-no-data]'), `${what}: ${key} No data`).toHaveCount(has ? 0 : 1)
+    if (!has) await expect(p.locator('[data-no-data]'), `${what}: ${key} note`).toHaveText('No data')
     if (has) await expect(p.locator('svg [data-line]').first(), `${what}: ${key} draws a line`).toBeAttached()
     else await expect(p.locator('[data-line]'), `${what}: ${key} draws no line`).toHaveCount(0)
   }

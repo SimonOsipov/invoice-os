@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react'
 import type { EditorState, Preview, PreviewBlock } from '../blog'
 import { G } from './BlogList'
+import { Linked } from '@invoice-os/api-client/linked'
 
 type Props = {
   model: Preview
@@ -35,7 +36,7 @@ function Block({ b }: { b: PreviewBlock }) {
     case 'p':
       return (
         <p className="t-body" style={{ margin: 0, fontSize: 15.5, color: 'var(--foreground)', textWrap: 'pretty' }}>
-          {b.text}
+          <Linked text={b.text} />
         </p>
       )
     case 'h':
@@ -49,7 +50,7 @@ function Block({ b }: { b: PreviewBlock }) {
                 <G name="circle-check" size={16} />
               </span>
               <span className="t-body" style={{ fontSize: 15.5, color: 'var(--foreground)' }}>
-                {it}
+                <Linked text={it} />
               </span>
             </div>
           ))}
@@ -67,7 +68,7 @@ function Block({ b }: { b: PreviewBlock }) {
             </span>
             <span style={{ fontSize: 15.5, fontWeight: 700, letterSpacing: '-0.01em', lineHeight: 1.35 }}>{b.title}</span>
             <span className="t-body-sm" style={{ color: 'var(--foreground)' }}>
-              {b.text}
+              <Linked text={b.text} />
             </span>
           </div>
         </div>
@@ -75,7 +76,7 @@ function Block({ b }: { b: PreviewBlock }) {
     case 'quote':
       return (
         <figure style={{ margin: '4px 0', display: 'flex', flexDirection: 'column', gap: 12, padding: '22px 0', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)' }}>
-          <blockquote style={{ margin: 0, fontSize: 20, fontWeight: 600, letterSpacing: '-0.03em', lineHeight: 1.4, color: 'var(--ink)' }}>“{b.text}”</blockquote>
+          <blockquote style={{ margin: 0, fontSize: 20, fontWeight: 600, letterSpacing: '-0.03em', lineHeight: 1.4, color: 'var(--ink)' }}>“<Linked text={b.text} />”</blockquote>
           <figcaption className="t-step">{b.who}</figcaption>
         </figure>
       )

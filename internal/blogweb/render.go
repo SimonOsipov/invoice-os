@@ -25,7 +25,8 @@ const (
 var pagesHTML string
 
 var pages = template.Must(template.New("pages").Funcs(template.FuncMap{
-	"date": longDate,
+	"date":  longDate,
+	"parts": linkParts,
 }).Parse(pagesHTML))
 
 // serverTags are the head tags the server writes; a shell holding one would duplicate it.

@@ -1,0 +1,529 @@
+[
+ {
+  "name": "empty",
+  "in": "",
+  "parts": []
+ },
+ {
+  "name": "plain",
+  "in": "plain text",
+  "parts": [
+   {
+    "text": "plain text"
+   }
+  ]
+ },
+ {
+  "name": "trailing period",
+  "in": "see https://example.com/a.",
+  "parts": [
+   {
+    "text": "see "
+   },
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": "."
+   }
+  ]
+ },
+ {
+  "name": "wrapping paren",
+  "in": "(https://example.com/a)",
+  "parts": [
+   {
+    "text": "("
+   },
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": ")"
+   }
+  ]
+ },
+ {
+  "name": "trailing punctuation class",
+  "in": "https://example.com/a?!,;:",
+  "parts": [
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": "?!,;:"
+   }
+  ]
+ },
+ {
+  "name": "every punctuation char each alone",
+  "in": "x https://example.com/a. https://example.com/a, https://example.com/a; https://example.com/a: https://example.com/a! https://example.com/a? https://example.com/a)",
+  "parts": [
+   {
+    "text": "x "
+   },
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": ". "
+   },
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": ", "
+   },
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": "; "
+   },
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": ": "
+   },
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": "! "
+   },
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": "? "
+   },
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": ")"
+   }
+  ]
+ },
+ {
+  "name": "balanced paren kept",
+  "in": "https://en.wikipedia.org/wiki/A_(b)",
+  "parts": [
+   {
+    "text": "https://en.wikipedia.org/wiki/A_(b)",
+    "href": "https://en.wikipedia.org/wiki/A_(b)"
+   }
+  ]
+ },
+ {
+  "name": "balanced paren then period",
+  "in": "see https://en.wikipedia.org/wiki/A_(b).",
+  "parts": [
+   {
+    "text": "see "
+   },
+   {
+    "text": "https://en.wikipedia.org/wiki/A_(b)",
+    "href": "https://en.wikipedia.org/wiki/A_(b)"
+   },
+   {
+    "text": "."
+   }
+  ]
+ },
+ {
+  "name": "paren wraps balanced paren",
+  "in": "(https://en.wikipedia.org/wiki/A_(b))",
+  "parts": [
+   {
+    "text": "("
+   },
+   {
+    "text": "https://en.wikipedia.org/wiki/A_(b)",
+    "href": "https://en.wikipedia.org/wiki/A_(b)"
+   },
+   {
+    "text": ")"
+   }
+  ]
+ },
+ {
+  "name": "paren then punctuation",
+  "in": "(https://example.com/a).",
+  "parts": [
+   {
+    "text": "("
+   },
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": ")."
+   }
+  ]
+ },
+ {
+  "name": "question then paren",
+  "in": "(https://example.com/a?)",
+  "parts": [
+   {
+    "text": "("
+   },
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": "?)"
+   }
+  ]
+ },
+ {
+  "name": "query and fragment kept",
+  "in": "https://example.com/a?q=1&r=2#frag",
+  "parts": [
+   {
+    "text": "https://example.com/a?q=1&r=2#frag",
+    "href": "https://example.com/a?q=1&r=2#frag"
+   }
+  ]
+ },
+ {
+  "name": "trailing question cut",
+  "in": "https://example.com/a?q=1?",
+  "parts": [
+   {
+    "text": "https://example.com/a?q=1",
+    "href": "https://example.com/a?q=1"
+   },
+   {
+    "text": "?"
+   }
+  ]
+ },
+ {
+  "name": "ellipsis",
+  "in": "https://example.com/a...",
+  "parts": [
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": "..."
+   }
+  ]
+ },
+ {
+  "name": "bare scheme",
+  "in": "https:// alone",
+  "parts": [
+   {
+    "text": "https:// alone"
+   }
+  ]
+ },
+ {
+  "name": "bare scheme with trailing dot",
+  "in": "go to http://.",
+  "parts": [
+   {
+    "text": "go to http://."
+   }
+  ]
+ },
+ {
+  "name": "scheme then punctuation only",
+  "in": "see https://?!",
+  "parts": [
+   {
+    "text": "see https://?!"
+   }
+  ]
+ },
+ {
+  "name": "uppercase scheme",
+  "in": "HTTPS://Example.com/A",
+  "parts": [
+   {
+    "text": "HTTPS://Example.com/A",
+    "href": "HTTPS://Example.com/A"
+   }
+  ]
+ },
+ {
+  "name": "mixed case scheme",
+  "in": "HtTp://x.io",
+  "parts": [
+   {
+    "text": "HtTp://x.io",
+    "href": "HtTp://x.io"
+   }
+  ]
+ },
+ {
+  "name": "two addresses",
+  "in": "a https://example.com/a b http://x.io/y",
+  "parts": [
+   {
+    "text": "a "
+   },
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": " b "
+   },
+   {
+    "text": "http://x.io/y",
+    "href": "http://x.io/y"
+   }
+  ]
+ },
+ {
+  "name": "comma joins two addresses into one",
+  "in": "https://example.com/a,http://x.io",
+  "parts": [
+   {
+    "text": "https://example.com/a,http://x.io",
+    "href": "https://example.com/a,http://x.io"
+   }
+  ]
+ },
+ {
+  "name": "address only start and end",
+  "in": "https://example.com/a mid https://example.com/a",
+  "parts": [
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": " mid "
+   },
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   }
+  ]
+ },
+ {
+  "name": "not-address schemes",
+  "in": "javascript:alert(1) data:x mailto:a@b.c",
+  "parts": [
+   {
+    "text": "javascript:alert(1) data:x mailto:a@b.c"
+   }
+  ]
+ },
+ {
+  "name": "ftp stays plain",
+  "in": "ftp://x.io/file",
+  "parts": [
+   {
+    "text": "ftp://x.io/file"
+   }
+  ]
+ },
+ {
+  "name": "no slashes stays plain",
+  "in": "https:example.com",
+  "parts": [
+   {
+    "text": "https:example.com"
+   }
+  ]
+ },
+ {
+  "name": "scheme inside word",
+  "in": "xhttps://x.io",
+  "parts": [
+   {
+    "text": "x"
+   },
+   {
+    "text": "https://x.io",
+    "href": "https://x.io"
+   }
+  ]
+ },
+ {
+  "name": "markup next to address",
+  "in": "<script> https://example.com/a",
+  "parts": [
+   {
+    "text": "<script> "
+   },
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   }
+  ]
+ },
+ {
+  "name": "angle bracket ends address",
+  "in": "<https://example.com/a><b>",
+  "parts": [
+   {
+    "text": "<"
+   },
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": "><b>"
+   }
+  ]
+ },
+ {
+  "name": "quote ends address",
+  "in": "\"https://example.com/a\"",
+  "parts": [
+   {
+    "text": "\""
+   },
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": "\""
+   }
+  ]
+ },
+ {
+  "name": "attribute breaker after address",
+  "in": "https://example.com/a\"onmouseover=\"x",
+  "parts": [
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": "\"onmouseover=\"x"
+   }
+  ]
+ },
+ {
+  "name": "ampersand kept",
+  "in": "https://example.com/a?a=1&b=2",
+  "parts": [
+   {
+    "text": "https://example.com/a?a=1&b=2",
+    "href": "https://example.com/a?a=1&b=2"
+   }
+  ]
+ },
+ {
+  "name": "newline ends address",
+  "in": "https://example.com/a\nnext",
+  "parts": [
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": "\nnext"
+   }
+  ]
+ },
+ {
+  "name": "tab ends address",
+  "in": "https://example.com/a\tnext",
+  "parts": [
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": "\tnext"
+   }
+  ]
+ },
+ {
+  "name": "no-break space ends address",
+  "in": "https://example.com/a next",
+  "parts": [
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": " next"
+   }
+  ]
+ },
+ {
+  "name": "ideographic space ends address",
+  "in": "https://example.com/a　next",
+  "parts": [
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": "　next"
+   }
+  ]
+ },
+ {
+  "name": "non-ascii path kept",
+  "in": "https://example.com/a/café",
+  "parts": [
+   {
+    "text": "https://example.com/a/café",
+    "href": "https://example.com/a/café"
+   }
+  ]
+ },
+ {
+  "name": "emoji after address",
+  "in": "https://example.com/a 😀",
+  "parts": [
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": " 😀"
+   }
+  ]
+ },
+ {
+  "name": "only unmatched parens",
+  "in": "https://example.com/a))",
+  "parts": [
+   {
+    "text": "https://example.com/a",
+    "href": "https://example.com/a"
+   },
+   {
+    "text": "))"
+   }
+  ]
+ },
+ {
+  "name": "unmatched open paren kept",
+  "in": "https://example.com/a(x",
+  "parts": [
+   {
+    "text": "https://example.com/a(x",
+    "href": "https://example.com/a(x"
+   }
+  ]
+ }
+]

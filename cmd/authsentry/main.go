@@ -60,7 +60,6 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 
 	cmd, pipe := startGoTrue(args, stdout)
 	if err := cmd.Start(); err != nil {
-		fmt.Fprintf(stderr, "{\"component\":\"authsentry\",\"level\":\"error\",\"msg\":%q}\n", "GoTrue did not start: "+err.Error())
 		finish(on, cl.exit(0, err), crashFlush)
 		return exitCodeNotFound
 	}

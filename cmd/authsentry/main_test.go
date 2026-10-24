@@ -253,6 +253,15 @@ func TestRun_MissingGoTrue(t *testing.T) {
 	}
 }
 
+func TestRun_StartFailureWithNoDSNWritesNothing(t *testing.T) {
+	t.Setenv("SENTRY_DSN", "")
+	var out, errb bytes.Buffer
+	code := run([]string{"/nonexistent"}, os.Getenv, &out, &errb)
+	if code == 0 || errb.Len() != 0 {
+		t.Fatalf("code %d stderr %q", code, errb.String())
+	}
+}
+
 func TestRun_ABlockedSentryNeverSlowsGoTrue(t *testing.T) {
 	rec := &recorder{block: make(chan struct{})}
 	t.Cleanup(func() { close(rec.block) })

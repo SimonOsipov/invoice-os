@@ -49,6 +49,7 @@ func TestParsePinAdversarial(t *testing.T) {
 		{"--platform with a Hub name", "FROM --platform=linux/amd64 supabase/auth:v2.197.0@" + pinnedDigest + "\n"},
 		{"AS stage after an unpinned ref", "FROM ghcr.io/supabase/auth:v2.197.0 AS base\n"},
 		{"FROM with no reference", "FROM\n"},
+		{"Hub namespace before supabase/auth", "FROM myorg/supabase/auth:v2.197.0@" + pinnedDigest + "\n"},
 		{"two supabase/auth FROM lines", "FROM " + pinnedRef + " AS a\nFROM " + pinnedRef + "\n"},
 		{"auth FROM not last", "FROM " + pinnedRef + "\nFROM golang:1 AS w\n"},
 		{"no auth FROM", "FROM golang:1 AS w\nFROM alpine\n"},

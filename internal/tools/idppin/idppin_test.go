@@ -128,25 +128,28 @@ func TestParsePin(t *testing.T) {
 }
 
 func TestTagPrintsThePinnedTag(t *testing.T) {
-	stdout, stderr, code := runIdppin(t, "tag", writeDockerfile(t, plannedBody))
-	if code != 0 || stdout != pinnedTag+"\n" {
-		t.Errorf("idppin tag: exit %d stdout %q stderr %q; want exit 0 and %q", code, stdout, stderr, pinnedTag+"\n")
+	for name, df := range map[string]string{"planned": writeDockerfile(t, plannedBody), "committed": committedDockerfile} {
+		stdout, stderr, code := runIdppin(t, "tag", df)
+		if code != 0 || stdout != pinnedTag+"\n" {
+			t.Errorf("idppin tag (%s): exit %d stdout %q stderr %q; want exit 0 and %q", name, code, stdout, stderr, pinnedTag+"\n")
+		}
 	}
 }
 
 func TestLatestCheckExitCodes(t *testing.T) {
-	df := writeDockerfile(t, plannedBody)
-	for _, c := range []struct {
-		latest string
-		want   int
-	}{
-		{"v2.197.0", 0},
-		{"v2.198.0", 1},
-	} {
-		stdout, stderr, code := runIdppin(t, "latest-check", df, c.latest)
-		if code != c.want {
-			t.Errorf("latest-check pinned %s vs %s: exit %d, want %d; stdout=%q stderr=%q",
-				pinnedTag, c.latest, code, c.want, stdout, stderr)
+	for name, df := range map[string]string{"planned": writeDockerfile(t, plannedBody), "committed": committedDockerfile} {
+		for _, c := range []struct {
+			latest string
+			want   int
+		}{
+			{"v2.197.0", 0},
+			{"v2.198.0", 1},
+		} {
+			stdout, stderr, code := runIdppin(t, "latest-check", df, c.latest)
+			if code != c.want {
+				t.Errorf("latest-check (%s) pinned %s vs %s: exit %d, want %d; stdout=%q stderr=%q",
+					name, pinnedTag, c.latest, code, c.want, stdout, stderr)
+			}
 		}
 	}
 }

@@ -38,6 +38,41 @@ export function sparkline(points: number[]): { line: string; area: string } {
   return { line, area }
 }
 
+export const CHART_W = 600
+export const CHART_H = 160
+
+export function niceCeil(v: number): number {
+  if (!(v > 0)) {
+    return 1
+  }
+  const mag = 10 ** Math.floor(Math.log10(v))
+  const m = v / mag
+  const n = m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10
+  return n * mag
+}
+
+export function chartX(t: number, start: number, end: number): number {
+  if (end <= start) {
+    return 0
+  }
+  return Math.min(CHART_W, Math.max(0, ((t - start) / (end - start)) * CHART_W))
+}
+
+export function chartY(v: number, yMax: number): number {
+  return CHART_H - (v / yMax) * CHART_H
+}
+
+export function chartPath(points: [number, number][], o: { start: number; end: number; step: number; yMax: number }): string {
+  let d = ''
+  let prev: number | null = null
+  for (const [t, v] of points) {
+    const cmd = prev === null || t - prev > 1.5 * o.step ? 'M' : 'L'
+    d += `${d ? ' ' : ''}${cmd}${chartX(t, o.start, o.end).toFixed(1)} ${chartY(v, o.yMax).toFixed(1)}`
+    prev = t
+  }
+  return d
+}
+
 // Dot, stroke and fill derive from one tone so a tile cannot mix them.
 export function healthTone(tone: 'green' | 'amber' | 'red' | 'muted'): { dot: string; stroke: string; fill: string } {
   if (tone === 'amber') {

@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs'
 import { AiUsage } from './components/AiUsage'
 import { Health } from './components/Health'
 import { Rules } from './components/Rules'
+import { TimeChart } from './components/TimeChart'
 import { Tenants } from './components/Tenants'
 import type { AiCall } from './aiUsageApi'
 import type { FleetHealth, ServiceHealth, StaffHealth, TrendPoint } from './healthApi'
@@ -645,5 +646,29 @@ describe('System health markup', () => {
     expect(style(ts[ts.indexOf(badge) - 2]).flex, 'badge wrapper').toBe('none')
     const build = ts.find((t) => t.text === 'abcdef1')!
     expect(style(build).flex).toBe('none')
+  })
+})
+
+describe('TimeChart', () => {
+  const base = { start: 0, end: 600, step: 60 }
+  const lines = [
+    { name: 'api', color: 'var(--series-1)', points: [[0, 1], [60, 2]] as [number, number][] },
+    { name: 'web', color: 'var(--series-2)', points: [[0, 3], [60, 5]] as [number, number][] },
+  ]
+  it('TimeChart draws each line, guide and deploy marker', () => {
+    const ts = parse(renderToStaticMarkup(createElement(TimeChart, { ...base, lines, guides: [{ value: 80, label: 'limit', dashed: true }], markers: [{ t: 120, title: 'rev-1 · 10:00 UTC' }, { t: 240, title: 'rev-2 · 11:00 UTC' }] })))
+    const paths = ts.filter((t) => attr(t, 'data-line'))
+    expect(paths.map((t) => [attr(t, 'data-line'), attr(t, 'stroke')])).toEqual([['api', 'var(--series-1)'], ['web', 'var(--series-2)']])
+    const guides = ts.filter((t) => t.name === 'line' && t.attrs.includes('data-guide'))
+    expect(guides).toHaveLength(1)
+    expect(attr(guides[0], 'stroke-dasharray')).not.toBe('')
+    const deploys = ts.map((t, i) => (t.name === 'line' && t.attrs.includes('data-deploy') ? ts[i + 1].text : null)).filter(Boolean)
+    expect(deploys).toEqual(['rev-1 · 10:00 UTC', 'rev-2 · 11:00 UTC'])
+  })
+  it('TimeChart scales to cover the guide', () => {
+    const html = renderToStaticMarkup(createElement(TimeChart, { ...base, lines, guides: [{ value: 80, label: 'limit', dashed: false }] }))
+    const labels = parse(html).filter((t) => t.name === 'span' && t.text).map((t) => t.text)
+    expect(labels[0]).toBe('100')
+    expect(labels[1]).toBe('0')
   })
 })

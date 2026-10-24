@@ -48,6 +48,20 @@ func (s *Store) Record(ctx context.Context, slot time.Time, fleetStatus string, 
 	return tag.RowsAffected() == 1, nil
 }
 
+// StaffCheck asks the database whether the caller is active staff and returns db.ErrNotStaff if not.
+// ceiling: borrows staff_read_health_samples as the check; a rename or a change to its guard breaks it, add a dedicated function then
+func (s *Store) StaffCheck(ctx context.Context) error {
+	actor, err := db.StaffActor(ctx)
+	if err != nil {
+		return err
+	}
+	return db.WithinStaffTx(ctx, s.Pool, func(tx pgx.Tx) error {
+		var n int64
+		err := tx.QueryRow(ctx, `SELECT count(*) FROM public.staff_read_health_samples($1, 'infinity')`, actor).Scan(&n)
+		return db.StaffReadError("systemhealth: staff metrics check", err)
+	})
+}
+
 // StaffSnapshot reads the live per-state counts and the samples since the given time, oldest first.
 func (s *Store) StaffSnapshot(ctx context.Context, since time.Time) (map[string]int64, []Sample, error) {
 	id, ok := auth.StaffFromContext(ctx)

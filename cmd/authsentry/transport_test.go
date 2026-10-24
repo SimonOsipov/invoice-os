@@ -23,6 +23,7 @@ type ingest struct {
 	headers  http.Header
 	attempts map[string]int
 	got      []string
+	order    []string
 	last     *http.Request
 	lastBody []byte
 }
@@ -39,6 +40,7 @@ func newIngest(t *testing.T, status func(id string) int) *ingest {
 		id, _ := hdr["event_id"].(string)
 		in.mu.Lock()
 		in.attempts[id]++
+		in.order = append(in.order, id)
 		st := in.status(id)
 		for k, v := range in.headers {
 			w.Header()[k] = v
@@ -510,5 +512,37 @@ func TestTransport_AStaleFlushDoesNotCutALaterWait(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if len(tr.kick) != 0 {
 		t.Error("a Flush that found the queue empty left a pending kick")
+	}
+}
+
+func TestTransport_AFlushPassSendsNewestFirstAndDropsWhatItSent(t *testing.T) {
+	in := newIngest(t, func(id string) int {
+		if id == eventID(1) {
+			return 429
+		}
+		return 200
+	})
+	in.headers = http.Header{"Retry-After": {"600"}}
+	tr := newBufferedTransport(http.DefaultClient, time.Now, nil)
+	tr.Configure(sentry.ClientOptions{Dsn: in.dsn()})
+	t.Cleanup(tr.Close)
+	tr.SendEvent(ev(1))
+	eventually(t, "head attempted", func() bool { return in.attemptsFor(eventID(1)) == 1 })
+	tr.SendEvent(ev(2))
+	tr.SendEvent(ev(3))
+	go tr.Flush(time.Second)
+	eventually(t, "both queued events delivered", func() bool { return len(in.received()) == 2 })
+	eventually(t, "head retried once in the pass", func() bool { return in.attemptsFor(eventID(1)) == 2 })
+	in.mu.Lock()
+	order := append([]string(nil), in.order...)
+	in.mu.Unlock()
+	if want := []string{eventID(1), eventID(3), eventID(2), eventID(1)}; strings.Join(order, ",") != strings.Join(want, ",") {
+		t.Errorf("attempt order %v, want %v", order, want)
+	}
+	tr.mu.Lock()
+	left := len(tr.queue)
+	tr.mu.Unlock()
+	if left != 1 {
+		t.Errorf("queue holds %d events after the pass, want only the rate-limited head", left)
 	}
 }

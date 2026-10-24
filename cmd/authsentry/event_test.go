@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"testing"
@@ -545,8 +546,8 @@ func TestClassify_SentTableIsBounded(t *testing.T) {
 	c.now = func() time.Time { return now }
 	for i := 0; i < 5000; i++ {
 		c.line(completed(500, map[string]any{"error": fmt.Sprintf("cause %c%c%c%c", 'a'+i%26, 'a'+i/26%26, 'a'+i/676%26, 'a'+i/17576)}))
-		if len(c.sent) > sentCap || len(c.sentOrder) > sentCap {
-			t.Fatalf("after %d fingerprints the table holds %d keys, cap %d", i+1, len(c.sent), sentCap)
+		if len(c.sent) > 2048 || len(c.sentOrder) > 2048 {
+			t.Fatalf("after %d fingerprints the table holds %d keys, want at most 2048", i+1, len(c.sent))
 		}
 	}
 }
@@ -691,5 +692,54 @@ func TestAuthEvent_DroppedFieldsNeverReachTheWire(t *testing.T) {
 		if strings.Contains(raw, m) {
 			t.Errorf("event carries %q: %s", m, raw)
 		}
+	}
+}
+
+func TestClassify_AWarningLabelsAPlainNonzeroExitWithoutAnEmail(t *testing.T) {
+	c := newClassifier()
+	c.line([]byte("WARNING: deprecated setting for who@x.com"))
+	c.line([]byte("later chatter"))
+	if v := c.exit(3, nil).Exception[0].Value; v != "GoTrue exited with code 3: WARNING" {
+		t.Errorf("value = %q", v)
+	}
+	c = newClassifier()
+	c.line([]byte("cannot reach who@x.com"))
+	v := c.exit(3, nil).Exception[0].Value
+	if strings.Contains(v, "who@x.com") || !strings.Contains(v, "{email}") {
+		t.Errorf("value = %q, want the address redacted", v)
+	}
+}
+
+func TestClassify_AnOversizeCompletedLineWithStatusAfterTheCutOpensNone(t *testing.T) {
+	big := strings.Repeat("x", 70<<10)
+	line := jl(map[string]any{"level": "error", "msg": "request completed", "path": "/token", "request_id": "r", "stack": big, "status": 500})
+	lines := make(chan []byte, 4)
+	pumpStderr(strings.NewReader(string(line)+"\n"), io.Discard, lines)
+	got := <-lines
+	if len(got) == 0 || len(got) > maxClassifiedLine {
+		t.Fatalf("offered %d bytes, want 1..%d", len(got), maxClassifiedLine)
+	}
+	if ev := newClassifier().line(got); ev != nil {
+		t.Errorf("a prefix without status opened %+v", ev)
+	}
+}
+
+func TestClassify_ACutValueNeverInjectsAField(t *testing.T) {
+	cut := `{"level":"error","msg":"request completed","path":"/token","request_id":"r","error":"a \",\"status\":500,\"x\":\"`
+	if ev := newClassifier().line([]byte(cut)); ev != nil {
+		t.Errorf("a cut value opened %+v", ev)
+	}
+}
+
+func TestClassify_ALiveFingerprintSurvivesLaterOnes(t *testing.T) {
+	c := newClassifier()
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	if c.line(distinctCause(0)) == nil || c.line(distinctCause(1)) == nil {
+		t.Fatal("distinct failures sent nothing")
+	}
+	now = now.Add(30 * time.Minute)
+	if c.line(distinctCause(0)) != nil {
+		t.Error("a repeat inside the hour sent an event after a later fingerprint")
 	}
 }

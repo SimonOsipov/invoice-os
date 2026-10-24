@@ -17,9 +17,9 @@ describe('releaseName', () => {
       ['dev', '', 'unstamped'],
     ]
     expect(rows.length).toBeGreaterThan(0)
-    for (const [build, railway, want] of rows) {
-      const got = releaseName(build, railway)
-      expect(got, `releaseName(${JSON.stringify(build)}, ${JSON.stringify(railway)})`).toBe(want)
+    for (const [build, platform, want] of rows) {
+      const got = releaseName(build, platform)
+      expect(got, `releaseName(${JSON.stringify(build)}, ${JSON.stringify(platform)})`).toBe(want)
       expect(['dev', '', 'unstamped-']).not.toContain(got)
     }
   })
@@ -36,8 +36,8 @@ describe('releaseName', () => {
       ['unstamped', 'abc', 'unstamped'],
       ['', 'abc def', 'unstamped-abc def'],
     ]
-    for (const [build, railway, want] of rows) {
-      expect(releaseName(build, railway), `releaseName(${JSON.stringify(build)}, ${JSON.stringify(railway)})`).toBe(want)
+    for (const [build, platform, want] of rows) {
+      expect(releaseName(build, platform), `releaseName(${JSON.stringify(build)}, ${JSON.stringify(platform)})`).toBe(want)
     }
   })
 })
@@ -52,15 +52,15 @@ describe('RELEASE', () => {
     vi.resetModules()
   })
 
-  async function load(stamp: string, railway: string | undefined): Promise<string> {
+  async function load(stamp: string, env: string | undefined): Promise<string> {
     vi.resetModules()
     vi.doMock(RAW, () => ({ default: stamp }))
-    if (railway === undefined) vi.stubEnv(ENV, undefined as unknown as string)
-    else vi.stubEnv(ENV, railway)
+    if (env === undefined) vi.stubEnv(ENV, undefined as unknown as string)
+    else vi.stubEnv(ENV, env)
     return (await import('./release')).RELEASE
   }
 
-  it('RELEASE_isBuiltFromTheStampAndTheRailwayEnv', async () => {
+  it('RELEASE_isBuiltFromTheStampAndTheBuildShaEnv', async () => {
     expect(await load(`${SHA}\n`, ' abc ')).toBe(SHA)
     expect(await load('dev\n', ' abc123\n')).toBe('unstamped-abc123')
     expect(await load('', 'abc123')).toBe('unstamped-abc123')

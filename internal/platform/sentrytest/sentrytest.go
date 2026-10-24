@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	fakeDSN        = "https://public@example.com/1"
-	fakeRailwaySHA = "d0e09998b867ee781c56969b28f9497a2c2f1595"
+	fakeDSN      = "https://public@example.com/1"
+	fakeBuildSHA = "d0e09998b867ee781c56969b28f9497a2c2f1595"
 )
 
 // Leak markers are URL- and JSON-safe, so encoding cannot disguise a leak.
@@ -169,14 +169,14 @@ func AssertNoLeak(t testing.TB, events []*sentry.Event) {
 	}
 }
 
-// Boot builds the service with production's Railway labels and re-points the
+// Boot builds the service with production's labels and re-points the
 // client platform.New installed at a Recorder, keeping its options and hooks.
 func Boot(t testing.TB, service string) (*platform.App, *Recorder, Labels) {
 	t.Helper()
 	t.Setenv("SENTRY_DSN", fakeDSN)
 	t.Setenv("DEPLOY_ENV", "production")
 	t.Setenv("ENVIRONMENT", "development")
-	t.Setenv("BUILD_SHA", fakeRailwaySHA)
+	t.Setenv("BUILD_SHA", fakeBuildSHA)
 
 	prevLogger := slog.Default()
 	hub := sentry.CurrentHub()
@@ -205,7 +205,7 @@ func Boot(t testing.TB, service string) (*platform.App, *Recorder, Labels) {
 	}
 	hub.BindClient(client)
 
-	want := Labels{Environment: "production", Release: "unstamped-" + fakeRailwaySHA, ServerName: service}
+	want := Labels{Environment: "production", Release: "unstamped-" + fakeBuildSHA, ServerName: service}
 	if sha := platform.BuildSHA; sha != "" && sha != "dev" {
 		want.Release = sha
 	}

@@ -2,7 +2,7 @@
 
 ## Overview
 
-`/ralph <STORY>` builds one story: plan once (Phase 0.6), then per subtask Test-Spec* → Execution → QA Verify (*Test-Spec only for `Test-first: yes`), then a story-level deploy gate (Phase 3.5). The deploy gate is the `dev-env.yml` run on the PR: it deploys the whole fleet to the PR's own ephemeral Railway environment (forked from `development`; its database is bootstrapped, migrated, demo-purged and seeded at gateway boot), checks fleet health, and runs smoke + topology E2E. Work runs in an isolated git worktree.
+`/ralph <STORY>` builds one story: plan once (Phase 0.6), then per subtask Test-Spec* → Execution → QA Verify (*Test-Spec only for `Test-first: yes`), then a story-level deploy gate (Phase 3.5). The deploy gate is the `dev-env.yml` run on the PR: it deploys the whole fleet to the PR's own preview on Google Cloud (`<svc>-pr-<N>` in `ascomply-preview`, with a fresh database `pr_<N>` that the `migrate` job bootstraps, migrates and seeds), checks fleet health, and runs smoke, api and topology E2E. Work runs in an isolated git worktree.
 
 **One story = one branch = one PR.** RALPH splits it into subtasks (`<STORY>-01`, …) internally.
 
@@ -51,11 +51,11 @@ Neither path licenses a silent feature cut.
 ```bash
 gh pr checks [PR_NUMBER]
 # CI (ci.yml) rolls up: go, frontend, clean-clone, migrations, docker-canary, rls, queue, audit.
-# dev-env.yml (on a ready PR): deploy-slot (at most 2 PRs deploy at once) → prepare-env (ci-watch alongside; red CI stops the run) → deploy-gateway (migrator) → health-gate →
-#   deploy-context ×7 + deploy-spas ×3 → fleet-gate → e2e (smoke + api) → topology ×6 (serial-lane, import-wizard, import-wizard-2, invoice-surfaces, ui-surfaces, library).
+# dev-env.yml (on a ready PR): invariants + prepare-env + build ×18 (ci-watch alongside; red CI stops the run) → deploy (database, migrate, GoTrue, backends, sites) →
+#   health-gate + fleet-gate → e2e (smoke + api) → topology ×7 (serial-lane, import-wizard, import-wizard-2, invoice-surfaces, ui-surfaces, library, blog) → E2E gate.
 ```
 
-Not part of the gate: `dev-env-teardown.yml` (deletes the PR environment on close), `dev-env-sweeper.yml` (daily reaper of orphaned PR environments). CI tears environments down; never use destructive Railway MCP calls.
+Not part of the gate: `dev-env-teardown.yml` (deletes the PR's preview on close), `dev-env-sweeper.yml` (daily reaper of previews whose PR is closed). CI tears previews down; never delete a preview resource by hand.
 
 ### 4. One branch, one PR per story
 All subtasks share one feature branch, one draft PR and one worktree.
@@ -81,7 +81,6 @@ In every other case, take the next step. Do not end a turn on "Starting X now", 
 | Context7 | `mcp__context7__*` — check before writing library code (pgx, River, CEL, goose, Vite, React) |
 | Playwright | `mcp__playwright__*` — fallback when `ctl` or `playwright-cli` cannot do a step (Stage 4 "Frontend") |
 | Sentry | `mcp__sentry__*` — deployed errors |
-| Railway | `mcp__railway-mcp-server__*` — read-only; deploys happen in `dev-env.yml` |
 | Obsidian | `mcp__obsidian-mcp-tools__*` — story files |
 | sysmap | `mcp__sysmap__*` — feature records and screen playbooks; read-only, the PM writes |
 
@@ -168,7 +167,7 @@ Spawn `product-architecture-spec` with the full basic story and its Obsidian pat
 - **Diff every new control against its siblings.** A control added to an existing bar or panel matches the siblings' visibility and disabled treatment. A sibling's shipped decision is the spec.
 - **A layout constant ships a relationship assertion.** When a subtask adds or changes a width, grid track, clearance, overflow or alignment, name a topology layout assertion as its deliverable. It asserts a relationship: the element fits, aligns or does not overlap. It never asserts a raw dimension. Phase 3.5 step 4 owns the rule "Assert the relationship, not the dimension". `e2e/topology/layout.ts` sweeps `WIDE_WIDTHS` (2560/1920/1440/1280); `e2e/topology/invoice-surfaces.spec.ts` is the worked example. Planning it here puts it in the first deploy-gate run.
 - **Re-measure every fact the story asserts** — a root cause, a mechanism, a count, another PR's state, whether the prescribed fix can work. Measure it in the worktree. Paste the command and its output into `## Decisions`, one entry per fact, tagged `premise — verified` or `premise — CORRECTED: story said X, actually Y`.
-- **Measure a fact about the deployed app on the deployed app** (browser output, sidecar responses, production data): Playwright MCP or Railway logs. Paste the output into the same `premise —` entry. Never escalate an unmeasured premise.
+- **Measure a fact about the deployed app on the deployed app** (browser output, sidecar responses, production data): Playwright MCP, Sentry, or Cloud Logging (`gcloud logging read`; previews live in project `ascomply-preview`). Paste the output into the same `premise —` entry. Never escalate an unmeasured premise.
 - **An AC that already holds at head is not work.** Record the proving test in `## Decisions`; write no subtask.
 - **Traceability:** every derived AC and subtask traces to the Objective or a Core AC. Nothing in Out of Scope appears in a subtask.
 - **`Test-first: yes` only for a risky subtask** (Agents and models). Every other logic-bearing subtask gets Test Specs and `Test-first: no`.
@@ -324,7 +323,6 @@ Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the Def
   - Drive the app with `playwright-cli`: `pwc -s=$S <command>`.
   - Measure: `ctl measure '<selector>' --props <p1,p2> [--viewport <width>] --session $S`. A selector with no match exits 1 and prints `no element matches` in stderr: that is a result. Any other exit 1 is a tool failure.
   - Save each screenshot straight to `.ralph/fidelity/`: `mkdir -p <W>/.ralph/fidelity && pwc -s=$S screenshot --filename=<W>/.ralph/fidelity/<surface>-<state>.png`.
-  - `ctl` reads the Railway token in `~/.railway/config.json`. The token lasts about one hour. On a token error, run `railway whoami` once, then run the command again. When it fails again, stop. Report the expired Railway login to the lead. Do not run `railway login`; it is interactive.
   - Use Playwright MCP only when a `ctl` or `pwc` command cannot do a step. Also use it when that command exits non-zero, except a `no element matches` result. Name that command and its exit code in the QA report.
   - Never click a control that writes data on production.
   - On a PR environment, restore each member, role or membership that you change, in the same run.
@@ -379,8 +377,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
    - Then, if `gh pr view <PR> --json isDraft -q .isDraft` prints `true`, run `gh pr ready <PR>`.
    - Then wait for the gate: `hm ci wait <PR> --gate` (CI Monitoring Protocol).
    - A `no-run` verdict on a docs-only PR is expected: `dev-env.yml` is paths-filtered. Escalate to the user rather than faking it green.
-   - `gh workflow run dev-env.yml` is for diagnosis only. It targets `development`, not the PR environment, so it proves nothing about this PR.
-   - Re-run a red gate whole: `gh run rerun <run id>`, never `--failed`. The database resets only when the gateway deploys.
+   - Re-run a red gate whole: `gh run rerun <run id>`, never `--failed`. The database is recreated only when the `deploy` job runs.
    - A spec this PR changed that passed only on retry fails the `e2e` job or the `E2E topology (<shard>)` leg that ran it. Fix the spec or the race; do not re-run for luck.
    - After `gh pr ready`, push only a gate fix (Protocol item 1 or step 5) or a base merge that `hm` demands.
    Green means: fleet deployed, gateway migrated, DB bootstrapped + demo-purged + seeded, all 8 backends up, smoke + topology E2E passed, including cross-tenant isolation.
@@ -402,7 +399,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
 
 After the PR merges (manually or via `/gh-merge-pr`), run `/post-merge-cleanup <STORY>`. It removes the worktree and branch and archives the story. The PM updates sysmap. A `/ralph-goal` loop advances only after this runs.
 
-Teardown of the PR environment is repo-side: `dev-env-teardown.yml` on PR close (best-effort), `dev-env-sweeper.yml` daily as the authority. See `.claude/rules/ci-railway.md`.
+Teardown of the PR's preview is repo-side: `dev-env-teardown.yml` on PR close, `dev-env-sweeper.yml` daily for a missed close. See `.claude/rules/ci-preview.md`.
 
 ---
 

@@ -54,7 +54,7 @@ def test_t02_5_every_direct_requirement_is_exact_pinned():
         assert name, f"{line!r} has no package name before =="
 
 
-def test_t02_6_dockerfile_has_no_syntax_directive_or_cache_mount():
+def test_t02_6_dockerfile_has_no_syntax_directive():
     assert DOCKERFILE.exists(), f"{DOCKERFILE} does not exist yet"
     text = DOCKERFILE.read_text()
 
@@ -66,10 +66,6 @@ def test_t02_6_dockerfile_has_no_syntax_directive_or_cache_mount():
         f"{DOCKERFILE}: a `syntax` parser directive makes BuildKit fetch a frontend image from "
         "Docker Hub before the build, which strands the fleet on a builder egress outage "
         "(Dockerfile:11-14)"
-    )
-    assert "--mount=type=cache" not in text, (
-        f"{DOCKERFILE}: BuildKit cache mounts are banned -- Railway requires each cache-mount "
-        "id to embed the building service's own id (.claude/rules/add-service.md)"
     )
 
 

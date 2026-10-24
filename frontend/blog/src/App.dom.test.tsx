@@ -63,10 +63,10 @@ describe('shell', () => {
   })
 
   it('SH-07 the sidebar Book the Demo matches the library button', () => {
-    vi.stubEnv('VITE_LANDING_URL', 'https://landing-pr-1.up.railway.app/')
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing-pr-1-944095690109.africa-south1.run.app/')
     mount('/')
     const a = byText('aside a', 'Book the Demo') as HTMLAnchorElement
-    expect(a.getAttribute('href')).toBe('https://landing-pr-1.up.railway.app/?demo')
+    expect(a.getAttribute('href')).toBe('https://landing-pr-1-944095690109.africa-south1.run.app/?demo')
     expect(a.className).toBe('ds-btn ds-btn--outlineDark ds-btn--sm')
     expect(a.style.width).toBe('100%')
     act(() => root.unmount())

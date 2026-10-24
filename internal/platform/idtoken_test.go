@@ -49,7 +49,7 @@ func TestIDTokenTransport_SignsOnlyRunAppHosts(t *testing.T) {
 	for _, u := range []string{
 		"https://tenancy-abc-uc.a.run.app/v1/x",
 		"https://tenancy-abc-uc.a.run.app/v1/y",
-		"http://tenancy.railway.internal:8080/v1/x",
+		"http://tenancy.internal:8080/v1/x",
 		"https://api.openrouter.ai/v1",
 	} {
 		req, _ := http.NewRequest(http.MethodGet, u, nil)

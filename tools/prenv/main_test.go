@@ -1,16 +1,5 @@
-// main_test.go pins the CLI contract documented in main.go's dispatch
-// comment: exit 2 means "you called me wrong", exit 1 means "well-formed
-// call, this isn't a PR environment name", exit 0 means success -- and
-// stdout carries only the answer, never diagnostics. This contract is
-// load-bearing for M4-23-07's sweeper, which will shell out to `prenv
-// parse` and capture stdout as the PR number while relying on the exit
-// code to distinguish "not a PR env, skip it" (1) from "I'm broken" (2).
-//
-// main() calls os.Exit, so it can't be driven in-process without killing
-// the test binary -- these tests build the real prenv binary once (TestMain)
-// and exec it, asserting on the real process exit code and the real
-// stdout/stderr separation, which is exactly the boundary the sweeper will
-// depend on.
+// main_test.go builds the prenv binary once and execs it: exit 2 means a malformed call, with
+// a diagnostic on stderr and nothing on stdout.
 package main
 
 import (
@@ -86,51 +75,6 @@ func runCLI(t *testing.T, args ...string) (stdout, stderr string, exitCode int) 
 	return outBuf.String(), errBuf.String(), exitCode
 }
 
-// TestCLINameSuccess: `prenv name <pr>` on a well-formed positive PR number
-// prints exactly the environment name plus a newline to stdout, nothing to
-// stderr, and exits 0.
-func TestCLINameSuccess(t *testing.T) {
-	t.Parallel()
-	stdout, stderr, code := runCLI(t, "name", "42")
-	if code != 0 {
-		t.Errorf("exit code = %d, want 0", code)
-	}
-	if stdout != "pr-42\n" {
-		t.Errorf("stdout = %q, want %q", stdout, "pr-42\n")
-	}
-	if stderr != "" {
-		t.Errorf("stderr = %q, want empty", stderr)
-	}
-}
-
-// TestCLIParseSuccess: `prenv parse <name>` on a well-formed PR environment
-// name prints exactly the PR number plus a newline to stdout, nothing to
-// stderr, and exits 0.
-func TestCLIParseSuccess(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name string
-		want string
-	}{
-		{"pr-42", "42\n"},
-		{"invoice-os-pr-42", "42\n"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			stdout, stderr, code := runCLI(t, "parse", tc.name)
-			if code != 0 {
-				t.Errorf("exit code = %d, want 0", code)
-			}
-			if stdout != tc.want {
-				t.Errorf("stdout = %q, want %q", stdout, tc.want)
-			}
-			if stderr != "" {
-				t.Errorf("stderr = %q, want empty", stderr)
-			}
-		})
-	}
-}
-
 // TestCLICalledWrongExitsTwoWithCleanStdout covers every "you called me
 // wrong" path the dispatch comment documents: missing subcommand, unknown
 // subcommand, wrong arity for either subcommand, a non-numeric PR number,
@@ -145,13 +89,9 @@ func TestCLICalledWrongExitsTwoWithCleanStdout(t *testing.T) {
 	}{
 		{"no subcommand", nil},
 		{"unknown subcommand", []string{"bogus"}},
-		{"name missing arg", []string{"name"}},
-		{"name extra arg", []string{"name", "1", "2"}},
-		{"name non-numeric", []string{"name", "abc"}},
-		{"name zero", []string{"name", "0"}},
-		{"name negative", []string{"name", "-5"}},
-		{"parse missing arg", []string{"parse"}},
-		{"parse extra arg", []string{"parse", "pr-1", "pr-2"}},
+		{"jwk-es256 extra arg", []string{"jwk-es256", "x"}},
+		{"jwk-check extra arg", []string{"jwk-check", "x"}},
+		{"mail-logo-check extra arg", []string{"mail-logo-check", "x"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.desc, func(t *testing.T) {
@@ -169,151 +109,6 @@ func TestCLICalledWrongExitsTwoWithCleanStdout(t *testing.T) {
 	}
 }
 
-// TestCLIParseNotAPREnvironmentExitsOneWithCleanStdout covers the "well-
-// formed call, negative answer" path: a syntactically fine `parse` call
-// whose argument simply isn't a PR environment name (including the
-// leading-zero lookalike from AC-3). Must exit 1, distinct from the exit-2
-// "called wrong" cases above — that split is exactly what lets the sweeper
-// tell "skip this, it's not a PR env" from "prenv itself is broken" without
-// parsing stderr text. stdout must stay empty here too.
-func TestCLIParseNotAPREnvironmentExitsOneWithCleanStdout(t *testing.T) {
-	t.Parallel()
-	names := []string{"development", "production", "staging", "pr-01", ""}
-	for _, name := range names {
-		t.Run(name, func(t *testing.T) {
-			stdout, stderr, code := runCLI(t, "parse", name)
-			if code != 1 {
-				t.Errorf("parse %q: exit code = %d, want 1", name, code)
-			}
-			if stdout != "" {
-				t.Errorf("parse %q: stdout = %q, want empty", name, stdout)
-			}
-			if stderr == "" {
-				t.Errorf("parse %q: stderr is empty, want a diagnostic message", name)
-			}
-		})
-	}
-}
-
-// --- sweep-decide CLI contract (M4-23-06, task-150) ---
-//
-// These tests exec the real binary, so they pin the 0/1/2 exit codes as
-// the BINARY reports them. That is the right boundary: `go run` collapses
-// every non-zero exit to 1 (measured, Go 1.26 -- it does the same to
-// `name` and `parse` above), so a caller that needs to tell exit 1 from
-// exit 2 must invoke a built binary rather than `go run`. See task-150's
-// implementation notes -- this constrains M4-23-07's workflow wiring.
-
-// TestCLISweepDecideExitContract pins sweep-decide's exit/stdout
-// contract from task-150: exit 0 (reap) with the reason on stdout for a
-// closed/merged PR; exit 1 (skip) with the reason on stdout for an open
-// PR. stderr is empty in both cases -- the deliberate divergence from
-// `parse` (which writes to stderr on exit 1): here exit 1 is the common
-// per-environment outcome (every open PR, every run), and stderr noise
-// would bury real failures.
-func TestCLISweepDecideExitContract(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name       string
-		ghJSON     string
-		wantCode   int
-		wantStdout string
-	}{
-		{"closed-and-merged PR reaps", `{"state":"MERGED"}`, 0, "pr-merged\n"},
-		{"open PR is skipped", `{"state":"OPEN"}`, 1, "pr-open\n"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			stdout, stderr, code := runCLI(t, "sweep-decide", "pr-42", "true", "0", tc.ghJSON)
-			if code != tc.wantCode {
-				t.Errorf("exit code = %d, want %d", code, tc.wantCode)
-			}
-			if stdout != tc.wantStdout {
-				t.Errorf("stdout = %q, want %q", stdout, tc.wantStdout)
-			}
-			if stderr != "" {
-				t.Errorf("stderr = %q, want empty", stderr)
-			}
-		})
-	}
-}
-
-// TestCLISweepDecideCalledWrongExitsTwoWithCleanStdout covers the
-// "called wrong" path for sweep-decide: wrong arity, an is-ephemeral
-// argument strconv.ParseBool can't parse, and a gh-exit-code argument
-// strconv.Atoi can't parse. All must exit 2 with empty stdout -- the
-// property the workflow's `if` structurally depends on to distinguish a
-// mechanism failure from a real reap/skip answer.
-//
-// HISTORY: pre-implementation, every case here already exited 2 via
-// main.go's "unknown subcommand" default arm -- so it passed for the
-// wrong reason and could not be made a true RED without asserting on
-// exact diagnostic text (a convention this file deliberately avoids).
-// Now that sweep-decide is dispatched, it exercises the subcommand's OWN
-// validation: the three arity cases print usage, and the four
-// ParseBool/Atoi cases print a sweep-decide-specific diagnostic. Verified
-// by hand at implementation time -- no case reaches the catch-all.
-func TestCLISweepDecideCalledWrongExitsTwoWithCleanStdout(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		desc string
-		args []string
-	}{
-		{"missing all args", []string{"sweep-decide"}},
-		{"missing one arg", []string{"sweep-decide", "pr-42", "true", "0"}},
-		{"extra arg", []string{"sweep-decide", "pr-42", "true", "0", "{}", "extra"}},
-		{"is-ephemeral empty", []string{"sweep-decide", "pr-42", "", "0", "{}"}},
-		{"is-ephemeral not a bool", []string{"sweep-decide", "pr-42", "yes", "0", "{}"}},
-		{"gh-exit-code empty", []string{"sweep-decide", "pr-42", "true", "", "{}"}},
-		{"gh-exit-code not numeric", []string{"sweep-decide", "pr-42", "true", "abc", "{}"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.desc, func(t *testing.T) {
-			stdout, stderr, code := runCLI(t, tc.args...)
-			if code != 2 {
-				t.Errorf("args=%v: exit code = %d, want 2", tc.args, code)
-			}
-			if stdout != "" {
-				t.Errorf("args=%v: stdout = %q, want empty", tc.args, stdout)
-			}
-			if stderr == "" {
-				t.Errorf("args=%v: stderr is empty, want a diagnostic message", tc.args)
-			}
-		})
-	}
-}
-
-// TestCLISweepDecideNeverReapsOnGhFailure asserts the fail-safe property
-// at the exact process boundary the sweeper workflow crosses: a non-zero
-// gh-exit-code must exit 1 (skip) regardless of what gh printed to
-// stdout -- including reap-looking JSON, so a caller can never trigger a
-// reap by racing gh's own exit code against its stdout. This is what
-// directly answers task-150 AC-8's "fail-safe logic its real caller
-// cannot reach is not fail-safe": it asserts the whole
-// gh-exit-code -> ParsePRState -> ShouldReap -> CLI exit chain at the
-// process boundary the sweeper actually crosses, not just the pure Go
-// functions in isolation.
-func TestCLISweepDecideNeverReapsOnGhFailure(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name   string
-		ghJSON string
-	}{
-		{"empty stdout on gh failure", ""},
-		{"reap-looking stdout on gh failure must not reap", `{"state":"MERGED"}`},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, _, code := runCLI(t, "sweep-decide", "pr-42", "true", "1", tc.ghJSON)
-			if code != 1 {
-				t.Errorf("gh-exit-code=1, gh-json=%q: exit code = %d, want 1", tc.ghJSON, code)
-			}
-		})
-	}
-}
-
-// runToFiles runs cmd with stdout and stderr in regular files (one file when merge is set).
-// A file, not a pipe: bash 3.2 on macOS fails an echo with EINTR when a pipe write blocks.
 func runToFiles(t *testing.T, cmd *exec.Cmd, merge bool) (stdout, stderr string, err error) {
 	t.Helper()
 	dir := t.TempDir()

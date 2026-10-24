@@ -9,8 +9,8 @@ import { isProductionHost, isSentryHost } from './sentryHost'
 //
 // EVERY test in this file runs with the HubSpot gate CLOSED. The gate is
 // `resolveSubmitTarget(window.location.hostname)`, which returns a target only on an
-// exact-match production hostname (frontend/landing/src/hubspot.ts). A PR's ephemeral
-// Railway environment has a generated, non-production hostname by construction, so no
+// exact-match production hostname (frontend/landing/src/hubspot.ts). A PR preview
+// has a run.app, non-production hostname by construction, so no
 // run of this file can reach an open gate. These tests therefore prove that a CLOSED
 // gate stays silent and sends nothing — never that a lead is created. Core AC 1 ("a real
 // contact appears in HubSpot with the six answers") is not provable in CI at all and is

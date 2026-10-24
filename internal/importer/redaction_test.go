@@ -16,7 +16,7 @@ const (
 	redactMarkerIRN = "INV-SECRET-2026"
 )
 
-// assertScrubbedForSentry: the raw message keeps marker and anchor (Railway
+// assertScrubbedForSentry: the raw message keeps marker and anchor (service
 // logs and the import screen); the Sentry copy keeps the anchor and loses the marker.
 func assertScrubbedForSentry(t *testing.T, err error, marker, anchor string) {
 	t.Helper()

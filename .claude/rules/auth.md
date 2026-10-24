@@ -32,7 +32,7 @@ paths:
 - Pin the identity provider on the `FROM` line of `sidecar/auth/Dockerfile` only. Tag and digest live nowhere else.
 - Bump the tag and the digest together.
 - Keep a sha256 digest on the `FROM` line. `idppin` refuses a `FROM` without one.
-- Pull the image from `ghcr.io` or `public.ecr.aws`, never Docker Hub. The Railway builder cannot reach Docker Hub.
+- Pull the image from `ghcr.io` or `public.ecr.aws`, never Docker Hub. Docker Hub rate-limits pulls from CI.
 - Print the pinned tag with `go run ./internal/tools/idppin tag sidecar/auth/Dockerfile`.
 
 - Upgrade the pin with the steps below, in order.
@@ -46,15 +46,11 @@ paths:
      https://ghcr.io/v2/supabase/auth/manifests/<tag> | grep -i docker-content-digest
    ```
 3. Bump the tag and the digest on the `FROM` line of `sidecar/auth/Dockerfile`. Change nothing else in the commit, unless the release notes require a new `ENV`.
-4. Open a PR. It runs the `idp` CI job, the release watch and the PR deploy gate.
+4. Open a PR. It runs the `idp` CI job, the release watch and the PR preview.
 5. Confirm that `TestIdP_HealthReportsPinnedTag` reports the new tag.
-6. Merge the PR. The push run deploys `auth` to production.
+6. Merge the PR. `deploy-prod.yml` deploys `auth` to production.
 7. Close the patch-due issue.
 
-- Write every production Railway variable with skip-deploys. A write without it rebuilds the service from `main` without the build stamp.
-- Seal only the names in `SEALED_ALLOWLIST` in `scripts/ci/railway-env.sh`. A seal cannot be undone.
-- Never write a script that writes over a sealed variable.
-- Keep `AUTH_ADMIN_PASSWORD` unsealed. The `auth` service renders it into its `DATABASE_URL`.
 - Print a secret as `<redacted>`. Never print its value.
 - Compose `GOTRUE_JWT_KEYS` as a JSON array of ES256 keys with exactly one signing key.
 - Validate a composed `GOTRUE_JWT_KEYS` offline before you paste it. A malformed value logs the private key at boot.

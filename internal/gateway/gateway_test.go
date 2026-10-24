@@ -44,7 +44,7 @@ type capture struct {
 
 // testGateway is a fully in-process gateway: an in-memory mock issuer, a Verifier
 // that fetches that issuer's JWKS over httptest, and one recording upstream per
-// routed service. No Railway, no Postgres.
+// routed service. No network, no Postgres.
 type testGateway struct {
 	handler  http.Handler
 	issuer   *auth.MockIssuer

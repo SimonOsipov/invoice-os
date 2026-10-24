@@ -2512,7 +2512,7 @@ test('INVCR-E2E-3 firm: manual entry persists and affirms nothing before the res
 // db/seed.dev.sql caps every curated entity under 51 rows (its own documented ceiling), so a
 // >50-row page can only come from a fixture built here, on a fresh entity -- paging through a
 // curated one would rot the page-1 specs earlier in this file. 51 sequential createInvoice
-// round trips against Railway is real wall-clock cost nothing else here pays, so each fixture
+// round trips against the deployed gateway is real wall-clock cost nothing else here pays, so each fixture
 // below is 1 sequential "anchor" invoice, awaited alone, then N invoices via Promise.all.
 // The anchor is always the OLDEST row (`ORDER BY created_at DESC, id DESC`, store.go), so it
 // always sorts onto page 2 regardless of how the concurrent batch ties against itself --

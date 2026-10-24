@@ -10,15 +10,7 @@
 // --dry-run is true by default; pass --dry-run=false WITH the '='.
 // The role must be invoice_app: a SUPERUSER or BYPASSRLS role is refused.
 //
-// Production Postgres has no public address. Two routes reach it:
-//
-//	A. SSH tunnel: ssh -N -L 15432:127.0.0.1:5432 <postgres-instance-id>@ssh.railway.com,
-//	   then run the CLI on this machine with DATABASE_URL on 127.0.0.1:15432.
-//	B. In-network: build a static linux binary, scp it into the Postgres
-//	   container, and run it with `railway ssh --service Postgres -- …` as
-//	   invoice_app over 127.0.0.1:5432.
-//
-// Not a service: no railway.json, no Dockerfile target.
+// Not a service: no Dockerfile target.
 package main
 
 import (

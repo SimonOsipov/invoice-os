@@ -5,7 +5,7 @@ import type { ConsoleTarget } from '../staffSession'
 // The SPAs under smoke test (landing, ops-console, support-console, library, blog). The consoles open
 // only on a real staff session, which `console` names (staffSession.ts). The app SPA is always gateway-wired in the deployed env,
 // so its (backend-verified) assertion lives in the topology suite instead (see e2e/topology/).
-// Each PR now deploys to its own ephemeral Railway environment (M4-23), so each URL is
+// Each PR deploys its own preview, so each URL is
 // REQUIRED — resolveTarget throws rather than falling back to a hardcoded dev deployment
 // (Decision [fail-loud-targets]).
 export interface AppTarget {

@@ -403,7 +403,7 @@ describe('empty artifact set', () => {
     const { code, text } = go({ runs: [run(100, null), run(200, [])] })
     expect(code).toBe(0)
     expect(snapshot(vault)).toEqual(before)
-    expect(text).toBe('no retry-pass in the Dev Env runs of PR #460 (2 runs read); wrote nothing')
+    expect(text).toBe('no retry-pass in the preview runs of PR #460 (2 runs read); wrote nothing')
   })
 })
 

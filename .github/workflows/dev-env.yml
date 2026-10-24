@@ -210,7 +210,7 @@ jobs:
       - name: Stamp the mock issuer into the gateway
         if: steps.exists.outputs.built != 'true' && matrix.image == 'gateway'
         run: sh scripts/ci/stamp-mock-issuer.sh
-      # The fork values of the Railway previews: the PR's URLs, no Sentry.
+      # The PR's URLs and no Sentry; production's analytics ids, which the consent specs read.
       - name: Build and push
         if: steps.exists.outputs.built != 'true'
         env:

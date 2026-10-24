@@ -14,7 +14,7 @@ GOOSE          := go tool goose
 MIGRATIONS_DIR := migrations
 
 # Dev-default role passwords for `db-bootstrap`. Overridden by .env / the
-# environment / the command line; real values live only in Railway.
+# environment / the command line; real values live only in Secret Manager.
 MIGRATOR_PASSWORD ?= migrator
 APP_PASSWORD      ?= app
 # invoice_tenant_reader — the M2-06 cross-tenant enumeration role (M2-07's suite is
@@ -59,7 +59,7 @@ db-bootstrap: ## Create/rotate the non-superuser roles (runs as SUPERUSER; needs
 	@test -n "$(DATABASE_SUPERUSER_URL)" || { echo "DATABASE_SUPERUSER_URL is not set (set it in .env or the environment)"; exit 1; }
 	# NOTE: passwords land in the `-c` argv here (and below in `dev-db`), so they're
 	# visible to `ps` on this machine and to the server's statement log if
-	# log_statement=all. Fine for dev-default placeholders (real Railway/prod
+	# log_statement=all. Fine for dev-default placeholders (real
 	# passwords never flow through this Makefile) — don't copy this exact pattern
 	# into a script that handles real secrets.
 	psql "$(DATABASE_SUPERUSER_URL)" -v ON_ERROR_STOP=1 \

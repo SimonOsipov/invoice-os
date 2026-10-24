@@ -4,7 +4,7 @@
 // confirms AC1/AC2/AC3/AC4/AC6 on the real build).
 //
 // There is no way to run these locally: this project's "No Local Server" policy
-// forbids a dev server, and the ephemeral per-PR Railway environment these specs
+// forbids a dev server, and the per-PR preview these specs
 // drive does not exist until this PR is marked ready for review. This subtask's
 // local oracle is exactly `pnpm -r typecheck` + `playwright test --list` collection
 // under playwright.topology.config.ts -- no config or workflow edit is needed
@@ -1970,7 +1970,7 @@ test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disa
 // played for M4-08/INVCR-01 above.
 //
 // Same "cannot run locally" oracle as every other Mode-A block in this file: this
-// package's "No Local Server" policy plus the ephemeral per-PR Railway environment mean
+// package's "No Local Server" policy plus the per-PR preview mean
 // `pnpm --filter @invoice-os/e2e typecheck` + `playwright test --list` (topology config)
 // collecting these three tests is the whole local oracle. The first REAL run is the
 // deploy gate on this PR, once it leaves draft.

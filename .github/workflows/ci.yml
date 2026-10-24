@@ -232,8 +232,7 @@ jobs:
           go test -count=1 -v -run 'TestTier1Accuracy' ./internal/extraction/ | tee accuracy.txt
           grep -q 'tier-1 accuracy over the golden corpus' accuracy.txt
 
-  # Prove the shared multi-service Dockerfile (M2-04) actually builds before it
-  # reaches Railway (M2-12). All nine Go services stamp the same root Dockerfile
+  # Prove the shared multi-service Dockerfile builds before a deploy. All nine Go services stamp the same root Dockerfile
   # with only the SERVICE build arg differing, so one plain service (tenancy) is
   # enough to guard "Option B": the build only sees Go source because
   # Dockerfile.dockerignore overrides the SPA-tuned root .dockerignore, so a
@@ -517,7 +516,7 @@ jobs:
         run: docker run --rm -v "$GITHUB_WORKSPACE:/repo:ro" -e REPO_ROOT=/repo docling:test
 
   # The independent migration gate (M2-01, task-9.2): prove the goose harness end to
-  # end against a FRESH, ephemeral Postgres — zero Railway dependency. Bootstrap the
+  # end against a FRESH, ephemeral Postgres. Bootstrap the
   # two non-superuser roles as the superuser, apply every migration as the migrator,
   # assert nothing is left pending, then a reset→up round-trip to prove every
   # migration is reversible. The DB is empty each run (no reliance on prior state).
@@ -527,8 +526,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.migrations == 'true'
     runs-on: ubuntu-latest
-    # Postgres MAJOR must match the Railway-provisioned major (both 18 today —
-    # Railway's postgres-ssl template provisioned PG18) — bump together.
+    # Postgres MAJOR must match Cloud SQL's (POSTGRES_18 in invoice-os-infra) — bump together.
     services:
       postgres:
         image: postgres:18

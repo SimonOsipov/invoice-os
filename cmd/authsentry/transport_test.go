@@ -131,18 +131,28 @@ func TestTransport_SendNeverBlocks(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
 	t.Cleanup(srv.Close)
-	t.Cleanup(func() { close(release) })
 	tr := newTestTransport(t, "http://public@"+strings.TrimPrefix(srv.URL, "http://")+"/1", nil, &sleeper{})
+	t.Cleanup(func() { close(release) })
 
-	for i := 0; i < 100; i++ {
-		tr.SendEvent(ev(i))
-	}
-	for i := 100; i < 150; i++ {
-		start := time.Now()
-		tr.SendEvent(ev(i))
-		if d := time.Since(start); d > 5*time.Millisecond {
-			t.Fatalf("SendEvent %d took %v", i, d)
+	slowest := make(chan time.Duration, 1)
+	go func() {
+		var worst time.Duration
+		for i := 0; i < 150; i++ {
+			start := time.Now()
+			tr.SendEvent(ev(i))
+			if i >= 100 {
+				worst = max(worst, time.Since(start))
+			}
 		}
+		slowest <- worst
+	}()
+	select {
+	case d := <-slowest:
+		if d > 5*time.Millisecond {
+			t.Fatalf("SendEvent took %v", d)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("SendEvent blocked")
 	}
 }
 
@@ -250,7 +260,11 @@ func TestTransport_RetriesANetworkError(t *testing.T) {
 	t.Cleanup(tr.Close)
 	tr.Configure(sentry.ClientOptions{Dsn: "http://public@" + addr + "/1"})
 	tr.SendEvent(ev(1))
-	<-s.sleeping
+	select {
+	case <-s.sleeping:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no retry wait after a network error")
+	}
 
 	in := newIngest(t, func(string) int { return 200 })
 	dsn, _ := sentry.NewDsn(in.dsn())

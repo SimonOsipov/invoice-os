@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react'
 import { CHART_H, SPARK_HEIGHT, SPARK_WIDTH, healthTone, sentryServiceUrl, sparkline } from '../helpers'
-import { fleetSummary, series, shortBuild, type StaffHealth, type TrendPoint } from '../healthApi'
+import { fleetSummary, jobSeries, jobsOf, series, shortBuild, type StaffHealth } from '../healthApi'
 import { DASHBOARDS, METRIC_SERVICES, NO_SENTRY, RANGES, SERIES, THRESHOLDS, colourMap, fleetSeries, formatValue, hasData, judge, latestOf, panelOf, type PanelKey, type Point, type RangeKey, type StaffMetrics, type Stat, type Verdict } from '../metricsApi'
 import { syncStamp } from '../rulesApi'
 import { G } from './BlogList'
@@ -28,8 +28,9 @@ type Props = {
 }
 
 type Tone = 'green' | 'amber' | 'red' | 'muted'
-type Tile = { key: string; label: string; value: string; unit: string; word?: string; tone: Tone; down?: string[]; points: number[] }
+type Tile = { key: string; label: string; value: string; unit: string; word?: string; scope?: string; tone: Tone; down?: string[]; points: number[] }
 
+const LEGEND_TEXT: CSSProperties = { fontSize: 11, color: 'var(--fg-3)' }
 const ONE_LINE: CSSProperties = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
 const CARD: CSSProperties = { border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden', background: 'var(--bg-2)' }
 const NOTE: CSSProperties = { padding: '14px 16px', fontSize: 13, color: 'var(--fg-3)' }
@@ -43,16 +44,22 @@ const FLEET_WORD: Record<StaffHealth['fleet']['status'], { word: string; tone: T
   unknown: { word: 'UNKNOWN', tone: 'amber' },
 }
 
-function tiles(d: StaffHealth): Tile[] {
+const ALL_SERVICES_TAG = 'All services'
+
+// Fleet tile, then the jobs tiles for the pick; null jobs when the service owns no job kind.
+function tiles(d: StaffHealth, service: string): { fleet: Tile; jobs: Tile[] | null } {
   const { up, total, down } = fleetSummary(d.fleet)
   const fleet = FLEET_WORD[d.fleet.status]
-  const dead = d.jobs.dead_lettered ?? 0
-  const of = (key: Exclude<keyof TrendPoint, 'taken_at'>) => series(d.trend, key)
-  return [
-    { key: 'fleet', label: 'Fleet', value: d.fleet.status === 'unknown' ? '—' : `${up}/${total}`, unit: 'services up', word: fleet.word, tone: fleet.tone, down, points: of('services_down') },
-    { key: 'queue', label: 'Queue depth', value: String(d.queue_depth), unit: 'jobs', tone: 'green', points: of('queue_depth') },
-    { key: 'dead-lettered', label: 'Dead-lettered', value: String(dead), unit: 'jobs', word: dead > 0 ? 'ATTENTION' : 'CLEAR', tone: dead > 0 ? 'red' : 'green', points: of('dead_lettered') },
-  ]
+  const fleetTile: Tile = { key: 'fleet', label: 'Fleet', value: d.fleet.status === 'unknown' ? '—' : `${up}/${total}`, unit: 'services up', word: fleet.word, scope: ALL_SERVICES_TAG, tone: fleet.tone, down, points: series(d.trend, 'services_down') }
+  const j = jobsOf(d.river_jobs, service)
+  if (!j) return { fleet: fleetTile, jobs: null }
+  return {
+    fleet: fleetTile,
+    jobs: [
+      { key: 'queue', label: 'Queue depth', value: String(j.queue_depth), unit: 'jobs', tone: 'green', points: jobSeries(d.trend, service, 'queue_depth') },
+      { key: 'dead-lettered', label: 'Dead-lettered', value: String(j.dead_lettered), unit: 'jobs', word: j.dead_lettered > 0 ? 'ATTENTION' : 'CLEAR', tone: j.dead_lettered > 0 ? 'red' : 'green', points: jobSeries(d.trend, service, 'dead_lettered') },
+    ],
+  }
 }
 
 const VERDICT: Record<Verdict, { word: string; tone: Tone }> = {
@@ -76,9 +83,9 @@ function metricTiles(m: StaffMetrics | null, status: HealthStatus): Tile[] {
     const points = f ? s.read(f) : []
     const latest = latestOf(points)
     const tail = s.stat === 'connections' ? (m ? `of ${m.connection_budget}` : '') : s.unit
-    if (latest === null) return { key: s.key, label: s.label, value: '—', unit: tail, word: !m && status === 'loading' ? undefined : !m && status !== 'ready' ? 'UNAVAILABLE' : 'NO DATA', tone: 'muted', points: [] }
+    if (latest === null) return { key: s.key, label: s.label, scope: s.stat === 'connections' ? ALL_SERVICES_TAG : undefined, value: '—', unit: tail, word: !m && status === 'loading' ? undefined : !m && status !== 'ready' ? 'UNAVAILABLE' : 'NO DATA', tone: 'muted', points: [] }
     const shown = formatValue(s.unit, latest)
-    const base = { key: s.key, label: s.label, value: shown.value, unit: s.stat === 'connections' ? tail : shown.unit, points: points.map((p) => p[1]) }
+    const base = { key: s.key, label: s.label, scope: s.stat === 'connections' ? ALL_SERVICES_TAG : undefined, value: shown.value, unit: s.stat === 'connections' ? tail : shown.unit, points: points.map((p) => p[1]) }
     if (!s.stat) return { ...base, tone: 'green' }
     const peak = Math.max(...points.map((p) => formatValue(s.unit, p[1]).n))
     return { ...base, ...VERDICT[judge(s.stat, shown.n, peak, m?.connection_budget ?? 0)] }
@@ -145,8 +152,6 @@ const shown = (e: Entry): string => {
   return unit ? `${f.value} ${unit}` : f.value
 }
 
-const LEGEND_TEXT: CSSProperties = { fontSize: 11, color: 'var(--fg-3)' }
-
 function Panel({ spec, m, colours, service, markers }: { spec: PanelSpec; m: StaffMetrics; colours: Record<string, string>; service: string; markers: { t: number; title: string }[] }) {
   const entries = entriesOf(spec, m, colours)
   const drawn = entries.filter((e) => e.points.length > 0)
@@ -169,7 +174,7 @@ function Panel({ spec, m, colours, service, markers }: { spec: PanelSpec; m: Sta
           <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 10 }}>
             {ALL_SERVICES.has(spec.key) && (
               <span className="mono" style={LEGEND_TEXT}>
-                All services
+                {ALL_SERVICES_TAG}
               </span>
             )}
             {tone && (
@@ -242,12 +247,21 @@ function TileCard({ t }: { t: Tile }) {
         <span className="label" style={{ minWidth: 0 }}>
           {t.label}
         </span>
-        {t.word && (
-          <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ width: 7, height: 7, borderRadius: '50%', background: tone.dot }} />
-            <span className="mono" style={{ fontSize: 9.5, fontWeight: 700, color: tone.dot, letterSpacing: '0.04em' }}>
-              {t.word}
-            </span>
+        {(t.word || t.scope) && (
+          <span style={{ display: 'inline-flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 10, rowGap: 4, minWidth: 0 }}>
+            {t.scope && (
+              <span data-scope="" className="mono" style={LEGEND_TEXT}>
+                {t.scope}
+              </span>
+            )}
+            {t.word && (
+              <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: tone.dot }} />
+                <span data-word="" className="mono" style={{ fontSize: 9.5, fontWeight: 700, color: tone.dot, letterSpacing: '0.04em' }}>
+                  {t.word}
+                </span>
+              </span>
+            )}
           </span>
         )}
       </div>
@@ -274,15 +288,19 @@ function TileCard({ t }: { t: Tile }) {
   )
 }
 
-function Services({ fleet }: { fleet: StaffHealth['fleet'] }) {
+function Services({ fleet, service }: { fleet: StaffHealth['fleet']; service: string }) {
+  const rows = fleet.status === 'unknown' ? [] : service === '' ? fleet.services : fleet.services.filter((s) => s.name === service)
   return (
     <div style={{ ...CARD, marginTop: 16 }}>
       <div className="label" style={{ padding: '14px 16px' }}>
         Services
       </div>
       {fleet.status === 'unknown' && <div style={NOTE}>The gateway roll-up is unavailable.</div>}
+      {fleet.status !== 'unknown' && rows.length === 0 && service !== '' && (
+        <div data-ping-note="" style={NOTE}>{`${service} has no live ping. The live ping covers the backend services.`}</div>
+      )}
       {fleet.status !== 'unknown' &&
-        fleet.services.map((s) => (
+        rows.map((s) => (
           <div key={s.name} data-service={s.name} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderTop: '1px solid var(--line-1)' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 600, ...ONE_LINE }}>{s.name}</div>
@@ -328,7 +346,7 @@ export function Health({ status, errorText, data, healthStale, metricsStale, onR
     if (status === 'loading' || (status === 'ready' && !data)) return <Note text="Loading system health…" />
     if (status === 'forbidden') return <Note text={STAFF_ONLY} />
     if (status === 'error' || !data) return <Note text={errorText ?? 'Unavailable'} onRetry={onRetry} />
-    const [fleet, ...rest] = tiles(data)
+    const { fleet, jobs } = tiles(data, service)
     const note = panelsNote()
     return (
       <>
@@ -354,17 +372,23 @@ export function Health({ status, errorText, data, healthStale, metricsStale, onR
             <TileCard key={t.key} t={t} />
           ))}
         </div>
-        <div className="ops-health-jobs" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16, marginTop: 16 }}>
-          {rest.map((t) => (
-            <TileCard key={t.key} t={t} />
-          ))}
-        </div>
+        {jobs ? (
+          <div className="ops-health-jobs" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16, marginTop: 16 }}>
+            {jobs.map((t) => (
+              <TileCard key={t.key} t={t} />
+            ))}
+          </div>
+        ) : (
+          <div data-jobs-note="" style={{ marginTop: 16 }}>
+            <Note text={`${service} owns no background jobs. Pick submission, notifications, worker or All services to see them.`} />
+          </div>
+        )}
         {(note || metrics) && (
           <div data-panels style={{ marginTop: 16 }}>
             {note ?? (metrics && <Panels m={metrics} service={service} />)}
           </div>
         )}
-        <Services fleet={data.fleet} />
+        <Services fleet={data.fleet} service={service} />
       </>
     )
   }

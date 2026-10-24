@@ -65,6 +65,7 @@ const HEALTH: StaffHealth = {
   fleet: { status: 'ok', services: [{ name: 'gateway', status: 'up', build: '541ac755c7a1' }] },
   jobs: { dead_lettered: 0 },
   queue_depth: 4,
+  river_jobs: { total: { queue_depth: 4, dead_lettered: 0 }, services: { submission: { queue_depth: 0, dead_lettered: 0 }, notifications: { queue_depth: 0, dead_lettered: 0 }, worker: { queue_depth: 4, dead_lettered: 0 } } },
   trend: [],
 }
 

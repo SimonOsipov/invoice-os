@@ -19,12 +19,22 @@ export interface FleetHealth {
   status: 'ok' | 'degraded' | 'unknown' // fleetOK | fleetDegraded | FleetUnknown
   services: ServiceHealth[]
 }
-// systemhealth.TrendPoint
+// systemhealth.JobTotals, systemhealth.JobView
+export interface JobTotals {
+  queue_depth: number
+  dead_lettered: number
+}
+export interface JobView {
+  total: JobTotals
+  services: Record<string, JobTotals>
+}
+// systemhealth.TrendPoint; river_jobs is null for a sample with no kind counts
 export interface TrendPoint {
   taken_at: string
   services_down: number | null
   queue_depth: number
   dead_lettered: number
+  river_jobs: JobView | null
 }
 // systemhealth.Snapshot
 export interface StaffHealth {
@@ -32,6 +42,7 @@ export interface StaffHealth {
   fleet: FleetHealth
   jobs: Record<string, number>
   queue_depth: number
+  river_jobs: JobView
   trend: TrendPoint[]
 }
 
@@ -46,5 +57,15 @@ export const fleetSummary = (fleet: FleetHealth): { up: number; total: number; d
 // Values of one signal in served (oldest first) order; null points are dropped.
 export const series = (trend: TrendPoint[], key: 'services_down' | 'queue_depth' | 'dead_lettered'): number[] =>
   trend.flatMap((p) => (p[key] === null ? [] : [p[key]]))
+
+// All services reads the total; a service that owns no job kind reads null.
+export const jobsOf = (v: JobView, service: string): JobTotals | null => (service === '' ? v.total : (v.services[service] ?? null))
+
+// One pick's values, oldest first; a sample without kind counts adds no point.
+export const jobSeries = (trend: TrendPoint[], service: string, key: keyof JobTotals): number[] =>
+  trend.flatMap((p) => {
+    const t = p.river_jobs ? jobsOf(p.river_jobs, service) : null
+    return t ? [t[key]] : []
+  })
 
 export const shortBuild = (build?: string): string => (build ? build.slice(0, 7) : '—')

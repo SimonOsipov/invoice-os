@@ -10,7 +10,7 @@ import { Rules } from './components/Rules'
 import { TimeChart } from './components/TimeChart'
 import { Tenants } from './components/Tenants'
 import type { AiCall } from './aiUsageApi'
-import type { FleetHealth, ServiceHealth, StaffHealth, TrendPoint } from './healthApi'
+import type { FleetHealth, JobTotals, JobView, ServiceHealth, StaffHealth, TrendPoint } from './healthApi'
 import { sentryServiceUrl } from './helpers'
 import { DASHBOARDS, METRIC_SERVICES, type PanelKey, type Point, type StaffMetrics } from './metricsApi'
 import { chipStyle } from './components/Submissions'
@@ -126,14 +126,20 @@ const TENANTS_PROPS: Parameters<typeof Tenants>[0] = {
 const tenantsWith = (over: Partial<Parameters<typeof Tenants>[0]>) => renderToStaticMarkup(createElement(Tenants, { ...TENANTS_PROPS, ...over }))
 
 const svc = (name: string, status: ServiceHealth['status'], build?: string): ServiceHealth => ({ name, status, build })
-const point = (n: number, services_down: number | null, queue_depth: number, dead_lettered: number): TrendPoint => ({ taken_at: `2026-10-14T09:${String(n).padStart(2, '0')}:00Z`, services_down, queue_depth, dead_lettered })
+const point = (n: number, services_down: number | null, queue_depth: number, dead_lettered: number, river_jobs: JobView | null = null): TrendPoint => ({ taken_at: `2026-10-14T09:${String(n).padStart(2, '0')}:00Z`, services_down, queue_depth, dead_lettered, river_jobs })
+const jt = (queue_depth: number, dead_lettered: number): JobTotals => ({ queue_depth, dead_lettered })
+// services keys are systemhealth.JobOwners values plus JobRunner
+const jobView = (total: JobTotals, services: Record<string, JobTotals> = {}): JobView => ({ total, services: { submission: jt(0, 0), notifications: jt(0, 0), worker: total, ...services } })
+// A sample whose river_jobs total equals its queue and dead values.
+const kp = (n: number, services_down: number | null, q: number, d: number): TrendPoint => point(n, services_down, q, d, jobView(jt(q, d)))
 const DEGRADED: FleetHealth = { status: 'degraded', services: [svc('gateway', 'up', '541ac755c7a1'), svc('docling', 'down', ''), svc('auth', 'down', 'abcdef1234')] }
 const HEALTH: StaffHealth = {
   checked_at: '2026-10-14T10:05:31Z',
   fleet: DEGRADED,
   jobs: { queued: 1, submitting: 1, pending: 1, dead_lettered: 2 },
   queue_depth: 3,
-  trend: [point(0, null, 1, 0), point(5, 0, 2, 1), point(10, 1, 3, 2)],
+  river_jobs: jobView(jt(3, 2)),
+  trend: [kp(0, null, 1, 0), kp(5, 0, 2, 1), kp(10, 1, 3, 2)],
 }
 const PANEL_UNITS: Record<PanelKey, string> = {
   req_per_min: 'req/min',
@@ -603,7 +609,7 @@ describe('System health markup', () => {
   const texts = (ts: Tag[]) => ts.map((t) => t.text)
 
   it('Health tiles show fleet, queue depth and dead-lettered', () => {
-    const html = healthWith({})
+    const html = healthData({ jobs: { dead_lettered: 9 }, queue_depth: 8, river_jobs: jobView(jt(3, 2)) })
     const { all, fleet, queue, dead } = tilesOf(html)
     expect(all.filter((t) => attr(t, 'data-tile')).map((t) => attr(t, 'data-tile'))).toEqual(['fleet', 'req', 'errors', 'p95', 'connections', 'queue', 'dead-lettered'])
     expect(texts(fleet)).toEqual(expect.arrayContaining(['Fleet', '1/3', 'services up', 'DEGRADED', 'Down: docling, auth']))
@@ -613,8 +619,70 @@ describe('System health markup', () => {
     for (const gone of ['APP latency', 'APP error rate', 'throughput', 'Recon']) expect(html).not.toContain(gone)
   })
 
+  it('the All services jobs trend draws only kind samples', () => {
+    const rj = (q: number) => jobView(jt(q, 0))
+    const two = tilesOf(healthData({ trend: [point(0, 0, 1, 0, null), point(5, 0, 2, 0, rj(1)), point(10, 0, 3, 0, rj(4))] }))
+    expect(two.queue.filter((x) => x.name === 'svg')).toHaveLength(1)
+    const one = tilesOf(healthData({ trend: [point(0, 0, 1, 0, null), point(5, 0, 2, 0, null), point(10, 0, 3, 0, rj(4))] }))
+    expect(one.queue.some((x) => x.name === 'svg')).toBe(false)
+  })
+
+  it('a picked service shows its own job totals', () => {
+    const rj = jobView(jt(9, 3), { submission: jt(2, 0), notifications: jt(0, 3) })
+    const sub = tilesOf(healthWith({ data: { ...HEALTH, river_jobs: rj }, service: 'submission' }))
+    expect(texts(sub.queue)).toEqual(expect.arrayContaining(['2']))
+    expect(texts(sub.dead)).toEqual(expect.arrayContaining(['0', 'CLEAR']))
+    const not = tilesOf(healthWith({ data: { ...HEALTH, river_jobs: rj }, service: 'notifications' }))
+    expect(texts(not.queue)).toEqual(expect.arrayContaining(['0']))
+    expect(texts(not.dead)).toEqual(expect.arrayContaining(['3', 'ATTENTION']))
+  })
+
+  it('a service without jobs shows one note in place of the jobs tiles', () => {
+    const html = healthWith({ service: 'app' })
+    const note = 'app owns no background jobs. Pick submission, notifications, worker or All services to see them.'
+    expect(html.split(note)).toHaveLength(2)
+    expect(html).not.toContain('data-tile="queue"')
+    expect(html).not.toContain('data-tile="dead-lettered"')
+    expect(html).not.toContain('ops-health-jobs')
+  })
+
+  it('a picked service shows only its ping row', () => {
+    const rows = (service: string) => parse(healthWith({ service })).filter((t) => attr(t, 'data-service'))
+    expect(rows('gateway').map((r) => attr(r, 'data-service'))).toEqual(['gateway'])
+    expect(healthWith({ service: 'gateway' })).toContain('aria-label="Open gateway in Sentry"')
+    expect(rows('auth').map((r) => attr(r, 'data-service'))).toEqual(['auth'])
+    expect(healthWith({ service: 'auth' })).not.toContain('in Sentry')
+  })
+
+  it('a service without a live ping reads the no-ping note', () => {
+    const html = healthWith({ service: 'app' })
+    expect(parse(html).filter((t) => attr(t, 'data-service'))).toHaveLength(0)
+    expect(html.split('app has no live ping. The live ping covers the backend services.')).toHaveLength(2)
+  })
+
+  it('an unknown roll-up keeps its copy whatever the pick', () => {
+    const html = healthWith({ service: 'gateway', data: { ...HEALTH, fleet: { status: 'unknown', services: [] } } })
+    expect(html.split('The gateway roll-up is unavailable.')).toHaveLength(2)
+    expect(html).not.toContain('has no live ping')
+  })
+
+  it('the fleet-wide tiles carry All services at every pick', () => {
+    for (const service of ['', 'submission']) {
+      const ts = parse(healthWith({ service }))
+      const tag = (key: string) => tileOf(ts, key).filter((t) => t.attrs.includes('data-scope'))
+      const sqlTag = parse(healthWith({ service })).filter((t) => t.text === 'All services' && t.name === 'span' && !t.attrs.includes('data-scope'))[0]
+      for (const key of ['fleet', 'connections']) {
+        expect(tag(key), `${key} at ${service}`).toHaveLength(1)
+        expect(tag(key)[0].text).toBe('All services')
+        expect(classes(tag(key)[0])).toContain('mono')
+        expect(style(tag(key)[0])).toEqual(style(sqlTag))
+      }
+      for (const key of ['req', 'errors', 'p95', 'queue', 'dead-lettered']) expect(tag(key), `${key} at ${service}`).toHaveLength(0)
+    }
+  })
+
   it('Health tiles name the healthy and unknown states', () => {
-    const ok = tilesOf(healthData({ fleet: { status: 'ok', services: [svc('gateway', 'up'), svc('auth', 'up')] }, jobs: { dead_lettered: 0 } }))
+    const ok = tilesOf(healthData({ fleet: { status: 'ok', services: [svc('gateway', 'up'), svc('auth', 'up')] }, jobs: { dead_lettered: 0 }, river_jobs: jobView(jt(3, 0)) }))
     expect(texts(ok.fleet)).toEqual(expect.arrayContaining(['2/2', 'HEALTHY']))
     expect(texts(ok.fleet).some((x) => x.startsWith('Down:'))).toBe(false)
     expect(texts(ok.dead)).toContain('CLEAR')
@@ -623,13 +691,13 @@ describe('System health markup', () => {
   })
 
   it('a tile draws a sparkline only from two points', () => {
-    const one = tilesOf(healthData({ trend: [point(0, 0, 1, 0)] }))
+    const one = tilesOf(healthData({ trend: [kp(0, 0, 1, 0)] }))
     for (const t of [one.fleet, one.queue, one.dead]) expect(t.some((x) => x.name === 'svg')).toBe(false)
     expect(texts(one.queue)).toContain('3')
-    const three = tilesOf(healthData({ trend: [point(0, null, 1, 0), point(5, 0, 2, 1), point(10, 1, 3, 2)] }))
+    const three = tilesOf(healthData({ trend: [kp(0, null, 1, 0), kp(5, 0, 2, 1), kp(10, 1, 3, 2)] }))
     for (const t of [three.fleet, three.queue, three.dead]) expect(t.filter((x) => x.name === 'svg')).toHaveLength(1)
     // services_down has 2 non-null points of 3; one non-null point of 2 draws nothing.
-    const sparse = tilesOf(healthData({ trend: [point(0, null, 1, 0), point(5, 0, 2, 1)] }))
+    const sparse = tilesOf(healthData({ trend: [kp(0, null, 1, 0), kp(5, 0, 2, 1)] }))
     expect(sparse.fleet.some((x) => x.name === 'svg')).toBe(false)
     expect(sparse.queue.filter((x) => x.name === 'svg')).toHaveLength(1)
   })
@@ -985,6 +1053,12 @@ describe('System health panels', () => {
     const narrowed = renderPanels(full({ sql_connections: db([[0, 60], [60, 70]]) }), 'a')
     expect(lines(panelTags(narrowed, 'sql_util')).map((t) => attr(t, 'data-line'))).toEqual(['CPU', 'RAM', 'Disk'])
     expect(lines(panelTags(narrowed, 'sql_connections'))).toHaveLength(1)
+    expect(panelTags(ts, 'cpu_pct').some((t) => t.text === 'All services')).toBe(false)
+  })
+
+  it('the Cloud SQL panels keep All services while a service is picked', () => {
+    const ts = renderPanels(full(), 'submission')
+    for (const key of ['sql_util', 'sql_connections']) expect(panelTags(ts, key).filter((t) => t.text === 'All services'), key).toHaveLength(1)
     expect(panelTags(ts, 'cpu_pct').some((t) => t.text === 'All services')).toBe(false)
   })
 

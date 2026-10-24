@@ -61,8 +61,6 @@ var nrsLineCols = func() []nrsCol {
 	)
 }()
 
-func nrsAllCols() []nrsCol { return append(slices.Clone(nrsInvoiceCols), nrsLineCols...) }
-
 func nrsNames(cols []nrsCol) []string {
 	out := make([]string, len(cols))
 	for i, c := range cols {

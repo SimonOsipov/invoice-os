@@ -1372,14 +1372,6 @@ func TestRegistrationHandlers_ResendWaitsAndLimits(t *testing.T) {
 	}
 }
 
-func distinctAddresses(n int) []string {
-	out := make([]string, n)
-	for i := range out {
-		out[i] = "user" + strconv.Itoa(i) + "@corp.example"
-	}
-	return out
-}
-
 // A PR fork counts and logs each limited route's per-address limit but does not refuse; every other posture refuses the fourth.
 func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 	routes := []struct {

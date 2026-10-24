@@ -90,6 +90,24 @@ func TestAuthFilter_KeepsEveryOtherScrub(t *testing.T) {
 	if ev := oneEvent(t, mt, ""); ev.User.Email != "a@b.c" {
 		t.Errorf("Email = %q, want a@b.c", ev.User.Email)
 	}
+
+	// The scope request omits body and cookies, so an explicit Request exercises those scrubs.
+	mt2 := authClient(t, AuthService)
+	sentry.CurrentHub().Clone().CaptureEvent(&sentry.Event{
+		Message: "x",
+		User:    sentry.User{Email: "a@b.c"},
+		Request: &sentry.Request{
+			URL:         "https://h/token?q=" + markerTIN,
+			QueryString: "q=" + markerTIN,
+			Data:        markerAmt,
+			Cookies:     "c=" + markerCred,
+			Headers:     map[string]string{"X-S2S-Token": markerCred, "X-Request-Id": "r1"},
+		},
+	})
+	assertNoLeak(t, mt2.captured())
+	if ev := oneEvent(t, mt2, ""); ev.Request == nil || ev.Request.Headers["X-Request-Id"] != "r1" || ev.User.Email != "a@b.c" {
+		t.Errorf("allowlisted header or email lost: %+v", ev)
+	}
 }
 
 func TestAuthFilter_DropsAnInvalidEmail(t *testing.T) {

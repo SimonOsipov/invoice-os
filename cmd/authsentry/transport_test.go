@@ -274,6 +274,7 @@ func TestTransport_HonoursRetryAfter(t *testing.T) {
 		{"Retry-After", http.Header{"Retry-After": {"30"}}, 30 * time.Second},
 		{"rate limits", http.Header{"X-Sentry-Rate-Limits": {"60:error:organization"}}, 60 * time.Second},
 		{"above an hour", http.Header{"Retry-After": {"7200"}}, time.Hour},
+		{"HTTP-date falls back to backoff", http.Header{"Retry-After": {"Wed, 21 Oct 2026 07:28:00 GMT"}}, time.Second},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -418,5 +419,35 @@ func TestTransport_APanickingPostDropsOneEvent(t *testing.T) {
 	defer mu.Unlock()
 	if !strings.Contains(delivered[0], eventID(2)) {
 		t.Fatalf("delivered %v, want only B", delivered)
+	}
+}
+
+func TestTransport_DroppingTheInFlightHeadKeepsTheRest(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	in := newIngest(t, func(id string) int {
+		if id == eventID(1) {
+			started <- struct{}{}
+			<-release
+		}
+		return 200
+	})
+	tr := newTestTransport(t, in.dsn(), nil, &sleeper{})
+	tr.SendEvent(ev(1))
+	<-started
+	for i := 2; i <= 101; i++ {
+		tr.SendEvent(ev(i))
+	}
+	close(release)
+
+	eventually(t, "events 2..101", func() bool { return len(in.received()) >= 100 })
+	got := in.received()
+	if got[len(got)-1] != eventID(101) {
+		t.Fatalf("last delivered %s, want event 101", got[len(got)-1])
+	}
+	for i := 2; i <= 101; i++ {
+		if in.attemptsFor(eventID(i)) != 1 {
+			t.Fatalf("event %d attempted %d times, want 1", i, in.attemptsFor(eventID(i)))
+		}
 	}
 }

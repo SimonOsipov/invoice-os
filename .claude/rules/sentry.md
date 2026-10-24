@@ -4,11 +4,14 @@ paths:
   - "internal/platform/config.go"
   - "packages/monitoring/**"
   - "sidecar/docling/sentry*.py"
+  - "cmd/authsentry/**"
+  - "sidecar/auth/**"
   - "frontend/*/src/instrument.ts"
 ---
 # Sentry
 
-- Send Go services and `docling` to project `asc-backend`. Send the SPAs to project `asc-frontend`.
+- Send Go services, `auth` and `docling` to project `asc-backend`. Send the SPAs to project `asc-frontend`.
+- Keep `User.Email` only on events from the `auth` client (`scrubAuthEvent`). Every other client empties `User`.
 - Name every deployable in its events: `server_name` for a Go service and `docling`, tag `service` for an SPA.
 - Treat an empty DSN as off. The SDK becomes a no-op.
 - Label the Sentry environment from `DEPLOY_ENV` and the unstamped release from `BUILD_SHA`.

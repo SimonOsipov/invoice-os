@@ -15,6 +15,7 @@ paths:
   - "internal/notifications/worker.go"
   - "internal/notifications/store.go"
   - "internal/notifications/newsletter*.go"
+  - "internal/platform/sentryfilter.go"
   - "internal/platform/ai/**"
   - "internal/platform/jev/**"
   - "internal/extraction/aiimage.go"

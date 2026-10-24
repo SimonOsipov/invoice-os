@@ -443,6 +443,30 @@ describe('BlogPreview', () => {
   const view = (m: ReturnType<typeof model>, tab: 'article' | 'card' = 'article', cover = 'none') =>
     renderToStaticMarkup(<BlogPreview model={m} tab={tab} cover={cover} onTab={() => {}} />)
 
+  it('BUG-42 an address in a paragraph renders as a new-tab link', () => {
+    const html = view(model(blocks({ type: 'p', text: 'see https://example.com/a.' })))
+    const tag = html.match(/<a [^>]*>/)?.[0] ?? ''
+    expect(tag).toContain('href="https://example.com/a"')
+    expect(tag).toContain('target="_blank"')
+    expect(tag).toContain('rel="noopener noreferrer"')
+    expect(html).toMatch(/>https:\/\/example\.com\/a<\/a>\./)
+  })
+
+  it('BUG-42 an address in a list item, callout and quote is a link; a quote beside it cannot break the tag', () => {
+    const u = 'https://example.com'
+    const html = view(
+      model(
+        blocks(
+          { type: 'ul', items: [`x ${u}/ul`] },
+          { type: 'note', kind: 'regulation', title: 'T', text: `y ${u}/note` },
+          { type: 'quote', text: `z ${u}/quote"onmouseover="q`, who: 'W' },
+        ),
+      ),
+    )
+    for (const s of ['ul', 'note', 'quote']) expect(html).toContain(`<a href="${u}/${s}" target="_blank" rel="noopener noreferrer"`)
+    expect(html).not.toContain('"onmouseover')
+  })
+
   it('the article renders blocks, TOC and quote marks', () => {
     const body = blocks(
       { type: 'h', text: 'First' },

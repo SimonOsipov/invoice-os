@@ -7,7 +7,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./client": "./src/client.ts",
-    "./strip-comments": "./src/stripComments.ts"
+    "./strip-comments": "./src/stripComments.ts",
+    "./link-parts": "./src/linkParts.ts",
+    "./linked": "./src/components/Linked.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

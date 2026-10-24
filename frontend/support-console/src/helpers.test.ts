@@ -1,7 +1,8 @@
 // Specs for the pure presentation helpers: token NAMES only, never literals.
 import { describe, expect, it } from 'vitest'
 
-import { healthTone, sentryTenantUrl, SPARK_HEIGHT, SPARK_WIDTH, severityStyle, sparkline } from './helpers'
+import { DASHBOARDS } from './metricsApi'
+import { healthTone, sentryServiceUrl, sentryTenantUrl, SPARK_HEIGHT, SPARK_WIDTH, severityStyle, sparkline } from './helpers'
 import type { Severity } from './types'
 
 const ALL_SEVERITIES: Severity[] = ['error', 'warn', 'info']
@@ -64,6 +65,10 @@ describe('healthTone', () => {
     expect(healthTone('amber')).toEqual({ dot: 'var(--status-amber-text)', stroke: 'var(--status-amber-text)', fill: 'var(--status-amber-bg)' })
     expect(healthTone('red')).toEqual({ dot: 'var(--status-red-text)', stroke: 'var(--status-red-text)', fill: 'var(--status-red-bg)' })
   })
+
+  it('healthTone gives the muted tone from status tokens', () => {
+    expect(healthTone('muted')).toEqual({ dot: 'var(--status-muted-text)', stroke: 'var(--status-muted-text)', fill: 'var(--status-muted-bg)' })
+  })
 })
 
 describe('sentryTenantUrl', () => {
@@ -78,5 +83,25 @@ describe('sentryTenantUrl', () => {
     expect(url).toContain('query=tenant_id:x%26project%3D1&')
     expect(url.match(/project=4512190351474768/g)).toHaveLength(1)
     expect(url.match(/project=/g)).toHaveLength(1)
+  })
+})
+
+describe('sentryServiceUrl', () => {
+  it('sentryServiceUrl builds the issues query for one service', () => {
+    expect(sentryServiceUrl('gateway')).toBe('https://as-comply.sentry.io/issues/?query=server_name:gateway&project=4512190351474768&statsPeriod=14d')
+  })
+
+  it('sentryServiceUrl encodes a name that holds URL syntax', () => {
+    const url = sentryServiceUrl('x&project=1')
+    expect(url).toContain('query=server_name:x%26project%3D1&')
+    expect(url.match(/project=4512190351474768/g)).toHaveLength(1)
+    expect(url.match(/project=/g)).toHaveLength(1)
+  })
+})
+
+describe('DASHBOARDS', () => {
+  it('DASHBOARDS are the two Terraform output URLs', () => {
+    expect(DASHBOARDS.services).toBe('https://console.cloud.google.com/monitoring/dashboards/builder/27155b37-f324-478d-9e9d-c91ede1837f9?project=ascomply-prod')
+    expect(DASHBOARDS.database_edge).toBe('https://console.cloud.google.com/monitoring/dashboards/builder/3c070f78-6025-432a-b178-5cde3fe08514?project=ascomply-prod')
   })
 })

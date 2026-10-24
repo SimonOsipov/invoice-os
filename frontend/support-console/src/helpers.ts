@@ -39,15 +39,19 @@ export function sparkline(points: number[]): { line: string; area: string } {
 }
 
 // Dot, stroke and fill derive from one tone so a tile cannot mix them.
-export function healthTone(tone: 'green' | 'amber' | 'red'): { dot: string; stroke: string; fill: string } {
+export function healthTone(tone: 'green' | 'amber' | 'red' | 'muted'): { dot: string; stroke: string; fill: string } {
   if (tone === 'amber') {
     return { dot: 'var(--status-amber-text)', stroke: 'var(--status-amber-text)', fill: 'var(--status-amber-bg)' }
   }
   if (tone === 'red') {
     return { dot: 'var(--status-red-text)', stroke: 'var(--status-red-text)', fill: 'var(--status-red-bg)' }
   }
+  if (tone === 'muted') {
+    return { dot: 'var(--status-muted-text)', stroke: 'var(--status-muted-text)', fill: 'var(--status-muted-bg)' }
+  }
   return { dot: 'var(--status-green-text)', stroke: 'var(--action)', fill: 'var(--action-tint)' }
 }
 
 const SENTRY_ISSUES = 'https://as-comply.sentry.io/issues/'
 export const sentryTenantUrl = (id: string) => `${SENTRY_ISSUES}?query=tenant_id:${encodeURIComponent(id)}&project=4512190351474768&statsPeriod=14d`
+export const sentryServiceUrl = (name: string) => `${SENTRY_ISSUES}?query=server_name:${encodeURIComponent(name)}&project=4512190351474768&statsPeriod=14d`

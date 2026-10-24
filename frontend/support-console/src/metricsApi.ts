@@ -75,9 +75,6 @@ export const DASHBOARDS = {
 export const THRESHOLDS = { error: 1, p95: 1000, cpu: 80, ram: 80 } as const
 export const CONNECTION_SHARE = 0.8
 
-// auth is GoTrue and has no Sentry DSN.
-export const NO_SENTRY: readonly string[] = ['auth']
-
 export const fetchStaffMetrics = (range: RangeKey, service: string, signal?: AbortSignal): Promise<StaffMetrics> => {
   const q = new URLSearchParams({ range })
   if (service) q.set('service', service)

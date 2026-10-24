@@ -662,7 +662,7 @@ describe('System health markup', () => {
     expect(healthWith({ service: 'gateway' })).toContain('aria-label="Open gateway in Sentry"')
     expect(healthWith({ service: 'gateway' })).not.toContain('has no live ping')
     expect(rows('auth').map((r) => attr(r, 'data-service'))).toEqual(['auth'])
-    expect(healthWith({ service: 'auth' })).not.toContain('in Sentry')
+    expect(healthWith({ service: 'auth' })).toContain('aria-label="Open auth in Sentry"')
   })
 
   it('a service without a live ping reads the no-ping note', () => {
@@ -957,13 +957,15 @@ describe('System health markup', () => {
     }
   })
 
-  it('the auth row has no Sentry link', () => {
-    const html = healthData({ fleet: { status: 'ok', services: [svc('gateway', 'up'), svc('auth', 'up')] } })
-    const rows = [...html.matchAll(/<div data-service="([^"]*)"[^>]*>([\s\S]*?)(?=<div data-service=|$)/g)]
-    const [gateway, auth] = rows.map((r) => r[2])
-    expect(gateway).toContain('aria-label="Open gateway in Sentry"')
-    expect(auth).not.toContain('<a ')
-    expect(auth).not.toContain('Sentry')
+  it('the auth row links to its Sentry issues', () => {
+    const ts = parse(healthData({ fleet: { status: 'ok', services: [svc('gateway', 'up'), svc('auth', 'up')] } }))
+    const linkOf = (name: string) => ts.slice(ts.indexOf(ts.find((t) => attr(t, 'data-service') === name)!)).find((t) => t.name === 'a')!
+    const auth = linkOf('auth')
+    expect(attr(auth, 'aria-label')).toBe('Open auth in Sentry')
+    expect(decode(attr(auth, 'href'))).toBe(sentryServiceUrl('auth'))
+    expect(attr(auth, 'target')).toBe('_blank')
+    expect(attr(auth, 'rel')).toBe('noopener noreferrer')
+    expect(attr(auth, 'class')).toBe(attr(linkOf('gateway'), 'class'))
   })
 
   it('long names stay on one line', () => {

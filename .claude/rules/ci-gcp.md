@@ -15,6 +15,7 @@ paths:
 - Start every new revision with `--no-traffic` and the tag `c-<sha12>`.
 - Check the tagged revisions with the `deploy-check` job (`cmd/deploycheck`). Tag URLs answer only inside the production network.
 - Move traffic with `gcp-traffic.sh promote`. It sends 100 % to latest and tags the previous revision `rollback`.
+- A tagged revision with a revision-level minimum keeps running. The worker's rule is in `add-service.md`.
 - After the move, poll `/healthz/fleet` through the load balancer. On failure, `gcp-traffic.sh restore` sends traffic back.
 - Roll back with `rollback-prod.yml`. It moves every service to its `rollback` revision together.
 - Keep the deploy read-only after migrate. It writes no data.

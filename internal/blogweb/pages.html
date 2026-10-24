@@ -10,6 +10,7 @@
 <noscript><style>#root>[data-crawl]{display:block}</style></noscript>
 {{end}}
 
+{{define "linked"}}{{range parts .}}{{if .Href}}<a href="{{.Href}}" target="_blank" rel="noopener noreferrer">{{.Text}}</a>{{else}}{{.Text}}{{end}}{{end}}{{end}}
 {{define "card"}}<article><h2><a href="/{{.ID}}">{{.Title}}</a></h2><p>{{.Summary}}</p><p>{{with .AuthorName}}{{.}} · {{end}}<time datetime="{{.PublishDate}}">{{date .PublishDate}}</time></p></article>{{end}}
 
 {{define "home"}}<h1>{{.Heading}}</h1>
@@ -28,11 +29,11 @@
 <h1>{{.Post.Title}}</h1>
 <p>{{with .Post.AuthorName}}{{.}} · {{end}}<time datetime="{{.Post.PublishDate}}">{{date .Post.PublishDate}}</time></p>
 <p>{{.Post.Summary}}</p>
-{{range .Post.Body}}{{if eq .Type "p"}}<p>{{.Text}}</p>
+{{range .Post.Body}}{{if eq .Type "p"}}<p>{{template "linked" .Text}}</p>
 {{else if eq .Type "h"}}<h2>{{.Text}}</h2>
-{{else if eq .Type "ul"}}<ul>{{range .Items}}<li>{{.}}</li>{{end}}</ul>
-{{else if eq .Type "note"}}<aside><p><strong>{{.Title}}</strong></p><p>{{.Text}}</p></aside>
-{{else if eq .Type "quote"}}<blockquote><p>{{.Text}}</p><footer>{{.Who}}</footer></blockquote>
+{{else if eq .Type "ul"}}<ul>{{range .Items}}<li>{{template "linked" .}}</li>{{end}}</ul>
+{{else if eq .Type "note"}}<aside><p><strong>{{.Title}}</strong></p><p>{{template "linked" .Text}}</p></aside>
+{{else if eq .Type "quote"}}<blockquote><p>{{template "linked" .Text}}</p><footer>{{.Who}}</footer></blockquote>
 {{end}}{{end}}</article>
 {{end}}
 

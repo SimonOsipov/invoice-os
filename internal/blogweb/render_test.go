@@ -449,3 +449,57 @@ func TestRenderSubscribeConfirm_IsNoindexWithItsOwnCanonical(t *testing.T) {
 	has(t, page, `<link rel="canonical" href="https://blog.example/subscribe/confirm">`)
 	has(t, page, "<h1>Subscribe</h1>")
 }
+
+func linkPage(t *testing.T, blocks ...Block) string {
+	t.Helper()
+	return string(shell(t).Post(origin, gateway, &Snapshot{}, Post{ID: "p", Title: "T", Body: blocks}))
+}
+
+func TestRenderPost_AddressesInTextBecomeNewTabLinks(t *testing.T) {
+	const u = "https://example.com/a"
+	a := func(path string) string {
+		return `<a href="` + u + path + `" target="_blank" rel="noopener noreferrer">` + u + path + `</a>`
+	}
+	page := linkPage(t,
+		Block{Type: "p", Text: "see " + u + "/p now"},
+		Block{Type: "ul", Items: []string{"label: " + u + "/ul"}},
+		Block{Type: "note", Title: "N", Text: "read " + u + "/note"},
+		Block{Type: "quote", Text: "via " + u + "/quote", Who: "W"},
+	)
+	for _, p := range []string{"/p", "/ul", "/note", "/quote"} {
+		has(t, page, a(p))
+	}
+}
+
+func TestRenderPost_LinkExcludesTrailingPunctuationAndWrappingParen(t *testing.T) {
+	const u = "https://example.com/a"
+	link := `<a href="` + u + `" target="_blank" rel="noopener noreferrer">` + u + `</a>`
+	page := linkPage(t, Block{Type: "p", Text: "see " + u + "."}, Block{Type: "p", Text: "(" + u + ")"})
+	has(t, page, "<p>see "+link+".</p>")
+	has(t, page, "<p>("+link+")</p>")
+}
+
+func TestRenderPost_JavascriptAddressStaysTextAndMarkupStaysEscaped(t *testing.T) {
+	const u = "https://example.com/a"
+	page := linkPage(t, Block{Type: "p", Text: "javascript:alert(1) and " + u},
+		Block{Type: "p", Text: "<script>alert(1)</script> " + u})
+	has(t, page, `<a href="`+u+`"`)
+	has(t, page, "javascript:alert(1) and ")
+	lacks(t, page, `href="javascript:`)
+	has(t, page, "&lt;script&gt;alert(1)&lt;/script&gt; ")
+	lacks(t, page, "<script>alert")
+}
+
+func TestRenderPost_AddressWithQuoteAmpersandOrAngleCannotBreakTheTag(t *testing.T) {
+	page := linkPage(t,
+		Block{Type: "p", Text: `a https://e.com/x?a=1&b=2#f"onmouseover="x z`},
+		Block{Type: "ul", Items: []string{`<https://e.com/l><b>`}},
+		Block{Type: "p", Text: "HTTPS://E.com/Up and https://e.com/w/A_(b)."},
+	)
+	has(t, page, `<a href="https://e.com/x?a=1&amp;b=2#f" target="_blank" rel="noopener noreferrer">https://e.com/x?a=1&amp;b=2#f</a>&#34;onmouseover=&#34;x z`)
+	has(t, page, `&lt;<a href="https://e.com/l" target="_blank" rel="noopener noreferrer">https://e.com/l</a>&gt;&lt;b&gt;`)
+	lacks(t, page, `"onmouseover`)
+	has(t, page, `<a href="HTTPS://E.com/Up" target`)
+	// html/template percent-encodes parens in href; the visible text keeps them.
+	has(t, page, `<a href="https://e.com/w/A_%28b%29" target="_blank" rel="noopener noreferrer">https://e.com/w/A_(b)</a>.</p>`)
+}

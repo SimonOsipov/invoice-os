@@ -118,6 +118,13 @@ describe('chart geometry', () => {
   it('chartPath keeps one line across a step of exactly 1.5 steps', () => {
     expect(chartPath([[1000, 1], [1090, 1]], o).match(/M/g)).toHaveLength(1)
   })
+  it('chartPath draws nothing for no points and a lone M for one point', () => {
+    expect(chartPath([], o)).toBe('')
+    expect(chartPath([[1150, 10]], o)).toBe('M300.0 0.0')
+  })
+  it('chartPath breaks the line just over 1.5 steps', () => {
+    expect(chartPath([[1000, 1], [1091, 1]], o).match(/M/g)).toHaveLength(2)
+  })
   it('chartX clamps a deploy outside the range to the edge', () => {
     expect(chartX(o.end + 120, o.start, o.end)).toBe(CHART_W)
     expect(chartX(o.start - 1, o.start, o.end)).toBe(0)
@@ -125,5 +132,6 @@ describe('chart geometry', () => {
   })
   it('niceCeil rounds up to 1, 2 or 5 times a power of ten', () => {
     expect([0, -3, 0.7, 1, 1.2, 3, 7, 80, 1000.1].map(niceCeil)).toEqual([1, 1, 1, 1, 2, 5, 10, 100, 2000])
+    expect([1.8, 4.5, 5, 0.03].map(niceCeil)).toEqual([2, 5, 5, 0.05])
   })
 })

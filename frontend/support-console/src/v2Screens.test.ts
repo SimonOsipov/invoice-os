@@ -671,4 +671,21 @@ describe('TimeChart', () => {
     expect(labels[0]).toBe('100')
     expect(labels[1]).toBe('0')
   })
+  it('TimeChart scales to cover the highest point', () => {
+    const tall = [{ name: 'api', color: 'var(--series-1)', points: [[0, 130]] as [number, number][] }]
+    const html = renderToStaticMarkup(createElement(TimeChart, { ...base, lines: tall, guides: [{ value: 80, label: 'limit', dashed: false }] }))
+    expect(parse(html).filter((t) => t.name === 'span' && t.text)[0].text).toBe('200')
+  })
+  it('TimeChart handles no lines, all-zero values and a deploy after the end', () => {
+    const empty = renderToStaticMarkup(createElement(TimeChart, { ...base, lines: [] }))
+    expect(parse(empty).filter((t) => t.name === 'span' && t.text).map((t) => t.text)).toEqual(['1', '0', '00:00 UTC', '00:10 UTC'])
+    expect(parse(empty).filter((t) => attr(t, 'data-line'))).toHaveLength(0)
+    const zero = [{ name: 'api', color: 'var(--series-1)', points: [[0, 0], [60, 0]] as [number, number][] }]
+    const html = renderToStaticMarkup(createElement(TimeChart, { ...base, lines: zero, markers: [{ t: 9999, title: 'late' }] }))
+    const ts = parse(html)
+    expect(attr(ts.filter((t) => attr(t, 'data-line'))[0], 'd')).toBe('M0.0 160.0 L60.0 160.0')
+    const dep = ts.filter((t) => t.name === 'line' && t.attrs.includes('data-deploy'))
+    expect(dep).toHaveLength(1)
+    expect(attr(dep[0], 'x1')).toBe('600')
+  })
 })

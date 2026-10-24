@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { ApiError } from '@invoice-os/api-client'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import type { ReactNode } from 'react'
+import { StrictMode, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
@@ -270,11 +270,78 @@ describe('Console system health refresh', () => {
     expect(reqTile()).toContain('42')
   })
 
+  it('a failed health tick alone marks the page', async () => {
+    await open()
+    health.mockRejectedValueOnce(new ApiError('http', 'boom', 500))
+    await tick()
+    expect(screen.getByText('REFRESH FAILED')).toBeTruthy()
+    expect(screen.getByText('1/1')).toBeTruthy()
+  })
+
   it('a 401 on a refresh tick expires the session', async () => {
     await open()
     metrics.mockRejectedValueOnce(new ApiError('http', 'expired', 401))
     await tick()
     expect(expireSession).toHaveBeenCalledTimes(1)
+    expect(reqTile()).not.toContain('42')
+    expect(screen.queryByText('REFRESH FAILED')).toBeNull()
+  })
+
+  it('re-entering System health does not show the old metrics while they load', async () => {
+    await open()
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    await tick(0)
+    metrics.mockImplementation(pending)
+    fireEvent.click(screen.getByRole('button', { name: /^System health$/ }))
+    await tick(0)
+    expect(screen.getByText('Loading metrics…')).toBeTruthy()
+    expect(reqTile()).not.toContain('42')
+  })
+
+  it('an older range answer that lands late does not overwrite the newer range', async () => {
+    await open()
+    const later = (v: StaffMetrics) => new Promise<StaffMetrics>((res) => setTimeout(() => res(v), 5_000))
+    const OLD: StaffMetrics = { ...WITH_REQ, panels: [{ ...WITH_REQ.panels[0], series: [{ name: 'gateway', points: [[1, 111]] }] }] }
+    const NEW: StaffMetrics = { ...WITH_REQ, panels: [{ ...WITH_REQ.panels[0], series: [{ name: 'gateway', points: [[1, 222]] }] }] }
+    metrics.mockImplementationOnce(() => later(OLD)).mockImplementationOnce(() => Promise.resolve(NEW))
+    fireEvent.click(screen.getByRole('button', { name: '6h' }))
+    await tick(0)
+    fireEvent.click(screen.getByRole('button', { name: '24h' }))
+    await tick(10_000)
+    expect(reqTile()).toContain('222')
+    expect(reqTile()).not.toContain('111')
+  })
+
+  it('leaving and re-entering before the first read answers shows no data from the first visit', async () => {
+    vi.useFakeTimers()
+    const first = new Promise<StaffHealth>((res) => setTimeout(() => res(HEALTH), 5_000))
+    health.mockImplementationOnce(() => first).mockImplementation(pending)
+    render(<App />)
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('button', { name: /^System health$/ }))
+    await tick(0)
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    await tick(0)
+    fireEvent.click(screen.getByRole('button', { name: /^System health$/ }))
+    await tick(10_000)
+    expect(screen.getByText('Loading system health…')).toBeTruthy()
+    expect(screen.queryByText('1/1')).toBeNull()
+  })
+
+  it('under StrictMode the refresh keeps the last values and does not loop', async () => {
+    vi.useFakeTimers()
+    metrics.mockResolvedValue(WITH_REQ)
+    render(<StrictMode><App /></StrictMode>)
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('button', { name: /^System health$/ }))
+    await tick(0)
+    const reads = health.mock.calls.length
+    expect(reads).toBeLessThanOrEqual(2)
+    health.mockImplementation(pending)
+    await tick()
+    expect(health).toHaveBeenCalledTimes(reads + 1)
+    expect(screen.getByText('1/1')).toBeTruthy()
+    expect(screen.queryByText(/Loading/)).toBeNull()
   })
 
   it('a 403 on a refresh tick shows the staff line', async () => {

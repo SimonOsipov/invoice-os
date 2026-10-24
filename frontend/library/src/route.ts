@@ -1,3 +1,4 @@
+import { LIBRARY_BASE } from './analytics.ts'
 import { GROUPS } from './content.ts'
 import type { Feature, Group } from './types.ts'
 
@@ -8,7 +9,11 @@ export type Route =
 
 const HOME: Route = { view: 'home' }
 
-export function parseLibraryPath(pathname: string): Route {
+// A path outside the base reads as base-relative, so the old hosts keep serving (D-2).
+const stripBase = (p: string): string => (p === LIBRARY_BASE || p.startsWith(`${LIBRARY_BASE}/`) ? p.slice(LIBRARY_BASE.length) : p)
+
+export function parseLibraryPath(raw: string): Route {
+  const pathname = stripBase(raw)
   const m = /^\/([^/]+)(?:\/([^/]+))?\/?$/.exec(pathname)
   if (!m) return HOME
   const group = GROUPS.find((g) => g.id === m[1])
@@ -19,7 +24,7 @@ export function parseLibraryPath(pathname: string): Route {
 }
 
 export function libraryPath(route: Route): string {
-  if (route.view === 'home') return '/'
-  if (route.view === 'group') return `/${route.group.id}`
-  return `/${route.group.id}/${route.feature.id}`
+  if (route.view === 'home') return `${LIBRARY_BASE}/`
+  if (route.view === 'group') return `${LIBRARY_BASE}/${route.group.id}`
+  return `${LIBRARY_BASE}/${route.group.id}/${route.feature.id}`
 }

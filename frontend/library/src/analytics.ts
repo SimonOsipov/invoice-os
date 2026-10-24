@@ -10,6 +10,7 @@ import { LIBRARY_HOSTNAMES } from '../../landing/src/hubspot'
 export { CookieNotice, type ConsentChoice } from '../../landing/src/components/CookieNotice'
 export { readConsent, type ConsentRecord } from '../../landing/src/consent'
 export { PRODUCTION_HOSTNAMES } from '../../landing/src/hubspot'
+export { LIBRARY_BASE } from '../../landing/src/sitePaths'
 export { trackLibraryDemoOpen, trackLibraryPageView, trackOpenInPlatform, trackTourStart } from '../../landing/src/analytics'
 
 // A Reject made on www reaches a library-host _ga at the next Library load.

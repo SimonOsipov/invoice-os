@@ -22,7 +22,7 @@ var RiverQueueStates = []string{"available", "scheduled", "retryable", "running"
 
 const RiverDeadState = "discarded" // River deletes such a row 7 days after the discard
 
-// ceiling: hand-kept; TestJobOwners_NameEveryWorkerKind fails on a kind the worker adds
+// ceiling: hand-kept map of job kind to owning service
 var JobOwners = map[string]string{
 	"submission_submit": "submission", "submission_poll": "submission", "extraction_extract": "submission",
 	"contact_deliver": "notifications", "demo_deal": "notifications", "blog_subscriber_sync": "notifications", "registrant_intake": "notifications",

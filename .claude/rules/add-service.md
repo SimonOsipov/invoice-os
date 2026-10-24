@@ -30,7 +30,7 @@ paths:
 - Wrap a new outbound client to another first-party service in `platform.TraceTransport`. Never wrap a third-party client. A first-party client without `TraceTransport` (GoTrue) takes `platform.IDTokenTransport`.
 - Run background work only in `cmd/worker`: River workers, tickers and sweeps. A request-driven service enqueues on an insert-only `queue.Config{}`. `TestOnlyTheWorkerRunsBackgroundWork` fails otherwise.
 - Wrap each periodic task in `leader.Lead("<task>", fn)` with its own name. `TestWorkerMain_EveryPeriodicTaskHasOneLeader` fails otherwise.
-- Run one worker instance. The submission rate limiter is in memory.
+- Run one worker instance. The submission rate limiter is in memory. Keep the worker's minimum instances at the service level in invoice-os-infra `terraform/run.tf`. A revision-level minimum keeps the `rollback`-tagged worker running.
 - Build a new Go service on `platform.New`. It gets Sentry labels, 5xx and panic capture, tracing and the `SENTRY_TEST_EVENT` trigger.
 - Call `initMonitoring` from `src/instrument.ts` in a new SPA. Add its name to the `Service` union in `packages/monitoring/src/options.ts`.
 - Declare `ARG` and `ENV` for `VITE_SENTRY_DSN` and `VITE_SENTRY_TEST_DIGEST` in a new SPA Dockerfile build stage.

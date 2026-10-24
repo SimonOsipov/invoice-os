@@ -139,8 +139,8 @@ func exitCode(cmd *exec.Cmd, waitErr error) int {
 	return 1
 }
 
-// pumpStderr copies r to w byte for byte, then offers each line under 64 KiB to lines.
-// A full queue or an oversize line skips classification, never the copy.
+// pumpStderr copies r to w byte for byte, then offers each line to lines.
+// An oversize line is offered as its first 64 KiB; a full queue skips classification, never the copy.
 func pumpStderr(r io.Reader, w io.Writer, lines chan<- []byte) {
 	defer func() {
 		if lines != nil {
@@ -153,22 +153,24 @@ func pumpStderr(r io.Reader, w io.Writer, lines chan<- []byte) {
 			_, _ = io.Copy(w, br)
 		}
 	}()
-	oversize := false
+	var prefix []byte
 	for {
 		chunk, err := br.ReadSlice('\n')
 		if len(chunk) > 0 {
 			_, _ = w.Write(chunk)
+			if lines != nil && prefix == nil {
+				prefix = append([]byte(nil), chunk...)
+			}
 			if err == bufio.ErrBufferFull {
-				oversize = true
 				continue
 			}
-			if lines != nil && !oversize {
+			if lines != nil {
 				select {
-				case lines <- append([]byte(nil), chunk...):
+				case lines <- prefix:
 				default:
 				}
 			}
-			oversize = false
+			prefix = nil
 		}
 		if err != nil && err != bufio.ErrBufferFull {
 			return

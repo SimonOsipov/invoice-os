@@ -31,6 +31,20 @@ func (sentryFailWorker) Work(context.Context, *river.Job[sentryFailArgs]) error 
 	return errors.New("sentry test: always fail")
 }
 
+type sentryTenantFailArgs struct {
+	TenantID string `json:"tenant_id"`
+}
+
+func (sentryTenantFailArgs) Kind() string { return "sentry_test_tenant_fail" }
+
+type sentryTenantFailWorker struct {
+	river.WorkerDefaults[sentryTenantFailArgs]
+}
+
+func (sentryTenantFailWorker) Work(context.Context, *river.Job[sentryTenantFailArgs]) error {
+	return errors.New("sentry test: always fail")
+}
+
 type sentryPanicArgs struct{}
 
 func (sentryPanicArgs) Kind() string { return "sentry_test_panic" }
@@ -97,6 +111,7 @@ func startSentryQueue(t *testing.T, pool *pgxpool.Pool) *sentryQueue {
 	t.Helper()
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &sentryFailWorker{})
+	river.AddWorker(workers, &sentryTenantFailWorker{})
 	river.AddWorker(workers, &sentryPanicWorker{})
 	river.AddWorker(workers, &sentryCancelWorker{})
 	river.AddWorker(workers, &sentrySnoozeWorker{})
@@ -171,6 +186,28 @@ func TestQueueSentry_DiscardedJobOpensOneIssue(t *testing.T) {
 	sentrytest.AssertLabels(t, got[0], want)
 	if fp := []string{"river", "discarded", sentryFailArgs{}.Kind()}; !slices.Equal(got[0].Fingerprint, fp) {
 		t.Errorf("fingerprint = %q, want %q", got[0].Fingerprint, fp)
+	}
+	if _, ok := got[0].Tags["tenant_id"]; ok {
+		t.Errorf("tags = %v, want no tenant_id on a tenant-less job", got[0].Tags)
+	}
+}
+
+func TestQueueSentry_DiscardedTenantJobCarriesTheTenantTag(t *testing.T) {
+	pool := requireDB(t)
+	defer pool.Close()
+	_, rec, want := sentrytest.Boot(t, "submission")
+	q := startSentryQueue(t, pool)
+	tenant := uuid.NewString()
+
+	q.run(t, sentryTenantFailArgs{TenantID: tenant}, 2, rivertype.JobStateDiscarded)
+
+	got := eventsOfKind(rec, sentryTenantFailArgs{}.Kind())
+	if len(got) != 1 {
+		t.Fatalf("events tagged job_kind=%s = %d, want 1", sentryTenantFailArgs{}.Kind(), len(got))
+	}
+	sentrytest.AssertLabels(t, got[0], want)
+	if g := got[0].Tags["tenant_id"]; g != tenant {
+		t.Errorf("tag tenant_id = %q, want %q", g, tenant)
 	}
 }
 

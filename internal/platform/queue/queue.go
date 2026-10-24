@@ -98,7 +98,8 @@ func (c *Client) River() *river.Client[pgx.Tx] { return c.river }
 // context from the payload — the worker-role pattern, .claude/rules/tenant-seam.md). EnqueueTx
 // uses it to fail closed when the declared tenant diverges from the tenant the
 // idempotency key is recorded under. submission.SubmitArgs implements it; every real
-// job-args type must.
+// job-args type must. Its args must also encode Tenant() as JSON key tenant_id: errorReporter
+// tags Sentry events from it.
 type TenantScoped interface {
 	Tenant() string
 }

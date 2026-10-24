@@ -1,7 +1,7 @@
 // Specs for the pure presentation helpers: token NAMES only, never literals.
 import { describe, expect, it } from 'vitest'
 
-import { healthTone, SPARK_HEIGHT, SPARK_WIDTH, severityStyle, sparkline } from './helpers'
+import { healthTone, sentryTenantUrl, SPARK_HEIGHT, SPARK_WIDTH, severityStyle, sparkline } from './helpers'
 import type { Severity } from './types'
 
 const ALL_SEVERITIES: Severity[] = ['error', 'warn', 'info']
@@ -63,5 +63,20 @@ describe('healthTone', () => {
     expect(healthTone('green')).toEqual({ dot: 'var(--status-green-text)', stroke: 'var(--action)', fill: 'var(--action-tint)' })
     expect(healthTone('amber')).toEqual({ dot: 'var(--status-amber-text)', stroke: 'var(--status-amber-text)', fill: 'var(--status-amber-bg)' })
     expect(healthTone('red')).toEqual({ dot: 'var(--status-red-text)', stroke: 'var(--status-red-text)', fill: 'var(--status-red-bg)' })
+  })
+})
+
+describe('sentryTenantUrl', () => {
+  it('sentryTenantUrl builds the issues query for one tenant', () => {
+    expect(sentryTenantUrl('3f2c1a9e-0b7d-4c55-9a1e-6d2f8b7a4c10')).toBe(
+      'https://as-comply.sentry.io/issues/?query=tenant_id:3f2c1a9e-0b7d-4c55-9a1e-6d2f8b7a4c10&project=4512190351474768&statsPeriod=14d',
+    )
+  })
+
+  it('sentryTenantUrl encodes an id that holds URL syntax', () => {
+    const url = sentryTenantUrl('x&project=1')
+    expect(url).toContain('query=tenant_id:x%26project%3D1&')
+    expect(url.match(/project=4512190351474768/g)).toHaveLength(1)
+    expect(url.match(/project=/g)).toHaveLength(1)
   })
 })

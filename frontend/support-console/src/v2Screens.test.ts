@@ -180,6 +180,8 @@ const METRICS = metricsWith()
 const HEALTH_PROPS: Parameters<typeof Health>[0] = {
   status: 'ready',
   data: HEALTH,
+  healthStale: false,
+  metricsStale: false,
   onRetry: noop,
   metricsStatus: 'ready',
   metrics: METRICS,

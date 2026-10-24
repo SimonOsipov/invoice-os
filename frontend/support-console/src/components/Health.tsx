@@ -14,6 +14,8 @@ type Props = {
   status: HealthStatus
   errorText?: string
   data: StaffHealth | null
+  healthStale: boolean
+  metricsStale: boolean
   onRetry: () => void
   metricsStatus: HealthStatus
   metricsErrorText?: string
@@ -315,7 +317,7 @@ const DASHBOARD_LINKS = [
   { label: 'Database and edge dashboard', href: DASHBOARDS.database_edge },
 ]
 
-export function Health({ status, errorText, data, onRetry, metricsStatus, metricsErrorText, metrics, onRetryMetrics, range, onRange, service, onService }: Props) {
+export function Health({ status, errorText, data, healthStale, metricsStale, onRetry, metricsStatus, metricsErrorText, metrics, onRetryMetrics, range, onRange, service, onService }: Props) {
   const panelsNote = () => {
     if (metricsStatus === 'forbidden') return <Note text={STAFF_ONLY} />
     if (metricsStatus === 'error') return <Note text={metricsErrorText ?? 'Unavailable'} onRetry={onRetryMetrics} />
@@ -380,6 +382,11 @@ export function Health({ status, errorText, data, onRetry, metricsStatus, metric
             <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.05em' }}>
               {`CHECKED ${syncStamp(data.checked_at)}`}
             </span>
+            {(healthStale || metricsStale) && (
+              <span className="mono" style={{ fontSize: 10.5, color: 'var(--status-amber-text)', letterSpacing: '0.05em' }}>
+                REFRESH FAILED
+              </span>
+            )}
             {DASHBOARD_LINKS.map((l) => (
               <a key={l.label} href={l.href} target="_blank" rel="noopener noreferrer" className="ops-btn v2-btn v2-btn-ghost" style={{ height: 34, padding: '0 12px', fontSize: 12, textDecoration: 'none' }}>
                 <G name="external-link" size={15} />

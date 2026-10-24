@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { ApiError } from '@invoice-os/api-client'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
 import { expireSession } from './auth'
 import { fetchStaffHealth, type StaffHealth } from './healthApi'
-import { fetchStaffMetrics, type StaffMetrics } from './metricsApi'
+import { fetchStaffMetrics, HEALTH_REFRESH_MS, type StaffMetrics } from './metricsApi'
 import { fetchCodeListSummary, fetchRules, fetchVersions } from './rulesApi'
 import { fetchStaffTenants } from './tenantsApi'
 
@@ -78,6 +78,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.clearAllMocks()
 })
 
@@ -170,5 +171,117 @@ describe('Console system health wiring', () => {
     render(<App />)
     await openHealth()
     await waitFor(() => expect(expireSession).toHaveBeenCalledTimes(1))
+  })
+})
+
+describe('Console system health refresh', () => {
+  const WITH_REQ: StaffMetrics = { ...METRICS, panels: [{ key: 'req_per_min', unit: 'req/min', available: true, series: [{ name: 'gateway', points: [[1, 42]] }] }] }
+  const tick = (ms = HEALTH_REFRESH_MS) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+  const reqTile = () => (document.querySelector('[data-tile="req"]') as HTMLElement).textContent ?? ''
+  const open = async () => {
+    vi.useFakeTimers()
+    metrics.mockResolvedValue(WITH_REQ)
+    render(<App />)
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('button', { name: /^System health$/ }))
+    await tick(0)
+    expect(screen.getByText('1/1')).toBeTruthy()
+    expect(reqTile()).toContain('42')
+  }
+  const pending = () => new Promise<never>(() => {})
+
+  it('System health re-reads both routes every 60 s', async () => {
+    await open()
+    await tick()
+    await tick()
+    expect(health).toHaveBeenCalledTimes(3)
+    expect(metrics).toHaveBeenCalledTimes(3)
+  })
+
+  it('no re-read before 60 s', async () => {
+    await open()
+    await tick(59_000)
+    expect(health).toHaveBeenCalledTimes(1)
+    expect(metrics).toHaveBeenCalledTimes(1)
+  })
+
+  it('a refresh keeps the last values on screen', async () => {
+    await open()
+    health.mockImplementation(pending)
+    metrics.mockImplementation(pending)
+    await tick()
+    expect(health).toHaveBeenCalledTimes(2)
+    expect(screen.getByText('1/1')).toBeTruthy()
+    expect(reqTile()).toContain('42')
+    expect(screen.queryByText(/Loading/)).toBeNull()
+    expect(screen.queryByText('REFRESH FAILED')).toBeNull()
+  })
+
+  it('leaving System health stops the refresh', async () => {
+    await open()
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    await tick(0)
+    await tick(180_000)
+    expect(health).toHaveBeenCalledTimes(1)
+    expect(metrics).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-entering System health shows Loading, not the old visit', async () => {
+    await open()
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    await tick(0)
+    health.mockImplementation(pending)
+    fireEvent.click(screen.getByRole('button', { name: /^System health$/ }))
+    await tick(0)
+    expect(screen.getByText('Loading system health…')).toBeTruthy()
+    expect(screen.queryByText('1/1')).toBeNull()
+  })
+
+  it('a range change loads its metrics and keeps the health data', async () => {
+    await open()
+    metrics.mockImplementation(pending)
+    fireEvent.click(screen.getByRole('button', { name: '6h' }))
+    await tick(0)
+    expect(screen.getByText('Loading metrics…')).toBeTruthy()
+    expect(screen.getByText('1/1')).toBeTruthy()
+    expect(reqTile()).not.toContain('42')
+  })
+
+  it('a failed refresh tick keeps the page and marks it', async () => {
+    await open()
+    health.mockRejectedValueOnce(new ApiError('http', 'boom', 500))
+    metrics.mockRejectedValueOnce(new ApiError('http', 'boom', 500))
+    await tick()
+    expect(screen.getByText('1/1')).toBeTruthy()
+    expect(reqTile()).toContain('42')
+    expect(screen.getByText('REFRESH FAILED')).toBeTruthy()
+    expect(screen.queryByText('boom')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    await tick()
+    expect(screen.queryByText('REFRESH FAILED')).toBeNull()
+    expect(screen.getByText('1/1')).toBeTruthy()
+  })
+
+  it('a failed metrics tick alone marks the page', async () => {
+    await open()
+    metrics.mockRejectedValueOnce(new ApiError('http', 'boom', 500))
+    await tick()
+    expect(screen.getByText('REFRESH FAILED')).toBeTruthy()
+    expect(reqTile()).toContain('42')
+  })
+
+  it('a 401 on a refresh tick expires the session', async () => {
+    await open()
+    metrics.mockRejectedValueOnce(new ApiError('http', 'expired', 401))
+    await tick()
+    expect(expireSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('a 403 on a refresh tick shows the staff line', async () => {
+    await open()
+    health.mockRejectedValueOnce(new ApiError('http', 'forbidden', 403))
+    await tick()
+    expect(screen.getByText('Your account is not ASComply staff.')).toBeTruthy()
+    expect(screen.queryByText('1/1')).toBeNull()
   })
 })

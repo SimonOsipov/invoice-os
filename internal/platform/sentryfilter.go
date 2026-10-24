@@ -53,7 +53,7 @@ func scrubEvent(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 	if event.Tags != nil {
 		tags := make(map[string]string, len(event.Tags))
 		for k, v := range event.Tags {
-			// The id tags stay byte-identical so they keep matching Railway logs.
+			// The id tags stay byte-identical so they keep matching the service logs.
 			if k == "request_id" || k == "tenant_id" {
 				tags[k] = v
 				continue

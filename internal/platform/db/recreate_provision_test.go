@@ -204,29 +204,29 @@ func TestProvisionRecreateLogsOnceThenNothing(t *testing.T) {
 
 func TestProvisionRecreateNeverRunsOutsideAPreview(t *testing.T) {
 	cases := []struct {
-		name                        string
-		env, bootstrap, railway, rs string
+		name                          string
+		env, bootstrap, deployEnv, rs string
 	}{
-		{"production railway name", "development", "true", "production", "true"},
+		{"production deploy env", "development", "true", "production", "true"},
 		{"pre-rename development name", "development", "true", "development", "true"},
-		{"empty railway name", "development", "true", "", "true"},
+		{"empty deploy env", "development", "true", "", "true"},
 		{"reset flag empty", "development", "true", "pr-452", ""},
 		{"reset flag 1", "development", "true", "pr-452", "1"},
 		{"bootstrap flag empty", "development", "", "pr-452", "true"},
 		{"environment production", "production", "true", "production", "true"},
-		{"environment production with a preview railway name", "production", "true", "pr-452", "true"},
+		{"environment production with a preview deploy env", "production", "true", "pr-452", "true"},
 		{"environment staging", "staging", "true", "pr-452", "true"},
 		{"environment Development", "Development", "true", "pr-452", "true"},
 		{"environment trailing space", "development ", "true", "pr-452", "true"},
 		{"environment empty", "", "true", "pr-452", "true"},
-		{"railway name Production", "development", "true", "Production", "true"},
-		{"railway name PR-452", "development", "true", "PR-452", "true"},
-		{"railway name pr-452x", "development", "true", "pr-452x", "true"},
-		{"railway name xpr-452", "development", "true", "xpr-452", "true"},
-		{"railway name pr- with no number", "development", "true", "pr-", "true"},
-		{"railway name trailing space", "development", "true", "pr-452 ", "true"},
-		{"railway name leading space", "development", "true", " pr-452", "true"},
-		{"railway name trailing newline", "development", "true", "pr-452\n", "true"},
+		{"deploy env Production", "development", "true", "Production", "true"},
+		{"deploy env PR-452", "development", "true", "PR-452", "true"},
+		{"deploy env pr-452x", "development", "true", "pr-452x", "true"},
+		{"deploy env xpr-452", "development", "true", "xpr-452", "true"},
+		{"deploy env pr- with no number", "development", "true", "pr-", "true"},
+		{"deploy env trailing space", "development", "true", "pr-452 ", "true"},
+		{"deploy env leading space", "development", "true", " pr-452", "true"},
+		{"deploy env trailing newline", "development", "true", "pr-452\n", "true"},
 		{"reset flag True", "development", "true", "pr-452", "True"},
 		{"reset flag trailing space", "development", "true", "pr-452", "true "},
 		{"bootstrap flag True", "development", "True", "pr-452", "true"},
@@ -239,7 +239,7 @@ func TestProvisionRecreateNeverRunsOutsideAPreview(t *testing.T) {
 			relBefore, rtnBefore := publicObjectCounts(t, superDSN)
 
 			cfg := recreateConfig(superDSN, migDSN, migrations.FS, nil)
-			cfg.Environment, cfg.BootstrapFlag, cfg.DeployEnv, cfg.ResetFlag = c.env, c.bootstrap, c.railway, c.rs
+			cfg.Environment, cfg.BootstrapFlag, cfg.DeployEnv, cfg.ResetFlag = c.env, c.bootstrap, c.deployEnv, c.rs
 			err := provisionWithin(t, cfg)
 
 			if err == nil || !strings.Contains(err.Error(), "out-of-order") {
@@ -257,7 +257,7 @@ func TestProvisionRecreateNeverRunsOutsideAPreview(t *testing.T) {
 		})
 	}
 
-	previews := []struct{ name, env, railway string }{
+	previews := []struct{ name, env, deployEnv string }{
 		{"control: pr-452 with every gate on recreates", "development", "pr-452"},
 		{"repo-qualified preview name recreates", "development", "invoice-os-pr-452"},
 		{"environment named like a preview recreates", "pr-452", "pr-452"},
@@ -267,7 +267,7 @@ func TestProvisionRecreateNeverRunsOutsideAPreview(t *testing.T) {
 			superDSN, migDSN := migratedScratchDB(t, fsWithout(migrations.FS, outOfOrderFile))
 			addCanary(t, superDSN, "public")
 			cfg := recreateConfig(superDSN, migDSN, migrations.FS, nil)
-			cfg.Environment, cfg.DeployEnv = c.env, c.railway
+			cfg.Environment, cfg.DeployEnv = c.env, c.deployEnv
 
 			mustProvision(t, c.name, cfg)
 

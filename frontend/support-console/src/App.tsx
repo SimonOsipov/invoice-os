@@ -43,7 +43,8 @@ import {
 import { cancelJob, fetchJob, fetchJobs, redriveJob, type JobDetail, type JobState, type StaffJob } from './jobsApi'
 import { defaultBundlePeriod, downloadBundle, fetchAuditEvents, fetchBundlePreview, fetchStaffChanges, fetchStaffEntities, rangeInverted, staffChangeLink, type AuditFilters, type StaffAuditPage, type StaffAuditRow, type StaffChangeLink } from './auditApi'
 import { fetchAiCalls, fetchAiTotals, type AiCallsPage, type AiFilters, type AiTotalsPage } from './aiUsageApi'
-import { fetchStaffHealth } from './healthApi'
+import { fetchStaffHealth, type StaffHealth } from './healthApi'
+import { DEFAULT_RANGE, fetchStaffMetrics, HEALTH_REFRESH_MS, type RangeKey, type StaffMetrics } from './metricsApi'
 import { detailStatus, fetchStaffTenant, fetchStaffTenants } from './tenantsApi'
 import { StaffGate } from '@invoice-os/console-session'
 import { SESSION_KEY, appBase, expireSession, landingBase } from './auth'
@@ -150,8 +151,53 @@ function Console() {
   }, { immediate: onTenants && tenantId !== null, deps: [onTenants, tenantId], isEmpty: () => false })
   const tenantsStatus = tenantsRead.status === 'error' ? (tenantsRead.error?.status === 403 ? 'forbidden' : 'error') : tenantsRead.status === 'ready' || tenantsRead.status === 'empty' ? tenantsRead.status : 'loading'
   const onHealth = screen === 'health'
-  const healthRead = useAsync(fetchStaffHealth, { immediate: onHealth, deps: [onHealth], isEmpty: () => false })
-  const healthStatus = healthRead.status === 'error' ? (healthRead.error?.status === 403 ? 'forbidden' : 'error') : healthRead.status === 'ready' ? 'ready' : 'loading'
+  // Reads carry the visit they started in, so a stale answer from an earlier visit never shows.
+  const visit = useRef(0)
+  if (!onHealth) visit.current++
+  const healthRead = useAsync(async () => { const v = visit.current; return { v, value: await fetchStaffHealth() } }, { immediate: onHealth, deps: [onHealth], isEmpty: () => false })
+  const lastHealth = useRef<StaffHealth | null>(null)
+  const freshHealth = healthRead.data?.v === visit.current ? healthRead.data.value : null
+  if (!onHealth) lastHealth.current = null
+  else if (freshHealth) lastHealth.current = freshHealth
+  const keepOn = (r: { status: string; error: ApiError | null }) => r.status === 'loading' || (r.status === 'error' && r.error?.status !== 401 && r.error?.status !== 403)
+  const health = freshHealth ?? (keepOn(healthRead) ? lastHealth.current : null)
+  const healthFailed = useRef(false)
+  if (freshHealth) healthFailed.current = false
+  else if (healthRead.status === 'error' && health) healthFailed.current = true
+  const healthStale = healthFailed.current && health !== null
+  const healthStatus = health ? 'ready' : healthRead.status === 'error' ? (healthRead.error?.status === 403 ? 'forbidden' : 'error') : 'loading'
+  const [healthRange, setHealthRange] = useState<RangeKey>(DEFAULT_RANGE)
+  const [healthService, setHealthService] = useState('')
+  const metricsKey = `${healthRange}|${healthService}`
+  const metricsRead = useAsync(async () => { const v = visit.current; return { v, key: metricsKey, value: await fetchStaffMetrics(healthRange, healthService) } }, { immediate: onHealth, deps: [onHealth, healthRange, healthService], isEmpty: () => false })
+  const lastMetrics = useRef<{ key: string; value: StaffMetrics } | null>(null)
+  const freshMetrics = metricsRead.data?.v === visit.current && metricsRead.data.key === metricsKey ? metricsRead.data.value : null
+  if (!onHealth) lastMetrics.current = null
+  else if (freshMetrics) lastMetrics.current = { key: metricsKey, value: freshMetrics }
+  const keptMetrics = lastMetrics.current?.key === metricsKey && keepOn(metricsRead) ? lastMetrics.current.value : null
+  const metrics = freshMetrics ?? keptMetrics
+  const metricsFailed = useRef(false)
+  if (freshMetrics) metricsFailed.current = false
+  else if (metricsRead.status === 'error' && metrics) metricsFailed.current = true
+  const metricsStale = metricsFailed.current && metrics !== null
+  const metricsStatus = metrics ? 'ready' : metricsRead.status === 'error' ? (metricsRead.error?.status === 403 ? 'forbidden' : 'error') : 'loading'
+  const refreshHealth = useRef(() => {})
+  refreshHealth.current = () => { healthRead.run(); metricsRead.run() }
+  const denied = [healthRead, metricsRead].some((r) => r.status === 'error' && (r.error?.status === 401 || r.error?.status === 403))
+  useEffect(() => {
+    if (!onHealth || denied) return
+    // A background tab must not wake the scale-to-zero fleet: skip hidden ticks, read once on return.
+    let skipped = false
+    const id = setInterval(() => {
+      if (document.hidden) skipped = true
+      else refreshHealth.current()
+    }, HEALTH_REFRESH_MS)
+    const onVisible = () => {
+      if (!document.hidden && skipped) { skipped = false; refreshHealth.current() }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible) }
+  }, [onHealth, denied])
   const onSubmissions = screen === 'submissions'
   const jobsRead = useAsync(() => fetchJobs(jobState, jobTenant || undefined), { immediate: onSubmissions, deps: [onSubmissions, jobState, jobTenant], isEmpty: () => false })
   const jobTenantsRead = useAsync(fetchStaffTenants, { immediate: onSubmissions, deps: [onSubmissions] })
@@ -333,7 +379,7 @@ function Console() {
   const jobDetail = freshJob ?? (jobRead.status === 'loading' && lastJob.current?.job.id === openJob ? lastJob.current : null)
   const jobNote = jobRead.status === 'error' ? { text: jobRead.error?.status === 403 ? 'Your account is not ASComply staff.' : (jobRead.error?.message ?? 'Unavailable'), onRetry: jobRead.run } : { text: 'Loading job…' }
   const jobInFlight = useRef(false)
-  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, healthRead, auditRead, auditTenantsRead, aiRead, totalsRead, aiTenantsRead, changesRead, entitiesRead, previewRead].some((r) => r.error?.status === 401)
+  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, healthRead, metricsRead, auditRead, auditTenantsRead, aiRead, totalsRead, aiTenantsRead, changesRead, entitiesRead, previewRead].some((r) => r.error?.status === 401)
   useEffect(() => {
     if (expired) void expireSession()
   }, [expired])
@@ -635,7 +681,24 @@ function Console() {
             />
           )}
           {screen === 'blog' && <Blog filters={blogFilters} onFilters={setBlogFilters} onToast={showToast} />}
-          {screen === 'health' && <Health status={healthStatus} errorText={healthRead.error?.message} data={healthRead.data ?? null} onRetry={healthRead.run} />}
+          {screen === 'health' && (
+            <Health
+              status={healthStatus}
+              errorText={healthRead.error?.message}
+              data={health}
+              healthStale={healthStale}
+              metricsStale={metricsStale}
+              onRetry={healthRead.run}
+              metricsStatus={metricsStatus}
+              metricsErrorText={metricsRead.error?.message}
+              metrics={metrics}
+              onRetryMetrics={metricsRead.run}
+              range={healthRange}
+              onRange={setHealthRange}
+              service={healthService}
+              onService={setHealthService}
+            />
+          )}
         </div>
       </main>
 

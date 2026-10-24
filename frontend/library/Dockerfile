@@ -7,7 +7,7 @@ WORKDIR /repo
 RUN corepack enable
 COPY . .
 RUN pnpm install --frozen-lockfile
-# Vite bakes VITE_* at build time; Railway passes service variables as build args.
+# Vite bakes VITE_* at build time; CI passes each value as a build arg.
 ARG VITE_APP_URL
 ENV VITE_APP_URL=$VITE_APP_URL
 ARG VITE_LANDING_URL
@@ -20,9 +20,7 @@ ENV VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST
 ARG VITE_GA_MEASUREMENT_ID
 ENV VITE_GA_MEASUREMENT_ID=$VITE_GA_MEASUREMENT_ID
 ARG BUILD_SHA
-# ceiling: Railway fallback, delete with Railway in GKE-12.
-ARG RAILWAY_GIT_COMMIT_SHA
-ENV VITE_BUILD_SHA=${BUILD_SHA:-$RAILWAY_GIT_COMMIT_SHA}
+ENV VITE_BUILD_SHA=${BUILD_SHA}
 # Build stage only, never ENV; empty skips the source-map upload.
 ARG SENTRY_AUTH_TOKEN
 RUN pnpm --filter @invoice-os/library build

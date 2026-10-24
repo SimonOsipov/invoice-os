@@ -93,8 +93,8 @@ func (a *App) Handler() http.Handler {
 	)
 }
 
-// Server timeouts outlast Railway's edge limits (5 min body, 15 min request, 60 s idle) so no
-// request the edge admits is cut. Vars so tests can lower them.
+// Server timeouts outlast Cloud Run's 300 s request timeout so no request
+// Cloud Run admits is cut by the server first. Vars so tests can lower them.
 var (
 	ServerReadTimeout  = 6 * time.Minute
 	ServerWriteTimeout = 16 * time.Minute

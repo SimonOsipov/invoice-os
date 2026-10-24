@@ -320,13 +320,13 @@ describe('consoleErrorsLine', () => {
   it('joins multi-line and sourced entries onto one line that keeps the url', () => {
     const sourced = sourcedConsoleError(
       'Failed to load resource: the server responded with a status of 401 ()',
-      'https://gateway-pr-460.up.railway.app/api/tenancy/v1/me',
-      ['401 GET https://gateway-pr-460.up.railway.app/api/tenancy/v1/me'],
+      'https://gateway-pr-460-944095690109.africa-south1.run.app/api/tenancy/v1/me',
+      ['401 GET https://gateway-pr-460-944095690109.africa-south1.run.app/api/tenancy/v1/me'],
     )
     const out = consoleErrorsLine(['pageerror: boom\n    at foo (x.js:1:1)', sourced])
     expect(out).not.toMatch(/[\r\n]/)
     expect(out).toContain('pageerror: boom at foo (x.js:1:1) | ')
-    expect(out).toContain('[url: https://gateway-pr-460.up.railway.app/api/tenancy/v1/me; 401 responses:')
+    expect(out).toContain('[url: https://gateway-pr-460-944095690109.africa-south1.run.app/api/tenancy/v1/me; 401 responses:')
   })
 
   it('gives an empty string for no errors', () => {

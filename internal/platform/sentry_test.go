@@ -198,7 +198,7 @@ func TestInitSentry_LabelsEveryEvent(t *testing.T) {
 	t.Setenv("SENTRY_DSN", "https://public@example.com/1")
 	t.Setenv("DEPLOY_ENV", "production")
 	t.Setenv("ENVIRONMENT", "development")
-	t.Setenv("RAILWAY_GIT_COMMIT_SHA", fakeRailwaySHA)
+	t.Setenv("BUILD_SHA", fakeBuildSHA)
 	sentry.CurrentHub().BindClient(nil)
 	t.Cleanup(func() { sentry.CurrentHub().BindClient(nil) })
 
@@ -216,7 +216,7 @@ func TestInitSentry_LabelsEveryEvent(t *testing.T) {
 	opts := installed.Options()
 	installed.Close()
 
-	wantRelease := "unstamped-" + fakeRailwaySHA
+	wantRelease := "unstamped-" + fakeBuildSHA
 	if opts.Environment != "production" || opts.Release != wantRelease || opts.ServerName != "svc" {
 		t.Errorf("installed options: environment %q, release %q, server_name %q; want production, %q, svc",
 			opts.Environment, opts.Release, opts.ServerName, wantRelease)

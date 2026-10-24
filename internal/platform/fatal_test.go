@@ -29,11 +29,11 @@ import (
 )
 
 const (
-	fatalHelperEnv  = "PLATFORM_FATAL_HELPER"
-	fatalRailwaySHA = "0123456789abcdef0123456789abcdef01234567"
-	bootFormat      = "svc: db pool: %v"
-	bootMessage     = "svc: db pool: dial tcp: refused"
-	pgPassword      = "S3cretPw"
+	fatalHelperEnv = "PLATFORM_FATAL_HELPER"
+	fatalBuildSHA  = "0123456789abcdef0123456789abcdef01234567"
+	bootFormat     = "svc: db pool: %v"
+	bootMessage    = "svc: db pool: dial tcp: refused"
+	pgPassword     = "S3cretPw"
 )
 
 // wireEvent is the event item as it crosses the wire; sentry.Event does not decode it.
@@ -224,12 +224,12 @@ func productionEnv(dsn string) []string {
 		"SENTRY_DSN=" + dsn,
 		"DEPLOY_ENV=production",
 		"ENVIRONMENT=development",
-		"RAILWAY_GIT_COMMIT_SHA=" + fatalRailwaySHA,
+		"BUILD_SHA=" + fatalBuildSHA,
 	}
 }
 
 func wantLabels(service string) sentrytest.Labels {
-	release := "unstamped-" + fatalRailwaySHA
+	release := "unstamped-" + fatalBuildSHA
 	if sha := platform.BuildSHA; sha != "" && sha != "dev" {
 		release = sha
 	}

@@ -1395,7 +1395,7 @@ func TestBootstrapRespectsContextDeadlineUnderAdvisoryLockContention(t *testing.
 // digit count and BootstrapEnabled never parses the number as an integer, so a
 // very large PR number must still be treated as a VALID shape (no overflow/panic
 // risk from an int conversion that doesn't exist) rather than silently rejected —
-// Railway PR numbers are unbounded over a repo's lifetime.
+// PR numbers are unbounded over a repo's lifetime.
 func TestBootstrapEnabledAllowlistAcceptsArbitrarilyLargePRNumber(t *testing.T) {
 	huge := "pr-99999999999999999999999999999999999999"
 	if !db.BootstrapEnabled(huge, "true") {

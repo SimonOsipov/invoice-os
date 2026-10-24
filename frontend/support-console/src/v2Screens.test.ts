@@ -7,9 +7,13 @@ import { readFileSync } from 'node:fs'
 import { AiUsage } from './components/AiUsage'
 import { Health } from './components/Health'
 import { Rules } from './components/Rules'
+import { TimeChart } from './components/TimeChart'
 import { Tenants } from './components/Tenants'
 import type { AiCall } from './aiUsageApi'
 import type { FleetHealth, ServiceHealth, StaffHealth, TrendPoint } from './healthApi'
+import { sentryServiceUrl } from './helpers'
+import { DASHBOARDS, METRIC_SERVICES, type PanelKey, type Point, type StaffMetrics } from './metricsApi'
+import { chipStyle } from './components/Submissions'
 import { SEED_RULES } from './rulesFixture'
 import type { RuleVersion } from './rulesApi'
 import type { StaffInvoice, StaffMember, StaffTenant, StaffTenantDetail } from './tenantsApi'
@@ -131,7 +135,62 @@ const HEALTH: StaffHealth = {
   queue_depth: 3,
   trend: [point(0, null, 1, 0), point(5, 0, 2, 1), point(10, 1, 3, 2)],
 }
-const HEALTH_PROPS: Parameters<typeof Health>[0] = { status: 'ready', data: HEALTH, onRetry: noop }
+const PANEL_UNITS: Record<PanelKey, string> = {
+  req_per_min: 'req/min',
+  error_pct: '%',
+  latency_p50_ms: 'ms',
+  latency_p95_ms: 'ms',
+  cpu_pct: '% of limit',
+  ram_pct: '% of limit',
+  instances: 'count',
+  cold_starts_per_min: '/min',
+  sql_cpu_pct: '%',
+  sql_ram_pct: '%',
+  sql_disk_pct: '%',
+  sql_connections: 'count',
+}
+type PanelSeries = Partial<Record<PanelKey, Record<string, Point[]>>>
+// Defaults: two services; fleet req 100, 5xx 1.00 %, p95 1200 ms, 23 connections of 80.
+const metricsWith = (over: PanelSeries = {}, available = true): StaffMetrics => {
+  const base: PanelSeries = {
+    req_per_min: { a: [[0, 10]], b: [[0, 90]] },
+    error_pct: { a: [[0, 10]], b: [[0, 0]] },
+    latency_p95_ms: { a: [[0, 300]], b: [[0, 1200]] },
+    sql_connections: { database: [[0, 23]] },
+  }
+  const by = { ...base, ...over }
+  return {
+    range: '1h',
+    service: '',
+    start: '2026-10-14T10:00:00Z',
+    end: '2026-10-14T11:00:00Z',
+    step_seconds: 60,
+    connection_budget: 80,
+    panels: (Object.keys(PANEL_UNITS) as PanelKey[]).map((key) => ({
+      key,
+      unit: PANEL_UNITS[key],
+      available,
+      series: Object.entries(by[key] ?? {}).map(([name, points]) => ({ name, points })),
+    })),
+    limits: { available: true, services: [] },
+    deploys: { available: true, revisions: [] },
+  }
+}
+const METRICS = metricsWith()
+const HEALTH_PROPS: Parameters<typeof Health>[0] = {
+  status: 'ready',
+  data: HEALTH,
+  healthStale: false,
+  metricsStale: false,
+  onRetry: noop,
+  metricsStatus: 'ready',
+  metrics: METRICS,
+  onRetryMetrics: noop,
+  range: '1h',
+  onRange: noop,
+  service: '',
+  onService: noop,
+}
 const healthWith = (over: Partial<Parameters<typeof Health>[0]>) => renderToStaticMarkup(createElement(Health, { ...HEALTH_PROPS, ...over }))
 const healthData = (over: Partial<StaffHealth>) => healthWith({ data: { ...HEALTH, ...over } })
 
@@ -534,7 +593,7 @@ describe('System health markup', () => {
   const tileOf = (ts: Tag[], key: string) => {
     const at = ts.findIndex((t) => attr(t, 'data-tile') === key)
     expect(at, `tile ${key}`).toBeGreaterThan(-1)
-    const next = ts.findIndex((t, i) => i > at && attr(t, 'data-tile') !== '')
+    const next = ts.findIndex((t, i) => i > at && (attr(t, 'data-tile') !== '' || attr(t, 'data-panels') !== '' || t.text === 'Services'))
     return ts.slice(at, next === -1 ? undefined : next)
   }
   const tilesOf = (html: string) => {
@@ -546,7 +605,7 @@ describe('System health markup', () => {
   it('Health tiles show fleet, queue depth and dead-lettered', () => {
     const html = healthWith({})
     const { all, fleet, queue, dead } = tilesOf(html)
-    expect(all.filter((t) => attr(t, 'data-tile')).map((t) => attr(t, 'data-tile'))).toEqual(['fleet', 'queue', 'dead-lettered'])
+    expect(all.filter((t) => attr(t, 'data-tile')).map((t) => attr(t, 'data-tile'))).toEqual(['fleet', 'req', 'errors', 'p95', 'connections', 'queue', 'dead-lettered'])
     expect(texts(fleet)).toEqual(expect.arrayContaining(['Fleet', '1/3', 'services up', 'DEGRADED', 'Down: docling, auth']))
     expect(texts(queue)).toEqual(expect.arrayContaining(['Queue depth', '3', 'jobs']))
     expect(texts(queue).filter((x) => /^[A-Z]+$/.test(x)), 'queue has no status word').toEqual([])
@@ -613,18 +672,152 @@ describe('System health markup', () => {
     const failed = healthWith({ status: 'error', errorText: 'boom', data: null })
     expect(failed).toContain('boom')
     expect(buttonByText(failed, 'Retry').attrs).toContain('v2-btn-ghost')
+    const metricsFailed = healthWith({ metricsStatus: 'error', metricsErrorText: 'metrics boom', metrics: null })
+    const ts = parse(metricsFailed)
+    for (const key of ['fleet', 'queue', 'dead-lettered']) tileOf(ts, key)
+    expect(ts.filter((t) => attr(t, 'data-service'))).toHaveLength(3)
+    expect(metricsFailed).toContain('metrics boom')
+    expect(buttonByText(metricsFailed, 'Retry').attrs).toContain('v2-btn-ghost')
+    expect(healthWith({ metricsStatus: 'forbidden', metrics: null })).toContain('Your account is not ASComply staff.')
   })
 
-  it('the health grid holds three columns and collapses', () => {
-    const grids = withClass(parse(healthWith({})), 'ops-health-grid')
-    expect(grids).toHaveLength(1)
-    expect(style(grids[0])['grid-template-columns']).toBe('repeat(3, minmax(0, 1fr))')
+  it('the stat and jobs grids hold their tracks and collapse', () => {
+    const ts = parse(healthWith({}))
+    const stats = withClass(ts, 'ops-health-stats')
+    const jobs = withClass(ts, 'ops-health-jobs')
+    expect(stats).toHaveLength(1)
+    expect(jobs).toHaveLength(1)
+    expect(withClass(ts, 'ops-health-grid')).toHaveLength(0)
+    expect(style(stats[0])['grid-template-columns']).toBe('repeat(5, minmax(0, 1fr))')
+    expect(style(jobs[0])['grid-template-columns']).toBe('repeat(2, minmax(0, 1fr))')
     const css = readFileSync(new URL('./styles/support.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
     const rule = (width: number) => css.match(new RegExp(`@media \\(max-width: ${width}px\\) \\{([\\s\\S]*?)\\n\\}`, 'i'))![1]
-    const cols = (width: number) => rule(width).match(/\.ops-health-grid\s*\{\s*grid-template-columns:\s*([^;]*);/i)?.[1]
-    expect(cols(1024)).toBe('repeat(2, minmax(0, 1fr)) !important')
-    expect(cols(768)).toBe('repeat(2, minmax(0, 1fr)) !important')
-    expect(cols(480)).toBe('minmax(0, 1fr) !important')
+    const cols = (width: number, cls: string) => rule(width).match(new RegExp(`\\.${cls}[^{]*\\{\\s*grid-template-columns:\\s*([^;]*);`, 'i'))?.[1]
+    expect(cols(1024, 'ops-health-stats')).toBe('repeat(3, minmax(0, 1fr)) !important')
+    expect(cols(768, 'ops-health-stats')).toBe('repeat(2, minmax(0, 1fr)) !important')
+    expect(cols(480, 'ops-health-stats')).toBe('minmax(0, 1fr) !important')
+    expect(rule(480)).toMatch(/\.ops-health-jobs\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\) !important;/)
+    expect(rule(1024)).not.toContain('ops-health-jobs')
+    expect(rule(768)).not.toContain('ops-health-jobs')
+  })
+
+  it('the range bar holds the five ranges with 1h pressed', () => {
+    const chips = withClass(parse(healthWith({})), 'ops-chip')
+    expect(chips.map((c) => c.text)).toEqual(['15m', '1h', '6h', '24h', '7d'])
+    expect(chips.map((c) => attr(c, 'aria-pressed'))).toEqual(['false', 'true', 'false', 'false', 'false'])
+    const painted = (on: boolean) => style(parse(renderToStaticMarkup(createElement('i', { style: chipStyle(on, null) })))[0])
+    expect(chips.map((c) => style(c))).toEqual([painted(false), painted(true), painted(false), painted(false), painted(false)])
+  })
+
+  it('the service select lists All services then every metric service', () => {
+    const html = healthWith({})
+    const sel = html.match(/<select\b[^>]*aria-label="Service"[^>]*>([\s\S]*?)<\/select>/)![1]
+    const opts = [...sel.matchAll(/<option value="([^"]*)"[^>]*>([^<]*)</g)]
+    expect(opts.map((o) => o[1])).toEqual(['', ...METRIC_SERVICES])
+    expect(opts[0][2]).toBe('All services')
+  })
+
+  it('the stat row shows fleet, requests, 5xx, p95 and connections', () => {
+    const ts = parse(healthWith({}))
+    expect(ts.filter((t) => attr(t, 'data-tile')).map((t) => attr(t, 'data-tile')).slice(0, 5)).toEqual(['fleet', 'req', 'errors', 'p95', 'connections'])
+    expect(texts(tileOf(ts, 'req'))).toEqual(expect.arrayContaining(['Requests', '100', 'req/min']))
+    expect(texts(tileOf(ts, 'req')).filter((x) => /^[A-Z ]+$/.test(x))).toEqual([])
+    expect(texts(tileOf(ts, 'errors'))).toEqual(expect.arrayContaining(['1.00', '%', 'OK']))
+    expect(texts(tileOf(ts, 'p95'))).toEqual(expect.arrayContaining(['1.20', 's', 'HIGH']))
+    expect(texts(tileOf(ts, 'connections'))).toEqual(expect.arrayContaining(['23', 'of 80', 'OK']))
+  })
+
+  const dotOf = (ts: Tag[]) => ts.map((t) => style(t).background).find((b) => b?.includes('--status-'))
+
+  it('a stat over its threshold reads HIGH in red', () => {
+    const ts = parse(healthWith({ metrics: metricsWith({ error_pct: { a: [[0, 1.5]] }, req_per_min: { a: [[0, 10]] }, sql_connections: { database: [[0, 70]] } }) }))
+    for (const key of ['errors', 'connections']) {
+      const t = tileOf(ts, key)
+      expect(texts(t), key).toContain('HIGH')
+      expect(dotOf(t), key).toBe('var(--status-red-text)')
+    }
+  })
+
+  it('a stat that peaked over its threshold reads PEAKED in amber', () => {
+    const ts = parse(healthWith({ metrics: metricsWith({ error_pct: { a: [[0, 3], [60, 0.2]] }, req_per_min: { a: [[0, 10], [60, 10]] } }) }))
+    const t = tileOf(ts, 'errors')
+    expect(texts(t)).toEqual(expect.arrayContaining(['0.20', 'PEAKED']))
+    expect(dotOf(t)).toBe('var(--status-amber-text)')
+  })
+
+  it('a stat with no data reads NO DATA in the muted tone', () => {
+    const ts = parse(healthWith({ metrics: metricsWith({}, false) }))
+    for (const key of ['req', 'errors', 'p95', 'connections']) {
+      const t = tileOf(ts, key)
+      expect(texts(t), key).toEqual(expect.arrayContaining(['—', 'NO DATA']))
+      expect(dotOf(t), key).toBe('var(--status-muted-text)')
+    }
+  })
+
+  it('a failed metrics read reads UNAVAILABLE on the tiles, not NO DATA', () => {
+    for (const metricsStatus of ['error', 'forbidden'] as const) {
+      const html = healthWith({ metricsStatus, metrics: null })
+      const ts = parse(html)
+      for (const key of ['req', 'errors', 'p95', 'connections']) {
+        const t = tileOf(ts, key)
+        expect(texts(t), `${metricsStatus} ${key}`).toEqual(expect.arrayContaining(['—', 'UNAVAILABLE']))
+        expect(texts(t), `${metricsStatus} ${key}`).not.toContain('NO DATA')
+      }
+    }
+  })
+
+  it('metric tiles carry no word while the metrics read loads', () => {
+    const html = healthWith({ metricsStatus: 'loading', metrics: null })
+    const ts = parse(html)
+    for (const key of ['req', 'errors', 'p95', 'connections']) {
+      const t = tileOf(ts, key)
+      expect(texts(t), key).toContain('—')
+      expect(texts(t).filter((x) => /^[A-Z ]+$/.test(x)), key).toEqual([])
+    }
+    expect(html).toContain('Loading metrics…')
+  })
+
+  it('the jobs row keeps queue depth and dead-lettered', () => {
+    const ts = parse(healthWith({}))
+    for (const [key, value, word] of [['queue', '3', ''], ['dead-lettered', '2', 'ATTENTION']]) {
+      const t = tileOf(ts, key)
+      expect(texts(t), key).toContain(value)
+      if (word) expect(texts(t)).toContain(word)
+      expect(t.filter((x) => x.name === 'svg'), key).toHaveLength(1)
+    }
+  })
+
+  it('the header links open both Cloud Monitoring dashboards in a new tab', () => {
+    const links = [...healthWith({}).matchAll(/<a\b([^>]*)>(?:<svg[\s\S]*?<\/svg>)?([^<]*)<\/a>/g)]
+      .map((m) => ({ attrs: ` ${m[1]}`, text: m[2] }))
+      .filter((l) => l.text.endsWith('dashboard'))
+    expect(links.map((l) => l.text)).toEqual(['Services dashboard', 'Database and edge dashboard'])
+    expect(links.map((l) => decode(attr(l, 'href')))).toEqual([DASHBOARDS.services, DASHBOARDS.database_edge])
+    for (const l of links) {
+      expect(attr(l, 'target')).toBe('_blank')
+      expect(attr(l, 'rel')).toBe('noopener noreferrer')
+    }
+  })
+
+  it('each service row links to its Sentry issues', () => {
+    const ts = parse(healthData({ fleet: { status: 'ok', services: [svc('gateway', 'up'), svc('docling', 'up')] } }))
+    for (const name of ['gateway', 'docling']) {
+      const row = ts.indexOf(ts.find((t) => attr(t, 'data-service') === name)!)
+      const link = ts.slice(row).find((t) => t.name === 'a')!
+      expect(decode(attr(link, 'href'))).toBe(sentryServiceUrl(name))
+      expect(attr(link, 'aria-label')).toBe(`Open ${name} in Sentry`)
+      expect(attr(link, 'target')).toBe('_blank')
+      expect(attr(link, 'rel')).toBe('noopener noreferrer')
+    }
+  })
+
+  it('the auth row has no Sentry link', () => {
+    const html = healthData({ fleet: { status: 'ok', services: [svc('gateway', 'up'), svc('auth', 'up')] } })
+    const rows = [...html.matchAll(/<div data-service="([^"]*)"[^>]*>([\s\S]*?)(?=<div data-service=|$)/g)]
+    const [gateway, auth] = rows.map((r) => r[2])
+    expect(gateway).toContain('aria-label="Open gateway in Sentry"')
+    expect(auth).not.toContain('<a ')
+    expect(auth).not.toContain('Sentry')
   })
 
   it('long names stay on one line', () => {
@@ -645,5 +838,251 @@ describe('System health markup', () => {
     expect(style(ts[ts.indexOf(badge) - 2]).flex, 'badge wrapper').toBe('none')
     const build = ts.find((t) => t.text === 'abcdef1')!
     expect(style(build).flex).toBe('none')
+  })
+})
+
+describe('System health panels', () => {
+  const ORDER = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'sql_util', 'sql_connections']
+  const TITLES = ['Requests / min', '5xx %', 'Latency p50 (ms)', 'Latency p95 (ms)', 'CPU % of limit', 'RAM % of limit', 'Instances', 'Cold starts / min', 'Cloud SQL CPU, RAM, disk (%)', 'Cloud SQL connections']
+  const FLAT: [number, number][] = [[0, 5], [60, 6]]
+  const db = (v: [number, number][] = FLAT) => ({ database: v })
+  const svcs = (names: string[], f: (i: number) => [number, number][] = () => FLAT) => Object.fromEntries(names.map((n, i) => [n, f(i)]))
+  const ALL: PanelSeries = {
+    req_per_min: svcs(['a', 'b']),
+    error_pct: svcs(['a', 'b']),
+    latency_p50_ms: svcs(['a', 'b']),
+    latency_p95_ms: svcs(['a', 'b']),
+    cpu_pct: svcs(['a', 'b']),
+    ram_pct: svcs(['a', 'b']),
+    instances: svcs(['a', 'b']),
+    cold_starts_per_min: svcs(['a', 'b']),
+    sql_cpu_pct: db(),
+    sql_ram_pct: db(),
+    sql_disk_pct: db(),
+    sql_connections: db(),
+  }
+  const full = (over: PanelSeries = {}) => metricsWith({ ...ALL, ...over })
+  const renderPanels = (m: StaffMetrics, service = '') => parse(healthWith({ metrics: m, service }))
+  const panelTags = (ts: Tag[], key: string) => {
+    const at = ts.findIndex((t) => attr(t, 'data-panel') === key)
+    expect(at, `panel ${key}`).toBeGreaterThan(-1)
+    const next = ts.findIndex((t, i) => i > at && (attr(t, 'data-panel') !== '' || t.text === 'Services'))
+    return ts.slice(at, next === -1 ? undefined : next)
+  }
+  const lines = (p: Tag[]) => p.filter((t) => attr(t, 'data-line'))
+  const guides = (p: Tag[]) => p.filter((t) => t.name === 'line' && t.attrs.includes('data-guide'))
+  const words = (p: Tag[]) => p.filter((t) => t.attrs.includes('data-word'))
+  const entries = (p: Tag[]) => p.filter((t) => attr(t, 'data-series'))
+  const patch = (m: StaffMetrics, key: PanelKey, f: (p: StaffMetrics['panels'][number]) => void) => {
+    f(m.panels.find((p) => p.key === key)!)
+    return m
+  }
+
+  it('the panels grid holds the ten panels in order', () => {
+    const html = healthWith({ metrics: full() })
+    const ts = parse(html)
+    const panels = ts.filter((t) => attr(t, 'data-panel'))
+    expect(panels.map((t) => attr(t, 'data-panel'))).toEqual(ORDER)
+    expect(ORDER.map((k) => panelTags(ts, k).find((t) => classes(t).includes('label'))!.text)).toEqual(TITLES)
+    expect(html).not.toContain('throughput')
+    expect(withClass(ts, 'ops-health-panels')).toHaveLength(1)
+  })
+
+  it('a panel draws one line per service in its page colour', () => {
+    const names = ['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9']
+    const rising = (i: number): [number, number][] => [[0, (i + 1) * 10], [60, (i + 1) * 10]]
+    const ts = renderPanels(full({ req_per_min: svcs(names, rising), cpu_pct: svcs(names, rising) }))
+    const strokes = (key: string) => Object.fromEntries(lines(panelTags(ts, key)).map((t) => [attr(t, 'data-line'), attr(t, 'stroke')]))
+    const req = strokes('req_per_min')
+    expect(Object.keys(req)).toHaveLength(9)
+    expect(Object.values(req).filter((c) => c.startsWith('var(--series-'))).toHaveLength(7)
+    expect(Object.entries(req).filter(([, c]) => c === 'var(--fg-4)').map(([n]) => n).sort()).toEqual(['s1', 's2'])
+    expect(strokes('cpu_pct')).toEqual(req)
+    const cpu = panelTags(ts, 'cpu_pct')
+    expect(entries(cpu)).toHaveLength(7)
+    expect(cpu.some((t) => t.text === '+2 other services')).toBe(true)
+    const eight = renderPanels(full({ req_per_min: svcs(names.slice(0, 8), rising) }))
+    expect(panelTags(eight, 'req_per_min').some((t) => t.text === '+1 other service')).toBe(true)
+  })
+
+  it('every panel marks each deploy', () => {
+    const m = full()
+    m.deploys.revisions = [
+      { service: 'a', revision: 'rev-1', created_at: '2026-10-14T10:05:00Z' },
+      { service: 'b', revision: 'rev-2', created_at: '2026-10-14T10:40:00Z' },
+    ]
+    const ts = renderPanels(m)
+    for (const key of ORDER) {
+      const p = panelTags(ts, key)
+      const marks = p.map((t, i) => (t.name === 'line' && t.attrs.includes('data-deploy') ? p[i + 1].text : null)).filter(Boolean)
+      expect(marks, key).toEqual(['rev-1 · 10:05 UTC', 'rev-2 · 10:40 UTC'])
+    }
+    expect(ts.some((t) => t.text === 'Deploy markers unavailable')).toBe(false)
+  })
+
+  it('unavailable deploys draw no marker and say so', () => {
+    const m = full()
+    m.deploys = { available: false, revisions: [] }
+    const ts = renderPanels(m)
+    expect(ts.filter((t) => t.attrs.includes('data-deploy'))).toHaveLength(0)
+    withText(ts, 'Deploy markers unavailable')
+    expect(parse(healthWith({ metrics: full() })).some((t) => t.text === 'Deploy markers unavailable')).toBe(false)
+  })
+
+  it('threshold panels draw the guide and flag HIGH', () => {
+    const ts = renderPanels(full({ cpu_pct: svcs(['a'], () => [[0, 30], [60, 85]]), error_pct: svcs(['a'], () => [[0, 0.5], [60, 0.5]]) }))
+    const cpu = panelTags(ts, 'cpu_pct')
+    expect(guides(cpu).map((t) => attr(t, 'data-guide'))).toEqual(['80 %'])
+    expect(attr(guides(cpu)[0], 'stroke-dasharray')).not.toBe('')
+    expect(words(cpu).map((t) => t.text)).toEqual(['HIGH'])
+    expect(style(words(cpu)[0]).color).toBe('var(--status-red-text)')
+    const err = panelTags(ts, 'error_pct')
+    expect(guides(err).map((t) => attr(t, 'data-guide'))).toEqual(['1 %'])
+    expect(words(err)).toHaveLength(0)
+    expect(guides(panelTags(ts, 'latency_p95_ms')).map((t) => attr(t, 'data-guide'))).toEqual(['1 s'])
+    expect(guides(panelTags(ts, 'req_per_min'))).toHaveLength(0)
+  })
+
+  it('a panel that peaked over its threshold reads PEAKED', () => {
+    const ts = renderPanels(full({ ram_pct: svcs(['a'], () => [[0, 90], [60, 40]]) }))
+    const ram = panelTags(ts, 'ram_pct')
+    expect(words(ram).map((t) => t.text)).toEqual(['PEAKED'])
+    expect(style(words(ram)[0]).color).toBe('var(--status-amber-text)')
+  })
+
+  it('the instances panel reads each service\'s max', () => {
+    const m = full({ req_per_min: svcs(['submission']), instances: svcs(['submission'], () => [[0, 1], [60, 2]]) })
+    m.limits.services = [{ name: 'submission', cpu: '1', memory: '512Mi', max_instances: 2 }]
+    const one = panelTags(renderPanels(m, 'submission'), 'instances')
+    expect(entries(one).map((t) => attr(t, 'data-series'))).toEqual(['submission'])
+    expect(one.filter((t) => t.text === '· max 2')).toHaveLength(1)
+    expect(guides(one).map((t) => attr(t, 'data-guide'))).toEqual(['max 2'])
+    expect(attr(guides(one)[0], 'stroke-dasharray')).not.toBe('')
+    const all = panelTags(renderPanels(m, ''), 'instances')
+    expect(guides(all)).toHaveLength(0)
+    expect(all.filter((t) => t.text === '· max 2')).toHaveLength(1)
+  })
+
+  it('unavailable limits drop the instances max', () => {
+    const m = full({ req_per_min: svcs(['submission']), instances: svcs(['submission']) })
+    m.limits = { available: false, services: [{ name: 'submission', cpu: '1', memory: '512Mi', max_instances: 2 }] }
+    const p = panelTags(renderPanels(m, 'submission'), 'instances')
+    expect(p.some((t) => t.text.includes('max'))).toBe(false)
+    expect(guides(p)).toHaveLength(0)
+  })
+
+  it('the Cloud SQL panels draw utilisation and connections against the budget', () => {
+    const ts = renderPanels(full({ sql_connections: db([[0, 60], [60, 70]]) }))
+    const util = panelTags(ts, 'sql_util')
+    expect(lines(util).map((t) => attr(t, 'data-line'))).toEqual(['CPU', 'RAM', 'Disk'])
+    expect(lines(util).map((t) => attr(t, 'stroke'))).toEqual(['var(--series-1)', 'var(--series-2)', 'var(--series-3)'])
+    const conn = panelTags(ts, 'sql_connections')
+    expect(lines(conn).map((t) => attr(t, 'data-line'))).toEqual(['connections'])
+    expect(guides(conn).map((t) => attr(t, 'data-guide'))).toEqual(['budget 80'])
+    expect(attr(guides(conn)[0], 'stroke-dasharray')).toBe('')
+    expect(words(conn).map((t) => t.text)).toEqual(['HIGH'])
+    for (const p of [util, conn]) expect(p.filter((t) => t.text === 'All services')).toHaveLength(1)
+    const narrowed = renderPanels(full({ sql_connections: db([[0, 60], [60, 70]]) }), 'a')
+    expect(lines(panelTags(narrowed, 'sql_util')).map((t) => attr(t, 'data-line'))).toEqual(['CPU', 'RAM', 'Disk'])
+    expect(lines(panelTags(narrowed, 'sql_connections'))).toHaveLength(1)
+    expect(panelTags(ts, 'cpu_pct').some((t) => t.text === 'All services')).toBe(false)
+  })
+
+  it('an unavailable panel shows No data and the others draw', () => {
+    const m = full()
+    patch(m, 'cpu_pct', (p) => (p.available = false))
+    patch(m, 'ram_pct', (p) => (p.series = []))
+    const ts = renderPanels(m)
+    for (const key of ['cpu_pct', 'ram_pct']) {
+      const p = panelTags(ts, key)
+      expect(p.filter((t) => t.attrs.includes('data-no-data')).map((t) => t.text), key).toEqual(['No data'])
+      expect(p.some((t) => t.name === 'svg'), key).toBe(false)
+    }
+    expect(lines(panelTags(ts, 'req_per_min'))).toHaveLength(2)
+  })
+
+  it('a missing SQL source leaves the other two lines', () => {
+    const m = full()
+    patch(m, 'sql_disk_pct', (p) => (p.available = false))
+    const util = panelTags(renderPanels(m), 'sql_util')
+    expect(lines(util).map((t) => attr(t, 'data-line'))).toEqual(['CPU', 'RAM'])
+    expect(entries(util).map((t) => attr(t, 'data-series'))).toEqual(['CPU', 'RAM', 'Disk'])
+    const disk = util.slice(util.findIndex((t) => attr(t, 'data-series') === 'Disk'))
+    expect(disk.some((t) => t.text === 'No data')).toBe(true)
+    expect(util.some((t) => t.attrs.includes('data-no-data'))).toBe(false)
+    const none = full()
+    for (const k of ['sql_cpu_pct', 'sql_ram_pct', 'sql_disk_pct'] as const) patch(none, k, (p) => (p.available = false))
+    expect(panelTags(renderPanels(none), 'sql_util').some((t) => t.attrs.includes('data-no-data'))).toBe(true)
+  })
+
+  it('the panels grid holds two tracks and collapses', () => {
+    const grid = withClass(parse(healthWith({ metrics: full() })), 'ops-health-panels')
+    expect(grid).toHaveLength(1)
+    expect(style(grid[0])['grid-template-columns']).toBe('repeat(2, minmax(0, 1fr))')
+    const css = readFileSync(new URL('./styles/support.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const rule = css.match(/@media \(max-width: 1024px\) \{([\s\S]*?)\n\}/i)![1]
+    expect(rule.match(/\.ops-health-panels[^{]*\{\s*grid-template-columns:\s*([^;]*);/i)?.[1]).toBe('minmax(0, 1fr) !important')
+  })
+
+  it('the panels sit between the Jobs row and the Services card', () => {
+    const ts = parse(healthWith({ metrics: full() }))
+    const at = (f: (t: Tag) => boolean) => ts.findIndex(f)
+    const jobs = at((t) => attr(t, 'data-tile') === 'dead-lettered')
+    const grid = at((t) => classes(t).includes('ops-health-panels'))
+    const card = at((t) => t.text === 'Services')
+    expect(jobs).toBeLessThan(grid)
+    expect(grid).toBeLessThan(card)
+  })
+})
+
+describe('TimeChart', () => {
+  const base = { start: 0, end: 600, step: 60 }
+  const lines = [
+    { name: 'api', color: 'var(--series-1)', points: [[0, 1], [60, 2]] as [number, number][] },
+    { name: 'web', color: 'var(--series-2)', points: [[0, 3], [60, 5]] as [number, number][] },
+  ]
+  it('TimeChart prints dated, distinct end labels for a 24 h range and clock labels for 6 h', () => {
+    const labels = (start: number, end: number) => [...renderToStaticMarkup(createElement(TimeChart, { lines, start, end, step: 60 })).matchAll(/<span[^>]*>(\d\d[-:]\d\d[^<]*)<\/span>/g)].map((m) => m[1])
+    const t0 = Date.UTC(2026, 9, 14, 10, 0) / 1000
+    expect(labels(t0 - 86400, t0)).toEqual(['10-13 10:00', '10-14 10:00'])
+    expect(labels(t0 - 6 * 3600, t0)).toEqual(['04:00 UTC', '10:00 UTC'])
+  })
+
+  it('TimeChart draws each line, guide and deploy marker', () => {
+    const ts = parse(renderToStaticMarkup(createElement(TimeChart, { ...base, lines, guides: [{ value: 80, label: 'limit', dashed: true }], markers: [{ t: 120, title: 'rev-1 · 10:00 UTC' }, { t: 240, title: 'rev-2 · 11:00 UTC' }] })))
+    const paths = ts.filter((t) => attr(t, 'data-line'))
+    expect(paths.map((t) => [attr(t, 'data-line'), attr(t, 'stroke')])).toEqual([['api', 'var(--series-1)'], ['web', 'var(--series-2)']])
+    const guides = ts.filter((t) => t.name === 'line' && t.attrs.includes('data-guide'))
+    expect(guides).toHaveLength(1)
+    expect(attr(guides[0], 'stroke-dasharray')).not.toBe('')
+    const deploys = ts.map((t, i) => (t.name === 'line' && t.attrs.includes('data-deploy') ? ts[i + 1].text : null)).filter(Boolean)
+    expect(deploys).toEqual(['rev-1 · 10:00 UTC', 'rev-2 · 11:00 UTC'])
+  })
+  it('TimeChart scales to cover the guide', () => {
+    const html = renderToStaticMarkup(createElement(TimeChart, { ...base, lines, guides: [{ value: 80, label: 'limit', dashed: false }] }))
+    const labels = parse(html).filter((t) => t.name === 'span' && t.text).map((t) => t.text)
+    expect(labels[0]).toBe('100')
+    expect(labels[1]).toBe('0')
+  })
+  it('TimeChart scales to cover the highest point', () => {
+    const tall = [{ name: 'api', color: 'var(--series-1)', points: [[0, 130]] as [number, number][] }]
+    const html = renderToStaticMarkup(createElement(TimeChart, { ...base, lines: tall, guides: [{ value: 80, label: 'limit', dashed: false }] }))
+    expect(parse(html).filter((t) => t.name === 'span' && t.text)[0].text).toBe('200')
+  })
+  it('TimeChart handles no lines, all-zero values and a deploy after the end', () => {
+    const empty = renderToStaticMarkup(createElement(TimeChart, { ...base, lines: [] }))
+    expect(parse(empty).filter((t) => t.name === 'span' && t.text).map((t) => t.text)).toEqual(['1', '0', '00:00 UTC', '00:10 UTC'])
+    expect(parse(empty).filter((t) => attr(t, 'data-line'))).toHaveLength(0)
+    const zero = [{ name: 'api', color: 'var(--series-1)', points: [[0, 0], [60, 0]] as [number, number][] }]
+    const html = renderToStaticMarkup(createElement(TimeChart, { ...base, lines: zero, markers: [{ t: 9999, title: 'late' }] }))
+    const ts = parse(html)
+    expect(attr(ts.filter((t) => attr(t, 'data-line'))[0], 'd')).toBe('M0.0 160.0 L60.0 160.0')
+    const dep = ts.filter((t) => t.name === 'line' && t.attrs.includes('data-deploy'))
+    expect(dep).toHaveLength(1)
+    expect(attr(dep[0], 'x1')).toBe('600')
+  })
+  it('TimeChart lines have round caps', () => {
+    const ts = parse(renderToStaticMarkup(createElement(TimeChart, { ...base, lines })))
+    expect(ts.filter((t) => attr(t, 'data-line')).map((t) => attr(t, 'stroke-linecap'))).toEqual(['round', 'round'])
   })
 })

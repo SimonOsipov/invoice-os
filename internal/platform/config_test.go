@@ -84,21 +84,18 @@ func TestLoadConfigInvalidDuration(t *testing.T) {
 
 const (
 	fakeStampedSHA = "5e975e718251c892c7cbfd3602bf6aa009f37ce5"
-	fakeRailwaySHA = "d0e09998b867ee781c56969b28f9497a2c2f1595"
+	fakeBuildSHA   = "d0e09998b867ee781c56969b28f9497a2c2f1595"
 )
 
 // Production runs ENVIRONMENT=development; only the Sentry label follows DEPLOY_ENV.
 func TestLoadConfig_SentryEnvironmentFromDeployEnv(t *testing.T) {
-	for _, c := range []struct{ name, deployEnv, railway, environment, want string }{
-		{"production_label", "production", "", "development", "production"},
-		{"deploy_env_wins_over_environment", "pr-283", "", "production", "pr-283"},
-		{"deploy_env_wins_over_railway", "production", "invoice-os-pr-283", "development", "production"},
-		{"railway_fallback", "", "invoice-os-pr-283", "development", "invoice-os-pr-283"},
+	for _, c := range []struct{ name, deployEnv, environment, want string }{
+		{"production_label", "production", "development", "production"},
+		{"deploy_env_wins_over_environment", "pr-283", "production", "pr-283"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv("ENVIRONMENT", c.environment)
 			t.Setenv("DEPLOY_ENV", c.deployEnv)
-			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.railway)
 			cfg, err := LoadConfig("svc")
 			if err != nil {
 				t.Fatalf("LoadConfig: %v", err)
@@ -124,10 +121,8 @@ func TestLoadConfig_SentryEnvironmentFallsBack(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv("DEPLOY_ENV", "")
-			t.Setenv("RAILWAY_ENVIRONMENT_NAME", "")
 			if c.unset {
 				os.Unsetenv("DEPLOY_ENV") // t.Setenv above restores it
-				os.Unsetenv("RAILWAY_ENVIRONMENT_NAME")
 			}
 			t.Setenv("ENVIRONMENT", c.environment)
 			cfg, err := LoadConfig("svc")
@@ -143,18 +138,16 @@ func TestLoadConfig_SentryEnvironmentFallsBack(t *testing.T) {
 
 func TestLoadConfig_CloudRunRequiresDeployEnv(t *testing.T) {
 	for _, c := range []struct {
-		name, kService, deployEnv, railway string
-		wantErr                            bool
+		name, kService, deployEnv string
+		wantErr                   bool
 	}{
-		{"cloud_run_without_deploy_env", "gateway", "", "", true},
-		{"cloud_run_with_deploy_env", "gateway", "production", "", false},
-		{"local_without_deploy_env", "", "", "", false},
-		{"railway_without_deploy_env", "", "", "production", false},
+		{"cloud_run_without_deploy_env", "gateway", "", true},
+		{"cloud_run_with_deploy_env", "gateway", "production", false},
+		{"local_without_deploy_env", "", "", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv("K_SERVICE", c.kService)
 			t.Setenv("DEPLOY_ENV", c.deployEnv)
-			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.railway)
 			_, err := LoadConfig("svc")
 			if (err != nil) != c.wantErr {
 				t.Fatalf("LoadConfig err = %v, wantErr %v", err, c.wantErr)
@@ -167,20 +160,20 @@ func TestLoadConfig_CloudRunRequiresDeployEnv(t *testing.T) {
 }
 
 func TestReleaseName(t *testing.T) {
-	for _, c := range []struct{ name, build, railway, want string }{
+	for _, c := range []struct{ name, build, platform, want string }{
 		{"stamped", fakeStampedSHA, "", fakeStampedSHA},
-		{"stamp_wins_over_railway", fakeStampedSHA, fakeRailwaySHA, fakeStampedSHA},
-		{"unstamped_with_railway_sha", "dev", fakeRailwaySHA, "unstamped-" + fakeRailwaySHA},
+		{"stamp_wins_over_build_sha", fakeStampedSHA, fakeBuildSHA, fakeStampedSHA},
+		{"unstamped_with_build_sha", "dev", fakeBuildSHA, "unstamped-" + fakeBuildSHA},
 		{"unstamped", "dev", "", "unstamped"},
 		{"empty_build", "", "", "unstamped"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := releaseName(c.build, c.railway)
+			got := releaseName(c.build, c.platform)
 			if got != c.want {
-				t.Errorf("releaseName(%q, %q) = %q, want %q", c.build, c.railway, got, c.want)
+				t.Errorf("releaseName(%q, %q) = %q, want %q", c.build, c.platform, got, c.want)
 			}
 			if got == "" || got == "dev" {
-				t.Errorf("releaseName(%q, %q) = %q, want neither empty nor dev", c.build, c.railway, got)
+				t.Errorf("releaseName(%q, %q) = %q, want neither empty nor dev", c.build, c.platform, got)
 			}
 		})
 	}
@@ -196,14 +189,11 @@ func setBuildSHA(t *testing.T, sha string) {
 
 func TestLoadConfig_UnstampedReleaseFromBuildSHA(t *testing.T) {
 	setBuildSHA(t, "dev")
-	for _, c := range []struct{ name, buildSHA, railway, want string }{
-		{"build_sha", fakeStampedSHA, "", "unstamped-" + fakeStampedSHA},
-		{"build_sha_wins_over_railway", fakeStampedSHA, fakeRailwaySHA, "unstamped-" + fakeStampedSHA},
-		{"railway_fallback", "", fakeRailwaySHA, "unstamped-" + fakeRailwaySHA},
+	for _, c := range []struct{ name, buildSHA, want string }{
+		{"build_sha", fakeStampedSHA, "unstamped-" + fakeStampedSHA},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv("BUILD_SHA", c.buildSHA)
-			t.Setenv("RAILWAY_GIT_COMMIT_SHA", c.railway)
 			cfg, err := LoadConfig("svc")
 			if err != nil {
 				t.Fatalf("LoadConfig: %v", err)
@@ -217,7 +207,7 @@ func TestLoadConfig_UnstampedReleaseFromBuildSHA(t *testing.T) {
 
 func TestLoadConfig_ReleaseFromStampedBuild(t *testing.T) {
 	setBuildSHA(t, fakeStampedSHA)
-	t.Setenv("RAILWAY_GIT_COMMIT_SHA", fakeRailwaySHA)
+	t.Setenv("BUILD_SHA", fakeBuildSHA)
 	cfg, err := LoadConfig("svc")
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)

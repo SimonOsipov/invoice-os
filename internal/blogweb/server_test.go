@@ -206,7 +206,7 @@ func TestServer_HealthAndMapParityWithCaddy(t *testing.T) {
 		t.Errorf("health %d %q", w.Code, w.Body)
 	}
 	w := r.do("GET", "/assets/app.js.map")
-	if w.Code != 404 || w.Header().Get("Content-Type") != "" || w.Body.Len() != 0 {
+	if w.Code != 404 || w.Header().Get("Content-Type") != "text/plain; charset=utf-8" || w.Body.Len() != 0 {
 		t.Errorf("map %d %v %q", w.Code, w.Header(), w.Body)
 	}
 }

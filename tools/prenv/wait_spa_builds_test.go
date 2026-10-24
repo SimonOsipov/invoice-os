@@ -115,7 +115,7 @@ func (s spaShim) run(t *testing.T, sha string, urls ...string) (stdout, stderr s
 
 func (s spaShim) sleeps(t *testing.T) []string {
 	t.Helper()
-	return railwayShim{dir: s.dir}.sleeps(t)
+	return sleepsIn(t, s.dir)
 }
 
 type spaRequest struct{ Method, URL string }

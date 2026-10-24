@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import path from 'node:path'
 
 import { CtlError } from './main'
-import type { EnvResult, ServiceLabel } from './railway'
+import type { EnvResult, ServiceLabel } from './envUrls'
 
 export type Persona = 'firm' | 'inhouse' | 'developer' | 'support'
 export type Role = 'admin' | 'preparer' | 'reviewer'
@@ -97,7 +97,7 @@ const PROVISION_WRITES = 2 * ACCOUNT_KEYS.length
 const productionRefusal = () =>
   new CtlError(
     'login refuses production: agents verify UI on PR environments, and production has no demo account (FLOWUPD-01 D6).',
-    'Use --env pr-<N>. For production use read-only probes: the API, the database, Railway logs, Sentry.',
+    'Use --env pr-<N>. For production use read-only probes: the API, the database, Cloud Run logs, Sentry.',
     1,
   )
 
@@ -264,7 +264,7 @@ async function runLogin(req: LoginRequest, deps: LoginDeps, secrets: Set<string>
   const resolved = await deps.resolveEnv(env)
   const dark = resolved.dark.filter((d) => NEEDED[persona].includes(d))
   if (dark.length > 0) {
-    throw new CtlError(`${dark.join(', ')} is dark for ${persona}`, "Not an app bug. The deploy gate's verify-spa-domains step recreates the domain; re-run the gate or report it.", 1)
+    throw new CtlError(`${dark.join(', ')} is dark for ${persona}`, 'Not an app bug. Re-run the preview workflow or report it.', 1)
   }
   // The e2e helpers read these at module scope, so they load only after this.
   for (const [name, value] of Object.entries(resolved.urls)) if (value) process.env[name] = value
@@ -349,7 +349,7 @@ async function runLogin(req: LoginRequest, deps: LoginDeps, secrets: Set<string>
 
 // Real dependencies, loaded when the command runs. root = the repo root that holds .ralph/.
 export async function defaultDeps(root: string): Promise<LoginDeps> {
-  const { resolveEnvByName } = await import('./railway')
+  const { resolveEnvByName } = await import('./envUrls')
   const { signInFresh, checkSavedState } = await import('./browserSession')
   return { resolveEnv: resolveEnvByName, store: createStore(root), provisionAll, apiRole, credentialsValid, regrant, signInFresh, checkSavedState }
 }

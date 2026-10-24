@@ -50,7 +50,13 @@ func (cfg ProvisionConfig) ResetWillRun() bool {
 		ResetEnabled(cfg.DeployEnv, cfg.ResetFlag)
 }
 
-// unrenderedReference is the opening delimiter of a Railway variable reference.
+// ShardsWillSeed reports whether Provision seeds the topology E2E shards: in a pr-<N> preview
+// that allows bootstrap. A GCP preview recreates its database instead of resetting it.
+func (cfg ProvisionConfig) ShardsWillSeed() bool {
+	return BootstrapEnabled(cfg.Environment, cfg.BootstrapFlag) && resettableEnvironment(cfg.DeployEnv)
+}
+
+// unrenderedReference is the opening delimiter of an unrendered template reference.
 // A DSN that still contains it was never rendered: the variable EXISTS on the
 // service, so a bare non-empty check passes, but the value it points at did not
 // resolve in this environment. Connecting with it fails with a URL-parse or DNS
@@ -79,10 +85,8 @@ func validateDSN(envVar, dsn string) error {
 
 // waitForPostgres blocks until dsn accepts a connection, or until budget is
 // exhausted. A successful pgx.Connect is proof Postgres SPEAKS THE WIRE
-// PROTOCOL — strictly stronger than "the deployment reported SUCCESS", which is
-// all the CI seam can observe from outside (scripts/ci/railway-env.sh's
-// ensure_postgres_running) and which was MEASURED on 2026-07-19 to be reachable
-// while Postgres was not yet answering.
+// PROTOCOL — strictly stronger than "the deployment reported SUCCESS", which
+// can hold while Postgres is not yet answering.
 //
 // This is the IN-NETWORK replacement for the pg_isready probe M4-22-08 deleted
 // along with the public database door. It proves the same property over the
@@ -247,7 +251,7 @@ func Provision(ctx context.Context, cfg ProvisionConfig) error {
 			return fmt.Errorf("db: provision: seed: %w", err)
 		}
 
-		if cfg.ResetWillRun() {
+		if cfg.ShardsWillSeed() {
 			if err := SeedShards(ctx, cfg.SuperuserDSN, cfg.SeedFS); err != nil {
 				return fmt.Errorf("db: provision: seed shards: %w", err)
 			}

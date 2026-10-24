@@ -28,11 +28,11 @@ func TestGrantAccountStateRead_ErrorsNeverCarryTheDSN(t *testing.T) {
 const badDSN = "::not a url"
 
 func TestAuthAdminDSN_SwapsOnlyTheCredentials(t *testing.T) {
-	got, err := db.AuthAdminDSN("postgresql://invoice_migrator:m@postgres.railway.internal:5432/railway?sslmode=disable", "pw")
+	got, err := db.AuthAdminDSN("postgresql://invoice_migrator:m@postgres.internal:5432/invoice_os?sslmode=disable", "pw")
 	if err != nil {
 		t.Fatalf("AuthAdminDSN: %v", err)
 	}
-	const want = "postgresql://" + authAdminRole + ":pw@postgres.railway.internal:5432/railway?sslmode=disable"
+	const want = "postgresql://" + authAdminRole + ":pw@postgres.internal:5432/invoice_os?sslmode=disable"
 	if got != want {
 		t.Errorf("AuthAdminDSN = %q, want %q", got, want)
 	}
@@ -59,11 +59,11 @@ func TestAuthAdminDSN_SwapsOnlyTheCredentials(t *testing.T) {
 	})
 
 	t.Run("a_dsn_without_credentials_gains_them", func(t *testing.T) {
-		got, err := db.AuthAdminDSN("postgres://h:5432/railway", "pw")
+		got, err := db.AuthAdminDSN("postgres://h:5432/invoice_os", "pw")
 		if err != nil {
 			t.Fatalf("AuthAdminDSN: %v", err)
 		}
-		if want := "postgres://" + authAdminRole + ":pw@h:5432/railway"; got != want {
+		if want := "postgres://" + authAdminRole + ":pw@h:5432/invoice_os"; got != want {
 			t.Errorf("AuthAdminDSN = %q, want %q", got, want)
 		}
 	})
@@ -73,11 +73,11 @@ func TestAuthAdminDSN_RefusesEmptyOrBadInput(t *testing.T) {
 	const secret = "s3cret-xyz"
 	cases := map[string]struct{ dsn, password string }{
 		"empty_migration_dsn":         {"", secret},
-		"no_host_dsn":                 {"postgres:///railway", secret},
-		"keyword_value_dsn":           {"host=h user=invoice_migrator password=m dbname=railway", secret},
-		"empty_password":              {"postgresql://invoice_migrator:m@h:5432/railway", ""},
+		"no_host_dsn":                 {"postgres:///invoice_os", secret},
+		"keyword_value_dsn":           {"host=h user=invoice_migrator password=m dbname=invoice_os", secret},
+		"empty_password":              {"postgresql://invoice_migrator:m@h:5432/invoice_os", ""},
 		"unparseable_dsn":             {badDSN, secret},
-		"bad_port_dsn_holds_password": {"postgres://invoice_migrator:" + secret + "@h:notaport/railway", secret},
+		"bad_port_dsn_holds_password": {"postgres://invoice_migrator:" + secret + "@h:notaport/invoice_os", secret},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

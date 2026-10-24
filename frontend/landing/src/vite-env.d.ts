@@ -4,8 +4,7 @@ interface ImportMetaEnv {
   // The gateway the sign-in form posts to. Unset means no sign-in form.
   readonly VITE_GATEWAY_URL?: string
   // Base URLs of the sibling SPAs the sign-in routes to. Each PR
-  // now deploys to its own ephemeral Railway environment with an unpredictable domain
-  // suffix (M4-23), so there is no hardcoded default — unset means the resolver returns null
+  // deploys its own preview on per-PR hostnames, so there is no hardcoded default — unset means the resolver returns null
   // (see auth.ts) rather than routing to the wrong environment.
   readonly VITE_APP_URL?: string
   // The ops-console service, which serves the Ops Console.

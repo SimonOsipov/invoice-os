@@ -87,7 +87,7 @@ func TestNoSourceNamesTheRetiredRoute(t *testing.T) {
 	}
 
 	// The planted-tree tests below prove a .sh or workflow naming the key is flagged.
-	for _, want := range []string{"internal/platform/jev/client.go", "scripts/ci/railway-env.sh", ".github/workflows/dev-env.yml"} {
+	for _, want := range []string{"internal/platform/jev/client.go", "scripts/ci/preview.sh", ".github/workflows/dev-env.yml"} {
 		if !slices.Contains(scanned, want) {
 			t.Errorf("the walk did not visit %s", want)
 		}

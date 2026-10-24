@@ -1,7 +1,6 @@
 // Mirrors gatewayBase()'s null-when-unset contract (@invoice-os/api-client/client,
-// C8b/C8c): each PR now deploys to its own ephemeral Railway environment with an
-// unpredictable domain suffix (M4-23), so a hardcoded dev-deploy fallback would silently
-// route a sign-in to the wrong environment. Return null rather than defaulting.
+// C8b/C8c): each PR deploys its own preview on per-PR hostnames, so a hardcoded
+// fallback would silently route a sign-in to the wrong environment. Return null rather than defaulting.
 const resolveBase = (v: string | undefined): string | null => {
   const trimmed = (v ?? '').trim().replace(/\/+$/, '')
   return trimmed || null

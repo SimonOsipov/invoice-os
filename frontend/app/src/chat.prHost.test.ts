@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// @vitest-environment-options { "url": "https://app-pr-42.up.railway.app/" }
+// @vitest-environment-options { "url": "https://app-pr-42-944095690109.africa-south1.run.app/" }
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import '../../library/src/testStorage'

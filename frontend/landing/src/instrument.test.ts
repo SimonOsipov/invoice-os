@@ -31,7 +31,7 @@ describe('instrument', () => {
   })
 
   it.each([
-    'landing-pr-301.up.railway.app',
+    'landing-pr-301-944095690109.africa-south1.run.app',
     'ascomply.com',
     'www.ascomply.com.attacker.example',
     'www.ascomply.com.',
@@ -86,7 +86,7 @@ describe('instrument', () => {
 
     it('instrument_consentDoesNotOpenTheGate', async () => {
       vi.stubGlobal('localStorage', { getItem: () => '{"analytics":true,"ts":"","v":1}' })
-      await load('landing-pr-301.up.railway.app')
+      await load('landing-pr-301-944095690109.africa-south1.run.app')
       expect(h.initMonitoring).not.toHaveBeenCalled()
 
       // Control: the production host with the same storage does start monitoring.

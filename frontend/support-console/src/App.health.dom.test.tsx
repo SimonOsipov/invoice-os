@@ -262,6 +262,32 @@ describe('Console system health refresh', () => {
     expect(screen.getByText('1/1')).toBeTruthy()
   })
 
+  it('REFRESH FAILED stays while the next tick is in flight and goes when it succeeds', async () => {
+    await open()
+    health.mockRejectedValueOnce(new ApiError('http', 'boom', 500))
+    await tick()
+    expect(screen.getByText('REFRESH FAILED')).toBeTruthy()
+    health.mockImplementationOnce(pending)
+    await tick()
+    expect(health).toHaveBeenCalledTimes(3)
+    expect(screen.getByText('REFRESH FAILED')).toBeTruthy()
+    expect(screen.queryByText(/Loading/)).toBeNull()
+    await tick()
+    expect(screen.queryByText('REFRESH FAILED')).toBeNull()
+  })
+
+  it('a range change clears REFRESH FAILED for the new key', async () => {
+    await open()
+    metrics.mockRejectedValueOnce(new ApiError('http', 'boom', 500))
+    await tick()
+    expect(screen.getByText('REFRESH FAILED')).toBeTruthy()
+    metrics.mockImplementation(pending)
+    fireEvent.click(screen.getByRole('button', { name: '6h' }))
+    await tick(0)
+    expect(screen.queryByText('REFRESH FAILED')).toBeNull()
+    expect(screen.getByText('Loading metrics…')).toBeTruthy()
+  })
+
   it('a failed metrics tick alone marks the page', async () => {
     await open()
     metrics.mockRejectedValueOnce(new ApiError('http', 'boom', 500))

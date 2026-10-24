@@ -161,7 +161,10 @@ function Console() {
   else if (freshHealth) lastHealth.current = freshHealth
   const keepOn = (r: { status: string; error: ApiError | null }) => r.status === 'loading' || (r.status === 'error' && r.error?.status !== 401 && r.error?.status !== 403)
   const health = freshHealth ?? (keepOn(healthRead) ? lastHealth.current : null)
-  const healthStale = healthRead.status === 'error' && health !== null
+  const healthFailed = useRef(false)
+  if (!onHealth || freshHealth) healthFailed.current = false
+  else if (healthRead.status === 'error' && health) healthFailed.current = true
+  const healthStale = healthFailed.current && health !== null
   const healthStatus = health ? 'ready' : healthRead.status === 'error' ? (healthRead.error?.status === 403 ? 'forbidden' : 'error') : 'loading'
   const [healthRange, setHealthRange] = useState<RangeKey>(DEFAULT_RANGE)
   const [healthService, setHealthService] = useState('')
@@ -173,7 +176,10 @@ function Console() {
   else if (freshMetrics) lastMetrics.current = { key: metricsKey, value: freshMetrics }
   const keptMetrics = lastMetrics.current?.key === metricsKey && keepOn(metricsRead) ? lastMetrics.current.value : null
   const metrics = freshMetrics ?? keptMetrics
-  const metricsStale = metricsRead.status === 'error' && metrics !== null
+  const metricsFailed = useRef<string | null>(null)
+  if (!onHealth || freshMetrics) metricsFailed.current = null
+  else if (metricsRead.status === 'error' && metrics) metricsFailed.current = metricsKey
+  const metricsStale = metricsFailed.current === metricsKey && metrics !== null
   const metricsStatus = metrics ? 'ready' : metricsRead.status === 'error' ? (metricsRead.error?.status === 403 ? 'forbidden' : 'error') : 'loading'
   const refreshHealth = useRef(() => {})
   refreshHealth.current = () => { healthRead.run(); metricsRead.run() }

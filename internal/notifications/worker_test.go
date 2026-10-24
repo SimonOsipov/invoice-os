@@ -1327,6 +1327,25 @@ func TestDemoDeal_WorkerNamesASignUpDeal(t *testing.T) {
 	}
 }
 
+func TestDemoDeal_WorkerNamesASignUpDealFromTheNameThenTheFallback(t *testing.T) {
+	for _, c := range []struct{ tag, name, want string }{
+		{"name", "Ada Lovelace", "Ada Lovelace — sign-up"},
+		{"nameless", "", "Sign-up"},
+	} {
+		t.Run(c.tag, func(t *testing.T) {
+			r := qaNewRig(t, ModeReal)
+			email := uniqueEmail(t, r.e, "dealsu"+c.tag)
+			qaRegistrant(t, r.e, email, c.name, "", "")
+
+			res, err := r.dealWork(t, r.dealRow(t, email))
+			qaRequireCompleted(t, res, err, "sign-up deal job")
+			if calls := r.hs.dealCalls(); len(calls) != 1 || calls[0].Name != c.want {
+				t.Errorf("OpenDemoDeal calls = %+v, want one named %q", calls, c.want)
+			}
+		})
+	}
+}
+
 func TestDemoDeal_JobWithoutSignUpKeyIsADemoDeal(t *testing.T) {
 	r := qaNewRig(t, ModeReal)
 	email := uniqueEmail(t, r.e, "dealnokey")

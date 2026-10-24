@@ -966,6 +966,16 @@ describe('System health markup', () => {
     expect(attr(auth, 'target')).toBe('_blank')
     expect(attr(auth, 'rel')).toBe('noopener noreferrer')
     expect(attr(auth, 'class')).toBe(attr(linkOf('gateway'), 'class'))
+    expect(attr(auth, 'style')).toBe(attr(linkOf('gateway'), 'style'))
+    expect(attr(auth, 'style')).toContain('height:28px')
+  })
+
+  it('every Services row link reads Sentry with the external-link glyph', () => {
+    const html = healthData({ fleet: { status: 'ok', services: [svc('gateway', 'up'), svc('auth', 'up')] } })
+    const links = [...html.matchAll(/<a\b[^>]*aria-label="Open (\w+) in Sentry"[^>]*>([\s\S]*?)<\/a>/g)]
+    expect(links.map((m) => m[1])).toEqual(['gateway', 'auth'])
+    expect(links[1][2]).toBe(links[0][2])
+    expect(links[1][2].replace(/<[^>]*>/g, '').trim()).toBe('Sentry')
   })
 
   it('long names stay on one line', () => {

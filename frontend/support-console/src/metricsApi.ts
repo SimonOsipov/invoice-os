@@ -160,7 +160,8 @@ export function judge(stat: Stat, latest: number, peak: number, budget: number):
   return peak > limit ? 'peaked' : 'ok'
 }
 
-const SLOTS = 7
+const SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)', 'var(--series-6)', 'var(--series-7)']
+const SLOTS = SERIES.length
 
 // A service keeps one colour on every panel: the 7 busiest by peak req/min, slots in name order.
 export function colourMap(m: StaffMetrics): Record<string, string> {
@@ -177,7 +178,7 @@ export function colourMap(m: StaffMetrics): Record<string, string> {
     names = first ? first.series.map((s) => s.name) : []
   }
   names = [...new Set(names)].sort().slice(0, SLOTS)
-  return Object.fromEntries(names.map((n, i) => [n, `var(--series-${i + 1})`]))
+  return Object.fromEntries(names.map((n, i) => [n, SERIES[i]]))
 }
 
 export interface Formatted {

@@ -24,6 +24,9 @@ type Config struct {
 	Log     *slog.Logger
 }
 
+// Base is the path the blog is served under; a twin of BLOG_BASE in frontend/landing/src/sitePaths.ts.
+const Base = "/blog"
+
 var idRe = regexp.MustCompile(`^[a-z0-9-]{1,80}$`)
 
 type server struct {
@@ -63,8 +66,8 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	p := r.URL.Path
-	origin := "https://" + r.Host
+	p := stripBase(r.URL.Path)
+	site := "https://" + r.Host + Base
 	switch {
 	case p == "/health":
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -76,7 +79,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	case p == "/robots.txt":
-		s.write(w, r, http.StatusOK, "text/plain; charset=utf-8", Robots(origin))
+		s.write(w, r, http.StatusOK, "text/plain; charset=utf-8", Robots(site))
 		return
 	case p == "/sitemap.xml":
 		snap, err := s.src.Get(r.Context())
@@ -84,10 +87,10 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			unavailable(w, r, nil)
 			return
 		}
-		s.write(w, r, http.StatusOK, "application/xml; charset=utf-8", Sitemap(origin, snap))
+		s.write(w, r, http.StatusOK, "application/xml; charset=utf-8", Sitemap(site, snap))
 		return
 	}
-	if s.serveFile(w, r) {
+	if s.serveFile(w, r, p) {
 		return
 	}
 	snap, err := s.src.Get(r.Context())
@@ -95,8 +98,19 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		unavailable(w, r, s.index)
 		return
 	}
-	status, page := s.document(origin, p, snap)
+	status, page := s.document(site, p, snap)
 	s.write(w, r, status, "text/html; charset=utf-8", page)
+}
+
+// stripBase drops the base so the old hosts, which serve unprefixed paths, keep working. "/blogger" is a slug, not stripped.
+func stripBase(p string) string {
+	if p == Base {
+		return "/"
+	}
+	if rest, ok := strings.CutPrefix(p, Base+"/"); ok {
+		return "/" + rest
+	}
+	return p
 }
 
 // unavailable answers 503; a document gets the unmodified shell so the SPA still boots.
@@ -125,8 +139,7 @@ func (s *server) write(w http.ResponseWriter, r *http.Request, status int, ctype
 }
 
 // serveFile serves a regular file under Root; it reports whether it answered.
-func (s *server) serveFile(w http.ResponseWriter, r *http.Request) bool {
-	p := r.URL.Path
+func (s *server) serveFile(w http.ResponseWriter, r *http.Request, p string) bool {
 	if p == "/" || strings.HasSuffix(p, "/") {
 		return false
 	}

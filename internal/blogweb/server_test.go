@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -80,7 +81,7 @@ func TestServer_VisiblePostAnswers200WithItsPage(t *testing.T) {
 
 func TestServer_TrailingSlashServesTheSamePageAndCanonical(t *testing.T) {
 	r := newRig(t)
-	for path, canon := range map[string]string{"/p/": "https://blog.example/p", "/category/a/": "https://blog.example/category/a"} {
+	for path, canon := range map[string]string{"/p/": "https://blog.example/blog/p", "/category/a/": "https://blog.example/blog/category/a"} {
 		w := r.do("GET", path)
 		if w.Code != 200 {
 			t.Errorf("%s: %d", path, w.Code)
@@ -159,7 +160,7 @@ func TestServer_SitemapAndRobotsAnswerWithTheirTypes(t *testing.T) {
 	if w.Code != 200 || w.Header().Get("Content-Type") != "text/plain; charset=utf-8" || w.Header().Get("Cache-Control") != "no-cache" {
 		t.Errorf("robots %d %v", w.Code, w.Header())
 	}
-	has(t, w.Body.String(), "Sitemap: https://blog.example/sitemap.xml")
+	has(t, w.Body.String(), "Sitemap: https://blog.example/blog/sitemap.xml")
 }
 
 func TestServer_RobotsNeedsNoUpstream(t *testing.T) {
@@ -197,7 +198,7 @@ func TestServer_APublishShowsAfterMaxAge(t *testing.T) {
 	if w := r.do("GET", "/new"); w.Code != 200 {
 		t.Errorf("/new: %d", w.Code)
 	}
-	has(t, r.do("GET", "/sitemap.xml").Body.String(), "https://blog.example/new</loc>")
+	has(t, r.do("GET", "/sitemap.xml").Body.String(), "https://blog.example/blog/new</loc>")
 }
 
 func TestServer_HealthAndMapParityWithCaddy(t *testing.T) {
@@ -424,7 +425,7 @@ func TestServer_SubscribeTrailingSlashAndOverlongIDsAndStaticHeaders(t *testing.
 		if w.Code != 200 {
 			t.Errorf("%s: %d", p, w.Code)
 		}
-		has(t, w.Body.String(), `<link rel="canonical" href="https://blog.example`+canon+`">`)
+		has(t, w.Body.String(), `<link rel="canonical" href="https://blog.example/blog`+canon+`">`)
 	}
 	long := strings.Repeat("a", 81)
 	r.g.set(func() {
@@ -449,7 +450,7 @@ func TestServer_AClientThatLeavesDuringARefreshDoesNotTakeTheSiteDown(t *testing
 	r.g.set(func() { r.g.hang = 100 * time.Millisecond })
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	req := httptest.NewRequest("GET", "https://blog.example/p", nil).WithContext(ctx)
+	req := httptest.NewRequest("GET", "https://blog.example/blog/p", nil).WithContext(ctx)
 	r.h.ServeHTTP(httptest.NewRecorder(), req)
 	r.g.set(func() { r.g.hang = 0 })
 	r.c.add(time.Second)
@@ -471,7 +472,7 @@ func TestServer_AWaiterThatLeavesReturnsAtOnceAndLeavesTheSharedStateAlone(t *te
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	r.h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "https://blog.example/p", nil).WithContext(ctx))
+	r.h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "https://blog.example/blog/p", nil).WithContext(ctx))
 	if d := time.Since(start); d > 120*time.Millisecond {
 		t.Errorf("a cancelled waiter took %v; the refresh holds the lock for about 200ms", d)
 	}
@@ -483,5 +484,119 @@ func TestServer_AWaiterThatLeavesReturnsAtOnceAndLeavesTheSharedStateAlone(t *te
 	r.c.add(4 * time.Second)
 	if w := r.do("GET", "/p"); w.Code != 200 {
 		t.Errorf("after the snapshot went stale: %d, a leaving waiter must not set a back-off", w.Code)
+	}
+}
+
+var canonRe = regexp.MustCompile(`<link rel="canonical" href="([^"]*)">`)
+
+func canonOf(t *testing.T, body string) string {
+	t.Helper()
+	m := canonRe.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatalf("no canonical in %.200s", body)
+	}
+	return m[1]
+}
+
+func TestServer_EveryPageAnswersUnderTheBase(t *testing.T) {
+	r := newRig(t)
+	for _, p := range []string{"/", "/p", "/p/", "/category/a", "/subscribe", "/subscribe/confirm"} {
+		want := r.do("GET", p).Body.String()
+		for _, target := range []string{Base + p, Base + strings.TrimSuffix(p, "/")} {
+			w := r.do("GET", target)
+			if w.Code != 200 || w.Header().Get("Content-Type") != "text/html; charset=utf-8" {
+				t.Errorf("%s: %d %v", target, w.Code, w.Header())
+			}
+			got := w.Body.String()
+			if got != want {
+				t.Errorf("%s: body differs from %s", target, p)
+			}
+			canon := "https://blog.example" + Base + strings.TrimSuffix(p, "/")
+			if p == "/" {
+				canon += "/"
+			}
+			if c := canonOf(t, got); c != canon {
+				t.Errorf("%s: canonical %q, want %q", target, c, canon)
+			}
+		}
+	}
+}
+
+func TestServer_APathOutsideTheBaseServesTheSamePage(t *testing.T) {
+	r := newRig(t)
+	out, in := r.do("GET", "/p").Body.String(), r.do("GET", "/blog/p").Body.String()
+	if out != in {
+		t.Error("bodies differ")
+	}
+	if c := canonOf(t, out); c != "https://blog.example/blog/p" {
+		t.Errorf("canonical %q", c)
+	}
+}
+
+func TestServer_ABaseLookalikeIsASlug(t *testing.T) {
+	r := newRig(t)
+	if w := r.do("GET", "/blogger"); w.Code != 404 {
+		t.Errorf("no post: %d", w.Code)
+	}
+	r.g.set(func() { r.g.posts = append(r.g.posts, Post{ID: "blogger", CategoryID: "a", PublishDate: "2026-10-02"}) })
+	r.c.add(60 * time.Second)
+	for _, p := range []string{"/blogger", "/blog/blogger"} {
+		if w := r.do("GET", p); w.Code != 200 {
+			t.Errorf("%s: %d", p, w.Code)
+		}
+	}
+}
+
+func TestServer_FilesHealthAndMapsUnderTheBase(t *testing.T) {
+	r := newRig(t)
+	for p, want := range map[string]string{
+		"/blog/assets/app.js": string(r.app), "/blog/favicon.ico": "ico", "/blog/build.txt": "abc123", "/build.txt": "abc123",
+		"/blog/health": "OK", "/health": "OK",
+	} {
+		w := r.do("GET", p)
+		if w.Code != 200 || w.Body.String() != want {
+			t.Errorf("%s: %d %.40q", p, w.Code, w.Body.String())
+		}
+	}
+	w := r.do("GET", "/blog/assets/app.js.map")
+	if w.Code != 404 || w.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
+		t.Errorf("map: %d %v", w.Code, w.Header())
+	}
+}
+
+func TestServer_SitemapAndRobotsNameTheBaseAddresses(t *testing.T) {
+	r := newRig(t)
+	var sm parsedSitemap
+	if err := xml.Unmarshal(r.do("GET", "/blog/sitemap.xml").Body.Bytes(), &sm); err != nil || len(sm.URLs) == 0 {
+		t.Fatalf("sitemap: %v %d", err, len(sm.URLs))
+	}
+	for _, u := range sm.URLs {
+		if !strings.HasPrefix(u.Loc, "https://blog.example/blog/") {
+			t.Errorf("loc %q", u.Loc)
+		}
+	}
+	has(t, r.do("GET", "/blog/robots.txt").Body.String(), "Sitemap: https://blog.example/blog/sitemap.xml")
+}
+
+func TestServer_EncodedPathsUnderTheBaseStayInsideRoot(t *testing.T) {
+	r := newRig(t)
+	secret := filepath.Join(r.root, "..", "secret.txt")
+	if err := os.WriteFile(secret, []byte("TOPSECRET"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(secret) })
+	for _, p := range []string{"/blog/%2e%2e/secret.txt", "/blog/..%2fsecret.txt", "/blog/assets/%2e%2e/%2e%2e/secret.txt"} {
+		if w := r.doRaw(p); strings.Contains(w.Body.String(), "TOPSECRET") {
+			t.Errorf("%s: served the file outside Root", p)
+		}
+	}
+}
+
+func TestServer_UpstreamFailureUnderTheBaseIs503(t *testing.T) {
+	r := newRig(t)
+	r.g.set(func() { r.g.status = 500 })
+	w := r.do("GET", "/blog/p")
+	if w.Code != 503 || w.Header().Get("Retry-After") != "60" || !bytes.Equal(w.Body.Bytes(), r.shell) {
+		t.Errorf("%d %v", w.Code, w.Header())
 	}
 }

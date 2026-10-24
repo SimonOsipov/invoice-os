@@ -454,7 +454,7 @@ func TestTransport_DroppingTheInFlightHeadKeepsTheRest(t *testing.T) {
 	}
 	close(release)
 
-	eventually(t, "events 2..101", func() bool { return len(in.received()) >= 100 })
+	eventually(t, "event 101", func() bool { return in.attemptsFor(eventID(101)) > 0 })
 	got := in.received()
 	if got[len(got)-1] != eventID(101) {
 		t.Fatalf("last delivered %s, want event 101", got[len(got)-1])

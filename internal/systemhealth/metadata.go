@@ -25,6 +25,8 @@ type Google struct {
 	Monitoring, Run string // base URLs; a test points them at an httptest.Server
 	Client          *http.Client
 	Meta            *Metadata
+	// Suffix is "-pr-<N>" on a PR preview: reads keep that PR's services and drop it from names.
+	Suffix string
 }
 
 // NewGoogle reads the production endpoints with client.

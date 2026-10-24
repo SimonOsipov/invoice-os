@@ -83,7 +83,7 @@ func TestQueryRange_EachRangeSendsItsWindowAndStep(t *testing.T) {
 		f, g := newPromFake(t, 200, emptyMatrix)
 		start, end := Window(r, now)
 		for _, p := range Panels {
-			if _, err := g.queryRange(context.Background(), "tok", "p1", p.Query(r, ""), start, end, r.Step); err != nil {
+			if _, err := g.queryRange(context.Background(), "tok", "p1", p.Query(r, "", ""), start, end, r.Step); err != nil {
 				t.Fatalf("%s %s: %v", k, p.Key, err)
 			}
 		}
@@ -136,7 +136,7 @@ func TestPanels_TheServiceFilterNarrowsOnlyCloudRunPanels(t *testing.T) {
 	}
 	var nRun, nSQL int
 	for _, p := range Panels {
-		withSvc, without := p.Query(r, "app"), p.Query(r, "")
+		withSvc, without := p.Query(r, "app", ""), p.Query(r, "", "")
 		runPanel := strings.Contains(withSvc, "cloud_run_revision")
 		sqlPanel := strings.Contains(withSvc, "cloudsql_database")
 		if runPanel == sqlPanel {
@@ -230,7 +230,7 @@ func TestErrorPct_KeepsAZeroPoint(t *testing.T) {
 	var q string
 	for _, p := range Panels {
 		if p.Key == "error_pct" {
-			q = p.Query(r, "")
+			q = p.Query(r, "", "")
 		}
 	}
 	got, err := g.queryRange(context.Background(), "tok", "p1", q, time.Unix(0, 0), time.Unix(3600, 0), r.Step)
@@ -275,11 +275,63 @@ func TestErrorPct_ClampsTheDenominatorSoAnIdleStepIsNotNaN(t *testing.T) {
 	var q string
 	for _, p := range Panels {
 		if p.Key == "error_pct" {
-			q = p.Query(Ranges["1h"], "")
+			q = p.Query(Ranges["1h"], "", "")
 		}
 	}
 	want := `/ clamp_min(sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision"}[300s])), 1e-9)`
 	if !strings.HasSuffix(q, want) {
 		t.Errorf("denominator is not clamped: %s", q)
+	}
+}
+
+func TestPanels_APreviewNarrowsCloudRunPanelsToItsPR(t *testing.T) {
+	r := Ranges["1h"]
+	for _, p := range Panels {
+		fleet, picked := p.Query(r, "", "-pr-545"), p.Query(r, "gateway", "-pr-545")
+		if !p.CloudRun {
+			if strings.Contains(fleet, "service_name") || strings.Contains(picked, "service_name") {
+				t.Errorf("%s: SQL query holds service_name", p.Key)
+			}
+			continue
+		}
+		if !strings.Contains(fleet, `service_name=~".+-pr-545"`) {
+			t.Errorf("%s: fleet query lacks the PR matcher: %s", p.Key, fleet)
+		}
+		if !strings.Contains(picked, `service_name="gateway-pr-545"`) || strings.Contains(picked, "=~") {
+			t.Errorf("%s: picked query = %s", p.Key, picked)
+		}
+	}
+}
+
+func TestPanels_APreviewMatcherDoesNotMatchALongerPRNumber(t *testing.T) {
+	for _, p := range Panels {
+		if !p.CloudRun {
+			continue
+		}
+		if q := p.Query(Ranges["1h"], "", "-pr-54"); !strings.Contains(q, `{monitored_resource="cloud_run_revision",service_name=~".+-pr-54"`) {
+			t.Errorf("%s: %s", p.Key, q)
+		}
+	}
+}
+
+func TestPanels_ProductionQueriesAreUnchanged(t *testing.T) {
+	r := Ranges["1h"]
+	var req Panel
+	for _, p := range Panels {
+		if p.Key == "req_per_min" {
+			req = p
+		}
+		for _, svc := range []string{"", "app"} {
+			if strings.Contains(p.Query(r, svc, ""), "=~") {
+				t.Errorf("%s/%q: production query holds =~", p.Key, svc)
+			}
+		}
+	}
+	const base = `60 * sum by (service_name) (rate(run_googleapis_com:request_count{monitored_resource="cloud_run_revision"%s}[300s]))`
+	if got, want := req.Query(r, "", ""), fmt.Sprintf(base, ""); got != want {
+		t.Errorf("fleet = %s", got)
+	}
+	if got, want := req.Query(r, "app", ""), fmt.Sprintf(base, `,service_name="app"`); got != want {
+		t.Errorf("picked = %s", got)
 	}
 }

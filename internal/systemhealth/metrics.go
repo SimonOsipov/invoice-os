@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 )
@@ -167,10 +168,15 @@ func (s *MetricsSource) fetch(ctx context.Context, key metricsKey, now time.Time
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			series, err := s.g.queryRange(ctx, token, project, p.Query(r, key.service), from, to, r.Step)
+			series, err := s.g.queryRange(ctx, token, project, p.Query(r, key.service, s.g.Suffix), from, to, r.Step)
 			if err != nil {
 				s.log.WarnContext(ctx, "system health: panel", slog.String("panel", p.Key), slog.String("error", err.Error()))
 				return
+			}
+			if p.CloudRun {
+				for j := range series {
+					series[j].Name = strings.TrimSuffix(series[j].Name, s.g.Suffix)
+				}
 			}
 			m.Panels[i].Available, m.Panels[i].Series = true, series
 		}()

@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react'
 import { CHART_H, SPARK_HEIGHT, SPARK_WIDTH, healthTone, sentryServiceUrl, sparkline } from '../helpers'
 import { fleetSummary, jobSeries, jobsOf, series, shortBuild, type StaffHealth } from '../healthApi'
-import { DASHBOARDS, METRIC_SERVICES, NO_SENTRY, RANGES, SERIES, THRESHOLDS, colourMap, fleetSeries, formatValue, hasData, judge, latestOf, panelOf, type PanelKey, type Point, type RangeKey, type StaffMetrics, type Stat, type Verdict } from '../metricsApi'
+import { DASHBOARDS, METRIC_SERVICES, RANGES, SERIES, THRESHOLDS, colourMap, fleetSeries, formatValue, hasData, judge, latestOf, panelOf, type PanelKey, type Point, type RangeKey, type StaffMetrics, type Stat, type Verdict } from '../metricsApi'
 import { syncStamp } from '../rulesApi'
 import { G } from './BlogList'
 import { Badge } from './StatusBadge'
@@ -315,19 +315,17 @@ function Services({ fleet, service }: { fleet: StaffHealth['fleet']; service: st
             <span className="mono" title={s.build || undefined} style={{ flex: 'none', fontSize: 11, color: 'var(--fg-3)' }}>
               {shortBuild(s.build)}
             </span>
-            {!NO_SENTRY.includes(s.name) && (
-              <a
-                href={sentryServiceUrl(s.name)}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label={`Open ${s.name} in Sentry`}
-                className="ops-btn v2-btn v2-btn-ghost"
-                style={{ flex: 'none', height: 28, padding: '0 10px', fontSize: 12, textDecoration: 'none' }}
-              >
-                <G name="external-link" size={15} />
-                Sentry
-              </a>
-            )}
+            <a
+              href={sentryServiceUrl(s.name)}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Open ${s.name} in Sentry`}
+              className="ops-btn v2-btn v2-btn-ghost"
+              style={{ flex: 'none', height: 28, padding: '0 10px', fontSize: 12, textDecoration: 'none' }}
+            >
+              <G name="external-link" size={15} />
+              Sentry
+            </a>
           </div>
         ))}
     </div>

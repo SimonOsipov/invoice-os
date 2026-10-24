@@ -42,6 +42,9 @@ var minFatalSites = map[string]int{
 
 const totalFatalSites = 59
 
+// Files whose main ends the process with a child's exit code; platform.Fatal always exits 1.
+var childExitSites = map[string]int{"cmd/authsentry/main.go": 1}
+
 type scanned struct {
 	rel  string
 	fset *token.FileSet
@@ -167,6 +170,7 @@ func exitCalls(f *ast.File) []exitCall {
 // bannedExits lists every way a cmd file can end the process other than platform.Fatal.
 func bannedExits(s scanned) []string {
 	lg, osn := importName(s.f, "log"), importName(s.f, "os")
+	exempt := childExitSites[s.rel]
 	var out []string
 	ast.Inspect(s.f, func(n ast.Node) bool {
 		switch x := n.(type) {
@@ -190,6 +194,10 @@ func bannedExits(s scanned) []string {
 					out = append(out, line(s, x)+": log."+sel+", want platform.Fatal")
 				}
 				if osn != "" && id.Name == osn && sel == "Exit" {
+					if exempt > 0 {
+						exempt--
+						break
+					}
 					out = append(out, line(s, x)+": os.Exit, want platform.Fatal")
 				}
 			}
@@ -223,6 +231,22 @@ import ("log/slog"; "github.com/SimonOsipov/invoice-os/internal/platform")
 func h(log *slog.Logger) { log.Warn("x"); platform.Fatal(log, "x") }`)); len(clean) != 0 {
 		t.Fatalf("detector flagged clean source: %v", clean)
 	}
+
+	t.Run("exempts one child exit", func(t *testing.T) {
+		const two = `package main
+import "os"
+func main() { os.Exit(1); os.Exit(2) }`
+		child := parseSnippet(t, two)
+		child.rel = "cmd/authsentry/main.go"
+		if got := bannedExits(child); len(got) != 1 {
+			t.Errorf("cmd/authsentry/main.go with two os.Exit: %d violation(s) %v, want 1", len(got), got)
+		}
+		other := parseSnippet(t, two)
+		other.rel = "cmd/gateway/main.go"
+		if got := bannedExits(other); len(got) != 2 {
+			t.Errorf("cmd/gateway/main.go with two os.Exit: %d violation(s) %v, want 2", len(got), got)
+		}
+	})
 
 	files := parseCmdTree(t)
 	mains(t, files)

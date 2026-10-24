@@ -938,10 +938,6 @@ async function healthLinks(page: Page, seen: SeenHealth): Promise<void> {
   for (const s of seen.fleet.services) {
     const row = mn.locator(`[data-service="${s.name}"]`)
     const link = row.getByRole('link')
-    if (s.name === 'auth') {
-      await expect(link, 'auth has no Sentry link').toHaveCount(0)
-      continue
-    }
     await attrs(link, `${s.name} Sentry link`, `https://as-comply.sentry.io/issues/?query=server_name:${s.name}&project=${SENTRY_PROJECT}&statsPeriod=14d`)
   }
 }
@@ -997,7 +993,7 @@ async function healthNarrowing(page: Page, latest: { body: SeenHealth }): Promis
     } else if (listed().length === 0 && name !== '') {
       await expect(mn.locator('[data-ping-note]'), `${at} ping note`).toHaveText(NO_PING_NOTE(name))
     } else await expect(mn.locator('[data-ping-note]'), `${at} has no ping note`).toHaveCount(0)
-    if (name === 'auth' && listed().length > 0) await expect(rows.getByRole('link'), 'auth row has no Sentry link').toHaveCount(0)
+    if (name === 'auth' && listed().length > 0) await expect(rows.getByRole('link'), 'auth row Sentry link').toHaveAttribute('aria-label', 'Open auth in Sentry')
 
     for (const key of SCOPED) await expect(tile(key).locator('[data-scope]'), `${key} tag at ${at}`).toHaveText('All services')
   }
@@ -1235,9 +1231,7 @@ async function healthLayout(page: Page): Promise<Read> {
   } else if (nRows === 0) await expect(mn.getByText('The gateway roll-up is unavailable.'), 'no rows only when the roll-up is unavailable').toHaveCount(1)
   for (let i = 0; i < nRows; i++) {
     const row = rows.nth(i)
-    const name = (await row.getAttribute('data-service')) ?? ''
-    const parts: Record<string, Locator> = { row, name: kid(row, 1), badge: kid(row, 2), build: kid(row, 3) }
-    if (name !== 'auth') parts.sentry = kid(row, 4)
+    const parts: Record<string, Locator> = { row, name: kid(row, 1), badge: kid(row, 2), build: kid(row, 3), sentry: kid(row, 4) }
     const p = await boxes(page, parts)
     const { row: rowBox, ...cells } = p
     problems.push(...within(grids.card, rowBox, `service row ${i} in the Services card`), ...pairwiseApart(Object.values(cells), `service ${i} name, badge, build and Sentry link`))

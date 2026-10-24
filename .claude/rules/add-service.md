@@ -16,6 +16,7 @@ paths:
 - Select the binary with the build argument `SERVICE`.
 - `cmd/migrate` is the pre-deploy Cloud Run job. It opens no listener and boots through `platform.ReportBootPanic` and `platform.Fatal` without `platform.New`.
 - `cmd/blog` is the other Go binary outside the fleet. It runs in the `blog` SPA image from `frontend/blog/Dockerfile`, answers `/health`, and boots through `platform.ReportBootPanic` and `platform.Fatal` without `platform.New`.
+- `cmd/authsentry` is the third Go binary outside the fleet. It runs in the auth image, boots through `platform.ReportBootPanic` and `platform.Fatal`, and exits with GoTrue's code through its one exempted `os.Exit`.
 - Bind all interfaces on `:$PORT`. Cloud Run injects `PORT`.
 - Probe a service at `/health` on a run.app host. Cloud Run answers `/healthz` itself there.
 - Add a new service in invoice-os-infra first: `terraform/run.tf` (`services` or `site`, `invokers`, the gateway's `urls`), `identities.tf`, and the secret lists in `secrets.tf`.
@@ -29,7 +30,7 @@ paths:
 - Wrap a new outbound client to another first-party service in `platform.TraceTransport`. Never wrap a third-party client. A first-party client without `TraceTransport` (GoTrue) takes `platform.IDTokenTransport`.
 - Run background work only in `cmd/worker`: River workers, tickers and sweeps. A request-driven service enqueues on an insert-only `queue.Config{}`. `TestOnlyTheWorkerRunsBackgroundWork` fails otherwise.
 - Wrap each periodic task in `leader.Lead("<task>", fn)` with its own name. `TestWorkerMain_EveryPeriodicTaskHasOneLeader` fails otherwise.
-- Run one worker instance. The submission rate limiter is in memory.
+- Run one worker instance. The submission rate limiter is in memory. Keep the worker's minimum instances at the service level in invoice-os-infra `terraform/run.tf`. A revision-level minimum keeps the `rollback`-tagged worker running.
 - Build a new Go service on `platform.New`. It gets Sentry labels, 5xx and panic capture, tracing and the `SENTRY_TEST_EVENT` trigger.
 - Call `initMonitoring` from `src/instrument.ts` in a new SPA. Add its name to the `Service` union in `packages/monitoring/src/options.ts`.
 - Declare `ARG` and `ENV` for `VITE_SENTRY_DSN` and `VITE_SENTRY_TEST_DIGEST` in a new SPA Dockerfile build stage.

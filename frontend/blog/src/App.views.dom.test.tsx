@@ -71,6 +71,14 @@ describe('sidebar', () => {
     }
   })
 
+  it('VW-01b a sidebar click from /blog/ pushes the base path into history', async () => {
+    await mount('/blog/')
+    const before = window.history.length
+    click(row('Regulation'))
+    expect(window.location.pathname).toBe('/blog/category/c1')
+    expect(window.history.length).toBe(before + 1)
+  })
+
   it('VW-13 nothing is highlighted while searching', async () => {
     await mount('/category/c1')
     type('sage')

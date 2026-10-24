@@ -64,4 +64,20 @@ describe('route', () => {
     }
     expect(blogPath({ view: 'home' })).toBe('/blog/')
   })
+
+  it('parse_baseEdgeInputsAreOneRouteAndRoundTrip', () => {
+    expect(parseBlogPath('/blog//x')).toEqual({ view: 'missing', path: '//x' })
+    expect(parseBlogPath('/BLOG/x')).toEqual({ view: 'missing', path: '/BLOG/x' })
+    expect(parseBlogPath('/blog/blog/x')).toEqual({ view: 'missing', path: '/blog/x' })
+    expect(parseBlogPath('/blog/subscribe/')).toEqual({ view: 'subscribe' })
+    expect(parseBlogPath('/blog/category/c/')).toEqual({ view: 'category', id: 'c' })
+    expect(parseBlogPath('/blog/category')).toEqual({ view: 'missing', path: '/category' })
+    for (const p of ['/blog/blog/x', '/blog//x', '/blog/a/b', '/a/b', '/blog/category']) {
+      const once = blogPath(parseBlogPath(p))
+      expect(once, p).not.toContain('/blog/blog/blog')
+      expect(parseBlogPath(once), p).toEqual(parseBlogPath(p))
+      expect(blogPath(parseBlogPath(once)), p).toBe(once)
+    }
+    expect(blogPath(parseBlogPath('/a/b'))).toBe('/blog/a/b')
+  })
 })

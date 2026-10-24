@@ -71,7 +71,7 @@ func baseDockerfile() string {
 func fromLine(t *testing.T, body string) string {
 	t.Helper()
 	for _, l := range strings.Split(body, "\n") {
-		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(l)), "FROM ") {
+		if t := strings.TrimSpace(l); strings.HasPrefix(strings.ToUpper(t), "FROM ") && strings.Contains(t, "/supabase/auth:") {
 			return strings.TrimSpace(l)
 		}
 	}

@@ -27,6 +27,7 @@ func TestParsePinAdversarial(t *testing.T) {
 		{"lowercase from", "from " + pinnedRef + "\n"},
 		{"CRLF line endings", "FROM " + pinnedRef + "\r\nENV A=b\r\n"},
 		{"a commented FROM does not count", "# FROM docker.io/supabase/auth:v1@" + pinnedDigest + "\nFROM " + pinnedRef + "\n"},
+		{"builder stage before the pin", "FROM mirror.gcr.io/library/golang:1.26.10-alpine AS wrap\nFROM " + pinnedRef + "\n"},
 		{"registry with a port", "FROM ghcr.io:443/supabase/auth:v2.197.0@" + pinnedDigest + "\n"},
 	}
 	for _, c := range accepted {
@@ -48,7 +49,9 @@ func TestParsePinAdversarial(t *testing.T) {
 		{"--platform with a Hub name", "FROM --platform=linux/amd64 supabase/auth:v2.197.0@" + pinnedDigest + "\n"},
 		{"AS stage after an unpinned ref", "FROM ghcr.io/supabase/auth:v2.197.0 AS base\n"},
 		{"FROM with no reference", "FROM\n"},
-		{"multi-stage second FROM", "FROM " + pinnedRef + " AS a\nFROM a\n"},
+		{"two supabase/auth FROM lines", "FROM " + pinnedRef + " AS a\nFROM " + pinnedRef + "\n"},
+		{"auth FROM not last", "FROM " + pinnedRef + "\nFROM golang:1 AS w\n"},
+		{"no auth FROM", "FROM golang:1 AS w\nFROM alpine\n"},
 	}
 	for _, c := range refused {
 		t.Run("refuses/"+c.name, func(t *testing.T) {

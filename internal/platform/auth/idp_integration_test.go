@@ -486,7 +486,7 @@ const goldenComment = "Shape of a real access token from the self-hosted supabas
 	"Refresh: go test -run TestIdP_TokenShapeMatchesGolden ./internal/platform/auth/ -update, with the env scripts/ci/idp-up.sh prints."
 
 var (
-	fromLine = regexp.MustCompile(`(?m)^FROM\s+(\S+)`)
+	fromLine = regexp.MustCompile(`(?m)^FROM\s+(\S*/supabase/auth:\S+)`)
 	rawJWT   = regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\.eyJ`)
 )
 
@@ -498,7 +498,7 @@ func imageRef(t *testing.T) string {
 	}
 	m := fromLine.FindSubmatch(b)
 	if m == nil {
-		t.Fatal("sidecar/auth/Dockerfile has no FROM line")
+		t.Fatal("sidecar/auth/Dockerfile has no supabase/auth FROM line")
 	}
 	return string(m[1])
 }

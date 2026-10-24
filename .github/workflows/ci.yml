@@ -84,6 +84,7 @@ jobs:
             # Every input to the supabase/auth image, its DB prerequisites and the TestIdP suite.
             idp:
               - 'sidecar/auth/**'
+              - 'cmd/authsentry/**'
               - 'internal/platform/auth/**'
               - 'internal/platform/*.go'
               - 'internal/platform/db/**'

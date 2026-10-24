@@ -600,3 +600,54 @@ func TestServer_UpstreamFailureUnderTheBaseIs503(t *testing.T) {
 		t.Errorf("%d %v", w.Code, w.Header())
 	}
 }
+
+func TestServer_BaseEdgePathsAreStrippedOnceAndMatchCase(t *testing.T) {
+	r := newRig(t)
+	for _, p := range []string{"/blog//p", "/BLOG/p", "/BLOG", "/blog/blog/p", "//blog/p", "/blog/health/", "/blog/category/", "/blog/assets/", "/blog/blog"} {
+		if w := r.do("GET", p); w.Code != 404 || !strings.Contains(w.Body.String(), "<h1>Not found</h1>") {
+			t.Errorf("%s: %d, want the not-found page", p, w.Code)
+		}
+	}
+	want := r.do("GET", "/blog/p").Body.String()
+	for _, p := range []string{"/blog%2Fp", "/blog/p?utm=1", "/blog/p/?utm=1", "/p?utm=1"} {
+		w := r.doRaw(p)
+		if w.Code != 200 || w.Body.String() != want {
+			t.Errorf("%s: %d, want the /blog/p page", p, w.Code)
+		}
+	}
+	for p, canon := range map[string]string{"/blog?x=1": "https://blog.example/blog/", "/blog/category/a/": "https://blog.example/blog/category/a", "/blog/subscribe/": "https://blog.example/blog/subscribe"} {
+		w := r.doRaw(p)
+		if w.Code != 200 || canonOf(t, w.Body.String()) != canon {
+			t.Errorf("%s: %d canonical %q, want %q", p, w.Code, canonOf(t, w.Body.String()), canon)
+		}
+	}
+}
+
+func TestServer_HeadUnderTheBaseAnswersHeadersOnly(t *testing.T) {
+	r := newRig(t)
+	for _, p := range []string{"/blog", "/blog/", "/blog/p", "/blog/category/a", "/blog/sitemap.xml", "/blog/robots.txt", "/blog/assets/app.js"} {
+		g, h := r.do("GET", p), r.do("HEAD", p)
+		if len(g.Body.Bytes()) == 0 {
+			t.Fatalf("%s: GET body empty", p)
+		}
+		if h.Code != g.Code || h.Body.Len() != 0 {
+			t.Errorf("%s: HEAD %d with %d body bytes, GET %d", p, h.Code, h.Body.Len(), g.Code)
+		}
+	}
+}
+
+// ceiling: a post with slug "blog" is reachable at /blog/blog only; /blog is the home page.
+func TestServer_APostSlugBlogIsShadowedByTheBaseButReachableUnderIt(t *testing.T) {
+	r := newRig(t)
+	r.g.set(func() {
+		r.g.posts = append(r.g.posts, Post{ID: "blog", CategoryID: "a", PublishDate: "2026-10-02", Title: "Blog post"})
+	})
+	r.c.add(60 * time.Second)
+	if body := r.do("GET", "/blog").Body.String(); canonOf(t, body) != "https://blog.example/blog/" {
+		t.Error("/blog is not home")
+	}
+	w := r.do("GET", "/blog/blog")
+	if w.Code != 200 || canonOf(t, w.Body.String()) != "https://blog.example/blog/blog" {
+		t.Errorf("/blog/blog: %d", w.Code)
+	}
+}

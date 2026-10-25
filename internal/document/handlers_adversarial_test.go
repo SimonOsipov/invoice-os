@@ -230,6 +230,10 @@ func (c *concurrentObjects) Get(ctx context.Context, key, rangeHeader string) (d
 	return document.Object{Body: io.NopCloser(bytes.NewReader(c.payload)), Size: int64(len(c.payload))}, nil
 }
 
+func (c *concurrentObjects) List(context.Context, string) ([]string, error) { return nil, nil }
+
+func (c *concurrentObjects) DeleteMany(context.Context, []string) error { return nil }
+
 // Core AC 6 is per-READ, not per-document: N concurrent downloads of one document
 // owe exactly N document.read rows and N intact bodies. A handler that memoised
 // the open result, or a store that folded the audit into the row lookup's

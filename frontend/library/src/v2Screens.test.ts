@@ -389,7 +389,7 @@ describe('library scenes', () => {
     expect(banner).toHaveLength(1)
     const bi = ts.indexOf(banner[0])
     expect([ts[bi + 1].name, attr(ts[bi + 1], 'width'), attr(ts[bi + 1], 'height')]).toEqual(['svg', '15', '15'])
-    expect(withText(ts, 'Mapped 9 of 9 columns').name).toBe('span')
+    expect(withText(ts, 'All fields placed').name).toBe('span')
     const head = where(ts, (s) => s['grid-template-columns'] === '0.5fr 2fr 1.2fr 1.2fr' && s['font-size'] === '10px')
     expect(head).toHaveLength(1)
     expect(ts.slice(ts.indexOf(head[0]) + 1, ts.indexOf(head[0]) + 5).map((t) => t.text)).toEqual(['Row', 'Customer', 'Amount', 'Status'])
@@ -401,7 +401,7 @@ describe('library scenes', () => {
     const rows3 = where(later, (s) => s.animation === 'libPop 320ms ease-out')
     expect(rows3).toHaveLength(4)
     expect(style(withText(later, 'Needs fixing')).color).toBe('var(--status-red-text)')
-    expect(later.some((t) => t.text === 'Mapped 9 of 9 columns')).toBe(false)
+    expect(later.some((t) => t.text === 'All fields placed')).toBe(false)
   })
 
   it('SN-02 the thumbnail list shows customer and chip only', () => {
@@ -469,7 +469,7 @@ describe('library scenes', () => {
     const ci = view('create-invoice', 2, 'thumb')
     expect(where(ci, (s) => s['grid-template-columns'] === '1fr 1fr')).toHaveLength(1)
     expect(where(ci, (s) => s.height === '16px')).toHaveLength(4)
-    expect(ci.some((x) => x.text === 'Re-validated · 0 errors')).toBe(true)
+    expect(ci.some((x) => x.text === 'Passes all rules · no violations')).toBe(true)
   })
 
   const formCases = FEATURES.flatMap((f) => {

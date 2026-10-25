@@ -24,7 +24,7 @@ describe('scene', () => {
     const s1 = at('import-files', 1, 'list')
     expect(s1.rows).toHaveLength(2)
     expect(s1.rows.map((r) => r.focused)).toEqual([true, false])
-    expect(s1.banner).toBe('Mapped 9 of 9 columns')
+    expect(s1.banner).toBe('All fields placed')
     const s2 = at('import-files', 2, 'list')
     expect(s2.rows.map((r) => r.status)).toEqual(['valid', 'valid', 'valid', 'new'])
     expect(s2.rows.map((r) => r.focused)).toEqual([false, false, false, true])
@@ -51,7 +51,7 @@ describe('scene', () => {
     const s2 = at('create-invoice', 2, 'form')
     expect(s2.fields.some((x) => x.focused)).toBe(false)
     expect(s2.fields.map((x) => x.mark)).toEqual([null, 'ok', null, 'ok', 'ok'])
-    expect(s2.msg).toEqual({ text: 'Re-validated · 0 errors', tone: 'ok' })
+    expect(s2.msg).toEqual({ text: 'Passes all rules · no violations', tone: 'ok' })
   })
 
   it('sceneState_formFixReplacesTheValueAndMarksAccumulate', () => {

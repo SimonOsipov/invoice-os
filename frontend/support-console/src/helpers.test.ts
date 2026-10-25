@@ -213,6 +213,33 @@ describe('chart model', () => {
     expect(r.left).toBeGreaterThanOrEqual(8)
   })
 
+  it('alignSeries sorts unsorted points and keeps the last of a duplicate time', () => {
+    const [x, v] = alignSeries([{ points: [[120, 3], [0, 1], [60, 2], [60, 9]] }], 0, 120, 60)
+    expect(x).toEqual([0, 60, 120])
+    expect(v).toEqual([1, 9, 3])
+  })
+  it('alignSeries stops the grid at the last whole step when the step does not divide the range', () => {
+    expect(alignSeries([], 0, 100, 60)).toEqual([[0, 60]])
+  })
+  it('alignSeries keeps a real zero value apart from a missing point', () => {
+    expect(alignSeries([{ points: [[0, 0]] }], 0, 60, 60)[1]).toEqual([0, null])
+  })
+  it('readoutPlacement clamps the right edge inside the view', () => {
+    const r = readoutPlacement({ x: 120, y: 70 }, { left: 100, top: 40, width: 400 }, box, { width: 200, height: 800 })
+    expect(r.left).toBe(200 - 160 - 8)
+  })
+  it('readoutPlacement does not flip at the exact middle of the plot', () => {
+    expect(readoutPlacement({ x: 300, y: 70 }, plot, box, view).left).toBe(312)
+  })
+  it('readoutPlacement keeps the top margin when the plot top is above it', () => {
+    expect(readoutPlacement({ x: 150, y: 0 }, { ...plot, top: 2 }, box, view).top).toBe(8)
+  })
+  it('tokenName rejects an empty or non-var value', () => {
+    expect(tokenName('')).toBeNull()
+    expect(tokenName('var()')).toBeNull()
+    expect(tokenName('rgb(1,2,3)')).toBeNull()
+  })
+
   it('tokenName reads the custom property of a var()', () => {
     expect(tokenName('var(--series-1)')).toBe('--series-1')
     expect(tokenName('var( --fg-4 )')).toBe('--fg-4')

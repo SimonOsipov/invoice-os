@@ -3465,6 +3465,9 @@ async function expectInsideAtEachWidth(page: Page, card: Locator, parts: [string
   }
 }
 
+// One over `maxNameChars` in internal/tenancy/tenancy.go.
+const NAME_LIMIT = 200
+
 // The workspace roster as the admin's API reads it: the row of `userId`.
 async function rosterRow(adminToken: string, userId: string) {
   const row = (await memberships(adminToken)).memberships.find((m) => m.user_id === userId)
@@ -3486,9 +3489,20 @@ test('the invite link asks a name and the workspace shows it', async ({ page }) 
   const text = existsText(page, account.email)
   await expect(text).toBeVisible({ timeout: 30_000 })
   const input = page.getByTestId('invite-name')
+  const signIn = page.getByRole('button', { name: 'Sign in', exact: true })
+  const error = page.locator('#inv-name-error')
+  await input.fill('   ')
+  await expect(error).toHaveText('Enter your name.')
+  await expect(signIn).toBeDisabled()
+  await input.fill('x'.repeat(NAME_LIMIT + 1))
+  await expect(error).toHaveText('Use 200 characters or fewer.')
+  await expect(signIn).toBeDisabled()
+  await expectInsideAtEachWidth(page, text.locator('xpath=..'), [['invite-name-error', error]])
   await input.fill(name)
+  await expect(error).toBeHidden()
+  await expect(signIn).toBeEnabled()
   await expectInsideAtEachWidth(page, text.locator('xpath=..'), [['invite-name', input]])
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await signIn.click()
   await signInInOpenWindow(page, account)
   const identity = await readSessionIdentity(page)
 
@@ -3512,9 +3526,20 @@ test('the Join screen asks a name and the workspace shows it', async ({ page }) 
   await passFrontDoor(page, account, '/')
   await expect(page.getByRole('heading', { name: `Join ${workspace.name}`, exact: true })).toBeVisible({ timeout: 30_000 })
   const input = page.getByTestId('join-name')
+  const join = page.getByRole('button', { name: `Join ${workspace.name}`, exact: true })
+  const error = page.getByTestId('join-name-error')
+  await input.fill('   ')
+  await expect(error).toHaveText('Enter your name.')
+  await expect(join).toBeDisabled()
+  await input.fill('x'.repeat(NAME_LIMIT + 1))
+  await expect(error).toHaveText('Use 200 characters or fewer.')
+  await expect(join).toBeDisabled()
+  await expectInsideAtEachWidth(page, page.getByTestId('join-screen'), [['join-name-error', error]])
   await input.fill(name)
+  await expect(error).toBeHidden()
+  await expect(join).toBeEnabled()
   await expectInsideAtEachWidth(page, page.getByTestId('join-screen'), [['join-name', input]])
-  await page.getByRole('button', { name: `Join ${workspace.name}`, exact: true }).click()
+  await join.click()
   const identity = await readSessionIdentity(page)
 
   expect(identity.tenant.id, 'the session is bound to the inviting workspace').toBe(workspace.tenantId)

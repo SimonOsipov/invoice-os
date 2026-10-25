@@ -3325,6 +3325,7 @@ test('deployed journey: an invitee with two invites picks one from the chooser',
   await expect(page.getByRole('heading', { name: 'Choose a workspace to join', exact: true })).toBeVisible({ timeout: 30_000 })
   const rows = page.getByTestId('join-invite')
   await expect(rows).toHaveCount(2)
+  await page.getByTestId('join-name').fill('Ada Obi')
   await rows.filter({ hasText: second.name }).getByRole('button', { name: `Join ${second.name}`, exact: true }).click()
   const identity = await readSessionIdentity(page)
 

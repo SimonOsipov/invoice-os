@@ -58,7 +58,7 @@ export interface PendingInvite {
   expires_at: string
 }
 
-// A tenant-less sign-in with invites waiting; the Join screen resolves it (joinInvite, createOwnWorkspace).
+// A tenant-less sign-in with invites waiting, or none for a removed person (invites empty); the Join screen resolves it (joinInvite, createOwnWorkspace).
 export type JoinOffer = { kind: 'join'; token: string; refreshToken: unknown; invites: PendingInvite[]; answers: ProvisionBody | null }
 
 export function isPendingInvites(body: unknown): body is { invitations: PendingInvite[] } {
@@ -87,12 +87,17 @@ function isEmptyInvites(body: unknown): boolean {
   return Array.isArray(list) && list.length === 0
 }
 
+// A missing or non-boolean key reads false (an old tenancy revision omits it).
+function isRemoved(body: unknown): boolean {
+  return (body as { removed?: unknown } | null | undefined)?.removed === true
+}
+
 export function isJoinOffer(x: Session | JoinOffer): x is JoinOffer {
   return 'kind' in x && x.kind === 'join'
 }
 
 // No degraded fallback: any failure, a 15 s timeout included, rejects.
-export async function redeemHandoff(base: string, code: string, state: string, now: number = Date.now(), invite: string | null = null): Promise<Session | JoinOffer> {
+export async function redeemHandoff(base: string, code: string, state: string, now: number = Date.now(), invite: { token: string; name: string | null } | null = null): Promise<Session | JoinOffer> {
   const signal = AbortSignal.timeout(15000)
   const { access_token: token, refresh_token: refreshToken } = await apiFetch<{ access_token: string; refresh_token?: unknown }>(`${base}/auth/exchange`, {
     method: 'POST',
@@ -120,6 +125,9 @@ export async function redeemHandoff(base: string, code: string, state: string, n
     if (!isEmptyInvites(invites)) {
       throw new Error('malformed invitation list')
     }
+    if (isRemoved(invites)) {
+      return { kind: 'join', token, refreshToken, invites: [], answers }
+    }
     if (answers === null) {
       throw err
     }
@@ -142,9 +150,9 @@ const INVITE_REFUSALS: Record<string, [number, InviteOutcome]> = {
 }
 
 // The invitee's first token has no tenant, so /me waits for the refresh that carries the new membership.
-async function acceptInviteAndRead(base: string, token: string, refreshToken: unknown, invite: string, now: number, signal: AbortSignal): Promise<Session> {
+async function acceptInviteAndRead(base: string, token: string, refreshToken: unknown, invite: { token: string; name: string | null }, now: number, signal: AbortSignal): Promise<Session> {
   try {
-    await apiFetch(`${base}/api/tenancy/v1/invitations/accept`, { method: 'POST', token, body: { token: invite }, signal })
+    await apiFetch(`${base}/api/tenancy/v1/invitations/accept`, { method: 'POST', token, body: invite.name === null ? { token: invite.token } : { token: invite.token, display_name: invite.name }, signal })
   } catch (err) {
     const message = err instanceof ApiError ? (err.body as { error?: unknown } | null | undefined)?.error : undefined
     const refusal = typeof message === 'string' && Object.hasOwn(INVITE_REFUSALS, message) ? INVITE_REFUSALS[message] : undefined
@@ -156,20 +164,17 @@ async function acceptInviteAndRead(base: string, token: string, refreshToken: un
   return renewAndRead(base, { token, refreshToken }, now, signal, 'no refresh token after accepting the invite')
 }
 
-export async function createOwnWorkspace(base: string, offer: JoinOffer, now: number = Date.now()): Promise<Session> {
-  if (offer.answers === null) {
-    throw new Error('no registration answers')
-  }
-  return provisionAndRead(base, offer, offer.answers, now, AbortSignal.timeout(15000))
+export async function createOwnWorkspace(base: string, offer: JoinOffer, body: ProvisionBody, now: number = Date.now()): Promise<Session> {
+  return provisionAndRead(base, offer, body, now, AbortSignal.timeout(15000))
 }
 
 // A 404 or 409 re-reads /me first: another tab may have accepted already.
 // A renewal rotates the refresh token; the offer is updated in place so the next Join uses the live pair.
-export async function joinInvite(base: string, offer: JoinOffer, id: string, now: number = Date.now()): Promise<Session> {
+export async function joinInvite(base: string, offer: JoinOffer, id: string, displayName: string, now: number = Date.now()): Promise<Session> {
   const signal = AbortSignal.timeout(15000)
   try {
     await callRenewing(base, offer, signal, (token) =>
-      apiFetch(`${base}/api/tenancy/v1/invitations/${encodeURIComponent(id)}/accept`, { method: 'POST', token, signal }),
+      apiFetch(`${base}/api/tenancy/v1/invitations/${encodeURIComponent(id)}/accept`, { method: 'POST', token, body: { display_name: displayName.trim() }, signal }),
     )
   } catch (err) {
     const message = err instanceof ApiError ? (err.body as { error?: unknown } | null | undefined)?.error : undefined
@@ -191,7 +196,6 @@ export async function joinInvite(base: string, offer: JoinOffer, id: string, now
   return renewAndRead(base, offer, now, signal, 'no refresh token after joining the invite')
 }
 
-// ceiling: an account whose workspace an operator deleted re-provisions at its next sign-in; revisit when workspace deletion ships.
 async function provisionAndRead(base: string, auth: { token: string; refreshToken: unknown }, answers: ProvisionBody, now: number, signal: AbortSignal): Promise<Session> {
   try {
     await callRenewing(base, auth, signal, (t) => apiFetch(`${base}/api/tenancy/v1/workspaces`, { method: 'POST', token: t, body: answers, signal }))

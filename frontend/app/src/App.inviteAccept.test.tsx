@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // An invitee's sign-in: the app holds the invite across the bounce, accepts it on hand-off and renews the session.
 
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Me } from './auth'
@@ -99,8 +99,8 @@ function storedState(): string | null {
 }
 
 // Written raw so the app tests do not depend on holdPendingInvite.
-function holdRaw(token: string = INVITE) {
-  sessionStorage.setItem(INVITE_KEY, JSON.stringify({ v: 1, t: token, at: Date.now() }))
+function holdRaw(token: string = INVITE, name?: string) {
+  sessionStorage.setItem(INVITE_KEY, JSON.stringify({ v: 1, t: token, at: Date.now(), ...(name === undefined ? {} : { n: name }) }))
 }
 
 type Reply = () => Promise<unknown>
@@ -114,6 +114,7 @@ let calls: Call[] = []
 let acceptReply: Reply = ok({ tenant: ME.tenant, user: { id: ME.user.id, role: 'admin' } })
 let refreshReply: Reply = ok({ access_token: T_RENEWED, refresh_token: 'R1' })
 let renewedMeReply: Reply = ok(ME)
+let mineReply: Reply = ok({ invitations: [] })
 
 const path = (c: Call) => c.url.replace(GATEWAY, '')
 const hits = (p: string) => calls.filter((c) => path(c) === p)
@@ -128,6 +129,7 @@ function routeFetch() {
       if (url === ACCEPT_URL) return acceptReply()
       if (url === `${GATEWAY}/auth/refresh`) return refreshReply()
       if (url === `${GATEWAY}/api/tenancy/v1/me`) return (auth === `Bearer ${T_FIRST}` ? fail(403, 'forbidden') : renewedMeReply)()
+      if (url === `${GATEWAY}/api/tenancy/v1/invitations/mine`) return mineReply()
       if (url === `${GATEWAY}/api/tenancy/v1/workspaces`) return ok({ tenant: ME.tenant })()
       if (url === `${GATEWAY}/auth/login`) return ok({ access_token: jwt(APP_PERSONAS.firm.subject, nowSec() + 3600) })()
       return ok({
@@ -178,6 +180,7 @@ beforeEach(() => {
   acceptReply = ok({ tenant: ME.tenant, user: { id: ME.user.id, role: 'admin' } })
   refreshReply = ok({ access_token: T_RENEWED, refresh_token: 'R1' })
   renewedMeReply = ok(ME)
+  mineReply = ok({ invitations: [] })
   routeFetch()
 })
 
@@ -203,6 +206,21 @@ describe('?auth=start holds the invite across the bounce (D11)', () => {
     expect(storedState(), 'the bounce carries a stored state').toEqual(expect.stringMatching(/^[A-Za-z0-9_-]{43}$/))
     expect(window.location.hash, 'the address bar holds no hash').toBe('')
     expect(window.location.search).toBe('')
+  })
+
+  it("App: the start fragment's name reaches the accept", async () => {
+    configure()
+    window.history.replaceState(null, '', `/?auth=start#invite=${INVITE}&name=Ada`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toHaveLength(1))
+    expect(JSON.parse(sessionStorage.getItem(INVITE_KEY) ?? 'null')).toEqual({ v: 1, t: INVITE, at: expect.any(Number), n: 'Ada' })
+    cleanup()
+    ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    await bootApp()
+    await waitFor(() => expect(hits(ACCEPT_PATH)).toHaveLength(1))
+    expect(hits(ACCEPT_PATH)[0].body).toEqual({ token: INVITE, display_name: 'Ada' })
   })
 
   it('app_authStartWithoutInviteClearsAHeldOne', async () => {
@@ -252,6 +270,18 @@ describe('a hand-off with a held invite accepts it and renews the session (D11, 
     await bootApp()
     await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
     expect(hits('/auth/exchange'), 'a tab without a state never redeems').toEqual([])
+    expect(sessionStorage.getItem(INVITE_KEY)).toBeNull()
+  })
+
+  it('App: a refused accept leaves no held name', async () => {
+    configure()
+    ensureSignInState()
+    holdRaw(INVITE, 'Ada')
+    acceptReply = fail(404, MSG_INVALID)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?invite=invalid`]))
     expect(sessionStorage.getItem(INVITE_KEY)).toBeNull()
   })
 
@@ -448,5 +478,40 @@ describe('refusals without a landing base (D35)', () => {
     expect(hits('/auth/refresh'), 'no refresh').toEqual([])
     expect(localStorage.getItem(SESSION_KEY), 'no session is stored').toBeNull()
     expect(capturedCtx, 'no workspace mounts').toBeUndefined()
+  })
+})
+
+describe('a tenant-less sign-in with no held invite (D30)', () => {
+  const PENDING = { id: 'a1', workspace: 'Obi Partners', role: 'reviewer', inviter: null, expires_at: '2026-10-20T00:00:00Z' }
+  const handoff = async () => {
+    configure()
+    ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+  }
+
+  it('App: Create a workspace provisions once and mounts the workspace', async () => {
+    mineReply = ok({ invitations: [], removed: true })
+    await handoff()
+    const create = (await screen.findByTestId('join-create')) as HTMLButtonElement
+    expect((screen.getByTestId('join-workspace-name') as HTMLInputElement).value).toBe(ANSWERS.workspace_name)
+    fireEvent.change(screen.getByTestId('join-workspace-name'), { target: { value: ' Acme ' } })
+    fireEvent.change(screen.getByTestId('join-name'), { target: { value: 'Ada' } })
+    expect(hits('/api/tenancy/v1/workspaces'), 'nothing is provisioned silently').toEqual([])
+    fireEvent.click(create)
+    fireEvent.click(create)
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    expect(hits('/api/tenancy/v1/workspaces')).toHaveLength(1)
+    expect(hits('/api/tenancy/v1/workspaces')[0].body).toEqual({ workspace_name: 'Acme', display_name: 'Ada', kind: 'firm' })
+  })
+
+  it('App: Create my own workspace on the Join screen sends the answers', async () => {
+    mineReply = ok({ invitations: [PENDING], removed: false })
+    await handoff()
+    fireEvent.click(await screen.findByRole('button', { name: 'Create my own workspace' }))
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    expect(hits('/api/tenancy/v1/workspaces')).toHaveLength(1)
+    expect(hits('/api/tenancy/v1/workspaces')[0].body).toEqual(ANSWERS)
   })
 })

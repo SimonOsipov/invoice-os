@@ -19,7 +19,7 @@ const ONE = [inv('a', 'Obi Partners', 'reviewer', 'Ada Obi')]
 const THREE = [inv('a', 'Obi Partners', 'reviewer', 'Ada Obi'), inv('b', 'Zulu Books', 'admin', null), inv('c', 'Kano Tax', 'preparer', 'Musa K')]
 
 function show(invites: PendingInvite[], over: Partial<Parameters<typeof JoinWorkspace>[0]> = {}) {
-  const props = { invites, joining: null, onJoin: vi.fn(), onSignOut: vi.fn(), ...over }
+  const props = { invites, joining: null, defaultName: 'Ada', onJoin: vi.fn(), onSignOut: vi.fn(), ...over }
   render(<JoinWorkspace {...props} />)
   return props
 }
@@ -56,7 +56,7 @@ describe('JoinWorkspace', () => {
     const { onJoin } = show(THREE)
     fireEvent.click(within(screen.getAllByTestId('join-invite')[1]).getByRole('button', { name: 'Join Zulu Books' }))
     expect(onJoin).toHaveBeenCalledTimes(1)
-    expect(onJoin).toHaveBeenCalledWith('b')
+    expect(onJoin).toHaveBeenCalledWith('b', 'Ada')
   })
 
   it('joinWorkspace_joiningDisablesEveryButton', () => {
@@ -100,5 +100,50 @@ describe('JoinWorkspace', () => {
     show(ONE, { joining: CREATING_OWN, onCreateOwn: vi.fn() })
     expect(screen.getByRole('button', { name: 'Creating…' })).toBeTruthy()
     expect((screen.getByRole('button', { name: 'Join Obi Partners' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('JoinWorkspace: the name is prefilled and gates Join', () => {
+    show(ONE)
+    const input = screen.getByTestId('join-name') as HTMLInputElement
+    const join = screen.getByRole('button', { name: 'Join Obi Partners' }) as HTMLButtonElement
+    expect(input.value).toBe('Ada')
+    expect(join.disabled).toBe(false)
+    expect(input.style.width).toBe('100%')
+    fireEvent.change(input, { target: { value: '  ' } })
+    expect(join.disabled).toBe(true)
+    fireEvent.change(input, { target: { value: 'a'.repeat(201) } })
+    expect(join.disabled).toBe(true)
+    fireEvent.change(input, { target: { value: ' Bo ' } })
+    expect(join.disabled).toBe(false)
+  })
+
+  it('JoinWorkspace: no invites renders the no-workspace screen', () => {
+    const { onCreate, onJoin } = show([], { defaultName: '', onCreate: vi.fn() })
+    expect(screen.getByRole('heading').textContent).toBe('No workspace yet')
+    expect(screen.getByText('This account has no workspace yet. If you were invited, open the invite link in your email.')).toBeTruthy()
+    const ws = screen.getByTestId('join-workspace-name') as HTMLInputElement
+    const nm = screen.getByTestId('join-name') as HTMLInputElement
+    const create = screen.getByTestId('join-create') as HTMLButtonElement
+    expect([ws.value, nm.value]).toEqual(['', ''])
+    expect(create.disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^Join/ })).toBeNull()
+    fireEvent.change(ws, { target: { value: 'Acme' } })
+    expect(create.disabled).toBe(true)
+    fireEvent.change(nm, { target: { value: 'Ada' } })
+    expect(create.disabled).toBe(false)
+    fireEvent.change(ws, { target: { value: 'a'.repeat(201) } })
+    expect(create.disabled).toBe(true)
+    fireEvent.change(ws, { target: { value: ' Acme ' } })
+    fireEvent.click(create)
+    expect(onCreate).toHaveBeenCalledWith('Acme', 'Ada')
+    expect(onJoin).not.toHaveBeenCalled()
+  })
+
+  it('JoinWorkspace: the no-workspace inputs are prefilled from the answers', () => {
+    show([], { defaultName: 'Ada', defaultWorkspace: 'Acme', onCreate: vi.fn() })
+    expect((screen.getByTestId('join-workspace-name') as HTMLInputElement).value).toBe('Acme')
+    expect((screen.getByTestId('join-name') as HTMLInputElement).value).toBe('Ada')
+    expect((screen.getByTestId('join-create') as HTMLButtonElement).disabled).toBe(false)
   })
 })

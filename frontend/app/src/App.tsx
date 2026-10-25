@@ -7,7 +7,7 @@ import { revokeSessions } from './lib/revoke'
 import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './lib/renewal'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
 import { consumeSignInState, ensureSignInState, landingInviteUrl, landingRegisterUrl, landingSignInUrl, mintSignInState } from './lib/signInState'
-import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment } from './lib/pendingInvite'
+import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment, readInviteName } from './lib/pendingInvite'
 import { consumePendingVerify, gatewayVerifyUrl, holdPendingVerify, holdsPendingVerify, landingVerifyFailedUrl, readVerifyFragment } from './lib/verifyBounce'
 import { AuditExportToast } from './components/AuditExportToast'
 import { HANDOFF_PARAM, InviteRefusedError, createOwnWorkspace, isJoinOffer, isLiveHandoffSession, joinInvite, readHandoffCode, redeemHandoff, type JoinOffer } from './lib/sessionHandoff'
@@ -1943,6 +1943,7 @@ export default function App() {
   )
   // Read before the strip effect drops the hash; null when `?auth=start` carries no invite.
   const [startInvite] = useState(() => (authStart ? readInviteFragment(window.location.hash) : null))
+  const [startName] = useState(() => (authStart ? readInviteName(window.location.hash) : null))
   const startBounced = useRef(false)
   // `?auth=verify#token=T` (confirm link) or `?auth=verify-invite#token=T` (invite set-password link). `?handoff=` wins.
   const [authVerify, setAuthVerify] = useState(() => {
@@ -2211,18 +2212,26 @@ export default function App() {
       },
     )
   }, [joinOffer])
-  const onJoin = (id: string) => {
+  const onJoin = (id: string, name: string) => {
     const base = gatewayBase()
     if (!joinOffer || !base || joinStarted.current) return
     setJoining(id)
     setJoinNotice(null)
-    resolveJoin(joinInvite(base, joinOffer, id), id)
+    resolveJoin(joinInvite(base, joinOffer, id, name), id)
   }
   const onCreateOwn = () => {
     const base = gatewayBase()
+    if (!joinOffer?.answers || !base || joinStarted.current) return
+    setJoining(CREATING_OWN)
+    resolveJoin(createOwnWorkspace(base, joinOffer, joinOffer.answers))
+  }
+  // The no-workspace screen: the person typed both names; the answers only lend the kind.
+  const onCreate = (workspace_name: string, display_name: string) => {
+    const base = gatewayBase()
     if (!joinOffer || !base || joinStarted.current) return
     setJoining(CREATING_OWN)
-    resolveJoin(createOwnWorkspace(base, joinOffer))
+    const kind = joinOffer.answers?.kind
+    resolveJoin(createOwnWorkspace(base, joinOffer, { workspace_name, display_name, ...(kind ? { kind } : {}) }))
   }
   const onJoinSignOut = async () => {
     const base = gatewayBase()
@@ -2241,12 +2250,12 @@ export default function App() {
     const dest = landingBase() ? landingSignInUrl(mintSignInState(), 'ready') : null
     if (dest) {
       startBounced.current = true
-      holdPendingInvite(startInvite)
+      holdPendingInvite(startInvite, Date.now(), startInvite ? startName : null)
       // replace drops the ?auth=start entry; the invite hop (Out of Scope) keeps its push.
       if (startInvite) window.location.href = dest
       else window.location.replace(dest)
     }
-  }, [authStart, startInvite])
+  }, [authStart, startInvite, startName])
 
   // Bounces over any stored session to the gateway confirm page; the ref keeps StrictMode to one navigation.
   useEffect(() => {
@@ -2329,9 +2338,12 @@ export default function App() {
           invites={joinOffer.invites}
           joining={joining}
           notice={joinNotice}
+          defaultName={joinOffer.answers?.display_name}
+          defaultWorkspace={joinOffer.answers?.workspace_name}
           onJoin={onJoin}
           onSignOut={onJoinSignOut}
           onCreateOwn={joinOffer.answers ? onCreateOwn : undefined}
+          onCreate={onCreate}
         />
       )
     }

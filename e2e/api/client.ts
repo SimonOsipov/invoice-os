@@ -308,14 +308,18 @@ export interface PendingInvite {
   expires_at: string
 }
 
-// GET /api/tenancy/v1/invitations/mine, raw so a spec can assert the refusals.
+// GET /api/tenancy/v1/invitations/mine, raw so a spec can assert the refusals. The body is {invitations, removed}.
 export function listMine(token: string): Promise<{ status: number; body: unknown }> {
   return rawFetch('/api/tenancy/v1/invitations/mine', { headers: { Authorization: `Bearer ${token}` } })
 }
 
-// POST /api/tenancy/v1/invitations/{id}/accept: no body, 200 in the token-accept shape.
-export function acceptById(token: string, id: string): Promise<{ status: number; body: unknown }> {
-  return rawFetch(`/api/tenancy/v1/invitations/${id}/accept`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+// POST /api/tenancy/v1/invitations/{id}/accept: optional {display_name} body, 200 in the token-accept shape.
+export function acceptById(token: string, id: string, displayName?: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch(`/api/tenancy/v1/invitations/${id}/accept`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    ...(displayName === undefined ? {} : { body: { display_name: displayName } }),
+  })
 }
 
 // ---- Wire contract types, declared locally to the verified contract

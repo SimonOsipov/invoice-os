@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as pendingInvite from './pendingInvite'
-import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment } from './pendingInvite'
+import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment, readInviteName } from './pendingInvite'
 
 // Read off the namespace so a missing export fails the assertion, not the import.
 const KEY = (pendingInvite as Record<string, unknown>).PENDING_INVITE_KEY
@@ -66,7 +66,27 @@ describe('readInviteFragment (D11)', () => {
   })
 })
 
+describe('readInviteName', () => {
+  it('readInviteName reads one bounded name', () => {
+    expect(readInviteName(`#invite=${T}&name=Ada%20Obi`)).toBe('Ada Obi')
+    expect(readInviteName('#name=%20Ada%20')).toBe('Ada')
+    expect(readInviteName('#name=Ada&name=Obi')).toBeNull()
+    expect(readInviteName('#name=%20%20')).toBeNull()
+    expect(readInviteName('#invite=x')).toBeNull()
+    expect(readInviteName(`#name=${'a'.repeat(200)}`)).toBe('a'.repeat(200))
+    expect(readInviteName(`#name=${'a'.repeat(201)}`)).toBeNull()
+  })
+})
+
 describe('holdPendingInvite and consumePendingInvite (D11)', () => {
+  it('holdPendingInvite keeps the name; an old blob has none', () => {
+    holdPendingInvite(T, NOW, 'Ada')
+    expect(JSON.parse(storage.store.get(RAW_KEY) ?? 'null')).toEqual({ v: 1, t: T, at: NOW, n: 'Ada' })
+    expect(consumePendingInvite(NOW)).toEqual({ token: T, name: 'Ada' })
+    storage.store.set(RAW_KEY, JSON.stringify({ v: 1, t: T, at: NOW }))
+    expect(consumePendingInvite(NOW)).toEqual({ token: T, name: null })
+  })
+
   it('pendingInvite_isOneShotAndLivesTenMinutes', () => {
     expect(KEY).toBe(RAW_KEY)
     holdPendingInvite(T, NOW)
@@ -75,7 +95,7 @@ describe('holdPendingInvite and consumePendingInvite (D11)', () => {
     expect(storage.store.has(RAW_KEY), 'peek leaves the key').toBe(true)
     expect(peekPendingInvite(NOW + TTL), 'peek at exactly ten minutes').toBeNull()
     expect(storage.store.has(RAW_KEY), 'peek leaves an expired key too').toBe(true)
-    expect(consumePendingInvite(NOW + TTL - 1000)).toBe(T)
+    expect(consumePendingInvite(NOW + TTL - 1000)).toEqual({ token: T, name: null })
     expect(storage.store.has(RAW_KEY), 'consuming removes the key').toBe(false)
     expect(consumePendingInvite(NOW + TTL - 1000), 'the second consume').toBeNull()
 
@@ -84,16 +104,16 @@ describe('holdPendingInvite and consumePendingInvite (D11)', () => {
     expect(storage.store.has(RAW_KEY), 'an expired blob is removed too').toBe(false)
 
     holdPendingInvite(T, NOW)
-    expect(consumePendingInvite(NOW + TTL - 1), 'one millisecond inside the TTL').toBe(T)
+    expect(consumePendingInvite(NOW + TTL - 1), 'one millisecond inside the TTL').toEqual({ token: T, name: null })
 
     holdPendingInvite(T, NOW)
     holdPendingInvite(T2, NOW + 1)
-    expect(consumePendingInvite(NOW + 2), 'a second hold replaces the first').toBe(T2)
+    expect(consumePendingInvite(NOW + 2), 'a second hold replaces the first').toEqual({ token: T2, name: null })
   })
 
   it('pendingInvite_malformedOrThrowingStorageReadsNull', () => {
     holdPendingInvite(T, NOW)
-    expect(consumePendingInvite(NOW), 'control: a well-formed blob reads').toBe(T)
+    expect(consumePendingInvite(NOW), 'control: a well-formed blob reads').toEqual({ token: T, name: null })
 
     const rows: [string, string][] = [
       ['wrong version', JSON.stringify({ v: 2, t: T, at: NOW })],

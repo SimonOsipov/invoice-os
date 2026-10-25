@@ -983,6 +983,47 @@ func TestRLS_IdentityHasRemovedMembershipIsNotPublic(t *testing.T) {
 	}
 }
 
+// Down puts back the any-removed-row answer with the same owner, SECURITY DEFINER, search_path and invoice_app-only grant; Up turns the live-row rule on again.
+func TestRLS_RemovedFlagMigrationDownAndUpKeepTheFunctionShape(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	const sig = "public.identity_has_removed_membership(uuid)"
+	provider := staffMigrationProvider(t)
+	flag := migrationVersion(t, "*_removed_flag_ignores_live_membership.sql")
+	restoreMigrationOnCleanup(t, provider, flag)
+
+	user := uuid.NewString()
+	seedMemberRow(t, h.tenantA, user, "preparer", "removed", nil, nil)
+	seedMemberRow(t, h.tenantB, user, "preparer", "active", nil, nil)
+
+	assertShape := func(phase string) {
+		t.Helper()
+		s, ok := readProc(t, sig)
+		if !ok {
+			t.Fatalf("%s: %s does not exist", phase, sig)
+		}
+		assertExecuteOnlyForApp(t, sig, s, "auth_hook_reader")
+		if s.owner != "auth_hook_reader" || !s.secdef || s.volatile != "s" || !reflect.DeepEqual(s.config, []string{`search_path=""`}) {
+			t.Errorf("%s: (owner, secdef, volatile, config) = (%s, %v, %s, %v), want (auth_hook_reader, true, s, [search_path=\"\"])", phase, s.owner, s.secdef, s.volatile, s.config)
+		}
+	}
+
+	if _, err := provider.ApplyVersion(ctx, flag, false); err != nil && !errors.Is(err, goose.ErrNotApplied) {
+		t.Fatalf("Down of the flag migration: %v", err)
+	}
+	assertShape("after Down")
+	if !callBool(t, h.app, "public.identity_has_removed_membership", user) {
+		t.Error("after Down: removed here, active there = false, want true (the membership_removed answer)")
+	}
+	if _, err := provider.ApplyVersion(ctx, flag, true); err != nil && !errors.Is(err, goose.ErrAlreadyApplied) {
+		t.Fatalf("Up of the flag migration: %v", err)
+	}
+	assertShape("after Up")
+	if callBool(t, h.app, "public.identity_has_removed_membership", user) {
+		t.Error("after Up: removed here, active there = true, want false")
+	}
+}
+
 // Down runs under FORCE RLS: it must reach removed rows in every tenant, then put FORCE back.
 func TestRLS_MembershipRemovedDownTurnsRemovedRowsSuspended(t *testing.T) {
 	h := requireHarness(t)

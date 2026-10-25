@@ -588,15 +588,15 @@ func joinCaller(ctx context.Context) (subject, email string, err error) {
 }
 
 // MyInvitations is the GET /v1/invitations/mine body: the live invites and
-// whether the caller holds a removed membership.
+// whether the caller holds a removed membership and no other.
 type MyInvitations struct {
 	Invitations []PendingInvite `json:"invitations"`
 	Removed     bool            `json:"removed"`
 }
 
 // MyPendingInvitations lists the live invites for the caller's email, soonest
-// expiry first, and says whether the caller was removed from a workspace. The
-// removed flag is read by subject, so it also answers for an empty email.
+// expiry first, and says whether the caller was removed from a workspace and holds
+// no other membership. The removed flag is read by subject, so it also answers for an empty email.
 func (s *Store) MyPendingInvitations(ctx context.Context) (MyInvitations, error) {
 	subject, email, err := joinCaller(ctx)
 	if err != nil {

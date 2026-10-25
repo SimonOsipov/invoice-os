@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react'
 import { CHART_H, SPARK_HEIGHT, SPARK_WIDTH, healthTone, sentryServiceUrl, sparkline } from '../helpers'
 import { fleetSummary, jobSeries, jobsOf, series, shortBuild, type StaffHealth } from '../healthApi'
-import { DASHBOARDS, METRIC_SERVICES, RANGES, SERIES, THRESHOLDS, colourMap, fleetSeries, formatValue, hasData, judge, latestOf, panelOf, type PanelKey, type Point, type RangeKey, type StaffMetrics, type Stat, type Verdict } from '../metricsApi'
+import { DASHBOARDS, METRIC_SERVICES, RANGES, SERIES, THRESHOLDS, colourMap, fleetSeries, formatValue, hasData, judge, latestOf, panelOf, worstP95, type PanelKey, type Point, type RangeKey, type StaffMetrics, type Stat, type Verdict } from '../metricsApi'
 import { syncStamp } from '../rulesApi'
 import { G } from './BlogList'
 import { Badge } from './StatusBadge'
@@ -28,7 +28,7 @@ type Props = {
 }
 
 type Tone = 'green' | 'amber' | 'red' | 'muted'
-type Tile = { key: string; label: string; value: string; unit: string; word?: string; scope?: string; tone: Tone; down?: string[]; points: number[] }
+type Tile = { key: string; label: string; value: string; unit: string; word?: string; scope?: string; tone: Tone; down?: string[]; worst?: string; points: number[] }
 
 const LEGEND_TEXT: CSSProperties = { fontSize: 11, color: 'var(--fg-3)' }
 const ONE_LINE: CSSProperties = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
@@ -81,7 +81,7 @@ const METRIC_STATS: MetricStat[] = [
 ]
 
 // Without metrics the tile is blank while loading, UNAVAILABLE after a failed read and NO DATA once an answer has no value.
-function metricTiles(m: StaffMetrics | null, status: HealthStatus): Tile[] {
+function metricTiles(m: StaffMetrics | null, status: HealthStatus, service: string): Tile[] {
   const f = m ? fleetSeries(m) : null
   return METRIC_STATS.map((s) => {
     const points = f ? s.read(f) : []
@@ -89,7 +89,14 @@ function metricTiles(m: StaffMetrics | null, status: HealthStatus): Tile[] {
     const tail = s.stat === 'connections' ? (m ? `of ${m.connection_budget}` : '') : s.unit
     if (latest === null) return { key: s.key, label: s.label, scope: s.stat === 'connections' ? ALL_SERVICES_TAG : undefined, value: '—', unit: tail, word: !m && status === 'loading' ? undefined : !m && status !== 'ready' ? 'UNAVAILABLE' : 'NO DATA', tone: 'muted', points: [] }
     const shown = formatValue(s.unit, latest)
-    const base = { key: s.key, label: s.label, scope: s.stat === 'connections' ? ALL_SERVICES_TAG : undefined, value: shown.value, unit: s.stat === 'connections' ? tail : shown.unit, points: points.map((p) => p[1]) }
+    let base: Omit<Tile, 'tone'> = { key: s.key, label: s.label, scope: s.stat === 'connections' ? ALL_SERVICES_TAG : undefined, value: shown.value, unit: s.stat === 'connections' ? tail : shown.unit, points: points.map((p) => p[1]) }
+    const worst = s.key === 'p95' && service === '' && m ? worstP95(m) : null
+    if (worst && f) {
+      // Main value is the fleet p95; colour, word and sparkline stay on the worst service.
+      const fleet = latestOf(f.p95Fleet)
+      const main = fleet === null ? { value: '—', unit: 'ms' } : formatValue('ms', fleet)
+      base = { ...base, value: main.value, unit: main.unit, worst: `worst ${worst.name} ${shown.value} ${shown.unit}` }
+    }
     if (!s.stat) return { ...base, tone: 'green' }
     const peak = Math.max(...points.map((p) => formatValue(s.unit, p[1]).n))
     return { ...base, ...VERDICT[judge(s.stat, shown.n, peak, m?.connection_budget ?? 0)] }
@@ -277,6 +284,11 @@ function TileCard({ t }: { t: Tile }) {
           {t.unit}
         </span>
       </div>
+      {t.worst && (
+        <div data-worst="" className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 12, overflowWrap: 'anywhere' }}>
+          {t.worst}
+        </div>
+      )}
       {t.down && t.down.length > 0 && (
         <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 12, ...ONE_LINE }}>
           {`Down: ${t.down.join(', ')}`}
@@ -370,7 +382,7 @@ export function Health({ status, errorText, data, healthStale, metricsStale, onR
           </div>
         </div>
         <div className="ops-health-stats" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 16 }}>
-          {[fleet, ...metricTiles(metrics, metricsStatus)].map((t) => (
+          {[fleet, ...metricTiles(metrics, metricsStatus, service)].map((t) => (
             <TileCard key={t.key} t={t} />
           ))}
         </div>

@@ -34,8 +34,11 @@ paths:
 - Apply a consent choice in `applyChoice` on every choice, not only when it injects the tag. A reject sets the revoked flag, clears the `_ga` cookies, calls `removeChat` and clears the HubSpot cookies.
 - Ship no `gtag('consent', ...)` call. Google Consent Mode is out of scope.
 - Seed a granted consent record in `openLanding()` before the landing e2e navigates. A denied default makes the production-host assertion false.
-- Gate the library tag on `LIBRARY_HOSTNAMES` in `hubspot.ts`. A fork of either host sends nothing.
+- Serve the library on the landing host, under `LIBRARY_BASE` in `frontend/landing/src/sitePaths.ts`.
+- Gate the library tag on `LIBRARY_HOSTNAMES` in `hubspot.ts`. A fork of the library sends nothing.
 - Gate the blog tag on `BLOG_HOSTNAMES` in `hubspot.ts`. A fork of the blog sends nothing.
+- Build `LIBRARY_HOSTNAMES` and `BLOG_HOSTNAMES` from `PRODUCTION_HOSTNAMES`. Each adds its own old host until the redirect to the new address is live.
+- Keep the library build in `/srv/library` in the library image. Keep `index.html` at `/srv/index.html` and `build.txt` in both directories.
 - Keep the library senders in `frontend/landing/src/analytics.ts`. `frontend/library/src/analytics.ts` binds them to the library host.
 - Keep the blog senders in `frontend/landing/src/analytics.ts`. `frontend/blog/src/analytics.ts` binds them to the blog host.
 - Store the consent choice in the `asc_consent` cookie on `SHARED_COOKIE_DOMAIN` on a production host. Keep it in `localStorage` on any other host. Move an older `localStorage` record into the cookie. Keep the record with the later `ts`.

@@ -47,14 +47,14 @@ afterEach(() => {
 })
 
 describe('shouldLoadTag with a host list', () => {
-  it('LS-01 the library list opens the gate on the library host only', async () => {
+  it('LS-01 the library list admits www and its old host only', async () => {
     const { shouldLoadTag } = await import('./analytics')
     const { LIBRARY_HOSTNAMES } = await import('./hubspot')
-    for (const h of [LIB, 'LIBRARY.ASCOMPLY.COM', ' library.ascomply.com ']) {
+    for (const h of [LIB, 'LIBRARY.ASCOMPLY.COM', ' library.ascomply.com ', 'www.ascomply.com']) {
       expect(shouldLoadTag(h, true, ID, LIBRARY_HOSTNAMES), h).toBe(true)
     }
     for (const h of [
-      'www.ascomply.com',
+      'blog.ascomply.com',
       'library-pr-12-944095690109.africa-south1.run.app',
       'library.ascomply.com.evil.example',
       'library.ascomply.com.',
@@ -65,13 +65,22 @@ describe('shouldLoadTag with a host list', () => {
     }
   })
 
-  it("LS-02 with no list the gate is the landing's", async () => {
+  it("LS-02 the library list extends the landing's", async () => {
     const { shouldLoadTag } = await import('./analytics')
     const { LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES } = await import('./hubspot')
     expect(shouldLoadTag(LIB, true, ID)).toBe(false)
     expect(shouldLoadTag('www.ascomply.com', true, ID)).toBe(true)
-    expect(LIBRARY_HOSTNAMES).toEqual([LIB])
-    expect(LIBRARY_HOSTNAMES.filter((h) => PRODUCTION_HOSTNAMES.includes(h))).toEqual([])
+    expect([...LIBRARY_HOSTNAMES].sort()).toEqual([...PRODUCTION_HOSTNAMES, LIB].sort())
+  })
+
+  it('LS-06 the blog list admits www and its old host, not the library old host', async () => {
+    const { shouldLoadTag } = await import('./analytics')
+    const { BLOG_HOSTNAMES, PRODUCTION_HOSTNAMES } = await import('./hubspot')
+    expect([...BLOG_HOSTNAMES].sort()).toEqual([...PRODUCTION_HOSTNAMES, 'blog.ascomply.com'].sort())
+    for (const h of ['www.ascomply.com', 'blog.ascomply.com']) expect(shouldLoadTag(h, true, ID, BLOG_HOSTNAMES), h).toBe(true)
+    for (const h of [LIB, 'blog.ascomply.com.evil.example', 'blog-pr-1-944095690109.africa-south1.run.app', 'ascomply.com', '']) {
+      expect(shouldLoadTag(h, true, ID, BLOG_HOSTNAMES), h).toBe(false)
+    }
   })
 
   it('LS-03 a closed gate holds without consent or without an id', async () => {

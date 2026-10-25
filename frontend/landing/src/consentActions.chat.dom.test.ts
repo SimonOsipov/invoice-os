@@ -141,6 +141,8 @@ describe('opt-out cookie on Accept', () => {
     ['www.ascomply.com', undefined],
     ['library.ascomply.com', LIBRARY_HOSTNAMES],
     ['blog.ascomply.com', BLOG_HOSTNAMES],
+    ['www.ascomply.com', LIBRARY_HOSTNAMES],
+    ['www.ascomply.com', BLOG_HOSTNAMES],
   ] as const)('Accept on %s expires __hs_do_not_track', async (hostname, hosts) => {
     seed('__hs_do_not_track')
     expect(jarNames(), 'seed did not land').toContain('__hs_do_not_track')

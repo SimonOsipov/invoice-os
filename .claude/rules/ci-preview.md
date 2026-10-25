@@ -16,6 +16,7 @@ paths:
 - Generate each PR's tokens and GoTrue key in `preview.sh secrets`. Never copy a production value into preview.
 - Give no preview service an OpenRouter key or a Sentry DSN. The `Preview invariants` job fails on either.
 - Probe the gateway at `/health` on run.app. Cloud Run's front end answers `/healthz` itself; `/healthz/fleet` passes through.
+- Print the library and blog addresses with their base paths from `preview.sh urls`. A preview has no load balancer.
 - Send `X-Gateway-Token` to `/healthz/fleet`. `preview.sh token <N>` prints the PR's token.
 - Read cloud credentials only after `pnpm install` in a job that installs dependencies.
 - Re-run the whole workflow to retry an `E2E gate`, never "Re-run failed jobs". The database is recreated only when the `deploy` job runs.

@@ -7,7 +7,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { BLOG_HOSTNAMES } from './hubspot'
+import { BLOG_HOSTNAMES, LIBRARY_HOSTNAMES } from './hubspot'
 import { shouldLoadChat } from './hubspotChat'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -41,6 +41,9 @@ describe('shouldLoadChat', () => {
     expect(shouldLoadChat('www.ascomply.com', false)).toBe(false)
     expect(shouldLoadChat('landing-pr-42-944095690109.africa-south1.run.app', true)).toBe(false)
     expect(shouldLoadChat('blog.ascomply.com', true, BLOG_HOSTNAMES)).toBe(true)
+    expect(shouldLoadChat('www.ascomply.com', true, LIBRARY_HOSTNAMES)).toBe(true)
+    expect(shouldLoadChat('www.ascomply.com', true, BLOG_HOSTNAMES)).toBe(true)
+    expect(shouldLoadChat('blog.ascomply.com', true, LIBRARY_HOSTNAMES)).toBe(false)
   })
 })
 

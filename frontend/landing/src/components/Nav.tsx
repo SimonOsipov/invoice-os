@@ -152,9 +152,11 @@ export function Nav({
             )
           })}
           {libraryHref && (
-            // Cross-origin, so no hrefPrefix, and not a NAV_LINKS entry: the spy and AN-01 only know sections.
+            // Another site, so no hrefPrefix, and not a NAV_LINKS entry: the spy and AN-01 only know sections.
             <a
               href={libraryHref}
+              target="_blank"
+              rel="noopener noreferrer"
               className="ios-nav-link"
               style={{
                 fontSize: 14,
@@ -171,6 +173,8 @@ export function Nav({
           {blogHref && (
             <a
               href={blogHref}
+              target="_blank"
+              rel="noopener noreferrer"
               className="ios-nav-link"
               style={{
                 fontSize: 14,
@@ -228,12 +232,12 @@ export function Nav({
             </a>
           ))}
           {libraryHref && (
-            <a href={libraryHref} className="a-menu-link" onClick={() => setMenuOpen(false)}>
+            <a href={libraryHref} target="_blank" rel="noopener noreferrer" className="a-menu-link" onClick={() => setMenuOpen(false)}>
               Library
             </a>
           )}
           {blogHref && (
-            <a href={blogHref} className="a-menu-link" onClick={() => setMenuOpen(false)}>
+            <a href={blogHref} target="_blank" rel="noopener noreferrer" className="a-menu-link" onClick={() => setMenuOpen(false)}>
               Blog
             </a>
           )}

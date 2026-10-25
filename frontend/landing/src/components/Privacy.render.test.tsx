@@ -22,7 +22,8 @@ import { ANALYTICS_DEFAULT_SENTENCE, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE
 import { CONSENT_TEXT } from './demoForm'
 import { APP_NOTICE_BODY, CookieNotice } from './CookieNotice'
 import { PRODUCTION_HOSTNAMES, submissionUrl } from '../hubspot'
-import { APP_HOSTNAMES, BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
+import { APP_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
+import { BLOG_BASE, LIBRARY_BASE } from '../sitePaths'
 import { CONSENT_DEFAULT_ANALYTICS } from '../consent'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import {
@@ -46,6 +47,8 @@ const INDEX_HTML = join(SRC_DIR, '..', '..', 'index.html')
 const APP_SRC = join(SRC_DIR, '..', '..', '..', 'app', 'src')
 const PACKAGES_DIR = join(SRC_DIR, '..', '..', '..', '..', 'packages')
 const OPS_CONSOLE_SRC = join(SRC_DIR, '..', '..', '..', 'ops-console', 'src')
+const LIBRARY_ADDR = `${PRODUCTION_HOSTNAMES[0]}${LIBRARY_BASE}`
+const BLOG_ADDR = `${PRODUCTION_HOSTNAMES[0]}${BLOG_BASE}`
 const SUPPORT_CONSOLE_SRC = join(SRC_DIR, '..', '..', '..', 'support-console', 'src')
 
 // Finds the first tag matching `re`. Uses vitest's own `expect` rather than a
@@ -213,8 +216,6 @@ describe('Privacy SSR render (LAND-04-02)', () => {
   it('C3 (NEW): the hostname on the page is the one the gate allowlists', () => {
     // Load-bearing: a second allowlisted host would make "and nowhere else" false.
     expect(PRODUCTION_HOSTNAMES.length, 'PRODUCTION_HOSTNAMES must have exactly one entry').toBe(1)
-    expect(LIBRARY_HOSTNAMES.length, 'LIBRARY_HOSTNAMES must have exactly one entry').toBe(1)
-    expect(BLOG_HOSTNAMES.length, 'BLOG_HOSTNAMES must have exactly one entry').toBe(1)
     expect(html).toContain(PRODUCTION_HOSTNAMES[0])
   })
 
@@ -490,9 +491,9 @@ describe('T3-15/T3-17/T3-18: the page describes the control that now exists', ()
   })
 
   it('PC-06 the Live chat section carries the consent qualifier', () => {
-    const para = paragraphContaining(`${BLOG_HOSTNAMES[0]} show HubSpot`)
-    const chat = para.split(/(?<=[.!?])\s+/).find((x) => x.includes(`${BLOG_HOSTNAMES[0]} show HubSpot`)) ?? ''
-    for (const host of [PRODUCTION_HOSTNAMES[0], LIBRARY_HOSTNAMES[0], BLOG_HOSTNAMES[0]]) {
+    const para = paragraphContaining(`${BLOG_ADDR} show HubSpot`)
+    const chat = para.split(/(?<=[.!?])\s+/).find((x) => x.includes(`${BLOG_ADDR} show HubSpot`)) ?? ''
+    for (const host of [PRODUCTION_HOSTNAMES[0], LIBRARY_ADDR, BLOG_ADDR]) {
       expect(chat, `the lede does not name ${host}`).toContain(host)
     }
     expect(carriesConsentQualifier(chat), `no consent condition in: ${chat}`).toBe(true)
@@ -732,7 +733,7 @@ describe('the Library shares the landing\'s choice', () => {
 
   // Pending PM approval of this copy.
   const LIBRARY_SECTION = [
-    `Our Feature Library at ${LIBRARY_HOSTNAMES[0]} follows this policy too. One analytics choice covers this site and the Library: whatever you choose on either applies to both, and the other does not ask you again. Cookie choices, at the foot of this site's pages and of the Library's sidebar, brings the notice back on either, and a change made there applies to both.`,
+    `Our Feature Library at ${LIBRARY_ADDR} follows this policy too. One analytics choice covers this site and the Library: whatever you choose on either applies to both, and the other does not ask you again. Cookie choices, at the foot of this site's pages and of the Library's sidebar, brings the notice back on either, and a change made there applies to both.`,
     `If you allow analytics there, Google Analytics measures the Library in the same way and under the same property. Google also receives each Library page you view, when you choose Book the Demo, when you start the tour, and when you choose Open in Platform, with the feature or group it was for. The Library shares the _ga cookies with this site, so Google can tell that a visit to both came from the same browser. Choosing Reject on either site deletes those shared _ga cookies. If analytics was running, though, Google's script is still loaded into any of our pages you have open, and until you reload them it can send measurements of its own and re-create those cookies.`,
     "If you have allowed analytics, the Library shows HubSpot's live chat, which loads only after you choose Accept, sends HubSpot, about its own pages, what is described under Live chat below, and is removed, with HubSpot's cookies, when you choose Reject on any of our sites. The Library is typeset in the same Google fonts. When a Library page fails, your browser sends Sentry a report as described below; the Library does not send Sentry how long its pages take to load.",
   ]
@@ -743,16 +744,23 @@ describe('the Library shares the landing\'s choice', () => {
       .find((t) => t.includes('and nowhere else'))
     expect(para, 'the active-on paragraph is gone').toBeDefined()
     expect(para).toContain(PRODUCTION_HOSTNAMES[0])
-    expect(para).toContain(LIBRARY_HOSTNAMES[0])
-    expect(para).toContain(BLOG_HOSTNAMES[0])
+    expect(para).toContain(LIBRARY_ADDR)
+    expect(para).toContain(BLOG_ADDR)
     expect(para).toContain(APP_HOSTNAMES[0])
     const src = readFileSync(PRIVACY_TSX, 'utf8')
     expect(src).toMatch(/import\s*\{[^}]*APP_HOSTNAMES[^}]*\}\s*from\s*['"]\.\.\/hubspot['"]/)
     expect(src).not.toContain('app.ascomply.com')
-    expect(src).toMatch(/import\s*\{[^}]*LIBRARY_HOSTNAMES[^}]*\}\s*from\s*['"]\.\.\/hubspot['"]/)
-    expect(src).toMatch(/import\s*\{[^}]*BLOG_HOSTNAMES[^}]*\}\s*from\s*['"]\.\.\/hubspot['"]/)
+    expect(src).toMatch(/import\s*\{[^}]*LIBRARY_BASE[^}]*\}\s*from\s*['"]\.\.\/sitePaths['"]/)
+    expect(src).toMatch(/import\s*\{[^}]*BLOG_BASE[^}]*\}\s*from\s*['"]\.\.\/sitePaths['"]/)
     expect(src).not.toContain('library.ascomply.com')
     expect(src).not.toContain('blog.ascomply.com')
+  })
+
+  it('PL-03 the Library and Blog sections name the www paths', () => {
+    expect(LIBRARY_ADDR).toBe('www.ascomply.com/library')
+    expect(BLOG_ADDR).toBe('www.ascomply.com/blog')
+    expect(libraryParagraphs()[0]).toMatch(/^Our Feature Library at www\.ascomply\.com\/library /)
+    expect(text(html)).toContain('Our Blog at www.ascomply.com/blog follows this policy too')
   })
 
   it('PL-02 one Library section, between what it is not used for and Google Fonts', () => {
@@ -817,7 +825,7 @@ describe('the Library shares the landing\'s choice', () => {
       'asks for your analytics choice itself',
       'keeps the answer for each address apart',
       'does not carry to the other',
-      `are set for ${LIBRARY_HOSTNAMES[0]} only`,
+      'are set for library.ascomply.com only',
       'Our own code sets no cookies at all',
       'though not as a cookie',
       'never sends anywhere',
@@ -844,13 +852,13 @@ describe('the Library shares the landing\'s choice', () => {
     const para = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g))
       .map((m) => text(m[1]))
       .find((t) => t.includes('asc_consent'))
-    expect(para).toContain(`so this site, our Feature Library at ${LIBRARY_HOSTNAMES[0]}, our Blog at ${BLOG_HOSTNAMES[0]} and the signed-in product at ${APP_HOSTNAMES[0]} read the same answer`)
+    expect(para).toContain(`so this site, our Feature Library at ${LIBRARY_ADDR}, our Blog at ${BLOG_ADDR} and the signed-in product at ${APP_HOSTNAMES[0]} read the same answer`)
   })
 
   // Pending the user's copy sign-off.
   const BLOG_HEADING = '>The Blog and its newsletter</h2>'
   const BLOG_SECTION = [
-    `Our Blog at ${BLOG_HOSTNAMES[0]} follows this policy too. One analytics choice covers this site, the Feature Library and the Blog: whatever you choose on any of them applies to all three. Cookie choices, at the foot of each site's pages or sidebar, brings the notice back, and a change made there applies to all three. If you allow analytics, Google Analytics measures the Blog in the same way and under the same property, and Google receives each Blog page you view and when you choose Book the Demo. The Blog shares the _ga cookies with this site and the Library. Choosing Reject on any of them deletes those shared _ga cookies. If analytics was running, though, Google's script is still loaded into any of our pages you have open, and until you reload them it can send measurements of its own and re-create those cookies. The Blog is typeset in the same Google fonts. When a Blog page fails, your browser sends Sentry a report as described below.`,
+    `Our Blog at ${BLOG_ADDR} follows this policy too. One analytics choice covers this site, the Feature Library and the Blog: whatever you choose on any of them applies to all three. Cookie choices, at the foot of each site's pages or sidebar, brings the notice back, and a change made there applies to all three. If you allow analytics, Google Analytics measures the Blog in the same way and under the same property, and Google receives each Blog page you view and when you choose Book the Demo. The Blog shares the _ga cookies with this site and the Library. Choosing Reject on any of them deletes those shared _ga cookies. If analytics was running, though, Google's script is still loaded into any of our pages you have open, and until you reload them it can send measurements of its own and re-create those cookies. The Blog is typeset in the same Google fonts. When a Blog page fails, your browser sends Sentry a report as described below.`,
     BLOG_CHAT_PARAGRAPH,
     'The Blog has a newsletter sign-up. You give us your work email address, the topics you want and how often you want to hear from us. Nothing is kept for good until you confirm. We first hold your request on our own server with a one-time link, and we send the link to your address in a confirmation email. Resend, the service we use to send email, receives your address to deliver that email. A request you do not confirm within 48 hours expires, and its link stops working.',
     'When you click the link, we store your email address, your topics, how often you want to hear from us and the time you confirmed, on our own server. We also add you to our Blog list in Resend, with the same three details. Nothing from the newsletter goes to HubSpot. We send the newsletter by hand, and we follow the frequency you chose.',

@@ -56,3 +56,4 @@ COPY --from=build /repo/frontend/landing/dist /srv
 # filesystem, so it can never carry a build; the deploy gate reads this instead and
 # blocks until the SPA under test is the one actually being served.
 COPY --from=build /repo/internal/platform/buildsha.txt /srv/build.txt
+COPY --from=build /repo/frontend/landing/robots.txt /srv/robots.txt

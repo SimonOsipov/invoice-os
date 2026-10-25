@@ -7,6 +7,8 @@ import type { BrowserContext, Page, Response, Route } from '@playwright/test'
 import { isProductionHost, isSentryHost } from './sentryHost'
 
 const CONSENT_KEY = 'asc_consent' // retyped from frontend/landing/src/consent.ts
+const LIBRARY_BASE = '/library' // frontend/landing/src/sitePaths.ts
+const BLOG_BASE = '/blog' // frontend/landing/src/sitePaths.ts
 export const STUB_HEADER = 'x-asc-stub'
 export const CHAT_LOADER_URL = 'https://js-eu1.hs-scripts.com/148915098.js' // CHAT_SCRIPT_URL in frontend/landing/src/hubspotChat.ts
 // retyped from HUBSPOT_CHAT_DOMAINS in frontend/landing/src/hubspotChat.ts
@@ -98,20 +100,23 @@ export async function routeProductionHosts(
   context: BrowserContext,
   targets: { landing: string; library: string; blog?: string; gateway?: string },
 ): Promise<void> {
-  const forward = (origin: string) => async (route: Route) => {
+  const forward = (target: string) => async (route: Route) => {
     const { pathname, search } = new URL(route.request().url())
-    await route.fulfill({ response: await route.fetch({ url: origin + pathname + search }) })
+    await route.fulfill({ response: await route.fetch({ url: new URL(target).origin + pathname + search }) })
   }
+  const underBase = (base: string) => (url: URL) =>
+    url.origin === 'https://www.ascomply.com' && (url.pathname === base || url.pathname.startsWith(`${base}/`))
+  // Later routes win: the landing first, then the two bases carved out of it.
   await context.route('https://www.ascomply.com/**', forward(targets.landing))
-  await context.route('https://library.ascomply.com/**', forward(targets.library))
-  if (targets.blog) await context.route('https://blog.ascomply.com/**', forward(targets.blog))
-  // The fork gateway's CORS list lacks the production blog origin; answer with it.
+  await context.route(underBase(LIBRARY_BASE), forward(targets.library))
+  if (targets.blog) await context.route(underBase(BLOG_BASE), forward(targets.blog))
+  // The fork gateway's CORS list lacks the production origin; answer with it.
   if (targets.gateway) {
     await context.route(`${targets.gateway}/blog/**`, async (route) => {
       const res = await route.fetch()
       await route.fulfill({
         response: res,
-        headers: { ...res.headers(), 'access-control-allow-origin': 'https://blog.ascomply.com' },
+        headers: { ...res.headers(), 'access-control-allow-origin': 'https://www.ascomply.com' },
       })
     })
   }

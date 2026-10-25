@@ -82,7 +82,7 @@ async function move(go: () => void) {
 
 describe('App', () => {
   it('root_isTheAscAppFrameWithTheSidebarAndTheScrollingMain', () => {
-    mount('/')
+    mount('/library/')
     const app = container.firstElementChild as HTMLElement
     expect(app.className).toBe('asc-app')
     expect([app.style.height, app.style.display, app.style.overflow]).toEqual(['100vh', 'flex', 'hidden'])
@@ -95,13 +95,13 @@ describe('App', () => {
   })
 
   it('boot_aPathOpensItsView', () => {
-    mount('/rules')
+    mount('/library/rules')
     expect(nav('rules').style.fontWeight).toBe('700')
     expect(h2s()).toContain('Rules & validation')
     act(() => root.unmount())
     container.remove()
 
-    mount('/clearance/submit-clear')
+    mount('/library/clearance/submit-clear')
     expect(byText('aside button span', 'Submit for NRS clearance').closest('button')!.style.color).toBe('var(--accent)')
     expect(stage('Clear').style.background).toBe('var(--sage-panel)')
     expect(stage('Validate').style.background).toBe('transparent')
@@ -109,12 +109,12 @@ describe('App', () => {
     act(() => root.unmount())
     container.remove()
 
-    mount('/')
+    mount('/library/')
     expect(container.textContent).toContain('Feature library')
   })
 
   it('boot_anUnknownPathShowsTheHomeAndKeepsTheUrl', () => {
-    for (const path of ['/nope', '/invoices/learns']) {
+    for (const path of ['/library/nope', '/library/invoices/learns']) {
       window.history.replaceState(null, '', path)
       const len = window.history.length
       mount(path)
@@ -124,52 +124,69 @@ describe('App', () => {
       act(() => root.unmount())
       container.remove()
     }
-    mount('/')
+    mount('/library/')
+  })
+
+  it('navigate_pushesTheBasePath', () => {
+    mount('/library/')
+    const push = vi.spyOn(window.history, 'pushState')
+    click(card('Rules & validation'))
+    expect(push).toHaveBeenCalledWith(null, '', '/library/rules')
+    expect(window.location.pathname).toBe('/library/rules')
+    push.mockRestore()
   })
 
   it('click_pushesOnePathPerView', () => {
-    mount('/')
+    mount('/library/')
     const len = window.history.length
     click(card('Rules & validation'))
-    expect(window.location.pathname).toBe('/rules')
+    expect(window.location.pathname).toBe('/library/rules')
     click(container.querySelector('#fc-validate')!)
-    expect(window.location.pathname).toBe('/rules/validate')
+    expect(window.location.pathname).toBe('/library/rules/validate')
     click(byText('aside button', 'Overview'))
-    expect(window.location.pathname).toBe('/')
+    expect(window.location.pathname).toBe('/library/')
     expect(window.history.length).toBe(len + 3)
     click(stage('Validate'))
-    expect(window.location.pathname).toBe('/rules')
+    expect(window.location.pathname).toBe('/library/rules')
     expect(window.history.length).toBe(len + 4)
     click(nav('rules'))
     expect(window.history.length).toBe(len + 4)
     act(() => root.unmount())
     container.remove()
 
-    mount('/invoices/')
+    mount('/library/invoices/')
     const l2 = window.history.length
     click(nav('invoices'))
     expect(window.history.length).toBe(l2)
-    expect(window.location.pathname).toBe('/invoices')
+    expect(window.location.pathname).toBe('/library/invoices')
     act(() => root.unmount())
     container.remove()
 
-    mount('/nope')
+    mount('/library/nope')
     const l3 = window.history.length
     click(byText('aside button', 'Overview'))
     expect(window.history.length).toBe(l3)
-    expect(window.location.pathname).toBe('/')
+    expect(window.location.pathname).toBe('/library/')
     act(() => root.unmount())
     container.remove()
 
-    mount('/rules')
+    mount('/library/rules')
     const l4 = window.history.length
     click(byText('aside button', 'Plain validation messages'))
-    expect(window.location.pathname).toBe('/rules/validate')
+    expect(window.location.pathname).toBe('/library/rules/validate')
     expect(window.history.length).toBe(l4 + 1)
   })
 
+  it('click_anOldHostPathIsCorrectedToTheBaseInPlace', () => {
+    mount('/rules')
+    const len = window.history.length
+    click(nav('rules'))
+    expect(window.location.pathname).toBe('/library/rules')
+    expect(window.history.length).toBe(len)
+  })
+
   it('backAndForward_restoreEachView', async () => {
-    mount('/')
+    mount('/library/')
     click(card('Rules & validation'))
     click(container.querySelector('#fc-validate')!)
     click(byText('aside button', 'Overview'))
@@ -186,7 +203,7 @@ describe('App', () => {
   })
 
   it('navigation_scrollsMainToTheTop', async () => {
-    mount('/')
+    mount('/library/')
     main().scrollTop = 500
     click(nav('audit'))
     expect(main().scrollTop).toBe(0)
@@ -203,7 +220,7 @@ describe('App', () => {
   it('links_followTheEnvironment', () => {
     vi.stubEnv('VITE_APP_URL', 'https://a.example')
     vi.stubEnv('VITE_LANDING_URL', 'https://l.example')
-    mount('/')
+    mount('/library/')
     const demo = links('Book the Demo')
     expect(demo.map((a) => a.getAttribute('href'))).toEqual(['https://l.example/?demo', 'https://l.example/?demo'])
     click(nav('rules'))
@@ -217,7 +234,7 @@ describe('App', () => {
 
     vi.stubEnv('VITE_APP_URL', '')
     vi.stubEnv('VITE_LANDING_URL', '')
-    mount('/')
+    mount('/library/')
     expect(links('Book the Demo')).toHaveLength(0)
     click(nav('rules'))
     expect(links('Book the Demo')).toHaveLength(0)
@@ -227,19 +244,19 @@ describe('App', () => {
   it('App_rendersNoBlogLink', () => {
     vi.stubEnv('VITE_BLOG_URL', 'https://b.example/')
     vi.stubEnv('VITE_LANDING_URL', 'https://l.example')
-    mount('/')
+    mount('/library/')
     expect(links('Blog')).toHaveLength(0)
     expect(links('Book the Demo').length).toBeGreaterThan(0)
   })
 
   it('featurePath_showsOpenInPlatformOnlyForShippedFeatures', () => {
     vi.stubEnv('VITE_APP_URL', 'https://a.example')
-    mount('/rules/validate')
+    mount('/library/rules/validate')
     expect(links('Open in Platform').map((a) => a.getAttribute('href'))).toEqual(['https://a.example/invoices?via=library'])
     act(() => root.unmount())
     container.remove()
 
-    mount('/notifications/alerts')
+    mount('/library/notifications/alerts')
     expect(links('Open in Platform')).toHaveLength(0)
     expect(main().textContent).toContain('Coming soon')
     advance(3400)
@@ -247,7 +264,7 @@ describe('App', () => {
   })
 
   it('feature_autoplaysOneStepEvery3_4Seconds', () => {
-    mount('/invoices/import-files')
+    mount('/library/invoices/import-files')
     expect([pos(), clock()]).toEqual(['01 / 04', '0:00 / 0:13'])
     advance(3300)
     expect(pos()).toBe('01 / 04')
@@ -259,7 +276,7 @@ describe('App', () => {
   })
 
   it('feature_stopsOnTheLastStepAndReplays', () => {
-    mount('/invoices/import-files')
+    mount('/library/invoices/import-files')
     advance(13600)
     expect([pos(), clock()]).toEqual(['04 / 04', '0:13 / 0:13'])
     expect(playBtn().innerHTML).toContain('M21 3v5h-5')
@@ -272,7 +289,7 @@ describe('App', () => {
   })
 
   it('feature_pausesAndResumes', () => {
-    mount('/invoices/import-files')
+    mount('/library/invoices/import-files')
     advance(3400)
     expect(pos()).toBe('02 / 04')
     click(playBtn())
@@ -285,7 +302,7 @@ describe('App', () => {
   })
 
   it('feature_scrubMovesToTheClickedTime', () => {
-    mount('/invoices/import-files')
+    mount('/library/invoices/import-files')
     const scrub = container.querySelector<HTMLElement>('#lib-scrub')!
     scrub.getBoundingClientRect = () => ({ left: 0, width: 400 }) as DOMRect
     act(() => scrub.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 300 })))
@@ -297,7 +314,7 @@ describe('App', () => {
   })
 
   it('feature_stepListJumpsAndPlays', () => {
-    mount('/invoices/import-files')
+    mount('/library/invoices/import-files')
     click(playBtn())
     const third = [...main().querySelectorAll('button')].find((b) => b.textContent === '03One invoice is created per row')!
     click(third)
@@ -307,12 +324,12 @@ describe('App', () => {
   })
 
   it('feature_leavingStopsTheTimerAndReturningStartsAtStepOne', async () => {
-    mount('/invoices/import-files')
+    mount('/library/invoices/import-files')
     advance(6800)
     expect(pos()).toBe('03 / 04')
     click(nav('invoices'))
     expect(vi.getTimerCount()).toBe(0)
-    expect(window.location.pathname).toBe('/invoices')
+    expect(window.location.pathname).toBe('/library/invoices')
     click(container.querySelector('#fc-import-files')!)
     expect([pos(), clock()]).toEqual(['01 / 04', '0:00 / 0:13'])
     expect(vi.getTimerCount()).toBe(1)
@@ -325,25 +342,25 @@ describe('App', () => {
   })
 
   it('feature_relatedOpensThatFeatureAtStepOne', () => {
-    mount('/invoices/import-files')
+    mount('/library/invoices/import-files')
     advance(3400)
     click(card('Read PDFs and scans'))
-    expect(window.location.pathname).toBe('/recognition/read-documents')
+    expect(window.location.pathname).toBe('/library/recognition/read-documents')
     expect(h2s()).toEqual(['Read PDFs and scans'])
     expect(pos()).toBe('01 / 03')
     expect(vi.getTimerCount()).toBe(1)
     act(() => root.unmount())
     container.remove()
 
-    mount('/approvals/approval-queue')
+    mount('/library/approvals/approval-queue')
     click(card('Alerts where you work'))
-    expect(window.location.pathname).toBe('/notifications/alerts')
+    expect(window.location.pathname).toBe('/library/notifications/alerts')
     expect(pos()).toBe('01 / 03')
     expect(main().textContent).toContain('Coming soon')
   })
 
   it('feature_clickingTheCurrentFeatureRestartsItsDemo', () => {
-    mount('/invoices/import-files')
+    mount('/library/invoices/import-files')
     advance(13600)
     expect(pos()).toBe('04 / 04')
     expect(vi.getTimerCount()).toBe(0)
@@ -361,31 +378,31 @@ describe('App', () => {
   })
 
   it('feature_backButtonOpensTheGroup', () => {
-    mount('/rules/validate')
+    mount('/library/rules/validate')
     click(main().querySelector('.lib-back')!)
-    expect(window.location.pathname).toBe('/rules')
+    expect(window.location.pathname).toBe('/library/rules')
     expect(h2s()).toEqual(['Rules & validation'])
     expect(vi.getTimerCount()).toBe(0)
   })
 
   it('feature_unmountingMidPlayClearsTheInterval', () => {
-    mount('/invoices/import-files')
+    mount('/library/invoices/import-files')
     advance(3400)
     expect(vi.getTimerCount()).toBe(1)
     act(() => root.unmount())
     container.remove()
     expect(vi.getTimerCount()).toBe(0)
     advance(5000)
-    mount('/')
+    mount('/library/')
   })
 
   it('feature_relatedToComingSoonHidesOpenInPlatformAndShowsThePill', () => {
     vi.stubEnv('VITE_APP_URL', 'https://a.example')
-    mount('/approvals/approval-queue')
+    mount('/library/approvals/approval-queue')
     expect(links('Open in Platform')).toHaveLength(1)
     expect(main().textContent).not.toContain('Coming soon')
     click(card('Alerts where you work'))
-    expect(window.location.pathname).toBe('/notifications/alerts')
+    expect(window.location.pathname).toBe('/library/notifications/alerts')
     expect(links('Open in Platform')).toHaveLength(0)
     expect(main().textContent).toContain('Coming soon')
     click(card('One queue for approvals'))
@@ -394,7 +411,7 @@ describe('App', () => {
   })
 
   it('feature_stepListJumpsFromTheEndedStateAndPlays', () => {
-    mount('/invoices/import-files')
+    mount('/library/invoices/import-files')
     advance(13600)
     expect(vi.getTimerCount()).toBe(0)
     const second = [...main().querySelectorAll('button')].find((b) => b.textContent === '02Columns are matched to invoice fields')!
@@ -407,13 +424,13 @@ describe('App', () => {
   })
 
   it('feature_backToAFeatureRestartsItWithExactlyOneTimer', async () => {
-    mount('/invoices/import-files')
+    mount('/library/invoices/import-files')
     advance(6800)
     click(card('Read PDFs and scans'))
     advance(3400)
     expect(pos()).toBe('02 / 03')
     await move(() => window.history.back())
-    expect(window.location.pathname).toBe('/invoices/import-files')
+    expect(window.location.pathname).toBe('/library/invoices/import-files')
     expect([pos(), clock()]).toEqual(['01 / 04', '0:00 / 0:13'])
     expect(vi.getTimerCount()).toBe(1)
     advance(3400)
@@ -421,7 +438,7 @@ describe('App', () => {
   })
 
   it('feature_repeatedRestartsLeaveOneTimerAndNoHistory', () => {
-    mount('/invoices/import-files')
+    mount('/library/invoices/import-files')
     const len = window.history.length
     for (let i = 0; i < 3; i++) {
       advance(3400)
@@ -457,7 +474,7 @@ describe('App tour', () => {
 
   it('tour_startsFromTheSidebarAndSpotlightsTheFirstGroup', () => {
     rects.set('nav-invoices', NAV_INVOICES)
-    mount('/')
+    mount('/library/')
     click(sidebarBtn())
     expect(sidebarLabel()).toBe('Tour 1 of 14 · exit')
     expect(box(spotlight())).toEqual([6, 97, 275, 42])
@@ -467,11 +484,11 @@ describe('App tour', () => {
     expect(container.textContent).toContain('Import, create and track every invoice.')
     expect(btn('Back').hasAttribute('disabled')).toBe(true)
     expect(btn('Watch demo')).toBeUndefined()
-    expect(window.location.pathname).toBe('/')
+    expect(window.location.pathname).toBe('/library/')
   })
 
   it('tour_heroButtonStartsTheSameTour', () => {
-    mount('/')
+    mount('/library/')
     expect(overlay()).toBeNull()
     click(hero()!)
     expect(step()).toBe('STEP 01 OF 14')
@@ -482,11 +499,11 @@ describe('App tour', () => {
   it('tour_nextOpensTheGroupPageAndSpotlightsTheCard', () => {
     rects.set('nav-invoices', NAV_INVOICES)
     rects.set('fc-import-files', CARD_IMPORT)
-    mount('/')
+    mount('/library/')
     click(sidebarBtn())
     const push = vi.spyOn(window.history, 'pushState')
     click(btn('Next'))
-    expect(window.location.pathname).toBe('/invoices')
+    expect(window.location.pathname).toBe('/library/invoices')
     expect(push).toHaveBeenCalledTimes(1)
     push.mockRestore()
     expect(step()).toBe('STEP 02 OF 14')
@@ -500,22 +517,22 @@ describe('App tour', () => {
 
   it('tour_nextAfterACardSpotlightsTheNextGroupWithoutNavigating', () => {
     allRects()
-    mount('/')
+    mount('/library/')
     click(sidebarBtn())
     click(btn('Next'))
     click(btn('Next'))
     expect(step()).toBe('STEP 03 OF 14')
     expect(container.textContent).toContain('Open Document recognition')
-    expect(window.location.pathname).toBe('/invoices')
+    expect(window.location.pathname).toBe('/library/invoices')
     expect(box(spotlight())).toEqual([6, 97 + 40, 275, 42])
     click(btn('Next'))
-    expect(window.location.pathname).toBe('/recognition')
+    expect(window.location.pathname).toBe('/library/recognition')
     expect(container.textContent).toContain('Read PDFs and scans')
   })
 
   it('tour_walksAllFourteenStepsAndFinishEndsIt', () => {
     allRects()
-    mount('/')
+    mount('/library/')
     click(sidebarBtn())
     const labels = [sidebarLabel()]
     const paths = [window.location.pathname]
@@ -525,25 +542,25 @@ describe('App tour', () => {
       paths.push(window.location.pathname)
     }
     expect(labels).toEqual(Array.from({ length: 14 }, (_, n) => `Tour ${n + 1} of 14 · exit`))
-    expect(paths).toEqual(['/', '/invoices', '/invoices', '/recognition', '/recognition', '/rules', '/rules', '/approvals', '/approvals', '/clearance', '/clearance', '/audit', '/audit', '/reports'])
+    expect(paths).toEqual(['/library/', ...['invoices', 'invoices', 'recognition', 'recognition', 'rules', 'rules', 'approvals', 'approvals', 'clearance', 'clearance', 'audit', 'audit', 'reports'].map((s) => `/library/${s}`)])
     expect(step()).toBe('STEP 14 OF 14')
     expect(container.textContent).toContain('See readiness at a glance')
     click(btn('Finish'))
     expect(overlay()).toBeNull()
     expect(sidebarLabel()).toBe('Take the tour')
-    expect(window.location.pathname).toBe('/reports')
+    expect(window.location.pathname).toBe('/library/reports')
   })
 
   it('tour_backStepsBackThroughTheStops', () => {
     allRects()
-    mount('/')
+    mount('/library/')
     click(sidebarBtn())
     click(btn('Next'))
     click(btn('Next'))
     expect(step()).toBe('STEP 03 OF 14')
     click(btn('Back'))
     expect(step()).toBe('STEP 02 OF 14')
-    expect(window.location.pathname).toBe('/invoices')
+    expect(window.location.pathname).toBe('/library/invoices')
     click(btn('Back'))
     expect(step()).toBe('STEP 01 OF 14')
     expect(btn('Back').hasAttribute('disabled')).toBe(true)
@@ -560,7 +577,7 @@ describe('App tour', () => {
 
   it('tour_closeAndExitEndTheTourAtAnyStep', () => {
     allRects()
-    mount('/')
+    mount('/library/')
     click(sidebarBtn())
     for (let n = 0; n < 4; n++) click(btn('Next'))
     expect(step()).toBe('STEP 05 OF 14')
@@ -581,7 +598,7 @@ describe('App tour', () => {
 
   it('tour_sidebarExitStacksAboveTheOverlay', () => {
     allRects()
-    mount('/')
+    mount('/library/')
     click(sidebarBtn())
     const z = (el: HTMLElement) => {
       const cs = getComputedStyle(el)
@@ -602,11 +619,11 @@ describe('App tour', () => {
 
   it('tour_watchDemoOpensTheStopsFeatureAndEndsTheTour', () => {
     allRects()
-    mount('/')
+    mount('/library/')
     click(sidebarBtn())
     click(btn('Next'))
     click(btn('Watch demo'))
-    expect(window.location.pathname).toBe('/invoices/import-files')
+    expect(window.location.pathname).toBe('/library/invoices/import-files')
     expect(h2s()).toContain('Import from CSV or Excel')
     expect(pos()).toBe('01 / 04')
     expect(overlay()).toBeNull()
@@ -619,24 +636,24 @@ describe('App tour', () => {
     click(sidebarBtn())
     for (let n = 0; n < 7; n++) click(btn('Next'))
     expect(step()).toBe('STEP 08 OF 14')
-    expect(window.location.pathname).toBe('/approvals')
+    expect(window.location.pathname).toBe('/library/approvals')
     expect(links('Open in Platform')).toHaveLength(1)
     click(btn('Next'))
     click(btn('Next'))
     expect(step()).toBe('STEP 10 OF 14')
-    expect(window.location.pathname).toBe('/clearance')
+    expect(window.location.pathname).toBe('/library/clearance')
     expect(links('Open in Platform')).toHaveLength(0)
     expect(container.querySelector('#fc-submit-clear')!.textContent).toContain('Coming soon')
     expect(callout().textContent).toMatch(/coming soon/i)
     click(btn('Watch demo'))
-    expect(window.location.pathname).toBe('/clearance/submit-clear')
+    expect(window.location.pathname).toBe('/library/clearance/submit-clear')
     expect(links('Open in Platform')).toHaveLength(0)
     expect(main().textContent).toContain('Coming soon')
   })
 
   it('tour_stepperHighlightsTheStopStage', () => {
     allRects()
-    mount('/')
+    mount('/library/')
     click(sidebarBtn())
     expect(stepperMarked()).toEqual(['Import'])
     click(btn('Next'))
@@ -645,7 +662,7 @@ describe('App tour', () => {
     expect(step()).toBe('STEP 04 OF 14')
     click(btn('Back'))
     expect(step()).toBe('STEP 03 OF 14')
-    expect(window.location.pathname).toBe('/recognition')
+    expect(window.location.pathname).toBe('/library/recognition')
     expect(stepperMarked()).toEqual(['Extract'])
     for (let n = 0; n < 11; n++) click(btn('Next'))
     expect(step()).toBe('STEP 14 OF 14')
@@ -657,7 +674,7 @@ describe('App tour', () => {
 
   it('tour_stepperIgnoresThePageAndTheRouteRuleReturnsAfterClose', () => {
     allRects()
-    mount('/audit')
+    mount('/library/audit')
     expect(stepperMarked()).toEqual(['Archive'])
     click(sidebarBtn())
     expect(stepperMarked()).toEqual(['Import'])
@@ -668,7 +685,7 @@ describe('App tour', () => {
   it('tour_resizeAndScrollRemeasureTheSpotlight', () => {
     rects.set('nav-invoices', NAV_INVOICES)
     rects.set('fc-import-files', CARD_IMPORT)
-    mount('/')
+    mount('/library/')
     click(sidebarBtn())
     rects.set('nav-invoices', { ...NAV_INVOICES, top: 300 })
     act(() => window.dispatchEvent(new Event('resize')))
@@ -695,7 +712,7 @@ describe('App tour', () => {
   it('tour_calloutStaysInsideTheWindowAndOffTheSpotlight', () => {
     rects.set('nav-invoices', NAV_INVOICES)
     rects.set('fc-import-files', CARD_IMPORT)
-    mount('/')
+    mount('/library/')
     click(sidebarBtn())
     const check = () => {
       const c = callout().style
@@ -715,20 +732,20 @@ describe('App tour', () => {
 
   it('tour_startedOnAFeaturePageLeavesNoPlayerRunning', () => {
     allRects()
-    mount('/invoices/import-files')
+    mount('/library/invoices/import-files')
     expect(vi.getTimerCount()).toBe(1)
     click(sidebarBtn())
     expect(step()).toBe('STEP 01 OF 14')
     expect(h2s()).toContain('Import from CSV or Excel')
     expect(vi.getTimerCount()).toBe(1)
     click(btn('Next'))
-    expect(window.location.pathname).toBe('/invoices')
+    expect(window.location.pathname).toBe('/library/invoices')
     expect(h2s()).not.toContain('Import from CSV or Excel')
     expect(step()).toBe('STEP 02 OF 14')
     expect(vi.getTimerCount()).toBe(0)
     act(() => root.unmount())
     container.remove()
-    mount('/')
+    mount('/library/')
     click(sidebarBtn())
     expect(vi.getTimerCount()).toBe(0)
     click(btn('Next'))
@@ -737,12 +754,12 @@ describe('App tour', () => {
 
   it('tour_otherNavigationEndsTheTour', async () => {
     allRects()
-    mount('/')
+    mount('/library/')
     click(sidebarBtn())
     click(btn('Next'))
     click(container.querySelector('#nav-rules')!)
     expect(overlay()).toBeNull()
-    expect(window.location.pathname).toBe('/rules')
+    expect(window.location.pathname).toBe('/library/rules')
     click(sidebarBtn())
     expect(step()).toBe('STEP 01 OF 14')
     await move(() => window.history.back())
@@ -751,20 +768,20 @@ describe('App tour', () => {
 
   it('tour_stepperLogoAndForwardEndTheTourToo', async () => {
     allRects()
-    mount('/')
+    mount('/library/')
     click(sidebarBtn())
     click(btn('Next'))
     const stages = [...container.querySelectorAll<HTMLElement>('button.lib-stage')]
     expect(stages.length).toBeGreaterThan(0)
     click(stages[2])
     expect(overlay()).toBeNull()
-    expect(window.location.pathname).toBe('/rules')
+    expect(window.location.pathname).toBe('/library/rules')
     click(sidebarBtn())
     click(btn('Next'))
     expect(step()).toBe('STEP 02 OF 14')
     click(container.querySelector<HTMLElement>('aside button:not(.lib-tour)')!)
     expect(overlay()).toBeNull()
-    expect(window.location.pathname).toBe('/')
+    expect(window.location.pathname).toBe('/library/')
     await move(() => window.history.back())
     click(sidebarBtn())
     expect(step()).toBe('STEP 01 OF 14')
@@ -775,7 +792,7 @@ describe('App tour', () => {
   it('tour_everyCardStepSpotlightsItsOwnFeatureCard', () => {
     allRects()
     TOUR.forEach((t, n) => rects.set(`fc-${t.f}`, { left: 330, top: 200 + n * 10, width: 340, height: 300 }))
-    mount('/')
+    mount('/library/')
     click(sidebarBtn())
     for (let n = 0; n < TOUR.length; n++) {
       click(btn('Next'))
@@ -818,7 +835,7 @@ describe('App on a phone', () => {
   it('PH-05 a phone renders no tour button', () => {
     vi.stubEnv('VITE_LANDING_URL', 'https://example.test')
     install(true)
-    mount('/')
+    mount('/library/')
     expect(stub.asked).toContain('(max-width: 767px)')
     expect(container.querySelector('.lib-tour')).toBeNull()
     expect(tourButtons()).toHaveLength(0)
@@ -828,13 +845,13 @@ describe('App on a phone', () => {
     act(() => root.unmount())
     container.remove()
     install(false)
-    mount('/')
+    mount('/library/')
     expect(tourButtons()).toHaveLength(2)
   })
 
   it('PH-06 a tour in progress hides on a phone and returns at the same step', () => {
     install(false)
-    mount('/')
+    mount('/library/')
     click(container.querySelector<HTMLElement>('button.lib-tour')!)
     click(btn('Next'))
     click(btn('Next'))
@@ -858,7 +875,7 @@ describe('App on a phone', () => {
 
   it('PH-07 navigating resets the document scroll as well as the main', () => {
     install(true)
-    mount('/')
+    mount('/library/')
     main().scrollTop = 500
     document.documentElement.scrollTop = 500
     click(nav('audit'))

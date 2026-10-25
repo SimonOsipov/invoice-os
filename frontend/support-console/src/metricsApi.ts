@@ -13,6 +13,7 @@ export type PanelKey =
   | 'ram_pct'
   | 'instances'
   | 'cold_starts_per_min'
+  | 'startup_latency_p95_ms'
   | 'sql_cpu_pct'
   | 'sql_ram_pct'
   | 'sql_disk_pct'

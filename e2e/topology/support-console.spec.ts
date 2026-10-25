@@ -107,6 +107,7 @@ const below = (above: Rect, lower: Rect, what: string): string[] => (lower.y >= 
 const centreY = (r: Rect): number => r.y + r.height / 2
 const sameCentreY = (a: Rect, b: Rect, what: string): string[] => (Math.abs(centreY(a) - centreY(b)) <= 1 ? [] : [`${what}: centres ${centreY(a)} vs ${centreY(b)}`])
 const sameTops = (rs: Rect[], what: string): string[] => (rs.every((r) => Math.abs(r.y - rs[0].y) <= 1) ? [] : [`${what}: tops ${rs.map((r) => r.y).join(', ')}`])
+const sameColumn = (a: Rect, b: Rect, what: string): string[] => (Math.abs(a.x - b.x) <= 1 && Math.abs(a.width - b.width) <= 1 ? [] : [`${what}: left/width ${a.x}/${a.width} vs ${b.x}/${b.width}`])
 const pairwiseApart = (rs: Rect[], what: string): string[] => rs.flatMap((a, i) => rs.slice(i + 1).flatMap((b, j) => apart(a, b, `${what} ${i}/${i + 1 + j}`)))
 
 type Read = { problems: string[]; rects: Record<string, unknown> }
@@ -808,7 +809,7 @@ const shortOf = (build?: string): string => (build ? build.slice(0, 7) : '—')
 const nonNull = (trend: SeenHealth['trend'], key: 'services_down' | 'river_jobs'): number => trend.filter((p) => p[key] !== null).length
 
 // systemhealth.Panels, in wire order.
-const METRIC_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'sql_cpu_pct', 'sql_ram_pct', 'sql_disk_pct', 'sql_connections', 'latency_p95_fleet_ms']
+const METRIC_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'sql_cpu_pct', 'sql_ram_pct', 'sql_disk_pct', 'sql_connections', 'latency_p95_fleet_ms', 'startup_latency_p95_ms']
 // systemhealth.ConnectionBudget
 const CONNECTION_BUDGET = 80
 // systemhealth.MetricServices
@@ -1156,7 +1157,7 @@ async function tileRowRead(page: Page, row: Locator, keys: string[], what: strin
   return { problems, rects }
 }
 
-const PANEL_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'sql_util', 'sql_connections']
+const PANEL_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'startup_latency_p95_ms', 'sql_util', 'sql_connections']
 
 // The panels grid: panels apart, a row sharing one top, title row, word and content inside each panel; the grid between the Jobs row and the Services card.
 async function panelsRead(page: Page, grid: Locator, jobs: Rect, card: Rect): Promise<{ problems: string[]; rects: Rect[] }> {
@@ -1166,6 +1167,10 @@ async function panelsRead(page: Page, grid: Locator, jobs: Rect, card: Rect): Pr
   const gridBox = (await boxes(page, { grid })).grid
   const problems = [...pairwiseApart(rects, 'panels'), ...below(jobs, gridBox, 'panels grid below the Jobs row'), ...below(gridBox, card, 'Services card below the panels grid')]
   for (let i = 0; i + 1 < rects.length; i += 2) problems.push(...sameTops([rects[i], rects[i + 1]], `panel row ${i / 2}`))
+  if (rects.length % 2 === 1) {
+    const last = rects[rects.length - 1]
+    problems.push(...sameColumn(rects[0], last, 'last panel aligns with the first column'), ...below(rects[rects.length - 2], last, 'last panel below the row above'))
+  }
   for (const [i, key] of PANEL_KEYS.entries()) {
     const p = panels.nth(i)
     const titleRow = kid(p, 1)
@@ -1223,6 +1228,8 @@ async function fixturePanelsRead(page: Page): Promise<Read> {
   await expect(word('cpu_pct'), 'cpu_pct word').toHaveText('HIGH')
   await expect(word('latency_p95_ms'), 'latency_p95_ms word').toHaveText('PEAKED')
   await expect(word('ram_pct'), 'ram_pct has no word').toHaveCount(0)
+  await expect(word('startup_latency_p95_ms'), 'startup_latency_p95_ms has no word').toHaveCount(0)
+  await expect(panels.nth(PANEL_KEYS.indexOf('startup_latency_p95_ms')).locator('svg line[data-guide]'), 'startup_latency_p95_ms has no guide').toHaveCount(0)
   return { problems, rects: { panels: rects } }
 }
 
@@ -1323,6 +1330,7 @@ function metricsFixture() {
       panel('sql_disk_pct', '%', database(() => 35)),
       panel('sql_connections', 'count', database(() => 23)),
       panel('latency_p95_fleet_ms', 'ms', [{ name: 'fleet', points: line(() => 180) }]), // FleetP95Key, FleetSeriesName
+      panel('startup_latency_p95_ms', 'ms', per((i, n) => (n === 4 ? 3000 : 250 + (i % 5)))), // n 4 is docling, over 1000 ms: a wrongly judged word would show
     ],
     limits: { available: true, services: names.map((name) => ({ name, cpu: '1', memory: '512Mi', max_instances: 3 })) },
     deploys: {
@@ -1362,7 +1370,7 @@ async function healthFixtureLayout(page: Page): Promise<void> {
   await expect(tile('p95').locator('[data-max]'), 'p95 max beside PEAKED').toHaveText('max 1.50 s')
   await expect(tile('connections').locator('[data-max]'), 'connections max').toHaveText('max 23 of 80')
   await expect(tile('fleet').locator('[data-max]'), 'fleet has no max line').toHaveCount(0)
-  await expect(mn.locator('.ops-health-panels > [data-panel]'), 'the panels grid holds ten panels').toHaveCount(10)
+  await expect(mn.locator('.ops-health-panels > [data-panel]'), 'the panels grid holds every panel').toHaveCount(PANEL_KEYS.length)
   await atWidths(page, 'SUP-03 System health fixture layout', async () => {
     const [base, charts] = [await healthLayout(page), await fixturePanelsRead(page)]
     return { problems: [...base.problems, ...charts.problems], rects: { base: base.rects, charts: charts.rects } }

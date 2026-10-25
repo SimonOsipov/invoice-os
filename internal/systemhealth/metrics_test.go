@@ -330,28 +330,35 @@ func TestMetricsSource_ALeaderThatLeavesStillFillsTheCache(t *testing.T) {
 }
 
 func TestMetricsSource_AFailedPanelIsUnavailableAndTheRestServe(t *testing.T) {
-	f, s, logs := newComboFake(t, newClock().now)
-	f.override = func(_, query string) (int, string, bool) {
-		return 500, "boom secret", strings.Contains(query, "num_backends")
-	}
-	m, err := s.Get(t.Context(), "1h", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, p := range m.Panels {
-		if p.Key == "sql_connections" {
-			if p.Available || p.Series == nil || len(p.Series) != 0 {
-				t.Fatalf("sql_connections = %+v", p)
+	for _, c := range []struct{ key, needle string }{{"sql_connections", "num_backends"}, {"startup_latency_p95_ms", "container_startup_latencies_bucket"}} {
+		t.Run(c.key, func(t *testing.T) {
+			f, s, logs := newComboFake(t, newClock().now)
+			f.override = func(_, query string) (int, string, bool) {
+				return 500, "boom secret", strings.Contains(query, c.needle)
 			}
-		} else if !p.Available || len(p.Series) == 0 {
-			t.Fatalf("panel %s = %+v, want available with data", p.Key, p)
-		}
-	}
-	if !m.Limits.Available || !m.Deploys.Available {
-		t.Fatal("limits/deploys should be available")
-	}
-	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "sql_connections") {
-		t.Fatalf("log = %q, want a Warn naming sql_connections", logs.String())
+			m, err := s.Get(t.Context(), "1h", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range m.Panels {
+				if p.Key == c.key {
+					if p.Available || p.Series == nil || len(p.Series) != 0 {
+						t.Fatalf("%s = %+v", c.key, p)
+					}
+				} else if !p.Available || len(p.Series) == 0 {
+					t.Fatalf("panel %s = %+v, want available with data", p.Key, p)
+				}
+			}
+			if !m.Limits.Available || !m.Deploys.Available {
+				t.Fatal("limits/deploys should be available")
+			}
+			if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), c.key) {
+				t.Fatalf("log = %q, want a Warn naming %s", logs.String(), c.key)
+			}
+			if raw, _ := json.Marshal(m); bytes.Contains(raw, []byte("boom")) || bytes.Contains(raw, []byte("secret")) {
+				t.Fatalf("body leaks Google text: %s", raw)
+			}
+		})
 	}
 }
 
@@ -642,7 +649,11 @@ func TestMetricsSource_APreviewTrimsItsSuffixFromSeriesNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for k, names := range panelNames(m, true) {
+	cloud := panelNames(m, true)
+	if len(cloud["startup_latency_p95_ms"]) == 0 {
+		t.Error("startup panel has no series")
+	}
+	for k, names := range cloud {
 		if sort.Strings(names); !reflect.DeepEqual(names, []string{"app", "gateway"}) {
 			t.Errorf("%s names = %v", k, names)
 		}
@@ -803,7 +814,7 @@ func TestMetricsSource_FleetP95UsesTheWindowAndStepOfTheLatencyPanel(t *testing.
 	}
 	fleet := f.formOf(t, isFleetQuery)
 	lat := f.formOf(t, func(q string) bool {
-		return strings.Contains(q, "0.95") && strings.Contains(q, "sum by (service_name, le)") && !strings.Contains(q, "100 *")
+		return strings.Contains(q, "0.95") && strings.Contains(q, "request_latencies_bucket") && strings.Contains(q, "sum by (service_name, le)") && !strings.Contains(q, "100 *")
 	})
 	for _, k := range []string{"start", "end", "step"} {
 		if fleet[k] != lat[k] || fleet[k] == "" {
@@ -882,18 +893,25 @@ func TestMetricsSource_AFailedFleetPanelIsUnavailableAndTheRestServe(t *testing.
 	}
 }
 
-func TestMetricsSource_AnEmptyFleetAnswerIsAvailableWithNoSeries(t *testing.T) {
-	f, s, _ := newComboFake(t, newClock().now)
-	f.override = func(_, query string) (int, string, bool) { return 200, emptyMatrix, isFleetQuery(query) }
-	m, err := s.Get(t.Context(), "1h", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fp := panelByKey(t, m, FleetP95Key)
-	if !fp.Available || fp.Series == nil || len(fp.Series) != 0 {
-		t.Fatalf("fleet panel = %+v", fp)
-	}
-	if raw, _ := json.Marshal(m); bytes.Contains(raw, []byte("null")) {
-		t.Fatalf("body holds null: %s", raw)
+func TestMetricsSource_AnEmptyAnswerIsAvailableWithNoSeries(t *testing.T) {
+	for key, match := range map[string]func(string) bool{
+		FleetP95Key:              isFleetQuery,
+		"startup_latency_p95_ms": func(q string) bool { return strings.Contains(q, "container_startup_latencies_bucket") },
+	} {
+		t.Run(key, func(t *testing.T) {
+			f, s, _ := newComboFake(t, newClock().now)
+			f.override = func(_, query string) (int, string, bool) { return 200, emptyMatrix, match(query) }
+			m, err := s.Get(t.Context(), "1h", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			fp := panelByKey(t, m, key)
+			if !fp.Available || fp.Series == nil || len(fp.Series) != 0 {
+				t.Fatalf("%s panel = %+v", key, fp)
+			}
+			if raw, _ := json.Marshal(m); bytes.Contains(raw, []byte("null")) {
+				t.Fatalf("body holds null: %s", raw)
+			}
+		})
 	}
 }

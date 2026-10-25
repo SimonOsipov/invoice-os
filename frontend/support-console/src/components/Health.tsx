@@ -122,6 +122,7 @@ const PANELS: PanelSpec[] = [
   { key: 'ram_pct', title: 'RAM % of limit', stat: 'ram', guide: { value: THRESHOLDS.ram, label: '80 %' } },
   { key: 'instances', title: 'Instances' },
   { key: 'cold_starts_per_min', title: 'Cold starts / min' },
+  { key: 'startup_latency_p95_ms', title: 'Startup latency p95 (ms)' },
   { key: 'sql_util', title: 'Cloud SQL CPU, RAM, disk (%)' },
   { key: 'sql_connections', title: 'Cloud SQL connections', stat: 'connections' },
 ]

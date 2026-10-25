@@ -150,6 +150,7 @@ const PANEL_UNITS: Record<PanelKey, string> = {
   ram_pct: '% of limit',
   instances: 'count',
   cold_starts_per_min: '/min',
+  startup_latency_p95_ms: 'ms',
   sql_cpu_pct: '%',
   sql_ram_pct: '%',
   sql_disk_pct: '%',
@@ -1224,8 +1225,8 @@ describe('System health markup', () => {
 })
 
 describe('System health panels', () => {
-  const ORDER = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'sql_util', 'sql_connections']
-  const TITLES = ['Requests / min', '5xx %', 'Latency p50 (ms)', 'Latency p95 (ms)', 'CPU % of limit', 'RAM % of limit', 'Instances', 'Cold starts / min', 'Cloud SQL CPU, RAM, disk (%)', 'Cloud SQL connections']
+  const ORDER = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'startup_latency_p95_ms', 'sql_util', 'sql_connections']
+  const TITLES = ['Requests / min', '5xx %', 'Latency p50 (ms)', 'Latency p95 (ms)', 'CPU % of limit', 'RAM % of limit', 'Instances', 'Cold starts / min', 'Startup latency p95 (ms)', 'Cloud SQL CPU, RAM, disk (%)', 'Cloud SQL connections']
   const FLAT: [number, number][] = [[0, 5], [60, 6]]
   const db = (v: [number, number][] = FLAT) => ({ database: v })
   const svcs = (names: string[], f: (i: number) => [number, number][] = () => FLAT) => Object.fromEntries(names.map((n, i) => [n, f(i)]))
@@ -1238,6 +1239,7 @@ describe('System health panels', () => {
     ram_pct: svcs(['a', 'b']),
     instances: svcs(['a', 'b']),
     cold_starts_per_min: svcs(['a', 'b']),
+    startup_latency_p95_ms: svcs(['a', 'b']),
     sql_cpu_pct: db(),
     sql_ram_pct: db(),
     sql_disk_pct: db(),
@@ -1260,7 +1262,7 @@ describe('System health panels', () => {
     return m
   }
 
-  it('the panels grid holds the ten panels in order', () => {
+  it('the panels grid holds every panel in order', () => {
     const html = healthWith({ metrics: full() })
     const ts = parse(html)
     const panels = ts.filter((t) => attr(t, 'data-panel'))
@@ -1273,16 +1275,23 @@ describe('System health panels', () => {
   it('a panel draws one line per service in its page colour', () => {
     const names = ['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9']
     const rising = (i: number): [number, number][] => [[0, (i + 1) * 10], [60, (i + 1) * 10]]
-    const ts = renderPanels(full({ req_per_min: svcs(names, rising), cpu_pct: svcs(names, rising) }))
+    const ts = renderPanels(full({ req_per_min: svcs(names, rising), cpu_pct: svcs(names, rising), startup_latency_p95_ms: svcs(names, rising) }))
     const strokes = (key: string) => Object.fromEntries(lines(panelTags(ts, key)).map((t) => [attr(t, 'data-line'), attr(t, 'stroke')]))
     const req = strokes('req_per_min')
     expect(Object.keys(req)).toHaveLength(9)
     expect(Object.values(req).filter((c) => c.startsWith('var(--series-'))).toHaveLength(7)
     expect(Object.entries(req).filter(([, c]) => c === 'var(--fg-4)').map(([n]) => n).sort()).toEqual(['s1', 's2'])
     expect(strokes('cpu_pct')).toEqual(req)
+    expect(strokes('startup_latency_p95_ms')).toEqual(req)
     const cpu = panelTags(ts, 'cpu_pct')
     expect(entries(cpu)).toHaveLength(7)
     expect(cpu.some((t) => t.text === '+2 other services')).toBe(true)
+    const startup = panelTags(ts, 'startup_latency_p95_ms')
+    expect(entries(startup)).toHaveLength(7)
+    expect(startup.some((t) => t.text === '+2 other services')).toBe(true)
+    const speed = panelTags(renderPanels(full({ startup_latency_p95_ms: svcs(['a', 'b'], (i) => [[0, 250], [60, i ? 3000 : 250]]) })), 'startup_latency_p95_ms')
+    expect(entries(speed)).toHaveLength(2)
+    expect(speed.filter((t) => t.text === '250 ms' || t.text === '3.00 s').map((t) => t.text)).toEqual(['250 ms', '3.00 s'])
     const eight = renderPanels(full({ req_per_min: svcs(names.slice(0, 8), rising) }))
     expect(panelTags(eight, 'req_per_min').some((t) => t.text === '+1 other service')).toBe(true)
   })
@@ -1373,20 +1382,46 @@ describe('System health panels', () => {
   it('the Cloud SQL panels keep All services while a service is picked', () => {
     const ts = renderPanels(full(), 'submission')
     for (const key of ['sql_util', 'sql_connections']) expect(panelTags(ts, key).filter((t) => t.text === 'All services'), key).toHaveLength(1)
-    expect(panelTags(ts, 'cpu_pct').some((t) => t.text === 'All services')).toBe(false)
+    for (const key of ['cpu_pct', 'startup_latency_p95_ms']) expect(panelTags(ts, key).some((t) => t.text === 'All services'), key).toBe(false)
   })
 
   it('an unavailable panel shows No data and the others draw', () => {
     const m = full()
     patch(m, 'cpu_pct', (p) => (p.available = false))
     patch(m, 'ram_pct', (p) => (p.series = []))
+    patch(m, 'startup_latency_p95_ms', (p) => (p.available = false))
     const ts = renderPanels(m)
-    for (const key of ['cpu_pct', 'ram_pct']) {
+    for (const key of ['cpu_pct', 'ram_pct', 'startup_latency_p95_ms']) {
       const p = panelTags(ts, key)
       expect(p.filter((t) => t.attrs.includes('data-no-data')).map((t) => t.text), key).toEqual(['No data'])
       expect(p.some((t) => t.name === 'svg'), key).toBe(false)
     }
     expect(lines(panelTags(ts, 'req_per_min'))).toHaveLength(2)
+  })
+
+  it('a service with no container start has no line and no legend entry', () => {
+    const ts = renderPanels(full({ req_per_min: svcs(['a', 'b', 'c']), startup_latency_p95_ms: { a: FLAT, b: [] } }))
+    const p = panelTags(ts, 'startup_latency_p95_ms')
+    expect(lines(p).map((t) => attr(t, 'data-line'))).toEqual(['a'])
+    expect(entries(p).map((t) => attr(t, 'data-series'))).toEqual(['a'])
+    expect(p.some((t) => t.text.includes('other service'))).toBe(false)
+    const none = panelTags(renderPanels(full({ startup_latency_p95_ms: { a: [], b: [] } })), 'startup_latency_p95_ms')
+    expect(none.filter((t) => t.attrs.includes('data-no-data')).map((t) => t.text)).toEqual(['No data'])
+    expect(none.some((t) => t.name === 'svg')).toBe(false)
+  })
+
+  it('the startup latency panel carries no word and no guide', () => {
+    const big = (): [number, number][] => [[0, 5000], [60, 9000]]
+    const p = panelTags(renderPanels(full({ startup_latency_p95_ms: svcs(['a'], big) })), 'startup_latency_p95_ms')
+    expect(words(p)).toHaveLength(0)
+    expect(guides(p)).toHaveLength(0)
+  })
+
+  it('startup latency data does not change the stat row', () => {
+    const stats = (html: string) => html.slice(html.indexOf('ops-health-stats'), html.indexOf('ops-health-jobs'))
+    const base = stats(healthWith({ metrics: full() }))
+    expect(base.length).toBeGreaterThan(0)
+    expect(stats(healthWith({ metrics: full({ startup_latency_p95_ms: svcs(['a', 'b'], () => [[0, 5000], [60, 9000]]) }) }))).toBe(base)
   })
 
   it('a missing SQL source leaves the other two lines', () => {

@@ -417,3 +417,55 @@ func TestPanels_TheExistingPanelsKeepKeyOrderUnitAndQueryAndTheFleetPanelFollows
 		t.Errorf("fleet panel index %d, want after sql_connections, Cloud Run, in ms", fi)
 	}
 }
+
+func TestPanels_StartupLatencyP95IsThePerServiceQuantileOfTheStartupBuckets(t *testing.T) {
+	idx, fleet := -1, -1
+	n := 0
+	for i, p := range Panels {
+		if p.Key == "startup_latency_p95_ms" {
+			idx, n = i, n+1
+		}
+		if p.Key == FleetP95Key {
+			fleet = i
+		}
+	}
+	if n != 1 || idx <= fleet {
+		t.Fatalf("startup panel matches = %d at %d, want one after the fleet panel at %d", n, idx, fleet)
+	}
+	p := Panels[idx]
+	if p.Unit != "ms" || !p.CloudRun {
+		t.Errorf("unit %q, CloudRun %v, want ms and true", p.Unit, p.CloudRun)
+	}
+	want := `histogram_quantile(0.95, sum by (service_name, le) (rate(run_googleapis_com:container_startup_latencies_bucket{monitored_resource="cloud_run_revision"}[300s])))`
+	if got := p.Query(Ranges["1h"], "", ""); got != want {
+		t.Errorf("query = %s\nwant    %s", got, want)
+	}
+	if got := p.Query(Ranges["24h"], "", ""); !strings.HasSuffix(got, `[900s])))`) {
+		t.Errorf("24h query = %s, want a 900s window", got)
+	}
+}
+
+func TestPanels_StartupLatencyP95UsesTheColdStartsSelectorAndWindow(t *testing.T) {
+	find := func(key string) Panel {
+		for _, p := range Panels {
+			if p.Key == key {
+				return p
+			}
+		}
+		t.Fatalf("no panel %s", key)
+		return Panel{}
+	}
+	start, cold := find("startup_latency_p95_ms"), find("cold_starts_per_min")
+	re := regexp.MustCompile(`\{[^}]*\}\[\d+s\]`)
+	for name, r := range Ranges {
+		for _, c := range []struct{ service, suffix string }{{"", ""}, {"app", ""}, {"", "-pr-545"}, {"gateway", "-pr-545"}} {
+			got, want := re.FindString(start.Query(r, c.service, c.suffix)), re.FindString(cold.Query(r, c.service, c.suffix))
+			if got == "" || got != want {
+				t.Errorf("%s %+v: startup %q, cold starts %q", name, c, got, want)
+			}
+			if w := map[string]string{"24h": "[900s]", "7d": "[7200s]"}[name]; w != "" && !strings.HasSuffix(got, w) {
+				t.Errorf("%s: %q, want window %s", name, got, w)
+			}
+		}
+	}
+}

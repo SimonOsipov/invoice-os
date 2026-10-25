@@ -525,11 +525,11 @@ describe('library scenes', () => {
     expect(lines.map((l) => style(l).display)).toEqual(['none', 'block', 'block', 'block', 'block'])
     expect(withText(ts, 'STATUS').attrs).toContain('t-step')
     expect(ts.some((t) => t.text === 'Submitted · waiting for a response')).toBe(true)
-    expect(ts.some((t) => t.text === 'Sent to NRS')).toBe(true)
+    expect(ts.some((t) => t.text === 'Submit to NRS')).toBe(true)
 
     const th = view('submit-clear', 1, 'thumb')
     expect(where(th, (s) => s.width === '22px' && s.height === '22px')).toHaveLength(5)
-    expect(th.some((t) => t.text === 'Sent to NRS')).toBe(false)
+    expect(th.some((t) => t.text === 'Submit to NRS')).toBe(false)
     expect(th.some((t) => t.text === 'Submitted · waiting for a response')).toBe(true)
   })
 

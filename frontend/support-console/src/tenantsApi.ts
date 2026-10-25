@@ -48,7 +48,7 @@ export const filterTenants = (list: StaffTenant[], query: string): StaffTenant[]
 }
 
 // Mirrors the server's actor fallback (internal/actor/actor.go); '' falls through like null.
-// A removed row never shows email or id: its name is display_name or "Deleted member" (actor.RemovedName).
+// A removed row never shows email or id: its name is display_name or "Deleted member".
 export const memberName = (m: Pick<StaffMember, 'display_name' | 'email' | 'user_id' | 'status'>): string =>
   m.status === 'removed' ? m.display_name || 'Deleted member' : m.display_name || m.email || m.user_id
 

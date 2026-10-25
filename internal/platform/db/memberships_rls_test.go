@@ -715,28 +715,35 @@ func staffMigrationProvider(t *testing.T) *goose.Provider {
 	return provider
 }
 
-// rollBackRemovedFirst undoes membership_removed so an older migration's Down and Up see their own schema.
-// The cleanup rolls it back again (a provider.Up in the test may have applied it early) and re-applies it last,
-// over the older bodies and the older CHECK that Up puts back, so it sits last in the goose ledger.
+// rollBackRemovedFirst undoes removed_flag_ignores_live_membership, then membership_removed, so an older migration's Down and Up see their own schema.
+// The cleanup rolls both back again (a provider.Up in the test may have applied them early) and re-applies them last, in order,
+// over the older bodies and the older CHECK that Up puts back, so they sit last in the goose ledger.
 func rollBackRemovedFirst(t *testing.T, provider *goose.Provider) {
 	t.Helper()
-	version := migrationVersion(t, "*_membership_removed.sql")
-	roll := func(up bool) error {
+	removed := migrationVersion(t, "*_membership_removed.sql")
+	flag := migrationVersion(t, "*_removed_flag_ignores_live_membership.sql")
+	roll := func(version int64, up bool) error {
 		_, err := provider.ApplyVersion(context.Background(), version, up)
 		if errors.Is(err, goose.ErrNotApplied) || errors.Is(err, goose.ErrAlreadyApplied) {
 			return nil
 		}
 		return err
 	}
-	if err := roll(false); err != nil {
-		t.Fatalf("roll back membership_removed: %v", err)
+	for _, v := range []int64{flag, removed} {
+		if err := roll(v, false); err != nil {
+			t.Fatalf("roll back migration %d: %v", v, err)
+		}
 	}
 	t.Cleanup(func() {
-		if err := roll(false); err != nil {
-			t.Errorf("roll back membership_removed: %v", err)
+		for _, v := range []int64{flag, removed} {
+			if err := roll(v, false); err != nil {
+				t.Errorf("roll back migration %d: %v", v, err)
+			}
 		}
-		if err := roll(true); err != nil {
-			t.Errorf("re-apply membership_removed: %v", err)
+		for _, v := range []int64{removed, flag} {
+			if err := roll(v, true); err != nil {
+				t.Errorf("re-apply migration %d: %v", v, err)
+			}
 		}
 	})
 }
@@ -988,6 +995,12 @@ func TestRLS_MembershipRemovedDownTurnsRemovedRowsSuspended(t *testing.T) {
 	seedMemberRow(t, h.tenantB, removedB, "preparer", "removed", nil, nil)
 	seedMemberRow(t, h.tenantA, kept, "preparer", "active", "Bola", "bola@obi.test")
 
+	// The flag migration redefines a function this Down drops: undo it first, restore it last.
+	flag := migrationVersion(t, "*_removed_flag_ignores_live_membership.sql")
+	restoreMigrationOnCleanup(t, provider, flag)
+	if _, err := provider.ApplyVersion(ctx, flag, false); err != nil && !errors.Is(err, goose.ErrNotApplied) {
+		t.Fatalf("Down of the flag migration: %v", err)
+	}
 	t.Cleanup(func() {
 		if _, err := provider.ApplyVersion(context.Background(), version, true); err != nil && !errors.Is(err, goose.ErrAlreadyApplied) {
 			t.Errorf("re-apply membership_removed: %v", err)

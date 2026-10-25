@@ -246,6 +246,10 @@ func (o *psObjects) Get(context.Context, string, string) (document.Object, error
 	return document.Object{}, errors.New("PageSink never reads an object")
 }
 
+func (o *psObjects) List(context.Context, string) ([]string, error) { return nil, nil }
+
+func (o *psObjects) DeleteMany(context.Context, []string) error { return nil }
+
 // TestPageSink_PutsToTheDocumentStore: the offset assertion is the load-bearing one.
 // document.Service.Store rewinds before its own Put for the reason recorded there -- Put transmits from the reader's CURRENT offset, so an
 // already-read reader sends zero bytes under a declared length and the object lands empty.
@@ -324,6 +328,10 @@ func (s *pgiStore) Get(_ context.Context, key, rangeHeader string) (document.Obj
 	s.gotKey, s.gotRange = key, rangeHeader
 	return s.obj, s.err
 }
+
+func (s *pgiStore) List(context.Context, string) ([]string, error) { return nil, nil }
+
+func (s *pgiStore) DeleteMany(context.Context, []string) error { return nil }
 
 // The adapter is the only thing standing between the reader's key and the bucket, so what it
 // forwards IS the security claim: the exact key, and no range header. A range would let a

@@ -63,6 +63,10 @@ func (f *fakeObjects) Get(ctx context.Context, key, rangeHeader string) (documen
 	return f.getObject, f.getErr
 }
 
+func (f *fakeObjects) List(context.Context, string) ([]string, error) { return nil, nil }
+
+func (f *fakeObjects) DeleteMany(context.Context, []string) error { return nil }
+
 func (f *fakeObjects) distinctPutKeys() []string {
 	seen := map[string]bool{}
 	var out []string

@@ -10,6 +10,12 @@ import (
 type ObjectStore interface {
 	Put(ctx context.Context, key string, body io.ReadSeeker, size int64) error
 	Get(ctx context.Context, key, rangeHeader string) (Object, error)
+	// List returns up to 1,000 keys under prefix, in key order. One page: the
+	// caller deletes and lists again until it is empty.
+	List(ctx context.Context, prefix string) ([]string, error)
+	// DeleteMany removes up to 1,000 keys in one request. A key already gone is
+	// not an error.
+	DeleteMany(ctx context.Context, keys []string) error
 }
 
 // Object is one Get result. Body is handed back UNREAD — the caller streams and

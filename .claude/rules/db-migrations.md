@@ -31,6 +31,9 @@ paths:
 - Write `db/bootstrap.sql` so that Cloud SQL's `postgres` can run it: it is not a superuser. Set no SUPERUSER attribute; the guard refuses a superuser role.
 - Run `db/restore-check.sql` on Cloud SQL as `restore_auditor`: apply `db/restore-auditor.sql` once, then `SET ROLE restore_auditor`.
 - Grant `EXECUTE` on `public.invitation_by_token`, `public.pending_invites_for_email`, `public.accept_invitation_by_id` and `public.invitee_account_state` to `invoice_app` only.
+- Grant `EXECUTE` on `public.purge_tenant` to `invoice_app` only. Call it inside `WithinTenantTx` for the tenant it purges, and commit right after it.
+- Expect `purge_tenant` to block every writer of `audit_log`, `approval_policy_versions` and `approval_policy_steps` until its transaction commits. It fails with `55P03` after 5 s behind another writer.
+- Delete a production tenant's rows only with `public.purge_tenant`. The demo purge and `db.Reset` stay the preview and local paths.
 - Grant `auth_hook_reader` SELECT on the `auth.users` columns `email`, `email_confirmed_at` and `is_sso_user` only.
 - Never grant `auth_hook_reader` a table-level privilege on `auth.users`.
 - Treat `invitee_account_state` as callable by every `invoice_app` service for any address.
@@ -58,6 +61,7 @@ paths:
 - Create `invoice_gateway` with `migrate bootstrap` before the migrations that grant to it. Those migrations grant only when the role already exists.
 - Keep `db.DemoTenants` a Go literal. Never derive it from `db/seed.dev.sql`.
 - Add every new `tenant_id` table to `purgeTables` or `purgeExcludedTables`. `TestPurgeTableListCoversEveryTenantOwnedTable` fails otherwise.
+- Plant a row of every new `tenant_id` table in `TestRLS_PurgeTenantLeavesNoRowInAnyTenantTable`. Give the table an `ON DELETE CASCADE` foreign key to `tenants`, or delete its rows in `public.purge_tenant`. The test fails by name otherwise.
 - Order `purgeTables` leaf-first so foreign keys stay enforced.
 - Write the tenant predicate in the same string literal as each purge `DELETE`.
 - Seed demo documents, approval policies and customers in the migrate job (`internal/demodocs`, `internal/demopolicy`, `customer.SeedDemo`), not in `db/seed.dev.sql`.
@@ -100,6 +104,7 @@ Cloud SQL 1 vCPU / 3.75 GB allows 100 connections (GKE-01 P5); 3 are reserved fo
 | worker | leader connection | – | 1 | 1 |
 | GoTrue | `GOTRUE_DB_MAX_POOL_SIZE` | 10 | 1 | 10 |
 | migrate job | goose, the lock and one provisioning connection | – | 1 | 3 |
+| migrate job | purge check, preview only (`DATABASE_URL`) | 2 | 1 | – |
 | **Total** | | | | **80** |
 
 ceiling: a rollout runs old and new revisions together; one new instance per service at a full pool adds up to 36. Revisit when `pg_stat_activity` passes 80 or a pool waits: a larger tier or a pooler.

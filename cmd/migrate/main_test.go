@@ -42,14 +42,14 @@ func logLines(t *testing.T, buf *bytes.Buffer) []logLine {
 }
 
 func TestRun_RefusesUnknownArguments(t *testing.T) {
-	err := run(context.Background(), []string{"down"}, db.ProvisionConfig{}, nil, nil, slog.New(slog.DiscardHandler))
+	err := run(context.Background(), []string{"down"}, db.ProvisionConfig{}, nil, nil, nil, slog.New(slog.DiscardHandler))
 	if err == nil || !strings.Contains(err.Error(), `"down"`) {
 		t.Fatalf("run(down) = %v, want an error naming the argument", err)
 	}
 }
 
 func TestRun_BootstrapNeedsTheSuperuserURL(t *testing.T) {
-	err := run(context.Background(), []string{"bootstrap"}, db.ProvisionConfig{}, nil, nil, slog.New(slog.DiscardHandler))
+	err := run(context.Background(), []string{"bootstrap"}, db.ProvisionConfig{}, nil, nil, nil, slog.New(slog.DiscardHandler))
 	if err == nil || !strings.Contains(err.Error(), "DATABASE_SUPERUSER_URL") {
 		t.Fatalf("run(bootstrap) with no superuser URL = %v, want an error naming DATABASE_SUPERUSER_URL", err)
 	}
@@ -118,12 +118,17 @@ func TestRun_MigratesThenGrants(t *testing.T) {
 	granted, seeded := 0, 0
 	grant := func(context.Context, string) (bool, error) { granted++; return true, nil }
 	seed := func(context.Context, *slog.Logger) { seeded++ }
+	checked := 0
+	check := func(context.Context, *slog.Logger) { checked++ }
 
-	if err := run(context.Background(), nil, cfg, grant, seed, slog.New(slog.DiscardHandler)); err != nil {
+	if err := run(context.Background(), nil, cfg, grant, seed, check, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if granted != 1 || seeded != 0 {
 		t.Errorf("production run: grant ran %d time(s), demo seeds %d, want 1 and 0", granted, seeded)
+	}
+	if checked != 0 {
+		t.Errorf("production run: purge check ran %d time(s), want 0", checked)
 	}
 }
 
@@ -150,11 +155,68 @@ func TestRun_SeedsTheDemoTenantsOnAnAllowlistedEnvironment(t *testing.T) {
 	seeded := 0
 	grant := func(context.Context, string) (bool, error) { return true, nil }
 	seed := func(context.Context, *slog.Logger) { seeded++ }
+	checked := 0
+	check := func(context.Context, *slog.Logger) { checked++ }
 
-	if err := run(context.Background(), nil, cfg, grant, seed, slog.New(slog.DiscardHandler)); err != nil {
+	if err := run(context.Background(), nil, cfg, grant, seed, check, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if seeded != 1 {
 		t.Errorf("demo seeds ran %d time(s) on development, want 1", seeded)
+	}
+	if checked != 0 {
+		t.Errorf("purge check ran %d time(s) with an empty DEPLOY_ENV, want 0", checked)
+	}
+}
+
+func TestPurgeCheckEnabled_OnlyOnAPreviewBootstrapRun(t *testing.T) {
+	cases := []struct {
+		env, flag, deploy string
+		want              bool
+	}{
+		{"development", "true", "pr-12", true},
+		{"pr-12", "true", "pr-12", true},
+		{"development", "true", "invoice-os-pr-12", true},
+		{"development", "true", "", false},
+		{"development", "true", "production", false},
+		{"development", "true", "PR-12", false},
+		{"development", "false", "pr-12", false},
+		{"development", "TRUE", "pr-12", false},
+		{"production", "true", "pr-12", false},
+		{"staging", "true", "pr-12", false},
+		{"development", "true", "pr-", false},
+		{"development", "true", "invoice-os-pr-x", false},
+		{"development", "true", "pr-12 ", false},
+		{"development", "true", "staging", false},
+		{"", "true", "pr-12", false},
+	}
+	for _, c := range cases {
+		cfg := db.ProvisionConfig{Environment: c.env, BootstrapFlag: c.flag, DeployEnv: c.deploy}
+		if got := purgeCheckEnabled(cfg); got != c.want {
+			t.Errorf("purgeCheckEnabled(ENVIRONMENT=%q, GATEWAY_DB_BOOTSTRAP=%q, DEPLOY_ENV=%q) = %v, want %v",
+				c.env, c.flag, c.deploy, got, c.want)
+		}
+	}
+}
+
+func TestPurgeCheckStep_CallsTheCheckOnlyWhenTheGateIsOn(t *testing.T) {
+	cases := []struct {
+		name, env, flag, deploy string
+		want                    int
+	}{
+		{"gate on", "development", "true", "pr-12", 1},
+		{"no deploy env", "development", "true", "", 0},
+		{"grant run", "development", "false", "pr-12", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			calls := 0
+			check := func(context.Context, *slog.Logger) { calls++ }
+			cfg := db.ProvisionConfig{Environment: c.env, BootstrapFlag: c.flag, DeployEnv: c.deploy}
+			purgeCheckStep(context.Background(), cfg, check, slog.New(slog.DiscardHandler))
+			if calls != c.want {
+				t.Errorf("check called %d time(s), want %d", calls, c.want)
+			}
+		})
 	}
 }

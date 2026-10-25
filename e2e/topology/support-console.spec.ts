@@ -1367,6 +1367,7 @@ async function fixtureHover(page: Page): Promise<void> {
   const mn = mainOf(page)
   const panels = mn.locator('.ops-health-panels > [data-panel]')
   const chartOf = (key: string): Locator => kid(panels.nth(PANEL_KEYS.indexOf(key)), 2)
+  const legendOf = (key: string): Locator => kid(panels.nth(PANEL_KEYS.indexOf(key)), 3)
   const charts = mn.locator('[data-chart]')
   const readout = mn.locator('[data-readout]')
   const total = await charts.count()
@@ -1401,12 +1402,13 @@ async function fixtureHover(page: Page): Promise<void> {
   const t = min + 30 * 60
   await expect.poll(allCursors, { message: 'the cursor reads step 30' }).toEqual(Array(total).fill(String(t)))
   await expect(readout.locator('[data-readout-time]'), 'readout time').toHaveText(`${new Date(t * 1000).toISOString().slice(11, 16)} UTC`)
-  const coloured = await chartOf('req_per_min').locator('[data-series]').evaluateAll((els) => els.map((e) => e.getAttribute('data-series')))
+  const coloured = await legendOf('req_per_min').locator('[data-series]').evaluateAll((els) => els.map((e) => e.getAttribute('data-series')))
   expect(coloured, 'seven coloured legend entries').toHaveLength(7)
   const want = [...coloured, ...METRIC_SERVICES_FIXTURE.filter((n) => !coloured.includes(n))]
   await expect.poll(() => readout.locator('[data-readout-row]').evaluateAll((els) => els.map((e) => e.getAttribute('data-readout-row'))), { message: 'readout rows: coloured in legend order, then grey' }).toEqual(want)
   await expect(readout.locator('[data-readout-row="auth"] .mono'), 'auth has no point at the gap').toHaveText('—')
-  await hoverAt('error_pct', 0.5)
+  // step 15: auth has no point at step 30, so every row has a value here
+  await hoverAt('error_pct', 0.25)
   const errRows = chartOf('error_pct').locator('[data-readout-row] .mono')
   await expect(errRows, 'error_pct rows').toHaveCount(METRIC_SERVICES_FIXTURE.length)
   expect(new Set(await errRows.allTextContents()), 'every error_pct row reads 2.00 %').toEqual(new Set(['2.00 %']))
@@ -1425,7 +1427,10 @@ async function fixtureHover(page: Page): Promise<void> {
       if (r.x < x.x + x.width + 1 && x.x - 1 < r.x + r.width) problems.push(`${key} readout covers the crosshair`)
       const top = await box.evaluate((el) => {
         const b = el.getBoundingClientRect()
+        // the readout has pointer-events: none, which elementFromPoint skips
+        el.style.pointerEvents = 'auto'
         const hit = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)
+        el.style.pointerEvents = 'none'
         return !!hit && el.contains(hit)
       })
       if (!top) problems.push(`${key} readout is not topmost at its centre`)
@@ -1545,10 +1550,11 @@ async function fixtureIsolate(page: Page): Promise<void> {
   await expect.poll(() => drawn('sql_connections'), { message: 'sql_connections keeps its line' }).toEqual(['connections'])
   await expect(legendOf('req_per_min').locator(`[data-series="${name}"]`)).toHaveAttribute('aria-pressed', 'true')
   await expect(legendOf('sql_util').locator('button'), 'SQL legend entries are not buttons').toHaveCount(0)
-  const muted = await page.evaluate(() => {
-    const probe = document.createElement('div')
-    probe.style.background = 'var(--line-2)'
-    document.body.appendChild(probe)
+  // tokens resolve inside the app root, not on body
+  const muted = await mn.evaluate((el) => {
+    const probe = document.createElement('span')
+    probe.style.backgroundColor = 'var(--line-2)'
+    el.append(probe)
     const c = getComputedStyle(probe).backgroundColor
     probe.remove()
     return c
@@ -1579,8 +1585,10 @@ async function fixtureIsolate(page: Page): Promise<void> {
 async function healthFixtureLayout(page: Page): Promise<void> {
   const mn = mainOf(page)
   const cors = { 'access-control-allow-origin': new URL(page.url()).origin, 'access-control-allow-headers': 'authorization, content-type', 'access-control-allow-methods': 'GET, OPTIONS' }
+  // one body for the whole test: the screen refetches every minute and a new body would move the window
+  const body = JSON.stringify(metricsFixture())
   await page.route(STAFF_METRICS, (route) =>
-    route.request().method() === 'OPTIONS' ? route.fulfill({ status: 204, headers: cors }) : route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify(metricsFixture()) }),
+    route.request().method() === 'OPTIONS' ? route.fulfill({ status: 204, headers: cors }) : route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body }),
   )
   const answered = page.waitForResponse((r) => STAFF_METRICS.test(new URL(r.url()).pathname + new URL(r.url()).search) && r.request().method() === 'GET')
   await mn.getByRole('button', { name: '6h', exact: true }).click()

@@ -236,7 +236,7 @@ func TestRLS_PersonErasuresKeyAndNotNullColumns(t *testing.T) {
 	}
 }
 
-// The statements the erase routine runs as invoice_app: finish, and the re-request upsert (D13, D13a).
+// The statements the erase routine runs as invoice_app: finish, and the re-request upsert.
 func TestRLS_PersonErasuresRoutineStatementsRunAsApp(t *testing.T) {
 	hh := erasuresRequireTable(t)
 	ctx := context.Background()

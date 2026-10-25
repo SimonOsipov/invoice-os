@@ -21,10 +21,37 @@ import (
 
 const rebuildWarn = "erasure: the address registered again; its vendor contact is rebuilt"
 
+type restoreCall struct {
+	email, first, last string
+	st                 ResendState
+}
+
 type recErase struct {
-	mu    sync.Mutex
-	calls []string
-	fn    func(n int, who string) error
+	mu       sync.Mutex
+	calls    []string
+	fn       func(n int, who string) error
+	state    ResendState // answered by ContactState
+	events   []string    // "state", "erase" and "restore", in call order
+	restored []restoreCall
+}
+
+func (r *recErase) event(e string) {
+	r.mu.Lock()
+	r.events = append(r.events, e)
+	r.mu.Unlock()
+}
+
+func (r *recErase) ContactState(context.Context, string) (ResendState, error) {
+	r.event("state")
+	return r.state, nil
+}
+
+func (r *recErase) RestoreContact(_ context.Context, email, first, last string, st ResendState) error {
+	r.event("restore")
+	r.mu.Lock()
+	r.restored = append(r.restored, restoreCall{email, first, last, st})
+	r.mu.Unlock()
+	return nil
 }
 
 func (r *recErase) record(who string) error {
@@ -38,8 +65,11 @@ func (r *recErase) record(who string) error {
 	return nil
 }
 
-func (r *recErase) EraseContact(_ context.Context, email string) error { return r.record(email) }
-func (r *recErase) DeleteUser(_ context.Context, id string) error      { return r.record(id) }
+func (r *recErase) EraseContact(_ context.Context, email string) error {
+	r.event("erase")
+	return r.record(email)
+}
+func (r *recErase) DeleteUser(_ context.Context, id string) error { return r.record(id) }
 
 func (r *recErase) got() []string {
 	r.mu.Lock()
@@ -636,12 +666,19 @@ func TestErase_ADemoRowWithoutAnAccountDoesNotSupersede(t *testing.T) {
 
 // rebuilt runs an erase during which another account registers the address.
 func rebuilt(t *testing.T) (*eraseRig, string) {
+	return rebuiltWith(t, ResendState{})
+}
+
+// rebuiltWith also gives the Resend contact the state the erase finds. The new account ticked
+// marketing and its opt_in is recorded as sent.
+func rebuiltWith(t *testing.T, st ResendState) (*eraseRig, string) {
 	r := newEraseRig(t)
+	r.rs.state = st
 	gen := r.start()
 	buid := uuid.NewString()
 	r.acct.fn = func(int, string) error {
-		r.exec(`INSERT INTO contacts (email, user_id, first_name, last_name, registered_at, version, hubspot_delivered_at, resend_delivered_at, resend_opt_in_sent_at)
-			VALUES ($1, $2::uuid, 'Bola', 'Eze', now(), 3, now(), now(), now())`, r.mail, buid)
+		r.exec(`INSERT INTO contacts (email, user_id, first_name, last_name, registered_at, marketing_consented_at, marketing_consent_text, version, hubspot_delivered_at, resend_delivered_at, resend_opt_in_sent_at)
+			VALUES ($1, $2::uuid, 'Bola', 'Eze', now(), now(), 'ok', 3, now(), now(), now())`, r.mail, buid)
 		r.blog(r.mail, 2)
 		return nil
 	}
@@ -693,7 +730,7 @@ func TestErase_TheRebuildSends(t *testing.T) {
 	if h := hs.got(); len(h) != 1 || h[0].FirstName != "Bola" || h[0].LastName != "Eze" {
 		t.Fatalf("hubspot = %+v", h)
 	}
-	if s := rs.got(); len(s) != 1 || s[0].C.FirstName != "Bola" || s[0].OptIn {
+	if s := rs.got(); len(s) != 1 || s[0].C.FirstName != "Bola" || !s[0].OptIn {
 		t.Fatalf("resend = %+v", s)
 	}
 	if bl.calls != 1 {
@@ -1406,3 +1443,138 @@ func TestErase_ABlogRowWithoutAnotherAccountIsNotRebuilt(t *testing.T) {
 		}
 	}
 }
+
+func (r *eraseRig) optInSent(buid string) bool {
+	r.t.Helper()
+	return r.count(`SELECT count(*) FROM contacts WHERE user_id = $1::uuid AND resend_opt_in_sent_at IS NOT NULL`, buid) == 1
+}
+
+func (r *eraseRig) blogRebuilt() bool {
+	r.t.Helper()
+	return r.count(`SELECT count(*) FROM blog_subscribers WHERE email = $1 AND resend_delivered_at IS NULL`, r.mail) == 1
+}
+
+const (
+	topicMarketing = "topic-marketing"
+	topicBlog      = "topic-blog"
+)
+
+func TestErase_TheRebuildReadsTheStateBeforeTheDeleteAndRestoresIt(t *testing.T) {
+	st := ResendState{Unsubscribed: true, MarketingOut: true, OptedOut: []string{topicMarketing, topicBlog}}
+	r, _ := rebuiltWith(t, st)
+	if got := strings.Join(r.rs.events, ","); got != "state,erase,restore" {
+		t.Fatalf("resend events = %s, want state,erase,restore", got)
+	}
+	if len(r.rs.restored) != 1 {
+		t.Fatalf("restores = %d", len(r.rs.restored))
+	}
+	c := r.rs.restored[0]
+	if c.email != r.mail || c.first != "Bola" || c.last != "Eze" || !c.st.Unsubscribed || len(c.st.OptedOut) != 2 {
+		t.Fatalf("restore = %+v", c)
+	}
+}
+
+func TestErase_AnUnsubscribedContactStaysUnsubscribed(t *testing.T) {
+	r, buid := rebuiltWith(t, ResendState{Unsubscribed: true})
+	if !r.optInSent(buid) {
+		t.Error("the opt_in stamp was cleared for an unsubscribed contact")
+	}
+	if r.blogRebuilt() {
+		t.Error("the blog subscription was re-queued for an unsubscribed contact")
+	}
+	if r.count(`SELECT count(*) FROM river_job WHERE kind = 'blog_subscriber_sync' AND state = 'available' AND args->>'email' = $1`, r.mail) != 0 {
+		t.Error("a blog sync job was queued")
+	}
+}
+
+func TestErase_AMarketingOptOutStaysOptedOut(t *testing.T) {
+	r, buid := rebuiltWith(t, ResendState{MarketingOut: true, OptedOut: []string{topicMarketing}})
+	if !r.optInSent(buid) {
+		t.Error("the opt_in stamp was cleared for a Marketing opt-out")
+	}
+	if !r.blogRebuilt() {
+		t.Error("a Marketing opt-out stopped the blog rebuild")
+	}
+	if len(r.rs.restored) != 1 || r.rs.restored[0].st.Unsubscribed {
+		t.Errorf("restores = %+v", r.rs.restored)
+	}
+}
+
+func TestErase_ABlogOptOutIsNotRebuilt(t *testing.T) {
+	r, buid := rebuiltWith(t, ResendState{OptedOut: []string{topicBlog}})
+	if r.blogRebuilt() {
+		t.Error("the blog subscription was re-queued over a Blog opt-out")
+	}
+	if r.optInSent(buid) {
+		t.Error("a Blog opt-out kept the Marketing opt_in stamp")
+	}
+	if len(r.rs.restored) != 1 || len(r.rs.restored[0].st.OptedOut) != 1 {
+		t.Errorf("restores = %+v", r.rs.restored)
+	}
+}
+
+func TestErase_ACleanContactGetsItsMarketingOptInBack(t *testing.T) {
+	r, buid := rebuilt(t)
+	if len(r.rs.restored) != 0 {
+		t.Errorf("restored a clean contact: %+v", r.rs.restored)
+	}
+	if r.optInSent(buid) {
+		t.Fatal("the opt_in stamp survived the erase of the contact")
+	}
+	rs := &qaRecResend{}
+	dw := &DeliverWorker{Pool: r.e.app, HubSpot: &qaRecHubSpot{}, Resend: rs, Mode: ModeReal, Logger: r.sink.logger()}
+	if err := dw.Work(context.Background(), &river.Job[DeliverArgs]{Args: DeliverArgs{Email: r.mail, Destination: "resend", Version: 3}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := rs.got(); len(got) != 1 || !got[0].OptIn {
+		t.Fatalf("resend = %+v, want one sync with the opt_in", got)
+	}
+}
+
+func TestErase_NothingIsRestoredWhenNoOtherAccountHoldsTheAddress(t *testing.T) {
+	r := newEraseRig(t)
+	r.rs.state = ResendState{Unsubscribed: true}
+	gen := r.start()
+	if err := r.work(gen); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.rs.restored) != 0 {
+		t.Fatalf("restores = %+v, want none", r.rs.restored)
+	}
+}
+
+func TestErase_SweepDeletesTheFinishedEmailKeyedJobsEvenWhenAnotherAccountHoldsTheAddress(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	r.exec(`UPDATE person_erasures SET account_erased_at = now() WHERE user_id = $1`, r.uid)
+	r.contact(r.mail, ptr(uuid.NewString()), 1)
+	var finished []int64
+	for _, st := range []string{"completed", "cancelled", "discarded"} {
+		for _, id := range []int64{
+			r.insertJob(DemoDealArgs{Email: r.mail, Name: "Adaeze Obi", Company: "Obi Ltd"}),
+			r.insertJob(DeliverArgs{Email: r.mail, Destination: "resend", Version: 1}),
+			r.insertJob(BlogSyncArgs{Email: r.mail, Version: 1}),
+			r.insertJob(RegistrantArgs{UserID: uuid.NewString(), Email: r.mail}),
+		} {
+			r.setState(id, st)
+			finished = append(finished, id)
+		}
+	}
+	open := r.insertJob(DemoDealArgs{Email: r.mail, Name: "Bola Eze"})
+	if err := r.work(gen); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range finished {
+		if r.jobExists(id) {
+			t.Errorf("finished email-keyed job %d is left", id)
+		}
+	}
+	if !r.jobExists(open) {
+		t.Error("a non-final email-keyed job of the other account was removed")
+	}
+	if s := r.row(r.uid); !s.Fin || !s.Superseded {
+		t.Fatalf("row = %+v", s)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

@@ -17,7 +17,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth/gotrueadmin"
 )
 
-// eraseTimeout bounds one attempt, and with it the HubSpot deal paging, which has no cursor guard.
+// eraseTimeout bounds one attempt.
 const eraseTimeout = 3 * time.Minute
 
 // EraseArgs carries the user id and the row generation, never the email: River keeps a finished job's args.
@@ -171,7 +171,7 @@ type execer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// updateRow updates the row of the generation the attempt read; a miss means a re-request landed (D13a).
+// updateRow updates the row of the generation the attempt read; a miss means a re-request landed.
 // set may use $3 onward.
 func updateRow(ctx context.Context, q execer, set, uid string, gen int64, args ...any) error {
 	tag, err := q.Exec(ctx, `UPDATE person_erasures SET `+set+` WHERE user_id = $1 AND generation = $2`,
@@ -205,19 +205,20 @@ func (w *EraseWorker) sweep(ctx context.Context, tx pgx.Tx, uid, email string) (
 			return res, err
 		}
 	}
-	// D20: another account on the address keeps its email-keyed rows and jobs.
+	// Another account on the address keeps its rows and its non-final jobs; finished jobs are history.
 	var err error
 	if res.superseded, err = holdsAddress(ctx, tx, uid, email); err != nil {
 		return res, err
 	}
 
 	// ceiling: seq-scans river_job args; index `args->>'email'` above ~100k rows
-	jobWhere, jobArgs := `kind = ANY($1) AND lower(args->>'user_id') = $2`, []any{eraseKinds, uid}
-	if !res.superseded {
-		jobWhere = `kind = ANY($1) AND (lower(btrim(args->>'email')) = $3 OR lower(args->>'user_id') = $2)`
-		jobArgs = append(jobArgs, email)
+	byEmail := `kind = ANY($1) AND (lower(btrim(args->>'email')) = $3 OR lower(args->>'user_id') = $2)`
+	byEmailArgs := []any{eraseKinds, uid, email}
+	liveWhere, liveArgs := byEmail, byEmailArgs
+	if res.superseded {
+		liveWhere, liveArgs = `kind = ANY($1) AND lower(args->>'user_id') = $2`, []any{eraseKinds, uid}
 	}
-	rows, err := tx.Query(ctx, `SELECT id FROM river_job WHERE state IN ('available', 'pending', 'retryable', 'running', 'scheduled') AND `+jobWhere+` ORDER BY id`, jobArgs...)
+	rows, err := tx.Query(ctx, `SELECT id FROM river_job WHERE state IN ('available', 'pending', 'retryable', 'running', 'scheduled') AND `+liveWhere+` ORDER BY id`, liveArgs...)
 	if err != nil {
 		return res, fmt.Errorf("notifications: find jobs: %w", err)
 	}
@@ -247,7 +248,7 @@ func (w *EraseWorker) sweep(ctx context.Context, tx pgx.Tx, uid, email string) (
 		args []any
 	}
 	deletes := []del{
-		{`DELETE FROM river_job WHERE state IN ('completed', 'cancelled', 'discarded') AND ` + jobWhere, jobArgs},
+		{`DELETE FROM river_job WHERE state IN ('completed', 'cancelled', 'discarded') AND ` + byEmail, byEmailArgs},
 		{`DELETE FROM registrant_handoffs WHERE lower(user_id) = $1`, []any{uid}},
 		{`DELETE FROM contacts WHERE email = $1 AND (user_id IS NULL OR user_id::text = $2)`, []any{email, uid}},
 	}
@@ -312,13 +313,21 @@ func (w *EraseWorker) vendorStep(ctx context.Context, uid string, r erasureRow, 
 		if err := lockDelivery(ctx, tx, step, r.email); err != nil {
 			return err
 		}
+		// The delete wipes the unsubscribe and the topic opt-outs; read them first for the rebuild.
+		var st ResendState
+		if step == stepResend {
+			var err error
+			if st, err = w.Resend.ContactState(ctx, r.email); err != nil {
+				return err
+			}
+		}
 		if err := call(ctx, r.email); err != nil {
 			return err
 		}
 		if err := updateRow(ctx, tx, `vendor_mode = $3, `+step+`_erased_at = now()`, uid, r.generation, string(w.Mode)); err != nil {
 			return err
 		}
-		return w.rebuild(ctx, tx, uid, r.email, step)
+		return w.rebuild(ctx, tx, uid, r.email, step, st)
 	}))
 }
 
@@ -337,12 +346,20 @@ func holdsAddress(ctx context.Context, tx pgx.Tx, uid, email string) (bool, erro
 	return held, nil
 }
 
-// rebuild re-queues the deliveries of another account that holds the address, whose vendor copy the erase removed (D20).
-func (w *EraseWorker) rebuild(ctx context.Context, tx pgx.Tx, uid, email, dest string) error {
+// rebuild re-queues the deliveries of another account that holds the address, whose vendor copy the erase removed.
+// For Resend it re-creates the contact with the unsubscribe and opt-outs the erase found (TestErase_AnUnsubscribedContactStaysUnsubscribed).
+func (w *EraseWorker) rebuild(ctx context.Context, tx pgx.Tx, uid, email, dest string, st ResendState) error {
 	rebuilt := false
 	var version int64
-	err := tx.QueryRow(ctx, `UPDATE contacts SET `+dest+`_delivered_at = NULL
-		WHERE email = $1 AND user_id IS NOT NULL AND user_id::text <> $2 RETURNING version`, email, uid).Scan(&version)
+	var first, last string
+	set := dest + `_delivered_at = NULL`
+	if dest == destResend && !st.Unsubscribed && !st.MarketingOut {
+		// The delete removed the Marketing opt_in; re-apply the one the row records (TestErase_ACleanContactGetsItsMarketingOptInBack).
+		set += `, resend_opt_in_sent_at = NULL`
+	}
+	err := tx.QueryRow(ctx, `UPDATE contacts SET `+set+`
+		WHERE email = $1 AND user_id IS NOT NULL AND user_id::text <> $2
+		RETURNING version, COALESCE(first_name, ''), COALESCE(last_name, '')`, email, uid).Scan(&version, &first, &last)
 	switch {
 	case err == nil:
 		if _, err = w.River.InsertTx(ctx, tx, DeliverArgs{Email: email, Destination: dest, Version: version}, nil); err != nil {
@@ -357,7 +374,8 @@ func (w *EraseWorker) rebuild(ctx context.Context, tx pgx.Tx, uid, email, dest s
 		if err != nil {
 			return err
 		}
-		if held {
+		// A blog sync opts the contact in to Blog; it must not undo an unsubscribe or a Blog opt-out.
+		if held && !st.Unsubscribed && !st.otherTopicOut() {
 			err = tx.QueryRow(ctx, `UPDATE blog_subscribers SET resend_delivered_at = NULL WHERE email = $1 RETURNING version`, email).Scan(&version)
 			if err == nil {
 				_, err = w.River.InsertTx(ctx, tx, BlogSyncArgs{Email: email, Version: version}, nil)
@@ -365,6 +383,11 @@ func (w *EraseWorker) rebuild(ctx context.Context, tx pgx.Tx, uid, email, dest s
 			}
 			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("notifications: rebuild blog subscriber: %w", err)
+			}
+		}
+		if held && !st.zero() {
+			if err := w.Resend.RestoreContact(ctx, email, first, last, st); err != nil {
+				return err
 			}
 		}
 	}

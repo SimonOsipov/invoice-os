@@ -419,3 +419,138 @@ func TestHubSpotErase_ContactReadFailureMakesNoOtherCall(t *testing.T) {
 		t.Errorf("calls = %v, want only the contact read", got)
 	}
 }
+
+// A cursor over a set that shrinks as deals are deleted skips deals.
+func TestHubSpotErase_DeletesEveryDealWhenThePagesShrink(t *testing.T) {
+	var mu sync.Mutex
+	left := []string{"1", "2", "3", "4", "5"}
+	v := newVendor(t, func(s seenReq) (int, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		p := s.path()
+		switch {
+		case s.Method == http.MethodGet && strings.HasSuffix(p, eraseEmailPath):
+			return 200, `{"id":"7"}`
+		case s.Method == http.MethodGet && strings.Contains(p, "/associations/deals"):
+			from := 0
+			if q, err := url.ParseQuery(s.Query); err == nil && q.Get("after") != "" {
+				from, _ = strconv.Atoi(q.Get("after"))
+			}
+			end := min(from+2, len(left))
+			if from > end {
+				from = end
+			}
+			var res, next string
+			for i, id := range left[from:end] {
+				if i > 0 {
+					res += ","
+				}
+				res += `{"toObjectId":` + id + `}`
+			}
+			if end < len(left) {
+				next = `,"paging":{"next":{"after":"` + strconv.Itoa(end) + `"}}`
+			}
+			return 200, `{"results":[` + res + `]` + next + `}`
+		case s.Method == http.MethodDelete && strings.HasPrefix(p, "/crm/v3/objects/deals/"):
+			id := strings.TrimPrefix(p, "/crm/v3/objects/deals/")
+			left = slices.DeleteFunc(left, func(x string) bool { return x == id })
+			return 200, ``
+		}
+		return 200, `{}`
+	})
+	if err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(left) != 0 {
+		t.Fatalf("deals left = %v, want none before gdpr-delete", left)
+	}
+	if got := v.labels(); got[len(got)-1] != "POST "+hsCreatePath+"/gdpr-delete" {
+		t.Errorf("last call = %q, want gdpr-delete", got[len(got)-1])
+	}
+}
+
+func TestHubSpotErase_StopsAfterTheRoundCap(t *testing.T) {
+	v := newVendor(t, func(s seenReq) (int, string) {
+		if s.Method == http.MethodGet && strings.Contains(s.path(), "/associations/deals") {
+			return 200, `{"results":[{"toObjectId":1}]}`
+		}
+		return 200, `{"id":"7"}`
+	})
+	err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail)
+	if err == nil || !strings.Contains(err.Error(), "round cap") {
+		t.Fatalf("err = %v, want the round-cap error", err)
+	}
+	if strings.Contains(strings.Join(v.labels(), "\n"), "gdpr-delete") {
+		t.Error("gdpr-delete sent with deals left")
+	}
+	if strings.Contains(err.Error(), eraseEmail) {
+		t.Error("the error carries the email")
+	}
+}
+
+func TestResendContactState_ReadsTheFlagAndTheOptOuts(t *testing.T) {
+	v := newVendor(t, func(s seenReq) (int, string) {
+		if strings.HasSuffix(s.path(), "/topics") {
+			return 200, `{"object":"list","has_more":false,"data":[{"id":"t-in","subscription":"opt_in"},{"id":"t-out","subscription":"opt_out"},{"id":"top-1","subscription":"opt_out"}]}`
+		}
+		return 200, `{"unsubscribed":true}`
+	})
+	rs := resendAt(v, nil)
+	got, err := rs.ContactState(t.Context(), eraseEmail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Unsubscribed || !got.MarketingOut || len(got.OptedOut) != 2 || !got.otherTopicOut() {
+		t.Fatalf("state = %+v", got)
+	}
+	for _, c := range v.calls() {
+		if c.Method != http.MethodGet {
+			t.Errorf("%s: a state read must only GET", c.label())
+		}
+	}
+}
+
+func TestResendContactState_MissingContactIsTheZeroState(t *testing.T) {
+	v := newVendor(t, func(seenReq) (int, string) { return 404, `{}` })
+	got, err := resendAt(v, nil).ContactState(t.Context(), eraseEmail)
+	if err != nil || !got.zero() {
+		t.Fatalf("state = %+v, err = %v", got, err)
+	}
+}
+
+func TestResendContactState_FailureIsAnError(t *testing.T) {
+	v := newVendor(t, func(seenReq) (int, string) { return 500, `{}` })
+	var de *DeliveryError
+	if _, err := resendAt(v, nil).ContactState(t.Context(), eraseEmail); !errors.As(err, &de) || de.Status != 500 {
+		t.Fatalf("err = %v, want *DeliveryError{500}", err)
+	}
+}
+
+func TestResendRestoreContact_CreatesItUnsubscribedWithTheOptOutsAndNoOptIn(t *testing.T) {
+	v := newVendor(t, func(seenReq) (int, string) { return 200, `{}` })
+	st := ResendState{Unsubscribed: true, OptedOut: []string{"t-out"}}
+	if err := resendAt(v, nil).RestoreContact(t.Context(), eraseEmail, "Ada", "Obi", st); err != nil {
+		t.Fatal(err)
+	}
+	calls := v.calls()
+	if len(calls) != 2 || calls[0].Method != http.MethodPost || calls[0].path() != "/contacts" || calls[1].Method != http.MethodPatch {
+		t.Fatalf("calls = %v", v.labels())
+	}
+	if !strings.Contains(string(calls[0].Body), `"unsubscribed":true`) || !strings.Contains(string(calls[0].Body), `"first_name":"Ada"`) {
+		t.Errorf("create body = %s", calls[0].Body)
+	}
+	if string(calls[1].Body) != `[{"id":"t-out","subscription":"opt_out"}]` {
+		t.Errorf("topics body = %s", calls[1].Body)
+	}
+}
+
+func TestFakeResend_ReturnsTheConfiguredState(t *testing.T) {
+	want := ResendState{Unsubscribed: true}
+	got, err := (FakeResend{State: &want}).ContactState(t.Context(), eraseEmail)
+	if err != nil || !got.Unsubscribed {
+		t.Fatalf("state = %+v, err = %v", got, err)
+	}
+	if got, _ := (FakeResend{}).ContactState(t.Context(), eraseEmail); !got.zero() {
+		t.Fatalf("state = %+v, want zero", got)
+	}
+}

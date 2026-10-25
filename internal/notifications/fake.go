@@ -11,11 +11,23 @@ func (FakeHubSpot) OpenDemoDeal(context.Context, Contact, string) error { return
 
 func (FakeHubSpot) EraseContact(context.Context, string) error { return nil }
 
-type FakeResend struct{}
+// FakeResend returns State as the contact state, so a test drives the erase rebuild.
+type FakeResend struct{ State *ResendState }
 
 func (FakeResend) Sync(context.Context, Contact, bool) error { return nil }
 
 func (FakeResend) EraseContact(context.Context, string) error { return nil }
+
+func (f FakeResend) ContactState(context.Context, string) (ResendState, error) {
+	if f.State == nil {
+		return ResendState{}, nil
+	}
+	return *f.State, nil
+}
+
+func (FakeResend) RestoreContact(context.Context, string, string, string, ResendState) error {
+	return nil
+}
 
 type FakeBlogResend struct{}
 

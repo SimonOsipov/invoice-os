@@ -1148,6 +1148,7 @@ describe('the name before Sign in', () => {
   it('InvitePage: a blank name says Enter your name', async () => {
     stubFetch({ preview: previewOk({ account: 'confirmed' }) })
     await mount()
+    expect(nameInput()!.className).toBe('dm-input')
     await typeName('   ')
     expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1)
     expect(nameMessage()!.getAttribute('role')).toBe('alert')
@@ -1223,6 +1224,8 @@ describe('the name before Sign in', () => {
     await typeName('  ')
     await typeName('Ada')
     expect(nameMessage()).toBeNull()
+    expect(nameInput()!.className).toBe('dm-input')
+    expect(nameInput()!.getAttribute('aria-invalid')).toBe('false')
     await click(button('Sign in'))
     expect(assigned).toEqual([SIGN_IN_HREF])
     expect(new URL(assigned[0]).search).not.toContain('name')

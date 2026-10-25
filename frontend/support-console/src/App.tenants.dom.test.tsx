@@ -293,6 +293,32 @@ describe('Console tenants wiring', () => {
     expect(screen.queryByText('r1')).toBeNull()
   })
 
+  it('tenant detail: a removed row among active and suspended rows keeps its muted chip and its place', async () => {
+    one.mockResolvedValueOnce({
+      tenant: X,
+      members: [
+        { user_id: 'a1', role: 'admin', status: 'active', display_name: 'Ada One', email: 'ada@x.test' },
+        { user_id: 'r1', role: 'preparer', status: 'removed', display_name: '   ', email: null },
+        { user_id: 's1', role: 'admin', status: 'suspended', display_name: 'Sue Three', email: 'sue@x.test' },
+      ],
+      invoices: [],
+    })
+    render(<App />)
+    await openTenants()
+    await waitRow('X')
+    fireEvent.click(rowOf('X'))
+    await screen.findByText('Ada One')
+    const chip = (label: string) => screen.getByText(label) as HTMLElement
+    const chips = ['ACTIVE', 'REMOVED', 'SUSPENDED'].map(chip)
+    expect(chips).toHaveLength(3)
+    expect(chip('REMOVED').style.color).toBe(chip('ACTIVE').style.color)
+    expect(chip('REMOVED').style.color).toContain('muted')
+    expect(chip('REMOVED').parentElement!.style.background).toBe(chip('ACTIVE').parentElement!.style.background)
+    expect(chip('SUSPENDED').style.color).not.toBe(chip('REMOVED').style.color)
+    expect(screen.getByText('ada@x.test')).toBeTruthy()
+    expect(screen.getByText('sue@x.test')).toBeTruthy()
+  })
+
   it('a tenant with no members and no invoices says so and offers only View jobs', async () => {
     one.mockResolvedValueOnce({ tenant: X, members: [], invoices: [] })
     render(<App />)

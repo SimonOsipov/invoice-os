@@ -122,6 +122,8 @@ describe('tenantsApi', () => {
     expect(memberName({ ...base, display_name: '' })).toBe('Deleted member')
     expect(memberName({ ...base, display_name: 'Ada' })).toBe('Ada')
     expect(memberName({ ...base, status: 'active', email: 'e@x' })).toBe('e@x')
+    expect(memberName({ ...base, email: 'e@x', user_id: 'uuid-1' })).toBe('Deleted member')
+    expect(memberName({ ...base, display_name: '   ' })).toBe('   ')
   })
 
   it('kindLabel names both kinds', () => {

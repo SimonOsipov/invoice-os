@@ -152,8 +152,23 @@ func TestNew_RefusesUnusableKeys(t *testing.T) {
 	p384alg := newKey(t, elliptic.P384(), "ES384", "sign", "verify")
 	oct := `[{"kty":"oct","alg":"HS256","kid":"k1","key_ops":["sign","verify"],"k":"SECRETOCTKEYBYTES"}]`
 	noSign := good.verifyOnly()
+	// edit returns good's key with one field changed, so each case breaks exactly one rule.
+	edit := func(f func(*jwk)) string { k := good.jwk; f(&k); return keysJSON(t, k) }
+	verifyOnlyWithD := edit(func(k *jwk) { k.KeyOps = []string{"verify"} })
 
 	cases := []struct{ name, in string }{
+		{"object, not an array", `{"kty":"EC"}`},
+		{"null", "null"},
+		{"P-256 material labelled ES384", edit(func(k *jwk) { k.Alg = "ES384" })},
+		{"P-256 material with no alg", edit(func(k *jwk) { k.Alg = "" })},
+		{"P-256 material labelled P-384", edit(func(k *jwk) { k.Crv = "P-384" })},
+		{"P-256 material labelled OKP", edit(func(k *jwk) { k.Kty = "OKP" })},
+		{"no kid", edit(func(k *jwk) { k.Kid = "" })},
+		{"public half of another key", edit(func(k *jwk) { k.X, k.Y = second.jwk.X, second.jwk.Y })},
+		{"d is not base64url", edit(func(k *jwk) { k.D = "!!!not base64!!!" })},
+		{"d is 31 bytes", edit(func(k *jwk) { k.D = k.D[:len(k.D)-2] })},
+		{"x is empty", edit(func(k *jwk) { k.X = "" })},
+		{"private key present, sign not listed", verifyOnlyWithD},
 		{"not json", "not json SECRETMARKER"},
 		{"empty array", "[]"},
 		{"empty string", ""},
@@ -163,7 +178,7 @@ func TestNew_RefusesUnusableKeys(t *testing.T) {
 		{"P-384 labelled ES256", keysJSON(t, p384.jwk)},
 		{"P-384 ES384", keysJSON(t, p384alg.jwk)},
 	}
-	secrets := []string{good.jwk.D, second.jwk.D, p384.jwk.D, p384alg.jwk.D, "SECRETOCTKEYBYTES", "SECRETMARKER"}
+	secrets := []string{good.jwk.D, good.jwk.X, second.jwk.D, p384.jwk.D, p384alg.jwk.D, "SECRETOCTKEYBYTES", "SECRETMARKER", "not base64"}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c, err := gotrueadmin.New("http://auth.invalid", tc.in, &http.Client{})
@@ -298,25 +313,81 @@ func TestDeleteUser_TransportFailureIsStatusZero(t *testing.T) {
 }
 
 func TestDeleteUser_DoesNotFollowARedirect(t *testing.T) {
-	var second atomic.Int64
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		second.Add(1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(target.Close)
-	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
-	}))
-	t.Cleanup(first.Close)
-	c := newClient(t, first.URL, signing(t))
+	for _, status := range []int{http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			var second atomic.Int64
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				second.Add(1)
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(target.Close)
+			first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, target.URL+r.URL.Path, status)
+			}))
+			t.Cleanup(first.Close)
+			c := newClient(t, first.URL, signing(t))
 
-	err := c.DeleteUser(context.Background(), uuid.NewString())
-	var se *gotrueadmin.StatusError
-	if !errors.As(err, &se) || se.Status != http.StatusTemporaryRedirect {
-		t.Fatalf("DeleteUser on a 307 = %v, want *StatusError{307}", err)
+			err := c.DeleteUser(context.Background(), uuid.NewString())
+			var se *gotrueadmin.StatusError
+			if !errors.As(err, &se) || se.Status != status {
+				t.Fatalf("DeleteUser on a %d = %v, want *StatusError{%d}", status, err, status)
+			}
+			if n := second.Load(); n != 0 {
+				t.Errorf("the redirect target got %d requests, want 0", n)
+			}
+		})
 	}
-	if n := second.Load(); n != 0 {
-		t.Errorf("the redirect target got %d requests, want 0", n)
+}
+
+func TestDeleteUser_KeepsTheCallersClientAndMintsAFreshTokenPerCall(t *testing.T) {
+	k := signing(t)
+	srv, got := recordingServer(t, http.StatusOK, "{}")
+	caller := &http.Client{}
+	c, err := gotrueadmin.New(srv.URL+"/", keysJSON(t, k.jwk), caller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if caller.CheckRedirect != nil {
+		t.Error("New changed the caller's http.Client")
+	}
+	id := uuid.NewString()
+	for i := range 2 {
+		if i == 1 {
+			time.Sleep(1100 * time.Millisecond) // iat has second resolution
+		}
+		if err := c.DeleteUser(context.Background(), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(*got) != 2 {
+		t.Fatalf("server got %d requests, want 2", len(*got))
+	}
+	if (*got)[0].path != "/admin/users/"+id {
+		t.Errorf("path = %q, want a single slash after the trailing-slash base", (*got)[0].path)
+	}
+	_, c0 := parseAdminToken(t, (*got)[0].auth, k)
+	_, c1 := parseAdminToken(t, (*got)[1].auth, k)
+	if c0["iat"] == c1["iat"] {
+		t.Errorf("both calls carry iat %v; each call must mint its own token", c0["iat"])
+	}
+}
+
+func TestDeleteUser_ACancelledContextIsStatusZero(t *testing.T) {
+	srv, got := recordingServer(t, http.StatusOK, "{}")
+	c := newClient(t, srv.URL, signing(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	id := uuid.NewString()
+	err := c.DeleteUser(ctx, id)
+	var se *gotrueadmin.StatusError
+	if !errors.As(err, &se) || se.Status != 0 {
+		t.Fatalf("DeleteUser with a cancelled context = %#v, want *StatusError{0}", err)
+	}
+	if strings.Contains(err.Error(), id) || strings.Contains(err.Error(), "context") {
+		t.Errorf("error %q carries the id or the cause", err)
+	}
+	if len(*got) != 0 {
+		t.Errorf("server got %d requests, want 0", len(*got))
 	}
 }
 

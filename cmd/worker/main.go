@@ -1,6 +1,6 @@
 // Command worker runs all background work, so a request-driven service that Cloud Run throttles
 // or scales to zero holds none: the River queues of submission, extraction and contact delivery,
-// the reconciliation sweep, the two custom-rule re-checks, the daily rollup snapshot, the
+// the person erase job, the reconciliation sweep, the two custom-rule re-checks, the daily rollup snapshot, the
 // system-health sampler, the newsletter purge and the code-list sync. The other services only
 // enqueue. It serves /healthz and /readyz and no other route.
 package main
@@ -28,6 +28,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth/gotrueadmin"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
@@ -159,16 +160,21 @@ func main() {
 	}
 	cw := contactWorkers(pool, mode, hubspot, resend, nl, app.Logger)
 	rw := &notifications.RegistrantWorker{Logger: app.Logger}
+	account, err := gotrueadmin.FromEnv(os.Getenv, os.Getenv("K_SERVICE") != "", platform.IDTokenTransport(nil))
+	if err != nil {
+		platform.Fatal(app.Logger, "worker: %v", err)
+	}
+	xw := newEraseWorker(pool, mode, hubspot, resend, account, app.Logger)
 
 	q, err := queue.New(pool, queue.Config{
 		Queues:  queueConfigs(cw != nil),
-		Workers: workerBundle(sw, pw, ew, rw, cw),
+		Workers: workerBundle(sw, pw, ew, rw, cw, xw),
 		Logger:  app.Logger,
 	})
 	if err != nil {
 		platform.Fatal(app.Logger, "worker: queue: %v", err)
 	}
-	sw.Queue, pw.Queue = q, q
+	sw.Queue, pw.Queue, xw.River = q, q, q.River()
 	rw.Store = notifications.NewStore(pool, q.River())
 	app.AddBackgroundWorker(q)
 
@@ -325,6 +331,19 @@ func contactWorkers(pool *pgxpool.Pool, mode notifications.Mode, hs notification
 	return cw
 }
 
+// newEraseWorker builds the erase worker in every contacts mode. The erasers are nil in off mode;
+// Account stays a nil interface without a client (TestNewEraseWorker_FollowsTheModes).
+func newEraseWorker(pool *pgxpool.Pool, mode notifications.Mode, hs notifications.HubSpotClient,
+	rs notifications.ResendClient, account *gotrueadmin.Client, logger *slog.Logger) *notifications.EraseWorker {
+	w := &notifications.EraseWorker{Pool: pool, Mode: mode, Logger: logger}
+	w.HubSpot, _ = hs.(notifications.HubSpotEraser)
+	w.Resend, _ = rs.(notifications.ResendEraser)
+	if account != nil {
+		w.Account = account
+	}
+	return w
+}
+
 // queueConfigs is the one map the client fetches from. Extraction gets its own queue so a slow
 // read cannot starve submission; river.NewClient refuses MaxWorkers < 1.
 func queueConfigs(contacts bool) map[string]river.QueueConfig {
@@ -340,10 +359,11 @@ func queueConfigs(contacts bool) map[string]river.QueueConfig {
 
 // workerBundle is the ONE bundle queue.New reads. A River client takes exactly one, so a second
 // bundle would leave its workers unfetched (TestWorkerBundle_CarriesEveryKind).
-func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet) *river.Workers {
+func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet, xw *notifications.EraseWorker) *river.Workers {
 	bundle := submission.Workers(sw, pw)
 	extraction.AddTo(bundle, ew)
 	notifications.AddRegistrantTo(bundle, rw)
+	notifications.AddEraseTo(bundle, xw)
 	if cw != nil {
 		notifications.AddTo(bundle, cw.deliver, cw.deal, cw.blog)
 	}

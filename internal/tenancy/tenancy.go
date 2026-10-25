@@ -118,6 +118,9 @@ func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 		case errors.Is(err, db.ErrNotActiveMember):
 			writeError(w, http.StatusForbidden, db.NotActiveMemberMessage)
 			return
+		case errors.Is(err, db.ErrWorkspaceLocked):
+			writeError(w, http.StatusForbidden, db.WorkspaceLockedMessage)
+			return
 		case errors.Is(err, ErrTenantNotFound):
 			writeError(w, http.StatusNotFound, "tenant not found")
 			return
@@ -206,6 +209,9 @@ func MembershipsHandler(load MembershipsLoader, log *slog.Logger) http.HandlerFu
 			return
 		case errors.Is(err, db.ErrNotActiveMember):
 			writeError(w, http.StatusForbidden, db.NotActiveMemberMessage)
+			return
+		case errors.Is(err, db.ErrWorkspaceLocked):
+			writeError(w, http.StatusForbidden, db.WorkspaceLockedMessage)
 			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "tenancy: list memberships", slog.Any("err", err))
@@ -435,6 +441,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusUnauthorized, "unauthorized"
 	case errors.Is(err, db.ErrNotActiveMember):
 		return http.StatusForbidden, db.NotActiveMemberMessage
+	case errors.Is(err, db.ErrWorkspaceLocked):
+		return http.StatusForbidden, db.WorkspaceLockedMessage
 	case errors.Is(err, ErrInvalidStatus):
 		return http.StatusBadRequest, `status must be "active" or "suspended"`
 	case errors.Is(err, ErrNotPermitted):

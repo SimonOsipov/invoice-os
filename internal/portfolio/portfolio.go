@@ -467,6 +467,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusUnauthorized, "unauthorized"
 	case errors.Is(err, db.ErrNotActiveMember):
 		return http.StatusForbidden, db.NotActiveMemberMessage
+	case errors.Is(err, db.ErrWorkspaceLocked):
+		return http.StatusForbidden, db.WorkspaceLockedMessage
 	case errors.Is(err, ErrNotPermitted):
 		return http.StatusForbidden, "only an admin can add a company"
 	case errors.Is(err, ErrNameRequired):

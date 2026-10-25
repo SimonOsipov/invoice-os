@@ -25,16 +25,19 @@ var ErrNotActiveMember = errors.New("db: caller's membership in this workspace i
 const NotActiveMemberMessage = "your membership in this workspace is not active"
 
 // ErrWorkspaceLocked refuses a read-write request transaction of a workspace scheduled for deletion.
-// Compile stub for the DEL-04-02 red tests; the executor wires it into the seam.
 var ErrWorkspaceLocked = errors.New("db: workspace is scheduled for deletion")
 
 // WorkspaceLockedMessage is the wire body for ErrWorkspaceLocked.
 const WorkspaceLockedMessage = "this workspace is scheduled for deletion"
 
 // WorkspaceLocked reports whether the transaction's own tenant is scheduled for deletion.
-// Stub: always false until DEL-04-02 implements it.
+// RLS limits the read to that tenant; a missing tenant row reads false.
 func WorkspaceLocked(ctx context.Context, tx pgx.Tx) (bool, error) {
-	return false, nil
+	var locked bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM tenants WHERE deletion_due_at IS NOT NULL)").Scan(&locked); err != nil {
+		return false, fmt.Errorf("db: read workspace lock: %w", err)
+	}
+	return locked, nil
 }
 
 // WithinRequestTenantTx is the HTTP path's entry point: it pulls the tenant from
@@ -92,7 +95,8 @@ func WithinRequestTenantTxOpts(ctx context.Context, pool *pgxpool.Pool, opts pgx
          CASE WHEN t.kind <> 'firm' OR m.role = 'admin' OR m.all_clients THEN '*'
               ELSE (SELECT coalesce(array_agg(c.entity_id ORDER BY c.entity_id), '{}')::text
                       FROM membership_clients c WHERE c.user_id = m.user_id)
-         END, true)
+         END, true),
+       t.deletion_due_at IS NOT NULL
   FROM memberships m
   JOIN tenants t ON t.id = m.tenant_id
  WHERE m.user_id = $1`, id.Subject)
@@ -101,8 +105,11 @@ func WithinRequestTenantTxOpts(ctx context.Context, pool *pgxpool.Pool, opts pgx
 		_ = br.Close()
 		return fmt.Errorf("db: set tenant context: %w", err)
 	}
-	var status string
-	scanErr := br.QueryRow().Scan(&status, nil) // column 2 is set_config's echo, unused
+	var (
+		status string
+		locked bool
+	)
+	scanErr := br.QueryRow().Scan(&status, nil, &locked) // column 2 is set_config's echo, unused
 	// Close returns the batch's stored error first, so scanErr must be classified
 	// before closeErr or the specific wrap below is unreachable.
 	closeErr := br.Close()
@@ -113,6 +120,9 @@ func WithinRequestTenantTxOpts(ctx context.Context, pool *pgxpool.Pool, opts pgx
 		return fmt.Errorf("db: close batch: %w", closeErr)
 	case scanErr != nil || status != "active": // ErrNoRows here means no membership row at all
 		return ErrNotActiveMember
+	case locked && opts.AccessMode != pgx.ReadOnly:
+		// ceiling: a tx whose check ran before a schedule committed may commit after it; revisit if a write must never follow the lock
+		return ErrWorkspaceLocked
 	}
 
 	if err := fn(tx); err != nil {

@@ -23,8 +23,11 @@ paths:
 - Queue the `set_config` statement before the membership SELECT. The SELECT reads through the tenant that `set_config` sets.
 - Refuse a caller with no membership row or an inactive row with `ErrNotActiveMember`.
 - Answer `ErrNotActiveMember` with 403 and `NotActiveMemberMessage`. Never answer 401.
+- Refuse a transaction that is not `READ ONLY` with `ErrWorkspaceLocked` when the caller's workspace is scheduled for deletion. Check it after the membership gate.
+- Answer `ErrWorkspaceLocked` with 403 and `WorkspaceLockedMessage`.
+- Open a read that must serve a locked workspace with `pgx.TxOptions{AccessMode: pgx.ReadOnly}`.
 - Answer 401 only for `ErrNoTenant`. The SPA signs the user out on every 401.
-- Map both `ErrNoTenant` and `ErrNotActiveMember` in every handler error mapper.
+- Map `ErrNoTenant`, `ErrNotActiveMember` and `ErrWorkspaceLocked` in every handler error mapper.
 - Refuse a request with a malformed tenant id with `ErrNoTenant` before the first statement.
 - Skip the membership lookup for a subject that is not a UUID. Only in-process actors reach that arm.
 - Never assert the query plan of the `memberships` status lookup.

@@ -713,3 +713,18 @@ func TestServer_OldBlogHostSpellingsMapToWww(t *testing.T) {
 		has(t, body, `<link rel="canonical" href="https://www.ascomply.com/blog/p">`)
 	}
 }
+
+func TestSiteFor_EdgeHostsKeepVerbatimAndNeverPanic(t *testing.T) {
+	for host, want := range map[string]string{
+		"[::1]:8080":             "https://[::1]:8080/blog",
+		"[::1]":                  "https://[::1]/blog",
+		"":                       "https://" + "/blog",
+		"blog.ascomply.com.:443": "https://www.ascomply.com/blog",
+		"[blog.ascomply.com":     "https://[blog.ascomply.com/blog",
+		"example.com:8080":       "https://example.com:8080/blog",
+	} {
+		if got := siteFor(host); got != want {
+			t.Errorf("siteFor(%q) = %q, want %q", host, got, want)
+		}
+	}
+}

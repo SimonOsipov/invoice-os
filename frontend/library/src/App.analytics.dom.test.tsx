@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// @vitest-environment-options { "url": "https://library.ascomply.com/" }
+// @vitest-environment-options { "url": "https://www.ascomply.com/library/" }
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import './testStorage'
 import { readConsentCookie } from '../../landing/src/consent'
@@ -181,7 +181,7 @@ describe('library events', () => {
     click(button('Cookie choices'))
     click(button('Reject'))
     const expiry = (d: string) => writes.some((w) => w.startsWith('_ga=; ') && w.includes('Max-Age=0') && w.endsWith(`domain=${d}`))
-    expect(expiry('library.ascomply.com')).toBe(true)
+    expect(expiry('www.ascomply.com')).toBe(true)
     expect(expiry('.ascomply.com')).toBe(true)
     click(card('validate'))
     click(link('Book the Demo')[0])
@@ -248,5 +248,13 @@ describe('library tour events', () => {
     expect(container.querySelector(NOTICE)!.hasAttribute('inert')).toBe(true)
     click(sidebarTour())
     expect(container.querySelector(NOTICE)!.hasAttribute('inert')).toBe(false)
+  })
+})
+
+describe('library tag on the www path', () => {
+  it('AN-01 a stored grant loads the gtag script once', async () => {
+    localStorage.setItem(KEY, GRANT)
+    await mount('/library/')
+    expect(document.querySelectorAll(`script[src="https://www.googletagmanager.com/gtag/js?id=${ID}"]`)).toHaveLength(1)
   })
 })

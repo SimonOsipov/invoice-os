@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// @vitest-environment-options { "url": "https://library-pr-12-944095690109.africa-south1.run.app/" }
+// @vitest-environment-options { "url": "https://library-pr-1-944095690109.africa-south1.run.app/library/" }
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { w } from '../../landing/src/hubspotChat.test.util'
 

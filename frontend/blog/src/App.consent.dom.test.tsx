@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// @vitest-environment-options { "url": "https://blog.ascomply.com/" }
+// @vitest-environment-options { "url": "https://www.ascomply.com/blog/" }
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -146,7 +146,7 @@ describe('blog consent', () => {
     expect(document.querySelectorAll('script[src^="https://www.googletagmanager.com/"]')).toHaveLength(0)
     const gaExpiries = writes.filter((w) => w.startsWith('_ga=; Max-Age=0'))
     expect(gaExpiries.some((w) => !w.includes('domain='))).toBe(true)
-    for (const d of ['blog.ascomply.com', '.blog.ascomply.com', 'ascomply.com', '.ascomply.com']) {
+    for (const d of ['www.ascomply.com', '.www.ascomply.com', 'ascomply.com', '.ascomply.com']) {
       expect(gaExpiries.some((w) => w.endsWith(`domain=${d}`)), d).toBe(true)
     }
   })
@@ -186,7 +186,7 @@ describe('blog consent', () => {
     const exp = writes.filter((w) => w.startsWith('_ga=; Max-Age=0'))
     expect(exp.filter((w) => !w.includes('domain='))).toHaveLength(1)
     expect(exp.filter((w) => w.includes('domain=')).map((w) => w.split('domain=')[1]).sort()).toEqual(
-      ['.ascomply.com', '.blog.ascomply.com', 'ascomply.com', 'blog.ascomply.com'],
+      ['.ascomply.com', '.www.ascomply.com', 'ascomply.com', 'www.ascomply.com'],
     )
     click(byText('Subscribe'))
     const events = ((window as TestWindow).dataLayer ?? []).map((a) => Array.from(a)).filter((e) => e[0] === 'event')

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// @vitest-environment-options { "url": "https://blog.ascomply.com/" }
+// @vitest-environment-options { "url": "https://www.ascomply.com/blog/" }
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import './testStorage'
 
@@ -108,5 +108,13 @@ describe('blog events', () => {
     await mount('/')
     click(byText('aside a', 'Book the Demo'))
     expect((window as TestWindow).dataLayer).toBeUndefined()
+  })
+})
+
+describe('blog tag on the www path', () => {
+  it('AN-01 a stored grant loads the gtag script once', async () => {
+    localStorage.setItem(KEY, GRANT)
+    await mount('/blog/')
+    expect(document.querySelectorAll(`script[src="https://www.googletagmanager.com/gtag/js?id=${ID}"]`)).toHaveLength(1)
   })
 })

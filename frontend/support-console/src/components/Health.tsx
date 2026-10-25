@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react'
+import { useEffect, type CSSProperties } from 'react'
 import { CHART_H, SPARK_HEIGHT, SPARK_WIDTH, healthTone, sentryServiceUrl, sparkline } from '../helpers'
 import { fleetSummary, jobSeries, jobsOf, series, shortBuild, type StaffHealth } from '../healthApi'
 import { DASHBOARDS, METRIC_SERVICES, RANGES, SERIES, THRESHOLDS, colourMap, fleetSeries, formatShown, formatValue, hasData, judge, latestOf, panelOf, worstP95, type PanelKey, type Point, type RangeKey, type StaffMetrics, type Stat, type Verdict } from '../metricsApi'
@@ -25,6 +25,8 @@ type Props = {
   onRange: (r: RangeKey) => void
   service: string
   onService: (s: string) => void
+  zoom: [number, number] | null
+  onZoom: (w: [number, number] | null) => void
 }
 
 type Tone = 'green' | 'amber' | 'red' | 'muted'
@@ -182,7 +184,9 @@ const shown = (e: Entry): string => {
   return formatShown(e.unit, latest)
 }
 
-function Panel({ spec, m, colours, service, markers }: { spec: PanelSpec; m: StaffMetrics; colours: Record<string, string>; service: string; markers: Marker[] }) {
+type ZoomProps = Pick<Props, 'zoom' | 'onZoom'>
+
+function Panel({ spec, m, colours, service, markers, zoom, onZoom }: { spec: PanelSpec; m: StaffMetrics; colours: Record<string, string>; service: string; markers: Marker[] } & ZoomProps) {
   const { lines: entries, guides } = panelChart(spec.key, m, colours, service)
   const drawn = entries.filter((e) => e.points.length > 0)
   const verdict = spec.stat && drawn.length > 0 ? panelVerdict(spec.stat, drawn, m.connection_budget) : 'ok'
@@ -214,7 +218,7 @@ function Panel({ spec, m, colours, service, markers }: { spec: PanelSpec; m: Sta
         )}
       </div>
       {drawn.length > 0 ? (
-        <TimeChart lines={drawn.map((e) => ({ ...e, folded: e.color === OTHER_LINE }))} start={Date.parse(m.start) / 1000} end={Date.parse(m.end) / 1000} step={m.step_seconds} guides={guides} markers={markers} />
+        <TimeChart lines={drawn.map((e) => ({ ...e, folded: e.color === OTHER_LINE }))} start={Date.parse(m.start) / 1000} end={Date.parse(m.end) / 1000} step={m.step_seconds} guides={guides} markers={markers} zoom={zoom} onZoom={onZoom} />
       ) : (
         <div data-no-data="" style={{ ...NOTE, padding: 0, minHeight: CHART_H, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           No data
@@ -235,7 +239,7 @@ function Panel({ spec, m, colours, service, markers }: { spec: PanelSpec; m: Sta
   )
 }
 
-function Panels({ m, service }: { m: StaffMetrics; service: string }) {
+function Panels({ m, service, zoom, onZoom }: { m: StaffMetrics; service: string } & ZoomProps) {
   const colours = colourMap(m)
   const markers = deployMarkers(m)
   return (
@@ -243,7 +247,7 @@ function Panels({ m, service }: { m: StaffMetrics; service: string }) {
       {!m.deploys.available && <div style={{ ...LEGEND_TEXT, marginBottom: 8 }}>Deploy markers unavailable</div>}
       <div className="ops-health-panels" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16 }}>
         {PANELS.map((spec) => (
-          <Panel key={spec.key} spec={spec} m={m} colours={colours} service={service} markers={markers} />
+          <Panel key={spec.key} spec={spec} m={m} colours={colours} service={service} markers={markers} zoom={zoom} onZoom={onZoom} />
         ))}
       </div>
     </>
@@ -368,7 +372,12 @@ const DASHBOARD_LINKS = [
   { label: 'Database and edge dashboard', href: DASHBOARDS.database_edge },
 ]
 
-export function Health({ status, errorText, data, healthStale, metricsStale, onRetry, metricsStatus, metricsErrorText, metrics, onRetryMetrics, range, onRange, service, onService }: Props) {
+export function Health({ status, errorText, data, healthStale, metricsStale, onRetry, metricsStatus, metricsErrorText, metrics, onRetryMetrics, range, onRange, service, onService, zoom, onZoom }: Props) {
+  // A window the shown answer no longer covers would leave every panel empty.
+  useEffect(() => {
+    if (!zoom || !metrics) return
+    if (zoom[1] < Date.parse(metrics.start) / 1000 || zoom[0] > Date.parse(metrics.end) / 1000) onZoom(null)
+  }, [zoom, metrics, onZoom])
   const panelsNote = () => {
     if (metricsStatus === 'forbidden') return <Note text={STAFF_ONLY} />
     if (metricsStatus === 'error') return <Note text={metricsErrorText ?? 'Unavailable'} onRetry={onRetryMetrics} />
@@ -389,6 +398,11 @@ export function Health({ status, errorText, data, healthStale, metricsStale, onR
               {r}
             </button>
           ))}
+          {zoom && (
+            <button type="button" onClick={() => onZoom(null)} className="ops-btn v2-btn v2-btn-ghost" style={{ height: 30 }}>
+              Reset zoom
+            </button>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
             <select className="ops-input" aria-label="Service" value={service} onChange={(e) => onService(e.target.value)} style={{ maxWidth: 260 }}>
               <option value="">All services</option>
@@ -418,7 +432,7 @@ export function Health({ status, errorText, data, healthStale, metricsStale, onR
         )}
         {(note || metrics) && (
           <div data-panels style={{ marginTop: 16 }}>
-            {note ?? (metrics && <Panels m={metrics} service={service} />)}
+            {note ?? (metrics && <Panels m={metrics} service={service} zoom={zoom} onZoom={onZoom} />)}
           </div>
         )}
         <Services fleet={data.fleet} service={service} />

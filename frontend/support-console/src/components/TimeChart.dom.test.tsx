@@ -186,11 +186,11 @@ describe('TimeChart wrapper', () => {
     expect(u().calls).toContainEqual(['setSize', { width: 512, height: CHART_H + 28 }])
   })
 
-  it('the chart opens on the window with no self-zoom', async () => {
+  it('the chart opens on the window and never zooms itself', async () => {
     const { u } = await mount({ start: 100, end: 4000 })
     const o = opts(u())
     expect([o.scales.x.min, o.scales.x.max]).toEqual([100, 4000])
-    expect(o.cursor.drag).toEqual({ x: false, y: false, setScale: false })
+    expect(o.cursor.drag).toEqual({ x: true, y: false, setScale: false, dist: 5 })
   })
 
   it('the observer ignores a zero or unchanged width', async () => {
@@ -461,5 +461,60 @@ describe('TimeChart readout edges', () => {
     const second = FakeUPlot.instances[1]
     act(() => second.setCursor({ left: second.valToPos(120, 'x'), top: 20 }))
     expect(view.container.querySelector('[data-readout-time]')!.textContent).toBe('00:02 UTC')
+  })
+})
+
+describe('TimeChart zoom', () => {
+  const zoomed = (u: FakeUPlot, left: number, width: number) => {
+    u.select = { left, top: 0, width, height: 10 }
+    act(() => u.fire('setSelect'))
+  }
+
+  it('a drag reports its window and clears the box', async () => {
+    const onZoom = vi.fn()
+    const { u } = await mount({ onZoom })
+    zoomed(u(), 100, 200)
+    expect(onZoom).toHaveBeenCalledTimes(1)
+    expect(onZoom).toHaveBeenCalledWith([u().posToVal(100, 'x'), u().posToVal(300, 'x')])
+    expect(u().calls.filter(([n]) => n === 'setSelect')).toEqual([['setSelect', expect.objectContaining({ width: 0, height: 0 }), false]])
+    expect(u().calls.some(([n]) => n === 'setScale')).toBe(false)
+  })
+
+  it('a zero-width select reports nothing', async () => {
+    const onZoom = vi.fn()
+    const { u } = await mount({ onZoom })
+    zoomed(u(), 100, 0)
+    expect(onZoom).not.toHaveBeenCalled()
+  })
+
+  it('the zoom prop sets the window on the chart', async () => {
+    const { view, u } = await mount()
+    view.rerender(<TimeChart lines={lines()} {...base} zoom={[600, 1800]} />)
+    expect(u().calls).toContainEqual(['setScale', 'x', { min: 600, max: 1800 }])
+    view.rerender(<TimeChart lines={lines()} {...base} zoom={null} />)
+    expect(u().calls[u().calls.length - 1]).toEqual(['setScale', 'x', { min: 0, max: 3600 }])
+    expect(root(view.container).getAttribute('data-x')).toBe('0,3600')
+  })
+
+  it('new data keeps the zoom window after setData', async () => {
+    const { view, u } = await mount({ zoom: [600, 1800] })
+    view.rerender(<TimeChart lines={lines({ a: [[0, 9], [60, 8]] })} {...base} zoom={[600, 1800]} />)
+    expect(u().calls.map(([n]) => n)).toEqual(['setData', 'setScale'])
+    expect(u().calls[0][2]).toBe(false)
+    expect(u().calls[1]).toEqual(['setScale', 'x', { min: 600, max: 1800 }])
+  })
+
+  it('a recreated chart starts in the zoom window', async () => {
+    const { view } = await mount({ zoom: [600, 1800] })
+    view.rerender(<TimeChart lines={lines().slice(0, 1)} {...base} zoom={[600, 1800]} />)
+    await waitFor(() => expect(FakeUPlot.instances).toHaveLength(2))
+    const o = opts(FakeUPlot.instances[1])
+    expect([o.scales.x.min, o.scales.x.max]).toEqual([600, 1800])
+    expect(root(view.container).getAttribute('data-x')).toBe('600,1800')
+  })
+
+  it('double-click is unbound', async () => {
+    const { u } = await mount()
+    expect(opts(u()).cursor.bind.dblclick(u(), u().over, () => {})).toBeNull()
   })
 })

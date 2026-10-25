@@ -168,6 +168,8 @@ function Console() {
   const healthStatus = health ? 'ready' : healthRead.status === 'error' ? (healthRead.error?.status === 403 ? 'forbidden' : 'error') : 'loading'
   const [healthRange, setHealthRange] = useState<RangeKey>(DEFAULT_RANGE)
   const [healthService, setHealthService] = useState('')
+  const [healthZoom, setHealthZoom] = useState<[number, number] | null>(null)
+  useEffect(() => { if (!onHealth) setHealthZoom(null) }, [onHealth])
   const metricsKey = `${healthRange}|${healthService}`
   const metricsRead = useAsync(async () => { const v = visit.current; return { v, key: metricsKey, value: await fetchStaffMetrics(healthRange, healthService) } }, { immediate: onHealth, deps: [onHealth, healthRange, healthService], isEmpty: () => false })
   const lastMetrics = useRef<{ key: string; value: StaffMetrics } | null>(null)
@@ -694,9 +696,11 @@ function Console() {
               metrics={metrics}
               onRetryMetrics={metricsRead.run}
               range={healthRange}
-              onRange={setHealthRange}
+              onRange={(r) => { setHealthRange(r); setHealthZoom(null) }}
               service={healthService}
-              onService={setHealthService}
+              onService={(v) => { setHealthService(v); setHealthZoom(null) }}
+              zoom={healthZoom}
+              onZoom={setHealthZoom}
             />
           )}
         </div>

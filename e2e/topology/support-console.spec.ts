@@ -1443,6 +1443,90 @@ async function fixtureHover(page: Page): Promise<void> {
   await expect(readout, 'the readout is gone').toHaveCount(0)
 }
 
+// fixture check: synced drag zoom, Reset zoom and the select colour on the labelled metrics body
+async function fixtureZoom(page: Page): Promise<void> {
+  const mn = mainOf(page)
+  const panels = mn.locator('.ops-health-panels > [data-panel]')
+  const charts = mn.locator('[data-chart]')
+  const reqOver = kid(panels.nth(PANEL_KEYS.indexOf('req_per_min')), 2).locator('.u-over')
+  const reset = mn.getByRole('button', { name: 'Reset zoom', exact: true })
+  const windows = async (): Promise<string[]> => charts.evaluateAll((els) => els.map((e) => e.getAttribute('data-x') ?? 'missing'))
+  const same = async (): Promise<string | null> => {
+    const w = await windows()
+    return w.length > 0 && new Set(w).size === 1 ? w[0] : null
+  }
+  const full = async (): Promise<[number, number]> => {
+    await expect.poll(same, { message: 'every chart shares one window' }).not.toBeNull()
+    return (await same())!.split(',').map(Number) as [number, number]
+  }
+  const drag = async (from: number, to: number, release = true): Promise<void> => {
+    const o = (await boxes(page, { o: reqOver })).o
+    const y = o.y + o.height / 2
+    await page.mouse.move(o.x + o.width * from, y)
+    await page.mouse.down()
+    await page.mouse.move(o.x + o.width * ((from + to) / 2), y, { steps: 4 })
+    await page.mouse.move(o.x + o.width * to, y, { steps: 4 })
+    if (release) await page.mouse.up()
+  }
+
+  await expect(reset, 'no Reset zoom before a drag').toHaveCount(0)
+  const [start, end] = await full()
+
+  // AC-6: the select box paints the resolved --action-tint while the button is down
+  await drag(0.2, 0.6, false)
+  const tint = await mn.evaluate((el) => {
+    const probe = document.createElement('span')
+    probe.style.backgroundColor = 'var(--action-tint)'
+    el.append(probe)
+    const want = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return { want, got: getComputedStyle(document.querySelector('.ops-health-panels .u-select')!).backgroundColor }
+  })
+  expect(tint.got, 'select box uses --action-tint').toBe(tint.want)
+  await page.mouse.up()
+
+  const zoomed = await full()
+  expect(zoomed[0], 'zoom starts inside the range').toBeGreaterThan(start)
+  expect(zoomed[1], 'zoom ends inside the range').toBeLessThan(end)
+  await expect(reset).toHaveCount(1)
+  await expect(mn.getByRole('button', { name: '6h', exact: true }), 'the range chip stays pressed while zoomed').toHaveAttribute('aria-pressed', 'true')
+
+  await atWidths(page, 'SUP-03 System health fixture filter bar while zoomed', async () => {
+    const problems: string[] = []
+    const filterBar = parent(mn.getByRole('button', { name: '15m', exact: true }))
+    const bar = await boxes(page, { filterBar, select: filterBar.locator('select'), reset })
+    const chipRects = await rectsOf(page, filterBar.locator('button.ops-chip'), 'range chip')
+    problems.push(...within(bar.filterBar, bar.reset, 'Reset zoom in the filter bar'), ...sameTops([...chipRects, bar.reset], 'chips and Reset zoom'))
+    problems.push(...pairwiseApart([...chipRects, bar.reset, bar.select], 'chips, Reset zoom and select'))
+    problems.push(...(await selectAtRightEnd(filterBar, bar.filterBar, bar.select, [...chipRects, bar.reset])))
+    for (let i = 0; i < PANEL_KEYS.length; i++) {
+      const marks = kid(panels.nth(i), 2).locator('[data-deploy]:visible')
+      const titles = await marks.evaluateAll((els) => els.map((e) => e.getAttribute('title')))
+      if (titles.length !== 1 || !titles[0]?.startsWith('gateway-00042 · ')) problems.push(`${PANEL_KEYS[i]} visible markers: ${titles.join(' | ')}`)
+    }
+    return { problems, rects: { bar: bar.filterBar, reset: bar.reset } }
+  })
+
+  await reset.click()
+  await expect(reset).toHaveCount(0)
+  await expect.poll(same, { message: 'Reset zoom restores the range' }).toBe(`${start},${end}`)
+
+  await drag(0.2, 0.6)
+  await expect(reset).toHaveCount(1)
+  await mn.getByRole('button', { name: '1h', exact: true }).click()
+  await expect(reset, 'a range chip clears the zoom').toHaveCount(0)
+  await full()
+
+  await drag(0.2, 0.6)
+  await expect(reset).toHaveCount(1)
+  await mn.locator('select[aria-label="Service"]').selectOption('app')
+  await expect(reset, 'a service pick clears the zoom').toHaveCount(0)
+  await full()
+  await mn.locator('select[aria-label="Service"]').selectOption('')
+  await mn.getByRole('button', { name: '6h', exact: true }).click()
+  await full()
+}
+
 // fixture check: pins layout of a wire-shaped body, not the metrics contract
 async function healthFixtureLayout(page: Page): Promise<void> {
   const mn = mainOf(page)
@@ -1476,6 +1560,7 @@ async function healthFixtureLayout(page: Page): Promise<void> {
     return { problems: [...base.problems, ...charts.problems], rects: { base: base.rects, charts: charts.rects } }
   })
   await fixtureHover(page)
+  await fixtureZoom(page)
 
   // app owns no job kind and has no live ping row: both notes show; the metrics route answers any query
   await mn.locator('select[aria-label="Service"]').selectOption('app')

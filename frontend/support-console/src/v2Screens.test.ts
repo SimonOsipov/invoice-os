@@ -199,6 +199,8 @@ const HEALTH_PROPS: Parameters<typeof Health>[0] = {
   onRange: noop,
   service: '',
   onService: noop,
+  zoom: null,
+  onZoom: noop,
 }
 const healthWith = (over: Partial<Parameters<typeof Health>[0]>) => renderToStaticMarkup(createElement(Health, { ...HEALTH_PROPS, ...over }))
 const healthData = (over: Partial<StaffHealth>) => healthWith({ data: { ...HEALTH, ...over } })
@@ -856,6 +858,19 @@ describe('System health markup', () => {
     expect(chips.map((c) => attr(c, 'aria-pressed'))).toEqual(['false', 'true', 'false', 'false', 'false'])
     const painted = (on: boolean) => style(parse(renderToStaticMarkup(createElement('i', { style: chipStyle(on, null) })))[0])
     expect(chips.map((c) => style(c))).toEqual([painted(false), painted(true), painted(false), painted(false), painted(false)])
+  })
+
+  it('Reset zoom shows only while zoomed, in the ghost paint at height 30', () => {
+    const zoomed = healthWith({ zoom: [1, 2] })
+    const reset = buttonByText(zoomed, 'Reset zoom')
+    expect(classes(reset)).toEqual(['ops-btn', 'v2-btn', 'v2-btn-ghost'])
+    expect(style(reset).height).toBe('30px')
+    expect(zoomed.indexOf('>7d</button>')).toBeLessThan(zoomed.indexOf('>Reset zoom</button>'))
+    expect(zoomed.indexOf('>Reset zoom</button>')).toBeLessThan(zoomed.indexOf('<select'))
+    expect(healthWith({ zoom: null })).not.toContain('Reset zoom')
+    for (const html of [zoomed, healthWith({ zoom: null })]) {
+      expect(attr(buttonByText(html, '1h'), 'aria-pressed')).toBe('true')
+    }
   })
 
   it('the service select lists All services then every metric service', () => {

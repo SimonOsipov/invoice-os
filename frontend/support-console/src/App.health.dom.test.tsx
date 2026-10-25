@@ -551,3 +551,113 @@ describe('Console system health refresh', () => {
     expect(screen.queryByText('1/1')).toBeNull()
   })
 })
+
+describe('Console system health zoom', () => {
+  const T0 = Date.parse(METRICS.start) / 1000
+  const reqPanel = (m: StaffMetrics, y: number, shift = 0): StaffMetrics => ({
+    ...m,
+    start: new Date((T0 + shift) * 1000).toISOString(),
+    end: new Date((T0 + 3600 + shift) * 1000).toISOString(),
+    panels: [{ key: 'req_per_min', unit: 'req/min', available: true, series: [{ name: 'gateway', points: [[T0 + shift + 60, y]] }] }],
+  })
+  const tick = (ms = HEALTH_REFRESH_MS) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+  const pending = () => new Promise<never>(() => {})
+  const chart = () => FakeUPlot.instances[FakeUPlot.instances.length - 1]
+  const resetBtn = () => screen.queryByRole('button', { name: 'Reset zoom' })
+  const lastScale = () => chart().calls.filter(([n]) => n === 'setScale').at(-1)?.[2]
+  // posToVal is the identity here, so left/width are the window in seconds.
+  const drag = async (from: number, to: number) => {
+    await vi.waitFor(() => expect(chart()).toBeTruthy())
+    const u = chart()
+    u.posToVal = (p) => p
+    u.select = { left: from, top: 0, width: to - from, height: 10 }
+    act(() => u.fire('setSelect'))
+  }
+  const open = async () => {
+    FakeUPlot.instances.length = 0
+    vi.useFakeTimers()
+    metrics.mockResolvedValue(reqPanel(METRICS, 42))
+    render(<App />)
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('button', { name: /^System health$/ }))
+    await tick(0)
+    await vi.waitFor(() => expect(chart()).toBeTruthy())
+  }
+
+  it('Reset zoom restores the range', async () => {
+    await open()
+    expect(resetBtn()).toBeNull()
+    await drag(T0 + 600, T0 + 1800)
+    expect(resetBtn()).not.toBeNull()
+    fireEvent.click(resetBtn()!)
+    expect(resetBtn()).toBeNull()
+    expect(lastScale()).toEqual({ min: T0, max: T0 + 3600 })
+  })
+
+  it('a range chip or a service pick clears the zoom', async () => {
+    await open()
+    await drag(T0 + 600, T0 + 1800)
+    fireEvent.click(screen.getByRole('button', { name: '6h' }))
+    await tick(0)
+    expect(resetBtn()).toBeNull()
+    await drag(T0 + 600, T0 + 1800)
+    fireEvent.click(screen.getByRole('button', { name: '6h' }))
+    await tick(0)
+    expect(resetBtn()).toBeNull()
+    await drag(T0 + 600, T0 + 1800)
+    fireEvent.change(screen.getByLabelText('Service'), { target: { value: 'submission' } })
+    await tick(0)
+    expect(resetBtn()).toBeNull()
+  })
+
+  it('the refresh keeps running and keeps the zoom', async () => {
+    await open()
+    await drag(T0 + 600, T0 + 1800)
+    metrics.mockResolvedValue(reqPanel(METRICS, 43))
+    await tick()
+    expect(health).toHaveBeenCalledTimes(2)
+    expect(metrics).toHaveBeenCalledTimes(2)
+    expect(resetBtn()).not.toBeNull()
+    expect(chart().calls.slice(-2)).toEqual([['setData', expect.anything(), false], ['setScale', 'x', { min: T0 + 600, max: T0 + 1800 }]])
+  })
+
+  it('a zoom window that leaves the data clears; a partly covered one stays', async () => {
+    await open()
+    await drag(T0 + 60, T0 + 600)
+    metrics.mockResolvedValue(reqPanel(METRICS, 44, 300))
+    await tick()
+    expect(resetBtn()).not.toBeNull()
+    expect(lastScale()).toEqual({ min: T0 + 60, max: T0 + 600 })
+    metrics.mockResolvedValue(reqPanel(METRICS, 45, 700))
+    await tick()
+    expect(resetBtn()).toBeNull()
+    expect(lastScale()).toEqual({ min: T0 + 700, max: T0 + 4300 })
+  })
+
+  it('a refresh still loading clears nothing', async () => {
+    await open()
+    await drag(T0 + 60, T0 + 600)
+    metrics.mockImplementation(pending)
+    await tick()
+    await tick()
+    expect(resetBtn()).not.toBeNull()
+  })
+
+  it('leaving System health clears the zoom and keeps the rest', async () => {
+    await open()
+    fireEvent.click(screen.getByRole('button', { name: '6h' }))
+    await tick(0)
+    fireEvent.change(screen.getByLabelText('Service'), { target: { value: 'submission' } })
+    await tick(0)
+    await drag(T0 + 600, T0 + 1800)
+    expect(resetBtn()).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    await tick(0)
+    fireEvent.click(screen.getByRole('button', { name: /^System health$/ }))
+    await tick(0)
+    expect(screen.getByText('1/1')).toBeTruthy()
+    expect(resetBtn()).toBeNull()
+    expect(screen.getByRole('button', { name: '6h' }).getAttribute('aria-pressed')).toBe('true')
+    expect((screen.getByLabelText('Service') as HTMLSelectElement).value).toBe('submission')
+  })
+})

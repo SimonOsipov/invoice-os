@@ -7,7 +7,7 @@ type Line = { name: string; color: string; unit: string; points: Point[]; folded
 type Guide = { value: number; label: string; dashed: boolean }
 type Marker = { t: number; title: string }
 
-type Props = { lines: Line[]; start: number; end: number; step: number; guides?: Guide[]; markers?: Marker[] }
+type Props = { lines: Line[]; start: number; end: number; step: number; guides?: Guide[]; markers?: Marker[]; zoom?: [number, number] | null; onZoom?: (w: [number, number]) => void }
 
 const X_AXIS_H = 28
 const DAY = 86400
@@ -83,11 +83,12 @@ export function TimeChart(props: Props) {
         legend: { show: false },
         cursor: {
           y: false,
-          drag: { x: false, y: false, setScale: false },
+          drag: { x: true, y: false, setScale: false, dist: 5 },
+          bind: { dblclick: () => null },
           sync: { key: 'health', scales: ['x', null], filters: { pub: (t) => t !== 'mousedown' && t !== 'mouseup' } },
         },
         scales: {
-          x: { time: true, auto: false, min: cur.start, max: cur.end },
+          x: { time: true, auto: false, min: cur.zoom?.[0] ?? cur.start, max: cur.zoom?.[1] ?? cur.end },
           y: {
             range: (_u, _min, max) => {
               const top = Math.max(max ?? 0, yTop([], latest.current.guides ?? NONE))
@@ -127,6 +128,14 @@ export function TimeChart(props: Props) {
               placeMarkers(self, latest.current)
             },
           ],
+          setSelect: [
+            (self) => {
+              const { left, width } = self.select
+              if (width <= 0) return
+              latest.current.onZoom?.([self.posToVal(left, 'x'), self.posToVal(left + width, 'x')])
+              self.setSelect({ left: 0, top: 0, width: 0, height: 0 }, false)
+            },
+          ],
           setSize: [(self) => placeMarkers(self, latest.current)],
           setCursor: [
             (self) => {
@@ -141,7 +150,7 @@ export function TimeChart(props: Props) {
       u = new UPlot(opts, alignSeries(cur.lines, cur.start, cur.end, cur.step), mount.current!)
       chart.current = u
       drawn.current = { points: cur.lines.map((l) => l.points), guides: JSON.stringify(cur.guides ?? NONE), start: cur.start, end: cur.end, step: cur.step }
-      el.setAttribute('data-x', `${cur.start},${cur.end}`)
+      el.setAttribute('data-x', `${cur.zoom?.[0] ?? cur.start},${cur.zoom?.[1] ?? cur.end}`)
       placeMarkers(u, cur)
       u.over.addEventListener('mouseenter', () => (hover.current = true))
       u.over.addEventListener('mouseleave', () => {
@@ -177,10 +186,16 @@ export function TimeChart(props: Props) {
     if (same) return
     drawn.current = { points: lines.map((l) => l.points), guides: guidesKey, start, end, step }
     u.setData(alignSeries(lines, start, end, step), false)
-    u.setScale('x', { min: start, max: end })
+    u.setScale('x', { min: latest.current.zoom?.[0] ?? start, max: latest.current.zoom?.[1] ?? end })
     const { left = -1, top = -1 } = u.cursor
     if (left >= 0) u.setCursor({ left, top })
   }, [lines, start, end, step, guidesKey])
+
+  const zoomMin = props.zoom?.[0]
+  const zoomMax = props.zoom?.[1]
+  useEffect(() => {
+    chart.current?.setScale('x', { min: zoomMin ?? latest.current.start, max: zoomMax ?? latest.current.end })
+  }, [zoomMin, zoomMax])
 
   useEffect(() => {
     if (chart.current) placeMarkers(chart.current, latest.current)

@@ -42,6 +42,7 @@ export class FakeUPlot {
   width: number
   height: number
   cursor: { left: number; top: number; idx: number | null } = { left: -10, top: -10, idx: null }
+  select = { left: 0, top: 0, width: 0, height: 0 }
   calls: Call[] = []
   destroyed = false
 
@@ -64,6 +65,17 @@ export class FakeUPlot {
     const { min, max } = this.scales[key]
     const span = (max ?? 1) - (min ?? 0) || 1
     return key === 'x' ? ((v - (min ?? 0)) / span) * this.width : this.height - ((v - (min ?? 0)) / span) * this.height
+  }
+
+  posToVal(pos: number, key: string): number {
+    const { min, max } = this.scales[key]
+    return (min ?? 0) + (pos / this.width) * ((max ?? 1) - (min ?? 0))
+  }
+
+  setSelect(sel: { left: number; top: number; width: number; height: number }, fire = true) {
+    this.calls.push(['setSelect', sel, fire])
+    this.select = { ...this.select, ...sel }
+    if (fire) this.fire('setSelect')
   }
 
   setData(data: uPlot.AlignedData, reset?: boolean) {

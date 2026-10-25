@@ -902,6 +902,9 @@ describe('System health markup', () => {
     const p95 = tileWith(metricsWith({ latency_p95_fleet_ms: { fleet: [[0, 500]] }, latency_p95_ms: { a: [[0, 1200]] } }), 'p95')
     expect(texts(p95)).toContain('500')
     expect(maxOf(p95).map((t) => t.text)).toEqual(['max 1.20 s'])
+    const low = tileWith(metricsWith({ latency_p95_fleet_ms: { fleet: [[0, 500]] }, latency_p95_ms: { a: [[0, 1200], [60, 640]] } }), 'p95')
+    expect(texts(low)).toContain('worst a 640 ms')
+    expect(maxOf(low).map((t) => t.text)).toEqual(['max 1.20 s'])
     const req = tileWith(metricsWith({ req_per_min: { a: [[0, 1420], [60, 300]] } }), 'req')
     expect(texts(req)).toContain('300')
     expect(maxOf(req).map((t) => t.text)).toEqual(['max 1.4k req/min'])
@@ -1016,6 +1019,17 @@ describe('System health markup', () => {
   it('a p95 tile with no fleet value still prints its max', () => {
     const t = tileWith(metricsWith({ latency_p95_fleet_ms: {} }), 'p95')
     expect(texts(t)).toEqual(expect.arrayContaining(['—', 'worst b 1.20 s', 'max 1.20 s', 'HIGH']))
+  })
+
+  it('a picked service ignores the fleet peak in the answer', () => {
+    const m = metricsWith({ latency_p95_fleet_ms: { fleet: [[0, 5000], [60, 100]] }, latency_p95_ms: { b: [[0, 700], [60, 300]] } })
+    expect(maxTexts(m, 'p95', { service: 'b' })).toEqual(['max 700 ms'])
+  })
+
+  it('a tile whose own series is empty has no max while its siblings keep theirs', () => {
+    const m = metricsWith({ error_pct: {}, req_per_min: { a: [[0, 10], [60, 30]] } })
+    expect(maxTexts(m, 'errors')).toEqual([])
+    expect(maxTexts(m, 'req')).toEqual(['max 30 req/min'])
   })
 
   it('the live-ping tiles carry no max line', () => {

@@ -61,7 +61,7 @@ var (
 	ErrRemovedNotTransitionable = errors.New("tenancy: removed membership is not transitionable")
 )
 
-// Sentinels for scheduling and cancelling a workspace deletion (inert until DEL-04-03 maps them).
+// Sentinels for scheduling and cancelling a workspace deletion.
 var (
 	ErrDeleteWorkspaceNotPermitted = errors.New("tenancy: delete workspace not permitted")
 	ErrCancelDeletionNotPermitted  = errors.New("tenancy: cancel deletion not permitted")
@@ -147,6 +147,10 @@ func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 		resp.Tenant.ID = tenant.ID
 		resp.Tenant.Name = tenant.Name
 		resp.Tenant.Kind = tenant.Kind
+		if tenant.DeletionDueAt != nil {
+			due := tenant.DeletionDueAt.UTC().Format(time.RFC3339)
+			resp.Tenant.DeletionDueAt = &due
+		}
 		resp.User.ID = id.Subject
 		resp.User.Role = me.Role
 		resp.User.DisplayName = me.DisplayName
@@ -454,6 +458,14 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, db.ErrWorkspaceLocked):
 		return http.StatusForbidden, db.WorkspaceLockedMessage
+	case errors.Is(err, ErrDeleteWorkspaceNotPermitted):
+		return http.StatusForbidden, "only an admin can delete the workspace"
+	case errors.Is(err, ErrCancelDeletionNotPermitted):
+		return http.StatusForbidden, "only an admin can cancel the deletion"
+	case errors.Is(err, ErrWorkspaceNameMismatch):
+		return http.StatusBadRequest, "the workspace name does not match"
+	case errors.Is(err, ErrHouseWorkspace):
+		return http.StatusConflict, "the ASComply staff workspace cannot be deleted"
 	case errors.Is(err, ErrInvalidStatus):
 		return http.StatusBadRequest, `status must be "active" or "suspended"`
 	case errors.Is(err, ErrNotPermitted):

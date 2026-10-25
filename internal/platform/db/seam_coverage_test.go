@@ -3216,6 +3216,8 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/accept_test.go", fn: "TestInvitations_RevokedLinkIsDeadOnEveryPath"},                                   // the invitee holds no membership in the invite's tenant
 	{file: "internal/tenancy/invitations_test.go", fn: "TestInvitations_RevokeRacingAnAcceptNeverBothWins"},                         // the invitee holds no membership in the invite's tenant
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ByTokenCopiesTheClientSet"},                                           // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/workspace_deletion_test.go", fn: "TestAccept_ALockedWorkspaceTakesNoNewMember"},                        // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/workspace_deletion_test.go", fn: "TestWorkspaceDeletion_ALockedWorkspacesInviteReadsAsRevoked"},        // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_InviteWithoutChoiceGivesNoClients"},                                   // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_CopyRollsBackWithTheAccept"},                                          // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_CopiesOnlyTheAcceptedInvitesSet"},                                     // the invitee holds no membership in the invite's tenant before accepting

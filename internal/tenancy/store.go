@@ -54,7 +54,7 @@ func (s *Store) Me(ctx context.Context) (Tenant, MeUser, error) {
 	var t Tenant
 	var me MeUser
 	err := db.WithinTenantTx(ctx, s.pool, id.TenantID, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `SELECT id, name, kind FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT id, name, kind, deletion_due_at FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind, &t.DeletionDueAt); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrTenantNotFound
 			}
@@ -522,6 +522,13 @@ func (s *Store) acceptInTenant(ctx context.Context, tenantID, subject, query str
 	var role string
 	// The caller has no membership in this tenant yet, so the gated seam would refuse.
 	err := db.WithinTenantTx(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
+		locked, err := db.WorkspaceLocked(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if locked {
+			return ErrInvitationNotValid
+		}
 		var id string
 		if err := tx.QueryRow(ctx, query, args...).Scan(&id, &role); err != nil {
 			var pgErr *pgconn.PgError

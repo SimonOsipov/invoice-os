@@ -127,6 +127,8 @@ var firmWideEvents = map[string]struct{}{
 	"membership.suspended":         {},
 	"membership.reactivated":       {},
 	"membership.removed":           {},
+	"workspace.deletion_scheduled": {},
+	"workspace.deletion_cancelled": {},
 	"membership.client_access_set": {},
 	"workspace.provisioned":        {},
 	"invitation.sent":              {},

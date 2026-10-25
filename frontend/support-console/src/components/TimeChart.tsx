@@ -103,7 +103,8 @@ export function TimeChart(props: Props) {
         cursor: {
           y: false,
           drag: { x: true, y: false, setScale: false, dist: 5 },
-          bind: { dblclick: () => null },
+          // uPlot's default mousemove ignores a child target, so a deploy marker would freeze the crosshair.
+          bind: { dblclick: () => null, mousemove: (_u, targ, handler) => (e) => (targ.contains(e.target as Node) ? handler(e) : null) },
           sync: { key: 'health', scales: ['x', null], filters: { pub: (t) => t !== 'mousedown' && t !== 'mouseup' } },
         },
         scales: {

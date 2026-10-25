@@ -361,6 +361,19 @@ describe('TimeChart readout', () => {
     expect((view.container.querySelector('[data-readout]') as HTMLElement).style.pointerEvents).toBe('none')
   })
 
+  it('the cursor follows the pointer over a child of the plot, not outside it', async () => {
+    const { u } = await mount()
+    const over = u().over
+    const child = over.appendChild(document.createElement('div'))
+    const outside = document.createElement('div')
+    const handler = vi.fn()
+    const move = opts(u()).cursor.bind.mousemove(u(), over, handler)
+    move({ target: child })
+    expect(handler).toHaveBeenCalledTimes(1)
+    move({ target: outside })
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
   it('a step with no point prints a dash', async () => {
     const { view, u } = await mount()
     hover(u(), u().valToPos(120, 'x'))

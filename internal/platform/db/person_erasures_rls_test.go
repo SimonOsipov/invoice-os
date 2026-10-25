@@ -5,6 +5,7 @@ package db_test
 import (
 	"context"
 	"io/fs"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -154,10 +155,11 @@ func TestRLS_PersonErasuresReaderMayNotSelect(t *testing.T) {
 func TestRLS_PersonErasuresEmailIsTrimmedLowerCase(t *testing.T) {
 	hh := erasuresRequireTable(t)
 	email := []string{"email"}
-	for _, bad := range []string{" Ada@X.test", "ada@x.test ", "Ada@x.test", "ab", strings.Repeat("a", 255)} {
+	// "é" is 2 bytes: 128 of them are 256 bytes but only 128 characters.
+	for _, bad := range []string{" Ada@X.test", "ada@x.test ", "Ada@x.test", "ab", strings.Repeat("a", 255), strings.Repeat("é", 128)} {
 		erasuresWantCheck(t, hh.app, "email "+bad[:min(len(bad), 12)], email, []any{bad})
 	}
-	for _, ok := range []string{"ada@x.test", "a@b", strings.Repeat("a", 254)} {
+	for _, ok := range []string{"ada@x.test", "a@b", strings.Repeat("a", 254), strings.Repeat("é", 127)} {
 		erasuresWantOK(t, hh.app, "email "+ok[:min(len(ok), 12)], email, []any{ok})
 	}
 }
@@ -206,6 +208,113 @@ func TestRLS_PersonErasuresSupersededRowIsFinished(t *testing.T) {
 	erasuresWantCheck(t, hh.app, "superseded and unfinished", cols, []any{"ada@x.test", now, nil})
 	erasuresWantOK(t, hh.app, "superseded and finished", cols, []any{nil, now, now})
 	erasuresWantOK(t, hh.app, "not superseded, unfinished", cols, []any{"ada@x.test", nil, nil})
+}
+
+func TestRLS_PersonErasuresKeyAndNotNullColumns(t *testing.T) {
+	hh := erasuresRequireTable(t)
+	ctx := context.Background()
+	id := erasuresID(t)
+	if err := erasuresInsert(hh.app, id, []string{"email"}, []any{"ada@x.test"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	var fresh bool
+	if err := hh.super.QueryRow(ctx,
+		`SELECT requested_at > now() - interval '1 minute' FROM public.person_erasures WHERE user_id = $1`, id).Scan(&fresh); err != nil || !fresh {
+		t.Fatalf("default requested_at fresh=%v err=%v, want now()", fresh, err)
+	}
+	if code := pgCode(erasuresInsert(hh.app, id, []string{"email"}, []any{"ada@x.test"})); code != pgUniqueViolation {
+		t.Errorf("second INSERT for one user_id: SQLSTATE %q, want %s", code, pgUniqueViolation)
+	}
+	for _, col := range []string{"requested_at", "generation"} {
+		other := erasuresID(t)
+		if code := pgCode(erasuresInsert(hh.app, other, []string{"email", col}, []any{"ada@x.test", nil})); code != "23502" {
+			t.Errorf("%s = NULL: SQLSTATE %q, want 23502 (not_null_violation)", col, code)
+		}
+	}
+	if _, err := hh.app.Exec(ctx, `INSERT INTO public.person_erasures (user_id, email) VALUES (NULL, 'ada@x.test')`); pgCode(err) != "23502" {
+		t.Errorf("user_id = NULL: got %v, want 23502", err)
+	}
+}
+
+// The statements the erase routine runs as invoice_app: finish, and the re-request upsert (D13, D13a).
+func TestRLS_PersonErasuresRoutineStatementsRunAsApp(t *testing.T) {
+	hh := erasuresRequireTable(t)
+	ctx := context.Background()
+	id := erasuresID(t)
+	if err := erasuresInsert(hh.app, id, []string{"email"}, []any{"ada@x.test"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	_, err := hh.app.Exec(ctx, `UPDATE public.person_erasures SET finished_at = now() WHERE user_id = $1`, id)
+	if pgCode(err) != pgCheckViolation {
+		t.Errorf("finish that keeps the email: got %v, want SQLSTATE %s", err, pgCheckViolation)
+	}
+	_, err = hh.app.Exec(ctx, `UPDATE public.person_erasures SET superseded_at = now() WHERE user_id = $1`, id)
+	if pgCode(err) != pgCheckViolation {
+		t.Errorf("supersede an unfinished row: got %v, want SQLSTATE %s", err, pgCheckViolation)
+	}
+	tag, err := hh.app.Exec(ctx, `UPDATE public.person_erasures SET finished_at = now(), email = NULL WHERE user_id = $1`, id)
+	if err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("finish: rows=%d err=%v, want 1 row", tag.RowsAffected(), err)
+	}
+	_, err = hh.app.Exec(ctx, `UPDATE public.person_erasures SET finished_at = NULL WHERE user_id = $1`, id)
+	if pgCode(err) != pgCheckViolation {
+		t.Errorf("unfinish with no email: got %v, want SQLSTATE %s", err, pgCheckViolation)
+	}
+
+	var gen int64
+	if err := hh.app.QueryRow(ctx,
+		`INSERT INTO public.person_erasures (user_id, email) VALUES ($1, 'bob@x.test')
+		 ON CONFLICT (user_id) DO UPDATE SET email = EXCLUDED.email, local_erased_at = NULL, superseded_at = NULL, finished_at = NULL,
+		   generation = public.person_erasures.generation + 1
+		 RETURNING generation`, id).Scan(&gen); err != nil || gen != 2 {
+		t.Fatalf("re-request upsert: generation=%d err=%v, want 2", gen, err)
+	}
+	var email *string
+	if err := hh.super.QueryRow(ctx, `SELECT email FROM public.person_erasures WHERE user_id = $1 AND finished_at IS NULL`, id).Scan(&email); err != nil || email == nil || *email != "bob@x.test" {
+		t.Fatalf("row after re-request: email=%v err=%v, want unfinished with bob@x.test", email, err)
+	}
+}
+
+// No role but invoice_app (and the owner) holds a privilege on the table, or on the two tables the migration grants DELETE on.
+func TestRLS_PersonErasuresNoOtherRoleHasAccess(t *testing.T) {
+	hh := erasuresRequireTable(t)
+	ctx := context.Background()
+	var others []string
+	if err := hh.super.QueryRow(ctx,
+		`SELECT coalesce(array_agg(rolname ORDER BY rolname), '{}') FROM pg_roles
+		 WHERE NOT rolsuper AND rolname !~ '^pg_' AND rolname NOT IN ('invoice_app', 'invoice_migrator')`).Scan(&others); err != nil {
+		t.Fatalf("list roles: %v", err)
+	}
+	for _, want := range []string{"invoice_tenant_reader", "staff_reader", "invoice_gateway", "supabase_auth_admin"} {
+		if !slices.Contains(others, want) {
+			t.Fatalf("role list %v lacks %s: the query is broken", others, want)
+		}
+	}
+	const all = `SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER`
+	for _, tbl := range []string{erasuresTable, "contacts", "blog_subscribers"} {
+		for _, role := range others {
+			var held bool
+			if err := hh.super.QueryRow(ctx, `SELECT has_table_privilege($1, $2, '`+all+`')`, role, "public."+tbl).Scan(&held); err != nil || held {
+				t.Errorf("role %s holds a privilege on %s (held=%v, err=%v), want none", role, tbl, held, err)
+			}
+		}
+		var publicHeld bool
+		if err := hh.super.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM pg_class c, aclexplode(c.relacl) a WHERE c.oid = $1::regclass AND a.grantee = 0)`,
+			"public."+tbl).Scan(&publicHeld); err != nil || publicHeld {
+			t.Errorf("PUBLIC holds a privilege on %s (held=%v, err=%v), want none", tbl, publicHeld, err)
+		}
+	}
+	for _, g := range []struct {
+		priv string
+		want bool
+	}{{"SELECT", true}, {"INSERT", true}, {"UPDATE", true}, {"DELETE", false}, {"TRUNCATE", false}, {"REFERENCES", false}, {"TRIGGER", false}} {
+		var got bool
+		if err := hh.super.QueryRow(ctx, `SELECT has_table_privilege('invoice_app', 'public.person_erasures', $1)`, g.priv).Scan(&got); err != nil || got != g.want {
+			t.Errorf("invoice_app %s on person_erasures = %v (err=%v), want %v", g.priv, got, err, g.want)
+		}
+	}
 }
 
 // --- AC-6: Down ----------------------------------------------------------------------

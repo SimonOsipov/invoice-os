@@ -34,7 +34,7 @@ paths:
 - Apply a consent choice in `applyChoice` on every choice, not only when it injects the tag. A reject sets the revoked flag, clears the `_ga` cookies, calls `removeChat` and clears the HubSpot cookies.
 - Ship no `gtag('consent', ...)` call. Google Consent Mode is out of scope.
 - Seed a granted consent record in `openLanding()` before the landing e2e navigates. A denied default makes the production-host assertion false.
-- Serve the library and the blog on the landing host, under `LIBRARY_BASE` and `BLOG_BASE` in `sitePaths.ts`.
+- Serve the library on the landing host, under `LIBRARY_BASE` in `frontend/landing/src/sitePaths.ts`.
 - Gate the library tag on `LIBRARY_HOSTNAMES` in `hubspot.ts`. A fork of the library sends nothing.
 - Gate the blog tag on `BLOG_HOSTNAMES` in `hubspot.ts`. A fork of the blog sends nothing.
 - Build `LIBRARY_HOSTNAMES` and `BLOG_HOSTNAMES` from `PRODUCTION_HOSTNAMES`. Each adds its own old host until the redirect to the new address is live.

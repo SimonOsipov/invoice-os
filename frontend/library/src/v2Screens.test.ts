@@ -75,7 +75,7 @@ describe('library home', () => {
     expect(lead).toHaveLength(1)
     expect(lead[0].name).toBe('p')
     expect(lead[0].text).toBe(
-      'Short screen recordings and plain explanations of what ASComply does to an invoice, from import to approval. Clearance with NRS is coming soon. Pick a group or take the tour.',
+      'Short animated demos and plain explanations of what ASComply does to an invoice, from import to audit. Clearance with NRS is coming soon. Pick a group or take the tour.',
     )
     expect(lead[0].text).not.toMatch(/\bFIRS\b/)
     expect(style(lead[0])['max-width']).toBe('600px')

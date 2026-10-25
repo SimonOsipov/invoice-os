@@ -28,7 +28,7 @@ export function Home({ demoHref, onGroup, onTour }: HomeProps) {
             <span style={{ color: 'var(--teal)' }}>to clearance.</span>
           </h1>
           <p className="t-lead" style={{ margin: 0, maxWidth: 600 }}>
-            Short screen recordings and plain explanations of what ASComply does to an invoice, from import to approval. Clearance with NRS is coming soon. Pick a group or take the tour.
+            Short animated demos and plain explanations of what ASComply does to an invoice, from import to audit. Clearance with NRS is coming soon. Pick a group or take the tour.
           </p>
           {onTour !== null && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginTop: 4 }}>

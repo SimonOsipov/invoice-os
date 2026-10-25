@@ -10,7 +10,7 @@ import { consentCookie, consentRecordOf, consoleGate, isHubSpotChatRequest, rout
 
 const BLOG_URL = resolveTarget('BLOG_URL')
 const BLOG_HOST = new URL(BLOG_URL).hostname.toLowerCase()
-const BLOG_PRODUCTION_HOST = 'blog.ascomply.com' // retyped from BLOG_HOSTNAMES in frontend/landing/src/hubspot.ts
+const BLOG_PRODUCTION_HOST = 'www.ascomply.com' // retyped from BLOG_HOSTNAMES in frontend/landing/src/hubspot.ts
 const EXPECT_TAG = BLOG_HOST === BLOG_PRODUCTION_HOST
 const LANDING_URL = resolveTarget('LANDING_URL')
 const LIBRARY_URL = resolveTarget('LIBRARY_URL') // routeProductionHosts routes it too
@@ -243,7 +243,7 @@ for (const width of [390, 375]) {
 
 // Shared choice, under the production hostnames served by the fork (E2E rules: no real GA or Sentry).
 const WWW = 'https://www.ascomply.com'
-const BLOG = 'https://blog.ascomply.com'
+const BLOG = 'https://www.ascomply.com/blog'
 const COOKIE_NAME = 'asc_consent'
 
 const routedTest = test.extend<{ routed: Page }>({

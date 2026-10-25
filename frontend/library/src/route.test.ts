@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { FEATURES, GROUPS } from './content.ts'
+import { LIBRARY_BASE } from './analytics.ts'
 import { libraryPath, parseLibraryPath } from './route.ts'
 
 describe('route', () => {
@@ -7,34 +8,50 @@ describe('route', () => {
     expect(parseLibraryPath('/')).toEqual({ view: 'home' })
   })
 
-  it('parse_everyGroupIdOpensItsGroup', () => {
-    let hits = 0
+  it('parse_stripsTheBase', () => {
+    for (const p of [LIBRARY_BASE, `${LIBRARY_BASE}/`]) expect(parseLibraryPath(p), p).toEqual({ view: 'home' })
+    let groups = 0
     for (const g of GROUPS) {
-      for (const p of [`/${g.id}`, `/${g.id}/`]) {
+      for (const p of [`${LIBRARY_BASE}/${g.id}`, `${LIBRARY_BASE}/${g.id}/`]) {
         const r = parseLibraryPath(p)
         expect(r.view).toBe('group')
         if (r.view === 'group') {
           expect(r.group).toBe(g)
-          hits++
+          groups++
         }
       }
     }
     expect(GROUPS).toHaveLength(11)
-    expect(hits).toBe(22)
-  })
-
-  it('parse_everyFeatureUnderItsGroupOpensTheFeature', () => {
-    let hits = 0
+    expect(groups).toBe(22)
+    let feats = 0
     for (const f of FEATURES) {
-      const r = parseLibraryPath(`/${f.gid}/${f.id}`)
+      const r = parseLibraryPath(`${LIBRARY_BASE}/${f.gid}/${f.id}`)
       expect(r.view).toBe('feature')
       if (r.view === 'feature') {
         expect(r.feature).toBe(f)
         expect(r.group.id).toBe(f.gid)
-        hits++
+        feats++
       }
     }
-    expect(hits).toBe(26)
+    expect(feats).toBe(26)
+  })
+
+  it('parse_aPathOutsideTheBaseIsBaseRelative', () => {
+    const f = FEATURES[0]
+    const r = parseLibraryPath(`/${f.gid}/${f.id}`)
+    expect(r.view).toBe('feature')
+    if (r.view === 'feature') expect(r.feature).toBe(f)
+  })
+
+  it('parse_aBaseLookalikeIsHome', () => {
+    for (const p of ['/libraryx', '/library/nope', '/Library/invoices', '/LIBRARY/rules', '/librarys/rules', '/library//rules', '/library/library/rules']) {
+      expect(parseLibraryPath(p), p).toEqual({ view: 'home' })
+    }
+  })
+
+  it('parse_aPrefixedPathReadsTheSameAsItsBaseRelativeOne', () => {
+    expect(FEATURES.length).toBeGreaterThan(0)
+    for (const f of FEATURES) expect(parseLibraryPath(`${LIBRARY_BASE}/${f.gid}/${f.id}`)).toEqual(parseLibraryPath(`/${f.gid}/${f.id}`))
   })
 
   it('parse_anUnknownPathIsHome', () => {
@@ -44,10 +61,14 @@ describe('route', () => {
     }
   })
 
-  it('path_roundTripsEveryView', () => {
-    const paths = ['/', ...GROUPS.map((g) => `/${g.id}`), ...FEATURES.map((f) => `/${f.gid}/${f.id}`)]
+  it('path_everyViewIsUnderTheBase', () => {
+    const paths = [`${LIBRARY_BASE}/`, ...GROUPS.map((g) => `${LIBRARY_BASE}/${g.id}`), ...FEATURES.map((f) => `${LIBRARY_BASE}/${f.gid}/${f.id}`)]
     expect(paths).toHaveLength(38)
     expect(new Set(paths).size).toBe(38)
-    for (const p of paths) expect(libraryPath(parseLibraryPath(p))).toBe(p)
+    for (const p of paths) {
+      expect(p.startsWith('/library/')).toBe(true)
+      expect(p).not.toContain('/library/library')
+      expect(libraryPath(parseLibraryPath(p))).toBe(p)
+    }
   })
 })

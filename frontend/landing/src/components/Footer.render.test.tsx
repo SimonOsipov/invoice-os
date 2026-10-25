@@ -405,3 +405,15 @@ describe('Footer Blog link', () => {
     }
   })
 })
+
+describe('Footer new-tab links', () => {
+  it('Footer_blogOpensInANewTab', () => {
+    const out = renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, blogHref: 'https://blog.x' }))
+    const platform = controlsOf(platformSlice(out))
+    const blog = platform.at(-1)!
+    expect(blog.label).toBe('Blog')
+    expect(blog.attrs.target).toBe('_blank')
+    expect(blog.attrs.rel).toBe('noopener noreferrer')
+    for (const c of platform.slice(0, -1)) expect(c.attrs).not.toHaveProperty('target')
+  })
+})

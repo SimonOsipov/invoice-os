@@ -11,7 +11,7 @@ const LANDING_URL = resolveTarget('LANDING_URL')
 const LIBRARY_URL = resolveTarget('LIBRARY_URL')
 const LIVE = new URL(LANDING_URL).hostname.toLowerCase() === 'www.ascomply.com'
 const WWW = 'https://www.ascomply.com'
-const LIB = 'https://library.ascomply.com'
+const LIB = 'https://www.ascomply.com/library'
 const COOKIE_NAMES = ['__hstc', 'hubspotutk', '__hssrc', '__hssc', 'messagesUtk', 'hs-messages-is-open', 'hs-messages-hide-welcome-message'] // HUBSPOT_COOKIE_NAMES in hubspotChat.ts
 const OPT_OUT_COOKIE = '__hs_do_not_track'
 const WIDGET = '#hubspot-messages-iframe-container'

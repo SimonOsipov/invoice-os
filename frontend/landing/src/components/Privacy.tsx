@@ -4,7 +4,8 @@ import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
 import { APP_NOTICE_BODY } from './CookieNotice'
 import { CHAT_SCRIPT_HOST, HUBSPOT_CHAT_DOMAINS } from '../hubspotChat'
-import { APP_HOSTNAMES, BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
+import { APP_HOSTNAMES, PRODUCTION_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
+import { BLOG_BASE, LIBRARY_BASE } from '../sitePaths'
 
 export const GA_RETENTION_MONTHS = 14
 export const AI_PROVIDER_HOST = 'openrouter.ai'
@@ -69,7 +70,7 @@ export function Privacy() {
             analytics, it loads HubSpot's live chat and tracking code, as described under Live chat below.
           </p>
           <p style={P}>
-            It is active on {PRODUCTION_HOSTNAMES[0]}, on our Feature Library at {LIBRARY_HOSTNAMES[0]}, on our Blog at {BLOG_HOSTNAMES[0]} and in the signed-in product at {APP_HOSTNAMES[0]}, and nowhere else. Our preview and test builds of this site, the Library and the Blog run the same code,
+            It is active on {PRODUCTION_HOSTNAMES[0]}, on our Feature Library at {PRODUCTION_HOSTNAMES[0]}{LIBRARY_BASE}, on our Blog at {PRODUCTION_HOSTNAMES[0]}{BLOG_BASE} and in the signed-in product at {APP_HOSTNAMES[0]}, and nowhere else. Our preview and test builds of this site, the Library and the Blog run the same code,
             but that code only measures on the live address, so those builds send Google nothing.
           </p>
           <p style={P}>
@@ -115,7 +116,7 @@ export function Privacy() {
           <p style={P}>
             Your answer itself is stored on your device too, in a small cookie of our own named asc_consent. It holds
             whether you allowed analytics, when you chose, and which version of the record it is. It is set for{' '}
-            {SHARED_COOKIE_DOMAIN}, so this site, our Feature Library at {LIBRARY_HOSTNAMES[0]}, our Blog at {BLOG_HOSTNAMES[0]} and the signed-in product at {APP_HOSTNAMES[0]} read the same answer. Your browser therefore
+            {SHARED_COOKIE_DOMAIN}, so this site, our Feature Library at {PRODUCTION_HOSTNAMES[0]}{LIBRARY_BASE}, our Blog at {PRODUCTION_HOSTNAMES[0]}{BLOG_BASE} and the signed-in product at {APP_HOSTNAMES[0]} read the same answer. Your browser therefore
             sends it with each request to our {SHARED_COOKIE_DOMAIN} addresses; our servers do not read it. It is what
             stops the cookie notice asking you again on every visit, and, apart from the deletions described above and
             the invite link's token, which is kept in this tab's session storage on the invite page only and cleared
@@ -146,7 +147,7 @@ export function Privacy() {
 
           <h2 style={H2}>The Feature Library</h2>
           <p style={P}>
-            Our Feature Library at {LIBRARY_HOSTNAMES[0]} follows this policy too. One analytics choice covers this
+            Our Feature Library at {PRODUCTION_HOSTNAMES[0]}{LIBRARY_BASE} follows this policy too. One analytics choice covers this
             site and the Library: whatever you choose on either applies to both, and the other does not ask you again.
             Cookie choices, at the foot of this site's pages and of the Library's sidebar, brings the notice back on
             either, and a change made there applies to both.
@@ -170,7 +171,7 @@ export function Privacy() {
 
           <h2 style={H2}>The Blog and its newsletter</h2>
           <p style={P}>
-            Our Blog at {BLOG_HOSTNAMES[0]} follows this policy too. One analytics choice covers this site, the Feature
+            Our Blog at {PRODUCTION_HOSTNAMES[0]}{BLOG_BASE} follows this policy too. One analytics choice covers this site, the Feature
             Library and the Blog: whatever you choose on any of them applies to all three. Cookie choices, at the foot
             of each site's pages or sidebar, brings the notice back, and a change made there applies to all three. If
             you allow analytics, Google Analytics measures the Blog in the same way and under the same property, and
@@ -261,7 +262,7 @@ export function Privacy() {
 
           <h2 style={H2}>Live chat</h2>
           <p style={P}>
-            If you have allowed analytics, {PRODUCTION_HOSTNAMES[0]}, our Feature Library at {LIBRARY_HOSTNAMES[0]} and our Blog at {BLOG_HOSTNAMES[0]} show
+            If you have allowed analytics, {PRODUCTION_HOSTNAMES[0]}, our Feature Library at {PRODUCTION_HOSTNAMES[0]}{LIBRARY_BASE} and our Blog at {PRODUCTION_HOSTNAMES[0]}{BLOG_BASE} show
             HubSpot's live chat, so that you can write to us from any page. Its code loads from {CHAT_SCRIPT_HOST} only after you choose Accept. Before you choose, or
             if you choose Reject, HubSpot's chat and tracking code does not load. Our preview and test builds never load
             it.

@@ -8,6 +8,8 @@ import { resolveTarget } from '../targets'
 const STAFF = '/api/notifications/v1/staff/blog'
 const GPTBOT = 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.2; +https://openai.com/gptbot)'
 const BLOG_URL = resolveTarget('BLOG_URL')
+const BASE = new URL(BLOG_URL).pathname // blogweb.Base: /blog
+const LANDING_URL = resolveTarget('LANDING_URL')
 const GATEWAY_URL = apiBase()
 // siteSuffix and homeHeading in internal/blogweb/render.go.
 const SITE_SUFFIX = ' · ASComply blog'
@@ -175,18 +177,36 @@ test.describe('blog crawler HTML (API E2E, over the deployed blog origin)', () =
     expect(home.status).toBe(200)
     expect(titleOf(home.text)).toBe(`${HOME_TITLE}${SITE_SUFFIX}`)
     expect(metaOf(home.text, 'description'), 'home description').toBeTruthy()
-    expect(home.text).toContain(`href="/${visible}"`)
-    expect(home.text).toContain(`href="/category/${category.id}"`)
-    expect(home.text).not.toContain(`href="/${draft}"`)
-    expect(home.text).not.toContain(`href="/${future}"`)
+    expect(home.text).toContain(`href="${BASE}/${visible}"`)
+    expect(home.text).toContain(`href="${BASE}/category/${category.id}"`)
+    expect(home.text).not.toContain(`href="${BASE}/${draft}"`)
+    expect(home.text).not.toContain(`href="${BASE}/${future}"`)
 
     const cat = await crawl(`/category/${category.id}`)
     expect(cat.status).toBe(200)
     expect(titleOf(cat.text)).toBe(`${category.name}${SITE_SUFFIX}`)
     expect(metaOf(cat.text, 'description')).toBe(`Crawler intro ${tag}`)
-    expect(cat.text).toContain(`href="/${visible}"`)
-    expect(cat.text).not.toContain(`href="/${draft}"`)
-    expect(cat.text).not.toContain(`href="/${future}"`)
+    expect(cat.text).toContain(`href="${BASE}/${visible}"`)
+    expect(cat.text).not.toContain(`href="${BASE}/${draft}"`)
+    expect(cat.text).not.toContain(`href="${BASE}/${future}"`)
+  })
+
+  test('crawler: every in-page link carries the base path', async () => {
+    for (const path of ['/', `/category/${category.id}`, `/${visible}`]) {
+      const hrefs = [...(await crawl(path)).text.matchAll(/href="(\/[^"]*)"/g)].map((m) => m[1])
+      expect(hrefs.length, `no href="/ on ${path}, so the sweep proves nothing`).toBeGreaterThan(0)
+      expect(hrefs.filter((h) => !h.startsWith(`${BASE}/`)), `links outside ${BASE}/ on ${path}`).toEqual([])
+    }
+  })
+
+  test('crawler: the landing robots.txt names the blog sitemap at its new address', async () => {
+    const res = await fetch(`${LANDING_URL}/robots.txt`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type') ?? '').toContain('text/plain')
+    const text = await res.text()
+    expect(text.split('\n')).toContain('Sitemap: https://www.ascomply.com/blog/sitemap.xml')
+    expect(text).not.toContain('blog.ascomply.com')
+    expect(text).not.toContain('library.ascomply.com')
   })
 
   test('crawler: draft, future, unknown slug and unknown category answer 404', async () => {

@@ -28,6 +28,8 @@ RUN pnpm --filter @invoice-os/library build
 # ---- Serve: Caddy static server with SPA fallback + /health ----
 FROM caddy:2-alpine AS serve
 COPY Caddyfile /etc/caddy/Caddyfile
-COPY --from=build /repo/frontend/library/dist /srv
-# The commit under test, served at /build.txt for the deploy gate.
+COPY --from=build /repo/frontend/library/dist /srv/library
+# The shared Caddyfile falls back to /index.html for every non-file path.
+COPY --from=build /repo/frontend/library/dist/index.html /srv/index.html
 COPY --from=build /repo/internal/platform/buildsha.txt /srv/build.txt
+COPY --from=build /repo/internal/platform/buildsha.txt /srv/library/build.txt

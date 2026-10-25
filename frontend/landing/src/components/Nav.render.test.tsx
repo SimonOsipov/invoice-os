@@ -236,3 +236,29 @@ describe('the Library link', () => {
     expect(attrs.style).toContain('border-bottom:2px solid transparent')
   })
 })
+
+describe('new-tab links', () => {
+  const html = renderToStaticMarkup(
+    createElement(Nav, { onSignIn: noop, onBookDemo: noop, libraryHref: 'https://lib.x', blogHref: 'https://blog.x' }),
+  )
+  const anchors = () => {
+    const nav = /<nav\b[^>]*aria-label="Primary"[^>]*>([\s\S]*?)<\/nav>/.exec(html)![1]
+    return [...nav.matchAll(/<a\b([^>]*)>/g)].map((m) => attrsOf(m[1]))
+  }
+
+  it('Nav_libraryAndBlogOpenInANewTab', () => {
+    const [lib, blog] = anchors().slice(-2)
+    expect(lib.href).toBe('https://lib.x')
+    expect(blog.href).toBe('https://blog.x')
+    for (const a of [lib, blog]) {
+      expect(a.target).toBe('_blank')
+      expect(a.rel).toBe('noopener noreferrer')
+    }
+  })
+
+  it('section links stay in this tab', () => {
+    const sections = anchors().slice(0, -2)
+    expect(sections).toHaveLength(NAV_LINKS.length)
+    for (const a of sections) expect(a).not.toHaveProperty('target')
+  })
+})

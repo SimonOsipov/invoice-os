@@ -75,8 +75,9 @@ describe('library home', () => {
     expect(lead).toHaveLength(1)
     expect(lead[0].name).toBe('p')
     expect(lead[0].text).toBe(
-      'Short screen recordings and plain explanations of what ASComply does to an invoice, from import to FIRS clearance. Pick a group or take the tour.',
+      'Short animated demos and plain explanations of what ASComply does to an invoice, from import to audit. Clearance with NRS is coming soon. Pick a group or take the tour.',
     )
+    expect(lead[0].text).not.toMatch(/\bFIRS\b/)
     expect(style(lead[0])['max-width']).toBe('600px')
     const tour = withText(ts, 'Take the tour')
     expect(tour.name).toBe('button')
@@ -339,18 +340,17 @@ describe('library group page', () => {
   })
 
   it('SC-09 a Coming soon card carries the pill, a shipped card does not', () => {
-    const { ts } = groupPage('clients')
+    const { ts } = groupPage('settings')
     const byId: Record<string, Tag[]> = Object.fromEntries(cardSlices(ts).map((c) => [attr(c.card, 'id'), c.inside]))
-    const pill = byId['fc-contacts'].find((t) => t.text === 'Coming soon')!
+    const pill = byId['fc-erp-connectors'].find((t) => t.text === 'Coming soon')!
     expect(style(pill).background).toBe('var(--status-progress-bg)')
-    expect(byId['fc-portfolio'].some((t) => t.text === 'Coming soon')).toBe(false)
-    expect(byId['fc-onboard-client'].some((t) => t.text === 'Coming soon')).toBe(false)
+    expect(byId['fc-company-profile'].some((t) => t.text === 'Coming soon')).toBe(false)
     const ids = GROUPS.flatMap((g) =>
       cardSlices(groupPage(g.id).ts)
         .filter((c) => c.inside.some((t) => t.text === 'Coming soon'))
         .map((c) => attr(c.card, 'id')!.slice(3)),
     )
-    expect(ids).toHaveLength(11)
+    expect(ids).toHaveLength(5)
     expect([...ids].sort()).toEqual([...COMING_SOON_IDS].sort())
   })
 
@@ -390,7 +390,7 @@ describe('library scenes', () => {
     expect(banner).toHaveLength(1)
     const bi = ts.indexOf(banner[0])
     expect([ts[bi + 1].name, attr(ts[bi + 1], 'width'), attr(ts[bi + 1], 'height')]).toEqual(['svg', '15', '15'])
-    expect(withText(ts, 'Mapped 9 of 9 columns').name).toBe('span')
+    expect(withText(ts, 'All fields placed').name).toBe('span')
     const head = where(ts, (s) => s['grid-template-columns'] === '0.5fr 2fr 1.2fr 1.2fr' && s['font-size'] === '10px')
     expect(head).toHaveLength(1)
     expect(ts.slice(ts.indexOf(head[0]) + 1, ts.indexOf(head[0]) + 5).map((t) => t.text)).toEqual(['Row', 'Customer', 'Amount', 'Status'])
@@ -402,7 +402,7 @@ describe('library scenes', () => {
     const rows3 = where(later, (s) => s.animation === 'libPop 320ms ease-out')
     expect(rows3).toHaveLength(4)
     expect(style(withText(later, 'Needs fixing')).color).toBe('var(--status-red-text)')
-    expect(later.some((t) => t.text === 'Mapped 9 of 9 columns')).toBe(false)
+    expect(later.some((t) => t.text === 'All fields placed')).toBe(false)
   })
 
   it('SN-02 the thumbnail list shows customer and chip only', () => {
@@ -414,11 +414,11 @@ describe('library scenes', () => {
     expect(ts.some((t) => t.text === 'Row')).toBe(false)
     expect(ts.some((t) => t.text === '₦ 4,820,000')).toBe(false)
     expect(markup('import-files', 3, 'thumb')).not.toContain('animation')
-    const c = view('contacts', 0, 'thumb')
+    const c = view('fiscal-outcomes', 1, 'thumb')
     expect(where(c, (s) => s['grid-template-columns'] === 'minmax(0, 1fr) auto')).toHaveLength(3)
     const banner = where(c, (s) => s.background === 'var(--status-red-bg)' && s['font-size'] === '9.5px')
     expect(banner).toHaveLength(1)
-    expect(banner[0].text).toBe('Synced 3 contacts from Sage')
+    expect(banner[0].text).toBe('Connection to NRS timed out · retrying')
   })
 
   it('SN-03 the player form marks fields and shows the message', () => {
@@ -435,11 +435,11 @@ describe('library scenes', () => {
     expect(markup('validate', 0, 'player')).toContain(glyph('triangle-alert'))
     const icon = where(ts, (s) => s.animation === 'libFade 300ms')
     expect(icon.map((t) => style(t).color)).toEqual(Array(4).fill(null).map((_, i) => (i === 0 ? 'var(--status-red-text)' : 'var(--status-green-text)')))
-    const msg = ts.find((t) => t.text.startsWith('Seller TIN has 7 digits'))!
+    const msg = ts.find((t) => t.text.startsWith('Buyer TIN, when present'))!
     expect(style(msg).background).toBe('var(--status-red-bg)')
 
     const fix = view('validate', 1, 'player')
-    expect(fix.some((t) => t.text === '20184412-0001')).toBe(true)
+    expect(fix.some((t) => t.text === '20665510-0001')).toBe(true)
     expect(style(where(fix, (s) => s.height === '38px')[0]).border).toBe('1px solid var(--ring)')
     expect(markup('validate', 1, 'player')).toContain(glyph('pen-tool'))
     expect(where(fix, (s) => s.animation === 'libPop 300ms ease-out')).toHaveLength(0)
@@ -447,7 +447,7 @@ describe('library scenes', () => {
     const ci = view('create-invoice', 0, 'player')
     expect(where(ci, (s) => s.transition === 'opacity 400ms').map((t) => style(t).opacity)).toEqual(['1', '1', '0', '0', '0'])
 
-    const info = view('learns', 1, 'player').find((t) => t.text === esc('Layout saved for Adeyemi & Sons Trading') && style(t).animation !== undefined)!
+    const info = view('learns', 1, 'player').find((t) => t.text === esc('Layout remembered') && style(t).animation !== undefined)!
     expect(style(info)).toMatchObject({ background: 'var(--mint-soft)', color: 'var(--tab-active-text)' })
   })
 
@@ -470,7 +470,7 @@ describe('library scenes', () => {
     const ci = view('create-invoice', 2, 'thumb')
     expect(where(ci, (s) => s['grid-template-columns'] === '1fr 1fr')).toHaveLength(1)
     expect(where(ci, (s) => s.height === '16px')).toHaveLength(4)
-    expect(ci.some((x) => x.text === '12 fields checked · 0 errors')).toBe(true)
+    expect(ci.some((x) => x.text === 'Passes all rules · no violations')).toBe(true)
   })
 
   const formCases = FEATURES.flatMap((f) => {
@@ -525,11 +525,11 @@ describe('library scenes', () => {
     expect(lines.map((l) => style(l).display)).toEqual(['none', 'block', 'block', 'block', 'block'])
     expect(withText(ts, 'STATUS').attrs).toContain('t-step')
     expect(ts.some((t) => t.text === 'Submitted · waiting for a response')).toBe(true)
-    expect(ts.some((t) => t.text === 'Sent to FIRS')).toBe(true)
+    expect(ts.some((t) => t.text === 'Submit to NRS')).toBe(true)
 
     const th = view('submit-clear', 1, 'thumb')
     expect(where(th, (s) => s.width === '22px' && s.height === '22px')).toHaveLength(5)
-    expect(th.some((t) => t.text === 'Sent to FIRS')).toBe(false)
+    expect(th.some((t) => t.text === 'Submit to NRS')).toBe(false)
     expect(th.some((t) => t.text === 'Submitted · waiting for a response')).toBe(true)
   })
 
@@ -969,7 +969,7 @@ describe('library feature page', () => {
     const skip = render({ ...f, rel: ['no-such-feature', 'roles'] })
     const cards = named(panelOf(skip, 'Related'), 'button')
     expect(cards).toHaveLength(1)
-    expect(panelOf(skip, 'Related').some((t) => t.text === 'Roles and permissions')).toBe(true)
+    expect(panelOf(skip, 'Related').some((t) => t.text === 'Roles and approval seats')).toBe(true)
   })
 })
 

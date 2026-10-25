@@ -33,7 +33,12 @@ paths:
 - Label a mock-backed assertion as a fixture check, in the spec. It pins a fixture, not a contract.
 - Test the `library` SPA for render and consent only. It is static content with no backend.
 - Test the `blog` SPA for render, layout and consent. It reads published posts from the gateway's public blog routes and its newsletter form posts to the gateway's public subscribe routes.
-- Cover the blog's crawler HTML, sitemap and robots in `e2e/api/contract-blog-crawler.spec.ts`.
+- Cover the blog's crawler HTML, sitemap and robots in `e2e/api/contract-blog-crawler.spec.ts`. Cover the `www` robots there too.
+- Set `LIBRARY_URL` and `BLOG_URL` to each site's home, base path included.
+- Take `new URL(...).origin` of `BLOG_URL` for an `Origin` header.
+- Print the same site addresses from `ctl env` as `preview.sh urls` prints.
+- Run `old-addresses.spec.ts` against production after a load-balancer change.
+- Keep `e2e/smoke/oldAddresses.ts` pure and unit-tested.
 - Cover the library consent notice, the stored answer, the privacy link, the production-host-only tag and the chat gate in `e2e/smoke/library-consent.spec.ts`.
 - Cover the blog consent and the blog chat gate in `e2e/smoke/blog-consent.spec.ts`.
 - Cover the landing chat gate in `e2e/smoke/landing-chat.spec.ts`. Its live arm runs only against `https://www.ascomply.com`.

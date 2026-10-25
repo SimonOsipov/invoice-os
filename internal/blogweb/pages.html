@@ -11,20 +11,20 @@
 {{end}}
 
 {{define "linked"}}{{range parts .}}{{if .Href}}<a href="{{.Href}}" target="_blank" rel="noopener noreferrer">{{.Text}}</a>{{else}}{{.Text}}{{end}}{{end}}{{end}}
-{{define "card"}}<article><h2><a href="/{{.ID}}">{{.Title}}</a></h2><p>{{.Summary}}</p><p>{{with .AuthorName}}{{.}} · {{end}}<time datetime="{{.PublishDate}}">{{date .PublishDate}}</time></p></article>{{end}}
+{{define "card"}}<article><h2><a href="{{base}}/{{.ID}}">{{.Title}}</a></h2><p>{{.Summary}}</p><p>{{with .AuthorName}}{{.}} · {{end}}<time datetime="{{.PublishDate}}">{{date .PublishDate}}</time></p></article>{{end}}
 
 {{define "home"}}<h1>{{.Heading}}</h1>
-{{if .Categories}}<nav>{{range .Categories}}<a href="/category/{{.ID}}">{{.Name}}</a> {{end}}</nav>
+{{if .Categories}}<nav>{{range .Categories}}<a href="{{base}}/category/{{.ID}}">{{.Name}}</a> {{end}}</nav>
 {{end}}{{range .Posts}}{{template "card" .}}
 {{end}}{{end}}
 
-{{define "category"}}<p><a href="/">Home</a></p>
+{{define "category"}}<p><a href="{{base}}/">Home</a></p>
 <h1>{{.Category.Name}}</h1>
 {{with .Category.Intro}}<p>{{.}}</p>
 {{end}}{{range .Posts}}{{template "card" .}}
 {{end}}{{end}}
 
-{{define "post"}}<p><a href="/">Home</a>{{with .Category}} · <a href="/category/{{.ID}}">{{.Name}}</a>{{end}}</p>
+{{define "post"}}<p><a href="{{base}}/">Home</a>{{with .Category}} · <a href="{{base}}/category/{{.ID}}">{{.Name}}</a>{{end}}</p>
 <article>
 <h1>{{.Post.Title}}</h1>
 <p>{{with .Post.AuthorName}}{{.}} · {{end}}<time datetime="{{.Post.PublishDate}}">{{date .Post.PublishDate}}</time></p>
@@ -37,10 +37,10 @@
 {{end}}{{end}}</article>
 {{end}}
 
-{{define "subscribe"}}<p><a href="/">Home</a></p>
+{{define "subscribe"}}<p><a href="{{base}}/">Home</a></p>
 <h1>Subscribe</h1>
 {{end}}
 
 {{define "notfound"}}<h1>Not found</h1>
-<p><a href="/">Home</a></p>
+<p><a href="{{base}}/">Home</a></p>
 {{end}}

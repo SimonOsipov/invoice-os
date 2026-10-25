@@ -14,6 +14,36 @@
 		X-Frame-Options "DENY"
 	}
 
+	# The LB's apex, blog and library redirects, served here until the LB routes these hosts to the landing backend.
+	@apex host ascomply.com
+	handle @apex {
+		redir https://www.ascomply.com{uri} 301
+	}
+
+	@blogUnderBase {
+		host blog.ascomply.com
+		path /blog /blog/*
+	}
+	handle @blogUnderBase {
+		redir https://www.ascomply.com{uri} 301
+	}
+	@blogOld host blog.ascomply.com
+	handle @blogOld {
+		redir https://www.ascomply.com/blog{uri} 301
+	}
+
+	@libraryUnderBase {
+		host library.ascomply.com
+		path /library /library/*
+	}
+	handle @libraryUnderBase {
+		redir https://www.ascomply.com{uri} 301
+	}
+	@libraryOld host library.ascomply.com
+	handle @libraryOld {
+		redir https://www.ascomply.com/library{uri} 301
+	}
+
 	# Liveness endpoint, answered before the filesystem. Cloud Run reserves /healthz on run.app.
 	handle /health {
 		respond "OK" 200

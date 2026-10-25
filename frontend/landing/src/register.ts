@@ -11,7 +11,9 @@ export const FREE_MAIL_REFUSED = 'a business email address is required; personal
 const CLOSED = 'Registration is not open yet.'
 const THROTTLED = 'Too many attempts. Try again in a minute.'
 const UNAVAILABLE = 'Registration is unavailable right now. Try again shortly.'
-const NAME_MAX = 200
+export const NAME_MAX = 200
+export const NAME_REQUIRED = 'Enter your name.'
+export const NAME_TOO_LONG = `Use ${NAME_MAX} characters or fewer.`
 
 export type RegisterKind = 'firm' | 'in_house'
 
@@ -36,7 +38,7 @@ export function registrationOpen(): boolean {
 function nameError(name: string, empty: string): string | undefined {
   const n = [...name.trim()].length
   if (n === 0) return empty
-  if (n > NAME_MAX) return `Use ${NAME_MAX} characters or fewer.`
+  if (n > NAME_MAX) return NAME_TOO_LONG
   return undefined
 }
 
@@ -47,7 +49,7 @@ export function validateRegisterForm(v: RegisterValues): RegisterErrors {
   else if (!EMAIL_RE.test(email)) errors.email = 'Enter a valid work email address.'
   // The password is never trimmed: surrounding spaces are part of it.
   if (!v.password) errors.password = 'Choose a password.'
-  const display = nameError(v.displayName, 'Enter your name.')
+  const display = nameError(v.displayName, NAME_REQUIRED)
   if (display) errors.displayName = display
   const workspace = nameError(v.workspaceName, 'Enter your company or workspace name.')
   if (workspace) errors.workspaceName = workspace

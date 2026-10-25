@@ -1141,6 +1141,93 @@ describe('the name before Sign in', () => {
     expect(button('Sign in').disabled, 'a NUL byte (checkName, internal/tenancy/tenancy.go)').toBe(true)
   })
 
+  const nameMessage = () => container.querySelector('#inv-name-error')
+  // maxNameChars in internal/tenancy/tenancy.go
+  const TOO_LONG = 'Use 200 characters or fewer.'
+
+  it('InvitePage: a blank name says Enter your name', async () => {
+    stubFetch({ preview: previewOk({ account: 'confirmed' }) })
+    await mount()
+    await typeName('   ')
+    expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1)
+    expect(nameMessage()!.getAttribute('role')).toBe('alert')
+    expect(nameMessage()!.textContent).toContain('Enter your name.')
+    const input = nameInput()!
+    expect(input.classList.contains('dm-err')).toBe(true)
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    expect(input.getAttribute('aria-describedby')).toBe('inv-name-error')
+    expect(button('Sign in').disabled).toBe(true)
+  })
+
+  it('InvitePage: an over-long name says the limit', async () => {
+    stubFetch({ preview: previewOk({ account: 'confirmed' }) })
+    await mount()
+    await typeName('a'.repeat(201))
+    expect(nameMessage()!.textContent).toContain(TOO_LONG)
+    expect(button('Sign in').disabled).toBe(true)
+    await typeName('a'.repeat(200))
+    expect(nameMessage()).toBeNull()
+    expect(button('Sign in').disabled).toBe(false)
+    await typeName(' ' + 'a'.repeat(200) + ' ')
+    expect(nameMessage()).toBeNull()
+    expect(button('Sign in').disabled).toBe(false)
+  })
+
+  it('InvitePage: a NUL name disables Sign in with no message', async () => {
+    stubFetch({ preview: previewOk({ account: 'confirmed' }) })
+    await mount()
+    for (const v of ['Ada\0', 'a'.repeat(201) + '\0', ' \0 ']) {
+      await typeName(v)
+      expect(button('Sign in').disabled).toBe(true)
+      expect(nameMessage()).toBeNull()
+    }
+  })
+
+  it.each(VIEWS)('InvitePage: no message before the first edit (%s)', async (_view, open) => {
+    await open()
+    expect(nameMessage()).toBeNull()
+    expect(button('Sign in').disabled).toBe(true)
+  })
+
+  it('InvitePage: clearing a typed name says Enter your name', async () => {
+    stubFetch({ preview: previewOk({ account: 'confirmed' }) })
+    await mount()
+    await typeName('Ada')
+    expect(nameMessage()).toBeNull()
+    await typeName('')
+    expect(nameMessage()!.textContent).toContain('Enter your name.')
+  })
+
+  it('InvitePage: the sent view shows the name message too', async () => {
+    stubFetch({ register: () => json(200, {}) })
+    await mount()
+    await toRegisterView()
+    await submit()
+    await typeName('  ')
+    expect(nameMessage()!.textContent).toContain('Enter your name.')
+    await typeName('a'.repeat(201))
+    expect(nameMessage()!.textContent).toContain(TOO_LONG)
+  })
+
+  it('InvitePage: Sign in is off for a name of only U+0085', async () => {
+    stubFetch({ preview: previewOk({ account: 'confirmed' }) })
+    await mount()
+    await typeName('\u0085')
+    expect(nameMessage()!.textContent).toContain('Enter your name.')
+    expect(button('Sign in').disabled).toBe(true)
+  })
+
+  it('InvitePage: the message clears when the name turns valid', async () => {
+    stubFetch({ preview: previewOk({ account: 'confirmed' }) })
+    await mount()
+    await typeName('  ')
+    await typeName('Ada')
+    expect(nameMessage()).toBeNull()
+    await click(button('Sign in'))
+    expect(assigned).toEqual([SIGN_IN_HREF])
+    expect(new URL(assigned[0]).search).not.toContain('name')
+  })
+
   it.each(VIEWS)('InvitePage: every Sign in view asks the name (%s)', async (_view, open) => {
     await open()
     const input = nameInput()

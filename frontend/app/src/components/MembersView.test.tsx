@@ -350,6 +350,66 @@ describe('DEL-02-05: Remove through the view', () => {
 
     expect((await screen.findByTestId('member-status-error')).textContent).toBe(REASON)
   })
+
+  it.each([
+    [403, 'only an admin can remove members'],
+    [404, 'no such membership'],
+    [409, REASON],
+  ])('view: a %i refusal renders its sentence and leaves the row unchanged', async (status, sentence) => {
+    mockedRemoveMembership.mockRejectedValue(new ApiError('http', sentence, status))
+
+    render(<Harness initial={[ada(), other()]} />)
+    openDrawer('Ada Person')
+    confirmRemove()
+
+    expect((await screen.findByTestId('member-drawer-status-error')).textContent).toBe(sentence)
+    expect(within(rowFor('Ada Person')).getByText('ACTIVE', { exact: true })).toBeTruthy()
+    expect(within(rowFor('Ada Person')).queryByText('REMOVED')).toBeNull()
+  })
+
+  it('view: a network failure shows an error and leaves the row unchanged', async () => {
+    mockedRemoveMembership.mockRejectedValue(new TypeError('Failed to fetch'))
+    const refetchRoles = vi.fn()
+
+    render(<Harness initial={[ada(), other()]} refetchRoles={refetchRoles} />)
+    openDrawer('Ada Person')
+    confirmRemove()
+
+    const err = await screen.findByTestId('member-drawer-status-error')
+    expect(err.textContent?.trim().length).toBeGreaterThan(0)
+    expect(within(rowFor('Ada Person')).getByText('ACTIVE', { exact: true })).toBeTruthy()
+    expect(refetchRoles).not.toHaveBeenCalled()
+  })
+
+  it('view: a double click on the confirm sends one request', async () => {
+    mockedRemoveMembership.mockReturnValue(new Promise(() => {}))
+
+    render(<Harness initial={[ada(), other()]} />)
+    openDrawer('Ada Person')
+    fireEvent.click(screen.getByTestId('member-remove'))
+    const confirm = screen.getByTestId('member-remove-confirmed')
+    fireEvent.click(confirm)
+    fireEvent.click(confirm)
+
+    expect(mockedRemoveMembership).toHaveBeenCalledTimes(1)
+  })
+
+  it('view: a removed member with no name reads Deleted member with an em dash for email', async () => {
+    const m = ada()
+    mockedRemoveMembership.mockResolvedValue({ ...wireFor(m, 'removed'), display_name: null, email: null })
+
+    render(<Harness initial={[m, other()]} />)
+    openDrawer('Ada Person')
+    confirmRemove()
+
+    await waitFor(() => expect(screen.queryByTestId('member-drawer')).toBeNull())
+    const row = rowFor('Deleted member')
+    expect(within(row).getByText('REMOVED', { exact: true })).toBeTruthy()
+    expect(within(row).getByText('—', { selector: '.mono' })).toBeTruthy()
+    expect(within(row).queryByText('ada@x.ng')).toBeNull()
+    fireEvent.click(row)
+    expect(screen.queryByTestId('member-drawer')).toBeNull()
+  })
 })
 
 // ============================================================================

@@ -2,6 +2,7 @@ package document_test
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"net/http"
 	"strings"
@@ -123,5 +124,75 @@ func TestS3Store_DeleteManyFailsOnARefusedRequest(t *testing.T) {
 	}
 	if rt.calls != 1 {
 		t.Errorf("DeleteMany() on a 403 sent %d requests, want 1", rt.calls)
+	}
+}
+
+func TestS3Store_DeleteManyEscapesKeysInTheXMLBody(t *testing.T) {
+	keys := []string{`a&b<c>"d'.txt`, "tenants/x/ü 1.pdf"}
+	rt := xmlRT(http.StatusOK, xmlHeader+`<DeleteResult/>`)
+	if err := newWireStore(t, rt).DeleteMany(context.Background(), keys); err != nil {
+		t.Fatalf("DeleteMany() returned unexpected error: %v", err)
+	}
+	var body struct {
+		Keys []string `xml:"Object>Key"`
+	}
+	if err := xml.Unmarshal(rt.lastBody, &body); err != nil {
+		t.Fatalf("DeleteMany() body is not well-formed XML: %v: %q", err, rt.lastBody)
+	}
+	if len(body.Keys) != len(keys) || body.Keys[0] != keys[0] || body.Keys[1] != keys[1] {
+		t.Errorf("DeleteMany() body keys = %q, want %q", body.Keys, keys)
+	}
+}
+
+func TestS3Store_DeleteManyNamesTheFirstOfSeveralPerKeyErrors(t *testing.T) {
+	rt := xmlRT(http.StatusOK, xmlHeader+`<DeleteResult>`+
+		`<Error><Key>k2</Key><Code>AccessDenied</Code></Error>`+
+		`<Error><Key>k3</Key><Code>InternalError</Code></Error></DeleteResult>`)
+	err := newWireStore(t, rt).DeleteMany(context.Background(), []string{"k1", "k2", "k3"})
+	if err == nil {
+		t.Fatal("DeleteMany() returned nil on a partial failure")
+	}
+	for _, want := range []string{"k2", "AccessDenied", "2 of 3"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("DeleteMany() error = %v, want it to contain %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "k3") {
+		t.Errorf("DeleteMany() error = %v, want only the first failed key", err)
+	}
+}
+
+func TestS3Store_ListWithAnEmptyPrefixSendsNoPrefixAndStillSucceeds(t *testing.T) {
+	rt := xmlRT(http.StatusOK, xmlHeader+`<ListBucketResult><Contents><Key>a</Key></Contents></ListBucketResult>`)
+	keys, err := newWireStore(t, rt).List(context.Background(), "")
+	if err != nil {
+		t.Fatalf("List(\"\") returned unexpected error: %v", err)
+	}
+	if len(keys) != 1 || keys[0] != "a" {
+		t.Errorf("List(\"\") = %v, want [a]", keys)
+	}
+	if rt.calls != 1 || rt.lastReq.URL.Query().Get("prefix") != "" {
+		t.Errorf("List(\"\") sent %d requests with prefix %q, want 1 with none", rt.calls, rt.lastReq.URL.Query().Get("prefix"))
+	}
+}
+
+func TestS3Store_ListKeysNeedingEscapingRoundTrip(t *testing.T) {
+	rt := xmlRT(http.StatusOK, xmlHeader+`<ListBucketResult><Contents><Key>a&amp;b&lt;c.txt</Key></Contents></ListBucketResult>`)
+	keys, err := newWireStore(t, rt).List(context.Background(), "p&q/ü ")
+	if err != nil || len(keys) != 1 || keys[0] != "a&b<c.txt" {
+		t.Fatalf("List() = %q, %v, want [a&b<c.txt]", keys, err)
+	}
+	if got := rt.lastReq.URL.Query().Get("prefix"); got != "p&q/ü " {
+		t.Errorf("List() prefix on the wire = %q, want %q", got, "p&q/ü ")
+	}
+}
+
+func TestS3Store_DeleteManySendsACRC32ChecksumNotContentMD5(t *testing.T) {
+	rt := xmlRT(http.StatusOK, xmlHeader+`<DeleteResult/>`)
+	if err := newWireStore(t, rt).DeleteMany(context.Background(), []string{"k1"}); err != nil {
+		t.Fatalf("DeleteMany() returned unexpected error: %v", err)
+	}
+	if rt.lastReq.Header.Get("X-Amz-Checksum-Crc32") == "" || rt.lastReq.Header.Get("Content-MD5") != "" {
+		t.Errorf("DeleteMany() headers = %v, want x-amz-checksum-crc32 and no Content-MD5", rt.lastReq.Header)
 	}
 }

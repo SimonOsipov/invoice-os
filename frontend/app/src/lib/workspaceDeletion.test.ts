@@ -45,11 +45,22 @@ describe('workspaceDeletion: the three calls hit their routes', () => {
     expect((await readWorkspaceDeletion(f, 'B')).dueAt).toBe('2026-11-24T18:10:44Z')
     expect(f).toHaveBeenCalledWith('B/api/tenancy/v1/me')
   })
+
+  it('read: only the admin role is an admin', async () => {
+    for (const role of ['approver', 'reviewer', 'viewer', 'preparer', 'Admin', '']) {
+      const f = vi.fn().mockResolvedValue(me(role))
+      expect((await readWorkspaceDeletion(f, 'B')).isAdmin, role).toBe(false)
+    }
+  })
 })
 
 describe('workspaceDeletion: formatDueDate and nameMatches', () => {
   it('formats the date in the given zone', () => {
     expect(formatDueDate('2026-11-24T18:10:44Z', 'UTC')).toBe('24 November 2026')
+  })
+
+  it('formats the date in a zone ahead of UTC', () => {
+    expect(formatDueDate('2026-11-24T18:10:44Z', 'Pacific/Auckland')).toBe('25 November 2026')
   })
 
   it('matches exactly', () => {

@@ -450,6 +450,7 @@ describe('isWorkspaceLocked: only the exact lock 403', () => {
     ['a 401 with the lock sentence', http(401, WORKSPACE_LOCKED_MESSAGE), false],
     ['a lock 403 without a body', new ApiError('http', WORKSPACE_LOCKED_MESSAGE, 403), false],
     ['a network error', new ApiError('network', 'network error', null), false],
+    ['a malformed 403 carrying the lock body', new ApiError('malformed', 'bad', 403, { error: WORKSPACE_LOCKED_MESSAGE }), false],
     ['a plain Error', new Error(WORKSPACE_LOCKED_MESSAGE), false],
   ])('%s', (_n, e, want) => {
     expect(isWorkspaceLocked(e)).toBe(want)

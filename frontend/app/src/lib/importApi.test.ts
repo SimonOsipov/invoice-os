@@ -1321,6 +1321,19 @@ describe('importApi: a lock refusal fires onLocked through the XHR transport', (
     expect(onSuspended).not.toHaveBeenCalled()
     expect(onUnauthorized).not.toHaveBeenCalled()
   })
+
+  it.each([
+    ['a suspension 403', 403, NOT_ACTIVE_MEMBER_MESSAGE],
+    ['an unrelated 403', 403, 'forbidden'],
+    ['a 401 with the lock sentence', 401, WORKSPACE_LOCKED_MESSAGE],
+  ])('%s never fires onLocked', async (_n, status, error) => {
+    const onLocked = vi.fn()
+    const auth = makeImportAuth(buildSession('tok'), vi.fn(), vi.fn(), undefined, onLocked)
+    const promise = previewImport(auth, base, makeFile(), FakeXhrCtor)
+    FakeXhr.last()?.respond(status, JSON.stringify({ error }), 'Forbidden')
+    await captureRejection(() => promise)
+    expect(onLocked).not.toHaveBeenCalled()
+  })
 })
 
 describe('checkMapping', () => {

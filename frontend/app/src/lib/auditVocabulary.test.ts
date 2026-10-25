@@ -64,6 +64,8 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'invitation.resent',
     'invitation.accepted',
     'invitation.revoked',
+    'workspace.deletion_scheduled',
+    'workspace.deletion_cancelled',
   ],
   validation: [
     'validation.rule.enabled',
@@ -159,6 +161,8 @@ describe('audit vocabulary', () => {
       'extraction.field_corrected',
       'extraction.anchor.learned',
       'workspace.provisioned',
+      'workspace.deletion_scheduled',
+      'workspace.deletion_cancelled',
       'membership.client_access_set',
       'membership.removed',
       'invitation.sent',
@@ -213,6 +217,21 @@ describe('audit vocabulary', () => {
     expect(view.label).toBe('Member removed')
     expect(AUDIT_EVENTS['membership.removed']?.outcome).toBe('neutral')
     expect(view.tone).toBe('amber')
+  })
+
+  it('auditVocabulary: workspace deletion events read as labelled', () => {
+    for (const [id, label] of [
+      ['workspace.deletion_scheduled', 'Workspace deletion scheduled'],
+      ['workspace.deletion_cancelled', 'Workspace deletion cancelled'],
+    ]) {
+      const view = auditEventView(id)
+      expect(view.domain, `${id} must be a labelled memberships event`).toBe('memberships')
+      expect(view.label).toBe(label)
+      expect(AUDIT_EVENTS[id]?.outcome).toBe('neutral')
+      expect(view.tone).toBe('amber')
+    }
+    // Control: an outcome-bearing sibling keeps its own tone.
+    expect(auditEventView('submission.failed').tone).toBe('red')
   })
 
   it('auditVocabulary_workspaceProvisionedIsLabelledInMemberships', () => {

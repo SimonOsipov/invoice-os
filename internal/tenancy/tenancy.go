@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -23,9 +24,10 @@ import (
 
 // Tenant is a caller's tenant as read from the tenants table under RLS.
 type Tenant struct {
-	ID   string
-	Name string
-	Kind string // "firm" | "in_house" (M3-01 tenants.kind discriminator)
+	ID            string
+	Name          string
+	Kind          string // "firm" | "in_house" (M3-01 tenants.kind discriminator)
+	DeletionDueAt *time.Time
 }
 
 // Membership is one row of the caller's tenant's memberships. JSON tags are
@@ -57,6 +59,14 @@ var (
 	ErrLastActiveAdmin          = errors.New("tenancy: last active admin")
 	ErrRemoveNotPermitted       = errors.New("tenancy: remove not permitted")
 	ErrRemovedNotTransitionable = errors.New("tenancy: removed membership is not transitionable")
+)
+
+// Sentinels for scheduling and cancelling a workspace deletion (inert until DEL-04-03 maps them).
+var (
+	ErrDeleteWorkspaceNotPermitted = errors.New("tenancy: delete workspace not permitted")
+	ErrCancelDeletionNotPermitted  = errors.New("tenancy: cancel deletion not permitted")
+	ErrWorkspaceNameMismatch       = errors.New("tenancy: workspace name mismatch")
+	ErrHouseWorkspace              = errors.New("tenancy: house workspace")
 )
 
 // Sentinels for the invitations store.
@@ -151,9 +161,10 @@ func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 // row (not the JWT role claim). A NULL column answers JSON null, never omitted.
 type meResponse struct {
 	Tenant struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-		Kind string `json:"kind"`
+		ID            string  `json:"id"`
+		Name          string  `json:"name"`
+		Kind          string  `json:"kind"`
+		DeletionDueAt *string `json:"deletion_due_at"`
 	} `json:"tenant"`
 	User struct {
 		ID          string  `json:"id"`

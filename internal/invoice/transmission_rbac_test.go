@@ -472,8 +472,15 @@ func TestTransition_RealStore_ReviewerAllowedPreparerRefused(t *testing.T) {
 	}
 }
 
-// AC-7: callerRoleTx filters status = 'active', so a suspended admin resolves
-// to "" and is refused exactly like a preparer.
+func assertNotActiveRefused(t *testing.T, rec *httptest.ResponseRecorder, gotError string) {
+	t.Helper()
+	if rec.Code != http.StatusForbidden || gotError != db.NotActiveMemberMessage {
+		t.Errorf("got %d %q, want 403 %q", rec.Code, gotError, db.NotActiveMemberMessage)
+	}
+}
+
+// AC-7: a suspended admin fails the seam's membership check, so the role lookup
+// returns db.ErrNotActiveMember and both doors answer 403 with the not-active text.
 func TestTransmitGate_SuspendedApproverRefused(t *testing.T) {
 	super, app := dbTestPools(t)
 
@@ -491,7 +498,7 @@ func TestTransmitGate_SuspendedApproverRefused(t *testing.T) {
 
 	t.Run("batch submit", func(t *testing.T) {
 		rec, resp := doBatchSubmitAs(t, submitter.BatchSubmit, store.CallerRole, &id, oneInvoiceBatchBody(t, batchInv))
-		assertTransmitRefused(t, rec, resp.Error)
+		assertNotActiveRefused(t, rec, resp.Error)
 		if got := mustInvoiceStatus(t, super, batchInv); got != string(StatusValidated) {
 			t.Errorf("invoice status = %q, want %q", got, StatusValidated)
 		}
@@ -499,7 +506,7 @@ func TestTransmitGate_SuspendedApproverRefused(t *testing.T) {
 
 	t.Run("transition", func(t *testing.T) {
 		rec, resp := doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &id, transitionInv, transitionToQueuedBody)
-		assertTransmitRefused(t, rec, resp.Error)
+		assertNotActiveRefused(t, rec, resp.Error)
 		if got := mustInvoiceStatus(t, super, transitionInv); got != string(StatusValidated) {
 			t.Errorf("invoice status = %q, want %q", got, StatusValidated)
 		}

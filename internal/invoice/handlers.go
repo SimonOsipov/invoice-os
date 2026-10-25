@@ -1096,8 +1096,8 @@ func TransitionHandler(transition func(ctx context.Context, id string, target St
 		// from the write below, so a suspension racing the write is a known,
 		// accepted TOCTOU.
 		role, err := callerRole(r.Context())
-		if err != nil || !isApprover(role) {
-			writeError(w, http.StatusForbidden, notApproverTransmitReason)
+		if status, msg, refused := roleRefusal(role, err); refused {
+			writeError(w, status, msg)
 			return
 		}
 
@@ -1602,8 +1602,8 @@ func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (B
 		// Ahead of the decode, for TransitionHandler's reasons: no existence
 		// oracle, and the same accepted TOCTOU on suspension.
 		role, err := callerRole(r.Context())
-		if err != nil || !isApprover(role) {
-			writeError(w, http.StatusForbidden, notApproverTransmitReason)
+		if status, msg, refused := roleRefusal(role, err); refused {
+			writeError(w, status, msg)
 			return
 		}
 
@@ -1767,6 +1767,19 @@ func ViolationSummaryHandler(summary func(ctx context.Context, importBatchIDs []
 // ErrValidation), so their order among these cases carries no meaning. Logging the unrecognized (500) case via slog is the
 // caller's responsibility, since only the caller knows the operation name to
 // log.
+// roleRefusal maps a callerRole result to a refusal. A seam error keeps its
+// statusForErr answer; any other error fails closed to the approver text.
+func roleRefusal(role string, err error) (status int, msg string, refused bool) {
+	if errors.Is(err, db.ErrNoTenant) || errors.Is(err, db.ErrNotActiveMember) || errors.Is(err, db.ErrWorkspaceLocked) {
+		status, msg = statusForErr(err)
+		return status, msg, true
+	}
+	if err != nil || !isApprover(role) {
+		return http.StatusForbidden, notApproverTransmitReason, true
+	}
+	return 0, "", false
+}
+
 func statusForErr(err error) (status int, msg string) {
 	switch {
 	case errors.Is(err, db.ErrNoTenant):

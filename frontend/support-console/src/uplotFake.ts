@@ -41,6 +41,7 @@ export class FakeUPlot {
   data: uPlot.AlignedData
   width: number
   height: number
+  cursor: { left: number; top: number; idx: number | null } = { left: -10, top: -10, idx: null }
   calls: Call[] = []
   destroyed = false
 
@@ -74,6 +75,16 @@ export class FakeUPlot {
     this.calls.push(['setScale', key, lim])
     this.scales[key] = { min: lim.min, max: lim.max }
     this.fire('setScale', key)
+  }
+
+  setCursor(pos: { left: number; top: number }, fire = true) {
+    this.calls.push(['setCursor', pos])
+    this.cursor.left = pos.left
+    this.cursor.top = pos.top
+    const xs = Array.from(this.data[0])
+    const dist = (i: number) => Math.abs(this.valToPos(xs[i], 'x') - pos.left)
+    this.cursor.idx = pos.left < 0 || !xs.length ? null : xs.reduce((best, _, i) => (dist(i) < dist(best) ? i : best), 0)
+    if (fire) this.fire('setCursor')
   }
 
   setSize(size: { width: number; height: number }) {

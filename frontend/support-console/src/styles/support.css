@@ -131,6 +131,10 @@ pre.ops-json {
   white-space: pre;
 }
 
+.ops-health-panels .u-hz .u-cursor-x {
+  border-right: 1px dashed var(--fg-3);
+}
+
 .ops-health-panels .u-select {
   background: var(--action-tint);
 }

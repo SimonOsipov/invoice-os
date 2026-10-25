@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type uPlot from 'uplot'
-import { CHART_H, alignSeries, tokenName, utcClock, yTop } from '../helpers'
+import { CHART_H, alignSeries, readoutPlacement, readoutRows, tokenName, utcClock, yTop } from '../helpers'
 
 type Point = [number, number]
 type Line = { name: string; color: string; unit: string; points: Point[]; folded?: boolean }
@@ -12,6 +12,7 @@ type Props = { lines: Line[]; start: number; end: number; step: number; guides?:
 const X_AXIS_H = 28
 const DAY = 86400
 const NONE: never[] = []
+type Tip = { idx: number; left: number; top: number }
 
 // ceiling: a rejected import is not caught; the chart area stays empty and the global Sentry handler reports it
 let loading: Promise<typeof import('./uplot')> | undefined
@@ -47,6 +48,10 @@ export function TimeChart(props: Props) {
   const chart = useRef<uPlot | null>(null)
   const latest = useRef(props)
   latest.current = props
+  const hover = useRef(false)
+  const held = useRef<{ left: number; top: number } | null>(null)
+  const box = useRef<HTMLDivElement>(null)
+  const [tip, setTip] = useState<Tip | null>(null)
   const drawn = useRef<{ points: Point[][]; guides: string; start: number; end: number; step: number } | null>(null)
 
   const { lines, start, end, step, guides = NONE, markers = NONE } = props
@@ -76,7 +81,11 @@ export function TimeChart(props: Props) {
         height: CHART_H + X_AXIS_H,
         tzDate: (ts) => UPlot.tzDate(new Date(ts * 1e3), 'Etc/UTC'),
         legend: { show: false },
-        cursor: { y: false, drag: { x: false, y: false, setScale: false } },
+        cursor: {
+          y: false,
+          drag: { x: false, y: false, setScale: false },
+          sync: { key: 'health', scales: ['x', null], filters: { pub: (t) => t !== 'mousedown' && t !== 'mouseup' } },
+        },
         scales: {
           x: { time: true, auto: false, min: cur.start, max: cur.end },
           y: {
@@ -119,6 +128,14 @@ export function TimeChart(props: Props) {
             },
           ],
           setSize: [(self) => placeMarkers(self, latest.current)],
+          setCursor: [
+            (self) => {
+              const { left = -1, top = -1, idx } = self.cursor
+              const on = left >= 0 && idx != null && idx >= 0
+              el.setAttribute('data-cursor', on ? String(self.data[0][idx]) : '')
+              if (hover.current) setTip(on ? { idx, left, top } : null)
+            },
+          ],
         },
       }
       u = new UPlot(opts, alignSeries(cur.lines, cur.start, cur.end, cur.step), mount.current!)
@@ -126,6 +143,13 @@ export function TimeChart(props: Props) {
       drawn.current = { points: cur.lines.map((l) => l.points), guides: JSON.stringify(cur.guides ?? NONE), start: cur.start, end: cur.end, step: cur.step }
       el.setAttribute('data-x', `${cur.start},${cur.end}`)
       placeMarkers(u, cur)
+      u.over.addEventListener('mouseenter', () => (hover.current = true))
+      u.over.addEventListener('mouseleave', () => {
+        hover.current = false
+        setTip(null)
+      })
+      const carried = held.current
+      if (carried && carried.left >= 0) u.setCursor(carried)
       let width = opts.width
       observer = new ResizeObserver((entries) => {
         const w = Math.floor(entries[0].contentRect.width)
@@ -139,6 +163,7 @@ export function TimeChart(props: Props) {
     return () => {
       dead = true
       observer?.disconnect()
+      if (u) held.current = { left: u.cursor.left ?? -1, top: u.cursor.top ?? -1 }
       u?.destroy()
       chart.current = null
     }
@@ -153,15 +178,52 @@ export function TimeChart(props: Props) {
     drawn.current = { points: lines.map((l) => l.points), guides: guidesKey, start, end, step }
     u.setData(alignSeries(lines, start, end, step), false)
     u.setScale('x', { min: start, max: end })
+    const { left = -1, top = -1 } = u.cursor
+    if (left >= 0) u.setCursor({ left, top })
   }, [lines, start, end, step, guidesKey])
 
   useEffect(() => {
     if (chart.current) placeMarkers(chart.current, latest.current)
   }, [markersKey])
 
+  const long = end - start >= DAY
+  const aligned = tip ? alignSeries(lines, start, end, step) : null
+  const rows = tip && aligned ? readoutRows(lines, aligned, tip.idx, null) : []
+
+  useLayoutEffect(() => {
+    const over = chart.current?.over
+    const b = box.current
+    if (!tip || !over || !b) return
+    const r = over.getBoundingClientRect()
+    const at = readoutPlacement({ x: r.left + tip.left, y: r.top + tip.top }, r, b.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight })
+    b.style.left = `${at.left}px`
+    b.style.top = `${at.top}px`
+  })
+
   return (
     <div ref={root} data-chart="" style={{ position: 'relative', minWidth: 0, minHeight: CHART_H + X_AXIS_H }}>
       <div ref={mount} />
+      {tip && aligned && (
+        <div
+          ref={box}
+          data-readout=""
+          style={{ position: 'fixed', zIndex: 70, left: 0, top: 0, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontSize: 11, whiteSpace: 'nowrap' }}
+        >
+          <div data-readout-time="" style={{ color: 'var(--fg-3)', marginBottom: 4 }}>
+            {utcClock(aligned[0][tip.idx], long)}
+            {long ? ' UTC' : ''}
+          </div>
+          {rows.map((r) => (
+            <div key={r.name} data-readout-row={r.name} style={{ display: 'flex', alignItems: 'center', gap: 6, lineHeight: '16px' }}>
+              <span style={{ width: 8, height: 8, flex: 'none', background: r.color }} />
+              <span style={{ color: 'var(--fg-3)' }}>{r.name}</span>
+              <span className="mono" style={{ marginLeft: 'auto', paddingLeft: 12, color: 'var(--fg-2)' }}>
+                {r.value}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

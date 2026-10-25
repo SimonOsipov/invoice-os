@@ -3,6 +3,7 @@ import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { alignSeries, CHART_H } from '../helpers'
+import { formatShown } from '../metricsApi'
 import { FakeUPlot, type RecordingCtx } from '../uplotFake'
 import { TimeChart } from './TimeChart'
 
@@ -189,7 +190,7 @@ describe('TimeChart wrapper', () => {
     const { u } = await mount({ start: 100, end: 4000 })
     const o = opts(u())
     expect([o.scales.x.min, o.scales.x.max]).toEqual([100, 4000])
-    expect(o.cursor).toEqual({ y: false, drag: { x: false, y: false, setScale: false } })
+    expect(o.cursor.drag).toEqual({ x: false, y: false, setScale: false })
   })
 
   it('the observer ignores a zero or unchanged width', async () => {
@@ -246,5 +247,119 @@ describe('TimeChart wrapper', () => {
     expect(root(view.container).getAttribute('data-x')).toBe('0,3600')
     act(() => u().setScale('x', { min: 100, max: 200 }))
     expect(root(view.container).getAttribute('data-x')).toBe('100,200')
+  })
+
+  it('every chart joins the health cursor sync on x', async () => {
+    const { u } = await mount()
+    const { y, sync } = opts(u()).cursor
+    expect(y).toBe(false)
+    expect(sync.key).toBe('health')
+    expect(sync.scales).toEqual(['x', null])
+    expect(sync.filters.pub('mousedown')).toBe(false)
+    expect(sync.filters.pub('mouseup')).toBe(false)
+    expect(sync.filters.pub('mousemove')).toBe(true)
+  })
+
+  it('the setCursor hook writes the time at the cursor', async () => {
+    const { view, u } = await mount({ start: 0, end: 120 })
+    u().cursor.idx = 1
+    u().cursor.left = 40
+    act(() => u().fire('setCursor'))
+    expect(root(view.container).getAttribute('data-cursor')).toBe('60')
+    u().cursor.left = -10
+    act(() => u().fire('setCursor'))
+    expect(root(view.container).getAttribute('data-cursor')).toBe('')
+  })
+})
+
+const hover = (u: FakeUPlot, left = 40, top = 20) =>
+  act(() => {
+    u.over.dispatchEvent(new Event('mouseenter'))
+    u.setCursor({ left, top })
+  })
+const rowNames = (c: HTMLElement) => [...c.querySelectorAll('[data-readout-row]')].map((e) => e.getAttribute('data-readout-row'))
+
+describe('TimeChart readout', () => {
+  it('only the hovered chart shows the readout', async () => {
+    const { container } = render(
+      <>
+        <TimeChart lines={lines()} {...base} />
+        <TimeChart lines={lines()} {...base} />
+      </>,
+    )
+    await waitFor(() => expect(FakeUPlot.instances).toHaveLength(2))
+    const [one, two] = FakeUPlot.instances
+    act(() => {
+      one.over.dispatchEvent(new Event('mouseenter'))
+      one.setCursor({ left: 40, top: 20 })
+      two.setCursor({ left: 40, top: 20 })
+    })
+    const found = container.querySelectorAll('[data-readout]')
+    expect(found).toHaveLength(1)
+    expect(container.querySelectorAll('[data-chart]')[0].contains(found[0])).toBe(true)
+  })
+
+  it('the readout prints the time and the rows', async () => {
+    const t0 = Date.UTC(2026, 9, 14, 10, 0) / 1000
+    const at = t0 + 5 * 60
+    const mk = (name: string, v: number, folded?: boolean) => ({ name, color: 'var(--series-1)', unit: 'count', points: [[at, v]] as [number, number][], folded })
+    const set = [mk('a', 1), mk('g', 2, true), mk('b', 3)]
+    const { view, u } = await mount({ lines: set, start: t0, end: t0 + 6 * 3600 })
+    hover(u(), u().valToPos(at, 'x'))
+    const c = view.container
+    expect(c.querySelector('[data-readout-time]')!.textContent).toBe('10:05 UTC')
+    expect(rowNames(c)).toEqual(['a', 'b', 'g'])
+    expect([...c.querySelectorAll('[data-readout-row] .mono')].map((e) => e.textContent)).toEqual([1, 3, 2].map((v) => formatShown('count', v)))
+    view.unmount()
+    FakeUPlot.instances.length = 0
+    const day = await mount({ lines: set, start: t0, end: t0 + 24 * 3600 })
+    hover(day.u(), day.u().valToPos(at, 'x'))
+    expect(day.view.container.querySelector('[data-readout-time]')!.textContent).toBe('10-14 10:05 UTC')
+  })
+
+  it('a step with no point prints a dash', async () => {
+    const { view, u } = await mount()
+    hover(u(), u().valToPos(120, 'x'))
+    expect([...view.container.querySelectorAll('[data-readout-row] .mono')].map((e) => e.textContent)).toEqual(['—', '—'])
+  })
+
+  it('mouseleave removes the readout', async () => {
+    const { view, u } = await mount()
+    hover(u())
+    expect(view.container.querySelector('[data-readout]')).not.toBeNull()
+    act(() => u().over.dispatchEvent(new Event('mouseleave')))
+    expect(view.container.querySelector('[data-readout]')).toBeNull()
+  })
+
+  it('a refresh keeps a held crosshair and shows the new values', async () => {
+    const mk = (v: number) => lines({ a: [[120, v]] })
+    const { view, u } = await mount({ lines: mk(5) })
+    hover(u())
+    expect(view.container.querySelector('[data-readout-row=a] .mono')!.textContent).toBe(formatShown('count', 5))
+    view.rerender(<TimeChart lines={mk(9)} {...base} />)
+    expect(u().calls.map(([n]) => n)).toEqual(['setCursor', 'setData', 'setScale', 'setCursor'])
+    expect(u().calls[1][2]).toBe(false)
+    expect(u().calls[3]).toEqual(['setCursor', { left: 40, top: 20 }])
+    expect(view.container.querySelector('[data-readout-row=a] .mono')!.textContent).toBe(formatShown('count', 9))
+  })
+
+  it('a refresh with no held cursor does not set one', async () => {
+    const { view, u } = await mount()
+    view.rerender(<TimeChart lines={lines({ a: [[0, 9]] })} {...base} />)
+    expect(u().calls.map(([n]) => n)).toEqual(['setData', 'setScale'])
+  })
+
+  it('a refresh that changes the series keeps the crosshair and the readout', async () => {
+    const { view, u } = await mount()
+    const first = u()
+    hover(first)
+    const three = [...lines(), { name: 'c', color: 'var(--fg-4)', unit: 'count', points: [[0, 1]] as [number, number][], folded: true }]
+    view.rerender(<TimeChart lines={three} {...base} />)
+    await waitFor(() => expect(FakeUPlot.instances).toHaveLength(2))
+    const second = FakeUPlot.instances[1]
+    expect(first.destroyed).toBe(true)
+    expect(second.calls[0]).toEqual(['setCursor', { left: 40, top: 20 }])
+    expect(view.container.querySelector('[data-readout]')).not.toBeNull()
+    expect(rowNames(view.container)).toEqual(['a', 'b', 'c'])
   })
 })

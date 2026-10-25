@@ -1359,6 +1359,90 @@ function metricsFixture() {
   }
 }
 
+// fixture check: the shared crosshair and the hover readout of the labelled metrics body
+async function fixtureHover(page: Page): Promise<void> {
+  const mn = mainOf(page)
+  const panels = mn.locator('.ops-health-panels > [data-panel]')
+  const chartOf = (key: string): Locator => kid(panels.nth(PANEL_KEYS.indexOf(key)), 2)
+  const charts = mn.locator('[data-chart]')
+  const readout = mn.locator('[data-readout]')
+  const total = await charts.count()
+  const overOf = async (key: string): Promise<Rect> => (await boxes(page, { over: chartOf(key).locator('.u-over') })).over
+  const hoverAt = async (key: string, frac: number): Promise<void> => {
+    const o = await overOf(key)
+    await page.mouse.move(o.x + o.width * frac, o.y + o.height / 2)
+  }
+  const allCursors = async (): Promise<string[]> => charts.evaluateAll((els) => els.map((e) => e.getAttribute('data-cursor') ?? 'missing'))
+
+  await page.mouse.move(1, 1)
+  await hoverAt('req_per_min', 0.25)
+  await expect.poll(async () => new Set(await allCursors()).size === 1 && (await allCursors())[0] !== '', { message: 'every panel shares one non-empty data-cursor' }).toBe(true)
+  for (let i = 0; i < total; i++) await expect(charts.nth(i).locator('.u-cursor-x'), `panel ${i} crosshair shows`).not.toHaveClass(/u-off/)
+  await expect(readout, 'only the hovered panel shows a readout').toHaveCount(1)
+  await expect(chartOf('req_per_min').locator('[data-readout]')).toHaveCount(1)
+
+  // crosshair colour: the resolved --fg-3 through a probe element
+  const colours = await chartOf('req_per_min').evaluate((el) => {
+    const probe = document.createElement('span')
+    probe.style.color = 'var(--fg-3)'
+    el.append(probe)
+    const fg3 = getComputedStyle(probe).color
+    probe.remove()
+    return { fg3, line: getComputedStyle(el.querySelector('.u-cursor-x')!).borderRightColor }
+  })
+  expect(colours.line, 'crosshair uses --fg-3').toBe(colours.fg3)
+
+  // step 30 of FIXTURE_STEPS (61) sits at the middle of the plot; auth (METRIC_SERVICES_FIXTURE[1]) has no point there (metricsFixture gapAt)
+  await hoverAt('req_per_min', 0.5)
+  const [min] = ((await chartOf('req_per_min').getAttribute('data-x')) ?? '').split(',').map(Number)
+  const t = min + 30 * 60
+  await expect.poll(allCursors, { message: 'the cursor reads step 30' }).toEqual(Array(total).fill(String(t)))
+  await expect(readout.locator('[data-readout-time]'), 'readout time').toHaveText(`${new Date(t * 1000).toISOString().slice(11, 16)} UTC`)
+  const coloured = await chartOf('req_per_min').locator('[data-series]').evaluateAll((els) => els.map((e) => e.getAttribute('data-series')))
+  expect(coloured, 'seven coloured legend entries').toHaveLength(7)
+  const want = [...coloured, ...METRIC_SERVICES_FIXTURE.filter((n) => !coloured.includes(n))]
+  await expect.poll(() => readout.locator('[data-readout-row]').evaluateAll((els) => els.map((e) => e.getAttribute('data-readout-row'))), { message: 'readout rows: coloured in legend order, then grey' }).toEqual(want)
+  await expect(readout.locator('[data-readout-row="auth"] .mono'), 'auth has no point at the gap').toHaveText('—')
+  await hoverAt('error_pct', 0.5)
+  const errRows = chartOf('error_pct').locator('[data-readout-row] .mono')
+  await expect(errRows, 'error_pct rows').toHaveCount(METRIC_SERVICES_FIXTURE.length)
+  expect(new Set(await errRows.allTextContents()), 'every error_pct row reads 2.00 %').toEqual(new Set(['2.00 %']))
+
+  // AC-6: the readout beside a left-column and a right-column hover
+  await atWidths(page, 'SUP-03 System health fixture readout layout', async () => {
+    const problems: string[] = []
+    for (const [key, frac] of [['req_per_min', 0.1], ['error_pct', 0.9]] as const) {
+      await page.mouse.move(1, 1)
+      await hoverAt(key, frac)
+      const box = chartOf(key).locator('[data-readout]')
+      await expect(box, `${key} readout`).toHaveCount(1)
+      const r = (await boxes(page, { box })).box
+      const x = (await boxes(page, { x: chartOf(key).locator('.u-cursor-x') })).x
+      const view = page.viewportSize()!
+      problems.push(...within({ x: 0, y: 0, width: view.width, height: view.height }, r, `${key} readout in the viewport`))
+      if (r.x < x.x + x.width + 1 && x.x - 1 < r.x + r.width) problems.push(`${key} readout covers the crosshair`)
+      const top = await box.evaluate((el) => {
+        const b = el.getBoundingClientRect()
+        const hit = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)
+        return !!hit && el.contains(hit)
+      })
+      if (!top) problems.push(`${key} readout is not topmost at its centre`)
+      const rows = await rectsOf(page, box.locator('[data-readout-row]'), `${key} readout row`)
+      problems.push(...pairwiseApart(rows, `${key} readout rows`))
+      for (const [i, row] of rows.entries()) problems.push(...within(r, row, `${key} readout row ${i}`))
+      await noSidewaysScroll(page, `${key} hover`)
+    }
+    return { problems, rects: {} }
+  })
+
+  // leaving the panel area clears every crosshair and the readout
+  const head = (await boxes(page, { h: mn.getByRole('heading', { level: 1, name: 'System health' }) })).h
+  await page.mouse.move(head.x + head.width / 2, head.y + head.height / 2)
+  await expect.poll(allCursors, { message: 'leaving empties data-cursor everywhere' }).toEqual(Array(total).fill(''))
+  for (let i = 0; i < total; i++) await expect(charts.nth(i).locator('.u-cursor-x'), `panel ${i} crosshair hides`).toHaveClass(/u-off/)
+  await expect(readout, 'the readout is gone').toHaveCount(0)
+}
+
 // fixture check: pins layout of a wire-shaped body, not the metrics contract
 async function healthFixtureLayout(page: Page): Promise<void> {
   const mn = mainOf(page)
@@ -1391,6 +1475,7 @@ async function healthFixtureLayout(page: Page): Promise<void> {
     const [base, charts] = [await healthLayout(page), await fixturePanelsRead(page)]
     return { problems: [...base.problems, ...charts.problems], rects: { base: base.rects, charts: charts.rects } }
   })
+  await fixtureHover(page)
 
   // app owns no job kind and has no live ping row: both notes show; the metrics route answers any query
   await mn.locator('select[aria-label="Service"]').selectOption('app')

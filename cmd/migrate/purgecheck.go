@@ -14,7 +14,9 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/tenancy"
 )
 
 // purgeCheckEnabled is true on a preview bootstrap run only; the grant run and production are off.
@@ -77,7 +79,15 @@ func runPurgeCheck(ctx context.Context) (rows, objects int, step string, err err
 
 // purgeCheckRun seeds a throwaway tenant, purges its objects and rows, and asserts both are gone.
 func purgeCheckRun(ctx context.Context, pool *pgxpool.Pool, store document.ObjectStore) (rows, objects int, step string, err error) {
-	tid, uid := uuid.NewString(), uuid.NewString()
+	step = "provision"
+	// The tenancy store is the one place that provisions a workspace.
+	caller := auth.Identity{Subject: uuid.NewString(), Email: "purge-check@example.invalid"}
+	tenant, _, err := tenancy.NewStore(pool).ProvisionWorkspace(auth.WithTenantlessCaller(ctx, caller),
+		tenancy.ProvisionInput{WorkspaceName: "Purge check", DisplayName: "Purge check", Kind: "firm"})
+	if err != nil {
+		return 0, 0, step, err
+	}
+	tid := tenant.ID
 
 	step = "seed"
 	err = db.WithinTenantTx(ctx, pool, tid, func(tx pgx.Tx) error {
@@ -86,8 +96,6 @@ func purgeCheckRun(ctx context.Context, pool *pgxpool.Pool, store document.Objec
 			sql  string
 			args []any
 		}{
-			{`SELECT public.provision_workspace($1, 'Purge check', 'firm', $2, 'Purge check', $3)`,
-				[]any{tid, uid, "purge-check-" + tid + "@example.invalid"}},
 			{`INSERT INTO approval_policies (id, tenant_id, name) VALUES ($1, $2, 'Purge check')`, []any{policy, tid}},
 			{`INSERT INTO approval_policy_versions (id, tenant_id, policy_id, version) VALUES ($1, $2, $3, 1)`, []any{version, tid, policy}},
 			{`INSERT INTO approval_policy_steps (tenant_id, version_id, ord, kind) VALUES ($1, $2, 1, 'approval')`, []any{tid, version}},

@@ -24,6 +24,19 @@ var ErrNotActiveMember = errors.New("db: caller's membership in this workspace i
 // NOT_ACTIVE_MESSAGE. Reword all three together.
 const NotActiveMemberMessage = "your membership in this workspace is not active"
 
+// ErrWorkspaceLocked refuses a read-write request transaction of a workspace scheduled for deletion.
+// Compile stub for the DEL-04-02 red tests; the executor wires it into the seam.
+var ErrWorkspaceLocked = errors.New("db: workspace is scheduled for deletion")
+
+// WorkspaceLockedMessage is the wire body for ErrWorkspaceLocked.
+const WorkspaceLockedMessage = "this workspace is scheduled for deletion"
+
+// WorkspaceLocked reports whether the transaction's own tenant is scheduled for deletion.
+// Stub: always false until DEL-04-02 implements it.
+func WorkspaceLocked(ctx context.Context, tx pgx.Tx) (bool, error) {
+	return false, nil
+}
+
 // WithinRequestTenantTx is the HTTP path's entry point: it pulls the tenant from
 // the verified Identity the auth middleware placed in ctx, so handlers don't thread
 // the tenant id by hand. It returns ErrNoTenant when no identity is present — an

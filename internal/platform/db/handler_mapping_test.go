@@ -89,14 +89,15 @@ func hmGoFiles(t *testing.T, root string, roots []string) []string {
 // hmSite is one refusal-mapping site: the innermost func enclosing the mapping.
 // p1 is the name-shaped population (statusForErr / *StatusForErr); p2 is the
 // call-shaped one (a body calling errors.Is(_, db.ErrNoTenant)). armed says the
-// same body also names db.ErrNotActiveMember.
+// same body also names db.ErrNotActiveMember; lockArmed, db.ErrWorkspaceLocked.
 type hmSite struct {
-	file  string
-	line  int
-	name  string
-	p1    bool
-	p2    bool
-	armed bool
+	file      string
+	line      int
+	name      string
+	p1        bool
+	p2        bool
+	armed     bool
+	lockArmed bool
 }
 
 func (s hmSite) String() string {
@@ -180,12 +181,13 @@ func hmSitesIn(fset *token.FileSet, rel string, f *ast.File) []hmSite {
 			return
 		}
 		sites = append(sites, hmSite{
-			file:  rel,
-			line:  fset.Position(pos).Line,
-			name:  name,
-			p1:    named,
-			p2:    p2,
-			armed: hmOwnBodyCallsErrorsIs(body, alias, "ErrNotActiveMember"),
+			file:      rel,
+			line:      fset.Position(pos).Line,
+			name:      name,
+			p1:        named,
+			p2:        p2,
+			armed:     hmOwnBodyCallsErrorsIs(body, alias, "ErrNotActiveMember"),
+			lockArmed: hmOwnBodyCallsErrorsIs(body, alias, "ErrWorkspaceLocked"),
 		})
 	}
 
@@ -294,6 +296,21 @@ const hmCommentOnlyArm = `func statusForErr(err error) (int, string) {
 }
 `
 
+// hmNamedMapperLockArmed is hmNamedMapperArmed plus the workspace-lock arm.
+const hmNamedMapperLockArmed = `func statusForErr(err error) (int, string) {
+	switch {
+	case errors.Is(err, db.ErrNoTenant):
+		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, db.ErrNotActiveMember):
+		return http.StatusForbidden, db.NotActiveMemberMessage
+	case errors.Is(err, db.ErrWorkspaceLocked):
+		return http.StatusForbidden, db.WorkspaceLockedMessage
+	default:
+		return http.StatusInternalServerError, "internal server error"
+	}
+}
+`
+
 func hmControlNeedles(t *testing.T) {
 	t.Run("C1 named mapper missing the arm", func(t *testing.T) {
 		sites := hmFixtureSites(t, "c1.go", hmFixtureHead+hmNamedMapperNoArm)
@@ -343,6 +360,20 @@ func hmControlNeedles(t *testing.T) {
 		}
 	})
 
+	t.Run("C6 a mapper armed for NotActiveMember only reads lock-unarmed", func(t *testing.T) {
+		sites := hmFixtureSites(t, "c6.go", hmFixtureHead+hmNamedMapperArmed)
+		if len(sites) != 1 || !sites[0].armed {
+			t.Fatalf("sites = %v, want one site armed for ErrNotActiveMember", sites)
+		}
+		if sites[0].lockArmed {
+			t.Fatal("a mapper with no ErrWorkspaceLocked arm reads lockArmed — a clean lock scan would prove nothing")
+		}
+		fixed := hmFixtureSites(t, "c6b.go", hmFixtureHead+hmNamedMapperLockArmed)
+		if len(fixed) != 1 || !fixed[0].lockArmed {
+			t.Fatalf("sites = %v, want one lockArmed site in the corrected fixture — the scan cannot recognise a fix", fixed)
+		}
+	})
+
 	t.Run("C5 a comment is not an arm", func(t *testing.T) {
 		sites := hmFixtureSites(t, "c5.go", hmFixtureHead+hmCommentOnlyArm)
 		if len(sites) != 1 {
@@ -354,11 +385,10 @@ func hmControlNeedles(t *testing.T) {
 	})
 }
 
-func TestHandlerMappingEveryRefusalSiteNamesNotActiveMember(t *testing.T) {
-	// First, so the scan is proved able to see both outcomes even on the runs
-	// where every real site is still unarmed.
-	t.Run("control needles", hmControlNeedles)
-
+// hmRepoSites walks internal/ for every refusal-mapping site and enforces the
+// population floors, so a broken walk fails loudly instead of reporting clean.
+func hmRepoSites(t *testing.T) []hmSite {
+	t.Helper()
 	root := repoRootDir(t)
 	files := hmGoFiles(t, root, []string{"internal"})
 	if len(files) < 120 {
@@ -405,10 +435,30 @@ func TestHandlerMappingEveryRefusalSiteNamesNotActiveMember(t *testing.T) {
 	if len(pkgs) < 10 {
 		t.Fatalf("sites span %d package(s) %v, want at least the 10 measured", len(pkgs), sortedKeys(pkgs))
 	}
+	return sites
+}
 
+func TestHandlerMappingEveryRefusalSiteNamesNotActiveMember(t *testing.T) {
+	// First, so the scan is proved able to see both outcomes even on the runs
+	// where every real site is still unarmed.
+	t.Run("control needles", hmControlNeedles)
+
+	sites := hmRepoSites(t)
 	for _, s := range sites {
 		if !s.armed {
 			t.Errorf("%s maps a refusal but never names db.ErrNotActiveMember — a suspended caller gets this handler's default, which is a 401 or a 500, not the 403 Core AC 2 requires", s)
+		}
+	}
+}
+
+// DEL-04-02: every refusal-mapping site also maps the workspace lock, on the
+// same population and floors as the scan above.
+func TestHandlerMappingEveryRefusalSiteNamesWorkspaceLocked(t *testing.T) {
+	t.Run("control needles", hmControlNeedles)
+
+	for _, s := range hmRepoSites(t) {
+		if !s.lockArmed {
+			t.Errorf("%s maps a refusal but never names db.ErrWorkspaceLocked — a locked workspace's caller gets this handler's default, a 500, not the 403 Core AC 3 requires", s)
 		}
 	}
 }
@@ -484,5 +534,42 @@ func TestHandlerMappingMessageIsNeverRetyped(t *testing.T) {
 
 	if total != 1 || hits[hmMessageDeclSite] != 1 {
 		t.Errorf("the message literal occurs %d time(s) %v, want exactly once at %s — every site must source it from db.NotActiveMemberMessage so a reword cannot leave one handler behind", total, hits, hmMessageDeclSite)
+	}
+}
+
+func TestHandlerMappingLockMessageIsNeverRetyped(t *testing.T) {
+	const wantMessage = "this workspace is scheduled for deletion"
+	if db.WorkspaceLockedMessage != wantMessage {
+		t.Fatalf("db.WorkspaceLockedMessage = %q, want %q — update the TypeScript mirror in the same commit", db.WorkspaceLockedMessage, wantMessage)
+	}
+
+	retyped := hmFixtureHead + "func f() string { return " + strconv.Quote(db.WorkspaceLockedMessage) + " }\n"
+	if n := hmCountMessageLiterals(t, "n2.go", retyped, db.WorkspaceLockedMessage); n != 1 {
+		t.Fatalf("the detector counted %d literal(s) in a fixture that re-types the message exactly once — it cannot see what it looks for", n)
+	}
+
+	root := repoRootDir(t)
+	files := hmGoFiles(t, root, []string{"internal", "cmd", "tools"})
+	if len(files) < 135 {
+		t.Fatalf("the walk found %d non-test .go file(s) under internal/, cmd/ and tools/, want at least 135", len(files))
+	}
+
+	hits := map[string]int{}
+	total := 0
+	for _, rel := range files {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		if n := hmCountMessageLiterals(t, rel, string(raw), db.WorkspaceLockedMessage); n > 0 {
+			hits[rel] = n
+			total += n
+		}
+	}
+	if total == 0 {
+		t.Fatalf("the message literal occurs nowhere under internal/, cmd/ or tools/ — %s no longer declares it, or the walk is broken", hmMessageDeclSite)
+	}
+	if total != 1 || hits[hmMessageDeclSite] != 1 {
+		t.Errorf("the message literal occurs %d time(s) %v, want exactly once at %s — every site must source it from db.WorkspaceLockedMessage", total, hits, hmMessageDeclSite)
 	}
 }

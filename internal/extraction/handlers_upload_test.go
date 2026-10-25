@@ -76,6 +76,8 @@ type upSpy struct {
 	reused   bool
 	storeID  *string // overrides id when set, including with the empty string
 	storeErr error
+
+	enqueueErr error
 }
 
 func newUpSpy() *upSpy { return &upSpy{id: uuid.NewString()} }
@@ -106,7 +108,7 @@ func (s *upSpy) store(_ context.Context, filename, contentType string, size int6
 func (s *upSpy) enqueue(_ context.Context, documentID string) (bool, error) {
 	s.order = append(s.order, "enqueue")
 	s.gotEnqueueID = documentID
-	return false, nil
+	return false, s.enqueueErr
 }
 
 func (s *upSpy) calls(name string) int {
@@ -430,6 +432,29 @@ func TestUploadHandler_SuspendedMemberIs403(t *testing.T) {
 	}
 	if spy.calls("enqueue") != 0 {
 		t.Errorf("enqueue ran %d time(s) after a failed store, want 0 -- there is no document to extract", spy.calls("enqueue"))
+	}
+}
+
+// TestUploadHandler_ALockedEnqueueIs403: the enqueuer returns the seam's refusal raw, so the
+// handler's own statusForErr must map it; an unmapped lock reads as a 500.
+func TestUploadHandler_ALockedEnqueueIs403(t *testing.T) {
+	control := newUpSpy()
+	if rec, raw, _ := upPost(t, control, "scan.pdf", upPDF, []byte("%PDF-1.7 fake")); rec.Code != http.StatusCreated {
+		t.Fatalf("control: an unlocked upload returned %d, want 201 (body=%s)", rec.Code, raw)
+	}
+
+	spy := newUpSpy()
+	spy.enqueueErr = fmt.Errorf("wrap: %w", db.ErrWorkspaceLocked)
+	rec, raw, decoded := upPost(t, spy, "scan.pdf", upPDF, []byte("%PDF-1.7 fake"))
+
+	if spy.calls("store") != 1 || spy.calls("enqueue") != 1 {
+		t.Fatalf("store/enqueue ran %d/%d time(s), want 1/1 (order=%v)", spy.calls("store"), spy.calls("enqueue"), spy.order)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for db.ErrWorkspaceLocked, never 500 (body=%s)", rec.Code, raw)
+	}
+	if got := upString(t, decoded, "error"); got != db.WorkspaceLockedMessage {
+		t.Errorf("error = %q, want db.WorkspaceLockedMessage %q", got, db.WorkspaceLockedMessage)
 	}
 }
 

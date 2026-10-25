@@ -2,7 +2,7 @@
 # preview.sh — one PR's preview in ascomply-preview (GKE-11). Needs gcloud signed in as deploy-preview.
 # The shared resources (network, Cloud SQL, preview-db job, shared secrets) are invoice-os-infra preview.tf.
 #
-#   preview.sh urls <pr>                  print <name>_url=<url> for the seven public hosts
+#   preview.sh urls <pr>                  print <name>_url=<address> for each public site
 #   preview.sh image <pr> <image> <sha>   print the image reference
 #   preview.sh secrets <pr>               create this PR's secrets that do not exist yet
 #   preview.sh bucket <pr>                create this PR's documents bucket if it does not exist
@@ -46,8 +46,8 @@ cmd_urls() {
   echo "gateway_url=$(url gateway "$pr")"
   echo "app_url=$(url app "$pr")"
   echo "landing_url=$(url landing "$pr")"
-  echo "library_url=$(url library "$pr")"
-  echo "blog_url=$(url blog "$pr")"
+  echo "library_url=$(url library "$pr")/library"
+  echo "blog_url=$(url blog "$pr")/blog"
   echo "ops_console_url=$(url ops-console "$pr")"
   echo "support_console_url=$(url support-console "$pr")"
 }

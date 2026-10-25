@@ -1300,3 +1300,25 @@ func TestStaffTenantHandler_Contract(t *testing.T) {
 		}
 	})
 }
+
+func TestStaffTenant_ShowsARemovedRowWithoutEmail(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newStaffRig(t, NewStore(app))
+	_, staff := houseMember(t, super, "active")
+	x := seedTenant(t, super, "DEL-02-04 staff removed "+uuid.NewString()[:8])
+	live, removed := uuid.NewString(), uuid.NewString()
+	t0 := time.Now().UTC().Truncate(time.Second)
+	seedMemberAt(t, super, x, live, "admin", "active", ptr("Ada Obi"), ptr("ada@x.ng"), t0)
+	seedMemberAt(t, super, x, removed, "preparer", "removed", ptr("Grace Eze"), nil, t0.Add(time.Second))
+
+	_, _, members, _ := detailOf(t, rig.getTenant(x, staffCaller{subject: staff, staff: true}))
+
+	if got := fieldIDs(t, members, "user_id"); !slices.Equal(got, []string{live, removed}) {
+		t.Fatalf("members = %v, want [%s %s]", got, live, removed)
+	}
+	for k, want := range map[string]string{"status": `"removed"`, "email": `null`, "display_name": `"Grace Eze"`} {
+		if got := string(members[1][k]); got != want {
+			t.Errorf("removed member %s = %s, want %s", k, got, want)
+		}
+	}
+}

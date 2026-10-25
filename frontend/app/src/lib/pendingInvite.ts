@@ -11,13 +11,28 @@ export function readInviteFragment(hash: string): string | null {
   return invites.length === 1 && BASE64URL_43.test(invites[0]) ? invites[0] : null
 }
 
-// A token replaces any held one; null removes it.
-export function holdPendingInvite(token: string | null, now: number = Date.now()): void {
+const MAX_NAME_CHARS = 200
+
+// Mirrors checkName in internal/tenancy/tenancy.go: trimmed, 1 to 200 characters, no NUL.
+export const validName = (v: string) => {
+  const t = v.trim()
+  return t !== '' && [...t].length <= MAX_NAME_CHARS && !t.includes('\0')
+}
+
+// The one `name` fragment value, trimmed and valid, else null.
+export function readInviteName(hash: string): string | null {
+  const names = new URLSearchParams(hash.replace(/^#/, '')).getAll('name')
+  const name = names.length === 1 ? names[0].trim() : ''
+  return validName(name) ? name : null
+}
+
+// A token replaces any held one; null removes it. The name rides in the same blob.
+export function holdPendingInvite(token: string | null, now: number = Date.now(), name: string | null = null): void {
   try {
     if (token === null) {
       sessionStorage.removeItem(PENDING_INVITE_KEY)
     } else {
-      sessionStorage.setItem(PENDING_INVITE_KEY, JSON.stringify({ v: PENDING_INVITE_SCHEMA_VERSION, t: token, at: now }))
+      sessionStorage.setItem(PENDING_INVITE_KEY, JSON.stringify({ v: PENDING_INVITE_SCHEMA_VERSION, t: token, at: now, ...(name === null ? {} : { n: name }) }))
     }
   } catch (e) {
     console.warn(`[pendingInvite] failed to store invite at "${PENDING_INVITE_KEY}":`, e)
@@ -27,28 +42,28 @@ export function holdPendingInvite(token: string | null, now: number = Date.now()
 // The held token when live, else null; leaves the key alone.
 export function peekPendingInvite(now: number = Date.now()): string | null {
   try {
-    return liveToken(sessionStorage.getItem(PENDING_INVITE_KEY), now)
+    return liveInvite(sessionStorage.getItem(PENDING_INVITE_KEY), now)?.token ?? null
   } catch (e) {
     console.warn(`[pendingInvite] failed to read invite at "${PENDING_INVITE_KEY}":`, e)
     return null
   }
 }
 
-// One-shot: removes the key whatever it held, returns the token only when live.
-export function consumePendingInvite(now: number = Date.now()): string | null {
+// One-shot: removes the key whatever it held, returns the invite only when live.
+export function consumePendingInvite(now: number = Date.now()): { token: string; name: string | null } | null {
   try {
     const raw = sessionStorage.getItem(PENDING_INVITE_KEY)
     sessionStorage.removeItem(PENDING_INVITE_KEY)
-    return liveToken(raw, now)
+    return liveInvite(raw, now)
   } catch (e) {
     console.warn(`[pendingInvite] failed to consume invite at "${PENDING_INVITE_KEY}":`, e)
     return null
   }
 }
 
-function liveToken(raw: string | null, now: number): string | null {
+function liveInvite(raw: string | null, now: number): { token: string; name: string | null } | null {
   if (raw == null) return null
-  const p = JSON.parse(raw) as { v?: unknown; t?: unknown; at?: unknown } | null
+  const p = JSON.parse(raw) as { v?: unknown; t?: unknown; at?: unknown; n?: unknown } | null
   if (
     p == null ||
     p.v !== PENDING_INVITE_SCHEMA_VERSION ||
@@ -59,5 +74,6 @@ function liveToken(raw: string | null, now: number): string | null {
   ) {
     return null
   }
-  return p.at <= now && now - p.at < SIGN_IN_STATE_TTL_MS ? p.t : null
+  if (!(p.at <= now && now - p.at < SIGN_IN_STATE_TTL_MS)) return null
+  return { token: p.t, name: typeof p.n === 'string' ? p.n : null }
 }

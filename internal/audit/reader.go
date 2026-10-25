@@ -126,6 +126,7 @@ var firmWideEvents = map[string]struct{}{
 	"workflow_role.staffed":        {},
 	"membership.suspended":         {},
 	"membership.reactivated":       {},
+	"membership.removed":           {},
 	"membership.client_access_set": {},
 	"workspace.provisioned":        {},
 	"invitation.sent":              {},

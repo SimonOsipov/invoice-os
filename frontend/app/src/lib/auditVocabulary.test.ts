@@ -58,6 +58,7 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'membership.suspended',
     'membership.reactivated',
     'membership.client_access_set',
+    'membership.removed',
     'workspace.provisioned',
     'invitation.sent',
     'invitation.resent',
@@ -159,6 +160,7 @@ describe('audit vocabulary', () => {
       'extraction.anchor.learned',
       'workspace.provisioned',
       'membership.client_access_set',
+      'membership.removed',
       'invitation.sent',
       'invitation.resent',
       'invitation.accepted',
@@ -203,6 +205,14 @@ describe('audit vocabulary', () => {
     expect(AUDIT_EVENTS['membership.client_access_set'].outcome).toBe('neutral')
     expect(view.tone).toBe('amber')
     expect(auditEventView('submission.failed').tone).not.toBeNull()
+  })
+
+  it('auditVocabulary: membership.removed reads Member removed', () => {
+    const view = auditEventView('membership.removed')
+    expect(view.domain).toBe('memberships')
+    expect(view.label).toBe('Member removed')
+    expect(AUDIT_EVENTS['membership.removed']?.outcome).toBe('neutral')
+    expect(view.tone).toBe('amber')
   })
 
   it('auditVocabulary_workspaceProvisionedIsLabelledInMemberships', () => {

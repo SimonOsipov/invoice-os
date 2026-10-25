@@ -9,7 +9,7 @@ import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
-import type { Member } from '../lib/members'
+import { PROTECTED_ADMIN_NOTE, removeConfirmQuestion, type Member } from '../lib/members'
 import { drawerRoleHelper, stepsNamedLine, SUSPENDED_STEPS_NOTE, type Role } from '../lib/roles'
 import type { Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
@@ -603,14 +603,12 @@ describe('the drawer shell and bands', () => {
     expect(screen.queryByTestId('member-drawer-status-error')).toBeNull()
   })
 
-  it('Remove is a disabled red ghost with the disabled paint, and your own drawer has none', () => {
+  it('drawer: Remove is a red ghost, enabled, and your own drawer has none', () => {
     open()
 
     const remove = screen.getByTestId('member-remove') as HTMLButtonElement
-    expect(remove.disabled).toBe(true)
-    expect(remove.style.opacity).toBe('0.45')
-    expect(remove.style.cursor).toBe('not-allowed')
-    expect(remove.style.filter).toBe('none')
+    expect(remove.disabled).toBe(false)
+    expect(remove.style.opacity).toBe('')
     expect(remove.style.color).toBe('var(--status-red-text)')
 
     cleanup()
@@ -805,5 +803,69 @@ describe('FIRMS-02-05: the drawer edits client access', () => {
     mount(vi.fn(), ['e3'], { entities: [entity('e1', 'Alpha Ltd'), entity('e3', 'Old Ltd', 'archived'), entity('e4', 'Gone Ltd', 'archived')] })
     expect(screen.getAllByTestId('drawer-client-row').map((r) => r.textContent)).toEqual(['Alpha Ltd', 'Old Ltd'])
     expect(ticks()).toEqual([false, true])
+  })
+})
+
+describe('DEL-02-05: Remove in the drawer', () => {
+  function mount(over: Record<string, unknown> = {}, id = 'u2', onRemove = vi.fn()) {
+    render(<MemberDrawer ctx={drawerCtx(over)} memberId={id} onClose={vi.fn()} onStatus={vi.fn()} onRemove={onRemove} statusError={null} />)
+    return onRemove
+  }
+
+  it('drawer: Remove opens the named confirm and Keep sends nothing', () => {
+    const onRemove = mount()
+
+    fireEvent.click(screen.getByTestId('member-remove'))
+    expect(screen.getByTestId('member-remove-confirm').textContent).toContain(removeConfirmQuestion('Bo Person'))
+    expect(document.activeElement).toBe(screen.getByTestId('member-remove-keep'))
+
+    fireEvent.click(screen.getByTestId('member-remove-keep'))
+    expect(screen.queryByTestId('member-remove-confirm')).toBeNull()
+    expect(screen.getByTestId('member-remove')).toBeTruthy()
+    expect(onRemove).not.toHaveBeenCalled()
+  })
+
+  it('drawer: the confirm click removes once', () => {
+    const onRemove = mount()
+
+    fireEvent.click(screen.getByTestId('member-remove'))
+    const confirm = screen.getByTestId('member-remove-confirmed')
+    fireEvent.click(confirm)
+    fireEvent.click(confirm)
+
+    expect(onRemove).toHaveBeenCalledTimes(1)
+    expect(onRemove).toHaveBeenCalledWith('u2')
+  })
+
+  it("drawer: the sole active admin's Remove is disabled with the note", () => {
+    const onRemove = mount({ members: [member({ id: 'me', isYou: true }), member({ id: 'u2', name: 'Bo Admin', role: 'admin' })] })
+
+    const remove = screen.getByTestId('member-remove') as HTMLButtonElement
+    expect(remove.disabled).toBe(true)
+    expect(remove.title).toBe(PROTECTED_ADMIN_NOTE)
+    expect(screen.getByTestId('member-danger-note').textContent).toBe(PROTECTED_ADMIN_NOTE)
+    fireEvent.click(remove)
+    expect(screen.queryByTestId('member-remove-confirm')).toBeNull()
+    expect(onRemove).not.toHaveBeenCalled()
+  })
+
+  it('drawer: your own row has no Remove', () => {
+    mount({ members: [member({ id: 'u1', isYou: true }), member({ id: 'u2' })] }, 'u1')
+
+    expect(screen.getByTestId('member-danger-zone')).toBeTruthy()
+    expect(screen.queryByTestId('member-remove')).toBeNull()
+  })
+
+  it('drawer: the involvement block stays beside the open strip', () => {
+    const policy = (id: string) =>
+      ({ id, name: `Policy ${id}`, nodes: [{ id: 'n1', type: 'approval', role: 'cfo', sla: '24', delegate: false }] }) as unknown as Policy
+    mount({
+      roles: [role({ key: 'cfo', members: ['u2'] })],
+      policies: [policy('p1'), policy('p2')],
+    })
+
+    fireEvent.click(screen.getByTestId('member-remove'))
+    expect(screen.getByTestId('member-remove-confirm')).toBeTruthy()
+    expect(screen.getByTestId('member-steps-named').textContent).toBe(stepsNamedLine(2))
   })
 })

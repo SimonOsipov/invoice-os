@@ -4,8 +4,10 @@ import react from '@vitejs/plugin-react'
 import { sentryVitePlugin } from '@sentry/vite-plugin'
 import { sourcemapUploadOptions } from '../../packages/monitoring/src/upload'
 import { cookieNoticeDefine } from './src/cookieNoticeCss'
+import { BLOG_BASE } from '../landing/src/sitePaths'
 
 export default defineConfig({
+  base: `${BLOG_BASE}/`,
   plugins: [react(), sentryVitePlugin(sourcemapUploadOptions(fileURLToPath(new URL('.', import.meta.url))))],
   define: cookieNoticeDefine(),
   // Maps go to Sentry, never to browsers.

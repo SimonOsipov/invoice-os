@@ -19,7 +19,8 @@ import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
 import { sentryOptions } from '@invoice-os/monitoring'
 import { CHAT_SCRIPT_HOST, HUBSPOT_CHAT_DOMAINS, HUBSPOT_COOKIE_NAMES } from '../hubspotChat'
-import { APP_HOSTNAMES, BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES } from '../hubspot'
+import { APP_HOSTNAMES, PRODUCTION_HOSTNAMES } from '../hubspot'
+import { BLOG_BASE, LIBRARY_BASE } from '../sitePaths'
 import {
   aiModelVendors,
   aiProviderHosts,
@@ -425,7 +426,7 @@ describe('AUTH-17-09: the page quotes the consent copy from code', () => {
 
 // Pending the user's copy sign-off (Q15).
 const PROPOSED_CHAT_SECTION = [
-  `If you have allowed analytics, ${PRODUCTION_HOSTNAMES[0]}, our Feature Library at ${LIBRARY_HOSTNAMES[0]} and our Blog at ${BLOG_HOSTNAMES[0]} show HubSpot's live chat, so that you can write to us from any page. Its code loads from ${CHAT_SCRIPT_HOST} only after you choose Accept. Before you choose, or if you choose Reject, HubSpot's chat and tracking code does not load. Our preview and test builds never load it.`,
+  `If you have allowed analytics, ${PRODUCTION_HOSTNAMES[0]}, our Feature Library at ${PRODUCTION_HOSTNAMES[0]}${LIBRARY_BASE} and our Blog at ${PRODUCTION_HOSTNAMES[0]}${BLOG_BASE} show HubSpot's live chat, so that you can write to us from any page. Its code loads from ${CHAT_SCRIPT_HOST} only after you choose Accept. Before you choose, or if you choose Reject, HubSpot's chat and tracking code does not load. Our preview and test builds never load it.`,
   `Whatever you type into the chat, including any name or email address you give there, goes to HubSpot, where we read it and reply. HubSpot's code also records which pages of those sites you open, the address you arrived from, your screen size and language, and a fingerprint it computes from your browser, under a randomly generated identifier kept in its cookies. It sends all of this to HubSpot addresses at ${HUBSPOT_CHAT_DOMAINS.slice(0, -1).join(', ')} and ${HUBSPOT_CHAT_DOMAINS[HUBSPOT_CHAT_DOMAINS.length - 1]}.`,
   "Choosing Reject removes the chat from the page, deletes HubSpot's cookies and tells HubSpot's code to send nothing more. The code itself stays loaded in any of our pages you have open until you reload them.",
 ]

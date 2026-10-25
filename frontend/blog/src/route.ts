@@ -1,3 +1,5 @@
+import { BLOG_BASE } from './analytics'
+
 export type Route =
   | { view: 'home' }
   | { view: 'subscribe' }
@@ -9,7 +11,11 @@ export type Route =
 const HOME: Route = { view: 'home' }
 
 // Segments are not decoded or checked against data; the page that renders them resolves them.
-export function parseBlogPath(pathname: string): Route {
+// A path outside the base reads as base-relative, so the old hosts keep serving until the old-host 301 is live.
+const stripBase = (p: string): string => (p === BLOG_BASE || p.startsWith(`${BLOG_BASE}/`) ? p.slice(BLOG_BASE.length) : p)
+
+export function parseBlogPath(raw: string): Route {
+  const pathname = stripBase(raw)
   const cat = /^\/category\/([^/]+)\/?$/.exec(pathname)
   if (cat) return { view: 'category', id: cat[1] }
   if (/^\/subscribe\/confirm\/?$/.test(pathname)) return { view: 'confirm' }
@@ -23,16 +29,16 @@ export function parseBlogPath(pathname: string): Route {
 export function blogPath(route: Route): string {
   switch (route.view) {
     case 'home':
-      return '/'
+      return `${BLOG_BASE}/`
     case 'subscribe':
-      return '/subscribe'
+      return `${BLOG_BASE}/subscribe`
     case 'confirm':
-      return '/subscribe/confirm'
+      return `${BLOG_BASE}/subscribe/confirm`
     case 'category':
-      return `/category/${route.id}`
+      return `${BLOG_BASE}/category/${route.id}`
     case 'post':
-      return `/${route.slug}`
+      return `${BLOG_BASE}/${route.slug}`
     case 'missing':
-      return route.path
+      return `${BLOG_BASE}${route.path}`
   }
 }

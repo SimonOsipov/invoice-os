@@ -107,13 +107,23 @@ describe('tenantsApi', () => {
   })
 
   it('memberName climbs display name, email, user id', () => {
-    const base = { user_id: 'u1', display_name: null, email: null }
+    const base = { user_id: 'u1', display_name: null, email: null, status: 'active' as const }
     expect(memberName({ ...base, display_name: 'Ada' })).toBe('Ada')
     expect(memberName({ ...base, display_name: '', email: 'a@x' })).toBe('a@x')
     expect(memberName(base)).toBe('u1')
     expect(memberName({ ...base, display_name: '', email: '' })).toBe('u1')
     expect(memberName({ ...base, display_name: null, email: 'e@x' })).toBe('e@x')
     expect(memberName({ ...base, display_name: 'Ada', email: 'a@x' })).toBe('Ada')
+  })
+
+  it('memberName: a removed row without a name is Deleted member', () => {
+    const base = { user_id: 'u1', display_name: null, email: null, status: 'removed' as const }
+    expect(memberName(base)).toBe('Deleted member')
+    expect(memberName({ ...base, display_name: '' })).toBe('Deleted member')
+    expect(memberName({ ...base, display_name: 'Ada' })).toBe('Ada')
+    expect(memberName({ ...base, status: 'active', email: 'e@x' })).toBe('e@x')
+    expect(memberName({ ...base, email: 'e@x', user_id: 'uuid-1' })).toBe('Deleted member')
+    expect(memberName({ ...base, display_name: '   ' })).toBe('   ')
   })
 
   it('kindLabel names both kinds', () => {

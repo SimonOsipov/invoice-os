@@ -11,11 +11,13 @@ import { captureApiFailure } from '@invoice-os/monitoring/report'
 /** The hostnames that ARE the real production landing site. Exact match only. */
 export const PRODUCTION_HOSTNAMES: readonly string[] = ['www.ascomply.com']
 
-/** The Feature Library's host. */
-export const LIBRARY_HOSTNAMES: readonly string[] = ['library.ascomply.com']
+/** The Feature Library's hosts. */
+// ceiling: the old host stays admitted until its 301 is live; drop it then.
+export const LIBRARY_HOSTNAMES: readonly string[] = [...PRODUCTION_HOSTNAMES, 'library.ascomply.com']
 
-/** The Blog's host. */
-export const BLOG_HOSTNAMES: readonly string[] = ['blog.ascomply.com']
+/** The Blog's hosts. */
+// ceiling: the old host stays admitted until its 301 is live; drop it then.
+export const BLOG_HOSTNAMES: readonly string[] = [...PRODUCTION_HOSTNAMES, 'blog.ascomply.com']
 
 /** The signed-in app's host. */
 export const APP_HOSTNAMES: readonly string[] = ['app.ascomply.com']

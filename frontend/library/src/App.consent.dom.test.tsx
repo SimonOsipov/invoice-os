@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// @vitest-environment-options { "url": "https://library.ascomply.com/" }
+// @vitest-environment-options { "url": "https://www.ascomply.com/library/" }
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -195,7 +195,26 @@ describe('library consent', () => {
     click(byText('Cookie choices'))
     click(byText('Reject'))
     expect(writes.some((w) => w.startsWith('_ga') && w.endsWith('domain=.ascomply.com'))).toBe(true)
-    expect(writes.some((w) => w.startsWith('_ga') && w.endsWith('domain=library.ascomply.com'))).toBe(true)
+    expect(writes.some((w) => w.startsWith('_ga') && w.endsWith('domain=www.ascomply.com'))).toBe(true)
+  })
+
+  it('CO-10 Accept then Reject at /library/ on www write asc_consent on the shared domain and expire _ga and HubSpot cookies on www and its parents', async () => {
+    const writes = spyWrites()
+    await mount('/library/')
+    click(byText('Accept'))
+    document.cookie = '_ga=x'
+    seed('__hstc')
+    click(byText('Cookie choices'))
+    click(byText('Reject'))
+    const consent = writes.filter((v) => v.startsWith(`${KEY}=`))
+    expect(consent.length).toBeGreaterThanOrEqual(2)
+    for (const v of consent) expect(v).toMatch(/; Domain=ascomply\.com; Path=\/;/)
+    const forms = ['www.ascomply.com', '.www.ascomply.com', 'ascomply.com', '.ascomply.com']
+    for (const name of ['_ga', '__hstc']) {
+      const exp = writes.filter((v) => v.startsWith(`${name}=; Max-Age=0`))
+      expect(exp.filter((v) => !v.includes('domain='))).not.toHaveLength(0)
+      for (const d of forms) expect(exp.some((v) => v.endsWith(`domain=${d}`)), `${name} ${d}`).toBe(true)
+    }
   })
 
   it('CO-07 a choice stored by the landing shows no notice on the Library', async () => {
@@ -218,7 +237,7 @@ describe('library consent', () => {
     expect(document.querySelectorAll('script[src^="https://www.googletagmanager.com/"]')).toHaveLength(0)
     const gaExpiries = writes.filter((w) => w.startsWith('_ga=; Max-Age=0'))
     expect(gaExpiries.some((w) => !w.includes('domain='))).toBe(true)
-    for (const d of ['library.ascomply.com', '.library.ascomply.com', 'ascomply.com', '.ascomply.com']) {
+    for (const d of ['www.ascomply.com', '.www.ascomply.com', 'ascomply.com', '.ascomply.com']) {
       expect(gaExpiries.some((w) => w.endsWith(`domain=${d}`)), d).toBe(true)
     }
     expect(readConsentCookie(document)!.analytics).toBe(false)
@@ -268,7 +287,7 @@ describe('library consent', () => {
     const exp = writes.filter((w) => w.startsWith('_ga=; Max-Age=0'))
     expect(exp.filter((w) => !w.includes('domain='))).toHaveLength(1)
     expect(exp.filter((w) => w.includes('domain=')).map((w) => w.split('domain=')[1]).sort()).toEqual(
-      ['.ascomply.com', '.library.ascomply.com', 'ascomply.com', 'library.ascomply.com'],
+      ['.ascomply.com', '.www.ascomply.com', 'ascomply.com', 'www.ascomply.com'],
     )
     m.analytics.trackLibraryDemoOpen()
     expect(entries().filter((e) => e[0] === 'event')).toEqual([])

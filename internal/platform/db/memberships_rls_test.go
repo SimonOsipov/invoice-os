@@ -46,6 +46,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pressly/goose/v3"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -358,8 +359,7 @@ func TestRLS_MembershipsStatusDefaultsActive(t *testing.T) {
 	}
 }
 
-// AC-1: status accepts exactly active/invited/suspended; anything else is refused
-// with a check_violation, SQLSTATE 23514.
+// AC-1: a status outside the vocabulary is refused with a check_violation, SQLSTATE 23514.
 func TestRLS_MembershipsStatusVocabulary(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
@@ -715,6 +715,39 @@ func staffMigrationProvider(t *testing.T) *goose.Provider {
 	return provider
 }
 
+// rollBackRemovedFirst undoes removed_flag_ignores_live_membership, then membership_removed, so an older migration's Down and Up see their own schema.
+// The cleanup rolls both back again (a provider.Up in the test may have applied them early) and re-applies them last, in order,
+// over the older bodies and the older CHECK that Up puts back, so they sit last in the goose ledger.
+func rollBackRemovedFirst(t *testing.T, provider *goose.Provider) {
+	t.Helper()
+	removed := migrationVersion(t, "*_membership_removed.sql")
+	flag := migrationVersion(t, "*_removed_flag_ignores_live_membership.sql")
+	roll := func(version int64, up bool) error {
+		_, err := provider.ApplyVersion(context.Background(), version, up)
+		if errors.Is(err, goose.ErrNotApplied) || errors.Is(err, goose.ErrAlreadyApplied) {
+			return nil
+		}
+		return err
+	}
+	for _, v := range []int64{flag, removed} {
+		if err := roll(v, false); err != nil {
+			t.Fatalf("roll back migration %d: %v", v, err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, v := range []int64{flag, removed} {
+			if err := roll(v, false); err != nil {
+				t.Errorf("roll back migration %d: %v", v, err)
+			}
+		}
+		for _, v := range []int64{removed, flag} {
+			if err := roll(v, true); err != nil {
+				t.Errorf("re-apply migration %d: %v", v, err)
+			}
+		}
+	})
+}
+
 // restoreMigrationOnCleanup re-applies the migration at version after a test that rolled it back.
 func restoreMigrationOnCleanup(t *testing.T, provider *goose.Provider, version int64) {
 	t.Helper()
@@ -723,4 +756,328 @@ func restoreMigrationOnCleanup(t *testing.T, provider *goose.Provider, version i
 			t.Errorf("restore migration %d: %v", version, err)
 		}
 	})
+}
+
+// memberSnap is every column a refused or revived accept may touch.
+type memberSnap struct {
+	ID, Role, Status, CreatedAt string
+	Email, Display              *string
+	AllClients                  bool
+}
+
+// seedMemberRow inserts a full row 30 days old with all_clients on. Before the removed
+// migration a 'removed' seed stops here with 23514 on memberships_status_check.
+func seedMemberRow(t *testing.T, tenant, user, role, status string, display, email any) string {
+	t.Helper()
+	id := uuid.NewString()
+	if _, err := h.super.Exec(context.Background(),
+		`INSERT INTO memberships (id, tenant_id, user_id, role, status, display_name, email, all_clients, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, true, now() - interval '30 days')`,
+		id, tenant, user, role, status, display, email,
+	); err != nil {
+		t.Fatalf("seed a %q membership: %v", status, err)
+	}
+	t.Cleanup(func() { _, _ = h.super.Exec(context.Background(), `DELETE FROM memberships WHERE id = $1`, id) })
+	return id
+}
+
+func readMemberSnap(t *testing.T, tenant, user string) memberSnap {
+	t.Helper()
+	var s memberSnap
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT id::text, role, status, created_at::text, email, display_name, all_clients
+		   FROM memberships WHERE tenant_id = $1 AND user_id = $2`, tenant, user,
+	).Scan(&s.ID, &s.Role, &s.Status, &s.CreatedAt, &s.Email, &s.Display, &s.AllClients); err != nil {
+		t.Fatalf("read the membership of %s in %s: %v", user, tenant, err)
+	}
+	return s
+}
+
+// callBool runs a one-argument boolean function and fails on any error, so a missing
+// function surfaces as its 42883 text.
+func callBool(t *testing.T, q querier, fn string, user string) bool {
+	t.Helper()
+	var got bool
+	if err := q.QueryRow(context.Background(), `SELECT `+fn+`($1::uuid)`, user).Scan(&got); err != nil {
+		t.Fatalf("%s(%s): %v", fn, user, err)
+	}
+	return got
+}
+
+// setStatusAsMigrator updates inside the tenant: the migrator owns the table but FORCE RLS still scopes it.
+func setStatusAsMigrator(t *testing.T, tenant, id, status string) error {
+	t.Helper()
+	ctx := context.Background()
+	return db.WithinTenantTx(ctx, h.mig, tenant, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE memberships SET status = $2 WHERE id = $1`, id, status)
+		if err == nil && tag.RowsAffected() != 1 {
+			t.Fatalf("set status %q touched %d rows, want 1", status, tag.RowsAffected())
+		}
+		return err
+	})
+}
+
+func TestRLS_MembershipStatusAdmitsRemoved(t *testing.T) {
+	h := requireHarness(t)
+	id, cleanup := seedMembership(t, h.tenantA, uuid.NewString(), "admin")
+	defer cleanup()
+
+	if err := setStatusAsMigrator(t, h.tenantA, id, "removed"); err != nil {
+		t.Fatalf("set status 'removed' as the migrator: %v", err)
+	}
+
+	var got string
+	if err := h.super.QueryRow(context.Background(), `SELECT status FROM memberships WHERE id = $1`, id).Scan(&got); err != nil {
+		t.Fatalf("read status back: %v", err)
+	}
+	if got != "removed" {
+		t.Errorf("status = %q, want removed", got)
+	}
+}
+
+// The removed step first proves the constraint is the new vocabulary, not a blanket refusal.
+func TestRLS_MembershipStatusRefusesAnUnknownValue(t *testing.T) {
+	h := requireHarness(t)
+	id, cleanup := seedMembership(t, h.tenantA, uuid.NewString(), "admin")
+	defer cleanup()
+	if err := setStatusAsMigrator(t, h.tenantA, id, "removed"); err != nil {
+		t.Fatalf("control: set status 'removed': %v", err)
+	}
+
+	for _, bad := range []string{"ended", "Removed", "removed "} {
+		err := setStatusAsMigrator(t, h.tenantA, id, bad)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != "memberships_status_check" {
+			t.Errorf("set status %q: want 23514 on memberships_status_check, got %v", bad, err)
+		}
+	}
+	var got string
+	if err := h.super.QueryRow(context.Background(), `SELECT status FROM memberships WHERE id = $1`, id).Scan(&got); err != nil || got != "removed" {
+		t.Errorf("status after the refusals = %q (%v), want removed unchanged", got, err)
+	}
+}
+
+func TestRLS_IdentityHasMembershipIgnoresRemovedRows(t *testing.T) {
+	h := requireHarness(t)
+	const fn = "public.identity_has_membership"
+
+	for _, c := range []struct {
+		status string
+		want   bool
+	}{{"removed", false}, {"active", true}, {"suspended", true}, {"invited", true}} {
+		t.Run(c.status, func(t *testing.T) {
+			user := uuid.NewString()
+			seedMemberRow(t, h.tenantA, user, "preparer", c.status, nil, nil)
+			if got := callBool(t, h.mig, fn, user); got != c.want {
+				t.Errorf("identity_has_membership with only a %s row = %v, want %v", c.status, got, c.want)
+			}
+		})
+	}
+
+	t.Run("removed here, active there", func(t *testing.T) {
+		user := uuid.NewString()
+		seedMemberRow(t, h.tenantA, user, "preparer", "removed", nil, nil)
+		seedMemberRow(t, h.tenantB, user, "preparer", "active", nil, nil)
+		if !callBool(t, h.mig, fn, user) {
+			t.Error("identity_has_membership = false, want true: the active row still counts")
+		}
+	})
+	t.Run("no row", func(t *testing.T) {
+		if callBool(t, h.mig, fn, uuid.NewString()) {
+			t.Error("identity_has_membership = true for an unknown user, want false")
+		}
+	})
+}
+
+func TestRLS_IdentityHasRemovedMembership(t *testing.T) {
+	h := requireHarness(t)
+	const fn = "public.identity_has_removed_membership"
+
+	t.Run("no row", func(t *testing.T) {
+		if callBool(t, h.app, fn, uuid.NewString()) {
+			t.Error("identity_has_removed_membership = true for an unknown user, want false")
+		}
+	})
+	for _, c := range []struct {
+		status string
+		want   bool
+	}{{"removed", true}, {"active", false}, {"suspended", false}, {"invited", false}} {
+		t.Run(c.status, func(t *testing.T) {
+			user := uuid.NewString()
+			seedMemberRow(t, h.tenantA, user, "preparer", c.status, nil, nil)
+			if got := callBool(t, h.app, fn, user); got != c.want {
+				t.Errorf("identity_has_removed_membership with only a %s row = %v, want %v", c.status, got, c.want)
+			}
+		})
+	}
+	for _, live := range []string{"active", "suspended", "invited"} {
+		t.Run("removed in one tenant, "+live+" in another", func(t *testing.T) {
+			user := uuid.NewString()
+			seedMemberRow(t, h.tenantA, user, "preparer", "removed", nil, nil)
+			seedMemberRow(t, h.tenantB, user, "preparer", live, nil, nil)
+			if callBool(t, h.app, fn, user) {
+				t.Errorf("identity_has_removed_membership = true with a %s row elsewhere, want false", live)
+			}
+		})
+	}
+	// ceiling 1 of the migration: the answer ignores app.current_tenant, so it is the same under another tenant's GUC and an unset one.
+	t.Run("the answer ignores the tenant GUC", func(t *testing.T) {
+		user := uuid.NewString()
+		seedMemberRow(t, h.tenantA, user, "preparer", "removed", nil, nil)
+		for _, guc := range []string{h.tenantB, ""} {
+			var got, other bool
+			err := inAppTx(context.Background(), guc, func(tx pgx.Tx) error {
+				if err := tx.QueryRow(context.Background(), `SELECT public.identity_has_removed_membership($1::uuid)`, user).Scan(&got); err != nil {
+					return err
+				}
+				return tx.QueryRow(context.Background(), `SELECT public.identity_has_removed_membership($1::uuid)`, uuid.NewString()).Scan(&other)
+			})
+			if err != nil || !got || other {
+				t.Errorf("GUC %q: (removed user, stranger) = (%v, %v) err %v, want (true, false)", guc, got, other, err)
+			}
+		}
+	})
+	t.Run("a NULL user id", func(t *testing.T) {
+		var got *bool
+		if err := h.app.QueryRow(context.Background(), `SELECT public.identity_has_removed_membership(NULL::uuid)`).Scan(&got); err != nil || got == nil || *got {
+			t.Errorf("identity_has_removed_membership(NULL) = %v (%v), want false", got, err)
+		}
+	})
+}
+
+func TestRLS_IdentityHasRemovedMembershipIsNotPublic(t *testing.T) {
+	h := requireHarness(t)
+	const sig = "public.identity_has_removed_membership(uuid)"
+	user := uuid.NewString()
+	seedMemberRow(t, h.tenantA, user, "preparer", "removed", nil, nil)
+
+	if !callBool(t, h.app, "public.identity_has_removed_membership", user) {
+		t.Fatal("control: invoice_app got false for a removed user, want true")
+	}
+
+	var got bool
+	err := h.reader.QueryRow(context.Background(), `SELECT public.identity_has_removed_membership($1::uuid)`, user).Scan(&got)
+	if code := pgCode(err); code != "42501" {
+		t.Errorf("invoice_tenant_reader call: SQLSTATE = %q (%v), want 42501", code, err)
+	}
+	for _, c := range []struct {
+		role string
+		want bool
+	}{{"invoice_app", true}, {"invoice_tenant_reader", false}, {"supabase_auth_admin", false}} {
+		var has bool
+		if err := h.super.QueryRow(context.Background(),
+			`SELECT has_function_privilege($1, to_regprocedure($2), 'EXECUTE')`, c.role, sig).Scan(&has); err != nil {
+			t.Fatalf("has_function_privilege(%s): %v", c.role, err)
+		}
+		if has != c.want {
+			t.Errorf("%s EXECUTE on %s = %v, want %v", c.role, sig, has, c.want)
+		}
+	}
+	s, ok := readProc(t, sig)
+	if !ok {
+		t.Fatalf("function %s does not exist", sig)
+	}
+	assertExecuteOnlyForApp(t, sig, s, "auth_hook_reader")
+	if s.owner != "auth_hook_reader" || !s.secdef || s.volatile != "s" || !reflect.DeepEqual(s.config, []string{`search_path=""`}) {
+		t.Errorf("(owner, secdef, volatile, config) = (%s, %v, %s, %v), want (auth_hook_reader, true, s, [search_path=\"\"])", s.owner, s.secdef, s.volatile, s.config)
+	}
+}
+
+// Down puts back the any-removed-row answer with the same owner, SECURITY DEFINER, search_path and invoice_app-only grant; Up turns the live-row rule on again.
+func TestRLS_RemovedFlagMigrationDownAndUpKeepTheFunctionShape(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	const sig = "public.identity_has_removed_membership(uuid)"
+	provider := staffMigrationProvider(t)
+	flag := migrationVersion(t, "*_removed_flag_ignores_live_membership.sql")
+	restoreMigrationOnCleanup(t, provider, flag)
+
+	user := uuid.NewString()
+	seedMemberRow(t, h.tenantA, user, "preparer", "removed", nil, nil)
+	seedMemberRow(t, h.tenantB, user, "preparer", "active", nil, nil)
+
+	assertShape := func(phase string) {
+		t.Helper()
+		s, ok := readProc(t, sig)
+		if !ok {
+			t.Fatalf("%s: %s does not exist", phase, sig)
+		}
+		assertExecuteOnlyForApp(t, sig, s, "auth_hook_reader")
+		if s.owner != "auth_hook_reader" || !s.secdef || s.volatile != "s" || !reflect.DeepEqual(s.config, []string{`search_path=""`}) {
+			t.Errorf("%s: (owner, secdef, volatile, config) = (%s, %v, %s, %v), want (auth_hook_reader, true, s, [search_path=\"\"])", phase, s.owner, s.secdef, s.volatile, s.config)
+		}
+	}
+
+	if _, err := provider.ApplyVersion(ctx, flag, false); err != nil && !errors.Is(err, goose.ErrNotApplied) {
+		t.Fatalf("Down of the flag migration: %v", err)
+	}
+	assertShape("after Down")
+	if !callBool(t, h.app, "public.identity_has_removed_membership", user) {
+		t.Error("after Down: removed here, active there = false, want true (the membership_removed answer)")
+	}
+	if _, err := provider.ApplyVersion(ctx, flag, true); err != nil && !errors.Is(err, goose.ErrAlreadyApplied) {
+		t.Fatalf("Up of the flag migration: %v", err)
+	}
+	assertShape("after Up")
+	if callBool(t, h.app, "public.identity_has_removed_membership", user) {
+		t.Error("after Up: removed here, active there = true, want false")
+	}
+}
+
+// Down runs under FORCE RLS: it must reach removed rows in every tenant, then put FORCE back.
+func TestRLS_MembershipRemovedDownTurnsRemovedRowsSuspended(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+	provider := staffMigrationProvider(t)
+	version := migrationVersion(t, "*_membership_removed.sql")
+
+	removedA, removedB, kept := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	seedMemberRow(t, h.tenantA, removedA, "preparer", "removed", "Ada", nil)
+	seedMemberRow(t, h.tenantB, removedB, "preparer", "removed", nil, nil)
+	seedMemberRow(t, h.tenantA, kept, "preparer", "active", "Bola", "bola@obi.test")
+
+	// The flag migration redefines a function this Down drops: undo it first, restore it last.
+	flag := migrationVersion(t, "*_removed_flag_ignores_live_membership.sql")
+	restoreMigrationOnCleanup(t, provider, flag)
+	if _, err := provider.ApplyVersion(ctx, flag, false); err != nil && !errors.Is(err, goose.ErrNotApplied) {
+		t.Fatalf("Down of the flag migration: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := provider.ApplyVersion(context.Background(), version, true); err != nil && !errors.Is(err, goose.ErrAlreadyApplied) {
+			t.Errorf("re-apply membership_removed: %v", err)
+		}
+	})
+	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
+		t.Fatalf("Down with removed rows present: %v", err)
+	}
+
+	for _, c := range []struct{ tenant, user, status string }{{h.tenantA, removedA, "suspended"}, {h.tenantB, removedB, "suspended"}, {h.tenantA, kept, "active"}} {
+		if s := readMemberSnap(t, c.tenant, c.user); s.Status != c.status {
+			t.Errorf("status after Down = %q, want %q", s.Status, c.status)
+		}
+	}
+	if s := readMemberSnap(t, h.tenantA, removedA); s.Display == nil || *s.Display != "Ada" {
+		t.Errorf("display_name after Down = %v, want Ada kept", s.Display)
+	}
+	var forced bool
+	if err := h.super.QueryRow(ctx, `SELECT relforcerowsecurity FROM pg_class WHERE oid = 'public.memberships'::regclass`).Scan(&forced); err != nil || !forced {
+		t.Errorf("memberships FORCE ROW LEVEL SECURITY after Down = %v (%v), want true", forced, err)
+	}
+	if err := setStatusAsMigrator(t, h.tenantA, readMemberSnap(t, h.tenantA, kept).ID, "removed"); pgCode(err) != "23514" {
+		t.Errorf("status 'removed' after Down: SQLSTATE %q (%v), want 23514", pgCode(err), err)
+	}
+	for _, sig := range []string{
+		"public.identity_has_removed_membership(uuid)",
+		"public.accept_invitation(uuid, text, uuid, text, text)",
+		"public.accept_invitation_by_id(uuid, uuid, uuid, text, text)",
+	} {
+		if _, ok := readProc(t, sig); ok {
+			t.Errorf("%s still exists after Down", sig)
+		}
+	}
+	for _, sig := range []string{"public.accept_invitation(uuid, text, uuid, text)", "public.accept_invitation_by_id(uuid, uuid, uuid, text)"} {
+		if _, ok := readProc(t, sig); !ok {
+			t.Errorf("%s is gone after Down, want the old form restored", sig)
+		}
+	}
 }

@@ -28,12 +28,14 @@ import {
   CLIENT_USERS_COPY,
   INVITE_ADMIN_ONLY,
   PROTECTED_ADMIN_NOTE,
+  removeMembership,
   replaceMember,
   setMembershipStatus,
   toMember,
   type InvitationWire,
   type Member,
   type MembershipWire,
+  type PatchableStatus,
 } from '../lib/members'
 import type { AuthedFetch } from '../lib/portfolio'
 import type { Role } from '../lib/roles'
@@ -43,6 +45,7 @@ import { MembersView } from './MembersView'
 vi.mock('../lib/members', async (orig) => ({
   ...(await orig<typeof import('../lib/members')>()),
   setMembershipStatus: vi.fn(),
+  removeMembership: vi.fn(),
 }))
 
 // Records the title of every EmptyState render pass, so a one-frame "Just you" (N3) is visible
@@ -73,6 +76,7 @@ vi.mock('./MembersTable', async (orig) => {
 })
 
 const mockedSetMembershipStatus = vi.mocked(setMembershipStatus)
+const mockedRemoveMembership = vi.mocked(removeMembership)
 
 const SUBJECT = 'u1'
 const BASE = 'https://gw'
@@ -146,9 +150,16 @@ function Harness({
   const [members, setMembers] = useState<Member[]>(initial)
   if (controls) controls.current = { setMembers }
 
-  async function setMemberStatus(id: string, status: Exclude<Member['status'], 'invited'>) {
+  async function setMemberStatus(id: string, status: PatchableStatus) {
     const wire = await setMembershipStatus(noopFetch, BASE, id, status)
     setMembers((list) => replaceMember(list, toMember(wire, SUBJECT)))
+  }
+
+  // App.tsx's removeMember: the server's row wins, then roles refetch.
+  async function removeMember(id: string) {
+    const wire = await removeMembership(noopFetch, BASE, id)
+    setMembers((list) => replaceMember(list, toMember(wire, SUBJECT)))
+    refetchRoles?.()
   }
 
   const ctx = {
@@ -179,6 +190,7 @@ function Harness({
     inviteMembers: vi.fn(),
     saveRole: vi.fn(),
     setSettingsTab: vi.fn(),
+    removeMember,
     setMemberStatus, // unused until MembersTable/MemberDrawer re-point their onClick here
   }
 
@@ -209,6 +221,7 @@ function suspendFromRowMenu(row: HTMLElement) {
 afterEach(() => {
   cleanup()
   mockedSetMembershipStatus.mockReset()
+  mockedRemoveMembership.mockReset()
 })
 
 describe('AC2: a successful suspend leaves no stale row', () => {
@@ -286,6 +299,117 @@ describe("AC4: a rejected write renders the server's own reason at the control",
     await screen.findAllByText(REASON) // presence, proven above -- the gate for this spec
     expect(screen.queryByText(PROTECTED_ADMIN_NOTE), "the pre-disable lock note must not stand in for the write's own failure").toBeNull()
     expect(screen.queryByText(/something went wrong/i), 'must never fall back to generic client copy ([the-clientsview-167-trap])').toBeNull()
+  })
+})
+
+describe('DEL-02-05: Remove through the view', () => {
+  const ada = () => member({ role: 'preparer' })
+  const other = () => member({ id: 'other1', name: 'Other Person', initials: 'OP', role: 'admin' })
+  const third = () => member({ id: 'other2', name: 'Third Person', initials: 'TP', role: 'reviewer' })
+
+  function confirmRemove() {
+    fireEvent.click(screen.getByTestId('member-remove'))
+    fireEvent.click(screen.getByTestId('member-remove-confirmed'))
+  }
+
+  it('view: a refused remove shows the server reason on that row', async () => {
+    mockedRemoveMembership.mockRejectedValue(new ApiError('http', REASON, 409))
+
+    render(<Harness initial={[ada(), other()]} />)
+    openDrawer('Ada Person')
+    confirmRemove()
+
+    expect((await screen.findByTestId('member-drawer-status-error')).textContent).toBe(REASON)
+    expect(within(rowFor('Ada Person')).getByText('ACTIVE', { exact: true })).toBeTruthy()
+    expect(screen.getByTestId('member-drawer')).toBeTruthy()
+  })
+
+  it("view: a removed member's drawer closes and roles refetch", async () => {
+    const m = ada()
+    mockedRemoveMembership.mockResolvedValue({ ...wireFor(m, 'removed'), email: null })
+    const refetchRoles = vi.fn()
+
+    render(<Harness initial={[m, other(), third()]} refetchRoles={refetchRoles} />)
+    openDrawer('Ada Person')
+    confirmRemove()
+
+    await waitFor(() => expect(screen.queryByTestId('member-drawer')).toBeNull())
+    expect(mockedRemoveMembership).toHaveBeenCalledWith(noopFetch, BASE, SUBJECT)
+    expect(refetchRoles).toHaveBeenCalledTimes(1)
+    const row = rowFor('Ada Person')
+    expect(within(row).getByText('REMOVED', { exact: true })).toBeTruthy()
+    expect(within(row).queryByTestId('member-menu-trigger')).toBeNull()
+  })
+
+  it('view: a refused remove from the menu shows the reason under the row', async () => {
+    mockedRemoveMembership.mockRejectedValue(new ApiError('http', REASON, 409))
+
+    render(<Harness initial={[ada(), other()]} />)
+    fireEvent.click(within(rowFor('Ada Person')).getByTestId('member-menu-trigger'))
+    fireEvent.click(within(screen.getByTestId('member-menu')).getByRole('button', { name: 'Remove' }))
+    fireEvent.click(screen.getByTestId('member-remove-confirmed'))
+
+    expect((await screen.findByTestId('member-status-error')).textContent).toBe(REASON)
+  })
+
+  it.each([
+    [403, 'only an admin can remove members'],
+    [404, 'no such membership'],
+    [409, REASON],
+  ])('view: a %i refusal renders its sentence and leaves the row unchanged', async (status, sentence) => {
+    mockedRemoveMembership.mockRejectedValue(new ApiError('http', sentence, status))
+
+    render(<Harness initial={[ada(), other()]} />)
+    openDrawer('Ada Person')
+    confirmRemove()
+
+    expect((await screen.findByTestId('member-drawer-status-error')).textContent).toBe(sentence)
+    expect(within(rowFor('Ada Person')).getByText('ACTIVE', { exact: true })).toBeTruthy()
+    expect(within(rowFor('Ada Person')).queryByText('REMOVED')).toBeNull()
+  })
+
+  it('view: a network failure shows an error and leaves the row unchanged', async () => {
+    mockedRemoveMembership.mockRejectedValue(new TypeError('Failed to fetch'))
+    const refetchRoles = vi.fn()
+
+    render(<Harness initial={[ada(), other()]} refetchRoles={refetchRoles} />)
+    openDrawer('Ada Person')
+    confirmRemove()
+
+    const err = await screen.findByTestId('member-drawer-status-error')
+    expect(err.textContent?.trim().length).toBeGreaterThan(0)
+    expect(within(rowFor('Ada Person')).getByText('ACTIVE', { exact: true })).toBeTruthy()
+    expect(refetchRoles).not.toHaveBeenCalled()
+  })
+
+  it('view: a double click on the confirm sends one request', async () => {
+    mockedRemoveMembership.mockReturnValue(new Promise(() => {}))
+
+    render(<Harness initial={[ada(), other()]} />)
+    openDrawer('Ada Person')
+    fireEvent.click(screen.getByTestId('member-remove'))
+    const confirm = screen.getByTestId('member-remove-confirmed')
+    fireEvent.click(confirm)
+    fireEvent.click(confirm)
+
+    expect(mockedRemoveMembership).toHaveBeenCalledTimes(1)
+  })
+
+  it('view: a removed member with no name reads Deleted member with an em dash for email', async () => {
+    const m = ada()
+    mockedRemoveMembership.mockResolvedValue({ ...wireFor(m, 'removed'), display_name: null, email: null })
+
+    render(<Harness initial={[m, other(), third()]} />)
+    openDrawer('Ada Person')
+    confirmRemove()
+
+    await waitFor(() => expect(screen.queryByTestId('member-drawer')).toBeNull())
+    const row = rowFor('Deleted member')
+    expect(within(row).getByText('REMOVED', { exact: true })).toBeTruthy()
+    expect(within(row).getByText('—', { selector: '.mono' })).toBeTruthy()
+    expect(within(row).queryByText('ada@x.ng')).toBeNull()
+    fireEvent.click(row)
+    expect(screen.queryByTestId('member-drawer')).toBeNull()
   })
 })
 
@@ -1799,6 +1923,23 @@ describe('the roster table chrome, head to rows', () => {
     expect(within(table).queryAllByTestId(/^(member|invite)-row$/)).toHaveLength(0)
     expect((table.firstElementChild as HTMLElement).nextElementSibling).toBe(within(table).getByTestId('members-no-match'))
     expect(screen.getByTestId('role-matrix-toggle'), 'a filter must not hide the capability matrix').toBeTruthy()
+  })
+
+  it('a removed row keeps the table on screen, not the "just you" card', () => {
+    render(<Harness initial={[member(), member({ id: 'g', name: 'Gone Person', status: 'removed', email: null })]} />)
+    expect(screen.queryByText('Just you at the firm')).toBeNull()
+    expect(within(rowFor('Gone Person')).getByText('REMOVED', { exact: true })).toBeTruthy()
+  })
+
+  it('with only you on the roster the "just you" card shows', () => {
+    render(<Harness initial={[member()]} />)
+    expect(screen.getByText('Just you at the firm')).toBeTruthy()
+  })
+
+  it('the Admin role filter lists no removed former admin', () => {
+    render(<Harness initial={[member(), otherMember(), member({ id: 'g', name: 'Gone Admin', role: 'admin', status: 'removed', email: null })]} />)
+    fireEvent.change(screen.getByLabelText('Access role').querySelector('select')!, { target: { value: 'admin' } })
+    expect(screen.queryByText('Gone Admin')).toBeNull()
   })
 
   it('a search on a roster of one keeps the table and its no-match row, never the "just you" card', () => {

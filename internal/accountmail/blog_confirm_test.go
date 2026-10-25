@@ -77,7 +77,7 @@ func TestRenderBlogConfirm_SubjectIsFixed(t *testing.T) {
 func TestRenderBlogConfirm_ButtonAndFallbackOpenTheConfirmPage(t *testing.T) {
 	_, out := renderBlog(t, blogMail)
 	for i, h := range blogHrefs(t, out) {
-		if want := "https://blog.ascomply.com/subscribe/confirm?token=abc_-"; h != want {
+		if want := "https://www.ascomply.com/blog/subscribe/confirm?token=abc_-"; h != want {
 			t.Errorf("link %d = %q, want %q", i, h, want)
 		}
 	}
@@ -94,7 +94,7 @@ func TestRenderBlogConfirm_TokenIsEscapedInBothLinks(t *testing.T) {
 				t.Errorf("token %q link %d = %q, want %q", token, i, h, want)
 			}
 			u, err := url.Parse(h)
-			if err != nil || u.Host != "blog.ascomply.com" || u.Fragment != "" || u.Query().Get("token") != token || len(u.Query()) != 1 {
+			if err != nil || u.Host != "www.ascomply.com" || u.Path != "/blog/subscribe/confirm" || u.Fragment != "" || u.Query().Get("token") != token || len(u.Query()) != 1 {
 				t.Errorf("token %q link %d does not parse back to one token (%v, %v)", token, i, u, err)
 			}
 		}

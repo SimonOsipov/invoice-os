@@ -1,7 +1,7 @@
 // Package tenancy is the 01 Tenancy context service: workspaces and their
 // memberships, read under Row-Level Security scoped by the app.current_tenant GUC.
 // GET /v1/me resolves the gateway-injected caller to their tenant, role, display name and email;
-// POST /v1/workspaces provisions a tenant-less caller's first workspace.
+// POST /v1/workspaces provisions a tenant-less caller's workspace.
 package tenancy
 
 import (
@@ -47,13 +47,15 @@ var ErrTenantNotFound = errors.New("tenancy: tenant not found")
 // no domain role. Fail-closed: a role must never be defaulted when this occurs.
 var ErrNoMembership = errors.New("tenancy: no membership")
 
-// Sentinels for PATCH /v1/memberships/{user_id} (SetMembershipStatus).
+// Sentinels for the /v1/memberships/{user_id} routes.
 var (
 	ErrNotPermitted             = errors.New("tenancy: not permitted")
 	ErrMembershipNotFound       = errors.New("tenancy: membership not found")
 	ErrInvalidStatus            = errors.New("tenancy: invalid status")
 	ErrInvitedNotTransitionable = errors.New("tenancy: invited membership is not transitionable")
 	ErrLastActiveAdmin          = errors.New("tenancy: last active admin")
+	ErrRemoveNotPermitted       = errors.New("tenancy: remove not permitted")
+	ErrRemovedNotTransitionable = errors.New("tenancy: removed membership is not transitionable")
 )
 
 // Sentinels for the invitations store.
@@ -294,6 +296,36 @@ func SetMembershipStatusHandler(set MembershipStatusSetter, log *slog.Logger) ht
 	}
 }
 
+// RemoveMemberHandler returns POST /v1/memberships/{user_id}/remove: identity
+// (401) -> path uuid (404) -> remove -> 200 with the member row. Only err is
+// logged on a 500, never a name or an email.
+func RemoveMemberHandler(remove func(ctx context.Context, userID string) (MemberAccess, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		userID, err := uuid.Parse(r.PathValue("user_id"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, "membership not found")
+			return
+		}
+		membership, err := remove(r.Context(), userID.String())
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "tenancy: remove member", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, membership)
+	}
+}
+
 // ProvisionInput is the POST /v1/workspaces body after trimming and validation.
 // An empty Kind is stored as in_house (Store.ProvisionWorkspace).
 type ProvisionInput struct {
@@ -308,6 +340,19 @@ type ProvisionFunc func(ctx context.Context, in ProvisionInput) (Tenant, string,
 
 // maxNameChars caps workspace_name and display_name after trimming.
 const maxNameChars = 200
+
+// checkName returns the 400 sentence for a trimmed name that is empty, over
+// maxNameChars or holds a NUL; "" when it is valid.
+func checkName(field, v string) string {
+	if n := utf8.RuneCountInString(v); n == 0 || n > maxNameChars {
+		return field + " must be 1 to 200 characters"
+	}
+	// Postgres text refuses NUL with 22021, which would answer 500.
+	if strings.ContainsRune(v, 0) {
+		return field + " must not contain a NUL byte"
+	}
+	return ""
+}
 
 // maxProvisionBodyBytes bounds the POST /v1/workspaces body before it is decoded.
 const maxProvisionBodyBytes = 4 << 10
@@ -338,21 +383,12 @@ func ProvisionHandler(provision ProvisionFunc, log *slog.Logger) http.HandlerFun
 			WorkspaceName: strings.TrimSpace(req.WorkspaceName),
 			DisplayName:   strings.TrimSpace(req.DisplayName),
 		}
-		if n := utf8.RuneCountInString(in.WorkspaceName); n == 0 || n > maxNameChars {
-			writeError(w, http.StatusBadRequest, "workspace_name must be 1 to 200 characters")
+		if msg := checkName("workspace_name", in.WorkspaceName); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
-		if n := utf8.RuneCountInString(in.DisplayName); n == 0 || n > maxNameChars {
-			writeError(w, http.StatusBadRequest, "display_name must be 1 to 200 characters")
-			return
-		}
-		// Postgres text refuses NUL with 22021, which would answer 500.
-		if strings.ContainsRune(in.WorkspaceName, 0) {
-			writeError(w, http.StatusBadRequest, "workspace_name must not contain a NUL byte")
-			return
-		}
-		if strings.ContainsRune(in.DisplayName, 0) {
-			writeError(w, http.StatusBadRequest, "display_name must not contain a NUL byte")
+		if msg := checkName("display_name", in.DisplayName); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
 		if req.Kind != nil {
@@ -401,6 +437,10 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusNotFound, "membership not found"
 	case errors.Is(err, ErrInvitedNotTransitionable):
 		return http.StatusConflict, "an invited member has no sign-in to suspend or reactivate"
+	case errors.Is(err, ErrRemovedNotTransitionable):
+		return http.StatusConflict, "a removed member must be invited again"
+	case errors.Is(err, ErrRemoveNotPermitted):
+		return http.StatusForbidden, "only an admin can remove a member"
 	case errors.Is(err, ErrLastActiveAdmin):
 		return http.StatusConflict, "this is the tenant's last active admin — make another member an active admin first"
 	case errors.Is(err, ErrInviteNotPermitted):

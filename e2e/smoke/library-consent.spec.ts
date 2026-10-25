@@ -11,7 +11,7 @@ import { consentCookie, consentRecordOf, consoleGate, isHubSpotChatRequest, isSt
 
 const LIBRARY_URL = resolveTarget('LIBRARY_URL')
 const LIBRARY_HOST = new URL(LIBRARY_URL).hostname.toLowerCase()
-const LIBRARY_PRODUCTION_HOST = 'library.ascomply.com' // retyped from LIBRARY_HOSTNAMES in frontend/landing/src/hubspot.ts
+const LIBRARY_PRODUCTION_HOST = 'www.ascomply.com' // retyped from LIBRARY_HOSTNAMES in frontend/landing/src/hubspot.ts
 const EXPECT_TAG = LIBRARY_HOST === LIBRARY_PRODUCTION_HOST
 const LANDING_URL = resolveTarget('LANDING_URL')
 const LANDING_FALLBACK_ORIGIN = 'https://www.ascomply.com'
@@ -213,7 +213,7 @@ for (const width of [390, 375]) {
 
 // Shared choice, under the production hostnames served by the fork (E2E rules: no real GA or Sentry).
 const WWW = 'https://www.ascomply.com'
-const LIB = 'https://library.ascomply.com'
+const LIB = 'https://www.ascomply.com/library'
 const COOKIE_DAYS = 400
 const DAY_S = 24 * 60 * 60
 const GA_NAME = /^_ga(_|$)/
@@ -232,8 +232,8 @@ const routedTest = test.extend<{ routed: Page }>({
 const grant = (ts = new Date().toISOString()): string => encodeURIComponent(JSON.stringify({ analytics: true, ts, v: 1 }))
 const grantCookie = { name: 'asc_consent', value: grant(), domain: '.ascomply.com', path: '/', secure: true, sameSite: 'Lax' as const }
 
-async function cookiesNamed(page: Page, name: string | RegExp, url?: string) {
-  const all = await page.context().cookies(url)
+async function cookiesNamed(page: Page, name: string | RegExp) {
+  const all = await page.context().cookies()
   return all.filter((c) => (typeof name === 'string' ? c.name === name : name.test(c.name)))
 }
 
@@ -315,83 +315,22 @@ routedTest('SC-01 shared consent: Accept on the landing applies on the Library',
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-routedTest('SC-02 shared consent: two old per-origin answers settle on the later one', async ({ routed: page, request }) => {
-  await controlRouting(page, request)
-  const errors = consoleGate(page)
-  const WWW_TS = '2026-01-01T00:00:00.000Z'
-  const LIB_TS = '2026-02-01T00:00:00.000Z'
-  // Seeds each origin once, so a later visit cannot resurrect the record the app removed.
-  await page.addInitScript(
-    ([wwwTs, libTs]) => {
-      try {
-        if (window.sessionStorage.getItem('seeded')) return
-        window.sessionStorage.setItem('seeded', '1')
-        const www = location.hostname === 'www.ascomply.com'
-        const lib = location.hostname === 'library.ascomply.com'
-        if (www || lib) {
-          window.localStorage.setItem('asc_consent', JSON.stringify({ analytics: www, ts: www ? wwwTs : libTs, v: 1 }))
-        }
-      } catch {
-        // about:blank has an opaque origin; the real navigation re-runs this.
-      }
-    },
-    [WWW_TS, LIB_TS],
-  )
-  const localRecord = (): Promise<string | null> => page.evaluate(() => window.localStorage.getItem('asc_consent'))
-
-  await openWww(page)
-  await expect(notice(page)).toHaveCount(0)
-  expect(JSON.parse((await consentRecordOf(page))!)).toMatchObject({ analytics: true, ts: WWW_TS })
-  expect(await localRecord(), 'www localStorage still holds asc_consent').toBeNull()
-
-  await openRoutedLibrary(page)
-  await expect(notice(page)).toHaveCount(0)
-  expect(JSON.parse((await consentRecordOf(page))!)).toMatchObject({ analytics: false, ts: LIB_TS })
-  expect(await localRecord(), 'library localStorage still holds asc_consent').toBeNull()
-
-  await openWww(page)
-  await expect(notice(page)).toHaveCount(0)
-  await landingChoices(page).click()
-  await expect(notice(page).locator('.cn-setting')).toHaveText('Analytics cookies are off.')
-  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
-})
-
-routedTest('SC-03 shared consent: Reject on the Library deletes the shared and the leftover _ga', async ({ routed: page, request }) => {
+routedTest('SC-03 shared consent: Reject on the Library deletes the shared _ga', async ({ routed: page, request }) => {
   await controlRouting(page, request)
   const errors = consoleGate(page)
   await page.context().addCookies([
     { name: '_ga', value: 'GA1.1.1.1', domain: '.ascomply.com', path: '/', secure: true },
-    { name: '_ga', value: 'GA1.1.2.2', url: LIB, secure: true },
     { name: '_ga_TEST', value: 'GS1.1.3', domain: '.ascomply.com', path: '/', secure: true },
     grantCookie,
   ])
 
   await openRoutedLibrary(page)
-  expect(await cookiesNamed(page, GA_NAME), 'control: the three _ga cookies must exist before Reject').toHaveLength(3)
+  expect(await cookiesNamed(page, GA_NAME), 'control: both _ga cookies must exist before Reject').toHaveLength(2)
   await libraryChoices(page).click()
   await notice(page).getByRole('button', { name: 'Reject' }).click()
 
   await expect.poll(async () => (await cookiesNamed(page, GA_NAME)).map((c) => `${c.name}@${c.domain}`)).toEqual([])
   expect(JSON.parse((await consentRecordOf(page))!)).toMatchObject({ analytics: false })
-  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
-})
-
-routedTest('SC-04 shared consent: a landing Reject reaches the leftover _ga at the next Library load', async ({ routed: page, request }) => {
-  await controlRouting(page, request)
-  const errors = consoleGate(page)
-  await page.context().addCookies([grantCookie, { name: '_ga', value: 'GA1.1.2.2', url: LIB, secure: true }])
-
-  await openWww(page)
-  await expect(notice(page)).toHaveCount(0)
-  await landingChoices(page).click()
-  await notice(page).getByRole('button', { name: 'Reject' }).click()
-  await expect(notice(page)).toHaveCount(0)
-  const leftover = await cookiesNamed(page, '_ga', LIB)
-  expect(leftover.map((c) => c.domain), 'control: a landing Reject cannot reach the library-host _ga').toEqual(['library.ascomply.com'])
-
-  await openRoutedLibrary(page)
-  await expect(notice(page)).toHaveCount(0)
-  await expect.poll(async () => (await cookiesNamed(page, GA_NAME)).length, 'the Library did not expire the leftover _ga').toBe(0)
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { APP_PATHS } from './appPaths.ts'
 import { COMING_SOON_IDS, FEATURES, GROUPS, STAGES, TOUR } from './content.ts'
@@ -42,51 +43,70 @@ describe('content', () => {
     }
   })
 
-  it('content_keepsThePrototypeCopyVerbatim', () => {
-    expect(byId('submit-clear').title).toBe('Submit for FIRS clearance')
-    const feed = byId('audit-trail').sc
-    if (feed.kind !== 'feed') throw new Error('audit-trail is not a feed')
-    expect(feed.items.map((i) => i[1])).toContain('Cleared by FIRS')
-    const flow = byId('submit-clear').sc
-    if (flow.kind !== 'flow') throw new Error('submit-clear is not a flow')
-    expect(flow.steps.map((s) => s.out)).toContain('Response received from FIRS')
-    const list = byId('contacts').sc
-    if (list.kind !== 'list') throw new Error('contacts is not a list')
-    expect(list.steps[0].banner).toBe('Synced 3 contacts from Sage')
-    expect(byId('import-files').benefits).toContain('Works with exports from Odoo, Sage, QuickBooks, SAP and Microsoft Dynamics')
-    expect(JSON.stringify([GROUPS, FEATURES, STAGES, TOUR])).not.toContain('NRS')
+  it('content_noShippedFeatureNamesAnErpOrFirs', () => {
+    const vendor = /\b(Sage|Odoo|QuickBooks|SAP|Dynamics|FIRS)\b/i
+    const shipped = FEATURES.filter((f) => f.status === 'shipped')
+    const liveGroups = GROUPS.filter((g) => g.feats.some((f) => f.status === 'shipped'))
+    expect(shipped.length).toBeGreaterThan(0)
+    expect(liveGroups.length).toBeGreaterThan(0)
+    expect(TOUR.length).toBeGreaterThan(0)
+    for (const f of shipped) expect(JSON.stringify(f), f.id).not.toMatch(vendor)
+    for (const g of liveGroups) expect(`${g.name} ${g.one} ${g.intro}`, g.id).not.toMatch(vendor)
+    for (const t of TOUR) expect(`${t.t} ${t.d}`, t.f).not.toMatch(vendor)
+    const lead = /className="t-lead"[^>]*>([\s\S]*?)<\/p>/.exec(readFileSync(new URL('./components/Home.tsx', import.meta.url), 'utf8'))?.[1] ?? ''
+    expect(lead.length).toBeGreaterThan(0)
+    expect(lead).not.toMatch(vendor)
+    expect(JSON.stringify(byId('erp-connectors'))).toMatch(vendor)
   })
 
-  it('content_marksExactlyTheElevenComingSoonFeatures', () => {
+  it('content_namesNrsNeverFirs', () => {
+    const all = JSON.stringify([GROUPS, FEATURES, STAGES, TOUR])
+    expect(all.length).toBeGreaterThan(0)
+    expect(all).not.toMatch(/\bFIRS\b/)
+    expect(all).toMatch(/\bNRS\b/)
+  })
+
+  it('content_aGroupWithNoShippedFeatureSaysComingSoon', () => {
+    const none = GROUPS.filter((g) => g.feats.every((f) => f.status === 'soon'))
+    expect(none.map((g) => g.id)).toEqual(['clearance', 'notifications'])
+    for (const g of none) {
+      expect(g.one, g.id).toMatch(/coming soon/i)
+      expect(g.intro, g.id).toMatch(/coming soon/i)
+    }
+  })
+
+  it('content_marksExactlyTheFiveComingSoonFeatures', () => {
     const soon = FEATURES.filter((f) => f.status === 'soon').map((f) => f.id).sort()
-    expect(soon).toEqual(['alerts', 'channels', 'company-profile', 'contacts', 'custom-rules', 'erp-connectors',
-      'fiscal-outcomes', 'invite-members', 'learns', 'reports', 'rule-library'])
-    expect(COMING_SOON_IDS).toHaveLength(11)
+    expect(soon).toEqual(['alerts', 'channels', 'erp-connectors', 'fiscal-outcomes', 'submit-clear'])
+    expect(COMING_SOON_IDS).toHaveLength(5)
     for (const id of COMING_SOON_IDS) expect(FEATURES.map((f) => f.id)).toContain(id)
   })
 
-  it('content_marksTheOtherFifteenShipped', () => {
+  it('content_marksTheOtherTwentyOneShipped', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped').map((f) => f.id)
-    expect(shipped).toEqual(['import-files', 'create-invoice', 'invoice-status', 'read-documents', 'review-fields', 'validate',
-      'approval-queue', 'workflow-builder', 'submit-clear', 'overview', 'audit-trail', 'evidence-bundle', 'portfolio',
-      'onboard-client', 'roles'])
+    expect(shipped).toEqual(['import-files', 'create-invoice', 'invoice-status', 'read-documents', 'review-fields', 'learns',
+      'rule-library', 'validate', 'custom-rules', 'approval-queue', 'workflow-builder', 'overview', 'reports', 'audit-trail',
+      'evidence-bundle', 'portfolio', 'onboard-client', 'contacts', 'invite-members', 'roles', 'company-profile'])
     for (const f of FEATURES) expect(['shipped', 'soon']).toContain(f.status)
   })
 
   it('content_shippedFeaturesHaveTheirViewsAppPath', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped')
-    expect(shipped.length).toBeGreaterThan(0)
+    expect(shipped).toHaveLength(21)
     for (const f of shipped) expect(f.path, f.id).toBe(APP_PATHS[f.view])
     expect(byId('overview').path).toBe('/')
     expect(byId('import-files').path).toBe('/create')
     expect(byId('workflow-builder').path).toBe('/workflows')
+    expect(byId('reports').path).toBe('/reports')
+    expect(byId('contacts').path).toBe('/customers')
+    expect(byId('company-profile').path).toBe('/settings')
   })
 
   it('content_comingSoonFeaturesHaveNoPath', () => {
     const soon = FEATURES.filter((f) => f.status === 'soon')
-    expect(soon).toHaveLength(11)
-    expect(byId('reports').view).toBe('reports')
-    expect(byId('contacts').view).toBe('customers')
+    expect(soon).toHaveLength(5)
+    expect(byId('submit-clear').view).toBe('invoices')
+    expect(byId('alerts').view).toBe('settings')
     for (const f of soon) expect('path' in f, f.id).toBe(false)
   })
 
@@ -117,6 +137,12 @@ describe('content', () => {
       expect(t.stage).toBe(stageIds.indexOf(t.g))
     }
     expect(TOUR[6].stage).toBe(-1)
+  })
+
+  it('content_aTourStopSaysComingSoonExactlyWhenItsFeatureIsComingSoon', () => {
+    const says = TOUR.map((t) => /coming soon/i.test(t.t + t.d))
+    TOUR.forEach((t, n) => expect(says[n], t.f).toBe(byId(t.f).status === 'soon'))
+    expect(says.flatMap((v, n) => (v ? [n] : []))).toEqual([4])
   })
 
   it('content_everyStageNamesAGroup', () => {

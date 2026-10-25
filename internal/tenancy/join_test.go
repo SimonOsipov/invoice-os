@@ -2,11 +2,14 @@ package tenancy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -77,7 +80,7 @@ func raceJoins(t *testing.T, w invWorld, user, addr string, ids ...string) []joi
 	ch := make(chan joinResult, len(ids))
 	for _, id := range ids {
 		go func() {
-			tenant, _, _, err := w.store.AcceptInvitationByID(tenantless(user, addr), id)
+			tenant, _, _, err := w.store.AcceptInvitationByID(tenantless(user, addr), id, nil)
 			ch <- joinResult{tenant, err}
 		}()
 	}
@@ -122,7 +125,8 @@ func TestJoin_ListNamesEveryWorkspaceThatInvitedTheAddress(t *testing.T) {
 	// Another address's invite must stay out.
 	mustIssue(t, obi.adminCtx(), obi.store, []string{joinAddr("someone-else")}, "reviewer")
 
-	got, err := obi.store.MyPendingInvitations(tenantless(uuid.NewString(), addr))
+	mine, err := obi.store.MyPendingInvitations(tenantless(uuid.NewString(), addr))
+	got := mine.Invitations
 	if err != nil {
 		t.Fatalf("MyPendingInvitations: %v", err)
 	}
@@ -165,7 +169,8 @@ func TestJoin_ListUsesTheNormalisedHeaderEmail(t *testing.T) {
 
 	padded := " " + strings.ToUpper(addr) + " "
 	before := tr.count()
-	got, err := store.MyPendingInvitations(tenantless(uuid.NewString(), padded))
+	mine, err := store.MyPendingInvitations(tenantless(uuid.NewString(), padded))
+	got := mine.Invitations
 	if err != nil {
 		t.Fatalf("list as %q: %v", padded, err)
 	}
@@ -184,17 +189,23 @@ func TestJoin_ListUsesTheNormalisedHeaderEmail(t *testing.T) {
 	for _, bad := range []string{"not-an-address", "", "   ", "Tunde <" + addr + ">", "a@b@c.test"} {
 		t.Run("list as "+bad, func(t *testing.T) {
 			before := tr.count()
-			got, err := store.MyPendingInvitations(tenantless(uuid.NewString(), bad))
+			mine, err := store.MyPendingInvitations(tenantless(uuid.NewString(), bad))
+			got := mine.Invitations
 			if err != nil || len(got) != 0 || got == nil {
 				t.Errorf("list = %+v, err %v; want a non-nil empty list and no error", got, err)
 			}
-			if n := tr.count() - before; n != 0 {
-				t.Errorf("sent %d statements, want none", n)
+			// Only the removed read runs for a bad address; no invite is queried.
+			tr.mu.Lock()
+			defer tr.mu.Unlock()
+			for _, st := range tr.stmts[before:] {
+				if strings.Contains(st.sql, "pending_invites_for_email") {
+					t.Errorf("sent an invite query for %q: %s", bad, st.sql)
+				}
 			}
 		})
 		t.Run("accept as "+bad, func(t *testing.T) {
 			before := tr.count()
-			_, _, _, err := store.AcceptInvitationByID(tenantless(uuid.NewString(), bad), live.ID)
+			_, _, _, err := store.AcceptInvitationByID(tenantless(uuid.NewString(), bad), live.ID, nil)
 			if !errors.Is(err, ErrInvitationNotValid) {
 				t.Errorf("err = %v, want ErrInvitationNotValid", err)
 			}
@@ -210,7 +221,7 @@ func TestJoin_AcceptByIdJoinsWithTheInvitedRole(t *testing.T) {
 	user := uuid.NewString()
 
 	// An upper-case subject and a padded address: the rows hold the canonical forms.
-	tenant, subject, role, err := w.store.AcceptInvitationByID(tenantless(strings.ToUpper(user), " "+strings.ToUpper(addr)+" "), w.invite.ID)
+	tenant, subject, role, err := w.store.AcceptInvitationByID(tenantless(strings.ToUpper(user), " "+strings.ToUpper(addr)+" "), w.invite.ID, nil)
 	if err != nil {
 		t.Fatalf("AcceptInvitationByID: %v", err)
 	}
@@ -257,12 +268,13 @@ func TestJoin_AnotherAddressInAnyTenantIsNeitherListedNorAccepted(t *testing.T) 
 		t.Run(other, func(t *testing.T) {
 			user := uuid.NewString()
 			ctx := tenantless(user, other)
-			got, err := t1.store.MyPendingInvitations(ctx)
+			mine, err := t1.store.MyPendingInvitations(ctx)
+			got := mine.Invitations
 			if err != nil || len(got) != 0 || got == nil {
 				t.Errorf("list = %+v, err %v; want a non-nil empty list and no error", got, err)
 			}
 			for _, id := range []string{i1.ID, i2.ID, unknown} {
-				if _, _, _, err := t1.store.AcceptInvitationByID(ctx, id); !errors.Is(err, ErrInvitationNotValid) {
+				if _, _, _, err := t1.store.AcceptInvitationByID(ctx, id, nil); !errors.Is(err, ErrInvitationNotValid) {
 					t.Errorf("accept %s: err = %v, want ErrInvitationNotValid", id, err)
 				}
 			}
@@ -278,7 +290,8 @@ func TestJoin_AnotherAddressInAnyTenantIsNeitherListedNorAccepted(t *testing.T) 
 		}
 	}
 	// Control: the addressee sees both, so the empty lists above are not an empty world.
-	got, err := t1.store.MyPendingInvitations(tenantless(uuid.NewString(), addr))
+	mine, err := t1.store.MyPendingInvitations(tenantless(uuid.NewString(), addr))
+	got := mine.Invitations
 	if err != nil || len(got) != 2 {
 		t.Errorf("the addressee's list = %+v, err %v; want both invites", got, err)
 	}
@@ -289,17 +302,19 @@ func TestJoin_ExpiredInviteIsNotListedAndNotAccepted(t *testing.T) {
 	user := uuid.NewString()
 	ctx := tenantless(user, addr)
 
-	got, err := w.store.MyPendingInvitations(ctx)
+	mine, err := w.store.MyPendingInvitations(ctx)
+	got := mine.Invitations
 	if err != nil || len(got) != 1 || got[0].ID != w.invite.ID {
 		t.Fatalf("a live invite lists as %+v, err %v; want exactly it", got, err)
 	}
 	setExpiry(t, w.super, w.invite.ID, time.Now().Add(-time.Second))
 
-	got, err = w.store.MyPendingInvitations(ctx)
+	mine, err = w.store.MyPendingInvitations(ctx)
+	got = mine.Invitations
 	if err != nil || len(got) != 0 {
 		t.Errorf("list after expiry = %+v, err %v; want empty", got, err)
 	}
-	if _, _, _, err := w.store.AcceptInvitationByID(ctx, w.invite.ID); !errors.Is(err, ErrInvitationNotValid) {
+	if _, _, _, err := w.store.AcceptInvitationByID(ctx, w.invite.ID, nil); !errors.Is(err, ErrInvitationNotValid) {
 		t.Errorf("accept after expiry: err = %v, want ErrInvitationNotValid", err)
 	}
 	requireNothingWritten(t, w, user, 0)
@@ -312,7 +327,7 @@ func TestJoin_AMemberGetsAlreadyMember(t *testing.T) {
 	seedIdentityMembership(t, w.super, other.tenant, user, "admin", "suspended", nil, strp(addr))
 	ctx := tenantless(user, addr) // a suspended-only member holds a tenant-less token
 
-	_, _, _, err := w.store.AcceptInvitationByID(ctx, w.invite.ID)
+	_, _, _, err := w.store.AcceptInvitationByID(ctx, w.invite.ID, nil)
 	if !errors.Is(err, ErrAlreadyMember) {
 		t.Fatalf("err = %v, want ErrAlreadyMember", err)
 	}
@@ -321,13 +336,13 @@ func TestJoin_AMemberGetsAlreadyMember(t *testing.T) {
 		t.Errorf("membership changed to %+v", m)
 	}
 
-	if got, err := w.store.MyPendingInvitations(ctx); err != nil || len(got) != 0 {
+	if got, err := w.store.MyPendingInvitations(ctx); err != nil || len(got.Invitations) != 0 {
 		t.Errorf("a suspended member's list = %+v, err %v; want empty", got, err)
 	}
 
 	// A member probing an invite of another address learns nothing: not valid answers before member.
 	probe := tenantless(user, joinAddr("probe"))
-	if _, _, _, err := w.store.AcceptInvitationByID(probe, w.invite.ID); !errors.Is(err, ErrInvitationNotValid) {
+	if _, _, _, err := w.store.AcceptInvitationByID(probe, w.invite.ID, nil); !errors.Is(err, ErrInvitationNotValid) {
 		t.Errorf("a member's probe of another address: err = %v, want ErrInvitationNotValid", err)
 	}
 }
@@ -338,7 +353,7 @@ func TestJoin_AnActiveMemberListsNothing(t *testing.T) {
 	user := uuid.NewString()
 	seedIdentityMembership(t, w.super, other.tenant, user, "admin", "active", nil, strp(addr))
 
-	if got, err := w.store.MyPendingInvitations(tenantless(user, addr)); err != nil || len(got) != 0 {
+	if got, err := w.store.MyPendingInvitations(tenantless(user, addr)); err != nil || len(got.Invitations) != 0 {
 		t.Errorf("an active member's list = %+v, err %v; want empty", got, err)
 	}
 }
@@ -355,7 +370,7 @@ func TestJoin_TenantBearingCallerSendsNoStatement(t *testing.T) {
 	if _, err := store.MyPendingInvitations(bearing); !errors.Is(err, ErrAlreadyMember) {
 		t.Errorf("list: err = %v, want ErrAlreadyMember", err)
 	}
-	if _, _, _, err := store.AcceptInvitationByID(bearing, w.invite.ID); !errors.Is(err, ErrAlreadyMember) {
+	if _, _, _, err := store.AcceptInvitationByID(bearing, w.invite.ID, nil); !errors.Is(err, ErrAlreadyMember) {
 		t.Errorf("accept: err = %v, want ErrAlreadyMember", err)
 	}
 	if n := tr.count() - before; n != 0 {
@@ -365,7 +380,7 @@ func TestJoin_TenantBearingCallerSendsNoStatement(t *testing.T) {
 
 	// Control: the same address as a tenant-less caller reaches the pool.
 	before = tr.count()
-	if got, err := store.MyPendingInvitations(tenantless(uuid.NewString(), addr)); err != nil || len(got) != 1 {
+	if got, err := store.MyPendingInvitations(tenantless(uuid.NewString(), addr)); err != nil || len(got.Invitations) != 1 {
 		t.Fatalf("control list = %+v, err %v; want the invite", got, err)
 	}
 	if tr.count() == before {
@@ -386,7 +401,7 @@ func TestJoin_NoCallerOrANonUuidSubjectSendsNoStatement(t *testing.T) {
 			if _, err := store.MyPendingInvitations(ctx); !errors.Is(err, db.ErrNoTenant) {
 				t.Errorf("list: err = %v, want db.ErrNoTenant", err)
 			}
-			if _, _, _, err := store.AcceptInvitationByID(ctx, w.invite.ID); !errors.Is(err, db.ErrNoTenant) {
+			if _, _, _, err := store.AcceptInvitationByID(ctx, w.invite.ID, nil); !errors.Is(err, db.ErrNoTenant) {
 				t.Errorf("accept: err = %v, want db.ErrNoTenant", err)
 			}
 			if n := tr.count() - before; n != 0 {
@@ -410,7 +425,7 @@ func TestJoin_AFailedAuditRollsTheJoinBack(t *testing.T) {
 	user := uuid.NewString()
 	drop := failAcceptAudit(t, w.super, w.tenant)
 
-	_, _, _, err := w.store.AcceptInvitationByID(tenantless(user, addr), w.invite.ID)
+	_, _, _, err := w.store.AcceptInvitationByID(tenantless(user, addr), w.invite.ID, nil)
 	if err == nil || !strings.Contains(err.Error(), "forced audit failure") {
 		t.Fatalf("err = %v, want the forced audit failure", err)
 	}
@@ -422,7 +437,7 @@ func TestJoin_AFailedAuditRollsTheJoinBack(t *testing.T) {
 	requireNothingWritten(t, w, user, 0)
 
 	drop()
-	if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, addr), w.invite.ID); err != nil {
+	if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, addr), w.invite.ID, nil); err != nil {
 		t.Errorf("accept after the trigger is gone: %v", err)
 	}
 	if got := len(membersOf(t, w.super, user)); got != 1 {
@@ -492,10 +507,10 @@ func TestJoin_TokenLinkAfterJoinByIdIsNoLongerValid(t *testing.T) {
 	user := uuid.NewString()
 	ctx := tenantless(user, addr)
 
-	if _, _, _, err := w.store.AcceptInvitationByID(ctx, w.invite.ID); err != nil {
+	if _, _, _, err := w.store.AcceptInvitationByID(ctx, w.invite.ID, nil); err != nil {
 		t.Fatalf("join by id: %v", err)
 	}
-	if _, _, _, err := w.store.AcceptInvitation(ctx, w.invite.Token); !errors.Is(err, ErrInvitationNotValid) {
+	if _, _, _, err := w.store.AcceptInvitation(ctx, w.invite.Token, nil); !errors.Is(err, ErrInvitationNotValid) {
 		t.Errorf("token accept after a join by id: err = %v, want ErrInvitationNotValid", err)
 	}
 	if got := len(membersOf(t, w.super, user)); got != 1 {
@@ -509,11 +524,11 @@ func TestJoin_JoinByIdAfterTokenLinkIsNoLongerValid(t *testing.T) {
 	user := uuid.NewString()
 	ctx := tenantless(user, addr)
 
-	if _, _, _, err := w.store.AcceptInvitation(ctx, w.invite.Token); err != nil {
+	if _, _, _, err := w.store.AcceptInvitation(ctx, w.invite.Token, nil); err != nil {
 		t.Fatalf("token accept: %v", err)
 	}
 	// Not valid answers before member, though the caller now holds the membership.
-	if _, _, _, err := w.store.AcceptInvitationByID(ctx, w.invite.ID); !errors.Is(err, ErrInvitationNotValid) {
+	if _, _, _, err := w.store.AcceptInvitationByID(ctx, w.invite.ID, nil); !errors.Is(err, ErrInvitationNotValid) {
 		t.Errorf("join by id after a token accept: err = %v, want ErrInvitationNotValid", err)
 	}
 	if got := len(membersOf(t, w.super, user)); got != 1 {
@@ -537,15 +552,15 @@ func TestJoin_RevokedOrAcceptedInviteIsNeitherListedNorAccepted(t *testing.T) {
 			w, addr := newJoinWorld(t, "reviewer")
 			user := uuid.NewString()
 			ctx := tenantless(user, addr)
-			if got, err := w.store.MyPendingInvitations(ctx); err != nil || len(got) != 1 {
+			if got, err := w.store.MyPendingInvitations(ctx); err != nil || len(got.Invitations) != 1 {
 				t.Fatalf("a live invite lists as %+v, err %v; want exactly it", got, err)
 			}
 			setInviteStatus(t, w.super, w.invite.ID, state)
 
-			if got, err := w.store.MyPendingInvitations(ctx); err != nil || len(got) != 0 {
+			if got, err := w.store.MyPendingInvitations(ctx); err != nil || len(got.Invitations) != 0 {
 				t.Errorf("list of a %s invite = %+v, err %v; want empty", state, got, err)
 			}
-			if _, _, _, err := w.store.AcceptInvitationByID(ctx, w.invite.ID); !errors.Is(err, ErrInvitationNotValid) {
+			if _, _, _, err := w.store.AcceptInvitationByID(ctx, w.invite.ID, nil); !errors.Is(err, ErrInvitationNotValid) {
 				t.Errorf("accept of a %s invite: err = %v, want ErrInvitationNotValid", state, err)
 			}
 			if got := len(membersOf(t, w.super, user)); got != 0 {
@@ -565,7 +580,7 @@ func TestJoin_ANonUuidIdSendsNoStatement(t *testing.T) {
 	ctx := tenantless(uuid.NewString(), addr)
 	for _, id := range []string{"", "x", w.invite.ID + "x", "' OR 1=1 --", w.invite.Token} {
 		before := tr.count()
-		if _, _, _, err := store.AcceptInvitationByID(ctx, id); !errors.Is(err, ErrInvitationNotValid) {
+		if _, _, _, err := store.AcceptInvitationByID(ctx, id, nil); !errors.Is(err, ErrInvitationNotValid) {
 			t.Errorf("accept %q: err = %v, want ErrInvitationNotValid", id, err)
 		}
 		if n := tr.count() - before; n != 0 {
@@ -574,7 +589,7 @@ func TestJoin_ANonUuidIdSendsNoStatement(t *testing.T) {
 	}
 	requireStatus(t, w, "pending")
 	before := tr.count()
-	if _, _, _, err := store.AcceptInvitationByID(ctx, w.invite.ID); err != nil {
+	if _, _, _, err := store.AcceptInvitationByID(ctx, w.invite.ID, nil); err != nil {
 		t.Fatalf("control accept: %v", err)
 	}
 	if tr.count() == before {
@@ -590,7 +605,7 @@ func TestJoin_TwoCallersOneInviteJoinOnce(t *testing.T) {
 	for _, u := range users {
 		go func() {
 			<-start
-			tenant, _, _, err := w.store.AcceptInvitationByID(tenantless(u, addr), w.invite.ID)
+			tenant, _, _, err := w.store.AcceptInvitationByID(tenantless(u, addr), w.invite.ID, nil)
 			ch <- joinResult{tenant, err}
 		}()
 	}
@@ -622,10 +637,10 @@ func TestJoin_AuditMatchesTheTokenAccept(t *testing.T) {
 	byID, addrA := newJoinWorld(t, "preparer")
 	byToken, addrB := newJoinWorld(t, "preparer")
 	userA, userB := uuid.NewString(), uuid.NewString()
-	if _, _, _, err := byID.store.AcceptInvitationByID(tenantless(userA, addrA), byID.invite.ID); err != nil {
+	if _, _, _, err := byID.store.AcceptInvitationByID(tenantless(userA, addrA), byID.invite.ID, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := byToken.store.AcceptInvitation(tenantless(userB, addrB), byToken.invite.Token); err != nil {
+	if _, _, _, err := byToken.store.AcceptInvitation(tenantless(userB, addrB), byToken.invite.Token, nil); err != nil {
 		t.Fatal(err)
 	}
 	a, b := acceptedAudits(t, byID.super, byID.tenant), acceptedAudits(t, byToken.super, byToken.tenant)
@@ -701,8 +716,8 @@ func TestJoin_HandlersIgnoreBodyAndQueryAndRefuseAlike(t *testing.T) {
 	requireStatus(t, w, "pending")
 
 	rec := apiDo(mux, atk, http.MethodGet, "/v1/invitations/mine?email="+addr, "")
-	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"invitations":[]}` {
-		t.Errorf("attacker list with a spoofed query = %d %s, want 200 empty", rec.Code, rec.Body)
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"invitations":[],"removed":false}` {
+		t.Errorf("attacker list with a spoofed query = %d %s, want 200 empty, not removed", rec.Code, rec.Body)
 	}
 
 	// Positive controls: the addressee lists and joins; a member and a no-caller request get 409 / 401.
@@ -732,7 +747,7 @@ func TestJoin_AcceptNamesTheInviteNotTheFirstOfTheAddress(t *testing.T) {
 	setExpiry(t, t1.super, i2.ID, time.Now().Add(48*time.Hour))
 	user := uuid.NewString()
 
-	tenant, _, role, err := t1.store.AcceptInvitationByID(tenantless(user, addr), i2.ID)
+	tenant, _, role, err := t1.store.AcceptInvitationByID(tenantless(user, addr), i2.ID, nil)
 	if err != nil {
 		t.Fatalf("accept: %v", err)
 	}
@@ -754,7 +769,7 @@ func TestAccept_ByIDCopiesAllClients(t *testing.T) {
 		setInviteClients(t, w.super, w.tenant, w.invite.ID, true)
 		user := uuid.NewString()
 
-		if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, addr), w.invite.ID); err != nil {
+		if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, addr), w.invite.ID, nil); err != nil {
 			t.Fatalf("AcceptInvitationByID: %v", err)
 		}
 		w.requireStored(t, "the new member", user, true)
@@ -766,7 +781,7 @@ func TestAccept_ByIDCopiesAllClients(t *testing.T) {
 		setInviteClients(t, w.super, w.tenant, w.invite.ID, false, e2, e1)
 		user := uuid.NewString()
 
-		if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, addr), w.invite.ID); err != nil {
+		if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, addr), w.invite.ID, nil); err != nil {
 			t.Fatalf("AcceptInvitationByID: %v", err)
 		}
 		w.requireStored(t, "the new member", user, false, e1, e2)
@@ -776,10 +791,304 @@ func TestAccept_ByIDCopiesAllClients(t *testing.T) {
 		w, addr := newJoinWorld(t, "preparer")
 		user := uuid.NewString()
 
-		if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, addr), w.invite.ID); err != nil {
+		if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, addr), w.invite.ID, nil); err != nil {
 			t.Fatalf("AcceptInvitationByID: %v", err)
 		}
 		w.requireStored(t, "the new member", user, false)
 		requireAccess(t, "list as admin", w.listAs(t, w.admin)[user], "[]")
 	})
+}
+
+func TestAcceptInvitationByID_StoresTheName(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	user := uuid.NewString()
+
+	if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, addr), w.invite.ID, strp("Ada Obi")); err != nil {
+		t.Fatalf("AcceptInvitationByID: %v", err)
+	}
+	rows := membersOf(t, w.super, user)
+	if len(rows) != 1 || rows[0].DisplayName == nil || *rows[0].DisplayName != "Ada Obi" {
+		t.Errorf("memberships = %+v, want one with display_name %q", rows, "Ada Obi")
+	}
+
+	// No name stores NULL: the name above is not a default.
+	w2, addr2 := newJoinWorld(t, "reviewer")
+	user2 := uuid.NewString()
+	if _, _, _, err := w2.store.AcceptInvitationByID(tenantless(user2, addr2), w2.invite.ID, nil); err != nil {
+		t.Fatalf("AcceptInvitationByID without a name: %v", err)
+	}
+	if rows := membersOf(t, w2.super, user2); len(rows) != 1 || rows[0].DisplayName != nil {
+		t.Errorf("memberships = %+v, want one with a NULL display_name", rows)
+	}
+}
+
+// removedMemberReinvited is a member of w removed by an admin and invited again to addr.
+func removedMemberReinvited(t *testing.T) (w invWorld, user, addr string, invite IssuedInvite) {
+	t.Helper()
+	addr = joinAddr("tunde")
+	w = newInvWorld(t, "Obi Partners", "Ada Obi")
+	user = w.addMember(t, "preparer", "active", "Old Name")
+	if _, err := w.store.RemoveMember(w.adminCtx(), user); err != nil {
+		t.Fatalf("remove the member: %v", err)
+	}
+	invite = mustIssue(t, w.adminCtx(), w.store, []string{addr}, "reviewer")[0]
+	return w, user, addr, invite
+}
+
+func TestAcceptInvitationByID_RevivesARemovedMember(t *testing.T) {
+	w, user, addr, invite := removedMemberReinvited(t)
+	var rowID string
+	var created time.Time
+	if err := w.super.QueryRow(context.Background(), `SELECT id::text, created_at FROM memberships WHERE tenant_id = $1 AND user_id = $2`,
+		w.tenant, user).Scan(&rowID, &created); err != nil {
+		t.Fatalf("read the removed row: %v", err)
+	}
+
+	if _, _, role, err := w.store.AcceptInvitationByID(tenantless(user, addr), invite.ID, strp("New Name")); err != nil || role != "reviewer" {
+		t.Fatalf("AcceptInvitationByID: role %q, err %v; want reviewer and no error", role, err)
+	}
+
+	rows := membersOf(t, w.super, user)
+	if len(rows) != 1 {
+		t.Fatalf("memberships = %+v, want exactly one (the row is revived, not duplicated)", rows)
+	}
+	m := rows[0]
+	if m.Status != "active" || m.Role != "reviewer" || m.Email == nil || *m.Email != addr {
+		t.Errorf("revived row = %+v, want active, the invite's role and email", m)
+	}
+	if m.DisplayName == nil || *m.DisplayName != "New Name" {
+		t.Errorf("display_name = %s, want the name given at accept", orNil(m.DisplayName))
+	}
+	var sameRow bool
+	if err := w.super.QueryRow(context.Background(),
+		`SELECT id::text = $3 AND created_at > $4 FROM memberships WHERE tenant_id = $1 AND user_id = $2`,
+		w.tenant, user, rowID, created).Scan(&sameRow); err != nil || !sameRow {
+		t.Errorf("revived row kept its id and advanced created_at = %v (err %v), want true", sameRow, err)
+	}
+}
+
+func TestAcceptInvitation_RevivesARemovedMember(t *testing.T) {
+	w, user, addr, invite := removedMemberReinvited(t)
+
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, addr), invite.Token, strp("New Name")); err != nil {
+		t.Fatalf("AcceptInvitation: %v", err)
+	}
+	rows := membersOf(t, w.super, user)
+	if len(rows) != 1 || rows[0].Status != "active" || rows[0].DisplayName == nil || *rows[0].DisplayName != "New Name" {
+		t.Errorf("memberships = %+v, want one active row named by the accept", rows)
+	}
+}
+
+// seedRemovedElsewhere gives user a removed row in a tenant of its own.
+func seedRemovedElsewhere(t *testing.T, user string) {
+	t.Helper()
+	x := newInvWorld(t, "Left Behind", "Chi Okoro")
+	seedIdentityMembership(t, x.super, x.tenant, user, "preparer", "removed", strp("Old Name"), nil)
+}
+
+func TestMyPendingInvitations_NamesARemovedMembership(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	user := uuid.NewString()
+	seedRemovedElsewhere(t, user)
+
+	got, err := w.store.MyPendingInvitations(tenantless(user, addr))
+	if err != nil {
+		t.Fatalf("MyPendingInvitations: %v", err)
+	}
+	if !got.Removed {
+		t.Errorf("Removed = false, want true for a caller holding a removed row")
+	}
+	if len(got.Invitations) != 1 || got.Invitations[0].ID != w.invite.ID {
+		t.Errorf("invitations = %+v, want exactly the live invite", got.Invitations)
+	}
+}
+
+func TestMyPendingInvitations_RemovedWithNoInvites(t *testing.T) {
+	w, _ := newJoinWorld(t, "reviewer")
+	user := uuid.NewString()
+	seedRemovedElsewhere(t, user)
+
+	got, err := w.store.MyPendingInvitations(tenantless(user, joinAddr("nobody-invited-me")))
+	if err != nil {
+		t.Fatalf("MyPendingInvitations: %v", err)
+	}
+	if !got.Removed || got.Invitations == nil || len(got.Invitations) != 0 {
+		t.Errorf("answer = %+v, want Removed with a non-nil empty list", got)
+	}
+}
+
+func TestMyPendingInvitations_EmptyEmailStillReadsRemoved(t *testing.T) {
+	w, _ := newJoinWorld(t, "reviewer")
+	for _, email := range []string{"", "not an address"} {
+		t.Run("email "+email, func(t *testing.T) {
+			user := uuid.NewString()
+			seedRemovedElsewhere(t, user)
+			got, err := w.store.MyPendingInvitations(tenantless(user, email))
+			if err != nil {
+				t.Fatalf("MyPendingInvitations: %v", err)
+			}
+			if !got.Removed || got.Invitations == nil || len(got.Invitations) != 0 {
+				t.Errorf("answer = %+v, want Removed with a non-nil empty list", got)
+			}
+		})
+	}
+}
+
+func TestMyPendingInvitations_RemovedFlagOffWhileAnotherMembershipLives(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	other := newInvWorld(t, "Elsewhere", "Chi Okoro")
+	for _, status := range []string{"suspended", "invited"} {
+		t.Run(status, func(t *testing.T) {
+			user := uuid.NewString()
+			seedRemovedElsewhere(t, user)
+			seedIdentityMembership(t, other.super, other.tenant, user, "preparer", status, strp("Ada"), nil)
+			got, err := w.store.MyPendingInvitations(tenantless(user, addr))
+			if err != nil {
+				t.Fatalf("MyPendingInvitations: %v", err)
+			}
+			if got.Removed {
+				t.Errorf("Removed = true with a %s membership elsewhere, want false", status)
+			}
+		})
+	}
+}
+
+func TestMyPendingInvitations_FreshAccountIsNotRemoved(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	other := newInvWorld(t, "Elsewhere", "Chi Okoro")
+
+	// Only a removed row sets the flag: no row, a suspended row and an invited row do not.
+	for _, status := range []string{"", "suspended", "invited"} {
+		t.Run("history "+status, func(t *testing.T) {
+			user := uuid.NewString()
+			if status != "" {
+				seedIdentityMembership(t, other.super, other.tenant, user, "preparer", status, strp("Old Name"), nil)
+			}
+			got, err := w.store.MyPendingInvitations(tenantless(user, addr))
+			if err != nil {
+				t.Fatalf("MyPendingInvitations: %v", err)
+			}
+			if got.Removed {
+				t.Errorf("Removed = true for history %q, want false", status)
+			}
+			// A suspended or invited row hides the invite (it is a membership); a fresh account sees it.
+			if wantInvites := status == ""; (len(got.Invitations) == 1) != wantInvites {
+				t.Errorf("invitations = %+v for history %q", got.Invitations, status)
+			}
+		})
+	}
+
+	// The same caller flips to true once a removed row exists, so the false above is read, not constant.
+	user := uuid.NewString()
+	if got, err := w.store.MyPendingInvitations(tenantless(user, addr)); err != nil || got.Removed {
+		t.Fatalf("before removal: %+v, err %v; want Removed false", got, err)
+	}
+	seedRemovedElsewhere(t, user)
+	if got, err := w.store.MyPendingInvitations(tenantless(user, addr)); err != nil || !got.Removed {
+		t.Errorf("after removal: %+v, err %v; want Removed true", got, err)
+	}
+}
+
+// realAcceptMux serves the three join routes over the real store.
+func realAcceptMux(s *Store) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/invitations/mine", InvitationsMineHandler(s.MyPendingInvitations, nil))
+	mux.HandleFunc("POST /v1/invitations/accept", AcceptInvitationHandler(s.AcceptInvitation, nil))
+	mux.HandleFunc("POST /v1/invitations/{id}/accept", AcceptInvitationByIDHandler(s.AcceptInvitationByID, nil))
+	return mux
+}
+
+func TestMyPendingInvitations_RemovedIsReadFromTheVerifiedSubjectOnly(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	mux := realAcceptMux(w.store)
+	removed, clean := uuid.NewString(), uuid.NewString()
+	seedRemovedElsewhere(t, removed)
+
+	get := func(subject, other, claim, target string) string {
+		req := httptest.NewRequestWithContext(tenantless(subject, addr), http.MethodGet, target, strings.NewReader(`{"removed":`+claim+`,"subject":"`+other+`"}`))
+		req.Header.Set("X-User-Id", other)
+		req.Header.Set("X-User-Subject", other)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d %s, want 200", target, rec.Code, rec.Body)
+		}
+		return rec.Body.String()
+	}
+	// A clean caller naming the removed person in every channel still reads false; the removed caller denying it still reads true.
+	if got := get(clean, removed, "true", "/v1/invitations/mine?subject="+removed+"&user_id="+removed+"&removed=true"); !strings.Contains(got, `"removed":false`) {
+		t.Errorf("clean caller with spoofed channels = %s, want removed false", got)
+	}
+	if got := get(removed, clean, "false", "/v1/invitations/mine?subject="+clean+"&user_id="+clean+"&removed=false"); !strings.Contains(got, `"removed":true`) {
+		t.Errorf("removed caller with spoofed channels = %s, want removed true", got)
+	}
+}
+
+func TestAcceptHandlers_OldClientBodiesStillJoinWithNoName(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		req  func(w acceptWorld) (path, body string)
+	}{
+		{"by id, no body", func(w acceptWorld) (string, string) { return "/v1/invitations/" + w.invite.ID + "/accept", "" }},
+		{"by id, empty object", func(w acceptWorld) (string, string) { return "/v1/invitations/" + w.invite.ID + "/accept", `{}` }},
+		{"token, no display_name", func(w acceptWorld) (string, string) {
+			return "/v1/invitations/accept", `{"token":"` + w.invite.Token + `"}`
+		}},
+		{"token, null display_name", func(w acceptWorld) (string, string) {
+			return "/v1/invitations/accept", `{"token":"` + w.invite.Token + `","display_name":null}`
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w, addr := newJoinWorld(t, "reviewer")
+			mux, user := realAcceptMux(w.store), uuid.NewString()
+			path, body := c.req(w)
+			if rec := apiDo(mux, tenantless(user, addr), http.MethodPost, path, body); rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+			}
+			rows := membersOf(t, w.super, user)
+			if len(rows) != 1 || rows[0].Status != "active" || rows[0].DisplayName != nil {
+				t.Errorf("memberships = %+v, want one active row with a NULL display_name", rows)
+			}
+		})
+	}
+}
+
+func TestAcceptHandlers_ABadNameWritesNothingAndTheNamesAtTheBoundsAreStored(t *testing.T) {
+	four := strings.Repeat("😀", 200)
+	for _, c := range []struct {
+		name, good string
+		post       func(w acceptWorld, name string) (path, body string)
+	}{
+		{"token", four, func(w acceptWorld, name string) (string, string) {
+			b, _ := json.Marshal(map[string]string{"token": w.invite.Token, "display_name": name})
+			return "/v1/invitations/accept", string(b)
+		}},
+		{"by id", "a", func(w acceptWorld, name string) (string, string) {
+			b, _ := json.Marshal(map[string]string{"display_name": name})
+			return "/v1/invitations/" + w.invite.ID + "/accept", string(b)
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w, addr := newJoinWorld(t, "reviewer")
+			mux, user := realAcceptMux(w.store), uuid.NewString()
+			for _, bad := range []string{"   ", "\t \n", strings.Repeat("é", 201), strings.Repeat("😀", 201), "a\x00b", "\x00"} {
+				path, body := c.post(w, bad)
+				if rec := apiDo(mux, tenantless(user, addr), http.MethodPost, path, body); rec.Code != http.StatusBadRequest {
+					t.Errorf("name of %d runes: status %d, want 400: %s", utf8.RuneCountInString(bad), rec.Code, rec.Body)
+				}
+			}
+			if rows := membersOf(t, w.super, user); len(rows) != 0 {
+				t.Errorf("memberships after refused names = %+v, want none", rows)
+			}
+			requireStatus(t, w, "pending")
+
+			path, body := c.post(w, c.good)
+			if rec := apiDo(mux, tenantless(user, addr), http.MethodPost, path, body); rec.Code != http.StatusOK {
+				t.Fatalf("name of %d runes: status %d, want 200: %s", utf8.RuneCountInString(c.good), rec.Code, rec.Body)
+			}
+			if rows := membersOf(t, w.super, user); len(rows) != 1 || rows[0].DisplayName == nil || *rows[0].DisplayName != c.good {
+				t.Errorf("memberships = %+v, want one stored with the %d-rune name", rows, utf8.RuneCountInString(c.good))
+			}
+		})
+	}
 }

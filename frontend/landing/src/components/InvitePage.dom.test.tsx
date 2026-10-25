@@ -16,7 +16,7 @@ const PREVIEW_URL = 'https://gw.x/auth/invitation'
 const REGISTER_URL = 'https://gw.x/auth/invitation/register'
 const RESEND_URL = 'https://gw.x/auth/invitation/resend'
 const RESET_URL = 'https://gw.x/auth/request-password-reset'
-const SIGN_IN_HREF = `https://app.x?auth=start#invite=${T}`
+const SIGN_IN_HREF = `https://app.x?auth=start#invite=${T}&name=Ada`
 
 // D16 copy, pinned here and not imported: a wording change is a deliberate edit.
 const INVALID_HEADING = 'This invite is no longer valid'
@@ -160,6 +160,17 @@ async function click(el: HTMLElement): Promise<void> {
   await act(async () => el.click())
 }
 
+const nameInput = () => container.querySelector<HTMLInputElement>('[data-testid="invite-name"]')
+
+async function typeName(value: string): Promise<void> {
+  const input = nameInput()
+  expect(input, 'expected the name input').not.toBeNull()
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+    input!.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
 function labelled(label: string): HTMLInputElement {
   const l = Array.from(container.querySelectorAll('label')).find((x) => x.textContent?.trim() === label)
   expect(l, `expected a label "${label}"`).toBeDefined()
@@ -231,6 +242,7 @@ describe('the ready view', () => {
     await mount()
     expect(assigned, 'control: nothing navigates before the click').toEqual([])
 
+    await typeName('Ada')
     await click(button('Sign in'))
 
     expect(assigned).toEqual([SIGN_IN_HREF])
@@ -241,6 +253,7 @@ describe('the ready view', () => {
     vi.stubEnv('VITE_APP_URL', '')
     stubFetch()
     await mount()
+    await typeName('Ada')
     await click(button('Sign in'))
     expect(assigned, 'no href write').toEqual([])
   })
@@ -491,6 +504,7 @@ describe('the sent view', () => {
     expect(region, 'the live region is in the DOM before the click').not.toBeNull()
     expect(region!.textContent).toBe('')
 
+    await typeName('Ada')
     const resend = button('Send the link again')
     expect(resend.className).toBe('ds-btn ds-btn--outline ds-btn--md')
     await click(resend)
@@ -502,7 +516,7 @@ describe('the sent view', () => {
     expect(bodyOf(posts[0] as [string, RequestInit])).toStrictEqual({ token: T })
     expect(resend.disabled).toBe(true)
     expect(resend.textContent?.trim()).toBe('Sending…')
-    expect(button('Sign in').disabled, 'Sign in stays enabled').toBe(false)
+    expect(button('Sign in').disabled, 'a named Sign in stays enabled while sending').toBe(false)
 
     await act(async () => finish())
     await settle()
@@ -554,13 +568,14 @@ describe('the sent view', () => {
     await toSentView()
     expect(text()).toContain(`link to confirm the address and choose your password is on its way to ${ADDRESS}`)
     expect(text()).not.toContain('confirmation link')
-    expect(container.querySelectorAll('input'), 'the sent view holds no field').toHaveLength(0)
+    expect(Array.from(container.querySelectorAll('input'), (i) => i.id), 'the sent view holds only the name').toEqual(['inv-name'])
   })
 
   it('invitePage_sentViewSignInCarriesTheInviteToTheApp', async () => {
     await toSentView()
     expect(assigned).toEqual([])
 
+    await typeName('Ada')
     await click(button('Sign in'))
 
     expect(assigned).toEqual([SIGN_IN_HREF])
@@ -589,6 +604,7 @@ describe('the account-exists views', () => {
     await toView('confirmed')
     expect(assigned).toEqual([])
 
+    await typeName('Ada')
     await click(button('Sign in'))
 
     expect(assigned).toEqual([SIGN_IN_HREF])
@@ -709,7 +725,7 @@ describe('the account-exists views', () => {
     await submit()
 
     expect(container.querySelector('p')!.textContent).toBe(expected)
-    expect(container.querySelectorAll('input').length, 'no password field is rendered').toBe(0)
+    expect(Array.from(container.querySelectorAll('input'), (i) => i.type), 'no password field is rendered').toEqual(['text'])
     expect(alerts()).toEqual([])
   })
 
@@ -741,6 +757,7 @@ describe('the account-exists views', () => {
     await toRegisterView()
     await submit()
 
+    await typeName('Ada')
     await click(button('Sign in'))
 
     expect(assigned).toEqual([SIGN_IN_HREF])
@@ -1089,5 +1106,82 @@ describe('long values', () => {
     const holding = textElementsHolding(LONG_ADDRESS)
     if (account === 'confirmed') for (const e of textElementsHolding(LONG_WORKSPACE)) holding.push(e)
     for (const e of holding) expect(e.style.overflowWrap, e.tagName).toBe('anywhere')
+  })
+})
+
+describe('the name before Sign in', () => {
+  const VIEWS: [string, () => Promise<void>][] = [
+    ['ready', async () => void (stubFetch(), await mount())],
+    ['exists', async () => void (stubFetch({ preview: previewOk({ account: 'confirmed' }) }), await mount())],
+    ['unconfirmed', async () => void (stubFetch({ preview: previewOk({ account: 'unconfirmed' }) }), await mount())],
+    [
+      'sent',
+      async () => {
+        stubFetch({ register: () => json(200, {}) })
+        await mount()
+        await toRegisterView()
+        await submit()
+      },
+    ],
+  ]
+
+  it('InvitePage: Sign in waits for a name', async () => {
+    stubFetch({ preview: previewOk({ account: 'confirmed' }) })
+    await mount()
+    expect(button('Sign in').disabled, 'blank').toBe(true)
+    await typeName('   ')
+    expect(button('Sign in').disabled, 'spaces only').toBe(true)
+    await typeName('Ada')
+    expect(button('Sign in').disabled, 'Ada').toBe(false)
+    await typeName('a'.repeat(200))
+    expect(button('Sign in').disabled, '200 characters').toBe(false)
+    await typeName('a'.repeat(201))
+    expect(button('Sign in').disabled, '201 characters').toBe(true)
+    await typeName('Ada\0')
+    expect(button('Sign in').disabled, 'a NUL byte (checkName, internal/tenancy/tenancy.go)').toBe(true)
+  })
+
+  it.each(VIEWS)('InvitePage: every Sign in view asks the name (%s)', async (_view, open) => {
+    await open()
+    const input = nameInput()
+    expect(input, 'the name input').not.toBeNull()
+    expect(labelled('Your name')).toBe(input)
+    expect(input!.id).toBe('inv-name')
+    expect(input!.compareDocumentPosition(button('Sign in')) & Node.DOCUMENT_POSITION_FOLLOWING, 'above Sign in').toBeTruthy()
+    expect(container.querySelectorAll('[data-testid="invite-name"]')).toHaveLength(1)
+  })
+
+  it('InvitePage: Sign in leaves with the name', async () => {
+    stubFetch({ preview: previewOk({ account: 'confirmed' }) })
+    await mount()
+    await typeName(' Ada & Obi#1=2 ')
+    await click(button('Sign in'))
+    const url = new URL(assigned[0])
+    expect(url.search).toBe('?auth=start')
+    expect(new URLSearchParams(url.hash.slice(1)).get('name')).toBe('Ada & Obi#1=2')
+  })
+
+  it('InvitePage: the typed name reaches no console call and no analytics event', async () => {
+    const gtag = vi.fn()
+    vi.stubGlobal('gtag', gtag)
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}))
+    stubFetch({ preview: previewOk({ account: 'confirmed' }) })
+    await mount()
+    await typeName('Zed Qwerty')
+    await click(button('Sign in'))
+    expect(assigned, 'control: Sign in left').toHaveLength(1)
+    const seen = JSON.stringify([...spies.flatMap((s) => s.mock.calls), ...gtag.mock.calls])
+    expect(seen).not.toContain('Zed')
+    expect(seen).not.toContain('Qwerty')
+    vi.unstubAllGlobals()
+  })
+
+  it('InvitePage: the register form asks no name', async () => {
+    const fetchMock = stubFetch({ register: () => json(200, {}) })
+    await mount()
+    await toRegisterView()
+    expect(nameInput()).toBeNull()
+    await submit()
+    expect(bodyOf(callsTo(fetchMock, REGISTER_URL)[0] as [string, RequestInit])).toStrictEqual({ token: T })
   })
 })

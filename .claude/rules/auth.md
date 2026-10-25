@@ -114,9 +114,10 @@ paths:
 - Reject a token whose `staff` is not a boolean.
 - Accept an invite only for the account whose verified email equals the invited address.
 - Answer a join with 404 `this invite is no longer valid` for every unusable invite. Never tell the cases apart.
-- Answer a join with 409 `you already belong to a workspace` for a caller who holds a membership of any status.
+- Answer a join with 409 `you already belong to a workspace` for a caller who holds a membership that is not `removed`.
 - Keep the live stored session over a verify hand-off code. Show the confirmed notice and post no exchange.
 - Offer the invites from `GET /api/tenancy/v1/invitations/mine` when `/me` answers 403 and no invite is held.
+- Show a caller whose list is empty and whose `removed` is true the app's no-workspace screen. Provision for them only when they press Create a workspace.
 - Set an invitee's password only after proof of the invited mailbox: the confirmation mail's set-password page.
 - Sign up an invite-link registration with a random password. Never store, log or return it.
 - Create no account on register for an address with a pending invite. Answer it as any other register.

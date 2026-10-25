@@ -50,6 +50,10 @@ let membershipCalls = 0
 // The PUT .../clients answer: a row to return, or a status to refuse with.
 let clientsPut: { calls: Array<{ url: string; body: unknown }>; answer: () => { status: number; body: unknown } } = { calls: [], answer: () => ({ status: 200, body: {} }) }
 
+// The POST .../remove calls and answer, and the count of workflow-roles GETs.
+let removePost: { calls: string[]; answer: () => { status: number; body: unknown } } = { calls: [], answer: () => ({ status: 200, body: {} }) }
+let rolesGets = 0
+
 function stubGateway() {
   vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
   vi.stubGlobal(
@@ -61,6 +65,12 @@ function stubGateway() {
         const { status, body } = clientsPut.answer()
         return Promise.resolve({ ok: status < 400, status, statusText: '', json: () => Promise.resolve(body) })
       }
+      if (url.endsWith('/remove')) {
+        removePost.calls.push(url)
+        const { status, body } = removePost.answer()
+        return Promise.resolve({ ok: status < 400, status, statusText: '', json: () => Promise.resolve(body) })
+      }
+      if (url.includes('/workflow-roles')) rolesGets++
       if (url.includes('/api/tenancy/v1/memberships')) {
         membershipCalls++
         return new Promise((resolve) => membershipReplies.push((list) => resolve(reply({ memberships: list }))))
@@ -90,6 +100,8 @@ beforeEach(() => {
   membershipReplies = []
   membershipCalls = 0
   clientsPut = { calls: [], answer: () => ({ status: 200, body: {} }) }
+  removePost = { calls: [], answer: () => ({ status: 200, body: {} }) }
+  rolesGets = 0
   vi.stubGlobal('localStorage', createMemoryStorage())
   window.history.replaceState(null, '', '/')
 })
@@ -154,5 +166,28 @@ describe('App: the members mirror', () => {
       await expect(ctx().setMemberClients('u2', 'all')).rejects.toBeTruthy()
     })
     expect(ctx().members.find((m) => m.id === 'u2')?.clientAccess, 'a refusal rolls nothing in').toEqual(['e1', 'e2'])
+  })
+
+  it('App: removeMember posts the remove, the mirror takes the removed row and roles refetch; a refusal leaves both', async () => {
+    await boot()
+    await waitFor(() => expect(membershipCalls).toBe(1))
+    await answer(0, [wire('u1'), wire('u2', { role: 'preparer' })])
+    await waitFor(() => expect(rolesGets).toBeGreaterThan(0))
+    const before = rolesGets
+
+    removePost.answer = () => ({ status: 409, body: { error: 'nope' } })
+    await act(async () => {
+      await expect(ctx().removeMember('u2')).rejects.toBeTruthy()
+    })
+    expect(ctx().members.find((m) => m.id === 'u2')?.status, 'a refusal rolls nothing in').toBe('active')
+    expect(rolesGets, 'a refusal refetches no roles').toBe(before)
+
+    removePost.answer = () => ({ status: 200, body: wire('u2', { role: 'preparer', status: 'removed', display_name: null, email: null }) })
+    await act(async () => ctx().removeMember('u2'))
+    expect(removePost.calls).toEqual([`${GATEWAY}/api/tenancy/v1/memberships/u2/remove`, `${GATEWAY}/api/tenancy/v1/memberships/u2/remove`])
+    const gone = ctx().members.find((m) => m.id === 'u2')
+    expect([gone?.status, gone?.name, gone?.email]).toEqual(['removed', 'Deleted member', null])
+    expect(ctx().members.find((m) => m.id === 'u1')?.status, 'the other row is untouched').toBe('active')
+    await waitFor(() => expect(rolesGets).toBe(before + 1))
   })
 })

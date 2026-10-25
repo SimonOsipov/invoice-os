@@ -18,7 +18,7 @@ export interface StaffTenant {
 export interface StaffMember {
   user_id: string
   role: string
-  status: 'active' | 'invited' | 'suspended'
+  status: 'active' | 'invited' | 'suspended' | 'removed'
   display_name: string | null
   email: string | null
 }
@@ -48,7 +48,9 @@ export const filterTenants = (list: StaffTenant[], query: string): StaffTenant[]
 }
 
 // Mirrors the server's actor fallback (internal/actor/actor.go); '' falls through like null.
-export const memberName = (m: Pick<StaffMember, 'display_name' | 'email' | 'user_id'>): string => m.display_name || m.email || m.user_id
+// A removed row never shows email or id: its name is display_name or "Deleted member".
+export const memberName = (m: Pick<StaffMember, 'display_name' | 'email' | 'user_id' | 'status'>): string =>
+  m.status === 'removed' ? m.display_name || 'Deleted member' : m.display_name || m.email || m.user_id
 
 export const kindLabel = (kind: string): string => (kind === 'firm' ? 'FIRM' : kind === 'in_house' ? 'IN-HOUSE' : kind.toUpperCase())
 

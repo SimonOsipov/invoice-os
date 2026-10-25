@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ApiError } from '@invoice-os/api-client/client'
-import { ROLE_LABELS, inviteResendHeld, inviteResendSent, inviteSignInUrl, previewInvitation, registerInvitee, resendInvitee, type InvitationPreview, type ResendOutcome } from '../invite'
+import { ROLE_LABELS, inviteResendHeld, inviteNameValid, inviteResendSent, inviteSignInUrl, previewInvitation, registerInvitee, resendInvitee, type InvitationPreview, type ResendOutcome } from '../invite'
 import { registerOutcome, registrationOpen } from '../register'
 import { RESET_SENT, requestPasswordReset } from '../passwordReset'
 import { DEMO_FORM_CSS } from './DemoLeadForm'
@@ -29,6 +29,7 @@ export function InvitePage({ token }: { token: string | null }) {
   const [invite, setInvite] = useState<InvitationPreview>()
   const [formError, setFormError] = useState<string>()
   const [submitting, setSubmitting] = useState(false)
+  const [name, setName] = useState('')
   // A refusal moves the page to the view that has a way forward; the view effect below drops the failed note the rethrow leaves.
   const sendInvite = async (): Promise<{ outcome: ResendOutcome }> => {
     try {
@@ -62,7 +63,7 @@ export function InvitePage({ token }: { token: string | null }) {
   const resendText = (email: string) => (note?.outcome === 'held' ? inviteResendHeld(email) : note?.outcome === 'sent' ? inviteResendSent(email) : undefined)
 
   const signIn = () => {
-    const url = inviteSignInUrl(token)
+    const url = inviteSignInUrl(token, name)
     if (url) window.location.href = url
   }
 
@@ -88,9 +89,25 @@ export function InvitePage({ token }: { token: string | null }) {
   }
 
   const signInButton = (
-    <button type="button" onClick={signIn} className="ds-btn ds-btn--outline ds-btn--md" style={{ width: '100%', marginTop: 10 }}>
-      Sign in
-    </button>
+    <>
+      <div style={{ marginTop: 18 }}>
+        <label htmlFor="inv-name" className="label" style={{ display: 'block', marginBottom: 6 }}>Your name</label>
+        <input
+          id="inv-name"
+          data-testid="invite-name"
+          type="text"
+          className="dm-input"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          autoComplete="name"
+          aria-required="true"
+          style={FIELD_STYLE}
+        />
+      </div>
+      <button type="button" onClick={signIn} disabled={!inviteNameValid(name)} className="ds-btn ds-btn--outline ds-btn--md" style={{ width: '100%', marginTop: 10 }}>
+        Sign in
+      </button>
+    </>
   )
 
   let body

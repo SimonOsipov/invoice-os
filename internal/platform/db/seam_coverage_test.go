@@ -724,7 +724,8 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/staffjobs/store.go", fn: "Redrive"},                                   // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
 	{file: "internal/staffjobs/store.go", fn: "Cancel"},                                    // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
 	{file: "internal/tenancy/store.go", fn: "Me"},                                          // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
-	{file: "internal/tenancy/store.go", fn: "ProvisionWorkspace"},                          // the caller has no membership yet; the seam would refuse before the closure
+	{file: "internal/tenancy/store.go", fn: "provisionAttempt"},                            // ProvisionWorkspace's write; the caller has no membership yet, so the seam would refuse before the closure
+	{file: "internal/tenancy/store.go", fn: "holdsRemovedRow"},                             // ProvisionWorkspace's retry probe: the caller's removed row in the derived tenant
 	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},                           // the token is the only credential and names the invite; there is no caller to gate
 	{file: "internal/tenancy/store.go", fn: "AcceptInvitation"},                            // the invitee has no membership in the invite's tenant yet; the seam would refuse before the closure
 	{file: "internal/tenancy/store.go", fn: "acceptInTenant"},                              // the shared tail of AcceptInvitation and AcceptInvitationByID, same reason
@@ -1054,6 +1055,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"PATCH /v1/entities/{id}":                             {verdict: scCovered},
 	"PATCH /v1/invoices/{id}":                             {verdict: scCovered},
 	"PATCH /v1/memberships/{user_id}":                     {verdict: scCovered},
+	"POST /v1/memberships/{user_id}/remove":               {verdict: scCovered},
 	"PUT /v1/memberships/{user_id}/clients":               {verdict: scCovered},
 	"GET /v1/staff/health":                                {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/tenants":                               {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
@@ -3243,6 +3245,10 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AuditMatchesTheTokenAccept"},                                              // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_HandlersIgnoreBodyAndQueryAndRefuseAlike"},                                // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AcceptNamesTheInviteNotTheFirstOfTheAddress"},                             // the invitee holds no membership before joining
+	{file: "internal/tenancy/accept_test.go", fn: "TestAcceptInvitation_StoresTheTrimmedName"},                                      // the invitee holds no membership before joining
+	{file: "internal/tenancy/accept_test.go", fn: "TestAcceptInvitation_NoNameStoresNull"},                                          // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestAcceptInvitationByID_StoresTheName"},                                           // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestMyPendingInvitations_FreshAccountIsNotRemoved"},                                // the invitee holds no membership before joining
 }
 
 // scSweepTestFiles returns every _test.go file under internal/ (repo-relative,

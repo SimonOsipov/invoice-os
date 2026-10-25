@@ -282,6 +282,9 @@ func TestEnqueueErasure_RefusesBadInput(t *testing.T) {
 			t.Fatal(err)
 		}
 		err = EnqueueErasure(ctx, tx, r.e.store.river, c.uid, c.email)
+		if _, qerr := tx.Exec(ctx, `SELECT 1`); qerr != nil {
+			t.Errorf("%+v: the refusal left the caller's transaction aborted: %v", c, qerr)
+		}
 		_ = tx.Rollback(ctx)
 		if err == nil {
 			t.Fatalf("%+v accepted", c)
@@ -308,11 +311,15 @@ func TestEnqueueErasure_EveryCallQueuesItsOwnJob(t *testing.T) {
 	if r.count(q, r.uid, 1) != 1 || r.count(q, r.uid, 2) != 1 {
 		t.Fatal("want one available job for each generation")
 	}
-	r.exec(`UPDATE person_erasures SET finished_at = now(), email = NULL WHERE user_id = $1`, r.uid)
+	r.exec(`UPDATE person_erasures SET local_erased_at = now(), account_erased_at = now(), hubspot_erased_at = now(), resend_erased_at = now(),
+		vendor_mode = 'real', superseded_at = now(), finished_at = now(), email = NULL WHERE user_id = $1`, r.uid)
 	r.start()
 	s := r.row(r.uid)
 	if s.Fin || s.Email == nil || *s.Email != r.mail || s.Gen != 3 || r.count(q, r.uid, 3) != 1 {
 		t.Fatalf("row after a re-request = %+v", s)
+	}
+	if s.Local || s.Account || s.HubSpot || s.Resend || s.Superseded || s.Mode != nil {
+		t.Fatalf("a re-request kept a stamp: %+v", s)
 	}
 }
 
@@ -338,43 +345,41 @@ func TestErase_SweepRemovesTheQueuedJobsOfThePerson(t *testing.T) {
 	}
 }
 
+// A finished job row is locked by the test, so the sweep's DELETE blocks after its cancel ran.
 func TestErase_SweepCancelsThenDeletesInOneTransaction(t *testing.T) {
 	r := newEraseRig(t)
 	gen := r.start()
-	var ps []river.InsertManyParams
-	for i := 0; i < 300; i++ {
-		ps = append(ps, river.InsertManyParams{Args: BlogSyncArgs{Email: r.mail, Version: int64(i + 1)}})
-	}
-	if _, err := r.e.store.river.InsertMany(context.Background(), ps); err != nil {
+	queued := r.insertJob(BlogSyncArgs{Email: r.mail, Version: 1})
+	finished := r.insertJob(BlogSyncArgs{Email: r.mail, Version: 2})
+	r.setState(finished, "completed")
+	r.failAll()
+	ctx := context.Background()
+	hold, err := r.e.admin.Begin(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	r.failAll()
-	done := make(chan struct{})
-	var seen int
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-done:
-				return
-			default:
-			}
-			if n := r.count(`SELECT count(*) FROM river_job WHERE kind = 'blog_subscriber_sync' AND state = 'cancelled' AND args->>'email' = $1`, r.mail); n > 0 {
-				seen = n
-				return
-			}
-		}
-	}()
-	_ = r.work(gen)
-	close(done)
-	wg.Wait()
-	if seen > 0 {
-		t.Fatalf("a poller saw %d cancelled rows", seen)
+	defer hold.Rollback(ctx)
+	if _, err := hold.Exec(ctx, `SELECT 1 FROM river_job WHERE id = $1 FOR UPDATE`, finished); err != nil {
+		t.Fatal(err)
 	}
-	if n := r.count(`SELECT count(*) FROM river_job WHERE kind = 'blog_subscriber_sync' AND args->>'email' = $1`, r.mail); n != 0 {
-		t.Fatalf("%d jobs left", n)
+	res := make(chan error, 1)
+	go func() { res <- r.work(gen) }()
+	deadline := time.Now().Add(qaHoldFor)
+	for r.count(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE 'DELETE FROM river_job%'`) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the sweep never reached its job delete")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if r.count(`SELECT count(*) FROM river_job WHERE id = $1 AND state = 'available'`, queued) != 1 {
+		t.Fatal("the cancel was visible before the sweep committed")
+	}
+	if err := hold.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-res
+	if r.jobExists(queued) || r.jobExists(finished) {
+		t.Fatal("a job is left after the sweep")
 	}
 }
 
@@ -751,7 +756,9 @@ func TestErase_NoRebuildWithoutAnotherAccount(t *testing.T) {
 				}
 				return nil
 			}
-			_ = r.work(gen)
+			if err := r.work(gen); (err != nil) != demoRow {
+				t.Fatalf("Work = %v with demo_row=%v", err, demoRow)
+			}
 			if n := r.count(`SELECT count(*) FROM river_job WHERE kind IN ('contact_deliver', 'blog_subscriber_sync') AND args->>'email' = $1`, r.mail); n != 0 {
 				t.Fatalf("%d jobs queued", n)
 			}
@@ -1084,8 +1091,9 @@ func TestErase_TransientFailureLogsWarn(t *testing.T) {
 	gen := r.start()
 	r.rs.fn = func(int, string) error { return &DeliveryError{} }
 	r.acct.fn = func(int, string) error { return &gotrueadmin.StatusError{Status: 503} }
-	if err := r.work(gen); err == nil {
-		t.Fatal("want an error")
+	var se *gotrueadmin.StatusError
+	if err := r.work(gen); !errors.As(err, &se) {
+		t.Fatalf("want the first failure (account), got %v", err)
 	}
 	var texts []string
 	for _, l := range r.sink.at(slog.LevelWarn) {
@@ -1138,5 +1146,198 @@ func TestEraseArgs_InsertOpts(t *testing.T) {
 	}
 	if d := (&EraseWorker{}).Timeout(nil); d != 3*time.Minute {
 		t.Fatalf("timeout = %v", d)
+	}
+}
+
+func TestErase_WorkCanonicalisesTheUserID(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	r.uid = strings.ToUpper(r.uid)
+	if err := r.work(gen); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.acct.got(); len(got) != 1 || got[0] != strings.ToLower(r.uid) {
+		t.Fatalf("account calls = %v", got)
+	}
+	if s := r.row(strings.ToLower(r.uid)); !s.Fin {
+		t.Fatalf("row = %+v", s)
+	}
+}
+
+func TestErase_SweepMatchesAnOddlyWrittenEmail(t *testing.T) {
+	for _, mail := range []string{"élodie+news@corp.example", "o'brien@corp.example"} {
+		t.Run(mail, func(t *testing.T) {
+			r := newEraseRig(t)
+			r.mail = mail
+			r.track(mail, r.uid)
+			gen := r.enqueue(r.uid, " "+strings.ToUpper(mail)+"\t")
+			padded := r.insertJob(DeliverArgs{Email: " " + strings.ToUpper(mail) + " ", Destination: "hubspot", Version: 1})
+			upper := r.insertJob(BlogSyncArgs{Email: strings.ToUpper(mail), Version: 1})
+			r.failAll()
+			_ = r.work(gen)
+			if r.jobExists(upper) || r.jobExists(padded) {
+				t.Error("a job that carries the address is left")
+			}
+		})
+	}
+}
+
+func TestErase_SweepCancelsEveryNonFinalState(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	var ids []int64
+	for _, st := range []string{"available", "pending", "retryable", "scheduled"} {
+		id := r.insertJob(BlogSyncArgs{Email: r.mail, Version: int64(len(ids) + 1)})
+		if st != "available" {
+			r.exec(`UPDATE river_job SET state = $2::river_job_state, scheduled_at = now() + interval '1 hour' WHERE id = $1`, id, st)
+		}
+		ids = append(ids, id)
+	}
+	r.failAll()
+	_ = r.work(gen)
+	for _, id := range ids {
+		if r.jobExists(id) {
+			t.Errorf("job %d is left", id)
+		}
+	}
+}
+
+func TestErase_EachSignOfAnotherAccountSupersedes(t *testing.T) {
+	other := uuid.NewString()
+	for name, put := range map[string]func(r *eraseRig){
+		"contacts row": func(r *eraseRig) { r.contact(r.mail, &other, 1) },
+		"hand-off":     func(r *eraseRig) { r.handoff(other, r.mail) },
+		"intake job":   func(r *eraseRig) { r.insertJob(RegistrantArgs{UserID: other, Email: r.mail}) },
+		"upper-case id": func(r *eraseRig) {
+			r.insertJob(RegistrantArgs{UserID: strings.ToUpper(other), Email: "  " + strings.ToUpper(r.mail)})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newEraseRig(t)
+			gen := r.start()
+			put(r)
+			r.blog(r.mail, 1)
+			emailJob := r.insertJob(DemoDealArgs{Email: r.mail})
+			if err := r.work(gen); err != nil {
+				t.Fatal(err)
+			}
+			if s := r.row(r.uid); !s.Fin || !s.Superseded {
+				t.Fatalf("row = %+v", s)
+			}
+			if r.count(`SELECT count(*) FROM blog_subscribers WHERE email = $1`, r.mail) != 1 || !r.jobExists(emailJob) {
+				t.Fatal("an email-keyed row or job of the other account was removed")
+			}
+		})
+	}
+}
+
+func TestLogEraseFailure_Levels(t *testing.T) {
+	for _, c := range []struct {
+		status int
+		level  slog.Level
+	}{
+		{0, slog.LevelWarn}, {399, slog.LevelWarn}, {400, slog.LevelError}, {403, slog.LevelError}, {408, slog.LevelWarn},
+		{429, slog.LevelWarn}, {499, slog.LevelError}, {500, slog.LevelWarn}, {503, slog.LevelWarn},
+	} {
+		for name, err := range map[string]error{
+			"vendor":  &DeliveryError{Status: c.status},
+			"account": &gotrueadmin.StatusError{Status: c.status},
+			"wrapped": fmt.Errorf("x: %w", &DeliveryError{Status: c.status}),
+		} {
+			var sink qaLogSink
+			logEraseFailure(context.Background(), sink.logger(), "hubspot", err)
+			ls := sink.snapshot()
+			if len(ls) != 1 || ls[0].Level != c.level || !strings.HasSuffix(ls[0].Text, fmt.Sprintf("step=hubspot status=%d", c.status)) {
+				t.Errorf("%s %d: lines = %+v", name, c.status, ls)
+			}
+		}
+	}
+}
+
+func TestErase_EveryLogPathCarriesNoPersonalData(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	buid := uuid.NewString()
+	r.acct.fn = func(int, string) error {
+		r.exec(`INSERT INTO contacts (email, user_id, first_name, last_name, registered_at) VALUES ($1, $2::uuid, 'Adaeze', 'Obi', now())`, r.mail, buid)
+		r.blog(r.mail, 1)
+		return nil
+	}
+	errs := []error{r.work(gen)}
+	r.w.HubSpot, r.w.Resend, r.w.Account = nil, nil, nil
+	r.exec(`UPDATE person_erasures SET account_erased_at = NULL, hubspot_erased_at = NULL, resend_erased_at = NULL, vendor_mode = NULL, superseded_at = NULL, finished_at = NULL, email = $2 WHERE user_id = $1`, r.uid, r.mail)
+	errs = append(errs, r.work(gen))
+	if len(r.sink.at(slog.LevelWarn)) < 4 {
+		t.Fatalf("warn lines = %d; the paths did not run", len(r.sink.at(slog.LevelWarn)))
+	}
+	for _, err := range errs {
+		qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.mail, strings.Split(r.mail, "@")[0], "Adaeze", "Obi", r.uid, buid)
+	}
+}
+
+func TestErase_ACameBackLogCarriesNoPersonalData(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	r.rs.fn = func(n int, _ string) error {
+		if n == 1 {
+			r.exec(`INSERT INTO contacts (email, demo_requested_at, first_name, last_name) VALUES ($1, now(), 'Adaeze', 'Obi')`, r.mail)
+		}
+		return nil
+	}
+	err := r.work(gen)
+	if err == nil || len(r.sink.at(slog.LevelWarn)) == 0 {
+		t.Fatalf("err = %v, warns = %d", err, len(r.sink.at(slog.LevelWarn)))
+	}
+	qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.mail, strings.Split(r.mail, "@")[0], "Adaeze", "Obi", r.uid)
+}
+
+func TestErase_EachStepsErrorCarriesNoPersonalData(t *testing.T) {
+	for _, step := range []string{"account", "hubspot", "resend"} {
+		t.Run(step, func(t *testing.T) {
+			r := newEraseRig(t)
+			gen := r.start()
+			bad := map[string]*recErase{"account": r.acct, "hubspot": r.hs, "resend": r.rs}[step]
+			bad.fn = func(int, string) error { return &DeliveryError{Status: 503} }
+			err := r.work(gen)
+			var de *DeliveryError
+			if !errors.As(err, &de) {
+				t.Fatalf("err = %v", err)
+			}
+			qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.mail, strings.Split(r.mail, "@")[0], r.uid)
+		})
+	}
+}
+
+func TestErase_TheCasingOfTheOwnUserIDDoesNotSupersede(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	r.insertJob(RegistrantArgs{UserID: strings.ToUpper(r.uid), Email: r.mail})
+	r.blog(r.mail, 1)
+	if err := r.work(gen); err != nil {
+		t.Fatal(err)
+	}
+	if s := r.row(r.uid); !s.Fin || s.Superseded || r.count(`SELECT count(*) FROM blog_subscribers WHERE email = $1`, r.mail) != 0 {
+		t.Fatalf("row = %+v", s)
+	}
+}
+
+func TestErase_TheHubSpotStepRebuildsOnlyHubSpot(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	r.exec(`UPDATE person_erasures SET resend_erased_at = now() WHERE user_id = $1`, r.uid)
+	buid := uuid.NewString()
+	r.hs.fn = func(int, string) error {
+		r.exec(`INSERT INTO contacts (email, user_id, first_name, last_name, registered_at, hubspot_delivered_at, resend_delivered_at) VALUES ($1, $2::uuid, 'Bola', 'Eze', now(), now(), now())`, r.mail, buid)
+		r.blog(r.mail, 1)
+		return nil
+	}
+	if err := r.work(gen); err != nil {
+		t.Fatal(err)
+	}
+	if r.count(`SELECT count(*) FROM river_job WHERE kind = 'contact_deliver' AND args->>'destination' = 'hubspot' AND args->>'email' = $1`, r.mail) != 1 ||
+		r.count(`SELECT count(*) FROM river_job WHERE kind IN ('blog_subscriber_sync') AND args->>'email' = $1`, r.mail) != 0 ||
+		r.count(`SELECT count(*) FROM river_job WHERE kind = 'contact_deliver' AND args->>'destination' = 'resend' AND args->>'email' = $1`, r.mail) != 0 ||
+		r.count(`SELECT count(*) FROM blog_subscribers WHERE email = $1 AND resend_delivered_at IS NOT NULL`, r.mail) != 1 {
+		t.Fatal("the HubSpot step rebuilt more than the HubSpot contact")
 	}
 }

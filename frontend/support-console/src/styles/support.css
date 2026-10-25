@@ -131,6 +131,10 @@ pre.ops-json {
   white-space: pre;
 }
 
+.ops-health-panels .u-select {
+  background: var(--action-tint);
+}
+
 /* ------------------------------------------------------------------
    Responsive degradation. The prototype is a fixed 1380x900 desktop
    app shell (fixed sidebar + wide grid tables/columns). These rules

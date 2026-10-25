@@ -39,45 +39,7 @@ export function sparkline(points: number[]): { line: string; area: string } {
   return { line, area }
 }
 
-export const CHART_W = 600
 export const CHART_H = 160
-
-export function niceCeil(v: number): number {
-  if (!(v > 0)) {
-    return 1
-  }
-  const mag = 10 ** Math.floor(Math.log10(v))
-  const m = v / mag
-  const n = m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10
-  return n * mag
-}
-
-export function chartX(t: number, start: number, end: number): number {
-  if (end <= start) {
-    return 0
-  }
-  return Math.min(CHART_W, Math.max(0, ((t - start) / (end - start)) * CHART_W))
-}
-
-export function chartY(v: number, yMax: number): number {
-  return CHART_H - (v / yMax) * CHART_H
-}
-
-export function chartPath(points: [number, number][], o: { start: number; end: number; step: number; yMax: number }): string {
-  const runs: string[][] = []
-  let prev: number | null = null
-  for (const [t, v] of points) {
-    const xy = `${chartX(t, o.start, o.end).toFixed(1)} ${chartY(v, o.yMax).toFixed(1)}`
-    if (prev === null || t - prev > 1.5 * o.step) {
-      runs.push([`M${xy}`])
-    } else {
-      runs[runs.length - 1].push(`L${xy}`)
-    }
-    prev = t
-  }
-  // a one-point run gets a zero-length segment so the round cap paints a dot
-  return runs.map((r) => (r.length === 1 ? `${r[0]} h0` : r.join(' '))).join(' ')
-}
 
 export type Aligned = [number[], ...(number | null)[][]]
 type Pts = { points: [number, number][] }

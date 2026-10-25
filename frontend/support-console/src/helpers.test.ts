@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { DASHBOARDS } from './metricsApi'
-import { alignSeries, CHART_H, CHART_W, chartPath, chartX, healthTone, niceCeil, readoutPlacement, readoutRows, sentryServiceUrl, sentryTenantUrl, SPARK_HEIGHT, SPARK_WIDTH, severityStyle, sparkline, tokenName, utcClock, yTop } from './helpers'
+import { alignSeries, CHART_H, healthTone, readoutPlacement, readoutRows, sentryServiceUrl, sentryTenantUrl, SPARK_HEIGHT, SPARK_WIDTH, severityStyle, sparkline, tokenName, utcClock, yTop } from './helpers'
 import type { Severity } from './types'
 
 const ALL_SEVERITIES: Severity[] = ['error', 'warn', 'info']
@@ -107,35 +107,8 @@ describe('DASHBOARDS', () => {
 })
 
 describe('chart geometry', () => {
-  const o = { start: 1000, end: 1300, step: 60, yMax: 10 }
-  it('chartPath spans the box from start to end', () => {
-    expect(chartPath([[1000, 0], [1300, 10]], { ...o, step: 300 })).toBe('M0.0 160.0 L600.0 0.0')
-  })
-  it('chartPath breaks the line at a missing step', () => {
-    const d = chartPath([[1000, 1], [1060, 1], [1240, 1], [1300, 1]], o)
-    expect(d.match(/M/g)).toHaveLength(2)
-  })
-  it('chartPath keeps one line across a step of exactly 1.5 steps', () => {
-    expect(chartPath([[1000, 1], [1090, 1]], o).match(/M/g)).toHaveLength(1)
-  })
-  it('chartPath draws nothing for no points and a drawable segment for one point', () => {
-    expect(chartPath([], o)).toBe('')
-    expect(chartPath([[1150, 10]], o)).toBe('M300.0 0.0 h0')
-  })
-  it('chartPath gives a point isolated between two gaps a drawable segment', () => {
-    expect(chartPath([[1000, 1], [1150, 1], [1300, 1]], o)).toBe('M0.0 144.0 h0 M300.0 144.0 h0 M600.0 144.0 h0')
-  })
-  it('chartPath breaks the line just over 1.5 steps', () => {
-    expect(chartPath([[1000, 1], [1091, 1]], o).match(/M/g)).toHaveLength(2)
-  })
-  it('chartX clamps a deploy outside the range to the edge', () => {
-    expect(chartX(o.end + 120, o.start, o.end)).toBe(CHART_W)
-    expect(chartX(o.start - 1, o.start, o.end)).toBe(0)
+  it('CHART_H is the plot height the layout reads', () => {
     expect(CHART_H).toBe(160)
-  })
-  it('niceCeil rounds up to 1, 2 or 5 times a power of ten', () => {
-    expect([0, -3, 0.7, 1, 1.2, 3, 7, 80, 1000.1].map(niceCeil)).toEqual([1, 1, 1, 1, 2, 5, 10, 100, 2000])
-    expect([1.8, 4.5, 5, 0.03].map(niceCeil)).toEqual([2, 5, 5, 0.05])
   })
 })
 

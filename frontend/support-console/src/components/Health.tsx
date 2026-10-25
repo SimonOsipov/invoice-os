@@ -134,6 +134,9 @@ function sqlPoints(m: StaffMetrics, key: PanelKey): Point[] {
   return hasData(p) ? (p.series.find((s) => s.name === 'database') ?? p.series[0]).points : []
 }
 
+type Guide = { value: number; label: string; dashed: boolean }
+type Marker = { t: number; title: string }
+
 function entriesOf(spec: PanelSpec, m: StaffMetrics, colours: Record<string, string>): Entry[] {
   if (spec.key === 'sql_util') return SQL_UTIL.map(([name, key], i) => ({ name, color: SERIES[i], unit: '%', points: sqlPoints(m, key) }))
   if (spec.key === 'sql_connections') return [{ name: 'connections', color: SERIES[0], unit: 'count', points: sqlPoints(m, 'sql_connections') }]
@@ -145,6 +148,20 @@ function entriesOf(spec: PanelSpec, m: StaffMetrics, colours: Record<string, str
       const max = spec.key === 'instances' && m.limits.available ? m.limits.services.find((l) => l.name === s.name)?.max_instances : undefined
       return { name: s.name, color: colours[s.name] ?? OTHER_LINE, unit: p.unit, points: s.points, extra: max === undefined ? undefined : `· max ${max}` }
     })
+}
+
+export function panelChart(key: string, m: StaffMetrics, colours: Record<string, string>, service: string): { lines: Entry[]; guides: Guide[] } {
+  const spec = PANELS.find((p) => p.key === key)!
+  const guides: Guide[] = []
+  if (spec.guide) guides.push({ ...spec.guide, dashed: true })
+  if (spec.key === 'sql_connections') guides.push({ value: m.connection_budget, label: `budget ${m.connection_budget}`, dashed: false })
+  const cap = spec.key === 'instances' && service && m.limits.available ? m.limits.services.find((l) => l.name === service) : undefined
+  if (cap) guides.push({ value: cap.max_instances, label: `max ${cap.max_instances}`, dashed: true })
+  return { lines: entriesOf(spec, m, colours), guides }
+}
+
+export function deployMarkers(m: StaffMetrics): Marker[] {
+  return m.deploys.available ? m.deploys.revisions.map((r) => ({ t: Date.parse(r.created_at) / 1000, title: `${r.revision} · ${new Date(r.created_at).toISOString().slice(11, 16)} UTC` })) : []
 }
 
 // The worst verdict over the series, each judged on displayed values.
@@ -165,16 +182,11 @@ const shown = (e: Entry): string => {
   return formatShown(e.unit, latest)
 }
 
-function Panel({ spec, m, colours, service, markers }: { spec: PanelSpec; m: StaffMetrics; colours: Record<string, string>; service: string; markers: { t: number; title: string }[] }) {
-  const entries = entriesOf(spec, m, colours)
+function Panel({ spec, m, colours, service, markers }: { spec: PanelSpec; m: StaffMetrics; colours: Record<string, string>; service: string; markers: Marker[] }) {
+  const { lines: entries, guides } = panelChart(spec.key, m, colours, service)
   const drawn = entries.filter((e) => e.points.length > 0)
   const verdict = spec.stat && drawn.length > 0 ? panelVerdict(spec.stat, drawn, m.connection_budget) : 'ok'
   const tone = verdict === 'ok' ? null : healthTone(WORD_TONE[verdict])
-  const guides = []
-  if (spec.guide) guides.push({ ...spec.guide, dashed: true })
-  if (spec.key === 'sql_connections') guides.push({ value: m.connection_budget, label: `budget ${m.connection_budget}`, dashed: false })
-  const cap = spec.key === 'instances' && service && m.limits.available ? m.limits.services.find((l) => l.name === service) : undefined
-  if (cap) guides.push({ value: cap.max_instances, label: `max ${cap.max_instances}`, dashed: true })
   const coloured = entries.filter((e) => e.color !== OTHER_LINE)
   const grey = drawn.filter((e) => e.color === OTHER_LINE).length
   return (
@@ -202,7 +214,7 @@ function Panel({ spec, m, colours, service, markers }: { spec: PanelSpec; m: Sta
         )}
       </div>
       {drawn.length > 0 ? (
-        <TimeChart lines={drawn} start={Date.parse(m.start) / 1000} end={Date.parse(m.end) / 1000} step={m.step_seconds} guides={guides} markers={markers} />
+        <TimeChart lines={drawn.map((e) => ({ ...e, folded: e.color === OTHER_LINE }))} start={Date.parse(m.start) / 1000} end={Date.parse(m.end) / 1000} step={m.step_seconds} guides={guides} markers={markers} />
       ) : (
         <div data-no-data="" style={{ ...NOTE, padding: 0, minHeight: CHART_H, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           No data
@@ -225,7 +237,7 @@ function Panel({ spec, m, colours, service, markers }: { spec: PanelSpec; m: Sta
 
 function Panels({ m, service }: { m: StaffMetrics; service: string }) {
   const colours = colourMap(m)
-  const markers = m.deploys.available ? m.deploys.revisions.map((r) => ({ t: Date.parse(r.created_at) / 1000, title: `${r.revision} · ${new Date(r.created_at).toISOString().slice(11, 16)} UTC` })) : []
+  const markers = deployMarkers(m)
   return (
     <>
       {!m.deploys.available && <div style={{ ...LEGEND_TEXT, marginBottom: 8 }}>Deploy markers unavailable</div>}

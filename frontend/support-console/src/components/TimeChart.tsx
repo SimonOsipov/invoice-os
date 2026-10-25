@@ -1,54 +1,167 @@
-import type { CSSProperties } from 'react'
-import { CHART_H, CHART_W, chartPath, chartX, chartY, niceCeil, utcClock } from '../helpers'
+import { useEffect, useRef } from 'react'
+import type uPlot from 'uplot'
+import { CHART_H, alignSeries, tokenName, utcClock, yTop } from '../helpers'
 
-type Line = { name: string; color: string; points: [number, number][] }
+type Point = [number, number]
+type Line = { name: string; color: string; unit: string; points: Point[]; folded?: boolean }
 type Guide = { value: number; label: string; dashed: boolean }
 type Marker = { t: number; title: string }
 
 type Props = { lines: Line[]; start: number; end: number; step: number; guides?: Guide[]; markers?: Marker[] }
 
-const TICK: CSSProperties = { fontSize: 11, color: 'var(--fg-3)', whiteSpace: 'nowrap' }
+const X_AXIS_H = 28
 const DAY = 86400
+const NONE: never[] = []
 
-export function TimeChart({ lines, start, end, step, guides = [], markers = [] }: Props) {
-  const values = [...lines.flatMap((l) => l.points.map(([, v]) => v)), ...guides.map((g) => g.value)]
-  const yMax = niceCeil(Math.max(0, ...values))
-  const long = end - start >= DAY
+// ceiling: a rejected import is not caught; the chart area stays empty and the global Sentry handler reports it
+let loading: Promise<typeof import('./uplot')> | undefined
+const load = () => (loading ??= import('./uplot'))
+
+function placeMarkers(u: uPlot, { markers = NONE, start, end }: Props) {
+  let els = [...u.over.querySelectorAll<HTMLElement>('[data-deploy]')]
+  if (els.length !== markers.length || els.some((e, i) => e.title !== markers[i].title)) {
+    els.forEach((e) => e.remove())
+    els = markers.map((m) => {
+      const el = document.createElement('div')
+      el.setAttribute('data-deploy', '')
+      el.title = m.title
+      el.style.cssText = 'position:absolute;top:0;bottom:0;width:7px;transform:translateX(-50%)'
+      const line = document.createElement('div')
+      line.style.cssText = 'position:absolute;top:0;bottom:0;left:3px;width:1px;background:var(--line-3)'
+      el.append(line)
+      u.over.append(el)
+      return el
+    })
+  }
+  const { min, max } = u.scales.x
+  els.forEach((el, i) => {
+    const t = Math.min(end, Math.max(start, markers[i].t))
+    el.style.left = `${u.valToPos(t, 'x')}px`
+    el.style.display = min != null && max != null && t >= min && t <= max ? '' : 'none'
+  })
+}
+
+export function TimeChart(props: Props) {
+  const root = useRef<HTMLDivElement>(null)
+  const mount = useRef<HTMLDivElement>(null)
+  const chart = useRef<uPlot | null>(null)
+  const latest = useRef(props)
+  latest.current = props
+  const drawn = useRef<{ points: Point[][]; guides: string; start: number; end: number; step: number } | null>(null)
+
+  const { lines, start, end, step, guides = NONE, markers = NONE } = props
+  const seriesKey = lines.map((l) => `${l.name}\n${l.color}`).join('\n\n')
+  const guidesKey = JSON.stringify(guides)
+  const markersKey = JSON.stringify(markers)
+
+  useEffect(() => {
+    let dead = false
+    let observer: ResizeObserver | undefined
+    let u: uPlot | undefined
+    load().then(({ default: UPlot }) => {
+      const el = root.current!
+      if (dead) return
+      const css = getComputedStyle(el)
+      const tok = (v: string) => {
+        const n = tokenName(v)
+        return n ? css.getPropertyValue(n).trim() : v
+      }
+      const fg3 = tok('var(--fg-3)')
+      const line1 = tok('var(--line-1)')
+      const font = `11px ${tok('var(--font-mono)')}`
+      const cur = latest.current
+      const axis = { stroke: fg3, font, grid: { stroke: line1, width: 1 }, ticks: { stroke: line1, width: 1 } }
+      const opts: uPlot.Options = {
+        width: el.clientWidth,
+        height: CHART_H + X_AXIS_H,
+        tzDate: (ts) => UPlot.tzDate(new Date(ts * 1e3), 'Etc/UTC'),
+        legend: { show: false },
+        cursor: { y: false, drag: { x: false, y: false, setScale: false } },
+        scales: {
+          x: { time: true, auto: false, min: cur.start, max: cur.end },
+          y: {
+            range: (_u, _min, max) => {
+              const top = Math.max(max ?? 0, yTop([], latest.current.guides ?? NONE))
+              return [0, top > 0 ? top : 1]
+            },
+          },
+        },
+        axes: [
+          { ...axis, size: X_AXIS_H, values: (_u, splits) => splits.map((t) => utcClock(t, latest.current.end - latest.current.start >= DAY)) },
+          { ...axis, values: (_u, splits) => splits.map(String) },
+        ],
+        series: [{}, ...cur.lines.map((l) => ({ label: l.name, stroke: tok(l.color), width: 1.6 }))],
+        hooks: {
+          draw: [
+            (self) => {
+              const { ctx, bbox } = self
+              const r = devicePixelRatio || 1
+              ctx.save()
+              ctx.strokeStyle = fg3
+              ctx.lineWidth = r
+              for (const g of latest.current.guides ?? NONE) {
+                const y = self.valToPos(g.value, 'y', true)
+                ctx.beginPath()
+                ctx.setLineDash(g.dashed ? [4 * r, 4 * r] : [])
+                ctx.moveTo(bbox.left, y)
+                ctx.lineTo(bbox.left + bbox.width, y)
+                ctx.stroke()
+              }
+              ctx.restore()
+              el.setAttribute('data-drawn', self.series.slice(1).filter((s) => s.show).map((s) => s.label).join(','))
+            },
+          ],
+          setScale: [
+            (self, key) => {
+              if (key !== 'x') return
+              el.setAttribute('data-x', `${self.scales.x.min},${self.scales.x.max}`)
+              placeMarkers(self, latest.current)
+            },
+          ],
+          setSize: [(self) => placeMarkers(self, latest.current)],
+        },
+      }
+      u = new UPlot(opts, alignSeries(cur.lines, cur.start, cur.end, cur.step), mount.current!)
+      chart.current = u
+      drawn.current = { points: cur.lines.map((l) => l.points), guides: JSON.stringify(cur.guides ?? NONE), start: cur.start, end: cur.end, step: cur.step }
+      el.setAttribute('data-x', `${cur.start},${cur.end}`)
+      placeMarkers(u, cur)
+      let width = opts.width
+      observer = new ResizeObserver((entries) => {
+        const w = Math.floor(entries[0].contentRect.width)
+        if (w > 0 && w !== width) {
+          width = w
+          u!.setSize({ width: w, height: CHART_H + X_AXIS_H })
+        }
+      })
+      observer.observe(el)
+    })
+    return () => {
+      dead = true
+      observer?.disconnect()
+      u?.destroy()
+      chart.current = null
+    }
+  }, [seriesKey])
+
+  useEffect(() => {
+    const u = chart.current
+    const prev = drawn.current
+    if (!u || !prev) return
+    const same = prev.start === start && prev.end === end && prev.step === step && prev.guides === guidesKey && prev.points.length === lines.length && lines.every((l, i) => l.points === prev.points[i])
+    if (same) return
+    drawn.current = { points: lines.map((l) => l.points), guides: guidesKey, start, end, step }
+    u.setData(alignSeries(lines, start, end, step), false)
+    u.setScale('x', { min: start, max: end })
+  }, [lines, start, end, step, guidesKey])
+
+  useEffect(() => {
+    if (chart.current) placeMarkers(chart.current, latest.current)
+  }, [markersKey])
+
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', columnGap: 8 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: CHART_H }}>
-        <span style={TICK}>{yMax}</span>
-        <span style={TICK}>0</span>
-      </div>
-      <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} width="100%" height={CHART_H} preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
-        {guides.map((g) => (
-          <line
-            key={g.label}
-            data-guide={g.label}
-            x1={0}
-            x2={CHART_W}
-            y1={chartY(g.value, yMax)}
-            y2={chartY(g.value, yMax)}
-            stroke="var(--fg-3)"
-            strokeWidth={1}
-            strokeDasharray={g.dashed ? '4 4' : undefined}
-            vectorEffect="non-scaling-stroke"
-          />
-        ))}
-        {markers.map((m) => (
-          <line key={`${m.t}-${m.title}`} data-deploy="" x1={chartX(m.t, start, end)} x2={chartX(m.t, start, end)} y1={0} y2={CHART_H} stroke="var(--line-3)" strokeWidth={1} vectorEffect="non-scaling-stroke">
-            <title>{m.title}</title>
-          </line>
-        ))}
-        {lines.map((l) => (
-          <path key={l.name} data-line={l.name} d={chartPath(l.points, { start, end, step, yMax })} fill="none" stroke={l.color} strokeWidth={1.6} vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-        ))}
-      </svg>
-      <span />
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-        <span style={TICK}>{utcClock(start, long)}</span>
-        <span style={TICK}>{utcClock(end, long)}</span>
-      </div>
+    <div ref={root} data-chart="" style={{ position: 'relative', minWidth: 0, minHeight: CHART_H + X_AXIS_H }}>
+      <div ref={mount} />
     </div>
   )
 }

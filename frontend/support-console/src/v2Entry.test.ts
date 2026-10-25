@@ -331,6 +331,13 @@ describe('v2 entry', () => {
     expect(stale, 'stale allowlist needles').toEqual([])
   })
 
+  it('VE-12 chart code holds no colour literal (source scan: canvas colours are not in the DOM)', () => {
+    const LITERAL = /#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i
+    const literals = (src: string) => stripComments(src).split('\n').filter((l) => LITERAL.test(l))
+    expect(literals("const c = '#607D8B'\nconst d = 'var(--fg-3)'\n// rgba(0,0,0,0.07)"), 'control: a planted literal is reported, a comment is not').toEqual(["const c = '#607D8B'"])
+    for (const f of ['components/TimeChart.tsx', 'components/uplot.ts']) expect(literals(read(join(HERE, f))), f).toEqual([])
+  })
+
   it('VE-11 rulesFixture is imported only by tests', () => {
     const files = (dir: string): string[] =>
       readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [join(dir, e.name)] : []))

@@ -847,6 +847,10 @@ function scopeMatch(m: SeenMetrics, what: string, only?: string): void {
 // Per panel key, the series names and point counts: evidence for the preview-scope check.
 const drawSummary = (m: SeenMetrics) => Object.fromEntries(m.panels.map((p) => [p.key, p.series.map((s) => ({ name: s.name, points: s.points.length }))]))
 
+// Series names a panel can draw: Cloud SQL panels name their own lines.
+const servedNames = (m: SeenMetrics, key: string): string[] =>
+  key === 'sql_util' ? ['CPU', 'RAM', 'Disk'] : key === 'sql_connections' ? ['connections'] : panelSeries(m, key).map((s) => s.name)
+
 // Panels and stat tiles equal one metrics answer: No data iff no point, else a line.
 async function metricsMatch(page: Page, m: SeenMetrics, what: string): Promise<void> {
   const mn = mainOf(page)
@@ -858,8 +862,12 @@ async function metricsMatch(page: Page, m: SeenMetrics, what: string): Promise<v
     const has = panelHasData(m, key)
     await expect(p.locator('[data-no-data]'), `${what}: ${key} No data`).toHaveCount(has ? 0 : 1)
     if (!has) await expect(p.locator('[data-no-data]'), `${what}: ${key} note`).toHaveText('No data')
-    if (has) await expect(p.locator('svg [data-line]').first(), `${what}: ${key} draws a line`).toBeAttached()
-    else await expect(p.locator('[data-line]'), `${what}: ${key} draws no line`).toHaveCount(0)
+    const chart = p.locator('[data-chart]')
+    if (has) {
+      await expect(chart, `${what}: ${key} draws a line`).toHaveAttribute('data-drawn', /.+/)
+      const drawn = ((await chart.getAttribute('data-drawn')) ?? '').split(',')
+      expect(servedNames(m, key), `${what}: ${key} data-drawn names are served series`).toEqual(expect.arrayContaining(drawn))
+    } else await expect(chart, `${what}: ${key} draws no chart`).toHaveCount(0)
   }
   for (const key of STAT_KEYS.filter((k) => k !== 'fleet')) {
     const t = mn.locator(`[data-tile="${key}"]`)
@@ -1199,13 +1207,17 @@ async function fixturePanelsRead(page: Page): Promise<Read> {
     const p = panels.nth(i)
     const chart = kid(p, 2)
     const legend = kid(p, 3)
-    const svg = chart.locator('svg')
-    await expect(svg, `${key} draws a chart`).toHaveCount(1)
-    const axis = { yMax: kid(kid(chart, 1), 1), yZero: kid(kid(chart, 1), 2), xStart: kid(kid(chart, 4), 1), xEnd: kid(kid(chart, 4), 2) }
-    const r = await boxes(page, { chart, legend, svg, ...axis })
-    problems.push(...within(rects[i], r.chart, `${key} chart`), ...below(r.chart, r.legend, `${key} legend below the chart`), ...within(rects[i], r.legend, `${key} legend`))
-    for (const k of Object.keys(axis) as (keyof typeof axis)[]) problems.push(...within(rects[i], r[k], `${key} axis label ${k}`))
-    problems.push(...leftOf(r.yMax, r.svg, `${key} y labels / chart`), ...below(r.svg, r.xStart, `${key} x labels under the chart`), ...pairwiseApart([r.yMax, r.yZero], `${key} y labels`), ...pairwiseApart([r.xStart, r.xEnd], `${key} x labels`))
+    const titleRow = kid(p, 1)
+    const uplot = chart.locator('.uplot')
+    await expect(chart, `${key} draws a chart`).toHaveAttribute('data-drawn', /.+/)
+    await expect(uplot, `${key} uPlot root`).toHaveCount(1)
+    const edges = async () => {
+      const b = await boxes(page, { chart, uplot, titleRow })
+      return Math.max(...[b.chart, b.uplot].flatMap((c) => [Math.abs(c.x - b.titleRow.x), Math.abs(c.x + c.width - (b.titleRow.x + b.titleRow.width))]))
+    }
+    await expect.poll(edges, { message: `${key} chart edges align with the title row` }).toBeLessThanOrEqual(1)
+    const r = await boxes(page, { chart, legend, uplot })
+    problems.push(...within(rects[i], r.chart, `${key} chart`), ...within(rects[i], r.uplot, `${key} uPlot`), ...below(r.chart, r.legend, `${key} legend below the chart`), ...within(rects[i], r.legend, `${key} legend`))
 
     const entries = legend.locator(':scope > span')
     const want = legendCounts[key] ?? 8
@@ -1218,10 +1230,15 @@ async function fixturePanelsRead(page: Page): Promise<Read> {
       await expect(legend.locator('[data-series-other]'), `${key} folded entry`).toHaveText('+10 other services')
     }
 
-    const marks = svg.locator('line[data-deploy]')
+    const over = chart.locator('.u-over')
+    const marks = over.locator('[data-deploy]')
     await expect(marks, `${key} deploy markers`).toHaveCount(2)
+    for (let j = 0; j < 2; j++) await expect(marks.nth(j), `${key} deploy marker ${j} title`).toHaveAttribute('title', /.+/)
     const markRects = await marks.evaluateAll((els) => els.map((e) => { const b = e.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height } }))
-    for (const [j, m] of markRects.entries()) problems.push(...within(rects[i], m, `${key} deploy marker ${j}`))
+    // a marker is a 7 px target centred on its time, so one at an edge reaches 4 px past the plot
+    const o = (await boxes(page, { over })).over
+    const roomy = { x: o.x - 4, y: o.y, width: o.width + 8, height: o.height }
+    for (const [j, m] of markRects.entries()) problems.push(...within(rects[i], m, `${key} deploy marker ${j}`), ...within(roomy, m, `${key} deploy marker ${j} in the plot`))
   }
   const word = (key: string): Locator => panels.nth(PANEL_KEYS.indexOf(key)).locator('[data-word]')
   await expect(word('error_pct'), 'error_pct word').toHaveText('HIGH')
@@ -1229,7 +1246,6 @@ async function fixturePanelsRead(page: Page): Promise<Read> {
   await expect(word('latency_p95_ms'), 'latency_p95_ms word').toHaveText('PEAKED')
   await expect(word('ram_pct'), 'ram_pct has no word').toHaveCount(0)
   await expect(word('startup_latency_p95_ms'), 'startup_latency_p95_ms has no word').toHaveCount(0)
-  await expect(panels.nth(PANEL_KEYS.indexOf('startup_latency_p95_ms')).locator('svg line[data-guide]'), 'startup_latency_p95_ms has no guide').toHaveCount(0)
   return { problems, rects: { panels: rects } }
 }
 

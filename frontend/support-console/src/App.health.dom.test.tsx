@@ -10,6 +10,7 @@ import { fetchStaffHealth, type StaffHealth } from './healthApi'
 import { fetchStaffMetrics, HEALTH_REFRESH_MS, type StaffMetrics } from './metricsApi'
 import { fetchCodeListSummary, fetchRules, fetchVersions } from './rulesApi'
 import { fetchStaffTenants } from './tenantsApi'
+import { FakeUPlot } from './uplotFake'
 
 vi.mock('@invoice-os/console-session', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
@@ -42,6 +43,14 @@ vi.mock('./metricsApi', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./metricsApi')>()),
   fetchStaffMetrics: vi.fn(),
 }))
+
+vi.mock('./components/uplot', () => ({ default: FakeUPlot }))
+
+class ObserverStub {
+  observe() {}
+  disconnect() {}
+}
+vi.stubGlobal('ResizeObserver', ObserverStub)
 
 const rulesRead = vi.mocked(fetchRules)
 const versionsRead = vi.mocked(fetchVersions)

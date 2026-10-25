@@ -108,7 +108,7 @@ test.describe.serial('membership removal (API E2E, over the deployed gateway)', 
     assertErrorEnvelope(read, 403, 'the removed member reads the roster')
     expect((read.body as { error: string }).error).toBe(NOT_ACTIVE)
 
-    const log = await getAuditLog(first.adminToken, { event: [EVENT_REMOVED, EVENT_ACCEPTED] })
+    const log = await getAuditLog(first.adminToken, { event: [EVENT_REMOVED, EVENT_ACCEPTED], limit: 100 })
     const ofMember = (e: { payload: unknown }) => (e.payload as { user_id?: string } | null)?.user_id === member.userId
     expect(log.events.filter((e) => e.event === EVENT_REMOVED && ofMember(e)), 'one removal row names the member').toHaveLength(1)
     const accepted = log.events.filter((e) => e.event === EVENT_ACCEPTED && e.actor === member.userId)

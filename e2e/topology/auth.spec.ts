@@ -3465,7 +3465,7 @@ async function expectInsideAtEachWidth(page: Page, card: Locator, parts: [string
   }
 }
 
-// One over `maxNameChars` in internal/tenancy/tenancy.go.
+// `maxNameChars` in internal/tenancy/tenancy.go; the journeys fill one more.
 const NAME_LIMIT = 200
 
 // The workspace roster as the admin's API reads it: the row of `userId`.

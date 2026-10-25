@@ -65,14 +65,15 @@ const FleetP95Key = "latency_p95_fleet_ms"
 const FleetSeriesName = "fleet"
 
 const (
-	reqRate  = `sum by (service_name) (rate(run_googleapis_com:request_count{{F}}[{W}]))`
-	req5xx   = `sum by (service_name) (rate(run_googleapis_com:request_count{{F},response_code_class="5xx"}[{W}]))`
-	latRate  = `sum by (service_name, le) (rate(run_googleapis_com:request_latencies_bucket{{F}}[{W}]))`
-	latFleet = `sum by (le) (rate(run_googleapis_com:request_latencies_bucket{{F}}[{W}]))`
-	cpuRate  = `sum by (service_name, le) (rate(run_googleapis_com:container_cpu_utilizations_bucket{{F}}[{W}]))`
-	ramRate  = `sum by (service_name, le) (rate(run_googleapis_com:container_memory_utilizations_bucket{{F}}[{W}]))`
-	sqlMax   = `max(max_over_time(cloudsql_googleapis_com:%s{{S}}[{W}]))`
-	connsSQL = `max(sum by (database_id) (max_over_time(cloudsql_googleapis_com:database_postgresql_num_backends{{S}}[{W}])))`
+	reqRate   = `sum by (service_name) (rate(run_googleapis_com:request_count{{F}}[{W}]))`
+	req5xx    = `sum by (service_name) (rate(run_googleapis_com:request_count{{F},response_code_class="5xx"}[{W}]))`
+	latRate   = `sum by (service_name, le) (rate(run_googleapis_com:request_latencies_bucket{{F}}[{W}]))`
+	latFleet  = `sum by (le) (rate(run_googleapis_com:request_latencies_bucket{{F}}[{W}]))`
+	cpuRate   = `sum by (service_name, le) (rate(run_googleapis_com:container_cpu_utilizations_bucket{{F}}[{W}]))`
+	ramRate   = `sum by (service_name, le) (rate(run_googleapis_com:container_memory_utilizations_bucket{{F}}[{W}]))`
+	sqlMax    = `max(max_over_time(cloudsql_googleapis_com:%s{{S}}[{W}]))`
+	startRate = `sum by (service_name, le) (rate(run_googleapis_com:container_startup_latencies_bucket{{F}}[{W}]))`
+	connsSQL  = `max(sum by (database_id) (max_over_time(cloudsql_googleapis_com:database_postgresql_num_backends{{S}}[{W}])))`
 )
 
 // Panels are the panels in wire order.
@@ -92,6 +93,7 @@ var Panels = []Panel{
 	{"sql_disk_pct", "%", `100 * ` + fmt.Sprintf(sqlMax, "database_disk_utilization"), false},
 	{"sql_connections", "count", connsSQL, false},
 	{FleetP95Key, "ms", `histogram_quantile(0.95, ` + latFleet + `)`, true},
+	{"startup_latency_p95_ms", "ms", `histogram_quantile(0.95, ` + startRate + `)`, true},
 }
 
 // Query renders the template for r, service and a preview suffix; service reaches it only after the handler matched MetricServices.

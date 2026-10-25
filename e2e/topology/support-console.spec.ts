@@ -808,7 +808,7 @@ const shortOf = (build?: string): string => (build ? build.slice(0, 7) : '—')
 const nonNull = (trend: SeenHealth['trend'], key: 'services_down' | 'river_jobs'): number => trend.filter((p) => p[key] !== null).length
 
 // systemhealth.Panels, in wire order.
-const METRIC_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'sql_cpu_pct', 'sql_ram_pct', 'sql_disk_pct', 'sql_connections', 'latency_p95_fleet_ms']
+const METRIC_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'sql_cpu_pct', 'sql_ram_pct', 'sql_disk_pct', 'sql_connections', 'latency_p95_fleet_ms', 'startup_latency_p95_ms']
 // systemhealth.ConnectionBudget
 const CONNECTION_BUDGET = 80
 // systemhealth.MetricServices

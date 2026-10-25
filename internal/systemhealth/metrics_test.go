@@ -803,7 +803,7 @@ func TestMetricsSource_FleetP95UsesTheWindowAndStepOfTheLatencyPanel(t *testing.
 	}
 	fleet := f.formOf(t, isFleetQuery)
 	lat := f.formOf(t, func(q string) bool {
-		return strings.Contains(q, "0.95") && strings.Contains(q, "sum by (service_name, le)") && !strings.Contains(q, "100 *")
+		return strings.Contains(q, "0.95") && strings.Contains(q, "request_latencies_bucket") && strings.Contains(q, "sum by (service_name, le)") && !strings.Contains(q, "100 *")
 	})
 	for _, k := range []string{"start", "end", "step"} {
 		if fleet[k] != lat[k] || fleet[k] == "" {

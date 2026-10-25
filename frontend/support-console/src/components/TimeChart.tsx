@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type uPlot from 'uplot'
-import { CHART_H, alignSeries, readoutPlacement, readoutRows, tokenName, utcClock, yTop } from '../helpers'
+import { CHART_H, type Aligned, alignSeries, readoutPlacement, readoutRows, tokenName, utcClock, yTop } from '../helpers'
 
 type Point = [number, number]
 type Line = { name: string; color: string; unit: string; points: Point[]; folded?: boolean }
@@ -12,11 +12,30 @@ type Props = { lines: Line[]; start: number; end: number; step: number; guides?:
 const X_AXIS_H = 28
 const DAY = 86400
 const NONE: never[] = []
+const LABEL_GAP = 16
+const MONO_ADVANCE = 0.6 // em; the advance of a monospace glyph
+const LONG_LABEL_CHARS = 'MM-DD HH:MM'.length
+const SHORT_LABEL_CHARS = 'HH:MM UTC'.length
 type Tip = { idx: number; left: number; top: number }
 
 // ceiling: a rejected import is not caught; the chart area stays empty and the global Sentry handler reports it
 let loading: Promise<typeof import('./uplot')> | undefined
 const load = () => (loading ??= import('./uplot'))
+
+// Indices of values with a null on both sides: uPlot draws a zero-length path for them.
+function lonePoints(values: ArrayLike<number | null | undefined>): number[] | null {
+  const idxs: number[] = []
+  for (let i = 0; i < values.length; i++) if (values[i] != null && values[i - 1] == null && values[i + 1] == null) idxs.push(i)
+  return idxs.length ? idxs : null
+}
+
+// A selection narrower than two steps widens around its centre, clamped to [start, end].
+function minWindow([a, b]: [number, number], { start, end, step }: Props): [number, number] {
+  const span = Math.min(2 * step, end - start)
+  if (b - a >= span) return [a, b]
+  const lo = Math.max(start, Math.min((a + b) / 2 - span / 2, end - span))
+  return [lo, lo + span]
+}
 
 function placeMarkers(u: uPlot, { markers = NONE, start, end }: Props) {
   let els = [...u.over.querySelectorAll<HTMLElement>('[data-deploy]')]
@@ -97,10 +116,24 @@ export function TimeChart(props: Props) {
           },
         },
         axes: [
-          { ...axis, size: X_AXIS_H, values: (_u, splits) => splits.map((t) => utcClock(t, latest.current.end - latest.current.start >= DAY)) },
+          {
+            ...axis,
+            size: X_AXIS_H,
+            space: () => {
+              const { start, end } = latest.current
+              return (end - start >= DAY ? LONG_LABEL_CHARS : SHORT_LABEL_CHARS) * MONO_ADVANCE * 11 + LABEL_GAP
+            },
+            values: (_u, splits) => splits.map((t) => utcClock(t, latest.current.end - latest.current.start >= DAY)),
+          },
           { ...axis, values: (_u, splits) => splits.map(String) },
         ],
-        series: [{}, ...cur.lines.map((l) => ({ label: l.name, stroke: tok(l.color), width: 1.6, show: !cur.isolated || l.name === cur.isolated }))],
+        series: [
+          {},
+          ...cur.lines.map((l) => {
+            const color = tok(l.color)
+            return { label: l.name, stroke: color, width: 1.6, show: !cur.isolated || l.name === cur.isolated, points: { stroke: color, fill: color, filter: (self: uPlot, i: number, show: boolean) => (show ? null : lonePoints(self.data[i])) } }
+          }),
+        ],
         hooks: {
           draw: [
             (self) => {
@@ -132,7 +165,7 @@ export function TimeChart(props: Props) {
             (self) => {
               const { left, width } = self.select
               if (width <= 0) return
-              latest.current.onZoom?.([self.posToVal(left, 'x'), self.posToVal(left + width, 'x')])
+              latest.current.onZoom?.(minWindow([self.posToVal(left, 'x'), self.posToVal(left + width, 'x')], latest.current))
               self.setSelect({ left: 0, top: 0, width: 0, height: 0 }, false)
             },
           ],
@@ -207,7 +240,8 @@ export function TimeChart(props: Props) {
   }, [isolated])
 
   const long = end - start >= DAY
-  const aligned = tip ? alignSeries(lines, start, end, step) : null
+  const uData = chart.current?.data
+  const aligned = tip && uData && uData.length === lines.length + 1 ? (uData as Aligned) : null
   const rows = tip && aligned ? readoutRows(lines, aligned, tip.idx, isolated) : []
 
   useLayoutEffect(() => {

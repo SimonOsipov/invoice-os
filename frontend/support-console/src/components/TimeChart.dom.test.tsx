@@ -279,6 +279,33 @@ const hover = (u: FakeUPlot, left = 40, top = 20) =>
   })
 const rowNames = (c: HTMLElement) => [...c.querySelectorAll('[data-readout-row]')].map((e) => e.getAttribute('data-readout-row'))
 
+describe('TimeChart lone points', () => {
+  it('series draw an isolated sample as a dot in the series colour', async () => {
+    const { u } = await mount()
+    const [a, b] = opts(u()).series.slice(1)
+    expect([a.points.stroke, a.points.fill, b.points.stroke, b.points.fill]).toEqual(['#111111', '#111111', '#222222', '#222222'])
+    const self = (v: (number | null)[]) => ({ data: [v.map((_, i) => i), v] })
+    expect(a.points.filter(self([null, 5, null, 6, 7, 8, null, 9]), 1, false)).toEqual([1, 7])
+    expect(a.points.filter(self([5, null, 6, 7]), 1, false)).toEqual([0])
+    expect(a.points.filter(self([5]), 1, false)).toEqual([0])
+    expect(a.points.filter(self([1, 2, 3, null]), 1, false)).toBeNull()
+    expect(a.points.filter(self([null, 5, null]), 1, true)).toBeNull()
+  })
+})
+
+describe('TimeChart x axis spacing', () => {
+  it('ticks sit at least a label width and a gap apart, short and long ranges', async () => {
+    const t = Date.UTC(2026, 9, 14, 23, 5) / 1000
+    for (const end of [6 * 3600, 7 * 86400]) {
+      const { u } = await mount({ start: 0, end })
+      const axis = opts(u()).axes[0]
+      const widest = Math.max(...axis.values(u(), [t, 0]).map((l: string) => l.length)) * 0.6 * 11
+      expect(axis.space(u(), 0, 0, end, 500)).toBeGreaterThanOrEqual(widest + 16)
+      cleanup()
+    }
+  })
+})
+
 describe('TimeChart readout', () => {
   it('only the hovered chart shows the readout', async () => {
     const { container } = render(
@@ -321,6 +348,14 @@ describe('TimeChart readout', () => {
     const { view, u } = await mount()
     hover(u(), u().valToPos(120, 'x'))
     expect([...view.container.querySelectorAll('[data-readout-row] .mono')].map((e) => e.textContent)).toEqual(['—', '—'])
+  })
+
+  it('the readout rows read the data uPlot holds at the cursor index', async () => {
+    const { view, u } = await mount()
+    hover(u(), u().valToPos(60, 'x'))
+    u().data = [u().data[0], u().data[1].map(() => 99), u().data[2].map(() => 77)] as any
+    act(() => u().setCursor({ left: u().valToPos(60, 'x'), top: 21 }))
+    expect([...view.container.querySelectorAll('[data-readout-row] .mono')].map((e) => e.textContent)).toEqual([99, 77].map((v) => formatShown('count', v)))
   })
 
   it('mouseleave removes the readout', async () => {
@@ -478,6 +513,19 @@ describe('TimeChart zoom', () => {
     expect(onZoom).toHaveBeenCalledWith([u().posToVal(100, 'x'), u().posToVal(300, 'x')])
     expect(u().calls.filter(([n]) => n === 'setSelect')).toEqual([['setSelect', expect.objectContaining({ width: 0, height: 0 }), false]])
     expect(u().calls.some(([n]) => n === 'setScale')).toBe(false)
+  })
+
+  it('a drag narrower than a step widens to two steps around its centre', async () => {
+    const onZoom = vi.fn()
+    const { u } = await mount({ onZoom, start: 0, end: 7 * 86400, step: 7200 })
+    zoomed(u(), 500, 8)
+    const [lo, hi] = onZoom.mock.calls[0][0]
+    expect(hi - lo).toBeGreaterThanOrEqual(2 * 7200)
+    expect(u().data[0].filter((x) => x >= lo && x <= hi).length).toBeGreaterThanOrEqual(2)
+    zoomed(u(), 0, 1)
+    expect(onZoom.mock.calls[1][0]).toEqual([0, 14400])
+    zoomed(u(), 1000, 1)
+    expect(onZoom.mock.calls[2][0]).toEqual([7 * 86400 - 14400, 7 * 86400])
   })
 
   it('a zero-width select reports nothing', async () => {

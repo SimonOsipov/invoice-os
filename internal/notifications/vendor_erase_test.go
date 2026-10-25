@@ -486,6 +486,15 @@ func TestHubSpotErase_StopsAfterTheRoundCap(t *testing.T) {
 	if strings.Contains(err.Error(), eraseEmail) {
 		t.Error("the error carries the email")
 	}
+	reads := 0
+	for _, l := range v.labels() {
+		if strings.HasPrefix(l, "GET ") && strings.Contains(l, "/associations/deals") {
+			reads++
+		}
+	}
+	if reads != maxDealRounds {
+		t.Errorf("deal reads = %d, want %d", reads, maxDealRounds)
+	}
 }
 
 func TestResendContactState_ReadsTheFlagAndTheOptOuts(t *testing.T) {
@@ -500,7 +509,7 @@ func TestResendContactState_ReadsTheFlagAndTheOptOuts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Unsubscribed || !got.MarketingOut || len(got.OptedOut) != 2 || !got.otherTopicOut() {
+	if got.Missing || !got.Unsubscribed || !got.MarketingOut || len(got.OptedOut) != 2 || !got.otherTopicOut() {
 		t.Fatalf("state = %+v", got)
 	}
 	for _, c := range v.calls() {
@@ -513,7 +522,7 @@ func TestResendContactState_ReadsTheFlagAndTheOptOuts(t *testing.T) {
 func TestResendContactState_MissingContactIsTheZeroState(t *testing.T) {
 	v := newVendor(t, func(seenReq) (int, string) { return 404, `{}` })
 	got, err := resendAt(v, nil).ContactState(t.Context(), eraseEmail)
-	if err != nil || !got.zero() {
+	if err != nil || !got.zero() || !got.Missing {
 		t.Fatalf("state = %+v, err = %v", got, err)
 	}
 }
@@ -552,5 +561,76 @@ func TestFakeResend_ReturnsTheConfiguredState(t *testing.T) {
 	}
 	if got, _ := (FakeResend{}).ContactState(t.Context(), eraseEmail); !got.zero() {
 		t.Fatalf("state = %+v, want zero", got)
+	}
+}
+
+func TestResendContactState_OnlyTheMarketingTopicIsMarketing(t *testing.T) {
+	v := newVendor(t, func(s seenReq) (int, string) {
+		if strings.HasSuffix(s.path(), "/topics") {
+			return 200, `{"has_more":false,"data":[{"id":"t-blog","subscription":"opt_out"}]}`
+		}
+		return 200, `{"unsubscribed":false}`
+	})
+	got, err := resendAt(v, nil).ContactState(t.Context(), eraseEmail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MarketingOut || got.Unsubscribed || len(got.OptedOut) != 1 || !got.otherTopicOut() {
+		t.Fatalf("state = %+v", got)
+	}
+}
+
+func TestResendContactState_ReadsEveryTopicPage(t *testing.T) {
+	v := newVendor(t, func(s seenReq) (int, string) {
+		switch {
+		case !strings.HasSuffix(s.path(), "/topics"):
+			return 200, `{"unsubscribed":false}`
+		case strings.Contains(s.Query, "after=b"):
+			return 200, `{"has_more":false,"data":[{"id":"c","subscription":"opt_out"}]}`
+		default:
+			return 200, `{"has_more":true,"data":[{"id":"a","subscription":"opt_in"},{"id":"b","subscription":"opt_out"}]}`
+		}
+	})
+	got, err := resendAt(v, nil).ContactState(t.Context(), eraseEmail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.OptedOut) != 2 || got.OptedOut[0] != "b" || got.OptedOut[1] != "c" {
+		t.Fatalf("opt-outs = %v, want [b c]", got.OptedOut)
+	}
+}
+
+func TestResendContactState_ATopicReadFailureIsAnError(t *testing.T) {
+	topics := func(status int) *fakeVendor {
+		return newVendor(t, func(s seenReq) (int, string) {
+			if strings.HasSuffix(s.path(), "/topics") {
+				return status, `{}`
+			}
+			return 200, `{"unsubscribed":true}`
+		})
+	}
+	var de *DeliveryError
+	if _, err := resendAt(topics(500), nil).ContactState(t.Context(), eraseEmail); !errors.As(err, &de) || de.Status != 500 {
+		t.Fatalf("err = %v, want *DeliveryError{500}", err)
+	}
+	got, err := resendAt(topics(404), nil).ContactState(t.Context(), eraseEmail)
+	if err != nil || !got.Unsubscribed {
+		t.Fatalf("a contact that vanished mid-read: state = %+v, err = %v", got, err)
+	}
+}
+
+func TestResendRestoreContact_FailureIsAnError(t *testing.T) {
+	st := ResendState{OptedOut: []string{"t-out"}}
+	for _, failing := range []string{http.MethodPost, http.MethodPatch} {
+		v := newVendor(t, func(s seenReq) (int, string) {
+			if s.Method == failing {
+				return 500, `{}`
+			}
+			return 200, `{}`
+		})
+		var de *DeliveryError
+		if err := resendAt(v, nil).RestoreContact(t.Context(), eraseEmail, "", "", st); !errors.As(err, &de) || de.Status != 500 {
+			t.Errorf("%s fails: err = %v, want *DeliveryError{500}", failing, err)
+		}
 	}
 }

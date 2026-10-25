@@ -99,6 +99,9 @@ func ptRows(t *testing.T, table, tenantID string) int {
 	return mustCount(t, h.super, `SELECT count(*) FROM `+table+` WHERE `+col+`::text = $1`, tenantID)
 }
 
+// ptBindEmpty makes ptCall bind app.current_tenant to the empty string, as a pooled connection does after a SET LOCAL ends.
+const ptBindEmpty = "\x00empty"
+
 // ptCall runs purge_tenant(arg) as invoice_app. bind "" opens a tx with no tenant bound.
 func ptCall(pool *pgxpool.Pool, bind string, arg any) (int, error) {
 	ctx := context.Background()
@@ -106,7 +109,7 @@ func ptCall(pool *pgxpool.Pool, bind string, arg any) (int, error) {
 	q := func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT public.purge_tenant($1::uuid)`, arg).Scan(&n)
 	}
-	if bind != "" {
+	if bind != "" && bind != ptBindEmpty {
 		return n, db.WithinTenantTx(ctx, pool, bind, q)
 	}
 	tx, err := pool.Begin(ctx)
@@ -114,6 +117,11 @@ func ptCall(pool *pgxpool.Pool, bind string, arg any) (int, error) {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if bind == ptBindEmpty {
+		if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', '', true)`); err != nil {
+			return 0, err
+		}
+	}
 	if err := q(tx); err != nil {
 		return 0, err
 	}
@@ -277,6 +285,31 @@ func TestRLS_PurgeTenantIsOwnedAndGrantedNarrowly(t *testing.T) {
 	if gateway {
 		t.Errorf("invoice_gateway holds EXECUTE on %s, want none", purgeSig)
 	}
+
+	id := uuid.NewString()
+	for _, c := range []struct {
+		role string
+		run  func() error
+	}{
+		{"invoice_tenant_reader", func() error {
+			_, err := h.reader.Exec(context.Background(), `SELECT public.purge_tenant($1::uuid)`, id)
+			return err
+		}},
+		{"invoice_gateway", func() error {
+			tx, err := h.super.Begin(context.Background())
+			if err != nil {
+				return err
+			}
+			defer func() { _ = tx.Rollback(context.Background()) }()
+			if _, err := tx.Exec(context.Background(), `SET LOCAL ROLE invoice_gateway`); err != nil {
+				return err
+			}
+			_, err = tx.Exec(context.Background(), `SELECT public.purge_tenant($1::uuid)`, id)
+			return err
+		}},
+	} {
+		assertPgRefusal(t, "purge_tenant as "+c.role, c.run(), "42501", "permission denied for function purge_tenant")
+	}
 }
 
 func TestRLS_PurgeTenantRefusesATenantOtherThanTheBoundOne(t *testing.T) {
@@ -291,6 +324,8 @@ func TestRLS_PurgeTenantRefusesATenantOtherThanTheBoundOne(t *testing.T) {
 		{"guc unset", "", a.id},
 		{"guc is another tenant", b.id, a.id},
 		{"null argument", a.id, nil},
+		{"null argument and guc unset", "", nil},
+		{"guc is the empty string", ptBindEmpty, a.id},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := ptCall(h.app, c.bind, c.arg)
@@ -480,8 +515,12 @@ func TestRLS_PurgeTenantRolledBackLeavesTheTenantAndItsGuards(t *testing.T) {
 	errRollback := errors.New("caller rolls back")
 
 	var removed int
+	var guc string
 	err := db.WithinTenantTx(context.Background(), h.app, a.id, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(context.Background(), `SELECT public.purge_tenant($1::uuid)`, a.id).Scan(&removed); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(context.Background(), `SELECT current_setting('app.current_tenant', true)`).Scan(&guc); err != nil {
 			return err
 		}
 		return errRollback
@@ -491,6 +530,9 @@ func TestRLS_PurgeTenantRolledBackLeavesTheTenantAndItsGuards(t *testing.T) {
 	}
 	if removed != 1 {
 		t.Errorf("purge_tenant inside the tx = %d, want 1", removed)
+	}
+	if guc != a.id {
+		t.Errorf("app.current_tenant after the call = %q, want %q (the call must not rebind the caller)", guc, a.id)
 	}
 	for _, tbl := range []string{"tenants", "approval_policy_versions", "approval_policy_steps", "audit_log"} {
 		if n := ptRows(t, tbl, a.id); n == 0 {
@@ -596,4 +638,106 @@ func TestRLS_PurgeTenantLeavesNoRowInAnyTenantTable(t *testing.T) {
 	if n := ptRows(t, "tenants", a); n != 0 {
 		t.Errorf("tenants rows for A = %d, want 0", n)
 	}
+}
+
+func TestRLS_PurgeTenantConcurrentSecondPurgeWaitsThenReturnsZero(t *testing.T) {
+	requireHarness(t)
+
+	t.Run("second call queues behind an uncommitted purge", func(t *testing.T) {
+		a := ptSeedSealedTenant(t)
+		ctx := context.Background()
+		purged, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		stop := func() { once.Do(func() { close(release) }) }
+		t.Cleanup(stop)
+		var first int
+		firstDone := make(chan error, 1)
+		go func() {
+			firstDone <- db.WithinTenantTx(ctx, h.app, a.id, func(tx pgx.Tx) error {
+				if err := tx.QueryRow(ctx, `SELECT public.purge_tenant($1::uuid)`, a.id).Scan(&first); err != nil {
+					return err
+				}
+				close(purged)
+				<-release
+				return nil
+			})
+		}()
+		select {
+		case <-purged:
+		case err := <-firstDone:
+			t.Fatalf("test setup: first purge ended early: %v", err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("test setup: first purge did not finish its call in 10s")
+		}
+
+		type result struct {
+			n       int
+			err     error
+			elapsed time.Duration
+		}
+		secondDone := make(chan result, 1)
+		go func() {
+			start := time.Now()
+			n, err := ptCall(h.app, a.id, a.id)
+			secondDone <- result{n, err, time.Since(start)}
+		}()
+		time.Sleep(time.Second)
+		select {
+		case r := <-secondDone:
+			t.Fatalf("second purge returned (%d, %v) while the first was uncommitted, want it queued", r.n, r.err)
+		default:
+		}
+		stop()
+		if err := <-firstDone; err != nil {
+			t.Fatalf("first purge commit: %v", err)
+		}
+		r := <-secondDone
+		if r.err != nil {
+			t.Fatalf("second purge: %v", r.err)
+		}
+		if first != 1 || r.n != 0 {
+			t.Errorf("purges returned (%d, %d), want (1, 0)", first, r.n)
+		}
+		if n := ptRows(t, "tenants", a.id); n != 0 {
+			t.Errorf("tenants rows for A = %d, want 0", n)
+		}
+		ptAssertGuardsArmed(t)
+	})
+
+	t.Run("simultaneous calls remove the tenant exactly once", func(t *testing.T) {
+		for i := 0; i < 3; i++ {
+			a := ptSeedSealedTenant(t)
+			var wg sync.WaitGroup
+			var mu sync.Mutex
+			var got []int
+			var errs []error
+			start := make(chan struct{})
+			for j := 0; j < 2; j++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-start
+					n, err := ptCall(h.app, a.id, a.id)
+					mu.Lock()
+					defer mu.Unlock()
+					got, errs = append(got, n), append(errs, err)
+				}()
+			}
+			close(start)
+			wg.Wait()
+			for _, err := range errs {
+				if err != nil {
+					t.Fatalf("round %d: concurrent purge: %v", i, err)
+				}
+			}
+			sort.Ints(got)
+			if !reflect.DeepEqual(got, []int{0, 1}) {
+				t.Errorf("round %d: purges returned %v, want [0 1]", i, got)
+			}
+			if n := ptRows(t, "tenants", a.id); n != 0 {
+				t.Errorf("round %d: tenants rows for A = %d, want 0", i, n)
+			}
+		}
+		ptAssertGuardsArmed(t)
+	})
 }

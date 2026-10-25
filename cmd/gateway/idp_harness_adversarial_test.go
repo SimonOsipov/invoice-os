@@ -59,6 +59,46 @@ chmod +x "$out"
 type idpUpRun struct {
 	stdout, stderr, log string
 	code                int
+	runnerTemp          string // idp-up.sh's RUNNER_TEMP, where it writes IDP_ES256_KEYS_FILE
+}
+
+const keysFileVar = "IDP_ES256_KEYS_FILE"
+
+// splitKeysFile returns stdout's lines without the IDP_ES256_KEYS_FILE line, and that line's path.
+func splitKeysFile(t *testing.T, stdout string) (rest []string, path string) {
+	t.Helper()
+	for _, l := range strings.Split(strings.TrimSuffix(stdout, "\n"), "\n") {
+		if v, ok := strings.CutPrefix(l, keysFileVar+"="); ok {
+			if path != "" {
+				t.Errorf("stdout carries %s twice", keysFileVar)
+			}
+			path = v
+			continue
+		}
+		rest = append(rest, l)
+	}
+	return rest, path
+}
+
+// assertKeysFile pins the printed file: in runnerTemp, named by slot, mode 600, holding the key idp-es256 got.
+func assertKeysFile(t *testing.T, r idpUpRun, path, name, container string) {
+	t.Helper()
+	if path == "" {
+		t.Fatalf("stdout carries no %s line: %q", keysFileVar, r.stdout)
+	}
+	if want := filepath.Join(r.runnerTemp, name); path != want {
+		t.Errorf("%s = %q, want %q", keysFileVar, path, want)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the printed key file: %v", err)
+	}
+	if want := stubEnv(t, r.log, container, "GOTRUE_JWT_KEYS"); strings.TrimSpace(string(raw)) != want {
+		t.Errorf("key file holds %q, want the key idp-es256 runs with, %q", raw, want)
+	}
+	if fi, err := os.Stat(path); err == nil && fi.Mode().Perm() != 0o600 {
+		t.Errorf("key file mode = %v, want 600", fi.Mode().Perm())
+	}
 }
 
 // runIdpUp runs the real scripts/ci/idp-up.sh with docker, go, curl and openssl stubbed and uname fixed to osName.
@@ -95,7 +135,11 @@ func runIdpUp(t *testing.T, osName string, args ...string) idpUpRun {
 			env = append(env, kv)
 		}
 	}
-	cmd.Env = append(env, "PATH="+bin+":"+os.Getenv("PATH"), "STUB_LOG="+logPath, "STUB_DIR="+dir)
+	runnerTemp := filepath.Join(dir, "runner")
+	if err := os.Mkdir(runnerTemp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Env = append(env, "PATH="+bin+":"+os.Getenv("PATH"), "STUB_LOG="+logPath, "STUB_DIR="+dir, "RUNNER_TEMP="+runnerTemp)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	code := 0
@@ -110,7 +154,7 @@ func runIdpUp(t *testing.T, osName string, args ...string) idpUpRun {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return idpUpRun{out.String(), errb.String(), string(log), code}
+	return idpUpRun{out.String(), errb.String(), string(log), code, runnerTemp}
 }
 
 func stubLines(log, prefix, name string) []string {
@@ -228,7 +272,8 @@ func TestIdpUpStdoutIsTheURLsAndTheIssuer(t *testing.T) {
 				"IDP_REBUILD_URL=http://localhost:9993", "IDP_MAIL_URL=http://localhost:9994",
 				"IDP_SHORT_URL=http://localhost:9996", "MAILPIT_URL=http://localhost:8025", "IDP_ISSUER=" + idpIssuer,
 			}
-			got := strings.Split(strings.TrimSuffix(r.stdout, "\n"), "\n")
+			got, keysFile := splitKeysFile(t, r.stdout)
+			assertKeysFile(t, r, keysFile, "idp-es256-keys.json", "idp-es256")
 			if !strings.HasSuffix(r.stdout, "\n") || !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
 				t.Errorf("stdout = %q, want exactly these lines in any order: %q", r.stdout, want)
 			}
@@ -461,15 +506,23 @@ func TestIdpDownRemovesEveryContainerIdpUpStarts(t *testing.T) {
 		t.Fatalf("control: idp-up.sh started %v; want at least six containers", started)
 	}
 
+	_, keysFile := splitKeysFile(t, up.stdout)
+	if _, err := os.Stat(keysFile); err != nil {
+		t.Fatalf("control: idp-up.sh left no key file at %q: %v", keysFile, err)
+	}
+
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "stub.log")
 	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/usr/bin/env bash\necho \"$*\" >>\""+logPath+"\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", filepath.Join("..", "..", "scripts", "ci", "idp-down.sh"))
-	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "RUNNER_TEMP="+up.runnerTemp)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("idp-down.sh: %v: %s", err, out)
+	}
+	if _, err := os.Stat(keysFile); !os.IsNotExist(err) {
+		t.Errorf("idp-down.sh leaves the key file %q (stat err %v)", keysFile, err)
 	}
 	log, err := os.ReadFile(logPath)
 	if err != nil {
@@ -560,10 +613,11 @@ func TestIdpSlotGivesAWorktreeItsOwnContainersAndPorts(t *testing.T) {
 				"IDP_REBUILD_URL=http://localhost:10013", "IDP_MAIL_URL=http://localhost:10014",
 				"IDP_SHORT_URL=http://localhost:10016", "MAILPIT_URL=http://localhost:8045", "IDP_ISSUER=" + idpIssuer,
 			}
-			got := strings.Split(strings.TrimSuffix(r.stdout, "\n"), "\n")
+			got, keysFile := splitKeysFile(t, r.stdout)
 			if !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
 				t.Errorf("stdout = %q, want %q", r.stdout, want)
 			}
+			assertKeysFile(t, r, keysFile, "idp-es256-keys-s2.json", "idp-es256-s2")
 			for c, port := range map[string]string{"idp-es256": "10011", "idp-hs256": "10012", "idp-rebuild": "10013", "idp-mail": "10014", "idp-short": "10016"} {
 				if len(stubLines(r.log, "RUN", c)) != 0 {
 					t.Errorf("slot 2 started the unsuffixed %s", c)

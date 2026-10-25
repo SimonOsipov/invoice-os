@@ -490,7 +490,7 @@ describe('TimeChart zoom', () => {
   it('the zoom prop sets the window on the chart', async () => {
     const { view, u } = await mount()
     view.rerender(<TimeChart lines={lines()} {...base} zoom={[600, 1800]} />)
-    expect(u().calls).toContainEqual(['setScale', 'x', { min: 600, max: 1800 }])
+    expect(u().calls.filter(([n]) => n === 'setScale').at(-1)).toEqual(['setScale', 'x', { min: 600, max: 1800 }])
     view.rerender(<TimeChart lines={lines()} {...base} zoom={null} />)
     expect(u().calls[u().calls.length - 1]).toEqual(['setScale', 'x', { min: 0, max: 3600 }])
     expect(root(view.container).getAttribute('data-x')).toBe('0,3600')

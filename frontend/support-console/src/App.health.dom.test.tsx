@@ -634,6 +634,41 @@ describe('Console system health zoom', () => {
     expect(lastScale()).toEqual({ min: T0 + 700, max: T0 + 4300 })
   })
 
+  it('a window after the answer end clears', async () => {
+    await open()
+    await drag(T0 + 600, T0 + 1800)
+    metrics.mockResolvedValue(reqPanel(METRICS, 46, -4000))
+    await tick()
+    expect(resetBtn()).toBeNull()
+    expect(lastScale()).toEqual({ min: T0 - 4000, max: T0 - 400 })
+  })
+
+  it('Reset zoom while a refresh is pending leaves the full range when it lands', async () => {
+    await open()
+    await drag(T0 + 600, T0 + 1800)
+    let land: (m: StaffMetrics) => void = () => {}
+    metrics.mockImplementation(() => new Promise<StaffMetrics>((r) => { land = r }))
+    await tick()
+    fireEvent.click(resetBtn()!)
+    await act(async () => { land(reqPanel(METRICS, 47)) })
+    expect(resetBtn()).toBeNull()
+    expect(lastScale()).toEqual({ min: T0, max: T0 + 3600 })
+  })
+
+  it('a chart recreated by a refresh while zoomed opens in the window', async () => {
+    await open()
+    await drag(T0 + 600, T0 + 1800)
+    const n = FakeUPlot.instances.length
+    const two = reqPanel(METRICS, 48)
+    two.panels = [{ ...two.panels[0], series: [...two.panels[0].series, { name: 'submission', points: [[T0 + 60, 3]] }] }]
+    metrics.mockResolvedValue(two)
+    await tick()
+    await vi.waitFor(() => expect(FakeUPlot.instances.length).toBeGreaterThan(n))
+    const o = chart().opts as any
+    expect([o.scales.x.min, o.scales.x.max]).toEqual([T0 + 600, T0 + 1800])
+    expect(resetBtn()).not.toBeNull()
+  })
+
   it('a refresh still loading clears nothing', async () => {
     await open()
     await drag(T0 + 60, T0 + 600)
@@ -641,6 +676,9 @@ describe('Console system health zoom', () => {
     await tick()
     await tick()
     expect(resetBtn()).not.toBeNull()
+    expect(screen.queryByText('Loading metrics…')).toBeNull()
+    expect(chart().destroyed).toBe(false)
+    expect(lastScale()).toEqual({ min: T0 + 60, max: T0 + 600 })
   })
 
   it('leaving System health clears the zoom and keeps the rest', async () => {

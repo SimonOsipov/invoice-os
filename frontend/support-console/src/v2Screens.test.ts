@@ -881,6 +881,7 @@ describe('System health markup', () => {
 
   it('the p95 tile shows the fleet value and the worst service', () => {
     const ts = parse(healthWith({}))
+    expect(texts(tileOf(ts, 'p95'))).toEqual(expect.arrayContaining(['500', 'ms', 'HIGH']))
     expect(worstOf(ts).map((t) => t.text)).toEqual(['worst b 1.20 s'])
     expect(classes(worstOf(ts)[0])).toContain('mono')
     expect(style(worstOf(ts)[0]).color).toBe('var(--fg-3)')
@@ -915,6 +916,18 @@ describe('System health markup', () => {
   it('no fleet data keeps the worst line', () => {
     const ts = parse(healthWith({ metrics: metricsWith({ latency_p95_fleet_ms: {} }) }))
     expect(texts(tileOf(ts, 'p95'))).toEqual(expect.arrayContaining(['—', 'worst b 1.20 s', 'HIGH']))
+  })
+
+  it('the p95 fleet value uses its own unit scale and the worst line takes the latest step', () => {
+    const t = tileOf(parse(healthWith({ metrics: metricsWith({ latency_p95_fleet_ms: { fleet: [[0, 1500]] }, latency_p95_ms: { a: [[0, 1200], [60, 100]], b: [[0, 50], [60, 200]] } }) })), 'p95')
+    expect(texts(t)).toEqual(expect.arrayContaining(['1.50', 's', 'worst b 200 ms', 'PEAKED']))
+  })
+
+  it('an unavailable fleet panel beside per-service data reads the dash and keeps the worst line', () => {
+    const m = metricsWith()
+    m.panels = m.panels.map((p) => (p.key === 'latency_p95_fleet_ms' ? { ...p, available: false } : p))
+    const t = tileOf(parse(healthWith({ metrics: m })), 'p95')
+    expect(texts(t)).toEqual(expect.arrayContaining(['—', 'worst b 1.20 s', 'HIGH']))
   })
 
   it('no per-service p95 reads NO DATA with no worst line', () => {

@@ -332,7 +332,7 @@ func contactWorkers(pool *pgxpool.Pool, mode notifications.Mode, hs notification
 }
 
 // newEraseWorker builds the erase worker in every contacts mode. The erasers are nil in off mode;
-// Account stays a nil interface without a client (TestNewEraseWorker_FollowsTheModes).
+// Account stays a nil interface without a client (TestEraseWorker_FollowsTheModes).
 func newEraseWorker(pool *pgxpool.Pool, mode notifications.Mode, hs notifications.HubSpotClient,
 	rs notifications.ResendClient, account *gotrueadmin.Client, logger *slog.Logger) *notifications.EraseWorker {
 	w := &notifications.EraseWorker{Pool: pool, Mode: mode, Logger: logger}

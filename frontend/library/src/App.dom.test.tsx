@@ -177,6 +177,14 @@ describe('App', () => {
     expect(window.history.length).toBe(l4 + 1)
   })
 
+  it('click_anOldHostPathIsCorrectedToTheBaseInPlace', () => {
+    mount('/rules')
+    const len = window.history.length
+    click(nav('rules'))
+    expect(window.location.pathname).toBe('/library/rules')
+    expect(window.history.length).toBe(len)
+  })
+
   it('backAndForward_restoreEachView', async () => {
     mount('/library/')
     click(card('Rules & validation'))

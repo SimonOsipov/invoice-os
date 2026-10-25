@@ -44,9 +44,14 @@ describe('route', () => {
   })
 
   it('parse_aBaseLookalikeIsHome', () => {
-    for (const p of ['/libraryx', '/library/nope', '/Library/invoices']) {
+    for (const p of ['/libraryx', '/library/nope', '/Library/invoices', '/LIBRARY/rules', '/librarys/rules', '/library//rules', '/library/library/rules']) {
       expect(parseLibraryPath(p), p).toEqual({ view: 'home' })
     }
+  })
+
+  it('parse_aPrefixedPathReadsTheSameAsItsBaseRelativeOne', () => {
+    expect(FEATURES.length).toBeGreaterThan(0)
+    for (const f of FEATURES) expect(parseLibraryPath(`${LIBRARY_BASE}/${f.gid}/${f.id}`)).toEqual(parseLibraryPath(`/${f.gid}/${f.id}`))
   })
 
   it('parse_anUnknownPathIsHome', () => {
@@ -62,6 +67,7 @@ describe('route', () => {
     expect(new Set(paths).size).toBe(38)
     for (const p of paths) {
       expect(p.startsWith('/library/')).toBe(true)
+      expect(p).not.toContain('/library/library')
       expect(libraryPath(parseLibraryPath(p))).toBe(p)
     }
   })

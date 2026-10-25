@@ -113,7 +113,7 @@ const pairwiseApart = (rs: Rect[], what: string): string[] => rs.flatMap((a, i) 
 type Read = { problems: string[]; rects: Record<string, unknown> }
 
 // Reads at every wide width until `read` reports no problem; the entry viewport is restored.
-async function atWidths(page: Page, label: string, read: () => Promise<Read>): Promise<unknown[]> {
+async function atWidths(page: Page, label: string, read: () => Promise<Read>, timeout = 10_000): Promise<unknown[]> {
   const entry = page.viewportSize()
   const out: unknown[] = []
   try {
@@ -132,7 +132,7 @@ async function atWidths(page: Page, label: string, read: () => Promise<Read>): P
               return [`read threw: ${String((err as Error).message).split('\n')[0]}`]
             }
           },
-          { message: `${label} at ${width}px`, timeout: 10_000 },
+          { message: `${label} at ${width}px`, timeout },
         )
         .toEqual([])
       out.push({ width, ...(rects as object) })
@@ -847,6 +847,10 @@ function scopeMatch(m: SeenMetrics, what: string, only?: string): void {
 // Per panel key, the series names and point counts: evidence for the preview-scope check.
 const drawSummary = (m: SeenMetrics) => Object.fromEntries(m.panels.map((p) => [p.key, p.series.map((s) => ({ name: s.name, points: s.points.length }))]))
 
+// Series names a panel can draw: Cloud SQL panels name their own lines.
+const servedNames = (m: SeenMetrics, key: string): string[] =>
+  key === 'sql_util' ? ['CPU', 'RAM', 'Disk'] : key === 'sql_connections' ? ['connections'] : panelSeries(m, key).map((s) => s.name)
+
 // Panels and stat tiles equal one metrics answer: No data iff no point, else a line.
 async function metricsMatch(page: Page, m: SeenMetrics, what: string): Promise<void> {
   const mn = mainOf(page)
@@ -858,8 +862,12 @@ async function metricsMatch(page: Page, m: SeenMetrics, what: string): Promise<v
     const has = panelHasData(m, key)
     await expect(p.locator('[data-no-data]'), `${what}: ${key} No data`).toHaveCount(has ? 0 : 1)
     if (!has) await expect(p.locator('[data-no-data]'), `${what}: ${key} note`).toHaveText('No data')
-    if (has) await expect(p.locator('svg [data-line]').first(), `${what}: ${key} draws a line`).toBeAttached()
-    else await expect(p.locator('[data-line]'), `${what}: ${key} draws no line`).toHaveCount(0)
+    const chart = p.locator('[data-chart]')
+    if (has) {
+      await expect(chart, `${what}: ${key} draws a line`).toHaveAttribute('data-drawn', /.+/)
+      const drawn = ((await chart.getAttribute('data-drawn')) ?? '').split(',')
+      expect(servedNames(m, key), `${what}: ${key} data-drawn names are served series`).toEqual(expect.arrayContaining(drawn))
+    } else await expect(chart, `${what}: ${key} draws no chart`).toHaveCount(0)
   }
   for (const key of STAT_KEYS.filter((k) => k !== 'fleet')) {
     const t = mn.locator(`[data-tile="${key}"]`)
@@ -1189,6 +1197,9 @@ async function panelsRead(page: Page, grid: Locator, jobs: Rect, card: Rect): Pr
   return { problems, rects }
 }
 
+// One fixturePanelsRead pass takes ~10 s on CI: 11 panels of serial locator round trips.
+const FIXTURE_READ_TIMEOUT = 30_000
+
 // fixture check: pins the chart, legend and marker layout of a wire-shaped body, not the metrics contract
 async function fixturePanelsRead(page: Page): Promise<Read> {
   const panels = mainOf(page).locator('.ops-health-panels > [data-panel]')
@@ -1199,15 +1210,19 @@ async function fixturePanelsRead(page: Page): Promise<Read> {
     const p = panels.nth(i)
     const chart = kid(p, 2)
     const legend = kid(p, 3)
-    const svg = chart.locator('svg')
-    await expect(svg, `${key} draws a chart`).toHaveCount(1)
-    const axis = { yMax: kid(kid(chart, 1), 1), yZero: kid(kid(chart, 1), 2), xStart: kid(kid(chart, 4), 1), xEnd: kid(kid(chart, 4), 2) }
-    const r = await boxes(page, { chart, legend, svg, ...axis })
-    problems.push(...within(rects[i], r.chart, `${key} chart`), ...below(r.chart, r.legend, `${key} legend below the chart`), ...within(rects[i], r.legend, `${key} legend`))
-    for (const k of Object.keys(axis) as (keyof typeof axis)[]) problems.push(...within(rects[i], r[k], `${key} axis label ${k}`))
-    problems.push(...leftOf(r.yMax, r.svg, `${key} y labels / chart`), ...below(r.svg, r.xStart, `${key} x labels under the chart`), ...pairwiseApart([r.yMax, r.yZero], `${key} y labels`), ...pairwiseApart([r.xStart, r.xEnd], `${key} x labels`))
+    const titleRow = kid(p, 1)
+    const uplot = chart.locator('.uplot')
+    await expect(chart, `${key} draws a chart`).toHaveAttribute('data-drawn', /.+/)
+    await expect(uplot, `${key} uPlot root`).toHaveCount(1)
+    const edges = async () => {
+      const b = await boxes(page, { chart, uplot, titleRow })
+      return Math.max(...[b.chart, b.uplot].flatMap((c) => [Math.abs(c.x - b.titleRow.x), Math.abs(c.x + c.width - (b.titleRow.x + b.titleRow.width))]))
+    }
+    await expect.poll(edges, { message: `${key} chart edges align with the title row` }).toBeLessThanOrEqual(1)
+    const r = await boxes(page, { chart, legend, uplot })
+    problems.push(...within(rects[i], r.chart, `${key} chart`), ...within(rects[i], r.uplot, `${key} uPlot`), ...below(r.chart, r.legend, `${key} legend below the chart`), ...within(rects[i], r.legend, `${key} legend`))
 
-    const entries = legend.locator(':scope > span')
+    const entries = legend.locator(':scope > *')
     const want = legendCounts[key] ?? 8
     await expect(entries, `${key} legend entries`).toHaveCount(want)
     const entryRects = await rectsOf(page, entries, `${key} legend entry`)
@@ -1218,10 +1233,15 @@ async function fixturePanelsRead(page: Page): Promise<Read> {
       await expect(legend.locator('[data-series-other]'), `${key} folded entry`).toHaveText('+10 other services')
     }
 
-    const marks = svg.locator('line[data-deploy]')
+    const over = chart.locator('.u-over')
+    const marks = over.locator('[data-deploy]')
     await expect(marks, `${key} deploy markers`).toHaveCount(2)
+    for (let j = 0; j < 2; j++) await expect(marks.nth(j), `${key} deploy marker ${j} title`).toHaveAttribute('title', /.+/)
     const markRects = await marks.evaluateAll((els) => els.map((e) => { const b = e.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height } }))
-    for (const [j, m] of markRects.entries()) problems.push(...within(rects[i], m, `${key} deploy marker ${j}`))
+    // a marker is a 7 px target centred on its time, so one at an edge reaches 4 px past the plot
+    const o = (await boxes(page, { over })).over
+    const roomy = { x: o.x - 4, y: o.y, width: o.width + 8, height: o.height }
+    for (const [j, m] of markRects.entries()) problems.push(...within(rects[i], m, `${key} deploy marker ${j}`), ...within(roomy, m, `${key} deploy marker ${j} in the plot`))
   }
   const word = (key: string): Locator => panels.nth(PANEL_KEYS.indexOf(key)).locator('[data-word]')
   await expect(word('error_pct'), 'error_pct word').toHaveText('HIGH')
@@ -1229,7 +1249,6 @@ async function fixturePanelsRead(page: Page): Promise<Read> {
   await expect(word('latency_p95_ms'), 'latency_p95_ms word').toHaveText('PEAKED')
   await expect(word('ram_pct'), 'ram_pct has no word').toHaveCount(0)
   await expect(word('startup_latency_p95_ms'), 'startup_latency_p95_ms has no word').toHaveCount(0)
-  await expect(panels.nth(PANEL_KEYS.indexOf('startup_latency_p95_ms')).locator('svg line[data-guide]'), 'startup_latency_p95_ms has no guide').toHaveCount(0)
   return { problems, rects: { panels: rects } }
 }
 
@@ -1343,12 +1362,233 @@ function metricsFixture() {
   }
 }
 
+// fixture check: the shared crosshair and the hover readout of the labelled metrics body
+async function fixtureHover(page: Page): Promise<void> {
+  const mn = mainOf(page)
+  const panels = mn.locator('.ops-health-panels > [data-panel]')
+  const chartOf = (key: string): Locator => kid(panels.nth(PANEL_KEYS.indexOf(key)), 2)
+  const legendOf = (key: string): Locator => kid(panels.nth(PANEL_KEYS.indexOf(key)), 3)
+  const charts = mn.locator('[data-chart]')
+  const readout = mn.locator('[data-readout]')
+  const total = await charts.count()
+  const overOf = async (key: string): Promise<Rect> => (await boxes(page, { over: chartOf(key).locator('.u-over') })).over
+  const hoverAt = async (key: string, frac: number): Promise<void> => {
+    const o = await overOf(key)
+    await page.mouse.move(o.x + o.width * frac, o.y + o.height / 2)
+  }
+  const allCursors = async (): Promise<string[]> => charts.evaluateAll((els) => els.map((e) => e.getAttribute('data-cursor') ?? 'missing'))
+
+  await page.mouse.move(1, 1)
+  await hoverAt('req_per_min', 0.25)
+  await expect.poll(async () => new Set(await allCursors()).size === 1 && (await allCursors())[0] !== '', { message: 'every panel shares one non-empty data-cursor' }).toBe(true)
+  for (let i = 0; i < total; i++) await expect(charts.nth(i).locator('.u-cursor-x'), `panel ${i} crosshair shows`).not.toHaveClass(/u-off/)
+  await expect(readout, 'only the hovered panel shows a readout').toHaveCount(1)
+  await expect(chartOf('req_per_min').locator('[data-readout]')).toHaveCount(1)
+
+  // crosshair colour: the resolved --fg-3 through a probe element
+  const colours = await chartOf('req_per_min').evaluate((el) => {
+    const probe = document.createElement('span')
+    probe.style.color = 'var(--fg-3)'
+    el.append(probe)
+    const fg3 = getComputedStyle(probe).color
+    probe.remove()
+    return { fg3, line: getComputedStyle(el.querySelector('.u-cursor-x')!).borderRightColor }
+  })
+  expect(colours.line, 'crosshair uses --fg-3').toBe(colours.fg3)
+
+  // step 30 of FIXTURE_STEPS (61) sits at the middle of the plot; auth (METRIC_SERVICES_FIXTURE[1]) has no point there (metricsFixture gapAt)
+  await hoverAt('req_per_min', 0.5)
+  const [min] = ((await chartOf('req_per_min').getAttribute('data-x')) ?? '').split(',').map(Number)
+  const t = min + 30 * 60
+  await expect.poll(allCursors, { message: 'the cursor reads step 30' }).toEqual(Array(total).fill(String(t)))
+  await expect(readout.locator('[data-readout-time]'), 'readout time').toHaveText(`${new Date(t * 1000).toISOString().slice(11, 16)} UTC`)
+  const coloured = await legendOf('req_per_min').locator('[data-series]').evaluateAll((els) => els.map((e) => e.getAttribute('data-series')))
+  expect(coloured, 'seven coloured legend entries').toHaveLength(7)
+  const want = [...coloured, ...METRIC_SERVICES_FIXTURE.filter((n) => !coloured.includes(n))]
+  await expect.poll(() => readout.locator('[data-readout-row]').evaluateAll((els) => els.map((e) => e.getAttribute('data-readout-row'))), { message: 'readout rows: coloured in legend order, then grey' }).toEqual(want)
+  await expect(readout.locator('[data-readout-row="auth"] .mono'), 'auth has no point at the gap').toHaveText('—')
+  // step 15: auth has no point at step 30, so every row has a value here
+  await hoverAt('error_pct', 0.25)
+  const errRows = chartOf('error_pct').locator('[data-readout-row] .mono')
+  await expect(errRows, 'error_pct rows').toHaveCount(METRIC_SERVICES_FIXTURE.length)
+  expect(new Set(await errRows.allTextContents()), 'every error_pct row reads 2.00 %').toEqual(new Set(['2.00 %']))
+
+  await atWidths(page, 'SUP-03 System health fixture readout layout', async () => {
+    const problems: string[] = []
+    for (const [key, frac] of [['req_per_min', 0.1], ['error_pct', 0.9]] as const) {
+      await page.mouse.move(1, 1)
+      await hoverAt(key, frac)
+      const box = chartOf(key).locator('[data-readout]')
+      await expect(box, `${key} readout`).toHaveCount(1)
+      const r = (await boxes(page, { box })).box
+      const x = (await boxes(page, { x: chartOf(key).locator('.u-cursor-x') })).x
+      const view = page.viewportSize()!
+      problems.push(...within({ x: 0, y: 0, width: view.width, height: view.height }, r, `${key} readout in the viewport`))
+      if (r.x < x.x + x.width + 1 && x.x - 1 < r.x + r.width) problems.push(`${key} readout covers the crosshair`)
+      const top = await box.evaluate((el) => {
+        const b = el.getBoundingClientRect()
+        // the readout has pointer-events: none, which elementFromPoint skips
+        el.style.pointerEvents = 'auto'
+        const hit = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)
+        el.style.pointerEvents = 'none'
+        return !!hit && el.contains(hit)
+      })
+      if (!top) problems.push(`${key} readout is not topmost at its centre`)
+      const rows = await rectsOf(page, box.locator('[data-readout-row]'), `${key} readout row`)
+      problems.push(...pairwiseApart(rows, `${key} readout rows`))
+      for (const [i, row] of rows.entries()) problems.push(...within(r, row, `${key} readout row ${i}`))
+      await noSidewaysScroll(page, `${key} hover`)
+    }
+    return { problems, rects: {} }
+  })
+
+  // leaving the panel area clears every crosshair and the readout
+  const head = (await boxes(page, { h: mn.getByRole('heading', { level: 1, name: 'System health' }) })).h
+  await page.mouse.move(head.x + head.width / 2, head.y + head.height / 2)
+  await expect.poll(allCursors, { message: 'leaving empties data-cursor everywhere' }).toEqual(Array(total).fill(''))
+  for (let i = 0; i < total; i++) await expect(charts.nth(i).locator('.u-cursor-x'), `panel ${i} crosshair hides`).toHaveClass(/u-off/)
+  await expect(readout, 'the readout is gone').toHaveCount(0)
+}
+
+// fixture check: synced drag zoom, Reset zoom and the select colour on the labelled metrics body
+async function fixtureZoom(page: Page): Promise<void> {
+  const mn = mainOf(page)
+  const panels = mn.locator('.ops-health-panels > [data-panel]')
+  const charts = mn.locator('[data-chart]')
+  const reqOver = kid(panels.nth(PANEL_KEYS.indexOf('req_per_min')), 2).locator('.u-over')
+  const reset = mn.getByRole('button', { name: 'Reset zoom', exact: true })
+  const windows = async (): Promise<string[]> => charts.evaluateAll((els) => els.map((e) => e.getAttribute('data-x') ?? 'missing'))
+  const same = async (): Promise<string | null> => {
+    const w = await windows()
+    return w.length > 0 && new Set(w).size === 1 ? w[0] : null
+  }
+  const full = async (): Promise<[number, number]> => {
+    await expect.poll(same, { message: 'every chart shares one window' }).not.toBeNull()
+    return (await same())!.split(',').map(Number) as [number, number]
+  }
+  const drag = async (from: number, to: number, release = true): Promise<void> => {
+    const o = (await boxes(page, { o: reqOver })).o
+    const y = o.y + o.height / 2
+    await page.mouse.move(o.x + o.width * from, y)
+    await page.mouse.down()
+    await page.mouse.move(o.x + o.width * ((from + to) / 2), y, { steps: 4 })
+    await page.mouse.move(o.x + o.width * to, y, { steps: 4 })
+    if (release) await page.mouse.up()
+  }
+
+  await expect(reset, 'no Reset zoom before a drag').toHaveCount(0)
+  const [start, end] = await full()
+
+  await drag(0.2, 0.6, false)
+  const tint = await mn.evaluate((el) => {
+    const probe = document.createElement('span')
+    probe.style.backgroundColor = 'var(--action-tint)'
+    el.append(probe)
+    const want = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return { want, got: getComputedStyle(document.querySelector('.ops-health-panels .u-select')!).backgroundColor }
+  })
+  expect(tint.got, 'select box uses --action-tint').toBe(tint.want)
+  await page.mouse.up()
+
+  const zoomed = await full()
+  expect(zoomed[0], 'zoom starts inside the range').toBeGreaterThan(start)
+  expect(zoomed[1], 'zoom ends inside the range').toBeLessThan(end)
+  await expect(reset).toHaveCount(1)
+  await expect(mn.getByRole('button', { name: '6h', exact: true }), 'the range chip stays pressed while zoomed').toHaveAttribute('aria-pressed', 'true')
+
+  await atWidths(page, 'SUP-03 System health fixture filter bar while zoomed', async () => {
+    const problems: string[] = []
+    const filterBar = parent(mn.getByRole('button', { name: '15m', exact: true }))
+    const bar = await boxes(page, { filterBar, select: filterBar.locator('select'), reset })
+    const chipRects = await rectsOf(page, filterBar.locator('button.ops-chip'), 'range chip')
+    problems.push(...within(bar.filterBar, bar.reset, 'Reset zoom in the filter bar'), ...sameTops([...chipRects, bar.reset], 'chips and Reset zoom'))
+    problems.push(...pairwiseApart([...chipRects, bar.reset, bar.select], 'chips, Reset zoom and select'))
+    problems.push(...(await selectAtRightEnd(filterBar, bar.filterBar, bar.select, [...chipRects, bar.reset])))
+    for (let i = 0; i < PANEL_KEYS.length; i++) {
+      const marks = kid(panels.nth(i), 2).locator('[data-deploy]:visible')
+      const titles = await marks.evaluateAll((els) => els.map((e) => e.getAttribute('title')))
+      if (titles.length !== 1 || !titles[0]?.startsWith('gateway-00042 · ')) problems.push(`${PANEL_KEYS[i]} visible markers: ${titles.join(' | ')}`)
+    }
+    return { problems, rects: { bar: bar.filterBar, reset: bar.reset } }
+  })
+
+  await reset.click()
+  await expect(reset).toHaveCount(0)
+  await expect.poll(same, { message: 'Reset zoom restores the range' }).toBe(`${start},${end}`)
+
+  await drag(0.2, 0.6)
+  await expect(reset).toHaveCount(1)
+  await mn.getByRole('button', { name: '1h', exact: true }).click()
+  await expect(reset, 'a range chip clears the zoom').toHaveCount(0)
+  await full()
+
+  await drag(0.2, 0.6)
+  await expect(reset).toHaveCount(1)
+  await mn.locator('select[aria-label="Service"]').selectOption('app')
+  await expect(reset, 'a service pick clears the zoom').toHaveCount(0)
+  await full()
+  await mn.locator('select[aria-label="Service"]').selectOption('')
+  await mn.getByRole('button', { name: '6h', exact: true }).click()
+  await full()
+}
+
+// fixture check: legend isolation, its readout and layout on the labelled metrics body
+async function fixtureIsolate(page: Page): Promise<void> {
+  const mn = mainOf(page)
+  const panels = mn.locator('.ops-health-panels > [data-panel]')
+  const chartOf = (key: string): Locator => kid(panels.nth(PANEL_KEYS.indexOf(key)), 2)
+  const legendOf = (key: string): Locator => kid(panels.nth(PANEL_KEYS.indexOf(key)), 3)
+  const cloud = PANEL_KEYS.filter((k) => !k.startsWith('sql_'))
+  const drawn = async (key: string): Promise<string[]> => ((await chartOf(key).getAttribute('data-drawn')) ?? '').split(',').filter(Boolean)
+
+  // worker: the highest req_per_min peak in metricsFixture (20 + n + i % 7, n 16), so colourMap gives it a slot in every Cloud Run panel
+  const name = 'worker'
+  await legendOf('req_per_min').locator(`[data-series="${name}"]`).click()
+  for (const key of cloud) await expect.poll(() => drawn(key), { message: `${key} draws only ${name}` }).toEqual([name])
+  await expect.poll(() => drawn('sql_util'), { message: 'sql_util keeps its lines' }).toEqual(['CPU', 'RAM', 'Disk'])
+  await expect.poll(() => drawn('sql_connections'), { message: 'sql_connections keeps its line' }).toEqual(['connections'])
+  await expect(legendOf('req_per_min').locator(`[data-series="${name}"]`)).toHaveAttribute('aria-pressed', 'true')
+  await expect(legendOf('sql_util').locator('button'), 'SQL legend entries are not buttons').toHaveCount(0)
+  // tokens resolve inside the app root, not on body
+  const muted = await mn.evaluate((el) => {
+    const probe = document.createElement('span')
+    probe.style.backgroundColor = 'var(--line-2)'
+    el.append(probe)
+    const c = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return c
+  })
+  const others = legendOf('req_per_min').locator(`button[data-series]:not([data-series="${name}"])`)
+  expect(await others.count(), 'other coloured entries stay').toBeGreaterThan(0)
+  await expect(others.first()).toHaveAttribute('aria-pressed', 'false')
+  await expect(kid(others.first(), 1), 'muted swatch').toHaveCSS('background-color', muted)
+  await expect(kid(others.first(), 2), 'struck-through name').toHaveCSS('text-decoration-line', 'line-through')
+  await expect(legendOf('req_per_min').locator('[data-series-other]'), 'folded entry struck through').toHaveCSS('text-decoration-line', 'line-through')
+  await expect(legendOf('sql_util').locator('[data-series]').first(), 'SQL entry not muted').not.toHaveCSS('text-decoration-line', 'line-through')
+
+  const o = (await boxes(page, { over: chartOf('req_per_min').locator('.u-over') })).over
+  await page.mouse.move(1, 1)
+  await page.mouse.move(o.x + o.width * 0.5, o.y + o.height / 2)
+  const rows = chartOf('req_per_min').locator('[data-readout-row]')
+  await expect.poll(() => rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-readout-row'))), { message: 'readout lists only the isolated service' }).toEqual([name])
+  await expect(chartOf('req_per_min').locator('[data-readout-time]')).toHaveCount(1)
+  await page.mouse.move(1, 1)
+
+  await atWidths(page, 'SUP-03 System health fixture legend layout, isolated', async () => fixturePanelsRead(page), FIXTURE_READ_TIMEOUT)
+
+  await legendOf('req_per_min').locator(`[data-series="${name}"]`).click()
+  for (const key of cloud) await expect.poll(async () => (await drawn(key)).length, { message: `${key} draws every series again` }).toBe(METRIC_SERVICES_FIXTURE.length)
+}
+
 // fixture check: pins layout of a wire-shaped body, not the metrics contract
 async function healthFixtureLayout(page: Page): Promise<void> {
   const mn = mainOf(page)
   const cors = { 'access-control-allow-origin': new URL(page.url()).origin, 'access-control-allow-headers': 'authorization, content-type', 'access-control-allow-methods': 'GET, OPTIONS' }
+  // one body for the whole test: the screen refetches every minute and a new body would move the window
+  const body = JSON.stringify(metricsFixture())
   await page.route(STAFF_METRICS, (route) =>
-    route.request().method() === 'OPTIONS' ? route.fulfill({ status: 204, headers: cors }) : route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify(metricsFixture()) }),
+    route.request().method() === 'OPTIONS' ? route.fulfill({ status: 204, headers: cors }) : route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body }),
   )
   const answered = page.waitForResponse((r) => STAFF_METRICS.test(new URL(r.url()).pathname + new URL(r.url()).search) && r.request().method() === 'GET')
   await mn.getByRole('button', { name: '6h', exact: true }).click()
@@ -1374,7 +1614,10 @@ async function healthFixtureLayout(page: Page): Promise<void> {
   await atWidths(page, 'SUP-03 System health fixture layout', async () => {
     const [base, charts] = [await healthLayout(page), await fixturePanelsRead(page)]
     return { problems: [...base.problems, ...charts.problems], rects: { base: base.rects, charts: charts.rects } }
-  })
+  }, FIXTURE_READ_TIMEOUT)
+  await fixtureHover(page)
+  await fixtureZoom(page)
+  await fixtureIsolate(page)
 
   // app owns no job kind and has no live ping row: both notes show; the metrics route answers any query
   await mn.locator('select[aria-label="Service"]').selectOption('app')
@@ -1802,7 +2045,7 @@ const SCREENS: Screen[] = [
 
 for (const s of SCREENS) {
   test(`SUP-03 ${s.nav}: v2 header, eyebrow clearances and screen reads`, async ({ page }, testInfo) => {
-    test.setTimeout(120_000)
+    test.setTimeout(s.nav === 'System health' ? 300_000 : 120_000)
     const errors = await startSupport(page)
     const armed = s.arm?.(page)
     armed?.catch(() => {}) // a timeout surfaces where `reads` awaits it, not as an unhandled rejection

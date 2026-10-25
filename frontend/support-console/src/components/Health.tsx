@@ -1,7 +1,7 @@
-import type { CSSProperties } from 'react'
+import { useEffect, type CSSProperties } from 'react'
 import { CHART_H, SPARK_HEIGHT, SPARK_WIDTH, healthTone, sentryServiceUrl, sparkline } from '../helpers'
 import { fleetSummary, jobSeries, jobsOf, series, shortBuild, type StaffHealth } from '../healthApi'
-import { DASHBOARDS, METRIC_SERVICES, RANGES, SERIES, THRESHOLDS, colourMap, fleetSeries, formatValue, hasData, judge, latestOf, panelOf, worstP95, type PanelKey, type Point, type RangeKey, type StaffMetrics, type Stat, type Verdict } from '../metricsApi'
+import { DASHBOARDS, METRIC_SERVICES, RANGES, SERIES, THRESHOLDS, colourMap, fleetSeries, formatShown, formatValue, hasData, judge, latestOf, panelOf, worstP95, type PanelKey, type Point, type RangeKey, type StaffMetrics, type Stat, type Verdict } from '../metricsApi'
 import { syncStamp } from '../rulesApi'
 import { G } from './BlogList'
 import { Badge } from './StatusBadge'
@@ -25,6 +25,10 @@ type Props = {
   onRange: (r: RangeKey) => void
   service: string
   onService: (s: string) => void
+  zoom: [number, number] | null
+  onZoom: (w: [number, number] | null) => void
+  isolated: string | null
+  onIsolate: (name: string | null) => void
 }
 
 type Tone = 'green' | 'amber' | 'red' | 'muted'
@@ -134,6 +138,9 @@ function sqlPoints(m: StaffMetrics, key: PanelKey): Point[] {
   return hasData(p) ? (p.series.find((s) => s.name === 'database') ?? p.series[0]).points : []
 }
 
+type Guide = { value: number; label: string; dashed: boolean }
+type Marker = { t: number; title: string }
+
 function entriesOf(spec: PanelSpec, m: StaffMetrics, colours: Record<string, string>): Entry[] {
   if (spec.key === 'sql_util') return SQL_UTIL.map(([name, key], i) => ({ name, color: SERIES[i], unit: '%', points: sqlPoints(m, key) }))
   if (spec.key === 'sql_connections') return [{ name: 'connections', color: SERIES[0], unit: 'count', points: sqlPoints(m, 'sql_connections') }]
@@ -145,6 +152,20 @@ function entriesOf(spec: PanelSpec, m: StaffMetrics, colours: Record<string, str
       const max = spec.key === 'instances' && m.limits.available ? m.limits.services.find((l) => l.name === s.name)?.max_instances : undefined
       return { name: s.name, color: colours[s.name] ?? OTHER_LINE, unit: p.unit, points: s.points, extra: max === undefined ? undefined : `· max ${max}` }
     })
+}
+
+export function panelChart(key: string, m: StaffMetrics, colours: Record<string, string>, service: string): { lines: Entry[]; guides: Guide[] } {
+  const spec = PANELS.find((p) => p.key === key)!
+  const guides: Guide[] = []
+  if (spec.guide) guides.push({ ...spec.guide, dashed: true })
+  if (spec.key === 'sql_connections') guides.push({ value: m.connection_budget, label: `budget ${m.connection_budget}`, dashed: false })
+  const cap = spec.key === 'instances' && service && m.limits.available ? m.limits.services.find((l) => l.name === service) : undefined
+  if (cap) guides.push({ value: cap.max_instances, label: `max ${cap.max_instances}`, dashed: true })
+  return { lines: entriesOf(spec, m, colours), guides }
+}
+
+export function deployMarkers(m: StaffMetrics): Marker[] {
+  return m.deploys.available ? m.deploys.revisions.map((r) => ({ t: Date.parse(r.created_at) / 1000, title: `${r.revision} · ${new Date(r.created_at).toISOString().slice(11, 16)} UTC` })) : []
 }
 
 // The worst verdict over the series, each judged on displayed values.
@@ -162,23 +183,23 @@ function panelVerdict(stat: Stat, entries: Entry[], budget: number): Verdict {
 const shown = (e: Entry): string => {
   const latest = latestOf(e.points)
   if (latest === null) return 'No data'
-  const f = formatValue(e.unit, latest)
-  const unit = f.unit === '% of limit' ? '%' : f.unit
-  return unit ? `${f.value} ${unit}` : f.value
+  return formatShown(e.unit, latest)
 }
 
-function Panel({ spec, m, colours, service, markers }: { spec: PanelSpec; m: StaffMetrics; colours: Record<string, string>; service: string; markers: { t: number; title: string }[] }) {
-  const entries = entriesOf(spec, m, colours)
+type ZoomProps = Pick<Props, 'zoom' | 'onZoom' | 'isolated' | 'onIsolate'>
+
+const LEGEND_BUTTON: CSSProperties = { border: 0, background: 'none', padding: 0, font: 'inherit', cursor: 'pointer' }
+
+function Panel({ spec, m, colours, service, markers, zoom, onZoom, isolated, onIsolate }: { spec: PanelSpec; m: StaffMetrics; colours: Record<string, string>; service: string; markers: Marker[] } & ZoomProps) {
+  const { lines: entries, guides } = panelChart(spec.key, m, colours, service)
   const drawn = entries.filter((e) => e.points.length > 0)
   const verdict = spec.stat && drawn.length > 0 ? panelVerdict(spec.stat, drawn, m.connection_budget) : 'ok'
   const tone = verdict === 'ok' ? null : healthTone(WORD_TONE[verdict])
-  const guides = []
-  if (spec.guide) guides.push({ ...spec.guide, dashed: true })
-  if (spec.key === 'sql_connections') guides.push({ value: m.connection_budget, label: `budget ${m.connection_budget}`, dashed: false })
-  const cap = spec.key === 'instances' && service && m.limits.available ? m.limits.services.find((l) => l.name === service) : undefined
-  if (cap) guides.push({ value: cap.max_instances, label: `max ${cap.max_instances}`, dashed: true })
   const coloured = entries.filter((e) => e.color !== OTHER_LINE)
-  const grey = drawn.filter((e) => e.color === OTHER_LINE).length
+  const cloud = !ALL_SERVICES.has(spec.key)
+  const iso = cloud ? isolated : null
+  const kept = iso ? drawn.find((e) => e.color === OTHER_LINE && e.name === iso) : undefined
+  const grey = drawn.filter((e) => e.color === OTHER_LINE && e !== kept).length
   return (
     <div data-panel={spec.key} style={{ ...CARD, minWidth: 0, padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 10, rowGap: 4 }}>
@@ -204,36 +225,49 @@ function Panel({ spec, m, colours, service, markers }: { spec: PanelSpec; m: Sta
         )}
       </div>
       {drawn.length > 0 ? (
-        <TimeChart lines={drawn} start={Date.parse(m.start) / 1000} end={Date.parse(m.end) / 1000} step={m.step_seconds} guides={guides} markers={markers} />
+        <TimeChart lines={drawn.map((e) => ({ ...e, folded: e.color === OTHER_LINE }))} start={Date.parse(m.start) / 1000} end={Date.parse(m.end) / 1000} step={m.step_seconds} guides={guides} markers={markers} zoom={zoom} onZoom={onZoom} isolated={iso} />
       ) : (
         <div data-no-data="" style={{ ...NOTE, padding: 0, minHeight: CHART_H, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           No data
         </div>
       )}
       <div style={{ display: 'flex', flexWrap: 'wrap', columnGap: 14, rowGap: 4, minHeight: 16 }}>
-        {coloured.map((e) => (
-          <span key={e.name} data-series={e.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, ...LEGEND_TEXT }}>
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: e.color }} />
-            <span>{e.name}</span>
-            <span className="mono">{shown(e)}</span>
-            {e.extra && <span className="mono">{e.extra}</span>}
-          </span>
-        ))}
-        {grey > 0 && <span data-series-other="" style={LEGEND_TEXT}>{`+${grey} other ${grey === 1 ? 'service' : 'services'}`}</span>}
+        {(kept ? [...coloured, kept] : coloured).map((e) => {
+          const muted = iso !== null && e.name !== iso
+          const body = (
+            <>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: muted ? 'var(--line-2)' : e.color }} />
+              <span style={muted ? { textDecoration: 'line-through' } : undefined}>{e.name}</span>
+              <span className="mono">{shown(e)}</span>
+              {e.extra && <span className="mono">{e.extra}</span>}
+            </>
+          )
+          const look: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, ...LEGEND_TEXT }
+          return cloud ? (
+            <button key={e.name} type="button" data-series={e.name} aria-pressed={iso === e.name} onClick={() => onIsolate(iso === e.name ? null : e.name)} style={{ ...LEGEND_BUTTON, ...look }}>
+              {body}
+            </button>
+          ) : (
+            <span key={e.name} data-series={e.name} style={look}>
+              {body}
+            </span>
+          )
+        })}
+        {grey > 0 && <span data-series-other="" style={iso ? { ...LEGEND_TEXT, textDecoration: 'line-through' } : LEGEND_TEXT}>{`+${grey} other ${grey === 1 ? 'service' : 'services'}`}</span>}
       </div>
     </div>
   )
 }
 
-function Panels({ m, service }: { m: StaffMetrics; service: string }) {
+function Panels({ m, service, zoom, onZoom, isolated, onIsolate }: { m: StaffMetrics; service: string } & ZoomProps) {
   const colours = colourMap(m)
-  const markers = m.deploys.available ? m.deploys.revisions.map((r) => ({ t: Date.parse(r.created_at) / 1000, title: `${r.revision} · ${new Date(r.created_at).toISOString().slice(11, 16)} UTC` })) : []
+  const markers = deployMarkers(m)
   return (
     <>
       {!m.deploys.available && <div style={{ ...LEGEND_TEXT, marginBottom: 8 }}>Deploy markers unavailable</div>}
       <div className="ops-health-panels" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16 }}>
         {PANELS.map((spec) => (
-          <Panel key={spec.key} spec={spec} m={m} colours={colours} service={service} markers={markers} />
+          <Panel key={spec.key} spec={spec} m={m} colours={colours} service={service} markers={markers} zoom={zoom} onZoom={onZoom} isolated={isolated} onIsolate={onIsolate} />
         ))}
       </div>
     </>
@@ -358,7 +392,19 @@ const DASHBOARD_LINKS = [
   { label: 'Database and edge dashboard', href: DASHBOARDS.database_edge },
 ]
 
-export function Health({ status, errorText, data, healthStale, metricsStale, onRetry, metricsStatus, metricsErrorText, metrics, onRetryMetrics, range, onRange, service, onService }: Props) {
+export function Health({ status, errorText, data, healthStale, metricsStale, onRetry, metricsStatus, metricsErrorText, metrics, onRetryMetrics, range, onRange, service, onService, zoom, onZoom, isolated, onIsolate }: Props) {
+  // A window the shown answer no longer covers would leave every panel empty.
+  useEffect(() => {
+    if (!zoom || !metrics) return
+    if (zoom[1] < Date.parse(metrics.start) / 1000 || zoom[0] > Date.parse(metrics.end) / 1000) onZoom(null)
+  }, [zoom, metrics, onZoom])
+  // An isolation with no Cloud Run series left would leave every such panel empty and no entry to click.
+  useEffect(() => {
+    if (!isolated || !metrics) return
+    const colours = colourMap(metrics)
+    const present = PANELS.some((spec) => !ALL_SERVICES.has(spec.key) && entriesOf(spec, metrics, colours).some((e) => e.name === isolated))
+    if (!present) onIsolate(null)
+  }, [isolated, metrics, onIsolate])
   const panelsNote = () => {
     if (metricsStatus === 'forbidden') return <Note text={STAFF_ONLY} />
     if (metricsStatus === 'error') return <Note text={metricsErrorText ?? 'Unavailable'} onRetry={onRetryMetrics} />
@@ -379,6 +425,11 @@ export function Health({ status, errorText, data, healthStale, metricsStale, onR
               {r}
             </button>
           ))}
+          {zoom && (
+            <button type="button" onClick={() => onZoom(null)} className="ops-btn v2-btn v2-btn-ghost" style={{ height: 30 }}>
+              Reset zoom
+            </button>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
             <select className="ops-input" aria-label="Service" value={service} onChange={(e) => onService(e.target.value)} style={{ maxWidth: 260 }}>
               <option value="">All services</option>
@@ -408,7 +459,7 @@ export function Health({ status, errorText, data, healthStale, metricsStale, onR
         )}
         {(note || metrics) && (
           <div data-panels style={{ marginTop: 16 }}>
-            {note ?? (metrics && <Panels m={metrics} service={service} />)}
+            {note ?? (metrics && <Panels m={metrics} service={service} zoom={zoom} onZoom={onZoom} isolated={isolated} onIsolate={onIsolate} />)}
           </div>
         )}
         <Services fleet={data.fleet} service={service} />

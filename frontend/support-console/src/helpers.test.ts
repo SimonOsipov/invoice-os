@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { DASHBOARDS } from './metricsApi'
-import { CHART_H, CHART_W, chartPath, chartX, healthTone, niceCeil, sentryServiceUrl, sentryTenantUrl, SPARK_HEIGHT, SPARK_WIDTH, severityStyle, sparkline } from './helpers'
+import { alignSeries, CHART_H, healthTone, readoutPlacement, readoutRows, sentryServiceUrl, sentryTenantUrl, SPARK_HEIGHT, SPARK_WIDTH, severityStyle, sparkline, tokenName, utcClock, yTop } from './helpers'
 import type { Severity } from './types'
 
 const ALL_SEVERITIES: Severity[] = ['error', 'warn', 'info']
@@ -107,34 +107,121 @@ describe('DASHBOARDS', () => {
 })
 
 describe('chart geometry', () => {
-  const o = { start: 1000, end: 1300, step: 60, yMax: 10 }
-  it('chartPath spans the box from start to end', () => {
-    expect(chartPath([[1000, 0], [1300, 10]], { ...o, step: 300 })).toBe('M0.0 160.0 L600.0 0.0')
-  })
-  it('chartPath breaks the line at a missing step', () => {
-    const d = chartPath([[1000, 1], [1060, 1], [1240, 1], [1300, 1]], o)
-    expect(d.match(/M/g)).toHaveLength(2)
-  })
-  it('chartPath keeps one line across a step of exactly 1.5 steps', () => {
-    expect(chartPath([[1000, 1], [1090, 1]], o).match(/M/g)).toHaveLength(1)
-  })
-  it('chartPath draws nothing for no points and a drawable segment for one point', () => {
-    expect(chartPath([], o)).toBe('')
-    expect(chartPath([[1150, 10]], o)).toBe('M300.0 0.0 h0')
-  })
-  it('chartPath gives a point isolated between two gaps a drawable segment', () => {
-    expect(chartPath([[1000, 1], [1150, 1], [1300, 1]], o)).toBe('M0.0 144.0 h0 M300.0 144.0 h0 M600.0 144.0 h0')
-  })
-  it('chartPath breaks the line just over 1.5 steps', () => {
-    expect(chartPath([[1000, 1], [1091, 1]], o).match(/M/g)).toHaveLength(2)
-  })
-  it('chartX clamps a deploy outside the range to the edge', () => {
-    expect(chartX(o.end + 120, o.start, o.end)).toBe(CHART_W)
-    expect(chartX(o.start - 1, o.start, o.end)).toBe(0)
+  it('CHART_H is the plot height the layout reads', () => {
     expect(CHART_H).toBe(160)
   })
-  it('niceCeil rounds up to 1, 2 or 5 times a power of ten', () => {
-    expect([0, -3, 0.7, 1, 1.2, 3, 7, 80, 1000.1].map(niceCeil)).toEqual([1, 1, 1, 1, 2, 5, 10, 100, 2000])
-    expect([1.8, 4.5, 5, 0.03].map(niceCeil)).toEqual([2, 5, 5, 0.05])
+  it('the SVG chart helpers are gone', async () => {
+    const exported = Object.keys(await import('./helpers'))
+    expect(exported).toContain('CHART_H')
+    for (const gone of ['CHART_W', 'niceCeil', 'chartX', 'chartY', 'chartPath']) expect(exported, gone).not.toContain(gone)
+  })
+})
+
+describe('chart model', () => {
+  const a: [number, number][] = [[0, 1], [60, 2], [120, 3], [180, 4]]
+  const b: [number, number][] = [[60, 5]]
+
+  it('alignSeries puts every line on one time grid', () => {
+    expect(alignSeries([{ points: a }, { points: b }], 0, 180, 60)).toEqual([[0, 60, 120, 180], [1, 2, 3, 4], [null, 5, null, null]])
+  })
+  it('alignSeries leaves a null at a step every line misses', () => {
+    const [x, v] = alignSeries([{ points: [[0, 7], [60, 8], [180, 9]] }], 0, 180, 60)
+    expect(x).toContain(120)
+    expect(v).toEqual([7, 8, null, 9])
+  })
+  it('alignSeries keeps a point that is off the grid or after the end', () => {
+    const [x, v] = alignSeries([{ points: [[90, 1], [240, 2]] }], 0, 180, 60)
+    expect(x).toEqual([0, 60, 90, 120, 180, 240])
+    expect(v).toEqual([null, null, 1, null, null, 2])
+  })
+  it('alignSeries with no lines returns the grid alone', () => {
+    expect(alignSeries([], 0, 180, 60)).toEqual([[0, 60, 120, 180]])
+  })
+  it('yTop covers the highest point and every guide', () => {
+    expect(yTop([{ points: [[0, 5]] }], [{ value: 80 }])).toBe(80)
+    expect(yTop([{ points: [[0, 1200]] }], [{ value: 1000 }])).toBe(1200)
+    expect(yTop([{ points: [[0, 0]] }], [])).toBe(0)
+  })
+  it('utcClock prints clock time for short ranges and the date for long ones', () => {
+    const tz = process.env.TZ
+    process.env.TZ = 'Africa/Lagos'
+    try {
+      const t = Date.UTC(2026, 9, 14, 23, 5) / 1000
+      expect(utcClock(t, false)).toBe('23:05 UTC')
+      expect(utcClock(t, true)).toBe('10-14 23:05')
+    } finally {
+      if (tz === undefined) delete process.env.TZ
+      else process.env.TZ = tz
+    }
+  })
+
+  const lines = [
+    { name: 'a', color: 'c1', unit: '%' },
+    { name: 'g', color: 'c2', unit: '%', folded: true },
+    { name: 'b', color: 'c3', unit: 'ms' },
+  ]
+  const grid: Parameters<typeof readoutRows>[1] = [[0, 60], [0.4249, 1], [3, 1], [1249, null]]
+  it('readoutRows lists coloured lines, then folded lines, with legend values', () => {
+    const rows = readoutRows(lines, grid, 0, null)
+    expect(rows.map((r) => r.name)).toEqual(['a', 'b', 'g'])
+    expect(rows.map((r) => r.value)).toEqual(['0.42 %', '1.25 s', '3.00 %'])
+  })
+  it('readoutRows prints a dash for a missing point', () => {
+    expect(readoutRows(lines, grid, 1, null).find((r) => r.name === 'b')?.value).toBe('—')
+  })
+  it('readoutRows lists only the isolated line', () => {
+    expect(readoutRows(lines, grid, 0, 'b').map((r) => r.name)).toEqual(['b'])
+  })
+  it('readoutRows prints dashes outside the grid', () => {
+    for (const idx of [-1, 2]) expect(readoutRows(lines, grid, idx, null).every((r) => r.value === '—')).toBe(true)
+  })
+
+  const plot = { left: 100, top: 40, width: 400 }
+  const box = { width: 160, height: 90 }
+  const view = { width: 1280, height: 800 }
+  it('readoutPlacement sits right of the cursor in the left half', () => {
+    expect(readoutPlacement({ x: 150, y: 70 }, plot, box, view)).toEqual({ left: 162, top: 40 })
+  })
+  it('readoutPlacement flips left past the middle', () => {
+    expect(readoutPlacement({ x: 450, y: 70 }, plot, box, view).left).toBe(450 - 12 - 160)
+  })
+  it('readoutPlacement stays inside the view', () => {
+    const r = readoutPlacement({ x: 20, y: 70 }, { left: 0, top: 760, width: 30 }, box, view)
+    expect(r.top).toBe(800 - 90 - 8)
+    expect(r.left).toBeGreaterThanOrEqual(8)
+  })
+
+  it('alignSeries sorts unsorted points and keeps the last of a duplicate time', () => {
+    const [x, v] = alignSeries([{ points: [[120, 3], [0, 1], [60, 2], [60, 9]] }], 0, 120, 60)
+    expect(x).toEqual([0, 60, 120])
+    expect(v).toEqual([1, 9, 3])
+  })
+  it('alignSeries stops the grid at the last whole step when the step does not divide the range', () => {
+    expect(alignSeries([], 0, 100, 60)).toEqual([[0, 60]])
+  })
+  it('alignSeries keeps a real zero value apart from a missing point', () => {
+    expect(alignSeries([{ points: [[0, 0]] }], 0, 60, 60)[1]).toEqual([0, null])
+  })
+  it('readoutPlacement clamps the right edge inside the view', () => {
+    const r = readoutPlacement({ x: 120, y: 70 }, { left: 100, top: 40, width: 400 }, box, { width: 200, height: 800 })
+    expect(r.left).toBe(200 - 160 - 8)
+  })
+  it('readoutPlacement does not flip at the exact middle of the plot', () => {
+    expect(readoutPlacement({ x: 300, y: 70 }, plot, box, view).left).toBe(312)
+  })
+  it('readoutPlacement keeps the top margin when the plot top is above it', () => {
+    expect(readoutPlacement({ x: 150, y: 0 }, { ...plot, top: 2 }, box, view).top).toBe(8)
+  })
+  it('tokenName rejects an empty or non-var value', () => {
+    expect(tokenName('')).toBeNull()
+    expect(tokenName('var()')).toBeNull()
+    expect(tokenName('rgb(1,2,3)')).toBeNull()
+  })
+
+  it('tokenName reads the custom property of a var()', () => {
+    expect(tokenName('var(--series-1)')).toBe('--series-1')
+    expect(tokenName('var( --fg-4 )')).toBe('--fg-4')
+    expect(tokenName('#2a78d6')).toBeNull()
+    expect(tokenName('var(--a) var(--b)')).toBeNull()
   })
 })

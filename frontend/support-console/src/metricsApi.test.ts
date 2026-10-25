@@ -6,6 +6,7 @@ import {
   colourMap,
   fetchStaffMetrics,
   fleetSeries,
+  formatShown,
   formatValue,
   judge,
   latestOf,
@@ -226,5 +227,14 @@ describe('formatValue', () => {
     for (const [unit, v, value, outUnit, n] of cases) {
       expect(formatValue(unit, v), `${unit} ${v}`).toEqual({ value, unit: outUnit, n })
     }
+  })
+})
+
+describe('formatShown', () => {
+  it('formatShown prints the legend text for each unit', () => {
+    expect(formatShown('% of limit', 63.54)).toBe('63.5 %')
+    expect(formatShown('ms', 1249)).toBe('1.25 s')
+    expect(formatShown('count', 23)).toBe('23')
+    expect(formatShown('req/min', 4.24)).toBe('4.2 req/min')
   })
 })

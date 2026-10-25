@@ -232,11 +232,13 @@ describe('TimeChart wrapper', () => {
     expect(first.destroyed).toBe(true)
     expect(Observers.all[0].disconnected).toBe(true)
     FakeUPlot.instances.length = 0
+    vi.mocked(window.getComputedStyle).mockClear()
     render(<TimeChart lines={lines()} {...base} />).unmount()
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))
     })
     expect(FakeUPlot.instances).toHaveLength(0)
+    expect(window.getComputedStyle, 'no setup runs after an early unmount').not.toHaveBeenCalled()
   })
 
   it('the setScale hook writes the window to data-x', async () => {

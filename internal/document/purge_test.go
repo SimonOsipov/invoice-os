@@ -136,3 +136,34 @@ func TestDeleteTenantObjects_StopsWhenTheStoreKeepsADeletedKey(t *testing.T) {
 		t.Errorf("sent %d List requests, want at most 2", mem.lists)
 	}
 }
+
+func TestDeleteTenantObjects_AcceptsEveryUUIDSpellingAndDeletesTheCanonicalPrefix(t *testing.T) {
+	const lower = "abcdefab-cdef-abcd-efab-cdefabcdefab"
+	for _, id := range []string{"AbCdEfAb-CdEf-aBcD-eFaB-cDeFaBcDeFaB", "abcdefabcdefabcdefabcdefabcdefab", "{" + lower + "}", "urn:uuid:" + lower} {
+		mem, store := newMemS3(t)
+		seed(t, store, document.StorageKey(lower, keyHash), extraction.PageKey(lower, keyHash, 1))
+		n, err := document.DeleteTenantObjects(context.Background(), store, id)
+		if err != nil || n != 2 {
+			t.Errorf("DeleteTenantObjects(%q) = %d, %v, want 2, nil", id, n, err)
+		}
+		if got := mem.keysUnder("tenants/"); len(got) != 0 {
+			t.Errorf("DeleteTenantObjects(%q) left %v", id, got)
+		}
+	}
+}
+
+func TestDeleteTenantObjects_StoreThatDropsDeletesOfAFullPageReportsTheBatchCount(t *testing.T) {
+	mem, store := newMemS3(t)
+	for i := 0; i < 1500; i++ {
+		mem.objects[fmt.Sprintf("tenants/%s/k%05d", keyTenantA, i)] = nil
+	}
+	mem.dropDelete = true
+
+	n, err := document.DeleteTenantObjects(context.Background(), store, keyTenantA)
+	if err == nil || !strings.Contains(err.Error(), "still lists") {
+		t.Fatalf("error = %v, want it to say %q", err, "still lists")
+	}
+	if n != 1000 || mem.lists != 2 || len(mem.deleteKeys) != 1 {
+		t.Errorf("count=%d lists=%d deletes=%v, want 1000, 2, one request", n, mem.lists, mem.deleteKeys)
+	}
+}

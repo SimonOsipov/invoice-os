@@ -435,11 +435,11 @@ describe('library scenes', () => {
     expect(markup('validate', 0, 'player')).toContain(glyph('triangle-alert'))
     const icon = where(ts, (s) => s.animation === 'libFade 300ms')
     expect(icon.map((t) => style(t).color)).toEqual(Array(4).fill(null).map((_, i) => (i === 0 ? 'var(--status-red-text)' : 'var(--status-green-text)')))
-    const msg = ts.find((t) => t.text.startsWith('Seller TIN has 7 digits'))!
+    const msg = ts.find((t) => t.text.startsWith('Buyer TIN, when present'))!
     expect(style(msg).background).toBe('var(--status-red-bg)')
 
     const fix = view('validate', 1, 'player')
-    expect(fix.some((t) => t.text === '20184412-0001')).toBe(true)
+    expect(fix.some((t) => t.text === '20665510-0001')).toBe(true)
     expect(style(where(fix, (s) => s.height === '38px')[0]).border).toBe('1px solid var(--ring)')
     expect(markup('validate', 1, 'player')).toContain(glyph('pen-tool'))
     expect(where(fix, (s) => s.animation === 'libPop 300ms ease-out')).toHaveLength(0)

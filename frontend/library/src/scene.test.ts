@@ -57,16 +57,16 @@ describe('scene', () => {
   it('sceneState_formFixReplacesTheValueAndMarksAccumulate', () => {
     const s0 = at('validate', 0, 'form')
     expect(s0.fields[0].mark).toBe('err')
-    expect(s0.fields[0].val).toBe('2018441-0001')
+    expect(s0.fields[0].val).toBe('2066551-0001')
     expect(s0.msg?.tone).toBe('err')
     const s1 = at('validate', 1, 'form')
     expect(s1.fields[0].mark).toBe('fix')
-    expect(s1.fields[0].val).toBe('20184412-0001')
+    expect(s1.fields[0].val).toBe('20665510-0001')
     expect(s1.fields.slice(1).map((x) => x.mark)).toEqual(['ok', 'ok', 'ok', 'ok'])
     expect(s1.msg).toBeNull()
     const s2 = at('validate', 2, 'form')
     expect(s2.fields[0].mark).toBe('ok')
-    expect(s2.fields[0].val).toBe('20184412-0001')
+    expect(s2.fields[0].val).toBe('20665510-0001')
   })
 
   it('sceneState_formInfoToneAndDoc', () => {

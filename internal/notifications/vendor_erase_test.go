@@ -5,7 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -15,29 +18,38 @@ const eraseEmail = "marker.person+x@ex.test"
 type hsErase struct {
 	contact, gdpr int
 	patch, del    map[string]int // by deal id
-	page1, page2  string
+	page1, page2  string         // the nth association read answers pageN, then an empty page
+	reads         int
 }
 
-func (c hsErase) st(v int) int {
+func (c *hsErase) st(v int) int {
 	if v == 0 {
 		return 200
 	}
 	return v
 }
 
-func (c hsErase) respond(s seenReq) (int, string) {
+func (c *hsErase) respond(s seenReq) (int, string) {
 	p := s.path()
 	switch {
 	case s.Method == http.MethodGet && p == hsCreatePath+"/"+eraseEmailPath:
 		return c.st(c.contact), `{"id":"7"}`
 	case s.Method == http.MethodGet && p == "/crm/v4/objects/contacts/7/associations/deals":
-		if strings.Contains(s.Query, "after=cur%2F2") {
-			return 200, c.page2
-		}
 		if strings.Contains(s.Query, "after=") {
-			return 400, `{"message":"bad cursor"}`
+			return 400, `{"message":"cursor after a delete"}`
 		}
-		return 200, c.page1
+		c.reads++
+		page := ""
+		switch c.reads {
+		case 1:
+			page = c.page1
+		case 2:
+			page = c.page2
+		}
+		if page == "" {
+			page = noDeals
+		}
+		return 200, page
 	case s.Method == http.MethodPatch && strings.HasPrefix(p, "/crm/v3/objects/deals/"):
 		return c.st(c.patch[strings.TrimPrefix(p, "/crm/v3/objects/deals/")]), `{}`
 	case s.Method == http.MethodDelete && strings.HasPrefix(p, "/crm/v3/objects/deals/"):
@@ -51,13 +63,13 @@ func (c hsErase) respond(s seenReq) (int, string) {
 var eraseEmailPath = url.PathEscape(eraseEmail)
 
 const (
-	twoDeals = `{"results":[{"toObjectId":1},{"toObjectId":2}],"paging":{"next":{"after":"cur/2"}}}`
+	twoDeals = `{"results":[{"toObjectId":1},{"toObjectId":2}],"paging":{"next":{"after":"cur/2"}}}` // a server that still offers a cursor
 	oneDeal  = `{"results":[{"toObjectId":3}]}`
 	noDeals  = `{"results":[]}`
 )
 
 func TestHubSpotErase_RenamesAndDeletesEveryDealThenGDPRDeletes(t *testing.T) {
-	v := newVendor(t, hsErase{page1: twoDeals, page2: oneDeal}.respond)
+	v := newVendor(t, (&hsErase{page1: twoDeals, page2: oneDeal}).respond)
 	if err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail); err != nil {
 		t.Fatalf("EraseContact() err = %v, want nil", err)
 	}
@@ -68,6 +80,7 @@ func TestHubSpotErase_RenamesAndDeletesEveryDealThenGDPRDeletes(t *testing.T) {
 		"PATCH /crm/v3/objects/deals/2", "DELETE /crm/v3/objects/deals/2",
 		"GET /crm/v4/objects/contacts/7/associations/deals",
 		"PATCH /crm/v3/objects/deals/3", "DELETE /crm/v3/objects/deals/3",
+		"GET /crm/v4/objects/contacts/7/associations/deals",
 		"POST " + hsCreatePath + "/gdpr-delete",
 	}
 	got := v.labels()
@@ -75,8 +88,10 @@ func TestHubSpotErase_RenamesAndDeletesEveryDealThenGDPRDeletes(t *testing.T) {
 		t.Fatalf("calls =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 	calls := v.calls()
-	if calls[1].Query != "limit=100" || calls[6].Query != "limit=100&after=cur%2F2" {
-		t.Errorf("association queries = %q, %q; want the first without after and the second with it", calls[1].Query, calls[6].Query)
+	for _, i := range []int{1, 6, 9} {
+		if calls[i].Query != "limit=100" {
+			t.Errorf("association query %d = %q, want the first page with no cursor", i, calls[i].Query)
+		}
 	}
 	for _, s := range calls {
 		if s.Auth != "Bearer hs-tok" {
@@ -92,7 +107,7 @@ func TestHubSpotErase_RenamesAndDeletesEveryDealThenGDPRDeletes(t *testing.T) {
 }
 
 func TestHubSpotErase_NoDealsGoesStraightToGDPRDelete(t *testing.T) {
-	v := newVendor(t, hsErase{page1: noDeals}.respond)
+	v := newVendor(t, (&hsErase{page1: noDeals}).respond)
 	if err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail); err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
@@ -107,7 +122,7 @@ func TestHubSpotErase_NoDealsGoesStraightToGDPRDelete(t *testing.T) {
 }
 
 func TestHubSpotErase_MissingContactIsSuccess(t *testing.T) {
-	v := newVendor(t, hsErase{contact: 404}.respond)
+	v := newVendor(t, (&hsErase{contact: 404}).respond)
 	if err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail); err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
@@ -117,8 +132,8 @@ func TestHubSpotErase_MissingContactIsSuccess(t *testing.T) {
 }
 
 func TestHubSpotErase_MissingDealIsSkipped(t *testing.T) {
-	v := newVendor(t, hsErase{page1: `{"results":[{"toObjectId":1},{"toObjectId":2}]}`,
-		patch: map[string]int{"1": 404}, del: map[string]int{"2": 404}}.respond)
+	v := newVendor(t, (&hsErase{page1: `{"results":[{"toObjectId":1},{"toObjectId":2}]}`,
+		patch: map[string]int{"1": 404}, del: map[string]int{"2": 404}}).respond)
 	if err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail); err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
@@ -132,7 +147,7 @@ func TestHubSpotErase_MissingDealIsSkipped(t *testing.T) {
 }
 
 func TestHubSpotErase_GDPRDeleteNotFoundIsSuccess(t *testing.T) {
-	v := newVendor(t, hsErase{page1: noDeals, gdpr: 404}.respond)
+	v := newVendor(t, (&hsErase{page1: noDeals, gdpr: 404}).respond)
 	if err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail); err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
@@ -140,7 +155,7 @@ func TestHubSpotErase_GDPRDeleteNotFoundIsSuccess(t *testing.T) {
 
 func TestHubSpotErase_FailureStopsAtTheCall(t *testing.T) {
 	t.Run("deal delete 500", func(t *testing.T) {
-		v := newVendor(t, hsErase{page1: `{"results":[{"toObjectId":1}]}`, del: map[string]int{"1": 500}}.respond)
+		v := newVendor(t, (&hsErase{page1: `{"results":[{"toObjectId":1}]}`, del: map[string]int{"1": 500}}).respond)
 		var de *DeliveryError
 		if err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail); !errors.As(err, &de) || de.Status != 500 {
 			t.Fatalf("err = %v, want *DeliveryError{500}", err)
@@ -150,7 +165,7 @@ func TestHubSpotErase_FailureStopsAtTheCall(t *testing.T) {
 		}
 	})
 	t.Run("gdpr-delete 403", func(t *testing.T) {
-		v := newVendor(t, hsErase{page1: noDeals, gdpr: 403}.respond)
+		v := newVendor(t, (&hsErase{page1: noDeals, gdpr: 403}).respond)
 		var de *DeliveryError
 		if err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail); !errors.As(err, &de) || de.Status != 403 || !de.Permanent() {
 			t.Fatalf("err = %v, want a permanent *DeliveryError{403}", err)
@@ -174,7 +189,7 @@ func TestHubSpotErase_FailureStopsAtTheCall(t *testing.T) {
 			if strings.Contains(s.path(), "/associations/") {
 				return 500, ``
 			}
-			return hsErase{}.respond(s)
+			return (&hsErase{}).respond(s)
 		})
 		var de *DeliveryError
 		if err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail); !errors.As(err, &de) || de.Status != 500 {
@@ -187,7 +202,7 @@ func TestHubSpotErase_FailureStopsAtTheCall(t *testing.T) {
 }
 
 func TestHubSpotErase_TransportFailureIsStatusZero(t *testing.T) {
-	v := newVendor(t, hsErase{}.respond)
+	v := newVendor(t, (&hsErase{}).respond)
 	v.srv.Close()
 	var de *DeliveryError
 	if err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail); !errors.As(err, &de) || de.Status != 0 {
@@ -257,7 +272,7 @@ func TestVendorErase_ErrorsCarryNoEmail(t *testing.T) {
 	for _, c := range []hsErase{{contact: 500}, {page1: noDeals, gdpr: 403}, {page1: `{"results":[{"toObjectId":1}]}`, del: map[string]int{"1": 500}}} {
 		errs = append(errs, hubspotAt(newVendor(t, c.respond), nil).EraseContact(t.Context(), eraseEmail))
 	}
-	closed := newVendor(t, hsErase{}.respond)
+	closed := newVendor(t, (&hsErase{}).respond)
 	closed.srv.Close()
 	errs = append(errs, hubspotAt(closed, nil).EraseContact(t.Context(), eraseEmail))
 	rs := newVendor(t, func(seenReq) (int, string) { return 500, eraseEmail })
@@ -347,7 +362,7 @@ func TestHubSpotErase_PathEscapesTheEmail(t *testing.T) {
 }
 
 func TestHubSpotErase_DealIDKeepsPrecision(t *testing.T) {
-	v := newVendor(t, hsErase{page1: `{"results":[{"toObjectId":9007199254740993}]}`}.respond)
+	v := newVendor(t, (&hsErase{page1: `{"results":[{"toObjectId":9007199254740993}]}`}).respond)
 	if err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail); err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -361,7 +376,7 @@ func TestHubSpotErase_OversizedPageIsStatusZero(t *testing.T) {
 		if strings.Contains(s.path(), "/associations/") {
 			return 200, `{"results":[],"pad":"` + strings.Repeat("x", maxVendorBody+10) + `"}`
 		}
-		return hsErase{}.respond(s)
+		return (&hsErase{}).respond(s)
 	})
 	var de *DeliveryError
 	if err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail); !errors.As(err, &de) || de.Status != 0 {
@@ -396,7 +411,7 @@ func TestResendErase_TransportFailureIsStatusZero(t *testing.T) {
 }
 
 func TestHubSpotErase_ContactReadFailureMakesNoOtherCall(t *testing.T) {
-	v := newVendor(t, hsErase{contact: 500}.respond)
+	v := newVendor(t, (&hsErase{contact: 500}).respond)
 	if err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail); err == nil {
 		t.Fatal("err = nil, want a failure")
 	}

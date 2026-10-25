@@ -3,6 +3,7 @@ package notifications
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 )
@@ -23,7 +24,11 @@ var (
 	_ ResendEraser  = FakeResend{}
 )
 
-const erasedDealName = "Erased contact"
+const (
+	erasedDealName = "Erased contact"
+	// maxDealRounds bounds the read-delete rounds; the attempt timeout bounds them too.
+	maxDealRounds = 200
+)
 
 // EraseContact renames and deletes every deal of the contact, then GDPR-deletes the contact.
 // Deals go first: a retry that finds no contact knows the deals are done.
@@ -41,21 +46,16 @@ func (h *HubSpot) EraseContact(ctx context.Context, email string) error {
 		return &DeliveryError{Status: status}
 	}
 
-	base := h.baseURL + hubspotV4 + "/" + url.PathEscape(c.ID) + "/associations/deals?limit=100"
-	for after := ""; ; {
-		u := base
-		if after != "" {
-			u += "&after=" + url.QueryEscape(after)
+	// Never follow `after` across a delete: the cursor would apply to the shrunken set. Read the first page again.
+	u := h.baseURL + hubspotV4 + "/" + url.PathEscape(c.ID) + "/associations/deals?limit=100"
+	for round := 0; ; round++ {
+		if round >= maxDealRounds {
+			return errors.New("notifications: hubspot deals remain after the round cap")
 		}
 		var page struct {
 			Results []struct {
 				ToObjectID json.Number `json:"toObjectId"`
 			} `json:"results"`
-			Paging struct {
-				Next struct {
-					After string `json:"after"`
-				} `json:"next"`
-			} `json:"paging"`
 		}
 		status, err := h.getJSON(ctx, http.MethodGet, u, nil, &page, http.StatusOK)
 		if err != nil {
@@ -68,9 +68,6 @@ func (h *HubSpot) EraseContact(ctx context.Context, email string) error {
 			if err := h.eraseDeal(ctx, r.ToObjectID.String()); err != nil {
 				return err
 			}
-		}
-		if after = page.Paging.Next.After; after == "" {
-			break
 		}
 	}
 
@@ -86,6 +83,9 @@ func (h *HubSpot) EraseContact(ctx context.Context, email string) error {
 }
 
 // eraseDeal blanks the deal name, then deletes it: a deleted deal stays restorable with its name.
+		if len(page.Results) == 0 {
+			break
+		}
 func (h *HubSpot) eraseDeal(ctx context.Context, id string) error {
 	dealURL := h.baseURL + hubspotDeals + "/" + url.PathEscape(id)
 	status, err := doJSON(ctx, h.hc, http.MethodPatch, dealURL, h.token,

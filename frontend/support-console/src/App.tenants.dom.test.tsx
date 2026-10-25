@@ -264,6 +264,35 @@ describe('Console tenants wiring', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
   })
 
+  const removedDetail = (): StaffTenantDetail => ({
+    tenant: X,
+    members: [
+      { user_id: 'r1', role: 'admin', status: 'removed', display_name: null, email: null },
+      { user_id: 'r2', role: 'admin', status: 'removed', display_name: 'Ada Gone', email: null },
+    ],
+    invoices: [],
+  })
+  const openRemoved = async () => {
+    one.mockResolvedValueOnce(removedDetail())
+    render(<App />)
+    await openTenants()
+    await waitRow('X')
+    fireEvent.click(rowOf('X'))
+    await screen.findByText('Ada Gone')
+  }
+
+  it('tenant detail: a removed member has a REMOVED chip', async () => {
+    await openRemoved()
+    expect(screen.getAllByText('REMOVED')).toHaveLength(2)
+  })
+
+  it('tenant detail: a removed member shows no email', async () => {
+    await openRemoved()
+    expect(screen.getByText('Deleted member')).toBeTruthy()
+    expect(document.querySelectorAll('.mono[style*="font-size: 10.5px"]')).toHaveLength(0)
+    expect(screen.queryByText('r1')).toBeNull()
+  })
+
   it('a tenant with no members and no invoices says so and offers only View jobs', async () => {
     one.mockResolvedValueOnce({ tenant: X, members: [], invoices: [] })
     render(<App />)

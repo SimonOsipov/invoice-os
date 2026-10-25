@@ -33,7 +33,7 @@ const ROLE_TONE: Record<string, Tone> = {
   preparer: MUTED,
 }
 // The app's member tones (frontend/app/src/components/MemberParts.tsx).
-const STATUS_TONE: Record<StaffMember['status'], Tone> = { active: MUTED, invited: AMBER, suspended: RED }
+const STATUS_TONE: Record<StaffMember['status'], Tone> = { active: MUTED, invited: AMBER, suspended: RED, removed: MUTED }
 
 export const ONE_LINE: CSSProperties = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
 export const CARD: CSSProperties = { border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden', background: 'var(--bg-2)' }

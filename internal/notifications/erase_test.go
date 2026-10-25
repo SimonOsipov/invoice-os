@@ -1208,6 +1208,9 @@ func TestErase_EachSignOfAnotherAccountSupersedes(t *testing.T) {
 		"contacts row": func(r *eraseRig) { r.contact(r.mail, &other, 1) },
 		"hand-off":     func(r *eraseRig) { r.handoff(other, r.mail) },
 		"intake job":   func(r *eraseRig) { r.insertJob(RegistrantArgs{UserID: other, Email: r.mail}) },
+		"running intake job": func(r *eraseRig) {
+			r.setState(r.insertJob(RegistrantArgs{UserID: other, Email: r.mail}), "running")
+		},
 		"upper-case id": func(r *eraseRig) {
 			r.insertJob(RegistrantArgs{UserID: strings.ToUpper(other), Email: "  " + strings.ToUpper(r.mail)})
 		},
@@ -1343,18 +1346,19 @@ func TestErase_TheHubSpotStepRebuildsOnlyHubSpot(t *testing.T) {
 }
 
 func TestErase_AFinishedIntakeJobOfAnotherUserDoesNotSupersede(t *testing.T) {
-	r := newEraseRig(t)
-	gen := r.start()
-	old := r.insertJob(RegistrantArgs{UserID: uuid.NewString(), Email: r.mail})
-	r.setState(old, "completed")
-	r.blog(r.mail, 1)
-	if err := r.work(gen); err != nil {
-		t.Fatal(err)
-	}
-	s := r.row(r.uid)
-	t.Logf("superseded=%v blogRows=%d", s.Superseded, r.count(`SELECT count(*) FROM blog_subscribers WHERE email=$1`, r.mail))
-	if s.Superseded || r.count(`SELECT count(*) FROM blog_subscribers WHERE email=$1`, r.mail) != 0 {
-		t.Fatal("DEFECT: finished foreign intake job supersedes; blog row survives")
+	for _, st := range []string{"completed", "cancelled", "discarded"} {
+		t.Run(st, func(t *testing.T) {
+			r := newEraseRig(t)
+			gen := r.start()
+			r.setState(r.insertJob(RegistrantArgs{UserID: uuid.NewString(), Email: r.mail}), st)
+			r.blog(r.mail, 1)
+			if err := r.work(gen); err != nil {
+				t.Fatal(err)
+			}
+			if s := r.row(r.uid); !s.Fin || s.Superseded || r.count(`SELECT count(*) FROM blog_subscribers WHERE email = $1`, r.mail) != 0 {
+				t.Fatalf("row = %+v", s)
+			}
+		})
 	}
 }
 
@@ -1362,14 +1366,43 @@ func TestErase_AHandoffOnlyAccountKeepsItsBlogSubscription(t *testing.T) {
 	r := newEraseRig(t)
 	gen := r.start()
 	r.handoff(uuid.NewString(), r.mail)
-	r.blog(r.mail, 1)
+	r.blog(r.mail, 4)
 	if err := r.work(gen); err != nil {
 		t.Fatal(err)
 	}
-	n := r.count(`SELECT count(*) FROM river_job WHERE kind='blog_subscriber_sync' AND args->>'email'=$1`, r.mail)
-	stamped := r.count(`SELECT count(*) FROM blog_subscribers WHERE email=$1 AND resend_delivered_at IS NOT NULL`, r.mail)
-	t.Logf("blog sync jobs=%d stampedRows=%d resendCalls=%d", n, stamped, len(r.rs.got()))
-	if n == 0 && stamped == 1 {
-		t.Fatal("DEFECT: blog row kept, stamped delivered, Resend contact erased, nothing queued")
+	if r.count(`SELECT count(*) FROM river_job WHERE kind = 'blog_subscriber_sync' AND state = 'available' AND args->>'email' = $1 AND (args->>'version')::int = 4`, r.mail) != 1 ||
+		r.count(`SELECT count(*) FROM blog_subscribers WHERE email = $1 AND version = 4 AND resend_delivered_at IS NULL`, r.mail) != 1 {
+		t.Fatal("the blog subscription was not rebuilt at its version")
+	}
+	if r.count(`SELECT count(*) FROM river_job WHERE kind = 'contact_deliver' AND args->>'email' = $1`, r.mail) != 0 {
+		t.Fatal("a contact_deliver was queued without a contacts row")
+	}
+	n := 0
+	for _, l := range r.sink.at(slog.LevelWarn) {
+		if l.Text == rebuildWarn {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("rebuild warnings = %d", n)
+	}
+}
+
+func TestErase_ABlogRowWithoutAnotherAccountIsNotRebuilt(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	r.rs.fn = func(n int, _ string) error {
+		if n == 1 {
+			r.blog(r.mail, 1)
+		}
+		return nil
+	}
+	if err := r.work(gen); err == nil {
+		t.Fatal("want the came-back error")
+	}
+	for _, l := range r.sink.snapshot() {
+		if l.Text == rebuildWarn {
+			t.Fatal("rebuild warning logged without another account")
+		}
 	}
 }

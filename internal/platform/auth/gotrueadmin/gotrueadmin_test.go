@@ -323,7 +323,8 @@ func TestDeleteUser_DoesNotFollowARedirect(t *testing.T) {
 func TestDeleteUser_RefusesANonUUID(t *testing.T) {
 	srv, got := recordingServer(t, http.StatusOK, "{}")
 	c := newClient(t, srv.URL, signing(t))
-	for _, id := range []string{"../users", "", " ", "not-a-uuid", uuid.NewString() + "/../x", uuid.NewString() + "?x=1"} {
+	// uuid.Parse also takes the urn and brace forms; only the canonical form may reach the path.
+	for _, id := range []string{"../users", "", " ", "not-a-uuid", uuid.NewString() + "/../x", uuid.NewString() + "?x=1", "urn:uuid:" + uuid.NewString(), "{" + uuid.NewString() + "}"} {
 		if err := c.DeleteUser(context.Background(), id); err == nil {
 			t.Errorf("DeleteUser(%q) = nil, want an error", id)
 		}

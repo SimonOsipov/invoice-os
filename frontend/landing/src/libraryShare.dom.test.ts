@@ -73,6 +73,16 @@ describe('shouldLoadTag with a host list', () => {
     expect([...LIBRARY_HOSTNAMES].sort()).toEqual([...PRODUCTION_HOSTNAMES, LIB].sort())
   })
 
+  it('LS-06 the blog list admits www and its old host, not the library old host', async () => {
+    const { shouldLoadTag } = await import('./analytics')
+    const { BLOG_HOSTNAMES, PRODUCTION_HOSTNAMES } = await import('./hubspot')
+    expect([...BLOG_HOSTNAMES].sort()).toEqual([...PRODUCTION_HOSTNAMES, 'blog.ascomply.com'].sort())
+    for (const h of ['www.ascomply.com', 'blog.ascomply.com']) expect(shouldLoadTag(h, true, ID, BLOG_HOSTNAMES), h).toBe(true)
+    for (const h of [LIB, 'blog.ascomply.com.evil.example', 'blog-pr-1-944095690109.africa-south1.run.app', 'ascomply.com', '']) {
+      expect(shouldLoadTag(h, true, ID, BLOG_HOSTNAMES), h).toBe(false)
+    }
+  })
+
   it('LS-03 a closed gate holds without consent or without an id', async () => {
     const { shouldLoadTag } = await import('./analytics')
     const { LIBRARY_HOSTNAMES } = await import('./hubspot')

@@ -198,6 +198,25 @@ describe('library consent', () => {
     expect(writes.some((w) => w.startsWith('_ga') && w.endsWith('domain=www.ascomply.com'))).toBe(true)
   })
 
+  it('CO-10 Accept then Reject at /library/ on www write asc_consent on the shared domain and expire _ga and HubSpot cookies on www and its parents', async () => {
+    const writes = spyWrites()
+    await mount('/library/')
+    click(byText('Accept'))
+    document.cookie = '_ga=x'
+    seed('__hstc')
+    click(byText('Cookie choices'))
+    click(byText('Reject'))
+    const consent = writes.filter((v) => v.startsWith(`${KEY}=`))
+    expect(consent.length).toBeGreaterThanOrEqual(2)
+    for (const v of consent) expect(v).toMatch(/; Domain=ascomply\.com; Path=\/;/)
+    const forms = ['www.ascomply.com', '.www.ascomply.com', 'ascomply.com', '.ascomply.com']
+    for (const name of ['_ga', '__hstc']) {
+      const exp = writes.filter((v) => v.startsWith(`${name}=; Max-Age=0`))
+      expect(exp.filter((v) => !v.includes('domain='))).not.toHaveLength(0)
+      for (const d of forms) expect(exp.some((v) => v.endsWith(`domain=${d}`)), `${name} ${d}`).toBe(true)
+    }
+  })
+
   it('CO-07 a choice stored by the landing shows no notice on the Library', async () => {
     const grant = encodeURIComponent('{"analytics":true,"ts":"2026-01-01T00:00:00.000Z","v":1}')
     document.cookie = `${KEY}=${grant}; Domain=ascomply.com; Path=/; Secure`

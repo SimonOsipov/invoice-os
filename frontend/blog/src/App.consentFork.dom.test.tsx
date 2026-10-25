@@ -78,6 +78,26 @@ describe('blog consent off the blog host', () => {
   })
 })
 
+describe('blog under its base path on a PR fork host', () => {
+  it('CO-06 a stored grant loads no tag and no chat at /blog/', async () => {
+    localStorage.setItem(KEY, GRANT)
+    const m = await mount('/blog/')
+    expect(window.location.pathname).toBe('/blog/')
+    expect(m.analytics.bootBlogAnalytics()).toBe(false)
+    expect(m.analytics.bootBlogChat()).toBe(false)
+    expect(document.querySelectorAll(ANY_TAG)).toHaveLength(0)
+    expect(document.querySelectorAll('script#hs-script-loader')).toHaveLength(0)
+  })
+
+  it('CO-07 Accept at /blog/ loads no tag and no chat', async () => {
+    await mount('/blog/')
+    click(byText('Accept'))
+    expect(JSON.parse(localStorage.getItem(KEY)!).analytics).toBe(true)
+    expect(document.querySelectorAll(ANY_TAG)).toHaveLength(0)
+    expect(document.querySelectorAll('script#hs-script-loader')).toHaveLength(0)
+  })
+})
+
 describe('blog chat off the blog host', () => {
   const loaders = () => document.querySelectorAll('script#hs-script-loader')
 

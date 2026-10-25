@@ -95,6 +95,26 @@ describe('library consent off the library host', () => {
   })
 })
 
+describe('library under its base path on a PR fork host', () => {
+  it('CO-06 a stored grant loads no tag and no chat at /library/', async () => {
+    localStorage.setItem(KEY, GRANT)
+    const m = await mount('/library/')
+    expect(window.location.pathname).toBe('/library/')
+    expect(m.analytics.bootLibraryAnalytics()).toBe(false)
+    expect(m.analytics.bootLibraryChat()).toBe(false)
+    expect(document.querySelectorAll(ANY_TAG)).toHaveLength(0)
+    expect(document.querySelectorAll('script#hs-script-loader')).toHaveLength(0)
+  })
+
+  it('CO-07 Accept at /library/ loads no tag and no chat', async () => {
+    await mount('/library/')
+    click(byText('Accept'))
+    expect(JSON.parse(localStorage.getItem(KEY)!).analytics).toBe(true)
+    expect(document.querySelectorAll(ANY_TAG)).toHaveLength(0)
+    expect(document.querySelectorAll('script#hs-script-loader')).toHaveLength(0)
+  })
+})
+
 describe('library chat off the library host', () => {
   const loaders = () => document.querySelectorAll('script#hs-script-loader')
 

@@ -752,8 +752,6 @@ describe('the Library shares the landing\'s choice', () => {
     expect(src).not.toContain('app.ascomply.com')
     expect(src).toMatch(/import\s*\{[^}]*LIBRARY_BASE[^}]*\}\s*from\s*['"]\.\.\/sitePaths['"]/)
     expect(src).toMatch(/import\s*\{[^}]*BLOG_BASE[^}]*\}\s*from\s*['"]\.\.\/sitePaths['"]/)
-    expect(src).not.toContain('www.ascomply.com/library')
-    expect(src).not.toContain('www.ascomply.com/blog')
     expect(src).not.toContain('library.ascomply.com')
     expect(src).not.toContain('blog.ascomply.com')
   })

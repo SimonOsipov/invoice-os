@@ -207,48 +207,11 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 		// Guaranteed present: WithinRequestTenantTx resolved it before this ran.
 		caller, _ := auth.IdentityFromContext(ctx)
 
-		var callerRole string
-		if err := tx.QueryRow(ctx,
-			`SELECT role FROM memberships WHERE user_id = $1 AND status = 'active'`, caller.Subject,
-		).Scan(&callerRole); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotPermitted
-			}
+		if err := requireActiveAdminCaller(ctx, tx, caller.Subject, ErrNotPermitted); err != nil {
 			return err
 		}
-		if callerRole != "admin" {
-			return ErrNotPermitted
-		}
-
-		// is_target is computed by Postgres so which row is the target never
-		// depends on the text form of a uuid agreeing between SQL and Go.
-		rows, err := tx.Query(ctx,
-			`SELECT user_id, role, status, display_name, email, user_id = $1 AS is_target
-			   FROM memberships
-			  WHERE user_id = $1 OR (role = 'admin' AND status = 'active')
-			  ORDER BY user_id
-			    FOR UPDATE`, userID)
+		locked, targetIdx, err := lockTargetAndAdmins(ctx, tx, userID)
 		if err != nil {
-			return err
-		}
-		var locked []Membership
-		targetIdx := -1
-		for rows.Next() {
-			var m Membership
-			var isTarget bool
-			if err := rows.Scan(&m.UserID, &m.Role, &m.Status, &m.DisplayName, &m.Email, &isTarget); err != nil {
-				rows.Close()
-				return err
-			}
-			if isTarget {
-				targetIdx = len(locked)
-			}
-			locked = append(locked, m)
-		}
-		// Closed explicitly rather than deferred: the UPDATE below reuses this
-		// transaction's connection.
-		rows.Close()
-		if err := rows.Err(); err != nil {
 			return err
 		}
 
@@ -258,6 +221,9 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 		target := locked[targetIdx]
 		if target.Status == "invited" {
 			return ErrInvitedNotTransitionable
+		}
+		if target.Status == "removed" {
+			return ErrRemovedNotTransitionable
 		}
 		if target.Status == status {
 			return readTarget(ctx, tx, target.UserID, &updated)
@@ -305,12 +271,117 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 	return updated, nil
 }
 
-// ErrRemoveStub is a red-test stub (DEL-02-02): RemoveMember answers it until the executor implements it.
-var ErrRemoveStub = errors.New("tenancy: RemoveMember not implemented")
+// requireActiveAdminCaller reads the caller's role first, unlocked and taking no
+// target, so a non-admin is refused alike for every target
+// (TestMembership_PermissionCheckedBeforeRowRead). notPermitted is the refusal.
+func requireActiveAdminCaller(ctx context.Context, tx pgx.Tx, subject string, notPermitted error) error {
+	var role string
+	if err := tx.QueryRow(ctx,
+		`SELECT role FROM memberships WHERE user_id = $1 AND status = 'active'`, subject,
+	).Scan(&role); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notPermitted
+		}
+		return err
+	}
+	if role != "admin" {
+		return notPermitted
+	}
+	return nil
+}
 
-// RemoveMember is a red-test stub (DEL-02-02).
+// lockTargetAndAdmins locks the target and every active admin in user_id order,
+// so the last-admin guard runs over rows no concurrent writer can move
+// (TestMembership_ConcurrentLastTwoAdmins). targetIdx is -1 when the target is
+// absent. No tenant_id clause: RLS scopes it.
+func lockTargetAndAdmins(ctx context.Context, tx pgx.Tx, userID string) (locked []Membership, targetIdx int, err error) {
+	rows, err := tx.Query(ctx,
+		`SELECT user_id, role, status, display_name, email, user_id = $1 AS is_target
+		   FROM memberships
+		  WHERE user_id = $1 OR (role = 'admin' AND status = 'active')
+		  ORDER BY user_id
+		    FOR UPDATE`, userID)
+	if err != nil {
+		return nil, -1, err
+	}
+	defer rows.Close()
+	targetIdx = -1
+	for rows.Next() {
+		var m Membership
+		var isTarget bool
+		if err := rows.Scan(&m.UserID, &m.Role, &m.Status, &m.DisplayName, &m.Email, &isTarget); err != nil {
+			return nil, -1, err
+		}
+		if isTarget {
+			targetIdx = len(locked)
+		}
+		locked = append(locked, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, -1, err
+	}
+	return locked, targetIdx, nil
+}
+
+// RemoveMember ends a member's access: guards in D4 order, then endMembership
+// and a membership.removed audit row in the same transaction.
 func (s *Store) RemoveMember(ctx context.Context, userID string) (MemberAccess, error) {
-	return MemberAccess{}, ErrRemoveStub
+	var removed MemberAccess
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		caller, _ := auth.IdentityFromContext(ctx)
+		if err := requireActiveAdminCaller(ctx, tx, caller.Subject, ErrRemoveNotPermitted); err != nil {
+			return err
+		}
+		locked, targetIdx, err := lockTargetAndAdmins(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		if targetIdx < 0 {
+			return ErrMembershipNotFound
+		}
+		target := locked[targetIdx]
+		if target.Status == "removed" {
+			return readTarget(ctx, tx, target.UserID, &removed)
+		}
+		if target.Role == "admin" && target.Status == "active" {
+			others := 0
+			for i, m := range locked {
+				if i != targetIdx && m.Role == "admin" && m.Status == "active" {
+					others++
+				}
+			}
+			if others == 0 {
+				return ErrLastActiveAdmin
+			}
+		}
+		if err := endMembership(ctx, tx, target.UserID); err != nil {
+			return err
+		}
+		if err := audit.Record(ctx, tx, caller.Subject, "membership.removed", map[string]any{
+			"user_id": target.UserID,
+			"from":    target.Status,
+		}); err != nil {
+			return err
+		}
+		return readTarget(ctx, tx, target.UserID, &removed)
+	})
+	if err != nil {
+		return MemberAccess{}, err
+	}
+	return removed, nil
+}
+
+// endMembership writes the removed end state (D2). Role and display_name stay.
+func endMembership(ctx context.Context, tx pgx.Tx, userID string) error {
+	if _, err := tx.Exec(ctx,
+		`UPDATE memberships SET status = 'removed', email = NULL, all_clients = false WHERE user_id = $1`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM membership_clients WHERE user_id = $1`, userID); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `DELETE FROM workflow_role_members WHERE user_id = $1`, userID)
+	return err
 }
 
 // readTarget reads one member's row with its client access into dst.

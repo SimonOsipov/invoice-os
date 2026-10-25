@@ -296,10 +296,33 @@ func SetMembershipStatusHandler(set MembershipStatusSetter, log *slog.Logger) ht
 	}
 }
 
-// RemoveMemberHandler is a red-test stub (DEL-02-02): it answers 501 until the executor implements it.
+// RemoveMemberHandler returns POST /v1/memberships/{user_id}/remove: identity
+// (401) -> path uuid (404) -> remove -> 200 with the member row. Only err is
+// logged on a 500, never a name or an email.
 func RemoveMemberHandler(remove func(ctx context.Context, userID string) (MemberAccess, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		userID, err := uuid.Parse(r.PathValue("user_id"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, "membership not found")
+			return
+		}
+		membership, err := remove(r.Context(), userID.String())
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "tenancy: remove member", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, membership)
 	}
 }
 
@@ -410,6 +433,10 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusNotFound, "membership not found"
 	case errors.Is(err, ErrInvitedNotTransitionable):
 		return http.StatusConflict, "an invited member has no sign-in to suspend or reactivate"
+	case errors.Is(err, ErrRemovedNotTransitionable):
+		return http.StatusConflict, "a removed member must be invited again"
+	case errors.Is(err, ErrRemoveNotPermitted):
+		return http.StatusForbidden, "only an admin can remove a member"
 	case errors.Is(err, ErrLastActiveAdmin):
 		return http.StatusConflict, "this is the tenant's last active admin — make another member an active admin first"
 	case errors.Is(err, ErrInviteNotPermitted):

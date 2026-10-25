@@ -62,6 +62,7 @@ func main() {
 	// PATCH /v1/memberships/{user_id} — admin-only suspend/reactivate. The
 	// gateway proxies it unchanged: its mount carries no method.
 	app.Mux.HandleFunc("PATCH /v1/memberships/{user_id}", tenancy.SetMembershipStatusHandler(store.SetMembershipStatus, app.Logger))
+	app.Mux.HandleFunc("POST /v1/memberships/{user_id}/remove", tenancy.RemoveMemberHandler(store.RemoveMember, app.Logger))
 
 	// PUT /v1/memberships/{user_id}/clients — admin-only whole-set replace of a member's client access.
 	app.Mux.HandleFunc("PUT /v1/memberships/{user_id}/clients", tenancy.SetMemberClientsHandler(store.SetMemberClients, app.Logger))

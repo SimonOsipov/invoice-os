@@ -434,6 +434,19 @@ func (s *Store) SetRoleMembers(ctx context.Context, key string, members []string
 			return err
 		}
 
+		// Shares every named row, active too: a concurrent RemoveMember then waits for this
+		// PUT and its grant delete runs after our insert (TestRemoveMember_BesideARolePutLeavesNoGrant).
+		var removed int
+		if err := tx.QueryRow(ctx,
+			`SELECT count(*) FILTER (WHERE status = 'removed')
+			   FROM (SELECT status FROM memberships WHERE user_id = ANY($1::uuid[]) FOR SHARE) r`, ids,
+		).Scan(&removed); err != nil {
+			return err
+		}
+		if removed > 0 {
+			return ErrValidation
+		}
+
 		// Resolved by the locked row's id, not by key, so it cannot drift off the row above.
 		// A separate statement from the INSERT, for the reason invoice.replaceLinesTx spells
 		// out: tuples deleted by this transaction are already dead to its own uniqueness

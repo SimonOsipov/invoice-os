@@ -16,6 +16,7 @@ paths:
 - Give the append-only tables `audit_log` and `idempotency_keys` SELECT and INSERT only.
 - Give `invoice_app` INSERT only on `staff_audit_log`. Staff read it only through `public.staff_read_staff_audit_log`.
 - Give `invoice_app` INSERT, DELETE and `SELECT (taken_at)` on `health_samples`. Staff read it only through `public.staff_read_health_samples`.
+- Staff read River job counts only through `public.staff_read_river_job_counts`. `staff_reader` holds `SELECT (kind, state)` on `river_job`, nothing else.
 - Give `invoice_app` SELECT and INSERT only on `ai_calls`. Staff read it only through `public.staff_read_ai_calls` and `public.staff_read_ai_call_totals`.
 - Give `invoice_app` SELECT, INSERT and UPDATE on `rollup_snapshots`. The purge, the reset and the FK cascade remove its rows.
 - Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `blog_categories`, `blog_posts` and `blog_post_covers`. They are global: no RLS.

@@ -10,13 +10,25 @@ import (
 	"github.com/getsentry/sentry-go"
 )
 
+// InitSentry is initSentry for binaries that do not boot through New.
+func InitSentry(cfg Config, transport sentry.Transport) error {
+	return initSentry(cfg, transport)
+}
+
 // initSentry initializes the global Sentry hub. An empty DSN disables Sentry
 // (the SDK becomes a no-op), which is the intended state for local dev and CI.
-func initSentry(cfg Config) error {
+// A nil transport keeps the SDK default.
+func initSentry(cfg Config, transport sentry.Transport) error {
 	if cfg.SentryDSN == "" {
 		return nil
 	}
-	if err := sentry.Init(sentry.ClientOptions{
+	beforeSend := scrubEvent
+	tracing, sampleRate := true, 1.0
+	if cfg.Service == AuthService {
+		beforeSend = scrubAuthEvent
+		tracing, sampleRate = false, 0
+	}
+	opts := sentry.ClientOptions{
 		Dsn:         cfg.SentryDSN,
 		Environment: cfg.SentryEnvironment,
 		Release:     cfg.Release,
@@ -24,16 +36,20 @@ func initSentry(cfg Config) error {
 		// The telemetry scheduler polls an event off its buffer before queueing it, so Flush can
 		// return first and os.Exit drops a boot failure. The transport path queues synchronously.
 		DisableTelemetryBuffer: true,
-		EnableTracing:          true,
+		EnableTracing:          tracing,
 		// ceiling: 100% of requests ≈ 13k–32k spans/month (0.3–0.6% of 5M); sample below 1.0 above ~2.5M spans/month
-		TracesSampleRate: 1.0,
+		TracesSampleRate: sampleRate,
 		// Keep 404s: the SDK drops them by default.
 		TraceIgnoreStatusCodes: [][]int{},
 		// Client hooks cover every capture path; initSentry is the only sentry.Init.
-		BeforeSend:            scrubEvent,
+		BeforeSend:            beforeSend,
 		BeforeSendTransaction: scrubEvent,
 		BeforeSendLog:         scrubLog,
-	}); err != nil {
+	}
+	if transport != nil {
+		opts.Transport = transport
+	}
+	if err := sentry.Init(opts); err != nil {
 		return fmt.Errorf("platform: sentry init: %w", err)
 	}
 	return nil

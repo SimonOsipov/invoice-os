@@ -249,6 +249,24 @@ func TestProvisionHandler_NameSentences(t *testing.T) {
 		}
 		return string(b)
 	}
+	t.Run("display_name/BOM only", func(t *testing.T) {
+		spy.calls = nil
+		rec, got := doProvision(t, spy.provision, body("display_name", "\ufeff"))
+		if msg := provisionErrorBody(t, got); rec.Code != http.StatusBadRequest || msg != "display_name must be 1 to 200 characters" {
+			t.Errorf("status %d, error %q; want 400 and the length sentence", rec.Code, msg)
+		}
+		if len(spy.calls) != 0 {
+			t.Errorf("provision called %d time(s), want 0", len(spy.calls))
+		}
+	})
+	// workspace_name keeps strings.TrimSpace: a BOM-only name still reaches provision.
+	t.Run("workspace_name/BOM only is not trimmed", func(t *testing.T) {
+		spy.calls = nil
+		rec, _ := doProvision(t, spy.provision, body("workspace_name", "\ufeff"))
+		if rec.Code != http.StatusCreated || len(spy.calls) != 1 {
+			t.Errorf("status %d, provision calls %d; want 201 and 1", rec.Code, len(spy.calls))
+		}
+	})
 	for _, field := range []string{"workspace_name", "display_name"} {
 		for _, c := range []struct{ name, value, msg string }{
 			{"blank", "   ", field + " must be 1 to 200 characters"},

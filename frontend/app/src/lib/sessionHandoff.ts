@@ -2,6 +2,7 @@
 import { ApiError, apiFetch } from '@invoice-os/api-client'
 
 import type { Me, Session } from '../auth'
+import { trimName } from './pendingInvite'
 import { refreshTokens } from './renewal'
 import { decodeJwtPayload, handoffPersona, isHandoffMe, isTokenExpired } from './session'
 import { BASE64URL_43 } from './signInState'
@@ -174,7 +175,7 @@ export async function joinInvite(base: string, offer: JoinOffer, id: string, dis
   const signal = AbortSignal.timeout(15000)
   try {
     await callRenewing(base, offer, signal, (token) =>
-      apiFetch(`${base}/api/tenancy/v1/invitations/${encodeURIComponent(id)}/accept`, { method: 'POST', token, body: { display_name: displayName.trim() }, signal }),
+      apiFetch(`${base}/api/tenancy/v1/invitations/${encodeURIComponent(id)}/accept`, { method: 'POST', token, body: { display_name: trimName(displayName) }, signal }),
     )
   } catch (err) {
     const message = err instanceof ApiError ? (err.body as { error?: unknown } | null | undefined)?.error : undefined

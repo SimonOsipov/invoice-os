@@ -1,2 +1,6 @@
-# The image copies nothing from the build context.
+# Only what the wrapper build copies.
 *
+!go.mod
+!go.sum
+!cmd/authsentry
+!internal/platform

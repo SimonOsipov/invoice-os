@@ -77,6 +77,7 @@ describe('validateRegisterForm', () => {
     expect(validateRegisterForm({ ...VALID, email: '   ' }), 'blank is missing, not invalid').toEqual({ email: 'Enter your work email.' })
     expect(validateRegisterForm({ ...VALID, email: '  ADA@Okafor.NG ' }), 'trimmed, case kept').toEqual({})
     expect(validateRegisterForm({ ...VALID, displayName: '' })).toEqual({ displayName: 'Enter your name.' })
+    expect(validateRegisterForm({ ...VALID, displayName: 'a'.repeat(201) })).toEqual({ displayName: 'Use 200 characters or fewer.' })
     expect(validateRegisterForm({ ...VALID, workspaceName: '' })).toEqual({ workspaceName: 'Enter your company or workspace name.' })
   })
 

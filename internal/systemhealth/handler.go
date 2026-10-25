@@ -18,6 +18,7 @@ type Snapshot struct {
 	Fleet      gateway.FleetHealth `json:"fleet"`
 	Jobs       map[string]int64    `json:"jobs"`
 	QueueDepth int64               `json:"queue_depth"`
+	RiverJobs  JobView             `json:"river_jobs"`
 	Trend      []TrendPoint        `json:"trend"`
 }
 
@@ -27,14 +28,15 @@ type TrendPoint struct {
 	ServicesDown *int      `json:"services_down"`
 	QueueDepth   int64     `json:"queue_depth"`
 	DeadLettered int64     `json:"dead_lettered"`
+	RiverJobs    *JobView  `json:"river_jobs"` // null for a sample with no kind counts
 }
 
 // Handler serves GET /v1/staff/health: the database read first, then the fleet read.
 // A fleet failure answers "unknown" and never fails the route.
-func Handler(read func(context.Context, time.Time) (map[string]int64, []Sample, error), fleet FleetReader, now func() time.Time, log *slog.Logger) http.HandlerFunc {
+func Handler(read func(context.Context, time.Time) (Live, []Sample, error), fleet FleetReader, now func() time.Time, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		at := now().UTC()
-		jobs, samples, err := read(r.Context(), at.Add(-TrendWindow))
+		live, samples, err := read(r.Context(), at.Add(-TrendWindow))
 		switch {
 		case errors.Is(err, db.ErrNotStaff):
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
@@ -52,13 +54,18 @@ func Handler(read func(context.Context, time.Time) (map[string]int64, []Sample, 
 		if f.Services == nil {
 			f.Services = []gateway.ServiceHealth{}
 		}
-		jobs = Counts(jobs)
+		jobs := Counts(live.Jobs)
 		trend := make([]TrendPoint, 0, len(samples))
 		for _, s := range samples {
 			c := Counts(s.JobCounts)
-			trend = append(trend, TrendPoint{TakenAt: s.TakenAt, ServicesDown: s.ServicesDown, QueueDepth: QueueDepth(c), DeadLettered: c["dead_lettered"]})
+			p := TrendPoint{TakenAt: s.TakenAt, ServicesDown: s.ServicesDown, QueueDepth: QueueDepth(c), DeadLettered: c["dead_lettered"]}
+			if s.KindCounts != nil {
+				v := JobViewOf(s.KindCounts, c["dead_lettered"])
+				p.RiverJobs = &v
+			}
+			trend = append(trend, p)
 		}
-		writeJSON(w, http.StatusOK, Snapshot{CheckedAt: at, Fleet: f, Jobs: jobs, QueueDepth: QueueDepth(jobs), Trend: trend})
+		writeJSON(w, http.StatusOK, Snapshot{CheckedAt: at, Fleet: f, Jobs: jobs, QueueDepth: QueueDepth(jobs), RiverJobs: JobViewOf(live.Kinds, jobs["dead_lettered"]), Trend: trend})
 	}
 }
 

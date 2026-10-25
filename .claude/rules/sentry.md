@@ -4,18 +4,21 @@ paths:
   - "internal/platform/config.go"
   - "packages/monitoring/**"
   - "sidecar/docling/sentry*.py"
+  - "cmd/authsentry/**"
+  - "sidecar/auth/**"
   - "frontend/*/src/instrument.ts"
 ---
 # Sentry
 
-- Send Go services and `docling` to project `asc-backend`. Send the SPAs to project `asc-frontend`.
+- Send Go services, `auth` and `docling` to project `asc-backend`. Send the SPAs to project `asc-frontend`.
+- Keep `User.Email` only on events from the `auth` client (`scrubAuthEvent`). Every other client empties `User`.
 - Name every deployable in its events: `server_name` for a Go service and `docling`, tag `service` for an SPA.
 - Treat an empty DSN as off. The SDK becomes a no-op.
 - Label the Sentry environment from `DEPLOY_ENV` and the unstamped release from `BUILD_SHA`.
 - Call `sentry.Init` only in `initSentry`. Its `BeforeSend` hooks scrub every event.
 - Set Sentry in production only: the `sentry-dsn` secret for the backends (invoice-os-infra `secrets.tf`) and `VITE_SENTRY_DSN` in the SPA build of `deploy-prod.yml`.
 - Give no PR preview a DSN. `fleet-gate` then sees `sentry` `off`, and the `Preview invariants` job fails on a Sentry secret or env var.
-- Exempt only `auth` from the Sentry fleet gate. GoTrue has no Sentry SDK.
+- Exempt only `auth` from the Sentry fleet gate. GoTrue's `/health` reports no `sentry` state; `cmd/authsentry` forwards its errors.
 - Keep the test-event fingerprint `["sentry-test-event", <service>]`. A repeat joins the same issue.
 - Fire `SENTRY_TEST_EVENT` only on exactly the value `true`. `1`, `True` and `yes` do nothing.
 - Expect `SENTRY_TEST_EVENT` to fire on every boot while the revision holds it. Remove the variable and deploy a new revision.

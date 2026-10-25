@@ -2,6 +2,7 @@
 import { ApiError, apiFetch, gatewayBase } from '@invoice-os/api-client/client'
 
 import { appBase } from './auth'
+import { NAME_MAX, NAME_REQUIRED, NAME_TOO_LONG } from './register'
 
 export const INVITE_PARAM = 'invite'
 
@@ -51,16 +52,28 @@ export async function resendInvitee(token: string): Promise<ResendOutcome> {
 export const inviteResendSent = (email: string) => `A new link is on its way to ${email}. Use the newest one.`
 export const inviteResendHeld = (email: string) => `We just sent a link to ${email}. Check your inbox, or try again in a minute.`
 
-const MAX_NAME_CHARS = 200
+// Trims as the API does: JS trim() plus U+0085, which Go's unicode.IsSpace strips and JS does not.
+export function trimName(v: string): string {
+  let s = v.trim()
+  while (s.startsWith('\u0085') || s.endsWith('\u0085')) s = s.replace(/^\u0085/, '').replace(/\u0085$/, '').trim()
+  return s
+}
 
-// Same rule as checkName in internal/tenancy/tenancy.go: trimmed, 1 to 200 characters, no NUL.
+// Same rule as checkName in internal/tenancy/tenancy.go: trimmed, 1 to 200 characters (maxNameChars), no NUL.
 export function inviteNameValid(name: string): boolean {
-  const n = [...name.trim()].length
-  return n >= 1 && n <= MAX_NAME_CHARS && !name.includes('\0')
+  const n = [...trimName(name)].length
+  return n >= 1 && n <= NAME_MAX && !name.includes('\0')
+}
+
+// Why Sign in is off; a NUL gives no message.
+export function inviteNameError(name: string): string | null {
+  if (name.includes('\0')) return null
+  const n = [...trimName(name)].length
+  return n === 0 ? NAME_REQUIRED : n > NAME_MAX ? NAME_TOO_LONG : null
 }
 
 // The name rides in the fragment, never the query string; the app reads it in pendingInvite.ts readInviteName.
 export function inviteSignInUrl(token: string | null, name: string): string | null {
   const app = appBase()
-  return app && token && inviteNameValid(name) ? `${app}?auth=start#invite=${token}&name=${encodeURIComponent(name.trim())}` : null
+  return app && token && inviteNameValid(name) ? `${app}?auth=start#invite=${token}&name=${encodeURIComponent(trimName(name))}` : null
 }

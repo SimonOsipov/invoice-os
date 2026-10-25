@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -341,6 +342,11 @@ type ProvisionFunc func(ctx context.Context, in ProvisionInput) (Tenant, string,
 // maxNameChars caps workspace_name and display_name after trimming.
 const maxNameChars = 200
 
+// trimName trims Unicode space plus U+FEFF, so the API accepts the names the screens do.
+func trimName(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool { return unicode.IsSpace(r) || r == '\ufeff' })
+}
+
 // checkName returns the 400 sentence for a trimmed name that is empty, over
 // maxNameChars or holds a NUL; "" when it is valid.
 func checkName(field, v string) string {
@@ -381,7 +387,7 @@ func ProvisionHandler(provision ProvisionFunc, log *slog.Logger) http.HandlerFun
 		}
 		in := ProvisionInput{
 			WorkspaceName: strings.TrimSpace(req.WorkspaceName),
-			DisplayName:   strings.TrimSpace(req.DisplayName),
+			DisplayName:   trimName(req.DisplayName),
 		}
 		if msg := checkName("workspace_name", in.WorkspaceName); msg != "" {
 			writeError(w, http.StatusBadRequest, msg)

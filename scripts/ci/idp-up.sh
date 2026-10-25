@@ -45,7 +45,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 go build -o "$tmp/prenv" ./tools/prenv >&2
 
-docker build -q -f sidecar/auth/Dockerfile -t idp:ci sidecar/auth >&2
+docker build -q -f sidecar/auth/Dockerfile -t idp:ci . >&2
 
 # start <name> <port> [extra docker args...]; secrets pass by name so they never reach argv.
 start() {

@@ -1,6 +1,7 @@
 ---
 paths:
   - "sidecar/auth/**"
+  - "cmd/authsentry/**"
   - "internal/tools/idppin/**"
   - "internal/platform/auth/**"
   - ".github/workflows/idp-release-watch.yml"
@@ -29,9 +30,9 @@ paths:
 ---
 # Identity provider
 
-- Pin the identity provider on the `FROM` line of `sidecar/auth/Dockerfile` only. Tag and digest live nowhere else.
+- Pin the identity provider on the `supabase/auth` `FROM` line of `sidecar/auth/Dockerfile` only. Keep it the last `FROM`. Tag and digest live nowhere else.
 - Bump the tag and the digest together.
-- Keep a sha256 digest on the `FROM` line. `idppin` refuses a `FROM` without one.
+- Keep a sha256 digest on the `supabase/auth` `FROM` line. `idppin` refuses a `FROM` without one.
 - Pull the image from `ghcr.io` or `public.ecr.aws`, never Docker Hub. Docker Hub rate-limits pulls from CI.
 - Print the pinned tag with `go run ./internal/tools/idppin tag sidecar/auth/Dockerfile`.
 
@@ -45,7 +46,7 @@ paths:
      -H 'Accept: application/vnd.oci.image.index.v1+json' \
      https://ghcr.io/v2/supabase/auth/manifests/<tag> | grep -i docker-content-digest
    ```
-3. Bump the tag and the digest on the `FROM` line of `sidecar/auth/Dockerfile`. Change nothing else in the commit, unless the release notes require a new `ENV`.
+3. Bump the tag and the digest on the `supabase/auth` `FROM` line of `sidecar/auth/Dockerfile`. Change nothing else in the commit, unless the release notes require a new `ENV`.
 4. Open a PR. It runs the `idp` CI job, the release watch and the PR preview.
 5. Confirm that `TestIdP_HealthReportsPinnedTag` reports the new tag.
 6. Merge the PR. `deploy-prod.yml` deploys `auth` to production.

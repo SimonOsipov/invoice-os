@@ -17,6 +17,7 @@
   --status-amber-bg: var(--status-progress-bg); --status-amber-border: var(--status-progress-border); --status-amber-text: var(--status-progress-fg);
   --status-red-bg: rgba(181,59,59,.08); --status-red-border: rgba(181,59,59,.28); --status-red-text: #a23232;
   --status-muted-bg: var(--muted); --status-muted-border: var(--border); --status-muted-text: var(--muted-foreground);
+  --series-1: #2a78d6; --series-2: #c2561f; --series-3: #0f8a6c; --series-4: #8f6a00; --series-5: #c0447e; --series-6: #3c7a1c; --series-7: #6250d6;
   --line-1: var(--border); --line-2: var(--input); --line-3: var(--button-outline-border); --line-bright: var(--primary);
   --on-dark-teal: var(--eyebrow-on-dark);
   --shadow-xs: none; --shadow-sm: none; --shadow-accent: none;

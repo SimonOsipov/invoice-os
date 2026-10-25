@@ -344,7 +344,7 @@ export function Privacy() {
             happens on every visit to the live site, whatever you chose on the cookie notice. It is how we keep the
             site working. It is not analytics, and it is not used to measure how you use the site. Sentry does not
             store your IP address. It sets no cookies and writes nothing to your browser's storage. It never receives
-            what you type into the demo form. Sentry stores these reports in the EU. Our preview and test builds send
+            what you type into the demo form. When signing in, signing up, resetting a password or keeping you signed in fails on our side, our sign-in service sends Sentry a report that may include the email address of the account involved. Sentry stores these reports in the EU. Our preview and test builds send
             Sentry nothing.
           </p>
 
@@ -390,7 +390,7 @@ export function Privacy() {
                 {PRIVACY_CONTACT}
               </a>{' '}
               and tell us what you want done, and we will act on it. If you have registered or booked a demo, the
-              records we hold are in HubSpot, in Resend and on our own server, and we can delete them. Analytics data sits with Google under an identifier that is not tied to your
+              records we hold are in HubSpot, in Resend and on our own server, and we can delete them. When signing in, signing up, resetting a password or keeping you signed in fails on our side, a Sentry error report may also hold the email address of the account involved. Analytics data sits with Google under an identifier that is not tied to your
               name, so tell us as much as you can about when you visited.
             </li>
           </ol>

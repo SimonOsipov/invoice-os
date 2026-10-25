@@ -108,7 +108,10 @@ const scanCorners = (files: Record<string, string>, stays: [string, string, numb
   }
 }
 
-const FG4_STAYS: [file: string, needle: string][] = [['components/BlogList.tsx', "featured ? 'var(--primary-foreground)' : 'var(--fg-4)'"]]
+const FG4_STAYS: [file: string, needle: string][] = [
+  ['components/BlogList.tsx', "featured ? 'var(--primary-foreground)' : 'var(--fg-4)'"],
+  ['components/Health.tsx', "const OTHER_LINE = 'var(--fg-4)'"],
+]
 const scanFg4 = (files: Record<string, string>, stays: [string, string][]) => {
   const lines = Object.entries(files).flatMap(([file, raw]) =>
     stripFile(file, raw)
@@ -326,6 +329,13 @@ describe('v2 entry', () => {
     expect(lines.length, '--fg-4 lines found').toBeGreaterThanOrEqual(FG4_STAYS.length)
     expect(unmatched, '--fg-4 on enabled text (move to --fg-3)').toEqual([])
     expect(stale, 'stale allowlist needles').toEqual([])
+  })
+
+  it('VE-12 chart code holds no colour literal (source scan: canvas colours are not in the DOM)', () => {
+    const LITERAL = /#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i
+    const literals = (src: string) => stripComments(src).split('\n').filter((l) => LITERAL.test(l))
+    expect(literals("const c = '#607D8B'\nconst d = 'var(--fg-3)'\n// rgba(0,0,0,0.07)"), 'control: a planted literal is reported, a comment is not').toEqual(["const c = '#607D8B'"])
+    for (const f of ['components/TimeChart.tsx', 'components/uplot.ts']) expect(literals(read(join(HERE, f))), f).toEqual([])
   })
 
   it('VE-11 rulesFixture is imported only by tests', () => {

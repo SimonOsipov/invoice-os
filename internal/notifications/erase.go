@@ -320,6 +320,9 @@ func (w *EraseWorker) vendorStep(ctx context.Context, uid string, r erasureRow, 
 			if st, err = w.Resend.ContactState(ctx, r.email); err != nil {
 				return err
 			}
+			if st, err = w.failSafeState(ctx, tx, uid, r.email, st); err != nil {
+				return err
+			}
 		}
 		if err := call(ctx, r.email); err != nil {
 			return err
@@ -329,6 +332,32 @@ func (w *EraseWorker) vendorStep(ctx context.Context, uid string, r erasureRow, 
 		}
 		return w.rebuild(ctx, tx, uid, r.email, step, st)
 	}))
+}
+
+// failSafeState covers a lost state: another account's contact was delivered to Resend, yet Resend has none.
+// An earlier attempt deleted it and failed before the restore. Treat the state as unsubscribed
+// (TestErase_ARetryAfterAFailedRestoreRestoresUnsubscribed).
+func (w *EraseWorker) failSafeState(ctx context.Context, tx pgx.Tx, uid, email string, st ResendState) (ResendState, error) {
+	if !st.Missing {
+		return st, nil
+	}
+	held, err := holdsAddress(ctx, tx, uid, email)
+	if err != nil || !held {
+		return st, err
+	}
+	var lost bool
+	err = tx.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM contacts WHERE email = $1 AND user_id IS NOT NULL AND user_id::text <> $2 AND resend_delivered_at IS NOT NULL)
+		    OR EXISTS (SELECT 1 FROM blog_subscribers WHERE email = $1 AND resend_delivered_at IS NOT NULL)`,
+		email, uid).Scan(&lost)
+	if err != nil {
+		return st, fmt.Errorf("notifications: check lost state: %w", err)
+	}
+	if !lost {
+		return st, nil
+	}
+	w.Logger.WarnContext(ctx, "erasure: the Resend state is unknown; the contact is restored unsubscribed")
+	return ResendState{Unsubscribed: true}, nil
 }
 
 // holdsAddress reports whether another account holds the address: a contacts row, a hand-off or a non-final intake job.

@@ -27,12 +27,13 @@ type restoreCall struct {
 }
 
 type recErase struct {
-	mu       sync.Mutex
-	calls    []string
-	fn       func(n int, who string) error
-	state    ResendState // answered by ContactState
-	events   []string    // "state", "erase" and "restore", in call order
-	restored []restoreCall
+	mu         sync.Mutex
+	calls      []string
+	fn         func(n int, who string) error
+	state      ResendState // answered by ContactState
+	restoreErr error       // returned by RestoreContact
+	events     []string    // "state", "erase" and "restore", in call order
+	restored   []restoreCall
 }
 
 func (r *recErase) event(e string) {
@@ -50,8 +51,9 @@ func (r *recErase) RestoreContact(_ context.Context, email, first, last string, 
 	r.event("restore")
 	r.mu.Lock()
 	r.restored = append(r.restored, restoreCall{email, first, last, st})
+	err := r.restoreErr
 	r.mu.Unlock()
-	return nil
+	return err
 }
 
 func (r *recErase) record(who string) error {
@@ -1578,3 +1580,54 @@ func TestErase_SweepDeletesTheFinishedEmailKeyedJobsEvenWhenAnotherAccountHoldsT
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func TestErase_ARetryAfterAFailedRestoreRestoresUnsubscribed(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	buid := uuid.NewString()
+	r.acct.fn = func(int, string) error {
+		r.exec(`INSERT INTO contacts (email, user_id, first_name, last_name, registered_at, marketing_consented_at, marketing_consent_text, version, hubspot_delivered_at, resend_delivered_at, resend_opt_in_sent_at)
+			VALUES ($1, $2::uuid, 'Bola', 'Eze', now(), now(), 'ok', 3, now(), now(), now())`, r.mail, buid)
+		r.blog(r.mail, 2)
+		return nil
+	}
+	r.rs.restoreErr = errors.New("boom")
+	r.rs.state = ResendState{OptedOut: []string{topicBlog}}
+	if err := r.work(gen); err == nil {
+		t.Fatal("want the restore error")
+	}
+	r.rs.restoreErr = nil
+	r.rs.state = ResendState{Missing: true}
+	if err := r.work(gen); err != nil {
+		t.Fatal(err)
+	}
+	last := r.rs.restored[len(r.rs.restored)-1]
+	if !last.st.Unsubscribed || last.email != r.mail {
+		t.Fatalf("restore = %+v, want unsubscribed", last)
+	}
+	if !r.optInSent(buid) {
+		t.Error("the opt_in stamp was cleared")
+	}
+	if r.blogRebuilt() {
+		t.Error("the blog subscription was re-queued")
+	}
+	if r.count(`SELECT count(*) FROM river_job WHERE kind = 'blog_subscriber_sync' AND state = 'available' AND args->>'email' = $1`, r.mail) != 0 {
+		t.Error("a blog sync job was queued")
+	}
+}
+
+func TestErase_AMissingContactThatWasNeverDeliveredStaysMissing(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	r.acct.fn = func(int, string) error {
+		r.exec(`INSERT INTO contacts (email, user_id, registered_at, version) VALUES ($1, $2::uuid, now(), 1)`, r.mail, uuid.NewString())
+		return nil
+	}
+	r.rs.state = ResendState{Missing: true}
+	if err := r.work(gen); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.rs.restored) != 0 {
+		t.Fatalf("restores = %+v, want none", r.rs.restored)
+	}
+}

@@ -14,8 +14,9 @@ type HubSpotEraser interface {
 }
 
 // ResendState is the part of a Resend contact that a delete wipes and a person set: the global
-// unsubscribe and the topic opt-outs. A missing contact has the zero state.
+// unsubscribe and the topic opt-outs. A missing contact has Missing set and nothing else.
 type ResendState struct {
+	Missing      bool // the contact does not exist (a 404)
 	Unsubscribed bool
 	MarketingOut bool     // the Marketing topic is opted out
 	OptedOut     []string // every opted-out topic id, Marketing included
@@ -151,6 +152,7 @@ func (r *Resend) ContactState(ctx context.Context, email string) (ResendState, e
 		return st, err
 	}
 	if status == http.StatusNotFound {
+		st.Missing = true
 		return st, nil
 	}
 	if err := statusError(status); err != nil {

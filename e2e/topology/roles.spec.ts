@@ -87,6 +87,7 @@ import {
   MEMBERS_TABLE_HEADS,
   SEED_FIRM_MEMBERS,
   SEED_INHOUSE_MEMBERS,
+  removeConfirmQuestion,
   SUSPEND_EXPLANATION,
   UNBACKED,
   type SeededMember,
@@ -507,15 +508,39 @@ async function expectRosterCell(page: Page, cell: SeedRosterCell): Promise<void>
 }
 
 /**
- * A control that is genuinely `disabled` AND states why in text the reader can see. Both
- * halves, always: a dead control with no visible reason is the defect this story exists to
- * fix, and `title` alone does not count — it never fires on a disabled element in Chromium.
+ * The open drawer's Remove: enabled, opens the named strip inside the danger zone with the
+ * two buttons apart at each width, and Keep closes it with no POST. Never confirms.
  */
-async function expectDisabledWithReason(control: Locator, reasonNode: Locator, reason: string, label: string): Promise<void> {
-  await expect(control, `${label} should be disabled`).toBeDisabled()
-  await expect(control, `${label} should carry its reason as a title`).toHaveAttribute('title', reason)
-  await expect(reasonNode, `${label}'s reason should be visible`).toBeVisible()
-  await expect(reasonNode, `${label}'s reason text`).toHaveText(reason)
+async function expectRemoveStrip(page: Page, name: string): Promise<void> {
+  const posts: string[] = []
+  const onRequest = (r: { method(): string; url(): string }) => {
+    if (r.method() === 'POST' && /\/api\/tenancy\/v1\/memberships\/[^/]+\/remove$/.test(r.url())) posts.push(r.url())
+  }
+  page.on('request', onRequest)
+  try {
+    const drawer = page.getByTestId('member-drawer')
+    await expect(page.getByTestId('member-remove'), `${name}'s drawer Remove`).toBeEnabled()
+    await page.getByTestId('member-remove').click()
+    const strip = page.getByTestId('member-remove-confirm')
+    await expect(strip.locator('p')).toHaveText(removeConfirmQuestion(name))
+    await expect(page.getByTestId('member-remove-keep')).toBeFocused()
+
+    await atEachWidth(page, async (width) => {
+      await settleAnimations(drawer)
+      const zone = await boxOf(page.getByTestId('member-danger-zone'), 'the danger zone')
+      const stripBox = await boxOf(strip, 'the confirm strip')
+      const keep = await boxOf(page.getByTestId('member-remove-keep'), 'Keep')
+      const confirm = await boxOf(page.getByTestId('member-remove-confirmed'), 'Remove')
+      expect(enclosesRect(zone, stripBox, 1), `the strip leaves the danger zone at ${width}px`).toBe(true)
+      expect(rectsOverlap(keep, confirm), `Keep and Remove overlap at ${width}px`).toBe(false)
+    })
+
+    await page.getByTestId('member-remove-keep').click()
+    await expect(strip).toHaveCount(0)
+    expect(posts, 'Keep must send nothing').toEqual([])
+  } finally {
+    page.off('request', onRequest)
+  }
 }
 
 /** Opens one row's `⋯` menu. The trigger toggles, so the same call closes it again. */
@@ -571,12 +596,8 @@ test('firm Settings: the live member directory, the live role grid, and every co
   await expect(menu.getByRole('button', { name: 'Edit', exact: true })).toBeEnabled()
   // The one real write this menu offers. Asserted enabled, never clicked — see the header.
   await expect(menu.getByRole('button', { name: 'Suspend', exact: true })).toBeEnabled()
-  await expectDisabledWithReason(
-    menu.getByRole('button', { name: 'Remove', exact: true }),
-    menu.getByTestId('member-menu-reason'),
-    UNBACKED.remove,
-    "Chiamaka Nwosu's Remove",
-  )
+  await expect(menu.getByRole('button', { name: 'Remove', exact: true }), "Chiamaka Nwosu's Remove").toBeEnabled()
+  await expect(menu.getByTestId('member-menu-reason'), 'no row here is locked, so no reason').toHaveCount(0)
   await toggleRowMenu(page, 'Chiamaka Nwosu')
   await expect(menu).toHaveCount(0)
 
@@ -642,8 +663,7 @@ test('firm Settings: the live member directory, the live role grid, and every co
   await expect(page.getByTestId('member-suspend'), 'an active member suspends').toHaveText('Suspend')
   await expect(page.getByTestId('member-suspend')).toBeEnabled()
   await expect(drawer, 'what suspension actually does').toContainText(SUSPEND_EXPLANATION)
-  await expect(page.getByTestId('member-remove')).toBeDisabled()
-  await expect(drawer, 'the remove reason').toContainText(UNBACKED.remove)
+  await expectRemoveStrip(page, twoSeat.member)
 
   await page.getByTestId('member-drawer-close').click()
   await expect(drawer).toHaveCount(0)
@@ -754,8 +774,7 @@ test('in-house Settings: its own live roster, three unsignable seats, and the su
   // In-house's fork of the drawer's unbacked field, and the firm's absent.
   await expect(wfSelect(page, 'Department')).toBeDisabled()
   await expect(drawer, 'the department reason').toContainText(UNBACKED.department)
-  await expect(page.getByTestId('member-remove')).toBeDisabled()
-  await expect(drawer, 'the remove reason').toContainText(UNBACKED.remove)
+  await expectRemoveStrip(page, suspended)
 
   await page.getByTestId('member-drawer-close').click()
   await expect(drawer).toHaveCount(0)

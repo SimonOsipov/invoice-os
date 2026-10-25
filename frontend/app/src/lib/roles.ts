@@ -254,9 +254,14 @@ export const INVITE_ROLE_HELPER =
 // Role modal — the picker's derivations, and the modal's own copy
 // ---------------------------------------------------------------------------
 
-/** The picker's rows for one mode — an invited person holds no place in a role yet. */
+/** The picker's rows for one mode — an invited or removed person holds no place in a role. */
 export function pickerMembers(list: readonly Member[]): Member[] {
-  return list.filter((m) => m.status !== 'invited')
+  return list.filter((m) => m.status === 'active' || m.status === 'suspended')
+}
+
+/** Invited rows only: the picker hides removed rows too, but the footnote names invites. */
+export function hiddenInvitedCount(list: readonly Member[]): number {
+  return list.filter((m) => m.status === 'invited').length
 }
 
 /** Case-insensitive name/email search over an already-selectable list; trims the query. */
@@ -293,7 +298,7 @@ export function hiddenSelectionNote(n: number): string {
 
 /** The footnote naming how many invited people the picker hides. Callers gate on a zero count. */
 export function hiddenInvitedFootnote(list: readonly Member[]): string {
-  const n = list.length - pickerMembers(list).length
+  const n = hiddenInvitedCount(list)
   // NOT IN BRIEF: the singular.
   return n === 1
     ? '1 invited person is hidden until they accept the invite.'

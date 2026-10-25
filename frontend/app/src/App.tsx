@@ -76,10 +76,11 @@ import {
   membersViewState,
   replaceMember,
   setMembershipClients,
+  removeMembership,
   setMembershipStatus,
   toMember,
   type Member,
-  type MemberStatus,
+  type PatchableStatus,
   type MembershipWire,
 } from './lib/members'
 import {
@@ -1660,9 +1661,16 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // No try/catch: the rejection has to reach MembersView, which renders the gateway's own
   // reason at the control. Because nothing writes before the await, a failed call leaves
   // the previous status rendered and there is no optimistic state to roll back.
-  async function setMemberStatus(id: string, status: Exclude<MemberStatus, 'invited'>) {
+  async function setMemberStatus(id: string, status: PatchableStatus) {
     const wire: MembershipWire = await setMembershipStatus(authedFetch, base!, id, status)
     setMembers((list) => replaceMember(list, toMember(wire, session.persona.subject)))
+  }
+
+  // `setMemberStatus`'s shape. The server deleted the person's role grants, so roles refetch.
+  async function removeMember(id: string) {
+    const wire: MembershipWire = await removeMembership(authedFetch, base!, id)
+    setMembers((list) => replaceMember(list, toMember(wire, session.persona.subject)))
+    rolesAsync.run()
   }
 
   // `setMemberStatus`'s shape: the server's row replaces the mirror's, and a refusal rejects.
@@ -1823,6 +1831,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     savePolicy,
     publishPolicy,
     setMemberStatus,
+    removeMember,
     setMemberClients,
     createRole,
     renameRole,

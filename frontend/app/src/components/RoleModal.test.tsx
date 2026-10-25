@@ -593,6 +593,17 @@ describe('Role modal v2 paint', () => {
     expect([note.style.borderTop, note.style.fontSize, note.style.padding]).toEqual(['1px solid var(--line-1)', '11.5px', '8px 4px 6px'])
   })
 
+  it('RoleModal: removed rows raise no hidden footnote', () => {
+    const gone = member({ id: 'u9', name: 'Dee Person', initials: 'DP', status: 'removed', email: null })
+    renderModal(editSubject, { members: [crew[0], gone] })
+    expect(screen.queryByTestId('role-modal-hidden')).toBeNull()
+    expect(screen.queryByText('Dee Person')).toBeNull()
+
+    cleanup()
+    renderModal(editSubject, { members: [crew[0], gone, crew[2]] })
+    expect(screen.getByTestId('role-modal-hidden').textContent).toBe('1 invited person is hidden until they accept the invite.')
+  })
+
   it('Save, blank: primary class, dimmed at the recipe, no fill override; typing a name lifts it', () => {
     renderModal({ mode: 'create' }, { members: crew })
     const save = screen.getByTestId('role-modal-save') as HTMLButtonElement

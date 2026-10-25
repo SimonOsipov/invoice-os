@@ -21,6 +21,7 @@ import {
   deleteRoleConfirmUnknownUsage,
   EDIT_ROLE_SUBTITLE,
   filterPickerMembers,
+  hiddenInvitedCount,
   hiddenInvitedFootnote,
   hiddenSelectionNote,
   NEW_ROLE_SUBTITLE,
@@ -93,8 +94,7 @@ export function RoleModal({ ctx, subject, onClose, onFlash }: {
 
   const selectable = pickerMembers(ctx.members)
   const shown = filterPickerMembers(selectable, query)
-  // Off the two lib derivations rather than re-testing `status === 'invited'` here.
-  const hidden = ctx.members.length - selectable.length
+  const hidden = hiddenInvitedCount(ctx.members)
   // `[invite-writes-both-stores]`: a role's `members` can hold a still-invited id the picker
   // has no row for, which `selected.length` above would otherwise count with no way to untick.
   const hiddenSelected = pickerHiddenAmongSelected(selected, ctx.members)

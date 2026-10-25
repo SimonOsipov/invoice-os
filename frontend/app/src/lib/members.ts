@@ -1,9 +1,9 @@
 // Members (Settings › Members) — types, the memberships wire and read-only derivations.
 //
 // Identity, access role and status are SERVER truth, read through `listMembers` and written
-// through `setMembershipStatus`. Pending invites are server truth too (`listInvitations`,
+// through `setMembershipStatus` and `removeMembership`. Pending invites are server truth too (`listInvitations`,
 // `sendInvitations`, `resendInvitation`, `revokeInvitation`). Per-person client access is server
-// truth too (`setMembershipClients`). Remove, role and department have no endpoint behind them;
+// truth too (`setMembershipClients`). Role and department have no endpoint behind them;
 // `MEMBER_UNBACKED` says so in one sentence each.
 //
 // This module is a function of a PERSON. Anything that is really a function of the ROLE LIST
@@ -29,7 +29,10 @@ import { initials } from './customers'
 /** Axis A — what a person can DO. Matches the shipped backend enum, three values only. */
 export type AccessRole = 'admin' | 'preparer' | 'reviewer'
 
-export type MemberStatus = 'active' | 'invited' | 'suspended'
+export type MemberStatus = 'active' | 'invited' | 'suspended' | 'removed'
+
+/** The two statuses PATCH accepts; `invited` and `removed` are never a PATCH target. */
+export type PatchableStatus = 'active' | 'suspended'
 
 /** In-house grouping primitive. There is no separate Teams/Groups entity. */
 export type Department = 'Finance' | 'Tax & Compliance' | 'Accounts Payable' | 'Executive' | 'Procurement'
@@ -476,6 +479,9 @@ export function removeConfirmQuestion(name: string): string {
   return `Remove ${name}? Access is revoked immediately. Their name stays on every invoice they touched.`
 }
 
+export const REMOVE_KEEP = 'Keep'
+export const REMOVE_CONFIRMED = 'Remove'
+
 /**
  * §9's explanation, and the tab's most-repeated sentence: the `⋯` menu, the drawer's role
  * cards and the drawer's danger zone all carry it.
@@ -518,17 +524,22 @@ export async function listMembers(f: AuthedFetch, base: string): Promise<Members
   return body.memberships
 }
 
-/** `invited` is a column value, not a PATCH target — excluded at the type level, not by a 400. */
+/** `invited` and `removed` are column values, not PATCH targets — excluded at the type level, not by a 400. */
 export function setMembershipStatus(
   f: AuthedFetch,
   base: string,
   userId: string,
-  status: Exclude<MemberStatus, 'invited'>,
+  status: PatchableStatus,
 ): Promise<MembershipWire> {
   return f<MembershipWire>(`${base}/api/tenancy/v1/memberships/${userId}`, {
     method: 'PATCH',
     body: { status },
   })
+}
+
+/** The answer is the member row, `status: "removed"`. A refusal rejects with the server's sentence. */
+export function removeMembership(f: AuthedFetch, base: string, userId: string): Promise<MembershipWire> {
+  return f<MembershipWire>(`${base}/api/tenancy/v1/memberships/${userId}/remove`, { method: 'POST' })
 }
 
 /** The whole access replaces the stored one; the answer is the member row. */
@@ -556,9 +567,10 @@ export function setMembershipClients(
 export function toMember(w: MembershipWire, selfSubject: string): Member {
   return {
     id: w.user_id,
-    name: w.display_name ?? w.email ?? w.user_id,
-    initials: memberInitials(w.display_name, w.email, w.user_id),
-    email: w.email,
+    // A removed row carries no email; its name is never an email or a uuid.
+    name: w.status === 'removed' ? w.display_name || REMOVED_NAME : (w.display_name ?? w.email ?? w.user_id),
+    initials: w.status === 'removed' ? initials(w.display_name || REMOVED_NAME) : memberInitials(w.display_name, w.email, w.user_id),
+    email: w.status === 'removed' ? null : w.email,
     role: w.role as AccessRole,
     status: w.status as MemberStatus,
     isYou: w.user_id === selfSubject,
@@ -598,6 +610,9 @@ export function membersSurface(status: AsyncStatus): MembersSurface {
   return 'roster'
 }
 
+/** A removed member with no stored name. */
+export const REMOVED_NAME = 'Deleted member'
+
 /** Absence, rendered. ONE em dash for the whole tab, so no two cells can disagree. */
 export const ABSENT_LABEL = '—'
 
@@ -605,11 +620,7 @@ export const ABSENT_LABEL = '—'
  * One sentence per control the roster still offers but no endpoint backs. Plain and
  * server-stated: what is missing, not an apology or a promise.
  */
-export const MEMBER_UNBACKED: Record<
-  'remove' | 'role' | 'department',
-  string
-> = {
-  remove: 'Deleting a membership locks that person out on their next request, and nothing undoes it. That decision has not been taken.',
+export const MEMBER_UNBACKED: Record<'role' | 'department', string> = {
   role: 'The membership endpoint writes status only. Changing someone\'s access role has no server call behind it.',
   department: 'A membership stores a name, an email, an access role and a status. There is no department column.',
 }

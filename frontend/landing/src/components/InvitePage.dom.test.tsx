@@ -1228,6 +1228,71 @@ describe('the name before Sign in', () => {
     expect(new URL(assigned[0]).search).not.toContain('name')
   })
 
+  it.each(VIEWS)('InvitePage: a blank name shows the register-form message pattern (%s)', async (_view, open) => {
+    await open()
+    await typeName('  ')
+    const alerts = container.querySelectorAll('[role="alert"]#inv-name-error')
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].textContent).toContain('Enter your name.')
+    const input = nameInput()!
+    expect(input.className).toBe('dm-input dm-err')
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    expect(input.getAttribute('aria-describedby')).toBe('inv-name-error')
+    expect(button('Sign in').disabled).toBe(true)
+    await typeName('Ada')
+    expect(nameMessage()).toBeNull()
+    expect(input.className).toBe('dm-input')
+    expect(input.getAttribute('aria-invalid')).toBe('false')
+    expect(input.hasAttribute('aria-describedby')).toBe(false)
+  })
+
+  it.each([['U+0085 only', '\u0085'], ['U+0085 and spaces', ' \u0085 \u0085 '], ['U+FEFF only', '\uFEFF'], ['U+FEFF and spaces', ' \uFEFF ']])(
+    'InvitePage: %s counts as blank',
+    async (_label, value) => {
+      stubFetch({ preview: previewOk({ account: 'confirmed' }) })
+      await mount()
+      await typeName(value)
+      expect(nameMessage()!.textContent).toContain('Enter your name.')
+      expect(button('Sign in').disabled).toBe(true)
+    },
+  )
+
+  it('InvitePage: the 200 and 201 limit counts the trimmed code points', async () => {
+    stubFetch({ preview: previewOk({ account: 'confirmed' }) })
+    await mount()
+    await typeName('\u0085 ' + 'a'.repeat(200) + ' \u0085')
+    expect(nameMessage()).toBeNull()
+    expect(button('Sign in').disabled).toBe(false)
+    await typeName('\u0085 ' + 'a'.repeat(201) + ' \u0085')
+    expect(nameMessage()!.textContent).toContain(TOO_LONG)
+    expect(button('Sign in').disabled).toBe(true)
+    await typeName('\u{1F600}'.repeat(200))
+    expect(nameMessage()).toBeNull()
+    expect(button('Sign in').disabled).toBe(false)
+    await typeName('\u{1F600}'.repeat(201))
+    expect(nameMessage()!.textContent).toContain(TOO_LONG)
+  })
+
+  it('InvitePage: a NUL hides a showing message and a valid NUL-free name restores Sign in', async () => {
+    stubFetch({ preview: previewOk({ account: 'confirmed' }) })
+    await mount()
+    await typeName('  ')
+    expect(nameMessage()).not.toBeNull()
+    await typeName('  \0')
+    expect(nameMessage()).toBeNull()
+    expect(button('Sign in').disabled).toBe(true)
+    await typeName('Ada')
+    expect(button('Sign in').disabled).toBe(false)
+  })
+
+  it('InvitePage: Sign in sends a U+0085-padded name trimmed in the fragment', async () => {
+    stubFetch({ preview: previewOk({ account: 'confirmed' }) })
+    await mount()
+    await typeName('\u0085 Ada \u0085')
+    await click(button('Sign in'))
+    expect(assigned).toEqual([SIGN_IN_HREF])
+  })
+
   it.each(VIEWS)('InvitePage: every Sign in view asks the name (%s)', async (_view, open) => {
     await open()
     const input = nameInput()

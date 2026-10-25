@@ -1,5 +1,6 @@
 // Pure presentation helpers. Everything here returns design-system token NAMES, never literals.
 
+import { formatShown } from './metricsApi'
 import type { Severity } from './types'
 
 export interface StatusStyle {
@@ -77,6 +78,59 @@ export function chartPath(points: [number, number][], o: { start: number; end: n
   // a one-point run gets a zero-length segment so the round cap paints a dot
   return runs.map((r) => (r.length === 1 ? `${r[0]} h0` : r.join(' '))).join(' ')
 }
+
+export type Aligned = [number[], ...(number | null)[][]]
+type Pts = { points: [number, number][] }
+
+// x = sorted unique union of the step grid and every point time; a null marks a step a line misses.
+export function alignSeries(lines: Pts[], start: number, end: number, step: number): Aligned {
+  const times = new Set<number>()
+  for (let k = 0; k <= Math.floor((end - start) / step); k++) times.add(start + k * step)
+  for (const l of lines) for (const [t] of l.points) times.add(t)
+  const x = [...times].sort((a, b) => a - b)
+  return [x, ...lines.map((l) => {
+    const at = new Map(l.points)
+    return x.map((t) => at.get(t) ?? null)
+  })]
+}
+
+export function yTop(lines: Pts[], guides: { value: number }[]): number {
+  return Math.max(0, ...lines.flatMap((l) => l.points.map(([, v]) => v)), ...guides.map((g) => g.value))
+}
+
+const pad = (n: number) => String(n).padStart(2, '0')
+
+// t is epoch seconds; ranges of a day or more show the date.
+export function utcClock(t: number, long: boolean): string {
+  const d = new Date(t * 1000)
+  const hm = `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`
+  return long ? `${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${hm}` : `${hm} UTC`
+}
+
+export type ReadoutRow = { name: string; color: string; value: string }
+
+// Coloured lines first, folded lines after, each in input order.
+export function readoutRows(lines: { name: string; color: string; unit: string; folded?: boolean }[], aligned: Aligned, idx: number, isolated: string | null): ReadoutRow[] {
+  const shownLines = lines.map((l, i) => ({ l, i })).filter(({ l }) => isolated === null || l.name === isolated)
+  const ordered = [...shownLines.filter(({ l }) => !l.folded), ...shownLines.filter(({ l }) => l.folded)]
+  return ordered.map(({ l, i }) => {
+    const v = idx >= 0 && idx < aligned[0].length ? aligned[i + 1][idx] : null
+    return { name: l.name, color: l.color, value: v === null ? '—' : formatShown(l.unit, v) }
+  })
+}
+
+const GAP = 12
+const MARGIN = 8
+
+export function readoutPlacement(at: { x: number; y: number }, plot: { left: number; top: number; width: number }, box: { width: number; height: number }, view: { width: number; height: number }): { left: number; top: number } {
+  const left = at.x > plot.left + plot.width / 2 ? at.x - GAP - box.width : at.x + GAP
+  return {
+    left: Math.max(MARGIN, Math.min(left, view.width - box.width - MARGIN)),
+    top: Math.max(MARGIN, Math.min(plot.top, view.height - box.height - MARGIN)),
+  }
+}
+
+export const tokenName = (v: string): string | null => /^var\(\s*(--[\w-]+)\s*\)$/.exec(v)?.[1] ?? null
 
 // Dot, stroke and fill derive from one tone so a tile cannot mix them.
 export function healthTone(tone: 'green' | 'amber' | 'red' | 'muted'): { dot: string; stroke: string; fill: string } {

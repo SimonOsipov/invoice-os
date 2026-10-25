@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react'
-import { CHART_H, CHART_W, chartPath, chartX, chartY, niceCeil } from '../helpers'
+import { CHART_H, CHART_W, chartPath, chartX, chartY, niceCeil, utcClock } from '../helpers'
 
 type Line = { name: string; color: string; points: [number, number][] }
 type Guide = { value: number; label: string; dashed: boolean }
@@ -9,15 +9,6 @@ type Props = { lines: Line[]; start: number; end: number; step: number; guides?:
 
 const TICK: CSSProperties = { fontSize: 11, color: 'var(--fg-3)', whiteSpace: 'nowrap' }
 const DAY = 86400
-
-const pad = (n: number) => String(n).padStart(2, '0')
-
-// t is epoch seconds; ranges of a day or more show the date.
-function clock(t: number, long: boolean): string {
-  const d = new Date(t * 1000)
-  const hm = `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`
-  return long ? `${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${hm}` : `${hm} UTC`
-}
 
 export function TimeChart({ lines, start, end, step, guides = [], markers = [] }: Props) {
   const values = [...lines.flatMap((l) => l.points.map(([, v]) => v)), ...guides.map((g) => g.value)]
@@ -55,8 +46,8 @@ export function TimeChart({ lines, start, end, step, guides = [], markers = [] }
       </svg>
       <span />
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-        <span style={TICK}>{clock(start, long)}</span>
-        <span style={TICK}>{clock(end, long)}</span>
+        <span style={TICK}>{utcClock(start, long)}</span>
+        <span style={TICK}>{utcClock(end, long)}</span>
       </div>
     </div>
   )

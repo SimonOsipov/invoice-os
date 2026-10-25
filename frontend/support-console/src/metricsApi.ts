@@ -226,3 +226,10 @@ export function formatValue(unit: string, v: number): Formatted {
   const r = Math.round(v)
   return { value: String(r), unit: unit === 'count' ? '' : unit, n: r }
 }
+
+// The legend's text: "% of limit" prints as "%", a unit-less value prints alone.
+export function formatShown(unit: string, v: number): string {
+  const f = formatValue(unit, v)
+  const u = f.unit === '% of limit' ? '%' : f.unit
+  return u ? `${f.value} ${u}` : f.value
+}

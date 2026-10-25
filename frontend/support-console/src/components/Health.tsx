@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react'
 import { CHART_H, SPARK_HEIGHT, SPARK_WIDTH, healthTone, sentryServiceUrl, sparkline } from '../helpers'
 import { fleetSummary, jobSeries, jobsOf, series, shortBuild, type StaffHealth } from '../healthApi'
-import { DASHBOARDS, METRIC_SERVICES, RANGES, SERIES, THRESHOLDS, colourMap, fleetSeries, formatValue, hasData, judge, latestOf, panelOf, worstP95, type PanelKey, type Point, type RangeKey, type StaffMetrics, type Stat, type Verdict } from '../metricsApi'
+import { DASHBOARDS, METRIC_SERVICES, RANGES, SERIES, THRESHOLDS, colourMap, fleetSeries, formatShown, formatValue, hasData, judge, latestOf, panelOf, worstP95, type PanelKey, type Point, type RangeKey, type StaffMetrics, type Stat, type Verdict } from '../metricsApi'
 import { syncStamp } from '../rulesApi'
 import { G } from './BlogList'
 import { Badge } from './StatusBadge'
@@ -162,9 +162,7 @@ function panelVerdict(stat: Stat, entries: Entry[], budget: number): Verdict {
 const shown = (e: Entry): string => {
   const latest = latestOf(e.points)
   if (latest === null) return 'No data'
-  const f = formatValue(e.unit, latest)
-  const unit = f.unit === '% of limit' ? '%' : f.unit
-  return unit ? `${f.value} ${unit}` : f.value
+  return formatShown(e.unit, latest)
 }
 
 function Panel({ spec, m, colours, service, markers }: { spec: PanelSpec; m: StaffMetrics; colours: Record<string, string>; service: string; markers: { t: number; title: string }[] }) {

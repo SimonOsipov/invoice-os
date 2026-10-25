@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { DASHBOARDS } from './metricsApi'
-import { CHART_H, CHART_W, chartPath, chartX, healthTone, niceCeil, sentryServiceUrl, sentryTenantUrl, SPARK_HEIGHT, SPARK_WIDTH, severityStyle, sparkline } from './helpers'
+import { alignSeries, CHART_H, CHART_W, chartPath, chartX, healthTone, niceCeil, readoutPlacement, readoutRows, sentryServiceUrl, sentryTenantUrl, SPARK_HEIGHT, SPARK_WIDTH, severityStyle, sparkline, tokenName, utcClock, yTop } from './helpers'
 import type { Severity } from './types'
 
 const ALL_SEVERITIES: Severity[] = ['error', 'warn', 'info']
@@ -136,5 +136,87 @@ describe('chart geometry', () => {
   it('niceCeil rounds up to 1, 2 or 5 times a power of ten', () => {
     expect([0, -3, 0.7, 1, 1.2, 3, 7, 80, 1000.1].map(niceCeil)).toEqual([1, 1, 1, 1, 2, 5, 10, 100, 2000])
     expect([1.8, 4.5, 5, 0.03].map(niceCeil)).toEqual([2, 5, 5, 0.05])
+  })
+})
+
+describe('chart model', () => {
+  const a: [number, number][] = [[0, 1], [60, 2], [120, 3], [180, 4]]
+  const b: [number, number][] = [[60, 5]]
+
+  it('alignSeries puts every line on one time grid', () => {
+    expect(alignSeries([{ points: a }, { points: b }], 0, 180, 60)).toEqual([[0, 60, 120, 180], [1, 2, 3, 4], [null, 5, null, null]])
+  })
+  it('alignSeries leaves a null at a step every line misses', () => {
+    const [x, v] = alignSeries([{ points: [[0, 7], [60, 8], [180, 9]] }], 0, 180, 60)
+    expect(x).toContain(120)
+    expect(v).toEqual([7, 8, null, 9])
+  })
+  it('alignSeries keeps a point that is off the grid or after the end', () => {
+    const [x, v] = alignSeries([{ points: [[90, 1], [240, 2]] }], 0, 180, 60)
+    expect(x).toEqual([0, 60, 90, 120, 180, 240])
+    expect(v).toEqual([null, null, 1, null, null, 2])
+  })
+  it('alignSeries with no lines returns the grid alone', () => {
+    expect(alignSeries([], 0, 180, 60)).toEqual([[0, 60, 120, 180]])
+  })
+  it('yTop covers the highest point and every guide', () => {
+    expect(yTop([{ points: [[0, 5]] }], [{ value: 80 }])).toBe(80)
+    expect(yTop([{ points: [[0, 1200]] }], [{ value: 1000 }])).toBe(1200)
+    expect(yTop([{ points: [[0, 0]] }], [])).toBe(0)
+  })
+  it('utcClock prints clock time for short ranges and the date for long ones', () => {
+    const tz = process.env.TZ
+    process.env.TZ = 'Africa/Lagos'
+    try {
+      const t = Date.UTC(2026, 9, 14, 23, 5) / 1000
+      expect(utcClock(t, false)).toBe('23:05 UTC')
+      expect(utcClock(t, true)).toBe('10-14 23:05')
+    } finally {
+      if (tz === undefined) delete process.env.TZ
+      else process.env.TZ = tz
+    }
+  })
+
+  const lines = [
+    { name: 'a', color: 'c1', unit: '%' },
+    { name: 'g', color: 'c2', unit: '%', folded: true },
+    { name: 'b', color: 'c3', unit: 'ms' },
+  ]
+  const grid: Parameters<typeof readoutRows>[1] = [[0, 60], [0.4249, 1], [3, 1], [1249, null]]
+  it('readoutRows lists coloured lines, then folded lines, with legend values', () => {
+    const rows = readoutRows(lines, grid, 0, null)
+    expect(rows.map((r) => r.name)).toEqual(['a', 'b', 'g'])
+    expect(rows.map((r) => r.value)).toEqual(['0.42 %', '1.25 s', '3.00 %'])
+  })
+  it('readoutRows prints a dash for a missing point', () => {
+    expect(readoutRows(lines, grid, 1, null).find((r) => r.name === 'b')?.value).toBe('—')
+  })
+  it('readoutRows lists only the isolated line', () => {
+    expect(readoutRows(lines, grid, 0, 'b').map((r) => r.name)).toEqual(['b'])
+  })
+  it('readoutRows prints dashes outside the grid', () => {
+    for (const idx of [-1, 2]) expect(readoutRows(lines, grid, idx, null).every((r) => r.value === '—')).toBe(true)
+  })
+
+  const plot = { left: 100, top: 40, width: 400 }
+  const box = { width: 160, height: 90 }
+  const view = { width: 1280, height: 800 }
+  it('readoutPlacement sits right of the cursor in the left half', () => {
+    expect(readoutPlacement({ x: 150, y: 70 }, plot, box, view)).toEqual({ left: 162, top: 40 })
+  })
+  it('readoutPlacement flips left past the middle', () => {
+    expect(readoutPlacement({ x: 450, y: 70 }, plot, box, view).left).toBe(450 - 12 - 160)
+  })
+  it('readoutPlacement stays inside the view', () => {
+    const r = readoutPlacement({ x: 20, y: 70 }, { left: 0, top: 760, width: 30 }, box, view)
+    expect(r.top).toBe(800 - 90 - 8)
+    expect(r.left).toBeGreaterThanOrEqual(8)
+  })
+
+  it('tokenName reads the custom property of a var()', () => {
+    expect(tokenName('var(--series-1)')).toBe('--series-1')
+    expect(tokenName('var( --fg-4 )')).toBe('--fg-4')
+    expect(tokenName('#2a78d6')).toBeNull()
+    expect(tokenName('var(--a) var(--b)')).toBeNull()
   })
 })

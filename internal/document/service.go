@@ -40,6 +40,10 @@ func (s *Service) Store(ctx context.Context, filename, contentType string, size 
 		return Document{}, false, db.ErrNoTenant
 	}
 
+	if err := s.store.Admit(ctx); err != nil {
+		return Document{}, false, err
+	}
+
 	h := sha256.New()
 	n, err := io.Copy(h, body)
 	if err != nil {
@@ -53,6 +57,7 @@ func (s *Service) Store(ctx context.Context, filename, contentType string, size 
 
 	hash := hex.EncodeToString(h.Sum(nil))
 	key := StorageKey(id.TenantID, hash)
+	// ceiling: a lock committed between Admit and Upsert leaves one unreferenced object; DEL-07's prefix delete removes it
 	if err := s.objects.Put(ctx, key, body, n); err != nil {
 		return Document{}, false, err
 	}

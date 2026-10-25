@@ -130,8 +130,8 @@ func distinctSubmissionEvents(t *testing.T, f *effectsFixture, tenantID string) 
 // --- COMMIT 4 ------------------------------------------------------------------------------
 
 // A River redelivery of the identical job (same id, same attempt) must not double the audit
-// row. The guard is tx1's terminal short-circuit -- worker.go:120 [tx1Terminal] for submit,
-// worker.go:443 [state != "pending"] for poll -- NOT queue.OncePerJob: for a redelivered job,
+// row. The guard is tx1's terminal short-circuit -- worker.go:132 [tx1Terminal] for submit,
+// worker.go:457 [state != "pending"] for poll -- NOT queue.OncePerJob: for a redelivered job,
 // tx1 returns before the adapter is ever called again. The second call returning nil (rather
 // than an error) is the control proving the short-circuit fired, not some unrelated early
 // error.
@@ -309,8 +309,8 @@ func TestSubmissionAudit_ConcurrentRedeliveryOfOneJobWritesOneRow(t *testing.T) 
 	go func() { defer wg.Done(); errs[1] = w.Work(ctx, job) }()
 	wg.Wait()
 
-	// Control: a tx1 short-circuit returns nil (worker.go:192 [case tx1Terminal, tx1AlreadyCleared]);
-	// worker.go:350 [return submitErr] returns a non-nil error on BOTH the applied and skipped
+	// Control: a tx1 short-circuit returns nil (worker.go:204 [case tx1Terminal, tx1AlreadyCleared]);
+	// worker.go:364 [return submitErr] returns a non-nil error on BOTH the applied and skipped
 	// OncePerJob paths. Both non-nil proves both goroutines independently reached tx2.
 	if errs[0] == nil || errs[1] == nil {
 		t.Fatalf("Work() returned (%v, %v), want BOTH non-nil", errs[0], errs[1])

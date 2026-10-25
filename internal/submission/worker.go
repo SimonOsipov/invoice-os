@@ -86,7 +86,10 @@ const (
 	tx1Terminal
 	tx1AlreadyCleared
 	tx1RateLimited
+	tx1Locked
 )
+
+const lockedSnooze = 15 * time.Minute
 
 // Work drives the tx1 / adapter / tx2 decision flow (worker.go's own doc comment, and the
 // M5-04-05 story's System Design). tx1 ensures the job row, applies the terminal /
@@ -108,6 +111,15 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 	)
 
 	tx1Err := db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
+		locked, err := db.WorkspaceLocked(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if locked {
+			outcome = tx1Locked
+			return nil
+		}
+		// ceiling: a job whose tx1 committed before the lock still reaches the adapter
 		id, state, att, err := ensureSubmissionJob(ctx, tx, args.TenantID, args.InvoiceID,
 			args.IdempotencyKey, adapterName, adapterVersion, job.ID)
 		if err != nil {
@@ -193,6 +205,8 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 		return nil
 	case tx1RateLimited:
 		return river.JobSnooze(retryAfter)
+	case tx1Locked:
+		return river.JobSnooze(lockedSnooze)
 	}
 
 	// No transaction held from here through adapter.Submit's return

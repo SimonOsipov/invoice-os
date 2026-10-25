@@ -62,6 +62,14 @@ describe('inviteSignInUrl', () => {
     expect(inviteSignInUrl('T', 'Ada')).toBeNull()
   })
 
+  // Same literal as frontend/app/src/lib/pendingInvite.test.ts 'readInviteName reads what the landing writes'.
+  it('inviteSignInUrl writes the hard name as the literal the app reads', () => {
+    vi.stubEnv('VITE_APP_URL', 'https://app.x')
+    const hard = 'A&b=c#d+e \u{1F600}' + 'x'.repeat(189)
+    expect([...hard]).toHaveLength(200)
+    expect(inviteSignInUrl('T', ` ${hard} `)).toBe('https://app.x?auth=start#invite=T&name=A%26b%3Dc%23d%2Be%20%F0%9F%98%80xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+  })
+
   it('inviteNameValid counts characters as the server counts runes', () => {
     expect(inviteNameValid('😀'.repeat(200))).toBe(true)
     expect(inviteNameValid('😀'.repeat(201))).toBe(false)

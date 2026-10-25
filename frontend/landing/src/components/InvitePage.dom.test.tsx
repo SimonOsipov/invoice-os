@@ -1161,6 +1161,21 @@ describe('the name before Sign in', () => {
     expect(new URLSearchParams(url.hash.slice(1)).get('name')).toBe('Ada & Obi#1=2')
   })
 
+  it('InvitePage: the typed name reaches no console call and no analytics event', async () => {
+    const gtag = vi.fn()
+    vi.stubGlobal('gtag', gtag)
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}))
+    stubFetch({ preview: previewOk({ account: 'confirmed' }) })
+    await mount()
+    await typeName('Zed Qwerty')
+    await click(button('Sign in'))
+    expect(assigned, 'control: Sign in left').toHaveLength(1)
+    const seen = JSON.stringify([...spies.flatMap((s) => s.mock.calls), ...gtag.mock.calls])
+    expect(seen).not.toContain('Zed')
+    expect(seen).not.toContain('Qwerty')
+    vi.unstubAllGlobals()
+  })
+
   it('InvitePage: the register form asks no name', async () => {
     const fetchMock = stubFetch({ register: () => json(200, {}) })
     await mount()

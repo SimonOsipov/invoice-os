@@ -115,6 +115,20 @@ func TestRLS_RequestSeamAdmitsAReadOnlyTxOfALockedWorkspace(t *testing.T) {
 	if !errors.As(err, &pgErr) || pgErr.Code != "25006" {
 		t.Errorf("write inside READ ONLY: err = %v, want SQLSTATE 25006", err)
 	}
+
+	// The admitted tx cannot switch itself to read-write: that would reopen the lock.
+	for name, stmt := range map[string]string{
+		"SET TRANSACTION":     `SET TRANSACTION READ WRITE`,
+		"SET LOCAL read_only": `SET LOCAL transaction_read_only = off`,
+	} {
+		err = db.WithinRequestTenantTxOpts(ctx, h.app, ro, func(tx pgx.Tx) error {
+			_, err := tx.Exec(context.Background(), stmt)
+			return err
+		})
+		if err == nil {
+			t.Errorf("%s inside an admitted READ ONLY tx of a locked workspace succeeded, want an error", name)
+		}
+	}
 }
 
 func TestRLS_RequestSeamPutsTheMembershipGateBeforeTheLock(t *testing.T) {
@@ -130,7 +144,10 @@ func TestRLS_RequestSeamPutsTheMembershipGateBeforeTheLock(t *testing.T) {
 	if err := db.WithinRequestTenantTx(requestCtx(active, h.tenantA), h.app, noop); !errors.Is(err, db.ErrWorkspaceLocked) {
 		t.Fatalf("control: active member of a locked workspace err = %v, want db.ErrWorkspaceLocked", err)
 	}
-	for name, user := range map[string]string{"suspended": suspended, "removed": removed} {
+	// A non-member, and a member of unlocked B who claims locked A, must not learn A is locked.
+	stranger, inB := uuid.NewString(), uuid.NewString()
+	seedMembershipWithStatus(t, h.tenantB, inB, "admin", "active")
+	for name, user := range map[string]string{"suspended": suspended, "removed": removed, "no membership": stranger, "member of another tenant": inB} {
 		ran := false
 		err := db.WithinRequestTenantTx(requestCtx(user, h.tenantA), h.app, func(pgx.Tx) error { ran = true; return nil })
 		if !errors.Is(err, db.ErrNotActiveMember) {

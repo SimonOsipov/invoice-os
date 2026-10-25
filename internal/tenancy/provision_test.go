@@ -364,7 +364,7 @@ func TestStoreProvisionWorkspace_RefusesAnyExistingMembership(t *testing.T) {
 	}
 }
 
-// With the guard in front, only a tenant row at the workspace id with no membership reaches tenants_pkey.
+// With the guard in front, a tenant row at the workspace id with no membership reaches tenants_pkey.
 func TestStoreProvisionWorkspace_MemberlessTenantAtTheWorkspaceIDIsAlreadyProvisioned(t *testing.T) {
 	r := newRegistrant(t)
 	if _, err := r.super.Exec(context.Background(), `INSERT INTO tenants (id, name) VALUES ($1, 'Orphan Works')`, r.tenantID); err != nil {
@@ -959,5 +959,136 @@ func TestProvision_ConcurrentRemovedCreatorProvisionsOnce(t *testing.T) {
 	}
 	if got := tenantCount(t, r.super); got != tenantsBefore+1 {
 		t.Errorf("tenants %d -> %d, want exactly one more", tenantsBefore, got)
+	}
+}
+
+func TestProvision_RetryNeedsTheCallersRemovedRowAtTheDerivedID(t *testing.T) {
+	atDerivedID := func(t *testing.T, r registrant) {
+		t.Helper()
+		if _, err := r.super.Exec(context.Background(), `INSERT INTO tenants (id, name) VALUES ($1, 'Orphan Works')`, r.tenantID); err != nil {
+			t.Fatalf("seed the tenant at the derived id: %v", err)
+		}
+	}
+	for _, c := range []struct {
+		name  string
+		setup func(t *testing.T) registrant
+		want  bool // a new workspace
+	}{
+		{"the caller's removed row is in another tenant", func(t *testing.T) registrant {
+			r := newRegistrant(t)
+			atDerivedID(t, r)
+			seedMembership(t, r.super, seedTenant(t, r.super, "Left Behind"), r.id.Subject, "preparer", "removed")
+			return r
+		}, false},
+		{"only another member's removed row is at the derived id", func(t *testing.T) registrant {
+			r := newRegistrant(t)
+			atDerivedID(t, r)
+			seedMembership(t, r.super, r.tenantID, uuid.NewString(), "preparer", "removed")
+			return r
+		}, false},
+		{"an active row elsewhere beside the removed row at the derived id", func(t *testing.T) registrant {
+			r := removedCreator(t)
+			seedMembership(t, r.super, seedTenant(t, r.super, "Joined Since"), r.id.Subject, "admin", "active")
+			return r
+		}, false},
+		// Control: the caller's own removed row at the derived id, beside another member's, retries.
+		{"the caller's removed row is at the derived id", func(t *testing.T) registrant {
+			r := newRegistrant(t)
+			dropTenantsOf(t, r.super, r.id.Subject)
+			atDerivedID(t, r)
+			seedMembership(t, r.super, r.tenantID, uuid.NewString(), "preparer", "removed")
+			seedMembership(t, r.super, r.tenantID, r.id.Subject, "admin", "removed")
+			return r
+		}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := c.setup(t)
+			store, tr := tracedStore(t)
+			before := tenantCount(t, r.super)
+
+			tenant, _, err := store.ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Retry Works", DisplayName: "Ada"})
+
+			if c.want {
+				if err != nil || tenant.ID == r.tenantID || provisionAttempts(tr) != 2 || tenantCount(t, r.super) != before+1 {
+					t.Errorf("tenant %q, err %v, attempts %d, tenants %d -> %d; want a new workspace after 2 attempts", tenant.ID, err, provisionAttempts(tr), before, tenantCount(t, r.super))
+				}
+				return
+			}
+			if !errors.Is(err, ErrAlreadyProvisioned) {
+				t.Errorf("err = %v, want ErrAlreadyProvisioned", err)
+			}
+			if n := provisionAttempts(tr); n != 1 {
+				t.Errorf("provision_workspace calls = %d, want 1 (no retry)", n)
+			}
+			if got := tenantCount(t, r.super); got != before {
+				t.Errorf("tenants %d -> %d, want unchanged", before, got)
+			}
+		})
+	}
+}
+
+func TestProvision_RetryIDIsRandomAndNotDerivable(t *testing.T) {
+	r := removedCreator(t)
+	store := NewStore(r.app)
+	derived := uuid.NewSHA1(workspaceNamespace, []byte(r.id.Subject)).String()
+
+	first, _, err := store.ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Second Works", DisplayName: "Ada"})
+	if err != nil {
+		t.Fatalf("first retry: %v", err)
+	}
+	// Remove the creator from the new workspace too; the next provision retries again.
+	other := uuid.NewString()
+	seedIdentityMembership(t, r.super, first.ID, other, "admin", "active", strp("Bola Eze"), strp(other+"@members.test"))
+	admin := auth.WithIdentity(context.Background(), auth.Identity{Subject: other, Role: "authenticated", TenantID: first.ID})
+	if _, err := store.RemoveMember(admin, r.id.Subject); err != nil {
+		t.Fatalf("remove the creator from the new workspace: %v", err)
+	}
+	second, _, err := store.ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Third Works", DisplayName: "Ada"})
+	if err != nil {
+		t.Fatalf("second retry: %v", err)
+	}
+
+	if first.ID == second.ID {
+		t.Errorf("two retries got the same tenant id %s, want a fresh one each", first.ID)
+	}
+	for _, id := range []string{first.ID, second.ID} {
+		parsed, perr := uuid.Parse(id)
+		if perr != nil || parsed.Version() != 4 {
+			t.Errorf("retry id %q: version %d, err %v; want a random v4 uuid", id, parsed.Version(), perr)
+		}
+		if id == derived {
+			t.Errorf("retry id %s is uuidv5(subject)", id)
+		}
+	}
+}
+
+func TestHoldsRemovedRow(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	user, other := uuid.NewString(), uuid.NewString()
+	at := func(status, who string) string {
+		tenant := seedTenant(t, super, "Probe "+status)
+		seedMembership(t, super, tenant, who, "preparer", status)
+		return tenant
+	}
+	for _, c := range []struct {
+		name   string
+		tenant string
+		want   bool
+	}{
+		{"the caller's removed row", at("removed", user), true},
+		{"the caller's active row", at("active", user), false},
+		{"the caller's suspended row", at("suspended", user), false},
+		{"the caller's invited row", at("invited", user), false},
+		{"another member's removed row", at("removed", other), false},
+		{"no row at all", seedTenant(t, super, "Probe empty"), false},
+		{"a tenant that does not exist", uuid.NewString(), false},
+		{"a malformed tenant id", "not-a-uuid", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := store.holdsRemovedRow(context.Background(), c.tenant, user); got != c.want {
+				t.Errorf("holdsRemovedRow = %v, want %v", got, c.want)
+			}
+		})
 	}
 }

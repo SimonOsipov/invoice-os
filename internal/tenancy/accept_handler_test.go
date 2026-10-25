@@ -375,6 +375,9 @@ func TestAcceptHandlers_RefuseABadName(t *testing.T) {
 				{"empty", `""`, lengthSentence},
 				{"201 runes", jsonString(t, strings.Repeat("é", 201)), lengthSentence},
 				{"NUL byte", jsonString(t, "a\x00b"), nulSentence},
+				{"a lone NUL survives the trim", jsonString(t, " \x00 "), nulSentence},
+				{"tab, no-break space and newline only", jsonString(t, "\t\u00a0\n"), lengthSentence},
+				{"201 four-byte runes", jsonString(t, strings.Repeat("😀", 201)), lengthSentence},
 				{"not a string", `5`, "invalid request body"},
 			} {
 				t.Run(c.name, func(t *testing.T) {
@@ -404,6 +407,9 @@ func TestAcceptHandlers_AcceptA200RuneName(t *testing.T) {
 			for _, c := range []struct{ name, members, want string }{
 				{"200 four-byte runes", `"display_name":` + jsonString(t, four), "v:" + four},
 				{"200 escaped surrogate pairs", `"display_name":"` + escaped + `"`, "v:" + four},
+				{"one rune", `"display_name":"a"`, "v:a"},
+				{"200 one-byte runes", `"display_name":` + jsonString(t, strings.Repeat("a", 200)), "v:" + strings.Repeat("a", 200)},
+				{"null is no name", `"display_name":null`, "<nil>"},
 			} {
 				t.Run(c.name, func(t *testing.T) {
 					spy := &nameSpy{}

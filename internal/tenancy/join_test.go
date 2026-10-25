@@ -2,11 +2,14 @@ package tenancy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -964,5 +967,109 @@ func TestMyPendingInvitations_FreshAccountIsNotRemoved(t *testing.T) {
 	seedRemovedElsewhere(t, user)
 	if got, err := w.store.MyPendingInvitations(tenantless(user, addr)); err != nil || !got.Removed {
 		t.Errorf("after removal: %+v, err %v; want Removed true", got, err)
+	}
+}
+
+// realAcceptMux serves the three join routes over the real store.
+func realAcceptMux(s *Store) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/invitations/mine", InvitationsMineHandler(s.MyPendingInvitations, nil))
+	mux.HandleFunc("POST /v1/invitations/accept", AcceptInvitationHandler(s.AcceptInvitation, nil))
+	mux.HandleFunc("POST /v1/invitations/{id}/accept", AcceptInvitationByIDHandler(s.AcceptInvitationByID, nil))
+	return mux
+}
+
+func TestMyPendingInvitations_RemovedIsReadFromTheVerifiedSubjectOnly(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	mux := realAcceptMux(w.store)
+	removed, clean := uuid.NewString(), uuid.NewString()
+	seedRemovedElsewhere(t, removed)
+
+	get := func(subject, other, claim, target string) string {
+		req := httptest.NewRequestWithContext(tenantless(subject, addr), http.MethodGet, target, strings.NewReader(`{"removed":`+claim+`,"subject":"`+other+`"}`))
+		req.Header.Set("X-User-Id", other)
+		req.Header.Set("X-User-Subject", other)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d %s, want 200", target, rec.Code, rec.Body)
+		}
+		return rec.Body.String()
+	}
+	// A clean caller naming the removed person in every channel still reads false; the removed caller denying it still reads true.
+	if got := get(clean, removed, "true", "/v1/invitations/mine?subject="+removed+"&user_id="+removed+"&removed=true"); !strings.Contains(got, `"removed":false`) {
+		t.Errorf("clean caller with spoofed channels = %s, want removed false", got)
+	}
+	if got := get(removed, clean, "false", "/v1/invitations/mine?subject="+clean+"&user_id="+clean+"&removed=false"); !strings.Contains(got, `"removed":true`) {
+		t.Errorf("removed caller with spoofed channels = %s, want removed true", got)
+	}
+}
+
+func TestAcceptHandlers_OldClientBodiesStillJoinWithNoName(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		req  func(w acceptWorld) (path, body string)
+	}{
+		{"by id, no body", func(w acceptWorld) (string, string) { return "/v1/invitations/" + w.invite.ID + "/accept", "" }},
+		{"by id, empty object", func(w acceptWorld) (string, string) { return "/v1/invitations/" + w.invite.ID + "/accept", `{}` }},
+		{"token, no display_name", func(w acceptWorld) (string, string) {
+			return "/v1/invitations/accept", `{"token":"` + w.invite.Token + `"}`
+		}},
+		{"token, null display_name", func(w acceptWorld) (string, string) {
+			return "/v1/invitations/accept", `{"token":"` + w.invite.Token + `","display_name":null}`
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w, addr := newJoinWorld(t, "reviewer")
+			mux, user := realAcceptMux(w.store), uuid.NewString()
+			path, body := c.req(w)
+			if rec := apiDo(mux, tenantless(user, addr), http.MethodPost, path, body); rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+			}
+			rows := membersOf(t, w.super, user)
+			if len(rows) != 1 || rows[0].Status != "active" || rows[0].DisplayName != nil {
+				t.Errorf("memberships = %+v, want one active row with a NULL display_name", rows)
+			}
+		})
+	}
+}
+
+func TestAcceptHandlers_ABadNameWritesNothingAndTheNamesAtTheBoundsAreStored(t *testing.T) {
+	four := strings.Repeat("😀", 200)
+	for _, c := range []struct {
+		name, good string
+		post       func(w acceptWorld, name string) (path, body string)
+	}{
+		{"token", four, func(w acceptWorld, name string) (string, string) {
+			b, _ := json.Marshal(map[string]string{"token": w.invite.Token, "display_name": name})
+			return "/v1/invitations/accept", string(b)
+		}},
+		{"by id", "a", func(w acceptWorld, name string) (string, string) {
+			b, _ := json.Marshal(map[string]string{"display_name": name})
+			return "/v1/invitations/" + w.invite.ID + "/accept", string(b)
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w, addr := newJoinWorld(t, "reviewer")
+			mux, user := realAcceptMux(w.store), uuid.NewString()
+			for _, bad := range []string{"   ", "\t \n", strings.Repeat("é", 201), strings.Repeat("😀", 201), "a\x00b", "\x00"} {
+				path, body := c.post(w, bad)
+				if rec := apiDo(mux, tenantless(user, addr), http.MethodPost, path, body); rec.Code != http.StatusBadRequest {
+					t.Errorf("name of %d runes: status %d, want 400: %s", utf8.RuneCountInString(bad), rec.Code, rec.Body)
+				}
+			}
+			if rows := membersOf(t, w.super, user); len(rows) != 0 {
+				t.Errorf("memberships after refused names = %+v, want none", rows)
+			}
+			requireStatus(t, w, "pending")
+
+			path, body := c.post(w, c.good)
+			if rec := apiDo(mux, tenantless(user, addr), http.MethodPost, path, body); rec.Code != http.StatusOK {
+				t.Fatalf("name of %d runes: status %d, want 200: %s", utf8.RuneCountInString(c.good), rec.Code, rec.Body)
+			}
+			if rows := membersOf(t, w.super, user); len(rows) != 1 || rows[0].DisplayName == nil || *rows[0].DisplayName != c.good {
+				t.Errorf("memberships = %+v, want one stored with the %d-rune name", rows, utf8.RuneCountInString(c.good))
+			}
+		})
 	}
 }

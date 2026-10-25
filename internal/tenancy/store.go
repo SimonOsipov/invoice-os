@@ -76,7 +76,7 @@ func (s *Store) Me(ctx context.Context) (Tenant, MeUser, error) {
 	return t, me, nil
 }
 
-// workspaceNamespace keys uuidv5(subject): one self-provisioned workspace per identity.
+// workspaceNamespace keys uuidv5(subject).
 var workspaceNamespace = uuid.MustParse("83584a9e-a526-4186-9fbb-508011cac1cc")
 
 // ProvisionWorkspace creates the caller's workspace and its first active admin
@@ -94,7 +94,7 @@ func (s *Store) ProvisionWorkspace(ctx context.Context, in ProvisionInput) (Tena
 	if err != nil {
 		return Tenant{}, "", db.ErrNoTenant
 	}
-	// uuid.Parse accepts several spellings; hash the canonical one so each identity gets one workspace.
+	// uuid.Parse accepts several spellings; hash the canonical one.
 	subject := parsed.String()
 	tenantID := uuid.NewSHA1(workspaceNamespace, []byte(subject)).String()
 

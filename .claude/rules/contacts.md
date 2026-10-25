@@ -51,3 +51,5 @@ paths:
 - Erase a HubSpot contact in this order: rename and delete each associated deal, then `gdpr-delete` by email.
 - Treat a vendor 404 on an erase call as success.
 - Erase a Resend contact with `DELETE /contacts/{email}` only.
+- Erase a person only through `EnqueueErasure`. The worker sweeps local copies in one transaction before any vendor call.
+- Never put an email, a name or a user id in an erase log line or error.

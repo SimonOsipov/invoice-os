@@ -1341,3 +1341,35 @@ func TestErase_TheHubSpotStepRebuildsOnlyHubSpot(t *testing.T) {
 		t.Fatal("the HubSpot step rebuilt more than the HubSpot contact")
 	}
 }
+
+func TestErase_AFinishedIntakeJobOfAnotherUserDoesNotSupersede(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	old := r.insertJob(RegistrantArgs{UserID: uuid.NewString(), Email: r.mail})
+	r.setState(old, "completed")
+	r.blog(r.mail, 1)
+	if err := r.work(gen); err != nil {
+		t.Fatal(err)
+	}
+	s := r.row(r.uid)
+	t.Logf("superseded=%v blogRows=%d", s.Superseded, r.count(`SELECT count(*) FROM blog_subscribers WHERE email=$1`, r.mail))
+	if s.Superseded || r.count(`SELECT count(*) FROM blog_subscribers WHERE email=$1`, r.mail) != 0 {
+		t.Fatal("DEFECT: finished foreign intake job supersedes; blog row survives")
+	}
+}
+
+func TestErase_AHandoffOnlyAccountKeepsItsBlogSubscription(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	r.handoff(uuid.NewString(), r.mail)
+	r.blog(r.mail, 1)
+	if err := r.work(gen); err != nil {
+		t.Fatal(err)
+	}
+	n := r.count(`SELECT count(*) FROM river_job WHERE kind='blog_subscriber_sync' AND args->>'email'=$1`, r.mail)
+	stamped := r.count(`SELECT count(*) FROM blog_subscribers WHERE email=$1 AND resend_delivered_at IS NOT NULL`, r.mail)
+	t.Logf("blog sync jobs=%d stampedRows=%d resendCalls=%d", n, stamped, len(r.rs.got()))
+	if n == 0 && stamped == 1 {
+		t.Fatal("DEFECT: blog row kept, stamped delivered, Resend contact erased, nothing queued")
+	}
+}

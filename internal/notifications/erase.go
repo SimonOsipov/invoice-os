@@ -206,12 +206,9 @@ func (w *EraseWorker) sweep(ctx context.Context, tx pgx.Tx, uid, email string) (
 		}
 	}
 	// D20: another account on the address keeps its email-keyed rows and jobs.
-	if err := tx.QueryRow(ctx, `
-		SELECT EXISTS (SELECT 1 FROM contacts WHERE email = $1 AND user_id IS NOT NULL AND user_id::text <> $2)
-		    OR EXISTS (SELECT 1 FROM registrant_handoffs WHERE lower(btrim(email)) = $1 AND lower(user_id) <> $2)
-		    OR EXISTS (SELECT 1 FROM river_job WHERE kind = $3 AND lower(btrim(args->>'email')) = $1 AND lower(args->>'user_id') <> $2)`,
-		email, uid, RegistrantArgs{}.Kind()).Scan(&res.superseded); err != nil {
-		return res, fmt.Errorf("notifications: check address: %w", err)
+	var err error
+	if res.superseded, err = holdsAddress(ctx, tx, uid, email); err != nil {
+		return res, err
 	}
 
 	// ceiling: seq-scans river_job args; index `args->>'email'` above ~100k rows
@@ -325,30 +322,55 @@ func (w *EraseWorker) vendorStep(ctx context.Context, uid string, r erasureRow, 
 	}))
 }
 
-// rebuild re-queues the delivery of another account that holds the address, whose vendor copy the erase removed (D20).
+// holdsAddress reports whether another account holds the address: a contacts row, a hand-off or a non-final intake job.
+func holdsAddress(ctx context.Context, tx pgx.Tx, uid, email string) (bool, error) {
+	var held bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM contacts WHERE email = $1 AND user_id IS NOT NULL AND user_id::text <> $2)
+		    OR EXISTS (SELECT 1 FROM registrant_handoffs WHERE lower(btrim(email)) = $1 AND lower(user_id) <> $2)
+		    OR EXISTS (SELECT 1 FROM river_job WHERE kind = $3 AND state IN ('available', 'pending', 'retryable', 'running', 'scheduled')
+		               AND lower(btrim(args->>'email')) = $1 AND lower(args->>'user_id') <> $2)`,
+		email, uid, RegistrantArgs{}.Kind()).Scan(&held)
+	if err != nil {
+		return false, fmt.Errorf("notifications: check address: %w", err)
+	}
+	return held, nil
+}
+
+// rebuild re-queues the deliveries of another account that holds the address, whose vendor copy the erase removed (D20).
 func (w *EraseWorker) rebuild(ctx context.Context, tx pgx.Tx, uid, email, dest string) error {
+	rebuilt := false
 	var version int64
 	err := tx.QueryRow(ctx, `UPDATE contacts SET `+dest+`_delivered_at = NULL
 		WHERE email = $1 AND user_id IS NOT NULL AND user_id::text <> $2 RETURNING version`, email, uid).Scan(&version)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
+	switch {
+	case err == nil:
+		if _, err = w.River.InsertTx(ctx, tx, DeliverArgs{Email: email, Destination: dest, Version: version}, nil); err != nil {
+			return fmt.Errorf("notifications: queue rebuild: %w", err)
+		}
+		rebuilt = true
+	case !errors.Is(err, pgx.ErrNoRows):
 		return fmt.Errorf("notifications: rebuild contact: %w", err)
 	}
-	if _, err = w.River.InsertTx(ctx, tx, DeliverArgs{Email: email, Destination: dest, Version: version}, nil); err != nil {
-		return fmt.Errorf("notifications: queue rebuild: %w", err)
-	}
 	if dest == destResend {
-		err = tx.QueryRow(ctx, `UPDATE blog_subscribers SET resend_delivered_at = NULL WHERE email = $1 RETURNING version`, email).Scan(&version)
-		if err == nil {
-			_, err = w.River.InsertTx(ctx, tx, BlogSyncArgs{Email: email, Version: version}, nil)
+		held, err := holdsAddress(ctx, tx, uid, email)
+		if err != nil {
+			return err
 		}
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("notifications: rebuild blog subscriber: %w", err)
+		if held {
+			err = tx.QueryRow(ctx, `UPDATE blog_subscribers SET resend_delivered_at = NULL WHERE email = $1 RETURNING version`, email).Scan(&version)
+			if err == nil {
+				_, err = w.River.InsertTx(ctx, tx, BlogSyncArgs{Email: email, Version: version}, nil)
+				rebuilt = true
+			}
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("notifications: rebuild blog subscriber: %w", err)
+			}
 		}
 	}
-	w.Logger.WarnContext(ctx, "erasure: the address registered again; its vendor contact is rebuilt")
+	if rebuilt {
+		w.Logger.WarnContext(ctx, "erasure: the address registered again; its vendor contact is rebuilt")
+	}
 	return nil
 }
 

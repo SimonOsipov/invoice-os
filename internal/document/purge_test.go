@@ -137,6 +137,22 @@ func TestDeleteTenantObjects_StopsWhenTheStoreKeepsADeletedKey(t *testing.T) {
 	}
 }
 
+func TestDeleteTenantObjects_DeletesAKeyReputAfterAnOlderBatch(t *testing.T) {
+	mem, store := newMemS3(t)
+	for i := 0; i < 2500; i++ {
+		mem.objects[fmt.Sprintf("tenants/%s/k%05d", keyTenantA, i)] = nil
+	}
+	mem.reputKey, mem.reputAfter = fmt.Sprintf("tenants/%s/k%05d", keyTenantA, 5), 2
+
+	n, err := document.DeleteTenantObjects(context.Background(), store, keyTenantA)
+	if err != nil || n != 2501 {
+		t.Fatalf("DeleteTenantObjects() = %d, %v, want 2501, nil", n, err)
+	}
+	if got := mem.keysUnder("tenants/"); len(got) != 0 {
+		t.Errorf("purge left %v", got)
+	}
+}
+
 func TestDeleteTenantObjects_AcceptsEveryUUIDSpellingAndDeletesTheCanonicalPrefix(t *testing.T) {
 	const lower = "abcdefab-cdef-abcd-efab-cdefabcdefab"
 	for _, id := range []string{"AbCdEfAb-CdEf-aBcD-eFaB-cDeFaBcDeFaB", "abcdefabcdefabcdefabcdefabcdefab", "{" + lower + "}", "urn:uuid:" + lower} {

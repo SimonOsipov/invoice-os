@@ -17,7 +17,9 @@ func DeleteTenantObjects(ctx context.Context, store ObjectStore, tenantID string
 	// Writers store the lower-case uuid text, so the prefix must too.
 	prefix := "tenants/" + id.String() + "/"
 
-	deleted := make(map[string]struct{})
+	// A key re-put by a writer after an older batch is deleted again; only the
+	// previous batch coming back means the store ignores deletes.
+	var prev map[string]struct{}
 	total := 0
 	for {
 		keys, err := store.List(ctx, prefix)
@@ -28,15 +30,16 @@ func DeleteTenantObjects(ctx context.Context, store ObjectStore, tenantID string
 			return total, nil
 		}
 		for _, k := range keys {
-			if _, again := deleted[k]; again {
+			if _, again := prev[k]; again {
 				return total, fmt.Errorf("document: purge objects: %s still lists after delete", k)
 			}
 		}
 		if err := store.DeleteMany(ctx, keys); err != nil {
 			return total, err
 		}
+		prev = make(map[string]struct{}, len(keys))
 		for _, k := range keys {
-			deleted[k] = struct{}{}
+			prev[k] = struct{}{}
 		}
 		total += len(keys)
 	}

@@ -24,6 +24,8 @@ type memS3 struct {
 	deleteKeys []int // key count of each DeleteObjects request
 	failKey    string
 	dropDelete bool
+	reputAfter int // re-put reputKey once this many DeleteObjects requests have run
+	reputKey   string
 }
 
 func newMemS3(t *testing.T) (*memS3, document.ObjectStore) {
@@ -118,6 +120,9 @@ func (m *memS3) RoundTrip(req *http.Request) (*http.Response, error) {
 			if !m.dropDelete {
 				delete(m.objects, k)
 			}
+		}
+		if m.reputKey != "" && m.deletes == m.reputAfter {
+			m.objects[m.reputKey] = []byte("x")
 		}
 		b.WriteString(`</DeleteResult>`)
 		return xmlResp(req, http.StatusOK, b.String()), nil

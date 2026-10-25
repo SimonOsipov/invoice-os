@@ -3031,6 +3031,12 @@ async function readSessionIdentity(page: Page): Promise<Me> {
   return me(await browserToken(page))
 }
 
+// Sign in stays disabled until the accept page holds a name.
+async function signInFromAcceptPage(page: Page): Promise<void> {
+  await page.getByTestId('invite-name').fill('Invite E2E')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+}
+
 // The landing "Sign in" window, as `signInAtFrontDoor` completes it, once the invite page's "Sign in" opened it.
 async function signInInOpenWindow(page: Page, account: { email: string; password: string }): Promise<void> {
   await expect(signInDialog(page).getByLabel('Work email', { exact: true })).toBeVisible({ timeout: 30_000 })
@@ -3078,7 +3084,7 @@ test('deployed journey: an account registered before the invite signs in from th
 
   await seedConsent(page, false)
   await openInvite(page, token)
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await signInFromAcceptPage(page)
   await signInInOpenWindow(page, account)
   const identity = await readSessionIdentity(page)
 
@@ -3129,7 +3135,7 @@ test('deployed journey: an invitee who already registered and submits Create acc
   await expect(existsText(page, account.email)).toBeVisible({ timeout: 30_000 })
   await expect(page.getByRole('button', { name: 'Create account', exact: true })).toHaveCount(0)
 
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await signInFromAcceptPage(page)
   await signInInOpenWindow(page, account)
   const identity = await readSessionIdentity(page)
 
@@ -3154,7 +3160,7 @@ test('deployed journey: an invitee who registered opens the invite on another de
     await expect(existsText(page, account.email)).toBeVisible({ timeout: 30_000 })
     expect(await page.getByRole('button').allTextContents(), 'the buttons on the existing-account view').toEqual(['Sign in'])
 
-    await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+    await signInFromAcceptPage(page)
     await signInInOpenWindow(page, account)
     const identity = await readSessionIdentity(page)
 

@@ -51,7 +51,16 @@ export async function resendInvitee(token: string): Promise<ResendOutcome> {
 export const inviteResendSent = (email: string) => `A new link is on its way to ${email}. Use the newest one.`
 export const inviteResendHeld = (email: string) => `We just sent a link to ${email}. Check your inbox, or try again in a minute.`
 
-export function inviteSignInUrl(token: string | null): string | null {
+const MAX_NAME_CHARS = 200
+
+// Same rule as checkName in internal/tenancy/tenancy.go: trimmed, 1 to 200 characters, no NUL.
+export function inviteNameValid(name: string): boolean {
+  const n = [...name.trim()].length
+  return n >= 1 && n <= MAX_NAME_CHARS && !name.includes('\0')
+}
+
+// The name rides in the fragment, never the query string; the app reads it in pendingInvite.ts readInviteName.
+export function inviteSignInUrl(token: string | null, name: string): string | null {
   const app = appBase()
-  return app && token ? `${app}?auth=start#invite=${token}` : null
+  return app && token && inviteNameValid(name) ? `${app}?auth=start#invite=${token}&name=${encodeURIComponent(name.trim())}` : null
 }

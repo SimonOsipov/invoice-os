@@ -893,7 +893,7 @@ func TestMetricsSource_AFailedFleetPanelIsUnavailableAndTheRestServe(t *testing.
 	}
 }
 
-func TestMetricsSource_AnEmptyFleetAnswerIsAvailableWithNoSeries(t *testing.T) {
+func TestMetricsSource_AnEmptyAnswerIsAvailableWithNoSeries(t *testing.T) {
 	for key, match := range map[string]func(string) bool{
 		FleetP95Key:              isFleetQuery,
 		"startup_latency_p95_ms": func(q string) bool { return strings.Contains(q, "container_startup_latencies_bucket") },

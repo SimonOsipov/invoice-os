@@ -1325,12 +1325,12 @@ function metricsFixture() {
       panel('ram_pct', '% of limit', per(() => 55)),
       panel('instances', 'count', per((i) => 1 + (i % 3))),
       panel('cold_starts_per_min', '/min', per((i) => (i % 9 === 0 ? 1 : 0))),
-      panel('startup_latency_p95_ms', 'ms', per((i, n) => (n === 4 ? 3000 : 250 + (i % 5)))), // n 4 is docling, over 1000 ms: a wrongly judged word would show
       panel('sql_cpu_pct', '%', database((i) => 20 + (i % 10))),
       panel('sql_ram_pct', '%', database(() => 60)),
       panel('sql_disk_pct', '%', database(() => 35)),
       panel('sql_connections', 'count', database(() => 23)),
       panel('latency_p95_fleet_ms', 'ms', [{ name: 'fleet', points: line(() => 180) }]), // FleetP95Key, FleetSeriesName
+      panel('startup_latency_p95_ms', 'ms', per((i, n) => (n === 4 ? 3000 : 250 + (i % 5)))), // n 4 is docling, over 1000 ms: a wrongly judged word would show
     ],
     limits: { available: true, services: names.map((name) => ({ name, cpu: '1', memory: '512Mi', max_instances: 3 })) },
     deploys: {

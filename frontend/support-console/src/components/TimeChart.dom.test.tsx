@@ -363,3 +363,103 @@ describe('TimeChart readout', () => {
     expect(rowNames(view.container)).toEqual(['a', 'b', 'c'])
   })
 })
+
+describe('TimeChart readout edges', () => {
+  const rects = (over: { left: number; top: number; width: number }, box: { width: number; height: number }) =>
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const r = this.hasAttribute('data-readout') ? { left: 0, top: 0, ...box } : { ...over, height: 100 }
+      return { ...r, right: r.left + r.width, bottom: r.top + r.height, x: r.left, y: r.top, toJSON() {} } as DOMRect
+    })
+
+  it('the readout clamps to the left edge of the viewport', async () => {
+    rects({ left: 0, top: 50, width: 100 }, { width: 200, height: 40 })
+    const { view, u } = await mount()
+    hover(u(), 95)
+    expect(view.container.querySelector<HTMLElement>('[data-readout]')!.style.left).toBe('8px')
+  })
+
+  it('the readout clamps to the right edge of the viewport', async () => {
+    rects({ left: 900, top: 50, width: 100 }, { width: 200, height: 40 })
+    const { view, u } = await mount()
+    hover(u(), 5)
+    const b = view.container.querySelector<HTMLElement>('[data-readout]')!
+    expect(b.style.left).toBe(`${window.innerWidth - 200 - 8}px`)
+    expect(b.style.top).toBe('50px')
+  })
+
+  it('the readout clamps to the bottom edge of the viewport', async () => {
+    rects({ left: 0, top: 700, width: 100 }, { width: 200, height: 200 })
+    const { view, u } = await mount()
+    hover(u(), 10)
+    expect(view.container.querySelector<HTMLElement>('[data-readout]')!.style.top).toBe(`${window.innerHeight - 200 - 8}px`)
+  })
+
+  it('a hover on a panel with no lines shows the time and no rows', async () => {
+    const { view, u } = await mount({ lines: [] })
+    hover(u(), 10)
+    expect(view.container.querySelector('[data-readout-time]')).not.toBeNull()
+    expect(rowNames(view.container)).toEqual([])
+  })
+
+  it('a cursor past the last point reads the last step', async () => {
+    const { view, u } = await mount({ start: 0, end: 120 })
+    hover(u(), 99999)
+    expect(root(view.container).getAttribute('data-cursor')).toBe('120')
+    expect(view.container.querySelector('[data-readout]')).not.toBeNull()
+  })
+
+  it('a synced cursor on an unhovered chart gets a crosshair but no readout, also after a refresh', async () => {
+    const { view, u } = await mount()
+    act(() => u().setCursor({ left: 40, top: 20 }))
+    expect(root(view.container).getAttribute('data-cursor')).not.toBe('')
+    expect(view.container.querySelector('[data-readout]')).toBeNull()
+    view.rerender(<TimeChart lines={lines({ a: [[0, 9]] })} {...base} />)
+    expect(view.container.querySelector('[data-readout]')).toBeNull()
+  })
+
+  it('after the cursor leaves, a synced move does not bring the readout back', async () => {
+    const { view, u } = await mount()
+    hover(u())
+    act(() => {
+      u().over.dispatchEvent(new Event('mouseleave'))
+      u().setCursor({ left: -10, top: -10 })
+    })
+    expect(view.container.querySelector('[data-readout]')).toBeNull()
+    act(() => u().setCursor({ left: 40, top: 20 }))
+    expect(view.container.querySelector('[data-readout]')).toBeNull()
+  })
+
+  it('moving the cursor off the plot while hovered removes the readout', async () => {
+    const { view, u } = await mount()
+    hover(u())
+    act(() => u().setCursor({ left: -10, top: -10 }))
+    expect(view.container.querySelector('[data-readout]')).toBeNull()
+    expect(root(view.container).getAttribute('data-cursor')).toBe('')
+  })
+
+  it('a leave before a recreate carries no crosshair to the new chart', async () => {
+    const { view, u } = await mount()
+    const first = u()
+    hover(first)
+    act(() => {
+      first.over.dispatchEvent(new Event('mouseleave'))
+      first.setCursor({ left: -10, top: -10 })
+    })
+    const three = [...lines(), { name: 'c', color: 'var(--fg-4)', unit: 'count', points: [[0, 1]] as [number, number][], folded: true }]
+    view.rerender(<TimeChart lines={three} {...base} />)
+    await waitFor(() => expect(FakeUPlot.instances).toHaveLength(2))
+    expect(FakeUPlot.instances[1].calls.some(([n]) => n === 'setCursor')).toBe(false)
+    expect(view.container.querySelector('[data-readout]')).toBeNull()
+  })
+
+  it('after a recreate the new chart still follows the pointer', async () => {
+    const { view, u } = await mount({ start: 0, end: 120 })
+    hover(u(), 40)
+    const three = [...lines(), { name: 'c', color: 'var(--fg-4)', unit: 'count', points: [[0, 1]] as [number, number][], folded: true }]
+    view.rerender(<TimeChart lines={three} {...base} start={0} end={120} />)
+    await waitFor(() => expect(FakeUPlot.instances).toHaveLength(2))
+    const second = FakeUPlot.instances[1]
+    act(() => second.setCursor({ left: second.valToPos(120, 'x'), top: 20 }))
+    expect(view.container.querySelector('[data-readout-time]')!.textContent).toBe('00:02 UTC')
+  })
+})

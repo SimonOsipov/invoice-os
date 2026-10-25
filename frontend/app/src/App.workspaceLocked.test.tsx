@@ -206,4 +206,50 @@ describe('deletion notice', () => {
     await screen.findByTestId('suspended-notice')
     expect(notice()).toBeNull()
   })
+  it('deletion notice: a failed /v1/me read after a latch shows Retry, and Retry loads the date', async () => {
+    await renderApp(sessionWith(null))
+    await screen.findByTestId('sidebar')
+    let meOk = false
+    handler = async (url) => {
+      if (isMe(url)) {
+        if (!meOk) throw new ApiError('network', 'Could not reach the server')
+        return me(DUE)
+      }
+      throw LOCK_403
+    }
+    await act(async () => {
+      await capturedCtx!.authedFetch('/x').catch(() => {})
+    })
+
+    const retry = await screen.findByRole('button', { name: 'Retry' })
+    expect(notice()!.textContent).not.toContain('24 November 2026')
+    meOk = true
+    fireEvent.click(retry)
+    await waitFor(() => expect(notice()!.textContent).toContain('24 November 2026'))
+  })
+
+  it('deletion notice: a suspended admin whose cancel is refused sees the sentence and no suspended notice', async () => {
+    handler = async (url) => {
+      if (isMe(url)) return me(DUE)
+      throw SUSPEND_403
+    }
+    await renderApp(sessionWith(DUE))
+    fireEvent.click(await screen.findByTestId('deletion-notice-cancel'))
+
+    await waitFor(() => expect(screen.getByTestId('deletion-notice-error').textContent).toBe(NOT_ACTIVE_MEMBER_MESSAGE))
+    expect(screen.queryByTestId('suspended-notice')).toBeNull()
+    expect((screen.getByTestId('deletion-notice-cancel') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('deletion notice: a network failure on cancel shows its message and re-enables Cancel', async () => {
+    handler = async (url) => {
+      if (isMe(url)) return me(DUE)
+      throw new ApiError('network', 'Could not reach the server')
+    }
+    await renderApp(sessionWith(DUE))
+    fireEvent.click(await screen.findByTestId('deletion-notice-cancel'))
+
+    await waitFor(() => expect(screen.getByTestId('deletion-notice-error').textContent).toBe('Could not reach the server'))
+    expect(notice()).not.toBeNull()
+  })
 })

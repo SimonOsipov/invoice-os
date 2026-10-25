@@ -2085,3 +2085,35 @@ func TestSubmitWorker_AnotherTenantsLockDoesNotHoldThisJob(t *testing.T) {
 		t.Errorf("unlocked tenant's job state = %q, want accepted", wj.state)
 	}
 }
+
+// D9: a poll reads the verdict of a submission already filed, so the lock does not hold it.
+func TestPollWorker_ALockedWorkspaceStillPolls(t *testing.T) {
+	f := requireExchangeDB(t)
+	ctx := context.Background()
+	tenantID, invoiceID, cleanup := seedQueuedInvoice(t, f)
+	defer cleanup()
+
+	idemKey := "req-" + uuid.NewString() + ":" + invoiceID
+	adapter := newScriptedAdapter(scriptedOutcome{
+		result:   submission.Pending{Ref: "r1", PollAfter: time.Now().Add(time.Hour)},
+		evidence: submission.Evidence{ReachedWire: true},
+	})
+	if err := newTestWorker(f.app, adapter).Work(ctx, newSubmitJob(1, 1, 8, submission.SubmitArgs{TenantID: tenantID, InvoiceID: invoiceID, IdempotencyKey: idemKey})); err != nil {
+		t.Fatalf("submit to pending: %v", err)
+	}
+	wj := wjRequire(t, f, tenantID, idemKey)
+	if wj.state != "pending" {
+		t.Fatalf("precondition: job state = %q, want pending", wj.state)
+	}
+
+	setWorkspaceLock(t, f, tenantID, true)
+	adapter.pollQueue = []scriptedOutcome{acceptedOnce()}
+	err := newTestPollWorker(f.app, adapter).Work(ctx, newPollJob(10, 1, 8, submission.PollArgs{TenantID: tenantID, InvoiceID: invoiceID, SubmissionJobID: wj.id, Sequence: 1}))
+	var snooze *river.JobSnoozeError
+	if err != nil || errors.As(err, &snooze) {
+		t.Fatalf("PollWorker.Work in a locked workspace = %v, want nil", err)
+	}
+	if got := wjRequire(t, f, tenantID, idemKey).state; got != "accepted" {
+		t.Errorf("job state after the locked poll = %q, want accepted", got)
+	}
+}

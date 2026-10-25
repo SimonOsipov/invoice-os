@@ -22,7 +22,8 @@ func NewService(store *Store, objects ObjectStore) *Service {
 	return &Service{store: store, objects: objects}
 }
 
-// Store hashes the body, PUTs the bytes, then upserts the row — in that order. A
+// Store admits the caller (TestServiceStore_ALockedWorkspacePutsNothing), hashes the body,
+// PUTs the bytes, then upserts the row — in that order. A
 // failed PUT returns before any row is written, so nothing downstream can
 // believe a document exists; the reverse order would leave a row pointing at
 // nothing, which is strictly worse than an orphaned object.

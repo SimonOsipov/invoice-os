@@ -511,3 +511,30 @@ func TestServiceStore_ASuspendedMemberPutsNothing(t *testing.T) {
 		t.Errorf("documents rows by a suspended member = %d, want 0", n)
 	}
 }
+
+func TestServiceStore_AnotherTenantsLockDoesNotRefuseThisUpload(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	locked := seedTenant(t, super, "svc other-lock locked")
+	free := seedTenant(t, super, "svc other-lock free")
+	setTenantLock(t, super, locked, true)
+	objs := &fakeObjects{}
+	svc := document.NewService(document.NewStore(app), objs)
+	body := []byte("free workspace body")
+
+	if _, _, err := svc.Store(identity(ctx, locked, memberSubject), "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body)); !errors.Is(err, db.ErrWorkspaceLocked) {
+		t.Fatalf("Store in the locked workspace = %v, want db.ErrWorkspaceLocked", err)
+	}
+	if _, _, err := svc.Store(identity(ctx, free, memberSubject), "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body)); err != nil {
+		t.Fatalf("Store in the unlocked workspace = %v, want nil", err)
+	}
+	if keys := objs.distinctPutKeys(); len(keys) != 1 {
+		t.Errorf("objects = %v, want exactly the unlocked workspace's one", keys)
+	}
+	if n := tenantDocCount(t, super, free); n != 1 {
+		t.Errorf("unlocked workspace documents rows = %d, want 1", n)
+	}
+	if n := tenantDocCount(t, super, locked); n != 0 {
+		t.Errorf("locked workspace documents rows = %d, want 0", n)
+	}
+}

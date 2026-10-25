@@ -1328,3 +1328,23 @@ func TestRLS_CommittedActionsAnswer200WhenThePostCommitReadFails(t *testing.T) {
 		})
 	}
 }
+
+// D18: only Redrive is refused while locked; stopping work in a doomed workspace is harmless.
+func TestRLS_CancelStillStopsAQueuedJobInALockedWorkspace(t *testing.T) {
+	r := newCancelRig(t, "queued", "scheduled")
+	if _, err := r.super.Exec(context.Background(),
+		`UPDATE tenants SET deletion_scheduled_at = now(), deletion_scheduled_by = gen_random_uuid() WHERE id = $1`, r.tenant); err != nil {
+		t.Fatalf("lock the tenant: %v", err)
+	}
+	if got := r.state(t); got.JobState != "queued" {
+		t.Fatalf("precondition: job state = %q, want queued", got.JobState)
+	}
+
+	d, err := r.store.Cancel(r.ctx, r.job, "APP is down")
+	if err != nil {
+		t.Fatalf("Cancel in a locked workspace = %v, want nil", err)
+	}
+	if got := r.state(t); got.JobState != "cancelled" || d.Job.State != "cancelled" {
+		t.Errorf("after Cancel job state = %q (detail %q), want cancelled", got.JobState, d.Job.State)
+	}
+}

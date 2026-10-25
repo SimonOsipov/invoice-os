@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/ci/caddy-headers.sh: runs the root Caddyfile in the SPA Dockerfiles' Caddy image and
-# asserts every response forbids framing. Needs docker and curl.
+# asserts every response forbids framing and the host redirects answer as the LB did. Needs docker and curl.
 set -uo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 img=caddy:2-alpine # same tag as frontend/*/Dockerfile
@@ -28,6 +28,35 @@ for path in / /invoices/42 /assets/index-abc123.js /health /assets/index-abc123.
   printf '%s\n' "$hdrs" | grep -qix "x-frame-options: DENY" \
     || { echo "FAIL $path: X-Frame-Options: DENY missing"; fail=1; }
 done
+
+# Host redirects: "host path want-location"; wants are newAddressOf (e2e/smoke/oldAddresses.ts) on https.
+redirects='ascomply.com / https://www.ascomply.com/
+ascomply.com /blog/x?q=1 https://www.ascomply.com/blog/x?q=1
+blog.ascomply.com / https://www.ascomply.com/blog/
+blog.ascomply.com /blog https://www.ascomply.com/blog
+blog.ascomply.com /blog/ https://www.ascomply.com/blog/
+blog.ascomply.com /blogger https://www.ascomply.com/blog/blogger
+blog.ascomply.com /subscribe?t=1 https://www.ascomply.com/blog/subscribe?t=1
+blog.ascomply.com /Blog/x https://www.ascomply.com/blog/Blog/x
+library.ascomply.com / https://www.ascomply.com/library/
+library.ascomply.com /library https://www.ascomply.com/library
+library.ascomply.com /library/invoices https://www.ascomply.com/library/invoices
+library.ascomply.com /libraryx https://www.ascomply.com/library/libraryx
+library.ascomply.com /invoices/x?q=1 https://www.ascomply.com/library/invoices/x?q=1
+library.ascomply.com /Library/x https://www.ascomply.com/library/Library/x'
+nrows=0
+while read -r h path want; do
+  nrows=$((nrows + 1))
+  hdrs=$(curl -s -o /dev/null -D - -H "Host: $h" "http://127.0.0.1:$port$path" | tr -d '\r')
+  code=$(printf '%s\n' "$hdrs" | head -n1 | cut -d' ' -f2)
+  loc=$(printf '%s\n' "$hdrs" | sed -n 's/^[Ll]ocation: //p')
+  echo "$h$path -> $code $loc"
+  { [ "$code" = 301 ] && [ "$loc" = "$want" ]; } || { echo "FAIL $h$path: want 301 $want"; fail=1; }
+done <<<"$redirects"
+[ "$nrows" -gt 0 ] || { echo "FAIL: no redirect rows"; fail=1; }
+# A host that is not an old address must serve, not redirect.
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: www.ascomply.com" "http://127.0.0.1:$port/blog/x")
+[ "$code" = 200 ] || { echo "FAIL: www.ascomply.com/blog/x answered $code, want 200"; fail=1; }
 # The 404 must really be the maps rule, or the check above proves nothing.
 curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/assets/index-abc123.js.map" | grep -qx 404 \
   || { echo "FAIL: *.map did not answer 404"; fail=1; }

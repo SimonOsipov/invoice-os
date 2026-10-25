@@ -28,7 +28,9 @@ test.skip(LANDING_URL !== 'https://www.ascomply.com', 'production only: a previe
 test('apex: http answers 301 to https on the same host', async ({ request }) => {
   const res = await request.get('http://ascomply.com/hsts-check?q=1', { maxRedirects: 0 })
   expect(res.status()).toBe(301)
-  const location = new URL(res.headers()['location'] ?? '')
+  const header = res.headers()['location']
+  expect(header, 'Location header').toBeTruthy()
+  const location = new URL(header)
   expect(location.protocol).toBe('https:')
   expect(location.hostname).toBe('ascomply.com')
   expect(location.pathname).toBe('/hsts-check')

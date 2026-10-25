@@ -37,11 +37,13 @@ blog.ascomply.com /blog https://www.ascomply.com/blog
 blog.ascomply.com /blog/ https://www.ascomply.com/blog/
 blog.ascomply.com /blogger https://www.ascomply.com/blog/blogger
 blog.ascomply.com /subscribe?t=1 https://www.ascomply.com/blog/subscribe?t=1
+blog.ascomply.com /Blog/x https://www.ascomply.com/blog/Blog/x
 library.ascomply.com / https://www.ascomply.com/library/
 library.ascomply.com /library https://www.ascomply.com/library
 library.ascomply.com /library/invoices https://www.ascomply.com/library/invoices
 library.ascomply.com /libraryx https://www.ascomply.com/library/libraryx
-library.ascomply.com /invoices/x?q=1 https://www.ascomply.com/library/invoices/x?q=1'
+library.ascomply.com /invoices/x?q=1 https://www.ascomply.com/library/invoices/x?q=1
+library.ascomply.com /Library/x https://www.ascomply.com/library/Library/x'
 nrows=0
 while read -r h path want; do
   nrows=$((nrows + 1))

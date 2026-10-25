@@ -14,7 +14,7 @@
 		X-Frame-Options "DENY"
 	}
 
-	# The LB's apex, blog and library redirects, served here until the LB routes these hosts to the landing backend.
+	# The LB cannot add the HSTS header to its own redirects, so these hosts route here.
 	@apex host ascomply.com
 	handle @apex {
 		redir https://www.ascomply.com{uri} 301
@@ -22,7 +22,8 @@
 
 	@blogUnderBase {
 		host blog.ascomply.com
-		path /blog /blog/*
+		# path_regexp is case-sensitive; the path matcher is not.
+		path_regexp ^/blog(/.*)?$
 	}
 	handle @blogUnderBase {
 		redir https://www.ascomply.com{uri} 301
@@ -34,7 +35,7 @@
 
 	@libraryUnderBase {
 		host library.ascomply.com
-		path /library /library/*
+		path_regexp ^/library(/.*)?$
 	}
 	handle @libraryUnderBase {
 		redir https://www.ascomply.com{uri} 301

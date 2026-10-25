@@ -292,7 +292,7 @@ describe('library shell primitives', () => {
       'justify-content': 'space-between',
       gap: '8px',
     })
-    expect(style(featBtn(set, 'Company and signing certificate'))).not.toHaveProperty('display')
+    expect(style(featBtn(set, 'Company details'))).not.toHaveProperty('display')
   })
 
   it('SH-12 Book the Demo is the outlineDark link, or absent', () => {

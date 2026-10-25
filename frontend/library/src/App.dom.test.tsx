@@ -102,10 +102,10 @@ describe('App', () => {
     container.remove()
 
     mount('/clearance/submit-clear')
-    expect(byText('aside button span', 'Submit for FIRS clearance').closest('button')!.style.color).toBe('var(--accent)')
+    expect(byText('aside button span', 'Submit for NRS clearance').closest('button')!.style.color).toBe('var(--accent)')
     expect(stage('Clear').style.background).toBe('var(--sage-panel)')
     expect(stage('Validate').style.background).toBe('transparent')
-    expect(main().querySelector('h2')!.textContent).toBe('Submit for FIRS clearance')
+    expect(main().querySelector('h2')!.textContent).toBe('Submit for NRS clearance')
     act(() => root.unmount())
     container.remove()
 

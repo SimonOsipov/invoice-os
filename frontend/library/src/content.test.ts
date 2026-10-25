@@ -42,17 +42,28 @@ describe('content', () => {
     }
   })
 
-  it('content_keepsThePrototypeCopyVerbatim', () => {
-    expect(byId('submit-clear').title).toBe('Submit for FIRS clearance')
-    const feed = byId('audit-trail').sc
-    if (feed.kind !== 'feed') throw new Error('audit-trail is not a feed')
-    expect(feed.items.map((i) => i[1])).toContain('Cleared by FIRS')
-    const flow = byId('submit-clear').sc
-    if (flow.kind !== 'flow') throw new Error('submit-clear is not a flow')
-    expect(flow.steps.map((s) => s.out)).toContain('Response received from FIRS')
-    const list = byId('contacts').sc
-    if (list.kind !== 'list') throw new Error('contacts is not a list')
-    expect(list.steps[0].banner).toBe('Synced 3 contacts from Sage')
+  it('content_noShippedFeatureNamesAnErpOrFirs', () => {
+    const vendor = /\b(Sage|Odoo|QuickBooks|SAP|Dynamics|FIRS)\b/i
+    const shipped = FEATURES.filter((f) => f.status === 'shipped')
+    expect(shipped.length).toBeGreaterThan(0)
+    for (const f of shipped) expect(JSON.stringify(f), f.id).not.toMatch(vendor)
+    expect(JSON.stringify(byId('erp-connectors'))).toMatch(vendor)
+  })
+
+  it('content_namesNrsNeverFirs', () => {
+    const all = JSON.stringify([GROUPS, FEATURES, STAGES, TOUR])
+    expect(all.length).toBeGreaterThan(0)
+    expect(all).not.toMatch(/\bFIRS\b/)
+    expect(all).toMatch(/\bNRS\b/)
+  })
+
+  it('content_aGroupWithNoShippedFeatureSaysComingSoon', () => {
+    const none = GROUPS.filter((g) => g.feats.every((f) => f.status === 'soon'))
+    expect(none.map((g) => g.id)).toEqual(['clearance', 'notifications'])
+    for (const g of none) {
+      expect(g.one, g.id).toMatch(/coming soon/i)
+      expect(g.intro, g.id).toMatch(/coming soon/i)
+    }
   })
 
   it('content_marksExactlyTheFiveComingSoonFeatures', () => {

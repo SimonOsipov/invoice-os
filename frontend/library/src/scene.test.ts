@@ -95,13 +95,13 @@ describe('scene', () => {
   })
 
   it('sceneState_togglesFlipCumulatively', () => {
-    const on = (i: number) => at('roles', i, 'toggles').rows.map((r) => r.on)
-    const focus = (i: number) => at('roles', i, 'toggles').rows.findIndex((r) => r.focused)
-    expect(on(0)).toEqual([true, false, true, true, false])
+    const on = (i: number) => at('channels', i, 'toggles').rows.map((r) => r.on)
+    const focus = (i: number) => at('channels', i, 'toggles').rows.findIndex((r) => r.focused)
+    expect(on(0)).toEqual([true, true, true, true, false])
     expect(focus(0)).toBe(0)
-    expect(on(1)).toEqual([true, false, true, false, false])
+    expect(on(1)).toEqual([true, true, true, false, false])
     expect(focus(1)).toBe(3)
-    expect(on(2)).toEqual([true, false, true, false, false])
+    expect(on(2)).toEqual([true, true, true, false, true])
     expect(focus(2)).toBe(4)
   })
 
@@ -112,7 +112,7 @@ describe('scene', () => {
     expect(s0.items[0].tag).toBe('g')
     const s2 = at('audit-trail', 2, 'feed')
     expect(s2.items).toHaveLength(5)
-    expect(s2.items[4].l).toBe('Cleared by FIRS')
+    expect(s2.items[4].l).toBe('Transmission accepted')
   })
 
   it('sceneState_everyFeatureEveryStep', () => {

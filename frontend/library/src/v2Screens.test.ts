@@ -75,8 +75,9 @@ describe('library home', () => {
     expect(lead).toHaveLength(1)
     expect(lead[0].name).toBe('p')
     expect(lead[0].text).toBe(
-      'Short screen recordings and plain explanations of what ASComply does to an invoice, from import to FIRS clearance. Pick a group or take the tour.',
+      'Short screen recordings and plain explanations of what ASComply does to an invoice, from import to approval. Clearance with NRS is coming soon. Pick a group or take the tour.',
     )
+    expect(lead[0].text).not.toMatch(/\bFIRS\b/)
     expect(style(lead[0])['max-width']).toBe('600px')
     const tour = withText(ts, 'Take the tour')
     expect(tour.name).toBe('button')
@@ -413,11 +414,11 @@ describe('library scenes', () => {
     expect(ts.some((t) => t.text === 'Row')).toBe(false)
     expect(ts.some((t) => t.text === '₦ 4,820,000')).toBe(false)
     expect(markup('import-files', 3, 'thumb')).not.toContain('animation')
-    const c = view('contacts', 0, 'thumb')
+    const c = view('fiscal-outcomes', 1, 'thumb')
     expect(where(c, (s) => s['grid-template-columns'] === 'minmax(0, 1fr) auto')).toHaveLength(3)
     const banner = where(c, (s) => s.background === 'var(--status-red-bg)' && s['font-size'] === '9.5px')
     expect(banner).toHaveLength(1)
-    expect(banner[0].text).toBe('Synced 3 contacts from Sage')
+    expect(banner[0].text).toBe('Connection to NRS timed out · retrying')
   })
 
   it('SN-03 the player form marks fields and shows the message', () => {
@@ -524,11 +525,11 @@ describe('library scenes', () => {
     expect(lines.map((l) => style(l).display)).toEqual(['none', 'block', 'block', 'block', 'block'])
     expect(withText(ts, 'STATUS').attrs).toContain('t-step')
     expect(ts.some((t) => t.text === 'Submitted · waiting for a response')).toBe(true)
-    expect(ts.some((t) => t.text === 'Sent to FIRS')).toBe(true)
+    expect(ts.some((t) => t.text === 'Sent to NRS')).toBe(true)
 
     const th = view('submit-clear', 1, 'thumb')
     expect(where(th, (s) => s.width === '22px' && s.height === '22px')).toHaveLength(5)
-    expect(th.some((t) => t.text === 'Sent to FIRS')).toBe(false)
+    expect(th.some((t) => t.text === 'Sent to NRS')).toBe(false)
     expect(th.some((t) => t.text === 'Submitted · waiting for a response')).toBe(true)
   })
 
@@ -968,7 +969,7 @@ describe('library feature page', () => {
     const skip = render({ ...f, rel: ['no-such-feature', 'roles'] })
     const cards = named(panelOf(skip, 'Related'), 'button')
     expect(cards).toHaveLength(1)
-    expect(panelOf(skip, 'Related').some((t) => t.text === 'Roles and permissions')).toBe(true)
+    expect(panelOf(skip, 'Related').some((t) => t.text === 'Roles and approval seats')).toBe(true)
   })
 })
 

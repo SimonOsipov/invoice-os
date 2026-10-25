@@ -130,6 +130,12 @@ describe('content', () => {
     expect(TOUR[6].stage).toBe(-1)
   })
 
+  it('content_aTourStopSaysComingSoonExactlyWhenItsFeatureIsComingSoon', () => {
+    const says = TOUR.map((t) => /coming soon/i.test(t.t + t.d))
+    TOUR.forEach((t, n) => expect(says[n], t.f).toBe(byId(t.f).status === 'soon'))
+    expect(says.flatMap((v, n) => (v ? [n] : []))).toEqual([4])
+  })
+
   it('content_everyStageNamesAGroup', () => {
     expect(STAGES.length).toBeGreaterThan(0)
     const gids = new Set(GROUPS.map((g) => g.id))

@@ -165,8 +165,8 @@ export const TOUR: TourStop[] = [
   { g: 'invoices', f: 'import-files', stage: 0, t: 'Start with the data you already have', d: 'Import a file from your accounting system. Each row becomes an invoice, and unreadable rows are listed with the reason.' },
   { g: 'recognition', f: 'read-documents', stage: 1, t: 'Read PDFs and scans', d: 'Upload a document and the invoice fields are located and filled in for you.' },
   { g: 'rules', f: 'validate', stage: 2, t: 'Check every invoice', d: 'Each failed check names the field and says what to change.' },
-  { g: 'approvals', f: 'approval-queue', stage: 3, t: 'Approve in one queue', d: 'Invoices waiting on you are in one list. Approve, or reject with a reason.' },
-  { g: 'clearance', f: 'submit-clear', stage: 4, t: 'Submit for NRS clearance', d: 'Approved invoices are sent, and the fiscal outcome is recorded on each one.' },
+  { g: 'approvals', f: 'approval-queue', stage: 3, t: 'Approve in one queue', d: 'Invoices awaiting approval are in one list. Approve, or reject with a reason.' },
+  { g: 'clearance', f: 'submit-clear', stage: 4, t: 'NRS clearance is coming soon', d: 'Approved invoices will be submitted to NRS and the outcome recorded on each one.' },
   { g: 'audit', f: 'audit-trail', stage: 5, t: 'Keep the evidence', d: 'Every action is recorded with who did it and when, ready for an auditor.' },
-  { g: 'reports', f: 'overview', stage: -1, t: 'See readiness at a glance', d: 'Totals, pass rate and what needs attention, for one company or a whole portfolio.' }
+  { g: 'reports', f: 'overview', stage: -1, t: 'See readiness at a glance', d: 'Invoice totals, the readiness score and what needs attention, for one company at a time.' }
 ]

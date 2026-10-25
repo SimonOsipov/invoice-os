@@ -612,6 +612,28 @@ describe('App tour', () => {
     expect(overlay()).toBeNull()
   })
 
+  it('tour_aComingSoonStopOffersNoPlatformLink', () => {
+    vi.stubEnv('VITE_APP_URL', 'https://a.example')
+    allRects()
+    mount('/')
+    click(sidebarBtn())
+    for (let n = 0; n < 7; n++) click(btn('Next'))
+    expect(step()).toBe('STEP 08 OF 14')
+    expect(window.location.pathname).toBe('/approvals')
+    expect(links('Open in Platform')).toHaveLength(1)
+    click(btn('Next'))
+    click(btn('Next'))
+    expect(step()).toBe('STEP 10 OF 14')
+    expect(window.location.pathname).toBe('/clearance')
+    expect(links('Open in Platform')).toHaveLength(0)
+    expect(container.querySelector('#fc-submit-clear')!.textContent).toContain('Coming soon')
+    expect(callout().textContent).toMatch(/coming soon/i)
+    click(btn('Watch demo'))
+    expect(window.location.pathname).toBe('/clearance/submit-clear')
+    expect(links('Open in Platform')).toHaveLength(0)
+    expect(main().textContent).toContain('Coming soon')
+  })
+
   it('tour_stepperHighlightsTheStopStage', () => {
     allRects()
     mount('/')

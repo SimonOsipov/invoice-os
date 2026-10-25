@@ -141,8 +141,8 @@ jobs:
               --build-arg VITE_GATEWAY_URL=https://api.ascomply.com
               --build-arg VITE_APP_URL=https://app.ascomply.com
               --build-arg VITE_LANDING_URL=https://www.ascomply.com
-              --build-arg VITE_LIBRARY_URL=https://library.ascomply.com
-              --build-arg VITE_BLOG_URL=https://blog.ascomply.com
+              --build-arg VITE_LIBRARY_URL=https://www.ascomply.com/library
+              --build-arg VITE_BLOG_URL=https://www.ascomply.com/blog
               --build-arg VITE_OPS_URL=https://ops.ascomply.com
               --build-arg VITE_SUPPORT_URL=https://sup.ascomply.com
               --build-arg VITE_GA_MEASUREMENT_ID=G-E409H76XYY
@@ -291,18 +291,19 @@ jobs:
           echo "Every backend serves $SHA."
       - name: Wait for each site to serve the commit
         run: |
-          for host in app www library blog ops sup; do
+          for site in app.ascomply.com www.ascomply.com www.ascomply.com/library www.ascomply.com/blog ops.ascomply.com sup.ascomply.com; do
+            host=${site%%/*}
             seen=""
             for _ in $(seq 1 60); do
-              seen=$(curl -fsS --max-time 10 --resolve "$host.ascomply.com:443:$LB_IP" "https://$host.ascomply.com/build.txt" 2>/dev/null | tr -d '[:space:]' || true)
+              seen=$(curl -fsS --max-time 10 --resolve "$host:443:$LB_IP" "https://$site/build.txt" 2>/dev/null | tr -d '[:space:]' || true)
               if [ "$seen" = "$SHA" ]; then break; fi
               sleep 5
             done
             if [ "$seen" != "$SHA" ]; then
-              echo "::error::$host.ascomply.com serves build '${seen:-none}', want $SHA."
+              echo "::error::$site serves build '${seen:-none}', want $SHA."
               exit 1
             fi
-            echo "$host.ascomply.com serves $SHA."
+            echo "$site serves $SHA."
           done
       - name: Send traffic back to the previous revisions
         if: failure()

@@ -26,9 +26,12 @@ const PRODUCTION_HOST: Record<ServiceLabel, string> = {
   landing: 'www',
   'ops-console': 'ops',
   'support-console': 'sup',
-  library: 'library',
-  blog: 'blog',
+  library: 'www',
+  blog: 'www',
 }
+
+// The library and the blog are served under a base path (D-3).
+const SITE_BASE: Partial<Record<ServiceLabel, string>> = { library: '/library', blog: '/blog' }
 
 // The preview project's number; scripts/ci/preview.sh builds the same run.app URLs.
 const PREVIEW_PROJECT_NUMBER = '944095690109'
@@ -39,9 +42,10 @@ export function resolveEnv(name: string): EnvResult {
   const urls: EnvResult['urls'] = {}
   const pr = /^pr-([0-9]+)$/.exec(name)?.[1]
   for (const [label, host] of Object.entries(PRODUCTION_HOST) as [ServiceLabel, string][]) {
+    const base = SITE_BASE[label] ?? ''
     urls[URL_VAR[label]] = pr
-      ? `https://${label}-pr-${pr}-${PREVIEW_PROJECT_NUMBER}.africa-south1.run.app`
-      : `https://${host}.ascomply.com`
+      ? `https://${label}-pr-${pr}-${PREVIEW_PROJECT_NUMBER}.africa-south1.run.app${base}`
+      : `https://${host}.ascomply.com${base}`
   }
   return { env: name, environmentId: name, urls, dark: [] }
 }

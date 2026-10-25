@@ -18,6 +18,7 @@ paths:
 - Give `invoice_app` INSERT, DELETE and `SELECT (taken_at)` on `health_samples`. Staff read it only through `public.staff_read_health_samples`.
 - Give `invoice_app` SELECT and INSERT only on `ai_calls`. Staff read it only through `public.staff_read_ai_calls` and `public.staff_read_ai_call_totals`.
 - Give `invoice_app` SELECT, INSERT and UPDATE on `rollup_snapshots`. The purge, the reset and the FK cascade remove its rows.
+- Give `invoice_app` UPDATE on `tenants.deletion_scheduled_at` and `tenants.deletion_scheduled_by` only. The trigger `tenants_deletion_guard` sets `deletion_due_at` and refuses the house tenant.
 - Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `blog_categories`, `blog_posts` and `blog_post_covers`. They are global: no RLS.
 - Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `blog_subscription_requests`, and SELECT, INSERT and UPDATE on `blog_subscribers`. Both are global: no RLS.
 - Staff read authors only through `public.staff_read_blog_authors`.
@@ -36,10 +37,12 @@ paths:
 - Delete a production tenant's rows only with `public.purge_tenant`. The demo purge and `db.Reset` stay the preview and local paths.
 - Grant `auth_hook_reader` SELECT on the `auth.users` columns `email`, `email_confirmed_at` and `is_sso_user` only.
 - Never grant `auth_hook_reader` a table-level privilege on `auth.users`.
+- Grant `auth_hook_reader` SELECT on `tenants.id`, `tenants.name` and `tenants.deletion_due_at` only.
 - Treat `invitee_account_state` as callable by every `invoice_app` service for any address.
 - Treat `invoice_migrator` as able to read `email`, `email_confirmed_at` and `is_sso_user` of every `auth.users` row through `SET ROLE auth_hook_reader`.
 - Treat `invoice_migrator` as able to read `submission_jobs.state` of every tenant through `SET ROLE auth_hook_reader`.
 - Return no rows from `pending_invites_for_email` for a user id that holds a membership that is not `removed`.
+- Return no invite of a workspace scheduled for deletion from `invitation_by_token`, `pending_invites_for_email` and `invitation_pending_for_email`.
 - Refuse `accept_invitation_by_id` in this order: GUC mismatch `42501`, not valid `invitation_not_valid`, already a member `one_workspace_per_identity`.
 - Name a new migration with a current timestamp.
 - Check the order with `go run ./internal/tools/migrationorder -base origin/<the PR's base branch>`. CI passes the PR's base sha.

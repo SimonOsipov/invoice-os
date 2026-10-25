@@ -306,6 +306,17 @@ describe('TimeChart x axis spacing', () => {
   })
 })
 
+describe('TimeChart x axis spacing after a range change', () => {
+  it('the same chart widens its tick spacing when the range grows past a day', async () => {
+    const { view, u } = await mount({ start: 0, end: 6 * 3600 })
+    const first = u()
+    const short = opts(first).axes[0].space(first, 0, 0, 6 * 3600, 500)
+    view.rerender(<TimeChart lines={lines()} start={0} end={7 * 86400} step={60} />)
+    expect(FakeUPlot.instances).toHaveLength(1)
+    expect(opts(first).axes[0].space(first, 0, 0, 7 * 86400, 500)).toBeGreaterThan(short)
+  })
+})
+
 describe('TimeChart readout', () => {
   it('only the hovered chart shows the readout', async () => {
     const { container } = render(
@@ -353,9 +364,9 @@ describe('TimeChart readout', () => {
   it('the readout rows read the data uPlot holds at the cursor index', async () => {
     const { view, u } = await mount()
     hover(u(), u().valToPos(60, 'x'))
-    u().data = [u().data[0], u().data[1].map(() => 99), u().data[2].map(() => 77)] as any
+    u().data = [u().data[0], u().data[1].map((_, i) => 100 + i), u().data[2].map((_, i) => 200 + i)] as any
     act(() => u().setCursor({ left: u().valToPos(60, 'x'), top: 21 }))
-    expect([...view.container.querySelectorAll('[data-readout-row] .mono')].map((e) => e.textContent)).toEqual([99, 77].map((v) => formatShown('count', v)))
+    expect([...view.container.querySelectorAll('[data-readout-row] .mono')].map((e) => e.textContent)).toEqual([101, 201].map((v) => formatShown('count', v)))
   })
 
   it('mouseleave removes the readout', async () => {
@@ -521,11 +532,19 @@ describe('TimeChart zoom', () => {
     zoomed(u(), 500, 8)
     const [lo, hi] = onZoom.mock.calls[0][0]
     expect(hi - lo).toBeGreaterThanOrEqual(2 * 7200)
+    expect((lo + hi) / 2).toBeCloseTo(u().posToVal(504, 'x'), 3)
     expect(u().data[0].filter((x) => x >= lo && x <= hi).length).toBeGreaterThanOrEqual(2)
     zoomed(u(), 0, 1)
     expect(onZoom.mock.calls[1][0]).toEqual([0, 14400])
     zoomed(u(), 1000, 1)
     expect(onZoom.mock.calls[2][0]).toEqual([7 * 86400 - 14400, 7 * 86400])
+  })
+
+  it('a drag in a range shorter than two steps reports the whole range', async () => {
+    const onZoom = vi.fn()
+    const { u } = await mount({ onZoom, start: 0, end: 100, step: 60 })
+    zoomed(u(), 500, 8)
+    expect(onZoom.mock.calls[0][0]).toEqual([0, 100])
   })
 
   it('a zero-width select reports nothing', async () => {

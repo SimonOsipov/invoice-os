@@ -115,6 +115,8 @@ let acceptReply: Reply = ok({ tenant: ME.tenant, user: { id: ME.user.id, role: '
 let refreshReply: Reply = ok({ access_token: T_RENEWED, refresh_token: 'R1' })
 let renewedMeReply: Reply = ok(ME)
 let mineReply: Reply = ok({ invitations: [] })
+let exchangeToken = T_FIRST
+let workspacesReply: Reply = ok({ tenant: ME.tenant })
 
 const path = (c: Call) => c.url.replace(GATEWAY, '')
 const hits = (p: string) => calls.filter((c) => path(c) === p)
@@ -125,12 +127,12 @@ function routeFetch() {
     vi.fn((url: string, init?: { method?: string; headers?: Headers; body?: string }) => {
       const auth = init?.headers?.get('Authorization') ?? null
       calls.push({ url, method: init?.method ?? 'GET', auth, body: init?.body === undefined ? undefined : JSON.parse(init.body) })
-      if (url === `${GATEWAY}/auth/exchange`) return ok({ access_token: T_FIRST, refresh_token: 'R0' })()
+      if (url === `${GATEWAY}/auth/exchange`) return ok({ access_token: exchangeToken, refresh_token: 'R0' })()
       if (url === ACCEPT_URL) return acceptReply()
       if (url === `${GATEWAY}/auth/refresh`) return refreshReply()
-      if (url === `${GATEWAY}/api/tenancy/v1/me`) return (auth === `Bearer ${T_FIRST}` ? fail(403, 'forbidden') : renewedMeReply)()
+      if (url === `${GATEWAY}/api/tenancy/v1/me`) return (auth === `Bearer ${exchangeToken}` ? fail(403, 'forbidden') : renewedMeReply)()
       if (url === `${GATEWAY}/api/tenancy/v1/invitations/mine`) return mineReply()
-      if (url === `${GATEWAY}/api/tenancy/v1/workspaces`) return ok({ tenant: ME.tenant })()
+      if (url === `${GATEWAY}/api/tenancy/v1/workspaces`) return workspacesReply()
       if (url === `${GATEWAY}/auth/login`) return ok({ access_token: jwt(APP_PERSONAS.firm.subject, nowSec() + 3600) })()
       return ok({
         entities: [],
@@ -181,6 +183,8 @@ beforeEach(() => {
   refreshReply = ok({ access_token: T_RENEWED, refresh_token: 'R1' })
   renewedMeReply = ok(ME)
   mineReply = ok({ invitations: [] })
+  exchangeToken = T_FIRST
+  workspacesReply = ok({ tenant: ME.tenant })
   routeFetch()
 })
 
@@ -221,6 +225,15 @@ describe('?auth=start holds the invite across the bounce (D11)', () => {
     await bootApp()
     await waitFor(() => expect(hits(ACCEPT_PATH)).toHaveLength(1))
     expect(hits(ACCEPT_PATH)[0].body).toEqual({ token: INVITE, display_name: 'Ada' })
+  })
+
+  it('App: a name without an invite holds nothing', async () => {
+    configure()
+    window.history.replaceState(null, '', '/?auth=start#name=Ada')
+    const { replaceWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(replaceWrites).toHaveLength(1))
+    expect(sessionStorage.getItem(INVITE_KEY)).toBeNull()
   })
 
   it('app_authStartWithoutInviteClearsAHeldOne', async () => {
@@ -513,5 +526,89 @@ describe('a tenant-less sign-in with no held invite (D30)', () => {
     await waitFor(() => expect(capturedCtx?.user).toBeDefined())
     expect(hits('/api/tenancy/v1/workspaces')).toHaveLength(1)
     expect(hits('/api/tenancy/v1/workspaces')[0].body).toEqual(ANSWERS)
+  })
+
+  it('App: two Create clicks in one tick send one POST /workspaces', async () => {
+    mineReply = ok({ invitations: [], removed: true })
+    await handoff()
+    const create = (await screen.findByTestId('join-create')) as HTMLButtonElement
+    fireEvent.change(screen.getByTestId('join-workspace-name'), { target: { value: 'Acme' } })
+    fireEvent.change(screen.getByTestId('join-name'), { target: { value: 'Ada' } })
+    await act(async () => {
+      fireEvent.click(create)
+      fireEvent.click(create)
+    })
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    expect(hits('/api/tenancy/v1/workspaces')).toHaveLength(1)
+  })
+
+  it('App: a removed person with invites sees Join, not the no-workspace screen', async () => {
+    mineReply = ok({ invitations: [PENDING], removed: true })
+    await handoff()
+    expect(await screen.findByRole('button', { name: 'Join Obi Partners' })).toBeTruthy()
+    expect(screen.queryByTestId('join-create')).toBeNull()
+    expect(hits('/api/tenancy/v1/workspaces')).toEqual([])
+  })
+
+  it('App: a removed person with no answers types both names; the body carries no kind', async () => {
+    exchangeToken = jwt(ME.user.id, nowSec() + 3600)
+    mineReply = ok({ invitations: [], removed: true })
+    await handoff()
+    const create = (await screen.findByTestId('join-create')) as HTMLButtonElement
+    expect(create.disabled).toBe(true)
+    fireEvent.change(screen.getByTestId('join-workspace-name'), { target: { value: 'Acme' } })
+    fireEvent.change(screen.getByTestId('join-name'), { target: { value: '   ' } })
+    expect(create.disabled, 'a blank name keeps Create off').toBe(true)
+    fireEvent.change(screen.getByTestId('join-name'), { target: { value: 'Ada' } })
+    fireEvent.click(create)
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    expect(hits('/api/tenancy/v1/workspaces')).toHaveLength(1)
+    expect(hits('/api/tenancy/v1/workspaces')[0].body).toEqual({ workspace_name: 'Acme', display_name: 'Ada' })
+  })
+
+  it('App: a failed Create leaves for the failed notice; with no landing the card takes a second click', async () => {
+    mineReply = ok({ invitations: [], removed: true })
+    workspacesReply = fail(500, 'boom')
+    configure({ landing: false })
+    ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    const create = (await screen.findByTestId('join-create')) as HTMLButtonElement
+    fireEvent.click(create)
+    await waitFor(() => expect(hits('/api/tenancy/v1/workspaces')).toHaveLength(1))
+    await waitFor(() => expect(create.disabled).toBe(false))
+    fireEvent.click(create)
+    await waitFor(() => expect(hits('/api/tenancy/v1/workspaces')).toHaveLength(2))
+    expect(capturedCtx).toBeUndefined()
+  })
+
+  it('App: a failed Create with a landing navigates to the failed notice', async () => {
+    mineReply = ok({ invitations: [], removed: true })
+    workspacesReply = fail(500, 'boom')
+    configure()
+    ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    fireEvent.click((await screen.findByTestId('join-create')) as HTMLButtonElement)
+    await waitFor(() => expect(hrefWrites).toHaveLength(1))
+    expect(hrefWrites[0]).toMatch(/signin=failed$/)
+  })
+
+  it('App: an unreachable invitation list neither provisions nor shows a screen', async () => {
+    mineReply = networkDown
+    const { hrefWrites } = await (async () => {
+      configure()
+      ensureSignInState()
+      window.history.replaceState(null, '', `/?handoff=${CODE}`)
+      const w = interceptHref()
+      await bootApp()
+      return w
+    })()
+    await waitFor(() => expect(hrefWrites).toHaveLength(1))
+    expect(hrefWrites[0]).toMatch(/signin=failed$/)
+    expect(hits('/api/tenancy/v1/workspaces')).toEqual([])
+    expect(screen.queryByTestId('join-screen')).toBeNull()
   })
 })

@@ -933,6 +933,7 @@ const FRAGMENT_READ = /\.\s*hash\b|\[\s*['"`]hash['"`]\s*\]|\{[^}]*\bhash\b[^}]*
 // The fragment reads the app keeps: the invite link's token and name (lib/pendingInvite.ts) and the confirm link's (lib/verifyBounce.ts).
 const INVITE_FRAGMENT_READ = 'readinvitefragment(window.location.hash)'
 const VERIFY_FRAGMENT_READ = 'readverifyfragment(window.location.hash)'
+const NAME_FRAGMENT_READ = 'readinvitename(window.location.hash)'
 
 describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app', () => {
   it('guard_noReviewHashSurvivesInTheApp', () => {
@@ -958,6 +959,7 @@ describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app'
         // Control needle: the allowed reads are the invite's and the confirm link's, so the count above is not a count of nothing.
         expect(code.includes(INVITE_FRAGMENT_READ), `${name} no longer reads the invite fragment through readInviteFragment`).toBe(true)
         expect(code.includes(VERIFY_FRAGMENT_READ), `${name} no longer reads the confirm fragment through readVerifyFragment`).toBe(true)
+        expect(code.includes(NAME_FRAGMENT_READ), `${name} no longer reads the invite name through readInviteName`).toBe(true)
       }
     }
   })

@@ -5,6 +5,7 @@ import { DESTINATION_READY, VERIFIED, browserToken, collectErrors, expectInWorks
 import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession, type ConsoleTarget } from '../staffSession'
 import { ensureMember } from '../realAccounts'
 import {
+  acceptById,
   contactsMe,
   login,
   createEntity,
@@ -15,6 +16,10 @@ import {
   grantMembership,
   inviteWithToken,
   listEntities,
+  listMine,
+  memberships,
+  registerFormAccount,
+  removeMember,
   setMemberClients,
   me,
   mintSignInState,
@@ -3433,4 +3438,131 @@ test('deployed app: the Join screen and the chooser stack at every width', async
     singleRead.push(width)
   }
   expect(singleRead, 'the widths the single-invite sweep read').toEqual(widths)
+})
+
+// Each part lies inside the card at every wide width; the rects are read after the resize settles.
+async function expectInsideAtEachWidth(page: Page, card: Locator, parts: [string, Locator][], apart?: [Locator, Locator, string]): Promise<void> {
+  for (const width of WIDE_WIDTHS) {
+    await page.setViewportSize({ width, height: TALL })
+    await settleAnimations(card)
+    const outer = await card.boundingBox()
+    if (!outer) throw new Error(`the card rendered no box at ${width}px`)
+    for (const [label, part] of parts) {
+      const box = await part.boundingBox()
+      if (!box) throw new Error(`${label} rendered no box at ${width}px`)
+      expect(enclosesRect(outer, box, 1), `${label} leaves its card at ${width}px`).toBe(true)
+    }
+    if (apart) {
+      const [a, b, label] = apart
+      const [boxA, boxB] = await Promise.all([a.boundingBox(), b.boundingBox()])
+      if (!boxA || !boxB) throw new Error(`${label} rendered no box at ${width}px`)
+      expect(rectsOverlap(boxA, boxB), `${label} overlap at ${width}px`).toBe(false)
+    }
+  }
+}
+
+// The workspace roster as the admin's API reads it: the row of `userId`.
+async function rosterRow(adminToken: string, userId: string) {
+  const row = (await memberships(adminToken)).memberships.find((m) => m.user_id === userId)
+  expect(row, 'the roster holds the row').toBeDefined()
+  return row!
+}
+
+test('the invite link asks a name and the workspace shows it', async ({ page }) => {
+  test.setTimeout(300_000)
+  const workspace = await inviteWorkspace()
+  const account = await registerFresh('invitee-named')
+  const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
+  const name = `Link Name ${crypto.randomUUID().slice(0, 8)}`
+  const errors = collectErrors(page)
+
+  await seedConsent(page, false)
+  await openInvite(page, token)
+  const heading = page.getByRole('heading', { name: `Join ${workspace.name}`, exact: true })
+  await expect(heading).toBeVisible({ timeout: 30_000 })
+  const input = page.getByTestId('invite-name')
+  await input.fill(name)
+  await expectInsideAtEachWidth(page, heading.locator('xpath=../..'), [['invite-name', input]])
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await signInInOpenWindow(page, account)
+  const identity = await readSessionIdentity(page)
+
+  expect(identity.tenant.id, 'the session is bound to the inviting workspace').toBe(workspace.tenantId)
+  expect(identity.user.display_name, 'the typed name').toBe(name)
+  const row = await rosterRow(workspace.adminToken, identity.user.id)
+  expect(row.display_name, 'the roster names the member by it').toBe(name)
+  expect(row.status).toBe('active')
+  expect(errors, `console errors on the invite journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('the Join screen asks a name and the workspace shows it', async ({ page }) => {
+  test.setTimeout(300_000)
+  const workspace = await inviteWorkspace()
+  const account = await registerFresh('join-named')
+  await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
+  const name = `Join Name ${crypto.randomUUID().slice(0, 8)}`
+  const errors = errorsAllowing403Me(page)
+  await seedConsent(page, false)
+
+  await passFrontDoor(page, account, '/')
+  await expect(page.getByRole('heading', { name: `Join ${workspace.name}`, exact: true })).toBeVisible({ timeout: 30_000 })
+  const input = page.getByTestId('join-name')
+  await input.fill(name)
+  await expectInsideAtEachWidth(page, page.getByTestId('join-screen'), [['join-name', input]])
+  await page.getByRole('button', { name: `Join ${workspace.name}`, exact: true }).click()
+  const identity = await readSessionIdentity(page)
+
+  expect(identity.tenant.id, 'the session is bound to the inviting workspace').toBe(workspace.tenantId)
+  expect((await rosterRow(workspace.adminToken, identity.user.id)).display_name, 'the roster names the member by it').toBe(name)
+  expect(errors, `console errors on the Join screen:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('a removed creator signs in to no-workspace and creates a workspace', async ({ page }) => {
+  test.setTimeout(300_000)
+  const creator = await registerFormAccount('removed-creator')
+  const oldTenant = (await me(creator.token)).tenant.id
+  const creatorId = subjectOf(creator.token)
+
+  // A second admin joins by id and removes the creator over the API.
+  const other = await registerFresh('removed-by')
+  await inviteWithToken(creator.token, oldTenant, other.email, 'admin')
+  const session = (await signInSession(other.email, other.password)).access_token
+  const invites = (await listMine(session)).body as { invitations: { id: string }[] }
+  const accepted = await acceptById(session, invites.invitations[0].id, 'Second Admin')
+  expect(accepted.status, JSON.stringify(accepted.body)).toBe(200)
+  const otherToken = (await signInSession(other.email, other.password)).access_token
+  const removed = await removeMember(otherToken, creatorId)
+  expect(removed.status, JSON.stringify(removed.body)).toBe(200)
+
+  const errors = errorsAllowing403Me(page)
+  let provisions = 0
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/tenancy/v1/workspaces')) provisions += 1
+  })
+  await seedConsent(page, false)
+  await passFrontDoor(page, creator.account, '/')
+
+  await expect(page.getByRole('heading', { name: 'No workspace yet', exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByText('This account has no workspace yet. If you were invited, open the invite link in your email.', { exact: true })).toBeVisible()
+  const workspaceInput = page.getByTestId('join-workspace-name')
+  const nameInput = page.getByTestId('join-name')
+  const create = page.getByTestId('join-create')
+  await expect(workspaceInput, 'prefilled from the registration answers').toHaveValue(creator.account.workspaceName)
+  await expect(nameInput, 'prefilled from the registration answers').toHaveValue(creator.account.displayName)
+  expect(provisions, 'nothing is provisioned before the click').toBe(0)
+
+  const card = page.getByTestId('join-screen')
+  await expectInsideAtEachWidth(
+    page,
+    card,
+    [['join-workspace-name', workspaceInput], ['join-name', nameInput], ['join-create', create]],
+    [create, card.getByRole('button', { name: 'Sign out', exact: true }), 'Create a workspace and Sign out'],
+  )
+
+  await create.click()
+  const identity = await readSessionIdentity(page)
+  expect(identity.tenant.id, 'a workspace other than the old one').not.toBe(oldTenant)
+  expect(provisions, 'one provision, from the click').toBe(1)
+  expect((await rosterRow(otherToken, creatorId)).status, 'the old workspace still shows the creator removed').toBe('removed')
+  expect(errors, `console errors on the no-workspace journey:\n${errors.join('\n')}`).toEqual([])
 })

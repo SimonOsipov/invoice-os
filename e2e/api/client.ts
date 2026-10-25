@@ -542,6 +542,12 @@ export function setMembershipStatus(token: string, userId: string, status: 'acti
   })
 }
 
+// removeMember(): POST /v1/memberships/{user_id}/remove, admin-only, no body. Raw, so a spec asserts the refusals.
+// A 200 answers the row in the Membership shape with status 'removed' and email null.
+export function removeMember(token: string, userId: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch(`/api/tenancy/v1/memberships/${userId}/remove`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+}
+
 // setMemberClients(): PUT /v1/memberships/{user_id}/clients, admin-only. Raw, so a spec asserts the refusals.
 export function setMemberClients(token: string, userId: string, access: unknown): Promise<{ status: number; body: unknown }> {
   return rawFetch(`/api/tenancy/v1/memberships/${userId}/clients`, {

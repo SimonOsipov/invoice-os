@@ -1925,8 +1925,14 @@ describe('the roster table chrome, head to rows', () => {
     expect(screen.getByTestId('role-matrix-toggle'), 'a filter must not hide the capability matrix').toBeTruthy()
   })
 
-  it('the "just you" card returns when the only teammate is a removed row', () => {
+  it('a removed row keeps the table on screen, not the "just you" card', () => {
     render(<Harness initial={[member(), member({ id: 'g', name: 'Gone Person', status: 'removed', email: null })]} />)
+    expect(screen.queryByText('Just you at the firm')).toBeNull()
+    expect(within(rowFor('Gone Person')).getByText('REMOVED', { exact: true })).toBeTruthy()
+  })
+
+  it('with only you on the roster the "just you" card shows', () => {
+    render(<Harness initial={[member()]} />)
     expect(screen.getByText('Just you at the firm')).toBeTruthy()
   })
 

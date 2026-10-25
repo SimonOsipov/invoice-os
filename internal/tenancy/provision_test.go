@@ -1086,7 +1086,11 @@ func TestHoldsRemovedRow(t *testing.T) {
 		{"a malformed tenant id", "not-a-uuid", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if got := store.holdsRemovedRow(context.Background(), c.tenant, user); got != c.want {
+			got, err := store.holdsRemovedRow(context.Background(), c.tenant, user)
+			if wantErr := c.tenant == "not-a-uuid"; (err != nil) != wantErr {
+				t.Errorf("holdsRemovedRow err = %v, want error %v", err, wantErr)
+			}
+			if got != c.want {
 				t.Errorf("holdsRemovedRow = %v, want %v", got, c.want)
 			}
 		})

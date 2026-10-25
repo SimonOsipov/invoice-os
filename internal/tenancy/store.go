@@ -3,6 +3,7 @@ package tenancy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -106,9 +107,15 @@ func (s *Store) ProvisionWorkspace(ctx context.Context, in ProvisionInput) (Tena
 
 	t, err := s.provisionAttempt(ctx, tenantID, in, kind, subject, caller)
 	var conflict *provisionConflict
-	if errors.As(err, &conflict) && conflict.constraint == "tenants_pkey" && s.holdsRemovedRow(ctx, tenantID, subject) {
-		// A removed creator's old workspace holds the derived id; take a random one (D16a).
-		t, err = s.provisionAttempt(ctx, uuid.NewString(), in, kind, subject, caller)
+	if errors.As(err, &conflict) && conflict.constraint == "tenants_pkey" {
+		held, perr := s.holdsRemovedRow(ctx, tenantID, subject)
+		if perr != nil {
+			return Tenant{}, "", fmt.Errorf("tenancy: probe removed row: %w", perr)
+		}
+		if held {
+			// A removed creator's old workspace holds the derived id; take a random one (D16a).
+			t, err = s.provisionAttempt(ctx, uuid.NewString(), in, kind, subject, caller)
+		}
 	}
 	if errors.As(err, &conflict) {
 		return Tenant{}, "", ErrAlreadyProvisioned
@@ -150,14 +157,14 @@ type provisionConflict struct{ constraint string }
 
 func (e *provisionConflict) Error() string { return "tenancy: provision conflict on " + e.constraint }
 
-// holdsRemovedRow reports whether subject holds a removed row in tenantID; a read error counts as no.
-func (s *Store) holdsRemovedRow(ctx context.Context, tenantID, subject string) bool {
+// holdsRemovedRow reports whether subject holds a removed row in tenantID.
+func (s *Store) holdsRemovedRow(ctx context.Context, tenantID, subject string) (bool, error) {
 	var found bool
 	err := db.WithinTenantTx(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = $1 AND status = 'removed')`, subject).Scan(&found)
 	})
-	return err == nil && found
+	return found, err
 }
 
 // nullIfEmpty sends "" as SQL NULL.

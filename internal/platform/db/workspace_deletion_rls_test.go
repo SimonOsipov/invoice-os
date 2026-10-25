@@ -646,6 +646,7 @@ func TestRLS_WorkspaceDeletionDownRestoresTheInviteReadersAndRoundTrips(t *testi
 	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
 		t.Fatalf("Up of the deletion migration after Down: %v", err)
 	}
+	wdAssertUnset(t, "a tenant that existed before Up", tenant)
 	wdSchedule(t, tenant, `now()`)
 	if n := len(lookupAs(t, "", token)); n != 0 {
 		t.Errorf("invitation_by_token after the round trip, tenant scheduled = %d rows, want 0", n)

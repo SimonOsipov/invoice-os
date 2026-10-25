@@ -32,6 +32,7 @@ type recErase struct {
 	fn         func(n int, who string) error
 	state      ResendState // answered by ContactState
 	restoreErr error       // returned by RestoreContact
+	stateErr   error       // returned by ContactState
 	events     []string    // "state", "erase" and "restore", in call order
 	restored   []restoreCall
 }
@@ -44,7 +45,7 @@ func (r *recErase) event(e string) {
 
 func (r *recErase) ContactState(context.Context, string) (ResendState, error) {
 	r.event("state")
-	return r.state, nil
+	return r.state, r.stateErr
 }
 
 func (r *recErase) RestoreContact(_ context.Context, email, first, last string, st ResendState) error {
@@ -1630,4 +1631,60 @@ func TestErase_AMissingContactThatWasNeverDeliveredStaysMissing(t *testing.T) {
 	if len(r.rs.restored) != 0 {
 		t.Fatalf("restores = %+v, want none", r.rs.restored)
 	}
+}
+
+func TestErase_AStateReadFailureStopsBeforeTheDelete(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	r.rs.stateErr = &DeliveryError{Status: 503}
+	var de *DeliveryError
+	if err := r.work(gen); !errors.As(err, &de) {
+		t.Fatalf("err = %v, want *DeliveryError", err)
+	}
+	if len(r.rs.events) == 0 || strings.Contains(strings.Join(r.rs.events, ","), "erase") {
+		t.Fatalf("resend events = %v, want the state read and no erase", r.rs.events)
+	}
+	if r.row(r.uid).Resend {
+		t.Error("the resend step is stamped")
+	}
+}
+
+func TestErase_AMissingContactWithNoResendDeliveryStampStaysMissing(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	r.acct.fn = func(int, string) error {
+		r.exec(`INSERT INTO contacts (email, user_id, registered_at, version, hubspot_delivered_at, resend_opt_in_sent_at) VALUES ($1, $2::uuid, now(), 1, now(), now())`, r.mail, uuid.NewString())
+		return nil
+	}
+	r.rs.state = ResendState{Missing: true}
+	if err := r.work(gen); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.rs.restored) != 0 {
+		t.Fatalf("restores = %+v, want none", r.rs.restored)
+	}
+}
+
+func TestErase_TheFailSafeLogsNoPersonalData(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	r.acct.fn = func(int, string) error {
+		r.exec(`INSERT INTO contacts (email, user_id, first_name, last_name, registered_at, version, resend_delivered_at) VALUES ($1, $2::uuid, 'Bola', 'Eze', now(), 1, now())`, r.mail, uuid.NewString())
+		return nil
+	}
+	r.rs.state = ResendState{Missing: true}
+	err := r.work(gen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warns := 0
+	for _, l := range r.sink.at(slog.LevelWarn) {
+		if strings.Contains(l.Text, "state is unknown") {
+			warns++
+		}
+	}
+	if warns != 1 || len(r.rs.restored) != 1 || !r.rs.restored[0].st.Unsubscribed {
+		t.Fatalf("warns = %d, restores = %+v", warns, r.rs.restored)
+	}
+	qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.mail, strings.Split(r.mail, "@")[0], "Bola", "Eze", r.uid)
 }

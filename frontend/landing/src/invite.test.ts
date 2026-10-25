@@ -2,7 +2,7 @@
 // The outcome values are the ones the app sends back: frontend/app/src/lib/sessionHandoff.ts InviteOutcome.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { INVITE_PARAM, inviteNameValid, inviteSignInUrl, readInviteOutcome, registerInvitee } from './invite'
+import { INVITE_PARAM, inviteNameError, inviteNameValid, inviteSignInUrl, readInviteOutcome, registerInvitee, trimName } from './invite'
 
 describe('readInviteOutcome_exactlyOneRecognisedValue', () => {
   it('each recognised value reads as its outcome', () => {
@@ -75,5 +75,30 @@ describe('inviteSignInUrl', () => {
     expect(inviteNameValid('😀'.repeat(201))).toBe(false)
     expect(inviteNameValid(' ')).toBe(false)
     expect(inviteNameValid('a\0b')).toBe(false)
+  })
+})
+
+describe('trimName and inviteNameError', () => {
+  it('trimName strips U+0085 as the API does', () => {
+    expect(trimName(' \u0085 Ada \u0085 ')).toBe('Ada')
+    expect(trimName('\u0085')).toBe('')
+    expect(trimName('\uFEFF')).toBe('')
+    expect(trimName('a\u200B')).toBe('a\u200B')
+  })
+
+  it('inviteNameError: the four outcomes', () => {
+    expect(inviteNameError('Ada')).toBeNull()
+    expect(inviteNameError('  ')).toBe('Enter your name.')
+    expect(inviteNameError('\u0085')).toBe('Enter your name.')
+    expect(inviteNameError('a'.repeat(201))).toBe('Use 200 characters or fewer.')
+    expect(inviteNameError('a\0')).toBeNull()
+    expect(inviteNameError('a'.repeat(201) + '\0')).toBeNull()
+  })
+
+  it('inviteSignInUrl puts the trimmed name in the fragment', () => {
+    vi.stubEnv('VITE_APP_URL', 'https://app.x')
+    expect(inviteSignInUrl('T', '\u0085 Ada Obi \u0085')).toBe('https://app.x?auth=start#invite=T&name=Ada%20Obi')
+    expect(inviteSignInUrl('T', '\u0085')).toBeNull()
+    vi.unstubAllEnvs()
   })
 })

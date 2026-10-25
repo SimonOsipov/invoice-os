@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -70,7 +69,7 @@ func readAccept(w http.ResponseWriter, r *http.Request, allowEmpty bool) (accept
 		return req, false
 	}
 	if req.DisplayName != nil {
-		name := strings.TrimSpace(*req.DisplayName)
+		name := trimName(*req.DisplayName)
 		if msg := checkName("display_name", name); msg != "" {
 			writeError(w, http.StatusBadRequest, msg)
 			return req, false

@@ -288,6 +288,9 @@ importers:
       react-dom:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
+      uplot:
+        specifier: ^1.6.32
+        version: 1.6.32
     devDependencies:
       '@sentry/vite-plugin':
         specifier: 5.4.0
@@ -1382,6 +1385,9 @@ packages:
     peerDependencies:
       browserslist: '>= 4.21.0'
 
+  uplot@1.6.32:
+    resolution: {integrity: sha512-KIMVnG68zvu5XXUbC4LQEPnhwOxBuLyW1AHtpm6IKTXImkbLgkMy+jabjLgSLMasNuGGzQm/ep3tOkyTxpiQIw==}
+
   vite@8.1.6:
     resolution: {integrity: sha512-aRAHIxx5SW5zc1sMqFwJU/t5qaFfXb5Hj0J7W0VXihu/X99+346tz6080tO1T1xVIJORX/b3zVTXGFqUXh35uw==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -2404,6 +2410,8 @@ snapshots:
       browserslist: 4.29.3
       escalade: 3.2.0
       picocolors: 1.1.1
+
+  uplot@1.6.32: {}
 
   vite@8.1.6(@types/node@22.20.0):
     dependencies:

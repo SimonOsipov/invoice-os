@@ -41,7 +41,7 @@ func (t *mockTransport) captured() []*sentry.Event {
 
 func TestInitSentryDisabled(t *testing.T) {
 	sentry.CurrentHub().BindClient(nil)
-	if err := initSentry(Config{Service: "svc"}); err != nil {
+	if err := initSentry(Config{Service: "svc"}, nil); err != nil {
 		t.Fatalf("initSentry with empty DSN should be a no-op, got: %v", err)
 	}
 	if c := sentry.CurrentHub().Client(); c != nil {
@@ -206,7 +206,7 @@ func TestInitSentry_LabelsEveryEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if err := initSentry(cfg); err != nil {
+	if err := initSentry(cfg, nil); err != nil {
 		t.Fatalf("initSentry: %v", err)
 	}
 	installed := sentry.CurrentHub().Client()
@@ -261,7 +261,7 @@ func TestInitSentry_EventsGoThroughTheSynchronousTransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if err := initSentry(cfg); err != nil {
+	if err := initSentry(cfg, nil); err != nil {
 		t.Fatalf("initSentry: %v", err)
 	}
 	client := sentry.CurrentHub().Client()

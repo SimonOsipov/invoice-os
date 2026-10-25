@@ -47,7 +47,7 @@ func New(service string) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := initSentry(cfg); err != nil {
+	if err := initSentry(cfg, nil); err != nil {
 		return nil, err
 	}
 	if cfg.SentryTestEvent {

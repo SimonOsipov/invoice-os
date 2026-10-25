@@ -2,13 +2,13 @@ import { ApiError } from '@invoice-os/api-client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SESSION_KEY } from './auth'
-import { fetchStaffHealth, fleetSummary, series, shortBuild, type FleetHealth, type StaffHealth, type TrendPoint } from './healthApi'
+import { fetchStaffHealth, fleetSummary, jobSeries, jobsOf, series, shortBuild, type FleetHealth, type JobView, type StaffHealth, type TrendPoint } from './healthApi'
 
 const GW = 'https://gw.test'
 const ROUTE = `${GW}/api/submission/v1/staff/health`
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
-const point = (services_down: number | null, queue_depth: number, dead_lettered = 0): TrendPoint => ({ taken_at: '2026-10-14T10:00:00Z', services_down, queue_depth, dead_lettered })
+const point = (services_down: number | null, queue_depth: number, dead_lettered = 0, river_jobs: JobView | null = null): TrendPoint => ({ taken_at: '2026-10-14T10:00:00Z', services_down, queue_depth, dead_lettered, river_jobs })
 
 let fetchMock: ReturnType<typeof vi.fn>
 beforeEach(() => {
@@ -26,7 +26,7 @@ afterEach(() => {
 
 describe('healthApi', () => {
   it('fetchStaffHealth reads the staff health route', async () => {
-    const body: StaffHealth = { checked_at: '2026-10-14T10:05:00Z', fleet: { status: 'ok', services: [] }, jobs: { queued: 1 }, queue_depth: 1, trend: [point(0, 1)] }
+    const body: StaffHealth = { checked_at: '2026-10-14T10:05:00Z', fleet: { status: 'ok', services: [] }, jobs: { queued: 1 }, queue_depth: 1, river_jobs: { total: { queue_depth: 1, dead_lettered: 0 }, services: {} }, trend: [point(0, 1)] }
     fetchMock.mockResolvedValue(json(200, body))
     expect(await fetchStaffHealth()).toEqual(body)
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -55,6 +55,30 @@ describe('healthApi', () => {
     }
     expect(fleetSummary(fleet)).toEqual({ up: 1, total: 3, down: ['docling', 'auth'] })
     expect(fleetSummary({ status: 'unknown', services: [] })).toEqual({ up: 0, total: 0, down: [] })
+  })
+
+  const jv = (q: number, d: number, services: JobView['services'] = {}): JobView => ({ total: { queue_depth: q, dead_lettered: d }, services })
+
+  it('jobsOf reads the total for All services', () => {
+    expect(jobsOf(jv(5, 1), '')).toEqual({ queue_depth: 5, dead_lettered: 1 })
+  })
+
+  it("jobsOf reads a service's totals and null for a service without kinds", () => {
+    const v = jv(9, 3, { submission: { queue_depth: 2, dead_lettered: 0 } })
+    expect(jobsOf(v, 'submission')).toEqual({ queue_depth: 2, dead_lettered: 0 })
+    expect(jobsOf(v, 'app')).toBeNull()
+  })
+
+  it('jobSeries skips samples without kind counts', () => {
+    const t = [point(0, 7, 7, null), point(0, 1, 0, jv(1, 0)), point(0, 1, 0, jv(3, 0))]
+    expect(jobSeries(t, '', 'queue_depth')).toEqual([1, 3])
+  })
+
+  it('jobSeries reads one service per sample', () => {
+    const at = (d: number) => point(0, 0, 0, jv(9, 9, { notifications: { queue_depth: 0, dead_lettered: d } }))
+    const t = [at(0), at(2)]
+    expect(jobSeries(t, 'notifications', 'dead_lettered')).toEqual([0, 2])
+    expect(jobSeries(t, 'app', 'dead_lettered')).toEqual([])
   })
 
   it('series keeps order and drops nulls', () => {

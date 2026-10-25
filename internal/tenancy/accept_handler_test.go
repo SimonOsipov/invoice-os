@@ -348,6 +348,9 @@ func TestAcceptInvitationHandler_PassesTheName(t *testing.T) {
 	for _, c := range []struct{ name, members, want string }{
 		{"padded name is trimmed", `"display_name":" Ada Obi "`, "v:Ada Obi"},
 		{"unicode whitespace is trimmed", `"display_name":"　Ada Obi\n"`, "v:Ada Obi"},
+		{"BOM padding is trimmed", `"display_name":"\ufeffAda\ufeff"`, "v:Ada"},
+		{"BOM mixed with other whitespace is trimmed", `"display_name":" \ufeff\u3000\ufeff Ada\n\ufeff "`, "v:Ada"},
+		{"an interior BOM is kept", `"display_name":"Ada\ufeffObi"`, "v:Ada\ufeffObi"},
 		{"absent name is nil", ``, "<nil>"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -373,6 +376,10 @@ func TestAcceptHandlers_RefuseABadName(t *testing.T) {
 			for _, c := range []struct{ name, value, msg string }{
 				{"blank", jsonString(t, "   "), lengthSentence},
 				{"empty", `""`, lengthSentence},
+				{"BOM only", jsonString(t, "\ufeff"), lengthSentence},
+				{"BOM and spaces only", jsonString(t, " \ufeff "), lengthSentence},
+				{"BOM around a NUL", jsonString(t, "\ufeff\x00\ufeff"), nulSentence},
+				{"201 runes inside BOMs", jsonString(t, "\ufeff"+strings.Repeat("é", 201)+"\ufeff"), lengthSentence},
 				{"201 runes", jsonString(t, strings.Repeat("é", 201)), lengthSentence},
 				{"NUL byte", jsonString(t, "a\x00b"), nulSentence},
 				{"a lone NUL survives the trim", jsonString(t, " \x00 "), nulSentence},
@@ -408,6 +415,7 @@ func TestAcceptHandlers_AcceptA200RuneName(t *testing.T) {
 				{"200 four-byte runes", `"display_name":` + jsonString(t, four), "v:" + four},
 				{"200 escaped surrogate pairs", `"display_name":"` + escaped + `"`, "v:" + four},
 				{"one rune", `"display_name":"a"`, "v:a"},
+				{"200 runes inside BOMs", `"display_name":` + jsonString(t, "\ufeff"+strings.Repeat("a", 200)+"\ufeff"), "v:" + strings.Repeat("a", 200)},
 				{"200 one-byte runes", `"display_name":` + jsonString(t, strings.Repeat("a", 200)), "v:" + strings.Repeat("a", 200)},
 				{"null is no name", `"display_name":null`, "<nil>"},
 			} {

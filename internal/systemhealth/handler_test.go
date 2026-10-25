@@ -19,7 +19,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-var healthKeys = []string{"checked_at", "fleet", "jobs", "queue_depth", "trend"}
+var healthKeys = []string{"checked_at", "fleet", "jobs", "queue_depth", "river_jobs", "trend"}
 
 type readCall struct {
 	since time.Time
@@ -33,13 +33,13 @@ type handlerRig struct {
 	h     http.HandlerFunc
 }
 
-func newHandlerRig(counts map[string]int64, samples []Sample, readErr error, fleet gateway.FleetHealth, fleetErr error, now time.Time) *handlerRig {
+func newHandlerRig(live Live, samples []Sample, readErr error, fleet gateway.FleetHealth, fleetErr error, now time.Time) *handlerRig {
 	rig := &handlerRig{logs: &bytes.Buffer{}}
 	log := slog.New(slog.NewJSONHandler(rig.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	rig.h = Handler(func(_ context.Context, since time.Time) (map[string]int64, []Sample, error) {
+	rig.h = Handler(func(_ context.Context, since time.Time) (Live, []Sample, error) {
 		rig.calls = append(rig.calls, "read")
 		rig.reads = append(rig.reads, readCall{since})
-		return counts, samples, readErr
+		return live, samples, readErr
 	}, func(context.Context) (gateway.FleetHealth, error) {
 		rig.calls = append(rig.calls, "fleet")
 		return fleet, fleetErr
@@ -100,7 +100,7 @@ func wantStatus(t *testing.T, rec *httptest.ResponseRecorder, status int) {
 func TestStaffHealthHandler_Contract(t *testing.T) {
 	now := time.Date(2026, 10, 14, 10, 5, 0, 0, time.UTC)
 	fleet := gateway.FleetHealth{Status: "ok", Services: []gateway.ServiceHealth{{Name: "gateway", Status: "up"}}}
-	rig := newHandlerRig(map[string]int64{"queued": 1, "pending": 2, "dead_lettered": 3}, nil, nil, fleet, nil, now)
+	rig := newHandlerRig(Live{Jobs: map[string]int64{"queued": 1, "pending": 2, "dead_lettered": 3}, Kinds: map[string]map[string]int64{"submission_poll": {"available": 2}}}, nil, nil, fleet, nil, now)
 
 	rec := rig.serve()
 	wantStatus(t, rec, http.StatusOK)
@@ -128,6 +128,13 @@ func TestStaffHealthHandler_Contract(t *testing.T) {
 	if got := string(body["trend"]); got != "[]" {
 		t.Errorf("trend = %s, want [] for no samples", got)
 	}
+	var rj JobView
+	if err := json.Unmarshal(body["river_jobs"], &rj); err != nil {
+		t.Fatal(err)
+	}
+	if rj.Services["submission"].QueueDepth != 2 || rj.Total.DeadLettered != 3 || rj.Services["submission"].DeadLettered != 3 {
+		t.Errorf("river_jobs = %+v, want submission queue_depth 2 and dead_lettered 3 on total and submission", rj)
+	}
 	var checked time.Time
 	if err := json.Unmarshal(body["checked_at"], &checked); err != nil || !checked.Equal(now) {
 		t.Errorf("checked_at = %s (%v), want %v", body["checked_at"], err, now)
@@ -146,7 +153,7 @@ func TestStaffHealthHandler_Contract(t *testing.T) {
 func TestStaffHealthHandler_Contract_ExtraStatesPassThroughAndCheckedAtIsUTC(t *testing.T) {
 	zone := time.FixedZone("UTC+2", 2*3600)
 	now := time.Date(2026, 10, 14, 12, 5, 0, 0, zone)
-	rig := newHandlerRig(map[string]int64{"queued": 1, "weird": 4}, nil, nil, gateway.FleetHealth{Status: "ok", Services: []gateway.ServiceHealth{}}, nil, now)
+	rig := newHandlerRig(Live{Jobs: map[string]int64{"queued": 1, "weird": 4}}, nil, nil, gateway.FleetHealth{Status: "ok", Services: []gateway.ServiceHealth{}}, nil, now)
 	rec := rig.serve()
 	wantStatus(t, rec, http.StatusOK)
 	body := decodeRaw(t, rec)
@@ -172,7 +179,7 @@ func TestStaffHealthHandler_TrendFromSamples(t *testing.T) {
 		{TakenAt: at(1), FleetStatus: "ok", ServicesDown: &zero, JobCounts: map[string]int64{"pending": 2, "dead_lettered": 1}},
 		{TakenAt: at(2), FleetStatus: "degraded", ServicesDown: &three, JobCounts: map[string]int64{"queued": 5, "submitting": 1, "pending": 1, "dead_lettered": 4, "accepted": 90}},
 	}
-	rig := newHandlerRig(map[string]int64{}, samples, nil, gateway.FleetHealth{Status: "ok", Services: []gateway.ServiceHealth{}}, nil, now)
+	rig := newHandlerRig(Live{}, samples, nil, gateway.FleetHealth{Status: "ok", Services: []gateway.ServiceHealth{}}, nil, now)
 	rec := rig.serve()
 	wantStatus(t, rec, http.StatusOK)
 
@@ -189,7 +196,7 @@ func TestStaffHealthHandler_TrendFromSamples(t *testing.T) {
 	}
 	for i, w := range want {
 		pt := trend[i]
-		if got := sortedKeys(pt); !slices.Equal(got, []string{"dead_lettered", "queue_depth", "services_down", "taken_at"}) {
+		if got := sortedKeys(pt); !slices.Equal(got, []string{"dead_lettered", "queue_depth", "river_jobs", "services_down", "taken_at"}) {
 			t.Errorf("point %d keys = %v", i, got)
 		}
 		var takenAt time.Time
@@ -202,9 +209,43 @@ func TestStaffHealthHandler_TrendFromSamples(t *testing.T) {
 	}
 }
 
+func TestStaffHealthHandler_TrendCarriesRiverJobsOnlyForKindSamples(t *testing.T) {
+	now := time.Date(2026, 10, 14, 10, 5, 0, 0, time.UTC)
+	kinds := map[string]map[string]int64{"submission_poll": {"available": 2, "discarded": 9}, "contact_deliver": {"running": 1, "discarded": 3}}
+	samples := []Sample{
+		{TakenAt: now.Add(-3 * SampleInterval), FleetStatus: "ok", JobCounts: map[string]int64{"queued": 5}},
+		{TakenAt: now.Add(-2 * SampleInterval), FleetStatus: "ok", JobCounts: map[string]int64{"queued": 1, "dead_lettered": 1}, KindCounts: kinds},
+		{TakenAt: now.Add(-SampleInterval), FleetStatus: "ok", JobCounts: map[string]int64{"pending": 2, "dead_lettered": 2}, KindCounts: kinds},
+	}
+	rig := newHandlerRig(Live{}, samples, nil, gateway.FleetHealth{Status: "ok", Services: []gateway.ServiceHealth{}}, nil, now)
+	rec := rig.serve()
+	wantStatus(t, rec, http.StatusOK)
+	var trend []map[string]json.RawMessage
+	if err := json.Unmarshal(decodeRaw(t, rec)["trend"], &trend); err != nil {
+		t.Fatal(err)
+	}
+	if len(trend) != 3 {
+		t.Fatalf("trend has %d points, want 3", len(trend))
+	}
+	if got := string(trend[0]["river_jobs"]); got != "null" {
+		t.Errorf("trend[0].river_jobs = %s, want null", got)
+	}
+	for i, dead := range map[int]int64{1: 1, 2: 2} {
+		want, _ := json.Marshal(JobViewOf(kinds, dead))
+		if got := string(trend[i]["river_jobs"]); got != string(want) {
+			t.Errorf("trend[%d].river_jobs = %s, want %s", i, got, want)
+		}
+	}
+	for i, w := range [][2]string{{"5", "0"}, {"1", "1"}, {"2", "2"}} {
+		if string(trend[i]["queue_depth"]) != w[0] || string(trend[i]["dead_lettered"]) != w[1] {
+			t.Errorf("trend[%d] queue_depth %s dead_lettered %s, want %s %s", i, trend[i]["queue_depth"], trend[i]["dead_lettered"], w[0], w[1])
+		}
+	}
+}
+
 func TestStaffHealthHandler_FleetErrorIsUnknown(t *testing.T) {
 	now := time.Date(2026, 10, 14, 10, 5, 0, 0, time.UTC)
-	rig := newHandlerRig(map[string]int64{"queued": 2, "dead_lettered": 1}, nil, nil, gateway.FleetHealth{}, errors.New("gateway down"), now)
+	rig := newHandlerRig(Live{Jobs: map[string]int64{"queued": 2, "dead_lettered": 1}}, nil, nil, gateway.FleetHealth{}, errors.New("gateway down"), now)
 	rec := rig.serve()
 	wantStatus(t, rec, http.StatusOK)
 	body := decodeRaw(t, rec)
@@ -228,7 +269,7 @@ func TestStaffHealthHandler_ErrorsMapTo403And500(t *testing.T) {
 	now := time.Date(2026, 10, 14, 10, 5, 0, 0, time.UTC)
 	fleet := gateway.FleetHealth{Status: "ok", Services: []gateway.ServiceHealth{}}
 
-	rig := newHandlerRig(nil, nil, db.ErrNotStaff, fleet, nil, now)
+	rig := newHandlerRig(Live{}, nil, db.ErrNotStaff, fleet, nil, now)
 	rec := rig.serve()
 	if rec.Code != http.StatusForbidden || strings.TrimSpace(rec.Body.String()) != `{"error":"forbidden"}` {
 		t.Errorf("ErrNotStaff = %d %q, want 403 {\"error\":\"forbidden\"}", rec.Code, rec.Body.String())
@@ -237,7 +278,7 @@ func TestStaffHealthHandler_ErrorsMapTo403And500(t *testing.T) {
 		t.Errorf("a refusal logged %v, want no error", levels)
 	}
 
-	rig = newHandlerRig(nil, nil, fmt.Errorf("staff health: %w", errors.New("connection reset by boom")), fleet, nil, now)
+	rig = newHandlerRig(Live{}, nil, fmt.Errorf("staff health: %w", errors.New("connection reset by boom")), fleet, nil, now)
 	rec = rig.serve()
 	if rec.Code != http.StatusInternalServerError || strings.TrimSpace(rec.Body.String()) != `{"error":"internal server error"}` {
 		t.Errorf("other error = %d %q, want 500 {\"error\":\"internal server error\"}", rec.Code, rec.Body.String())

@@ -17,7 +17,8 @@
     "@invoice-os/design-tokens": "workspace:*",
     "@invoice-os/monitoring": "workspace:*",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "uplot": "^1.6.32"
   },
   "devDependencies": {
     "@invoice-os/api-client": "workspace:*",

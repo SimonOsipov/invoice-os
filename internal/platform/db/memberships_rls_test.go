@@ -903,14 +903,16 @@ func TestRLS_IdentityHasRemovedMembership(t *testing.T) {
 			}
 		})
 	}
-	t.Run("removed in one tenant, active in another", func(t *testing.T) {
-		user := uuid.NewString()
-		seedMemberRow(t, h.tenantA, user, "preparer", "removed", nil, nil)
-		seedMemberRow(t, h.tenantB, user, "preparer", "active", nil, nil)
-		if !callBool(t, h.app, fn, user) {
-			t.Error("identity_has_removed_membership = false, want true: one removed row is enough")
-		}
-	})
+	for _, live := range []string{"active", "suspended", "invited"} {
+		t.Run("removed in one tenant, "+live+" in another", func(t *testing.T) {
+			user := uuid.NewString()
+			seedMemberRow(t, h.tenantA, user, "preparer", "removed", nil, nil)
+			seedMemberRow(t, h.tenantB, user, "preparer", live, nil, nil)
+			if callBool(t, h.app, fn, user) {
+				t.Errorf("identity_has_removed_membership = true with a %s row elsewhere, want false", live)
+			}
+		})
+	}
 	// ceiling 1 of the migration: the answer ignores app.current_tenant, so it is the same under another tenant's GUC and an unset one.
 	t.Run("the answer ignores the tenant GUC", func(t *testing.T) {
 		user := uuid.NewString()

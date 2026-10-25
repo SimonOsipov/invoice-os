@@ -194,7 +194,7 @@ func TestJoin_ListUsesTheNormalisedHeaderEmail(t *testing.T) {
 			if err != nil || len(got) != 0 || got == nil {
 				t.Errorf("list = %+v, err %v; want a non-nil empty list and no error", got, err)
 			}
-			// Only the removed read runs for a bad address (D11); no invite is queried.
+			// Only the removed read runs for a bad address; no invite is queried.
 			tr.mu.Lock()
 			defer tr.mu.Unlock()
 			for _, st := range tr.stmts[before:] {
@@ -929,6 +929,25 @@ func TestMyPendingInvitations_EmptyEmailStillReadsRemoved(t *testing.T) {
 			}
 			if !got.Removed || got.Invitations == nil || len(got.Invitations) != 0 {
 				t.Errorf("answer = %+v, want Removed with a non-nil empty list", got)
+			}
+		})
+	}
+}
+
+func TestMyPendingInvitations_RemovedFlagOffWhileAnotherMembershipLives(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	other := newInvWorld(t, "Elsewhere", "Chi Okoro")
+	for _, status := range []string{"suspended", "invited"} {
+		t.Run(status, func(t *testing.T) {
+			user := uuid.NewString()
+			seedRemovedElsewhere(t, user)
+			seedIdentityMembership(t, other.super, other.tenant, user, "preparer", status, strp("Ada"), nil)
+			got, err := w.store.MyPendingInvitations(tenantless(user, addr))
+			if err != nil {
+				t.Fatalf("MyPendingInvitations: %v", err)
+			}
+			if got.Removed {
+				t.Errorf("Removed = true with a %s membership elsewhere, want false", status)
 			}
 		})
 	}

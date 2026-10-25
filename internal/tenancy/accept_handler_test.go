@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -90,7 +91,7 @@ func TestAcceptHandler_Contract(t *testing.T) {
 		{"no caller", okBody, failing(db.ErrNoTenant), http.StatusUnauthorized, "unauthorized", 1},
 		{"malformed JSON", `{`, granted, http.StatusBadRequest, "invalid request body", 0},
 		{"empty body", ``, granted, http.StatusBadRequest, "invalid request body", 0},
-		{"over 1 KiB", bodyOf(1025), granted, http.StatusBadRequest, "invalid request body", 0},
+		{"over 4 KiB", bodyOf(4097), granted, http.StatusBadRequest, "invalid request body", 0},
 		{"invite not valid", okBody, failing(ErrInvitationNotValid), http.StatusNotFound, "this invite is no longer valid", 1},
 		{"invite not valid, wrapped", okBody, failing(fmt.Errorf("accept: %w", ErrInvitationNotValid)), http.StatusNotFound, "this invite is no longer valid", 1},
 		{"already a member", okBody, failing(ErrAlreadyMember), http.StatusConflict, "you already belong to a workspace", 1},
@@ -266,4 +267,196 @@ func TestPreviewHandler_Contract(t *testing.T) {
 			})
 		}
 	})
+}
+
+// acceptRoute is one accept handler behind a spy that records the name it is handed.
+type acceptRoute struct {
+	name string
+	path string
+	// body wraps raw JSON members (without the token) into a request body.
+	body func(members string) string
+	// serve mounts the handler over a spy.
+	serve func(spy *nameSpy, log *slog.Logger) http.Handler
+}
+
+type nameSpy struct {
+	names []*string
+	err   error
+}
+
+func (s *nameSpy) accept(_ context.Context, _ string, name *string) (Tenant, string, string, error) {
+	s.names = append(s.names, name)
+	if s.err != nil {
+		return Tenant{}, "", "", s.err
+	}
+	return Tenant{ID: uuid.NewString(), Name: "Obi Partners", Kind: "firm"}, uuid.NewString(), "reviewer", nil
+}
+
+func acceptRoutes() []acceptRoute {
+	token := strings.Repeat("A", 43)
+	return []acceptRoute{
+		{
+			name: "token",
+			path: "/v1/invitations/accept",
+			body: func(members string) string {
+				if members == "" {
+					return `{"token":"` + token + `"}`
+				}
+				return `{"token":"` + token + `",` + members + `}`
+			},
+			serve: func(spy *nameSpy, log *slog.Logger) http.Handler {
+				mux := http.NewServeMux()
+				mux.HandleFunc("POST /v1/invitations/accept", AcceptInvitationNamedHandler(spy.accept, log))
+				return mux
+			},
+		},
+		{
+			name: "by id",
+			path: "/v1/invitations/" + uuid.NewString() + "/accept",
+			body: func(members string) string { return `{` + members + `}` },
+			serve: func(spy *nameSpy, log *slog.Logger) http.Handler {
+				mux := http.NewServeMux()
+				mux.HandleFunc("POST /v1/invitations/{id}/accept", AcceptInvitationByIDNamedHandler(spy.accept, log))
+				return mux
+			},
+		},
+	}
+}
+
+func jsonString(t *testing.T, s string) string {
+	t.Helper()
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// gotName reads the one name a spy was handed: "<nil>" for no name.
+func gotName(t *testing.T, spy *nameSpy) string {
+	t.Helper()
+	if len(spy.names) != 1 {
+		t.Fatalf("accept calls = %d, want 1", len(spy.names))
+	}
+	return orNil(spy.names[0])
+}
+
+func TestAcceptInvitationHandler_PassesTheName(t *testing.T) {
+	route := acceptRoutes()[0]
+	for _, c := range []struct{ name, members, want string }{
+		{"padded name is trimmed", `"display_name":" Ada Obi "`, "v:Ada Obi"},
+		{"unicode whitespace is trimmed", `"display_name":"　Ada Obi\n"`, "v:Ada Obi"},
+		{"absent name is nil", ``, "<nil>"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			spy := &nameSpy{}
+			rec := apiDo(route.serve(spy, nil), context.Background(), http.MethodPost, route.path, route.body(c.members))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+			}
+			if got := gotName(t, spy); got != c.want {
+				t.Errorf("accept got name %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestAcceptHandlers_RefuseABadName(t *testing.T) {
+	const (
+		lengthSentence = "display_name must be 1 to 200 characters"
+		nulSentence    = "display_name must not contain a NUL byte"
+	)
+	for _, route := range acceptRoutes() {
+		t.Run(route.name, func(t *testing.T) {
+			for _, c := range []struct{ name, value, msg string }{
+				{"blank", jsonString(t, "   "), lengthSentence},
+				{"empty", `""`, lengthSentence},
+				{"201 runes", jsonString(t, strings.Repeat("é", 201)), lengthSentence},
+				{"NUL byte", jsonString(t, "a\x00b"), nulSentence},
+				{"not a string", `5`, "invalid request body"},
+			} {
+				t.Run(c.name, func(t *testing.T) {
+					spy := &nameSpy{}
+					rec := apiDo(route.serve(spy, nil), context.Background(), http.MethodPost, route.path, route.body(`"display_name":`+c.value))
+					assertErrorBody(t, rec, http.StatusBadRequest, c.msg)
+					if len(spy.names) != 0 {
+						t.Errorf("accept called %d time(s), want 0", len(spy.names))
+					}
+				})
+			}
+			// Control: a valid name on the same route reaches the accept.
+			spy := &nameSpy{}
+			rec := apiDo(route.serve(spy, nil), context.Background(), http.MethodPost, route.path, route.body(`"display_name":"Ada Obi"`))
+			if rec.Code != http.StatusOK || len(spy.names) != 1 {
+				t.Errorf("valid name: status %d, accept calls %d; want 200 and 1", rec.Code, len(spy.names))
+			}
+		})
+	}
+}
+
+func TestAcceptHandlers_AcceptA200RuneName(t *testing.T) {
+	four := strings.Repeat("😀", 200)
+	escaped := strings.Repeat(`😀`, 200) // 2400 bytes on the wire: past the 1 KiB preview cap
+	for _, route := range acceptRoutes() {
+		t.Run(route.name, func(t *testing.T) {
+			for _, c := range []struct{ name, members, want string }{
+				{"200 four-byte runes", `"display_name":` + jsonString(t, four), "v:" + four},
+				{"200 escaped surrogate pairs", `"display_name":"` + escaped + `"`, "v:" + four},
+			} {
+				t.Run(c.name, func(t *testing.T) {
+					spy := &nameSpy{}
+					rec := apiDo(route.serve(spy, nil), context.Background(), http.MethodPost, route.path, route.body(c.members))
+					if rec.Code != http.StatusOK {
+						t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+					}
+					if got := gotName(t, spy); got != c.want {
+						t.Errorf("accept got a %d-rune name, want the 200 sent", utf8.RuneCountInString(strings.TrimPrefix(got, "v:")))
+					}
+				})
+			}
+
+			// The 4 KiB cap itself: a body of exactly 4096 bytes passes, one byte more is refused.
+			sized := func(n int) string {
+				base := len(route.body(`"display_name":"Ada"`))
+				return route.body(`"display_name":"Ada` + strings.Repeat(" ", n-base) + `"`)
+			}
+			if got := len(sized(4096)); got != 4096 {
+				t.Fatalf("fixture: sized body = %d bytes, want 4096", got)
+			}
+			spy := &nameSpy{}
+			rec := apiDo(route.serve(spy, nil), context.Background(), http.MethodPost, route.path, sized(4096))
+			if got := gotName(t, spy); rec.Code != http.StatusOK || got != "v:Ada" {
+				t.Errorf("4096-byte body: status %d, name %q; want 200 and Ada", rec.Code, got)
+			}
+			spy = &nameSpy{}
+			rec = apiDo(route.serve(spy, nil), context.Background(), http.MethodPost, route.path, sized(4097))
+			assertErrorBody(t, rec, http.StatusBadRequest, "invalid request body")
+			if len(spy.names) != 0 {
+				t.Errorf("accept called %d time(s) for an over-cap body, want 0", len(spy.names))
+			}
+		})
+	}
+}
+
+func TestAcceptHandlers_500LogsNoName(t *testing.T) {
+	const name = "Ada Obi"
+	for _, route := range acceptRoutes() {
+		t.Run(route.name, func(t *testing.T) {
+			spy := &nameSpy{err: errors.New("pq: connection refused")}
+			var logs syncBuf
+			rec := apiDo(route.serve(spy, slog.New(slog.NewTextHandler(&logs, nil))), context.Background(), http.MethodPost, route.path,
+				route.body(`"display_name":"`+name+`"`))
+			assertErrorBody(t, rec, http.StatusInternalServerError, "internal server error")
+			// The name reached the accept, so its absence from the log is not an unread field.
+			if got := gotName(t, spy); got != "v:"+name {
+				t.Fatalf("accept got name %q, want the one sent", got)
+			}
+			if n := strings.Count(logs.String(), "level=ERROR"); n != 1 {
+				t.Errorf("ERROR log lines = %d, want 1:\n%s", n, logs.String())
+			}
+			if strings.Contains(logs.String(), name) || strings.Contains(rec.Body.String(), name) {
+				t.Errorf("the log or the body carries the display name:\n%s\n%s", logs.String(), rec.Body)
+			}
+		})
+	}
 }

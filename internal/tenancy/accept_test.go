@@ -985,3 +985,43 @@ func TestAccept_ARefusedAcceptCopiesNothing(t *testing.T) {
 		t.Error("the admin's flag turned true when an all-clients invite was accepted")
 	}
 }
+
+func TestAcceptInvitation_StoresTheTrimmedName(t *testing.T) {
+	w := newAcceptWorld(t, "reviewer")
+	user := uuid.NewString()
+
+	if _, _, _, err := w.store.AcceptInvitationNamed(tenantless(user, inviteeAddr), w.invite.Token, strp(" Ada Obi ")); err != nil {
+		t.Fatalf("AcceptInvitation: %v", err)
+	}
+	rows := membersOf(t, w.super, user)
+	if len(rows) != 1 || rows[0].DisplayName == nil || *rows[0].DisplayName != "Ada Obi" {
+		t.Fatalf("memberships = %+v, want one with display_name %q", rows, "Ada Obi")
+	}
+	if rows[0].Email == nil || *rows[0].Email != inviteeAddr {
+		t.Errorf("email = %v, want the invited address", rows[0].Email)
+	}
+	// The name stays out of the audit payload.
+	audits := acceptedAudits(t, w.super, w.tenant)
+	if len(audits) != 1 || len(audits[0].Payload) != 2 {
+		t.Fatalf("audit rows = %+v, want one with exactly {invitation_id, role}", audits)
+	}
+	if strings.Contains(fmt.Sprint(audits[0].Payload), "Ada Obi") {
+		t.Errorf("audit payload carries the display name: %v", audits[0].Payload)
+	}
+}
+
+func TestAcceptInvitation_NoNameStoresNull(t *testing.T) {
+	for name, given := range map[string]*string{"nil": nil, "blank": strp("   ")} {
+		t.Run(name, func(t *testing.T) {
+			w := newAcceptWorld(t, "reviewer")
+			user := uuid.NewString()
+			if _, _, _, err := w.store.AcceptInvitationNamed(tenantless(user, inviteeAddr), w.invite.Token, given); err != nil {
+				t.Fatalf("AcceptInvitation: %v", err)
+			}
+			rows := membersOf(t, w.super, user)
+			if len(rows) != 1 || rows[0].Status != "active" || rows[0].DisplayName != nil {
+				t.Errorf("memberships = %+v, want one active row with a NULL display_name", rows)
+			}
+		})
+	}
+}

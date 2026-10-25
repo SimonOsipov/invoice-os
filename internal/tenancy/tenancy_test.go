@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -2859,5 +2860,28 @@ func TestStoreMe_AnswersForARemovedMember(t *testing.T) {
 	}
 	if me.Email != nil {
 		t.Error("email not nil for a removed member")
+	}
+}
+
+func TestCheckName(t *testing.T) {
+	for _, field := range []string{"workspace_name", "display_name"} {
+		length := field + " must be 1 to 200 characters"
+		nul := field + " must not contain a NUL byte"
+		for _, c := range []struct{ name, in, want string }{
+			{"empty", "", length},
+			{"201 runes", strings.Repeat("é", 201), length},
+			{"NUL byte", "a\x00b", nul},
+			{"200 four-byte runes", strings.Repeat("😀", 200), ""},
+			{"200 runes", strings.Repeat("a", 200), ""},
+			{"one rune", "a", ""},
+			// It trims nothing: callers trim first.
+			{"a lone space", " ", ""},
+		} {
+			t.Run(field+"/"+c.name, func(t *testing.T) {
+				if got := checkName(field, c.in); got != c.want {
+					t.Errorf("checkName(%q, %d runes) = %q, want %q", field, utf8.RuneCountInString(c.in), got, c.want)
+				}
+			})
+		}
 	}
 }

@@ -783,3 +783,174 @@ func TestAccept_ByIDCopiesAllClients(t *testing.T) {
 		requireAccess(t, "list as admin", w.listAs(t, w.admin)[user], "[]")
 	})
 }
+
+func TestAcceptInvitationByID_StoresTheName(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	user := uuid.NewString()
+
+	if _, _, _, err := w.store.AcceptInvitationByIDNamed(tenantless(user, addr), w.invite.ID, strp("Ada Obi")); err != nil {
+		t.Fatalf("AcceptInvitationByID: %v", err)
+	}
+	rows := membersOf(t, w.super, user)
+	if len(rows) != 1 || rows[0].DisplayName == nil || *rows[0].DisplayName != "Ada Obi" {
+		t.Errorf("memberships = %+v, want one with display_name %q", rows, "Ada Obi")
+	}
+
+	// No name stores NULL: the name above is not a default.
+	w2, addr2 := newJoinWorld(t, "reviewer")
+	user2 := uuid.NewString()
+	if _, _, _, err := w2.store.AcceptInvitationByIDNamed(tenantless(user2, addr2), w2.invite.ID, nil); err != nil {
+		t.Fatalf("AcceptInvitationByID without a name: %v", err)
+	}
+	if rows := membersOf(t, w2.super, user2); len(rows) != 1 || rows[0].DisplayName != nil {
+		t.Errorf("memberships = %+v, want one with a NULL display_name", rows)
+	}
+}
+
+// removedMemberReinvited is a member of w removed by an admin and invited again to addr.
+func removedMemberReinvited(t *testing.T) (w invWorld, user, addr string, invite IssuedInvite) {
+	t.Helper()
+	addr = joinAddr("tunde")
+	w = newInvWorld(t, "Obi Partners", "Ada Obi")
+	user = w.addMember(t, "preparer", "active", "Old Name")
+	if _, err := w.store.RemoveMember(w.adminCtx(), user); err != nil {
+		t.Fatalf("remove the member: %v", err)
+	}
+	invite = mustIssue(t, w.adminCtx(), w.store, []string{addr}, "reviewer")[0]
+	return w, user, addr, invite
+}
+
+func TestAcceptInvitationByID_RevivesARemovedMember(t *testing.T) {
+	w, user, addr, invite := removedMemberReinvited(t)
+	var rowID string
+	var created time.Time
+	if err := w.super.QueryRow(context.Background(), `SELECT id::text, created_at FROM memberships WHERE tenant_id = $1 AND user_id = $2`,
+		w.tenant, user).Scan(&rowID, &created); err != nil {
+		t.Fatalf("read the removed row: %v", err)
+	}
+
+	if _, _, role, err := w.store.AcceptInvitationByIDNamed(tenantless(user, addr), invite.ID, strp("New Name")); err != nil || role != "reviewer" {
+		t.Fatalf("AcceptInvitationByID: role %q, err %v; want reviewer and no error", role, err)
+	}
+
+	rows := membersOf(t, w.super, user)
+	if len(rows) != 1 {
+		t.Fatalf("memberships = %+v, want exactly one (the row is revived, not duplicated)", rows)
+	}
+	m := rows[0]
+	if m.Status != "active" || m.Role != "reviewer" || m.Email == nil || *m.Email != addr {
+		t.Errorf("revived row = %+v, want active, the invite's role and email", m)
+	}
+	if m.DisplayName == nil || *m.DisplayName != "New Name" {
+		t.Errorf("display_name = %s, want the name given at accept", orNil(m.DisplayName))
+	}
+	var sameRow bool
+	if err := w.super.QueryRow(context.Background(),
+		`SELECT id::text = $3 AND created_at > $4 FROM memberships WHERE tenant_id = $1 AND user_id = $2`,
+		w.tenant, user, rowID, created).Scan(&sameRow); err != nil || !sameRow {
+		t.Errorf("revived row kept its id and advanced created_at = %v (err %v), want true", sameRow, err)
+	}
+}
+
+func TestAcceptInvitation_RevivesARemovedMember(t *testing.T) {
+	w, user, addr, invite := removedMemberReinvited(t)
+
+	if _, _, _, err := w.store.AcceptInvitationNamed(tenantless(user, addr), invite.Token, strp("New Name")); err != nil {
+		t.Fatalf("AcceptInvitation: %v", err)
+	}
+	rows := membersOf(t, w.super, user)
+	if len(rows) != 1 || rows[0].Status != "active" || rows[0].DisplayName == nil || *rows[0].DisplayName != "New Name" {
+		t.Errorf("memberships = %+v, want one active row named by the accept", rows)
+	}
+}
+
+// seedRemovedElsewhere gives user a removed row in a tenant of its own.
+func seedRemovedElsewhere(t *testing.T, user string) {
+	t.Helper()
+	x := newInvWorld(t, "Left Behind", "Chi Okoro")
+	seedIdentityMembership(t, x.super, x.tenant, user, "preparer", "removed", strp("Old Name"), nil)
+}
+
+func TestMyPendingInvitations_NamesARemovedMembership(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	user := uuid.NewString()
+	seedRemovedElsewhere(t, user)
+
+	got, err := w.store.MyInvitationsMine(tenantless(user, addr))
+	if err != nil {
+		t.Fatalf("MyPendingInvitations: %v", err)
+	}
+	if !got.Removed {
+		t.Errorf("Removed = false, want true for a caller holding a removed row")
+	}
+	if len(got.Invitations) != 1 || got.Invitations[0].ID != w.invite.ID {
+		t.Errorf("invitations = %+v, want exactly the live invite", got.Invitations)
+	}
+}
+
+func TestMyPendingInvitations_RemovedWithNoInvites(t *testing.T) {
+	w, _ := newJoinWorld(t, "reviewer")
+	user := uuid.NewString()
+	seedRemovedElsewhere(t, user)
+
+	got, err := w.store.MyInvitationsMine(tenantless(user, joinAddr("nobody-invited-me")))
+	if err != nil {
+		t.Fatalf("MyPendingInvitations: %v", err)
+	}
+	if !got.Removed || got.Invitations == nil || len(got.Invitations) != 0 {
+		t.Errorf("answer = %+v, want Removed with a non-nil empty list", got)
+	}
+}
+
+func TestMyPendingInvitations_EmptyEmailStillReadsRemoved(t *testing.T) {
+	w, _ := newJoinWorld(t, "reviewer")
+	for _, email := range []string{"", "not an address"} {
+		t.Run("email "+email, func(t *testing.T) {
+			user := uuid.NewString()
+			seedRemovedElsewhere(t, user)
+			got, err := w.store.MyInvitationsMine(tenantless(user, email))
+			if err != nil {
+				t.Fatalf("MyPendingInvitations: %v", err)
+			}
+			if !got.Removed || got.Invitations == nil || len(got.Invitations) != 0 {
+				t.Errorf("answer = %+v, want Removed with a non-nil empty list", got)
+			}
+		})
+	}
+}
+
+func TestMyPendingInvitations_FreshAccountIsNotRemoved(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	other := newInvWorld(t, "Elsewhere", "Chi Okoro")
+
+	// Only a removed row sets the flag: no row, a suspended row and an invited row do not.
+	for _, status := range []string{"", "suspended", "invited"} {
+		t.Run("history "+status, func(t *testing.T) {
+			user := uuid.NewString()
+			if status != "" {
+				seedIdentityMembership(t, other.super, other.tenant, user, "preparer", status, strp("Old Name"), nil)
+			}
+			got, err := w.store.MyInvitationsMine(tenantless(user, addr))
+			if err != nil {
+				t.Fatalf("MyPendingInvitations: %v", err)
+			}
+			if got.Removed {
+				t.Errorf("Removed = true for history %q, want false", status)
+			}
+			// A suspended or invited row hides the invite (it is a membership); a fresh account sees it.
+			if wantInvites := status == ""; (len(got.Invitations) == 1) != wantInvites {
+				t.Errorf("invitations = %+v for history %q", got.Invitations, status)
+			}
+		})
+	}
+
+	// The same caller flips to true once a removed row exists, so the false above is read, not constant.
+	user := uuid.NewString()
+	if got, err := w.store.MyInvitationsMine(tenantless(user, addr)); err != nil || got.Removed {
+		t.Fatalf("before removal: %+v, err %v; want Removed false", got, err)
+	}
+	seedRemovedElsewhere(t, user)
+	if got, err := w.store.MyInvitationsMine(tenantless(user, addr)); err != nil || !got.Removed {
+		t.Errorf("after removal: %+v, err %v; want Removed true", got, err)
+	}
+}

@@ -161,3 +161,74 @@ func TestAcceptByID_WireShapeMatchesTheTokenAccept(t *testing.T) {
 		t.Errorf("token accept = %d %s, by id = %s; want the same body", tok.Code, tok.Body, rec.Body)
 	}
 }
+
+func TestAcceptInvitationByIDHandler_EmptyBodyIsNoName(t *testing.T) {
+	route := acceptRoutes()[1]
+	for _, c := range []struct{ name, body, want string }{
+		{"no body", ``, "<nil>"},
+		{"empty object", `{}`, "<nil>"},
+		// Control: the same route hands a sent name over, so the nil above is not a body left unread.
+		{"a name", `{"display_name":" Ada Obi "}`, "v:Ada Obi"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			spy := &nameSpy{}
+			rec := apiDo(route.serve(spy, nil), context.Background(), http.MethodPost, route.path, c.body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+			}
+			if got := gotName(t, spy); got != c.want {
+				t.Errorf("accept got name %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestAcceptInvitationByIDHandler_MalformedBody(t *testing.T) {
+	route := acceptRoutes()[1]
+	for _, body := range []string{`{`, `{"display_name":`, `[]`, `"Ada Obi"`, `{not json`} {
+		t.Run(body, func(t *testing.T) {
+			spy := &nameSpy{}
+			rec := apiDo(route.serve(spy, nil), context.Background(), http.MethodPost, route.path, body)
+			assertErrorBody(t, rec, http.StatusBadRequest, "invalid request body")
+			if len(spy.names) != 0 {
+				t.Errorf("accept called %d time(s), want 0", len(spy.names))
+			}
+		})
+	}
+}
+
+func TestInvitationsMineHandler_Shape(t *testing.T) {
+	exp := time.Date(2026, 10, 14, 9, 30, 0, 0, time.UTC)
+	item := PendingInvite{ID: uuid.NewString(), Workspace: "Eze Ltd", Role: "preparer", ExpiresAt: exp}
+	mux := func(m MyInvitations) http.Handler {
+		h := http.NewServeMux()
+		h.HandleFunc("GET /v1/invitations/mine", InvitationsMineStateHandler(func(context.Context) (MyInvitations, error) { return m, nil }, nil))
+		return h
+	}
+	for _, c := range []struct {
+		name string
+		in   MyInvitations
+		want string
+	}{
+		{"removed with no invites", MyInvitations{Invitations: []PendingInvite{}, Removed: true}, `{"invitations":[],"removed":true}`},
+		{"not removed with no invites", MyInvitations{Invitations: []PendingInvite{}}, `{"invitations":[],"removed":false}`},
+		{"removed with an invite", MyInvitations{Invitations: []PendingInvite{item}, Removed: true},
+			`{"invitations":[{"id":"` + item.ID + `","workspace":"Eze Ltd","role":"preparer","inviter":null,"expires_at":"2026-10-14T09:30:00Z"}],"removed":true}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := apiDo(mux(c.in), context.Background(), http.MethodGet, "/v1/invitations/mine", "")
+			if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != c.want {
+				t.Errorf("answer = %d %s, want 200 %s", rec.Code, rec.Body, c.want)
+			}
+		})
+	}
+
+	rec := apiDo(func() http.Handler {
+		h := http.NewServeMux()
+		h.HandleFunc("GET /v1/invitations/mine", InvitationsMineStateHandler(func(context.Context) (MyInvitations, error) {
+			return MyInvitations{}, ErrAlreadyMember
+		}, nil))
+		return h
+	}(), context.Background(), http.MethodGet, "/v1/invitations/mine", "")
+	assertErrorBody(t, rec, http.StatusConflict, "you already belong to a workspace")
+}

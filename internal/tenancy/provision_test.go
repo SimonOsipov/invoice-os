@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -782,5 +783,181 @@ func TestProvision_SucceedsForAnIdentityRemovedElsewhere(t *testing.T) {
 	if err := r.super.QueryRow(ctx, `SELECT count(*) FROM memberships WHERE tenant_id = $1 AND user_id = $2 AND status = 'removed'`,
 		otherID, r.id.Subject).Scan(&removed); err != nil || removed != 1 {
 		t.Errorf("removed rows in the old workspace = %d (%v), want 1 untouched", removed, err)
+	}
+}
+
+// provisionAttempts counts the provision_workspace calls a traced pool sent.
+func provisionAttempts(tr *sqlTrace) int {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	n := 0
+	for _, s := range tr.stmts {
+		if strings.Contains(s.sql, "public.provision_workspace") {
+			n++
+		}
+	}
+	return n
+}
+
+// dropTenantsOf deletes every tenant the subject holds a row in, after the test.
+func dropTenantsOf(t *testing.T, super *pgxpool.Pool, subject string) {
+	t.Helper()
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(),
+			`DELETE FROM tenants WHERE id IN (SELECT tenant_id FROM memberships WHERE user_id = $1)`, subject)
+	})
+}
+
+// removedCreator is r after it provisioned its workspace and a second admin removed it.
+func removedCreator(t *testing.T) registrant {
+	t.Helper()
+	r := newRegistrant(t)
+	dropTenantsOf(t, r.super, r.id.Subject)
+	store := NewStore(r.app)
+	if _, _, err := store.ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "First Works", DisplayName: "Ada Creator"}); err != nil {
+		t.Fatalf("fixture: provision the first workspace: %v", err)
+	}
+	other := uuid.NewString()
+	seedIdentityMembership(t, r.super, r.tenantID, other, "admin", "active", strp("Bola Eze"), strp(other+"@members.test"))
+	admin := auth.WithIdentity(context.Background(), auth.Identity{Subject: other, Role: "authenticated", TenantID: r.tenantID})
+	if _, err := store.RemoveMember(admin, r.id.Subject); err != nil {
+		t.Fatalf("fixture: remove the creator: %v", err)
+	}
+	return r
+}
+
+func TestProvision_RemovedCreatorGetsANewWorkspace(t *testing.T) {
+	r := removedCreator(t)
+	before := imageOf(t, r.super, r.tenantID, r.id.Subject)
+	store, tr := tracedStore(t)
+	tenantsBefore := tenantCount(t, r.super)
+
+	tenant, subject, err := store.ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Second Works", DisplayName: "Ada Again"})
+	if err != nil {
+		t.Fatalf("ProvisionWorkspace for a removed creator: %v", err)
+	}
+	if subject != r.id.Subject {
+		t.Errorf("subject = %q, want the caller's %q", subject, r.id.Subject)
+	}
+	if _, perr := uuid.Parse(tenant.ID); perr != nil || tenant.ID == r.tenantID {
+		t.Fatalf("tenant id = %q, want a uuid other than the old workspace and uuidv5(subject) %s", tenant.ID, r.tenantID)
+	}
+	if tenant.Name != "Second Works" {
+		t.Errorf("tenant name = %q, want Second Works", tenant.Name)
+	}
+	if n := provisionAttempts(tr); n != 2 {
+		t.Errorf("provision_workspace calls = %d, want 2 (the derived id, then one random id)", n)
+	}
+	if got := tenantCount(t, r.super); got != tenantsBefore+1 {
+		t.Errorf("tenants %d -> %d, want exactly one more", tenantsBefore, got)
+	}
+
+	_, members := provisionedRows(t, r.super, tenant.ID)
+	if len(members) != 1 || members[0].UserID != r.id.Subject || members[0].Role != "admin" || members[0].Status != "active" {
+		t.Errorf("memberships in the new workspace = %+v, want the caller as its one active admin", members)
+	}
+	if n := len(provisionedEvents(t, r.super, tenant.ID)); n != 1 {
+		t.Errorf("workspace.provisioned rows in the new workspace = %d, want 1 (the failed first attempt wrote none)", n)
+	}
+	if after := imageOf(t, r.super, r.tenantID, r.id.Subject); after != before || after.Status != "removed" {
+		t.Errorf("old workspace row = %+v, want the removed row untouched (was %+v)", after, before)
+	}
+}
+
+func TestProvision_FreshIdentityKeepsTheDerivedID(t *testing.T) {
+	r := newRegistrant(t)
+	store, tr := tracedStore(t)
+
+	tenant, _, err := store.ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Fresh Works", DisplayName: "Ada"})
+	if err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
+	}
+	if want := uuid.NewSHA1(workspaceNamespace, []byte(r.id.Subject)).String(); tenant.ID != want {
+		t.Errorf("tenant id = %s, want uuidv5(subject) %s", tenant.ID, want)
+	}
+	if n := provisionAttempts(tr); n != 1 {
+		t.Errorf("provision_workspace calls = %d, want 1 (no retry on success)", n)
+	}
+}
+
+func TestProvision_LiveMemberIsNotRetried(t *testing.T) {
+	for _, status := range []string{"active", "suspended", "invited"} {
+		t.Run(status, func(t *testing.T) {
+			r := newRegistrant(t)
+			seedMembership(t, r.super, seedTenant(t, r.super, "Elsewhere "+status), r.id.Subject, "admin", status)
+			store, tr := tracedStore(t)
+			tenantsBefore := tenantCount(t, r.super)
+
+			_, _, err := store.ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Refused Works", DisplayName: "Ada"})
+			if !errors.Is(err, ErrAlreadyProvisioned) {
+				t.Fatalf("err = %v, want ErrAlreadyProvisioned", err)
+			}
+			if n := provisionAttempts(tr); n != 1 {
+				t.Errorf("provision_workspace calls = %d, want 1 (one_workspace_per_identity never retries)", n)
+			}
+			if got := tenantCount(t, r.super); got != tenantsBefore {
+				t.Errorf("tenants %d -> %d, want unchanged", tenantsBefore, got)
+			}
+		})
+	}
+}
+
+// Two provisions by a removed creator are held on the identity lock until both queue, so they overlap on every run.
+func TestProvision_ConcurrentRemovedCreatorProvisionsOnce(t *testing.T) {
+	r := removedCreator(t)
+	store := NewStore(r.app)
+	tenantsBefore := tenantCount(t, r.super)
+
+	release := holdIdentityLock(t, r.super, r.id.Subject)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, _, err := store.ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Race Works", DisplayName: "Ada"})
+			errs <- err
+		}()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for identityLockRequests(t, r.super, r.id.Subject, false) < 2 {
+		select {
+		case err := <-errs:
+			t.Fatalf("a provision returned while the identity lock was held (err %v)", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pg_locks shows %d queued requests on the identity key after 5 s, want 2", identityLockRequests(t, r.super, r.id.Subject, false))
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	release()
+
+	var created, refused int
+	for range 2 {
+		select {
+		case err := <-errs:
+			switch {
+			case err == nil:
+				created++
+			case errors.Is(err, ErrAlreadyProvisioned):
+				refused++
+			default:
+				t.Errorf("a provision failed with %v, want success or ErrAlreadyProvisioned", err)
+			}
+		case <-time.After(15 * time.Second):
+			t.Fatal("a provision did not return after the lock was released")
+		}
+	}
+	if created != 1 || refused != 1 {
+		t.Errorf("results: %d created, %d refused; want exactly 1 and 1", created, refused)
+	}
+	var live, all int
+	if err := r.super.QueryRow(context.Background(),
+		`SELECT count(*) FILTER (WHERE status <> 'removed'), count(*) FROM memberships WHERE user_id = $1`, r.id.Subject).Scan(&live, &all); err != nil {
+		t.Fatal(err)
+	}
+	if live != 1 || all != 2 {
+		t.Errorf("caller rows: %d live of %d, want 1 live of 2 (the removed row and one new)", live, all)
+	}
+	if got := tenantCount(t, r.super); got != tenantsBefore+1 {
+		t.Errorf("tenants %d -> %d, want exactly one more", tenantsBefore, got)
 	}
 }

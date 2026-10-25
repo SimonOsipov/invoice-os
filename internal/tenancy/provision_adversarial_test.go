@@ -240,3 +240,46 @@ func TestStoreProvisionWorkspace_RowsAreTenantIsolated(t *testing.T) {
 		t.Errorf("ListMemberships(A) = %+v, want only A", list)
 	}
 }
+
+// Pins the four sentences ProvisionHandler answers, so the checkName refactor cannot reword them.
+func TestProvisionHandler_NameSentences(t *testing.T) {
+	spy := &provisionSpy{fn: func(in ProvisionInput) (Tenant, string, error) {
+		return Tenant{ID: uuid.NewString(), Name: in.WorkspaceName, Kind: "firm"}, uuid.NewString(), nil
+	}}
+	body := func(field, value string) string {
+		b, err := json.Marshal(map[string]string{"workspace_name": "Acme Ltd", "display_name": "Ada", field: value})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	for _, field := range []string{"workspace_name", "display_name"} {
+		for _, c := range []struct{ name, value, msg string }{
+			{"blank", "   ", field + " must be 1 to 200 characters"},
+			{"201 runes", strings.Repeat("é", 201), field + " must be 1 to 200 characters"},
+			{"NUL byte", "a\x00b", field + " must not contain a NUL byte"},
+		} {
+			t.Run(field+"/"+c.name, func(t *testing.T) {
+				spy.calls = nil
+				rec, got := doProvision(t, spy.provision, body(field, c.value))
+				if rec.Code != http.StatusBadRequest {
+					t.Errorf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+				}
+				if msg := provisionErrorBody(t, got); msg != c.msg {
+					t.Errorf("error = %q, want %q", msg, c.msg)
+				}
+				if len(spy.calls) != 0 {
+					t.Errorf("provision called %d time(s), want 0", len(spy.calls))
+				}
+			})
+		}
+		// Control: 200 four-byte runes in the same field reach provision.
+		t.Run(field+"/200 four-byte runes", func(t *testing.T) {
+			spy.calls = nil
+			rec, _ := doProvision(t, spy.provision, body(field, strings.Repeat("😀", 200)))
+			if rec.Code != http.StatusCreated || len(spy.calls) != 1 {
+				t.Errorf("status %d, provision calls %d; want 201 and 1", rec.Code, len(spy.calls))
+			}
+		})
+	}
+}

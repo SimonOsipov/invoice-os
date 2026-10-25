@@ -64,7 +64,7 @@ func TestGoPins_RepoAgree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, df := range []string{"Dockerfile", "frontend/blog/Dockerfile"} {
+	for _, df := range []string{"Dockerfile", "frontend/blog/Dockerfile", "sidecar/auth/Dockerfile"} {
 		dockerfile, err := os.ReadFile(filepath.Join(root, df))
 		if err != nil {
 			t.Fatal(err)

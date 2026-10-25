@@ -431,14 +431,19 @@ func TestSubmissionMain_FatalOnGatewayURLError(t *testing.T) {
 	}
 }
 
-// The staff health read stays here; cmd/worker runs the sampler (TestWorkerMain_RunsTheHealthSampler).
+// The staff routes stay here; cmd/worker runs the sampler (TestWorkerMain_RunsTheHealthSampler).
 func TestSubmissionMain_RegistersTheStaffHealthRoute(t *testing.T) {
 	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse cmd/submission/main.go: %v", err)
 	}
-	var healthRoutes, routes int
-	var healthOnAppMux, healthHandlerOK bool
+	type reg struct {
+		onAppMux bool
+		handler  string
+		firstArg string
+	}
+	found := map[string][]reg{}
+	var routes int
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -449,25 +454,44 @@ func TestSubmissionMain_RegistersTheStaffHealthRoute(t *testing.T) {
 			return true
 		}
 		routes++
-		if lit, ok := call.Args[0].(*ast.BasicLit); ok && strings.Trim(lit.Value, `"`) == "GET /v1/staff/health" {
-			healthRoutes++
-			healthOnAppMux = wtRender(sel.X) == "app.Mux"
-			h, ok := call.Args[1].(*ast.CallExpr)
-			healthHandlerOK = ok && wtCallName(h.Fun) == "systemhealth.Handler"
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok {
+			return true
 		}
+		r := reg{onAppMux: wtRender(sel.X) == "app.Mux"}
+		if h, ok := call.Args[1].(*ast.CallExpr); ok {
+			r.handler = wtCallName(h.Fun)
+			if len(h.Args) > 0 {
+				r.firstArg = wtRender(h.Args[0])
+			}
+		}
+		pattern := strings.Trim(lit.Value, `"`)
+		found[pattern] = append(found[pattern], r)
 		return true
 	})
 	if routes < 5 {
 		t.Fatalf("control needle: %d HandleFunc call(s) found, want at least 5 -- the AST walk is broken", routes)
 	}
-	if healthRoutes != 1 {
-		t.Fatalf(`app.Mux.HandleFunc("GET /v1/staff/health", ...) registered %d time(s), want exactly 1`, healthRoutes)
-	}
-	if !healthOnAppMux {
-		t.Error("GET /v1/staff/health is not registered on app.Mux -- only app.Mux is served")
-	}
-	if !healthHandlerOK {
-		t.Error("GET /v1/staff/health's handler is not a systemhealth.Handler(...) call")
+	for _, want := range []struct{ route, handler, firstArg string }{
+		{"GET /v1/staff/health", "systemhealth.Handler", ""},
+		{"GET /v1/staff/metrics", "systemhealth.MetricsHandler", "healthStore.StaffCheck"},
+	} {
+		t.Run(want.route, func(t *testing.T) {
+			regs := found[want.route]
+			if len(regs) != 1 {
+				t.Fatalf("app.Mux.HandleFunc(%q, ...) registered %d time(s), want exactly 1", want.route, len(regs))
+			}
+			got := regs[0]
+			if !got.onAppMux {
+				t.Errorf("%s is not registered on app.Mux -- only app.Mux is served", want.route)
+			}
+			if got.handler != want.handler {
+				t.Errorf("%s's handler is %q, want a %s(...) call", want.route, got.handler, want.handler)
+			}
+			if want.firstArg != "" && got.firstArg != want.firstArg {
+				t.Errorf("%s's first argument is %q, want %s: the database staff check must be wired", want.route, got.firstArg, want.firstArg)
+			}
+		})
 	}
 }
 

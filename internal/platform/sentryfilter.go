@@ -23,6 +23,25 @@ var sentryHeaders = map[string]struct{}{
 	"X-Request-Id":   {},
 }
 
+// AuthService is the only service whose events may carry User.Email.
+const AuthService = "auth"
+
+// scrubAuthEvent is scrubEvent plus the affected user's email, when it is valid.
+func scrubAuthEvent(event *sentry.Event, hint *sentry.EventHint) *sentry.Event {
+	email := event.User.Email
+	event = scrubEvent(event, hint)
+	if validAuthEmail(email) {
+		event.User = sentry.User{Email: email}
+	}
+	return event
+}
+
+// validAuthEmail accepts one "@", no whitespace, no '"', at most 254 bytes.
+func validAuthEmail(s string) bool {
+	return len(s) <= 254 && strings.Count(s, "@") == 1 &&
+		!strings.ContainsFunc(s, unicode.IsSpace) && !strings.Contains(s, `"`)
+}
+
 // scrubEvent removes request data, queries, user identity and customer text
 // from an error event or transaction before it leaves for Sentry. It never
 // drops the event.

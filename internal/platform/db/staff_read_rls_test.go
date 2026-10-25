@@ -561,12 +561,20 @@ func TestRLS_StaffReaderPrivilegesAreSelectColumnsWithAPolicy(t *testing.T) {
 		t.Errorf("staff_audit_log has staff_reader policies %v, want none", ps)
 	}
 
-	wantHealth := []string{"fleet_status/SELECT", "job_counts/SELECT", "services_down/SELECT", "taken_at/SELECT"}
+	wantHealth := []string{"fleet_status/SELECT", "job_counts/SELECT", "kind_counts/SELECT", "services_down/SELECT", "taken_at/SELECT"}
 	if got := sortedCopy(grants["public.health_samples"]); !reflect.DeepEqual(got, wantHealth) {
 		t.Errorf("staff_reader grants on health_samples = %v, want exactly %v", got, wantHealth)
 	}
 	if ps := policies["public.health_samples"]; len(ps) != 0 {
 		t.Errorf("health_samples has staff_reader policies %v, want none", ps)
+	}
+
+	wantRiver := []string{"kind/SELECT", "state/SELECT"}
+	if got := sortedCopy(grants["public.river_job"]); !reflect.DeepEqual(got, wantRiver) {
+		t.Errorf("staff_reader grants on river_job = %v, want exactly %v (never args)", got, wantRiver)
+	}
+	if ps := policies["public.river_job"]; len(ps) != 0 {
+		t.Errorf("river_job has staff_reader policies %v, want none", ps)
 	}
 }
 

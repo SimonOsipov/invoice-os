@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/getsentry/sentry-go"
+	"github.com/google/uuid"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -32,7 +33,7 @@ func (errorReporter) HandlePanic(ctx context.Context, job *rivertype.JobRow, pan
 }
 
 // finalAttemptHub returns a scoped hub when this attempt ends the job and Sentry is on, else nil.
-// EncodedArgs and Errors stay out: the filter does not scrub raw JSON.
+// Only the tenant id is read from EncodedArgs; the rest and Errors stay out (the filter does not scrub raw JSON).
 func finalAttemptHub(job *rivertype.JobRow, class, trace string) *sentry.Hub {
 	if job.Attempt < job.MaxAttempts {
 		return nil
@@ -60,7 +61,26 @@ func finalAttemptHub(job *rivertype.JobRow, class, trace string) *sentry.Hub {
 	hub.ConfigureScope(func(scope *sentry.Scope) {
 		scope.SetFingerprint([]string{"river", class, job.Kind})
 		scope.SetTag("job_kind", job.Kind)
+		if id := tenantOf(job); id != "" {
+			scope.SetTag("tenant_id", id)
+		}
 		scope.SetContext("river", rc)
 	})
 	return hub
+}
+
+// tenantOf returns the job's tenant id, or "" when the args carry none or it is not a UUID.
+// The Sentry filter passes a tenant_id tag as is, so the UUID parse is the only guard on the value.
+func tenantOf(job *rivertype.JobRow) string {
+	var a struct {
+		TenantID string `json:"tenant_id"`
+	}
+	if json.Unmarshal(job.EncodedArgs, &a) != nil {
+		return ""
+	}
+	id, err := uuid.Parse(a.TenantID)
+	if err != nil {
+		return ""
+	}
+	return id.String()
 }

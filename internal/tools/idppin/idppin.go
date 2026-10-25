@@ -8,8 +8,8 @@ import (
 
 var digestRE = regexp.MustCompile(`@sha256:[0-9a-f]{64}$`)
 
-// ParsePin returns the image tag from the single digest-pinned, non-Docker-Hub
-// FROM line in dockerfile.
+// ParsePin returns the image tag from the digest-pinned, non-Docker-Hub supabase/auth
+// FROM line in dockerfile. That line must be unique and the last FROM.
 func ParsePin(dockerfile string) (string, error) {
 	var refs []string
 	for _, line := range strings.Split(dockerfile, "\n") {
@@ -26,10 +26,23 @@ func ParsePin(dockerfile string) (string, error) {
 		}
 		refs = append(refs, ref)
 	}
-	if len(refs) != 1 {
-		return "", fmt.Errorf("want exactly one FROM line, found %d", len(refs))
+	idx := -1
+	for i, r := range refs {
+		if !strings.Contains(r, "/supabase/auth:") && !strings.Contains(r, "/supabase/auth@") {
+			continue
+		}
+		if idx >= 0 {
+			return "", fmt.Errorf("want exactly one supabase/auth FROM line, found more")
+		}
+		idx = i
 	}
-	ref := refs[0]
+	if idx < 0 {
+		return "", fmt.Errorf("no supabase/auth FROM line among %d FROM lines", len(refs))
+	}
+	if idx != len(refs)-1 {
+		return "", fmt.Errorf("the supabase/auth FROM %q is not the last FROM", refs[idx])
+	}
+	ref := refs[idx]
 	if !digestRE.MatchString(ref) {
 		return "", fmt.Errorf("FROM %q is not pinned by a sha256 digest", ref)
 	}

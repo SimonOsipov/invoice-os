@@ -278,7 +278,7 @@ func TestIdpUpContainerConfiguration(t *testing.T) {
 			if r.code != 0 {
 				t.Fatalf("exit %d; stderr=%s", r.code, r.stderr)
 			}
-			if !strings.Contains(r.log, "docker build -q -f sidecar/auth/Dockerfile -t idp:ci sidecar/auth") {
+			if !strings.Contains(r.log, "docker build -q -f sidecar/auth/Dockerfile -t idp:ci .") {
 				t.Errorf("the committed Dockerfile was not built; stub log:\n%s", r.log)
 			}
 			ports := map[string]string{"idp-es256": "9991", "idp-hs256": "9992", "idp-rebuild": "9993", "idp-short": "9996"}
@@ -512,8 +512,8 @@ func TestIdpUpRefusesANonAuthAdminDSN(t *testing.T) {
 
 // plannedIdPFilter is the idp paths filter the plan lists; the job must run when any of them changes.
 var plannedIdPFilter = []string{
-	"sidecar/auth/**", "internal/platform/auth/**", "migrations/**", "db/**", "tools/prenv/**",
-	"internal/gateway/**", "internal/accountmail/**", "packages/design-tokens/v2/assets/**", "internal/tenancy/**", "internal/platform/*.go", "internal/platform/db/**",
+	"sidecar/auth/**", "cmd/authsentry/**", "internal/platform/auth/**", "migrations/**", "db/**", "tools/prenv/**",
+	"internal/gateway/**", "internal/accountmail/**", "packages/design-tokens/v2/assets/**", "internal/tenancy/**", "internal/platform/*.go", "internal/platform/**", "internal/platform/db/**",
 	"internal/tools/idppin/**", "scripts/ci/idp-*.sh", "Makefile", ".github/workflows/ci.yml", "go.mod", "go.sum",
 }
 

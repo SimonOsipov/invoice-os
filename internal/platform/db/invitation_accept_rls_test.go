@@ -859,3 +859,222 @@ func TestRLS_AcceptInvitationIsOwnedAndGrantedNarrowly(t *testing.T) {
 	}
 	assertExecuteOnlyForApp(t, acceptSig, s, "invoice_migrator")
 }
+
+const acceptNamedCall = `SELECT invitation_id::text, role FROM public.accept_invitation($1::uuid, $2::text, $3::uuid, $4::text, $5::text)`
+
+// acceptNamedAs calls the five-argument form; name may be nil for SQL NULL.
+func acceptNamedAs(ctx context.Context, guc, tenant, token, user, email string, name any) (id, role string, err error) {
+	err = db.WithinTenantTx(ctx, h.app, guc, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, acceptNamedCall, tenant, token, user, email, name).Scan(&id, &role)
+	})
+	return id, role, err
+}
+
+func wantDisplay(t *testing.T, got *string, want string) {
+	t.Helper()
+	if got == nil || *got != want {
+		t.Errorf("display_name = %v, want %q", got, want)
+	}
+}
+
+func TestRLS_AcceptInvitationNeverOverwritesALiveRowInTheSameTenant(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+
+	for _, status := range []string{"active", "suspended", "invited"} {
+		for _, form := range []string{"five-argument", "four-argument"} {
+			t.Run(status+"/"+form, func(t *testing.T) {
+				a := newNamedTenant(t, "Obi Partners")
+				user := uuid.NewString()
+				seedMemberRow(t, a, user, "preparer", status, "Old Name", "old@obi.test")
+				before := readMemberSnap(t, a, user)
+				token := newToken(t)
+				inviteID := seedAcceptInvite(t, a, "reviewer", invitedAddress, token)
+
+				var err error
+				if form == "five-argument" {
+					_, _, err = acceptNamedAs(ctx, a, a, token, user, invitedAddress, "New")
+				} else {
+					_, _, err = acceptAs(ctx, a, a, token, user, invitedAddress)
+				}
+
+				assertAcceptRefusal(t, "a "+status+" member accepting into their own tenant", err, "23505", guardConstraint)
+				if after := readMemberSnap(t, a, user); !reflect.DeepEqual(after, before) {
+					t.Errorf("row changed\n got: %+v\nwant: %+v", after, before)
+				}
+				if s := inviteStatus(t, inviteID); s != "pending" {
+					t.Errorf("invite status = %q, want pending", s)
+				}
+			})
+		}
+	}
+}
+
+func TestRLS_AcceptInvitationStoresTheDisplayName(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	a := newNamedTenant(t, "Obi Partners")
+	token := newToken(t)
+	inviteID := seedAcceptInvite(t, a, "reviewer", invitedAddress, token)
+	user := uuid.NewString()
+
+	gotID, gotRole, err := acceptNamedAs(ctx, a, a, token, user, invitedAddress, "  Ada Obi ")
+	if err != nil {
+		t.Fatalf("five-argument accept: want success, got %v", err)
+	}
+	if gotID != inviteID || gotRole != "reviewer" {
+		t.Errorf("returned (invitation_id, role) = (%s, %s), want (%s, reviewer)", gotID, gotRole, inviteID)
+	}
+	s := readMemberSnap(t, a, user)
+	wantDisplay(t, s.Display, "Ada Obi")
+	if s.Status != "active" || s.Role != "reviewer" {
+		t.Errorf("row (status, role) = (%s, %s), want (active, reviewer)", s.Status, s.Role)
+	}
+}
+
+func TestRLS_AcceptInvitationBlankNameStoresNull(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+
+	for _, c := range []struct {
+		name string
+		arg  any
+	}{{"blank", "   "}, {"empty", ""}, {"null", nil}} {
+		t.Run(c.name, func(t *testing.T) {
+			a := newNamedTenant(t, "Obi Partners")
+			token := newToken(t)
+			seedAcceptInvite(t, a, "reviewer", invitedAddress, token)
+			user := uuid.NewString()
+
+			if _, _, err := acceptNamedAs(ctx, a, a, token, user, invitedAddress, c.arg); err != nil {
+				t.Fatalf("five-argument accept: want success, got %v", err)
+			}
+
+			s := readMemberSnap(t, a, user)
+			if s.Display != nil {
+				t.Errorf("display_name = %q, want NULL", *s.Display)
+			}
+			if s.Status != "active" {
+				t.Errorf("status = %q, want active", s.Status)
+			}
+		})
+	}
+}
+
+func TestRLS_AcceptInvitationFourArgumentFormStillWorks(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	a := newNamedTenant(t, "Obi Partners")
+	token := newToken(t)
+	seedAcceptInvite(t, a, "reviewer", invitedAddress, token)
+	user := uuid.NewString()
+
+	if _, _, err := acceptAs(ctx, a, a, token, user, invitedAddress); err != nil {
+		t.Fatalf("four-argument accept: want success, got %v", err)
+	}
+
+	s := readMemberSnap(t, a, user)
+	if s.Status != "active" || s.Display != nil {
+		t.Errorf("row (status, display_name) = (%s, %v), want (active, NULL)", s.Status, s.Display)
+	}
+	if _, ok := readProc(t, "public.accept_invitation(uuid, text, uuid, text, text)"); !ok {
+		t.Error("the five-argument overload does not exist, so the four-argument form has nothing to delegate to")
+	}
+}
+
+// Wrong GUC beats a bad token, which beats a membership elsewhere, which beats an email mismatch.
+func TestRLS_AcceptInvitationRefusalOrderUnchanged(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	a, b, c := newNamedTenant(t, "Obi Partners"), newNamedTenant(t, "Other Firm"), newNamedTenant(t, "Third Firm")
+	token := newToken(t)
+	inviteID := seedAcceptInvite(t, a, "reviewer", invitedAddress, token)
+	user := uuid.NewString()
+	seedMemberRow(t, c, user, "preparer", "active", nil, nil)
+
+	_, _, err := acceptNamedAs(ctx, b, a, "no-such-token", user, "other@obi.test", "Ada")
+	assertPgRefusal(t, "wrong GUC, bad token, active elsewhere", err, "42501", "row-level security")
+
+	_, _, err = acceptNamedAs(ctx, a, a, "no-such-token", user, "other@obi.test", "Ada")
+	assertAcceptRefusal(t, "bad token, active elsewhere, wrong email", err, "P0002", notValidName)
+
+	_, _, err = acceptNamedAs(ctx, a, a, token, user, "other@obi.test", "Ada")
+	assertAcceptRefusal(t, "good token, active elsewhere, wrong email", err, "23505", guardConstraint)
+
+	other := uuid.NewString()
+	_, _, err = acceptNamedAs(ctx, a, a, token, other, "other@obi.test", "Ada")
+	assertAcceptRefusal(t, "good token, no membership, wrong email", err, "P0001", emailMismatchKey)
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, a); n != 0 {
+		t.Errorf("memberships in A = %d, want 0", n)
+	}
+	if s := inviteStatus(t, inviteID); s != "pending" {
+		t.Errorf("invite status = %q, want pending", s)
+	}
+}
+
+func TestRLS_AcceptInvitationRevivesARemovedRow(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	a := newNamedTenant(t, "Obi Partners")
+	user := uuid.NewString()
+	seedMemberRow(t, a, user, "preparer", "removed", "Ada", "old@obi.test")
+	before := readMemberSnap(t, a, user)
+	token := newToken(t)
+	inviteID := seedAcceptInvite(t, a, "reviewer", invitedAddress, token)
+
+	gotID, gotRole, err := acceptNamedAs(ctx, a, a, token, user, invitedAddress, nil)
+	if err != nil {
+		t.Fatalf("accept into the tenant that removed the caller: want success, got %v", err)
+	}
+	if gotID != inviteID || gotRole != "reviewer" {
+		t.Errorf("returned (invitation_id, role) = (%s, %s), want (%s, reviewer)", gotID, gotRole, inviteID)
+	}
+
+	if n := mustCount(t, h.super, `SELECT count(*) FROM memberships WHERE tenant_id = $1 AND user_id = $2`, a, user); n != 1 {
+		t.Fatalf("rows for the user in A = %d, want 1", n)
+	}
+	s := readMemberSnap(t, a, user)
+	if s.ID != before.ID {
+		t.Errorf("id = %s, want the same row %s", s.ID, before.ID)
+	}
+	if s.Status != "active" || s.Role != "reviewer" {
+		t.Errorf("(status, role) = (%s, %s), want (active, reviewer)", s.Status, s.Role)
+	}
+	if s.Email == nil || *s.Email != invitedAddress {
+		t.Errorf("email = %v, want the invite's %q", s.Email, invitedAddress)
+	}
+	wantDisplay(t, s.Display, "Ada")
+	if s.AllClients {
+		t.Error("all_clients = true, want it reset to false (D15)")
+	}
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM memberships WHERE id = $1 AND created_at > now() - interval '1 minute'`, s.ID); n != 1 {
+		t.Errorf("created_at = %s, want it advanced to now (was %s)", s.CreatedAt, before.CreatedAt)
+	}
+	if st := inviteStatus(t, inviteID); st != "accepted" {
+		t.Errorf("invite status = %q, want accepted", st)
+	}
+}
+
+func TestRLS_AcceptInvitationRefusesARemovedUserActiveElsewhere(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	a, u := newNamedTenant(t, "Obi Partners"), newNamedTenant(t, "Other Firm")
+	user := uuid.NewString()
+	seedMemberRow(t, a, user, "preparer", "removed", "Ada", "old@obi.test")
+	seedMemberRow(t, u, user, "preparer", "active", "Ada", "old@obi.test")
+	before := readMemberSnap(t, a, user)
+	token := newToken(t)
+	inviteID := seedAcceptInvite(t, a, "reviewer", invitedAddress, token)
+
+	_, _, err := acceptNamedAs(ctx, a, a, token, user, invitedAddress, nil)
+
+	assertAcceptRefusal(t, "a removed user who is active elsewhere", err, "23505", guardConstraint)
+	if after := readMemberSnap(t, a, user); !reflect.DeepEqual(after, before) {
+		t.Errorf("the removed row changed\n got: %+v\nwant: %+v", after, before)
+	}
+	if st := inviteStatus(t, inviteID); st != "pending" {
+		t.Errorf("invite status = %q, want pending", st)
+	}
+}

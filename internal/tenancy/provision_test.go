@@ -752,3 +752,35 @@ func TestAuditRead_AnotherWorkspaceAdminCannotReadTheProvisionedEvent(t *testing
 		t.Errorf("B filtering by A's subject reads %d events, want 0", len(byActor.Events))
 	}
 }
+
+func TestProvision_SucceedsForAnIdentityRemovedElsewhere(t *testing.T) {
+	r := newRegistrant(t)
+	ctx := context.Background()
+	otherID := uuid.NewString()
+	if _, err := r.super.Exec(ctx, `INSERT INTO tenants (id, name) VALUES ($1, 'Removed From')`, otherID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() { _, _ = r.super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, otherID) })
+	if _, err := r.super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'preparer', 'removed')`,
+		otherID, r.id.Subject); err != nil {
+		t.Fatalf("seed a removed membership: %v", err)
+	}
+
+	tenant, _, err := NewStore(r.app).ProvisionWorkspace(r.ctx(), ProvisionInput{WorkspaceName: "Second Chance Ltd", DisplayName: "Ada"})
+	if err != nil {
+		t.Fatalf("ProvisionWorkspace for a removed-only identity: %v", err)
+	}
+	if tenant.ID != r.tenantID {
+		t.Errorf("tenant id = %s, want %s", tenant.ID, r.tenantID)
+	}
+	_, members := provisionedRows(t, r.super, r.tenantID)
+	if len(members) != 1 || members[0].UserID != r.id.Subject || members[0].Role != "admin" || members[0].Status != "active" {
+		t.Errorf("memberships in the new workspace = %+v, want one active admin row for the caller", members)
+	}
+	var removed int
+	if err := r.super.QueryRow(ctx, `SELECT count(*) FROM memberships WHERE tenant_id = $1 AND user_id = $2 AND status = 'removed'`,
+		otherID, r.id.Subject).Scan(&removed); err != nil || removed != 1 {
+		t.Errorf("removed rows in the old workspace = %d (%v), want 1 untouched", removed, err)
+	}
+}

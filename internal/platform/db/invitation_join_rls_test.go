@@ -914,3 +914,197 @@ func TestRLS_JoinMigrationDownRemovesFunctionsAndGrantsThenReapplies(t *testing.
 		t.Errorf("after Up again: functions=%d grants=%d, want 2 3", fns, grants)
 	}
 }
+
+const acceptByIDNamedCall = `SELECT invitation_id::text, role FROM public.accept_invitation_by_id($1::uuid, $2::uuid, $3::uuid, $4::text, $5::text)`
+
+// acceptByIDNamedAs calls the five-argument form; name may be nil for SQL NULL.
+func acceptByIDNamedAs(ctx context.Context, guc, tenant, invite, user, email string, name any) (id, role string, err error) {
+	err = inAppTx(ctx, guc, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, acceptByIDNamedCall, tenant, invite, user, email, name).Scan(&id, &role)
+	})
+	return id, role, err
+}
+
+func TestRLS_PendingInvitesListForARemovedOnlyIdentity(t *testing.T) {
+	requireHarness(t)
+	addr := uniqueAddr("tunde")
+	t1, t2 := newNamedTenant(t, "Obi Partners"), newNamedTenant(t, "Other Firm")
+	user := uuid.NewString()
+	seedMemberRow(t, t1, user, "preparer", "removed", "Ada", "old@obi.test")
+	toOther := seedJoinInvite(t, t2, "reviewer", addr, `now() + interval '1 day'`, "")
+
+	t.Run("invite to another workspace", func(t *testing.T) {
+		got := pendingForUser(t, "", addr, user)
+		if len(got) != 1 || got[0].id != toOther {
+			t.Errorf("rows = %v, want exactly [%s]", idsOf(got), toOther)
+		}
+	})
+	t.Run("invite back to the removing workspace", func(t *testing.T) {
+		back := seedJoinInvite(t, t1, "reviewer", addr, `now() + interval '2 days'`, "")
+		got := pendingForUser(t, "", addr, user)
+		if want := []string{toOther, back}; !reflect.DeepEqual(idsOf(got), want) {
+			t.Errorf("rows = %v, want %v in expiry order", idsOf(got), want)
+		}
+	})
+}
+
+// Any non-removed row blocks the list; the removed-plus-suspended case keeps the filter from collapsing to "ignore everything".
+func TestRLS_PendingInvitesStayEmptyForASuspendedIdentity(t *testing.T) {
+	requireHarness(t)
+	addr := uniqueAddr("tunde")
+	t1, t2, t3 := newNamedTenant(t, "Obi Partners"), newNamedTenant(t, "Other Firm"), newNamedTenant(t, "Third Firm")
+	invite := seedJoinInvite(t, t2, "reviewer", addr, `now() + interval '1 day'`, "")
+	if got := pendingForUser(t, "", addr, uuid.NewString()); len(got) != 1 || got[0].id != invite {
+		t.Fatalf("control: a user with no row sees %v, want [%s]", idsOf(got), invite)
+	}
+
+	for _, status := range []string{"suspended", "active", "invited"} {
+		user := uuid.NewString()
+		seedMemberRow(t, t3, user, "preparer", status, nil, nil)
+		if got := pendingForUser(t, "", addr, user); len(got) != 0 {
+			t.Errorf("%s row: rows = %v, want none", status, idsOf(got))
+		}
+	}
+	user := uuid.NewString()
+	seedMemberRow(t, t1, user, "preparer", "removed", nil, nil)
+	seedMemberRow(t, t3, user, "preparer", "suspended", nil, nil)
+	if got := pendingForUser(t, "", addr, user); len(got) != 0 {
+		t.Errorf("removed here, suspended there: rows = %v, want none", idsOf(got))
+	}
+}
+
+func TestRLS_AcceptInvitationByIDStoresTheDisplayName(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+
+	for _, c := range []struct {
+		name string
+		call func(a, invite, user, addr string) error
+		want *string
+	}{
+		{"trimmed", func(a, invite, user, addr string) error {
+			_, _, err := acceptByIDNamedAs(ctx, a, a, invite, user, addr, "  Ada Obi ")
+			return err
+		}, ptr("Ada Obi")},
+		{"blank", func(a, invite, user, addr string) error {
+			_, _, err := acceptByIDNamedAs(ctx, a, a, invite, user, addr, "   ")
+			return err
+		}, nil},
+		{"null", func(a, invite, user, addr string) error {
+			_, _, err := acceptByIDNamedAs(ctx, a, a, invite, user, addr, nil)
+			return err
+		}, nil},
+		{"four-argument form", func(a, invite, user, addr string) error {
+			_, _, err := acceptByIDAs(ctx, a, a, invite, user, addr)
+			return err
+		}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a := newNamedTenant(t, "Obi Partners")
+			addr := uniqueAddr("tunde")
+			invite := seedJoinInvite(t, a, "reviewer", addr, `now() + interval '1 day'`, "")
+			user := uuid.NewString()
+
+			if err := c.call(a, invite, user, addr); err != nil {
+				t.Fatalf("accept by id: want success, got %v", err)
+			}
+
+			s := readMemberSnap(t, a, user)
+			if s.Status != "active" {
+				t.Errorf("status = %q, want active", s.Status)
+			}
+			if c.want == nil && s.Display != nil {
+				t.Errorf("display_name = %q, want NULL", *s.Display)
+			}
+			if c.want != nil {
+				wantDisplay(t, s.Display, *c.want)
+			}
+		})
+	}
+}
+
+func TestRLS_AcceptInvitationByIDNeverOverwritesALiveRowInTheSameTenant(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+
+	for _, status := range []string{"active", "suspended", "invited"} {
+		for _, form := range []string{"five-argument", "four-argument"} {
+			t.Run(status+"/"+form, func(t *testing.T) {
+				a := newNamedTenant(t, "Obi Partners")
+				addr := uniqueAddr("tunde")
+				user := uuid.NewString()
+				seedMemberRow(t, a, user, "preparer", status, "Old Name", "old@obi.test")
+				before := readMemberSnap(t, a, user)
+				invite := seedJoinInvite(t, a, "reviewer", addr, `now() + interval '1 day'`, "")
+
+				var err error
+				if form == "five-argument" {
+					_, _, err = acceptByIDNamedAs(ctx, a, a, invite, user, addr, "New")
+				} else {
+					_, _, err = acceptByIDAs(ctx, a, a, invite, user, addr)
+				}
+
+				assertAcceptRefusal(t, "a "+status+" member accepting into their own tenant", err, "23505", guardConstraint)
+				if after := readMemberSnap(t, a, user); !reflect.DeepEqual(after, before) {
+					t.Errorf("row changed\n got: %+v\nwant: %+v", after, before)
+				}
+				if s := inviteStatus(t, invite); s != "pending" {
+					t.Errorf("invite status = %q, want pending", s)
+				}
+			})
+		}
+	}
+}
+
+func TestRLS_AcceptInvitationByIDRevivesARemovedRowWithANewName(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+
+	for _, c := range []struct {
+		name string
+		arg  any
+		want string
+	}{{"new name", "Ada Obi", "Ada Obi"}, {"no name keeps the old one", nil, "Ada"}} {
+		t.Run(c.name, func(t *testing.T) {
+			a := newNamedTenant(t, "Obi Partners")
+			addr := uniqueAddr("tunde")
+			user := uuid.NewString()
+			seedMemberRow(t, a, user, "preparer", "removed", "Ada", "old@obi.test")
+			before := readMemberSnap(t, a, user)
+			invite := seedJoinInvite(t, a, "reviewer", addr, `now() + interval '1 day'`, "")
+
+			gotID, gotRole, err := acceptByIDNamedAs(ctx, a, a, invite, user, addr, c.arg)
+			if err != nil {
+				t.Fatalf("accept by id into the tenant that removed the caller: want success, got %v", err)
+			}
+			if gotID != invite || gotRole != "reviewer" {
+				t.Errorf("returned (invitation_id, role) = (%s, %s), want (%s, reviewer)", gotID, gotRole, invite)
+			}
+
+			if n := mustCount(t, h.super, `SELECT count(*) FROM memberships WHERE tenant_id = $1 AND user_id = $2`, a, user); n != 1 {
+				t.Fatalf("rows for the user in A = %d, want 1", n)
+			}
+			s := readMemberSnap(t, a, user)
+			if s.ID != before.ID {
+				t.Errorf("id = %s, want the same row %s", s.ID, before.ID)
+			}
+			if s.Status != "active" || s.Role != "reviewer" {
+				t.Errorf("(status, role) = (%s, %s), want (active, reviewer)", s.Status, s.Role)
+			}
+			if s.Email == nil || *s.Email != addr {
+				t.Errorf("email = %v, want the invite's %q", s.Email, addr)
+			}
+			wantDisplay(t, s.Display, c.want)
+			if s.AllClients {
+				t.Error("all_clients = true, want it reset to false (D15)")
+			}
+			if n := mustCount(t, h.super,
+				`SELECT count(*) FROM memberships WHERE id = $1 AND created_at > now() - interval '1 minute'`, s.ID); n != 1 {
+				t.Errorf("created_at = %s, want it advanced to now (was %s)", s.CreatedAt, before.CreatedAt)
+			}
+			if st := inviteStatus(t, invite); st != "accepted" {
+				t.Errorf("invite status = %q, want accepted", st)
+			}
+		})
+	}
+}

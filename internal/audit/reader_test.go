@@ -342,7 +342,7 @@ func TestAuditScopeOf_CustomerEventsAreWorkspace(t *testing.T) {
 // For the five unattributed names this is a DRIFT GUARD, not evidence of their scope:
 // rule 3 answers identically for extraction.succeeded and for an event nobody ever named
 // (TestAuditScopeOf_UnknownEventFallsBackToUnattributedNotWorkspace pins that fallback).
-func TestAuditScopeOf_MatchesTheTwentySevenEventsTheTriggerLeavesNull(t *testing.T) {
+func TestAuditScopeOf_MatchesTheEventsTheTriggerLeavesNull(t *testing.T) {
 	ruleD := triggerRuleDPayloads(uuid.NewString())
 	if len(ruleD) != 28 {
 		t.Fatalf("rule-D payload map holds %d events, want 28", len(ruleD))

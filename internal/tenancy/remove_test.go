@@ -490,10 +490,12 @@ func TestRemoveMemberHandler_RefusalsAndLogsCarryNoNameOrEmail(t *testing.T) {
 		return &auth.Identity{Subject: u, Role: "authenticated", TenantID: tenant}
 	}
 
-	var bodies []string
+	var refusals []string
 	step := func(label string, rec *httptest.ResponseRecorder, want int) {
 		t.Helper()
-		bodies = append(bodies, rec.Body.String())
+		if rec.Code >= 400 {
+			refusals = append(refusals, rec.Body.String())
+		}
 		if rec.Code != want {
 			t.Errorf("%s: status = %d, want %d", label, rec.Code, want)
 		}
@@ -502,7 +504,12 @@ func TestRemoveMemberHandler_RefusalsAndLogsCarryNoNameOrEmail(t *testing.T) {
 	step("sole admin removes self", removeViaMux(t, store.RemoveMember, logger, idOf(ada), ada), 409)
 
 	seedMembership(t, super, tenant, boss, "admin", "active")
-	step("second admin removes Ada", removeViaMux(t, store.RemoveMember, logger, idOf(boss), ada), 200)
+	ok := removeViaMux(t, store.RemoveMember, logger, idOf(boss), ada)
+	step("second admin removes Ada", ok, 200)
+	// The 200 keeps the name and clears the email (AC 1); it is a control, not a leak.
+	if !strings.Contains(ok.Body.String(), adaName) || strings.Contains(ok.Body.String(), adaEmail) {
+		t.Error("the 200 body must carry the kept name and no email")
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("PATCH /v1/memberships/{user_id}", SetMembershipStatusHandler(store.SetMembershipStatus, logger))
 	r := httptest.NewRequest("PATCH", "/v1/memberships/"+ada, strings.NewReader(`{"status":"active"}`))
@@ -524,10 +531,14 @@ func TestRemoveMemberHandler_RefusalsAndLogsCarryNoNameOrEmail(t *testing.T) {
 		t.Fatal("the 500 wrote no log line, so the absence checks below read nothing")
 	}
 
-	all := strings.ToLower(logs.String() + strings.Join(bodies, "\n"))
+	if len(refusals) != 4 {
+		t.Fatalf("scanned %d refusal bodies, want 4 (403, 409, 409, 500)", len(refusals))
+	}
+	// Refusal bodies and every log line, the 200 step's included, carry neither value.
+	scanned := strings.ToLower(logs.String() + strings.Join(refusals, "\n"))
 	for _, needle := range []string{adaName, adaEmail} {
-		if strings.Contains(all, strings.ToLower(needle)) {
-			t.Errorf("a response body or log line carries the fixture name or address %q", needle[:3]+"...")
+		if strings.Contains(scanned, strings.ToLower(needle)) {
+			t.Errorf("a refusal body or log line carries the fixture name or address %q", needle[:3]+"...")
 		}
 	}
 }

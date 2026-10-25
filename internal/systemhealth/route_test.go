@@ -25,7 +25,23 @@ import (
 const (
 	routeGatewayToken = "systemhealth-route-test-gateway-token"
 	forbiddenBody     = `{"error":"forbidden"}`
+	healthPath        = "/v1/staff/health"
+	metricsPath       = "/v1/staff/metrics?range=1h"
 )
+
+// routePaths are the staff routes whose caller tables run once per path.
+var routePaths = []struct{ name, path string }{{"health", healthPath}, {"metrics", metricsPath}}
+
+func forEachRoute(t *testing.T, run func(t *testing.T, path string)) {
+	t.Helper()
+	for _, p := range routePaths {
+		t.Run(p.name, func(t *testing.T) { run(t, p.path) })
+	}
+}
+
+func routeMetrics() Metrics {
+	return Metrics{Range: "1h", StepSeconds: 60, ConnectionBudget: ConnectionBudget, Panels: []PanelData{{Key: "route-test", Unit: "count", Available: true, Series: []Series{}}}}
+}
 
 func routeFleet() gateway.FleetHealth {
 	up, down := true, false
@@ -36,8 +52,9 @@ func routeFleet() gateway.FleetHealth {
 }
 
 type healthRig struct {
-	h     http.Handler
-	loads atomic.Int32
+	h       http.Handler
+	loads   atomic.Int32 // the database read or staff check ran
+	sources atomic.Int32 // the metrics source ran
 }
 
 // newHealthRig serves the route through a gateway-guarded platform.App over the real store.
@@ -54,10 +71,17 @@ func newHealthRigWith(t *testing.T, store *Store, fleet FleetReader, now func() 
 		t.Fatal(err)
 	}
 	rig := &healthRig{}
-	app.Mux.HandleFunc("GET /v1/staff/health", Handler(func(ctx context.Context, since time.Time) (map[string]int64, []Sample, error) {
+	app.Mux.HandleFunc("GET /v1/staff/health", Handler(func(ctx context.Context, since time.Time) (Live, []Sample, error) {
 		rig.loads.Add(1)
 		return store.StaffSnapshot(ctx, since)
 	}, fleet, now, slog.Default()))
+	app.Mux.HandleFunc("GET /v1/staff/metrics", MetricsHandler(func(ctx context.Context) error {
+		rig.loads.Add(1)
+		return store.StaffCheck(ctx)
+	}, func(context.Context, string, string) (Metrics, error) {
+		rig.sources.Add(1)
+		return routeMetrics(), nil
+	}, slog.Default()))
 	app.RequireGateway(routeGatewayToken)
 	rig.h = app.Handler()
 	return rig
@@ -69,13 +93,13 @@ type healthCaller struct {
 	staff           bool
 }
 
-func (rig *healthRig) get(c healthCaller) *httptest.ResponseRecorder {
-	return rig.do(http.MethodGet, routeGatewayToken, c)
+func (rig *healthRig) get(path string, c healthCaller) *httptest.ResponseRecorder {
+	return rig.do(http.MethodGet, path, routeGatewayToken, c)
 }
 
 // do sends one request; an empty token sends no gateway token header.
-func (rig *healthRig) do(method, token string, c healthCaller) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(method, "/v1/staff/health", nil)
+func (rig *healthRig) do(method, path, token string, c healthCaller) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(method, path, nil)
 	if token != "" {
 		r.Header.Set(platform.HeaderGatewayToken, token)
 	}
@@ -117,7 +141,7 @@ func TestStaffHealthRoute_ReturnsFleetCountsAndDepth(t *testing.T) {
 	rig := newHealthRig(t, &Store{Pool: app}, fleet)
 	wantRaw, _ := json.Marshal(fleet) // before serving: the handler shares the fake's slice
 
-	rec := rig.get(healthCaller{subject: houseMember(t, super), staff: true})
+	rec := rig.get(healthPath, healthCaller{subject: houseMember(t, super), staff: true})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d %q, want 200", rec.Code, rec.Body.String())
 	}
@@ -164,6 +188,26 @@ func TestStaffHealthRoute_ReturnsFleetCountsAndDepth(t *testing.T) {
 	}
 }
 
+func TestStaffHealthRoute_ServesRiverJobs(t *testing.T) {
+	super, app := dbTestPools(t)
+	seedRiverJobs(t, super, "shtest_"+uuid.NewString()[:8], "available", 1)
+	rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
+	rec := rig.get(healthPath, healthCaller{subject: houseMember(t, super), staff: true})
+	wantStatus(t, rec, http.StatusOK)
+	var body struct {
+		RiverJobs JobView `json:"river_jobs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if got := sortedKeys(body.RiverJobs.Services); !slices.Equal(got, []string{"notifications", "submission", "worker"}) {
+		t.Errorf("river_jobs.services keys = %v", got)
+	}
+	if body.RiverJobs.Total.QueueDepth < 1 {
+		t.Errorf("river_jobs.total.queue_depth = %d, want >= 1", body.RiverJobs.Total.QueueDepth)
+	}
+}
+
 func TestStaffHealthRoute_TrendIsTheLastSevenDays(t *testing.T) {
 	super, app := dbTestPools(t)
 	rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
@@ -190,7 +234,7 @@ func TestStaffHealthRoute_TrendIsTheLastSevenDays(t *testing.T) {
 		})
 	}
 
-	rec := rig.get(healthCaller{subject: houseMember(t, super), staff: true})
+	rec := rig.get(healthPath, healthCaller{subject: houseMember(t, super), staff: true})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d %q, want 200", rec.Code, rec.Body.String())
 	}
@@ -229,62 +273,73 @@ func TestStaffHealthRoute_TrendIsTheLastSevenDays(t *testing.T) {
 	}
 }
 
-// Regression pin, green at head: platform.App refuses these callers before the handler runs.
+// platform.App refuses these callers before the handler runs.
 func TestStaffHealthRoute_RefusesEveryNonStaffCaller(t *testing.T) {
 	super, app := dbTestPools(t)
-	rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
 	custSubject := customerMember(t, super)
 	custTenant := memberTenant(t, super, custSubject)
 	houseSubject := houseMember(t, super)
-
-	for name, c := range map[string]healthCaller{
+	callers := map[string]healthCaller{
 		"customer":                    {subject: custSubject, tenant: custTenant},
 		"tenant-less, not staff":      {subject: custSubject},
 		"no identity":                 {},
 		"house member, no staff flag": {subject: houseSubject},
-	} {
-		t.Run(name, func(t *testing.T) { wantForbidden(t, rig.get(c)) })
 	}
-	if got := rig.loads.Load(); got != 0 {
-		t.Errorf("loader called %d times for non-staff callers, want 0", got)
-	}
-	// Control: a staff caller passes the platform, so the 403s above are not a missing route. The 200 is asserted in ReturnsFleetCountsAndDepth.
-	if rec := rig.get(healthCaller{subject: houseSubject, staff: true}); rec.Code == http.StatusForbidden || rec.Code == http.StatusNotFound || rec.Code == http.StatusUnauthorized {
-		t.Fatalf("house member control = %d %q, want it past the platform guard", rec.Code, rec.Body.String())
-	}
+
+	forEachRoute(t, func(t *testing.T, path string) {
+		rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
+		for name, c := range callers {
+			t.Run(name, func(t *testing.T) { wantForbidden(t, rig.get(path, c)) })
+		}
+		if loads, sources := rig.loads.Load(), rig.sources.Load(); loads != 0 || sources != 0 {
+			t.Errorf("check ran %d time(s), metrics source %d, for non-staff callers, want 0 and 0", loads, sources)
+		}
+		// Control: a staff caller passes the platform and reaches the handler, so the 403s above are not a missing route.
+		if rec := rig.get(path, healthCaller{subject: houseSubject, staff: true}); rec.Code != http.StatusOK || rig.loads.Load() != 1 {
+			t.Fatalf("house member control = %d %q, loads %d, want 200 and 1", rec.Code, rec.Body.String(), rig.loads.Load())
+		}
+	})
 }
 
 // The staff header is a claim: the database function re-checks the subject.
 func TestStaffHealthRoute_RefusesAForgedOrSuspendedStaffCaller(t *testing.T) {
 	super, app := dbTestPools(t)
-	rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
 	custSubject := customerMember(t, super)
 	custTenant := memberTenant(t, super, custSubject)
 	house := adoptHouseTenant(t, super)
 	suspended := seedMember(t, super, house, "suspended")
 	invited := seedMember(t, super, house, "invited")
-
-	for name, c := range map[string]healthCaller{
+	callers := map[string]healthCaller{
 		"customer-only member, tenant-bearing":   {subject: custSubject, tenant: custTenant, staff: true},
 		"customer-only member, tenant-less":      {subject: custSubject, staff: true},
 		"suspended house member":                 {subject: suspended, staff: true},
 		"invited house member":                   {subject: invited, staff: true},
 		"suspended house member, tenant-bearing": {subject: suspended, tenant: house, staff: true},
 		"unknown subject":                        {subject: uuid.NewString(), staff: true},
-	} {
-		t.Run(name, func(t *testing.T) { wantForbidden(t, rig.get(c)) })
 	}
-	if got := rig.loads.Load(); got != 6 {
-		t.Errorf("loader called %d times, want 6: the refusal must come from the database function, not the platform", got)
-	}
-	if rec := rig.get(healthCaller{subject: houseMember(t, super), staff: true}); rec.Code != http.StatusOK {
-		t.Errorf("house member control = %d %q, want 200", rec.Code, rec.Body.String())
-	}
+
+	forEachRoute(t, func(t *testing.T, path string) {
+		rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
+		if len(callers) == 0 {
+			t.Fatal("no callers to refuse")
+		}
+		for name, c := range callers {
+			t.Run(name, func(t *testing.T) { wantForbidden(t, rig.get(path, c)) })
+		}
+		if got := rig.loads.Load(); int(got) != len(callers) {
+			t.Errorf("check ran %d times, want %d: the refusal must come from the database function, not the platform", got, len(callers))
+		}
+		if got := rig.sources.Load(); got != 0 {
+			t.Errorf("metrics source ran %d times for refused callers, want 0", got)
+		}
+		if rec := rig.get(path, healthCaller{subject: houseMember(t, super), staff: true}); rec.Code != http.StatusOK {
+			t.Errorf("house member control = %d %q, want 200", rec.Code, rec.Body.String())
+		}
+	})
 }
 
 func TestStaffHealthRoute_WritesNothing(t *testing.T) {
 	super, app := dbTestPools(t)
-	rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
 	subject := houseMember(t, super)
 	count := func(query string, args ...any) int {
 		t.Helper()
@@ -296,51 +351,158 @@ func TestStaffHealthRoute_WritesNothing(t *testing.T) {
 	}
 	audits := func() int { return count(`SELECT count(*) FROM audit_log WHERE actor = $1`, subject) }
 	samples := func() int { return count(`SELECT count(*) FROM public.health_samples`) }
-	auditsBefore, samplesBefore := audits(), samples()
 
-	for i := range 2 {
-		if rec := rig.get(healthCaller{subject: subject, staff: true}); rec.Code != http.StatusOK {
-			t.Fatalf("read %d = %d %q, want 200", i, rec.Code, rec.Body.String())
+	forEachRoute(t, func(t *testing.T, path string) {
+		rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
+		auditsBefore, samplesBefore := audits(), samples()
+		for i := range 2 {
+			if rec := rig.get(path, healthCaller{subject: subject, staff: true}); rec.Code != http.StatusOK {
+				t.Fatalf("read %d = %d %q, want 200", i, rec.Code, rec.Body.String())
+			}
 		}
-	}
-	if got := audits(); got != auditsBefore {
-		t.Errorf("audit_log rows for the caller: %d -> %d, want unchanged", auditsBefore, got)
-	}
-	if got := samples(); got != samplesBefore {
-		t.Errorf("health_samples rows: %d -> %d, want unchanged", samplesBefore, got)
-	}
+		if got := rig.loads.Load(); got != 2 {
+			t.Fatalf("check ran %d times for 2 reads, want 2: the reads did not reach the database", got)
+		}
+		if got := audits(); got != auditsBefore {
+			t.Errorf("audit_log rows for the caller: %d -> %d, want unchanged", auditsBefore, got)
+		}
+		if got := samples(); got != samplesBefore {
+			t.Errorf("health_samples rows: %d -> %d, want unchanged", samplesBefore, got)
+		}
+	})
 }
 
 // The gateway token is the only door: a forged staff header from a house member's own subject still gets nothing.
 func TestStaffHealthRoute_RefusesARequestNotFromTheGateway(t *testing.T) {
 	super, app := dbTestPools(t)
-	rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
 	member := healthCaller{subject: houseMember(t, super), staff: true}
 
-	for name, token := range map[string]string{"no token": "", "wrong token": routeGatewayToken + "x"} {
-		t.Run(name, func(t *testing.T) {
-			rec := rig.do(http.MethodGet, token, member)
-			if rec.Code != http.StatusUnauthorized {
-				t.Errorf("got %d %q, want 401", rec.Code, rec.Body.String())
-			}
-		})
-	}
-	if got := rig.loads.Load(); got != 0 {
-		t.Errorf("loader called %d times without the gateway token, want 0", got)
-	}
-	if rec := rig.get(member); rec.Code != http.StatusOK || rig.loads.Load() != 1 {
-		t.Errorf("control with the token = %d %q, loads %d, want 200 and 1", rec.Code, rec.Body.String(), rig.loads.Load())
-	}
+	forEachRoute(t, func(t *testing.T, path string) {
+		rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
+		for name, token := range map[string]string{"no token": "", "wrong token": routeGatewayToken + "x"} {
+			t.Run(name, func(t *testing.T) {
+				rec := rig.do(http.MethodGet, path, token, member)
+				if rec.Code != http.StatusUnauthorized {
+					t.Errorf("got %d %q, want 401", rec.Code, rec.Body.String())
+				}
+			})
+		}
+		if loads, sources := rig.loads.Load(), rig.sources.Load(); loads != 0 || sources != 0 {
+			t.Errorf("check ran %d time(s), metrics source %d, without the gateway token, want 0 and 0", loads, sources)
+		}
+		if rec := rig.get(path, member); rec.Code != http.StatusOK || rig.loads.Load() != 1 {
+			t.Errorf("control with the token = %d %q, loads %d, want 200 and 1", rec.Code, rec.Body.String(), rig.loads.Load())
+		}
+	})
 }
 
 // A staff JWT carries the house tenant, so the tenant-bearing house member is the console's real caller.
 func TestStaffHealthRoute_ATenantBearingHouseMemberIsServed(t *testing.T) {
 	super, app := dbTestPools(t)
-	rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
 	house := adoptHouseTenant(t, super)
-	rec := rig.get(healthCaller{subject: seedMember(t, super, house, "active"), tenant: house, staff: true})
-	if rec.Code != http.StatusOK || rig.loads.Load() != 1 {
-		t.Fatalf("got %d %q, loads %d, want 200 and 1", rec.Code, rec.Body.String(), rig.loads.Load())
+	wantMetrics, _ := json.Marshal(routeMetrics())
+
+	forEachRoute(t, func(t *testing.T, path string) {
+		callers := map[string]healthCaller{
+			"tenant-less":  {subject: seedMember(t, super, house, "active"), staff: true},
+			"house tenant": {subject: seedMember(t, super, house, "active"), tenant: house, staff: true},
+		}
+		rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
+		for name, c := range callers {
+			t.Run(name, func(t *testing.T) {
+				rec := rig.get(path, c)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("got %d %q, want 200", rec.Code, rec.Body.String())
+				}
+				if path == metricsPath && strings.TrimSpace(rec.Body.String()) != string(wantMetrics) {
+					t.Errorf("body = %q, want the fake source's Metrics %s", rec.Body.String(), wantMetrics)
+				}
+			})
+		}
+		if got := int(rig.loads.Load()); got != len(callers) {
+			t.Errorf("check ran %d times, want %d", got, len(callers))
+		}
+		if path == metricsPath && int(rig.sources.Load()) != len(callers) {
+			t.Errorf("metrics source ran %d times, want %d", rig.sources.Load(), len(callers))
+		}
+	})
+}
+
+// Validation runs before the database check and after the platform: a refused caller never learns what is a valid query.
+func TestStaffMetricsRoute_ABadQueryIs400OnlyForAStaffCallerAndNeverReadsTheDatabase(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
+	const bad = "/v1/staff/metrics?range=2h"
+	staff := healthCaller{subject: houseMember(t, super), staff: true}
+
+	rec := rig.get(bad, staff)
+	if rec.Code != http.StatusBadRequest || strings.TrimSpace(rec.Body.String()) != `{"error":"unknown range"}` {
+		t.Errorf("staff caller, bad range = %d %q, want 400 unknown range", rec.Code, rec.Body.String())
+	}
+	if rec := rig.get("/v1/staff/metrics", staff); rec.Code != http.StatusBadRequest {
+		t.Errorf("staff caller, no range = %d %q, want 400", rec.Code, rec.Body.String())
+	}
+	forged := healthCaller{subject: customerMember(t, super), staff: true}
+	if rec := rig.get(bad, forged); rec.Code != http.StatusBadRequest {
+		t.Errorf("forged staff caller, bad range = %d %q, want 400: validation runs before the database check", rec.Code, rec.Body.String())
+	}
+	if loads, sources := rig.loads.Load(), rig.sources.Load(); loads != 0 || sources != 0 {
+		t.Fatalf("check ran %d time(s), source %d, for bad queries, want 0 and 0", loads, sources)
+	}
+
+	for name, c := range map[string]healthCaller{
+		"customer":                    {subject: customerMember(t, super)},
+		"house member, no staff flag": {subject: staff.subject},
+		"no identity":                 {},
+	} {
+		t.Run(name, func(t *testing.T) { wantForbidden(t, rig.get(bad, c)) })
+	}
+	if rec := rig.do(http.MethodGet, bad, "", staff); rec.Code != http.StatusUnauthorized {
+		t.Errorf("no gateway token, bad range = %d %q, want 401", rec.Code, rec.Body.String())
+	}
+	if loads := rig.loads.Load(); loads != 0 {
+		t.Errorf("check ran %d time(s) for callers the platform refuses, want 0", loads)
+	}
+
+	// Control: the same staff caller with a valid range reaches the check and the source.
+	rec = rig.get(metricsPath, staff)
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" || rig.loads.Load() != 1 || rig.sources.Load() != 1 {
+		t.Errorf("valid query = %d %q (%s), check %d, source %d, want 200 JSON and 1, 1", rec.Code, rec.Body.String(), rec.Header().Get("Content-Type"), rig.loads.Load(), rig.sources.Load())
+	}
+}
+
+// Only GET is registered: another method gets 405 from the mux and no database or Google read.
+func TestStaffMetricsRoute_OtherMethodsAreRefusedWithoutARead(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
+	staff := healthCaller{subject: houseMember(t, super), staff: true}
+	for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		t.Run(m, func(t *testing.T) {
+			if rec := rig.do(m, metricsPath, routeGatewayToken, staff); rec.Code != http.StatusMethodNotAllowed {
+				t.Errorf("%s = %d %q, want 405", m, rec.Code, rec.Body.String())
+			}
+		})
+	}
+	if loads, sources := rig.loads.Load(), rig.sources.Load(); loads != 0 || sources != 0 {
+		t.Errorf("check ran %d time(s), source %d, for other methods, want 0 and 0", loads, sources)
+	}
+	if rec := rig.get(metricsPath, staff); rec.Code != http.StatusOK {
+		t.Errorf("GET control = %d %q, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// A database fault in the check is a 500 with a fixed body, not a 403 and not a read.
+func TestStaffMetricsRoute_ADatabaseFaultInTheCheckIs500(t *testing.T) {
+	rig := newHealthRig(t, &Store{Pool: unreachablePool(t)}, routeFleet())
+	rec := rig.get(metricsPath, healthCaller{subject: uuid.NewString(), staff: true})
+	if rec.Code != http.StatusInternalServerError || strings.TrimSpace(rec.Body.String()) != `{"error":"internal server error"}` {
+		t.Errorf("got %d %q, want 500 with the fixed body", rec.Code, rec.Body.String())
+	}
+	if got := rig.loads.Load(); got != 1 {
+		t.Errorf("check ran %d time(s), want 1", got)
+	}
+	if got := rig.sources.Load(); got != 0 {
+		t.Errorf("metrics source ran %d time(s) after a check fault, want 0", got)
 	}
 }
 
@@ -380,7 +542,7 @@ func TestStaffHealthRoute_AGatewayOutageStillServesCountsAndTrend(t *testing.T) 
 	}
 	for name, base := range servers {
 		t.Run(name, func(t *testing.T) {
-			rec := newHealthRigWith(t, &Store{Pool: app}, reader(base), time.Now).get(member)
+			rec := newHealthRigWith(t, &Store{Pool: app}, reader(base), time.Now).get(healthPath, member)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("got %d %q, want 200", rec.Code, rec.Body.String())
 			}
@@ -417,7 +579,7 @@ func TestStaffHealthRoute_AGatewayOutageStillServesCountsAndTrend(t *testing.T) 
 
 	// Control: a degraded roll-up (503 with a body) is data, not an outage.
 	degraded := serve(http.StatusServiceUnavailable, `{"status":"degraded","services":[{"name":"docling","status":"down"}]}`)
-	rec := newHealthRigWith(t, &Store{Pool: app}, reader(degraded.URL), time.Now).get(member)
+	rec := newHealthRigWith(t, &Store{Pool: app}, reader(degraded.URL), time.Now).get(healthPath, member)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"degraded"`) {
 		t.Errorf("degraded control = %d %q, want 200 with status degraded", rec.Code, rec.Body.String())
 	}
@@ -440,7 +602,7 @@ func TestStaffHealthRoute_TrendWindowEdgeIsInclusiveToTheMicrosecond(t *testing.
 		})
 	}
 	rig := newHealthRigWith(t, &Store{Pool: app}, func(context.Context) (gateway.FleetHealth, error) { return routeFleet(), nil }, func() time.Time { return now })
-	rec := rig.get(healthCaller{subject: houseMember(t, super), staff: true})
+	rec := rig.get(healthPath, healthCaller{subject: houseMember(t, super), staff: true})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d %q, want 200", rec.Code, rec.Body.String())
 	}

@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { FRONTEND, monitoredSpas } from './monitoredSpas.testutil'
 
-type Item = { type: 'chunk' | 'asset'; fileName: string; isEntry?: boolean; code?: string; map?: { sources: string[] } | null; source?: string | Uint8Array }
+type Item = { type: 'chunk' | 'asset'; fileName: string; isEntry?: boolean; code?: string; map?: { sources: string[] } | null; source?: string | Uint8Array; moduleIds?: string[]; imports?: string[]; dynamicImports?: string[]; isDynamicEntry?: boolean }
 type Built = { appDir: string; output: Item[]; dist: string[]; warns: string[]; errors: string[]; failure?: unknown }
 
 const SPAS = monitoredSpas()
@@ -157,5 +157,30 @@ describe('sourcemaps (real SPA builds)', () => {
     expect(lib.includes('hsforms.com'), 'library bundle carries hsforms.com').toBe(false)
     expect(lib.includes('/submissions/v3/integration/submit/'), 'library bundle carries the HubSpot submit path').toBe(false)
     expect(js('landing').includes('hsforms.com'), 'control: the landing bundle carries hsforms.com').toBe(true)
+  }, TIMEOUT)
+
+  it('bundle_theSupportConsoleLoadsUPlotInAnAsyncChunkOnly', () => {
+    const b = built('support-console')
+    const all = chunks(b)
+    const holdsUPlot = (c: Item) => (c.moduleIds ?? []).some((id) => id.includes('/uplot/'))
+    const byName = new Map(all.map((c) => [c.fileName, c]))
+    const staticReach = new Set<string>()
+    const walkStatic = (c: Item) => {
+      if (staticReach.has(c.fileName)) return
+      staticReach.add(c.fileName)
+      for (const f of c.imports ?? []) if (byName.has(f)) walkStatic(byName.get(f)!)
+    }
+    entries(b).forEach(walkStatic)
+    expect(staticReach.size, 'support-console: entry chunks walked').toBeGreaterThan(0)
+    expect([...staticReach].filter((f) => holdsUPlot(byName.get(f)!)), 'a chunk in an entry static imports holds uplot').toEqual([])
+    const lazy = all.filter(holdsUPlot)
+    expect(lazy.length, 'no chunk holds uplot').toBeGreaterThan(0)
+    const dynamic = new Set(all.flatMap((c) => c.dynamicImports ?? []))
+    for (const c of lazy) expect(dynamic.has(c.fileName), `${c.fileName} is not reached through dynamicImports`).toBe(true)
+    const html = readFileSync(join(b.appDir, 'dist/index.html'), 'utf8')
+    const sheets = [...html.matchAll(/href="([^"]+\.css)"/g)].map((m) => m[1])
+    const hasUPlotCss = (f: string) => /\.uplot\{/.test(readFileSync(join(b.appDir, 'dist', f), 'utf8'))
+    expect(b.dist.filter((f) => f.endsWith('.css') && hasUPlotCss(f)).length, 'control: no css file carries the uPlot stylesheet').toBeGreaterThan(0)
+    for (const href of sheets) expect(hasUPlotCss(href), `index.html links ${href} with uPlot css`).toBe(false)
   }, TIMEOUT)
 })

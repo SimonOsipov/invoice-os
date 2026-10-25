@@ -1058,6 +1058,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/memberships/{user_id}/remove":               {verdict: scCovered},
 	"PUT /v1/memberships/{user_id}/clients":               {verdict: scCovered},
 	"GET /v1/staff/health":                                {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"GET /v1/staff/metrics":                               {verdict: scExempt, reason: "staff route: staff check in platform.App and in staff_read_health_samples; reads Google metrics, no tenant rows"},
 	"GET /v1/staff/tenants":                               {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/tenants/{id}":                          {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/jobs":                                  {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},

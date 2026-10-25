@@ -134,19 +134,47 @@ func TestWorkspaceDeletion_AFailedAuditRollsTheScheduleBack(t *testing.T) {
 func TestWorkspaceDeletion_ANonAdminIsRefusedBeforeTheName(t *testing.T) {
 	w := newInvWorld(t, obi, "Ada Obi")
 	preparer := w.addMember(t, "preparer", "active", "Grace Eze")
+	reviewer := w.addMember(t, "reviewer", "active", "Kemi Eze")
+	suspended := w.addMember(t, "admin", "suspended", "Tunde Bello")
+	foreign := newInvWorld(t, "Elsewhere Ltd", "Bola Eze")
 
-	_, err := w.store.ScheduleWorkspaceDeletion(w.as(preparer), "not the name")
-	if !errors.Is(err, ErrDeleteWorkspaceNotPermitted) {
-		t.Errorf("err = %v, want ErrDeleteWorkspaceNotPermitted (the role is checked before the name)", err)
+	cases := []struct {
+		name    string
+		subject string
+		want    error
+	}{
+		{"an active preparer", preparer, ErrDeleteWorkspaceNotPermitted},
+		{"an active reviewer", reviewer, ErrDeleteWorkspaceNotPermitted},
+		{"a suspended admin", suspended, db.ErrNotActiveMember},
+		{"a caller with no row", uuid.NewString(), db.ErrNotActiveMember},
+		{"an admin of another workspace", foreign.admin, db.ErrNotActiveMember},
 	}
-	if errors.Is(err, ErrWorkspaceNameMismatch) {
-		t.Errorf("err = %v leaks the name check to a non-admin", err)
-	}
-	if c := deletionOf(t, w.super, w.tenant); !c.empty() {
-		t.Errorf("deletion columns = %+v, want all NULL", c)
+	// The wrong name and the exact name must both be refused alike: a refused caller learns nothing about the name.
+	for _, tc := range cases {
+		for _, typed := range []string{"not the name", obi} {
+			t.Run(tc.name+" typing "+typed, func(t *testing.T) {
+				_, err := w.store.ScheduleWorkspaceDeletion(w.as(tc.subject), typed)
+				if !errors.Is(err, tc.want) {
+					t.Errorf("err = %v, want %v (the caller is checked before the name)", err, tc.want)
+				}
+				if errors.Is(err, ErrWorkspaceNameMismatch) {
+					t.Errorf("err = %v leaks the name check to a caller who may not delete", err)
+				}
+				if c := deletionOf(t, w.super, w.tenant); !c.empty() {
+					t.Errorf("deletion columns = %+v, want all NULL", c)
+				}
+				if c := deletionOf(t, w.super, foreign.tenant); !c.empty() {
+					t.Errorf("the other workspace's deletion columns = %+v, want all NULL", c)
+				}
+			})
+		}
 	}
 	if n := auditCount(t, w.app, w.tenant, evScheduled); n != 0 {
 		t.Errorf("%s rows = %d, want 0", evScheduled, n)
+	}
+	// Control: the admin with the exact name schedules, so the refusals above were about the caller.
+	if _, err := w.store.ScheduleWorkspaceDeletion(w.adminCtx(), obi); err != nil {
+		t.Errorf("the admin with the exact name: %v", err)
 	}
 }
 
@@ -283,6 +311,7 @@ func TestWorkspaceDeletion_AnAdminCancelsAndTheWorkspaceUnlocks(t *testing.T) {
 func TestWorkspaceDeletion_OnlyAnActiveAdminCancels(t *testing.T) {
 	w := newInvWorld(t, obi, "Ada Obi")
 	preparer := w.addMember(t, "preparer", "active", "Grace Eze")
+	reviewer := w.addMember(t, "reviewer", "active", "Kemi Eze")
 	suspended := w.addMember(t, "admin", "suspended", "Tunde Bello")
 	foreign := newInvWorld(t, "Elsewhere Ltd", "Bola Eze")
 	lockByOwner(t, w.super, w.tenant, w.admin)
@@ -293,6 +322,7 @@ func TestWorkspaceDeletion_OnlyAnActiveAdminCancels(t *testing.T) {
 		want error
 	}{
 		{"an active preparer", w.as(preparer), ErrCancelDeletionNotPermitted},
+		{"an active reviewer", w.as(reviewer), ErrCancelDeletionNotPermitted},
 		{"a suspended admin", w.as(suspended), db.ErrNotActiveMember},
 		{"a caller with no row", w.as(uuid.NewString()), db.ErrNotActiveMember},
 		{"an admin of another workspace naming this one", w.as(foreign.admin), db.ErrNotActiveMember},
@@ -545,5 +575,81 @@ func TestWorkspaceDeletion_ALongNameMatchesExactly(t *testing.T) {
 	}
 	if _, err := w.store.ScheduleWorkspaceDeletion(w.adminCtx(), name); err != nil {
 		t.Errorf("the exact 200-character name: %v", err)
+	}
+}
+
+func TestWorkspaceDeletion_ANameIsMatchedWithoutUnicodeNormalisation(t *testing.T) {
+	const composed = "Caf\u00e9 Ltd"
+	w := newInvWorld(t, composed, "Ada Obi")
+	for name, typed := range map[string]string{
+		"decomposed accent": "Cafe\u0301 Ltd",
+		"a doubled space":   "Caf\u00e9  Ltd",
+		"a no-break space":  "Caf\u00e9\u00a0Ltd",
+		"upper-cased":       strings.ToUpper(composed),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := w.store.ScheduleWorkspaceDeletion(w.adminCtx(), typed); !errors.Is(err, ErrWorkspaceNameMismatch) {
+				t.Errorf("err = %v, want ErrWorkspaceNameMismatch", err)
+			}
+		})
+	}
+	if c := deletionOf(t, w.super, w.tenant); !c.empty() {
+		t.Errorf("deletion columns = %+v, want all NULL", c)
+	}
+	if _, err := w.store.ScheduleWorkspaceDeletion(w.adminCtx(), composed); err != nil {
+		t.Errorf("the exact name: %v", err)
+	}
+}
+
+func TestWorkspaceDeletion_ACancelTouchesOnlyTheCallersWorkspace(t *testing.T) {
+	a := newInvWorld(t, obi, "Ada Obi")
+	b := newInvWorld(t, "Elsewhere Ltd", "Bola Eze")
+	lockByOwner(t, a.super, a.tenant, a.admin)
+	lockByOwner(t, b.super, b.tenant, b.admin)
+	bDue := deletionOf(t, b.super, b.tenant).DueAt
+
+	// The admin of A cancels: A unlocks, B stays locked.
+	if err := a.store.CancelWorkspaceDeletion(a.adminCtx()); err != nil {
+		t.Fatalf("cancel in A: %v", err)
+	}
+	if c := deletionOf(t, a.super, a.tenant); !c.empty() {
+		t.Errorf("A's deletion columns = %+v, want all NULL", c)
+	}
+	if c := deletionOf(t, b.super, b.tenant); c.DueAt == nil || !c.DueAt.Equal(*bDue) {
+		t.Errorf("B's due = %v, want %v unchanged", c.DueAt, bDue)
+	}
+	if n := auditCount(t, b.app, b.tenant, evCancelled); n != 0 {
+		t.Errorf("B has %d %s rows, want 0", n, evCancelled)
+	}
+	// A second cancel is a no-op and writes no second row.
+	if err := a.store.CancelWorkspaceDeletion(a.adminCtx()); err != nil {
+		t.Errorf("second cancel: %v, want nil", err)
+	}
+	if n := auditCount(t, a.app, a.tenant, evCancelled); n != 1 {
+		t.Errorf("A's %s rows = %d, want 1", evCancelled, n)
+	}
+}
+
+func TestWorkspaceDeletion_ACancelledWorkspaceCanBeScheduledAgain(t *testing.T) {
+	w := newInvWorld(t, obi, "Ada Obi")
+	first, err := w.store.ScheduleWorkspaceDeletion(w.adminCtx(), obi)
+	if err != nil {
+		t.Fatalf("first schedule: %v", err)
+	}
+	if err := w.store.CancelWorkspaceDeletion(w.adminCtx()); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	second, err := w.store.ScheduleWorkspaceDeletion(w.adminCtx(), obi)
+	if err != nil {
+		t.Fatalf("schedule after the cancel: %v", err)
+	}
+	if !second.After(first) {
+		t.Errorf("second due %v is not after the first %v: the cancelled schedule was kept", second, first)
+	}
+	if c := deletionOf(t, w.super, w.tenant); c.DueAt == nil || !c.DueAt.Equal(second) {
+		t.Errorf("stored due = %v, want the second %v", c.DueAt, second)
+	}
+	if n := auditCount(t, w.app, w.tenant, evScheduled); n != 2 {
+		t.Errorf("%s rows = %d, want 2", evScheduled, n)
 	}
 }

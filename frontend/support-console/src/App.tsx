@@ -169,6 +169,7 @@ function Console() {
   const [healthRange, setHealthRange] = useState<RangeKey>(DEFAULT_RANGE)
   const [healthService, setHealthService] = useState('')
   const [healthZoom, setHealthZoom] = useState<[number, number] | null>(null)
+  const [healthIsolated, setHealthIsolated] = useState<string | null>(null)
   useEffect(() => { if (!onHealth) setHealthZoom(null) }, [onHealth])
   const metricsKey = `${healthRange}|${healthService}`
   const metricsRead = useAsync(async () => { const v = visit.current; return { v, key: metricsKey, value: await fetchStaffMetrics(healthRange, healthService) } }, { immediate: onHealth, deps: [onHealth, healthRange, healthService], isEmpty: () => false })
@@ -698,9 +699,11 @@ function Console() {
               range={healthRange}
               onRange={(r) => { setHealthRange(r); setHealthZoom(null) }}
               service={healthService}
-              onService={(v) => { setHealthService(v); setHealthZoom(null) }}
+              onService={(v) => { setHealthService(v); setHealthZoom(null); setHealthIsolated(null) }}
               zoom={healthZoom}
               onZoom={setHealthZoom}
+              isolated={healthIsolated}
+              onIsolate={setHealthIsolated}
             />
           )}
         </div>

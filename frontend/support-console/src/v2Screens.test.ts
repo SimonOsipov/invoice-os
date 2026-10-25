@@ -201,6 +201,8 @@ const HEALTH_PROPS: Parameters<typeof Health>[0] = {
   onService: noop,
   zoom: null,
   onZoom: noop,
+  isolated: null,
+  onIsolate: noop,
 }
 const healthWith = (over: Partial<Parameters<typeof Health>[0]>) => renderToStaticMarkup(createElement(Health, { ...HEALTH_PROPS, ...over }))
 const healthData = (over: Partial<StaffHealth>) => healthWith({ data: { ...HEALTH, ...over } })
@@ -1312,6 +1314,29 @@ describe('System health panels', () => {
     expect(speed.filter((t) => t.text === '250 ms' || t.text === '3.00 s').map((t) => t.text)).toEqual(['250 ms', '3.00 s'])
     const eight = renderPanels(full({ req_per_min: svcs(names.slice(0, 8), rising) }))
     expect(panelTags(eight, 'req_per_min').some((t) => t.text === '+1 other service')).toBe(true)
+  })
+
+  it('legend entries become isolation buttons on Cloud Run panels only', () => {
+    const names = ['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9']
+    const rising = (i: number): [number, number][] => [[0, (i + 1) * 10], [60, (i + 1) * 10]]
+    const m = full({ req_per_min: svcs(names, rising) })
+    const entryTags = (p: Tag[]) => p.map((t, i) => ({ t, swatch: p[i + 1], name: p[i + 2] })).filter((e) => attr(e.t, 'data-series'))
+    const req = panelTags(renderPanels(m), 'req_per_min')
+    const iso = panelTags(parse(healthWith({ metrics: m, isolated: 's3' })), 'req_per_min')
+    expect(entryTags(iso).map((e) => e.t.name)).toEqual(Array(7).fill('button'))
+    for (const e of entryTags(iso)) {
+      const on = attr(e.t, 'data-series') === 's3'
+      expect(attr(e.t, 'aria-pressed')).toBe(String(on))
+      expect(style(e.swatch).background).toBe(on ? 'var(--series-1)' : 'var(--line-2)')
+      expect(style(e.name)['text-decoration'] ?? '').toBe(on ? '' : 'line-through')
+    }
+    expect(style(iso.find((t) => t.text === '+2 other services')!)['text-decoration']).toBe('line-through')
+    expect(req.filter((t) => attr(t, 'data-series') && style(t)['text-decoration']).length).toBe(0)
+    expect(req.some((t) => attr(t, 'aria-pressed') === 'true')).toBe(false)
+    expect(style(req.find((t) => t.text === '+2 other services')!)['text-decoration']).toBeUndefined()
+    const sql = panelTags(parse(healthWith({ metrics: m, isolated: 's3' })), 'sql_util')
+    expect(entryTags(sql).map((e) => e.t.name)).toEqual(['span', 'span', 'span'])
+    expect(sql.some((t) => style(t)['text-decoration'] || attr(t, 'aria-pressed'))).toBe(false)
   })
 
   it('every panel marks each deploy', () => {

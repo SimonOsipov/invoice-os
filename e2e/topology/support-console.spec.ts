@@ -1219,7 +1219,7 @@ async function fixturePanelsRead(page: Page): Promise<Read> {
     const r = await boxes(page, { chart, legend, uplot })
     problems.push(...within(rects[i], r.chart, `${key} chart`), ...within(rects[i], r.uplot, `${key} uPlot`), ...below(r.chart, r.legend, `${key} legend below the chart`), ...within(rects[i], r.legend, `${key} legend`))
 
-    const entries = legend.locator(':scope > span')
+    const entries = legend.locator(':scope > *')
     const want = legendCounts[key] ?? 8
     await expect(entries, `${key} legend entries`).toHaveCount(want)
     const entryRects = await rectsOf(page, entries, `${key} legend entry`)
@@ -1527,6 +1527,38 @@ async function fixtureZoom(page: Page): Promise<void> {
   await full()
 }
 
+// fixture check: legend isolation, its readout and layout on the labelled metrics body
+async function fixtureIsolate(page: Page): Promise<void> {
+  const mn = mainOf(page)
+  const panels = mn.locator('.ops-health-panels > [data-panel]')
+  const chartOf = (key: string): Locator => kid(panels.nth(PANEL_KEYS.indexOf(key)), 2)
+  const legendOf = (key: string): Locator => kid(panels.nth(PANEL_KEYS.indexOf(key)), 3)
+  const cloud = PANEL_KEYS.filter((k) => !k.startsWith('sql_'))
+  const drawn = async (key: string): Promise<string[]> => ((await chartOf(key).getAttribute('data-drawn')) ?? '').split(',').filter(Boolean)
+
+  // the first coloured entry, so the pick follows the fixture's colour slots
+  const name = (await legendOf('req_per_min').locator('button[data-series]').first().getAttribute('data-series'))!
+  await legendOf('req_per_min').locator(`[data-series="${name}"]`).click()
+  for (const key of cloud) await expect.poll(() => drawn(key), { message: `${key} draws only ${name}` }).toEqual([name])
+  await expect.poll(() => drawn('sql_util'), { message: 'sql_util keeps its lines' }).toEqual(['CPU', 'RAM', 'Disk'])
+  await expect.poll(() => drawn('sql_connections'), { message: 'sql_connections keeps its line' }).toEqual(['connections'])
+  await expect(legendOf('req_per_min').locator(`[data-series="${name}"]`)).toHaveAttribute('aria-pressed', 'true')
+  await expect(legendOf('sql_util').locator('button'), 'SQL legend entries are not buttons').toHaveCount(0)
+
+  const o = (await boxes(page, { over: chartOf('req_per_min').locator('.u-over') })).over
+  await page.mouse.move(1, 1)
+  await page.mouse.move(o.x + o.width * 0.5, o.y + o.height / 2)
+  const rows = chartOf('req_per_min').locator('[data-readout-row]')
+  await expect.poll(() => rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-readout-row'))), { message: 'readout lists only the isolated service' }).toEqual([name])
+  await expect(chartOf('req_per_min').locator('[data-readout-time]')).toHaveCount(1)
+  await page.mouse.move(1, 1)
+
+  await atWidths(page, 'SUP-03 System health fixture legend layout, isolated', async () => fixturePanelsRead(page))
+
+  await legendOf('req_per_min').locator(`[data-series="${name}"]`).click()
+  for (const key of cloud) await expect.poll(async () => (await drawn(key)).length, { message: `${key} draws every series again` }).toBeGreaterThan(1)
+}
+
 // fixture check: pins layout of a wire-shaped body, not the metrics contract
 async function healthFixtureLayout(page: Page): Promise<void> {
   const mn = mainOf(page)
@@ -1561,6 +1593,7 @@ async function healthFixtureLayout(page: Page): Promise<void> {
   })
   await fixtureHover(page)
   await fixtureZoom(page)
+  await fixtureIsolate(page)
 
   // app owns no job kind and has no live ping row: both notes show; the metrics route answers any query
   await mn.locator('select[aria-label="Service"]').selectOption('app')

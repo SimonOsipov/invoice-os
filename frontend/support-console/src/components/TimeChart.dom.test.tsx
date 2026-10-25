@@ -518,3 +518,34 @@ describe('TimeChart zoom', () => {
     expect(opts(u()).cursor.bind.dblclick(u(), u().over, () => {})).toBeNull()
   })
 })
+
+describe('TimeChart isolation', () => {
+  const three = () => [...lines(), { name: 'c', color: 'var(--series-1)', unit: 'count', points: [[0, 5], [60, 6]] as [number, number][] }]
+
+  it('isolation shows one series on the chart', async () => {
+    const { view, u } = await mount({ lines: three() })
+    const first = u()
+    view.rerender(<TimeChart lines={three()} {...base} isolated="b" />)
+    const sets = first.calls.filter(([n]) => n === 'setSeries')
+    expect(sets).toEqual([['setSeries', 1, { show: false }], ['setSeries', 2, { show: true }], ['setSeries', 3, { show: false }]])
+    expect(first.series.slice(1).map((s) => s.show)).toEqual([false, true, false])
+    view.rerender(<TimeChart lines={three()} {...base} isolated={null} />)
+    expect(first.series.slice(1).map((s) => s.show)).toEqual([true, true, true])
+    cleanup()
+    const fresh = await mount({ lines: three(), isolated: 'b' })
+    expect(opts(fresh.u()).series.slice(1).map((s: any) => s.show)).toEqual([false, true, false])
+  })
+
+  it('a chart recreated while isolated starts with only that series shown', async () => {
+    const { view } = await mount({ lines: three(), isolated: 'b' })
+    view.rerender(<TimeChart lines={three().slice(1)} {...base} isolated="b" />)
+    await waitFor(() => expect(FakeUPlot.instances).toHaveLength(2))
+    expect(opts(FakeUPlot.instances[1]).series.slice(1).map((s: any) => s.show)).toEqual([true, false])
+  })
+
+  it('the readout lists only the isolated series', async () => {
+    const { view, u } = await mount({ isolated: 'b' })
+    hover(u())
+    expect(rowNames(view.container)).toEqual(['b'])
+  })
+})

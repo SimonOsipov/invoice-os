@@ -99,6 +99,12 @@ export class FakeUPlot {
     if (fire) this.fire('setCursor')
   }
 
+  setSeries(i: number, opts: { show?: boolean }) {
+    this.calls.push(['setSeries', i, opts])
+    if (opts.show !== undefined) this.series[i].show = opts.show
+    this.fire('setSeries', i, opts)
+  }
+
   setSize(size: { width: number; height: number }) {
     this.calls.push(['setSize', size])
     this.width = size.width

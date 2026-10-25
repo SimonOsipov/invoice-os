@@ -7,7 +7,7 @@ type Line = { name: string; color: string; unit: string; points: Point[]; folded
 type Guide = { value: number; label: string; dashed: boolean }
 type Marker = { t: number; title: string }
 
-type Props = { lines: Line[]; start: number; end: number; step: number; guides?: Guide[]; markers?: Marker[]; zoom?: [number, number] | null; onZoom?: (w: [number, number]) => void }
+type Props = { lines: Line[]; start: number; end: number; step: number; guides?: Guide[]; markers?: Marker[]; zoom?: [number, number] | null; onZoom?: (w: [number, number]) => void; isolated?: string | null }
 
 const X_AXIS_H = 28
 const DAY = 86400
@@ -100,7 +100,7 @@ export function TimeChart(props: Props) {
           { ...axis, size: X_AXIS_H, values: (_u, splits) => splits.map((t) => utcClock(t, latest.current.end - latest.current.start >= DAY)) },
           { ...axis, values: (_u, splits) => splits.map(String) },
         ],
-        series: [{}, ...cur.lines.map((l) => ({ label: l.name, stroke: tok(l.color), width: 1.6 }))],
+        series: [{}, ...cur.lines.map((l) => ({ label: l.name, stroke: tok(l.color), width: 1.6, show: !cur.isolated || l.name === cur.isolated }))],
         hooks: {
           draw: [
             (self) => {
@@ -201,9 +201,14 @@ export function TimeChart(props: Props) {
     if (chart.current) placeMarkers(chart.current, latest.current)
   }, [markersKey])
 
+  const { isolated = null } = props
+  useEffect(() => {
+    latest.current.lines.forEach((l, i) => chart.current?.setSeries(i + 1, { show: !isolated || l.name === isolated }))
+  }, [isolated])
+
   const long = end - start >= DAY
   const aligned = tip ? alignSeries(lines, start, end, step) : null
-  const rows = tip && aligned ? readoutRows(lines, aligned, tip.idx, null) : []
+  const rows = tip && aligned ? readoutRows(lines, aligned, tip.idx, isolated) : []
 
   useLayoutEffect(() => {
     const over = chart.current?.over

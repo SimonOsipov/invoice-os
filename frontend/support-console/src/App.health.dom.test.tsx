@@ -689,13 +689,142 @@ describe('Console system health zoom', () => {
     await tick(0)
     await drag(T0 + 600, T0 + 1800)
     expect(resetBtn()).not.toBeNull()
+    act(() => { fireEvent.click(document.querySelector('[data-panel="req_per_min"] [data-series="gateway"]')!) })
     fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
     await tick(0)
     fireEvent.click(screen.getByRole('button', { name: /^System health$/ }))
     await tick(0)
     expect(screen.getByText('1/1')).toBeTruthy()
     expect(resetBtn()).toBeNull()
+    expect(document.querySelector('[data-series="gateway"]')!.getAttribute('aria-pressed')).toBe('true')
     expect(screen.getByRole('button', { name: '6h' }).getAttribute('aria-pressed')).toBe('true')
     expect((screen.getByLabelText('Service') as HTMLSelectElement).value).toBe('submission')
+  })
+})
+
+describe('Console system health isolation', () => {
+  const T0 = Date.parse(METRICS.start) / 1000
+  const tick = (ms = HEALTH_REFRESH_MS) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+  // Peaks decide the colour slots: a higher peak ranks first.
+  const answer = (peaks: Record<string, number>): StaffMetrics => ({
+    ...METRICS,
+    panels: (['req_per_min', 'cpu_pct'] as const).map((key) => ({
+      key,
+      unit: key === 'cpu_pct' ? '%' : 'req/min',
+      available: true,
+      series: Object.entries(peaks).map(([name, y]) => ({ name, points: [[T0 + 60, y]] as [number, number][] })),
+    })),
+  })
+  const entry = (panel: string, name: string) => document.querySelector(`[data-panel="${panel}"] [data-series="${name}"]`) as HTMLElement | null
+  const pressed = () => [...document.querySelectorAll('[data-series][aria-pressed="true"]')]
+  const click = (panel: string, name: string) => act(() => { fireEvent.click(entry(panel, name)!) })
+  const alive = () => FakeUPlot.instances.filter((u) => !u.destroyed)
+  const lastShow = (u: FakeUPlot, idx: number) => u.calls.filter(([n, i]) => n === 'setSeries' && i === idx).at(-1)?.[2]
+  const shows = (u: FakeUPlot) => u.series.slice(1).map((s) => s.show)
+  const open = async (m: StaffMetrics) => {
+    FakeUPlot.instances.length = 0
+    vi.useFakeTimers()
+    metrics.mockResolvedValue(m)
+    render(<App />)
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('button', { name: /^System health$/ }))
+    await tick(0)
+    await vi.waitFor(() => expect(alive()).toHaveLength(2))
+  }
+
+  it('a legend click isolates the service on every Cloud Run panel', async () => {
+    await open(answer({ gateway: 20, worker: 10 }))
+    click('req_per_min', 'gateway')
+    expect(entry('req_per_min', 'gateway')!.getAttribute('aria-pressed')).toBe('true')
+    expect(entry('cpu_pct', 'gateway')!.getAttribute('aria-pressed')).toBe('true')
+    for (const u of alive()) expect(lastShow(u, 2)).toEqual({ show: false })
+  })
+
+  it('a second click restores and another click switches', async () => {
+    await open(answer({ gateway: 20, worker: 10 }))
+    const state = () => ['gateway', 'worker'].map((n) => entry('req_per_min', n)!.getAttribute('aria-pressed'))
+    click('req_per_min', 'gateway')
+    expect(state()).toEqual(['true', 'false'])
+    click('req_per_min', 'gateway')
+    expect(state()).toEqual(['false', 'false'])
+    for (const u of alive()) expect(shows(u)).toEqual([true, true])
+    click('req_per_min', 'gateway')
+    click('cpu_pct', 'worker')
+    expect(state()).toEqual(['false', 'true'])
+    for (const u of alive()) expect(shows(u)).toEqual([false, true])
+  })
+
+  it('isolation survives the refresh and a range change and clears on a pick', async () => {
+    await open(answer({ gateway: 20, worker: 10 }))
+    click('req_per_min', 'gateway')
+    await tick()
+    expect(pressed()).toHaveLength(2)
+    metrics.mockResolvedValue(answer({ gateway: 20, worker: 10, submission: 5 }))
+    await tick()
+    await vi.waitFor(() => expect(alive()).toHaveLength(2))
+    expect(pressed()).toHaveLength(2)
+    for (const u of alive()) expect(shows(u)).toEqual([true, false, false])
+    fireEvent.click(screen.getByRole('button', { name: '6h' }))
+    await tick(0)
+    expect(pressed().map((e) => e.getAttribute('data-series'))).toEqual(['gateway', 'gateway'])
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    await tick(0)
+    fireEvent.click(screen.getByRole('button', { name: /^System health$/ }))
+    await tick(0)
+    await vi.waitFor(() => expect(entry('req_per_min', 'gateway')).not.toBeNull())
+    expect(pressed()).toHaveLength(2)
+    act(() => { fireEvent.change(screen.getByLabelText('Service'), { target: { value: 'submission' } }) })
+    await tick(0)
+    await vi.waitFor(() => expect(entry('req_per_min', 'gateway')).not.toBeNull())
+    expect(pressed()).toHaveLength(0)
+  })
+
+  it('an isolated service that turns grey keeps a pressed entry', async () => {
+    const eight = (s8: number) => Object.fromEntries([...Array.from({ length: 7 }, (_, i) => [`s${i + 1}`, 20 + i]), ['s8', s8]])
+    await open(answer(eight(100)))
+    click('req_per_min', 's8')
+    metrics.mockResolvedValue(answer(eight(1)))
+    await tick()
+    for (const panel of ['req_per_min', 'cpu_pct']) {
+      const names = [...document.querySelectorAll(`[data-panel="${panel}"] [data-series]`)].map((e) => e.getAttribute('data-series'))
+      expect(names, panel).toEqual(['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8'])
+      expect(entry(panel, 's8')!.getAttribute('aria-pressed')).toBe('true')
+      expect(document.querySelector(`[data-panel="${panel}"] [data-series-other]`)).toBeNull()
+    }
+    const nine = { ...eight(1), s9: 0.5 }
+    metrics.mockResolvedValue(answer(nine))
+    await tick()
+    expect(document.querySelector('[data-panel="req_per_min"] [data-series-other]')!.textContent).toBe('+1 other service')
+    click('req_per_min', 's8')
+    expect(pressed()).toHaveLength(0)
+    for (const u of alive()) expect(shows(u).every(Boolean)).toBe(true)
+  })
+
+  it('isolation clears when its service leaves the answer', async () => {
+    await open(answer({ gateway: 20, worker: 10 }))
+    click('req_per_min', 'gateway')
+    let land: (m: StaffMetrics) => void = () => {}
+    metrics.mockImplementation(() => new Promise<StaffMetrics>((r) => { land = r }))
+    fireEvent.click(screen.getByRole('button', { name: '6h' }))
+    await tick(0)
+    await act(async () => { land(answer({ gateway: 20, worker: 10 })) })
+    await vi.waitFor(() => expect(entry('req_per_min', 'gateway')).not.toBeNull())
+    expect(entry('req_per_min', 'gateway')!.getAttribute('aria-pressed')).toBe('true')
+    metrics.mockResolvedValue(answer({ worker: 10, submission: 5 }))
+    await tick()
+    await vi.waitFor(() => expect(alive()).toHaveLength(2))
+    expect(pressed()).toHaveLength(0)
+    for (const u of alive()) expect(shows(u)).toEqual([true, true])
+  })
+
+  it('leaving System health keeps the isolation', async () => {
+    await open(answer({ gateway: 20, worker: 10 }))
+    click('req_per_min', 'gateway')
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    await tick(0)
+    fireEvent.click(screen.getByRole('button', { name: /^System health$/ }))
+    await tick(0)
+    await vi.waitFor(() => expect(entry('req_per_min', 'gateway')).not.toBeNull())
+    expect(entry('req_per_min', 'gateway')!.getAttribute('aria-pressed')).toBe('true')
   })
 })

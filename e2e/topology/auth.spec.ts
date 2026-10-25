@@ -3310,7 +3310,11 @@ test('deployed journey: an invitee who registered in one browser signs in from a
 
     await expect(page.getByRole('heading', { name: `Join ${workspace.name}`, exact: true })).toBeVisible({ timeout: 30_000 })
     await expect(page.getByText(ONE_REVIEWER, { exact: true })).toBeVisible()
-    await page.getByRole('button', { name: `Join ${workspace.name}`, exact: true }).click()
+    // No registration answers: the name starts empty and Join waits for it.
+    const join = page.getByRole('button', { name: `Join ${workspace.name}`, exact: true })
+    await expect(join).toBeDisabled()
+    await page.getByTestId('join-name').fill('Join E2E')
+    await join.click()
     const identity = await readSessionIdentity(page)
 
     expect(identity.tenant.id, 'the session is bound to the inviting workspace').toBe(workspace.tenantId)

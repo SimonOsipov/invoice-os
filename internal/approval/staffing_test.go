@@ -274,6 +274,38 @@ func TestStaffing_SuspendedAndInvitedMembersAreStaffable(t *testing.T) {
 	}
 }
 
+// D6: a stale tab can PUT a removed id back; the writer refuses it like an unknown id.
+func TestStaffing_RemovedMemberIsRefused(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "DEL-02-02 staff-removed")
+	c, _ := activeAdmin(t, super, tenantID)
+	store := NewStore(app, stubFingerprinter, nil)
+
+	a, b := uuid.NewString(), uuid.NewString()
+	seedMembership(t, super, tenantID, a, "preparer", "active")
+	seedMembership(t, super, tenantID, b, "preparer", "removed")
+	roleID := seedWorkflowRole(t, super, tenantID, "tax-reviewer", "Tax Reviewer")
+	staffWorkflowRole(t, super, tenantID, roleID, a, 0)
+	before := staffingRows(t, super, roleID)
+
+	_, err := store.SetRoleMembers(c, "tax-reviewer", sent(a, b))
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation", err)
+	}
+	if status, _ := statusForErr(err); status != 400 {
+		t.Errorf("wire status = %d, want 400", status)
+	}
+	if after := staffingRows(t, super, roleID); !sameStaffing(after, before) {
+		t.Errorf("staffing = %v, want unchanged %v", after, before)
+	}
+	if n := auditCount(t, super, tenantID, "workflow_role.staffed"); n != 0 {
+		t.Errorf("workflow_role.staffed rows = %d, want 0", n)
+	}
+	if _, err := store.SetRoleMembers(c, "tax-reviewer", sent(a)); err != nil {
+		t.Fatalf("control: SetRoleMembers with the active member only: %v", err)
+	}
+}
+
 // --- order and whole-set replace -------------------------------------------
 
 // TestStaffing_OrderRoundTrips: the submitted array order is what is persisted and what

@@ -305,6 +305,14 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 	return updated, nil
 }
 
+// ErrRemoveStub is a red-test stub (DEL-02-02): RemoveMember answers it until the executor implements it.
+var ErrRemoveStub = errors.New("tenancy: RemoveMember not implemented")
+
+// RemoveMember is a red-test stub (DEL-02-02).
+func (s *Store) RemoveMember(ctx context.Context, userID string) (MemberAccess, error) {
+	return MemberAccess{}, ErrRemoveStub
+}
+
 // readTarget reads one member's row with its client access into dst.
 func readTarget(ctx context.Context, tx pgx.Tx, userID string, dst *MemberAccess) error {
 	rows, err := readMemberAccess(ctx, tx, userID)

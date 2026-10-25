@@ -54,6 +54,8 @@ var (
 	ErrInvalidStatus            = errors.New("tenancy: invalid status")
 	ErrInvitedNotTransitionable = errors.New("tenancy: invited membership is not transitionable")
 	ErrLastActiveAdmin          = errors.New("tenancy: last active admin")
+	ErrRemoveNotPermitted       = errors.New("tenancy: remove not permitted")
+	ErrRemovedNotTransitionable = errors.New("tenancy: removed membership is not transitionable")
 )
 
 // Sentinels for the invitations store.
@@ -291,6 +293,13 @@ func SetMembershipStatusHandler(set MembershipStatusSetter, log *slog.Logger) ht
 			return
 		}
 		writeJSON(w, http.StatusOK, membership)
+	}
+}
+
+// RemoveMemberHandler is a red-test stub (DEL-02-02): it answers 501 until the executor implements it.
+func RemoveMemberHandler(remove func(ctx context.Context, userID string) (MemberAccess, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
 	}
 }
 

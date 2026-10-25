@@ -34,6 +34,9 @@ func (c hsErase) respond(s seenReq) (int, string) {
 		if strings.Contains(s.Query, "after=cur%2F2") {
 			return 200, c.page2
 		}
+		if strings.Contains(s.Query, "after=") {
+			return 400, `{"message":"bad cursor"}`
+		}
 		return 200, c.page1
 	case s.Method == http.MethodPatch && strings.HasPrefix(p, "/crm/v3/objects/deals/"):
 		return c.st(c.patch[strings.TrimPrefix(p, "/crm/v3/objects/deals/")]), `{}`

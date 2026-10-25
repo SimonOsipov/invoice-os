@@ -251,5 +251,6 @@ describe('deletion notice', () => {
 
     await waitFor(() => expect(screen.getByTestId('deletion-notice-error').textContent).toBe('Could not reach the server'))
     expect(notice()).not.toBeNull()
+    expect((screen.getByTestId('deletion-notice-cancel') as HTMLButtonElement).disabled).toBe(false)
   })
 })

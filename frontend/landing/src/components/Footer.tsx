@@ -48,7 +48,7 @@ export function Footer({
                 </a>
               ))}
               {blogHref && (
-                <a href={blogHref} className="a-link">
+                <a href={blogHref} target="_blank" rel="noopener noreferrer" className="a-link">
                   Blog
                 </a>
               )}

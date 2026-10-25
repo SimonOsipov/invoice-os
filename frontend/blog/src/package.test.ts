@@ -79,6 +79,11 @@ describe('blog package', () => {
     expect(importSpecifiers(read(join(HERE, 'analytics.ts'))).filter((s) => s.includes('landing/')).length).toBeGreaterThanOrEqual(4)
   })
 
+  it('vite_buildsUnderTheBlogBase', async () => {
+    const { default: config } = await import('../vite.config')
+    expect(config.base).toBe('/blog/')
+  })
+
   it('seam_noSecondCopyOfTheConsentOrTagCode', () => {
     const needle = /asc_consent|googletagmanager|dataLayer|\b_ga\b/
     const others = srcFiles().filter((f) => relative(HERE, f) !== 'analytics.ts')

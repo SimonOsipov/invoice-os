@@ -3,6 +3,7 @@ package blogweb
 import (
 	"encoding/xml"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -151,10 +152,10 @@ func TestRenderHome_LinksEveryPostAndEachCategoryWithPosts(t *testing.T) {
 	has(t, page, "<title>News from the invoice compliance desk · ASComply blog</title>")
 	has(t, page, `content="`+homeDescription+`"`)
 	has(t, page, "<h1>"+homeHeading+"</h1>")
-	for _, w := range []string{`href="/p1"`, `href="/p2"`, `href="/category/a"`} {
+	for _, w := range []string{`href="/blog/p1"`, `href="/blog/p2"`, `href="/blog/category/a"`} {
 		has(t, page, w)
 	}
-	lacks(t, page, `href="/category/b"`)
+	lacks(t, page, `href="/blog/category/b"`)
 }
 
 func TestRenderCategory_OwnTitleIntroAndItsPostsOnly(t *testing.T) {
@@ -164,8 +165,8 @@ func TestRenderCategory_OwnTitleIntroAndItsPostsOnly(t *testing.T) {
 	has(t, page, "<title>a-name · ASComply blog</title>")
 	has(t, page, `<meta name="description" content="I">`)
 	has(t, page, `href="https://blog.example/category/a"`)
-	has(t, page, `href="/p1"`)
-	lacks(t, page, `href="/p2"`)
+	has(t, page, `href="/blog/p1"`)
+	lacks(t, page, `href="/blog/p2"`)
 }
 
 func TestRenderCategory_DescriptionFallsBackToHeadlineThenHome(t *testing.T) {
@@ -181,7 +182,7 @@ func TestRenderNotFound_IsNoindex(t *testing.T) {
 	has(t, page, "<title>Not found · ASComply blog</title>")
 	has(t, page, `<meta name="robots" content="noindex">`)
 	has(t, page, "<h1>Not found</h1>")
-	has(t, page, `href="/"`)
+	has(t, page, `href="/blog/"`)
 }
 
 func TestRenderHome_ZeroPostsHasHeadingAndNoEmptyNav(t *testing.T) {
@@ -189,7 +190,7 @@ func TestRenderHome_ZeroPostsHasHeadingAndNoEmptyNav(t *testing.T) {
 	has(t, page, "<title>News from the invoice compliance desk · ASComply blog</title>")
 	has(t, page, `content="`+homeDescription+`"`)
 	has(t, page, "<h1>"+homeHeading+"</h1>")
-	for _, bad := range []string{"<nav", "<article", `href="/category/`} {
+	for _, bad := range []string{"<nav", "<article", `href="/blog/category/`} {
 		lacks(t, page, bad)
 	}
 }
@@ -372,11 +373,11 @@ func TestRenderPost_LinksHomeAndItsCategoryOnlyWhenItExists(t *testing.T) {
 	sh := shell(t)
 	snap := &Snapshot{Categories: []Category{{ID: "a", Name: "A-name"}}}
 	page := string(sh.Post(origin, gateway, snap, Post{ID: "p", CategoryID: "a", Title: "T"}))
-	has(t, page, `<a href="/category/a">A-name</a>`)
-	has(t, page, `<a href="/">Home</a>`)
+	has(t, page, `<a href="/blog/category/a">A-name</a>`)
+	has(t, page, `<a href="/blog/">Home</a>`)
 	page = string(sh.Post(origin, gateway, snap, Post{ID: "p", CategoryID: "gone", Title: "T"}))
-	has(t, page, `<a href="/">Home</a>`)
-	lacks(t, page, `href="/category/`)
+	has(t, page, `<a href="/blog/">Home</a>`)
+	lacks(t, page, `href="/blog/category/`)
 }
 
 func TestRender_OnlyNotFoundCarriesNoindex(t *testing.T) {
@@ -405,13 +406,13 @@ func TestRenderSubscribe_OwnTitleDescriptionCanonicalAndHeading(t *testing.T) {
 	has(t, page, `<meta name="description" content="`+homeDescription+`">`)
 	has(t, page, `<link rel="canonical" href="https://blog.example/subscribe">`)
 	has(t, page, "<h1>Subscribe</h1>")
-	has(t, page, `<a href="/">Home</a>`)
+	has(t, page, `<a href="/blog/">Home</a>`)
 }
 
 func TestRenderHome_ListsPostsNewestFirstWhateverTheSnapshotOrder(t *testing.T) {
 	snap := &Snapshot{Categories: twoCats.Categories, Posts: []Post{twoCats.Posts[1], twoCats.Posts[0]}}
 	page := string(shell(t).Home(origin, snap))
-	a, b := strings.Index(page, `href="/p1"`), strings.Index(page, `href="/p2"`)
+	a, b := strings.Index(page, `href="/blog/p1"`), strings.Index(page, `href="/blog/p2"`)
 	if a < 0 || b < 0 || a > b {
 		t.Errorf("p1 at %d, p2 at %d; want p1 first", a, b)
 	}
@@ -502,4 +503,30 @@ func TestRenderPost_AddressWithQuoteAmpersandOrAngleCannotBreakTheTag(t *testing
 	has(t, page, `<a href="HTTPS://E.com/Up" target`)
 	// html/template percent-encodes parens in href; the visible text keeps them.
 	has(t, page, `<a href="https://e.com/w/A_%28b%29" target="_blank" rel="noopener noreferrer">https://e.com/w/A_(b)</a>.</p>`)
+}
+
+func TestRender_EveryInPageLinkCarriesTheBase(t *testing.T) {
+	sh := shell(t)
+	snap := &Snapshot{Categories: twoCats.Categories, Posts: twoCats.Posts}
+	linked := Post{ID: "p", CategoryID: "a", Title: "T", Body: []Block{{Type: "p", Text: "see https://ext.example/x"}}}
+	pages := map[string]string{
+		"home":      string(sh.Home(origin, snap)),
+		"category":  string(sh.Category(origin, snap, snap.Categories[0])),
+		"post":      string(sh.Post(origin, gateway, snap, linked)),
+		"subscribe": string(sh.Subscribe(origin)),
+		"notfound":  string(sh.NotFound(origin, "/x")),
+	}
+	for name, page := range pages {
+		body := page[strings.Index(page, "<div data-crawl>"):] // the shell head holds /favicon.ico
+		hrefs := regexp.MustCompile(`href="/[^"]*"`).FindAllString(body, -1)
+		if len(hrefs) == 0 {
+			t.Errorf("%s: no in-page link", name)
+		}
+		for _, h := range hrefs {
+			if !strings.HasPrefix(h, `href="/blog/`) {
+				t.Errorf("%s: %s lacks the base", name, h)
+			}
+		}
+	}
+	has(t, pages["post"], `href="https://ext.example/x"`)
 }

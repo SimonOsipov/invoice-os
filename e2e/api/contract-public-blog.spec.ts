@@ -194,7 +194,7 @@ test.describe('public blog (API E2E, over the deployed gateway)', () => {
   })
 
   test('public blog: the blog origin gets the CORS grant', async () => {
-    const origin = resolveTarget('BLOG_URL')
+    const origin = new URL(resolveTarget('BLOG_URL')).origin
     const get = await pub('/blog/posts', { headers: { Origin: origin } })
     expect(get.status).toBe(200)
     expect(get.headers.get('access-control-allow-origin')).toBe(origin)

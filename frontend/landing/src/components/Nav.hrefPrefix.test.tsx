@@ -91,7 +91,7 @@ describe('Nav blogHref', () => {
 
   it('Nav_rendersBlogAfterLibraryWhenSet', () => {
     expect(hrefsOf({ libraryHref: LIB, blogHref: BLOG })).toEqual(['#top', ...NAV_ONLY_TARGETS, LIB, BLOG])
-    expect(render({ libraryHref: LIB, blogHref: BLOG })).toMatch(/<a href="https:\/\/blog\.x" class="ios-nav-link"/)
+    expect(render({ libraryHref: LIB, blogHref: BLOG })).toMatch(/<a href="https:\/\/blog\.x" target="_blank" rel="noopener noreferrer" class="ios-nav-link"/)
   })
 
   it('Nav_rendersNoBlogWhenUnset', () => {

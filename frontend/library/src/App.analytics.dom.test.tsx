@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// @vitest-environment-options { "url": "https://library.ascomply.com/" }
+// @vitest-environment-options { "url": "https://www.ascomply.com/library/" }
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import './testStorage'
 import { readConsentCookie } from '../../landing/src/consent'
@@ -20,7 +20,7 @@ let act: Act
 // jsdom would navigate on an anchor click; the library's links are external.
 const stopNavigation = (e: Event) => e.preventDefault()
 
-async function mount(path = '/') {
+async function mount(path = '/library/') {
   vi.resetModules()
   const React = await import('react')
   const { createRoot } = await import('react-dom/client')
@@ -72,19 +72,19 @@ describe('library events', () => {
   beforeEach(() => localStorage.setItem(KEY, GRANT))
 
   it('EV-01 the first path is the config page view only', async () => {
-    await mount('/rules')
+    await mount('/library/rules')
     expect(events()).toEqual([])
     expect(all().filter((e) => e[0] === 'config')).toHaveLength(1)
   })
 
   it('EV-02 each new path sends one page_view', async () => {
-    await mount('/')
+    await mount('/library/')
     click(homeCard('Rules & validation'))
-    expect(window.location.pathname).toBe('/rules')
+    expect(window.location.pathname).toBe('/library/rules')
     click(card('validate'))
-    expect(window.location.pathname).toBe('/rules/validate')
+    expect(window.location.pathname).toBe('/library/rules/validate')
     click(button('Overview'))
-    expect(window.location.pathname).toBe('/')
+    expect(window.location.pathname).toBe('/library/')
     expect(events()).toEqual([
       ['event', 'page_view', {}],
       ['event', 'page_view', {}],
@@ -93,26 +93,26 @@ describe('library events', () => {
   })
 
   it('EV-03 the same view and a correction send none', async () => {
-    await mount('/rules')
+    await mount('/library/rules')
     click(nav('rules'))
     expect(events()).toEqual([])
     unmount()
     container.remove()
 
-    await mount('/invoices/')
+    await mount('/library/invoices/')
     click(nav('invoices'))
-    expect(window.location.pathname).toBe('/invoices')
+    expect(window.location.pathname).toBe('/library/invoices')
     expect(events()).toEqual([])
     unmount()
     container.remove()
 
-    await mount('/rules/validate')
+    await mount('/library/rules/validate')
     click(container.querySelector<HTMLElement>('.lib-subnav button[aria-current="true"]')!)
     expect(events()).toEqual([])
   })
 
   it('EV-04 back and forward each send one', async () => {
-    await mount('/')
+    await mount('/library/')
     click(nav('rules'))
     click(card('validate'))
     expect(pageViews()).toHaveLength(2)
@@ -127,7 +127,7 @@ describe('library events', () => {
   })
 
   it('EV-05 both Book the Demo links report the library source', async () => {
-    await mount('/')
+    await mount('/library/')
     const links = link('Book the Demo')
     expect(links).toHaveLength(2)
     click(links[0])
@@ -139,21 +139,21 @@ describe('library events', () => {
   })
 
   it('EV-06 Open in Platform carries the group or the feature id', async () => {
-    await mount('/rules')
+    await mount('/library/rules')
     click(link('Open in Platform')[0])
     expect(events()).toEqual([['event', 'open_in_platform', { group_id: 'rules' }]])
     unmount()
     container.remove()
 
     delete (window as TestWindow).dataLayer
-    await mount('/rules/validate')
+    await mount('/library/rules/validate')
     click(link('Open in Platform')[0])
     expect(events()).toEqual([['event', 'open_in_platform', { feature_id: 'validate' }]])
   })
 
   it('EV-07 nothing is sent before consent', async () => {
     localStorage.clear()
-    await mount('/')
+    await mount('/library/')
     click(nav('rules'))
     click(link('Book the Demo')[0])
     expect((window as TestWindow).dataLayer).toBeUndefined()
@@ -175,13 +175,13 @@ describe('library events', () => {
         desc.set!.call(document, v)
       },
     })
-    await mount('/')
+    await mount('/library/')
     click(nav('rules'))
     expect(events()).toHaveLength(1)
     click(button('Cookie choices'))
     click(button('Reject'))
     const expiry = (d: string) => writes.some((w) => w.startsWith('_ga=; ') && w.includes('Max-Age=0') && w.endsWith(`domain=${d}`))
-    expect(expiry('library.ascomply.com')).toBe(true)
+    expect(expiry('www.ascomply.com')).toBe(true)
     expect(expiry('.ascomply.com')).toBe(true)
     click(card('validate'))
     click(link('Book the Demo')[0])
@@ -210,7 +210,7 @@ describe('library tour events', () => {
 
   it('EV-08 each start sends one tour_start', async () => {
     localStorage.setItem(KEY, GRANT)
-    await mount('/')
+    await mount('/library/')
     click(button('Take the tour'))
     expect(tourStarts()).toEqual([['event', 'tour_start', {}]])
     click(sidebarTour())
@@ -220,7 +220,7 @@ describe('library tour events', () => {
 
   it('two synchronous tour clicks send one tour_start and leave the tour closed', async () => {
     localStorage.setItem(KEY, GRANT)
-    await mount('/')
+    await mount('/library/')
     const btn = sidebarTour()
     act(() => {
       btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
@@ -232,7 +232,7 @@ describe('library tour events', () => {
 
   it('EV-09 stopping and stepping send no tour_start', async () => {
     localStorage.setItem(KEY, GRANT)
-    await mount('/')
+    await mount('/library/')
     click(button('Take the tour'))
     for (let i = 0; i < 3; i++) click(button('Next'))
     expect(tourStarts()).toHaveLength(1)
@@ -242,11 +242,19 @@ describe('library tour events', () => {
   })
 
   it('EV-11 a running tour makes the notice inert', async () => {
-    await mount('/')
+    await mount('/library/')
     expect(container.querySelector(NOTICE)!.hasAttribute('inert')).toBe(false)
     click(button('Take the tour'))
     expect(container.querySelector(NOTICE)!.hasAttribute('inert')).toBe(true)
     click(sidebarTour())
     expect(container.querySelector(NOTICE)!.hasAttribute('inert')).toBe(false)
+  })
+})
+
+describe('library tag on the www path', () => {
+  it('AN-01 a stored grant loads the gtag script once', async () => {
+    localStorage.setItem(KEY, GRANT)
+    await mount('/library/')
+    expect(document.querySelectorAll(`script[src="https://www.googletagmanager.com/gtag/js?id=${ID}"]`)).toHaveLength(1)
   })
 })

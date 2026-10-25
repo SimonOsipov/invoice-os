@@ -25,15 +25,15 @@ Each target's URL is a **required** env var — there is no hardcoded default. A
 throws naming itself rather than silently pointing at another deployment (`targets.ts`).
 A PR preview's URLs are `https://<svc>-pr-<N>-944095690109.africa-south1.run.app`:
 
-| Target          | Env var               | Needed by            |
-| --------------- | --------------------- | -------------------- |
-| landing         | `LANDING_URL`         | smoke, topology      |
-| ops-console     | `OPS_CONSOLE_URL`     | smoke                |
-| support-console | `SUPPORT_CONSOLE_URL` | smoke                |
-| library         | `LIBRARY_URL`         | smoke, topology      |
-| blog            | `BLOG_URL`            | smoke, api, topology |
-| app             | `APP_URL`             | smoke, topology      |
-| gateway         | `GATEWAY_URL`         | smoke, api, topology |
+| Target          | Env var               | Needed by            | Value                               |
+| --------------- | --------------------- | -------------------- | ----------------------------------- |
+| landing         | `LANDING_URL`         | smoke, topology      |                                     |
+| ops-console     | `OPS_CONSOLE_URL`     | smoke                |                                     |
+| support-console | `SUPPORT_CONSOLE_URL` | smoke                |                                     |
+| library         | `LIBRARY_URL`         | smoke, topology      | site address, base path included    |
+| blog            | `BLOG_URL`            | smoke, api, topology | site address, base path included    |
+| app             | `APP_URL`             | smoke, topology      |                                     |
+| gateway         | `GATEWAY_URL`         | smoke, api, topology |                                     |
 
 CI sets all seven for the whole `e2e` job, so this table matters mainly when running a
 suite by hand. Most are resolved at module scope and throw during collection; a few

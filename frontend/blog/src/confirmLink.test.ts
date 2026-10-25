@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const KEY = 'ascomply.blogConfirmToken'
 const T = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
 const STORED = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFG'
-const PATH = '/subscribe/confirm'
+const PATH = '/subscribe/confirm' // base-relative; the BLOG_BASE form is tested below
 
 function fakeStorage(initial?: string) {
   const map = new Map<string, string>(initial === undefined ? [] : [[KEY, initial]])
@@ -36,6 +36,13 @@ describe('captureConfirmToken', () => {
     expect(captureConfirmToken({ pathname: PATH, search: `?token=${T}`, hash: '' }, { replaceState }, storage)).toBe(T)
     expect(storage.map.get(KEY)).toBe(T)
     expect(replaceState).toHaveBeenCalledWith(null, '', PATH)
+  })
+
+  it('capture_readsTheTokenUnderTheBase', async () => {
+    const { captureConfirmToken } = await load()
+    const replaceState = vi.fn()
+    expect(captureConfirmToken({ pathname: '/blog/subscribe/confirm', search: `?token=${T}`, hash: '' }, { replaceState }, fakeStorage())).toBe(T)
+    expect(replaceState).toHaveBeenCalledWith(null, '', '/blog/subscribe/confirm')
   })
 
   it('capture_reloadReadsStorage', async () => {

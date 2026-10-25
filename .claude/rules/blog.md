@@ -19,6 +19,9 @@ paths:
 - `blog_posts_one_featured` holds one pin.
 - Serve the blog through `cmd/blog`, not the shared `Caddyfile`.
 - Read posts in `internal/blogweb` only from the gateway's public `/blog/` routes.
+- Serve the blog under `Base` (`/blog`) in `internal/blogweb`. `BLOG_BASE` in `frontend/landing/src/sitePaths.ts` holds the same value.
+- Strip `Base` from a request path when it is present, so a path without it still answers.
+- Write every canonical, sitemap location, robots line and in-page link with `Base`.
 - Render every database string in `internal/blogweb` with `html/template` or `encoding/xml`.
 - Keep one `<title>` and one `<div id="root"></div>` in `frontend/blog/index.html`, and no description, canonical, robots or Open Graph tag; the server writes those.
 - Let the SPA leave `<title>` and the meta tags alone; the server owns them.

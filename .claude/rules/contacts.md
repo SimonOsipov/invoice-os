@@ -9,6 +9,7 @@ paths:
 # Contact sync
 
 - Never put an email address or a name in a log line or an error.
+- Log a user id as `user.id`, never `user_id`. `scrubLog` drops `user.*` from Sentry Logs (`TestSentryLogBridge_DropsUserDotAttributes`).
 - Never wait on a vendor in signup, sign-in or the demo route.
 - Write a registrant to `registrant_handoffs` before the response, once. The worker moves the row into a `registrant_intake` River job. Without `DATABASE_GATEWAY_URL` the gateway posts to notifications in the background.
 - Hand a registrant off after `POST /auth/verify`, after `POST /auth/invitation/password` and after a sign-in whose user has `user_metadata.registration`.

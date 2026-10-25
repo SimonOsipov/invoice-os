@@ -131,7 +131,7 @@ func handOffRegistrant(ctx context.Context, log *slog.Logger, source string, sin
 	if outbox, ok := sink.(*RegistrantOutbox); ok {
 		// One durable write before the response; River retries the delivery.
 		if err := outbox.Registrant(ctx, user); err != nil {
-			log.WarnContext(ctx, "contacts: registrant hand-off failed", slog.String("user_id", user.UserID), slog.Int("attempts", 1), slog.Int("status", 0))
+			log.WarnContext(ctx, "contacts: registrant hand-off failed", slog.String("user.id", user.UserID), slog.Int("attempts", 1), slog.Int("status", 0))
 		}
 		return
 	}
@@ -147,7 +147,7 @@ func handOffRegistrant(ctx context.Context, log *slog.Logger, source string, sin
 			}
 			time.Sleep(delays[attempt])
 		}
-		log.WarnContext(ctx, "contacts: registrant hand-off failed", slog.String("user_id", user.UserID), slog.Int("attempts", len(delays)+1), slog.Int("status", failureStatus(err)))
+		log.WarnContext(ctx, "contacts: registrant hand-off failed", slog.String("user.id", user.UserID), slog.Int("attempts", len(delays)+1), slog.Int("status", failureStatus(err)))
 	}()
 }
 

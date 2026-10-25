@@ -14,7 +14,9 @@ export function newAddressOf(oldUrl: string): string {
   const base = BASE_OF_HOST[url.hostname]
   if (base === undefined) throw new Error(`${oldUrl} is not on an old host`)
   const underBase = url.pathname === base || url.pathname.startsWith(`${base}/`)
-  return `${WWW}${underBase ? '' : base}${url.pathname}${url.search}`
+  // GCP writes :443 when a URL map switches http to https
+  const host = url.protocol === 'http:' ? `${WWW}:443` : WWW
+  return `${host}${underBase ? '' : base}${url.pathname}${url.search}`
 }
 
 /** The group and feature paths (`/invoices`, `/invoices/import-files`) of frontend/library/src/content.ts. */

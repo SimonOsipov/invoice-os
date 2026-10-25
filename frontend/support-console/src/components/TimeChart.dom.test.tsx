@@ -74,6 +74,23 @@ describe('TimeChart wrapper', () => {
     u().series[2].show = false
     u().fire('draw')
     expect(root(view.container).getAttribute('data-drawn')).toBe('a')
+    u().series[2].show = true
+    u().fire('draw')
+    expect(root(view.container).getAttribute('data-drawn')).toBe('a,b')
+  })
+
+  it('the draw hook strokes each guide across the plot in canvas pixels', async () => {
+    vi.stubGlobal('devicePixelRatio', 2)
+    const spy = vi.spyOn(FakeUPlot.prototype, 'valToPos')
+    const { u } = await mount({ guides: [{ value: 80, label: '80 %', dashed: true }, { value: 64, label: 'budget 64', dashed: false }] })
+    u().fire('draw')
+    const log = (u().ctx as unknown as RecordingCtx).log
+    expect(log.filter(([n]) => n === 'moveTo').map(([, x]) => x)).toEqual([u().bbox.left, u().bbox.left])
+    expect(log.filter(([n]) => n === 'lineTo').map(([, x]) => x)).toEqual([u().bbox.left + u().bbox.width, u().bbox.left + u().bbox.width])
+    expect(log.filter(([n]) => n === 'setLineDash').map(([, d]) => d)).toEqual([[8, 8], []])
+    expect((u().ctx as unknown as RecordingCtx).lineWidth).toBe(2)
+    const guideCalls = spy.mock.calls.filter(([v, k]) => k === 'y' && (v === 80 || v === 64))
+    expect(guideCalls).toEqual([[80, 'y', true], [64, 'y', true]])
   })
 
   it('the draw hook paints each guide dashed or solid in the guide token', async () => {
@@ -104,6 +121,14 @@ describe('TimeChart wrapper', () => {
     expect(els.map((e) => e.style.display)).toEqual(['none', 'none'])
   })
 
+  it('a marker before the window clamps to the left edge and hides once the scale starts after it', async () => {
+    const { u } = await mount({ start: 1000, end: 4600, markers: [{ t: 400, title: 'old · 09:00 UTC' }, { t: 2000, title: 'mid · 10:00 UTC' }] })
+    const els = [...u().over.querySelectorAll<HTMLElement>('[data-deploy]')]
+    expect(els.map((e) => e.style.left)).toEqual([`${u().valToPos(1000, 'x')}px`, `${u().valToPos(2000, 'x')}px`])
+    act(() => u().setScale('x', { min: 1500, max: 4600 }))
+    expect(els.map((e) => e.style.display)).toEqual(['none', ''])
+  })
+
   it('a resize re-places the markers', async () => {
     const { u } = await mount({ markers: [{ t: 1800, title: 'rev-1 · 10:00 UTC' }] })
     const el = u().over.querySelector<HTMLElement>('[data-deploy]')!
@@ -114,17 +139,29 @@ describe('TimeChart wrapper', () => {
   })
 
   it('a new deploy inside the same window is placed', async () => {
-    const { view, u } = await mount({ markers: [{ t: 1800, title: 'rev-1 · 10:00 UTC' }] })
-    view.rerender(<TimeChart lines={lines()} {...base} markers={[{ t: 1800, title: 'rev-1 · 10:00 UTC' }, { t: 2700, title: 'rev-2 · 10:45 UTC' }]} />)
+    const same = lines()
+    const { view, u } = await mount({ lines: same, markers: [{ t: 1800, title: 'rev-1 · 10:00 UTC' }] })
+    view.rerender(<TimeChart lines={same} {...base} markers={[{ t: 1800, title: 'rev-1 · 10:00 UTC' }, { t: 2700, title: 'rev-2 · 10:45 UTC' }]} />)
     const els = [...u().over.querySelectorAll<HTMLElement>('[data-deploy]')]
     expect(els.map((e) => e.title)).toEqual(['rev-1 · 10:00 UTC', 'rev-2 · 10:45 UTC'])
     expect(els.map((e) => e.style.left)).toEqual([`${u().valToPos(1800, 'x')}px`, `${u().valToPos(2700, 'x')}px`])
+    expect(u().calls).toEqual([])
+  })
+
+  it('a deploy renamed inside the same window replaces the marker title', async () => {
+    const same = lines()
+    const { view, u } = await mount({ lines: same, markers: [{ t: 1800, title: 'rev-1 · 10:00 UTC' }] })
+    view.rerender(<TimeChart lines={same} {...base} markers={[{ t: 1800, title: 'rev-9 · 10:00 UTC' }]} />)
+    expect([...u().over.querySelectorAll<HTMLElement>('[data-deploy]')].map((e) => e.title)).toEqual(['rev-9 · 10:00 UTC'])
   })
 
   it('the chart reads time in UTC with dated ticks from 24 h', async () => {
     const { u } = await mount({ start: 0, end: 6 * 3600 })
     const o = opts(u())
     expect(o.tzDate(0)).toEqual(FakeUPlot.tzDate(new Date(0), 'Etc/UTC'))
+    const zone = vi.spyOn(FakeUPlot, 'tzDate')
+    o.tzDate(90)
+    expect(zone).toHaveBeenCalledWith(new Date(90_000), 'Etc/UTC')
     const t = Date.UTC(2026, 9, 14, 23, 5) / 1000
     expect(o.axes[0].values(u(), [t])).toEqual(['23:05 UTC'])
     cleanup()
@@ -148,6 +185,20 @@ describe('TimeChart wrapper', () => {
     expect(u().calls).toContainEqual(['setSize', { width: 512, height: CHART_H + 28 }])
   })
 
+  it('the chart opens on the window with no self-zoom', async () => {
+    const { u } = await mount({ start: 100, end: 4000 })
+    const o = opts(u())
+    expect([o.scales.x.min, o.scales.x.max]).toEqual([100, 4000])
+    expect(o.cursor).toEqual({ y: false, drag: { x: false, y: false, setScale: false } })
+  })
+
+  it('the observer ignores a zero or unchanged width', async () => {
+    const { u } = await mount()
+    act(() => Observers.all[0].report(0))
+    act(() => Observers.all[0].report(1000))
+    expect(u().calls.filter(([n]) => n === 'setSize')).toEqual([])
+  })
+
   it('new data reuses the chart and keeps the range', async () => {
     const { view, u } = await mount()
     const next = lines({ a: [[0, 9], [60, 8]] })
@@ -165,6 +216,13 @@ describe('TimeChart wrapper', () => {
     await waitFor(() => expect(FakeUPlot.instances).toHaveLength(2))
     expect(first.destroyed).toBe(true)
     expect(FakeUPlot.instances[1].destroyed).toBe(false)
+  })
+
+  it('a renamed line in the same colour recreates the chart', async () => {
+    const { view } = await mount()
+    view.rerender(<TimeChart lines={lines().map((l, i) => (i === 0 ? { ...l, name: 'z' } : l))} {...base} />)
+    await waitFor(() => expect(FakeUPlot.instances).toHaveLength(2))
+    expect((FakeUPlot.instances[1].opts as any).series.slice(1).map((s: any) => s.label)).toEqual(['z', 'b'])
   })
 
   it('unmount destroys the chart; an early unmount creates none', async () => {

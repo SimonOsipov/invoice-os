@@ -1377,7 +1377,8 @@ describe('System health panels', () => {
 
   it('panelChart gives the HEALTH-04 guides', () => {
     const m = full()
-    m.limits.services = [{ name: 'submission', cpu: '1', memory: '512Mi', max_instances: 2 }]
+    m.limits.services = [{ name: 'worker', cpu: '1', memory: '512Mi', max_instances: 5 }, { name: 'submission', cpu: '1', memory: '512Mi', max_instances: 2 }]
+    expect(guides(m, 'instances', 'nobody')).toHaveLength(0)
     const want: Record<string, [string, boolean][]> = { error_pct: [['1 %', true]], latency_p95_ms: [['1 s', true]], cpu_pct: [['80 %', true]], ram_pct: [['80 %', true]], sql_connections: [['budget 80', false]] }
     for (const key of ORDER) for (const service of ['', 'submission']) {
       const extra: [string, boolean][] = key === 'instances' && service ? [['max 2', true]] : []

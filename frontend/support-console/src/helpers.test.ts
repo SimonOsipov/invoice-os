@@ -110,6 +110,11 @@ describe('chart geometry', () => {
   it('CHART_H is the plot height the layout reads', () => {
     expect(CHART_H).toBe(160)
   })
+  it('the SVG chart helpers are gone', async () => {
+    const exported = Object.keys(await import('./helpers'))
+    expect(exported).toContain('CHART_H')
+    for (const gone of ['CHART_W', 'niceCeil', 'chartX', 'chartY', 'chartPath']) expect(exported, gone).not.toContain(gone)
+  })
 })
 
 describe('chart model', () => {

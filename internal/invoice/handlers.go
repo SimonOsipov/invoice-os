@@ -1743,6 +1743,19 @@ func ViolationSummaryHandler(summary func(ctx context.Context, importBatchIDs []
 	}
 }
 
+// roleRefusal maps a callerRole result to a refusal. Only the workspace lock maps
+// here; any other error fails closed to the approver text.
+func roleRefusal(role string, err error) (status int, msg string, refused bool) {
+	if errors.Is(err, db.ErrWorkspaceLocked) {
+		status, msg = statusForErr(err)
+		return status, msg, true
+	}
+	if err != nil || !isApprover(role) {
+		return http.StatusForbidden, notApproverTransmitReason, true
+	}
+	return 0, "", false
+}
+
 // statusForErr maps a store/domain error to the HTTP status + message the
 // handlers above write to the response ([D4]/[D12] error-map table).
 // db.ErrNoTenant is 401 (fail-closed, missing identity never reaches here in
@@ -1767,19 +1780,6 @@ func ViolationSummaryHandler(summary func(ctx context.Context, importBatchIDs []
 // ErrValidation), so their order among these cases carries no meaning. Logging the unrecognized (500) case via slog is the
 // caller's responsibility, since only the caller knows the operation name to
 // log.
-// roleRefusal maps a callerRole result to a refusal. Only the workspace lock maps
-// here; any other error fails closed to the approver text.
-func roleRefusal(role string, err error) (status int, msg string, refused bool) {
-	if errors.Is(err, db.ErrWorkspaceLocked) {
-		status, msg = statusForErr(err)
-		return status, msg, true
-	}
-	if err != nil || !isApprover(role) {
-		return http.StatusForbidden, notApproverTransmitReason, true
-	}
-	return 0, "", false
-}
-
 func statusForErr(err error) (status int, msg string) {
 	switch {
 	case errors.Is(err, db.ErrNoTenant):

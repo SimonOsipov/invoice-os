@@ -4,6 +4,7 @@ package invoice
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -28,6 +29,8 @@ func TestTransmitGate_SeamErrorFromRoleLookupKeepsItsRefusal(t *testing.T) {
 		want string
 	}{
 		{"locked workspace", "", db.ErrWorkspaceLocked, db.WorkspaceLockedMessage},
+		{"wrapped locked workspace", "", fmt.Errorf("role lookup: %w", db.ErrWorkspaceLocked), db.WorkspaceLockedMessage},
+		{"no tenant keeps the approver text", "", db.ErrNoTenant, wantNotApproverTransmitReason},
 		{"suspended approver keeps the approver text", "admin", db.ErrNotActiveMember, wantNotApproverTransmitReason},
 		{"preparer still gets the approver text", "preparer", nil, wantNotApproverTransmitReason},
 	}

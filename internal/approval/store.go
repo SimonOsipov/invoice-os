@@ -439,7 +439,7 @@ func (s *Store) SetRoleMembers(ctx context.Context, key string, members []string
 		var removed int
 		if err := tx.QueryRow(ctx,
 			`SELECT count(*) FILTER (WHERE status = 'removed')
-			   FROM (SELECT status FROM memberships WHERE user_id = ANY($1::uuid[]) FOR SHARE) r`, ids,
+			   FROM (SELECT status FROM memberships WHERE user_id = ANY($1::uuid[]) ORDER BY user_id FOR SHARE) r`, ids,
 		).Scan(&removed); err != nil {
 			return err
 		}

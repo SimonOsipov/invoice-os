@@ -22,6 +22,7 @@ import (
 const (
 	byTokenSig       = "public.invitation_by_token(text)"
 	acceptSig        = "public.accept_invitation(uuid, text, uuid, text)"
+	acceptNamedSig   = "public.accept_invitation(uuid, text, uuid, text, text)"
 	acceptCall       = `SELECT invitation_id::text, role FROM public.accept_invitation($1::uuid, $2::text, $3::uuid, $4::text)`
 	lookupCall       = `SELECT invitation_id::text, tenant_id::text, workspace, role, email FROM public.invitation_by_token($1::text)`
 	invitedAddress   = "tunde@obi.test"
@@ -844,20 +845,22 @@ func TestRLS_AcceptInvitationSharesTheProvisionLock(t *testing.T) {
 func TestRLS_AcceptInvitationIsOwnedAndGrantedNarrowly(t *testing.T) {
 	requireHarness(t)
 
-	s, ok := readProc(t, acceptSig)
-	if !ok {
-		t.Fatalf("function %s does not exist", acceptSig)
+	for _, sig := range []string{acceptSig, acceptNamedSig} {
+		s, ok := readProc(t, sig)
+		if !ok {
+			t.Fatalf("function %s does not exist", sig)
+		}
+		if s.owner != "invoice_migrator" {
+			t.Errorf("%s owner = %q, want invoice_migrator", sig, s.owner)
+		}
+		if !s.secdef {
+			t.Errorf("%s prosecdef = false, want SECURITY DEFINER", sig)
+		}
+		if !reflect.DeepEqual(s.config, []string{`search_path=""`}) {
+			t.Errorf("%s proconfig = %q, want [search_path=\"\"]", sig, s.config)
+		}
+		assertExecuteOnlyForApp(t, sig, s, "invoice_migrator")
 	}
-	if s.owner != "invoice_migrator" {
-		t.Errorf("owner = %q, want invoice_migrator", s.owner)
-	}
-	if !s.secdef {
-		t.Errorf("prosecdef = false, want SECURITY DEFINER")
-	}
-	if !reflect.DeepEqual(s.config, []string{`search_path=""`}) {
-		t.Errorf("proconfig = %q, want [search_path=\"\"]", s.config)
-	}
-	assertExecuteOnlyForApp(t, acceptSig, s, "invoice_migrator")
 }
 
 const acceptNamedCall = `SELECT invitation_id::text, role FROM public.accept_invitation($1::uuid, $2::text, $3::uuid, $4::text, $5::text)`

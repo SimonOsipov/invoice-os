@@ -359,8 +359,7 @@ func TestRLS_MembershipsStatusDefaultsActive(t *testing.T) {
 	}
 }
 
-// AC-1: status accepts exactly active/invited/suspended; anything else is refused
-// with a check_violation, SQLSTATE 23514.
+// AC-1: a status outside the vocabulary is refused with a check_violation, SQLSTATE 23514.
 func TestRLS_MembershipsStatusVocabulary(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
@@ -912,6 +911,29 @@ func TestRLS_IdentityHasRemovedMembership(t *testing.T) {
 			t.Error("identity_has_removed_membership = false, want true: one removed row is enough")
 		}
 	})
+	// ceiling 1 of the migration: the answer ignores app.current_tenant, so it is the same under another tenant's GUC and an unset one.
+	t.Run("the answer ignores the tenant GUC", func(t *testing.T) {
+		user := uuid.NewString()
+		seedMemberRow(t, h.tenantA, user, "preparer", "removed", nil, nil)
+		for _, guc := range []string{h.tenantB, ""} {
+			var got, other bool
+			err := inAppTx(context.Background(), guc, func(tx pgx.Tx) error {
+				if err := tx.QueryRow(context.Background(), `SELECT public.identity_has_removed_membership($1::uuid)`, user).Scan(&got); err != nil {
+					return err
+				}
+				return tx.QueryRow(context.Background(), `SELECT public.identity_has_removed_membership($1::uuid)`, uuid.NewString()).Scan(&other)
+			})
+			if err != nil || !got || other {
+				t.Errorf("GUC %q: (removed user, stranger) = (%v, %v) err %v, want (true, false)", guc, got, other, err)
+			}
+		}
+	})
+	t.Run("a NULL user id", func(t *testing.T) {
+		var got *bool
+		if err := h.app.QueryRow(context.Background(), `SELECT public.identity_has_removed_membership(NULL::uuid)`).Scan(&got); err != nil || got == nil || *got {
+			t.Errorf("identity_has_removed_membership(NULL) = %v (%v), want false", got, err)
+		}
+	})
 }
 
 func TestRLS_IdentityHasRemovedMembershipIsNotPublic(t *testing.T) {
@@ -942,7 +964,64 @@ func TestRLS_IdentityHasRemovedMembershipIsNotPublic(t *testing.T) {
 			t.Errorf("%s EXECUTE on %s = %v, want %v", c.role, sig, has, c.want)
 		}
 	}
-	if s, ok := readProc(t, sig); ok && s.publicAny {
-		t.Error("PUBLIC holds EXECUTE (or proacl is the NULL default), want revoked")
+	s, ok := readProc(t, sig)
+	if !ok {
+		t.Fatalf("function %s does not exist", sig)
+	}
+	assertExecuteOnlyForApp(t, sig, s, "auth_hook_reader")
+	if s.owner != "auth_hook_reader" || !s.secdef || s.volatile != "s" || !reflect.DeepEqual(s.config, []string{`search_path=""`}) {
+		t.Errorf("(owner, secdef, volatile, config) = (%s, %v, %s, %v), want (auth_hook_reader, true, s, [search_path=\"\"])", s.owner, s.secdef, s.volatile, s.config)
+	}
+}
+
+// Down runs under FORCE RLS: it must reach removed rows in every tenant, then put FORCE back.
+func TestRLS_MembershipRemovedDownTurnsRemovedRowsSuspended(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+	provider := staffMigrationProvider(t)
+	version := migrationVersion(t, "*_membership_removed.sql")
+
+	removedA, removedB, kept := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	seedMemberRow(t, h.tenantA, removedA, "preparer", "removed", "Ada", nil)
+	seedMemberRow(t, h.tenantB, removedB, "preparer", "removed", nil, nil)
+	seedMemberRow(t, h.tenantA, kept, "preparer", "active", "Bola", "bola@obi.test")
+
+	t.Cleanup(func() {
+		if _, err := provider.ApplyVersion(context.Background(), version, true); err != nil && !errors.Is(err, goose.ErrAlreadyApplied) {
+			t.Errorf("re-apply membership_removed: %v", err)
+		}
+	})
+	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
+		t.Fatalf("Down with removed rows present: %v", err)
+	}
+
+	for _, c := range []struct{ tenant, user, status string }{{h.tenantA, removedA, "suspended"}, {h.tenantB, removedB, "suspended"}, {h.tenantA, kept, "active"}} {
+		if s := readMemberSnap(t, c.tenant, c.user); s.Status != c.status {
+			t.Errorf("status after Down = %q, want %q", s.Status, c.status)
+		}
+	}
+	if s := readMemberSnap(t, h.tenantA, removedA); s.Display == nil || *s.Display != "Ada" {
+		t.Errorf("display_name after Down = %v, want Ada kept", s.Display)
+	}
+	var forced bool
+	if err := h.super.QueryRow(ctx, `SELECT relforcerowsecurity FROM pg_class WHERE oid = 'public.memberships'::regclass`).Scan(&forced); err != nil || !forced {
+		t.Errorf("memberships FORCE ROW LEVEL SECURITY after Down = %v (%v), want true", forced, err)
+	}
+	if err := setStatusAsMigrator(t, h.tenantA, readMemberSnap(t, h.tenantA, kept).ID, "removed"); pgCode(err) != "23514" {
+		t.Errorf("status 'removed' after Down: SQLSTATE %q (%v), want 23514", pgCode(err), err)
+	}
+	for _, sig := range []string{
+		"public.identity_has_removed_membership(uuid)",
+		"public.accept_invitation(uuid, text, uuid, text, text)",
+		"public.accept_invitation_by_id(uuid, uuid, uuid, text, text)",
+	} {
+		if _, ok := readProc(t, sig); ok {
+			t.Errorf("%s still exists after Down", sig)
+		}
+	}
+	for _, sig := range []string{"public.accept_invitation(uuid, text, uuid, text)", "public.accept_invitation_by_id(uuid, uuid, uuid, text)"} {
+		if _, ok := readProc(t, sig); !ok {
+			t.Errorf("%s is gone after Down, want the old form restored", sig)
+		}
 	}
 }

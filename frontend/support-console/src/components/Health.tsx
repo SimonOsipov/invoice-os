@@ -28,10 +28,11 @@ type Props = {
 }
 
 type Tone = 'green' | 'amber' | 'red' | 'muted'
-type Tile = { key: string; label: string; value: string; unit: string; word?: string; scope?: string; tone: Tone; down?: string[]; worst?: string; points: number[] }
+type Tile = { key: string; label: string; value: string; unit: string; word?: string; scope?: string; tone: Tone; down?: string[]; worst?: string; max?: string; points: number[] }
 
 const LEGEND_TEXT: CSSProperties = { fontSize: 11, color: 'var(--fg-3)' }
 const ONE_LINE: CSSProperties = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
+const TILE_NOTE: CSSProperties = { fontSize: 11, color: 'var(--fg-3)', overflowWrap: 'anywhere' }
 const CARD: CSSProperties = { border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden', background: 'var(--bg-2)' }
 const NOTE: CSSProperties = { padding: '14px 16px', fontSize: 13, color: 'var(--fg-3)' }
 const STAFF_ONLY = 'Your account is not ASComply staff.'
@@ -92,14 +93,16 @@ function metricTiles(m: StaffMetrics | null, status: HealthStatus, service: stri
     let base: Omit<Tile, 'tone'> = { key: s.key, label: s.label, scope: s.stat === 'connections' ? ALL_SERVICES_TAG : undefined, value: shown.value, unit: s.stat === 'connections' ? tail : shown.unit, points: points.map((p) => p[1]) }
     const worst = s.key === 'p95' && service === '' && m ? worstP95(m) : null
     if (worst && f) {
-      // Main value is the fleet p95; colour, word and sparkline stay on the worst service.
+      // Main value is the fleet p95.
       const fleet = latestOf(f.p95Fleet)
       const main = fleet === null ? { value: '—', unit: 'ms' } : formatValue('ms', fleet)
       base = { ...base, value: main.value, unit: main.unit, worst: `worst ${worst.name} ${shown.value} ${shown.unit}` }
     }
+    // The max never reads below the fleet headline, so at All services it also covers the fleet peak.
+    const top = formatValue(s.unit, Math.max(...(worst && f ? [...points, ...f.p95Fleet] : points).map((p) => p[1])))
+    base = { ...base, max: `max ${top.value} ${s.stat === 'connections' ? tail : top.unit}` }
     if (!s.stat) return { ...base, tone: 'green' }
-    const peak = Math.max(...points.map((p) => formatValue(s.unit, p[1]).n))
-    return { ...base, ...VERDICT[judge(s.stat, shown.n, peak, m?.connection_budget ?? 0)] }
+    return { ...base, ...VERDICT[judge(s.stat, shown.n, top.n, m?.connection_budget ?? 0)] }
   })
 }
 
@@ -276,7 +279,7 @@ function TileCard({ t }: { t: Tile }) {
           </span>
         )}
       </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 6, rowGap: 4, marginBottom: 12 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 6, rowGap: 4, marginBottom: t.max ? 4 : 12 }}>
         <span className="money" style={{ flex: 'none', fontSize: 30, fontWeight: 700, color: 'var(--fg-1)' }}>
           {t.value}
         </span>
@@ -284,8 +287,13 @@ function TileCard({ t }: { t: Tile }) {
           {t.unit}
         </span>
       </div>
+      {t.max && (
+        <div data-max="" className="mono" style={{ ...TILE_NOTE, marginBottom: 12 }}>
+          {t.max}
+        </div>
+      )}
       {t.worst && (
-        <div data-worst="" className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 12, overflowWrap: 'anywhere' }}>
+        <div data-worst="" className="mono" style={{ ...TILE_NOTE, marginBottom: 12 }}>
           {t.worst}
         </div>
       )}

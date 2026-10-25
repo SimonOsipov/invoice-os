@@ -868,6 +868,12 @@ async function metricsMatch(page: Page, m: SeenMetrics, what: string): Promise<v
     if (has) await expect(t.locator('.money'), `${what}: ${key} value`).not.toHaveText('—')
     else await expect(t.locator('.money'), `${what}: ${key} value`).toHaveText('—')
   }
+  for (const key of MAX_TILES) {
+    const max = mn.locator(`[data-tile="${key}"] [data-max]`)
+    const has = statHasData(m, key)
+    await expect(max, `${what}: ${key} max line`).toHaveCount(has ? 1 : 0)
+    if (has) await expect(max, `${what}: ${key} max text`).toHaveText(MAX_TEXT[key])
+  }
   // p95: fleet value and a worst line at All services; a picked service shows its own value alone
   const p95 = mn.locator('[data-tile="p95"]')
   const allServices = m.service === ''
@@ -893,7 +899,7 @@ async function metricsReads(page: Page, testInfo: TestInfo, first: SeenMetrics, 
   // A wrong PreviewSuffix empties every PR-scoped read; the unscoped Cloud SQL panels would still pass above.
   expect(first.limits.available, 'Core AC 2: limits are available; unavailable means run-preview lacks roles/run.viewer on ascomply-preview or the PR suffix matched nothing').toBe(true)
   expect(first.limits.services.map((s) => s.name).sort(), 'Core AC 2: limits list the PR\'s own services (scripts/ci/preview.sh BACKENDS + SITES = systemhealth.MetricServices); missing names mean the PR suffix matched nothing').toEqual([...METRIC_SERVICES].sort())
-  await expect(mn.locator('[data-tile="connections"]').getByText(`of ${CONNECTION_BUDGET}`), 'connections tile shows the budget').toHaveCount(1)
+  await expect(mn.locator('[data-tile="connections"]').getByText(`of ${CONNECTION_BUDGET}`, { exact: true }), 'connections tile shows the budget').toHaveCount(1)
 
   const read = (range: string, service: string | null) =>
     page.waitForResponse((r) => {
@@ -1081,6 +1087,15 @@ const SCOPED = ['fleet', 'connections']
 // Which tiles carry a status word: always, only NO DATA, or never.
 const WORD_RULE: Record<string, 'always' | 'no-data' | 'never'> = { fleet: 'always', req: 'no-data', errors: 'always', p95: 'always', connections: 'always', queue: 'never', 'dead-lettered': 'always' }
 
+// Which tiles carry a max line (the range tiles); the live-ping tiles never do.
+const MAX_TILES = ['req', 'errors', 'p95', 'connections']
+const MAX_TEXT: Record<string, RegExp> = {
+  req: /^max (\d+(\.\d)?k?) req\/min$/,
+  errors: /^max \d+(\.\d+)? %$/,
+  p95: /^max (\d+ ms|\d+\.\d{2} s)$/,
+  connections: new RegExp(`^max \\d+ of ${CONNECTION_BUDGET}$`),
+}
+
 // Reads one tile row by key: its tiles sit in order, share a top and stay apart; each tile holds its label, word, value and unit.
 async function tileRowRead(page: Page, row: Locator, keys: string[], what: string): Promise<{ problems: string[]; rects: Rect[] }> {
   const tiles = row.locator(':scope > [data-tile]')
@@ -1120,11 +1135,22 @@ async function tileRowRead(page: Page, row: Locator, keys: string[], what: strin
       const clip = await worst.evaluate((el) => el.scrollWidth - el.clientWidth)
       if (clip > 0) problems.push(`${key} worst line: clipped by ${clip}px`)
     }
+    const max = t.locator('[data-max]')
+    const hasValue = (await t.locator('.money').innerText()) !== '—'
+    await expect(max, `${key} max line`).toHaveCount(MAX_TILES.includes(key) && (hasValue || hasWorst) ? 1 : 0)
+    const maxBox = (await max.count()) > 0 ? (await boxes(page, { max }))['max'] : null
+    if (maxBox) {
+      problems.push(...within(r.tile, maxBox, `${key} max line`), ...below(r.valueRow, maxBox, `${key} max line under the value row`), ...apart(maxBox, r.value, `${key} max line / value`), ...apart(maxBox, r.unit, `${key} max line / unit`))
+      if (worstBox) problems.push(...below(maxBox, worstBox, `${key} worst line under the max line`))
+      const clip = await max.evaluate((el) => el.scrollWidth - el.clientWidth)
+      if (clip > 0) problems.push(`${key} max line: clipped by ${clip}px`)
+    }
     const svg = t.locator('svg')
     if ((await svg.count()) > 0) {
       const v = (await boxes(page, { svg }))['svg']
       problems.push(...within(r.tile, v, `${key} sparkline`), ...below(r.valueRow, v, `${key} sparkline under the value row`))
       if (worstBox) problems.push(...below(worstBox, v, `${key} sparkline under the worst line`))
+      if (maxBox) problems.push(...below(maxBox, v, `${key} sparkline under the max line`))
     }
   }
   return { problems, rects }
@@ -1329,6 +1355,13 @@ async function healthFixtureLayout(page: Page): Promise<void> {
   await expect(tile('p95').locator('.money + span'), 'p95 unit').toHaveText('ms')
   await expect(tile('p95').locator('[data-worst]'), 'p95 worst line').toHaveText('worst support-console 640 ms')
   await expect(word('connections')).toHaveText('OK')
+  // fixture arithmetic: req sums 17 series (476 + 17 * (i % 7)): last step 544, best 578; 5xx is 2 at every step; worst p95 peaks 1500 ms; connections is 23
+  await expect(tile('req').locator('.money'), 'requests headline').toHaveText('544')
+  await expect(tile('req').locator('[data-max]'), 'requests max').toHaveText('max 578 req/min')
+  await expect(tile('errors').locator('[data-max]'), 'errors max').toHaveText('max 2.00 %')
+  await expect(tile('p95').locator('[data-max]'), 'p95 max beside PEAKED').toHaveText('max 1.50 s')
+  await expect(tile('connections').locator('[data-max]'), 'connections max').toHaveText('max 23 of 80')
+  await expect(tile('fleet').locator('[data-max]'), 'fleet has no max line').toHaveCount(0)
   await expect(mn.locator('.ops-health-panels > [data-panel]'), 'the panels grid holds ten panels').toHaveCount(10)
   await atWidths(page, 'SUP-03 System health fixture layout', async () => {
     const [base, charts] = [await healthLayout(page), await fixturePanelsRead(page)]
@@ -1338,6 +1371,7 @@ async function healthFixtureLayout(page: Page): Promise<void> {
   // app owns no job kind and has no live ping row: both notes show; the metrics route answers any query
   await mn.locator('select[aria-label="Service"]').selectOption('app')
   await expect(mn.locator('[data-tile="p95"] [data-worst]'), 'a picked service has no worst line').toHaveCount(0)
+  await expect(mn.locator('[data-tile="p95"] [data-max]'), 'a picked service keeps the p95 max (fixture check)').toHaveText('max 1.50 s')
   await expect(mn.locator('[data-jobs-note]'), 'app jobs note').toHaveText('app owns no background jobs. Pick submission, notifications, worker or All services to see them.')
   await expect(mn.locator('[data-service]'), 'app has no service row').toHaveCount(0)
   const pinged = (await mn.locator('[data-ping-note]').count()) > 0

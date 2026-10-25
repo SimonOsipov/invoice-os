@@ -879,6 +879,164 @@ describe('System health markup', () => {
 
   const worstOf = (ts: Tag[]) => tileOf(ts, 'p95').filter((t) => t.attrs.includes('data-worst'))
 
+  const maxOf = (ts: Tag[]) => ts.filter((t) => t.attrs.includes('data-max'))
+  const maxTexts = (m: StaffMetrics, key: string, over: Partial<Parameters<typeof Health>[0]> = {}) => maxOf(tileOf(parse(healthWith({ metrics: m, ...over })), key)).map((t) => t.text)
+  const tileWith = (m: StaffMetrics, key: string, over: Partial<Parameters<typeof Health>[0]> = {}) => tileOf(parse(healthWith({ metrics: m, ...over })), key)
+
+  it('every range tile prints its max in the headline format', () => {
+    const ts = parse(healthWith({}))
+    const got = ['req', 'errors', 'p95', 'connections'].map((k) => maxOf(tileOf(ts, k)).map((t) => t.text))
+    expect(got).toEqual([['max 100 req/min'], ['max 1.00 %'], ['max 1.20 s'], ['max 23 of 80']])
+  })
+
+  it('the max is the highest step, not the latest', () => {
+    const req = tileWith(metricsWith({ req_per_min: { a: [[0, 10], [60, 50]], b: [[0, 90], [60, 20]] } }), 'req')
+    expect(texts(req)).toContain('70')
+    expect(maxOf(req).map((t) => t.text)).toEqual(['max 100 req/min'])
+    const err = tileWith(metricsWith({ error_pct: { a: [[0, 3], [60, 0.2]] }, req_per_min: { a: [[0, 10], [60, 10]] } }), 'errors')
+    expect(texts(err)).toContain('0.20')
+    expect(maxOf(err).map((t) => t.text)).toEqual(['max 3.00 %'])
+  })
+
+  it('the max scales its unit on its own value', () => {
+    const p95 = tileWith(metricsWith({ latency_p95_fleet_ms: { fleet: [[0, 500]] }, latency_p95_ms: { a: [[0, 1200]] } }), 'p95')
+    expect(texts(p95)).toContain('500')
+    expect(maxOf(p95).map((t) => t.text)).toEqual(['max 1.20 s'])
+    const low = tileWith(metricsWith({ latency_p95_fleet_ms: { fleet: [[0, 500]] }, latency_p95_ms: { a: [[0, 1200], [60, 640]] } }), 'p95')
+    expect(texts(low)).toContain('worst a 640 ms')
+    expect(maxOf(low).map((t) => t.text)).toEqual(['max 1.20 s'])
+    const req = tileWith(metricsWith({ req_per_min: { a: [[0, 1420], [60, 300]] } }), 'req')
+    expect(texts(req)).toContain('300')
+    expect(maxOf(req).map((t) => t.text)).toEqual(['max 1.4k req/min'])
+  })
+
+  it('the p95 max takes the worst-service peak over a lower fleet peak', () => {
+    const t = tileWith(metricsWith({ latency_p95_fleet_ms: { fleet: [[0, 500], [60, 300]] }, latency_p95_ms: { a: [[0, 1500], [60, 640]] } }), 'p95')
+    expect(texts(t)).toEqual(expect.arrayContaining(['300', 'worst a 640 ms', 'max 1.50 s', 'PEAKED']))
+  })
+
+  it('the p95 max is never below the fleet headline', () => {
+    const t = tileWith(metricsWith({ latency_p95_fleet_ms: { fleet: [[0, 1500]] }, latency_p95_ms: { a: [[0, 1200], [60, 100]], b: [[0, 50], [60, 200]] } }), 'p95')
+    expect(texts(t)).toEqual(expect.arrayContaining(['1.50', 'worst b 200 ms', 'max 1.50 s', 'PEAKED']))
+  })
+
+  it('the word follows the printed p95 max when the fleet peak wins', () => {
+    const t = tileWith(metricsWith({ latency_p95_fleet_ms: { fleet: [[0, 1500], [60, 300]] }, latency_p95_ms: { a: [[0, 900], [60, 640]] } }), 'p95')
+    expect(texts(t)).toEqual(expect.arrayContaining(['300', 'worst a 640 ms', 'max 1.50 s', 'PEAKED']))
+  })
+
+  it('a picked service shows its own p95 max', () => {
+    const m = metricsWith({ latency_p95_ms: { b: [[0, 1200], [60, 300]] }, latency_p95_fleet_ms: {} })
+    expect(maxTexts(m, 'p95', { service: 'b' })).toEqual(['max 1.20 s'])
+    expect(worstOf(parse(healthWith({ metrics: m, service: 'b' })))).toHaveLength(0)
+  })
+
+  it('the connections max ignores the service pick', () => {
+    const m = metricsWith({ sql_connections: { database: [[0, 70], [60, 23]] } })
+    expect(maxTexts(m, 'connections', { service: 'b' })).toEqual(['max 70 of 80'])
+  })
+
+  it('PEAKED shows a max over the threshold', () => {
+    const m = metricsWith({
+      error_pct: { a: [[0, 3], [60, 0.2]] },
+      req_per_min: { a: [[0, 10], [60, 10]] },
+      latency_p95_ms: { a: [[0, 1500], [60, 640]] },
+      sql_connections: { database: [[0, 70], [60, 23]] },
+    })
+    const ts = parse(healthWith({ metrics: m }))
+    for (const [key, over] of [['errors', 1], ['p95', 1000], ['connections', 64]] as const) {
+      const t = tileOf(ts, key)
+      expect(texts(t), key).toContain('PEAKED')
+      const n = parseFloat(maxOf(t)[0].text.split(' ')[1]) * (key === 'p95' ? 1000 : 1)
+      expect(n, key).toBeGreaterThan(over)
+    }
+  })
+
+  it('the max line and the word agree at each boundary', () => {
+    const at = (key: string, over: PanelSeries) => {
+      const t = tileWith(metricsWith({ req_per_min: { a: [[0, 10], [60, 10]] }, ...over }), key)
+      return [maxOf(t)[0].text, texts(t).find((x) => /^(OK|PEAKED|HIGH)$/.test(x))]
+    }
+    expect(at('errors', { error_pct: { a: [[0, 1.004], [60, 0.2]] } })).toEqual(['max 1.00 %', 'OK'])
+    expect(at('errors', { error_pct: { a: [[0, 1.006], [60, 0.2]] } })).toEqual(['max 1.01 %', 'PEAKED'])
+    expect(at('p95', { latency_p95_ms: { a: [[0, 1004], [60, 300]] } })).toEqual(['max 1.00 s', 'OK'])
+    expect(at('p95', { latency_p95_ms: { a: [[0, 1006], [60, 300]] } })).toEqual(['max 1.01 s', 'PEAKED'])
+    expect(at('connections', { sql_connections: { database: [[0, 64], [60, 23]] } })).toEqual(['max 64 of 80', 'OK'])
+    expect(at('connections', { sql_connections: { database: [[0, 65], [60, 23]] } })).toEqual(['max 65 of 80', 'PEAKED'])
+  })
+
+  it('the max line has the sibling style and no status colour', () => {
+    const ts = parse(healthWith({}))
+    for (const key of ['req', 'errors', 'p95', 'connections']) {
+      const [m] = maxOf(tileOf(ts, key))
+      expect(classes(m), key).toContain('mono')
+      expect(style(m)['font-size'], key).toBe('11px')
+      expect(style(m).color, key).toBe('var(--fg-3)')
+      expect(attr(m, 'style'), key).not.toContain('--status-')
+    }
+    expect(dotOf(tileOf(ts, 'req'))).toBeUndefined()
+    expect(dotOf(tileOf(ts, 'errors'))).toBe('var(--status-green-text)')
+    expect(dotOf(tileOf(ts, 'p95'))).toBe('var(--status-red-text)')
+    expect(dotOf(tileOf(ts, 'connections'))).toBe('var(--status-green-text)')
+  })
+
+  it('Requests carries its max and no word', () => {
+    const t = tileOf(parse(healthWith({})), 'req')
+    expect(maxOf(t).map((x) => x.text)).toEqual(['max 100 req/min'])
+    expect(texts(t).filter((x) => /^[A-Z ]+$/.test(x))).toEqual([])
+  })
+
+  it('the max line sits between the value row and the worst line', () => {
+    const t = tileOf(parse(healthWith({})), 'p95')
+    const at = (pred: (x: Tag) => boolean) => t.findIndex(pred)
+    const unit = at((x) => x.text === 'ms')
+    const max = at((x) => x.attrs.includes('data-max'))
+    const worst = at((x) => x.attrs.includes('data-worst'))
+    expect(unit).toBeGreaterThan(-1)
+    expect(max).toBe(unit + 1)
+    expect(worst).toBeGreaterThan(max)
+  })
+
+  it('no value, no max line', () => {
+    const cases = [
+      healthWith({ metrics: metricsWith({}, false) }),
+      healthWith({ metricsStatus: 'error', metrics: null }),
+      healthWith({ metricsStatus: 'forbidden', metrics: null }),
+      healthWith({ metricsStatus: 'loading', metrics: null }),
+    ]
+    for (const html of cases) {
+      const ts = parse(html)
+      for (const key of ['req', 'errors', 'p95', 'connections']) expect(maxOf(tileOf(ts, key)), key).toHaveLength(0)
+    }
+  })
+
+  it('a max equal to the latest value still shows', () => {
+    const t = tileWith(metricsWith({ req_per_min: { a: [[0, 42]] } }), 'req')
+    expect(texts(t)).toContain('42')
+    expect(maxOf(t).map((x) => x.text)).toEqual(['max 42 req/min'])
+  })
+
+  it('a p95 tile with no fleet value still prints its max', () => {
+    const t = tileWith(metricsWith({ latency_p95_fleet_ms: {} }), 'p95')
+    expect(texts(t)).toEqual(expect.arrayContaining(['—', 'worst b 1.20 s', 'max 1.20 s', 'HIGH']))
+  })
+
+  it('a picked service ignores the fleet peak in the answer', () => {
+    const m = metricsWith({ latency_p95_fleet_ms: { fleet: [[0, 5000], [60, 100]] }, latency_p95_ms: { b: [[0, 700], [60, 300]] } })
+    expect(maxTexts(m, 'p95', { service: 'b' })).toEqual(['max 700 ms'])
+  })
+
+  it('a tile whose own series is empty has no max while its siblings keep theirs', () => {
+    const m = metricsWith({ error_pct: {}, req_per_min: { a: [[0, 10], [60, 30]] } })
+    expect(maxTexts(m, 'errors')).toEqual([])
+    expect(maxTexts(m, 'req')).toEqual(['max 30 req/min'])
+  })
+
+  it('the live-ping tiles carry no max line', () => {
+    const ts = parse(healthWith({}))
+    for (const key of ['fleet', 'queue', 'dead-lettered']) expect(maxOf(tileOf(ts, key)), key).toHaveLength(0)
+  })
+
   it('the p95 tile shows the fleet value and the worst service', () => {
     const ts = parse(healthWith({}))
     expect(texts(tileOf(ts, 'p95'))).toEqual(expect.arrayContaining(['500', 'ms', 'HIGH']))

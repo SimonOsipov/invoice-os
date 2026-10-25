@@ -334,7 +334,7 @@ func TestAuditScopeOf_CustomerEventsAreWorkspace(t *testing.T) {
 }
 
 // AC #4 drift guard: reuses audit_trigger_test.go's own triggerRuleDPayloads (already
-// DB-pinned at 27 rows by TestAudit_InsertTriggerLeavesWorkspaceEventsNull) instead of
+// DB-pinned by TestAudit_InsertTriggerLeavesWorkspaceEventsNull) instead of
 // a fifth hand-written copy of the list. A rule-D event that is neither firm-wide nor
 // already listed below fails here through ScopeOf's fallback, forcing a human to classify
 // it (D-28's fail-safe intent).

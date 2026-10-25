@@ -191,7 +191,7 @@ func (s *Store) ListMemberships(ctx context.Context) ([]MemberAccess, error) {
 // Both statements are bare of any tenant_id clause — RLS scopes them, so a
 // cross-tenant target is simply absent from the result.
 //
-// Guards run in this order: target missing -> target invited -> already at the
+// Guards run in this order: target missing -> target invited -> target removed -> already at the
 // requested status (200 no-op, no UPDATE, no audit) -> last active admin. The
 // no-op must precede the last-admin guard, or re-suspending an already-suspended
 // sole admin would 409 a request that changes nothing.

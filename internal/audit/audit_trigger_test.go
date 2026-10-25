@@ -24,7 +24,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// The attributable events, by rule, plus the 27 workspace-level ones.
+// The attributable events, by rule, plus the workspace-level ones.
 var (
 	triggerRuleAEvents = []string{ // bare `id`, looked up through invoices
 		"invoice.created",
@@ -166,7 +166,7 @@ func TestAudit_InsertTriggerResolvesPortfolioEventsFromTheirOwnPayload(t *testin
 	}
 }
 
-// AC-13: the 27 workspace-level events stay NULL even when their payload holds a real
+// AC-13: the workspace-level events stay NULL even when their payload holds a real
 // invoice id. The rule-A row in the same test is the positive control.
 //
 // For the two extraction.* names this is a DRIFT GUARD, not proof of their scope: the

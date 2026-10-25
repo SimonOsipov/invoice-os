@@ -47,7 +47,7 @@ var ErrTenantNotFound = errors.New("tenancy: tenant not found")
 // no domain role. Fail-closed: a role must never be defaulted when this occurs.
 var ErrNoMembership = errors.New("tenancy: no membership")
 
-// Sentinels for PATCH /v1/memberships/{user_id} (SetMembershipStatus).
+// Sentinels for the /v1/memberships/{user_id} routes.
 var (
 	ErrNotPermitted             = errors.New("tenancy: not permitted")
 	ErrMembershipNotFound       = errors.New("tenancy: membership not found")

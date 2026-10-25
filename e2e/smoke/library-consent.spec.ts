@@ -232,8 +232,8 @@ const routedTest = test.extend<{ routed: Page }>({
 const grant = (ts = new Date().toISOString()): string => encodeURIComponent(JSON.stringify({ analytics: true, ts, v: 1 }))
 const grantCookie = { name: 'asc_consent', value: grant(), domain: '.ascomply.com', path: '/', secure: true, sameSite: 'Lax' as const }
 
-async function cookiesNamed(page: Page, name: string | RegExp, url?: string) {
-  const all = await page.context().cookies(url)
+async function cookiesNamed(page: Page, name: string | RegExp) {
+  const all = await page.context().cookies()
   return all.filter((c) => (typeof name === 'string' ? c.name === name : name.test(c.name)))
 }
 

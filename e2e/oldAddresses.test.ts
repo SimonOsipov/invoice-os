@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { libraryPathsOf, newAddressOf, oldUrls } from './smoke/oldAddresses'
 
@@ -41,5 +42,20 @@ describe('oldAddresses', () => {
   it('libraryPathsOf lists each group and each feature under its group', () => {
     const src = "{ id: 'invoices', n: '01', name: 'x' }\n F('import-files', 'T')\n { id: 'rules', n: '02' }\n F('validate', 'V')"
     expect(libraryPathsOf(src)).toEqual(['/invoices', '/invoices/import-files', '/rules', '/rules/validate'])
+  })
+
+  it('oldUrls asks every fixed blog and library address', () => {
+    const urls = oldUrls(['https://www.ascomply.com/blog/', 'https://www.ascomply.com/blog/p'], ['/rules'])
+    for (const path of ['/', '/robots.txt', '/sitemap.xml', '/subscribe', '/blog/']) expect(urls).toContain(`https://blog.ascomply.com${path}`)
+    expect(urls).toContain(`https://blog.ascomply.com/subscribe/confirm?token=${'t'.repeat(43)}`)
+    for (const path of ['/', '/library/invoices']) expect(urls).toContain(`https://library.ascomply.com${path}`)
+  })
+
+  it('libraryPathsOf reads every group and feature of the real content.ts', () => {
+    const src = readFileSync(new URL('../frontend/library/src/content.ts', import.meta.url), 'utf8')
+    const paths = libraryPathsOf(src)
+    expect(paths.filter((p) => p.split('/').length === 2)).toHaveLength(11)
+    expect(paths.filter((p) => p.split('/').length === 3)).toHaveLength(26)
+    expect(paths).toContain('/invoices/import-files')
   })
 })

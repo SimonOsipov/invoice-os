@@ -2,7 +2,7 @@
 --
 -- `make dev-db` runs this in-container as the POSTGRES SUPERUSER, after migrations.
 -- The superuser has BYPASSRLS, so these inserts need no app.current_tenant context and
--- no INSERT grant on the app role (invoice_app is deliberately SELECT-only on tenants).
+-- no INSERT grant on the app role.
 -- Idempotent (ON CONFLICT DO NOTHING) so re-running `make dev-db` never errors.
 --
 -- The UUIDs are FIXED and well-known on purpose: mint a mock-issuer JWT (M2-05) with

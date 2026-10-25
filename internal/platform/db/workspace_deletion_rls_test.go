@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -240,6 +241,22 @@ func TestRLS_TenantsDeletionIsAllOrNone(t *testing.T) {
 		t.Errorf("constraint = %q, want %q", pgErr.ConstraintName, constraint)
 	}
 	wdAssertUnset(t, "after the refusal", fresh)
+
+	// With the trigger bypassed the CHECK alone must still refuse a half-set row.
+	for _, set := range []string{`deletion_due_at = now()`, `deletion_scheduled_at = now(), deletion_scheduled_by = gen_random_uuid()`} {
+		tx, err := h.super.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+			t.Fatalf("bypass the trigger: %v", err)
+		}
+		_, err = tx.Exec(ctx, `UPDATE tenants SET `+set+` WHERE id = $1`, fresh)
+		_ = tx.Rollback(ctx)
+		if pgErr := wdPgErr(t, "trigger bypassed, "+set, err, "23514"); pgErr.ConstraintName != constraint {
+			t.Errorf("trigger bypassed, %s: constraint = %q, want %q", set, pgErr.ConstraintName, constraint)
+		}
+	}
 }
 
 func TestRLS_AppUpdatesOnlyTheTwoScheduleColumnsOfItsTenant(t *testing.T) {
@@ -278,6 +295,18 @@ func TestRLS_AppUpdatesOnlyTheTwoScheduleColumnsOfItsTenant(t *testing.T) {
 		t.Errorf("A after its own update = %+v, want scheduled by %s", s, by)
 	}
 	wdAssertUnset(t, "B after an update bound to A", b)
+
+	if err := inAppTx(ctx, a, func(tx pgx.Tx) error {
+		tag, e := tx.Exec(ctx, set+` WHERE id = $2`, uuid.NewString(), b)
+		n = tag.RowsAffected()
+		return e
+	}); err != nil {
+		t.Fatalf("update of B by id bound to A: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("rows of B updated by id while bound to A = %d, want 0", n)
+	}
+	wdAssertUnset(t, "B after an update that names it, bound to A", b)
 
 	freshID := uuid.NewString()
 	cleanupTenant(t, freshID)
@@ -456,5 +485,169 @@ func TestRLS_InviteReadersStayDefinersOfAuthHookReader(t *testing.T) {
 	}
 	if want := []string{"deletion_due_at", "id", "name"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("auth_hook_reader SELECT columns on tenants = %v, want %v", got, want)
+	}
+}
+
+func TestRLS_TenantsDeletionDueCannotBeForgedByAnyWriter(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	wdRequireColumns(t)
+	at1 := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	at2 := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+
+	id := newNamedTenant(t, "Forge probe")
+	wdSchedule(t, id, `'2026-10-10 12:00:00+00'`)
+	if _, err := h.super.Exec(ctx, `UPDATE tenants SET deletion_due_at = '2030-01-01 00:00:00+00' WHERE id = $1`, id); err != nil {
+		t.Fatalf("write deletion_due_at as the superuser: %v", err)
+	}
+	if s := wdRead(t, id); s.dueAt == nil || !s.dueAt.Equal(at1.AddDate(0, 0, 30)) {
+		t.Errorf("deletion_due_at after a direct write = %v, want the derived %s", s.dueAt, at1.AddDate(0, 0, 30))
+	}
+
+	wdSchedule(t, id, `'2026-12-01 00:00:00+00'`)
+	if s := wdRead(t, id); s.dueAt == nil || !s.dueAt.Equal(at2.AddDate(0, 0, 30)) {
+		t.Errorf("deletion_due_at after a reschedule = %v, want %s", s.dueAt, at2.AddDate(0, 0, 30))
+	}
+
+	ins := uuid.NewString()
+	cleanupTenant(t, ins)
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO tenants (id, name, deletion_scheduled_at, deletion_due_at, deletion_scheduled_by)
+		 VALUES ($1, 'Forge insert', '2026-10-10 12:00:00+00', '2000-01-01 00:00:00+00', $2)`, ins, uuid.NewString()); err != nil {
+		t.Fatalf("insert a scheduled tenant as the superuser: %v", err)
+	}
+	if s := wdRead(t, ins); s.dueAt == nil || !s.dueAt.Equal(at1.AddDate(0, 0, 30)) {
+		t.Errorf("deletion_due_at of an inserted row = %v, want the derived %s", s.dueAt, at1.AddDate(0, 0, 30))
+	}
+}
+
+func TestRLS_ALockedWorkspaceHidesOnlyItsOwnInviteForASharedAddress(t *testing.T) {
+	requireHarness(t)
+	wdRequireColumns(t)
+	email := uniqueAddr("shared")
+	a, b := newNamedTenant(t, "Shared invite A"), newNamedTenant(t, "Shared invite B")
+	tokA, tokB := newToken(t), newToken(t)
+	idA := seedAcceptInvite(t, a, "reviewer", email, tokA)
+	idB := seedAcceptInvite(t, b, "reviewer", email, tokB)
+
+	ids := func() []string {
+		var out []string
+		for _, r := range pendingFor(t, "", email) {
+			out = append(out, r.id)
+		}
+		return out
+	}
+	if got := ids(); len(got) != 2 {
+		t.Fatalf("control: pending invites for the shared address = %v, want both", got)
+	}
+	wdSchedule(t, a, `now()`)
+	if got := ids(); !reflect.DeepEqual(got, []string{idB}) {
+		t.Errorf("pending invites with A locked = %v, want only B's %s", got, idB)
+	}
+	if !invitationPendingFor(t, "", email) {
+		t.Error("invitation_pending_for_email with A locked and B open = false, want true")
+	}
+	if n := len(lookupAs(t, "", tokA)); n != 0 {
+		t.Errorf("invitation_by_token for A's token = %d rows, want 0", n)
+	}
+	if n := len(lookupAs(t, "", tokB)); n != 1 {
+		t.Errorf("invitation_by_token for B's token = %d rows, want 1", n)
+	}
+	wdSchedule(t, b, `now()`)
+	if got := ids(); len(got) != 0 {
+		t.Errorf("pending invites with both locked = %v, want none", got)
+	}
+	if invitationPendingFor(t, "", email) {
+		t.Error("invitation_pending_for_email with both locked = true, want false")
+	}
+	wdClear(t, a)
+	if got := ids(); !reflect.DeepEqual(got, []string{idA}) {
+		t.Errorf("pending invites with only A cleared = %v, want %s", got, idA)
+	}
+}
+
+// Down must put the three old bodies back: a SQL function body is not checked against dropped columns.
+func TestRLS_WorkspaceDeletionDownRestoresTheInviteReadersAndRoundTrips(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	wdRequireColumns(t)
+	provider := staffMigrationProvider(t)
+	version := migrationVersion(t, "*_workspace_deletion.sql")
+
+	tenant, token, email := newNamedTenant(t, "Down probe"), newToken(t), uniqueAddr("down")
+	seedAcceptInvite(t, tenant, "reviewer", email, token)
+	wdSchedule(t, tenant, `now()`)
+	restoreMigrationOnCleanup(t, provider, version)
+	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
+		t.Fatalf("Down of the deletion migration with a scheduled tenant: %v", err)
+	}
+
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'tenants' AND column_name = ANY($1)`, wdColumns); n != 0 {
+		t.Errorf("deletion columns after Down = %d, want 0", n)
+	}
+	if _, ok := readProc(t, "public.tenants_deletion_guard()"); ok {
+		t.Error("tenants_deletion_guard still exists after Down")
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.tenants'::regclass AND tgname = 'tenants_deletion_guard'`); n != 0 {
+		t.Errorf("tenants_deletion_guard triggers after Down = %d, want 0", n)
+	}
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM information_schema.column_privileges WHERE table_schema = 'public' AND table_name = 'tenants' AND grantee = 'invoice_app' AND privilege_type = 'UPDATE'`); n != 0 {
+		t.Errorf("invoice_app UPDATE column grants on tenants after Down = %d, want 0", n)
+	}
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM information_schema.column_privileges WHERE table_schema = 'public' AND table_name = 'tenants' AND grantee = 'auth_hook_reader' AND privilege_type = 'SELECT'`); n != 2 {
+		t.Errorf("auth_hook_reader SELECT column grants on tenants after Down = %d, want 2 (id, name)", n)
+	}
+	for _, sig := range []string{byTokenSig, pendingSig, pendingForEmailSig} {
+		s, ok := readProc(t, sig)
+		if !ok {
+			t.Errorf("%s is gone after Down", sig)
+			continue
+		}
+		if s.owner != "auth_hook_reader" || !s.secdef || !reflect.DeepEqual(s.config, []string{`search_path=""`}) {
+			t.Errorf("%s after Down = %+v, want a SECURITY DEFINER of auth_hook_reader with search_path fixed", sig, s)
+		}
+		assertExecuteOnlyForApp(t, sig, s, "auth_hook_reader")
+		var src string
+		if err := h.super.QueryRow(ctx, `SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure($1)`, sig).Scan(&src); err != nil {
+			t.Fatalf("read the body of %s: %v", sig, err)
+		}
+		if strings.Contains(src, "deletion_due_at") {
+			t.Errorf("%s still reads deletion_due_at after Down", sig)
+		}
+	}
+	if n := len(lookupAs(t, "", token)); n != 1 {
+		t.Errorf("invitation_by_token after Down = %d rows, want 1", n)
+	}
+	if n := len(pendingFor(t, "", email)); n != 1 {
+		t.Errorf("pending_invites_for_email after Down = %d rows, want 1", n)
+	}
+	if !invitationPendingFor(t, "", email) {
+		t.Error("invitation_pending_for_email after Down = false, want true")
+	}
+
+	revEmail, revToken := uniqueAddr("down-revoked"), newToken(t)
+	setInviteState(t, seedAcceptInvite(t, tenant, "reviewer", revEmail, revToken), "status = 'revoked'")
+	if n := len(lookupAs(t, "", revToken)) + len(pendingFor(t, "", revEmail)); n != 0 || invitationPendingFor(t, "", revEmail) {
+		t.Errorf("a revoked invite after Down: by_token + pending rows = %d, pending_for_email = %v, want 0 and false", n, invitationPendingFor(t, "", revEmail))
+	}
+	removedUser, activeUser := uuid.NewString(), uuid.NewString()
+	seedMemberRow(t, h.tenantA, removedUser, "preparer", "removed", nil, nil)
+	seedMemberRow(t, h.tenantB, activeUser, "preparer", "active", nil, nil)
+	if n := len(pendingForUser(t, "", email, removedUser)); n != 1 {
+		t.Errorf("pending_invites_for_email for a removed member after Down = %d rows, want 1", n)
+	}
+	if n := len(pendingForUser(t, "", email, activeUser)); n != 0 {
+		t.Errorf("pending_invites_for_email for an active member after Down = %d rows, want 0", n)
+	}
+
+	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
+		t.Fatalf("Up of the deletion migration after Down: %v", err)
+	}
+	wdSchedule(t, tenant, `now()`)
+	if n := len(lookupAs(t, "", token)); n != 0 {
+		t.Errorf("invitation_by_token after the round trip, tenant scheduled = %d rows, want 0", n)
 	}
 }

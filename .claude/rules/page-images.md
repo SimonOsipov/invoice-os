@@ -33,7 +33,7 @@ paths:
 - Assume one render per job. Re-derive `maxPages` before you wire `PDFiumExtractor` beside `PageStore`.
 - Re-derive `maxPages` before you fill `ExtractWorker.Text` with a local reader. `selectTextReader` fills it only under docling.
 - Keep the page images as long as the source document. Set no TTL and no bucket lifecycle rule.
-- Delete a bucket object only in `document.DeleteTenantObjects`, during a tenant purge (see `db-migrations.md`).
+- Delete a bucket object only in `document.DeleteTenantObjects`, during a tenant purge.
 - Expect orphan PNGs after a demo purge. It deletes the rows and leaves the objects.
 - Select the object key off an RLS-visible row in `Reader.PageImageKey`. Never rebuild it with `PageKey` on a request.
 - Pass no caller-supplied text to object storage. `GET /v1/extractions/{id}/pages/{n}` streams the object as `image/png`.

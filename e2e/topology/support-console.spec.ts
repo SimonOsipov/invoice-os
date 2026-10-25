@@ -9,6 +9,7 @@ import { apiBase, fleetHeaders, getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, p
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { scopeStrays } from './metricsScope'
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
@@ -106,12 +107,13 @@ const below = (above: Rect, lower: Rect, what: string): string[] => (lower.y >= 
 const centreY = (r: Rect): number => r.y + r.height / 2
 const sameCentreY = (a: Rect, b: Rect, what: string): string[] => (Math.abs(centreY(a) - centreY(b)) <= 1 ? [] : [`${what}: centres ${centreY(a)} vs ${centreY(b)}`])
 const sameTops = (rs: Rect[], what: string): string[] => (rs.every((r) => Math.abs(r.y - rs[0].y) <= 1) ? [] : [`${what}: tops ${rs.map((r) => r.y).join(', ')}`])
+const sameColumn = (a: Rect, b: Rect, what: string): string[] => (Math.abs(a.x - b.x) <= 1 && Math.abs(a.width - b.width) <= 1 ? [] : [`${what}: left/width ${a.x}/${a.width} vs ${b.x}/${b.width}`])
 const pairwiseApart = (rs: Rect[], what: string): string[] => rs.flatMap((a, i) => rs.slice(i + 1).flatMap((b, j) => apart(a, b, `${what} ${i}/${i + 1 + j}`)))
 
 type Read = { problems: string[]; rects: Record<string, unknown> }
 
 // Reads at every wide width until `read` reports no problem; the entry viewport is restored.
-async function atWidths(page: Page, label: string, read: () => Promise<Read>): Promise<unknown[]> {
+async function atWidths(page: Page, label: string, read: () => Promise<Read>, timeout = 10_000): Promise<unknown[]> {
   const entry = page.viewportSize()
   const out: unknown[] = []
   try {
@@ -130,7 +132,7 @@ async function atWidths(page: Page, label: string, read: () => Promise<Read>): P
               return [`read threw: ${String((err as Error).message).split('\n')[0]}`]
             }
           },
-          { message: `${label} at ${width}px`, timeout: 10_000 },
+          { message: `${label} at ${width}px`, timeout },
         )
         .toEqual([])
       out.push({ width, ...(rects as object) })
@@ -681,6 +683,15 @@ async function submissionsReads(page: Page, testInfo: TestInfo): Promise<void> {
   await attachShot(page, testInfo, 'submissions')
 }
 
+// The select ends the filter bar: rightmost of `others` and flush with the bar's content edge.
+async function selectAtRightEnd(filterBar: Locator, bar: Rect, select: Rect, others: Rect[]): Promise<string[]> {
+  const padRight = await filterBar.evaluate((el) => parseFloat(getComputedStyle(el).paddingRight))
+  const right = (r: Rect): number => r.x + r.width
+  const problems = others.flatMap((o, i) => (right(o) > right(select) + 1 ? [`select: not rightmost, #${i} ends later`] : []))
+  if (!near(right(select), right(bar) - padRight, 1)) problems.push(`select right ${right(select)} vs filter bar content edge ${right(bar) - padRight}`)
+  return problems
+}
+
 async function submissionsLayout(page: Page): Promise<Read> {
   const mn = mainOf(page)
   const filterBar = parent(mn.getByRole('button', { name: 'ALL', exact: true }))
@@ -695,6 +706,7 @@ async function submissionsLayout(page: Page): Promise<Read> {
   ]
 
   const chipRects = await rectsOf(page, chips, 'state chip')
+  problems.push(...(await selectAtRightEnd(filterBar, top.filterBar, top.select, chipRects)))
   problems.push(...sameTops(chipRects, 'state chips'), ...pairwiseApart([...chipRects, top.select], 'state chips and tenant select'))
   for (const [i, c] of chipRects.entries()) problems.push(...within(top.filterBar, c, `chip ${i} in the filter bar`))
 
@@ -714,6 +726,25 @@ async function submissionsLayout(page: Page): Promise<Read> {
 
   await noSidewaysScroll(page, 'Submissions')
   return { problems, rects: { top, chipRects, headCells } }
+}
+
+// With a tenant chosen the Sentry link joins the filter bar beside the select; no job rows needed.
+async function submissionsLinkLayout(page: Page): Promise<Read> {
+  const mn = mainOf(page)
+  const filterBar = parent(mn.getByRole('button', { name: 'ALL', exact: true }))
+  const chips = filterBar.locator('button.ops-chip')
+  const link = filterBar.getByRole('link', { name: 'Open in Sentry' })
+  const top = await boxes(page, { filterBar, select: filterBar.locator('select'), link })
+  const chipRects = await rectsOf(page, chips, 'state chip')
+  const problems = [
+    ...within(top.filterBar, top.link, 'Sentry link in the filter bar'),
+    ...sameTops([top.link, top.select], 'Sentry link and tenant select'),
+    ...pairwiseApart([top.link, top.select, ...chipRects], 'Sentry link, tenant select and state chips'),
+    ...leftOf(top.link, top.select, 'Sentry link / tenant select'),
+    ...(await selectAtRightEnd(filterBar, top.filterBar, top.select, [top.link, ...chipRects])),
+  ]
+  await noSidewaysScroll(page, 'Submissions with a tenant')
+  return { problems, rects: { top, chipRects } }
 }
 
 // The house tenant is selected: View jobs opens Submissions with that tenant preset and no state filter.
@@ -741,30 +772,272 @@ type SeenHealth = {
   fleet: { status: string; services: SeenService[] }
   jobs: Record<string, number>
   queue_depth: number
-  trend: { services_down: number | null; queue_depth: number; dead_lettered: number }[]
+  // systemhealth.JobView: total and per owning service
+  river_jobs: { total: { queue_depth: number; dead_lettered: number }; services: Record<string, { queue_depth: number; dead_lettered: number }> }
+  trend: { services_down: number | null; queue_depth: number; dead_lettered: number; river_jobs: SeenHealth['river_jobs'] | null }[]
 }
 
-// Armed before the nav click: the screen's own read is the comparison, so a shard moving the queue cannot race it.
-const armHealth = (page: Page): Promise<SeenHealth> =>
-  page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === STAFF_HEALTH, { timeout: 30_000 }).then((r) => r.json() as Promise<SeenHealth>)
+type SeenPanel = { key: string; available: boolean; series: { name: string; points: [number, number][] }[] }
+// internal/systemhealth PanelData, DeploysSection, LimitsSection
+type SeenMetrics = { range: string; service: string; connection_budget: number; panels: SeenPanel[]; limits: { available: boolean; services: { name: string }[] }; deploys: { available: boolean; revisions: { service: string }[] } }
+type Armed = { health: SeenHealth; metrics: SeenMetrics; metricsUrl: URL; latest: { body: SeenHealth } }
+
+// Armed before the nav click: the screen's own reads are the comparison, so a shard moving the queue cannot race them.
+const armHealth = async (page: Page): Promise<Armed> => {
+  const first = (path: string) => page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === path, { timeout: 30_000 })
+  const [h, m] = await Promise.all([first(STAFF_HEALTH), first('/api/submission/v1/staff/metrics')])
+  const health = (await h.json()) as SeenHealth
+  // `latest` follows every later health read: the screen renders the body it last got.
+  const latest = { body: health }
+  // r.json() settles out of order: the sequence is taken at arrival, and only a newer response writes.
+  let seq = 0
+  let written = 0
+  page.on('response', (r) => {
+    if (r.request().method() !== 'GET' || new URL(r.url()).pathname !== STAFF_HEALTH || r.status() !== 200) return
+    const mine = ++seq
+    void r.json().then((b: SeenHealth) => {
+      if (mine > written) {
+        written = mine
+        latest.body = b
+      }
+    }, () => {})
+  })
+  return { health, metrics: (await m.json()) as SeenMetrics, metricsUrl: new URL(m.url()), latest }
+}
 
 const shortOf = (build?: string): string => (build ? build.slice(0, 7) : '—')
-const nonNull = (trend: SeenHealth['trend'], key: 'services_down' | 'queue_depth' | 'dead_lettered'): number => trend.filter((p) => p[key] !== null).length
+const nonNull = (trend: SeenHealth['trend'], key: 'services_down' | 'river_jobs'): number => trend.filter((p) => p[key] !== null).length
+
+// systemhealth.Panels, in wire order.
+const METRIC_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'sql_cpu_pct', 'sql_ram_pct', 'sql_disk_pct', 'sql_connections', 'latency_p95_fleet_ms', 'startup_latency_p95_ms']
+// systemhealth.ConnectionBudget
+const CONNECTION_BUDGET = 80
+// systemhealth.MetricServices
+const METRIC_SERVICES = ['app', 'auth', 'blog', 'dashboard', 'docling', 'gateway', 'invoice', 'landing', 'library', 'notifications', 'ops-console', 'portfolio', 'submission', 'support-console', 'tenancy', 'validation', 'worker']
+// Terraform output dashboard_urls in invoice-os-infra.
+const DASHBOARD_HREFS: Record<string, string> = {
+  'Services dashboard': 'https://console.cloud.google.com/monitoring/dashboards/builder/27155b37-f324-478d-9e9d-c91ede1837f9?project=ascomply-prod',
+  'Database and edge dashboard': 'https://console.cloud.google.com/monitoring/dashboards/builder/3c070f78-6025-432a-b178-5cde3fe08514?project=ascomply-prod',
+}
+const SENTRY_PROJECT = '4512190351474768'
+
+type SeenPoints = [number, number][]
+const panelSeries = (m: SeenMetrics, key: string): SeenPanel['series'] => m.panels.find((p) => p.key === key && p.available)?.series.filter((s) => s.points.length > 0) ?? []
+// The series the SQL panels draw: the "database" series, else the first.
+const sqlSeries = (m: SeenMetrics, key: string): SeenPoints => {
+  const all = m.panels.find((p) => p.key === key && p.available)?.series ?? []
+  return (all.find((s) => s.name === 'database') ?? all[0])?.points ?? []
+}
+const panelHasData = (m: SeenMetrics, key: string): boolean =>
+  key === 'sql_util' ? ['sql_cpu_pct', 'sql_ram_pct', 'sql_disk_pct'].some((k) => sqlSeries(m, k).length > 0) : key === 'sql_connections' ? sqlSeries(m, key).length > 0 : panelSeries(m, key).length > 0
+// Stat source has a point: the 5xx tile needs an error point with a request point on the same series and step.
+const statHasData = (m: SeenMetrics, key: string): boolean => {
+  if (key === 'req') return panelSeries(m, 'req_per_min').length > 0
+  if (key === 'p95') return panelSeries(m, 'latency_p95_ms').length > 0
+  if (key === 'connections') return sqlSeries(m, 'sql_connections').length > 0
+  const req = new Map(panelSeries(m, 'req_per_min').map((s) => [s.name, new Set(s.points.map((p) => p[0]))]))
+  return panelSeries(m, 'error_pct').some((s) => s.points.some((p) => req.get(s.name)?.has(p[0])))
+}
+
+// Every Cloud Run series, limits and deploy name is a fleet service, and is `only` when given.
+function scopeMatch(m: SeenMetrics, what: string, only?: string): void {
+  expect(scopeStrays(m, only ? [only] : METRIC_SERVICES), `${what}: every Cloud Run series, limits and deploy name is ${only ?? 'in METRIC_SERVICES'}`).toEqual([])
+}
+
+// Per panel key, the series names and point counts: evidence for the preview-scope check.
+const drawSummary = (m: SeenMetrics) => Object.fromEntries(m.panels.map((p) => [p.key, p.series.map((s) => ({ name: s.name, points: s.points.length }))]))
+
+// Series names a panel can draw: Cloud SQL panels name their own lines.
+const servedNames = (m: SeenMetrics, key: string): string[] =>
+  key === 'sql_util' ? ['CPU', 'RAM', 'Disk'] : key === 'sql_connections' ? ['connections'] : panelSeries(m, key).map((s) => s.name)
+
+// Panels and stat tiles equal one metrics answer: No data iff no point, else a line.
+async function metricsMatch(page: Page, m: SeenMetrics, what: string): Promise<void> {
+  const mn = mainOf(page)
+  await expect(mn.getByText('Loading metrics…'), `${what}: metrics have loaded`).toHaveCount(0)
+  const panels = mn.locator('.ops-health-panels > [data-panel]')
+  await expect(panels, `${what}: panels`).toHaveCount(PANEL_KEYS.length)
+  for (const key of PANEL_KEYS) {
+    const p = mn.locator(`[data-panel="${key}"]`)
+    const has = panelHasData(m, key)
+    await expect(p.locator('[data-no-data]'), `${what}: ${key} No data`).toHaveCount(has ? 0 : 1)
+    if (!has) await expect(p.locator('[data-no-data]'), `${what}: ${key} note`).toHaveText('No data')
+    const chart = p.locator('[data-chart]')
+    if (has) {
+      await expect(chart, `${what}: ${key} draws a line`).toHaveAttribute('data-drawn', /.+/)
+      const drawn = ((await chart.getAttribute('data-drawn')) ?? '').split(',')
+      expect(servedNames(m, key), `${what}: ${key} data-drawn names are served series`).toEqual(expect.arrayContaining(drawn))
+    } else await expect(chart, `${what}: ${key} draws no chart`).toHaveCount(0)
+  }
+  for (const key of STAT_KEYS.filter((k) => k !== 'fleet')) {
+    const t = mn.locator(`[data-tile="${key}"]`)
+    const has = statHasData(m, key)
+    await expect(t.getByText('NO DATA', { exact: true }), `${what}: ${key} NO DATA`).toHaveCount(has ? 0 : 1)
+    if (key === 'p95') continue
+    if (has) await expect(t.locator('.money'), `${what}: ${key} value`).not.toHaveText('—')
+    else await expect(t.locator('.money'), `${what}: ${key} value`).toHaveText('—')
+  }
+  for (const key of MAX_TILES) {
+    const max = mn.locator(`[data-tile="${key}"] [data-max]`)
+    const has = statHasData(m, key)
+    await expect(max, `${what}: ${key} max line`).toHaveCount(has ? 1 : 0)
+    if (has) await expect(max, `${what}: ${key} max text`).toHaveText(MAX_TEXT[key])
+  }
+  // p95: fleet value and a worst line at All services; a picked service shows its own value alone
+  const p95 = mn.locator('[data-tile="p95"]')
+  const allServices = m.service === ''
+  const p95Has = statHasData(m, 'p95')
+  await expect(p95.locator('[data-worst]'), `${what}: p95 worst line`).toHaveCount(allServices && p95Has ? 1 : 0)
+  const noValue = !p95Has || (allServices && panelSeries(m, 'latency_p95_fleet_ms').length === 0)
+  if (noValue) await expect(p95.locator('.money'), `${what}: p95 value`).toHaveText('—')
+  else await expect(p95.locator('.money'), `${what}: p95 value`).not.toHaveText('—')
+}
+
+// The armed answers drive the first comparison; the chip and the select each send a fresh read.
+async function metricsReads(page: Page, testInfo: TestInfo, first: SeenMetrics, firstUrl: URL): Promise<void> {
+  const mn = mainOf(page)
+  expect(firstUrl.searchParams.get('range'), 'first metrics request range').toBe('1h')
+  expect(firstUrl.searchParams.has('service'), 'first metrics request names no service').toBe(false)
+  expect(first.panels.map((p) => p.key), 'metrics panel keys are the systemhealth panels').toEqual(METRIC_KEYS)
+  expect(first.connection_budget, 'systemhealth.ConnectionBudget').toBe(CONNECTION_BUDGET)
+  await expect(mn.getByRole('button', { name: '1h', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await metricsMatch(page, first, 'range 1h')
+  // Cloud SQL series fill every step, so this holds even before the PR's own series land (4-minute lag).
+  expect(await mn.locator('[data-panel] [data-no-data]').count(), 'some metric panel draws: all No data means run-preview lacks roles/monitoring.viewer on ascomply-preview, or the metrics path broke').toBeLessThan(PANEL_KEYS.length)
+  scopeMatch(first, 'range 1h')
+  // A wrong PreviewSuffix empties every PR-scoped read; the unscoped Cloud SQL panels would still pass above.
+  expect(first.limits.available, 'Core AC 2: limits are available; unavailable means run-preview lacks roles/run.viewer on ascomply-preview or the PR suffix matched nothing').toBe(true)
+  expect(first.limits.services.map((s) => s.name).sort(), 'Core AC 2: limits list the PR\'s own services (scripts/ci/preview.sh BACKENDS + SITES = systemhealth.MetricServices); missing names mean the PR suffix matched nothing').toEqual([...METRIC_SERVICES].sort())
+  await expect(mn.locator('[data-tile="connections"]').getByText(`of ${CONNECTION_BUDGET}`, { exact: true }), 'connections tile shows the budget').toHaveCount(1)
+
+  const read = (range: string, service: string | null) =>
+    page.waitForResponse((r) => {
+      const u = new URL(r.url())
+      return r.request().method() === 'GET' && u.pathname === '/api/submission/v1/staff/metrics' && u.searchParams.get('range') === range && u.searchParams.get('service') === service
+    })
+  const sent = (range: string, service: string | null) =>
+    page.waitForRequest((r) => {
+      const u = new URL(r.url())
+      return u.pathname === '/api/submission/v1/staff/metrics' && u.searchParams.get('range') === range && u.searchParams.get('service') === service
+    })
+
+  const [, six] = await Promise.all([sent('6h', null), read('6h', null), mn.getByRole('button', { name: '6h', exact: true }).click()]).then((r) => [r[0], r[1]] as const)
+  await expect(mn.getByRole('button', { name: '6h', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  expect(six.status(), '6h read status').toBe(200)
+  const sixBody = (await six.json()) as SeenMetrics
+  scopeMatch(sixBody, 'range 6h')
+  await metricsMatch(page, sixBody, 'range 6h')
+
+  const drawn = METRIC_SERVICES.find((n) => panelSeries(first, 'req_per_min').some((s) => s.name === n))
+  expect(drawn, 'Core AC 2 and 3: req_per_min draws a series for one of the PR\'s services; none means run-preview lacks roles/monitoring.viewer on ascomply-preview or the PR suffix matched nothing').toBeDefined()
+  const name = drawn as string
+  const select = mn.locator('select[aria-label="Service"]')
+  const options = await select.locator('option').evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value))
+  expect(options, 'the service select lists systemhealth.MetricServices after All services').toEqual(['', ...METRIC_SERVICES])
+  const [, one] = await Promise.all([sent('6h', name), read('6h', name), select.selectOption(name)]).then((r) => [r[0], r[1]] as const)
+  expect(one.status(), `${name} read status`).toBe(200)
+  const oneBody = (await one.json()) as SeenMetrics
+  await testInfo.attach('health-metrics-draw', { body: JSON.stringify({ fleet1h: drawSummary(first), narrowed: { service: name, panels: drawSummary(oneBody) } }, null, 2), contentType: 'application/json' })
+  expect(oneBody.service, 'the answer names the selected service').toBe(name)
+  scopeMatch(oneBody, `service ${name}`, name)
+  expect(panelSeries(oneBody, 'req_per_min').map((s) => s.name), `service ${name} draws its own req_per_min series`).toEqual([name])
+  await metricsMatch(page, oneBody, `service ${name}`)
+
+  // Back to the default view: the fixture step clicks 6h and needs a changed range.
+  await Promise.all([read('1h', name), mn.getByRole('button', { name: '1h', exact: true }).click()])
+  await Promise.all([read('1h', null), select.selectOption('')])
+  await expect(mn.getByRole('button', { name: '1h', exact: true })).toHaveAttribute('aria-pressed', 'true')
+}
+
+async function healthLinks(page: Page, seen: SeenHealth): Promise<void> {
+  const mn = mainOf(page)
+  const attrs = async (link: Locator, what: string, href: string): Promise<void> => {
+    await expect(link, `${what} href`).toHaveAttribute('href', href)
+    await expect(link, `${what} target`).toHaveAttribute('target', '_blank')
+    await expect(link, `${what} rel`).toHaveAttribute('rel', 'noopener noreferrer')
+  }
+  for (const [label, href] of Object.entries(DASHBOARD_HREFS)) await attrs(mn.getByRole('link', { name: label }), label, href)
+  if (seen.fleet.status === 'unknown') return
+  expect(seen.fleet.services.length, 'services with links').toBeGreaterThan(0)
+  for (const s of seen.fleet.services) {
+    const row = mn.locator(`[data-service="${s.name}"]`)
+    const link = row.getByRole('link')
+    await attrs(link, `${s.name} Sentry link`, `https://as-comply.sentry.io/issues/?query=server_name:${s.name}&project=${SENTRY_PROJECT}&statsPeriod=14d`)
+  }
+}
+
+// Polls until the locator matches what the latest health body implies; `want` is re-read on each try.
+async function readsLatest(loc: Locator, want: () => string, what: string, mode: 'text' | 'count' = 'text'): Promise<void> {
+  const got = async (): Promise<string> => (mode === 'count' ? String(await loc.count()) : ((await loc.textContent()) ?? ''))
+  await expect.poll(async () => ((await got()) === want() ? 'match' : `${await got()} != ${want()}`), { message: what }).toBe('match')
+}
+
+const NO_JOBS_NOTE = (name: string): string => `${name} owns no background jobs. Pick submission, notifications, worker or All services to see them.`
+const NO_PING_NOTE = (name: string): string => `${name} has no live ping. The live ping covers the backend services.`
+const ROLLUP_DOWN = 'The gateway roll-up is unavailable.'
+
+// Picks each service in turn: jobs tiles, Services rows and the All services tags follow the pick.
+async function healthNarrowing(page: Page, latest: { body: SeenHealth }): Promise<void> {
+  const mn = mainOf(page)
+  const select = mn.locator('select[aria-label="Service"]')
+  const tile = (key: string): Locator => mn.locator(`[data-tile="${key}"]`)
+  const card = mn.locator('.ops-screen-pad > div:last-child')
+  const jobsOwned = (name: string) => latest.body.river_jobs.services[name]
+  // systemhealth.JobOwners and JobRunner: these three always serve totals
+  for (const name of ['submission', 'notifications', 'worker']) expect(jobsOwned(name), `${name} totals are served`).toBeDefined()
+
+  const pick = async (name: string): Promise<void> => {
+    await select.selectOption(name)
+    const at = name === '' ? 'All services' : name
+    const totals = name === '' ? latest.body.river_jobs.total : jobsOwned(name)
+    if (totals) {
+      await readsLatest(tile('queue').locator('.money'), () => String((name === '' ? latest.body.river_jobs.total : jobsOwned(name)).queue_depth), `${at} queue value`)
+      await readsLatest(tile('dead-lettered').locator('.money'), () => String((name === '' ? latest.body.river_jobs.total : jobsOwned(name)).dead_lettered), `${at} dead-lettered value`)
+      await expect(mn.locator('[data-jobs-note]'), `${at} has no jobs note`).toHaveCount(0)
+      await expect(mn.locator('.ops-health-jobs').getByText(/Loading/), `${at} jobs row is not loading`).toHaveCount(0)
+    } else {
+      await expect(mn.locator('[data-jobs-note]'), `${at} jobs note`).toHaveText(NO_JOBS_NOTE(name))
+      await expect(mn.locator('[data-tile="queue"], [data-tile="dead-lettered"]'), `${at} has no jobs tiles`).toHaveCount(0)
+    }
+    await expect(card.getByText(/Loading/), `${at} Services card is not loading`).toHaveCount(0)
+
+    // Rows follow the latest roll-up, re-read per try so a 60 s refresh cannot race them.
+    const listed = (): string[] => {
+      const r = latest.body.fleet
+      return r.status === 'unknown' ? [] : r.services.map((s) => s.name).filter((n) => name === '' || n === name).sort()
+    }
+    const rows = mn.locator('[data-service]')
+    await expect.poll(async () => JSON.stringify((await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-service')).sort()))), { message: `${at} Services row names` }).toBe(JSON.stringify(listed()))
+    const known = latest.body.fleet.status !== 'unknown'
+    // probedServices (auth, worker) are always in a known roll-up, so these picks cannot pass with zero rows
+    if (known && (name === 'worker' || name === 'auth')) expect(listed(), `${at} is in the known roll-up`).toEqual([name])
+    if (!known) {
+      await expect(mn.getByText(ROLLUP_DOWN), `${at} roll-up unavailable copy`).toHaveCount(1)
+      await expect(mn.locator('[data-ping-note]'), `${at} no ping note when the roll-up is unknown`).toHaveCount(0)
+    } else if (listed().length === 0 && name !== '') {
+      await expect(mn.locator('[data-ping-note]'), `${at} ping note`).toHaveText(NO_PING_NOTE(name))
+    } else await expect(mn.locator('[data-ping-note]'), `${at} has no ping note`).toHaveCount(0)
+    if (name === 'auth' && listed().length > 0) await expect(rows.getByRole('link'), 'auth row Sentry link').toHaveAttribute('aria-label', 'Open auth in Sentry')
+
+    for (const key of SCOPED) await expect(tile(key).locator('[data-scope]'), `${key} tag at ${at}`).toHaveText('All services')
+  }
+  for (const name of ['submission', 'notifications', 'worker', 'auth', 'app', '']) await pick(name)
+}
 
 async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Promise<void> {
   const mn = mainOf(page)
-  const seen = await (armed as Promise<SeenHealth>)
+  const { health: seen, metrics, metricsUrl, latest } = await (armed as Promise<Armed>)
   const tile = (key: string): Locator => mn.locator(`[data-tile="${key}"]`)
   await expect(tile('fleet'), 'the health tiles have loaded').toBeVisible()
 
   const known = seen.fleet.status !== 'unknown'
   const up = seen.fleet.services.filter((s) => s.status === 'up').length
   await expect(tile('fleet').locator('.money')).toHaveText(known ? `${up}/${seen.fleet.services.length}` : '—')
-  await expect(tile('queue').locator('.money')).toHaveText(String(seen.queue_depth))
-  await expect(tile('dead-lettered').locator('.money')).toHaveText(String(seen.jobs.dead_lettered ?? 0))
+  await readsLatest(tile('queue').locator('.money'), () => String(latest.body.river_jobs.total.queue_depth), 'queue value')
+  await readsLatest(tile('dead-lettered').locator('.money'), () => String(latest.body.river_jobs.total.dead_lettered), 'dead-lettered value')
   const fleetWord = { ok: 'HEALTHY', degraded: 'DEGRADED', unknown: 'UNKNOWN' }[seen.fleet.status as 'ok' | 'degraded' | 'unknown']
   await expect(tile('fleet').getByText(fleetWord, { exact: true }), 'fleet status word').toHaveCount(1)
-  await expect(tile('dead-lettered').getByText((seen.jobs.dead_lettered ?? 0) > 0 ? 'ATTENTION' : 'CLEAR', { exact: true }), 'dead-lettered status word').toHaveCount(1)
+  await readsLatest(tile('dead-lettered').locator('[data-word]'), () => (latest.body.river_jobs.total.dead_lettered > 0 ? 'ATTENTION' : 'CLEAR'), 'dead-lettered status word')
 
   if (known) {
     expect(seen.fleet.services.length, 'the fleet read names services').toBeGreaterThan(0)
@@ -776,12 +1049,15 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
   }
   await expect(mn.locator('[data-service]'), 'one row per service').toHaveCount(known ? seen.fleet.services.length : 0)
 
-  const series: [string, 'services_down' | 'queue_depth' | 'dead_lettered'][] = [
+  const series: [string, 'services_down' | 'river_jobs'][] = [
     ['fleet', 'services_down'],
-    ['queue', 'queue_depth'],
-    ['dead-lettered', 'dead_lettered'],
+    ['queue', 'river_jobs'],
+    ['dead-lettered', 'river_jobs'],
   ]
-  for (const [key, field] of series) await expect(tile(key).locator('svg'), `${key} sparkline`).toHaveCount(nonNull(seen.trend, field) >= 2 ? 1 : 0)
+  for (const [key, field] of series) {
+    if (field === 'river_jobs') await readsLatest(tile(key).locator('svg'), () => String(nonNull(latest.body.trend, field) >= 2 ? 1 : 0), `${key} sparkline count`, 'count')
+    else await expect(tile(key).locator('svg'), `${key} sparkline`).toHaveCount(nonNull(seen.trend, field) >= 2 ? 1 : 0)
+  }
 
   // Stable parts only: a failed gateway probe empties a build, and a read can be unknown with no services.
   const live = await liveStaffGet<SeenHealth>(STAFF_HEALTH)
@@ -800,6 +1076,10 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
   await expect(mn.getByText(/APP latency|APP error rate|throughput|Recon backlog/i), 'no unmeasured tile').toHaveCount(0)
   await expectStyles(parent(mn.locator('[data-service]').first().getByText(/^(UP|DOWN)$/)), 'service badge', { radius: '4px' })
 
+  await metricsReads(page, testInfo, metrics, metricsUrl)
+  await healthNarrowing(page, latest)
+  await healthLinks(page, seen)
+
   // Core AC 2: the fleet route grants the console no CORS.
   const fleet = await page.request.get(`${apiBase()}/healthz/fleet`, { headers: { ...fleetHeaders(), Origin: new URL(page.url()).origin } })
   expect([200, 503], '/healthz/fleet status').toContain(fleet.status())
@@ -809,48 +1089,552 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
   await attachShot(page, testInfo, 'health')
 }
 
-async function healthLayout(page: Page): Promise<Read> {
-  const mn = mainOf(page)
-  const tiles = mn.locator('.ops-health-grid > div')
-  const n = await tiles.count()
-  expect(n, 'health tiles').toBe(3)
-  const tileRects = await rectsOf(page, tiles, 'health tile')
-  const problems = [...pairwiseApart(tileRects, 'health tiles'), ...sameTops(tileRects, 'health tiles')]
+const STAT_KEYS = ['fleet', 'req', 'errors', 'p95', 'connections']
+const JOB_KEYS = ['queue', 'dead-lettered']
+// Which tiles carry the All services tag (the fleet-wide ones).
+const SCOPED = ['fleet', 'connections']
+// Which tiles carry a status word: always, only NO DATA, or never.
+const WORD_RULE: Record<string, 'always' | 'no-data' | 'never'> = { fleet: 'always', req: 'no-data', errors: 'always', p95: 'always', connections: 'always', queue: 'never', 'dead-lettered': 'always' }
 
-  for (let i = 0; i < n; i++) {
+// Which tiles carry a max line (the range tiles); the live-ping tiles never do.
+const MAX_TILES = ['req', 'errors', 'p95', 'connections']
+const MAX_TEXT: Record<string, RegExp> = {
+  req: /^max (\d+(\.\d)?k?) req\/min$/,
+  errors: /^max \d+(\.\d+)? %$/,
+  p95: /^max (\d+ ms|\d+\.\d{2} s)$/,
+  connections: new RegExp(`^max \\d+ of ${CONNECTION_BUDGET}$`),
+}
+
+// Reads one tile row by key: its tiles sit in order, share a top and stay apart; each tile holds its label, word, value and unit.
+async function tileRowRead(page: Page, row: Locator, keys: string[], what: string): Promise<{ problems: string[]; rects: Rect[] }> {
+  const tiles = row.locator(':scope > [data-tile]')
+  expect(await tiles.evaluateAll((els) => els.map((e) => e.getAttribute('data-tile'))), `${what} tile keys`).toEqual(keys)
+  const rects = await rectsOf(page, tiles, `${what} tile`)
+  const problems = [...pairwiseApart(rects, `${what} tiles`), ...sameTops(rects, `${what} tiles`)]
+  for (const [i, key] of keys.entries()) {
     const t = tiles.nth(i)
     const head = kid(t, 1)
-    const word = kid(head, 2)
+    const word = t.locator('[data-word]')
+    const tag = t.locator('[data-scope]')
     const hasWord = (await word.count()) > 0
-    if (i !== 1) expect(hasWord, `tile ${i} has a status word`).toBe(true)
-    const svg = t.locator('svg')
-    const hasSvg = (await svg.count()) > 0
-    const r = await boxes(page, { tile: t, label: kid(head, 1), value: kid(t, 2) })
-    problems.push(...within(r.tile, r.label, `tile ${i} label`), ...within(r.tile, r.value, `tile ${i} value row`))
+    await expect(tag, `${key} tag`).toHaveCount(SCOPED.includes(key) ? 1 : 0)
+    const rule = WORD_RULE[key]
+    if (rule === 'always') expect(hasWord, `${key} has a status word`).toBe(true)
+    if (rule === 'never') expect(hasWord, `${key} has no status word`).toBe(false)
+    if (rule === 'no-data' && hasWord) await expect(word, `${key} word`).toHaveText('NO DATA')
+    const valueRow = kid(t, 2)
+    const r = await boxes(page, { tile: t, label: kid(head, 1), valueRow, value: kid(valueRow, 1), unit: kid(valueRow, 2) })
+    problems.push(...within(r.tile, r.label, `${key} label`), ...within(r.tile, r.valueRow, `${key} value row`), ...within(r.tile, r.value, `${key} value`), ...within(r.tile, r.unit, `${key} unit`), ...apart(r.value, r.unit, `${key} value / unit`))
     if (hasWord) {
       const w = (await boxes(page, { word }))['word']
-      problems.push(...within(r.tile, w, `tile ${i} status word`), ...apart(r.label, w, `tile ${i} label / status word`))
+      problems.push(...within(r.tile, w, `${key} status word`), ...apart(r.label, w, `${key} label / status word`))
     }
-    if (hasSvg) {
+    if (SCOPED.includes(key)) {
+      await expect(tag, `${key} tag text`).toHaveText('All services')
+      const g = (await boxes(page, { tag }))['tag']
+      problems.push(...within(r.tile, g, `${key} tag`), ...apart(r.label, g, `${key} label / tag`))
+      if (hasWord) problems.push(...apart(g, (await boxes(page, { word }))['word'], `${key} tag / status word`))
+    }
+    const worst = t.locator('[data-worst]')
+    const hasWorst = (await worst.count()) > 0
+    let worstBox: Rect | null = null
+    if (hasWorst) {
+      worstBox = (await boxes(page, { worst }))['worst']
+      problems.push(...within(r.tile, worstBox, `${key} worst line`), ...below(r.valueRow, worstBox, `${key} worst line under the value row`))
+      const clip = await worst.evaluate((el) => el.scrollWidth - el.clientWidth)
+      if (clip > 0) problems.push(`${key} worst line: clipped by ${clip}px`)
+    }
+    const max = t.locator('[data-max]')
+    const hasValue = (await t.locator('.money').innerText()) !== '—'
+    await expect(max, `${key} max line`).toHaveCount(MAX_TILES.includes(key) && (hasValue || hasWorst) ? 1 : 0)
+    const maxBox = (await max.count()) > 0 ? (await boxes(page, { max }))['max'] : null
+    if (maxBox) {
+      problems.push(...within(r.tile, maxBox, `${key} max line`), ...below(r.valueRow, maxBox, `${key} max line under the value row`), ...apart(maxBox, r.value, `${key} max line / value`), ...apart(maxBox, r.unit, `${key} max line / unit`))
+      if (worstBox) problems.push(...below(maxBox, worstBox, `${key} worst line under the max line`))
+      const clip = await max.evaluate((el) => el.scrollWidth - el.clientWidth)
+      if (clip > 0) problems.push(`${key} max line: clipped by ${clip}px`)
+    }
+    const svg = t.locator('svg')
+    if ((await svg.count()) > 0) {
       const v = (await boxes(page, { svg }))['svg']
-      problems.push(...within(r.tile, v, `tile ${i} sparkline`), ...below(r.value, v, `tile ${i} sparkline under the value row`))
+      problems.push(...within(r.tile, v, `${key} sparkline`), ...below(r.valueRow, v, `${key} sparkline under the value row`))
+      if (worstBox) problems.push(...below(worstBox, v, `${key} sparkline under the worst line`))
+      if (maxBox) problems.push(...below(maxBox, v, `${key} sparkline under the max line`))
     }
   }
+  return { problems, rects }
+}
 
-  const grid = await boxes(page, { grid: mn.locator('.ops-health-grid'), card: mn.locator('.ops-health-grid + div') })
-  problems.push(...below(grid.grid, grid.card, 'Services card under the grid'))
+const PANEL_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'startup_latency_p95_ms', 'sql_util', 'sql_connections']
+
+// The panels grid: panels apart, a row sharing one top, title row, word and content inside each panel; the grid between the Jobs row and the Services card.
+async function panelsRead(page: Page, grid: Locator, jobs: Rect, card: Rect): Promise<{ problems: string[]; rects: Rect[] }> {
+  const panels = grid.locator(':scope > [data-panel]')
+  expect(await panels.evaluateAll((els) => els.map((e) => e.getAttribute('data-panel'))), 'panel keys').toEqual(PANEL_KEYS)
+  const rects = await rectsOf(page, panels, 'panel')
+  const gridBox = (await boxes(page, { grid })).grid
+  const problems = [...pairwiseApart(rects, 'panels'), ...below(jobs, gridBox, 'panels grid below the Jobs row'), ...below(gridBox, card, 'Services card below the panels grid')]
+  for (let i = 0; i + 1 < rects.length; i += 2) problems.push(...sameTops([rects[i], rects[i + 1]], `panel row ${i / 2}`))
+  if (rects.length % 2 === 1) {
+    const last = rects[rects.length - 1]
+    problems.push(...sameColumn(rects[0], last, 'last panel aligns with the first column'), ...below(rects[rects.length - 2], last, 'last panel below the row above'))
+  }
+  for (const [i, key] of PANEL_KEYS.entries()) {
+    const p = panels.nth(i)
+    const titleRow = kid(p, 1)
+    const word = p.locator('[data-word]')
+    const noData = p.locator('[data-no-data]')
+    const named: Record<string, Locator> = { titleRow, title: kid(titleRow, 1), content: kid(p, 2) }
+    if ((await word.count()) > 0) named.word = word
+    const r = await boxes(page, named)
+    problems.push(...within(rects[i], r.titleRow, `${key} title row`), ...within(rects[i], r.title, `${key} title`), ...within(rects[i], r.content, `${key} chart`), ...below(r.titleRow, r.content, `${key} chart below the title row`))
+    if (r.word) problems.push(...within(rects[i], r.word, `${key} word`), ...apart(r.title, r.word, `${key} title / word`))
+    if ((await noData.count()) > 0) {
+      await expect(noData, `${key} note`).toHaveText('No data')
+      problems.push(...within(rects[i], (await boxes(page, { noData })).noData, `${key} No data`))
+    }
+  }
+  return { problems, rects }
+}
+
+// One fixturePanelsRead pass takes ~10 s on CI: 11 panels of serial locator round trips.
+const FIXTURE_READ_TIMEOUT = 30_000
+
+// fixture check: pins the chart, legend and marker layout of a wire-shaped body, not the metrics contract
+async function fixturePanelsRead(page: Page): Promise<Read> {
+  const panels = mainOf(page).locator('.ops-health-panels > [data-panel]')
+  const rects = await rectsOf(page, panels, 'panel')
+  const problems: string[] = []
+  const legendCounts: Record<string, number> = { sql_util: 3, sql_connections: 1 }
+  for (const [i, key] of PANEL_KEYS.entries()) {
+    const p = panels.nth(i)
+    const chart = kid(p, 2)
+    const legend = kid(p, 3)
+    const titleRow = kid(p, 1)
+    const uplot = chart.locator('.uplot')
+    await expect(chart, `${key} draws a chart`).toHaveAttribute('data-drawn', /.+/)
+    await expect(uplot, `${key} uPlot root`).toHaveCount(1)
+    const edges = async () => {
+      const b = await boxes(page, { chart, uplot, titleRow })
+      return Math.max(...[b.chart, b.uplot].flatMap((c) => [Math.abs(c.x - b.titleRow.x), Math.abs(c.x + c.width - (b.titleRow.x + b.titleRow.width))]))
+    }
+    await expect.poll(edges, { message: `${key} chart edges align with the title row` }).toBeLessThanOrEqual(1)
+    const r = await boxes(page, { chart, legend, uplot })
+    problems.push(...within(rects[i], r.chart, `${key} chart`), ...within(rects[i], r.uplot, `${key} uPlot`), ...below(r.chart, r.legend, `${key} legend below the chart`), ...within(rects[i], r.legend, `${key} legend`))
+
+    const entries = legend.locator(':scope > *')
+    const want = legendCounts[key] ?? 8
+    await expect(entries, `${key} legend entries`).toHaveCount(want)
+    const entryRects = await rectsOf(page, entries, `${key} legend entry`)
+    problems.push(...pairwiseApart(entryRects, `${key} legend entries`))
+    for (const [j, e] of entryRects.entries()) problems.push(...within(rects[i], e, `${key} legend entry ${j}`))
+    if (want === 8) {
+      await expect(legend.locator('[data-series]'), `${key} coloured entries`).toHaveCount(7)
+      await expect(legend.locator('[data-series-other]'), `${key} folded entry`).toHaveText('+10 other services')
+    }
+
+    const over = chart.locator('.u-over')
+    const marks = over.locator('[data-deploy]')
+    await expect(marks, `${key} deploy markers`).toHaveCount(2)
+    for (let j = 0; j < 2; j++) await expect(marks.nth(j), `${key} deploy marker ${j} title`).toHaveAttribute('title', /.+/)
+    const markRects = await marks.evaluateAll((els) => els.map((e) => { const b = e.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height } }))
+    // a marker is a 7 px target centred on its time, so one at an edge reaches 4 px past the plot
+    const o = (await boxes(page, { over })).over
+    const roomy = { x: o.x - 4, y: o.y, width: o.width + 8, height: o.height }
+    for (const [j, m] of markRects.entries()) problems.push(...within(rects[i], m, `${key} deploy marker ${j}`), ...within(roomy, m, `${key} deploy marker ${j} in the plot`))
+  }
+  const word = (key: string): Locator => panels.nth(PANEL_KEYS.indexOf(key)).locator('[data-word]')
+  await expect(word('error_pct'), 'error_pct word').toHaveText('HIGH')
+  await expect(word('cpu_pct'), 'cpu_pct word').toHaveText('HIGH')
+  await expect(word('latency_p95_ms'), 'latency_p95_ms word').toHaveText('PEAKED')
+  await expect(word('ram_pct'), 'ram_pct has no word').toHaveCount(0)
+  await expect(word('startup_latency_p95_ms'), 'startup_latency_p95_ms has no word').toHaveCount(0)
+  return { problems, rects: { panels: rects } }
+}
+
+async function healthLayout(page: Page): Promise<Read> {
+  const mn = mainOf(page)
+  const problems: string[] = []
+
+  const titleBlock = parent(mn.getByRole('heading', { level: 1, name: 'System health' }))
+  const headRow = parent(titleBlock)
+  const failed = mn.getByText('REFRESH FAILED', { exact: true })
+  const headNamed: Record<string, Locator> = {
+    headRow,
+    titleBlock,
+    stamp: headRow.getByText(/^CHECKED /),
+    servicesLink: headRow.getByRole('link', { name: 'Services dashboard' }),
+    databaseLink: headRow.getByRole('link', { name: 'Database and edge dashboard' }),
+  }
+  if ((await failed.count()) > 0) headNamed.failed = failed
+  const head = await boxes(page, headNamed)
+  const { headRow: headBox, ...headParts } = head
+  for (const [k, r] of Object.entries(headParts)) problems.push(...within(headBox, r, `header ${k}`))
+  problems.push(...pairwiseApart(Object.values(headParts), 'header title block, stamp and links'))
+
+  const filterBar = parent(mn.getByRole('button', { name: '15m', exact: true }))
+  const chips = filterBar.locator('button.ops-chip')
+  const bar = await boxes(page, { filterBar, select: filterBar.locator('select') })
+  const chipRects = await rectsOf(page, chips, 'range chip')
+  problems.push(...below(head.headRow, bar.filterBar, 'filter bar below the header row'), ...within(bar.filterBar, bar.select, 'service select in the filter bar'))
+  problems.push(...sameTops(chipRects, 'range chips'), ...pairwiseApart([...chipRects, bar.select], 'range chips and service select'))
+  for (const [i, c] of chipRects.entries()) problems.push(...within(bar.filterBar, c, `range chip ${i} in the filter bar`))
+  problems.push(...(await selectAtRightEnd(filterBar, bar.filterBar, bar.select, chipRects)))
+
+  const statsRow = mn.locator('.ops-health-stats')
+  const jobsRow = mn.locator('.ops-health-jobs')
+  const stats = await tileRowRead(page, statsRow, STAT_KEYS, 'stat')
+  const jobsNote = mn.locator('[data-jobs-note]')
+  const noJobs = (await jobsNote.count()) > 0
+  const jobs = noJobs ? { problems: [], rects: [] as Rect[] } : await tileRowRead(page, jobsRow, JOB_KEYS, 'jobs')
+  const grids = await boxes(page, { stats: statsRow, jobs: noJobs ? jobsNote : jobsRow, card: mn.locator('.ops-screen-pad > div:last-child'), pad: mn.locator('.ops-screen-pad') })
+  const panelsGrid = mn.locator('.ops-health-panels')
+  const panelRead = (await panelsGrid.count()) > 0 ? await panelsRead(page, panelsGrid, grids.jobs, grids.card) : null
+  if (noJobs) problems.push(...withinX(grids.pad, grids.jobs, 'jobs note in the content column'), ...below(grids.stats, grids.jobs, 'jobs note below the stat row'))
+  problems.push(...(panelRead?.problems ?? []), ...stats.problems, ...jobs.problems, ...below(bar.filterBar, grids.stats, 'stat row below the filter bar'), ...below(grids.stats, grids.jobs, 'Jobs row below the stat row'), ...below(grids.jobs, grids.card, 'Services card below the Jobs row'))
 
   const rows = mn.locator('[data-service]')
   const nRows = Math.min(await rows.count(), 20)
-  if (nRows === 0) await expect(mn.getByText('The gateway roll-up is unavailable.'), 'no rows only when the roll-up is unavailable').toHaveCount(1)
+  const pingNote = mn.locator('[data-ping-note]')
+  if (nRows === 0 && (await pingNote.count()) > 0) {
+    const n = (await boxes(page, { pingNote })).pingNote
+    problems.push(...within(grids.card, n, 'no-ping note in the Services card'))
+  } else if (nRows === 0) await expect(mn.getByText('The gateway roll-up is unavailable.'), 'no rows only when the roll-up is unavailable').toHaveCount(1)
   for (let i = 0; i < nRows; i++) {
     const row = rows.nth(i)
-    const p = await boxes(page, { row, name: kid(row, 1), badge: kid(row, 2), build: kid(row, 3) })
-    problems.push(...within(grid.card, p.row, `service row ${i} in the Services card`), ...within(p.row, p.name, `service ${i} name`), ...within(p.row, p.badge, `service ${i} badge`), ...within(p.row, p.build, `service ${i} build`), ...pairwiseApart([p.name, p.badge, p.build], `service ${i} name, badge, build`))
+    const parts: Record<string, Locator> = { row, name: kid(row, 1), badge: kid(row, 2), build: kid(row, 3), sentry: kid(row, 4) }
+    const p = await boxes(page, parts)
+    const { row: rowBox, ...cells } = p
+    problems.push(...within(grids.card, rowBox, `service row ${i} in the Services card`), ...pairwiseApart(Object.values(cells), `service ${i} name, badge, build and Sentry link`))
+    for (const [k, r] of Object.entries(cells)) problems.push(...within(rowBox, r, `service ${i} ${k}`))
   }
 
   await noSidewaysScroll(page, 'System health')
-  return { problems, rects: { tiles: tileRects, grid } }
+  return { problems, rects: { head, bar, chipRects, stats: stats.rects, jobs: jobs.rects, panels: panelRead?.rects, grids } }
+}
+
+const STAFF_METRICS = /\/api\/submission\/v1\/staff\/metrics(\?|$)/
+const FIXTURE_STEPS = 61
+// frontend/support-console/src/metricsApi.ts METRIC_SERVICES
+const METRIC_SERVICES_FIXTURE = ['app', 'auth', 'blog', 'dashboard', 'docling', 'gateway', 'invoice', 'landing', 'library', 'notifications', 'ops-console', 'portfolio', 'submission', 'support-console', 'tenancy', 'validation', 'worker']
+
+// Wire-shaped body of systemhealth.Metrics: every Cloud Run panel full, 5xx over 1, p95 peaked then back under, CPU over 80, one gap, one deploy after the end.
+function metricsFixture() {
+  const end = Math.floor(Date.now() / 60_000) * 60
+  const start = end - (FIXTURE_STEPS - 1) * 60
+  const ts = Array.from({ length: FIXTURE_STEPS }, (_, i) => start + i * 60)
+  const line = (f: (i: number) => number, gapAt?: number): [number, number][] => ts.flatMap((t, i): [number, number][] => (i === gapAt ? [] : [[t, f(i)]]))
+  const names = METRIC_SERVICES_FIXTURE
+  const per = (f: (i: number, n: number) => number) => names.map((name, n) => ({ name, points: line((i) => f(i, n), n === 1 ? 30 : undefined) }))
+  const panel = (key: string, unit: string, series: { name: string; points: [number, number][] }[]) => ({ key, unit, available: true, series })
+  const database = (f: (i: number) => number) => [{ name: 'database', points: line(f) }]
+  return {
+    range: '6h',
+    service: '',
+    start: new Date(start * 1000).toISOString(),
+    end: new Date(end * 1000).toISOString(),
+    step_seconds: 60,
+    connection_budget: 80,
+    panels: [
+      panel('req_per_min', 'req/min', per((i, n) => 20 + n + (i % 7))),
+      panel('error_pct', '%', per(() => 2)),
+      panel('latency_p50_ms', 'ms', per(() => 120)),
+      panel('latency_p95_ms', 'ms', per((i, n) => (i === 10 ? 1500 : n === 13 ? 640 : 400))), // n 13 is support-console, the latest worst
+      panel('cpu_pct', '% of limit', per((i, n) => (n === 0 ? 85 : 30 + (i % 5)))),
+      panel('ram_pct', '% of limit', per(() => 55)),
+      panel('instances', 'count', per((i) => 1 + (i % 3))),
+      panel('cold_starts_per_min', '/min', per((i) => (i % 9 === 0 ? 1 : 0))),
+      panel('sql_cpu_pct', '%', database((i) => 20 + (i % 10))),
+      panel('sql_ram_pct', '%', database(() => 60)),
+      panel('sql_disk_pct', '%', database(() => 35)),
+      panel('sql_connections', 'count', database(() => 23)),
+      panel('latency_p95_fleet_ms', 'ms', [{ name: 'fleet', points: line(() => 180) }]), // FleetP95Key, FleetSeriesName
+      panel('startup_latency_p95_ms', 'ms', per((i, n) => (n === 4 ? 3000 : 250 + (i % 5)))), // n 4 is docling, over 1000 ms: a wrongly judged word would show
+    ],
+    limits: { available: true, services: names.map((name) => ({ name, cpu: '1', memory: '512Mi', max_instances: 3 })) },
+    deploys: {
+      available: true,
+      revisions: [
+        { service: 'gateway', revision: 'gateway-00042', created_at: new Date((start + 1800) * 1000).toISOString() },
+        { service: 'worker', revision: 'worker-00017', created_at: new Date((end + 120) * 1000).toISOString() },
+      ],
+    },
+  }
+}
+
+// fixture check: the shared crosshair and the hover readout of the labelled metrics body
+async function fixtureHover(page: Page): Promise<void> {
+  const mn = mainOf(page)
+  const panels = mn.locator('.ops-health-panels > [data-panel]')
+  const chartOf = (key: string): Locator => kid(panels.nth(PANEL_KEYS.indexOf(key)), 2)
+  const legendOf = (key: string): Locator => kid(panels.nth(PANEL_KEYS.indexOf(key)), 3)
+  const charts = mn.locator('[data-chart]')
+  const readout = mn.locator('[data-readout]')
+  const total = await charts.count()
+  const overOf = async (key: string): Promise<Rect> => (await boxes(page, { over: chartOf(key).locator('.u-over') })).over
+  const hoverAt = async (key: string, frac: number): Promise<void> => {
+    const o = await overOf(key)
+    await page.mouse.move(o.x + o.width * frac, o.y + o.height / 2)
+  }
+  const allCursors = async (): Promise<string[]> => charts.evaluateAll((els) => els.map((e) => e.getAttribute('data-cursor') ?? 'missing'))
+
+  await page.mouse.move(1, 1)
+  await hoverAt('req_per_min', 0.25)
+  await expect.poll(async () => new Set(await allCursors()).size === 1 && (await allCursors())[0] !== '', { message: 'every panel shares one non-empty data-cursor' }).toBe(true)
+  for (let i = 0; i < total; i++) await expect(charts.nth(i).locator('.u-cursor-x'), `panel ${i} crosshair shows`).not.toHaveClass(/u-off/)
+  await expect(readout, 'only the hovered panel shows a readout').toHaveCount(1)
+  await expect(chartOf('req_per_min').locator('[data-readout]')).toHaveCount(1)
+
+  // crosshair colour: the resolved --fg-3 through a probe element
+  const colours = await chartOf('req_per_min').evaluate((el) => {
+    const probe = document.createElement('span')
+    probe.style.color = 'var(--fg-3)'
+    el.append(probe)
+    const fg3 = getComputedStyle(probe).color
+    probe.remove()
+    return { fg3, line: getComputedStyle(el.querySelector('.u-cursor-x')!).borderRightColor }
+  })
+  expect(colours.line, 'crosshair uses --fg-3').toBe(colours.fg3)
+
+  // step 30 of FIXTURE_STEPS (61) sits at the middle of the plot; auth (METRIC_SERVICES_FIXTURE[1]) has no point there (metricsFixture gapAt)
+  await hoverAt('req_per_min', 0.5)
+  const [min] = ((await chartOf('req_per_min').getAttribute('data-x')) ?? '').split(',').map(Number)
+  const t = min + 30 * 60
+  await expect.poll(allCursors, { message: 'the cursor reads step 30' }).toEqual(Array(total).fill(String(t)))
+  await expect(readout.locator('[data-readout-time]'), 'readout time').toHaveText(`${new Date(t * 1000).toISOString().slice(11, 16)} UTC`)
+  const coloured = await legendOf('req_per_min').locator('[data-series]').evaluateAll((els) => els.map((e) => e.getAttribute('data-series')))
+  expect(coloured, 'seven coloured legend entries').toHaveLength(7)
+  const want = [...coloured, ...METRIC_SERVICES_FIXTURE.filter((n) => !coloured.includes(n))]
+  await expect.poll(() => readout.locator('[data-readout-row]').evaluateAll((els) => els.map((e) => e.getAttribute('data-readout-row'))), { message: 'readout rows: coloured in legend order, then grey' }).toEqual(want)
+  await expect(readout.locator('[data-readout-row="auth"] .mono'), 'auth has no point at the gap').toHaveText('—')
+  // step 15: auth has no point at step 30, so every row has a value here
+  await hoverAt('error_pct', 0.25)
+  const errRows = chartOf('error_pct').locator('[data-readout-row] .mono')
+  await expect(errRows, 'error_pct rows').toHaveCount(METRIC_SERVICES_FIXTURE.length)
+  expect(new Set(await errRows.allTextContents()), 'every error_pct row reads 2.00 %').toEqual(new Set(['2.00 %']))
+
+  await atWidths(page, 'SUP-03 System health fixture readout layout', async () => {
+    const problems: string[] = []
+    for (const [key, frac] of [['req_per_min', 0.1], ['error_pct', 0.9]] as const) {
+      await page.mouse.move(1, 1)
+      await hoverAt(key, frac)
+      const box = chartOf(key).locator('[data-readout]')
+      await expect(box, `${key} readout`).toHaveCount(1)
+      const r = (await boxes(page, { box })).box
+      const x = (await boxes(page, { x: chartOf(key).locator('.u-cursor-x') })).x
+      const view = page.viewportSize()!
+      problems.push(...within({ x: 0, y: 0, width: view.width, height: view.height }, r, `${key} readout in the viewport`))
+      if (r.x < x.x + x.width + 1 && x.x - 1 < r.x + r.width) problems.push(`${key} readout covers the crosshair`)
+      const top = await box.evaluate((el) => {
+        const b = el.getBoundingClientRect()
+        // the readout has pointer-events: none, which elementFromPoint skips
+        el.style.pointerEvents = 'auto'
+        const hit = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)
+        el.style.pointerEvents = 'none'
+        return !!hit && el.contains(hit)
+      })
+      if (!top) problems.push(`${key} readout is not topmost at its centre`)
+      const rows = await rectsOf(page, box.locator('[data-readout-row]'), `${key} readout row`)
+      problems.push(...pairwiseApart(rows, `${key} readout rows`))
+      for (const [i, row] of rows.entries()) problems.push(...within(r, row, `${key} readout row ${i}`))
+      await noSidewaysScroll(page, `${key} hover`)
+    }
+    return { problems, rects: {} }
+  })
+
+  // leaving the panel area clears every crosshair and the readout
+  const head = (await boxes(page, { h: mn.getByRole('heading', { level: 1, name: 'System health' }) })).h
+  await page.mouse.move(head.x + head.width / 2, head.y + head.height / 2)
+  await expect.poll(allCursors, { message: 'leaving empties data-cursor everywhere' }).toEqual(Array(total).fill(''))
+  for (let i = 0; i < total; i++) await expect(charts.nth(i).locator('.u-cursor-x'), `panel ${i} crosshair hides`).toHaveClass(/u-off/)
+  await expect(readout, 'the readout is gone').toHaveCount(0)
+}
+
+// fixture check: synced drag zoom, Reset zoom and the select colour on the labelled metrics body
+async function fixtureZoom(page: Page): Promise<void> {
+  const mn = mainOf(page)
+  const panels = mn.locator('.ops-health-panels > [data-panel]')
+  const charts = mn.locator('[data-chart]')
+  const reqOver = kid(panels.nth(PANEL_KEYS.indexOf('req_per_min')), 2).locator('.u-over')
+  const reset = mn.getByRole('button', { name: 'Reset zoom', exact: true })
+  const windows = async (): Promise<string[]> => charts.evaluateAll((els) => els.map((e) => e.getAttribute('data-x') ?? 'missing'))
+  const same = async (): Promise<string | null> => {
+    const w = await windows()
+    return w.length > 0 && new Set(w).size === 1 ? w[0] : null
+  }
+  const full = async (): Promise<[number, number]> => {
+    await expect.poll(same, { message: 'every chart shares one window' }).not.toBeNull()
+    return (await same())!.split(',').map(Number) as [number, number]
+  }
+  const drag = async (from: number, to: number, release = true): Promise<void> => {
+    const o = (await boxes(page, { o: reqOver })).o
+    const y = o.y + o.height / 2
+    await page.mouse.move(o.x + o.width * from, y)
+    await page.mouse.down()
+    await page.mouse.move(o.x + o.width * ((from + to) / 2), y, { steps: 4 })
+    await page.mouse.move(o.x + o.width * to, y, { steps: 4 })
+    if (release) await page.mouse.up()
+  }
+
+  await expect(reset, 'no Reset zoom before a drag').toHaveCount(0)
+  const [start, end] = await full()
+
+  await drag(0.2, 0.6, false)
+  const tint = await mn.evaluate((el) => {
+    const probe = document.createElement('span')
+    probe.style.backgroundColor = 'var(--action-tint)'
+    el.append(probe)
+    const want = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return { want, got: getComputedStyle(document.querySelector('.ops-health-panels .u-select')!).backgroundColor }
+  })
+  expect(tint.got, 'select box uses --action-tint').toBe(tint.want)
+  await page.mouse.up()
+
+  const zoomed = await full()
+  expect(zoomed[0], 'zoom starts inside the range').toBeGreaterThan(start)
+  expect(zoomed[1], 'zoom ends inside the range').toBeLessThan(end)
+  await expect(reset).toHaveCount(1)
+  await expect(mn.getByRole('button', { name: '6h', exact: true }), 'the range chip stays pressed while zoomed').toHaveAttribute('aria-pressed', 'true')
+
+  await atWidths(page, 'SUP-03 System health fixture filter bar while zoomed', async () => {
+    const problems: string[] = []
+    const filterBar = parent(mn.getByRole('button', { name: '15m', exact: true }))
+    const bar = await boxes(page, { filterBar, select: filterBar.locator('select'), reset })
+    const chipRects = await rectsOf(page, filterBar.locator('button.ops-chip'), 'range chip')
+    problems.push(...within(bar.filterBar, bar.reset, 'Reset zoom in the filter bar'), ...sameTops([...chipRects, bar.reset], 'chips and Reset zoom'))
+    problems.push(...pairwiseApart([...chipRects, bar.reset, bar.select], 'chips, Reset zoom and select'))
+    problems.push(...(await selectAtRightEnd(filterBar, bar.filterBar, bar.select, [...chipRects, bar.reset])))
+    for (let i = 0; i < PANEL_KEYS.length; i++) {
+      const marks = kid(panels.nth(i), 2).locator('[data-deploy]:visible')
+      const titles = await marks.evaluateAll((els) => els.map((e) => e.getAttribute('title')))
+      if (titles.length !== 1 || !titles[0]?.startsWith('gateway-00042 · ')) problems.push(`${PANEL_KEYS[i]} visible markers: ${titles.join(' | ')}`)
+    }
+    return { problems, rects: { bar: bar.filterBar, reset: bar.reset } }
+  })
+
+  await reset.click()
+  await expect(reset).toHaveCount(0)
+  await expect.poll(same, { message: 'Reset zoom restores the range' }).toBe(`${start},${end}`)
+
+  await drag(0.2, 0.6)
+  await expect(reset).toHaveCount(1)
+  await mn.getByRole('button', { name: '1h', exact: true }).click()
+  await expect(reset, 'a range chip clears the zoom').toHaveCount(0)
+  await full()
+
+  await drag(0.2, 0.6)
+  await expect(reset).toHaveCount(1)
+  await mn.locator('select[aria-label="Service"]').selectOption('app')
+  await expect(reset, 'a service pick clears the zoom').toHaveCount(0)
+  await full()
+  await mn.locator('select[aria-label="Service"]').selectOption('')
+  await mn.getByRole('button', { name: '6h', exact: true }).click()
+  await full()
+}
+
+// fixture check: legend isolation, its readout and layout on the labelled metrics body
+async function fixtureIsolate(page: Page): Promise<void> {
+  const mn = mainOf(page)
+  const panels = mn.locator('.ops-health-panels > [data-panel]')
+  const chartOf = (key: string): Locator => kid(panels.nth(PANEL_KEYS.indexOf(key)), 2)
+  const legendOf = (key: string): Locator => kid(panels.nth(PANEL_KEYS.indexOf(key)), 3)
+  const cloud = PANEL_KEYS.filter((k) => !k.startsWith('sql_'))
+  const drawn = async (key: string): Promise<string[]> => ((await chartOf(key).getAttribute('data-drawn')) ?? '').split(',').filter(Boolean)
+
+  // worker: the highest req_per_min peak in metricsFixture (20 + n + i % 7, n 16), so colourMap gives it a slot in every Cloud Run panel
+  const name = 'worker'
+  await legendOf('req_per_min').locator(`[data-series="${name}"]`).click()
+  for (const key of cloud) await expect.poll(() => drawn(key), { message: `${key} draws only ${name}` }).toEqual([name])
+  await expect.poll(() => drawn('sql_util'), { message: 'sql_util keeps its lines' }).toEqual(['CPU', 'RAM', 'Disk'])
+  await expect.poll(() => drawn('sql_connections'), { message: 'sql_connections keeps its line' }).toEqual(['connections'])
+  await expect(legendOf('req_per_min').locator(`[data-series="${name}"]`)).toHaveAttribute('aria-pressed', 'true')
+  await expect(legendOf('sql_util').locator('button'), 'SQL legend entries are not buttons').toHaveCount(0)
+  // tokens resolve inside the app root, not on body
+  const muted = await mn.evaluate((el) => {
+    const probe = document.createElement('span')
+    probe.style.backgroundColor = 'var(--line-2)'
+    el.append(probe)
+    const c = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return c
+  })
+  const others = legendOf('req_per_min').locator(`button[data-series]:not([data-series="${name}"])`)
+  expect(await others.count(), 'other coloured entries stay').toBeGreaterThan(0)
+  await expect(others.first()).toHaveAttribute('aria-pressed', 'false')
+  await expect(kid(others.first(), 1), 'muted swatch').toHaveCSS('background-color', muted)
+  await expect(kid(others.first(), 2), 'struck-through name').toHaveCSS('text-decoration-line', 'line-through')
+  await expect(legendOf('req_per_min').locator('[data-series-other]'), 'folded entry struck through').toHaveCSS('text-decoration-line', 'line-through')
+  await expect(legendOf('sql_util').locator('[data-series]').first(), 'SQL entry not muted').not.toHaveCSS('text-decoration-line', 'line-through')
+
+  const o = (await boxes(page, { over: chartOf('req_per_min').locator('.u-over') })).over
+  await page.mouse.move(1, 1)
+  await page.mouse.move(o.x + o.width * 0.5, o.y + o.height / 2)
+  const rows = chartOf('req_per_min').locator('[data-readout-row]')
+  await expect.poll(() => rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-readout-row'))), { message: 'readout lists only the isolated service' }).toEqual([name])
+  await expect(chartOf('req_per_min').locator('[data-readout-time]')).toHaveCount(1)
+  await page.mouse.move(1, 1)
+
+  await atWidths(page, 'SUP-03 System health fixture legend layout, isolated', async () => fixturePanelsRead(page), FIXTURE_READ_TIMEOUT)
+
+  await legendOf('req_per_min').locator(`[data-series="${name}"]`).click()
+  for (const key of cloud) await expect.poll(async () => (await drawn(key)).length, { message: `${key} draws every series again` }).toBe(METRIC_SERVICES_FIXTURE.length)
+}
+
+// fixture check: pins layout of a wire-shaped body, not the metrics contract
+async function healthFixtureLayout(page: Page): Promise<void> {
+  const mn = mainOf(page)
+  const cors = { 'access-control-allow-origin': new URL(page.url()).origin, 'access-control-allow-headers': 'authorization, content-type', 'access-control-allow-methods': 'GET, OPTIONS' }
+  // one body for the whole test: the screen refetches every minute and a new body would move the window
+  const body = JSON.stringify(metricsFixture())
+  await page.route(STAFF_METRICS, (route) =>
+    route.request().method() === 'OPTIONS' ? route.fulfill({ status: 204, headers: cors }) : route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body }),
+  )
+  const answered = page.waitForResponse((r) => STAFF_METRICS.test(new URL(r.url()).pathname + new URL(r.url()).search) && r.request().method() === 'GET')
+  await mn.getByRole('button', { name: '6h', exact: true }).click()
+  await answered
+  const tile = (key: string): Locator => mn.locator(`[data-tile="${key}"]`)
+  const word = (key: string): Locator => tile(key).locator('[data-word]')
+  await expect(tile('req').locator('.money'), 'requests value').not.toHaveText('—')
+  await expect(word('req'), 'requests carry no word').toHaveCount(0)
+  await expect(word('errors')).toHaveText('HIGH')
+  await expect(word('p95')).toHaveText('PEAKED')
+  await expect(tile('p95').locator('.money'), 'p95 fleet value').toHaveText('180')
+  await expect(tile('p95').locator('.money + span'), 'p95 unit').toHaveText('ms')
+  await expect(tile('p95').locator('[data-worst]'), 'p95 worst line').toHaveText('worst support-console 640 ms')
+  await expect(word('connections')).toHaveText('OK')
+  // fixture arithmetic: req sums 17 series (476 + 17 * (i % 7)): last step 544, best 578; 5xx is 2 at every step; worst p95 peaks 1500 ms; connections is 23
+  await expect(tile('req').locator('.money'), 'requests headline').toHaveText('544')
+  await expect(tile('req').locator('[data-max]'), 'requests max').toHaveText('max 578 req/min')
+  await expect(tile('errors').locator('[data-max]'), 'errors max').toHaveText('max 2.00 %')
+  await expect(tile('p95').locator('[data-max]'), 'p95 max beside PEAKED').toHaveText('max 1.50 s')
+  await expect(tile('connections').locator('[data-max]'), 'connections max').toHaveText('max 23 of 80')
+  await expect(tile('fleet').locator('[data-max]'), 'fleet has no max line').toHaveCount(0)
+  await expect(mn.locator('.ops-health-panels > [data-panel]'), 'the panels grid holds every panel').toHaveCount(PANEL_KEYS.length)
+  await atWidths(page, 'SUP-03 System health fixture layout', async () => {
+    const [base, charts] = [await healthLayout(page), await fixturePanelsRead(page)]
+    return { problems: [...base.problems, ...charts.problems], rects: { base: base.rects, charts: charts.rects } }
+  }, FIXTURE_READ_TIMEOUT)
+  await fixtureHover(page)
+  await fixtureZoom(page)
+  await fixtureIsolate(page)
+
+  // app owns no job kind and has no live ping row: both notes show; the metrics route answers any query
+  await mn.locator('select[aria-label="Service"]').selectOption('app')
+  await expect(mn.locator('[data-tile="p95"] [data-worst]'), 'a picked service has no worst line').toHaveCount(0)
+  await expect(mn.locator('[data-tile="p95"] [data-max]'), 'a picked service keeps the p95 max (fixture check)').toHaveText('max 1.50 s')
+  await expect(mn.locator('[data-jobs-note]'), 'app jobs note').toHaveText('app owns no background jobs. Pick submission, notifications, worker or All services to see them.')
+  await expect(mn.locator('[data-service]'), 'app has no service row').toHaveCount(0)
+  const pinged = (await mn.locator('[data-ping-note]').count()) > 0
+  if (!pinged) await expect(mn.getByText('The gateway roll-up is unavailable.'), 'app pass keeps the roll-up copy').toHaveCount(1)
+  if (pinged) await expect(mn.locator('[data-ping-note]'), 'app ping note').toHaveText('app has no live ping. The live ping covers the backend services.')
+  await expect(mn.locator('[data-tile="queue"], [data-tile="dead-lettered"]'), 'no jobs tiles for app').toHaveCount(0)
+  await atWidths(page, 'SUP-03 System health fixture layout, app pick', async () => {
+    const base = await healthLayout(page)
+    return { problems: base.problems, rects: { base: base.rects } }
+  })
+  await mn.locator('select[aria-label="Service"]').selectOption('')
+  await expect(mn.locator('[data-tile="queue"]'), 'All services restores the jobs tiles').toHaveCount(1)
 }
 
 const STAFF_AUDIT = '/api/invoice/v1/staff/audit-log'
@@ -1190,6 +1974,13 @@ const SCREENS: Screen[] = [
     rowUp: 1,
     reads: submissionsReads,
     layout: submissionsLayout,
+    after: async (page) => {
+      const select = mainOf(page).locator('select[aria-label="Tenant"]')
+      const value = await select.locator('option:not([value=""])').first().getAttribute('value')
+      expect(value, 'a real tenant option').toBeTruthy()
+      await select.selectOption(value!)
+      await atWidths(page, 'SUP-03 Submissions Sentry link layout', () => submissionsLinkLayout(page))
+    },
   },
   {
     nav: 'Rules',
@@ -1241,6 +2032,7 @@ const SCREENS: Screen[] = [
     arm: armHealth,
     reads: healthReads,
     layout: healthLayout,
+    after: healthFixtureLayout,
   },
   {
     nav: 'AI usage',
@@ -1253,7 +2045,7 @@ const SCREENS: Screen[] = [
 
 for (const s of SCREENS) {
   test(`SUP-03 ${s.nav}: v2 header, eyebrow clearances and screen reads`, async ({ page }, testInfo) => {
-    test.setTimeout(120_000)
+    test.setTimeout(s.nav === 'System health' ? 300_000 : 120_000)
     const errors = await startSupport(page)
     const armed = s.arm?.(page)
     armed?.catch(() => {}) // a timeout surfaces where `reads` awaits it, not as an unhandled rejection

@@ -15,6 +15,7 @@ paths:
   - "internal/notifications/worker.go"
   - "internal/notifications/store.go"
   - "internal/notifications/newsletter*.go"
+  - "internal/platform/sentryfilter.go"
   - "internal/platform/ai/**"
   - "internal/platform/jev/**"
   - "internal/extraction/aiimage.go"
@@ -92,3 +93,4 @@ Each row holds the URL, one finding and the plan. The PR body holds the full ven
 | Google, Gemini 3.5 Flash Lite | https://ai.google.dev/gemini-api/terms | AI Studio unpaid terms permit product training. Vertex terms do not. | No claim. The serving endpoint is unknown. |
 | TypeSafe, Jev | https://typesafe.ai/legal/privacy-policy | The policy forbids training on Input. It does not name Jev. | No claim. The user decides. |
 - Quote the hosting region from `HOSTING_REGION`. `productionRegion` reads the same value from `deploy-prod.yml`, and C37 fails when they differ.
+- Say that the sign-in service's error reports may include the account email while `scrubAuthEvent` keeps it. `TestAuthEvent_CarriesTheAccountEmail` pins the code side.

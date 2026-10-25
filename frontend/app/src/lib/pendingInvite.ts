@@ -12,17 +12,34 @@ export function readInviteFragment(hash: string): string | null {
 }
 
 const MAX_NAME_CHARS = 200
+// Mirror NAME_REQUIRED and NAME_TOO_LONG in frontend/landing/src/register.ts.
+const NAME_REQUIRED = 'Enter your name.'
+const NAME_TOO_LONG = `Use ${MAX_NAME_CHARS} characters or fewer.`
 
-// Mirrors checkName in internal/tenancy/tenancy.go: trimmed, 1 to 200 characters, no NUL.
+// Trims as the API does: JS trim() plus U+0085, which Go's unicode.IsSpace strips and JS does not.
+export function trimName(v: string): string {
+  let s = v.trim()
+  while (s.startsWith('\u0085') || s.endsWith('\u0085')) s = s.replace(/^\u0085/, '').replace(/\u0085$/, '').trim()
+  return s
+}
+
+// Mirrors checkName in internal/tenancy/tenancy.go: trimmed, 1 to 200 characters (maxNameChars), no NUL.
 export const validName = (v: string) => {
-  const t = v.trim()
+  const t = trimName(v)
   return t !== '' && [...t].length <= MAX_NAME_CHARS && !t.includes('\0')
+}
+
+// Why a name is invalid, as the landing invite page says it; a NUL gives no message.
+export function nameError(v: string): string | null {
+  if (v.includes('\0')) return null
+  const n = [...trimName(v)].length
+  return n === 0 ? NAME_REQUIRED : n > MAX_NAME_CHARS ? NAME_TOO_LONG : null
 }
 
 // The one `name` fragment value, trimmed and valid, else null.
 export function readInviteName(hash: string): string | null {
   const names = new URLSearchParams(hash.replace(/^#/, '')).getAll('name')
-  const name = names.length === 1 ? names[0].trim() : ''
+  const name = names.length === 1 ? trimName(names[0]) : ''
   return validName(name) ? name : null
 }
 

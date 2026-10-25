@@ -1,6 +1,15 @@
+# Wrapper stage. The golang tag equals go.mod; TestGoPins_RepoAgree fails when they differ.
+FROM mirror.gcr.io/library/golang:1.26.10-alpine AS wrap
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY cmd/authsentry cmd/authsentry
+COPY internal/platform internal/platform
+RUN CGO_ENABLED=0 go build -o /out/authsentry ./cmd/authsentry
+
 # The tag and digest live here only; internal/tools/idppin reads them for every other consumer.
 # ghcr.io, not Docker Hub: Docker Hub rate-limits anonymous CI pulls.
 FROM ghcr.io/supabase/auth:v2.197.0@sha256:1736a63078f5922b198c4cbe50f80ab9a2d3b54fe8b7b6cfb2e9dc5dbbc12c6b
+COPY --from=wrap /out/authsentry /usr/local/bin/authsentry
 
 # Environment-independent settings. Per-environment values and secrets are set on the Cloud Run service.
 ENV GOTRUE_DB_DRIVER=postgres \
@@ -18,3 +27,7 @@ ENV GOTRUE_DB_DRIVER=postgres \
     GOTRUE_SMTP_ADMIN_EMAIL=no-reply@ascomply.com \
     GOTRUE_SMTP_SENDER_NAME=ASComply \
     GOTRUE_LOG_LEVEL=info
+
+# The upstream image sets CMD ["auth"] and no ENTRYPOINT. The wrapper runs its args as GoTrue.
+ENTRYPOINT ["/usr/local/bin/authsentry"]
+CMD ["auth"]

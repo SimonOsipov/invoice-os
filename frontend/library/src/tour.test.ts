@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { STAGES, TOUR } from './content'
+import { GROUPS, STAGES, TOUR } from './content'
 import {
   CALLOUT_H, CALLOUT_W, calloutPos, cardScrollDelta, spotRect, TOUR_START, tourBack, tourButtonLabel,
   tourCallout, tourNext, tourStage, tourStepNumber, type CalloutPos, type Rect, type TourState,
@@ -51,6 +51,10 @@ describe('tour', () => {
       step: 'STEP 01 OF 14', title: 'Open Invoices', text: 'Import, create and track every invoice.',
       showWatch: false, backOff: true, nextLabel: 'Next',
     })
+    const soon = tourCallout({ i: 4, phase: 'menu' })
+    expect(soon.title).toBe('Open NRS clearance & submission')
+    expect(soon.text).toBe(GROUPS.find((g) => g.id === 'clearance')!.one)
+    expect(soon.text).toMatch(/coming soon/i)
     const last = tourCallout({ i: 6, phase: 'menu' })
     expect(last.step).toBe('STEP 13 OF 14')
     expect(last.title).toBe('Open Reports & analytics')

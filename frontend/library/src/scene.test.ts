@@ -24,7 +24,7 @@ describe('scene', () => {
     const s1 = at('import-files', 1, 'list')
     expect(s1.rows).toHaveLength(2)
     expect(s1.rows.map((r) => r.focused)).toEqual([true, false])
-    expect(s1.banner).toBe('Mapped 9 of 9 columns')
+    expect(s1.banner).toBe('All fields placed')
     const s2 = at('import-files', 2, 'list')
     expect(s2.rows.map((r) => r.status)).toEqual(['valid', 'valid', 'valid', 'new'])
     expect(s2.rows.map((r) => r.focused)).toEqual([false, false, false, true])
@@ -51,28 +51,28 @@ describe('scene', () => {
     const s2 = at('create-invoice', 2, 'form')
     expect(s2.fields.some((x) => x.focused)).toBe(false)
     expect(s2.fields.map((x) => x.mark)).toEqual([null, 'ok', null, 'ok', 'ok'])
-    expect(s2.msg).toEqual({ text: '12 fields checked · 0 errors', tone: 'ok' })
+    expect(s2.msg).toEqual({ text: 'Passes all rules · no violations', tone: 'ok' })
   })
 
   it('sceneState_formFixReplacesTheValueAndMarksAccumulate', () => {
     const s0 = at('validate', 0, 'form')
     expect(s0.fields[0].mark).toBe('err')
-    expect(s0.fields[0].val).toBe('2018441-0001')
+    expect(s0.fields[0].val).toBe('2066551-0001')
     expect(s0.msg?.tone).toBe('err')
     const s1 = at('validate', 1, 'form')
     expect(s1.fields[0].mark).toBe('fix')
-    expect(s1.fields[0].val).toBe('20184412-0001')
+    expect(s1.fields[0].val).toBe('20665510-0001')
     expect(s1.fields.slice(1).map((x) => x.mark)).toEqual(['ok', 'ok', 'ok', 'ok'])
     expect(s1.msg).toBeNull()
     const s2 = at('validate', 2, 'form')
     expect(s2.fields[0].mark).toBe('ok')
-    expect(s2.fields[0].val).toBe('20184412-0001')
+    expect(s2.fields[0].val).toBe('20665510-0001')
   })
 
   it('sceneState_formInfoToneAndDoc', () => {
     const s = at('learns', 1, 'form')
     expect(s.doc).toBe(true)
-    expect(s.msg).toEqual({ text: 'Layout saved for Adeyemi & Sons Trading', tone: 'info' })
+    expect(s.msg).toEqual({ text: 'Layout remembered', tone: 'info' })
     expect(at('read-documents', 0, 'form').fields.every((x) => !x.shown)).toBe(true)
   })
 
@@ -95,13 +95,13 @@ describe('scene', () => {
   })
 
   it('sceneState_togglesFlipCumulatively', () => {
-    const on = (i: number) => at('roles', i, 'toggles').rows.map((r) => r.on)
-    const focus = (i: number) => at('roles', i, 'toggles').rows.findIndex((r) => r.focused)
-    expect(on(0)).toEqual([true, false, true, true, false])
+    const on = (i: number) => at('channels', i, 'toggles').rows.map((r) => r.on)
+    const focus = (i: number) => at('channels', i, 'toggles').rows.findIndex((r) => r.focused)
+    expect(on(0)).toEqual([true, true, true, true, false])
     expect(focus(0)).toBe(0)
-    expect(on(1)).toEqual([true, false, true, false, false])
+    expect(on(1)).toEqual([true, true, true, false, false])
     expect(focus(1)).toBe(3)
-    expect(on(2)).toEqual([true, false, true, false, false])
+    expect(on(2)).toEqual([true, true, true, false, true])
     expect(focus(2)).toBe(4)
   })
 
@@ -112,7 +112,7 @@ describe('scene', () => {
     expect(s0.items[0].tag).toBe('g')
     const s2 = at('audit-trail', 2, 'feed')
     expect(s2.items).toHaveLength(5)
-    expect(s2.items[4].l).toBe('Cleared by FIRS')
+    expect(s2.items[4].l).toBe('Transmission accepted')
   })
 
   it('sceneState_everyFeatureEveryStep', () => {

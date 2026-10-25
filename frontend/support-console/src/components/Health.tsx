@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react'
 import { CHART_H, SPARK_HEIGHT, SPARK_WIDTH, healthTone, sentryServiceUrl, sparkline } from '../helpers'
 import { fleetSummary, jobSeries, jobsOf, series, shortBuild, type StaffHealth } from '../healthApi'
-import { DASHBOARDS, METRIC_SERVICES, RANGES, SERIES, THRESHOLDS, colourMap, fleetSeries, formatValue, hasData, judge, latestOf, panelOf, worstP95, type PanelKey, type Point, type RangeKey, type StaffMetrics, type Stat, type Verdict } from '../metricsApi'
+import { DASHBOARDS, METRIC_SERVICES, RANGES, SERIES, THRESHOLDS, colourMap, fleetSeries, formatValue, hasData, judge, latestOf, panelOf, peakOf, worstP95, type PanelKey, type Point, type RangeKey, type StaffMetrics, type Stat, type Verdict } from '../metricsApi'
 import { syncStamp } from '../rulesApi'
 import { G } from './BlogList'
 import { Badge } from './StatusBadge'
@@ -28,7 +28,7 @@ type Props = {
 }
 
 type Tone = 'green' | 'amber' | 'red' | 'muted'
-type Tile = { key: string; label: string; value: string; unit: string; word?: string; scope?: string; tone: Tone; down?: string[]; worst?: string; points: number[] }
+type Tile = { key: string; label: string; value: string; unit: string; word?: string; scope?: string; tone: Tone; down?: string[]; worst?: string; max?: string; points: number[] }
 
 const LEGEND_TEXT: CSSProperties = { fontSize: 11, color: 'var(--fg-3)' }
 const ONE_LINE: CSSProperties = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
@@ -97,9 +97,12 @@ function metricTiles(m: StaffMetrics | null, status: HealthStatus, service: stri
       const main = fleet === null ? { value: '—', unit: 'ms' } : formatValue('ms', fleet)
       base = { ...base, value: main.value, unit: main.unit, worst: `worst ${worst.name} ${shown.value} ${shown.unit}` }
     }
+    // The max never reads below the fleet headline, so at All services it also covers the fleet peak.
+    const fleetPeak = worst && f ? peakOf(f.p95Fleet) : null
+    const top = formatValue(s.unit, Math.max(peakOf(points) ?? latest, fleetPeak ?? -Infinity))
+    base = { ...base, max: `max ${top.value} ${s.stat === 'connections' ? tail : top.unit}` }
     if (!s.stat) return { ...base, tone: 'green' }
-    const peak = Math.max(...points.map((p) => formatValue(s.unit, p[1]).n))
-    return { ...base, ...VERDICT[judge(s.stat, shown.n, peak, m?.connection_budget ?? 0)] }
+    return { ...base, ...VERDICT[judge(s.stat, shown.n, top.n, m?.connection_budget ?? 0)] }
   })
 }
 
@@ -276,7 +279,7 @@ function TileCard({ t }: { t: Tile }) {
           </span>
         )}
       </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 6, rowGap: 4, marginBottom: 12 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 6, rowGap: 4, marginBottom: t.max ? 4 : 12 }}>
         <span className="money" style={{ flex: 'none', fontSize: 30, fontWeight: 700, color: 'var(--fg-1)' }}>
           {t.value}
         </span>
@@ -284,6 +287,11 @@ function TileCard({ t }: { t: Tile }) {
           {t.unit}
         </span>
       </div>
+      {t.max && (
+        <div data-max="" className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 12, overflowWrap: 'anywhere' }}>
+          {t.max}
+        </div>
+      )}
       {t.worst && (
         <div data-worst="" className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 12, overflowWrap: 'anywhere' }}>
           {t.worst}

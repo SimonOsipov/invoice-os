@@ -289,6 +289,38 @@ describe('Console system health refresh', () => {
     expect(screen.getByText('Loading metrics…')).toBeTruthy()
   })
 
+  it('a refresh keeps the max on screen', async () => {
+    await open()
+    metrics.mockImplementation(pending)
+    await tick()
+    expect(reqTile()).toContain('max 42 req/min')
+  })
+
+  it('a failed refresh keeps the max beside REFRESH FAILED', async () => {
+    await open()
+    metrics.mockRejectedValueOnce(new ApiError('http', 'boom', 500))
+    await tick()
+    expect(screen.getByText('REFRESH FAILED')).toBeTruthy()
+    expect(reqTile()).toContain('max 42 req/min')
+  })
+
+  it('a range change clears the max with the headline', async () => {
+    await open()
+    metrics.mockImplementation(pending)
+    fireEvent.click(screen.getByRole('button', { name: '6h' }))
+    await tick(0)
+    expect(reqTile()).not.toContain('max')
+    expect(reqTile()).not.toContain('42')
+  })
+
+  it('a service change clears the max with the headline', async () => {
+    await open()
+    metrics.mockImplementation(pending)
+    fireEvent.change(screen.getByLabelText('Service'), { target: { value: 'gateway' } })
+    await tick(0)
+    expect(reqTile()).not.toContain('max')
+  })
+
   it('a failed metrics tick alone marks the page', async () => {
     await open()
     metrics.mockRejectedValueOnce(new ApiError('http', 'boom', 500))

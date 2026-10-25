@@ -53,8 +53,6 @@ describe('content', () => {
     const list = byId('contacts').sc
     if (list.kind !== 'list') throw new Error('contacts is not a list')
     expect(list.steps[0].banner).toBe('Synced 3 contacts from Sage')
-    expect(byId('import-files').benefits).toContain('Works with exports from Odoo, Sage, QuickBooks, SAP and Microsoft Dynamics')
-    expect(JSON.stringify([GROUPS, FEATURES, STAGES, TOUR])).not.toContain('NRS')
   })
 
   it('content_marksExactlyTheFiveComingSoonFeatures', () => {

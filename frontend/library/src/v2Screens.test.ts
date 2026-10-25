@@ -446,7 +446,7 @@ describe('library scenes', () => {
     const ci = view('create-invoice', 0, 'player')
     expect(where(ci, (s) => s.transition === 'opacity 400ms').map((t) => style(t).opacity)).toEqual(['1', '1', '0', '0', '0'])
 
-    const info = view('learns', 1, 'player').find((t) => t.text === esc('Layout saved for Adeyemi & Sons Trading') && style(t).animation !== undefined)!
+    const info = view('learns', 1, 'player').find((t) => t.text === esc('Layout remembered') && style(t).animation !== undefined)!
     expect(style(info)).toMatchObject({ background: 'var(--mint-soft)', color: 'var(--tab-active-text)' })
   })
 
@@ -469,7 +469,7 @@ describe('library scenes', () => {
     const ci = view('create-invoice', 2, 'thumb')
     expect(where(ci, (s) => s['grid-template-columns'] === '1fr 1fr')).toHaveLength(1)
     expect(where(ci, (s) => s.height === '16px')).toHaveLength(4)
-    expect(ci.some((x) => x.text === '12 fields checked · 0 errors')).toBe(true)
+    expect(ci.some((x) => x.text === 'Re-validated · 0 errors')).toBe(true)
   })
 
   const formCases = FEATURES.flatMap((f) => {

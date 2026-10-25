@@ -51,7 +51,7 @@ describe('scene', () => {
     const s2 = at('create-invoice', 2, 'form')
     expect(s2.fields.some((x) => x.focused)).toBe(false)
     expect(s2.fields.map((x) => x.mark)).toEqual([null, 'ok', null, 'ok', 'ok'])
-    expect(s2.msg).toEqual({ text: '12 fields checked · 0 errors', tone: 'ok' })
+    expect(s2.msg).toEqual({ text: 'Re-validated · 0 errors', tone: 'ok' })
   })
 
   it('sceneState_formFixReplacesTheValueAndMarksAccumulate', () => {
@@ -72,7 +72,7 @@ describe('scene', () => {
   it('sceneState_formInfoToneAndDoc', () => {
     const s = at('learns', 1, 'form')
     expect(s.doc).toBe(true)
-    expect(s.msg).toEqual({ text: 'Layout saved for Adeyemi & Sons Trading', tone: 'info' })
+    expect(s.msg).toEqual({ text: 'Layout remembered', tone: 'info' })
     expect(at('read-documents', 0, 'form').fields.every((x) => !x.shown)).toBe(true)
   })
 

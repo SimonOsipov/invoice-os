@@ -95,7 +95,7 @@ type MeUser struct {
 // the caller's membership via load, and returns them. A missing/invalid tenant is
 // 401 (db.ErrNoTenant, fail-closed); an unknown tenant is 404; a resolved tenant with
 // no membership row is 403 (ErrNoMembership, fail-closed — a role is never
-// defaulted); a non-active membership is 403 (db.ErrNotActiveMember);
+// defaulted); a non-active membership is 403 (db.ErrNotActiveMember), as is a locked workspace (db.ErrWorkspaceLocked);
 // anything else is 500.
 func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
@@ -188,7 +188,7 @@ type MembershipsLoader func(ctx context.Context) ([]MemberAccess, error)
 // fail-closed shape as MeHandler), then lists the caller's tenant's
 // memberships via load. Unlike MeHandler, this endpoint does NOT gate on the
 // caller holding a membership row: db.ErrNoTenant is 401 (fail-closed, no
-// tenant context at all); db.ErrNotActiveMember is 403; any other loader
+// tenant context at all); db.ErrNotActiveMember and db.ErrWorkspaceLocked are 403; any other loader
 // error is 500. Per A4 there is deliberately no membership-based 403/404
 // mapping here. A nil/empty result is normalized to
 // an empty slice so the memberships field always serializes as `[]`, never

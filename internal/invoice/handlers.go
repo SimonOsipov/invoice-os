@@ -1748,7 +1748,7 @@ func ViolationSummaryHandler(summary func(ctx context.Context, importBatchIDs []
 // db.ErrNoTenant is 401 (fail-closed, missing identity never reaches here in
 // practice since every handler checks identity first, but this is the
 // defense-in-depth mirror of portfolio's own statusForErr);
-// db.ErrNotActiveMember is 403; ErrValidation is 400 with the wrapped
+// db.ErrNotActiveMember and db.ErrWorkspaceLocked are 403; ErrValidation is 400 with the wrapped
 // message; ErrNotFound is 404; ErrDuplicateNumber/
 // ErrRedundantTransition/ErrIllegalTransition/ErrAwaitingApproval are 409;
 // the last answers with awaitingApprovalReason, the shared refusal sentence

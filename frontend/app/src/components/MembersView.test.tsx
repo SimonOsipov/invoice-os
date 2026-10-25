@@ -305,6 +305,7 @@ describe("AC4: a rejected write renders the server's own reason at the control",
 describe('DEL-02-05: Remove through the view', () => {
   const ada = () => member({ role: 'preparer' })
   const other = () => member({ id: 'other1', name: 'Other Person', initials: 'OP', role: 'admin' })
+  const third = () => member({ id: 'other2', name: 'Third Person', initials: 'TP', role: 'reviewer' })
 
   function confirmRemove() {
     fireEvent.click(screen.getByTestId('member-remove'))
@@ -328,7 +329,7 @@ describe('DEL-02-05: Remove through the view', () => {
     mockedRemoveMembership.mockResolvedValue({ ...wireFor(m, 'removed'), email: null })
     const refetchRoles = vi.fn()
 
-    render(<Harness initial={[m, other()]} refetchRoles={refetchRoles} />)
+    render(<Harness initial={[m, other(), third()]} refetchRoles={refetchRoles} />)
     openDrawer('Ada Person')
     confirmRemove()
 
@@ -398,7 +399,7 @@ describe('DEL-02-05: Remove through the view', () => {
     const m = ada()
     mockedRemoveMembership.mockResolvedValue({ ...wireFor(m, 'removed'), display_name: null, email: null })
 
-    render(<Harness initial={[m, other()]} />)
+    render(<Harness initial={[m, other(), third()]} />)
     openDrawer('Ada Person')
     confirmRemove()
 
@@ -1922,6 +1923,17 @@ describe('the roster table chrome, head to rows', () => {
     expect(within(table).queryAllByTestId(/^(member|invite)-row$/)).toHaveLength(0)
     expect((table.firstElementChild as HTMLElement).nextElementSibling).toBe(within(table).getByTestId('members-no-match'))
     expect(screen.getByTestId('role-matrix-toggle'), 'a filter must not hide the capability matrix').toBeTruthy()
+  })
+
+  it('the "just you" card returns when the only teammate is a removed row', () => {
+    render(<Harness initial={[member(), member({ id: 'g', name: 'Gone Person', status: 'removed', email: null })]} />)
+    expect(screen.getByText('Just you at the firm')).toBeTruthy()
+  })
+
+  it('the Admin role filter lists no removed former admin', () => {
+    render(<Harness initial={[member(), otherMember(), member({ id: 'g', name: 'Gone Admin', role: 'admin', status: 'removed', email: null })]} />)
+    fireEvent.change(screen.getByLabelText('Access role').querySelector('select')!, { target: { value: 'admin' } })
+    expect(screen.queryByText('Gone Admin')).toBeNull()
   })
 
   it('a search on a roster of one keeps the table and its no-match row, never the "just you" card', () => {

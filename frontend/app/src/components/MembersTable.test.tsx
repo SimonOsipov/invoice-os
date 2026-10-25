@@ -857,6 +857,13 @@ describe('FIRMS-02-05: the roster shows client access under the access role', ()
     expect(screen.queryByTestId('member-client-access')).toBeNull()
   })
 
+  it('a removed firm row shows no access role and no client line', () => {
+    renderRows('firm', [member({ id: 'g', name: 'Gone Person', role: 'reviewer', status: 'removed', email: null, clientAccess: ['a'] })])
+    const row = screen.getByText('Gone Person').closest('[data-testid="member-row"]') as HTMLElement
+    expect(within(row).queryByTestId('member-client-access')).toBeNull()
+    expect(row.textContent).not.toContain('Reviewer')
+  })
+
   it('a row whose access is unknown to the viewer shows no line', () => {
     renderRows('firm', [member({ clientAccess: null })])
     expect(screen.queryByTestId('member-client-access')).toBeNull()

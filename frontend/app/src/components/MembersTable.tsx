@@ -227,9 +227,9 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, onR
           const rolesLanded = ctx.rolesState === 'ready' || ctx.rolesState === 'empty'
           const roleCell = rolesLanded ? rosterRoleCell(roles, m.id) : { text: '', tooltip: '' }
           const pending = m.status === 'invited'
-          // D9: a removed row is history; no menu, no drawer.
+          // A removed row is history: pill and name only, no role, menu or drawer.
           const removed = m.status === 'removed'
-          const clientLine = ctx.mode === 'firm' ? clientAccessLabel(m.clientAccess) : null
+          const clientLine = ctx.mode === 'firm' && !removed ? clientAccessLabel(m.clientAccess) : null
           const invite = pending ? invites.find((i) => i.id === m.id) : undefined
           const accountLine = invite ? inviteAccountLine(invite) : null
           return (
@@ -280,7 +280,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, onR
                 </span>
 
                 <span style={{ minWidth: 0 }}>
-                  <span style={{ display: 'block', ...ELLIPSIS, fontSize: 12.5, color: 'var(--fg-2)' }}>{accessRoleLabel(m.role)}</span>
+                  <span style={{ display: 'block', ...ELLIPSIS, fontSize: 12.5, color: 'var(--fg-2)' }}>{removed ? '' : accessRoleLabel(m.role)}</span>
                   {clientLine && (
                     <span
                       data-testid="member-client-access"

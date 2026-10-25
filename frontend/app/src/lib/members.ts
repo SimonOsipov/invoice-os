@@ -305,7 +305,7 @@ export function filterMembers(list: readonly Member[], query: string, roleFilter
   if (!isFiltering(query, roleFilter)) return list.slice()
   const q = query.trim().toLowerCase()
   return list.filter((m) => {
-    if (roleFilter !== 'all' && m.role !== roleFilter) return false
+    if (roleFilter !== 'all' && (m.status === 'removed' || m.role !== roleFilter)) return false
     if (!q) return true
     // `q` is non-empty here, so a null email's `''` never matches.
     return m.name.toLowerCase().includes(q) || (m.email ?? '').toLowerCase().includes(q)

@@ -236,7 +236,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   // here — `isFiltering` is the same one `filterMembers` short-circuits on, so `shown` and
   // this flag always answer to one definition of an empty query.
   const filtering = isFiltering(query, roleFilter)
-  const justYou = roster.length === 1 && !filtering
+  const justYou = roster.filter((m) => m.status !== 'removed').length === 1 && !filtering
 
   return (
     <>

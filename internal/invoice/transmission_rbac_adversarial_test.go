@@ -170,7 +170,7 @@ func TestTransmitGate_RealStore_InvitedApproverRefused(t *testing.T) {
 	id := auth.Identity{Subject: subject, Role: "authenticated", TenantID: tenantID}
 
 	rec, resp := doInvoiceTransitionAs(t, store.Transition, store.CallerRole, &id, inv, transitionToQueuedBody)
-	assertNotActiveRefused(t, rec, resp.Error)
+	assertTransmitRefused(t, rec, resp.Error)
 	if got := mustInvoiceStatus(t, super, inv); got != string(StatusValidated) {
 		t.Errorf("invoice status = %q, want %q", got, StatusValidated)
 	}

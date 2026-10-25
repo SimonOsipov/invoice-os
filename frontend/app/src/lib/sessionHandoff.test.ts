@@ -681,6 +681,12 @@ describe('join offers', () => {
     expect(calls[0].body).toEqual({ display_name: 'Ada' })
   })
 
+  it('joinInvite sends the name trimmed of U+0085', async () => {
+    const calls = stub({ me: [{ status: 200, body: ME }] })
+    await joinInvite(GATEWAY, offer(), 'a', '\u0085 Ada \u0085', 5000)
+    expect(calls[0].body).toEqual({ display_name: 'Ada' })
+  })
+
   it('joinInvite_refusalWithAWorkspaceOpensIt', async () => {
     const calls = stub({ accept: { status: 404, body: { error: MSG_INVALID } }, me: [{ status: 200, body: ME }] })
     const s = await joinInvite(GATEWAY, offer(), 'a', 'Ada', 5000)

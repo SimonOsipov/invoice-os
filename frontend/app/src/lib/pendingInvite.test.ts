@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as pendingInvite from './pendingInvite'
-import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment, readInviteName } from './pendingInvite'
+import { consumePendingInvite, holdPendingInvite, peekPendingInvite, nameError, readInviteFragment, readInviteName, trimName } from './pendingInvite'
 
 // Read off the namespace so a missing export fails the assertion, not the import.
 const KEY = (pendingInvite as Record<string, unknown>).PENDING_INVITE_KEY
@@ -160,5 +160,28 @@ describe('holdPendingInvite and consumePendingInvite (D11)', () => {
     })
     expect(() => holdPendingInvite(T, NOW), 'setItem throws').not.toThrow()
     expect(warn).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('trimName and nameError', () => {
+  it('trimName strips U+0085 as the API does', () => {
+    expect(trimName(' \u0085 Ada \u0085 ')).toBe('Ada')
+    expect(trimName('\u0085')).toBe('')
+    expect(trimName('\uFEFF')).toBe('')
+  })
+
+  it('nameError: the four outcomes', () => {
+    expect(nameError('Ada')).toBeNull()
+    expect(nameError('  ')).toBe('Enter your name.')
+    expect(nameError('\u0085')).toBe('Enter your name.')
+    expect(nameError('a'.repeat(201))).toBe('Use 200 characters or fewer.')
+    expect(nameError('a'.repeat(200))).toBeNull()
+    expect(nameError('a\0')).toBeNull()
+    expect(nameError('a'.repeat(201) + '\0')).toBeNull()
+  })
+
+  it('readInviteName trims U+0085', () => {
+    expect(readInviteName('#invite=T&name=%C2%85Ada%C2%85')).toBe('Ada')
+    expect(readInviteName('#name=%C2%85')).toBeNull()
   })
 })

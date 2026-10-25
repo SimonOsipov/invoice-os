@@ -2,7 +2,7 @@ import { useState } from 'react'
 
 import { BrandMark } from '../icons'
 import { accessRoleLabel, type AccessRole } from '../lib/members'
-import { validName } from '../lib/pendingInvite'
+import { nameError, trimName, validName } from '../lib/pendingInvite'
 import type { PendingInvite } from '../lib/sessionHandoff'
 
 // Passed as `joining` while Create my own workspace runs; invite ids are UUIDs.
@@ -36,15 +36,38 @@ export function JoinWorkspace({ invites, joining, notice, defaultName = '', defa
   const several = invites.length > 1
   const empty = invites.length === 0
   const busy = joining !== null
-  const nameInput = (testId: string, label: string, value: string, set: (v: string) => void) => (
-    <label style={LABEL}>
-      {label}
-      <input data-testid={testId} className="pf-input" value={value} onChange={(e) => set(e.target.value)} disabled={busy} style={INPUT} />
-    </label>
+  const [nameTouched, setNameTouched] = useState(false)
+  // A prefilled invalid name explains itself with no edit.
+  const nameMessage = nameTouched || name !== '' ? nameError(name) : null
+  const nameInput = (testId: string, label: string, value: string, set: (v: string) => void, error?: string | null) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <label style={LABEL}>
+        {label}
+        <input
+          data-testid={testId}
+          className="pf-input"
+          value={value}
+          onChange={(e) => set(e.target.value)}
+          disabled={busy}
+          style={INPUT}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? 'join-name-error' : undefined}
+        />
+      </label>
+      {error && (
+        <div id="join-name-error" data-testid="join-name-error" style={{ fontSize: 11.5, color: 'var(--status-red-text)' }}>
+          {error}
+        </div>
+      )}
+    </div>
   )
+  const setNameEdited = (v: string) => {
+    setNameTouched(true)
+    setName(v)
+  }
   const joinButton = (i: PendingInvite, marginTop: number) => (
     <button
-      onClick={() => onJoin(i.id, name.trim())}
+      onClick={() => onJoin(i.id, trimName(name))}
       disabled={busy || !validName(name)}
       aria-label={joining === i.id ? undefined : `Join ${i.workspace}`}
       className="v2-btn v2-btn-primary pf-btn"
@@ -78,10 +101,10 @@ export function JoinWorkspace({ invites, joining, notice, defaultName = '', defa
           {empty ? (
             <>
               {nameInput('join-workspace-name', 'Workspace name', workspace, setWorkspace)}
-              {nameInput('join-name', 'Your name', name, setName)}
+              {nameInput('join-name', 'Your name', name, setNameEdited, nameMessage)}
               <button
                 data-testid="join-create"
-                onClick={() => onCreate?.(workspace.trim(), name.trim())}
+                onClick={() => onCreate?.(workspace.trim(), trimName(name))}
                 disabled={busy || !onCreate || !validName(workspace) || !validName(name)}
                 className="v2-btn v2-btn-primary pf-btn"
                 style={{ ...BUTTON, marginTop: 4 }}
@@ -91,7 +114,7 @@ export function JoinWorkspace({ invites, joining, notice, defaultName = '', defa
             </>
           ) : (
             <>
-              {nameInput('join-name', 'Your name', name, setName)}
+              {nameInput('join-name', 'Your name', name, setNameEdited, nameMessage)}
               {several ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {invites.map((i) => (

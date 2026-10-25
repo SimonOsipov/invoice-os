@@ -182,4 +182,117 @@ describe('JoinWorkspace', () => {
     expect((screen.getByTestId('join-name') as HTMLInputElement).value).toBe('Ada')
     expect((screen.getByTestId('join-create') as HTMLButtonElement).disabled).toBe(false)
   })
+
+  const nameBox = () => screen.getByTestId('join-name') as HTMLInputElement
+  const edit = (v: string) => fireEvent.change(nameBox(), { target: { value: v } })
+  const joinBtn = () => screen.getByRole('button', { name: 'Join Obi Partners' }) as HTMLButtonElement
+  const errText = () => screen.queryByTestId('join-name-error')?.textContent ?? null
+
+  it('JoinWorkspace: a blank name says Enter your name', () => {
+    show(ONE)
+    edit('  ')
+    expect(errText()).toBe('Enter your name.')
+    expect(nameBox().getAttribute('aria-invalid')).toBe('true')
+    expect(nameBox().getAttribute('aria-describedby')).toBe('join-name-error')
+    expect(joinBtn().disabled).toBe(true)
+  })
+
+  it('JoinWorkspace: an over-long name says the limit', () => {
+    show(ONE)
+    edit('a'.repeat(201))
+    expect(errText()).toBe('Use 200 characters or fewer.')
+    expect(joinBtn().disabled).toBe(true)
+    edit('a'.repeat(200))
+    expect(errText()).toBeNull()
+    expect(joinBtn().disabled).toBe(false)
+    edit(`  ${'a'.repeat(200)}  `)
+    expect(errText()).toBeNull()
+    expect(joinBtn().disabled).toBe(false)
+  })
+
+  it('JoinWorkspace: a NUL name disables Join with no message', () => {
+    show(ONE)
+    for (const v of ['Bo\0b', 'a'.repeat(201) + '\0', ' \0 ']) {
+      edit(v)
+      expect(errText()).toBeNull()
+      expect(joinBtn().disabled).toBe(true)
+    }
+  })
+
+  it('JoinWorkspace: no message for a pristine empty or a prefilled valid name', () => {
+    show(ONE)
+    expect(errText()).toBeNull()
+    cleanup()
+    show(ONE, { defaultName: '' })
+    expect(errText()).toBeNull()
+    expect(joinBtn().disabled).toBe(true)
+  })
+
+  it('JoinWorkspace: a prefilled 201-character name shows the limit with no edit', () => {
+    show(ONE, { defaultName: 'a'.repeat(201) })
+    expect(errText()).toBe('Use 200 characters or fewer.')
+    expect(joinBtn().disabled).toBe(true)
+  })
+
+  it('JoinWorkspace: a prefilled U+0085 name shows Enter your name with no edit', () => {
+    show(ONE, { defaultName: '\u0085' })
+    expect(errText()).toBe('Enter your name.')
+    expect(joinBtn().disabled).toBe(true)
+  })
+
+  it('JoinWorkspace: a prefilled NUL name shows no message', () => {
+    show(ONE, { defaultName: 'Bo\0b' })
+    expect(errText()).toBeNull()
+    expect(joinBtn().disabled).toBe(true)
+  })
+
+  it('JoinWorkspace: clearing the prefilled name says Enter your name', () => {
+    show(ONE)
+    edit('')
+    expect(errText()).toBe('Enter your name.')
+  })
+
+  it('JoinWorkspace: the message clears when the name turns valid', () => {
+    const { onJoin } = show(ONE)
+    edit('  ')
+    expect(errText()).toBe('Enter your name.')
+    edit('Bo')
+    expect(errText()).toBeNull()
+    expect(joinBtn().disabled).toBe(false)
+    fireEvent.click(joinBtn())
+    expect(onJoin).toHaveBeenCalledWith('a', 'Bo')
+  })
+
+  it('JoinWorkspace: several invites show one message above the rows', () => {
+    show(THREE)
+    edit('  ')
+    const msgs = screen.getAllByTestId('join-name-error')
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].compareDocumentPosition(screen.getAllByTestId('join-invite')[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    for (const b of screen.getAllByRole('button', { name: /^Join / })) expect((b as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('JoinWorkspace: Join passes the trimmed name', () => {
+    const { onJoin } = show(ONE)
+    edit('\u0085 Bo \u0085')
+    fireEvent.click(joinBtn())
+    expect(onJoin).toHaveBeenCalledWith('a', 'Bo')
+  })
+
+  it('JoinWorkspace: the no-workspace screen shows the name message only', () => {
+    const onCreate = vi.fn()
+    show([], { onCreate, defaultName: '' })
+    const ws = screen.getByTestId('join-workspace-name')
+    const create = screen.getByTestId('join-create') as HTMLButtonElement
+    fireEvent.change(ws, { target: { value: 'Acme' } })
+    edit('  ')
+    expect(errText()).toBe('Enter your name.')
+    expect(create.disabled).toBe(true)
+    fireEvent.change(ws, { target: { value: 'a'.repeat(201) } })
+    edit('Bo')
+    expect(screen.queryByTestId('join-name-error')).toBeNull()
+    expect(create.disabled).toBe(true)
+    fireEvent.change(ws, { target: { value: 'Acme' } })
+    expect(create.disabled).toBe(false)
+  })
 })

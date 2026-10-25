@@ -484,7 +484,7 @@ func hmCountMessageLiterals(t *testing.T, name, src, msg string) int {
 		if !ok || lit.Kind != token.STRING {
 			return true
 		}
-		if v, err := strconv.Unquote(lit.Value); err == nil && v == msg {
+		if v, err := strconv.Unquote(lit.Value); err == nil && strings.EqualFold(v, msg) {
 			n++
 		}
 		return true
@@ -546,6 +546,12 @@ func TestHandlerMappingLockMessageIsNeverRetyped(t *testing.T) {
 	retyped := hmFixtureHead + "func f() string { return " + strconv.Quote(db.WorkspaceLockedMessage) + " }\n"
 	if n := hmCountMessageLiterals(t, "n2.go", retyped, db.WorkspaceLockedMessage); n != 1 {
 		t.Fatalf("the detector counted %d literal(s) in a fixture that re-types the message exactly once — it cannot see what it looks for", n)
+	}
+
+	// A re-typed message in another letter case is still a re-type.
+	upper := hmFixtureHead + "func f() string { return " + strconv.Quote(strings.ToUpper(db.WorkspaceLockedMessage)) + " }\n"
+	if n := hmCountMessageLiterals(t, "n2u.go", upper, db.WorkspaceLockedMessage); n != 1 {
+		t.Fatalf("the detector counted %d literal(s) in a fixture that re-types the message in upper case, want 1", n)
 	}
 
 	root := repoRootDir(t)

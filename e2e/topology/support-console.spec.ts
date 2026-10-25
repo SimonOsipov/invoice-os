@@ -1408,7 +1408,6 @@ async function fixtureHover(page: Page): Promise<void> {
   await expect(errRows, 'error_pct rows').toHaveCount(METRIC_SERVICES_FIXTURE.length)
   expect(new Set(await errRows.allTextContents()), 'every error_pct row reads 2.00 %').toEqual(new Set(['2.00 %']))
 
-  // AC-6: the readout beside a left-column and a right-column hover
   await atWidths(page, 'SUP-03 System health fixture readout layout', async () => {
     const problems: string[] = []
     for (const [key, frac] of [['req_per_min', 0.1], ['error_pct', 0.9]] as const) {
@@ -1472,7 +1471,6 @@ async function fixtureZoom(page: Page): Promise<void> {
   await expect(reset, 'no Reset zoom before a drag').toHaveCount(0)
   const [start, end] = await full()
 
-  // AC-6: the select box paints the resolved --action-tint while the button is down
   await drag(0.2, 0.6, false)
   const tint = await mn.evaluate((el) => {
     const probe = document.createElement('span')

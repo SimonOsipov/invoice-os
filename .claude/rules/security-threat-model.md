@@ -60,6 +60,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 
 - `ceiling:` in `migrations/20261006162416_invitation_accept.sql`: `invoice_app` can name one invite per known token across tenants.
 - `ceiling:` in `migrations/20261006162416_invitation_accept.sql`: `provision_workspace` and `accept_invitation` are the only membership writers behind the identity lock.
+- `ceiling:` in `migrations/20261025065442_purge_tenant.sql`: any `invoice_app` service can purge the tenant it binds.
 - `ceiling:` in `cmd/gateway/main.go` and `cmd/worker/main.go`: a boot error quotes a raw internal service URL.
 - `ceiling:` in `internal/accountmail/accountmail.go`: the account-mail token rides in the query string.
 - Any other `ceiling:` comment on a path above. List them with `git grep -n "ceiling:"`.

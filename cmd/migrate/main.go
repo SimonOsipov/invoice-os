@@ -1,6 +1,7 @@
 // Command migrate prepares the database before each deploy: migrations under goose's lock, the
-// preview reset, purge and seeds, then the account-state grant. `migrate bootstrap` creates the
-// roles and sets their passwords; run it once per database and after a role is added.
+// preview reset, purge and seeds, the account-state grant, then the preview-only tenant purge
+// check. `migrate bootstrap` creates the roles and sets their passwords; run it once per
+// database and after a role is added.
 package main
 
 import (

@@ -57,36 +57,38 @@ describe('content', () => {
     expect(JSON.stringify([GROUPS, FEATURES, STAGES, TOUR])).not.toContain('NRS')
   })
 
-  it('content_marksExactlyTheElevenComingSoonFeatures', () => {
+  it('content_marksExactlyTheFiveComingSoonFeatures', () => {
     const soon = FEATURES.filter((f) => f.status === 'soon').map((f) => f.id).sort()
-    expect(soon).toEqual(['alerts', 'channels', 'company-profile', 'contacts', 'custom-rules', 'erp-connectors',
-      'fiscal-outcomes', 'invite-members', 'learns', 'reports', 'rule-library'])
-    expect(COMING_SOON_IDS).toHaveLength(11)
+    expect(soon).toEqual(['alerts', 'channels', 'erp-connectors', 'fiscal-outcomes', 'submit-clear'])
+    expect(COMING_SOON_IDS).toHaveLength(5)
     for (const id of COMING_SOON_IDS) expect(FEATURES.map((f) => f.id)).toContain(id)
   })
 
-  it('content_marksTheOtherFifteenShipped', () => {
+  it('content_marksTheOtherTwentyOneShipped', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped').map((f) => f.id)
-    expect(shipped).toEqual(['import-files', 'create-invoice', 'invoice-status', 'read-documents', 'review-fields', 'validate',
-      'approval-queue', 'workflow-builder', 'submit-clear', 'overview', 'audit-trail', 'evidence-bundle', 'portfolio',
-      'onboard-client', 'roles'])
+    expect(shipped).toEqual(['import-files', 'create-invoice', 'invoice-status', 'read-documents', 'review-fields', 'learns',
+      'rule-library', 'validate', 'custom-rules', 'approval-queue', 'workflow-builder', 'overview', 'reports', 'audit-trail',
+      'evidence-bundle', 'portfolio', 'onboard-client', 'contacts', 'invite-members', 'roles', 'company-profile'])
     for (const f of FEATURES) expect(['shipped', 'soon']).toContain(f.status)
   })
 
   it('content_shippedFeaturesHaveTheirViewsAppPath', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped')
-    expect(shipped.length).toBeGreaterThan(0)
+    expect(shipped).toHaveLength(21)
     for (const f of shipped) expect(f.path, f.id).toBe(APP_PATHS[f.view])
     expect(byId('overview').path).toBe('/')
     expect(byId('import-files').path).toBe('/create')
     expect(byId('workflow-builder').path).toBe('/workflows')
+    expect(byId('reports').path).toBe('/reports')
+    expect(byId('contacts').path).toBe('/customers')
+    expect(byId('company-profile').path).toBe('/settings')
   })
 
   it('content_comingSoonFeaturesHaveNoPath', () => {
     const soon = FEATURES.filter((f) => f.status === 'soon')
-    expect(soon).toHaveLength(11)
-    expect(byId('reports').view).toBe('reports')
-    expect(byId('contacts').view).toBe('customers')
+    expect(soon).toHaveLength(5)
+    expect(byId('submit-clear').view).toBe('invoices')
+    expect(byId('alerts').view).toBe('settings')
     for (const f of soon) expect('path' in f, f.id).toBe(false)
   })
 

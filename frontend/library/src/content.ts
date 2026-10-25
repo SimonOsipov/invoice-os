@@ -1,8 +1,7 @@
 import { APP_PATHS } from './appPaths.ts'
 import type { Feature, Group, RawFeature, RawGroup, Scene, Stage, TourStop, ViewId } from './types.ts'
 
-export const COMING_SOON_IDS: readonly string[] = ['learns', 'fiscal-outcomes', 'reports', 'contacts', 'company-profile',
-  'rule-library', 'custom-rules', 'invite-members', 'erp-connectors', 'alerts', 'channels']
+export const COMING_SOON_IDS: readonly string[] = ['fiscal-outcomes', 'submit-clear', 'alerts', 'channels', 'erp-connectors']
 
 // Positional parameters match the prototype so the data block pastes in unchanged.
 const F = (id: string, title: string, short: string, desc: string, benefits: string[], who: string[], view: ViewId, rel: string[], sc: Scene): RawFeature => ({ id, title, short, desc, benefits, who, view, rel, sc, ...(COMING_SOON_IDS.includes(id) ? { status: 'soon' as const } : { status: 'shipped' as const, path: APP_PATHS[view] }) })

@@ -279,20 +279,20 @@ describe('library shell primitives', () => {
     expect(notif.filter((t) => t.text === 'Coming soon')).toHaveLength(2)
     expect(pills('/invoices')).toHaveLength(0)
 
-    const rec = sidebar(parseLibraryPath('/recognition'))
-    expect(rec.filter((t) => t.text === 'Coming soon')).toHaveLength(1)
-    const title = withText(rec, 'Corrections teach the reader')
-    const pill = rec[rec.indexOf(title) + 1]
+    const set = sidebar(parseLibraryPath('/settings'))
+    expect(set.filter((t) => t.text === 'Coming soon')).toHaveLength(1)
+    const title = withText(set, 'Connect your accounting system')
+    const pill = set[set.indexOf(title) + 1]
     expect(pill.text).toBe('Coming soon')
     expect(style(pill)).toMatchObject({ background: 'var(--on-dark-10)', flex: 'none' })
     expect(style(title)).toMatchObject({ flex: '1 1 auto', 'min-width': '0' })
-    expect(style(featBtn(rec, 'Corrections teach the reader'))).toMatchObject({
+    expect(style(featBtn(set, 'Connect your accounting system'))).toMatchObject({
       display: 'flex',
       'align-items': 'center',
       'justify-content': 'space-between',
       gap: '8px',
     })
-    expect(style(featBtn(rec, 'Read PDFs and scans'))).not.toHaveProperty('display')
+    expect(style(featBtn(set, 'Company and signing certificate'))).not.toHaveProperty('display')
   })
 
   it('SH-12 Book the Demo is the outlineDark link, or absent', () => {

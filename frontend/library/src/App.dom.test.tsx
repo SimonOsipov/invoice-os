@@ -102,7 +102,7 @@ describe('App', () => {
     container.remove()
 
     mount('/clearance/submit-clear')
-    expect(byText('aside button', 'Submit for FIRS clearance').style.color).toBe('var(--accent)')
+    expect(byText('aside button span', 'Submit for FIRS clearance').closest('button')!.style.color).toBe('var(--accent)')
     expect(stage('Clear').style.background).toBe('var(--sage-panel)')
     expect(stage('Validate').style.background).toBe('transparent')
     expect(main().querySelector('h2')!.textContent).toBe('Submit for FIRS clearance')
@@ -208,7 +208,7 @@ describe('App', () => {
     expect(demo.map((a) => a.getAttribute('href'))).toEqual(['https://l.example/?demo', 'https://l.example/?demo'])
     click(nav('rules'))
     expect(links('Open in Platform').map((a) => a.getAttribute('href'))).toEqual(['https://a.example/rules?via=library'])
-    for (const gid of ['notifications', 'settings']) {
+    for (const gid of ['clearance', 'notifications']) {
       click(nav(gid))
       expect(links('Open in Platform')).toHaveLength(0)
     }
@@ -335,9 +335,9 @@ describe('App', () => {
     act(() => root.unmount())
     container.remove()
 
-    mount('/rules/validate')
-    click(card('A rule set for every invoice'))
-    expect(window.location.pathname).toBe('/rules/rule-library')
+    mount('/approvals/approval-queue')
+    click(card('Alerts where you work'))
+    expect(window.location.pathname).toBe('/notifications/alerts')
     expect(pos()).toBe('01 / 03')
     expect(main().textContent).toContain('Coming soon')
   })
@@ -381,15 +381,15 @@ describe('App', () => {
 
   it('feature_relatedToComingSoonHidesOpenInPlatformAndShowsThePill', () => {
     vi.stubEnv('VITE_APP_URL', 'https://a.example')
-    mount('/rules/validate')
+    mount('/approvals/approval-queue')
     expect(links('Open in Platform')).toHaveLength(1)
     expect(main().textContent).not.toContain('Coming soon')
-    click(card('A rule set for every invoice'))
-    expect(window.location.pathname).toBe('/rules/rule-library')
+    click(card('Alerts where you work'))
+    expect(window.location.pathname).toBe('/notifications/alerts')
     expect(links('Open in Platform')).toHaveLength(0)
     expect(main().textContent).toContain('Coming soon')
-    click(card('Plain validation messages'))
-    expect(links('Open in Platform').map((a) => a.getAttribute('href'))).toEqual(['https://a.example/invoices?via=library'])
+    click(card('One queue for approvals'))
+    expect(links('Open in Platform').map((a) => a.getAttribute('href'))).toEqual(['https://a.example/approvals?via=library'])
     expect(main().textContent).not.toContain('Coming soon')
   })
 

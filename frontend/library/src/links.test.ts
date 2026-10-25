@@ -32,20 +32,24 @@ describe('links', () => {
         shipped++
       }
     }
-    expect([soon, shipped]).toEqual([11, 15])
+    expect([soon, shipped]).toEqual([5, 21])
     const clear = FEATURES.find((f) => f.id === 'submit-clear')!
-    expect(featurePlatformHref(clear)).toBe('https://app.example/invoices?via=library')
+    expect(featurePlatformHref(clear)).toBeNull()
+    const reports = FEATURES.find((f) => f.id === 'reports')!
+    expect(featurePlatformHref(reports)).toBe('https://app.example/reports?via=library')
   })
 
   it('groupPlatformHref_isNullForAGroupWithNoShippedFeature', () => {
     vi.stubEnv('VITE_APP_URL', 'https://app.example')
     const nulls = GROUPS.filter((g) => groupPlatformHref(g) === null).map((g) => g.id)
-    expect(nulls).toEqual(['notifications', 'settings'])
+    expect(nulls).toEqual(['clearance', 'notifications'])
     for (const g of GROUPS.filter((x) => !nulls.includes(x.id))) {
       expect(groupPlatformHref(g)).toBe(platformHref(APP_PATHS[g.view]))
     }
     const reports = GROUPS.find((g) => g.id === 'reports')!
     expect(groupPlatformHref(reports)).toBe('https://app.example/?via=library')
+    const settings = GROUPS.find((g) => g.id === 'settings')!
+    expect(groupPlatformHref(settings)).toBe('https://app.example/settings?via=library')
   })
 
   it('demoHref_isTheLandingDemoDeepLink', () => {

@@ -339,18 +339,17 @@ describe('library group page', () => {
   })
 
   it('SC-09 a Coming soon card carries the pill, a shipped card does not', () => {
-    const { ts } = groupPage('clients')
+    const { ts } = groupPage('settings')
     const byId: Record<string, Tag[]> = Object.fromEntries(cardSlices(ts).map((c) => [attr(c.card, 'id'), c.inside]))
-    const pill = byId['fc-contacts'].find((t) => t.text === 'Coming soon')!
+    const pill = byId['fc-erp-connectors'].find((t) => t.text === 'Coming soon')!
     expect(style(pill).background).toBe('var(--status-progress-bg)')
-    expect(byId['fc-portfolio'].some((t) => t.text === 'Coming soon')).toBe(false)
-    expect(byId['fc-onboard-client'].some((t) => t.text === 'Coming soon')).toBe(false)
+    expect(byId['fc-company-profile'].some((t) => t.text === 'Coming soon')).toBe(false)
     const ids = GROUPS.flatMap((g) =>
       cardSlices(groupPage(g.id).ts)
         .filter((c) => c.inside.some((t) => t.text === 'Coming soon'))
         .map((c) => attr(c.card, 'id')!.slice(3)),
     )
-    expect(ids).toHaveLength(11)
+    expect(ids).toHaveLength(5)
     expect([...ids].sort()).toEqual([...COMING_SOON_IDS].sort())
   })
 

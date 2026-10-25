@@ -48,3 +48,6 @@ paths:
 - Expect Cloud Armor on the production load balancer to throttle the demo route per client IP. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
 - Log no client IP on the demo route.
 - `ceiling:` the demo route has no double opt-in step. Add one before you send marketing email to its contacts.
+- Erase a HubSpot contact in this order: rename and delete each associated deal, then `gdpr-delete` by email.
+- Treat a vendor 404 on an erase call as success.
+- Erase a Resend contact with `DELETE /contacts/{email}` only.

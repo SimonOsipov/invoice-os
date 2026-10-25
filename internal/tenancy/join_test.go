@@ -1071,7 +1071,7 @@ func TestAcceptHandlers_ABadNameWritesNothingAndTheNamesAtTheBoundsAreStored(t *
 		t.Run(c.name, func(t *testing.T) {
 			w, addr := newJoinWorld(t, "reviewer")
 			mux, user := realAcceptMux(w.store), uuid.NewString()
-			for _, bad := range []string{"   ", "\t \n", strings.Repeat("é", 201), strings.Repeat("😀", 201), "a\x00b", "\x00"} {
+			for _, bad := range []string{"   ", "\t \n", "\ufeff", " \ufeff ", strings.Repeat("é", 201), strings.Repeat("😀", 201), "a\x00b", "\x00"} {
 				path, body := c.post(w, bad)
 				if rec := apiDo(mux, tenantless(user, addr), http.MethodPost, path, body); rec.Code != http.StatusBadRequest {
 					t.Errorf("name of %d runes: status %d, want 400: %s", utf8.RuneCountInString(bad), rec.Code, rec.Body)

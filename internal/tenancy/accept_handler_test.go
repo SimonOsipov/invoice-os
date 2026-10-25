@@ -348,6 +348,7 @@ func TestAcceptInvitationHandler_PassesTheName(t *testing.T) {
 	for _, c := range []struct{ name, members, want string }{
 		{"padded name is trimmed", `"display_name":" Ada Obi "`, "v:Ada Obi"},
 		{"unicode whitespace is trimmed", `"display_name":"　Ada Obi\n"`, "v:Ada Obi"},
+		{"BOM padding is trimmed", `"display_name":"\ufeffAda\ufeff"`, "v:Ada"},
 		{"absent name is nil", ``, "<nil>"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -373,6 +374,8 @@ func TestAcceptHandlers_RefuseABadName(t *testing.T) {
 			for _, c := range []struct{ name, value, msg string }{
 				{"blank", jsonString(t, "   "), lengthSentence},
 				{"empty", `""`, lengthSentence},
+				{"BOM only", jsonString(t, "\ufeff"), lengthSentence},
+				{"BOM and spaces only", jsonString(t, " \ufeff "), lengthSentence},
 				{"201 runes", jsonString(t, strings.Repeat("é", 201)), lengthSentence},
 				{"NUL byte", jsonString(t, "a\x00b"), nulSentence},
 				{"a lone NUL survives the trim", jsonString(t, " \x00 "), nulSentence},

@@ -1049,7 +1049,7 @@ func TestRLS_AcceptInvitationRevivesARemovedRow(t *testing.T) {
 	}
 	wantDisplay(t, s.Display, "Ada")
 	if s.AllClients {
-		t.Error("all_clients = true, want it reset to false (D15)")
+		t.Error("all_clients = true, want it reset to false")
 	}
 	if n := mustCount(t, h.super,
 		`SELECT count(*) FROM memberships WHERE id = $1 AND created_at > now() - interval '1 minute'`, s.ID); n != 1 {

@@ -274,7 +274,7 @@ func TestStaffing_SuspendedAndInvitedMembersAreStaffable(t *testing.T) {
 	}
 }
 
-// D6: a stale tab can PUT a removed id back; the writer refuses it like an unknown id.
+// A stale tab can PUT a removed id back; the writer refuses it like an unknown id.
 func TestStaffing_RemovedMemberIsRefused(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "DEL-02-02 staff-removed")

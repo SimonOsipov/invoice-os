@@ -725,7 +725,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/staffjobs/store.go", fn: "Cancel"},                                    // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
 	{file: "internal/tenancy/store.go", fn: "Me"},                                          // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
 	{file: "internal/tenancy/store.go", fn: "provisionAttempt"},                            // ProvisionWorkspace's write; the caller has no membership yet, so the seam would refuse before the closure
-	{file: "internal/tenancy/store.go", fn: "holdsRemovedRow"},                             // ProvisionWorkspace's retry probe: the caller's removed row in the derived tenant (D16a)
+	{file: "internal/tenancy/store.go", fn: "holdsRemovedRow"},                             // ProvisionWorkspace's retry probe: the caller's removed row in the derived tenant
 	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},                           // the token is the only credential and names the invite; there is no caller to gate
 	{file: "internal/tenancy/store.go", fn: "AcceptInvitation"},                            // the invitee has no membership in the invite's tenant yet; the seam would refuse before the closure
 	{file: "internal/tenancy/store.go", fn: "acceptInTenant"},                              // the shared tail of AcceptInvitation and AcceptInvitationByID, same reason

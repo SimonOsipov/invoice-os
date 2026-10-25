@@ -2840,7 +2840,7 @@ func TestMembership_RemovedRowIsNotTransitionable(t *testing.T) {
 	}
 }
 
-// D29: Me reads no status, so a removed member whose token still carries the tenant gets a 200 payload.
+// Me reads no status, so a removed member whose token still carries the tenant gets a 200 payload.
 func TestStoreMe_AnswersForARemovedMember(t *testing.T) {
 	w := newInvWorld(t, "DEL-02-02 me removed", "Ada Obi")
 	m := w.addMember(t, "reviewer", "active", "Grace Eze")

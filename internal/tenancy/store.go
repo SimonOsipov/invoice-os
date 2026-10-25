@@ -113,7 +113,7 @@ func (s *Store) ProvisionWorkspace(ctx context.Context, in ProvisionInput) (Tena
 			return Tenant{}, "", fmt.Errorf("tenancy: probe removed row: %w", perr)
 		}
 		if held {
-			// A removed creator's old workspace holds the derived id; take a random one (D16a).
+			// A removed creator's old workspace holds the derived id; take a random one.
 			t, err = s.provisionAttempt(ctx, uuid.NewString(), in, kind, subject, caller)
 		}
 	}
@@ -359,8 +359,8 @@ func lockTargetAndAdmins(ctx context.Context, tx pgx.Tx, userID string) (locked 
 	return locked, targetIdx, nil
 }
 
-// RemoveMember ends a member's access: guards in D4 order, then endMembership
-// and a membership.removed audit row in the same transaction.
+// RemoveMember ends a member's access: active-admin caller, target exists, already removed
+// (idempotent), last admin; then endMembership and a membership.removed audit row in one transaction.
 func (s *Store) RemoveMember(ctx context.Context, userID string) (MemberAccess, error) {
 	var removed MemberAccess
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -407,7 +407,7 @@ func (s *Store) RemoveMember(ctx context.Context, userID string) (MemberAccess, 
 	return removed, nil
 }
 
-// endMembership writes the removed end state (D2). Role and display_name stay.
+// endMembership writes the removed end state. Role and display_name stay.
 func endMembership(ctx context.Context, tx pgx.Tx, userID string) error {
 	if _, err := tx.Exec(ctx,
 		`UPDATE memberships SET status = 'removed', email = NULL, all_clients = false WHERE user_id = $1`, userID); err != nil {

@@ -46,10 +46,10 @@
 -- references them), so the only statement that can legally reach these tables names
 -- approval_policy_steps.
 --
--- Consequence: DELETE FROM tenants raises 23001 under a sealed version — tenants -> policies ->
--- versions is CASCADE the whole way and the guard raises on the cascaded version DELETE. Test
--- teardown needs SET LOCAL session_replication_role = 'replica' plus explicit bottom-up child
--- deletes (teardownSealedApprovalFixture, internal/approval/policy_immutability_test.go).
+-- Consequence: a sealed version makes its tenant undeletable — tenants -> policies -> versions
+-- is CASCADE the whole way and the guard raises 23001 on the cascaded version DELETE. Teardown
+-- needs SET LOCAL session_replication_role = 'replica' plus explicit bottom-up child deletes
+-- (teardownSealedApprovalFixture, internal/approval/policy_immutability_test.go).
 
 -- +goose Up
 CREATE TABLE approval_policies (

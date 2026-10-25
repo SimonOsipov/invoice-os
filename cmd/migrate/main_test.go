@@ -184,6 +184,11 @@ func TestPurgeCheckEnabled_OnlyOnAPreviewBootstrapRun(t *testing.T) {
 		{"development", "TRUE", "pr-12", false},
 		{"production", "true", "pr-12", false},
 		{"staging", "true", "pr-12", false},
+		{"development", "true", "pr-", false},
+		{"development", "true", "invoice-os-pr-x", false},
+		{"development", "true", "pr-12 ", false},
+		{"development", "true", "staging", false},
+		{"", "true", "pr-12", false},
 	}
 	for _, c := range cases {
 		cfg := db.ProvisionConfig{Environment: c.env, BootstrapFlag: c.flag, DeployEnv: c.deploy}

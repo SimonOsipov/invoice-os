@@ -1114,3 +1114,103 @@ func TestActorResolve_NullColumnsFallThroughToTheSubject(t *testing.T) {
 		t.Errorf("bound array holds %d element(s), want 2 — the NULL row must be bound", n)
 	}
 }
+
+// setRemoved marks an okafor row removed with the given columns and restores the
+// row on cleanup. A direct write: the remove route nulls email, these tests also
+// need a stale one.
+func setRemoved(t *testing.T, super *pgxpool.Pool, userID string, name, email *string) {
+	t.Helper()
+	var origName, origEmail *string
+	var origStatus string
+	if err := super.QueryRow(context.Background(),
+		`SELECT display_name, email, status FROM memberships WHERE tenant_id = $1 AND user_id = $2`,
+		okaforTenantID, userID).Scan(&origName, &origEmail, &origStatus); err != nil {
+		t.Fatalf("read the fixture row %s: %v", userID, err)
+	}
+	t.Cleanup(func() {
+		if _, err := super.Exec(context.Background(),
+			`UPDATE memberships SET display_name = $1, email = $2, status = $3 WHERE tenant_id = $4 AND user_id = $5`,
+			origName, origEmail, origStatus, okaforTenantID, userID); err != nil {
+			t.Errorf("restore the fixture row %s: %v", userID, err)
+		}
+	})
+	if _, err := super.Exec(context.Background(),
+		`UPDATE memberships SET display_name = $1, email = $2, status = 'removed' WHERE tenant_id = $3 AND user_id = $4`,
+		name, email, okaforTenantID, userID); err != nil {
+		t.Fatalf("remove the fixture row %s: %v", userID, err)
+	}
+}
+
+func TestActorResolve_RemovedMemberIsNameDeleted(t *testing.T) {
+	super, _ := dbTestPools(t)
+	setRemoved(t, super, okaforBlankable, ptr("Ada Obi"), nil)
+	traced, rec := tracedAppPool(t)
+	tx := scopedTx(t, traced, rec, okaforTenantID)
+
+	got := mustResolve(t, tx, []string{okaforBlankable, okaforAdmin, okaforSuspended})
+
+	assertLabel(t, got, okaforBlankable, person("Ada Obi (deleted)"))
+	assertLabel(t, got, okaforAdmin, person("Chinedu Okafor"))
+	assertLabel(t, got, okaforSuspended, person("Halima Yusuf"))
+	// AC 4: removed and live subjects share the one statement.
+	s := membershipsStmts(t, rec, 1)[0]
+	if n := boundArrayLen(t, s); n != 3 {
+		t.Errorf("bound array holds %d element(s), want 3", n)
+	}
+}
+
+func TestActorResolve_RemovedMemberWithoutNameIsDeletedMember(t *testing.T) {
+	super, _ := dbTestPools(t)
+	for _, tc := range []struct {
+		name string
+		col  *string
+	}{{"NULL name", nil}, {"empty name and a stale email", ptr("")}} {
+		t.Run(tc.name, func(t *testing.T) {
+			setRemoved(t, super, okaforBlankable, tc.col, ptr("stale@x.ng"))
+			traced, rec := tracedAppPool(t)
+			tx := scopedTx(t, traced, rec, okaforTenantID)
+
+			got := mustResolve(t, tx, []string{okaforBlankable})
+			assertLabel(t, got, okaforBlankable, person("Deleted member"))
+		})
+	}
+}
+
+func TestActorResolve_LiveRowsKeepTheLadder(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+	var origName, origEmail *string
+	var origStatus string
+	if err := super.QueryRow(ctx,
+		`SELECT display_name, email, status FROM memberships WHERE tenant_id = $1 AND user_id = $2`,
+		okaforTenantID, okaforBlankable).Scan(&origName, &origEmail, &origStatus); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := super.Exec(context.Background(),
+			`UPDATE memberships SET display_name = $1, email = $2, status = $3 WHERE tenant_id = $4 AND user_id = $5`,
+			origName, origEmail, origStatus, okaforTenantID, okaforBlankable); err != nil {
+			t.Errorf("restore the fixture row: %v", err)
+		}
+	})
+	cases := []struct {
+		name, email *string
+		want        actor.Label
+	}{
+		{ptr("Ada Obi"), ptr("a@x.ng"), person("Ada Obi")},
+		{nil, ptr("a@x.ng"), person("a@x.ng")},
+		{ptr(""), nil, raw(okaforBlankable)},
+	}
+	for _, status := range []string{"active", "suspended"} {
+		for _, c := range cases {
+			if _, err := super.Exec(ctx,
+				`UPDATE memberships SET display_name = $1, email = $2, status = $3 WHERE tenant_id = $4 AND user_id = $5`,
+				c.name, c.email, status, okaforTenantID, okaforBlankable); err != nil {
+				t.Fatal(err)
+			}
+			traced, rec := tracedAppPool(t)
+			tx := scopedTx(t, traced, rec, okaforTenantID)
+			assertLabel(t, mustResolve(t, tx, []string{okaforBlankable}), okaforBlankable, c.want)
+		}
+	}
+}

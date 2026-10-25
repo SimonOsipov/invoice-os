@@ -282,3 +282,22 @@ func TestSetMemberClients_RemovedTargetIsNotFound(t *testing.T) {
 		t.Errorf("control: SetMemberClients on an active member: %v", err)
 	}
 }
+
+func TestListMemberships_ShowsARemovedRowWithoutEmail(t *testing.T) {
+	w := newInvWorld(t, "DEL-02-04 roster removed "+uuid.NewString()[:8], "Ada Admin")
+	m := w.removedRow(t, "Grace Eze")
+
+	rows := w.listAs(t, w.admin)
+	row := rows[m]
+	if row == nil {
+		t.Fatalf("removed row %s missing from the roster: %v", m, rows)
+	}
+	for k, want := range map[string]string{"status": `"removed"`, "email": `null`, "display_name": `"Grace Eze"`} {
+		if got := string(row[k]); got != want {
+			t.Errorf("%s = %s, want %s", k, got, want)
+		}
+	}
+	if _, live := rows[w.admin]; !live {
+		t.Errorf("control: the active admin is missing from the roster")
+	}
+}

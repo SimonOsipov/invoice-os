@@ -67,7 +67,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := stripBase(r.URL.Path)
-	site := "https://" + r.Host + Base
+	site := siteFor(r.Host)
 	switch {
 	case p == "/health":
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -100,6 +100,17 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	status, page := s.document(site, p, snap)
 	s.write(w, r, status, "text/html; charset=utf-8", page)
+}
+
+// ceiling: the old blog host serves until its 301 is live; delete this mapping then.
+const oldHost = "blog.ascomply.com"
+
+// siteFor names the address a page writes for itself; the old host writes the www address.
+func siteFor(host string) string {
+	if host == oldHost {
+		host = "www.ascomply.com"
+	}
+	return "https://" + host + Base
 }
 
 // stripBase drops the base so the old hosts, which serve unprefixed paths, keep working. "/blogger" is a slug, not stripped.

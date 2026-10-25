@@ -11,7 +11,7 @@ export type Route =
 const HOME: Route = { view: 'home' }
 
 // Segments are not decoded or checked against data; the page that renders them resolves them.
-// A path outside the base reads as base-relative, so the old hosts keep serving (D-2).
+// A path outside the base reads as base-relative, so the old hosts keep serving until the old-host 301 is live.
 const stripBase = (p: string): string => (p === BLOG_BASE || p.startsWith(`${BLOG_BASE}/`) ? p.slice(BLOG_BASE.length) : p)
 
 export function parseBlogPath(raw: string): Route {

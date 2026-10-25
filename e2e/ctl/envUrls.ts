@@ -30,7 +30,7 @@ const PRODUCTION_HOST: Record<ServiceLabel, string> = {
   blog: 'www',
 }
 
-// The library and the blog are served under a base path (D-3).
+// The library and the blog are served under a base path.
 const SITE_BASE: Partial<Record<ServiceLabel, string>> = { library: '/library', blog: '/blog' }
 
 // The preview project's number; scripts/ci/preview.sh builds the same run.app URLs.

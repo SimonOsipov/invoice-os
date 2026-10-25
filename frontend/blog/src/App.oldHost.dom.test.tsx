@@ -17,7 +17,7 @@ Object.defineProperty(globalThis, 'localStorage', {
   },
 })
 
-// ceiling: the old blog host stays admitted until its stage-B 301 is live (D-6).
+// ceiling: the old blog host stays admitted until its 301 is live.
 describe('blog on the old blog host', () => {
   afterEach(() => {
     store.clear()

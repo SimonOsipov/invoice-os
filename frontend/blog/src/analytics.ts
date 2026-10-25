@@ -13,7 +13,7 @@ export { PRODUCTION_HOSTNAMES } from '../../landing/src/hubspot'
 export { BLOG_BASE } from '../../landing/src/sitePaths'
 export { trackBlogDemoOpen, trackBlogPageView } from '../../landing/src/analytics'
 
-// A Reject made elsewhere reaches a _ga left on the old blog host (D-1 window) at the next Blog load.
+// A Reject made elsewhere reaches a _ga left on the old blog host until the old-host 301 is live, at the next Blog load.
 export const bootBlogAnalytics = (): boolean => {
   const record = readConsent()
   if (record && !record.analytics) clearGaCookies(window.location.hostname)

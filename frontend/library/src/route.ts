@@ -9,7 +9,7 @@ export type Route =
 
 const HOME: Route = { view: 'home' }
 
-// A path outside the base reads as base-relative, so the old hosts keep serving (D-2).
+// A path outside the base reads as base-relative, so the old hosts keep serving until the old-host 301 is live.
 const stripBase = (p: string): string => (p === LIBRARY_BASE || p.startsWith(`${LIBRARY_BASE}/`) ? p.slice(LIBRARY_BASE.length) : p)
 
 export function parseLibraryPath(raw: string): Route {

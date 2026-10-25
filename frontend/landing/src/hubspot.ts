@@ -12,11 +12,11 @@ import { captureApiFailure } from '@invoice-os/monitoring/report'
 export const PRODUCTION_HOSTNAMES: readonly string[] = ['www.ascomply.com']
 
 /** The Feature Library's hosts. */
-// ceiling: the old host stays admitted until its stage-B 301 is live (D-6); drop it then.
+// ceiling: the old host stays admitted until its 301 is live; drop it then.
 export const LIBRARY_HOSTNAMES: readonly string[] = [...PRODUCTION_HOSTNAMES, 'library.ascomply.com']
 
 /** The Blog's hosts. */
-// ceiling: the old host stays admitted until its stage-B 301 is live (D-6); drop it then.
+// ceiling: the old host stays admitted until its 301 is live; drop it then.
 export const BLOG_HOSTNAMES: readonly string[] = [...PRODUCTION_HOSTNAMES, 'blog.ascomply.com']
 
 /** The signed-in app's host. */

@@ -651,3 +651,44 @@ func TestServer_APostSlugBlogIsShadowedByTheBaseButReachableUnderIt(t *testing.T
 		t.Errorf("/blog/blog: %d", w.Code)
 	}
 }
+
+func (r *rig) doHost(host, path string) string {
+	req := httptest.NewRequest("GET", "https://"+host+"/", nil)
+	req.URL.Path, req.Host = path, host
+	w := httptest.NewRecorder()
+	r.h.ServeHTTP(w, req)
+	return w.Body.String()
+}
+
+func TestServer_OldBlogHostWritesWwwAddresses(t *testing.T) {
+	r := newRig(t)
+	const www = "https://www.ascomply.com/blog"
+	for _, p := range []string{"/blog/p", "/p", "/blog/sitemap.xml", "/blog/robots.txt"} {
+		body := r.doHost("blog.ascomply.com", p)
+		if strings.Contains(body, "blog.ascomply.com") {
+			t.Errorf("%s: old host written:\n%s", p, body)
+		}
+		switch p {
+		case "/blog/p", "/p":
+			has(t, body, `<link rel="canonical" href="`+www+`/p">`)
+		case "/blog/sitemap.xml":
+			locs := regexp.MustCompile(`<loc>([^<]*)</loc>`).FindAllStringSubmatch(body, -1)
+			if len(locs) == 0 {
+				t.Fatal("no <loc>")
+			}
+			for _, m := range locs {
+				if !strings.HasPrefix(m[1], www+"/") {
+					t.Errorf("loc %q", m[1])
+				}
+			}
+		default:
+			has(t, body, "Sitemap: "+www+"/sitemap.xml")
+		}
+	}
+}
+
+func TestServer_OtherHostsKeepTheirOwnHost(t *testing.T) {
+	r := newRig(t)
+	body := r.doHost("blog-abc.a.run.app", "/blog/p")
+	has(t, body, `<link rel="canonical" href="https://blog-abc.a.run.app/blog/p">`)
+}

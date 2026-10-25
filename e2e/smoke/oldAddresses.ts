@@ -1,4 +1,4 @@
-// The stage-B mapping of an old subdomain URL to its address on www (D-13, D-22). Pure, no I/O:
+// The stage-B mapping of an old subdomain URL to its address on www. Pure, no I/O:
 // test:unit runs it with no deploy URLs.
 
 const WWW = 'https://www.ascomply.com'

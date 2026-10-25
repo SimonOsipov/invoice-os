@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 import { resolveTarget } from '../targets'
 import { libraryPathsOf, newAddressOf, oldUrls } from './oldAddresses'
 
-// Production only, after infra stage B (D-13, D-23): previews have no load balancer, so no 301 exists there.
+// Production only, after infra stage B: previews have no load balancer, so no 301 exists there.
 
 const LANDING_URL = resolveTarget('LANDING_URL')
 const SITEMAP = 'https://www.ascomply.com/blog/sitemap.xml'

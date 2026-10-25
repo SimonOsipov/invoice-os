@@ -17,7 +17,7 @@ Object.defineProperty(globalThis, 'localStorage', {
   },
 })
 
-// ceiling: the old library host stays admitted until its stage-B 301 is live (D-6).
+// ceiling: the old library host stays admitted until its 301 is live.
 describe('library on the old library host', () => {
   afterEach(() => {
     store.clear()

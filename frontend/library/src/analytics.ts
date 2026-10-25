@@ -13,7 +13,7 @@ export { PRODUCTION_HOSTNAMES } from '../../landing/src/hubspot'
 export { LIBRARY_BASE } from '../../landing/src/sitePaths'
 export { trackLibraryDemoOpen, trackLibraryPageView, trackOpenInPlatform, trackTourStart } from '../../landing/src/analytics'
 
-// A Reject made elsewhere reaches a _ga left on the old library host (D-1 window) at the next Library load.
+// A Reject made elsewhere reaches a _ga left on the old library host until the old-host 301 is live, at the next Library load.
 export const bootLibraryAnalytics = (): boolean => {
   const record = readConsent()
   if (record && !record.analytics) clearGaCookies(window.location.hostname)

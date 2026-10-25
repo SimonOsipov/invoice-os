@@ -113,7 +113,7 @@ const pairwiseApart = (rs: Rect[], what: string): string[] => rs.flatMap((a, i) 
 type Read = { problems: string[]; rects: Record<string, unknown> }
 
 // Reads at every wide width until `read` reports no problem; the entry viewport is restored.
-async function atWidths(page: Page, label: string, read: () => Promise<Read>): Promise<unknown[]> {
+async function atWidths(page: Page, label: string, read: () => Promise<Read>, timeout = 10_000): Promise<unknown[]> {
   const entry = page.viewportSize()
   const out: unknown[] = []
   try {
@@ -132,7 +132,7 @@ async function atWidths(page: Page, label: string, read: () => Promise<Read>): P
               return [`read threw: ${String((err as Error).message).split('\n')[0]}`]
             }
           },
-          { message: `${label} at ${width}px`, timeout: 10_000 },
+          { message: `${label} at ${width}px`, timeout },
         )
         .toEqual([])
       out.push({ width, ...(rects as object) })
@@ -1197,6 +1197,9 @@ async function panelsRead(page: Page, grid: Locator, jobs: Rect, card: Rect): Pr
   return { problems, rects }
 }
 
+// One fixturePanelsRead pass takes ~10 s on CI: 11 panels of serial locator round trips.
+const FIXTURE_READ_TIMEOUT = 30_000
+
 // fixture check: pins the chart, legend and marker layout of a wire-shaped body, not the metrics contract
 async function fixturePanelsRead(page: Page): Promise<Read> {
   const panels = mainOf(page).locator('.ops-health-panels > [data-panel]')
@@ -1566,7 +1569,7 @@ async function fixtureIsolate(page: Page): Promise<void> {
   await expect(chartOf('req_per_min').locator('[data-readout-time]')).toHaveCount(1)
   await page.mouse.move(1, 1)
 
-  await atWidths(page, 'SUP-03 System health fixture legend layout, isolated', async () => fixturePanelsRead(page))
+  await atWidths(page, 'SUP-03 System health fixture legend layout, isolated', async () => fixturePanelsRead(page), FIXTURE_READ_TIMEOUT)
 
   await legendOf('req_per_min').locator(`[data-series="${name}"]`).click()
   for (const key of cloud) await expect.poll(async () => (await drawn(key)).length, { message: `${key} draws every series again` }).toBe(METRIC_SERVICES_FIXTURE.length)
@@ -1603,7 +1606,7 @@ async function healthFixtureLayout(page: Page): Promise<void> {
   await atWidths(page, 'SUP-03 System health fixture layout', async () => {
     const [base, charts] = [await healthLayout(page), await fixturePanelsRead(page)]
     return { problems: [...base.problems, ...charts.problems], rects: { base: base.rects, charts: charts.rects } }
-  })
+  }, FIXTURE_READ_TIMEOUT)
   await fixtureHover(page)
   await fixtureZoom(page)
   await fixtureIsolate(page)
@@ -2034,7 +2037,7 @@ const SCREENS: Screen[] = [
 
 for (const s of SCREENS) {
   test(`SUP-03 ${s.nav}: v2 header, eyebrow clearances and screen reads`, async ({ page }, testInfo) => {
-    test.setTimeout(120_000)
+    test.setTimeout(s.nav === 'System health' ? 300_000 : 120_000)
     const errors = await startSupport(page)
     const armed = s.arm?.(page)
     armed?.catch(() => {}) // a timeout surfaces where `reads` awaits it, not as an unhandled rejection

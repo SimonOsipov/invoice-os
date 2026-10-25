@@ -261,7 +261,7 @@ export function TimeChart(props: Props) {
         <div
           ref={box}
           data-readout=""
-          style={{ position: 'fixed', zIndex: 70, left: 0, top: 0, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontSize: 11, whiteSpace: 'nowrap' }}
+          style={{ position: 'fixed', zIndex: 70, pointerEvents: 'none', left: 0, top: 0, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontSize: 11, whiteSpace: 'nowrap' }}
         >
           <div data-readout-time="" style={{ color: 'var(--fg-3)', marginBottom: 4 }}>
             {utcClock(aligned[0][tip.idx], long)}

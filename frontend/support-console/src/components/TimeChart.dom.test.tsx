@@ -355,6 +355,12 @@ describe('TimeChart readout', () => {
     expect(day.view.container.querySelector('[data-readout-time]')!.textContent).toBe('10-14 10:05 UTC')
   })
 
+  it('the readout ignores the pointer so the cursor can move under it', async () => {
+    const { view, u } = await mount()
+    hover(u())
+    expect((view.container.querySelector('[data-readout]') as HTMLElement).style.pointerEvents).toBe('none')
+  })
+
   it('a step with no point prints a dash', async () => {
     const { view, u } = await mount()
     hover(u(), u().valToPos(120, 'x'))

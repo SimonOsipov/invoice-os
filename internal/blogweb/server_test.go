@@ -692,3 +692,24 @@ func TestServer_OtherHostsKeepTheirOwnHost(t *testing.T) {
 	body := r.doHost("blog-abc.a.run.app", "/blog/p")
 	has(t, body, `<link rel="canonical" href="https://blog-abc.a.run.app/blog/p">`)
 }
+
+func TestServer_OldBlogHostWritesWwwOnEveryPageKind(t *testing.T) {
+	r := newRig(t)
+	for _, p := range []string{"/blog", "/blog/category/a", "/blog/category/empty", "/blog/subscribe", "/blog/subscribe/confirm", "/blog/nope", "/blog/p"} {
+		body := r.doHost("blog.ascomply.com", p)
+		if !strings.Contains(body, "https://www.ascomply.com/blog") {
+			t.Errorf("%s: no www address written", p)
+		}
+		if strings.Contains(body, "blog.ascomply.com") {
+			t.Errorf("%s: old host written", p)
+		}
+	}
+}
+
+func TestServer_OldBlogHostSpellingsMapToWww(t *testing.T) {
+	r := newRig(t)
+	for _, h := range []string{"blog.ascomply.com:443", "BLOG.ascomply.com", "blog.ascomply.com."} {
+		body := r.doHost(h, "/blog/p")
+		has(t, body, `<link rel="canonical" href="https://www.ascomply.com/blog/p">`)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -107,7 +108,11 @@ const oldHost = "blog.ascomply.com"
 
 // siteFor names the address a page writes for itself; the old host writes the www address.
 func siteFor(host string) string {
-	if host == oldHost {
+	name := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		name = h
+	}
+	if strings.TrimSuffix(strings.ToLower(name), ".") == oldHost {
 		host = "www.ascomply.com"
 	}
 	return "https://" + host + Base

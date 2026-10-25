@@ -417,3 +417,19 @@ describe('the menu Blog link', () => {
     expect(menu()!.querySelectorAll('a')).toHaveLength(NAV_LINKS.length + 1)
   })
 })
+
+describe('menu new-tab links', () => {
+  it('menu_libraryAndBlogOpenInANewTab', () => {
+    mount({ libraryHref: 'https://lib.x', blogHref: 'https://blog.x' })
+    toggle()
+    const links = Array.from(menu()!.querySelectorAll('a'))
+    const [lib, blog] = links.slice(-2)
+    for (const a of [lib, blog]) {
+      expect(a.getAttribute('target')).toBe('_blank')
+      expect(a.getAttribute('rel')).toBe('noopener noreferrer')
+    }
+    for (const a of links.slice(0, -2)) expect(a.hasAttribute('target')).toBe(false)
+    act(() => void lib.click())
+    expect(menu()).toBeNull()
+  })
+})

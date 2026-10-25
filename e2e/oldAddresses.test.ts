@@ -9,10 +9,16 @@ describe('oldAddresses', () => {
     ['https://blog.ascomply.com/blog', 'https://www.ascomply.com/blog'],
     ['https://blog.ascomply.com/blog/x', 'https://www.ascomply.com/blog/x'],
     ['https://blog.ascomply.com/subscribe/confirm?token=t', 'https://www.ascomply.com/blog/subscribe/confirm?token=t'],
-    ['http://library.ascomply.com/invoices', 'https://www.ascomply.com/library/invoices'],
+    ['http://library.ascomply.com/invoices', 'https://www.ascomply.com:443/library/invoices'],
+    ['http://blog.ascomply.com/', 'https://www.ascomply.com:443/blog/'],
     ['https://library.ascomply.com/library/rules', 'https://www.ascomply.com/library/rules'],
   ])('newAddressOf maps %s', (from, to) => {
     expect(newAddressOf(from)).toBe(to)
+  })
+
+  it('only an http old URL maps with :443', () => {
+    expect(newAddressOf('https://blog.ascomply.com/x')).not.toContain(':443')
+    expect(newAddressOf('http://blog.ascomply.com/x')).toBe('https://www.ascomply.com:443/blog/x')
   })
 
   it('a lookalike is not a base', () => {
@@ -35,7 +41,7 @@ describe('oldAddresses', () => {
 
   it('every url oldUrls builds maps to a www address', () => {
     for (const url of oldUrls(['https://www.ascomply.com/blog/p'], ['/a/b'])) {
-      expect(newAddressOf(url).startsWith('https://www.ascomply.com/')).toBe(true)
+      expect(newAddressOf(url)).toMatch(/^https:\/\/www\.ascomply\.com(:443)?\//)
     }
   })
 

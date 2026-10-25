@@ -873,6 +873,7 @@ func TestRLS_JoinMigrationDownRemovesFunctionsAndGrantsThenReapplies(t *testing.
 	if err != nil {
 		t.Fatalf("build migration provider: %v", err)
 	}
+	rollBackRemovedFirst(t, provider)
 	footprint := func() (fns, grants int) {
 		t.Helper()
 		if err := h.super.QueryRow(ctx,

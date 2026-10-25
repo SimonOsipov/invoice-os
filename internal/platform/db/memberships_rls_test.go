@@ -716,6 +716,32 @@ func staffMigrationProvider(t *testing.T) *goose.Provider {
 	return provider
 }
 
+// rollBackRemovedFirst undoes membership_removed so an older migration's Down and Up see their own schema.
+// The cleanup rolls it back again (a provider.Up in the test may have applied it early) and re-applies it last,
+// over the older bodies and the older CHECK that Up puts back, so it sits last in the goose ledger.
+func rollBackRemovedFirst(t *testing.T, provider *goose.Provider) {
+	t.Helper()
+	version := migrationVersion(t, "*_membership_removed.sql")
+	roll := func(up bool) error {
+		_, err := provider.ApplyVersion(context.Background(), version, up)
+		if errors.Is(err, goose.ErrNotApplied) || errors.Is(err, goose.ErrAlreadyApplied) {
+			return nil
+		}
+		return err
+	}
+	if err := roll(false); err != nil {
+		t.Fatalf("roll back membership_removed: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := roll(false); err != nil {
+			t.Errorf("roll back membership_removed: %v", err)
+		}
+		if err := roll(true); err != nil {
+			t.Errorf("re-apply membership_removed: %v", err)
+		}
+	})
+}
+
 // restoreMigrationOnCleanup re-applies the migration at version after a test that rolled it back.
 func restoreMigrationOnCleanup(t *testing.T, provider *goose.Provider, version int64) {
 	t.Helper()

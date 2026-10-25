@@ -59,6 +59,7 @@ func reapplyHookMigrationOnCleanup(t *testing.T, provider *goose.Provider) {
 	byHouse, house, rules, staff, hook := staffByHouseMigrationVersion(t), houseMigrationVersion(t), rulesRoleMigrationVersion(t), staffMigrationVersion(t), hookMigrationVersion(t)
 	join, hasJoin := joinMigrationVersion(t)
 	staffRead := staffReadMigrationVersions(t)
+	rollBackRemovedFirst(t, provider)
 	t.Cleanup(func() {
 		ctx := context.Background()
 		type migStep struct {
@@ -400,6 +401,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 	if err != nil {
 		t.Fatalf("build migration provider: %v", err)
 	}
+	rollBackRemovedFirst(t, provider)
 
 	// Counts the hook's own memberships columns: the join-by-email
 	// columns (display_name, email) belong to other migrations.

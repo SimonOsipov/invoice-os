@@ -37,18 +37,20 @@ func TestAcceptHandler_Contract(t *testing.T) {
 	tenant, subject := Tenant{ID: uuid.NewString(), Name: "Obi Partners", Kind: "firm"}, uuid.NewString()
 	token := strings.Repeat("A", 43)
 	okBody := `{"token":"` + token + `"}`
-	granted := func(context.Context, string) (Tenant, string, string, error) { return tenant, subject, "reviewer", nil }
+	granted := func(context.Context, string, *string) (Tenant, string, string, error) {
+		return tenant, subject, "reviewer", nil
+	}
 	failing := func(err error) AcceptInvitationFunc {
-		return func(context.Context, string) (Tenant, string, string, error) { return Tenant{}, "", "", err }
+		return func(context.Context, string, *string) (Tenant, string, string, error) { return Tenant{}, "", "", err }
 	}
 
 	t.Run("accepted", func(t *testing.T) {
 		for name, body := range map[string]string{"typical": okBody, "exactly 1 KiB": bodyOf(1024)} {
 			t.Run(name, func(t *testing.T) {
 				var calls []string
-				accept := func(ctx context.Context, tok string) (Tenant, string, string, error) {
+				accept := func(ctx context.Context, tok string, _ *string) (Tenant, string, string, error) {
 					calls = append(calls, tok)
-					return granted(ctx, tok)
+					return granted(ctx, tok, nil)
 				}
 				// A bare context: the handler must not gate on an identity it cannot see for a tenant-less caller.
 				rec := apiDo(AcceptInvitationHandler(accept, nil), context.Background(), http.MethodPost, "/v1/invitations/accept", body)
@@ -99,9 +101,9 @@ func TestAcceptHandler_Contract(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			calls := 0
-			accept := func(ctx context.Context, tok string) (Tenant, string, string, error) {
+			accept := func(ctx context.Context, tok string, _ *string) (Tenant, string, string, error) {
 				calls++
-				return c.accept(ctx, tok)
+				return c.accept(ctx, tok, nil)
 			}
 			var logs syncBuf
 			rec := apiDo(AcceptInvitationHandler(accept, slog.New(slog.NewTextHandler(&logs, nil))), context.Background(), http.MethodPost, "/v1/invitations/accept", c.body)
@@ -306,7 +308,7 @@ func acceptRoutes() []acceptRoute {
 			},
 			serve: func(spy *nameSpy, log *slog.Logger) http.Handler {
 				mux := http.NewServeMux()
-				mux.HandleFunc("POST /v1/invitations/accept", AcceptInvitationNamedHandler(spy.accept, log))
+				mux.HandleFunc("POST /v1/invitations/accept", AcceptInvitationHandler(spy.accept, log))
 				return mux
 			},
 		},
@@ -316,7 +318,7 @@ func acceptRoutes() []acceptRoute {
 			body: func(members string) string { return `{` + members + `}` },
 			serve: func(spy *nameSpy, log *slog.Logger) http.Handler {
 				mux := http.NewServeMux()
-				mux.HandleFunc("POST /v1/invitations/{id}/accept", AcceptInvitationByIDNamedHandler(spy.accept, log))
+				mux.HandleFunc("POST /v1/invitations/{id}/accept", AcceptInvitationByIDHandler(spy.accept, log))
 				return mux
 			},
 		},

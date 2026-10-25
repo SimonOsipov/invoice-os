@@ -35,23 +35,29 @@ func TestInvitationsMine_WireShape(t *testing.T) {
 		{ID: id2, Workspace: "Obi Partners", Role: "reviewer", Inviter: &ada, ExpiresAt: exp.Add(time.Hour)},
 	}
 
-	rec := apiDo(mineMux(func(context.Context) ([]PendingInvite, error) { return items, nil }), context.Background(), http.MethodGet, "/v1/invitations/mine", "")
+	rec := apiDo(mineMux(func(context.Context) (MyInvitations, error) { return MyInvitations{Invitations: items}, nil }), context.Background(), http.MethodGet, "/v1/invitations/mine", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
 	}
-	var body map[string][]map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+	var raw map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
 		t.Fatalf("body %q: %v", rec.Body, err)
 	}
-	if len(body) != 1 || len(body["invitations"]) != 2 {
-		t.Fatalf("body = %s, want exactly {invitations: [2 items]}", rec.Body)
+	if strings.Join(keysOf(raw), ",") != "invitations,removed" || raw["removed"] != false {
+		t.Fatalf("body = %s, want exactly {invitations, removed:false}", rec.Body)
 	}
-	for i, it := range body["invitations"] {
+	var body struct {
+		Invitations []map[string]any `json:"invitations"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body.Invitations) != 2 {
+		t.Fatalf("body = %s (%v), want 2 invitations", rec.Body, err)
+	}
+	for i, it := range body.Invitations {
 		if got := keysOf(it); strings.Join(got, ",") != "expires_at,id,inviter,role,workspace" {
 			t.Errorf("item %d keys = %v, want exactly id, workspace, role, inviter, expires_at", i, got)
 		}
 	}
-	first, second := body["invitations"][0], body["invitations"][1]
+	first, second := body.Invitations[0], body.Invitations[1]
 	if first["id"] != id1 || first["workspace"] != "Eze Ltd" || first["role"] != "preparer" {
 		t.Errorf("first item = %v, want the Eze Ltd invite first", first)
 	}
@@ -67,9 +73,9 @@ func TestInvitationsMine_WireShape(t *testing.T) {
 
 	for name, empty := range map[string][]PendingInvite{"empty slice": {}} {
 		t.Run(name, func(t *testing.T) {
-			rec := apiDo(mineMux(func(context.Context) ([]PendingInvite, error) { return empty, nil }), context.Background(), http.MethodGet, "/v1/invitations/mine", "")
-			if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"invitations":[]}` {
-				t.Errorf("answer = %d %s, want 200 {\"invitations\":[]}", rec.Code, rec.Body)
+			rec := apiDo(mineMux(func(context.Context) (MyInvitations, error) { return MyInvitations{Invitations: empty}, nil }), context.Background(), http.MethodGet, "/v1/invitations/mine", "")
+			if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"invitations":[],"removed":false}` {
+				t.Errorf("answer = %d %s, want 200 {\"invitations\":[],\"removed\":false}", rec.Code, rec.Body)
 			}
 		})
 	}
@@ -87,7 +93,7 @@ func TestInvitationsMine_MapsStoreErrors(t *testing.T) {
 		{"other", errors.New("pq: connection to 10.0.0.9 refused"), http.StatusInternalServerError, "internal server error"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			rec := apiDo(mineMux(func(context.Context) ([]PendingInvite, error) { return nil, c.err }), context.Background(), http.MethodGet, "/v1/invitations/mine", "")
+			rec := apiDo(mineMux(func(context.Context) (MyInvitations, error) { return MyInvitations{}, c.err }), context.Background(), http.MethodGet, "/v1/invitations/mine", "")
 			assertErrorBody(t, rec, c.status, c.msg)
 			if strings.Contains(rec.Body.String(), "10.0.0.9") {
 				t.Errorf("body %s leaks the store error", rec.Body)
@@ -111,7 +117,7 @@ func TestAcceptByID_MapsRefusals(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var calls []string
-			h := acceptByIDMux(func(_ context.Context, got string) (Tenant, string, string, error) {
+			h := acceptByIDMux(func(_ context.Context, got string, _ *string) (Tenant, string, string, error) {
 				calls = append(calls, got)
 				return Tenant{}, "", "", c.err
 			})
@@ -131,9 +137,11 @@ func TestAcceptByID_WireShapeMatchesTheTokenAccept(t *testing.T) {
 	id, subject := uuid.NewString(), uuid.NewString()
 	tenant := Tenant{ID: uuid.NewString(), Name: "Obi Partners", Kind: "firm"}
 
-	// The body is not read: a garbage body must not turn into a 400.
-	rec := apiDo(acceptByIDMux(func(context.Context, string) (Tenant, string, string, error) { return tenant, subject, "reviewer", nil }),
-		context.Background(), http.MethodPost, "/v1/invitations/"+id+"/accept", "{not json")
+	// A sent name changes nothing in the answer; a malformed body is a 400 (TestAcceptInvitationByIDHandler_MalformedBody).
+	rec := apiDo(acceptByIDMux(func(context.Context, string, *string) (Tenant, string, string, error) {
+		return tenant, subject, "reviewer", nil
+	}),
+		context.Background(), http.MethodPost, "/v1/invitations/"+id+"/accept", `{"display_name":"Ada Obi"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
 	}
@@ -153,7 +161,7 @@ func TestAcceptByID_WireShapeMatchesTheTokenAccept(t *testing.T) {
 
 	// Same bytes as the token accept for the same result.
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/invitations/accept", AcceptInvitationHandler(func(context.Context, string) (Tenant, string, string, error) {
+	mux.HandleFunc("POST /v1/invitations/accept", AcceptInvitationHandler(func(context.Context, string, *string) (Tenant, string, string, error) {
 		return tenant, subject, "reviewer", nil
 	}, nil))
 	tok := apiDo(mux, context.Background(), http.MethodPost, "/v1/invitations/accept", `{"token":"x"}`)
@@ -202,7 +210,7 @@ func TestInvitationsMineHandler_Shape(t *testing.T) {
 	item := PendingInvite{ID: uuid.NewString(), Workspace: "Eze Ltd", Role: "preparer", ExpiresAt: exp}
 	mux := func(m MyInvitations) http.Handler {
 		h := http.NewServeMux()
-		h.HandleFunc("GET /v1/invitations/mine", InvitationsMineStateHandler(func(context.Context) (MyInvitations, error) { return m, nil }, nil))
+		h.HandleFunc("GET /v1/invitations/mine", InvitationsMineHandler(func(context.Context) (MyInvitations, error) { return m, nil }, nil))
 		return h
 	}
 	for _, c := range []struct {
@@ -225,7 +233,7 @@ func TestInvitationsMineHandler_Shape(t *testing.T) {
 
 	rec := apiDo(func() http.Handler {
 		h := http.NewServeMux()
-		h.HandleFunc("GET /v1/invitations/mine", InvitationsMineStateHandler(func(context.Context) (MyInvitations, error) {
+		h.HandleFunc("GET /v1/invitations/mine", InvitationsMineHandler(func(context.Context) (MyInvitations, error) {
 			return MyInvitations{}, ErrAlreadyMember
 		}, nil))
 		return h

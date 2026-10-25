@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -37,7 +39,7 @@ func logAccountStateErr(ctx context.Context, log *slog.Logger, err error) {
 type InvitationPreviewFunc func(ctx context.Context, token string) (InvitationPreview, error)
 
 // AcceptInvitationFunc accepts an invite for the caller: tenant, subject, role.
-type AcceptInvitationFunc func(ctx context.Context, token string) (Tenant, string, string, error)
+type AcceptInvitationFunc func(ctx context.Context, token string, displayName *string) (Tenant, string, string, error)
 
 // Refusal messages for the invite routes; statusForErr maps the sentinels to them.
 const (
@@ -46,8 +48,37 @@ const (
 	msgWrongAddress   = "this invite was sent to a different email address"
 )
 
-// maxInviteTokenBodyBytes bounds an invite route body before it is decoded.
-const maxInviteTokenBodyBytes = 1 << 10
+// maxInviteTokenBodyBytes bounds the preview body; maxAcceptBodyBytes bounds the accept bodies.
+const (
+	maxInviteTokenBodyBytes = 1 << 10
+	maxAcceptBodyBytes      = 4 << 10
+)
+
+// acceptRequest is the accept wire body; the by-id route reads no token.
+type acceptRequest struct {
+	Token       string  `json:"token"`
+	DisplayName *string `json:"display_name"`
+}
+
+// readAccept decodes the capped accept body and validates display_name; it
+// answers 400 itself on failure. An empty body decodes as no fields when allowEmpty.
+func readAccept(w http.ResponseWriter, r *http.Request, allowEmpty bool) (acceptRequest, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAcceptBodyBytes)
+	var req acceptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !(allowEmpty && errors.Is(err, io.EOF)) {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return req, false
+	}
+	if req.DisplayName != nil {
+		name := strings.TrimSpace(*req.DisplayName)
+		if msg := checkName("display_name", name); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return req, false
+		}
+		req.DisplayName = &name
+	}
+	return req, true
+}
 
 // inviteTokenRequest is the {"token"} wire body.
 type inviteTokenRequest struct {
@@ -110,11 +141,11 @@ func AcceptInvitationHandler(accept AcceptInvitationFunc, log *slog.Logger) http
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		token, ok := readInviteToken(w, r)
+		req, ok := readAccept(w, r, false)
 		if !ok {
 			return
 		}
-		tenant, subject, role, err := accept(r.Context(), token)
+		tenant, subject, role, err := accept(r.Context(), req.Token, req.DisplayName)
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
@@ -128,19 +159,19 @@ func AcceptInvitationHandler(accept AcceptInvitationFunc, log *slog.Logger) http
 }
 
 // MyPendingInvitationsFunc lists the live invites for the caller's email.
-type MyPendingInvitationsFunc func(context.Context) ([]PendingInvite, error)
+type MyPendingInvitationsFunc func(context.Context) (MyInvitations, error)
 
 // AcceptInvitationByIDFunc accepts invite id for the caller: tenant, subject, role.
-type AcceptInvitationByIDFunc func(context.Context, string) (Tenant, string, string, error)
+type AcceptInvitationByIDFunc func(context.Context, string, *string) (Tenant, string, string, error)
 
-// InvitationsMineHandler returns GET /v1/invitations/mine: 200 `{"invitations":[…]}`,
-// never null. The store reads the caller's email from the identity header.
+// InvitationsMineHandler returns GET /v1/invitations/mine: 200 `{"invitations":[…],"removed":bool}`,
+// the list never null. The store reads the caller's email from the identity header.
 func InvitationsMineHandler(list MyPendingInvitationsFunc, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		invites, err := list(r.Context())
+		mine, err := list(r.Context())
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
@@ -149,20 +180,22 @@ func InvitationsMineHandler(list MyPendingInvitationsFunc, log *slog.Logger) htt
 			writeError(w, status, msg)
 			return
 		}
-		writeJSON(w, http.StatusOK, struct {
-			Invitations []PendingInvite `json:"invitations"`
-		}{invites})
+		writeJSON(w, http.StatusOK, mine)
 	}
 }
 
-// AcceptInvitationByIDHandler returns POST /v1/invitations/{id}/accept: no body
-// is read; 200 in the token-accept shape. The store maps a non-uuid id to 404.
+// AcceptInvitationByIDHandler returns POST /v1/invitations/{id}/accept: an
+// optional {display_name} body; 200 in the token-accept shape. The store maps a non-uuid id to 404.
 func AcceptInvitationByIDHandler(accept AcceptInvitationByIDFunc, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenant, subject, role, err := accept(r.Context(), r.PathValue("id"))
+		req, ok := readAccept(w, r, true)
+		if !ok {
+			return
+		}
+		tenant, subject, role, err := accept(r.Context(), r.PathValue("id"), req.DisplayName)
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {

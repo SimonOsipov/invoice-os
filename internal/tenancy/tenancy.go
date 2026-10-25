@@ -341,6 +341,19 @@ type ProvisionFunc func(ctx context.Context, in ProvisionInput) (Tenant, string,
 // maxNameChars caps workspace_name and display_name after trimming.
 const maxNameChars = 200
 
+// checkName returns the 400 sentence for a trimmed name that is empty, over
+// maxNameChars or holds a NUL; "" when it is valid.
+func checkName(field, v string) string {
+	if n := utf8.RuneCountInString(v); n == 0 || n > maxNameChars {
+		return field + " must be 1 to 200 characters"
+	}
+	// Postgres text refuses NUL with 22021, which would answer 500.
+	if strings.ContainsRune(v, 0) {
+		return field + " must not contain a NUL byte"
+	}
+	return ""
+}
+
 // maxProvisionBodyBytes bounds the POST /v1/workspaces body before it is decoded.
 const maxProvisionBodyBytes = 4 << 10
 
@@ -370,21 +383,12 @@ func ProvisionHandler(provision ProvisionFunc, log *slog.Logger) http.HandlerFun
 			WorkspaceName: strings.TrimSpace(req.WorkspaceName),
 			DisplayName:   strings.TrimSpace(req.DisplayName),
 		}
-		if n := utf8.RuneCountInString(in.WorkspaceName); n == 0 || n > maxNameChars {
-			writeError(w, http.StatusBadRequest, "workspace_name must be 1 to 200 characters")
+		if msg := checkName("workspace_name", in.WorkspaceName); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
-		if n := utf8.RuneCountInString(in.DisplayName); n == 0 || n > maxNameChars {
-			writeError(w, http.StatusBadRequest, "display_name must be 1 to 200 characters")
-			return
-		}
-		// Postgres text refuses NUL with 22021, which would answer 500.
-		if strings.ContainsRune(in.WorkspaceName, 0) {
-			writeError(w, http.StatusBadRequest, "workspace_name must not contain a NUL byte")
-			return
-		}
-		if strings.ContainsRune(in.DisplayName, 0) {
-			writeError(w, http.StatusBadRequest, "display_name must not contain a NUL byte")
+		if msg := checkName("display_name", in.DisplayName); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
 		if req.Kind != nil {

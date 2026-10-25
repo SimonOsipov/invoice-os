@@ -104,17 +104,34 @@ func (s *Store) ProvisionWorkspace(ctx context.Context, in ProvisionInput) (Tena
 		kind = "in_house"
 	}
 
+	t, err := s.provisionAttempt(ctx, tenantID, in, kind, subject, caller)
+	var conflict *provisionConflict
+	if errors.As(err, &conflict) && conflict.constraint == "tenants_pkey" && s.holdsRemovedRow(ctx, tenantID, subject) {
+		// A removed creator's old workspace holds the derived id; take a random one (D16a).
+		t, err = s.provisionAttempt(ctx, uuid.NewString(), in, kind, subject, caller)
+	}
+	if errors.As(err, &conflict) {
+		return Tenant{}, "", ErrAlreadyProvisioned
+	}
+	if err != nil {
+		return Tenant{}, "", err
+	}
+	return t, subject, nil
+}
+
+// provisionAttempt runs provision_workspace in tenantID's scope. The caller has no
+// membership yet, so the gated seam would refuse before the closure; exempt like Me
+// (TestRLS_UngatedCoreIsWorkerAndExemptionOnly).
+func (s *Store) provisionAttempt(ctx context.Context, tenantID string, in ProvisionInput, kind, subject string, caller auth.Identity) (Tenant, error) {
 	var t Tenant
-	// The caller has no membership yet, so the gated seam would refuse before
-	// the closure; exempt like Me (TestRLS_UngatedCoreIsWorkerAndExemptionOnly).
-	err = db.WithinTenantTx(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
+	err := db.WithinTenantTx(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT public.provision_workspace($1, $2, $3, $4, $5, $6)`,
 			tenantID, in.WorkspaceName, kind, subject, in.DisplayName, nullIfEmpty(caller.Email),
 		); err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == "23505" &&
 				(pgErr.ConstraintName == "tenants_pkey" || pgErr.ConstraintName == "one_workspace_per_identity") {
-				return ErrAlreadyProvisioned
+				return &provisionConflict{constraint: pgErr.ConstraintName}
 			}
 			return err
 		}
@@ -125,10 +142,22 @@ func (s *Store) ProvisionWorkspace(ctx context.Context, in ProvisionInput) (Tena
 			"tenant_id": t.ID, "user_id": subject, "name": t.Name, "kind": t.Kind,
 		})
 	})
-	if err != nil {
-		return Tenant{}, "", err
-	}
-	return t, subject, nil
+	return t, err
+}
+
+// provisionConflict is a provision_workspace unique violation, kept until the retry decision.
+type provisionConflict struct{ constraint string }
+
+func (e *provisionConflict) Error() string { return "tenancy: provision conflict on " + e.constraint }
+
+// holdsRemovedRow reports whether subject holds a removed row in tenantID; a read error counts as no.
+func (s *Store) holdsRemovedRow(ctx context.Context, tenantID, subject string) bool {
+	var found bool
+	err := db.WithinTenantTx(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = $1 AND status = 'removed')`, subject).Scan(&found)
+	})
+	return err == nil && found
 }
 
 // nullIfEmpty sends "" as SQL NULL.
@@ -445,7 +474,7 @@ func accountState(ctx context.Context, tx pgx.Tx, email string) (string, error) 
 // AcceptInvitation joins the caller to the invite's workspace with the invited
 // role and audits it in one transaction. It returns the tenant, the canonical
 // subject and the role. The caller may be tenant-bearing or tenant-less.
-func (s *Store) AcceptInvitation(ctx context.Context, token string) (Tenant, string, string, error) {
+func (s *Store) AcceptInvitation(ctx context.Context, token string, displayName *string) (Tenant, string, string, error) {
 	caller, ok := auth.IdentityFromContext(ctx)
 	if !ok {
 		caller, ok = auth.TenantlessCallerFromContext(ctx)
@@ -475,8 +504,8 @@ func (s *Store) AcceptInvitation(ctx context.Context, token string) (Tenant, str
 	}
 
 	return s.acceptInTenant(ctx, tenantID, subject,
-		`SELECT invitation_id, role FROM public.accept_invitation($1, $2, $3, $4)`,
-		tenantID, token, subject, caller.Email)
+		`SELECT invitation_id, role FROM public.accept_invitation($1, $2, $3, $4, $5)`,
+		tenantID, token, subject, caller.Email, displayName)
 }
 
 // acceptInTenant runs the accept call in the invite's tenant scope, reads the
@@ -551,18 +580,30 @@ func joinCaller(ctx context.Context) (subject, email string, err error) {
 	return parsed.String(), email, nil
 }
 
-// MyPendingInvitations lists the live invites for the caller's email, soonest expiry first.
-func (s *Store) MyPendingInvitations(ctx context.Context) ([]PendingInvite, error) {
+// MyInvitations is the GET /v1/invitations/mine body: the live invites and
+// whether the caller holds a removed membership.
+type MyInvitations struct {
+	Invitations []PendingInvite `json:"invitations"`
+	Removed     bool            `json:"removed"`
+}
+
+// MyPendingInvitations lists the live invites for the caller's email, soonest
+// expiry first, and says whether the caller was removed from a workspace. The
+// removed flag is read by subject, so it also answers for an empty email.
+func (s *Store) MyPendingInvitations(ctx context.Context) (MyInvitations, error) {
 	subject, email, err := joinCaller(ctx)
 	if err != nil {
-		return nil, err
+		return MyInvitations{}, err
 	}
-	if email == "" {
-		return []PendingInvite{}, nil
-	}
-	out := []PendingInvite{}
+	out := MyInvitations{Invitations: []PendingInvite{}}
 	// The email filter and the function's membership filter are the guard.
 	err = db.WithinTenantTx(ctx, s.pool, uuid.Nil.String(), func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT public.identity_has_removed_membership($1)`, subject).Scan(&out.Removed); err != nil {
+			return err
+		}
+		if email == "" {
+			return nil
+		}
 		rows, err := tx.Query(ctx,
 			`SELECT invitation_id, workspace, role, inviter, expires_at
 			   FROM public.pending_invites_for_email($1, $2)`, email, subject)
@@ -575,12 +616,12 @@ func (s *Store) MyPendingInvitations(ctx context.Context) ([]PendingInvite, erro
 			if err := rows.Scan(&p.ID, &p.Workspace, &p.Role, &p.Inviter, &p.ExpiresAt); err != nil {
 				return err
 			}
-			out = append(out, p)
+			out.Invitations = append(out.Invitations, p)
 		}
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, err
+		return MyInvitations{}, err
 	}
 	return out, nil
 }
@@ -588,7 +629,7 @@ func (s *Store) MyPendingInvitations(ctx context.Context) ([]PendingInvite, erro
 // AcceptInvitationByID joins the caller to the tenant of invite id with the
 // invited role and audits it in one transaction. The invite must be addressed
 // to the caller's email; every other id answers ErrInvitationNotValid.
-func (s *Store) AcceptInvitationByID(ctx context.Context, id string) (Tenant, string, string, error) {
+func (s *Store) AcceptInvitationByID(ctx context.Context, id string, displayName *string) (Tenant, string, string, error) {
 	subject, email, err := joinCaller(ctx)
 	if err != nil {
 		return Tenant{}, "", "", err
@@ -614,6 +655,6 @@ func (s *Store) AcceptInvitationByID(ctx context.Context, id string) (Tenant, st
 	}
 
 	return s.acceptInTenant(ctx, tenantID, subject,
-		`SELECT invitation_id, role FROM public.accept_invitation_by_id($1, $2, $3, $4)`,
-		tenantID, invID.String(), subject, email)
+		`SELECT invitation_id, role FROM public.accept_invitation_by_id($1, $2, $3, $4, $5)`,
+		tenantID, invID.String(), subject, email, displayName)
 }

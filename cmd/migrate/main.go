@@ -55,7 +55,7 @@ func migrate(log *slog.Logger) {
 		ConnectWait:  connectWait,
 		Logger:       log,
 	}
-	if err := run(ctx, os.Args[1:], cfg, db.GrantAccountStateRead, seedDemo, log); err != nil {
+	if err := run(ctx, os.Args[1:], cfg, db.GrantAccountStateRead, seedDemo, purgeCheck, log); err != nil {
 		platform.Fatal(log, "migrate: %v", err)
 	}
 }
@@ -63,7 +63,7 @@ func migrate(log *slog.Logger) {
 // connectWait covers a preview database that is still starting when the job runs.
 const connectWait = 120 * time.Second
 
-func run(ctx context.Context, args []string, cfg db.ProvisionConfig, grant func(context.Context, string) (bool, error), seed func(context.Context, *slog.Logger), log *slog.Logger) error {
+func run(ctx context.Context, args []string, cfg db.ProvisionConfig, grant func(context.Context, string) (bool, error), seed, check func(context.Context, *slog.Logger), log *slog.Logger) error {
 	switch {
 	case len(args) == 1 && args[0] == "bootstrap":
 		if cfg.SuperuserDSN == "" {
@@ -86,6 +86,7 @@ func run(ctx context.Context, args []string, cfg db.ProvisionConfig, grant func(
 		seed(ctx, log)
 	}
 	grantAccountStateRead(ctx, cfg.MigrationDSN, cfg.Passwords.AuthAdmin, grant, log)
+	purgeCheckStep(ctx, cfg, check, log)
 	return nil
 }
 

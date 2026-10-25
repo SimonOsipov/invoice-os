@@ -494,7 +494,7 @@ describe('refusals without a landing base (D35)', () => {
   })
 })
 
-describe('a tenant-less sign-in with no held invite (D30)', () => {
+describe('a tenant-less sign-in with no held invite', () => {
   const PENDING = { id: 'a1', workspace: 'Obi Partners', role: 'reviewer', inviter: null, expires_at: '2026-10-20T00:00:00Z' }
   const handoff = async () => {
     configure()

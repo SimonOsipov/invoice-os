@@ -13,6 +13,7 @@ import {
   type PanelKey,
   type Point,
   type StaffMetrics,
+  worstP95,
 } from './metricsApi'
 
 const GW = 'https://gw.test'
@@ -100,6 +101,18 @@ describe('fleetSeries', () => {
     expect(fleetSeries(m).p95).toEqual([[1, 1200]])
   })
 
+  it('fleetSeries reads the fleet p95 panel', () => {
+    // latency_p95_fleet_ms and fleet mirror FleetP95Key and FleetSeriesName
+    const m = body(panel('latency_p95_ms', { a: [[1, 300]], b: [[1, 1200]] }), panel('latency_p95_fleet_ms', { fleet: [[2, 9], [1, 8]] }))
+    expect(fleetSeries(m).p95Fleet).toEqual([[1, 8], [2, 9]])
+    expect(fleetSeries(m).p95).toEqual([[1, 1200]])
+  })
+
+  it('fleetSeries p95Fleet is empty for an unavailable or empty fleet panel', () => {
+    expect(fleetSeries(body(panel('latency_p95_fleet_ms', { fleet: [[1, 8]] }, false))).p95Fleet).toEqual([])
+    expect(fleetSeries(body(panel('latency_p95_fleet_ms', {}))).p95Fleet).toEqual([])
+  })
+
   it('fleetSeries reads the database series as connections', () => {
     const m = body(panel('sql_connections', { database: [[1, 23], [2, 25]] }))
     expect(fleetSeries(m).connections).toEqual([[1, 23], [2, 25]])
@@ -112,6 +125,29 @@ describe('fleetSeries', () => {
     expect(f.error).toEqual([])
     expect(latestOf(f.requests)).toBeNull()
     expect(latestOf(f.error)).toBeNull()
+  })
+})
+
+describe('worstP95', () => {
+  it('worstP95 names the highest service at the latest step', () => {
+    const m = body(panel('latency_p95_ms', { a: [[1, 300], [2, 200]], b: [[1, 1200], [2, 150]] }))
+    expect(worstP95(m)).toEqual({ name: 'a', value: 200 })
+  })
+
+  it('worstP95 breaks a tie by the lower name', () => {
+    const m = body(panel('latency_p95_ms', { b: [[1, 500]], a: [[1, 500]] }))
+    expect(worstP95(m)).toEqual({ name: 'a', value: 500 })
+  })
+
+  it('worstP95 value equals the latest of fleetSeries p95', () => {
+    const m = body(panel('latency_p95_ms', { a: [[1, 900]], b: [[2, 100]] }))
+    expect(worstP95(m)).toEqual({ name: 'b', value: 100 })
+    expect(latestOf(fleetSeries(m).p95)).toBe(100)
+  })
+
+  it('worstP95 is null without data', () => {
+    expect(worstP95(body(panel('latency_p95_ms', { a: [[1, 5]] }, false)))).toBeNull()
+    expect(worstP95(body(panel('latency_p95_ms', {})))).toBeNull()
   })
 })
 

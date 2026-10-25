@@ -335,3 +335,85 @@ func TestPanels_ProductionQueriesAreUnchanged(t *testing.T) {
 		t.Errorf("picked = %s", got)
 	}
 }
+
+func fleetPanel(t *testing.T) Panel {
+	t.Helper()
+	for _, p := range Panels {
+		if p.Key == FleetP95Key {
+			return p
+		}
+	}
+	t.Fatalf("no panel %s", FleetP95Key)
+	return Panel{}
+}
+
+func TestPanels_FleetP95DropsServiceNameFromTheAggregation(t *testing.T) {
+	got := fleetPanel(t).Query(Ranges["1h"], "", "")
+	want := `histogram_quantile(0.95, sum by (le) (rate(run_googleapis_com:request_latencies_bucket{monitored_resource="cloud_run_revision"}[300s])))`
+	if got != want {
+		t.Fatalf("query = %s\nwant    %s", got, want)
+	}
+}
+
+func TestPanels_FleetP95KeepsTheServiceFilterAndPreviewMatcher(t *testing.T) {
+	p, r := fleetPanel(t), Ranges["1h"]
+	for q, want := range map[string]string{
+		p.Query(r, "app", ""):     `service_name="app"`,
+		p.Query(r, "", "-pr-545"): `service_name=~".+-pr-545"`,
+	} {
+		if !strings.Contains(q, want) || !strings.Contains(q, "sum by (le)") || strings.Contains(q, "sum by (service_name") {
+			t.Errorf("query = %s, want %s and a le-only aggregation", q, want)
+		}
+	}
+}
+
+func TestPanels_TheExistingPanelsKeepKeyOrderUnitAndQueryAndTheFleetPanelFollows(t *testing.T) {
+	const run = `run_googleapis_com:`
+	const sel = `{monitored_resource="cloud_run_revision"}[300s]`
+	const lat = `sum by (service_name, le) (rate(` + run + `request_latencies_bucket` + sel + `))`
+	const req = `sum by (service_name) (rate(` + run + `request_count` + sel + `))`
+	const req5 = `sum by (service_name) (rate(` + run + `request_count{monitored_resource="cloud_run_revision",response_code_class="5xx"}[300s]))`
+	const sql = `{monitored_resource="cloudsql_database"}[300s]`
+	want := []struct{ key, unit, query string }{
+		{"req_per_min", "req/min", `60 * ` + req},
+		{"error_pct", "%", `100 * (` + req5 + ` or 0 * ` + req + `) / clamp_min(` + req + `, 1e-9)`},
+		{"latency_p50_ms", "ms", `histogram_quantile(0.5, ` + lat + `)`},
+		{"latency_p95_ms", "ms", `histogram_quantile(0.95, ` + lat + `)`},
+		{"cpu_pct", "% of limit", `100 * histogram_quantile(0.95, sum by (service_name, le) (rate(` + run + `container_cpu_utilizations_bucket` + sel + `)))`},
+		{"ram_pct", "% of limit", `100 * histogram_quantile(0.95, sum by (service_name, le) (rate(` + run + `container_memory_utilizations_bucket` + sel + `)))`},
+		{"instances", "count", `sum by (service_name) (max_over_time(` + run + `container_instance_count` + sel + `))`},
+		{"cold_starts_per_min", "/min", `60 * sum by (service_name) (rate(` + run + `container_startup_latencies_count` + sel + `))`},
+		{"sql_cpu_pct", "%", `100 * max(max_over_time(cloudsql_googleapis_com:database_cpu_utilization` + sql + `))`},
+		{"sql_ram_pct", "%", `100 * max(max_over_time(cloudsql_googleapis_com:database_memory_utilization` + sql + `))`},
+		{"sql_disk_pct", "%", `100 * max(max_over_time(cloudsql_googleapis_com:database_disk_utilization` + sql + `))`},
+		{"sql_connections", "count", `max(sum by (database_id) (max_over_time(cloudsql_googleapis_com:database_postgresql_num_backends` + sql + `)))`},
+	}
+	index := func(key string) int {
+		for i, p := range Panels {
+			if p.Key == key {
+				return i
+			}
+		}
+		return -1
+	}
+	prev := -1
+	for _, w := range want {
+		i := index(w.key)
+		if i < 0 {
+			t.Errorf("panel %s missing", w.key)
+			continue
+		}
+		if i <= prev {
+			t.Errorf("panel %s at %d, want after index %d", w.key, i, prev)
+		}
+		prev = i
+		p := Panels[i]
+		if p.Unit != w.unit || p.Query(Ranges["1h"], "", "") != w.query {
+			t.Errorf("panel %s = %s %s, want %s %s", w.key, p.Unit, p.Query(Ranges["1h"], "", ""), w.unit, w.query)
+		}
+	}
+	fi := index(FleetP95Key)
+	if fi < 0 || fi <= index("sql_connections") || Panels[fi].Unit != "ms" || !Panels[fi].CloudRun {
+		t.Errorf("fleet panel index %d, want after sql_connections, Cloud Run, in ms", fi)
+	}
+}

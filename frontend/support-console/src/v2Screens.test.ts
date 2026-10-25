@@ -154,14 +154,16 @@ const PANEL_UNITS: Record<PanelKey, string> = {
   sql_ram_pct: '%',
   sql_disk_pct: '%',
   sql_connections: 'count',
+  latency_p95_fleet_ms: 'ms',
 }
 type PanelSeries = Partial<Record<PanelKey, Record<string, Point[]>>>
-// Defaults: two services; fleet req 100, 5xx 1.00 %, p95 1200 ms, 23 connections of 80.
+// Defaults: two services; fleet req 100, 5xx 1.00 %, worst p95 1200 ms beside a fleet p95 of 500 ms, 23 connections of 80.
 const metricsWith = (over: PanelSeries = {}, available = true): StaffMetrics => {
   const base: PanelSeries = {
     req_per_min: { a: [[0, 10]], b: [[0, 90]] },
     error_pct: { a: [[0, 10]], b: [[0, 0]] },
     latency_p95_ms: { a: [[0, 300]], b: [[0, 1200]] },
+    latency_p95_fleet_ms: { fleet: [[0, 500]] },
     sql_connections: { database: [[0, 23]] },
   }
   const by = { ...base, ...over }
@@ -869,11 +871,75 @@ describe('System health markup', () => {
     expect(texts(tileOf(ts, 'req'))).toEqual(expect.arrayContaining(['Requests', '100', 'req/min']))
     expect(texts(tileOf(ts, 'req')).filter((x) => /^[A-Z ]+$/.test(x))).toEqual([])
     expect(texts(tileOf(ts, 'errors'))).toEqual(expect.arrayContaining(['1.00', '%', 'OK']))
-    expect(texts(tileOf(ts, 'p95'))).toEqual(expect.arrayContaining(['1.20', 's', 'HIGH']))
+    expect(texts(tileOf(ts, 'p95'))).toEqual(expect.arrayContaining(['500', 'ms', 'worst b 1.20 s', 'HIGH']))
     expect(texts(tileOf(ts, 'connections'))).toEqual(expect.arrayContaining(['23', 'of 80', 'OK']))
   })
 
   const dotOf = (ts: Tag[]) => ts.map((t) => style(t).background).find((b) => b?.includes('--status-'))
+
+  const worstOf = (ts: Tag[]) => tileOf(ts, 'p95').filter((t) => t.attrs.includes('data-worst'))
+
+  it('the p95 tile shows the fleet value and the worst service', () => {
+    const ts = parse(healthWith({}))
+    expect(texts(tileOf(ts, 'p95'))).toEqual(expect.arrayContaining(['500', 'ms', 'HIGH']))
+    expect(worstOf(ts).map((t) => t.text)).toEqual(['worst b 1.20 s'])
+    expect(classes(worstOf(ts)[0])).toContain('mono')
+    expect(style(worstOf(ts)[0]).color).toBe('var(--fg-3)')
+  })
+
+  it('the p95 word judges the worst service, not the fleet', () => {
+    const red = parse(healthWith({}))
+    expect(dotOf(tileOf(red, 'p95'))).toBe('var(--status-red-text)')
+    const ok = tileOf(parse(healthWith({ metrics: metricsWith({ latency_p95_ms: { a: [[0, 640]] }, latency_p95_fleet_ms: { fleet: [[0, 180]] } }) })), 'p95')
+    expect(texts(ok)).toEqual(expect.arrayContaining(['180', 'worst a 640 ms', 'OK']))
+    expect(dotOf(ok)).toBe('var(--status-green-text)')
+  })
+
+  it('the p95 tile reads PEAKED when only the range peak is over', () => {
+    const t = tileOf(parse(healthWith({ metrics: metricsWith({ latency_p95_ms: { a: [[0, 1500], [60, 640]] } }) })), 'p95')
+    expect(texts(t)).toEqual(expect.arrayContaining(['worst a 640 ms', 'PEAKED']))
+    expect(dotOf(t)).toBe('var(--status-amber-text)')
+  })
+
+  it('the printed worst value and the word agree at the 1 s boundary', () => {
+    const at = (v: number) => texts(tileOf(parse(healthWith({ metrics: metricsWith({ latency_p95_ms: { a: [[0, v]] } }) })), 'p95'))
+    expect(at(1004)).toEqual(expect.arrayContaining(['worst a 1.00 s', 'OK']))
+    expect(at(1006)).toEqual(expect.arrayContaining(['worst a 1.01 s', 'HIGH']))
+  })
+
+  it('a picked service shows its own p95 and no worst line', () => {
+    const ts = parse(healthWith({ service: 'b' }))
+    expect(texts(tileOf(ts, 'p95'))).toEqual(expect.arrayContaining(['1.20', 's', 'HIGH']))
+    expect(worstOf(ts)).toHaveLength(0)
+  })
+
+  it('no fleet data keeps the worst line', () => {
+    const ts = parse(healthWith({ metrics: metricsWith({ latency_p95_fleet_ms: {} }) }))
+    expect(texts(tileOf(ts, 'p95'))).toEqual(expect.arrayContaining(['—', 'worst b 1.20 s', 'HIGH']))
+  })
+
+  it('the p95 fleet value uses its own unit scale and the worst line takes the latest step', () => {
+    const t = tileOf(parse(healthWith({ metrics: metricsWith({ latency_p95_fleet_ms: { fleet: [[0, 1500]] }, latency_p95_ms: { a: [[0, 1200], [60, 100]], b: [[0, 50], [60, 200]] } }) })), 'p95')
+    expect(texts(t)).toEqual(expect.arrayContaining(['1.50', 's', 'worst b 200 ms', 'PEAKED']))
+  })
+
+  it('an unavailable fleet panel beside per-service data reads the dash and keeps the worst line', () => {
+    const m = metricsWith()
+    m.panels = m.panels.map((p) => (p.key === 'latency_p95_fleet_ms' ? { ...p, available: false } : p))
+    const t = tileOf(parse(healthWith({ metrics: m })), 'p95')
+    expect(texts(t)).toEqual(expect.arrayContaining(['—', 'worst b 1.20 s', 'HIGH']))
+  })
+
+  it('no per-service p95 reads NO DATA with no worst line', () => {
+    const none = parse(healthWith({ metrics: metricsWith({ latency_p95_ms: {} }) }))
+    expect(texts(tileOf(none, 'p95'))).toEqual(expect.arrayContaining(['—', 'NO DATA']))
+    expect(dotOf(tileOf(none, 'p95'))).toBe('var(--status-muted-text)')
+    expect(worstOf(none)).toHaveLength(0)
+    expect(worstOf(parse(healthWith({ metrics: metricsWith({}, false) })))).toHaveLength(0)
+    const failed = parse(healthWith({ metricsStatus: 'error', metrics: null }))
+    expect(worstOf(failed)).toHaveLength(0)
+    expect(texts(tileOf(failed, 'p95'))).toContain('UNAVAILABLE')
+  })
 
   it('a stat over its threshold reads HIGH in red', () => {
     const ts = parse(healthWith({ metrics: metricsWith({ error_pct: { a: [[0, 1.5]] }, req_per_min: { a: [[0, 10]] }, sql_connections: { database: [[0, 70]] } }) }))

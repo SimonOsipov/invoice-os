@@ -176,6 +176,9 @@ func (s *MetricsSource) fetch(ctx context.Context, key metricsKey, now time.Time
 			if p.CloudRun {
 				for j := range series {
 					series[j].Name = strings.TrimSuffix(series[j].Name, s.g.Suffix)
+					if p.Key == FleetP95Key {
+						series[j].Name = FleetSeriesName
+					}
 				}
 			}
 			m.Panels[i].Available, m.Panels[i].Series = true, series

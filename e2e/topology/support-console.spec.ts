@@ -808,7 +808,7 @@ const shortOf = (build?: string): string => (build ? build.slice(0, 7) : '—')
 const nonNull = (trend: SeenHealth['trend'], key: 'services_down' | 'river_jobs'): number => trend.filter((p) => p[key] !== null).length
 
 // systemhealth.Panels, in wire order.
-const METRIC_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'sql_cpu_pct', 'sql_ram_pct', 'sql_disk_pct', 'sql_connections']
+const METRIC_KEYS = ['req_per_min', 'error_pct', 'latency_p50_ms', 'latency_p95_ms', 'cpu_pct', 'ram_pct', 'instances', 'cold_starts_per_min', 'sql_cpu_pct', 'sql_ram_pct', 'sql_disk_pct', 'sql_connections', 'latency_p95_fleet_ms']
 // systemhealth.ConnectionBudget
 const CONNECTION_BUDGET = 80
 // systemhealth.MetricServices
@@ -864,9 +864,18 @@ async function metricsMatch(page: Page, m: SeenMetrics, what: string): Promise<v
     const t = mn.locator(`[data-tile="${key}"]`)
     const has = statHasData(m, key)
     await expect(t.getByText('NO DATA', { exact: true }), `${what}: ${key} NO DATA`).toHaveCount(has ? 0 : 1)
+    if (key === 'p95') continue
     if (has) await expect(t.locator('.money'), `${what}: ${key} value`).not.toHaveText('—')
     else await expect(t.locator('.money'), `${what}: ${key} value`).toHaveText('—')
   }
+  // p95: fleet value and a worst line at All services; a picked service shows its own value alone
+  const p95 = mn.locator('[data-tile="p95"]')
+  const allServices = m.service === ''
+  const p95Has = statHasData(m, 'p95')
+  await expect(p95.locator('[data-worst]'), `${what}: p95 worst line`).toHaveCount(allServices && p95Has ? 1 : 0)
+  const noValue = !p95Has || (allServices && panelSeries(m, 'latency_p95_fleet_ms').length === 0)
+  if (noValue) await expect(p95.locator('.money'), `${what}: p95 value`).toHaveText('—')
+  else await expect(p95.locator('.money'), `${what}: p95 value`).not.toHaveText('—')
 }
 
 // The armed answers drive the first comparison; the chip and the select each send a fresh read.
@@ -1102,10 +1111,20 @@ async function tileRowRead(page: Page, row: Locator, keys: string[], what: strin
       problems.push(...within(r.tile, g, `${key} tag`), ...apart(r.label, g, `${key} label / tag`))
       if (hasWord) problems.push(...apart(g, (await boxes(page, { word }))['word'], `${key} tag / status word`))
     }
+    const worst = t.locator('[data-worst]')
+    const hasWorst = (await worst.count()) > 0
+    let worstBox: Rect | null = null
+    if (hasWorst) {
+      worstBox = (await boxes(page, { worst }))['worst']
+      problems.push(...within(r.tile, worstBox, `${key} worst line`), ...below(r.valueRow, worstBox, `${key} worst line under the value row`))
+      const clip = await worst.evaluate((el) => el.scrollWidth - el.clientWidth)
+      if (clip > 0) problems.push(`${key} worst line: clipped by ${clip}px`)
+    }
     const svg = t.locator('svg')
     if ((await svg.count()) > 0) {
       const v = (await boxes(page, { svg }))['svg']
       problems.push(...within(r.tile, v, `${key} sparkline`), ...below(r.valueRow, v, `${key} sparkline under the value row`))
+      if (worstBox) problems.push(...below(worstBox, v, `${key} sparkline under the worst line`))
     }
   }
   return { problems, rects }
@@ -1268,7 +1287,7 @@ function metricsFixture() {
       panel('req_per_min', 'req/min', per((i, n) => 20 + n + (i % 7))),
       panel('error_pct', '%', per(() => 2)),
       panel('latency_p50_ms', 'ms', per(() => 120)),
-      panel('latency_p95_ms', 'ms', per((i) => (i === 10 ? 1500 : 400))),
+      panel('latency_p95_ms', 'ms', per((i, n) => (i === 10 ? 1500 : n === 13 ? 640 : 400))), // n 13 is support-console, the latest worst
       panel('cpu_pct', '% of limit', per((i, n) => (n === 0 ? 85 : 30 + (i % 5)))),
       panel('ram_pct', '% of limit', per(() => 55)),
       panel('instances', 'count', per((i) => 1 + (i % 3))),
@@ -1277,6 +1296,7 @@ function metricsFixture() {
       panel('sql_ram_pct', '%', database(() => 60)),
       panel('sql_disk_pct', '%', database(() => 35)),
       panel('sql_connections', 'count', database(() => 23)),
+      panel('latency_p95_fleet_ms', 'ms', [{ name: 'fleet', points: line(() => 180) }]), // FleetP95Key, FleetSeriesName
     ],
     limits: { available: true, services: names.map((name) => ({ name, cpu: '1', memory: '512Mi', max_instances: 3 })) },
     deploys: {
@@ -1305,6 +1325,9 @@ async function healthFixtureLayout(page: Page): Promise<void> {
   await expect(word('req'), 'requests carry no word').toHaveCount(0)
   await expect(word('errors')).toHaveText('HIGH')
   await expect(word('p95')).toHaveText('PEAKED')
+  await expect(tile('p95').locator('.money'), 'p95 fleet value').toHaveText('180')
+  await expect(tile('p95').locator('.money + span'), 'p95 unit').toHaveText('ms')
+  await expect(tile('p95').locator('[data-worst]'), 'p95 worst line').toHaveText('worst support-console 640 ms')
   await expect(word('connections')).toHaveText('OK')
   await expect(mn.locator('.ops-health-panels > [data-panel]'), 'the panels grid holds ten panels').toHaveCount(10)
   await atWidths(page, 'SUP-03 System health fixture layout', async () => {
@@ -1314,6 +1337,7 @@ async function healthFixtureLayout(page: Page): Promise<void> {
 
   // app owns no job kind and has no live ping row: both notes show; the metrics route answers any query
   await mn.locator('select[aria-label="Service"]').selectOption('app')
+  await expect(mn.locator('[data-tile="p95"] [data-worst]'), 'a picked service has no worst line').toHaveCount(0)
   await expect(mn.locator('[data-jobs-note]'), 'app jobs note').toHaveText('app owns no background jobs. Pick submission, notifications, worker or All services to see them.')
   await expect(mn.locator('[data-service]'), 'app has no service row').toHaveCount(0)
   const pinged = (await mn.locator('[data-ping-note]').count()) > 0

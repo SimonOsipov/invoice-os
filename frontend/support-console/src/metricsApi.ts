@@ -17,6 +17,7 @@ export type PanelKey =
   | 'sql_ram_pct'
   | 'sql_disk_pct'
   | 'sql_connections'
+  | 'latency_p95_fleet_ms' // systemhealth.FleetP95Key
 export type Point = [number, number] // [unix seconds, value]
 export interface MetricSeries {
   name: string
@@ -89,6 +90,7 @@ export interface FleetSeries {
   requests: Point[]
   error: Point[]
   p95: Point[]
+  p95Fleet: Point[]
   connections: Point[]
 }
 
@@ -100,6 +102,7 @@ export function fleetSeries(m: StaffMetrics): FleetSeries {
   const req = panelOf(m, 'req_per_min')
   const err = panelOf(m, 'error_pct')
   const lat = panelOf(m, 'latency_p95_ms')
+  const fleetLat = panelOf(m, 'latency_p95_fleet_ms')
   const conns = panelOf(m, 'sql_connections')
 
   const requests = new Map<number, number>()
@@ -135,8 +138,24 @@ export function fleetSeries(m: StaffMetrics): FleetSeries {
     requests: [...requests].sort(byTime),
     error: [...weighted].map(([t, [num, den]]): Point => [t, den === 0 ? 0 : num / den]).sort(byTime),
     p95: [...worst].sort(byTime),
+    p95Fleet: hasData(fleetLat) ? fleetLat.series[0].points.slice().sort(byTime) : [],
     connections: hasData(conns) ? (conns.series.find((s) => s.name === 'database') ?? conns.series[0]).points.slice().sort(byTime) : [],
   }
+}
+
+// The slowest service at the latest step; a tie goes to the lower name.
+export function worstP95(m: StaffMetrics): { name: string; value: number } | null {
+  const lat = panelOf(m, 'latency_p95_ms')
+  if (!hasData(lat)) return null
+  let at = -Infinity
+  for (const s of lat.series) for (const [t] of s.points) at = Math.max(at, t)
+  let best: { name: string; value: number } | null = null
+  for (const s of lat.series) {
+    const v = stepMap(s).get(at)
+    if (v === undefined) continue
+    if (!best || v > best.value || (v === best.value && s.name < best.name)) best = { name: s.name, value: v }
+  }
+  return best
 }
 
 export const latestOf = (points: Point[]): number | null => {

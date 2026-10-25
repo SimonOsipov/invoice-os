@@ -1960,3 +1960,80 @@ func wtExprString(e ast.Expr) string {
 	_ = printer.Fprint(&b, token.NewFileSet(), e)
 	return b.String()
 }
+
+// The erase worker main() builds is the one on the bundle, gets the account client FromEnv built,
+// and has its River client set after queue.New and before the queue is handed to the app.
+func TestWorkerMain_WiresTheEraseWorker(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/worker/main.go: %v", err)
+	}
+	poolName := wtAppPool(t, f)
+	accountName, fromEnvArgs := wtOneCall(t, f, "gotrueadmin.FromEnv")
+	xwName, xwArgs := wtOneCall(t, f, "newEraseWorker")
+	qName, _ := wtOneCall(t, f, "queue.New")
+	if got := wtExprString(fromEnvArgs[0]); got != "os.Getenv" {
+		t.Errorf("FromEnv first argument = %s, want os.Getenv", got)
+	}
+
+	var modeName, hsName, rsName string
+	for _, stmt := range wtMainBody(t, f) {
+		as, ok := stmt.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 || len(as.Lhs) != 4 {
+			continue
+		}
+		if c, ok := as.Rhs[0].(*ast.CallExpr); ok && wtCallName(c.Fun) == "notifications.DeliveryClients" {
+			modeName, hsName, rsName = wtExprString(as.Lhs[0]), wtExprString(as.Lhs[1]), wtExprString(as.Lhs[2])
+		}
+	}
+	if modeName == "" {
+		t.Fatal("main() has no notifications.DeliveryClients assignment with four results")
+	}
+	if len(xwArgs) != 6 {
+		t.Fatalf("newEraseWorker is called with %d argument(s), want 6", len(xwArgs))
+	}
+	for i, want := range []string{poolName, modeName, hsName, rsName, accountName, "app.Logger"} {
+		if got := wtExprString(xwArgs[i]); got != want {
+			t.Errorf("newEraseWorker argument %d = %s, want %s", i, got, want)
+		}
+	}
+
+	var bundle *ast.CallExpr
+	ast.Inspect(f, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok && wtCallName(c.Fun) == "workerBundle" {
+			bundle = c
+		}
+		return true
+	})
+	if bundle == nil || len(bundle.Args) != 6 {
+		t.Fatal("main() has no six-argument workerBundle call")
+	}
+	if got := wtExprString(bundle.Args[5]); got != xwName {
+		t.Errorf("workerBundle sixth argument = %s, want %s, the worker newEraseWorker built", got, xwName)
+	}
+
+	newIdx, riverIdx, addIdx := -1, -1, -1
+	for i, stmt := range wtMainBody(t, f) {
+		switch s := stmt.(type) {
+		case *ast.AssignStmt:
+			if c, ok := s.Rhs[0].(*ast.CallExpr); ok && wtCallName(c.Fun) == "queue.New" {
+				newIdx = i
+			}
+			for j, l := range s.Lhs {
+				if wtExprString(l) == xwName+".River" && j < len(s.Rhs) && wtExprString(s.Rhs[j]) == qName+".River()" {
+					riverIdx = i
+				}
+			}
+		case *ast.ExprStmt:
+			if c, ok := s.X.(*ast.CallExpr); ok && wtCallName(c.Fun) == "app.AddBackgroundWorker" {
+				addIdx = i
+			}
+		}
+	}
+	if newIdx < 0 || addIdx < 0 {
+		t.Fatalf("matcher found queue.New at %d and app.AddBackgroundWorker at %d", newIdx, addIdx)
+	}
+	if riverIdx <= newIdx || riverIdx >= addIdx {
+		t.Errorf("%s.River = %s.River() is at statement %d, want between queue.New (%d) and app.AddBackgroundWorker (%d)", xwName, qName, riverIdx, newIdx, addIdx)
+	}
+}

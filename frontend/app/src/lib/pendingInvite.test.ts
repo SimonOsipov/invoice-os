@@ -168,6 +168,8 @@ describe('trimName and nameError', () => {
     expect(trimName(' \u0085 Ada \u0085 ')).toBe('Ada')
     expect(trimName('\u0085')).toBe('')
     expect(trimName('\uFEFF')).toBe('')
+    expect(trimName('\u0085Ada')).toBe('Ada')
+    expect(trimName('Ada\u0085')).toBe('Ada')
   })
 
   it('nameError: the four outcomes', () => {
@@ -183,5 +185,13 @@ describe('trimName and nameError', () => {
   it('readInviteName trims U+0085', () => {
     expect(readInviteName('#invite=T&name=%C2%85Ada%C2%85')).toBe('Ada')
     expect(readInviteName('#name=%C2%85')).toBeNull()
+  })
+  it('trimName and readInviteName QA: stacked U+0085 and whitespace, interior kept, over-long refused', () => {
+    expect(trimName('\u0085 \u0085\u00A0 Ada Obi \u0085 \u0085')).toBe('Ada Obi')
+    expect(trimName('A\u0085B')).toBe('A\u0085B')
+    expect(readInviteName(`#name=${'a'.repeat(201)}`)).toBeNull()
+    expect(readInviteName(`#name=%C2%85${'a'.repeat(200)}%C2%85`)).toBe('a'.repeat(200))
+    expect(nameError('\u0085 \u0085')).toBe('Enter your name.')
+    expect(nameError('\0')).toBeNull()
   })
 })

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { APP_PATHS } from './appPaths.ts'
 import { COMING_SOON_IDS, FEATURES, GROUPS, STAGES, TOUR } from './content.ts'
@@ -45,8 +46,16 @@ describe('content', () => {
   it('content_noShippedFeatureNamesAnErpOrFirs', () => {
     const vendor = /\b(Sage|Odoo|QuickBooks|SAP|Dynamics|FIRS)\b/i
     const shipped = FEATURES.filter((f) => f.status === 'shipped')
+    const liveGroups = GROUPS.filter((g) => g.feats.some((f) => f.status === 'shipped'))
     expect(shipped.length).toBeGreaterThan(0)
+    expect(liveGroups.length).toBeGreaterThan(0)
+    expect(TOUR.length).toBeGreaterThan(0)
     for (const f of shipped) expect(JSON.stringify(f), f.id).not.toMatch(vendor)
+    for (const g of liveGroups) expect(`${g.name} ${g.one} ${g.intro}`, g.id).not.toMatch(vendor)
+    for (const t of TOUR) expect(`${t.t} ${t.d}`, t.f).not.toMatch(vendor)
+    const lead = /className="t-lead"[^>]*>([\s\S]*?)<\/p>/.exec(readFileSync(new URL('./components/Home.tsx', import.meta.url), 'utf8'))?.[1] ?? ''
+    expect(lead.length).toBeGreaterThan(0)
+    expect(lead).not.toMatch(vendor)
     expect(JSON.stringify(byId('erp-connectors'))).toMatch(vendor)
   })
 

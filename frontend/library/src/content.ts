@@ -3,7 +3,6 @@ import type { Feature, Group, RawFeature, RawGroup, Scene, Stage, TourStop, View
 
 export const COMING_SOON_IDS: readonly string[] = ['fiscal-outcomes', 'submit-clear', 'alerts', 'channels', 'erp-connectors']
 
-// Positional parameters match the prototype so the data block pastes in unchanged.
 const F = (id: string, title: string, short: string, desc: string, benefits: string[], who: string[], view: ViewId, rel: string[], sc: Scene): RawFeature => ({ id, title, short, desc, benefits, who, view, rel, sc, ...(COMING_SOON_IDS.includes(id) ? { status: 'soon' as const } : { status: 'shipped' as const, path: APP_PATHS[view] }) })
 
 const RAW_GROUPS: RawGroup[] = [
@@ -15,7 +14,7 @@ const RAW_GROUPS: RawGroup[] = [
             { cap: 'One invoice is created per row', show: 4, focus: 3, set: { 0: 'valid', 1: 'valid', 2: 'valid' } },
             { cap: 'Rows that cannot be read are flagged with a reason', focus: 3, set: { 3: 'error' } }] }),
         F('create-invoice', 'Create an invoice by hand', 'One form for customer, line items and tax.', 'Enter an invoice in a single form with customer, line items and tax. The invoice is saved as a draft, and one click on Re-validate checks it against the rules.', ['Enter the buyer\'s TIN and the saved details fill in', 'VAT is calculated from the line items', 'Re-validate checks the draft with one click'], ['Finance officer'], 'create', ['validate', 'contacts', 'invoice-status'],
-          { kind: 'form', win: 'New invoice', fields: [{ l: 'Customer', v: 'Sahara Foods Distribution Ltd' }, { l: 'Customer TIN', v: '19847720-0001' }, { l: 'Line item', v: 'Palm oil, 25 L × 120' }, { l: 'Taxable amount', v: '₦ 3,600,000' }, { l: 'VAT (7.5%)', v: '₦ 270,000' }], steps: [
+          { kind: 'form', win: 'New invoice', fields: [{ l: 'Customer', v: 'Sahara Foods Distribution Ltd' }, { l: 'Customer TIN', v: '19847720-0002' }, { l: 'Line item', v: 'Palm oil, 25 L × 120' }, { l: 'Taxable amount', v: '₦ 3,600,000' }, { l: 'VAT (7.5%)', v: '₦ 270,000' }], steps: [
             { cap: 'Enter the buyer\'s TIN and the saved details fill in', reveal: 2, focus: 0 },
             { cap: 'Add line items; VAT is calculated from them', reveal: 5, focus: 2 },
             { cap: 'Save the draft, then run Re-validate', focus: -1, mark: { 1: 'ok', 3: 'ok', 4: 'ok' }, msg: 'Passes all rules · no violations', tone: 'ok' }] }),
@@ -53,22 +52,22 @@ const RAW_GROUPS: RawGroup[] = [
             { cap: 'Edit the field, then re-check with one click', focus: 0, mark: { 0: 'fix' } },
             { cap: 'The invoice is ready to go forward', focus: -1, mark: { 0: 'ok' }, msg: 'Passes all rules · no violations', tone: 'ok' }] }),
         F('custom-rules', 'Add your own rules', 'Company-specific checks on top of the standard set.', 'Add company-specific checks on top of the standard set, for one client company or across the firm.', ['A check on any invoice field, or an expression', 'Choose whether a rule warns or blocks', 'Takes effect on the next validation run'], ['Compliance lead'], 'rules', ['rule-library', 'validate'],
-          { kind: 'form', win: 'New rule', fields: [{ l: 'Applies to', v: 'Sahara Foods Distribution Ltd only' }, { l: 'Field', v: 'Buyer email' }, { l: 'Check', v: 'Is required' }, { l: 'Message', v: 'Buyer email failed the check' }, { l: 'Severity', v: 'Block submission' }], steps: [
+          { kind: 'form', win: 'New rule', fields: [{ l: 'Applies to', v: 'Sahara Foods Distribution Ltd only' }, { l: 'Field', v: 'Buyer email' }, { l: 'Check', v: 'Is filled in' }, { l: 'Message', v: 'Buyer email failed the check' }, { l: 'Severity', v: 'Block submission' }], steps: [
             { cap: 'Choose the client and the invoice field', reveal: 2, focus: 1 },
             { cap: 'Set the check and the message', reveal: 4, focus: 2 },
             { cap: 'Choose whether it warns or blocks', reveal: 5, focus: 4, mark: { 4: 'ok' }, msg: 'Rule active for the next validation run', tone: 'ok' }] })] },
       { id: 'approvals', n: '04', name: 'Approvals & workflows', icon: 'workflow', view: 'approvals', one: 'Route invoices to the right approver.', intro: 'Set who approves what, and work through a single queue. Every decision is recorded and a rejection keeps its reason on the invoice.', feats: [
-        F('approval-queue', 'One queue for approvals', 'Approve, or reject with a reason.', 'Invoices awaiting approval are in one queue with the amount, customer and the step they are on. Approve, or reject with a reason.', ['One list of every invoice awaiting approval', 'The rejection reason is recorded on the invoice', 'Each decision is time-stamped'], ['Approver', 'Finance director'], 'approvals', ['workflow-builder', 'alerts', 'roles'],
+        F('approval-queue', 'One queue for approvals', 'Approve, or reject with a reason.', 'Invoices awaiting approval are in one queue with the amount, customer and the step they are on. Approve, or reject with a reason.', ['One list of every invoice awaiting approval', 'The rejection reason is recorded on the invoice', 'Each decision is time-stamped'], ['Reviewer', 'Finance director'], 'approvals', ['workflow-builder', 'alerts', 'roles'],
           { kind: 'list', win: 'Approvals · Awaiting approval', cols: ['Invoice', 'Customer', 'Amount', 'Status'], grid: '1.2fr 2fr 1.2fr 1.4fr', rows: [['INV-2026-0412', 'Lagos Freight & Logistics Ltd', '₦ 4,820,000', 'pending'], ['INV-2026-0413', 'Honeywell Group', '₦ 12,450,000', 'pending'], ['INV-2026-0416', 'Nigerian Delta Supplies Co.', '₦ 960,500', 'pending']], steps: [
             { cap: 'Invoices awaiting approval are queued', focus: 0 },
             { cap: 'Open an invoice and review its checks', focus: 1 },
             { cap: 'Approve it, and it moves to the next step', focus: 1, set: { 1: 'approved' } },
             { cap: 'Or reject with a reason; the reason is recorded on the invoice', focus: 2, set: { 2: 'rejected' } }] }),
-        F('workflow-builder', 'Build an approval workflow', 'Steps, approvers and amount thresholds.', 'Set the steps an invoice passes through, which role approves each one and the amount that triggers it. Test a workflow with a sample amount before turning it on.', ['Conditions by invoice amount', 'Approvers by role', 'Try a sample amount before going live'], ['Finance director', 'Firm partner'], 'workflows', ['approval-queue', 'roles', 'submit-clear'],
+        F('workflow-builder', 'Build an approval workflow', 'Steps, approvers and amount thresholds.', 'Set the steps an invoice passes through, which approval seat approves each one and the amount that triggers it. Test a workflow with a sample amount before turning it on.', ['Conditions by invoice amount', 'An approval seat for each step', 'Try a sample amount before going live'], ['Finance director', 'Firm partner'], 'workflows', ['approval-queue', 'roles', 'submit-clear'],
           { kind: 'flow', win: 'Workflow · Over ₦ 1m', nodes: [['Validated', 'Finance officer'], ['Amount check', 'Over ₦ 1,000,000'], ['Step 1', 'Accountant'], ['Step 2', 'Finance director'], ['Released', 'Ready to submit']], steps: [
             { cap: 'An invoice enters the workflow once it passes validation', at: 0, out: 'INV-2026-0412 · ₦ 4,820,000 validated' },
             { cap: 'A condition decides which path it takes', at: 1, out: 'Amount is over the threshold, two approvals needed' },
-            { cap: 'Each step has a role', at: 3, out: 'Step 1 approved · waiting on Finance director' },
+            { cap: 'Each step has an approval seat', at: 3, out: 'Step 1 approved · waiting on Finance director' },
             { cap: 'The last approval releases the invoice for submission', at: 4, out: 'Approved at step 2 · released for submission' }] })] },
       { id: 'clearance', n: '05', name: 'NRS clearance & submission', icon: 'send', view: 'invoices', one: 'Coming soon: send approved invoices and record the outcome.', intro: 'Coming soon. Approved invoices are submitted for clearance and tracked until NRS responds. Failures are retried, and rejections show the reason.', feats: [
         F('submit-clear', 'Submit for NRS clearance', 'Submission is tracked to a recorded outcome.', 'Approved invoices are sent for clearance. ASComply tracks the submission and records the fiscal outcome on the invoice when NRS responds.', ['Submission status visible on every invoice', 'Clearance reference stored with the invoice', 'No manual re-keying into another portal'], ['Finance officer', 'Compliance lead'], 'invoices', ['fiscal-outcomes', 'evidence-bundle', 'erp-connectors'],
@@ -118,9 +117,9 @@ const RAW_GROUPS: RawGroup[] = [
             { cap: 'Add the optional sector and address details', reveal: 4, focus: 3 },
             { cap: 'The client appears in your portfolio', focus: -1, mark: { 0: 'ok', 2: 'ok', 3: 'ok' } }] }),
         F('contacts', 'Customer contacts', 'Buyers are saved from your invoices.', 'Buyers are saved when you save an invoice with a buyer TIN, or added by hand. A malformed TIN is refused, and new invoices fill in the saved details when you enter the TIN.', ['Buyers are saved from your invoices or added by hand', 'A malformed TIN is refused', 'Invoices reuse the saved details'], ['Finance officer', 'Accountant'], 'customers', ['create-invoice', 'import-files', 'portfolio'],
-          { kind: 'list', win: 'Customers', cols: ['Customer', 'TIN', 'Invoices', 'Status'], grid: '2.2fr 1.4fr 0.8fr 1.2fr', show0: 0, rows: [['Lagos Freight & Logistics Ltd', '20184412-0001', '18', 'valid'], ['Honeywell Group', '20665510-0001', '12', 'valid'], ['Adeyemi & Sons Trading', '2099104-0001', '7', 'error']], steps: [
+          { kind: 'list', win: 'Customers', cols: ['Customer', 'TIN', 'Invoices', 'Status'], grid: '2.2fr 1.4fr 0.8fr 1.2fr', show0: 0, rows: [['Lagos Freight & Logistics Ltd', '20184412-0001', '18', 'valid'], ['Honeywell Group', '20665510-0001', '12', 'valid'], ['Adeyemi & Sons Trading', '20991040-0008', '7', 'valid']], steps: [
             { cap: 'Buyers are saved from your invoices', show: 3 },
-            { cap: 'Each customer shows whether its TIN is valid', focus: 2 },
+            { cap: 'Each customer shows its TIN, invoice count and tax status', focus: 2 },
             { cap: 'Enter a saved buyer\'s TIN on a new invoice and the details fill in', focus: 0 }] })] },
       { id: 'members', n: '09', name: 'Members & roles', icon: 'users', view: 'settings', one: 'Invite your team and give each a role.', intro: 'Invite colleagues and give each a role: Admin, Preparer or Reviewer.', feats: [
         F('invite-members', 'Invite your team', 'Add a colleague with a role and client access.', 'Invite a colleague by email, choose a role and, in a firm, the clients they can see. They join with their own sign-in.', ['Role and client access set at invitation', 'Each person signs in individually', 'Client access can be changed, and a member suspended, later'], ['Admin', 'Firm partner'], 'settings', ['roles', 'onboard-client'],
@@ -134,7 +133,7 @@ const RAW_GROUPS: RawGroup[] = [
             { cap: 'A Preparer cannot approve or transmit', focus: 3 },
             { cap: 'Only Admins invite and manage members', focus: 4 }] })] },
       { id: 'notifications', n: '10', name: 'Notifications', icon: 'bell', view: 'settings', one: 'Coming soon: hear about what needs you.', intro: 'Coming soon. Approval requests, rejections and clearance results reach the right person. Each person chooses what they hear about.', feats: [
-        F('alerts', 'Alerts where you work', 'The right person hears about each event.', 'Approvers are told when an invoice needs them, submitters when one is rejected, and everyone when an import finishes or a clearance result arrives.', ['Approval requests reach the approver', 'Rejections reach the submitter with the reason', 'Import and clearance results are announced'], ['Approver', 'Finance officer'], 'settings', ['channels', 'approval-queue'],
+        F('alerts', 'Alerts where you work', 'The right person hears about each event.', 'Approvers are told when an invoice needs them, submitters when one is rejected, and everyone when an import finishes or a clearance result arrives.', ['Approval requests reach the approver', 'Rejections reach the submitter with the reason', 'Import and clearance results are announced'], ['Reviewer', 'Finance officer'], 'settings', ['channels', 'approval-queue'],
           { kind: 'feed', win: 'Notifications', items: [['09:41', 'INV-2026-0412 needs your approval', 'Step 2 · ₦ 4,820,000', 'a'], ['09:58', 'INV-2026-0398 was rejected', 'Buyer TIN not found', 'r'], ['10:20', 'Import finished', '42 rows · 3 need attention', 'm'], ['10:34', 'INV-2026-0371 cleared by NRS', 'Reference stored', 'g']], steps: [
             { cap: 'Approvers are told when an invoice needs them', show: 1 },
             { cap: 'Submitters see rejections with the reason', show: 2 },
@@ -151,7 +150,7 @@ const RAW_GROUPS: RawGroup[] = [
             { cap: 'They are validated and approved here', at: 2, out: '39 passed · 3 need attention' },
             { cap: 'Cleared invoices go to NRS', at: 3, out: '39 submitted for clearance' },
             { cap: 'The result is written back to the ledger', at: 4, out: 'Clearance references written to Sage' }] }),
-        F('company-profile', 'Company details', 'Details that go on every invoice.', 'Keep the company name, TIN and address current. They are copied onto every new invoice as the supplier.', ['One place for company details', 'The TIN is checked when you save', 'Copied onto every new invoice'], ['Admin'], 'settings', ['erp-connectors', 'submit-clear'],
+        F('company-profile', 'Company details', 'Details that go on every invoice.', 'In an in-house workspace, keep the company name, TIN and address current on the Company tab in Settings. They are copied onto every new invoice as the supplier. A firm keeps each client company\'s details on Clients.', ['One place for company details', 'The TIN is checked when you save', 'Copied onto every new invoice'], ['Admin'], 'settings', ['erp-connectors', 'submit-clear'],
           { kind: 'form', win: 'Settings · Company', fields: [{ l: 'Name', v: 'Sahara Foods Distribution Ltd' }, { l: 'TIN', v: '19847720-0002' }, { l: 'Street', v: '14 Allen Avenue' }, { l: 'City', v: 'Lagos' }], steps: [
             { cap: 'Company details are kept in one place', reveal: 3, focus: 0 },
             { cap: 'Edit the address when it changes', reveal: 4, focus: 3 },

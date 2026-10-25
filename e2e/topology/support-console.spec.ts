@@ -872,7 +872,7 @@ async function metricsMatch(page: Page, m: SeenMetrics, what: string): Promise<v
     const max = mn.locator(`[data-tile="${key}"] [data-max]`)
     const has = statHasData(m, key)
     await expect(max, `${what}: ${key} max line`).toHaveCount(has ? 1 : 0)
-    if (has) await expect(max, `${what}: ${key} max text`).toHaveText(MAX_TEXT)
+    if (has) await expect(max, `${what}: ${key} max text`).toHaveText(MAX_TEXT[key])
   }
   // p95: fleet value and a worst line at All services; a picked service shows its own value alone
   const p95 = mn.locator('[data-tile="p95"]')
@@ -900,7 +900,6 @@ async function metricsReads(page: Page, testInfo: TestInfo, first: SeenMetrics, 
   expect(first.limits.available, 'Core AC 2: limits are available; unavailable means run-preview lacks roles/run.viewer on ascomply-preview or the PR suffix matched nothing').toBe(true)
   expect(first.limits.services.map((s) => s.name).sort(), 'Core AC 2: limits list the PR\'s own services (scripts/ci/preview.sh BACKENDS + SITES = systemhealth.MetricServices); missing names mean the PR suffix matched nothing').toEqual([...METRIC_SERVICES].sort())
   await expect(mn.locator('[data-tile="connections"]').getByText(`of ${CONNECTION_BUDGET}`, { exact: true }), 'connections tile shows the budget').toHaveCount(1)
-  if (statHasData(first, 'connections')) await expect(mn.locator('[data-tile="connections"] [data-max]'), 'connections max line').toHaveText(new RegExp('^max \\d+ of ' + CONNECTION_BUDGET + '$'))
 
   const read = (range: string, service: string | null) =>
     page.waitForResponse((r) => {
@@ -1090,7 +1089,12 @@ const WORD_RULE: Record<string, 'always' | 'no-data' | 'never'> = { fleet: 'alwa
 
 // Which tiles carry a max line (the range tiles); the live-ping tiles never do.
 const MAX_TILES = ['req', 'errors', 'p95', 'connections']
-const MAX_TEXT = /^max \S+( \S+)?( of \d+)?$/
+const MAX_TEXT: Record<string, RegExp> = {
+  req: /^max (\d+(\.\d)?k?) req\/min$/,
+  errors: /^max \d+(\.\d+)? %$/,
+  p95: /^max (\d+ ms|\d+\.\d{2} s)$/,
+  connections: new RegExp(`^max \\d+ of ${CONNECTION_BUDGET}$`),
+}
 
 // Reads one tile row by key: its tiles sit in order, share a top and stay apart; each tile holds its label, word, value and unit.
 async function tileRowRead(page: Page, row: Locator, keys: string[], what: string): Promise<{ problems: string[]; rects: Rect[] }> {

@@ -290,3 +290,114 @@ func TestFakeErase_MakesNoCall(t *testing.T) {
 		t.Errorf("FakeResend err = %v, want nil", err)
 	}
 }
+
+func TestHubSpotErase_StatusMapping(t *testing.T) {
+	oneDealPage := `{"results":[{"toObjectId":1}]}`
+	at := map[string]hsErase{
+		"contact read": {contact: 0},
+		"deal rename":  {page1: oneDealPage},
+		"deal delete":  {page1: oneDealPage},
+		"gdpr-delete":  {page1: noDeals},
+	}
+	for _, st := range []int{401, 403, 429, 500, 503} {
+		for name, base := range at {
+			c := base
+			switch name {
+			case "contact read":
+				c.contact = st
+			case "deal rename":
+				c.patch = map[string]int{"1": st}
+			case "deal delete":
+				c.del = map[string]int{"1": st}
+			case "gdpr-delete":
+				c.gdpr = st
+			}
+			v := newVendor(t, c.respond)
+			var de *DeliveryError
+			err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail)
+			if !errors.As(err, &de) || de.Status != st {
+				t.Fatalf("%s %d: err = %v, want *DeliveryError{%d}", name, st, err, st)
+			}
+			if want := st == 401 || st == 403; de.Permanent() != want {
+				t.Errorf("%s %d: Permanent() = %v, want %v", name, st, de.Permanent(), want)
+			}
+			got := strings.Join(v.labels(), "\n")
+			if name == "deal rename" && strings.Contains(got, "DELETE") {
+				t.Errorf("%d: deal deleted after a failed rename", st)
+			}
+			if name != "gdpr-delete" && strings.Contains(got, "gdpr-delete") {
+				t.Errorf("%s %d: gdpr-delete sent after the failure", name, st)
+			}
+		}
+	}
+}
+
+func TestHubSpotErase_PathEscapesTheEmail(t *testing.T) {
+	v := newVendor(t, func(s seenReq) (int, string) { return 404, `{}` })
+	if err := hubspotAt(v, nil).EraseContact(t.Context(), "a/b?c@ex.test"); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	c := v.calls()
+	if len(c) != 1 || c[0].path() != hsCreatePath+"/a%2Fb%3Fc@ex.test" || c[0].Query != "idProperty=email" {
+		t.Fatalf("calls = %v query %q, want the escaped email path and idProperty=email only", v.labels(), c[0].Query)
+	}
+}
+
+func TestHubSpotErase_DealIDKeepsPrecision(t *testing.T) {
+	v := newVendor(t, hsErase{page1: `{"results":[{"toObjectId":9007199254740993}]}`}.respond)
+	if err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if got := strings.Join(v.labels(), "\n"); !strings.Contains(got, "PATCH /crm/v3/objects/deals/9007199254740993\n") {
+		t.Errorf("calls =\n%s\nwant the exact deal id", got)
+	}
+}
+
+func TestHubSpotErase_OversizedPageIsStatusZero(t *testing.T) {
+	v := newVendor(t, func(s seenReq) (int, string) {
+		if strings.Contains(s.path(), "/associations/") {
+			return 200, `{"results":[],"pad":"` + strings.Repeat("x", maxVendorBody+10) + `"}`
+		}
+		return hsErase{}.respond(s)
+	})
+	var de *DeliveryError
+	if err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail); !errors.As(err, &de) || de.Status != 0 {
+		t.Fatalf("err = %v, want *DeliveryError{0}", err)
+	}
+	if strings.Contains(strings.Join(v.labels(), "\n"), "gdpr-delete") {
+		t.Error("gdpr-delete sent after an unreadable page")
+	}
+}
+
+func TestResendErase_StatusMapping(t *testing.T) {
+	for _, st := range []int{401, 403, 429, 503} {
+		v := newVendor(t, func(seenReq) (int, string) { return st, `{}` })
+		var de *DeliveryError
+		err := resendAt(v, nil).EraseContact(t.Context(), eraseEmail)
+		if !errors.As(err, &de) || de.Status != st {
+			t.Fatalf("%d: err = %v, want *DeliveryError{%d}", st, err, st)
+		}
+		if want := st == 401 || st == 403; de.Permanent() != want {
+			t.Errorf("%d: Permanent() = %v, want %v", st, de.Permanent(), want)
+		}
+	}
+}
+
+func TestResendErase_TransportFailureIsStatusZero(t *testing.T) {
+	v := newVendor(t, func(seenReq) (int, string) { return 200, `{}` })
+	v.srv.Close()
+	var de *DeliveryError
+	if err := resendAt(v, nil).EraseContact(t.Context(), eraseEmail); !errors.As(err, &de) || de.Status != 0 {
+		t.Fatalf("err = %v, want *DeliveryError{0}", err)
+	}
+}
+
+func TestHubSpotErase_ContactReadFailureMakesNoOtherCall(t *testing.T) {
+	v := newVendor(t, hsErase{contact: 500}.respond)
+	if err := hubspotAt(v, nil).EraseContact(t.Context(), eraseEmail); err == nil {
+		t.Fatal("err = nil, want a failure")
+	}
+	if got := v.labels(); len(got) != 1 {
+		t.Errorf("calls = %v, want only the contact read", got)
+	}
+}

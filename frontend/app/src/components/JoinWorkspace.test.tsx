@@ -113,6 +113,8 @@ describe('JoinWorkspace', () => {
     expect(join.disabled).toBe(true)
     fireEvent.change(input, { target: { value: 'a'.repeat(201) } })
     expect(join.disabled).toBe(true)
+    fireEvent.change(input, { target: { value: 'Bo\0b' } })
+    expect(join.disabled).toBe(true)
     fireEvent.change(input, { target: { value: ' Bo ' } })
     expect(join.disabled).toBe(false)
   })

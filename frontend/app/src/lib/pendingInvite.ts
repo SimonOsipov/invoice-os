@@ -13,11 +13,17 @@ export function readInviteFragment(hash: string): string | null {
 
 const MAX_NAME_CHARS = 200
 
-// The one `name` fragment value, trimmed, 1 to 200 characters, else null.
+// Mirrors checkName in internal/tenancy/tenancy.go: trimmed, 1 to 200 characters, no NUL.
+export const validName = (v: string) => {
+  const t = v.trim()
+  return t !== '' && [...t].length <= MAX_NAME_CHARS && !t.includes('\0')
+}
+
+// The one `name` fragment value, trimmed and valid, else null.
 export function readInviteName(hash: string): string | null {
   const names = new URLSearchParams(hash.replace(/^#/, '')).getAll('name')
   const name = names.length === 1 ? names[0].trim() : ''
-  return name !== '' && [...name].length <= MAX_NAME_CHARS ? name : null
+  return validName(name) ? name : null
 }
 
 // A token replaces any held one; null removes it. The name rides in the same blob.

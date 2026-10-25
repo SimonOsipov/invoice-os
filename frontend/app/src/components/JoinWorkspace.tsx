@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import { BrandMark } from '../icons'
 import { accessRoleLabel, type AccessRole } from '../lib/members'
+import { validName } from '../lib/pendingInvite'
 import type { PendingInvite } from '../lib/sessionHandoff'
 
 // Passed as `joining` while Create my own workspace runs; invite ids are UUIDs.
@@ -11,9 +12,6 @@ const BUTTON = { alignSelf: 'flex-start', height: 34, padding: '0 12px', fontSiz
 const WRAP = { overflowWrap: 'anywhere' } as const
 const INPUT = { width: '100%', boxSizing: 'border-box' } as const
 const LABEL = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, color: 'var(--fg-3)' } as const
-const MAX_NAME_CHARS = 200
-// Mirrors checkName in internal/tenancy/tenancy.go: trimmed, 1 to 200 characters.
-const validName = (v: string) => v.trim() !== '' && [...v.trim()].length <= MAX_NAME_CHARS
 const NO_WORKSPACE_LINE = 'This account has no workspace yet. If you were invited, open the invite link in your email.'
 
 const inviteLine = (i: PendingInvite) => {

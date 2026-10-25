@@ -77,6 +77,10 @@ describe('readInviteName', () => {
     expect(readInviteName(`#name=${'a'.repeat(201)}`)).toBeNull()
   })
 
+  it('readInviteName drops a name with a NUL', () => {
+    expect(readInviteName('#name=Ada%00Obi')).toBeNull()
+  })
+
   it('readInviteName reads what the landing writes', () => {
     const hard = 'A&b=c#d+e \u{1F600}' + 'x'.repeat(189)
     expect(readInviteName(`#invite=${T}&name=A%26b%3Dc%23d%2Be%20%F0%9F%98%80xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`)).toBe(hard)

@@ -1,0 +1,209 @@
+// @vitest-environment jsdom
+// DEL-04-07: a scheduled-for-deletion workspace is replaced by the full-page notice.
+// Harness of App.suspended.test.tsx: real <App/>, a stored session, ctx captured via a mocked
+// Sidebar; makeAuthedFetch is mocked to route every call through `handler` and fire the seams.
+
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { ApiError } from '@invoice-os/api-client'
+import { APP_PERSONAS, type Session } from './auth'
+import { NOT_ACTIVE_MEMBER_MESSAGE, WORKSPACE_LOCKED_MESSAGE } from './lib/authedFetch'
+import { SESSION_KEY, serializeSession } from './lib/session'
+import type { PlatformCtx } from './types'
+
+const LOCK_403 = new ApiError('http', WORKSPACE_LOCKED_MESSAGE, 403, { error: WORKSPACE_LOCKED_MESSAGE })
+const SUSPEND_403 = new ApiError('http', NOT_ACTIVE_MEMBER_MESSAGE, 403, { error: NOT_ACTIVE_MEMBER_MESSAGE })
+const DUE = '2026-11-24T12:00:00Z'
+const GATEWAY = 'https://gw.test'
+
+type Handler = (url: string, opts?: { method?: string }) => Promise<unknown>
+let handler: Handler
+let calls: Array<{ url: string; method: string }>
+
+vi.mock('./lib/authedFetch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/authedFetch')>()
+  return {
+    ...actual,
+    makeAuthedFetch: (_s: Session, _u: () => void, onSuspended?: () => void, _f?: unknown, onLocked?: () => void) =>
+      async (url: string, opts?: { method?: string }) => {
+        calls.push({ url, method: opts?.method ?? 'GET' })
+        try {
+          return await handler(url, opts)
+        } catch (e) {
+          if (actual.isSuspended(e)) onSuspended?.()
+          else if (actual.isWorkspaceLocked(e)) onLocked?.()
+          throw e
+        }
+      },
+  }
+})
+
+let capturedCtx: PlatformCtx | undefined
+vi.mock('./components/Sidebar', () => ({
+  Sidebar: (p: { ctx: PlatformCtx }) => {
+    capturedCtx = p.ctx
+    return <div data-testid="sidebar" />
+  },
+}))
+
+const me = (dueAt: string | null, role = 'admin') => ({
+  tenant: { id: 't1', name: 'Adaeze Ventures', kind: 'firm', deletion_due_at: dueAt },
+  user: { id: 'u1', role, display_name: null, email: null },
+})
+const sessionWith = (dueAt: string | null): Session => ({
+  persona: APP_PERSONAS.firm,
+  token: 'tok',
+  me: me(dueAt) as Session['me'],
+  verified: true,
+})
+
+function createMemoryStorage() {
+  const store = new Map<string, string>()
+  return {
+    getItem: vi.fn((k: string) => (store.has(k) ? (store.get(k) as string) : null)),
+    setItem: vi.fn((k: string, v: string) => void store.set(k, v)),
+    removeItem: vi.fn((k: string) => void store.delete(k)),
+    clear: vi.fn(() => store.clear()),
+  }
+}
+
+const isMe = (url: string) => url.endsWith('/api/tenancy/v1/me')
+const isCancel = (url: string) => url.endsWith('/workspace/deletion/cancel')
+const stored = () => JSON.parse(localStorage.getItem(SESSION_KEY) as string)
+
+beforeEach(() => {
+  capturedCtx = undefined
+  calls = []
+  handler = async (url) => {
+    if (isMe(url)) return me(DUE)
+    throw new Error(`unexpected ${url}`)
+  }
+  window.history.replaceState(null, '', '/')
+  vi.stubGlobal('localStorage', createMemoryStorage())
+  vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+})
+
+afterEach(() => {
+  cleanup()
+  vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
+
+async function renderApp(session: Session) {
+  localStorage.setItem(SESSION_KEY, serializeSession(session))
+  vi.resetModules()
+  const { default: App } = await import('./App')
+  return render(<App />)
+}
+
+const notice = () => screen.queryByTestId('workspace-deletion-notice')
+
+describe('deletion notice', () => {
+  it('deletion notice: a locked stored session boots to the notice', async () => {
+    await renderApp(sessionWith(DUE))
+    await screen.findByTestId('workspace-deletion-notice')
+
+    expect(capturedCtx, 'the workspace must not mount').toBeUndefined()
+    expect(calls.map((c) => c.url)).toEqual([`${GATEWAY}/api/tenancy/v1/me`])
+  })
+
+  it('deletion notice: a mid-session lock 403 replaces the workspace', async () => {
+    await renderApp(sessionWith(null))
+    await screen.findByTestId('sidebar')
+    expect(notice()).toBeNull()
+    handler = async (url) => {
+      if (isMe(url)) return me(DUE)
+      throw LOCK_403
+    }
+    await act(async () => {
+      await capturedCtx!.authedFetch('/x').catch(() => {})
+    })
+
+    await screen.findByTestId('workspace-deletion-notice')
+    expect(screen.queryByTestId('sidebar')).toBeNull()
+  })
+
+  it.each([
+    ['admin', true],
+    ['preparer', false],
+  ])('deletion notice: an admin sees Cancel deletion, a preparer does not (%s)', async (role, admin) => {
+    handler = async (url) => {
+      if (isMe(url)) return me(DUE, role)
+      throw new Error(`unexpected ${url}`)
+    }
+    await renderApp(sessionWith(DUE))
+    const n = await screen.findByTestId('workspace-deletion-notice')
+
+    expect(n.textContent).toContain('This workspace is scheduled for deletion')
+    await waitFor(() => expect(n.textContent).toContain('24 November 2026'))
+    expect(n.textContent).toContain('Adaeze Ventures')
+    expect(screen.queryByTestId('deletion-notice-cancel') !== null).toBe(admin)
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeTruthy()
+  })
+
+  it('deletion notice: Cancel deletion unlocks and remounts the workspace', async () => {
+    handler = async (url) => {
+      if (isMe(url)) return me(DUE)
+      if (isCancel(url)) return {}
+      throw new Error(`unexpected ${url}`)
+    }
+    await renderApp(sessionWith(DUE))
+    fireEvent.click(await screen.findByTestId('deletion-notice-cancel'))
+
+    await screen.findByTestId('sidebar')
+    expect(calls.some((c) => isCancel(c.url) && c.method === 'POST')).toBe(true)
+    expect(notice()).toBeNull()
+    expect(stored().me.tenant.deletion_due_at).toBeNull()
+  })
+
+  it('deletion notice: a failed cancel keeps the notice and shows why', async () => {
+    const why = 'only an admin can cancel the deletion'
+    handler = async (url) => {
+      if (isMe(url)) return me(DUE)
+      throw new ApiError('http', why, 403, { error: why })
+    }
+    await renderApp(sessionWith(DUE))
+    fireEvent.click(await screen.findByTestId('deletion-notice-cancel'))
+
+    await waitFor(() => expect(screen.getByTestId('deletion-notice-error').textContent).toBe(why))
+    expect(notice()).not.toBeNull()
+    expect(capturedCtx).toBeUndefined()
+  })
+
+  it('deletion notice: a stale stored lock unlocks when /v1/me says null', async () => {
+    handler = async (url) => {
+      if (isMe(url)) return me(null)
+      throw new Error(`unexpected ${url}`)
+    }
+    await renderApp(sessionWith(DUE))
+
+    await screen.findByTestId('sidebar')
+    expect(notice()).toBeNull()
+  })
+
+  it('deletion notice: Sign out signs out', async () => {
+    await renderApp(sessionWith(DUE))
+    await screen.findByTestId('workspace-deletion-notice')
+    vi.mocked(localStorage.removeItem).mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+
+    await waitFor(() => expect(localStorage.removeItem).toHaveBeenCalledWith(SESSION_KEY))
+    expect(notice()).toBeNull()
+  })
+
+  it('deletion notice: the suspension latch still shows SuspendedNotice', async () => {
+    await renderApp(sessionWith(null))
+    await screen.findByTestId('sidebar')
+    handler = async () => {
+      throw SUSPEND_403
+    }
+    await act(async () => {
+      await capturedCtx!.authedFetch('/x').catch(() => {})
+    })
+
+    await screen.findByTestId('suspended-notice')
+    expect(notice()).toBeNull()
+  })
+})

@@ -105,6 +105,7 @@ import {
 import { removePolicy, replacePolicy, type Policy } from './lib/workflows'
 import { flaskGlyph, shieldGlyph15 } from './glyphs'
 import { BrandMark } from './icons'
+import { WorkspaceDeletionNotice } from './components/WorkspaceDeletionNotice'
 import {
   APP_NOTICE_BODY,
   CookieNotice,
@@ -244,11 +245,12 @@ const STILL_WORKING = new ApiError('network', 'An import or filing is still in p
 // (Platform.dc.html ~L980-1263): `this.state` becomes typed `useState` hooks below,
 // and every handler in the "actions" section is ported 1:1 as a plain function.
 // Rendered only once signed in (see App).
-function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
+function Workspace({ session, onSignOut, freshToken, onUnauthorized, onLocked }: {
   session: Session
   onSignOut: () => void
   freshToken?: () => string | null | Promise<string | null>
   onUnauthorized: () => void
+  onLocked: (dueAt?: string) => void
 }) {
   // Workspace mode is fixed by the session: a hand-off session takes it from /me tenant.kind,
   // a persona session from its persona. There is no in-app switch.
@@ -280,14 +282,14 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   }, [suspended])
 
   const authedFetch = useMemo(
-    () => makeAuthedFetch(session, onUnauthorized, onSuspended, freshToken),
-    [session, onUnauthorized, onSuspended, freshToken],
+    () => makeAuthedFetch(session, onUnauthorized, onSuspended, freshToken, onLocked),
+    [session, onUnauthorized, onSuspended, freshToken, onLocked],
   )
   // Same arguments, one construction site — the multipart XHR transport cannot drift
   // from the fetch path on auth, the 401 or the 403 suspension (importApi.ts).
   const importAuth = useMemo(
-    () => makeImportAuth(session, onUnauthorized, onSuspended, freshToken),
-    [session, onUnauthorized, onSuspended, freshToken],
+    () => makeImportAuth(session, onUnauthorized, onSuspended, freshToken, onLocked),
+    [session, onUnauthorized, onSuspended, freshToken, onLocked],
   )
 
   // [entity-picker] step 1 of 3: ONE fetch of the tenant's live portfolio entities,
@@ -1838,6 +1840,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     staffRole,
     deleteRole,
     signOut: onSignOut,
+    lockWorkspace: onLocked,
     cookieChoices: () => {
       const next = syncAppConsent(chatEmail)
       if (next) setConsent(next)
@@ -1971,6 +1974,23 @@ export default function App() {
   // unless the stored one is a live hand-off session: the fresh code wins over a stale identity.
   const [seat, setSeat] = useState<Session | null>(() => (handoffCode ? null : bootSession))
   const [signingIn, setSigningIn] = useState<PersonaId | null>(null)
+  // Latched by a lock 403 mid-session; the stored session's deletion_due_at covers a boot.
+  const [lockLatched, setLockLatched] = useState(false)
+  const locked = lockLatched || seat?.me?.tenant.deletion_due_at != null
+  const withDueAt = useCallback((dueAt: string | null) => {
+    setSeat((s) => (s?.me ? { ...s, me: { ...s.me, tenant: { ...s.me.tenant, deletion_due_at: dueAt } } } : s))
+  }, [])
+  const lockWorkspace = useCallback(
+    (dueAt?: string) => {
+      setLockLatched(true)
+      if (dueAt) withDueAt(dueAt)
+    },
+    [withDueAt],
+  )
+  const unlockWorkspace = useCallback(() => {
+    withDueAt(null)
+    setLockLatched(false)
+  }, [withDueAt])
 
   // Set when storage belongs to another tab's sign-in or sign-out.
   const keepStoredRecord = useRef(false)
@@ -2096,6 +2116,11 @@ export default function App() {
       window.location.href = dest
     }
   }, [seat])
+
+  const noticeFetch = useMemo(
+    () => (seat ? makeAuthedFetch(seat, endRevokedSession, undefined, freshToken) : null),
+    [seat, endRevokedSession, freshToken],
+  )
 
   const doSignIn = useCallback(async (persona: Persona) => {
     setSigningIn(persona.id)
@@ -2360,12 +2385,23 @@ export default function App() {
   }
   return (
     <>
-      <Workspace
-        session={seat}
-        onSignOut={signOut}
-        freshToken={freshToken}
-        onUnauthorized={endRevokedSession}
-      />
+      {locked && noticeFetch ? (
+        <WorkspaceDeletionNotice
+          authedFetch={noticeFetch}
+          base={gatewayBase() ?? ''}
+          known={{ dueAt: seat.me?.tenant.deletion_due_at ?? null, name: seat.me?.tenant.name ?? null, isAdmin: seat.me?.user.role === 'admin' }}
+          onUnlocked={unlockWorkspace}
+          onSignOut={signOut}
+        />
+      ) : (
+        <Workspace
+          session={seat}
+          onSignOut={signOut}
+          freshToken={freshToken}
+          onUnauthorized={endRevokedSession}
+          onLocked={lockWorkspace}
+        />
+      )}
       {verifyConfirmedNotice !== null && (
         <AuditExportToast kind="success" testId="verify-confirmed-toast" text={verifyConfirmedNotice} onDismiss={dismissVerifyNotice} />
       )}

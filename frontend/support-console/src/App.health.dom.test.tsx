@@ -817,6 +817,41 @@ describe('Console system health isolation', () => {
     for (const u of alive()) expect(shows(u)).toEqual([true, true])
   })
 
+  it('isolation and zoom both survive a refresh', async () => {
+    await open(answer({ gateway: 20, worker: 10 }))
+    click('req_per_min', 'gateway')
+    const u = alive()[0]
+    u.posToVal = (p) => p
+    u.select = { left: T0 + 600, top: 0, width: 1200, height: 10 }
+    act(() => u.fire('setSelect'))
+    expect(screen.queryByRole('button', { name: 'Reset zoom' })).not.toBeNull()
+    await tick()
+    expect(screen.queryByRole('button', { name: 'Reset zoom' })).not.toBeNull()
+    expect(pressed()).toHaveLength(2)
+    for (const c of alive()) expect(shows(c)).toEqual([true, false])
+  })
+
+  it('a service present in one Cloud Run panel keeps the isolation', async () => {
+    await open(answer({ gateway: 20, worker: 10 }))
+    click('req_per_min', 'gateway')
+    const both = answer({ gateway: 20, worker: 10 })
+    metrics.mockResolvedValue({ ...both, panels: both.panels.map((p) => (p.key === 'req_per_min' ? { ...p, series: p.series.filter((s) => s.name === 'worker') } : p)) })
+    await tick()
+    await vi.waitFor(() => expect(entry('cpu_pct', 'gateway')).not.toBeNull())
+    expect(entry('req_per_min', 'gateway')).toBeNull()
+    expect(entry('cpu_pct', 'gateway')!.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('a click on the folded entry changes nothing', async () => {
+    const nine = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`s${i + 1}`, 20 + i]))
+    await open(answer(nine))
+    click('req_per_min', 's9')
+    const folded = document.querySelector('[data-panel="req_per_min"] [data-series-other]')!
+    act(() => { fireEvent.click(folded) })
+    expect(pressed().map((e) => e.getAttribute('data-series'))).toEqual(['s9', 's9'])
+    expect(folded.textContent).toBe('+2 other services')
+  })
+
   it('leaving System health keeps the isolation', async () => {
     await open(answer({ gateway: 20, worker: 10 }))
     click('req_per_min', 'gateway')

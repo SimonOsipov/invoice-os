@@ -1536,14 +1536,29 @@ async function fixtureIsolate(page: Page): Promise<void> {
   const cloud = PANEL_KEYS.filter((k) => !k.startsWith('sql_'))
   const drawn = async (key: string): Promise<string[]> => ((await chartOf(key).getAttribute('data-drawn')) ?? '').split(',').filter(Boolean)
 
-  // the first coloured entry, so the pick follows the fixture's colour slots
-  const name = (await legendOf('req_per_min').locator('button[data-series]').first().getAttribute('data-series'))!
+  // worker: the highest req_per_min peak in metricsFixture (20 + n + i % 7, n 16), so colourMap gives it a slot in every Cloud Run panel
+  const name = 'worker'
   await legendOf('req_per_min').locator(`[data-series="${name}"]`).click()
   for (const key of cloud) await expect.poll(() => drawn(key), { message: `${key} draws only ${name}` }).toEqual([name])
   await expect.poll(() => drawn('sql_util'), { message: 'sql_util keeps its lines' }).toEqual(['CPU', 'RAM', 'Disk'])
   await expect.poll(() => drawn('sql_connections'), { message: 'sql_connections keeps its line' }).toEqual(['connections'])
   await expect(legendOf('req_per_min').locator(`[data-series="${name}"]`)).toHaveAttribute('aria-pressed', 'true')
   await expect(legendOf('sql_util').locator('button'), 'SQL legend entries are not buttons').toHaveCount(0)
+  const muted = await page.evaluate(() => {
+    const probe = document.createElement('div')
+    probe.style.background = 'var(--line-2)'
+    document.body.appendChild(probe)
+    const c = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return c
+  })
+  const others = legendOf('req_per_min').locator(`button[data-series]:not([data-series="${name}"])`)
+  expect(await others.count(), 'other coloured entries stay').toBeGreaterThan(0)
+  await expect(others.first()).toHaveAttribute('aria-pressed', 'false')
+  await expect(kid(others.first(), 1), 'muted swatch').toHaveCSS('background-color', muted)
+  await expect(kid(others.first(), 2), 'struck-through name').toHaveCSS('text-decoration-line', 'line-through')
+  await expect(legendOf('req_per_min').locator('[data-series-other]'), 'folded entry struck through').toHaveCSS('text-decoration-line', 'line-through')
+  await expect(legendOf('sql_util').locator('[data-series]').first(), 'SQL entry not muted').not.toHaveCSS('text-decoration-line', 'line-through')
 
   const o = (await boxes(page, { over: chartOf('req_per_min').locator('.u-over') })).over
   await page.mouse.move(1, 1)
@@ -1556,7 +1571,7 @@ async function fixtureIsolate(page: Page): Promise<void> {
   await atWidths(page, 'SUP-03 System health fixture legend layout, isolated', async () => fixturePanelsRead(page))
 
   await legendOf('req_per_min').locator(`[data-series="${name}"]`).click()
-  for (const key of cloud) await expect.poll(async () => (await drawn(key)).length, { message: `${key} draws every series again` }).toBeGreaterThan(1)
+  for (const key of cloud) await expect.poll(async () => (await drawn(key)).length, { message: `${key} draws every series again` }).toBe(METRIC_SERVICES_FIXTURE.length)
 }
 
 // fixture check: pins layout of a wire-shaped body, not the metrics contract

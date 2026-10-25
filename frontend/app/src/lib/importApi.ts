@@ -65,7 +65,7 @@
 // import under this app's `verbatimModuleSyntax`.
 import { ApiError, reportApiFailure } from '@invoice-os/api-client'
 import type { Session } from '../auth'
-import { isPromiseLike, isSuspended, isUnauthorized } from './authedFetch'
+import { isPromiseLike, isSuspended, isUnauthorized, isWorkspaceLocked } from './authedFetch'
 import type { InvoiceRecord } from './invoices'
 import type { AuthedFetch } from './portfolio'
 
@@ -193,6 +193,7 @@ export interface ImportAuth {
   onUnauthorized: () => void
   // Optional for the same reason createAuthedFetch's third parameter is (authedFetch.ts).
   onSuspended?: () => void
+  onLocked?: () => void
 }
 
 export interface CreateImportRequest {
@@ -220,11 +221,13 @@ export function makeImportAuth(
   onUnauthorized: () => void,
   onSuspended?: () => void,
   freshToken?: () => string | null | Promise<string | null>,
+  onLocked?: () => void,
 ): ImportAuth {
   return {
     getToken: freshToken ?? (() => session.token),
     onUnauthorized,
     onSuspended,
+    onLocked,
   }
 }
 
@@ -299,6 +302,7 @@ function xhrJson(
       // refusal is which — IMPAPI-19..23.
       if (isUnauthorized(error)) auth.onUnauthorized()
       else if (isSuspended(error)) auth.onSuspended?.()
+      else if (isWorkspaceLocked(error)) auth.onLocked?.()
 
       fail(error, true)
     }

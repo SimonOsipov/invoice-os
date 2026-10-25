@@ -10,7 +10,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client'
 
 import { APP_PERSONAS, type Session } from '../auth'
-import { NOT_ACTIVE_MEMBER_MESSAGE, createAuthedFetch, isSuspended, isUnauthorized, makeAuthedFetch } from './authedFetch'
+import {
+  NOT_ACTIVE_MEMBER_MESSAGE,
+  WORKSPACE_LOCKED_MESSAGE,
+  createAuthedFetch,
+  isSuspended,
+  isUnauthorized,
+  isWorkspaceLocked,
+  makeAuthedFetch,
+} from './authedFetch'
 import { SessionEndedError } from './renewal'
 import { SESSION_KEY, clearSession, loadSession, saveSession } from './session'
 
@@ -430,5 +438,55 @@ describe('authedFetch with an async getter (AUTH-06 D9, D5)', () => {
 
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined
     expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer A1')
+  })
+})
+
+describe('isWorkspaceLocked: only the exact lock 403', () => {
+  const http = (status: number, error: string) => new ApiError('http', error, status, { error })
+  it.each([
+    ['the lock 403', http(403, WORKSPACE_LOCKED_MESSAGE), true],
+    ['the suspension 403', http(403, NOT_ACTIVE_MEMBER_MESSAGE), false],
+    ['another 403 sentence', http(403, 'forbidden'), false],
+    ['a 401 with the lock sentence', http(401, WORKSPACE_LOCKED_MESSAGE), false],
+    ['a lock 403 without a body', new ApiError('http', WORKSPACE_LOCKED_MESSAGE, 403), false],
+    ['a network error', new ApiError('network', 'network error', null), false],
+    ['a plain Error', new Error(WORKSPACE_LOCKED_MESSAGE), false],
+  ])('%s', (_n, e, want) => {
+    expect(isWorkspaceLocked(e)).toBe(want)
+  })
+})
+
+describe('authedFetch: a lock refusal fires onLocked once and rethrows', () => {
+  function refuse(error: string) {
+    mockFetchOnce({ ok: false, status: 403, statusText: 'Forbidden', json: async () => ({ error }) })
+  }
+
+  it('lock 403: onLocked 1, the others 0, same error rethrown', async () => {
+    const [onUnauthorized, onSuspended, onLocked] = [vi.fn(), vi.fn(), vi.fn()]
+    const af = createAuthedFetch(() => 'tok', onUnauthorized, onSuspended, onLocked)
+    refuse(WORKSPACE_LOCKED_MESSAGE)
+    const err = await captureRejection(() => af('/x'))
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).message).toBe(WORKSPACE_LOCKED_MESSAGE)
+    expect(onLocked).toHaveBeenCalledTimes(1)
+    expect(onSuspended).not.toHaveBeenCalled()
+    expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+
+  it('suspension 403: onLocked 0', async () => {
+    const [onSuspended, onLocked] = [vi.fn(), vi.fn()]
+    const af = createAuthedFetch(() => 'tok', vi.fn(), onSuspended, onLocked)
+    refuse(NOT_ACTIVE_MEMBER_MESSAGE)
+    await captureRejection(() => af('/x'))
+    expect(onSuspended).toHaveBeenCalledTimes(1)
+    expect(onLocked).not.toHaveBeenCalled()
+  })
+
+  it('makeAuthedFetch forwards onLocked as its fifth argument', async () => {
+    const onLocked = vi.fn()
+    const af = makeAuthedFetch(seededSession(), vi.fn(), undefined, undefined, onLocked)
+    refuse(WORKSPACE_LOCKED_MESSAGE)
+    await captureRejection(() => af('/x'))
+    expect(onLocked).toHaveBeenCalledTimes(1)
   })
 })

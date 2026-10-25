@@ -273,7 +273,8 @@ func TestActorRemovedName(t *testing.T) {
 	for _, tc := range []struct {
 		in   *string
 		want string
-	}{{nil, "Deleted member"}, {ptr(""), "Deleted member"}, {ptr("Ada"), "Ada (deleted)"}} {
+	}{{nil, "Deleted member"}, {ptr(""), "Deleted member"}, {ptr("Ada"), "Ada (deleted)"},
+		{ptr("  "), "   (deleted)"}, {ptr(strings.Repeat("N", 300)), strings.Repeat("N", 300) + " (deleted)"}} {
 		got := actor.RemovedName(tc.in)
 		if want := (actor.Label{Text: tc.want, Kind: actor.KindPerson}); got != want {
 			t.Errorf("RemovedName(%v) = %+v, want %+v", tc.in, got, want)

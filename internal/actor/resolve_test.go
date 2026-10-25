@@ -1214,3 +1214,39 @@ func TestActorResolve_LiveRowsKeepTheLadder(t *testing.T) {
 		}
 	}
 }
+
+func TestActorResolve_RemovedRowsInOneBatchLeakNoLabel(t *testing.T) {
+	super, _ := dbTestPools(t)
+	long := strings.Repeat("N", 300)
+	setRemoved(t, super, okaforBlankable, nil, ptr("stale@x.ng"))
+	setRemoved(t, super, okaforPreparer, ptr(long), nil)
+	traced, rec := tracedAppPool(t)
+	tx := scopedTx(t, traced, rec, okaforTenantID)
+
+	upper := strings.ToUpper(okaforPreparer)
+	got := mustResolve(t, tx, []string{okaforBlankable, okaforPreparer, upper, okaforAdmin, okaforSuspended})
+
+	if len(got) != 5 {
+		t.Fatalf("Resolve returned %d labels, want 5", len(got))
+	}
+	assertLabel(t, got, okaforBlankable, person("Deleted member"))
+	assertLabel(t, got, okaforPreparer, person(long+" (deleted)"))
+	assertLabel(t, got, upper, person(long+" (deleted)"))
+	assertLabel(t, got, okaforAdmin, person("Chinedu Okafor"))
+	assertLabel(t, got, okaforSuspended, person("Halima Yusuf"))
+	for k, l := range got {
+		if strings.Contains(l.Text, "stale@x.ng") || l.Text == k {
+			t.Errorf("Resolve[%s] = %q leaks the email or the uuid", k, l.Text)
+		}
+	}
+	membershipsStmts(t, rec, 1)
+}
+
+func TestActorResolve_RemovedWhitespaceNameIsAName(t *testing.T) {
+	super, _ := dbTestPools(t)
+	setRemoved(t, super, okaforBlankable, ptr("  "), nil)
+	traced, rec := tracedAppPool(t)
+	tx := scopedTx(t, traced, rec, okaforTenantID)
+
+	assertLabel(t, mustResolve(t, tx, []string{okaforBlankable}), okaforBlankable, person("   (deleted)"))
+}

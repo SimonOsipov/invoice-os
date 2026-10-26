@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/net/html"
 )
@@ -1030,17 +1031,27 @@ func TestResetPasswordPage_TokenHoldingAPlaceholderIsNotExpanded(t *testing.T) {
 }
 
 // Holds today: a link GoTrue refuses ends before EvictSubject, so it writes no revocation.
+// The dead pool turns every write into a logged ERROR on the checker's log, which is the oracle.
 func TestResetPassword_AnExpiredLinkWritesNoRevocation(t *testing.T) {
-	f := newResetGoTrue(t)
-	f.verify = answer(http.StatusForbidden, rpOTPExpired)
-	sessions := liveSessions(t)
-	sessions.Shared(deadPool(t))
-	log, buf := captureLog()
-	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-	h := ResetPasswordHandler(f.URL, siteURL(t), testClient(), sessions, th, log)
+	post := func(refuse bool) (*resetGoTrue, *bytes.Buffer) {
+		f := newResetGoTrue(t)
+		if refuse {
+			f.verify = answer(http.StatusForbidden, rpOTPExpired)
+		}
+		log, buf := captureLog()
+		sessions := NewSessionChecker(f.URL, testClient(), time.Now, log)
+		sessions.Shared(deadPool(t))
+		th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
+		h := ResetPasswordHandler(f.URL, siteURL(t), testClient(), sessions, th, log)
+		want := rpOK
+		if refuse {
+			want = rpFailed
+		}
+		rpRequireRedirect(t, rpPost(t, h, rpValues(rpToken, "recovery", rpPass)), want)
+		return f, buf
+	}
 
-	rpRequireRedirect(t, rpPost(t, h, rpValues(rpToken, "recovery", rpPass)), rpFailed)
-
+	f, buf := post(true)
 	if n := len(recordsNamed(t, buf, rpMsgRefusedLink)); n != 1 {
 		t.Errorf("refused-link records = %d, want 1 (the link was refused): %s", n, buf.String())
 	}
@@ -1049,5 +1060,10 @@ func TestResetPassword_AnExpiredLinkWritesNoRevocation(t *testing.T) {
 	}
 	if n := f.count(http.MethodPost, "/logout"); n != 0 {
 		t.Errorf("GoTrue /logout calls = %d, want 0", n)
+	}
+
+	_, ctl := post(false)
+	if n := len(recordsNamed(t, ctl, "session check: record sign-out")); n != 1 {
+		t.Errorf("control: sign-out write records = %d for an accepted link, want 1 (the log sees the write)", n)
 	}
 }

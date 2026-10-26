@@ -1490,12 +1490,14 @@ func TestSessionCheck_AStalledRevocationReadIsBounded(t *testing.T) {
 	if n := fake.Hits(); n != 2 {
 		t.Errorf("GoTrue /user calls = %d, want 2 (the stalled read counts as failed)", n)
 	}
-	if elapsed >= handoffDBTimeout {
-		t.Errorf("a cached request took %v, want under handoffDBTimeout (%v): the read bound is revocationReadTimeout (%v)", elapsed, handoffDBTimeout, revocationReadTimeout)
+	// 3 s: well above revocationReadTimeout (1 s), well below handoffDBTimeout (5 s).
+	if elapsed >= 3*time.Second {
+		t.Errorf("a cached request took %v, want about revocationReadTimeout (%v), not handoffDBTimeout (%v)", elapsed, revocationReadTimeout, handoffDBTimeout)
 	}
 	if n := len(recordsNamed(t, buf, "session check: revocation read failed")); n != 1 {
 		t.Errorf("revocation read failure records = %d, want 1: %s", n, buf.String())
 	}
+	requireNoLeak(t, buf, tok, subjectS1, "ada@corp.example")
 }
 
 func TestSessionCheck_AFailedRevocationWriteStillEvictsLocally(t *testing.T) {
@@ -1521,4 +1523,22 @@ func TestSessionCheck_AFailedRevocationWriteStillEvictsLocally(t *testing.T) {
 		t.Errorf("sign-out write records = %v, want exactly one ERROR", recs)
 	}
 	requireNoLeak(t, buf, subjectS1)
+}
+
+// A failed read does not decide: GoTrue unreachable is the 503, never a revoked 401.
+func TestSessionCheck_AFailedRevocationReadThenGoTrueDownIs503(t *testing.T) {
+	fake := newUserFake(t, http.StatusOK, gtUser)
+	rg := newSessionRig(t, fake.URL, nil, nil)
+	rg.sessions.Shared(deadPool(t))
+	tok := rg.signer.token(t, subjectS1, sid1)
+	if rec := rg.get(tok); rec.Code != http.StatusOK {
+		t.Fatalf("first request = %d, want 200", rec.Code)
+	}
+	fake.set(http.StatusInternalServerError, "")
+
+	assertUnavailable(t, rg.get(tok))
+
+	if n := fake.Hits(); n != 2 {
+		t.Errorf("GoTrue /user calls = %d, want 2 (the failed read asked GoTrue)", n)
+	}
 }

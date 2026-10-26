@@ -31,7 +31,7 @@ describe('content', () => {
     for (const f of FEATURES) {
       expect(f.sc.win).not.toBe('')
       expect(f.sc.steps.length).toBeGreaterThanOrEqual(3)
-      expect(f.sc.steps.length).toBeLessThanOrEqual(f.id === 'delete-workspace' ? 5 : 4)
+      expect(f.sc.steps.length).toBeLessThanOrEqual(4)
       for (const s of f.sc.steps) expect(s.cap).not.toBe('')
     }
   })
@@ -168,7 +168,7 @@ describe('content', () => {
     expect(acct.steps.length).toBeLessThanOrEqual(4)
     expect(ws.kind).toBe('flow')
     expect(ws.steps.length).toBeGreaterThanOrEqual(3)
-    expect(ws.steps.length).toBeLessThanOrEqual(5)
+    expect(ws.steps.length).toBeLessThanOrEqual(4)
     if (ws.kind !== 'flow') return
     const at = ws.steps.map((s) => s.at)
     for (const a of at) expect(a).toBeLessThan(ws.nodes.length)
@@ -183,7 +183,7 @@ describe('content', () => {
   it('content_deletionCopyNamesTheExport', () => {
     const ws = byId('delete-workspace')
     expect(JSON.stringify(ws)).toMatch(/Download export|downloads the export/i)
-    expect((ws.sc as { nodes: string[][] }).nodes[0][0]).toBe('Export')
+    expect(ws.sc.steps[0].cap).toMatch(/downloads the export/i)
   })
 
   // Add the emailed cancel link claim only once the app has it: edit this regex first.

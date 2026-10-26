@@ -282,8 +282,8 @@ describe('library group page', () => {
         expect(style(block)).toMatchObject({ gap: '8px' })
         expect(inside.indexOf(block)).toBeLessThan(inside.indexOf(title))
         expect(attr(inside.find((t) => t.text === esc(f.short))!, 'class')).toBe('t-body-sm')
-        const dur = ({ 3: '0:10', 4: '0:13', 5: '0:17' } as Record<number, string>)[f.sc.steps.length]
-        expect(dur).toBeDefined()
+        const dur = f.sc.steps.length === 4 ? '0:13' : '0:10'
+        expect(f.sc.steps.length === 4 || f.sc.steps.length === 3).toBe(true)
         expect(attr(inside.find((t) => t.text === dur)!, 'class')).toBe('mono')
         f.who.forEach((w) => expect(inside.some((t) => t.text.includes(esc(w)))).toBe(false))
       })

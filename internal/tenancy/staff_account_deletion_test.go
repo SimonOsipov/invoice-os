@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -682,5 +686,264 @@ func TestStaffAccountDeletion_RefusesWithoutAStaffCaller(t *testing.T) {
 
 	if err := w.del(p, OutcomeLeave, ""); err != nil {
 		t.Errorf("control: the staff caller on the same target: %v", err)
+	}
+}
+
+// A suspended target in a workspace with no active member decides delete_workspace, so the delete answers the last-member 409 (pinned surprise).
+func TestStaffAccountDeletion_ASuspendedTargetBesideNoActiveMemberAnswersLastMember(t *testing.T) {
+	w := newStaffAccWorld(t)
+	if _, err := w.super.Exec(context.Background(),
+		`UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id = $2`, w.tenant, w.admin); err != nil {
+		t.Fatalf("suspend the only admin: %v", err)
+	}
+	snap := w.snapshot(t, w.admin)
+
+	got, err := w.store.StaffPreviewAccountDeletion(w.ctx, w.tenant, w.admin)
+	if err != nil || got.Outcome != OutcomeDeleteWorkspace {
+		t.Fatalf("preview = %+v, %v; want delete_workspace", got, err)
+	}
+	if err := w.del(w.admin, OutcomeLeave, ""); !errors.Is(err, ErrLastActiveMember) {
+		t.Errorf("err = %v, want ErrLastActiveMember", err)
+	}
+	snap.requireUnchanged(t)
+
+	w.member(t, "preparer", "active", "Chidi Eze", joined(1)) // control: an active member makes it a plain leave
+	if err := w.del(w.admin, OutcomeLeave, ""); err != nil {
+		t.Errorf("control: leave beside an active member: %v", err)
+	}
+}
+
+func TestStaffAccountDeletion_ASuspendedOrInvitedTargetLeavesAndASuspendedAdminIsNoSecondAdmin(t *testing.T) {
+	for _, status := range []string{"suspended", "invited"} {
+		t.Run("a "+status+" target", func(t *testing.T) {
+			w := newStaffAccWorld(t)
+			p := w.member(t, "preparer", status, "Sue Pend", joined(1))
+			other := w.member(t, "reviewer", "active", "Tunde Bello", joined(2))
+			adminBefore, otherBefore, pBefore := imageOf(t, w.super, w.tenant, w.admin), imageOf(t, w.super, w.tenant, other), imageOf(t, w.super, w.tenant, p)
+
+			if err := w.del(p, OutcomeLeave, ""); err != nil {
+				t.Fatalf("StaffDeleteAccount(leave): %v", err)
+			}
+			requireImage(t, w.invWorld, "target", p, endState(pBefore))
+			requireImage(t, w.invWorld, "admin", w.admin, adminBefore)
+			requireImage(t, w.invWorld, "other member", other, otherBefore)
+			if rows := staffEvents(t, w.super, w.tenant); !slices.Equal(eventNames(rows), []string{evAccountDeleted}) || rows[0].Subject != p {
+				t.Errorf("staff rows = %+v, want one %s for the target", rows, evAccountDeleted)
+			}
+			if _, _, found := w.erasureOf(t, p); !found || w.eraseJobs(t, p) != 1 {
+				t.Errorf("erasure of the target: row %v, jobs %d, want the row and one job", found, w.eraseJobs(t, p))
+			}
+		})
+	}
+	t.Run("the only active admin beside a suspended admin hands on", func(t *testing.T) {
+		w := newStaffAccWorld(t)
+		sa := w.member(t, "admin", "suspended", "Sue Pend", joined(0))
+		p := w.member(t, "preparer", "active", "Chidi Eze", joined(1))
+		saBefore := imageOf(t, w.super, w.tenant, sa)
+		if err := w.del(w.admin, OutcomeLeave, ""); !errors.Is(err, ErrDeletionOutcomeChanged) {
+			t.Fatalf("leave err = %v, want ErrDeletionOutcomeChanged (the suspended admin is no second admin)", err)
+		}
+		if err := w.del(w.admin, OutcomeHandOn, p); err != nil {
+			t.Fatalf("hand_on: %v", err)
+		}
+		requireImage(t, w.invWorld, "suspended admin", sa, saBefore)
+		if got := imageOf(t, w.super, w.tenant, p); got.Role != "admin" {
+			t.Errorf("heir role = %q, want admin", got.Role)
+		}
+	})
+}
+
+func TestStaffAccountDeletion_AHeirChangedUnderTheRowLockIsRefused(t *testing.T) {
+	w := newStaffAccWorld(t)
+	p := w.member(t, "preparer", "active", "Chidi Eze", joined(1))
+	r := w.member(t, "reviewer", "active", "Tunde Bello", joined(2))
+	prev, err := w.store.StaffPreviewAccountDeletion(w.ctx, w.tenant, w.admin)
+	if err != nil || prev.HeirUserID == nil || *prev.HeirUserID != p {
+		t.Fatalf("preview = %+v, %v; want hand_on to %s", prev, err, p)
+	}
+	snap := w.snapshot(t, w.admin, r)
+
+	// the holder suspends the previewed heir and keeps the row lock until the delete waits on it
+	ctx := context.Background()
+	tx, err := w.super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	var pid int
+	if _, err := tx.Exec(ctx, `UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id = $2`, w.tenant, p); err != nil {
+		t.Fatalf("suspend the heir: %v", err)
+	}
+	if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- w.del(w.admin, OutcomeHandOn, p) }()
+	waitRowLockWaiters(t, w.invWorld, pid, 1, done)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit the suspension: %v", err)
+	}
+
+	if err := <-done; !errors.Is(err, ErrDeletionOutcomeChanged) {
+		t.Fatalf("err = %v, want ErrDeletionOutcomeChanged", err)
+	}
+	if got := imageOf(t, w.super, w.tenant, p); got.Status != "suspended" || got.Role != "preparer" {
+		t.Errorf("former heir = %+v, want suspended and still a preparer", got)
+	}
+	snap.requireUnchanged(t)
+
+	if err := w.del(w.admin, OutcomeHandOn, r); err != nil { // control: the heir the lock shows
+		t.Errorf("control: hand_on to the new heir: %v", err)
+	}
+}
+
+func TestStaffAccountDeletion_NoNameOrEmailOfTheMemberIsWritten(t *testing.T) {
+	w := newStaffAccWorld(t)
+	const leaverName, leaverMail, heirName, heirMail = "Zyx Quillfeather", "zyx.quillfeather@leak.test", "Wren Marlowe", "wren.marlowe@leak.test"
+	leaver := w.member(t, "preparer", "active", leaverName, joined(1))
+	heir := w.member(t, "reviewer", "active", heirName, joined(2))
+	for user, mail := range map[string]string{leaver: leaverMail, heir: heirMail} {
+		if _, err := w.super.Exec(context.Background(),
+			`UPDATE memberships SET email = $3 WHERE tenant_id = $1 AND user_id = $2`, w.tenant, user, mail); err != nil {
+			t.Fatalf("set the row email: %v", err)
+		}
+	}
+	if err := w.del(leaver, OutcomeLeave, ""); err != nil {
+		t.Fatalf("leave: %v", err)
+	}
+	if err := w.del(w.admin, OutcomeHandOn, heir); err != nil {
+		t.Fatalf("hand_on: %v", err)
+	}
+
+	var text string
+	for _, q := range []string{
+		`SELECT coalesce(string_agg(to_jsonb(s)::text, ' '), '') FROM public.staff_audit_log s WHERE tenant_id = $1`,
+		`SELECT coalesce(string_agg(to_jsonb(a)::text, ' '), '') FROM public.audit_log a WHERE tenant_id = $1`,
+	} {
+		var got string
+		if err := w.super.QueryRow(context.Background(), q, w.tenant).Scan(&got); err != nil {
+			t.Fatalf("read rows: %v", err)
+		}
+		text += got + " "
+	}
+	for _, id := range []string{leaver, heir, w.admin} { // the ids are the control: the rows exist and name the people by id
+		if !strings.Contains(text, id) {
+			t.Fatalf("no audit row names %s; rows: %s", id, text)
+		}
+	}
+	for _, needle := range []string{leaverName, "quillfeather", leaverMail, heirName, "marlowe", heirMail, "members.test", "Ada Obi"} {
+		if strings.Contains(strings.ToLower(text), strings.ToLower(needle)) {
+			t.Errorf("an audit row carries %q: %s", needle, text)
+		}
+	}
+}
+
+func TestStaffAccountDeletion_ARepeatedDeleteAndAReasonTheStoreCannotWriteChangeNothing(t *testing.T) {
+	w := newStaffAccWorld(t)
+	p := w.member(t, "preparer", "active", "Chidi Eze", joined(1))
+	if err := w.del(p, OutcomeLeave, ""); err != nil {
+		t.Fatalf("first delete: %v", err)
+	}
+	if err := w.del(p, OutcomeLeave, ""); !errors.Is(err, ErrMembershipNotFound) {
+		t.Errorf("repeat delete err = %v, want ErrMembershipNotFound", err)
+	}
+	if n := len(staffEvents(t, w.super, w.tenant)); n != 1 {
+		t.Errorf("staff rows after a repeat = %d, want 1", n)
+	}
+	if n := w.eraseJobs(t, p); n != 1 {
+		t.Errorf("%s jobs after a repeat = %d, want 1", evEraseByEmail, n)
+	}
+
+	// a NUL fails at the first staff row, after the heir's role change
+	q := w.member(t, "reviewer", "active", "Tunde Bello", joined(2))
+	before := w.snapshot(t, w.admin, q)
+	before.audit = w.auditTotal(t)
+	staffRows := len(staffEvents(t, w.super, w.tenant))
+	err := w.store.StaffDeleteAccount(w.ctx, w.tenant, w.admin, OutcomeHandOn, q, "a\x00b")
+	if err == nil || errors.Is(err, ErrDeletionOutcomeChanged) {
+		t.Fatalf("hand_on with a NUL reason err = %v, want a write failure", err)
+	}
+	for i, u := range before.users {
+		requireImage(t, w.invWorld, "member "+u, u, before.images[i])
+	}
+	if n := len(staffEvents(t, w.super, w.tenant)); n != staffRows {
+		t.Errorf("staff rows = %d, want %d", n, staffRows)
+	}
+	if n := w.auditTotal(t); n != before.audit {
+		t.Errorf("audit_log rows = %d, want %d", n, before.audit)
+	}
+	w.requireNoErase(t, w.admin, q)
+}
+
+// memberRoutes serves the two member routes over the real store behind the platform's staff gate.
+func memberRoutes(t *testing.T, store *Store) http.Handler {
+	t.Helper()
+	t.Setenv("SENTRY_DSN", "")
+	app, err := platform.New("tenancy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}/members/{user_id}/deletion", StaffAccountDeletionPreviewHandler(store.StaffPreviewAccountDeletion, slog.Default()))
+	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/members/{user_id}/deletion", StaffDeleteAccountHandler(store.StaffDeleteAccount, slog.Default()))
+	app.RequireGateway(staffGatewayToken)
+	return app.Handler()
+}
+
+func TestStaffAccountDeletionRoutes_RefuseEveryNonStaffCallerAndServeStaff(t *testing.T) {
+	w := newStaffAccWorld(t)
+	h := memberRoutes(t, w.store)
+	p := w.member(t, "preparer", "active", "Chidi Eze", joined(1))
+	path := "/v1/staff/tenants/" + w.tenant + "/members/" + p + "/deletion"
+	snap := w.snapshot(t, w.admin, p)
+
+	call := func(method string, c staffCaller, gateway bool) *httptest.ResponseRecorder {
+		body := ""
+		if method == http.MethodPost {
+			body = `{"outcome":"leave","reason":"customer asked by email"}`
+		}
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		if gateway {
+			r.Header.Set(platform.HeaderGatewayToken, staffGatewayToken)
+		}
+		r.Header.Set("X-User-ID", c.subject)
+		r.Header.Set("X-User-Role", "authenticated")
+		r.Header.Set("X-Tenant-ID", c.tenant)
+		if c.staff {
+			r.Header.Set("X-User-Staff", "true")
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec
+	}
+	refused := map[string]struct {
+		c       staffCaller
+		gateway bool
+		status  []int
+	}{
+		"the tenant's own admin":                    {staffCaller{subject: w.admin, tenant: w.tenant}, true, []int{403}},
+		"a house member without the staff claim":    {staffCaller{subject: w.staff}, true, []int{403}},
+		"the staff claim on a customer admin":       {staffCaller{subject: w.admin, tenant: w.tenant, staff: true}, true, []int{403}},
+		"the staff claim without the gateway token": {staffCaller{subject: w.staff, staff: true}, false, []int{401, 403}},
+	}
+	for name, tc := range refused {
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			rec := call(method, tc.c, tc.gateway)
+			if !slices.Contains(tc.status, rec.Code) {
+				t.Errorf("%s %s: got %d %q, want one of %v", method, name, rec.Code, rec.Body.String(), tc.status)
+			}
+		}
+	}
+	snap.requireUnchanged(t)
+
+	rec := call(http.MethodGet, staffCaller{subject: w.staff, staff: true}, true)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"outcome":"leave"`) {
+		t.Fatalf("staff control (GET) = %d %q, want 200 leave", rec.Code, rec.Body.String())
+	}
+	rec = call(http.MethodPost, staffCaller{subject: w.staff, staff: true}, true)
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"outcome":"leave"}` {
+		t.Fatalf("staff control (POST) = %d %q, want 200 {\"outcome\":\"leave\"}", rec.Code, rec.Body.String())
+	}
+	if got := imageOf(t, w.super, w.tenant, p); got.Status != "removed" {
+		t.Errorf("target after the staff POST = %+v, want removed", got)
 	}
 }

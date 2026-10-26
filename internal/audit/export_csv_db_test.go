@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -178,5 +179,32 @@ func TestExportCSV_AnEmptyLogWritesTheHeaderOnly(t *testing.T) {
 		if recs[0][i] != c {
 			t.Fatalf("header cell %d = %q, want %q", i, recs[0][i], c)
 		}
+	}
+}
+
+func TestExportCSV_CreatedAtIsUTCRFC3339NanoAndEventAndActorAreVerbatim(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+	ids := pageInsert(t, f, p, []pageRow{{event: "approval_policy.published", payload: "{}", ageSeconds: 90}})
+
+	var want time.Time
+	if err := db.WithinTenantTx(context.Background(), f.app, p.tenant, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(), `SELECT created_at FROM audit_log WHERE id = $1`, ids[0]).Scan(&want)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, recs := exportCSV(t, f, p)
+	if len(recs) != 2 {
+		t.Fatalf("records = %d, want 2", len(recs))
+	}
+	r := recs[1]
+	if got := r[exportCol(t, "created_at")]; got != want.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("created_at = %q, want %q", got, want.UTC().Format(time.RFC3339Nano))
+	}
+	if r[exportCol(t, "event")] != "approval_policy.published" || r[exportCol(t, "actor")] != "page-actor" {
+		t.Fatalf("event/actor cells = %q / %q", r[exportCol(t, "event")], r[exportCol(t, "actor")])
+	}
+	if r[exportCol(t, "id")] != strconv.FormatInt(ids[0], 10) {
+		t.Fatalf("id cell = %q", r[exportCol(t, "id")])
 	}
 }

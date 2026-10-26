@@ -82,6 +82,7 @@ export const UNITS: Unit[] = [
       'ops-console.spec.ts',
       'overview-register-approvals.spec.ts',
       'portfolio.spec.ts',
+      'staff-deletion.spec.ts',
       'workspace-deletion.spec.ts',
     ],
     tenants: {

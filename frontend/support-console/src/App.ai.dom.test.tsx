@@ -36,7 +36,7 @@ const totalsRead = vi.mocked(fetchAiTotals)
 const tenantsRead = vi.mocked(fetchStaffTenants)
 
 const tenant = (id: string, name: string): StaffTenant => ({
-  id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 1, invoice_count: 2, last_activity_at: null,
+  id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 1, invoice_count: 2, last_activity_at: null, deletion_due_at: null, deletion_purge_started_at: null,
 })
 const call = (id: string, over: Partial<AiCall> = {}): AiCall => ({
   id, tenant_id: 'T1', tenant_name: 'Okafor & Partners', created_at: '2026-10-14T09:12:03.123456Z', client: 'ai', purpose: 'document', model: 'google/gemini',

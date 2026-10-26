@@ -38,7 +38,7 @@ const redrive = vi.mocked(redriveJob)
 const cancel = vi.mocked(cancelJob)
 
 const tenant = (id: string, name: string): StaffTenant => ({
-  id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 1, invoice_count: 2, last_activity_at: null,
+  id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 1, invoice_count: 2, last_activity_at: null, deletion_due_at: null, deletion_purge_started_at: null,
 })
 const job = (id: string, over: Partial<StaffJob> = {}): StaffJob => ({
   id, tenant_id: 'T1', tenant_name: 'Okafor & Partners', invoice_id: `${id}i`, invoice_number: `INV-${id}`, invoice_status: 'failed',

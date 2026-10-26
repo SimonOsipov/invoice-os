@@ -20,7 +20,12 @@ type Props = {
   detailErrorText?: string
   onRetryDetail: () => void
   onViewJobs: (id: string) => void
+  onDeletion: (action: DeletionAction) => void
+  onDeleteAccount: (member: StaffMember) => void
+  actionBusy: boolean
 }
+
+export type DeletionAction = 'start' | 'cancel' | 'purge'
 
 type Tone = { bg: string; border: string; text: string }
 const MUTED: Tone = { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)' }
@@ -38,6 +43,9 @@ const STATUS_TONE: Record<StaffMember['status'], Tone> = { active: MUTED, invite
 export const ONE_LINE: CSSProperties = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
 export const CARD: CSSProperties = { border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden', background: 'var(--bg-2)' }
 const NOTE: CSSProperties = { padding: '14px 16px', fontSize: 13, color: 'var(--fg-3)' }
+const LOCKED: CSSProperties = { opacity: 0.45, cursor: 'not-allowed' }
+const ACTION_BTN: CSSProperties = { flex: 'none', height: 32, padding: '0 12px', fontSize: 12 }
+const DANGER: CSSProperties = { border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', color: 'var(--status-red-text)' }
 export const STAFF_ONLY = 'Your account is not ASComply staff.'
 
 const Chip = ({ tone, label }: { tone: Tone; label: string }) => (
@@ -108,7 +116,7 @@ function TenantList({ status, errorText, tenants, query, selectedId, onSelect, o
   )
 }
 
-function Detail({ status, detail, errorText, onRetry, onViewJobs }: { status: DetailStatus; detail: StaffTenantDetail | null; errorText?: string; onRetry: () => void; onViewJobs: (id: string) => void }) {
+function Detail({ status, detail, errorText, onRetry, onViewJobs, onDeletion, onDeleteAccount, actionBusy }: { status: DetailStatus; detail: StaffTenantDetail | null; errorText?: string; onRetry: () => void; onViewJobs: (id: string) => void; onDeletion: (action: DeletionAction) => void; onDeleteAccount: (member: StaffMember) => void; actionBusy: boolean }) {
   if (status === 'none') return <Note text="Select a tenant to see its members and recent invoices." />
   if (status === 'loading') return <Note text="Loading tenant…" />
   if (status === 'not-found') return <Note text="Tenant not found." />
@@ -116,6 +124,14 @@ function Detail({ status, detail, errorText, onRetry, onViewJobs }: { status: De
   if (status === 'error') return <Note text={errorText ?? 'Unavailable'} onRetry={onRetry} />
   if (!detail) return <Note text="Loading tenant…" />
   const { tenant: t, members, invoices } = detail
+  const scheduled = t.deletion_due_at !== null
+  const started = t.deletion_purge_started_at !== null
+  // A hidden action does not apply; a running request locks the rest.
+  const act = (label: string, action: DeletionAction, extra: CSSProperties = {}) => (
+    <button key={action} type="button" onClick={() => onDeletion(action)} disabled={actionBusy} className="ops-btn v2-btn v2-btn-ghost" style={{ ...ACTION_BTN, ...extra, ...(actionBusy ? LOCKED : {}) }}>
+      {label}
+    </button>
+  )
   return (
     <>
       <div style={{ padding: '20px 22px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'flex-start', gap: 16 }}>
@@ -133,10 +149,20 @@ function Detail({ status, detail, errorText, onRetry, onViewJobs }: { status: De
           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', ...ONE_LINE }}>
             {`${t.active_members} active members · ${t.invoice_count} invoices · ${activity(t)}`}
           </div>
+          {started ? (
+            <div className="mono" style={{ fontSize: 11, color: RED.text, ...ONE_LINE }}>{`Purge in progress since ${syncStamp(t.deletion_purge_started_at!)}`}</div>
+          ) : scheduled ? (
+            <div className="mono" style={{ fontSize: 11, color: AMBER.text, ...ONE_LINE }}>{`Scheduled for deletion on ${syncDate(t.deletion_due_at!)}`}</div>
+          ) : null}
         </div>
         <button type="button" onClick={() => onViewJobs(t.id)} className="ops-btn v2-btn v2-btn-ghost" style={{ flex: 'none', height: 32, padding: '0 12px', fontSize: 12 }}>
           View jobs
         </button>
+        <div data-testid="tenant-actions" style={{ flex: 'none', display: 'flex', gap: 8 }}>
+          {!scheduled && act('Delete workspace', 'start', DANGER)}
+          {scheduled && !started && act('Cancel deletion', 'cancel')}
+          {!started && act('Purge now', 'purge', DANGER)}
+        </div>
       </div>
 
       <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--line-1)' }}>
@@ -165,6 +191,11 @@ function Detail({ status, detail, errorText, onRetry, onViewJobs }: { status: De
                   {m.role.toUpperCase()}
                 </span>
                 <Chip tone={STATUS_TONE[m.status] ?? MUTED} label={m.status.toUpperCase()} />
+                {!scheduled && m.status !== 'removed' && (
+                  <button type="button" onClick={() => onDeleteAccount(m)} disabled={actionBusy} className="ops-btn v2-btn v2-btn-ghost" style={{ flex: 'none', height: 26, padding: '0 10px', fontSize: 11, ...DANGER, ...(actionBusy ? LOCKED : {}) }}>
+                    Delete account
+                  </button>
+                )}
               </div>
             )
           })}
@@ -194,7 +225,7 @@ function Detail({ status, detail, errorText, onRetry, onViewJobs }: { status: De
   )
 }
 
-export function Tenants({ status, errorText, tenants, query, onQueryChange, selectedId, onSelect, onRetry, detailStatus, detail, detailErrorText, onRetryDetail, onViewJobs }: Props) {
+export function Tenants({ status, errorText, tenants, query, onQueryChange, selectedId, onSelect, onRetry, detailStatus, detail, detailErrorText, onRetryDetail, onViewJobs, onDeletion, onDeleteAccount, actionBusy }: Props) {
   return (
     <div className="ops-screen-pad">
       <div style={{ marginBottom: 20 }}>
@@ -224,7 +255,7 @@ export function Tenants({ status, errorText, tenants, query, onQueryChange, sele
         </div>
 
         <div style={{ ...CARD, minWidth: 0 }}>
-          <Detail status={detailStatus} detail={detail} errorText={detailErrorText} onRetry={onRetryDetail} onViewJobs={onViewJobs} />
+          <Detail status={detailStatus} detail={detail} errorText={detailErrorText} onRetry={onRetryDetail} onViewJobs={onViewJobs} onDeletion={onDeletion} onDeleteAccount={onDeleteAccount} actionBusy={actionBusy} />
         </div>
       </div>
     </div>

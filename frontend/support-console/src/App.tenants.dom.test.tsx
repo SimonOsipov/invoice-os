@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { ApiError } from '@invoice-os/api-client'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -8,7 +8,7 @@ import App from './App'
 import { expireSession } from './auth'
 import { fetchJobs } from './jobsApi'
 import { fetchCodeListSummary, fetchRules, fetchVersions } from './rulesApi'
-import { fetchStaffTenant, fetchStaffTenants, type StaffTenant, type StaffTenantDetail } from './tenantsApi'
+import { cancelTenantDeletion, deleteMemberAccount, fetchStaffTenant, fetchStaffTenants, previewMemberDeletion, purgeTenant, startTenantDeletion, type StaffTenant, type StaffTenantDetail } from './tenantsApi'
 
 vi.mock('@invoice-os/console-session', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
@@ -38,6 +38,11 @@ vi.mock('./tenantsApi', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./tenantsApi')>()),
   fetchStaffTenants: vi.fn(),
   fetchStaffTenant: vi.fn(),
+  startTenantDeletion: vi.fn(),
+  cancelTenantDeletion: vi.fn(),
+  purgeTenant: vi.fn(),
+  previewMemberDeletion: vi.fn(),
+  deleteMemberAccount: vi.fn(),
 }))
 
 const rulesRead = vi.mocked(fetchRules)
@@ -46,9 +51,14 @@ const summary = vi.mocked(fetchCodeListSummary)
 const list = vi.mocked(fetchStaffTenants)
 const one = vi.mocked(fetchStaffTenant)
 const jobsRead = vi.mocked(fetchJobs)
+const start = vi.mocked(startTenantDeletion)
+const cancel = vi.mocked(cancelTenantDeletion)
+const purge = vi.mocked(purgeTenant)
+const preview = vi.mocked(previewMemberDeletion)
+const delAccount = vi.mocked(deleteMemberAccount)
 
 const tenant = (id: string, name: string): StaffTenant => ({
-  id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 1, invoice_count: 2, last_activity_at: null,
+  id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 1, invoice_count: 2, last_activity_at: null, deletion_due_at: null, deletion_purge_started_at: null,
 })
 const X = tenant('X', 'Okafor & Partners')
 const Y = tenant('Y', 'Yaba Freight')
@@ -79,6 +89,24 @@ const openTenants = async () => {
 }
 const rowOf = (id: string) => document.querySelector(`[data-tenant-id="${id}"]`) as HTMLButtonElement
 const waitRow = async (id: string) => waitFor(() => expect(rowOf(id)).toBeTruthy())
+
+const DUE = '2026-11-25T10:00:00Z'
+const STARTED = '2026-10-26T10:00:00Z'
+const SCHEDULED = { ...X, deletion_due_at: DUE }
+const PURGING = { ...X, deletion_due_at: DUE, deletion_purge_started_at: STARTED }
+const openX = async (t: StaffTenant = X, names = ['Ada One', 'Bola Two', 'Chi Three']) => {
+  list.mockResolvedValue([t, Y, H])
+  one.mockImplementation(async (id) => (id === 'X' ? detail(t, names) : detail(Y, ['Yemi Only'])))
+  render(<App />)
+  await openTenants()
+  await waitRow('X')
+  fireEvent.click(rowOf('X'))
+  await screen.findByText(names[0])
+}
+const btn = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement
+const dialog = () => screen.getByRole('dialog')
+const typeReason = (v: string) => fireEvent.change(within(dialog()).getByLabelText('Reason'), { target: { value: v } })
+const headerButtons = () => Array.from((screen.getByTestId('tenant-actions').parentElement as HTMLElement).querySelectorAll('button')).map((b) => b.textContent)
 
 describe('Console tenants wiring', () => {
   it('Tenants opens from the nav and reads the list once', async () => {
@@ -319,7 +347,7 @@ describe('Console tenants wiring', () => {
     expect(screen.getByText('sue@x.test')).toBeTruthy()
   })
 
-  it('a tenant with no members and no invoices says so and offers only View jobs', async () => {
+  it('a tenant with no members and no invoices says so and offers View jobs, Delete workspace and Purge now', async () => {
     one.mockResolvedValueOnce({ tenant: X, members: [], invoices: [] })
     render(<App />)
     await openTenants()
@@ -329,8 +357,155 @@ describe('Console tenants wiring', () => {
     expect(screen.getByText('No invoices yet.')).toBeTruthy()
     const card = screen.getByRole('heading', { level: 2 }).closest('div[style*="overflow"]') as HTMLElement
     const buttons = Array.from(card.querySelectorAll('button'))
-    expect(buttons).toHaveLength(1)
-    expect(buttons[0].textContent).toBe('View jobs')
+    expect(buttons.map((b) => b.textContent)).toEqual(['View jobs', 'Delete workspace', 'Purge now'])
+  })
+
+  it('tenant detail: a scheduled tenant shows its deletion date', async () => {
+    await openX(SCHEDULED)
+    expect(screen.getByText('Scheduled for deletion on 2026-11-25')).toBeTruthy()
+    expect(screen.queryByText(/Purge in progress/)).toBeNull()
+    cleanup()
+    await openX(PURGING)
+    expect(screen.getByText('Purge in progress since 2026-10-26 10:00 UTC')).toBeTruthy()
+    expect(screen.queryByText(/Scheduled for deletion/)).toBeNull()
+    cleanup()
+    await openX(X)
+    expect(screen.queryByText(/Scheduled for deletion|Purge in progress/)).toBeNull()
+  })
+
+  it('tenant detail: the actions follow the deletion state', async () => {
+    const cases: [StaffTenant, string[], number][] = [
+      [X, ['View jobs', 'Delete workspace', 'Purge now'], 3],
+      [SCHEDULED, ['View jobs', 'Cancel deletion', 'Purge now'], 0],
+      [PURGING, ['View jobs'], 0],
+    ]
+    for (const [t, names, rows] of cases) {
+      await openX(t)
+      expect(headerButtons(), t.deletion_due_at ?? 'unscheduled').toEqual(names)
+      expect(screen.queryAllByRole('button', { name: 'Delete account' }), `${t.deletion_due_at} rows`).toHaveLength(rows)
+      cleanup()
+    }
+    one.mockImplementation(async () => ({ tenant: X, members: [{ user_id: 'r1', role: 'preparer', status: 'removed', display_name: null, email: null }, { user_id: 'a1', role: 'admin', status: 'active', display_name: 'Ada One', email: null }], invoices: [] }))
+    render(<App />)
+    await openTenants()
+    await waitRow('X')
+    fireEvent.click(rowOf('X'))
+    await screen.findByText('Ada One')
+    expect(screen.getAllByRole('button', { name: 'Delete account' })).toHaveLength(1)
+  })
+
+  it('purge now: the confirm waits for the exact name and a reason', async () => {
+    await openX()
+    fireEvent.click(btn('Purge now'))
+    const confirm = () => within(dialog()).getByRole('button', { name: 'Purge now' }) as HTMLButtonElement
+    expect(confirm().disabled).toBe(true)
+    const name = within(dialog()).getByLabelText('Workspace name')
+    fireEvent.change(name, { target: { value: 'okafor & partners' } })
+    typeReason('')
+    expect(confirm().disabled).toBe(true)
+    fireEvent.change(name, { target: { value: 'Okafor & Partners' } })
+    expect(confirm().disabled).toBe(true)
+    typeReason('  customer wrote in  ')
+    expect(confirm().disabled).toBe(false)
+    fireEvent.change(name, { target: { value: 'Okafor & Partners ' } })
+    expect(confirm().disabled).toBe(true)
+    fireEvent.change(name, { target: { value: 'Okafor & Partners' } })
+    purge.mockResolvedValue({ deletion_purge_started_at: STARTED })
+    fireEvent.click(confirm())
+    await waitFor(() => expect(purge).toHaveBeenCalledWith('X', 'Okafor & Partners', 'customer wrote in'))
+    await screen.findByText('Purge started')
+  })
+
+  it('start deletion: posts the reason, toasts and re-reads', async () => {
+    await openX()
+    start.mockResolvedValue({ deletion_due_at: DUE })
+    fireEvent.click(btn('Delete workspace'))
+    expect(within(dialog()).getByText('Start deleting Okafor & Partners?')).toBeTruthy()
+    expect(within(dialog()).queryByLabelText('Workspace name')).toBeNull()
+    const confirm = within(dialog()).getByRole('button', { name: 'Start deletion' }) as HTMLButtonElement
+    expect(confirm.disabled).toBe(true)
+    typeReason(' by email ')
+    const lists = list.mock.calls.length
+    const reads = one.mock.calls.length
+    fireEvent.click(confirm)
+    await waitFor(() => expect(start).toHaveBeenCalledWith('X', 'by email'))
+    await screen.findByText('Deletion scheduled')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    await waitFor(() => {
+      expect(list.mock.calls.length).toBe(lists + 1)
+      expect(one.mock.calls.length).toBe(reads + 1)
+    })
+  })
+
+  it('a 409 shows the server sentence and re-reads', async () => {
+    await openX(SCHEDULED)
+    cancel.mockRejectedValue(new ApiError('http', 'this workspace is already being deleted', 409))
+    fireEvent.click(btn('Cancel deletion'))
+    typeReason('changed mind')
+    const reads = one.mock.calls.length
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Cancel deletion' }))
+    await screen.findByText('this workspace is already being deleted')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    await waitFor(() => expect(one.mock.calls.length).toBe(reads + 1))
+    expect(cancel).toHaveBeenCalledWith('X', 'changed mind')
+  })
+
+  it('a 500 keeps the modal open and a 401 expires the session', async () => {
+    await openX()
+    start.mockRejectedValueOnce(new ApiError('http', 'boom', 500))
+    fireEvent.click(btn('Delete workspace'))
+    typeReason('r')
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Start deletion' }))
+    await screen.findByText('boom')
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    start.mockRejectedValueOnce(new ApiError('http', 'expired', 401))
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Start deletion' }))
+    await waitFor(() => expect(expireSession).toHaveBeenCalledTimes(1))
+  })
+
+  it('delete account: the modal names the heir, and the last member gets no confirm', async () => {
+    await openX()
+    preview.mockResolvedValue({ outcome: 'hand_on', heir_name: 'Bola', heir_user_id: 'X1' })
+    delAccount.mockResolvedValue({ outcome: 'hand_on' })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete account' })[0])
+    await within(dialog()).findByText(/Admin moves to Bola/)
+    expect(preview).toHaveBeenCalledWith('X', 'X0')
+    expect(within(dialog()).getByText("Delete Ada One's account?")).toBeTruthy()
+    typeReason('asked')
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Delete account' }))
+    await waitFor(() => expect(delAccount).toHaveBeenCalledWith('X', 'X0', { outcome: 'hand_on', heir_user_id: 'X1', reason: 'asked' }))
+    await screen.findByText('Account deleted')
+    preview.mockResolvedValue({ outcome: 'delete_workspace', heir_name: null, heir_user_id: null })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete account' })[0])
+    await within(dialog()).findByText('Ada One is the last active member. Start a workspace deletion instead.')
+    expect(within(dialog()).queryByRole('button', { name: 'Delete account' })).toBeNull()
+    expect(within(dialog()).getByRole('button', { name: 'Back' })).toBeTruthy()
+  })
+
+  it('delete account: the confirm waits for the preview', async () => {
+    await openX()
+    preview.mockReturnValue(new Promise(() => {}))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete account' })[0])
+    expect(within(dialog()).getByText('Reading…')).toBeTruthy()
+    typeReason('r')
+    expect((within(dialog()).getByRole('button', { name: 'Delete account' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('an action in flight disables every action', async () => {
+    await openX()
+    let release!: (v: { deletion_due_at: string }) => void
+    start.mockReturnValue(new Promise((res) => (release = res)))
+    fireEvent.click(btn('Delete workspace'))
+    typeReason('r')
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Start deletion' }))
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1))
+    expect((within(dialog()).getByRole('button', { name: 'Start deletion' }) as HTMLButtonElement).disabled).toBe(true)
+    const behind = Array.from((screen.getByTestId('tenant-actions').parentElement as HTMLElement).querySelectorAll('button')).filter((b) => b.textContent !== 'View jobs')
+    expect(behind.length).toBe(2)
+    expect(behind.every((b) => b.disabled)).toBe(true)
+    expect((screen.getAllByRole('button', { name: 'Delete account' }) as HTMLButtonElement[]).every((b) => b.disabled)).toBe(true)
+    release({ deletion_due_at: DUE })
+    await screen.findByText('Deletion scheduled')
   })
 
   it('View jobs opens Submissions filtered to the tenant', async () => {

@@ -154,6 +154,13 @@ describe('WorkspaceDeletionNotice export', () => {
     await waitFor(() => expect(screen.getByTestId('deletion-notice-export-status').textContent).toBe(sentence))
     expect(screen.getByTestId('deletion-notice-export-status').style.color).toBe('var(--status-red-text)')
 
+    let settle: () => void = () => {}
+    startExport.mockReturnValueOnce(new Promise<void>((r) => (settle = r)))
+    fireEvent.click(exportBtn())
+    await waitFor(() => expect(exportBtn().disabled).toBe(true))
+    await act(async () => settle())
+    await waitFor(() => expect(exportBtn().disabled).toBe(false))
+
     fireEvent.click(screen.getByTestId('deletion-notice-cancel'))
     expect(exportBtn().disabled).toBe(true)
   })

@@ -846,7 +846,7 @@ func TestStaffPurge_ClosesEveryCancel(t *testing.T) {
 		t.Fatal("setup: no due time after the purge")
 	}
 
-	if err := w.store.CancelWorkspaceDeletion(w.adminCtx()); !errors.Is(err, ErrDeletionUnderway) {
+	if _, err := w.store.CancelWorkspaceDeletion(w.adminCtx()); !errors.Is(err, ErrDeletionUnderway) {
 		t.Errorf("an admin's cancel: err = %v, want ErrDeletionUnderway", err)
 	}
 	if err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); !errors.Is(err, ErrDeletionUnderway) {
@@ -1165,7 +1165,7 @@ func TestStaffPurge_RacingCancelsLeaveOneStartedPurge(t *testing.T) {
 				}()
 			}
 			run("purge", func() error { _, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason); return err })
-			run("admin cancel", func() error { return w.store.CancelWorkspaceDeletion(w.adminCtx()) })
+			run("admin cancel", func() error { _, err := w.store.CancelWorkspaceDeletion(w.adminCtx()); return err })
 			run("staff cancel", func() error { return w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText) })
 			close(gate)
 			wg.Wait()

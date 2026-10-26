@@ -1077,6 +1077,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/staff/jobs/{id}/redrive":                    {verdict: scExempt, reason: "staff route: staff check in platform.App; the job's tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
 	"POST /v1/staff/tenants/{id}/deletion":                {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
 	"POST /v1/staff/tenants/{id}/deletion/cancel":         {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
+	"POST /v1/staff/tenants/{id}/deletion/purge":          {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
 	"POST /v1/staff/jobs/{id}/cancel":                     {verdict: scExempt, reason: "staff route: staff check in platform.App; the job's tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
 	"GET /v1/staff/rules":                                 {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"GET /v1/staff/rule-versions":                         {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},

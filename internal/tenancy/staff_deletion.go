@@ -18,6 +18,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/workspacepurge/purgeargs"
 )
 
 const (
@@ -236,14 +237,76 @@ func StaffCancelDeletionHandler(cancel func(ctx context.Context, tenantID, reaso
 	}
 }
 
-// StaffPurgeWorkspace is a signature stub until DEL-09-04 is implemented.
+// StaffPurgeWorkspace starts the purge of the path tenant now, scheduling it first when it is not.
+// The staff row and the workspace_purge job commit with the marker.
 func (s *Store) StaffPurgeWorkspace(ctx context.Context, tenantID, typedName, reason string) (time.Time, error) {
-	return time.Time{}, errors.New("tenancy: StaffPurgeWorkspace not implemented")
+	if s.eraseQueue == nil {
+		return time.Time{}, errNoEraseQueue
+	}
+	var startedAt time.Time
+	err := s.withinStaffTenant(ctx, tenantID, pgx.TxOptions{}, func(tx pgx.Tx, tenant, actor uuid.UUID) error {
+		var name string
+		var scheduled, started bool
+		err := tx.QueryRow(ctx, `SELECT name, deletion_scheduled_at IS NOT NULL, deletion_purge_started_at IS NOT NULL FROM tenants FOR UPDATE`).
+			Scan(&name, &scheduled, &started)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrTenantNotFound // purged after the staff check
+		}
+		if err != nil {
+			return err
+		}
+		if typedName != name {
+			return ErrWorkspaceNameMismatch
+		}
+		if started {
+			return ErrDeletionUnderway
+		}
+		if !scheduled {
+			if _, err := scheduleTenantDeletion(ctx, tx, actor); err != nil {
+				return err
+			}
+		}
+		// The staff decision is final: the marker closes every cancel before the worker starts.
+		if err := tx.QueryRow(ctx, `UPDATE tenants SET deletion_purge_started_at = now() RETURNING deletion_purge_started_at`).Scan(&startedAt); err != nil {
+			return err
+		}
+		if err := audit.RecordStaff(ctx, tx, audit.StaffEvent{
+			Actor: actor, Event: "workspace.purge_started", TenantID: tenant,
+			Payload: map[string]any{"reason": reason},
+		}); err != nil {
+			return err
+		}
+		_, err = s.eraseQueue.InsertTx(ctx, tx, purgeargs.Args{TenantID: tenant.String()}, nil)
+		return err
+	})
+	if err != nil {
+		return time.Time{}, err
+	}
+	return startedAt, nil
 }
 
-// StaffPurgeHandler is a signature stub until DEL-09-04 is implemented.
+type staffPurgeRequest struct {
+	WorkspaceName string `json:"workspace_name"`
+	Reason        string `json:"reason"`
+}
+
+// StaffPurgeHandler repeats no staff check: auth.RequireStaff runs before it.
 func StaffPurgeHandler(purge func(ctx context.Context, tenantID, typedName, reason string) (time.Time, error), log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+		var req staffPurgeRequest
+		if !readStaffBody(w, r, &req) {
+			return
+		}
+		reason, ok := staffReason(req.Reason)
+		if !ok {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("reason must be 1 to %d characters", maxStaffReasonRunes))
+			return
+		}
+		at, err := purge(r.Context(), r.PathValue("id"), req.WorkspaceName, reason)
+		if err != nil {
+			writeStaffDeletionError(w, log, "tenancy: staff purge response", err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"deletion_purge_started_at": at.UTC().Format(time.RFC3339)})
 	}
 }

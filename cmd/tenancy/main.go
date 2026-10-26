@@ -66,6 +66,7 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}", tenancy.StaffTenantHandler(store.StaffTenant, app.Logger))
 	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/deletion", tenancy.StaffScheduleDeletionHandler(store.StaffScheduleWorkspaceDeletion, app.Logger))
 	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/deletion/cancel", tenancy.StaffCancelDeletionHandler(store.StaffCancelWorkspaceDeletion, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/deletion/purge", tenancy.StaffPurgeHandler(store.StaffPurgeWorkspace, app.Logger))
 
 	// GET /v1/memberships — the caller's tenant's membership list, resolved under
 	// RLS. Reached via the gateway as /api/tenancy/v1/memberships.

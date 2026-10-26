@@ -16,7 +16,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// DeletionNotifier schedules a workspace deletion, then mails the other active admins a cancel link.
+// DeletionNotifier mails the other active admins.
 type DeletionNotifier struct {
 	Store  *Store
 	Sender accountmail.Sender

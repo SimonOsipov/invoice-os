@@ -424,3 +424,25 @@ func TestEraseByID_ACopyWrittenAfterTheFirstSweepFailsTheAttemptAndIsSwept(t *te
 		t.Errorf("retry with nothing left: %v, want nil", err)
 	}
 }
+
+func TestEraseByID_AFailedFinalSweepFailsTheAttemptAndLogsTheStepOnly(t *testing.T) {
+	r := newEraseRig(t)
+	r.seedCopies(r.uid, r.mail)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// The account call succeeds, then the context dies before the final sweep.
+	r.acct.fn = func(int, string) error { cancel(); return nil }
+
+	err := r.byIDWorker().Work(ctx, &river.Job[EraseByIDArgs]{Args: EraseByIDArgs{UserID: r.uid}})
+	if err == nil {
+		t.Fatal("Work with a failed final sweep = nil, want an error so River retries")
+	}
+	if len(r.acct.got()) != 1 {
+		t.Fatalf("control: account deletes = %v, want 1", r.acct.got())
+	}
+	warns := r.sink.at(slog.LevelWarn)
+	if len(warns) != 1 || !strings.HasSuffix(warns[0].Text, "step="+stepFinal+" status=0") {
+		t.Errorf("WARN lines = %+v, want one with step=%s status=0", warns, stepFinal)
+	}
+	qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.uid, r.mail)
+}

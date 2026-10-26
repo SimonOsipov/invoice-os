@@ -87,4 +87,17 @@ describe('WorkspaceDeletionNotice reads', () => {
     await act(async () => c.pending[1].resolve(me('2026-11-24T12:00:00Z', 'Newer Co')))
     expect(screen.getByTestId('workspace-deletion-notice').textContent).toContain('Newer Co')
   })
+
+  it('Retry after the authedFetch changed reads through the newest fetch', async () => {
+    const a = controlled()
+    const view = mount(a.fetch)
+    await act(async () => a.pending[0].reject(new ApiError('network', 'down', 0, null)))
+    const b = controlled()
+    view.rerender(
+      <WorkspaceDeletionNotice authedFetch={b.fetch} base="" known={KNOWN} onUnlocked={() => {}} onSignOut={() => {}} />,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: /retry/i }))
+    expect(b.fetch).toHaveBeenCalledTimes(1)
+    expect(a.fetch).toHaveBeenCalledTimes(1)
+  })
 })

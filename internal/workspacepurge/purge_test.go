@@ -1483,6 +1483,9 @@ func TestRunOnce_StopsOnADoneContext(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("RunOnce = %v, want an error wrapping context.Canceled", err)
 	}
+	if err != nil && strings.Contains(err.Error(), second) {
+		t.Errorf("RunOnce = %v, names the second tenant it should not have started", err)
+	}
 	if len(listed) == 0 || listed[0] != first {
 		t.Fatalf("first List was for %v, want the earliest-due tenant %s", listed, first)
 	}
@@ -1505,6 +1508,9 @@ func TestRunOnce_StopsOnADoneContext(t *testing.T) {
 func TestDueTenants_ReadsOnlyDueTenants(t *testing.T) {
 	r := newRig(t)
 	a, later, notYet, unscheduled := r.tenant(), r.tenant(), r.tenant(), r.tenant()
+	if a < later { // the earlier-due tenant has the larger id, so ordering by id alone fails
+		a, later = later, a
+	}
 	started, future := r.start(r.tenant()), r.tenant()
 	r.scheduleAt(a, "now() - interval '45 days'")
 	r.scheduleAt(later, "now() - interval '31 days'")

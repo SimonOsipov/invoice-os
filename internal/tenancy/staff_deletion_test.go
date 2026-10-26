@@ -591,3 +591,32 @@ func TestStaffDeletion_ACancelTwiceWritesOneRowAndARestartSchedulesAgain(t *test
 		t.Error("db.WorkspaceLocked = false after the restart, want true")
 	}
 }
+
+func TestStaffDeletion_ConcurrentCancelsWriteOneRowPerSchedule(t *testing.T) {
+	w := newStaffDelWorld(t)
+	const rounds, callers = 10, 8
+	for round := 1; round <= rounds; round++ {
+		lockByOwner(t, w.super, w.tenant, w.staff)
+		errs := make([]error, callers)
+		var wg sync.WaitGroup
+		gate := make(chan struct{})
+		for i := range errs {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-gate
+				errs[i] = w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
+			}()
+		}
+		close(gate)
+		wg.Wait()
+		for _, err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: a concurrent cancel failed: %v", round, err)
+			}
+		}
+		if n := len(staffRowsOf(t, w.super, w.tenant, evCancelled)); n != round {
+			t.Fatalf("round %d: staff_audit_log %s rows = %d, want %d (one per schedule)", round, evCancelled, n, round)
+		}
+	}
+}

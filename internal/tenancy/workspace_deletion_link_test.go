@@ -301,6 +301,29 @@ func TestDeletionLink_AHeldLinkAfterAnotherAdminsCancelIsANoOp(t *testing.T) {
 	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 1 {
 		t.Errorf("%s rows = %d, want 1 (C's only)", evCancelled, n)
 	}
+
+	// The no-op comes after the caller gates: a refused caller is refused on an unscheduled workspace too.
+	refused := []struct {
+		name string
+		ctx  context.Context
+		want error
+	}{
+		{"an active preparer", w.as(w.preparer), ErrCancelDeletionNotPermitted},
+		{"a suspended admin", w.as(w.suspended), db.ErrNotActiveMember},
+		{"no identity at all", context.Background(), db.ErrNoTenant},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			for route, cancel := range map[string]func() error{
+				"link":  func() error { _, err := w.store.CancelWorkspaceDeletionByLink(tc.ctx, held); return err },
+				"plain": func() error { _, err := w.store.CancelWorkspaceDeletion(tc.ctx); return err },
+			} {
+				if err := cancel(); !errors.Is(err, tc.want) {
+					t.Errorf("%s route: err = %v, want %v", route, err, tc.want)
+				}
+			}
+		})
+	}
 }
 
 func TestDeletionLink_ALinkOfAnEarlierDeletionIsVoid(t *testing.T) {

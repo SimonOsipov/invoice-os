@@ -735,6 +735,8 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/tenancy/invite_registration.go", fn: "InvitationPendingForEmail"},     // a gateway-token route; there is no caller to gate
 	{file: "internal/tenancy/invite_registration.go", fn: "ClaimInvitationRegistration"},   // a gateway-token route; the token names the invite and there is no caller to gate
 	{file: "internal/tenancy/workspace_deletion.go", fn: "CancelWorkspaceDeletion"},        // cancels a locked workspace, which the seam refuses; the method gates the active admin itself
+	{file: "internal/archive/workspace.go", fn: "recordExportFailed"},                      // audits a failed export of a possibly locked workspace in its own short tx
+	{file: "internal/archive/workspace.go", fn: "AssembleWorkspace"},                       // exports a locked workspace, which the seam refuses for a read-write tx; the method gates the active admin itself
 	{file: "internal/tenancy/invite_registration.go", fn: "ReleaseInvitationRegistration"}, // a gateway-token route; the token names the invite and there is no caller to gate
 	{file: "internal/aicalls/recorder.go", fn: "write"},                                    // a background usage row written after the AI call returned; the tenant is the identity the call ran under, and no request context is left to gate
 	{file: "internal/archive/staff.go", fn: "withinStaffTenant"},                           // staff read: the path tenant is checked by a staff_read_ function in db.WithinStaffTx; READ ONLY tenant tx
@@ -1060,6 +1062,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/memberships/{user_id}/remove":               {verdict: scCovered},
 	"POST /v1/workspace/deletion":                         {verdict: scCovered},
 	"POST /v1/workspace/deletion/cancel":                  {verdict: scExempt, reason: "writes a locked workspace; Store.CancelWorkspaceDeletion gates the active admin itself in WithinTenantTx"},
+	"GET /v1/workspace/export/preflight":                  {verdict: scCovered},
+	"GET /v1/workspace/export":                            {verdict: scExempt, reason: "admin export of a locked workspace; WorkspaceStore.AssembleWorkspace gates the active admin itself in WithinTenantTxOpts and writes workspace.exported"},
 	"PUT /v1/memberships/{user_id}/clients":               {verdict: scCovered},
 	"GET /v1/staff/health":                                {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/metrics":                               {verdict: scExempt, reason: "staff route: staff check in platform.App and in staff_read_health_samples; reads Google metrics, no tenant rows"},

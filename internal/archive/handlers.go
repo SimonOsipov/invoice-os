@@ -253,3 +253,14 @@ func StaffDownloadHandler(assemble staffAssembleFn, log *slog.Logger) http.Handl
 		writeStaffErr(w, r, log, "archive: staff assemble", err)
 	}
 }
+
+// STUB: DEL-06-02 replaces both handlers.
+type workspaceAssembleFn func(ctx context.Context, w io.Writer, onStart func(filename string)) error
+
+func WorkspaceExportHandler(assemble workspaceAssembleFn, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotImplemented) }
+}
+
+func WorkspaceExportPreflightHandler(check func(context.Context) error, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotImplemented) }
+}

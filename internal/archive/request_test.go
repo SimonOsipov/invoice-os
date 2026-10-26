@@ -175,6 +175,7 @@ func TestArchivePackage_ImportsOnlyStdlibAndUUID(t *testing.T) {
 		"github.com/SimonOsipov/invoice-os/internal/actor":          true,
 		"github.com/SimonOsipov/invoice-os/internal/submission":     true,
 		"github.com/SimonOsipov/invoice-os/internal/audit":          true,
+		"github.com/SimonOsipov/invoice-os/internal/platform":       true,
 		"github.com/SimonOsipov/invoice-os/internal/platform/auth":  true,
 		"github.com/SimonOsipov/invoice-os/internal/platform/db":    true,
 		"github.com/SimonOsipov/invoice-os/internal/platform/queue": true,

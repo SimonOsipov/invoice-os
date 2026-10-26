@@ -3,7 +3,9 @@ package db_test
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -66,6 +68,46 @@ func TestLeader_OneInstanceRunsEachTask(t *testing.T) {
 	ldStop(t, b)
 	if err := a.Lead(task, fnA)(ctx); err != nil || *runsA != 4 {
 		t.Fatalf("a after b stopped: runs=%d err=%v, want 4", *runsA, err)
+	}
+}
+
+// BUG-52: a Lead that misses the lock must retry soon, not wait a full task interval.
+func TestLeader_MissedLockRetriesAfterTheHolderStops(t *testing.T) {
+	dsn := requireHarness(t).appURL
+	task := "test-" + uuid.NewString()
+	a, b := db.NewLeader(dsn), db.NewLeader(dsn)
+	t.Cleanup(func() { ldStop(t, a); ldStop(t, b) })
+
+	fnA, runsA := ldRuns()
+	if err := a.Lead(task, fnA)(context.Background()); err != nil || *runsA != 1 {
+		t.Fatalf("a: runs=%d err=%v, want 1 run: a takes the lock", *runsA, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	var ran atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = b.Lead(task, func(context.Context) error { ran.Store(true); return nil })(ctx)
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+
+	time.Sleep(time.Second)
+	if ran.Load() {
+		t.Fatal("b ran while a held the lock")
+	}
+	ldStop(t, a)
+	deadline := time.After(15 * time.Second)
+	for !ran.Load() {
+		select {
+		case <-done:
+			if !ran.Load() {
+				t.Fatal("b's Lead returned without running its task after a stopped: a missed lock is never retried")
+			}
+		case <-deadline:
+			t.Fatal("b did not run within 15s of a stopping: a missed lock is not retried soon")
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 }
 

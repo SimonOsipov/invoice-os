@@ -220,6 +220,7 @@ func mockIssuerStateFaults(filename string, src any) []string {
 		`app.Mux.Handle("OPTIONS /auth/login", login)`,
 		`app.Mux.Handle("POST /auth/mock/member", mockMemberRoute(os.Getenv("DATABASE_MIGRATION_URL"), app.Logger))`,
 		`app.Mux.Handle("POST /auth/mock/invitation-token", mockInvitationTokenRoute(os.Getenv("DATABASE_MIGRATION_URL"), app.Logger))`,
+		`app.Mux.Handle("POST /auth/mock/deletion-link-token", mockDeletionLinkTokenRoute(os.Getenv("DATABASE_MIGRATION_URL"), app.Logger))`,
 	} {
 		if !slices.Contains(handled, want) {
 			faults = append(faults, fmt.Sprintf("the \"on\" branch does not run %s", want))
@@ -256,6 +257,7 @@ func main() {
 		app.Mux.Handle("OPTIONS /auth/login", login)
 		app.Mux.Handle("POST /auth/mock/member", mockMemberRoute(os.Getenv("DATABASE_MIGRATION_URL"), app.Logger))
 		app.Mux.Handle("POST /auth/mock/invitation-token", mockInvitationTokenRoute(os.Getenv("DATABASE_MIGRATION_URL"), app.Logger))
+		app.Mux.Handle("POST /auth/mock/deletion-link-token", mockDeletionLinkTokenRoute(os.Getenv("DATABASE_MIGRATION_URL"), app.Logger))
 		platform.MockIssuer = "on"
 	}
 }
@@ -269,6 +271,7 @@ func main() {
 		{"a mint route missing from the branch", "\t\tapp.Mux.Handle(\"POST /auth/login\", login)\n", ""},
 		{"the member route missing from the branch", "\t\tapp.Mux.Handle(\"POST /auth/mock/member\", mockMemberRoute(os.Getenv(\"DATABASE_MIGRATION_URL\"), app.Logger))\n", ""},
 		{"the invitation-token route missing from the branch", "\t\tapp.Mux.Handle(\"POST /auth/mock/invitation-token\", mockInvitationTokenRoute(os.Getenv(\"DATABASE_MIGRATION_URL\"), app.Logger))\n", ""},
+		{"the deletion-link-token route missing from the branch", "\t\tapp.Mux.Handle(\"POST /auth/mock/deletion-link-token\", mockDeletionLinkTokenRoute(os.Getenv(\"DATABASE_MIGRATION_URL\"), app.Logger))\n", ""},
 		{"a retired staff route registered", "\t\tplatform.MockIssuer = \"on\"\n", "\t\tapp.Mux.Handle(\"POST /auth/mock/staff\", mockMemberRoute(os.Getenv(\"DATABASE_MIGRATION_URL\"), app.Logger))\n\t\tplatform.MockIssuer = \"on\"\n"},
 		{"a fourth value", "platform.MockIssuer = \"on\"", "platform.MockIssuer = \"on\"\n\t\tplatform.MockIssuer = \"yes\""},
 	} {

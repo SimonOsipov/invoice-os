@@ -48,3 +48,10 @@ func mockInvitationTokenRoute(dsn string, logger *slog.Logger) http.Handler {
 		return db.SetInvitationToken(ctx, dsn, tenantID, invitationID, token)
 	}, logger)
 }
+
+// mockDeletionLinkTokenRoute binds the cancel link token setter to the owner DSN.
+func mockDeletionLinkTokenRoute(dsn string, logger *slog.Logger) http.Handler {
+	return gateway.MockDeletionLinkTokenHandler(func(ctx context.Context, tenantID, userID uuid.UUID, token string) (bool, error) {
+		return db.SetDeletionLinkToken(ctx, dsn, tenantID, userID, token)
+	}, logger)
+}

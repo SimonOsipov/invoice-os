@@ -136,7 +136,7 @@ func dlAppExec(tenant, sql string, args ...any) (int64, error) {
 	return n, err
 }
 
-// dlVisible counts the rows pool sees; bind "" leaves app.current_tenant unset, dlBindEmpty sets it to ”.
+// dlVisible counts the rows pool sees; bind "" leaves app.current_tenant unset, dlBindEmpty sets it to the empty string.
 const dlBindEmpty = "\x00empty"
 
 func dlVisible(t *testing.T, pool interface {

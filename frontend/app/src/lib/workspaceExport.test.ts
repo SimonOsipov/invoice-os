@@ -41,7 +41,7 @@ describe('workspaceExport', () => {
     expect(a).not.toEqual(b)
   })
 
-  it('workspaceExport: the state uses the url-safe alphabet for bytes that encode + and /', () => {
+  it('workspaceExport: the state uses the url-safe alphabet and no padding', () => {
     vi.spyOn(crypto, 'getRandomValues').mockImplementation(((a: Uint8Array) => a.fill(0xfb)) as typeof crypto.getRandomValues)
     const s = newExportState()
     expect(s).toMatch(/^[A-Za-z0-9_-]{43}$/)

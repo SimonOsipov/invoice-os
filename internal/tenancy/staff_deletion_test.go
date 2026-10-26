@@ -658,6 +658,13 @@ func TestStaffDeletion_ATenantPurgedAfterTheStaffCheckIsNotFound(t *testing.T) {
 			if !errors.Is(err, ErrTenantNotFound) {
 				t.Errorf("err = %v, want ErrTenantNotFound", err)
 			}
+			wantScheduled := map[string]int{"start": 0, "cancel": 1}[route] // the setup start's row stays
+			if n := len(staffRowsOf(t, w.super, w.tenant, evScheduled)); n != wantScheduled {
+				t.Errorf("staff_audit_log %s rows = %d, want %d", evScheduled, n, wantScheduled)
+			}
+			if n := len(staffRowsOf(t, w.super, w.tenant, evCancelled)); n != 0 {
+				t.Errorf("staff_audit_log %s rows = %d, want 0", evCancelled, n)
+			}
 		})
 	}
 }

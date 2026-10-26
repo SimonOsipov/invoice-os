@@ -1463,6 +1463,9 @@ func TestPurge_ASkippedRunnerLeavesAFailedPurgeToTheNextRun(t *testing.T) {
 	if r.tenantRows(a) != 1 || !r.isDue(a) {
 		t.Fatal("control: the failed purge should leave the tenant in place and due")
 	}
+	if r.purgeLocked(a) {
+		t.Fatal("the failed purge kept the tenant lock")
+	}
 	failing.Store(false)
 	if err := p.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce: %v", err)

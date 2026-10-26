@@ -82,7 +82,7 @@ func TestMockIssuerFromJWK_SameKeySameKidAndCrossVerifies(t *testing.T) {
 	}
 }
 
-// The BUG-53 case: a restarted instance must accept a token minted before.
+// A restarted instance must accept a token minted before.
 func TestMockIssuerFromJWK_TokenSurvivesRestart(t *testing.T) {
 	raw := jwkArray(t, "kid-restart", nil)
 	a, err := NewMockIssuerFromJWK(testIssuer, raw)

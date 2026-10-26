@@ -370,6 +370,14 @@ func (r *rig) scheduleAt(tenant, expr string) {
 	r.exec(`UPDATE tenants SET deletion_scheduled_at = `+expr+`, deletion_scheduled_by = gen_random_uuid() WHERE id = $1`, tenant)
 }
 
+// start schedules the tenant now (so it is not due) and sets the purge marker, as a staff purge now does.
+func (r *rig) start(tenant string) string {
+	r.t.Helper()
+	r.scheduleAt(tenant, "now()")
+	r.exec(`UPDATE tenants SET deletion_purge_started_at = now() WHERE id = $1`, tenant)
+	return tenant
+}
+
 func (r *rig) due(tenant string) string {
 	r.t.Helper()
 	r.scheduleAt(tenant, "now() - interval '31 days'")
@@ -616,6 +624,44 @@ func TestPurge_ErasesTheMembersDeletesTheFilesAndPurgesTheRows(t *testing.T) {
 	}
 	if left := r.store.under("tenants/" + c + "/"); !slices.Equal(left, cKeys) {
 		t.Errorf("C's objects = %v, want %v", left, cKeys)
+	}
+}
+
+func TestPurge_AStartedTenantThatIsNotDueIsPurged(t *testing.T) {
+	r := newRig(t)
+	a := r.start(r.tenant())
+	if r.isDue(a) {
+		t.Fatal("control: A is due; the test needs a started tenant whose due time is 30 days away")
+	}
+	admin, mail := r.user(), r.mail("started")
+	r.member(a, admin, "admin", "active", &mail, "")
+	r.put(a, 2)
+	b, bUser, bMail := r.tenant(), r.user(), r.mail("b") // scheduled now, never started: not due
+	r.scheduleAt(b, "now()")
+	r.member(b, bUser, "admin", "active", &bMail, "")
+	bKeys := r.put(b, 1)
+
+	got, err := r.purger().Purge(context.Background(), a)
+	requireResult(t, got, err, Result{Purged: true, Members: 1, Objects: 2})
+	if r.erasures(admin) != 1 || r.jobs(eraseKind, admin) != 1 {
+		t.Error("the admin of A has no erasure row or job")
+	}
+	if r.tenantRows(a) != 0 || r.memberRows(a) != 0 || r.objects(a) != 0 {
+		t.Errorf("A's tenant, member and object counts = %d, %d, %d; want 0, 0, 0", r.tenantRows(a), r.memberRows(a), r.objects(a))
+	}
+	rows := r.staff(a)
+	if len(rows) != 1 || rows[0].Event != "workspace.purged" {
+		t.Fatalf("staff rows of A = %+v, want one workspace.purged", rows)
+	}
+
+	// B is scheduled but neither due nor started: Purge leaves it whole.
+	got, err = r.purger().Purge(context.Background(), b)
+	requireResult(t, got, err, Result{})
+	if r.tenantRows(b) != 1 || r.memberRows(b) != 1 || r.marker(b) != nil || r.erasures(bUser) != 0 || len(r.staff(b)) != 0 {
+		t.Error("B was touched: its row, member, marker, erasure or staff row changed")
+	}
+	if left := r.store.under("tenants/" + b + "/"); !slices.Equal(left, bKeys) {
+		t.Errorf("B's objects = %v, want %v", left, bKeys)
 	}
 }
 
@@ -1445,23 +1491,33 @@ func TestRunOnce_StopsOnADoneContext(t *testing.T) {
 func TestDueTenants_ReadsOnlyDueTenants(t *testing.T) {
 	r := newRig(t)
 	a, later, notYet, unscheduled := r.tenant(), r.tenant(), r.tenant(), r.tenant()
+	started, future := r.start(r.tenant()), r.tenant()
 	r.scheduleAt(a, "now() - interval '45 days'")
 	r.scheduleAt(later, "now() - interval '31 days'")
 	r.scheduleAt(notYet, "now() - interval '29 days'")
+	r.scheduleAt(future, "now()")
 
 	got, err := dueTenants(context.Background(), r.reader)
 	if err != nil {
 		t.Fatalf("dueTenants: %v", err)
 	}
-	ia, il := slices.Index(got, a), slices.Index(got, later)
+	ia, il, is := slices.Index(got, a), slices.Index(got, later), slices.Index(got, started)
 	if ia < 0 || il < 0 {
 		t.Fatalf("dueTenants = %v, want both due tenants %s and %s", got, a, later)
 	}
 	if ia > il {
 		t.Errorf("due tenant A is at %d, after the later-due tenant at %d", ia, il)
 	}
-	if slices.Contains(got, notYet) || slices.Contains(got, unscheduled) {
-		t.Errorf("dueTenants = %v, holds a tenant that is not due or not scheduled", got)
+	if is < 0 {
+		t.Fatalf("dueTenants = %v, want the started tenant %s although it is not due", got, started)
+	}
+	if is < il {
+		t.Errorf("the started tenant is at %d, before the earlier-due tenant at %d: ORDER BY deletion_due_at is lost", is, il)
+	}
+	for name, id := range map[string]string{"scheduled 29 days ago, unstarted": notYet, "scheduled now, unstarted": future, "unscheduled": unscheduled} {
+		if slices.Contains(got, id) {
+			t.Errorf("dueTenants lists the %s tenant %s", name, id)
+		}
 	}
 }
 

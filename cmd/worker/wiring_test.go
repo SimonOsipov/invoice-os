@@ -40,6 +40,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 	"github.com/SimonOsipov/invoice-os/internal/systemhealth"
+	"github.com/SimonOsipov/invoice-os/internal/workspacepurge"
 )
 
 // TestWorkerMain_FatalsOnAdapterSelectError: AC-6 / AC-7 (Core AC-6's binary-level
@@ -246,6 +247,9 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 		{"person_erase_by_id", func(b *river.Workers) error {
 			return river.AddWorkerSafely(b, &notifications.EraseByIDWorker{})
 		}},
+		{"workspace_purge", func(b *river.Workers) error {
+			return river.AddWorkerSafely(b, &workspacepurge.PurgeWorker{})
+		}},
 	}
 	contactProbes := []struct {
 		kind string
@@ -283,7 +287,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 
 	cw := &contactWorkerSet{deliver: &notifications.DeliverWorker{}, deal: &notifications.DemoDealWorker{}, blog: &notifications.BlogSyncWorker{}}
-	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{})
+	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{})
 	if bundle == nil {
 		t.Fatal("workerBundle returned nil; a River client takes exactly one bundle")
 	}
@@ -299,7 +303,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 
 	// Contacts off: no contact kind is registered, so its queued jobs wait untouched. Intake still records.
-	off := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, nil, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{})
+	off := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, nil, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{})
 	if err := probes[3].add(off); err == nil {
 		t.Errorf("workerBundle with contacts off does not carry %q; the gateway's registrants would never be recorded", probes[3].kind)
 	}
@@ -309,6 +313,9 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	if err := probes[5].add(off); err == nil {
 		t.Errorf("workerBundle with contacts off does not carry %q; an erase by id needs no vendor", probes[5].kind)
 	}
+	if err := probes[6].add(off); err == nil {
+		t.Errorf("workerBundle with contacts off does not carry %q; a staff purge now runs in every mode", probes[6].kind)
+	}
 	for _, p := range contactProbes {
 		if err := p.add(off); err != nil {
 			t.Errorf("workerBundle with contacts off carries %q (%v), want it absent", p.kind, err)
@@ -316,7 +323,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 	// The newsletter off: the blog sync worker is absent, the other two are not.
 	cw.blog = nil
-	noBlog := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{})
+	noBlog := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{})
 	for i, p := range contactProbes {
 		if err := p.add(noBlog); (err == nil) != (i == 2) {
 			t.Errorf("workerBundle with the newsletter off: probing %q returned %v", p.kind, err)
@@ -713,8 +720,8 @@ func TestWorkerMain_WiresTheQueueSeams(t *testing.T) {
 	// 1. The worker on the bundle is the one newExtractWorker built. A bare
 	//    &extraction.ExtractWorker{} here compiles, registers the kind, and fails job one on
 	//    Work's nil-Audit guard before its nil pool can panic.
-	if len(bundleArgs) != 7 {
-		t.Fatalf("workerBundle is called with %d argument(s), want 7 (sw, pw, ew, rw, cw, xw, xbw)", len(bundleArgs))
+	if len(bundleArgs) != 8 {
+		t.Fatalf("workerBundle is called with %d argument(s), want 8 (sw, pw, ew, rw, cw, xw, xbw, pjw)", len(bundleArgs))
 	}
 	if id, ok := bundleArgs[2].(*ast.Ident); !ok || id.Name != ewName {
 		t.Errorf("workerBundle's third argument is %s, want %s -- the worker newExtractWorker built. Any other value here registers the kind with nil collaborators and works no job", wtRender(bundleArgs[2]), ewName)
@@ -2011,8 +2018,8 @@ func TestWorkerMain_WiresTheEraseWorker(t *testing.T) {
 		}
 		return true
 	})
-	if bundle == nil || len(bundle.Args) != 7 {
-		t.Fatal("main() has no seven-argument workerBundle call")
+	if bundle == nil || len(bundle.Args) != 8 {
+		t.Fatal("main() has no eight-argument workerBundle call")
 	}
 	if got := wtExprString(bundle.Args[5]); got != xwName {
 		t.Errorf("workerBundle sixth argument = %s, want %s, the worker newEraseWorker built", got, xwName)
@@ -2123,11 +2130,15 @@ func TestWorkerMain_WiresTheWorkspacePurger(t *testing.T) {
 	}
 
 	purgerName, accountSet, pools := "", false, 0
+	pjwName, pjwPurger := "", ""
 	for _, stmt := range wtMainBody(t, f) {
 		switch s := stmt.(type) {
 		case *ast.AssignStmt:
 			if len(s.Lhs) == 1 && len(s.Rhs) == 1 {
 				if u, ok := s.Rhs[0].(*ast.UnaryExpr); ok && u.Op == token.AND {
+					if lit, ok := u.X.(*ast.CompositeLit); ok && wtCallName(lit.Type) == "workspacepurge.PurgeWorker" {
+						pjwName = wtExprString(s.Lhs[0])
+					}
 					if lit, ok := u.X.(*ast.CompositeLit); ok && wtCallName(lit.Type) == "workspacepurge.Purger" {
 						purgerName = wtExprString(s.Lhs[0])
 						got := map[string]string{}
@@ -2148,6 +2159,10 @@ func TestWorkerMain_WiresTheWorkspacePurger(t *testing.T) {
 					}
 				}
 			}
+			// A nil Purger on the job panics the first purge-now job.
+			if len(s.Lhs) == 1 && len(s.Rhs) == 1 && pjwName != "" && wtExprString(s.Lhs[0]) == pjwName+".Purger" {
+				pjwPurger = wtExprString(s.Rhs[0])
+			}
 		case *ast.IfStmt:
 			if wtExprString(s.Cond) == accountName+" != nil" && purgerName != "" {
 				for _, in := range s.Body.List {
@@ -2163,6 +2178,23 @@ func TestWorkerMain_WiresTheWorkspacePurger(t *testing.T) {
 	}
 	if !accountSet {
 		t.Errorf("main() does not set %s.Accounts = %s under `if %s != nil`", purgerName, accountName, accountName)
+	}
+
+	if pjwName == "" {
+		t.Fatal("main() builds no &workspacepurge.PurgeWorker{}")
+	}
+	if pjwPurger != purgerName {
+		t.Errorf("main() sets %s.Purger = %q, want %s, the purger the ticker runs", pjwName, pjwPurger, purgerName)
+	}
+	var bundleCall *ast.CallExpr
+	ast.Inspect(f, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok && wtCallName(c.Fun) == "workerBundle" {
+			bundleCall = c
+		}
+		return true
+	})
+	if bundleCall == nil || len(bundleCall.Args) != 8 || wtExprString(bundleCall.Args[7]) != pjwName {
+		t.Errorf("workerBundle's eighth argument is not %s, the purge worker main() built", pjwName)
 	}
 
 	var interval string

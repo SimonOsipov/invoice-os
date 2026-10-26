@@ -26,26 +26,31 @@ func newBundleWriter(w io.Writer) *bundleWriter {
 	return &bundleWriter{zw: zip.NewWriter(w), entries: []manifestEntry{}}
 }
 
-// csvEntry buffers one CSV's records and hashes them as they're written, so the
-// digest is ready the moment finalizeCSV materializes the ZIP entry.
-type csvEntry struct {
+// csvRecords writes records through encoding/csv and counts the rows after the header.
+type csvRecords struct {
 	name        string
-	buf         bytes.Buffer
-	hash        hash.Hash
 	cw          *csv.Writer
 	rows        int
 	wroteHeader bool
 }
 
+// csvEntry buffers one CSV's records and hashes them as they're written, so the
+// digest is ready the moment finalizeCSV materializes the ZIP entry.
+type csvEntry struct {
+	csvRecords
+	buf  bytes.Buffer
+	hash hash.Hash
+}
+
 func (bw *bundleWriter) newCSVEntry(name string) *csvEntry {
-	e := &csvEntry{name: name, hash: sha256.New()}
+	e := &csvEntry{csvRecords: csvRecords{name: name}, hash: sha256.New()}
 	e.cw = csv.NewWriter(io.MultiWriter(&e.buf, e.hash))
 	return e
 }
 
 // Write satisfies csvWriter. The first call is the header record and is not
 // counted in rows.
-func (e *csvEntry) Write(record []string) error {
+func (e *csvRecords) Write(record []string) error {
 	if err := e.cw.Write(record); err != nil {
 		return fmt.Errorf("archive: write %s record: %w", e.name, err)
 	}
@@ -123,27 +128,6 @@ func (bw *bundleWriter) WriteBodyFrom(name string, r io.Reader) error {
 	return nil
 }
 
-// streamedCSV writes records through encoding/csv into a live entry and counts
-// the rows after the header.
-type streamedCSV struct {
-	name        string
-	cw          *csv.Writer
-	rows        int
-	wroteHeader bool
-}
-
-func (e *streamedCSV) Write(record []string) error {
-	if err := e.cw.Write(record); err != nil {
-		return fmt.Errorf("archive: write %s record: %w", e.name, err)
-	}
-	if !e.wroteHeader {
-		e.wroteHeader = true
-		return nil
-	}
-	e.rows++
-	return nil
-}
-
 // streamCSV opens the entry first and lets fill write records straight into it.
 // Nothing else may create an entry while fill runs: archive/zip keeps one open.
 func (bw *bundleWriter) streamCSV(name string, fill func(csvWriter) error) error {
@@ -152,7 +136,7 @@ func (bw *bundleWriter) streamCSV(name string, fill func(csvWriter) error) error
 		return fmt.Errorf("archive: create %s entry: %w", name, err)
 	}
 	h, n := sha256.New(), &byteCounter{}
-	e := &streamedCSV{name: name, cw: csv.NewWriter(io.MultiWriter(w, h, n))}
+	e := &csvRecords{name: name, cw: csv.NewWriter(io.MultiWriter(w, h, n))}
 	if err := fill(e); err != nil {
 		return err
 	}

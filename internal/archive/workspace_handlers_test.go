@@ -224,6 +224,37 @@ func TestWorkspaceExportHandler_AMidStreamErrorAbortsTheConnection(t *testing.T)
 	}
 }
 
+func TestWorkspaceExportHandler_AGoneClientIsNotCapturedToSentry(t *testing.T) {
+	rec := &sentrytest.Recorder{}
+	client, err := sentry.NewClient(sentry.ClientOptions{Dsn: "https://public@example.com/1", Transport: rec})
+	if err != nil {
+		t.Fatalf("new sentry client: %v", err)
+	}
+	sentry.CurrentHub().BindClient(client)
+	t.Cleanup(func() { sentry.CurrentHub().BindClient(nil) })
+
+	spy := &workspaceSpy{fn: func(w io.Writer, onStart func(string)) error {
+		onStart("x.zip")
+		if _, err := w.Write([]byte("PK")); err != nil {
+			return err
+		}
+		return context.Canceled
+	}}
+	var logs bytes.Buffer
+	ctx, cancel := context.WithCancel(workspaceRequest(true).Context())
+	cancel()
+	_, aborted := serveWorkspace(WorkspaceExportHandler(spy.Assemble, slog.New(slog.NewTextHandler(&logs, nil))), workspaceRequest(true).WithContext(ctx))
+	if !aborted {
+		t.Error("the handler returned normally, want panic(http.ErrAbortHandler)")
+	}
+	if n := len(rec.Events()); n != 0 {
+		t.Errorf("Sentry events for a gone client = %d, want 0", n)
+	}
+	if !strings.Contains(logs.String(), "archive: workspace export aborted mid-stream") {
+		t.Errorf("log = %q, want the abort line kept", logs.String())
+	}
+}
+
 // deadlineRecorder records the write deadline a handler asks for.
 type deadlineRecorder struct {
 	*httptest.ResponseRecorder

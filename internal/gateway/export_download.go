@@ -85,8 +85,12 @@ func (w *refusalPageWriter) WriteHeader(code int) {
 	}
 	w.refused = true
 	h := w.Header()
+	requestID := h.Get(headerRequestID)
 	for k := range h {
 		delete(h, k)
+	}
+	if requestID != "" {
+		h.Set(headerRequestID, requestID)
 	}
 	writeExportRefusal(w.ResponseWriter, code)
 }

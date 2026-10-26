@@ -764,7 +764,7 @@ func TestRLS_ARefusalWritesNeitherEvent(t *testing.T) {
 	}
 }
 
-// --- Concurrency: D18, D26 ---------------------------------------------------------
+// --- Concurrency ---------------------------------------------------------
 
 func TestRLS_ASecondExportOnTheInstanceIs503(t *testing.T) {
 	rig := newWsRig(t)

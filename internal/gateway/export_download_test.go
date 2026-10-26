@@ -667,6 +667,20 @@ func TestRefusalPageWriter_PassesA200AndReachesTheConnection(t *testing.T) {
 	}
 }
 
+func TestRefusalPageWriter_KeepsTheRequestID(t *testing.T) {
+	rec := httptest.NewRecorder()
+	w := &refusalPageWriter{ResponseWriter: rec}
+	w.Header().Set(headerRequestID, "req-123")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	if got := rec.Header().Get(headerRequestID); got != "req-123" {
+		t.Errorf("%s = %q, want req-123", headerRequestID, got)
+	}
+	if got := rec.Header().Get("Content-Type"); strings.Contains(got, "json") {
+		t.Errorf("Content-Type = %q, want the upstream's dropped", got)
+	}
+}
+
 // expiredBearer is signed by the rig's issuer with an exp one hour in the past.
 func (rg *exportRig) expiredBearer(t *testing.T) string {
 	t.Helper()
@@ -824,7 +838,7 @@ func TestExportDownload_AnUpstreamThatDiesBeforeTheFirstByteAnswersThe502Page(t 
 	}
 }
 
-// A sign-in code never redeems here; the converse is D6's accepted residue: /auth/exchange does not
+// A sign-in code never redeems here; the converse is an accepted residue: /auth/exchange does not
 // shape-check the state, so an export code redeems there under the prefixed state, for the holder of both.
 func TestExportDownload_ExchangeRedeemsAnExportCodeOnlyUnderThePrefixedState(t *testing.T) {
 	rg := newExportRig(t)

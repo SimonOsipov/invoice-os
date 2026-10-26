@@ -149,9 +149,8 @@ func (s *WorkspaceStore) AssembleWorkspace(ctx context.Context, w io.Writer, onS
 	}
 
 	var (
-		committed bool
-		bw        *bundleWriter
-		sent      = &sentCounter{w: w}
+		bw   *bundleWriter
+		sent = &sentCounter{w: w}
 	)
 	err := db.WithinTenantTxOpts(ctx, s.pool, id.TenantID, workspaceExportTxOptions, func(tx pgx.Tx) error {
 		var status, role string
@@ -222,11 +221,10 @@ func (s *WorkspaceStore) AssembleWorkspace(ctx context.Context, w io.Writer, onS
 		return audit.Record(ctx, tx, id.Subject, "workspace.exported", map[string]any{"files": files, "bytes": bytes})
 	})
 	if err == nil {
-		committed = true
 		// Close alone writes the central directory; a failure here keeps the committed row.
 		return bw.Close()
 	}
-	if sent.wrote && !committed {
+	if sent.wrote {
 		actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 		if aerr := s.auditFailed(actx, id, len(bw.entries), sent.n); aerr != nil {

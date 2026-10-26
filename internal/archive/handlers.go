@@ -286,7 +286,9 @@ func WorkspaceExportHandler(assemble workspaceAssembleFn, log *slog.Logger) http
 			return
 		}
 		if sink.wrote {
-			platform.CaptureError(r.Context(), err)
+			if !errors.Is(r.Context().Err(), context.Canceled) {
+				platform.CaptureError(r.Context(), err)
+			}
 			log.ErrorContext(r.Context(), "archive: workspace export aborted mid-stream", slog.Any("err", err))
 			panic(http.ErrAbortHandler)
 		}

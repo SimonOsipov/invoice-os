@@ -133,11 +133,16 @@ func TestDeletionLink_OnlyAnActiveAdminOfThatWorkspaceCancels(t *testing.T) {
 	lockByOwner(t, foreign.super, foreign.tenant, foreign.admin)
 	foreignDue := deletionOf(t, foreign.super, foreign.tenant).DueAt
 
+	invited := w.addMember(t, "admin", "invited", "Ivy Eze")
+	removed := w.addMember(t, "admin", "removed", "Rita Eze")
 	cases := []struct {
 		name string
 		ctx  context.Context
 		want error
 	}{
+		{"an invited admin", w.as(invited), db.ErrNotActiveMember},
+		{"a removed admin", w.as(removed), db.ErrNotActiveMember},
+		{"no identity at all", context.Background(), db.ErrNoTenant},
 		{"an active preparer", w.as(w.preparer), ErrCancelDeletionNotPermitted},
 		{"a suspended admin", w.as(w.suspended), db.ErrNotActiveMember},
 		{"an admin of another workspace", foreign.adminCtx(), ErrDeletionLinkNotValid},
@@ -347,5 +352,84 @@ func TestDeletionLink_TwoConcurrentLinkCancelsAuditOnce(t *testing.T) {
 	}
 	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 1 {
 		t.Errorf("%s rows = %d, want exactly 1", evCancelled, n)
+	}
+}
+
+func TestDeletionLink_ATokenAfterThePurgeIsRefused(t *testing.T) {
+	w := newLinkWorld(t)
+	ctx := context.Background()
+	tx, err := w.super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, w.tenant); err != nil {
+		t.Fatalf("bind the tenant: %v", err)
+	}
+	var removed int
+	if err := tx.QueryRow(ctx, `SELECT public.purge_tenant($1::uuid)`, w.tenant).Scan(&removed); err != nil {
+		t.Fatalf("purge_tenant: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit the purge: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("purge_tenant removed %d tenants, want 1", removed)
+	}
+
+	_, err = w.store.CancelWorkspaceDeletionByLink(w.as(w.b), w.tokB)
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Errorf("a link cancel after the purge: err = %v, want db.ErrNotActiveMember", err)
+	}
+	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 0 {
+		t.Errorf("%s rows = %d, want 0", evCancelled, n)
+	}
+}
+
+// A cancel parked behind the winner's row lock must see the winner's commit, not the schedule it read first.
+func TestDeletionLink_ACancelWaitingForTheLockSeesTheWinnersCancel(t *testing.T) {
+	w := newLinkWorld(t)
+	ctx := context.Background()
+	winner, err := w.super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = winner.Rollback(ctx) }()
+	if _, err := winner.Exec(ctx, `SELECT 1 FROM tenants WHERE id = $1 FOR UPDATE`, w.tenant); err != nil {
+		t.Fatalf("hold the tenant row: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), w.tokB)
+		done <- err
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		if err := w.super.QueryRow(ctx,
+			`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()`).Scan(&waiting); err != nil {
+			t.Fatalf("read pg_stat_activity: %v", err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the cancel never waited for the tenant row lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := winner.Exec(ctx,
+		`UPDATE tenants SET deletion_scheduled_at = NULL, deletion_scheduled_by = NULL WHERE id = $1`, w.tenant); err != nil {
+		t.Fatalf("the winner clears the schedule: %v", err)
+	}
+	if err := winner.Commit(ctx); err != nil {
+		t.Fatalf("the winner commits: %v", err)
+	}
+
+	if err := <-done; !errors.Is(err, ErrDeletionLinkNotValid) {
+		t.Errorf("the loser's err = %v, want ErrDeletionLinkNotValid", err)
+	}
+	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 0 {
+		t.Errorf("%s rows = %d, want 0 (the winner here wrote none)", evCancelled, n)
 	}
 }

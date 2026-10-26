@@ -400,9 +400,10 @@ describe('Console tenants wiring', () => {
     const confirm = () => within(dialog()).getByRole('button', { name: 'Purge now' }) as HTMLButtonElement
     expect(confirm().disabled).toBe(true)
     const name = within(dialog()).getByLabelText('Workspace name')
+    typeReason('  customer wrote in  ')
     fireEvent.change(name, { target: { value: 'okafor & partners' } })
-    typeReason('')
     expect(confirm().disabled).toBe(true)
+    typeReason('')
     fireEvent.change(name, { target: { value: 'Okafor & Partners' } })
     expect(confirm().disabled).toBe(true)
     typeReason('  customer wrote in  ')
@@ -506,6 +507,80 @@ describe('Console tenants wiring', () => {
     expect((screen.getAllByRole('button', { name: 'Delete account' }) as HTMLButtonElement[]).every((b) => b.disabled)).toBe(true)
     release({ deletion_due_at: DUE })
     await screen.findByText('Deletion scheduled')
+  })
+
+  it('deletion modals: reason bounds, purge notice and a second click', async () => {
+    await openX(SCHEDULED)
+    fireEvent.click(btn('Cancel deletion'))
+    const cc = () => within(dialog()).getByRole('button', { name: 'Cancel deletion' }) as HTMLButtonElement
+    expect(within(dialog()).getByText(/Every active admin gets an email\./)).toBeTruthy()
+    expect(within(dialog()).getByText(/customer sees this reason/)).toBeTruthy()
+    typeReason('   ')
+    expect(cc().disabled).toBe(true)
+    typeReason('x'.repeat(2000))
+    expect(cc().disabled).toBe(true)
+    typeReason('ok')
+    expect(cc().disabled).toBe(false)
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Back' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(btn('Purge now'))
+    expect(within(dialog()).getByText(/stays in the staff audit log after the workspace is gone/)).toBeTruthy()
+    expect(within(dialog()).queryByText(/customer sees this reason/)).toBeNull()
+  })
+
+  it('a second click on a running confirm sends one request, and a 404 closes the modal', async () => {
+    await openX()
+    let fail!: (e: unknown) => void
+    start.mockReturnValue(new Promise((_, rej) => (fail = rej)))
+    fireEvent.click(btn('Delete workspace'))
+    typeReason('r')
+    const confirm = within(dialog()).getByRole('button', { name: 'Start deletion' })
+    fireEvent.click(confirm)
+    fireEvent.click(confirm)
+    expect(start).toHaveBeenCalledTimes(1)
+    fail(new ApiError('http', 'tenant not found', 404))
+    await screen.findByText('tenant not found')
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('a 200-character name is typed and posted whole; a rejected purge keeps the modal and the typed name', async () => {
+    const long = 'N'.repeat(200)
+    const T = { ...X, name: long }
+    await openX(T)
+    fireEvent.click(btn('Purge now'))
+    expect(within(dialog()).getByText(`Purge ${long} now?`)).toBeTruthy()
+    fireEvent.change(within(dialog()).getByLabelText('Workspace name'), { target: { value: long } })
+    typeReason('r')
+    purge.mockRejectedValueOnce(new ApiError('http', 'the workspace name does not match', 400))
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Purge now' }))
+    await screen.findByText('the workspace name does not match')
+    expect(purge).toHaveBeenCalledWith('X', long, 'r')
+    expect((within(dialog()).getByLabelText('Workspace name') as HTMLInputElement).value).toBe(long)
+    expect((within(dialog()).getByRole('button', { name: 'Purge now' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('delete account: a leave sends no heir, shows no handover sentence, and a 409 sentence shows verbatim', async () => {
+    await openX()
+    preview.mockResolvedValue({ outcome: 'leave', heir_name: null, heir_user_id: null })
+    delAccount.mockRejectedValueOnce(new ApiError('http', 'the workspace changed; review the page and confirm again', 409))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete account' })[1])
+    await within(dialog()).findByText(/Their account goes at once\./)
+    expect(within(dialog()).queryByText(/Admin moves to/)).toBeNull()
+    typeReason('asked')
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Delete account' }))
+    await waitFor(() => expect(delAccount).toHaveBeenCalledWith('X', 'X1', { outcome: 'leave', reason: 'asked' }))
+    await screen.findByText('the workspace changed; review the page and confirm again')
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('delete account: a failed preview shows its message and offers no usable confirm', async () => {
+    await openX()
+    preview.mockRejectedValue(new ApiError('http', 'membership not found', 404))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete account' })[0])
+    await within(dialog()).findByText('membership not found')
+    typeReason('r')
+    expect((within(dialog()).getByRole('button', { name: 'Delete account' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(delAccount).not.toHaveBeenCalled()
   })
 
   it('View jobs opens Submissions filtered to the tenant', async () => {

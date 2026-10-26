@@ -16,7 +16,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
-// ceiling: copied from platform/db recreate_test.go; move both to a shared dbtest package at a third caller.
+// ceiling: scratch-DB setup is copied in 5 test files (this one, platform/db, platform, platform/auth, systemhealth); extract a dbtest package before a 6th.
 
 // planScratchDB is the migrated audit_plan_<hex> database the plan corpus lives in, so the
 // plan tests see a fresh database's planner stats instead of the grown dev one.
@@ -37,6 +37,14 @@ func dsnForDB(dsn, name string) (string, error) {
 	}
 	u.Path = "/" + name
 	return u.String(), nil
+}
+
+// envOr mirrors platform/db devDefaultGUCs: Bootstrap resets cluster-wide role passwords.
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
 
 func newPlanScratch() (*planScratchDB, error) {
@@ -66,7 +74,7 @@ func newPlanScratch() (*planScratchDB, error) {
 			return nil, fmt.Errorf("parse %s: %w", env, err)
 		}
 	}
-	pw := db.RolePasswords{Migrator: "migrator", App: "app", Reader: "reader", AuthAdmin: "auth_admin"}
+	pw := db.RolePasswords{Migrator: envOr("MIGRATOR_PASSWORD", "migrator"), App: envOr("APP_PASSWORD", "app"), Reader: envOr("READER_PASSWORD", "reader"), AuthAdmin: envOr("AUTH_ADMIN_PASSWORD", "auth_admin")}
 	if err := db.Bootstrap(ctx, dsns["super"], pw, dbsql.FS); err != nil {
 		return nil, fmt.Errorf("bootstrap scratch: %w", err)
 	}

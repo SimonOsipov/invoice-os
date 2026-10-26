@@ -26,6 +26,16 @@ func useScratchHarness(t *testing.T) string {
 	name := strings.TrimPrefix(u.Path, "/")
 
 	scratch := &harness{appURL: dsnForDB(t, os.Getenv("DATABASE_URL"), name)}
+	prev := h
+	h = scratch
+	t.Cleanup(func() {
+		for _, p := range []*pgxpool.Pool{scratch.reader, scratch.app, scratch.mig, scratch.super} {
+			if p != nil {
+				p.Close()
+			}
+		}
+		h = prev
+	})
 	for _, c := range []struct {
 		dst **pgxpool.Pool
 		dsn string
@@ -42,14 +52,5 @@ func useScratchHarness(t *testing.T) string {
 		*c.dst = pool
 	}
 
-	prev := h
-	h = scratch
-	t.Cleanup(func() {
-		scratch.reader.Close()
-		scratch.app.Close()
-		scratch.mig.Close()
-		scratch.super.Close()
-		h = prev
-	})
 	return superDSN
 }

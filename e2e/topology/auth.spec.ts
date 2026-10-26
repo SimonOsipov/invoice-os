@@ -45,7 +45,7 @@ const LANDING_URL = resolveTarget('LANDING_URL')
 
 // The live browser round trip: a real sign-in through the landing form mints a session whose
 // /v1/me read resolves the tenant under RLS before the workspace renders.
-test('deployed app: a real sign-in into 1111 renders the backend-verified tenant identity', async ({ page }) => {
+test('deployed app: a real sign-in into the firm tenant renders the backend-verified tenant identity', async ({ page }) => {
   const errors = collectErrors(page)
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
@@ -83,7 +83,7 @@ test('deployed app: a second real sign-in replaces the session only after the fi
   await expect(page.locator('aside.pf-sidebar')).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
   const firmToken = await browserToken(page)
 
-  // Sign in as 2222 from landing without signing out: ?auth=start bounces over the live session
+  // Sign in as the in-house member from landing without signing out: ?auth=start bounces over the live session
   // and keeps it, then the hand-off code is ignored.
   await page.goto(`${APP_URL}/?auth=start`)
   await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
@@ -96,13 +96,13 @@ test('deployed app: a second real sign-in replaces the session only after the fi
   await expectInWorkspace(page, { workspaceName: FIRM_PERSONA.tenantName })
   expect(await browserToken(page), 'a live session was replaced by a sign-in from landing').toBe(firmToken)
 
-  // Once the stored session is gone, a real sign-in as the 2222 member takes the tab.
+  // Once the stored session is gone, a real sign-in as the in-house member takes the tab.
   await signInAs(page, 'inhouse', { tenantId: SHARD.b.id })
   const sidebar = page.locator('aside.pf-sidebar')
   await expect(sidebar).toContainText(INHOUSE_PERSONA.tenantName.toUpperCase())
   // The positive assertion alone would pass while both identities render.
   await expect(sidebar).not.toContainText(FIRM_PERSONA.tenantName.toUpperCase())
-  expect(await browserToken(page), 'the 2222 session carries the 1111 token').not.toBe(firmToken)
+  expect(await browserToken(page), 'the in-house session carries the firm token').not.toBe(firmToken)
 
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })

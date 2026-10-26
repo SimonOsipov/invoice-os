@@ -42,6 +42,7 @@ import {
   DELETION_SENTENCES,
   appLabels,
   onlyActiveMemberDeletesWorkspace,
+  workspaceExportIsMerged,
 } from './privacyCodeFacts.test.util'
 
 const SRC_DIR = fileURLToPath(new URL('.', import.meta.url))
@@ -725,6 +726,7 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
   })
 
   it('DEL-10-02 A4 does not say the email leaves the workspace', () => {
+    expect(accountSentences().length, 'the account section has no sentences').toBeGreaterThan(10)
     expect(accountSentences().filter((x) => /email address does not stay|no email/i.test(x))).toEqual([])
   })
 
@@ -743,6 +745,11 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     expect(deletionSentence('A7')).toContain('not at once')
     const bad = accountSentences().filter((x) => /only active member|last member/i.test(x) && /at once/i.test(x.replace(/not at once/gi, '')))
     expect(bad).toEqual([])
+  })
+
+  it('DEL-10-02 the rendered account section mentions the export iff the export is merged', () => {
+    expect(accountSentences().length, 'the account section has no sentences').toBeGreaterThan(10)
+    expect(/\bexport/i.test(accountText())).toBe(workspaceExportIsMerged())
   })
 
   it('DEL-10-02 the page names no data-protection law', () => {

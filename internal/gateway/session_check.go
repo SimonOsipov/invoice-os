@@ -66,11 +66,12 @@ type sessionCall struct {
 
 // SessionChecker refuses a verified token whose GoTrue session is gone.
 type SessionChecker struct {
-	userURL    string
-	client     *http.Client
-	now        func() time.Time
-	log        *slog.Logger
-	maxEntries int
+	userURL     string
+	client      *http.Client
+	now         func() time.Time
+	log         *slog.Logger
+	maxEntries  int
+	revocations *pgxpool.Pool // nil: sign-outs stay in this process
 
 	mu       sync.Mutex
 	entries  map[string]sessionEntry // keyed by session_id
@@ -129,10 +130,14 @@ func (c *SessionChecker) check(r *http.Request, id auth.Identity) (verdict, stri
 	start := c.now()
 	if e, ok := c.entries[id.SessionID]; ok && start.Sub(e.checkedAt) < SessionCheckTTL {
 		c.mu.Unlock()
-		if e.live {
+		if !e.live {
+			return verdictRevoked, ""
+		}
+		if !c.signedOutSince(r.Context(), e, start) {
 			return verdictLive, e.confirmedEmail
 		}
-		return verdictRevoked, ""
+		c.mu.Lock()
+		c.evictSession(id.SessionID)
 	}
 	call, shared := c.inflight[id.SessionID]
 	if !shared {
@@ -151,6 +156,31 @@ func (c *SessionChecker) check(r *http.Request, id auth.Identity) (verdict, stri
 	}
 	c.run(r, id.SessionID, call, start)
 	return call.verdict, call.confirmedEmail
+}
+
+// signedOutSince reports whether another instance signed the subject out after this entry was cached.
+// A failed read counts as yes: GoTrue decides.
+func (c *SessionChecker) signedOutSince(ctx context.Context, e sessionEntry, start time.Time) bool {
+	if c.revocations == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, revocationReadTimeout)
+	defer cancel()
+	revoked, err := revokedSince(ctx, c.revocations, e.subject, revocationWindow(start.Sub(e.checkedAt)))
+	if err != nil {
+		c.log.WarnContext(ctx, "session check: revocation read failed", slog.String("error", err.Error()))
+		return true
+	}
+	return revoked
+}
+
+// evictSession drops one session's entry and in-flight call, whatever their age. Caller holds mu.
+func (c *SessionChecker) evictSession(sid string) {
+	delete(c.entries, sid)
+	if call, ok := c.inflight[sid]; ok {
+		call.evicted = true
+		delete(c.inflight, sid)
+	}
 }
 
 // run performs the shared call. The cleanup is deferred so a panic still releases the waiters.
@@ -240,11 +270,24 @@ func (c *SessionChecker) store(sid string, e sessionEntry) {
 }
 
 // Shared makes sign-outs visible to every gateway instance through pool; nil keeps the in-process cache.
-func (c *SessionChecker) Shared(pool *pgxpool.Pool) {}
+func (c *SessionChecker) Shared(pool *pgxpool.Pool) { c.revocations = pool }
 
 // EvictSubject drops every cached verdict for sub; its in-flight calls answer their waiters but cache nothing.
 // ceiling: O(n) scan over every entry; index by subject above ~10k live sessions.
-func (c *SessionChecker) EvictSubject(_ context.Context, sub string) {
+// When shared, it also records the sign-out for every instance; a failed write is logged and the local eviction stands.
+func (c *SessionChecker) EvictSubject(ctx context.Context, sub string) {
+	c.evictLocal(sub)
+	if c.revocations == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, handoffDBTimeout)
+	defer cancel()
+	if err := revokeSubject(ctx, c.revocations, sub); err != nil {
+		c.log.ErrorContext(ctx, "session check: record sign-out", slog.String("error", err.Error()))
+	}
+}
+
+func (c *SessionChecker) evictLocal(sub string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for sid, e := range c.entries {

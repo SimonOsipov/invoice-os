@@ -82,7 +82,8 @@ paths:
 - Bind a hand-off code to the `state` that minted it.
 - Share hand-off codes between gateway instances through `gateway_handoff_codes`, as `invoice_gateway` (`DATABASE_GATEWAY_URL`). Store `sha256(code)`, never the code.
 - Expect the gateway to refuse boot on Cloud Run without `DATABASE_GATEWAY_URL`. Elsewhere an unset URL keeps the in-process store, for a single instance only.
-- Expect a signed-out session to stay valid on another gateway instance for up to `SessionCheckTTL` (30 s). `EvictSubject` clears only the local cache. A shared revocation store was rejected (GKE-00 Q12).
+- Record each sign-out and password reset in `gateway_session_revocations` through `EvictSubject`. Every gateway instance reads it before it trusts a cached live verdict (FLAKE-00 Q4).
+- Ask GoTrue again when the revocation read fails. Answer the sign-out 204 when only the revocation write fails.
 - Expect the sign-in and resend-by-address limits to count per instance. Their ceiling is the limit times the instance count (GKE-00 Q11).
 - Mint a console hand-off code on `POST /auth/console-handoff` only for a verified, session-checked bearer whose `app_metadata.staff` is true.
 - Store only the caller's access token as that code's answer. Never store a refresh token.
@@ -108,7 +109,7 @@ paths:
 - Check the staff claim in the platform on every `/v1/staff` path. The service handler checks nothing.
 - Check every session with GoTrue `GET /user` before a request reaches a service. Read `error_code` from a refusal and `email` and `email_confirmed_at` from a 200, within 16 KiB.
 - Answer 503 when the session check cannot reach GoTrue. Never treat that failure as a revoked session.
-- Evict the subject's session-check cache on sign-out.
+- Evict the subject's session-check cache on every instance on sign-out and password reset.
 - Mint the staff claim from an active membership of the tenant in `public.house_company`, through `public.is_house_member`. Never read `user_metadata` for it.
 - Strip an incoming legacy rules-claim key in the hook. No code reads it.
 - Decode `tenant_id` and `staff` by exact key. A key in another case counts for nothing.

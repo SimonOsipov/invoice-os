@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -881,6 +882,8 @@ func TestStaffPurge_ANameMismatchWritesNothing(t *testing.T) {
 		{"upper-cased", strings.ToUpper(obi)},
 		{"a trailing space", obi + " "},
 		{"a leading space", " " + obi},
+		{"a non-breaking space", strings.Replace(obi, " ", "\u00a0", 1)},
+		{"a zero-width space", obi + "\u200b"},
 		{"another tenant's name", bName},
 		{"empty", ""},
 	} {
@@ -1117,5 +1120,68 @@ func TestStaffPurge_ConcurrentCallsQueueOneJobAndWriteOneRow(t *testing.T) {
 	}
 	if n := len(staffRowsOf(t, w.super, w.tenant, wantPurgeStartedEvent)); n != 1 {
 		t.Errorf("staff_audit_log %s rows = %d, want 1", wantPurgeStartedEvent, n)
+	}
+}
+
+func TestStaffPurge_TheCustomerAuditRowCarriesOnlyTheReason(t *testing.T) {
+	w := newStaffPurgeWorld(t, "Adaeze Obi")
+	if _, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason); err != nil {
+		t.Fatalf("StaffPurgeWorkspace: %v", err)
+	}
+	var actor, raw string
+	if err := w.super.QueryRow(context.Background(),
+		`SELECT actor, payload::text FROM public.audit_log WHERE tenant_id = $1 AND event = $2`, w.tenant, wantPurgeStartedEvent).Scan(&actor, &raw); err != nil {
+		t.Fatalf("read the customer's %s row: %v", wantPurgeStartedEvent, err)
+	}
+	if actor != audit.SupportActor {
+		t.Errorf("customer row actor = %q, want %q", actor, audit.SupportActor)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil || !slices.Equal(keysOf(payload), []string{"reason"}) || payload["reason"] != purgeReason {
+		t.Errorf("customer row payload = %s (%v), want exactly {reason: %q}", raw, err, purgeReason)
+	}
+	for _, leak := range []string{adminMarkerEmail, "Adaeze", w.admin, w.staff} {
+		if strings.Contains(actor+raw, leak) {
+			t.Errorf("customer row carries %q: actor %q payload %s", leak, actor, raw)
+		}
+	}
+}
+
+func TestStaffPurge_RacingCancelsLeaveOneStartedPurge(t *testing.T) {
+	for i := range 5 {
+		t.Run(fmt.Sprintf("round %d", i), func(t *testing.T) {
+			w := newStaffPurgeWorld(t, "Ada Obi")
+			lockByOwner(t, w.super, w.tenant, w.admin)
+			var wg sync.WaitGroup
+			gate := make(chan struct{})
+			run := func(name string, f func() error) {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-gate
+					if err := f(); err != nil && !errors.Is(err, ErrDeletionUnderway) {
+						t.Errorf("%s: %v", name, err)
+					}
+				}()
+			}
+			run("purge", func() error { _, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason); return err })
+			run("admin cancel", func() error { return w.store.CancelWorkspaceDeletion(w.adminCtx()) })
+			run("staff cancel", func() error { return w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText) })
+			close(gate)
+			wg.Wait()
+
+			if m := purgeStartedAt(t, w.super, w.tenant); m == nil {
+				t.Fatal("no purge marker after the race: a cancel won over the purge")
+			}
+			if c := deletionOf(t, w.super, w.tenant); c.ScheduledAt == nil || c.DueAt == nil {
+				t.Errorf("deletion columns = %+v, want the schedule kept under the marker", c)
+			}
+			if n := len(purgeJobsOf(t, w.super, w.tenant)); n != 1 {
+				t.Errorf("queued %s jobs = %d, want 1", wantPurgeJobKind, n)
+			}
+			if n := len(staffRowsOf(t, w.super, w.tenant, wantPurgeStartedEvent)); n != 1 {
+				t.Errorf("staff_audit_log %s rows = %d, want 1", wantPurgeStartedEvent, n)
+			}
+		})
 	}
 }

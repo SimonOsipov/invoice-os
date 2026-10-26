@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 
@@ -27,10 +28,11 @@ const (
 	OutcomeDeleteWorkspace AccountDeletionOutcome = "delete_workspace"
 )
 
-// AccountDeletionPreview is the outcome the delete would take now and, for hand_on, the heir's label.
+// AccountDeletionPreview is the outcome the delete would take now and, for hand_on, the heir.
 type AccountDeletionPreview struct {
-	Outcome  AccountDeletionOutcome `json:"outcome"`
-	HeirName *string                `json:"heir_name"`
+	Outcome    AccountDeletionOutcome `json:"outcome"`
+	HeirName   *string                `json:"heir_name"`
+	HeirUserID *string                `json:"heir_user_id"`
 }
 
 type activeMember struct {
@@ -42,7 +44,7 @@ type activeMember struct {
 
 // PreviewAccountDeletionFunc and DeleteMyAccountFunc are the store seams of the two handlers.
 type PreviewAccountDeletionFunc func(ctx context.Context) (AccountDeletionPreview, error)
-type DeleteMyAccountFunc func(ctx context.Context, want AccountDeletionOutcome) error
+type DeleteMyAccountFunc func(ctx context.Context, want AccountDeletionOutcome, heirUserID string) error
 
 var errNoEraseQueue = errors.New("tenancy: erase queue not configured")
 
@@ -114,6 +116,7 @@ func (s *Store) PreviewAccountDeletion(ctx context.Context) (AccountDeletionPrev
 		out = AccountDeletionPreview{Outcome: outcome}
 		if heir != nil {
 			out.HeirName = heirLabel(heir)
+			out.HeirUserID = &heir.UserID
 		}
 		return nil
 	})
@@ -132,10 +135,9 @@ func heirLabel(m *activeMember) *string {
 }
 
 // DeleteMyAccount ends the caller and queues their erasure; the sole admin first hands admin to
-// the heir. want must equal the outcome under the row locks.
-// ceiling: the heir is chosen at commit, not named in the body; it changes only if the named heir
-// deletes their own account at the same moment. Name the heir in the body if that bites.
-func (s *Store) DeleteMyAccount(ctx context.Context, want AccountDeletionOutcome) error {
+// the heir. want, and for hand_on the previewed heirUserID, must equal the decision under the row
+// locks; heirUserID is a precondition only and never picks whom to act on.
+func (s *Store) DeleteMyAccount(ctx context.Context, want AccountDeletionOutcome, heirUserID string) error {
 	if s.eraseQueue == nil {
 		return errNoEraseQueue
 	}
@@ -146,7 +148,7 @@ func (s *Store) DeleteMyAccount(ctx context.Context, want AccountDeletionOutcome
 			return err
 		}
 		got, heir := decideAccountDeletion(caller.Subject, active)
-		if got != want {
+		if got != want || (got == OutcomeHandOn && heir.UserID != heirUserID) {
 			return ErrDeletionOutcomeChanged
 		}
 		var self *activeMember
@@ -170,7 +172,7 @@ func (s *Store) DeleteMyAccount(ctx context.Context, want AccountDeletionOutcome
 				return err
 			}
 			if err := audit.Record(ctx, tx, caller.Subject, "membership.admin_handed_on",
-				map[string]any{"user_id": heir.UserID, "from": heir.Role}); err != nil {
+				map[string]any{"user_id": heir.UserID, "from": heir.Role, "to": "admin"}); err != nil {
 				return err
 			}
 		}
@@ -211,11 +213,17 @@ func AccountDeletionPreviewHandler(load PreviewAccountDeletionFunc, log *slog.Lo
 }
 
 type deleteMyAccountRequest struct {
+	Outcome    AccountDeletionOutcome `json:"outcome"`
+	HeirUserID *string                `json:"heir_user_id"`
+}
+
+type deleteMyAccountResponse struct {
 	Outcome AccountDeletionOutcome `json:"outcome"`
 }
 
 // DeleteMyAccountHandler returns POST /v1/me/deletion: identity (401), capped decode and outcome
-// check (400), delete, 200 with the outcome. The body names no user.
+// check (400), delete, 200 with the outcome. hand_on carries the previewed heir, leave none; the
+// route still acts only on the caller.
 func DeleteMyAccountHandler(del DeleteMyAccountFunc, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -227,12 +235,15 @@ func DeleteMyAccountHandler(del DeleteMyAccountFunc, log *slog.Logger) http.Hand
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxDeleteAccountBodyBytes)
 		var req deleteMyAccountRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
-			(req.Outcome != OutcomeLeave && req.Outcome != OutcomeHandOn) {
+		heir, ok := "", false
+		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+			heir, ok = deleteBodyHeir(req)
+		}
+		if !ok {
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		if err := del(r.Context(), req.Outcome); err != nil {
+		if err := del(r.Context(), req.Outcome, heir); err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
 				log.ErrorContext(r.Context(), "tenancy: delete my account", slog.Any("err", err))
@@ -240,6 +251,22 @@ func DeleteMyAccountHandler(del DeleteMyAccountFunc, log *slog.Logger) http.Hand
 			writeError(w, status, msg)
 			return
 		}
-		writeJSON(w, http.StatusOK, deleteMyAccountRequest{Outcome: req.Outcome})
+		writeJSON(w, http.StatusOK, deleteMyAccountResponse{Outcome: req.Outcome})
 	}
+}
+
+// deleteBodyHeir validates the body and returns the heir id in canonical form: leave carries none,
+// hand_on a well-formed one.
+func deleteBodyHeir(req deleteMyAccountRequest) (string, bool) {
+	switch req.Outcome {
+	case OutcomeLeave:
+		return "", req.HeirUserID == nil
+	case OutcomeHandOn:
+		if req.HeirUserID == nil {
+			return "", false
+		}
+		id, err := uuid.Parse(*req.HeirUserID)
+		return id.String(), err == nil
+	}
+	return "", false
 }

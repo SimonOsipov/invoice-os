@@ -16,20 +16,31 @@ const (
 	msgOutcomeChanged = "the workspace changed; review the page and confirm again"
 	msgNoEraseEmail   = "your account has no email address on record; sign in again and retry"
 	meDeletionPath    = "/v1/me/deletion"
+	heirID            = "6f0f6f0f-0000-4000-8000-0000000000aa"
 )
+
+// bodyFor is the valid body of outcome o: hand_on names the previewed heir.
+func bodyFor(o AccountDeletionOutcome) string {
+	if o == OutcomeHandOn {
+		return `{"outcome":"hand_on","heir_user_id":"` + heirID + `"}`
+	}
+	return `{"outcome":"leave"}`
+}
 
 // deleteStub records every call of the stubbed store.
 type deleteStub struct {
 	calls   int
 	outcome AccountDeletionOutcome
+	heir    string
 	subject string
 	err     error
 }
 
 func (s *deleteStub) fn() DeleteMyAccountFunc {
-	return func(ctx context.Context, want AccountDeletionOutcome) error {
+	return func(ctx context.Context, want AccountDeletionOutcome, heir string) error {
 		s.calls++
 		s.outcome = want
+		s.heir = heir
 		if id, ok := auth.IdentityFromContext(ctx); ok {
 			s.subject = id.Subject
 		}
@@ -47,12 +58,12 @@ func TestDeleteMyAccountHandler_MapsEveryOutcome(t *testing.T) {
 	t.Run("a success echoes the outcome", func(t *testing.T) {
 		for _, o := range []AccountDeletionOutcome{OutcomeLeave, OutcomeHandOn} {
 			stub := &deleteStub{}
-			status, body := deletionCall(DeleteMyAccountHandler(stub.fn(), nil), deletionCaller, meDeletionPath, `{"outcome":"`+string(o)+`"}`)
+			status, body := deletionCall(DeleteMyAccountHandler(stub.fn(), nil), deletionCaller, meDeletionPath, bodyFor(o))
 			if status != http.StatusOK || string(body["outcome"]) != `"`+string(o)+`"` || len(body) != 1 {
 				t.Errorf("%s: status = %d, body = %v, want 200 and exactly {outcome:%s}", o, status, body, o)
 			}
-			if stub.calls != 1 || stub.outcome != o {
-				t.Errorf("%s: store calls = %d outcome = %q, want one call with %s", o, stub.calls, stub.outcome, o)
+			if stub.calls != 1 || stub.outcome != o || stub.heir != heirIf(o, heirID) {
+				t.Errorf("%s: store calls = %d outcome = %q heir = %q, want one call with %s and heir %q", o, stub.calls, stub.outcome, stub.heir, o, heirIf(o, heirID))
 			}
 		}
 	})
@@ -65,6 +76,11 @@ func TestDeleteMyAccountHandler_MapsEveryOutcome(t *testing.T) {
 			{"an unknown outcome", `{"outcome":"other"}`},
 			{"a wrong-case outcome", `{"outcome":"Leave"}`},
 			{"a non-string outcome", `{"outcome":1}`},
+			{"hand_on without a heir", `{"outcome":"hand_on"}`},
+			{"hand_on with a null heir", `{"outcome":"hand_on","heir_user_id":null}`},
+			{"hand_on with a malformed heir", `{"outcome":"hand_on","heir_user_id":"not-a-uuid"}`},
+			{"hand_on with a non-string heir", `{"outcome":"hand_on","heir_user_id":7}`},
+			{"leave with a heir", `{"outcome":"leave","heir_user_id":"` + heirID + `"}`},
 			{"over 4 KiB", bodyOf(4097)},
 		} {
 			stub := &deleteStub{}
@@ -125,7 +141,7 @@ func TestDeleteMyAccountHandler_RefusesDeleteWorkspace(t *testing.T) {
 		t.Errorf("status = %d %v, want 400 invalid request body", status, body)
 	}
 	if stub.calls != 0 {
-		t.Errorf("the store was called %d times, want 0 (the schedule goes through the DEL-04 route)", stub.calls)
+		t.Errorf("the store was called %d times, want 0 (the schedule goes through its own route)", stub.calls)
 	}
 	// positive pair: the handler is wired and reads a leave from the same caller
 	ok := &deleteStub{}
@@ -149,9 +165,19 @@ func TestDeleteMyAccountHandler_IgnoresAUserIDInTheBody(t *testing.T) {
 
 func TestDeleteMyAccountHandler_NeedsNoTypedPhrase(t *testing.T) {
 	stub := &deleteStub{}
-	status, body := deletionCall(DeleteMyAccountHandler(stub.fn(), nil), deletionCaller, meDeletionPath, `{"outcome":"leave"}`)
-	if status != http.StatusOK || stub.calls != 1 || stub.outcome != OutcomeLeave {
-		t.Errorf("status = %d %v, calls = %d outcome = %q, want 200 and one leave", status, body, stub.calls, stub.outcome)
+	status, body := deletionCall(DeleteMyAccountHandler(stub.fn(), nil), deletionCaller, meDeletionPath, bodyFor(OutcomeHandOn))
+	if status != http.StatusOK || stub.calls != 1 || stub.outcome != OutcomeHandOn {
+		t.Errorf("status = %d %v, calls = %d outcome = %q, want 200 and one hand_on", status, body, stub.calls, stub.outcome)
+	}
+}
+
+func TestDeleteMyAccountHandler_PassesTheHeirInCanonicalForm(t *testing.T) {
+	stub := &deleteStub{}
+	upper := strings.ToUpper(heirID)
+	status, _ := deletionCall(DeleteMyAccountHandler(stub.fn(), nil), deletionCaller, meDeletionPath,
+		`{"outcome":"hand_on","heir_user_id":"`+upper+`"}`)
+	if status != http.StatusOK || stub.heir != heirID {
+		t.Errorf("status = %d, heir = %q, want 200 and %q", status, stub.heir, heirID)
 	}
 }
 
@@ -166,14 +192,14 @@ func previewCall(h http.HandlerFunc, id *auth.Identity) (int, string) {
 }
 
 func TestAccountDeletionPreviewHandler_Shape(t *testing.T) {
-	name := "Chidi Eze"
+	name, id := "Chidi Eze", heirID
 	serve := func(p AccountDeletionPreview, err error) http.HandlerFunc {
 		return AccountDeletionPreviewHandler(func(context.Context) (AccountDeletionPreview, error) { return p, err }, nil)
 	}
 
 	t.Run("hand_on names the heir", func(t *testing.T) {
-		status, body := previewCall(serve(AccountDeletionPreview{Outcome: OutcomeHandOn, HeirName: &name}, nil), deletionCaller)
-		if status != http.StatusOK || body != `{"outcome":"hand_on","heir_name":"Chidi Eze"}` {
+		status, body := previewCall(serve(AccountDeletionPreview{Outcome: OutcomeHandOn, HeirName: &name, HeirUserID: &id}, nil), deletionCaller)
+		if status != http.StatusOK || body != `{"outcome":"hand_on","heir_name":"Chidi Eze","heir_user_id":"`+heirID+`"}` {
 			t.Errorf("status = %d, body = %s, want 200 and the heir named", status, body)
 		}
 	})
@@ -183,8 +209,8 @@ func TestAccountDeletionPreviewHandler_Shape(t *testing.T) {
 			status, body := previewCall(serve(AccountDeletionPreview{Outcome: o}, nil), deletionCaller)
 			var got map[string]json.RawMessage
 			_ = json.Unmarshal([]byte(body), &got)
-			if status != http.StatusOK || string(got["outcome"]) != `"`+string(o)+`"` || string(got["heir_name"]) != "null" || len(got) != 2 {
-				t.Errorf("%s: status = %d, body = %s, want 200 with outcome and heir_name:null", o, status, body)
+			if status != http.StatusOK || string(got["outcome"]) != `"`+string(o)+`"` || string(got["heir_name"]) != "null" || string(got["heir_user_id"]) != "null" || len(got) != 3 {
+				t.Errorf("%s: status = %d, body = %s, want 200 with outcome, heir_name:null and heir_user_id:null", o, status, body)
 			}
 		}
 	})

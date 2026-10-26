@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -119,6 +120,13 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/evidence-bundle", archive.DownloadHandler(bundleStore.Assemble, app.Logger))
 	app.Mux.HandleFunc("GET /v1/evidence-bundle/preview", archive.PreviewHandler(bundleStore.Preview, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoice-register", archive.RegisterHandler(bundleStore.Register, app.Logger))
+	openObject := func(ctx context.Context, key string) (io.ReadCloser, error) {
+		o, err := docObjects.Get(ctx, key, "")
+		return o.Body, err
+	}
+	workspaceStore := archive.NewWorkspaceStore(pool, openObject)
+	app.Mux.HandleFunc("GET /v1/workspace/export", archive.WorkspaceExportHandler(workspaceStore.AssembleWorkspace, app.Logger))
+	app.Mux.HandleFunc("GET /v1/workspace/export/preflight", archive.WorkspaceExportPreflightHandler(workspaceStore.PreflightWorkspace, app.Logger))
 	// GET /v1/staff/tenants/{id}/...: staff reads of one tenant's companies and evidence bundle.
 	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}/entities", archive.StaffEntitiesHandler(bundleStore.StaffEntities, app.Logger))
 	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}/evidence-bundle", archive.StaffDownloadHandler(bundleStore.StaffAssemble, app.Logger))

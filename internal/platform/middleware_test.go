@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func discardLogger() *slog.Logger {
@@ -168,4 +169,61 @@ func TestStatusRecorder(t *testing.T) {
 			t.Errorf("WriteHeader(%d) then 502: status = %d, want %d", tc.first, sr.status, tc.want)
 		}
 	}
+}
+
+func TestApp_AHandlerCanExtendItsWriteDeadline(t *testing.T) {
+	app, _ := leakApp(t)
+	var got error
+	called := false
+	app.Mux.HandleFunc("GET /v1/long", func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		got = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(time.Hour))
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	res, err := srv.Client().Get(srv.URL + "/v1/long")
+	if err != nil {
+		t.Fatalf("GET /v1/long: %v", err)
+	}
+	res.Body.Close()
+	if !called {
+		t.Fatal("the route never ran, so its SetWriteDeadline result proves nothing")
+	}
+	if got != nil {
+		t.Errorf("SetWriteDeadline through the middleware chain = %v, want nil", got)
+	}
+}
+
+func TestApp_AFlushedResponseKeepsItsRecordedStatus(t *testing.T) {
+	app, mt := leakApp(t)
+	var logs bytes.Buffer
+	app.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	var flushErr error
+	app.Mux.HandleFunc("GET /v1/flushed", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("partial"))
+		flushErr = http.NewResponseController(w).Flush()
+	})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	res, err := srv.Client().Get(srv.URL + "/v1/flushed")
+	if err != nil {
+		t.Fatalf("GET /v1/flushed: %v", err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+
+	if flushErr != nil {
+		t.Errorf("Flush through the middleware chain = %v, want nil", flushErr)
+	}
+	if res.StatusCode != http.StatusBadGateway || string(body) != "partial" {
+		t.Errorf("client read %d %q, want 502 %q", res.StatusCode, body, "partial")
+	}
+	if !strings.Contains(logs.String(), "status=502") {
+		t.Errorf("request log = %q, want status=502", logs.String())
+	}
+	oneEvent(t, mt, "")
 }

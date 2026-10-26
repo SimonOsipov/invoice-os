@@ -18,6 +18,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 )
 
 const staffReasonText = "customer asked by email"
@@ -666,5 +667,455 @@ func TestStaffDeletion_ATenantPurgedAfterTheStaffCheckIsNotFound(t *testing.T) {
 				t.Errorf("staff_audit_log %s rows = %d, want 0", evCancelled, n)
 			}
 		})
+	}
+}
+
+const (
+	wantPurgeStartedEvent = "workspace.purge_started"
+	wantPurgeJobKind      = "workspace_purge" // purgeargs.Args.Kind()
+	purgeReason           = "court order"
+	adminMarkerEmail      = "marker-adaeze@members.test"
+)
+
+// newStaffPurgeWorld is a staff world whose store holds an insert-only erase queue, with the tenant's admin named.
+func newStaffPurgeWorld(t *testing.T, adminName string) staffDelWorld {
+	t.Helper()
+	w := newInvWorld(t, obi, adminName)
+	houseID, staff := houseMember(t, w.super, "active")
+	q, err := queue.New(w.app, queue.Config{})
+	if err != nil {
+		t.Fatalf("build the insert-only queue client: %v", err)
+	}
+	w.store.SetEraseQueue(q.River())
+	dropPurgeJobsOnCleanup(t, w.super, w.tenant)
+	if _, err := w.super.Exec(context.Background(), `UPDATE memberships SET email = $2 WHERE user_id = $1`, w.admin, adminMarkerEmail); err != nil {
+		t.Fatalf("set the admin's marker email: %v", err)
+	}
+	return staffDelWorld{invWorld: w, houseID: houseID, staff: staff, ctx: staffCtx(staff)}
+}
+
+func dropPurgeJobsOnCleanup(t *testing.T, super *pgxpool.Pool, tenants ...string) {
+	t.Helper()
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(),
+			`DELETE FROM river_job WHERE kind = $1 AND args->>'tenant_id' = ANY($2::text[])`, wantPurgeJobKind, tenants)
+	})
+}
+
+// purgeJobsOf returns the encoded args of the tenant's queued workspace_purge jobs.
+func purgeJobsOf(t *testing.T, super *pgxpool.Pool, tenant string) []string {
+	t.Helper()
+	rows, err := super.Query(context.Background(),
+		`SELECT args::text FROM river_job WHERE kind = $1 AND args->>'tenant_id' = $2 ORDER BY id`, wantPurgeJobKind, tenant)
+	if err != nil {
+		t.Fatalf("read river_job: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			t.Fatalf("scan river_job: %v", err)
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+func tenantNameOf(t *testing.T, super *pgxpool.Pool, tenant string) string {
+	t.Helper()
+	var name string
+	if err := super.QueryRow(context.Background(), `SELECT name FROM tenants WHERE id = $1`, tenant).Scan(&name); err != nil {
+		t.Fatalf("read the tenant name: %v", err)
+	}
+	return name
+}
+
+// requireUntouched fails when the tenant has a deletion column, a marker, a queued purge job or a staff row.
+func requireUntouched(t *testing.T, w staffDelWorld, tenant string) {
+	t.Helper()
+	if c := deletionOf(t, w.super, tenant); !c.empty() {
+		t.Errorf("deletion columns of %s = %+v, want all NULL", tenant, c)
+	}
+	if m := purgeStartedAt(t, w.super, tenant); m != nil {
+		t.Errorf("deletion_purge_started_at of %s = %v, want NULL", tenant, m)
+	}
+	if jobs := purgeJobsOf(t, w.super, tenant); len(jobs) != 0 {
+		t.Errorf("queued %s jobs of %s = %v, want none", wantPurgeJobKind, tenant, jobs)
+	}
+	if n := tenantRowsOfStaff(t, w.super, tenant); n != 0 {
+		t.Errorf("staff_audit_log rows of %s = %d, want 0", tenant, n)
+	}
+}
+
+func TestStaffPurge_MarksAuditsAndQueuesInOneTransaction(t *testing.T) {
+	w := newStaffPurgeWorld(t, "Adaeze Obi")
+	lockByOwner(t, w.super, w.tenant, w.admin) // scheduled by someone else, so the purge must keep that schedule
+	before := deletionOf(t, w.super, w.tenant)
+	if before.DueAt == nil {
+		t.Fatal("setup: the scheduled tenant has no due time")
+	}
+
+	at, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason)
+	if err != nil {
+		t.Fatalf("StaffPurgeWorkspace: %v", err)
+	}
+
+	marker := purgeStartedAt(t, w.super, w.tenant)
+	if marker == nil || !marker.Equal(at) {
+		t.Errorf("deletion_purge_started_at = %v, want the returned %v", marker, at)
+	}
+	if after := deletionOf(t, w.super, w.tenant); after.By == nil || *after.By != w.admin || after.DueAt == nil || !after.DueAt.Equal(*before.DueAt) {
+		t.Errorf("schedule after the purge = %+v, want the earlier schedule (by %s, due %v) kept", after, w.admin, before.DueAt)
+	}
+
+	rows := staffRowsOf(t, w.super, w.tenant, wantPurgeStartedEvent)
+	if len(rows) != 1 {
+		t.Fatalf("staff_audit_log %s rows = %d, want 1", wantPurgeStartedEvent, len(rows))
+	}
+	if rows[0].Actor != w.staff {
+		t.Errorf("staff row actor = %s, want the staff subject %s", rows[0].Actor, w.staff)
+	}
+	if !slices.Equal(keysOf(rows[0].Payload), []string{"reason"}) || rows[0].Payload["reason"] != purgeReason {
+		t.Errorf("staff payload = %v, want exactly {reason: %q}", rows[0].Payload, purgeReason)
+	}
+	if n := tenantRowsOfStaff(t, w.super, w.tenant); n != 1 {
+		t.Errorf("staff_audit_log rows of the tenant = %d, want only the purge_started row", n)
+	}
+	var raw string
+	if err := w.super.QueryRow(context.Background(),
+		`SELECT payload::text FROM public.staff_audit_log WHERE tenant_id = $1 AND event = $2`, w.tenant, wantPurgeStartedEvent).Scan(&raw); err != nil {
+		t.Fatalf("read the payload text: %v", err)
+	}
+	for _, leak := range []string{adminMarkerEmail, "Adaeze", w.admin} {
+		if strings.Contains(raw, leak) {
+			t.Errorf("staff payload %s carries %q", raw, leak)
+		}
+	}
+
+	jobs := purgeJobsOf(t, w.super, w.tenant)
+	if len(jobs) != 1 {
+		t.Fatalf("queued %s jobs = %d, want 1", wantPurgeJobKind, len(jobs))
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(jobs[0]), &args); err != nil || len(args) != 1 || args["tenant_id"] != w.tenant {
+		t.Errorf("job args = %s (%v), want exactly {tenant_id: %s}", jobs[0], err, w.tenant)
+	}
+}
+
+func TestStaffPurge_SchedulesAnUnscheduledTenantFirst(t *testing.T) {
+	w := newStaffPurgeWorld(t, "Ada Obi")
+	before := time.Now()
+
+	at, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason)
+	if err != nil {
+		t.Fatalf("StaffPurgeWorkspace on an unscheduled tenant: %v", err)
+	}
+
+	c := deletionOf(t, w.super, w.tenant)
+	if c.ScheduledAt == nil || c.DueAt == nil {
+		t.Fatalf("deletion columns after the purge = %+v, want the schedule set", c)
+	}
+	if c.By == nil || *c.By != w.staff {
+		t.Errorf("deletion_scheduled_by = %v, want the staff subject %s", c.By, w.staff)
+	}
+	near(t, "due", *c.DueAt, before.Add(720*time.Hour), time.Minute) // the DEL-04 trigger's 30 days
+	if m := purgeStartedAt(t, w.super, w.tenant); m == nil || !m.Equal(at) {
+		t.Errorf("deletion_purge_started_at = %v, want the returned %v", m, at)
+	}
+	if !workspaceLocked(t, w.app, w.tenant) {
+		t.Error("db.WorkspaceLocked = false after the purge, want true")
+	}
+	if n := tenantRowsOfStaff(t, w.super, w.tenant); n != 1 {
+		t.Errorf("staff_audit_log rows of the tenant = %d, want 1 (purge_started)", n)
+	}
+	if n := len(purgeJobsOf(t, w.super, w.tenant)); n != 1 {
+		t.Errorf("queued %s jobs = %d, want 1", wantPurgeJobKind, n)
+	}
+}
+
+func TestStaffPurge_ClosesEveryCancel(t *testing.T) {
+	w := newStaffPurgeWorld(t, "Ada Obi")
+	at, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason)
+	if err != nil {
+		t.Fatalf("StaffPurgeWorkspace: %v", err)
+	}
+	due := deletionOf(t, w.super, w.tenant).DueAt
+	if due == nil {
+		t.Fatal("setup: no due time after the purge")
+	}
+
+	if err := w.store.CancelWorkspaceDeletion(w.adminCtx()); !errors.Is(err, ErrDeletionUnderway) {
+		t.Errorf("an admin's cancel: err = %v, want ErrDeletionUnderway", err)
+	}
+	if err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); !errors.Is(err, ErrDeletionUnderway) {
+		t.Errorf("the staff cancel: err = %v, want ErrDeletionUnderway", err)
+	}
+	// A second purge (a double click) is refused too and queues no second job.
+	if _, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason); !errors.Is(err, ErrDeletionUnderway) {
+		t.Errorf("a second purge: err = %v, want ErrDeletionUnderway", err)
+	}
+
+	if m := purgeStartedAt(t, w.super, w.tenant); m == nil || !m.Equal(at) {
+		t.Errorf("deletion_purge_started_at = %v, want %v unchanged", m, at)
+	}
+	if got := deletionOf(t, w.super, w.tenant).DueAt; got == nil || !got.Equal(*due) {
+		t.Errorf("deletion_due_at = %v, want %v unchanged", got, due)
+	}
+	if n := tenantRowsOfStaff(t, w.super, w.tenant); n != 1 {
+		t.Errorf("staff_audit_log rows of the tenant = %d, want only the first purge's 1", n)
+	}
+	if n := len(purgeJobsOf(t, w.super, w.tenant)); n != 1 {
+		t.Errorf("queued %s jobs = %d, want 1", wantPurgeJobKind, n)
+	}
+}
+
+func TestStaffPurge_ANameMismatchWritesNothing(t *testing.T) {
+	w := newStaffPurgeWorld(t, "Ada Obi")
+	bName := "Bystander Holdings"
+	b := seedTenant(t, w.super, bName)
+	dropPurgeJobsOnCleanup(t, w.super, b)
+
+	for _, tc := range []struct{ name, typed string }{
+		{"lower-cased", strings.ToLower(obi)},
+		{"upper-cased", strings.ToUpper(obi)},
+		{"a trailing space", obi + " "},
+		{"a leading space", " " + obi},
+		{"another tenant's name", bName},
+		{"empty", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, tc.typed, purgeReason)
+			if !errors.Is(err, ErrWorkspaceNameMismatch) {
+				t.Errorf("err = %v, want ErrWorkspaceNameMismatch", err)
+			}
+			requireUntouched(t, w, w.tenant)
+			requireUntouched(t, w, b)
+		})
+	}
+
+	t.Run("control: the exact name purges", func(t *testing.T) {
+		if _, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason); err != nil {
+			t.Fatalf("StaffPurgeWorkspace with the exact name: %v", err)
+		}
+		if n := len(purgeJobsOf(t, w.super, w.tenant)); n != 1 {
+			t.Errorf("queued %s jobs = %d, want 1", wantPurgeJobKind, n)
+		}
+	})
+}
+
+func TestStaffPurge_RefusesTheHouseAndAStartedTenant(t *testing.T) {
+	w := newStaffPurgeWorld(t, "Ada Obi")
+	dropPurgeJobsOnCleanup(t, w.super, w.houseID)
+	houseName := tenantNameOf(t, w.super, w.houseID)
+	houseRowsBefore := tenantRowsOfStaff(t, w.super, w.houseID)
+
+	if _, err := w.store.StaffPurgeWorkspace(w.ctx, w.houseID, houseName, purgeReason); !errors.Is(err, ErrHouseWorkspace) {
+		t.Errorf("the house tenant: err = %v, want ErrHouseWorkspace", err)
+	}
+	if c := deletionOf(t, w.super, w.houseID); !c.empty() {
+		t.Errorf("the house tenant's deletion columns = %+v, want all NULL", c)
+	}
+	if m := purgeStartedAt(t, w.super, w.houseID); m != nil {
+		t.Errorf("the house tenant's marker = %v, want NULL", m)
+	}
+	if n := len(purgeJobsOf(t, w.super, w.houseID)); n != 0 {
+		t.Errorf("queued %s jobs of the house tenant = %d, want 0", wantPurgeJobKind, n)
+	}
+	if n := tenantRowsOfStaff(t, w.super, w.houseID); n != houseRowsBefore {
+		t.Errorf("staff_audit_log rows of the house tenant = %d, want %d unchanged", n, houseRowsBefore)
+	}
+
+	startPurge(t, w.super, w.tenant, w.staff)
+	marker := purgeStartedAt(t, w.super, w.tenant)
+	if marker == nil {
+		t.Fatal("setup: no purge marker")
+	}
+	if _, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason); !errors.Is(err, ErrDeletionUnderway) {
+		t.Errorf("a started tenant: err = %v, want ErrDeletionUnderway", err)
+	}
+	if got := purgeStartedAt(t, w.super, w.tenant); got == nil || !got.Equal(*marker) {
+		t.Errorf("deletion_purge_started_at = %v, want %v unchanged", got, marker)
+	}
+	if n := len(purgeJobsOf(t, w.super, w.tenant)); n != 0 {
+		t.Errorf("queued %s jobs of the started tenant = %d, want 0", wantPurgeJobKind, n)
+	}
+	if n := tenantRowsOfStaff(t, w.super, w.tenant); n != 0 {
+		t.Errorf("staff_audit_log rows of the started tenant = %d, want 0", n)
+	}
+}
+
+func TestStaffPurge_RefusesWithoutAStaffCaller(t *testing.T) {
+	w := newStaffPurgeWorld(t, "Ada Obi")
+	_, suspended := houseMember(t, w.super, "suspended")
+
+	callers := map[string]context.Context{
+		"no caller":                          context.Background(),
+		"a customer admin":                   w.adminCtx(),
+		"a customer admin, tenantless":       auth.WithTenantlessCaller(context.Background(), auth.Identity{Subject: w.admin, Role: "authenticated"}),
+		"the staff flag on a customer admin": staffCtx(w.admin),
+		"a suspended house member":           staffCtx(suspended),
+	}
+	for name, ctx := range callers {
+		t.Run(name, func(t *testing.T) {
+			if _, err := w.store.StaffPurgeWorkspace(ctx, w.tenant, obi, purgeReason); !errors.Is(err, db.ErrNotStaff) {
+				t.Errorf("err = %v, want db.ErrNotStaff", err)
+			}
+			requireUntouched(t, w, w.tenant)
+		})
+	}
+
+	t.Run("control: the staff caller purges the same tenant", func(t *testing.T) {
+		if _, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason); err != nil {
+			t.Errorf("staff purge: %v", err)
+		}
+	})
+}
+
+func TestStaffPurge_ActsOnlyOnThePathTenant(t *testing.T) {
+	w := newStaffPurgeWorld(t, "Ada Obi")
+	b := seedTenant(t, w.super, "Bystander Holdings")
+	c := seedTenant(t, w.super, "Scheduled Bystander")
+	dropPurgeJobsOnCleanup(t, w.super, b, c)
+	lockByOwner(t, w.super, c, w.staff)
+	cBefore := deletionOf(t, w.super, c)
+
+	if _, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason); err != nil {
+		t.Fatalf("purge of A: %v", err)
+	}
+	if m := purgeStartedAt(t, w.super, w.tenant); m == nil {
+		t.Fatal("control: A has no marker after its purge")
+	}
+
+	requireUntouched(t, w, b)
+	if got := deletionOf(t, w.super, c); got.DueAt == nil || !got.DueAt.Equal(*cBefore.DueAt) || got.By == nil || *got.By != w.staff {
+		t.Errorf("scheduled bystander's columns = %+v, want %+v unchanged", got, cBefore)
+	}
+	if m := purgeStartedAt(t, w.super, c); m != nil {
+		t.Errorf("scheduled bystander's marker = %v, want NULL", m)
+	}
+	for _, other := range []string{b, c} {
+		if n := len(purgeJobsOf(t, w.super, other)); n != 0 {
+			t.Errorf("queued %s jobs of %s = %d, want 0", wantPurgeJobKind, other, n)
+		}
+		if n := tenantRowsOfStaff(t, w.super, other); n != 0 {
+			t.Errorf("staff_audit_log rows of %s = %d, want 0", other, n)
+		}
+		if n := auditCount(t, w.app, other, wantPurgeStartedEvent); n != 0 {
+			t.Errorf("audit_log %s rows of %s = %d, want 0", wantPurgeStartedEvent, other, n)
+		}
+	}
+}
+
+func TestStaffPurge_AnUnknownTenantIsNotFound(t *testing.T) {
+	w := newStaffPurgeWorld(t, "Ada Obi")
+	for _, id := range []string{uuid.NewString(), "x", ""} {
+		if _, err := w.store.StaffPurgeWorkspace(w.ctx, id, obi, purgeReason); !errors.Is(err, ErrTenantNotFound) {
+			t.Errorf("id %q: err = %v, want ErrTenantNotFound", id, err)
+		}
+	}
+	requireUntouched(t, w, w.tenant)
+}
+
+func TestStaffPurge_WithoutAnEraseQueueFailsBeforeAnyTransaction(t *testing.T) {
+	w := newStaffPurgeWorld(t, "Ada Obi")
+	w.store.SetEraseQueue(nil)
+
+	// An unknown tenant would answer ErrTenantNotFound if a transaction ran first.
+	for _, id := range []string{w.tenant, uuid.NewString()} {
+		if _, err := w.store.StaffPurgeWorkspace(w.ctx, id, obi, purgeReason); !errors.Is(err, errNoEraseQueue) {
+			t.Errorf("id %s: err = %v, want errNoEraseQueue", id, err)
+		}
+	}
+	requireUntouched(t, w, w.tenant)
+}
+
+func TestStaffPurge_AFailedStaffRowRollsBack(t *testing.T) {
+	w := newStaffPurgeWorld(t, "Ada Obi")
+	drop := failStaffAudit(t, w.super, w.tenant, wantPurgeStartedEvent)
+
+	_, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason)
+	if err == nil {
+		t.Fatal("StaffPurgeWorkspace succeeded although its staff row fails")
+	}
+	requireNoSentinel(t, err)
+	requireUntouched(t, w, w.tenant)
+
+	drop()
+	if _, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason); err != nil {
+		t.Errorf("purge after the trigger is gone: %v", err)
+	}
+}
+
+func TestStaffPurge_AFailedJobInsertRollsBackTheStaffRowToo(t *testing.T) {
+	w := newStaffPurgeWorld(t, "Ada Obi")
+	ctx := context.Background()
+	name := "river_fail_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err := w.super.Exec(ctx,
+		`CREATE FUNCTION `+name+`() RETURNS trigger LANGUAGE plpgsql AS $$
+		 BEGIN RAISE EXCEPTION 'forced job insert failure' USING ERRCODE = 'check_violation'; END; $$`); err != nil {
+		t.Fatalf("create the forced-failure function: %v", err)
+	}
+	t.Cleanup(func() { _, _ = w.super.Exec(context.Background(), `DROP FUNCTION IF EXISTS `+name+`() CASCADE`) })
+	if _, err := w.super.Exec(ctx,
+		`CREATE TRIGGER `+name+` BEFORE INSERT ON public.river_job FOR EACH ROW
+		 WHEN (NEW.kind = `+quoteLiteral(wantPurgeJobKind)+` AND NEW.args->>'tenant_id' = `+quoteLiteral(w.tenant)+`) EXECUTE FUNCTION `+name+`()`); err != nil {
+		t.Fatalf("create the forced-failure trigger: %v", err)
+	}
+
+	_, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason)
+	if err == nil {
+		t.Fatal("StaffPurgeWorkspace succeeded although its job insert fails")
+	}
+	requireNoSentinel(t, err)
+	requireUntouched(t, w, w.tenant)
+	if n := auditCount(t, w.app, w.tenant, wantPurgeStartedEvent); n != 0 {
+		t.Errorf("audit_log %s rows = %d after the rollback, want 0", wantPurgeStartedEvent, n)
+	}
+
+	if _, err := w.super.Exec(ctx, `DROP TRIGGER `+name+` ON public.river_job`); err != nil {
+		t.Fatalf("drop the forced-failure trigger: %v", err)
+	}
+	if _, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason); err != nil {
+		t.Errorf("purge after the trigger is gone: %v", err)
+	}
+}
+
+func TestStaffPurge_ConcurrentCallsQueueOneJobAndWriteOneRow(t *testing.T) {
+	w := newStaffPurgeWorld(t, "Ada Obi")
+	const callers = 8
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	gate := make(chan struct{})
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-gate
+			_, errs[i] = w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason)
+		}()
+	}
+	close(gate)
+	wg.Wait()
+
+	won, underway := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			won++
+		case errors.Is(err, ErrDeletionUnderway):
+			underway++
+		default:
+			t.Errorf("a concurrent purge failed with %v, want nil or ErrDeletionUnderway", err)
+		}
+	}
+	if won != 1 || underway != callers-1 {
+		t.Errorf("%d purges won and %d were refused, want 1 and %d", won, underway, callers-1)
+	}
+	if n := len(purgeJobsOf(t, w.super, w.tenant)); n != 1 {
+		t.Errorf("queued %s jobs = %d, want 1", wantPurgeJobKind, n)
+	}
+	if n := len(staffRowsOf(t, w.super, w.tenant, wantPurgeStartedEvent)); n != 1 {
+		t.Errorf("staff_audit_log %s rows = %d, want 1", wantPurgeStartedEvent, n)
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"sort"
@@ -28,6 +30,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth/gotrueadmin"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/tenancy"
+	"github.com/SimonOsipov/invoice-os/internal/workspacepurge/purgeargs"
 )
 
 const (
@@ -1681,5 +1684,187 @@ func TestPurge_TheHouseTenantIsNeverPurged(t *testing.T) {
 	}
 	if dueIDs, err := dueTenants(context.Background(), r.reader); err != nil || slices.Contains(dueIDs, house) {
 		t.Errorf("dueTenants = %v, %v; want no house tenant", dueIDs, err)
+	}
+}
+
+const (
+	wantPurgeStartedEvent = "workspace.purge_started"
+	wantPurgeJobKind      = "workspace_purge" // purgeargs.Args.Kind()
+)
+
+// staffCaller seeds an active member of the house tenant and returns the context auth.RequireStaff builds for them.
+func (r *rig) staffCaller() (ctx context.Context, subject string) {
+	r.t.Helper()
+	var house string
+	err := r.super.QueryRow(context.Background(), `SELECT tenant_id::text FROM public.house_company`).Scan(&house)
+	if errors.Is(err, pgx.ErrNoRows) {
+		house = r.tenant()
+		r.exec(`INSERT INTO public.house_company (tenant_id) VALUES ($1)`, house)
+		r.t.Cleanup(func() {
+			_, _ = r.super.Exec(context.Background(), `DELETE FROM public.house_company WHERE tenant_id = $1`, house)
+		})
+	} else if err != nil {
+		r.t.Fatalf("read the house row: %v", err)
+	}
+	subject = r.user()
+	r.exec(`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`, house, subject)
+	r.t.Cleanup(func() {
+		_, _ = r.super.Exec(context.Background(), `DELETE FROM memberships WHERE tenant_id = $1 AND user_id = $2`, house, subject)
+	})
+	h := auth.RequireStaff(http.HandlerFunc(func(_ http.ResponseWriter, req *http.Request) { ctx = req.Context() }))
+	in := auth.WithTenantlessCaller(context.Background(), auth.Identity{Subject: subject, Role: "authenticated", Staff: true})
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/staff/tenants", nil).WithContext(in))
+	return ctx, subject
+}
+
+// staffStore is a tenancy store whose erase queue is the rig's insert-only River client.
+func (r *rig) staffStore() *tenancy.Store {
+	s := tenancy.NewStore(r.app)
+	s.SetEraseQueue(r.river)
+	return s
+}
+
+func (r *rig) dropPurgeJobsOnCleanup(tenants ...string) {
+	r.t.Cleanup(func() {
+		_, _ = r.super.Exec(context.Background(),
+			`DELETE FROM river_job WHERE kind = $1 AND args->>'tenant_id' = ANY($2::text[])`, wantPurgeJobKind, tenants)
+	})
+}
+
+// purgeJobs decodes the args of the tenant's queued workspace_purge jobs.
+func (r *rig) purgeJobs(tenant string) []purgeargs.Args {
+	r.t.Helper()
+	rows, err := r.super.Query(context.Background(),
+		`SELECT args FROM river_job WHERE kind = $1 AND args->>'tenant_id' = $2 ORDER BY id`, wantPurgeJobKind, tenant)
+	if err != nil {
+		r.t.Fatalf("read river_job: %v", err)
+	}
+	defer rows.Close()
+	var out []purgeargs.Args
+	for rows.Next() {
+		var raw []byte
+		var a purgeargs.Args
+		if err := rows.Scan(&raw); err != nil {
+			r.t.Fatalf("scan river_job: %v", err)
+		}
+		if err := json.Unmarshal(raw, &a); err != nil {
+			r.t.Fatalf("decode job args %s: %v", raw, err)
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+func (r *rig) tenantName(tenant string) string {
+	r.t.Helper()
+	var name string
+	if err := r.super.QueryRow(context.Background(), `SELECT name FROM tenants WHERE id = $1`, tenant).Scan(&name); err != nil {
+		r.t.Fatalf("read the tenant name: %v", err)
+	}
+	return name
+}
+
+func TestStaffPurgeNow_TheJobPurgesTheWorkspace(t *testing.T) {
+	r := newRig(t)
+	ctx, staff := r.staffCaller()
+	store := r.staffStore()
+	a, b := r.tenant(), r.tenant()
+	r.dropPurgeJobsOnCleanup(a, b)
+	admin, mail := r.user(), r.mail("staffpurge")
+	r.member(a, admin, "admin", "active", &mail, "")
+	r.put(a, 2)
+	bUser, bMail := r.user(), r.mail("bystander")
+	r.member(b, bUser, "admin", "active", &bMail, "")
+	r.put(b, 1)
+
+	at, err := store.StaffPurgeWorkspace(ctx, a, r.tenantName(a), "court order")
+	if err != nil {
+		t.Fatalf("StaffPurgeWorkspace: %v", err)
+	}
+	jobs := r.purgeJobs(a)
+	if len(jobs) != 1 || jobs[0].TenantID != a {
+		t.Fatalf("queued %s jobs of A = %+v, want one naming A", wantPurgeJobKind, jobs)
+	}
+	if m := r.marker(a); m == nil || !m.Equal(at) || r.tenantRows(a) != 1 || r.objects(a) != 2 {
+		t.Fatalf("before the job: marker = %v (want %v), tenant rows = %d, objects = %d; want the started tenant intact", m, at, r.tenantRows(a), r.objects(a))
+	}
+
+	if err := r.worker().Work(context.Background(), purgeJob(jobs[0].TenantID)); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if r.tenantRows(a) != 0 || r.memberRows(a) != 0 || r.objects(a) != 0 {
+		t.Errorf("A's tenant, member and object counts = %d, %d, %d; want 0, 0, 0", r.tenantRows(a), r.memberRows(a), r.objects(a))
+	}
+	if r.erasures(admin) != 1 {
+		t.Error("the admin of A has no erasure row")
+	}
+	var events []string
+	for _, row := range r.staff(a) {
+		events = append(events, row.Event)
+		if row.Event == wantPurgeStartedEvent && (row.Actor != staff || !slices.Equal(sortedKeys(row.Payload), []string{"reason"})) {
+			t.Errorf("%s row = actor %s, payload %v; want the staff subject %s and exactly {reason}", wantPurgeStartedEvent, row.Actor, row.Payload, staff)
+		}
+	}
+	if !slices.Equal(events, []string{wantPurgeStartedEvent, "workspace.purged"}) {
+		t.Errorf("staff rows of A = %v, want [%s workspace.purged] and no other step", events, wantPurgeStartedEvent)
+	}
+
+	if r.tenantRows(b) != 1 || r.memberRows(b) != 1 || r.objects(b) != 1 || r.erasures(bUser) != 0 || r.marker(b) != nil {
+		t.Error("bystander B lost a row or object, or got an erasure or a marker")
+	}
+	if n := len(r.staff(b)); n != 0 || len(r.purgeJobs(b)) != 0 {
+		t.Errorf("bystander B has %d staff rows and %d purge jobs, want 0 and 0", n, len(r.purgeJobs(b)))
+	}
+}
+
+func TestStaffPurgeNow_TheRemovedCreatorCanCreateAWorkspaceAgain(t *testing.T) {
+	r := newRig(t)
+	ctx, _ := r.staffCaller()
+	staffStore := r.staffStore()
+	creator := r.user()
+	derived := uuid.NewSHA1(uuid.MustParse(creatorNS), []byte(creator)).String()
+	r.removeOnCleanup(derived)
+	r.dropPurgeJobsOnCleanup(derived)
+	store := tenancy.NewStore(r.app)
+	callerCtx := auth.WithTenantlessCaller(context.Background(), auth.Identity{Subject: creator, Email: creator + "@example.invalid"})
+	const wsName = "Creator Workspace"
+	in := tenancy.ProvisionInput{WorkspaceName: wsName, DisplayName: "Creator"}
+
+	first, _, err := store.ProvisionWorkspace(callerCtx, in)
+	if err != nil {
+		t.Fatalf("first ProvisionWorkspace: %v", err)
+	}
+	if first.ID != derived {
+		t.Fatalf("control: first tenant id = %s, want the derived %s", first.ID, derived)
+	}
+	other, otherMail := r.user(), r.mail("other")
+	r.member(derived, other, "admin", "active", &otherMail, "")
+	r.exec(`UPDATE memberships SET status = 'removed', email = NULL WHERE tenant_id = $1 AND user_id = $2`, derived, creator)
+
+	if _, err := staffStore.StaffPurgeWorkspace(ctx, derived, wsName, "court order"); err != nil {
+		t.Fatalf("StaffPurgeWorkspace: %v", err)
+	}
+	jobs := r.purgeJobs(derived)
+	if len(jobs) != 1 {
+		t.Fatalf("queued %s jobs = %d, want 1", wantPurgeJobKind, len(jobs))
+	}
+	if err := r.worker().Work(context.Background(), purgeJob(jobs[0].TenantID)); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if r.tenantRows(derived) != 0 {
+		t.Fatal("control: the derived tenant is still there after the job")
+	}
+
+	second, _, err := store.ProvisionWorkspace(callerCtx, in)
+	if err != nil {
+		t.Fatalf("ProvisionWorkspace after the purge now: %v (ErrAlreadyProvisioned = %v)", err, errors.Is(err, tenancy.ErrAlreadyProvisioned))
+	}
+	if second.ID != derived {
+		r.removeOnCleanup(second.ID)
+		t.Errorf("tenant id = %s, want the derived %s, not a random one", second.ID, derived)
+	}
+	if n := r.count(`SELECT count(*) FROM memberships WHERE tenant_id = $1 AND user_id = $2 AND status = 'active'`, derived, creator); n != 1 {
+		t.Errorf("active memberships of the creator = %d, want 1", n)
 	}
 }

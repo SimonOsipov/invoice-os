@@ -235,3 +235,15 @@ func StaffCancelDeletionHandler(cancel func(ctx context.Context, tenantID, reaso
 		writeJSON(w, http.StatusOK, map[string]any{"deletion_due_at": nil})
 	}
 }
+
+// StaffPurgeWorkspace is a signature stub until DEL-09-04 is implemented.
+func (s *Store) StaffPurgeWorkspace(ctx context.Context, tenantID, typedName, reason string) (time.Time, error) {
+	return time.Time{}, errors.New("tenancy: StaffPurgeWorkspace not implemented")
+}
+
+// StaffPurgeHandler is a signature stub until DEL-09-04 is implemented.
+func StaffPurgeHandler(purge func(ctx context.Context, tenantID, typedName, reason string) (time.Time, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	}
+}

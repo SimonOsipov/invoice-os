@@ -66,6 +66,7 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'invitation.revoked',
     'workspace.deletion_scheduled',
     'workspace.deletion_cancelled',
+    'workspace.purge_started',
     'membership.account_deleted',
     'membership.admin_handed_on',
   ],
@@ -165,6 +166,7 @@ describe('audit vocabulary', () => {
       'workspace.provisioned',
       'workspace.deletion_scheduled',
       'workspace.deletion_cancelled',
+      'workspace.purge_started',
       'membership.account_deleted',
       'membership.admin_handed_on',
       'membership.client_access_set',
@@ -227,6 +229,7 @@ describe('audit vocabulary', () => {
     for (const [id, label] of [
       ['workspace.deletion_scheduled', 'Workspace deletion scheduled'],
       ['workspace.deletion_cancelled', 'Workspace deletion cancelled'],
+      ['workspace.purge_started', 'Workspace purge started'],
       ['membership.account_deleted', 'Account deleted'],
       ['membership.admin_handed_on', 'Admin handed on'],
     ]) {

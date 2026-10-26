@@ -960,6 +960,8 @@ describe('DEL-10-02: the account section states the deletion rules', () => {
     expect(anyAdminCancels()).toBe(true)
     const planted = swap('internal/tenancy/workspace_deletion.go', 'if role != "admin" {', 'if role != "admin" || id.Subject != "deletion_scheduled_by" {')
     expect(anyAdminCancels(planted)).toBe(false)
+    const bypass = swap('internal/tenancy/workspace_deletion.go', 'return s.cancelScheduledDeletion(ctx, &token)', 'return s.cancelByLinkAnyone(ctx, token)')
+    expect(anyAdminCancels(bypass)).toBe(false)
   })
 
   it('DEL-10-02 A6 the purge deletes files before rows and erases every non-removed member', () => {

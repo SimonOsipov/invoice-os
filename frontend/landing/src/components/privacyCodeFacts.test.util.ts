@@ -332,9 +332,18 @@ export function lockRefusesWrites(src: string = readSource('internal/platform/db
   return /case locked && opts\.AccessMode != pgx\.ReadOnly:\s*return ErrWorkspaceLocked/.test(src)
 }
 
+// The body both cancel routes, the button and the emailed link, run.
+function cancelBody(src: string): string {
+  const button = goFunc(src, /func \(s \*Store\) CancelWorkspaceDeletion\b/, 'Store.CancelWorkspaceDeletion')
+  const link = goFunc(src, /func \(s \*Store\) CancelWorkspaceDeletionByLink\b/, 'Store.CancelWorkspaceDeletionByLink')
+  const body = goFunc(src, /func \(s \*Store\) cancelScheduledDeletion\b/, 'Store.cancelScheduledDeletion')
+  const delegates = button.includes('return s.cancelScheduledDeletion(ctx, nil)') && link.includes('return s.cancelScheduledDeletion(ctx, &token)')
+  return delegates ? body : ''
+}
+
 // Cancel gates on the admin role and never on who scheduled the deletion.
 export function anyAdminCancels(src: string = readSource('internal/tenancy/workspace_deletion.go')): boolean {
-  const cancel = goFunc(src, /func \(s \*Store\) CancelWorkspaceDeletion\b/, 'Store.CancelWorkspaceDeletion')
+  const cancel = cancelBody(src)
   return cancel.includes('role != "admin"') && !cancel.includes('deletion_scheduled_by')
 }
 
@@ -412,7 +421,7 @@ export function cancelRefusedOnceThePurgeStarted(
   mapper: string = readSource('internal/tenancy/tenancy.go'),
   migrations: string[] = migrationUps(),
 ): boolean {
-  const cancel = goFunc(src, /func \(s \*Store\) CancelWorkspaceDeletion\b/, 'Store.CancelWorkspaceDeletion')
+  const cancel = cancelBody(src)
   const clear = goFunc(src, /func clearDeletionSchedule\b/, 'clearDeletionSchedule')
   const guard = lastDefinition(migrations, /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?tenants_purge_guard\(\)[\s\S]*?\$\$[\s\S]*?\$\$/i, 'the tenants_purge_guard function')
   return (

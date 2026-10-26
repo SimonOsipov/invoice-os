@@ -11,18 +11,23 @@ const byId = (id: string) => {
 }
 
 describe('content', () => {
-  it('content_hasElevenGroupsTwentySixFeaturesSixStagesSevenTourStops', () => {
-    expect([GROUPS.length, FEATURES.length, STAGES.length, TOUR.length]).toEqual([11, 26, 6, 7])
+  it('content_hasElevenGroupsTwentyEightFeaturesSixStagesSevenTourStops', () => {
+    expect([GROUPS.length, FEATURES.length, STAGES.length, TOUR.length]).toEqual([11, 28, 6, 7])
     expect(FEATURES).toEqual(GROUPS.flatMap((g) => g.feats))
     expect(GROUPS.map((g) => g.n)).toEqual(['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11'])
-    expect(GROUPS.map((g) => g.feats.length)).toEqual([3, 3, 3, 2, 2, 2, 2, 3, 2, 2, 2])
+    expect(GROUPS.map((g) => g.feats.length)).toEqual([3, 3, 3, 2, 2, 2, 2, 3, 4, 2, 2])
+  })
+
+  it('content_membersGroupEndsWithTheTwoDeletionFeatures', () => {
+    const members = GROUPS.find((g) => g.id === 'members')!
+    expect(members.feats.map((f) => f.id)).toEqual(['invite-members', 'roles', 'delete-account', 'delete-workspace'])
   })
 
   it('content_everySceneIsOneOfTheSixKinds', () => {
     expect(FEATURES.length).toBeGreaterThan(0)
     const counts: Record<SceneKind, number> = { list: 0, form: 0, flow: 0, feed: 0, metrics: 0, toggles: 0 }
     for (const f of FEATURES) counts[f.sc.kind]++
-    expect(counts).toEqual({ list: 6, form: 9, flow: 4, feed: 2, metrics: 2, toggles: 3 })
+    expect(counts).toEqual({ list: 6, form: 10, flow: 5, feed: 2, metrics: 2, toggles: 3 })
     for (const f of FEATURES) {
       expect(f.sc.win).not.toBe('')
       expect(f.sc.steps.length).toBeGreaterThanOrEqual(3)
@@ -82,17 +87,17 @@ describe('content', () => {
     for (const id of COMING_SOON_IDS) expect(FEATURES.map((f) => f.id)).toContain(id)
   })
 
-  it('content_marksTheOtherTwentyOneShipped', () => {
+  it('content_marksTheOtherTwentyThreeShipped', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped').map((f) => f.id)
     expect(shipped).toEqual(['import-files', 'create-invoice', 'invoice-status', 'read-documents', 'review-fields', 'learns',
       'rule-library', 'validate', 'custom-rules', 'approval-queue', 'workflow-builder', 'overview', 'reports', 'audit-trail',
-      'evidence-bundle', 'portfolio', 'onboard-client', 'contacts', 'invite-members', 'roles', 'company-profile'])
+      'evidence-bundle', 'portfolio', 'onboard-client', 'contacts', 'invite-members', 'roles', 'delete-account', 'delete-workspace', 'company-profile'])
     for (const f of FEATURES) expect(['shipped', 'soon']).toContain(f.status)
   })
 
   it('content_shippedFeaturesHaveTheirViewsAppPath', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped')
-    expect(shipped).toHaveLength(21)
+    expect(shipped).toHaveLength(23)
     for (const f of shipped) expect(f.path, f.id).toBe(APP_PATHS[f.view])
     expect(byId('overview').path).toBe('/')
     expect(byId('import-files').path).toBe('/create')
@@ -100,6 +105,8 @@ describe('content', () => {
     expect(byId('reports').path).toBe('/reports')
     expect(byId('contacts').path).toBe('/customers')
     expect(byId('company-profile').path).toBe('/settings')
+    expect(byId('delete-account').path).toBe('/account')
+    expect(byId('delete-workspace').path).toBe('/settings')
   })
 
   it('content_comingSoonFeaturesHaveNoPath', () => {
@@ -110,9 +117,9 @@ describe('content', () => {
     for (const f of soon) expect('path' in f, f.id).toBe(false)
   })
 
-  it('content_usesExactlyTheElevenPrototypeViews', () => {
+  it('content_usesExactlyTheTwelveAppViews', () => {
     expect([...new Set(FEATURES.map((f) => f.view))].sort()).toEqual(
-      ['approvals', 'audit', 'clients', 'create', 'customers', 'dashboard', 'invoices', 'reports', 'rules', 'settings', 'workflows'])
+      ['account', 'approvals', 'audit', 'clients', 'create', 'customers', 'dashboard', 'invoices', 'reports', 'rules', 'settings', 'workflows'])
   })
 
   it('content_idsAreUnique', () => {
@@ -151,5 +158,32 @@ describe('content', () => {
     const named = STAGES.map((s) => s[1])
     for (const id of named) expect(gids.has(id), id).toBe(true)
     expect(new Set(named).size).toBe(named.length)
+  })
+
+  it('content_deletionScenesAreAFormAndAFlow', () => {
+    const acct = byId('delete-account').sc
+    const ws = byId('delete-workspace').sc
+    expect(acct.kind).toBe('form')
+    expect(acct.steps.length).toBeGreaterThanOrEqual(3)
+    expect(acct.steps.length).toBeLessThanOrEqual(4)
+    expect(ws.kind).toBe('flow')
+    expect(ws.steps.length).toBeGreaterThanOrEqual(3)
+    expect(ws.steps.length).toBeLessThanOrEqual(4)
+    if (ws.kind !== 'flow') return
+    const at = ws.steps.map((s) => s.at)
+    for (const a of at) expect(a).toBeLessThan(ws.nodes.length)
+    expect(at).toEqual([...at].sort((a, b) => a - b))
+  })
+
+  it('content_deletionEntriesNameWhoTheyAreFor', () => {
+    expect(byId('delete-account').who).toEqual(['Everyone'])
+    expect(byId('delete-workspace').who).toEqual(['Admin'])
+  })
+
+  // Add the export or cancel-link claim only after DEL-06 / DEL-05 ship: edit this regex first.
+  it('content_deletionCopyClaimsOnlyWhatIsLive', () => {
+    const unshipped = /export|download|cancel link|e-?mail/i
+    expect('cancel link by email').toMatch(unshipped)
+    for (const id of ['delete-account', 'delete-workspace']) expect(JSON.stringify(byId(id)), id).not.toMatch(unshipped)
   })
 })

@@ -20,7 +20,7 @@ import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Session } from './auth'
-import { ALL_13 } from './App.atomAudit.data'
+import { ALL_14 } from './App.atomAudit.data'
 import { ROUTE_PATHS } from './lib/route'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import type { PlatformCtx, View } from './types'
@@ -154,7 +154,7 @@ const plainRow = (coldBoot: Cell = COLD_BOOT_LOOP): Row => ({
   forward: FORWARD_IS_BACK_AT_THIS_LAYER,
 })
 
-// The Back column is `here` on all thirteen deliberately. Measured on this head, the
+// The Back column is `here` on all fourteen deliberately. Measured on this head, the
 // pre-existing Back coverage asserts AC-2's view+pathname pair almost nowhere: six views
 // (approvals, rules, customers, reports, workflows, clients) had no popstate spec at all,
 // and dashboard/create/detail/settings each assert one half.
@@ -174,6 +174,7 @@ const SWEEP: Record<View, Row> = {
   create: plainRow(),
   detail: plainRow(),
   extraction: plainRow(),
+  account: plainRow(),
 }
 
 // The five parameterised forms. Each names the ROUTE_PATHS key it extends, so a form
@@ -242,7 +243,7 @@ const COLUMNS: (keyof Row)[] = ['coldBoot', 'navUrl', 'back', 'forward']
 // The other guards that iterate the same imported table. Named so a rename of any of them
 // surfaces here rather than quietly halving the totality discipline.
 const SIBLING_TOTALITY_GUARDS: Cell[] = [
-  { test: 'routeTable_isTotalOverTheThirteenViews', file: CODEC },
+  { test: 'routeTable_isTotalOverTheFourteenViews', file: CODEC },
   COLD_BOOT_LOOP,
   NAV_LOOP,
 ]
@@ -265,7 +266,7 @@ describe('AC-4, AC-5: the ledger is total over the imported route table', () => 
     const tableKeys = Object.keys(ROUTE_PATHS).sort()
     // Vacuity floor: a mis-resolved import gives {}, and every diff below then compares
     // nothing against nothing and passes.
-    expect(tableKeys.length, 'ROUTE_PATHS did not resolve to the real thirteen-view table').toBeGreaterThan(12)
+    expect(tableKeys.length, 'ROUTE_PATHS did not resolve to the real fourteen-view table').toBeGreaterThan(13)
 
     const ledgerKeys = Object.keys(SWEEP).sort()
     const missing = tableKeys.filter((k) => !ledgerKeys.includes(k))
@@ -275,10 +276,10 @@ describe('AC-4, AC-5: the ledger is total over the imported route table', () => 
       extra: [],
     })
 
-    // The fourth copy of the route table. App.atomAudit.data.ts retypes all thirteen paths
-    // by hand; a fourteenth key would leave it silently stale, which is the exact drift
+    // The fourth copy of the route table. App.atomAudit.data.ts retypes all fourteen paths
+    // by hand; a fifteenth key would leave it silently stale, which is the exact drift
     // this sweep exists to catch.
-    expect([...ALL_13].sort(), 'App.atomAudit.data.ts ALL_13 has drifted from ROUTE_PATHS').toEqual(
+    expect([...ALL_14].sort(), 'App.atomAudit.data.ts ALL_14 has drifted from ROUTE_PATHS').toEqual(
       Object.values(ROUTE_PATHS).sort(),
     )
 
@@ -291,8 +292,8 @@ describe('AC-4, AC-5: the ledger is total over the imported route table', () => 
       }
     }
     expect(problems, 'every ledger cell must be a verified citation or a stated refusal').toEqual([])
-    // Floor: thirteen rows x four columns, minus the thirteen refused Forward cells.
-    expect(verified, 'the ledger verified far too few cells to be total').toBe(13 * COLUMNS.length - 13)
+    // Floor: fourteen rows x four columns, minus the fourteen refused Forward cells.
+    expect(verified, 'the ledger verified far too few cells to be total').toBe(14 * COLUMNS.length - 14)
   })
 
   it('sweep_theParameterisedLedgerIsTotalOverTheFiveForms', () => {
@@ -316,7 +317,7 @@ describe('AC-2: every route path survives a Back onto it, view and pathname toge
   it('sweep_everyRoutePathSurvivesABackOntoIt', async () => {
     const views = Object.keys(ROUTE_PATHS) as View[]
     // Vacuity floor: an empty table makes both loops below no-ops.
-    expect(views.length, 'ROUTE_PATHS did not resolve to the real thirteen-view table').toBeGreaterThan(12)
+    expect(views.length, 'ROUTE_PATHS did not resolve to the real fourteen-view table').toBeGreaterThan(13)
 
     await bootAt('/')
     for (const v of views) {

@@ -129,6 +129,7 @@ import { RulesView } from './components/RulesView'
 import { WorkflowsView } from './components/WorkflowsView'
 import { CustomersView } from './components/CustomersView'
 import { ReportsView } from './components/ReportsView'
+import { AccountView } from './components/AccountView'
 import { SettingsView } from './components/SettingsView'
 import { ApprovalsView } from './components/ApprovalsView'
 import { AuditView } from './components/AuditView'
@@ -1890,6 +1891,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized, onLocked }:
           {view === 'customers' && <CustomersView ctx={ctx} />}
           {view === 'reports' && <ReportsView ctx={ctx} />}
           {view === 'settings' && <SettingsView ctx={ctx} />}
+          {view === 'account' && <AccountView ctx={ctx} />}
           {view === 'approvals' && <ApprovalsView ctx={ctx} />}
           {view === 'audit' && <AuditView ctx={ctx} />}
           {view === 'extraction' && extractionJobId != null && <ExtractionReview ctx={ctx} jobId={extractionJobId} onOpenInvoice={openReviewedInvoice} />}

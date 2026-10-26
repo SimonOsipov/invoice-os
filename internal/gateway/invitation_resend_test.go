@@ -473,3 +473,35 @@ func TestInvitationResend_BudgetsArePerAddress(t *testing.T) {
 		t.Errorf("GoTrue saw %d calls, want 4", n)
 	}
 }
+
+func newInviteResendWith(authURL *url.URL, th *SignInThrottle, enforce bool) http.Handler {
+	return InvitationResendHandler(authURL, testClient(), th, enforce, slog.New(slog.DiscardHandler), invitePreviewing("unconfirmed").preview)
+}
+
+// D6: an enforced resend whose shared count cannot be read answers 502 (msgResendUnavailable), not 429, and sends nothing.
+func TestInvitationResend_AnUnreadableThrottleAnswers502(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+	th := resendThrottle(time.Now)
+	th.Shared(deadPool(t), slog.New(slog.DiscardHandler))
+
+	rec := serveInviteResend(newInviteResendWith(fake.URL, th, true), http.MethodPost, tokenBody(inviteToken))
+
+	requireInviteAnswer(t, rec, http.StatusBadGateway, jsonError(wantResendUnavailable), "enforced resend, count unreadable")
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+}
+
+// Holds today: with enforcement off, a refused reservation does not stop the send.
+func TestInvitationResend_AnUnreadableThrottleUnenforcedStillSends(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+	th := resendThrottle(time.Now)
+	th.Shared(deadPool(t), slog.New(slog.DiscardHandler))
+
+	rec := serveInviteResend(newInviteResendWith(fake.URL, th, false), http.MethodPost, tokenBody(inviteToken))
+
+	requireInviteAnswer(t, rec, http.StatusOK, resendSent, "unenforced resend, count unreadable")
+	if n := len(fake.Calls()); n != 1 {
+		t.Errorf("GoTrue saw %d calls, want 1", n)
+	}
+}

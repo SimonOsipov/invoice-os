@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -165,5 +167,63 @@ func TestSignInThrottle_SweepIsAmortised(t *testing.T) {
 	th.Reserve("late@x.com")
 	if n := th.SweepsForTest(); n != 2 {
 		t.Fatalf("sweeps after one more minute = %d, want 2", n)
+	}
+}
+
+func TestSignInThrottle_SharedFailsClosedWhenTheDatabaseIsDown(t *testing.T) {
+	const addr = "victim-7f3a9c@corp.example"
+	th, _ := newTestThrottle(SignInMaxKeys, SignInWindow)
+	log, logs := newCaptureLog()
+	th.Shared(deadPool(t), log)
+
+	admitted := th.Reserve(addr)
+	th.Refund(addr)
+	th.Reset(addr)
+
+	if admitted {
+		t.Error("Reserve with the database down = true, want false (fail closed, D6)")
+	}
+	var errs []string
+	for _, r := range logs.all() {
+		if r.level == slog.LevelError {
+			errs = append(errs, r.text)
+		}
+		if strings.Contains(r.text, addr) || strings.Contains(r.text, "victim") {
+			t.Errorf("log line carries the address: %q", r.text)
+		}
+	}
+	want := []string{"sign-in throttle: sweep", "sign-in throttle: reserve", "sign-in throttle: refund", "sign-in throttle: reset"}
+	if len(errs) != len(want) {
+		t.Fatalf("ERROR records = %d %q, want %d (sweep, reserve, refund, reset)", len(errs), errs, len(want))
+	}
+	for i, w := range want {
+		if !strings.HasPrefix(errs[i], w) {
+			t.Errorf("ERROR #%d = %q, want it to start %q", i+1, errs[i], w)
+		}
+	}
+}
+
+func TestSignInThrottle_AdmitReturnsTheDatabaseError(t *testing.T) {
+	shared, _ := newTestThrottle(SignInMaxKeys, SignInWindow)
+	shared.Shared(deadPool(t), slog.New(slog.DiscardHandler))
+	if ok, err := shared.Admit("a@x.com"); ok || err == nil {
+		t.Errorf("Admit with the database down = %v, %v; want false and an error", ok, err)
+	}
+
+	local, _ := newTestThrottle(SignInMaxKeys, SignInWindow)
+	if ok, err := local.Admit("a@x.com"); !ok || err != nil {
+		t.Errorf("in-process Admit = %v, %v; want true and nil", ok, err)
+	}
+}
+
+// Holds today: a nil pool is the in-process count, with no database touched.
+func TestSignInThrottle_NilPoolKeepsTheInProcessCount(t *testing.T) {
+	th, _ := newTestThrottle(SignInMaxKeys, SignInWindow)
+	th.Shared(nil, slog.New(slog.DiscardHandler))
+
+	reserveN(t, th, "a@x.com", SignInMaxFailures)
+
+	if th.Reserve("a@x.com") {
+		t.Errorf("Reserve #%d = true, want false", SignInMaxFailures+1)
 	}
 }

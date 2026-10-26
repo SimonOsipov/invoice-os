@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -43,6 +45,12 @@ func NewSignInThrottle(name string, max, maxKeys int, window time.Duration, now 
 }
 
 func signInKey(email string) string { return strings.ToLower(strings.TrimSpace(email)) }
+
+// Shared counts attempts in gateway_throttle_counts through pool, so every instance sees one count; nil keeps the in-process count.
+func (t *SignInThrottle) Shared(pool *pgxpool.Pool, log *slog.Logger) {}
+
+// Admit is Reserve with the database error returned.
+func (t *SignInThrottle) Admit(email string) (bool, error) { return t.Reserve(email), nil }
 
 // Reserve counts one attempt for email; false means refuse before GoTrue.
 func (t *SignInThrottle) Reserve(email string) bool {

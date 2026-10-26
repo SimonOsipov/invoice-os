@@ -1065,6 +1065,8 @@ describe('DEL-10-03: the retention section states how long each copy lasts', () 
     expect(
       staffLogIsAppendOnly(later('CREATE OR REPLACE FUNCTION public.staff_audit_log_append_only() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql;')),
     ).toBe(false)
+    expect(staffLogIsAppendOnly(later('DROP TABLE public.staff_audit_log;'))).toBe(false)
+    expect(staffLogIsAppendOnly(later('ALTER TABLE public.staff_audit_log RENAME TO staff_log_old;'))).toBe(false)
     expect(staffLogIsAppendOnly(later('-- DROP TRIGGER staff_audit_log_no_update_delete ON public.staff_audit_log;'))).toBe(true)
   })
 

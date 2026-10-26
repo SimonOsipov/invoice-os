@@ -472,6 +472,7 @@ export function staffLogIsAppendOnly(migrations: string[] = migrationUps()): boo
     if (/DROP\s+TRIGGER\s+(?:IF EXISTS\s+)?staff_audit_log_no_update_delete\b/i.test(up)) rowTrigger = false
     if (/DROP\s+TRIGGER\s+(?:IF EXISTS\s+)?staff_audit_log_no_truncate\b/i.test(up)) truncTrigger = false
     if (/ALTER\s+TABLE\s+(?:ONLY\s+)?public\.staff_audit_log\s+DISABLE\s+TRIGGER/i.test(up)) rowTrigger = truncTrigger = false
+    if (/DROP\s+TABLE\s+(?:IF EXISTS\s+)?(?:public\.)?staff_audit_log\b|ALTER\s+TABLE\s+(?:ONLY\s+)?(?:public\.)?staff_audit_log\s+RENAME\s+TO/i.test(up)) raises = rowTrigger = truncTrigger = false
   }
   return raises && rowTrigger && truncTrigger
 }

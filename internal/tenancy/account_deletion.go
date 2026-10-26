@@ -133,8 +133,8 @@ func heirLabel(m *activeMember) *string {
 
 // DeleteMyAccount ends the caller and queues their erasure; the sole admin first hands admin to
 // the heir. want must equal the outcome under the row locks.
-// ceiling: the heir is chosen at commit, not at preview; the page can name a different person than
-// the one who inherits. Show the heir in the confirm body if that bites.
+// ceiling: the heir is chosen at commit, not named in the body; it changes only if the named heir
+// deletes their own account at the same moment. Name the heir in the body if that bites.
 func (s *Store) DeleteMyAccount(ctx context.Context, want AccountDeletionOutcome) error {
 	if s.eraseQueue == nil {
 		return errNoEraseQueue

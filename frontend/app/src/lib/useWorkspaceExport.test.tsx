@@ -58,4 +58,22 @@ describe('useWorkspaceExport', () => {
     expect(result.current.status).toEqual({ kind: 'error', message: sentence })
     expect(result.current.busy).toBe(false)
   })
+
+  it('useWorkspaceExport: no request before start, then the latest authedFetch is used', async () => {
+    vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => {})
+    const old = vi.fn(async () => undefined) as unknown as AuthedFetch
+    const urls: string[] = []
+    const fresh = (async (url: string) => {
+      urls.push(url)
+      return url.endsWith('/auth/export-code') ? { code: 'c' } : undefined
+    }) as AuthedFetch
+    const { result, rerender } = renderHook(({ f }) => useWorkspaceExport(f, base), { initialProps: { f: old } })
+    expect(old).not.toHaveBeenCalled()
+    rerender({ f: fresh })
+    expect(urls).toEqual([])
+    await act(async () => result.current.start())
+    expect(old).not.toHaveBeenCalled()
+    expect(urls).toHaveLength(2)
+    expect(result.current.status).toEqual({ kind: 'started' })
+  })
 })

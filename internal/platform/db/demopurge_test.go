@@ -229,6 +229,8 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 	roleMemberID := uuid.NewString()
 	memberID := uuid.NewString()
 	inviteID := uuid.NewString()
+	deletionLinkID := uuid.NewString()
+	cancelMailID := uuid.NewString()
 	lineID := uuid.NewString()
 	historyID := uuid.NewString()
 	revisionID := uuid.NewString()
@@ -360,6 +362,14 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO workflow_role_members (id, tenant_id, workflow_role_id, user_id, ord)
 		 VALUES ($1,$2,$3,$4,1)`,
 		roleMemberID, tenantID, roleID, userID)
+	plant("workspace_deletion_links", "id", deletionLinkID,
+		`INSERT INTO workspace_deletion_links (id, tenant_id, recipient_user_id, token_hash, expires_at)
+		 VALUES ($1,$2,$3,$4,now() + interval '30 days')`,
+		deletionLinkID, tenantID, userID, tokenHash(t, 32))
+	plant("workspace_deletion_cancel_mails", "id", cancelMailID,
+		`INSERT INTO workspace_deletion_cancel_mails (id, tenant_id, recipient_user_id, cancelled_due_at)
+		 VALUES ($1,$2,$3,now())`,
+		cancelMailID, tenantID, userID)
 	plant("audit_log", "event", auditEvent,
 		`INSERT INTO audit_log (tenant_id, actor, event, payload) VALUES ($1,'purge-witness',$2,'{}'::jsonb)`,
 		tenantID, auditEvent)

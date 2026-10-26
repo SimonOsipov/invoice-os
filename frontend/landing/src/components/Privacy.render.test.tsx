@@ -764,6 +764,11 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
   })
 
   const retentionText = (): string => plain(section(/^How long deleted data lasts$/))
+  const retentionParagraphs = (): string[] => {
+    const at = html.indexOf('>How long deleted data lasts</h2>')
+    const end = html.indexOf('<h2', at + 1)
+    return Array.from(html.slice(at, end).matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g), (m) => plain(m[1]))
+  }
   const h2Texts = (): string[] => Array.from(html.matchAll(/<h2[^>]*>([\s\S]*?)<\/h2>/g), (m) => plain(m[1]))
 
   it('DEL-10-03 the retention section sits between How long it is kept and What it is not used for', () => {
@@ -788,13 +793,15 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
   })
 
   it('DEL-10-03 R1 promises no completeness', () => {
-    const r1 = deletionSentence('R1')
+    const r1 = retentionParagraphs()[0]
+    expect(r1).toBe(deletionSentence('R1'))
     expect(r1).toContain('main copies')
     expect(r1).not.toMatch(/\b(each|every|all)\b/i)
   })
 
   it('DEL-10-03 R5 sets no retention period', () => {
-    const r5 = deletionSentence('R5')
+    const r5 = retentionParagraphs().find((p) => p.startsWith('Sign-in record'))!
+    expect(r5).toBe(deletionSentence('R5'))
     expect(r5).toContain('We have set no time')
     expect(r5).not.toMatch(/\d/)
   })

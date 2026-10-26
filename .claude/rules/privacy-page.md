@@ -118,8 +118,8 @@ Each line names a sentence of `DELETION_SENTENCES` and its backing. Check date: 
 - `A5`: `WorkspaceSettings.tsx`, `DeleteWorkspaceDialog.tsx` and `SETTINGS_TABS`.
 - `A6`, `R2`: the `tenants_deletion_guard` trigger sets the 30 days. `ErrWorkspaceLocked`, `CancelWorkspaceDeletion` and `workspacepurge.Purger` do the rest.
 - `A7`: `decideAccountDeletion` and `eraseMembers`.
-- `R3`: Cloud SQL `prod` has `retainedBackups` 7 and `transactionLogRetentionDays` 7. Source: infra `terraform/sql.tf`. Read with `gcloud sql instances describe <instance> --format=json`, field `settings.backupConfiguration`.
-- `R4`: bucket `ascomply-prod-documents` has `soft_delete_policy.retentionDurationSeconds` 604800. Source: infra `terraform/storage.tf`. Read with `gcloud storage buckets describe gs://ascomply-prod-documents --format=json`, field `soft_delete_policy`.
+- `R3`: Cloud SQL `prod` has `retainedBackups` 7 and `transactionLogRetentionDays` 7. Source: infra `terraform/sql.tf`. Read with `gcloud sql instances describe prod --project ascomply-prod --format='yaml(settings.backupConfiguration,region,state)'`.
+- `R4`: bucket `ascomply-prod-documents` has `soft_delete_policy.retentionDurationSeconds` 604800. Source: infra `terraform/storage.tf`. Read with `gcloud storage buckets describe gs://ascomply-prod-documents --project ascomply-prod --format='yaml(name,location,soft_delete_policy)'`.
 - `R5`: GoTrue v2.197.0 `adminUserDelete` writes `user_deleted` with `user_email` to `auth.audit_log_entries` before it destroys the user. `gotrueVersion()` pins the version. `nothingPrunesSigninAuditLog()` pins that no file in this repo names the table.
 - `R6`: `invitations.invitee_email` is `NOT NULL`. `invitationKeepsInviteeEmail()` pins it. DEL-13 erases `invitee_email` at account deletion and removes `R6` in its own PR.
 - `R7`: `workspacepurge.purgeRows` writes the staff row. `staffLogEntryFacts()` and `staffLogIsAppendOnly()` pin the payload keys and the append-only trigger.

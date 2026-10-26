@@ -42,6 +42,7 @@ import {
   gotrueVersion,
   invitationKeepsInviteeEmail,
   nothingPrunesSigninAuditLog,
+  signinScanFiles,
   staffLogEntryFacts,
   staffLogIsAppendOnly,
   lockRefusesWrites,
@@ -1030,6 +1031,15 @@ describe('DEL-10-03: the retention section states how long each copy lasts', () 
   it('DEL-10-03 R5 nothing in this repo prunes the sign-in audit table', () => {
     expect(nothingPrunesSigninAuditLog()).toBe(true)
     expect(nothingPrunesSigninAuditLog(['package x', 'DELETE FROM auth.audit_log_entries WHERE created_at < now()'])).toBe(false)
+    expect(nothingPrunesSigninAuditLog(['DELETE FROM AUTH.AUDIT_LOG_ENTRIES'])).toBe(false)
+  })
+
+  it('DEL-10-03 R5 the audit-table scan reads a real population', () => {
+    const files = signinScanFiles()
+    expect(files.length).toBeGreaterThan(200)
+    expect(files).toContain('sidecar/auth/Dockerfile')
+    expect(files).toContain('internal/workspacepurge/purge.go')
+    expect(files.some((f) => /_test\.go$/.test(f))).toBe(false)
   })
 
   it('DEL-10-03 R7 the staff row holds the id, the due date and two counts', () => {
@@ -1037,6 +1047,10 @@ describe('DEL-10-03: the retention section states how long each copy lasts', () 
     expect(staffLogIsAppendOnly()).toBe(true)
     const sql = readFileSync(join(REPO, 'migrations/20261010080000_staff_audit_log.sql'), 'utf8')
     expect(staffLogIsAppendOnly(sql.replace('BEFORE UPDATE OR DELETE', 'BEFORE UPDATE'))).toBe(false)
+    expect(staffLogIsAppendOnly(sql.replace('BEFORE TRUNCATE', 'BEFORE INSERT'))).toBe(false)
+    const raise = "RAISE EXCEPTION 'staff_audit_log is append-only: % is not permitted', TG_OP"
+    expect(sql).toContain(raise)
+    expect(staffLogIsAppendOnly(sql.replace(raise, `-- ${raise}`))).toBe(false)
   })
 
   it('DEL-10-03 control: a payload with a name key fails R7', () => {
@@ -1050,5 +1064,6 @@ describe('DEL-10-03: the retention section states how long each copy lasts', () 
     expect(invitationKeepsInviteeEmail()).toBe(true)
     const sql = readFileSync(join(REPO, 'migrations/20260709161252_invitations.sql'), 'utf8')
     expect(invitationKeepsInviteeEmail(sql.replace('invitee_email text        NOT NULL', 'invitee_email text'))).toBe(false)
+    expect(invitationKeepsInviteeEmail(sql.replace('invitee_email text        NOT NULL', '-- invitee_email text NOT NULL\n    invitee_email text'))).toBe(false)
   })
 })

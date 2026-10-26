@@ -423,10 +423,14 @@ function nonTestFiles(rel: string): string[] {
 }
 
 // No non-test file in this repo names the table GoTrue writes the deletion record to, so nothing reads or prunes it.
+export function signinScanFiles(): string[] {
+  return PRUNE_ROOTS.filter((r) => existsSync(join(REPO, r))).flatMap(nonTestFiles)
+}
+
 export function nothingPrunesSigninAuditLog(
-  texts: Iterable<string> = PRUNE_ROOTS.filter((r) => existsSync(join(REPO, r))).flatMap(nonTestFiles).map((f) => readFileSync(join(REPO, f), 'utf8')),
+  texts: Iterable<string> = signinScanFiles().map((f) => readFileSync(join(REPO, f), 'utf8')),
 ): boolean {
-  for (const t of texts) if (t.includes('audit_log_entries')) return false
+  for (const t of texts) if (/audit_log_entries/i.test(t)) return false
   return true
 }
 
@@ -442,11 +446,15 @@ export function staffLogEntryFacts(
   }
 }
 
+function sqlCode(sql: string): string {
+  return sql.replace(/--.*$/gm, '')
+}
+
 // The append-only trigger refuses UPDATE, DELETE and TRUNCATE on the staff log.
 export function staffLogIsAppendOnly(
   sql: string = readFileSync(join(REPO, 'migrations/20261010080000_staff_audit_log.sql'), 'utf8'),
 ): boolean {
-  const up = sql.split('-- +goose Down')[0]
+  const up = sqlCode(sql.split('-- +goose Down')[0])
   return (
     /RAISE EXCEPTION 'staff_audit_log is append-only/.test(up) &&
     /BEFORE UPDATE OR DELETE ON public\.staff_audit_log[\s\S]*?EXECUTE FUNCTION public\.staff_audit_log_append_only\(\)/.test(up) &&
@@ -458,5 +466,5 @@ export function staffLogIsAppendOnly(
 export function invitationKeepsInviteeEmail(
   sql: string = readFileSync(join(REPO, 'migrations/20260709161252_invitations.sql'), 'utf8'),
 ): boolean {
-  return /\binvitee_email\s+text\s+NOT NULL\b/.test(sql)
+  return /\binvitee_email\s+text\s+NOT NULL\b/.test(sqlCode(sql.split('-- +goose Down')[0]))
 }

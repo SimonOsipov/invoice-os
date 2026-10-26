@@ -207,9 +207,9 @@ func TestMetricsSource_CachesSixtySecondsPerKey(t *testing.T) {
 		}
 	}
 	get("1h", "", n)
-	clk.advance(59 * time.Second)
+	clk.advance(MetricsRefreshAfter - time.Second)
 	get("1h", "", n)
-	clk.advance(-58 * time.Second)
+	clk.advance(-(MetricsRefreshAfter - 2*time.Second))
 	get("6h", "", 2*n)
 	get("1h", "app", 3*n)
 	clk.advance(MetricsStaleTTL - time.Second)
@@ -342,8 +342,9 @@ func TestMetricsSource_AgeBoundariesDecideServeRefreshOrWait(t *testing.T) {
 		wantProm int  // after the Get and any background fetch
 		blocks   bool // the Get waits on Google
 	}{
-		{"just under MetricsTTL is a plain hit", MetricsTTL - time.Nanosecond, n, false},
-		{"exactly MetricsTTL is served and refreshed", MetricsTTL, 2 * n, false},
+		{"just under MetricsRefreshAfter is a plain hit", MetricsRefreshAfter - time.Nanosecond, n, false},
+		{"exactly MetricsRefreshAfter is served and refreshed", MetricsRefreshAfter, 2 * n, false},
+		{"just under MetricsTTL is served and refreshed", MetricsTTL - time.Nanosecond, 2 * n, false},
 		{"just under MetricsStaleTTL is served and refreshed", MetricsStaleTTL - time.Nanosecond, 2 * n, false},
 		{"exactly MetricsStaleTTL waits", MetricsStaleTTL, 2 * n, true},
 	} {
@@ -726,7 +727,7 @@ func TestMetricsSource_APartialResultIsCachedAndLeaksNoGoogleText(t *testing.T) 
 		t.Fatalf("body leaks Google text: %s", raw)
 	}
 	prom, run := f.googleHits()
-	clk.advance(MetricsTTL - time.Second)
+	clk.advance(MetricsRefreshAfter - time.Second)
 	again, err := s.Get(t.Context(), "1h", "")
 	if err != nil {
 		t.Fatal(err)

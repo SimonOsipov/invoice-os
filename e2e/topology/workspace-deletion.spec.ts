@@ -1,7 +1,8 @@
 // Settings > Workspace: delete dialog, deletion notice, cancel. Every workspace is registered here; the seeded tenants are never scheduled.
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { cancelDeletion, registerFormAccount, type RealAccount } from '../api/client'
-import { VERIFIED, collectErrors, signInAtFrontDoor } from '../personaSession'
+import { VERIFIED, signInAtFrontDoor } from '../personaSession'
+import { collectSourcedErrors, expectedStatusDropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 
 test.beforeAll(() => { expect(test.info().project.name, 'workspace-deletion.spec.ts belongs to the ui-surfaces shard').toBe('ui-surfaces') })
@@ -107,7 +108,8 @@ async function withWorkspace(account: RealAccount, token: string, page: Page, dr
 test('workspace deletion: an admin deletes from Settings, reloads, cancels and is back', async ({ page }) => {
   test.setTimeout(240_000)
   const { account, token } = await registerFormAccount('ws-delete')
-  const errors = collectErrors(page)
+  // A request in flight when the lock lands answers 403 workspace_locked; that 403 is the schedule's own effect.
+  const errors = collectSourcedErrors(page, expectedStatusDropper(page, 403, /\/api\//))
 
   await withWorkspace(account, token, page, async () => {
     await openWorkspaceTab(page)

@@ -65,4 +65,16 @@ describe('DeleteWorkspaceDialog', () => {
     expect(bad.lockWorkspace).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog')).toBeTruthy()
   })
+
+  it.each([
+    [409, 'the house workspace cannot be deleted'],
+    [403, 'only an admin can delete the workspace'],
+  ])('a %i refusal shows the server sentence and keeps the dialog', async (status, sentence) => {
+    const { lockWorkspace } = setup(vi.fn().mockRejectedValue(new ApiError('http', sentence, status)))
+    fireEvent.change(input(), { target: { value: NAME } })
+    await userEvent.click(confirm())
+    expect((await screen.findByTestId('delete-workspace-error')).textContent).toBe(sentence)
+    expect(lockWorkspace).not.toHaveBeenCalled()
+    expect(confirm().disabled).toBe(false)
+  })
 })

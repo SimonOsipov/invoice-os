@@ -58,4 +58,11 @@ describe('WorkspaceSettings', () => {
     expect(button().disabled).toBe(true)
     expect(reason()).toBeNull()
   })
+
+  it('a roster that has not loaded disables it without a reason line', () => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
+    render(<WorkspaceSettings ctx={wsCtx({ members: [], membersState: 'loading' })} />)
+    expect(button().disabled).toBe(true)
+    expect(reason()).toBeNull()
+  })
 })

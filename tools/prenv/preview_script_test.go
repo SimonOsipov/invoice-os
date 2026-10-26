@@ -295,7 +295,7 @@ func TestPreviewBudgetMatchesWhatDeployAndSecretsUse(t *testing.T) {
 			}
 		}
 		if svc == "worker" {
-			total++ // the River leader connection
+			total += n // the River leader connection, one per instance
 		}
 		if svc == "auth" {
 			m := regexp.MustCompile(`GOTRUE_DB_MAX_POOL_SIZE: '(\d+)'`).FindStringSubmatch(deploy.file(t, "env-auth-pr-7"))

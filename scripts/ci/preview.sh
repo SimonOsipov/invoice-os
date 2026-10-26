@@ -329,7 +329,7 @@ cmd_prs() {
 
 # budget: Cloud SQL connections one fleet holds at peak (instances x pool), from the deploy and secrets tables.
 cmd_budget() {
-  local svc kv name pool n total=0
+  local svc kv name pool n leader total=0
   for svc in "${BACKENDS[@]}"; do
     for kv in $(secrets_of 0 "$svc" | tr , ' '); do
       name=${kv#*=pr-0-}
@@ -342,10 +342,11 @@ cmd_budget() {
     done
   done
   # River's leader connection, outside the pool (internal/platform/db/leader.go).
-  printf '%-14s %-22s %s\n' worker leader 1
+  leader=$(max_instances worker)
+  printf '%-14s %-22s %s\n' worker leader "$leader"
   n=$(($(max_instances auth) * $(gotrue_pool)))
   printf '%-14s %-22s %s\n' auth gotrue-pool "$n"
-  echo "fleet $((total + 1 + n))"
+  echo "fleet $((total + leader + n))"
 }
 
 # invariants: GKE-11 AC6.

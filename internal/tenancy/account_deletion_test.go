@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -505,6 +506,54 @@ func TestDeleteMyAccount_AHeirWhoChangedSincePreviewIs409(t *testing.T) {
 	}
 	if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p2); err != nil {
 		t.Errorf("control: the current heir: %v", err)
+	}
+}
+
+func TestDeleteMyAccount_OnlyTheLockedHeirPasses(t *testing.T) {
+	w := newAccWorld(t, "DEL-08 heir pin")
+	other := newAccWorld(t, "DEL-08 heir pin B")
+	susp := w.member(t, "preparer", "suspended", "Sue Pend", joined(0))
+	p1 := w.member(t, "preparer", "active", "Chidi Eze", joined(1))
+	p2 := w.member(t, "preparer", "active", "Tunde Bello", joined(2))
+	outsider := other.member(t, "preparer", "active", "Out Sider", joined(1))
+	users := []string{w.admin, susp, p1, p2}
+	before := make([]memberImage, len(users))
+	for i, u := range users {
+		before[i] = imageOf(t, w.super, w.tenant, u)
+	}
+	outsiderBefore, auditBefore := imageOf(t, w.super, other.tenant, outsider), w.auditTotal(t)
+
+	wrong := []struct{ name, heir string }{
+		{"an active member who is not the heir", p2},
+		{"the caller", w.admin},
+		{"a suspended member", susp},
+		{"a member of another workspace", outsider},
+		{"an unknown id", uuid.NewString()},
+		{"the heir in upper case", strings.ToUpper(p1)},
+		{"an empty id", ""},
+	}
+	for _, tc := range wrong {
+		if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, tc.heir); !errors.Is(err, ErrDeletionOutcomeChanged) {
+			t.Errorf("%s: err = %v, want ErrDeletionOutcomeChanged", tc.name, err)
+		}
+	}
+	for i, u := range users {
+		requireImage(t, w, "member "+u, u, before[i])
+	}
+	requireImage(t, other, "member of the other workspace", outsider, outsiderBefore)
+	w.requireNoErase(t, users...)
+	if n := w.auditTotal(t); n != auditBefore {
+		t.Errorf("audit rows = %d, want %d", n, auditBefore)
+	}
+
+	if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn, p1); err != nil {
+		t.Fatalf("control: the locked heir: %v", err)
+	}
+	if got := imageOf(t, w.super, w.tenant, p1); got.Role != "admin" {
+		t.Errorf("heir role = %q, want admin", got.Role)
+	}
+	if got := imageOf(t, w.super, w.tenant, p2); got.Role != "preparer" {
+		t.Errorf("non-heir role = %q, want preparer", got.Role)
 	}
 }
 

@@ -84,6 +84,17 @@ describe('AccountView', () => {
     expect(screen.queryByTestId('delete-account-dialog')).toBeNull()
     cleanup()
 
+    // a different person with the same name, and the same person renamed, are both a changed page
+    for (const second of [{ heir_name: 'Chidi Eze', heir_user_id: 'u-other-chidi' }, { heir_name: 'Chidi Okoro', heir_user_id: 'u-chidi' }]) {
+      const { gets: pair } = setup([{ outcome: 'hand_on', heir_name: 'Chidi Eze', heir_user_id: 'u-chidi' }, { outcome: 'hand_on', ...second }])
+      await ready()
+      await userEvent.click(button())
+      await waitFor(() => expect(pair).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(button().disabled).toBe(false))
+      expect(screen.queryByTestId('delete-account-dialog')).toBeNull()
+      cleanup()
+    }
+
     setup([{ outcome: 'leave' }, { outcome: 'leave' }])
     await ready()
     await userEvent.click(button())

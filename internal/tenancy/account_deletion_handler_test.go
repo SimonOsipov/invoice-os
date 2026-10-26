@@ -80,7 +80,10 @@ func TestDeleteMyAccountHandler_MapsEveryOutcome(t *testing.T) {
 			{"hand_on with a null heir", `{"outcome":"hand_on","heir_user_id":null}`},
 			{"hand_on with a malformed heir", `{"outcome":"hand_on","heir_user_id":"not-a-uuid"}`},
 			{"hand_on with a non-string heir", `{"outcome":"hand_on","heir_user_id":7}`},
+			{"hand_on with an empty heir", `{"outcome":"hand_on","heir_user_id":""}`},
+			{"hand_on with a too-long heir", `{"outcome":"hand_on","heir_user_id":"` + heirID + `0"}`},
 			{"leave with a heir", `{"outcome":"leave","heir_user_id":"` + heirID + `"}`},
+			{"leave with an empty heir", `{"outcome":"leave","heir_user_id":""}`},
 			{"over 4 KiB", bodyOf(4097)},
 		} {
 			stub := &deleteStub{}
@@ -151,15 +154,17 @@ func TestDeleteMyAccountHandler_RefusesDeleteWorkspace(t *testing.T) {
 }
 
 func TestDeleteMyAccountHandler_IgnoresAUserIDInTheBody(t *testing.T) {
-	stub := &deleteStub{}
 	other := "6f0f6f0f-0000-4000-8000-0000000000ff"
-	status, _ := deletionCall(DeleteMyAccountHandler(stub.fn(), nil), deletionCaller, meDeletionPath,
-		`{"outcome":"leave","user_id":"`+other+`"}`)
-	if status != http.StatusOK || stub.calls != 1 || stub.outcome != OutcomeLeave {
-		t.Fatalf("status = %d, calls = %d, outcome = %q, want 200, one call, leave", status, stub.calls, stub.outcome)
-	}
-	if stub.subject != deletionCaller.Subject {
-		t.Errorf("store ran as %q, want the verified caller %q (never the body's user_id)", stub.subject, deletionCaller.Subject)
+	for _, o := range []AccountDeletionOutcome{OutcomeLeave, OutcomeHandOn} {
+		stub := &deleteStub{}
+		body := strings.TrimSuffix(bodyFor(o), "}") + `,"user_id":"` + other + `"}`
+		status, _ := deletionCall(DeleteMyAccountHandler(stub.fn(), nil), deletionCaller, meDeletionPath, body)
+		if status != http.StatusOK || stub.calls != 1 || stub.outcome != o || stub.heir != heirIf(o, heirID) {
+			t.Fatalf("%s: status = %d, calls = %d, outcome = %q, heir = %q, want 200, one call, that outcome, heir %q", o, status, stub.calls, stub.outcome, stub.heir, heirIf(o, heirID))
+		}
+		if stub.subject != deletionCaller.Subject {
+			t.Errorf("%s: store ran as %q, want the verified caller %q (never the body's user_id)", o, stub.subject, deletionCaller.Subject)
+		}
 	}
 }
 
@@ -172,12 +177,17 @@ func TestDeleteMyAccountHandler_NeedsNoTypedPhrase(t *testing.T) {
 }
 
 func TestDeleteMyAccountHandler_PassesTheHeirInCanonicalForm(t *testing.T) {
-	stub := &deleteStub{}
-	upper := strings.ToUpper(heirID)
-	status, _ := deletionCall(DeleteMyAccountHandler(stub.fn(), nil), deletionCaller, meDeletionPath,
-		`{"outcome":"hand_on","heir_user_id":"`+upper+`"}`)
-	if status != http.StatusOK || stub.heir != heirID {
-		t.Errorf("status = %d, heir = %q, want 200 and %q", status, stub.heir, heirID)
+	for _, tc := range []struct{ name, body, want string }{
+		{"lower case", `{"outcome":"hand_on","heir_user_id":"` + heirID + `"}`, heirID},
+		{"upper case", `{"outcome":"hand_on","heir_user_id":"` + strings.ToUpper(heirID) + `"}`, heirID},
+		{"no hyphens", `{"outcome":"hand_on","heir_user_id":"` + strings.ReplaceAll(heirID, "-", "") + `"}`, heirID},
+		{"leave with a null heir", `{"outcome":"leave","heir_user_id":null}`, ""},
+	} {
+		stub := &deleteStub{}
+		status, _ := deletionCall(DeleteMyAccountHandler(stub.fn(), nil), deletionCaller, meDeletionPath, tc.body)
+		if status != http.StatusOK || stub.calls != 1 || stub.heir != tc.want {
+			t.Errorf("%s: status = %d, calls = %d, heir = %q, want 200, one call, heir %q", tc.name, status, stub.calls, stub.heir, tc.want)
+		}
 	}
 }
 

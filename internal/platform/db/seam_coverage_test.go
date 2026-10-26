@@ -742,6 +742,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/tenancy/invite_registration.go", fn: "ReleaseInvitationRegistration"}, // a gateway-token route; the token names the invite and there is no caller to gate
 	{file: "internal/aicalls/recorder.go", fn: "write"},                                    // a background usage row written after the AI call returned; the tenant is the identity the call ran under, and no request context is left to gate
 	{file: "internal/archive/staff.go", fn: "withinStaffTenant"},                           // staff read: the path tenant is checked by a staff_read_ function in db.WithinStaffTx; READ ONLY tenant tx
+	{file: "internal/tenancy/staff_deletion.go", fn: "withinStaffTenant"},                  // staff write or read: the path tenant is checked by a staff_read_ function in db.WithinStaffTx; the request carries no tenant
 	{file: "internal/customer/backfill.go", fn: "Backfill"},                                // operator CLI and the demo-seed boot step only; internal/customer serves HTTP, so a package exemption would un-gate the customer handlers
 	{file: "cmd/migrate/purgecheck.go", fn: "purgeCheckRun"},                               // preview-only deploy probe in the migrate job; no request reaches it
 }
@@ -1074,6 +1075,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/staff/jobs":                                  {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/jobs/{id}":                             {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"POST /v1/staff/jobs/{id}/redrive":                    {verdict: scExempt, reason: "staff route: staff check in platform.App; the job's tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
+	"POST /v1/staff/tenants/{id}/deletion":                {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
+	"POST /v1/staff/tenants/{id}/deletion/cancel":         {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
 	"POST /v1/staff/jobs/{id}/cancel":                     {verdict: scExempt, reason: "staff route: staff check in platform.App; the job's tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
 	"GET /v1/staff/rules":                                 {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"GET /v1/staff/rule-versions":                         {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},

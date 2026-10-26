@@ -31,7 +31,7 @@ describe('content', () => {
     for (const f of FEATURES) {
       expect(f.sc.win).not.toBe('')
       expect(f.sc.steps.length).toBeGreaterThanOrEqual(3)
-      expect(f.sc.steps.length).toBeLessThanOrEqual(4)
+      expect(f.sc.steps.length).toBeLessThanOrEqual(f.id === 'delete-workspace' ? 5 : 4)
       for (const s of f.sc.steps) expect(s.cap).not.toBe('')
     }
   })
@@ -168,7 +168,7 @@ describe('content', () => {
     expect(acct.steps.length).toBeLessThanOrEqual(4)
     expect(ws.kind).toBe('flow')
     expect(ws.steps.length).toBeGreaterThanOrEqual(3)
-    expect(ws.steps.length).toBeLessThanOrEqual(4)
+    expect(ws.steps.length).toBeLessThanOrEqual(5)
     if (ws.kind !== 'flow') return
     const at = ws.steps.map((s) => s.at)
     for (const a of at) expect(a).toBeLessThan(ws.nodes.length)
@@ -180,9 +180,15 @@ describe('content', () => {
     expect(byId('delete-workspace').who).toEqual(['Admin'])
   })
 
-  // Add the data export or emailed cancel link claim only once the app has them: edit this regex first.
+  it('content_deletionCopyNamesTheExport', () => {
+    const ws = byId('delete-workspace')
+    expect(JSON.stringify(ws)).toMatch(/Download export|downloads the export/i)
+    expect((ws.sc as { nodes: string[][] }).nodes[0][0]).toBe('Export')
+  })
+
+  // Add the emailed cancel link claim only once the app has it: edit this regex first.
   it('content_deletionCopyClaimsOnlyWhatIsLive', () => {
-    const unshipped = /export|download|cancel link|e-?mail/i
+    const unshipped = /cancel link|e-?mail/i
     expect('cancel link by email').toMatch(unshipped)
     for (const id of ['delete-account', 'delete-workspace']) expect(JSON.stringify(byId(id)), id).not.toMatch(unshipped)
   })

@@ -67,6 +67,7 @@ var (
 	ErrCancelDeletionNotPermitted  = errors.New("tenancy: cancel deletion not permitted")
 	ErrWorkspaceNameMismatch       = errors.New("tenancy: workspace name mismatch")
 	ErrHouseWorkspace              = errors.New("tenancy: house workspace")
+	ErrDeletionLinkNotValid        = errors.New("tenancy: deletion link not valid")
 )
 
 // Sentinels for the invitations store.

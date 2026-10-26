@@ -734,7 +734,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/tenancy/store.go", fn: "AcceptInvitationByID"},                         // the caller has no membership; the email filter is the guard
 	{file: "internal/tenancy/invite_registration.go", fn: "InvitationPendingForEmail"},      // a gateway-token route; there is no caller to gate
 	{file: "internal/tenancy/invite_registration.go", fn: "ClaimInvitationRegistration"},    // a gateway-token route; the token names the invite and there is no caller to gate
-	{file: "internal/tenancy/workspace_deletion.go", fn: "CancelWorkspaceDeletion"},         // cancels a locked workspace, which the seam refuses; the method gates the active admin itself
+	{file: "internal/tenancy/workspace_deletion.go", fn: "cancelScheduledDeletion"},         // cancels a locked workspace, by route or by link, which the seam refuses; it gates the active admin itself
 	{file: "internal/tenancy/workspace_deletion_mail.go", fn: "RecordDeletionLinkDelivery"}, // records a deletion mail's outcome after the lock commits; scoped to the caller's own tenant
 	{file: "internal/tenancy/invite_registration.go", fn: "ReleaseInvitationRegistration"},  // a gateway-token route; the token names the invite and there is no caller to gate
 	{file: "internal/aicalls/recorder.go", fn: "write"},                                     // a background usage row written after the AI call returned; the tenant is the identity the call ran under, and no request context is left to gate
@@ -1060,7 +1060,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"PATCH /v1/memberships/{user_id}":                     {verdict: scCovered},
 	"POST /v1/memberships/{user_id}/remove":               {verdict: scCovered},
 	"POST /v1/workspace/deletion":                         {verdict: scCovered},
-	"POST /v1/workspace/deletion/cancel":                  {verdict: scExempt, reason: "writes a locked workspace; Store.CancelWorkspaceDeletion gates the active admin itself in WithinTenantTx"},
+	"POST /v1/workspace/deletion/cancel":                  {verdict: scExempt, reason: "writes a locked workspace; cancelScheduledDeletion gates the active admin itself in WithinTenantTx"},
+	"POST /v1/workspace/deletion/cancel-by-link":          {verdict: scExempt, reason: "writes a locked workspace; cancelScheduledDeletion gates the active admin itself in WithinTenantTx"},
 	"PUT /v1/memberships/{user_id}/clients":               {verdict: scCovered},
 	"GET /v1/staff/health":                                {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/metrics":                               {verdict: scExempt, reason: "staff route: staff check in platform.App and in staff_read_health_samples; reads Google metrics, no tenant rows"},

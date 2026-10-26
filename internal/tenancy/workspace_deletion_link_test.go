@@ -1,0 +1,351 @@
+package tenancy
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+)
+
+// freshToken is a well-formed (43-character base64url) token that no link holds.
+func freshToken(t *testing.T) string {
+	t.Helper()
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatalf("random token: %v", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// knownLinkToken gives the recipient's live link a token the test knows.
+func knownLinkToken(t *testing.T, super *pgxpool.Pool, tenant, recipient string) string {
+	t.Helper()
+	tok := freshToken(t)
+	tag, err := super.Exec(context.Background(),
+		`UPDATE workspace_deletion_links SET token_hash = sha256(convert_to($1, 'UTF8'))
+		  WHERE recipient_user_id = $2 AND tenant_id = $3
+		    AND expires_at = (SELECT deletion_due_at FROM tenants WHERE id = $3)`, tok, recipient, tenant)
+	if err != nil {
+		t.Fatalf("set the link token: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("live links of %s = %d, want 1", recipient, tag.RowsAffected())
+	}
+	return tok
+}
+
+// linkWorld is a workspace scheduled by its admin A, with live links for admins B and C.
+type linkWorld struct {
+	invWorld
+	b, c, preparer, suspended string
+	tokB, tokC                string
+	due                       time.Time
+}
+
+func newLinkWorld(t *testing.T) *linkWorld {
+	t.Helper()
+	w := &linkWorld{invWorld: newInvWorld(t, obi, "Ada Obi")}
+	w.b = w.addMember(t, "admin", "active", "Bola Eze")
+	w.c = w.addMember(t, "admin", "active", "Chidi Eze")
+	w.preparer = w.addMember(t, "preparer", "active", "Pat Eze")
+	w.suspended = w.addMember(t, "admin", "suspended", "Sade Eze")
+	w.schedule(t)
+	return w
+}
+
+// schedule locks the workspace as A and notes the tokens of B and C.
+func (w *linkWorld) schedule(t *testing.T) {
+	t.Helper()
+	s, err := w.store.ScheduleWorkspaceDeletion(w.adminCtx(), obi)
+	if err != nil {
+		t.Fatalf("schedule: %v", err)
+	}
+	w.due = s.DueAt
+	w.tokB = knownLinkToken(t, w.super, w.tenant, w.b)
+	w.tokC = knownLinkToken(t, w.super, w.tenant, w.c)
+}
+
+// cancelByRoute cancels through the DEL-04 route, as the notifier serves it.
+func (w *linkWorld) cancelByRoute(ctx context.Context) error {
+	return (&DeletionNotifier{Store: w.store, Sender: &apiSender{}}).Cancel(ctx)
+}
+
+func (w *linkWorld) requireLocked(t *testing.T) {
+	t.Helper()
+	if c := deletionOf(t, w.super, w.tenant); c.DueAt == nil {
+		t.Error("the workspace is no longer scheduled for deletion")
+	}
+}
+
+func TestDeletionLink_AnotherAdminCancelsWithAValidLink(t *testing.T) {
+	w := newLinkWorld(t)
+	old := deletionOf(t, w.super, w.tenant)
+	if _, err := w.store.ListMemberships(w.adminCtx()); !errors.Is(err, db.ErrWorkspaceLocked) {
+		t.Fatalf("control: ListMemberships while locked: err = %v, want db.ErrWorkspaceLocked", err)
+	}
+
+	if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), w.tokB); err != nil {
+		t.Fatalf("CancelWorkspaceDeletionByLink: %v", err)
+	}
+	if c := deletionOf(t, w.super, w.tenant); !c.empty() {
+		t.Errorf("deletion columns after the cancel = %+v, want all NULL", c)
+	}
+	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 1 {
+		t.Fatalf("%s rows = %d, want 1", evCancelled, n)
+	}
+	if got := auditActor(t, w.app, w.tenant, evCancelled); got != w.b {
+		t.Errorf("audit actor = %q, want the cancelling admin %q", got, w.b)
+	}
+	p := auditPayloads(t, w.super, w.tenant, evCancelled)[0]
+	want := old.DueAt.UTC().Format(time.RFC3339)
+	if !slices.Equal(keysOf(p), []string{"due_at"}) || p["due_at"] != want {
+		t.Errorf("payload = %v, want exactly due_at = %s", p, want)
+	}
+	if _, err := w.store.ListMemberships(w.as(w.b)); err != nil {
+		t.Errorf("ListMemberships after the cancel: %v", err)
+	}
+}
+
+func TestDeletionLink_AnyAdminOfTheWorkspaceMayUseALink(t *testing.T) {
+	w := newLinkWorld(t)
+
+	if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.c), w.tokB); err != nil {
+		t.Fatalf("C cancels with B's link: %v, want nil (the link is not bound to its recipient)", err)
+	}
+	if c := deletionOf(t, w.super, w.tenant); !c.empty() {
+		t.Errorf("deletion columns = %+v, want all NULL", c)
+	}
+	if got := auditActor(t, w.app, w.tenant, evCancelled); got != w.c {
+		t.Errorf("audit actor = %q, want C %q", got, w.c)
+	}
+}
+
+func TestDeletionLink_OnlyAnActiveAdminOfThatWorkspaceCancels(t *testing.T) {
+	w := newLinkWorld(t)
+	foreign := newInvWorld(t, "Elsewhere Ltd", "Olu Eze")
+	lockByOwner(t, foreign.super, foreign.tenant, foreign.admin)
+	foreignDue := deletionOf(t, foreign.super, foreign.tenant).DueAt
+
+	cases := []struct {
+		name string
+		ctx  context.Context
+		want error
+	}{
+		{"an active preparer", w.as(w.preparer), ErrCancelDeletionNotPermitted},
+		{"a suspended admin", w.as(w.suspended), db.ErrNotActiveMember},
+		{"an admin of another workspace", foreign.adminCtx(), ErrDeletionLinkNotValid},
+		{"a non-UUID subject", w.as("not-a-uuid"), db.ErrNoTenant},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := w.store.CancelWorkspaceDeletionByLink(tc.ctx, w.tokB)
+			if !errors.Is(err, tc.want) {
+				t.Errorf("err = %v, want %v", err, tc.want)
+			}
+			w.requireLocked(t)
+			if n := auditCount(t, w.app, w.tenant, evCancelled); n != 0 {
+				t.Errorf("%s rows = %d, want 0", evCancelled, n)
+			}
+		})
+	}
+	if c := deletionOf(t, foreign.super, foreign.tenant); c.DueAt == nil || !c.DueAt.Equal(*foreignDue) {
+		t.Errorf("the other workspace's due = %v, want %v unchanged", c.DueAt, foreignDue)
+	}
+	if n := auditCount(t, foreign.app, foreign.tenant, evCancelled); n != 0 {
+		t.Errorf("the other workspace has %d %s rows, want 0", n, evCancelled)
+	}
+	// Control: an active admin with the same token cancels, so the refusals above were about the caller.
+	if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.c), w.tokB); err != nil {
+		t.Errorf("control: an active admin with the same token: %v", err)
+	}
+}
+
+func TestDeletionLink_ABadTokenIsRefused(t *testing.T) {
+	w := newLinkWorld(t)
+	cases := []struct{ name, token string }{
+		{"a random well-formed token", freshToken(t)},
+		{"an empty token", ""},
+		{"42 characters", w.tokB[:42]},
+		{"44 characters", w.tokB + "A"},
+		{"43 characters outside base64url", w.tokB[:42] + "+"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), tc.token)
+			if !errors.Is(err, ErrDeletionLinkNotValid) {
+				t.Errorf("err = %v, want ErrDeletionLinkNotValid", err)
+			}
+			w.requireLocked(t)
+			if n := auditCount(t, w.app, w.tenant, evCancelled); n != 0 {
+				t.Errorf("%s rows = %d, want 0", evCancelled, n)
+			}
+		})
+	}
+
+	t.Run("an expired link", func(t *testing.T) {
+		ctx := context.Background()
+		if _, err := w.super.Exec(ctx,
+			`UPDATE tenants SET deletion_scheduled_at = deletion_scheduled_at - interval '31 days' WHERE id = $1`, w.tenant); err != nil {
+			t.Fatalf("move the schedule back: %v", err)
+		}
+		if _, err := w.super.Exec(ctx,
+			`UPDATE workspace_deletion_links SET expires_at = (SELECT deletion_due_at FROM tenants WHERE id = $1)
+			  WHERE tenant_id = $1`, w.tenant); err != nil {
+			t.Fatalf("move the links back: %v", err)
+		}
+		if c := deletionOf(t, w.super, w.tenant); c.DueAt == nil || !c.DueAt.Before(time.Now()) {
+			t.Fatalf("fixture: due = %v, want a time in the past", c.DueAt)
+		}
+		_, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), w.tokB)
+		if !errors.Is(err, ErrDeletionLinkNotValid) {
+			t.Errorf("err = %v, want ErrDeletionLinkNotValid", err)
+		}
+		w.requireLocked(t)
+		if n := auditCount(t, w.app, w.tenant, evCancelled); n != 0 {
+			t.Errorf("%s rows = %d, want 0", evCancelled, n)
+		}
+
+		// Control: the same token works again once the due time is back in the future.
+		if _, err := w.super.Exec(ctx,
+			`UPDATE tenants SET deletion_scheduled_at = deletion_scheduled_at + interval '31 days' WHERE id = $1`, w.tenant); err != nil {
+			t.Fatalf("move the schedule forward: %v", err)
+		}
+		if _, err := w.super.Exec(ctx,
+			`UPDATE workspace_deletion_links SET expires_at = (SELECT deletion_due_at FROM tenants WHERE id = $1)
+			  WHERE tenant_id = $1`, w.tenant); err != nil {
+			t.Fatalf("move the links forward: %v", err)
+		}
+		if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), w.tokB); err != nil {
+			t.Errorf("control: the same token with a future due time: %v", err)
+		}
+	})
+}
+
+func TestDeletionLink_ANonAdminLearnsNothingAboutTheToken(t *testing.T) {
+	w := newLinkWorld(t)
+	for name, token := range map[string]string{"a random token": freshToken(t), "a valid token": w.tokB} {
+		t.Run(name, func(t *testing.T) {
+			_, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.preparer), token)
+			if !errors.Is(err, ErrCancelDeletionNotPermitted) {
+				t.Errorf("err = %v, want ErrCancelDeletionNotPermitted", err)
+			}
+			if errors.Is(err, ErrDeletionLinkNotValid) {
+				t.Errorf("err = %v tells a non-admin about the token", err)
+			}
+		})
+	}
+	w.requireLocked(t)
+	// Control: an admin with a bad token reads the token refusal, so the role check is what differs.
+	if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), freshToken(t)); !errors.Is(err, ErrDeletionLinkNotValid) {
+		t.Errorf("control: an admin with a random token: err = %v, want ErrDeletionLinkNotValid", err)
+	}
+}
+
+func TestDeletionLink_EveryLinkIsVoidAfterACancel(t *testing.T) {
+	w := newLinkWorld(t)
+	oldB, oldC := w.tokB, w.tokC
+
+	if err := w.cancelByRoute(w.adminCtx()); err != nil {
+		t.Fatalf("cancel by the DEL-04 route: %v", err)
+	}
+	if c := deletionOf(t, w.super, w.tenant); !c.empty() {
+		t.Fatalf("deletion columns after the cancel = %+v, want all NULL", c)
+	}
+	for name, tok := range map[string]string{"B's": oldB, "C's": oldC} {
+		if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), tok); !errors.Is(err, ErrDeletionLinkNotValid) {
+			t.Errorf("%s token after the DEL-04 cancel: err = %v, want ErrDeletionLinkNotValid", name, err)
+		}
+	}
+	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 1 {
+		t.Errorf("%s rows = %d, want 1 (the refused link cancels write none)", evCancelled, n)
+	}
+
+	w.schedule(t)
+	if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), w.tokB); err != nil {
+		t.Fatalf("cancel by link in the second deletion: %v", err)
+	}
+	if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), w.tokC); !errors.Is(err, ErrDeletionLinkNotValid) {
+		t.Errorf("C's token after B's link cancel: err = %v, want ErrDeletionLinkNotValid", err)
+	}
+	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 2 {
+		t.Errorf("%s rows = %d, want 2", evCancelled, n)
+	}
+}
+
+func TestDeletionLink_ALinkOfAnEarlierDeletionIsVoid(t *testing.T) {
+	w := newLinkWorld(t)
+	oldB := w.tokB
+	if err := w.cancelByRoute(w.adminCtx()); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	w.schedule(t)
+
+	if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), oldB); !errors.Is(err, ErrDeletionLinkNotValid) {
+		t.Errorf("the earlier deletion's token: err = %v, want ErrDeletionLinkNotValid", err)
+	}
+	w.requireLocked(t)
+	if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), w.tokB); err != nil {
+		t.Errorf("the new deletion's token: %v, want nil", err)
+	}
+}
+
+func TestDeletionLink_AFailedAuditKeepsTheLockAndTheLink(t *testing.T) {
+	w := newLinkWorld(t)
+	drop := failAudit(t, w.super, w.tenant, evCancelled)
+
+	_, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), w.tokB)
+	if err == nil {
+		t.Fatal("CancelWorkspaceDeletionByLink succeeded although its audit write fails")
+	}
+	requireNoSentinel(t, err)
+	if errors.Is(err, ErrDeletionLinkNotValid) {
+		t.Errorf("err = %v, want the audit failure, not a refusal", err)
+	}
+	if c := deletionOf(t, w.super, w.tenant); c.DueAt == nil || !c.DueAt.Equal(w.due) {
+		t.Errorf("deletion_due_at = %v, want %v unchanged", c.DueAt, w.due)
+	}
+	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 0 {
+		t.Errorf("%s rows = %d, want 0", evCancelled, n)
+	}
+
+	drop()
+	if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), w.tokB); err != nil {
+		t.Errorf("the same token after the trigger is gone: %v, want nil (the link stayed valid)", err)
+	}
+}
+
+func TestDeletionLink_TwoConcurrentLinkCancelsAuditOnce(t *testing.T) {
+	w := newLinkWorld(t)
+
+	errA, errB := race(
+		func() error { _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), w.tokB); return err },
+		func() error { _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.c), w.tokC); return err },
+	)
+	nils, invalid := 0, 0
+	for _, err := range []error{errA, errB} {
+		switch {
+		case err == nil:
+			nils++
+		case errors.Is(err, ErrDeletionLinkNotValid):
+			invalid++
+		default:
+			t.Errorf("unexpected err = %v", err)
+		}
+	}
+	if nils != 1 || invalid != 1 {
+		t.Errorf("results = %v, %v: want one nil and one ErrDeletionLinkNotValid", errA, errB)
+	}
+	if c := deletionOf(t, w.super, w.tenant); !c.empty() {
+		t.Errorf("deletion columns = %+v, want all NULL", c)
+	}
+	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 1 {
+		t.Errorf("%s rows = %d, want exactly 1", evCancelled, n)
+	}
+}

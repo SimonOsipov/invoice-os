@@ -33,6 +33,17 @@ func (n *DeletionNotifier) Schedule(ctx context.Context, typedName string) (time
 	return s.DueAt, nil
 }
 
+// Cancel is a stub for the DEL-05-04 red tests: it cancels and mails nobody.
+func (n *DeletionNotifier) Cancel(ctx context.Context) error {
+	return n.Store.CancelWorkspaceDeletion(ctx)
+}
+
+// CancelByLink is a stub for the DEL-05-04 red tests.
+func (n *DeletionNotifier) CancelByLink(ctx context.Context, token string) error {
+	_, err := n.Store.CancelWorkspaceDeletionByLink(ctx, token)
+	return err
+}
+
 // deliver runs on a context that outlives the client, so a send after the commit is always recorded.
 func (n *DeletionNotifier) deliver(ctx context.Context, s ScheduledDeletion) {
 	ctx2 := context.WithoutCancel(ctx)

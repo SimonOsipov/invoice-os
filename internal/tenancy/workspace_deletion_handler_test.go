@@ -168,6 +168,86 @@ func TestCancelDeletionHandler_MapsEveryOutcome(t *testing.T) {
 	})
 }
 
+func TestCancelDeletionByLinkHandler_MapsEveryOutcome(t *testing.T) {
+	const target = "/v1/workspace/deletion/cancel-by-link"
+	const token = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCde"
+
+	// a body of exactly n bytes whose token is padding
+	bodyOf := func(n int) string {
+		const frame = `{"token":""}`
+		return `{"token":"` + strings.Repeat("a", n-len(frame)) + `"}`
+	}
+
+	t.Run("a success answers a null due date and passes the token on", func(t *testing.T) {
+		var got string
+		h := CancelDeletionByLinkHandler(func(_ context.Context, tok string) error { got = tok; return nil }, nil)
+		status, body := deletionCall(h, deletionCaller, target, `{"token":"`+token+`"}`)
+		raw, present := body["deletion_due_at"]
+		if status != http.StatusOK || !present || string(raw) != "null" {
+			t.Errorf("status = %d, body = %v, want 200 with deletion_due_at null", status, body)
+		}
+		if got != token {
+			t.Errorf("token passed on = %q, want %q", got, token)
+		}
+	})
+
+	t.Run("the body limit is 1 KiB", func(t *testing.T) {
+		for _, tc := range []struct {
+			name   string
+			body   string
+			called bool
+			status int
+		}{
+			{"1024 bytes", bodyOf(1024), true, http.StatusOK},
+			{"2048 bytes", bodyOf(2048), false, http.StatusBadRequest},
+			{"malformed JSON", `{"token":`, false, http.StatusBadRequest},
+			{"an empty body", ``, false, http.StatusBadRequest},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				called := false
+				h := CancelDeletionByLinkHandler(func(context.Context, string) error { called = true; return nil }, nil)
+				status, body := deletionCall(h, deletionCaller, target, tc.body)
+				if status != tc.status || called != tc.called {
+					t.Fatalf("status = %d, store called = %v, want %d and %v", status, called, tc.status, tc.called)
+				}
+				if !tc.called && errorSentence(body) != "invalid request body" {
+					t.Errorf("error = %q, want %q", errorSentence(body), "invalid request body")
+				}
+			})
+		}
+	})
+
+	t.Run("each store outcome has its status and sentence", func(t *testing.T) {
+		rows := append([]struct {
+			name   string
+			err    error
+			status int
+			msg    string
+		}{
+			{"a bad link", ErrDeletionLinkNotValid, http.StatusForbidden, "this cancel link is no longer valid"},
+			{"a non-admin", ErrCancelDeletionNotPermitted, http.StatusForbidden, "only an admin can cancel the deletion"},
+		}, deletionRefusals...)
+		for _, tc := range rows {
+			t.Run(tc.name, func(t *testing.T) {
+				h := CancelDeletionByLinkHandler(func(context.Context, string) error { return tc.err }, nil)
+				status, body := deletionCall(h, deletionCaller, target, `{"token":"`+token+`"}`)
+				if status != tc.status || errorSentence(body) != tc.msg {
+					t.Errorf("status = %d, error = %q, want %d and %q", status, errorSentence(body), tc.status, tc.msg)
+				}
+			})
+		}
+	})
+
+	t.Run("no identity is 401 and the store is not called", func(t *testing.T) {
+		called := false
+		h := CancelDeletionByLinkHandler(func(context.Context, string) error { called = true; return nil }, nil)
+		status, body := deletionCall(h, nil, target, `{"token":"`+token+`"}`)
+		if status != http.StatusUnauthorized || errorSentence(body) != "unauthorized" || called {
+			t.Errorf("status = %d, error = %q, called = %v, want 401, unauthorized, false", status, errorSentence(body), called)
+		}
+	})
+}
+
 func TestMeHandler_SerialisesTheDueDateAsRFC3339UTC(t *testing.T) {
 	lagos := time.FixedZone("WAT", 3600)
 	due := time.Date(2026, 11, 24, 19, 10, 44, 0, lagos)

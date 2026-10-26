@@ -23,6 +23,9 @@ type ScheduleDeletionFunc func(ctx context.Context, typedName string) (time.Time
 // CancelDeletionFunc clears the caller's workspace deletion schedule.
 type CancelDeletionFunc func(ctx context.Context) error
 
+// CancelDeletionByLinkFunc cancels the caller's workspace deletion with a link token.
+type CancelDeletionByLinkFunc func(ctx context.Context, token string) error
+
 // maxScheduleDeletionBodyBytes bounds the schedule body before it is decoded.
 const maxScheduleDeletionBodyBytes = 4 << 10
 
@@ -34,6 +37,16 @@ type ScheduledDeletion struct {
 	DueAt                time.Time
 	Workspace, Requester string
 	Links                []IssuedDeletionLink
+}
+
+// IssuedCancelMail is one cancel-mail row to send.
+type IssuedCancelMail struct{ ID, Email string }
+
+// CancelledDeletion is the outcome of a cancel: the cancelled due time and the mail to send.
+type CancelledDeletion struct {
+	DueAt                time.Time
+	Workspace, Canceller string
+	Mails                []IssuedCancelMail
 }
 
 // ScheduleWorkspaceDeletion locks the caller's workspace for deletion 30 days out. The caller must be an
@@ -228,4 +241,14 @@ func CancelDeletionHandler(cancel CancelDeletionFunc, log *slog.Logger) http.Han
 		}
 		writeJSON(w, http.StatusOK, map[string]*string{"deletion_due_at": nil})
 	}
+}
+
+// CancelWorkspaceDeletionByLink is a stub for the DEL-05-04 red tests.
+func (s *Store) CancelWorkspaceDeletionByLink(ctx context.Context, token string) (CancelledDeletion, error) {
+	return CancelledDeletion{}, errors.New("not implemented")
+}
+
+// CancelDeletionByLinkHandler is a stub for the DEL-05-04 red tests.
+func CancelDeletionByLinkHandler(cancel CancelDeletionByLinkFunc, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNotImplemented) }
 }

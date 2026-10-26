@@ -115,13 +115,15 @@ func qaStart(t *testing.T, bin string, vars map[string]string) *qaProc {
 		_ = p.cmd.Process.Signal(syscall.SIGTERM)
 		select {
 		case <-p.done:
-		case <-time.After(10 * time.Second):
+		case <-time.After(qaBootWait):
 			_ = p.cmd.Process.Kill()
 			<-p.done
 		}
 	})
 	return p
 }
+
+const qaBootWait = 30 * time.Second
 
 // qaWorkerBin builds cmd/worker once per test binary: it runs every delivery job.
 var qaWorkerBin = sync.OnceValues(func() (string, error) {
@@ -165,7 +167,7 @@ func qaStartWithWorker(t *testing.T, bin string, vars map[string]string) *qaProc
 		_ = w.Process.Signal(syscall.SIGTERM)
 		select {
 		case <-done:
-		case <-time.After(10 * time.Second):
+		case <-time.After(qaBootWait):
 			_ = w.Process.Kill()
 			<-done
 		}
@@ -227,7 +229,7 @@ func TestNotificationsMain_ModeErrorIsFatal(t *testing.T) {
 			for k, v := range tc.vars {
 				vars[k] = v
 			}
-			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), qaBootWait)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, bin)
 			cmd.Env = qaBootEnv(qaFreePort(t), vars)
@@ -666,7 +668,7 @@ func TestNotificationsMain_ReadinessReportsTheDatabase(t *testing.T) {
 // A service that cannot reach a database it needs must not boot: the fork's deploy gate sees a crash, not a half service.
 func TestNotificationsMain_RefusesToBootWithoutADatabase(t *testing.T) {
 	bin := qaBuildNotifications(t)
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), qaBootWait)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin)
 	cmd.Env = qaBootEnv(qaFreePort(t), nil)

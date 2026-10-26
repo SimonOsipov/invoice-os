@@ -273,7 +273,13 @@ func TestRLS_DeletionPurgeStartedDownDropsTheGuard(t *testing.T) {
 	started := newNamedTenant(t, "Down started")
 	wdSchedule(t, started, `now()`)
 	ppStart(t, started)
+	deletionRead := migrationVersion(t, "*_staff_read_tenant_deletions.sql")
+	t.Cleanup(func() { requireStaffDeletionRead(t) })
+	restoreMigrationOnCleanup(t, provider, deletionRead)
 	restoreMigrationOnCleanup(t, provider, version)
+	if _, err := provider.ApplyVersion(ctx, deletionRead, false); err != nil {
+		t.Fatalf("Down of the staff-read-deletions migration: %v", err)
+	}
 	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
 		t.Fatalf("Down with a started tenant: %v", err)
 	}

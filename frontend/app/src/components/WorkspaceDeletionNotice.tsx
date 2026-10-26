@@ -4,22 +4,27 @@ import { ErrorState, Loading, toApiError, type ApiError } from '@invoice-os/api-
 import { BrandMark } from '../icons'
 import { endAppChat } from '../chat'
 import type { AuthedFetch } from '../lib/portfolio'
-import { DELETION_NOTICE, cancelWorkspaceDeletion, deletionNoticeBody, formatDueDate, readWorkspaceDeletion } from '../lib/workspaceDeletion'
+import { DELETION_NOTICE, cancelWorkspaceDeletion, cancelWorkspaceDeletionByLink, deletionNoticeBody, formatDueDate, readWorkspaceDeletion } from '../lib/workspaceDeletion'
 
 export type KnownDeletion = { dueAt: string | null; name: string | null; isAdmin: boolean }
 
 // Replaces the workspace like SuspendedNotice; the lock refuses every tenant read, so no shell around it.
-export function WorkspaceDeletionNotice({ authedFetch, base, known, onUnlocked, onSignOut }: {
+export function WorkspaceDeletionNotice({ authedFetch, base, known, onUnlocked, onSignOut, linkToken = null, onLinkSpent }: {
   authedFetch: AuthedFetch
   base: string
   known: KnownDeletion
   onUnlocked: () => void
   onSignOut: () => void
+  // A cancel link from the mail; sent once, then spent whatever the answer.
+  linkToken?: string | null
+  onLinkSpent?: () => void
 }) {
   const [read, setRead] = useState<KnownDeletion | null>(null)
   const [readError, setReadError] = useState<ApiError | null>(null)
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState<string | null>(null)
+  // The prop is read at App render; this stops a spent link going out twice.
+  const [spent, setSpent] = useState(false)
   // Held in refs so a re-render never re-runs the mount read.
   const unlocked = useRef(onUnlocked)
   unlocked.current = onUnlocked
@@ -56,7 +61,16 @@ export function WorkspaceDeletionNotice({ authedFetch, base, known, onUnlocked, 
     setCancelling(true)
     setCancelError(null)
     try {
-      await cancelWorkspaceDeletion(authedFetch, base)
+      if (linkToken === null || spent) {
+        await cancelWorkspaceDeletion(authedFetch, base)
+      } else {
+        try {
+          await cancelWorkspaceDeletionByLink(authedFetch, base, linkToken)
+        } finally {
+          setSpent(true)
+          onLinkSpent?.()
+        }
+      }
       unlocked.current()
     } catch (e) {
       setCancelError(toApiError(e).message)

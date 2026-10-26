@@ -106,6 +106,7 @@ import { removePolicy, replacePolicy, type Policy } from './lib/workflows'
 import { flaskGlyph, shieldGlyph15 } from './glyphs'
 import { BrandMark } from './icons'
 import { WorkspaceDeletionNotice } from './components/WorkspaceDeletionNotice'
+import { holdCancelLink, peekCancelLink, readCancelLinkFragment } from './lib/workspaceDeletion'
 import {
   APP_NOTICE_BODY,
   CookieNotice,
@@ -1947,6 +1948,12 @@ export default function App() {
   // Read before the strip effect drops the hash; null when `?auth=start` carries no invite.
   const [startInvite] = useState(() => (authStart ? readInviteFragment(window.location.hash) : null))
   const [startName] = useState(() => (authStart ? readInviteName(window.location.hash) : null))
+  // Held before the front door can navigate; the strip effect then drops the hash.
+  const [cancelLinkSeen] = useState(() => {
+    const t = readCancelLinkFragment(window.location.hash)
+    if (t !== null) holdCancelLink(t)
+    return t !== null
+  })
   const startBounced = useRef(false)
   // `?auth=verify#token=T` (confirm link) or `?auth=verify-invite#token=T` (invite set-password link). `?handoff=` wins.
   const [authVerify, setAuthVerify] = useState(() => {
@@ -1990,6 +1997,7 @@ export default function App() {
   const unlockWorkspace = useCallback(() => {
     withDueAt(null)
     setLockLatched(false)
+    holdCancelLink(null)
   }, [withDueAt])
 
   // Set when storage belongs to another tab's sign-in or sign-out.
@@ -2321,6 +2329,11 @@ export default function App() {
     consumeSignInState()
   }, [])
 
+  // The token never stays in the address bar or history.
+  useEffect(() => {
+    if (cancelLinkSeen) window.history.replaceState(null, '', window.location.pathname + window.location.search)
+  }, [cancelLinkSeen])
+
   // The single front door. Any sessionless visit — never signed in, signed out, session
   // expired while the tab was closed, or token invalidated by a 401 — goes to the landing
   // page rather than being offered a second place to sign in here.
@@ -2392,6 +2405,8 @@ export default function App() {
           known={{ dueAt: seat.me?.tenant.deletion_due_at ?? null, name: seat.me?.tenant.name ?? null, isAdmin: seat.me?.user.role === 'admin' }}
           onUnlocked={unlockWorkspace}
           onSignOut={signOut}
+          linkToken={peekCancelLink()}
+          onLinkSpent={() => holdCancelLink(null)}
         />
       ) : (
         <Workspace

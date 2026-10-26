@@ -1,10 +1,15 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   DELETE_ADMIN_ONLY,
   DELETE_WORKSPACE,
   DELETION_NOTICE,
+  CANCEL_LINK_KEY,
   cancelWorkspaceDeletion,
+  cancelWorkspaceDeletionByLink,
+  holdCancelLink,
+  peekCancelLink,
+  readCancelLinkFragment,
   deletionNoticeBody,
   formatDueDate,
   nameMatches,
@@ -90,5 +95,59 @@ describe('workspaceDeletion: the copy', () => {
     expect(deletionNoticeBody('24 November 2026', 'Okafor & Co').join('')).toBe(
       'On 24 November 2026 we delete every invoice, file and member of Okafor & Co.',
     )
+  })
+})
+
+const T = 'A'.repeat(43)
+
+describe('workspaceDeletion: the cancel link', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+  const memory = () => {
+    const m = new Map<string, string>()
+    vi.stubGlobal('sessionStorage', {
+      getItem: (k: string) => m.get(k) ?? null,
+      setItem: (k: string, v: string) => void m.set(k, v),
+      removeItem: (k: string) => void m.delete(k),
+    })
+    return m
+  }
+
+  it('workspaceDeletion: readCancelLinkFragment takes exactly one 43-character token', () => {
+    expect(readCancelLinkFragment(`#cancel-deletion=${T}`)).toBe(T)
+    expect(readCancelLinkFragment(`#cancel-deletion=${T}&cancel-deletion=${'B'.repeat(43)}`)).toBeNull()
+    expect(readCancelLinkFragment(`#cancel-deletion=${'A'.repeat(42)}`)).toBeNull()
+    expect(readCancelLinkFragment(`#cancel-deletion=${'A'.repeat(44)}`)).toBeNull()
+    expect(readCancelLinkFragment(`#invite=${T}`)).toBeNull()
+    expect(readCancelLinkFragment('')).toBeNull()
+  })
+
+  it('workspaceDeletion: a held cancel link lives ten minutes in this tab', () => {
+    const m = memory()
+    const t = 1_000_000
+    const ten = 10 * 60 * 1000
+    holdCancelLink(T, t)
+    expect(peekCancelLink(t + ten - 60_000)).toBe(T)
+    expect(peekCancelLink(t + ten)).toBeNull()
+    expect(peekCancelLink(t - 1)).toBeNull()
+    holdCancelLink(null)
+    expect(peekCancelLink(t)).toBeNull()
+    expect(m.has(CANCEL_LINK_KEY)).toBe(false)
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    m.set(CANCEL_LINK_KEY, '{not json')
+    expect(peekCancelLink(t)).toBeNull()
+    expect(warn).toHaveBeenCalled()
+  })
+
+  it('workspaceDeletion: cancelWorkspaceDeletionByLink posts the token', async () => {
+    const f = vi.fn().mockResolvedValue({})
+    await cancelWorkspaceDeletionByLink(f, 'B', T)
+    expect(f).toHaveBeenCalledWith('B/api/tenancy/v1/workspace/deletion/cancel-by-link', {
+      method: 'POST',
+      body: { token: T },
+    })
   })
 })

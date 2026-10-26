@@ -1,5 +1,6 @@
 import type { Me } from '../auth'
 import type { AuthedFetch } from './portfolio'
+import { BASE64URL_43, SIGN_IN_STATE_TTL_MS } from './signInState'
 
 export const DELETE_WORKSPACE = {
   title: 'Delete this workspace',
@@ -51,4 +52,50 @@ export async function readWorkspaceDeletion(
 ): Promise<{ dueAt: string | null; name: string; isAdmin: boolean }> {
   const me = await f<Me>(`${base}/api/tenancy/v1/me`)
   return { dueAt: me.tenant.deletion_due_at ?? null, name: me.tenant.name, isAdmin: me.user.role === 'admin' }
+}
+
+export const CANCEL_LINK_KEY = 'invoice-os.cancelDeletionLink'
+const CANCEL_LINK_SCHEMA_VERSION = 1
+
+// The token of `#cancel-deletion=<43 base64url>` given exactly once, else null.
+export function readCancelLinkFragment(hash: string): string | null {
+  const tokens = new URLSearchParams(hash.replace(/^#/, '')).getAll('cancel-deletion')
+  return tokens.length === 1 && BASE64URL_43.test(tokens[0]) ? tokens[0] : null
+}
+
+// Held in this tab across the sign-in bounce; null removes it. Warns, never throws.
+export function holdCancelLink(token: string | null, now: number = Date.now()): void {
+  try {
+    if (token === null) sessionStorage.removeItem(CANCEL_LINK_KEY)
+    else sessionStorage.setItem(CANCEL_LINK_KEY, JSON.stringify({ v: CANCEL_LINK_SCHEMA_VERSION, t: token, at: now }))
+  } catch (e) {
+    console.warn(`[workspaceDeletion] failed to store cancel link at "${CANCEL_LINK_KEY}":`, e)
+  }
+}
+
+// The held token while live, else null; leaves the key alone.
+export function peekCancelLink(now: number = Date.now()): string | null {
+  try {
+    const raw = sessionStorage.getItem(CANCEL_LINK_KEY)
+    if (raw == null) return null
+    const p = JSON.parse(raw) as { v?: unknown; t?: unknown; at?: unknown } | null
+    if (
+      p == null ||
+      p.v !== CANCEL_LINK_SCHEMA_VERSION ||
+      typeof p.t !== 'string' ||
+      !BASE64URL_43.test(p.t) ||
+      typeof p.at !== 'number' ||
+      Number.isNaN(p.at)
+    ) {
+      return null
+    }
+    return p.at <= now && now - p.at < SIGN_IN_STATE_TTL_MS ? p.t : null
+  } catch (e) {
+    console.warn(`[workspaceDeletion] failed to read cancel link at "${CANCEL_LINK_KEY}":`, e)
+    return null
+  }
+}
+
+export async function cancelWorkspaceDeletionByLink(f: AuthedFetch, base: string, token: string): Promise<void> {
+  await f<unknown>(`${base}/api/tenancy/v1/workspace/deletion/cancel-by-link`, { method: 'POST', body: { token } })
 }

@@ -7,7 +7,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
@@ -35,6 +37,50 @@ func NewMockIssuer(issuer string) (*MockIssuer, error) {
 		return nil, fmt.Errorf("auth: generate mock signing key: %w", err)
 	}
 	return &MockIssuer{issuer: issuer, kid: uuid.NewString(), key: key}, nil
+}
+
+// NewMockIssuerFromJWK creates an issuer that signs with the one-key ES256 private
+// JWK array `prenv jwk-es256` prints, keeping its kid, so every process given the
+// same key serves one JWKS. Errors carry a fixed reason, never the input.
+func NewMockIssuerFromJWK(issuer, jwkJSON string) (*MockIssuer, error) {
+	if issuer == "" {
+		return nil, fmt.Errorf("auth: mock issuer requires an issuer URL")
+	}
+	// A map keeps member names exact (RFC 7517 names are case-sensitive).
+	var keys []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(strings.TrimSpace(jwkJSON)), &keys); err != nil {
+		return nil, fmt.Errorf("auth: mock issuer key: not a JSON array of JWK objects")
+	}
+	if len(keys) != 1 {
+		return nil, fmt.Errorf("auth: mock issuer key: want exactly 1 key, got %d", len(keys))
+	}
+	member := func(name string) string {
+		var v string
+		_ = json.Unmarshal(keys[0][name], &v)
+		return v
+	}
+	if member("kty") != "EC" || member("crv") != "P-256" || member("alg") != "ES256" {
+		return nil, fmt.Errorf("auth: mock issuer key: not an ES256 P-256 key")
+	}
+	kid := member("kid")
+	if kid == "" {
+		return nil, fmt.Errorf("auth: mock issuer key: no kid")
+	}
+	dec := base64.RawURLEncoding.DecodeString
+	d, errD := dec(member("d"))
+	x, errX := dec(member("x"))
+	y, errY := dec(member("y"))
+	if errD != nil || errX != nil || errY != nil || len(d) == 0 {
+		return nil, fmt.Errorf("auth: mock issuer key: a coordinate or the private scalar is missing or not unpadded base64url")
+	}
+	key, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), d)
+	if err != nil {
+		return nil, fmt.Errorf("auth: mock issuer key: the private scalar is not a valid P-256 scalar")
+	}
+	if key.X.Cmp(new(big.Int).SetBytes(x)) != 0 || key.Y.Cmp(new(big.Int).SetBytes(y)) != 0 {
+		return nil, fmt.Errorf("auth: mock issuer key: x/y are not the public point of the private scalar")
+	}
+	return &MockIssuer{issuer: issuer, kid: kid, key: key}, nil
 }
 
 // MintOptions describes a token to mint. Zero fields take GoTrue-shaped

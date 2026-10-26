@@ -491,7 +491,7 @@ func TestMe_SuspendedMemberStillGets200(t *testing.T) {
 	}
 }
 
-// TestMe_LockedWorkspaceStillGets200 (DEL-04-02): Me is an exempt method, so the seam lock
+// TestMe_LockedWorkspaceStillGets200: Me is an exempt method, so the seam lock
 // must not turn the notice's own read into a 403.
 func TestMe_LockedWorkspaceStillGets200(t *testing.T) {
 	super, app := dbTestPools(t)

@@ -143,7 +143,7 @@ func RedriveHandler(redrive func(ctx context.Context, id, reason string) (Detail
 		case errors.Is(err, ErrJobNotFound):
 			writeError(w, http.StatusNotFound, "job not found")
 		case errors.Is(err, db.ErrWorkspaceLocked):
-			writeError(w, http.StatusConflict, "the workspace is scheduled for deletion")
+			writeError(w, http.StatusConflict, db.WorkspaceLockedMessage)
 		case errors.Is(err, ErrJobState):
 			writeError(w, http.StatusConflict, "only a dead_lettered job can be re-driven")
 		case errors.Is(err, ErrAcknowledged):

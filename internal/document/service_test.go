@@ -440,7 +440,7 @@ var (
 	_ func(*document.Service, context.Context, string, string) (document.Document, document.Object, error)            = (*document.Service).Open
 )
 
-// --- DEL-04-04: no object for a caller the seam refuses ---------------------
+// --- No object for a caller the seam refuses ---------------------
 
 func setTenantLock(t *testing.T, super *pgxpool.Pool, tenantID string, on bool) {
 	t.Helper()

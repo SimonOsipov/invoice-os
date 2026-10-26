@@ -23,17 +23,25 @@ export function WorkspaceDeletionNotice({ authedFetch, base, known, onUnlocked, 
   // Held in refs so a re-render never re-runs the mount read.
   const unlocked = useRef(onUnlocked)
   unlocked.current = onUnlocked
+  const fetcher = useRef(authedFetch)
+  fetcher.current = authedFetch
+  const latest = useRef(0)
 
+  // An answer to anything but the latest read is dropped.
   const load = useCallback(() => {
+    const id = ++latest.current
     setReadError(null)
-    readWorkspaceDeletion(authedFetch, base).then(
+    readWorkspaceDeletion(fetcher.current, base).then(
       (r) => {
+        if (id !== latest.current) return
         if (r.dueAt === null) unlocked.current()
         else setRead(r)
       },
-      (e) => setReadError(toApiError(e)),
+      (e) => {
+        if (id === latest.current) setReadError(toApiError(e))
+      },
     )
-  }, [authedFetch, base])
+  }, [base])
 
   useEffect(() => {
     endAppChat()

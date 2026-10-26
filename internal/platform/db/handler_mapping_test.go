@@ -451,7 +451,7 @@ func TestHandlerMappingEveryRefusalSiteNamesNotActiveMember(t *testing.T) {
 	}
 }
 
-// DEL-04-02: every refusal-mapping site also maps the workspace lock, on the
+// Every refusal-mapping site also maps the workspace lock, on the
 // same population and floors as the scan above.
 func TestHandlerMappingEveryRefusalSiteNamesWorkspaceLocked(t *testing.T) {
 	t.Run("control needles", hmControlNeedles)

@@ -1909,7 +1909,7 @@ func TestSubmitWorker_DeadLetterRecordsAttemptsAndLastError(t *testing.T) {
 	}
 }
 
-// --- DEL-04-04: a locked workspace's submission waits ---------------------------------
+// --- A locked workspace's submission waits ---------------------------------
 
 // setWorkspaceLock schedules (on) or clears (off) the tenant's deletion through the migrator.
 func setWorkspaceLock(t *testing.T, f *effectsFixture, tenantID string, on bool) {

@@ -24,7 +24,7 @@ paths:
 - Refuse a caller with no membership row or an inactive row with `ErrNotActiveMember`.
 - Answer `ErrNotActiveMember` with 403 and `NotActiveMemberMessage`. Never answer 401.
 - Refuse a transaction that is not `READ ONLY` with `ErrWorkspaceLocked` when the caller's workspace is scheduled for deletion. Check it after the membership gate.
-- Answer `ErrWorkspaceLocked` with 403 and `WorkspaceLockedMessage`.
+- Answer `ErrWorkspaceLocked` on a tenant route with 403 and `WorkspaceLockedMessage`. The staff re-drive answers 409 with the same constant.
 - Open a read that must serve a locked workspace with `pgx.TxOptions{AccessMode: pgx.ReadOnly}`.
 - Answer 401 only for `ErrNoTenant`. The SPA signs the user out on every 401.
 - Map `ErrNoTenant`, `ErrNotActiveMember` and `ErrWorkspaceLocked` in every handler error mapper.

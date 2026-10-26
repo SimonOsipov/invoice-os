@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// DEL-04-07: a scheduled-for-deletion workspace is replaced by the full-page notice.
+// A scheduled-for-deletion workspace is replaced by the full-page notice.
 // Harness of App.suspended.test.tsx: real <App/>, a stored session, ctx captured via a mocked
 // Sidebar; makeAuthedFetch is mocked to route every call through `handler` and fire the seams.
 

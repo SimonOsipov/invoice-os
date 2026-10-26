@@ -105,8 +105,8 @@ type MeUser struct {
 // the caller's membership via load, and returns them. A missing/invalid tenant is
 // 401 (db.ErrNoTenant, fail-closed); an unknown tenant is 404; a resolved tenant with
 // no membership row is 403 (ErrNoMembership, fail-closed — a role is never
-// defaulted); a non-active membership is 403 (db.ErrNotActiveMember), as is a locked workspace (db.ErrWorkspaceLocked);
-// anything else is 500.
+// defaulted); a non-active membership is 403 (db.ErrNotActiveMember);
+// anything else is 500. A locked workspace still gets 200: Me reads over the ungated seam.
 func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -128,6 +128,7 @@ func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 		case errors.Is(err, db.ErrNotActiveMember):
 			writeError(w, http.StatusForbidden, db.NotActiveMemberMessage)
 			return
+		// Dead like the arm above; the mapping scan requires it.
 		case errors.Is(err, db.ErrWorkspaceLocked):
 			writeError(w, http.StatusForbidden, db.WorkspaceLockedMessage)
 			return

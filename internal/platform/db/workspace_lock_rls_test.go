@@ -1,4 +1,4 @@
-// DEL-04-02: the request seam refuses every non-READ ONLY transaction of a workspace
+// The request seam refuses every non-READ ONLY transaction of a workspace
 // scheduled for deletion, after the membership gate. Named TestRLS_ so ci.yml's
 // -run TestRLS step reaches each case.
 package db_test

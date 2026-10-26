@@ -269,7 +269,7 @@ func TestRedriveHandler_LockedWorkspaceIs409(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec, call := serveRedrive(t, `{"reason":"r"}`, Detail{}, err)
-			wantBody(t, rec, http.StatusConflict, `{"error":"the workspace is scheduled for deletion"}`)
+			wantBody(t, rec, http.StatusConflict, `{"error":"`+db.WorkspaceLockedMessage+`"}`)
 			if call.n != 1 {
 				t.Errorf("redrive calls = %d, want 1", call.n)
 			}

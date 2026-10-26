@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/riverqueue/river"
@@ -370,7 +371,7 @@ func TestEraseByID_ARetryAfterAFailedAccountStepIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestEraseByID_AFailedSweepSkipsTheAccountAndLeaksNothing(t *testing.T) {
+func TestEraseByID_AFailedContactsReadSkipsTheAccountAndLeaksNothing(t *testing.T) {
 	r := newEraseRig(t)
 	r.seedCopies(r.uid, r.mail)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -472,8 +473,8 @@ func TestEraseByID_AContactsRowHandsOffToTheNormalErasure(t *testing.T) {
 
 	err := r.workByID(r.byIDWorker(), r.uid)
 	var sn *river.JobSnoozeError
-	if !errors.As(err, &sn) || sn.Duration != handOffSnooze {
-		t.Fatalf("Work = %v, want a snooze of %v", err, handOffSnooze)
+	if !errors.As(err, &sn) || sn.Duration != 30*time.Second {
+		t.Fatalf("Work = %v, want a snooze of 30s", err)
 	}
 
 	if n := r.count(`SELECT count(*) FROM river_job WHERE kind = $1 AND args->>'user_id' = $2 AND args ? 'email'`, EraseArgs{}.Kind(), r.uid); n != 0 {
@@ -650,4 +651,29 @@ func TestEraseByID_AFinishedEarlierErasureDoesNotBlockANewHandOff(t *testing.T) 
 	if _, c := r.copies(r.uid); c != 0 {
 		t.Errorf("contacts rows left = %d, want 0", c)
 	}
+}
+
+func TestEraseByID_AFailedSweepSkipsTheAccountAndLeaksNothing(t *testing.T) {
+	r := newEraseRig(t)
+	r.seedCopies(r.uid, r.mail)
+	fn := "qa_refuse_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	r.exec(`CREATE FUNCTION ` + fn + `() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$`)
+	r.exec(`CREATE TRIGGER ` + fn + ` BEFORE DELETE ON registrant_handoffs FOR EACH ROW WHEN (OLD.user_id = '` + r.uid + `') EXECUTE FUNCTION ` + fn + `()`)
+	t.Cleanup(func() {
+		r.exec(`DROP TRIGGER IF EXISTS ` + fn + ` ON registrant_handoffs`)
+		r.exec(`DROP FUNCTION IF EXISTS ` + fn + `()`)
+	})
+
+	err := r.workByID(r.byIDWorker(), r.uid)
+	if err == nil {
+		t.Fatal("Work with a refused delete = nil, want an error")
+	}
+	if len(r.acct.got()) != 0 {
+		t.Error("the account was deleted although the sweep failed")
+	}
+	warns := r.sink.at(slog.LevelWarn)
+	if len(warns) != 1 || !strings.HasSuffix(warns[0].Text, "step="+stepSweep+" status=0") {
+		t.Errorf("WARN lines = %+v, want one with step=%s status=0", warns, stepSweep)
+	}
+	qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.uid, r.mail)
 }

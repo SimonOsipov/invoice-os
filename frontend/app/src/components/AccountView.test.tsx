@@ -27,6 +27,7 @@ function setup(previews: Preview[], over: { tenantName?: string | null; post?: (
   const ctx = {
     authedFetch,
     signOut: vi.fn(),
+    accountDeleted: vi.fn(),
     lockWorkspace: vi.fn(),
     user: { name: 'Ada', initials: 'A', tenantName: over.tenantName === undefined ? 'Okafor & Co' : over.tenantName },
   } as unknown as PlatformCtx
@@ -148,6 +149,7 @@ describe('AccountView', () => {
     await userEvent.click(screen.getByTestId('delete-account-confirm'))
     expect((await screen.findByTestId('delete-account-error')).textContent).toBe(sentence)
     expect(ctx.signOut).not.toHaveBeenCalled()
+    expect(ctx.accountDeleted).not.toHaveBeenCalled()
     const before = gets.mock.calls.length
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(gets.mock.calls.length).toBe(before + 1))

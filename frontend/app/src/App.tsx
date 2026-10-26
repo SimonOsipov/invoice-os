@@ -246,9 +246,10 @@ const STILL_WORKING = new ApiError('network', 'An import or filing is still in p
 // (Platform.dc.html ~L980-1263): `this.state` becomes typed `useState` hooks below,
 // and every handler in the "actions" section is ported 1:1 as a plain function.
 // Rendered only once signed in (see App).
-function Workspace({ session, onSignOut, freshToken, onUnauthorized, onLocked }: {
+function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnauthorized, onLocked }: {
   session: Session
   onSignOut: () => void
+  onAccountDeleted: () => void
   freshToken?: () => string | null | Promise<string | null>
   onUnauthorized: () => void
   onLocked: (dueAt?: string) => void
@@ -1841,6 +1842,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized, onLocked }:
     staffRole,
     deleteRole,
     signOut: onSignOut,
+    accountDeleted: onAccountDeleted,
     lockWorkspace: onLocked,
     cookieChoices: () => {
       const next = syncAppConsent(chatEmail)
@@ -2097,6 +2099,13 @@ export default function App() {
     }
     leaveToLanding()
   }, [seat, leaveToLanding])
+
+  // The deletion already revoked every session of the account, so no sign-out is sent.
+  const leaveDeletedAccount = useCallback(() => {
+    if (signingOut.current) return
+    signingOut.current = true
+    leaveToLanding()
+  }, [leaveToLanding])
 
   // The 401 seam: the session is already dead, so nothing is sent. Keeps the stored record
   // only when it holds another sign-in (both tokens carry session_ids that differ).
@@ -2399,6 +2408,7 @@ export default function App() {
         <Workspace
           session={seat}
           onSignOut={signOut}
+          onAccountDeleted={leaveDeletedAccount}
           freshToken={freshToken}
           onUnauthorized={endRevokedSession}
           onLocked={lockWorkspace}

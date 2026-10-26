@@ -74,6 +74,7 @@ function sidebarCtx(over: Record<string, unknown> = {}): PlatformCtx {
     switchClient: vi.fn(),
     nav: vi.fn(),
     signOut: vi.fn(),
+    accountDeleted: vi.fn(),
     cookieChoices: vi.fn(),
     ...over,
   }

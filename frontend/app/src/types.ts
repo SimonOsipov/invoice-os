@@ -559,6 +559,8 @@ export type PlatformCtx = {
   staffRole: (key: string, members: readonly string[]) => Promise<Role>
   deleteRole: (key: string) => Promise<void>
   signOut: () => void
+  // Leaves without the sign-out request: the account and its sessions are gone.
+  accountDeleted: () => void
   lockWorkspace: (dueAt?: string) => void
   cookieChoices: () => void
 }

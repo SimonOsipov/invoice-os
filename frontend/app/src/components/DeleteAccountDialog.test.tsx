@@ -10,11 +10,12 @@ afterEach(cleanup)
 
 function setup(authedFetch: unknown, outcome: 'leave' | 'hand_on' = 'leave') {
   const signOut = vi.fn()
+  const accountDeleted = vi.fn()
   const lockWorkspace = vi.fn()
   const onClose = vi.fn()
-  const ctx = { authedFetch, signOut, lockWorkspace, user: { tenantName: 'Okafor & Co' } } as unknown as PlatformCtx
+  const ctx = { authedFetch, signOut, accountDeleted, lockWorkspace, user: { tenantName: 'Okafor & Co' } } as unknown as PlatformCtx
   render(<DeleteAccountDialog ctx={ctx} base="https://gw.test" preview={{ outcome, heirName: 'Chidi Eze', heirUserId: 'u-heir' }} outcome={outcome} onClose={onClose} />)
-  return { signOut, lockWorkspace, onClose }
+  return { signOut, accountDeleted, lockWorkspace, onClose }
 }
 
 const confirm = () => screen.getByTestId('delete-account-confirm') as HTMLButtonElement
@@ -46,12 +47,13 @@ describe('DeleteAccountDialog', () => {
     expect(onClose).toHaveBeenCalledTimes(2)
   })
 
-  it.each(['leave', 'hand_on'] as const)('DeleteAccountDialog: a 200 signs out (%s)', async (outcome) => {
+  it.each(['leave', 'hand_on'] as const)('DeleteAccountDialog: a 200 leaves without a sign-out request (%s)', async (outcome) => {
     const f = vi.fn().mockResolvedValue({ outcome })
-    const { signOut, lockWorkspace } = setup(f, outcome)
+    const { signOut, accountDeleted, lockWorkspace } = setup(f, outcome)
     fireEvent.change(input(), { target: { value: 'delete my account' } })
     await userEvent.click(confirm())
-    await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(accountDeleted).toHaveBeenCalledTimes(1))
+    expect(signOut).not.toHaveBeenCalled()
     expect(lockWorkspace).not.toHaveBeenCalled()
     expect(f).toHaveBeenCalledWith('https://gw.test/api/tenancy/v1/me/deletion', { method: 'POST', body: outcome === 'hand_on' ? { outcome, heir_user_id: 'u-heir' } : { outcome } })
   })

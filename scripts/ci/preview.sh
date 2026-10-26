@@ -14,6 +14,7 @@
 #   preview.sh teardown <pr>              delete everything this PR owns
 #   preview.sh prs                        print "<pr> <created>" for each PR that owns a service
 #   preview.sh invariants                 fail when preview holds a production secret or reaches prod
+#   preview.sh budget                     print the connections one PR fleet can hold at peak
 set -euo pipefail
 
 PROJECT=ascomply-preview
@@ -28,7 +29,7 @@ BACKENDS=(gateway auth tenancy portfolio invoice validation dashboard submission
 SITES=(app landing library blog ops-console support-console)
 # The secrets each PR generates or composes; preview.tf holds the shared ones.
 PR_SECRETS=(gateway-token s2s-token gotrue-jwt-keys gotrue-jwt-secret database-superuser-url database-migration-url
-  database-app-url database-worker-url database-reader-url database-gateway-url database-auth-url)
+  database-app-url database-worker-url database-reader-url database-gateway-url database-auth-url mock-issuer-key)
 
 die() {
   echo "::error::$*" >&2
@@ -56,6 +57,25 @@ image() { printf '%s/%s:pr-%s-%s' "$REGISTRY" "$2" "$1" "$3"; }
 
 secret() { printf 'pr-%s-%s' "$1" "$2"; }
 
+# The tables are case functions: bash 3.2 has no associative arrays, and only a function crosses export -f.
+max_instances() {
+  case "$1" in
+    auth | worker) echo 1 ;;
+    portfolio | dashboard | notifications | validation | submission) echo 2 ;;
+    *) echo 3 ;;
+  esac
+}
+
+# pool_conns <secret>: pool_max_conns of a pooled DSN secret; empty for any other secret.
+pool_conns() {
+  case "$1" in
+    database-app-url | database-reader-url | database-gateway-url) echo 1 ;;
+    database-worker-url) echo 6 ;;
+  esac
+}
+
+gotrue_pool() { echo 3; }
+
 shared() { gcloud secrets versions access latest --secret "$1" --project "$PROJECT"; }
 
 # put <name> <pr>: stdin is the value; argv never carries it.
@@ -68,8 +88,18 @@ put() {
   echo "created $1"
 }
 
+# repool <secret> <n>: add a version when the latest DSN's pool_max_conns is not n.
+repool() {
+  local cur
+  cur=$(gcloud secrets versions access latest --secret "$1" --project "$PROJECT")
+  [[ "$cur" == *"pool_max_conns=$2" ]] && return 0
+  printf '%s' "$cur" | sed "s/pool_max_conns=[0-9]*/pool_max_conns=$2/" |
+    gcloud secrets versions add "$1" --project "$PROJECT" --data-file=- >/dev/null
+  echo "updated $1"
+}
+
 cmd_secrets() {
-  local pr=$1 db="pr_$1" have name ip
+  local pr=$1 db="pr_$1" have name ip pool
   have=$(gcloud secrets list --project "$PROJECT" --filter "labels.$LABEL=$pr" --format 'value(name)')
   ip=$(gcloud sql instances describe preview --project "$PROJECT" --format 'value(ipAddresses[0].ipAddress)')
   [ -n "$ip" ] || die "the preview Cloud SQL instance has no private IP"
@@ -77,18 +107,19 @@ cmd_secrets() {
 
   for name in "${PR_SECRETS[@]}"; do
     if grep -qx "$(secret "$pr" "$name")" <<<"$have"; then
+      pool=$(pool_conns "$name")
+      [ -z "$pool" ] || repool "$(secret "$pr" "$name")" "$pool"
       continue
     fi
-    # Pools: about 30 connections per PR fleet against the preview instance's 100.
     case "$name" in
       gateway-token | s2s-token | gotrue-jwt-secret) openssl rand -hex 32 ;;
-      gotrue-jwt-keys) go run ./tools/prenv jwk-es256 ;;
+      gotrue-jwt-keys | mock-issuer-key) go run ./tools/prenv jwk-es256 ;;
       database-superuser-url) dsn postgres "$(shared postgres-password)" '' ;;
       database-migration-url) dsn invoice_migrator "$(shared migrator-password)" '' ;;
-      database-app-url) dsn invoice_app "$(shared app-password)" '&pool_max_conns=2' ;;
-      database-worker-url) dsn invoice_app "$(shared app-password)" '&pool_max_conns=6' ;;
-      database-reader-url) dsn invoice_tenant_reader "$(shared reader-password)" '&pool_max_conns=1' ;;
-      database-gateway-url) dsn invoice_gateway "$(shared gateway-password)" '&pool_max_conns=2' ;;
+      database-app-url) dsn invoice_app "$(shared app-password)" "&pool_max_conns=$(pool_conns database-app-url)" ;;
+      database-worker-url) dsn invoice_app "$(shared app-password)" "&pool_max_conns=$(pool_conns database-worker-url)" ;;
+      database-reader-url) dsn invoice_tenant_reader "$(shared reader-password)" "&pool_max_conns=$(pool_conns database-reader-url)" ;;
+      database-gateway-url) dsn invoice_gateway "$(shared gateway-password)" "&pool_max_conns=$(pool_conns database-gateway-url)" ;;
       database-auth-url) dsn supabase_auth_admin "$(shared auth-admin-password)" '' ;;
     esac | put "$(secret "$pr" "$name")" "$pr"
   done
@@ -140,7 +171,7 @@ env_file() {
         echo "GOTRUE_DISABLE_SIGNUP: 'false'"
         # No mail: a preview confirms a sign-up at once.
         echo "GOTRUE_MAILER_AUTOCONFIRM: 'true'"
-        echo "GOTRUE_DB_MAX_POOL_SIZE: '3'"
+        echo "GOTRUE_DB_MAX_POOL_SIZE: '$(gotrue_pool)'"
         ;;
       invoice) echo "VALIDATION_URL: $(url validation "$pr")" ;;
       submission) echo "GATEWAY_URL: $(url gateway "$pr")" ;;
@@ -169,7 +200,8 @@ env_file() {
 secrets_of() {
   local pr=$1 s=()
   case "$2" in
-    gateway) s=(GATEWAY_TOKEN=gateway-token DATABASE_GATEWAY_URL=database-gateway-url DATABASE_MIGRATION_URL=database-migration-url) ;;
+    gateway) s=(GATEWAY_TOKEN=gateway-token DATABASE_GATEWAY_URL=database-gateway-url DATABASE_MIGRATION_URL=database-migration-url
+      GATEWAY_MOCK_ISSUER_KEY=mock-issuer-key) ;;
     auth) s=(DATABASE_URL=database-auth-url GOTRUE_JWT_KEYS=gotrue-jwt-keys GOTRUE_JWT_SECRET=gotrue-jwt-secret) ;;
     tenancy | portfolio | dashboard | notifications) s=(DATABASE_URL=database-app-url GATEWAY_TOKEN=gateway-token) ;;
     validation) s=(DATABASE_URL=database-app-url GATEWAY_TOKEN=gateway-token S2S_TOKEN=s2s-token) ;;
@@ -199,7 +231,7 @@ deploy_one() {
   envf=$(mktemp)
   env_file "$pr" "$svc" "$envf"
   args=(--image "$(image "$pr" "$svc" "$sha")" --service-account "$RUNTIME" --labels "$LABEL=$pr"
-    --env-vars-file "$envf" --min-instances "$min" --max-instances 1 --cpu "$cpu" --memory "$memory"
+    --env-vars-file "$envf" --min-instances "$min" --max-instances "$(max_instances "$svc")" --cpu "$cpu" --memory "$memory"
     --no-cpu-boost --ingress all)
   secrets=$(secrets_of "$pr" "$svc")
   [ -z "$secrets" ] || args+=(--set-secrets "$secrets")
@@ -221,7 +253,7 @@ deploy_one() {
 cmd_deploy() {
   local pr=$1 sha=$2 failed=0 svc
   shift 2
-  export -f deploy_one env_file secrets_of url image secret
+  export -f deploy_one env_file secrets_of url image secret max_instances gotrue_pool
   export PROJECT PROJECT_NUMBER REGION REGISTRY RUNTIME LABEL
   # Four at a time: africa-south1 allows 20 vCPU of allocation per minute per project.
   # shellcheck disable=SC2016 # the child bash expands its own arguments
@@ -295,6 +327,27 @@ cmd_prs() {
   } | sort -k1,1n -k2,2 | awk '!seen[$1]++ {print $1, $2}'
 }
 
+# budget: Cloud SQL connections one fleet holds at peak (instances x pool), from the deploy and secrets tables.
+cmd_budget() {
+  local svc kv name pool n total=0
+  for svc in "${BACKENDS[@]}"; do
+    for kv in $(secrets_of 0 "$svc" | tr , ' '); do
+      name=${kv#*=pr-0-}
+      name=${name%:latest}
+      pool=$(pool_conns "$name")
+      [ -n "$pool" ] || continue
+      n=$(($(max_instances "$svc") * pool))
+      printf '%-14s %-22s %s\n' "$svc" "$name" "$n"
+      total=$((total + n))
+    done
+  done
+  # River's leader connection, outside the pool (internal/platform/db/leader.go).
+  printf '%-14s %-22s %s\n' worker leader 1
+  n=$(($(max_instances auth) * $(gotrue_pool)))
+  printf '%-14s %-22s %s\n' auth gotrue-pool "$n"
+  echo "fleet $((total + 1 + n))"
+}
+
 # invariants: GKE-11 AC6.
 cmd_invariants() {
   local bad=0 names envs held token code
@@ -347,5 +400,6 @@ case "${1:-}" in
   teardown) pr_arg "${2:-}"; cmd_teardown "$2" ;;
   prs) cmd_prs ;;
   invariants) cmd_invariants ;;
-  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|prs|invariants" ;;
+  budget) cmd_budget ;;
+  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|prs|invariants|budget" ;;
 esac

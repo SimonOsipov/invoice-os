@@ -1,7 +1,7 @@
 // Command worker runs all background work, so a request-driven service that Cloud Run throttles
 // or scales to zero holds none: the River queues of submission, extraction and contact delivery,
 // the person erase job, the reconciliation sweep, the two custom-rule re-checks, the daily rollup snapshot, the
-// system-health sampler, the newsletter purge and the code-list sync. The other services only
+// system-health sampler, the newsletter purge, the workspace purge and the code-list sync. The other services only
 // enqueue. It serves /healthz and /readyz and no other route.
 package main
 
@@ -36,6 +36,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 	"github.com/SimonOsipov/invoice-os/internal/systemhealth"
 	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
+	"github.com/SimonOsipov/invoice-os/internal/workspacepurge"
 )
 
 func main() {
@@ -193,6 +194,12 @@ func main() {
 	app.AddBackgroundWorker(codelist.NewWorker(notifications.HandoffInterval, leader.Lead("registrant-handoff", notifications.MoveRegistrantHandoffs(pool, q.River()))))
 
 	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("newsletter-purge", notifications.NewNewsletterStore(pool, q.River()).PurgeExpired)))
+
+	purger := &workspacepurge.Purger{Pool: pool, Reader: readerPool, River: q.River(), Objects: docObjects, Logger: app.Logger}
+	if account != nil { // a nil *Client in the interface would pass the purger's nil check
+		purger.Accounts = account
+	}
+	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("workspace-purge", purger.RunOnce)))
 
 	app.AddBackgroundWorker(codelist.NewWorker(codelist.SyncInterval,
 		leader.Lead("codelist-sync", codelist.NewSyncer(pool, codelist.DefaultBaseURL, nil, app.Logger).SyncAll)))

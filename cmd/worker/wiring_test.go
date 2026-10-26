@@ -1873,7 +1873,7 @@ func TestWorkerMain_EveryPeriodicTaskHasOneLeader(t *testing.T) {
 		names[lit.Value]++
 		return true
 	})
-	want := []string{`"health-sample"`, `"registrant-handoff"`, `"newsletter-purge"`, `"codelist-sync"`,
+	want := []string{`"health-sample"`, `"registrant-handoff"`, `"newsletter-purge"`, `"workspace-purge"`, `"codelist-sync"`,
 		`"reconciliation-sweep"`, `"recheck"`, `"recheck-custom"`, `"rollup-snapshot"`}
 	if tasks != len(want) {
 		t.Errorf("found %d periodic task(s), want %d %v", tasks, len(want), want)

@@ -190,7 +190,7 @@ type wsDoc struct {
 }
 
 type wsFx struct {
-	tenant, admin, preparer, suspended string
+	tenant, admin, preparer, reviewer, suspended string
 	label                              string
 	alpha, beta                        string
 	invoiceNumbers                     []string
@@ -203,6 +203,8 @@ type wsRig struct {
 	app   *pgxpool.Pool
 	rec   *sqlRecorder
 	objs  *fakeObjects
+	// filename is what the last exportOK handed to onStart.
+	filename string
 }
 
 func newWsRig(t *testing.T) *wsRig {
@@ -228,13 +230,14 @@ func (r *wsRig) plant(t *testing.T, base string, shape wsShape) wsFx {
 	t.Helper()
 	fx := wsFx{
 		label: base + "-" + uuid.NewString()[:8],
-		admin: uuid.NewString(), preparer: uuid.NewString(), suspended: uuid.NewString(),
+		admin: uuid.NewString(), preparer: uuid.NewString(), reviewer: uuid.NewString(), suspended: uuid.NewString(),
 	}
 	now := time.Now().UTC()
 	fx.tenant = mustCommitFixture(t, r.super, func(tx pgx.Tx) string {
 		tid := mustCreateTenant(t, tx, "Okafor Holdings "+fx.label)
 		mustCreateMemberRow(t, tx, tid, fx.admin, "admin", "active")
 		mustCreateMemberRow(t, tx, tid, fx.preparer, "preparer", "active")
+		mustCreateMemberRow(t, tx, tid, fx.reviewer, "reviewer", "active")
 		mustCreateMemberRow(t, tx, tid, fx.suspended, "admin", "suspended")
 		if shape.alpha {
 			fx.alpha = mustCreateEntity(t, tx, tid, "Alpha Co", "80000070-0001")
@@ -347,7 +350,7 @@ func (r *wsRig) eventRow(t *testing.T, tenant, event string) (actor string, payl
 func (r *wsRig) exportOK(t *testing.T, fx wsFx) []byte {
 	t.Helper()
 	sink := &wsSink{}
-	if err := r.store().AssembleWorkspace(idCtx(fx.admin, fx.tenant), sink, noStart); err != nil {
+	if err := r.store().AssembleWorkspace(idCtx(fx.admin, fx.tenant), sink, func(name string) { r.filename = name }); err != nil {
 		t.Fatalf("AssembleWorkspace as the admin: %v", err)
 	}
 	return sink.data()
@@ -469,6 +472,9 @@ func TestRLS_WorkspaceManifestChecksEveryEntry(t *testing.T) {
 	names, body := zipEntries(t, rig.exportOK(t, fx))
 	m := parseWsManifest(t, body)
 
+	if want := "ASComply_workspace_Okafor-Holdings-" + fx.label + "_" + time.Now().UTC().Format("20060102") + ".zip"; rig.filename != want {
+		t.Errorf("download filename = %q, want %q", rig.filename, want)
+	}
 	if m.Format != "ascomply-workspace-export/1" {
 		t.Errorf("format = %q, want ascomply-workspace-export/1", m.Format)
 	}
@@ -515,6 +521,7 @@ func TestRLS_WorkspaceManifestChecksEveryEntry(t *testing.T) {
 func TestRLS_WorkspaceExportIsAdminOnly(t *testing.T) {
 	rig := newWsRig(t)
 	fx := rig.plant(t, "admin-only", shapeFull)
+	other := rig.plant(t, "admin-only-other", shapeOneDoc)
 
 	cases := []struct {
 		name string
@@ -522,6 +529,9 @@ func TestRLS_WorkspaceExportIsAdminOnly(t *testing.T) {
 		want error
 	}{
 		{"active preparer", idCtx(fx.preparer, fx.tenant), ErrExportNotPermitted},
+		{"active reviewer", idCtx(fx.reviewer, fx.tenant), ErrExportNotPermitted},
+		{"admin of another workspace", idCtx(other.admin, fx.tenant), db.ErrNotActiveMember},
+		{"tenant id that is not a uuid", idCtx(fx.admin, "not-a-uuid"), db.ErrNoTenant},
 		{"suspended admin", idCtx(fx.suspended, fx.tenant), db.ErrNotActiveMember},
 		{"subject with no row", idCtx(uuid.NewString(), fx.tenant), db.ErrNotActiveMember},
 		{"subject system", idCtx("system", fx.tenant), db.ErrNoTenant},
@@ -537,8 +547,10 @@ func TestRLS_WorkspaceExportIsAdminOnly(t *testing.T) {
 			if sink.size() != 0 || started {
 				t.Errorf("refusal wrote %d bytes, onStart called = %v, want 0 and false", sink.size(), started)
 			}
-			if n := rig.countEvent(t, fx.tenant, "workspace.exported") + rig.countEvent(t, fx.tenant, "workspace.export_failed"); n != 0 {
-				t.Errorf("refusal wrote %d export audit rows, want 0", n)
+			for _, tenant := range []string{fx.tenant, other.tenant} {
+				if n := rig.countEvent(t, tenant, "workspace.exported") + rig.countEvent(t, tenant, "workspace.export_failed"); n != 0 {
+					t.Errorf("refusal wrote %d export audit rows into %s, want 0", n, tenant)
+				}
 			}
 		})
 	}
@@ -1002,6 +1014,7 @@ func TestRLS_PreflightTellsWhetherTheExportCanStart(t *testing.T) {
 	rig.lock(t, locked)
 
 	free := rig.store()
+	auditBefore := rig.auditTotal(t, a.tenant) + rig.auditTotal(t, b.tenant) + rig.auditTotal(t, locked.tenant)
 	for _, tc := range []struct {
 		name string
 		ctx  context.Context
@@ -1010,6 +1023,8 @@ func TestRLS_PreflightTellsWhetherTheExportCanStart(t *testing.T) {
 		{"free admin", idCtx(a.admin, a.tenant), nil},
 		{"admin of a locked workspace", idCtx(locked.admin, locked.tenant), nil},
 		{"preparer", idCtx(a.preparer, a.tenant), ErrExportNotPermitted},
+		{"reviewer", idCtx(a.reviewer, a.tenant), ErrExportNotPermitted},
+		{"admin of another workspace", idCtx(b.admin, a.tenant), db.ErrNotActiveMember},
 		{"suspended admin", idCtx(a.suspended, a.tenant), db.ErrNotActiveMember},
 		{"subject with no row", idCtx(uuid.NewString(), a.tenant), db.ErrNotActiveMember},
 		{"no identity", context.Background(), db.ErrNoTenant},
@@ -1023,6 +1038,9 @@ func TestRLS_PreflightTellsWhetherTheExportCanStart(t *testing.T) {
 	}
 	if len(free.slots) != 0 {
 		t.Errorf("slots held after the preflights = %d, want 0", len(free.slots))
+	}
+	if after := rig.auditTotal(t, a.tenant) + rig.auditTotal(t, b.tenant) + rig.auditTotal(t, locked.tenant); after != auditBefore {
+		t.Errorf("preflights moved the audit rows from %d to %d, want no change", auditBefore, after)
 	}
 
 	rig.rec.reset()
@@ -1046,5 +1064,115 @@ func TestRLS_PreflightTellsWhetherTheExportCanStart(t *testing.T) {
 	}
 	if err := run.finish(t); err != nil {
 		t.Errorf("the held export failed: %v", err)
+	}
+}
+
+// --- adversarial: paging, directory names ------------------------------------------------
+
+// plantDocuments adds n documents sharing one created_at, so only the id breaks ties across pages.
+func (r *wsRig) plantDocuments(t *testing.T, fx wsFx, n int) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := r.super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin documents fixture: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	at := time.Now().UTC().Add(-time.Hour)
+	for i := range n {
+		body := []byte(fmt.Sprintf("paged %s %d", fx.label, i))
+		sum := sha256.Sum256(body)
+		hash := hex.EncodeToString(sum[:])
+		key := "tenants/" + fx.tenant + "/" + hash
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO documents (tenant_id, storage_key, content_hash, size_bytes, created_at) VALUES ($1, $2, $3, $4, $5)`,
+			fx.tenant, key, hash, len(body), at); err != nil {
+			t.Fatalf("insert paged document %d: %v", i, err)
+		}
+		r.objs.put(key, body)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit documents fixture: %v", err)
+	}
+}
+
+func TestRLS_WorkspaceExportPagesEveryDocumentOnceInIDOrder(t *testing.T) {
+	rig := newWsRig(t)
+	fx := rig.plant(t, "paging", shapeEmpty)
+	const n = 2*documentPageSize + 1
+	rig.plantDocuments(t, fx, n)
+
+	names, body := zipEntries(t, rig.exportOK(t, fx))
+
+	rows, err := rig.super.Query(context.Background(), `SELECT content_hash FROM documents WHERE tenant_id = $1 ORDER BY id`, fx.tenant)
+	if err != nil {
+		t.Fatalf("read document order: %v", err)
+	}
+	want := []string{}
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		want = append(want, "documents/"+h)
+	}
+	rows.Close()
+	if len(want) != n {
+		t.Fatalf("fixture holds %d documents, want %d", len(want), n)
+	}
+	got := names[:len(names)-2]
+	if !slices.Equal(got, want) {
+		t.Errorf("document entries: %d names (first mismatch aside), want the %d documents once each in id order", len(got), n)
+	}
+	if names[len(names)-2] != "audit_log.csv" || names[len(names)-1] != "manifest.json" {
+		t.Errorf("the ZIP ends with %q, want audit_log.csv then manifest.json", names[len(names)-2:])
+	}
+	if m := parseWsManifest(t, body); m.Counts.Documents != n {
+		t.Errorf("counts.documents = %d, want %d", m.Counts.Documents, n)
+	}
+}
+
+func TestRLS_WorkspaceExportGivesAlikeSlugsDistinctDirectories(t *testing.T) {
+	rig := newWsRig(t)
+	fx := rig.plant(t, "slugs", shapeEmpty)
+	var ids [4]string
+	for i, name := range []string{"Okafor & Co", "Okafor  Co", "../../escape", "!!!"} {
+		ids[i] = uuid.NewString()
+		if _, err := rig.super.Exec(context.Background(),
+			`INSERT INTO business_entities (id, tenant_id, name) VALUES ($1, $2, $3)`, ids[i], fx.tenant, name); err != nil {
+			t.Fatalf("insert company %q: %v", name, err)
+		}
+	}
+
+	names, body := zipEntries(t, rig.exportOK(t, fx))
+
+	m := parseWsManifest(t, body)
+	dirOf := map[string]string{}
+	for _, c := range m.Companies {
+		dirOf[c.ID] = c.Dir
+	}
+	// ORDER BY name is collation-dependent: either alike name may take the plain slug.
+	okay := dirOf[ids[0]] == "okafor-co" && dirOf[ids[1]] == "okafor-co-"+ids[1] ||
+		dirOf[ids[1]] == "okafor-co" && dirOf[ids[0]] == "okafor-co-"+ids[0]
+	if len(m.Companies) != 4 || !okay {
+		t.Errorf("directories = %v, want okafor-co for one alike name and okafor-co-<its id> for the other", dirOf)
+	}
+	if dirOf[ids[2]] != "escape" || dirOf[ids[3]] != ids[3] {
+		t.Errorf("directories for ../../escape and !!! = %q and %q, want escape and the id %q", dirOf[ids[2]], dirOf[ids[3]], ids[3])
+	}
+	seen := map[string]bool{}
+	for _, n := range names {
+		if seen[n] {
+			t.Errorf("entry %q appears twice", n)
+		}
+		seen[n] = true
+		if strings.Contains(n, "..") {
+			t.Errorf("entry %q escapes its directory", n)
+		}
+	}
+	for _, c := range m.Companies {
+		if !seen["companies/"+c.Dir+"/invoices.csv"] {
+			t.Errorf("no companies/%s/invoices.csv in %q", c.Dir, names)
+		}
 	}
 }

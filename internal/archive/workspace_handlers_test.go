@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
@@ -221,6 +222,74 @@ func TestWorkspaceExportHandler_AMidStreamErrorAbortsTheConnection(t *testing.T)
 	if n := len(rec.Events()); n != 1 {
 		t.Errorf("Sentry events after the clean export = %d, want still 1", n)
 	}
+}
+
+// deadlineRecorder records the write deadline a handler asks for.
+type deadlineRecorder struct {
+	*httptest.ResponseRecorder
+	deadline time.Time
+}
+
+func (d *deadlineRecorder) SetWriteDeadline(t time.Time) error {
+	d.deadline = t
+	return nil
+}
+
+func TestWorkspaceExportHandler_ExtendsTheWriteDeadlineToOneHour(t *testing.T) {
+	t.Run("asks for one hour from now", func(t *testing.T) {
+		spy := &workspaceSpy{}
+		rec := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+		before := time.Now()
+		WorkspaceExportHandler(spy.Assemble, slog.Default()).ServeHTTP(rec, workspaceRequest(true))
+		if spy.calls != 1 {
+			t.Fatalf("store called %d times, want 1", spy.calls)
+		}
+		if got := rec.deadline.Sub(before); got < 59*time.Minute || got > 61*time.Minute {
+			t.Errorf("write deadline is %v from now, want about one hour", got)
+		}
+	})
+
+	// A server write timeout far under the stream's length cuts the stream unless the handler extends it.
+	slow := func(w io.Writer, onStart func(string)) error {
+		time.Sleep(600 * time.Millisecond)
+		onStart("x.zip")
+		_, err := w.Write([]byte("PK"))
+		return err
+	}
+	serve := func(h http.Handler) (*http.Response, error) {
+		srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h.ServeHTTP(w, r.WithContext(auth.WithIdentity(r.Context(), auth.Identity{Subject: uuid.NewString(), TenantID: testTenantID})))
+		}))
+		srv.Config.WriteTimeout = 200 * time.Millisecond
+		srv.Start()
+		t.Cleanup(srv.Close)
+		return http.Get(srv.URL)
+	}
+
+	t.Run("a stream longer than the server write timeout arrives", func(t *testing.T) {
+		spy := &workspaceSpy{fn: slow}
+		res, err := serve(WorkspaceExportHandler(spy.Assemble, slog.Default()))
+		if err != nil {
+			t.Fatalf("GET: %v, want the stream to arrive", err)
+		}
+		defer res.Body.Close()
+		if body, err := io.ReadAll(res.Body); err != nil || string(body) != "PK" {
+			t.Errorf("body = %q, err %v, want PK and nil", body, err)
+		}
+	})
+
+	t.Run("control: the same stream without the extension is cut", func(t *testing.T) {
+		res, err := serve(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_ = slow(w, func(string) {})
+		}))
+		if err == nil {
+			defer res.Body.Close()
+			body, rerr := io.ReadAll(res.Body)
+			if rerr == nil && string(body) == "PK" {
+				t.Fatal("the stream arrived without the extension, so the server write timeout is not cutting and the test above proves nothing")
+			}
+		}
+	})
 }
 
 func TestWorkspaceExportHandler_BusyIs503WithRetryAfter(t *testing.T) {

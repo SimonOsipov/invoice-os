@@ -1,6 +1,8 @@
 // Your account page: a member deletes themself, the last member schedules the workspace, and the card, page and dialog stay inside at every width.
 // Every workspace is registered here; the seeded tenants are never touched.
+import { readFile } from 'node:fs/promises'
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { unzipSync } from 'fflate'
 import { acceptById, cancelDeletion, inviteWithToken, listMine, me, registerFormAccount, registerFresh, signInSession, type PendingInvite, type RealAccount } from '../api/client'
 import { VERIFIED, signInAtFrontDoor } from '../personaSession'
 import { resolveTarget } from '../targets'
@@ -154,11 +156,11 @@ test('account deletion: the last member schedules the workspace and can cancel',
     await input.fill(`${account.workspaceName}x`)
     await expect(confirm).toBeDisabled()
     await input.fill(account.workspaceName)
-    // The dialog has no export step yet.
-    if ((await page.getByTestId('delete-workspace-export').count()) > 0) {
-      await expect(page.getByTestId('delete-workspace-export')).toBeVisible()
-      await page.getByTestId('delete-workspace-exported').check()
-    }
+    const exportButton = page.getByTestId('delete-workspace-export')
+    await expect(exportButton).toBeVisible()
+    const [download] = await Promise.all([page.waitForEvent('download'), exportButton.click()])
+    expect(Object.keys(unzipSync(new Uint8Array(await readFile(await download.path())))), 'the export ZIP holds manifest.json').toContain('manifest.json')
+    await page.getByTestId('delete-workspace-exported').check()
     await expect(confirm).toBeEnabled()
     await confirm.click()
 

@@ -2,12 +2,16 @@ import { useCallback, useId, useState } from 'react'
 
 import { toApiError } from '@invoice-os/api-client'
 import { useDismiss } from '../lib/useDismiss'
+import { useWorkspaceExport } from '../lib/useWorkspaceExport'
+import { EXPORT_COPY } from '../lib/workspaceExport'
 import { DELETE_WORKSPACE, nameMatches, scheduleWorkspaceDeletion } from '../lib/workspaceDeletion'
 import type { PlatformCtx } from '../types'
 
 export function DeleteWorkspaceDialog({ ctx, base, name, onClose }: { ctx: PlatformCtx; base: string; name: string; onClose: () => void }) {
   const [typed, setTyped] = useState('')
   const [pending, setPending] = useState(false)
+  const [exported, setExported] = useState(false)
+  const exp = useWorkspaceExport(ctx.authedFetch, base)
   const [error, setError] = useState<string | null>(null)
   const titleId = useId()
   const inputId = useId()
@@ -28,7 +32,7 @@ export function DeleteWorkspaceDialog({ ctx, base, name, onClose }: { ctx: Platf
     }
   }
 
-  const canConfirm = nameMatches(typed, name) && !pending
+  const canConfirm = exported && nameMatches(typed, name) && !pending
 
   return (
     <div
@@ -49,6 +53,35 @@ export function DeleteWorkspaceDialog({ ctx, base, name, onClose }: { ctx: Platf
         </div>
         <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', overflowWrap: 'anywhere' }}>{DELETE_WORKSPACE.body}</div>
+          <button
+            type="button"
+            onClick={exp.start}
+            disabled={exp.busy || pending}
+            data-testid="delete-workspace-export"
+            className="v2-btn v2-btn-primary pf-btn"
+            style={{ height: 34, fontSize: 13, alignSelf: 'flex-start' }}
+          >
+            {EXPORT_COPY.button}
+          </button>
+          {exp.status !== null && (
+            <div
+              data-testid="delete-workspace-export-status"
+              style={{ fontSize: 12.5, lineHeight: 1.55, color: exp.status.kind === 'error' ? 'var(--status-red-text)' : 'var(--fg-3)', overflowWrap: 'anywhere' }}
+            >
+              {exp.status.kind === 'error' ? exp.status.message : EXPORT_COPY.started}
+            </div>
+          )}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13 }}>
+            <input
+              type="checkbox"
+              data-testid="delete-workspace-exported"
+              checked={exported}
+              disabled={pending}
+              onChange={(e) => setExported(e.target.checked)}
+              style={{ flex: 'none' }}
+            />
+            {EXPORT_COPY.tick}
+          </label>
           <div data-testid="delete-workspace-name-shown" style={{ fontSize: 13, fontWeight: 700, overflowWrap: 'anywhere' }}>{name}</div>
           <label htmlFor={inputId} className="label">{DELETE_WORKSPACE.label}</label>
           <input

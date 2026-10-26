@@ -4,6 +4,8 @@ import { ErrorState, Loading, toApiError, type ApiError } from '@invoice-os/api-
 import { BrandMark } from '../icons'
 import { endAppChat } from '../chat'
 import type { AuthedFetch } from '../lib/portfolio'
+import { useWorkspaceExport } from '../lib/useWorkspaceExport'
+import { EXPORT_COPY } from '../lib/workspaceExport'
 import { DELETION_NOTICE, cancelWorkspaceDeletion, deletionNoticeBody, formatDueDate, readWorkspaceDeletion } from '../lib/workspaceDeletion'
 
 export type KnownDeletion = { dueAt: string | null; name: string | null; isAdmin: boolean }
@@ -20,6 +22,7 @@ export function WorkspaceDeletionNotice({ authedFetch, base, known, onUnlocked, 
   const [readError, setReadError] = useState<ApiError | null>(null)
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState<string | null>(null)
+  const exp = useWorkspaceExport(authedFetch, base)
   // Held in refs so a re-render never re-runs the mount read.
   const unlocked = useRef(onUnlocked)
   unlocked.current = onUnlocked
@@ -87,7 +90,18 @@ export function WorkspaceDeletionNotice({ authedFetch, base, known, onUnlocked, 
           ) : (
             <Loading label="Loading…" />
           )}
-          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+            {isAdmin && (
+              <button
+                onClick={exp.start}
+                disabled={exp.busy || cancelling}
+                data-testid="deletion-notice-export"
+                className="v2-btn v2-btn-primary pf-btn"
+                style={{ height: 34, padding: '0 12px', fontSize: 13 }}
+              >
+                {EXPORT_COPY.button}
+              </button>
+            )}
             {isAdmin && (
               <button
                 onClick={cancel}
@@ -107,6 +121,14 @@ export function WorkspaceDeletionNotice({ authedFetch, base, known, onUnlocked, 
               {DELETION_NOTICE.signOut}
             </button>
           </div>
+          {exp.status !== null && (
+            <div
+              data-testid="deletion-notice-export-status"
+              style={{ fontSize: 12.5, lineHeight: 1.55, color: exp.status.kind === 'error' ? 'var(--status-red-text)' : 'var(--fg-3)', overflowWrap: 'anywhere' }}
+            >
+              {exp.status.kind === 'error' ? exp.status.message : EXPORT_COPY.started}
+            </div>
+          )}
           {cancelError !== null && (
             <div data-testid="deletion-notice-error" style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--status-red-text)' }}>
               {cancelError}

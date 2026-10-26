@@ -54,6 +54,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - `POST /v1/documents` (`extraction.UploadHandler`, submission): uploaded file bytes.
 - docling `POST /v1/read` (`sidecar/docling/app.py`): document bytes forwarded by submission.
 - `/v1/imports*` (`importer` handlers, invoice): CSV, spreadsheet and document input.
+- `POST /auth/export-download` (gateway): a form body with an export code. It runs without the verifier until the code is redeemed.
 - Public gateway routes in `cmd/gateway/main.go` outside `/api/`: `/auth/*`, `/contacts/demo-request`, `/blog/*`, `/emails/*`. They run without the verifier. `/healthz/fleet` runs without the verifier and needs `X-Gateway-Token`.
 - `POST /v1/validate/batch` and `POST /v1/custom-rules/check` (validation): open past `RequireGateway`, guarded by `S2SMiddleware` with the shared `S2S_TOKEN`. They carry no identity and read no tenant.
 

@@ -620,3 +620,44 @@ func TestStaffDeletion_ConcurrentCancelsWriteOneRowPerSchedule(t *testing.T) {
 		}
 	}
 }
+
+// A tenant purged between the staff check and the write answers ErrTenantNotFound, not locked or 500.
+func TestStaffDeletion_ATenantPurgedAfterTheStaffCheckIsNotFound(t *testing.T) {
+	for _, route := range []string{"start", "cancel"} {
+		t.Run(route, func(t *testing.T) {
+			w := newStaffDelWorld(t)
+			if route == "cancel" {
+				if _, err := w.store.StaffScheduleWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); err != nil {
+					t.Fatalf("setup start: %v", err)
+				}
+			}
+			w.store.afterStaffCheck = func() {
+				ctx := context.Background()
+				tx, err := w.super.Begin(ctx)
+				if err != nil {
+					t.Errorf("begin: %v", err)
+					return
+				}
+				defer tx.Rollback(ctx) //nolint:errcheck
+				if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, w.tenant); err != nil {
+					t.Errorf("set tenant: %v", err)
+				}
+				if _, err := tx.Exec(ctx, `SELECT public.purge_tenant($1::uuid)`, w.tenant); err != nil {
+					t.Errorf("purge_tenant: %v", err)
+				}
+				if err := tx.Commit(ctx); err != nil {
+					t.Errorf("commit: %v", err)
+				}
+			}
+			var err error
+			if route == "start" {
+				_, err = w.store.StaffScheduleWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
+			} else {
+				err = w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
+			}
+			if !errors.Is(err, ErrTenantNotFound) {
+				t.Errorf("err = %v, want ErrTenantNotFound", err)
+			}
+		})
+	}
+}

@@ -26,6 +26,8 @@ import (
 type Store struct {
 	pool       *pgxpool.Pool
 	eraseQueue *river.Client[pgx.Tx]
+	// afterStaffCheck runs between the staff tenant check and the write; tests only.
+	afterStaffCheck func()
 }
 
 // NewStore wraps the app-role connection pool. The caller owns the pool's lifecycle.

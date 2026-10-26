@@ -3,6 +3,7 @@ paths:
   - "internal/audit/**"
   - "internal/actor/**"
   - "internal/staffjobs/**"
+  - "internal/tenancy/staff_deletion.go"
   - "migrations/*audit_log*"
 ---
 # Audit log

@@ -47,6 +47,9 @@ func (s *Store) withinStaffTenant(ctx context.Context, tenantID string, opts pgx
 	if !found {
 		return ErrTenantNotFound
 	}
+	if s.afterStaffCheck != nil {
+		s.afterStaffCheck()
+	}
 	return db.WithinTenantTxOpts(ctx, s.pool, id.String(), opts, func(tx pgx.Tx) error { return fn(tx, id, actor) })
 }
 
@@ -100,6 +103,14 @@ func scheduleTenantDeletion(ctx context.Context, tx pgx.Tx, actor uuid.UUID) (ti
 		var pgErr *pgconn.PgError
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
+			// No row: already scheduled, or the tenant vanished after the staff check.
+			var exists bool
+			if qerr := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM tenants)`).Scan(&exists); qerr != nil {
+				return time.Time{}, qerr
+			}
+			if !exists {
+				return time.Time{}, ErrTenantNotFound
+			}
 			return time.Time{}, db.ErrWorkspaceLocked
 		case errors.As(err, &pgErr) && pgErr.ConstraintName == "house_tenant_not_deletable":
 			return time.Time{}, ErrHouseWorkspace
@@ -133,6 +144,9 @@ func (s *Store) StaffCancelWorkspaceDeletion(ctx context.Context, tenantID, reas
 	return s.withinStaffTenant(ctx, tenantID, pgx.TxOptions{}, func(tx pgx.Tx, tenant, actor uuid.UUID) error {
 		var due *time.Time
 		if err := tx.QueryRow(ctx, `SELECT deletion_due_at FROM tenants FOR UPDATE`).Scan(&due); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrTenantNotFound // purged after the staff check
+			}
 			return err
 		}
 		if due == nil {

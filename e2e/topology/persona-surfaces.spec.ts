@@ -26,7 +26,7 @@
 // both are used below -- (1) compared against a LIVE API read taken in the same test (the
 // Approvals badge, the Overview KPI), and (2) containment of rows this test itself created.
 // A hardcoded '3' would pass on a clean fixture and fail the moment anything ran first.
-import { test, expect, type Locator, type Page } from '@playwright/test'
+import { test, expect, errors as pwErrors, type Locator, type Page } from '@playwright/test'
 import { createEntity, createInvoice, getInvoice, listCustomers, listInvoices, listWorkflowRoles, login, rollup, signInSession, staffWorkflowRole, subjectOf, validateInvoice, PERSONAS } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
@@ -1209,11 +1209,15 @@ test('in-house Approvals: the queue narrows, bulk approve settles per item, and 
   await expect(blockedRow.getByTestId('approval-select-row'), 'the seat really is blocked').toBeDisabled()
   await expect(blockedRow.getByTestId('approval-blocked-icon')).toBeVisible()
   let blockedHeight = 0
-  // The short timeout keeps one read inside the poll's bound; a rejected read counts as 0 and retries.
+  // The short timeout keeps one read inside the poll's bound; only its TimeoutError counts as 0 and retries.
   await expect
     .poll(
       async () => {
-        blockedHeight = (await blockedRow.boundingBox({ timeout: 2_000 }).catch(() => null))?.height ?? 0
+        const box = await blockedRow.boundingBox({ timeout: 2_000 }).catch((e: unknown) => {
+          if (e instanceof pwErrors.TimeoutError) return null
+          throw e
+        })
+        blockedHeight = box?.height ?? 0
         return blockedHeight
       },
       { message: 'the blocked row never rendered after the unstaffing' },

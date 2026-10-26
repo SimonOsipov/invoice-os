@@ -78,7 +78,9 @@ export function WorkspaceDeletionNotice({ authedFetch, base, known, onUnlocked, 
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--fg-1)' }}>{DELETION_NOTICE.title}</div>
           {dueAt !== null ? (
             <div style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg-3)', overflowWrap: 'anywhere' }}>
-              {deletionNoticeBody(formatDueDate(dueAt), name ?? 'this workspace')}
+              {deletionNoticeBody(formatDueDate(dueAt), name ?? 'this workspace').map((part, i) =>
+                i % 2 === 1 ? <b key={i} style={{ fontWeight: 600, color: 'var(--fg-1)' }}>{part}</b> : part,
+              )}
             </div>
           ) : readError !== null ? (
             <ErrorState error={readError} onRetry={load} />

@@ -18,8 +18,9 @@ export const DELETION_NOTICE = {
   signOut: 'Sign out',
 } as const
 
-export function deletionNoticeBody(date: string, name: string): string {
-  return `On ${date} we delete every invoice, file and member of ${name}.`
+// Odd indexes are the date and the name; the notice bolds them.
+export function deletionNoticeBody(date: string, name: string): string[] {
+  return ['On ', date, ' we delete every invoice, file and member of ', name, '.']
 }
 
 export function formatDueDate(iso: string, timeZone?: string): string {

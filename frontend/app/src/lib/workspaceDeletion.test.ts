@@ -87,7 +87,7 @@ describe('workspaceDeletion: the copy', () => {
       cancel: 'Cancel deletion',
       signOut: 'Sign out',
     })
-    expect(deletionNoticeBody('24 November 2026', 'Okafor & Co')).toBe(
+    expect(deletionNoticeBody('24 November 2026', 'Okafor & Co').join('')).toBe(
       'On 24 November 2026 we delete every invoice, file and member of Okafor & Co.',
     )
   })

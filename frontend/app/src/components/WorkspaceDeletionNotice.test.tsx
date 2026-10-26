@@ -100,4 +100,15 @@ describe('WorkspaceDeletionNotice reads', () => {
     expect(b.fetch).toHaveBeenCalledTimes(1)
     expect(a.fetch).toHaveBeenCalledTimes(1)
   })
+
+  it('bolds the date and the workspace name and leaves the sentence unchanged', async () => {
+    const c = controlled()
+    mount(c.fetch)
+    await act(async () => c.pending[0].resolve(me('2026-11-24T12:00:00Z', 'Okafor & Co')))
+    const bold = Array.from(screen.getByTestId('workspace-deletion-notice').querySelectorAll('b')).map((b) => b.textContent)
+    expect(bold).toEqual(['24 November 2026', 'Okafor & Co'])
+    expect(screen.getByText(/we delete every invoice/).textContent).toBe(
+      'On 24 November 2026 we delete every invoice, file and member of Okafor & Co.',
+    )
+  })
 })

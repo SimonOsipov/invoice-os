@@ -138,10 +138,10 @@ describe('scene', () => {
       return s.kind === 'flow' ? s.nodes.map((n) => n.state) : []
     }
     expect([0, 1, 2, 3].map(nodes)).toEqual([
-      ['active', 'todo', 'todo', 'todo', 'todo'],
-      ['done', 'active', 'todo', 'todo', 'todo'],
-      ['done', 'done', 'active', 'todo', 'todo'],
-      ['done', 'done', 'done', 'done', 'active'],
+      ['active', 'todo', 'todo', 'todo'],
+      ['done', 'active', 'todo', 'todo'],
+      ['done', 'done', 'active', 'todo'],
+      ['done', 'done', 'done', 'active'],
     ])
   })
 

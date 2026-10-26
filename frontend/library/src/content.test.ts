@@ -180,7 +180,7 @@ describe('content', () => {
     expect(byId('delete-workspace').who).toEqual(['Admin'])
   })
 
-  // Add the export or cancel-link claim only after DEL-06 / DEL-05 ship: edit this regex first.
+  // Add the data export or emailed cancel link claim only once the app has them: edit this regex first.
   it('content_deletionCopyClaimsOnlyWhatIsLive', () => {
     const unshipped = /export|download|cancel link|e-?mail/i
     expect('cancel link by email').toMatch(unshipped)

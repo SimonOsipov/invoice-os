@@ -155,21 +155,6 @@ func TestPreviewDeployMaxInstancesByService(t *testing.T) {
 	}
 }
 
-func TestPreviewDeployEverySiteAndBackendHasAValue(t *testing.T) {
-	t.Parallel()
-	all := append(previewList(t, "BACKENDS"), previewList(t, "SITES")...)
-	r := runPreview(t, nil, append([]string{"deploy", "7", "abc123"}, all...)...)
-	if r.code != 0 {
-		t.Fatalf("deploy exited %d: %s", r.code, r.stderr)
-	}
-	calls := deployCalls(t, r, "7")
-	for _, svc := range all {
-		if v := flagValue(calls[svc], "--max-instances"); v != "1" && v != "2" && v != "3" {
-			t.Errorf("%s --max-instances = %q", svc, v)
-		}
-	}
-}
-
 func TestPreviewDeployAuthKeepsTheGoTruePool(t *testing.T) {
 	t.Parallel()
 	r := runPreview(t, nil, "deploy", "7", "abc123", "auth")

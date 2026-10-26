@@ -108,8 +108,37 @@ func (p *Purger) purgeLogged(ctx context.Context, log *slog.Logger, id string) e
 	return nil
 }
 
-// Purge runs the three steps for one tenant. A tenant that is not due returns Result{} and nil.
+// lockTenant takes the session advisory lock for one tenant's purge on a held connection.
+// ok is false when another runner holds it; release frees the lock and the connection.
+func (p *Purger) lockTenant(ctx context.Context, tenantID string) (release func(), ok bool, err error) {
+	conn, err := p.Pool.Acquire(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtextextended('workspace_purge:' || $1::text, 0))`, tenantID).Scan(&ok); err != nil || !ok {
+		conn.Release()
+		return nil, false, err
+	}
+	return func() {
+		var unlocked bool
+		uctx := context.WithoutCancel(ctx)
+		if err := conn.QueryRow(uctx, `SELECT pg_advisory_unlock(hashtextextended('workspace_purge:' || $1::text, 0))`, tenantID).Scan(&unlocked); err != nil || !unlocked {
+			_ = conn.Conn().Close(uctx) // closing the session frees the lock; the pool drops the dead conn
+		}
+		conn.Release()
+	}, true, nil
+}
+
+// Purge runs the three steps for one tenant. A tenant that is not due, or that another runner is purging, returns Result{} and nil.
 func (p *Purger) Purge(ctx context.Context, tenantID string) (Result, error) {
+	release, ok, err := p.lockTenant(ctx, tenantID)
+	if err != nil {
+		return Result{}, &stepError{tenantID, stepErase, err}
+	}
+	if !ok {
+		return Result{}, nil
+	}
+	defer release()
 	log := p.Logger
 	if log == nil {
 		log = slog.Default()

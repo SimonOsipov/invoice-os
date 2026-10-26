@@ -201,6 +201,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/invoice/revalidate.go"},                                          // operator CLI tools/revalidate-invoices and the reconciliation re-checks (version and custom-rule); same shape, same absence of a caller
 	{file: "internal/reconciliation/sweep.go"},                                        // EnumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
 	{file: "internal/workspacepurge/purge.go", fn: "dueTenants"},                      // the workspace-purge ticker reads due tenants as invoice_tenant_reader with no GUC set
+	{file: "internal/workspacepurge/purge.go", fn: "lockTenant"},                      // holds a session advisory lock for one tenant's purge; reads no tenant row
 	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"},         // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/invitation_token.go", fn: "SetInvitationToken"},      // mock builds only: the E2E fork replaces a pending invite's token hash on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/deletion_link_token.go", fn: "SetDeletionLinkToken"}, // mock builds only: the E2E fork replaces an admin's cancel link token hash on the owner DSN; no caller identity exists

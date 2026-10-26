@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1327,6 +1328,47 @@ func TestPurge_TwoRunsAtOncePurgeOnce(t *testing.T) {
 	}
 }
 
+// A second runner that starts while the first is in its file step skips the tenant, so no member is erased twice.
+func TestPurge_ARunnerWhileAnotherPurgesTheTenantSkipsIt(t *testing.T) {
+	r := newRig(t)
+	a := r.due(r.tenant())
+	admin, mail := r.user(), r.mail("single")
+	r.member(a, admin, "admin", "active", &mail, "")
+	r.put(a, 1)
+	p := r.purger()
+
+	inFiles, release := make(chan struct{}), make(chan struct{})
+	var blocked atomic.Bool
+	r.store.onList = func(context.Context, string) {
+		if blocked.CompareAndSwap(false, true) {
+			close(inFiles)
+			<-release
+		}
+	}
+	var first Result
+	var firstErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		first, firstErr = p.Purge(context.Background(), a)
+	}()
+	<-inFiles
+
+	second, secondErr := p.Purge(context.Background(), a)
+	close(release)
+	<-done
+
+	requireResult(t, second, secondErr, Result{})
+	requireResult(t, first, firstErr, Result{Purged: true, Members: 1, Objects: 1})
+	var gen int64
+	if err := r.super.QueryRow(context.Background(), `SELECT generation FROM person_erasures WHERE user_id = $1`, admin).Scan(&gen); err != nil || gen != 1 {
+		t.Errorf("erasure generation = %d (%v), want 1: the member is queued once", gen, err)
+	}
+	if n := len(r.staff(a)); n != 1 {
+		t.Errorf("staff rows = %d, want 1", n)
+	}
+}
+
 func b2i(b bool) int {
 	if b {
 		return 1
@@ -1669,6 +1711,7 @@ func TestPurge_TheHouseTenantIsNeverPurged(t *testing.T) {
 	}
 	rowsBefore, membersBefore := r.tenantRows(house), r.memberRows(house)
 	erasedBefore := r.count(`SELECT count(*) FROM person_erasures`)
+	staffBefore := len(r.staff(house))
 
 	got, err := r.purger().Purge(context.Background(), house)
 	requireResult(t, got, err, Result{})
@@ -1679,7 +1722,7 @@ func TestPurge_TheHouseTenantIsNeverPurged(t *testing.T) {
 	if n := r.count(`SELECT count(*) FROM person_erasures`); n != erasedBefore {
 		t.Errorf("erasure rows %d -> %d, want unchanged", erasedBefore, n)
 	}
-	if r.store.deletes() != 0 || len(r.staff(house)) != 0 || len(r.accounts.got()) != 0 {
+	if r.store.deletes() != 0 || len(r.staff(house)) != staffBefore || len(r.accounts.got()) != 0 {
 		t.Error("the house tenant had files deleted, a staff row or an account read")
 	}
 	if dueIDs, err := dueTenants(context.Background(), r.reader); err != nil || slices.Contains(dueIDs, house) {

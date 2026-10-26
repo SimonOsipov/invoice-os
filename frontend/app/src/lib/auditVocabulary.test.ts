@@ -166,7 +166,6 @@ describe('audit vocabulary', () => {
       'workspace.provisioned',
       'workspace.deletion_scheduled',
       'workspace.deletion_cancelled',
-      'workspace.purge_started',
       'membership.account_deleted',
       'membership.admin_handed_on',
       'membership.client_access_set',

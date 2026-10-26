@@ -59,7 +59,7 @@ paths:
 - Validate a composed `GOTRUE_JWT_KEYS` offline before you paste it. A malformed value logs the private key at boot.
 
 - Keep GoTrue private. The gateway calls fixed GoTrue paths and forwards no client path or query.
-- The worker calls only `DELETE /admin/users/{id}`, with a 60 s `service_role` token.
+- The worker calls only `GET` and `DELETE /admin/users/{id}`, with a 60 s `service_role` token.
 - Answer a new, a repeat and a confirmed address on `/auth/register` with the same 202.
 - Answer `POST /auth/invitation` with `account` set to `none`, `unconfirmed`, `confirmed` or `unknown`. Map any other tenancy value to `unknown`.
 - Answer `/auth/invitation/register` with 409 `account_exists` when the preview reads `confirmed` and 409 `account_unconfirmed` when it reads `unconfirmed`. Send both before the claim and the GoTrue call.

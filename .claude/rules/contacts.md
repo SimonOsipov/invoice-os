@@ -57,5 +57,5 @@ paths:
 - Erase a Resend contact with `DELETE /contacts/{email}`. Before it, read `unsubscribed` and the topic opt-outs with GET. After it, when another account holds the address, re-create the contact with that state (`TestErase_TheRebuildReadsTheStateBeforeTheDeleteAndRestoresIt`).
 - When Resend has no contact but another account's Resend delivery stamp is set, restore the contact unsubscribed (`TestErase_ARetryAfterAFailedRestoreRestoresUnsubscribed`).
 - Make no Resend suppression call in an erase.
-- Erase a person only through `EnqueueErasure`. The worker sweeps local copies in one transaction before any vendor call.
+- Erase a person only through `EnqueueErasure`, or `EnqueueErasureByID` when no usable email exists. The worker sweeps local copies in one transaction before any vendor call.
 - Never put an email, a name or a user id in an erase log line or error.

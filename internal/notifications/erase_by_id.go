@@ -1,0 +1,113 @@
+package notifications
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
+)
+
+// EraseByIDArgs carries the user id only; it erases a person who has no usable email.
+type EraseByIDArgs struct {
+	UserID string `json:"user_id"`
+}
+
+func (EraseByIDArgs) Kind() string { return "person_erase_by_id" }
+
+func (EraseByIDArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{} }
+
+// EnqueueErasureByID queues the by-id erasure in tx.
+func EnqueueErasureByID(ctx context.Context, tx pgx.Tx, rc *river.Client[pgx.Tx], userID string) error {
+	id, err := uuid.Parse(userID)
+	if err != nil {
+		return errors.New("notifications: erase user id is not a UUID")
+	}
+	if _, err = rc.InsertTx(ctx, tx, EraseByIDArgs{UserID: id.String()}, nil); err != nil {
+		return fmt.Errorf("notifications: queue erasure: %w", err)
+	}
+	return nil
+}
+
+// EraseByIDWorker removes the user-id-keyed copies and the account. It writes no person_erasures row and calls no vendor.
+type EraseByIDWorker struct {
+	river.WorkerDefaults[EraseByIDArgs]
+	Pool    *pgxpool.Pool
+	River   *river.Client[pgx.Tx] // set by the wiring after queue.New
+	Account AccountDeleter
+	Logger  *slog.Logger
+}
+
+func (w *EraseByIDWorker) Timeout(*river.Job[EraseByIDArgs]) time.Duration { return eraseTimeout }
+
+// Work runs both steps; every statement is idempotent, so a retry repeats the job.
+func (w *EraseByIDWorker) Work(ctx context.Context, job *river.Job[EraseByIDArgs]) error {
+	id, err := uuid.Parse(job.Args.UserID)
+	if err != nil {
+		return river.JobCancel(errors.New("notifications: erase job has a bad user id"))
+	}
+	uid := id.String()
+
+	err = pgx.BeginFunc(ctx, w.Pool, func(tx pgx.Tx) error { return w.sweep(ctx, tx, uid) })
+	if err != nil {
+		logEraseFailure(ctx, w.Logger, stepSweep, err)
+		return err
+	}
+	if w.Account == nil {
+		w.Logger.WarnContext(ctx, "erasure: no account client; the account step waits", slog.String("step", stepAccount))
+		return errAccountOff
+	}
+	if err := w.Account.DeleteUser(ctx, uid); err != nil {
+		logEraseFailure(ctx, w.Logger, stepAccount, err)
+		return err
+	}
+	return nil
+}
+
+func (w *EraseByIDWorker) sweep(ctx context.Context, tx pgx.Tx, uid string) error {
+	const where = `kind = ANY($1) AND lower(args->>'user_id') = $2`
+	rows, err := tx.Query(ctx, `SELECT id FROM river_job WHERE state IN ('available', 'pending', 'retryable', 'running', 'scheduled') AND `+where+` ORDER BY id`, eraseKinds, uid)
+	if err != nil {
+		return fmt.Errorf("notifications: find jobs: %w", err)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("notifications: read job: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("notifications: find jobs: %w", err)
+	}
+	for _, id := range ids {
+		if _, err := w.River.JobCancelTx(ctx, tx, id); err != nil {
+			return fmt.Errorf("notifications: cancel job: %w", err)
+		}
+	}
+	// Cancelled first, so the jobs just cancelled go too; a running job stays, marked.
+	for _, d := range []struct {
+		sql  string
+		args []any
+	}{
+		{`DELETE FROM river_job WHERE state IN ('completed', 'cancelled', 'discarded') AND ` + where, []any{eraseKinds, uid}},
+		{`DELETE FROM registrant_handoffs WHERE lower(user_id) = $1`, []any{uid}},
+		{`DELETE FROM contacts WHERE user_id::text = $1`, []any{uid}},
+	} {
+		if _, err := tx.Exec(ctx, d.sql, d.args...); err != nil {
+			return fmt.Errorf("notifications: delete copies: %w", err)
+		}
+	}
+	return nil
+}
+
+// AddEraseByIDTo registers the by-id erase worker on the worker's one bundle.
+func AddEraseByIDTo(bundle *river.Workers, w *EraseByIDWorker) { river.AddWorker(bundle, w) }

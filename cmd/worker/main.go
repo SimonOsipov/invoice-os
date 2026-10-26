@@ -165,16 +165,21 @@ func main() {
 		platform.Fatal(app.Logger, "worker: %v", err)
 	}
 	xw := newEraseWorker(pool, mode, hubspot, resend, account, app.Logger)
+	xbw := &notifications.EraseByIDWorker{Pool: pool, Logger: app.Logger}
+	if account != nil {
+		xbw.Account = account
+	}
 
 	q, err := queue.New(pool, queue.Config{
 		Queues:  queueConfigs(cw != nil),
-		Workers: workerBundle(sw, pw, ew, rw, cw, xw),
+		Workers: workerBundle(sw, pw, ew, rw, cw, xw, xbw),
 		Logger:  app.Logger,
 	})
 	if err != nil {
 		platform.Fatal(app.Logger, "worker: queue: %v", err)
 	}
 	sw.Queue, pw.Queue, xw.River = q, q, q.River()
+	xbw.River = q.River()
 	rw.Store = notifications.NewStore(pool, q.River())
 	app.AddBackgroundWorker(q)
 
@@ -359,11 +364,12 @@ func queueConfigs(contacts bool) map[string]river.QueueConfig {
 
 // workerBundle is the ONE bundle queue.New reads. A River client takes exactly one, so a second
 // bundle would leave its workers unfetched (TestWorkerBundle_CarriesEveryKind).
-func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet, xw *notifications.EraseWorker) *river.Workers {
+func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet, xw *notifications.EraseWorker, xbw *notifications.EraseByIDWorker) *river.Workers {
 	bundle := submission.Workers(sw, pw)
 	extraction.AddTo(bundle, ew)
 	notifications.AddRegistrantTo(bundle, rw)
 	notifications.AddEraseTo(bundle, xw)
+	notifications.AddEraseByIDTo(bundle, xbw)
 	if cw != nil {
 		notifications.AddTo(bundle, cw.deliver, cw.deal, cw.blog)
 	}

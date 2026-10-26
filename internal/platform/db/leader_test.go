@@ -40,7 +40,10 @@ func TestLeader_OneInstanceRunsEachTask(t *testing.T) {
 		if err := a.Lead(task, fnA)(ctx); err != nil {
 			t.Fatalf("a: %v", err)
 		}
-		if err := b.Lead(task, fnB)(ctx); err != nil {
+		skipCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		err := b.Lead(task, fnB)(skipCtx)
+		cancel()
+		if err != nil {
 			t.Fatalf("b: %v", err)
 		}
 	}
@@ -60,7 +63,9 @@ func TestLeader_OneInstanceRunsEachTask(t *testing.T) {
 	if err := b.Lead(task, fnB)(ctx); err != nil || *runsB != 1 {
 		t.Fatalf("b after a's connection died: runs=%d err=%v, want 1 run", *runsB, err)
 	}
-	if err := a.Lead(task, fnA)(ctx); err != nil || *runsA != 3 {
+	skipCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	if err := a.Lead(task, fnA)(skipCtx); err != nil || *runsA != 3 {
 		t.Fatalf("a after reconnecting: runs=%d err=%v, want still 3: b leads now", *runsA, err)
 	}
 

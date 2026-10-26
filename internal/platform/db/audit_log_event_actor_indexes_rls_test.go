@@ -96,31 +96,57 @@ func TestRLS_AuditLogEventAndActorIndexesRefuseAboveTheRowCeiling(t *testing.T) 
 	if err != nil {
 		t.Fatalf("build migration provider: %v", err)
 	}
-	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
-		t.Fatalf("roll back migration %d: %v", version, err)
-	}
-
 	super, err := sql.Open("pgx", superDSN)
 	if err != nil {
 		t.Fatalf("open scratch superuser connection: %v", err)
 	}
 	defer super.Close()
+
+	// The guard lifts FORCE RLS to count: it must be back on after a pass and after a refusal.
+	state := func(when string, wantIdx int) {
+		t.Helper()
+		var force bool
+		if err := super.QueryRowContext(ctx,
+			`SELECT relforcerowsecurity FROM pg_class WHERE oid = 'public.audit_log'::regclass`).Scan(&force); err != nil {
+			t.Fatalf("read audit_log relforcerowsecurity: %v", err)
+		}
+		if !force {
+			t.Errorf("%s: audit_log relforcerowsecurity = false, want true", when)
+		}
+		var n int
+		if err := super.QueryRowContext(ctx,
+			`SELECT count(*) FROM pg_indexes WHERE tablename = 'audit_log' AND indexname IN ('audit_log_event_created_idx', 'audit_log_actor_created_idx')`).Scan(&n); err != nil {
+			t.Fatalf("read pg_indexes: %v", err)
+		}
+		if n != wantIdx {
+			t.Errorf("%s: %d new indexes, want %d", when, n, wantIdx)
+		}
+	}
+	state("after the Up on an empty table", 2)
+
+	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
+		t.Fatalf("roll back migration %d: %v", version, err)
+	}
 	if _, err := super.ExecContext(ctx,
 		`INSERT INTO audit_log (tenant_id, actor, event, payload)
-		 SELECT gen_random_uuid(), 'ceiling', 'ceiling.seed', '{}'::jsonb FROM generate_series(1, 500001)`); err != nil {
-		t.Fatalf("seed 500001 audit rows: %v", err)
+		 SELECT gen_random_uuid(), 'ceiling', 'ceiling.seed', '{}'::jsonb FROM generate_series(1, 500000)`); err != nil {
+		t.Fatalf("seed 500000 audit rows: %v", err)
 	}
+	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
+		t.Fatalf("Up at exactly the ceiling = %v, want it to pass", err)
+	}
+	state("after the Up at exactly 500000 rows", 2)
 
+	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
+		t.Fatalf("roll back migration %d: %v", version, err)
+	}
+	if _, err := super.ExecContext(ctx,
+		`INSERT INTO audit_log (tenant_id, actor, event, payload) VALUES (gen_random_uuid(), 'ceiling', 'ceiling.seed', '{}'::jsonb)`); err != nil {
+		t.Fatalf("seed the 500001st audit row: %v", err)
+	}
 	_, err = provider.ApplyVersion(ctx, version, true)
 	if err == nil || !strings.Contains(err.Error(), "500000 in-migration ceiling") {
 		t.Fatalf("Up above the ceiling = %v, want the in-migration ceiling refusal", err)
 	}
-	var n int
-	if err := super.QueryRowContext(ctx,
-		`SELECT count(*) FROM pg_indexes WHERE tablename = 'audit_log' AND indexname IN ('audit_log_event_created_idx', 'audit_log_actor_created_idx')`).Scan(&n); err != nil {
-		t.Fatalf("read pg_indexes: %v", err)
-	}
-	if n != 0 {
-		t.Errorf("%d new indexes exist after the refused Up, want 0", n)
-	}
+	state("after the refused Up at 500001 rows", 0)
 }

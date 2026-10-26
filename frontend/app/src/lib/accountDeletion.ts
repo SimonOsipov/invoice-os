@@ -18,6 +18,7 @@ export type AccountDeletionOutcome = 'leave' | 'hand_on' | 'delete_workspace'
 export interface AccountDeletionPreview {
   outcome: AccountDeletionOutcome
   heirName: string | null
+  heirUserId: string | null
 }
 
 // Odd indexes are the name; the card bolds them. A null heir gives one part.
@@ -43,20 +44,21 @@ export function phraseMatches(typed: string): boolean {
 }
 
 export async function readAccountDeletion(f: AuthedFetch, base: string): Promise<AccountDeletionPreview> {
-  const r = await f<{ outcome: AccountDeletionOutcome; heir_name?: string | null }>(
+  const r = await f<{ outcome: AccountDeletionOutcome; heir_name?: string | null; heir_user_id?: string | null }>(
     `${base}/api/tenancy/v1/me/deletion`,
   )
-  return { outcome: r.outcome, heirName: r.heir_name ?? null }
+  return { outcome: r.outcome, heirName: r.heir_name ?? null, heirUserId: r.heir_user_id ?? null }
 }
 
 export async function deleteMyAccount(
   f: AuthedFetch,
   base: string,
   outcome: 'leave' | 'hand_on',
+  heirUserId: string | null,
 ): Promise<{ outcome: AccountDeletionOutcome }> {
   const r = await f<{ outcome: AccountDeletionOutcome }>(`${base}/api/tenancy/v1/me/deletion`, {
     method: 'POST',
-    body: { outcome },
+    body: outcome === 'hand_on' ? { outcome, heir_user_id: heirUserId } : { outcome },
   })
   return { outcome: r.outcome }
 }

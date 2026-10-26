@@ -7,7 +7,7 @@ import { ApiError } from '@invoice-os/api-client'
 import type { PlatformCtx } from '../types'
 import { AccountView } from './AccountView'
 
-type Preview = { outcome: string; heir_name?: string | null }
+type Preview = { outcome: string; heir_name?: string | null; heir_user_id?: string | null }
 
 beforeEach(() => vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test'))
 afterEach(() => {
@@ -42,7 +42,7 @@ describe('AccountView', () => {
   it("AccountView: the card speaks the preview's outcome", async () => {
     for (const [preview, text, bold, label] of [
       [{ outcome: 'leave' }, 'Your account goes at once. Your name stays in the history of Okafor & Co, marked (deleted).', 'Okafor & Co', 'Delete my account'],
-      [{ outcome: 'hand_on', heir_name: 'Chidi Eze' }, 'You are the last admin. Admin moves to Chidi Eze, who joined first.', 'Chidi Eze', 'Delete my account'],
+      [{ outcome: 'hand_on', heir_name: 'Chidi Eze', heir_user_id: 'u-chidi' }, 'You are the last admin. Admin moves to Chidi Eze, who joined first.', 'Chidi Eze', 'Delete my account'],
       [{ outcome: 'delete_workspace' }, 'You are the last member. Okafor & Co will be deleted in 30 days.', 'Okafor & Co', 'Delete my account and workspace'],
     ] as const) {
       setup([preview])
@@ -54,7 +54,7 @@ describe('AccountView', () => {
     }
   })
 
-  it('AccountView: the last member gets the DEL-04 delete dialog', async () => {
+  it('AccountView: the last member gets the delete-workspace dialog', async () => {
     const { gets } = setup([{ outcome: 'delete_workspace' }])
     await ready()
     await userEvent.click(button())
@@ -68,7 +68,7 @@ describe('AccountView', () => {
   })
 
   it('AccountView: the button re-reads the outcome before it opens a dialog', async () => {
-    const { gets } = setup([{ outcome: 'delete_workspace' }, { outcome: 'hand_on', heir_name: 'Chidi Eze' }])
+    const { gets } = setup([{ outcome: 'delete_workspace' }, { outcome: 'hand_on', heir_name: 'Chidi Eze', heir_user_id: 'u-chidi' }])
     await ready()
     await userEvent.click(button())
     await waitFor(() => expect(body().textContent).toContain('Chidi Eze'))
@@ -77,7 +77,7 @@ describe('AccountView', () => {
     expect(screen.queryByTestId('delete-account-dialog')).toBeNull()
     cleanup()
 
-    setup([{ outcome: 'hand_on', heir_name: 'Chidi Eze' }, { outcome: 'hand_on', heir_name: 'Ngozi Bello' }])
+    setup([{ outcome: 'hand_on', heir_name: 'Chidi Eze', heir_user_id: 'u-chidi' }, { outcome: 'hand_on', heir_name: 'Ngozi Bello', heir_user_id: 'u-ngozi' }])
     await ready()
     await userEvent.click(button())
     await waitFor(() => expect(body().textContent).toContain('Ngozi Bello'))

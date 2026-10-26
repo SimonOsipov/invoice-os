@@ -9,9 +9,9 @@ import { DeleteWorkspaceDialog } from './DeleteWorkspaceDialog'
 // Same dead-button treatment as WorkspaceSettings.
 const DISABLED: React.CSSProperties = { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }
 
-const same = (a: AccountDeletionPreview, b: AccountDeletionPreview) => a.outcome === b.outcome && a.heirName === b.heirName
+const same = (a: AccountDeletionPreview, b: AccountDeletionPreview) => a.outcome === b.outcome && a.heirName === b.heirName && a.heirUserId === b.heirUserId
 
-// ceiling: someone who joins while the DEL-04 dialog is open still meets the schedule; any admin may cancel it (DEL-08 D24).
+// ceiling: a member who joins while the delete-workspace dialog is open still meets the schedule; revisit if a joiner must be warned (any admin can cancel it).
 export function AccountView({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
   const [preview, setPreview] = useState<AccountDeletionPreview | null>(null)

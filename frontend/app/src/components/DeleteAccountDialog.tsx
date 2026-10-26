@@ -27,7 +27,7 @@ export function DeleteAccountDialog({ ctx, base, preview, outcome, onClose }: {
     setPending(true)
     setError(null)
     try {
-      await deleteMyAccount(ctx.authedFetch, base, outcome)
+      await deleteMyAccount(ctx.authedFetch, base, outcome, preview.heirUserId)
       ctx.signOut()
     } catch (e) {
       setError(toApiError(e).message)

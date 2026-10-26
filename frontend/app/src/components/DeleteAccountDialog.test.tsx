@@ -13,7 +13,7 @@ function setup(authedFetch: unknown, outcome: 'leave' | 'hand_on' = 'leave') {
   const lockWorkspace = vi.fn()
   const onClose = vi.fn()
   const ctx = { authedFetch, signOut, lockWorkspace, user: { tenantName: 'Okafor & Co' } } as unknown as PlatformCtx
-  render(<DeleteAccountDialog ctx={ctx} base="https://gw.test" preview={{ outcome, heirName: 'Chidi Eze' }} outcome={outcome} onClose={onClose} />)
+  render(<DeleteAccountDialog ctx={ctx} base="https://gw.test" preview={{ outcome, heirName: 'Chidi Eze', heirUserId: 'u-heir' }} outcome={outcome} onClose={onClose} />)
   return { signOut, lockWorkspace, onClose }
 }
 
@@ -53,7 +53,7 @@ describe('DeleteAccountDialog', () => {
     await userEvent.click(confirm())
     await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
     expect(lockWorkspace).not.toHaveBeenCalled()
-    expect(f).toHaveBeenCalledWith('https://gw.test/api/tenancy/v1/me/deletion', { method: 'POST', body: { outcome } })
+    expect(f).toHaveBeenCalledWith('https://gw.test/api/tenancy/v1/me/deletion', { method: 'POST', body: outcome === 'hand_on' ? { outcome, heir_user_id: 'u-heir' } : { outcome } })
   })
 
   it('DeleteAccountDialog: the body names the heir in bold', () => {

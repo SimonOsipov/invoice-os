@@ -154,7 +154,7 @@ test('account deletion: the last member schedules the workspace and can cancel',
     await input.fill(`${account.workspaceName}x`)
     await expect(confirm).toBeDisabled()
     await input.fill(account.workspaceName)
-    // The export step arrives with DEL-06 (delete-workspace-export); until then the dialog has none.
+    // The dialog has no export step yet.
     if ((await page.getByTestId('delete-workspace-export').count()) > 0) {
       await expect(page.getByTestId('delete-workspace-export')).toBeVisible()
       await page.getByTestId('delete-workspace-exported').check()

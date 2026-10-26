@@ -332,12 +332,12 @@ export function cancelDeletion(token: string): Promise<{ status: number; body: u
   return rawFetch('/api/tenancy/v1/workspace/deletion/cancel', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
 }
 
-// GET /api/tenancy/v1/me/deletion: 200 {outcome, heir_name}, outcome one of leave | hand_on | delete_workspace.
+// GET /api/tenancy/v1/me/deletion: 200 {outcome, heir_name, heir_user_id}, outcome one of leave | hand_on | delete_workspace.
 export function previewAccountDeletion(token: string): Promise<{ status: number; body: unknown }> {
   return rawFetch('/api/tenancy/v1/me/deletion', { headers: { Authorization: `Bearer ${token}` } })
 }
 
-// POST /api/tenancy/v1/me/deletion: 200 {outcome}; the body is sent as given so a spec can add keys or omit the outcome.
+// POST /api/tenancy/v1/me/deletion: 200 {outcome}; hand_on carries heir_user_id. The body is sent as given so a spec can add or omit keys.
 export function deleteMyAccount(token: string, body: unknown): Promise<{ status: number; body: unknown }> {
   return rawFetch('/api/tenancy/v1/me/deletion', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body })
 }

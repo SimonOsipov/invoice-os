@@ -86,7 +86,7 @@ async function joined(ws: Workspace, role: 'admin' | 'preparer', label: string):
   return { ...account, userId: subjectOf(token), name, token }
 }
 
-test.describe.serial('account deletion (API E2E, over the deployed gateway)', () => {
+test.describe('account deletion (API E2E, over the deployed gateway)', () => {
   test('account deletion: a member leaves at once and is erased', async () => {
     const ws = await workspace('selfdelete-leave')
     const preparer = await joined(ws, 'preparer', 'Leaver')
@@ -112,7 +112,7 @@ test.describe.serial('account deletion (API E2E, over the deployed gateway)', ()
     expect(own, 'one deleted row for the preparer').toHaveLength(1)
     expect(own[0].actor_name).toBe(`${preparer.name}${DELETED_SUFFIX}`)
 
-    // The preview worker runs the erase job against the preview GoTrue. A timeout here is a DEL-03 wiring defect.
+    // The preview worker runs the erase job against the preview GoTrue. A timeout here means the erase job is not wired to that GoTrue.
     await expect
       .poll(async () => signInOutcome(preparer.email, preparer.password), { intervals: [5_000], timeout: 120_000 })
       .toBe('rejected')
@@ -125,9 +125,9 @@ test.describe.serial('account deletion (API E2E, over the deployed gateway)', ()
 
     const preview = await previewAccountDeletion(ws.adminToken)
     expect(preview.status, JSON.stringify(preview.body)).toBe(200)
-    expect(preview.body).toEqual({ outcome: HAND_ON, heir_name: x.name })
+    expect(preview.body).toEqual({ outcome: HAND_ON, heir_name: x.name, heir_user_id: x.userId })
 
-    const res = await deleteMyAccount(ws.adminToken, { outcome: HAND_ON })
+    const res = await deleteMyAccount(ws.adminToken, { outcome: HAND_ON, heir_user_id: x.userId })
     expect(res.status, JSON.stringify(res.body)).toBe(200)
     expect(outcomeOf(res)).toBe(HAND_ON)
 
@@ -182,6 +182,26 @@ test.describe.serial('account deletion (API E2E, over the deployed gateway)', ()
     assertErrorEnvelope(res, 409, 'leave as the sole admin')
     expect(errorOf(res)).toBe(OUTCOME_CHANGED)
     expect((await me(ws.adminToken)).user.role, 'the caller stays an active admin').toBe('admin')
+  })
+
+  test('account deletion: a stale heir id is refused', async () => {
+    const ws = await workspace('selfdelete-staleheir')
+    await joined(ws, 'preparer', 'Heir')
+    const stranger = '00000000-0000-4000-8000-000000000001'
+
+    const res = await deleteMyAccount(ws.adminToken, { outcome: HAND_ON, heir_user_id: stranger })
+    assertErrorEnvelope(res, 409, 'hand_on naming a member who is not the heir')
+    expect(errorOf(res)).toBe(OUTCOME_CHANGED)
+    expect((await me(ws.adminToken)).user.role, 'the caller stays an active admin').toBe('admin')
+  })
+
+  test('account deletion: hand_on without an heir id is refused', async () => {
+    const ws = await workspace('selfdelete-noheir')
+    await joined(ws, 'preparer', 'Heir')
+
+    const res = await deleteMyAccount(ws.adminToken, { outcome: HAND_ON })
+    assertErrorEnvelope(res, 400, 'hand_on without heir_user_id')
+    expect((await me(ws.adminToken)).user.role).toBe('admin')
   })
 
   test('account deletion: the body cannot name another member', async () => {

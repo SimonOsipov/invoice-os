@@ -33,6 +33,7 @@ const ALL_VIEWS = [
   'approvals',
   'audit',
   'extraction',
+  'account',
 ] as const
 
 // types.ts — seven members. The strip SettingsView renders is the *available* set and is
@@ -66,23 +67,28 @@ function domTokenHits(src: string): number {
 }
 
 describe('ROUTE_PATHS', () => {
-  it('routeTable_isTotalOverTheThirteenViews', () => {
-    expect(ALL_VIEWS.length).toBe(13)
+  it('routeTable_isTotalOverTheFourteenViews', () => {
+    expect(ALL_VIEWS.length).toBe(14)
     expect(Object.keys(ROUTE_PATHS).sort()).toEqual([...ALL_VIEWS].sort())
-    expect(Object.keys(ROUTE_PATHS).length).toBe(13)
+    expect(Object.keys(ROUTE_PATHS).length).toBe(14)
   })
 
   it('routeTable_everyPathIsDistinct', () => {
-    expect(new Set(Object.values(ROUTE_PATHS)).size).toBe(13)
+    expect(new Set(Object.values(ROUTE_PATHS)).size).toBe(14)
   })
 })
 
 describe('routePath / parseRoute round trip', () => {
   it('roundTrip_everyViewSerialisesAndParsesBackToItself', () => {
-    expect(ALL_VIEWS.length).toBe(13)
+    expect(ALL_VIEWS.length).toBe(14)
     for (const v of ALL_VIEWS) {
       expect(parseRoute(routePath(v))).toEqual({ view: v, id: null })
     }
+  })
+
+  it('route: /account parses and serialises', () => {
+    expect(parseLocation('/account', '').view).toBe('account')
+    expect(routeUrl('account')).toBe('/account')
   })
 
   it('serialize_dashboardIsTheBareRoot', () => {
@@ -175,14 +181,14 @@ describe('parseRoute — adversarial', () => {
 
 describe('routeUrl — serialise', () => {
   it('routeUrl_withNoParamsEqualsRoutePathExceptSettings', () => {
-    expect(ALL_VIEWS.length).toBe(13)
+    expect(ALL_VIEWS.length).toBe(14)
     let compared = 0
     for (const v of ALL_VIEWS) {
       if (v === 'settings') continue
       expect(routeUrl(v), `${v} must serialise to its shipped path`).toBe(routePath(v))
       compared += 1
     }
-    expect(compared, 'the twelve non-settings views must each have been compared').toBe(12)
+    expect(compared, 'the thirteen non-settings views must each have been compared').toBe(13)
     // settings is the one named exception, asserted rather than excused: the default tab
     // is emitted, so the URL is strictly longer than the path. Both literals are pinned --
     // an inequality alone would pass on any wrong value.
@@ -233,7 +239,7 @@ describe('routeUrl — serialise', () => {
   // ALL_SETTINGS_TABS is a local literal, so the `.length === 7` floor above asserts it
   // against itself: a new tab added to types.ts would leave every tab loop in this file
   // one short and silent. ROUTE_PATHS has such an anchor already
-  // (routeTable_isTotalOverTheThirteenViews); the tab set had none.
+  // (routeTable_isTotalOverTheFourteenViews); the tab set had none.
   it('settingsTabs_theTestTableIsAnchoredToTheShippedUnion', () => {
     const src = readFileSync(TYPES_TS, 'utf8')
     expect(src.length, 'types.ts read back empty -- the path is broken').toBeGreaterThan(0)
@@ -534,12 +540,12 @@ describe('routePath — drill-down id parameter', () => {
     expect(routePath('detail', null)).toBe('/invoice')
   })
 
-  it('serialize_idIsIgnoredForTheTenViewsThatDoNotTakeOne', () => {
+  it('serialize_idIsIgnoredForTheElevenViewsThatDoNotTakeOne', () => {
     expect(routePath('settings', 'x')).toBe('/settings')
     // The count in the name is asserted, not decorative: a fourth id branch makes it wrong.
-    expect(ALL_VIEWS.length).toBe(13)
+    expect(ALL_VIEWS.length).toBe(14)
     const ignoreTheId = ALL_VIEWS.filter((v) => routePath(v, 'x') === ROUTE_PATHS[v])
-    expect(ignoreTheId.length, `views that ignore an id: ${ignoreTheId.join(', ')}`).toBe(10)
+    expect(ignoreTheId.length, `views that ignore an id: ${ignoreTheId.join(', ')}`).toBe(11)
   })
 })
 
@@ -556,7 +562,7 @@ describe('routePath / parseRoute round trip — id corpus', () => {
   const ID_TAKING_VIEWS = new Set(['detail', 'extraction', 'workflows'])
 
   it('roundTrip_idCorpusSurvivesForEveryViewAcrossAllIds', () => {
-    expect(ALL_VIEWS.length).toBe(13)
+    expect(ALL_VIEWS.length).toBe(14)
     expect(ID_CORPUS.length).toBe(6)
     for (const v of ALL_VIEWS) {
       for (const id of ID_CORPUS) {
@@ -975,7 +981,7 @@ describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app'
 describe('routeName — the bounded name Sentry groups a page by', () => {
   it('routeName_namesEveryRouteByPattern', () => {
     const statics = Object.values(ROUTE_PATHS)
-    expect(statics.length).toBe(13)
+    expect(statics.length).toBe(14)
     for (const path of statics) expect(routeName(path), path).toBe(path)
 
     const U2 = 'b1b2c3d4-e5f6-47a8-89ab-cdef01234568'

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -23,7 +24,8 @@ import (
 // so RLS enforces isolation — through db.WithinRequestTenantTx, except Me and
 // ProvisionWorkspace, which are exempt from that seam's membership gate.
 type Store struct {
-	pool *pgxpool.Pool
+	pool       *pgxpool.Pool
+	eraseQueue *river.Client[pgx.Tx]
 }
 
 // NewStore wraps the app-role connection pool. The caller owns the pool's lifecycle.

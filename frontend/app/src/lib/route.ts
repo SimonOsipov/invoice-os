@@ -17,6 +17,7 @@ export const ROUTE_PATHS: Record<View, string> = {
   create: '/create',
   detail: '/invoice',
   extraction: '/extraction',
+  account: '/account',
 }
 
 const PATH_TO_VIEW = new Map<string, View>(

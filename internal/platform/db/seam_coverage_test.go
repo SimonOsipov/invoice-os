@@ -746,6 +746,8 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/archive/staff.go", fn: "withinStaffTenant"},                            // staff read: the path tenant is checked by a staff_read_ function in db.WithinStaffTx; READ ONLY tenant tx
 	{file: "internal/customer/backfill.go", fn: "Backfill"},                                 // operator CLI and the demo-seed boot step only; internal/customer serves HTTP, so a package exemption would un-gate the customer handlers
 	{file: "cmd/migrate/purgecheck.go", fn: "purgeCheckRun"},                                // preview-only deploy probe in the migrate job; no request reaches it
+	{file: "internal/archive/workspace.go", fn: "recordExportFailed"},                       // audits a failed export of a possibly locked workspace in its own short tx
+	{file: "internal/archive/workspace.go", fn: "AssembleWorkspace"},                        // exports a locked workspace, which the seam refuses for a read-write tx; the method gates the active admin itself
 }
 
 // scCoreSite is one call of the ungated core, attributed to the INNERMOST
@@ -1042,6 +1044,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/rollup":                                      {verdict: scCovered},
 	"GET /v1/rollup/history":                              {verdict: scCovered},
 	"GET /v1/workflow-roles":                              {verdict: scCovered},
+	"OPTIONS /auth/export-code":                           {verdict: scExempt, reason: "no database; gateway hand-off code store"},
 	"OPTIONS /auth/console-handoff":                       {verdict: scExempt, reason: "no database; in-process code store"},
 	"OPTIONS /auth/exchange":                              {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
 	"OPTIONS /auth/invitation":                            {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
@@ -1069,6 +1072,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/workspace/deletion":                         {verdict: scCovered},
 	"POST /v1/workspace/deletion/cancel":                  {verdict: scExempt, reason: "writes a locked workspace; cancelScheduledDeletion gates the active admin itself in WithinTenantTx"},
 	"POST /v1/workspace/deletion/cancel-by-link":          {verdict: scExempt, reason: "writes a locked workspace; cancelScheduledDeletion gates the active admin itself in WithinTenantTx"},
+	"GET /v1/workspace/export/preflight":                  {verdict: scCovered},
+	"GET /v1/workspace/export":                            {verdict: scExempt, reason: "admin export of a locked workspace; WorkspaceStore.AssembleWorkspace gates the active admin itself in WithinTenantTxOpts and writes workspace.exported"},
 	"PUT /v1/memberships/{user_id}/clients":               {verdict: scCovered},
 	"GET /v1/staff/health":                                {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/metrics":                               {verdict: scExempt, reason: "staff route: staff check in platform.App and in staff_read_health_samples; reads Google metrics, no tenant rows"},
@@ -1118,6 +1123,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"PATCH /v1/rules/{key}":                               {verdict: scExempt, reason: "refuses every caller with 403 and reaches no database"},
 	"PATCH /v1/workflow-roles/{key}":                      {verdict: scCovered},
 	"POST /auth/console-handoff":                          {verdict: scExempt, reason: "no database; in-process code store"},
+	"POST /auth/export-code":                              {verdict: scExempt, reason: "no database; gateway hand-off code store"},
+	"POST /auth/export-download":                          {verdict: scExempt, reason: "no database; gateway hand-off code store"},
 	"POST /auth/exchange":                                 {verdict: scExempt, reason: "no database; in-process code store"},
 	"POST /auth/invitation":                               {verdict: scExempt, reason: "no database; asks tenancy"},
 	"POST /auth/invitation/password":                      {verdict: scExempt, reason: "no database; calls GoTrue"},

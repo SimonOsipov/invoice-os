@@ -351,6 +351,29 @@ export function cancelDeletionByLink(token: string, linkToken: string): Promise<
   return rawFetch('/api/tenancy/v1/workspace/deletion/cancel-by-link', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: { token: linkToken } })
 }
 
+// GET /api/invoice/v1/workspace/export/preflight: 204 when an export can start; raw so a spec can assert the refusals.
+export function exportPreflight(token: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/api/invoice/v1/workspace/export/preflight', { headers: { Authorization: `Bearer ${token}` } })
+}
+
+// POST /auth/export-code {state}: 200 {code}. Pass token=null to omit the bearer.
+export function exportCode(token: string | null, state: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/auth/export-code', { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: { state } })
+}
+
+// POST /auth/export-download as the browser form does: the ZIP, or the refusal page, as bytes.
+export async function exportDownload(
+  code: string,
+  state: string,
+): Promise<{ status: number; headers: Headers; body: Uint8Array }> {
+  const res = await fetch(`${apiBase()}/auth/export-download`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ code, state }).toString(),
+  })
+  return { status: res.status, headers: res.headers, body: new Uint8Array(await res.arrayBuffer()) }
+}
+
 // GET /api/tenancy/v1/me/deletion: 200 {outcome, heir_name, heir_user_id}, outcome one of leave | hand_on | delete_workspace.
 export function previewAccountDeletion(token: string): Promise<{ status: number; body: unknown }> {
   return rawFetch('/api/tenancy/v1/me/deletion', { headers: { Authorization: `Bearer ${token}` } })

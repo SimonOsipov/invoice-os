@@ -18,6 +18,8 @@ paths:
   - "internal/gateway/session_check*.go"
   - "internal/gateway/handoff*.go"
   - "internal/gateway/console_handoff*.go"
+  - "internal/gateway/export_download*"
+  - "internal/gateway/export_refused*"
   - "internal/gateway/invitation*.go"
   - "internal/gateway/freemail*.go"
   - "internal/gateway/mock*.go"
@@ -88,6 +90,10 @@ paths:
 - Mint a console hand-off code on `POST /auth/console-handoff` only for a verified, session-checked bearer whose `app_metadata.staff` is true.
 - Store only the caller's access token as that code's answer. Never store a refresh token.
 - Bind that code to the `state` in the request body.
+- Mint an export code on `POST /auth/export-code` only for a verified, session-checked bearer. Store only the caller's access token as its answer.
+- Bind an export code to `sha256("workspace-export:" + state)`. `/auth/exchange` redeems it only under the prefixed state (`TestExportDownload_ExchangeRedeemsAnExportCodeOnlyUnderThePrefixedState`).
+- Redeem an export code only on `POST /auth/export-download`, from the form body. Forward it only to `GET /api/invoice/v1/workspace/export`, through the verifier and the session check, with no client header.
+- Answer each refusal of `/auth/export-download` before the first byte with the export refusal page and its status. Never answer it with JSON.
 - Send a sessionless app visit with exactly `?via=library` to `<landing>/?state=<s>&register`. Any other value takes the sign-in path. An earlier front-door case wins: `?auth=start`, a confirm hop, a pending hand-off or a join offer. `frontDoor_authStartWinsOverVia` and `frontDoor_aPendingHandoffWinsOverVia` pin it.
 - Expect `?register` to open the create-an-account modal, or "Book a demo" when `registrationOpen()` is false.
 - Expect landing's `?demo` to open the book-a-demo modal.

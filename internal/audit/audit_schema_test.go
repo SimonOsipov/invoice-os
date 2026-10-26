@@ -464,12 +464,13 @@ const (
 // auditReaderFiles is internal/audit's whole non-test surface. AUDIT-11 touches exactly one of
 // them, AUDIT-11-09's filter.go.
 var auditReaderFiles = []string{
-	"audit.go", "facets.go", "filter.go", "handlers.go", "reader.go", "staff_read.go", "store.go",
+	"audit.go", "export_csv.go", "facets.go", "filter.go", "handlers.go", "reader.go", "staff_read.go", "store.go",
 }
 
 // auditReaderImports is that surface's import set, measured on this branch. It is the half a
 // file count cannot see: an existing file widened to reach a new dependency.
 var auditReaderImports = []string{
+	"bytes",
 	"context",
 	"encoding/base64",
 	"encoding/json",

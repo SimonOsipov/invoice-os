@@ -1,5 +1,7 @@
 // Settings > Workspace: delete dialog, deletion notice, cancel. Every workspace is registered here; the seeded tenants are never scheduled.
+import { readFile } from 'node:fs/promises'
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { unzipSync } from 'fflate'
 import {
   acceptById,
   cancelDeletion,
@@ -44,6 +46,14 @@ async function sweep(page: Page, check: (width: number) => Promise<void>): Promi
   }
 }
 
+// The button submits a form navigation; the ZIP arrives as a download holding manifest.json.
+async function downloadExport(page: Page, button: Locator, status: Locator): Promise<void> {
+  const [download] = await Promise.all([page.waitForEvent('download'), button.click()])
+  const zip = unzipSync(new Uint8Array(await readFile(await download.path())))
+  expect(Object.keys(zip), 'the export ZIP holds manifest.json').toContain('manifest.json')
+  await expect(status).toBeVisible()
+}
+
 async function openWorkspaceTab(page: Page): Promise<void> {
   // Scoped to the tab strip: the in-house sidebar group is also called "Workspace".
   await page.locator('button.pf-tab').filter({ hasText: /^Workspace$/ }).click()
@@ -67,6 +77,9 @@ async function sweepCard(page: Page): Promise<void> {
 async function sweepDialog(page: Page, name: string): Promise<void> {
   const panel = page.getByRole('dialog')
   const parts = {
+    'Download export': panel.getByTestId('delete-workspace-export'),
+    'the export status': panel.getByTestId('delete-workspace-export-status'),
+    'the tick row': panel.locator('label').filter({ has: page.getByTestId('delete-workspace-exported') }),
     'the shown name': panel.getByTestId('delete-workspace-name-shown'),
     'the input': panel.getByTestId('delete-workspace-name'),
     Cancel: panel.getByRole('button', { name: 'Cancel', exact: true }),
@@ -82,7 +95,8 @@ async function sweepDialog(page: Page, name: string): Promise<void> {
       boxes[label] = await rectOf(label, loc, width)
       expect(enclosesRect(panelBox, boxes[label], 1), `${label} leaves the panel at ${width}px`).toBe(true)
     }
-    expect(rectsOverlap(boxes.Cancel, boxes['Delete workspace']), `the dialog buttons overlap at ${width}px`).toBe(false)
+    const pairs = [['Cancel', 'Delete workspace'], ['Download export', 'the export status'], ['the export status', 'the tick row'], ['the tick row', 'the input'], ['Download export', 'the input']]
+    for (const [a, b] of pairs) expect(rectsOverlap(boxes[a], boxes[b]), `${a} and ${b} overlap at ${width}px`).toBe(false)
     await assertPageDoesNotScrollSideways(page, `the dialog at ${width}px`)
   })
 }
@@ -91,6 +105,7 @@ async function sweepNotice(page: Page): Promise<void> {
   const card = page.getByTestId('workspace-deletion-notice')
   const parts = {
     'the body': card.getByText(/we delete every invoice, file and member of/),
+    'Download export': page.getByTestId('deletion-notice-export'),
     'Cancel deletion': page.getByTestId('deletion-notice-cancel'),
     'Sign out': card.getByRole('button', { name: 'Sign out', exact: true }),
   }
@@ -103,7 +118,10 @@ async function sweepNotice(page: Page): Promise<void> {
       boxes[label] = await rectOf(label, loc, width)
       expect(enclosesRect(cardBox, boxes[label], 1), `${label} leaves the notice at ${width}px`).toBe(true)
     }
-    expect(rectsOverlap(boxes['Cancel deletion'], boxes['Sign out']), `the notice buttons overlap at ${width}px`).toBe(false)
+    const names = ['Download export', 'Cancel deletion', 'Sign out']
+    for (const [i, a] of names.entries()) {
+      for (const b of names.slice(i + 1)) expect(rectsOverlap(boxes[a], boxes[b]), `${a} and ${b} overlap at ${width}px`).toBe(false)
+    }
     // The notice has no app shell, so layout.ts's `.pf-scroll` helper would never resolve.
     const doc = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }))
     expect(doc.scrollWidth - doc.clientWidth, `the notice scrolls sideways at ${width}px (${JSON.stringify(doc)})`).toBeLessThanOrEqual(1)
@@ -137,6 +155,10 @@ test('workspace deletion: an admin deletes from Settings, reloads, cancels and i
     await input.fill(`${account.workspaceName}x`)
     await expect(confirm).toBeDisabled()
     await input.fill(account.workspaceName)
+    await expect(confirm).toBeDisabled()
+    await downloadExport(page, page.getByTestId('delete-workspace-export'), page.getByTestId('delete-workspace-export-status'))
+    await expect(confirm).toBeDisabled()
+    await page.getByTestId('delete-workspace-exported').check()
     await expect(confirm).toBeEnabled()
     await sweepDialog(page, account.workspaceName)
 
@@ -144,6 +166,7 @@ test('workspace deletion: an admin deletes from Settings, reloads, cancels and i
     const notice = page.getByTestId('workspace-deletion-notice')
     await expect(notice).toContainText(account.workspaceName)
     await expect(page.getByTestId('deletion-notice-cancel')).toBeVisible()
+    await downloadExport(page, page.getByTestId('deletion-notice-export'), page.getByTestId('deletion-notice-export-status'))
     await sweepNotice(page)
 
     await page.reload()
@@ -169,11 +192,15 @@ test('workspace deletion: a 200-character name stays inside the dialog and the n
     const confirm = page.getByTestId('delete-workspace-confirm')
     await expect(confirm).toBeDisabled()
     await page.getByTestId('delete-workspace-name').fill(name)
+    await expect(confirm).toBeDisabled()
+    await downloadExport(page, page.getByTestId('delete-workspace-export'), page.getByTestId('delete-workspace-export-status'))
+    await page.getByTestId('delete-workspace-exported').check()
     await expect(confirm).toBeEnabled()
     await sweepDialog(page, name)
 
     await confirm.click()
     await expect(page.getByTestId('workspace-deletion-notice')).toContainText(name)
+    await downloadExport(page, page.getByTestId('deletion-notice-export'), page.getByTestId('deletion-notice-export-status'))
     await sweepNotice(page)
 
     await page.getByTestId('deletion-notice-cancel').click()

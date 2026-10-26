@@ -15,7 +15,7 @@ export type SignInOutcome = 'ready' | 'failed' | 'no-workspace'
 export const BASE64URL_43 = /^[A-Za-z0-9_-]{43}$/
 
 // 32 random bytes, base64url without padding: 43 characters.
-function mint(): string {
+export function mintState(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32))
   return btoa(String.fromCharCode(...bytes))
     .replace(/\+/g, '-')
@@ -60,14 +60,14 @@ export function ensureSignInState(now: number = Date.now()): string {
     if (p && p.at <= now && now - p.at < SIGN_IN_STATE_REUSE_MS) return p.s
   } catch (e) {
     console.warn(`[signInState] failed to store state at "${SIGN_IN_STATE_KEY}":`, e)
-    return mint()
+    return mintState()
   }
   return mintSignInState(now)
 }
 
 // Mints and stores a new state, replacing any held one.
 export function mintSignInState(now: number = Date.now()): string {
-  const s = mint()
+  const s = mintState()
   try {
     sessionStorage.setItem(SIGN_IN_STATE_KEY, JSON.stringify({ v: SIGN_IN_STATE_SCHEMA_VERSION, s, at: now }))
   } catch (e) {

@@ -72,7 +72,7 @@ func main() {
 	// the gateway lets a token without a tenant reach this route only.
 	app.Mux.HandleFunc("POST /v1/workspaces", tenancy.ProvisionHandler(store.ProvisionWorkspace, app.Logger))
 
-	// Invite routes: the sender is chosen once at boot from the environment.
+	// Mail routes: the sender is chosen once at boot from the environment.
 	sender := inviteSender(os.Getenv, http.DefaultTransport.(*http.Transport).Clone(), app.Logger)
 	inviter := &tenancy.Inviter{Store: store, Sender: sender, Logger: app.Logger}
 	notifier := &tenancy.DeletionNotifier{Store: store, Sender: sender, Logger: app.Logger}
@@ -97,7 +97,7 @@ func main() {
 	}
 }
 
-// inviteSender picks the invite mail sender: capture in a preview, Resend with a key, else off.
+// inviteSender picks the mail sender: capture in a preview, Resend with a key, else off.
 func inviteSender(getenv func(string) string, rt http.RoundTripper, logger *slog.Logger) accountmail.Sender {
 	mode, key := accountmail.ModeFromEnv(getenv, platform.Posture(platform.DeployEnvFrom(getenv)) == platform.PosturePreview)
 	logger.Info("tenancy: invite mail mode", slog.String("mode", string(mode)))

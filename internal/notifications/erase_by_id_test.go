@@ -470,8 +470,10 @@ func TestEraseByID_AContactsRowHandsOffToTheNormalErasure(t *testing.T) {
 	r.contact(otherMail, &other, 1)
 	live, _ := r.seedCopies(r.uid, r.mail)
 
-	if err := r.workByID(r.byIDWorker(), r.uid); !isSnooze(err) {
-		t.Fatalf("Work = %v, want a snooze", err)
+	err := r.workByID(r.byIDWorker(), r.uid)
+	var sn *river.JobSnoozeError
+	if !errors.As(err, &sn) || sn.Duration != handOffSnooze {
+		t.Fatalf("Work = %v, want a snooze of %v", err, handOffSnooze)
 	}
 
 	if n := r.count(`SELECT count(*) FROM river_job WHERE kind = $1 AND args->>'user_id' = $2 AND args ? 'email'`, EraseArgs{}.Kind(), r.uid); n != 0 {

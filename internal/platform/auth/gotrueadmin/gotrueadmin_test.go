@@ -698,7 +698,7 @@ func TestUserEmail_DoesNotFollowARedirectAndReadsAtMost16KiB(t *testing.T) {
 		t.Errorf("UserEmail on a redirect = %q, %v, target hits %d; want \"\", *StatusError{307}, 0", email, err, second.Load())
 	}
 
-	for _, status := range []int{http.StatusNotFound} {
+	for _, status := range []int{http.StatusNotFound, http.StatusInternalServerError} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			var read int
 			hc := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {

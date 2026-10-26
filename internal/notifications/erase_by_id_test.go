@@ -247,6 +247,8 @@ func TestUsableEraseEmail_MatchesTheEnqueueRule(t *testing.T) {
 		{"254 bytes", strings.Repeat("a", 254), true},
 		{"255 bytes", strings.Repeat("a", 255), false},
 		{"padded and cased", " Ada@X.test ", true},
+		{"only spaces", "   ", false},
+		{"254 bytes padded", " " + strings.Repeat("a", 254) + " ", true},
 		{"254 bytes in 127 runes", strings.Repeat("é", 127), true},
 		{"256 bytes in 128 runes", strings.Repeat("é", 128), false},
 	}
@@ -271,4 +273,116 @@ func TestUsableEraseEmail_MatchesTheEnqueueRule(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestEraseByID_AnUpperCaseIDErasesTheCanonicalPerson(t *testing.T) {
+	r := newEraseRig(t)
+	upper := strings.ToUpper(r.uid)
+	r.handoff(upper, r.mail)
+	live := r.insertJob(RegistrantArgs{UserID: upper, Email: r.mail})
+	r.seedCopies(r.uid, r.mail)
+
+	if err := r.workByID(r.byIDWorker(), upper); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if n := r.count(`SELECT count(*) FROM registrant_handoffs WHERE lower(user_id) = $1`, r.uid); n != 0 {
+		t.Errorf("hand-offs left = %d, want 0 whatever the case of the stored id", n)
+	}
+	if r.jobExists(live) {
+		t.Error("a live job with an upper-case user id survived")
+	}
+	// DeleteUser refuses a non-canonical id; the worker must hand it the canonical one.
+	if got := r.acct.got(); len(got) != 1 || got[0] != r.uid {
+		t.Errorf("account deletes = %v, want the lower-case id once", got)
+	}
+}
+
+func TestEraseByID_TouchesOnlyTheErasableKindsOfThatPerson(t *testing.T) {
+	r := newEraseRig(t)
+	other, otherMail := r.person()
+	// A job of a kind outside eraseKinds that names the person must stay.
+	foreign := r.insertJob(EraseArgs{UserID: r.uid, Generation: 1})
+	// Every non-final and final state of the person's own jobs.
+	var gone []int64
+	for _, st := range []string{"scheduled", "retryable", "cancelled", "discarded"} {
+		id := r.insertJob(RegistrantArgs{UserID: r.uid, Email: r.mail})
+		r.setState(id, st)
+		gone = append(gone, id)
+	}
+	if len(gone) != 4 {
+		t.Fatal("control: seeded jobs")
+	}
+	// The other person: a contact keyed by their id, and a contact of the same shape with no user id.
+	r.contact(otherMail, &other, 1)
+	r.contact(r.mail, nil, 1)
+
+	if err := r.workByID(r.byIDWorker(), r.uid); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	for _, id := range gone {
+		if r.jobExists(id) {
+			t.Errorf("job %d of the person survived", id)
+		}
+	}
+	if !r.jobExists(foreign) {
+		t.Error("a job of a kind outside eraseKinds was deleted")
+	}
+	if r.count(`SELECT count(*) FROM river_job WHERE id = $1 AND state = 'available'`, foreign) != 1 {
+		t.Error("a job of a kind outside eraseKinds was cancelled")
+	}
+	if c := r.count(`SELECT count(*) FROM contacts WHERE email = ANY($1)`, []string{otherMail, r.mail}); c != 2 {
+		t.Errorf("contacts left = %d, want the other person's and the email-keyed one (2)", c)
+	}
+}
+
+func TestEraseByID_ARetryAfterAFailedAccountStepIsIdempotent(t *testing.T) {
+	r := newEraseRig(t)
+	other, otherMail := r.person()
+	r.seedCopies(r.uid, r.mail)
+	otherLive, _ := r.seedCopies(other, otherMail)
+	r.acct.fn = func(n int, _ string) error {
+		if n == 1 {
+			return &gotrueadmin.StatusError{Status: 503}
+		}
+		return nil
+	}
+	w := r.byIDWorker()
+
+	if err := r.workByID(w, r.uid); err == nil {
+		t.Fatal("first attempt: want the account's error")
+	}
+	if h, c := r.copies(r.uid); h != 0 || c != 0 {
+		t.Errorf("after the failed attempt: %d hand-offs, %d contacts left", h, c)
+	}
+	for i := 2; i <= 3; i++ {
+		if err := r.workByID(w, r.uid); err != nil {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+	}
+	if got := r.acct.got(); len(got) != 3 {
+		t.Errorf("account deletes = %v, want one per attempt", got)
+	}
+	if h, c := r.copies(other); h != 1 || c != 1 || !r.jobExists(otherLive) {
+		t.Errorf("another person's copies after the retries = %d hand-offs, %d contacts", h, c)
+	}
+}
+
+func TestEraseByID_AFailedSweepSkipsTheAccountAndLeaksNothing(t *testing.T) {
+	r := newEraseRig(t)
+	r.seedCopies(r.uid, r.mail)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := r.byIDWorker().Work(ctx, &river.Job[EraseByIDArgs]{Args: EraseByIDArgs{UserID: r.uid}})
+	if err == nil {
+		t.Fatal("Work with a dead context = nil, want an error")
+	}
+	if len(r.acct.got()) != 0 {
+		t.Error("the account was deleted although step 1 failed")
+	}
+	warns := r.sink.at(slog.LevelWarn)
+	if len(warns) != 1 || !strings.HasSuffix(warns[0].Text, "step="+stepSweep+" status=0") {
+		t.Errorf("WARN lines = %+v, want one with step=%s status=0", warns, stepSweep)
+	}
+	qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.uid, r.mail)
 }

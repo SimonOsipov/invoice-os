@@ -637,3 +637,84 @@ func TestUserEmail_RefusesANonCanonicalID(t *testing.T) {
 		t.Errorf("control: server got %d requests, want 1", len(*got))
 	}
 }
+
+func TestUserEmail_OtherAnswersAreRefusedOrEmpty(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusTooManyRequests, http.StatusNoContent, http.StatusBadGateway} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			srv, _ := recordingServer(t, status, `{"email":"leak@example.invalid"}`)
+			email, err := newClient(t, srv.URL, signing(t)).UserEmail(context.Background(), uuid.NewString())
+			var se *gotrueadmin.StatusError
+			if !errors.As(err, &se) || se.Status != status || email != "" {
+				t.Errorf("UserEmail on %d = %q, %v; want \"\" and *StatusError{%d}", status, email, err, status)
+			}
+		})
+	}
+
+	// A 200 whose body does not decode is an error, not an empty address: "" would read as "no account".
+	for name, body := range map[string]string{
+		"not json":          "<html>SECRETBODYTEXT</html>",
+		"truncated":         `{"email":"ada@exam`,
+		"email is a number": `{"email":42}`,
+		"oversized":         `{"email":"ada@example.invalid","pad":"` + strings.Repeat("x", 17<<10) + `"}`,
+	} {
+		t.Run("200 "+name, func(t *testing.T) {
+			srv, _ := recordingServer(t, http.StatusOK, body)
+			email, err := newClient(t, srv.URL, signing(t)).UserEmail(context.Background(), uuid.NewString())
+			var se *gotrueadmin.StatusError
+			if !errors.As(err, &se) || se.Status != http.StatusOK || email != "" {
+				t.Fatalf("UserEmail = %q, %v; want \"\" and *StatusError{200}", email, err)
+			}
+			if strings.Contains(err.Error(), "SECRETBODYTEXT") {
+				t.Errorf("error %q carries the body", err)
+			}
+		})
+	}
+
+	// An account with no email (a phone-only sign-up) reads as "".
+	for name, body := range map[string]string{"absent": `{"id":"x"}`, "null": `{"email":null}`, "empty": `{"email":""}`} {
+		t.Run("200 email "+name, func(t *testing.T) {
+			srv, _ := recordingServer(t, http.StatusOK, body)
+			if email, err := newClient(t, srv.URL, signing(t)).UserEmail(context.Background(), uuid.NewString()); err != nil || email != "" {
+				t.Errorf("UserEmail = %q, %v; want \"\", nil", email, err)
+			}
+		})
+	}
+}
+
+func TestUserEmail_DoesNotFollowARedirectAndReadsAtMost16KiB(t *testing.T) {
+	var second atomic.Int64
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		second.Add(1)
+		_, _ = io.WriteString(w, `{"email":"ada@example.invalid"}`)
+	}))
+	t.Cleanup(target.Close)
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(first.Close)
+	email, err := newClient(t, first.URL, signing(t)).UserEmail(context.Background(), uuid.NewString())
+	var se *gotrueadmin.StatusError
+	if !errors.As(err, &se) || se.Status != http.StatusTemporaryRedirect || email != "" || second.Load() != 0 {
+		t.Errorf("UserEmail on a redirect = %q, %v, target hits %d; want \"\", *StatusError{307}, 0", email, err, second.Load())
+	}
+
+	for _, status := range []int{http.StatusOK, http.StatusNotFound} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			var read int
+			hc := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: status, Body: infiniteBody{&read}, Header: http.Header{}, Request: r}, nil
+			})}
+			c, err := gotrueadmin.New("http://auth.invalid", keysJSON(t, signing(t).jwk), hc)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			_, _ = c.UserEmail(context.Background(), uuid.NewString())
+			if read == 0 {
+				t.Fatal("control: the answer was never reached")
+			}
+			if read > 16<<10 {
+				t.Errorf("read %d bytes of the answer, want at most %d", read, 16<<10)
+			}
+		})
+	}
+}

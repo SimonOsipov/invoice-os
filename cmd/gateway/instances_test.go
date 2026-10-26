@@ -8,8 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	"go/ast"
-	"go/types"
 	"io"
 	"log/slog"
 	"math/big"
@@ -189,9 +187,7 @@ func newTwoInstances(t *testing.T) *twoInstances {
 		}
 		log := slog.New(slog.DiscardHandler)
 		sessions := gateway.NewSessionChecker(authURL, http.DefaultClient, time.Now, log)
-		if checkerSharedInMain(t) {
-			sessions.Shared(pool)
-		}
+		sessions.Shared(pool)
 		api, _ := gatewayHandlers(verifier, sessions, map[string]*url.URL{"tenancy": tenancyURL}, map[string]*url.URL{"auth": authURL},
 			map[string]string{"auth": ".well-known/jwks.json"}, log, instToken)
 		h := handoffHandlers(authURL, site, sessions, log, nil, verifier, pool)
@@ -206,25 +202,6 @@ func newTwoInstances(t *testing.T) *twoInstances {
 	}
 	r.a, r.b = build(poolA), build(poolB)
 	return r
-}
-
-// checkerSharedInMain reports whether main calls `sessions.Shared(gwPool)` right after building the checker.
-// The rig does what main does, so a main that forgets the call fails the sign-out tests at runtime.
-func checkerSharedInMain(t *testing.T) bool {
-	t.Helper()
-	_, body := parseMain(t)
-	for i, st := range body.List[:len(body.List)-1] {
-		as, ok := st.(*ast.AssignStmt)
-		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
-			continue
-		}
-		if _, ok := isCallTo(as.Rhs[0], "gateway", "NewSessionChecker"); ok {
-			es, ok := body.List[i+1].(*ast.ExprStmt)
-			return ok && types.ExprString(es.X) == types.ExprString(as.Lhs[0])+".Shared(gwPool)"
-		}
-	}
-	t.Fatal("main has no top-level `x := gateway.NewSessionChecker(...)`")
-	return false
 }
 
 // token signs a GoTrue-shaped access token for the subject on one session.

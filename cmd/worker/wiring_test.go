@@ -6,6 +6,10 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -14,6 +18,7 @@ import (
 	"go/token"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +36,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth/gotrueadmin"
 	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 	"github.com/SimonOsipov/invoice-os/internal/systemhealth"
@@ -234,6 +240,9 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 		{"registrant_intake", func(b *river.Workers) error {
 			return river.AddWorkerSafely(b, &notifications.RegistrantWorker{})
 		}},
+		{"person_erase", func(b *river.Workers) error {
+			return river.AddWorkerSafely(b, &notifications.EraseWorker{})
+		}},
 	}
 	contactProbes := []struct {
 		kind string
@@ -271,7 +280,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 
 	cw := &contactWorkerSet{deliver: &notifications.DeliverWorker{}, deal: &notifications.DemoDealWorker{}, blog: &notifications.BlogSyncWorker{}}
-	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw)
+	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{})
 	if bundle == nil {
 		t.Fatal("workerBundle returned nil; a River client takes exactly one bundle")
 	}
@@ -287,9 +296,12 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 
 	// Contacts off: no contact kind is registered, so its queued jobs wait untouched. Intake still records.
-	off := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, nil)
+	off := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, nil, &notifications.EraseWorker{})
 	if err := probes[3].add(off); err == nil {
 		t.Errorf("workerBundle with contacts off does not carry %q; the gateway's registrants would never be recorded", probes[3].kind)
+	}
+	if err := probes[4].add(off); err == nil {
+		t.Errorf("workerBundle with contacts off does not carry %q; its step order needs the worker in every mode", probes[4].kind)
 	}
 	for _, p := range contactProbes {
 		if err := p.add(off); err != nil {
@@ -298,10 +310,58 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 	// The newsletter off: the blog sync worker is absent, the other two are not.
 	cw.blog = nil
-	noBlog := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw)
+	noBlog := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{})
 	for i, p := range contactProbes {
 		if err := p.add(noBlog); (err == nil) != (i == 2) {
 			t.Errorf("workerBundle with the newsletter off: probing %q returned %v", p.kind, err)
+		}
+	}
+}
+
+// The erase worker gets vendor clients or fakes in real and fake, nil interfaces in off, and an
+// Account only when a client exists.
+func TestEraseWorker_FollowsTheModes(t *testing.T) {
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc := base64.RawURLEncoding.EncodeToString
+	keys := fmt.Sprintf(`[{"kty":"EC","crv":"P-256","alg":"ES256","kid":"k","key_ops":["sign","verify"],"x":%q,"y":%q,"d":%q}]`,
+		enc(k.X.FillBytes(make([]byte, 32))), enc(k.Y.FillBytes(make([]byte, 32))), enc(k.D.FillBytes(make([]byte, 32))))
+	acct, err := gotrueadmin.New("http://127.0.0.1:1", keys, &http.Client{})
+	if err != nil {
+		t.Fatalf("gotrueadmin.New: %v", err)
+	}
+	hs := notifications.NewHubSpot(notifications.HubSpotBaseURL, notifications.Keys{}, nil)
+	rs := notifications.NewResend(notifications.ResendBaseURL, notifications.Keys{}, nil)
+	for _, c := range []struct {
+		name   string
+		mode   notifications.Mode
+		hs     notifications.HubSpotClient
+		rs     notifications.ResendClient
+		wantHS any
+		wantRS any
+	}{
+		{"real", notifications.ModeReal, hs, rs, hs, rs},
+		{"fake", notifications.ModeFake, notifications.FakeHubSpot{}, notifications.FakeResend{}, notifications.FakeHubSpot{}, notifications.FakeResend{}},
+		{"off", notifications.ModeOff, nil, nil, nil, nil},
+	} {
+		for _, withAcct := range []bool{false, true} {
+			var a *gotrueadmin.Client
+			if withAcct {
+				a = acct
+			}
+			w := newEraseWorker(nil, c.mode, c.hs, c.rs, a, slog.Default())
+			if w.Mode != c.mode || w.Logger == nil {
+				t.Errorf("%s: Mode %q, Logger %v", c.name, w.Mode, w.Logger)
+			}
+			if (w.HubSpot == nil) != (c.wantHS == nil) || (w.Resend == nil) != (c.wantRS == nil) ||
+				(c.wantHS != nil && (w.HubSpot != c.wantHS || w.Resend != c.wantRS)) {
+				t.Errorf("%s: HubSpot %v, Resend %v, want %v and %v", c.name, w.HubSpot, w.Resend, c.wantHS, c.wantRS)
+			}
+			if (w.Account == nil) == withAcct {
+				t.Errorf("%s, account client %v: Account %v", c.name, withAcct, w.Account)
+			}
 		}
 	}
 }
@@ -647,8 +707,8 @@ func TestWorkerMain_WiresTheQueueSeams(t *testing.T) {
 	// 1. The worker on the bundle is the one newExtractWorker built. A bare
 	//    &extraction.ExtractWorker{} here compiles, registers the kind, and fails job one on
 	//    Work's nil-Audit guard before its nil pool can panic.
-	if len(bundleArgs) != 5 {
-		t.Fatalf("workerBundle is called with %d argument(s), want 5 (sw, pw, ew, rw, cw)", len(bundleArgs))
+	if len(bundleArgs) != 6 {
+		t.Fatalf("workerBundle is called with %d argument(s), want 6 (sw, pw, ew, rw, cw, xw)", len(bundleArgs))
 	}
 	if id, ok := bundleArgs[2].(*ast.Ident); !ok || id.Name != ewName {
 		t.Errorf("workerBundle's third argument is %s, want %s -- the worker newExtractWorker built. Any other value here registers the kind with nil collaborators and works no job", wtRender(bundleArgs[2]), ewName)
@@ -1845,5 +1905,135 @@ func TestJobOwners_NameEveryWorkerKind(t *testing.T) {
 	slices.Sort(owners)
 	if !slices.Equal(kinds, owners) {
 		t.Errorf("worker kinds = %v, JobOwners keys = %v", kinds, owners)
+	}
+}
+
+// gotrueCall returns main()'s unconditional gotrueadmin.FromEnv call.
+func gotrueCall(t *testing.T) *ast.CallExpr {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/worker/main.go: %v", err)
+	}
+	var found *ast.CallExpr
+	for _, stmt := range wtMainBody(t, f) {
+		if as, ok := stmt.(*ast.AssignStmt); ok && len(as.Rhs) == 1 {
+			if c, ok := as.Rhs[0].(*ast.CallExpr); ok && wtCallName(c.Fun) == "gotrueadmin.FromEnv" {
+				found = c
+			}
+		}
+	}
+	if found == nil || len(found.Args) != 3 {
+		t.Fatal("main() has no unconditional gotrueadmin.FromEnv call with three arguments")
+	}
+	return found
+}
+
+func TestWorkerMain_FatalOnAccountConfigError(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/worker/main.go: %v", err)
+	}
+	if calls, fatal := wtFatalAfter(t, f, "submission.MockConfigFromEnv"); calls != 1 || !fatal {
+		t.Fatalf("the matcher found %d MockConfigFromEnv call(s), fatal=%v, want 1 and true", calls, fatal)
+	}
+	calls, fatal := wtFatalAfter(t, f, "gotrueadmin.FromEnv")
+	if calls != 1 || !fatal {
+		t.Errorf("gotrueadmin.FromEnv: %d unconditional call(s), fatal=%v, want 1 and true: a worker with no account config must refuse to boot", calls, fatal)
+	}
+}
+
+func TestWorkerMain_AccountConfigReadsCloudRun(t *testing.T) {
+	if got := wtExprString(gotrueCall(t).Args[1]); got != `os.Getenv("K_SERVICE") != ""` {
+		t.Errorf("FromEnv second argument = %s, want os.Getenv(\"K_SERVICE\") != \"\"", got)
+	}
+}
+
+func TestWorkerMain_AccountClientUsesTheIDTokenTransport(t *testing.T) {
+	if got := wtExprString(gotrueCall(t).Args[2]); got != "platform.IDTokenTransport(nil)" {
+		t.Errorf("FromEnv third argument = %s, want platform.IDTokenTransport(nil)", got)
+	}
+}
+
+func wtExprString(e ast.Expr) string {
+	var b strings.Builder
+	_ = printer.Fprint(&b, token.NewFileSet(), e)
+	return b.String()
+}
+
+// The erase worker main() builds is the one on the bundle, gets the account client FromEnv built,
+// and has its River client set after queue.New and before the queue is handed to the app.
+func TestWorkerMain_WiresTheEraseWorker(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/worker/main.go: %v", err)
+	}
+	poolName := wtAppPool(t, f)
+	accountName, fromEnvArgs := wtOneCall(t, f, "gotrueadmin.FromEnv")
+	xwName, xwArgs := wtOneCall(t, f, "newEraseWorker")
+	qName, _ := wtOneCall(t, f, "queue.New")
+	if got := wtExprString(fromEnvArgs[0]); got != "os.Getenv" {
+		t.Errorf("FromEnv first argument = %s, want os.Getenv", got)
+	}
+
+	var modeName, hsName, rsName string
+	for _, stmt := range wtMainBody(t, f) {
+		as, ok := stmt.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 || len(as.Lhs) != 4 {
+			continue
+		}
+		if c, ok := as.Rhs[0].(*ast.CallExpr); ok && wtCallName(c.Fun) == "notifications.DeliveryClients" {
+			modeName, hsName, rsName = wtExprString(as.Lhs[0]), wtExprString(as.Lhs[1]), wtExprString(as.Lhs[2])
+		}
+	}
+	if modeName == "" {
+		t.Fatal("main() has no notifications.DeliveryClients assignment with four results")
+	}
+	if len(xwArgs) != 6 {
+		t.Fatalf("newEraseWorker is called with %d argument(s), want 6", len(xwArgs))
+	}
+	for i, want := range []string{poolName, modeName, hsName, rsName, accountName, "app.Logger"} {
+		if got := wtExprString(xwArgs[i]); got != want {
+			t.Errorf("newEraseWorker argument %d = %s, want %s", i, got, want)
+		}
+	}
+
+	var bundle *ast.CallExpr
+	ast.Inspect(f, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok && wtCallName(c.Fun) == "workerBundle" {
+			bundle = c
+		}
+		return true
+	})
+	if bundle == nil || len(bundle.Args) != 6 {
+		t.Fatal("main() has no six-argument workerBundle call")
+	}
+	if got := wtExprString(bundle.Args[5]); got != xwName {
+		t.Errorf("workerBundle sixth argument = %s, want %s, the worker newEraseWorker built", got, xwName)
+	}
+
+	newIdx, riverIdx, addIdx := -1, -1, -1
+	for i, stmt := range wtMainBody(t, f) {
+		switch s := stmt.(type) {
+		case *ast.AssignStmt:
+			if c, ok := s.Rhs[0].(*ast.CallExpr); ok && wtCallName(c.Fun) == "queue.New" {
+				newIdx = i
+			}
+			for j, l := range s.Lhs {
+				if wtExprString(l) == xwName+".River" && j < len(s.Rhs) && wtExprString(s.Rhs[j]) == qName+".River()" {
+					riverIdx = i
+				}
+			}
+		case *ast.ExprStmt:
+			if c, ok := s.X.(*ast.CallExpr); ok && wtCallName(c.Fun) == "app.AddBackgroundWorker" {
+				addIdx = i
+			}
+		}
+	}
+	if newIdx < 0 || addIdx < 0 {
+		t.Fatalf("matcher found queue.New at %d and app.AddBackgroundWorker at %d", newIdx, addIdx)
+	}
+	if riverIdx <= newIdx || riverIdx >= addIdx {
+		t.Errorf("%s.River = %s.River() is at statement %d, want between queue.New (%d) and app.AddBackgroundWorker (%d)", xwName, qName, riverIdx, newIdx, addIdx)
 	}
 }

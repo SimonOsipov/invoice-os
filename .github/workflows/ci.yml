@@ -848,7 +848,7 @@ jobs:
         run: make db-bootstrap
       - name: Apply all migrations (as migrator)
         run: make migrate-up
-      - name: Start the idp containers and mailpit (stdout is the URLs and the issuer only)
+      - name: Start the idp containers and mailpit (stdout is the URLs, the issuer and the key file path only)
         run: scripts/ci/idp-up.sh "$DATABASE_AUTH_ADMIN_URL" 5432 >> "$GITHUB_ENV"
       - name: Read the pinned supabase/auth tag
         run: echo "IDP_PINNED_TAG=$(go run ./internal/tools/idppin tag sidecar/auth/Dockerfile)" >> "$GITHUB_ENV"

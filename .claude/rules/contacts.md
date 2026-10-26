@@ -9,6 +9,7 @@ paths:
 # Contact sync
 
 - Never put an email address or a name in a log line or an error.
+- Log a user id as `user.id`, never `user_id`. `scrubLog` drops `user.*` from Sentry Logs (`TestSentryLogBridge_DropsUserDotAttributes`).
 - Never wait on a vendor in signup, sign-in or the demo route.
 - Write a registrant to `registrant_handoffs` before the response, once. The worker moves the row into a `registrant_intake` River job. Without `DATABASE_GATEWAY_URL` the gateway posts to notifications in the background.
 - Hand a registrant off after `POST /auth/verify`, after `POST /auth/invitation/password` and after a sign-in whose user has `user_metadata.registration`.
@@ -32,6 +33,8 @@ paths:
 - Ask the PM before adding per-category segments.
 - Set the Marketing topic to `opt_in` once, for a ticked person. Record it in `resend_opt_in_sent_at`.
 - Never send Resend `unsubscribed`, `opt_out` or a second `opt_in` for registration and Marketing consent.
+- Exception: the erase deleted the Resend contact of an address that another account holds. The rebuild clears `resend_opt_in_sent_at`, so the next delivery sends the `opt_in` once more (`TestErase_ACleanContactGetsItsMarketingOptInBack`).
+- Keep the stamp when the contact was unsubscribed or opted out of Marketing (`TestErase_AnUnsubscribedContactStaysUnsubscribed`, `TestErase_AMarketingOptOutStaysOptedOut`).
 - Send a repeat Blog-topic `opt_in` after each confirmed double opt-in.
 - Queue no Resend job for a demo booker who did not tick.
 - Pick the mode from the vendor keys and `CONTACTS_FAKE`: `real`, `fake` or `off`. In `off` the worker fetches no `contacts` job.
@@ -48,3 +51,11 @@ paths:
 - Expect Cloud Armor on the production load balancer to throttle the demo route per client IP. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
 - Log no client IP on the demo route.
 - `ceiling:` the demo route has no double opt-in step. Add one before you send marketing email to its contacts.
+- Erase a HubSpot contact in this order: rename and delete each associated deal, then `gdpr-delete` by email.
+- Page the deals by reading the first page again after each delete. Never follow `after` across a delete (`TestHubSpotErase_DeletesEveryDealWhenThePagesShrink`).
+- Treat a vendor 404 on an erase call as success.
+- Erase a Resend contact with `DELETE /contacts/{email}`. Before it, read `unsubscribed` and the topic opt-outs with GET. After it, when another account holds the address, re-create the contact with that state (`TestErase_TheRebuildReadsTheStateBeforeTheDeleteAndRestoresIt`).
+- When Resend has no contact but another account's Resend delivery stamp is set, restore the contact unsubscribed (`TestErase_ARetryAfterAFailedRestoreRestoresUnsubscribed`).
+- Make no Resend suppression call in an erase.
+- Erase a person only through `EnqueueErasure`. The worker sweeps local copies in one transaction before any vendor call.
+- Never put an email, a name or a user id in an erase log line or error.

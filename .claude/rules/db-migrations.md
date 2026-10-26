@@ -21,7 +21,9 @@ paths:
 - Give `invoice_app` SELECT, INSERT and UPDATE on `rollup_snapshots`. The purge, the reset and the FK cascade remove its rows.
 - Give `invoice_app` UPDATE on `tenants.deletion_scheduled_at` and `tenants.deletion_scheduled_by` only. The trigger `tenants_deletion_guard` sets `deletion_due_at` and refuses the house tenant.
 - Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `blog_categories`, `blog_posts` and `blog_post_covers`. They are global: no RLS.
-- Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `blog_subscription_requests`, and SELECT, INSERT and UPDATE on `blog_subscribers`. Both are global: no RLS.
+- Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `blog_subscription_requests`, and SELECT, INSERT, UPDATE and DELETE on `blog_subscribers`. Both are global: no RLS.
+- Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `contacts`. Only the erase routine deletes a contact.
+- Give `invoice_app` SELECT, INSERT and UPDATE on `person_erasures`. It is global: no RLS.
 - Staff read authors only through `public.staff_read_blog_authors`.
 - Treat `submission_job_state_counts` as callable by every `invoice_app` service. It returns per-state counts only.
 - Copy the `tenants` template for a new tenant table. Use `ENABLE` and `FORCE ROW LEVEL SECURITY` and a `tenant_isolation` policy.

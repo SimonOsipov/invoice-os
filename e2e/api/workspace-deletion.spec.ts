@@ -20,6 +20,7 @@ import {
   registerFresh,
   scheduleDeletion,
   setDeletionLinkToken,
+  refreshSession,
   signInSession,
   subjectOf,
   type PendingInvite,
@@ -209,11 +210,13 @@ test.describe.serial('cancel link (API E2E, over the deployed gateway)', () => {
   async function join(prefix: string, role: 'admin' | 'preparer'): Promise<string> {
     const who = await registerFresh(prefix)
     await inviteWithToken(adminToken, tenantId, who.email, role)
-    const session = (await signInSession(who.email, who.password)).access_token
+    const first = await signInSession(who.email, who.password)
+    const session = first.access_token
     const [pending] = ((await listMine(session)).body as { invitations: PendingInvite[] }).invitations
     const accepted = await acceptById(session, pending.id, 'Cancel Link Member')
     expect(accepted.status, JSON.stringify(accepted.body)).toBe(200)
-    return (await signInSession(who.email, who.password)).access_token
+    // A refresh re-mints the claims, so one password sign-in per person is enough.
+    return refreshSession(first.refresh_token)
   }
 
   // Schedules A's workspace, runs fn, and unlocks it again whatever fn did.

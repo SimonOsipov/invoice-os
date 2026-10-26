@@ -55,52 +55,43 @@ func NewWorkspaceStore(pool *pgxpool.Pool, open ObjectOpener) *WorkspaceStore {
 	return s
 }
 
-// exportTag names the session of a running export; 53 bytes, under the 63-byte NAMEDATALEN cut.
-func exportTag(tenantID string) string { return "workspace-export:" + tenantID }
+// exportKey is the advisory-lock key of a workspace's export.
+const exportKey = `hashtextextended('workspace-export:' || $1::text, 0)`
 
-// sentCounter counts the bytes handed to w.
+// sentCounter counts the bytes handed to w; wrote is set at the first Write call.
 type sentCounter struct {
-	w io.Writer
-	n int64
+	w     io.Writer
+	n     int64
+	wrote bool
 }
 
 func (c *sentCounter) Write(p []byte) (int, error) {
+	c.wrote = true
 	n, err := c.w.Write(p)
 	c.n += int64(n)
 	return n, err
 }
 
-// claimWorkspaceExport tags the session and refuses when another session of the workspace carries the tag.
-// The tag lives until the transaction ends; the savepoint releases only the ordering lock.
+// claimWorkspaceExport takes the workspace's export lock for the rest of the transaction.
+// The try-lock is atomic, so of two simultaneous starts exactly one wins.
 func claimWorkspaceExport(ctx context.Context, tx pgx.Tx, tenantID string) error {
-	if _, err := tx.Exec(ctx, `SELECT set_config('application_name', $1, true)`, exportTag(tenantID)); err != nil {
-		return fmt.Errorf("archive: tag export: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `SAVEPOINT export_claim`); err != nil {
+	var got bool
+	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(`+exportKey+`)`, tenantID).Scan(&got); err != nil {
 		return fmt.Errorf("archive: claim export: %w", err)
 	}
-	// one key for every workspace; it only orders two claims
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('workspace-export', 0))`); err != nil {
-		return fmt.Errorf("archive: lock export claim: %w", err)
-	}
-	running, err := exportRunning(ctx, tx, tenantID)
-	if err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `ROLLBACK TO SAVEPOINT export_claim`); err != nil {
-		return fmt.Errorf("archive: release export claim: %w", err)
-	}
-	if running {
+	if !got {
 		return ErrExportRunning
 	}
 	return nil
 }
 
+// exportRunning reads the lock without taking it, so a preflight never blocks an export.
 func exportRunning(ctx context.Context, tx pgx.Tx, tenantID string) (bool, error) {
 	var running bool
-	err := tx.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = $1 AND pid <> pg_backend_pid())`,
-		exportTag(tenantID)).Scan(&running)
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks, (SELECT `+exportKey+` AS k) x
+		WHERE locktype = 'advisory' AND granted AND objsubid = 1
+		AND classid::bigint = (x.k >> 32) & 4294967295 AND objid::bigint = x.k & 4294967295)`,
+		tenantID).Scan(&running)
 	if err != nil {
 		return false, fmt.Errorf("archive: read running exports: %w", err)
 	}
@@ -156,9 +147,9 @@ func (s *WorkspaceStore) AssembleWorkspace(ctx context.Context, w io.Writer, onS
 	}
 
 	var (
-		started, committed bool
-		bw                 *bundleWriter
-		sent               = &sentCounter{w: w}
+		committed bool
+		bw        *bundleWriter
+		sent      = &sentCounter{w: w}
 	)
 	err := db.WithinTenantTxOpts(ctx, s.pool, id.TenantID, workspaceExportTxOptions, func(tx pgx.Tx) error {
 		var status, role string
@@ -195,7 +186,6 @@ func (s *WorkspaceStore) AssembleWorkspace(ctx context.Context, w io.Writer, onS
 		if onStart != nil {
 			onStart("ASComply_workspace_" + entitySlug(tenantName, id.TenantID) + "_" + now.UTC().Format("20060102") + ".zip")
 		}
-		started = true
 		bw = newBundleWriter(sent)
 
 		taken := map[string]bool{}
@@ -234,7 +224,7 @@ func (s *WorkspaceStore) AssembleWorkspace(ctx context.Context, w io.Writer, onS
 		// Close alone writes the central directory; a failure here keeps the committed row.
 		return bw.Close()
 	}
-	if started && !committed {
+	if sent.wrote && !committed {
 		actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 		if aerr := s.auditFailed(actx, id, len(bw.entries), sent.n); aerr != nil {

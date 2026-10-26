@@ -191,11 +191,11 @@ type wsDoc struct {
 
 type wsFx struct {
 	tenant, admin, preparer, reviewer, suspended string
-	label                              string
-	alpha, beta                        string
-	invoiceNumbers                     []string
-	exchange                           string
-	docs                               []wsDoc
+	label                                        string
+	alpha, beta                                  string
+	invoiceNumbers                               []string
+	exchange                                     string
+	docs                                         []wsDoc
 }
 
 type wsRig struct {
@@ -838,29 +838,113 @@ func TestRLS_AnotherWorkspaceExportsWhileOneRuns(t *testing.T) {
 	}
 }
 
+// exportLockCount counts the granted export locks of the workspace $1.
+const exportLockCount = `SELECT count(*) FROM pg_locks, (SELECT ` + exportKey + ` AS k) x
+	WHERE locktype = 'advisory' AND granted AND objsubid = 1
+	AND classid::bigint = (x.k >> 32) & 4294967295 AND objid::bigint = x.k & 4294967295`
+
+// 40 pairs of simultaneous starts: exactly one proceeds, the other is refused.
+func TestRLS_OfTwoSimultaneousStartsExactlyOneProceeds(t *testing.T) {
+	rig := newWsRig(t)
+	fx := rig.plant(t, "pair", shapeOneDoc)
+	ctx := idCtx(fx.admin, fx.tenant)
+
+	for i := 0; i < 40; i++ {
+		type res struct {
+			gate *wsGate
+			done chan error
+		}
+		var rs [2]res
+		start := make(chan struct{})
+		for j := range rs {
+			g := newGate(t)
+			rs[j] = res{gate: g, done: make(chan error, 1)}
+			sink, s := g.sink(), rig.store()
+			go func(done chan error) { <-start; done <- s.AssembleWorkspace(ctx, sink, noStart) }(rs[j].done)
+		}
+		close(start)
+
+		running, refused := 0, 0
+		for deadline := time.After(30 * time.Second); running+refused < 2; {
+			for j := range rs {
+				select {
+				case <-rs[j].gate.started:
+					running++
+					rs[j].gate.started = nil
+				case err := <-rs[j].done:
+					if !errors.Is(err, ErrExportRunning) {
+						t.Fatalf("pair %d: a start ended with %v, want ErrExportRunning", i, err)
+					}
+					refused++
+					rs[j].done = nil
+				case <-deadline:
+					t.Fatalf("pair %d: running %d refused %d after 30s", i, running, refused)
+				default:
+				}
+			}
+			time.Sleep(time.Millisecond)
+		}
+		if running != 1 || refused != 1 {
+			t.Fatalf("pair %d: running %d refused %d, want 1 and 1", i, running, refused)
+		}
+		for j := range rs {
+			rs[j].gate.let()
+			if rs[j].done != nil {
+				if err := <-rs[j].done; err != nil {
+					t.Fatalf("pair %d: the winner failed: %v", i, err)
+				}
+			}
+		}
+	}
+}
+
+func TestRLS_AFailureBeforeTheFirstByteWritesNoAuditRow(t *testing.T) {
+	rig := newWsRig(t)
+	fx := rig.plant(t, "pre-byte", shapeOneDoc)
+
+	ctx, cancel := context.WithCancel(idCtx(fx.admin, fx.tenant))
+	defer cancel()
+	sink := &wsSink{}
+	err := rig.store().AssembleWorkspace(ctx, sink, func(string) { cancel() })
+	if err == nil {
+		t.Fatal("AssembleWorkspace returned nil after the context was cancelled before the first byte")
+	}
+	if sink.n != 0 {
+		t.Fatalf("control: %d writes reached the sink, want 0 before the first byte", sink.n)
+	}
+	if n := rig.countEvent(t, fx.tenant, "workspace.export_failed") + rig.countEvent(t, fx.tenant, "workspace.exported"); n != 0 {
+		t.Errorf("audit rows after a pre-byte failure = %d, want 0", n)
+	}
+
+	gone := &wsSink{hook: func(int, []byte) error { return errors.New("client went away") }}
+	if err := rig.store().AssembleWorkspace(idCtx(fx.admin, fx.tenant), gone, noStart); err == nil {
+		t.Fatal("AssembleWorkspace returned nil though the first write failed")
+	}
+	if n := rig.countEvent(t, fx.tenant, "workspace.export_failed"); n != 1 {
+		t.Errorf("workspace.export_failed rows after a failure at the first byte = %d, want 1", n)
+	}
+}
+
 func TestRLS_TheWorkspaceClaimEndsWithItsTransaction(t *testing.T) {
 	rig := newWsRig(t)
 	fx := rig.plant(t, "claim", shapeOneDoc)
 	s := rig.store()
 	ctx := idCtx(fx.admin, fx.tenant)
-	tag := "workspace-export:" + fx.tenant
 
-	if got := exportTag(fx.tenant); got != tag {
-		t.Errorf("exportTag = %q, want %q", got, tag)
-	}
 	sessions := func() int {
 		var n int
-		if err := rig.super.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity WHERE application_name = $1`, tag).Scan(&n); err != nil {
-			t.Fatalf("read pg_stat_activity: %v", err)
+		if err := rig.super.QueryRow(context.Background(), exportLockCount, fx.tenant).Scan(&n); err != nil {
+			t.Fatalf("read pg_locks: %v", err)
 		}
 		return n
 	}
+	tag := "the export lock of " + fx.tenant
 	settles := func(label string) {
 		t.Helper()
 		deadline := time.Now().Add(3 * time.Second)
 		for sessions() != 0 {
 			if time.Now().After(deadline) {
-				t.Fatalf("%s: %d session(s) still carry %q", label, sessions(), tag)
+				t.Fatalf("%s: %d session(s) still hold %q", label, sessions(), tag)
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
@@ -868,7 +952,7 @@ func TestRLS_TheWorkspaceClaimEndsWithItsTransaction(t *testing.T) {
 
 	run := startBlockedExport(t, s, ctx)
 	if n := sessions(); n != 1 {
-		t.Errorf("sessions tagged %q during the export = %d, want exactly 1", tag, n)
+		t.Errorf("holders of %q during the export = %d, want exactly 1", tag, n)
 	}
 	if err := run.finish(t); err != nil {
 		t.Fatalf("the held export failed: %v", err)

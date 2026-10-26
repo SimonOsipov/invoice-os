@@ -80,6 +80,8 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
   'workspace.deletion_cancelled': { label: 'Workspace deletion cancelled', domain: 'memberships', outcome: 'neutral' },
   'workspace.exported': { label: 'Workspace exported', domain: 'memberships', outcome: 'neutral' },
   'workspace.export_failed': { label: 'Workspace export failed', domain: 'memberships', outcome: 'bad' },
+  'membership.account_deleted': { label: 'Account deleted', domain: 'memberships', outcome: 'neutral' },
+  'membership.admin_handed_on': { label: 'Admin handed on', domain: 'memberships', outcome: 'neutral' },
   'workspace.provisioned': { label: 'Workspace created', domain: 'memberships' },
   'invitation.sent': { label: 'Invite sent', domain: 'memberships' },
   'invitation.resent': { label: 'Invite resent', domain: 'memberships' },

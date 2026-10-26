@@ -101,6 +101,8 @@ func triggerRuleDPayloads(invoiceID string) map[string]map[string]any {
 		"workspace.deletion_cancelled": {"due_at": "2026-11-24T00:00:00Z"},
 		"workspace.exported":           {"files": 3, "bytes": 1024},
 		"workspace.export_failed":      {"files": 2, "bytes": 512},
+		"membership.account_deleted":   {"user_id": userID, "role": "preparer"},
+		"membership.admin_handed_on":   {"user_id": userID, "from": "preparer", "to": "admin"},
 	}
 }
 

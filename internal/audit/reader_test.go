@@ -173,6 +173,7 @@ var readerFirmWideEvents = []string{
 	"custom_rule.created", "custom_rule.updated", "custom_rule.deleted",
 	"workspace.deletion_scheduled", "workspace.deletion_cancelled",
 	"workspace.exported", "workspace.export_failed",
+	"membership.account_deleted", "membership.admin_handed_on",
 }
 
 // readerDocumentEvents are the three document.* names the SQL resolver also leaves

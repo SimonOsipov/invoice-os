@@ -524,8 +524,7 @@ type auditPlanCorpus struct {
 }
 
 // seedAuditPlanCorpus inserts 20 tenants x 1,000 audit rows over 90 days, plus 1,480 one-row tenants, in tx and analyzes the tables.
-// The thin tenants take the table past 1,500 distinct tenant ids, where the planner stops using the tenant-leading skip scan.
-// The caller rolls tx back: audit_log is append-only, and leftover rows would push the table past the audit migrations' 500,000-row ceiling.
+// The caller rolls tx back: audit_log is append-only.
 func seedAuditPlanCorpus(t *testing.T, tx pgx.Tx) auditPlanCorpus {
 	t.Helper()
 	ctx := context.Background()
@@ -586,7 +585,6 @@ func seedAuditPlanCorpus(t *testing.T, tx pgx.Tx) auditPlanCorpus {
 
 func TestRLS_StaffReadAuditLogPlansReadAnIndex(t *testing.T) {
 	requireHarness(t)
-	requireStaffReadAuditLog(t)
 	ctx := context.Background()
 	superDSN, _ := migratedScratchDB(t, migrations.FS)
 

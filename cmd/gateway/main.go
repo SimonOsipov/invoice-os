@@ -75,7 +75,9 @@ func main() {
 	// (comma-separated); empty grants no browser origin (the production default).
 	withCORS := gateway.CORS(strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ","))
 
+	gwPool := gatewayPool(app.Logger)
 	sessions := gateway.NewSessionChecker(probed["auth"], &http.Client{Timeout: gateway.SessionCheckTimeout, Transport: platform.IDTokenTransport(nil)}, time.Now, app.Logger)
+	sessions.Shared(gwPool)
 	apiHandler, fleetHandler := gatewayHandlers(verifier, sessions, routed, probed, map[string]string{"auth": ".well-known/jwks.json"}, app.Logger, gatewayToken)
 	app.Mux.Handle(routePrefix, withCORS(apiHandler))
 
@@ -100,8 +102,6 @@ func main() {
 		platform.Fatal(app.Logger, "gateway: verify page: %v", err)
 	}
 
-	gwPool := gatewayPool(app.Logger)
-
 	// One sink for both hand-off paths; the sink bounds each call and never follows a redirect.
 	sink := registrantSink(gwPool, gateway.NewHTTPContactSink(routed["notifications"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken))
 
@@ -109,7 +109,7 @@ func main() {
 
 	// Public registration, outside /api/ and the verifier, in every build. Register is
 	// CORS-wrapped for the landing page; the OPTIONS route stops the POST route 405ing the preflight.
-	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger, sink, pending, nil)
+	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger, sink, pending, gwPool)
 	app.Mux.Handle("POST /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("OPTIONS /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("POST /auth/resend-verification", withCORS(reg.ResendVerification))
@@ -140,7 +140,7 @@ func main() {
 	app.Mux.Handle("GET /blog/covers/{id}/{version}", blogRead.Cover)
 	app.Mux.Handle("GET /blog/posts/", withCORS(blogRead.NotFound))
 	app.Mux.Handle("GET /blog/covers/", blogRead.NotFound)
-	blogSubscribe := blogSubscribeHandlers(routed["notifications"], gatewayToken, registerMinResponse, app.Logger, nil)
+	blogSubscribe := blogSubscribeHandlers(routed["notifications"], gatewayToken, registerMinResponse, app.Logger, gwPool)
 	app.Mux.Handle("POST /blog/subscriptions", withCORS(blogSubscribe.Subscribe))
 	app.Mux.Handle("OPTIONS /blog/subscriptions", withCORS(blogSubscribe.Subscribe))
 	app.Mux.Handle("POST /blog/subscriptions/confirm", withCORS(blogSubscribe.Confirm))
@@ -275,6 +275,7 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 	}
 	// Resend and reset share one budget per address.
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
+	perAddress.Shared(pool, log)
 	return registration{
 		Register:             gateway.RegisterHandler(authURL, client, minResponse, log, pending),
 		ResendByAddress:      perAddress,
@@ -293,6 +294,7 @@ func blogHandlers(notifications *url.URL, gatewayToken string, log *slog.Logger)
 func blogSubscribeHandlers(notifications *url.URL, gatewayToken string, minResponse time.Duration, log *slog.Logger, pool *pgxpool.Pool) gateway.BlogSubscribeRoutes {
 	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
 	perEmail := gateway.NewSignInThrottle("blog-subscribe-email", gateway.BlogSubscribePerEmail, gateway.BlogSubscribeMaxKeys, gateway.BlogSubscribeWindow, time.Now)
+	perEmail.Shared(pool, log)
 	return gateway.BlogSubscribeHandlers(notifications, &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken, minResponse, perEmail, enforce, log)
 }
 
@@ -356,6 +358,7 @@ func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker
 		store = gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
 	}
 	throttle := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
+	throttle.Shared(pool, log)
 	// Same settings as registrationHandlers; TestRegistrationClientTimeoutAndNoFollow pins that literal in place.
 	client := &http.Client{
 		Timeout:       10 * time.Second,

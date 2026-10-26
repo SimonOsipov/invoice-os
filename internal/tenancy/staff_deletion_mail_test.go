@@ -318,3 +318,44 @@ func TestStaffCancelMail_TheOutcomeIsRecordedOnThePathTenant(t *testing.T) {
 		})
 	}
 }
+
+func TestStaffDeletionMail_AnAdminWithoutAnEmailGetsNoLinkOrCancelMail(t *testing.T) {
+	w := newStaffMailWorld(t)
+	clearEmail(t, w.super, w.a2)
+	sender := &apiSender{}
+	n, _ := notifierFor(w.invWorld, sender)
+
+	if _, err := n.StaffSchedule(w.ctx, w.tenant, staffReasonText); err != nil {
+		t.Fatalf("StaffSchedule: %v", err)
+	}
+	if rows := linkRows(t, w.super, w.tenant); len(rows) != 1 || rows[0].Recipient != w.a1 {
+		t.Fatalf("link rows = %+v, want one for %s", rows, w.a1)
+	}
+	if err := n.StaffCancel(w.ctx, w.tenant, staffReasonText); err != nil {
+		t.Fatalf("StaffCancel: %v", err)
+	}
+	if rows := cancelMailRows(t, w.super, w.tenant); len(rows) != 1 || rows[0].Recipient != w.a1 {
+		t.Fatalf("cancel-mail rows = %+v, want one for %s", rows, w.a1)
+	}
+}
+
+func TestStaffDeletionMail_TheMailedDateIsTheStoredDueDate(t *testing.T) {
+	w := newStaffMailWorld(t)
+	sender := &apiSender{}
+	n, _ := notifierFor(w.invWorld, sender)
+
+	if _, err := n.StaffSchedule(w.ctx, w.tenant, staffReasonText); err != nil {
+		t.Fatalf("StaffSchedule: %v", err)
+	}
+	stored := deletionOf(t, w.super, w.tenant).DueAt
+	if stored == nil {
+		t.Fatal("no stored due date")
+	}
+	want := stored.UTC().Format("2 January 2006") + " (UTC)"
+	msgs := requireOneBatchTo(t, sender, w.wantRecipients())
+	for _, m := range msgs {
+		if !strings.Contains(m.HTML, want) {
+			t.Errorf("notice to %s lacks the stored due date %q", m.To, want)
+		}
+	}
+}

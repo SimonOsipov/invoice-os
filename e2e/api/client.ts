@@ -167,10 +167,10 @@ export async function registerFresh(prefix = 'handoff', password?: string): Prom
 // Signs in once before provisioning (the hand-off) and again after (the tenant claim).
 export async function registerFormAccount(
   prefix: string,
-  opts: { marketingConsentText?: string } = {},
+  opts: { marketingConsentText?: string; workspaceName?: string } = {},
 ): Promise<{ account: RealAccount; token: string }> {
   const id = crypto.randomUUID()
-  const account: RealAccount = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: `Contacts E2E ${id.slice(0, 8)}`, displayName: 'Contacts E2E' }
+  const account: RealAccount = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: opts.workspaceName ?? `Contacts E2E ${id.slice(0, 8)}`, displayName: 'Contacts E2E' }
   const res = await rawFetch('/auth/register', {
     method: 'POST',
     body: {

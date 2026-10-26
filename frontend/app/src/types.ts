@@ -210,7 +210,7 @@ export type Mapping = Record<string, string | null>
 // to the tab strip conditionally on ctx.mode, it is never in the shared SETTINGS_TABS list
 // (data.tsx). A firm workspace already has a dedicated multi-entity portfolio screen
 // (ClientsView); in-house's is single-entity and lives in Settings instead ([entity-picker]).
-export type SettingsTab = 'members' | 'roles' | 'connectors' | 'api' | 'signing' | 'company'
+export type SettingsTab = 'members' | 'roles' | 'connectors' | 'api' | 'signing' | 'company' | 'workspace'
 
 export type ConnectorId = 'sap' | 'quickbooks' | 'oracle' | 'sage' | 'odoo' | 'dynamics'
 

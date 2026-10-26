@@ -42,7 +42,7 @@
 // auth/error shaping (IMPAPI-20 is the anti-fork guard, mirroring PRV-16's role on the
 // backend).
 //
-// makeImportAuth(session, onUnauthorized, onSuspended, freshToken) mirrors makeAuthedFetch with
+// makeImportAuth mirrors makeAuthedFetch with
 // the same parameters. The token is read at CALL time (the renewer's
 // getter, or `session.token`), never captured at construction.
 //

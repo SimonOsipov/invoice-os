@@ -246,6 +246,7 @@ export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'connectors', label: 'ERP connectors' },
   { id: 'api', label: 'API & webhooks' },
   { id: 'signing', label: 'Signing & certificates' },
+  { id: 'workspace', label: 'Workspace' },
 ]
 
 export const API_BASE = 'https://api.ascomply.com/v1'

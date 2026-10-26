@@ -130,12 +130,19 @@ func budgetFleet(t *testing.T, r previewRun) int {
 
 func TestPreviewDeployMaxInstancesByService(t *testing.T) {
 	t.Parallel()
-	r := runPreview(t, nil, "deploy", "7", "abc123", "gateway", "auth", "worker", "portfolio", "tenancy", "docling")
+	want := map[string]string{"gateway": "3", "auth": "1", "worker": "1", "portfolio": "2", "tenancy": "3", "docling": "3",
+		"invoice": "3", "validation": "2", "dashboard": "2", "submission": "2", "notifications": "2",
+		"app": "3", "landing": "3", "library": "3", "blog": "3", "ops-console": "3", "support-console": "3"}
+	all := append(previewList(t, "BACKENDS"), previewList(t, "SITES")...)
+	if len(all) != len(want) {
+		t.Fatalf("preview.sh lists %d services, table has %d", len(all), len(want))
+	}
+	r := runPreview(t, nil, append([]string{"deploy", "7", "abc123"}, all...)...)
 	if r.code != 0 {
 		t.Fatalf("deploy exited %d: %s", r.code, r.stderr)
 	}
 	calls := deployCalls(t, r, "7")
-	for svc, want := range map[string]string{"gateway": "3", "auth": "1", "worker": "1", "portfolio": "2", "tenancy": "3", "docling": "3"} {
+	for svc, want := range want {
 		if got := flagValue(calls[svc], "--max-instances"); got != want {
 			t.Errorf("%s --max-instances = %q, want %s", svc, got, want)
 		}
@@ -233,6 +240,9 @@ func TestPreviewSecretsAddsAVersionWhenThePoolDiffers(t *testing.T) {
 	}, "secrets", "7")
 	if r.code != 0 {
 		t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+	}
+	if !strings.Contains(r.stdout, "updated pr-7-database-app-url") || strings.Contains(r.stdout+r.stderr, "postgres://") {
+		t.Errorf("rollover output must name the secret and never a DSN:\n%s%s", r.stdout, r.stderr)
 	}
 	if got := r.file(t, "added-pr-7-database-app-url"); got != dsn+"1" {
 		t.Errorf("new app version = %q, want %q", got, dsn+"1")

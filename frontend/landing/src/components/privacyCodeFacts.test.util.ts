@@ -1,9 +1,11 @@
 // What the privacy page must describe, read from the Go and TS sources that do it.
+// ceiling: the CI frontend filter skips Go-only PRs, so these readers run with a frontend change only; add internal/** and migrations/** to the filter if a Go-only PR falsifies a sentence
 // A parse miss throws, so a moved fact fails the test instead of emptying the oracle.
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
+import { APP_LABELS, PRIVACY_CONTACT } from './Privacy'
 
 const REPO = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
 
@@ -191,3 +193,37 @@ export function confirmPageSaysOneClickUnsubscribe(): boolean {
 // The pinned Blog chat paragraph; Privacy.render.test.tsx pins it in place, Privacy.claims.test.tsx reads its HubSpot sentence.
 export const BLOG_CHAT_PARAGRAPH =
   "If you have allowed analytics, the Blog shows HubSpot's live chat, which loads only after you choose Accept, sends HubSpot, about its own pages, what is described under Live chat below, and is removed, with HubSpot's cookies, when you choose Reject on any of our sites."
+
+// The five labels of APP_LABELS, read from the app files that render them.
+export function appLabels(
+  src: { account: string; workspace: string; data: string; glyphs: string } = {
+    account: readSource('frontend/app/src/lib/accountDeletion.ts'),
+    workspace: readSource('frontend/app/src/lib/workspaceDeletion.ts'),
+    data: readSource('frontend/app/src/data.tsx'),
+    glyphs: readSource('frontend/app/src/glyphs.tsx'),
+  },
+): typeof APP_LABELS {
+  return {
+    page: found(/ACCOUNT_PAGE\s*=\s*\{\s*title:\s*'([^']+)'/.exec(src.account)?.[1], 'ACCOUNT_PAGE title') as 'Your account',
+    deleteAccount: found(/DELETE_ACCOUNT\s*=\s*\{\s*title:\s*'([^']+)'/.exec(src.account)?.[1], 'DELETE_ACCOUNT title') as 'Delete my account',
+    settings: found(/NAV_SETTINGS\b[^=]*=\s*\{\s*id:\s*'settings',\s*label:\s*'([^']+)'/.exec(src.glyphs)?.[1], 'NAV_SETTINGS label') as 'Settings',
+    workspaceTab: found(/\{\s*id:\s*'workspace',\s*label:\s*'([^']+)'/.exec(src.data)?.[1], 'the workspace settings tab') as 'Workspace',
+    deleteWorkspace: found(/DELETE_WORKSPACE\s*=\s*\{[^}]*?button:\s*'([^']+)'/.exec(src.workspace)?.[1], 'DELETE_WORKSPACE button') as 'Delete workspace',
+  }
+}
+
+// The sidebar name card opens the account page and is labelled with it.
+export function sidebarOpensAccountPage(
+  src: string = readSource('frontend/app/src/components/Sidebar.tsx'),
+): boolean {
+  const at = src.indexOf('data-testid="identity-card-account"')
+  const card = at < 0 ? '' : src.slice(src.lastIndexOf('<button', at), src.indexOf('style=', at))
+  return card.includes("ctx.nav('account')") && card.includes(`aria-label="${APP_LABELS.page}"`)
+}
+
+// Sentences the page states about deletion; Privacy.render.test.tsx pins each verbatim on the page.
+export const DELETION_SENTENCES: readonly { id: string; text: string }[] = [
+  { id: 'W1', text: `If you cannot sign in to an account, or never had one, email ${PRIVACY_CONTACT} and tell us what you want done, and we will act on it.` },
+  { id: 'W2', text: `If you can sign in, you can delete your account yourself: open ${APP_LABELS.page}, from your name at the foot of the sidebar, and choose ${APP_LABELS.deleteAccount}.` },
+  { id: 'W3', text: 'If you have registered or booked a demo, the records we hold are in HubSpot, in Resend and on our own server, and we can delete them.' },
+]

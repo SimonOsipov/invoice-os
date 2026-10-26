@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
 
-import { ANALYTICS_DEFAULT_SENTENCE, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
+import { ANALYTICS_DEFAULT_SENTENCE, APP_LABELS, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { CONSENT_TEXT } from './demoForm'
 import { APP_NOTICE_BODY, CookieNotice } from './CookieNotice'
 import { PRODUCTION_HOSTNAMES, submissionUrl } from '../hubspot'
@@ -39,6 +39,7 @@ import {
   resendContactKeys,
   resendSkipsUntickedDemoBooker,
   BLOG_CHAT_PARAGRAPH,
+  DELETION_SENTENCES,
 } from './privacyCodeFacts.test.util'
 
 const SRC_DIR = fileURLToPath(new URL('.', import.meta.url))
@@ -656,6 +657,47 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     }
     expect(write).toMatch(/delete/i)
     expect(write, 'a registrant record is not covered').toMatch(/regist/i)
+  })
+
+  const deletionSentence = (id: string): string => DELETION_SENTENCES.find((s) => s.id === id)!.text
+  const writeToUsItem = (): string => {
+    const at = html.indexOf('<strong>Write to us.</strong>')
+    expect(at, 'the "Write to us" item is gone').toBeGreaterThan(-1)
+    return html.slice(html.lastIndexOf('<li', at), html.indexOf('</li>', at))
+  }
+
+  it('DEL-10-01 W2 the Write-to-us item names Your account and Delete my account', () => {
+    const write = plain(writeToUsItem())
+    expect(write).toContain(APP_LABELS.page)
+    expect(write).toContain(APP_LABELS.deleteAccount)
+    expect(write).toContain(deletionSentence('W2'))
+  })
+
+  it('DEL-10-01 W1 email stays the route for a person without access', () => {
+    const item = writeToUsItem()
+    expect(plain(item)).toContain(deletionSentence('W1'))
+    expect(item).toContain(`href="mailto:${PRIVACY_CONTACT}"`)
+  })
+
+  it('DEL-10-01 W1 is not a second contact address', () => {
+    expect(writeToUsItem().match(/href="mailto:/g)).toHaveLength(1)
+    const src = readFileSync(PRIVACY_TSX, 'utf8')
+    expect(src.split(PRIVACY_CONTACT)).toHaveLength(2)
+  })
+
+  it('DEL-10-01 the ordered list keeps four items', () => {
+    const at = html.indexOf('<strong>Write to us.</strong>')
+    const list = html.slice(html.lastIndexOf('<ol', at), html.indexOf('</ol>', at))
+    expect(list.match(/<li[ >]/g)).toHaveLength(4)
+    expect(plain(html)).toContain('None of the four stops Google Fonts')
+  })
+
+  it('DEL-10-01 W3 follows W2 and the Sentry sentence follows W3', () => {
+    const write = plain(writeToUsItem())
+    const order = ['W1', 'W2', 'W3'].map((id) => write.indexOf(deletionSentence(id)))
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    expect(order[0]).toBeGreaterThan(-1)
+    expect(write.indexOf('a Sentry error report')).toBeGreaterThan(order[2])
   })
 
   it('C14: the page says the marketing sentence is stored with its time', () => {

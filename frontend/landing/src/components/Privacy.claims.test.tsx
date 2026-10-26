@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { AI_PROVIDER_HOST, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
+import { AI_PROVIDER_HOST, APP_LABELS, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { Footer } from './Footer'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
@@ -23,6 +23,7 @@ import { APP_HOSTNAMES, PRODUCTION_HOSTNAMES } from '../hubspot'
 import { BLOG_BASE, LIBRARY_BASE } from '../sitePaths'
 import {
   aiModelVendors,
+  appLabels,
   aiProviderHosts,
   confirmLinkIsSingleUseAndExpires,
   confirmOverwritesSubscriber,
@@ -38,6 +39,7 @@ import {
   BLOG_CHAT_PARAGRAPH,
   resubscribeReplacesRequest,
   rulePutsUnsubscribeInEveryBroadcast,
+  sidebarOpensAccountPage,
   syncBlogAddsSegmentAndTopic,
   workerNamesHubSpot,
 } from './privacyCodeFacts.test.util'
@@ -814,5 +816,30 @@ describe("HEALTH-07: the sign-in service's reports", () => {
     const sentry = sentences(para).find((s) => s.includes('Sentry error report')) ?? ''
     expect(sentry, 'control: the Sentry sentence is missing').not.toBe('')
     expect(sentry).not.toMatch(/delete|days|months/i)
+  })
+})
+
+describe('DEL-10-01: APP_LABELS are the labels the app renders', () => {
+  it('DEL-10-01 APP_LABELS equal the labels the app renders', () => {
+    expect(appLabels()).toEqual(APP_LABELS)
+  })
+
+  it('DEL-10-01 appLabels throws when a label moves', () => {
+    const src = {
+      account: "export const DELETE_ACCOUNT = { title: 'Delete my account' } as const",
+      workspace: '',
+      data: '',
+      glyphs: '',
+    }
+    expect(() => appLabels(src)).toThrow(/ACCOUNT_PAGE title not found/)
+  })
+
+  it('DEL-10-01 the sidebar name card opens Your account', () => {
+    expect(sidebarOpensAccountPage()).toBe(true)
+  })
+
+  it('DEL-10-01 control: sidebarOpensAccountPage is false when the card opens another page', () => {
+    const planted = `<button type="button" onClick={() => ctx.nav('settings')} data-testid="identity-card-account" aria-label="Your account">`
+    expect(sidebarOpensAccountPage(planted)).toBe(false)
   })
 })

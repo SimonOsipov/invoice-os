@@ -14,6 +14,14 @@ export const HOSTING_REGION = 'africa-south1'
 export const PROSE_MAX_WIDTH = 720
 export const PRIVACY_CONTACT = 'sam@ascomply.com'
 export const ANALYTICS_DEFAULT_SENTENCE = 'Analytics is off unless you turn it on.'
+// Each label is pinned to the app source that renders it (appLabels in privacyCodeFacts.test.util.ts).
+export const APP_LABELS = {
+  page: 'Your account',
+  deleteAccount: 'Delete my account',
+  settings: 'Settings',
+  workspaceTab: 'Workspace',
+  deleteWorkspace: 'Delete workspace',
+} as const
 
 const PAGE_TITLE = 'Privacy and cookies — ASComply Africa'
 
@@ -385,11 +393,13 @@ export function Privacy() {
               does not stop the demo form.
             </li>
             <li style={ITEM}>
-              <strong>Write to us.</strong> Email{' '}
+              <strong>Write to us.</strong> If you cannot sign in to an account, or never had one, email{' '}
               <a href={`mailto:${PRIVACY_CONTACT}`} className="ios-link" style={LINK}>
                 {PRIVACY_CONTACT}
               </a>{' '}
-              and tell us what you want done, and we will act on it. If you have registered or booked a demo, the
+              and tell us what you want done, and we will act on it. If you can sign in, you can delete your account
+              yourself: open {APP_LABELS.page}, from your name at the foot of the sidebar, and choose{' '}
+              {APP_LABELS.deleteAccount}. If you have registered or booked a demo, the
               records we hold are in HubSpot, in Resend and on our own server, and we can delete them. When signing in, signing up, resetting a password or keeping you signed in fails on our side, a Sentry error report may also hold the email address of the account involved. Analytics data sits with Google under an identifier that is not tied to your
               name, so tell us as much as you can about when you visited.
             </li>

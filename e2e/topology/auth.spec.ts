@@ -1,5 +1,6 @@
 import { test, expect, type BrowserContext, type Frame, type Locator, type Page, type Request, type Response } from '@playwright/test'
-import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA, TENANTS } from './targets'
+import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA } from './targets'
+import { shardPersonas } from './importWizardShared'
 import { resolveTarget } from '../targets'
 import { DESTINATION_READY, VERIFIED, browserToken, collectErrors, expectInWorkspace, headerSignIn, isHandoffNavigation, passFrontDoor, sidebarRoster, signInAs, signInAtFrontDoor, signInDialog, submitSignIn } from '../personaSession'
 import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession, type ConsoleTarget } from '../staffSession'
@@ -25,7 +26,6 @@ import {
   signInForCode,
   signInSession,
   subjectOf,
-  PERSONAS as API_PERSONAS,
   type Me,
   type RealAccount,
   type TenantKind,
@@ -34,6 +34,8 @@ import { freshTin } from '../api/fixtures'
 import { seedConsent } from '../smoke/landingConsent'
 import { approvalRun404Dropper, consoleErrorsLine, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS } from './layout'
+
+const { SHARD, PERSONAS: API_PERSONAS } = shardPersonas('auth.spec.ts')
 
 // The public marketing landing page — sign-out's redirect target. Imported from the
 // BASE e2e/targets.ts, not this directory's ./targets: topology/targets.ts re-exports
@@ -46,7 +48,7 @@ const LANDING_URL = resolveTarget('LANDING_URL')
 test('deployed app: a real sign-in into 1111 renders the backend-verified tenant identity', async ({ page }) => {
   const errors = collectErrors(page)
 
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
 
   // The marker renders only once /v1/me resolved; the static label alone would pass on the fallback.
   await expect(page.locator(VERIFIED)).toBeAttached()
@@ -59,7 +61,7 @@ test('deployed app: a real sign-in into 1111 renders the backend-verified tenant
 test('deployed app: sign-out redirects to the landing page', async ({ page }) => {
   const errors = collectErrors(page)
 
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   // The app's mount reads 401 if Sign out lands mid-flight.
   await page.waitForLoadState('networkidle')
 
@@ -75,9 +77,9 @@ test('deployed app: sign-out redirects to the landing page', async ({ page }) =>
 test('deployed app: a second real sign-in replaces the session only after the first one is gone', async ({ page }) => {
   test.setTimeout(180_000)
   const errors = collectErrors(page)
-  const inhouse = await ensureMember(TENANTS.b.id, 'in_house')
+  const inhouse = await ensureMember(SHARD.b.id, 'in_house')
 
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await expect(page.locator('aside.pf-sidebar')).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
   const firmToken = await browserToken(page)
 
@@ -95,7 +97,7 @@ test('deployed app: a second real sign-in replaces the session only after the fi
   expect(await browserToken(page), 'a live session was replaced by a sign-in from landing').toBe(firmToken)
 
   // Once the stored session is gone, a real sign-in as the 2222 member takes the tab.
-  await signInAs(page, 'inhouse')
+  await signInAs(page, 'inhouse', { tenantId: SHARD.b.id })
   const sidebar = page.locator('aside.pf-sidebar')
   await expect(sidebar).toContainText(INHOUSE_PERSONA.tenantName.toUpperCase())
   // The positive assertion alone would pass while both identities render.
@@ -107,7 +109,7 @@ test('deployed app: a second real sign-in replaces the session only after the fi
 
 // The one case that proves the param is inert: with a live session it neither replaces it nor mints.
 test('deployed app: a ?persona=firm visit with a live session keeps that session and mints nothing', async ({ page }) => {
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   const before = await browserToken(page)
 
   const seen: string[] = []
@@ -149,7 +151,7 @@ test('deployed app: a visit with no session redirects to the landing page', asyn
 test("deployed app: Back walks the workspace's own history instead of leaving it", async ({ page }) => {
   const errors = collectErrors(page)
 
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
 
   const nav = page.locator('aside.pf-sidebar nav.pf-nav-list')
@@ -185,7 +187,7 @@ test("deployed app: Back walks the workspace's own history instead of leaving it
 test('deployed app: Forward re-applies the view Back left', async ({ page }) => {
   const errors = collectErrors(page)
 
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
 
   const nav = page.locator('aside.pf-sidebar nav.pf-nav-list')
   await nav.getByRole('button', { name: 'Invoices' }).click()
@@ -210,7 +212,7 @@ test("deployed app: Back from the session's first screen leaves for the landing 
 
   // The sign-in itself passes through landing, so landing is the only history entry before
   // the workspace: a Back landing there proves boot replaced the hand-off entry, not pushed.
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
 
   await page.goBack()
   await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
@@ -257,7 +259,7 @@ test("deployed app: Back from an invoice detail returns to the list, not the lan
     line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
   })
 
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
 
   // Invoices is a CLIENT-scoped surface: the list is filtered to ctx.active.entityId,
   // which signing in leaves at whatever clients[0] resolves to (portfolio's ORDER BY name
@@ -298,7 +300,7 @@ test("deployed app: Back from an invoice detail returns to the list, not the lan
 test('deployed app: a top-level path is a working deep link', async ({ page }) => {
   const errors = collectErrors(page)
 
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   const url = `${APP_URL}/audit`
   const res = await page.goto(url)
   expect(res, `no response from ${url}`).toBeTruthy()
@@ -354,7 +356,7 @@ test('deployed app: /invoices/<uuid> is a working deep link', async ({ page }) =
   const invoiceNumber = `INV-ROUTE02-CB-${Date.now()}`
   const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
 
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   const url = `${APP_URL}/invoices/${inv.id}`
   const res = await page.goto(url)
   expect(res, `no response from ${url}`).toBeTruthy()
@@ -374,7 +376,7 @@ test('deployed app: /invoices/<uuid> is a working deep link', async ({ page }) =
 test('deployed app: a settings tab is a working deep link', async ({ page }) => {
   const errors = collectErrors(page)
 
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   const url = `${APP_URL}/settings/roles`
   const res = await page.goto(url)
   expect(res, `no response from ${url}`).toBeTruthy()
@@ -407,7 +409,7 @@ test('deployed app: a signed-out deep link returns to its destination after sign
   const errors = collectErrors(page)
 
   // signInAs bounces the signed-out /audit visit through landing and the form, and waits for the marker.
-  await signInAs(page, 'firm', { path: '/audit' })
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: '/audit' })
 
   // The hand-off lands on the app ROOT (it carries no path), so arriving on /audit can only
   // have come from the restored destination. AuditView is a static import (App.tsx), so no
@@ -438,7 +440,7 @@ test('deployed app: a signed-out deep link returns to its FILTER after sign-in',
   const unknownInvoice = crypto.randomUUID()
 
   // The destination's ?invoice= query rides through the front door and comes back with the restore.
-  await signInAs(page, 'firm', { path: `/audit?invoice=${unknownInvoice}` })
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/audit?invoice=${unknownInvoice}` })
 
   await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
   await expect(page, 'the restored destination did not carry its ?invoice= filter back').toHaveURL(
@@ -509,7 +511,7 @@ test('deployed app: every top-level path cold-boots to its own screen', async ({
   ]
 
   // Each visit below is a cold boot on the stored session.
-  await signInAs(page, 'firm', { path: paths[0].path })
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: paths[0].path })
 
   for (const { path, heading } of paths) {
     const url = `${APP_URL}${path}`
@@ -550,7 +552,7 @@ test('deployed app: a review path cold-boots to the review surface', async ({ pa
   const entity = await createEntity(token, { name: `ROUTE-06 review cold-boot ${Date.now()}`, tin: freshTin() })
   const batchId = await createImportBatch(token, entity.id, `INV-ROUTE06-REVIEW-${Date.now()}`)
 
-  await signInAs(page, 'firm', { path: `/imports/${batchId}/review` })
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${batchId}/review` })
 
   await expect(page, 'the review deep link did not keep its batch id').toHaveURL(new RegExp(`/imports/${batchId}/review$`))
   await expect(page.getByText(`BATCH ${batchId}`), 'the review surface did not render its batch header').toBeVisible()
@@ -610,7 +612,7 @@ test("deployed app: Back past a company switch cannot resume the previous compan
     line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
   })
 
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
 
   const nav = page.locator('aside.pf-sidebar nav.pf-nav-list')
   await nav.getByRole('button', { name: 'Invoices' }).click()
@@ -1521,8 +1523,8 @@ test('landing forwards a verify code to the app', async ({ page }) => {
 // A confirm or invitee code over a live session: the app keeps the session, posts no exchange and shows the confirmed notice.
 // `entry` is the app's bounce entry. Returns the exchange POSTs and every request seen after the sign-in.
 async function confirmOverLiveSession(page: Page, entry: 'verify' | 'verify-invite'): Promise<{ email: string; exchanges: string[]; seen: string[] }> {
-  const { email } = await ensureMember(TENANTS.a.id, 'firm')
-  await signInAs(page, 'firm')
+  const { email } = await ensureMember(SHARD.a.id, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   const seen: string[] = []
   const exchanges: string[] = []
   page.on('request', (r) => {
@@ -1566,7 +1568,7 @@ test('an invitee code over a live session shows the confirmed notice naming the 
 test('the confirmed notice sits clear of the sidebar at each wide width', async ({ page }) => {
   test.setTimeout(240_000)
   const height = 1080
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   for (const width of WIDE_WIDTHS) {
     await page.setViewportSize({ width, height })
     await page.goto(`${APP_URL}/?auth=verify#token=bogus-${crypto.randomUUID()}`, { waitUntil: 'commit' })
@@ -2178,7 +2180,7 @@ test('deployed app: the support icon sits beside Sign out in the identity card a
 test('deployed app: a customer sees no support icon and the console start asks the gateway for nothing', async ({ page }) => {
   test.setTimeout(180_000)
   const errors = gatedErrors(page, [])
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await expect(page.locator(VERIFIED)).toBeAttached()
   await expect(page.getByRole('button', { name: 'Sign out', exact: true }), 'control: the identity card drew').toBeVisible()
   await expect(page.getByRole('link', { name: SUPPORT_ICON })).toHaveCount(0)

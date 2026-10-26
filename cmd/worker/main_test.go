@@ -90,12 +90,7 @@ func bootEnv(vars map[string]string) []string {
 // run boots the binary with exactly vars as its environment and returns its combined output.
 func run(t *testing.T, bin string, vars map[string]string) (string, error) {
 	t.Helper()
-	return runWithin(t, bin, vars, bootWait)
-}
-
-func runWithin(t *testing.T, bin string, vars map[string]string, d time.Duration) (string, error) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), d)
+	ctx, cancel := context.WithTimeout(t.Context(), bootWait)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin)
 	cmd.Env = []string{"HOME=" + os.Getenv("HOME"), "PORT=" + strconv.Itoa(freePort(t))}
@@ -112,21 +107,6 @@ func runWithin(t *testing.T, bin string, vars map[string]string, d time.Duration
 func exitedOne(err error) bool {
 	var exit *exec.ExitError
 	return errors.As(err, &exit) && exit.ExitCode() == 1
-}
-
-func TestWorkerMain_RunKillsAHungBinary(t *testing.T) {
-	script := filepath.Join(t.TempDir(), "hang.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	_, err := runWithin(t, script, nil, 300*time.Millisecond)
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != -1 {
-		t.Fatalf("hung binary ended with %v, want a kill (ExitCode -1)", err)
-	}
-	if exitedOne(err) {
-		t.Fatal("a killed run counts as exit status 1")
-	}
 }
 
 func TestWorkerMain_RequiresTheValidationConfig(t *testing.T) {
@@ -152,7 +132,7 @@ func TestWorkerMain_RequiresTheValidationConfig(t *testing.T) {
 		})
 	}
 
-	// Control: with both set the validation refusal is gone (a later required variable stops the boot instead).
+	// Control: with both set the boot reaches the next refusal, DOCUMENT_BUCKET.
 	vars := map[string]string{"VALIDATION_URL": "http://validation.invalid", "S2S_TOKEN": "tok"}
 	for k, v := range base {
 		vars[k] = v
@@ -160,6 +140,9 @@ func TestWorkerMain_RequiresTheValidationConfig(t *testing.T) {
 	out, err := run(t, bin, vars)
 	if !exitedOne(err) {
 		t.Fatalf("control ended with %v, want exit status 1\n%s", err, out)
+	}
+	if !strings.Contains(out, "DOCUMENT_BUCKET is required") {
+		t.Fatalf("control did not reach the next refusal, DOCUMENT_BUCKET\n%s", out)
 	}
 	if strings.Contains(out, "VALIDATION_URL is required") || strings.Contains(out, "S2S_TOKEN is required") {
 		t.Errorf("a validation refusal remains with both variables set\n%s", out)

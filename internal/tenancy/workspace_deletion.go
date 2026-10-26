@@ -193,8 +193,12 @@ func (s *Store) cancelScheduledDeletion(ctx context.Context, token *string) (Can
 		if err := tx.QueryRow(ctx, `SELECT deletion_due_at FROM tenants FOR UPDATE`).Scan(&due); err != nil {
 			return err
 		}
+		// Unscheduled is a no-op on both routes, so a held link never turns a lost race into a refusal.
+		if due == nil {
+			return nil
+		}
 		if token != nil {
-			if due == nil || !inviteTokenShape.MatchString(*token) {
+			if !inviteTokenShape.MatchString(*token) {
 				return ErrDeletionLinkNotValid
 			}
 			hash := sha256.Sum256([]byte(*token))
@@ -208,9 +212,6 @@ func (s *Store) cancelScheduledDeletion(ctx context.Context, token *string) (Can
 			if !live {
 				return ErrDeletionLinkNotValid
 			}
-		}
-		if due == nil {
-			return nil
 		}
 		if _, err := tx.Exec(ctx,
 			`UPDATE tenants SET deletion_scheduled_at = NULL, deletion_scheduled_by = NULL`); err != nil {

@@ -72,7 +72,7 @@ func (w *linkWorld) schedule(t *testing.T) {
 	w.tokC = knownLinkToken(t, w.super, w.tenant, w.c)
 }
 
-// cancelByRoute cancels through the DEL-04 route, as the notifier serves it.
+// cancelByRoute cancels through the plain cancel route, as the notifier serves it.
 func (w *linkWorld) cancelByRoute(ctx context.Context) error {
 	return (&DeletionNotifier{Store: w.store, Sender: &apiSender{}}).Cancel(ctx)
 }
@@ -258,29 +258,48 @@ func TestDeletionLink_EveryLinkIsVoidAfterACancel(t *testing.T) {
 	oldB, oldC := w.tokB, w.tokC
 
 	if err := w.cancelByRoute(w.adminCtx()); err != nil {
-		t.Fatalf("cancel by the DEL-04 route: %v", err)
+		t.Fatalf("cancel by the plain route: %v", err)
 	}
 	if c := deletionOf(t, w.super, w.tenant); !c.empty() {
 		t.Fatalf("deletion columns after the cancel = %+v, want all NULL", c)
 	}
 	for name, tok := range map[string]string{"B's": oldB, "C's": oldC} {
-		if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), tok); !errors.Is(err, ErrDeletionLinkNotValid) {
-			t.Errorf("%s token after the DEL-04 cancel: err = %v, want ErrDeletionLinkNotValid", name, err)
+		if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), tok); err != nil {
+			t.Errorf("%s token after the plain cancel: err = %v, want the no-op nil", name, err)
 		}
 	}
 	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 1 {
-		t.Errorf("%s rows = %d, want 1 (the refused link cancels write none)", evCancelled, n)
+		t.Errorf("%s rows = %d, want 1 (the no-op link cancels write none)", evCancelled, n)
 	}
 
 	w.schedule(t)
 	if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), w.tokB); err != nil {
 		t.Fatalf("cancel by link in the second deletion: %v", err)
 	}
-	if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), w.tokC); !errors.Is(err, ErrDeletionLinkNotValid) {
-		t.Errorf("C's token after B's link cancel: err = %v, want ErrDeletionLinkNotValid", err)
+	if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), w.tokC); err != nil {
+		t.Errorf("C's token after B's link cancel: err = %v, want the no-op nil", err)
 	}
 	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 2 {
 		t.Errorf("%s rows = %d, want 2", evCancelled, n)
+	}
+}
+
+// A held link meets a workspace another admin already unlocked: it answers as the plain route does.
+func TestDeletionLink_AHeldLinkAfterAnotherAdminsCancelIsANoOp(t *testing.T) {
+	w := newLinkWorld(t)
+	held := w.tokB
+	if _, err := w.store.CancelWorkspaceDeletion(w.as(w.c)); err != nil {
+		t.Fatalf("A cancel by C: %v", err)
+	}
+	res, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), held)
+	if err != nil {
+		t.Fatalf("link cancel on an unscheduled workspace: err = %v, want nil", err)
+	}
+	if res.Workspace != "" || len(res.Mails) != 0 {
+		t.Errorf("result = %+v, want the zero result (no mail)", res)
+	}
+	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 1 {
+		t.Errorf("%s rows = %d, want 1 (C's only)", evCancelled, n)
 	}
 }
 
@@ -333,19 +352,8 @@ func TestDeletionLink_TwoConcurrentLinkCancelsAuditOnce(t *testing.T) {
 		func() error { _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), w.tokB); return err },
 		func() error { _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.c), w.tokC); return err },
 	)
-	nils, invalid := 0, 0
-	for _, err := range []error{errA, errB} {
-		switch {
-		case err == nil:
-			nils++
-		case errors.Is(err, ErrDeletionLinkNotValid):
-			invalid++
-		default:
-			t.Errorf("unexpected err = %v", err)
-		}
-	}
-	if nils != 1 || invalid != 1 {
-		t.Errorf("results = %v, %v: want one nil and one ErrDeletionLinkNotValid", errA, errB)
+	if errA != nil || errB != nil {
+		t.Errorf("results = %v, %v: want both nil (the loser is a no-op)", errA, errB)
 	}
 	if c := deletionOf(t, w.super, w.tenant); !c.empty() {
 		t.Errorf("deletion columns = %+v, want all NULL", c)
@@ -426,8 +434,8 @@ func TestDeletionLink_ACancelWaitingForTheLockSeesTheWinnersCancel(t *testing.T)
 		t.Fatalf("the winner commits: %v", err)
 	}
 
-	if err := <-done; !errors.Is(err, ErrDeletionLinkNotValid) {
-		t.Errorf("the loser's err = %v, want ErrDeletionLinkNotValid", err)
+	if err := <-done; err != nil {
+		t.Errorf("the loser's err = %v, want the no-op nil", err)
 	}
 	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 0 {
 		t.Errorf("%s rows = %d, want 0 (the winner here wrote none)", evCancelled, n)

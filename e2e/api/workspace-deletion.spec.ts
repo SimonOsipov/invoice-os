@@ -297,8 +297,8 @@ test.describe.serial('cancel link (API E2E, over the deployed gateway)', () => {
       expect(first.status, JSON.stringify(first.body)).toBe(200)
 
       const reused = await cancelDeletionByLink(adminBToken, used)
-      assertErrorEnvelope(reused, 403, 'a used token')
-      expect(errorOf(reused)).toBe(LINK_NOT_VALID)
+      expect(reused.status, 'a used token on an unlocked workspace is the plain no-op').toBe(200)
+      expect(reused.body).toEqual({ deletion_due_at: null })
     })
 
     await whileLocked(async () => {

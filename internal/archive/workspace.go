@@ -86,10 +86,12 @@ func claimWorkspaceExport(ctx context.Context, tx pgx.Tx, tenantID string) error
 }
 
 // exportRunning reads the lock without taking it, so a preflight never blocks an export.
+// pg_locks spans the cluster; PR databases share it, so filter to this database.
 func exportRunning(ctx context.Context, tx pgx.Tx, tenantID string) (bool, error) {
 	var running bool
 	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks, (SELECT `+exportKey+` AS k) x
 		WHERE locktype = 'advisory' AND granted AND objsubid = 1
+		AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
 		AND classid::bigint = (x.k >> 32) & 4294967295 AND objid::bigint = x.k & 4294967295)`,
 		tenantID).Scan(&running)
 	if err != nil {

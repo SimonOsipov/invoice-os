@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -841,6 +843,7 @@ func TestRLS_AnotherWorkspaceExportsWhileOneRuns(t *testing.T) {
 // exportLockCount counts the granted export locks of the workspace $1.
 const exportLockCount = `SELECT count(*) FROM pg_locks, (SELECT ` + exportKey + ` AS k) x
 	WHERE locktype = 'advisory' AND granted AND objsubid = 1
+	AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
 	AND classid::bigint = (x.k >> 32) & 4294967295 AND objid::bigint = x.k & 4294967295`
 
 // 40 pairs of simultaneous starts: exactly one proceeds, the other is refused.
@@ -1258,5 +1261,44 @@ func TestRLS_WorkspaceExportGivesAlikeSlugsDistinctDirectories(t *testing.T) {
 		if !seen["companies/"+c.Dir+"/invoices.csv"] {
 			t.Errorf("no companies/%s/invoices.csv in %q", c.Dir, names)
 		}
+	}
+}
+
+func TestRLS_AnExportLockInAnotherDatabaseIsNotRunning(t *testing.T) {
+	rig := newWsRig(t)
+	fx := rig.plant(t, "otherdb", shapeOneDoc)
+	ctx := context.Background()
+
+	name := "ws_export_other_" + strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	if _, err := rig.super.Exec(ctx, `CREATE DATABASE `+name); err != nil {
+		t.Fatalf("create database: %v", err)
+	}
+	t.Cleanup(func() { _, _ = rig.super.Exec(context.Background(), `DROP DATABASE IF EXISTS `+name+` WITH (FORCE)`) })
+
+	u, err := url.Parse(os.Getenv("DATABASE_SUPERUSER_URL"))
+	if err != nil {
+		t.Fatalf("parse DATABASE_SUPERUSER_URL: %v", err)
+	}
+	u.Path = "/" + name
+	conn, err := pgx.Connect(ctx, u.String())
+	if err != nil {
+		t.Fatalf("connect to %s: %v", name, err)
+	}
+	defer conn.Close(ctx)
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(`+exportKey+`)`, fx.tenant); err != nil {
+		t.Fatalf("hold the key in %s: %v", name, err)
+	}
+
+	var n int
+	if err := rig.super.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND granted AND database = (SELECT oid FROM pg_database WHERE datname = $1)`, name).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("control: locks held in %s = %d (err %v), want 1", name, n, err)
+	}
+	if err := rig.store().PreflightWorkspace(idCtx(fx.admin, fx.tenant)); err != nil {
+		t.Errorf("preflight with the key held in another database = %v, want nil", err)
 	}
 }

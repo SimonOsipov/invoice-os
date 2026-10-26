@@ -1728,6 +1728,10 @@ async function switchAuditView(page: Page, chip: 'STAFF CHANGES' | 'TENANT LOG',
 
 async function auditLayout(page: Page): Promise<Read> {
   const mn = mainOf(page)
+  // A retry after a failed STAFF CHANGES switch starts on the staff view.
+  if ((await mn.getByRole('button', { name: 'TENANT LOG' }).getAttribute('aria-pressed')) !== 'true') {
+    await switchAuditView(page, 'TENANT LOG', STAFF_AUDIT, 'Loading audit entries…', auditRows(page))
+  }
   const titleBlock = parent(mn.getByRole('heading', { level: 1, name: 'Audit & evidence explorer' }))
   const headerRow = parent(titleBlock)
   const right = kid(headerRow, 2)

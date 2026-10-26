@@ -1,4 +1,5 @@
 import type { AuthedFetch } from './portfolio'
+import { mintState } from './signInState'
 
 // Copy matches the delete-dialog mock.
 export const EXPORT_COPY = {
@@ -7,14 +8,8 @@ export const EXPORT_COPY = {
   started: "The download has started. Check your browser's downloads.",
 } as const
 
-// 32 random bytes, unpadded base64url: 43 characters (gateway `stateShape`, internal/gateway/signin.go).
-export function newExportState(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(32))
-  return btoa(String.fromCharCode(...bytes))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '')
-}
+// The sign-in state generator: 43 base64url characters, the gateway's `stateShape`.
+export const newExportState = mintState
 
 // GET .../workspace/export/preflight (WorkspaceExportPreflightHandler): 204 resolves undefined; 403/409 reject.
 export function preflightExport(f: AuthedFetch, base: string): Promise<void> {

@@ -84,8 +84,8 @@ func TestSuiteSummary_AFileNamedByTheArrowLineAloneIsNamed(t *testing.T) {
 
 func TestSuiteSummary_AFileNamedByTheFailLineAloneIsNamed(t *testing.T) {
 	t.Parallel()
-	wantOut(t, unitOut(t, "packages/a test:  FAIL  src/a.test.ts [ src/a.test.ts ]\n"),
-		"unit file: packages/a src/a.test.ts")
+	wantOut(t, unitOut(t, "packages/a test:  FAIL  src/a.test.ts [ src/a.test.ts ]\npackages/a test:  FAIL  src/a[1].(x)+$.test.ts > t\n"),
+		"unit file: packages/a src/a.test.ts", "unit file: packages/a src/a[1].(x)+$.test.ts")
 }
 
 func TestSuiteSummary_UnprefixedVitestLinesAreMatched(t *testing.T) {
@@ -140,7 +140,7 @@ func TestSuiteSummary_APnpmCodeWithoutAPackageNamesNothing(t *testing.T) {
 func TestSuiteSummary_NamesAGoPackageAndTopLevelTest(t *testing.T) {
 	t.Parallel()
 	log := "ok  \tgithub.com/x/y/ok\t1s\n--- FAIL: TestA (0.04s)\n    --- FAIL: TestA/sub (0.00s)\nFAIL\n" +
-		"FAIL\tgithub.com/x/y/bad\t1.2s\nFAIL\tgithub.com/x/y/broken [build failed]\n"
+		"FAIL\tgithub.com/x/y/bad\t1.2s\nFAIL\tgithub.com/x/y/bad\t1.2s\n--- FAIL: TestA (0.04s)\nFAIL\tgithub.com/x/y/broken [build failed]\n"
 	out, code := runSummary(t, map[string]string{"go": log}, nil, "go")
 	if code != 0 {
 		t.Fatalf("exit %d", code)
@@ -211,6 +211,7 @@ func TestSuiteSummary_AFailedSuiteWithNothingNamedPointsAtItsLog(t *testing.T) {
 	for _, c := range []struct{ suite, log string }{
 		{"fmt", "gofmt: not formatted:\ninternal/x.go\n"},
 		{"fmt", ""},
+		{"unit", ""},
 		{"go", "# pkg\nx.go:1:1: undefined: y\n"},
 		{"unit", "ok  \tgithub.com/x/y\t1s\n Test Files  3 passed (3)\n"},
 	} {
@@ -222,8 +223,9 @@ func TestSuiteSummary_AFailedSuiteWithNothingNamedPointsAtItsLog(t *testing.T) {
 func TestSuiteSummary_AnsiColourAndCRDoNotHideAFile(t *testing.T) {
 	t.Parallel()
 	log := fl + "\x1b[31m FAIL \x1b[39m  src/a.test.tsx > t\r\n" +
-		fl + "\x1b[31m ❯ src/b.test.tsx (2 tests | 1 failed) 5ms\x1b[39m\r\n"
-	wantOut(t, unitOut(t, log), "unit file: frontend/landing src/a.test.tsx", "unit file: frontend/landing src/b.test.tsx")
+		fl + "\x1b[31m ❯ src/b.test.tsx (2 tests | 1 failed) 5ms\x1b[39m\r\n" +
+		fl + " FAIL  src/c.test.tsx\r\n"
+	wantOut(t, unitOut(t, log), "unit file: frontend/landing src/a.test.tsx", "unit file: frontend/landing src/b.test.tsx", "unit file: frontend/landing src/c.test.tsx")
 }
 
 func TestSuiteSummary_OnlyTheNamedSuitesAreRead(t *testing.T) {

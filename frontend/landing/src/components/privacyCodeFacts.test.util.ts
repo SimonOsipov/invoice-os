@@ -5,7 +5,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
-import { APP_LABELS, DELETED_MARK, DELETION_GRACE_DAYS, PRIVACY_CONTACT } from './Privacy'
+import { APP_LABELS, BACKUP_DAYS, DELETED_MARK, DELETION_GRACE_DAYS, FILE_RECOVERY_DAYS, PRIVACY_CONTACT } from './Privacy'
 
 const REPO = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
 
@@ -233,6 +233,13 @@ export const DELETION_SENTENCES: readonly { id: string; text: string }[] = [
   { id: 'A5', text: `An admin can delete the whole workspace. In ${APP_LABELS.settings}, under ${APP_LABELS.workspaceTab}, the admin chooses ${APP_LABELS.deleteWorkspace} and types the workspace name to confirm.` },
   { id: 'A6', text: `The workspace is then locked for ${DELETION_GRACE_DAYS} days. Nobody can create or change anything in it. Members see the date it will be deleted and can sign out. Any admin can cancel the deletion until the ${DELETION_GRACE_DAYS} days end. Then our server deletes every invoice, file and member of the workspace, and erases the records of each member still in it, as described above.` },
   { id: 'A7', text: `If you are the only active member of a workspace, deleting your account deletes the workspace instead. Your account then goes when the workspace is deleted, ${DELETION_GRACE_DAYS} days later, not at once.` },
+  { id: 'R1', text: 'This section covers the main copies in our own systems. It says how long they last after an account or a workspace is deleted.' },
+  { id: 'R2', text: `When an admin deletes a workspace, it and everything in it stay for ${DELETION_GRACE_DAYS} days. Then our server deletes them.` },
+  { id: 'R3', text: `Database backups: our database keeps backups, and a log of recent changes, for ${BACKUP_DAYS} days. Data that has been deleted can stay in a backup for up to ${BACKUP_DAYS} more days.` },
+  { id: 'R4', text: `Stored files: the storage that holds uploaded documents keeps a deleted file for ${FILE_RECOVERY_DAYS} days before it is gone for good. A file can stay in storage for up to ${FILE_RECOVERY_DAYS} more days after it is deleted.` },
+  { id: 'R5', text: 'Sign-in record: our sign-in service writes a record when an account is deleted. The record includes the email address of the account. We have set no time after which it is removed.' },
+  { id: 'R6', text: 'Invitations: an invitation keeps the invited email address until the workspace is deleted, also after the invited person deletes their account.' },
+  { id: 'R7', text: 'Staff log: our staff action log keeps one entry for the deletion of a workspace: the workspace identifier, the date the deletion was due, and the number of members and files removed. That entry is not deleted.' },
 ]
 
 // The body of one Go func, from its signature to the closing brace in column 0.
@@ -395,4 +402,61 @@ export function graceDays(
 // DEL-06 merged: the app has the export module. The page may mention the export only then.
 export function workspaceExportIsMerged(): boolean {
   return existsSync(join(REPO, 'frontend/app/src/lib/workspaceExport.ts'))
+}
+
+// The GoTrue release the sidecar pins; R5 describes what that release's adminUserDelete writes.
+export function gotrueVersion(
+  src: string = readFileSync(join(REPO, 'sidecar/auth/Dockerfile'), 'utf8'),
+): string {
+  return found(/^FROM ghcr\.io\/supabase\/auth:v(\d+\.\d+\.\d+)@/m.exec(src)?.[1], 'the GoTrue tag')
+}
+
+const PRUNE_ROOTS = ['internal', 'cmd', 'migrations', 'sidecar', '.github']
+const SKIP_DIRS = new Set(['node_modules', '.venv', '__pycache__', '.git'])
+
+function nonTestFiles(rel: string): string[] {
+  return readdirSync(join(REPO, rel), { withFileTypes: true }).flatMap((e) => {
+    const next = `${rel}/${e.name}`
+    if (e.isDirectory()) return SKIP_DIRS.has(e.name) ? [] : nonTestFiles(next)
+    return /_test\.go$|\.test\.[jt]sx?$/.test(e.name) ? [] : [next]
+  })
+}
+
+// No non-test file in this repo names the table GoTrue writes the deletion record to, so nothing reads or prunes it.
+export function nothingPrunesSigninAuditLog(
+  texts: Iterable<string> = PRUNE_ROOTS.filter((r) => existsSync(join(REPO, r))).flatMap(nonTestFiles).map((f) => readFileSync(join(REPO, f), 'utf8')),
+): boolean {
+  for (const t of texts) if (t.includes('audit_log_entries')) return false
+  return true
+}
+
+// The facts R7 states: the purge's staff row carries the event and exactly these payload keys.
+export function staffLogEntryFacts(
+  src: string = readSource('internal/workspacepurge/purge.go'),
+): { event: string; keys: string[] } {
+  const call = found(/audit\.RecordStaff\([\s\S]*?\n\t\t\}\)/.exec(src)?.[0], 'the RecordStaff call')
+  const payload = found(/Payload:\s*map\[string\]any\{([^}]*)\}/.exec(call)?.[1], 'the staff payload')
+  return {
+    event: found(/Event:\s*"([^"]+)"/.exec(call)?.[1], 'the staff event'),
+    keys: Array.from(payload.matchAll(/"(\w+)":/g), (m) => m[1]).sort(),
+  }
+}
+
+// The append-only trigger refuses UPDATE, DELETE and TRUNCATE on the staff log.
+export function staffLogIsAppendOnly(
+  sql: string = readFileSync(join(REPO, 'migrations/20261010080000_staff_audit_log.sql'), 'utf8'),
+): boolean {
+  const up = sql.split('-- +goose Down')[0]
+  return (
+    /RAISE EXCEPTION 'staff_audit_log is append-only/.test(up) &&
+    /BEFORE UPDATE OR DELETE ON public\.staff_audit_log[\s\S]*?EXECUTE FUNCTION public\.staff_audit_log_append_only\(\)/.test(up) &&
+    /BEFORE TRUNCATE ON public\.staff_audit_log[\s\S]*?EXECUTE FUNCTION public\.staff_audit_log_append_only\(\)/.test(up)
+  )
+}
+
+// invitee_email is NOT NULL, so no erase can blank it.
+export function invitationKeepsInviteeEmail(
+  sql: string = readFileSync(join(REPO, 'migrations/20260709161252_invitations.sql'), 'utf8'),
+): boolean {
+  return /\binvitee_email\s+text\s+NOT NULL\b/.test(sql)
 }

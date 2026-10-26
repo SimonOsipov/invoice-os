@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { AI_PROVIDER_HOST, APP_LABELS, DELETED_MARK, DELETION_GRACE_DAYS, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
+import { AI_PROVIDER_HOST, APP_LABELS, BACKUP_DAYS, DELETED_MARK, DELETION_GRACE_DAYS, FILE_RECOVERY_DAYS, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { Footer } from './Footer'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
@@ -39,6 +39,11 @@ import {
   eraseDeletesRegistrationCopies,
   eraseDeletesSigninAccount,
   graceDays,
+  gotrueVersion,
+  invitationKeepsInviteeEmail,
+  nothingPrunesSigninAuditLog,
+  staffLogEntryFacts,
+  staffLogIsAppendOnly,
   lockRefusesWrites,
   purgeDeletesFilesThenRows,
   purgeErasesEveryNonRemovedMember,
@@ -986,5 +991,64 @@ describe('DEL-10-02: the account section states the deletion rules', () => {
     expect(workspaceExportIsMerged()).toBe(false)
     expect(exportClaimMatches(workspaceExportIsMerged(), account)).toBe(true)
     expect(exportClaimMatches(true, account)).toBe(false)
+  })
+})
+
+describe('DEL-10-03: the retention section states how long each copy lasts', () => {
+  const REPO = join(SRC_DIR, '..', '..', '..', '..')
+  const sentence = (id: string): string => DELETION_SENTENCES.find((x) => x.id === id)!.text
+
+  it('DEL-10-03 R2 the 30 is the trigger\'s', () => {
+    expect(graceDays()).toBe(DELETION_GRACE_DAYS)
+    expect(sentence('R2')).toContain(`${DELETION_GRACE_DAYS} days`)
+  })
+
+  it('DEL-10-03 R3 and R4 quote the operator-confirmed 7', () => {
+    // gcloud read 2026-10-26: Cloud SQL retainedBackups 7, transactionLogRetentionDays 7; bucket soft delete 604800 s.
+    expect(BACKUP_DAYS).toBe(7)
+    expect(FILE_RECOVERY_DAYS).toBe(7)
+    expect(sentence('R3')).toContain(`${BACKUP_DAYS} days`)
+    expect(sentence('R4')).toContain(`${FILE_RECOVERY_DAYS} days`)
+  })
+
+  it('DEL-10-03 the new numbers are not retyped in Privacy.tsx', () => {
+    const src = readSource('frontend/landing/src/components/Privacy.tsx')
+    expect(src).not.toMatch(/\b(30|7) days\b/)
+    expect(Array.from(src.matchAll(/export const (\w+_DAYS) = (\d+)/g), (m) => `${m[1]}=${m[2]}`)).toEqual([
+      'DELETION_GRACE_DAYS=30',
+      'BACKUP_DAYS=7',
+      'FILE_RECOVERY_DAYS=7',
+    ])
+  })
+
+  it('DEL-10-03 R5 the GoTrue version that was read is the one pinned', () => {
+    const dockerfile = readFileSync(join(REPO, 'sidecar/auth/Dockerfile'), 'utf8')
+    expect(gotrueVersion()).toBe('2.197.0')
+    expect(gotrueVersion(dockerfile.replace('auth:v2.197.0@', 'auth:v2.198.0@'))).not.toBe('2.197.0')
+  })
+
+  it('DEL-10-03 R5 nothing in this repo prunes the sign-in audit table', () => {
+    expect(nothingPrunesSigninAuditLog()).toBe(true)
+    expect(nothingPrunesSigninAuditLog(['package x', 'DELETE FROM auth.audit_log_entries WHERE created_at < now()'])).toBe(false)
+  })
+
+  it('DEL-10-03 R7 the staff row holds the id, the due date and two counts', () => {
+    expect(staffLogEntryFacts()).toEqual({ event: 'workspace.purged', keys: ['due_at', 'members', 'objects'] })
+    expect(staffLogIsAppendOnly()).toBe(true)
+    const sql = readFileSync(join(REPO, 'migrations/20261010080000_staff_audit_log.sql'), 'utf8')
+    expect(staffLogIsAppendOnly(sql.replace('BEFORE UPDATE OR DELETE', 'BEFORE UPDATE'))).toBe(false)
+  })
+
+  it('DEL-10-03 control: a payload with a name key fails R7', () => {
+    const src = readSource('internal/workspacepurge/purge.go')
+    const planted = src.replace('"objects": objects,', '"objects": objects,\n\t\t\t\t"name": name,')
+    expect(planted).not.toBe(src)
+    expect(staffLogEntryFacts(planted).keys).not.toEqual(staffLogEntryFacts().keys)
+  })
+
+  it('DEL-10-03 R6 the invitation column cannot be blanked', () => {
+    expect(invitationKeepsInviteeEmail()).toBe(true)
+    const sql = readFileSync(join(REPO, 'migrations/20260709161252_invitations.sql'), 'utf8')
+    expect(invitationKeepsInviteeEmail(sql.replace('invitee_email text        NOT NULL', 'invitee_email text'))).toBe(false)
   })
 })

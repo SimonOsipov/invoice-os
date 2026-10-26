@@ -16,6 +16,10 @@ export const PRIVACY_CONTACT = 'sam@ascomply.com'
 export const ANALYTICS_DEFAULT_SENTENCE = 'Analytics is off unless you turn it on.'
 // Pinned to the tenants_deletion_guard trigger (graceDays in privacyCodeFacts.test.util.ts).
 export const DELETION_GRACE_DAYS = 30
+// Cloud SQL backups and change log; the rule file records the source. Pinned by value (the infra repo is private).
+export const BACKUP_DAYS = 7
+// Bucket soft delete; the rule file records the source. Pinned by value.
+export const FILE_RECOVERY_DAYS = 7
 // Pinned to actor.RemovedName (deletedMark in privacyCodeFacts.test.util.ts).
 export const DELETED_MARK = '(deleted)'
 // Each label is pinned to the app source that renders it (appLabels in privacyCodeFacts.test.util.ts).
@@ -148,6 +152,37 @@ export function Privacy() {
           <h2 style={H2}>How long it is kept</h2>
           <p style={P}>
             Google deletes the underlying record of your visit after {GA_RETENTION_MONTHS} months.
+          </p>
+
+          <h2 style={H2}>How long deleted data lasts</h2>
+          <p style={P}>
+            This section covers the main copies in our own systems. It says how long they last after an account or a
+            workspace is deleted.
+          </p>
+          <p style={P}>
+            When an admin deletes a workspace, it and everything in it stay for {DELETION_GRACE_DAYS} days. Then our
+            server deletes them.
+          </p>
+          <p style={P}>
+            Database backups: our database keeps backups, and a log of recent changes, for {BACKUP_DAYS} days. Data that
+            has been deleted can stay in a backup for up to {BACKUP_DAYS} more days.
+          </p>
+          <p style={P}>
+            Stored files: the storage that holds uploaded documents keeps a deleted file for {FILE_RECOVERY_DAYS} days
+            before it is gone for good. A file can stay in storage for up to {FILE_RECOVERY_DAYS} more days after it is
+            deleted.
+          </p>
+          <p style={P}>
+            Sign-in record: our sign-in service writes a record when an account is deleted. The record includes the email
+            address of the account. We have set no time after which it is removed.
+          </p>
+          <p style={P}>
+            Invitations: an invitation keeps the invited email address until the workspace is deleted, also after the
+            invited person deletes their account.
+          </p>
+          <p style={P}>
+            Staff log: our staff action log keeps one entry for the deletion of a workspace: the workspace identifier, the
+            date the deletion was due, and the number of members and files removed. That entry is not deleted.
           </p>
 
           <h2 style={H2}>What it is not used for</h2>

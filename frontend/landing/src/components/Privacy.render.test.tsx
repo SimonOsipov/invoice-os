@@ -763,6 +763,42 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     expect(h2s.filter((t) => /account|regist/i.test(t))).toHaveLength(1)
   })
 
+  const retentionText = (): string => plain(section(/^How long deleted data lasts$/))
+  const h2Texts = (): string[] => Array.from(html.matchAll(/<h2[^>]*>([\s\S]*?)<\/h2>/g), (m) => plain(m[1]))
+
+  it('DEL-10-03 the retention section sits between How long it is kept and What it is not used for', () => {
+    const h2s = h2Texts()
+    const at = ['How long it is kept', 'How long deleted data lasts', 'What it is not used for'].map((t) => h2s.indexOf(t))
+    expect(at.every((i) => i > -1), `an h2 is missing: ${at}`).toBe(true)
+    expect(at[1]).toBe(at[0] + 1)
+    expect(at[2]).toBe(at[1] + 1)
+    expect(h2s.filter((t) => t === 'How long deleted data lasts')).toHaveLength(1)
+  })
+
+  it('DEL-10-03 the new h2 is not found by the account-or-regist regex', () => {
+    expect('How long deleted data lasts').not.toMatch(/account|regist/i)
+    expect(h2Texts().filter((t) => /account|regist/i.test(t))).toHaveLength(1)
+  })
+
+  it('DEL-10-03 R1..R7 are pinned in place', () => {
+    const text = retentionText()
+    const at = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7'].map((id) => text.indexOf(deletionSentence(id)))
+    expect(at.every((i) => i > -1), `a sentence is missing: ${at}`).toBe(true)
+    expect(at).toEqual([...at].sort((x, y) => x - y))
+  })
+
+  it('DEL-10-03 R1 promises no completeness', () => {
+    const r1 = deletionSentence('R1')
+    expect(r1).toContain('main copies')
+    expect(r1).not.toMatch(/\b(each|every|all)\b/i)
+  })
+
+  it('DEL-10-03 R5 sets no retention period', () => {
+    const r5 = deletionSentence('R5')
+    expect(r5).toContain('We have set no time')
+    expect(r5).not.toMatch(/\d/)
+  })
+
   it('C14: the page says the marketing sentence is stored with its time', () => {
     const quoted = blocks(html).filter((b) => b.includes(MARKETING_CONSENT_TEXT))
     expect(quoted.length, 'the page does not quote the marketing sentence').toBeGreaterThan(0)

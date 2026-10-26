@@ -77,6 +77,13 @@ describe('AccountView', () => {
     expect(screen.queryByTestId('delete-account-dialog')).toBeNull()
     cleanup()
 
+    setup([{ outcome: 'hand_on', heir_name: 'Chidi Eze' }, { outcome: 'hand_on', heir_name: 'Ngozi Bello' }])
+    await ready()
+    await userEvent.click(button())
+    await waitFor(() => expect(body().textContent).toContain('Ngozi Bello'))
+    expect(screen.queryByTestId('delete-account-dialog')).toBeNull()
+    cleanup()
+
     setup([{ outcome: 'leave' }, { outcome: 'leave' }])
     await ready()
     await userEvent.click(button())

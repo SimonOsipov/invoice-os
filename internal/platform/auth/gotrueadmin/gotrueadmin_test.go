@@ -530,3 +530,110 @@ func TestFromEnv_SendsThroughTheGivenTransport(t *testing.T) {
 		t.Errorf("request deadline is %v after the call, want the client's 10 s timeout", d)
 	}
 }
+
+func TestUserEmail_SendsAServiceRoleTokenAndReadsTheEmail(t *testing.T) {
+	k := signing(t)
+	id := uuid.NewString()
+	srv, got := recordingServer(t, http.StatusOK, `{"id":"`+id+`","aud":"authenticated","email":"ada@example.invalid","role":"authenticated"}`)
+	c := newClient(t, srv.URL, k)
+
+	email, err := c.UserEmail(context.Background(), id)
+	if err != nil {
+		t.Fatalf("UserEmail: %v", err)
+	}
+	if email != "ada@example.invalid" {
+		t.Errorf("email = %q, want ada@example.invalid", email)
+	}
+	if len(*got) != 1 {
+		t.Fatalf("server got %d requests, want 1", len(*got))
+	}
+	r := (*got)[0]
+	if r.method != http.MethodGet || r.path != "/admin/users/"+id {
+		t.Errorf("request = %s %s, want GET /admin/users/%s", r.method, r.path, id)
+	}
+	header, claims := parseAdminToken(t, r.auth, k)
+	if header["kid"] != k.jwk.Kid || header["alg"] != "ES256" {
+		t.Errorf("header = %v, want alg ES256 and kid %q", header, k.jwk.Kid)
+	}
+	if claims["role"] != "service_role" {
+		t.Errorf("role = %v, want service_role", claims["role"])
+	}
+	iat, _ := claims["iat"].(float64)
+	exp, _ := claims["exp"].(float64)
+	if exp-iat != 60 {
+		t.Errorf("exp - iat = %v s, want 60", exp-iat)
+	}
+}
+
+func TestUserEmail_NotFoundIsEmpty(t *testing.T) {
+	srv, got := recordingServer(t, http.StatusNotFound, `{"error_code":"user_not_found"}`)
+	c := newClient(t, srv.URL, signing(t))
+	email, err := c.UserEmail(context.Background(), uuid.NewString())
+	if err != nil || email != "" {
+		t.Errorf("UserEmail on 404 = %q, %v; want \"\", nil", email, err)
+	}
+	if len(*got) != 1 {
+		t.Errorf("server got %d requests, want 1", len(*got))
+	}
+}
+
+func TestUserEmail_ARefusalIsAStatusError(t *testing.T) {
+	// The body holds an email so a leaking error or a returned value shows.
+	const body = `{"msg":"SECRETBODYTEXT","email":"leak@example.invalid"}`
+	for _, status := range []int{http.StatusUnauthorized, http.StatusInternalServerError} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			srv, _ := recordingServer(t, status, body)
+			c := newClient(t, srv.URL, signing(t))
+			id := uuid.NewString()
+			email, err := c.UserEmail(context.Background(), id)
+			var se *gotrueadmin.StatusError
+			if !errors.As(err, &se) || se.Status != status {
+				t.Fatalf("UserEmail on %d = %v, want *StatusError{%d}", status, err, status)
+			}
+			if email != "" {
+				t.Errorf("email = %q beside an error, want \"\"", email)
+			}
+			for _, banned := range []string{id, "SECRETBODYTEXT", "leak@example.invalid", srv.URL} {
+				if strings.Contains(err.Error(), banned) {
+					t.Errorf("error %q carries %q", err, banned)
+				}
+			}
+		})
+	}
+	t.Run("closed server", func(t *testing.T) {
+		srv := httptest.NewServer(http.NotFoundHandler())
+		url := srv.URL
+		srv.Close()
+		c := newClient(t, url, signing(t))
+		id := uuid.NewString()
+		_, err := c.UserEmail(context.Background(), id)
+		var se *gotrueadmin.StatusError
+		if !errors.As(err, &se) || se.Status != 0 {
+			t.Fatalf("UserEmail against a closed server = %#v, want *StatusError{0}", err)
+		}
+		if strings.Contains(err.Error(), id) || strings.Contains(err.Error(), strings.TrimPrefix(url, "http://")) {
+			t.Errorf("error %q carries the id or the address", err)
+		}
+	})
+}
+
+func TestUserEmail_RefusesANonCanonicalID(t *testing.T) {
+	srv, got := recordingServer(t, http.StatusOK, `{"email":"ada@example.invalid"}`)
+	c := newClient(t, srv.URL, signing(t))
+	id := uuid.NewString()
+	for _, bad := range []string{"ABC", strings.ToUpper(id), "", "../users", "urn:uuid:" + id} {
+		if email, err := c.UserEmail(context.Background(), bad); err == nil || email != "" {
+			t.Errorf("UserEmail(%q) = %q, %v; want an error", bad, email, err)
+		}
+	}
+	if len(*got) != 0 {
+		t.Fatalf("server got %d requests for refused ids, want 0", len(*got))
+	}
+	// Control: the canonical id reaches the same server.
+	if email, err := c.UserEmail(context.Background(), id); err != nil || email != "ada@example.invalid" {
+		t.Errorf("control: UserEmail(canonical) = %q, %v", email, err)
+	}
+	if len(*got) != 1 {
+		t.Errorf("control: server got %d requests, want 1", len(*got))
+	}
+}

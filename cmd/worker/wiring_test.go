@@ -243,6 +243,9 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 		{"person_erase", func(b *river.Workers) error {
 			return river.AddWorkerSafely(b, &notifications.EraseWorker{})
 		}},
+		{"person_erase_by_id", func(b *river.Workers) error {
+			return river.AddWorkerSafely(b, &notifications.EraseByIDWorker{})
+		}},
 	}
 	contactProbes := []struct {
 		kind string
@@ -280,7 +283,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 
 	cw := &contactWorkerSet{deliver: &notifications.DeliverWorker{}, deal: &notifications.DemoDealWorker{}, blog: &notifications.BlogSyncWorker{}}
-	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{})
+	bundle := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{})
 	if bundle == nil {
 		t.Fatal("workerBundle returned nil; a River client takes exactly one bundle")
 	}
@@ -296,12 +299,15 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 
 	// Contacts off: no contact kind is registered, so its queued jobs wait untouched. Intake still records.
-	off := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, nil, &notifications.EraseWorker{})
+	off := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, nil, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{})
 	if err := probes[3].add(off); err == nil {
 		t.Errorf("workerBundle with contacts off does not carry %q; the gateway's registrants would never be recorded", probes[3].kind)
 	}
 	if err := probes[4].add(off); err == nil {
 		t.Errorf("workerBundle with contacts off does not carry %q; its step order needs the worker in every mode", probes[4].kind)
+	}
+	if err := probes[5].add(off); err == nil {
+		t.Errorf("workerBundle with contacts off does not carry %q; an erase by id needs no vendor", probes[5].kind)
 	}
 	for _, p := range contactProbes {
 		if err := p.add(off); err != nil {
@@ -310,7 +316,7 @@ func TestWorkerBundle_CarriesEveryKind(t *testing.T) {
 	}
 	// The newsletter off: the blog sync worker is absent, the other two are not.
 	cw.blog = nil
-	noBlog := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{})
+	noBlog := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{})
 	for i, p := range contactProbes {
 		if err := p.add(noBlog); (err == nil) != (i == 2) {
 			t.Errorf("workerBundle with the newsletter off: probing %q returned %v", p.kind, err)
@@ -707,8 +713,8 @@ func TestWorkerMain_WiresTheQueueSeams(t *testing.T) {
 	// 1. The worker on the bundle is the one newExtractWorker built. A bare
 	//    &extraction.ExtractWorker{} here compiles, registers the kind, and fails job one on
 	//    Work's nil-Audit guard before its nil pool can panic.
-	if len(bundleArgs) != 6 {
-		t.Fatalf("workerBundle is called with %d argument(s), want 6 (sw, pw, ew, rw, cw, xw)", len(bundleArgs))
+	if len(bundleArgs) != 7 {
+		t.Fatalf("workerBundle is called with %d argument(s), want 7 (sw, pw, ew, rw, cw, xw, xbw)", len(bundleArgs))
 	}
 	if id, ok := bundleArgs[2].(*ast.Ident); !ok || id.Name != ewName {
 		t.Errorf("workerBundle's third argument is %s, want %s -- the worker newExtractWorker built. Any other value here registers the kind with nil collaborators and works no job", wtRender(bundleArgs[2]), ewName)
@@ -2005,11 +2011,62 @@ func TestWorkerMain_WiresTheEraseWorker(t *testing.T) {
 		}
 		return true
 	})
-	if bundle == nil || len(bundle.Args) != 6 {
-		t.Fatal("main() has no six-argument workerBundle call")
+	if bundle == nil || len(bundle.Args) != 7 {
+		t.Fatal("main() has no seven-argument workerBundle call")
 	}
 	if got := wtExprString(bundle.Args[5]); got != xwName {
 		t.Errorf("workerBundle sixth argument = %s, want %s, the worker newEraseWorker built", got, xwName)
+	}
+
+	// The by-id worker: the literal main() builds is the one on the bundle. A typed-nil *gotrueadmin.Client
+	// in Account passes the worker's nil check and panics in DeleteUser, so Account is set only under account != nil.
+	xbwName := ""
+	var accountSet, byIDRiver bool
+	for _, stmt := range wtMainBody(t, f) {
+		switch s := stmt.(type) {
+		case *ast.AssignStmt:
+			if len(s.Lhs) == 1 && len(s.Rhs) == 1 {
+				if u, ok := s.Rhs[0].(*ast.UnaryExpr); ok && u.Op == token.AND {
+					if lit, ok := u.X.(*ast.CompositeLit); ok && wtCallName(lit.Type) == "notifications.EraseByIDWorker" {
+						xbwName = wtExprString(s.Lhs[0])
+						got := map[string]string{}
+						for _, elt := range lit.Elts {
+							if kv, ok := elt.(*ast.KeyValueExpr); ok {
+								got[wtExprString(kv.Key)] = wtExprString(kv.Value)
+							}
+						}
+						if got["Pool"] != poolName || got["Logger"] != "app.Logger" || got["Account"] != "" {
+							t.Errorf("EraseByIDWorker literal fields = %v, want Pool %s and Logger app.Logger, and no Account", got, poolName)
+						}
+					}
+				}
+			}
+			for j, l := range s.Lhs {
+				if xbwName != "" && wtExprString(l) == xbwName+".River" && j < len(s.Rhs) && wtExprString(s.Rhs[j]) == qName+".River()" {
+					byIDRiver = true
+				}
+			}
+		case *ast.IfStmt:
+			if wtExprString(s.Cond) == accountName+" != nil" && xbwName != "" {
+				for _, in := range s.Body.List {
+					if as, ok := in.(*ast.AssignStmt); ok && len(as.Lhs) == 1 && wtExprString(as.Lhs[0]) == xbwName+".Account" && wtExprString(as.Rhs[0]) == accountName {
+						accountSet = true
+					}
+				}
+			}
+		}
+	}
+	if xbwName == "" {
+		t.Fatal("main() builds no &notifications.EraseByIDWorker{...}")
+	}
+	if got := wtExprString(bundle.Args[6]); got != xbwName {
+		t.Errorf("workerBundle seventh argument = %s, want %s, the by-id worker main() built", got, xbwName)
+	}
+	if !accountSet {
+		t.Errorf("main() does not set %s.Account = %s under `if %s != nil`", xbwName, accountName, accountName)
+	}
+	if !byIDRiver {
+		t.Errorf("main() does not set %s.River = %s.River()", xbwName, qName)
 	}
 
 	newIdx, riverIdx, addIdx := -1, -1, -1

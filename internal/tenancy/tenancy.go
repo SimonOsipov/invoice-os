@@ -68,6 +68,7 @@ var (
 	ErrWorkspaceNameMismatch       = errors.New("tenancy: workspace name mismatch")
 	ErrHouseWorkspace              = errors.New("tenancy: house workspace")
 	ErrDeletionLinkNotValid        = errors.New("tenancy: deletion link not valid")
+	ErrDeletionUnderway            = errors.New("tenancy: deletion underway")
 	ErrDeletionOutcomeChanged      = errors.New("tenancy: account deletion outcome changed")
 	ErrNoEraseEmail                = errors.New("tenancy: no email to erase by")
 )
@@ -472,6 +473,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusBadRequest, "the workspace name does not match"
 	case errors.Is(err, ErrHouseWorkspace):
 		return http.StatusConflict, "the ASComply staff workspace cannot be deleted"
+	case errors.Is(err, ErrDeletionUnderway):
+		return http.StatusConflict, "this workspace is already being deleted"
 	case errors.Is(err, ErrDeletionOutcomeChanged):
 		return http.StatusConflict, "the workspace changed; review the page and confirm again"
 	case errors.Is(err, ErrNoEraseEmail):

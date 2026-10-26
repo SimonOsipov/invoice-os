@@ -21,6 +21,8 @@ paths:
 - Give `invoice_app` SELECT, INSERT and UPDATE on `rollup_snapshots`. The purge, the reset and the FK cascade remove its rows.
 - Give `invoice_app` UPDATE on `tenants.deletion_scheduled_at` and `tenants.deletion_scheduled_by` only. The trigger `tenants_deletion_guard` sets `deletion_due_at` and refuses the house tenant.
 - Give `invoice_app` SELECT, INSERT and `UPDATE (send_status)` on `workspace_deletion_links` and `workspace_deletion_cancel_mails`. The tenant purge removes their rows by cascade.
+- Give `invoice_app` UPDATE on `tenants.deletion_purge_started_at`. The trigger `tenants_purge_guard` refuses any change of `deletion_scheduled_at` or `deletion_purge_started_at` once the purge has started.
+- Roll back `*_deletion_purge_started.sql` before a test rolls back `*_workspace_deletion.sql`, and re-apply it after.
 - Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `blog_categories`, `blog_posts` and `blog_post_covers`. They are global: no RLS.
 - Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `blog_subscription_requests`, and SELECT, INSERT, UPDATE and DELETE on `blog_subscribers`. Both are global: no RLS.
 - Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `contacts`. Only the erase routine deletes a contact.

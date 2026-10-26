@@ -200,6 +200,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/importer/backfill.go"},                                           // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
 	{file: "internal/invoice/revalidate.go"},                                          // operator CLI tools/revalidate-invoices and the reconciliation re-checks (version and custom-rule); same shape, same absence of a caller
 	{file: "internal/reconciliation/sweep.go"},                                        // EnumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
+	{file: "internal/workspacepurge/purge.go", fn: "dueTenants"},                      // the workspace-purge ticker reads due tenants as invoice_tenant_reader with no GUC set
 	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"},         // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/invitation_token.go", fn: "SetInvitationToken"},      // mock builds only: the E2E fork replaces a pending invite's token hash on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/deletion_link_token.go", fn: "SetDeletionLinkToken"}, // mock builds only: the E2E fork replaces an admin's cancel link token hash on the owner DSN; no caller identity exists
@@ -213,6 +214,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/notifications/deal.go"},                                          // a River job carries no caller identity and no tenant; the job only takes an advisory lock on the pool
 	{file: "internal/notifications/newsletter_worker.go"},                             // a River job carries no caller identity and no tenant; subscribers are not tenant data, and the worker reads and updates them on the pool
 	{file: "internal/notifications/erase.go"},                                         // a River job carries no caller identity and no tenant; the erase sweeps global tables on the pool
+	{file: "internal/notifications/erase_by_id.go"},                                   // a River job carries no caller identity and no tenant; it reads contacts and person_erasures on the pool
 	{file: "internal/notifications/newsletter.go"},                                    // subscription requests and subscribers carry no tenant; the store and the hourly purge run on the pool with no caller identity
 	{file: "internal/systemhealth/store.go", fn: "Record"},                            // a scheduled global sample with no caller identity; the package serves HTTP, so the exemption is func-scoped
 	{file: "internal/blog/public.go", fn: "readPublic"},                               // anonymous blog read: no caller to gate; global published content only, in a READ ONLY transaction
@@ -716,6 +718,8 @@ var scCoreAllowlist = []scCoreExemption{
 	{pkg: "internal/submission"},                                                            // River job workers; the job row carries its tenant and there is no request identity to gate
 	{pkg: "internal/reconciliation"},                                                        // the sweep worker, same shape: a schedule opened it, not a caller
 	{file: "internal/dashboard/snapshot.go", fn: "RunOnce"},                                 // the daily snapshot ticker in cmd/worker; a schedule opened it, not a caller
+	{file: "internal/workspacepurge/purge.go", fn: "eraseMembers"},                          // the workspace-purge ticker in cmd/worker; a schedule opened it, not a caller
+	{file: "internal/workspacepurge/purge.go", fn: "purgeRows"},                             // the workspace-purge ticker in cmd/worker; a schedule opened it, not a caller
 	{pkg: "internal/demodocs"},                                                              // boot-time document seeder; it runs to completion before the first request is served
 	{pkg: "internal/demopolicy"},                                                            // boot-time approval-policy seeder, on the same pre-request boot phase
 	{file: "internal/extraction/store.go"},                                                  // the extraction worker's store; a River job carries its own tenant and there is no request identity to gate

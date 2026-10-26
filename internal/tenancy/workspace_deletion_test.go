@@ -3,6 +3,13 @@ package tenancy
 import (
 	"context"
 	"errors"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"net/http"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -10,6 +17,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -653,5 +662,284 @@ func TestWorkspaceDeletion_ACancelledWorkspaceCanBeScheduledAgain(t *testing.T) 
 	}
 	if n := auditCount(t, w.app, w.tenant, evScheduled); n != 2 {
 		t.Errorf("%s rows = %d, want 2", evScheduled, n)
+	}
+}
+
+// startPurge schedules the tenant 31 days ago (due a day ago), then sets the purge marker, as superuser.
+func startPurge(t *testing.T, super *pgxpool.Pool, tenant, by string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := super.Exec(ctx,
+		`UPDATE tenants SET deletion_scheduled_at = now() - interval '31 days', deletion_scheduled_by = $2 WHERE id = $1`,
+		tenant, by); err != nil {
+		t.Fatalf("schedule the tenant in the past: %v", err)
+	}
+	if _, err := super.Exec(ctx, `UPDATE tenants SET deletion_purge_started_at = now() WHERE id = $1`, tenant); err != nil {
+		t.Fatalf("set deletion_purge_started_at: %v", err)
+	}
+}
+
+func purgeStartedAt(t *testing.T, super *pgxpool.Pool, tenant string) *time.Time {
+	t.Helper()
+	var at *time.Time
+	if err := super.QueryRow(context.Background(),
+		`SELECT deletion_purge_started_at FROM tenants WHERE id = $1`, tenant).Scan(&at); err != nil {
+		t.Fatalf("read deletion_purge_started_at: %v", err)
+	}
+	return at
+}
+
+func TestWorkspaceDeletion_AStartedPurgeCannotBeCancelled(t *testing.T) {
+	w := newInvWorld(t, obi, "Ada Obi")
+	startPurge(t, w.super, w.tenant, w.admin)
+	before := deletionOf(t, w.super, w.tenant)
+	if before.DueAt == nil || !before.DueAt.Before(time.Now()) {
+		t.Fatalf("setup: deletion_due_at = %v, want a past time", before.DueAt)
+	}
+	marker := purgeStartedAt(t, w.super, w.tenant)
+
+	_, err := w.store.CancelWorkspaceDeletion(w.adminCtx())
+	if err == nil {
+		t.Fatal("CancelWorkspaceDeletion succeeded after the purge started")
+	}
+	if !errors.Is(err, ErrDeletionUnderway) {
+		t.Errorf("err = %v, want ErrDeletionUnderway", err)
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		t.Errorf("err = %v, want the mapped sentinel, not the raw database error", err)
+	}
+	requireNoSentinel(t, err)
+	if after := deletionOf(t, w.super, w.tenant); after.DueAt == nil || !after.DueAt.Equal(*before.DueAt) {
+		t.Errorf("deletion_due_at = %v, want %v unchanged", after.DueAt, before.DueAt)
+	}
+	if got := purgeStartedAt(t, w.super, w.tenant); got == nil || !got.Equal(*marker) {
+		t.Errorf("deletion_purge_started_at = %v, want %v unchanged", got, marker)
+	}
+	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 0 {
+		t.Errorf("%s rows = %d, want 0", evCancelled, n)
+	}
+}
+
+func TestWorkspaceDeletion_AStartedPurgeAnswers409OnTheCancelRoute(t *testing.T) {
+	w := newInvWorld(t, obi, "Ada Obi")
+	preparer := w.addMember(t, "preparer", "active", "Grace Eze")
+	startPurge(t, w.super, w.tenant, w.admin)
+	const target = "/v1/workspace/deletion/cancel"
+	h := CancelDeletionHandler(func(ctx context.Context) error { _, err := w.store.CancelWorkspaceDeletion(ctx); return err }, nil)
+	idOf := func(sub string) *auth.Identity {
+		return &auth.Identity{Subject: sub, Role: "authenticated", TenantID: w.tenant}
+	}
+
+	status, body := deletionCall(h, idOf(w.admin), target, "")
+	if status != http.StatusConflict || errorSentence(body) != "this workspace is already being deleted" {
+		t.Errorf("admin: status = %d, error = %q, want 409 and %q", status, errorSentence(body), "this workspace is already being deleted")
+	}
+	// Control: the role check still runs first.
+	status, body = deletionCall(h, idOf(preparer), target, "")
+	if status != http.StatusForbidden || errorSentence(body) != "only an admin can cancel the deletion" {
+		t.Errorf("preparer: status = %d, error = %q, want 403 and %q", status, errorSentence(body), "only an admin can cancel the deletion")
+	}
+}
+
+func TestWorkspaceDeletion_AStartedPurgeKeepsTheRoleCheckFirst(t *testing.T) {
+	w := newInvWorld(t, obi, "Ada Obi")
+	var roles []string
+	rows, err := w.super.Query(context.Background(), `SELECT name FROM roles WHERE name <> 'admin' ORDER BY name`)
+	if err != nil {
+		t.Fatalf("read the roles: %v", err)
+	}
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			t.Fatalf("scan a role: %v", err)
+		}
+		roles = append(roles, r)
+	}
+	rows.Close()
+	if len(roles) == 0 {
+		t.Fatal("setup: no non-admin role")
+	}
+	members := map[string]string{}
+	for _, r := range roles {
+		members[r] = w.addMember(t, r, "active", "Grace "+r)
+	}
+	suspended := w.addMember(t, "admin", "suspended", "Tunde Bello")
+	startPurge(t, w.super, w.tenant, w.admin)
+
+	for _, r := range roles {
+		if _, err := w.store.CancelWorkspaceDeletion(w.as(members[r])); !errors.Is(err, ErrCancelDeletionNotPermitted) {
+			t.Errorf("%s: err = %v, want ErrCancelDeletionNotPermitted", r, err)
+		}
+	}
+	if _, err := w.store.CancelWorkspaceDeletion(w.as(suspended)); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Errorf("suspended admin: err = %v, want db.ErrNotActiveMember", err)
+	}
+	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 0 {
+		t.Errorf("%s rows = %d, want 0", evCancelled, n)
+	}
+}
+
+func TestWorkspaceDeletion_AStartedPurgeOnADeletionNotYetDueCannotBeCancelled(t *testing.T) {
+	w := newInvWorld(t, obi, "Ada Obi")
+	lockByOwner(t, w.super, w.tenant, w.admin)
+	if _, err := w.super.Exec(context.Background(),
+		`UPDATE tenants SET deletion_purge_started_at = now() WHERE id = $1`, w.tenant); err != nil {
+		t.Fatalf("set deletion_purge_started_at: %v", err)
+	}
+	before := deletionOf(t, w.super, w.tenant)
+	if before.DueAt == nil || !before.DueAt.After(time.Now()) {
+		t.Fatalf("setup: deletion_due_at = %v, want a future time", before.DueAt)
+	}
+
+	for i := 1; i <= 2; i++ {
+		if _, err := w.store.CancelWorkspaceDeletion(w.adminCtx()); !errors.Is(err, ErrDeletionUnderway) {
+			t.Errorf("cancel %d: err = %v, want ErrDeletionUnderway", i, err)
+		}
+	}
+	if after := deletionOf(t, w.super, w.tenant); after.DueAt == nil || !after.DueAt.Equal(*before.DueAt) {
+		t.Errorf("deletion_due_at = %v, want %v unchanged", after.DueAt, before.DueAt)
+	}
+	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 0 {
+		t.Errorf("%s rows = %d, want 0", evCancelled, n)
+	}
+}
+
+func TestWorkspaceDeletion_AStartedPurgeOfAnotherWorkspaceDoesNotBlockTheCancel(t *testing.T) {
+	a := newInvWorld(t, obi, "Ada Obi")
+	b := newInvWorld(t, "Eze Holdings", "Bola Eze")
+	lockByOwner(t, a.super, a.tenant, a.admin)
+	startPurge(t, b.super, b.tenant, b.admin)
+	startedB := purgeStartedAt(t, b.super, b.tenant)
+	if startedB == nil {
+		t.Fatal("setup: the other workspace has no purge marker")
+	}
+
+	if _, err := a.store.CancelWorkspaceDeletion(a.adminCtx()); err != nil {
+		t.Fatalf("cancel of the workspace with no marker: %v", err)
+	}
+	if c := deletionOf(t, a.super, a.tenant); !c.empty() {
+		t.Errorf("own deletion columns = %+v, want all NULL", c)
+	}
+	if c := deletionOf(t, b.super, b.tenant); c.DueAt == nil {
+		t.Error("the started workspace lost its schedule")
+	}
+	if got := purgeStartedAt(t, b.super, b.tenant); got == nil || !got.Equal(*startedB) {
+		t.Errorf("other marker = %v, want %v unchanged", got, startedB)
+	}
+}
+
+// txExec is a pgx.Tx whose Exec returns a fixed error; clearDeletionSchedule calls nothing else.
+type txExec struct {
+	pgx.Tx
+	err error
+}
+
+func (x txExec) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, x.err
+}
+
+func TestClearDeletionSchedule_MapsOnlyTheUnderwayConstraint(t *testing.T) {
+	other := &pgconn.PgError{Code: "42501", ConstraintName: "house_tenant_not_deletable"}
+	noName := &pgconn.PgError{Code: "42501"}
+	plain := errors.New("boom")
+	for _, tc := range []struct {
+		name string
+		in   error
+		is   error // errors.Is target of the result; nil = result is nil
+	}{
+		{"the underway constraint", &pgconn.PgError{Code: "42501", ConstraintName: "tenant_deletion_underway"}, ErrDeletionUnderway},
+		{"the underway constraint, wrapped", fmt.Errorf("wrap: %w", &pgconn.PgError{Code: "42501", ConstraintName: "tenant_deletion_underway"}), ErrDeletionUnderway},
+		{"another constraint", other, other},
+		{"a 42501 with no constraint", noName, noName},
+		{"a plain error", plain, plain},
+		{"no error", nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := clearDeletionSchedule(context.Background(), txExec{err: tc.in})
+			if tc.is == nil {
+				if got != nil {
+					t.Fatalf("err = %v, want nil", got)
+				}
+				return
+			}
+			if !errors.Is(got, tc.is) {
+				t.Errorf("err = %v, want %v", got, tc.is)
+			}
+			if tc.is != ErrDeletionUnderway && errors.Is(got, ErrDeletionUnderway) {
+				t.Errorf("err = %v, must not read as ErrDeletionUnderway", got)
+			}
+		})
+	}
+}
+
+// ceiling: a clear that builds its SQL outside a string literal in this package escapes the scan.
+func TestWorkspaceDeletion_OnlyClearDeletionScheduleClearsTheSchedule(t *testing.T) {
+	// No runtime test sees a clear site that does not exist yet: a second clear would skip the 409 mapping.
+	clearRe := regexp.MustCompile(`(?is)deletion_scheduled_at\s*=\s*NULL`)
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed int
+	sites := map[string]int{} // enclosing func -> clears
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		parsed++
+		file, err := parser.ParseFile(token.NewFileSet(), f, nil, 0) // mode 0: comments dropped
+		if err != nil {
+			t.Fatalf("parse %s: %v", f, err)
+		}
+		for _, decl := range file.Decls {
+			var lits []string
+			ast.Inspect(decl, func(n ast.Node) bool {
+				if bl, ok := n.(*ast.BasicLit); ok && bl.Kind == token.STRING {
+					lits = append(lits, bl.Value)
+				}
+				return true
+			})
+			if n := len(clearRe.FindAllString(strings.Join(lits, " "), -1)); n > 0 {
+				name := f + ": top-level declaration"
+				if fd, ok := decl.(*ast.FuncDecl); ok {
+					name = fd.Name.Name
+				}
+				sites[name] += n
+			}
+		}
+	}
+	if parsed < 5 {
+		t.Fatalf("parsed %d non-test files, want >= 5", parsed)
+	}
+	if sites["clearDeletionSchedule"] != 1 {
+		t.Errorf("clearDeletionSchedule holds %d clears, want 1 (control)", sites["clearDeletionSchedule"])
+	}
+	for fn, n := range sites {
+		if fn != "clearDeletionSchedule" {
+			t.Errorf("%s clears the schedule %d time(s); only clearDeletionSchedule may", fn, n)
+		}
+	}
+}
+
+func TestWorkspaceDeletion_ADueDeletionNotYetStartedStillCancels(t *testing.T) {
+	w := newInvWorld(t, obi, "Ada Obi")
+	if _, err := w.super.Exec(context.Background(),
+		`UPDATE tenants SET deletion_scheduled_at = now() - interval '31 days', deletion_scheduled_by = $2 WHERE id = $1`,
+		w.tenant, w.admin); err != nil {
+		t.Fatalf("schedule the tenant in the past: %v", err)
+	}
+	if c := deletionOf(t, w.super, w.tenant); c.DueAt == nil || !c.DueAt.Before(time.Now()) {
+		t.Fatalf("setup: deletion_due_at = %v, want a past time", c.DueAt)
+	}
+
+	if _, err := w.store.CancelWorkspaceDeletion(w.adminCtx()); err != nil {
+		t.Fatalf("CancelWorkspaceDeletion of a due deletion with no marker: %v", err)
+	}
+	if c := deletionOf(t, w.super, w.tenant); !c.empty() {
+		t.Errorf("deletion columns after the cancel = %+v, want all NULL", c)
+	}
+	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 1 {
+		t.Errorf("%s rows = %d, want 1", evCancelled, n)
 	}
 }

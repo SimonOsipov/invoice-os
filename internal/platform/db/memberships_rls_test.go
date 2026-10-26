@@ -715,14 +715,15 @@ func staffMigrationProvider(t *testing.T) *goose.Provider {
 	return provider
 }
 
-// rollBackRemovedFirst undoes workspace_deletion_mails, workspace_deletion, then person_erasures, removed_flag_ignores_live_membership, then membership_removed, so an older migration's Down and Up see their own schema.
-// The cleanup rolls both back again (a provider.Up in the test may have applied them early) and re-applies them last, in order,
+// rollBackRemovedFirst undoes workspace_deletion_mails, deletion_purge_started, then workspace_deletion, then person_erasures, removed_flag_ignores_live_membership, then membership_removed, so an older migration's Down and Up see their own schema.
+// The cleanup rolls them back again (a provider.Up in the test may have applied them early) and re-applies them last, in order,
 // over the older bodies and the older CHECK that Up puts back, so they sit last in the goose ledger.
 func rollBackRemovedFirst(t *testing.T, provider *goose.Provider) {
 	t.Helper()
 	removed := migrationVersion(t, "*_membership_removed.sql")
 	flag := migrationVersion(t, "*_removed_flag_ignores_live_membership.sql")
 	deletion := migrationVersion(t, "*_workspace_deletion.sql")
+	purge := migrationVersion(t, "*_deletion_purge_started.sql")
 	erasures := migrationVersion(t, "*_person_erasures.sql")
 	mails := migrationVersion(t, "*_workspace_deletion_mails.sql")
 	roll := func(version int64, up bool) error {
@@ -732,22 +733,23 @@ func rollBackRemovedFirst(t *testing.T, provider *goose.Provider) {
 		}
 		return err
 	}
-	for _, v := range []int64{mails, deletion, erasures, flag, removed} {
+	for _, v := range []int64{mails, purge, deletion, erasures, flag, removed} {
 		if err := roll(v, false); err != nil {
 			t.Fatalf("roll back migration %d: %v", v, err)
 		}
 	}
 	t.Cleanup(func() {
-		for _, v := range []int64{mails, deletion, erasures, flag, removed} {
+		for _, v := range []int64{mails, purge, deletion, erasures, flag, removed} {
 			if err := roll(v, false); err != nil {
 				t.Errorf("roll back migration %d: %v", v, err)
 			}
 		}
-		for _, v := range []int64{removed, flag, erasures, deletion, mails} {
+		for _, v := range []int64{removed, flag, erasures, deletion, purge, mails} {
 			if err := roll(v, true); err != nil {
 				t.Errorf("re-apply migration %d: %v", v, err)
 			}
 		}
+		requirePurgeGuard(t)
 	})
 }
 
@@ -1041,9 +1043,15 @@ func TestRLS_MembershipRemovedDownTurnsRemovedRowsSuspended(t *testing.T) {
 
 	// The flag and deletion migrations redefine functions this Down drops: undo them first, restore them last.
 	deletion := migrationVersion(t, "*_workspace_deletion.sql")
+	purge := migrationVersion(t, "*_deletion_purge_started.sql")
 	flag := migrationVersion(t, "*_removed_flag_ignores_live_membership.sql")
+	t.Cleanup(func() { requirePurgeGuard(t) })
+	restoreMigrationOnCleanup(t, provider, purge)
 	restoreMigrationOnCleanup(t, provider, deletion)
 	restoreMigrationOnCleanup(t, provider, flag)
+	if _, err := provider.ApplyVersion(ctx, purge, false); err != nil && !errors.Is(err, goose.ErrNotApplied) {
+		t.Fatalf("Down of the purge-started migration: %v", err)
+	}
 	if _, err := provider.ApplyVersion(ctx, deletion, false); err != nil && !errors.Is(err, goose.ErrNotApplied) {
 		t.Fatalf("Down of the deletion migration: %v", err)
 	}

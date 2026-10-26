@@ -385,4 +385,24 @@ describe('cancel link', () => {
     await screen.findByTestId('sidebar')
     expect(posts().map((c) => c.url.split('/deletion')[1])).toEqual(['/cancel'])
   })
+
+  it('cancel link: the token leaves the address bar even when the visit is signed out', async () => {
+    handler = async () => ({})
+    window.history.replaceState(null, '', `/#cancel-deletion=${LINK}`)
+    vi.resetModules()
+    const { default: App } = await import('./App')
+    render(<App />)
+
+    await waitFor(() => expect(window.location.hash).toBe(''))
+    expect(peekCancelLink()).toBe(LINK)
+  })
+
+  it('cancel link: a link is dropped when the notice finds the workspace already unlocked', async () => {
+    handler = async (url) => (isMe(url) ? me(null) : {})
+    window.history.replaceState(null, '', `/#cancel-deletion=${LINK}`)
+    await renderApp(sessionWith(DUE))
+
+    await screen.findByTestId('sidebar')
+    expect(peekCancelLink()).toBeNull()
+  })
 })

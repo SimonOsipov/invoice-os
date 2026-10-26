@@ -216,6 +216,66 @@ func TestMetricsSource_CachesSixtySecondsPerKey(t *testing.T) {
 	get("1h", "", 4*n)
 }
 
+// The poll arrives MetricsTTL after the previous fetch ended; it must not wait on Google.
+func TestMetricsSource_APollOneTTLAfterAFetchDoesNotWaitOnGoogle(t *testing.T) {
+	const fetchTime = 1500 * time.Millisecond
+	clk := newClock()
+	f, s, _ := newComboFake(t, clk.now)
+	var first sync.Once
+	hold := make(chan struct{})
+	t.Cleanup(func() { close(hold) })
+	f.mu.Lock()
+	f.override = func(path, _ string) (int, string, bool) {
+		if !strings.HasSuffix(path, "/query_range") {
+			return 0, "", false
+		}
+		select {
+		case <-hold:
+		default:
+			first.Do(func() { clk.advance(fetchTime) })
+		}
+		return 0, "", false
+	}
+	f.mu.Unlock()
+
+	body, err := s.Get(t.Context(), "1h", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// From here every Google query blocks until cleanup.
+	f.mu.Lock()
+	f.override = func(path, _ string) (int, string, bool) {
+		if strings.HasSuffix(path, "/query_range") {
+			<-hold
+		}
+		return 0, "", false
+	}
+	f.mu.Unlock()
+	clk.advance(MetricsTTL)
+
+	type result struct {
+		m   Metrics
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		m, err := s.Get(t.Context(), "1h", "")
+		done <- result{m, err}
+	}()
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		if !reflect.DeepEqual(r.m, body) {
+			t.Fatal("second Get did not return the first body")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("second Get waited on a Google fetch instead of serving the cached body")
+	}
+}
+
 func TestMetricsSource_CallsNothingUntilAsked(t *testing.T) {
 	f, _, _ := newComboFake(t, newClock().now)
 	f.mu.Lock()

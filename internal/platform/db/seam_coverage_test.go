@@ -202,6 +202,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/reconciliation/sweep.go"},                                        // EnumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
 	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"},         // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/invitation_token.go", fn: "SetInvitationToken"},      // mock builds only: the E2E fork replaces a pending invite's token hash on the owner DSN; no caller identity exists
+	{file: "internal/platform/db/deletion_link_token.go", fn: "SetDeletionLinkToken"}, // mock builds only: the E2E fork replaces an admin's cancel link token hash on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/account_state_read.go", fn: "GrantAccountStateRead"}, // boot-time grant on the supabase_auth_admin DSN, before any request or tenant exists
 	{file: "internal/platform/db/leader.go", fn: "claim"},                             // worker-only advisory locks; reads no table and serves no request
 	{file: "internal/gateway/registrant_outbox.go", fn: "Registrant"},                 // global outbox, no tenant data; invoice_gateway may only INSERT into it
@@ -1118,6 +1119,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /auth/invitation/resend":                        {verdict: scExempt, reason: "no database; asks tenancy, calls GoTrue"},
 	"POST /auth/login":                                    {verdict: scExempt, reason: "unauthenticated by definition; there is no caller yet to hold a membership"},
 	"POST /auth/mock/invitation-token":                    {verdict: scExempt, reason: "mock builds only; replaces a pending invite's token hash on the owner DSN for the E2E fork, with no caller identity"},
+	"POST /auth/mock/deletion-link-token":                 {verdict: scExempt, reason: "mock builds only; replaces an admin's cancel link token hash on the owner DSN for the E2E fork, with no caller identity"},
 	"POST /auth/mock/member":                              {verdict: scExempt, reason: "mock builds only; grants a tenant membership on the owner DSN for the E2E fork, with no caller identity"},
 	"POST /auth/refresh":                                  {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /auth/register":                                 {verdict: scExempt, reason: "no database; calls GoTrue"},

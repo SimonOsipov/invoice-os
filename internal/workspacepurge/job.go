@@ -2,19 +2,35 @@ package workspacepurge
 
 import (
 	"context"
+	"log/slog"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/riverqueue/river"
 
 	"github.com/SimonOsipov/invoice-os/internal/workspacepurge/purgeargs"
 )
 
-// PurgeWorker purges the tenant a job names.
+const purgeTimeout = 10 * time.Minute
+
+// PurgeWorker purges the tenant a job names. Purger is set by the wiring once it is built.
 type PurgeWorker struct {
 	river.WorkerDefaults[purgeargs.Args]
 	Purger *Purger
 }
 
-// Stub for the red tests: DEL-09-03 implements Work and AddPurgeTo.
-func (w *PurgeWorker) Work(context.Context, *river.Job[purgeargs.Args]) error { return nil }
+func (w *PurgeWorker) Timeout(*river.Job[purgeargs.Args]) time.Duration { return purgeTimeout }
 
-func AddPurgeTo(*river.Workers, *PurgeWorker) {}
+// Work purges the tenant; a tenant that is not due or started is a no-op.
+func (w *PurgeWorker) Work(ctx context.Context, job *river.Job[purgeargs.Args]) error {
+	if _, err := uuid.Parse(job.Args.TenantID); err != nil {
+		return river.JobCancel(err)
+	}
+	log := w.Purger.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	return w.Purger.purgeLogged(ctx, log, job.Args.TenantID)
+}
+
+func AddPurgeTo(bundle *river.Workers, w *PurgeWorker) { river.AddWorker(bundle, w) }

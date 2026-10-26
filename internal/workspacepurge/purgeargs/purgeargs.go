@@ -8,7 +8,7 @@ type Args struct {
 	TenantID string `json:"tenant_id"`
 }
 
-// Stub for the red tests: DEL-09-03 sets the kind and MaxAttempts.
-func (Args) Kind() string { return "" }
+func (Args) Kind() string { return "workspace_purge" }
 
-func (Args) InsertOpts() river.InsertOpts { return river.InsertOpts{} }
+// ceiling: one attempt; the hourly workspace-purge ticker retries a started purge.
+func (Args) InsertOpts() river.InsertOpts { return river.InsertOpts{MaxAttempts: 1} }

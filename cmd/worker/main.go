@@ -201,6 +201,7 @@ func main() {
 	if account != nil { // a nil *Client in the interface would pass the purger's nil check
 		purger.Accounts = account
 	}
+	pjw.Purger = purger
 	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("workspace-purge", purger.RunOnce)))
 
 	app.AddBackgroundWorker(codelist.NewWorker(codelist.SyncInterval,

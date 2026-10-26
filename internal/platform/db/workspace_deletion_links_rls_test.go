@@ -343,6 +343,15 @@ func dlCheckIsolation(t *testing.T, tbl dlTable) {
 	if got := dlVisible(t, h.app, dlBindEmpty, tbl); got != 0 {
 		t.Errorf("%s: app with an empty tenant sees %d rows, want 0", tbl.name, got)
 	}
+	// A fresh connection has never set the GUC, so current_setting(..., true) is NULL, not '' as on a reused pool connection.
+	fresh, err := pgx.Connect(ctx, h.appURL)
+	if err != nil {
+		t.Fatalf("connect as invoice_app: %v", err)
+	}
+	defer func() { _ = fresh.Close(ctx) }()
+	if n := mustCount(t, fresh, `SELECT count(*) FROM public.`+tbl.name); n != 0 {
+		t.Errorf("%s: a fresh app connection with no tenant sees %d rows, want 0", tbl.name, n)
+	}
 	if got := dlVisible(t, h.mig, "", tbl); got != 0 {
 		t.Errorf("%s: invoice_migrator with no tenant sees %d rows, want 0 (FORCE RLS)", tbl.name, got)
 	}

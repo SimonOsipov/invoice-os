@@ -34,10 +34,10 @@ var DemoTenants = []string{
 // last because it is the only statement issued under the 'replica' bypass, and
 // that window is kept as small as possible ([bypass-narrowed-to-audit-log]).
 //
-// Deliberately WIDER than reset.go, which excludes invitations, workflow_roles
-// and workflow_role_members: db.Seed follows the purge in the same Provision
+// Deliberately WIDER than reset.go, which excludes invitations, the two workspace_deletion_* tables,
+// workflow_roles and workflow_role_members: db.Seed follows the purge in the same Provision
 // call and restores all 14 roles and 13 staffing rows under their literal
-// seeded ids, and the seed inserts no invitation — zero is their seeded state
+// seeded ids, and the seed inserts no invitation or deletion row — zero is their seeded state
 // ([include-workflow-roles]).
 var purgeTables = []string{
 	"approval_decisions",

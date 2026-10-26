@@ -514,7 +514,7 @@ func isStringLit(e ast.Expr, want string) bool {
 func TestMain_PassesTheGatewayPoolToEverySharedState(t *testing.T) {
 	_, body := parseMain(t)
 
-	poolAt, sessionsAt, sessions := -1, -1, ""
+	poolAt, sessionsAt, sessions, checkers := -1, -1, "", 0
 	builders := map[string][]string{"handoffHandlers": nil, "registrationHandlers": nil, "blogSubscribeHandlers": nil}
 	for i, st := range body.List {
 		as, ok := st.(*ast.AssignStmt)
@@ -525,7 +525,7 @@ func TestMain_PassesTheGatewayPoolToEverySharedState(t *testing.T) {
 			poolAt = i
 		}
 		if _, ok := isCallTo(as.Rhs[0], "gateway", "NewSessionChecker"); ok {
-			sessionsAt, sessions = i, types.ExprString(as.Lhs[0])
+			sessionsAt, sessions, checkers = i, types.ExprString(as.Lhs[0]), checkers+1
 		}
 		for name := range builders {
 			if call, ok := isCallTo(as.Rhs[0], "", name); ok && len(call.Args) > 0 {
@@ -535,6 +535,9 @@ func TestMain_PassesTheGatewayPoolToEverySharedState(t *testing.T) {
 	}
 	if poolAt < 0 || sessionsAt < 0 {
 		t.Fatalf("main has no top-level `gwPool := gatewayPool(...)` (at %d) or `x := gateway.NewSessionChecker(...)` (at %d)", poolAt, sessionsAt)
+	}
+	if checkers != 1 {
+		t.Errorf("main builds %d session checkers at the top level, want one: a second one may carry the Shared call", checkers)
 	}
 	if poolAt > sessionsAt {
 		t.Errorf("gwPool opens at statement %d, after the checker at %d; it must come first", poolAt, sessionsAt)

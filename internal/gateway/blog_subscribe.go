@@ -15,7 +15,7 @@ import (
 	"unicode"
 )
 
-// ceiling: with no pool, counts are in-process; a restart clears them and replicas do not share them. Revisit when the gateway runs more than one replica.
+// ceiling: with no pool, counts are in-process; a restart clears them and replicas do not share them.
 // ceiling: an attacker can spend a victim address's 3 subscribes an hour. Revisit if abuse reports name a victim address.
 const (
 	BlogSubscribePerEmail = 3

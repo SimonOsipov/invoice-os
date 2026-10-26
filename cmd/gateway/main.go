@@ -320,7 +320,7 @@ func gatewayPool(log *slog.Logger) *pgxpool.Pool {
 	}
 	pool, err := db.NewPool(context.Background(), dsn)
 	if err != nil {
-		platform.Fatal(log, "gateway: hand-off store: %v", err)
+		platform.Fatal(log, "gateway: database pool: %v", err)
 	}
 	return pool
 }

@@ -352,3 +352,51 @@ func TestTwoInstances_ALiveSessionIsStillCached(t *testing.T) {
 		t.Errorf("tenancy calls = %d, want 5", n)
 	}
 }
+
+// Without DATABASE_GATEWAY_URL main passes a nil pool: each builder keeps its in-process limit and never reaches the shared path.
+func TestBuilders_NilPoolKeepsTheLimitsInProcess(t *testing.T) {
+	t.Setenv("DEPLOY_ENV", "")
+	addr := "flake04-" + uuid.NewString() + "@example.test"
+	g := newGotrueFake(t, uuid.NewString(), addr)
+	authURL, _ := url.Parse(g.URL)
+	site, _ := url.Parse("https://site.example")
+	log := slog.New(slog.DiscardHandler)
+	h := handoffHandlers(authURL, site, gateway.NewSessionChecker(authURL, http.DefaultClient, time.Now, log), log, nil, nil, nil)
+
+	body := fmt.Sprintf(`{"email":%q,"password":"wrong","state":%q}`, addr, handoffState)
+	for i := range gateway.SignInMaxFailures {
+		if rec := serveJSON(h.SignIn, "/auth/sign-in", body); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("wrong password %d = %d, want 401: %s", i+1, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := serveJSON(h.SignIn, "/auth/sign-in", body); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("wrong password %d = %d, want 429 from the in-process limit", gateway.SignInMaxFailures+1, rec.Code)
+	}
+	if n := g.passwordGrants.Load(); n != gateway.SignInMaxFailures {
+		t.Errorf("GoTrue password grants = %d, want %d", n, gateway.SignInMaxFailures)
+	}
+
+	resend := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite, nil).ResendVerification
+	for i := range gateway.ResendPerAddress + 1 {
+		if rec := serveJSON(resend, "/auth/resend-verification", fmt.Sprintf(`{"email":%q}`, addr)); rec.Code != http.StatusAccepted {
+			t.Fatalf("resend %d = %d, want 202", i+1, rec.Code)
+		}
+	}
+	if n := g.resends.Load(); n != gateway.ResendPerAddress {
+		t.Errorf("GoTrue /resend calls = %d, want %d", n, gateway.ResendPerAddress)
+	}
+
+	var hits atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { hits.Add(1); w.WriteHeader(http.StatusAccepted) }))
+	t.Cleanup(up.Close)
+	upURL, _ := url.Parse(up.URL)
+	subscribe := blogSubscribeHandlers(upURL, instToken, 0, log, nil).Subscribe
+	for i := range gateway.BlogSubscribePerEmail + 1 {
+		if rec := serveJSON(subscribe, "/blog/subscriptions", fmt.Sprintf(instSubscribe, addr)); rec.Code != http.StatusAccepted {
+			t.Fatalf("subscribe %d = %d, want 202", i+1, rec.Code)
+		}
+	}
+	if n := hits.Load(); n != gateway.BlogSubscribePerEmail {
+		t.Errorf("notifications calls = %d, want %d", n, gateway.BlogSubscribePerEmail)
+	}
+}

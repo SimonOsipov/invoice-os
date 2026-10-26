@@ -332,6 +332,29 @@ export function cancelDeletion(token: string): Promise<{ status: number; body: u
   return rawFetch('/api/tenancy/v1/workspace/deletion/cancel', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
 }
 
+// GET /api/invoice/v1/workspace/export/preflight: 204 when an export can start; raw so a spec can assert the refusals.
+export function exportPreflight(token: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/api/invoice/v1/workspace/export/preflight', { headers: { Authorization: `Bearer ${token}` } })
+}
+
+// POST /auth/export-code {state}: 200 {code}. Pass token=null to omit the bearer.
+export function exportCode(token: string | null, state: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/auth/export-code', { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: { state } })
+}
+
+// POST /auth/export-download as the browser form does: the ZIP, or the refusal page, as bytes.
+export async function exportDownload(
+  code: string,
+  state: string,
+): Promise<{ status: number; headers: Headers; body: Uint8Array }> {
+  const res = await fetch(`${apiBase()}/auth/export-download`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ code, state }).toString(),
+  })
+  return { status: res.status, headers: res.headers, body: new Uint8Array(await res.arrayBuffer()) }
+}
+
 // ---- Wire contract types, declared locally to the verified contract
 // (internal/tenancy, internal/portfolio/portfolio.go, internal/validation/
 // rule.go + handlers.go). Me mirrors e2e/topology/isolation.spec.ts's Me

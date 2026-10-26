@@ -64,8 +64,6 @@ func main() {
 	// GET /v1/staff/tenants — every tenant, for staff; the staff check is in platform.App.
 	app.Mux.HandleFunc("GET /v1/staff/tenants", tenancy.StaffTenantsHandler(store.StaffTenants, app.Logger))
 	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}", tenancy.StaffTenantHandler(store.StaffTenant, app.Logger))
-	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/deletion", tenancy.StaffScheduleDeletionHandler(store.StaffScheduleWorkspaceDeletion, app.Logger))
-	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/deletion/cancel", tenancy.StaffCancelDeletionHandler(store.StaffCancelWorkspaceDeletion, app.Logger))
 	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/deletion/purge", tenancy.StaffPurgeHandler(store.StaffPurgeWorkspace, app.Logger))
 	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}/members/{user_id}/deletion", tenancy.StaffAccountDeletionPreviewHandler(store.StaffPreviewAccountDeletion, app.Logger))
 	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/members/{user_id}/deletion", tenancy.StaffDeleteAccountHandler(store.StaffDeleteAccount, app.Logger))
@@ -93,6 +91,8 @@ func main() {
 	app.Mux.HandleFunc("POST /v1/workspace/deletion", tenancy.ScheduleDeletionHandler(notifier.Schedule, app.Logger))
 	app.Mux.HandleFunc("POST /v1/workspace/deletion/cancel", tenancy.CancelDeletionHandler(notifier.Cancel, app.Logger))
 	app.Mux.HandleFunc("POST /v1/workspace/deletion/cancel-by-link", tenancy.CancelDeletionByLinkHandler(notifier.CancelByLink, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/deletion", tenancy.StaffScheduleDeletionHandler(notifier.StaffSchedule, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/deletion/cancel", tenancy.StaffCancelDeletionHandler(notifier.StaffCancel, app.Logger))
 	app.Mux.HandleFunc("POST /v1/invitations", tenancy.InvitationsCreateHandler(inviter.Invite, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invitations", tenancy.InvitationsListHandler(store.ListInvitations, app.Logger))
 	app.Mux.HandleFunc("POST /v1/invitations/{id}/resend", tenancy.InvitationResendHandler(inviter.Resend, app.Logger))

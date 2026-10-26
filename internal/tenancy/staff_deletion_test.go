@@ -131,7 +131,7 @@ func TestStaffDeletion_StartLocksTheWorkspaceWithStaffAsActor(t *testing.T) {
 	}
 	before := time.Now()
 
-	due, err := w.store.StaffScheduleWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
+	due, err := staffScheduleDue(w.store, w.ctx, w.tenant, staffReasonText)
 	if err != nil {
 		t.Fatalf("StaffScheduleWorkspaceDeletion: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestStaffDeletion_StartLocksTheWorkspaceWithStaffAsActor(t *testing.T) {
 func TestStaffDeletion_StartWritesOneStaffRowAndTheCustomerRow(t *testing.T) {
 	w := newStaffDelWorld(t)
 
-	due, err := w.store.StaffScheduleWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
+	due, err := staffScheduleDue(w.store, w.ctx, w.tenant, staffReasonText)
 	if err != nil {
 		t.Fatalf("StaffScheduleWorkspaceDeletion: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestStaffDeletion_StartRefusals(t *testing.T) {
 
 func TestStaffDeletion_CancelUnlocksAndAudits(t *testing.T) {
 	w := newStaffDelWorld(t)
-	due, err := w.store.StaffScheduleWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
+	due, err := staffScheduleDue(w.store, w.ctx, w.tenant, staffReasonText)
 	if err != nil {
 		t.Fatalf("setup start: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestStaffDeletion_CancelUnlocksAndAudits(t *testing.T) {
 	}
 
 	const reason = "customer changed their mind"
-	if err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, reason); err != nil {
+	if _, err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, reason); err != nil {
 		t.Fatalf("StaffCancelWorkspaceDeletion: %v", err)
 	}
 
@@ -313,7 +313,7 @@ func TestStaffDeletion_CancelUnlocksAndAudits(t *testing.T) {
 func TestStaffDeletion_CancelOfAnUnscheduledTenantWritesNothing(t *testing.T) {
 	w := newStaffDelWorld(t)
 
-	if err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); err != nil {
+	if _, err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); err != nil {
 		t.Fatalf("cancel of an unscheduled tenant: err = %v, want nil", err)
 	}
 	if n := tenantRowsOfStaff(t, w.super, w.tenant); n != 0 {
@@ -327,10 +327,10 @@ func TestStaffDeletion_CancelOfAnUnscheduledTenantWritesNothing(t *testing.T) {
 	}
 
 	t.Run("an unknown tenant is not a no-op", func(t *testing.T) {
-		if err := w.store.StaffCancelWorkspaceDeletion(w.ctx, uuid.NewString(), staffReasonText); !errors.Is(err, ErrTenantNotFound) {
+		if _, err := w.store.StaffCancelWorkspaceDeletion(w.ctx, uuid.NewString(), staffReasonText); !errors.Is(err, ErrTenantNotFound) {
 			t.Errorf("err = %v, want ErrTenantNotFound", err)
 		}
-		if err := w.store.StaffCancelWorkspaceDeletion(w.ctx, "x", staffReasonText); !errors.Is(err, ErrTenantNotFound) {
+		if _, err := w.store.StaffCancelWorkspaceDeletion(w.ctx, "x", staffReasonText); !errors.Is(err, ErrTenantNotFound) {
 			t.Errorf("malformed id: err = %v, want ErrTenantNotFound", err)
 		}
 	})
@@ -348,7 +348,7 @@ func TestStaffDeletion_CancelOfAStartedPurgeIsRefused(t *testing.T) {
 		t.Fatal("setup: no purge marker")
 	}
 
-	err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
+	_, err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
 	if !errors.Is(err, ErrDeletionUnderway) {
 		t.Fatalf("err = %v, want ErrDeletionUnderway", err)
 	}
@@ -390,7 +390,7 @@ func TestStaffDeletion_RefusesWithoutAStaffCaller(t *testing.T) {
 			if _, err := w.store.StaffScheduleWorkspaceDeletion(ctx, w.tenant, staffReasonText); !errors.Is(err, db.ErrNotStaff) {
 				t.Errorf("start: err = %v, want db.ErrNotStaff", err)
 			}
-			if err := w.store.StaffCancelWorkspaceDeletion(ctx, other, staffReasonText); !errors.Is(err, db.ErrNotStaff) {
+			if _, err := w.store.StaffCancelWorkspaceDeletion(ctx, other, staffReasonText); !errors.Is(err, db.ErrNotStaff) {
 				t.Errorf("cancel: err = %v, want db.ErrNotStaff", err)
 			}
 			if c := deletionOf(t, w.super, w.tenant); !c.empty() {
@@ -411,7 +411,7 @@ func TestStaffDeletion_RefusesWithoutAStaffCaller(t *testing.T) {
 		if _, err := w.store.StaffScheduleWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); err != nil {
 			t.Errorf("staff start: %v", err)
 		}
-		if err := w.store.StaffCancelWorkspaceDeletion(w.ctx, other, staffReasonText); err != nil {
+		if _, err := w.store.StaffCancelWorkspaceDeletion(w.ctx, other, staffReasonText); err != nil {
 			t.Errorf("staff cancel: %v", err)
 		}
 	})
@@ -440,7 +440,7 @@ func TestStaffDeletion_ActsOnlyOnThePathTenant(t *testing.T) {
 	t.Run("a cancel of A leaves a scheduled B alone", func(t *testing.T) {
 		lockByOwner(t, w.super, b, w.staff)
 		bBefore := deletionOf(t, w.super, b)
-		if err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); err != nil {
+		if _, err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); err != nil {
 			t.Fatalf("cancel of A: %v", err)
 		}
 		if c := deletionOf(t, w.super, w.tenant); !c.empty() {
@@ -460,13 +460,13 @@ func TestStaffDeletion_ActsOnlyOnThePathTenant(t *testing.T) {
 
 func TestStaffDeletion_AFailedCancelRowKeepsTheSchedule(t *testing.T) {
 	w := newStaffDelWorld(t)
-	due, err := w.store.StaffScheduleWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
+	due, err := staffScheduleDue(w.store, w.ctx, w.tenant, staffReasonText)
 	if err != nil {
 		t.Fatalf("setup start: %v", err)
 	}
 	drop := failStaffAudit(t, w.super, w.tenant, evCancelled)
 
-	err = w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
+	_, err = w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
 	if err == nil {
 		t.Fatal("StaffCancelWorkspaceDeletion succeeded although its staff row fails")
 	}
@@ -482,7 +482,7 @@ func TestStaffDeletion_AFailedCancelRowKeepsTheSchedule(t *testing.T) {
 	}
 
 	drop()
-	if err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); err != nil {
+	if _, err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); err != nil {
 		t.Errorf("cancel after the trigger is gone: %v", err)
 	}
 }
@@ -551,7 +551,7 @@ func TestStaffDeletion_StartsAndCancelsRacingKeepTheRowsInStepWithTheState(t *te
 			_, err := w.store.StaffScheduleWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
 			return err
 		}, db.ErrWorkspaceLocked)
-		run(func() error { return w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText) })
+		run(func() error { return staffCancelErr(w.store, w.ctx, w.tenant, staffReasonText) })
 	}
 	close(gate)
 	wg.Wait()
@@ -576,7 +576,7 @@ func TestStaffDeletion_ACancelTwiceWritesOneRowAndARestartSchedulesAgain(t *test
 		t.Fatalf("setup start: %v", err)
 	}
 	for i := range 2 {
-		if err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); err != nil {
+		if _, err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); err != nil {
 			t.Fatalf("cancel %d: %v", i+1, err)
 		}
 	}
@@ -607,7 +607,7 @@ func TestStaffDeletion_ConcurrentCancelsWriteOneRowPerSchedule(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-gate
-				errs[i] = w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
+				_, errs[i] = w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
 			}()
 		}
 		close(gate)
@@ -655,7 +655,7 @@ func TestStaffDeletion_ATenantPurgedAfterTheStaffCheckIsNotFound(t *testing.T) {
 			if route == "start" {
 				_, err = w.store.StaffScheduleWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
 			} else {
-				err = w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
+				_, err = w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
 			}
 			if !errors.Is(err, ErrTenantNotFound) {
 				t.Errorf("err = %v, want ErrTenantNotFound", err)
@@ -849,7 +849,7 @@ func TestStaffPurge_ClosesEveryCancel(t *testing.T) {
 	if _, err := w.store.CancelWorkspaceDeletion(w.adminCtx()); !errors.Is(err, ErrDeletionUnderway) {
 		t.Errorf("an admin's cancel: err = %v, want ErrDeletionUnderway", err)
 	}
-	if err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); !errors.Is(err, ErrDeletionUnderway) {
+	if _, err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); !errors.Is(err, ErrDeletionUnderway) {
 		t.Errorf("the staff cancel: err = %v, want ErrDeletionUnderway", err)
 	}
 	// A second purge (a double click) is refused too and queues no second job.
@@ -1166,7 +1166,7 @@ func TestStaffPurge_RacingCancelsLeaveOneStartedPurge(t *testing.T) {
 			}
 			run("purge", func() error { _, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason); return err })
 			run("admin cancel", func() error { _, err := w.store.CancelWorkspaceDeletion(w.adminCtx()); return err })
-			run("staff cancel", func() error { return w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText) })
+			run("staff cancel", func() error { return staffCancelErr(w.store, w.ctx, w.tenant, staffReasonText) })
 			close(gate)
 			wg.Wait()
 
@@ -1184,4 +1184,14 @@ func TestStaffPurge_RacingCancelsLeaveOneStartedPurge(t *testing.T) {
 			}
 		})
 	}
+}
+
+func staffScheduleDue(s *Store, ctx context.Context, tenant, reason string) (time.Time, error) {
+	sched, err := s.StaffScheduleWorkspaceDeletion(ctx, tenant, reason)
+	return sched.DueAt, err
+}
+
+func staffCancelErr(s *Store, ctx context.Context, tenant, reason string) error {
+	_, err := s.StaffCancelWorkspaceDeletion(ctx, tenant, reason)
+	return err
 }

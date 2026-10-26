@@ -29,7 +29,7 @@ func (n *DeletionNotifier) Schedule(ctx context.Context, typedName string) (time
 	if err != nil {
 		return time.Time{}, err
 	}
-	n.deliver(ctx, s)
+	n.deliver(ctx, s, n.Store.RecordDeletionLinkDelivery)
 	return s.DueAt, nil
 }
 
@@ -39,7 +39,7 @@ func (n *DeletionNotifier) Cancel(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	n.deliverCancelled(ctx, c)
+	n.deliverCancelled(ctx, c, n.Store.RecordCancelMailDelivery)
 	return nil
 }
 
@@ -49,9 +49,12 @@ func (n *DeletionNotifier) CancelByLink(ctx context.Context, token string) error
 	if err != nil {
 		return err
 	}
-	n.deliverCancelled(ctx, c)
+	n.deliverCancelled(ctx, c, n.Store.RecordCancelMailDelivery)
 	return nil
 }
+
+// deliveryRecorder writes one mail's send outcome.
+type deliveryRecorder = func(ctx context.Context, id string, sent bool) error
 
 // outbound is one mail to render, send and record.
 type outbound struct {
@@ -59,7 +62,7 @@ type outbound struct {
 	render func() (subject, html string, err error)
 }
 
-func (n *DeletionNotifier) deliver(ctx context.Context, s ScheduledDeletion) {
+func (n *DeletionNotifier) deliver(ctx context.Context, s ScheduledDeletion, record deliveryRecorder) {
 	items := make([]outbound, len(s.Links))
 	for i, l := range s.Links {
 		items[i] = outbound{id: l.ID, to: l.Email, render: func() (string, string, error) {
@@ -68,10 +71,10 @@ func (n *DeletionNotifier) deliver(ctx context.Context, s ScheduledDeletion) {
 			})
 		}}
 	}
-	n.sendAndRecord(ctx, "deletion mail", items, n.Store.RecordDeletionLinkDelivery)
+	n.sendAndRecord(ctx, "deletion mail", items, record)
 }
 
-func (n *DeletionNotifier) deliverCancelled(ctx context.Context, c CancelledDeletion) {
+func (n *DeletionNotifier) deliverCancelled(ctx context.Context, c CancelledDeletion, record deliveryRecorder) {
 	items := make([]outbound, len(c.Mails))
 	for i, m := range c.Mails {
 		items[i] = outbound{id: m.ID, to: m.Email, render: func() (string, string, error) {
@@ -80,13 +83,13 @@ func (n *DeletionNotifier) deliverCancelled(ctx context.Context, c CancelledDele
 			})
 		}}
 	}
-	n.sendAndRecord(ctx, "deletion cancel mail", items, n.Store.RecordCancelMailDelivery)
+	n.sendAndRecord(ctx, "deletion cancel mail", items, record)
 }
 
 // sendAndRecord runs on a context that outlives the client, so a send after the commit is always recorded.
 // The log lines carry counts and the vendor status only.
 func (n *DeletionNotifier) sendAndRecord(ctx context.Context, label string, items []outbound,
-	record func(ctx context.Context, id string, sent bool) error) {
+	record deliveryRecorder) {
 	ctx2 := context.WithoutCancel(ctx)
 	var msgs []accountmail.Message
 	var ids []string

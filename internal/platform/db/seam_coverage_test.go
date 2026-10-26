@@ -742,6 +742,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/tenancy/invite_registration.go", fn: "ClaimInvitationRegistration"},    // a gateway-token route; the token names the invite and there is no caller to gate
 	{file: "internal/tenancy/workspace_deletion.go", fn: "cancelScheduledDeletion"},         // cancels a locked workspace, by route or by link, which the seam refuses; it gates the active admin itself
 	{file: "internal/tenancy/workspace_deletion_mail.go", fn: "RecordDeletionLinkDelivery"}, // records a deletion mail's outcome after the lock commits; scoped to the caller's own tenant
+	{file: "internal/tenancy/staff_deletion_mail.go", fn: "recordStaffMailStatus"},          // records a staff-started mail's outcome on the path tenant; the staff caller's own tenant is the house one
 	{file: "internal/tenancy/invite_registration.go", fn: "ReleaseInvitationRegistration"},  // a gateway-token route; the token names the invite and there is no caller to gate
 	{file: "internal/aicalls/recorder.go", fn: "write"},                                     // a background usage row written after the AI call returned; the tenant is the identity the call ran under, and no request context is left to gate
 	{file: "internal/archive/staff.go", fn: "withinStaffTenant"},                            // staff read: the path tenant is checked by a staff_read_ function in db.WithinStaffTx; READ ONLY tenant tx

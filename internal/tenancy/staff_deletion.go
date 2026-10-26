@@ -121,30 +121,48 @@ func scheduleTenantDeletion(ctx context.Context, tx pgx.Tx, actor uuid.UUID) (ti
 	return due, nil
 }
 
-// StaffScheduleWorkspaceDeletion schedules the path tenant's deletion; the staff row commits in the same transaction.
-func (s *Store) StaffScheduleWorkspaceDeletion(ctx context.Context, tenantID, reason string) (time.Time, error) {
-	var due time.Time
+// StaffScheduleWorkspaceDeletion schedules the path tenant's deletion; the staff row and one cancel link
+// per active admin with an email commit in the same transaction.
+func (s *Store) StaffScheduleWorkspaceDeletion(ctx context.Context, tenantID, reason string) (ScheduledDeletion, error) {
+	var out ScheduledDeletion
 	err := s.withinStaffTenant(ctx, tenantID, pgx.TxOptions{}, func(tx pgx.Tx, tenant, actor uuid.UUID) error {
-		var err error
-		if due, err = scheduleTenantDeletion(ctx, tx, actor); err != nil {
+		due, err := scheduleTenantDeletion(ctx, tx, actor)
+		if err != nil {
 			return err
 		}
-		return audit.RecordStaff(ctx, tx, audit.StaffEvent{
+		if err := audit.RecordStaff(ctx, tx, audit.StaffEvent{
 			Actor: actor, Event: "workspace.deletion_scheduled", TenantID: tenant,
 			Payload: map[string]any{"due_at": due.UTC().Format(time.RFC3339), "reason": reason},
-		})
+		}); err != nil {
+			return err
+		}
+		var name string
+		if err := tx.QueryRow(ctx, `SELECT name FROM tenants`).Scan(&name); err != nil {
+			return err
+		}
+		// The staff actor matches no member, so every active admin with an email gets a link.
+		links, err := issueDeletionLinks(ctx, tx, tenant.String(), actor.String(), due)
+		if err != nil {
+			return err
+		}
+		out = ScheduledDeletion{DueAt: due, Workspace: name, Requester: audit.SupportActor, Links: links}
+		return nil
 	})
 	if err != nil {
-		return time.Time{}, err
+		return ScheduledDeletion{}, err
 	}
-	return due, nil
+	return out, nil
 }
 
-// StaffCancelWorkspaceDeletion clears a schedule. A tenant that is not scheduled is a no-op with no audit row.
-func (s *Store) StaffCancelWorkspaceDeletion(ctx context.Context, tenantID, reason string) error {
-	return s.withinStaffTenant(ctx, tenantID, pgx.TxOptions{}, func(tx pgx.Tx, tenant, actor uuid.UUID) error {
+// StaffCancelWorkspaceDeletion clears a schedule and writes one cancel-mail row per active admin with an email.
+// A tenant that is not scheduled is a no-op with a zero result and no audit row.
+func (s *Store) StaffCancelWorkspaceDeletion(ctx context.Context, tenantID, reason string) (CancelledDeletion, error) {
+	var out CancelledDeletion
+	err := s.withinStaffTenant(ctx, tenantID, pgx.TxOptions{}, func(tx pgx.Tx, tenant, actor uuid.UUID) error {
+		out = CancelledDeletion{}
 		var due *time.Time
-		if err := tx.QueryRow(ctx, `SELECT deletion_due_at FROM tenants FOR UPDATE`).Scan(&due); err != nil {
+		var name string
+		if err := tx.QueryRow(ctx, `SELECT deletion_due_at, name FROM tenants FOR UPDATE`).Scan(&due, &name); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrTenantNotFound // purged after the staff check
 			}
@@ -156,11 +174,23 @@ func (s *Store) StaffCancelWorkspaceDeletion(ctx context.Context, tenantID, reas
 		if err := clearDeletionSchedule(ctx, tx); err != nil {
 			return err
 		}
-		return audit.RecordStaff(ctx, tx, audit.StaffEvent{
+		if err := audit.RecordStaff(ctx, tx, audit.StaffEvent{
 			Actor: actor, Event: "workspace.deletion_cancelled", TenantID: tenant,
 			Payload: map[string]any{"due_at": due.UTC().Format(time.RFC3339), "reason": reason},
-		})
+		}); err != nil {
+			return err
+		}
+		mails, err := issueCancelMails(ctx, tx, tenant.String(), actor.String(), *due)
+		if err != nil {
+			return err
+		}
+		out = CancelledDeletion{DueAt: *due, Workspace: name, Canceller: audit.SupportActor, Mails: mails}
+		return nil
 	})
+	if err != nil {
+		return CancelledDeletion{}, err
+	}
+	return out, nil
 }
 
 // staffDeletionStatus maps a staff deletion error; the caller logs the 500.

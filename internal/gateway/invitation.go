@@ -347,7 +347,11 @@ func InvitationResendHandler(authURL *url.URL, client *http.Client, perAddress *
 			return
 		}
 
-		addrHeld := perAddress.Reserve(p.Email)
+		addrHeld, admitErr := perAddress.Admit(p.Email)
+		if admitErr != nil && enforce {
+			writeError(w, http.StatusBadGateway, msgResendUnavailable)
+			return
+		}
 		if !addrHeld {
 			log.WarnContext(r.Context(), "invitation-resend: limit reached",
 				slog.String("limit", "address"), slog.Bool("enforced", enforce))

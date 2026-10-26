@@ -216,6 +216,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/blog/public.go", fn: "readPublic"},                               // anonymous blog read: no caller to gate; global published content only, in a READ ONLY transaction
 	{file: "internal/gateway/handoff_pg.go"},                                          // sign-in hand-off codes: no tenant and no identity yet
 	{file: "internal/gateway/session_check_pg.go"},                                    // sign-out revocations: global gateway state keyed on the subject, no tenant
+	{file: "internal/gateway/signin_throttle_pg.go"},                                  // per-address limit counts: global gateway state keyed on a hash, no tenant
 }
 
 // scPoolSite is one direct pool call: recv is the pool-typed name it was made on,

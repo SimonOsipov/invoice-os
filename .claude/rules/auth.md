@@ -84,7 +84,8 @@ paths:
 - Expect the gateway to refuse boot on Cloud Run without `DATABASE_GATEWAY_URL`. Elsewhere an unset URL keeps the in-process store, for a single instance only.
 - Record each sign-out and password reset in `gateway_session_revocations` through `EvictSubject`. Every gateway instance reads it before it trusts a cached live verdict (FLAKE-00 Q4).
 - Ask GoTrue again when the revocation read fails. Answer the sign-out 204 when only the revocation write fails.
-- Expect the sign-in and resend-by-address limits to count per instance. Their ceiling is the limit times the instance count (GKE-00 Q11).
+- Count the sign-in, resend-by-address and blog-subscribe limits in `gateway_throttle_counts` when the gateway has a pool. Store `sha256` of the folded address, never the address (FLAKE-00 Q5).
+- Refuse a reservation when the shared count cannot be read. Answer that sign-in with 503 `sign-in is unavailable` and that invitation resend with 502 `invitation resend is unavailable`, never 429.
 - Mint a console hand-off code on `POST /auth/console-handoff` only for a verified, session-checked bearer whose `app_metadata.staff` is true.
 - Store only the caller's access token as that code's answer. Never store a refresh token.
 - Bind that code to the `state` in the request body.

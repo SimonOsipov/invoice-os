@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// ceiling: counts are in-process; a restart clears them and replicas do not share them.
+// ceiling: with no pool, counts are in-process; a restart clears them and replicas do not share them.
 // ceiling: an attacker can spend a victim address's 3 per hour; a full map (10,000 keys) refuses every new key, so a flood switches resend off for new addresses.
 const (
 	ResendPerAddress = 3

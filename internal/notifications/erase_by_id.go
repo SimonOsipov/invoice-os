@@ -13,6 +13,9 @@ import (
 	"github.com/riverqueue/river"
 )
 
+// handOffSnooze is the wait between hand-off loops; a snooze costs no attempt.
+const handOffSnooze = 30 * time.Second
+
 // EraseByIDArgs carries the user id only; it erases a person who has no usable email.
 type EraseByIDArgs struct {
 	UserID string `json:"user_id"`
@@ -34,7 +37,7 @@ func EnqueueErasureByID(ctx context.Context, tx pgx.Tx, rc *river.Client[pgx.Tx]
 	return nil
 }
 
-// EraseByIDWorker erases a person by user id. With a contacts row it hands the email to EnqueueErasure; without one it removes
+// EraseByIDWorker erases a person by user id. With a contacts row it hands the email to EnqueueErasure; with none it removes
 // the user-id-keyed copies and the account itself, writes no person_erasures row and calls no vendor.
 type EraseByIDWorker struct {
 	river.WorkerDefaults[EraseByIDArgs]
@@ -46,7 +49,7 @@ type EraseByIDWorker struct {
 
 func (w *EraseByIDWorker) Timeout(*river.Job[EraseByIDArgs]) time.Duration { return eraseTimeout }
 
-// Work hands off when a contacts row holds an email; else it sweeps, deletes the account, then sweeps again.
+// Work hands off one contacts email at a time while a row remains; else it sweeps, deletes the account, then sweeps again.
 // Every statement is idempotent, so a retry repeats the job.
 func (w *EraseByIDWorker) Work(ctx context.Context, job *river.Job[EraseByIDArgs]) error {
 	id, err := uuid.Parse(job.Args.UserID)
@@ -61,20 +64,7 @@ func (w *EraseByIDWorker) Work(ctx context.Context, job *river.Job[EraseByIDArgs
 		return err
 	}
 	if len(emails) > 0 {
-		// person_erase is not in eraseKinds, so no sweep cancels the job queued here.
-		// The erasure removes the hand-offs, jobs, contacts rows and account by user id and email.
-		err = pgx.BeginFunc(ctx, w.Pool, func(tx pgx.Tx) error {
-			for _, e := range emails {
-				if err := EnqueueErasure(ctx, tx, w.River, uid, e); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			logEraseFailure(ctx, w.Logger, stepSweep, err)
-		}
-		return err
+		return w.handOff(ctx, uid, emails[0])
 	}
 
 	_, err = w.sweepTx(ctx, uid)
@@ -101,6 +91,22 @@ func (w *EraseByIDWorker) Work(ctx context.Context, job *river.Job[EraseByIDArgs
 		return errCameBack
 	}
 	return nil
+}
+
+// handOff queues the erasure of one contacts email unless one is running, then snoozes.
+// A person_erasures row keeps one email, so each contacts row gets its own erasure in turn.
+// person_erase is not in eraseKinds, so no sweep cancels the job queued here.
+func (w *EraseByIDWorker) handOff(ctx context.Context, uid, email string) error {
+	var running bool
+	err := w.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM person_erasures WHERE user_id = $1 AND finished_at IS NULL)`, uid).Scan(&running)
+	if err == nil && !running {
+		err = pgx.BeginFunc(ctx, w.Pool, func(tx pgx.Tx) error { return EnqueueErasure(ctx, tx, w.River, uid, email) })
+	}
+	if err != nil {
+		logEraseFailure(ctx, w.Logger, stepSweep, err)
+		return err
+	}
+	return river.JobSnooze(handOffSnooze)
 }
 
 // contactEmails returns the usable emails of the person's contacts rows.

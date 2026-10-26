@@ -470,8 +470,8 @@ func TestEraseByID_AContactsRowHandsOffToTheNormalErasure(t *testing.T) {
 	r.contact(otherMail, &other, 1)
 	live, _ := r.seedCopies(r.uid, r.mail)
 
-	if err := r.workByID(r.byIDWorker(), r.uid); err != nil {
-		t.Fatalf("Work: %v", err)
+	if err := r.workByID(r.byIDWorker(), r.uid); !isSnooze(err) {
+		t.Fatalf("Work = %v, want a snooze", err)
 	}
 
 	if n := r.count(`SELECT count(*) FROM river_job WHERE kind = $1 AND args->>'user_id' = $2 AND args ? 'email'`, EraseArgs{}.Kind(), r.uid); n != 0 {
@@ -515,8 +515,8 @@ func TestEraseByID_TheQueuedErasureSurvivesTheSweep(t *testing.T) {
 	r := newEraseRig(t)
 	w := r.byIDWorker()
 	r.contact(r.mail, &r.uid, 1)
-	if err := r.workByID(w, r.uid); err != nil {
-		t.Fatalf("Work: %v", err)
+	if err := r.workByID(w, r.uid); !isSnooze(err) {
+		t.Fatalf("Work = %v, want a snooze", err)
 	}
 	// A retry (or a no-row run) sweeps the person's jobs; the queued erasure must stay live.
 	if _, err := w.sweepTx(context.Background(), r.uid); err != nil {
@@ -524,5 +524,56 @@ func TestEraseByID_TheQueuedErasureSurvivesTheSweep(t *testing.T) {
 	}
 	if n := r.count(`SELECT count(*) FROM river_job WHERE kind = $1 AND args->>'user_id' = $2 AND state = 'available'`, EraseArgs{}.Kind(), r.uid); n != 1 {
 		t.Errorf("live person_erase jobs after the sweep = %d, want 1", n)
+	}
+}
+
+func isSnooze(err error) bool {
+	var sn *river.JobSnoozeError
+	return errors.As(err, &sn)
+}
+
+func TestEraseByID_TwoContactsRowsAreErasedOneAfterTheOther(t *testing.T) {
+	r := newEraseRig(t)
+	a, b := "a-"+r.mail, "b-"+r.mail
+	r.contact(a, &r.uid, 1)
+	r.contact(b, &r.uid, 1)
+	r.track(a, r.uid)
+	r.track(b, r.uid)
+	w := r.byIDWorker()
+
+	if err := r.workByID(w, r.uid); !isSnooze(err) {
+		t.Fatalf("first Work = %v, want a snooze", err)
+	}
+	if n := r.count(`SELECT count(*) FROM person_erasures WHERE user_id = $1::uuid AND email = $2`, r.uid, a); n != 1 {
+		t.Fatalf("first erasure not for a: %d", n)
+	}
+	// Unfinished erasure: snooze, queue nothing.
+	if err := r.workByID(w, r.uid); !isSnooze(err) {
+		t.Fatalf("Work during an erasure = %v, want a snooze", err)
+	}
+	if jobs := r.erasureJobs(r.uid); len(jobs) != 1 {
+		t.Fatalf("person_erase jobs during an erasure = %v, want 1", jobs)
+	}
+
+	if err := r.work(r.row(r.uid).Gen); err != nil {
+		t.Fatalf("erasure of a: %v", err)
+	}
+	if !r.row(r.uid).Fin {
+		t.Fatal("control: the erasure of a did not finish")
+	}
+	if err := r.workByID(w, r.uid); !isSnooze(err) {
+		t.Fatalf("Work after a = %v, want a snooze", err)
+	}
+	if n := r.count(`SELECT count(*) FROM person_erasures WHERE user_id = $1::uuid AND email = $2`, r.uid, b); n != 1 {
+		t.Fatalf("second erasure not for b: %d", n)
+	}
+	if err := r.work(r.row(r.uid).Gen); err != nil {
+		t.Fatalf("erasure of b: %v", err)
+	}
+	if err := r.workByID(w, r.uid); err != nil {
+		t.Fatalf("Work with no contacts row = %v, want nil", err)
+	}
+	if _, c := r.copies(r.uid); c != 0 {
+		t.Errorf("contacts rows left = %d, want 0", c)
 	}
 }

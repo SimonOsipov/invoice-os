@@ -63,6 +63,8 @@ func main() {
 	// gateway proxies it unchanged: its mount carries no method.
 	app.Mux.HandleFunc("PATCH /v1/memberships/{user_id}", tenancy.SetMembershipStatusHandler(store.SetMembershipStatus, app.Logger))
 	app.Mux.HandleFunc("POST /v1/memberships/{user_id}/remove", tenancy.RemoveMemberHandler(store.RemoveMember, app.Logger))
+	app.Mux.HandleFunc("POST /v1/workspace/deletion", tenancy.ScheduleDeletionHandler(store.ScheduleWorkspaceDeletion, app.Logger))
+	app.Mux.HandleFunc("POST /v1/workspace/deletion/cancel", tenancy.CancelDeletionHandler(store.CancelWorkspaceDeletion, app.Logger))
 
 	// PUT /v1/memberships/{user_id}/clients — admin-only whole-set replace of a member's client access.
 	app.Mux.HandleFunc("PUT /v1/memberships/{user_id}/clients", tenancy.SetMemberClientsHandler(store.SetMemberClients, app.Logger))

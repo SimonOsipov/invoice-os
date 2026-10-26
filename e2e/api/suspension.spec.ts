@@ -154,7 +154,8 @@ test.describe('read-path suspension (API E2E, over the deployed gateway)', () =>
 
     const body = res.body as { tenant: Record<string, unknown>; user: Record<string, unknown> }
     expect(Object.keys(body).sort(), '/v1/me top-level keys').toEqual(['tenant', 'user'])
-    expect(Object.keys(body.tenant).sort(), '/v1/me tenant keys').toEqual(['id', 'kind', 'name'])
+    expect(Object.keys(body.tenant).sort(), '/v1/me tenant keys').toEqual(['deletion_due_at', 'id', 'kind', 'name'])
+    expect(body.tenant.deletion_due_at, 'a seeded tenant is not scheduled for deletion').toBeNull()
     expect(Object.keys(body.user).sort(), '/v1/me user keys').toEqual(['display_name', 'email', 'id', 'role'])
     expect(body.tenant.id, 'the suspended member still resolves their own tenant').toBe(PERSONAS.A.tenantId)
     expect(body.user.id, 'the subject the token carries').toBe(SUSPENDED_SUBJECT)

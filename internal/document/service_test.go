@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/document"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // --- fakeObjects ------------------------------------------------------------
@@ -77,6 +78,14 @@ func (f *fakeObjects) distinctPutKeys() []string {
 		}
 	}
 	return out
+}
+
+// dropTenant deletes the tenant (and its members) as the superuser.
+func dropTenant(t *testing.T, super *pgxpool.Pool, tenantID string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID); err != nil {
+		t.Fatalf("drop tenant: %v", err)
+	}
 }
 
 var errPutBoom = errors.New("object storage unreachable")
@@ -222,11 +231,12 @@ func TestServiceStore_UpsertFailureAfterSuccessfulPutReturnsErrorNoID(t *testing
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	tenantID := uuid.NewString() // deliberately never seeded into tenants
+	tenantID := seedTenant(t, super, "svc upsert-failure")
 	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world")
 	objs := &fakeObjects{}
+	objs.onPut = func() { dropTenant(t, super, tenantID) } // the tenant vanishes between the admit and the row
 	svc := document.NewService(document.NewStore(app), objs)
 
 	doc, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
@@ -253,17 +263,19 @@ func TestServiceStore_RetryAfterUpsertFailureSucceedsWithNoDuplicateObject(t *te
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	tenantID := uuid.NewString() // not seeded yet — the first attempt must fail
+	tenantID := seedTenant(t, super, "svc retry first attempt")
 	c := identity(ctx, tenantID, memberSubject)
 
 	body := []byte("hello world")
 	objs := &fakeObjects{}
+	objs.onPut = func() { dropTenant(t, super, tenantID) } // the first attempt's row write must fail
 	svc := document.NewService(document.NewStore(app), objs)
 
 	if _, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body)); err == nil {
 		t.Fatal("first Store under a nonexistent tenant succeeded, want the documents FK violation")
 	}
 
+	objs.onPut = nil
 	seedTenantWithID(t, super, tenantID, "svc retry after failure")
 
 	doc, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
@@ -427,3 +439,102 @@ var (
 	_ func(*document.Service, context.Context, string, string, int64, io.ReadSeeker) (document.Document, bool, error) = (*document.Service).Store
 	_ func(*document.Service, context.Context, string, string) (document.Document, document.Object, error)            = (*document.Service).Open
 )
+
+// --- No object for a caller the seam refuses ---------------------
+
+func setTenantLock(t *testing.T, super *pgxpool.Pool, tenantID string, on bool) {
+	t.Helper()
+	q := `UPDATE tenants SET deletion_scheduled_at = NULL, deletion_scheduled_by = NULL WHERE id = $1`
+	if on {
+		q = `UPDATE tenants SET deletion_scheduled_at = now(), deletion_scheduled_by = gen_random_uuid() WHERE id = $1`
+	}
+	if _, err := super.Exec(context.Background(), q, tenantID); err != nil {
+		t.Fatalf("set tenant lock (on=%v): %v", on, err)
+	}
+}
+
+func TestServiceStore_ALockedWorkspacePutsNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "svc locked-puts-nothing")
+	c := identity(ctx, tenantID, memberSubject)
+	objs := &fakeObjects{}
+	svc := document.NewService(document.NewStore(app), objs)
+	body := []byte("locked workspace body")
+
+	setTenantLock(t, super, tenantID, true)
+	_, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	if !errors.Is(err, db.ErrWorkspaceLocked) {
+		t.Fatalf("Store in a locked workspace = %v, want db.ErrWorkspaceLocked", err)
+	}
+	if keys := objs.distinctPutKeys(); len(keys) != 0 {
+		t.Errorf("objects written in a locked workspace = %v, want none", keys)
+	}
+	if n := tenantDocCount(t, super, tenantID); n != 0 {
+		t.Errorf("documents rows in a locked workspace = %d, want 0", n)
+	}
+
+	setTenantLock(t, super, tenantID, false)
+	if _, _, err := svc.Store(c, "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body)); err != nil {
+		t.Fatalf("Store after the lock cleared = %v", err)
+	}
+	if keys := objs.distinctPutKeys(); len(keys) != 1 {
+		t.Errorf("objects after unlock = %d, want 1", len(keys))
+	}
+	if n := tenantDocCount(t, super, tenantID); n != 1 {
+		t.Errorf("documents rows after unlock = %d, want 1", n)
+	}
+}
+
+func TestServiceStore_ASuspendedMemberPutsNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "svc suspended-puts-nothing")
+	suspended := uuid.NewString()
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status, all_clients) VALUES ($1, $2, 'preparer', 'suspended', true)`,
+		tenantID, suspended); err != nil {
+		t.Fatalf("seed suspended member: %v", err)
+	}
+	objs := &fakeObjects{}
+	svc := document.NewService(document.NewStore(app), objs)
+	body := []byte("suspended member body")
+
+	_, _, err := svc.Store(identity(ctx, tenantID, suspended), "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body))
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("Store as a suspended member = %v, want db.ErrNotActiveMember", err)
+	}
+	if keys := objs.distinctPutKeys(); len(keys) != 0 {
+		t.Errorf("objects written by a suspended member = %v, want none", keys)
+	}
+	if n := tenantDocCount(t, super, tenantID); n != 0 {
+		t.Errorf("documents rows by a suspended member = %d, want 0", n)
+	}
+}
+
+func TestServiceStore_AnotherTenantsLockDoesNotRefuseThisUpload(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	locked := seedTenant(t, super, "svc other-lock locked")
+	free := seedTenant(t, super, "svc other-lock free")
+	setTenantLock(t, super, locked, true)
+	objs := &fakeObjects{}
+	svc := document.NewService(document.NewStore(app), objs)
+	body := []byte("free workspace body")
+
+	if _, _, err := svc.Store(identity(ctx, locked, memberSubject), "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body)); !errors.Is(err, db.ErrWorkspaceLocked) {
+		t.Fatalf("Store in the locked workspace = %v, want db.ErrWorkspaceLocked", err)
+	}
+	if _, _, err := svc.Store(identity(ctx, free, memberSubject), "a.csv", "text/csv", int64(len(body)), bytes.NewReader(body)); err != nil {
+		t.Fatalf("Store in the unlocked workspace = %v, want nil", err)
+	}
+	if keys := objs.distinctPutKeys(); len(keys) != 1 {
+		t.Errorf("objects = %v, want exactly the unlocked workspace's one", keys)
+	}
+	if n := tenantDocCount(t, super, free); n != 1 {
+		t.Errorf("unlocked workspace documents rows = %d, want 1", n)
+	}
+	if n := tenantDocCount(t, super, locked); n != 0 {
+		t.Errorf("locked workspace documents rows = %d, want 0", n)
+	}
+}

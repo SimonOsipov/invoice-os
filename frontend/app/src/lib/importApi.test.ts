@@ -58,7 +58,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client'
 
 import { APP_PERSONAS, type Session } from '../auth'
-import { NOT_ACTIVE_MEMBER_MESSAGE, createAuthedFetch } from './authedFetch'
+import { NOT_ACTIVE_MEMBER_MESSAGE, WORKSPACE_LOCKED_MESSAGE, createAuthedFetch } from './authedFetch'
 import type { AuthedFetch } from './portfolio'
 import { SessionEndedError } from './renewal'
 import {
@@ -1299,6 +1299,40 @@ describe('AUDIT-10-07: a suspended member on the multipart transport', () => {
     const auth = makeImportAuth(buildSession('tok'), vi.fn(), onSuspended)
 
     expect(auth.onSuspended, 'the factory dropped onSuspended').toBe(onSuspended)
+  })
+})
+
+describe('importApi: a lock refusal fires onLocked through the XHR transport', () => {
+  beforeEach(() => {
+    FakeXhr.reset()
+  })
+
+  it('previewImport: onLocked 1, the others 0, still rejects; makeImportAuth forwards the fifth argument', async () => {
+    const [onUnauthorized, onSuspended, onLocked] = [vi.fn(), vi.fn(), vi.fn()]
+    const auth = makeImportAuth(buildSession('tok'), onUnauthorized, onSuspended, undefined, onLocked)
+    expect(auth.onLocked, 'the factory dropped onLocked').toBe(onLocked)
+    const promise = previewImport(auth, base, makeFile(), FakeXhrCtor)
+    FakeXhr.last()?.respond(403, JSON.stringify({ error: WORKSPACE_LOCKED_MESSAGE }), 'Forbidden')
+
+    const err = await captureRejection(() => promise)
+
+    expect((err as ApiError).status).toBe(403)
+    expect(onLocked).toHaveBeenCalledTimes(1)
+    expect(onSuspended).not.toHaveBeenCalled()
+    expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['a suspension 403', 403, NOT_ACTIVE_MEMBER_MESSAGE],
+    ['an unrelated 403', 403, 'forbidden'],
+    ['a 401 with the lock sentence', 401, WORKSPACE_LOCKED_MESSAGE],
+  ])('%s never fires onLocked', async (_n, status, error) => {
+    const onLocked = vi.fn()
+    const auth = makeImportAuth(buildSession('tok'), vi.fn(), vi.fn(), undefined, onLocked)
+    const promise = previewImport(auth, base, makeFile(), FakeXhrCtor)
+    FakeXhr.last()?.respond(status, JSON.stringify({ error }), 'Forbidden')
+    await captureRejection(() => promise)
+    expect(onLocked).not.toHaveBeenCalled()
   })
 })
 

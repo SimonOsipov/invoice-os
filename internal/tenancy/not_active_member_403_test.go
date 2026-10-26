@@ -43,6 +43,26 @@ func TestTenancyStatusForErr_NotActiveMemberIs403(t *testing.T) {
 	}
 }
 
+func TestTenancyStatusForErr_WorkspaceLockedIs403(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"bare", db.ErrWorkspaceLocked},
+		{"wrapped", fmt.Errorf("tenancy: schedule deletion: %w", db.ErrWorkspaceLocked)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, msg := statusForErr(tc.err)
+			if status != http.StatusForbidden {
+				t.Errorf("status = %d, want 403", status)
+			}
+			if msg != db.WorkspaceLockedMessage {
+				t.Errorf("msg = %q, want db.WorkspaceLockedMessage %q", msg, db.WorkspaceLockedMessage)
+			}
+		})
+	}
+}
+
 func TestMeHandler_NotActiveMemberIs403(t *testing.T) {
 	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
 	load := MeLoader(func(context.Context) (Tenant, MeUser, error) {

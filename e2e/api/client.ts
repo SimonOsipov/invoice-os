@@ -167,10 +167,10 @@ export async function registerFresh(prefix = 'handoff', password?: string): Prom
 // Signs in once before provisioning (the hand-off) and again after (the tenant claim).
 export async function registerFormAccount(
   prefix: string,
-  opts: { marketingConsentText?: string } = {},
+  opts: { marketingConsentText?: string; workspaceName?: string } = {},
 ): Promise<{ account: RealAccount; token: string }> {
   const id = crypto.randomUUID()
-  const account: RealAccount = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: `Contacts E2E ${id.slice(0, 8)}`, displayName: 'Contacts E2E' }
+  const account: RealAccount = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: opts.workspaceName ?? `Contacts E2E ${id.slice(0, 8)}`, displayName: 'Contacts E2E' }
   const res = await rawFetch('/auth/register', {
     method: 'POST',
     body: {
@@ -322,13 +322,23 @@ export function acceptById(token: string, id: string, displayName?: string): Pro
   })
 }
 
+// POST /api/tenancy/v1/workspace/deletion: 200 {deletion_due_at}; raw so a spec can assert the refusals.
+export function scheduleDeletion(token: string, workspaceName: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/api/tenancy/v1/workspace/deletion', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: { workspace_name: workspaceName } })
+}
+
+// POST /api/tenancy/v1/workspace/deletion/cancel: 200 {deletion_due_at: null}, also when nothing is scheduled.
+export function cancelDeletion(token: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/api/tenancy/v1/workspace/deletion/cancel', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+}
+
 // ---- Wire contract types, declared locally to the verified contract
 // (internal/tenancy, internal/portfolio/portfolio.go, internal/validation/
 // rule.go + handlers.go). Me mirrors e2e/topology/isolation.spec.ts's Me
 // shape exactly. ----
 
 export interface Me {
-  tenant: { id: string; name: string; kind: string }
+  tenant: { id: string; name: string; kind: string; deletion_due_at: string | null }
   user: { id: string; role: string; display_name: string | null; email: string | null }
 }
 

@@ -74,6 +74,7 @@ const SETTINGS_TAB_TABLE: Record<SettingsTab, true> = {
   api: true,
   signing: true,
   company: true,
+  workspace: true,
 }
 // The Record keeps this exhaustive; the Set (not `in`) keeps prototype keys out.
 const SETTINGS_TAB_IDS = new Set<string>(Object.keys(SETTINGS_TAB_TABLE))

@@ -679,6 +679,7 @@ describe('ROUTE-04-06 AC-1: a firm-mode /settings/company falls back identically
     'ERP connectors',
     'API & webhooks',
     'Signing & certificates',
+    'Workspace',
     'Company',
   ])
   function settingsStripLabels(): string[] {
@@ -711,7 +712,7 @@ describe('ROUTE-04-06 AC-1: a firm-mode /settings/company falls back identically
       view: 'settings',
       settingsTab: 'members',
       alignedUrl: '/settings/members',
-      stripLabels: ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates'],
+      stripLabels: ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates', 'Workspace'],
     })
   })
 })
@@ -790,7 +791,7 @@ describe('ROUTE-04-06 AC-3: a stale Company entry left behind by an earlier sess
       'a stale Company entry from an earlier in-house session must be clamped for the firm workspace it resurfaces under',
     ).toBe('members')
 
-    const FIRM_TAB_LABELS = ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates']
+    const FIRM_TAB_LABELS = ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates', 'Workspace']
     const stripTabs = Array.from(document.querySelectorAll('.pf-tab')).filter((el) =>
       FIRM_TAB_LABELS.includes(el.textContent ?? ''),
     )

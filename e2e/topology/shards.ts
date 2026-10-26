@@ -81,6 +81,7 @@ export const UNITS: Unit[] = [
       'ops-console.spec.ts',
       'overview-register-approvals.spec.ts',
       'portfolio.spec.ts',
+      'workspace-deletion.spec.ts',
     ],
     tenants: {
       firm: '11111111-1111-1111-1111-00000000e2e4',

@@ -491,6 +491,34 @@ func TestMe_SuspendedMemberStillGets200(t *testing.T) {
 	}
 }
 
+// TestMe_LockedWorkspaceStillGets200: Me is an exempt method, so the seam lock
+// must not turn the notice's own read into a 403.
+func TestMe_LockedWorkspaceStillGets200(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "tenancy me-handler locked firm")
+	userID := uuid.NewString()
+	seedIdentityMembership(t, super, tenantID, userID, "admin", "active", strp("Locked Sam"), strp("locked@tenancy.test"))
+	if _, err := super.Exec(context.Background(),
+		`UPDATE tenants SET deletion_scheduled_at = now(), deletion_scheduled_by = $2 WHERE id = $1`, tenantID, userID); err != nil {
+		t.Fatalf("lock tenant: %v", err)
+	}
+	id := auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID}
+
+	// Control: the lock is live for a gated read, so the 200 below is the exemption.
+	err := db.WithinRequestTenantTx(auth.WithIdentity(context.Background(), id), app, func(pgx.Tx) error { return nil })
+	if !errors.Is(err, db.ErrWorkspaceLocked) {
+		t.Fatalf("control: gated seam read of the locked workspace err = %v, want db.ErrWorkspaceLocked", err)
+	}
+
+	rec, body := doMe(t, NewStore(app).Me, &id)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+	if body.Tenant.ID != tenantID || body.User.ID != userID {
+		t.Errorf("me = tenant %q user %q, want %q / %q", body.Tenant.ID, body.User.ID, tenantID, userID)
+	}
+}
+
 // TestMe_RealStoreNullAndEmptyOnTheWire: NULL columns reach the wire as a present
 // JSON null and empty strings as "", through the real Store.Me.
 func TestMe_RealStoreNullAndEmptyOnTheWire(t *testing.T) {

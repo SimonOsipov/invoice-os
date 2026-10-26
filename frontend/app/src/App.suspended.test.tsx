@@ -314,8 +314,9 @@ describe('AC-2: both construction sites are wired', () => {
       expect(call, `App.tsx no longer calls ${factory}`).toBeDefined()
       expect(
         call!.split(',').length,
-        `${factory} must be called with (session, onUnauthorized, onSuspended, freshToken) — got ${call}`,
-      ).toBe(4)
+        `${factory} must be called with (session, onUnauthorized, onSuspended, freshToken, onLocked) — got ${call}`,
+      ).toBe(5)
+      expect(call!.split(',')[4].trim(), `${factory} must pass onLocked as its fifth argument`).toBe('onLocked')
     }
   })
 })

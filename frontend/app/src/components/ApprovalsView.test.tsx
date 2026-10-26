@@ -451,6 +451,17 @@ describe('the list refetches on the request\'s entity id, not the context\'s', (
     expect(urlParams((fetchMock.mock.calls[1] as [string])[0]).get('entity_id')).toBe('ent-1')
   })
 
+  it('mode switch firm to in-house refetches when neither mode has an entity id', async () => {
+    const fetchMock = mockFetchSequence([oneRow(), oneRow()])
+    const { rerender } = render(<ApprovalsView ctx={approvalsCtx({ mode: 'firm', entityId: null })} />)
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    await act(async () => {})
+
+    rerender(<ApprovalsView ctx={approvalsCtx({ mode: 'inhouse', entityId: null })} />)
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+  })
+
   it('paging Next refetches with the new offset', async () => {
     const page1 = [approvalRow({ id: 'p1', invoice_number: 'INV-P1' }), approvalRow({ id: 'p2', invoice_number: 'INV-P2' })]
     const page2 = [approvalRow({ id: 'p3', invoice_number: 'INV-P3' })]

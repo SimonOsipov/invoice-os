@@ -947,7 +947,7 @@ describe('DEL-10-02: the account section states the deletion rules', () => {
     expect(deleteAccountEndsMembershipAndQueuesErasureInOneTx()).toBe(true)
     const AD = 'internal/tenancy/account_deletion.go'
     expect(deleteAccountEndsMembershipAndQueuesErasureInOneTx(swap(AD, 'notifications.EnqueueErasure(ctx, tx,', 'notifications.EnqueueErasure(ctx, s.pool,'))).toBe(false)
-    expect(deleteAccountEndsMembershipAndQueuesErasureInOneTx(swap(AD, 'endMembership(ctx, tx,', 'endMembership(ctx, s.pool,'))).toBe(false)
+    expect(deleteAccountEndsMembershipAndQueuesErasureInOneTx(swap(AD, 'endMembership(ctx, tx, caller.Subject)', 'endMembership(ctx, tx, heirUserID)'))).toBe(false)
     expect(deleteAccountEndsMembershipAndQueuesErasureInOneTx(swap(AD, 'db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {', 'func(tx pgx.Tx) error {'))).toBe(false)
   })
 

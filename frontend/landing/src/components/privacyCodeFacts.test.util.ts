@@ -336,7 +336,7 @@ export function deleteAccountEndsMembershipAndQueuesErasureInOneTx(
 ): boolean {
   const body = goFunc(src, /func \(s \*Store\) DeleteMyAccount\b/, 'Store.DeleteMyAccount')
   const open = body.indexOf('db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {')
-  const end = body.indexOf('endMembership(ctx, tx,')
+  const end = body.indexOf('endMembership(ctx, tx, caller.Subject)')
   const enqueue = body.indexOf('notifications.EnqueueErasure(ctx, tx,')
   return open > -1 && end > open && enqueue > end
 }

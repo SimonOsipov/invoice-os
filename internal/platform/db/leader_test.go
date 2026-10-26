@@ -3,7 +3,10 @@ package db_test
 import (
 	"context"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -38,7 +41,10 @@ func TestLeader_OneInstanceRunsEachTask(t *testing.T) {
 		if err := a.Lead(task, fnA)(ctx); err != nil {
 			t.Fatalf("a: %v", err)
 		}
-		if err := b.Lead(task, fnB)(ctx); err != nil {
+		skipCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		err := b.Lead(task, fnB)(skipCtx)
+		cancel()
+		if err != nil {
 			t.Fatalf("b: %v", err)
 		}
 	}
@@ -58,7 +64,9 @@ func TestLeader_OneInstanceRunsEachTask(t *testing.T) {
 	if err := b.Lead(task, fnB)(ctx); err != nil || *runsB != 1 {
 		t.Fatalf("b after a's connection died: runs=%d err=%v, want 1 run", *runsB, err)
 	}
-	if err := a.Lead(task, fnA)(ctx); err != nil || *runsA != 3 {
+	skipCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	if err := a.Lead(task, fnA)(skipCtx); err != nil || *runsA != 3 {
 		t.Fatalf("a after reconnecting: runs=%d err=%v, want still 3: b leads now", *runsA, err)
 	}
 
@@ -66,6 +74,163 @@ func TestLeader_OneInstanceRunsEachTask(t *testing.T) {
 	ldStop(t, b)
 	if err := a.Lead(task, fnA)(ctx); err != nil || *runsA != 4 {
 		t.Fatalf("a after b stopped: runs=%d err=%v, want 4", *runsA, err)
+	}
+}
+
+// BUG-52: a Lead that misses the lock must retry soon, not wait a full task interval.
+func TestLeader_MissedLockRetriesAfterTheHolderStops(t *testing.T) {
+	dsn := requireHarness(t).appURL
+	task := "test-" + uuid.NewString()
+	a, b := db.NewLeader(dsn), db.NewLeader(dsn)
+	t.Cleanup(func() { ldStop(t, a); ldStop(t, b) })
+
+	fnA, runsA := ldRuns()
+	if err := a.Lead(task, fnA)(context.Background()); err != nil || *runsA != 1 {
+		t.Fatalf("a: runs=%d err=%v, want 1 run: a takes the lock", *runsA, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	var ran atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = b.Lead(task, func(context.Context) error { ran.Store(true); return nil })(ctx)
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+
+	time.Sleep(time.Second)
+	if ran.Load() {
+		t.Fatal("b ran while a held the lock")
+	}
+	ldStop(t, a)
+	deadline := time.After(15 * time.Second)
+	for !ran.Load() {
+		select {
+		case <-done:
+			if !ran.Load() {
+				t.Fatal("b's Lead returned without running its task after a stopped: a missed lock is never retried")
+			}
+		case <-deadline:
+			t.Fatal("b did not run within 15s of a stopping: a missed lock is not retried soon")
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+// ldHold makes a take the lock for task.
+func ldHold(t *testing.T, a *db.Leader, task string) {
+	t.Helper()
+	fn, runs := ldRuns()
+	if err := a.Lead(task, fn)(context.Background()); err != nil || *runs != 1 {
+		t.Fatalf("holder: runs=%d err=%v, want 1 run", *runs, err)
+	}
+}
+
+// BUG-52: shutdown cancels a Lead that waits on a held lock; it returns nil at once, task unrun.
+func TestLeader_CancelledWhileWaitingReturnsNilWithoutRunning(t *testing.T) {
+	dsn := requireHarness(t).appURL
+	task := "test-" + uuid.NewString()
+	a, b := db.NewLeader(dsn), db.NewLeader(dsn)
+	t.Cleanup(func() { ldStop(t, a); ldStop(t, b) })
+	ldHold(t, a, task)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var ran atomic.Bool
+	res := make(chan error, 1)
+	go func() { res <- b.Lead(task, func(context.Context) error { ran.Store(true); return nil })(ctx) }()
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-res:
+		if err != nil {
+			t.Fatalf("cancelled wait returned %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Lead still waiting 2s after its ctx was cancelled")
+	}
+	if ran.Load() {
+		t.Fatal("task ran without the lock")
+	}
+}
+
+// BUG-52: a task waiting on a held lock must not block another task of the same Leader.
+func TestLeader_WaitingTaskDoesNotBlockAnotherTask(t *testing.T) {
+	dsn := requireHarness(t).appURL
+	held, free := "test-"+uuid.NewString(), "test-"+uuid.NewString()
+	a, b := db.NewLeader(dsn), db.NewLeader(dsn)
+	t.Cleanup(func() { ldStop(t, a); ldStop(t, b) })
+	ldHold(t, a, held)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	waiting := make(chan struct{})
+	go func() {
+		defer close(waiting)
+		_ = b.Lead(held, func(context.Context) error { return nil })(ctx)
+	}()
+	t.Cleanup(func() { cancel(); <-waiting })
+	time.Sleep(500 * time.Millisecond)
+
+	fn, runs := ldRuns()
+	start := time.Now()
+	if err := b.Lead(free, fn)(context.Background()); err != nil || *runs != 1 {
+		t.Fatalf("b on a free task: runs=%d err=%v, want 1 run", *runs, err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("a free task waited %s behind a task that waits on a held lock", d)
+	}
+}
+
+// BUG-52: a connect failure is returned at once, not retried.
+func TestLeader_ClaimErrorIsReturnedNotRetried(t *testing.T) {
+	l := db.NewLeader("postgres://nobody:x@127.0.0.1:1/none?sslmode=disable")
+	t.Cleanup(func() { ldStop(t, l) })
+	fn, runs := ldRuns()
+	start := time.Now()
+	err := l.Lead("test-"+uuid.NewString(), fn)(context.Background())
+	if err == nil {
+		t.Fatal("Lead on an unreachable database returned nil")
+	}
+	if *runs != 0 {
+		t.Fatalf("task ran %d times without a lock", *runs)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("a claim error took %s to return: it was retried", d)
+	}
+}
+
+// BUG-52: two waiters on one released lock run the task once between them.
+func TestLeader_TwoWaitersRunTheTaskOnce(t *testing.T) {
+	dsn := requireHarness(t).appURL
+	task := "test-" + uuid.NewString()
+	a, b, c := db.NewLeader(dsn), db.NewLeader(dsn), db.NewLeader(dsn)
+	t.Cleanup(func() { ldStop(t, a); ldStop(t, b); ldStop(t, c) })
+	ldHold(t, a, task)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var runs atomic.Int32
+	fn := func(context.Context) error { runs.Add(1); return nil }
+	var wg sync.WaitGroup
+	for _, l := range []*db.Leader{b, c} {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = l.Lead(task, fn)(ctx) }()
+	}
+	t.Cleanup(func() { cancel(); wg.Wait() })
+
+	time.Sleep(time.Second)
+	if n := runs.Load(); n != 0 {
+		t.Fatalf("%d waiters ran while a held the lock", n)
+	}
+	ldStop(t, a)
+	deadline := time.Now().Add(15 * time.Second)
+	for runs.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if runs.Load() == 0 {
+		t.Fatal("no waiter took the lock within 15s of a stopping")
+	}
+	time.Sleep(6 * time.Second) // longer than claimRetry
+	if n := runs.Load(); n != 1 {
+		t.Fatalf("task ran %d times across two waiters, want 1", n)
 	}
 }
 

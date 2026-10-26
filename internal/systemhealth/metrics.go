@@ -84,8 +84,8 @@ func NewMetricsSource(g *Google, now func() time.Time, log *slog.Logger) *Metric
 }
 
 // Get answers from a cache entry younger than MetricsRefreshAfter. An older entry is served too
-// and one background fetch refreshes it; past MetricsStaleTTL Get serves it only while a fetch is in flight.
-// Otherwise Get joins or starts the key's one fetch.
+// and one background fetch refreshes it; past MetricsStaleTTL it is served only while a fetch is in flight
+// and the entry is under MetricsStaleTTL+MetricsFetchTimeout old. Otherwise Get joins or starts the key's one fetch.
 // Its only error is ctx's, when the caller leaves before the fetch ends.
 func (s *MetricsSource) Get(ctx context.Context, rangeName, service string) (Metrics, error) {
 	key := metricsKey{rangeName, service}
@@ -98,7 +98,7 @@ func (s *MetricsSource) Get(ctx context.Context, rangeName, service string) (Met
 		return e.body, nil
 	}
 	call, shared := s.inflight[key]
-	if cached && (age < MetricsStaleTTL || shared) {
+	if cached && (age < MetricsStaleTTL || shared && age < MetricsStaleTTL+MetricsFetchTimeout) {
 		if !shared {
 			call = &metricsCall{done: make(chan struct{})}
 			s.inflight[key] = call

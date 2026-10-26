@@ -795,6 +795,41 @@ func (h panicHandler) Handle(context.Context, slog.Record) error {
 	panic("log boom")
 }
 
+// An hour-old entry with a fetch in flight is not served: the second caller joins the fetch.
+func TestMetricsSource_AVeryOldEntryWithAFetchInFlightJoinsIt(t *testing.T) {
+	clk := newClock()
+	f, s, _ := newComboFake(t, clk.now)
+	first, err := s.Get(t.Context(), "1h", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(time.Hour)
+	release := holdQueries(t, f)
+	type res struct {
+		m   Metrics
+		err error
+	}
+	get := func() chan res {
+		c := make(chan res, 1)
+		go func() { m, err := s.Get(t.Context(), "1h", ""); c <- res{m, err} }()
+		return c
+	}
+	leader := get()
+	<-f.entered
+	joiner := get()
+	select {
+	case <-joiner:
+		t.Fatal("Get served the hour-old entry instead of joining the fetch")
+	case <-time.After(200 * time.Millisecond):
+	}
+	release()
+	r := <-joiner
+	<-leader
+	if r.err != nil || !r.m.End.After(first.End) {
+		t.Fatalf("joiner = %v, %v: want the fetch's fresh body", r.m.End, r.err)
+	}
+}
+
 func TestMetricsSource_APanickingFetchReleasesWaitersAndCachesNothing(t *testing.T) {
 	clk := newClock()
 	f, s, _ := newComboFake(t, clk.now)

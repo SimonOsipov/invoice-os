@@ -123,6 +123,7 @@ func TestRLS_AStartedPurgeRefusesEveryChange(t *testing.T) {
 			{"reschedule", `UPDATE tenants SET deletion_scheduled_at = now() WHERE id = $1`},
 			{"change the marker", `UPDATE tenants SET deletion_purge_started_at = now() WHERE id = $1`},
 			{"clear the marker", `UPDATE tenants SET deletion_purge_started_at = NULL WHERE id = $1`},
+			{"clear the schedule and the marker together", `UPDATE tenants SET deletion_scheduled_at = NULL, deletion_scheduled_by = NULL, deletion_purge_started_at = NULL WHERE id = $1`},
 		} {
 			_, err := ppExec(t, who, a, c.sql, a)
 			pgErr := wdPgErr(t, who+" "+c.what, err, "42501")
@@ -182,6 +183,17 @@ func TestRLS_AnUnscheduledTenantCannotBeStarted(t *testing.T) {
 	}
 	if m := ppMarker(t, c); m != nil {
 		t.Errorf("marker after the refused start = %v, want NULL", m)
+	}
+
+	house := wdHouseTenant(t)
+	for _, who := range []string{"invoice_app", "invoice_migrator"} {
+		_, err := ppExec(t, who, house, start)
+		if pgErr := wdPgErr(t, who+" starts the house tenant", err, "23514"); pgErr.ConstraintName != "tenants_purge_started_needs_schedule" {
+			t.Errorf("%s house start: constraint = %q, want tenants_purge_started_needs_schedule", who, pgErr.ConstraintName)
+		}
+	}
+	if m := ppMarker(t, house); m != nil {
+		t.Errorf("house marker after the refused starts = %v, want NULL", m)
 	}
 
 	wdSchedule(t, c, `now()`)
@@ -301,5 +313,31 @@ func TestRLS_DeletionPurgeStartedDownDropsTheGuard(t *testing.T) {
 	_, err := ppExec(t, "invoice_app", again, `UPDATE tenants SET deletion_scheduled_at = NULL, deletion_scheduled_by = NULL`)
 	if pgErr := wdPgErr(t, "clear a started tenant after Up", err, "42501"); pgErr.ConstraintName != "tenant_deletion_underway" {
 		t.Errorf("constraint after Up = %q, want tenant_deletion_underway", pgErr.ConstraintName)
+	}
+}
+
+func TestRLS_OnlyInvoiceAppAndTheOwnerCanUpdateThePurgeMarker(t *testing.T) {
+	requireHarness(t)
+	requirePurgeGuard(t)
+
+	rows, err := h.super.Query(context.Background(),
+		`SELECT rolname FROM pg_roles
+		  WHERE NOT rolsuper AND rolname !~ '^pg_'
+		    AND (has_column_privilege(oid, 'public.tenants', $1, 'UPDATE') OR has_table_privilege(oid, 'public.tenants', 'UPDATE'))
+		  ORDER BY rolname`, purgeStartedCol)
+	if err != nil {
+		t.Fatalf("read the roles that can update the marker: %v", err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			t.Fatalf("scan role: %v", err)
+		}
+		got = append(got, r)
+	}
+	if want := []string{"invoice_app", "invoice_migrator"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("roles that can update %s = %v, want %v", purgeStartedCol, got, want)
 	}
 }

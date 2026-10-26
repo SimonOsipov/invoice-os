@@ -716,7 +716,7 @@ func staffMigrationProvider(t *testing.T) *goose.Provider {
 }
 
 // rollBackRemovedFirst undoes deletion_purge_started, then workspace_deletion, then person_erasures, removed_flag_ignores_live_membership, then membership_removed, so an older migration's Down and Up see their own schema.
-// The cleanup rolls both back again (a provider.Up in the test may have applied them early) and re-applies them last, in order,
+// The cleanup rolls them back again (a provider.Up in the test may have applied them early) and re-applies them last, in order,
 // over the older bodies and the older CHECK that Up puts back, so they sit last in the goose ledger.
 func rollBackRemovedFirst(t *testing.T, provider *goose.Provider) {
 	t.Helper()

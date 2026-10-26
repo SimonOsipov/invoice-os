@@ -87,24 +87,88 @@ func (bw *bundleWriter) finalizeCSV(e *csvEntry) error {
 	return nil
 }
 
-// WriteBody satisfies bodyWriter: it creates its own ZIP entry and copies body
-// verbatim, never through a CSV cell (D-6).
+// WriteBody satisfies bodyWriter: it copies body verbatim into its own ZIP
+// entry, never through a CSV cell (D-6).
 func (bw *bundleWriter) WriteBody(name string, body []byte) error {
+	return bw.WriteBodyFrom(name, bytes.NewReader(body))
+}
+
+// byteCounter counts the bytes written through it.
+type byteCounter struct{ n int64 }
+
+func (c *byteCounter) Write(p []byte) (int, error) {
+	c.n += int64(len(p))
+	return len(p), nil
+}
+
+// WriteBodyFrom streams r verbatim into its own ZIP entry. A copy error returns
+// before any manifest entry is appended.
+func (bw *bundleWriter) WriteBodyFrom(name string, r io.Reader) error {
 	w, err := bw.zw.Create(name)
 	if err != nil {
 		return fmt.Errorf("archive: create %s entry: %w", name, err)
 	}
-	if _, err := w.Write(body); err != nil {
+	h, n := sha256.New(), &byteCounter{}
+	if _, err := io.Copy(io.MultiWriter(w, h, n), r); err != nil {
 		return fmt.Errorf("archive: write %s entry: %w", name, err)
 	}
 	if err := bw.zw.Flush(); err != nil {
 		return fmt.Errorf("archive: flush %s entry: %w", name, err)
 	}
-	sum := sha256.Sum256(body)
 	bw.entries = append(bw.entries, manifestEntry{
 		Name:   name,
-		Bytes:  int64(len(body)),
-		SHA256: hex.EncodeToString(sum[:]),
+		Bytes:  n.n,
+		SHA256: hex.EncodeToString(h.Sum(nil)),
+	})
+	return nil
+}
+
+// streamedCSV writes records through encoding/csv into a live entry and counts
+// the rows after the header.
+type streamedCSV struct {
+	name        string
+	cw          *csv.Writer
+	rows        int
+	wroteHeader bool
+}
+
+func (e *streamedCSV) Write(record []string) error {
+	if err := e.cw.Write(record); err != nil {
+		return fmt.Errorf("archive: write %s record: %w", e.name, err)
+	}
+	if !e.wroteHeader {
+		e.wroteHeader = true
+		return nil
+	}
+	e.rows++
+	return nil
+}
+
+// streamCSV opens the entry first and lets fill write records straight into it.
+// Nothing else may create an entry while fill runs: archive/zip keeps one open.
+func (bw *bundleWriter) streamCSV(name string, fill func(csvWriter) error) error {
+	w, err := bw.zw.Create(name)
+	if err != nil {
+		return fmt.Errorf("archive: create %s entry: %w", name, err)
+	}
+	h, n := sha256.New(), &byteCounter{}
+	e := &streamedCSV{name: name, cw: csv.NewWriter(io.MultiWriter(w, h, n))}
+	if err := fill(e); err != nil {
+		return err
+	}
+	e.cw.Flush()
+	if err := e.cw.Error(); err != nil {
+		return fmt.Errorf("archive: flush %s: %w", name, err)
+	}
+	if err := bw.zw.Flush(); err != nil {
+		return fmt.Errorf("archive: flush %s entry: %w", name, err)
+	}
+	rows := e.rows
+	bw.entries = append(bw.entries, manifestEntry{
+		Name:   name,
+		Bytes:  n.n,
+		SHA256: hex.EncodeToString(h.Sum(nil)),
+		Rows:   &rows,
 	})
 	return nil
 }

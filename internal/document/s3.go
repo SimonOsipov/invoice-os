@@ -98,7 +98,7 @@ func NewS3Store(cfg Config, hc *http.Client) (ObjectStore, error) {
 		// virtual-host url style.
 		o.APIOptions = append(o.APIOptions, unsignAcceptEncoding)
 	})
-	// A timed-out read arrives as a 408 with code RequestCanceled.
+	// Reads also retry a 408 and a RequestCanceled code (TestS3Store_GetRetries408RequestCanceled).
 	readRetryer := retry.NewStandard(func(o *retry.StandardOptions) {
 		o.Retryables = append(o.Retryables,
 			retry.RetryableHTTPStatusCode{Codes: map[int]struct{}{http.StatusRequestTimeout: {}}},

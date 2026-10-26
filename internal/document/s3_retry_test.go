@@ -51,24 +51,28 @@ func wantGetAfterRetry(t *testing.T, rt *fakeRoundTripper) {
 }
 
 func TestS3Store_GetRetries408RequestCanceled(t *testing.T) {
+	t.Parallel()
 	rt := &fakeRoundTripper{}
 	scripted(rt, errReply(408, "RequestCanceled", "Request is canceled."), okBody(5))
 	wantGetAfterRetry(t, rt)
 }
 
 func TestS3Store_GetRetries408WithAnotherCode(t *testing.T) {
+	t.Parallel()
 	rt := &fakeRoundTripper{}
 	scripted(rt, errReply(408, "ClientTimeout", "timed out"), okBody(5))
 	wantGetAfterRetry(t, rt)
 }
 
 func TestS3Store_GetRetriesRequestCanceledCode(t *testing.T) {
+	t.Parallel()
 	rt := &fakeRoundTripper{}
 	scripted(rt, errReply(400, "RequestCanceled", "Request is canceled."), okBody(5))
 	wantGetAfterRetry(t, rt)
 }
 
 func TestS3Store_GetStillRetries503(t *testing.T) {
+	t.Parallel()
 	rt := &fakeRoundTripper{}
 	scripted(rt, func(req *http.Request) *http.Response {
 		return newFakeResponse(req, http.StatusServiceUnavailable, nil, "")
@@ -77,6 +81,7 @@ func TestS3Store_GetStillRetries503(t *testing.T) {
 }
 
 func TestS3Store_GetCallerCancelIsNotRetried(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	calls := 0
@@ -100,6 +105,7 @@ func TestS3Store_GetCallerCancelIsNotRetried(t *testing.T) {
 }
 
 func TestS3Store_GetCallerCancelAfter408IsNotRetried(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	calls := 0
@@ -122,6 +128,7 @@ func TestS3Store_GetCallerCancelAfter408IsNotRetried(t *testing.T) {
 }
 
 func TestS3Store_PutDoesNotRetry408RequestCanceled(t *testing.T) {
+	t.Parallel()
 	rt := &fakeRoundTripper{}
 	scripted(rt, errReply(408, "RequestCanceled", "Request is canceled."), okBody(0))
 
@@ -135,6 +142,7 @@ func TestS3Store_PutDoesNotRetry408RequestCanceled(t *testing.T) {
 }
 
 func TestS3Store_GetStopsAfterThreeAttempts(t *testing.T) {
+	t.Parallel()
 	rt := &fakeRoundTripper{}
 	scripted(rt, errReply(408, "RequestCanceled", "Request is canceled."))
 
@@ -147,6 +155,7 @@ func TestS3Store_GetStopsAfterThreeAttempts(t *testing.T) {
 }
 
 func TestS3Store_GetNotFoundIsNotRetried(t *testing.T) {
+	t.Parallel()
 	rt := &fakeRoundTripper{}
 	scripted(rt, errReply(404, "NoSuchKey", "The specified key does not exist."), okBody(5))
 

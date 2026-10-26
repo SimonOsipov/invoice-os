@@ -223,17 +223,7 @@ const (
 
 func newWireStore(t *testing.T, rt *fakeRoundTripper) document.ObjectStore {
 	t.Helper()
-	store, err := document.NewS3Store(document.Config{
-		Bucket:          wireBucket,
-		Endpoint:        wireEndpoint,
-		Region:          "auto",
-		AccessKeyID:     "tid_test_access_key",
-		SecretAccessKey: "tsec_test_secret_key",
-	}, &http.Client{Transport: rt})
-	if err != nil {
-		t.Fatalf("NewS3Store() returned unexpected error: %v", err)
-	}
-	return store
+	return newStoreWithClient(t, &http.Client{Transport: rt})
 }
 
 // okBody answers 200 with n bytes and no Content-Range.

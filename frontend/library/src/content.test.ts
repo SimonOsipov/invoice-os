@@ -194,6 +194,8 @@ describe('content', () => {
     const ws = byId('delete-workspace')
     expect(ws.desc).toMatch(/other admins get an email with a link to cancel/i)
     expect(ws.desc).toMatch(/another email if the deletion is cancelled/i)
+    expect(ws.desc).toMatch(/cancel from the notice or the emailed link/i)
+    expect(ws.benefits[1]).toMatch(/any admin can cancel from the notice or the emailed link/i)
     if (ws.sc.kind === 'flow') expect(ws.sc.steps[0].out).toMatch(/other admins emailed a cancel link/i)
     expect(ws.sc.steps[1].cap).toMatch(/emailed link/i)
     expect(JSON.stringify(byId('delete-account'))).not.toMatch(/e-?mail/i)

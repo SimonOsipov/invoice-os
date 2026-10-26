@@ -66,6 +66,8 @@ var purgeTables = []string{
 	"idempotency_keys",
 	"submission_rate_limits",
 	"invitations",
+	"workspace_deletion_links",
+	"workspace_deletion_cancel_mails",
 	"workflow_role_members",
 	"workflow_roles",
 	auditLogTable,

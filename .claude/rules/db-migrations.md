@@ -20,6 +20,7 @@ paths:
 - Give `invoice_app` SELECT and INSERT only on `ai_calls`. Staff read it only through `public.staff_read_ai_calls` and `public.staff_read_ai_call_totals`.
 - Give `invoice_app` SELECT, INSERT and UPDATE on `rollup_snapshots`. The purge, the reset and the FK cascade remove its rows.
 - Give `invoice_app` UPDATE on `tenants.deletion_scheduled_at` and `tenants.deletion_scheduled_by` only. The trigger `tenants_deletion_guard` sets `deletion_due_at` and refuses the house tenant.
+- Give `invoice_app` SELECT, INSERT and `UPDATE (send_status)` on `workspace_deletion_links` and `workspace_deletion_cancel_mails`. The tenant purge removes their rows by cascade.
 - Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `blog_categories`, `blog_posts` and `blog_post_covers`. They are global: no RLS.
 - Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `blog_subscription_requests`, and SELECT, INSERT, UPDATE and DELETE on `blog_subscribers`. Both are global: no RLS.
 - Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `contacts`. Only the erase routine deletes a contact.

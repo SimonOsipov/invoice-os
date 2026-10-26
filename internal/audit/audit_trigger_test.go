@@ -99,6 +99,8 @@ func triggerRuleDPayloads(invoiceID string) map[string]map[string]any {
 		"customers.customer.restored":  {"id": uuid.NewString(), "from": "archived", "to": "active"},
 		"workspace.deletion_scheduled": {"due_at": "2026-11-24T00:00:00Z"},
 		"workspace.deletion_cancelled": {"due_at": "2026-11-24T00:00:00Z"},
+		"membership.account_deleted":   {"user_id": userID, "role": "preparer"},
+		"membership.admin_handed_on":   {"user_id": userID, "from": "preparer"},
 	}
 }
 
@@ -180,8 +182,8 @@ func TestAudit_InsertTriggerLeavesWorkspaceEventsNull(t *testing.T) {
 	fx := seedTriggerFixture(t, f)
 
 	ruleD := triggerRuleDPayloads(fx.invoice)
-	if len(ruleD) != 30 {
-		t.Fatalf("rule-D payload map holds %d events, want 30", len(ruleD))
+	if len(ruleD) != 32 {
+		t.Fatalf("rule-D payload map holds %d events, want 32", len(ruleD))
 	}
 	for event, payload := range ruleD {
 		recordAudit(t, f, fx.tenant, event, payload)

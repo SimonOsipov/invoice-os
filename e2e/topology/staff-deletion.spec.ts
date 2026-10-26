@@ -104,7 +104,9 @@ test('support console: start, cancel and purge a workspace', async ({ page }) =>
   await dialog.getByLabel('Workspace name').fill(ws.name)
   await expect(purge).toBeEnabled()
   await purge.click()
-  await expect(main(page).getByText(/Purge in progress/)).toBeVisible()
+  await expect(page.getByText('Purge started'), 'the toast follows the 202').toBeVisible()
+  // The purge job may erase the tenant before the re-read lands; the read then answers 404.
+  await expect(main(page).getByText(/Purge in progress/).or(main(page).getByText('Tenant not found.'))).toBeVisible()
 
   await expect.poll(async () => (await rawFetch(`${STAFF_TENANTS}/${ws.tenantId}`, { headers: auth(token) })).status, { intervals: [3_000], timeout: 90_000 }).toBe(404)
 
@@ -132,6 +134,8 @@ test('support console: the deletion header, member rows and modal fit at every w
   const viewJobs = header.getByRole('button', { name: 'View jobs', exact: true })
   const deleteButtons = main(page).getByRole('button', { name: 'Delete account', exact: true })
   await expect(deleteButtons).toHaveCount(2)
+  const actionButtons = actions.getByRole('button')
+  await expect(actionButtons, 'Delete workspace and Purge now').toHaveCount(2)
 
   await sweep(page, async (width) => {
     await settleAnimations(card, header, text, viewJobs, actions)
@@ -148,6 +152,11 @@ test('support console: the deletion header, member rows and modal fit at every w
     for (const part of ['text', 'viewJobs', 'actions'] as const) {
       expect(enclosesRect(r.header, r[part], 1), `${part} leaves the header at ${width}px`).toBe(true)
     }
+    const [first, second] = [await rectOf('first action', actionButtons.nth(0), width), await rectOf('second action', actionButtons.nth(1), width)]
+    for (const [label, box] of [['first action', first], ['second action', second]] as const) {
+      expect(enclosesRect(r.actions, box, 1), `${label} leaves the action group at ${width}px`).toBe(true)
+    }
+    expect(rectsOverlap(first, second), `the action buttons overlap at ${width}px`).toBe(false)
     for (const [a, b] of [['text', 'viewJobs'], ['text', 'actions'], ['viewJobs', 'actions']] as const) {
       expect(rectsOverlap(r[a], r[b]), `${a} and ${b} overlap at ${width}px`).toBe(false)
     }

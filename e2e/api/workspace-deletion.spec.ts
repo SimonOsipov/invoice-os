@@ -356,6 +356,8 @@ test.describe('staff workspace deletion (API E2E, over the deployed gateway)', (
     for (const [label, path, method, body] of routes) {
       const res = await rawFetch(`${STAFF_TENANTS}/${path}`, { method, headers: auth(customer), ...(body !== undefined && { body }) })
       assertErrorEnvelope(res, 403, `a customer on staff ${label}`)
+      // internal/gateway/gateway.go authorize: the staff class refuses before any handler runs.
+      expect(errorOf(res), `a customer on staff ${label}`).toBe('forbidden')
     }
 
     const bodies: [string, string, unknown][] = [
@@ -402,9 +404,10 @@ test.describe('staff workspace deletion (API E2E, over the deployed gateway)', (
     const purge = await staffPost(staff, `${ws.tenantId}/deletion/purge`, { workspace_name: ws.workspaceName, reason: 'e2e purge' })
     expect(purge.status, JSON.stringify(purge.body)).toBe(202)
 
+    // The purge job races this call: 409 while the marker stands, a refusal once the tenant and its sessions are gone.
     const cancel = await cancelDeletion(ws.adminToken)
-    assertErrorEnvelope(cancel, 409, 'an admin cancels a purge')
-    expect(errorOf(cancel)).toBe(BEING_DELETED)
+    expect([401, 403, 404, 409], `an admin cancel after a purge answered ${cancel.status}`).toContain(cancel.status)
+    if (cancel.status === 409) expect(errorOf(cancel)).toBe(BEING_DELETED)
 
     // The first live run of purge now on the preview: files and GoTrue included.
     await expect.poll(async () => (await staffRead(ws.tenantId)).status, { intervals: [3_000], timeout: 90_000 }).toBe(404)

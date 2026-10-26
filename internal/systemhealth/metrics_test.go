@@ -212,7 +212,7 @@ func TestMetricsSource_CachesSixtySecondsPerKey(t *testing.T) {
 	clk.advance(-58 * time.Second)
 	get("6h", "", 2*n)
 	get("1h", "app", 3*n)
-	clk.advance(59 * time.Second)
+	clk.advance(MetricsStaleTTL - time.Second)
 	get("1h", "", 4*n)
 }
 
@@ -465,7 +465,7 @@ func TestMetricsSource_AMetadataFailureMarksEverySection(t *testing.T) {
 			if prom, run := f.googleHits(); prom != 0 || run != 0 {
 				t.Fatalf("prometheus/run hits = %d/%d, want 0/0", prom, run)
 			}
-			clk.advance(MetricsTTL)
+			clk.advance(MetricsStaleTTL)
 			if _, err := s.Get(t.Context(), "1h", ""); err != nil {
 				t.Fatal(err)
 			}

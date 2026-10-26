@@ -14,6 +14,7 @@ const ConnectionBudget = 80
 
 const (
 	MetricsTTL          = 60 * time.Second
+	MetricsStaleTTL     = 2 * MetricsTTL // a 60 s poll lands inside it even when a fetch ran long
 	MetricsFetchTimeout = 15 * time.Second
 )
 
@@ -65,6 +66,7 @@ type metricsCall struct {
 }
 
 // MetricsSource serves Metrics from a 60 s cache with one shared fetch per key.
+// An entry up to MetricsStaleTTL old is served at once while one background fetch refreshes it.
 type MetricsSource struct {
 	g   *Google
 	now func() time.Time
@@ -80,17 +82,29 @@ func NewMetricsSource(g *Google, now func() time.Time, log *slog.Logger) *Metric
 	return &MetricsSource{g: g, now: now, log: log, entries: map[metricsKey]metricsEntry{}, inflight: map[metricsKey]*metricsCall{}}
 }
 
-// Get answers from a cache entry younger than MetricsTTL, else joins or starts the key's one fetch.
+// Get answers from a cache entry younger than MetricsTTL. An entry younger than MetricsStaleTTL
+// is served too, and a background fetch refreshes it. Otherwise Get joins or starts the key's one fetch.
 // Its only error is ctx's, when the caller leaves before the fetch ends.
 func (s *MetricsSource) Get(ctx context.Context, rangeName, service string) (Metrics, error) {
 	key := metricsKey{rangeName, service}
 	s.mu.Lock()
 	start := s.now()
-	if e, ok := s.entries[key]; ok && start.Sub(e.fetchedAt) < MetricsTTL {
+	e, cached := s.entries[key]
+	age := start.Sub(e.fetchedAt)
+	if cached && age < MetricsTTL {
 		s.mu.Unlock()
 		return e.body, nil
 	}
 	call, shared := s.inflight[key]
+	if cached && age < MetricsStaleTTL {
+		if !shared {
+			call = &metricsCall{done: make(chan struct{})}
+			s.inflight[key] = call
+			go s.run(ctx, key, call, start)
+		}
+		s.mu.Unlock()
+		return e.body, nil
+	}
 	if !shared {
 		call = &metricsCall{done: make(chan struct{})}
 		s.inflight[key] = call

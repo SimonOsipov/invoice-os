@@ -45,7 +45,7 @@ type EraseByIDWorker struct {
 
 func (w *EraseByIDWorker) Timeout(*river.Job[EraseByIDArgs]) time.Duration { return eraseTimeout }
 
-// Work runs both steps; every statement is idempotent, so a retry repeats the job.
+// Work sweeps, deletes the account, then sweeps again; every statement is idempotent, so a retry repeats the job.
 func (w *EraseByIDWorker) Work(ctx context.Context, job *river.Job[EraseByIDArgs]) error {
 	id, err := uuid.Parse(job.Args.UserID)
 	if err != nil {

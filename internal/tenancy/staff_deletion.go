@@ -182,6 +182,8 @@ func staffDeletionStatus(err error) (int, string) {
 		return http.StatusConflict, "this workspace is already being deleted"
 	case errors.Is(err, ErrDeletionOutcomeChanged):
 		return http.StatusConflict, "the workspace changed; review the page and confirm again"
+	case errors.Is(err, ErrLastActiveMember):
+		return http.StatusConflict, "this is the last active member; start a workspace deletion instead"
 	}
 	return http.StatusInternalServerError, "internal server error"
 }

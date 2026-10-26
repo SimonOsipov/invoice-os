@@ -184,6 +184,10 @@ describe('content', () => {
     const ws = byId('delete-workspace')
     expect(JSON.stringify(ws)).toMatch(/Download export|downloads the export/i)
     expect(ws.sc.steps[0].cap).toMatch(/downloads the export/i)
+    expect(ws.desc).toMatch(/ticks that it is downloaded/i)
+    expect(ws.desc).toMatch(/every company's evidence, every original upload and the full audit log/i)
+    expect(ws.sc.steps[1].cap).toMatch(/admin can download the export again/i)
+    expect(byId('delete-account').desc).toMatch(/downloads the export/i)
   })
 
   // Add the emailed cancel link claim only once the app has it: edit this regex first.

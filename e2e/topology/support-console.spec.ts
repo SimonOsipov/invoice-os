@@ -1022,6 +1022,7 @@ async function healthNarrowing(page: Page, latest: { body: SeenHealth }): Promis
     for (const key of SCOPED) await expect(tile(key).locator('[data-scope]'), `${key} tag at ${at}`).toHaveText('All services')
   }
   for (const name of ['submission', 'notifications', 'worker', 'auth', 'app', '']) await pick(name)
+  await expect(mn.getByText('Loading metrics…'), 'metrics have loaded after the last pick').toHaveCount(0)
 }
 
 async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Promise<void> {
@@ -1146,8 +1147,10 @@ async function tileRowRead(page: Page, row: Locator, keys: string[], what: strin
     }
     const max = t.locator('[data-max]')
     const hasValue = (await t.locator('.money').innerText()) !== '—'
-    await expect(max, `${key} max line`).toHaveCount(MAX_TILES.includes(key) && (hasValue || hasWorst) ? 1 : 0)
-    const maxBox = (await max.count()) > 0 ? (await boxes(page, { max }))['max'] : null
+    const wantMax = MAX_TILES.includes(key) && (hasValue || hasWorst) ? 1 : 0
+    const nMax = await max.count()
+    if (nMax !== wantMax) problems.push(`${key} max line: ${nMax} found, want ${wantMax}`)
+    const maxBox = nMax === 1 ? (await boxes(page, { max }))['max'] : null
     if (maxBox) {
       problems.push(...within(r.tile, maxBox, `${key} max line`), ...below(r.valueRow, maxBox, `${key} max line under the value row`), ...apart(maxBox, r.value, `${key} max line / value`), ...apart(maxBox, r.unit, `${key} max line / unit`))
       if (worstBox) problems.push(...below(maxBox, worstBox, `${key} worst line under the max line`))
@@ -1710,6 +1713,19 @@ async function auditReads(page: Page, testInfo: TestInfo): Promise<void> {
   await attachShot(page, testInfo, 'audit')
 }
 
+// Shorter than the 10 s atWidths poll: a stuck wait fails by name.
+const AUDIT_WAIT_MS = 4_000
+
+// The old rows paint for a frame after the click: wait for the reload's answer, the loading note and the rows.
+async function switchAuditView(page: Page, chip: 'STAFF CHANGES' | 'TENANT LOG', path: string, loading: string, rows: Locator): Promise<void> {
+  const mn = mainOf(page)
+  const read = page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === path, { timeout: AUDIT_WAIT_MS })
+  const [res] = await Promise.all([read, mn.getByRole('button', { name: chip }).click()])
+  expect(res.status(), `${chip} read status`).toBe(200)
+  await expect(mn.getByText(loading), `${chip}: the list has loaded`).toHaveCount(0, { timeout: AUDIT_WAIT_MS })
+  await expect(rows.first(), `${chip}: the list shows rows`).toBeVisible({ timeout: AUDIT_WAIT_MS })
+}
+
 async function auditLayout(page: Page): Promise<Read> {
   const mn = mainOf(page)
   const titleBlock = parent(mn.getByRole('heading', { level: 1, name: 'Audit & evidence explorer' }))
@@ -1767,9 +1783,8 @@ async function auditLayout(page: Page): Promise<Read> {
   const more = mn.getByRole('button', { name: 'Load more' })
   if ((await more.count()) > 0) problems.push(...below(top.card, (await boxes(page, { more })).more, 'Load more below the card'))
 
-  await mn.getByRole('button', { name: 'STAFF CHANGES' }).click()
   const changeRows = mn.locator('button[data-change-id]')
-  await expect(changeRows.first(), 'the staff changes have loaded').toBeVisible()
+  await switchAuditView(page, 'STAFF CHANGES', STAFF_CHANGES, 'Loading staff changes…', changeRows)
   const staffHead = await childRects(kid(parent(changeRows.first()), 1))
   for (const [i, row] of (await changeRows.all()).slice(0, ROW_CAP).entries()) {
     const cells = await childRects(row)
@@ -1778,7 +1793,7 @@ async function auditLayout(page: Page): Promise<Read> {
       if (!near(c.x, staffHead[n].x, 1)) problems.push(`staff row ${i} cell ${n + 1}: left ${c.x} vs header cell ${staffHead[n].x}`)
     }
   }
-  await mn.getByRole('button', { name: 'TENANT LOG' }).click()
+  await switchAuditView(page, 'TENANT LOG', STAFF_AUDIT, 'Loading audit entries…', auditRows(page))
 
   await noSidewaysScroll(page, 'Audit')
   return { problems, rects: { top, chipRects, controls, headCells, staffHead } }

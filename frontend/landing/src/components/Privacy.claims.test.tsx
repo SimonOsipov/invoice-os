@@ -44,6 +44,7 @@ import {
   nothingPrunesSigninAuditLog,
   signinScanFiles,
   staffLogEntryFacts,
+  migrationUps,
   staffLogIsAppendOnly,
   lockRefusesWrites,
   purgeDeletesFilesThenRows,
@@ -1032,6 +1033,7 @@ describe('DEL-10-03: the retention section states how long each copy lasts', () 
     expect(nothingPrunesSigninAuditLog()).toBe(true)
     expect(nothingPrunesSigninAuditLog(['package x', 'DELETE FROM auth.audit_log_entries WHERE created_at < now()'])).toBe(false)
     expect(nothingPrunesSigninAuditLog(['DELETE FROM AUTH.AUDIT_LOG_ENTRIES'])).toBe(false)
+    expect(nothingPrunesSigninAuditLog(['// auth.audit_log_entries is GoTrue\'s', '/* audit_log_entries */'])).toBe(true)
   })
 
   it('DEL-10-03 R5 the audit-table scan reads a real population', () => {
@@ -1045,12 +1047,25 @@ describe('DEL-10-03: the retention section states how long each copy lasts', () 
   it('DEL-10-03 R7 the staff row holds the id, the due date and two counts', () => {
     expect(staffLogEntryFacts()).toEqual({ event: 'workspace.purged', keys: ['due_at', 'members', 'objects'] })
     expect(staffLogIsAppendOnly()).toBe(true)
-    const sql = readFileSync(join(REPO, 'migrations/20261010080000_staff_audit_log.sql'), 'utf8')
-    expect(staffLogIsAppendOnly(sql.replace('BEFORE UPDATE OR DELETE', 'BEFORE UPDATE'))).toBe(false)
-    expect(staffLogIsAppendOnly(sql.replace('BEFORE TRUNCATE', 'BEFORE INSERT'))).toBe(false)
+    const ups = migrationUps()
+    expect(ups.length).toBeGreaterThan(100)
+    const i = ups.findIndex((m) => m.includes('CREATE TRIGGER staff_audit_log_no_update_delete'))
+    expect(i).toBeGreaterThanOrEqual(0)
+    const sql = ups[i]
+    const with0 = (m: string) => ups.map((x, j) => (j === i ? m : x))
+    expect(staffLogIsAppendOnly(with0(sql.replace('BEFORE UPDATE OR DELETE', 'BEFORE UPDATE')))).toBe(false)
+    expect(staffLogIsAppendOnly(with0(sql.replace('BEFORE TRUNCATE', 'BEFORE INSERT')))).toBe(false)
     const raise = "RAISE EXCEPTION 'staff_audit_log is append-only: % is not permitted', TG_OP"
     expect(sql).toContain(raise)
-    expect(staffLogIsAppendOnly(sql.replace(raise, `-- ${raise}`))).toBe(false)
+    expect(staffLogIsAppendOnly(with0(sql.replace(raise, `-- ${raise}`)))).toBe(false)
+    const later = (m: string) => [...ups, `-- +goose Up\n${m}\n-- +goose Down\nSELECT 1;`]
+    expect(staffLogIsAppendOnly(later('DROP TRIGGER staff_audit_log_no_update_delete ON public.staff_audit_log;'))).toBe(false)
+    expect(staffLogIsAppendOnly(later('/* x */ DROP TRIGGER IF EXISTS staff_audit_log_no_truncate ON public.staff_audit_log;'))).toBe(false)
+    expect(staffLogIsAppendOnly(later('DROP FUNCTION public.staff_audit_log_append_only();'))).toBe(false)
+    expect(
+      staffLogIsAppendOnly(later('CREATE OR REPLACE FUNCTION public.staff_audit_log_append_only() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql;')),
+    ).toBe(false)
+    expect(staffLogIsAppendOnly(later('-- DROP TRIGGER staff_audit_log_no_update_delete ON public.staff_audit_log;'))).toBe(true)
   })
 
   it('DEL-10-03 control: a payload with a name key fails R7', () => {

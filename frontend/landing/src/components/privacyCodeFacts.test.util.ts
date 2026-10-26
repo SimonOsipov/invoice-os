@@ -430,7 +430,7 @@ export function signinScanFiles(): string[] {
 export function nothingPrunesSigninAuditLog(
   texts: Iterable<string> = signinScanFiles().map((f) => readFileSync(join(REPO, f), 'utf8')),
 ): boolean {
-  for (const t of texts) if (/audit_log_entries/i.test(t)) return false
+  for (const t of texts) if (/audit_log_entries/i.test(stripComments(t))) return false
   return true
 }
 
@@ -446,20 +446,34 @@ export function staffLogEntryFacts(
   }
 }
 
-function sqlCode(sql: string): string {
-  return sql.replace(/--.*$/gm, '')
+// Every migration's Up section, in timestamp order.
+export function migrationUps(): string[] {
+  return readdirSync(join(REPO, 'migrations'))
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+    .map((f) => readFileSync(join(REPO, 'migrations', f), 'utf8'))
 }
 
-// The append-only trigger refuses UPDATE, DELETE and TRUNCATE on the staff log.
-export function staffLogIsAppendOnly(
-  sql: string = readFileSync(join(REPO, 'migrations/20261010080000_staff_audit_log.sql'), 'utf8'),
-): boolean {
-  const up = sqlCode(sql.split('-- +goose Down')[0])
-  return (
-    /RAISE EXCEPTION 'staff_audit_log is append-only/.test(up) &&
-    /BEFORE UPDATE OR DELETE ON public\.staff_audit_log[\s\S]*?EXECUTE FUNCTION public\.staff_audit_log_append_only\(\)/.test(up) &&
-    /BEFORE TRUNCATE ON public\.staff_audit_log[\s\S]*?EXECUTE FUNCTION public\.staff_audit_log_append_only\(\)/.test(up)
-  )
+const sqlCode = (sql: string): string => sql.replace(/\/\*[\s\S]*?\*\//g, '').replace(/--.*$/gm, '')
+
+// After the last migration, the append-only function raises and both triggers refuse UPDATE, DELETE and TRUNCATE.
+export function staffLogIsAppendOnly(migrations: string[] = migrationUps()): boolean {
+  let raises = false
+  let rowTrigger = false
+  let truncTrigger = false
+  for (const sql of migrations) {
+    const up = sqlCode(sql.split('-- +goose Down')[0])
+    if (!/staff_audit_log/.test(up)) continue
+    const fn = /FUNCTION\s+(?:public\.)?staff_audit_log_append_only\(\)[\s\S]*?\$\$[\s\S]*?\$\$/.exec(up)?.[0]
+    if (fn) raises = /RAISE EXCEPTION 'staff_audit_log is append-only/.test(fn)
+    if (/DROP\s+FUNCTION\s+(?:IF EXISTS\s+)?(?:public\.)?staff_audit_log_append_only/i.test(up)) raises = false
+    if (/BEFORE UPDATE OR DELETE ON public\.staff_audit_log[\s\S]*?EXECUTE FUNCTION public\.staff_audit_log_append_only\(\)/.test(up)) rowTrigger = true
+    if (/BEFORE TRUNCATE ON public\.staff_audit_log[\s\S]*?EXECUTE FUNCTION public\.staff_audit_log_append_only\(\)/.test(up)) truncTrigger = true
+    if (/DROP\s+TRIGGER\s+(?:IF EXISTS\s+)?staff_audit_log_no_update_delete\b/i.test(up)) rowTrigger = false
+    if (/DROP\s+TRIGGER\s+(?:IF EXISTS\s+)?staff_audit_log_no_truncate\b/i.test(up)) truncTrigger = false
+    if (/ALTER\s+TABLE\s+(?:ONLY\s+)?public\.staff_audit_log\s+DISABLE\s+TRIGGER/i.test(up)) rowTrigger = truncTrigger = false
+  }
+  return raises && rowTrigger && truncTrigger
 }
 
 // invitee_email is NOT NULL, so no erase can blank it.

@@ -357,6 +357,27 @@ describe('cancel link', () => {
     expect(posts().map((c) => c.url.split('/deletion')[1])).toEqual(['/cancel-by-link'])
   })
 
+  it('cancel link: a refused link and a refused plain route show the plain refusal, drop the link and retry plain only', async () => {
+    const NOT_PERMITTED = 'only an admin can cancel the deletion'
+    let plainTries = 0
+    handler = async (url) => {
+      if (isLinkCancel(url)) throw new ApiError('http', LINK_403, 403, { error: LINK_403 })
+      if (isCancel(url) && plainTries++ === 0) throw new ApiError('http', NOT_PERMITTED, 403, { error: NOT_PERMITTED })
+      return cancelsAnswer(url)
+    }
+    window.history.replaceState(null, '', `/#cancel-deletion=${LINK}`)
+    await renderApp(sessionWith(DUE))
+    fireEvent.click(await screen.findByTestId('deletion-notice-cancel'))
+
+    await waitFor(() => expect(screen.getByTestId('deletion-notice-error').textContent).toBe(NOT_PERMITTED))
+    expect(notice()).not.toBeNull()
+    expect(peekCancelLink()).toBeNull()
+    fireEvent.click(screen.getByTestId('deletion-notice-cancel'))
+
+    await screen.findByTestId('sidebar')
+    expect(posts().map((c) => c.url.split('/deletion')[1])).toEqual(['/cancel-by-link', '/cancel', '/cancel'])
+  })
+
   it('cancel link: a stored session from before the lock still sends the link', async () => {
     let locked = false
     handler = async (url) => {

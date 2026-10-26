@@ -8,6 +8,8 @@ import {
   cancelWorkspaceDeletion,
   cancelWorkspaceDeletionByLink,
   holdCancelLink,
+  isLinkRefusal,
+  LINK_NOT_VALID_MESSAGE,
   peekCancelLink,
   readCancelLinkFragment,
   deletionNoticeBody,
@@ -149,5 +151,16 @@ describe('workspaceDeletion: the cancel link', () => {
       method: 'POST',
       body: { token: T },
     })
+  })
+
+  it('workspaceDeletion: isLinkRefusal is the link message on a 403 and nothing else', () => {
+    const e = (status: number | null, message: string) => ({ status, message })
+    expect(isLinkRefusal(e(403, LINK_NOT_VALID_MESSAGE))).toBe(true)
+    expect(isLinkRefusal(e(403, 'only an admin can cancel the deletion'))).toBe(false)
+    expect(isLinkRefusal(e(500, LINK_NOT_VALID_MESSAGE))).toBe(false)
+    expect(isLinkRefusal(e(null, LINK_NOT_VALID_MESSAGE))).toBe(false)
+    expect(isLinkRefusal(null)).toBe(false)
+    expect(isLinkRefusal(undefined)).toBe(false)
+    expect(isLinkRefusal(LINK_NOT_VALID_MESSAGE)).toBe(false)
   })
 })

@@ -77,7 +77,7 @@ func SignOutHandler(authURL *url.URL, client *http.Client, sessions *SessionChec
 		// gone: a 401/403 naming a gone-code; the session vanished between the two calls, which sign-out wants.
 		case status >= 200 && status < 300, gone:
 			if claims.Subject != "" {
-				sessions.EvictSubject(claims.Subject)
+				sessions.EvictSubject(ctx, claims.Subject)
 			}
 			w.WriteHeader(http.StatusNoContent)
 		default:

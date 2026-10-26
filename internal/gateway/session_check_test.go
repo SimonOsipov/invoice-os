@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -748,7 +750,7 @@ func TestSessionCheck_EvictionBeatsAnInFlightCheck(t *testing.T) {
 		<-first
 		t.Fatalf("GoTrue /user was never called for request 1 (calls = %d)", fake.Hits())
 	}
-	rg.sessions.EvictSubject(subjectS1)
+	rg.sessions.EvictSubject(context.Background(), subjectS1)
 	open()
 
 	if code := <-first; code != http.StatusOK {
@@ -777,7 +779,7 @@ func TestSessionCheck_EvictSubject(t *testing.T) {
 		t.Fatalf("GoTrue /user calls = %d before eviction, want 2 (both cached)", n)
 	}
 
-	rg.sessions.EvictSubject(subjectS1)
+	rg.sessions.EvictSubject(context.Background(), subjectS1)
 
 	if rec := rg.get(tok1); rec.Code != http.StatusOK {
 		t.Errorf("S1 after eviction: status = %d, want 200", rec.Code)
@@ -1082,7 +1084,7 @@ func TestSessionCheck_EvictedCallKeepsANewerRegistration(t *testing.T) {
 	if !waitFor(2*time.Second, func() bool { return fake.Hits() == 1 }) {
 		t.Fatalf("GoTrue /user calls = %d, want request 1's call", fake.Hits())
 	}
-	rg.sessions.EvictSubject(subjectS1)
+	rg.sessions.EvictSubject(context.Background(), subjectS1)
 	go get(r2)
 	if !waitFor(2*time.Second, func() bool { return fake.Hits() == 2 }) {
 		t.Fatalf("GoTrue /user calls = %d after eviction, want request 2's own call", fake.Hits())
@@ -1367,4 +1369,148 @@ func TestSessionCheck_RefusalBodiesStayAtOneKiB(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRevocationWindow_AddsTheSlackToTheAge(t *testing.T) {
+	for _, age := range []time.Duration{0, 29 * time.Second} {
+		if got, want := revocationWindow(age), age+revocationSlack; got != want {
+			t.Errorf("revocationWindow(%v) = %v, want %v (the age plus revocationSlack)", age, got, want)
+		}
+	}
+}
+
+// deadPool refuses every connection at once, as registrant_outbox_test.go does.
+func deadPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	pool, err := pgxpool.New(context.Background(), "postgres://invoice_gateway:x@127.0.0.1:1/none?sslmode=disable&connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// stalledPool connects to a listener that accepts and never answers.
+func stalledPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(context.Background(), "postgres://invoice_gateway:x@"+ln.Addr().String()+"/none?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var mu sync.Mutex
+	var held []net.Conn
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			held = append(held, c)
+			mu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		_ = ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range held {
+			_ = c.Close()
+		}
+	})
+	return pool
+}
+
+// requireNoLeak fails when the captured log carries a token, subject or email.
+func requireNoLeak(t *testing.T, buf *bytes.Buffer, secrets ...string) {
+	t.Helper()
+	for _, s := range secrets {
+		if strings.Contains(buf.String(), s) {
+			t.Errorf("the log carries %q, want no token, subject or email: %s", s, buf.String())
+		}
+	}
+}
+
+func TestSessionCheck_AFailedRevocationReadAsksGoTrue(t *testing.T) {
+	fake := newUserFake(t, http.StatusOK, gtUser)
+	log, buf := captureLog()
+	rg := newSessionRig(t, fake.URL, nil, log)
+	rg.sessions.Shared(deadPool(t))
+	refusal := rg.refusal(t)
+	tok := rg.signer.token(t, subjectS1, sid1)
+	if rec := rg.get(tok); rec.Code != http.StatusOK || fake.Hits() != 1 {
+		t.Fatalf("first request = %d with %d /user calls, want 200 and 1 (a miss reads no database)", rec.Code, fake.Hits())
+	}
+	fake.set(http.StatusForbidden, gtError(403, "session_not_found"))
+
+	assertRevoked(t, rg.get(tok), refusal)
+
+	if n := fake.Hits(); n != 2 {
+		t.Errorf("GoTrue /user calls = %d, want 2 (the failed read evicted the entry)", n)
+	}
+	if recs := recordsNamed(t, buf, "session check: revocation read failed"); len(recs) != 1 || recs[0]["level"] != "WARN" {
+		t.Errorf("revocation read records = %v, want exactly one WARN", recs)
+	}
+	if n := warnCount(t, buf); n != 1 {
+		t.Errorf("WARN records = %d, want 1: %s", n, buf.String())
+	}
+	requireNoLeak(t, buf, tok, subjectS1, "ada@corp.example")
+}
+
+func TestSessionCheck_AStalledRevocationReadIsBounded(t *testing.T) {
+	fake := newUserFake(t, http.StatusOK, gtUser)
+	log, buf := captureLog()
+	rg := newSessionRig(t, fake.URL, nil, log)
+	rg.sessions.Shared(stalledPool(t))
+	tok := rg.signer.token(t, subjectS1, sid1)
+	if rec := rg.get(tok); rec.Code != http.StatusOK || fake.Hits() != 1 {
+		t.Fatalf("first request = %d with %d /user calls, want 200 and 1 (a miss reads no database)", rec.Code, fake.Hits())
+	}
+
+	start := time.Now()
+	rec := rg.get(tok)
+	elapsed := time.Since(start)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (GoTrue's live answer stands)", rec.Code)
+	}
+	if n := fake.Hits(); n != 2 {
+		t.Errorf("GoTrue /user calls = %d, want 2 (the stalled read counts as failed)", n)
+	}
+	if elapsed >= handoffDBTimeout {
+		t.Errorf("a cached request took %v, want under handoffDBTimeout (%v): the read bound is revocationReadTimeout (%v)", elapsed, handoffDBTimeout, revocationReadTimeout)
+	}
+	if n := len(recordsNamed(t, buf, "session check: revocation read failed")); n != 1 {
+		t.Errorf("revocation read failure records = %d, want 1: %s", n, buf.String())
+	}
+}
+
+func TestSessionCheck_AFailedRevocationWriteStillEvictsLocally(t *testing.T) {
+	fake := newUserFake(t, http.StatusOK, gtUser)
+	log, buf := captureLog()
+	rg := newSessionRig(t, fake.URL, nil, log)
+	rg.sessions.Shared(deadPool(t))
+	tok := rg.signer.token(t, subjectS1, sid1)
+	if rec := rg.get(tok); rec.Code != http.StatusOK || fake.Hits() != 1 {
+		t.Fatalf("first request = %d with %d /user calls, want 200 and 1", rec.Code, fake.Hits())
+	}
+
+	rg.sessions.EvictSubject(context.Background(), subjectS1)
+
+	if rec := rg.get(tok); rec.Code != http.StatusOK {
+		t.Errorf("request after the eviction = %d, want 200", rec.Code)
+	}
+	if n := fake.Hits(); n != 2 {
+		t.Errorf("GoTrue /user calls = %d after the eviction, want 2 (the local entry is gone)", n)
+	}
+	recs := recordsNamed(t, buf, "session check: record sign-out")
+	if len(recs) != 1 || recs[0]["level"] != "ERROR" {
+		t.Errorf("sign-out write records = %v, want exactly one ERROR", recs)
+	}
+	requireNoLeak(t, buf, subjectS1)
 }

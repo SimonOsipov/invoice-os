@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -237,9 +239,12 @@ func (c *SessionChecker) store(sid string, e sessionEntry) {
 	c.entries[sid] = e
 }
 
+// Shared makes sign-outs visible to every gateway instance through pool; nil keeps the in-process cache.
+func (c *SessionChecker) Shared(pool *pgxpool.Pool) {}
+
 // EvictSubject drops every cached verdict for sub; its in-flight calls answer their waiters but cache nothing.
 // ceiling: O(n) scan over every entry; index by subject above ~10k live sessions.
-func (c *SessionChecker) EvictSubject(sub string) {
+func (c *SessionChecker) EvictSubject(_ context.Context, sub string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for sid, e := range c.entries {

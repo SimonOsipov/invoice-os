@@ -1028,3 +1028,26 @@ func TestResetPasswordPage_TokenHoldingAPlaceholderIsNotExpanded(t *testing.T) {
 		})
 	}
 }
+
+// Holds today: a link GoTrue refuses ends before EvictSubject, so it writes no revocation.
+func TestResetPassword_AnExpiredLinkWritesNoRevocation(t *testing.T) {
+	f := newResetGoTrue(t)
+	f.verify = answer(http.StatusForbidden, rpOTPExpired)
+	sessions := liveSessions(t)
+	sessions.Shared(deadPool(t))
+	log, buf := captureLog()
+	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
+	h := ResetPasswordHandler(f.URL, siteURL(t), testClient(), sessions, th, log)
+
+	rpRequireRedirect(t, rpPost(t, h, rpValues(rpToken, "recovery", rpPass)), rpFailed)
+
+	if n := len(recordsNamed(t, buf, rpMsgRefusedLink)); n != 1 {
+		t.Errorf("refused-link records = %d, want 1 (the link was refused): %s", n, buf.String())
+	}
+	if n := len(recordsNamed(t, buf, "session check: record sign-out")); n != 0 {
+		t.Errorf("sign-out write records = %d, want 0", n)
+	}
+	if n := f.count(http.MethodPost, "/logout"); n != 0 {
+		t.Errorf("GoTrue /logout calls = %d, want 0", n)
+	}
+}

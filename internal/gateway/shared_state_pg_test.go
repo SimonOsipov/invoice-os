@@ -10,6 +10,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -38,10 +39,10 @@ func randHex(t *testing.T, n int) string {
 	return hex.EncodeToString(b)
 }
 
-// ownSubject returns a random subject and deletes its row as the superuser on cleanup (D21).
+// ownSubject returns a random uuid subject (the verifier refuses any other) and deletes its row as the superuser on cleanup (D21).
 func ownSubject(t *testing.T, d handoffDB) string {
 	t.Helper()
-	sub := "flake04-" + randHex(t, 8)
+	sub := uuid.NewString()
 	t.Cleanup(func() {
 		_, _ = d.super.Exec(context.Background(), `DELETE FROM gateway_session_revocations WHERE subject = $1`, sub)
 	})

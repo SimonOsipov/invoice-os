@@ -10,6 +10,7 @@ import {
   login,
   createEntity,
   createInvoice,
+  getAuditLog,
   createImportBatch,
   claimsOf,
   exchangeCode,
@@ -431,13 +432,18 @@ test('deployed app: a signed-out deep link returns to its destination after sign
 // and the honest filtered-empty state in one pass.
 //
 // The empty-by-filter arm needs the firm tenant's own log to be non-empty (auditScreenState,
-// lib/auditView.ts); audit.spec.ts's audit_exportIsDisabledWhenNothingMatches pins the same
-// premise on the same tenant.
+// lib/auditView.ts); the e2e5 shard seed writes none, so the test audits one entry first.
 test('deployed app: a signed-out deep link returns to its FILTER after sign-in', async ({ page }) => {
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
   const unknownInvoice = crypto.randomUUID()
+
+  // createEntity writes an audit entry; skipped when a retry or re-run left one behind.
+  const token = await login(API_PERSONAS.A)
+  if ((await getAuditLog(token, { limit: 1 })).log_is_empty) {
+    await createEntity(token, { name: `ROUTE-06 filter audit ${Date.now()}`, tin: freshTin() })
+  }
 
   // The destination's ?invoice= query rides through the front door and comes back with the restore.
   await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/audit?invoice=${unknownInvoice}` })
@@ -596,6 +602,10 @@ test("deployed app: Back past a company switch cannot resume the previous compan
   const { entities } = await listEntities(token, { status: 'active' })
   expect(entities.length, 'the firm seed must have at least one active entity to file under').toBeGreaterThan(0)
   const entity = entities[0]
+  // The switch below needs a second active client; the e2e5 shard seed holds one company.
+  if (entities.length < 2) {
+    await createEntity(token, { name: `ROUTE-06 switch target ${Date.now()}`, tin: freshTin() })
+  }
   const invoiceNumber = `INV-ROUTE06-SWITCHBACK-${Date.now()}`
   await createInvoice(token, {
     entity_id: entity.id,
@@ -642,7 +652,7 @@ test("deployed app: Back past a company switch cannot resume the previous compan
   await expect(options.first()).toBeVisible()
   expect(
     await options.count(),
-    'the firm seed must offer >=2 active clients to switch between (db/seed.dev.sql seeds 8)',
+    'the firm shard must offer >=2 active clients to switch between (the fixtures above ensure a second)',
   ).toBeGreaterThanOrEqual(2)
 
   const target = options.nth(1)

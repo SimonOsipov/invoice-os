@@ -128,6 +128,7 @@ func TestDeletionMail_EveryOtherActiveAdminGetsOneLink(t *testing.T) {
 	c := w.addMember(t, "admin", "active", "Chidi Eze")
 	s := w.addMember(t, "admin", "suspended", "Sade Eze")
 	r := w.addMember(t, "admin", "removed", "Rita Eze")
+	iv := w.addMember(t, "admin", "invited", "Ivy Eze")
 	p := w.addMember(t, "preparer", "active", "Pat Eze")
 	sender := &apiSender{}
 	n, _ := notifierFor(w, sender)
@@ -147,14 +148,16 @@ func TestDeletionMail_EveryOtherActiveAdminGetsOneLink(t *testing.T) {
 		to = append(to, m.To)
 	}
 	slices.Sort(to)
-	if want := []string{emailOf(b), emailOf(c)}; !slices.Equal(to, want) {
+	want := []string{emailOf(b), emailOf(c)}
+	slices.Sort(want)
+	if !slices.Equal(to, want) {
 		t.Errorf("recipients = %v, want exactly the other active admins %v", to, want)
 	}
 	rows := linkRows(t, w.super, w.tenant)
 	if len(rows) != 2 {
 		t.Fatalf("link rows = %d, want 2", len(rows))
 	}
-	for _, other := range []string{w.admin, s, r, p} {
+	for _, other := range []string{w.admin, s, r, iv, p} {
 		if _, ok := linkFor(rows, other); ok {
 			t.Errorf("a link row exists for %s, who must get none", other)
 		}

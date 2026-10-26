@@ -182,21 +182,23 @@ describe('content', () => {
 
   it('content_deletionCopyNamesTheExport', () => {
     const ws = byId('delete-workspace')
-    expect(JSON.stringify(ws)).toMatch(/Download export|downloads the export/i)
     expect(ws.sc.steps[0].cap).toMatch(/downloads the export/i)
     expect(ws.desc).toMatch(/ticks that it is downloaded/i)
     expect(ws.desc).toMatch(/every company's evidence, every original upload and the full audit log/i)
     expect(ws.sc.steps[1].cap).toMatch(/admin can download the export again/i)
     expect(byId('delete-account').desc).toMatch(/downloads the export/i)
+    expect(byId('delete-account').desc).toMatch(/ticks that it is downloaded/i)
   })
 
   it('content_deletionCopyNamesTheCancelLink', () => {
     const ws = byId('delete-workspace')
     expect(ws.desc).toMatch(/other admins get an email with a link to cancel/i)
-    expect(ws.desc).toMatch(/another email if the deletion is cancelled/i)
+    expect(ws.desc).toMatch(/every other admin gets an email/i)
     expect(ws.desc).toMatch(/cancel from the notice or the emailed link/i)
     expect(ws.benefits[1]).toMatch(/any admin can cancel from the notice or the emailed link/i)
-    if (ws.sc.kind === 'flow') expect(ws.sc.steps[0].out).toMatch(/other admins emailed a cancel link/i)
+    expect(ws.sc.kind).toBe('flow')
+    if (ws.sc.kind !== 'flow') return
+    expect(ws.sc.steps[0].out).toMatch(/other admins get a cancel link/i)
     expect(ws.sc.steps[1].cap).toMatch(/emailed link/i)
     expect(JSON.stringify(byId('delete-account'))).not.toMatch(/e-?mail/i)
   })

@@ -219,6 +219,8 @@ func TestTenancyMain_StaffTenantsRouteIsRegistered(t *testing.T) {
 	for _, want := range []struct{ pattern, handler, loader string }{
 		{"GET /v1/staff/tenants", "tenancy.StaffTenantsHandler", "store.StaffTenants"},
 		{"GET /v1/staff/tenants/{id}", "tenancy.StaffTenantHandler", "store.StaffTenant"},
+		{"POST /v1/staff/tenants/{id}/deletion", "tenancy.StaffScheduleDeletionHandler", "store.StaffScheduleWorkspaceDeletion"},
+		{"POST /v1/staff/tenants/{id}/deletion/cancel", "tenancy.StaffCancelDeletionHandler", "store.StaffCancelWorkspaceDeletion"},
 	} {
 		if got := handlers[want.pattern]; len(got) != 1 || got[0] != want.handler {
 			t.Errorf("%q registered with %v, want exactly [%s]", want.pattern, got, want.handler)

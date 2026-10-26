@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -453,4 +454,140 @@ func TestStaffDeletion_ActsOnlyOnThePathTenant(t *testing.T) {
 			t.Errorf("audit_log %s rows of B = %d, want 0", evCancelled, n)
 		}
 	})
+}
+
+func TestStaffDeletion_AFailedCancelRowKeepsTheSchedule(t *testing.T) {
+	w := newStaffDelWorld(t)
+	due, err := w.store.StaffScheduleWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
+	if err != nil {
+		t.Fatalf("setup start: %v", err)
+	}
+	drop := failStaffAudit(t, w.super, w.tenant, evCancelled)
+
+	err = w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
+	if err == nil {
+		t.Fatal("StaffCancelWorkspaceDeletion succeeded although its staff row fails")
+	}
+	requireNoSentinel(t, err)
+	if c := deletionOf(t, w.super, w.tenant); c.DueAt == nil || !c.DueAt.Equal(due) || c.By == nil || *c.By != w.staff {
+		t.Errorf("deletion columns after the failed cancel = %+v, want the schedule kept (due %v, by %s)", c, due, w.staff)
+	}
+	if !workspaceLocked(t, w.app, w.tenant) {
+		t.Error("db.WorkspaceLocked = false after the failed cancel, want true")
+	}
+	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 0 {
+		t.Errorf("audit_log %s rows = %d after the rollback, want 0", evCancelled, n)
+	}
+
+	drop()
+	if err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); err != nil {
+		t.Errorf("cancel after the trigger is gone: %v", err)
+	}
+}
+
+func TestStaffDeletion_ConcurrentStartsWriteOneScheduleAndOneRow(t *testing.T) {
+	w := newStaffDelWorld(t)
+	const callers = 8
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	gate := make(chan struct{})
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-gate
+			_, errs[i] = w.store.StaffScheduleWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
+		}()
+	}
+	close(gate)
+	wg.Wait()
+
+	won, locked := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			won++
+		case errors.Is(err, db.ErrWorkspaceLocked):
+			locked++
+		default:
+			t.Errorf("a concurrent start failed with %v, want nil or db.ErrWorkspaceLocked", err)
+		}
+	}
+	if won != 1 || locked != callers-1 {
+		t.Errorf("%d starts won and %d were refused, want 1 and %d", won, locked, callers-1)
+	}
+	if n := len(staffRowsOf(t, w.super, w.tenant, evScheduled)); n != 1 {
+		t.Errorf("staff_audit_log %s rows = %d, want 1", evScheduled, n)
+	}
+	if n := auditCount(t, w.app, w.tenant, evScheduled); n != 1 {
+		t.Errorf("audit_log %s rows = %d, want 1", evScheduled, n)
+	}
+}
+
+// Whichever order the races land in, the rows say whether the tenant ends scheduled: starts minus cancels is 1 or 0.
+func TestStaffDeletion_StartsAndCancelsRacingKeepTheRowsInStepWithTheState(t *testing.T) {
+	w := newStaffDelWorld(t)
+	if _, err := w.store.StaffScheduleWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); err != nil {
+		t.Fatalf("setup start: %v", err)
+	}
+	const pairs = 6
+	var wg sync.WaitGroup
+	gate := make(chan struct{})
+	run := func(f func() error, allowed ...error) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-gate
+			err := f()
+			if err != nil && !slices.ContainsFunc(allowed, func(a error) bool { return errors.Is(err, a) }) {
+				t.Errorf("a racing call failed with %v", err)
+			}
+		}()
+	}
+	for range pairs {
+		run(func() error {
+			_, err := w.store.StaffScheduleWorkspaceDeletion(w.ctx, w.tenant, staffReasonText)
+			return err
+		}, db.ErrWorkspaceLocked)
+		run(func() error { return w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText) })
+	}
+	close(gate)
+	wg.Wait()
+
+	starts := len(staffRowsOf(t, w.super, w.tenant, evScheduled))
+	cancels := len(staffRowsOf(t, w.super, w.tenant, evCancelled))
+	scheduled := !deletionOf(t, w.super, w.tenant).empty()
+	if want := map[bool]int{true: 1, false: 0}[scheduled]; starts-cancels != want {
+		t.Errorf("%d start rows and %d cancel rows with scheduled=%v, want starts-cancels = %d", starts, cancels, scheduled, want)
+	}
+	if got := auditCount(t, w.app, w.tenant, evScheduled); got != starts {
+		t.Errorf("audit_log %s rows = %d, staff rows = %d, want equal", evScheduled, got, starts)
+	}
+	if got := auditCount(t, w.app, w.tenant, evCancelled); got != cancels {
+		t.Errorf("audit_log %s rows = %d, staff rows = %d, want equal", evCancelled, got, cancels)
+	}
+}
+
+func TestStaffDeletion_ACancelTwiceWritesOneRowAndARestartSchedulesAgain(t *testing.T) {
+	w := newStaffDelWorld(t)
+	if _, err := w.store.StaffScheduleWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); err != nil {
+		t.Fatalf("setup start: %v", err)
+	}
+	for i := range 2 {
+		if err := w.store.StaffCancelWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); err != nil {
+			t.Fatalf("cancel %d: %v", i+1, err)
+		}
+	}
+	if n := len(staffRowsOf(t, w.super, w.tenant, evCancelled)); n != 1 {
+		t.Errorf("staff_audit_log %s rows after two cancels = %d, want 1", evCancelled, n)
+	}
+	if _, err := w.store.StaffScheduleWorkspaceDeletion(w.ctx, w.tenant, staffReasonText); err != nil {
+		t.Fatalf("restart after the cancel: %v", err)
+	}
+	if n := len(staffRowsOf(t, w.super, w.tenant, evScheduled)); n != 2 {
+		t.Errorf("staff_audit_log %s rows after the restart = %d, want 2", evScheduled, n)
+	}
+	if !workspaceLocked(t, w.app, w.tenant) {
+		t.Error("db.WorkspaceLocked = false after the restart, want true")
+	}
 }

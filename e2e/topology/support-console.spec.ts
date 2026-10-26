@@ -1713,7 +1713,7 @@ async function auditReads(page: Page, testInfo: TestInfo): Promise<void> {
   await attachShot(page, testInfo, 'audit')
 }
 
-// Shorter than the 10 s atWidths poll: a stuck wait fails by name.
+// Each wait stays under the 10 s atWidths poll, so one stuck wait can fail by name.
 const AUDIT_WAIT_MS = 4_000
 
 // The old rows paint for a frame after the click: wait for the reload's answer, the loading note and the rows.
@@ -1722,7 +1722,11 @@ async function switchAuditView(page: Page, chip: 'STAFF CHANGES' | 'TENANT LOG',
   const read = page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === path, { timeout: AUDIT_WAIT_MS })
   const [res] = await Promise.all([read, mn.getByRole('button', { name: chip }).click()])
   expect(res.status(), `${chip} read status`).toBe(200)
-  await expect(mn.getByText(loading), `${chip}: the list has loaded`).toHaveCount(0, { timeout: AUDIT_WAIT_MS })
+  await awaitAuditList(page, chip, loading, rows)
+}
+
+async function awaitAuditList(page: Page, chip: string, loading: string, rows: Locator): Promise<void> {
+  await expect(mainOf(page).getByText(loading), `${chip}: the list has loaded`).toHaveCount(0, { timeout: AUDIT_WAIT_MS })
   await expect(rows.first(), `${chip}: the list shows rows`).toBeVisible({ timeout: AUDIT_WAIT_MS })
 }
 
@@ -1731,6 +1735,8 @@ async function auditLayout(page: Page): Promise<Read> {
   // A retry after a failed STAFF CHANGES switch starts on the staff view.
   if ((await mn.getByRole('button', { name: 'TENANT LOG' }).getAttribute('aria-pressed')) !== 'true') {
     await switchAuditView(page, 'TENANT LOG', STAFF_AUDIT, 'Loading audit entries…', auditRows(page))
+  } else {
+    await awaitAuditList(page, 'TENANT LOG', 'Loading audit entries…', auditRows(page))
   }
   const titleBlock = parent(mn.getByRole('heading', { level: 1, name: 'Audit & evidence explorer' }))
   const headerRow = parent(titleBlock)

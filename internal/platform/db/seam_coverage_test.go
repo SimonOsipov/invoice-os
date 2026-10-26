@@ -214,7 +214,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/notifications/newsletter.go"},                                    // subscription requests and subscribers carry no tenant; the store and the hourly purge run on the pool with no caller identity
 	{file: "internal/systemhealth/store.go", fn: "Record"},                            // a scheduled global sample with no caller identity; the package serves HTTP, so the exemption is func-scoped
 	{file: "internal/blog/public.go", fn: "readPublic"},                               // anonymous blog read: no caller to gate; global published content only, in a READ ONLY transaction
-	{file: "internal/gateway/handoff_pg.go"},                                          // sign-in hand-off codes: no tenant and no identity yet; invoice_gateway reaches only this table and the registrant outbox
+	{file: "internal/gateway/handoff_pg.go"},                                          // sign-in hand-off codes: no tenant and no identity yet
 }
 
 // scPoolSite is one direct pool call: recv is the pool-typed name it was made on,

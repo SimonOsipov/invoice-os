@@ -120,6 +120,16 @@ func TestRLS_GatewaySharedState_OnlyTheGatewayRoleReachesTheTables(t *testing.T)
 				t.Errorf("invoice_app holds %s on %s, want nothing", priv, tbl)
 			}
 		}
+		var grants []string
+		if err := d.super.QueryRow(ctx, `SELECT coalesce(array_agg(coalesce(r.rolname, 'PUBLIC') || ':' || a.privilege_type ORDER BY coalesce(r.rolname, 'PUBLIC') || ':' || a.privilege_type), '{}')
+			FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a LEFT JOIN pg_roles r ON r.oid = a.grantee
+			WHERE c.oid = to_regclass('public.' || $1) AND a.grantee <> c.relowner`, tbl).Scan(&grants); err != nil {
+			t.Fatalf("aclexplode %s: %v", tbl, err)
+		}
+		wantGrants := []string{"invoice_gateway:DELETE", "invoice_gateway:INSERT", "invoice_gateway:SELECT", "invoice_gateway:UPDATE"}
+		if !slices.Equal(grants, wantGrants) {
+			t.Errorf("%s grants beyond the owner = %v, want exactly %v (no reader, app, PUBLIC or extra privilege)", tbl, grants, wantGrants)
+		}
 		_, err := d.app.Exec(ctx, `SELECT * FROM `+tbl)
 		if code := sqlState(err); code != "42501" {
 			t.Errorf("invoice_app SELECT on %s = %v (SQLSTATE %q), want permission denied 42501", tbl, err, code)
@@ -141,8 +151,12 @@ func TestRLS_GatewaySharedState_TablesAreGlobal(t *testing.T) {
 		"gateway_throttle_counts":     {"scope", "key_hash"},
 	}
 	wantIdx := map[string]string{
-		"gateway_session_revocations": "gateway_session_revocations_revoked_at",
-		"gateway_throttle_counts":     "gateway_throttle_counts_expires_at",
+		"gateway_session_revocations": "CREATE INDEX gateway_session_revocations_revoked_at ON public.gateway_session_revocations USING btree (revoked_at)",
+		"gateway_throttle_counts":     "CREATE INDEX gateway_throttle_counts_expires_at ON public.gateway_throttle_counts USING btree (expires_at)",
+	}
+	wantTypes := map[string]string{
+		"gateway_session_revocations": "revoked_at=timestamp with time zone,subject=text",
+		"gateway_throttle_counts":     "expires_at=timestamp with time zone,key_hash=bytea,n=integer,scope=text",
 	}
 	for _, tbl := range sharedStateTables {
 		var rls, force bool
@@ -196,12 +210,20 @@ func TestRLS_GatewaySharedState_TablesAreGlobal(t *testing.T) {
 			t.Errorf("%s primary key = %v, want %v", tbl, pk, wantPK[tbl])
 		}
 
-		var idxDef string
-		if err := d.super.QueryRow(ctx, `SELECT coalesce(max(indexdef), '') FROM pg_indexes WHERE schemaname = 'public' AND tablename = $1 AND indexname = $2`, tbl, wantIdx[tbl]).Scan(&idxDef); err != nil {
+		var types string
+		if err := d.super.QueryRow(ctx, `SELECT string_agg(column_name || '=' || data_type, ',' ORDER BY column_name) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1`, tbl).Scan(&types); err != nil {
 			t.Fatal(err)
 		}
-		if idxDef == "" {
-			t.Errorf("%s: index %s is missing", tbl, wantIdx[tbl])
+		if types != wantTypes[tbl] {
+			t.Errorf("%s column types = %q, want %q", tbl, types, wantTypes[tbl])
+		}
+
+		var idxDefs []string
+		if err := d.super.QueryRow(ctx, `SELECT coalesce(array_agg(indexdef ORDER BY indexname) FILTER (WHERE indexname NOT LIKE '%_pkey'), '{}') FROM pg_indexes WHERE schemaname = 'public' AND tablename = $1`, tbl).Scan(&idxDefs); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(idxDefs, []string{wantIdx[tbl]}) {
+			t.Errorf("%s secondary indexes = %v, want exactly [%s]", tbl, idxDefs, wantIdx[tbl])
 		}
 	}
 }
@@ -215,6 +237,11 @@ func TestRLS_GatewaySharedState_ThrottleKeyIsAHashLength(t *testing.T) {
 	scope, key := ownThrottleRow(t, d)
 	if _, err := d.a.Exec(ctx, ins, scope, key, 1); err != nil {
 		t.Fatalf("a 32-byte key_hash is refused: %v", err)
+	}
+
+	zeroScope, zeroKey := ownThrottleRow(t, d)
+	if _, err := d.a.Exec(ctx, ins, zeroScope, zeroKey, 0); err != nil {
+		t.Fatalf("n = 0 is refused: %v", err)
 	}
 
 	refused := []struct {

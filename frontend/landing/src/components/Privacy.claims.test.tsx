@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { AI_PROVIDER_HOST, APP_LABELS, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
+import { AI_PROVIDER_HOST, APP_LABELS, DELETED_MARK, DELETION_GRACE_DAYS, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { Footer } from './Footer'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
@@ -23,7 +23,24 @@ import { APP_HOSTNAMES, PRODUCTION_HOSTNAMES } from '../hubspot'
 import { BLOG_BASE, LIBRARY_BASE } from '../sitePaths'
 import {
   aiModelVendors,
+  anyAdminCancels,
   appLabels,
+  DELETION_SENTENCES,
+  deletedFallback,
+  deletedMark,
+  endMembershipDropsEmail,
+  eraseAsksHubSpotToDeleteContactAndDeals,
+  eraseAsksResendToDeleteContact,
+  eraseDeletesBlogSubscription,
+  eraseDeletesRegistrationCopies,
+  eraseDeletesSigninAccount,
+  graceDays,
+  lockRefusesWrites,
+  purgeDeletesFilesThenRows,
+  purgeErasesEveryNonRemovedMember,
+  readSource,
+  resolveMarksRemovedMembers,
+  workspaceExportIsMerged,
   aiProviderHosts,
   confirmLinkIsSingleUseAndExpires,
   confirmOverwritesSubscriber,
@@ -841,5 +858,93 @@ describe('DEL-10-01: APP_LABELS are the labels the app renders', () => {
   it('DEL-10-01 control: sidebarOpensAccountPage is false when the card opens another page', () => {
     const planted = `<button type="button" onClick={() => ctx.nav('settings')} data-testid="identity-card-account" aria-label="Your account">`
     expect(sidebarOpensAccountPage(planted)).toBe(false)
+  })
+})
+
+describe('DEL-10-02: the account section states the deletion rules', () => {
+  const sentence = (id: string): string => DELETION_SENTENCES.find((x) => x.id === id)!.text
+  const swap = (rel: string, from: string | RegExp, to: string): string => {
+    const src = readSource(rel)
+    const out = src.replace(from, to)
+    expect(out, `the planted edit missed ${rel}`).not.toBe(src)
+    return out
+  }
+  const ADMIN = 'internal/platform/auth/gotrueadmin/gotrueadmin.go'
+  const VENDOR = 'internal/notifications/vendor_erase.go'
+  const ERASE = 'internal/notifications/erase.go'
+
+  it('DEL-10-02 A3 the erasure deletes the sign-in account by a hard delete', () => {
+    expect(eraseDeletesSigninAccount()).toBe(true)
+  })
+
+  it('DEL-10-02 control: a soft delete is not a hard delete', () => {
+    const planted = swap(ADMIN, 'c.call(ctx, http.MethodDelete, userID)', 'c.call(ctx, http.MethodDelete, userID, `{"should_soft_delete":true}`)')
+    expect(eraseDeletesSigninAccount(readSource(ERASE), planted)).toBe(false)
+  })
+
+  it('DEL-10-02 A3 the HubSpot step deletes the contact and its deals', () => {
+    expect(eraseAsksHubSpotToDeleteContactAndDeals()).toBe(true)
+    expect(eraseAsksHubSpotToDeleteContactAndDeals(swap(VENDOR, '/associations/deals', '/associations/notes'))).toBe(false)
+  })
+
+  it('DEL-10-02 A3 the Resend step deletes the contact', () => {
+    expect(eraseAsksResendToDeleteContact()).toBe(true)
+    const planted = swap(VENDOR, /http\.MethodDelete, r\.baseURL\+"\/contacts\/"/, 'http.MethodGet, r.baseURL+"/contacts/"')
+    expect(eraseAsksResendToDeleteContact(planted)).toBe(false)
+  })
+
+  it('DEL-10-02 A3 the sweep deletes the Blog subscription and the registration copies', () => {
+    expect(eraseDeletesBlogSubscription()).toBe(true)
+    expect(eraseDeletesRegistrationCopies()).toBe(true)
+    expect(eraseDeletesBlogSubscription(swap(ERASE, 'blog_subscription_requests WHERE', 'blog_other WHERE'))).toBe(false)
+    expect(eraseDeletesRegistrationCopies(swap(ERASE, 'DELETE FROM registrant_handoffs', 'DELETE FROM other'))).toBe(false)
+  })
+
+  it('DEL-10-02 A4 the mark and the fallback are the ones the history renders', () => {
+    expect(deletedMark()).toBe(DELETED_MARK)
+    expect(deletedFallback()).toBe('Deleted member')
+    expect(sentence('A4')).toContain(DELETED_MARK)
+    expect(sentence('A4')).toContain(deletedFallback())
+  })
+
+  it('DEL-10-02 A4 the history resolves a removed member through RemovedName', () => {
+    expect(resolveMarksRemovedMembers()).toBe(true)
+    expect(resolveMarksRemovedMembers(swap('internal/actor/resolve.go', 'out[subject] = RemovedName(displayName)', 'out[subject] = Name(displayName, email, subject)'))).toBe(false)
+  })
+
+  it('DEL-10-02 A4 the membership drops the email', () => {
+    expect(endMembershipDropsEmail()).toBe(true)
+    expect(endMembershipDropsEmail(swap('internal/tenancy/store.go', "SET status = 'removed', email = NULL,", "SET status = 'removed',"))).toBe(false)
+  })
+
+  it('DEL-10-02 A6 the number of days is the triggers', () => {
+    expect(graceDays()).toBe(DELETION_GRACE_DAYS)
+    expect(sentence('A6')).toContain(`${DELETION_GRACE_DAYS} days`)
+  })
+
+  it('DEL-10-02 A6 the lock refuses writes and any admin cancels', () => {
+    expect(lockRefusesWrites()).toBe(true)
+    expect(anyAdminCancels()).toBe(true)
+    const planted = swap('internal/tenancy/workspace_deletion.go', 'if role != "admin" {', 'if role != "admin" || id.Subject != "deletion_scheduled_by" {')
+    expect(anyAdminCancels(planted)).toBe(false)
+  })
+
+  it('DEL-10-02 A6 the purge deletes files before rows and erases every non-removed member', () => {
+    expect(purgeDeletesFilesThenRows()).toBe(true)
+    expect(purgeErasesEveryNonRemovedMember()).toBe(true)
+    const src = readSource('internal/workspacepurge/purge.go')
+    const swapped = src.replace('document.DeleteTenantObjects(', 'p.purgeRows(ctx, tenantID, members, objects); document.DeleteTenantObjects(')
+    expect(purgeDeletesFilesThenRows(swapped)).toBe(false)
+    expect(purgeErasesEveryNonRemovedMember(swap('internal/workspacepurge/purge.go', "status <> 'removed'", "status = 'active'"))).toBe(false)
+  })
+
+  // The page says "export" if and only if the export is merged.
+  const exportClaimMatches = (merged: boolean, text: string): boolean => merged === /\bexport/i.test(text)
+
+  it('DEL-10-02 the page mentions the export iff the export is merged', () => {
+    const account = DELETION_SENTENCES.filter((x) => x.id.startsWith('A')).map((x) => x.text).join(' ')
+    expect(workspaceExportIsMerged()).toBe(false)
+    expect(exportClaimMatches(workspaceExportIsMerged(), account)).toBe(true)
+    expect(exportClaimMatches(true, account)).toBe(false)
   })
 })

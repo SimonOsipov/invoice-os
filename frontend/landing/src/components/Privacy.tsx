@@ -14,6 +14,10 @@ export const HOSTING_REGION = 'africa-south1'
 export const PROSE_MAX_WIDTH = 720
 export const PRIVACY_CONTACT = 'sam@ascomply.com'
 export const ANALYTICS_DEFAULT_SENTENCE = 'Analytics is off unless you turn it on.'
+// Pinned to the tenants_deletion_guard trigger (graceDays in privacyCodeFacts.test.util.ts).
+export const DELETION_GRACE_DAYS = 30
+// Pinned to actor.RemovedName (deletedMark in privacyCodeFacts.test.util.ts).
+export const DELETED_MARK = '(deleted)'
 // Each label is pinned to the app source that renders it (appLabels in privacyCodeFacts.test.util.ts).
 export const APP_LABELS = {
   page: 'Your account',
@@ -313,6 +317,39 @@ export function Privacy() {
           <p style={P}>
             The registration form has the same separate marketing box. Its sentence is stored on our own server, word for
             word, with the time you submitted the form: “{MARKETING_CONSENT_TEXT}”
+          </p>
+          <p style={P}>
+            You can delete your account yourself. Open {APP_LABELS.page}, from your name at the foot of the sidebar, and
+            choose {APP_LABELS.deleteAccount}.
+          </p>
+          <p style={P}>
+            If another member is still active in your workspace, your place in it ends at once and we queue the erasure
+            of your records.
+          </p>
+          <p style={P}>
+            The erasure deletes your sign-in account. Our own server also asks HubSpot to delete your contact
+            permanently, together with the deals filed under it, and asks Resend to delete your contact. It deletes the
+            copies of your registration and demo details that our own server holds under your email address, and it ends
+            your subscription to the Blog newsletter if that address has one.
+          </p>
+          <p style={P}>
+            Your name stays in the audit log and in the history of each invoice of your workspace, the record of who did
+            what, with {DELETED_MARK} after it. If we never held a name for you, the history says Deleted member. Your
+            membership record keeps your name and drops your email address.
+          </p>
+          <p style={P}>
+            An admin can delete the whole workspace. In {APP_LABELS.settings}, under {APP_LABELS.workspaceTab}, the admin
+            chooses {APP_LABELS.deleteWorkspace} and types the workspace name to confirm.
+          </p>
+          <p style={P}>
+            The workspace is then locked for {DELETION_GRACE_DAYS} days. Nobody can create or change anything in it.
+            Members see the date it will be deleted and can sign out. Any admin can cancel the deletion until the{' '}
+            {DELETION_GRACE_DAYS} days end. Then our server deletes every invoice, file and member of the workspace, and
+            erases the records of each member still in it, as described above.
+          </p>
+          <p style={P}>
+            If you are the only active member of a workspace, deleting your account deletes the workspace instead. Your
+            account then goes when the workspace is deleted, {DELETION_GRACE_DAYS} days later, not at once.
           </p>
 
           <h2 style={H2}>If you upload invoice documents</h2>

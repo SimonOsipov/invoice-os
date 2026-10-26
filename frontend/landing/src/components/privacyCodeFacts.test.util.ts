@@ -1,11 +1,11 @@
 // What the privacy page must describe, read from the Go and TS sources that do it.
 // ceiling: the CI frontend filter skips Go-only PRs, so these readers run with a frontend change only; add internal/** and migrations/** to the filter if a Go-only PR falsifies a sentence
 // A parse miss throws, so a moved fact fails the test instead of emptying the oracle.
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
-import { APP_LABELS, PRIVACY_CONTACT } from './Privacy'
+import { APP_LABELS, DELETED_MARK, DELETION_GRACE_DAYS, PRIVACY_CONTACT } from './Privacy'
 
 const REPO = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
 
@@ -226,4 +226,118 @@ export const DELETION_SENTENCES: readonly { id: string; text: string }[] = [
   { id: 'W1', text: `If you cannot sign in to an account, or never had one, email ${PRIVACY_CONTACT} and tell us what you want done, and we will act on it.` },
   { id: 'W2', text: `If you can sign in, you can delete your account yourself: open ${APP_LABELS.page}, from your name at the foot of the sidebar, and choose ${APP_LABELS.deleteAccount}.` },
   { id: 'W3', text: 'If you have registered or booked a demo, the records we hold are in HubSpot, in Resend and on our own server, and we can delete them.' },
+  { id: 'A1', text: `You can delete your account yourself. Open ${APP_LABELS.page}, from your name at the foot of the sidebar, and choose ${APP_LABELS.deleteAccount}.` },
+  { id: 'A2', text: 'If another member is still active in your workspace, your place in it ends at once and we queue the erasure of your records.' },
+  { id: 'A3', text: 'The erasure deletes your sign-in account. Our own server also asks HubSpot to delete your contact permanently, together with the deals filed under it, and asks Resend to delete your contact. It deletes the copies of your registration and demo details that our own server holds under your email address, and it ends your subscription to the Blog newsletter if that address has one.' },
+  { id: 'A4', text: `Your name stays in the audit log and in the history of each invoice of your workspace, the record of who did what, with ${DELETED_MARK} after it. If we never held a name for you, the history says Deleted member. Your membership record keeps your name and drops your email address.` },
+  { id: 'A5', text: `An admin can delete the whole workspace. In ${APP_LABELS.settings}, under ${APP_LABELS.workspaceTab}, the admin chooses ${APP_LABELS.deleteWorkspace} and types the workspace name to confirm.` },
+  { id: 'A6', text: `The workspace is then locked for ${DELETION_GRACE_DAYS} days. Nobody can create or change anything in it. Members see the date it will be deleted and can sign out. Any admin can cancel the deletion until the ${DELETION_GRACE_DAYS} days end. Then our server deletes every invoice, file and member of the workspace, and erases the records of each member still in it, as described above.` },
+  { id: 'A7', text: `If you are the only active member of a workspace, deleting your account deletes the workspace instead. Your account then goes when the workspace is deleted, ${DELETION_GRACE_DAYS} days later, not at once.` },
 ]
+
+// The body of one Go func, from its signature to the closing brace in column 0.
+const goFunc = (src: string, signature: RegExp, what: string): string =>
+  found(new RegExp(`${signature.source}[\\s\\S]*?\\n}\\n`).exec(src)?.[0], what)
+
+// The erase calls Account.DeleteUser; DeleteUser sends a DELETE with no body, so no soft-delete flag.
+export function eraseDeletesSigninAccount(
+  erase: string = readSource('internal/notifications/erase.go'),
+  admin: string = readSource('internal/platform/auth/gotrueadmin/gotrueadmin.go'),
+): boolean {
+  const del = goFunc(admin, /func \(c \*Client\) DeleteUser\b/, 'gotrueadmin DeleteUser')
+  return erase.includes('w.Account.DeleteUser(ctx, uid)') && /c\.call\(ctx, http\.MethodDelete, userID\)/.test(del) && !/soft/i.test(del)
+}
+
+// The HubSpot step reads the contact's deals, deletes each, then POSTs gdpr-delete.
+export function eraseAsksHubSpotToDeleteContactAndDeals(
+  src: string = readSource('internal/notifications/vendor_erase.go'),
+): boolean {
+  const contact = goFunc(src, /func \(h \*HubSpot\) EraseContact\b/, 'HubSpot.EraseContact')
+  const deal = goFunc(src, /func \(h \*HubSpot\) eraseDeal\b/, 'HubSpot.eraseDeal')
+  return (
+    contact.includes('/associations/deals') &&
+    contact.includes('h.eraseDeal(') &&
+    /http\.MethodPost, h\.baseURL\+hubspotContacts\+"\/gdpr-delete"/.test(contact) &&
+    deal.includes('http.MethodDelete, dealURL')
+  )
+}
+
+export function eraseAsksResendToDeleteContact(
+  src: string = readSource('internal/notifications/vendor_erase.go'),
+): boolean {
+  return /http\.MethodDelete, r\.baseURL\+"\/contacts\/"/.test(goFunc(src, /func \(r \*Resend\) EraseContact\b/, 'Resend.EraseContact'))
+}
+
+const sweepDeletes = (src: string): string => goFunc(src, /func \(w \*EraseWorker\) sweep\b/, 'EraseWorker.sweep')
+
+export function eraseDeletesBlogSubscription(src: string = readSource('internal/notifications/erase.go')): boolean {
+  const sweep = sweepDeletes(src)
+  return sweep.includes('DELETE FROM blog_subscribers WHERE email = $1') && sweep.includes('DELETE FROM blog_subscription_requests WHERE email = $1')
+}
+
+export function eraseDeletesRegistrationCopies(src: string = readSource('internal/notifications/erase.go')): boolean {
+  const sweep = sweepDeletes(src)
+  return sweep.includes('DELETE FROM registrant_handoffs WHERE') && sweep.includes('DELETE FROM contacts WHERE email = $1')
+}
+
+const removedName = (src: string): string => goFunc(src, /func RemovedName\b/, 'actor.RemovedName')
+
+// The suffix RemovedName appends to a stored name.
+export function deletedMark(src: string = readSource('internal/actor/actor.go')): string {
+  return found(/\+ " (\(deleted\))"/.exec(removedName(src))?.[1], 'the RemovedName suffix')
+}
+
+// The text RemovedName gives a member with no stored name.
+export function deletedFallback(src: string = readSource('internal/actor/actor.go')): string {
+  return found(/Label\{Text: "([^"]+)", Kind/.exec(removedName(src))?.[1], 'the RemovedName fallback')
+}
+
+// Resolve labels a removed membership with RemovedName and every other with Name.
+export function resolveMarksRemovedMembers(src: string = readSource('internal/actor/resolve.go')): boolean {
+  return /if status == "removed" \{\s*out\[subject\] = RemovedName\(displayName\)\s*continue\s*\}\s*out\[subject\] = Name\(/.test(src)
+}
+
+export function endMembershipDropsEmail(src: string = readSource('internal/tenancy/store.go')): boolean {
+  return /UPDATE memberships SET status = 'removed', email = NULL\b/.test(src)
+}
+
+export function onlyActiveMemberDeletesWorkspace(src: string = readSource('internal/tenancy/account_deletion.go')): boolean {
+  return /case heir == nil:\s*return OutcomeDeleteWorkspace/.test(src)
+}
+
+// The purge reads every non-removed member, then queues an erasure for each.
+export function purgeErasesEveryNonRemovedMember(src: string = readSource('internal/workspacepurge/purge.go')): boolean {
+  const body = goFunc(src, /func \(p \*Purger\) eraseMembers\b/, 'Purger.eraseMembers')
+  const read = body.indexOf("FROM memberships WHERE status <> 'removed'")
+  return read > -1 && body.indexOf('notifications.EnqueueErasure(', read) > read
+}
+
+// The purge deletes the tenant's files before it purges the rows.
+export function purgeDeletesFilesThenRows(src: string = readSource('internal/workspacepurge/purge.go')): boolean {
+  const files = src.indexOf('document.DeleteTenantObjects(')
+  const rows = src.indexOf('p.purgeRows(')
+  return files > -1 && rows > files && src.includes('public.purge_tenant(')
+}
+
+// A write in a locked workspace gets ErrWorkspaceLocked; a read-only transaction passes.
+export function lockRefusesWrites(src: string = readSource('internal/platform/db/tenant.go')): boolean {
+  return /case locked && opts\.AccessMode != pgx\.ReadOnly:\s*return ErrWorkspaceLocked/.test(src)
+}
+
+// Cancel gates on the admin role and never on who scheduled the deletion.
+export function anyAdminCancels(src: string = readSource('internal/tenancy/workspace_deletion.go')): boolean {
+  const cancel = goFunc(src, /func \(s \*Store\) CancelWorkspaceDeletion\b/, 'Store.CancelWorkspaceDeletion')
+  return cancel.includes('role != "admin"') && !cancel.includes('deletion_scheduled_by')
+}
+
+// The days the tenants_deletion_guard trigger adds to the schedule.
+export function graceDays(
+  sql: string = readFileSync(join(REPO, 'migrations/20261026004500_workspace_deletion.sql'), 'utf8'),
+): number {
+  return Number(found(/deletion_scheduled_at \+ interval '(\d+) days'/.exec(sql)?.[1], 'the deletion interval'))
+}
+
+// DEL-06 merged: the app has the export module. The page may mention the export only then.
+export function workspaceExportIsMerged(): boolean {
+  return existsSync(join(REPO, 'frontend/app/src/lib/workspaceExport.ts'))
+}

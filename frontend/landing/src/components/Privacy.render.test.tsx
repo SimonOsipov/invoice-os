@@ -40,6 +40,8 @@ import {
   resendSkipsUntickedDemoBooker,
   BLOG_CHAT_PARAGRAPH,
   DELETION_SENTENCES,
+  appLabels,
+  onlyActiveMemberDeletesWorkspace,
 } from './privacyCodeFacts.test.util'
 
 const SRC_DIR = fileURLToPath(new URL('.', import.meta.url))
@@ -698,6 +700,60 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     expect(order).toEqual([...order].sort((a, b) => a - b))
     expect(order[0]).toBeGreaterThan(-1)
     expect(write.indexOf('a Sentry error report')).toBeGreaterThan(order[2])
+  })
+
+  const accountText = (): string => plain(section(/account|regist/i))
+  const accountSentences = (): string[] => sentences(accountText())
+
+  it('DEL-10-02 A1 the self-service route is on the page', () => {
+    expect(accountText()).toContain(deletionSentence('A1'))
+  })
+
+  it('DEL-10-02 every account-section sentence is pinned in place', () => {
+    const text = accountText()
+    const at = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7'].map((id) => text.indexOf(deletionSentence(id)))
+    expect(at.every((i) => i > -1), `a sentence is missing: ${at}`).toBe(true)
+    expect(at).toEqual([...at].sort((x, y) => x - y))
+  })
+
+  it('DEL-10-02 A3 says asks for both vendors and promises no vendor outcome', () => {
+    const a3 = deletionSentence('A3')
+    expect(a3).toContain('asks HubSpot')
+    expect(a3).toContain('asks Resend')
+    const promises = accountSentences().filter((x) => /HubSpot|Resend/.test(x) && /backup|within|days|no copy|nothing remains/i.test(x))
+    expect(promises).toEqual([])
+  })
+
+  it('DEL-10-02 A4 does not say the email leaves the workspace', () => {
+    expect(accountSentences().filter((x) => /email address does not stay|no email/i.test(x))).toEqual([])
+  })
+
+  it('DEL-10-02 A5 the labels in the workspace path are the app', () => {
+    const a5 = deletionSentence('A5')
+    for (const label of [APP_LABELS.settings, APP_LABELS.workspaceTab, APP_LABELS.deleteWorkspace]) expect(a5).toContain(label)
+    expect({ settings: APP_LABELS.settings, workspaceTab: APP_LABELS.workspaceTab, deleteWorkspace: APP_LABELS.deleteWorkspace }).toEqual({
+      settings: appLabels().settings,
+      workspaceTab: appLabels().workspaceTab,
+      deleteWorkspace: appLabels().deleteWorkspace,
+    })
+  })
+
+  it('DEL-10-02 A7 a sole active member deletes the workspace, not at once', () => {
+    expect(onlyActiveMemberDeletesWorkspace()).toBe(true)
+    expect(deletionSentence('A7')).toContain('not at once')
+    const bad = accountSentences().filter((x) => /only active member|last member/i.test(x) && /at once/i.test(x.replace(/not at once/gi, '')))
+    expect(bad).toEqual([])
+  })
+
+  it('DEL-10-02 the page names no data-protection law', () => {
+    // The demo consent sentence quotes "compliance specialist", so the broad word is checked on the account section only.
+    expect(plain(html)).not.toMatch(/NDPA|GDPR/)
+    expect(accountText()).not.toMatch(/NDPA|GDPR|complian/)
+  })
+
+  it('DEL-10-02 the account section is still the only h2 the account-or-regist regex finds', () => {
+    const h2s = Array.from(html.matchAll(/<h2[^>]*>([\s\S]*?)<\/h2>/g), (m) => plain(m[1]))
+    expect(h2s.filter((t) => /account|regist/i.test(t))).toHaveLength(1)
   })
 
   it('C14: the page says the marketing sentence is stored with its time', () => {

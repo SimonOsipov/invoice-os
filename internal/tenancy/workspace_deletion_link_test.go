@@ -326,6 +326,31 @@ func TestDeletionLink_AHeldLinkAfterAnotherAdminsCancelIsANoOp(t *testing.T) {
 	}
 }
 
+// On the caller's own unscheduled workspace, only a token of that tenant's own links is a no-op.
+func TestDeletionLink_AnUnscheduledWorkspaceRefusesATokenItNeverIssued(t *testing.T) {
+	w := newLinkWorld(t)
+	outsider := newInvWorld(t, "Elsewhere Ltd", "Olu Eze")
+	for name, token := range map[string]string{
+		"another workspace's token": w.tokB,
+		"a garbage token":           freshToken(t),
+		"a malformed token":         "nope",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := w.store.CancelWorkspaceDeletionByLink(outsider.adminCtx(), token); !errors.Is(err, ErrDeletionLinkNotValid) {
+				t.Errorf("err = %v, want ErrDeletionLinkNotValid", err)
+			}
+		})
+	}
+	w.requireLocked(t)
+
+	if err := w.cancelByRoute(w.adminCtx()); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	if _, err := w.store.CancelWorkspaceDeletionByLink(w.as(w.b), freshToken(t)); !errors.Is(err, ErrDeletionLinkNotValid) {
+		t.Errorf("garbage token on the unscheduled own workspace: err = %v, want ErrDeletionLinkNotValid", err)
+	}
+}
+
 func TestDeletionLink_ALinkOfAnEarlierDeletionIsVoid(t *testing.T) {
 	w := newLinkWorld(t)
 	oldB := w.tokB

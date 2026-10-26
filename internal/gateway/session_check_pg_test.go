@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -470,8 +471,44 @@ func TestRLS_GatewayRevocations_AFailedSweepIsNotAFailedRecord(t *testing.T) {
 	if n := len(recordsNamed(t, buf, "session check: sweep sign-outs")); n != 1 {
 		t.Errorf("sweep records = %d, want 1", n)
 	}
+	if strings.Contains(buf.String(), subject) {
+		t.Errorf("the log carries the subject, want none: %s", buf.String())
+	}
 	var n int
 	if err := d.super.QueryRow(ctx, `SELECT count(*) FROM gateway_session_revocations WHERE subject = $1`, subject).Scan(&n); err != nil || n != 1 {
 		t.Errorf("sign-out rows = %d (err %v), want 1", n, err)
+	}
+}
+
+// A sign-out write stuck behind a row lock gives up after handoffDBTimeout, even for a live request.
+func TestRLS_GatewayRevocations_AStalledWriteIsBounded(t *testing.T) {
+	d := requireHandoffDB(t)
+	requireSharedStateTables(t, d)
+	ctx := context.Background()
+	subject := ownSubject(t, d)
+	if _, err := d.super.Exec(ctx, `INSERT INTO gateway_session_revocations (subject, revoked_at) VALUES ($1, now())`, subject); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := d.super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM gateway_session_revocations WHERE subject = $1 FOR UPDATE`, subject); err != nil {
+		t.Fatal(err)
+	}
+	log, buf := captureLog()
+	c := NewSessionChecker(nil, nil, time.Now, log)
+	c.Shared(d.a)
+
+	done := make(chan struct{})
+	go func() { c.EvictSubject(ctx, subject); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(handoffDBTimeout + 3*time.Second):
+		t.Fatal("EvictSubject still waiting on a locked row, want it bounded by handoffDBTimeout")
+	}
+	if n := len(recordsNamed(t, buf, "session check: record sign-out")); n != 1 {
+		t.Errorf("record sign-out records = %d, want 1", n)
 	}
 }

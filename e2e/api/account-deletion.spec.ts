@@ -2,6 +2,7 @@
 // Every test builds a fresh workspace, so no row is shared across tests or retries.
 import { test, expect } from '@playwright/test'
 import {
+  ApiError,
   acceptById,
   cancelDeletion,
   deleteMyAccount,
@@ -27,6 +28,14 @@ const OUTCOME_CHANGED = 'the workspace changed; review the page and confirm agai
 const NAME_MISMATCH = 'the workspace name does not match'
 // internal/actor/actor.go RemovedName.
 const DELETED_SUFFIX = ' (deleted)'
+// internal/gateway/signin.go: gt.ErrorCode "invalid_credentials" -> 401 "invalid email or password".
+const SIGN_IN_REFUSED = 'invalid email or password'
+// 'signed-in' and 'failed' never satisfy the erase poll; only the credential refusal does.
+const signInOutcome = (email: string, password: string) =>
+  signInSession(email, password).then(
+    () => 'signed-in',
+    (e) => (e instanceof ApiError && e.status === 401 && (e.body as { error?: string } | undefined)?.error === SIGN_IN_REFUSED ? 'rejected' : `failed: ${e}`),
+  )
 // internal/tenancy/account_deletion.go audit.Record event names.
 const EVENT_DELETED = 'membership.account_deleted'
 const EVENT_HANDED_ON = 'membership.admin_handed_on'
@@ -105,7 +114,7 @@ test.describe.serial('account deletion (API E2E, over the deployed gateway)', ()
 
     // The preview worker runs the erase job against the preview GoTrue. A timeout here is a DEL-03 wiring defect.
     await expect
-      .poll(async () => signInSession(preparer.email, preparer.password).then(() => 'signed-in', () => 'rejected'), { intervals: [5_000], timeout: 120_000 })
+      .poll(async () => signInOutcome(preparer.email, preparer.password), { intervals: [5_000], timeout: 120_000 })
       .toBe('rejected')
   })
 

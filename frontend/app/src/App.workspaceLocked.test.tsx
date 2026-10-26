@@ -328,7 +328,7 @@ describe('cancel link', () => {
     expect(posts().map((c) => c.url)).toEqual([`${GATEWAY}/api/tenancy/v1/workspace/deletion/cancel-by-link`])
   })
 
-  it('cancel link: a refused link explains and the next Cancel uses the plain route', async () => {
+  it('cancel link: a refused link falls through to the plain route in one click', async () => {
     handler = async (url) => {
       if (isLinkCancel(url)) throw new ApiError('http', LINK_403, 403, { error: LINK_403 })
       return cancelsAnswer(url)
@@ -337,13 +337,24 @@ describe('cancel link', () => {
     await renderApp(sessionWith(DUE))
     fireEvent.click(await screen.findByTestId('deletion-notice-cancel'))
 
-    await waitFor(() => expect(screen.getByTestId('deletion-notice-error').textContent).toBe(LINK_403))
-    expect(notice()).not.toBeNull()
-    expect(peekCancelLink()).toBeNull()
-    fireEvent.click(screen.getByTestId('deletion-notice-cancel'))
-
     await screen.findByTestId('sidebar')
+    expect(peekCancelLink()).toBeNull()
     expect(posts().map((c) => c.url.split('/deletion')[1])).toEqual(['/cancel-by-link', '/cancel'])
+  })
+
+  it('cancel link: a 403 that is not the link refusal shows the error and sends no second request', async () => {
+    const NOT_PERMITTED = 'only an admin can cancel the deletion'
+    handler = async (url) => {
+      if (isLinkCancel(url)) throw new ApiError('http', NOT_PERMITTED, 403, { error: NOT_PERMITTED })
+      return cancelsAnswer(url)
+    }
+    window.history.replaceState(null, '', `/#cancel-deletion=${LINK}`)
+    await renderApp(sessionWith(DUE))
+    fireEvent.click(await screen.findByTestId('deletion-notice-cancel'))
+
+    await waitFor(() => expect(screen.getByTestId('deletion-notice-error').textContent).toBe(NOT_PERMITTED))
+    expect(notice()).not.toBeNull()
+    expect(posts().map((c) => c.url.split('/deletion')[1])).toEqual(['/cancel-by-link'])
   })
 
   it('cancel link: a stored session from before the lock still sends the link', async () => {

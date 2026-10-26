@@ -4,7 +4,7 @@ import { ErrorState, Loading, toApiError, type ApiError } from '@invoice-os/api-
 import { BrandMark } from '../icons'
 import { endAppChat } from '../chat'
 import type { AuthedFetch } from '../lib/portfolio'
-import { DELETION_NOTICE, cancelWorkspaceDeletion, cancelWorkspaceDeletionByLink, deletionNoticeBody, formatDueDate, readWorkspaceDeletion } from '../lib/workspaceDeletion'
+import { DELETION_NOTICE, cancelWorkspaceDeletion, cancelWorkspaceDeletionByLink, deletionNoticeBody, formatDueDate, isLinkRefusal, readWorkspaceDeletion } from '../lib/workspaceDeletion'
 
 export type KnownDeletion = { dueAt: string | null; name: string | null; isAdmin: boolean }
 
@@ -66,6 +66,10 @@ export function WorkspaceDeletionNotice({ authedFetch, base, known, onUnlocked, 
       } else {
         try {
           await cancelWorkspaceDeletionByLink(authedFetch, base, linkToken)
+        } catch (e) {
+          // A stale or foreign link does not stop an admin who may cancel.
+          if (!isLinkRefusal(e)) throw e
+          await cancelWorkspaceDeletion(authedFetch, base)
         } finally {
           setSpent(true)
           onLinkSpent?.()

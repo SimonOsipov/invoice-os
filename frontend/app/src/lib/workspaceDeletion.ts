@@ -99,3 +99,11 @@ export function peekCancelLink(now: number = Date.now()): string | null {
 export async function cancelWorkspaceDeletionByLink(f: AuthedFetch, base: string, token: string): Promise<void> {
   await f<unknown>(`${base}/api/tenancy/v1/workspace/deletion/cancel-by-link`, { method: 'POST', body: { token } })
 }
+
+// The 403 text of tenancy.ErrDeletionLinkNotValid in statusForErr; the wire has no error code.
+export const LINK_NOT_VALID_MESSAGE = 'this cancel link is no longer valid'
+
+export function isLinkRefusal(e: unknown): boolean {
+  const { status, message } = (e ?? {}) as { status?: unknown; message?: unknown }
+  return status === 403 && message === LINK_NOT_VALID_MESSAGE
+}

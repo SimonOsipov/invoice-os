@@ -13,6 +13,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 	"github.com/SimonOsipov/invoice-os/internal/tenancy"
 )
 
@@ -50,6 +51,15 @@ func main() {
 	// gateway as /api/tenancy/v1/me (the prefix is stripped upstream).
 	store := tenancy.NewStore(pool)
 	app.Mux.HandleFunc("GET /v1/me", tenancy.MeHandler(store.Me, app.Logger))
+
+	// Insert-only River client: the self-delete enqueues person_erase in its transaction.
+	q, err := queue.New(pool, queue.Config{})
+	if err != nil {
+		platform.Fatal(app.Logger, "tenancy: queue: %v", err)
+	}
+	store.SetEraseQueue(q.River())
+	app.Mux.HandleFunc("GET /v1/me/deletion", tenancy.AccountDeletionPreviewHandler(store.PreviewAccountDeletion, app.Logger))
+	app.Mux.HandleFunc("POST /v1/me/deletion", tenancy.DeleteMyAccountHandler(store.DeleteMyAccount, app.Logger))
 
 	// GET /v1/staff/tenants — every tenant, for staff; the staff check is in platform.App.
 	app.Mux.HandleFunc("GET /v1/staff/tenants", tenancy.StaffTenantsHandler(store.StaffTenants, app.Logger))

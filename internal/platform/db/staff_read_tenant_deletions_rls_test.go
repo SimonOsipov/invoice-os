@@ -274,3 +274,44 @@ func TestRLS_StaffReadTenantDeletionsDownAndUp(t *testing.T) {
 	}
 	requireSameInstant(t, "B deletion_due_at after Up", r.due, bDue)
 }
+
+func TestRLS_StaffReadTenantDeletionsRefusesEveryOtherActor(t *testing.T) {
+	requireHarness(t)
+	requireStaffDeletionRead(t)
+	active := seedHouseMember(t, "reviewer", "active")
+	suspended := seedHouseMember(t, "reviewer", "suspended")
+	customer := seedCommittedMembership(t, h.tenantA, "admin", "active")
+
+	if got, err := collectStaffDeletions(h.app, active); err != nil || len(got) == 0 {
+		t.Fatalf("control: an active house member reads %d rows, err %v, want rows and no error", len(got), err)
+	}
+	for _, c := range []struct {
+		name  string
+		actor any
+	}{{"suspended house member", suspended}, {"NULL actor", nil}} {
+		got, err := collectStaffDeletions(h.app, c.actor)
+		if len(got) != 0 {
+			t.Errorf("%s: refused call returned %d rows", c.name, len(got))
+		}
+		requireNotStaffRefusal(t, c.name, err, "staff_read_tenant_deletions")
+	}
+
+	// A customer admin with their own tenant set is still not staff.
+	var got []staffDeletionRow
+	var callErr error
+	_ = db.WithinTenantTx(context.Background(), h.app, h.tenantA, func(tx pgx.Tx) error {
+		got, callErr = collectStaffDeletions(tx, customer)
+		return callErr
+	})
+	if len(got) != 0 {
+		t.Errorf("customer admin with tenant A set: refused call returned %d rows", len(got))
+	}
+	requireNotStaffRefusal(t, "customer admin with tenant A set", callErr, "staff_read_tenant_deletions")
+
+	// invoice_tenant_reader holds no EXECUTE: PUBLIC was revoked.
+	got, err := collectStaffDeletions(h.reader, active)
+	if len(got) != 0 {
+		t.Errorf("invoice_tenant_reader: refused call returned %d rows", len(got))
+	}
+	assertPgRefusal(t, "invoice_tenant_reader call", err, sqlstateInsufficientPrivilege, "permission denied for function staff_read_tenant_deletions")
+}

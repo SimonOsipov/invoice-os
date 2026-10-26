@@ -66,6 +66,8 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'invitation.revoked',
     'workspace.deletion_scheduled',
     'workspace.deletion_cancelled',
+    'membership.account_deleted',
+    'membership.admin_handed_on',
   ],
   validation: [
     'validation.rule.enabled',
@@ -163,6 +165,8 @@ describe('audit vocabulary', () => {
       'workspace.provisioned',
       'workspace.deletion_scheduled',
       'workspace.deletion_cancelled',
+      'membership.account_deleted',
+      'membership.admin_handed_on',
       'membership.client_access_set',
       'membership.removed',
       'invitation.sent',
@@ -219,10 +223,12 @@ describe('audit vocabulary', () => {
     expect(view.tone).toBe('amber')
   })
 
-  it('auditVocabulary: workspace deletion events read as labelled', () => {
+  it('auditVocabulary: workspace and account deletion events read as labelled', () => {
     for (const [id, label] of [
       ['workspace.deletion_scheduled', 'Workspace deletion scheduled'],
       ['workspace.deletion_cancelled', 'Workspace deletion cancelled'],
+      ['membership.account_deleted', 'Account deleted'],
+      ['membership.admin_handed_on', 'Admin handed on'],
     ]) {
       const view = auditEventView(id)
       expect(view.domain, `${id} must be a labelled memberships event`).toBe('memberships')

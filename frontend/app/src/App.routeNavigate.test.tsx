@@ -112,7 +112,7 @@ describe('AC-1: every setView( call site routes through navigate() and pushes', 
   it('nav_everySidebarViewPushesItsOwnPath', async () => {
     await bootAt('/')
     const views = Object.keys(ROUTE_PATHS) as View[]
-    expect(views, 'the route table must have exactly 13 members').toHaveLength(13)
+    expect(views, 'the route table must have exactly 14 members').toHaveLength(14)
 
     let settingsPushed: string | null = null
     for (const v of views) {
@@ -122,7 +122,7 @@ describe('AC-1: every setView( call site routes through navigate() and pushes', 
       })
       const ctx = requireCtx()
       // routeUrl, not ROUTE_PATHS: settings serialises its default tab, so the two differ
-      // for exactly one of the thirteen (routeUrl_withNoParamsEqualsRoutePathExceptSettings).
+      // for exactly one of the fourteen (routeUrl_withNoParamsEqualsRoutePathExceptSettings).
       expect(window.location.pathname, `nav('${v}') should push '${routeUrl(v)}'`).toBe(routeUrl(v))
       expect(window.history.length, `nav('${v}') must add exactly one history entry`).toBe(lengthBefore + 1)
       expect(ctx.view, `nav('${v}') should set view to '${v}'`).toBe(v)

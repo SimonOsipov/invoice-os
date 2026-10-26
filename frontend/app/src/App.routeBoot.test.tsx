@@ -109,7 +109,7 @@ describe('AC-1: a path seeds the view it names', () => {
   it('boot_everyNonDefaultPathSeedsItsOwnView', async () => {
     const nonDefault = (Object.entries(ROUTE_PATHS) as [View, string][]).filter(([view]) => view !== 'dashboard')
     // Floor: a loop over an empty array passes every assertion inside it.
-    expect(nonDefault, 'the route table must have exactly 12 non-dashboard entries').toHaveLength(12)
+    expect(nonDefault, 'the route table must have exactly 13 non-dashboard entries').toHaveLength(13)
 
     for (const [view, path] of nonDefault) {
       cleanup()

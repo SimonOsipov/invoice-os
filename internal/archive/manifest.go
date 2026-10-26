@@ -154,3 +154,99 @@ func (bw *bundleWriter) writeManifest(p ManifestParams) error {
 	}
 	return nil
 }
+
+const workspaceManifestFormat = "ascomply-workspace-export/1"
+
+type workspaceCompany struct {
+	ID   string  `json:"id"`
+	Name string  `json:"name"`
+	TIN  *string `json:"tin"`
+	Dir  string  `json:"dir"`
+}
+
+type workspaceCounts struct {
+	Companies         int `json:"companies"`
+	Invoices          int `json:"invoices"`
+	LineItems         int `json:"line_items"`
+	StatusTransitions int `json:"status_transitions"`
+	Submissions       int `json:"submissions"`
+	ExchangeAttempts  int `json:"exchange_attempts"`
+	BodyFiles         int `json:"body_files"`
+	Documents         int `json:"documents"`
+	AuditRows         int `json:"audit_rows"`
+}
+
+// workspaceManifestDoc: Companies and Entries are never nil, so an empty workspace marshals [].
+type workspaceManifestDoc struct {
+	Format      string             `json:"format"`
+	GeneratedAt string             `json:"generated_at"`
+	GeneratedBy manifestActor      `json:"generated_by"`
+	TenantID    string             `json:"tenant_id"`
+	Companies   []workspaceCompany `json:"companies"`
+	Counts      workspaceCounts    `json:"counts"`
+	Entries     []manifestEntry    `json:"entries"`
+	Notes       []string           `json:"notes"`
+}
+
+var workspaceNotes = append(append([]string{}, manifestNotes...),
+	"Each company directory holds the evidence bundle of that company over all time; its body file cells are relative to the directory.",
+	"documents/ holds each original upload once, named by its SHA-256 content hash.",
+)
+
+// workspaceCountsOf sums the entries by name suffix.
+func workspaceCountsOf(companies int, entries []manifestEntry) workspaceCounts {
+	c := workspaceCounts{Companies: companies}
+	for _, e := range entries {
+		rows := 0
+		if e.Rows != nil {
+			rows = *e.Rows
+		}
+		switch {
+		case strings.HasSuffix(e.Name, "/invoices.csv"):
+			c.Invoices += rows
+		case strings.HasSuffix(e.Name, "/line_items.csv"):
+			c.LineItems += rows
+		case strings.HasSuffix(e.Name, "/status_history.csv"):
+			c.StatusTransitions += rows
+		case strings.HasSuffix(e.Name, "/submissions.csv"):
+			c.Submissions += rows
+		case strings.HasSuffix(e.Name, "/exchange.csv"):
+			c.ExchangeAttempts += rows
+		case strings.Contains(e.Name, "/bodies/"):
+			c.BodyFiles++
+		case strings.HasPrefix(e.Name, "documents/"):
+			c.Documents++
+		case e.Name == "audit_log.csv":
+			c.AuditRows += rows
+		}
+	}
+	return c
+}
+
+// writeWorkspaceManifest writes manifest.json from the entries recorded so far; it lists no entry for itself.
+func (bw *bundleWriter) writeWorkspaceManifest(tenantID string, generatedBy manifestActor, companies []workspaceCompany, now time.Time) error {
+	if companies == nil {
+		companies = []workspaceCompany{}
+	}
+	raw, err := json.Marshal(workspaceManifestDoc{
+		Format:      workspaceManifestFormat,
+		GeneratedAt: now.UTC().Format(time.RFC3339),
+		GeneratedBy: generatedBy,
+		TenantID:    tenantID,
+		Companies:   companies,
+		Counts:      workspaceCountsOf(len(companies), bw.entries),
+		Entries:     bw.entries,
+		Notes:       workspaceNotes,
+	})
+	if err != nil {
+		return fmt.Errorf("archive: marshal manifest.json: %w", err)
+	}
+	w, err := bw.zw.Create("manifest.json")
+	if err != nil {
+		return fmt.Errorf("archive: create manifest.json entry: %w", err)
+	}
+	if _, err := w.Write(raw); err != nil {
+		return fmt.Errorf("archive: write manifest.json entry: %w", err)
+	}
+	return nil
+}

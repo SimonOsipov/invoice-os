@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1456,8 +1457,15 @@ func TestSessionCheck_AFailedRevocationReadAsksGoTrue(t *testing.T) {
 	if recs := recordsNamed(t, buf, "session check: revocation read failed"); len(recs) != 1 || recs[0]["level"] != "WARN" {
 		t.Errorf("revocation read records = %v, want exactly one WARN", recs)
 	}
-	if n := warnCount(t, buf); n != 1 {
-		t.Errorf("WARN records = %d, want 1: %s", n, buf.String())
+	// "auth rejected" is the verifier's WARN for rg.refusal's token-less request above.
+	var warns []string
+	for _, rec := range logRecords(t, buf) {
+		if rec["level"] == "WARN" {
+			warns = append(warns, rec["msg"].(string))
+		}
+	}
+	if want := []string{"auth rejected", "session check: revocation read failed"}; !slices.Equal(warns, want) {
+		t.Errorf("WARN messages = %q, want %q", warns, want)
 	}
 	requireNoLeak(t, buf, tok, subjectS1, "ada@corp.example")
 }

@@ -67,6 +67,7 @@ var (
 	ErrCancelDeletionNotPermitted  = errors.New("tenancy: cancel deletion not permitted")
 	ErrWorkspaceNameMismatch       = errors.New("tenancy: workspace name mismatch")
 	ErrHouseWorkspace              = errors.New("tenancy: house workspace")
+	ErrDeletionLinkNotValid        = errors.New("tenancy: deletion link not valid")
 	ErrDeletionUnderway            = errors.New("tenancy: deletion underway")
 	ErrDeletionOutcomeChanged      = errors.New("tenancy: account deletion outcome changed")
 	ErrLastActiveMember            = errors.New("tenancy: last active member")
@@ -467,6 +468,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusForbidden, "only an admin can delete the workspace"
 	case errors.Is(err, ErrCancelDeletionNotPermitted):
 		return http.StatusForbidden, "only an admin can cancel the deletion"
+	case errors.Is(err, ErrDeletionLinkNotValid):
+		return http.StatusForbidden, "this cancel link is no longer valid"
 	case errors.Is(err, ErrWorkspaceNameMismatch):
 		return http.StatusBadRequest, "the workspace name does not match"
 	case errors.Is(err, ErrHouseWorkspace):

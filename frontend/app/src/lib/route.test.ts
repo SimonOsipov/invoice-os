@@ -945,11 +945,12 @@ const FRAGMENT_READ = /\.\s*hash\b|\[\s*['"`]hash['"`]\s*\]|\{[^}]*\bhash\b[^}]*
 const INVITE_FRAGMENT_READ = 'readinvitefragment(window.location.hash)'
 const VERIFY_FRAGMENT_READ = 'readverifyfragment(window.location.hash)'
 const NAME_FRAGMENT_READ = 'readinvitename(window.location.hash)'
+const CANCEL_FRAGMENT_READ = 'readcancellinkfragment(window.location.hash)'
 
 describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app', () => {
   it('guard_noReviewHashSurvivesInTheApp', () => {
     const files = [
-      { name: 'App.tsx', path: APP_TSX, inviteReads: 3 },
+      { name: 'App.tsx', path: APP_TSX, inviteReads: 4 },
       { name: 'lib/reviewBatch.ts', path: fileURLToPath(new URL('./reviewBatch.ts', import.meta.url)), inviteReads: 0 },
       { name: 'lib/route.ts', path: ROUTE_TS, inviteReads: 0 },
       { name: 'types.ts', path: fileURLToPath(new URL('../types.ts', import.meta.url)), inviteReads: 0 },
@@ -963,7 +964,7 @@ describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app'
       expect(raw.length, `${name} read back empty -- the path is broken`).toBeGreaterThan(0)
       const code = stripComments(raw).toLowerCase()
       expect(code.includes(REVIEW_FRAGMENT), `${name} still mentions the retired review-hash fragment`).toBe(false)
-      // App.tsx keeps exactly three fragment reads, the invite link's token and name and the confirm link's; any other read is a review hash returning.
+      // App.tsx keeps exactly four fragment reads, the invite link's token and name, the confirm link's and the cancel-deletion link's; any other read is a review hash returning.
       const reads = code.match(FRAGMENT_READ) ?? []
       expect(reads.length, `${name} reads or writes the url fragment ${inviteReads === 0 ? 'at all' : 'beyond the invite and confirm links'}`).toBe(inviteReads)
       if (inviteReads > 0) {
@@ -971,6 +972,7 @@ describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app'
         expect(code.includes(INVITE_FRAGMENT_READ), `${name} no longer reads the invite fragment through readInviteFragment`).toBe(true)
         expect(code.includes(VERIFY_FRAGMENT_READ), `${name} no longer reads the confirm fragment through readVerifyFragment`).toBe(true)
         expect(code.includes(NAME_FRAGMENT_READ), `${name} no longer reads the invite name through readInviteName`).toBe(true)
+        expect(code.includes(CANCEL_FRAGMENT_READ), `${name} no longer reads the cancel-deletion fragment through readCancelLinkFragment`).toBe(true)
       }
     }
   })

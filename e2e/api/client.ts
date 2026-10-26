@@ -233,6 +233,13 @@ export async function signInSession(email: string, password: string): Promise<{ 
   return res.body as { access_token: string; refresh_token: string }
 }
 
+// POST /auth/refresh: a fresh access token (claims re-minted) without a password sign-in.
+export async function refreshSession(refreshToken: string): Promise<string> {
+  const res = await rawFetch('/auth/refresh', { method: 'POST', body: { refresh_token: refreshToken } })
+  if (res.status !== 200) throw new Error(`refresh answered ${res.status}: ${JSON.stringify(res.body)}`)
+  return (res.body as { access_token: string }).access_token
+}
+
 // Unverified payload of a JWT the gateway just minted.
 export function claimsOf(token: string): Record<string, unknown> {
   return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')) as Record<string, unknown>
@@ -278,6 +285,13 @@ export async function provisionStaffAccount(prefix: string, password?: string): 
 export async function setInvitationToken(tenantId: string, invitationId: string, token: string): Promise<void> {
   const res = await rawFetch('/auth/mock/invitation-token', { method: 'POST', body: { tenant_id: tenantId, invitation_id: invitationId, token } })
   if (res.status !== 204) throw new Error(`invitation token seed answered ${res.status}: ${JSON.stringify(res.body)}`)
+}
+
+// POST /auth/mock/deletion-link-token (internal/gateway/mockdeletionlink.go answers 204); mock build only.
+// Replaces the admin's live cancel link token; 404 where the admin has no live link.
+export async function setDeletionLinkToken(tenantId: string, userId: string, token: string): Promise<void> {
+  const res = await rawFetch('/auth/mock/deletion-link-token', { method: 'POST', body: { tenant_id: tenantId, user_id: userId, token } })
+  if (res.status !== 204) throw new Error(`deletion link token seed answered ${res.status}: ${JSON.stringify(res.body)}`)
 }
 
 // Invites `email` as `role` through the tenancy API, gives the invite a token of the spec's own and returns it.
@@ -330,6 +344,34 @@ export function scheduleDeletion(token: string, workspaceName: string): Promise<
 // POST /api/tenancy/v1/workspace/deletion/cancel: 200 {deletion_due_at: null}, also when nothing is scheduled.
 export function cancelDeletion(token: string): Promise<{ status: number; body: unknown }> {
   return rawFetch('/api/tenancy/v1/workspace/deletion/cancel', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+}
+
+// POST /api/tenancy/v1/workspace/deletion/cancel-by-link: 200 {deletion_due_at: null}; raw so a spec can assert the refusals.
+export function cancelDeletionByLink(token: string, linkToken: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/api/tenancy/v1/workspace/deletion/cancel-by-link', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: { token: linkToken } })
+}
+
+// GET /api/invoice/v1/workspace/export/preflight: 204 when an export can start; raw so a spec can assert the refusals.
+export function exportPreflight(token: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/api/invoice/v1/workspace/export/preflight', { headers: { Authorization: `Bearer ${token}` } })
+}
+
+// POST /auth/export-code {state}: 200 {code}. Pass token=null to omit the bearer.
+export function exportCode(token: string | null, state: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/auth/export-code', { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: { state } })
+}
+
+// POST /auth/export-download as the browser form does: the ZIP, or the refusal page, as bytes.
+export async function exportDownload(
+  code: string,
+  state: string,
+): Promise<{ status: number; headers: Headers; body: Uint8Array }> {
+  const res = await fetch(`${apiBase()}/auth/export-download`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ code, state }).toString(),
+  })
+  return { status: res.status, headers: res.headers, body: new Uint8Array(await res.arrayBuffer()) }
 }
 
 // GET /api/tenancy/v1/me/deletion: 200 {outcome, heir_name, heir_user_id}, outcome one of leave | hand_on | delete_workspace.

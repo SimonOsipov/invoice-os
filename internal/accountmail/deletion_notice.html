@@ -1,0 +1,13 @@
+{{- define "title"}}Your ASComply workspace is scheduled for deletion{{end}}
+{{- define "preheader"}}An admin asked to delete your ASComply workspace. You can cancel it until the due date.{{end}}
+{{- define "eyebrow"}}Workspace deletion{{end}}
+{{- define "heading"}}Your workspace is scheduled for deletion.{{end}}
+{{- define "heading_accent"}}You can still cancel it.{{end}}
+{{- define "intro"}}{{.Requester}} asked to delete {{.Workspace}}. It will be deleted on {{.DueDate}}.{{end}}
+{{- define "action_url"}}{{.ActionURL}}{{end}}
+{{- define "action_label"}}Cancel the deletion{{end}}
+{{- define "expiry"}}This link works until {{.DueTime}}. Sign in as an admin of the workspace to use it.{{end}}
+{{- define "details"}}<tr><td width="120" style="{{template "row_label_style"}}">Organisation</td><td style="{{template "row_value_style"}}">{{.Workspace}}</td></tr><tr><td width="120" style="{{template "row_label_style"}}">Requested by</td><td style="{{template "row_value_style"}}">{{.Requester}}</td></tr><tr><td width="120" style="{{template "row_label_style_last"}}">Deleted on</td><td style="{{template "row_value_style_last"}}">{{.DueTime}}</td></tr>{{end}}
+{{- define "ignore_note"}}If you agree with the deletion, ignore this email. Nothing else is needed.{{end}}
+{{- define "reason"}}You received this email because you are an admin of this ASComply workspace.{{end}}
+{{- template "layout" .}}

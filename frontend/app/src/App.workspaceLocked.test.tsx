@@ -10,6 +10,7 @@ import { ApiError } from '@invoice-os/api-client'
 import { APP_PERSONAS, type Session } from './auth'
 import { NOT_ACTIVE_MEMBER_MESSAGE, WORKSPACE_LOCKED_MESSAGE } from './lib/authedFetch'
 import { SESSION_KEY, serializeSession } from './lib/session'
+import { CANCEL_LINK_KEY, peekCancelLink } from './lib/workspaceDeletion'
 import type { PlatformCtx } from './types'
 
 const LOCK_403 = new ApiError('http', WORKSPACE_LOCKED_MESSAGE, 403, { error: WORKSPACE_LOCKED_MESSAGE })
@@ -17,7 +18,8 @@ const SUSPEND_403 = new ApiError('http', NOT_ACTIVE_MEMBER_MESSAGE, 403, { error
 const DUE = '2026-11-24T12:00:00Z'
 const GATEWAY = 'https://gw.test'
 
-type Handler = (url: string, opts?: { method?: string }) => Promise<unknown>
+type Opts = { method?: string; body?: unknown }
+type Handler = (url: string, opts?: Opts) => Promise<unknown>
 let handler: Handler
 let calls: Array<{ url: string; method: string }>
 
@@ -26,7 +28,7 @@ vi.mock('./lib/authedFetch', async (importOriginal) => {
   return {
     ...actual,
     makeAuthedFetch: (_s: Session, _u: () => void, onSuspended?: () => void, _f?: unknown, onLocked?: () => void) =>
-      async (url: string, opts?: { method?: string }) => {
+      async (url: string, opts?: Opts) => {
         calls.push({ url, method: opts?.method ?? 'GET' })
         try {
           return await handler(url, opts)
@@ -70,6 +72,9 @@ function createMemoryStorage() {
 
 const isMe = (url: string) => url.endsWith('/api/tenancy/v1/me')
 const isCancel = (url: string) => url.endsWith('/workspace/deletion/cancel')
+const isLinkCancel = (url: string) => url.endsWith('/workspace/deletion/cancel-by-link')
+const LINK = 'L'.repeat(43)
+const LINK_403 = 'this cancel link is no longer valid'
 const stored = () => JSON.parse(localStorage.getItem(SESSION_KEY) as string)
 
 beforeEach(() => {
@@ -80,6 +85,7 @@ beforeEach(() => {
     throw new Error(`unexpected ${url}`)
   }
   window.history.replaceState(null, '', '/')
+  sessionStorage.clear()
   vi.stubGlobal('localStorage', createMemoryStorage())
   vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
 })
@@ -252,5 +258,183 @@ describe('deletion notice', () => {
     await waitFor(() => expect(screen.getByTestId('deletion-notice-error').textContent).toBe('Could not reach the server'))
     expect(notice()).not.toBeNull()
     expect((screen.getByTestId('deletion-notice-cancel') as HTMLButtonElement).disabled).toBe(false)
+  })
+})
+
+describe('cancel link', () => {
+  const posts = () => calls.filter((c) => c.method === 'POST')
+  const cancelsAnswer = (url: string) => {
+    if (isMe(url)) return me(DUE)
+    if (isCancel(url) || isLinkCancel(url)) return {}
+    throw new Error(`unexpected ${url}`)
+  }
+
+  it('cancel link: a signed-in admin opens the link and Cancel deletion sends it', async () => {
+    const bodies: unknown[] = []
+    handler = async (url, opts) => {
+      if (isLinkCancel(url)) bodies.push(opts?.body)
+      return cancelsAnswer(url)
+    }
+    window.history.replaceState(null, '', `/#cancel-deletion=${LINK}`)
+    await renderApp(sessionWith(DUE))
+    fireEvent.click(await screen.findByTestId('deletion-notice-cancel'))
+
+    await screen.findByTestId('sidebar')
+    expect(window.location.hash).toBe('')
+    expect(posts().map((c) => c.url)).toEqual([`${GATEWAY}/api/tenancy/v1/workspace/deletion/cancel-by-link`])
+    expect(bodies).toEqual([{ token: LINK }])
+    expect(peekCancelLink()).toBeNull()
+  })
+
+  it('cancel link: the token survives the sign-in bounce', async () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    const real = Object.getOwnPropertyDescriptor(window, 'location')!
+    const hrefWrites: string[] = []
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      writable: true,
+      value: {
+        get href() {
+          return hrefWrites.length ? hrefWrites[hrefWrites.length - 1] : 'http://localhost/'
+        },
+        set href(v: string) {
+          hrefWrites.push(v)
+        },
+        pathname: '/',
+        hash: `#cancel-deletion=${LINK}`,
+        hostname: 'localhost',
+        origin: 'http://localhost',
+        search: '',
+      },
+    })
+    try {
+      vi.resetModules()
+      const { default: App } = await import('./App')
+      render(<App />)
+      await waitFor(() => expect(hrefWrites.length).toBeGreaterThan(0))
+      expect(hrefWrites[0].startsWith('https://landing.example/')).toBe(true)
+      expect(peekCancelLink()).toBe(LINK)
+    } finally {
+      Object.defineProperty(window, 'location', real)
+    }
+    cleanup()
+    handler = async (url, opts) => {
+      if (isLinkCancel(url)) expect(opts?.body).toEqual({ token: LINK })
+      return cancelsAnswer(url)
+    }
+    await renderApp(sessionWith(DUE))
+    fireEvent.click(await screen.findByTestId('deletion-notice-cancel'))
+    await screen.findByTestId('sidebar')
+    expect(posts().map((c) => c.url)).toEqual([`${GATEWAY}/api/tenancy/v1/workspace/deletion/cancel-by-link`])
+  })
+
+  it('cancel link: a refused link falls through to the plain route in one click', async () => {
+    handler = async (url) => {
+      if (isLinkCancel(url)) throw new ApiError('http', LINK_403, 403, { error: LINK_403 })
+      return cancelsAnswer(url)
+    }
+    window.history.replaceState(null, '', `/#cancel-deletion=${LINK}`)
+    await renderApp(sessionWith(DUE))
+    fireEvent.click(await screen.findByTestId('deletion-notice-cancel'))
+
+    await screen.findByTestId('sidebar')
+    expect(peekCancelLink()).toBeNull()
+    expect(posts().map((c) => c.url.split('/deletion')[1])).toEqual(['/cancel-by-link', '/cancel'])
+  })
+
+  it('cancel link: a 403 that is not the link refusal shows the error and sends no second request', async () => {
+    const NOT_PERMITTED = 'only an admin can cancel the deletion'
+    handler = async (url) => {
+      if (isLinkCancel(url)) throw new ApiError('http', NOT_PERMITTED, 403, { error: NOT_PERMITTED })
+      return cancelsAnswer(url)
+    }
+    window.history.replaceState(null, '', `/#cancel-deletion=${LINK}`)
+    await renderApp(sessionWith(DUE))
+    fireEvent.click(await screen.findByTestId('deletion-notice-cancel'))
+
+    await waitFor(() => expect(screen.getByTestId('deletion-notice-error').textContent).toBe(NOT_PERMITTED))
+    expect(notice()).not.toBeNull()
+    expect(posts().map((c) => c.url.split('/deletion')[1])).toEqual(['/cancel-by-link'])
+  })
+
+  it('cancel link: a refused link and a refused plain route show the plain refusal, drop the link and retry plain only', async () => {
+    const NOT_PERMITTED = 'only an admin can cancel the deletion'
+    let plainTries = 0
+    handler = async (url) => {
+      if (isLinkCancel(url)) throw new ApiError('http', LINK_403, 403, { error: LINK_403 })
+      if (isCancel(url) && plainTries++ === 0) throw new ApiError('http', NOT_PERMITTED, 403, { error: NOT_PERMITTED })
+      return cancelsAnswer(url)
+    }
+    window.history.replaceState(null, '', `/#cancel-deletion=${LINK}`)
+    await renderApp(sessionWith(DUE))
+    fireEvent.click(await screen.findByTestId('deletion-notice-cancel'))
+
+    await waitFor(() => expect(screen.getByTestId('deletion-notice-error').textContent).toBe(NOT_PERMITTED))
+    expect(notice()).not.toBeNull()
+    expect(peekCancelLink()).toBeNull()
+    fireEvent.click(screen.getByTestId('deletion-notice-cancel'))
+
+    await screen.findByTestId('sidebar')
+    expect(posts().map((c) => c.url.split('/deletion')[1])).toEqual(['/cancel-by-link', '/cancel', '/cancel'])
+  })
+
+  it('cancel link: a stored session from before the lock still sends the link', async () => {
+    let locked = false
+    handler = async (url) => {
+      if (isLinkCancel(url) || isCancel(url)) return cancelsAnswer(url)
+      if (isMe(url)) return me(DUE)
+      locked = true
+      throw LOCK_403
+    }
+    window.history.replaceState(null, '', `/#cancel-deletion=${LINK}`)
+    await renderApp(sessionWith(null))
+    await screen.findByTestId('sidebar')
+    await act(async () => {
+      await capturedCtx!.authedFetch('/x').catch(() => {})
+    })
+    expect(locked).toBe(true)
+    fireEvent.click(await screen.findByTestId('deletion-notice-cancel'))
+
+    await screen.findByTestId('sidebar')
+    expect(posts().map((c) => c.url.split('/deletion')[1])).toEqual(['/cancel-by-link'])
+  })
+
+  it('cancel link: a link in an unlocked workspace is never sent', async () => {
+    handler = async () => ({})
+    window.history.replaceState(null, '', `/#cancel-deletion=${LINK}`)
+    await renderApp(sessionWith(null))
+
+    await screen.findByTestId('sidebar')
+    expect(calls.filter((c) => isCancel(c.url) || isLinkCancel(c.url))).toEqual([])
+  })
+
+  it('cancel link: an expired hold falls back to the plain cancel', async () => {
+    handler = async (url) => cancelsAnswer(url)
+    sessionStorage.setItem(CANCEL_LINK_KEY, JSON.stringify({ v: 1, t: LINK, at: Date.now() - 10 * 60 * 1000 - 1 }))
+    await renderApp(sessionWith(DUE))
+    fireEvent.click(await screen.findByTestId('deletion-notice-cancel'))
+
+    await screen.findByTestId('sidebar')
+    expect(posts().map((c) => c.url.split('/deletion')[1])).toEqual(['/cancel'])
+  })
+
+  it('cancel link: the token leaves the address bar even when the visit is signed out', async () => {
+    handler = async () => ({})
+    window.history.replaceState(null, '', `/#cancel-deletion=${LINK}`)
+    vi.resetModules()
+    const { default: App } = await import('./App')
+    render(<App />)
+
+    await waitFor(() => expect(window.location.hash).toBe(''))
+    expect(peekCancelLink()).toBe(LINK)
+  })
+
+  it('cancel link: a link is dropped when the notice finds the workspace already unlocked', async () => {
+    handler = async (url) => (isMe(url) ? me(null) : {})
+    window.history.replaceState(null, '', `/#cancel-deletion=${LINK}`)
+    await renderApp(sessionWith(DUE))
+
+    await screen.findByTestId('sidebar')
+    expect(peekCancelLink()).toBeNull()
   })
 })

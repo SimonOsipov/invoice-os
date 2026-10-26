@@ -203,6 +203,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/workspacepurge/purge.go", fn: "dueTenants"},                      // the workspace-purge ticker reads due tenants as invoice_tenant_reader with no GUC set
 	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"},         // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/invitation_token.go", fn: "SetInvitationToken"},      // mock builds only: the E2E fork replaces a pending invite's token hash on the owner DSN; no caller identity exists
+	{file: "internal/platform/db/deletion_link_token.go", fn: "SetDeletionLinkToken"}, // mock builds only: the E2E fork replaces an admin's cancel link token hash on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/account_state_read.go", fn: "GrantAccountStateRead"}, // boot-time grant on the supabase_auth_admin DSN, before any request or tenant exists
 	{file: "internal/platform/db/leader.go", fn: "claim"},                             // worker-only advisory locks; reads no table and serves no request
 	{file: "internal/gateway/registrant_outbox.go", fn: "Registrant"},                 // global outbox, no tenant data; invoice_gateway may only INSERT into it
@@ -714,37 +715,40 @@ func (e scCoreExemption) covers(s scCoreSite) bool {
 
 // scCoreAllowlist is every caller allowed to reach the identity-free core.
 var scCoreAllowlist = []scCoreExemption{
-	{pkg: "internal/submission"},                                                           // River job workers; the job row carries its tenant and there is no request identity to gate
-	{pkg: "internal/reconciliation"},                                                       // the sweep worker, same shape: a schedule opened it, not a caller
-	{file: "internal/dashboard/snapshot.go", fn: "RunOnce"},                                // the daily snapshot ticker in cmd/worker; a schedule opened it, not a caller
-	{file: "internal/workspacepurge/purge.go", fn: "eraseMembers"},                         // the workspace-purge ticker in cmd/worker; a schedule opened it, not a caller
-	{file: "internal/workspacepurge/purge.go", fn: "purgeRows"},                            // the workspace-purge ticker in cmd/worker; a schedule opened it, not a caller
-	{pkg: "internal/demodocs"},                                                             // boot-time document seeder; it runs to completion before the first request is served
-	{pkg: "internal/demopolicy"},                                                           // boot-time approval-policy seeder, on the same pre-request boot phase
-	{file: "internal/extraction/store.go"},                                                 // the extraction worker's store; a River job carries its own tenant and there is no request identity to gate
-	{file: "internal/extraction/worker.go"},                                                // the extraction River worker itself, same shape: the job row carries the tenant
-	{file: "internal/extraction/anchor_store.go"},                                          // the learned-rule read, same shape as store.go: no request path reaches it
-	{file: "internal/importer/backfill.go"},                                                // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
-	{file: "internal/invoice/revalidate.go"},                                               // operator CLI and the reconciliation re-checks (version and custom-rule) only, and internal/invoice is the largest HTTP-serving package in the tree
-	{file: "internal/staffjobs/store.go", fn: "Redrive"},                                   // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
-	{file: "internal/staffjobs/store.go", fn: "Cancel"},                                    // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
-	{file: "internal/tenancy/store.go", fn: "Me"},                                          // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
-	{file: "internal/tenancy/store.go", fn: "provisionAttempt"},                            // ProvisionWorkspace's write; the caller has no membership yet, so the seam would refuse before the closure
-	{file: "internal/tenancy/store.go", fn: "holdsRemovedRow"},                             // ProvisionWorkspace's retry probe: the caller's removed row in the derived tenant
-	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},                           // the token is the only credential and names the invite; there is no caller to gate
-	{file: "internal/tenancy/store.go", fn: "AcceptInvitation"},                            // the invitee has no membership in the invite's tenant yet; the seam would refuse before the closure
-	{file: "internal/tenancy/store.go", fn: "acceptInTenant"},                              // the shared tail of AcceptInvitation and AcceptInvitationByID, same reason
-	{file: "internal/tenancy/store.go", fn: "MyPendingInvitations"},                        // the caller has no membership; the email filter is the guard
-	{file: "internal/tenancy/store.go", fn: "AcceptInvitationByID"},                        // the caller has no membership; the email filter is the guard
-	{file: "internal/tenancy/invite_registration.go", fn: "InvitationPendingForEmail"},     // a gateway-token route; there is no caller to gate
-	{file: "internal/tenancy/invite_registration.go", fn: "ClaimInvitationRegistration"},   // a gateway-token route; the token names the invite and there is no caller to gate
-	{file: "internal/tenancy/workspace_deletion.go", fn: "CancelWorkspaceDeletion"},        // cancels a locked workspace, which the seam refuses; the method gates the active admin itself
-	{file: "internal/tenancy/invite_registration.go", fn: "ReleaseInvitationRegistration"}, // a gateway-token route; the token names the invite and there is no caller to gate
-	{file: "internal/aicalls/recorder.go", fn: "write"},                                    // a background usage row written after the AI call returned; the tenant is the identity the call ran under, and no request context is left to gate
-	{file: "internal/archive/staff.go", fn: "withinStaffTenant"},                           // staff read: the path tenant is checked by a staff_read_ function in db.WithinStaffTx; READ ONLY tenant tx
-	{file: "internal/tenancy/staff_deletion.go", fn: "withinStaffTenant"},                  // staff write or read: the path tenant is checked by a staff_read_ function in db.WithinStaffTx; the request carries no tenant
-	{file: "internal/customer/backfill.go", fn: "Backfill"},                                // operator CLI and the demo-seed boot step only; internal/customer serves HTTP, so a package exemption would un-gate the customer handlers
-	{file: "cmd/migrate/purgecheck.go", fn: "purgeCheckRun"},                               // preview-only deploy probe in the migrate job; no request reaches it
+	{pkg: "internal/submission"},                                                            // River job workers; the job row carries its tenant and there is no request identity to gate
+	{pkg: "internal/reconciliation"},                                                        // the sweep worker, same shape: a schedule opened it, not a caller
+	{file: "internal/dashboard/snapshot.go", fn: "RunOnce"},                                 // the daily snapshot ticker in cmd/worker; a schedule opened it, not a caller
+	{file: "internal/workspacepurge/purge.go", fn: "eraseMembers"},                          // the workspace-purge ticker in cmd/worker; a schedule opened it, not a caller
+	{file: "internal/workspacepurge/purge.go", fn: "purgeRows"},                             // the workspace-purge ticker in cmd/worker; a schedule opened it, not a caller
+	{pkg: "internal/demodocs"},                                                              // boot-time document seeder; it runs to completion before the first request is served
+	{pkg: "internal/demopolicy"},                                                            // boot-time approval-policy seeder, on the same pre-request boot phase
+	{file: "internal/extraction/store.go"},                                                  // the extraction worker's store; a River job carries its own tenant and there is no request identity to gate
+	{file: "internal/extraction/worker.go"},                                                 // the extraction River worker itself, same shape: the job row carries the tenant
+	{file: "internal/extraction/anchor_store.go"},                                           // the learned-rule read, same shape as store.go: no request path reaches it
+	{file: "internal/importer/backfill.go"},                                                 // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
+	{file: "internal/invoice/revalidate.go"},                                                // operator CLI and the reconciliation re-checks (version and custom-rule) only, and internal/invoice is the largest HTTP-serving package in the tree
+	{file: "internal/staffjobs/store.go", fn: "Redrive"},                                    // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
+	{file: "internal/staffjobs/store.go", fn: "Cancel"},                                     // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
+	{file: "internal/tenancy/staff_deletion.go", fn: "withinStaffTenant"},                   // staff write or read: the path tenant is checked by a staff_read_ function in db.WithinStaffTx; the request carries no tenant
+	{file: "internal/tenancy/store.go", fn: "Me"},                                           // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
+	{file: "internal/tenancy/store.go", fn: "provisionAttempt"},                             // ProvisionWorkspace's write; the caller has no membership yet, so the seam would refuse before the closure
+	{file: "internal/tenancy/store.go", fn: "holdsRemovedRow"},                              // ProvisionWorkspace's retry probe: the caller's removed row in the derived tenant
+	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},                            // the token is the only credential and names the invite; there is no caller to gate
+	{file: "internal/tenancy/store.go", fn: "AcceptInvitation"},                             // the invitee has no membership in the invite's tenant yet; the seam would refuse before the closure
+	{file: "internal/tenancy/store.go", fn: "acceptInTenant"},                               // the shared tail of AcceptInvitation and AcceptInvitationByID, same reason
+	{file: "internal/tenancy/store.go", fn: "MyPendingInvitations"},                         // the caller has no membership; the email filter is the guard
+	{file: "internal/tenancy/store.go", fn: "AcceptInvitationByID"},                         // the caller has no membership; the email filter is the guard
+	{file: "internal/tenancy/invite_registration.go", fn: "InvitationPendingForEmail"},      // a gateway-token route; there is no caller to gate
+	{file: "internal/tenancy/invite_registration.go", fn: "ClaimInvitationRegistration"},    // a gateway-token route; the token names the invite and there is no caller to gate
+	{file: "internal/tenancy/workspace_deletion.go", fn: "cancelScheduledDeletion"},         // cancels a locked workspace, by route or by link, which the seam refuses; it gates the active admin itself
+	{file: "internal/tenancy/workspace_deletion_mail.go", fn: "RecordDeletionLinkDelivery"}, // records a deletion mail's outcome after the lock commits; scoped to the caller's own tenant
+	{file: "internal/tenancy/invite_registration.go", fn: "ReleaseInvitationRegistration"},  // a gateway-token route; the token names the invite and there is no caller to gate
+	{file: "internal/aicalls/recorder.go", fn: "write"},                                     // a background usage row written after the AI call returned; the tenant is the identity the call ran under, and no request context is left to gate
+	{file: "internal/archive/staff.go", fn: "withinStaffTenant"},                            // staff read: the path tenant is checked by a staff_read_ function in db.WithinStaffTx; READ ONLY tenant tx
+	{file: "internal/customer/backfill.go", fn: "Backfill"},                                 // operator CLI and the demo-seed boot step only; internal/customer serves HTTP, so a package exemption would un-gate the customer handlers
+	{file: "cmd/migrate/purgecheck.go", fn: "purgeCheckRun"},                                // preview-only deploy probe in the migrate job; no request reaches it
+	{file: "internal/archive/workspace.go", fn: "recordExportFailed"},                       // audits a failed export of a possibly locked workspace in its own short tx
+	{file: "internal/archive/workspace.go", fn: "AssembleWorkspace"},                        // exports a locked workspace, which the seam refuses for a read-write tx; the method gates the active admin itself
 }
 
 // scCoreSite is one call of the ungated core, attributed to the INNERMOST
@@ -1041,6 +1045,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/rollup":                                         {verdict: scCovered},
 	"GET /v1/rollup/history":                                 {verdict: scCovered},
 	"GET /v1/workflow-roles":                                 {verdict: scCovered},
+	"OPTIONS /auth/export-code":                              {verdict: scExempt, reason: "no database; gateway hand-off code store"},
 	"OPTIONS /auth/console-handoff":                          {verdict: scExempt, reason: "no database; in-process code store"},
 	"OPTIONS /auth/exchange":                                 {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
 	"OPTIONS /auth/invitation":                               {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
@@ -1066,20 +1071,23 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/me/deletion":                                   {verdict: scCovered},
 	"POST /v1/memberships/{user_id}/remove":                  {verdict: scCovered},
 	"POST /v1/workspace/deletion":                            {verdict: scCovered},
-	"POST /v1/workspace/deletion/cancel":                     {verdict: scExempt, reason: "writes a locked workspace; Store.CancelWorkspaceDeletion gates the active admin itself in WithinTenantTx"},
+	"GET /v1/staff/tenants/{id}/members/{user_id}/deletion":  {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, read in that tenant's READ ONLY WithinTenantTxOpts"},
+	"POST /v1/staff/tenants/{id}/deletion":                   {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
+	"POST /v1/staff/tenants/{id}/deletion/cancel":            {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
+	"POST /v1/staff/tenants/{id}/deletion/purge":             {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
+	"POST /v1/staff/tenants/{id}/members/{user_id}/deletion": {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
+	"POST /v1/workspace/deletion/cancel":                     {verdict: scExempt, reason: "writes a locked workspace; cancelScheduledDeletion gates the active admin itself in WithinTenantTx"},
+	"POST /v1/workspace/deletion/cancel-by-link":             {verdict: scExempt, reason: "writes a locked workspace; cancelScheduledDeletion gates the active admin itself in WithinTenantTx"},
+	"GET /v1/workspace/export/preflight":                     {verdict: scCovered},
+	"GET /v1/workspace/export":                               {verdict: scExempt, reason: "admin export of a locked workspace; WorkspaceStore.AssembleWorkspace gates the active admin itself in WithinTenantTxOpts and writes workspace.exported"},
 	"PUT /v1/memberships/{user_id}/clients":                  {verdict: scCovered},
 	"GET /v1/staff/health":                                   {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/metrics":                                  {verdict: scExempt, reason: "staff route: staff check in platform.App and in staff_read_health_samples; reads Google metrics, no tenant rows"},
 	"GET /v1/staff/tenants":                                  {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/tenants/{id}":                             {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
-	"GET /v1/staff/tenants/{id}/members/{user_id}/deletion":  {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, read in that tenant's READ ONLY WithinTenantTxOpts"},
 	"GET /v1/staff/jobs":                                     {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/jobs/{id}":                                {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"POST /v1/staff/jobs/{id}/redrive":                       {verdict: scExempt, reason: "staff route: staff check in platform.App; the job's tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
-	"POST /v1/staff/tenants/{id}/deletion":                   {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
-	"POST /v1/staff/tenants/{id}/deletion/cancel":            {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
-	"POST /v1/staff/tenants/{id}/deletion/purge":             {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
-	"POST /v1/staff/tenants/{id}/members/{user_id}/deletion": {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
 	"POST /v1/staff/jobs/{id}/cancel":                        {verdict: scExempt, reason: "staff route: staff check in platform.App; the job's tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
 	"GET /v1/staff/rules":                                    {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"GET /v1/staff/rule-versions":                            {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
@@ -1121,6 +1129,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"PATCH /v1/rules/{key}":                                  {verdict: scExempt, reason: "refuses every caller with 403 and reaches no database"},
 	"PATCH /v1/workflow-roles/{key}":                         {verdict: scCovered},
 	"POST /auth/console-handoff":                             {verdict: scExempt, reason: "no database; in-process code store"},
+	"POST /auth/export-code":                                 {verdict: scExempt, reason: "no database; gateway hand-off code store"},
+	"POST /auth/export-download":                             {verdict: scExempt, reason: "no database; gateway hand-off code store"},
 	"POST /auth/exchange":                                    {verdict: scExempt, reason: "no database; in-process code store"},
 	"POST /auth/invitation":                                  {verdict: scExempt, reason: "no database; asks tenancy"},
 	"POST /auth/invitation/password":                         {verdict: scExempt, reason: "no database; calls GoTrue"},
@@ -1128,6 +1138,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /auth/invitation/resend":                           {verdict: scExempt, reason: "no database; asks tenancy, calls GoTrue"},
 	"POST /auth/login":                                       {verdict: scExempt, reason: "unauthenticated by definition; there is no caller yet to hold a membership"},
 	"POST /auth/mock/invitation-token":                       {verdict: scExempt, reason: "mock builds only; replaces a pending invite's token hash on the owner DSN for the E2E fork, with no caller identity"},
+	"POST /auth/mock/deletion-link-token":                    {verdict: scExempt, reason: "mock builds only; replaces an admin's cancel link token hash on the owner DSN for the E2E fork, with no caller identity"},
 	"POST /auth/mock/member":                                 {verdict: scExempt, reason: "mock builds only; grants a tenant membership on the owner DSN for the E2E fork, with no caller identity"},
 	"POST /auth/refresh":                                     {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /auth/register":                                    {verdict: scExempt, reason: "no database; calls GoTrue"},

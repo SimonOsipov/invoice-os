@@ -672,7 +672,11 @@ func TestRefusalPageWriter_KeepsTheRequestID(t *testing.T) {
 	w := &refusalPageWriter{ResponseWriter: rec}
 	w.Header().Set(headerRequestID, "req-123")
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", "upstream=1")
 	w.WriteHeader(http.StatusForbidden)
+	if got := rec.Header().Get("Set-Cookie"); got != "" {
+		t.Errorf("Set-Cookie = %q, want the upstream's header dropped", got)
+	}
 	if got := rec.Header().Get(headerRequestID); got != "req-123" {
 		t.Errorf("%s = %q, want req-123", headerRequestID, got)
 	}
@@ -851,6 +855,9 @@ func TestExportDownload_ExchangeRedeemsAnExportCodeOnlyUnderThePrefixedState(t *
 		rec := httptest.NewRecorder()
 		rg.exchange.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/exchange", bytes.NewReader(b)))
 		return rec
+	}
+	if plain := ex(rg.seed(t, bearer, state), state); plain.Code != http.StatusBadRequest {
+		t.Errorf("exchange under the unprefixed state = %d, want 400", plain.Code)
 	}
 	rec := ex(code, exportStateForTest+state)
 	var got map[string]string

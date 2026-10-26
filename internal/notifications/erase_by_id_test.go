@@ -577,3 +577,75 @@ func TestEraseByID_TwoContactsRowsAreErasedOneAfterTheOther(t *testing.T) {
 		t.Errorf("contacts rows left = %d, want 0", c)
 	}
 }
+
+func TestEraseByID_AnAddressAnotherAccountHoldsStillEndsTheHandOff(t *testing.T) {
+	r := newEraseRig(t)
+	other, _ := r.person()
+	r.contact(r.mail, &r.uid, 1)
+	r.handoff(other, r.mail)
+	w := r.byIDWorker()
+
+	if err := r.workByID(w, r.uid); !isSnooze(err) {
+		t.Fatalf("Work = %v, want a snooze", err)
+	}
+	if err := r.work(r.row(r.uid).Gen); err != nil {
+		t.Fatalf("erasure: %v", err)
+	}
+	if !r.row(r.uid).Superseded {
+		t.Fatal("control: the erasure did not see the other account on the address")
+	}
+	if _, c := r.copies(r.uid); c != 0 {
+		t.Fatalf("contacts rows left = %d, the hand-off would repeat", c)
+	}
+	if h, _ := r.copies(other); h != 1 {
+		t.Errorf("the other account's hand-off = %d, want 1", h)
+	}
+	if err := r.workByID(w, r.uid); err != nil {
+		t.Errorf("Work after the erasure = %v, want nil", err)
+	}
+}
+
+func TestEraseByID_ContactsOffStillEndsTheHandOff(t *testing.T) {
+	r := newEraseRig(t)
+	r.w.HubSpot, r.w.Resend = nil, nil
+	r.contact(r.mail, &r.uid, 1)
+	w := r.byIDWorker()
+
+	if err := r.workByID(w, r.uid); !isSnooze(err) {
+		t.Fatalf("Work = %v, want a snooze", err)
+	}
+	if err := r.work(r.row(r.uid).Gen); !errors.Is(err, errContactsOff) {
+		t.Fatalf("erasure = %v, want errContactsOff", err)
+	}
+	if _, c := r.copies(r.uid); c != 0 {
+		t.Fatalf("contacts rows left = %d, the hand-off would repeat", c)
+	}
+	if err := r.workByID(w, r.uid); err != nil {
+		t.Errorf("Work with the vendor step waiting = %v, want nil", err)
+	}
+}
+
+func TestEraseByID_AFinishedEarlierErasureDoesNotBlockANewHandOff(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	if err := r.work(gen); err != nil || !r.row(r.uid).Fin {
+		t.Fatalf("control: first erasure err=%v finished=%v", err, r.row(r.uid).Fin)
+	}
+	again := "again-" + r.mail
+	r.track(again, r.uid)
+	r.contact(again, &r.uid, 1)
+
+	if err := r.workByID(r.byIDWorker(), r.uid); !isSnooze(err) {
+		t.Fatalf("Work = %v, want a snooze", err)
+	}
+	row := r.row(r.uid)
+	if row.Fin || row.Gen != gen+1 || row.Email == nil || *row.Email != again {
+		t.Fatalf("erasure row after the hand-off: %+v, want unfinished generation %d for the contact's email", row, gen+1)
+	}
+	if err := r.work(row.Gen); err != nil {
+		t.Fatalf("erasure: %v", err)
+	}
+	if _, c := r.copies(r.uid); c != 0 {
+		t.Errorf("contacts rows left = %d, want 0", c)
+	}
+}

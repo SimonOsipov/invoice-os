@@ -367,6 +367,7 @@ describe('the list refetches on the request\'s entity id, not the context\'s', (
     await screen.findByText('INV-R1')
 
     rerender(<ApprovalsView ctx={approvalsCtx({ mode: 'inhouse', entityId: 'ent-1' })} />)
+    await act(async () => {})
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(screen.queryByText(APPROVALS_COPY.loading)).toBeNull()
@@ -383,6 +384,7 @@ describe('the list refetches on the request\'s entity id, not the context\'s', (
     })
 
     expect(await screen.findByText('INV-R1')).toBeTruthy()
+    await act(async () => {})
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
@@ -392,6 +394,7 @@ describe('the list refetches on the request\'s entity id, not the context\'s', (
     expect(await screen.findByText('boom')).toBeTruthy()
 
     rerender(<ApprovalsView ctx={approvalsCtx({ mode: 'inhouse', entityId: 'ent-1' })} />)
+    await act(async () => {})
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(screen.getByText('boom')).toBeTruthy()

@@ -93,7 +93,7 @@ type staffReasonRequest struct {
 	Reason string `json:"reason"`
 }
 
-// scheduleTenantDeletion is the DEL-04 schedule with the staff member as actor.
+// scheduleTenantDeletion is the customer schedule with the staff member as actor.
 func scheduleTenantDeletion(ctx context.Context, tx pgx.Tx, actor uuid.UUID) (time.Time, error) {
 	var due time.Time
 	// The tenants_deletion_guard trigger derives deletion_due_at.

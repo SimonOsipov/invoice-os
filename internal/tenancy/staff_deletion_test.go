@@ -135,7 +135,7 @@ func TestStaffDeletion_StartLocksTheWorkspaceWithStaffAsActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StaffScheduleWorkspaceDeletion: %v", err)
 	}
-	near(t, "due", due, before.Add(720*time.Hour), time.Minute) // the DEL-04 trigger's 30 days
+	near(t, "due", due, before.Add(720*time.Hour), time.Minute) // the tenants_deletion_guard trigger's 30 days
 
 	c := deletionOf(t, w.super, w.tenant)
 	if c.ScheduledAt == nil {
@@ -820,7 +820,7 @@ func TestStaffPurge_SchedulesAnUnscheduledTenantFirst(t *testing.T) {
 	if c.By == nil || *c.By != w.staff {
 		t.Errorf("deletion_scheduled_by = %v, want the staff subject %s", c.By, w.staff)
 	}
-	near(t, "due", *c.DueAt, before.Add(720*time.Hour), time.Minute) // the DEL-04 trigger's 30 days
+	near(t, "due", *c.DueAt, before.Add(720*time.Hour), time.Minute) // the tenants_deletion_guard trigger's 30 days
 	if m := purgeStartedAt(t, w.super, w.tenant); m == nil || !m.Equal(at) {
 		t.Errorf("deletion_purge_started_at = %v, want the returned %v", m, at)
 	}

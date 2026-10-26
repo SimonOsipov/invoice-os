@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { ErrorState, Loading, gatewayBase, toApiError, type ApiError } from '@invoice-os/api-client'
+import { ErrorState, gatewayBase, toApiError, type ApiError } from '@invoice-os/api-client'
 import { ACCOUNT_PAGE, DELETE_ACCOUNT, accountDeletionBody, readAccountDeletion, type AccountDeletionPreview } from '../lib/accountDeletion'
 import type { PlatformCtx } from '../types'
 import { DeleteAccountDialog } from './DeleteAccountDialog'
@@ -64,18 +64,24 @@ export function AccountView({ ctx }: { ctx: PlatformCtx }) {
         <div className="eyebrow" style={{ marginBottom: 10 }}>YOUR ACCOUNT</div>
         <h1 style={{ fontSize: 26, letterSpacing: '-0.025em', margin: '0 0 4px' }}>{ACCOUNT_PAGE.title}</h1>
       </div>
-      {preview === null ? (
-        error !== null ? <ErrorState error={error} onRetry={() => void load()} /> : <Loading label="Loading…" />
+      {preview === null && error !== null ? (
+        <ErrorState error={error} onRetry={() => void load()} />
       ) : (
         <div data-testid="account-delete-card" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden', maxWidth: 720 }}>
           <div style={{ padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 15, fontWeight: 700 }}>{DELETE_ACCOUNT.title}</div>
               <div data-testid="account-delete-body" style={{ marginTop: 4, fontSize: 13, lineHeight: 1.55, color: 'var(--fg-3)', overflowWrap: 'anywhere' }}>
-                {accountDeletionBody(preview, name).map((part, i) =>
-                  i % 2 === 1 ? <b key={i} style={{ fontWeight: 600, color: 'var(--fg-1)' }}>{part}</b> : part,
-                )}
+                {preview !== null &&
+                  accountDeletionBody(preview, name).map((part, i) =>
+                    i % 2 === 1 ? <b key={i} style={{ fontWeight: 600, color: 'var(--fg-1)' }}>{part}</b> : part,
+                  )}
               </div>
+              {preview !== null && error !== null && (
+                <div data-testid="account-delete-error" style={{ marginTop: 6, fontSize: 12.5, lineHeight: 1.55, color: 'var(--status-red-text)', overflowWrap: 'anywhere' }}>
+                  {error.message}
+                </div>
+              )}
             </div>
             <button
               onClick={onDelete}
@@ -84,7 +90,7 @@ export function AccountView({ ctx }: { ctx: PlatformCtx }) {
               className="v2-btn pf-btn"
               style={{ flex: 'none', height: 32, fontSize: 13, background: 'var(--status-red-text)', color: 'var(--primary-foreground)', ...(disabled ? DISABLED : null) }}
             >
-              {preview.outcome === 'delete_workspace' ? DELETE_ACCOUNT.buttonWorkspace : DELETE_ACCOUNT.buttonLeave}
+              {preview?.outcome === 'delete_workspace' ? DELETE_ACCOUNT.buttonWorkspace : DELETE_ACCOUNT.buttonLeave}
             </button>
           </div>
         </div>

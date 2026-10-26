@@ -92,20 +92,33 @@ describe('AccountView', () => {
 
   it('AccountView: disabled without a gateway, a preview or a workspace name', async () => {
     vi.stubEnv('VITE_GATEWAY_URL', '')
-    setup([{ outcome: 'leave' }])
-    expect(screen.queryByTestId('account-delete')).toBeNull()
+    const { gets } = setup([{ outcome: 'leave' }])
+    expect(button().disabled).toBe(true)
+    expect(button().style.opacity).toBe('0.45')
+    expect(gets).not.toHaveBeenCalled()
     cleanup()
     vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
 
     const pending = vi.fn(() => new Promise(() => {}))
     render(<AccountView ctx={{ authedFetch: pending, user: { tenantName: 'Okafor & Co' } } as unknown as PlatformCtx} />)
-    expect(screen.queryByTestId('account-delete')).toBeNull()
+    expect(button().disabled).toBe(true)
+    expect(button().style.opacity).toBe('0.45')
     cleanup()
 
     setup([{ outcome: 'delete_workspace' }], { tenantName: null })
     await ready()
     expect(button().disabled).toBe(true)
     expect(button().style.opacity).toBe('0.45')
+  })
+
+  it('AccountView: a failed re-read on click shows the error and opens no dialog', async () => {
+    const f = vi.fn().mockResolvedValueOnce({ outcome: 'leave' }).mockRejectedValueOnce(new ApiError('http', 'boom', 500))
+    render(<AccountView ctx={{ authedFetch: f, user: { tenantName: 'Okafor & Co' } } as unknown as PlatformCtx} />)
+    await ready()
+    await userEvent.click(button())
+    expect((await screen.findByTestId('account-delete-error')).textContent).toBe('boom')
+    expect(screen.queryByTestId('delete-account-dialog')).toBeNull()
+    expect(screen.queryByTestId('delete-workspace-dialog')).toBeNull()
   })
 
   it('AccountView: a failed read shows Retry', async () => {

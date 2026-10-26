@@ -73,6 +73,7 @@ export const UNITS: Unit[] = [
   {
     name: 'ui-surfaces',
     specs: [
+      'account-deletion.spec.ts',
       'app-consent.spec.ts',
       'app-shell.spec.ts',
       'blog-editor.spec.ts',

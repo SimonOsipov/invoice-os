@@ -2094,3 +2094,94 @@ func TestWorkerMain_WiresTheEraseWorker(t *testing.T) {
 		t.Errorf("%s.River = %s.River() is at statement %d, want between queue.New (%d) and app.AddBackgroundWorker (%d)", xwName, qName, riverIdx, newIdx, addIdx)
 	}
 }
+
+// The purger runs on the app pool, reads due tenants on the reader pool, and gets the account
+// client only under `account != nil` (a typed-nil *Client would pass its nil check). Hourly, under its own lock.
+func TestWorkerMain_WiresTheWorkspacePurger(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/worker/main.go: %v", err)
+	}
+	poolName := wtAppPool(t, f)
+	accountName, _ := wtOneCall(t, f, "gotrueadmin.FromEnv")
+	qName, _ := wtOneCall(t, f, "queue.New")
+	objName, _ := wtOneCall(t, f, "document.NewS3Store")
+	readerName := ""
+	for _, stmt := range wtMainBody(t, f) {
+		as, ok := stmt.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 {
+			continue
+		}
+		if c, ok := as.Rhs[0].(*ast.CallExpr); ok && wtCallName(c.Fun) == "db.NewPool" && len(c.Args) == 2 {
+			if lit, ok := c.Args[1].(*ast.CallExpr); ok && len(lit.Args) == 1 && wtExprString(lit.Args[0]) == `"DATABASE_READER_URL"` {
+				readerName = wtExprString(as.Lhs[0])
+			}
+		}
+	}
+	if readerName == "" {
+		t.Fatal("main() builds no db.NewPool on DATABASE_READER_URL")
+	}
+
+	purgerName, accountSet, pools := "", false, 0
+	for _, stmt := range wtMainBody(t, f) {
+		switch s := stmt.(type) {
+		case *ast.AssignStmt:
+			if len(s.Lhs) == 1 && len(s.Rhs) == 1 {
+				if u, ok := s.Rhs[0].(*ast.UnaryExpr); ok && u.Op == token.AND {
+					if lit, ok := u.X.(*ast.CompositeLit); ok && wtCallName(lit.Type) == "workspacepurge.Purger" {
+						purgerName = wtExprString(s.Lhs[0])
+						got := map[string]string{}
+						for _, elt := range lit.Elts {
+							if kv, ok := elt.(*ast.KeyValueExpr); ok {
+								got[wtExprString(kv.Key)] = wtExprString(kv.Value)
+							}
+						}
+						want := map[string]string{"Pool": poolName, "Reader": readerName, "River": qName + ".River()", "Objects": objName, "Logger": "app.Logger"}
+						if len(got) != len(want) {
+							t.Errorf("Purger literal fields = %v, want exactly %v (Accounts only under account != nil)", got, want)
+						}
+						for k, v := range want {
+							if got[k] != v {
+								t.Errorf("Purger.%s = %q, want %q", k, got[k], v)
+							}
+						}
+					}
+				}
+			}
+		case *ast.IfStmt:
+			if wtExprString(s.Cond) == accountName+" != nil" && purgerName != "" {
+				for _, in := range s.Body.List {
+					if as, ok := in.(*ast.AssignStmt); ok && len(as.Lhs) == 1 && wtExprString(as.Lhs[0]) == purgerName+".Accounts" && wtExprString(as.Rhs[0]) == accountName {
+						accountSet = true
+					}
+				}
+			}
+		}
+	}
+	if purgerName == "" {
+		t.Fatal("main() builds no &workspacepurge.Purger{...}")
+	}
+	if !accountSet {
+		t.Errorf("main() does not set %s.Accounts = %s under `if %s != nil`", purgerName, accountName, accountName)
+	}
+
+	var interval string
+	ast.Inspect(f, func(n ast.Node) bool {
+		c, ok := n.(*ast.CallExpr)
+		if !ok || wtCallName(c.Fun) != "codelist.NewWorker" || len(c.Args) != 2 {
+			return true
+		}
+		if lead, ok := c.Args[1].(*ast.CallExpr); ok && wtCallName(lead.Fun) == "leader.Lead" && len(lead.Args) == 2 &&
+			wtExprString(lead.Args[0]) == `"workspace-purge"` && wtExprString(lead.Args[1]) == purgerName+".RunOnce" {
+			interval = wtExprString(c.Args[0])
+			pools++
+		}
+		return true
+	})
+	if pools != 1 {
+		t.Fatalf("%d workspace-purge registration(s) run %s.RunOnce, want 1", pools, purgerName)
+	}
+	if interval != "time.Hour" {
+		t.Errorf("workspace-purge interval = %s, want time.Hour", interval)
+	}
+}

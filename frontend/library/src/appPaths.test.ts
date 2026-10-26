@@ -15,7 +15,7 @@ describe('appPaths', () => {
     if (Object.keys(entries).length < 11) throw new Error(`route.ts: ROUTE_PATHS has ${Object.keys(entries).length} entries, expected at least 11`)
     expect(entries.dashboard).toBe('/')
     const views = Object.keys(APP_PATHS) as ViewId[]
-    expect(views).toHaveLength(11)
+    expect(views).toHaveLength(12)
     for (const v of views) expect(APP_PATHS[v], v).toBe(entries[v])
   })
 })

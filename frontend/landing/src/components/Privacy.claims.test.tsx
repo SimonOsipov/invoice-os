@@ -26,6 +26,7 @@ import {
   anyAdminCancels,
   cancelRefusedOnceThePurgeStarted,
   deleteAccountEndsMembershipAndQueuesErasureInOneTx,
+  deleteAccountRefusedWhileLocked,
   deleteWorkspaceDialogNeedsTypedName,
   deletionNoticeShowsDateAndSignOut,
   appLabels,
@@ -933,6 +934,22 @@ describe('DEL-10-02: the account section states the deletion rules', () => {
     expect(sentence('A6')).toContain(`${DELETION_GRACE_DAYS} days`)
   })
 
+  it('DEL-10-02 A6 a later redefinition of the guard changes the days', () => {
+    const redefined = `-- +goose Up\nCREATE OR REPLACE FUNCTION public.tenants_deletion_guard() RETURNS trigger AS $$ BEGIN NEW.deletion_due_at := NEW.deletion_scheduled_at + interval '14 days'; RETURN NEW; END $$ LANGUAGE plpgsql;\n-- +goose Down\nSELECT 1;`
+    expect(graceDays([...migrationUps(), redefined])).toBe(14)
+    expect(graceDays([...migrationUps(), redefined, '-- +goose Up\n-- CREATE OR REPLACE FUNCTION tenants_deletion_guard() $$ interval \'9 days\' $$'])).toBe(14)
+  })
+
+  it('DEL-10-02 A6 a member cannot delete their own account while the workspace is locked', () => {
+    const AD = 'internal/tenancy/account_deletion.go'
+    expect(sentence('A6')).toContain('While it is locked, a member cannot delete their own account.')
+    expect(deleteAccountRefusedWhileLocked()).toBe(true)
+    const readOnly = swap(AD, 'db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {', 'db.WithinRequestTenantTxOpts(ctx, s.pool, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {')
+    expect(deleteAccountRefusedWhileLocked(readOnly)).toBe(false)
+    const tenant = readSource('internal/platform/db/tenant.go')
+    expect(deleteAccountRefusedWhileLocked(readSource(AD), tenant.replace('return ErrWorkspaceLocked', 'return nil'))).toBe(false)
+  })
+
   it('DEL-10-02 A6 the lock refuses writes and any admin cancels', () => {
     expect(lockRefusesWrites()).toBe(true)
     expect(anyAdminCancels()).toBe(true)
@@ -964,6 +981,9 @@ describe('DEL-10-02: the account section states the deletion rules', () => {
     expect(sentence('A5')).toContain('types the workspace name to confirm')
     expect(deleteWorkspaceDialogNeedsTypedName()).toBe(true)
     expect(deleteWorkspaceDialogNeedsTypedName(swap(DLG, 'disabled={!canConfirm}', 'disabled={pending}'))).toBe(false)
+    const onInput = readSource(DLG).replace('disabled={!canConfirm}', 'disabled={pending}').replace('<input', '<input disabled={!canConfirm}')
+    expect(onInput).toContain('<input disabled={!canConfirm}')
+    expect(deleteWorkspaceDialogNeedsTypedName(onInput)).toBe(false)
     expect(deleteWorkspaceDialogNeedsTypedName(swap(DLG, 'nameMatches(typed, name) && !pending', '!pending'))).toBe(false)
     expect(deleteWorkspaceDialogNeedsTypedName(readSource(DLG), swap(LIB, 'return typed === name', 'return true'))).toBe(false)
   })
@@ -982,6 +1002,8 @@ describe('DEL-10-02: the account section states the deletion rules', () => {
     expect(sentence('A6')).toContain(`Any admin can cancel the deletion until the ${DELETION_GRACE_DAYS} days end`)
     expect(cancelRefusedOnceThePurgeStarted()).toBe(true)
     expect(cancelRefusedOnceThePurgeStarted(swap(WD, 'return ErrDeletionUnderway', 'return err'))).toBe(false)
+    const relaxed = '-- +goose Up\nCREATE OR REPLACE FUNCTION public.tenants_purge_guard() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql;\n-- +goose Down\nSELECT 1;'
+    expect(cancelRefusedOnceThePurgeStarted(readSource(WD), readSource('internal/tenancy/tenancy.go'), [...migrationUps(), relaxed])).toBe(false)
     expect(cancelRefusedOnceThePurgeStarted(readSource(WD), swap('internal/tenancy/tenancy.go', 'case errors.Is(err, ErrDeletionUnderway):\n\t\treturn http.StatusConflict', 'case errors.Is(err, ErrDeletionUnderway):\n\t\treturn http.StatusBadRequest'))).toBe(false)
   })
 
@@ -1031,9 +1053,11 @@ describe('DEL-10-03: the retention section states how long each copy lasts', () 
 
   it('DEL-10-03 R5 nothing in this repo prunes the sign-in audit table', () => {
     expect(nothingPrunesSigninAuditLog()).toBe(true)
-    expect(nothingPrunesSigninAuditLog(['package x', 'DELETE FROM auth.audit_log_entries WHERE created_at < now()'])).toBe(false)
-    expect(nothingPrunesSigninAuditLog(['DELETE FROM AUTH.AUDIT_LOG_ENTRIES'])).toBe(false)
-    expect(nothingPrunesSigninAuditLog(['// auth.audit_log_entries is GoTrue\'s', '/* audit_log_entries */'])).toBe(true)
+    expect(nothingPrunesSigninAuditLog([['internal/x.go', 'package x'], ['internal/y.sql', 'DELETE FROM auth.audit_log_entries WHERE created_at < now()']])).toBe(false)
+    expect(nothingPrunesSigninAuditLog([['db/bootstrap.sql', 'DELETE FROM auth.audit_log_entries']])).toBe(false)
+    expect(nothingPrunesSigninAuditLog([['scripts/prune.sh', 'psql -c "delete from audit_log_entries"']])).toBe(false)
+    expect(nothingPrunesSigninAuditLog([['Makefile', '\t@psql -c "DELETE FROM AUTH.AUDIT_LOG_ENTRIES"']])).toBe(false)
+    expect(nothingPrunesSigninAuditLog([['internal/a.go', '// auth.audit_log_entries is GoTrue\'s\n/* audit_log_entries */'], ['db/a.sql', '-- audit_log_entries\n/* audit_log_entries */'], ['scripts/a.sh', '# audit_log_entries'], ['x.yml', 'a: 1 # audit_log_entries']])).toBe(true)
   })
 
   it('DEL-10-03 R5 the audit-table scan reads a real population', () => {
@@ -1041,6 +1065,10 @@ describe('DEL-10-03: the retention section states how long each copy lasts', () 
     expect(files.length).toBeGreaterThan(200)
     expect(files).toContain('sidecar/auth/Dockerfile')
     expect(files).toContain('internal/workspacepurge/purge.go')
+    expect(files).toContain('db/bootstrap.sql')
+    expect(files).toContain('Makefile')
+    expect(files).toContain('docker-compose.yml')
+    expect(files.some((f) => f.startsWith('scripts/'))).toBe(true)
     expect(files.some((f) => /_test\.go$/.test(f))).toBe(false)
   })
 
@@ -1079,8 +1107,17 @@ describe('DEL-10-03: the retention section states how long each copy lasts', () 
 
   it('DEL-10-03 R6 the invitation column cannot be blanked', () => {
     expect(invitationKeepsInviteeEmail()).toBe(true)
-    const sql = readFileSync(join(REPO, 'migrations/20260709161252_invitations.sql'), 'utf8')
-    expect(invitationKeepsInviteeEmail(sql.replace('invitee_email text        NOT NULL', 'invitee_email text'))).toBe(false)
-    expect(invitationKeepsInviteeEmail(sql.replace('invitee_email text        NOT NULL', '-- invitee_email text NOT NULL\n    invitee_email text'))).toBe(false)
+    const ups = migrationUps()
+    const i = ups.findIndex((m) => m.includes('invitee_email text        NOT NULL'))
+    expect(i).toBeGreaterThanOrEqual(0)
+    const with0 = (m: string) => ups.map((x, j) => (j === i ? m : x))
+    const sql = ups[i]
+    expect(invitationKeepsInviteeEmail(with0(sql.replace('invitee_email text        NOT NULL', 'invitee_email text')))).toBe(false)
+    expect(invitationKeepsInviteeEmail(with0(sql.replace('invitee_email text        NOT NULL', '-- invitee_email text NOT NULL\n    invitee_email text')))).toBe(false)
+    const later = (m: string) => [...ups, `-- +goose Up\n${m}\n-- +goose Down\nSELECT 1;`]
+    expect(invitationKeepsInviteeEmail(later('ALTER TABLE public.invitations ALTER COLUMN invitee_email DROP NOT NULL;'))).toBe(false)
+    expect(invitationKeepsInviteeEmail(later('ALTER TABLE invitations DROP COLUMN invitee_email;'))).toBe(false)
+    expect(invitationKeepsInviteeEmail(later('DROP TABLE public.invitations;'))).toBe(false)
+    expect(invitationKeepsInviteeEmail(later('-- ALTER TABLE invitations ALTER COLUMN invitee_email DROP NOT NULL;'))).toBe(true)
   })
 })

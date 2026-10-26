@@ -378,7 +378,7 @@ export function Privacy() {
           </p>
           <p style={P}>
             The workspace is then locked for {DELETION_GRACE_DAYS} days. Nobody can create or change anything in it.
-            Members see the date it will be deleted and can sign out. Any admin can cancel the deletion until the{' '}
+            While it is locked, a member cannot delete their own account. Members see the date it will be deleted and can sign out. Any admin can cancel the deletion until the{' '}
             {DELETION_GRACE_DAYS} days end. Then our server deletes every invoice, file and member of the workspace, and
             erases the records of each member still in it, as described above.
           </p>
@@ -465,11 +465,11 @@ export function Privacy() {
               does not stop the demo form.
             </li>
             <li style={ITEM}>
-              <strong>Write to us.</strong> If you cannot sign in to an account, or never had one, email{' '}
+              <strong>Write to us.</strong> Email{' '}
               <a href={`mailto:${PRIVACY_CONTACT}`} className="ios-link" style={LINK}>
                 {PRIVACY_CONTACT}
               </a>{' '}
-              and tell us what you want done, and we will act on it. If you can sign in, you can delete your account
+              and tell us what you want done, and we will act on it. That works also if you cannot sign in to an account, or never had one. If you can sign in, you can delete your account
               yourself: open {APP_LABELS.page}, from your name at the foot of the sidebar, and choose{' '}
               {APP_LABELS.deleteAccount}. If you have registered or booked a demo, the
               records we hold are in HubSpot, in Resend and on our own server, and we can delete them. When signing in, signing up, resetting a password or keeping you signed in fails on our side, a Sentry error report may also hold the email address of the account involved. Analytics data sits with Google under an identifier that is not tied to your

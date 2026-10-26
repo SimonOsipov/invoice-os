@@ -223,7 +223,7 @@ export function sidebarOpensAccountPage(
 
 // Sentences the page states about deletion; Privacy.render.test.tsx pins each verbatim on the page.
 export const DELETION_SENTENCES: readonly { id: string; text: string }[] = [
-  { id: 'W1', text: `If you cannot sign in to an account, or never had one, email ${PRIVACY_CONTACT} and tell us what you want done, and we will act on it.` },
+  { id: 'W1', text: `Email ${PRIVACY_CONTACT} and tell us what you want done, and we will act on it. That works also if you cannot sign in to an account, or never had one.` },
   { id: 'W2', text: `If you can sign in, you can delete your account yourself: open ${APP_LABELS.page}, from your name at the foot of the sidebar, and choose ${APP_LABELS.deleteAccount}.` },
   { id: 'W3', text: 'If you have registered or booked a demo, the records we hold are in HubSpot, in Resend and on our own server, and we can delete them.' },
   { id: 'A1', text: `You can delete your account yourself. Open ${APP_LABELS.page}, from your name at the foot of the sidebar, and choose ${APP_LABELS.deleteAccount}.` },
@@ -231,7 +231,7 @@ export const DELETION_SENTENCES: readonly { id: string; text: string }[] = [
   { id: 'A3', text: 'The erasure deletes your sign-in account. Our own server also asks HubSpot to delete your contact permanently, together with the deals filed under it, and asks Resend to delete your contact. It deletes the copies of your registration and demo details that our own server holds under your email address, and it ends your subscription to the Blog newsletter if that address has one.' },
   { id: 'A4', text: `Your name stays in the audit log and in the history of each invoice of your workspace, the record of who did what, with ${DELETED_MARK} after it. If we never held a name for you, the history says Deleted member. Your membership record keeps your name and drops your email address.` },
   { id: 'A5', text: `An admin can delete the whole workspace. In ${APP_LABELS.settings}, under ${APP_LABELS.workspaceTab}, the admin chooses ${APP_LABELS.deleteWorkspace} and types the workspace name to confirm.` },
-  { id: 'A6', text: `The workspace is then locked for ${DELETION_GRACE_DAYS} days. Nobody can create or change anything in it. Members see the date it will be deleted and can sign out. Any admin can cancel the deletion until the ${DELETION_GRACE_DAYS} days end. Then our server deletes every invoice, file and member of the workspace, and erases the records of each member still in it, as described above.` },
+  { id: 'A6', text: `The workspace is then locked for ${DELETION_GRACE_DAYS} days. Nobody can create or change anything in it. While it is locked, a member cannot delete their own account. Members see the date it will be deleted and can sign out. Any admin can cancel the deletion until the ${DELETION_GRACE_DAYS} days end. Then our server deletes every invoice, file and member of the workspace, and erases the records of each member still in it, as described above.` },
   { id: 'A7', text: `If you are the only active member of a workspace, deleting your account deletes the workspace instead. Your account then goes when the workspace is deleted, ${DELETION_GRACE_DAYS} days later, not at once.` },
   { id: 'R1', text: 'This section covers the main copies in our own systems. It says how long they last after an account or a workspace is deleted.' },
   { id: 'R2', text: `When an admin deletes a workspace, it and everything in it stay for ${DELETION_GRACE_DAYS} days. Then our server deletes them.` },
@@ -337,6 +337,21 @@ export function anyAdminCancels(src: string = readSource('internal/tenancy/works
   return cancel.includes('role != "admin"') && !cancel.includes('deletion_scheduled_by')
 }
 
+// DeleteMyAccount runs in a read-write request transaction, which a locked workspace refuses.
+export function deleteAccountRefusedWhileLocked(
+  src: string = readSource('internal/tenancy/account_deletion.go'),
+  tenant: string = readSource('internal/platform/db/tenant.go'),
+  mapper: string = readSource('internal/tenancy/tenancy.go'),
+): boolean {
+  const body = goFunc(src, /func \(s \*Store\) DeleteMyAccount\b/, 'Store.DeleteMyAccount')
+  return (
+    body.includes('db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {') &&
+    !body.includes('ReadOnly') &&
+    lockRefusesWrites(tenant) &&
+    /errors\.Is\(err, db\.ErrWorkspaceLocked\):\s*return http\.StatusForbidden/.test(mapper)
+  )
+}
+
 // DeleteMyAccount ends the membership and queues the erasure through the same tx, inside one tenant transaction.
 export function deleteAccountEndsMembershipAndQueuesErasureInOneTx(
   src: string = readSource('internal/tenancy/account_deletion.go'),
@@ -346,6 +361,20 @@ export function deleteAccountEndsMembershipAndQueuesErasureInOneTx(
   const end = body.indexOf('endMembership(ctx, tx, caller.Subject)')
   const enqueue = body.indexOf('notifications.EnqueueErasure(ctx, tx,')
   return open > -1 && end > open && enqueue > end
+}
+
+// The JSX opening tag that carries the confirm testid: from its "<" to the first ">" outside braces.
+function confirmTag(dialog: string): string {
+  const at = dialog.indexOf('data-testid="delete-workspace-confirm"')
+  if (at < 0) return ''
+  const start = dialog.lastIndexOf('<', at)
+  let depth = 0
+  for (let i = start + 1; i < dialog.length; i++) {
+    if (dialog[i] === '{') depth++
+    else if (dialog[i] === '}') depth--
+    else if (dialog[i] === '>' && depth === 0) return dialog.slice(start, i + 1)
+  }
+  return ''
 }
 
 // The Confirm button of the delete-workspace dialog is disabled until the typed text equals the name.
@@ -358,7 +387,7 @@ export function deleteWorkspaceDialogNeedsTypedName(
     /return typed === name\b/.test(match) &&
     /canConfirm = nameMatches\(typed, name\)/.test(dialog) &&
     /data-testid="delete-workspace-confirm"/.test(dialog) &&
-    /disabled=\{!canConfirm\}[\s\S]*?data-testid="delete-workspace-confirm"/.test(dialog)
+    confirmTag(dialog).includes('disabled={!canConfirm}')
   )
 }
 
@@ -380,23 +409,30 @@ export function deletionNoticeShowsDateAndSignOut(
 export function cancelRefusedOnceThePurgeStarted(
   src: string = readSource('internal/tenancy/workspace_deletion.go'),
   mapper: string = readSource('internal/tenancy/tenancy.go'),
-  sql: string = readFileSync(join(REPO, 'migrations/20261026045351_deletion_purge_started.sql'), 'utf8'),
+  migrations: string[] = migrationUps(),
 ): boolean {
   const cancel = goFunc(src, /func \(s \*Store\) CancelWorkspaceDeletion\b/, 'Store.CancelWorkspaceDeletion')
   const clear = goFunc(src, /func clearDeletionSchedule\b/, 'clearDeletionSchedule')
+  const guard = lastDefinition(migrations, /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?tenants_purge_guard\(\)[\s\S]*?\$\$[\s\S]*?\$\$/i, 'the tenants_purge_guard function')
   return (
     cancel.includes('clearDeletionSchedule(ctx, tx)') &&
     /ConstraintName == "tenant_deletion_underway"[\s\S]*?return ErrDeletionUnderway/.test(clear) &&
     /errors\.Is\(err, ErrDeletionUnderway\):\s*return http\.StatusConflict/.test(mapper) &&
-    /OLD\.deletion_purge_started_at IS NOT NULL[\s\S]*?CONSTRAINT = 'tenant_deletion_underway'/.test(sql)
+    /OLD\.deletion_purge_started_at IS NOT NULL[\s\S]*?CONSTRAINT = 'tenant_deletion_underway'/.test(guard)
   )
 }
 
-// The days the tenants_deletion_guard trigger adds to the schedule.
-export function graceDays(
-  sql: string = readFileSync(join(REPO, 'migrations/20261026004500_workspace_deletion.sql'), 'utf8'),
-): number {
-  return Number(found(/deletion_scheduled_at \+ interval '(\d+) days'/.exec(sql)?.[1], 'the deletion interval'))
+// The text of the last migration that matches, so a later CREATE OR REPLACE wins.
+function lastDefinition(migrations: string[], re: RegExp, what: string): string {
+  let last: string | undefined
+  for (const sql of migrations) last = re.exec(sqlCode(sql.split('-- +goose Down')[0]))?.[0] ?? last
+  return found(last, what)
+}
+
+// The days the tenants_deletion_guard trigger adds to the schedule, per its last definition.
+export function graceDays(migrations: string[] = migrationUps()): number {
+  const fn = lastDefinition(migrations, /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?tenants_deletion_guard\(\)[\s\S]*?\$\$[\s\S]*?\$\$/i, 'the tenants_deletion_guard function')
+  return Number(found(/deletion_scheduled_at \+ interval '(\d+) days'/.exec(fn)?.[1], 'the deletion interval'))
 }
 
 // DEL-06 merged: the app has the export module. The page may mention the export only then.
@@ -411,7 +447,7 @@ export function gotrueVersion(
   return found(/^FROM ghcr\.io\/supabase\/auth:v(\d+\.\d+\.\d+)@/m.exec(src)?.[1], 'the GoTrue tag')
 }
 
-const PRUNE_ROOTS = ['internal', 'cmd', 'migrations', 'sidecar', '.github']
+const PRUNE_ROOTS = ['internal', 'cmd', 'migrations', 'sidecar', '.github', 'db', 'scripts', 'tools']
 const SKIP_DIRS = new Set(['node_modules', '.venv', '__pycache__', '.git'])
 
 function nonTestFiles(rel: string): string[] {
@@ -424,13 +460,30 @@ function nonTestFiles(rel: string): string[] {
 
 // No non-test file in this repo names the table GoTrue writes the deletion record to, so nothing reads or prunes it.
 export function signinScanFiles(): string[] {
-  return PRUNE_ROOTS.filter((r) => existsSync(join(REPO, r))).flatMap(nonTestFiles)
+  const roots = PRUNE_ROOTS.filter((r) => existsSync(join(REPO, r))).flatMap(nonTestFiles)
+  const top = readdirSync(REPO).filter((f) => f === 'Makefile' || /^docker-compose.*\.ya?ml$/.test(f))
+  return [...roots, ...top]
 }
 
-export function nothingPrunesSigninAuditLog(
-  texts: Iterable<string> = signinScanFiles().map((f) => readFileSync(join(REPO, f), 'utf8')),
-): boolean {
-  for (const t of texts) if (/audit_log_entries/i.test(stripComments(t))) return false
+const hashCode = (t: string): string => t.replace(/^[ \t]*#.*$/gm, '').replace(/\s#.*$/gm, '')
+
+function codeOf(file: string, text: string): string {
+  if (/\.sql$/.test(file)) return sqlCode(text)
+  if (/\.(?:sh|ya?ml|mk)$|(?:^|\/)(?:Makefile|Dockerfile[^/]*)$/.test(file)) return hashCode(text)
+  if (/\.(?:go|[cm]?[jt]sx?)$/.test(file)) return stripComments(text)
+  return text
+}
+
+// Pairs of [file, text]; a file with a NUL byte is binary and is skipped.
+export function signinScanTexts(): [string, string][] {
+  return signinScanFiles().flatMap((f): [string, string][] => {
+    const buf = readFileSync(join(REPO, f))
+    return buf.includes(0) ? [] : [[f, buf.toString('utf8')]]
+  })
+}
+
+export function nothingPrunesSigninAuditLog(texts: Iterable<[string, string]> = signinScanTexts()): boolean {
+  for (const [file, text] of texts) if (/audit_log_entries/i.test(codeOf(file, text))) return false
   return true
 }
 
@@ -477,9 +530,13 @@ export function staffLogIsAppendOnly(migrations: string[] = migrationUps()): boo
   return raises && rowTrigger && truncTrigger
 }
 
-// invitee_email is NOT NULL, so no erase can blank it.
-export function invitationKeepsInviteeEmail(
-  sql: string = readFileSync(join(REPO, 'migrations/20260709161252_invitations.sql'), 'utf8'),
-): boolean {
-  return /\binvitee_email\s+text\s+NOT NULL\b/.test(sqlCode(sql.split('-- +goose Down')[0]))
+// invitee_email is NOT NULL after the last migration, so no erase can blank it.
+export function invitationKeepsInviteeEmail(migrations: string[] = migrationUps()): boolean {
+  let notNull = false
+  for (const sql of migrations) {
+    const up = sqlCode(sql.split('-- +goose Down')[0])
+    if (/CREATE\s+TABLE\s+(?:IF NOT EXISTS\s+)?(?:public\.)?invitations\b[\s\S]*?\binvitee_email\s+text\s+NOT NULL\b/i.test(up)) notNull = true
+    if (/ALTER\s+COLUMN\s+invitee_email\s+(?:DROP\s+NOT\s+NULL|TYPE\b[^;]*DROP)|DROP\s+COLUMN\s+(?:IF EXISTS\s+)?invitee_email\b|RENAME\s+COLUMN\s+invitee_email\b|DROP\s+TABLE\s+(?:IF EXISTS\s+)?(?:public\.)?invitations\b|ALTER\s+TABLE\s+(?:IF EXISTS\s+)?(?:ONLY\s+)?(?:public\.)?invitations\s+RENAME\s+TO/i.test(up)) notNull = false
+  }
+  return notNull
 }

@@ -676,9 +676,11 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     expect(write).toContain(deletionSentence('W2'))
   })
 
-  it('DEL-10-01 W1 email stays the route for a person without access', () => {
+  it('DEL-10-01 W1 email is open to everyone and names the no-access case', () => {
     const item = writeToUsItem()
     expect(plain(item)).toContain(deletionSentence('W1'))
+    expect(deletionSentence('W1')).toMatch(/^Email /)
+    expect(deletionSentence('W1')).toContain('That works also if you cannot sign in to an account, or never had one.')
     expect(item).toContain(`href="mailto:${PRIVACY_CONTACT}"`)
   })
 

@@ -38,6 +38,19 @@ paths:
   - "frontend/app/src/lib/accountDeletion.ts"
   - "frontend/app/src/lib/workspaceDeletion.ts"
   - "sidecar/auth/Dockerfile"
+  - "internal/tenancy/store.go"
+  - "internal/tenancy/tenancy.go"
+  - "migrations/20260709161252_invitations.sql"
+  - "migrations/20261010080000_staff_audit_log*.sql"
+  - "migrations/20261026004500_workspace_deletion.sql"
+  - "migrations/20261026045351_deletion_purge_started.sql"
+  - "frontend/app/src/components/Sidebar.tsx"
+  - "frontend/app/src/components/AccountView.tsx"
+  - "frontend/app/src/components/WorkspaceSettings.tsx"
+  - "frontend/app/src/components/DeleteWorkspaceDialog.tsx"
+  - "frontend/app/src/components/WorkspaceDeletionNotice.tsx"
+  - "frontend/app/src/data.tsx"
+  - "frontend/app/src/glyphs.tsx"
 ---
 # Privacy page
 
@@ -117,6 +130,8 @@ Each line names a sentence of `DELETION_SENTENCES` and its backing. Check date: 
 - `A4`: `actor.Resolve` picks `actor.RemovedName` for a removed membership. The audit reader and the invoice history call it.
 - `A5`: `WorkspaceSettings.tsx`, `DeleteWorkspaceDialog.tsx` and `SETTINGS_TABS`.
 - `A6`, `R2`: the `tenants_deletion_guard` trigger sets the 30 days. `ErrWorkspaceLocked`, `CancelWorkspaceDeletion` and `workspacepurge.Purger` do the rest.
+- `A6` lock clause: `DeleteMyAccount` runs in a read-write request transaction, which a locked workspace refuses with `ErrWorkspaceLocked`. `deleteAccountRefusedWhileLocked()` pins it.
+- Read the last definition of a trigger function across all migrations. A later `CREATE OR REPLACE` wins.
 - `A7`: `decideAccountDeletion` and `eraseMembers`.
 - `R3`: Cloud SQL `prod` has `retainedBackups` 7 and `transactionLogRetentionDays` 7. Source: infra `terraform/sql.tf`. Read with `gcloud sql instances describe prod --project ascomply-prod --format='yaml(settings.backupConfiguration,region,state)'`.
 - `R4`: bucket `ascomply-prod-documents` has `soft_delete_policy.retentionDurationSeconds` 604800. Source: infra `terraform/storage.tf`. Read with `gcloud storage buckets describe gs://ascomply-prod-documents --project ascomply-prod --format='yaml(name,location,soft_delete_policy)'`.

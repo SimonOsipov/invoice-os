@@ -84,10 +84,11 @@ func TestWorkspaceDeletion_AnAdminSchedulesAndItIsAudited(t *testing.T) {
 	w := newInvWorld(t, obi, "Ada Obi")
 	before := time.Now()
 
-	due, err := w.store.ScheduleWorkspaceDeletion(w.adminCtx(), obi)
+	sched, err := w.store.ScheduleWorkspaceDeletion(w.adminCtx(), obi)
 	if err != nil {
 		t.Fatalf("ScheduleWorkspaceDeletion: %v", err)
 	}
+	due := sched.DueAt
 	near(t, "due", due, before.Add(720*time.Hour), time.Minute)
 
 	c := deletionOf(t, w.super, w.tenant)
@@ -632,17 +633,18 @@ func TestWorkspaceDeletion_ACancelTouchesOnlyTheCallersWorkspace(t *testing.T) {
 
 func TestWorkspaceDeletion_ACancelledWorkspaceCanBeScheduledAgain(t *testing.T) {
 	w := newInvWorld(t, obi, "Ada Obi")
-	first, err := w.store.ScheduleWorkspaceDeletion(w.adminCtx(), obi)
+	firstS, err := w.store.ScheduleWorkspaceDeletion(w.adminCtx(), obi)
 	if err != nil {
 		t.Fatalf("first schedule: %v", err)
 	}
 	if err := w.store.CancelWorkspaceDeletion(w.adminCtx()); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
-	second, err := w.store.ScheduleWorkspaceDeletion(w.adminCtx(), obi)
+	secondS, err := w.store.ScheduleWorkspaceDeletion(w.adminCtx(), obi)
 	if err != nil {
 		t.Fatalf("schedule after the cancel: %v", err)
 	}
+	first, second := firstS.DueAt, secondS.DueAt
 	if !second.After(first) {
 		t.Errorf("second due %v is not after the first %v: the cancelled schedule was kept", second, first)
 	}

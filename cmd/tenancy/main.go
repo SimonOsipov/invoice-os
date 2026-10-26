@@ -63,7 +63,6 @@ func main() {
 	// gateway proxies it unchanged: its mount carries no method.
 	app.Mux.HandleFunc("PATCH /v1/memberships/{user_id}", tenancy.SetMembershipStatusHandler(store.SetMembershipStatus, app.Logger))
 	app.Mux.HandleFunc("POST /v1/memberships/{user_id}/remove", tenancy.RemoveMemberHandler(store.RemoveMember, app.Logger))
-	app.Mux.HandleFunc("POST /v1/workspace/deletion", tenancy.ScheduleDeletionHandler(store.ScheduleWorkspaceDeletion, app.Logger))
 	app.Mux.HandleFunc("POST /v1/workspace/deletion/cancel", tenancy.CancelDeletionHandler(store.CancelWorkspaceDeletion, app.Logger))
 
 	// PUT /v1/memberships/{user_id}/clients — admin-only whole-set replace of a member's client access.
@@ -74,11 +73,10 @@ func main() {
 	app.Mux.HandleFunc("POST /v1/workspaces", tenancy.ProvisionHandler(store.ProvisionWorkspace, app.Logger))
 
 	// Invite routes: the sender is chosen once at boot from the environment.
-	inviter := &tenancy.Inviter{
-		Store:  store,
-		Sender: inviteSender(os.Getenv, http.DefaultTransport.(*http.Transport).Clone(), app.Logger),
-		Logger: app.Logger,
-	}
+	sender := inviteSender(os.Getenv, http.DefaultTransport.(*http.Transport).Clone(), app.Logger)
+	inviter := &tenancy.Inviter{Store: store, Sender: sender, Logger: app.Logger}
+	notifier := &tenancy.DeletionNotifier{Store: store, Sender: sender, Logger: app.Logger}
+	app.Mux.HandleFunc("POST /v1/workspace/deletion", tenancy.ScheduleDeletionHandler(notifier.Schedule, app.Logger))
 	app.Mux.HandleFunc("POST /v1/invitations", tenancy.InvitationsCreateHandler(inviter.Invite, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invitations", tenancy.InvitationsListHandler(store.ListInvitations, app.Logger))
 	app.Mux.HandleFunc("POST /v1/invitations/{id}/resend", tenancy.InvitationResendHandler(inviter.Resend, app.Logger))

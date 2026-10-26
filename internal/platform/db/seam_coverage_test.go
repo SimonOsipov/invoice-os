@@ -712,34 +712,35 @@ func (e scCoreExemption) covers(s scCoreSite) bool {
 
 // scCoreAllowlist is every caller allowed to reach the identity-free core.
 var scCoreAllowlist = []scCoreExemption{
-	{pkg: "internal/submission"},                                                           // River job workers; the job row carries its tenant and there is no request identity to gate
-	{pkg: "internal/reconciliation"},                                                       // the sweep worker, same shape: a schedule opened it, not a caller
-	{file: "internal/dashboard/snapshot.go", fn: "RunOnce"},                                // the daily snapshot ticker in cmd/worker; a schedule opened it, not a caller
-	{pkg: "internal/demodocs"},                                                             // boot-time document seeder; it runs to completion before the first request is served
-	{pkg: "internal/demopolicy"},                                                           // boot-time approval-policy seeder, on the same pre-request boot phase
-	{file: "internal/extraction/store.go"},                                                 // the extraction worker's store; a River job carries its own tenant and there is no request identity to gate
-	{file: "internal/extraction/worker.go"},                                                // the extraction River worker itself, same shape: the job row carries the tenant
-	{file: "internal/extraction/anchor_store.go"},                                          // the learned-rule read, same shape as store.go: no request path reaches it
-	{file: "internal/importer/backfill.go"},                                                // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
-	{file: "internal/invoice/revalidate.go"},                                               // operator CLI and the reconciliation re-checks (version and custom-rule) only, and internal/invoice is the largest HTTP-serving package in the tree
-	{file: "internal/staffjobs/store.go", fn: "Redrive"},                                   // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
-	{file: "internal/staffjobs/store.go", fn: "Cancel"},                                    // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
-	{file: "internal/tenancy/store.go", fn: "Me"},                                          // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
-	{file: "internal/tenancy/store.go", fn: "provisionAttempt"},                            // ProvisionWorkspace's write; the caller has no membership yet, so the seam would refuse before the closure
-	{file: "internal/tenancy/store.go", fn: "holdsRemovedRow"},                             // ProvisionWorkspace's retry probe: the caller's removed row in the derived tenant
-	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},                           // the token is the only credential and names the invite; there is no caller to gate
-	{file: "internal/tenancy/store.go", fn: "AcceptInvitation"},                            // the invitee has no membership in the invite's tenant yet; the seam would refuse before the closure
-	{file: "internal/tenancy/store.go", fn: "acceptInTenant"},                              // the shared tail of AcceptInvitation and AcceptInvitationByID, same reason
-	{file: "internal/tenancy/store.go", fn: "MyPendingInvitations"},                        // the caller has no membership; the email filter is the guard
-	{file: "internal/tenancy/store.go", fn: "AcceptInvitationByID"},                        // the caller has no membership; the email filter is the guard
-	{file: "internal/tenancy/invite_registration.go", fn: "InvitationPendingForEmail"},     // a gateway-token route; there is no caller to gate
-	{file: "internal/tenancy/invite_registration.go", fn: "ClaimInvitationRegistration"},   // a gateway-token route; the token names the invite and there is no caller to gate
-	{file: "internal/tenancy/workspace_deletion.go", fn: "CancelWorkspaceDeletion"},        // cancels a locked workspace, which the seam refuses; the method gates the active admin itself
-	{file: "internal/tenancy/invite_registration.go", fn: "ReleaseInvitationRegistration"}, // a gateway-token route; the token names the invite and there is no caller to gate
-	{file: "internal/aicalls/recorder.go", fn: "write"},                                    // a background usage row written after the AI call returned; the tenant is the identity the call ran under, and no request context is left to gate
-	{file: "internal/archive/staff.go", fn: "withinStaffTenant"},                           // staff read: the path tenant is checked by a staff_read_ function in db.WithinStaffTx; READ ONLY tenant tx
-	{file: "internal/customer/backfill.go", fn: "Backfill"},                                // operator CLI and the demo-seed boot step only; internal/customer serves HTTP, so a package exemption would un-gate the customer handlers
-	{file: "cmd/migrate/purgecheck.go", fn: "purgeCheckRun"},                               // preview-only deploy probe in the migrate job; no request reaches it
+	{pkg: "internal/submission"},                                                            // River job workers; the job row carries its tenant and there is no request identity to gate
+	{pkg: "internal/reconciliation"},                                                        // the sweep worker, same shape: a schedule opened it, not a caller
+	{file: "internal/dashboard/snapshot.go", fn: "RunOnce"},                                 // the daily snapshot ticker in cmd/worker; a schedule opened it, not a caller
+	{pkg: "internal/demodocs"},                                                              // boot-time document seeder; it runs to completion before the first request is served
+	{pkg: "internal/demopolicy"},                                                            // boot-time approval-policy seeder, on the same pre-request boot phase
+	{file: "internal/extraction/store.go"},                                                  // the extraction worker's store; a River job carries its own tenant and there is no request identity to gate
+	{file: "internal/extraction/worker.go"},                                                 // the extraction River worker itself, same shape: the job row carries the tenant
+	{file: "internal/extraction/anchor_store.go"},                                           // the learned-rule read, same shape as store.go: no request path reaches it
+	{file: "internal/importer/backfill.go"},                                                 // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
+	{file: "internal/invoice/revalidate.go"},                                                // operator CLI and the reconciliation re-checks (version and custom-rule) only, and internal/invoice is the largest HTTP-serving package in the tree
+	{file: "internal/staffjobs/store.go", fn: "Redrive"},                                    // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
+	{file: "internal/staffjobs/store.go", fn: "Cancel"},                                     // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
+	{file: "internal/tenancy/store.go", fn: "Me"},                                           // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
+	{file: "internal/tenancy/store.go", fn: "provisionAttempt"},                             // ProvisionWorkspace's write; the caller has no membership yet, so the seam would refuse before the closure
+	{file: "internal/tenancy/store.go", fn: "holdsRemovedRow"},                              // ProvisionWorkspace's retry probe: the caller's removed row in the derived tenant
+	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},                            // the token is the only credential and names the invite; there is no caller to gate
+	{file: "internal/tenancy/store.go", fn: "AcceptInvitation"},                             // the invitee has no membership in the invite's tenant yet; the seam would refuse before the closure
+	{file: "internal/tenancy/store.go", fn: "acceptInTenant"},                               // the shared tail of AcceptInvitation and AcceptInvitationByID, same reason
+	{file: "internal/tenancy/store.go", fn: "MyPendingInvitations"},                         // the caller has no membership; the email filter is the guard
+	{file: "internal/tenancy/store.go", fn: "AcceptInvitationByID"},                         // the caller has no membership; the email filter is the guard
+	{file: "internal/tenancy/invite_registration.go", fn: "InvitationPendingForEmail"},      // a gateway-token route; there is no caller to gate
+	{file: "internal/tenancy/invite_registration.go", fn: "ClaimInvitationRegistration"},    // a gateway-token route; the token names the invite and there is no caller to gate
+	{file: "internal/tenancy/workspace_deletion.go", fn: "CancelWorkspaceDeletion"},         // cancels a locked workspace, which the seam refuses; the method gates the active admin itself
+	{file: "internal/tenancy/workspace_deletion_mail.go", fn: "RecordDeletionLinkDelivery"}, // records a deletion mail's outcome after the lock commits; scoped to the caller's own tenant
+	{file: "internal/tenancy/invite_registration.go", fn: "ReleaseInvitationRegistration"},  // a gateway-token route; the token names the invite and there is no caller to gate
+	{file: "internal/aicalls/recorder.go", fn: "write"},                                     // a background usage row written after the AI call returned; the tenant is the identity the call ran under, and no request context is left to gate
+	{file: "internal/archive/staff.go", fn: "withinStaffTenant"},                            // staff read: the path tenant is checked by a staff_read_ function in db.WithinStaffTx; READ ONLY tenant tx
+	{file: "internal/customer/backfill.go", fn: "Backfill"},                                 // operator CLI and the demo-seed boot step only; internal/customer serves HTTP, so a package exemption would un-gate the customer handlers
+	{file: "cmd/migrate/purgecheck.go", fn: "purgeCheckRun"},                                // preview-only deploy probe in the migrate job; no request reaches it
 }
 
 // scCoreSite is one call of the ungated core, attributed to the INNERMOST

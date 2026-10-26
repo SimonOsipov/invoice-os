@@ -26,9 +26,21 @@ type CancelDeletionFunc func(ctx context.Context) error
 // maxScheduleDeletionBodyBytes bounds the schedule body before it is decoded.
 const maxScheduleDeletionBodyBytes = 4 << 10
 
+// IssuedDeletionLink is one minted cancel link. Token exists only here, for the mail.
+type IssuedDeletionLink struct{ ID, Email, Token string }
+
+// ScheduledDeletion is the outcome of a schedule: the due time and the links to mail.
+type ScheduledDeletion struct {
+	DueAt                time.Time
+	Workspace, Requester string
+	Links                []IssuedDeletionLink
+}
+
 // ScheduleWorkspaceDeletion locks the caller's workspace for deletion 30 days out. The caller must be an
-// active admin who types the exact name; the audit row commits in the same transaction.
-func (s *Store) ScheduleWorkspaceDeletion(ctx context.Context, typedName string) (time.Time, error) {
+// active admin who types the exact name; the audit row and one cancel link per other active admin
+// commit in the same transaction.
+func (s *Store) ScheduleWorkspaceDeletion(ctx context.Context, typedName string) (ScheduledDeletion, error) {
+	var out ScheduledDeletion
 	var due time.Time
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		caller, _ := auth.IdentityFromContext(ctx)
@@ -56,13 +68,67 @@ func (s *Store) ScheduleWorkspaceDeletion(ctx context.Context, typedName string)
 			}
 			return err
 		}
-		return audit.Record(ctx, tx, caller.Subject, "workspace.deletion_scheduled",
-			map[string]any{"due_at": due.UTC().Format(time.RFC3339)})
+		if err := audit.Record(ctx, tx, caller.Subject, "workspace.deletion_scheduled",
+			map[string]any{"due_at": due.UTC().Format(time.RFC3339)}); err != nil {
+			return err
+		}
+		var requester string
+		if err := tx.QueryRow(ctx,
+			`SELECT COALESCE(NULLIF(display_name, ''), email, '') FROM memberships WHERE user_id = $1`,
+			caller.Subject).Scan(&requester); err != nil {
+			return err
+		}
+		links, err := issueDeletionLinks(ctx, tx, caller.TenantID, caller.Subject, due)
+		if err != nil {
+			return err
+		}
+		out = ScheduledDeletion{DueAt: due, Workspace: name, Requester: requester, Links: links}
+		return nil
 	})
 	if err != nil {
-		return time.Time{}, err
+		return ScheduledDeletion{}, err
 	}
-	return due, nil
+	return out, nil
+}
+
+// issueDeletionLinks writes one link per other active admin with an email; the link dies with the due time.
+func issueDeletionLinks(ctx context.Context, tx pgx.Tx, tenantID, subject string, due time.Time) ([]IssuedDeletionLink, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT user_id::text, email FROM memberships
+		  WHERE role = 'admin' AND status = 'active' AND user_id <> $1 AND email IS NOT NULL
+		  ORDER BY user_id`, subject)
+	if err != nil {
+		return nil, err
+	}
+	type admin struct{ id, email string }
+	var admins []admin
+	for rows.Next() {
+		var a admin
+		if err := rows.Scan(&a.id, &a.email); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		admins = append(admins, a)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var links []IssuedDeletionLink
+	for _, a := range admins {
+		tok, hash, err := mintToken()
+		if err != nil {
+			return nil, err
+		}
+		var id string
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO workspace_deletion_links (tenant_id, recipient_user_id, token_hash, expires_at)
+			 VALUES ($1, $2, $3, $4) RETURNING id::text`, tenantID, a.id, hash, due).Scan(&id); err != nil {
+			return nil, err
+		}
+		links = append(links, IssuedDeletionLink{ID: id, Email: a.email, Token: tok})
+	}
+	return links, nil
 }
 
 // CancelWorkspaceDeletion clears a schedule. It skips the seam, which refuses a locked workspace,

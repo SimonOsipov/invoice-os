@@ -13,7 +13,7 @@ paths:
 - Write the `staff_read_` SQL literal inside the `WithinStaffTx` closure. `TestRLS_StaffReadFunctionsAreCalledOnlyInsideWithinStaffTx` fails otherwise.
 - Call `WithinTenantTx` only from a worker, a boot-time seeder, an operator CLI or an exempt method. Each needs an `scCoreAllowlist` entry with a reason.
 - Give a staff route that reads one tenant through `WithinTenantTxOpts` a func-scoped `scCoreAllowlist` entry, as `withinStaffTenant` has.
-- These `tenancy.Store` methods skip the gate: `Me`, `ProvisionWorkspace`, `AcceptInvitation`, `AcceptInvitationByID`, `MyPendingInvitations`, `PreviewInvitation`, `InvitationPendingForEmail`, `ClaimInvitationRegistration`, `ReleaseInvitationRegistration` and `CancelWorkspaceDeletion`.
+- These `tenancy.Store` methods skip the gate: `Me`, `ProvisionWorkspace`, `AcceptInvitation`, `AcceptInvitationByID`, `MyPendingInvitations`, `PreviewInvitation`, `InvitationPendingForEmail`, `ClaimInvitationRegistration`, `ReleaseInvitationRegistration`, `CancelWorkspaceDeletion` and `RecordDeletionLinkDelivery`.
 - Call `invitee_account_state` only through `accountState` in `internal/tenancy/store.go`.
 - Call `accountState` only from `PreviewInvitation` and `ListInvitations`, with an address read from an `invitations` row in the same transaction. `TestInviteeAccountStateCalledOnlyByTheStore` fails otherwise.
 - Guard `AcceptInvitationByID` and `MyPendingInvitations` with the email of the identity header only. The caller has no membership.

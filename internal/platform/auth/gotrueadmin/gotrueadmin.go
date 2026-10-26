@@ -1,4 +1,4 @@
-// Package gotrueadmin deletes accounts through GoTrue's admin API.
+// Package gotrueadmin reads and deletes accounts through GoTrue's admin API.
 package gotrueadmin
 
 import (
@@ -112,10 +112,10 @@ func FromEnv(getenv func(string) string, onCloudRun bool, rt http.RoundTripper) 
 	return New(url, keys, &http.Client{Transport: rt, Timeout: callTimeout})
 }
 
-// DeleteUser deletes the account; 200 and 404 are success.
-func (c *Client) DeleteUser(ctx context.Context, userID string) error {
+// call sends an authenticated request for one account and returns the response with its body unread.
+func (c *Client) call(ctx context.Context, method, userID string) (*http.Response, error) {
 	if id, err := uuid.Parse(userID); err != nil || id.String() != userID {
-		return errors.New("gotrueadmin: user id is not a canonical UUID")
+		return nil, errors.New("gotrueadmin: user id is not a canonical UUID")
 	}
 	now := time.Now()
 	tok := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
@@ -124,16 +124,25 @@ func (c *Client) DeleteUser(ctx context.Context, userID string) error {
 	tok.Header["kid"] = c.kid
 	signed, err := tok.SignedString(c.key)
 	if err != nil {
-		return errors.New("gotrueadmin: signing failed")
+		return nil, errors.New("gotrueadmin: signing failed")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.base+"/admin/users/"+userID, nil)
+	req, err := http.NewRequestWithContext(ctx, method, c.base+"/admin/users/"+userID, nil)
 	if err != nil {
-		return &StatusError{}
+		return nil, &StatusError{}
 	}
 	req.Header.Set("Authorization", "Bearer "+signed)
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return &StatusError{}
+		return nil, &StatusError{}
+	}
+	return resp, nil
+}
+
+// DeleteUser deletes the account; 200 and 404 are success.
+func (c *Client) DeleteUser(ctx context.Context, userID string) error {
+	resp, err := c.call(ctx, http.MethodDelete, userID)
+	if err != nil {
+		return err
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswer))
@@ -141,4 +150,29 @@ func (c *Client) DeleteUser(ctx context.Context, userID string) error {
 		return nil
 	}
 	return &StatusError{Status: resp.StatusCode}
+}
+
+// UserEmail reads the account's sign-in email; a missing account answers "" and nil.
+func (c *Client) UserEmail(ctx context.Context, userID string) (string, error) {
+	resp, err := c.call(ctx, http.MethodGet, userID)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		var u struct {
+			Email string `json:"email"`
+		}
+		if json.NewDecoder(io.LimitReader(resp.Body, maxAnswer)).Decode(&u) != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswer))
+			return "", &StatusError{Status: resp.StatusCode}
+		}
+		return u.Email, nil
+	case http.StatusNotFound:
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswer))
+		return "", nil
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswer))
+	return "", &StatusError{Status: resp.StatusCode}
 }

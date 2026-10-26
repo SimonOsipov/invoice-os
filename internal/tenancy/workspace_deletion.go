@@ -98,13 +98,23 @@ func (s *Store) CancelWorkspaceDeletion(ctx context.Context) error {
 		if due == nil {
 			return nil
 		}
-		if _, err := tx.Exec(ctx,
-			`UPDATE tenants SET deletion_scheduled_at = NULL, deletion_scheduled_by = NULL`); err != nil {
+		if err := clearDeletionSchedule(ctx, tx); err != nil {
 			return err
 		}
 		return audit.Record(ctx, tx, id.Subject, "workspace.deletion_cancelled",
 			map[string]any{"due_at": due.UTC().Format(time.RFC3339)})
 	})
+}
+
+// clearDeletionSchedule is the only clear of a schedule. The tenants_purge_guard trigger refuses
+// it once the purge started.
+func clearDeletionSchedule(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, `UPDATE tenants SET deletion_scheduled_at = NULL, deletion_scheduled_by = NULL`)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.ConstraintName == "tenant_deletion_underway" {
+		return ErrDeletionUnderway
+	}
+	return err
 }
 
 type scheduleDeletionRequest struct {

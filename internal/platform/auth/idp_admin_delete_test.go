@@ -39,6 +39,13 @@ func deleteAs(t *testing.T, c *gotrueadmin.Client, id string) error {
 	return c.DeleteUser(ctx, id)
 }
 
+func emailAs(t *testing.T, c *gotrueadmin.Client, id string) (string, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return c.UserEmail(ctx, id)
+}
+
 func countAuthRows(t *testing.T, conn *pgx.Conn, sql, id string) int {
 	t.Helper()
 	var n int
@@ -188,5 +195,21 @@ func TestIdP_AnHS256ServiceRoleTokenIsRefused(t *testing.T) {
 	}
 	if n := countAuthRows(t, conn, usersSQL, u.id); n != 0 {
 		t.Errorf("control: the real key left %d rows", n)
+	}
+}
+
+func TestIdP_AdminUserEmailReadsTheSignInEmail(t *testing.T) {
+	base := idpURL(t)
+	admin := adminClient(t, base)
+	u := signUp(t, superConn(t), base)
+
+	if got, err := emailAs(t, admin, u.id); err != nil || got != u.email {
+		t.Fatalf("UserEmail of a real account = %q, %v; want the sign-up address", got, err)
+	}
+	if err := deleteAs(t, admin, u.id); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if got, err := emailAs(t, admin, u.id); err != nil || got != "" {
+		t.Errorf("UserEmail after DeleteUser = %q, %v; want \"\", nil", got, err)
 	}
 }

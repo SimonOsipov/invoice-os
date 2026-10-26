@@ -56,16 +56,22 @@ const (
 // eraseKinds are the job kinds that can carry a person.
 var eraseKinds = []string{DeliverArgs{}.Kind(), DemoDealArgs{}.Kind(), RegistrantArgs{}.Kind(), BlogSyncArgs{}.Kind()}
 
+// UsableEraseEmail reports whether EnqueueErasure accepts the address.
+func UsableEraseEmail(email string) bool {
+	n := len(strings.ToLower(strings.TrimSpace(email)))
+	return n >= 3 && n <= 254
+}
+
 // EnqueueErasure records the erasure and queues its job in tx. A repeat call resets the row and queues another job.
 func EnqueueErasure(ctx context.Context, tx pgx.Tx, rc *river.Client[pgx.Tx], userID, email string) error {
 	id, err := uuid.Parse(userID)
 	if err != nil {
 		return errors.New("notifications: erase user id is not a UUID")
 	}
-	email = strings.ToLower(strings.TrimSpace(email))
-	if len(email) < 3 || len(email) > 254 {
+	if !UsableEraseEmail(email) {
 		return errors.New("notifications: erase email is blank or out of range")
 	}
+	email = strings.ToLower(strings.TrimSpace(email))
 	var gen int64
 	err = tx.QueryRow(ctx, `
 		INSERT INTO person_erasures (user_id, email) VALUES ($1, $2)

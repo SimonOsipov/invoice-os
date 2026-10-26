@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -147,6 +148,7 @@ func TestCancelDeletionHandler_MapsEveryOutcome(t *testing.T) {
 		msg    string
 	}{
 		{"a non-admin", ErrCancelDeletionNotPermitted, http.StatusForbidden, "only an admin can cancel the deletion"},
+		{"a started purge", fmt.Errorf("wrap: %w", ErrDeletionUnderway), http.StatusConflict, "this workspace is already being deleted"},
 	}, deletionRefusals...)
 	for _, tc := range rows {
 		t.Run(tc.name, func(t *testing.T) {

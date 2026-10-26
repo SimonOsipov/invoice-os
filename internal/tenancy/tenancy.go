@@ -464,6 +464,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusForbidden, "only an admin can delete the workspace"
 	case errors.Is(err, ErrCancelDeletionNotPermitted):
 		return http.StatusForbidden, "only an admin can cancel the deletion"
+	case errors.Is(err, ErrDeletionLinkNotValid):
+		return http.StatusForbidden, "this cancel link is no longer valid"
 	case errors.Is(err, ErrWorkspaceNameMismatch):
 		return http.StatusBadRequest, "the workspace name does not match"
 	case errors.Is(err, ErrHouseWorkspace):

@@ -288,7 +288,7 @@ func TestWorkspaceDeletion_AnAdminCancelsAndTheWorkspaceUnlocks(t *testing.T) {
 		t.Fatalf("ListMemberships while locked: err = %v, want db.ErrWorkspaceLocked", err)
 	}
 
-	if err := w.store.CancelWorkspaceDeletion(w.as(other)); err != nil {
+	if _, err := w.store.CancelWorkspaceDeletion(w.as(other)); err != nil {
 		t.Fatalf("CancelWorkspaceDeletion: %v", err)
 	}
 	if c := deletionOf(t, w.super, w.tenant); !c.empty() {
@@ -332,7 +332,7 @@ func TestWorkspaceDeletion_OnlyAnActiveAdminCancels(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := w.store.CancelWorkspaceDeletion(tc.ctx)
+			_, err := w.store.CancelWorkspaceDeletion(tc.ctx)
 			if !errors.Is(err, tc.want) {
 				t.Errorf("err = %v, want %v", err, tc.want)
 			}
@@ -348,7 +348,7 @@ func TestWorkspaceDeletion_OnlyAnActiveAdminCancels(t *testing.T) {
 
 func TestWorkspaceDeletion_CancelOfAnUnscheduledWorkspaceIsANoOp(t *testing.T) {
 	w := newInvWorld(t, obi, "Ada Obi")
-	if err := w.store.CancelWorkspaceDeletion(w.adminCtx()); err != nil {
+	if _, err := w.store.CancelWorkspaceDeletion(w.adminCtx()); err != nil {
 		t.Errorf("CancelWorkspaceDeletion on an unscheduled workspace: %v, want nil", err)
 	}
 	if n := auditCount(t, w.app, w.tenant, evCancelled); n != 0 {
@@ -459,7 +459,7 @@ func TestWorkspaceDeletion_ALockedWorkspacesInviteReadsAsRevoked(t *testing.T) {
 		t.Errorf("ClaimInvitationRegistration err = %v, want ErrInvitationNotValid", err)
 	}
 
-	if err := w.store.CancelWorkspaceDeletion(w.adminCtx()); err != nil {
+	if _, err := w.store.CancelWorkspaceDeletion(w.adminCtx()); err != nil {
 		t.Fatalf("CancelWorkspaceDeletion: %v", err)
 	}
 	if got, err := w.store.PreviewInvitation(context.Background(), w.invite.Token); err != nil || got.Workspace != obi {
@@ -485,7 +485,7 @@ func TestWorkspaceDeletion_AFailedCancelAuditKeepsTheLock(t *testing.T) {
 	old := deletionOf(t, w.super, w.tenant)
 	drop := failAudit(t, w.super, w.tenant, evCancelled)
 
-	err := w.store.CancelWorkspaceDeletion(w.adminCtx())
+	_, err := w.store.CancelWorkspaceDeletion(w.adminCtx())
 	if err == nil {
 		t.Fatal("CancelWorkspaceDeletion succeeded although its audit write fails")
 	}
@@ -498,7 +498,7 @@ func TestWorkspaceDeletion_AFailedCancelAuditKeepsTheLock(t *testing.T) {
 	}
 
 	drop()
-	if err := w.store.CancelWorkspaceDeletion(w.adminCtx()); err != nil {
+	if _, err := w.store.CancelWorkspaceDeletion(w.adminCtx()); err != nil {
 		t.Errorf("cancel after the trigger is gone: %v", err)
 	}
 }
@@ -509,8 +509,8 @@ func TestWorkspaceDeletion_TwoConcurrentCancelsAuditOnce(t *testing.T) {
 	lockByOwner(t, w.super, w.tenant, w.admin)
 
 	errA, errB := race(
-		func() error { return w.store.CancelWorkspaceDeletion(w.adminCtx()) },
-		func() error { return w.store.CancelWorkspaceDeletion(w.as(second)) },
+		func() error { _, err := w.store.CancelWorkspaceDeletion(w.adminCtx()); return err },
+		func() error { _, err := w.store.CancelWorkspaceDeletion(w.as(second)); return err },
 	)
 	if errA != nil || errB != nil {
 		t.Errorf("results = %v, %v, want both nil", errA, errB)
@@ -534,7 +534,7 @@ func TestWorkspaceDeletion_AScheduleRacingACancelEndsSerially(t *testing.T) {
 
 		errS, errC := race(
 			func() error { _, err := w.store.ScheduleWorkspaceDeletion(w.adminCtx(), obi); return err },
-			func() error { return w.store.CancelWorkspaceDeletion(w.as(second)) },
+			func() error { _, err := w.store.CancelWorkspaceDeletion(w.as(second)); return err },
 		)
 		if errS != nil || errC != nil {
 			t.Fatalf("round %d: schedule err = %v, cancel err = %v, want both nil", round, errS, errC)
@@ -610,7 +610,7 @@ func TestWorkspaceDeletion_ACancelTouchesOnlyTheCallersWorkspace(t *testing.T) {
 	bDue := deletionOf(t, b.super, b.tenant).DueAt
 
 	// The admin of A cancels: A unlocks, B stays locked.
-	if err := a.store.CancelWorkspaceDeletion(a.adminCtx()); err != nil {
+	if _, err := a.store.CancelWorkspaceDeletion(a.adminCtx()); err != nil {
 		t.Fatalf("cancel in A: %v", err)
 	}
 	if c := deletionOf(t, a.super, a.tenant); !c.empty() {
@@ -623,7 +623,7 @@ func TestWorkspaceDeletion_ACancelTouchesOnlyTheCallersWorkspace(t *testing.T) {
 		t.Errorf("B has %d %s rows, want 0", n, evCancelled)
 	}
 	// A second cancel is a no-op and writes no second row.
-	if err := a.store.CancelWorkspaceDeletion(a.adminCtx()); err != nil {
+	if _, err := a.store.CancelWorkspaceDeletion(a.adminCtx()); err != nil {
 		t.Errorf("second cancel: %v, want nil", err)
 	}
 	if n := auditCount(t, a.app, a.tenant, evCancelled); n != 1 {
@@ -637,7 +637,7 @@ func TestWorkspaceDeletion_ACancelledWorkspaceCanBeScheduledAgain(t *testing.T) 
 	if err != nil {
 		t.Fatalf("first schedule: %v", err)
 	}
-	if err := w.store.CancelWorkspaceDeletion(w.adminCtx()); err != nil {
+	if _, err := w.store.CancelWorkspaceDeletion(w.adminCtx()); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
 	secondS, err := w.store.ScheduleWorkspaceDeletion(w.adminCtx(), obi)

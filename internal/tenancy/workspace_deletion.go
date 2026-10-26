@@ -2,6 +2,7 @@ package tenancy
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -104,8 +105,10 @@ func (s *Store) ScheduleWorkspaceDeletion(ctx context.Context, typedName string)
 	return out, nil
 }
 
-// issueDeletionLinks writes one link per other active admin with an email; the link dies with the due time.
-func issueDeletionLinks(ctx context.Context, tx pgx.Tx, tenantID, subject string, due time.Time) ([]IssuedDeletionLink, error) {
+type adminRecipient struct{ id, email string }
+
+// otherActiveAdmins lists the active admins with an email other than subject, in a stable order.
+func otherActiveAdmins(ctx context.Context, tx pgx.Tx, subject string) ([]adminRecipient, error) {
 	rows, err := tx.Query(ctx,
 		`SELECT user_id::text, email FROM memberships
 		  WHERE role = 'admin' AND status = 'active' AND user_id <> $1 AND email IS NOT NULL
@@ -113,18 +116,22 @@ func issueDeletionLinks(ctx context.Context, tx pgx.Tx, tenantID, subject string
 	if err != nil {
 		return nil, err
 	}
-	type admin struct{ id, email string }
-	var admins []admin
+	defer rows.Close()
+	var admins []adminRecipient
 	for rows.Next() {
-		var a admin
+		var a adminRecipient
 		if err := rows.Scan(&a.id, &a.email); err != nil {
-			rows.Close()
 			return nil, err
 		}
 		admins = append(admins, a)
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+	return admins, rows.Err()
+}
+
+// issueDeletionLinks writes one link per other active admin with an email; the link dies with the due time.
+func issueDeletionLinks(ctx context.Context, tx pgx.Tx, tenantID, subject string, due time.Time) ([]IssuedDeletionLink, error) {
+	admins, err := otherActiveAdmins(ctx, tx, subject)
+	if err != nil {
 		return nil, err
 	}
 	var links []IssuedDeletionLink
@@ -144,17 +151,29 @@ func issueDeletionLinks(ctx context.Context, tx pgx.Tx, tenantID, subject string
 	return links, nil
 }
 
-// CancelWorkspaceDeletion clears a schedule. It skips the seam, which refuses a locked workspace,
-// and gates the active admin itself. A workspace that is not scheduled is a no-op.
-func (s *Store) CancelWorkspaceDeletion(ctx context.Context) error {
+// CancelWorkspaceDeletion clears a schedule and returns the mail to send. A workspace that is not
+// scheduled is a no-op with a zero result.
+func (s *Store) CancelWorkspaceDeletion(ctx context.Context) (CancelledDeletion, error) {
+	return s.cancelScheduledDeletion(ctx, nil)
+}
+
+// CancelWorkspaceDeletionByLink cancels with a link token of the deletion.
+func (s *Store) CancelWorkspaceDeletionByLink(ctx context.Context, token string) (CancelledDeletion, error) {
+	return s.cancelScheduledDeletion(ctx, &token)
+}
+
+// cancelScheduledDeletion skips the seam, which refuses a locked workspace, and gates the active admin itself.
+func (s *Store) cancelScheduledDeletion(ctx context.Context, token *string) (CancelledDeletion, error) {
+	var out CancelledDeletion
 	id, ok := auth.IdentityFromContext(ctx)
 	if !ok {
-		return db.ErrNoTenant
+		return out, db.ErrNoTenant
 	}
 	if _, err := uuid.Parse(id.Subject); err != nil {
-		return db.ErrNoTenant
+		return out, db.ErrNoTenant
 	}
-	return db.WithinTenantTx(ctx, s.pool, id.TenantID, func(tx pgx.Tx) error {
+	err := db.WithinTenantTx(ctx, s.pool, id.TenantID, func(tx pgx.Tx) error {
+		out = CancelledDeletion{}
 		var status, role string
 		if err := tx.QueryRow(ctx,
 			`SELECT status, role FROM memberships WHERE user_id = $1`, id.Subject,
@@ -174,6 +193,22 @@ func (s *Store) CancelWorkspaceDeletion(ctx context.Context) error {
 		if err := tx.QueryRow(ctx, `SELECT deletion_due_at FROM tenants FOR UPDATE`).Scan(&due); err != nil {
 			return err
 		}
+		if token != nil {
+			if due == nil || !inviteTokenShape.MatchString(*token) {
+				return ErrDeletionLinkNotValid
+			}
+			hash := sha256.Sum256([]byte(*token))
+			var live bool
+			if err := tx.QueryRow(ctx,
+				`SELECT EXISTS (SELECT 1 FROM workspace_deletion_links
+				  WHERE token_hash = $1 AND expires_at = $2 AND expires_at > now())`,
+				hash[:], *due).Scan(&live); err != nil {
+				return err
+			}
+			if !live {
+				return ErrDeletionLinkNotValid
+			}
+		}
 		if due == nil {
 			return nil
 		}
@@ -181,9 +216,40 @@ func (s *Store) CancelWorkspaceDeletion(ctx context.Context) error {
 			`UPDATE tenants SET deletion_scheduled_at = NULL, deletion_scheduled_by = NULL`); err != nil {
 			return err
 		}
-		return audit.Record(ctx, tx, id.Subject, "workspace.deletion_cancelled",
-			map[string]any{"due_at": due.UTC().Format(time.RFC3339)})
+		if err := audit.Record(ctx, tx, id.Subject, "workspace.deletion_cancelled",
+			map[string]any{"due_at": due.UTC().Format(time.RFC3339)}); err != nil {
+			return err
+		}
+		var workspace, canceller string
+		if err := tx.QueryRow(ctx, `SELECT name FROM tenants`).Scan(&workspace); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx,
+			`SELECT COALESCE(NULLIF(display_name, ''), email, '') FROM memberships WHERE user_id = $1`,
+			id.Subject).Scan(&canceller); err != nil {
+			return err
+		}
+		admins, err := otherActiveAdmins(ctx, tx, id.Subject)
+		if err != nil {
+			return err
+		}
+		mails := make([]IssuedCancelMail, 0, len(admins))
+		for _, a := range admins {
+			var mailID string
+			if err := tx.QueryRow(ctx,
+				`INSERT INTO workspace_deletion_cancel_mails (tenant_id, recipient_user_id, cancelled_due_at)
+				 VALUES ($1, $2, $3) RETURNING id::text`, id.TenantID, a.id, *due).Scan(&mailID); err != nil {
+				return err
+			}
+			mails = append(mails, IssuedCancelMail{ID: mailID, Email: a.email})
+		}
+		out = CancelledDeletion{DueAt: *due, Workspace: workspace, Canceller: canceller, Mails: mails}
+		return nil
 	})
+	if err != nil {
+		return CancelledDeletion{}, err
+	}
+	return out, nil
 }
 
 type scheduleDeletionRequest struct {
@@ -243,12 +309,35 @@ func CancelDeletionHandler(cancel CancelDeletionFunc, log *slog.Logger) http.Han
 	}
 }
 
-// CancelWorkspaceDeletionByLink is a stub for the DEL-05-04 red tests.
-func (s *Store) CancelWorkspaceDeletionByLink(ctx context.Context, token string) (CancelledDeletion, error) {
-	return CancelledDeletion{}, errors.New("not implemented")
+type cancelByLinkRequest struct {
+	Token string `json:"token"`
 }
 
-// CancelDeletionByLinkHandler is a stub for the DEL-05-04 red tests.
+// CancelDeletionByLinkHandler returns POST /v1/workspace/deletion/cancel-by-link: identity (401),
+// capped decode (400), cancel, 200 `{"deletion_due_at": null}`.
 func CancelDeletionByLinkHandler(cancel CancelDeletionByLinkFunc, log *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNotImplemented) }
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxInviteTokenBodyBytes)
+		var req cancelByLinkRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if err := cancel(r.Context(), req.Token); err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "tenancy: cancel workspace deletion by link", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]*string{"deletion_due_at": nil})
+	}
 }

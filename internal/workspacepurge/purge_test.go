@@ -1373,6 +1373,14 @@ func TestRunOnce_PurgesEveryDueTenantAndReportsAFailure(t *testing.T) {
 	r.put(e, 1)
 	r.put(d, 1)
 	r.store.failDelete = func(keys []string) bool { return tenantOfKey(keys[0]) == c }
+	// S is started but not due; N is scheduled now and never started.
+	s, n := r.start(r.tenant()), r.tenant()
+	r.scheduleAt(n, "now()")
+	sUser, nUser := r.user(), r.user()
+	r.member(s, sUser, "admin", "active", ptr(r.mail("s")), "")
+	r.member(n, nUser, "admin", "active", ptr(r.mail("n")), "")
+	r.put(s, 1)
+	r.put(n, 1)
 
 	err := r.purger().RunOnce(context.Background())
 
@@ -1394,9 +1402,15 @@ func TestRunOnce_PurgesEveryDueTenantAndReportsAFailure(t *testing.T) {
 	if r.tenantRows(d) != 1 || r.memberRows(d) != 1 || r.objects(d) != 1 || r.erasures(users[d]) != 0 || r.marker(d) != nil {
 		t.Error("D (not due) was touched")
 	}
-	// One at a time: the runs of file operations, collapsed, are A's, C's, E's; none for D.
-	if ops := slices.Compact(r.store.opsFor(a, c, e, d)); !slices.Equal(ops, []string{a, c, e}) {
-		t.Errorf("file operations by tenant = %v, want [A C E] in due order, not interleaved", ops)
+	if r.tenantRows(s) != 0 || r.objects(s) != 0 || r.erasures(sUser) != 1 {
+		t.Error("S (started, not due) was not purged by the ticker")
+	}
+	if r.tenantRows(n) != 1 || r.objects(n) != 1 || r.erasures(nUser) != 0 || r.marker(n) != nil {
+		t.Error("N (scheduled now, never started) was touched")
+	}
+	// One at a time: the runs of file operations, collapsed, are A's, C's, E's, S's; none for D or N.
+	if ops := slices.Compact(r.store.opsFor(a, c, e, d, s, n)); !slices.Equal(ops, []string{a, c, e, s}) {
+		t.Errorf("file operations by tenant = %v, want [A C E S] in due order, not interleaved", ops)
 	}
 
 	failed := r.logs.find(slog.LevelError, errTenantMsg)

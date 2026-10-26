@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
@@ -44,6 +45,19 @@ func TestPurgeWorker_PurgesAStartedTenant(t *testing.T) {
 	if r.tenantRows(b) != 1 || r.erasures(bUser) != 0 || r.marker(b) != nil {
 		t.Error("due tenant B was touched by the job for A")
 	}
+
+	// Another started tenant, and a second run of A's job.
+	s, sUser, sMail := r.start(r.tenant()), r.user(), r.mail("s")
+	r.member(s, sUser, "admin", "active", &sMail, "")
+	if err := r.worker().Work(context.Background(), purgeJob(a)); err != nil {
+		t.Fatalf("second Work for the purged tenant: %v", err)
+	}
+	if r.erasures(admin) != 1 || r.jobs(eraseKind, admin) != 1 || len(r.staff(a)) != 1 {
+		t.Errorf("after a second run: erasure rows %d, erase jobs %d, staff rows %d; want 1, 1, 1", r.erasures(admin), r.jobs(eraseKind, admin), len(r.staff(a)))
+	}
+	if r.tenantRows(s) != 1 || r.erasures(sUser) != 0 || r.marker(s) == nil || len(r.staff(s)) != 0 {
+		t.Error("started tenant S was touched by the jobs for A")
+	}
 }
 
 func TestPurgeWorker_ATenantNotStartedIsUntouched(t *testing.T) {
@@ -69,13 +83,26 @@ func TestPurgeWorker_ATenantNotStartedIsUntouched(t *testing.T) {
 		}
 	}
 
+	if err := r.worker().Work(context.Background(), purgeJob(uuid.NewString())); err != nil {
+		t.Errorf("Work on a tenant that does not exist: %v, want nil", err)
+	}
+
 	// Control: the same worker purges a started tenant, so the untouched tenants above are a decision, not a dead worker.
+	// It runs on a nil Logger, so Work falls back to the default one.
+	prev := slog.Default()
+	slog.SetDefault(r.logs.logger())
+	t.Cleanup(func() { slog.SetDefault(prev) })
 	s := r.start(r.tenant())
-	if err := r.worker().Work(context.Background(), purgeJob(s)); err != nil {
+	w := r.worker()
+	w.Purger.Logger = nil
+	if err := w.Work(context.Background(), purgeJob(s)); err != nil {
 		t.Fatalf("Work on the started tenant: %v", err)
 	}
 	if r.tenantRows(s) != 0 {
 		t.Error("control: the started tenant is still there after Work")
+	}
+	if recs := r.logs.find(slog.LevelInfo, infoPurged); len(recs) != 1 || recs[0].attrs["tenant_id"] != s {
+		t.Errorf("%q records on the default logger = %+v, want one for %s", infoPurged, recs, s)
 	}
 }
 

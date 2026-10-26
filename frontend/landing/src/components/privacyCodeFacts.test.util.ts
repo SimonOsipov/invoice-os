@@ -330,6 +330,61 @@ export function anyAdminCancels(src: string = readSource('internal/tenancy/works
   return cancel.includes('role != "admin"') && !cancel.includes('deletion_scheduled_by')
 }
 
+// DeleteMyAccount ends the membership and queues the erasure through the same tx, inside one tenant transaction.
+export function deleteAccountEndsMembershipAndQueuesErasureInOneTx(
+  src: string = readSource('internal/tenancy/account_deletion.go'),
+): boolean {
+  const body = goFunc(src, /func \(s \*Store\) DeleteMyAccount\b/, 'Store.DeleteMyAccount')
+  const open = body.indexOf('db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {')
+  const end = body.indexOf('endMembership(ctx, tx,')
+  const enqueue = body.indexOf('notifications.EnqueueErasure(ctx, tx,')
+  return open > -1 && end > open && enqueue > end
+}
+
+// The Confirm button of the delete-workspace dialog is disabled until the typed text equals the name.
+export function deleteWorkspaceDialogNeedsTypedName(
+  dialog: string = readSource('frontend/app/src/components/DeleteWorkspaceDialog.tsx'),
+  lib: string = readSource('frontend/app/src/lib/workspaceDeletion.ts'),
+): boolean {
+  const match = found(/export function nameMatches\b[^{]*\{([\s\S]*?)\n\}/.exec(lib)?.[1], 'nameMatches')
+  return (
+    /return typed === name\b/.test(match) &&
+    /canConfirm = nameMatches\(typed, name\)/.test(dialog) &&
+    /data-testid="delete-workspace-confirm"/.test(dialog) &&
+    /disabled=\{!canConfirm\}[\s\S]*?data-testid="delete-workspace-confirm"/.test(dialog)
+  )
+}
+
+// The lock notice shows the due date and a Sign out button that no admin gate wraps.
+export function deletionNoticeShowsDateAndSignOut(
+  notice: string = readSource('frontend/app/src/components/WorkspaceDeletionNotice.tsx'),
+  lib: string = readSource('frontend/app/src/lib/workspaceDeletion.ts'),
+): boolean {
+  const adminOnly = found(/\{isAdmin && \([\s\S]*?\n\s*\)\}/.exec(notice)?.[0], 'the admin-only block')
+  return (
+    notice.includes('deletionNoticeBody(formatDueDate(dueAt)') &&
+    /onClick=\{onSignOut\}[\s\S]*?\{DELETION_NOTICE\.signOut\}/.test(notice) &&
+    !adminOnly.includes('onSignOut') &&
+    /signOut: 'Sign out'/.test(lib)
+  )
+}
+
+// The clear of a schedule maps the purge-started trigger error to ErrDeletionUnderway, which answers 409.
+export function cancelRefusedOnceThePurgeStarted(
+  src: string = readSource('internal/tenancy/workspace_deletion.go'),
+  mapper: string = readSource('internal/tenancy/tenancy.go'),
+  sql: string = readFileSync(join(REPO, 'migrations/20261026045351_deletion_purge_started.sql'), 'utf8'),
+): boolean {
+  const cancel = goFunc(src, /func \(s \*Store\) CancelWorkspaceDeletion\b/, 'Store.CancelWorkspaceDeletion')
+  const clear = goFunc(src, /func clearDeletionSchedule\b/, 'clearDeletionSchedule')
+  return (
+    cancel.includes('clearDeletionSchedule(ctx, tx)') &&
+    /ConstraintName == "tenant_deletion_underway"[\s\S]*?return ErrDeletionUnderway/.test(clear) &&
+    /errors\.Is\(err, ErrDeletionUnderway\):\s*return http\.StatusConflict/.test(mapper) &&
+    /OLD\.deletion_purge_started_at IS NOT NULL[\s\S]*?CONSTRAINT = 'tenant_deletion_underway'/.test(sql)
+  )
+}
+
 // The days the tenants_deletion_guard trigger adds to the schedule.
 export function graceDays(
   sql: string = readFileSync(join(REPO, 'migrations/20261026004500_workspace_deletion.sql'), 'utf8'),

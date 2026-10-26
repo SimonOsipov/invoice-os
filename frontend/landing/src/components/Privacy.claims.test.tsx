@@ -24,6 +24,10 @@ import { BLOG_BASE, LIBRARY_BASE } from '../sitePaths'
 import {
   aiModelVendors,
   anyAdminCancels,
+  cancelRefusedOnceThePurgeStarted,
+  deleteAccountEndsMembershipAndQueuesErasureInOneTx,
+  deleteWorkspaceDialogNeedsTypedName,
+  deletionNoticeShowsDateAndSignOut,
   appLabels,
   DELETION_SENTENCES,
   deletedFallback,
@@ -936,6 +940,42 @@ describe('DEL-10-02: the account section states the deletion rules', () => {
     const swapped = src.replace('document.DeleteTenantObjects(', 'p.purgeRows(ctx, tenantID, members, objects); document.DeleteTenantObjects(')
     expect(purgeDeletesFilesThenRows(swapped)).toBe(false)
     expect(purgeErasesEveryNonRemovedMember(swap('internal/workspacepurge/purge.go', "status <> 'removed'", "status = 'active'"))).toBe(false)
+  })
+
+  it('DEL-10-02 A2 the membership ends and the erasure is queued in one transaction', () => {
+    expect(sentence('A2')).toContain('your place in it ends at once and we queue the erasure')
+    expect(deleteAccountEndsMembershipAndQueuesErasureInOneTx()).toBe(true)
+    const AD = 'internal/tenancy/account_deletion.go'
+    expect(deleteAccountEndsMembershipAndQueuesErasureInOneTx(swap(AD, 'notifications.EnqueueErasure(ctx, tx,', 'notifications.EnqueueErasure(ctx, s.pool,'))).toBe(false)
+    expect(deleteAccountEndsMembershipAndQueuesErasureInOneTx(swap(AD, 'endMembership(ctx, tx,', 'endMembership(ctx, s.pool,'))).toBe(false)
+    expect(deleteAccountEndsMembershipAndQueuesErasureInOneTx(swap(AD, 'db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {', 'func(tx pgx.Tx) error {'))).toBe(false)
+  })
+
+  it('DEL-10-02 A5 the admin types the workspace name to confirm', () => {
+    const DLG = 'frontend/app/src/components/DeleteWorkspaceDialog.tsx'
+    const LIB = 'frontend/app/src/lib/workspaceDeletion.ts'
+    expect(sentence('A5')).toContain('types the workspace name to confirm')
+    expect(deleteWorkspaceDialogNeedsTypedName()).toBe(true)
+    expect(deleteWorkspaceDialogNeedsTypedName(swap(DLG, 'disabled={!canConfirm}', 'disabled={pending}'))).toBe(false)
+    expect(deleteWorkspaceDialogNeedsTypedName(swap(DLG, 'nameMatches(typed, name) && !pending', '!pending'))).toBe(false)
+    expect(deleteWorkspaceDialogNeedsTypedName(readSource(DLG), swap(LIB, 'return typed === name', 'return true'))).toBe(false)
+  })
+
+  it('DEL-10-02 A6 members see the date and can sign out', () => {
+    const NOTICE = 'frontend/app/src/components/WorkspaceDeletionNotice.tsx'
+    expect(sentence('A6')).toContain('Members see the date it will be deleted and can sign out')
+    expect(deletionNoticeShowsDateAndSignOut()).toBe(true)
+    expect(deletionNoticeShowsDateAndSignOut(swap(NOTICE, 'deletionNoticeBody(formatDueDate(dueAt)', "deletionNoticeBody(''"))).toBe(false)
+    expect(deletionNoticeShowsDateAndSignOut(swap(NOTICE, 'onClick={onSignOut}', 'onClick={cancel}'))).toBe(false)
+    expect(deletionNoticeShowsDateAndSignOut(swap(NOTICE, '{isAdmin && (', '{isAdmin && (\n<button onClick={onSignOut} />'))).toBe(false)
+  })
+
+  it('DEL-10-02 A6 a cancel is refused once the purge started', () => {
+    const WD = 'internal/tenancy/workspace_deletion.go'
+    expect(sentence('A6')).toContain(`Any admin can cancel the deletion until the ${DELETION_GRACE_DAYS} days end`)
+    expect(cancelRefusedOnceThePurgeStarted()).toBe(true)
+    expect(cancelRefusedOnceThePurgeStarted(swap(WD, 'return ErrDeletionUnderway', 'return err'))).toBe(false)
+    expect(cancelRefusedOnceThePurgeStarted(readSource(WD), swap('internal/tenancy/tenancy.go', 'case errors.Is(err, ErrDeletionUnderway):\n\t\treturn http.StatusConflict', 'case errors.Is(err, ErrDeletionUnderway):\n\t\treturn http.StatusBadRequest'))).toBe(false)
   })
 
   // The page says "export" if and only if the export is merged.

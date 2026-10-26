@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -945,5 +946,39 @@ func TestStaffAccountDeletionRoutes_RefuseEveryNonStaffCallerAndServeStaff(t *te
 	}
 	if got := imageOf(t, w.super, w.tenant, p); got.Status != "removed" {
 		t.Errorf("target after the staff POST = %+v, want removed", got)
+	}
+}
+
+// A store over a closed pool fails any statement, so a refusal it still gives was made before the first one.
+func TestStaffAccountDeletion_TheGuardsRefuseBeforeAnyStatement(t *testing.T) {
+	w := newStaffAccWorld(t)
+	p := w.member(t, "preparer", "active", "Chidi Eze", joined(1))
+	closed, err := pgxpool.New(context.Background(), os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed.Close()
+	noQueue := NewStore(closed)
+	withQueue := NewStore(closed)
+	withQueue.SetEraseQueue(w.store.eraseQueue)
+
+	if err := noQueue.StaffDeleteAccount(w.ctx, w.tenant, p, OutcomeLeave, "", staffAccReason); !errors.Is(err, errNoEraseQueue) {
+		t.Errorf("no queue: err = %v, want errNoEraseQueue", err)
+	}
+	for name, ctx := range map[string]context.Context{"no caller": context.Background(), "a customer admin": w.adminCtx()} {
+		if _, err := withQueue.StaffPreviewAccountDeletion(ctx, w.tenant, p); !errors.Is(err, db.ErrNotStaff) {
+			t.Errorf("%s: preview err = %v, want db.ErrNotStaff", name, err)
+		}
+		if err := withQueue.StaffDeleteAccount(ctx, w.tenant, p, OutcomeLeave, "", staffAccReason); !errors.Is(err, db.ErrNotStaff) {
+			t.Errorf("%s: delete err = %v, want db.ErrNotStaff", name, err)
+		}
+	}
+	if err := withQueue.StaffDeleteAccount(w.ctx, "x", p, OutcomeLeave, "", staffAccReason); !errors.Is(err, ErrTenantNotFound) {
+		t.Errorf("malformed tenant: delete err = %v, want ErrTenantNotFound", err)
+	}
+	// control: with a staff caller and a real tenant the closed pool is reached and fails
+	err = withQueue.StaffDeleteAccount(w.ctx, w.tenant, p, OutcomeLeave, "", staffAccReason)
+	if err == nil || errors.Is(err, db.ErrNotStaff) || errors.Is(err, errNoEraseQueue) || errors.Is(err, ErrTenantNotFound) {
+		t.Errorf("control: err = %v, want a closed-pool failure", err)
 	}
 }

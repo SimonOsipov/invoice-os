@@ -1369,6 +1369,109 @@ func TestPurge_ARunnerWhileAnotherPurgesTheTenantSkipsIt(t *testing.T) {
 	}
 }
 
+// purgeLocked reads the tenant's purge lock from pg_locks, as archive.exportRunning reads the export lock.
+func (r *rig) purgeLocked(tenant string) bool {
+	return r.count(`SELECT count(*) FROM pg_locks, (SELECT hashtextextended('workspace_purge:' || $1::text, 0) AS k) x
+		WHERE locktype = 'advisory' AND granted AND objsubid = 1
+		AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+		AND classid::bigint = (x.k >> 32) & 4294967295 AND objid::bigint = x.k & 4294967295`, tenant) > 0
+}
+
+func TestPurge_TheTenantLockIsHeldWhilePurgingAndFreeAfterEveryExit(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		arm   func(r *rig, cancel func())
+		panic bool
+	}{
+		{"a purge that completes", func(*rig, func()) {}, false},
+		{"a failed file step", func(r *rig, _ func()) { r.store.failDelete = func([]string) bool { return true } }, false},
+		{"a cancelled context", func(r *rig, cancel func()) {
+			prev := r.store.onList
+			r.store.onList = func(ctx context.Context, p string) { prev(ctx, p); cancel() }
+		}, false},
+		{"a panic in the file step", func(r *rig, _ func()) {
+			prev := r.store.onList
+			r.store.onList = func(ctx context.Context, p string) { prev(ctx, p); panic("forced") }
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			a := r.due(r.tenant())
+			r.member(a, r.user(), "admin", "active", ptr(r.mail("lock")), "")
+			r.put(a, 1)
+			var during bool
+			r.store.onList = func(context.Context, string) { during = r.purgeLocked(a) }
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			tc.arm(r, cancel)
+
+			func() {
+				defer func() {
+					if rec := recover(); (rec != nil) != tc.panic {
+						t.Errorf("recovered %v, want a panic = %v", rec, tc.panic)
+					}
+				}()
+				_, _ = r.purger().Purge(ctx, a)
+			}()
+
+			if !during {
+				t.Error("the purge lock was not held while the file step ran")
+			}
+			if r.purgeLocked(a) {
+				t.Error("the purge lock is still held after Purge returned")
+			}
+			if n := r.app.Stat().AcquiredConns(); n != 0 {
+				t.Errorf("%d pool connections still acquired after Purge returned", n)
+			}
+		})
+	}
+}
+
+// A runner that skipped while a purge held the tenant must not lose the purge when that purge fails: the next run finishes it.
+func TestPurge_ASkippedRunnerLeavesAFailedPurgeToTheNextRun(t *testing.T) {
+	r := newRig(t)
+	a := r.due(r.tenant())
+	r.member(a, r.user(), "admin", "active", ptr(r.mail("lost")), "")
+	r.put(a, 1)
+	p := r.purger()
+
+	inFiles, release := make(chan struct{}), make(chan struct{})
+	var once atomic.Bool
+	r.store.onList = func(context.Context, string) {
+		if once.CompareAndSwap(false, true) {
+			close(inFiles)
+			<-release
+		}
+	}
+	var failing atomic.Bool
+	failing.Store(true)
+	r.store.failDelete = func([]string) bool { return failing.Load() }
+	var firstErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, firstErr = p.Purge(context.Background(), a)
+	}()
+	<-inFiles
+
+	second, secondErr := p.Purge(context.Background(), a)
+	close(release)
+	<-done
+
+	requireResult(t, second, secondErr, Result{})
+	requireStepErr(t, firstErr, a, "files")
+	if r.tenantRows(a) != 1 || !r.isDue(a) {
+		t.Fatal("control: the failed purge should leave the tenant in place and due")
+	}
+	failing.Store(false)
+	if err := p.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if r.tenantRows(a) != 0 || r.objects(a) != 0 {
+		t.Errorf("after the next run: tenant rows = %d, objects = %d; want 0 and 0", r.tenantRows(a), r.objects(a))
+	}
+}
+
 func b2i(b bool) int {
 	if b {
 		return 1

@@ -552,6 +552,37 @@ func TestStaffAccountDeletion_RefusesTheHouseTenant(t *testing.T) {
 	if jobs := append(w.byIDJobs(t, colleague), w.byIDJobs(t, w.staff)...); len(jobs) != 0 {
 		t.Errorf("%s jobs = %v, want none", evEraseByID, jobs)
 	}
+
+	for _, status := range []string{"suspended", "removed"} {
+		_, gone := houseMember(t, w.super, status)
+		ctx := staffCtx(gone)
+		if _, err := w.store.StaffPreviewAccountDeletion(ctx, w.houseID, colleague); !errors.Is(err, db.ErrNotStaff) {
+			t.Errorf("%s house member: preview err = %v, want db.ErrNotStaff", status, err)
+		}
+		if err := w.store.StaffDeleteAccount(ctx, w.houseID, colleague, OutcomeLeave, "", staffAccReason); !errors.Is(err, db.ErrNotStaff) {
+			t.Errorf("%s house member: delete err = %v, want db.ErrNotStaff", status, err)
+		}
+	}
+	if got := imageOf(t, w.super, w.houseID, colleague); got != before {
+		t.Errorf("colleague row after the lapsed actors = %+v, want %+v", got, before)
+	}
+}
+
+// Pinned: the house test is the actor's own active membership, so a staff caller who also holds an active
+// seat in a customer workspace is refused there too.
+func TestStaffAccountDeletion_AStaffCallerWithACustomerSeatIsRefusedThere(t *testing.T) {
+	w := newStaffAccWorld(t)
+	seedMembership(t, w.super, w.tenant, w.staff, "preparer", "active")
+	t.Cleanup(func() {
+		_, _ = w.super.Exec(context.Background(), `DELETE FROM memberships WHERE tenant_id = $1 AND user_id = $2`, w.tenant, w.staff)
+	})
+	other := w.member(t, "preparer", "active", "Oda Other", joined(1))
+	if err := w.del(other, OutcomeLeave, ""); !errors.Is(err, ErrHouseWorkspace) {
+		t.Errorf("delete err = %v, want ErrHouseWorkspace", err)
+	}
+	if _, err := w.store.StaffPreviewAccountDeletion(w.ctx, w.tenant, other); !errors.Is(err, ErrHouseWorkspace) {
+		t.Errorf("preview err = %v, want ErrHouseWorkspace", err)
+	}
 }
 
 func TestStaffAccountDeletion_ActsOnlyOnThePathTenant(t *testing.T) {

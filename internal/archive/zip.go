@@ -93,7 +93,7 @@ func (bw *bundleWriter) finalizeCSV(e *csvEntry) error {
 }
 
 // WriteBody satisfies bodyWriter: it copies body verbatim into its own ZIP
-// entry, never through a CSV cell (D-6).
+// entry, never through a CSV cell.
 func (bw *bundleWriter) WriteBody(name string, body []byte) error {
 	return bw.WriteBodyFrom(name, bytes.NewReader(body))
 }
@@ -158,7 +158,7 @@ func (bw *bundleWriter) streamCSV(name string, fill func(csvWriter) error) error
 }
 
 // Close delegates to the underlying zip.Writer, which alone writes the central
-// directory. Callers must not call this after a mid-stream error (D-15) --
+// directory. Callers must not call this after a mid-stream error --
 // leaving the writer unclosed is what makes the abandoned bytes unreadable.
 func (bw *bundleWriter) Close() error {
 	return bw.zw.Close()

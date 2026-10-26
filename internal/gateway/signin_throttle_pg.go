@@ -27,13 +27,16 @@ func (t *SignInThrottle) admitShared(email string) (bool, error) {
 	}
 	t.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), handoffDBTimeout)
-	defer cancel()
+	// The sweep has its own budget so a slow one cannot starve the reservation.
 	if sweep {
-		if _, err := t.pool.Exec(ctx, `DELETE FROM gateway_throttle_counts WHERE expires_at <= now()`); err != nil {
+		sctx, scancel := context.WithTimeout(context.Background(), handoffDBTimeout)
+		if _, err := t.pool.Exec(sctx, `DELETE FROM gateway_throttle_counts WHERE expires_at <= now()`); err != nil {
 			t.logErr("sweep", err)
 		}
+		scancel()
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), handoffDBTimeout)
+	defer cancel()
 	var n int
 	err := t.pool.QueryRow(ctx, `
 INSERT INTO gateway_throttle_counts AS t (scope, key_hash, n, expires_at)

@@ -140,11 +140,14 @@ func (s *blogSubscriber) subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	emailHeld := s.perEmail.Reserve(in.Email)
+	emailHeld, admitErr := s.perEmail.Admit(in.Email)
 	refused := false
 	if !emailHeld {
-		s.log.WarnContext(r.Context(), "blog-subscribe: limit reached",
-			slog.String("limit", "email"), slog.Bool("enforced", s.enforce))
+		// A database error is already logged by the throttle.
+		if admitErr == nil {
+			s.log.WarnContext(r.Context(), "blog-subscribe: limit reached",
+				slog.String("limit", "email"), slog.Bool("enforced", s.enforce))
+		}
 		refused = s.enforce
 	}
 

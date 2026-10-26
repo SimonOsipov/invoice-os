@@ -53,13 +53,8 @@ func (t *SignInThrottle) Shared(pool *pgxpool.Pool, log *slog.Logger) {
 	t.pool, t.log = pool, log
 }
 
-// Reserve counts one attempt for email; false means refuse before GoTrue.
-func (t *SignInThrottle) Reserve(email string) bool {
-	ok, err := t.Admit(email)
-	return ok && err == nil
-}
-
-// Admit is Reserve with the database error returned; a shared count that cannot be read refuses.
+// Admit counts one attempt for email; false means refuse before GoTrue.
+// A shared count that cannot be read returns false and the database error.
 func (t *SignInThrottle) Admit(email string) (bool, error) {
 	if t.pool != nil {
 		return t.admitShared(email)
@@ -77,7 +72,7 @@ func (t *SignInThrottle) Admit(email string) (bool, error) {
 		if !now.Before(t.nextExpiry) {
 			t.sweep(now)
 		}
-		// ceiling: at maxKeys (~30 MB) Reserve refuses new keys until keys expire.
+		// ceiling: with no pool, at maxKeys (~30 MB) Admit refuses new keys until keys expire.
 		if len(t.counts) >= t.maxKeys {
 			if now.Sub(t.lastWarn) >= time.Minute {
 				t.lastWarn = now

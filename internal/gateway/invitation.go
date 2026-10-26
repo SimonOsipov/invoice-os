@@ -353,11 +353,13 @@ func InvitationResendHandler(authURL *url.URL, client *http.Client, perAddress *
 			return
 		}
 		if !addrHeld {
-			log.WarnContext(r.Context(), "invitation-resend: limit reached",
-				slog.String("limit", "address"), slog.Bool("enforced", enforce))
-			if enforce {
-				writeError(w, http.StatusTooManyRequests, "too many requests")
-				return
+			if admitErr == nil {
+				log.WarnContext(r.Context(), "invitation-resend: limit reached",
+					slog.String("limit", "address"), slog.Bool("enforced", enforce))
+				if enforce {
+					writeError(w, http.StatusTooManyRequests, "too many requests")
+					return
+				}
 			}
 		}
 

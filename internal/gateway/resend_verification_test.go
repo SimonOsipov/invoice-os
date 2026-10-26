@@ -780,3 +780,35 @@ func TestResendVerification_AnUnreadableThrottleIsTheSame202AndSendsNothing(t *t
 		t.Errorf("GoTrue saw %d calls, want 0", n)
 	}
 }
+
+// A database error is the throttle's own ERROR; the handler logs no "limit reached" for it.
+func TestResendAndReset_AnUnreadableThrottleLogsNoLimitReached(t *testing.T) {
+	for _, c := range []struct {
+		name, msg string
+		build     func(u *url.URL, th *SignInThrottle, log *slog.Logger) http.Handler
+	}{
+		{"resend", resendLimitMsg, func(u *url.URL, th *SignInThrottle, log *slog.Logger) http.Handler {
+			return ResendVerificationHandler(u, testClient(), 0, th, true, log)
+		}},
+		{"reset", resetLimitMsg, func(u *url.URL, th *SignInThrottle, log *slog.Logger) http.Handler {
+			return RequestPasswordResetHandler(u, testClient(), 0, th, true, log)
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+			th := resendThrottle(time.Now)
+			th.Shared(deadPool(t), slog.New(slog.DiscardHandler))
+			log, buf := captureLog()
+
+			rec, _ := serveResend(t.Context(), c.build(fake.URL, th, log), resendBody("ada@corp.example"))
+
+			requireAccepted(t, rec, "count unreadable")
+			if n := len(fake.Calls()); n != 0 {
+				t.Errorf("GoTrue saw %d calls, want 0", n)
+			}
+			if n := len(recordsNamed(t, buf, c.msg)); n != 0 {
+				t.Errorf("%q records = %d, want 0 (a database error is not a reached limit)", c.msg, n)
+			}
+		})
+	}
+}

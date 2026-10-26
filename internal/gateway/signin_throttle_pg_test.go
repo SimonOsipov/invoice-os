@@ -461,3 +461,40 @@ func TestRLS_GatewayThrottle_SpellingsThatFoldAlikeShareOneRowIncludingNonASCII(
 		t.Errorf("rows = %d, n = %d for sha256 of the folded non-ASCII address, want 1 row and n = 2", rows, n)
 	}
 }
+
+// A sweep stuck behind a row lock must not use up the reservation's budget.
+func TestRLS_GatewayThrottle_AStalledSweepDoesNotFailTheReservation(t *testing.T) {
+	d := requireHandoffDB(t)
+	requireSharedStateTables(t, d)
+	ctx := context.Background()
+	addr := ownAddress(t, d)
+	scope := "sweep-lock-" + randHex(t, 6)
+	hash := sha256.Sum256([]byte(scope))
+	if _, err := d.super.Exec(ctx, `INSERT INTO gateway_throttle_counts (scope, key_hash, n, expires_at)
+		VALUES ($1, $2, 1, now() - interval '1 hour')`, scope, hash[:]); err != nil {
+		t.Fatalf("place an expired row: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = d.super.Exec(ctx, `DELETE FROM gateway_throttle_counts WHERE scope = $1`, scope)
+	})
+	tx, err := d.super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM gateway_throttle_counts WHERE scope = $1 FOR UPDATE`, scope); err != nil {
+		t.Fatalf("lock the expired row: %v", err)
+	}
+	log, buf := captureLog()
+	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
+	th.Shared(d.a, log)
+
+	ok, err := th.Admit(addr)
+
+	if err != nil || !ok {
+		t.Errorf("Admit = %v, %v; want true, nil: the sweep's wait must not spend the reservation's budget", ok, err)
+	}
+	if n := len(recordsNamed(t, buf, "sign-in throttle: sweep")); n != 1 {
+		t.Errorf("sweep failure records = %d, want 1 (the sweep timed out on the lock)", n)
+	}
+}

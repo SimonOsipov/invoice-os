@@ -10,7 +10,7 @@ import (
 )
 
 // ceiling: with no pool, counts are in-process; a restart clears them and replicas do not share them.
-// ceiling: an attacker can spend a victim address's 3 per hour; a full map (10,000 keys) refuses every new key, so a flood switches resend off for new addresses.
+// ceiling: an attacker can spend a victim address's 3 per hour; with no pool, a full map (10,000 keys) refuses every new key, so a flood switches resend off for new addresses.
 const (
 	ResendPerAddress = 3
 	ResendWindow     = time.Hour
@@ -53,11 +53,14 @@ func mailLinkHandler(name, verb, endpoint string, payload func(email string) map
 			return
 		}
 
-		addrHeld := perAddress.Reserve(email)
+		addrHeld, admitErr := perAddress.Admit(email)
 		refused := false
 		if !addrHeld {
-			log.WarnContext(r.Context(), name+": limit reached",
-				slog.String("limit", "address"), slog.Bool("enforced", enforce))
+			// A database error is already logged by the throttle.
+			if admitErr == nil {
+				log.WarnContext(r.Context(), name+": limit reached",
+					slog.String("limit", "address"), slog.Bool("enforced", enforce))
+			}
 			refused = enforce
 		}
 

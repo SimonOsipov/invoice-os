@@ -557,3 +557,24 @@ func TestBlogSubscribe_AnUnreadableThrottleIsTheSame202AndForwardsNothing(t *tes
 		t.Errorf("upstream calls = %d, want 0", up.calls())
 	}
 }
+
+func TestBlogSubscribe_AnUnreadableThrottleLogsNoLimitReached(t *testing.T) {
+	up := newSubUpstream(t, http.StatusAccepted, `{}`)
+	u, err := url.Parse(up.srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	perEmail := NewSignInThrottle("blog-subscribe-email", BlogSubscribePerEmail, BlogSubscribeMaxKeys, BlogSubscribeWindow, time.Now)
+	perEmail.Shared(deadPool(t), slog.New(slog.DiscardHandler))
+	log, buf := captureLog()
+	rt := BlogSubscribeHandlers(u, http.DefaultClient, subTestToken, 0, perEmail, true, log)
+
+	rec := subPost(rt.Subscribe, "203.0.113.61:1", subBody("p@x.co"))
+
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("status = %d, want 202", rec.Code)
+	}
+	if n := len(recordsNamed(t, buf, "blog-subscribe: limit reached")); n != 0 {
+		t.Errorf("limit reached records = %d, want 0 (a database error is not a reached limit)", n)
+	}
+}

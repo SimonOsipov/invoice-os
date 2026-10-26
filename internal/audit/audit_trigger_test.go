@@ -184,7 +184,7 @@ func TestAudit_InsertTriggerLeavesWorkspaceEventsNull(t *testing.T) {
 	fx := seedTriggerFixture(t, f)
 
 	ruleD := triggerRuleDPayloads(fx.invoice)
-	if len(ruleD) != 32 {
+	if len(ruleD) != 34 {
 		t.Fatalf("rule-D payload map holds %d events, want 32", len(ruleD))
 	}
 	for event, payload := range ruleD {

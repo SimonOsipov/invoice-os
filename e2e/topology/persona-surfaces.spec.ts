@@ -1208,11 +1208,20 @@ test('in-house Approvals: the queue narrows, bulk approve settles per item, and 
   await expect(blockedRow).toBeVisible()
   await expect(blockedRow.getByTestId('approval-select-row'), 'the seat really is blocked').toBeDisabled()
   await expect(blockedRow.getByTestId('approval-blocked-icon')).toBeVisible()
-  const blockedHeightBox = await blockedRow.boundingBox()
-  expect(blockedHeightBox, 'the blocked row never rendered after the unstaffing').toBeTruthy()
+  let blockedHeight = 0
+  // The short timeout keeps one read inside the poll's bound; a rejected read counts as 0 and retries.
+  await expect
+    .poll(
+      async () => {
+        blockedHeight = (await blockedRow.boundingBox({ timeout: 2_000 }).catch(() => null))?.height ?? 0
+        return blockedHeight
+      },
+      { message: 'the blocked row never rendered after the unstaffing' },
+    )
+    .toBeGreaterThan(0)
   expect(
-    Math.abs(blockedHeightBox!.height - approvableHeightBox!.height),
-    `the blocked row (${blockedHeightBox!.height}px) must stand the same height as the approvable row it replaced (${approvableHeightBox!.height}px)`,
+    Math.abs(blockedHeight - approvableHeightBox!.height),
+    `the blocked row (${blockedHeight}px) must stand the same height as the approvable row it replaced (${approvableHeightBox!.height}px)`,
   ).toBeLessThanOrEqual(1)
 
   await blockedRow.locator('> *').nth(BUYER_TRACK).click()

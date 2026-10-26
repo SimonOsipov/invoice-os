@@ -93,6 +93,7 @@ function Console() {
   const [jobBusy, setJobBusy] = useState(false)
   const [deletion, setDeletion] = useState<{ kind: 'start' | 'cancel' | 'purge' } | { kind: 'member'; member: StaffMember } | null>(null)
   const [deletionBusy, setDeletionBusy] = useState(false)
+  const [acctOpens, setAcctOpens] = useState(0)
   const [auditView, setAuditView] = useState<AuditView>('tenant')
   const [auditFilters, setAuditFilters] = useState<AuditFilters>({})
   const [auditMore, setAuditMore] = useState<{ key: number; events: StaffAuditRow[]; page: StaffAuditPage['page'] } | null>(null)
@@ -153,8 +154,8 @@ function Console() {
     try { return await fetchStaffTenant(id) } catch (e) { const error = toApiError(e); failedTenants.current.set(error, id); throw error }
   }, { immediate: onTenants && tenantId !== null, deps: [onTenants, tenantId], isEmpty: () => false })
   const deletionMember = deletion?.kind === 'member' ? deletion.member.user_id : null
-  const acctKey = `${tenantId}/${deletionMember}`
-  // Keyed like previewRead: an answer for another member never shows.
+  const acctKey = `${tenantId}/${deletionMember}/${acctOpens}`
+  // Keyed like previewRead, plus the open count: an answer for another member or an earlier open never shows.
   const acctRead = useAsync(async () => ({ key: acctKey, res: await previewMemberDeletion(tenantId ?? '', deletionMember ?? '') }), { immediate: deletionMember !== null && tenantId !== null, deps: [acctKey], isEmpty: () => false })
   const acctPreview = acctRead.data?.key === acctKey ? acctRead.data.res : null
   const tenantsStatus = tenantsRead.status === 'error' ? (tenantsRead.error?.status === 403 ? 'forbidden' : 'error') : tenantsRead.status === 'ready' || tenantsRead.status === 'empty' ? tenantsRead.status : 'loading'
@@ -744,7 +745,7 @@ function Console() {
                 go('submissions')
               }}
               onDeletion={(kind) => setDeletion({ kind })}
-              onDeleteAccount={(member) => setDeletion({ kind: 'member', member })}
+              onDeleteAccount={(member) => { setAcctOpens((n) => n + 1); setDeletion({ kind: 'member', member }) }}
               actionBusy={deletionBusy}
             />
           )}

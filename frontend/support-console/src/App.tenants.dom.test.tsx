@@ -573,6 +573,38 @@ describe('Console tenants wiring', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
+  it('delete account: a reopened modal waits for a fresh preview before it can confirm', async () => {
+    await openX()
+    preview.mockResolvedValue({ outcome: 'leave', heir_name: null, heir_user_id: null })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete account' })[1])
+    await within(dialog()).findByText(/Their account goes at once\./)
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Back' }))
+
+    let resolve: (v: { outcome: 'hand_on'; heir_name: string; heir_user_id: string }) => void = () => {}
+    preview.mockReturnValue(new Promise((r) => { resolve = r }))
+    // Snapshot each node as React inserts it: the first commit of the reopened modal is where a stale preview would show.
+    const painted: string[] = []
+    const realAppend = Node.prototype.appendChild
+    const realInsert = Node.prototype.insertBefore
+    Node.prototype.appendChild = function <T extends Node>(this: Node, n: T): T { const r = realAppend.call(this, n) as T; painted.push(n.textContent ?? ''); return r }
+    Node.prototype.insertBefore = function <T extends Node>(this: Node, n: T, ref: Node | null): T { const r = realInsert.call(this, n, ref) as T; painted.push(n.textContent ?? ''); return r }
+    try {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Delete account' })[1])
+    } finally {
+      Node.prototype.appendChild = realAppend
+      Node.prototype.insertBefore = realInsert
+    }
+    expect(painted.some((t) => t.includes('Their account goes at once.'))).toBe(false)
+    expect(painted.some((t) => t.includes('Reading…'))).toBe(true)
+    expect(within(dialog()).queryByText(/Their account goes at once\./)).toBeNull()
+    expect(within(dialog()).getByText('Reading…')).toBeTruthy()
+    typeReason('asked')
+    expect((within(dialog()).getByRole('button', { name: 'Delete account' }) as HTMLButtonElement).disabled).toBe(true)
+
+    resolve({ outcome: 'hand_on', heir_name: 'Bola', heir_user_id: 'X0' })
+    await within(dialog()).findByText(/Admin moves to Bola/)
+  })
+
   it('delete account: a failed preview shows its message and offers no usable confirm', async () => {
     await openX()
     preview.mockRejectedValue(new ApiError('http', 'membership not found', 404))

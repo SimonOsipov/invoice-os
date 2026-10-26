@@ -574,20 +574,22 @@ func TestDeleteMyAccount_NoEraseQueueFailsClosed(t *testing.T) {
 
 func TestDeleteMyAccount_ANullRowEmailUsesTheTokenEmail(t *testing.T) {
 	w := newAccWorld(t, "DEL-08-01 null row email")
-	p := w.member(t, "preparer", "active", "Chidi Eze", joined(1))
-	if _, err := w.super.Exec(context.Background(),
-		`UPDATE memberships SET email = NULL WHERE tenant_id = $1 AND user_id = $2`, w.tenant, p); err != nil {
-		t.Fatalf("null the row email: %v", err)
-	}
+	for _, rowEmail := range []*string{nil, strp(""), strp("   ")} {
+		p := w.member(t, "preparer", "active", "Chidi Eze", joined(1))
+		if _, err := w.super.Exec(context.Background(),
+			`UPDATE memberships SET email = $3 WHERE tenant_id = $1 AND user_id = $2`, w.tenant, p, rowEmail); err != nil {
+			t.Fatalf("set the row email: %v", err)
+		}
 
-	if err := w.store.DeleteMyAccount(w.asWithEmail(p, "P@Example.test"), OutcomeLeave); err != nil {
-		t.Fatalf("DeleteMyAccount(leave): %v", err)
-	}
-	if email, _, found := w.erasureOf(t, p); !found || email != "p@example.test" {
-		t.Errorf("person_erasures = (%q, found %v), want the token email p@example.test", email, found)
-	}
-	if got := imageOf(t, w.super, w.tenant, p); got.Status != "removed" {
-		t.Errorf("caller status = %q, want removed", got.Status)
+		if err := w.store.DeleteMyAccount(w.asWithEmail(p, "P@Example.test"), OutcomeLeave); err != nil {
+			t.Fatalf("row email %v: DeleteMyAccount(leave): %v", rowEmail, err)
+		}
+		if email, _, found := w.erasureOf(t, p); !found || email != "p@example.test" {
+			t.Errorf("row email %v: person_erasures = (%q, found %v), want the token email p@example.test", rowEmail, email, found)
+		}
+		if got := imageOf(t, w.super, w.tenant, p); got.Status != "removed" {
+			t.Errorf("row email %v: caller status = %q, want removed", rowEmail, got.Status)
+		}
 	}
 }
 
@@ -658,5 +660,108 @@ func TestDeleteMyAccount_ARepeatCallIsRefused(t *testing.T) {
 	}
 	if n := len(w.auditRows(t, evAccountDeleted)); n != 1 {
 		t.Errorf("%s rows = %d, want 1", evAccountDeleted, n)
+	}
+}
+
+func TestDeleteMyAccount_OtherTenantsAreUntouched(t *testing.T) {
+	w := newAccWorld(t, "DEL-08-01 cross tenant A")
+	other := newAccWorld(t, "DEL-08-01 cross tenant B")
+
+	// the caller and the heir hold a second membership, under the same user id, in tenant B
+	p := w.member(t, "preparer", "active", "Chidi Eze", joined(1))
+	heir := w.member(t, "preparer", "active", "Tunde Bello", joined(2))
+	for _, u := range []string{p, heir} {
+		other.addJoined(t, u, "preparer", "active", "Same Person", joined(0))
+	}
+	pOther, heirOther, adminOther := imageOf(t, w.super, other.tenant, p), imageOf(t, w.super, other.tenant, heir), imageOf(t, w.super, other.tenant, other.admin)
+
+	if err := w.store.DeleteMyAccount(w.as(p), OutcomeLeave); err != nil {
+		t.Fatalf("DeleteMyAccount(leave): %v", err)
+	}
+	if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn); err != nil {
+		t.Fatalf("DeleteMyAccount(hand_on): %v", err)
+	}
+	if got := imageOf(t, w.super, w.tenant, heir); got.Role != "admin" {
+		t.Fatalf("heir role in the caller's tenant = %q, want admin", got.Role)
+	}
+	requireImage(t, other, "caller in tenant B", p, pOther)
+	requireImage(t, other, "heir in tenant B", heir, heirOther)
+	requireImage(t, other, "admin of tenant B", other.admin, adminOther)
+	if n := other.auditTotal(t); n != 0 {
+		t.Errorf("tenant B audit rows = %d, want 0", n)
+	}
+
+	// a member of tenant B only, naming tenant A in the token, is not a member of A
+	outsider := other.member(t, "admin", "active", "Out Sider", joined(3))
+	if err := w.store.DeleteMyAccount(w.as(outsider), OutcomeLeave); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Errorf("outsider: err = %v, want db.ErrNotActiveMember", err)
+	}
+	if _, err := w.store.PreviewAccountDeletion(w.as(outsider)); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Errorf("outsider preview: err = %v, want db.ErrNotActiveMember", err)
+	}
+	if got := imageOf(t, w.super, other.tenant, outsider); got.Status != "active" {
+		t.Errorf("outsider status = %q, want active", got.Status)
+	}
+}
+
+func TestAccountDeletionPreview_ASuspendedCallerIsRefused(t *testing.T) {
+	w := newAccWorld(t, "DEL-08-01 suspended preview")
+	s := w.member(t, "preparer", "suspended", "Sue Pend", joined(1))
+	if _, err := w.store.PreviewAccountDeletion(w.as(s)); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Errorf("suspended preview: err = %v, want db.ErrNotActiveMember", err)
+	}
+	if got, err := w.store.PreviewAccountDeletion(w.adminCtx()); err != nil || got.Outcome != OutcomeDeleteWorkspace {
+		t.Errorf("control: admin preview = %+v, err = %v, want delete_workspace (a suspended member is not counted)", got, err)
+	}
+}
+
+func TestDeleteMyAccount_AHeirKeepsTheirGrants(t *testing.T) {
+	w := newAccWorld(t, "DEL-08-01 heir grants")
+	heir, _ := w.grantedMember(t, "Grace Eze")
+	if _, err := w.super.Exec(context.Background(),
+		`UPDATE memberships SET created_at = $3 WHERE tenant_id = $1 AND user_id = $2`, w.tenant, heir, joined(1)); err != nil {
+		t.Fatalf("set created_at: %v", err)
+	}
+	before := imageOf(t, w.super, w.tenant, heir)
+
+	if err := w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn); err != nil {
+		t.Fatalf("DeleteMyAccount(hand_on): %v", err)
+	}
+	want := before
+	want.Role = "admin"
+	requireImage(t, w, "heir", heir, want)
+}
+
+func TestDeleteMyAccount_TheSoleAdminAndTheHeirDeletingAtOnceKeepOneAdmin(t *testing.T) {
+	super, app := dbTestPools(t)
+	for round := 0; round < 20; round++ {
+		w := accWorldOn(t, super, app, "DEL-08-01 heir race")
+		heir := w.member(t, "preparer", "active", "Chidi Eze", joined(1))
+
+		e1, e2 := race(
+			func() error { return w.store.DeleteMyAccount(w.adminCtx(), OutcomeHandOn) },
+			func() error { return w.store.DeleteMyAccount(w.as(heir), OutcomeLeave) },
+		)
+		nils := 0
+		for _, e := range []error{e1, e2} {
+			switch {
+			case e == nil:
+				nils++
+			case !errors.Is(e, ErrDeletionOutcomeChanged):
+				t.Fatalf("round %d: err = %v, want nil or ErrDeletionOutcomeChanged", round, e)
+			}
+		}
+		if nils != 1 {
+			t.Fatalf("round %d: %d calls succeeded (errs %v, %v), want exactly one", round, nils, e1, e2)
+		}
+		w.requireUnscheduled(t)
+		var active, admins int
+		if err := super.QueryRow(context.Background(),
+			`SELECT count(*), count(*) FILTER (WHERE role = 'admin') FROM memberships WHERE tenant_id = $1 AND status = 'active'`, w.tenant).Scan(&active, &admins); err != nil {
+			t.Fatalf("count active members: %v", err)
+		}
+		if active != 1 || admins != 1 {
+			t.Fatalf("round %d: active members = %d, admins = %d, want one member who is an admin", round, active, admins)
+		}
 	}
 }

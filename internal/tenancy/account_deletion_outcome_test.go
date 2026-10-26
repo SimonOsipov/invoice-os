@@ -24,6 +24,7 @@ func TestDecideAccountDeletion_Table(t *testing.T) {
 		wantHeir string // "" = nil heir
 	}{
 		{"a preparer with one admin leaves", []activeMember{m(caller, "preparer", t1), m(hi, "admin", t1)}, OutcomeLeave, ""},
+		{"a preparer leaves even when no admin is active", []activeMember{m(caller, "preparer", t1), m(hi, "reviewer", t2)}, OutcomeLeave, ""},
 		{"an admin with a second active admin leaves", []activeMember{m(caller, "admin", t1), m(hi, "admin", t2)}, OutcomeLeave, ""},
 		{"the sole admin hands on to the first joined", []activeMember{m(caller, "admin", t1), m(hi, "preparer", t2), m(lo, "reviewer", t1.Add(time.Minute))}, OutcomeHandOn, lo},
 		{"the sole admin hands on to the earliest even when listed last", []activeMember{m(caller, "admin", t1), m(lo, "preparer", t2), m(hi, "preparer", t1.Add(time.Minute))}, OutcomeHandOn, hi},

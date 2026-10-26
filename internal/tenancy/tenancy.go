@@ -69,6 +69,7 @@ var (
 	ErrHouseWorkspace              = errors.New("tenancy: house workspace")
 	ErrDeletionUnderway            = errors.New("tenancy: deletion underway")
 	ErrDeletionOutcomeChanged      = errors.New("tenancy: account deletion outcome changed")
+	ErrLastActiveMember            = errors.New("tenancy: last active member")
 	ErrNoEraseEmail                = errors.New("tenancy: no email to erase by")
 )
 

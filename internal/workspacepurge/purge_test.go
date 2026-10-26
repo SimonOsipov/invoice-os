@@ -881,7 +881,7 @@ func TestPurge_ACancelAfterTheEraseStepIsRefused(t *testing.T) {
 			return
 		}
 		markerSet = r.marker(a) != nil
-		cancelErr = tenancy.NewStore(r.app).CancelWorkspaceDeletion(adminCtx(a, admin))
+		_, cancelErr = tenancy.NewStore(r.app).CancelWorkspaceDeletion(adminCtx(a, admin))
 		stillScheduled = r.count(`SELECT count(*) FROM tenants WHERE id = $1 AND deletion_scheduled_at IS NOT NULL`, a) == 1
 	}
 
@@ -1189,7 +1189,7 @@ func TestPurge_AFailedAccountReadStopsTheTenant(t *testing.T) {
 			if n := len(r.logs.find(slog.LevelWarn, warnNoEmail)); n != 0 {
 				t.Errorf("WARN records = %d, want 0 on a rolled-back step", n)
 			}
-			if err := tenancy.NewStore(r.app).CancelWorkspaceDeletion(adminCtx(a, admin)); err != nil {
+			if _, err := tenancy.NewStore(r.app).CancelWorkspaceDeletion(adminCtx(a, admin)); err != nil {
 				t.Errorf("an admin cancel after the failed step: %v, want nil", err)
 			}
 		})

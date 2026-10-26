@@ -2,8 +2,23 @@
 import { readFile } from 'node:fs/promises'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { unzipSync } from 'fflate'
-import { cancelDeletion, registerFormAccount, type RealAccount } from '../api/client'
-import { VERIFIED, signInAtFrontDoor } from '../personaSession'
+import {
+  acceptById,
+  cancelDeletion,
+  inviteWithToken,
+  listMine,
+  me,
+  mintSignInState,
+  registerFormAccount,
+  registerFresh,
+  scheduleDeletion,
+  setDeletionLinkToken,
+  signInSession,
+  subjectOf,
+  type PendingInvite,
+  type RealAccount,
+} from '../api/client'
+import { VERIFIED, passFrontDoor, signInAtFrontDoor } from '../personaSession'
 import { collectSourcedErrors, expectedStatusDropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 
@@ -192,4 +207,74 @@ test('workspace deletion: a 200-character name stays inside the dialog and the n
     await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
     await expect(page.locator('button.pf-tab').filter({ hasText: /^Workspace$/ })).toBeVisible()
   })
+})
+
+test('workspace deletion: a second admin cancels from the emailed link', async ({ page }) => {
+  test.setTimeout(240_000)
+  const { account, token } = await registerFormAccount('ws-cancel-link')
+  const errors = collectSourcedErrors(page, expectedStatusDropper(page, 403, /\/api\//))
+  try {
+    const tenantId = (await me(token)).tenant.id
+    const b = await registerFresh('ws-cancel-link-b')
+    await inviteWithToken(token, tenantId, b.email, 'admin')
+    const session = (await signInSession(b.email, b.password)).access_token
+    const [pending] = ((await listMine(session)).body as { invitations: PendingInvite[] }).invitations
+    const accepted = await acceptById(session, pending.id, 'Cancel Link Admin')
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200)
+    const bId = subjectOf((await signInSession(b.email, b.password)).access_token)
+
+    const scheduled = await scheduleDeletion(token, account.workspaceName)
+    expect(scheduled.status, JSON.stringify(scheduled.body)).toBe(200)
+    const linkToken = mintSignInState()
+    await setDeletionLinkToken(tenantId, bId, linkToken)
+
+    await passFrontDoor(page, b, `/#cancel-deletion=${linkToken}`)
+    const notice = page.getByTestId('workspace-deletion-notice')
+    await expect(notice).toContainText(account.workspaceName)
+    const sent = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith('/api/tenancy/v1/workspace/deletion/cancel-by-link'))
+    await page.getByTestId('deletion-notice-cancel').click()
+    await sent
+
+    await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
+    await expect(notice).toHaveCount(0)
+  } finally {
+    await cancelDeletion(token)
+  }
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('workspace deletion: a stale emailed link falls through to the plain cancel in one click', async ({ page }) => {
+  test.setTimeout(240_000)
+  const { account, token } = await registerFormAccount('ws-cancel-stale')
+  const errors = collectSourcedErrors(page, expectedStatusDropper(page, 403, /\/api\//))
+  try {
+    const tenantId = (await me(token)).tenant.id
+    const b = await registerFresh('ws-cancel-link-b')
+    await inviteWithToken(token, tenantId, b.email, 'admin')
+    const session = (await signInSession(b.email, b.password)).access_token
+    const [pending] = ((await listMine(session)).body as { invitations: PendingInvite[] }).invitations
+    const accepted = await acceptById(session, pending.id, 'Cancel Link Admin')
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200)
+
+    const scheduled = await scheduleDeletion(token, account.workspaceName)
+    expect(scheduled.status, JSON.stringify(scheduled.body)).toBe(200)
+
+    const staleToken = mintSignInState()
+
+    await passFrontDoor(page, b, `/#cancel-deletion=${staleToken}`)
+    const notice = page.getByTestId('workspace-deletion-notice')
+    await expect(notice).toContainText(account.workspaceName)
+    const paths: string[] = []
+    page.on('request', (r) => {
+      if (r.method() === 'POST' && r.url().includes('/api/tenancy/v1/workspace/deletion/')) paths.push(new URL(r.url()).pathname.split('/deletion/')[1])
+    })
+    await page.getByTestId('deletion-notice-cancel').click()
+
+    await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
+    await expect(notice).toHaveCount(0)
+    expect(paths).toEqual(['cancel-by-link', 'cancel'])
+  } finally {
+    await cancelDeletion(token)
+  }
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })

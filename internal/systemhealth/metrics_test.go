@@ -276,6 +276,220 @@ func TestMetricsSource_APollOneTTLAfterAFetchDoesNotWaitOnGoogle(t *testing.T) {
 	}
 }
 
+// holdQueries blocks every query_range request until the returned func runs; each held request sends on entered.
+func holdQueries(t *testing.T, f *comboFake) (release func()) {
+	t.Helper()
+	gate := make(chan struct{})
+	var once sync.Once
+	release = func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.override = func(path, _ string) (int, string, bool) {
+		if strings.HasSuffix(path, "/query_range") {
+			f.entered <- struct{}{}
+			<-gate
+		}
+		return 0, "", false
+	}
+	return release
+}
+
+// idle waits until the key's background fetch has stored its entry.
+func idle(t *testing.T, s *MetricsSource) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		s.mu.Lock()
+		n := len(s.inflight)
+		s.mu.Unlock()
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a fetch stayed in flight")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// getFast fails when Get does not return within a second: it would be waiting on Google.
+func getFast(t *testing.T, s *MetricsSource, ctx context.Context) Metrics {
+	t.Helper()
+	type res struct {
+		m   Metrics
+		err error
+	}
+	c := make(chan res, 1)
+	go func() { m, err := s.Get(ctx, "1h", ""); c <- res{m, err} }()
+	select {
+	case r := <-c:
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		return r.m
+	case <-time.After(time.Second):
+		t.Fatal("Get waited on a Google fetch")
+		return Metrics{}
+	}
+}
+
+func TestMetricsSource_AgeBoundariesDecideServeRefreshOrWait(t *testing.T) {
+	n := len(Panels)
+	for _, tc := range []struct {
+		name     string
+		age      time.Duration
+		wantProm int  // after the Get and any background fetch
+		blocks   bool // the Get waits on Google
+	}{
+		{"just under MetricsTTL is a plain hit", MetricsTTL - time.Nanosecond, n, false},
+		{"exactly MetricsTTL is served and refreshed", MetricsTTL, 2 * n, false},
+		{"just under MetricsStaleTTL is served and refreshed", MetricsStaleTTL - time.Nanosecond, 2 * n, false},
+		{"exactly MetricsStaleTTL waits", MetricsStaleTTL, 2 * n, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clk := newClock()
+			f, s, _ := newComboFake(t, clk.now)
+			first, err := s.Get(t.Context(), "1h", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			clk.advance(tc.age)
+			if tc.blocks {
+				release := holdQueries(t, f)
+				done := make(chan struct{})
+				go func() { defer close(done); _, _ = s.Get(t.Context(), "1h", "") }()
+				<-f.entered
+				select {
+				case <-done:
+					t.Fatal("Get returned before the Google fetch ended")
+				default:
+				}
+				release()
+				<-done
+			} else if got := getFast(t, s, t.Context()); !reflect.DeepEqual(got, first) {
+				t.Fatal("did not serve the cached body")
+			}
+			idle(t, s)
+			if prom, _ := f.googleHits(); prom != tc.wantProm {
+				t.Fatalf("prometheus hits = %d, want %d", prom, tc.wantProm)
+			}
+		})
+	}
+}
+
+func TestMetricsSource_ConcurrentStaleGetsStartOneBackgroundFetch(t *testing.T) {
+	clk := newClock()
+	f, s, _ := newComboFake(t, clk.now)
+	if _, err := s.Get(t.Context(), "1h", ""); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(MetricsTTL)
+	release := holdQueries(t, f)
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Add(1)
+		go func() { defer wg.Done(); getFast(t, s, t.Context()) }()
+	}
+	wg.Wait()
+	<-f.entered
+	release()
+	idle(t, s)
+	if prom, _ := f.googleHits(); prom != 2*len(Panels) {
+		t.Fatalf("prometheus hits = %d, want %d: more than one background fetch", prom, 2*len(Panels))
+	}
+}
+
+func TestMetricsSource_AStaleGetWhileAFetchIsInFlightStartsNone(t *testing.T) {
+	clk := newClock()
+	f, s, _ := newComboFake(t, clk.now)
+	if _, err := s.Get(t.Context(), "1h", ""); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(MetricsTTL)
+	release := holdQueries(t, f)
+	getFast(t, s, t.Context())
+	<-f.entered
+	for range 3 {
+		clk.advance(time.Second)
+		getFast(t, s, t.Context())
+	}
+	release()
+	idle(t, s)
+	if prom, _ := f.googleHits(); prom != 2*len(Panels) {
+		t.Fatalf("prometheus hits = %d, want %d", prom, 2*len(Panels))
+	}
+}
+
+func TestMetricsSource_TheBackgroundFetchReplacesTheEntryEvenWhenTheCallerLeft(t *testing.T) {
+	clk := newClock()
+	_, s, _ := newComboFake(t, clk.now)
+	first, err := s.Get(t.Context(), "1h", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(MetricsTTL)
+	ctx, cancel := context.WithCancel(t.Context())
+	getFast(t, s, ctx)
+	cancel()
+	idle(t, s)
+	next := getFast(t, s, t.Context())
+	if !next.End.After(first.End) {
+		t.Fatalf("next poll End = %v, want after %v: the entry was not replaced", next.End, first.End)
+	}
+	for _, p := range next.Panels {
+		if !p.Available {
+			t.Fatalf("panel %s unavailable: the cancelled caller aborted the fetch", p.Key)
+		}
+	}
+}
+
+// AC2: an open screen polling every MetricsTTL is never served an entry older than one period plus a fetch.
+func TestMetricsSource_SixtySecondPollsNeverWaitAndStayWithinOnePeriodPlusAFetch(t *testing.T) {
+	const fetchTime = 1500 * time.Millisecond
+	clk := newClock()
+	f, s, _ := newComboFake(t, clk.now)
+	f.mu.Lock()
+	f.override = func(path, _ string) (int, string, bool) {
+		if strings.HasSuffix(path, "/query_range") {
+			time.Sleep(300 * time.Millisecond)
+		}
+		return 0, "", false
+	}
+	f.mu.Unlock()
+	if _, err := s.Get(t.Context(), "1h", ""); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 8; i++ {
+		clk.advance(MetricsTTL)
+		start := time.Now()
+		m := getFast(t, s, t.Context())
+		if d := time.Since(start); d > 150*time.Millisecond {
+			t.Fatalf("poll %d took %v, want a cache answer", i, d)
+		}
+		if age := clk.now().Sub(m.End); age > MetricsTTL+fetchTime+windowLag {
+			t.Fatalf("poll %d served data %v old, want at most one period plus one fetch", i, age)
+		}
+		clk.advance(fetchTime)
+		idle(t, s)
+		clk.advance(-fetchTime)
+	}
+}
+
+// A hit leaves the entry unrefreshed, so a poll that follows by one more period must still not wait.
+func TestMetricsSource_AHitThenAPollWithJitterDoesNotWait(t *testing.T) {
+	clk := newClock()
+	f, s, _ := newComboFake(t, clk.now)
+	if _, err := s.Get(t.Context(), "1h", ""); err != nil {
+		t.Fatal(err)
+	}
+	holdQueries(t, f)
+	clk.advance(MetricsTTL - 100*time.Millisecond)
+	getFast(t, s, t.Context())
+	clk.advance(MetricsTTL + 200*time.Millisecond)
+	getFast(t, s, t.Context())
+}
+
 func TestMetricsSource_CallsNothingUntilAsked(t *testing.T) {
 	f, _, _ := newComboFake(t, newClock().now)
 	f.mu.Lock()

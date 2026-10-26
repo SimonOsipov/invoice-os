@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -195,7 +196,8 @@ func TestRLS_GatewayThrottle_TheRowHoldsAHashNotTheAddress(t *testing.T) {
 		t.Errorf("rows = %d, n = %d for sha256 of the folded address, want 1 row and n = 2", rows, n)
 	}
 	var leaks int
-	if err := d.super.QueryRow(context.Background(), `SELECT count(*) FROM gateway_throttle_counts t WHERE t::text ILIKE '%' || $1 || '%'`, local).Scan(&leaks); err != nil {
+	if err := d.super.QueryRow(context.Background(), `SELECT count(*) FROM gateway_throttle_counts t
+		WHERE t.scope ILIKE '%' || $1 || '%' OR position(convert_to($1, 'UTF8') in t.key_hash) > 0`, local).Scan(&leaks); err != nil {
 		t.Fatal(err)
 	}
 	if leaks != 0 {
@@ -273,5 +275,189 @@ func TestRLS_GatewayThrottle_SweepDropsExpiredRows(t *testing.T) {
 	}
 	if got := count(liveScope); got != 1 {
 		t.Errorf("live rows left = %d, want 1: the sweep keeps unexpired rows", got)
+	}
+}
+
+func errorRecords(logs *logStore) []string {
+	var out []string
+	for _, r := range logs.all() {
+		if r.level == slog.LevelError {
+			out = append(out, r.text)
+		}
+	}
+	return out
+}
+
+func TestRLS_GatewayThrottle_ARefundFloorsAtZeroAndStaysInItsScope(t *testing.T) {
+	d := requireHandoffDB(t)
+	requireSharedStateTables(t, d)
+	addr := ownAddress(t, d)
+	log, logs := newCaptureLog()
+	signIn := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
+	signIn.Shared(d.a, log)
+	resend := NewSignInThrottle("resend-address", ResendPerAddress, SignInMaxKeys, SignInWindow, time.Now)
+	resend.Shared(d.b, log)
+
+	signIn.Refund(addr)
+	var rows int
+	h := sha256.Sum256([]byte(signInKey(addr)))
+	if err := d.super.QueryRow(context.Background(), `SELECT count(*) FROM gateway_throttle_counts WHERE key_hash = $1`, h[:]).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Errorf("a Refund with no row made %d row(s), want 0", rows)
+	}
+
+	if !signIn.Reserve(addr) {
+		t.Fatal("first Reserve = false, want true")
+	}
+	signIn.Refund(addr)
+	signIn.Refund(addr)
+	if n, _ := throttleRow(t, d, "sign-in", addr); n != 0 {
+		t.Errorf("row n = %d after two Refunds of one reservation, want 0", n)
+	}
+
+	reserveN(t, signIn, addr, SignInMaxFailures)
+	resend.Refund(addr)
+	if signIn.Reserve(addr) {
+		t.Error("a Refund in the resend-address scope freed a sign-in slot, want scopes apart")
+	}
+	if errs := errorRecords(logs); len(errs) != 0 {
+		t.Errorf("ERROR records = %q, want none: a Refund below zero is a no-op, not a CHECK violation", errs)
+	}
+}
+
+func TestRLS_GatewayThrottle_AResetTouchesOnlyItsOwnAddressAndScope(t *testing.T) {
+	d := requireHandoffDB(t)
+	requireSharedStateTables(t, d)
+	addr, other := ownAddress(t, d), ownAddress(t, d)
+	log, logs := newCaptureLog()
+	signIn := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
+	signIn.Shared(d.a, log)
+	resend := NewSignInThrottle("resend-address", ResendPerAddress, SignInMaxKeys, SignInWindow, time.Now)
+	resend.Shared(d.b, log)
+	reserveN(t, signIn, addr, 2)
+	reserveN(t, signIn, other, 3)
+	reserveN(t, resend, addr, 1)
+
+	signIn.Reset(addr)
+
+	if n, _ := throttleRow(t, d, "sign-in", other); n != 3 {
+		t.Errorf("other address row n = %d after a Reset of one address, want 3", n)
+	}
+	if n, _ := throttleRow(t, d, "resend-address", addr); n != 1 {
+		t.Errorf("resend-address row n = %d after a sign-in Reset, want 1", n)
+	}
+	var rows int
+	h := sha256.Sum256([]byte(signInKey(addr)))
+	if err := d.super.QueryRow(context.Background(), `SELECT count(*) FROM gateway_throttle_counts WHERE scope = 'sign-in' AND key_hash = $1`, h[:]).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Errorf("sign-in rows for the reset address = %d, want 0", rows)
+	}
+	signIn.Reset(ownAddress(t, d))
+	if errs := errorRecords(logs); len(errs) != 0 {
+		t.Errorf("ERROR records = %q, want none: Reset of an address with no row is a no-op", errs)
+	}
+}
+
+func TestRLS_GatewayThrottle_AnOpenWindowIsNeitherExtendedNorEndedEarly(t *testing.T) {
+	d := requireHandoffDB(t)
+	requireSharedStateTables(t, d)
+	addr := ownAddress(t, d)
+	a, b := instance("sign-in", SignInMaxFailures, d.a), instance("sign-in", SignInMaxFailures, d.b)
+	reserveSplit(t, a, b, addr)
+	h := sha256.Sum256([]byte(signInKey(addr)))
+	if _, err := d.super.Exec(context.Background(), `UPDATE gateway_throttle_counts SET expires_at = now() + interval '30 seconds'
+		WHERE scope = 'sign-in' AND key_hash = $1`, h[:]); err != nil {
+		t.Fatal(err)
+	}
+
+	if a.Reserve(addr) {
+		t.Error("Reserve in a window with 30 s left and n = max = true, want false")
+	}
+
+	n, remaining := throttleRow(t, d, "sign-in", addr)
+	if n != SignInMaxFailures {
+		t.Errorf("row n = %d after a refused Reserve, want %d", n, SignInMaxFailures)
+	}
+	if remaining <= 0 || remaining > 30*time.Second {
+		t.Errorf("expires_at is %v away after a refused Reserve, want at most 30 s: a refusal does not move the window", remaining)
+	}
+	b.Refund(addr)
+	if !b.Reserve(addr) {
+		t.Fatal("Reserve after a Refund = false, want true")
+	}
+	if _, remaining = throttleRow(t, d, "sign-in", addr); remaining <= 0 || remaining > 30*time.Second {
+		t.Errorf("expires_at is %v away after an admitted Reserve in an open window, want at most 30 s: the window starts at the first attempt", remaining)
+	}
+}
+
+func TestRLS_GatewayThrottle_ConcurrentReservesOnAnExpiredRowAdmitExactlyTheLimit(t *testing.T) {
+	d := requireHandoffDB(t)
+	requireSharedStateTables(t, d)
+	addr := ownAddress(t, d)
+	a, b := instance("sign-in", SignInMaxFailures, d.a), instance("sign-in", SignInMaxFailures, d.b)
+	reserveSplit(t, a, b, addr)
+	h := sha256.Sum256([]byte(signInKey(addr)))
+	if _, err := d.super.Exec(context.Background(), `UPDATE gateway_throttle_counts SET expires_at = now() - interval '1 second'
+		WHERE scope = 'sign-in' AND key_hash = $1`, h[:]); err != nil {
+		t.Fatal(err)
+	}
+
+	const callers = 30
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	var admitted atomic.Int32
+	for i := 0; i < callers; i++ {
+		th := a
+		if i%2 == 1 {
+			th = b
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if th.Reserve(addr) {
+				admitted.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if got := admitted.Load(); got != SignInMaxFailures {
+		t.Errorf("%d of %d concurrent reservations admitted on an expired row, want exactly %d: one new window", got, callers, SignInMaxFailures)
+	}
+	if n, _ := throttleRow(t, d, "sign-in", addr); n != SignInMaxFailures {
+		t.Errorf("row n = %d, want %d", n, SignInMaxFailures)
+	}
+}
+
+func TestRLS_GatewayThrottle_SpellingsThatFoldAlikeShareOneRowIncludingNonASCII(t *testing.T) {
+	d := requireHandoffDB(t)
+	requireSharedStateTables(t, d)
+	local := "élise-" + randHex(t, 8)
+	h := sha256.Sum256([]byte(local + "@corp.example"))
+	t.Cleanup(func() {
+		_, _ = d.super.Exec(context.Background(), `DELETE FROM gateway_throttle_counts WHERE key_hash = $1`, h[:])
+	})
+	a, b := instance("sign-in", SignInMaxFailures, d.a), instance("sign-in", SignInMaxFailures, d.b)
+
+	if !a.Reserve("\t" + strings.ToUpper(local) + "@CORP.example\n") {
+		t.Fatal("Reserve of the upper-cased, padded spelling = false, want true")
+	}
+	if !b.Reserve(local + "@corp.example") {
+		t.Fatal("Reserve of the folded spelling = false, want true")
+	}
+
+	var rows, n int
+	if err := d.super.QueryRow(context.Background(), `SELECT count(*), coalesce(max(n), 0) FROM gateway_throttle_counts
+		WHERE scope = 'sign-in' AND key_hash = $1`, h[:]).Scan(&rows, &n); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 || n != 2 {
+		t.Errorf("rows = %d, n = %d for sha256 of the folded non-ASCII address, want 1 row and n = 2", rows, n)
 	}
 }

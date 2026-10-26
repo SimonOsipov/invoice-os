@@ -227,3 +227,61 @@ func TestSignInThrottle_NilPoolKeepsTheInProcessCount(t *testing.T) {
 		t.Errorf("Reserve #%d = true, want false", SignInMaxFailures+1)
 	}
 }
+
+func TestSignInThrottle_SharedSweepsOncePerIntervalAndOnlyInAdmit(t *testing.T) {
+	th, clk := newTestThrottle(SignInMaxKeys, SignInWindow)
+	log, logs := newCaptureLog()
+	th.Shared(deadPool(t), log)
+	sweeps := func() int {
+		n := 0
+		for _, e := range errorRecords(logs) {
+			if strings.HasPrefix(e, "sign-in throttle: sweep") {
+				n++
+			}
+		}
+		return n
+	}
+
+	th.Refund("a@x.com")
+	th.Reset("a@x.com")
+	if n := sweeps(); n != 0 {
+		t.Fatalf("sweeps after Refund and Reset = %d, want 0: only Admit sweeps", n)
+	}
+	th.Reserve("a@x.com")
+	th.Reserve("a@x.com")
+	if n := sweeps(); n != 1 {
+		t.Fatalf("sweeps after two Reserves in one instant = %d, want 1", n)
+	}
+	clk.Advance(signInSweepEvery - time.Nanosecond)
+	th.Reserve("a@x.com")
+	if n := sweeps(); n != 1 {
+		t.Fatalf("sweeps just under %v later = %d, want 1", signInSweepEvery, n)
+	}
+	clk.Advance(time.Nanosecond)
+	th.Reserve("a@x.com")
+	if n := sweeps(); n != 2 {
+		t.Fatalf("sweeps %v after the first = %d, want 2", signInSweepEvery, n)
+	}
+}
+
+// A stalled database must not block other callers on t.mu.
+func TestSignInThrottle_SharedAdmitDoesNotHoldTheMutexAcrossSQL(t *testing.T) {
+	th, _ := newTestThrottle(SignInMaxKeys, SignInWindow)
+	th.Shared(stalledPool(t), slog.New(slog.DiscardHandler))
+	go th.Admit("a@x.com")
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if th.mu.TryLock() {
+			inSQL := !th.lastSweep.IsZero()
+			th.mu.Unlock()
+			if inSQL {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("t.mu stayed locked while Admit waited on the database, want it released before any SQL")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

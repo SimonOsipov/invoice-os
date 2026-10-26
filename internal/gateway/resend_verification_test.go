@@ -765,3 +765,18 @@ func TestResendVerification_FullMapFailsClosed(t *testing.T) {
 		t.Errorf("limit lines = %v, want one limit=address", lines)
 	}
 }
+
+// D6: with the shared count unreadable, an enforced resend answers the same 202 and mails nothing.
+func TestResendVerification_AnUnreadableThrottleIsTheSame202AndSendsNothing(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
+	th := resendThrottle(time.Now)
+	th.Shared(deadPool(t), slog.New(slog.DiscardHandler))
+	h := ResendVerificationHandler(fake.URL, testClient(), 0, th, true, slog.New(slog.DiscardHandler))
+
+	rec, _ := serveResend(t.Context(), h, resendBody("ada@corp.example"))
+
+	requireAccepted(t, rec, "enforced resend, count unreadable")
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+}

@@ -390,3 +390,37 @@ func TestEraseByID_AFailedSweepSkipsTheAccountAndLeaksNothing(t *testing.T) {
 	}
 	qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.uid, r.mail)
 }
+
+func TestEraseByID_ACopyWrittenAfterTheFirstSweepFailsTheAttemptAndIsSwept(t *testing.T) {
+	r := newEraseRig(t)
+	other, otherMail := r.person()
+	r.contact(otherMail, &other, 1)
+	// A running intake job writes the person's contact while the account is deleted.
+	r.acct.fn = func(n int, _ string) error {
+		if n == 1 {
+			r.contact(r.mail, &r.uid, 1)
+		}
+		return nil
+	}
+	w := r.byIDWorker()
+
+	err := r.workByID(w, r.uid)
+	if !errors.Is(err, errCameBack) {
+		t.Fatalf("Work = %v, want errCameBack so River retries", err)
+	}
+	if _, c := r.copies(r.uid); c != 0 {
+		t.Errorf("contacts of the person after the final sweep = %d, want 0", c)
+	}
+	if _, c := r.copies(other); c != 1 {
+		t.Errorf("another person's contacts = %d, want 1", c)
+	}
+	warns := r.sink.at(slog.LevelWarn)
+	if len(warns) != 1 || !strings.HasSuffix(warns[0].Text, "step="+stepFinal) {
+		t.Errorf("WARN lines = %+v, want one with step=%s", warns, stepFinal)
+	}
+	qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.uid, r.mail)
+
+	if err := r.workByID(w, r.uid); err != nil {
+		t.Errorf("retry with nothing left: %v, want nil", err)
+	}
+}

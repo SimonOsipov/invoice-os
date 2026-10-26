@@ -53,7 +53,7 @@ func (w *EraseByIDWorker) Work(ctx context.Context, job *river.Job[EraseByIDArgs
 	}
 	uid := id.String()
 
-	err = pgx.BeginFunc(ctx, w.Pool, func(tx pgx.Tx) error { return w.sweep(ctx, tx, uid) })
+	_, err = w.sweepTx(ctx, uid)
 	if err != nil {
 		logEraseFailure(ctx, w.Logger, stepSweep, err)
 		return err
@@ -66,31 +66,51 @@ func (w *EraseByIDWorker) Work(ctx context.Context, job *river.Job[EraseByIDArgs
 		logEraseFailure(ctx, w.Logger, stepAccount, err)
 		return err
 	}
+	// A running job can write a copy after the first sweep; a copy found here fails the attempt.
+	removed, err := w.sweepTx(ctx, uid)
+	if err != nil {
+		logEraseFailure(ctx, w.Logger, stepFinal, err)
+		return err
+	}
+	if removed > 0 {
+		w.Logger.WarnContext(ctx, "erasure: a copy came back; the sweep runs again", slog.String("step", stepFinal))
+		return errCameBack
+	}
 	return nil
 }
 
-func (w *EraseByIDWorker) sweep(ctx context.Context, tx pgx.Tx, uid string) error {
+func (w *EraseByIDWorker) sweepTx(ctx context.Context, uid string) (removed int64, err error) {
+	err = pgx.BeginFunc(ctx, w.Pool, func(tx pgx.Tx) error {
+		removed, err = w.sweep(ctx, tx, uid)
+		return err
+	})
+	return removed, err
+}
+
+// sweep reports how many rows its deletes removed.
+func (w *EraseByIDWorker) sweep(ctx context.Context, tx pgx.Tx, uid string) (int64, error) {
+	var removed int64
 	const where = `kind = ANY($1) AND lower(args->>'user_id') = $2`
 	rows, err := tx.Query(ctx, `SELECT id FROM river_job WHERE state IN ('available', 'pending', 'retryable', 'running', 'scheduled') AND `+where+` ORDER BY id`, eraseKinds, uid)
 	if err != nil {
-		return fmt.Errorf("notifications: find jobs: %w", err)
+		return 0, fmt.Errorf("notifications: find jobs: %w", err)
 	}
 	var ids []int64
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
-			return fmt.Errorf("notifications: read job: %w", err)
+			return 0, fmt.Errorf("notifications: read job: %w", err)
 		}
 		ids = append(ids, id)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("notifications: find jobs: %w", err)
+		return 0, fmt.Errorf("notifications: find jobs: %w", err)
 	}
 	for _, id := range ids {
 		if _, err := w.River.JobCancelTx(ctx, tx, id); err != nil {
-			return fmt.Errorf("notifications: cancel job: %w", err)
+			return 0, fmt.Errorf("notifications: cancel job: %w", err)
 		}
 	}
 	// Cancelled first, so the jobs just cancelled go too; a running job stays, marked.
@@ -102,11 +122,13 @@ func (w *EraseByIDWorker) sweep(ctx context.Context, tx pgx.Tx, uid string) erro
 		{`DELETE FROM registrant_handoffs WHERE lower(user_id) = $1`, []any{uid}},
 		{`DELETE FROM contacts WHERE user_id::text = $1`, []any{uid}},
 	} {
-		if _, err := tx.Exec(ctx, d.sql, d.args...); err != nil {
-			return fmt.Errorf("notifications: delete copies: %w", err)
+		tag, err := tx.Exec(ctx, d.sql, d.args...)
+		if err != nil {
+			return 0, fmt.Errorf("notifications: delete copies: %w", err)
 		}
+		removed += tag.RowsAffected()
 	}
-	return nil
+	return removed, nil
 }
 
 // AddEraseByIDTo registers the by-id erase worker on the worker's one bundle.

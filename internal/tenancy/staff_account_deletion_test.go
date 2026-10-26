@@ -296,8 +296,10 @@ func TestStaffAccountDeletion_HandOnGivesAdminToTheEarliestActiveMember(t *testi
 	// the higher id is seeded first, so insertion order cannot decide the tie
 	r := w.addJoined(t, hi, "reviewer", "active", "Tunde Bello", joined(1))
 	p := w.addJoined(t, lo, "preparer", "active", "Chidi Eze", joined(1))
-	aBefore, sBefore, iBefore, rBefore, pBefore := imageOf(t, w.super, w.tenant, w.admin), imageOf(t, w.super, w.tenant, s),
-		imageOf(t, w.super, w.tenant, i), imageOf(t, w.super, w.tenant, r), imageOf(t, w.super, w.tenant, p)
+	// joined last under the lowest id: neither the latest join nor the lowest id alone picks P
+	late := w.addJoined(t, "00000000-"+uuid.NewString()[9:], "reviewer", "active", "Late Joiner", joined(5))
+	aBefore, sBefore, iBefore, rBefore, pBefore, lateBefore := imageOf(t, w.super, w.tenant, w.admin), imageOf(t, w.super, w.tenant, s),
+		imageOf(t, w.super, w.tenant, i), imageOf(t, w.super, w.tenant, r), imageOf(t, w.super, w.tenant, p), imageOf(t, w.super, w.tenant, late)
 
 	if err := w.del(w.admin, OutcomeHandOn, p); err != nil {
 		t.Fatalf("StaffDeleteAccount(hand_on): %v", err)
@@ -309,6 +311,7 @@ func TestStaffAccountDeletion_HandOnGivesAdminToTheEarliestActiveMember(t *testi
 	requireImage(t, w.invWorld, "suspended member", s, sBefore)
 	requireImage(t, w.invWorld, "invited member", i, iBefore)
 	requireImage(t, w.invWorld, "later active member", r, rBefore)
+	requireImage(t, w.invWorld, "last active member", late, lateBefore)
 	requireImage(t, w.invWorld, "target", w.admin, endState(aBefore))
 
 	rows := staffEvents(t, w.super, w.tenant)
@@ -339,7 +342,7 @@ func TestStaffAccountDeletion_HandOnGivesAdminToTheEarliestActiveMember(t *testi
 	if email, _, found := w.erasureOf(t, w.admin); !found || email != w.admin+"@members.test" || w.eraseJobs(t, w.admin) != 1 {
 		t.Errorf("target erasure = (%q, found %v), jobs = %d, want the row email queued once", email, found, w.eraseJobs(t, w.admin))
 	}
-	w.requireNoErase(t, p, r, s, i)
+	w.requireNoErase(t, p, r, s, i, late)
 	w.requireUnscheduled(t)
 }
 
@@ -736,6 +739,23 @@ func TestStaffAccountDeletion_ASuspendedOrInvitedTargetLeavesAndASuspendedAdminI
 			}
 		})
 	}
+	t.Run("a suspended admin target hands nothing on", func(t *testing.T) {
+		w := newStaffAccWorld(t)
+		p := w.member(t, "preparer", "active", "Chidi Eze", joined(1))
+		if _, err := w.super.Exec(context.Background(),
+			`UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id = $2`, w.tenant, w.admin); err != nil {
+			t.Fatalf("suspend the admin: %v", err)
+		}
+		pBefore, aBefore := imageOf(t, w.super, w.tenant, p), imageOf(t, w.super, w.tenant, w.admin)
+		if err := w.del(w.admin, OutcomeHandOn, p); !errors.Is(err, ErrDeletionOutcomeChanged) {
+			t.Fatalf("hand_on err = %v, want ErrDeletionOutcomeChanged (a suspended admin hands nothing on)", err)
+		}
+		if err := w.del(w.admin, OutcomeLeave, ""); err != nil {
+			t.Fatalf("leave: %v", err)
+		}
+		requireImage(t, w.invWorld, "target", w.admin, endState(aBefore))
+		requireImage(t, w.invWorld, "the active member", p, pBefore)
+	})
 	t.Run("the only active admin beside a suspended admin hands on", func(t *testing.T) {
 		w := newStaffAccWorld(t)
 		sa := w.member(t, "admin", "suspended", "Sue Pend", joined(0))

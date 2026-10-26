@@ -190,10 +190,12 @@ describe('content', () => {
     expect(byId('delete-account').desc).toMatch(/downloads the export/i)
   })
 
-  // Add the emailed cancel link claim only once the app has it: edit this regex first.
-  it('content_deletionCopyClaimsOnlyWhatIsLive', () => {
-    const unshipped = /cancel link|e-?mail/i
-    expect('cancel link by email').toMatch(unshipped)
-    for (const id of ['delete-account', 'delete-workspace']) expect(JSON.stringify(byId(id)), id).not.toMatch(unshipped)
+  it('content_deletionCopyNamesTheCancelLink', () => {
+    const ws = byId('delete-workspace')
+    expect(ws.desc).toMatch(/other admins get an email with a link to cancel/i)
+    expect(ws.desc).toMatch(/another email if the deletion is cancelled/i)
+    if (ws.sc.kind === 'flow') expect(ws.sc.steps[0].out).toMatch(/other admins emailed a cancel link/i)
+    expect(ws.sc.steps[1].cap).toMatch(/emailed link/i)
+    expect(JSON.stringify(byId('delete-account'))).not.toMatch(/e-?mail/i)
   })
 })

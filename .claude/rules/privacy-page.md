@@ -37,6 +37,8 @@ paths:
   - "internal/actor/**"
   - "frontend/app/src/lib/accountDeletion.ts"
   - "frontend/app/src/lib/workspaceDeletion.ts"
+  - "frontend/app/src/lib/workspaceExport.ts"
+  - "internal/archive/workspace.go"
   - "sidecar/auth/Dockerfile"
   - "internal/tenancy/store.go"
   - "internal/tenancy/tenancy.go"

@@ -714,9 +714,16 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
 
   it('DEL-10-02 every account-section sentence is pinned in place', () => {
     const text = accountText()
-    const at = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7'].map((id) => text.indexOf(deletionSentence(id)))
+    const at = ['A1', 'A2', 'A3', 'A4', 'A5', 'E1', 'A6', 'A7'].map((id) => text.indexOf(deletionSentence(id)))
     expect(at.every((i) => i > -1), `a sentence is missing: ${at}`).toBe(true)
     expect(at).toEqual([...at].sort((x, y) => x - y))
+  })
+
+  it('DEL-10-04 E1 is pinned in the account section', () => {
+    const text = accountText()
+    expect(text).toContain(deletionSentence('E1'))
+    expect(text.indexOf(deletionSentence('E1'))).toBeGreaterThan(text.indexOf(deletionSentence('A5')))
+    expect(text.indexOf(deletionSentence('E1'))).toBeLessThan(text.indexOf(deletionSentence('A6')))
   })
 
   it('DEL-10-02 A3 says asks for both vendors and promises no vendor outcome', () => {

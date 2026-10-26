@@ -30,6 +30,8 @@ export const APP_LABELS = {
   workspaceTab: 'Workspace',
   deleteWorkspace: 'Delete workspace',
 } as const
+// Pinned to EXPORT_COPY in the app (exportLabels in privacyCodeFacts.test.util.ts).
+export const EXPORT_LABELS = { button: 'Download export', tick: 'I downloaded the export' } as const
 
 const PAGE_TITLE = 'Privacy and cookies — ASComply Africa'
 
@@ -375,6 +377,12 @@ export function Privacy() {
           <p style={P}>
             An admin can delete the whole workspace. In {APP_LABELS.settings}, under {APP_LABELS.workspaceTab}, the admin
             chooses {APP_LABELS.deleteWorkspace} and types the workspace name to confirm.
+          </p>
+          <p style={P}>
+            In the dialog that opens, {EXPORT_LABELS.button} starts the download of one ZIP file, and the admin ticks “
+            {EXPORT_LABELS.tick}” before the deletion can be confirmed. The ZIP holds the evidence bundle of every company
+            in the workspace over all time, every original uploaded document and the audit log. While the workspace is
+            locked, the notice offers the admin {EXPORT_LABELS.button} again.
           </p>
           <p style={P}>
             The workspace is then locked for {DELETION_GRACE_DAYS} days. Nobody can create or change anything in it.

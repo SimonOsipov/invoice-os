@@ -5,7 +5,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
-import { APP_LABELS, BACKUP_DAYS, DELETED_MARK, DELETION_GRACE_DAYS, FILE_RECOVERY_DAYS, PRIVACY_CONTACT } from './Privacy'
+import { APP_LABELS, BACKUP_DAYS, DELETED_MARK, DELETION_GRACE_DAYS, EXPORT_LABELS, FILE_RECOVERY_DAYS, PRIVACY_CONTACT } from './Privacy'
 
 const REPO = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
 
@@ -231,6 +231,7 @@ export const DELETION_SENTENCES: readonly { id: string; text: string }[] = [
   { id: 'A3', text: 'The erasure deletes your sign-in account. Our own server also asks HubSpot to delete your contact permanently, together with the deals filed under it, and asks Resend to delete your contact. It deletes the copies of your registration and demo details that our own server holds under your email address, and it ends your subscription to the Blog newsletter if that address has one.' },
   { id: 'A4', text: `Your name stays in the audit log and in the history of each invoice of your workspace, the record of who did what, with ${DELETED_MARK} after it. If we never held a name for you, the history says Deleted member. Your membership record keeps your name and drops your email address.` },
   { id: 'A5', text: `An admin can delete the whole workspace. In ${APP_LABELS.settings}, under ${APP_LABELS.workspaceTab}, the admin chooses ${APP_LABELS.deleteWorkspace} and types the workspace name to confirm.` },
+  { id: 'E1', text: `In the dialog that opens, ${EXPORT_LABELS.button} starts the download of one ZIP file, and the admin ticks “${EXPORT_LABELS.tick}” before the deletion can be confirmed. The ZIP holds the evidence bundle of every company in the workspace over all time, every original uploaded document and the audit log. While the workspace is locked, the notice offers the admin ${EXPORT_LABELS.button} again.` },
   { id: 'A6', text: `The workspace is then locked for ${DELETION_GRACE_DAYS} days. Nobody can create or change anything in it. While it is locked, a member cannot delete their own account. Members see the date it will be deleted and can sign out. Any admin can cancel the deletion until the ${DELETION_GRACE_DAYS} days end. Then our server deletes every invoice, file and member of the workspace, and erases the records of each member still in it, as described above.` },
   { id: 'A7', text: `If you are the only active member of a workspace, deleting your account deletes the workspace instead. Your account then goes when the workspace is deleted, ${DELETION_GRACE_DAYS} days later, not at once.` },
   { id: 'R1', text: 'This section covers the main copies in our own systems. It says how long they last after an account or a workspace is deleted.' },
@@ -385,7 +386,7 @@ export function deleteWorkspaceDialogNeedsTypedName(
   const match = found(/export function nameMatches\b[^{]*\{([\s\S]*?)\n\}/.exec(lib)?.[1], 'nameMatches')
   return (
     /return typed === name\b/.test(match) &&
-    /canConfirm = nameMatches\(typed, name\)/.test(dialog) &&
+    /canConfirm = exported && nameMatches\(typed, name\)/.test(dialog) &&
     /data-testid="delete-workspace-confirm"/.test(dialog) &&
     confirmTag(dialog).includes('disabled={!canConfirm}')
   )
@@ -433,6 +434,59 @@ function lastDefinition(migrations: string[], re: RegExp, what: string): string 
 export function graceDays(migrations: string[] = migrationUps()): number {
   const fn = lastDefinition(migrations, /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?tenants_deletion_guard\(\)[\s\S]*?\$\$[\s\S]*?\$\$/i, 'the tenants_deletion_guard function')
   return Number(found(/deletion_scheduled_at \+ interval '(\d+) days'/.exec(fn)?.[1], 'the deletion interval'))
+}
+
+// The two labels of EXPORT_LABELS, read from the app's EXPORT_COPY.
+export function exportLabels(src: string = readSource('frontend/app/src/lib/workspaceExport.ts')): typeof EXPORT_LABELS {
+  const copy = found(/EXPORT_COPY\s*=\s*\{([\s\S]*?)\}\s*as const/.exec(src)?.[1], 'EXPORT_COPY')
+  return {
+    button: found(/button:\s*'([^']+)'/.exec(copy)?.[1], 'EXPORT_COPY button') as 'Download export',
+    tick: found(/tick:\s*'([^']+)'/.exec(copy)?.[1], 'EXPORT_COPY tick') as 'I downloaded the export',
+  }
+}
+
+// The entries the workspace ZIP gets, in write order, read from AssembleWorkspace.
+export function exportZipEntries(src: string = readSource('internal/archive/workspace.go')): string[] {
+  const body = found(/func \(s \*WorkspaceStore\) AssembleWorkspace\b[\s\S]*?\n}\n/.exec(src)?.[0], 'AssembleWorkspace')
+  const hits = [/writeEntityStages\([^"\n]*"(companies\/)"/.exec(body)?.[1], /WriteBodyFrom\("(documents\/)"/.exec(src)?.[1], /streamCSV\("(audit_log\.csv)"/.exec(body)?.[1]]
+  return hits.filter((x): x is string => x !== undefined)
+}
+
+// Every company, every document, no date window, one .zip.
+export function exportCoversAllTime(src: string = readSource('internal/archive/workspace.go')): boolean {
+  const body = found(/func \(s \*WorkspaceStore\) AssembleWorkspace\b[\s\S]*?\n}\n/.exec(src)?.[0], 'AssembleWorkspace')
+  const firstDocs = found(/func selectDocumentPage\b[\s\S]*?cur == nil \{\s*rows, err = tx\.Query\(ctx, cols\+`([^`]*)`/.exec(src)?.[1], 'the first documents page')
+  return (
+    /var allTime = Request\{From: time\.Time\{\}, To: time\.Date\(9999,/.test(src) &&
+    /req := allTime\b/.test(body) &&
+    /SELECT id::text, name, tin FROM business_entities ORDER BY/.test(src) &&
+    !/WHERE/.test(firstDocs) &&
+    /\+ "\.zip"\)/.test(body)
+  )
+}
+
+// The delete dialog's button starts the export and its confirm waits on the tick.
+export function dialogStartsExportAndAsksTick(
+  dialog: string = readSource('frontend/app/src/components/DeleteWorkspaceDialog.tsx'),
+): boolean {
+  const button = found(/<button[^>]*data-testid="delete-workspace-export"[^>]*>[\s\S]*?<\/button>/.exec(dialog)?.[0], 'the export button')
+  const label = found(/<label[^>]*>[\s\S]*?<\/label>/.exec(dialog.slice(dialog.lastIndexOf('<label', dialog.indexOf('data-testid="delete-workspace-exported"'))))?.[0], 'the tick label')
+  return (
+    button.includes('onClick={exp.start}') &&
+    button.includes('{EXPORT_COPY.button}') &&
+    label.includes('type="checkbox"') &&
+    label.includes('checked={exported}') &&
+    label.includes('{EXPORT_COPY.tick}') &&
+    /canConfirm = exported && nameMatches/.test(dialog)
+  )
+}
+
+// The lock notice offers the export to admins only.
+export function noticeOffersExportToAdmins(
+  notice: string = readSource('frontend/app/src/components/WorkspaceDeletionNotice.tsx'),
+): boolean {
+  const adminBlock = /\{isAdmin && \(\s*<button\s+onClick=\{exp\.start\}[\s\S]*?<\/button>\s*\)\}/.exec(notice)?.[0] ?? ''
+  return adminBlock.includes('{EXPORT_COPY.button}') && adminBlock.includes('data-testid="deletion-notice-export"')
 }
 
 // DEL-06 merged: the app has the export module. The page may mention the export only then.

@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { AI_PROVIDER_HOST, APP_LABELS, BACKUP_DAYS, DELETED_MARK, DELETION_GRACE_DAYS, FILE_RECOVERY_DAYS, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
+import { AI_PROVIDER_HOST, APP_LABELS, BACKUP_DAYS, DELETED_MARK, DELETION_GRACE_DAYS, EXPORT_LABELS, FILE_RECOVERY_DAYS, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { Footer } from './Footer'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
@@ -39,6 +39,11 @@ import {
   eraseDeletesBlogSubscription,
   eraseDeletesRegistrationCopies,
   eraseDeletesSigninAccount,
+  exportCoversAllTime,
+  exportLabels,
+  exportZipEntries,
+  dialogStartsExportAndAsksTick,
+  noticeOffersExportToAdmins,
   graceDays,
   gotrueVersion,
   invitationKeepsInviteeEmail,
@@ -1011,10 +1016,67 @@ describe('DEL-10-02: the account section states the deletion rules', () => {
   const exportClaimMatches = (merged: boolean, text: string): boolean => merged === /\bexport/i.test(text)
 
   it('DEL-10-02 the page mentions the export iff the export is merged', () => {
-    const account = DELETION_SENTENCES.filter((x) => x.id.startsWith('A')).map((x) => x.text).join(' ')
-    expect(workspaceExportIsMerged()).toBe(false)
+    const account = DELETION_SENTENCES.filter((x) => /^[AE]/.test(x.id)).map((x) => x.text).join(' ')
+    expect(workspaceExportIsMerged()).toBe(true)
     expect(exportClaimMatches(workspaceExportIsMerged(), account)).toBe(true)
-    expect(exportClaimMatches(true, account)).toBe(false)
+    expect(exportClaimMatches(false, account)).toBe(false)
+    expect(exportClaimMatches(true, account.replace(/export/gi, 'copy'))).toBe(false)
+  })
+})
+
+describe('DEL-10-04: the export sentence states what the merged code backs', () => {
+  const e1 = (): string => DELETION_SENTENCES.find((x) => x.id === 'E1')!.text
+  const swap = (rel: string, from: string | RegExp, to: string): string => {
+    const src = readSource(rel)
+    const out = src.replace(from, to)
+    expect(out, `the planted edit missed ${rel}`).not.toBe(src)
+    return out
+  }
+  const WS = 'internal/archive/workspace.go'
+  const DLG = 'frontend/app/src/components/DeleteWorkspaceDialog.tsx'
+  const NOTICE = 'frontend/app/src/components/WorkspaceDeletionNotice.tsx'
+
+  it("DEL-10-04 the export contents are the ZIP's", () => {
+    const entries = exportZipEntries()
+    expect(entries).toEqual(['companies/', 'documents/', 'audit_log.csv'])
+    expect(exportZipEntries(swap(WS, 'bw.WriteBodyFrom("documents/"', 'bw.WriteBodyFrom("files/"'))).not.toContain('documents/')
+    expect(exportZipEntries(swap(WS, 'bw.streamCSV("audit_log.csv"', 'bw.streamCSV("log.csv"'))).not.toContain('audit_log.csv')
+    expect(exportZipEntries(swap(WS, '"companies/"+dir', '"entities/"+dir'))).not.toContain('companies/')
+    expect(e1()).toContain('evidence bundle of every company')
+    expect(e1()).toContain('every original uploaded document')
+    expect(e1()).toContain('the audit log')
+    expect(e1()).toContain('one ZIP file')
+  })
+
+  it('DEL-10-04 the ZIP covers all time, every company and every document', () => {
+    expect(exportCoversAllTime()).toBe(true)
+    expect(e1()).toContain('over all time')
+    expect(exportCoversAllTime(swap(WS, 'req := allTime', 'req := Request{}'))).toBe(false)
+    expect(exportCoversAllTime(swap(WS, 'FROM business_entities ORDER BY', "FROM business_entities WHERE tin <> '' ORDER BY"))).toBe(false)
+    expect(exportCoversAllTime(swap(WS, '` ORDER BY created_at, id LIMIT $1`', '` WHERE filename IS NOT NULL ORDER BY created_at, id LIMIT $1`'))).toBe(false)
+    expect(exportCoversAllTime(swap(WS, '"_" + now.UTC().Format("20060102") + ".zip"', '"_" + now.UTC().Format("20060102") + ".tar"'))).toBe(false)
+  })
+
+  it('DEL-10-04 the export labels equal the app\'s', () => {
+    expect(exportLabels()).toEqual(EXPORT_LABELS)
+    expect(e1()).toContain(`${EXPORT_LABELS.button} starts`)
+    expect(e1()).toContain(`“${EXPORT_LABELS.tick}”`)
+    expect(exportLabels(swap('frontend/app/src/lib/workspaceExport.ts', "button: 'Download export'", "button: 'Export all'"))).not.toEqual(EXPORT_LABELS)
+    expect(exportLabels(swap('frontend/app/src/lib/workspaceExport.ts', "tick: 'I downloaded the export'", "tick: 'Done'"))).not.toEqual(EXPORT_LABELS)
+  })
+
+  it('DEL-10-04 the dialog starts the export and the confirm waits on the tick', () => {
+    expect(dialogStartsExportAndAsksTick()).toBe(true)
+    expect(dialogStartsExportAndAsksTick(swap(DLG, 'canConfirm = exported && ', 'canConfirm = '))).toBe(false)
+    expect(dialogStartsExportAndAsksTick(swap(DLG, 'onClick={exp.start}', 'onClick={confirm}'))).toBe(false)
+    expect(dialogStartsExportAndAsksTick(swap(DLG, 'checked={exported}', 'checked={pending}'))).toBe(false)
+  })
+
+  it('DEL-10-04 the locked notice offers the export to admins only', () => {
+    expect(noticeOffersExportToAdmins()).toBe(true)
+    expect(e1()).toContain('the notice offers the admin')
+    expect(noticeOffersExportToAdmins(swap(NOTICE, '{isAdmin && (\n              <button\n                onClick={exp.start}', '{(\n              <button\n                onClick={exp.start}'))).toBe(false)
+    expect(noticeOffersExportToAdmins(swap(NOTICE, 'data-testid="deletion-notice-export"', 'data-testid="x"'))).toBe(false)
   })
 })
 

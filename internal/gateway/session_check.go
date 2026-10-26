@@ -164,7 +164,8 @@ func (c *SessionChecker) signedOutSince(ctx context.Context, e sessionEntry, sta
 	if c.revocations == nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(ctx, revocationReadTimeout)
+	// A client disconnect must not fail the read and evict a live entry.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), revocationReadTimeout)
 	defer cancel()
 	revoked, err := revokedSince(ctx, c.revocations, e.subject, revocationWindow(start.Sub(e.checkedAt)))
 	if err != nil {
@@ -280,10 +281,15 @@ func (c *SessionChecker) EvictSubject(ctx context.Context, sub string) {
 	if c.revocations == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, handoffDBTimeout)
+	// A client disconnect must not drop the shared sign-out row.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handoffDBTimeout)
 	defer cancel()
-	if err := revokeSubject(ctx, c.revocations, sub); err != nil {
-		c.log.ErrorContext(ctx, "session check: record sign-out", slog.String("error", err.Error()))
+	recordErr, sweepErr := revokeSubject(ctx, c.revocations, sub)
+	if recordErr != nil {
+		c.log.ErrorContext(ctx, "session check: record sign-out", slog.String("error", recordErr.Error()))
+	}
+	if sweepErr != nil {
+		c.log.WarnContext(ctx, "session check: sweep sign-outs", slog.String("error", sweepErr.Error()))
 	}
 }
 

@@ -392,3 +392,86 @@ func TestRLS_GatewayRevocations_AFailedWriteStillEvictsLocally(t *testing.T) {
 		t.Errorf("read failure records = %d, want 0 (the pool reads)", n)
 	}
 }
+
+// A client disconnect must not drop the shared sign-out row.
+func TestRLS_GatewayRevocations_ACancelledRequestStillRecordsTheSignOut(t *testing.T) {
+	d := requireHandoffDB(t)
+	requireSharedStateTables(t, d)
+	subject := ownSubject(t, d)
+	c := NewSessionChecker(nil, nil, time.Now, slog.New(slog.DiscardHandler))
+	c.Shared(d.a)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	c.EvictSubject(ctx, subject)
+
+	var n int
+	if err := d.super.QueryRow(context.Background(), `SELECT count(*) FROM gateway_session_revocations WHERE subject = $1`, subject).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("sign-out rows = %d after a cancelled request, want 1", n)
+	}
+}
+
+// A client disconnect must not read as a failed revocation read.
+func TestRLS_GatewayRevocations_ACancelledRequestReadsTheTableWithoutAWarn(t *testing.T) {
+	d := requireHandoffDB(t)
+	requireSharedStateTables(t, d)
+	log, buf := captureLog()
+	c := NewSessionChecker(nil, nil, time.Now, log)
+	c.Shared(d.a)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	now := time.Now()
+
+	revoked := c.signedOutSince(ctx, sessionEntry{subject: ownSubject(t, d), live: true, checkedAt: now}, now)
+
+	if revoked {
+		t.Error("signedOutSince = true, want false: no sign-out row exists")
+	}
+	if n := len(recordsNamed(t, buf, "session check: revocation read failed")); n != 0 {
+		t.Errorf("revocation read failed records = %d, want 0", n)
+	}
+}
+
+// The sign-out was recorded, so a failed sweep must not log "record sign-out".
+func TestRLS_GatewayRevocations_AFailedSweepIsNotAFailedRecord(t *testing.T) {
+	d := requireHandoffDB(t)
+	requireSharedStateTables(t, d)
+	ctx := context.Background()
+	subject, marker := ownSubject(t, d), ownSubject(t, d)
+	fn := "flake04_block_" + randHex(t, 4)
+	for _, q := range []string{
+		`CREATE FUNCTION ` + fn + `() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'sweep blocked'; END $$`,
+		`CREATE TRIGGER ` + fn + ` BEFORE DELETE ON gateway_session_revocations FOR EACH ROW WHEN (OLD.subject = '` + marker + `') EXECUTE FUNCTION ` + fn + `()`,
+	} {
+		if _, err := d.super.Exec(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = d.super.Exec(ctx, `DROP TRIGGER `+fn+` ON gateway_session_revocations`)
+		_, _ = d.super.Exec(ctx, `DROP FUNCTION `+fn+`()`)
+	})
+	if _, err := d.super.Exec(ctx, `INSERT INTO gateway_session_revocations (subject, revoked_at)
+		VALUES ($1, now() - $2 * interval '1 microsecond')`, marker, (revocationKeep + time.Second).Microseconds()); err != nil {
+		t.Fatal(err)
+	}
+	log, buf := captureLog()
+	c := NewSessionChecker(nil, nil, time.Now, log)
+	c.Shared(d.a)
+
+	c.EvictSubject(ctx, subject)
+
+	if n := len(recordsNamed(t, buf, "session check: record sign-out")); n != 0 {
+		t.Errorf("record sign-out records = %d, want 0: the INSERT succeeded", n)
+	}
+	if n := len(recordsNamed(t, buf, "session check: sweep sign-outs")); n != 1 {
+		t.Errorf("sweep records = %d, want 1", n)
+	}
+	var n int
+	if err := d.super.QueryRow(ctx, `SELECT count(*) FROM gateway_session_revocations WHERE subject = $1`, subject).Scan(&n); err != nil || n != 1 {
+		t.Errorf("sign-out rows = %d (err %v), want 1", n, err)
+	}
+}

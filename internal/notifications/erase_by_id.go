@@ -34,7 +34,8 @@ func EnqueueErasureByID(ctx context.Context, tx pgx.Tx, rc *river.Client[pgx.Tx]
 	return nil
 }
 
-// EraseByIDWorker removes the user-id-keyed copies and the account. It writes no person_erasures row and calls no vendor.
+// EraseByIDWorker erases a person by user id. With a contacts row it hands the email to EnqueueErasure; without one it removes
+// the user-id-keyed copies and the account itself, writes no person_erasures row and calls no vendor.
 type EraseByIDWorker struct {
 	river.WorkerDefaults[EraseByIDArgs]
 	Pool    *pgxpool.Pool
@@ -45,13 +46,36 @@ type EraseByIDWorker struct {
 
 func (w *EraseByIDWorker) Timeout(*river.Job[EraseByIDArgs]) time.Duration { return eraseTimeout }
 
-// Work sweeps, deletes the account, then sweeps again; every statement is idempotent, so a retry repeats the job.
+// Work hands off when a contacts row holds an email; else it sweeps, deletes the account, then sweeps again.
+// Every statement is idempotent, so a retry repeats the job.
 func (w *EraseByIDWorker) Work(ctx context.Context, job *river.Job[EraseByIDArgs]) error {
 	id, err := uuid.Parse(job.Args.UserID)
 	if err != nil {
 		return river.JobCancel(errors.New("notifications: erase job has a bad user id"))
 	}
 	uid := id.String()
+
+	emails, err := w.contactEmails(ctx, uid)
+	if err != nil {
+		logEraseFailure(ctx, w.Logger, stepSweep, err)
+		return err
+	}
+	if len(emails) > 0 {
+		// person_erase is not in eraseKinds, so no sweep cancels the job queued here.
+		// The erasure removes the hand-offs, jobs, contacts rows and account by user id and email.
+		err = pgx.BeginFunc(ctx, w.Pool, func(tx pgx.Tx) error {
+			for _, e := range emails {
+				if err := EnqueueErasure(ctx, tx, w.River, uid, e); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			logEraseFailure(ctx, w.Logger, stepSweep, err)
+		}
+		return err
+	}
 
 	_, err = w.sweepTx(ctx, uid)
 	if err != nil {
@@ -77,6 +101,29 @@ func (w *EraseByIDWorker) Work(ctx context.Context, job *river.Job[EraseByIDArgs
 		return errCameBack
 	}
 	return nil
+}
+
+// contactEmails returns the usable emails of the person's contacts rows.
+func (w *EraseByIDWorker) contactEmails(ctx context.Context, uid string) ([]string, error) {
+	rows, err := w.Pool.Query(ctx, `SELECT email FROM contacts WHERE user_id::text = $1 ORDER BY email`, uid)
+	if err != nil {
+		return nil, fmt.Errorf("notifications: read contacts: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var e string
+		if err := rows.Scan(&e); err != nil {
+			return nil, fmt.Errorf("notifications: read contacts: %w", err)
+		}
+		if UsableEraseEmail(e) {
+			out = append(out, e)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("notifications: read contacts: %w", err)
+	}
+	return out, nil
 }
 
 func (w *EraseByIDWorker) sweepTx(ctx context.Context, uid string) (removed int64, err error) {

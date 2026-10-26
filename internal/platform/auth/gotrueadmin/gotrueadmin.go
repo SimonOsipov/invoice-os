@@ -165,6 +165,7 @@ func (c *Client) UserEmail(ctx context.Context, userID string) (string, error) {
 			Email string `json:"email"`
 		}
 		if json.NewDecoder(io.LimitReader(resp.Body, maxAnswer)).Decode(&u) != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswer))
 			return "", &StatusError{Status: resp.StatusCode}
 		}
 		return u.Email, nil
@@ -172,5 +173,6 @@ func (c *Client) UserEmail(ctx context.Context, userID string) (string, error) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswer))
 		return "", nil
 	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswer))
 	return "", &StatusError{Status: resp.StatusCode}
 }

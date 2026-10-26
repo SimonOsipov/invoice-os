@@ -1,4 +1,4 @@
--- ceiling: any invoice_app service can start the purge of the tenant it binds, which ends its Cancel.
+-- ceiling: any invoice_app service can start the purge of the tenant it binds, which ends its Cancel; revisit if invoice_app is shared with a service that must not purge.
 -- +goose Up
 ALTER TABLE public.tenants
     ADD COLUMN deletion_purge_started_at timestamptz,

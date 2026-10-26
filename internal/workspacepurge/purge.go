@@ -197,7 +197,7 @@ func (p *Purger) eraseMembers(ctx context.Context, tenantID string) (queued, byI
 			return err
 		}
 
-		// ceiling: one GoTrue read per member without a usable email, under the tenant row lock.
+		// ceiling: one GoTrue read per member without a usable email, under the tenant row lock; revisit if a purge holds the lock for seconds.
 		for i := range ms {
 			if notifications.UsableEraseEmail(ms[i].email) {
 				continue

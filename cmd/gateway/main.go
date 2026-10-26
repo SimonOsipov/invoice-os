@@ -329,10 +329,10 @@ func gatewayPool(log *slog.Logger) *pgxpool.Pool {
 	return pool
 }
 
-// handoffStore shares hand-off codes through Postgres when pool is set; nil means the in-process store.
+// handoffStore shares hand-off codes through Postgres when pool is set, else keeps them in-process.
 func handoffStore(pool *pgxpool.Pool, log *slog.Logger) gateway.Handoffs {
 	if pool == nil {
-		return nil
+		return gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
 	}
 	return gateway.NewPGHandoffStore(pool, gateway.HandoffTTL, log)
 }

@@ -119,16 +119,19 @@ func TestMockIssuerFromJWK_RejectsBadKeys(t *testing.T) {
 		"two keys":     "[" + strings.Trim(one, "[]") + "," + strings.Trim(one, "[]") + "]",
 		"no keys":      "[]",
 		"crv P-384":    jwkArray(t, "k", func(m map[string]any) { m["crv"] = "P-384" }),
+		"kty RSA":      jwkArray(t, "k", func(m map[string]any) { m["kty"] = "RSA" }),
 		"alg RS256":    jwkArray(t, "k", func(m map[string]any) { m["alg"] = "RS256" }),
 		"no kid":       jwkArray(t, "", nil),
 		"no d":         jwkArray(t, "k", func(m map[string]any) { delete(m, "d") }),
 		"x/y of another key": jwkArray(t, "k", func(m map[string]any) {
 			m["x"], m["y"] = enc(otherPub[1:33]), enc(otherPub[33:])
 		}),
-		"bad base64 d": jwkArray(t, "k", func(m map[string]any) { m["d"] = "!!!" }),
-		"bad base64 x": jwkArray(t, "k", func(m map[string]any) { m["x"] = "!!!" }),
-		"zero scalar":  jwkArray(t, "k", func(m map[string]any) { m["d"] = enc(make([]byte, 32)) }),
-		"member type":  jwkArray(t, "k", func(m map[string]any) { m["kid"] = 7 }),
+		"only x of another key": jwkArray(t, "k", func(m map[string]any) { m["x"] = enc(otherPub[1:33]) }),
+		"only y of another key": jwkArray(t, "k", func(m map[string]any) { m["y"] = enc(otherPub[33:]) }),
+		"bad base64 d":          jwkArray(t, "k", func(m map[string]any) { m["d"] = "!!!" }),
+		"bad base64 x":          jwkArray(t, "k", func(m map[string]any) { m["x"] = "!!!" }),
+		"zero scalar":           jwkArray(t, "k", func(m map[string]any) { m["d"] = enc(make([]byte, 32)) }),
+		"member type":           jwkArray(t, "k", func(m map[string]any) { m["kid"] = 7 }),
 	}
 	for name, raw := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -159,7 +162,8 @@ func TestMockIssuerFromJWK_ErrorNeverQuotesTheKey(t *testing.T) {
 		"wrong alg":      jwkArrayOf(t, marker, e, func(m map[string]any) { m["alg"] = "RS256"; m["note"] = marker }),
 		"truncated JSON": `[{"kty":"EC","d":"` + d + `","kid":"` + marker + `"`,
 		"wrong type":     `[{"kty":"EC","crv":"P-256","alg":"ES256","kid":"` + marker + `","d":["` + d + `"]}]`,
-		"bad x":          jwkArrayOf(t, marker, e, func(m map[string]any) { m["x"] = marker }),
+		"bad x":          jwkArrayOf(t, marker, e, func(m map[string]any) { m["x"] = "!" + marker }),
+		"x/y mismatch":   jwkArrayOf(t, marker, e, func(m map[string]any) { m["x"] = m["y"] }),
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := NewMockIssuerFromJWK(testIssuer, raw)

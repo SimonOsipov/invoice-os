@@ -63,6 +63,26 @@ func TestTenancyStatusForErr_WorkspaceLockedIs403(t *testing.T) {
 	}
 }
 
+func TestTenancyStatusForErr_DeletionLinkNotValidIs403(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"bare", ErrDeletionLinkNotValid},
+		{"wrapped", fmt.Errorf("tenancy: cancel deletion by link: %w", ErrDeletionLinkNotValid)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, msg := statusForErr(tc.err)
+			if status != http.StatusForbidden {
+				t.Errorf("status = %d, want 403", status)
+			}
+			if msg != "this cancel link is no longer valid" {
+				t.Errorf("msg = %q, want %q", msg, "this cancel link is no longer valid")
+			}
+		})
+	}
+}
+
 func TestMeHandler_NotActiveMemberIs403(t *testing.T) {
 	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
 	load := MeLoader(func(context.Context) (Tenant, MeUser, error) {

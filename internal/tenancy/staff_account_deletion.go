@@ -24,10 +24,25 @@ func targetUserID(userID string) (string, error) {
 	return id.String(), nil
 }
 
-// StaffPreviewAccountDeletion answers the DEL-08 outcome for the path member. Read-only, so it also answers on a locked workspace.
+// refuseHouseTenant answers ErrHouseWorkspace when the path tenant is the house one: the staff caller is its member.
+func refuseHouseTenant(ctx context.Context, tx pgx.Tx, actor uuid.UUID) error {
+	var house bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = $1 AND status = 'active')`, actor).Scan(&house); err != nil {
+		return err
+	}
+	if house {
+		return ErrHouseWorkspace
+	}
+	return nil
+}
+
+// StaffPreviewAccountDeletion answers the decideAccountDeletion outcome for the path member. Read-only, so it also answers on a locked workspace.
 func (s *Store) StaffPreviewAccountDeletion(ctx context.Context, tenantID, userID string) (AccountDeletionPreview, error) {
 	var out AccountDeletionPreview
-	err := s.withinStaffTenant(ctx, tenantID, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx pgx.Tx, _, _ uuid.UUID) error {
+	err := s.withinStaffTenant(ctx, tenantID, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx pgx.Tx, _, actor uuid.UUID) error {
+		if err := refuseHouseTenant(ctx, tx, actor); err != nil {
+			return err
+		}
 		target, err := targetUserID(userID)
 		if err != nil {
 			return err
@@ -67,6 +82,9 @@ func (s *Store) StaffDeleteAccount(ctx context.Context, tenantID, userID string,
 		return errNoEraseQueue
 	}
 	return s.withinStaffTenant(ctx, tenantID, pgx.TxOptions{}, func(tx pgx.Tx, tenant, actor uuid.UUID) error {
+		if err := refuseHouseTenant(ctx, tx, actor); err != nil {
+			return err
+		}
 		if locked, err := db.WorkspaceLocked(ctx, tx); err != nil {
 			return err
 		} else if locked {

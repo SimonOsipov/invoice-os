@@ -144,6 +144,7 @@ func TestStaffDeleteAccountHandler_BodyRulesAndOutcomes(t *testing.T) {
 		{"not staff", db.ErrNotStaff, 403, "forbidden"},
 		{"tenant not found", ErrTenantNotFound, 404, "tenant not found"},
 		{"membership not found", ErrMembershipNotFound, 404, "membership not found"},
+		{"house workspace", ErrHouseWorkspace, 409, "the ASComply staff workspace cannot be deleted"},
 		{"workspace locked", db.ErrWorkspaceLocked, 409, db.WorkspaceLockedMessage},
 		{"outcome changed", ErrDeletionOutcomeChanged, 409, outcomeChangedPhrase},
 		{"last active member", ErrLastActiveMember, 409, lastMemberSentence},
@@ -205,6 +206,7 @@ func TestStaffAccountDeletionPreviewHandler_ShapeAndOutcomes(t *testing.T) {
 		{"not staff", db.ErrNotStaff, 403, "forbidden"},
 		{"tenant not found", ErrTenantNotFound, 404, "tenant not found"},
 		{"membership not found", ErrMembershipNotFound, 404, "membership not found"},
+		{"house workspace", ErrHouseWorkspace, 409, "the ASComply staff workspace cannot be deleted"},
 		{"an unknown failure", errors.New("boom"), 500, "internal server error"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

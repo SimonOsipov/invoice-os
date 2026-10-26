@@ -524,6 +524,36 @@ func TestStaffAccountDeletion_Refusals(t *testing.T) {
 	}
 }
 
+func TestStaffAccountDeletion_RefusesTheHouseTenant(t *testing.T) {
+	w := newStaffAccWorld(t)
+	colleague := uuid.NewString()
+	seedMembership(t, w.super, w.houseID, colleague, "preparer", "active")
+	t.Cleanup(func() {
+		_, _ = w.super.Exec(context.Background(), `DELETE FROM memberships WHERE tenant_id = $1 AND user_id = $2`, w.houseID, colleague)
+	})
+	before := imageOf(t, w.super, w.houseID, colleague)
+	staffRows := len(staffEvents(t, w.super, w.houseID))
+
+	for name, target := range map[string]string{"a colleague": colleague, "the staff caller": w.staff} {
+		if err := w.store.StaffDeleteAccount(w.ctx, w.houseID, target, OutcomeLeave, "", staffAccReason); !errors.Is(err, ErrHouseWorkspace) {
+			t.Errorf("%s: delete err = %v, want ErrHouseWorkspace", name, err)
+		}
+		if _, err := w.store.StaffPreviewAccountDeletion(w.ctx, w.houseID, target); !errors.Is(err, ErrHouseWorkspace) {
+			t.Errorf("%s: preview err = %v, want ErrHouseWorkspace", name, err)
+		}
+	}
+	if got := imageOf(t, w.super, w.houseID, colleague); got != before {
+		t.Errorf("colleague row = %+v, want %+v", got, before)
+	}
+	if n := len(staffEvents(t, w.super, w.houseID)); n != staffRows {
+		t.Errorf("staff_audit_log rows of the house tenant = %d, want %d", n, staffRows)
+	}
+	w.invWorld.requireNoErase(t, colleague, w.staff)
+	if jobs := append(w.byIDJobs(t, colleague), w.byIDJobs(t, w.staff)...); len(jobs) != 0 {
+		t.Errorf("%s jobs = %v, want none", evEraseByID, jobs)
+	}
+}
+
 func TestStaffAccountDeletion_ActsOnlyOnThePathTenant(t *testing.T) {
 	w := newStaffAccWorld(t)
 	b := staffAccWorldOn(t, w.super, w.app, staffAccOtherTn)

@@ -37,3 +37,6 @@ paths:
 - Run `ANALYZE` as the owner or the superuser before you measure a plan. `invoice_app` cannot analyze.
 - Build a staff bundle, preview or company list only through `withinStaffTenant`. It checks the path tenant with `staff_read_tenants` in `WithinStaffTx`. Then it reads in that tenant's `WithinTenantTxOpts` with `bundleTxOptions`.
 - Pass `audit.SupportActor` as the `subject` of a staff bundle. `resolveGeneratedBy` then writes `ASComply support` as `generated_by`.
+- Build the workspace export only through `AssembleWorkspace`: one `REPEATABLE READ` read-write transaction, the company stages through `writeEntityStages`, `workspace.exported` last, and `bw.Close()` after the commit.
+- After the first byte, audit a failed export as `workspace.export_failed` in its own short transaction. Keep the original error when that write fails.
+- Stream documents and `audit_log.csv`. Buffer a company CSV as the bundle does.

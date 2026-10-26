@@ -14,7 +14,9 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"time"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -143,6 +145,12 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, db.ErrWorkspaceLocked):
 		return http.StatusForbidden, db.WorkspaceLockedMessage
+	case errors.Is(err, ErrExportNotPermitted):
+		return http.StatusForbidden, "only an admin can download the workspace export"
+	case errors.Is(err, ErrExportRunning):
+		return http.StatusConflict, "an export of this workspace is already running"
+	case errors.Is(err, ErrExportBusy):
+		return http.StatusServiceUnavailable, "another workspace export is running; try again in a few minutes"
 	case errors.Is(err, ErrEntityNotFound):
 		return http.StatusNotFound, "not found"
 	case errors.Is(err, ErrTenantNotFound):
@@ -254,13 +262,59 @@ func StaffDownloadHandler(assemble staffAssembleFn, log *slog.Logger) http.Handl
 	}
 }
 
-// STUB: DEL-06-02 replaces both handlers.
+// exportWriteWindow is how long the export may keep writing; the server's own write timeout is shorter.
+const exportWriteWindow = time.Hour
+
 type workspaceAssembleFn func(ctx context.Context, w io.Writer, onStart func(filename string)) error
 
+// WorkspaceExportHandler returns GET /v1/workspace/export. After the first byte an error aborts
+// the connection, so the client sees a broken download and not a short ZIP.
 func WorkspaceExportHandler(assemble workspaceAssembleFn, log *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotImplemented) }
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(exportWriteWindow))
+
+		sink := &bundleSink{w: w, contentType: "application/zip"}
+		err := assemble(r.Context(), sink, sink.setFilename)
+		if err == nil {
+			return
+		}
+		if sink.wrote {
+			platform.CaptureError(r.Context(), err)
+			log.ErrorContext(r.Context(), "archive: workspace export aborted mid-stream", slog.Any("err", err))
+			panic(http.ErrAbortHandler)
+		}
+		status, body := statusForErr(err)
+		if status == http.StatusInternalServerError {
+			log.ErrorContext(r.Context(), "archive: workspace export", slog.Any("err", err))
+		}
+		if errors.Is(err, ErrExportBusy) {
+			w.Header().Set("Retry-After", "60")
+		}
+		writeError(w, status, body)
+	}
 }
 
+// WorkspaceExportPreflightHandler returns GET /v1/workspace/export/preflight: 204 when the export can start.
 func WorkspaceExportPreflightHandler(check func(context.Context) error, log *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotImplemented) }
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if err := check(r.Context()); err != nil {
+			writeStaffErr(w, r, log, "archive: workspace export preflight", err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
 }

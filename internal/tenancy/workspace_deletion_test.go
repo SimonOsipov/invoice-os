@@ -693,7 +693,9 @@ func TestWorkspaceDeletion_AStartedPurgeCannotBeCancelled(t *testing.T) {
 	if err == nil {
 		t.Fatal("CancelWorkspaceDeletion succeeded after the purge started")
 	}
-	// A raw 42501 means the helper did not map tenant_deletion_underway to ErrDeletionUnderway.
+	if !errors.Is(err, ErrDeletionUnderway) {
+		t.Errorf("err = %v, want ErrDeletionUnderway", err)
+	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		t.Errorf("err = %v, want the mapped sentinel, not the raw database error", err)

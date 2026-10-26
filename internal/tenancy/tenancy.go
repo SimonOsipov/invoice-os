@@ -67,6 +67,7 @@ var (
 	ErrCancelDeletionNotPermitted  = errors.New("tenancy: cancel deletion not permitted")
 	ErrWorkspaceNameMismatch       = errors.New("tenancy: workspace name mismatch")
 	ErrHouseWorkspace              = errors.New("tenancy: house workspace")
+	ErrDeletionUnderway            = errors.New("tenancy: deletion underway")
 )
 
 // Sentinels for the invitations store.
@@ -467,6 +468,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusBadRequest, "the workspace name does not match"
 	case errors.Is(err, ErrHouseWorkspace):
 		return http.StatusConflict, "the ASComply staff workspace cannot be deleted"
+	case errors.Is(err, ErrDeletionUnderway):
+		return http.StatusConflict, "this workspace is already being deleted"
 	case errors.Is(err, ErrInvalidStatus):
 		return http.StatusBadRequest, `status must be "active" or "suspended"`
 	case errors.Is(err, ErrNotPermitted):

@@ -306,7 +306,11 @@ func TestEraseByID_TouchesOnlyTheErasableKindsOfThatPerson(t *testing.T) {
 	var gone []int64
 	for _, st := range []string{"scheduled", "retryable", "cancelled", "discarded"} {
 		id := r.insertJob(RegistrantArgs{UserID: r.uid, Email: r.mail})
-		r.setState(id, st)
+		if st == "scheduled" || st == "retryable" {
+			r.exec(`UPDATE river_job SET state = $2::river_job_state, scheduled_at = now() + interval '1 hour' WHERE id = $1`, id, st)
+		} else {
+			r.setState(id, st)
+		}
 		gone = append(gone, id)
 	}
 	if len(gone) != 4 {

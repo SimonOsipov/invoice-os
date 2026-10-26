@@ -37,7 +37,7 @@ paths:
 - Set `LIBRARY_URL` and `BLOG_URL` to each site's home, base path included.
 - Take `new URL(...).origin` of `BLOG_URL` for an `Origin` header.
 - Print the same site addresses from `ctl env` as `preview.sh urls` prints.
-- Run `old-addresses.spec.ts` against production after a load-balancer change.
+- Run `old-addresses.spec.ts` and `transport-security.spec.ts` against production after a load-balancer change.
 - Keep `e2e/smoke/oldAddresses.ts` pure and unit-tested.
 - Cover the library consent notice, the stored answer, the privacy link, the production-host-only tag and the chat gate in `e2e/smoke/library-consent.spec.ts`.
 - Cover the blog consent and the blog chat gate in `e2e/smoke/blog-consent.spec.ts`.

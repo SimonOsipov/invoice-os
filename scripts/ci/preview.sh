@@ -150,6 +150,7 @@ env_file() {
         echo "VALIDATION_URL: $(url validation "$pr")"
         echo "GATEWAY_URL: $(url gateway "$pr")"
         echo "DOCLING_URL: $(url docling "$pr")"
+        echo "AUTH_URL: $(url auth "$pr")"
         ;;
       blog) echo "VITE_GATEWAY_URL: $(url gateway "$pr")" ;;
     esac
@@ -175,7 +176,7 @@ secrets_of() {
     validation) s=(DATABASE_URL=database-app-url GATEWAY_TOKEN=gateway-token S2S_TOKEN=s2s-token) ;;
     invoice) s=(DATABASE_URL=database-app-url GATEWAY_TOKEN=gateway-token S2S_TOKEN=s2s-token) ;;
     submission) s=(DATABASE_URL=database-app-url GATEWAY_TOKEN=gateway-token) ;;
-    worker) s=(DATABASE_URL=database-worker-url DATABASE_READER_URL=database-reader-url GATEWAY_TOKEN=gateway-token S2S_TOKEN=s2s-token) ;;
+    worker) s=(DATABASE_URL=database-worker-url DATABASE_READER_URL=database-reader-url GATEWAY_TOKEN=gateway-token S2S_TOKEN=s2s-token GOTRUE_JWT_KEYS=gotrue-jwt-keys) ;;
   esac
   local out=() kv
   for kv in ${s[@]+"${s[@]}"}; do out+=("${kv%%=*}=$(secret "$pr" "${kv#*=}"):latest"); done

@@ -141,18 +141,21 @@ func TestRLS_ContactsAppMayInsertSelectUpdate(t *testing.T) {
 	}
 }
 
-func TestRLS_ContactsAppMayNotDelete(t *testing.T) {
+// The erase routine deletes a contact; the facts-only-grow trigger must not refuse a DELETE.
+func TestRLS_ContactsAppMayDelete(t *testing.T) {
 	hh := requireHarness(t)
 	email := contactsEmail(t)
-	contactsSeed(t, email, []string{"registered_at"}, []any{contactsNow()})
+	contactsSeedConsented(t, email, contactsNow().Add(-3*time.Hour), contactsNow().Add(-2*time.Hour), contactsNow().Add(-time.Hour))
 	if n := contactsRowCount(t, email); n != 1 {
 		t.Fatalf("seeded row count = %d, want 1", n)
 	}
 
-	_, err := hh.app.Exec(context.Background(), `DELETE FROM contacts WHERE email = $1`, email)
-	wantPgCode(t, err, pgInsufficientPriv)
-	if n := contactsRowCount(t, email); n != 1 {
-		t.Fatalf("row count after refused DELETE = %d, want 1", n)
+	tag, err := hh.app.Exec(context.Background(), `DELETE FROM contacts WHERE email = $1`, email)
+	if err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("app DELETE of a row with every fact set: rows=%d err=%v, want 1 row", tag.RowsAffected(), err)
+	}
+	if n := contactsRowCount(t, email); n != 0 {
+		t.Fatalf("row count after DELETE = %d, want 0", n)
 	}
 }
 

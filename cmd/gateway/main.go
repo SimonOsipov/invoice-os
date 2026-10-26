@@ -109,7 +109,7 @@ func main() {
 
 	// Public registration, outside /api/ and the verifier, in every build. Register is
 	// CORS-wrapped for the landing page; the OPTIONS route stops the POST route 405ing the preflight.
-	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger, sink, pending)
+	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger, sink, pending, nil)
 	app.Mux.Handle("POST /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("OPTIONS /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("POST /auth/resend-verification", withCORS(reg.ResendVerification))
@@ -140,7 +140,7 @@ func main() {
 	app.Mux.Handle("GET /blog/covers/{id}/{version}", blogRead.Cover)
 	app.Mux.Handle("GET /blog/posts/", withCORS(blogRead.NotFound))
 	app.Mux.Handle("GET /blog/covers/", blogRead.NotFound)
-	blogSubscribe := blogSubscribeHandlers(routed["notifications"], gatewayToken, registerMinResponse, app.Logger)
+	blogSubscribe := blogSubscribeHandlers(routed["notifications"], gatewayToken, registerMinResponse, app.Logger, nil)
 	app.Mux.Handle("POST /blog/subscriptions", withCORS(blogSubscribe.Subscribe))
 	app.Mux.Handle("OPTIONS /blog/subscriptions", withCORS(blogSubscribe.Subscribe))
 	app.Mux.Handle("POST /blog/subscriptions/confirm", withCORS(blogSubscribe.Confirm))
@@ -148,7 +148,7 @@ func main() {
 
 	// Public sign-in hand-off, renewal and sign-out, outside the verifier; console-handoff verifies its own bearer.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
-	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier, handoffStore(gwPool, app.Logger))
+	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier, gwPool)
 	app.Mux.Handle("POST /auth/verify", h.Verify)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
@@ -262,7 +262,7 @@ func newJWKSClient() *http.Client {
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
 // A nil authURL or siteURL (AUTH_SITE_URL unset) makes Register, ResendVerification and RequestPasswordReset answer 503 (TestRegistrationHandlers_NotConfigured503). A nil pending lookup makes Register alone answer 503 (TestRegistrationHandlers_NilPendingLookupIsNotConfigured).
 // On a PR preview the per-address limit (resend, reset) logs but does not refuse: a preview sends no mail (TestRegistrationHandlers_PreviewOnlyLogs).
-func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink, pending gateway.PendingInviteLookup) registration {
+func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink, pending gateway.PendingInviteLookup, pool *pgxpool.Pool) registration {
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
 		return registration{Register: nc, ResendVerification: nc, RequestPasswordReset: nc, DemoRequest: gateway.DemoRequestHandler(sink, log)}
@@ -290,7 +290,7 @@ func blogHandlers(notifications *url.URL, gatewayToken string, log *slog.Logger)
 }
 
 // blogSubscribeHandlers builds the public newsletter routes; the per-email cap logs and admits on a PR fork.
-func blogSubscribeHandlers(notifications *url.URL, gatewayToken string, minResponse time.Duration, log *slog.Logger) gateway.BlogSubscribeRoutes {
+func blogSubscribeHandlers(notifications *url.URL, gatewayToken string, minResponse time.Duration, log *slog.Logger, pool *pgxpool.Pool) gateway.BlogSubscribeRoutes {
 	enforce := platform.Posture(platform.DeployEnv()) != platform.PosturePreview
 	perEmail := gateway.NewSignInThrottle("blog-subscribe-email", gateway.BlogSubscribePerEmail, gateway.BlogSubscribeMaxKeys, gateway.BlogSubscribeWindow, time.Now)
 	return gateway.BlogSubscribeHandlers(notifications, &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken, minResponse, perEmail, enforce, log)
@@ -349,8 +349,9 @@ type handoff struct {
 // Sign-out evicts from sessions, the API's own checker.
 // Every minter and exchange share one code store: a code is redeemable only through exchange.
 // A nil siteURL makes Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
-// A nil store means the in-process one.
-func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink, verifier *auth.Verifier, store gateway.Handoffs) handoff {
+// A nil pool means the in-process store.
+func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink, verifier *auth.Verifier, pool *pgxpool.Pool) handoff {
+	store := handoffStore(pool, log)
 	if store == nil {
 		store = gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
 	}

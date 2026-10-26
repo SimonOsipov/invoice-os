@@ -8,6 +8,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -509,6 +510,50 @@ func isStringLit(e ast.Expr, want string) bool {
 	return err == nil && s == want
 }
 
+// Shared state needs main's pool: opened before the checker, handed to it at once, and last argument of the three builders.
+func TestMain_PassesTheGatewayPoolToEverySharedState(t *testing.T) {
+	_, body := parseMain(t)
+
+	poolAt, sessionsAt, sessions := -1, -1, ""
+	builders := map[string][]string{"handoffHandlers": nil, "registrationHandlers": nil, "blogSubscribeHandlers": nil}
+	for i, st := range body.List {
+		as, ok := st.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			continue
+		}
+		if _, ok := isCallTo(as.Rhs[0], "", "gatewayPool"); ok && types.ExprString(as.Lhs[0]) == "gwPool" {
+			poolAt = i
+		}
+		if _, ok := isCallTo(as.Rhs[0], "gateway", "NewSessionChecker"); ok {
+			sessionsAt, sessions = i, types.ExprString(as.Lhs[0])
+		}
+		for name := range builders {
+			if call, ok := isCallTo(as.Rhs[0], "", name); ok && len(call.Args) > 0 {
+				builders[name] = append(builders[name], types.ExprString(call.Args[len(call.Args)-1]))
+			}
+		}
+	}
+	if poolAt < 0 || sessionsAt < 0 {
+		t.Fatalf("main has no top-level `gwPool := gatewayPool(...)` (at %d) or `x := gateway.NewSessionChecker(...)` (at %d)", poolAt, sessionsAt)
+	}
+	if poolAt > sessionsAt {
+		t.Errorf("gwPool opens at statement %d, after the checker at %d; it must come first", poolAt, sessionsAt)
+	}
+	if sessionsAt+1 >= len(body.List) {
+		t.Fatal("the checker is main's last statement")
+	}
+	if es, ok := body.List[sessionsAt+1].(*ast.ExprStmt); !ok || types.ExprString(es.X) != sessions+".Shared(gwPool)" {
+		t.Errorf("the statement after the checker is %T, want the expression `%s.Shared(gwPool)`", body.List[sessionsAt+1], sessions)
+	}
+	for name, lasts := range builders {
+		if len(lasts) != 1 {
+			t.Errorf("main calls %s %d times at the top level, want once", name, len(lasts))
+		} else if lasts[0] != "gwPool" {
+			t.Errorf("%s last argument = %q, want gwPool", name, lasts[0])
+		}
+	}
+}
+
 // TestGatewayAuthIssuersCountsPrimaryPlusAdditional pins main's wiring: the
 // additional set comes from AUTH_ADDITIONAL_ISSUERS through a helper that is
 // fatal on a parse error, feeds the verifier, and publishes 1 + its length
@@ -867,7 +912,7 @@ func TestRegistrationHandlers_WiresRegisterAndVerify(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	const floor = 100 * time.Millisecond
-	reg := registrationHandlers(authURL, site, floor, slog.New(slog.DiscardHandler), nil, noPendingInvite)
+	reg := registrationHandlers(authURL, site, floor, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil)
 
 	start := time.Now()
 	rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`)
@@ -894,9 +939,9 @@ func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 			authURL, calls := fakeAuth(t)
 			var reg registration
 			if unset == "AUTH_SITE_URL" {
-				reg = registrationHandlers(authURL, nil, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
+				reg = registrationHandlers(authURL, nil, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil)
 			} else {
-				reg = registrationHandlers(nil, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
+				reg = registrationHandlers(nil, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil)
 			}
 
 			answers := map[string]*httptest.ResponseRecorder{
@@ -1110,7 +1155,7 @@ func TestRegistrationHandlers_ResendBudgetsAreSharedWithTheInviteResend(t *testi
 	site, _ := url.Parse("https://site.example")
 	log := slog.New(slog.DiscardHandler)
 
-	reg := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite)
+	reg := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite, nil)
 	if reg.ResendByAddress == nil {
 		t.Fatal("ResendByAddress is nil with AUTH_URL and AUTH_SITE_URL configured")
 	}
@@ -1131,10 +1176,10 @@ func TestRegistrationHandlers_ResendBudgetsAreSharedWithTheInviteResend(t *testi
 		t.Errorf("GoTrue /resend calls = %d, want %d: the invite route was not refused by the shared budget", got, gateway.ResendPerAddress)
 	}
 
-	if got := registrationHandlers(nil, site, 0, log, nil, noPendingInvite); got.ResendByAddress != nil {
+	if got := registrationHandlers(nil, site, 0, log, nil, noPendingInvite, nil); got.ResendByAddress != nil {
 		t.Error("the resend throttle is non-nil with AUTH_URL unset")
 	}
-	if got := registrationHandlers(authURL, nil, 0, log, nil, noPendingInvite); got.ResendByAddress != nil {
+	if got := registrationHandlers(authURL, nil, 0, log, nil, noPendingInvite, nil); got.ResendByAddress != nil {
 		t.Error("the resend throttle is non-nil with AUTH_SITE_URL unset")
 	}
 }
@@ -1206,7 +1251,7 @@ func TestInvitationResendHandler_EnforcementFollowsThePosture(t *testing.T) {
 			authURL, calls := fakeAuth(t)
 			site, _ := url.Parse("https://site.example")
 			log := slog.New(slog.DiscardHandler)
-			reg := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite)
+			reg := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite, nil)
 			resend := invitationResendHandler(authURL, site, reg.ResendByAddress, func(context.Context, string) (gateway.InvitationPreview, error) {
 				return gateway.InvitationPreview{Email: "tunde@obi.test", Account: "unconfirmed"}, nil
 			}, log)
@@ -1290,7 +1335,7 @@ func TestRegistrationHandlers_ResetSharesTheResendLimits(t *testing.T) {
 	t.Run("per address", func(t *testing.T) {
 		authURL, calls := fakeAuth(t)
 		site, _ := url.Parse("https://site.example")
-		reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
+		reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil)
 		for range 2 {
 			resendFrom(reg.ResendVerification, "ada@corp.example")
 			resetFrom(reg.RequestPasswordReset, "ada@corp.example")
@@ -1313,7 +1358,7 @@ func TestRegistrationHandlers_ResetPreviewOnlyLogsPerAddress(t *testing.T) {
 			authURL, calls := fakeAuth(t)
 			site, _ := url.Parse("https://site.example")
 			var logs bytes.Buffer
-			reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil, noPendingInvite)
+			reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil, noPendingInvite, nil)
 
 			for range 4 {
 				resetFrom(reg.RequestPasswordReset, "ada@corp.example")
@@ -1353,7 +1398,7 @@ func TestRegistrationHandlers_ResendWaitsAndLimits(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			authURL, calls := fakeAuth(t)
 			site, _ := url.Parse("https://site.example")
-			reg := registrationHandlers(authURL, site, c.floor, slog.New(slog.DiscardHandler), nil, noPendingInvite)
+			reg := registrationHandlers(authURL, site, c.floor, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil)
 
 			start := time.Now()
 			for _, email := range c.addresses {
@@ -1402,7 +1447,7 @@ func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 				authURL, calls := fakeAuth(t)
 				site, _ := url.Parse("https://site.example")
 				var logs bytes.Buffer
-				reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil, noPendingInvite)
+				reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil, noPendingInvite, nil)
 
 				for range 4 {
 					rt.send(rt.handler(reg), "ada@corp.example")
@@ -1438,7 +1483,7 @@ func TestRegistrationHandlers_FullMapWarningNamesTheMap(t *testing.T) {
 
 	authURL, _ := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil)
 
 	for i := range gateway.ResendMaxKeys {
 		resendFrom(reg.ResendVerification, "user"+strconv.Itoa(i)+"@corp.example")

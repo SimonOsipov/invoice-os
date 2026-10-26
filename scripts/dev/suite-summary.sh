@@ -12,13 +12,15 @@ list() {
 }
 
 # Awk string forms only: BSD awk does not match octal escapes in a regex literal.
+# An unprefixed line is the single-package e2e run of suites.sh.
 # pnpm writes U+2009 where vitest writes ASCII spaces.
 extract_unit() {
   awk '
     { gsub("\033\\[[0-9;]*m", ""); gsub("\r", ""); gsub("\342\200\211", " "); l = $0; p = ""
-      if (match(l, /^[^ ]+ test:/)) { p = substr(l, 1, RLENGTH - 6); l = substr(l, RLENGTH + 1) }
-      if (l ~ /^ +FAIL  /) { sub(/^ +FAIL  /, "", l); split(l, a, " "); if (a[1] ~ /\.[cm]?[jt]sx?$/) print "file: " (p == "" ? "" : p " ") a[1] }
-      else if (l ~ /^ +❯ [^ ]+ \([0-9]+ tests?[ |)]/) { sub(/^ +❯ /, "", l); split(l, a, " "); print "file: " (p == "" ? "" : p " ") a[1] }
+      if (match(l, /^[^ ]+ test:([A-Za-z0-9_-]+(:[A-Za-z0-9_-]+)*:)?/)) { p = substr(l, 1, index(l, " test:") - 1); l = substr(l, RLENGTH + 1) }
+      else p = "e2e"
+      if (l ~ /^ +FAIL  /) { sub(/^ +FAIL  /, "", l); split(l, a, " "); if (a[1] ~ /\.[cm]?[jt]sx?$/) print "file: " p " " a[1] }
+      else if (l ~ /^ +❯ [^ ]+ \([0-9]+ tests?[ |)]/) { sub(/^ +❯ /, "", l); split(l, a, " "); print "file: " p " " a[1] }
       else if ($0 ~ /^ ERROR  [^ ]+@[^ ]+ test:/) { split($0, a, " "); print "package: " a[2] }
       else if ($0 ~ /^ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  [^ ]+@/) { split($0, a, " "); print "package: " a[2] }
     }' "$1"

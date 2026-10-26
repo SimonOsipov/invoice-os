@@ -91,7 +91,13 @@ func TestSuiteSummary_AFileNamedByTheFailLineAloneIsNamed(t *testing.T) {
 func TestSuiteSummary_UnprefixedVitestLinesAreMatched(t *testing.T) {
 	t.Parallel()
 	log := " FAIL  seam/a.test.ts > t\n  ❯ seam/b.test.ts (2 tests | 1 failed) 5ms\n"
-	wantOut(t, unitOut(t, log), "unit file: seam/a.test.ts", "unit file: seam/b.test.ts")
+	wantOut(t, unitOut(t, log), "unit file: e2e seam/a.test.ts", "unit file: e2e seam/b.test.ts")
+}
+
+func TestSuiteSummary_ANamedTestScriptPrefixKeepsItsPackage(t *testing.T) {
+	t.Parallel()
+	log := "e2e test:unit:  FAIL  tests/unit/y.test.ts > t\nfrontend/app test:dom:ci:  ❯ src/z.test.tsx (2 tests | 1 failed) 5ms\n"
+	wantOut(t, unitOut(t, log), "unit file: e2e tests/unit/y.test.ts", "unit file: frontend/app src/z.test.tsx")
 }
 
 func TestSuiteSummary_StackFramesAreNotFiles(t *testing.T) {
@@ -120,7 +126,6 @@ func TestSuiteSummary_NamesAPackageFromAnErrorLineWithThinSpaces(t *testing.T) {
 	wantOut(t, unitOut(t, log), "unit package: @x/a@1.0.0", "unit package: @x/c@1.0.0")
 }
 
-// The bail-form line of bug-52.
 func TestSuiteSummary_NamesAPackageFromTheRunFirstFailLine(t *testing.T) {
 	t.Parallel()
 	log := ts + "ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL" + ts + " @invoice-os/landing@0.1.0 test: `vitest run`\n"

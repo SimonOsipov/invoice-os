@@ -193,7 +193,7 @@ func TestMetricsSource_BodyCarriesEverySection(t *testing.T) {
 	}
 }
 
-func TestMetricsSource_CachesSixtySecondsPerKey(t *testing.T) {
+func TestMetricsSource_CachesPerKey(t *testing.T) {
 	clk := newClock()
 	f, s, _ := newComboFake(t, clk.now)
 	n := len(Panels)
@@ -445,35 +445,56 @@ func TestMetricsSource_TheBackgroundFetchReplacesTheEntryEvenWhenTheCallerLeft(t
 	}
 }
 
-// AC2: an open screen polling every MetricsTTL is never served an entry older than one period plus a fetch.
+// AC2: an open screen polling about every MetricsTTL, early or late, never waits and is never served
+// an entry older than one period plus a fetch.
 func TestMetricsSource_SixtySecondPollsNeverWaitAndStayWithinOnePeriodPlusAFetch(t *testing.T) {
 	const fetchTime = 1500 * time.Millisecond
-	clk := newClock()
-	f, s, _ := newComboFake(t, clk.now)
-	f.mu.Lock()
-	f.override = func(path, _ string) (int, string, bool) {
-		if strings.HasSuffix(path, "/query_range") {
-			time.Sleep(300 * time.Millisecond)
-		}
-		return 0, "", false
-	}
-	f.mu.Unlock()
-	if _, err := s.Get(t.Context(), "1h", ""); err != nil {
-		t.Fatal(err)
-	}
-	for i := 1; i <= 8; i++ {
-		clk.advance(MetricsTTL)
-		start := time.Now()
-		m := getFast(t, s, t.Context())
-		if d := time.Since(start); d > 150*time.Millisecond {
-			t.Fatalf("poll %d took %v, want a cache answer", i, d)
-		}
-		if age := clk.now().Sub(m.End); age > MetricsTTL+fetchTime+windowLag {
-			t.Fatalf("poll %d served data %v old, want at most one period plus one fetch", i, age)
-		}
-		clk.advance(fetchTime)
-		idle(t, s)
-		clk.advance(-fetchTime)
+	for _, tc := range []struct {
+		name string
+		gap  func(i int) time.Duration
+	}{
+		{"exact", func(int) time.Duration { return MetricsTTL }},
+		{"early", func(int) time.Duration { return MetricsTTL - 100*time.Millisecond }},
+		{"late", func(int) time.Duration { return MetricsTTL + 300*time.Millisecond }},
+		{"alternating", func(i int) time.Duration {
+			if i%2 == 0 {
+				return MetricsTTL - 100*time.Millisecond
+			}
+			return MetricsTTL + 300*time.Millisecond
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clk := newClock()
+			f, s, _ := newComboFake(t, clk.now)
+			f.mu.Lock()
+			f.override = func(path, _ string) (int, string, bool) {
+				if strings.HasSuffix(path, "/query_range") {
+					time.Sleep(100 * time.Millisecond)
+				}
+				return 0, "", false
+			}
+			f.mu.Unlock()
+			if _, err := s.Get(t.Context(), "1h", ""); err != nil {
+				t.Fatal(err)
+			}
+			for i := 1; i <= 6; i++ {
+				clk.advance(tc.gap(i))
+				start := time.Now()
+				m := getFast(t, s, t.Context())
+				if d := time.Since(start); d > 50*time.Millisecond {
+					t.Fatalf("poll %d took %v, want a cache answer", i, d)
+				}
+				if age := clk.now().Sub(m.End); age > MetricsTTL+fetchTime+windowLag {
+					t.Fatalf("poll %d served data %v old, want at most one period plus one fetch", i, age)
+				}
+				clk.advance(fetchTime)
+				idle(t, s)
+				clk.advance(-fetchTime)
+			}
+			if prom, _ := f.googleHits(); prom != 7*len(Panels) {
+				t.Fatalf("prometheus hits = %d, want %d: every poll should refresh once", prom, 7*len(Panels))
+			}
+		})
 	}
 }
 
@@ -733,7 +754,7 @@ func TestMetricsSource_APartialResultIsCachedAndLeaksNoGoogleText(t *testing.T) 
 		t.Fatal(err)
 	}
 	if p2, r2 := f.googleHits(); p2 != prom || r2 != run {
-		t.Fatalf("partial result refetched inside 60 s: prom %d->%d run %d->%d", prom, p2, run, r2)
+		t.Fatalf("partial result refetched before MetricsRefreshAfter: prom %d->%d run %d->%d", prom, p2, run, r2)
 	}
 	if !reflect.DeepEqual(again, m) {
 		t.Fatal("cached partial body differs")
@@ -885,6 +906,81 @@ func TestMetricsSource_APanickingFetchReleasesWaitersAndCachesNothing(t *testing
 	defer s.mu.Unlock()
 	if len(s.inflight) != 0 || len(s.entries) != 0 {
 		t.Fatalf("inflight=%d entries=%d, want 0/0", len(s.inflight), len(s.entries))
+	}
+}
+
+// warnPanicHandler blocks a Warn record until proceed closes, then panics; it records Error records.
+type warnPanicHandler struct {
+	slog.Handler
+	proceed chan struct{}
+	errs    *atomic.Int32
+}
+
+func (warnPanicHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h warnPanicHandler) Handle(_ context.Context, r slog.Record) error {
+	if r.Level == slog.LevelError {
+		h.errs.Add(1)
+		return nil
+	}
+	<-h.proceed
+	panic("log boom")
+}
+
+func TestMetricsSource_APanickingBackgroundRefreshIsRecoveredAndReleasesAJoiner(t *testing.T) {
+	clk := newClock()
+	f, s, _ := newComboFake(t, clk.now)
+	// Seeded, so no token is cached and the refresh's token call hits the failing override.
+	first := Metrics{Range: "1h"}
+	s.entries[metricsKey{"1h", ""}] = metricsEntry{body: first, fetchedAt: clk.now()}
+	proceed := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-proceed:
+		default:
+			close(proceed)
+		}
+	})
+	var errs atomic.Int32
+	s.log = slog.New(warnPanicHandler{proceed: proceed, errs: &errs})
+	f.mu.Lock()
+	f.override = func(path, _ string) (int, string, bool) { return 500, "", path == tokenPath }
+	f.mu.Unlock()
+	var reads atomic.Int32
+	s.now = func() time.Time { reads.Add(1); return clk.now() }
+
+	clk.advance(MetricsTTL)
+	getFast(t, s, t.Context()) // starts the background refresh, which blocks in its first log call
+	// Past the in-flight bound, a caller joins the fetch.
+	clk.advance(MetricsStaleTTL + MetricsFetchTimeout - MetricsTTL)
+	before := reads.Load()
+	joined := make(chan error, 1)
+	go func() { _, err := s.Get(t.Context(), "1h", ""); joined <- err }()
+	for reads.Load() == before {
+		runtime.Gosched()
+	}
+	s.mu.Lock()
+	s.mu.Unlock()
+	close(proceed)
+	select {
+	case err := <-joined:
+		if !errors.Is(err, errFetchAborted) {
+			t.Fatalf("joiner err = %v, want errFetchAborted", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("joiner hung after the background refresh panicked")
+	}
+	idle(t, s)
+	for deadline := time.Now().Add(10 * time.Second); errs.Load() == 0 && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond) // the recover runs after run's cleanup
+	}
+	if errs.Load() != 1 {
+		t.Fatalf("recovered panic logged %d times, want 1", errs.Load())
+	}
+	s.mu.Lock()
+	e := s.entries[metricsKey{"1h", ""}]
+	s.mu.Unlock()
+	if !reflect.DeepEqual(e.body, first) {
+		t.Fatal("the panicked refresh changed the cached entry")
 	}
 }
 

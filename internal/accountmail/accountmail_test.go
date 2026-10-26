@@ -471,6 +471,11 @@ func TestTemplate_UnknownNameIsAnError(t *testing.T) {
 	if src, err := Template("blog_confirm"); err != nil || len(src) == 0 {
 		t.Fatalf("Template(blog_confirm) = %d bytes, %v; want bytes and no error", len(src), err)
 	}
+	for _, name := range []string{"deletion_notice", "deletion_cancelled"} {
+		if src, err := Template(name); err != nil || len(src) == 0 {
+			t.Fatalf("Template(%s) = %d bytes, %v; want bytes and no error", name, len(src), err)
+		}
+	}
 	for _, name := range []string{"nope", "", "../layout", "layout", "confirmation.html", "reset", "recovery.html", "blog-confirm"} {
 		src, err := Template(name)
 		if err == nil {

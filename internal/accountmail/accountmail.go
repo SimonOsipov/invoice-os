@@ -8,9 +8,10 @@ import (
 	"html/template"
 	"net/url"
 	"strings"
+	"time"
 )
 
-//go:embed layout.html blog_confirm.html confirmation.html invite.html recovery.html
+//go:embed layout.html blog_confirm.html confirmation.html deletion_cancelled.html deletion_notice.html invite.html recovery.html
 var files embed.FS
 
 // LogoURL is the absolute public URL of the mark in every mail.
@@ -18,7 +19,9 @@ const LogoURL = "https://api.ascomply.com/emails/mark.png"
 
 // Template returns layout.html plus <name>.html as one html/template source.
 func Template(name string) ([]byte, error) {
-	if name != "blog_confirm" && name != "confirmation" && name != "invite" && name != "recovery" {
+	switch name {
+	case "blog_confirm", "confirmation", "deletion_cancelled", "deletion_notice", "invite", "recovery":
+	default:
 		return nil, fmt.Errorf("accountmail: unknown mail %q", name)
 	}
 	layout, err := files.ReadFile("layout.html")
@@ -77,6 +80,86 @@ func RenderInvite(m InviteMail) (subject, html string, err error) {
 		return "", "", err
 	}
 	return InviteSubject, buf.String(), nil
+}
+
+const (
+	// AppURL is the app root, where the deletion mails send the reader.
+	AppURL                   = "https://app.ascomply.com/"
+	DeletionNoticeSubject    = "Your ASComply workspace is scheduled for deletion"
+	DeletionCancelledSubject = "Your ASComply workspace is no longer scheduled for deletion"
+)
+
+// DeletionNoticeMail is the data of one deletion notice; Token is the plain cancel token.
+type DeletionNoticeMail struct {
+	Workspace, Requester, Token string
+	DueAt                       time.Time
+}
+
+// DeletionCancelledMail is the data of one deletion-cancelled mail; DueAt is the cancelled due time.
+type DeletionCancelledMail struct {
+	Workspace, Canceller string
+	DueAt                time.Time
+}
+
+type deletionView struct {
+	Workspace, Requester, Canceller, ActionURL, DueDate, DueTime string
+}
+
+// renderDeletion executes the named mail; dates render in UTC so the zone of DueAt never shows.
+func renderDeletion(name string, v deletionView, dueAt time.Time) (string, error) {
+	if dueAt.IsZero() {
+		return "", fmt.Errorf("accountmail: %s mail needs a due time", name)
+	}
+	due := dueAt.UTC()
+	v.DueDate, v.DueTime = due.Format("2 January 2006")+" (UTC)", due.Format("2 January 2006, 15:04")+" UTC"
+	src, err := Template(name)
+	if err != nil {
+		return "", err
+	}
+	tpl, err := template.New(name).Parse(string(src))
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, v); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+// RenderDeletionNotice renders the deletion notice; the subject is fixed so it never carries user text.
+func RenderDeletionNotice(m DeletionNoticeMail) (subject, html string, err error) {
+	if m.Token == "" {
+		return "", "", fmt.Errorf("accountmail: deletion notice needs a token")
+	}
+	requester := m.Requester
+	if requester == "" {
+		requester = "A workspace admin"
+	}
+	html, err = renderDeletion("deletion_notice", deletionView{
+		Workspace: m.Workspace, Requester: requester,
+		// The token rides in the fragment so no server log receives it.
+		ActionURL: AppURL + "#cancel-deletion=" + url.QueryEscape(m.Token),
+	}, m.DueAt)
+	if err != nil {
+		return "", "", err
+	}
+	return DeletionNoticeSubject, html, nil
+}
+
+// RenderDeletionCancelled renders the deletion-cancelled mail; the subject is fixed so it never carries user text.
+func RenderDeletionCancelled(m DeletionCancelledMail) (subject, html string, err error) {
+	canceller := m.Canceller
+	if canceller == "" {
+		canceller = "A workspace admin"
+	}
+	html, err = renderDeletion("deletion_cancelled", deletionView{
+		Workspace: m.Workspace, Canceller: canceller, ActionURL: AppURL,
+	}, m.DueAt)
+	if err != nil {
+		return "", "", err
+	}
+	return DeletionCancelledSubject, html, nil
 }
 
 const (

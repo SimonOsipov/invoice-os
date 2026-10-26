@@ -21,7 +21,7 @@ type PurgeWorker struct {
 
 func (w *PurgeWorker) Timeout(*river.Job[purgeargs.Args]) time.Duration { return purgeTimeout }
 
-// Work purges the tenant; a tenant that is not due or started is a no-op.
+// Work purges the tenant; a tenant that is not due or started, or that another runner is purging, is a no-op.
 func (w *PurgeWorker) Work(ctx context.Context, job *river.Job[purgeargs.Args]) error {
 	if _, err := uuid.Parse(job.Args.TenantID); err != nil {
 		return river.JobCancel(err)

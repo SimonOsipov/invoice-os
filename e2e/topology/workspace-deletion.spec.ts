@@ -64,7 +64,7 @@ async function sweepDialog(page: Page, name: string): Promise<void> {
   const parts = {
     'Download export': panel.getByTestId('delete-workspace-export'),
     'the export status': panel.getByTestId('delete-workspace-export-status'),
-    'the tick row': panel.locator('label').filter({ has: panel.getByTestId('delete-workspace-exported') }),
+    'the tick row': panel.locator('label').filter({ has: page.getByTestId('delete-workspace-exported') }),
     'the shown name': panel.getByTestId('delete-workspace-name-shown'),
     'the input': panel.getByTestId('delete-workspace-name'),
     Cancel: panel.getByRole('button', { name: 'Cancel', exact: true }),

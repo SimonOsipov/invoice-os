@@ -14,8 +14,11 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v4"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -92,7 +95,11 @@ type exportRig struct {
 
 func newExportRig(t *testing.T) *exportRig {
 	t.Helper()
-	log := slog.New(slog.DiscardHandler)
+	return newExportRigLogging(t, slog.New(slog.DiscardHandler))
+}
+
+func newExportRigLogging(t *testing.T, log *slog.Logger) *exportRig {
+	t.Helper()
 	mock, err := auth.NewMockIssuer(testIssuer)
 	if err != nil {
 		t.Fatalf("mock issuer: %v", err)
@@ -657,5 +664,276 @@ func TestRefusalPageWriter_PassesA200AndReachesTheConnection(t *testing.T) {
 	}
 	if !bytes.Equal(dr2.Body.Bytes(), payload) || dr2.Code != http.StatusOK {
 		t.Errorf("headerless write recorded %d, %d bytes; want 200 and the payload", dr2.Code, dr2.Body.Len())
+	}
+}
+
+// expiredBearer is signed by the rig's issuer with an exp one hour in the past.
+func (rg *exportRig) expiredBearer(t *testing.T) string {
+	t.Helper()
+	now := time.Now()
+	tok := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
+		"iss": sidIssuer, "sub": subjectS1, "aud": "authenticated", "role": testRole, "session_id": sid1,
+		"iat": now.Add(-2 * time.Hour).Unix(), "exp": now.Add(-time.Hour).Unix(),
+		"app_metadata": map[string]any{"tenant_id": testTenant},
+	})
+	tok.Header["kid"] = rg.signer.kid
+	out, err := tok.SignedString(rg.signer.key)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	return out
+}
+
+func TestExportCode_RefusesARevokedOrExpiredSessionAndStoresNothing(t *testing.T) {
+	rg := newExportRig(t)
+	state := randomState(t)
+	rg.mintCode(t, rg.bearer(t), state) // control: the rig mints
+	base := rg.store.LiveForTest()
+
+	assertErrorBody(t, rg.postCode(rg.expiredBearer(t), stateBody(state)), http.StatusUnauthorized, "unauthorized")
+	if got := rg.store.LiveForTest(); got != base {
+		t.Errorf("live codes = %d after an expired token, want %d", got, base)
+	}
+
+	rg.user.setAnswer(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(gtError(http.StatusForbidden, "session_not_found")))
+	})
+	rg.clk.Advance(SessionCheckTTL + time.Second) // past the cached live verdict
+	assertErrorBody(t, rg.postCode(rg.bearer(t), stateBody(state)), http.StatusUnauthorized, "unauthorized")
+	if got := rg.store.LiveForTest(); got != base {
+		t.Errorf("live codes = %d after a revoked session, want %d", got, base)
+	}
+}
+
+func TestExportDownload_ATokenThatExpiredAfterTheMintIsRefusedAs401(t *testing.T) {
+	rg := newExportRig(t)
+	state := randomState(t)
+	code := rg.seed(t, rg.expiredBearer(t), state)
+
+	assertRefusalPage(t, rg.redeem(code, state), http.StatusUnauthorized, exportMsgSession)
+	if got := rg.up.Hits(); got != 0 {
+		t.Errorf("upstream hits = %d, want 0", got)
+	}
+}
+
+func TestExportDownload_RefusalPageRendersNoRequestValue(t *testing.T) {
+	rg := newExportRig(t)
+	const hostile = `"><script>alert(1)</script>`
+	form := url.Values{"code": {hostile}, "state": {hostile}, "message": {hostile}}
+	r := formRequest("/auth/export-download?code="+url.QueryEscape(hostile)+"&message="+url.QueryEscape(hostile), form)
+	r.Header.Set("Referer", hostile)
+	rec := httptest.NewRecorder()
+	rg.download.ServeHTTP(rec, r)
+
+	assertRefusalPage(t, rec, http.StatusBadRequest, exportMsgExpired)
+	body := rec.Body.String()
+	if strings.Contains(body, "alert(1)") || strings.Contains(body, hostile) {
+		t.Errorf("refusal page echoes a request value: %.400s", body)
+	}
+	if n := len(pageScript.FindAllString(body, -1)); n != 1 {
+		t.Errorf("page holds %d <script> elements, want only the pinned one", n)
+	}
+}
+
+func TestExportDownload_ANonFormBodyIsRefusedAndSpendsNothing(t *testing.T) {
+	rg := newExportRig(t)
+	state := randomState(t)
+	code := rg.seed(t, rg.bearer(t), state)
+
+	for name, c := range map[string]struct{ ctype, body string }{
+		"json":      {"application/json", `{"code":"` + code + `","state":"` + state + `"}`},
+		"plain":     {"text/plain", "code=" + code + "&state=" + state},
+		"multipart": {"multipart/form-data; boundary=x", "--x\r\nContent-Disposition: form-data; name=\"code\"\r\n\r\n" + code + "\r\n--x--\r\n"},
+	} {
+		r := httptest.NewRequest(http.MethodPost, "/auth/export-download", strings.NewReader(c.body))
+		r.Header.Set("Content-Type", c.ctype)
+		rec := httptest.NewRecorder()
+		rg.download.ServeHTTP(rec, r)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s body = %d, want 400 refusal page", name, rec.Code)
+		}
+	}
+	if got := rg.up.Hits(); got != 0 {
+		t.Fatalf("upstream hits = %d after non-form bodies, want 0", got)
+	}
+	if rec := rg.redeem(code, state); rec.Code != http.StatusOK {
+		t.Errorf("urlencoded redeem = %d, want 200 (a non-form body spent the code)", rec.Code)
+	}
+}
+
+// The form cap is 4 KiB: exactly 4096 encoded bytes redeem, 4097 do not.
+func TestExportDownload_TheFormCapIsExactly4KiB(t *testing.T) {
+	rg := newExportRig(t)
+	state := randomState(t)
+	send := func(total int) *httptest.ResponseRecorder {
+		code := rg.seed(t, rg.bearer(t), state)
+		base := url.Values{"code": {code}, "state": {state}}.Encode() + "&pad="
+		r := httptest.NewRequest(http.MethodPost, "/auth/export-download", strings.NewReader(base+strings.Repeat("x", total-len(base))))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		rg.download.ServeHTTP(rec, r)
+		return rec
+	}
+	if rec := send(4096); rec.Code != http.StatusOK {
+		t.Errorf("4096-byte form = %d, want 200", rec.Code)
+	}
+	assertRefusalPage(t, send(4097), http.StatusBadRequest, exportMsgExpired)
+}
+
+func TestExportDownload_ARaceRedeemsOnce(t *testing.T) {
+	rg := newExportRig(t)
+	state := randomState(t)
+	code := rg.seed(t, rg.bearer(t), state)
+
+	const n = 16
+	var ok, refused atomic.Int64
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			switch rec := rg.redeem(code, state); rec.Code {
+			case http.StatusOK:
+				ok.Add(1)
+			case http.StatusBadRequest:
+				refused.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if ok.Load() != 1 || refused.Load() != n-1 || rg.up.Hits() != 1 {
+		t.Errorf("%d concurrent redeems: %d ok, %d refused, %d upstream hits; want 1, %d, 1", n, ok.Load(), refused.Load(), rg.up.Hits(), n-1)
+	}
+}
+
+func TestExportDownload_AnUpstreamThatDiesBeforeTheFirstByteAnswersThe502Page(t *testing.T) {
+	rg := newExportRig(t)
+	rg.up.setAnswer(func(http.ResponseWriter, *http.Request) { panic(http.ErrAbortHandler) })
+	state := randomState(t)
+	rec := rg.redeem(rg.seed(t, rg.bearer(t), state), state)
+
+	assertRefusalPage(t, rec, http.StatusBadGateway, exportRefusalDefault)
+	assertNoUpstreamLeak(t, rec)
+	if strings.Contains(rec.Body.String(), `"error"`) || strings.Contains(rec.Body.String(), "bad gateway") {
+		t.Errorf("502 body carries the gateway's JSON words: %.300s", rec.Body.String())
+	}
+}
+
+// A sign-in code never redeems here; the converse is D6's accepted residue: /auth/exchange does not
+// shape-check the state, so an export code redeems there under the prefixed state, for the holder of both.
+func TestExportDownload_ExchangeRedeemsAnExportCodeOnlyUnderThePrefixedState(t *testing.T) {
+	rg := newExportRig(t)
+	state := randomState(t)
+	bearer := rg.bearer(t)
+	code := rg.seed(t, bearer, state)
+
+	ex := func(code, state string) *httptest.ResponseRecorder {
+		b, _ := json.Marshal(map[string]string{"code": code, "state": state})
+		rec := httptest.NewRecorder()
+		rg.exchange.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/exchange", bytes.NewReader(b)))
+		return rec
+	}
+	rec := ex(code, exportStateForTest+state)
+	var got map[string]string
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil || got["access_token"] != bearer || len(got) != 1 {
+		t.Errorf("exchange under the prefixed state = %d %s, want 200 with only the holder's own access token", rec.Code, rec.Body.String())
+	}
+	if again := ex(code, exportStateForTest+state); again.Code != http.StatusBadRequest {
+		t.Errorf("second exchange = %d, want 400", again.Code)
+	}
+}
+
+// A code, state, bearer or stored answer must reach no log line, at any level.
+func TestExportRoutes_NeverLogACodeAStateOrAToken(t *testing.T) {
+	var buf bytes.Buffer
+	var mu sync.Mutex
+	log := slog.New(slog.NewTextHandler(&lockedWriter{mu: &mu, w: &buf}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	rg := newExportRigLogging(t, log)
+	bearer := rg.bearer(t)
+	var secrets []string
+	note := func(vs ...string) { secrets = append(secrets, vs...) }
+
+	state := randomState(t)
+	code := rg.mintCode(t, bearer, state)
+	note(state, code, bearer)
+	_ = rg.redeem(code, state) // 200
+	_ = rg.redeem(code, state) // spent
+
+	s2 := randomState(t)
+	c2 := rg.seed(t, bearer, s2)
+	_ = rg.redeem(c2, randomState(t)) // wrong state
+	note(s2, c2)
+
+	s3 := randomState(t)
+	c3, _ := rg.store.Put("not json "+bearer, stateHash(exportStateForTest+s3)) // unusable stored answer
+	_ = rg.redeem(c3, s3)
+	note(s3, c3)
+
+	s4 := randomState(t)
+	rg.up.setAnswer(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
+	_ = rg.redeem(rg.seed(t, bearer, s4), s4)
+	note(s4)
+
+	rg.user.setAnswer(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(gtError(http.StatusForbidden, "session_not_found")))
+	})
+	rg.clk.Advance(SessionCheckTTL + time.Second)
+	s5 := randomState(t)
+	_ = rg.redeem(rg.seed(t, bearer, s5), s5)
+	_ = rg.postCode(bearer, stateBody(s5))
+	note(s5)
+
+	full := newExportRigLogging(t, log) // a fresh session cache: the revoked verdict above is still cached
+	fillToCap(t, full.store)
+	s6 := randomState(t)
+	_ = full.postCode(full.bearer(t), stateBody(s6)) // full store: the one warning the route logs
+	note(s6)
+
+	mu.Lock()
+	out := buf.String()
+	mu.Unlock()
+	if !strings.Contains(out, "export code: code store is full") || !strings.Contains(out, "stored answer is unusable") {
+		t.Fatalf("control: the capture holds neither expected warning, so it is blind: %q", out)
+	}
+	for _, sec := range secrets {
+		if sec != "" && strings.Contains(out, sec) {
+			t.Errorf("log holds a secret (%.8s...): %s", sec, out)
+		}
+	}
+	if strings.Contains(out, "access_token") {
+		t.Errorf("log holds a stored answer: %s", out)
+	}
+}
+
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
+
+func TestExportDownload_AStoredAnswerWithoutATokenIsRefused(t *testing.T) {
+	rg := newExportRig(t)
+	for _, answer := range []string{`{}`, `{"access_token":""}`, `[]`} {
+		state := randomState(t)
+		code, ok := rg.store.Put(answer, stateHash(exportStateForTest+state))
+		if !ok {
+			t.Fatal("store refused a code")
+		}
+		assertRefusalPage(t, rg.redeem(code, state), http.StatusBadRequest, exportMsgExpired)
+	}
+	if got := rg.up.Hits(); got != 0 {
+		t.Errorf("upstream hits = %d, want 0", got)
 	}
 }

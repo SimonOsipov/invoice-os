@@ -4,6 +4,10 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -301,5 +305,116 @@ func TestTaggedMockInvitationTokenRouteWiresTheSetter(t *testing.T) {
 	}
 	if strings.Contains(logs.String()+rec.Body.String(), "abcdefghijklmnopqrstuvwxyz-_") {
 		t.Errorf("the log or the answer carries the token: %s %s", logs.String(), rec.Body.String())
+	}
+}
+
+func taggedJWK(t *testing.T, kid string) string {
+	t.Helper()
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := k.ECDH()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := e.PublicKey().Bytes()
+	enc := base64.RawURLEncoding.EncodeToString
+	raw, err := json.Marshal([]map[string]any{{
+		"kty": "EC", "crv": "P-256", "alg": "ES256", "kid": kid,
+		"key_ops": []string{"sign", "verify"},
+		"x":       enc(pub[1:33]), "y": enc(pub[33:]), "d": enc(e.Bytes()),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// With GATEWAY_MOCK_ISSUER_KEY set, JWKS and /auth/login both use that key's kid.
+func TestTaggedMockIssuerUsesConfiguredKey(t *testing.T) {
+	t.Setenv("AUTH_ISSUER", mountTestIssuer)
+	t.Setenv("GATEWAY_MOCK_ISSUER_KEY", taggedJWK(t, "kid-configured"))
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	jwks, login := mockIssuerRoutes("development", "true", gateway.CORS([]string{"https://app.ascomply.test"}), logger)
+	if jwks == nil || login == nil {
+		t.Fatalf("mockIssuerRoutes = (jwks %v, login %v), want both handlers", jwks, login)
+	}
+
+	rec := httptest.NewRecorder()
+	jwks.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/.well-known/jwks.json", nil))
+	var set struct {
+		Keys []struct {
+			Kid string `json:"kid"`
+		} `json:"keys"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &set); err != nil || len(set.Keys) != 1 {
+		t.Fatalf("jwks = %q (decode err %v), want one key", rec.Body.String(), err)
+	}
+	if set.Keys[0].Kid != "kid-configured" {
+		t.Errorf("jwks kid = %q, want kid-configured", set.Keys[0].Kid)
+	}
+
+	rec = httptest.NewRecorder()
+	login.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{}`)))
+	var tok struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &tok); err != nil || tok.AccessToken == "" {
+		t.Fatalf("login = %d %s, want an access_token", rec.Code, rec.Body.String())
+	}
+	hdr, _, _ := strings.Cut(tok.AccessToken, ".")
+	b, err := base64.RawURLEncoding.DecodeString(hdr)
+	if err != nil {
+		t.Fatalf("decode token header: %v", err)
+	}
+	var h struct {
+		Kid string `json:"kid"`
+	}
+	if err := json.Unmarshal(b, &h); err != nil || h.Kid != "kid-configured" {
+		t.Errorf("token header %s, want kid kid-configured (decode err %v)", b, err)
+	}
+}
+
+func servedKid(t *testing.T, iss *auth.MockIssuer) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	iss.JWKSHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	var set struct {
+		Keys []struct {
+			Kid string `json:"kid"`
+		} `json:"keys"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &set); err != nil || len(set.Keys) != 1 {
+		t.Fatalf("jwks = %q (decode err %v), want one key", rec.Body.String(), err)
+	}
+	return set.Keys[0].Kid
+}
+
+// Unset and blank both generate a key per build, as before.
+func TestTaggedMockIssuerWithoutKeyGeneratesOne(t *testing.T) {
+	for _, keyJSON := range []string{"", "  "} {
+		a, err := newMockIssuer(mountTestIssuer, keyJSON)
+		if err != nil {
+			t.Fatalf("newMockIssuer(%q): %v", keyJSON, err)
+		}
+		b, err := newMockIssuer(mountTestIssuer, keyJSON)
+		if err != nil {
+			t.Fatalf("newMockIssuer(%q) again: %v", keyJSON, err)
+		}
+		if ka, kb := servedKid(t, a), servedKid(t, b); ka == kb {
+			t.Errorf("newMockIssuer(%q) twice gave one kid %q, want two generated keys", keyJSON, ka)
+		}
+	}
+}
+
+func TestTaggedNewMockIssuerRejectsABadKey(t *testing.T) {
+	const bad = `{"x":1}`
+	_, err := newMockIssuer(mountTestIssuer, bad)
+	if err == nil {
+		t.Fatal("accepted a bad key")
+	}
+	if strings.Contains(err.Error(), bad) {
+		t.Errorf("error quotes the key: %q", err.Error())
 	}
 }

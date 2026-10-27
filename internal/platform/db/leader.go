@@ -4,14 +4,18 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// claimRetry is how often a process that missed a task's lock tries again.
+const claimRetry = 5 * time.Second
+
 // Leader elects one process per periodic task with session advisory locks on one dedicated
 // connection. A task keeps its lock until the connection drops, so a second worker instance
-// runs none of the tasks the first one leads.
+// runs none of the tasks the first one leads, and takes them over soon after the first stops.
 // ceiling: a connection lost mid-run lets a peer start the task before this run ends.
 type Leader struct {
 	dsn string
@@ -23,14 +27,24 @@ type Leader struct {
 
 func NewLeader(dsn string) *Leader { return &Leader{dsn: dsn} }
 
-// Lead wraps fn so it runs only while this process holds the lock for name.
+// Lead wraps fn so it runs only while this process holds the lock for name. A call that misses
+// the lock retries every claimRetry until it takes the lock or ctx ends; it then returns nil.
 func (l *Leader) Lead(name string, fn func(context.Context) error) func(context.Context) error {
 	return func(ctx context.Context) error {
-		ok, err := l.claim(ctx, name)
-		if err != nil || !ok {
-			return err
+		for {
+			ok, err := l.claim(ctx, name)
+			if err != nil {
+				return err
+			}
+			if ok {
+				return fn(ctx)
+			}
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(claimRetry):
+			}
 		}
-		return fn(ctx)
 	}
 }
 

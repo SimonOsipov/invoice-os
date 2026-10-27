@@ -21,6 +21,7 @@ describe('shardTenants', () => {
     const surfaces = shardTenants('invoice-surfaces.spec.ts')
     const wizard2 = shardTenants('import-wizard-2.spec.ts')
     const ui = shardTenants('portfolio.spec.ts')
+    const auth = shardTenants('auth.spec.ts')
 
     expect(wizard.a.id).toBe('11111111-1111-1111-1111-00000000e2e1')
     expect(wizard.b.id).toBe('22222222-2222-2222-2222-00000000e2e1')
@@ -30,6 +31,10 @@ describe('shardTenants', () => {
     expect(wizard2.b.id).toBe('22222222-2222-2222-2222-00000000e2e3')
     expect(ui.a.id).toBe('11111111-1111-1111-1111-00000000e2e4')
     expect(ui.b.id).toBe('22222222-2222-2222-2222-00000000e2e4')
+    expect(auth.a.id).toBe('11111111-1111-1111-1111-00000000e2e5')
+    expect(auth.b.id).toBe('22222222-2222-2222-2222-00000000e2e5')
+    expect([auth.a.name, auth.a.kind, auth.a.subject]).toEqual([wizard.a.name, wizard.a.kind, wizard.a.subject])
+    expect([auth.b.name, auth.b.kind, auth.b.subject]).toEqual([wizard.b.name, wizard.b.kind, wizard.b.subject])
     expect([ui.a.name, ui.a.kind, ui.a.subject]).toEqual([wizard.a.name, wizard.a.kind, wizard.a.subject])
     expect([ui.b.name, ui.b.kind, ui.b.subject]).toEqual([wizard.b.name, wizard.b.kind, wizard.b.subject])
     expect([wizard2.a.name, wizard2.a.kind, wizard2.a.subject]).toEqual([wizard.a.name, wizard.a.kind, wizard.a.subject])

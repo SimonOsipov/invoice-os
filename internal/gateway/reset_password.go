@@ -198,7 +198,7 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 			}
 			log.WarnContext(ctx, label+": global sign-out failed", attrs...)
 		}
-		sessions.EvictSubject(confirmed.User.ID)
+		sessions.EvictSubject(ctx, confirmed.User.ID)
 		// After same_password GoTrue ended no session, so only a completed sign-out may claim success.
 		if samePassword && !signedOut {
 			http.Redirect(w, r, failed, http.StatusSeeOther)

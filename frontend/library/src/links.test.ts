@@ -32,11 +32,13 @@ describe('links', () => {
         shipped++
       }
     }
-    expect([soon, shipped]).toEqual([5, 21])
+    expect([soon, shipped]).toEqual([5, 23])
     const clear = FEATURES.find((f) => f.id === 'submit-clear')!
     expect(featurePlatformHref(clear)).toBeNull()
     const reports = FEATURES.find((f) => f.id === 'reports')!
     expect(featurePlatformHref(reports)).toBe('https://app.example/reports?via=library')
+    expect(featurePlatformHref(FEATURES.find((f) => f.id === 'delete-account')!)).toBe('https://app.example/account?via=library')
+    expect(featurePlatformHref(FEATURES.find((f) => f.id === 'delete-workspace')!)).toBe('https://app.example/settings?via=library')
   })
 
   it('groupPlatformHref_isNullForAGroupWithNoShippedFeature', () => {

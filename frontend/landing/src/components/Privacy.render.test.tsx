@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
 
-import { ANALYTICS_DEFAULT_SENTENCE, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
+import { ANALYTICS_DEFAULT_SENTENCE, APP_LABELS, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { CONSENT_TEXT } from './demoForm'
 import { APP_NOTICE_BODY, CookieNotice } from './CookieNotice'
 import { PRODUCTION_HOSTNAMES, submissionUrl } from '../hubspot'
@@ -39,6 +39,10 @@ import {
   resendContactKeys,
   resendSkipsUntickedDemoBooker,
   BLOG_CHAT_PARAGRAPH,
+  DELETION_SENTENCES,
+  appLabels,
+  onlyActiveMemberDeletesWorkspace,
+  workspaceExportIsMerged,
 } from './privacyCodeFacts.test.util'
 
 const SRC_DIR = fileURLToPath(new URL('.', import.meta.url))
@@ -656,6 +660,159 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     }
     expect(write).toMatch(/delete/i)
     expect(write, 'a registrant record is not covered').toMatch(/regist/i)
+  })
+
+  const deletionSentence = (id: string): string => DELETION_SENTENCES.find((s) => s.id === id)!.text
+  const writeToUsItem = (): string => {
+    const at = html.indexOf('<strong>Write to us.</strong>')
+    expect(at, 'the "Write to us" item is gone').toBeGreaterThan(-1)
+    return html.slice(html.lastIndexOf('<li', at), html.indexOf('</li>', at))
+  }
+
+  it('DEL-10-01 W2 the Write-to-us item names Your account and Delete my account', () => {
+    const write = plain(writeToUsItem())
+    expect(write).toContain(APP_LABELS.page)
+    expect(write).toContain(APP_LABELS.deleteAccount)
+    expect(write).toContain(deletionSentence('W2'))
+  })
+
+  it('DEL-10-01 W1 email is open to everyone and names the no-access case', () => {
+    const item = writeToUsItem()
+    expect(plain(item)).toContain(deletionSentence('W1'))
+    expect(deletionSentence('W1')).toMatch(/^Email /)
+    expect(deletionSentence('W1')).toContain('That works also if you cannot sign in to an account, or never had one.')
+    expect(item).toContain(`href="mailto:${PRIVACY_CONTACT}"`)
+  })
+
+  it('DEL-10-01 W1 is not a second contact address', () => {
+    expect(writeToUsItem().match(/href="mailto:/g)).toHaveLength(1)
+    const src = readFileSync(PRIVACY_TSX, 'utf8')
+    expect(src.split(PRIVACY_CONTACT)).toHaveLength(2)
+  })
+
+  it('DEL-10-01 the ordered list keeps four items', () => {
+    const at = html.indexOf('<strong>Write to us.</strong>')
+    const list = html.slice(html.lastIndexOf('<ol', at), html.indexOf('</ol>', at))
+    expect(list.match(/<li[ >]/g)).toHaveLength(4)
+    expect(plain(html)).toContain('None of the four stops Google Fonts')
+  })
+
+  it('DEL-10-01 W3 follows W2 and the Sentry sentence follows W3', () => {
+    const write = plain(writeToUsItem())
+    const order = ['W1', 'W2', 'W3'].map((id) => write.indexOf(deletionSentence(id)))
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    expect(order[0]).toBeGreaterThan(-1)
+    expect(write.indexOf('a Sentry error report')).toBeGreaterThan(order[2])
+  })
+
+  const accountText = (): string => plain(section(/account|regist/i))
+  const accountSentences = (): string[] => sentences(accountText())
+
+  it('DEL-10-02 A1 the self-service route is on the page', () => {
+    expect(accountText()).toContain(deletionSentence('A1'))
+  })
+
+  it('DEL-10-02 every account-section sentence is pinned in place', () => {
+    const text = accountText()
+    const at = ['A1', 'A2', 'A3', 'A4', 'A5', 'E1', 'A6', 'A7'].map((id) => text.indexOf(deletionSentence(id)))
+    expect(at.every((i) => i > -1), `a sentence is missing: ${at}`).toBe(true)
+    expect(at).toEqual([...at].sort((x, y) => x - y))
+  })
+
+  it('DEL-10-04 E1 is pinned in the account section', () => {
+    const text = accountText()
+    expect(text).toContain(deletionSentence('E1'))
+    expect(text.indexOf(deletionSentence('E1'))).toBeGreaterThan(text.indexOf(deletionSentence('A5')))
+    expect(text.indexOf(deletionSentence('E1'))).toBeLessThan(text.indexOf(deletionSentence('A6')))
+  })
+
+  it('DEL-10-02 A3 says asks for both vendors and promises no vendor outcome', () => {
+    const a3 = deletionSentence('A3')
+    expect(a3).toContain('asks HubSpot')
+    expect(a3).toContain('asks Resend')
+    const promises = accountSentences().filter((x) => /HubSpot|Resend/.test(x) && /backup|within|days|no copy|nothing remains/i.test(x))
+    expect(promises).toEqual([])
+  })
+
+  it('DEL-10-02 A4 does not say the email leaves the workspace', () => {
+    expect(accountSentences().length, 'the account section has no sentences').toBeGreaterThan(10)
+    expect(accountSentences().filter((x) => /email address does not stay|no email/i.test(x))).toEqual([])
+  })
+
+  it('DEL-10-02 A5 the labels in the workspace path are the app', () => {
+    const a5 = deletionSentence('A5')
+    for (const label of [APP_LABELS.settings, APP_LABELS.workspaceTab, APP_LABELS.deleteWorkspace]) expect(a5).toContain(label)
+    expect({ settings: APP_LABELS.settings, workspaceTab: APP_LABELS.workspaceTab, deleteWorkspace: APP_LABELS.deleteWorkspace }).toEqual({
+      settings: appLabels().settings,
+      workspaceTab: appLabels().workspaceTab,
+      deleteWorkspace: appLabels().deleteWorkspace,
+    })
+  })
+
+  it('DEL-10-02 A7 a sole active member deletes the workspace, not at once', () => {
+    expect(onlyActiveMemberDeletesWorkspace()).toBe(true)
+    expect(deletionSentence('A7')).toContain('not at once')
+    const bad = accountSentences().filter((x) => /only active member|last member/i.test(x) && /at once/i.test(x.replace(/not at once/gi, '')))
+    expect(bad).toEqual([])
+  })
+
+  it('DEL-10-02 the rendered account section mentions the export iff the export is merged', () => {
+    expect(accountSentences().length, 'the account section has no sentences').toBeGreaterThan(10)
+    expect(/\bexport/i.test(accountText())).toBe(workspaceExportIsMerged())
+  })
+
+  it('DEL-10-02 the page names no data-protection law', () => {
+    // The demo consent sentence quotes "compliance specialist", so the broad word is checked on the account section only.
+    expect(plain(html)).not.toMatch(/NDPA|GDPR/)
+    expect(accountText()).not.toMatch(/NDPA|GDPR|complian/)
+  })
+
+  it('DEL-10-02 the account section is still the only h2 the account-or-regist regex finds', () => {
+    const h2s = Array.from(html.matchAll(/<h2[^>]*>([\s\S]*?)<\/h2>/g), (m) => plain(m[1]))
+    expect(h2s.filter((t) => /account|regist/i.test(t))).toHaveLength(1)
+  })
+
+  const retentionText = (): string => plain(section(/^How long deleted data lasts$/))
+  const retentionParagraphs = (): string[] => {
+    const at = html.indexOf('>How long deleted data lasts</h2>')
+    const end = html.indexOf('<h2', at + 1)
+    return Array.from(html.slice(at, end).matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g), (m) => plain(m[1]))
+  }
+  const h2Texts = (): string[] => Array.from(html.matchAll(/<h2[^>]*>([\s\S]*?)<\/h2>/g), (m) => plain(m[1]))
+
+  it('DEL-10-03 the retention section sits between How long it is kept and What it is not used for', () => {
+    const h2s = h2Texts()
+    const at = ['How long it is kept', 'How long deleted data lasts', 'What it is not used for'].map((t) => h2s.indexOf(t))
+    expect(at.every((i) => i > -1), `an h2 is missing: ${at}`).toBe(true)
+    expect(at[1]).toBe(at[0] + 1)
+    expect(at[2]).toBe(at[1] + 1)
+    expect(h2s.filter((t) => t === 'How long deleted data lasts')).toHaveLength(1)
+  })
+
+  it('DEL-10-03 the new h2 is not found by the account-or-regist regex', () => {
+    expect('How long deleted data lasts').not.toMatch(/account|regist/i)
+    expect(h2Texts().filter((t) => /account|regist/i.test(t))).toHaveLength(1)
+  })
+
+  it('DEL-10-03 R1..R7 are pinned in place', () => {
+    const text = retentionText()
+    const at = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7'].map((id) => text.indexOf(deletionSentence(id)))
+    expect(at.every((i) => i > -1), `a sentence is missing: ${at}`).toBe(true)
+    expect(at).toEqual([...at].sort((x, y) => x - y))
+  })
+
+  it('DEL-10-03 R1 promises no completeness', () => {
+    const r1 = retentionParagraphs()[0]
+    expect(r1).toBe(deletionSentence('R1'))
+    expect(r1).toContain('main copies')
+    expect(r1).not.toMatch(/\b(each|every|all)\b/i)
+  })
+
+  it('DEL-10-03 R5 sets no retention period', () => {
+    const r5 = retentionParagraphs().find((p) => p.startsWith('Sign-in record'))!
+    expect(r5).toBe(deletionSentence('R5'))
+    expect(r5).toContain('We have set no time')
+    expect(r5).not.toMatch(/\d/)
   })
 
   it('C14: the page says the marketing sentence is stored with its time', () => {

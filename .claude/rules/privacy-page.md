@@ -27,6 +27,32 @@ paths:
   - "internal/invoice/explain.go"
   - "internal/invoice/handlers_explain.go"
   - "frontend/app/src/components/CreateUpload.tsx"
+  - "internal/tenancy/account_deletion.go"
+  - "internal/tenancy/workspace_deletion.go"
+  - "internal/workspacepurge/**"
+  - "internal/notifications/erase.go"
+  - "internal/notifications/vendor_erase.go"
+  - "internal/platform/db/tenant.go"
+  - "internal/platform/auth/gotrueadmin/**"
+  - "internal/actor/**"
+  - "frontend/app/src/lib/accountDeletion.ts"
+  - "frontend/app/src/lib/workspaceDeletion.ts"
+  - "frontend/app/src/lib/workspaceExport.ts"
+  - "internal/archive/workspace.go"
+  - "sidecar/auth/Dockerfile"
+  - "internal/tenancy/store.go"
+  - "internal/tenancy/tenancy.go"
+  - "migrations/20260709161252_invitations.sql"
+  - "migrations/20261010080000_staff_audit_log*.sql"
+  - "migrations/20261026004500_workspace_deletion.sql"
+  - "migrations/20261026045351_deletion_purge_started.sql"
+  - "frontend/app/src/components/Sidebar.tsx"
+  - "frontend/app/src/components/AccountView.tsx"
+  - "frontend/app/src/components/WorkspaceSettings.tsx"
+  - "frontend/app/src/components/DeleteWorkspaceDialog.tsx"
+  - "frontend/app/src/components/WorkspaceDeletionNotice.tsx"
+  - "frontend/app/src/data.tsx"
+  - "frontend/app/src/glyphs.tsx"
 ---
 # Privacy page
 
@@ -94,3 +120,26 @@ Each row holds the URL, one finding and the plan. The PR body holds the full ven
 | TypeSafe, Jev | https://typesafe.ai/legal/privacy-policy | The policy forbids training on Input. It does not name Jev. | No claim. The user decides. |
 - Quote the hosting region from `HOSTING_REGION`. `productionRegion` reads the same value from `deploy-prod.yml`, and C37 fails when they differ.
 - Say that the sign-in service's error reports may include the account email while `scrubAuthEvent` keeps it. `TestAuthEvent_CarriesTheAccountEmail` pins the code side.
+
+## Deletion and retention
+
+Each line names a sentence of `DELETION_SENTENCES` and its backing. Check date: 2026-10-26.
+
+- `W2`, `A1`: the sidebar name card calls `ctx.nav('account')`. `appLabels()` reads the labels.
+- `A2`: `DeleteMyAccount` ends the membership and calls `notifications.EnqueueErasure` in one transaction.
+- `A3`: `EraseWorker` runs the steps sweep, account, hubspot and resend. Say "asks" for a vendor, never that the vendor holds no copy.
+- `A3` HubSpot: its `gdpr-delete` page reads "Permanently delete a contact and all associated content to follow GDPR" (checked 2026-10-26).
+- `A4`: `actor.Resolve` picks `actor.RemovedName` for a removed membership. The audit reader and the invoice history call it.
+- `A5`: `WorkspaceSettings.tsx`, `DeleteWorkspaceDialog.tsx` and `SETTINGS_TABS`.
+- `A6`, `R2`: the `tenants_deletion_guard` trigger sets the 30 days. `ErrWorkspaceLocked`, `CancelWorkspaceDeletion` and `workspacepurge.Purger` do the rest.
+- `A6` lock clause: `DeleteMyAccount` runs in a read-write request transaction, which a locked workspace refuses with `ErrWorkspaceLocked`. `deleteAccountRefusedWhileLocked()` pins it.
+- Read the last definition of a trigger function across all migrations. A later `CREATE OR REPLACE` wins.
+- `A7`: `decideAccountDeletion` and `eraseMembers`.
+- `R3`: Cloud SQL `prod` has `retainedBackups` 7 and `transactionLogRetentionDays` 7. Source: infra `terraform/sql.tf`. Read with `gcloud sql instances describe prod --project ascomply-prod --format='yaml(settings.backupConfiguration,region,state)'`.
+- `R4`: bucket `ascomply-prod-documents` has `soft_delete_policy.retentionDurationSeconds` 604800. Source: infra `terraform/storage.tf`. Read with `gcloud storage buckets describe gs://ascomply-prod-documents --project ascomply-prod --format='yaml(name,location,soft_delete_policy)'`.
+- `R5`: GoTrue v2.197.0 `adminUserDelete` writes `user_deleted` with `user_email` to `auth.audit_log_entries` before it destroys the user. `gotrueVersion()` pins the version. `nothingPrunesSigninAuditLog()` pins that no file in this repo names the table.
+- `R6`: `invitations.invitee_email` is `NOT NULL`. `invitationKeepsInviteeEmail()` pins it. DEL-13 erases `invitee_email` at account deletion and removes `R6` in its own PR.
+- `R7`: `workspacepurge.purgeRows` writes the staff row. `staffLogEntryFacts()` and `staffLogIsAppendOnly()` pin the payload keys and the append-only trigger.
+- Change `BACKUP_DAYS`, `FILE_RECOVERY_DAYS` and `R3`..`R4` together with the infra.
+- Change `R2` and `A6` in the PR that adds a staff path to start or purge a deletion (DEL-09).
+- Change the retention paragraphs when the sign-in service version changes. Re-read `adminUserDelete` first.

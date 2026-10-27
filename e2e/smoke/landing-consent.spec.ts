@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { resolveTarget } from '../targets'
-import { overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from '../topology/layout'
+import { overlapOf, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from '../topology/layout'
 import { consoleGate, seedConsent } from './landingConsent'
 
 // The cookie consent notice on the deployed landing: mount predicate, layout
@@ -770,6 +770,8 @@ test('landing consent: the first-visit card is at most a third of the phone view
     await page.setViewportSize({ width, height: PHONE.height })
     await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
     await settleLayout(page)
+    // cn-in slides the card for 220 ms; sequential rect reads must not land mid-slide
+    await settleAnimations(card)
 
     const rect = await rectOf(card, 'the cookie notice', at)
     const { accept, reject } = await expectTouchRow(card, rect, 'first visit', at)
@@ -818,6 +820,8 @@ test('landing consent: the reopened card is at most a third of the phone viewpor
     await page.setViewportSize({ width, height: PHONE.height })
     await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
     await settleLayout(page)
+    // cn-in slides the card for 220 ms; sequential rect reads must not land mid-slide
+    await settleAnimations(card)
 
     const rect = await rectOf(card, 'the reopened cookie notice', at)
     const { accept, reject } = await expectTouchRow(card, rect, 'reopened', at)

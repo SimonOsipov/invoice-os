@@ -228,6 +228,7 @@ func TestStaffPurgeHandler_MapsEveryOutcome(t *testing.T) {
 		{"name mismatch", ErrWorkspaceNameMismatch, 400, "the workspace name does not match"},
 		{"house workspace", ErrHouseWorkspace, 409, "the ASComply staff workspace cannot be deleted"},
 		{"deletion underway", ErrDeletionUnderway, 409, "this workspace is already being deleted"},
+		{"deletion not scheduled", ErrDeletionNotScheduled, 409, "this workspace has no scheduled deletion; use Delete workspace first"},
 		{"an unknown failure", errors.New("boom"), 500, "internal server error"},
 	}
 	for _, tc := range outcomes {

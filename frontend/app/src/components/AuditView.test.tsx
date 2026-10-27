@@ -1335,7 +1335,7 @@ describe('AuditView export control (AUDIT-07-10)', () => {
       .decode(bytes.slice(3))
       .split('\n')
       .filter((l) => l.length > 0)
-      .slice(1)
+      .slice(1, -1) // header off the front, BUG-74 notice off the back
     // Hardcoded 2000, not AUDIT_EXPORT_CAP: this must catch AuditView wiring in a different cap.
     expect(dataLines.length, 'the written file must hold exactly 2000 data rows').toBe(2000)
 

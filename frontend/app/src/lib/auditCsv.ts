@@ -25,7 +25,7 @@ function csvCompany(event: AuditEvent): string {
       : '—'
 }
 
-export function auditCsv(events: AuditEvent[]): string {
+export function auditCsv(events: AuditEvent[], opts?: { truncated: boolean; cap: number }): string {
   const lines = events.map((e) =>
     [
       e.created_at,
@@ -41,6 +41,9 @@ export function auditCsv(events: AuditEvent[]): string {
       .map((v) => csvCell(String(v)))
       .join(','),
   )
+  if (opts?.truncated) {
+    lines.push(csvCell(`This file holds only the first ${opts.cap} rows; the audit log has more events. Narrow the filters to export the rest.`))
+  }
   return [AUDIT_CSV_HEADER.join(','), ...lines].join('\n')
 }
 

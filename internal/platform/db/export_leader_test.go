@@ -16,3 +16,9 @@ func ExportLeaderTerminate(ctx context.Context, l *Leader) (bool, error) {
 	err = pool.QueryRow(ctx, `SELECT pg_terminate_backend($1)`, pid).Scan(&ok)
 	return ok, err
 }
+
+// ExportLeaderHoldMu holds l.mu, so a claim blocks on it, until the returned func runs.
+func ExportLeaderHoldMu(l *Leader) (release func()) {
+	l.mu.Lock()
+	return l.mu.Unlock
+}

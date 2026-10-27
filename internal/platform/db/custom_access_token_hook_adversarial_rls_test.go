@@ -58,7 +58,8 @@ func reapplyHookMigrationOnCleanup(t *testing.T, provider *goose.Provider) {
 	t.Helper()
 	byHouse, house, rules, staff, hook := staffByHouseMigrationVersion(t), houseMigrationVersion(t), rulesRoleMigrationVersion(t), staffMigrationVersion(t), hookMigrationVersion(t)
 	join, hasJoin := joinMigrationVersion(t)
-	staffRead := staffReadMigrationVersions(t)
+	staffRead := withoutStaffDeletionRead(t, staffReadMigrationVersions(t))
+	rollBackRemovedFirst(t, provider)
 	t.Cleanup(func() {
 		ctx := context.Background()
 		type migStep struct {
@@ -368,7 +369,7 @@ func TestRLS_CustomAccessTokenHookIsStableAndItsOwnerCannotWrite(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate column privileges: %v", err)
 	}
-	if want := map[string]int{"memberships": 5, "house_company": 1, "invitations": 8, "tenants": 2, "submission_jobs": 1}; !reflect.DeepEqual(cols, want) {
+	if want := map[string]int{"memberships": 5, "house_company": 1, "invitations": 8, "tenants": 3, "submission_jobs": 1}; !reflect.DeepEqual(cols, want) {
 		t.Errorf("auth_hook_reader column privileges per table = %v, want %v", cols, want)
 	}
 
@@ -389,7 +390,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 	ctx := context.Background()
 	byHouse, house, hook, staff, rules := staffByHouseMigrationVersion(t), houseMigrationVersion(t), hookMigrationVersion(t), staffMigrationVersion(t), rulesRoleMigrationVersion(t)
 	join, hasJoin := joinMigrationVersion(t)
-	staffRead := staffReadMigrationVersions(t)
+	staffRead := withoutStaffDeletionRead(t, staffReadMigrationVersions(t))
 
 	sqlDB, err := sql.Open("pgx", os.Getenv("DATABASE_MIGRATION_URL"))
 	if err != nil {
@@ -400,6 +401,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 	if err != nil {
 		t.Fatalf("build migration provider: %v", err)
 	}
+	rollBackRemovedFirst(t, provider)
 
 	// Counts the hook's own memberships columns: the join-by-email
 	// columns (display_name, email) belong to other migrations.

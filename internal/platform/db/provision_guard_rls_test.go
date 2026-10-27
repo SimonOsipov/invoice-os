@@ -44,6 +44,7 @@ func useShippedGuard(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
 	provider, version := guardMigrationProvider(t)
+	rollBackRemovedFirst(t, provider)
 	if _, err := h.super.Exec(ctx, `DROP FUNCTION IF EXISTS `+guardSig); err != nil {
 		t.Fatalf("drop %s: %v", guardSig, err)
 	}
@@ -228,6 +229,7 @@ func TestRLS_ProvisionGuard_DownRestoresTheUnguardedFunction(t *testing.T) {
 	ctx := context.Background()
 	requireGuardFunction(t)
 	provider, version := guardMigrationProvider(t)
+	rollBackRemovedFirst(t, provider)
 
 	t.Cleanup(func() {
 		if _, err := provider.ApplyVersion(context.Background(), version, true); err != nil && !errors.Is(err, goose.ErrAlreadyApplied) {

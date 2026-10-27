@@ -3,6 +3,7 @@ package tenancy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -257,5 +258,46 @@ func TestClientAccess_PatchAnswersTheTargetsStoredAccess(t *testing.T) {
 			}
 			requireAccess(t, tc.name, wireRows(t, []any{got})[tc.user], tc.want)
 		})
+	}
+}
+
+func TestSetMemberClients_RemovedTargetIsNotFound(t *testing.T) {
+	w := newInvWorld(t, "DEL-02-02 clients removed", "Ada Obi")
+	m := w.removedRow(t, "Grace Eze")
+	e1 := seedEntity(t, w.super, w.tenant)
+	before := imageOf(t, w.super, w.tenant, m)
+
+	if _, err := w.store.SetMemberClients(w.adminCtx(), m, ClientAccess{All: false, IDs: []string{e1}}); !errors.Is(err, ErrMembershipNotFound) {
+		t.Fatalf("err = %v, want ErrMembershipNotFound", err)
+	}
+	if after := imageOf(t, w.super, w.tenant, m); after != before || after.AllClients || after.Clients != 0 {
+		t.Errorf("removed row after the refused write = %+v, want unchanged %+v", after, before)
+	}
+	if n := auditCount(t, w.app, w.tenant, "membership.client_access_set"); n != 0 {
+		t.Errorf("membership.client_access_set rows = %d, want 0", n)
+	}
+
+	live := w.addMember(t, "preparer", "active", "Tunde Bello")
+	if _, err := w.store.SetMemberClients(w.adminCtx(), live, ClientAccess{IDs: []string{e1}}); err != nil {
+		t.Errorf("control: SetMemberClients on an active member: %v", err)
+	}
+}
+
+func TestListMemberships_ShowsARemovedRowWithoutEmail(t *testing.T) {
+	w := newInvWorld(t, "DEL-02-04 roster removed "+uuid.NewString()[:8], "Ada Admin")
+	m := w.removedRow(t, "Grace Eze")
+
+	rows := w.listAs(t, w.admin)
+	row := rows[m]
+	if row == nil {
+		t.Fatalf("removed row %s missing from the roster: %v", m, rows)
+	}
+	for k, want := range map[string]string{"status": `"removed"`, "email": `null`, "display_name": `"Grace Eze"`} {
+		if got := string(row[k]); got != want {
+			t.Errorf("%s = %s, want %s", k, got, want)
+		}
+	}
+	if _, live := rows[w.admin]; !live {
+		t.Errorf("control: the active admin is missing from the roster")
 	}
 }

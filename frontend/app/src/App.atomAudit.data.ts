@@ -38,9 +38,9 @@ export type AuditedAtom = {
 // connectorMappings, policies, members, roles. Named, not indexed --
 // inserting a row renumbers an index list and nothing catches it.
 
-// Every route a screen reading an always-mounted atom can be on: the 13 ROUTE_PATHS
+// Every route a screen reading an always-mounted atom can be on: the 14 ROUTE_PATHS
 // entries (lib/route.ts:7-20). Sidebar and Header mount on all of them (App.tsx#Workspace).
-export const ALL_13 = [
+export const ALL_14 = [
   '/',
   '/invoices',
   '/approvals',
@@ -54,6 +54,7 @@ export const ALL_13 = [
   '/create',
   '/invoice',
   '/extraction',
+  '/account',
 ]
 
 export const AUDITED_ATOMS: readonly AuditedAtom[] = [
@@ -62,7 +63,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     name: 'suspended',
     kind: 'useState',
     resetBySwitchClient: false,
-    routes: ALL_13,
+    routes: ALL_14,
     verdict: 'correctly-reset',
     citation: { text: 'if (suspended) return <SuspendedNotice onSignOut={onSignOut} />' },
     note: 'Tenant/membership-scoped and latched, never unlatched -- it pre-empts the whole shell at App.tsx#Workspace. Every company here shares one tenant.',
@@ -72,7 +73,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     name: 'consent',
     kind: 'useState',
     resetBySwitchClient: false,
-    routes: ALL_13,
+    routes: ALL_14,
     verdict: 'correctly-reset',
     citation: { text: 'const [consent, setConsent] = useState(() => readConsent())' },
     note: 'User-scoped, not company-scoped: the one browser-wide cookie choice, invariant across a company switch. Read by the notice in App.tsx#Workspace and written by cookieChoices and the notice.',
@@ -82,7 +83,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     name: 'consentReopened',
     kind: 'useState',
     resetBySwitchClient: false,
-    routes: ALL_13,
+    routes: ALL_14,
     verdict: 'correctly-reset',
     citation: { text: 'setConsentReopened(true)' },
     note: 'User-scoped, invariant across a company switch. Set by ctx.cookieChoices, cleared when the notice answers.',
@@ -92,7 +93,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     name: 'activeEntityId',
     kind: 'useState',
     resetBySwitchClient: true,
-    routes: ALL_13,
+    routes: ALL_14,
     verdict: 'correctly-reset',
     citation: { text: 'setActiveEntityId(id)' },
     note: 'The switch itself (App.tsx#switchClient). No component reads it directly; every screen sees it through the `active` memo (App.tsx#Workspace).',
@@ -120,7 +121,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     name: 'view',
     kind: 'useState',
     resetBySwitchClient: true,
-    routes: ALL_13,
+    routes: ALL_14,
     verdict: 'correctly-reset',
     citation: { text: 'navigate(\'dashboard\')' },
     note: "navigate('dashboard') at App.tsx#switchClient sets it; carryView owns the resume rule (ROUTE-02).",
@@ -278,7 +279,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     name: 'invoiceQuery',
     kind: 'useState',
     resetBySwitchClient: false,
-    routes: [...ALL_13, '/invoices?q=<text>'],
+    routes: [...ALL_14, '/invoices?q=<text>'],
     verdict: 'deliberate',
     citation: { text: '// settingsTab and q are DURABLE -- a param overrides, absence leaves state alone.' },
     note: 'Durable by design (App.tsx#navigate). A filter text is not company data; the global search box keeps it across a switch.',
@@ -288,7 +289,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     name: 'switcherOpen',
     kind: 'useState',
     resetBySwitchClient: true,
-    routes: ALL_13,
+    routes: ALL_14,
     verdict: 'correctly-reset',
     citation: { in: 'function switchClient(id: string)', text: 'setSwitcherOpen(false)' },
     note: 'Closed at App.tsx#switchClient -- the switcher that fired the switch. Read by Sidebar on every route.',
@@ -298,7 +299,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     name: 'sandbox',
     kind: 'useState',
     resetBySwitchClient: false,
-    routes: [...ALL_13, '/settings/<tab>'],
+    routes: [...ALL_14, '/settings/<tab>'],
     verdict: 'correctly-reset',
     note: 'A client-side constant (App.tsx#Workspace), never fetched, so it carries no company dimension. Read by the always-mounted env banner and the Header env pill.',
   },

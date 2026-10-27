@@ -1097,21 +1097,24 @@ test('ST-08 the member menu stays inside its scroller at every wide width', asyn
   const table = tid(page, 'members-table')
   const scroller = table.locator('xpath=..')
 
-  // The row whose menu names the most reasons.
+  // The row whose open menu is tallest.
+  const menuHeights: number[] = []
   const reasonCounts: number[] = []
   for (let i = 0; i < total; i++) {
     const trigger = rows.nth(i).getByTestId('member-menu-trigger')
     await trigger.click()
-    await expect(rows.nth(i).getByTestId('member-menu'), `row ${i} menu never opened`).toBeVisible()
+    const menu = rows.nth(i).getByTestId('member-menu')
+    await expect(menu, `row ${i} menu never opened`).toBeVisible()
+    menuHeights.push((await menu.boundingBox())?.height ?? 0)
     reasonCounts.push(await rows.nth(i).getByTestId('member-menu-reason').count())
     await trigger.click()
-    await expect(rows.nth(i).getByTestId('member-menu'), `row ${i} menu never closed`).toHaveCount(0)
+    await expect(menu, `row ${i} menu never closed`).toHaveCount(0)
   }
-  const most = reasonCounts.indexOf(Math.max(...reasonCounts))
-  expect(reasonCounts[most], `no row menu names a reason: ${reasonCounts.join(', ')}`).toBeGreaterThanOrEqual(1)
+  expect(menuHeights.length, 'no row menu was measured').toBeGreaterThanOrEqual(1)
+  const most = menuHeights.indexOf(Math.max(...menuHeights))
 
   const reads: Record<string, unknown>[] = []
-  for (const [label, index] of [['most-reasons', most], ['last', total - 1]] as const) {
+  for (const [label, index] of [['tallest', most], ['last', total - 1]] as const) {
     const row = rows.nth(index)
     const trigger = row.getByTestId('member-menu-trigger')
     const menu = row.getByTestId('member-menu')
@@ -1143,7 +1146,7 @@ test('ST-08 the member menu stays inside its scroller at every wide width', asyn
     .toEqual([0, 0, 0, 0, 0])
   const scroll = await assertPageDoesNotScrollSideways(page, 'Members at 1280')
 
-  await attachJson(testInfo, 'st-08-measurements', { reasonCounts, reads, scroll })
+  await attachJson(testInfo, 'st-08-measurements', { menuHeights, reasonCounts, reads, scroll })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 

@@ -68,6 +68,15 @@ describe('redeemHandoff adversarial', () => {
     expect(urls).toEqual([`${GATEWAY}/auth/exchange`, `${GATEWAY}/api/tenancy/v1/me`, `${GATEWAY}/api/tenancy/v1/invitations/mine`])
   })
 
+  it('redeemHandoff: a non-boolean removed reads false', async () => {
+    const b64 = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, '')
+    const registration = { workspace_name: 'Acme', display_name: 'Ada' }
+    const token = `${b64({ alg: 'RS256' })}.${b64({ sub: ME.user.id, exp: NOW / 1000 + 3600, user_metadata: { registration } })}.sig`
+    const urls = stubFetch({ status: 200, body: { access_token: token } }, { status: 403, body: { error: 'forbidden' } }, { status: 200, body: { invitations: [], removed: 'true' } })
+    await redeemHandoff(GATEWAY, CODE, STATE).catch((e: unknown) => e)
+    expect(urls).toContain(`${GATEWAY}/api/tenancy/v1/workspaces`)
+  })
+
   it('a /me 200 with no tenant rejects', async () => {
     stubFetch({ status: 200, body: { access_token: LIVE } }, { status: 200, body: { user: ME.user } })
     await expect(redeemHandoff(GATEWAY, CODE, STATE)).rejects.toThrow(/malformed/)

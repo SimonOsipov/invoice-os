@@ -1,7 +1,7 @@
 // Package tenancy is the 01 Tenancy context service: workspaces and their
 // memberships, read under Row-Level Security scoped by the app.current_tenant GUC.
 // GET /v1/me resolves the gateway-injected caller to their tenant, role, display name and email;
-// POST /v1/workspaces provisions a tenant-less caller's first workspace.
+// POST /v1/workspaces provisions a tenant-less caller's workspace.
 package tenancy
 
 import (
@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -22,9 +24,10 @@ import (
 
 // Tenant is a caller's tenant as read from the tenants table under RLS.
 type Tenant struct {
-	ID   string
-	Name string
-	Kind string // "firm" | "in_house" (M3-01 tenants.kind discriminator)
+	ID            string
+	Name          string
+	Kind          string // "firm" | "in_house" (M3-01 tenants.kind discriminator)
+	DeletionDueAt *time.Time
 }
 
 // Membership is one row of the caller's tenant's memberships. JSON tags are
@@ -47,13 +50,29 @@ var ErrTenantNotFound = errors.New("tenancy: tenant not found")
 // no domain role. Fail-closed: a role must never be defaulted when this occurs.
 var ErrNoMembership = errors.New("tenancy: no membership")
 
-// Sentinels for PATCH /v1/memberships/{user_id} (SetMembershipStatus).
+// Sentinels for the /v1/memberships/{user_id} routes.
 var (
 	ErrNotPermitted             = errors.New("tenancy: not permitted")
 	ErrMembershipNotFound       = errors.New("tenancy: membership not found")
 	ErrInvalidStatus            = errors.New("tenancy: invalid status")
 	ErrInvitedNotTransitionable = errors.New("tenancy: invited membership is not transitionable")
 	ErrLastActiveAdmin          = errors.New("tenancy: last active admin")
+	ErrRemoveNotPermitted       = errors.New("tenancy: remove not permitted")
+	ErrRemovedNotTransitionable = errors.New("tenancy: removed membership is not transitionable")
+)
+
+// Sentinels for scheduling and cancelling a workspace deletion.
+var (
+	ErrDeleteWorkspaceNotPermitted = errors.New("tenancy: delete workspace not permitted")
+	ErrCancelDeletionNotPermitted  = errors.New("tenancy: cancel deletion not permitted")
+	ErrWorkspaceNameMismatch       = errors.New("tenancy: workspace name mismatch")
+	ErrHouseWorkspace              = errors.New("tenancy: house workspace")
+	ErrDeletionLinkNotValid        = errors.New("tenancy: deletion link not valid")
+	ErrDeletionUnderway            = errors.New("tenancy: deletion underway")
+	ErrDeletionNotScheduled        = errors.New("tenancy: deletion not scheduled")
+	ErrDeletionOutcomeChanged      = errors.New("tenancy: account deletion outcome changed")
+	ErrLastActiveMember            = errors.New("tenancy: last active member")
+	ErrNoEraseEmail                = errors.New("tenancy: no email to erase by")
 )
 
 // Sentinels for the invitations store.
@@ -93,7 +112,7 @@ type MeUser struct {
 // 401 (db.ErrNoTenant, fail-closed); an unknown tenant is 404; a resolved tenant with
 // no membership row is 403 (ErrNoMembership, fail-closed — a role is never
 // defaulted); a non-active membership is 403 (db.ErrNotActiveMember);
-// anything else is 500.
+// anything else is 500. A locked workspace still gets 200: Me reads over the ungated seam.
 func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -115,6 +134,10 @@ func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 		case errors.Is(err, db.ErrNotActiveMember):
 			writeError(w, http.StatusForbidden, db.NotActiveMemberMessage)
 			return
+		// Dead like the arm above; the mapping scan requires it.
+		case errors.Is(err, db.ErrWorkspaceLocked):
+			writeError(w, http.StatusForbidden, db.WorkspaceLockedMessage)
+			return
 		case errors.Is(err, ErrTenantNotFound):
 			writeError(w, http.StatusNotFound, "tenant not found")
 			return
@@ -131,6 +154,10 @@ func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 		resp.Tenant.ID = tenant.ID
 		resp.Tenant.Name = tenant.Name
 		resp.Tenant.Kind = tenant.Kind
+		if tenant.DeletionDueAt != nil {
+			due := tenant.DeletionDueAt.UTC().Format(time.RFC3339)
+			resp.Tenant.DeletionDueAt = &due
+		}
 		resp.User.ID = id.Subject
 		resp.User.Role = me.Role
 		resp.User.DisplayName = me.DisplayName
@@ -145,9 +172,10 @@ func MeHandler(load MeLoader, log *slog.Logger) http.HandlerFunc {
 // row (not the JWT role claim). A NULL column answers JSON null, never omitted.
 type meResponse struct {
 	Tenant struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-		Kind string `json:"kind"`
+		ID            string  `json:"id"`
+		Name          string  `json:"name"`
+		Kind          string  `json:"kind"`
+		DeletionDueAt *string `json:"deletion_due_at"`
 	} `json:"tenant"`
 	User struct {
 		ID          string  `json:"id"`
@@ -182,7 +210,7 @@ type MembershipsLoader func(ctx context.Context) ([]MemberAccess, error)
 // fail-closed shape as MeHandler), then lists the caller's tenant's
 // memberships via load. Unlike MeHandler, this endpoint does NOT gate on the
 // caller holding a membership row: db.ErrNoTenant is 401 (fail-closed, no
-// tenant context at all); db.ErrNotActiveMember is 403; any other loader
+// tenant context at all); db.ErrNotActiveMember and db.ErrWorkspaceLocked are 403; any other loader
 // error is 500. Per A4 there is deliberately no membership-based 403/404
 // mapping here. A nil/empty result is normalized to
 // an empty slice so the memberships field always serializes as `[]`, never
@@ -203,6 +231,9 @@ func MembershipsHandler(load MembershipsLoader, log *slog.Logger) http.HandlerFu
 			return
 		case errors.Is(err, db.ErrNotActiveMember):
 			writeError(w, http.StatusForbidden, db.NotActiveMemberMessage)
+			return
+		case errors.Is(err, db.ErrWorkspaceLocked):
+			writeError(w, http.StatusForbidden, db.WorkspaceLockedMessage)
 			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "tenancy: list memberships", slog.Any("err", err))
@@ -294,6 +325,36 @@ func SetMembershipStatusHandler(set MembershipStatusSetter, log *slog.Logger) ht
 	}
 }
 
+// RemoveMemberHandler returns POST /v1/memberships/{user_id}/remove: identity
+// (401) -> path uuid (404) -> remove -> 200 with the member row. Only err is
+// logged on a 500, never a name or an email.
+func RemoveMemberHandler(remove func(ctx context.Context, userID string) (MemberAccess, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		userID, err := uuid.Parse(r.PathValue("user_id"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, "membership not found")
+			return
+		}
+		membership, err := remove(r.Context(), userID.String())
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "tenancy: remove member", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, membership)
+	}
+}
+
 // ProvisionInput is the POST /v1/workspaces body after trimming and validation.
 // An empty Kind is stored as in_house (Store.ProvisionWorkspace).
 type ProvisionInput struct {
@@ -308,6 +369,24 @@ type ProvisionFunc func(ctx context.Context, in ProvisionInput) (Tenant, string,
 
 // maxNameChars caps workspace_name and display_name after trimming.
 const maxNameChars = 200
+
+// trimName trims Unicode space plus U+FEFF, so the API accepts the names the screens do.
+func trimName(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool { return unicode.IsSpace(r) || r == '\ufeff' })
+}
+
+// checkName returns the 400 sentence for a trimmed name that is empty, over
+// maxNameChars or holds a NUL; "" when it is valid.
+func checkName(field, v string) string {
+	if n := utf8.RuneCountInString(v); n == 0 || n > maxNameChars {
+		return field + " must be 1 to 200 characters"
+	}
+	// Postgres text refuses NUL with 22021, which would answer 500.
+	if strings.ContainsRune(v, 0) {
+		return field + " must not contain a NUL byte"
+	}
+	return ""
+}
 
 // maxProvisionBodyBytes bounds the POST /v1/workspaces body before it is decoded.
 const maxProvisionBodyBytes = 4 << 10
@@ -336,23 +415,14 @@ func ProvisionHandler(provision ProvisionFunc, log *slog.Logger) http.HandlerFun
 		}
 		in := ProvisionInput{
 			WorkspaceName: strings.TrimSpace(req.WorkspaceName),
-			DisplayName:   strings.TrimSpace(req.DisplayName),
+			DisplayName:   trimName(req.DisplayName),
 		}
-		if n := utf8.RuneCountInString(in.WorkspaceName); n == 0 || n > maxNameChars {
-			writeError(w, http.StatusBadRequest, "workspace_name must be 1 to 200 characters")
+		if msg := checkName("workspace_name", in.WorkspaceName); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
-		if n := utf8.RuneCountInString(in.DisplayName); n == 0 || n > maxNameChars {
-			writeError(w, http.StatusBadRequest, "display_name must be 1 to 200 characters")
-			return
-		}
-		// Postgres text refuses NUL with 22021, which would answer 500.
-		if strings.ContainsRune(in.WorkspaceName, 0) {
-			writeError(w, http.StatusBadRequest, "workspace_name must not contain a NUL byte")
-			return
-		}
-		if strings.ContainsRune(in.DisplayName, 0) {
-			writeError(w, http.StatusBadRequest, "display_name must not contain a NUL byte")
+		if msg := checkName("display_name", in.DisplayName); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
 		if req.Kind != nil {
@@ -393,6 +463,24 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusUnauthorized, "unauthorized"
 	case errors.Is(err, db.ErrNotActiveMember):
 		return http.StatusForbidden, db.NotActiveMemberMessage
+	case errors.Is(err, db.ErrWorkspaceLocked):
+		return http.StatusForbidden, db.WorkspaceLockedMessage
+	case errors.Is(err, ErrDeleteWorkspaceNotPermitted):
+		return http.StatusForbidden, "only an admin can delete the workspace"
+	case errors.Is(err, ErrCancelDeletionNotPermitted):
+		return http.StatusForbidden, "only an admin can cancel the deletion"
+	case errors.Is(err, ErrDeletionLinkNotValid):
+		return http.StatusForbidden, "this cancel link is no longer valid"
+	case errors.Is(err, ErrWorkspaceNameMismatch):
+		return http.StatusBadRequest, "the workspace name does not match"
+	case errors.Is(err, ErrHouseWorkspace):
+		return http.StatusConflict, "the ASComply staff workspace cannot be deleted"
+	case errors.Is(err, ErrDeletionUnderway):
+		return http.StatusConflict, "this workspace is already being deleted"
+	case errors.Is(err, ErrDeletionOutcomeChanged):
+		return http.StatusConflict, "the workspace changed; review the page and confirm again"
+	case errors.Is(err, ErrNoEraseEmail):
+		return http.StatusConflict, "your account has no email address on record; sign in again and retry"
 	case errors.Is(err, ErrInvalidStatus):
 		return http.StatusBadRequest, `status must be "active" or "suspended"`
 	case errors.Is(err, ErrNotPermitted):
@@ -401,6 +489,10 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusNotFound, "membership not found"
 	case errors.Is(err, ErrInvitedNotTransitionable):
 		return http.StatusConflict, "an invited member has no sign-in to suspend or reactivate"
+	case errors.Is(err, ErrRemovedNotTransitionable):
+		return http.StatusConflict, "a removed member must be invited again"
+	case errors.Is(err, ErrRemoveNotPermitted):
+		return http.StatusForbidden, "only an admin can remove a member"
 	case errors.Is(err, ErrLastActiveAdmin):
 		return http.StatusConflict, "this is the tenant's last active admin — make another member an active admin first"
 	case errors.Is(err, ErrInviteNotPermitted):

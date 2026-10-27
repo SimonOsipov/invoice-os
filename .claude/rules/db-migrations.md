@@ -19,8 +19,15 @@ paths:
 - Staff read River job counts only through `public.staff_read_river_job_counts`. `staff_reader` holds `SELECT (kind, state)` on `river_job`, nothing else.
 - Give `invoice_app` SELECT and INSERT only on `ai_calls`. Staff read it only through `public.staff_read_ai_calls` and `public.staff_read_ai_call_totals`.
 - Give `invoice_app` SELECT, INSERT and UPDATE on `rollup_snapshots`. The purge, the reset and the FK cascade remove its rows.
+- Give `invoice_app` UPDATE on `tenants.deletion_scheduled_at` and `tenants.deletion_scheduled_by` only. The trigger `tenants_deletion_guard` sets `deletion_due_at` and refuses the house tenant.
+- Give `invoice_app` SELECT, INSERT and `UPDATE (send_status)` on `workspace_deletion_links` and `workspace_deletion_cancel_mails`. The tenant purge removes their rows by cascade.
+- Give `invoice_app` UPDATE on `tenants.deletion_purge_started_at`. The trigger `tenants_purge_guard` refuses any change of `deletion_scheduled_at` or `deletion_purge_started_at` once the purge has started.
+- Staff read a tenant's deletion state only through `public.staff_read_tenant_deletions`.
+- Roll back `*_staff_read_tenant_deletions.sql`, then `*_deletion_purge_started.sql`, before a test rolls back `*_workspace_deletion.sql`, and re-apply them after.
 - Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `blog_categories`, `blog_posts` and `blog_post_covers`. They are global: no RLS.
-- Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `blog_subscription_requests`, and SELECT, INSERT and UPDATE on `blog_subscribers`. Both are global: no RLS.
+- Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `blog_subscription_requests`, and SELECT, INSERT, UPDATE and DELETE on `blog_subscribers`. Both are global: no RLS.
+- Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `contacts`. Only the erase routine deletes a contact.
+- Give `invoice_app` SELECT, INSERT and UPDATE on `person_erasures`. It is global: no RLS.
 - Staff read authors only through `public.staff_read_blog_authors`.
 - Treat `submission_job_state_counts` as callable by every `invoice_app` service. It returns per-state counts only.
 - Copy the `tenants` template for a new tenant table. Use `ENABLE` and `FORCE ROW LEVEL SECURITY` and a `tenant_isolation` policy.
@@ -31,13 +38,21 @@ paths:
 - Install a trusted extension in a migration. Install an untrusted extension in `db/bootstrap.sql`.
 - Write `db/bootstrap.sql` so that Cloud SQL's `postgres` can run it: it is not a superuser. Set no SUPERUSER attribute; the guard refuses a superuser role.
 - Run `db/restore-check.sql` on Cloud SQL as `restore_auditor`: apply `db/restore-auditor.sql` once, then `SET ROLE restore_auditor`.
-- Grant `EXECUTE` on `public.invitation_by_token`, `public.pending_invites_for_email`, `public.accept_invitation_by_id` and `public.invitee_account_state` to `invoice_app` only.
+- Grant `EXECUTE` on `public.invitation_by_token`, `public.pending_invites_for_email`, `public.identity_has_removed_membership`, the five-argument `public.accept_invitation`, the five-argument `public.accept_invitation_by_id` and `public.invitee_account_state` to `invoice_app` only.
+- Grant `EXECUTE` on `public.purge_tenant` to `invoice_app` only. Call it inside `WithinTenantTx` for the tenant it purges, and commit right after it.
+- Expect `purge_tenant` to block every writer of `audit_log`, `approval_policy_versions` and `approval_policy_steps` until its transaction commits. It fails with `55P03` after 5 s behind another writer.
+- Delete a production tenant's rows only with `public.purge_tenant`. The demo purge and `db.Reset` stay the preview and local paths. Exception: `public.erase_invitation_emails` deletes the invitation rows of one erased person, in any tenant, and binds each tenant inside the function.
+- The exception of `public.erase_invitation_emails` also covers the rules on binding `app.current_tenant` by hand, looping over tenants and enumerating tenants.
+- Grant `EXECUTE` on `public.erase_invitation_emails` to `invoice_app` only.
+- Grant `EXECUTE` on `public.invitations_to_erase` to `invoice_migrator` only.
 - Grant `auth_hook_reader` SELECT on the `auth.users` columns `email`, `email_confirmed_at` and `is_sso_user` only.
 - Never grant `auth_hook_reader` a table-level privilege on `auth.users`.
+- Grant `auth_hook_reader` SELECT on `tenants.id`, `tenants.name` and `tenants.deletion_due_at` only.
 - Treat `invitee_account_state` as callable by every `invoice_app` service for any address.
 - Treat `invoice_migrator` as able to read `email`, `email_confirmed_at` and `is_sso_user` of every `auth.users` row through `SET ROLE auth_hook_reader`.
 - Treat `invoice_migrator` as able to read `submission_jobs.state` of every tenant through `SET ROLE auth_hook_reader`.
-- Return no rows from `pending_invites_for_email` for a user id that holds a membership of any status.
+- Return no rows from `pending_invites_for_email` for a user id that holds a membership that is not `removed`.
+- Return no invite of a workspace scheduled for deletion from `invitation_by_token`, `pending_invites_for_email` and `invitation_pending_for_email`.
 - Refuse `accept_invitation_by_id` in this order: GUC mismatch `42501`, not valid `invitation_not_valid`, already a member `one_workspace_per_identity`.
 - Name a new migration with a current timestamp.
 - Check the order with `go run ./internal/tools/migrationorder -base origin/<the PR's base branch>`. CI passes the PR's base sha.
@@ -59,6 +74,7 @@ paths:
 - Create `invoice_gateway` with `migrate bootstrap` before the migrations that grant to it. Those migrations grant only when the role already exists.
 - Keep `db.DemoTenants` a Go literal. Never derive it from `db/seed.dev.sql`.
 - Add every new `tenant_id` table to `purgeTables` or `purgeExcludedTables`. `TestPurgeTableListCoversEveryTenantOwnedTable` fails otherwise.
+- Plant a row of every new `tenant_id` table in `TestRLS_PurgeTenantLeavesNoRowInAnyTenantTable`. Give the table an `ON DELETE CASCADE` foreign key to `tenants`, or delete its rows in `public.purge_tenant`. The test fails by name otherwise.
 - Order `purgeTables` leaf-first so foreign keys stay enforced.
 - Write the tenant predicate in the same string literal as each purge `DELETE`.
 - Seed demo documents, approval policies and customers in the migrate job (`internal/demodocs`, `internal/demopolicy`, `customer.SeedDemo`), not in `db/seed.dev.sql`.
@@ -101,6 +117,7 @@ Cloud SQL 1 vCPU / 3.75 GB allows 100 connections (GKE-01 P5); 3 are reserved fo
 | worker | leader connection | – | 1 | 1 |
 | GoTrue | `GOTRUE_DB_MAX_POOL_SIZE` | 10 | 1 | 10 |
 | migrate job | goose, the lock and one provisioning connection | – | 1 | 3 |
+| migrate job | purge check, preview only (`DATABASE_URL`) | 2 | 1 | – |
 | **Total** | | | | **80** |
 
 ceiling: a rollout runs old and new revisions together; one new instance per service at a full pool adds up to 36. Revisit when `pg_stat_activity` passes 80 or a pool waits: a larger tier or a pooler.

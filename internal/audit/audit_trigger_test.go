@@ -24,7 +24,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// The attributable events, by rule, plus the 27 workspace-level ones.
+// The attributable events, by rule, plus the workspace-level ones.
 var (
 	triggerRuleAEvents = []string{ // bare `id`, looked up through invoices
 		"invoice.created",
@@ -85,6 +85,7 @@ func triggerRuleDPayloads(invoiceID string) map[string]map[string]any {
 		"membership.suspended":         {"user_id": userID},
 		"membership.reactivated":       {"user_id": userID},
 		"membership.client_access_set": {"user_id": userID, "all_clients": false, "client_ids": []string{invoiceID}},
+		"membership.removed":           {"user_id": userID},
 		"workspace.provisioned":        {"tenant_id": uuid.NewString(), "user_id": userID},
 		"validation.rule.enabled":      {"key": "buyer-tin-present"},
 		"validation.rule.disabled":     {"key": "buyer-tin-present"},
@@ -96,6 +97,12 @@ func triggerRuleDPayloads(invoiceID string) map[string]map[string]any {
 		"customers.customer.created":   {"id": uuid.NewString(), "tin": "12345678-0001", "fields": []string{"name"}},
 		"customers.customer.archived":  {"id": uuid.NewString(), "from": "active", "to": "archived"},
 		"customers.customer.restored":  {"id": uuid.NewString(), "from": "archived", "to": "active"},
+		"workspace.deletion_scheduled": {"due_at": "2026-11-24T00:00:00Z"},
+		"workspace.deletion_cancelled": {"due_at": "2026-11-24T00:00:00Z"},
+		"workspace.exported":           {"files": 3, "bytes": 1024},
+		"workspace.export_failed":      {"files": 2, "bytes": 512},
+		"membership.account_deleted":   {"user_id": userID, "role": "preparer"},
+		"membership.admin_handed_on":   {"user_id": userID, "from": "preparer", "to": "admin"},
 	}
 }
 
@@ -165,7 +172,7 @@ func TestAudit_InsertTriggerResolvesPortfolioEventsFromTheirOwnPayload(t *testin
 	}
 }
 
-// AC-13: the 27 workspace-level events stay NULL even when their payload holds a real
+// AC-13: the workspace-level events stay NULL even when their payload holds a real
 // invoice id. The rule-A row in the same test is the positive control.
 //
 // For the two extraction.* names this is a DRIFT GUARD, not proof of their scope: the
@@ -177,8 +184,8 @@ func TestAudit_InsertTriggerLeavesWorkspaceEventsNull(t *testing.T) {
 	fx := seedTriggerFixture(t, f)
 
 	ruleD := triggerRuleDPayloads(fx.invoice)
-	if len(ruleD) != 27 {
-		t.Fatalf("rule-D payload map holds %d events, want 27", len(ruleD))
+	if len(ruleD) != 34 {
+		t.Fatalf("rule-D payload map holds %d events, want 32", len(ruleD))
 	}
 	for event, payload := range ruleD {
 		recordAudit(t, f, fx.tenant, event, payload)

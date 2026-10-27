@@ -1,0 +1,13 @@
+{{- define "title"}}Your ASComply workspace is no longer scheduled for deletion{{end}}
+{{- define "preheader"}}An admin cancelled the deletion of your ASComply workspace. Nothing will be deleted.{{end}}
+{{- define "eyebrow"}}Workspace deletion{{end}}
+{{- define "heading"}}The deletion is cancelled.{{end}}
+{{- define "heading_accent"}}Your workspace stays.{{end}}
+{{- define "intro"}}{{.Canceller}} cancelled the deletion of {{.Workspace}}. It will not be deleted on {{.DueDate}}.{{end}}
+{{- define "action_url"}}{{.ActionURL}}{{end}}
+{{- define "action_label"}}Open ASComply{{end}}
+{{- define "expiry"}}Every member can use the workspace again.{{end}}
+{{- define "details"}}<tr><td width="120" style="{{template "row_label_style"}}">Organisation</td><td style="{{template "row_value_style"}}">{{.Workspace}}</td></tr><tr><td width="120" style="{{template "row_label_style"}}">Cancelled by</td><td style="{{template "row_value_style"}}">{{.Canceller}}</td></tr><tr><td width="120" style="{{template "row_label_style_last"}}">Was due</td><td style="{{template "row_value_style_last"}}">{{.DueTime}}</td></tr>{{end}}
+{{- define "ignore_note"}}If you still want the workspace deleted, an admin can schedule it again in Settings › Workspace.{{end}}
+{{- define "reason"}}You received this email because you are an admin of this ASComply workspace.{{end}}
+{{- template "layout" .}}

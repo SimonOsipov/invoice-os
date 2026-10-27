@@ -514,6 +514,7 @@ const (
 	planTenants       = 20
 	planRowsPerTenant = 1000
 	planMembers       = 5
+	planThinTenants   = 1480
 )
 
 type auditPlanCorpus struct {
@@ -522,8 +523,8 @@ type auditPlanCorpus struct {
 	common, rare string
 }
 
-// seedAuditPlanCorpus inserts 20 tenants x 1,000 audit rows over 90 days in tx and analyzes the tables.
-// The caller rolls tx back: audit_log is append-only, and leftover rows would push the table past the audit migrations' 500,000-row ceiling.
+// seedAuditPlanCorpus inserts 20 tenants x 1,000 audit rows over 90 days, plus 1,480 one-row tenants, in tx and analyzes the tables.
+// The caller rolls tx back: audit_log is append-only.
 func seedAuditPlanCorpus(t *testing.T, tx pgx.Tx) auditPlanCorpus {
 	t.Helper()
 	ctx := context.Background()
@@ -555,11 +556,17 @@ func seedAuditPlanCorpus(t *testing.T, tx pgx.Tx) auditPlanCorpus {
 			tenant, members, c.common, c.rare, others, n*37, planRowsPerTenant)
 	}
 
-	var rows, tenants, common, rare, system, members int
+	txExec(t, tx,
+		`INSERT INTO audit_log (tenant_id, actor, event, payload, created_at)
+		 SELECT gen_random_uuid(), 'plan-thin', ($1::text[])[1 + k % 4], '{}'::jsonb, now() - make_interval(secs => k * 5254)
+		   FROM generate_series(1, $2::int) k`, others, planThinTenants)
+
+	var rows, tenants, common, rare, system, members, allTenants int
 	if err := tx.QueryRow(ctx,
 		`SELECT count(*), count(DISTINCT tenant_id), count(*) FILTER (WHERE event = $2), count(*) FILTER (WHERE event = $3),
-		        count(*) FILTER (WHERE actor = 'system'), (SELECT count(*) FROM memberships WHERE tenant_id = ANY ($1))
-		   FROM audit_log WHERE tenant_id = ANY ($1)`, c.tenants, c.common, c.rare).Scan(&rows, &tenants, &common, &rare, &system, &members); err != nil {
+		        count(*) FILTER (WHERE actor = 'system'), (SELECT count(*) FROM memberships WHERE tenant_id = ANY ($1)),
+		        (SELECT count(DISTINCT tenant_id) FROM audit_log)
+		   FROM audit_log WHERE tenant_id = ANY ($1)`, c.tenants, c.common, c.rare).Scan(&rows, &tenants, &common, &rare, &system, &members, &allTenants); err != nil {
 		t.Fatalf("read the corpus size: %v", err)
 	}
 	if rows != planTenants*planRowsPerTenant || tenants != planTenants || members != planTenants*planMembers {
@@ -567,6 +574,9 @@ func seedAuditPlanCorpus(t *testing.T, tx pgx.Tx) auditPlanCorpus {
 	}
 	if common*10 < rows*3 || rare != planTenants || system*100 < rows*15 {
 		t.Fatalf("corpus event mix = common %d, rare %d, system %d of %d rows, want common >= 30%%, rare %d, system >= 15%%", common, rare, system, rows, planTenants)
+	}
+	if allTenants < planTenants+planThinTenants {
+		t.Fatalf("corpus holds %d distinct tenants in audit_log, want >= %d", allTenants, planTenants+planThinTenants)
 	}
 	txExec(t, tx, `ANALYZE audit_log`)
 	txExec(t, tx, `ANALYZE memberships, tenants`)
@@ -577,11 +587,10 @@ func TestRLS_StaffReadAuditLogPlansReadAnIndex(t *testing.T) {
 	superDSN := useScratchHarness(t)
 	requireStaffReadAuditLog(t)
 	ctx := context.Background()
-	staff := seedHouseMember(t, "reviewer", "active")
 
 	cfg, err := pgx.ParseConfig(superDSN)
 	if err != nil {
-		t.Fatalf("parse scratch superuser dsn: %v", err)
+		t.Fatalf("parse the scratch superuser dsn: %v", err)
 	}
 	var notices []string
 	cfg.OnNotice = func(_ *pgconn.PgConn, n *pgconn.Notice) { notices = append(notices, n.Message) }
@@ -595,6 +604,12 @@ func TestRLS_StaffReadAuditLogPlansReadAnIndex(t *testing.T) {
 		t.Fatalf("begin: %v", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// A migrated scratch database has no house_company row; the singleton key allows this one.
+	house := uuid.NewString()
+	txExec(t, tx, `INSERT INTO tenants (id, name) VALUES ($1, 'house (plan scratch)')`, house)
+	txExec(t, tx, `INSERT INTO public.house_company (tenant_id) VALUES ($1)`, house)
+	staff, _ := insertMembership(t, tx, house, "reviewer", "active")
 
 	c := seedAuditPlanCorpus(t, tx)
 	for _, stmt := range []string{
@@ -650,15 +665,20 @@ func TestRLS_StaffReadAuditLogPlansReadAnIndex(t *testing.T) {
 		wantRows   int
 		createdIdx bool
 		tenantIdx  bool
+		cond       *regexp.Regexp
 	}{
-		{"a: no filter, limit 51", auditSearch{limit: ip(51)}, 51, true, false},
-		{"b: cursor at row 51", auditSearch{limit: ip(51), beforeAt: tp(row51.at), beforeID: i64p(row51.id)}, 51, true, false},
-		{"c: last seven days", auditSearch{limit: ip(51), from: tp(weekAgo), to: tp(now)}, 51, true, false},
-		{"d: one tenant", auditSearch{limit: ip(51), tenant: sp(c.tenants[3])}, 51, false, true},
-		{"e: the common event", auditSearch{limit: ip(51), event: sp(c.common)}, 51, false, false},
-		{"f: the rare event", auditSearch{limit: ip(51), event: sp(c.rare)}, planTenants, false, false},
-		{"g: one member's uuid", auditSearch{limit: ip(51), subject: sp(c.member)}, 51, false, false},
-		{"h: system", auditSearch{limit: ip(51), subject: sp("system")}, 51, false, false},
+		{"a: no filter, limit 51", auditSearch{limit: ip(51)}, 51, true, false, nil},
+		{"b: cursor at row 51", auditSearch{limit: ip(51), beforeAt: tp(row51.at), beforeID: i64p(row51.id)}, 51, true, false, nil},
+		{"c: last seven days", auditSearch{limit: ip(51), from: tp(weekAgo), to: tp(now)}, 51, true, false, nil},
+		{"d: one tenant", auditSearch{limit: ip(51), tenant: sp(c.tenants[3])}, 51, false, true, nil},
+		{"e: the common event", auditSearch{limit: ip(51), event: sp(c.common)}, 51, false, false, nil},
+		{"f: the rare event", auditSearch{limit: ip(51), event: sp(c.rare)}, planTenants, false, false, regexp.MustCompile(`Index Cond: \(event = `)},
+		{"g: one member's uuid", auditSearch{limit: ip(51), subject: sp(c.member)}, 51, false, false, regexp.MustCompile(`Index Cond: \(actor = `)},
+		{"h: system", auditSearch{limit: ip(51), subject: sp("system")}, 51, false, false, nil},
+		{"i: one tenant and the rare event", auditSearch{limit: ip(51), tenant: sp(c.tenants[3]), event: sp(c.rare)}, 1, false, true,
+			regexp.MustCompile(`Index Cond: \(\(tenant_id = '[0-9a-f-]+'::uuid\) AND \(event = `)},
+		{"j: one tenant and a member", auditSearch{limit: ip(51), tenant: sp(c.tenants[0]), subject: sp(c.member)}, 51, false, true,
+			regexp.MustCompile(`Index Cond: \(\(tenant_id = '[0-9a-f-]+'::uuid\) AND \(actor = `)},
 	} {
 		rows, plan := run(tc.name, tc.args)
 		if len(rows) != tc.wantRows {
@@ -683,6 +703,9 @@ func TestRLS_StaffReadAuditLogPlansReadAnIndex(t *testing.T) {
 			if !planAuditScan.MatchString(plan) {
 				t.Errorf("%s: plan does not read an audit_log_ index:\n%s", tc.name, plan)
 			}
+		}
+		if tc.cond != nil && !tc.cond.MatchString(plan) {
+			t.Errorf("%s: plan has no %s:\n%s", tc.name, tc.cond, plan)
 		}
 	}
 }

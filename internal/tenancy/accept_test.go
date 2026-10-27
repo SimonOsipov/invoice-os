@@ -227,7 +227,7 @@ func TestAccept_TenantlessInviteeJoinsWithTheInvitedRole(t *testing.T) {
 	inv := invRows(t, w.super, w.tenant, "id = $2", w.invite.ID)[0]
 
 	// An upper-case subject and address: the result and the rows hold the canonical forms.
-	tenant, subject, role, err := w.store.AcceptInvitation(tenantless(strings.ToUpper(user), "Tunde@obi.test"), w.invite.Token)
+	tenant, subject, role, err := w.store.AcceptInvitation(tenantless(strings.ToUpper(user), "Tunde@obi.test"), w.invite.Token, nil)
 	if err != nil {
 		t.Fatalf("AcceptInvitation: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestAccept_TenantlessInviteeJoinsWithTheInvitedRole(t *testing.T) {
 func TestAccept_TheJoinedWorkspaceAnswersMe(t *testing.T) {
 	w := newAcceptWorld(t, "reviewer")
 	user := uuid.NewString()
-	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); err != nil {
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token, nil); err != nil {
 		t.Fatalf("first accept: %v", err)
 	}
 
@@ -283,7 +283,7 @@ func TestAccept_TheJoinedWorkspaceAnswersMe(t *testing.T) {
 	}
 
 	// The invite is spent, so the token names no usable invite before any membership guard runs.
-	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); !errors.Is(err, ErrInvitationNotValid) {
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token, nil); !errors.Is(err, ErrInvitationNotValid) {
 		t.Errorf("second accept err = %v, want ErrInvitationNotValid", err)
 	}
 	if _, err := w.store.PreviewInvitation(context.Background(), w.invite.Token); !errors.Is(err, ErrInvitationNotValid) {
@@ -313,7 +313,7 @@ func TestAccept_AnAccountWithAWorkspaceGainsNothing(t *testing.T) {
 				ctx = auth.WithIdentity(context.Background(), auth.Identity{Subject: user, Role: "authenticated", TenantID: b.tenant, Email: c.email})
 			}
 
-			_, _, _, err := w.store.AcceptInvitation(ctx, w.invite.Token)
+			_, _, _, err := w.store.AcceptInvitation(ctx, w.invite.Token, nil)
 			if !errors.Is(err, ErrAlreadyMember) {
 				t.Fatalf("err = %v, want ErrAlreadyMember", err)
 			}
@@ -323,7 +323,7 @@ func TestAccept_AnAccountWithAWorkspaceGainsNothing(t *testing.T) {
 			}
 
 			fresh := uuid.NewString()
-			tenant, _, role, err := w.store.AcceptInvitation(tenantless(fresh, inviteeAddr), w.invite.Token)
+			tenant, _, role, err := w.store.AcceptInvitation(tenantless(fresh, inviteeAddr), w.invite.Token, nil)
 			if err != nil || tenant.ID != w.tenant || role != "reviewer" {
 				t.Errorf("the invited account accepts afterwards: tenant %+v role %q err %v", tenant, role, err)
 			}
@@ -337,13 +337,13 @@ func TestAccept_AnotherAddressIsRefused(t *testing.T) {
 			w := newAcceptWorld(t, "reviewer")
 			user := uuid.NewString()
 
-			_, _, _, err := w.store.AcceptInvitation(tenantless(user, email), w.invite.Token)
+			_, _, _, err := w.store.AcceptInvitation(tenantless(user, email), w.invite.Token, nil)
 			if !errors.Is(err, ErrInvitationEmailMismatch) {
 				t.Fatalf("err = %v, want ErrInvitationEmailMismatch", err)
 			}
 			requireNothingWritten(t, w, user, 0)
 
-			if _, _, _, err := w.store.AcceptInvitation(tenantless(uuid.NewString(), inviteeAddr), w.invite.Token); err != nil {
+			if _, _, _, err := w.store.AcceptInvitation(tenantless(uuid.NewString(), inviteeAddr), w.invite.Token, nil); err != nil {
 				t.Errorf("the invited address accepts afterwards: %v", err)
 			}
 		})
@@ -384,7 +384,7 @@ func TestAccept_AFailedAuditRollsTheAcceptBack(t *testing.T) {
 	user := uuid.NewString()
 	drop := failAcceptAudit(t, w.super, w.tenant)
 
-	_, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token)
+	_, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token, nil)
 	if err == nil {
 		t.Fatal("AcceptInvitation succeeded although its audit write fails")
 	}
@@ -396,7 +396,7 @@ func TestAccept_AFailedAuditRollsTheAcceptBack(t *testing.T) {
 	requireNothingWritten(t, w, user, 0)
 
 	drop()
-	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); err != nil {
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token, nil); err != nil {
 		t.Errorf("accept after the trigger is gone: %v", err)
 	}
 	if got := len(membersOf(t, w.super, user)); got != 1 {
@@ -454,7 +454,7 @@ func TestAccept_ConcurrentAcceptsOfOneTokenJoinOnce(t *testing.T) {
 	ch := make(chan result, 2)
 	for range 2 {
 		go func() {
-			tenant, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token)
+			tenant, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token, nil)
 			ch <- result{tenant, err}
 		}()
 	}
@@ -506,7 +506,7 @@ func TestAccept_NoCallerIs401BeforeAnyQuery(t *testing.T) {
 	store, tr := tracedStore(t)
 	before := tr.count()
 
-	_, _, _, err := store.AcceptInvitation(context.Background(), w.invite.Token)
+	_, _, _, err := store.AcceptInvitation(context.Background(), w.invite.Token, nil)
 	if !errors.Is(err, db.ErrNoTenant) {
 		t.Errorf("err = %v, want db.ErrNoTenant", err)
 	}
@@ -574,7 +574,7 @@ func TestAccept_ATokenJoinsOnlyItsOwnTenant(t *testing.T) {
 
 	// A stale tenant claim for A does not steer the accept: the token names B.
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: user, Role: "authenticated", TenantID: a.tenant, Email: inviteeAddr})
-	tenant, _, role, err := b.store.AcceptInvitation(ctx, invB.Token)
+	tenant, _, role, err := b.store.AcceptInvitation(ctx, invB.Token, nil)
 	if err != nil {
 		t.Fatalf("AcceptInvitation: %v", err)
 	}
@@ -604,7 +604,7 @@ func TestAccept_AMalformedTokenOrSubjectSendsNoStatement(t *testing.T) {
 
 	// Control: a well-formed call reaches the pool, so a zero count below is not a dead tracer.
 	before := tr.count()
-	if _, _, _, err := store.AcceptInvitation(valid, w.invite.Token); err != nil {
+	if _, _, _, err := store.AcceptInvitation(valid, w.invite.Token, nil); err != nil {
 		t.Fatalf("control accept: %v", err)
 	}
 	if tr.count() == before {
@@ -625,7 +625,7 @@ func TestAccept_AMalformedTokenOrSubjectSendsNoStatement(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			before := tr.count()
-			_, _, _, err := store.AcceptInvitation(c.ctx, c.token)
+			_, _, _, err := store.AcceptInvitation(c.ctx, c.token, nil)
 			if !errors.Is(err, c.want) {
 				t.Errorf("err = %v, want %v", err, c.want)
 			}
@@ -652,7 +652,7 @@ func TestInvitations_RevokedLinkIsDeadOnEveryPath(t *testing.T) {
 	if _, first, err := w.store.ClaimInvitationRegistration(context.Background(), live.Token); err != nil || !first {
 		t.Fatalf("control: claim of the second invite = first %v, err %v; want first, nil", first, err)
 	}
-	if got, err := w.store.MyPendingInvitations(invitee); err != nil || len(got) != 1 || got[0].ID != w.invite.ID {
+	if got, err := w.store.MyPendingInvitations(invitee); err != nil || len(got.Invitations) != 1 || got.Invitations[0].ID != w.invite.ID {
 		t.Fatalf("control: MyPendingInvitations = %+v, %v; want the one invite", got, err)
 	}
 
@@ -663,16 +663,16 @@ func TestInvitations_RevokedLinkIsDeadOnEveryPath(t *testing.T) {
 	if _, err := w.store.PreviewInvitation(context.Background(), w.invite.Token); !errors.Is(err, ErrInvitationNotValid) {
 		t.Errorf("PreviewInvitation err = %v, want ErrInvitationNotValid", err)
 	}
-	if _, _, _, err := w.store.AcceptInvitation(invitee, w.invite.Token); !errors.Is(err, ErrInvitationNotValid) {
+	if _, _, _, err := w.store.AcceptInvitation(invitee, w.invite.Token, nil); !errors.Is(err, ErrInvitationNotValid) {
 		t.Errorf("AcceptInvitation err = %v, want ErrInvitationNotValid", err)
 	}
-	if _, _, _, err := w.store.AcceptInvitationByID(invitee, w.invite.ID); !errors.Is(err, ErrInvitationNotValid) {
+	if _, _, _, err := w.store.AcceptInvitationByID(invitee, w.invite.ID, nil); !errors.Is(err, ErrInvitationNotValid) {
 		t.Errorf("AcceptInvitationByID err = %v, want ErrInvitationNotValid", err)
 	}
 	if _, _, err := w.store.ClaimInvitationRegistration(context.Background(), w.invite.Token); !errors.Is(err, ErrInvitationNotValid) {
 		t.Errorf("ClaimInvitationRegistration err = %v, want ErrInvitationNotValid", err)
 	}
-	if got, err := w.store.MyPendingInvitations(invitee); err != nil || len(got) != 0 {
+	if got, err := w.store.MyPendingInvitations(invitee); err != nil || len(got.Invitations) != 0 {
 		t.Errorf("MyPendingInvitations = %+v, %v; want empty", got, err)
 	}
 	if got := len(membersOf(t, w.super, user)); got != 0 {
@@ -796,7 +796,7 @@ func TestAccept_ByTokenCopiesTheClientSet(t *testing.T) {
 	setInviteClients(t, w.super, w.tenant, w.invite.ID, false, e1, e2)
 	user := uuid.NewString()
 
-	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); err != nil {
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token, nil); err != nil {
 		t.Fatalf("AcceptInvitation: %v", err)
 	}
 	w.requireStored(t, "the new member", user, false, e1, e2)
@@ -807,7 +807,7 @@ func TestAccept_InviteWithoutChoiceGivesNoClients(t *testing.T) {
 	w := newAcceptWorld(t, "preparer")
 	user := uuid.NewString()
 
-	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); err != nil {
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token, nil); err != nil {
 		t.Fatalf("AcceptInvitation: %v", err)
 	}
 	if got := len(membersOf(t, w.super, user)); got != 1 {
@@ -824,7 +824,7 @@ func TestAccept_CopyRollsBackWithTheAccept(t *testing.T) {
 	user := uuid.NewString()
 	drop := failAcceptAudit(t, w.super, w.tenant)
 
-	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); err == nil {
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token, nil); err == nil {
 		t.Fatal("AcceptInvitation succeeded although its audit write fails")
 	}
 	requireNothingWritten(t, w, user, 0)
@@ -837,7 +837,7 @@ func TestAccept_CopyRollsBackWithTheAccept(t *testing.T) {
 
 	// The retry proves the copy runs at all, so the rollback above is not vacuous.
 	drop()
-	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); err != nil {
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token, nil); err != nil {
 		t.Fatalf("accept after the trigger is gone: %v", err)
 	}
 	w.requireStored(t, "the member after the retry", user, false, e1)
@@ -858,7 +858,7 @@ func TestAccept_CopiesOnlyTheAcceptedInvitesSet(t *testing.T) {
 	giveAllClients(t, w.super, w.tenant, everyone)
 	user := uuid.NewString()
 
-	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); err != nil {
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token, nil); err != nil {
 		t.Fatalf("AcceptInvitation: %v", err)
 	}
 	w.requireStored(t, "the new member", user, false, e1)
@@ -882,7 +882,7 @@ func TestAccept_DeletedEntityIsNotCopied(t *testing.T) {
 	}
 	user := uuid.NewString()
 
-	tenant, _, role, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token)
+	tenant, _, role, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token, nil)
 	if err != nil {
 		t.Fatalf("AcceptInvitation: %v", err)
 	}
@@ -898,7 +898,7 @@ func TestAccept_AReplayedLinkLeavesTheMembersSetAlone(t *testing.T) {
 	setInviteClients(t, w.super, w.tenant, w.invite.ID, false, e1)
 	user := uuid.NewString()
 
-	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); err != nil {
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token, nil); err != nil {
 		t.Fatalf("first accept: %v", err)
 	}
 	w.requireStored(t, "after the first accept", user, false, e1)
@@ -906,13 +906,13 @@ func TestAccept_AReplayedLinkLeavesTheMembersSetAlone(t *testing.T) {
 		t.Fatalf("admin sets the member's clients: %v", err)
 	}
 
-	_, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token)
+	_, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token, nil)
 	if !errors.Is(err, ErrInvitationNotValid) {
 		t.Fatalf("replayed token err = %v, want ErrInvitationNotValid", err)
 	}
 	w.requireStored(t, "after the replay by token", user, false, e2)
 
-	if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, inviteeAddr), w.invite.ID); !errors.Is(err, ErrInvitationNotValid) {
+	if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, inviteeAddr), w.invite.ID, nil); !errors.Is(err, ErrInvitationNotValid) {
 		t.Errorf("replay by id err = %v, want ErrInvitationNotValid", err)
 	}
 	w.requireStored(t, "after the replay by id", user, false, e2)
@@ -936,7 +936,7 @@ func TestAccept_ARevokedOrExpiredLinkCopiesNothing(t *testing.T) {
 		{"expired", "late@obi.test", expired.Token},
 	} {
 		user := uuid.NewString()
-		if _, _, _, err := w.store.AcceptInvitation(tenantless(user, c.email), c.token); !errors.Is(err, ErrInvitationNotValid) {
+		if _, _, _, err := w.store.AcceptInvitation(tenantless(user, c.email), c.token, nil); !errors.Is(err, ErrInvitationNotValid) {
 			t.Errorf("%s link err = %v, want ErrInvitationNotValid", c.name, err)
 		}
 		if got := len(membersOf(t, w.super, user)); got != 0 {
@@ -949,7 +949,7 @@ func TestAccept_ARevokedOrExpiredLinkCopiesNothing(t *testing.T) {
 
 	// The live link proves the copy is wired, so the zero above is not vacuous.
 	user := uuid.NewString()
-	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, "live@obi.test"), live.Token); err != nil {
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, "live@obi.test"), live.Token, nil); err != nil {
 		t.Fatalf("live accept: %v", err)
 	}
 	w.requireStored(t, "the live invitee", user, false, e1)
@@ -964,10 +964,10 @@ func TestAccept_ARefusedAcceptCopiesNothing(t *testing.T) {
 	setInviteClients(t, w.super, w.tenant, w.invite.ID, true)
 	member := other.addMember(t, "preparer", "active", "Already Here")
 
-	if _, _, _, err := w.store.AcceptInvitation(tenantless(uuid.NewString(), "wrong@obi.test"), w.invite.Token); !errors.Is(err, ErrInvitationEmailMismatch) {
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(uuid.NewString(), "wrong@obi.test"), w.invite.Token, nil); !errors.Is(err, ErrInvitationEmailMismatch) {
 		t.Fatalf("wrong address err = %v, want ErrInvitationEmailMismatch", err)
 	}
-	if _, _, _, err := w.store.AcceptInvitation(tenantless(member, inviteeAddr), w.invite.Token); !errors.Is(err, ErrAlreadyMember) {
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(member, inviteeAddr), w.invite.Token, nil); !errors.Is(err, ErrAlreadyMember) {
 		t.Fatalf("member of another workspace err = %v, want ErrAlreadyMember", err)
 	}
 	other.requireStored(t, "the member's own workspace row", member, false)
@@ -977,11 +977,51 @@ func TestAccept_ARefusedAcceptCopiesNothing(t *testing.T) {
 
 	// Control: the same invite, accepted by its invitee, copies the flag.
 	user := uuid.NewString()
-	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token); err != nil {
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token, nil); err != nil {
 		t.Fatalf("accept by the invitee: %v", err)
 	}
 	w.requireStored(t, "the invitee", user, true)
 	if all, _ := storedAccess(t, w.super, w.tenant, w.admin); all {
 		t.Error("the admin's flag turned true when an all-clients invite was accepted")
+	}
+}
+
+func TestAcceptInvitation_StoresTheTrimmedName(t *testing.T) {
+	w := newAcceptWorld(t, "reviewer")
+	user := uuid.NewString()
+
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token, strp(" Ada Obi ")); err != nil {
+		t.Fatalf("AcceptInvitation: %v", err)
+	}
+	rows := membersOf(t, w.super, user)
+	if len(rows) != 1 || rows[0].DisplayName == nil || *rows[0].DisplayName != "Ada Obi" {
+		t.Fatalf("memberships = %+v, want one with display_name %q", rows, "Ada Obi")
+	}
+	if rows[0].Email == nil || *rows[0].Email != inviteeAddr {
+		t.Errorf("email = %v, want the invited address", rows[0].Email)
+	}
+	// The name stays out of the audit payload.
+	audits := acceptedAudits(t, w.super, w.tenant)
+	if len(audits) != 1 || len(audits[0].Payload) != 2 {
+		t.Fatalf("audit rows = %+v, want one with exactly {invitation_id, role}", audits)
+	}
+	if strings.Contains(fmt.Sprint(audits[0].Payload), "Ada Obi") {
+		t.Errorf("audit payload carries the display name: %v", audits[0].Payload)
+	}
+}
+
+func TestAcceptInvitation_NoNameStoresNull(t *testing.T) {
+	for name, given := range map[string]*string{"nil": nil, "blank": strp("   ")} {
+		t.Run(name, func(t *testing.T) {
+			w := newAcceptWorld(t, "reviewer")
+			user := uuid.NewString()
+			if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inviteeAddr), w.invite.Token, given); err != nil {
+				t.Fatalf("AcceptInvitation: %v", err)
+			}
+			rows := membersOf(t, w.super, user)
+			if len(rows) != 1 || rows[0].Status != "active" || rows[0].DisplayName != nil {
+				t.Errorf("memberships = %+v, want one active row with a NULL display_name", rows)
+			}
+		})
 	}
 }

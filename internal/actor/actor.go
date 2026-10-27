@@ -41,3 +41,12 @@ func Name(displayName, email *string, subject string) Label {
 	}
 	return Label{Text: subject, Kind: KindRaw}
 }
+
+// RemovedName labels a removed member by display_name alone; the email never
+// shows. "" is absent (D-31).
+func RemovedName(displayName *string) Label {
+	if displayName != nil && *displayName != "" {
+		return Label{Text: *displayName + " (deleted)", Kind: KindPerson}
+	}
+	return Label{Text: "Deleted member", Kind: KindPerson}
+}

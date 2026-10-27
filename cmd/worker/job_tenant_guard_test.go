@@ -16,6 +16,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
+	"github.com/SimonOsipov/invoice-os/internal/workspacepurge"
 )
 
 // companyFreeKinds: job kinds that run for no company, each with its reason.
@@ -25,6 +26,8 @@ var companyFreeKinds = map[string]string{
 	"demo_deal":            "args hold a demo requester's email, name and company text; no tenant",
 	"blog_subscriber_sync": "args hold a subscriber email and version; newsletter tables are global",
 	"registrant_intake":    "args hold a registrant's user id and workspace name; registrant_handoffs is global",
+	"person_erase":         "args hold a user id and a generation; person_erasures is global",
+	"person_erase_by_id":   "args hold a user id only; it touches no tenant table",
 }
 
 // registeredJobArgs maps kind to args type for every worker in b.
@@ -114,9 +117,9 @@ func realRegistry(t *testing.T) map[string]reflect.Type {
 			t.Fatalf("contactWorkerSet.%s is nil: the guard would not see its job kind", v.Type().Field(i).Name)
 		}
 	}
-	b := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw)
+	b := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{})
 	kinds := registeredJobArgs(t, b)
-	for _, k := range []string{"submission_submit", "submission_poll", "extraction_extract"} {
+	for _, k := range []string{"submission_submit", "submission_poll", "extraction_extract", "workspace_purge"} {
 		if _, ok := kinds[k]; !ok {
 			t.Fatalf("registry lacks %s: the guard read the wrong bundle", k)
 		}

@@ -244,7 +244,7 @@ func BatchValidateHandler(load func(ctx context.Context, dates []string, custom 
 
 // statusForErr maps a store/engine error to the HTTP status + message the
 // handlers write to the response. db.ErrNoTenant is 401 (fail-closed, mirroring
-// portfolio.statusForErr); db.ErrNotActiveMember is 403; ErrValidation is 400
+// portfolio.statusForErr); db.ErrNotActiveMember and db.ErrWorkspaceLocked are 403; ErrValidation is 400
 // with the wrapped message; ErrNoActiveRuleSet is 503 (the engine has no
 // published version to evaluate against); anything else is
 // 500 with a generic body -- this helper never leaks internals into the
@@ -256,6 +256,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusUnauthorized, "unauthorized"
 	case errors.Is(err, db.ErrNotActiveMember):
 		return http.StatusForbidden, db.NotActiveMemberMessage
+	case errors.Is(err, db.ErrWorkspaceLocked):
+		return http.StatusForbidden, db.WorkspaceLockedMessage
 	case errors.Is(err, ErrValidation):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, ErrNoActiveRuleSet):

@@ -7,7 +7,7 @@ import { revokeSessions } from './lib/revoke'
 import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './lib/renewal'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
 import { consumeSignInState, ensureSignInState, landingInviteUrl, landingRegisterUrl, landingSignInUrl, mintSignInState } from './lib/signInState'
-import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment } from './lib/pendingInvite'
+import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment, readInviteName } from './lib/pendingInvite'
 import { consumePendingVerify, gatewayVerifyUrl, holdPendingVerify, holdsPendingVerify, landingVerifyFailedUrl, readVerifyFragment } from './lib/verifyBounce'
 import { AuditExportToast } from './components/AuditExportToast'
 import { HANDOFF_PARAM, InviteRefusedError, createOwnWorkspace, isJoinOffer, isLiveHandoffSession, joinInvite, readHandoffCode, redeemHandoff, type JoinOffer } from './lib/sessionHandoff'
@@ -76,10 +76,11 @@ import {
   membersViewState,
   replaceMember,
   setMembershipClients,
+  removeMembership,
   setMembershipStatus,
   toMember,
   type Member,
-  type MemberStatus,
+  type PatchableStatus,
   type MembershipWire,
 } from './lib/members'
 import {
@@ -104,6 +105,8 @@ import {
 import { removePolicy, replacePolicy, type Policy } from './lib/workflows'
 import { flaskGlyph, shieldGlyph15 } from './glyphs'
 import { BrandMark } from './icons'
+import { WorkspaceDeletionNotice } from './components/WorkspaceDeletionNotice'
+import { holdCancelLink, peekCancelLink, readCancelLinkFragment } from './lib/workspaceDeletion'
 import {
   APP_NOTICE_BODY,
   CookieNotice,
@@ -127,6 +130,7 @@ import { RulesView } from './components/RulesView'
 import { WorkflowsView } from './components/WorkflowsView'
 import { CustomersView } from './components/CustomersView'
 import { ReportsView } from './components/ReportsView'
+import { AccountView } from './components/AccountView'
 import { SettingsView } from './components/SettingsView'
 import { ApprovalsView } from './components/ApprovalsView'
 import { AuditView } from './components/AuditView'
@@ -243,11 +247,13 @@ const STILL_WORKING = new ApiError('network', 'An import or filing is still in p
 // (Platform.dc.html ~L980-1263): `this.state` becomes typed `useState` hooks below,
 // and every handler in the "actions" section is ported 1:1 as a plain function.
 // Rendered only once signed in (see App).
-function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
+function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnauthorized, onLocked }: {
   session: Session
   onSignOut: () => void
+  onAccountDeleted: () => void
   freshToken?: () => string | null | Promise<string | null>
   onUnauthorized: () => void
+  onLocked: (dueAt?: string) => void
 }) {
   // Workspace mode is fixed by the session: a hand-off session takes it from /me tenant.kind,
   // a persona session from its persona. There is no in-app switch.
@@ -279,14 +285,14 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   }, [suspended])
 
   const authedFetch = useMemo(
-    () => makeAuthedFetch(session, onUnauthorized, onSuspended, freshToken),
-    [session, onUnauthorized, onSuspended, freshToken],
+    () => makeAuthedFetch(session, onUnauthorized, onSuspended, freshToken, onLocked),
+    [session, onUnauthorized, onSuspended, freshToken, onLocked],
   )
   // Same arguments, one construction site — the multipart XHR transport cannot drift
   // from the fetch path on auth, the 401 or the 403 suspension (importApi.ts).
   const importAuth = useMemo(
-    () => makeImportAuth(session, onUnauthorized, onSuspended, freshToken),
-    [session, onUnauthorized, onSuspended, freshToken],
+    () => makeImportAuth(session, onUnauthorized, onSuspended, freshToken, onLocked),
+    [session, onUnauthorized, onSuspended, freshToken, onLocked],
   )
 
   // [entity-picker] step 1 of 3: ONE fetch of the tenant's live portfolio entities,
@@ -1660,9 +1666,16 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // No try/catch: the rejection has to reach MembersView, which renders the gateway's own
   // reason at the control. Because nothing writes before the await, a failed call leaves
   // the previous status rendered and there is no optimistic state to roll back.
-  async function setMemberStatus(id: string, status: Exclude<MemberStatus, 'invited'>) {
+  async function setMemberStatus(id: string, status: PatchableStatus) {
     const wire: MembershipWire = await setMembershipStatus(authedFetch, base!, id, status)
     setMembers((list) => replaceMember(list, toMember(wire, session.persona.subject)))
+  }
+
+  // `setMemberStatus`'s shape. The server deleted the person's role grants, so roles refetch.
+  async function removeMember(id: string) {
+    const wire: MembershipWire = await removeMembership(authedFetch, base!, id)
+    setMembers((list) => replaceMember(list, toMember(wire, session.persona.subject)))
+    rolesAsync.run()
   }
 
   // `setMemberStatus`'s shape: the server's row replaces the mirror's, and a refusal rejects.
@@ -1823,12 +1836,15 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     savePolicy,
     publishPolicy,
     setMemberStatus,
+    removeMember,
     setMemberClients,
     createRole,
     renameRole,
     staffRole,
     deleteRole,
     signOut: onSignOut,
+    accountDeleted: onAccountDeleted,
+    lockWorkspace: onLocked,
     cookieChoices: () => {
       const next = syncAppConsent(chatEmail)
       if (next) setConsent(next)
@@ -1878,6 +1894,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
           {view === 'customers' && <CustomersView ctx={ctx} />}
           {view === 'reports' && <ReportsView ctx={ctx} />}
           {view === 'settings' && <SettingsView ctx={ctx} />}
+          {view === 'account' && <AccountView ctx={ctx} />}
           {view === 'approvals' && <ApprovalsView ctx={ctx} />}
           {view === 'audit' && <AuditView ctx={ctx} />}
           {view === 'extraction' && extractionJobId != null && <ExtractionReview ctx={ctx} jobId={extractionJobId} onOpenInvoice={openReviewedInvoice} />}
@@ -1934,6 +1951,13 @@ export default function App() {
   )
   // Read before the strip effect drops the hash; null when `?auth=start` carries no invite.
   const [startInvite] = useState(() => (authStart ? readInviteFragment(window.location.hash) : null))
+  const [startName] = useState(() => (authStart ? readInviteName(window.location.hash) : null))
+  // Held before the front door can navigate; the strip effect then drops the hash.
+  const [cancelLinkSeen] = useState(() => {
+    const t = readCancelLinkFragment(window.location.hash)
+    if (t !== null) holdCancelLink(t)
+    return t !== null
+  })
   const startBounced = useRef(false)
   // `?auth=verify#token=T` (confirm link) or `?auth=verify-invite#token=T` (invite set-password link). `?handoff=` wins.
   const [authVerify, setAuthVerify] = useState(() => {
@@ -1961,6 +1985,24 @@ export default function App() {
   // unless the stored one is a live hand-off session: the fresh code wins over a stale identity.
   const [seat, setSeat] = useState<Session | null>(() => (handoffCode ? null : bootSession))
   const [signingIn, setSigningIn] = useState<PersonaId | null>(null)
+  // Latched by a lock 403 mid-session; the stored session's deletion_due_at covers a boot.
+  const [lockLatched, setLockLatched] = useState(false)
+  const locked = lockLatched || seat?.me?.tenant.deletion_due_at != null
+  const withDueAt = useCallback((dueAt: string | null) => {
+    setSeat((s) => (s?.me ? { ...s, me: { ...s.me, tenant: { ...s.me.tenant, deletion_due_at: dueAt } } } : s))
+  }, [])
+  const lockWorkspace = useCallback(
+    (dueAt?: string) => {
+      setLockLatched(true)
+      if (dueAt) withDueAt(dueAt)
+    },
+    [withDueAt],
+  )
+  const unlockWorkspace = useCallback(() => {
+    withDueAt(null)
+    setLockLatched(false)
+    holdCancelLink(null)
+  }, [withDueAt])
 
   // Set when storage belongs to another tab's sign-in or sign-out.
   const keepStoredRecord = useRef(false)
@@ -2066,6 +2108,13 @@ export default function App() {
     leaveToLanding()
   }, [seat, leaveToLanding])
 
+  // The deletion already revoked every session of the account, so no sign-out is sent.
+  const leaveDeletedAccount = useCallback(() => {
+    if (signingOut.current) return
+    signingOut.current = true
+    leaveToLanding()
+  }, [leaveToLanding])
+
   // The 401 seam: the session is already dead, so nothing is sent. Keeps the stored record
   // only when it holds another sign-in (both tokens carry session_ids that differ).
   const endRevokedSession = useCallback(() => {
@@ -2086,6 +2135,11 @@ export default function App() {
       window.location.href = dest
     }
   }, [seat])
+
+  const noticeFetch = useMemo(
+    () => (seat ? makeAuthedFetch(seat, endRevokedSession, undefined, freshToken) : null),
+    [seat, endRevokedSession, freshToken],
+  )
 
   const doSignIn = useCallback(async (persona: Persona) => {
     setSigningIn(persona.id)
@@ -2202,18 +2256,26 @@ export default function App() {
       },
     )
   }, [joinOffer])
-  const onJoin = (id: string) => {
+  const onJoin = (id: string, name: string) => {
     const base = gatewayBase()
     if (!joinOffer || !base || joinStarted.current) return
     setJoining(id)
     setJoinNotice(null)
-    resolveJoin(joinInvite(base, joinOffer, id), id)
+    resolveJoin(joinInvite(base, joinOffer, id, name), id)
   }
   const onCreateOwn = () => {
     const base = gatewayBase()
+    if (!joinOffer?.answers || !base || joinStarted.current) return
+    setJoining(CREATING_OWN)
+    resolveJoin(createOwnWorkspace(base, joinOffer, joinOffer.answers))
+  }
+  // The no-workspace screen: the person typed both names; the answers only lend the kind.
+  const onCreate = (workspace_name: string, display_name: string) => {
+    const base = gatewayBase()
     if (!joinOffer || !base || joinStarted.current) return
     setJoining(CREATING_OWN)
-    resolveJoin(createOwnWorkspace(base, joinOffer))
+    const kind = joinOffer.answers?.kind
+    resolveJoin(createOwnWorkspace(base, joinOffer, { workspace_name, display_name, ...(kind ? { kind } : {}) }))
   }
   const onJoinSignOut = async () => {
     const base = gatewayBase()
@@ -2232,12 +2294,12 @@ export default function App() {
     const dest = landingBase() ? landingSignInUrl(mintSignInState(), 'ready') : null
     if (dest) {
       startBounced.current = true
-      holdPendingInvite(startInvite)
+      holdPendingInvite(startInvite, Date.now(), startInvite ? startName : null)
       // replace drops the ?auth=start entry; the invite hop (Out of Scope) keeps its push.
       if (startInvite) window.location.href = dest
       else window.location.replace(dest)
     }
-  }, [authStart, startInvite])
+  }, [authStart, startInvite, startName])
 
   // Bounces over any stored session to the gateway confirm page; the ref keeps StrictMode to one navigation.
   useEffect(() => {
@@ -2277,6 +2339,11 @@ export default function App() {
     consumePendingVerify()
     consumeSignInState()
   }, [])
+
+  // The token never stays in the address bar or history.
+  useEffect(() => {
+    if (cancelLinkSeen) window.history.replaceState(null, '', window.location.pathname + window.location.search)
+  }, [cancelLinkSeen])
 
   // The single front door. Any sessionless visit — never signed in, signed out, session
   // expired while the tab was closed, or token invalidated by a 401 — goes to the landing
@@ -2320,9 +2387,12 @@ export default function App() {
           invites={joinOffer.invites}
           joining={joining}
           notice={joinNotice}
+          defaultName={joinOffer.answers?.display_name}
+          defaultWorkspace={joinOffer.answers?.workspace_name}
           onJoin={onJoin}
           onSignOut={onJoinSignOut}
           onCreateOwn={joinOffer.answers ? onCreateOwn : undefined}
+          onCreate={onCreate}
         />
       )
     }
@@ -2339,12 +2409,26 @@ export default function App() {
   }
   return (
     <>
-      <Workspace
-        session={seat}
-        onSignOut={signOut}
-        freshToken={freshToken}
-        onUnauthorized={endRevokedSession}
-      />
+      {locked && noticeFetch ? (
+        <WorkspaceDeletionNotice
+          authedFetch={noticeFetch}
+          base={gatewayBase() ?? ''}
+          known={{ dueAt: seat.me?.tenant.deletion_due_at ?? null, name: seat.me?.tenant.name ?? null, isAdmin: seat.me?.user.role === 'admin' }}
+          onUnlocked={unlockWorkspace}
+          onSignOut={signOut}
+          linkToken={peekCancelLink()}
+          onLinkSpent={() => holdCancelLink(null)}
+        />
+      ) : (
+        <Workspace
+          session={seat}
+          onSignOut={signOut}
+          onAccountDeleted={leaveDeletedAccount}
+          freshToken={freshToken}
+          onUnauthorized={endRevokedSession}
+          onLocked={lockWorkspace}
+        />
+      )}
       {verifyConfirmedNotice !== null && (
         <AuditExportToast kind="success" testId="verify-confirmed-toast" text={verifyConfirmedNotice} onDismiss={dismissVerifyNotice} />
       )}

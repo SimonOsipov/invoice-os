@@ -86,11 +86,12 @@ func (e joinEdge) requireJoinRoutes(t *testing.T, token string) {
 func (w inviteWorld) joinByEmail(t *testing.T, caller auth.Identity) {
 	t.Helper()
 	ctx := auth.WithTenantlessCaller(context.Background(), caller)
-	pending, err := w.store.MyPendingInvitations(ctx)
+	mine, err := w.store.MyPendingInvitations(ctx)
+	pending := mine.Invitations
 	if err != nil || len(pending) != 1 || pending[0].Workspace != "IdP Invite Co" || pending[0].Role != "reviewer" {
 		t.Fatalf("MyPendingInvitations: %+v, err %v; want one {IdP Invite Co, reviewer}", pending, err)
 	}
-	tenant, subject, role, err := w.store.AcceptInvitationByID(ctx, pending[0].ID)
+	tenant, subject, role, err := w.store.AcceptInvitationByID(ctx, pending[0].ID, nil)
 	if err != nil || tenant.ID != w.tenant || subject != caller.Subject || role != "reviewer" {
 		t.Fatalf("AcceptInvitationByID: tenant %+v, subject %q, role %q, err %v; want %s, the caller, reviewer", tenant, subject, role, err, w.tenant)
 	}

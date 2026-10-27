@@ -17,6 +17,7 @@ import {
   drawerRoleHelper,
   filterPickerMembers,
   filterRoles,
+  hiddenInvitedCount,
   hiddenInvitedFootnote,
   hiddenSelectionNote,
   holderCount,
@@ -663,6 +664,26 @@ describe('AC-5 — pickerSelectionCount denominators on the selectable count, no
 
   it('inhouse: 5 selected of 14 selectable', () => {
     expect(pickerSelectionCount(5, MOCK_INHOUSE_MEMBERS)).toBe('5 of 14 selected')
+  })
+})
+
+describe('DEL-02-05 — removed members are neither in the picker nor in the invited count', () => {
+  const row = (id: string, status: Member['status']): Member => ({
+    id, name: id, initials: 'X', email: null, role: 'preparer', status, isYou: false,
+  })
+  const mixed = [row('a', 'active'), row('s', 'suspended'), row('i', 'invited'), row('r', 'removed'), row('r2', 'removed')]
+
+  it('pickerMembers drops removed members', () => {
+    expect(pickerMembers(mixed).map((m) => m.id)).toEqual(['a', 's'])
+  })
+
+  it('hiddenInvitedCount counts invited rows only', () => {
+    expect(hiddenInvitedCount(mixed)).toBe(1)
+    expect(hiddenInvitedCount(mixed.filter((m) => m.status !== 'invited'))).toBe(0)
+  })
+
+  it('hiddenInvitedFootnote counts invited rows only', () => {
+    expect(hiddenInvitedFootnote(mixed)).toBe('1 invited person is hidden until they accept the invite.')
   })
 })
 

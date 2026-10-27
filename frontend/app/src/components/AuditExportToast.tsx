@@ -1,5 +1,5 @@
 // The workspace's one notice toast: the audit export's outcome, and App's confirmed-email notice.
-// Fixed geometry, own expiry timer.
+// Fixed geometry, own expiry timer unless `persist` (dismiss button only).
 
 import { useEffect } from 'react'
 
@@ -16,17 +16,20 @@ export function AuditExportToast({
   // download and App's confirmed-email notice pass a different one. EB-06-9's second render is the oracle.
   testId = DEFAULT_TEST_ID,
   maxWidth = 640,
+  persist = false,
 }: {
   kind: 'success' | 'error'
   text: string
   onDismiss: () => void
   testId?: string
   maxWidth?: number
+  persist?: boolean
 }) {
   useEffect(() => {
+    if (persist) return
     const timer = setTimeout(onDismiss, EXPORT_TOAST_MS)
     return () => clearTimeout(timer)
-  }, [onDismiss])
+  }, [onDismiss, persist])
 
   const accent = kind === 'error' ? 'var(--status-red-text)' : 'var(--status-green-text)'
 

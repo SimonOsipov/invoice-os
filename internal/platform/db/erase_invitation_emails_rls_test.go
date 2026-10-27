@@ -615,55 +615,136 @@ func TestRLS_EraseInvitationEmailsDownThenUp(t *testing.T) {
 // A row that stops matching while the erase waits on its lock survives: the DELETE re-checks the finder's predicate.
 func TestRLS_EraseInvitationEmailsKeepsARowThatStopsMatchingWhileTheDeleteWaits(t *testing.T) {
 	eiRequireFunctions(t)
-	ctx := context.Background()
-	tenant := eiTenant(t)
-	user, addr := uuid.NewString(), eiAddr()
-	eiErasure(t, user, addr)
-	id := eiInvite(t, tenant, addr, "pending")
+	for _, c := range []struct {
+		name, status, change string
+		unheld, member       bool
+	}{
+		{"the address changes", "pending", `UPDATE invitations SET invitee_email = 'ei-moved@corp.example.test' WHERE id = $1`, true, false},
+		{"an accepted row turns pending while unheld is false", "accepted", `UPDATE invitations SET status = 'pending' WHERE id = $1`, false, true},
+		{"a pending row turns accepted in a tenant without the membership", "pending", `UPDATE invitations SET status = 'accepted' WHERE id = $1`, true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
+			tenant, other := eiTenant(t), eiTenant(t)
+			user, addr := uuid.NewString(), eiAddr()
+			if c.member {
+				seedMemberRow(t, tenant, user, "admin", "active", nil, nil)
+			} else {
+				seedMemberRow(t, other, user, "admin", "active", nil, nil)
+				seedMemberRow(t, tenant, uuid.NewString(), "admin", "active", nil, nil)
+			}
+			eiErasure(t, user, addr)
+			id := eiInvite(t, tenant, addr, c.status)
 
-	holder, err := h.super.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin lock holder: %v", err)
-	}
-	defer func() { _ = holder.Rollback(ctx) }()
-	if _, err := holder.Exec(ctx, `UPDATE invitations SET invitee_email = $2 WHERE id = $1`, id, eiAddr()); err != nil {
-		t.Fatalf("change the invitation under lock: %v", err)
-	}
+			holder, err := h.super.Begin(ctx)
+			if err != nil {
+				t.Fatalf("begin lock holder: %v", err)
+			}
+			defer func() { _ = holder.Rollback(ctx) }()
+			if _, err := holder.Exec(ctx, c.change, id); err != nil {
+				t.Fatalf("change the invitation under lock: %v", err)
+			}
 
-	type result struct {
-		n   int
-		err error
-	}
-	done := make(chan result, 1)
-	go func() {
-		n, err := eiCall(h.app, user, addr, true)
-		done <- result{n, err}
-	}()
+			type result struct {
+				n   int
+				err error
+			}
+			done := make(chan result, 1)
+			go func() {
+				n, err := eiCall(h.app, user, addr, c.unheld)
+				done <- result{n, err}
+			}()
 
-	deadline := time.Now().Add(10 * time.Second)
-	for mustCount(t, h.super, `SELECT count(*) FROM pg_stat_activity
-		WHERE wait_event_type = 'Lock' AND query LIKE '%erase_invitation_emails(%' AND pid <> pg_backend_pid()`) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the erase never waited on the invitation lock")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if err := holder.Commit(ctx); err != nil {
-		t.Fatalf("commit the lock holder: %v", err)
-	}
+			deadline := time.Now().Add(10 * time.Second)
+			for mustCount(t, h.super, `SELECT count(*) FROM pg_stat_activity
+				WHERE wait_event_type = 'Lock' AND query LIKE '%erase_invitation_emails(%' AND pid <> pg_backend_pid()`) == 0 {
+				if time.Now().After(deadline) {
+					t.Fatal("the erase never waited on the invitation lock")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if err := holder.Commit(ctx); err != nil {
+				t.Fatalf("commit the lock holder: %v", err)
+			}
 
-	select {
-	case r := <-done:
-		if r.err != nil {
-			t.Fatalf("erase: %v", r.err)
-		}
-		if r.n != 0 {
-			t.Errorf("erase returned %d, want 0", r.n)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("the erase did not finish after the lock was released")
+			select {
+			case r := <-done:
+				if r.err != nil {
+					t.Fatalf("erase: %v", r.err)
+				}
+				if r.n != 0 {
+					t.Errorf("erase returned %d, want 0", r.n)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the erase did not finish after the lock was released")
+			}
+			if !eiExists(t, id) {
+				t.Error("the erase deleted an invitation that no longer matched")
+			}
+		})
 	}
-	if !eiExists(t, id) {
-		t.Error("the erase deleted an invitation that no longer matched the address")
+}
+
+// The finder and the DELETE hold one predicate: the erase removes exactly the rows the finder returns, and the finder returns exactly the expected rows.
+func TestRLS_EraseInvitationEmailsDeletesExactlyWhatTheFinderReturns(t *testing.T) {
+	eiRequireFunctions(t)
+	for _, unheld := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unheld=%v", unheld), func(t *testing.T) {
+			ctx := context.Background()
+			a, b, c := eiTenant(t), eiTenant(t), eiTenant(t)
+			user, other, addr := uuid.NewString(), uuid.NewString(), eiAddr()
+			seedMemberRow(t, a, user, "admin", "removed", nil, nil)
+			seedMemberRow(t, c, other, "admin", "active", nil, nil)
+			eiErasure(t, user, addr)
+			spaced := " " + strings.ToUpper(addr) + " "
+			ids := map[string]string{
+				"a accepted":        eiInvite(t, a, addr, "accepted"),
+				"a accepted spaced": eiInvite(t, a, spaced, "accepted"),
+				"a accepted other":  eiInvite(t, a, eiAddr(), "accepted"),
+				"a pending":         eiInvite(t, a, addr, "pending"),
+				"a revoked":         eiInvite(t, a, addr, "revoked"),
+				"b accepted":        eiInvite(t, b, addr, "accepted"),
+				"b pending":         eiInvite(t, b, spaced, "pending"),
+				"b revoked":         eiInvite(t, b, addr, "revoked"),
+				"c accepted":        eiInvite(t, c, addr, "accepted"),
+			}
+			want := map[string]bool{"a accepted": true, "a accepted spaced": true}
+			if unheld {
+				for _, l := range []string{"a pending", "a revoked", "b pending", "b revoked"} {
+					want[l] = true
+				}
+			}
+
+			rows, err := h.super.Query(ctx, `SELECT invitation_id::text FROM public.invitations_to_erase($1::uuid, $2, $3)`, user, addr, unheld)
+			if err != nil {
+				t.Fatalf("finder: %v", err)
+			}
+			found := map[string]bool{}
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					t.Fatalf("scan finder row: %v", err)
+				}
+				found[id] = true
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				t.Fatalf("finder rows: %v", err)
+			}
+			for label, id := range ids {
+				if found[id] != want[label] {
+					t.Errorf("finder returns %q = %v, want %v", label, found[id], want[label])
+				}
+			}
+
+			if n := eiErase(t, user, addr, unheld); n != len(want) {
+				t.Errorf("erase returned %d, want %d", n, len(want))
+			}
+			for label, id := range ids {
+				if got := !eiExists(t, id); got != found[id] {
+					t.Errorf("erase deleted %q = %v, finder returned it = %v", label, got, found[id])
+				}
+			}
+		})
 	}
 }

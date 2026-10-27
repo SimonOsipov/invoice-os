@@ -1166,50 +1166,95 @@ func TestStaffPurge_TheCustomerAuditRowCarriesOnlyTheReason(t *testing.T) {
 	}
 }
 
-func TestStaffPurge_RacingCancelsLeaveOneStartedPurge(t *testing.T) {
+type purgeRaceErrs struct{ purge, adminCancel, staffCancel error }
+
+// runPurgeRound runs the purge and both cancels against a scheduled tenant, together or one after another.
+func runPurgeRound(w staffDelWorld, together bool, order ...string) purgeRaceErrs {
+	var e purgeRaceErrs
+	ops := map[string]func(){
+		"purge":        func() { _, e.purge = w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason) },
+		"admin cancel": func() { _, e.adminCancel = w.store.CancelWorkspaceDeletion(w.adminCtx()) },
+		"staff cancel": func() { e.staffCancel = staffCancelErr(w.store, w.ctx, w.tenant, staffReasonText) },
+	}
+	if !together {
+		for _, name := range order {
+			ops[name]()
+		}
+		return e
+	}
+	var wg sync.WaitGroup
+	gate := make(chan struct{})
+	for _, op := range ops {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-gate
+			op()
+		}()
+	}
+	close(gate)
+	wg.Wait()
+	return e
+}
+
+// requirePurgeRoundConsistent asserts the round ended in exactly one of two states: the purge started or both cancels won.
+func requirePurgeRoundConsistent(t *testing.T, w staffDelWorld, e purgeRaceErrs) (purgeWon bool) {
+	t.Helper()
+	jobs := len(purgeJobsOf(t, w.super, w.tenant))
+	rows := len(staffRowsOf(t, w.super, w.tenant, wantPurgeStartedEvent))
+	c := deletionOf(t, w.super, w.tenant)
+	if purgeStartedAt(t, w.super, w.tenant) != nil {
+		if e.purge != nil || !errors.Is(e.adminCancel, ErrDeletionUnderway) || !errors.Is(e.staffCancel, ErrDeletionUnderway) {
+			t.Errorf("purge won: errors purge = %v, admin cancel = %v, staff cancel = %v, want nil, ErrDeletionUnderway, ErrDeletionUnderway", e.purge, e.adminCancel, e.staffCancel)
+		}
+		if c.ScheduledAt == nil || c.DueAt == nil {
+			t.Errorf("deletion columns = %+v, want the schedule kept under the marker", c)
+		}
+		if jobs != 1 || rows != 1 {
+			t.Errorf("jobs = %d, %s rows = %d, want 1 and 1", jobs, wantPurgeStartedEvent, rows)
+		}
+		return true
+	}
+	if !errors.Is(e.purge, ErrDeletionNotScheduled) {
+		t.Errorf("cancel won: purge = %v, want ErrDeletionNotScheduled", e.purge)
+	}
+	for name, err := range map[string]error{"admin cancel": e.adminCancel, "staff cancel": e.staffCancel} {
+		if err != nil {
+			t.Errorf("cancel won: %s = %v, want nil (a lost cancel is a no-op)", name, err)
+		}
+	}
+	if !c.empty() {
+		t.Errorf("deletion columns = %+v, want all NULL", c)
+	}
+	if jobs != 0 || rows != 0 {
+		t.Errorf("jobs = %d, %s rows = %d, want 0 and 0", jobs, wantPurgeStartedEvent, rows)
+	}
+	return false
+}
+
+func TestStaffPurge_RacingCancelsEndInOneConsistentState(t *testing.T) {
 	for i := range 5 {
 		t.Run(fmt.Sprintf("round %d", i), func(t *testing.T) {
 			w := newStaffPurgeWorld(t, "Ada Obi")
 			lockByOwner(t, w.super, w.tenant, w.admin)
-			var wg sync.WaitGroup
-			gate := make(chan struct{})
-			run := func(name string, f func() error) {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					<-gate
-					if err := f(); err != nil && !errors.Is(err, ErrDeletionUnderway) && !errors.Is(err, ErrDeletionNotScheduled) {
-						t.Errorf("%s: %v", name, err)
-					}
-				}()
-			}
-			run("purge", func() error { _, err := w.store.StaffPurgeWorkspace(w.ctx, w.tenant, obi, purgeReason); return err })
-			run("admin cancel", func() error { _, err := w.store.CancelWorkspaceDeletion(w.adminCtx()); return err })
-			run("staff cancel", func() error { return staffCancelErr(w.store, w.ctx, w.tenant, staffReasonText) })
-			close(gate)
-			wg.Wait()
-
-			jobs := len(purgeJobsOf(t, w.super, w.tenant))
-			rows := len(staffRowsOf(t, w.super, w.tenant, wantPurgeStartedEvent))
-			c := deletionOf(t, w.super, w.tenant)
-			if m := purgeStartedAt(t, w.super, w.tenant); m != nil {
-				// the purge won: schedule kept, one job, one row
-				if c.ScheduledAt == nil || c.DueAt == nil {
-					t.Errorf("deletion columns = %+v, want the schedule kept under the marker", c)
-				}
-				if jobs != 1 || rows != 1 {
-					t.Errorf("purge won: jobs = %d, %s rows = %d, want 1 and 1", jobs, wantPurgeStartedEvent, rows)
-				}
-				return
-			}
-			// a cancel won: nothing of the purge remains
-			if !c.empty() {
-				t.Errorf("a cancel won: deletion columns = %+v, want all NULL", c)
-			}
-			if jobs != 0 || rows != 0 {
-				t.Errorf("a cancel won: jobs = %d, %s rows = %d, want 0 and 0", jobs, wantPurgeStartedEvent, rows)
-			}
+			requirePurgeRoundConsistent(t, w, runPurgeRound(w, true))
 		})
+	}
+}
+
+func TestStaffPurge_PurgeFirstBeatsBothCancels(t *testing.T) {
+	w := newStaffPurgeWorld(t, "Ada Obi")
+	lockByOwner(t, w.super, w.tenant, w.admin)
+	if !requirePurgeRoundConsistent(t, w, runPurgeRound(w, false, "purge", "admin cancel", "staff cancel")) {
+		t.Error("purge first: the purge did not win")
+	}
+}
+
+func TestStaffPurge_CancelFirstBeatsThePurge(t *testing.T) {
+	w := newStaffPurgeWorld(t, "Ada Obi")
+	lockByOwner(t, w.super, w.tenant, w.admin)
+	if requirePurgeRoundConsistent(t, w, runPurgeRound(w, false, "staff cancel", "admin cancel", "purge")) {
+		t.Error("cancel first: the purge won")
 	}
 }
 

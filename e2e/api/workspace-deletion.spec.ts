@@ -408,7 +408,7 @@ test.describe('staff workspace deletion (API E2E, over the deployed gateway)', (
     expect(errorOf(unscheduled)).toBe(NOT_SCHEDULED)
     const read = await staffRead(ws.tenantId)
     expect(read.status, 'the refused purge left the workspace').toBe(200)
-    expect((read.body as { deletion_purge_started_at: string | null }).deletion_purge_started_at, 'no purge marker').toBeNull()
+    expect((read.body as { tenant: { deletion_purge_started_at: string | null } }).tenant.deletion_purge_started_at, 'no purge marker').toBeNull()
     expect((await me(ws.adminToken)).tenant.deletion_due_at, 'the refusal scheduled nothing').toBeNull()
 
     const start = await staffPost(staff, `${ws.tenantId}/deletion`, { reason: 'e2e start' })

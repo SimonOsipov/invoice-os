@@ -119,6 +119,40 @@ describe('auditCsv', () => {
   })
 })
 
+describe('auditCsv truncation notice (BUG-74)', () => {
+  const trunc = { truncated: true, cap: 2000 }
+
+  it('auditCsv_truncatedEndsWithOneNoticeLine: a truncated export ends with one line naming 2000, "first" and more events', () => {
+    const events = [makeEvent(), makeEvent(), makeEvent()]
+    const lines = auditCsv(events, trunc).split('\n')
+
+    expect(lines.length, 'header + 3 event rows + 1 notice line').toBe(5)
+    const notice = lines[lines.length - 1]
+    expect(notice, 'the last line names the 2000 cap').toContain('2000')
+    expect(notice, 'the last line says the file holds only the first rows').toMatch(/first/i)
+    expect(notice, 'the last line says the log has more events').toMatch(/more/i)
+  })
+
+  it('auditCsv_truncatedKeepsHeaderFirstAndRowsUntouched: header stays line 1 and event rows match the untruncated output', () => {
+    const events = [makeEvent(), makeEvent()]
+    const plain = auditCsv(events).split('\n')
+    const lines = auditCsv(events, trunc).split('\n')
+
+    expect(lines.length, 'control: the notice line exists').toBe(plain.length + 1)
+    expect(lines[0]).toBe(AUDIT_CSV_HEADER.join(','))
+    expect(lines.slice(0, plain.length)).toEqual(plain)
+  })
+
+  it('auditCsv_notTruncatedIsByteIdentical: no options and truncated:false give today\'s output', () => {
+    const events = [makeEvent(), makeEvent()]
+    const today = [AUDIT_CSV_HEADER.join(','), ...auditCsv(events).split('\n').slice(1)].join('\n')
+
+    expect(auditCsv(events, { truncated: false, cap: 2000 })).toBe(auditCsv(events))
+    expect(auditCsv(events), 'control: output is header + rows only').toBe(today)
+    expect(auditCsv(events).split('\n').length).toBe(3)
+  })
+})
+
 describe('auditCsvFilename', () => {
   it('auditCsv_filenameIsDated: the filename embeds the export date as audit-log-YYYY-MM-DD.csv', () => {
     const filename = auditCsvFilename(new Date('2026-08-23T10:00:00Z'))

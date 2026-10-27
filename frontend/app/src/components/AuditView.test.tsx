@@ -1350,6 +1350,51 @@ describe('AuditView export control (AUDIT-07-10)', () => {
     dl.restore()
   })
 
+  // Fake timers advance with real time so waitFor and the 2000-row loop still run.
+  it.each([
+    { truncated: true, stays: true },
+    { truncated: false, stays: false },
+  ])('auditExport_toastPersistsOnlyWhenTruncated: truncated=$truncated, still shown after 6s = $stays', async ({ truncated, stays }) => {
+    let n = 0
+    const fetchMock = vi.fn((url: string) => {
+      if (!isExportPageUrl(url)) return Promise.resolve(logResponse())
+      n += 1
+      return Promise.resolve(
+        truncated
+          ? logResponse({
+              events: Array.from({ length: 100 }, (_, i) => auditEvent({ id: `evt-persist-${n}-${i}` })),
+              total: 100_000,
+              page: { limit: 100, has_more: true, next_cursor: `cursor-${n}` },
+            })
+          : logResponse({ events: [auditEvent()], total: 1, page: { limit: 100, has_more: false, next_cursor: null } }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const dl = stubDownload()
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      render(<AuditView ctx={auditCtx()} />)
+      await waitFor(() => expect(screen.getByTestId('audit-export'), 'control needle: export renders').toBeTruthy())
+      fireEvent.click(screen.getByTestId('audit-export'))
+      await waitFor(() => expect(screen.getByTestId('audit-export-toast'), 'a completion toast must render').toBeTruthy(), { timeout: 3000 })
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6000)
+      })
+
+      if (stays) {
+        expect(screen.queryByTestId('audit-export-toast'), 'a truncated export toast must outlive the 5200 ms auto-dismiss').not.toBeNull()
+        fireEvent.click(screen.getByTestId('audit-export-toast-dismiss'))
+        expect(screen.queryByTestId('audit-export-toast'), 'the dismiss button must remove the toast').toBeNull()
+      } else {
+        expect(screen.queryByTestId('audit-export-toast'), 'a complete export toast still auto-dismisses').toBeNull()
+      }
+    } finally {
+      vi.useRealTimers()
+      dl.restore()
+    }
+  })
+
   it('auditExport_exactlyAtCapWithNoMoreIsNotTruncated: landing on 2000 via a real has_more:false never claims a cap that never bit', async () => {
     const rows = Array.from({ length: 2000 }, (_, i) => auditEvent({ id: `evt-exact-${i}` }))
     const fetchMock = vi.fn((url: string) =>

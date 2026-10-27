@@ -130,10 +130,7 @@ test('support console: the deletion header, member rows and modal fit at every w
   expect(name).toHaveLength(MAX_NAME_CHARS)
   const ws = await fresh('staff-deletion-layout', name)
   await addPreparer(ws.adminToken, ws.tenantId)
-  const token = await staffSession(page, await provisionStaffAccount('staff-deletion-layout'))
-  // Purge now shows only on a scheduled workspace.
-  const started = await rawFetch(`${STAFF_TENANTS}/${ws.tenantId}/deletion`, { method: 'POST', headers: auth(token), body: { reason: 'e2e layout' } })
-  expect(started.status, JSON.stringify(started.body)).toBe(200)
+  await staffSession(page, await provisionStaffAccount('staff-deletion-layout'))
   await openTenant(page, ws.tenantId, name)
 
   const actions = page.getByTestId('tenant-actions')
@@ -142,7 +139,26 @@ test('support console: the deletion header, member rows and modal fit at every w
   const text = main(page).getByRole('heading', { level: 2, name }).locator('xpath=../..')
   const viewJobs = header.getByRole('button', { name: 'View jobs', exact: true })
   const deleteButtons = main(page).getByRole('button', { name: 'Delete account', exact: true })
+  // Member rows offer Delete account only while the workspace is unscheduled.
   await expect(deleteButtons).toHaveCount(2)
+  await sweep(page, async (width) => {
+    for (let i = 0; i < 2; i++) {
+      const button = deleteButtons.nth(i)
+      const row = button.locator('xpath=..')
+      const chip = button.locator('xpath=preceding-sibling::*[1]')
+      await settleAnimations(row, button, chip)
+      const [rowBox, buttonBox, chipBox] = await Promise.all([rectOf(`row ${i}`, row, width), rectOf(`Delete account ${i}`, button, width), rectOf(`status chip ${i}`, chip, width)])
+      expect(enclosesRect(rowBox, buttonBox, 1), `Delete account ${i} leaves its row at ${width}px`).toBe(true)
+      expect(rectsOverlap(buttonBox, chipBox), `Delete account ${i} and its status chip overlap at ${width}px`).toBe(false)
+    }
+    await noSideways(page, `Tenants, member rows at ${width}px`)
+  })
+
+  // Purge now shows only on a scheduled workspace.
+  await actions.getByRole('button', { name: 'Delete workspace', exact: true }).click()
+  await confirmModal(page, 'Start deletion', 'e2e layout')
+  await expect(main(page).getByText(/Scheduled for deletion on/)).toBeVisible()
+  await expect(deleteButtons, 'a scheduled workspace offers no Delete account').toHaveCount(0)
   const actionButtons = actions.getByRole('button')
   await expect(actionButtons, 'Cancel deletion and Purge now').toHaveCount(2)
 
@@ -170,15 +186,6 @@ test('support console: the deletion header, member rows and modal fit at every w
       expect(rectsOverlap(r[a], r[b]), `${a} and ${b} overlap at ${width}px`).toBe(false)
     }
 
-    for (let i = 0; i < 2; i++) {
-      const button = deleteButtons.nth(i)
-      const row = button.locator('xpath=..')
-      const chip = button.locator('xpath=preceding-sibling::*[1]')
-      await settleAnimations(row, button, chip)
-      const [rowBox, buttonBox, chipBox] = await Promise.all([rectOf(`row ${i}`, row, width), rectOf(`Delete account ${i}`, button, width), rectOf(`status chip ${i}`, chip, width)])
-      expect(enclosesRect(rowBox, buttonBox, 1), `Delete account ${i} leaves its row at ${width}px`).toBe(true)
-      expect(rectsOverlap(buttonBox, chipBox), `Delete account ${i} and its status chip overlap at ${width}px`).toBe(false)
-    }
     await noSideways(page, `Tenants at ${width}px`)
   })
 

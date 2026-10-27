@@ -530,7 +530,7 @@ func TestRLS_MembershipsDownDropsExactlyThreeColumns(t *testing.T) {
 	// last — a plain `defer` here would close the connection before t.Cleanup runs.
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
-	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS, goose.WithAllowOutofOrder(true))
 	if err != nil {
 		t.Fatalf("build migration provider: %v", err)
 	}
@@ -580,7 +580,7 @@ func TestRLS_MembershipsPreMigrationRowBackfillsToActive(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
-	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS, goose.WithAllowOutofOrder(true))
 	if err != nil {
 		t.Fatalf("build migration provider: %v", err)
 	}

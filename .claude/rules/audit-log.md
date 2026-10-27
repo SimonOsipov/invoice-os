@@ -24,7 +24,7 @@ paths:
 - Attribute an event by its event name, never by which payload key is present.
 - Order a page by `created_at DESC, id DESC`.
 - Filter on `created_at`, `event`, `actor`, `entity_id` or `invoice_id`. Each leads an index after `tenant_id`.
-- A staff search with no tenant reads `audit_log_created_idx` (`created_at DESC, id DESC`).
+- A staff search with no tenant reads `audit_log_created_idx` (`created_at DESC, id DESC`). With an event or an actor, it reads `audit_log_event_created_idx` or `audit_log_actor_created_idx`.
 - Read `audit_log` across tenants only through `public.staff_read_audit_log`. It names an actor from the row tenant's `memberships` by exact text. It never calls `actor.Resolve`.
 - Free-text search is the one predicate no index serves. The date range is its only bound.
 - Run the page, the count, the facets and the empty probe in one transaction.

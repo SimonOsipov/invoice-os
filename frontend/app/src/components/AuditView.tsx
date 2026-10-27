@@ -95,7 +95,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   const [exporting, setExporting] = useState(false)
   // testId is optional so the CSV path keeps AuditExportToast's default; the drawer's
   // download names its own (EB-06-8b).
-  const [exportToast, setExportToast] = useState<{ kind: 'success' | 'error'; text: string; testId?: string; maxWidth?: number } | null>(
+  const [exportToast, setExportToast] = useState<{ kind: 'success' | 'error'; text: string; testId?: string; maxWidth?: number; persist?: boolean } | null>(
     null,
   )
   // Drives the trigger's aria-expanded and the drawer mount below.
@@ -196,10 +196,11 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
       const fetchPage: AuditExportFetchPage = (query) => getAuditLog(ctx.authedFetch, base, query)
       const { rows, truncated } = await collectExportRows(fetchPage, startQuery, AUDIT_EXPORT_CAP)
       const filename = auditCsvFilename(new Date())
-      const blob = downloadAuditCsv(auditCsv(rows), filename)
+      const blob = downloadAuditCsv(auditCsv(rows, { truncated, cap: AUDIT_EXPORT_CAP }), filename)
       setExportToast({
         kind: 'success',
         text: auditExportToastCopy({ rows: rows.length, bytes: blob.size, filename, truncated, cap: AUDIT_EXPORT_CAP }),
+        persist: truncated,
       })
     } catch (err) {
       // collectExportRows throws on every abort (reject, bad limit echo, stalled cursor,
@@ -377,6 +378,7 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
           text={exportToast.text}
           testId={exportToast.testId}
           maxWidth={exportToast.maxWidth}
+          persist={exportToast.persist}
           onDismiss={() => setExportToast(null)}
         />
       )}

@@ -51,7 +51,12 @@ func SignInHandler(authURL *url.URL, client *http.Client, store Handoffs, thrott
 			return
 		}
 		// Reserving before the call bounds a parallel burst to the window's budget.
-		if !throttle.Reserve(in.Email) {
+		admitted, err := throttle.Admit(in.Email)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "sign-in is unavailable")
+			return
+		}
+		if !admitted {
 			writeError(w, http.StatusTooManyRequests, "too many requests")
 			return
 		}

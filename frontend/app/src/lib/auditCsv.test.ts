@@ -123,15 +123,17 @@ describe('auditCsv', () => {
 describe('auditCsv truncation notice (BUG-74)', () => {
   const trunc = { truncated: true, cap: 2000 }
 
-  it('auditCsv_truncatedEndsWithOneNoticeLine: a truncated export ends with one line naming 2000, "first" and more events', () => {
+  it('auditCsv_truncatedEndsWithOneNoticeLine: a truncated export ends with one line naming 2000, the most recent events and more older ones', () => {
     const events = [makeEvent(), makeEvent(), makeEvent()]
     const lines = auditCsv(events, trunc).split('\n')
 
     expect(lines.length, 'header + 3 event rows + 1 notice line').toBe(5)
     const notice = lines[lines.length - 1]
     expect(notice, 'the last line names the 2000 cap').toContain('2000')
-    expect(notice, 'the last line says the file holds only the first rows').toMatch(/first/i)
+    expect(notice, 'the last line says the file holds only the most recent events').toMatch(/most recent/i)
     expect(notice, 'the last line says the log has more events').toMatch(/more/i)
+    expect(notice, 'the last line says the dropped events are older').toMatch(/older/i)
+    expect(notice, 'the last line must not claim the file holds the first rows').not.toMatch(/first/i)
   })
 
   it('auditCsv_truncatedKeepsHeaderFirstAndRowsUntouched: header stays line 1 and event rows match the untruncated output', () => {
@@ -176,6 +178,8 @@ describe('auditCsv truncation notice (BUG-74)', () => {
 
     expect(notice.length, 'control: the notice line is not empty').toBeGreaterThan(0)
     expect(notice.startsWith('"') ? notice.endsWith('"') : !notice.includes(',')).toBe(true)
+    expect(notice, 'no comma, so any list separator keeps one cell').not.toContain(',')
+    expect(notice, 'no semicolon, so a semicolon-locale Excel keeps one cell').not.toContain(';')
   })
 
   it('auditCsv_truncatedWithNoRowsStillHasHeaderThenNotice: header on line 1, notice on line 2', () => {

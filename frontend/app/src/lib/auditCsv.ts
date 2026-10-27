@@ -42,7 +42,7 @@ export function auditCsv(events: AuditEvent[], opts?: { truncated: boolean; cap:
       .join(','),
   )
   if (opts?.truncated) {
-    lines.push(csvCell(`This file holds only the first ${opts.cap} rows; the audit log has more events. Narrow the filters to export the rest.`))
+    lines.push(csvCell(`This file holds only the ${opts.cap} most recent events. The audit log has more older events. Narrow the filters such as the date range to export the rest.`))
   }
   return [AUDIT_CSV_HEADER.join(','), ...lines].join('\n')
 }

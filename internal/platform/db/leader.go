@@ -31,7 +31,7 @@ type Leader struct {
 func NewLeader(dsn string) *Leader { return &Leader{dsn: dsn} }
 
 // Lead wraps fn so it runs only while this process holds the lock for name. A call that misses
-// the lock retries every claimRetry until it takes the lock or ctx ends; it then returns nil.
+// the lock retries every claimRetry until it takes the lock or ctx ends.
 func (l *Leader) Lead(name string, fn func(context.Context) error) func(context.Context) error {
 	return func(ctx context.Context) error {
 		for {

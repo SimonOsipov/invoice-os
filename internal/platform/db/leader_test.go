@@ -313,3 +313,55 @@ func TestLeader_CancelledClaimKeepsOtherLocks(t *testing.T) {
 		}
 	})
 }
+
+// BUG-67 AC 2: a dead connection with a live ctx is replaced and every task re-claimed.
+func TestLeader_DeadConnectionIsReplacedAndLocksReclaimed(t *testing.T) {
+	dsn := requireHarness(t).appURL
+	held, other := "test-"+uuid.NewString(), "test-"+uuid.NewString()
+	a, peer := db.NewLeader(dsn), db.NewLeader(dsn)
+	t.Cleanup(func() { ldStop(t, a); ldStop(t, peer) })
+	ldHold(t, a, held)
+	if ok, err := db.ExportLeaderTerminate(context.Background(), a); err != nil || !ok {
+		t.Fatalf("terminate: ok=%v err=%v", ok, err)
+	}
+	fnP, runsP := ldRuns()
+	if err := peer.Lead(held, fnP)(context.Background()); err != nil || *runsP != 1 {
+		t.Fatalf("peer after a's connection died: runs=%d err=%v, want 1", *runsP, err)
+	}
+	skip, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	fnA, runsA := ldRuns()
+	if err := a.Lead(held, fnA)(skip); err != nil || *runsA != 0 {
+		t.Fatalf("a on the lost task: runs=%d err=%v, want 0: held must be cleared", *runsA, err)
+	}
+	if err := a.Lead(other, fnA)(context.Background()); err != nil || *runsA != 1 {
+		t.Fatalf("a on a free task: runs=%d err=%v, want 1 on the new connection", *runsA, err)
+	}
+}
+
+// BUG-67 AC 4: claims cancelled at random points, mid-Ping or mid-query, keep the held lock.
+func TestLeader_ClaimsCancelledMidFlightKeepTheHeldLock(t *testing.T) {
+	dsn := requireHarness(t).appURL
+	held := "test-" + uuid.NewString()
+	a, peer := db.NewLeader(dsn), db.NewLeader(dsn)
+	t.Cleanup(func() { ldStop(t, a); ldStop(t, peer) })
+	ldHold(t, a, held)
+	var wg sync.WaitGroup
+	for i := range 300 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(i%30)*100*time.Microsecond)
+			defer cancel()
+			fn, _ := ldRuns()
+			_ = a.Lead("test-"+uuid.NewString(), fn)(ctx)
+		}()
+	}
+	wg.Wait()
+	fn, runs := ldRuns()
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if err := peer.Lead(held, fn)(ctx); err != nil || *runs != 0 {
+		t.Fatalf("peer: runs=%d err=%v, want 0: a still holds the lock", *runs, err)
+	}
+}

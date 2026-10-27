@@ -708,6 +708,8 @@ jobs:
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/customrule/...
       - name: Contact store suite (intake merge + delivery queue as invoice_app) + per-test visibility & skip gate
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/notifications/...
+      - name: Workspace purge suite (erase, files, purge as invoice_app; due read as invoice_tenant_reader) + per-test visibility & skip gate
+        run: scripts/ci/rls-test-gate.sh -p 1 -count=1 ./internal/workspacepurge/...
       - name: Blog store suite (categories and posts as invoice_app, audit in the same tx) + per-test visibility & skip gate
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/blog/...
       - name: AI call recorder suite (ai_calls rows land under the call's tenant as invoice_app) + per-test visibility & skip gate
@@ -848,7 +850,7 @@ jobs:
         run: make db-bootstrap
       - name: Apply all migrations (as migrator)
         run: make migrate-up
-      - name: Start the idp containers and mailpit (stdout is the URLs and the issuer only)
+      - name: Start the idp containers and mailpit (stdout is the URLs, the issuer and the key file path only)
         run: scripts/ci/idp-up.sh "$DATABASE_AUTH_ADMIN_URL" 5432 >> "$GITHUB_ENV"
       - name: Read the pinned supabase/auth tag
         run: echo "IDP_PINNED_TAG=$(go run ./internal/tools/idppin tag sidecar/auth/Dockerfile)" >> "$GITHUB_ENV"

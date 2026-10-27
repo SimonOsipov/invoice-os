@@ -8,10 +8,11 @@
 // caller is MembersView, which — once AC-1 lands — only mounts this table when
 // rolesSurface(...) resolves to 'roster', meaning ctx.rolesState is always 'ready' by then.
 // This guard is therefore unreachable through the shipped app and is defense-in-depth only.
+import type { ComponentProps } from 'react'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { invitedMember, MEMBER_UNBACKED, PROTECTED_ADMIN_NOTE, type Member, type PendingInvite } from '../lib/members'
+import { invitedMember, PROTECTED_ADMIN_NOTE, removeConfirmQuestion, type Member, type PendingInvite } from '../lib/members'
 import type { Role } from '../lib/roles'
 import type { Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
@@ -201,7 +202,7 @@ describe('APPR-09-06 AC-2: an unlanded policies fetch renders no blocked-steps s
   })
 })
 
-function renderRows(rows: Member[], over: Record<string, unknown> = {}) {
+function renderRows(rows: Member[], over: Record<string, unknown> = {}, handlers: Partial<ComponentProps<typeof MembersTable>> = {}) {
   render(
     <MembersTable
       ctx={ctxWith({ members: rows, ...over })}
@@ -211,6 +212,7 @@ function renderRows(rows: Member[], over: Record<string, unknown> = {}) {
       onOpen={vi.fn()}
       onStatus={vi.fn()}
       statusError={null}
+      {...handlers}
     />,
   )
 }
@@ -293,20 +295,20 @@ describe('the row menu', () => {
     expect(edit.style.opacity, 'an enabled item must not carry the disabled paint').toBe('')
   })
 
-  it('a disabled item keeps its paint, dims to .45, shows not-allowed, and points at its reason', () => {
-    renderRows(ROSTER())
+  it("menu: the sole active admin's Remove is disabled with the note, keeping its paint and pointing at its reason", () => {
+    renderRows([member({ id: 'me', name: 'Me Preparer', initials: 'MP', isYou: true }), member({ id: 'u2', name: 'Bo Active', initials: 'BA', role: 'admin' })])
 
     fireEvent.click(rowOf('Bo Active').getByTestId('member-menu-trigger'))
 
     const menu = screen.getByTestId('member-menu')
     const remove = within(menu).getByRole('button', { name: 'Remove' }) as HTMLButtonElement
-    expect(remove.disabled).toBe(true)
+    expect(remove.disabled, 'the sole active admin, not you').toBe(true)
     expect(remove.style.opacity).toBe('0.45')
     expect(remove.style.cursor).toBe('not-allowed')
     expect(remove.style.filter).toBe('none')
     expect(remove.style.color, 'the enabled paint (red) must survive the dim').toBe('var(--status-red-text)')
     const reason = within(menu).getByTestId('member-menu-reason')
-    expect(reason.textContent).toBe(MEMBER_UNBACKED.remove)
+    expect(reason.textContent).toBe(PROTECTED_ADMIN_NOTE)
     expect(remove.getAttribute('aria-describedby')).toBe(reason.id)
     expect(reason.style.fontSize).toBe('11px')
   })
@@ -332,6 +334,45 @@ describe('the row menu', () => {
     expect(within(menu).queryByRole('button', { name: 'Remove' })).toBeNull()
     expect((within(menu).getByRole('button', { name: 'Suspend' }) as HTMLButtonElement).disabled).toBe(true)
     expect(within(menu).getByTestId('member-menu-reason').textContent).toBe(PROTECTED_ADMIN_NOTE)
+  })
+
+  it('menu: Remove opens the strip under the row, Keep closes it, confirm removes once', () => {
+    const onRemove = vi.fn()
+    renderRows(ROSTER(), {}, { onRemove })
+
+    fireEvent.click(rowOf('Bo Active').getByTestId('member-menu-trigger'))
+    const remove = within(screen.getByTestId('member-menu')).getByRole('button', { name: 'Remove' }) as HTMLButtonElement
+    expect(remove.disabled).toBe(false)
+    fireEvent.click(remove)
+
+    const strip = screen.getByTestId('member-remove-confirm')
+    const row = screen.getByText('Bo Active').closest('[data-testid="member-row"]') as HTMLElement
+    expect(row.nextElementSibling).toBe(strip)
+    expect(strip.textContent).toContain(removeConfirmQuestion('Bo Active'))
+
+    fireEvent.click(screen.getByTestId('member-remove-keep'))
+    expect(screen.queryByTestId('member-remove-confirm')).toBeNull()
+    expect(onRemove).not.toHaveBeenCalled()
+
+    fireEvent.click(rowOf('Bo Active').getByTestId('member-menu-trigger'))
+    fireEvent.click(within(screen.getByTestId('member-menu')).getByRole('button', { name: 'Remove' }))
+    fireEvent.click(screen.getByTestId('member-remove-confirmed'))
+    expect(onRemove).toHaveBeenCalledTimes(1)
+    expect(onRemove).toHaveBeenCalledWith('u2')
+  })
+
+  it('table: a removed row has a pill, no menu and no drawer', () => {
+    const onOpen = vi.fn()
+    renderRows([...ROSTER(), member({ id: 'u5', name: 'Deleted member', initials: 'DM', email: null, status: 'removed' })], {}, { onOpen })
+
+    const row = screen.getByText('Deleted member').closest('[data-testid="member-row"]') as HTMLElement
+    expect(within(row).getByText('REMOVED')).toBeTruthy()
+    expect(within(row).getByText('—', { selector: '.mono' })).toBeTruthy()
+    expect(within(row).queryByTestId('member-menu-trigger')).toBeNull()
+    fireEvent.click(row)
+    expect(onOpen).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('Bo Active'))
+    expect(onOpen).toHaveBeenCalledWith('u2')
   })
 
   it('opening a second row menu closes the first', () => {
@@ -814,6 +855,13 @@ describe('FIRMS-02-05: the roster shows client access under the access role', ()
   it('in-house rows show no client access line', () => {
     renderRows('inhouse', [member({ clientAccess: null }), member({ id: 'u9', clientAccess: 'all' })])
     expect(screen.queryByTestId('member-client-access')).toBeNull()
+  })
+
+  it('a removed firm row shows no access role and no client line', () => {
+    renderRows('firm', [member({ id: 'g', name: 'Gone Person', role: 'reviewer', status: 'removed', email: null, clientAccess: ['a'] })])
+    const row = screen.getByText('Gone Person').closest('[data-testid="member-row"]') as HTMLElement
+    expect(within(row).queryByTestId('member-client-access')).toBeNull()
+    expect(row.textContent).not.toContain('Reviewer')
   })
 
   it('a row whose access is unknown to the viewer shows no line', () => {

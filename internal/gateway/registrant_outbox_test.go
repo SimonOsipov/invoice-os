@@ -62,6 +62,11 @@ func TestHandOff_AnOutboxWritesBeforeReturning(t *testing.T) {
 	if got := logs.all(); len(got) != 1 {
 		t.Fatalf("logged %d line(s) by the time the hand-off returned, want the one failure WARN: %+v", len(got), got)
 	}
+	if w := logs.all()[0]; w.attrs["user.id"] != coUserID {
+		t.Errorf("WARN user.id = %q, want %q", w.attrs["user.id"], coUserID)
+	} else if _, old := w.attrs["user_id"]; old {
+		t.Error("WARN still carries user_id")
+	}
 	if n := len(sink.got()); n != 0 {
 		t.Errorf("the HTTP sink got %d registrant call(s), want 0: the outbox replaces it", n)
 	}

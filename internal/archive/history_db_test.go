@@ -823,3 +823,36 @@ func TestSelectHistory_GenesisNullFromStatusIsEmptyCell(t *testing.T) {
 		t.Errorf("genesis row from_status cell = %q, want empty (D-8: NULL -> empty cell, never the string null)", rows[0][fromIdx])
 	}
 }
+
+func TestArchive_StatusHistoryNamesARemovedActorDeleted(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-history-removed-actor")
+	entity := mustCreateEntity(t, tx, tenant, "Removed Actor Co", "40000005-0002")
+	invID := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-REMOVED-01"})
+	userID := uuid.NewString()
+	displayName := "Ada Obi"
+	mustCreateMembership(t, tx, tenant, userID, &displayName, nil)
+	if _, err := tx.Exec(context.Background(),
+		`UPDATE memberships SET status = 'removed' WHERE tenant_id = $1 AND user_id = $2`, tenant, userID); err != nil {
+		t.Fatalf("remove the actor: %v", err)
+	}
+	mustCreateHistoryRow(t, tx, historyFixture{tenantID: tenant, invoiceID: invID, toStatus: "validated", actor: userID, changedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)})
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	if err := selectHistory(context.Background(), tx, []string{invID}, w); err != nil {
+		t.Fatalf("selectHistory: %v", err)
+	}
+	w.Flush()
+
+	rows := historyRowsFor(t, buf.Bytes(), invID)
+	if len(rows) != 1 {
+		t.Fatalf("selectHistory wrote %d rows, want 1", len(rows))
+	}
+	nameIdx, kindIdx := historyColIndex(t, "actor_name"), historyColIndex(t, "actor_kind")
+	if rows[0][nameIdx] != "Ada Obi (deleted)" || rows[0][kindIdx] != "person" {
+		t.Errorf("actor_name/actor_kind = %q/%q, want %q/person", rows[0][nameIdx], rows[0][kindIdx], "Ada Obi (deleted)")
+	}
+}

@@ -4,7 +4,7 @@
 # Builds sidecar/auth/Dockerfile and starts idp-es256, idp-hs256 and idp-rebuild on 9991-9993,
 # plus mailpit (SMTP 1025, API 8025) and idp-mail on 9994, which mails its branded confirmation and reset links there,
 # and idp-short on 9996, whose access tokens expire after 5 s (9995 is the mailed-link verify handler).
-# Stdout carries only the NAME=url lines and IDP_ISSUER (safe for $GITHUB_ENV); the rest goes to stderr.
+# Stdout carries only the NAME=url lines, IDP_ISSUER and IDP_ES256_KEYS_FILE (safe for $GITHUB_ENV); the rest goes to stderr.
 # IDP_SLOT=n (0-500, default 0) suffixes every container name with -s<n> and adds 10*n to every
 # port, so two worktrees' runs do not remove each other's containers; `make test-idp` derives it.
 # The DSN must be supabase_auth_admin's: a superuser would hide a missing grant or search_path.
@@ -112,6 +112,9 @@ no_mail=(-e GOTRUE_MAILER_AUTOCONFIRM=true -e GOTRUE_SMTP_HOST=)
 
 # Sequential: each GoTrue runs its migrations on boot, so the first finishes them alone.
 es256_keys
+# idp-es256's key, for tests that sign an admin token; idp-down.sh removes it.
+keys_file="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/idp-es256-keys$sfx.json"
+(umask 077 && cp "$tmp/keys" "$keys_file") && chmod 600 "$keys_file"
 start idp-es256 9991 -e GOTRUE_JWT_KEYS "${no_mail[@]}"
 start idp-hs256 9992 "${no_mail[@]}"
 es256_keys
@@ -141,3 +144,4 @@ echo "IDP_MAIL_URL=http://localhost:$((9994 + off))"
 echo "IDP_SHORT_URL=http://localhost:$((9996 + off))"
 echo "MAILPIT_URL=http://localhost:$mail_api"
 echo "IDP_ISSUER=$issuer"
+echo "IDP_ES256_KEYS_FILE=$keys_file"

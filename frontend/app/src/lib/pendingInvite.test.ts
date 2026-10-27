@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as pendingInvite from './pendingInvite'
-import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment } from './pendingInvite'
+import { consumePendingInvite, holdPendingInvite, peekPendingInvite, nameError, readInviteFragment, readInviteName, trimName } from './pendingInvite'
 
 // Read off the namespace so a missing export fails the assertion, not the import.
 const KEY = (pendingInvite as Record<string, unknown>).PENDING_INVITE_KEY
@@ -66,7 +66,36 @@ describe('readInviteFragment (D11)', () => {
   })
 })
 
+describe('readInviteName', () => {
+  it('readInviteName reads one bounded name', () => {
+    expect(readInviteName(`#invite=${T}&name=Ada%20Obi`)).toBe('Ada Obi')
+    expect(readInviteName('#name=%20Ada%20')).toBe('Ada')
+    expect(readInviteName('#name=Ada&name=Obi')).toBeNull()
+    expect(readInviteName('#name=%20%20')).toBeNull()
+    expect(readInviteName('#invite=x')).toBeNull()
+    expect(readInviteName(`#name=${'a'.repeat(200)}`)).toBe('a'.repeat(200))
+    expect(readInviteName(`#name=${'a'.repeat(201)}`)).toBeNull()
+  })
+
+  it('readInviteName drops a name with a NUL', () => {
+    expect(readInviteName('#name=Ada%00Obi')).toBeNull()
+  })
+
+  it('readInviteName reads what the landing writes', () => {
+    const hard = 'A&b=c#d+e \u{1F600}' + 'x'.repeat(189)
+    expect(readInviteName(`#invite=${T}&name=A%26b%3Dc%23d%2Be%20%F0%9F%98%80xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`)).toBe(hard)
+  })
+})
+
 describe('holdPendingInvite and consumePendingInvite (D11)', () => {
+  it('holdPendingInvite keeps the name; an old blob has none', () => {
+    holdPendingInvite(T, NOW, 'Ada')
+    expect(JSON.parse(storage.store.get(RAW_KEY) ?? 'null')).toEqual({ v: 1, t: T, at: NOW, n: 'Ada' })
+    expect(consumePendingInvite(NOW)).toEqual({ token: T, name: 'Ada' })
+    storage.store.set(RAW_KEY, JSON.stringify({ v: 1, t: T, at: NOW }))
+    expect(consumePendingInvite(NOW)).toEqual({ token: T, name: null })
+  })
+
   it('pendingInvite_isOneShotAndLivesTenMinutes', () => {
     expect(KEY).toBe(RAW_KEY)
     holdPendingInvite(T, NOW)
@@ -75,7 +104,7 @@ describe('holdPendingInvite and consumePendingInvite (D11)', () => {
     expect(storage.store.has(RAW_KEY), 'peek leaves the key').toBe(true)
     expect(peekPendingInvite(NOW + TTL), 'peek at exactly ten minutes').toBeNull()
     expect(storage.store.has(RAW_KEY), 'peek leaves an expired key too').toBe(true)
-    expect(consumePendingInvite(NOW + TTL - 1000)).toBe(T)
+    expect(consumePendingInvite(NOW + TTL - 1000)).toEqual({ token: T, name: null })
     expect(storage.store.has(RAW_KEY), 'consuming removes the key').toBe(false)
     expect(consumePendingInvite(NOW + TTL - 1000), 'the second consume').toBeNull()
 
@@ -84,16 +113,16 @@ describe('holdPendingInvite and consumePendingInvite (D11)', () => {
     expect(storage.store.has(RAW_KEY), 'an expired blob is removed too').toBe(false)
 
     holdPendingInvite(T, NOW)
-    expect(consumePendingInvite(NOW + TTL - 1), 'one millisecond inside the TTL').toBe(T)
+    expect(consumePendingInvite(NOW + TTL - 1), 'one millisecond inside the TTL').toEqual({ token: T, name: null })
 
     holdPendingInvite(T, NOW)
     holdPendingInvite(T2, NOW + 1)
-    expect(consumePendingInvite(NOW + 2), 'a second hold replaces the first').toBe(T2)
+    expect(consumePendingInvite(NOW + 2), 'a second hold replaces the first').toEqual({ token: T2, name: null })
   })
 
   it('pendingInvite_malformedOrThrowingStorageReadsNull', () => {
     holdPendingInvite(T, NOW)
-    expect(consumePendingInvite(NOW), 'control: a well-formed blob reads').toBe(T)
+    expect(consumePendingInvite(NOW), 'control: a well-formed blob reads').toEqual({ token: T, name: null })
 
     const rows: [string, string][] = [
       ['wrong version', JSON.stringify({ v: 2, t: T, at: NOW })],
@@ -131,5 +160,38 @@ describe('holdPendingInvite and consumePendingInvite (D11)', () => {
     })
     expect(() => holdPendingInvite(T, NOW), 'setItem throws').not.toThrow()
     expect(warn).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('trimName and nameError', () => {
+  it('trimName strips U+0085 as the API does', () => {
+    expect(trimName(' \u0085 Ada \u0085 ')).toBe('Ada')
+    expect(trimName('\u0085')).toBe('')
+    expect(trimName('\uFEFF')).toBe('')
+    expect(trimName('\u0085Ada')).toBe('Ada')
+    expect(trimName('Ada\u0085')).toBe('Ada')
+  })
+
+  it('nameError: the four outcomes', () => {
+    expect(nameError('Ada')).toBeNull()
+    expect(nameError('  ')).toBe('Enter your name.')
+    expect(nameError('\u0085')).toBe('Enter your name.')
+    expect(nameError('a'.repeat(201))).toBe('Use 200 characters or fewer.')
+    expect(nameError('a'.repeat(200))).toBeNull()
+    expect(nameError('a\0')).toBeNull()
+    expect(nameError('a'.repeat(201) + '\0')).toBeNull()
+  })
+
+  it('readInviteName trims U+0085', () => {
+    expect(readInviteName('#invite=T&name=%C2%85Ada%C2%85')).toBe('Ada')
+    expect(readInviteName('#name=%C2%85')).toBeNull()
+  })
+  it('trimName and readInviteName QA: stacked U+0085 and whitespace, interior kept, over-long refused', () => {
+    expect(trimName('\u0085 \u0085\u00A0 Ada Obi \u0085 \u0085')).toBe('Ada Obi')
+    expect(trimName('A\u0085B')).toBe('A\u0085B')
+    expect(readInviteName(`#name=${'a'.repeat(201)}`)).toBeNull()
+    expect(readInviteName(`#name=%C2%85${'a'.repeat(200)}%C2%85`)).toBe('a'.repeat(200))
+    expect(nameError('\u0085 \u0085')).toBe('Enter your name.')
+    expect(nameError('\0')).toBeNull()
   })
 })

@@ -34,7 +34,7 @@ import {
   viewerIsAdmin,
   type AccessRole,
   type InvitationWire,
-  type MemberStatus,
+  type PatchableStatus,
   type PendingInvite,
 } from '../lib/members'
 import { rolesSurface, unassignedNotice, unassignedRoles } from '../lib/roles'
@@ -73,7 +73,7 @@ const EMPTY_TITLE: Record<PlatformCtx['mode'], string> = {
 const EMPTY_MESSAGE = "You're priced by compliance need, not per seat."
 
 export function MembersView({ ctx }: { ctx: PlatformCtx }) {
-  const { members, mode, setMemberStatus } = ctx
+  const { members, mode, setMemberStatus, removeMember } = ctx
   const [query, setQuery] = useState('')
   const [roleFilter, setRoleFilter] = useState<AccessRole | 'all'>('all')
   // The member whose drawer is open — the ID, never the row. A captured row goes stale the
@@ -141,7 +141,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
   // settles, so neither control is guaranteed to exist when the answer arrives.
   const [statusError, setStatusError] = useState<{ id: string; message: string } | null>(null)
   const changeStatus = useCallback(
-    (id: string, status: Exclude<MemberStatus, 'invited'>) => {
+    (id: string, status: PatchableStatus) => {
       setStatusError(null)
       // `toApiError(err).message` IS the gateway's own sentence (api-client's client.ts parses
       // the `{"error": …}` envelope into it). Rendered verbatim — a generic substitution here
@@ -149,6 +149,17 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
       return setMemberStatus(id, status).catch((err: unknown) => setStatusError({ id, message: toApiError(err).message }))
     },
     [setMemberStatus],
+  )
+  // Same error channel; the drawer closes only on a 200.
+  const changeRemove = useCallback(
+    (id: string) => {
+      setStatusError(null)
+      return removeMember(id).then(
+        () => setDrawerId((cur) => (cur === id ? null : cur)),
+        (err: unknown) => setStatusError({ id, message: toApiError(err).message }),
+      )
+    },
+    [removeMember],
   )
   const resend = async (id: string) => {
     if (!base || resending.has(id) || revoking.has(id)) return
@@ -326,6 +337,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
               roles={ctx.roles}
               onOpen={setDrawerId}
               onStatus={changeStatus}
+              onRemove={changeRemove}
               statusError={statusError}
               invites={pendingInvites}
               onResend={resend}
@@ -372,7 +384,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
           once from `value`. Opening another member without closing first is unreachable behind
           the scrim today, which is exactly why a key is the right guard rather than an effect. */}
       {drawerId != null && (
-        <MemberDrawer key={drawerId} ctx={ctx} memberId={drawerId} onClose={closeDrawer} onStatus={changeStatus} statusError={statusError} />
+        <MemberDrawer key={drawerId} ctx={ctx} memberId={drawerId} onClose={closeDrawer} onStatus={changeStatus} onRemove={changeRemove} statusError={statusError} />
       )}
     </>
   )

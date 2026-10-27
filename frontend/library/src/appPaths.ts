@@ -13,4 +13,5 @@ export const APP_PATHS: Record<ViewId, string> = {
   clients: '/clients',
   customers: '/customers',
   settings: '/settings',
+  account: '/account',
 }

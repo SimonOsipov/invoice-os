@@ -254,6 +254,8 @@ func registerStatusForErr(err error) (int, string) {
 		return http.StatusUnauthorized, "unauthorized"
 	case errors.Is(err, db.ErrNotActiveMember):
 		return http.StatusForbidden, db.NotActiveMemberMessage
+	case errors.Is(err, db.ErrWorkspaceLocked):
+		return http.StatusForbidden, db.WorkspaceLockedMessage
 	case errors.As(err, &tooMany):
 		return http.StatusBadRequest,
 			fmt.Sprintf("%d invoices exceeds the register limit of %d", tooMany.Count, tooMany.Limit)

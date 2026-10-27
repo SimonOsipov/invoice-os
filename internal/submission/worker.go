@@ -58,8 +58,8 @@ func (SubmitArgs) InsertOpts() river.InsertOpts {
 	}
 }
 
-// SubmitWorker runs SubmitArgs jobs: tx1 (ensure the job row, terminal / already-cleared /
-// rate-limit gates, state='submitting') -> adapter.Transform / adapter.Submit with NO
+// SubmitWorker runs SubmitArgs jobs: tx1 (ensure the job row, its gates,
+// state='submitting') -> adapter.Transform / adapter.Submit with NO
 // transaction held ([adapters-are-db-free]) -> tx2 (record the exchange, advance job state,
 // drive InvoicePort). Every dependency is an exported struct field rather than something
 // threaded through Workers(...), mirroring DemoWorker's own Pool/Logger fields -- see the
@@ -86,12 +86,15 @@ const (
 	tx1Terminal
 	tx1AlreadyCleared
 	tx1RateLimited
+	tx1Locked
 )
 
+const lockedSnooze = 15 * time.Minute
+
 // Work drives the tx1 / adapter / tx2 decision flow (worker.go's own doc comment, and the
-// M5-04-05 story's System Design). tx1 ensures the job row, applies the terminal /
-// already-cleared / rate-limit gates and, if none fire, hands the invoice's Canonical
-// projection back and commits. The adapter is then called with NO transaction held
+// M5-04-05 story's System Design). tx1 ensures the job row, applies its gates and, if none fire,
+// hands the invoice's Canonical projection back and commits.
+// The adapter is then called with NO transaction held
 // ([adapters-are-db-free], T05-15). tx2 records the outcome, advances the job's state and
 // drives InvoicePort.
 func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) error {
@@ -108,6 +111,15 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 	)
 
 	tx1Err := db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
+		locked, err := db.WorkspaceLocked(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if locked {
+			outcome = tx1Locked
+			return nil
+		}
+		// ceiling: a job whose tx1 committed before the lock still reaches the adapter
 		id, state, att, err := ensureSubmissionJob(ctx, tx, args.TenantID, args.InvoiceID,
 			args.IdempotencyKey, adapterName, adapterVersion, job.ID)
 		if err != nil {
@@ -193,6 +205,8 @@ func (w *SubmitWorker) Work(ctx context.Context, job *river.Job[SubmitArgs]) err
 		return nil
 	case tx1RateLimited:
 		return river.JobSnooze(retryAfter)
+	case tx1Locked:
+		return river.JobSnooze(lockedSnooze)
 	}
 
 	// No transaction held from here through adapter.Submit's return

@@ -1988,7 +1988,7 @@ func TestInvitations_RevokeRacingAnAcceptNeverBothWins(t *testing.T) {
 		startRevoke := func() { go func() { revoked <- w.store.RevokeInvitation(w.adminCtx(), issued.ID) }() }
 		startAccept := func() {
 			go func() {
-				_, _, _, err := w.store.AcceptInvitation(tenantless(user, email), issued.Token)
+				_, _, _, err := w.store.AcceptInvitation(tenantless(user, email), issued.Token, nil)
 				accepted <- err
 			}()
 		}

@@ -89,10 +89,13 @@ export const MEMBERS_TABLE_HEADS: readonly string[] = ['Person', 'Access role', 
  * sibling is the only layer a screenshot, a keyboard user and an assertion can all reach.
  */
 export const UNBACKED = {
-  remove: 'Deleting a membership locks that person out on their next request, and nothing undoes it. That decision has not been taken.',
   role: "The membership endpoint writes status only. Changing someone's access role has no server call behind it.",
   department: 'A membership stores a name, an email, an access role and a status. There is no department column.',
 } as const
+
+/** `removeConfirmQuestion` in frontend/app/src/lib/members.ts, transcribed. */
+export const removeConfirmQuestion = (name: string): string =>
+  `Remove ${name}? Access is revoked immediately. Their name stays on every invoice they touched.`
 
 /** Invitee account-state labels, transcribed from inviteAccountLine in frontend/app/src/lib/members.ts. */
 export const INVITE_ACCOUNT_LABELS = {

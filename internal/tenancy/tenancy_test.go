@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -487,6 +488,34 @@ func TestMe_SuspendedMemberStillGets200(t *testing.T) {
 	}
 	if body.User.Email == nil || *body.User.Email != "sam@tenancy.test" {
 		t.Errorf("user.email = %v, want %q on the wire", body.User.Email, "sam@tenancy.test")
+	}
+}
+
+// TestMe_LockedWorkspaceStillGets200: Me is an exempt method, so the seam lock
+// must not turn the notice's own read into a 403.
+func TestMe_LockedWorkspaceStillGets200(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "tenancy me-handler locked firm")
+	userID := uuid.NewString()
+	seedIdentityMembership(t, super, tenantID, userID, "admin", "active", strp("Locked Sam"), strp("locked@tenancy.test"))
+	if _, err := super.Exec(context.Background(),
+		`UPDATE tenants SET deletion_scheduled_at = now(), deletion_scheduled_by = $2 WHERE id = $1`, tenantID, userID); err != nil {
+		t.Fatalf("lock tenant: %v", err)
+	}
+	id := auth.Identity{Subject: userID, Role: "authenticated", TenantID: tenantID}
+
+	// Control: the lock is live for a gated read, so the 200 below is the exemption.
+	err := db.WithinRequestTenantTx(auth.WithIdentity(context.Background(), id), app, func(pgx.Tx) error { return nil })
+	if !errors.Is(err, db.ErrWorkspaceLocked) {
+		t.Fatalf("control: gated seam read of the locked workspace err = %v, want db.ErrWorkspaceLocked", err)
+	}
+
+	rec, body := doMe(t, NewStore(app).Me, &id)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+	if body.Tenant.ID != tenantID || body.User.ID != userID {
+		t.Errorf("me = tenant %q user %q, want %q / %q", body.Tenant.ID, body.User.ID, tenantID, userID)
 	}
 }
 
@@ -2506,6 +2535,8 @@ func TestMembership_StatusForErrTable(t *testing.T) {
 		{ErrMembershipNotFound, http.StatusNotFound, "membership not found"},
 		{ErrInvitedNotTransitionable, http.StatusConflict, "an invited member has no sign-in to suspend or reactivate"},
 		{ErrLastActiveAdmin, http.StatusConflict, "this is the tenant's last active admin — make another member an active admin first"},
+		{ErrRemoveNotPermitted, http.StatusForbidden, "only an admin can remove a member"},
+		{ErrRemovedNotTransitionable, http.StatusConflict, "a removed member must be invited again"},
 		{errors.New("boom"), http.StatusInternalServerError, "internal server error"},
 	}
 	for _, tc := range cases {
@@ -2807,5 +2838,78 @@ func TestProvision_Internal500(t *testing.T) {
 	}
 	if len(spy.calls) != 1 {
 		t.Errorf("provision called %d time(s), want 1", len(spy.calls))
+	}
+}
+
+func TestMembership_RemovedRowIsNotTransitionable(t *testing.T) {
+	for _, status := range []string{"active", "suspended"} {
+		t.Run(status, func(t *testing.T) {
+			w := newInvWorld(t, "DEL-02-02 patch removed", "Ada Obi")
+			m := w.removedRow(t, "Grace Eze")
+			before := imageOf(t, w.super, w.tenant, m)
+
+			if _, err := w.store.SetMembershipStatus(w.adminCtx(), m, status); !errors.Is(err, ErrRemovedNotTransitionable) {
+				t.Fatalf("err = %v, want ErrRemovedNotTransitionable", err)
+			}
+			if imageOf(t, w.super, w.tenant, m) != before {
+				t.Error("PATCH on a removed row changed it")
+			}
+			for _, ev := range []string{"membership.reactivated", "membership.suspended"} {
+				if n := auditCount(t, w.app, w.tenant, ev); n != 0 {
+					t.Errorf("%s rows = %d, want 0", ev, n)
+				}
+			}
+			rec := patchViaMux(t, w.store.SetMembershipStatus, auth.Identity{Subject: w.admin, Role: "authenticated", TenantID: w.tenant},
+				m, `{"status":"`+status+`"}`)
+			if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "a removed member must be invited again") {
+				t.Errorf("wire = %d %s, want 409 with the invite-again sentence", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// Me reads no status, so a removed member whose token still carries the tenant gets a 200 payload.
+func TestStoreMe_AnswersForARemovedMember(t *testing.T) {
+	w := newInvWorld(t, "DEL-02-02 me removed", "Ada Obi")
+	m := w.addMember(t, "reviewer", "active", "Grace Eze")
+	if _, err := w.store.RemoveMember(w.adminCtx(), m); err != nil {
+		t.Fatalf("RemoveMember: %v", err)
+	}
+
+	tenant, me, err := w.store.Me(w.as(m))
+	if err != nil {
+		t.Fatalf("Me for a removed member: %v, want the boot payload", err)
+	}
+	if tenant.ID != w.tenant || me.Role != "reviewer" {
+		t.Errorf("tenant-matches=%v role=%q, want the tenant and role reviewer", tenant.ID == w.tenant, me.Role)
+	}
+	if me.DisplayName == nil || *me.DisplayName != "Grace Eze" {
+		t.Error("display name not kept")
+	}
+	if me.Email != nil {
+		t.Error("email not nil for a removed member")
+	}
+}
+
+func TestCheckName(t *testing.T) {
+	for _, field := range []string{"workspace_name", "display_name"} {
+		length := field + " must be 1 to 200 characters"
+		nul := field + " must not contain a NUL byte"
+		for _, c := range []struct{ name, in, want string }{
+			{"empty", "", length},
+			{"201 runes", strings.Repeat("é", 201), length},
+			{"NUL byte", "a\x00b", nul},
+			{"200 four-byte runes", strings.Repeat("😀", 200), ""},
+			{"200 runes", strings.Repeat("a", 200), ""},
+			{"one rune", "a", ""},
+			// It trims nothing: callers trim first.
+			{"a lone space", " ", ""},
+		} {
+			t.Run(field+"/"+c.name, func(t *testing.T) {
+				if got := checkName(field, c.in); got != c.want {
+					t.Errorf("checkName(%q, %d runes) = %q, want %q", field, utf8.RuneCountInString(c.in), got, c.want)
+				}
+			})
+		}
 	}
 }

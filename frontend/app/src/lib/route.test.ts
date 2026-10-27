@@ -33,11 +33,12 @@ const ALL_VIEWS = [
   'approvals',
   'audit',
   'extraction',
+  'account',
 ] as const
 
-// types.ts — six members. The strip SettingsView renders is the *available* set and is
+// types.ts — seven members. The strip SettingsView renders is the *available* set and is
 // one shorter in a firm workspace; this is the addressable set.
-const ALL_SETTINGS_TABS = ['members', 'roles', 'connectors', 'api', 'signing', 'company'] as const
+const ALL_SETTINGS_TABS = ['members', 'roles', 'connectors', 'api', 'signing', 'company', 'workspace'] as const
 
 // A well-formed id and its upper-case twin: parse must preserve case, not normalise it.
 const UUID = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
@@ -66,23 +67,28 @@ function domTokenHits(src: string): number {
 }
 
 describe('ROUTE_PATHS', () => {
-  it('routeTable_isTotalOverTheThirteenViews', () => {
-    expect(ALL_VIEWS.length).toBe(13)
+  it('routeTable_isTotalOverTheFourteenViews', () => {
+    expect(ALL_VIEWS.length).toBe(14)
     expect(Object.keys(ROUTE_PATHS).sort()).toEqual([...ALL_VIEWS].sort())
-    expect(Object.keys(ROUTE_PATHS).length).toBe(13)
+    expect(Object.keys(ROUTE_PATHS).length).toBe(14)
   })
 
   it('routeTable_everyPathIsDistinct', () => {
-    expect(new Set(Object.values(ROUTE_PATHS)).size).toBe(13)
+    expect(new Set(Object.values(ROUTE_PATHS)).size).toBe(14)
   })
 })
 
 describe('routePath / parseRoute round trip', () => {
   it('roundTrip_everyViewSerialisesAndParsesBackToItself', () => {
-    expect(ALL_VIEWS.length).toBe(13)
+    expect(ALL_VIEWS.length).toBe(14)
     for (const v of ALL_VIEWS) {
       expect(parseRoute(routePath(v))).toEqual({ view: v, id: null })
     }
+  })
+
+  it('route: /account parses and serialises', () => {
+    expect(parseLocation('/account', '').view).toBe('account')
+    expect(routeUrl('account')).toBe('/account')
   })
 
   it('serialize_dashboardIsTheBareRoot', () => {
@@ -175,14 +181,14 @@ describe('parseRoute — adversarial', () => {
 
 describe('routeUrl — serialise', () => {
   it('routeUrl_withNoParamsEqualsRoutePathExceptSettings', () => {
-    expect(ALL_VIEWS.length).toBe(13)
+    expect(ALL_VIEWS.length).toBe(14)
     let compared = 0
     for (const v of ALL_VIEWS) {
       if (v === 'settings') continue
       expect(routeUrl(v), `${v} must serialise to its shipped path`).toBe(routePath(v))
       compared += 1
     }
-    expect(compared, 'the twelve non-settings views must each have been compared').toBe(12)
+    expect(compared, 'the thirteen non-settings views must each have been compared').toBe(13)
     // settings is the one named exception, asserted rather than excused: the default tab
     // is emitted, so the URL is strictly longer than the path. Both literals are pinned --
     // an inequality alone would pass on any wrong value.
@@ -212,23 +218,28 @@ describe('routeUrl — serialise', () => {
     expect(routeUrl('audit', { auditInvoice: null })).toBe('/audit')
   })
 
+  it('route: /settings/workspace parses and serialises', () => {
+    expect(parseLocation('/settings/workspace', '')).toMatchObject({ view: 'settings', settingsTab: 'workspace' })
+    expect(routeUrl('settings', { settingsTab: 'workspace' })).toBe('/settings/workspace')
+  })
+
   it('routeUrl_alwaysNamesTheSettingsTabIncludingTheDefault', () => {
-    expect(ALL_SETTINGS_TABS.length).toBe(6)
+    expect(ALL_SETTINGS_TABS.length).toBe(7)
     expect(routeUrl('settings')).toBe('/settings/members')
     expect(routeUrl('settings', { settingsTab: 'members' })).toBe('/settings/members')
     expect(routeUrl('settings', { settingsTab: undefined })).toBe('/settings/members')
     for (const t of ALL_SETTINGS_TABS) {
       expect(routeUrl('settings', { settingsTab: t }), `${t} is addressable`).toBe(`/settings/${t}`)
     }
-    // Floor: the six are not five defaults plus members -- members is one of the six.
+    // Floor: the seven are not six defaults plus members -- members is one of the seven.
     const nonDefault = ALL_SETTINGS_TABS.filter((t) => t !== 'members')
-    expect(nonDefault.length).toBe(5)
+    expect(nonDefault.length).toBe(6)
   })
 
-  // ALL_SETTINGS_TABS is a local literal, so the `.length === 6` floor above asserts it
+  // ALL_SETTINGS_TABS is a local literal, so the `.length === 7` floor above asserts it
   // against itself: a new tab added to types.ts would leave every tab loop in this file
   // one short and silent. ROUTE_PATHS has such an anchor already
-  // (routeTable_isTotalOverTheThirteenViews); the tab set had none.
+  // (routeTable_isTotalOverTheFourteenViews); the tab set had none.
   it('settingsTabs_theTestTableIsAnchoredToTheShippedUnion', () => {
     const src = readFileSync(TYPES_TS, 'utf8')
     expect(src.length, 'types.ts read back empty -- the path is broken').toBeGreaterThan(0)
@@ -236,7 +247,7 @@ describe('routeUrl — serialise', () => {
     expect(line, 'types.ts no longer declares `export type SettingsTab =` on one line').toBeTruthy()
     const shipped = (line ?? '').match(/'[a-z]+'/g)?.map((m) => m.slice(1, -1)) ?? []
     // Needle: a regex that matched nothing would make the set comparison below vacuous.
-    expect(shipped.length, 'the union scan matched no member -- it would prove nothing').toBe(6)
+    expect(shipped.length, 'the union scan matched no member -- it would prove nothing').toBe(7)
     expect(shipped.sort(), 'the shipped union and this file\'s table must name the same tabs').toEqual(
       [...ALL_SETTINGS_TABS].sort(),
     )
@@ -359,7 +370,7 @@ describe('parseLocation — the inverse of routeUrl', () => {
     // Control needles: every real tab resolves to itself through the codec.
     expect(parseLocation('/settings/roles', '').settingsTab).toBe('roles')
     expect(parseLocation('/settings/connectors', '').settingsTab).toBe('connectors')
-    expect(ALL_SETTINGS_TABS.length).toBe(6)
+    expect(ALL_SETTINGS_TABS.length).toBe(7)
     for (const t of ALL_SETTINGS_TABS) {
       const [pathname, search] = splitUrl(routeUrl('settings', { settingsTab: t }))
       expect(parseLocation(pathname, search).settingsTab, t).toBe(t)
@@ -529,12 +540,12 @@ describe('routePath — drill-down id parameter', () => {
     expect(routePath('detail', null)).toBe('/invoice')
   })
 
-  it('serialize_idIsIgnoredForTheTenViewsThatDoNotTakeOne', () => {
+  it('serialize_idIsIgnoredForTheElevenViewsThatDoNotTakeOne', () => {
     expect(routePath('settings', 'x')).toBe('/settings')
     // The count in the name is asserted, not decorative: a fourth id branch makes it wrong.
-    expect(ALL_VIEWS.length).toBe(13)
+    expect(ALL_VIEWS.length).toBe(14)
     const ignoreTheId = ALL_VIEWS.filter((v) => routePath(v, 'x') === ROUTE_PATHS[v])
-    expect(ignoreTheId.length, `views that ignore an id: ${ignoreTheId.join(', ')}`).toBe(10)
+    expect(ignoreTheId.length, `views that ignore an id: ${ignoreTheId.join(', ')}`).toBe(11)
   })
 })
 
@@ -551,7 +562,7 @@ describe('routePath / parseRoute round trip — id corpus', () => {
   const ID_TAKING_VIEWS = new Set(['detail', 'extraction', 'workflows'])
 
   it('roundTrip_idCorpusSurvivesForEveryViewAcrossAllIds', () => {
-    expect(ALL_VIEWS.length).toBe(13)
+    expect(ALL_VIEWS.length).toBe(14)
     expect(ID_CORPUS.length).toBe(6)
     for (const v of ALL_VIEWS) {
       for (const id of ID_CORPUS) {
@@ -930,14 +941,16 @@ const REVIEW_FRAGMENT = '#' + 'review'
 
 // A read of the url fragment, however spelled: `.hash`, `['hash']` or a destructured `hash`.
 const FRAGMENT_READ = /\.\s*hash\b|\[\s*['"`]hash['"`]\s*\]|\{[^}]*\bhash\b[^}]*\}\s*=\s*[\w.]*location\b/g
-// The two fragment reads the app keeps: the invite link's token (lib/pendingInvite.ts) and the confirm link's (lib/verifyBounce.ts).
+// The fragment reads the app keeps: the invite link's token and name (lib/pendingInvite.ts) and the confirm link's (lib/verifyBounce.ts).
 const INVITE_FRAGMENT_READ = 'readinvitefragment(window.location.hash)'
 const VERIFY_FRAGMENT_READ = 'readverifyfragment(window.location.hash)'
+const NAME_FRAGMENT_READ = 'readinvitename(window.location.hash)'
+const CANCEL_FRAGMENT_READ = 'readcancellinkfragment(window.location.hash)'
 
 describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app', () => {
   it('guard_noReviewHashSurvivesInTheApp', () => {
     const files = [
-      { name: 'App.tsx', path: APP_TSX, inviteReads: 2 },
+      { name: 'App.tsx', path: APP_TSX, inviteReads: 4 },
       { name: 'lib/reviewBatch.ts', path: fileURLToPath(new URL('./reviewBatch.ts', import.meta.url)), inviteReads: 0 },
       { name: 'lib/route.ts', path: ROUTE_TS, inviteReads: 0 },
       { name: 'types.ts', path: fileURLToPath(new URL('../types.ts', import.meta.url)), inviteReads: 0 },
@@ -951,13 +964,15 @@ describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app'
       expect(raw.length, `${name} read back empty -- the path is broken`).toBeGreaterThan(0)
       const code = stripComments(raw).toLowerCase()
       expect(code.includes(REVIEW_FRAGMENT), `${name} still mentions the retired review-hash fragment`).toBe(false)
-      // App.tsx keeps exactly two fragment reads, the invite link's and the confirm link's; any other read is a review hash returning.
+      // App.tsx keeps exactly four fragment reads, the invite link's token and name, the confirm link's and the cancel-deletion link's; any other read is a review hash returning.
       const reads = code.match(FRAGMENT_READ) ?? []
       expect(reads.length, `${name} reads or writes the url fragment ${inviteReads === 0 ? 'at all' : 'beyond the invite and confirm links'}`).toBe(inviteReads)
       if (inviteReads > 0) {
         // Control needle: the allowed reads are the invite's and the confirm link's, so the count above is not a count of nothing.
         expect(code.includes(INVITE_FRAGMENT_READ), `${name} no longer reads the invite fragment through readInviteFragment`).toBe(true)
         expect(code.includes(VERIFY_FRAGMENT_READ), `${name} no longer reads the confirm fragment through readVerifyFragment`).toBe(true)
+        expect(code.includes(NAME_FRAGMENT_READ), `${name} no longer reads the invite name through readInviteName`).toBe(true)
+        expect(code.includes(CANCEL_FRAGMENT_READ), `${name} no longer reads the cancel-deletion fragment through readCancelLinkFragment`).toBe(true)
       }
     }
   })
@@ -966,7 +981,7 @@ describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app'
 describe('routeName — the bounded name Sentry groups a page by', () => {
   it('routeName_namesEveryRouteByPattern', () => {
     const statics = Object.values(ROUTE_PATHS)
-    expect(statics.length).toBe(13)
+    expect(statics.length).toBe(14)
     for (const path of statics) expect(routeName(path), path).toBe(path)
 
     const U2 = 'b1b2c3d4-e5f6-47a8-89ab-cdef01234568'

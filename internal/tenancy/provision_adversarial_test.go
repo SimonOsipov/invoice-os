@@ -23,7 +23,6 @@ func TestProvision_Adversarial400(t *testing.T) {
 	spy := &provisionSpy{fn: func(in ProvisionInput) (Tenant, string, error) {
 		return Tenant{ID: uuid.NewString(), Name: in.WorkspaceName, Kind: "firm"}, uuid.NewString(), nil
 	}}
-	multi201 := strings.Repeat("é", 201)
 	for _, tc := range []struct{ name, body string }{
 		{"kind explicit empty", `{"workspace_name":"Acme","display_name":"Ada","kind":""}`},
 		{"kind FIRM", `{"workspace_name":"Acme","display_name":"Ada","kind":"FIRM"}`},
@@ -32,9 +31,6 @@ func TestProvision_Adversarial400(t *testing.T) {
 		{"kind whitespace only", `{"workspace_name":"Acme","display_name":"Ada","kind":"  "}`},
 		{"kind number", `{"workspace_name":"Acme","display_name":"Ada","kind":1}`},
 		{"workspace_name unicode whitespace only", `{"workspace_name":" 　 \n","display_name":"Ada"}`},
-		{"display_name unicode whitespace only", `{"workspace_name":"Acme","display_name":"  "}`},
-		{"workspace_name 201 two-byte runes", `{"workspace_name":"` + multi201 + `","display_name":"Ada"}`},
-		{"display_name 201 two-byte runes", `{"workspace_name":"Acme","display_name":"` + multi201 + `"}`},
 		{"workspace_name not a string", `{"workspace_name":["Acme"],"display_name":"Ada"}`},
 		// The decoder keeps going after a type error, so the valid duplicate would pass validation.
 		{"type error then a valid duplicate", `{"workspace_name":1,"workspace_name":"Acme","display_name":"Ada"}`},
@@ -238,5 +234,66 @@ func TestStoreProvisionWorkspace_RowsAreTenantIsolated(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].UserID != a.id.Subject {
 		t.Errorf("ListMemberships(A) = %+v, want only A", list)
+	}
+}
+
+// Pins the four sentences ProvisionHandler answers, so the checkName refactor cannot reword them.
+func TestProvisionHandler_NameSentences(t *testing.T) {
+	spy := &provisionSpy{fn: func(in ProvisionInput) (Tenant, string, error) {
+		return Tenant{ID: uuid.NewString(), Name: in.WorkspaceName, Kind: "firm"}, uuid.NewString(), nil
+	}}
+	body := func(field, value string) string {
+		b, err := json.Marshal(map[string]string{"workspace_name": "Acme Ltd", "display_name": "Ada", field: value})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	t.Run("display_name/BOM only", func(t *testing.T) {
+		spy.calls = nil
+		rec, got := doProvision(t, spy.provision, body("display_name", "\ufeff"))
+		if msg := provisionErrorBody(t, got); rec.Code != http.StatusBadRequest || msg != "display_name must be 1 to 200 characters" {
+			t.Errorf("status %d, error %q; want 400 and the length sentence", rec.Code, msg)
+		}
+		if len(spy.calls) != 0 {
+			t.Errorf("provision called %d time(s), want 0", len(spy.calls))
+		}
+	})
+	// workspace_name keeps strings.TrimSpace: a BOM-only name still reaches provision.
+	t.Run("workspace_name/BOM only is not trimmed", func(t *testing.T) {
+		spy.calls = nil
+		rec, _ := doProvision(t, spy.provision, body("workspace_name", "\ufeff"))
+		if rec.Code != http.StatusCreated || len(spy.calls) != 1 {
+			t.Errorf("status %d, provision calls %d; want 201 and 1", rec.Code, len(spy.calls))
+		}
+	})
+	for _, field := range []string{"workspace_name", "display_name"} {
+		for _, c := range []struct{ name, value, msg string }{
+			{"blank", "   ", field + " must be 1 to 200 characters"},
+			{"201 runes", strings.Repeat("é", 201), field + " must be 1 to 200 characters"},
+			{"NUL byte", "a\x00b", field + " must not contain a NUL byte"},
+		} {
+			t.Run(field+"/"+c.name, func(t *testing.T) {
+				spy.calls = nil
+				rec, got := doProvision(t, spy.provision, body(field, c.value))
+				if rec.Code != http.StatusBadRequest {
+					t.Errorf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+				}
+				if msg := provisionErrorBody(t, got); msg != c.msg {
+					t.Errorf("error = %q, want %q", msg, c.msg)
+				}
+				if len(spy.calls) != 0 {
+					t.Errorf("provision called %d time(s), want 0", len(spy.calls))
+				}
+			})
+		}
+		// Control: 200 four-byte runes in the same field reach provision.
+		t.Run(field+"/200 four-byte runes", func(t *testing.T) {
+			spy.calls = nil
+			rec, _ := doProvision(t, spy.provision, body(field, strings.Repeat("😀", 200)))
+			if rec.Code != http.StatusCreated || len(spy.calls) != 1 {
+				t.Errorf("status %d, provision calls %d; want 201 and 1", rec.Code, len(spy.calls))
+			}
+		})
 	}
 }

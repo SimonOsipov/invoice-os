@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest'
 
 import { stripComments } from '@invoice-os/api-client/strip-comments'
 
-import { NOT_ACTIVE_MEMBER_MESSAGE } from './authedFetch'
+import { NOT_ACTIVE_MEMBER_MESSAGE, WORKSPACE_LOCKED_MESSAGE } from './authedFetch'
 import { CODE_LISTS } from './codeLists'
 import { AI_UNAVAILABLE_FIELD, DOCUMENT_TYPE_NOTICE } from './extractionReview'
 import type { DocumentType } from './extractionReview'
@@ -469,6 +469,15 @@ const MESSAGE_MIRRORS = [
     e2ePath: 'e2e/api/suspension.spec.ts',
     e2eAnchor: 'setMembershipStatus',
   },
+  {
+    go: 'WorkspaceLockedMessage',
+    goPath: 'internal/platform/db/tenant.go',
+    goAnchor: 'func WorkspaceLocked(',
+    spa: WORKSPACE_LOCKED_MESSAGE,
+    e2e: 'WORKSPACE_LOCKED',
+    e2ePath: 'e2e/api/workspace-deletion.spec.ts',
+    e2eAnchor: 'cancelDeletion',
+  },
 ] as const
 
 describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
@@ -573,7 +582,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'GoldenRule',
       'CustomRule',
     ])
-    expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
+    expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage', 'WorkspaceLockedMessage'])
   })
 
   // T3 — closes the blind spot AC-7 names: goStructKeys and

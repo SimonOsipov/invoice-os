@@ -73,7 +73,7 @@ func Resolve(ctx context.Context, tx pgx.Tx, subjects []string) (map[string]Labe
 	}
 
 	rows, err := tx.Query(ctx,
-		`SELECT user_id, display_name, email
+		`SELECT user_id, display_name, email, status
 		   FROM memberships
 		  WHERE user_id = ANY($1::uuid[])`, bind)
 	if err != nil {
@@ -83,10 +83,15 @@ func Resolve(ctx context.Context, tx pgx.Tx, subjects []string) (map[string]Labe
 	for rows.Next() {
 		var userID string
 		var displayName, email *string
-		if err := rows.Scan(&userID, &displayName, &email); err != nil {
+		var status string
+		if err := rows.Scan(&userID, &displayName, &email, &status); err != nil {
 			return nil, err
 		}
 		for _, subject := range subjectsOf[strings.ReplaceAll(userID, "-", "")] {
+			if status == "removed" {
+				out[subject] = RemovedName(displayName)
+				continue
+			}
 			out[subject] = Name(displayName, email, subject)
 		}
 	}

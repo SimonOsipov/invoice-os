@@ -14,6 +14,24 @@ export const HOSTING_REGION = 'africa-south1'
 export const PROSE_MAX_WIDTH = 720
 export const PRIVACY_CONTACT = 'sam@ascomply.com'
 export const ANALYTICS_DEFAULT_SENTENCE = 'Analytics is off unless you turn it on.'
+// Pinned to the tenants_deletion_guard trigger (graceDays in privacyCodeFacts.test.util.ts).
+export const DELETION_GRACE_DAYS = 30
+// Cloud SQL backups and change log; the rule file records the source. Pinned by value (the infra repo is private).
+export const BACKUP_DAYS = 7
+// Bucket soft delete; the rule file records the source. Pinned by value.
+export const FILE_RECOVERY_DAYS = 7
+// Pinned to actor.RemovedName (deletedMark in privacyCodeFacts.test.util.ts).
+export const DELETED_MARK = '(deleted)'
+// Each label is pinned to the app source that renders it (appLabels in privacyCodeFacts.test.util.ts).
+export const APP_LABELS = {
+  page: 'Your account',
+  deleteAccount: 'Delete my account',
+  settings: 'Settings',
+  workspaceTab: 'Workspace',
+  deleteWorkspace: 'Delete workspace',
+} as const
+// Pinned to EXPORT_COPY in the app (exportLabels in privacyCodeFacts.test.util.ts).
+export const EXPORT_LABELS = { button: 'Download export', tick: 'I downloaded the export' } as const
 
 const PAGE_TITLE = 'Privacy and cookies — ASComply Africa'
 
@@ -136,6 +154,33 @@ export function Privacy() {
           <h2 style={H2}>How long it is kept</h2>
           <p style={P}>
             Google deletes the underlying record of your visit after {GA_RETENTION_MONTHS} months.
+          </p>
+
+          <h2 style={H2}>How long deleted data lasts</h2>
+          <p style={P}>
+            This section covers the main copies in our own systems. It says how long they last after an account or a
+            workspace is deleted.
+          </p>
+          <p style={P}>
+            When an admin deletes a workspace, it and everything in it stay for {DELETION_GRACE_DAYS} days. Then our
+            server deletes them.
+          </p>
+          <p style={P}>
+            Database backups: our database keeps backups, and a log of recent changes, for {BACKUP_DAYS} days. Data that
+            has been deleted can stay in a backup for up to {BACKUP_DAYS} more days.
+          </p>
+          <p style={P}>
+            Stored files: the storage that holds uploaded documents keeps a deleted file for {FILE_RECOVERY_DAYS} days
+            before it is gone for good. A file can stay in storage for up to {FILE_RECOVERY_DAYS} more days after it is
+            deleted.
+          </p>
+          <p style={P}>
+            Sign-in record: our sign-in service writes a record when an account is deleted. The record includes the email
+            address of the account. We have set no time after which it is removed.
+          </p>
+          <p style={P}>
+            Staff log: our staff action log keeps one entry for the deletion of a workspace: the workspace identifier, the
+            date the deletion was due, and the number of members and files removed. That entry is not deleted.
           </p>
 
           <h2 style={H2}>What it is not used for</h2>
@@ -306,6 +351,45 @@ export function Privacy() {
             The registration form has the same separate marketing box. Its sentence is stored on our own server, word for
             word, with the time you submitted the form: “{MARKETING_CONSENT_TEXT}”
           </p>
+          <p style={P}>
+            You can delete your account yourself. Open {APP_LABELS.page}, from your name at the foot of the sidebar, and
+            choose {APP_LABELS.deleteAccount}.
+          </p>
+          <p style={P}>
+            If another member is still active in your workspace, your place in it ends at once and we queue the erasure
+            of your records.
+          </p>
+          <p style={P}>
+            The erasure deletes your sign-in account. Our own server also asks HubSpot to delete your contact
+            permanently, together with the deals filed under it, and asks Resend to delete your contact. It deletes the
+            copies of your registration and demo details that our own server holds under your email address, and it ends
+            your subscription to the Blog newsletter if that address has one.
+          </p>
+          <p style={P}>
+            Your name stays in the audit log and in the history of each invoice of your workspace, the record of who did
+            what, with {DELETED_MARK} after it. If we never held a name for you, the history says Deleted member. Your
+            membership record keeps your name and drops your email address.
+          </p>
+          <p style={P}>
+            An admin can delete the whole workspace. In {APP_LABELS.settings}, under {APP_LABELS.workspaceTab}, the admin
+            chooses {APP_LABELS.deleteWorkspace} and types the workspace name to confirm.
+          </p>
+          <p style={P}>
+            In the dialog that opens, {EXPORT_LABELS.button} starts the download of one ZIP file, and the admin ticks “
+            {EXPORT_LABELS.tick}” before the deletion can be confirmed. The ZIP holds the evidence bundle of every company
+            in the workspace over all time, every original uploaded document and the audit log. While the workspace is
+            locked, the notice offers the admin {EXPORT_LABELS.button} again.
+          </p>
+          <p style={P}>
+            The workspace is then locked for {DELETION_GRACE_DAYS} days. Nobody can create or change anything in it.
+            While it is locked, a member cannot delete their own account. Members see the date it will be deleted and can sign out. Any admin can cancel the deletion until the{' '}
+            {DELETION_GRACE_DAYS} days end. Then our server deletes every invoice, file and member of the workspace, and
+            erases the records of each member still in it, as described above.
+          </p>
+          <p style={P}>
+            If you are the only active member of a workspace, deleting your account deletes the workspace instead. Your
+            account then goes when the workspace is deleted, {DELETION_GRACE_DAYS} days later, not at once.
+          </p>
 
           <h2 style={H2}>If you upload invoice documents</h2>
           <p style={P}>
@@ -389,7 +473,9 @@ export function Privacy() {
               <a href={`mailto:${PRIVACY_CONTACT}`} className="ios-link" style={LINK}>
                 {PRIVACY_CONTACT}
               </a>{' '}
-              and tell us what you want done, and we will act on it. If you have registered or booked a demo, the
+              and tell us what you want done, and we will act on it. That works also if you cannot sign in to an account, or never had one. If you can sign in, you can delete your account
+              yourself: open {APP_LABELS.page}, from your name at the foot of the sidebar, and choose{' '}
+              {APP_LABELS.deleteAccount}. If you have registered or booked a demo, the
               records we hold are in HubSpot, in Resend and on our own server, and we can delete them. When signing in, signing up, resetting a password or keeping you signed in fails on our side, a Sentry error report may also hold the email address of the account involved. Analytics data sits with Google under an identifier that is not tied to your
               name, so tell us as much as you can about when you visited.
             </li>

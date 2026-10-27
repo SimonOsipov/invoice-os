@@ -127,7 +127,12 @@ async function boot(): Promise<string[]> {
   return hrefWrites
 }
 
-const joinScreen = () => waitFor(() => expect(screen.getByTestId('join-screen')).toBeTruthy())
+// Join needs a name; the screen starts empty unless the registration answers carry one.
+const joinScreen = async () => {
+  await waitFor(() => expect(screen.getByTestId('join-screen')).toBeTruthy())
+  const name = screen.getByTestId('join-name') as HTMLInputElement
+  if (name.value === '') fireEvent.change(name, { target: { value: 'Ada' } })
+}
 const storedSession = () => JSON.parse(localStorage.getItem(SESSION_KEY) ?? 'null')
 const posts = (suffix: string) => calls.filter((c) => c.method === 'POST' && c.url.endsWith(suffix))
 

@@ -457,19 +457,20 @@ func triggerNames(states map[string]string) []string {
 // checks out at fetch-depth 1, where `git diff main...HEAD` exits 128 with "ambiguous argument".
 // This is the shallow-safe form, and it is the idiom requireStoryMigration above already uses.
 const (
-	auditNumberMigrationCount  = 117
+	auditNumberMigrationCount  = 126
 	auditNumberNewestMigration = "20261027114858_audit_log_event_and_actor_created_indexes.sql"
 )
 
 // auditReaderFiles is internal/audit's whole non-test surface. AUDIT-11 touches exactly one of
 // them, AUDIT-11-09's filter.go.
 var auditReaderFiles = []string{
-	"audit.go", "facets.go", "filter.go", "handlers.go", "reader.go", "staff_read.go", "store.go",
+	"audit.go", "export_csv.go", "facets.go", "filter.go", "handlers.go", "reader.go", "staff_read.go", "store.go",
 }
 
 // auditReaderImports is that surface's import set, measured on this branch. It is the half a
 // file count cannot see: an existing file widened to reach a new dependency.
 var auditReaderImports = []string{
+	"bytes",
 	"context",
 	"encoding/base64",
 	"encoding/json",

@@ -13,6 +13,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 	"github.com/SimonOsipov/invoice-os/internal/tenancy"
 )
 
@@ -51,9 +52,21 @@ func main() {
 	store := tenancy.NewStore(pool)
 	app.Mux.HandleFunc("GET /v1/me", tenancy.MeHandler(store.Me, app.Logger))
 
+	// Insert-only River client: the self-delete enqueues person_erase in its transaction.
+	q, err := queue.New(pool, queue.Config{})
+	if err != nil {
+		platform.Fatal(app.Logger, "tenancy: queue: %v", err)
+	}
+	store.SetEraseQueue(q.River())
+	app.Mux.HandleFunc("GET /v1/me/deletion", tenancy.AccountDeletionPreviewHandler(store.PreviewAccountDeletion, app.Logger))
+	app.Mux.HandleFunc("POST /v1/me/deletion", tenancy.DeleteMyAccountHandler(store.DeleteMyAccount, app.Logger))
+
 	// GET /v1/staff/tenants — every tenant, for staff; the staff check is in platform.App.
 	app.Mux.HandleFunc("GET /v1/staff/tenants", tenancy.StaffTenantsHandler(store.StaffTenants, app.Logger))
 	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}", tenancy.StaffTenantHandler(store.StaffTenant, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/deletion/purge", tenancy.StaffPurgeHandler(store.StaffPurgeWorkspace, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}/members/{user_id}/deletion", tenancy.StaffAccountDeletionPreviewHandler(store.StaffPreviewAccountDeletion, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/members/{user_id}/deletion", tenancy.StaffDeleteAccountHandler(store.StaffDeleteAccount, app.Logger))
 
 	// GET /v1/memberships — the caller's tenant's membership list, resolved under
 	// RLS. Reached via the gateway as /api/tenancy/v1/memberships.
@@ -62,20 +75,24 @@ func main() {
 	// PATCH /v1/memberships/{user_id} — admin-only suspend/reactivate. The
 	// gateway proxies it unchanged: its mount carries no method.
 	app.Mux.HandleFunc("PATCH /v1/memberships/{user_id}", tenancy.SetMembershipStatusHandler(store.SetMembershipStatus, app.Logger))
+	app.Mux.HandleFunc("POST /v1/memberships/{user_id}/remove", tenancy.RemoveMemberHandler(store.RemoveMember, app.Logger))
 
 	// PUT /v1/memberships/{user_id}/clients — admin-only whole-set replace of a member's client access.
 	app.Mux.HandleFunc("PUT /v1/memberships/{user_id}/clients", tenancy.SetMemberClientsHandler(store.SetMemberClients, app.Logger))
 
-	// POST /v1/workspaces — a tenant-less caller provisions their first workspace;
+	// POST /v1/workspaces — a tenant-less caller provisions their workspace;
 	// the gateway lets a token without a tenant reach this route only.
 	app.Mux.HandleFunc("POST /v1/workspaces", tenancy.ProvisionHandler(store.ProvisionWorkspace, app.Logger))
 
-	// Invite routes: the sender is chosen once at boot from the environment.
-	inviter := &tenancy.Inviter{
-		Store:  store,
-		Sender: inviteSender(os.Getenv, http.DefaultTransport.(*http.Transport).Clone(), app.Logger),
-		Logger: app.Logger,
-	}
+	// Mail routes: the sender is chosen once at boot from the environment.
+	sender := inviteSender(os.Getenv, http.DefaultTransport.(*http.Transport).Clone(), app.Logger)
+	inviter := &tenancy.Inviter{Store: store, Sender: sender, Logger: app.Logger}
+	notifier := &tenancy.DeletionNotifier{Store: store, Sender: sender, Logger: app.Logger}
+	app.Mux.HandleFunc("POST /v1/workspace/deletion", tenancy.ScheduleDeletionHandler(notifier.Schedule, app.Logger))
+	app.Mux.HandleFunc("POST /v1/workspace/deletion/cancel", tenancy.CancelDeletionHandler(notifier.Cancel, app.Logger))
+	app.Mux.HandleFunc("POST /v1/workspace/deletion/cancel-by-link", tenancy.CancelDeletionByLinkHandler(notifier.CancelByLink, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/deletion", tenancy.StaffScheduleDeletionHandler(notifier.StaffSchedule, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/tenants/{id}/deletion/cancel", tenancy.StaffCancelDeletionHandler(notifier.StaffCancel, app.Logger))
 	app.Mux.HandleFunc("POST /v1/invitations", tenancy.InvitationsCreateHandler(inviter.Invite, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invitations", tenancy.InvitationsListHandler(store.ListInvitations, app.Logger))
 	app.Mux.HandleFunc("POST /v1/invitations/{id}/resend", tenancy.InvitationResendHandler(inviter.Resend, app.Logger))
@@ -96,7 +113,7 @@ func main() {
 	}
 }
 
-// inviteSender picks the invite mail sender: capture in a preview, Resend with a key, else off.
+// inviteSender picks the mail sender: capture in a preview, Resend with a key, else off.
 func inviteSender(getenv func(string) string, rt http.RoundTripper, logger *slog.Logger) accountmail.Sender {
 	mode, key := accountmail.ModeFromEnv(getenv, platform.Posture(platform.DeployEnvFrom(getenv)) == platform.PosturePreview)
 	logger.Info("tenancy: invite mail mode", slog.String("mode", string(mode)))

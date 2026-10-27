@@ -23,3 +23,8 @@ func mockMemberRoute(dsn string, logger *slog.Logger) http.Handler {
 func mockInvitationTokenRoute(dsn string, logger *slog.Logger) http.Handler {
 	return http.NotFoundHandler()
 }
+
+// mockDeletionLinkTokenRoute never serves: this build carries no cancel link token code.
+func mockDeletionLinkTokenRoute(dsn string, logger *slog.Logger) http.Handler {
+	return http.NotFoundHandler()
+}

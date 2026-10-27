@@ -22,11 +22,12 @@ import (
 )
 
 const (
-	pendingSig      = "public.pending_invites_for_email(text, uuid)"
-	acceptByIDSig   = "public.accept_invitation_by_id(uuid, uuid, uuid, text)"
-	pendingCall     = `SELECT invitation_id::text, tenant_id::text, workspace, role, inviter, expires_at FROM public.pending_invites_for_email($1::text, $2::uuid)`
-	acceptByIDCall  = `SELECT invitation_id::text, role FROM public.accept_invitation_by_id($1::uuid, $2::uuid, $3::uuid, $4::text)`
-	mismatchMessage = "row-level security"
+	pendingSig         = "public.pending_invites_for_email(text, uuid)"
+	acceptByIDSig      = "public.accept_invitation_by_id(uuid, uuid, uuid, text)"
+	acceptByIDNamedSig = "public.accept_invitation_by_id(uuid, uuid, uuid, text, text)"
+	pendingCall        = `SELECT invitation_id::text, tenant_id::text, workspace, role, inviter, expires_at FROM public.pending_invites_for_email($1::text, $2::uuid)`
+	acceptByIDCall     = `SELECT invitation_id::text, role FROM public.accept_invitation_by_id($1::uuid, $2::uuid, $3::uuid, $4::text)`
+	mismatchMessage    = "row-level security"
 )
 
 type pendingRow struct {
@@ -782,6 +783,10 @@ func TestRLS_JoinFunctionsAreOwnedAndGrantedNarrowly(t *testing.T) {
 		{"pending_invites_for_email", `SELECT count(*) FROM public.pending_invites_for_email($1::text, $2::uuid)`, []any{"a@obi.test", uuid.NewString()}},
 		{"accept_invitation_by_id", `SELECT count(*) FROM public.accept_invitation_by_id($1::uuid, $2::uuid, $3::uuid, $4::text)`,
 			[]any{uuid.NewString(), uuid.NewString(), uuid.NewString(), "a@obi.test"}},
+		{"accept_invitation_by_id with a name", `SELECT count(*) FROM public.accept_invitation_by_id($1::uuid, $2::uuid, $3::uuid, $4::text, $5::text)`,
+			[]any{uuid.NewString(), uuid.NewString(), uuid.NewString(), "a@obi.test", "Ada"}},
+		{"accept_invitation with a name", `SELECT count(*) FROM public.accept_invitation($1::uuid, $2::text, $3::uuid, $4::text, $5::text)`,
+			[]any{uuid.NewString(), "token", uuid.NewString(), "a@obi.test", "Ada"}},
 	} {
 		var n int
 		assertPgRefusal(t, "invoice_tenant_reader calling "+c.name, h.reader.QueryRow(ctx, c.sql, c.args...).Scan(&n), "42501", "permission denied")
@@ -805,20 +810,22 @@ func TestRLS_JoinFunctionsAreOwnedAndGrantedNarrowly(t *testing.T) {
 	}
 	assertExecuteOnlyForApp(t, pendingSig, list, "auth_hook_reader")
 
-	acc, ok := readProc(t, acceptByIDSig)
-	if !ok {
-		t.Fatalf("function %s does not exist", acceptByIDSig)
+	for _, sig := range []string{acceptByIDSig, acceptByIDNamedSig} {
+		acc, ok := readProc(t, sig)
+		if !ok {
+			t.Fatalf("function %s does not exist", sig)
+		}
+		if acc.owner != "invoice_migrator" {
+			t.Errorf("%s owner = %q, want invoice_migrator", sig, acc.owner)
+		}
+		if !acc.secdef {
+			t.Errorf("%s prosecdef = false, want SECURITY DEFINER", sig)
+		}
+		if !reflect.DeepEqual(acc.config, []string{`search_path=""`}) {
+			t.Errorf("%s proconfig = %q, want [search_path=\"\"]", sig, acc.config)
+		}
+		assertExecuteOnlyForApp(t, sig, acc, "invoice_migrator")
 	}
-	if acc.owner != "invoice_migrator" {
-		t.Errorf("%s owner = %q, want invoice_migrator", acceptByIDSig, acc.owner)
-	}
-	if !acc.secdef {
-		t.Errorf("%s prosecdef = false, want SECURITY DEFINER", acceptByIDSig)
-	}
-	if !reflect.DeepEqual(acc.config, []string{`search_path=""`}) {
-		t.Errorf("%s proconfig = %q, want [search_path=\"\"]", acceptByIDSig, acc.config)
-	}
-	assertExecuteOnlyForApp(t, acceptByIDSig, acc, "invoice_migrator")
 }
 
 // The control proves the list sees tenant 1 while the direct reads do not.
@@ -873,6 +880,7 @@ func TestRLS_JoinMigrationDownRemovesFunctionsAndGrantsThenReapplies(t *testing.
 	if err != nil {
 		t.Fatalf("build migration provider: %v", err)
 	}
+	rollBackRemovedFirst(t, provider)
 	footprint := func() (fns, grants int) {
 		t.Helper()
 		if err := h.super.QueryRow(ctx,
@@ -913,4 +921,355 @@ func TestRLS_JoinMigrationDownRemovesFunctionsAndGrantsThenReapplies(t *testing.
 	if fns, grants := footprint(); fns != 2 || grants != 3 {
 		t.Errorf("after Up again: functions=%d grants=%d, want 2 3", fns, grants)
 	}
+}
+
+const acceptByIDNamedCall = `SELECT invitation_id::text, role FROM public.accept_invitation_by_id($1::uuid, $2::uuid, $3::uuid, $4::text, $5::text)`
+
+// acceptByIDNamedAs calls the five-argument form; name may be nil for SQL NULL.
+func acceptByIDNamedAs(ctx context.Context, guc, tenant, invite, user, email string, name any) (id, role string, err error) {
+	err = inAppTx(ctx, guc, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, acceptByIDNamedCall, tenant, invite, user, email, name).Scan(&id, &role)
+	})
+	return id, role, err
+}
+
+func TestRLS_PendingInvitesListForARemovedOnlyIdentity(t *testing.T) {
+	requireHarness(t)
+	addr := uniqueAddr("tunde")
+	t1, t2 := newNamedTenant(t, "Obi Partners"), newNamedTenant(t, "Other Firm")
+	user := uuid.NewString()
+	seedMemberRow(t, t1, user, "preparer", "removed", "Ada", "old@obi.test")
+	toOther := seedJoinInvite(t, t2, "reviewer", addr, `now() + interval '1 day'`, "")
+
+	t.Run("invite to another workspace", func(t *testing.T) {
+		got := pendingForUser(t, "", addr, user)
+		if len(got) != 1 || got[0].id != toOther {
+			t.Errorf("rows = %v, want exactly [%s]", idsOf(got), toOther)
+		}
+	})
+	t.Run("invite back to the removing workspace", func(t *testing.T) {
+		back := seedJoinInvite(t, t1, "reviewer", addr, `now() + interval '2 days'`, "")
+		got := pendingForUser(t, "", addr, user)
+		if want := []string{toOther, back}; !reflect.DeepEqual(idsOf(got), want) {
+			t.Errorf("rows = %v, want %v in expiry order", idsOf(got), want)
+		}
+	})
+}
+
+// Any non-removed row blocks the list; the removed-plus-suspended case keeps the filter from collapsing to "ignore everything".
+func TestRLS_PendingInvitesStayEmptyForASuspendedIdentity(t *testing.T) {
+	requireHarness(t)
+	addr := uniqueAddr("tunde")
+	t1, t2, t3 := newNamedTenant(t, "Obi Partners"), newNamedTenant(t, "Other Firm"), newNamedTenant(t, "Third Firm")
+	invite := seedJoinInvite(t, t2, "reviewer", addr, `now() + interval '1 day'`, "")
+	if got := pendingForUser(t, "", addr, uuid.NewString()); len(got) != 1 || got[0].id != invite {
+		t.Fatalf("control: a user with no row sees %v, want [%s]", idsOf(got), invite)
+	}
+
+	for _, status := range []string{"suspended", "active", "invited"} {
+		user := uuid.NewString()
+		seedMemberRow(t, t3, user, "preparer", status, nil, nil)
+		if got := pendingForUser(t, "", addr, user); len(got) != 0 {
+			t.Errorf("%s row: rows = %v, want none", status, idsOf(got))
+		}
+	}
+	user := uuid.NewString()
+	seedMemberRow(t, t1, user, "preparer", "removed", nil, nil)
+	seedMemberRow(t, t3, user, "preparer", "suspended", nil, nil)
+	if got := pendingForUser(t, "", addr, user); len(got) != 0 {
+		t.Errorf("removed here, suspended there: rows = %v, want none", idsOf(got))
+	}
+}
+
+func TestRLS_AcceptInvitationByIDStoresTheDisplayName(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+
+	for _, c := range []struct {
+		name string
+		call func(a, invite, user, addr string) error
+		want *string
+	}{
+		{"trimmed", func(a, invite, user, addr string) error {
+			_, _, err := acceptByIDNamedAs(ctx, a, a, invite, user, addr, "  Ada Obi ")
+			return err
+		}, ptr("Ada Obi")},
+		{"blank", func(a, invite, user, addr string) error {
+			_, _, err := acceptByIDNamedAs(ctx, a, a, invite, user, addr, "   ")
+			return err
+		}, nil},
+		{"null", func(a, invite, user, addr string) error {
+			_, _, err := acceptByIDNamedAs(ctx, a, a, invite, user, addr, nil)
+			return err
+		}, nil},
+		{"four-argument form", func(a, invite, user, addr string) error {
+			_, _, err := acceptByIDAs(ctx, a, a, invite, user, addr)
+			return err
+		}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a := newNamedTenant(t, "Obi Partners")
+			addr := uniqueAddr("tunde")
+			invite := seedJoinInvite(t, a, "reviewer", addr, `now() + interval '1 day'`, "")
+			user := uuid.NewString()
+
+			if err := c.call(a, invite, user, addr); err != nil {
+				t.Fatalf("accept by id: want success, got %v", err)
+			}
+
+			s := readMemberSnap(t, a, user)
+			if s.Status != "active" {
+				t.Errorf("status = %q, want active", s.Status)
+			}
+			if c.want == nil && s.Display != nil {
+				t.Errorf("display_name = %q, want NULL", *s.Display)
+			}
+			if c.want != nil {
+				wantDisplay(t, s.Display, *c.want)
+			}
+		})
+	}
+}
+
+func TestRLS_AcceptInvitationByIDNeverOverwritesALiveRowInTheSameTenant(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+
+	for _, status := range []string{"active", "suspended", "invited"} {
+		for _, form := range []string{"five-argument", "four-argument"} {
+			t.Run(status+"/"+form, func(t *testing.T) {
+				a := newNamedTenant(t, "Obi Partners")
+				addr := uniqueAddr("tunde")
+				user := uuid.NewString()
+				seedMemberRow(t, a, user, "preparer", status, "Old Name", "old@obi.test")
+				before := readMemberSnap(t, a, user)
+				invite := seedJoinInvite(t, a, "reviewer", addr, `now() + interval '1 day'`, "")
+
+				var err error
+				if form == "five-argument" {
+					_, _, err = acceptByIDNamedAs(ctx, a, a, invite, user, addr, "New")
+				} else {
+					_, _, err = acceptByIDAs(ctx, a, a, invite, user, addr)
+				}
+
+				assertAcceptRefusal(t, "a "+status+" member accepting into their own tenant", err, "23505", guardConstraint)
+				if after := readMemberSnap(t, a, user); !reflect.DeepEqual(after, before) {
+					t.Errorf("row changed\n got: %+v\nwant: %+v", after, before)
+				}
+				if s := inviteStatus(t, invite); s != "pending" {
+					t.Errorf("invite status = %q, want pending", s)
+				}
+			})
+		}
+	}
+}
+
+func TestRLS_AcceptInvitationByIDRevivesARemovedRowWithANewName(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+
+	for _, c := range []struct {
+		name string
+		arg  any
+		want string
+	}{{"new name", "Ada Obi", "Ada Obi"}, {"no name keeps the old one", nil, "Ada"}} {
+		t.Run(c.name, func(t *testing.T) {
+			a := newNamedTenant(t, "Obi Partners")
+			addr := uniqueAddr("tunde")
+			user := uuid.NewString()
+			seedMemberRow(t, a, user, "preparer", "removed", "Ada", "old@obi.test")
+			before := readMemberSnap(t, a, user)
+			invite := seedJoinInvite(t, a, "reviewer", addr, `now() + interval '1 day'`, "")
+
+			gotID, gotRole, err := acceptByIDNamedAs(ctx, a, a, invite, user, addr, c.arg)
+			if err != nil {
+				t.Fatalf("accept by id into the tenant that removed the caller: want success, got %v", err)
+			}
+			if gotID != invite || gotRole != "reviewer" {
+				t.Errorf("returned (invitation_id, role) = (%s, %s), want (%s, reviewer)", gotID, gotRole, invite)
+			}
+
+			if n := mustCount(t, h.super, `SELECT count(*) FROM memberships WHERE tenant_id = $1 AND user_id = $2`, a, user); n != 1 {
+				t.Fatalf("rows for the user in A = %d, want 1", n)
+			}
+			s := readMemberSnap(t, a, user)
+			if s.ID != before.ID {
+				t.Errorf("id = %s, want the same row %s", s.ID, before.ID)
+			}
+			if s.Status != "active" || s.Role != "reviewer" {
+				t.Errorf("(status, role) = (%s, %s), want (active, reviewer)", s.Status, s.Role)
+			}
+			if s.Email == nil || *s.Email != addr {
+				t.Errorf("email = %v, want the invite's %q", s.Email, addr)
+			}
+			wantDisplay(t, s.Display, c.want)
+			if s.AllClients {
+				t.Error("all_clients = true, want it reset to false")
+			}
+			if n := mustCount(t, h.super,
+				`SELECT count(*) FROM memberships WHERE id = $1 AND created_at > now() - interval '1 minute'`, s.ID); n != 1 {
+				t.Errorf("created_at = %s, want it advanced to now (was %s)", s.CreatedAt, before.CreatedAt)
+			}
+			if st := inviteStatus(t, invite); st != "accepted" {
+				t.Errorf("invite status = %q, want accepted", st)
+			}
+		})
+	}
+}
+
+// acceptNamedForm runs the five-argument accept by token or by invite id for the same seeded invite.
+func acceptNamedForm(ctx context.Context, form, guc, tenant, invite, token, user, email string, name any) error {
+	if form == "token" {
+		_, _, err := acceptNamedAs(ctx, guc, tenant, token, user, email, name)
+		return err
+	}
+	_, _, err := acceptByIDNamedAs(ctx, guc, tenant, invite, user, email, name)
+	return err
+}
+
+func TestRLS_AcceptInvitationReviveEdges(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+
+	for _, form := range []string{"token", "by id"} {
+		// The by-id form folds the address into the invite lookup, so a wrong address reads as an invalid invite.
+		wrongAddr := map[string][2]string{"token": {"P0001", emailMismatchKey}, "by id": {"P0002", notValidName}}[form]
+		setup := func(t *testing.T, old any) (a, user, invite, token string, before memberSnap) {
+			a = newNamedTenant(t, "Obi Partners")
+			user = uuid.NewString()
+			seedMemberRow(t, a, user, "preparer", "removed", old, nil)
+			token = newToken(t)
+			invite = seedAcceptInvite(t, a, "reviewer", invitedAddress, token)
+			return a, user, invite, token, readMemberSnap(t, a, user)
+		}
+		unchanged := func(t *testing.T, a, user, invite string, before memberSnap) {
+			t.Helper()
+			if after := readMemberSnap(t, a, user); !reflect.DeepEqual(after, before) {
+				t.Errorf("the removed row changed\n got: %+v\nwant: %+v", after, before)
+			}
+			if s := inviteStatus(t, invite); s != "pending" {
+				t.Errorf("invite status = %q, want pending", s)
+			}
+		}
+
+		t.Run(form+"/name rules on a revive", func(t *testing.T) {
+			for _, c := range []struct {
+				old, arg any
+				want     *string
+			}{
+				{nil, "Ada Obi", ptr("Ada Obi")}, {nil, "   ", nil}, {nil, nil, nil},
+				{"Ada", "   ", ptr("Ada")}, {"Ada", "", ptr("Ada")}, {"Ada", " New ", ptr("New")},
+			} {
+				a, user, invite, token, _ := setup(t, c.old)
+				if err := acceptNamedForm(ctx, form, a, a, invite, token, user, invitedAddress, c.arg); err != nil {
+					t.Fatalf("revive (old %v, arg %v): %v", c.old, c.arg, err)
+				}
+				s := readMemberSnap(t, a, user)
+				if c.want == nil && s.Display != nil {
+					t.Errorf("(old %v, arg %v): display_name = %q, want NULL", c.old, c.arg, *s.Display)
+				}
+				if c.want != nil {
+					wantDisplay(t, s.Display, *c.want)
+				}
+			}
+		})
+		t.Run(form+"/a wrong address leaves the removed row", func(t *testing.T) {
+			a, user, invite, token, before := setup(t, "Ada")
+			err := acceptNamedForm(ctx, form, a, a, invite, token, user, "other@obi.test", "New")
+			assertAcceptRefusal(t, "revive with another address", err, wrongAddr[0], wrongAddr[1])
+			unchanged(t, a, user, invite, before)
+		})
+		t.Run(form+"/an expired invite leaves the removed row", func(t *testing.T) {
+			a, user, invite, token, before := setup(t, "Ada")
+			setInviteState(t, invite, `expires_at = now() - interval '1 minute'`)
+			err := acceptNamedForm(ctx, form, a, a, invite, token, user, invitedAddress, "New")
+			assertAcceptRefusal(t, "revive with an expired invite", err, "P0002", notValidName)
+			unchanged(t, a, user, invite, before)
+		})
+		t.Run(form+"/the invite's address is stored, whatever case the caller sends", func(t *testing.T) {
+			a, user, invite, token, _ := setup(t, "Ada")
+			if err := acceptNamedForm(ctx, form, a, a, invite, token, user, "  TUNDE@Obi.Test ", nil); err != nil {
+				t.Fatalf("revive: %v", err)
+			}
+			if s := readMemberSnap(t, a, user); s.Email == nil || *s.Email != invitedAddress {
+				t.Errorf("email = %v, want the invite's %q", s.Email, invitedAddress)
+			}
+		})
+		t.Run(form+"/the same invite cannot revive twice", func(t *testing.T) {
+			a, user, invite, token, _ := setup(t, "Ada")
+			if err := acceptNamedForm(ctx, form, a, a, invite, token, user, invitedAddress, nil); err != nil {
+				t.Fatalf("first revive: %v", err)
+			}
+			first := readMemberSnap(t, a, user)
+			err := acceptNamedForm(ctx, form, a, a, invite, token, user, invitedAddress, "Again")
+			assertAcceptRefusal(t, "second use of the invite", err, "P0002", notValidName)
+			if after := readMemberSnap(t, a, user); !reflect.DeepEqual(after, first) {
+				t.Errorf("the row changed on the second use\n got: %+v\nwant: %+v", after, first)
+			}
+		})
+		t.Run(form+"/another workspace's removed row stays removed", func(t *testing.T) {
+			a, user, invite, token, _ := setup(t, "Ada")
+			u := newNamedTenant(t, "Other Firm")
+			seedMemberRow(t, u, user, "preparer", "removed", "Ada", nil)
+			otherBefore := readMemberSnap(t, u, user)
+			if err := acceptNamedForm(ctx, form, a, a, invite, token, user, invitedAddress, nil); err != nil {
+				t.Fatalf("revive: %v", err)
+			}
+			if s := readMemberSnap(t, a, user); s.Status != "active" {
+				t.Errorf("revived row status = %q, want active", s.Status)
+			}
+			if after := readMemberSnap(t, u, user); !reflect.DeepEqual(after, otherBefore) {
+				t.Errorf("the other workspace's row changed\n got: %+v\nwant: %+v", after, otherBefore)
+			}
+		})
+		t.Run(form+"/another tenant's GUC revives nothing", func(t *testing.T) {
+			a, user, invite, token, before := setup(t, "Ada")
+			u := newNamedTenant(t, "Other Firm")
+			err := acceptNamedForm(ctx, form, u, a, invite, token, user, invitedAddress, "New")
+			assertPgRefusal(t, "GUC of U, p_tenant_id of A", err, "42501", mismatchMessage)
+			err = acceptNamedForm(ctx, form, a, u, invite, token, user, invitedAddress, "New")
+			assertPgRefusal(t, "GUC of A, p_tenant_id of U", err, "42501", mismatchMessage)
+			unchanged(t, a, user, invite, before)
+			if n := mustCount(t, h.super, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, u); n != 0 {
+				t.Errorf("memberships in U = %d, want 0", n)
+			}
+		})
+	}
+
+	t.Run("unset GUC", func(t *testing.T) {
+		a := newNamedTenant(t, "Obi Partners")
+		user := uuid.NewString()
+		seedMemberRow(t, a, user, "preparer", "removed", "Ada", nil)
+		before := readMemberSnap(t, a, user)
+		token := newToken(t)
+		invite := seedAcceptInvite(t, a, "reviewer", invitedAddress, token)
+		err := inAppTx(ctx, "", func(tx pgx.Tx) error {
+			var id, role string
+			return tx.QueryRow(ctx, acceptNamedCall, a, token, user, invitedAddress, "New").Scan(&id, &role)
+		})
+		assertPgRefusal(t, "accept with no tenant GUC", err, "42501", mismatchMessage)
+		err = inAppTx(ctx, "", func(tx pgx.Tx) error {
+			var id, role string
+			return tx.QueryRow(ctx, acceptByIDNamedCall, a, invite, user, invitedAddress, "New").Scan(&id, &role)
+		})
+		assertPgRefusal(t, "accept by id with no tenant GUC", err, "42501", mismatchMessage)
+		if after := readMemberSnap(t, a, user); !reflect.DeepEqual(after, before) {
+			t.Errorf("the removed row changed\n got: %+v\nwant: %+v", after, before)
+		}
+	})
+	t.Run("by id, an invite of another tenant", func(t *testing.T) {
+		a, u := newNamedTenant(t, "Obi Partners"), newNamedTenant(t, "Other Firm")
+		user := uuid.NewString()
+		seedMemberRow(t, a, user, "preparer", "removed", "Ada", nil)
+		before := readMemberSnap(t, a, user)
+		invite := seedAcceptInvite(t, a, "reviewer", invitedAddress, newToken(t))
+		err := acceptNamedForm(ctx, "by id", u, u, invite, "", user, invitedAddress, "New")
+		assertAcceptRefusal(t, "A's invite named under U", err, "P0002", notValidName)
+		if after := readMemberSnap(t, a, user); !reflect.DeepEqual(after, before) {
+			t.Errorf("the removed row changed\n got: %+v\nwant: %+v", after, before)
+		}
+		if n := mustCount(t, h.super, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, u); n != 0 {
+			t.Errorf("memberships in U = %d, want 0", n)
+		}
+	})
 }

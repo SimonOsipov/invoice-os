@@ -455,7 +455,7 @@ func TestRegistrationRoutes_InvitationPasswordIsMounted(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
 	log := slog.New(slog.DiscardHandler)
 	mux := http.NewServeMux()
-	mux.Handle("POST /auth/invitation/password", handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil).InvitationPassword)
+	mux.Handle("POST /auth/invitation/password", handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil, nil).InvitationPassword)
 
 	rec := serveForm(mux, "/auth/invitation/password", "type=signup&password=new-password-1")
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verify=failed" {

@@ -22,6 +22,10 @@ import type { AuthedFetch } from './portfolio'
 // this hand-maintained copy is pinned to it by wireMirrors.test.ts.
 export const NOT_ACTIVE_MEMBER_MESSAGE = 'your membership in this workspace is not active'
 
+// The 403 body of a workspace scheduled for deletion. Go: db.WorkspaceLockedMessage, pinned
+// by wireMirrors.test.ts.
+export const WORKSPACE_LOCKED_MESSAGE = 'this workspace is scheduled for deletion'
+
 // A plain token must reach the transport synchronously: importApi's XHR tests respond in the same tick.
 export function isPromiseLike<T>(v: T | PromiseLike<T>): v is PromiseLike<T> {
   return typeof (v as { then?: unknown } | null)?.then === 'function'
@@ -42,12 +46,22 @@ export function isSuspended(e: unknown): boolean {
   )
 }
 
+export function isWorkspaceLocked(e: unknown): boolean {
+  return (
+    e instanceof ApiError &&
+    e.kind === 'http' &&
+    e.status === 403 &&
+    (e.body as { error?: unknown } | undefined)?.error === WORKSPACE_LOCKED_MESSAGE
+  )
+}
+
 // onSuspended is optional so the ~30 ctx-fixture call sites stay two-argument; both live
 // construction sites pass it (App.tsx, pinned by App.suspended.test.tsx).
 export function createAuthedFetch(
   getToken: () => string | null | Promise<string | null>,
   onUnauthorized: () => void,
   onSuspended?: () => void,
+  onLocked?: () => void,
 ): <T>(url: string, opts?: ApiFetchOptions) => Promise<T> {
   return async function authedFetch<T>(url: string, opts?: ApiFetchOptions): Promise<T> {
     try {
@@ -57,6 +71,7 @@ export function createAuthedFetch(
       // A SessionEndedError is not an ApiError, so neither seam fires.
       if (isUnauthorized(e)) onUnauthorized()
       else if (isSuspended(e)) onSuspended?.()
+      else if (isWorkspaceLocked(e)) onLocked?.()
       throw e
     }
   }
@@ -70,6 +85,7 @@ export function makeAuthedFetch(
   onUnauthorized: () => void,
   onSuspended?: () => void,
   freshToken?: () => string | null | Promise<string | null>,
+  onLocked?: () => void,
 ): AuthedFetch {
-  return createAuthedFetch(freshToken ?? (() => session.token), onUnauthorized, onSuspended)
+  return createAuthedFetch(freshToken ?? (() => session.token), onUnauthorized, onSuspended, onLocked)
 }

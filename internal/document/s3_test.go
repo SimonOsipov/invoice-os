@@ -609,6 +609,10 @@ func (fakeObjectStore) Get(ctx context.Context, key, rangeHeader string) (docume
 	return document.Object{}, nil
 }
 
+func (fakeObjectStore) List(context.Context, string) ([]string, error) { return nil, nil }
+
+func (fakeObjectStore) DeleteMany(context.Context, []string) error { return nil }
+
 var (
 	_ document.ObjectStore                                              = (*fakeObjectStore)(nil)
 	_ func(document.Config, *http.Client) (document.ObjectStore, error) = document.NewS3Store

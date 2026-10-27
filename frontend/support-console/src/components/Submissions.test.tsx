@@ -5,7 +5,7 @@ import type { StaffTenant } from '../tenantsApi'
 import { Submissions } from './Submissions'
 
 const tenant = (id: string, name: string): StaffTenant => ({
-  id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 1, invoice_count: 2, last_activity_at: null,
+  id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 1, invoice_count: 2, last_activity_at: null, deletion_due_at: null, deletion_purge_started_at: null,
 })
 const TENANTS = [tenant('T1', 'Okafor & Partners'), tenant('T2', 'Yaba Freight')]
 const render = (selected: string) =>

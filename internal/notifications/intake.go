@@ -104,7 +104,7 @@ func consent(ctx context.Context, log *slog.Logger, userID, text, at string) (st
 	}
 	t, err := time.Parse(time.RFC3339, at)
 	if err != nil {
-		log.WarnContext(ctx, "contacts: marketing consent time unreadable; consent dropped", slog.String("user_id", userID))
+		log.WarnContext(ctx, "contacts: marketing consent time unreadable; consent dropped", slog.String("user.id", userID))
 		return "", time.Time{}
 	}
 	return text, t

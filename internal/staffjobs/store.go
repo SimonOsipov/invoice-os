@@ -180,6 +180,11 @@ func (s *Store) Redrive(ctx context.Context, id, reason string) (Detail, error) 
 			}
 			return fmt.Errorf("staffjobs: lock job: %w", err)
 		}
+		if locked, err := db.WorkspaceLocked(ctx, tx); err != nil {
+			return err
+		} else if locked {
+			return db.ErrWorkspaceLocked
+		}
 		if state != "dead_lettered" {
 			return ErrJobState
 		}

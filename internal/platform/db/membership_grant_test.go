@@ -26,7 +26,7 @@ func grantTo(t *testing.T, tenantID string, userID uuid.UUID, g grantedRow) erro
 func readMemberships(t *testing.T, userID uuid.UUID) []grantedRow {
 	t.Helper()
 	rows, err := h.super.Query(context.Background(),
-		`SELECT role, display_name, email, status FROM memberships WHERE user_id = $1 ORDER BY tenant_id`, userID)
+		`SELECT role, coalesce(display_name, ''), coalesce(email, ''), status FROM memberships WHERE user_id = $1 ORDER BY tenant_id`, userID)
 	if err != nil {
 		t.Fatalf("read memberships: %v", err)
 	}
@@ -68,25 +68,29 @@ func TestRLS_GrantMembershipInsertsActiveRow(t *testing.T) {
 
 func TestRLS_GrantMembershipRepeatReactivates(t *testing.T) {
 	h := requireHarness(t)
-	user := uuid.New()
-	if err := grantTo(t, h.tenantA, user, grantedRow{"admin", "First Name", "first@example.test", ""}); err != nil {
-		t.Fatalf("first GrantMembership: %v", err)
-	}
-	if _, err := h.super.Exec(context.Background(),
-		`UPDATE memberships SET status = 'suspended' WHERE user_id = $1`, user); err != nil {
-		t.Fatalf("suspend the membership: %v", err)
-	}
-	if got := readMemberships(t, user); len(got) != 1 || got[0].status != "suspended" {
-		t.Fatalf("memberships after the suspension = %+v, want one suspended row", got)
-	}
+	for _, from := range []string{"suspended", "removed"} {
+		t.Run(from, func(t *testing.T) {
+			user := uuid.New()
+			if err := grantTo(t, h.tenantA, user, grantedRow{"admin", "First Name", "first@example.test", ""}); err != nil {
+				t.Fatalf("first GrantMembership: %v", err)
+			}
+			if _, err := h.super.Exec(context.Background(),
+				`UPDATE memberships SET status = $2, email = CASE WHEN $2 = 'removed' THEN NULL ELSE email END WHERE user_id = $1`, user, from); err != nil {
+				t.Fatalf("set the membership to %s: %v", from, err)
+			}
+			if got := readMemberships(t, user); len(got) != 1 || got[0].status != from {
+				t.Fatalf("memberships after the update = %+v, want one %s row", got, from)
+			}
 
-	if err := grantTo(t, h.tenantA, user, grantedRow{"reviewer", "Second Name", "second@example.test", ""}); err != nil {
-		t.Fatalf("repeat GrantMembership: %v", err)
-	}
+			if err := grantTo(t, h.tenantA, user, grantedRow{"reviewer", "Second Name", "second@example.test", ""}); err != nil {
+				t.Fatalf("repeat GrantMembership: %v", err)
+			}
 
-	want := grantedRow{"reviewer", "Second Name", "second@example.test", "active"}
-	if got := readMemberships(t, user); len(got) != 1 || got[0] != want {
-		t.Errorf("memberships after the repeat = %+v, want exactly [%+v]", got, want)
+			want := grantedRow{"reviewer", "Second Name", "second@example.test", "active"}
+			if got := readMemberships(t, user); len(got) != 1 || got[0] != want {
+				t.Errorf("memberships after the repeat = %+v, want exactly [%+v]", got, want)
+			}
+		})
 	}
 }
 

@@ -1096,8 +1096,8 @@ func TransitionHandler(transition func(ctx context.Context, id string, target St
 		// from the write below, so a suspension racing the write is a known,
 		// accepted TOCTOU.
 		role, err := callerRole(r.Context())
-		if err != nil || !isApprover(role) {
-			writeError(w, http.StatusForbidden, notApproverTransmitReason)
+		if status, msg, refused := roleRefusal(role, err); refused {
+			writeError(w, status, msg)
 			return
 		}
 
@@ -1602,8 +1602,8 @@ func BatchSubmitHandler(submit func(ctx context.Context, in BatchSubmitInput) (B
 		// Ahead of the decode, for TransitionHandler's reasons: no existence
 		// oracle, and the same accepted TOCTOU on suspension.
 		role, err := callerRole(r.Context())
-		if err != nil || !isApprover(role) {
-			writeError(w, http.StatusForbidden, notApproverTransmitReason)
+		if status, msg, refused := roleRefusal(role, err); refused {
+			writeError(w, status, msg)
 			return
 		}
 
@@ -1743,12 +1743,25 @@ func ViolationSummaryHandler(summary func(ctx context.Context, importBatchIDs []
 	}
 }
 
+// roleRefusal maps a callerRole result to a refusal. Only the workspace lock maps
+// here; any other error fails closed to the approver text.
+func roleRefusal(role string, err error) (status int, msg string, refused bool) {
+	if errors.Is(err, db.ErrWorkspaceLocked) {
+		status, msg = statusForErr(err)
+		return status, msg, true
+	}
+	if err != nil || !isApprover(role) {
+		return http.StatusForbidden, notApproverTransmitReason, true
+	}
+	return 0, "", false
+}
+
 // statusForErr maps a store/domain error to the HTTP status + message the
 // handlers above write to the response ([D4]/[D12] error-map table).
 // db.ErrNoTenant is 401 (fail-closed, missing identity never reaches here in
 // practice since every handler checks identity first, but this is the
 // defense-in-depth mirror of portfolio's own statusForErr);
-// db.ErrNotActiveMember is 403; ErrValidation is 400 with the wrapped
+// db.ErrNotActiveMember and db.ErrWorkspaceLocked are 403; ErrValidation is 400 with the wrapped
 // message; ErrNotFound is 404; ErrDuplicateNumber/
 // ErrRedundantTransition/ErrIllegalTransition/ErrAwaitingApproval are 409;
 // the last answers with awaitingApprovalReason, the shared refusal sentence
@@ -1773,6 +1786,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusUnauthorized, "unauthorized"
 	case errors.Is(err, db.ErrNotActiveMember):
 		return http.StatusForbidden, db.NotActiveMemberMessage
+	case errors.Is(err, db.ErrWorkspaceLocked):
+		return http.StatusForbidden, db.WorkspaceLockedMessage
 	case errors.Is(err, ErrValidation):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, ErrUnknownLineID):

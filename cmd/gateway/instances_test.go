@@ -190,7 +190,7 @@ func newTwoInstances(t *testing.T) *twoInstances {
 		sessions.Shared(pool)
 		api, _ := gatewayHandlers(verifier, sessions, map[string]*url.URL{"tenancy": tenancyURL}, map[string]*url.URL{"auth": authURL},
 			map[string]string{"auth": ".well-known/jwks.json"}, log, instToken)
-		h := handoffHandlers(authURL, site, sessions, log, nil, verifier, pool)
+		h := handoffHandlers(authURL, site, sessions, log, nil, verifier, handoffStore(pool, log), pool)
 		reg := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite, pool)
 		return instance{
 			api:       api,
@@ -361,7 +361,7 @@ func TestBuilders_NilPoolKeepsTheLimitsInProcess(t *testing.T) {
 	authURL, _ := url.Parse(g.URL)
 	site, _ := url.Parse("https://site.example")
 	log := slog.New(slog.DiscardHandler)
-	h := handoffHandlers(authURL, site, gateway.NewSessionChecker(authURL, http.DefaultClient, time.Now, log), log, nil, nil, nil)
+	h := handoffHandlers(authURL, site, gateway.NewSessionChecker(authURL, http.DefaultClient, time.Now, log), log, nil, nil, nil, nil)
 
 	body := fmt.Sprintf(`{"email":%q,"password":"wrong","state":%q}`, addr, handoffState)
 	for i := range gateway.SignInMaxFailures {

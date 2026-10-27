@@ -22,7 +22,8 @@ func NewService(store *Store, objects ObjectStore) *Service {
 	return &Service{store: store, objects: objects}
 }
 
-// Store hashes the body, PUTs the bytes, then upserts the row — in that order. A
+// Store admits the caller (TestServiceStore_ALockedWorkspacePutsNothing), hashes the body,
+// PUTs the bytes, then upserts the row — in that order. A
 // failed PUT returns before any row is written, so nothing downstream can
 // believe a document exists; the reverse order would leave a row pointing at
 // nothing, which is strictly worse than an orphaned object.
@@ -40,6 +41,10 @@ func (s *Service) Store(ctx context.Context, filename, contentType string, size 
 		return Document{}, false, db.ErrNoTenant
 	}
 
+	if err := s.store.Admit(ctx); err != nil {
+		return Document{}, false, err
+	}
+
 	h := sha256.New()
 	n, err := io.Copy(h, body)
 	if err != nil {
@@ -53,6 +58,7 @@ func (s *Service) Store(ctx context.Context, filename, contentType string, size 
 
 	hash := hex.EncodeToString(h.Sum(nil))
 	key := StorageKey(id.TenantID, hash)
+	// ceiling: a lock committed between Admit and Upsert leaves one unreferenced object; DEL-07's prefix delete removes it
 	if err := s.objects.Put(ctx, key, body, n); err != nil {
 		return Document{}, false, err
 	}

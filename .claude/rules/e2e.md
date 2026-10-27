@@ -19,9 +19,10 @@ paths:
 - Keep a spec on `serial-lane` while it needs the seeded tenants 1111 and 2222. A shard gets its own tenant pair from `db/seed.e2e-shards.sql`.
 - Sign in an app session with `signInAs(page, id, { tenantId })` from `e2e/personaSession.ts`. It admits the e2e member through `ensureMember`.
 - Set an invitation token with `setInvitationToken`, or invite with `inviteWithToken`. A fork captures mail, so a spec cannot read a real token.
+- Set a deletion cancel-link token with `setDeletionLinkToken`.
 - A staff account is an active `reviewer` of the seeded house company `ASComply (dev)`. `provisionStaffAccount` grants it through `/auth/mock/member`.
 - Open a console with a staff session from `provisionStaffAccount` and `seedStaffSession`.
-- Serve `/auth/mock/member` and `/auth/mock/invitation-token` only from the `mockissuer` build. Only `pull_request` stamps that tag.
+- Serve `/auth/mock/member`, `/auth/mock/invitation-token` and `/auth/mock/deletion-link-token` only from the `mockissuer` build. Only `pull_request` stamps that tag.
 - Never assume an empty table. Smoke, api and topology run in that order against one deployment, with no reset between them.
 - Expect a Playwright retry to rerun a failed test against the rows its first attempt left.
 - Create per-run-unique data, such as fresh TINs and random UUIDs. Act only on rows the spec created.

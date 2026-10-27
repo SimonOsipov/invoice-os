@@ -277,7 +277,7 @@ describe('bundleManifestLines', () => {
     const assemble = readFileSync(ASSEMBLE_GO, 'utf8')
     expect(assemble, 'assemble.go must still call newCSVEntry').toContain('newCSVEntry')
 
-    const csvEntries = [...assemble.matchAll(/newCSVEntry\("([^"]+)"\)/g)].map((m) => m[1])
+    const csvEntries = [...assemble.matchAll(/newCSVEntry\(dir \+ "([^"]+)"\)/g)].map((m) => m[1])
     expect(csvEntries, 'the five CSV entries must still be found').toHaveLength(5)
 
     const labels = bundleManifestLines(PREVIEW).map((l) => l.label)

@@ -174,7 +174,7 @@ func TestRLS_BlogSubscriptionsAppGrants(t *testing.T) {
 	}
 }
 
-func TestRLS_BlogSubscribersAppMayNotDelete(t *testing.T) {
+func TestRLS_BlogSubscribersAppMayDelete(t *testing.T) {
 	blogSubRequireTables(t)
 	hh := requireHarness(t)
 	ctx := context.Background()
@@ -189,12 +189,12 @@ func TestRLS_BlogSubscribersAppMayNotDelete(t *testing.T) {
 		t.Fatalf("app sees %d seeded subscribers, want 1", n)
 	}
 
-	_, err := hh.app.Exec(ctx, `DELETE FROM public.blog_subscribers WHERE email = $1`, email)
-	if pgCode(err) != pgInsufficientPriv {
-		t.Fatalf("app DELETE subscriber: got %v, want SQLSTATE %s (no DELETE grant)", err, pgInsufficientPriv)
+	tag, err := hh.app.Exec(ctx, `DELETE FROM public.blog_subscribers WHERE email = $1`, email)
+	if err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("app DELETE subscriber: rows=%d err=%v, want 1 row", tag.RowsAffected(), err)
 	}
-	if n := blogSubCount(t, hh.super, blogSubSub, email); n != 1 {
-		t.Fatalf("subscriber rows after refused DELETE = %d, want 1", n)
+	if n := blogSubCount(t, hh.super, blogSubSub, email); n != 0 {
+		t.Fatalf("subscriber rows after DELETE = %d, want 0", n)
 	}
 }
 
@@ -448,7 +448,7 @@ func TestRLS_BlogSubscriptionsKeyModeNotNullAndDefaults(t *testing.T) {
 
 func TestRLS_BlogSubscriptionsOnlyAppHasAccessInTheLiveDatabase(t *testing.T) {
 	blogSubRequireTables(t)
-	blogSubGrantsCase(t, requireHarness(t).super)
+	blogSubGrantsCase(t, requireHarness(t).super, true)
 }
 
 // --- AC-2: Down and Up ---------------------------------------------------------------
@@ -509,7 +509,8 @@ func blogSubPublicTables(t *testing.T, ctx context.Context, tx pgx.Tx) []string 
 	return out
 }
 
-func blogSubGrantsCase(t *testing.T, c contactsConn) {
+// wantSubDelete: the live database holds the erasure migration's DELETE grant; a replay of the blog migration alone does not.
+func blogSubGrantsCase(t *testing.T, c contactsConn, wantSubDelete bool) {
 	t.Helper()
 	for _, g := range []struct {
 		role, table, priv string
@@ -519,7 +520,7 @@ func blogSubGrantsCase(t *testing.T, c contactsConn) {
 		{"invoice_app", blogSubReq, "UPDATE", true}, {"invoice_app", blogSubReq, "DELETE", true},
 		{"invoice_app", blogSubReq, "TRUNCATE", false},
 		{"invoice_app", blogSubSub, "SELECT", true}, {"invoice_app", blogSubSub, "INSERT", true},
-		{"invoice_app", blogSubSub, "UPDATE", true}, {"invoice_app", blogSubSub, "DELETE", false},
+		{"invoice_app", blogSubSub, "UPDATE", true}, {"invoice_app", blogSubSub, "DELETE", wantSubDelete},
 		{"invoice_app", blogSubSub, "TRUNCATE", false},
 		{"invoice_tenant_reader", blogSubReq, "SELECT", false}, {"invoice_tenant_reader", blogSubSub, "SELECT", false},
 		{"invoice_tenant_reader", blogSubReq, "INSERT", false}, {"invoice_tenant_reader", blogSubSub, "INSERT", false},
@@ -592,7 +593,7 @@ func TestRLS_BlogSubscriptionsMigrationUpRestoresWhatDownDropped(t *testing.T) {
 	if after := blogSubPublicTables(t, ctx, tx); !slices.Equal(after, before) {
 		t.Fatalf("public tables after Down/Up = %v, want %v", after, before)
 	}
-	blogSubGrantsCase(t, tx)
+	blogSubGrantsCase(t, tx, false)
 
 	sp := contactsSavepointConn{tx}
 	blogSubEmailCase(t, sp)

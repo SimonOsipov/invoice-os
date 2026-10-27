@@ -21,6 +21,7 @@ const CRUMB_MAP: Record<View, string> = {
   approvals: 'Approvals',
   audit: 'Audit log',
   extraction: 'Extraction review',
+  account: 'Your account',
 }
 
 // Active segment is filled primary; the environment colour lives only on the dot

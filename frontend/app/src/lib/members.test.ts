@@ -13,6 +13,7 @@ import {
   ACCESS_ROLES,
   accessRoleLabel,
   activeAdmins,
+  removeMembership,
   addMembers,
   CAPABILITY_FOOTNOTE,
   CAPABILITY_ROWS,
@@ -1966,6 +1967,37 @@ describe('RESEND-07-02 — INVITE_ADMIN_ONLY', () => {
   })
 })
 
+describe('DEL-02-05 — removeMembership and a removed row', () => {
+  it('removeMembership posts to the remove route', async () => {
+    const af = vi.fn().mockResolvedValue(wire({ status: 'removed', email: null })) as unknown as AuthedFetch
+
+    const got = await removeMembership(af, 'https://gw', 'u1')
+
+    expect(af).toHaveBeenCalledTimes(1)
+    expect(af).toHaveBeenCalledWith('https://gw/api/tenancy/v1/memberships/u1/remove', { method: 'POST' })
+    expect(got.status).toBe('removed')
+  })
+
+  it('removeMembership rethrows a 409 ApiError unreshaped', async () => {
+    const boom = new ApiError('http', 'last admin', 409, { error: 'last admin' })
+    const af = vi.fn().mockRejectedValue(boom) as unknown as AuthedFetch
+
+    await expect(removeMembership(af, 'https://gw', 'u1')).rejects.toBe(boom)
+  })
+
+  it('toMember: a removed row is named, never by email or uuid', () => {
+    const named = toMember(wire({ status: 'removed', display_name: 'Ada', email: null }), SELF_SUBJECT)
+    expect([named.name, named.initials, named.email, named.status]).toEqual(['Ada', 'A', null, 'removed'])
+
+    for (const display_name of [null, '']) {
+      const anon = toMember(wire({ status: 'removed', display_name, email: null }), SELF_SUBJECT)
+      expect([anon.name, anon.initials, anon.email]).toEqual(['Deleted member', 'DM', null])
+    }
+    const leaky = toMember(wire({ status: 'removed', display_name: null, email: 'gone@x.ng' }), SELF_SUBJECT)
+    expect([leaky.name, leaky.email]).toEqual(['Deleted member', null])
+  })
+})
+
 describe('AC-2 — toMember maps the wire row to a Member', () => {
   it('maps the five wire fields to {id, name, email, role, status}', () => {
     const w = wire({
@@ -2125,7 +2157,7 @@ describe('AC-5 — filterMembers and classifyInvites tolerate a null email', () 
 
 describe('AC-7 — MEMBER_UNBACKED', () => {
   it('supplies one distinct, non-empty sentence per unbacked control', () => {
-    const keys = ['remove', 'role', 'department'] as const
+    const keys = ['role', 'department'] as const
     for (const k of keys) expect(MEMBER_UNBACKED[k]).toBeTruthy()
     expect((MEMBER_UNBACKED as Record<string, string>).clientAccess).toBeUndefined()
     const values = keys.map((k) => MEMBER_UNBACKED[k])

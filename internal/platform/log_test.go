@@ -6,6 +6,10 @@ import (
 	"encoding/json"
 	"log/slog"
 	"testing"
+	"time"
+
+	"github.com/getsentry/sentry-go"
+	"github.com/getsentry/sentry-go/attribute"
 )
 
 func TestContextHandlerInjectsIDs(t *testing.T) {
@@ -76,5 +80,29 @@ func TestParseLevel(t *testing.T) {
 		if got := parseLevel(in); got != want {
 			t.Errorf("parseLevel(%q) = %v, want %v", in, got, want)
 		}
+	}
+}
+
+func TestSentryLogBridge_DropsUserDotAttributes(t *testing.T) {
+	mt := filteredClient(t, false)
+	const u = "3f2b8c1e-0000-4000-8000-000000000001"
+	slog.New(sentryLogHandler(slog.LevelDebug)).WarnContext(context.Background(), "probe",
+		slog.String("user.id", u), slog.String("user_id", u))
+	sentry.Flush(time.Second)
+
+	var attrs map[string]attribute.Value
+	for _, e := range mt.captured() {
+		if len(e.Logs) > 0 {
+			attrs = e.Logs[0].Attributes
+		}
+	}
+	if attrs == nil {
+		t.Fatal("no log reached the transport")
+	}
+	if _, ok := attrs["user.id"]; ok {
+		t.Error("user.id reached Sentry Logs")
+	}
+	if got := attrs["user_id"].AsString(); got != u {
+		t.Errorf("user_id = %q, want %q (the control for the rename)", got, u)
 	}
 }

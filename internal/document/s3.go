@@ -64,6 +64,9 @@ func ConfigFromEnv() (Config, error) {
 	return cfg, nil
 }
 
+// maxKeysPerRequest is the S3 cap for both ListObjectsV2 and DeleteObjects.
+const maxKeysPerRequest = 1000
+
 type s3Store struct {
 	client *s3.Client
 	bucket string
@@ -206,4 +209,46 @@ func classifyGet(key string, err error) error {
 		}
 	}
 	return fmt.Errorf("document: get %s: %w", key, err)
+}
+
+func (s *s3Store) List(ctx context.Context, prefix string) ([]string, error) {
+	out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket:  aws.String(s.bucket),
+		Prefix:  aws.String(prefix),
+		MaxKeys: aws.Int32(maxKeysPerRequest),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("document: list %s: %w", prefix, err)
+	}
+	keys := make([]string, 0, len(out.Contents))
+	for _, o := range out.Contents {
+		keys = append(keys, aws.ToString(o.Key))
+	}
+	return keys, nil
+}
+
+func (s *s3Store) DeleteMany(ctx context.Context, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	if len(keys) > maxKeysPerRequest {
+		return fmt.Errorf("document: delete %d keys: more than %d per request", len(keys), maxKeysPerRequest)
+	}
+	ids := make([]types.ObjectIdentifier, len(keys))
+	for i, k := range keys {
+		ids[i] = types.ObjectIdentifier{Key: aws.String(k)}
+	}
+	out, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		Bucket: aws.String(s.bucket),
+		Delete: &types.Delete{Objects: ids, Quiet: aws.Bool(true)},
+	})
+	if err != nil {
+		return fmt.Errorf("document: delete %d keys, first %s: %w", len(keys), keys[0], err)
+	}
+	if len(out.Errors) > 0 {
+		e := out.Errors[0]
+		return fmt.Errorf("document: delete %s: %s (%d of %d keys failed)",
+			aws.ToString(e.Key), aws.ToString(e.Code), len(out.Errors), len(keys))
+	}
+	return nil
 }

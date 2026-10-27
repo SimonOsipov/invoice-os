@@ -5,11 +5,14 @@ package archive
 import (
 	"archive/zip"
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -807,5 +810,150 @@ func TestBundleWriter_HandlesMoreThanUint16Entries(t *testing.T) {
 	r := mustReadZip(t, buf.Bytes())
 	if len(r.File) != n+1 { // +1 manifest.json
 		t.Fatalf("archive has %d entries, want %d (%d bodies + manifest.json)", len(r.File), n+1, n)
+	}
+}
+
+// --- WriteBodyFrom and streamCSV ------------------------------------------------------
+
+func TestBundleWriter_WriteBodyFromRecordsBytesAndSHA256(t *testing.T) {
+	body := make([]byte, 3<<20)
+	if _, err := rand.Read(body); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	bw := newBundleWriter(&buf)
+	if err := bw.WriteBodyFrom("documents/x.pdf", bytes.NewReader(body)); err != nil {
+		t.Fatalf("WriteBodyFrom: %v", err)
+	}
+	if err := bw.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := readEntry(t, mustReadZip(t, buf.Bytes()), "documents/x.pdf"); !bytes.Equal(got, body) {
+		t.Fatal("entry bytes differ from the reader's bytes")
+	}
+	sum := sha256.Sum256(body)
+	e := bw.entries[0]
+	if e.Bytes != 3145728 || e.SHA256 != hex.EncodeToString(sum[:]) || e.Rows != nil {
+		t.Fatalf("manifest entry = %+v", e)
+	}
+}
+
+func TestBundleWriter_WriteBodyEqualsWriteBodyFrom(t *testing.T) {
+	body := []byte("%PDF-1.7 some bytes")
+	var a, b bytes.Buffer
+	wa, wb := newBundleWriter(&a), newBundleWriter(&b)
+	if err := wa.WriteBody("n", body); err != nil {
+		t.Fatal(err)
+	}
+	if err := wb.WriteBodyFrom("n", bytes.NewReader(body)); err != nil {
+		t.Fatal(err)
+	}
+	_ = wa.Close()
+	_ = wb.Close()
+	if !reflect.DeepEqual(wa.entries, wb.entries) {
+		t.Fatalf("manifest entries differ: %+v vs %+v", wa.entries, wb.entries)
+	}
+	if !bytes.Equal(readEntry(t, mustReadZip(t, a.Bytes()), "n"), readEntry(t, mustReadZip(t, b.Bytes()), "n")) {
+		t.Fatal("entry bytes differ")
+	}
+}
+
+type failingReader struct{ sent bool }
+
+func (r *failingReader) Read(p []byte) (int, error) {
+	if r.sent {
+		return 0, errors.New("boom")
+	}
+	r.sent = true
+	return copy(p, make([]byte, 1024)), nil
+}
+
+func TestBundleWriter_AReaderErrorFailsWriteBodyFrom(t *testing.T) {
+	bw := newBundleWriter(&bytes.Buffer{})
+	err := bw.WriteBodyFrom("documents/x", &failingReader{})
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v, want one wrapping boom", err)
+	}
+	if len(bw.entries) != 0 {
+		t.Fatalf("entries = %d, want 0", len(bw.entries))
+	}
+}
+
+func TestBundleWriter_StreamCSVCountsRowsAndHashesTheEntry(t *testing.T) {
+	records := [][]string{{"a", "b"}, {"1", "2"}, {"x,y", "say \"hi\"\nthere"}, {"3", "4"}}
+	var buf bytes.Buffer
+	bw := newBundleWriter(&buf)
+	err := bw.streamCSV("audit_log.csv", func(w csvWriter) error {
+		for _, r := range records {
+			if err := w.Write(r); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("streamCSV: %v", err)
+	}
+	_ = bw.Close()
+	raw := readEntry(t, mustReadZip(t, buf.Bytes()), "audit_log.csv")
+	sum := sha256.Sum256(raw)
+	e := bw.entries[0]
+	if e.Rows == nil || *e.Rows != 3 || e.SHA256 != hex.EncodeToString(sum[:]) || e.Bytes != int64(len(raw)) {
+		t.Fatalf("manifest entry = %+v", e)
+	}
+	got, err := csv.NewReader(bytes.NewReader(raw)).ReadAll()
+	if err != nil || !reflect.DeepEqual(got, records) {
+		t.Fatalf("read back = %v, %v", got, err)
+	}
+}
+
+func TestBundleWriter_StreamCSVHeaderOnlyIsZeroRows(t *testing.T) {
+	var buf bytes.Buffer
+	bw := newBundleWriter(&buf)
+	if err := bw.streamCSV("h.csv", func(w csvWriter) error { return w.Write([]string{"a", "b"}) }); err != nil {
+		t.Fatal(err)
+	}
+	_ = bw.Close()
+	if e := bw.entries[0]; e.Rows == nil || *e.Rows != 0 {
+		t.Fatalf("rows = %v, want 0", e.Rows)
+	}
+	if got := string(readEntry(t, mustReadZip(t, buf.Bytes()), "h.csv")); got != "a,b\n" {
+		t.Fatalf("entry = %q", got)
+	}
+}
+
+func TestBundleWriter_StreamCSVFillErrorAppendsNoEntry(t *testing.T) {
+	bw := newBundleWriter(&bytes.Buffer{})
+	err := bw.streamCSV("h.csv", func(w csvWriter) error {
+		_ = w.Write([]string{"a"})
+		_ = w.Write([]string{"1"})
+		return errors.New("x")
+	})
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if len(bw.entries) != 0 {
+		t.Fatalf("entries = %d, want 0", len(bw.entries))
+	}
+}
+
+func TestBundleWriter_StreamCSVThenWriteBodyReadsInOrder(t *testing.T) {
+	var buf bytes.Buffer
+	bw := newBundleWriter(&buf)
+	if err := bw.streamCSV("a.csv", func(w csvWriter) error { return w.Write([]string{"h"}) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := bw.WriteBody("b.bin", []byte("body")); err != nil {
+		t.Fatal(err)
+	}
+	if err := bw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r := mustReadZip(t, buf.Bytes())
+	if names := entryNames(r); !slices.Equal(names, []string{"a.csv", "b.bin"}) {
+		t.Fatalf("names = %v", names)
+	}
+	if string(readEntry(t, r, "a.csv")) != "h\n" || string(readEntry(t, r, "b.bin")) != "body" {
+		t.Fatal("entry contents wrong")
 	}
 }

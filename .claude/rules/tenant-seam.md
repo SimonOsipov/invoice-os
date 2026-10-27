@@ -13,7 +13,8 @@ paths:
 - Write the `staff_read_` SQL literal inside the `WithinStaffTx` closure. `TestRLS_StaffReadFunctionsAreCalledOnlyInsideWithinStaffTx` fails otherwise.
 - Call `WithinTenantTx` only from a worker, a boot-time seeder, an operator CLI or an exempt method. Each needs an `scCoreAllowlist` entry with a reason.
 - Give a staff route that reads one tenant through `WithinTenantTxOpts` a func-scoped `scCoreAllowlist` entry, as `withinStaffTenant` has.
-- These `tenancy.Store` methods skip the gate: `Me`, `ProvisionWorkspace`, `AcceptInvitation`, `AcceptInvitationByID`, `MyPendingInvitations`, `PreviewInvitation`, `InvitationPendingForEmail`, `ClaimInvitationRegistration` and `ReleaseInvitationRegistration`.
+- These `tenancy.Store` methods skip the gate: `Me`, `ProvisionWorkspace`, `AcceptInvitation`, `AcceptInvitationByID`, `MyPendingInvitations`, `PreviewInvitation`, `InvitationPendingForEmail`, `ClaimInvitationRegistration`, `ReleaseInvitationRegistration`, `CancelWorkspaceDeletion`, `CancelWorkspaceDeletionByLink` and `RecordDeletionLinkDelivery`.
+- `archive.WorkspaceStore.AssembleWorkspace` skips the gate and reads `documents` without `ReadableByScope`. It exports a locked workspace and gates the active admin itself.
 - Call `invitee_account_state` only through `accountState` in `internal/tenancy/store.go`.
 - Call `accountState` only from `PreviewInvitation` and `ListInvitations`, with an address read from an `invitations` row in the same transaction. `TestInviteeAccountStateCalledOnlyByTheStore` fails otherwise.
 - Guard `AcceptInvitationByID` and `MyPendingInvitations` with the email of the identity header only. The caller has no membership.
@@ -23,8 +24,11 @@ paths:
 - Queue the `set_config` statement before the membership SELECT. The SELECT reads through the tenant that `set_config` sets.
 - Refuse a caller with no membership row or an inactive row with `ErrNotActiveMember`.
 - Answer `ErrNotActiveMember` with 403 and `NotActiveMemberMessage`. Never answer 401.
+- Refuse a transaction that is not `READ ONLY` with `ErrWorkspaceLocked` when the caller's workspace is scheduled for deletion. Check it after the membership gate.
+- Answer `ErrWorkspaceLocked` on a tenant route with 403 and `WorkspaceLockedMessage`. The staff re-drive answers 409 with the same constant.
+- Open a read that must serve a locked workspace with `pgx.TxOptions{AccessMode: pgx.ReadOnly}`.
 - Answer 401 only for `ErrNoTenant`. The SPA signs the user out on every 401.
-- Map both `ErrNoTenant` and `ErrNotActiveMember` in every handler error mapper.
+- Map `ErrNoTenant`, `ErrNotActiveMember` and `ErrWorkspaceLocked` in every handler error mapper.
 - Refuse a request with a malformed tenant id with `ErrNoTenant` before the first statement.
 - Skip the membership lookup for a subject that is not a UUID. Only in-process actors reach that arm.
 - Never assert the query plan of the `memberships` status lookup.

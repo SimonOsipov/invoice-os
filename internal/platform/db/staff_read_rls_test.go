@@ -531,9 +531,9 @@ func TestRLS_StaffReaderPrivilegesAreSelectColumnsWithAPolicy(t *testing.T) {
 		}
 	}
 
-	// Column sets per table: tenants is the staff_read_tenants migration's, the next three the tenant-detail migration's, the last two the submission-jobs migration's; audit_log gains id, event, actor and payload from the audit-search migration. ai_calls is the staff_read_ai_calls migration's.
+	// Column sets per table: tenants is the staff_read_tenants migration's plus the two deletion columns of staff_read_tenant_deletions, the next three the tenant-detail migration's, the last two the submission-jobs migration's; audit_log gains id, event, actor and payload from the audit-search migration. ai_calls is the staff_read_ai_calls migration's.
 	for table, cols := range map[string][]string{
-		"public.tenants":                {"created_at", "id", "kind", "name"},
+		"public.tenants":                {"created_at", "deletion_due_at", "deletion_purge_started_at", "id", "kind", "name"},
 		"public.memberships":            {"created_at", "display_name", "email", "role", "status", "tenant_id", "user_id"},
 		"public.invoices":               {"created_at", "id", "invoice_number", "status", "tenant_id"},
 		"public.audit_log":              {"actor", "created_at", "event", "id", "payload", "tenant_id"},
@@ -780,8 +780,8 @@ func TestRLS_StaffReadTenantsDownAndUp(t *testing.T) {
 		t.Fatal("no staff_read_ migration found: no migration holds CREATE FUNCTION public.staff_read_")
 	}
 	member := seedHouseMember(t, "reviewer", "active")
-	if f := readStaffReadFootprint(t); !f.function || !f.policy || !f.isHouseMemberExecute || f.tenantColumnGrants != 4 {
-		t.Fatalf("before the Down: footprint = %+v, want function, policy, is_house_member EXECUTE and 4 tenants column grants", f)
+	if f := readStaffReadFootprint(t); !f.function || !f.policy || !f.isHouseMemberExecute || f.tenantColumnGrants != 6 {
+		t.Fatalf("before the Down: footprint = %+v, want function, policy, is_house_member EXECUTE and 6 tenants column grants", f)
 	}
 
 	reapply := rollBackMigrations(t, staffMigrationProvider(t), versions...)
@@ -790,8 +790,8 @@ func TestRLS_StaffReadTenantsDownAndUp(t *testing.T) {
 	}
 
 	reapply()
-	if f := readStaffReadFootprint(t); !f.function || !f.policy || !f.isHouseMemberExecute || f.tenantColumnGrants != 4 {
-		t.Errorf("after the Up: footprint = %+v, want function, policy, is_house_member EXECUTE and 4 tenants column grants", f)
+	if f := readStaffReadFootprint(t); !f.function || !f.policy || !f.isHouseMemberExecute || f.tenantColumnGrants != 6 {
+		t.Errorf("after the Up: footprint = %+v, want function, policy, is_house_member EXECUTE and 6 tenants column grants", f)
 	}
 	if got := collectStaffTenantRows(t, h.app, member); len(got) == 0 {
 		t.Error("after the Up: staff_read_tenants returned no rows to an active house member")

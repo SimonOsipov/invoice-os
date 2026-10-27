@@ -20,7 +20,7 @@ import type { InvoiceKind, MappingGroup } from './lib/mappingGroups'
 // erased at compile — this file has zero runtime exports. `tsc` is what enforces it
 // (TS1484, from `verbatimModuleSyntax`), NOT the bundler: `vite build` alone erases a
 // value import here and emits a byte-identical bundle.
-import type { Member, MemberStatus } from './lib/members'
+import type { Member, PatchableStatus } from './lib/members'
 // Type-only for the reason the `Member` edge above spells out — `lib/roles.ts` type-imports
 // `lib/members.ts`, which closes the same benign compile-erased loop.
 import type { Role } from './lib/roles'
@@ -174,7 +174,7 @@ export type ValidationResult = {
 
 export type Mode = 'firm' | 'inhouse'
 
-export type View = 'dashboard' | 'invoices' | 'rules' | 'workflows' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings' | 'approvals' | 'audit' | 'extraction'
+export type View = 'dashboard' | 'invoices' | 'rules' | 'workflows' | 'create' | 'detail' | 'clients' | 'customers' | 'reports' | 'settings' | 'approvals' | 'audit' | 'extraction' | 'account'
 
 // 'review' was added by M4-08-04 under its former name (plan B1/DRIFT-1) — one subtask
 // ahead of story §6's original assignment (M4-08-05), because wizardHeader's index-2
@@ -210,7 +210,7 @@ export type Mapping = Record<string, string | null>
 // to the tab strip conditionally on ctx.mode, it is never in the shared SETTINGS_TABS list
 // (data.tsx). A firm workspace already has a dedicated multi-entity portfolio screen
 // (ClientsView); in-house's is single-entity and lives in Settings instead ([entity-picker]).
-export type SettingsTab = 'members' | 'roles' | 'connectors' | 'api' | 'signing' | 'company'
+export type SettingsTab = 'members' | 'roles' | 'connectors' | 'api' | 'signing' | 'company' | 'workspace'
 
 export type ConnectorId = 'sap' | 'quickbooks' | 'oracle' | 'sage' | 'odoo' | 'dynamics'
 
@@ -543,9 +543,11 @@ export type PlatformCtx = {
   // Settings › Members. The ONE membership write the server backs. It resolves once the
   // server's own row has replaced the old one, and REJECTS with the gateway's ApiError
   // unreshaped — the caller renders that message at the control, so nothing here may
-  // swallow it. Remove and access-role writes have no endpoint; their controls ship
-  // disabled with `MEMBER_UNBACKED`'s reason rather than calling a verb that lies.
-  setMemberStatus: (id: string, status: Exclude<MemberStatus, 'invited'>) => Promise<void>
+  // swallow it. Access-role writes have no endpoint; their controls ship disabled with
+  // `MEMBER_UNBACKED`'s reason rather than calling a verb that lies.
+  setMemberStatus: (id: string, status: PatchableStatus) => Promise<void>
+  // Same contract; the server's removed row replaces the old one and roles are refetched.
+  removeMember: (id: string) => Promise<void>
   // Replaces the member's whole client access; same reject-unreshaped contract.
   setMemberClients: (id: string, access: 'all' | readonly string[]) => Promise<void>
   // Settings › Roles. Rename (PATCH) and staffing (PUT /members) are separate server
@@ -557,5 +559,8 @@ export type PlatformCtx = {
   staffRole: (key: string, members: readonly string[]) => Promise<Role>
   deleteRole: (key: string) => Promise<void>
   signOut: () => void
+  // Leaves without the sign-out request: the account and its sessions are gone.
+  accountDeleted: () => void
+  lockWorkspace: (dueAt?: string) => void
   cookieChoices: () => void
 }

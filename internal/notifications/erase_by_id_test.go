@@ -1,0 +1,679 @@
+package notifications
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/riverqueue/river"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth/gotrueadmin"
+)
+
+const eraseByIDKind = "person_erase_by_id" // EraseByIDArgs.Kind
+
+// byIDWorker is the by-id worker on the rig's pool, with the rig's account recorder.
+func (r *eraseRig) byIDWorker() *EraseByIDWorker {
+	return &EraseByIDWorker{Pool: r.e.app, River: r.e.store.river, Account: r.acct, Logger: r.sink.logger()}
+}
+
+func (r *eraseRig) workByID(w *EraseByIDWorker, uid string) error {
+	return w.Work(context.Background(), &river.Job[EraseByIDArgs]{Args: EraseByIDArgs{UserID: uid}})
+}
+
+func (r *eraseRig) byIDJobs(uid string) int {
+	return r.count(`SELECT count(*) FROM river_job WHERE kind = $1 AND args->>'user_id' = $2`, eraseByIDKind, uid)
+}
+
+// seedCopies gives a person a hand-off, a live intake job and a finished one; no contacts row, so the by-id job sweeps itself.
+func (r *eraseRig) seedCopies(uid, email string) (live, done int64) {
+	r.handoff(uid, email)
+	live = r.insertJob(RegistrantArgs{UserID: uid, Email: email})
+	done = r.insertJob(RegistrantArgs{UserID: uid, Email: email})
+	r.setState(done, "completed")
+	return live, done
+}
+
+func (r *eraseRig) copies(uid string) (handoffs, contacts int) {
+	return r.count(`SELECT count(*) FROM registrant_handoffs WHERE user_id = $1`, uid),
+		r.count(`SELECT count(*) FROM contacts WHERE user_id::text = $1`, uid)
+}
+
+func TestEnqueueErasureByID_QueuesInTheCallersTx(t *testing.T) {
+	r := newEraseRig(t)
+	ctx := context.Background()
+	enqueue := func(uid string, commit bool) error {
+		tx, err := r.e.app.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = EnqueueErasureByID(ctx, tx, r.e.store.river, uid)
+		if err != nil || !commit {
+			_ = tx.Rollback(ctx)
+			return err
+		}
+		if cerr := tx.Commit(ctx); cerr != nil {
+			t.Fatal(cerr)
+		}
+		return nil
+	}
+
+	if err := enqueue(r.uid, true); err != nil {
+		t.Fatalf("EnqueueErasureByID: %v", err)
+	}
+	if n := r.byIDJobs(r.uid); n != 1 {
+		t.Fatalf("jobs after commit = %d, want 1", n)
+	}
+	if keys := r.count(`SELECT count(*) FROM river_job, jsonb_object_keys(args) k WHERE kind = $1 AND args->>'user_id' = $2 AND k <> 'user_id'`, eraseByIDKind, r.uid); keys != 0 {
+		t.Errorf("args hold %d keys besides user_id; the job must carry no email", keys)
+	}
+
+	if err := enqueue(r.uid, false); err != nil {
+		t.Fatalf("EnqueueErasureByID in a rolled-back tx: %v", err)
+	}
+	if n := r.byIDJobs(r.uid); n != 1 {
+		t.Errorf("jobs after a rolled-back enqueue = %d, want still 1", n)
+	}
+
+	// Empty InsertOpts: no uniqueness, every committed call queues its own job.
+	if err := enqueue(r.uid, true); err != nil {
+		t.Fatal(err)
+	}
+	if n := r.byIDJobs(r.uid); n != 2 {
+		t.Errorf("jobs after a second committed enqueue = %d, want 2", n)
+	}
+
+	for _, bad := range []string{"not-a-uuid", ""} {
+		if err := enqueue(bad, true); err == nil {
+			t.Errorf("EnqueueErasureByID(%q) = nil, want an error", bad)
+		}
+		if n := r.byIDJobs(bad); n != 0 {
+			t.Errorf("jobs for %q = %d, want 0", bad, n)
+		}
+	}
+}
+
+func TestEraseByID_RemovesTheUserIDKeyedCopiesAndTheAccount(t *testing.T) {
+	r := newEraseRig(t)
+	other, otherMail := r.person()
+	live, done := r.seedCopies(r.uid, r.mail)
+	otherLive, otherDone := r.seedCopies(other, otherMail)
+	running := r.insertJob(RegistrantArgs{UserID: r.uid, Email: r.mail})
+	r.setState(running, "running")
+	if h, _ := r.copies(r.uid); h != 1 {
+		t.Fatalf("control: seeded hand-offs = %d", h)
+	}
+
+	if err := r.workByID(r.byIDWorker(), r.uid); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if h, _ := r.copies(r.uid); h != 0 {
+		t.Errorf("person's hand-offs left: %d", h)
+	}
+	if r.jobExists(live) || r.jobExists(done) {
+		t.Errorf("person's jobs left: live %v, finished %v", r.jobExists(live), r.jobExists(done))
+	}
+	// A running job cannot be deleted; cancelling marks it.
+	if r.count(`SELECT count(*) FROM river_job WHERE id = $1 AND state = 'running' AND metadata ? 'cancel_attempted_at'`, running) != 1 {
+		t.Error("the running job was not marked cancelled")
+	}
+	if h, _ := r.copies(other); h != 1 {
+		t.Errorf("another person's hand-offs = %d, want 1", h)
+	}
+	if !r.jobExists(otherLive) || !r.jobExists(otherDone) {
+		t.Error("another person's jobs were removed")
+	}
+	if r.count(`SELECT count(*) FROM river_job WHERE id = $1 AND state <> 'available'`, otherLive) != 0 {
+		t.Error("another person's live job was cancelled")
+	}
+	if got := r.acct.got(); len(got) != 1 || got[0] != r.uid {
+		t.Errorf("account deletes = %v, want exactly the person's id once", got)
+	}
+}
+
+func TestEraseByID_WritesNoErasureRowAndCallsNoVendor(t *testing.T) {
+	r := newEraseRig(t)
+	other, _ := r.person()
+	r.handoff(r.uid, r.mail)
+	// Email-keyed copies: no email-keyed step runs, so these stay.
+	r.contact(r.mail, nil, 1)
+	r.blog(r.mail, 1)
+	byEmail := r.insertJob(RegistrantArgs{UserID: other, Email: r.mail})
+
+	w := r.byIDWorker()
+	if err := r.workByID(w, r.uid); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if h, _ := r.copies(r.uid); h != 0 {
+		t.Fatal("control: the by-id job did not run its sweep")
+	}
+	if n := r.count(`SELECT count(*) FROM person_erasures WHERE user_id = $1::uuid`, r.uid); n != 0 {
+		t.Errorf("person_erasures rows = %d, want 0", n)
+	}
+	if r.count(`SELECT count(*) FROM contacts WHERE email = $1`, r.mail) != 1 ||
+		r.count(`SELECT count(*) FROM blog_subscribers WHERE email = $1`, r.mail) != 1 || !r.jobExists(byEmail) {
+		t.Error("an email-keyed copy was removed")
+	}
+	// No field can reach a vendor.
+	vendors := []reflect.Type{reflect.TypeOf((*HubSpotEraser)(nil)).Elem(), reflect.TypeOf((*ResendEraser)(nil)).Elem()}
+	st := reflect.TypeOf(*w)
+	for i := 0; i < st.NumField(); i++ {
+		for _, v := range vendors {
+			if ft := st.Field(i).Type; ft.Implements(v) {
+				t.Errorf("EraseByIDWorker.%s implements %v", st.Field(i).Name, v)
+			}
+		}
+	}
+}
+
+func TestEraseByID_WaitsWithoutAnAccountClient(t *testing.T) {
+	r := newEraseRig(t)
+	r.seedCopies(r.uid, r.mail)
+	w := r.byIDWorker()
+	w.Account = nil
+
+	err := r.workByID(w, r.uid)
+	if !errors.Is(err, errAccountOff) {
+		t.Fatalf("Work without a client = %v, want errAccountOff", err)
+	}
+	if h, _ := r.copies(r.uid); h != 0 {
+		t.Errorf("hand-offs left: %d; step 1 must finish before the wait", h)
+	}
+	warns := r.sink.at(slog.LevelWarn)
+	if len(warns) != 1 || !strings.HasSuffix(warns[0].Text, "step="+stepAccount) || strings.Count(warns[0].Text, "=") != 1 {
+		t.Errorf("WARN lines = %+v, want one that carries step=%s only", warns, stepAccount)
+	}
+	if len(r.acct.got()) != 0 {
+		t.Fatal("control: the recorder was called before it was set")
+	}
+
+	w.Account = r.acct
+	if err := r.workByID(w, r.uid); err != nil {
+		t.Fatalf("Work with a client = %v", err)
+	}
+	if got := r.acct.got(); len(got) != 1 || got[0] != r.uid {
+		t.Errorf("account deletes = %v, want the person's id once", got)
+	}
+}
+
+func TestEraseByID_AnAccountFailureLogsTheStatusOnly(t *testing.T) {
+	r := newEraseRig(t)
+	r.seedCopies(r.uid, r.mail)
+	r.acct.fn = func(int, string) error { return &gotrueadmin.StatusError{Status: 500} }
+
+	err := r.workByID(r.byIDWorker(), r.uid)
+	var se *gotrueadmin.StatusError
+	if !errors.As(err, &se) || se.Status != 500 {
+		t.Fatalf("Work = %v, want the account's *StatusError{500}", err)
+	}
+	warns := r.sink.at(slog.LevelWarn)
+	if len(warns) != 1 || !strings.HasSuffix(warns[0].Text, "step="+stepAccount+" status=500") || strings.Count(warns[0].Text, "=") != 2 {
+		t.Fatalf("WARN lines = %+v, want one with exactly step=%s and status=500", warns, stepAccount)
+	}
+	if n := len(r.sink.at(slog.LevelError)); n != 0 {
+		t.Errorf("ERROR lines = %d, want 0 for a 500", n)
+	}
+	qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.uid, r.mail)
+}
+
+func TestEraseByID_ABadIDCancelsTheJob(t *testing.T) {
+	r := newEraseRig(t)
+	err := r.workByID(r.byIDWorker(), "not-a-uuid")
+	var cancel *river.JobCancelError
+	if !errors.As(err, &cancel) {
+		t.Fatalf("Work with a bad id = %v, want river.JobCancel", err)
+	}
+	if len(r.acct.got()) != 0 {
+		t.Error("the account was called for a bad id")
+	}
+}
+
+func TestUsableEraseEmail_MatchesTheEnqueueRule(t *testing.T) {
+	cases := []struct {
+		name, in string
+		want     bool
+	}{
+		{"empty", "", false},
+		{"blank", "  ", false},
+		{"two bytes", "a@", false},
+		{"three bytes", "a@b", true},
+		{"254 bytes", strings.Repeat("a", 254), true},
+		{"255 bytes", strings.Repeat("a", 255), false},
+		{"padded and cased", " Ada@X.test ", true},
+		{"only spaces", "   ", false},
+		{"254 bytes padded", " " + strings.Repeat("a", 254) + " ", true},
+		{"254 bytes in 127 runes", strings.Repeat("é", 127), true},
+		{"256 bytes in 128 runes", strings.Repeat("é", 128), false},
+	}
+	for _, c := range cases {
+		if got := UsableEraseEmail(c.in); got != c.want {
+			t.Errorf("UsableEraseEmail(%s) = %v, want %v", c.name, got, c.want)
+		}
+	}
+
+	t.Run("EnqueueErasure agrees", func(t *testing.T) {
+		e := newEnv(t)
+		ctx := context.Background()
+		for _, c := range cases {
+			tx, err := e.app.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = EnqueueErasure(ctx, tx, e.store.river, uuid.NewString(), c.in)
+			_ = tx.Rollback(ctx)
+			if (err == nil) != c.want {
+				t.Errorf("EnqueueErasure(%s) error = %v, want accepted %v", c.name, err, c.want)
+			}
+		}
+	})
+}
+
+func TestEraseByID_AnUpperCaseIDErasesTheCanonicalPerson(t *testing.T) {
+	r := newEraseRig(t)
+	upper := strings.ToUpper(r.uid)
+	r.handoff(upper, r.mail)
+	live := r.insertJob(RegistrantArgs{UserID: upper, Email: r.mail})
+	r.seedCopies(r.uid, r.mail)
+
+	if err := r.workByID(r.byIDWorker(), upper); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if n := r.count(`SELECT count(*) FROM registrant_handoffs WHERE lower(user_id) = $1`, r.uid); n != 0 {
+		t.Errorf("hand-offs left = %d, want 0 whatever the case of the stored id", n)
+	}
+	if r.jobExists(live) {
+		t.Error("a live job with an upper-case user id survived")
+	}
+	// DeleteUser refuses a non-canonical id; the worker must hand it the canonical one.
+	if got := r.acct.got(); len(got) != 1 || got[0] != r.uid {
+		t.Errorf("account deletes = %v, want the lower-case id once", got)
+	}
+}
+
+func TestEraseByID_TouchesOnlyTheErasableKindsOfThatPerson(t *testing.T) {
+	r := newEraseRig(t)
+	other, otherMail := r.person()
+	// A job of a kind outside eraseKinds that names the person must stay.
+	foreign := r.insertJob(EraseArgs{UserID: r.uid, Generation: 1})
+	// Every non-final and final state of the person's own jobs.
+	var gone []int64
+	for _, st := range []string{"scheduled", "retryable", "cancelled", "discarded"} {
+		id := r.insertJob(RegistrantArgs{UserID: r.uid, Email: r.mail})
+		if st == "scheduled" || st == "retryable" {
+			r.exec(`UPDATE river_job SET state = $2::river_job_state, scheduled_at = now() + interval '1 hour' WHERE id = $1`, id, st)
+		} else {
+			r.setState(id, st)
+		}
+		gone = append(gone, id)
+	}
+	if len(gone) != 4 {
+		t.Fatal("control: seeded jobs")
+	}
+	// The other person: a contact keyed by their id, and a contact of the same shape with no user id.
+	r.contact(otherMail, &other, 1)
+	r.contact(r.mail, nil, 1)
+
+	if err := r.workByID(r.byIDWorker(), r.uid); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	for _, id := range gone {
+		if r.jobExists(id) {
+			t.Errorf("job %d of the person survived", id)
+		}
+	}
+	if !r.jobExists(foreign) {
+		t.Error("a job of a kind outside eraseKinds was deleted")
+	}
+	if r.count(`SELECT count(*) FROM river_job WHERE id = $1 AND state = 'available'`, foreign) != 1 {
+		t.Error("a job of a kind outside eraseKinds was cancelled")
+	}
+	if c := r.count(`SELECT count(*) FROM contacts WHERE email = ANY($1)`, []string{otherMail, r.mail}); c != 2 {
+		t.Errorf("contacts left = %d, want the other person's and the email-keyed one (2)", c)
+	}
+}
+
+func TestEraseByID_ARetryAfterAFailedAccountStepIsIdempotent(t *testing.T) {
+	r := newEraseRig(t)
+	other, otherMail := r.person()
+	r.seedCopies(r.uid, r.mail)
+	otherLive, _ := r.seedCopies(other, otherMail)
+	r.acct.fn = func(n int, _ string) error {
+		if n == 1 {
+			return &gotrueadmin.StatusError{Status: 503}
+		}
+		return nil
+	}
+	w := r.byIDWorker()
+
+	if err := r.workByID(w, r.uid); err == nil {
+		t.Fatal("first attempt: want the account's error")
+	}
+	if h, _ := r.copies(r.uid); h != 0 {
+		t.Errorf("after the failed attempt: %d hand-offs left", h)
+	}
+	for i := 2; i <= 3; i++ {
+		if err := r.workByID(w, r.uid); err != nil {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+	}
+	if got := r.acct.got(); len(got) != 3 {
+		t.Errorf("account deletes = %v, want one per attempt", got)
+	}
+	if h, _ := r.copies(other); h != 1 || !r.jobExists(otherLive) {
+		t.Errorf("another person's copies after the retries = %d hand-offs", h)
+	}
+}
+
+func TestEraseByID_AFailedContactsReadSkipsTheAccountAndLeaksNothing(t *testing.T) {
+	r := newEraseRig(t)
+	r.seedCopies(r.uid, r.mail)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := r.byIDWorker().Work(ctx, &river.Job[EraseByIDArgs]{Args: EraseByIDArgs{UserID: r.uid}})
+	if err == nil {
+		t.Fatal("Work with a dead context = nil, want an error")
+	}
+	if len(r.acct.got()) != 0 {
+		t.Error("the account was deleted although step 1 failed")
+	}
+	warns := r.sink.at(slog.LevelWarn)
+	if len(warns) != 1 || !strings.HasSuffix(warns[0].Text, "step="+stepSweep+" status=0") {
+		t.Errorf("WARN lines = %+v, want one with step=%s status=0", warns, stepSweep)
+	}
+	qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.uid, r.mail)
+}
+
+func TestEraseByID_ACopyWrittenAfterTheFirstSweepFailsTheAttemptAndIsSwept(t *testing.T) {
+	r := newEraseRig(t)
+	other, otherMail := r.person()
+	r.contact(otherMail, &other, 1)
+	// A running intake job writes the person's contact while the account is deleted.
+	r.acct.fn = func(n int, _ string) error {
+		if n == 1 {
+			r.contact(r.mail, &r.uid, 1)
+		}
+		return nil
+	}
+	w := r.byIDWorker()
+
+	err := r.workByID(w, r.uid)
+	if !errors.Is(err, errCameBack) {
+		t.Fatalf("Work = %v, want errCameBack so River retries", err)
+	}
+	if _, c := r.copies(r.uid); c != 0 {
+		t.Errorf("contacts of the person after the final sweep = %d, want 0", c)
+	}
+	if _, c := r.copies(other); c != 1 {
+		t.Errorf("another person's contacts = %d, want 1", c)
+	}
+	warns := r.sink.at(slog.LevelWarn)
+	if len(warns) != 1 || !strings.HasSuffix(warns[0].Text, "step="+stepFinal) {
+		t.Errorf("WARN lines = %+v, want one with step=%s", warns, stepFinal)
+	}
+	qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.uid, r.mail)
+
+	if err := r.workByID(w, r.uid); err != nil {
+		t.Errorf("retry with nothing left: %v, want nil", err)
+	}
+}
+
+func TestEraseByID_AFailedFinalSweepFailsTheAttemptAndLogsTheStepOnly(t *testing.T) {
+	r := newEraseRig(t)
+	r.seedCopies(r.uid, r.mail)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// The account call succeeds, then the context dies before the final sweep.
+	r.acct.fn = func(int, string) error { cancel(); return nil }
+
+	err := r.byIDWorker().Work(ctx, &river.Job[EraseByIDArgs]{Args: EraseByIDArgs{UserID: r.uid}})
+	if err == nil {
+		t.Fatal("Work with a failed final sweep = nil, want an error so River retries")
+	}
+	if len(r.acct.got()) != 1 {
+		t.Fatalf("control: account deletes = %v, want 1", r.acct.got())
+	}
+	warns := r.sink.at(slog.LevelWarn)
+	if len(warns) != 1 || !strings.HasSuffix(warns[0].Text, "step="+stepFinal+" status=0") {
+		t.Errorf("WARN lines = %+v, want one with step=%s status=0", warns, stepFinal)
+	}
+	qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.uid, r.mail)
+}
+
+func (r *eraseRig) erasureJobs(uid string) []string {
+	rows, err := r.e.app.Query(context.Background(), `SELECT args->>'user_id' || '|' || (args->>'generation') FROM river_job WHERE kind = $1 AND args->>'user_id' = $2`, EraseArgs{}.Kind(), uid)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			r.t.Fatal(err)
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func TestEraseByID_AContactsRowHandsOffToTheNormalErasure(t *testing.T) {
+	r := newEraseRig(t)
+	other, otherMail := r.person()
+	r.contact(r.mail, &r.uid, 1)
+	r.contact(otherMail, &other, 1)
+	live, _ := r.seedCopies(r.uid, r.mail)
+
+	err := r.workByID(r.byIDWorker(), r.uid)
+	var sn *river.JobSnoozeError
+	if !errors.As(err, &sn) || sn.Duration != 30*time.Second {
+		t.Fatalf("Work = %v, want a snooze of 30s", err)
+	}
+
+	if n := r.count(`SELECT count(*) FROM river_job WHERE kind = $1 AND args->>'user_id' = $2 AND args ? 'email'`, EraseArgs{}.Kind(), r.uid); n != 0 {
+		t.Fatal("the erase job must not carry the email")
+	}
+	if jobs := r.erasureJobs(r.uid); len(jobs) != 1 {
+		t.Fatalf("person_erase jobs = %v, want 1", jobs)
+	}
+	if n := r.count(`SELECT count(*) FROM person_erasures WHERE user_id = $1::uuid AND email = $2`, r.uid, r.mail); n != 1 {
+		t.Errorf("person_erasures rows for the contact's email = %d, want 1", n)
+	}
+	if _, c := r.copies(r.uid); c != 1 {
+		t.Errorf("contacts rows of the person = %d, want 1 until the erasure runs", c)
+	}
+	if len(r.acct.got()) != 0 {
+		t.Error("the by-id job deleted the account; the erasure owns it")
+	}
+	if r.count(`SELECT count(*) FROM person_erasures WHERE user_id = $1::uuid`, other) != 0 || r.erasureJobs(other) != nil {
+		t.Error("another person was queued for erasure")
+	}
+	if _, c := r.copies(other); c != 1 {
+		t.Errorf("another person's contacts = %d, want 1", c)
+	}
+	if !r.jobExists(live) {
+		t.Error("the intake job was removed by the by-id job; the erasure's sweep owns it")
+	}
+
+	// The queued erasure removes what the by-id sweep used to.
+	if err := r.work(r.row(r.uid).Gen); err != nil {
+		t.Fatalf("erasure: %v", err)
+	}
+	if h, c := r.copies(r.uid); h != 0 || c != 0 || r.jobExists(live) {
+		t.Errorf("after the erasure: %d hand-offs, %d contacts, live job kept %v", h, c, r.jobExists(live))
+	}
+	if got := r.acct.got(); len(got) != 1 || got[0] != r.uid {
+		t.Errorf("account deletes = %v, want the person's id once", got)
+	}
+}
+
+func TestEraseByID_TheQueuedErasureSurvivesTheSweep(t *testing.T) {
+	r := newEraseRig(t)
+	w := r.byIDWorker()
+	r.contact(r.mail, &r.uid, 1)
+	if err := r.workByID(w, r.uid); !isSnooze(err) {
+		t.Fatalf("Work = %v, want a snooze", err)
+	}
+	// A retry (or a no-row run) sweeps the person's jobs; the queued erasure must stay live.
+	if _, err := w.sweepTx(context.Background(), r.uid); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if n := r.count(`SELECT count(*) FROM river_job WHERE kind = $1 AND args->>'user_id' = $2 AND state = 'available'`, EraseArgs{}.Kind(), r.uid); n != 1 {
+		t.Errorf("live person_erase jobs after the sweep = %d, want 1", n)
+	}
+}
+
+func isSnooze(err error) bool {
+	var sn *river.JobSnoozeError
+	return errors.As(err, &sn)
+}
+
+func TestEraseByID_TwoContactsRowsAreErasedOneAfterTheOther(t *testing.T) {
+	r := newEraseRig(t)
+	a, b := "a-"+r.mail, "b-"+r.mail
+	r.contact(a, &r.uid, 1)
+	r.contact(b, &r.uid, 1)
+	r.track(a, r.uid)
+	r.track(b, r.uid)
+	w := r.byIDWorker()
+
+	if err := r.workByID(w, r.uid); !isSnooze(err) {
+		t.Fatalf("first Work = %v, want a snooze", err)
+	}
+	if n := r.count(`SELECT count(*) FROM person_erasures WHERE user_id = $1::uuid AND email = $2`, r.uid, a); n != 1 {
+		t.Fatalf("first erasure not for a: %d", n)
+	}
+	// Unfinished erasure: snooze, queue nothing.
+	if err := r.workByID(w, r.uid); !isSnooze(err) {
+		t.Fatalf("Work during an erasure = %v, want a snooze", err)
+	}
+	if jobs := r.erasureJobs(r.uid); len(jobs) != 1 {
+		t.Fatalf("person_erase jobs during an erasure = %v, want 1", jobs)
+	}
+
+	if err := r.work(r.row(r.uid).Gen); err != nil {
+		t.Fatalf("erasure of a: %v", err)
+	}
+	if !r.row(r.uid).Fin {
+		t.Fatal("control: the erasure of a did not finish")
+	}
+	if err := r.workByID(w, r.uid); !isSnooze(err) {
+		t.Fatalf("Work after a = %v, want a snooze", err)
+	}
+	if n := r.count(`SELECT count(*) FROM person_erasures WHERE user_id = $1::uuid AND email = $2`, r.uid, b); n != 1 {
+		t.Fatalf("second erasure not for b: %d", n)
+	}
+	if err := r.work(r.row(r.uid).Gen); err != nil {
+		t.Fatalf("erasure of b: %v", err)
+	}
+	if err := r.workByID(w, r.uid); err != nil {
+		t.Fatalf("Work with no contacts row = %v, want nil", err)
+	}
+	if _, c := r.copies(r.uid); c != 0 {
+		t.Errorf("contacts rows left = %d, want 0", c)
+	}
+}
+
+func TestEraseByID_AnAddressAnotherAccountHoldsStillEndsTheHandOff(t *testing.T) {
+	r := newEraseRig(t)
+	other, _ := r.person()
+	r.contact(r.mail, &r.uid, 1)
+	r.handoff(other, r.mail)
+	w := r.byIDWorker()
+
+	if err := r.workByID(w, r.uid); !isSnooze(err) {
+		t.Fatalf("Work = %v, want a snooze", err)
+	}
+	if err := r.work(r.row(r.uid).Gen); err != nil {
+		t.Fatalf("erasure: %v", err)
+	}
+	if !r.row(r.uid).Superseded {
+		t.Fatal("control: the erasure did not see the other account on the address")
+	}
+	if _, c := r.copies(r.uid); c != 0 {
+		t.Fatalf("contacts rows left = %d, the hand-off would repeat", c)
+	}
+	if h, _ := r.copies(other); h != 1 {
+		t.Errorf("the other account's hand-off = %d, want 1", h)
+	}
+	if err := r.workByID(w, r.uid); err != nil {
+		t.Errorf("Work after the erasure = %v, want nil", err)
+	}
+}
+
+func TestEraseByID_ContactsOffStillEndsTheHandOff(t *testing.T) {
+	r := newEraseRig(t)
+	r.w.HubSpot, r.w.Resend = nil, nil
+	r.contact(r.mail, &r.uid, 1)
+	w := r.byIDWorker()
+
+	if err := r.workByID(w, r.uid); !isSnooze(err) {
+		t.Fatalf("Work = %v, want a snooze", err)
+	}
+	if err := r.work(r.row(r.uid).Gen); !errors.Is(err, errContactsOff) {
+		t.Fatalf("erasure = %v, want errContactsOff", err)
+	}
+	if _, c := r.copies(r.uid); c != 0 {
+		t.Fatalf("contacts rows left = %d, the hand-off would repeat", c)
+	}
+	if err := r.workByID(w, r.uid); err != nil {
+		t.Errorf("Work with the vendor step waiting = %v, want nil", err)
+	}
+}
+
+func TestEraseByID_AFinishedEarlierErasureDoesNotBlockANewHandOff(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	if err := r.work(gen); err != nil || !r.row(r.uid).Fin {
+		t.Fatalf("control: first erasure err=%v finished=%v", err, r.row(r.uid).Fin)
+	}
+	again := "again-" + r.mail
+	r.track(again, r.uid)
+	r.contact(again, &r.uid, 1)
+
+	if err := r.workByID(r.byIDWorker(), r.uid); !isSnooze(err) {
+		t.Fatalf("Work = %v, want a snooze", err)
+	}
+	row := r.row(r.uid)
+	if row.Fin || row.Gen != gen+1 || row.Email == nil || *row.Email != again {
+		t.Fatalf("erasure row after the hand-off: %+v, want unfinished generation %d for the contact's email", row, gen+1)
+	}
+	if err := r.work(row.Gen); err != nil {
+		t.Fatalf("erasure: %v", err)
+	}
+	if _, c := r.copies(r.uid); c != 0 {
+		t.Errorf("contacts rows left = %d, want 0", c)
+	}
+}
+
+func TestEraseByID_AFailedSweepSkipsTheAccountAndLeaksNothing(t *testing.T) {
+	r := newEraseRig(t)
+	r.seedCopies(r.uid, r.mail)
+	fn := "qa_refuse_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	r.exec(`CREATE FUNCTION ` + fn + `() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$`)
+	r.exec(`CREATE TRIGGER ` + fn + ` BEFORE DELETE ON registrant_handoffs FOR EACH ROW WHEN (OLD.user_id = '` + r.uid + `') EXECUTE FUNCTION ` + fn + `()`)
+	t.Cleanup(func() {
+		r.exec(`DROP TRIGGER IF EXISTS ` + fn + ` ON registrant_handoffs`)
+		r.exec(`DROP FUNCTION IF EXISTS ` + fn + `()`)
+	})
+
+	err := r.workByID(r.byIDWorker(), r.uid)
+	if err == nil {
+		t.Fatal("Work with a refused delete = nil, want an error")
+	}
+	if len(r.acct.got()) != 0 {
+		t.Error("the account was deleted although the sweep failed")
+	}
+	warns := r.sink.at(slog.LevelWarn)
+	if len(warns) != 1 || !strings.HasSuffix(warns[0].Text, "step="+stepSweep+" status=0") {
+		t.Errorf("WARN lines = %+v, want one with step=%s status=0", warns, stepSweep)
+	}
+	qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.uid, r.mail)
+}

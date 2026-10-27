@@ -538,3 +538,34 @@ func TestHistory_OrdinaryTransitionsHaveNoCause(t *testing.T) {
 		}
 	}
 }
+
+func TestHistory_NamesARemovedActorDeleted(t *testing.T) {
+	super, app := dbTestPools(t)
+	fx := seedNamedInvoice(t, super, app, "DEL-02-04-REMOVED", "Ada Obi")
+	if _, err := fx.store.Transition(fx.ctx, fx.invID, StatusValidated); err != nil {
+		t.Fatalf("Transition: %v", err)
+	}
+	if _, err := super.Exec(context.Background(),
+		`UPDATE memberships SET status = 'removed', email = NULL WHERE tenant_id = $1 AND user_id = $2`,
+		fx.tenantID, fx.subject); err != nil {
+		t.Fatalf("remove the actor: %v", err)
+	}
+
+	// A removed member cannot read; an active colleague does.
+	reader := uuid.NewString()
+	seedMembershipNamed(t, super, fx.tenantID, reader, "Reader")
+	rctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: reader, Role: "authenticated", TenantID: fx.tenantID})
+
+	got, err := fx.store.History(rctx, fx.invID)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("History returned %d rows, want 2", len(got))
+	}
+	for i, sc := range got {
+		if sc.ActorName != "Ada Obi (deleted)" || sc.ActorKind != kindPerson {
+			t.Errorf("got[%d] = %q/%q, want %q/%q", i, sc.ActorName, sc.ActorKind, "Ada Obi (deleted)", kindPerson)
+		}
+	}
+}

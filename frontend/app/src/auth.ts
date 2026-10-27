@@ -92,7 +92,7 @@ export const supportBase = (): string | null => {
 export type TenantKind = 'firm' | 'in_house'
 
 export interface Me {
-  tenant: { id: string; name: string; kind: TenantKind }
+  tenant: { id: string; name: string; kind: TenantKind; deletion_due_at?: string | null }
   user: { id: string; role: string; display_name: string | null; email: string | null }
 }
 

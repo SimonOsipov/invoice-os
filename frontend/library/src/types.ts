@@ -1,5 +1,5 @@
 export type ViewId = 'create' | 'invoices' | 'rules' | 'approvals' | 'workflows' | 'dashboard'
-  | 'reports' | 'audit' | 'clients' | 'customers' | 'settings'
+  | 'reports' | 'audit' | 'clients' | 'customers' | 'settings' | 'account'
 export type SceneKind = 'list' | 'form' | 'flow' | 'feed' | 'metrics' | 'toggles'
 export type RowStatus = 'new' | 'valid' | 'draft' | 'cleared' | 'pending' | 'sent' | 'ready'
   | 'progress' | 'none' | 'approved' | 'error' | 'failed' | 'rejected'

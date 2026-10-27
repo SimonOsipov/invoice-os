@@ -778,6 +778,41 @@ describe('setInvitationToken and inviteWithToken', () => {
     }
   })
 
+  it('setDeletionLinkToken posts the three fields and resolves on 204', async () => {
+    const { setDeletionLinkToken } = await import('./client')
+    const stub = stubFetchSequence({ status: 204 })
+
+    await expect(setDeletionLinkToken(TENANT, INVITATION, TOKEN)).resolves.toBeUndefined()
+
+    const [url, init] = stub.mock.calls[0] as unknown as [string, { method: string; body: string }]
+    expect(url.endsWith('/auth/mock/deletion-link-token')).toBe(true)
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ tenant_id: TENANT, user_id: INVITATION, token: TOKEN })
+  })
+
+  it('setDeletionLinkToken throws on every answer but 204', async () => {
+    const { setDeletionLinkToken } = await import('./client')
+    for (const status of [200, 400, 404, 502]) {
+      stubFetchSequence({ status, body: { error: 'refused' } })
+      const err = await captureRejection(setDeletionLinkToken(TENANT, INVITATION, TOKEN))
+      expect(err.message, String(status)).toContain(String(status))
+    }
+  })
+
+  it('cancelDeletionByLink posts the token with the session', async () => {
+    const { cancelDeletionByLink } = await import('./client')
+    const stub = stubFetchSequence({ status: 403, body: { error: 'refused' } })
+
+    const res = await cancelDeletionByLink('session-token', TOKEN)
+
+    expect(res.status).toBe(403)
+    const [url, init] = stub.mock.calls[0] as unknown as [string, { method: string; body: string; headers: Record<string, string> }]
+    expect(url.endsWith('/api/tenancy/v1/workspace/deletion/cancel-by-link')).toBe(true)
+    expect(init.method).toBe('POST')
+    expect(init.headers.Authorization).toBe('Bearer session-token')
+    expect(JSON.parse(init.body)).toEqual({ token: TOKEN })
+  })
+
   it('inviteWithToken invites, seeds a 43-character token on the invite it created and returns it', async () => {
     const { inviteWithToken } = await import('./client')
     const stub = stubFetchSequence({ status: 200, body: { invitations: [{ id: INVITATION }] } }, { status: 204 })

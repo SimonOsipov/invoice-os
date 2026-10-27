@@ -78,6 +78,7 @@ export const UNITS: Unit[] = [
   {
     name: 'ui-surfaces',
     specs: [
+      'account-deletion.spec.ts',
       'app-consent.spec.ts',
       'app-shell.spec.ts',
       'blog-editor.spec.ts',
@@ -86,6 +87,8 @@ export const UNITS: Unit[] = [
       'ops-console.spec.ts',
       'overview-register-approvals.spec.ts',
       'portfolio.spec.ts',
+      'staff-deletion.spec.ts',
+      'workspace-deletion.spec.ts',
     ],
     tenants: {
       firm: '11111111-1111-1111-1111-00000000e2e4',

@@ -135,7 +135,7 @@ func buildPlanCorpus(f *fixture) (planFixture, error) {
 	}
 
 	for _, tenant := range tenants {
-		// tenants is SELECT-only for invoice_app, so the tenant row goes in as the owner.
+		// the tenant row goes in as the owner.
 		if err := db.WithinTenantTx(ctx, f.mig, tenant, func(tx pgx.Tx) error {
 			_, e := tx.Exec(ctx, `INSERT INTO tenants (id, name) VALUES ($1, $2)`,
 				tenant, "audit-plan-"+tenant[:8])

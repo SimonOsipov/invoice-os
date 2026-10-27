@@ -61,6 +61,12 @@ func pgCode(err error) string {
 	return ""
 }
 
+// Admit runs the request seam's gate and lock check and nothing else, so a caller can refuse
+// before an object Put.
+func (s *Store) Admit(ctx context.Context) error {
+	return db.WithinRequestTenantTx(ctx, s.pool, func(pgx.Tx) error { return nil })
+}
+
 // Upsert inserts one documents row, or resolves the existing one when this
 // tenant already holds the same content hash, and writes document.created or
 // document.reused in the SAME transaction. tenant_id comes from the caller's

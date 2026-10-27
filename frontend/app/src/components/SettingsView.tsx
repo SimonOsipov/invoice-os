@@ -36,6 +36,7 @@ import { FieldMappingModal } from './FieldMappingModal'
 import type { Entity } from '../lib/portfolio'
 import { MembersView } from './MembersView'
 import { RolesView } from './RolesView'
+import { WorkspaceSettings } from './WorkspaceSettings'
 import type { ConnectorId, PlatformCtx, SettingsTab } from '../types'
 
 // The repo has no :disabled rule; filter:none stops .v2-btn-primary:hover repainting a dead button.
@@ -196,6 +197,8 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
 
       {/* Roles */}
       {settingsTab === 'roles' && <RolesView ctx={ctx} />}
+
+      {settingsTab === 'workspace' && <WorkspaceSettings ctx={ctx} />}
 
       {/* Connector detail — replaces the list while a connector is open */}
       {settingsTab === 'connectors' && openDef && (

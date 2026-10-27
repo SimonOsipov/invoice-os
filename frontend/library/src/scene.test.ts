@@ -127,8 +127,22 @@ describe('scene', () => {
         kinds.add(s.kind)
       }
     }
-    expect(FEATURES).toHaveLength(26)
+    expect(FEATURES).toHaveLength(28)
     expect(kinds.size).toBe(6)
+  })
+
+  it('sceneState_deleteWorkspaceFlowWalksItsNodes', () => {
+    const sc = feat('delete-workspace').sc
+    const nodes = (i: number) => {
+      const s = sceneState(sc, i)
+      return s.kind === 'flow' ? s.nodes.map((n) => n.state) : []
+    }
+    expect([0, 1, 2, 3].map(nodes)).toEqual([
+      ['active', 'todo', 'todo', 'todo'],
+      ['done', 'active', 'todo', 'todo'],
+      ['done', 'done', 'active', 'todo'],
+      ['done', 'done', 'done', 'active'],
+    ])
   })
 
   it('thumbStep_isThePrototypePickOrTheLastStep', () => {

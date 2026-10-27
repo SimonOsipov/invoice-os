@@ -23,7 +23,7 @@ const consentText = "Allow marketing communications: ASComply Africa may email m
 type env struct {
 	store *Store
 	app   *pgxpool.Pool // invoice_app: what the service runs as
-	admin *pgxpool.Pool // superuser: cleanup only (invoice_app cannot DELETE contacts)
+	admin *pgxpool.Pool // superuser: cleanup only
 }
 
 // newEnv skips without DB env, like internal/tenancy's DB tests.

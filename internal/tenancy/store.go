@@ -3,6 +3,7 @@ package tenancy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -22,7 +24,10 @@ import (
 // so RLS enforces isolation — through db.WithinRequestTenantTx, except Me and
 // ProvisionWorkspace, which are exempt from that seam's membership gate.
 type Store struct {
-	pool *pgxpool.Pool
+	pool       *pgxpool.Pool
+	eraseQueue *river.Client[pgx.Tx]
+	// afterStaffCheck runs between the staff tenant check and the write; tests only.
+	afterStaffCheck func()
 }
 
 // NewStore wraps the app-role connection pool. The caller owns the pool's lifecycle.
@@ -30,8 +35,8 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// Me returns the caller's tenant (id, name, kind) and their own membership
-// (role, display name, email), both resolved under RLS: SELECT id, name, kind FROM
+// Me returns the caller's tenant (id, name, kind, deletion due date) and their own membership
+// (role, display name, email), both resolved under RLS: SELECT id, name, kind, deletion_due_at FROM
 // tenants (bare — the app.current_tenant GUC is the filter, not a WHERE clause)
 // then SELECT role, display_name, email FROM memberships WHERE user_id = $1
 // (identity.Subject — RLS scopes the row set to the current tenant). It reads no
@@ -53,7 +58,7 @@ func (s *Store) Me(ctx context.Context) (Tenant, MeUser, error) {
 	var t Tenant
 	var me MeUser
 	err := db.WithinTenantTx(ctx, s.pool, id.TenantID, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `SELECT id, name, kind FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT id, name, kind, deletion_due_at FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind, &t.DeletionDueAt); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrTenantNotFound
 			}
@@ -76,7 +81,7 @@ func (s *Store) Me(ctx context.Context) (Tenant, MeUser, error) {
 	return t, me, nil
 }
 
-// workspaceNamespace keys uuidv5(subject): one self-provisioned workspace per identity.
+// workspaceNamespace keys uuidv5(subject).
 var workspaceNamespace = uuid.MustParse("83584a9e-a526-4186-9fbb-508011cac1cc")
 
 // ProvisionWorkspace creates the caller's workspace and its first active admin
@@ -94,7 +99,7 @@ func (s *Store) ProvisionWorkspace(ctx context.Context, in ProvisionInput) (Tena
 	if err != nil {
 		return Tenant{}, "", db.ErrNoTenant
 	}
-	// uuid.Parse accepts several spellings; hash the canonical one so each identity gets one workspace.
+	// uuid.Parse accepts several spellings; hash the canonical one.
 	subject := parsed.String()
 	tenantID := uuid.NewSHA1(workspaceNamespace, []byte(subject)).String()
 
@@ -104,17 +109,40 @@ func (s *Store) ProvisionWorkspace(ctx context.Context, in ProvisionInput) (Tena
 		kind = "in_house"
 	}
 
+	t, err := s.provisionAttempt(ctx, tenantID, in, kind, subject, caller)
+	var conflict *provisionConflict
+	if errors.As(err, &conflict) && conflict.constraint == "tenants_pkey" {
+		held, perr := s.holdsRemovedRow(ctx, tenantID, subject)
+		if perr != nil {
+			return Tenant{}, "", fmt.Errorf("tenancy: probe removed row: %w", perr)
+		}
+		if held {
+			// A removed creator's old workspace holds the derived id; take a random one.
+			t, err = s.provisionAttempt(ctx, uuid.NewString(), in, kind, subject, caller)
+		}
+	}
+	if errors.As(err, &conflict) {
+		return Tenant{}, "", ErrAlreadyProvisioned
+	}
+	if err != nil {
+		return Tenant{}, "", err
+	}
+	return t, subject, nil
+}
+
+// provisionAttempt runs provision_workspace in tenantID's scope. The caller has no
+// membership yet, so the gated seam would refuse before the closure; exempt like Me
+// (TestRLS_UngatedCoreIsWorkerAndExemptionOnly).
+func (s *Store) provisionAttempt(ctx context.Context, tenantID string, in ProvisionInput, kind, subject string, caller auth.Identity) (Tenant, error) {
 	var t Tenant
-	// The caller has no membership yet, so the gated seam would refuse before
-	// the closure; exempt like Me (TestRLS_UngatedCoreIsWorkerAndExemptionOnly).
-	err = db.WithinTenantTx(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
+	err := db.WithinTenantTx(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT public.provision_workspace($1, $2, $3, $4, $5, $6)`,
 			tenantID, in.WorkspaceName, kind, subject, in.DisplayName, nullIfEmpty(caller.Email),
 		); err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == "23505" &&
 				(pgErr.ConstraintName == "tenants_pkey" || pgErr.ConstraintName == "one_workspace_per_identity") {
-				return ErrAlreadyProvisioned
+				return &provisionConflict{constraint: pgErr.ConstraintName}
 			}
 			return err
 		}
@@ -125,10 +153,22 @@ func (s *Store) ProvisionWorkspace(ctx context.Context, in ProvisionInput) (Tena
 			"tenant_id": t.ID, "user_id": subject, "name": t.Name, "kind": t.Kind,
 		})
 	})
-	if err != nil {
-		return Tenant{}, "", err
-	}
-	return t, subject, nil
+	return t, err
+}
+
+// provisionConflict is a provision_workspace unique violation, kept until the retry decision.
+type provisionConflict struct{ constraint string }
+
+func (e *provisionConflict) Error() string { return "tenancy: provision conflict on " + e.constraint }
+
+// holdsRemovedRow reports whether subject holds a removed row in tenantID.
+func (s *Store) holdsRemovedRow(ctx context.Context, tenantID, subject string) (bool, error) {
+	var found bool
+	err := db.WithinTenantTx(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = $1 AND status = 'removed')`, subject).Scan(&found)
+	})
+	return found, err
 }
 
 // nullIfEmpty sends "" as SQL NULL.
@@ -191,7 +231,7 @@ func (s *Store) ListMemberships(ctx context.Context) ([]MemberAccess, error) {
 // Both statements are bare of any tenant_id clause — RLS scopes them, so a
 // cross-tenant target is simply absent from the result.
 //
-// Guards run in this order: target missing -> target invited -> already at the
+// Guards run in this order: target missing -> target invited -> target removed -> already at the
 // requested status (200 no-op, no UPDATE, no audit) -> last active admin. The
 // no-op must precede the last-admin guard, or re-suspending an already-suspended
 // sole admin would 409 a request that changes nothing.
@@ -207,48 +247,11 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 		// Guaranteed present: WithinRequestTenantTx resolved it before this ran.
 		caller, _ := auth.IdentityFromContext(ctx)
 
-		var callerRole string
-		if err := tx.QueryRow(ctx,
-			`SELECT role FROM memberships WHERE user_id = $1 AND status = 'active'`, caller.Subject,
-		).Scan(&callerRole); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotPermitted
-			}
+		if err := requireActiveAdminCaller(ctx, tx, caller.Subject, ErrNotPermitted); err != nil {
 			return err
 		}
-		if callerRole != "admin" {
-			return ErrNotPermitted
-		}
-
-		// is_target is computed by Postgres so which row is the target never
-		// depends on the text form of a uuid agreeing between SQL and Go.
-		rows, err := tx.Query(ctx,
-			`SELECT user_id, role, status, display_name, email, user_id = $1 AS is_target
-			   FROM memberships
-			  WHERE user_id = $1 OR (role = 'admin' AND status = 'active')
-			  ORDER BY user_id
-			    FOR UPDATE`, userID)
+		locked, targetIdx, err := lockTargetAndAdmins(ctx, tx, userID)
 		if err != nil {
-			return err
-		}
-		var locked []Membership
-		targetIdx := -1
-		for rows.Next() {
-			var m Membership
-			var isTarget bool
-			if err := rows.Scan(&m.UserID, &m.Role, &m.Status, &m.DisplayName, &m.Email, &isTarget); err != nil {
-				rows.Close()
-				return err
-			}
-			if isTarget {
-				targetIdx = len(locked)
-			}
-			locked = append(locked, m)
-		}
-		// Closed explicitly rather than deferred: the UPDATE below reuses this
-		// transaction's connection.
-		rows.Close()
-		if err := rows.Err(); err != nil {
 			return err
 		}
 
@@ -258,6 +261,9 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 		target := locked[targetIdx]
 		if target.Status == "invited" {
 			return ErrInvitedNotTransitionable
+		}
+		if target.Status == "removed" {
+			return ErrRemovedNotTransitionable
 		}
 		if target.Status == status {
 			return readTarget(ctx, tx, target.UserID, &updated)
@@ -303,6 +309,119 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 		return MemberAccess{}, err
 	}
 	return updated, nil
+}
+
+// requireActiveAdminCaller reads the caller's role first, unlocked and taking no
+// target, so a non-admin is refused alike for every target
+// (TestMembership_PermissionCheckedBeforeRowRead). notPermitted is the refusal.
+func requireActiveAdminCaller(ctx context.Context, tx pgx.Tx, subject string, notPermitted error) error {
+	var role string
+	if err := tx.QueryRow(ctx,
+		`SELECT role FROM memberships WHERE user_id = $1 AND status = 'active'`, subject,
+	).Scan(&role); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notPermitted
+		}
+		return err
+	}
+	if role != "admin" {
+		return notPermitted
+	}
+	return nil
+}
+
+// lockTargetAndAdmins locks the target and every active admin in user_id order,
+// so the last-admin guard runs over rows no concurrent writer can move
+// (TestMembership_ConcurrentLastTwoAdmins). targetIdx is -1 when the target is
+// absent. No tenant_id clause: RLS scopes it.
+func lockTargetAndAdmins(ctx context.Context, tx pgx.Tx, userID string) (locked []Membership, targetIdx int, err error) {
+	rows, err := tx.Query(ctx,
+		`SELECT user_id, role, status, display_name, email, user_id = $1 AS is_target
+		   FROM memberships
+		  WHERE user_id = $1 OR (role = 'admin' AND status = 'active')
+		  ORDER BY user_id
+		    FOR UPDATE`, userID)
+	if err != nil {
+		return nil, -1, err
+	}
+	defer rows.Close()
+	targetIdx = -1
+	for rows.Next() {
+		var m Membership
+		var isTarget bool
+		if err := rows.Scan(&m.UserID, &m.Role, &m.Status, &m.DisplayName, &m.Email, &isTarget); err != nil {
+			return nil, -1, err
+		}
+		if isTarget {
+			targetIdx = len(locked)
+		}
+		locked = append(locked, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, -1, err
+	}
+	return locked, targetIdx, nil
+}
+
+// RemoveMember ends a member's access: active-admin caller, target exists, already removed
+// (idempotent), last admin; then endMembership and a membership.removed audit row in one transaction.
+func (s *Store) RemoveMember(ctx context.Context, userID string) (MemberAccess, error) {
+	var removed MemberAccess
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		caller, _ := auth.IdentityFromContext(ctx)
+		if err := requireActiveAdminCaller(ctx, tx, caller.Subject, ErrRemoveNotPermitted); err != nil {
+			return err
+		}
+		locked, targetIdx, err := lockTargetAndAdmins(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		if targetIdx < 0 {
+			return ErrMembershipNotFound
+		}
+		target := locked[targetIdx]
+		if target.Status == "removed" {
+			return readTarget(ctx, tx, target.UserID, &removed)
+		}
+		if target.Role == "admin" && target.Status == "active" {
+			others := 0
+			for i, m := range locked {
+				if i != targetIdx && m.Role == "admin" && m.Status == "active" {
+					others++
+				}
+			}
+			if others == 0 {
+				return ErrLastActiveAdmin
+			}
+		}
+		if err := endMembership(ctx, tx, target.UserID); err != nil {
+			return err
+		}
+		if err := audit.Record(ctx, tx, caller.Subject, "membership.removed", map[string]any{
+			"user_id": target.UserID,
+			"from":    target.Status,
+		}); err != nil {
+			return err
+		}
+		return readTarget(ctx, tx, target.UserID, &removed)
+	})
+	if err != nil {
+		return MemberAccess{}, err
+	}
+	return removed, nil
+}
+
+// endMembership writes the removed end state. Role and display_name stay.
+func endMembership(ctx context.Context, tx pgx.Tx, userID string) error {
+	if _, err := tx.Exec(ctx,
+		`UPDATE memberships SET status = 'removed', email = NULL, all_clients = false WHERE user_id = $1`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM membership_clients WHERE user_id = $1`, userID); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `DELETE FROM workflow_role_members WHERE user_id = $1`, userID)
+	return err
 }
 
 // readTarget reads one member's row with its client access into dst.
@@ -366,7 +485,7 @@ func accountState(ctx context.Context, tx pgx.Tx, email string) (string, error) 
 // AcceptInvitation joins the caller to the invite's workspace with the invited
 // role and audits it in one transaction. It returns the tenant, the canonical
 // subject and the role. The caller may be tenant-bearing or tenant-less.
-func (s *Store) AcceptInvitation(ctx context.Context, token string) (Tenant, string, string, error) {
+func (s *Store) AcceptInvitation(ctx context.Context, token string, displayName *string) (Tenant, string, string, error) {
 	caller, ok := auth.IdentityFromContext(ctx)
 	if !ok {
 		caller, ok = auth.TenantlessCallerFromContext(ctx)
@@ -396,8 +515,8 @@ func (s *Store) AcceptInvitation(ctx context.Context, token string) (Tenant, str
 	}
 
 	return s.acceptInTenant(ctx, tenantID, subject,
-		`SELECT invitation_id, role FROM public.accept_invitation($1, $2, $3, $4)`,
-		tenantID, token, subject, caller.Email)
+		`SELECT invitation_id, role FROM public.accept_invitation($1, $2, $3, $4, $5)`,
+		tenantID, token, subject, caller.Email, displayName)
 }
 
 // acceptInTenant runs the accept call in the invite's tenant scope, reads the
@@ -407,6 +526,13 @@ func (s *Store) acceptInTenant(ctx context.Context, tenantID, subject, query str
 	var role string
 	// The caller has no membership in this tenant yet, so the gated seam would refuse.
 	err := db.WithinTenantTx(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
+		locked, err := db.WorkspaceLocked(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if locked {
+			return ErrInvitationNotValid
+		}
 		var id string
 		if err := tx.QueryRow(ctx, query, args...).Scan(&id, &role); err != nil {
 			var pgErr *pgconn.PgError
@@ -472,18 +598,30 @@ func joinCaller(ctx context.Context) (subject, email string, err error) {
 	return parsed.String(), email, nil
 }
 
-// MyPendingInvitations lists the live invites for the caller's email, soonest expiry first.
-func (s *Store) MyPendingInvitations(ctx context.Context) ([]PendingInvite, error) {
+// MyInvitations is the GET /v1/invitations/mine body: the live invites and
+// whether the caller holds a removed membership and no other.
+type MyInvitations struct {
+	Invitations []PendingInvite `json:"invitations"`
+	Removed     bool            `json:"removed"`
+}
+
+// MyPendingInvitations lists the live invites for the caller's email, soonest
+// expiry first, and says whether the caller was removed from a workspace and holds
+// no other membership. The removed flag is read by subject, so it also answers for an empty email.
+func (s *Store) MyPendingInvitations(ctx context.Context) (MyInvitations, error) {
 	subject, email, err := joinCaller(ctx)
 	if err != nil {
-		return nil, err
+		return MyInvitations{}, err
 	}
-	if email == "" {
-		return []PendingInvite{}, nil
-	}
-	out := []PendingInvite{}
+	out := MyInvitations{Invitations: []PendingInvite{}}
 	// The email filter and the function's membership filter are the guard.
 	err = db.WithinTenantTx(ctx, s.pool, uuid.Nil.String(), func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT public.identity_has_removed_membership($1)`, subject).Scan(&out.Removed); err != nil {
+			return err
+		}
+		if email == "" {
+			return nil
+		}
 		rows, err := tx.Query(ctx,
 			`SELECT invitation_id, workspace, role, inviter, expires_at
 			   FROM public.pending_invites_for_email($1, $2)`, email, subject)
@@ -496,12 +634,12 @@ func (s *Store) MyPendingInvitations(ctx context.Context) ([]PendingInvite, erro
 			if err := rows.Scan(&p.ID, &p.Workspace, &p.Role, &p.Inviter, &p.ExpiresAt); err != nil {
 				return err
 			}
-			out = append(out, p)
+			out.Invitations = append(out.Invitations, p)
 		}
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, err
+		return MyInvitations{}, err
 	}
 	return out, nil
 }
@@ -509,7 +647,7 @@ func (s *Store) MyPendingInvitations(ctx context.Context) ([]PendingInvite, erro
 // AcceptInvitationByID joins the caller to the tenant of invite id with the
 // invited role and audits it in one transaction. The invite must be addressed
 // to the caller's email; every other id answers ErrInvitationNotValid.
-func (s *Store) AcceptInvitationByID(ctx context.Context, id string) (Tenant, string, string, error) {
+func (s *Store) AcceptInvitationByID(ctx context.Context, id string, displayName *string) (Tenant, string, string, error) {
 	subject, email, err := joinCaller(ctx)
 	if err != nil {
 		return Tenant{}, "", "", err
@@ -535,6 +673,6 @@ func (s *Store) AcceptInvitationByID(ctx context.Context, id string) (Tenant, st
 	}
 
 	return s.acceptInTenant(ctx, tenantID, subject,
-		`SELECT invitation_id, role FROM public.accept_invitation_by_id($1, $2, $3, $4)`,
-		tenantID, invID.String(), subject, email)
+		`SELECT invitation_id, role FROM public.accept_invitation_by_id($1, $2, $3, $4, $5)`,
+		tenantID, invID.String(), subject, email, displayName)
 }

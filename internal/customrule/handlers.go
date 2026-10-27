@@ -135,6 +135,8 @@ func fail(w http.ResponseWriter, r *http.Request, log *slog.Logger, err error) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 	case errors.Is(err, db.ErrNotActiveMember):
 		writeError(w, http.StatusForbidden, db.NotActiveMemberMessage)
+	case errors.Is(err, db.ErrWorkspaceLocked):
+		writeError(w, http.StatusForbidden, db.WorkspaceLockedMessage)
 	case errors.Is(err, ErrNotPermitted):
 		writeError(w, http.StatusForbidden, "only a workspace admin can change custom rules")
 	case errors.As(err, &ie):

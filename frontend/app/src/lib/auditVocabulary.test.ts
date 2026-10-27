@@ -58,11 +58,19 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'membership.suspended',
     'membership.reactivated',
     'membership.client_access_set',
+    'membership.removed',
     'workspace.provisioned',
     'invitation.sent',
     'invitation.resent',
     'invitation.accepted',
     'invitation.revoked',
+    'workspace.deletion_scheduled',
+    'workspace.deletion_cancelled',
+    'workspace.purge_started',
+    'workspace.exported',
+    'workspace.export_failed',
+    'membership.account_deleted',
+    'membership.admin_handed_on',
   ],
   validation: [
     'validation.rule.enabled',
@@ -158,7 +166,14 @@ describe('audit vocabulary', () => {
       'extraction.field_corrected',
       'extraction.anchor.learned',
       'workspace.provisioned',
+      'workspace.deletion_scheduled',
+      'workspace.deletion_cancelled',
+      'workspace.exported',
+      'workspace.export_failed',
+      'membership.account_deleted',
+      'membership.admin_handed_on',
       'membership.client_access_set',
+      'membership.removed',
       'invitation.sent',
       'invitation.resent',
       'invitation.accepted',
@@ -203,6 +218,41 @@ describe('audit vocabulary', () => {
     expect(AUDIT_EVENTS['membership.client_access_set'].outcome).toBe('neutral')
     expect(view.tone).toBe('amber')
     expect(auditEventView('submission.failed').tone).not.toBeNull()
+  })
+
+  it('auditVocabulary: membership.removed reads Member removed', () => {
+    const view = auditEventView('membership.removed')
+    expect(view.domain).toBe('memberships')
+    expect(view.label).toBe('Member removed')
+    expect(AUDIT_EVENTS['membership.removed']?.outcome).toBe('neutral')
+    expect(view.tone).toBe('amber')
+  })
+
+  it('auditVocabulary: workspace and account deletion events read as labelled', () => {
+    for (const [id, label] of [
+      ['workspace.deletion_scheduled', 'Workspace deletion scheduled'],
+      ['workspace.deletion_cancelled', 'Workspace deletion cancelled'],
+      ['workspace.purge_started', 'Workspace purge started'],
+      ['workspace.exported', 'Workspace exported'],
+      ['membership.account_deleted', 'Account deleted'],
+      ['membership.admin_handed_on', 'Admin handed on'],
+    ]) {
+      const view = auditEventView(id)
+      expect(view.domain, `${id} must be a labelled memberships event`).toBe('memberships')
+      expect(view.label).toBe(label)
+      expect(AUDIT_EVENTS[id]?.outcome).toBe('neutral')
+      expect(view.tone).toBe('amber')
+    }
+    // Control: an outcome-bearing sibling keeps its own tone.
+    expect(auditEventView('submission.failed').tone).toBe('red')
+  })
+
+  it('auditVocabulary: workspace.export_failed reads Workspace export failed', () => {
+    const view = auditEventView('workspace.export_failed')
+    expect(view.domain).toBe('memberships')
+    expect(view.label).toBe('Workspace export failed')
+    expect(AUDIT_EVENTS['workspace.export_failed']?.outcome).toBe('bad')
+    expect(view.tone).toBe('red')
   })
 
   it('auditVocabulary_workspaceProvisionedIsLabelledInMemberships', () => {

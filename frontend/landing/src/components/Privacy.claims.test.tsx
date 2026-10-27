@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { AI_PROVIDER_HOST, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
+import { AI_PROVIDER_HOST, APP_LABELS, BACKUP_DAYS, DELETED_MARK, DELETION_GRACE_DAYS, EXPORT_LABELS, FILE_RECOVERY_DAYS, HOSTING_REGION, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { Footer } from './Footer'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
@@ -23,6 +23,40 @@ import { APP_HOSTNAMES, PRODUCTION_HOSTNAMES } from '../hubspot'
 import { BLOG_BASE, LIBRARY_BASE } from '../sitePaths'
 import {
   aiModelVendors,
+  anyAdminCancels,
+  cancelRefusedOnceThePurgeStarted,
+  deleteAccountEndsMembershipAndQueuesErasureInOneTx,
+  deleteAccountRefusedWhileLocked,
+  deleteWorkspaceDialogNeedsTypedName,
+  deletionNoticeShowsDateAndSignOut,
+  appLabels,
+  DELETION_SENTENCES,
+  deletedFallback,
+  deletedMark,
+  endMembershipDropsEmail,
+  eraseAsksHubSpotToDeleteContactAndDeals,
+  eraseAsksResendToDeleteContact,
+  eraseDeletesBlogSubscription,
+  eraseDeletesRegistrationCopies,
+  eraseDeletesSigninAccount,
+  exportCoversAllTime,
+  exportLabels,
+  exportZipEntries,
+  dialogStartsExportAndAsksTick,
+  noticeOffersExportToAdmins,
+  graceDays,
+  gotrueVersion,
+  nothingPrunesSigninAuditLog,
+  signinScanFiles,
+  staffLogEntryFacts,
+  migrationUps,
+  staffLogIsAppendOnly,
+  lockRefusesWrites,
+  purgeDeletesFilesThenRows,
+  purgeErasesEveryNonRemovedMember,
+  readSource,
+  resolveMarksRemovedMembers,
+  workspaceExportIsMerged,
   aiProviderHosts,
   confirmLinkIsSingleUseAndExpires,
   confirmOverwritesSubscriber,
@@ -38,6 +72,7 @@ import {
   BLOG_CHAT_PARAGRAPH,
   resubscribeReplacesRequest,
   rulePutsUnsubscribeInEveryBroadcast,
+  sidebarOpensAccountPage,
   syncBlogAddsSegmentAndTopic,
   workerNamesHubSpot,
 } from './privacyCodeFacts.test.util'
@@ -814,5 +849,322 @@ describe("HEALTH-07: the sign-in service's reports", () => {
     const sentry = sentences(para).find((s) => s.includes('Sentry error report')) ?? ''
     expect(sentry, 'control: the Sentry sentence is missing').not.toBe('')
     expect(sentry).not.toMatch(/delete|days|months/i)
+  })
+})
+
+describe('DEL-10-01: APP_LABELS are the labels the app renders', () => {
+  it('DEL-10-01 APP_LABELS equal the labels the app renders', () => {
+    expect(appLabels()).toEqual(APP_LABELS)
+  })
+
+  it('DEL-10-01 appLabels throws when a label moves', () => {
+    const src = {
+      account: "export const DELETE_ACCOUNT = { title: 'Delete my account' } as const",
+      workspace: '',
+      data: '',
+      glyphs: '',
+    }
+    expect(() => appLabels(src)).toThrow(/ACCOUNT_PAGE title not found/)
+  })
+
+  it('DEL-10-01 the sidebar name card opens Your account', () => {
+    expect(sidebarOpensAccountPage()).toBe(true)
+  })
+
+  it('DEL-10-01 control: sidebarOpensAccountPage is false when the card opens another page', () => {
+    const planted = `<button type="button" onClick={() => ctx.nav('settings')} data-testid="identity-card-account" aria-label="Your account">`
+    expect(sidebarOpensAccountPage(planted)).toBe(false)
+  })
+})
+
+describe('DEL-10-02: the account section states the deletion rules', () => {
+  const sentence = (id: string): string => DELETION_SENTENCES.find((x) => x.id === id)!.text
+  const swap = (rel: string, from: string | RegExp, to: string): string => {
+    const src = readSource(rel)
+    const out = src.replace(from, to)
+    expect(out, `the planted edit missed ${rel}`).not.toBe(src)
+    return out
+  }
+  const ADMIN = 'internal/platform/auth/gotrueadmin/gotrueadmin.go'
+  const VENDOR = 'internal/notifications/vendor_erase.go'
+  const ERASE = 'internal/notifications/erase.go'
+
+  it('DEL-10-02 A3 the erasure deletes the sign-in account by a hard delete', () => {
+    expect(eraseDeletesSigninAccount()).toBe(true)
+  })
+
+  it('DEL-10-02 control: a soft delete is not a hard delete', () => {
+    const planted = swap(ADMIN, 'c.call(ctx, http.MethodDelete, userID)', 'c.call(ctx, http.MethodDelete, userID, `{"should_soft_delete":true}`)')
+    expect(eraseDeletesSigninAccount(readSource(ERASE), planted)).toBe(false)
+  })
+
+  it('DEL-10-02 A3 the HubSpot step deletes the contact and its deals', () => {
+    expect(eraseAsksHubSpotToDeleteContactAndDeals()).toBe(true)
+    expect(eraseAsksHubSpotToDeleteContactAndDeals(swap(VENDOR, '/associations/deals', '/associations/notes'))).toBe(false)
+  })
+
+  it('DEL-10-02 A3 the Resend step deletes the contact', () => {
+    expect(eraseAsksResendToDeleteContact()).toBe(true)
+    const planted = swap(VENDOR, /http\.MethodDelete, r\.baseURL\+"\/contacts\/"/, 'http.MethodGet, r.baseURL+"/contacts/"')
+    expect(eraseAsksResendToDeleteContact(planted)).toBe(false)
+  })
+
+  it('DEL-10-02 A3 the sweep deletes the Blog subscription and the registration copies', () => {
+    expect(eraseDeletesBlogSubscription()).toBe(true)
+    expect(eraseDeletesRegistrationCopies()).toBe(true)
+    expect(eraseDeletesBlogSubscription(swap(ERASE, 'blog_subscription_requests WHERE', 'blog_other WHERE'))).toBe(false)
+    expect(eraseDeletesRegistrationCopies(swap(ERASE, 'DELETE FROM registrant_handoffs', 'DELETE FROM other'))).toBe(false)
+  })
+
+  it('DEL-10-02 A4 the mark and the fallback are the ones the history renders', () => {
+    expect(deletedMark()).toBe(DELETED_MARK)
+    expect(deletedFallback()).toBe('Deleted member')
+    expect(sentence('A4')).toContain(DELETED_MARK)
+    expect(sentence('A4')).toContain(deletedFallback())
+  })
+
+  it('DEL-10-02 A4 the history resolves a removed member through RemovedName', () => {
+    expect(resolveMarksRemovedMembers()).toBe(true)
+    expect(resolveMarksRemovedMembers(swap('internal/actor/resolve.go', 'out[subject] = RemovedName(displayName)', 'out[subject] = Name(displayName, email, subject)'))).toBe(false)
+  })
+
+  it('DEL-10-02 A4 the membership drops the email', () => {
+    expect(endMembershipDropsEmail()).toBe(true)
+    expect(endMembershipDropsEmail(swap('internal/tenancy/store.go', "SET status = 'removed', email = NULL,", "SET status = 'removed',"))).toBe(false)
+  })
+
+  it('DEL-10-02 A6 the number of days is the triggers', () => {
+    expect(graceDays()).toBe(DELETION_GRACE_DAYS)
+    expect(sentence('A6')).toContain(`${DELETION_GRACE_DAYS} days`)
+  })
+
+  it('DEL-10-02 A6 a later redefinition of the guard changes the days', () => {
+    const redefined = `-- +goose Up\nCREATE OR REPLACE FUNCTION public.tenants_deletion_guard() RETURNS trigger AS $$ BEGIN NEW.deletion_due_at := NEW.deletion_scheduled_at + interval '14 days'; RETURN NEW; END $$ LANGUAGE plpgsql;\n-- +goose Down\nSELECT 1;`
+    expect(graceDays([...migrationUps(), redefined])).toBe(14)
+    expect(graceDays([...migrationUps(), redefined, '-- +goose Up\n-- CREATE OR REPLACE FUNCTION tenants_deletion_guard() $$ interval \'9 days\' $$'])).toBe(14)
+  })
+
+  it('DEL-10-02 A6 a member cannot delete their own account while the workspace is locked', () => {
+    const AD = 'internal/tenancy/account_deletion.go'
+    expect(sentence('A6')).toContain('While it is locked, a member cannot delete their own account.')
+    expect(deleteAccountRefusedWhileLocked()).toBe(true)
+    const readOnly = swap(AD, 'db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {', 'db.WithinRequestTenantTxOpts(ctx, s.pool, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {')
+    expect(deleteAccountRefusedWhileLocked(readOnly)).toBe(false)
+    const tenant = readSource('internal/platform/db/tenant.go')
+    expect(deleteAccountRefusedWhileLocked(readSource(AD), tenant.replace('return ErrWorkspaceLocked', 'return nil'))).toBe(false)
+  })
+
+  it('DEL-10-02 A6 the lock refuses writes and any admin cancels', () => {
+    expect(lockRefusesWrites()).toBe(true)
+    expect(anyAdminCancels()).toBe(true)
+    const planted = swap('internal/tenancy/workspace_deletion.go', 'if role != "admin" {', 'if role != "admin" || id.Subject != "deletion_scheduled_by" {')
+    expect(anyAdminCancels(planted)).toBe(false)
+    const bypass = swap('internal/tenancy/workspace_deletion.go', 'return s.cancelScheduledDeletion(ctx, &token)', 'return s.cancelByLinkAnyone(ctx, token)')
+    expect(anyAdminCancels(bypass)).toBe(false)
+  })
+
+  it('DEL-10-02 A6 the purge deletes files before rows and erases every non-removed member', () => {
+    expect(purgeDeletesFilesThenRows()).toBe(true)
+    expect(purgeErasesEveryNonRemovedMember()).toBe(true)
+    const src = readSource('internal/workspacepurge/purge.go')
+    const swapped = src.replace('document.DeleteTenantObjects(', 'p.purgeRows(ctx, tenantID, members, objects); document.DeleteTenantObjects(')
+    expect(purgeDeletesFilesThenRows(swapped)).toBe(false)
+    expect(purgeErasesEveryNonRemovedMember(swap('internal/workspacepurge/purge.go', "status <> 'removed'", "status = 'active'"))).toBe(false)
+  })
+
+  it('DEL-10-02 A2 the membership ends and the erasure is queued in one transaction', () => {
+    expect(sentence('A2')).toContain('your place in it ends at once and we queue the erasure')
+    expect(deleteAccountEndsMembershipAndQueuesErasureInOneTx()).toBe(true)
+    const AD = 'internal/tenancy/account_deletion.go'
+    expect(deleteAccountEndsMembershipAndQueuesErasureInOneTx(swap(AD, 'notifications.EnqueueErasure(ctx, tx,', 'notifications.EnqueueErasure(ctx, s.pool,'))).toBe(false)
+    expect(deleteAccountEndsMembershipAndQueuesErasureInOneTx(swap(AD, 'endMembership(ctx, tx, caller.Subject)', 'endMembership(ctx, tx, heirUserID)'))).toBe(false)
+    expect(deleteAccountEndsMembershipAndQueuesErasureInOneTx(swap(AD, 'db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {', 'func(tx pgx.Tx) error {'))).toBe(false)
+  })
+
+  it('DEL-10-02 A5 the admin types the workspace name to confirm', () => {
+    const DLG = 'frontend/app/src/components/DeleteWorkspaceDialog.tsx'
+    const LIB = 'frontend/app/src/lib/workspaceDeletion.ts'
+    expect(sentence('A5')).toContain('types the workspace name to confirm')
+    expect(deleteWorkspaceDialogNeedsTypedName()).toBe(true)
+    expect(deleteWorkspaceDialogNeedsTypedName(swap(DLG, 'disabled={!canConfirm}', 'disabled={pending}'))).toBe(false)
+    const onInput = readSource(DLG).replace('disabled={!canConfirm}', 'disabled={pending}').replace('<input', '<input disabled={!canConfirm}')
+    expect(onInput).toContain('<input disabled={!canConfirm}')
+    expect(deleteWorkspaceDialogNeedsTypedName(onInput)).toBe(false)
+    expect(deleteWorkspaceDialogNeedsTypedName(swap(DLG, 'nameMatches(typed, name) && !pending', '!pending'))).toBe(false)
+    expect(deleteWorkspaceDialogNeedsTypedName(readSource(DLG), swap(LIB, 'return typed === name', 'return true'))).toBe(false)
+  })
+
+  it('DEL-10-02 A6 members see the date and can sign out', () => {
+    const NOTICE = 'frontend/app/src/components/WorkspaceDeletionNotice.tsx'
+    expect(sentence('A6')).toContain('Members see the date it will be deleted and can sign out')
+    expect(deletionNoticeShowsDateAndSignOut()).toBe(true)
+    expect(deletionNoticeShowsDateAndSignOut(swap(NOTICE, 'deletionNoticeBody(formatDueDate(dueAt)', "deletionNoticeBody(''"))).toBe(false)
+    expect(deletionNoticeShowsDateAndSignOut(swap(NOTICE, 'onClick={onSignOut}', 'onClick={cancel}'))).toBe(false)
+    expect(deletionNoticeShowsDateAndSignOut(swap(NOTICE, '{isAdmin && (', '{isAdmin && (\n<button onClick={onSignOut} />'))).toBe(false)
+  })
+
+  it('DEL-10-02 A6 a cancel is refused once the purge started', () => {
+    const WD = 'internal/tenancy/workspace_deletion.go'
+    expect(sentence('A6')).toContain(`Any admin can cancel the deletion until the ${DELETION_GRACE_DAYS} days end`)
+    expect(cancelRefusedOnceThePurgeStarted()).toBe(true)
+    expect(cancelRefusedOnceThePurgeStarted(swap(WD, 'return ErrDeletionUnderway', 'return err'))).toBe(false)
+    const relaxed = '-- +goose Up\nCREATE OR REPLACE FUNCTION public.tenants_purge_guard() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql;\n-- +goose Down\nSELECT 1;'
+    expect(cancelRefusedOnceThePurgeStarted(readSource(WD), readSource('internal/tenancy/tenancy.go'), [...migrationUps(), relaxed])).toBe(false)
+    expect(cancelRefusedOnceThePurgeStarted(readSource(WD), swap('internal/tenancy/tenancy.go', 'case errors.Is(err, ErrDeletionUnderway):\n\t\treturn http.StatusConflict', 'case errors.Is(err, ErrDeletionUnderway):\n\t\treturn http.StatusBadRequest'))).toBe(false)
+  })
+
+  // The page says "export" if and only if the export is merged.
+  const exportClaimMatches = (merged: boolean, text: string): boolean => merged === /\bexport/i.test(text)
+
+  it('DEL-10-02 the page mentions the export iff the export is merged', () => {
+    const account = DELETION_SENTENCES.filter((x) => /^[AE]/.test(x.id)).map((x) => x.text).join(' ')
+    expect(workspaceExportIsMerged()).toBe(true)
+    expect(exportClaimMatches(workspaceExportIsMerged(), account)).toBe(true)
+    expect(exportClaimMatches(false, account)).toBe(false)
+    expect(exportClaimMatches(true, account.replace(/export/gi, 'copy'))).toBe(false)
+  })
+})
+
+describe('DEL-10-04: the export sentence states what the merged code backs', () => {
+  const e1 = (): string => DELETION_SENTENCES.find((x) => x.id === 'E1')!.text
+  const swap = (rel: string, from: string | RegExp, to: string): string => {
+    const src = readSource(rel)
+    const out = src.replace(from, to)
+    expect(out, `the planted edit missed ${rel}`).not.toBe(src)
+    return out
+  }
+  const WS = 'internal/archive/workspace.go'
+  const DLG = 'frontend/app/src/components/DeleteWorkspaceDialog.tsx'
+  const NOTICE = 'frontend/app/src/components/WorkspaceDeletionNotice.tsx'
+
+  it("DEL-10-04 the export contents are the ZIP's", () => {
+    const entries = exportZipEntries()
+    expect(entries).toEqual(['companies/', 'documents/', 'audit_log.csv'])
+    expect(exportZipEntries(swap(WS, 'bw.WriteBodyFrom("documents/"', 'bw.WriteBodyFrom("files/"'))).not.toContain('documents/')
+    expect(exportZipEntries(swap(WS, 'bw.streamCSV("audit_log.csv"', 'bw.streamCSV("log.csv"'))).not.toContain('audit_log.csv')
+    expect(exportZipEntries(swap(WS, '"companies/"+dir', '"entities/"+dir'))).not.toContain('companies/')
+    expect(e1()).toContain('evidence bundle of every company')
+    expect(e1()).toContain('every original uploaded document')
+    expect(e1()).toContain('the audit log')
+    expect(e1()).toContain('one ZIP file')
+  })
+
+  it('DEL-10-04 the ZIP covers all time, every company and every document', () => {
+    expect(exportCoversAllTime()).toBe(true)
+    expect(e1()).toContain('over all time')
+    expect(exportCoversAllTime(swap(WS, 'req := allTime', 'req := Request{}'))).toBe(false)
+    expect(exportCoversAllTime(swap(WS, 'FROM business_entities ORDER BY', "FROM business_entities WHERE tin <> '' ORDER BY"))).toBe(false)
+    expect(exportCoversAllTime(swap(WS, '` ORDER BY created_at, id LIMIT $1`', '` WHERE filename IS NOT NULL ORDER BY created_at, id LIMIT $1`'))).toBe(false)
+    expect(exportCoversAllTime(swap(WS, '"_" + now.UTC().Format("20060102") + ".zip"', '"_" + now.UTC().Format("20060102") + ".tar"'))).toBe(false)
+  })
+
+  it('DEL-10-04 the export labels equal the app\'s', () => {
+    expect(exportLabels()).toEqual(EXPORT_LABELS)
+    expect(e1()).toContain(`${EXPORT_LABELS.button} starts`)
+    expect(e1()).toContain(`“${EXPORT_LABELS.tick}”`)
+    expect(exportLabels(swap('frontend/app/src/lib/workspaceExport.ts', "button: 'Download export'", "button: 'Export all'"))).not.toEqual(EXPORT_LABELS)
+    expect(exportLabels(swap('frontend/app/src/lib/workspaceExport.ts', "tick: 'I downloaded the export'", "tick: 'Done'"))).not.toEqual(EXPORT_LABELS)
+  })
+
+  it('DEL-10-04 the dialog starts the export and the confirm waits on the tick', () => {
+    expect(dialogStartsExportAndAsksTick()).toBe(true)
+    expect(dialogStartsExportAndAsksTick(swap(DLG, 'canConfirm = exported && ', 'canConfirm = '))).toBe(false)
+    expect(dialogStartsExportAndAsksTick(swap(DLG, 'onClick={exp.start}', 'onClick={confirm}'))).toBe(false)
+    expect(dialogStartsExportAndAsksTick(swap(DLG, 'checked={exported}', 'checked={pending}'))).toBe(false)
+  })
+
+  it('DEL-10-04 the locked notice offers the export to admins only', () => {
+    expect(noticeOffersExportToAdmins()).toBe(true)
+    expect(e1()).toContain('the notice offers the admin')
+    expect(noticeOffersExportToAdmins(swap(NOTICE, '{isAdmin && (\n              <button\n                onClick={exp.start}', '{(\n              <button\n                onClick={exp.start}'))).toBe(false)
+    expect(noticeOffersExportToAdmins(swap(NOTICE, 'data-testid="deletion-notice-export"', 'data-testid="x"'))).toBe(false)
+  })
+})
+
+describe('DEL-10-03: the retention section states how long each copy lasts', () => {
+  const REPO = join(SRC_DIR, '..', '..', '..', '..')
+  const sentence = (id: string): string => DELETION_SENTENCES.find((x) => x.id === id)!.text
+
+  it('DEL-10-03 R2 the 30 is the trigger\'s', () => {
+    expect(graceDays()).toBe(DELETION_GRACE_DAYS)
+    expect(sentence('R2')).toContain(`${DELETION_GRACE_DAYS} days`)
+  })
+
+  it('DEL-10-03 R3 and R4 quote the operator-confirmed 7', () => {
+    // gcloud read 2026-10-26: Cloud SQL retainedBackups 7, transactionLogRetentionDays 7; bucket soft delete 604800 s.
+    expect(BACKUP_DAYS).toBe(7)
+    expect(FILE_RECOVERY_DAYS).toBe(7)
+    expect(sentence('R3')).toContain(`${BACKUP_DAYS} days`)
+    expect(sentence('R4')).toContain(`${FILE_RECOVERY_DAYS} days`)
+  })
+
+  it('DEL-10-03 the new numbers are not retyped in Privacy.tsx', () => {
+    const src = readSource('frontend/landing/src/components/Privacy.tsx')
+    expect(src).not.toMatch(/\b(30|7) days\b/)
+    expect(Array.from(src.matchAll(/export const (\w+_DAYS) = (\d+)/g), (m) => `${m[1]}=${m[2]}`)).toEqual([
+      'DELETION_GRACE_DAYS=30',
+      'BACKUP_DAYS=7',
+      'FILE_RECOVERY_DAYS=7',
+    ])
+  })
+
+  it('DEL-10-03 R5 the GoTrue version that was read is the one pinned', () => {
+    const dockerfile = readFileSync(join(REPO, 'sidecar/auth/Dockerfile'), 'utf8')
+    expect(gotrueVersion()).toBe('2.197.0')
+    expect(gotrueVersion(dockerfile.replace('auth:v2.197.0@', 'auth:v2.198.0@'))).not.toBe('2.197.0')
+  })
+
+  it('DEL-10-03 R5 nothing in this repo prunes the sign-in audit table', () => {
+    expect(nothingPrunesSigninAuditLog()).toBe(true)
+    expect(nothingPrunesSigninAuditLog([['internal/x.go', 'package x'], ['internal/y.sql', 'DELETE FROM auth.audit_log_entries WHERE created_at < now()']])).toBe(false)
+    expect(nothingPrunesSigninAuditLog([['db/bootstrap.sql', 'DELETE FROM auth.audit_log_entries']])).toBe(false)
+    expect(nothingPrunesSigninAuditLog([['scripts/prune.sh', 'psql -c "delete from audit_log_entries"']])).toBe(false)
+    expect(nothingPrunesSigninAuditLog([['Makefile', '\t@psql -c "DELETE FROM AUTH.AUDIT_LOG_ENTRIES"']])).toBe(false)
+    expect(nothingPrunesSigninAuditLog([['internal/a.go', '// auth.audit_log_entries is GoTrue\'s\n/* audit_log_entries */'], ['db/a.sql', '-- audit_log_entries\n/* audit_log_entries */'], ['scripts/a.sh', '# audit_log_entries'], ['x.yml', 'a: 1 # audit_log_entries']])).toBe(true)
+  })
+
+  it('DEL-10-03 R5 the audit-table scan reads a real population', () => {
+    const files = signinScanFiles()
+    expect(files.length).toBeGreaterThan(200)
+    expect(files).toContain('sidecar/auth/Dockerfile')
+    expect(files).toContain('internal/workspacepurge/purge.go')
+    expect(files).toContain('db/bootstrap.sql')
+    expect(files).toContain('Makefile')
+    expect(files).toContain('docker-compose.yml')
+    expect(files.some((f) => f.startsWith('scripts/'))).toBe(true)
+    expect(files.some((f) => /_test\.go$/.test(f))).toBe(false)
+  })
+
+  it('DEL-10-03 R7 the staff row holds the id, the due date and two counts', () => {
+    expect(staffLogEntryFacts()).toEqual({ event: 'workspace.purged', keys: ['due_at', 'members', 'objects'] })
+    expect(staffLogIsAppendOnly()).toBe(true)
+    const ups = migrationUps()
+    expect(ups.length).toBeGreaterThan(100)
+    const i = ups.findIndex((m) => m.includes('CREATE TRIGGER staff_audit_log_no_update_delete'))
+    expect(i).toBeGreaterThanOrEqual(0)
+    const sql = ups[i]
+    const with0 = (m: string) => ups.map((x, j) => (j === i ? m : x))
+    expect(staffLogIsAppendOnly(with0(sql.replace('BEFORE UPDATE OR DELETE', 'BEFORE UPDATE')))).toBe(false)
+    expect(staffLogIsAppendOnly(with0(sql.replace('BEFORE TRUNCATE', 'BEFORE INSERT')))).toBe(false)
+    const raise = "RAISE EXCEPTION 'staff_audit_log is append-only: % is not permitted', TG_OP"
+    expect(sql).toContain(raise)
+    expect(staffLogIsAppendOnly(with0(sql.replace(raise, `-- ${raise}`)))).toBe(false)
+    const later = (m: string) => [...ups, `-- +goose Up\n${m}\n-- +goose Down\nSELECT 1;`]
+    expect(staffLogIsAppendOnly(later('DROP TRIGGER staff_audit_log_no_update_delete ON public.staff_audit_log;'))).toBe(false)
+    expect(staffLogIsAppendOnly(later('/* x */ DROP TRIGGER IF EXISTS staff_audit_log_no_truncate ON public.staff_audit_log;'))).toBe(false)
+    expect(staffLogIsAppendOnly(later('DROP FUNCTION public.staff_audit_log_append_only();'))).toBe(false)
+    expect(
+      staffLogIsAppendOnly(later('CREATE OR REPLACE FUNCTION public.staff_audit_log_append_only() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql;')),
+    ).toBe(false)
+    expect(staffLogIsAppendOnly(later('DROP TABLE public.staff_audit_log;'))).toBe(false)
+    expect(staffLogIsAppendOnly(later('ALTER TABLE public.staff_audit_log RENAME TO staff_log_old;'))).toBe(false)
+    expect(staffLogIsAppendOnly(later('-- DROP TRIGGER staff_audit_log_no_update_delete ON public.staff_audit_log;'))).toBe(true)
+  })
+
+  it('DEL-10-03 control: a payload with a name key fails R7', () => {
+    const src = readSource('internal/workspacepurge/purge.go')
+    const planted = src.replace('"objects": objects,', '"objects": objects,\n\t\t\t\t"name": name,')
+    expect(planted).not.toBe(src)
+    expect(staffLogEntryFacts(planted).keys).not.toEqual(staffLogEntryFacts().keys)
   })
 })

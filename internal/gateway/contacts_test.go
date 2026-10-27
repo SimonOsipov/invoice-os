@@ -549,8 +549,11 @@ func TestHandOff_FailingSinkIsTriedThreeTimes(t *testing.T) {
 			if warn.attrs["status"] != c.status {
 				t.Errorf("WARN %q has status %q, want %q", warn.text, warn.attrs["status"], c.status)
 			}
-			if warn.attrs["user_id"] != coUserID {
-				t.Errorf("WARN %q has user_id %q, want %q", warn.text, warn.attrs["user_id"], coUserID)
+			if warn.attrs["user.id"] != coUserID {
+				t.Errorf("WARN %q has user.id %q, want %q", warn.text, warn.attrs["user.id"], coUserID)
+			}
+			if _, ok := warn.attrs["user_id"]; ok {
+				t.Errorf("WARN %q still carries user_id", warn.text)
 			}
 			var warns int
 			for _, r := range logs.all() {
@@ -982,8 +985,25 @@ func TestHandOff_AttemptsAreSpacedFiveThenThirtySeconds(t *testing.T) {
 		step(30*time.Second-time.Millisecond, 2, 0)
 		step(time.Millisecond, 3, 1)
 		step(time.Hour, 3, 1)
-		if w := <-logs.warn; w.attrs["user_id"] != coUserID || w.level != slog.LevelWarn {
-			t.Errorf("WARN = %+v, want a WARN with user_id %s", w, coUserID)
+		w := <-logs.warn
+		if _, old := w.attrs["user_id"]; w.attrs["user.id"] != coUserID || old || w.level != slog.LevelWarn {
+			t.Errorf("WARN = %+v, want a WARN with user.id %s and no user_id", w, coUserID)
+		}
+	})
+}
+
+func TestHandOff_TextLogKeepsUserDotID(t *testing.T) {
+	down := func(context.Context, int, RegistrantContact) error { return errors.New("notifications unavailable") }
+	synctest.Test(t, func(t *testing.T) {
+		var buf strings.Builder
+		log := slog.New(slog.NewTextHandler(&buf, nil))
+
+		handOffRegistrant(context.Background(), log, "verify", newRecSink(down), coWant)
+		synctest.Wait()
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		if want := "user.id=" + coUserID; !strings.Contains(buf.String(), want) {
+			t.Errorf("stdout log %q lacks %s", buf.String(), want)
 		}
 	})
 }

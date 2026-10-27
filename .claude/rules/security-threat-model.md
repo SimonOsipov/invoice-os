@@ -43,6 +43,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 ## Network
 
 - Only the gateway and the static sites have a public domain. Every other service is on the private network only.
+- `auth` admits the gateway and the worker.
 - `probedServices` in `cmd/gateway/main.go` (docling, auth, worker) get no public proxy route. `TestGatewayHandlersPublishNoProxyRouteForAProbedService` asserts this.
 - The docling sidecar has no authentication. It relies on the private network. A public route to it is HIGH.
 - Cloud Armor on the production load balancer throttles register, invitation register, resend, reset, invitation resend, `/contacts/demo-request` and `/blog/*` per client IP. Sign-in and refresh have no per-IP limit. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
@@ -53,13 +54,17 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - `POST /v1/documents` (`extraction.UploadHandler`, submission): uploaded file bytes.
 - docling `POST /v1/read` (`sidecar/docling/app.py`): document bytes forwarded by submission.
 - `/v1/imports*` (`importer` handlers, invoice): CSV, spreadsheet and document input.
+- `POST /auth/export-download` (gateway): a form body with an export code. It runs without the verifier until the code is redeemed.
 - Public gateway routes in `cmd/gateway/main.go` outside `/api/`: `/auth/*`, `/contacts/demo-request`, `/blog/*`, `/emails/*`. They run without the verifier. `/healthz/fleet` runs without the verifier and needs `X-Gateway-Token`.
 - `POST /v1/validate/batch` and `POST /v1/custom-rules/check` (validation): open past `RequireGateway`, guarded by `S2SMiddleware` with the shared `S2S_TOKEN`. They carry no identity and read no tenant.
 
 ## Accepted ceilings
 
 - `ceiling:` in `migrations/20261006162416_invitation_accept.sql`: `invoice_app` can name one invite per known token across tenants.
-- `ceiling:` in `migrations/20261006162416_invitation_accept.sql`: `provision_workspace` and `accept_invitation` are the only membership writers behind the identity lock.
+- `ceiling:` in `migrations/20261026120002_membership_removed.sql`: `provision_workspace` and every `accept_invitation` and `accept_invitation_by_id` overload are the membership writers behind the identity lock. `SetMembershipStatus` and `RemoveMember` take no identity lock; they change a status in the caller's tenant and never make a non-`removed` row.
+- `ceiling:` in `migrations/20261026120001_purge_tenant.sql`: any `invoice_app` service can purge the tenant it binds.
+- `ceiling:` in `migrations/20261027010037_erase_invitation_emails.sql`: any `invoice_app` service can erase the invitations of one address in every tenant.
+- `ceiling:` in `internal/platform/auth/gotrueadmin`: the worker holds GoTrue's signing key.
 - `ceiling:` in `cmd/gateway/main.go` and `cmd/worker/main.go`: a boot error quotes a raw internal service URL.
 - `ceiling:` in `internal/accountmail/accountmail.go`: the account-mail token rides in the query string.
 - Any other `ceiling:` comment on a path above. List them with `git grep -n "ceiling:"`.

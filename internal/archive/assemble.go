@@ -75,46 +75,7 @@ func assemble(ctx context.Context, tx pgx.Tx, r Request, w io.Writer, o assemble
 
 	bw := newBundleWriter(w)
 
-	invEntry := bw.newCSVEntry("invoices.csv")
-	ids, err := selectInvoices(ctx, tx, r, invEntry)
-	if err != nil {
-		return err
-	}
-	if err := bw.finalizeCSV(invEntry); err != nil {
-		return err
-	}
-
-	lineEntry := bw.newCSVEntry("line_items.csv")
-	if err := selectLineItems(ctx, tx, ids, lineEntry); err != nil {
-		return err
-	}
-	if err := bw.finalizeCSV(lineEntry); err != nil {
-		return err
-	}
-
-	histEntry := bw.newCSVEntry("status_history.csv")
-	if err := selectHistory(ctx, tx, ids, histEntry); err != nil {
-		return err
-	}
-	if err := bw.finalizeCSV(histEntry); err != nil {
-		return err
-	}
-
-	subEntry := bw.newCSVEntry("submissions.csv")
-	if err := selectSubmissions(ctx, tx, ids, subEntry); err != nil {
-		return err
-	}
-	if err := bw.finalizeCSV(subEntry); err != nil {
-		return err
-	}
-
-	// Bodies stream to their own ZIP entries during this call, so bodies/*
-	// physically precede exchange.csv (D-31).
-	exEntry := bw.newCSVEntry("exchange.csv")
-	if err := selectExchange(ctx, tx, ids, exEntry, bw); err != nil {
-		return err
-	}
-	if err := bw.finalizeCSV(exEntry); err != nil {
+	if err := writeEntityStages(ctx, tx, bw, "", r); err != nil {
 		return err
 	}
 
@@ -129,6 +90,63 @@ func assemble(ctx context.Context, tx pgx.Tx, r Request, w io.Writer, o assemble
 	}
 
 	return bw.Close()
+}
+
+// prefixedBodies writes body files under dir.
+type prefixedBodies struct {
+	bw  *bundleWriter
+	dir string
+}
+
+func (p prefixedBodies) WriteBody(name string, body []byte) error {
+	return p.bw.WriteBody(p.dir+name, body)
+}
+
+// writeEntityStages writes one company's five CSVs and its body files under dir ("" for the bundle).
+func writeEntityStages(ctx context.Context, tx pgx.Tx, bw *bundleWriter, dir string, r Request) error {
+	invEntry := bw.newCSVEntry(dir + "invoices.csv")
+	ids, err := selectInvoices(ctx, tx, r, invEntry)
+	if err != nil {
+		return err
+	}
+	if err := bw.finalizeCSV(invEntry); err != nil {
+		return err
+	}
+
+	lineEntry := bw.newCSVEntry(dir + "line_items.csv")
+	if err := selectLineItems(ctx, tx, ids, lineEntry); err != nil {
+		return err
+	}
+	if err := bw.finalizeCSV(lineEntry); err != nil {
+		return err
+	}
+
+	histEntry := bw.newCSVEntry(dir + "status_history.csv")
+	if err := selectHistory(ctx, tx, ids, histEntry); err != nil {
+		return err
+	}
+	if err := bw.finalizeCSV(histEntry); err != nil {
+		return err
+	}
+
+	subEntry := bw.newCSVEntry(dir + "submissions.csv")
+	if err := selectSubmissions(ctx, tx, ids, subEntry); err != nil {
+		return err
+	}
+	if err := bw.finalizeCSV(subEntry); err != nil {
+		return err
+	}
+
+	// Bodies stream to their own ZIP entries during this call, so bodies/*
+	// physically precede exchange.csv (D-31).
+	exEntry := bw.newCSVEntry(dir + "exchange.csv")
+	if err := selectExchange(ctx, tx, ids, exEntry, prefixedBodies{bw: bw, dir: dir}); err != nil {
+		return err
+	}
+	if err := bw.finalizeCSV(exEntry); err != nil {
+		return err
+	}
+	return nil
 }
 
 // resolveGeneratedBy names the acting user for manifest.json through the same

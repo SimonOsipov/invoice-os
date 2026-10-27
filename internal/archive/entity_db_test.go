@@ -72,8 +72,7 @@ func actingAsRoleOnly(t *testing.T, tx pgx.Tx) {
 	}
 }
 
-// mustCreateTenant inserts as superuser -- invoice_app holds SELECT-only on tenants,
-// so even a same-tenant fixture can't mint its own tenant row.
+// mustCreateTenant inserts as superuser: a same-tenant fixture can't mint its own tenant row.
 func mustCreateTenant(t *testing.T, tx pgx.Tx, name string) string {
 	t.Helper()
 	id := uuid.NewString()

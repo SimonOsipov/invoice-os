@@ -147,7 +147,7 @@ func (s *Store) SetMemberClients(ctx context.Context, userID string, access Clie
 		}
 		var role, target string
 		if err := tx.QueryRow(ctx,
-			`SELECT user_id::text, role FROM memberships WHERE user_id = $1 FOR UPDATE`, userID,
+			`SELECT user_id::text, role FROM memberships WHERE user_id = $1 AND status <> 'removed' FOR UPDATE`, userID,
 		).Scan(&target, &role); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrMembershipNotFound

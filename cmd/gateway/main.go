@@ -148,7 +148,8 @@ func main() {
 
 	// Public sign-in hand-off, renewal and sign-out, outside the verifier; console-handoff verifies its own bearer.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
-	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier, gwPool)
+	store := handoffStore(gwPool, app.Logger)
+	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier, store, gwPool)
 	app.Mux.Handle("POST /auth/verify", h.Verify)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
@@ -156,6 +157,11 @@ func main() {
 	app.Mux.Handle("OPTIONS /auth/exchange", withCORS(h.Exchange))
 	app.Mux.Handle("POST /auth/console-handoff", withCORS(h.ConsoleHandoff))
 	app.Mux.Handle("OPTIONS /auth/console-handoff", withCORS(h.ConsoleHandoff))
+	exportCode := verifier.Middleware(sessions.Middleware(gateway.ExportCodeHandler(store, app.Logger)))
+	app.Mux.Handle("POST /auth/export-code", withCORS(exportCode))
+	app.Mux.Handle("OPTIONS /auth/export-code", withCORS(exportCode))
+	// A form navigation: no CORS, no bearer; the redeemed code supplies the token.
+	app.Mux.Handle("POST /auth/export-download", gateway.ExportDownloadHandler(store, apiHandler, app.Logger))
 	app.Mux.Handle("POST /auth/refresh", withCORS(h.Refresh))
 	app.Mux.Handle("OPTIONS /auth/refresh", withCORS(h.Refresh))
 	app.Mux.Handle("POST /auth/sign-out", withCORS(h.SignOut))
@@ -175,6 +181,7 @@ func main() {
 		app.Mux.Handle("OPTIONS /auth/login", login)
 		app.Mux.Handle("POST /auth/mock/member", mockMemberRoute(os.Getenv("DATABASE_MIGRATION_URL"), app.Logger))
 		app.Mux.Handle("POST /auth/mock/invitation-token", mockInvitationTokenRoute(os.Getenv("DATABASE_MIGRATION_URL"), app.Logger))
+		app.Mux.Handle("POST /auth/mock/deletion-link-token", mockDeletionLinkTokenRoute(os.Getenv("DATABASE_MIGRATION_URL"), app.Logger))
 		platform.MockIssuer = "on"
 	}
 
@@ -325,10 +332,10 @@ func gatewayPool(log *slog.Logger) *pgxpool.Pool {
 	return pool
 }
 
-// handoffStore shares hand-off codes through Postgres when pool is set; nil means the in-process store.
+// handoffStore shares hand-off codes through Postgres when pool is set, else keeps them in-process.
 func handoffStore(pool *pgxpool.Pool, log *slog.Logger) gateway.Handoffs {
 	if pool == nil {
-		return nil
+		return gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
 	}
 	return gateway.NewPGHandoffStore(pool, gateway.HandoffTTL, log)
 }
@@ -349,11 +356,10 @@ type handoff struct {
 
 // handoffHandlers builds the sign-in, exchange, refresh and sign-out handlers against GoTrue at authURL.
 // Sign-out evicts from sessions, the API's own checker.
-// Every minter and exchange share one code store: a code is redeemable only through exchange.
+// Every minter and exchange share one code store: a sign-in code is redeemable only through exchange; an export code only through export-download.
 // A nil siteURL makes Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
-// A nil pool means the in-process store.
-func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink, verifier *auth.Verifier, pool *pgxpool.Pool) handoff {
-	store := handoffStore(pool, log)
+// A nil store means the in-process one; a nil pool keeps the sign-in throttle in-process.
+func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink, verifier *auth.Verifier, store gateway.Handoffs, pool *pgxpool.Pool) handoff {
 	if store == nil {
 		store = gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
 	}

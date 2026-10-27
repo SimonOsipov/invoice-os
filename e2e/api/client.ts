@@ -167,10 +167,10 @@ export async function registerFresh(prefix = 'handoff', password?: string): Prom
 // Signs in once before provisioning (the hand-off) and again after (the tenant claim).
 export async function registerFormAccount(
   prefix: string,
-  opts: { marketingConsentText?: string } = {},
+  opts: { marketingConsentText?: string; workspaceName?: string } = {},
 ): Promise<{ account: RealAccount; token: string }> {
   const id = crypto.randomUUID()
-  const account: RealAccount = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: `Contacts E2E ${id.slice(0, 8)}`, displayName: 'Contacts E2E' }
+  const account: RealAccount = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: opts.workspaceName ?? `Contacts E2E ${id.slice(0, 8)}`, displayName: 'Contacts E2E' }
   const res = await rawFetch('/auth/register', {
     method: 'POST',
     body: {
@@ -233,6 +233,13 @@ export async function signInSession(email: string, password: string): Promise<{ 
   return res.body as { access_token: string; refresh_token: string }
 }
 
+// POST /auth/refresh: a fresh access token (claims re-minted) without a password sign-in.
+export async function refreshSession(refreshToken: string): Promise<string> {
+  const res = await rawFetch('/auth/refresh', { method: 'POST', body: { refresh_token: refreshToken } })
+  if (res.status !== 200) throw new Error(`refresh answered ${res.status}: ${JSON.stringify(res.body)}`)
+  return (res.body as { access_token: string }).access_token
+}
+
 // Unverified payload of a JWT the gateway just minted.
 export function claimsOf(token: string): Record<string, unknown> {
   return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')) as Record<string, unknown>
@@ -280,6 +287,13 @@ export async function setInvitationToken(tenantId: string, invitationId: string,
   if (res.status !== 204) throw new Error(`invitation token seed answered ${res.status}: ${JSON.stringify(res.body)}`)
 }
 
+// POST /auth/mock/deletion-link-token (internal/gateway/mockdeletionlink.go answers 204); mock build only.
+// Replaces the admin's live cancel link token; 404 where the admin has no live link.
+export async function setDeletionLinkToken(tenantId: string, userId: string, token: string): Promise<void> {
+  const res = await rawFetch('/auth/mock/deletion-link-token', { method: 'POST', body: { tenant_id: tenantId, user_id: userId, token } })
+  if (res.status !== 204) throw new Error(`deletion link token seed answered ${res.status}: ${JSON.stringify(res.body)}`)
+}
+
 // Invites `email` as `role` through the tenancy API, gives the invite a token of the spec's own and returns it.
 // `tenantId` is the admin's workspace.
 export async function inviteWithToken(
@@ -308,14 +322,66 @@ export interface PendingInvite {
   expires_at: string
 }
 
-// GET /api/tenancy/v1/invitations/mine, raw so a spec can assert the refusals.
+// GET /api/tenancy/v1/invitations/mine, raw so a spec can assert the refusals. The body is {invitations, removed}.
 export function listMine(token: string): Promise<{ status: number; body: unknown }> {
   return rawFetch('/api/tenancy/v1/invitations/mine', { headers: { Authorization: `Bearer ${token}` } })
 }
 
-// POST /api/tenancy/v1/invitations/{id}/accept: no body, 200 in the token-accept shape.
-export function acceptById(token: string, id: string): Promise<{ status: number; body: unknown }> {
-  return rawFetch(`/api/tenancy/v1/invitations/${id}/accept`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+// POST /api/tenancy/v1/invitations/{id}/accept: optional {display_name} body, 200 in the token-accept shape.
+export function acceptById(token: string, id: string, displayName?: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch(`/api/tenancy/v1/invitations/${id}/accept`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    ...(displayName === undefined ? {} : { body: { display_name: displayName } }),
+  })
+}
+
+// POST /api/tenancy/v1/workspace/deletion: 200 {deletion_due_at}; raw so a spec can assert the refusals.
+export function scheduleDeletion(token: string, workspaceName: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/api/tenancy/v1/workspace/deletion', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: { workspace_name: workspaceName } })
+}
+
+// POST /api/tenancy/v1/workspace/deletion/cancel: 200 {deletion_due_at: null}, also when nothing is scheduled.
+export function cancelDeletion(token: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/api/tenancy/v1/workspace/deletion/cancel', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+}
+
+// POST /api/tenancy/v1/workspace/deletion/cancel-by-link: 200 {deletion_due_at: null}; raw so a spec can assert the refusals.
+export function cancelDeletionByLink(token: string, linkToken: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/api/tenancy/v1/workspace/deletion/cancel-by-link', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: { token: linkToken } })
+}
+
+// GET /api/invoice/v1/workspace/export/preflight: 204 when an export can start; raw so a spec can assert the refusals.
+export function exportPreflight(token: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/api/invoice/v1/workspace/export/preflight', { headers: { Authorization: `Bearer ${token}` } })
+}
+
+// POST /auth/export-code {state}: 200 {code}. Pass token=null to omit the bearer.
+export function exportCode(token: string | null, state: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/auth/export-code', { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: { state } })
+}
+
+// POST /auth/export-download as the browser form does: the ZIP, or the refusal page, as bytes.
+export async function exportDownload(
+  code: string,
+  state: string,
+): Promise<{ status: number; headers: Headers; body: Uint8Array }> {
+  const res = await fetch(`${apiBase()}/auth/export-download`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ code, state }).toString(),
+  })
+  return { status: res.status, headers: res.headers, body: new Uint8Array(await res.arrayBuffer()) }
+}
+
+// GET /api/tenancy/v1/me/deletion: 200 {outcome, heir_name, heir_user_id}, outcome one of leave | hand_on | delete_workspace.
+export function previewAccountDeletion(token: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/api/tenancy/v1/me/deletion', { headers: { Authorization: `Bearer ${token}` } })
+}
+
+// POST /api/tenancy/v1/me/deletion: 200 {outcome}; hand_on carries heir_user_id. The body is sent as given so a spec can add or omit keys.
+export function deleteMyAccount(token: string, body: unknown): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/api/tenancy/v1/me/deletion', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body })
 }
 
 // ---- Wire contract types, declared locally to the verified contract
@@ -324,7 +390,7 @@ export function acceptById(token: string, id: string): Promise<{ status: number;
 // shape exactly. ----
 
 export interface Me {
-  tenant: { id: string; name: string; kind: string }
+  tenant: { id: string; name: string; kind: string; deletion_due_at: string | null }
   user: { id: string; role: string; display_name: string | null; email: string | null }
 }
 
@@ -536,6 +602,12 @@ export function setMembershipStatus(token: string, userId: string, status: 'acti
     body: { status },
     token,
   })
+}
+
+// removeMember(): POST /v1/memberships/{user_id}/remove, admin-only, no body. Raw, so a spec asserts the refusals.
+// A 200 answers the row in the Membership shape with status 'removed' and email null.
+export function removeMember(token: string, userId: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch(`/api/tenancy/v1/memberships/${userId}/remove`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
 }
 
 // setMemberClients(): PUT /v1/memberships/{user_id}/clients, admin-only. Raw, so a spec asserts the refusals.

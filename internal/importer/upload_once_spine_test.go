@@ -61,6 +61,10 @@ func (m *memObjects) Get(ctx context.Context, key, rangeHeader string) (document
 	return document.Object{Body: io.NopCloser(bytes.NewReader(b)), Size: int64(len(b))}, nil
 }
 
+func (m *memObjects) List(context.Context, string) ([]string, error) { return nil, nil }
+
+func (m *memObjects) DeleteMany(context.Context, []string) error { return nil }
+
 // --- fixtures ---------------------------------------------------------------
 
 var uoHeader = []string{"Inv No", "Date", "Buyer", "Subtotal", "VAT", "Total"}

@@ -109,6 +109,9 @@ type statusRecorder struct {
 	wroteHeader bool
 }
 
+// Unwrap lets http.ResponseController reach the connection (write deadline, flush).
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
 func (r *statusRecorder) WriteHeader(code int) {
 	// A 1xx is informational; the final status follows it.
 	if !r.wroteHeader && (code < 100 || code > 199) {

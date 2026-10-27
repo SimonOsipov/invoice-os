@@ -905,13 +905,15 @@ func SavedMappingHandler(
 
 // statusForErr maps a service error to the HTTP status + message this
 // handler writes to the response, mirroring internal/invoice's own
-// statusForErr: db.ErrNotActiveMember is 403, ErrValidation is 400 with the
+// statusForErr: db.ErrNotActiveMember and db.ErrWorkspaceLocked are 403, ErrValidation is 400 with the
 // wrapped message, ErrNotFound is 404, anything else is 500 with a generic
 // body (never leaking internals).
 func statusForErr(err error) (status int, msg string) {
 	switch {
 	case errors.Is(err, db.ErrNotActiveMember):
 		return http.StatusForbidden, db.NotActiveMemberMessage
+	case errors.Is(err, db.ErrWorkspaceLocked):
+		return http.StatusForbidden, db.WorkspaceLockedMessage
 	case errors.Is(err, ErrValidation):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, ErrNotFound), errors.Is(err, invoice.ErrNotFound):

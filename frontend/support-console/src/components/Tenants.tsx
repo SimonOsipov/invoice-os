@@ -134,11 +134,11 @@ function Detail({ status, detail, errorText, onRetry, onViewJobs, onDeletion, on
   )
   return (
     <>
-      <div style={{ padding: '20px 22px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'flex-start', gap: 16 }}>
+      <div style={{ padding: '20px 22px', borderBottom: '1px solid var(--line-1)', display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 16 }}>
         <span style={{ flex: 'none', width: 48, height: 48, borderRadius: 'var(--radius-md)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 16, fontWeight: 700 }}>
           {initials(t.name)}
         </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ flex: '1 1 200px', minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, marginBottom: 3 }}>
             <h2 style={{ fontSize: 19, margin: 0, minWidth: 0, ...ONE_LINE }}>{t.name}</h2>
             {t.demo && <Chip tone={MUTED} label="DEMO" />}
@@ -150,15 +150,15 @@ function Detail({ status, detail, errorText, onRetry, onViewJobs, onDeletion, on
             {`${t.active_members} active members · ${t.invoice_count} invoices · ${activity(t)}`}
           </div>
           {started ? (
-            <div className="mono" style={{ fontSize: 11, color: RED.text, ...ONE_LINE }}>{`Purge in progress since ${syncStamp(t.deletion_purge_started_at!)}`}</div>
+            <div className="mono" style={{ fontSize: 11, color: RED.text, overflowWrap: 'anywhere' }}>{`Purge in progress since ${syncStamp(t.deletion_purge_started_at!)}`}</div>
           ) : scheduled ? (
-            <div className="mono" style={{ fontSize: 11, color: AMBER.text, ...ONE_LINE }}>{`Scheduled for deletion on ${syncDate(t.deletion_due_at!)}`}</div>
+            <div className="mono" style={{ fontSize: 11, color: AMBER.text, overflowWrap: 'anywhere' }}>{`Scheduled for deletion on ${syncDate(t.deletion_due_at!)}`}</div>
           ) : null}
         </div>
         <button type="button" onClick={() => onViewJobs(t.id)} className="ops-btn v2-btn v2-btn-ghost" style={{ flex: 'none', height: 32, padding: '0 12px', fontSize: 12 }}>
           View jobs
         </button>
-        <div data-testid="tenant-actions" style={{ flex: 'none', display: 'flex', gap: 8 }}>
+        <div data-testid="tenant-actions" style={{ flex: 'none', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {!scheduled && act('Delete workspace', 'start', DANGER)}
           {scheduled && !started && act('Cancel deletion', 'cancel')}
           {!started && act('Purge now', 'purge', DANGER)}

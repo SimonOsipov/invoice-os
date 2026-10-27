@@ -1,4 +1,4 @@
-// Support Console Tenants: staff start, cancel and purge a fresh workspace through the modal; the deletion header, member rows and modal fit at every wide width.
+// Support Console Tenants: staff start, cancel and purge a fresh workspace through the modal; the deletion header, member rows and modal fit at every wide width; the header wraps at 390px.
 // Every workspace is registered here; the seeded tenants are never acted on.
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { acceptById, inviteWithToken, listMine, me, provisionStaffAccount, rawFetch, registerFormAccount, registerFresh, signInSession, type PendingInvite, type StaffAccount } from '../api/client'
@@ -199,5 +199,72 @@ test('support console: the deletion header, member rows and modal fit at every w
   })
   await parts.Back.click()
   await expect(panel).toBeHidden()
+  expect(errors, errors.join('\n')).toEqual([])
+})
+
+const NARROW_WIDTHS = [390, 768, ...WIDE_WIDTHS]
+
+test('support console: the tenant header wraps and shows the whole state line at 390px and every wide width', async ({ page }) => {
+  test.setTimeout(240_000)
+  const errors = collectSourcedErrors(page)
+  const name = `N${crypto.randomUUID().replaceAll('-', '')}`.padEnd(MAX_NAME_CHARS, 'x')
+  const ws = await fresh('staff-deletion-narrow', name)
+  await staffSession(page, await provisionStaffAccount('staff-deletion-narrow'))
+  await openTenant(page, ws.tenantId, name)
+
+  const actions = page.getByTestId('tenant-actions')
+  const header = actions.locator('xpath=..')
+  const card = header.locator('xpath=..')
+  const heading = main(page).getByRole('heading', { level: 2, name })
+  const text = heading.locator('xpath=../..')
+  const viewJobs = header.getByRole('button', { name: 'View jobs', exact: true })
+
+  const check = async (state: string, stateLine: Locator): Promise<void> => {
+    const entry = page.viewportSize()
+    try {
+      for (const width of NARROW_WIDTHS) {
+        await page.setViewportSize({ width, height: HEIGHT })
+        await settleAnimations(card, header, text, viewJobs, actions)
+        const where = `${state} at ${width}px`
+        const r = {
+          text: await rectOf('the text block', text, width),
+          viewJobs: await rectOf('View jobs', viewJobs, width),
+          actions: await rectOf('the action group', actions, width),
+        }
+        const cardBox = await rectOf('the detail card', card, width)
+        for (const part of ['text', 'viewJobs', 'actions'] as const) {
+          expect(enclosesRect(cardBox, r[part], 1), `${part} leaves the detail card, ${where}`).toBe(true)
+        }
+        for (const [a, b] of [['text', 'viewJobs'], ['text', 'actions'], ['viewJobs', 'actions']] as const) {
+          expect(rectsOverlap(r[a], r[b]), `${a} and ${b} overlap, ${where}`).toBe(false)
+        }
+        const buttons = actions.getByRole('button')
+        const count = await buttons.count()
+        const boxes: Rect[] = []
+        for (let i = 0; i < count; i++) {
+          const box = await rectOf(`action ${i}`, buttons.nth(i), width)
+          expect(enclosesRect(cardBox, box, 1), `action ${i} leaves the detail card, ${where}`).toBe(true)
+          boxes.push(box)
+        }
+        for (let i = 0; i < count; i++) for (let j = i + 1; j < count; j++) expect(rectsOverlap(boxes[i], boxes[j]), `actions ${i} and ${j} overlap, ${where}`).toBe(false)
+        expect((await rectOf('the name', heading, width)).width, `the name is 0 wide, ${where}`).toBeGreaterThan(0)
+        if (state === 'scheduled') {
+          expect((await rectOf('the state line', stateLine, width)).width, `the state line is 0 wide, ${where}`).toBeGreaterThan(0)
+          const fit = await stateLine.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+          expect(fit.scrollWidth, `the state line is truncated, ${where} (${JSON.stringify(fit)})`).toBeLessThanOrEqual(fit.clientWidth)
+        }
+        await noSideways(page, `Tenants, ${where}`)
+      }
+    } finally {
+      if (entry) await page.setViewportSize(entry)
+    }
+  }
+
+  const stateLine = main(page).getByText(/Scheduled for deletion on/)
+  await check('unscheduled', stateLine)
+  await actions.getByRole('button', { name: 'Delete workspace', exact: true }).click()
+  await confirmModal(page, 'Start deletion', 'e2e narrow')
+  await expect(stateLine).toBeVisible()
+  await check('scheduled', stateLine)
   expect(errors, errors.join('\n')).toEqual([])
 })

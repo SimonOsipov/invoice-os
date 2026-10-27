@@ -46,7 +46,6 @@ import {
   noticeOffersExportToAdmins,
   graceDays,
   gotrueVersion,
-  invitationKeepsInviteeEmail,
   nothingPrunesSigninAuditLog,
   signinScanFiles,
   staffLogEntryFacts,
@@ -1167,21 +1166,5 @@ describe('DEL-10-03: the retention section states how long each copy lasts', () 
     const planted = src.replace('"objects": objects,', '"objects": objects,\n\t\t\t\t"name": name,')
     expect(planted).not.toBe(src)
     expect(staffLogEntryFacts(planted).keys).not.toEqual(staffLogEntryFacts().keys)
-  })
-
-  it('DEL-10-03 R6 the invitation column cannot be blanked', () => {
-    expect(invitationKeepsInviteeEmail()).toBe(true)
-    const ups = migrationUps()
-    const i = ups.findIndex((m) => m.includes('invitee_email text        NOT NULL'))
-    expect(i).toBeGreaterThanOrEqual(0)
-    const with0 = (m: string) => ups.map((x, j) => (j === i ? m : x))
-    const sql = ups[i]
-    expect(invitationKeepsInviteeEmail(with0(sql.replace('invitee_email text        NOT NULL', 'invitee_email text')))).toBe(false)
-    expect(invitationKeepsInviteeEmail(with0(sql.replace('invitee_email text        NOT NULL', '-- invitee_email text NOT NULL\n    invitee_email text')))).toBe(false)
-    const later = (m: string) => [...ups, `-- +goose Up\n${m}\n-- +goose Down\nSELECT 1;`]
-    expect(invitationKeepsInviteeEmail(later('ALTER TABLE public.invitations ALTER COLUMN invitee_email DROP NOT NULL;'))).toBe(false)
-    expect(invitationKeepsInviteeEmail(later('ALTER TABLE invitations DROP COLUMN invitee_email;'))).toBe(false)
-    expect(invitationKeepsInviteeEmail(later('DROP TABLE public.invitations;'))).toBe(false)
-    expect(invitationKeepsInviteeEmail(later('-- ALTER TABLE invitations ALTER COLUMN invitee_email DROP NOT NULL;'))).toBe(true)
   })
 })

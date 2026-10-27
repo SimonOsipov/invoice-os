@@ -179,10 +179,6 @@ export function Privacy() {
             address of the account. We have set no time after which it is removed.
           </p>
           <p style={P}>
-            Invitations: an invitation keeps the invited email address until the workspace is deleted, also after the
-            invited person deletes their account.
-          </p>
-          <p style={P}>
             Staff log: our staff action log keeps one entry for the deletion of a workspace: the workspace identifier, the
             date the deletion was due, and the number of members and files removed. That entry is not deleted.
           </p>

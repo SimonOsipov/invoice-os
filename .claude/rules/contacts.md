@@ -58,4 +58,5 @@ paths:
 - When Resend has no contact but another account's Resend delivery stamp is set, restore the contact unsubscribed (`TestErase_ARetryAfterAFailedRestoreRestoresUnsubscribed`).
 - Make no Resend suppression call in an erase.
 - Erase a person only through `EnqueueErasure`, or `EnqueueErasureByID` when no usable email exists. The worker sweeps local copies in one transaction before any vendor call.
+- The sweep deletes the person's accepted invitations and, when no other account holds the address, the pending and revoked invitations to it (`TestErase_SweepDeletesTheInvitations`).
 - Never put an email, a name or a user id in an erase log line or error.

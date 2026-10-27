@@ -715,7 +715,7 @@ func staffMigrationProvider(t *testing.T) *goose.Provider {
 	return provider
 }
 
-// rollBackRemovedFirst undoes staff_read_tenant_deletions, then workspace_deletion_mails, then deletion_purge_started, then workspace_deletion, then person_erasures, removed_flag_ignores_live_membership, then membership_removed, so an older migration's Down and Up see their own schema.
+// rollBackRemovedFirst undoes erase_invitation_emails, staff_read_tenant_deletions, then workspace_deletion_mails, deletion_purge_started, then workspace_deletion, then person_erasures, removed_flag_ignores_live_membership, then membership_removed, so an older migration's Down and Up see their own schema.
 // The cleanup rolls them back again (a provider.Up in the test may have applied them early) and re-applies them last, in order,
 // over the older bodies and the older CHECK that Up puts back, so they sit last in the goose ledger.
 func rollBackRemovedFirst(t *testing.T, provider *goose.Provider) {
@@ -727,6 +727,7 @@ func rollBackRemovedFirst(t *testing.T, provider *goose.Provider) {
 	deletionRead := migrationVersion(t, "*_staff_read_tenant_deletions.sql")
 	erasures := migrationVersion(t, "*_person_erasures.sql")
 	mails := migrationVersion(t, "*_workspace_deletion_mails.sql")
+	erase := migrationVersion(t, "*_erase_invitation_emails.sql")
 	roll := func(version int64, up bool) error {
 		_, err := provider.ApplyVersion(context.Background(), version, up)
 		if errors.Is(err, goose.ErrNotApplied) || errors.Is(err, goose.ErrAlreadyApplied) {
@@ -734,18 +735,18 @@ func rollBackRemovedFirst(t *testing.T, provider *goose.Provider) {
 		}
 		return err
 	}
-	for _, v := range []int64{deletionRead, mails, purge, deletion, erasures, flag, removed} {
+	for _, v := range []int64{erase, deletionRead, mails, purge, deletion, erasures, flag, removed} {
 		if err := roll(v, false); err != nil {
 			t.Fatalf("roll back migration %d: %v", v, err)
 		}
 	}
 	t.Cleanup(func() {
-		for _, v := range []int64{deletionRead, mails, purge, deletion, erasures, flag, removed} {
+		for _, v := range []int64{erase, deletionRead, mails, purge, deletion, erasures, flag, removed} {
 			if err := roll(v, false); err != nil {
 				t.Errorf("roll back migration %d: %v", v, err)
 			}
 		}
-		for _, v := range []int64{removed, flag, erasures, deletion, purge, mails, deletionRead} {
+		for _, v := range []int64{removed, flag, erasures, deletion, purge, mails, deletionRead, erase} {
 			if err := roll(v, true); err != nil {
 				t.Errorf("re-apply migration %d: %v", v, err)
 			}

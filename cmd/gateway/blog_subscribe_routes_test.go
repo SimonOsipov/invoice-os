@@ -43,8 +43,10 @@ func TestBlogSubscribeRoutesRegisteredOutsideAPI(t *testing.T) {
 		for _, a := range call.Args {
 			args = append(args, types.ExprString(a))
 		}
-		if want := []string{`routed["notifications"]`, "gatewayToken", "registerMinResponse", "app.Logger"}; !reflect.DeepEqual(args, want) {
-			t.Errorf("blogSubscribeHandlers args = %v, want %v", args, want)
+		// The pool argument is pinned by TestMain_PassesTheGatewayPoolToEverySharedState.
+		want := []string{`routed["notifications"]`, "gatewayToken", "registerMinResponse", "app.Logger"}
+		if len(args) != len(want)+1 || !reflect.DeepEqual(args[:len(want)], want) {
+			t.Errorf("blogSubscribeHandlers args = %v, want %v and a pool", args, want)
 		}
 	}
 	if calls != 1 {
@@ -91,7 +93,7 @@ func TestBlogSubscribePreflightGrantsTheBlogOrigin(t *testing.T) {
 	}))
 	t.Cleanup(stub.Close)
 	up, _ := url.Parse(stub.URL)
-	sub := blogSubscribeHandlers(up, "gw-token", time.Millisecond, slog.New(slog.DiscardHandler))
+	sub := blogSubscribeHandlers(up, "gw-token", time.Millisecond, slog.New(slog.DiscardHandler), nil)
 	withCORS := gateway.CORS([]string{blogAllowedOrigin})
 	mux := http.NewServeMux()
 	mux.Handle("POST /blog/subscriptions", withCORS(sub.Subscribe))
@@ -143,7 +145,7 @@ func TestBlogSubscribePreviewPostureAdmits(t *testing.T) {
 	send := func(env string, n int) int32 {
 		t.Setenv("DEPLOY_ENV", env)
 		calls.Store(0)
-		sub := blogSubscribeHandlers(up, "gw-token", 0, slog.New(slog.DiscardHandler))
+		sub := blogSubscribeHandlers(up, "gw-token", 0, slog.New(slog.DiscardHandler), nil)
 		for range n {
 			req := httptest.NewRequest(http.MethodPost, "/blog/subscriptions",
 				strings.NewReader(`{"email":"p@x.co","category_ids":["a"],"frequency":"weekly"}`))

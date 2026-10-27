@@ -536,3 +536,45 @@ func TestBlogSubscribe_EmailCapValueIsThree(t *testing.T) {
 		t.Errorf("per-email: %d subscribes forwarded, want 3", got)
 	}
 }
+
+// D6: with the shared count unreadable, an enforced subscribe answers the same 202 and forwards nothing.
+func TestBlogSubscribe_AnUnreadableThrottleIsTheSame202AndForwardsNothing(t *testing.T) {
+	up := newSubUpstream(t, http.StatusAccepted, `{}`)
+	u, err := url.Parse(up.srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	perEmail := NewSignInThrottle("blog-subscribe-email", BlogSubscribePerEmail, BlogSubscribeMaxKeys, BlogSubscribeWindow, time.Now)
+	perEmail.Shared(deadPool(t), slog.New(slog.DiscardHandler))
+	rt := BlogSubscribeHandlers(u, http.DefaultClient, subTestToken, 0, perEmail, true, slog.New(slog.DiscardHandler))
+
+	rec := subPost(rt.Subscribe, "203.0.113.60:1", subBody("p@x.co"))
+
+	if rec.Code != http.StatusAccepted || strings.TrimSpace(rec.Body.String()) != `{"status":"accepted"}` {
+		t.Errorf("enforced subscribe, count unreadable: %d %q, want 202 accepted", rec.Code, rec.Body.String())
+	}
+	if up.calls() != 0 {
+		t.Errorf("upstream calls = %d, want 0", up.calls())
+	}
+}
+
+func TestBlogSubscribe_AnUnreadableThrottleLogsNoLimitReached(t *testing.T) {
+	up := newSubUpstream(t, http.StatusAccepted, `{}`)
+	u, err := url.Parse(up.srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	perEmail := NewSignInThrottle("blog-subscribe-email", BlogSubscribePerEmail, BlogSubscribeMaxKeys, BlogSubscribeWindow, time.Now)
+	perEmail.Shared(deadPool(t), slog.New(slog.DiscardHandler))
+	log, buf := captureLog()
+	rt := BlogSubscribeHandlers(u, http.DefaultClient, subTestToken, 0, perEmail, true, log)
+
+	rec := subPost(rt.Subscribe, "203.0.113.61:1", subBody("p@x.co"))
+
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("status = %d, want 202", rec.Code)
+	}
+	if n := len(recordsNamed(t, buf, "blog-subscribe: limit reached")); n != 0 {
+		t.Errorf("limit reached records = %d, want 0 (a database error is not a reached limit)", n)
+	}
+}

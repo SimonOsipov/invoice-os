@@ -82,7 +82,7 @@ function appPersona(id: PersonaId): { tenantName: string } {
 // uppercased backend name is what the verified sidebar renders after the round trip.
 export const FIRM_PERSONA = appPersona('firm')
 
-// The in-house persona, resolving to seeded tenant 2222. Proving that a hand-off SWITCHES
+// The in-house persona. Proving that a hand-off SWITCHES
 // identity (auth.spec.ts) needs a second persona to switch TO — one whose sidebar shares no
 // tenant label with the firm's, so "switched" and "did not switch" are distinguishable.
 export const INHOUSE_PERSONA = appPersona('inhouse')

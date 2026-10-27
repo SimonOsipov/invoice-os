@@ -52,7 +52,7 @@ Neither path licenses a silent feature cut.
 gh pr checks [PR_NUMBER]
 # CI (ci.yml) rolls up: go, frontend, clean-clone, migrations, docker-canary, rls, queue, audit.
 # dev-env.yml (on a ready PR): invariants + prepare-env + build ×18 (ci-watch alongside; red CI stops the run) → deploy (database, migrate, GoTrue, backends, sites) →
-#   health-gate + fleet-gate → e2e (smoke + api) → topology ×7 (serial-lane, import-wizard, import-wizard-2, invoice-surfaces, ui-surfaces, library, blog) → E2E gate.
+#   health-gate + fleet-gate → e2e (smoke + api) → topology ×8 (serial-lane, auth, import-wizard, import-wizard-2, invoice-surfaces, ui-surfaces, library, blog) → E2E gate.
 ```
 
 Not part of the gate: `dev-env-teardown.yml` (deletes the PR's preview on close), `dev-env-sweeper.yml` (daily reaper of previews whose PR is closed). CI tears previews down; never delete a preview resource by hand.
@@ -277,7 +277,7 @@ DEV_DB_PORT=<your DEV_DB_PORT> hm suite run scripts/dev/suites.sh
 ```
 - `hm suite run` runs one worktree's suites at a time on the machine. Parallel suites starve each other of CPU until their tests time out. Queued runs take turns in the order they came. A queued run prints the story whose suites it waits for and the number of runs ahead of it.
 - A long wait in the line is normal. Do not ask the coordinator about it.
-- `scripts/dev/suites.sh` writes one log per suite to `$WORKTREE_PATH/.ralph/`. It prints one `<suite>=<exit code>` line per suite and the summary lines. It exits non-zero when a suite failed.
+- `scripts/dev/suites.sh` writes one log per suite to `$WORKTREE_PATH/.ralph/`. It prints one `<suite>=<exit code>` line per suite. Then, for each failed suite, it prints one line per failed package, vitest file and Go package or test. Each line reads `<suite> <kind>: <name>`. A vitest file line names its package. It prints at most 25 lines per kind. A longer list ends with `+N more, see .ralph/<suite>.log`. A failed suite with nothing named prints `<suite>: no failing file, package or test named, see .ralph/<suite>.log`. Together these are the summary lines. It exits non-zero when a suite failed.
 - Omit `DEV_DB_PORT` only when Phase 0.5 started no dev Postgres. The script then prints `db=skipped`.
 - `wait=1`: a `go test` still runs in this worktree, and no suite ran. Wait for it to end, then run the command again.
 - Exit 1 with "the suites did not run": this run was first in line for an hour, and the suites that hold the queue did not end. Stop and report the error. It names the run that holds the queue. A new run of this worktree within 30 minutes keeps its place in the line.

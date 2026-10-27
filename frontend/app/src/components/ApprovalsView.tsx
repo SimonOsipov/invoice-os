@@ -97,7 +97,8 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
     {
       isEmpty: invoiceListIsEmpty,
       immediate: shouldFetchInvoices(base),
-      deps: [ctx.mode, ctx.active.entityId, offset],
+      // The request uses activeEntityId: an in-house ctx.active.entityId settling must not refetch.
+      deps: [ctx.mode, activeEntityId, offset],
     },
   )
   const state = invoicesViewState(base, list)

@@ -13,13 +13,14 @@ if ! scripts/dev/wait-go-test-idle.sh . > "$L/wait.log" 2>&1; then
 fi
 
 failed=0
+fs=
 suite() { # suite <name> <command...>
   local name=$1 rc
   shift
   "$@" > "$L/$name.log" 2>&1
   rc=$?
   echo "$name=$rc"
-  [ "$rc" -eq 0 ] || failed=1
+  [ "$rc" -eq 0 ] || { failed=1; fs="$fs $name"; }
 }
 
 suite fmt make fmt-check
@@ -31,7 +32,10 @@ else
 fi
 suite spa sh -c 'pnpm -r typecheck && pnpm -r build'
 # `pnpm -r test` alone would launch Playwright (e2e's `test` script is the browser suite).
-suite unit sh -c "pnpm -r --filter '!@invoice-os/e2e' test && pnpm --filter @invoice-os/e2e test:unit"
+# pnpm runs 4 packages at once and each vitest starts cores-1 workers: cap each at cores/4, min 1.
+cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null)
+case $cores in ''|*[!0-9]*) workers=1 ;; *) workers=$(( cores / 4 )); [ "$workers" -ge 1 ] || workers=1 ;; esac
+suite unit sh -c "rc=0; pnpm -r --no-bail --filter '!@invoice-os/e2e' test --maxWorkers=$workers || rc=1; pnpm --filter @invoice-os/e2e test:unit || rc=1; exit \$rc"
 
-grep -hE '^(ok|FAIL|--- FAIL|Test Files|Tests)' "$L"/*.log | tail -40
+[ -z "$fs" ] || scripts/dev/suite-summary.sh "$L" $fs
 exit "$failed"

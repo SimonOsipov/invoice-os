@@ -584,9 +584,9 @@ func seedAuditPlanCorpus(t *testing.T, tx pgx.Tx) auditPlanCorpus {
 }
 
 func TestRLS_StaffReadAuditLogPlansReadAnIndex(t *testing.T) {
-	requireHarness(t)
+	superDSN := useScratchHarness(t)
+	requireStaffReadAuditLog(t)
 	ctx := context.Background()
-	superDSN, _ := migratedScratchDB(t, migrations.FS)
 
 	cfg, err := pgx.ParseConfig(superDSN)
 	if err != nil {

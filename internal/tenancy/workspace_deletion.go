@@ -151,6 +151,25 @@ func issueDeletionLinks(ctx context.Context, tx pgx.Tx, tenantID, subject string
 	return links, nil
 }
 
+// issueCancelMails writes one cancel-mail row per other active admin with an email.
+func issueCancelMails(ctx context.Context, tx pgx.Tx, tenantID, subject string, due time.Time) ([]IssuedCancelMail, error) {
+	admins, err := otherActiveAdmins(ctx, tx, subject)
+	if err != nil {
+		return nil, err
+	}
+	mails := make([]IssuedCancelMail, 0, len(admins))
+	for _, a := range admins {
+		var id string
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO workspace_deletion_cancel_mails (tenant_id, recipient_user_id, cancelled_due_at)
+			 VALUES ($1, $2, $3) RETURNING id::text`, tenantID, a.id, due).Scan(&id); err != nil {
+			return nil, err
+		}
+		mails = append(mails, IssuedCancelMail{ID: id, Email: a.email})
+	}
+	return mails, nil
+}
+
 // CancelWorkspaceDeletion clears a schedule and returns the mail to send. A workspace that is not
 // scheduled is a no-op with a zero result.
 func (s *Store) CancelWorkspaceDeletion(ctx context.Context) (CancelledDeletion, error) {
@@ -246,19 +265,9 @@ func (s *Store) cancelScheduledDeletion(ctx context.Context, token *string) (Can
 			id.Subject).Scan(&canceller); err != nil {
 			return err
 		}
-		admins, err := otherActiveAdmins(ctx, tx, id.Subject)
+		mails, err := issueCancelMails(ctx, tx, id.TenantID, id.Subject, *due)
 		if err != nil {
 			return err
-		}
-		mails := make([]IssuedCancelMail, 0, len(admins))
-		for _, a := range admins {
-			var mailID string
-			if err := tx.QueryRow(ctx,
-				`INSERT INTO workspace_deletion_cancel_mails (tenant_id, recipient_user_id, cancelled_due_at)
-				 VALUES ($1, $2, $3) RETURNING id::text`, id.TenantID, a.id, *due).Scan(&mailID); err != nil {
-				return err
-			}
-			mails = append(mails, IssuedCancelMail{ID: mailID, Email: a.email})
 		}
 		out = CancelledDeletion{DueAt: *due, Workspace: workspace, Canceller: canceller, Mails: mails}
 		return nil

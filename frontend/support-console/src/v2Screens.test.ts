@@ -98,7 +98,7 @@ const RULES_PROPS: Parameters<typeof Rules>[0] = {
 const rulesWith = (over: Partial<Parameters<typeof Rules>[0]>) => renderToStaticMarkup(createElement(Rules, { ...RULES_PROPS, ...over }))
 
 const tenant = (id: string, name: string, over: Partial<StaffTenant> = {}): StaffTenant => ({
-  id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 0, invoice_count: 0, last_activity_at: null, ...over,
+  id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 0, invoice_count: 0, last_activity_at: null, deletion_due_at: null, deletion_purge_started_at: null, ...over,
 })
 const T1 = tenant('t1', 'Okafor & Partners', { demo: true, active_members: 5, invoice_count: 31, last_activity_at: '2026-09-23T11:35:00Z' })
 const T2 = tenant('t2', 'In-house Co', { kind: 'in_house' })
@@ -122,6 +122,9 @@ const TENANTS_PROPS: Parameters<typeof Tenants>[0] = {
   detail: DETAIL,
   onRetryDetail: noop,
   onViewJobs: noop,
+  onDeletion: noop,
+  onDeleteAccount: noop,
+  actionBusy: false,
 }
 const tenantsWith = (over: Partial<Parameters<typeof Tenants>[0]>) => renderToStaticMarkup(createElement(Tenants, { ...TENANTS_PROPS, ...over }))
 
@@ -553,10 +556,10 @@ describe('v2 screens', () => {
     expect(tenantsWith({ status: 'ready', tenants: [T1], query: 'zzz' })).toContain('No tenant matches.')
   })
 
-  it('the tenant detail offers View jobs as its only action', () => {
-    const detail = SCREENS.tenants.slice(SCREENS.tenants.indexOf('<h2'))
-    expect(detail.match(/<button\b/g)).toHaveLength(1)
-    expect(detail).toMatch(/<button\b[^>]*>View jobs<\/button>/)
+  it('the tenant detail header offers View jobs, Delete workspace and Purge now on an unscheduled tenant', () => {
+    const header = SCREENS.tenants.slice(SCREENS.tenants.indexOf('<h2'), SCREENS.tenants.indexOf('>Members<'))
+    expect(Array.from(header.matchAll(/<button\b[^>]*>([^<]*)<\/button>/g), (m) => m[1])).toEqual(['View jobs', 'Delete workspace', 'Purge now'])
+    expect(header.match(/<button\b/g)).toHaveLength(3)
   })
 
   it('the tenants grid holds two columns', () => {

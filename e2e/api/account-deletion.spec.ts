@@ -12,6 +12,8 @@ import {
   me,
   memberships,
   previewAccountDeletion,
+  provisionStaffAccount,
+  rawFetch,
   registerFormAccount,
   registerFresh,
   scheduleDeletion,
@@ -215,5 +217,28 @@ test.describe('account deletion (API E2E, over the deployed gateway)', () => {
     const status = new Map((await memberships(ws.adminToken)).memberships.map((m) => [m.user_id, m.status]))
     expect(status.get(p.userId)).toBe('removed')
     expect(status.get(q.userId)).toBe('active')
+  })
+
+  test("account deletion: staff delete a preparer's account", async () => {
+    const ws = await workspace('selfdelete-staff')
+    const preparer = await joined(ws, 'preparer', 'Staffed')
+    const granted = await provisionStaffAccount('staff-selfdelete')
+    const staff = (await signInSession(granted.email, granted.password)).access_token
+    // internal/tenancy/staff_account_deletion.go routes.
+    const path = `/api/tenancy/v1/staff/tenants/${ws.tenantId}/members/${preparer.userId}/deletion`
+    const headers = { Authorization: `Bearer ${staff}` }
+
+    const preview = await rawFetch(path, { headers })
+    expect(preview.status, JSON.stringify(preview.body)).toBe(200)
+    expect(outcomeOf(preview)).toBe(LEAVE)
+
+    const res = await rawFetch(path, { method: 'POST', headers, body: { outcome: LEAVE, reason: 'e2e staff delete' } })
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    expect(res.body).toEqual({ outcome: LEAVE })
+
+    const detail = await rawFetch(`/api/tenancy/v1/staff/tenants/${ws.tenantId}`, { headers })
+    expect(detail.status, JSON.stringify(detail.body)).toBe(200)
+    const row = (detail.body as { members: { user_id: string; status: string }[] }).members.find((m) => m.user_id === preparer.userId)
+    expect(row?.status, 'the staff roster shows the member removed').toBe('removed')
   })
 })

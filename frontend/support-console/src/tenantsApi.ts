@@ -13,6 +13,8 @@ export interface StaffTenant {
   active_members: number
   invoice_count: number
   last_activity_at: string | null
+  deletion_due_at: string | null
+  deletion_purge_started_at: string | null
 }
 // tenancy.Membership
 export interface StaffMember {
@@ -41,6 +43,30 @@ export const fetchStaffTenants = async (signal?: AbortSignal): Promise<StaffTena
 
 export const fetchStaffTenant = (id: string, signal?: AbortSignal): Promise<StaffTenantDetail> =>
   request<StaffTenantDetail>(`${TENANTS_PATH}/${encodeURIComponent(id)}`, { signal })
+
+const tenantPath = (id: string): string => `${TENANTS_PATH}/${encodeURIComponent(id)}`
+const memberDeletionPath = (id: string, userId: string): string => `${tenantPath(id)}/members/${encodeURIComponent(userId)}/deletion`
+const post = <T>(path: string, body: unknown): Promise<T> => request<T>(path, { method: 'POST', body })
+
+export const startTenantDeletion = (id: string, reason: string): Promise<{ deletion_due_at: string }> => post(`${tenantPath(id)}/deletion`, { reason })
+
+export const cancelTenantDeletion = (id: string, reason: string): Promise<{ deletion_due_at: null }> => post(`${tenantPath(id)}/deletion/cancel`, { reason })
+
+export const purgeTenant = (id: string, workspaceName: string, reason: string): Promise<{ deletion_purge_started_at: string }> =>
+  post(`${tenantPath(id)}/deletion/purge`, { workspace_name: workspaceName, reason })
+
+// tenancy.AccountDeletionPreview
+export type AccountOutcome = 'leave' | 'hand_on' | 'delete_workspace'
+export interface AccountPreview {
+  outcome: AccountOutcome
+  heir_name: string | null
+  heir_user_id: string | null
+}
+export const previewMemberDeletion = (id: string, userId: string, signal?: AbortSignal): Promise<AccountPreview> =>
+  request<AccountPreview>(memberDeletionPath(id, userId), { signal })
+
+export const deleteMemberAccount = (id: string, userId: string, body: { outcome: 'leave' | 'hand_on'; heir_user_id?: string; reason: string }): Promise<{ outcome: AccountOutcome }> =>
+  post(memberDeletionPath(id, userId), body)
 
 export const filterTenants = (list: StaffTenant[], query: string): StaffTenant[] => {
   const q = query.trim().toLowerCase()

@@ -15,6 +15,7 @@ import {
   me,
   memberships,
   mintSignInState,
+  provisionStaffAccount,
   rawFetch,
   registerFormAccount,
   registerFresh,
@@ -315,5 +316,100 @@ test.describe.serial('cancel link (API E2E, over the deployed gateway)', () => {
       const res = await cancelDeletionByLink(adminBToken, fresh)
       expect(res.status, JSON.stringify(res.body)).toBe(200)
     })
+  })
+})
+
+// internal/tenancy/staff_deletion.go readStaffReason with maxStaffReasonRunes = 500.
+const REASON_LENGTH = 'reason must be 1 to 500 characters'
+// internal/tenancy/tenancy.go statusForErr: the purge-marked 409.
+const BEING_DELETED = 'this workspace is already being deleted'
+const STAFF_TENANTS = '/api/tenancy/v1/staff/tenants'
+
+test.describe('staff workspace deletion (API E2E, over the deployed gateway)', () => {
+  let staff: string
+  let customer: string
+
+  const staffPost = (token: string, path: string, body: unknown): Promise<RawResult> => rawFetch(`${STAFF_TENANTS}/${path}`, { method: 'POST', headers: auth(token), body })
+  const staffRead = (id: string): Promise<RawResult> => rawFetch(`${STAFF_TENANTS}/${id}`, { headers: auth(staff) })
+
+  async function fresh(prefix: string): Promise<{ adminToken: string; tenantId: string; workspaceName: string }> {
+    const reg = await registerFormAccount(prefix)
+    return { adminToken: reg.token, tenantId: (await me(reg.token)).tenant.id, workspaceName: reg.account.workspaceName }
+  }
+
+  test.beforeAll(async () => {
+    const granted = await provisionStaffAccount('staff-deletion')
+    staff = (await signInSession(granted.email, granted.password)).access_token
+    customer = (await registerFormAccount('staff-deletion-customer')).token
+  })
+
+  test('staff deletion routes refuse a customer and a missing reason', async () => {
+    const ws = await fresh('staff-deletion-refuse')
+    const member = crypto.randomUUID()
+    const routes: [string, string, 'GET' | 'POST', unknown][] = [
+      ['start', `${ws.tenantId}/deletion`, 'POST', { reason: 'r' }],
+      ['cancel', `${ws.tenantId}/deletion/cancel`, 'POST', { reason: 'r' }],
+      ['purge', `${ws.tenantId}/deletion/purge`, 'POST', { workspace_name: ws.workspaceName, reason: 'r' }],
+      ['member preview', `${ws.tenantId}/members/${member}/deletion`, 'GET', undefined],
+      ['member delete', `${ws.tenantId}/members/${member}/deletion`, 'POST', { outcome: 'leave', reason: 'r' }],
+    ]
+    for (const [label, path, method, body] of routes) {
+      const res = await rawFetch(`${STAFF_TENANTS}/${path}`, { method, headers: auth(customer), ...(body !== undefined && { body }) })
+      assertErrorEnvelope(res, 403, `a customer on staff ${label}`)
+      // internal/gateway/gateway.go authorize: the staff class refuses before any handler runs.
+      expect(errorOf(res), `a customer on staff ${label}`).toBe('forbidden')
+    }
+
+    const bodies: [string, string, unknown][] = [
+      ['start', `${ws.tenantId}/deletion`, {}],
+      ['cancel', `${ws.tenantId}/deletion/cancel`, {}],
+      ['purge', `${ws.tenantId}/deletion/purge`, { workspace_name: ws.workspaceName }],
+      ['member delete', `${ws.tenantId}/members/${member}/deletion`, { outcome: 'leave' }],
+    ]
+    for (const [label, path, body] of bodies) {
+      const res = await staffPost(staff, path, body)
+      assertErrorEnvelope(res, 400, `staff ${label} without a reason`)
+      expect(errorOf(res), label).toBe(REASON_LENGTH)
+    }
+    expect((await me(ws.adminToken)).tenant.deletion_due_at, 'nothing was scheduled').toBeNull()
+  })
+
+  test('staff start and cancel lock and unlock a fresh workspace', async () => {
+    const ws = await fresh('staff-deletion-start')
+    const start = await staffPost(staff, `${ws.tenantId}/deletion`, { reason: 'e2e start' })
+    expect(start.status, JSON.stringify(start.body)).toBe(200)
+    const due = dueOf(start)
+    expect(Math.abs(Date.parse(due) - (Date.now() + 30 * DAY_MS)), 'due date is now + 30 days within 2 minutes').toBeLessThanOrEqual(120_000)
+    expect((await me(ws.adminToken)).tenant.deletion_due_at, 'the admin reads the due date').toBe(due)
+
+    const again = await staffPost(staff, `${ws.tenantId}/deletion`, { reason: 'e2e start again' })
+    assertErrorEnvelope(again, 409, 'a second staff start')
+    expect(errorOf(again)).toBe(WORKSPACE_LOCKED)
+
+    const cancel = await staffPost(staff, `${ws.tenantId}/deletion/cancel`, { reason: 'e2e cancel' })
+    expect(cancel.status, JSON.stringify(cancel.body)).toBe(200)
+    expect(cancel.body).toEqual({ deletion_due_at: null })
+    expect((await me(ws.adminToken)).tenant.deletion_due_at, 'the admin reads no due date').toBeNull()
+  })
+
+  test('staff purge now erases a fresh workspace', async () => {
+    test.setTimeout(180_000)
+    const ws = await fresh('staff-deletion-purge')
+
+    const wrong = await staffPost(staff, `${ws.tenantId}/deletion/purge`, { workspace_name: `${ws.workspaceName} x`, reason: 'e2e purge' })
+    assertErrorEnvelope(wrong, 400, 'purge with a wrong name')
+    expect(errorOf(wrong)).toBe(NAME_MISMATCH)
+    expect((await staffRead(ws.tenantId)).status, 'the wrong name purged nothing').toBe(200)
+
+    const purge = await staffPost(staff, `${ws.tenantId}/deletion/purge`, { workspace_name: ws.workspaceName, reason: 'e2e purge' })
+    expect(purge.status, JSON.stringify(purge.body)).toBe(202)
+
+    // The purge job races this call: 409 while the marker stands, a refusal once the tenant and its sessions are gone.
+    const cancel = await cancelDeletion(ws.adminToken)
+    expect([401, 403, 404, 409], `an admin cancel after a purge answered ${cancel.status}`).toContain(cancel.status)
+    if (cancel.status === 409) expect(errorOf(cancel)).toBe(BEING_DELETED)
+
+    // The first live run of purge now on the preview: files and GoTrue included.
+    await expect.poll(async () => (await staffRead(ws.tenantId)).status, { intervals: [3_000], timeout: 90_000 }).toBe(404)
   })
 })

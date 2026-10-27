@@ -578,9 +578,14 @@ func TestRLS_WorkspaceDeletionDownRestoresTheInviteReadersAndRoundTrips(t *testi
 	tenant, token, email := newNamedTenant(t, "Down probe"), newToken(t), uniqueAddr("down")
 	seedAcceptInvite(t, tenant, "reviewer", email, token)
 	wdSchedule(t, tenant, `now()`)
-	t.Cleanup(func() { requirePurgeGuard(t) })
+	deletionRead := migrationVersion(t, "*_staff_read_tenant_deletions.sql")
+	t.Cleanup(func() { requirePurgeGuard(t); requireStaffDeletionRead(t) })
+	restoreMigrationOnCleanup(t, provider, deletionRead)
 	restoreMigrationOnCleanup(t, provider, purge)
 	restoreMigrationOnCleanup(t, provider, version)
+	if _, err := provider.ApplyVersion(ctx, deletionRead, false); err != nil {
+		t.Fatalf("Down of the staff-read-deletions migration: %v", err)
+	}
 	if _, err := provider.ApplyVersion(ctx, purge, false); err != nil {
 		t.Fatalf("Down of the purge-started migration: %v", err)
 	}

@@ -34,7 +34,7 @@ const (
 	devHouseTenant     = "a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0"
 )
 
-var staffTenantKeys = []string{"active_members", "created_at", "demo", "id", "invoice_count", "kind", "last_activity_at", "name"}
+var staffTenantKeys = []string{"active_members", "created_at", "deletion_due_at", "deletion_purge_started_at", "demo", "id", "invoice_count", "kind", "last_activity_at", "name"}
 
 // staffCtx returns the context auth.RequireStaff builds for a staff caller: the key is private to auth.
 func staffCtx(subject string) context.Context {
@@ -282,7 +282,7 @@ func TestStaffTenantsRoute_StaffSeesEveryTenant(t *testing.T) {
 				if name != nk[0] || kind != nk[1] {
 					t.Errorf("tenant %s = name %q kind %q, want %q %q", id, name, kind, nk[0], nk[1])
 				}
-				for k, want := range map[string]string{"active_members": "0", "invoice_count": "0", "last_activity_at": "null", "demo": "false"} {
+				for k, want := range map[string]string{"active_members": "0", "invoice_count": "0", "last_activity_at": "null", "demo": "false", "deletion_due_at": "null", "deletion_purge_started_at": "null"} {
 					if got := string(row[k]); got != want {
 						t.Errorf("tenant %s %s = %s, want %s", id, k, got, want)
 					}
@@ -381,9 +381,9 @@ func TestStaffTenantsHandler_Contract(t *testing.T) {
 		{"nil list is an empty array", func(context.Context) ([]StaffTenant, error) { return nil, nil }, 200, `{"tenants":[]}`, false},
 		{"empty list is an empty array", func(context.Context) ([]StaffTenant, error) { return []StaffTenant{}, nil }, 200, `{"tenants":[]}`, false},
 		{"one tenant", func(context.Context) ([]StaffTenant, error) { return one, nil }, 200,
-			`{"tenants":[{"id":"t1","name":"Acme","kind":"firm","created_at":"2026-10-13T12:00:00Z","demo":true,"active_members":2,"invoice_count":3,"last_activity_at":null}]}`, false},
+			`{"tenants":[{"id":"t1","name":"Acme","kind":"firm","created_at":"2026-10-13T12:00:00Z","demo":true,"active_members":2,"invoice_count":3,"last_activity_at":null,"deletion_due_at":null,"deletion_purge_started_at":null}]}`, false},
 		{"one tenant with activity", func(context.Context) ([]StaffTenant, error) { return withActivity, nil }, 200,
-			`{"tenants":[{"id":"t2","name":"Beta","kind":"firm","created_at":"2026-10-13T12:00:00Z","demo":false,"active_members":0,"invoice_count":0,"last_activity_at":"2026-10-13T12:30:00Z"}]}`, false},
+			`{"tenants":[{"id":"t2","name":"Beta","kind":"firm","created_at":"2026-10-13T12:00:00Z","demo":false,"active_members":0,"invoice_count":0,"last_activity_at":"2026-10-13T12:30:00Z","deletion_due_at":null,"deletion_purge_started_at":null}]}`, false},
 		{"not staff", func(context.Context) ([]StaffTenant, error) { return nil, db.ErrNotStaff }, 403, forbiddenBody, false},
 		{"wrapped not staff", func(context.Context) ([]StaffTenant, error) { return nil, fmt.Errorf("x: %w", db.ErrNotStaff) }, 403, forbiddenBody, false},
 		{"other error", func(context.Context) ([]StaffTenant, error) { return nil, errors.New("x") }, 500, internalBody, true},
@@ -1239,7 +1239,7 @@ func TestStaffTenantRoute_ReadsWriteNoAuditRow(t *testing.T) {
 func TestStaffTenantHandler_Contract(t *testing.T) {
 	created := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
 	header := StaffTenant{ID: "t1", Name: "Acme", Kind: "firm", CreatedAt: created}
-	const headerJSON = `{"id":"t1","name":"Acme","kind":"firm","created_at":"2026-10-13T12:00:00Z","demo":false,"active_members":0,"invoice_count":0,"last_activity_at":null}`
+	const headerJSON = `{"id":"t1","name":"Acme","kind":"firm","created_at":"2026-10-13T12:00:00Z","demo":false,"active_members":0,"invoice_count":0,"last_activity_at":null,"deletion_due_at":null,"deletion_purge_started_at":null}`
 	lostGrant := fmt.Errorf("tenancy: staff read tenant: %w", &pgconn.PgError{Code: "42501", Message: "permission denied for function staff_read_tenant_members"})
 	serve := func(d StaffTenantDetail, err error) func(context.Context, string) (StaffTenantDetail, error) {
 		return func(context.Context, string) (StaffTenantDetail, error) { return d, err }
@@ -1320,5 +1320,80 @@ func TestStaffTenant_ShowsARemovedRowWithoutEmail(t *testing.T) {
 		if got := string(members[1][k]); got != want {
 			t.Errorf("removed member %s = %s, want %s", k, got, want)
 		}
+	}
+}
+
+// TestStoreStaffTenants_CarriesTheDeletionState reads the two fields off the wire form, so the spec fails on the value, not the build.
+func TestStoreStaffTenants_CarriesTheDeletionState(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	_, staff := houseMember(t, super, "active")
+	scheduled := seedKindedTenant(t, super, "deletion state scheduled", "firm")
+	started := seedKindedTenant(t, super, "deletion state started", "firm")
+	plain := seedKindedTenant(t, super, "deletion state plain", "firm")
+	lockByOwner(t, super, scheduled, staff)
+	startPurge(t, super, started, staff)
+	ctx := staffCtx(staff)
+
+	type state struct{ due, marker *time.Time }
+	want := map[string]state{
+		scheduled: {deletionOf(t, super, scheduled).DueAt, nil},
+		started:   {deletionOf(t, super, started).DueAt, purgeStartedAt(t, super, started)},
+		plain:     {nil, nil},
+	}
+	if want[scheduled].due == nil || want[started].due == nil || want[started].marker == nil {
+		t.Fatal("setup: the scheduled and started tenants carry no deletion state")
+	}
+	wireOf := func(v StaffTenant) (id string, got state, keys []string) {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("marshal a StaffTenant: %v", err)
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("decode a StaffTenant: %v", err)
+		}
+		for k := range m {
+			keys = append(keys, k)
+		}
+		_ = json.Unmarshal(m["id"], &id)
+		_ = json.Unmarshal(m["deletion_due_at"], &got.due)
+		_ = json.Unmarshal(m["deletion_purge_started_at"], &got.marker)
+		return id, got, keys
+	}
+	same := func(a, b *time.Time) bool { return a == nil && b == nil || a != nil && b != nil && a.Equal(*b) }
+	check := func(what string, v StaffTenant) {
+		t.Helper()
+		id, got, keys := wireOf(v)
+		for _, k := range []string{"deletion_due_at", "deletion_purge_started_at"} {
+			if !slices.Contains(keys, k) {
+				t.Errorf("%s: the tenant carries no %s key (keys %v)", what, k, keys)
+			}
+		}
+		if w := want[id]; !same(got.due, w.due) || !same(got.marker, w.marker) {
+			t.Errorf("%s %s: due = %v, marker = %v, want %v, %v", what, id, got.due, got.marker, w.due, w.marker)
+		}
+	}
+
+	list, err := store.StaffTenants(ctx)
+	if err != nil {
+		t.Fatalf("StaffTenants: %v", err)
+	}
+	seen := 0
+	for _, v := range list {
+		if _, ok := want[v.ID]; ok {
+			seen++
+			check("list", v)
+		}
+	}
+	if seen != len(want) {
+		t.Fatalf("the list carried %d of the %d seeded tenants", seen, len(want))
+	}
+	for id := range want {
+		detail, err := store.StaffTenant(ctx, id)
+		if err != nil {
+			t.Fatalf("StaffTenant(%s): %v", id, err)
+		}
+		check("detail", detail.Tenant)
 	}
 }

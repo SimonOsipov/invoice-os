@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,6 +31,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth/gotrueadmin"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/tenancy"
+	"github.com/SimonOsipov/invoice-os/internal/workspacepurge/purgeargs"
 )
 
 const (
@@ -370,6 +374,14 @@ func (r *rig) scheduleAt(tenant, expr string) {
 	r.exec(`UPDATE tenants SET deletion_scheduled_at = `+expr+`, deletion_scheduled_by = gen_random_uuid() WHERE id = $1`, tenant)
 }
 
+// start schedules the tenant now (so it is not due) and sets the purge marker, as a staff purge now does.
+func (r *rig) start(tenant string) string {
+	r.t.Helper()
+	r.scheduleAt(tenant, "now()")
+	r.exec(`UPDATE tenants SET deletion_purge_started_at = now() WHERE id = $1`, tenant)
+	return tenant
+}
+
 func (r *rig) due(tenant string) string {
 	r.t.Helper()
 	r.scheduleAt(tenant, "now() - interval '31 days'")
@@ -616,6 +628,44 @@ func TestPurge_ErasesTheMembersDeletesTheFilesAndPurgesTheRows(t *testing.T) {
 	}
 	if left := r.store.under("tenants/" + c + "/"); !slices.Equal(left, cKeys) {
 		t.Errorf("C's objects = %v, want %v", left, cKeys)
+	}
+}
+
+func TestPurge_AStartedTenantThatIsNotDueIsPurged(t *testing.T) {
+	r := newRig(t)
+	a := r.start(r.tenant())
+	if r.isDue(a) {
+		t.Fatal("control: A is due; the test needs a started tenant whose due time is 30 days away")
+	}
+	admin, mail := r.user(), r.mail("started")
+	r.member(a, admin, "admin", "active", &mail, "")
+	r.put(a, 2)
+	b, bUser, bMail := r.tenant(), r.user(), r.mail("b") // scheduled now, never started: not due
+	r.scheduleAt(b, "now()")
+	r.member(b, bUser, "admin", "active", &bMail, "")
+	bKeys := r.put(b, 1)
+
+	got, err := r.purger().Purge(context.Background(), a)
+	requireResult(t, got, err, Result{Purged: true, Members: 1, Objects: 2})
+	if r.erasures(admin) != 1 || r.jobs(eraseKind, admin) != 1 {
+		t.Error("the admin of A has no erasure row or job")
+	}
+	if r.tenantRows(a) != 0 || r.memberRows(a) != 0 || r.objects(a) != 0 {
+		t.Errorf("A's tenant, member and object counts = %d, %d, %d; want 0, 0, 0", r.tenantRows(a), r.memberRows(a), r.objects(a))
+	}
+	rows := r.staff(a)
+	if len(rows) != 1 || rows[0].Event != "workspace.purged" {
+		t.Fatalf("staff rows of A = %+v, want one workspace.purged", rows)
+	}
+
+	// B is scheduled but neither due nor started: Purge leaves it whole.
+	got, err = r.purger().Purge(context.Background(), b)
+	requireResult(t, got, err, Result{})
+	if r.tenantRows(b) != 1 || r.memberRows(b) != 1 || r.marker(b) != nil || r.erasures(bUser) != 0 || len(r.staff(b)) != 0 {
+		t.Error("B was touched: its row, member, marker, erasure or staff row changed")
+	}
+	if left := r.store.under("tenants/" + b + "/"); !slices.Equal(left, bKeys) {
+		t.Errorf("B's objects = %v, want %v", left, bKeys)
 	}
 }
 
@@ -1278,6 +1328,153 @@ func TestPurge_TwoRunsAtOncePurgeOnce(t *testing.T) {
 	}
 }
 
+// A second runner that starts while the first is in its file step skips the tenant, so no member is erased twice.
+func TestPurge_ARunnerWhileAnotherPurgesTheTenantSkipsIt(t *testing.T) {
+	r := newRig(t)
+	a := r.due(r.tenant())
+	admin, mail := r.user(), r.mail("single")
+	r.member(a, admin, "admin", "active", &mail, "")
+	r.put(a, 1)
+	p := r.purger()
+
+	inFiles, release := make(chan struct{}), make(chan struct{})
+	var blocked atomic.Bool
+	r.store.onList = func(context.Context, string) {
+		if blocked.CompareAndSwap(false, true) {
+			close(inFiles)
+			<-release
+		}
+	}
+	var first Result
+	var firstErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		first, firstErr = p.Purge(context.Background(), a)
+	}()
+	<-inFiles
+
+	second, secondErr := p.Purge(context.Background(), a)
+	close(release)
+	<-done
+
+	requireResult(t, second, secondErr, Result{})
+	requireResult(t, first, firstErr, Result{Purged: true, Members: 1, Objects: 1})
+	var gen int64
+	if err := r.super.QueryRow(context.Background(), `SELECT generation FROM person_erasures WHERE user_id = $1`, admin).Scan(&gen); err != nil || gen != 1 {
+		t.Errorf("erasure generation = %d (%v), want 1: the member is queued once", gen, err)
+	}
+	if n := len(r.staff(a)); n != 1 {
+		t.Errorf("staff rows = %d, want 1", n)
+	}
+}
+
+// purgeLocked reads the tenant's purge lock from pg_locks, as archive.exportRunning reads the export lock.
+func (r *rig) purgeLocked(tenant string) bool {
+	return r.count(`SELECT count(*) FROM pg_locks, (SELECT hashtextextended('workspace_purge:' || $1::text, 0) AS k) x
+		WHERE locktype = 'advisory' AND granted AND objsubid = 1
+		AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+		AND classid::bigint = (x.k >> 32) & 4294967295 AND objid::bigint = x.k & 4294967295`, tenant) > 0
+}
+
+func TestPurge_TheTenantLockIsHeldWhilePurgingAndFreeAfterEveryExit(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		arm   func(r *rig, cancel func())
+		panic bool
+	}{
+		{"a purge that completes", func(*rig, func()) {}, false},
+		{"a failed file step", func(r *rig, _ func()) { r.store.failDelete = func([]string) bool { return true } }, false},
+		{"a cancelled context", func(r *rig, cancel func()) {
+			prev := r.store.onList
+			r.store.onList = func(ctx context.Context, p string) { prev(ctx, p); cancel() }
+		}, false},
+		{"a panic in the file step", func(r *rig, _ func()) {
+			prev := r.store.onList
+			r.store.onList = func(ctx context.Context, p string) { prev(ctx, p); panic("forced") }
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			a := r.due(r.tenant())
+			r.member(a, r.user(), "admin", "active", ptr(r.mail("lock")), "")
+			r.put(a, 1)
+			var during bool
+			r.store.onList = func(context.Context, string) { during = r.purgeLocked(a) }
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			tc.arm(r, cancel)
+
+			func() {
+				defer func() {
+					if rec := recover(); (rec != nil) != tc.panic {
+						t.Errorf("recovered %v, want a panic = %v", rec, tc.panic)
+					}
+				}()
+				_, _ = r.purger().Purge(ctx, a)
+			}()
+
+			if !during {
+				t.Error("the purge lock was not held while the file step ran")
+			}
+			if r.purgeLocked(a) {
+				t.Error("the purge lock is still held after Purge returned")
+			}
+			if n := r.app.Stat().AcquiredConns(); n != 0 {
+				t.Errorf("%d pool connections still acquired after Purge returned", n)
+			}
+		})
+	}
+}
+
+// A runner that skipped while a purge held the tenant must not lose the purge when that purge fails: the next run finishes it.
+func TestPurge_ASkippedRunnerLeavesAFailedPurgeToTheNextRun(t *testing.T) {
+	r := newRig(t)
+	a := r.due(r.tenant())
+	r.member(a, r.user(), "admin", "active", ptr(r.mail("lost")), "")
+	r.put(a, 1)
+	p := r.purger()
+
+	inFiles, release := make(chan struct{}), make(chan struct{})
+	var once atomic.Bool
+	r.store.onList = func(context.Context, string) {
+		if once.CompareAndSwap(false, true) {
+			close(inFiles)
+			<-release
+		}
+	}
+	var failing atomic.Bool
+	failing.Store(true)
+	r.store.failDelete = func([]string) bool { return failing.Load() }
+	var firstErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, firstErr = p.Purge(context.Background(), a)
+	}()
+	<-inFiles
+
+	second, secondErr := p.Purge(context.Background(), a)
+	close(release)
+	<-done
+
+	requireResult(t, second, secondErr, Result{})
+	requireStepErr(t, firstErr, a, "files")
+	if r.tenantRows(a) != 1 || !r.isDue(a) {
+		t.Fatal("control: the failed purge should leave the tenant in place and due")
+	}
+	if r.purgeLocked(a) {
+		t.Fatal("the failed purge kept the tenant lock")
+	}
+	failing.Store(false)
+	if err := p.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if r.tenantRows(a) != 0 || r.objects(a) != 0 {
+		t.Errorf("after the next run: tenant rows = %d, objects = %d; want 0 and 0", r.tenantRows(a), r.objects(a))
+	}
+}
+
 func b2i(b bool) int {
 	if b {
 		return 1
@@ -1327,6 +1524,14 @@ func TestRunOnce_PurgesEveryDueTenantAndReportsAFailure(t *testing.T) {
 	r.put(e, 1)
 	r.put(d, 1)
 	r.store.failDelete = func(keys []string) bool { return tenantOfKey(keys[0]) == c }
+	// S is started but not due; N is scheduled now and never started.
+	s, n := r.start(r.tenant()), r.tenant()
+	r.scheduleAt(n, "now()")
+	sUser, nUser := r.user(), r.user()
+	r.member(s, sUser, "admin", "active", ptr(r.mail("s")), "")
+	r.member(n, nUser, "admin", "active", ptr(r.mail("n")), "")
+	r.put(s, 1)
+	r.put(n, 1)
 
 	err := r.purger().RunOnce(context.Background())
 
@@ -1348,9 +1553,15 @@ func TestRunOnce_PurgesEveryDueTenantAndReportsAFailure(t *testing.T) {
 	if r.tenantRows(d) != 1 || r.memberRows(d) != 1 || r.objects(d) != 1 || r.erasures(users[d]) != 0 || r.marker(d) != nil {
 		t.Error("D (not due) was touched")
 	}
-	// One at a time: the runs of file operations, collapsed, are A's, C's, E's; none for D.
-	if ops := slices.Compact(r.store.opsFor(a, c, e, d)); !slices.Equal(ops, []string{a, c, e}) {
-		t.Errorf("file operations by tenant = %v, want [A C E] in due order, not interleaved", ops)
+	if r.tenantRows(s) != 0 || r.objects(s) != 0 || r.erasures(sUser) != 1 {
+		t.Error("S (started, not due) was not purged by the ticker")
+	}
+	if r.tenantRows(n) != 1 || r.objects(n) != 1 || r.erasures(nUser) != 0 || r.marker(n) != nil {
+		t.Error("N (scheduled now, never started) was touched")
+	}
+	// One at a time: the runs of file operations, collapsed, are A's, C's, E's, S's; none for D or N.
+	if ops := slices.Compact(r.store.opsFor(a, c, e, d, s, n)); !slices.Equal(ops, []string{a, c, e, s}) {
+		t.Errorf("file operations by tenant = %v, want [A C E S] in due order, not interleaved", ops)
 	}
 
 	failed := r.logs.find(slog.LevelError, errTenantMsg)
@@ -1423,6 +1634,9 @@ func TestRunOnce_StopsOnADoneContext(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("RunOnce = %v, want an error wrapping context.Canceled", err)
 	}
+	if err != nil && strings.Contains(err.Error(), second) {
+		t.Errorf("RunOnce = %v, names the second tenant it should not have started", err)
+	}
 	if len(listed) == 0 || listed[0] != first {
 		t.Fatalf("first List was for %v, want the earliest-due tenant %s", listed, first)
 	}
@@ -1445,23 +1659,36 @@ func TestRunOnce_StopsOnADoneContext(t *testing.T) {
 func TestDueTenants_ReadsOnlyDueTenants(t *testing.T) {
 	r := newRig(t)
 	a, later, notYet, unscheduled := r.tenant(), r.tenant(), r.tenant(), r.tenant()
+	if a < later { // the earlier-due tenant has the larger id, so ordering by id alone fails
+		a, later = later, a
+	}
+	started, future := r.start(r.tenant()), r.tenant()
 	r.scheduleAt(a, "now() - interval '45 days'")
 	r.scheduleAt(later, "now() - interval '31 days'")
 	r.scheduleAt(notYet, "now() - interval '29 days'")
+	r.scheduleAt(future, "now()")
 
 	got, err := dueTenants(context.Background(), r.reader)
 	if err != nil {
 		t.Fatalf("dueTenants: %v", err)
 	}
-	ia, il := slices.Index(got, a), slices.Index(got, later)
+	ia, il, is := slices.Index(got, a), slices.Index(got, later), slices.Index(got, started)
 	if ia < 0 || il < 0 {
 		t.Fatalf("dueTenants = %v, want both due tenants %s and %s", got, a, later)
 	}
 	if ia > il {
 		t.Errorf("due tenant A is at %d, after the later-due tenant at %d", ia, il)
 	}
-	if slices.Contains(got, notYet) || slices.Contains(got, unscheduled) {
-		t.Errorf("dueTenants = %v, holds a tenant that is not due or not scheduled", got)
+	if is < 0 {
+		t.Fatalf("dueTenants = %v, want the started tenant %s although it is not due", got, started)
+	}
+	if is < il {
+		t.Errorf("the started tenant is at %d, before the earlier-due tenant at %d: ORDER BY deletion_due_at is lost", is, il)
+	}
+	for name, id := range map[string]string{"scheduled 29 days ago, unstarted": notYet, "scheduled now, unstarted": future, "unscheduled": unscheduled} {
+		if slices.Contains(got, id) {
+			t.Errorf("dueTenants lists the %s tenant %s", name, id)
+		}
 	}
 }
 
@@ -1590,6 +1817,7 @@ func TestPurge_TheHouseTenantIsNeverPurged(t *testing.T) {
 	}
 	rowsBefore, membersBefore := r.tenantRows(house), r.memberRows(house)
 	erasedBefore := r.count(`SELECT count(*) FROM person_erasures`)
+	staffBefore := len(r.staff(house))
 
 	got, err := r.purger().Purge(context.Background(), house)
 	requireResult(t, got, err, Result{})
@@ -1600,10 +1828,192 @@ func TestPurge_TheHouseTenantIsNeverPurged(t *testing.T) {
 	if n := r.count(`SELECT count(*) FROM person_erasures`); n != erasedBefore {
 		t.Errorf("erasure rows %d -> %d, want unchanged", erasedBefore, n)
 	}
-	if r.store.deletes() != 0 || len(r.staff(house)) != 0 || len(r.accounts.got()) != 0 {
+	if r.store.deletes() != 0 || len(r.staff(house)) != staffBefore || len(r.accounts.got()) != 0 {
 		t.Error("the house tenant had files deleted, a staff row or an account read")
 	}
 	if dueIDs, err := dueTenants(context.Background(), r.reader); err != nil || slices.Contains(dueIDs, house) {
 		t.Errorf("dueTenants = %v, %v; want no house tenant", dueIDs, err)
+	}
+}
+
+const (
+	wantPurgeStartedEvent = "workspace.purge_started"
+	wantPurgeJobKind      = "workspace_purge" // purgeargs.Args.Kind()
+)
+
+// staffCaller seeds an active member of the house tenant and returns the context auth.RequireStaff builds for them.
+func (r *rig) staffCaller() (ctx context.Context, subject string) {
+	r.t.Helper()
+	var house string
+	err := r.super.QueryRow(context.Background(), `SELECT tenant_id::text FROM public.house_company`).Scan(&house)
+	if errors.Is(err, pgx.ErrNoRows) {
+		house = r.tenant()
+		r.exec(`INSERT INTO public.house_company (tenant_id) VALUES ($1)`, house)
+		r.t.Cleanup(func() {
+			_, _ = r.super.Exec(context.Background(), `DELETE FROM public.house_company WHERE tenant_id = $1`, house)
+		})
+	} else if err != nil {
+		r.t.Fatalf("read the house row: %v", err)
+	}
+	subject = r.user()
+	r.exec(`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`, house, subject)
+	r.t.Cleanup(func() {
+		_, _ = r.super.Exec(context.Background(), `DELETE FROM memberships WHERE tenant_id = $1 AND user_id = $2`, house, subject)
+	})
+	h := auth.RequireStaff(http.HandlerFunc(func(_ http.ResponseWriter, req *http.Request) { ctx = req.Context() }))
+	in := auth.WithTenantlessCaller(context.Background(), auth.Identity{Subject: subject, Role: "authenticated", Staff: true})
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/staff/tenants", nil).WithContext(in))
+	return ctx, subject
+}
+
+// staffStore is a tenancy store whose erase queue is the rig's insert-only River client.
+func (r *rig) staffStore() *tenancy.Store {
+	s := tenancy.NewStore(r.app)
+	s.SetEraseQueue(r.river)
+	return s
+}
+
+func (r *rig) dropPurgeJobsOnCleanup(tenants ...string) {
+	r.t.Cleanup(func() {
+		_, _ = r.super.Exec(context.Background(),
+			`DELETE FROM river_job WHERE kind = $1 AND args->>'tenant_id' = ANY($2::text[])`, wantPurgeJobKind, tenants)
+	})
+}
+
+// purgeJobs decodes the args of the tenant's queued workspace_purge jobs.
+func (r *rig) purgeJobs(tenant string) []purgeargs.Args {
+	r.t.Helper()
+	rows, err := r.super.Query(context.Background(),
+		`SELECT args FROM river_job WHERE kind = $1 AND args->>'tenant_id' = $2 ORDER BY id`, wantPurgeJobKind, tenant)
+	if err != nil {
+		r.t.Fatalf("read river_job: %v", err)
+	}
+	defer rows.Close()
+	var out []purgeargs.Args
+	for rows.Next() {
+		var raw []byte
+		var a purgeargs.Args
+		if err := rows.Scan(&raw); err != nil {
+			r.t.Fatalf("scan river_job: %v", err)
+		}
+		if err := json.Unmarshal(raw, &a); err != nil {
+			r.t.Fatalf("decode job args %s: %v", raw, err)
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+func (r *rig) tenantName(tenant string) string {
+	r.t.Helper()
+	var name string
+	if err := r.super.QueryRow(context.Background(), `SELECT name FROM tenants WHERE id = $1`, tenant).Scan(&name); err != nil {
+		r.t.Fatalf("read the tenant name: %v", err)
+	}
+	return name
+}
+
+func TestStaffPurgeNow_TheJobPurgesTheWorkspace(t *testing.T) {
+	r := newRig(t)
+	ctx, staff := r.staffCaller()
+	store := r.staffStore()
+	a, b := r.tenant(), r.tenant()
+	r.dropPurgeJobsOnCleanup(a, b)
+	admin, mail := r.user(), r.mail("staffpurge")
+	r.member(a, admin, "admin", "active", &mail, "")
+	r.put(a, 2)
+	bUser, bMail := r.user(), r.mail("bystander")
+	r.member(b, bUser, "admin", "active", &bMail, "")
+	r.put(b, 1)
+
+	at, err := store.StaffPurgeWorkspace(ctx, a, r.tenantName(a), "court order")
+	if err != nil {
+		t.Fatalf("StaffPurgeWorkspace: %v", err)
+	}
+	jobs := r.purgeJobs(a)
+	if len(jobs) != 1 || jobs[0].TenantID != a {
+		t.Fatalf("queued %s jobs of A = %+v, want one naming A", wantPurgeJobKind, jobs)
+	}
+	if m := r.marker(a); m == nil || !m.Equal(at) || r.tenantRows(a) != 1 || r.objects(a) != 2 {
+		t.Fatalf("before the job: marker = %v (want %v), tenant rows = %d, objects = %d; want the started tenant intact", m, at, r.tenantRows(a), r.objects(a))
+	}
+
+	if err := r.worker().Work(context.Background(), purgeJob(jobs[0].TenantID)); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if r.tenantRows(a) != 0 || r.memberRows(a) != 0 || r.objects(a) != 0 {
+		t.Errorf("A's tenant, member and object counts = %d, %d, %d; want 0, 0, 0", r.tenantRows(a), r.memberRows(a), r.objects(a))
+	}
+	if r.erasures(admin) != 1 {
+		t.Error("the admin of A has no erasure row")
+	}
+	var events []string
+	for _, row := range r.staff(a) {
+		events = append(events, row.Event)
+		if row.Event == wantPurgeStartedEvent && (row.Actor != staff || !slices.Equal(sortedKeys(row.Payload), []string{"reason"})) {
+			t.Errorf("%s row = actor %s, payload %v; want the staff subject %s and exactly {reason}", wantPurgeStartedEvent, row.Actor, row.Payload, staff)
+		}
+	}
+	if !slices.Equal(events, []string{wantPurgeStartedEvent, "workspace.purged"}) {
+		t.Errorf("staff rows of A = %v, want [%s workspace.purged] and no other step", events, wantPurgeStartedEvent)
+	}
+
+	if r.tenantRows(b) != 1 || r.memberRows(b) != 1 || r.objects(b) != 1 || r.erasures(bUser) != 0 || r.marker(b) != nil {
+		t.Error("bystander B lost a row or object, or got an erasure or a marker")
+	}
+	if n := len(r.staff(b)); n != 0 || len(r.purgeJobs(b)) != 0 {
+		t.Errorf("bystander B has %d staff rows and %d purge jobs, want 0 and 0", n, len(r.purgeJobs(b)))
+	}
+}
+
+func TestStaffPurgeNow_TheRemovedCreatorCanCreateAWorkspaceAgain(t *testing.T) {
+	r := newRig(t)
+	ctx, _ := r.staffCaller()
+	staffStore := r.staffStore()
+	creator := r.user()
+	derived := uuid.NewSHA1(uuid.MustParse(creatorNS), []byte(creator)).String()
+	r.removeOnCleanup(derived)
+	r.dropPurgeJobsOnCleanup(derived)
+	store := tenancy.NewStore(r.app)
+	callerCtx := auth.WithTenantlessCaller(context.Background(), auth.Identity{Subject: creator, Email: creator + "@example.invalid"})
+	const wsName = "Creator Workspace"
+	in := tenancy.ProvisionInput{WorkspaceName: wsName, DisplayName: "Creator"}
+
+	first, _, err := store.ProvisionWorkspace(callerCtx, in)
+	if err != nil {
+		t.Fatalf("first ProvisionWorkspace: %v", err)
+	}
+	if first.ID != derived {
+		t.Fatalf("control: first tenant id = %s, want the derived %s", first.ID, derived)
+	}
+	other, otherMail := r.user(), r.mail("other")
+	r.member(derived, other, "admin", "active", &otherMail, "")
+	r.exec(`UPDATE memberships SET status = 'removed', email = NULL WHERE tenant_id = $1 AND user_id = $2`, derived, creator)
+
+	if _, err := staffStore.StaffPurgeWorkspace(ctx, derived, wsName, "court order"); err != nil {
+		t.Fatalf("StaffPurgeWorkspace: %v", err)
+	}
+	jobs := r.purgeJobs(derived)
+	if len(jobs) != 1 {
+		t.Fatalf("queued %s jobs = %d, want 1", wantPurgeJobKind, len(jobs))
+	}
+	if err := r.worker().Work(context.Background(), purgeJob(jobs[0].TenantID)); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if r.tenantRows(derived) != 0 {
+		t.Fatal("control: the derived tenant is still there after the job")
+	}
+
+	second, _, err := store.ProvisionWorkspace(callerCtx, in)
+	if err != nil {
+		t.Fatalf("ProvisionWorkspace after the purge now: %v (ErrAlreadyProvisioned = %v)", err, errors.Is(err, tenancy.ErrAlreadyProvisioned))
+	}
+	if second.ID != derived {
+		r.removeOnCleanup(second.ID)
+		t.Errorf("tenant id = %s, want the derived %s, not a random one", second.ID, derived)
+	}
+	if n := r.count(`SELECT count(*) FROM memberships WHERE tenant_id = $1 AND user_id = $2 AND status = 'active'`, derived, creator); n != 1 {
+		t.Errorf("active memberships of the creator = %d, want 1", n)
 	}
 }

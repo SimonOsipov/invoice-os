@@ -78,6 +78,7 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
   'membership.client_access_set': { label: 'Client access changed', domain: 'memberships', outcome: 'neutral' },
   'workspace.deletion_scheduled': { label: 'Workspace deletion scheduled', domain: 'memberships', outcome: 'neutral' },
   'workspace.deletion_cancelled': { label: 'Workspace deletion cancelled', domain: 'memberships', outcome: 'neutral' },
+  'workspace.purge_started': { label: 'Workspace purge started', domain: 'memberships', outcome: 'neutral' },
   'workspace.exported': { label: 'Workspace exported', domain: 'memberships', outcome: 'neutral' },
   'workspace.export_failed': { label: 'Workspace export failed', domain: 'memberships', outcome: 'bad' },
   'membership.account_deleted': { label: 'Account deleted', domain: 'memberships', outcome: 'neutral' },

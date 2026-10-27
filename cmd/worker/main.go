@@ -171,9 +171,11 @@ func main() {
 		xbw.Account = account
 	}
 
+	pjw := &workspacepurge.PurgeWorker{}
+
 	q, err := queue.New(pool, queue.Config{
 		Queues:  queueConfigs(cw != nil),
-		Workers: workerBundle(sw, pw, ew, rw, cw, xw, xbw),
+		Workers: workerBundle(sw, pw, ew, rw, cw, xw, xbw, pjw),
 		Logger:  app.Logger,
 	})
 	if err != nil {
@@ -199,6 +201,7 @@ func main() {
 	if account != nil { // a nil *Client in the interface would pass the purger's nil check
 		purger.Accounts = account
 	}
+	pjw.Purger = purger
 	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("workspace-purge", purger.RunOnce)))
 
 	app.AddBackgroundWorker(codelist.NewWorker(codelist.SyncInterval,
@@ -371,12 +374,13 @@ func queueConfigs(contacts bool) map[string]river.QueueConfig {
 
 // workerBundle is the ONE bundle queue.New reads. A River client takes exactly one, so a second
 // bundle would leave its workers unfetched (TestWorkerBundle_CarriesEveryKind).
-func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet, xw *notifications.EraseWorker, xbw *notifications.EraseByIDWorker) *river.Workers {
+func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet, xw *notifications.EraseWorker, xbw *notifications.EraseByIDWorker, pjw *workspacepurge.PurgeWorker) *river.Workers {
 	bundle := submission.Workers(sw, pw)
 	extraction.AddTo(bundle, ew)
 	notifications.AddRegistrantTo(bundle, rw)
 	notifications.AddEraseTo(bundle, xw)
 	notifications.AddEraseByIDTo(bundle, xbw)
+	workspacepurge.AddPurgeTo(bundle, pjw)
 	if cw != nil {
 		notifications.AddTo(bundle, cw.deliver, cw.deal, cw.blog)
 	}

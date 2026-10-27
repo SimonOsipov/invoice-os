@@ -36,7 +36,8 @@ exit 0
 if [ "$1" = test ]; then cat "$SUITES_FX/go.out"; exit "$GO_RC"; fi
 exit 0
 `
-	getconfShim = `echo "$GETCONF_N"
+	getconfShim = `[ "$1" = _NPROCESSORS_ONLN ] || exit 1
+echo "$GETCONF_N"
 `
 	pnpmShim = `echo "$*" >> "$SUITES_FX/pnpm.argv"
 case "$*" in

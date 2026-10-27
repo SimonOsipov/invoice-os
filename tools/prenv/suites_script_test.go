@@ -1,4 +1,4 @@
-// suites_script_test.go runs scripts/dev/suites.sh in a temp tree with shim make, go and pnpm.
+// suites_script_test.go runs scripts/dev/suites.sh in a temp tree with shim make, go, pnpm and getconf.
 package main
 
 import (
@@ -17,6 +17,8 @@ type suitesRun struct {
 	fmtOut, goOut, rOut   string // shim output; goOut is printed by `go test`
 	fmtRC, goRC, rRC, eRC int    // make fmt-check, go test, pnpm -r test, pnpm e2e test:unit
 	staleLogs             map[string]string
+	cores                 string // getconf _NPROCESSORS_ONLN output; "" means 12
+	noCores               bool   // getconf prints nothing
 }
 
 type suitesResult struct {
@@ -33,6 +35,9 @@ exit 0
 	goShim = `echo "$*" >> "$SUITES_FX/go.argv"
 if [ "$1" = test ]; then cat "$SUITES_FX/go.out"; exit "$GO_RC"; fi
 exit 0
+`
+	getconfShim = `[ "$1" = _NPROCESSORS_ONLN ] || exit 1
+echo "$GETCONF_N"
 `
 	pnpmShim = `echo "$*" >> "$SUITES_FX/pnpm.argv"
 case "$*" in
@@ -63,7 +68,7 @@ func runSuites(t *testing.T, r suitesRun) suitesResult {
 		}
 	}
 	writeShim(t, filepath.Join(tree, "scripts/dev/wait-go-test-idle.sh"), "exit "+strconv.Itoa(r.waitRC)+"\n")
-	for name, body := range map[string]string{"make": makeShim, "go": goShim, "pnpm": pnpmShim} {
+	for name, body := range map[string]string{"make": makeShim, "go": goShim, "pnpm": pnpmShim, "getconf": getconfShim} {
 		writeShim(t, filepath.Join(bin, name), body)
 	}
 	for name, body := range map[string]string{"fmt.out": r.fmtOut, "go.out": r.goOut, "r.out": r.rOut} {
@@ -75,6 +80,10 @@ func runSuites(t *testing.T, r suitesRun) suitesResult {
 		if err := os.WriteFile(filepath.Join(tree, ".ralph", name+".log"), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	cores := r.cores
+	if cores == "" {
+		cores = "12"
 	}
 	bash := "bash"
 	if _, err := os.Stat("/bin/bash"); err == nil {
@@ -88,6 +97,11 @@ func runSuites(t *testing.T, r suitesRun) suitesResult {
 		"DEV_DB_PORT="+r.port,
 		"FMT_RC="+strconv.Itoa(r.fmtRC), "GO_RC="+strconv.Itoa(r.goRC),
 		"R_RC="+strconv.Itoa(r.rRC), "E_RC="+strconv.Itoa(r.eRC))
+	if r.noCores {
+		cmd.Env = append(cmd.Env, "GETCONF_N=")
+	} else {
+		cmd.Env = append(cmd.Env, "GETCONF_N="+cores)
+	}
 	stdout, _, err := runToFiles(t, cmd, false)
 	code := 0
 	if err != nil {
@@ -119,7 +133,7 @@ func TestSuites_TheE2EUnitTestsRunAfterTheFrontendPackagesFail(t *testing.T) {
 	first, second := -1, -1
 	for i, c := range calls {
 		switch c {
-		case "-r --no-bail --filter !@invoice-os/e2e test":
+		case "-r --no-bail --filter !@invoice-os/e2e test --maxWorkers=3":
 			first = i
 		case "--filter @invoice-os/e2e test:unit":
 			second = i
@@ -130,6 +144,52 @@ func TestSuites_TheE2EUnitTestsRunAfterTheFrontendPackagesFail(t *testing.T) {
 	}
 	if !strings.Contains(res.stdout, "unit=1\n") || res.code != 1 {
 		t.Fatalf("code %d, stdout:\n%s", res.code, res.stdout)
+	}
+}
+
+func rArgv(t *testing.T, res suitesResult) string {
+	t.Helper()
+	for _, c := range strings.Split(strings.TrimSpace(readFx(t, res, "pnpm.argv")), "\n") {
+		if strings.HasPrefix(c, "-r --no-bail") {
+			return c
+		}
+	}
+	t.Fatalf("no pnpm -r call in %q", readFx(t, res, "pnpm.argv"))
+	return ""
+}
+
+func TestSuites_VitestWorkersAreCoresOverFourMinOne(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ cores, workers string }{
+		{"1", "1"}, {"3", "1"}, {"4", "1"}, {"7", "1"}, {"8", "2"}, {"12", "3"}, {"16", "4"},
+	} {
+		t.Run(c.cores, func(t *testing.T) {
+			t.Parallel()
+			res := runSuites(t, suitesRun{cores: c.cores})
+			want := "-r --no-bail --filter !@invoice-os/e2e test --maxWorkers=" + c.workers
+			if got := rArgv(t, res); got != want {
+				t.Fatalf("cores %s: argv %q, want %q", c.cores, got, want)
+			}
+		})
+	}
+}
+
+func TestSuites_UnusableCoreCountCapsAtOne(t *testing.T) {
+	t.Parallel()
+	for name, r := range map[string]suitesRun{
+		"empty": {noCores: true}, "undefined": {cores: "undefined"}, "abc": {cores: "abc"}, "fraction": {cores: "4.5"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			res := runSuites(t, r)
+			want := "-r --no-bail --filter !@invoice-os/e2e test --maxWorkers=1"
+			if got := rArgv(t, res); got != want {
+				t.Fatalf("argv %q, want %q", got, want)
+			}
+			if !strings.Contains(res.stdout, "unit=0\n") || res.code != 0 {
+				t.Fatalf("code %d, stdout:\n%s", res.code, res.stdout)
+			}
+		})
 	}
 }
 

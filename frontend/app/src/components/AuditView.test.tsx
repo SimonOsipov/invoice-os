@@ -1395,6 +1395,106 @@ describe('AuditView export control (AUDIT-07-10)', () => {
     }
   })
 
+  it('auditExport_truncatedFileEndsWithTheNotice: the downloaded file of an endless stream ends with a line naming 2000 and more events', async () => {
+    let n = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (!isExportPageUrl(url)) return Promise.resolve(logResponse())
+        n += 1
+        return Promise.resolve(
+          logResponse({
+            events: Array.from({ length: 100 }, (_, i) => auditEvent({ id: `evt-notice-${n}-${i}` })),
+            total: 100_000,
+            page: { limit: 100, has_more: true, next_cursor: `cursor-${n}` },
+          }),
+        )
+      }),
+    )
+    const dl = stubDownload()
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getByTestId('audit-export'), 'control needle: export renders').toBeTruthy())
+    fireEvent.click(screen.getByTestId('audit-export'))
+    await waitFor(() => expect(dl.clicks.length).toBe(1), { timeout: 3000 })
+
+    const lines = new TextDecoder('utf-8')
+      .decode((await blobBytes(dl.blob as Blob)).slice(3))
+      .split('\n')
+      .filter((l) => l.length > 0)
+    expect(lines.length, 'header + 2000 rows + notice').toBe(2002)
+    expect(lines[lines.length - 1]).toContain('2000')
+    expect(lines[lines.length - 1]).toMatch(/more/i)
+    dl.restore()
+  })
+
+  it('auditExport_laterCompleteExportReplacesAPersistedToastAndExpires: truncated, then complete, then the new toast auto-dismisses', async () => {
+    let truncatedRun = true
+    let n = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (!isExportPageUrl(url)) return Promise.resolve(logResponse())
+        n += 1
+        return Promise.resolve(
+          truncatedRun
+            ? logResponse({
+                events: Array.from({ length: 100 }, (_, i) => auditEvent({ id: `evt-rep-${n}-${i}` })),
+                total: 100_000,
+                page: { limit: 100, has_more: true, next_cursor: `cursor-${n}` },
+              })
+            : logResponse({ events: [auditEvent()], total: 1, page: { limit: 100, has_more: false, next_cursor: null } }),
+        )
+      }),
+    )
+    const dl = stubDownload()
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      render(<AuditView ctx={auditCtx()} />)
+      await waitFor(() => expect(screen.getByTestId('audit-export'), 'control needle: export renders').toBeTruthy())
+      fireEvent.click(screen.getByTestId('audit-export'))
+      await waitFor(() => expect(screen.getByTestId('audit-export-toast').textContent).toContain('capped at 2000'), { timeout: 3000 })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6000)
+      })
+      expect(screen.queryByTestId('audit-export-toast'), 'control: the truncated toast persisted').not.toBeNull()
+
+      truncatedRun = false
+      fireEvent.click(screen.getByTestId('audit-export'))
+      await waitFor(() => expect(screen.getByTestId('audit-export-toast').textContent).not.toContain('capped'), { timeout: 3000 })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6000)
+      })
+      expect(screen.queryByTestId('audit-export-toast'), 'the complete export toast expires').toBeNull()
+    } finally {
+      vi.useRealTimers()
+      dl.restore()
+    }
+  })
+
+  it('auditExport_errorToastStillAutoDismisses: a refused export shows the error toast and it expires', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        isExportPageUrl(url) ? Promise.resolve({ ...logResponse(), ok: false, status: 500 } as MockResponse) : Promise.resolve(logResponse()),
+      ),
+    )
+    const dl = stubDownload()
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      render(<AuditView ctx={auditCtx()} />)
+      await waitFor(() => expect(screen.getByTestId('audit-export'), 'control needle: export renders').toBeTruthy())
+      fireEvent.click(screen.getByTestId('audit-export'))
+      await waitFor(() => expect(screen.getByTestId('audit-export-toast').textContent).toContain('Export stopped'), { timeout: 3000 })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6000)
+      })
+      expect(screen.queryByTestId('audit-export-toast')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+      dl.restore()
+    }
+  })
+
   it('auditExport_exactlyAtCapWithNoMoreIsNotTruncated: landing on 2000 via a real has_more:false never claims a cap that never bit', async () => {
     const rows = Array.from({ length: 2000 }, (_, i) => auditEvent({ id: `evt-exact-${i}` }))
     const fetchMock = vi.fn((url: string) =>
@@ -1928,6 +2028,51 @@ describe('AuditExportToast testId prop (AUDIT-08-06)', () => {
     render(<AuditExportToast kind="success" text="x" onDismiss={vi.fn()} testId="probe-toast" />)
     expect(screen.getByTestId('probe-toast')).toBeTruthy()
     expect(screen.queryByTestId('audit-export-toast')).toBeNull()
+  })
+})
+
+describe('AuditExportToast expiry (BUG-74)', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('toast_expiryCallsOnDismissAt5200UnlessPersist', () => {
+    const timed = vi.fn()
+    const kept = vi.fn()
+    render(<AuditExportToast kind="success" text="a" onDismiss={timed} />)
+    render(<AuditExportToast kind="success" text="b" testId="kept-toast" persist onDismiss={kept} />)
+    act(() => {
+      vi.advanceTimersByTime(5199)
+    })
+    expect(timed, 'not yet at 5199 ms').not.toHaveBeenCalled()
+    act(() => {
+      vi.advanceTimersByTime(1)
+    })
+    expect(timed, 'control: the default toast expires at 5200 ms').toHaveBeenCalledTimes(1)
+    act(() => {
+      vi.advanceTimersByTime(60_000)
+    })
+    expect(kept, 'a persist toast never calls onDismiss by timer').not.toHaveBeenCalled()
+  })
+
+  it('toast_dismissButtonStillCallsOnDismissWhenPersist', () => {
+    const onDismiss = vi.fn()
+    render(<AuditExportToast kind="success" text="a" persist onDismiss={onDismiss} />)
+    fireEvent.click(screen.getByTestId('audit-export-toast-dismiss'))
+    expect(onDismiss).toHaveBeenCalledTimes(1)
+  })
+
+  it('toast_persistTurnedOffArmsTheTimer: a re-render with persist=false expires after 5200 ms', () => {
+    const onDismiss = vi.fn()
+    const { rerender } = render(<AuditExportToast kind="success" text="a" persist onDismiss={onDismiss} />)
+    act(() => {
+      vi.advanceTimersByTime(10_000)
+    })
+    expect(onDismiss, 'control: persisted so far').not.toHaveBeenCalled()
+    rerender(<AuditExportToast kind="success" text="a" persist={false} onDismiss={onDismiss} />)
+    act(() => {
+      vi.advanceTimersByTime(5200)
+    })
+    expect(onDismiss).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import type { AuditEvent } from './audit'
+import { auditEventView } from './auditVocabulary'
 import { AUDIT_CSV_HEADER, auditCsv, auditCsvFilename, auditExportToastCopy } from './auditCsv'
 
 let eventCounter = 0
@@ -150,6 +151,39 @@ describe('auditCsv truncation notice (BUG-74)', () => {
     expect(auditCsv(events, { truncated: false, cap: 2000 })).toBe(auditCsv(events))
     expect(auditCsv(events), 'control: output is header + rows only').toBe(today)
     expect(auditCsv(events).split('\n').length).toBe(3)
+  })
+
+  it('auditCsv_notTruncatedMatchesStoredLiteral: a one-event export equals the pre-fix file byte for byte', () => {
+    const event = makeEvent({ id: 'evt-literal' })
+    const literal =
+      'When,Who,Actor kind,Actor id,What,Event identifier,Company,Company scope,Event id\n' +
+      `2026-08-20T09:15:00Z,Ada Obi,person,actor-uuid-0001,${auditEventView('invoice.created').label},invoice.created,\u2014,unattributed,evt-literal`
+
+    expect(auditCsv([event]), 'no options').toBe(literal)
+    expect(auditCsv([event], { truncated: false, cap: 2000 }), 'truncated:false').toBe(literal)
+  })
+
+  it('auditCsv_truncatedNamesTheCapItWasGiven: cap 50 says 50 and never 2000', () => {
+    const notice = auditCsv([makeEvent()], { truncated: true, cap: 50 }).split('\n').pop() as string
+
+    expect(notice).toContain('50')
+    expect(notice).not.toContain('2000')
+  })
+
+  it('auditCsv_truncatedNoticeIsOneCsvCell: the notice line has no unquoted comma, so a spreadsheet shows one cell', () => {
+    const lines = auditCsv([makeEvent()], trunc).split('\n')
+    const notice = lines[lines.length - 1]
+
+    expect(notice.length, 'control: the notice line is not empty').toBeGreaterThan(0)
+    expect(notice.startsWith('"') ? notice.endsWith('"') : !notice.includes(',')).toBe(true)
+  })
+
+  it('auditCsv_truncatedWithNoRowsStillHasHeaderThenNotice: header on line 1, notice on line 2', () => {
+    const lines = auditCsv([], trunc).split('\n')
+
+    expect(lines.length).toBe(2)
+    expect(lines[0]).toBe(AUDIT_CSV_HEADER.join(','))
+    expect(lines[1]).toContain('2000')
   })
 })
 

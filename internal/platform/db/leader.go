@@ -13,6 +13,9 @@ import (
 // claimRetry is how often a process that missed a task's lock tries again.
 const claimRetry = 5 * time.Second
 
+// claimTimeout bounds one claim's connection work, which the caller's ctx cannot cancel.
+const claimTimeout = 10 * time.Second
+
 // Leader elects one process per periodic task with session advisory locks on one dedicated
 // connection. A task keeps its lock until the connection drops, so a second worker instance
 // runs none of the tasks the first one leads, and takes them over soon after the first stops.
@@ -49,10 +52,16 @@ func (l *Leader) Lead(name string, fn func(context.Context) error) func(context.
 }
 
 // claim reports whether this process holds name's lock, taking it when free. A dead
-// connection has lost every lock, so it is replaced and every task re-claimed.
+// connection has lost every lock, so it is replaced and every task re-claimed. A done ctx
+// returns its error and leaves the connection alone: pgx closes a conn whose ctx ends mid-read.
 func (l *Leader) claim(ctx context.Context, name string) (bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), claimTimeout)
+	defer cancel()
 	if l.conn != nil && l.conn.Ping(ctx) != nil {
 		_ = l.conn.Close(context.Background())
 		l.conn = nil

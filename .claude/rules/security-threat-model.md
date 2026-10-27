@@ -63,6 +63,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - `ceiling:` in `migrations/20261006162416_invitation_accept.sql`: `invoice_app` can name one invite per known token across tenants.
 - `ceiling:` in `migrations/20261025070011_membership_removed.sql`: `provision_workspace` and every `accept_invitation` and `accept_invitation_by_id` overload are the membership writers behind the identity lock. `SetMembershipStatus` and `RemoveMember` take no identity lock; they change a status in the caller's tenant and never make a non-`removed` row.
 - `ceiling:` in `migrations/20261025065442_purge_tenant.sql`: any `invoice_app` service can purge the tenant it binds.
+- `ceiling:` in `migrations/20261027010037_erase_invitation_emails.sql`: any `invoice_app` service can erase the invitations of one address in every tenant, guarded by an unfinished `person_erasures` row for that user and address.
 - `ceiling:` in `internal/platform/auth/gotrueadmin`: the worker holds GoTrue's signing key.
 - `ceiling:` in `cmd/gateway/main.go` and `cmd/worker/main.go`: a boot error quotes a raw internal service URL.
 - `ceiling:` in `internal/accountmail/accountmail.go`: the account-mail token rides in the query string.

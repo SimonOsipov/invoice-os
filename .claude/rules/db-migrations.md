@@ -40,7 +40,10 @@ paths:
 - Grant `EXECUTE` on `public.invitation_by_token`, `public.pending_invites_for_email`, `public.identity_has_removed_membership`, the five-argument `public.accept_invitation`, the five-argument `public.accept_invitation_by_id` and `public.invitee_account_state` to `invoice_app` only.
 - Grant `EXECUTE` on `public.purge_tenant` to `invoice_app` only. Call it inside `WithinTenantTx` for the tenant it purges, and commit right after it.
 - Expect `purge_tenant` to block every writer of `audit_log`, `approval_policy_versions` and `approval_policy_steps` until its transaction commits. It fails with `55P03` after 5 s behind another writer.
-- Delete a production tenant's rows only with `public.purge_tenant`. The demo purge and `db.Reset` stay the preview and local paths.
+- Delete a production tenant's rows only with `public.purge_tenant`. The demo purge and `db.Reset` stay the preview and local paths. Exception: `public.erase_invitation_emails` deletes the invitation rows of one erased person, in any tenant, and binds each tenant inside the function.
+- The exception of `public.erase_invitation_emails` also covers the rules on binding `app.current_tenant` by hand, looping over tenants and enumerating tenants.
+- Grant `EXECUTE` on `public.erase_invitation_emails` to `invoice_app` only.
+- Grant `EXECUTE` on `public.invitations_to_erase` to `invoice_migrator` only.
 - Grant `auth_hook_reader` SELECT on the `auth.users` columns `email`, `email_confirmed_at` and `is_sso_user` only.
 - Never grant `auth_hook_reader` a table-level privilege on `auth.users`.
 - Grant `auth_hook_reader` SELECT on `tenants.id`, `tenants.name` and `tenants.deletion_due_at` only.

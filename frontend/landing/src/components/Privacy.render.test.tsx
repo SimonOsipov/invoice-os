@@ -794,11 +794,17 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     expect(h2Texts().filter((t) => /account|regist/i.test(t))).toHaveLength(1)
   })
 
-  it('DEL-10-03 R1..R7 are pinned in place', () => {
+  it('DEL-10-03 R1..R5 and R7 are pinned in place', () => {
     const text = retentionText()
-    const at = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7'].map((id) => text.indexOf(deletionSentence(id)))
+    const at = ['R1', 'R2', 'R3', 'R4', 'R5', 'R7'].map((id) => text.indexOf(deletionSentence(id)))
     expect(at.every((i) => i > -1), `a sentence is missing: ${at}`).toBe(true)
     expect(at).toEqual([...at].sort((x, y) => x - y))
+  })
+
+  it('DEL-13-03 no paragraph of the page says an invitation keeps an email address', () => {
+    const paras = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g), (m) => plain(m[1]))
+    expect(paras.length).toBeGreaterThan(10)
+    expect(paras.filter((t) => /invitation/i.test(t) && /email/i.test(t))).toEqual([])
   })
 
   it('DEL-10-03 R1 promises no completeness', () => {

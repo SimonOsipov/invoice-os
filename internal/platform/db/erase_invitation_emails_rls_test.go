@@ -1,4 +1,4 @@
-// public.erase_invitation_emails and its finder public.invitations_to_erase (DEL-13-01):
+// public.erase_invitation_emails and its finder public.invitations_to_erase:
 // ownership, grants, tenant reach, the erasure guard and the GUC restore. Env-gated through
 // requireHarness (make test-rls). Every address is unique per test: a call with p_unheld
 // reaches every tenant in the database.
@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -608,5 +609,61 @@ func TestRLS_EraseInvitationEmailsDownThenUp(t *testing.T) {
 	}
 	if s, ok := readProc(t, eraseInvSig); !ok || s.owner != "invoice_migrator" {
 		t.Errorf("after Up: erase owner = %q (present %v), want invoice_migrator", s.owner, ok)
+	}
+}
+
+// A row that stops matching while the erase waits on its lock survives: the DELETE re-checks the finder's predicate.
+func TestRLS_EraseInvitationEmailsKeepsARowThatStopsMatchingWhileTheDeleteWaits(t *testing.T) {
+	eiRequireFunctions(t)
+	ctx := context.Background()
+	tenant := eiTenant(t)
+	user, addr := uuid.NewString(), eiAddr()
+	eiErasure(t, user, addr)
+	id := eiInvite(t, tenant, addr, "pending")
+
+	holder, err := h.super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin lock holder: %v", err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	if _, err := holder.Exec(ctx, `UPDATE invitations SET invitee_email = $2 WHERE id = $1`, id, eiAddr()); err != nil {
+		t.Fatalf("change the invitation under lock: %v", err)
+	}
+
+	type result struct {
+		n   int
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		n, err := eiCall(h.app, user, addr, true)
+		done <- result{n, err}
+	}()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for mustCount(t, h.super, `SELECT count(*) FROM pg_stat_activity
+		WHERE wait_event_type = 'Lock' AND query LIKE '%erase_invitation_emails(%' AND pid <> pg_backend_pid()`) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the erase never waited on the invitation lock")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatalf("commit the lock holder: %v", err)
+	}
+
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("erase: %v", r.err)
+		}
+		if r.n != 0 {
+			t.Errorf("erase returned %d, want 0", r.n)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the erase did not finish after the lock was released")
+	}
+	if !eiExists(t, id) {
+		t.Error("the erase deleted an invitation that no longer matched the address")
 	}
 }

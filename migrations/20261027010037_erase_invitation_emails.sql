@@ -46,7 +46,14 @@ BEGIN
          GROUP BY f.tenant_id
     LOOP
         PERFORM pg_catalog.set_config('app.current_tenant', v_tenant::text, true);
-        DELETE FROM public.invitations WHERE tenant_id = v_tenant AND id = ANY (v_ids);
+        -- Same predicate as the finder: READ COMMITTED re-checks it on a row changed since the finder ran.
+        DELETE FROM public.invitations i
+         WHERE i.tenant_id = v_tenant AND i.id = ANY (v_ids)
+           AND pg_catalog.lower(pg_catalog.btrim(i.invitee_email)) = v_email
+           AND ((i.status = 'accepted'
+                 AND EXISTS (SELECT 1 FROM public.memberships m
+                              WHERE m.tenant_id = i.tenant_id AND m.user_id = p_user_id))
+                OR (p_unheld AND i.status IN ('pending', 'revoked')));
         GET DIAGNOSTICS v_n = ROW_COUNT;
         v_total := v_total + v_n;
     END LOOP;

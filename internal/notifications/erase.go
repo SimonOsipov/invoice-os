@@ -270,7 +270,7 @@ func (w *EraseWorker) sweep(ctx context.Context, tx pgx.Tx, uid, email string) (
 		}
 		res.count += int(tag.RowsAffected())
 	}
-	// Not in res.count: an invitation made between steps 1 and 5 is removed here without a rerun (TestErase_SweepDeletesTheInvitations).
+	// Not in res.count: an invitation made between steps 1 and 5 is removed here without a rerun (TestErase_AnInvitationCreatedMidRunIsRemovedWithoutARerun).
 	if _, err := tx.Exec(ctx, `SELECT public.erase_invitation_emails($1::uuid, $2, $3)`, uid, email, !res.superseded); err != nil {
 		return res, fmt.Errorf("notifications: erase invitations: %w", err)
 	}

@@ -329,6 +329,51 @@ func TestRLS_EraseInvitationEmailsMatchesAddressCaseAndSpaces(t *testing.T) {
 	eiAssertRows(t, "after the erase", map[string]bool{}, ids)
 }
 
+func TestRLS_EraseInvitationEmailsMatchesTheCalledAddressInAnyCase(t *testing.T) {
+	eiRequireFunctions(t)
+	t1, t2 := eiTenant(t), eiTenant(t)
+	user, addr := uuid.NewString(), eiAddr()
+	seedMemberRow(t, t1, user, "admin", "active", nil, nil)
+	eiErasure(t, user, addr)
+	ids := map[string]string{"accepted": eiInvite(t, t1, addr, "accepted"), "pending": eiInvite(t, t2, addr, "pending")}
+
+	if n := eiErase(t, user, " "+strings.ToUpper(addr)+" ", true); n != 2 {
+		t.Errorf("erase returned %d, want 2", n)
+	}
+	eiAssertRows(t, "after the erase", map[string]bool{}, ids)
+}
+
+func TestRLS_EraseInvitationEmailsCallerBoundToAnotherTenantReachesOnlyTheErasedAddress(t *testing.T) {
+	eiRequireFunctions(t)
+	ctx := context.Background()
+	t1, t2, t3 := eiTenant(t), eiTenant(t), eiTenant(t)
+	user, addr, other := uuid.NewString(), eiAddr(), eiAddr()
+	seedMemberRow(t, t1, user, "admin", "active", nil, nil)
+	eiErasure(t, user, addr)
+	ids := map[string]string{
+		"t1 accepted": eiInvite(t, t1, addr, "accepted"), "t2 pending": eiInvite(t, t2, addr, "pending"),
+		"t3 pending other": eiInvite(t, t3, other, "pending"), "t3 accepted other": eiInvite(t, t3, other, "accepted"),
+		"t3 accepted address": eiInvite(t, t3, addr, "accepted"),
+	}
+
+	var n int
+	err := db.WithinTenantTx(ctx, h.app, t3, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT public.erase_invitation_emails($1::uuid, $2, true)`, user, addr).Scan(&n)
+	})
+	if err != nil {
+		t.Fatalf("call bound to the unrelated tenant: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("erase returned %d, want 2", n)
+	}
+	eiAssertRows(t, "after the erase", map[string]bool{
+		"t1 accepted": false, "t2 pending": false, "t3 pending other": true, "t3 accepted other": true, "t3 accepted address": true,
+	}, ids)
+	if again := eiErase(t, user, addr, true); again != 0 {
+		t.Errorf("second erase returned %d, want 0", again)
+	}
+}
+
 func TestRLS_EraseInvitationEmailsRefusesNothingOnNullOrBlankInput(t *testing.T) {
 	eiRequireFunctions(t)
 	t1, t2 := eiTenant(t), eiTenant(t)
@@ -427,6 +472,52 @@ func TestRLS_EraseInvitationEmailsRestoresTheTenantBinding(t *testing.T) {
 	if eiExists(t, pending) {
 		t.Errorf("the pending invitation survives the unbound call, want it deleted")
 	}
+}
+
+// A pooled connection that once held a binding reads an empty string, not NULL; only a fresh connection reads NULL.
+func TestRLS_EraseInvitationEmailsLeavesAFreshConnectionUnbound(t *testing.T) {
+	eiRequireFunctions(t)
+	ctx := context.Background()
+	t1, t2 := eiTenant(t), eiTenant(t)
+	user, addr := uuid.NewString(), eiAddr()
+	seedMemberRow(t, t1, user, "admin", "active", nil, nil)
+	eiErasure(t, user, addr)
+	ids := map[string]string{"accepted": eiInvite(t, t1, addr, "accepted"), "pending": eiInvite(t, t2, addr, "pending")}
+
+	conn, err := pgx.ConnectConfig(ctx, h.app.Config().ConnConfig)
+	if err != nil {
+		t.Fatalf("open a fresh invoice_app connection: %v", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var before, after *string
+	if err := tx.QueryRow(ctx, `SELECT current_setting('app.current_tenant', true)`).Scan(&before); err != nil {
+		t.Fatalf("read the binding before: %v", err)
+	}
+	if before != nil {
+		t.Fatalf("test setup: a fresh connection reads %q, want NULL", *before)
+	}
+	var n int
+	if err := tx.QueryRow(ctx, `SELECT public.erase_invitation_emails($1::uuid, $2, true)`, user, addr).Scan(&n); err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("erase returned %d, want 2", n)
+	}
+	if err := tx.QueryRow(ctx, `SELECT nullif(current_setting('app.current_tenant', true), '')`).Scan(&after); err != nil {
+		t.Fatalf("read the binding after: %v", err)
+	}
+	if after != nil {
+		t.Errorf("app.current_tenant after the call = %q, want unset", *after)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	eiAssertRows(t, "after the erase", map[string]bool{}, ids)
 }
 
 func TestRLS_EraseInvitationEmailsCascadesInvitationClients(t *testing.T) {

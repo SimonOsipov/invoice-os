@@ -301,3 +301,47 @@ func TestErase_ADeletedPendingInvitationsTokenIsInvalidAndTheAddressCanBeInvited
 	}
 	r.invite(t1, r.mail, "pending")
 }
+
+func TestErase_AFailedInvitationDeleteLeaksNoAddressAndTheRetryFinishes(t *testing.T) {
+	r := newEraseRig(t)
+	t1 := r.tenant()
+	r.member(t1, r.uid, "removed")
+	ids := map[string]string{"accepted": r.invite(t1, r.mail, "accepted"), "pending": r.invite(t1, r.mail, "pending")}
+	fn := "erase_invitations_fail_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	r.exec(`CREATE FUNCTION public.` + fn + `() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+		IF lower(OLD.invitee_email) = '` + r.mail + `' THEN RAISE EXCEPTION 'invitation delete refused'; END IF; RETURN OLD; END $$`)
+	r.exec(`CREATE TRIGGER ` + fn + ` BEFORE DELETE ON invitations FOR EACH ROW EXECUTE FUNCTION public.` + fn + `()`)
+	dropped := false
+	drop := func() {
+		if dropped {
+			return
+		}
+		dropped = true
+		r.exec(`DROP TRIGGER ` + fn + ` ON invitations`)
+		r.exec(`DROP FUNCTION public.` + fn + `()`)
+	}
+	t.Cleanup(drop)
+	gen := r.start()
+
+	err := r.work(gen)
+	if err == nil || !strings.Contains(err.Error(), "erase invitations") {
+		t.Fatalf("Work = %v, want an erase invitations error", err)
+	}
+	qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.mail, strings.Split(r.mail, "@")[0], r.uid)
+	r.wantInvites("after the failed sweep", ids, map[string]bool{"accepted": true, "pending": true})
+	if r.row(r.uid).Fin {
+		t.Fatal("erasure row finished despite the failed invitation delete")
+	}
+
+	drop()
+	if err := r.work(gen); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	r.wantInvites("after the retry", ids, nil)
+	if !r.row(r.uid).Fin {
+		t.Error("erasure row not finished after the retry")
+	}
+	if err := r.work(gen); err != nil || r.invitationCount() != 0 {
+		t.Errorf("a further run: err %v, invitations %d, want nil and 0", err, r.invitationCount())
+	}
+}

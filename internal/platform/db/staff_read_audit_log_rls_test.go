@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"math/rand"
-	"os"
 	"reflect"
 	"regexp"
 	"sort"
@@ -575,14 +574,14 @@ func seedAuditPlanCorpus(t *testing.T, tx pgx.Tx) auditPlanCorpus {
 }
 
 func TestRLS_StaffReadAuditLogPlansReadAnIndex(t *testing.T) {
-	requireHarness(t)
+	superDSN := useScratchHarness(t)
 	requireStaffReadAuditLog(t)
 	ctx := context.Background()
 	staff := seedHouseMember(t, "reviewer", "active")
 
-	cfg, err := pgx.ParseConfig(os.Getenv("DATABASE_SUPERUSER_URL"))
+	cfg, err := pgx.ParseConfig(superDSN)
 	if err != nil {
-		t.Fatalf("parse DATABASE_SUPERUSER_URL: %v", err)
+		t.Fatalf("parse scratch superuser dsn: %v", err)
 	}
 	var notices []string
 	cfg.OnNotice = func(_ *pgconn.PgConn, n *pgconn.Notice) { notices = append(notices, n.Message) }

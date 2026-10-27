@@ -111,18 +111,25 @@ var (
 	planErr  error
 )
 
-// requirePlanCorpus builds the corpus once per test binary, on first use. Its audit rows
-// are permanent -- audit_log refuses DELETE and TRUNCATE -- so every run mints fresh
-// throwaway tenants and leaves them, along with the entities and invoices its rows are
-// attributed to. Deleting those would leave the surviving audit rows pointing at ids that
-// no longer exist, which is worse than the clutter.
+// requirePlanCorpus builds a scratch database and the corpus once per test binary, on first
+// use, and returns the scratch fixture. closePlanScratch drops the database on exit, so the
+// permanent audit rows never reach the dev database.
 func requirePlanCorpus(t *testing.T) (*fixture, planFixture) {
 	t.Helper()
-	f := requireFixture(t)
-	planOnce.Do(func() { planData, planErr = buildPlanCorpus(f) })
+	requireFixture(t)
+	if os.Getenv("DATABASE_SUPERUSER_URL") == "" {
+		t.Skip("plan tests skipped: set DATABASE_SUPERUSER_URL to create the scratch database")
+	}
+	planOnce.Do(func() {
+		var s *planScratchDB
+		if s, planErr = newPlanScratch(); planErr == nil {
+			planData, planErr = buildPlanCorpus(s.fx)
+		}
+	})
 	if planErr != nil {
 		t.Fatalf("build plan corpus: %v", planErr)
 	}
+	f := planScratch.fx
 	assertCorpusShape(t, f, planData)
 	return f, planData
 }
@@ -602,9 +609,9 @@ const (
 // pool and returns every statement it issued, in order.
 func planTrace(t *testing.T, filter audit.Filter) []planStmt {
 	t.Helper()
-	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+	cfg, err := pgxpool.ParseConfig(planScratch.appDSN)
 	if err != nil {
-		t.Fatalf("parse DATABASE_URL: %v", err)
+		t.Fatalf("parse scratch DSN: %v", err)
 	}
 	tr := &planTracer{}
 	cfg.ConnConfig.Tracer = tr
@@ -1499,7 +1506,7 @@ func TestAudit_PlanCorpusNumberMatchesTheResolvedInvoice(t *testing.T) {
 // planScopedMember seeds a member limited to the named entities of the corpus tenant.
 func planScopedMember(t *testing.T, p planFixture, entities ...string) context.Context {
 	t.Helper()
-	return csMember(t, csSuper(t), p.tenant, "reviewer", false, entities...)
+	return csMember(t, planScratch.super, p.tenant, "reviewer", false, entities...)
 }
 
 // planCorpusEntities returns n entities of the corpus tenant that carry audit rows.
@@ -1531,9 +1538,9 @@ func planCorpusEntities(t *testing.T, f *fixture, p planFixture, n int) []string
 // response with every statement that names audit_log, keyed by kind plus "probe".
 func planTraceList(t *testing.T, ctx context.Context, filter audit.Filter) (audit.Response, map[string]planStmt) {
 	t.Helper()
-	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+	cfg, err := pgxpool.ParseConfig(planScratch.appDSN)
 	if err != nil {
-		t.Fatalf("parse DATABASE_URL: %v", err)
+		t.Fatalf("parse scratch DSN: %v", err)
 	}
 	tr := &planTracer{}
 	cfg.ConnConfig.Tracer = tr

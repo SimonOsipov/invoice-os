@@ -447,7 +447,7 @@ func auditReadPlan(t *testing.T, ctx context.Context, tx pgx.Tx, sql string, arg
 // this case asks WHERE the tenant qual lands once an index is used, not whether the planner
 // picks one (that is AUDIT-01-05's question).
 func TestRLS_AuditReadTenantQualIsAnIndexCondOnEveryNewIndex(t *testing.T) {
-	requireHarness(t)
+	useScratchHarness(t)
 	ctx := context.Background()
 	a := seedAuditReadFixture(t, auditReadBase())
 

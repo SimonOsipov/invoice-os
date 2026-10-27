@@ -94,6 +94,12 @@ test('support console: start, cancel and purge a workspace', async ({ page }) =>
   await confirmModal(page, 'Cancel deletion', 'e2e cancel')
   await expect(scheduled).toBeHidden()
   expect((await me(ws.adminToken)).tenant.deletion_due_at, 'the customer reads no due date').toBeNull()
+  await expect(actions.getByRole('button', { name: 'Purge now', exact: true }), 'Purge now waits for a scheduled deletion').toHaveCount(0)
+  await expect(main(page).getByText('Not scheduled. Use Delete workspace first')).toBeVisible()
+
+  await actions.getByRole('button', { name: 'Delete workspace', exact: true }).click()
+  await confirmModal(page, 'Start deletion', 'e2e start again')
+  await expect(scheduled).toBeVisible()
 
   await actions.getByRole('button', { name: 'Purge now', exact: true }).click()
   const dialog = page.getByRole('dialog')
@@ -124,7 +130,10 @@ test('support console: the deletion header, member rows and modal fit at every w
   expect(name).toHaveLength(MAX_NAME_CHARS)
   const ws = await fresh('staff-deletion-layout', name)
   await addPreparer(ws.adminToken, ws.tenantId)
-  await staffSession(page, await provisionStaffAccount('staff-deletion-layout'))
+  const token = await staffSession(page, await provisionStaffAccount('staff-deletion-layout'))
+  // Purge now shows only on a scheduled workspace.
+  const started = await rawFetch(`${STAFF_TENANTS}/${ws.tenantId}/deletion`, { method: 'POST', headers: auth(token), body: { reason: 'e2e layout' } })
+  expect(started.status, JSON.stringify(started.body)).toBe(200)
   await openTenant(page, ws.tenantId, name)
 
   const actions = page.getByTestId('tenant-actions')
@@ -135,7 +144,7 @@ test('support console: the deletion header, member rows and modal fit at every w
   const deleteButtons = main(page).getByRole('button', { name: 'Delete account', exact: true })
   await expect(deleteButtons).toHaveCount(2)
   const actionButtons = actions.getByRole('button')
-  await expect(actionButtons, 'Delete workspace and Purge now').toHaveCount(2)
+  await expect(actionButtons, 'Cancel deletion and Purge now').toHaveCount(2)
 
   await sweep(page, async (width) => {
     await settleAnimations(card, header, text, viewJobs, actions)
@@ -248,11 +257,9 @@ test('support console: the tenant header wraps and shows the whole state line at
         }
         for (let i = 0; i < count; i++) for (let j = i + 1; j < count; j++) expect(rectsOverlap(boxes[i], boxes[j]), `actions ${i} and ${j} overlap, ${where}`).toBe(false)
         expect((await rectOf('the name', heading, width)).width, `the name is 0 wide, ${where}`).toBeGreaterThan(0)
-        if (state === 'scheduled') {
-          expect((await rectOf('the state line', stateLine, width)).width, `the state line is 0 wide, ${where}`).toBeGreaterThan(0)
-          const fit = await stateLine.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
-          expect(fit.scrollWidth, `the state line is truncated, ${where} (${JSON.stringify(fit)})`).toBeLessThanOrEqual(fit.clientWidth)
-        }
+        expect((await rectOf('the state line', stateLine, width)).width, `the state line is 0 wide, ${where}`).toBeGreaterThan(0)
+        const fit = await stateLine.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+        expect(fit.scrollWidth, `the state line is truncated, ${where} (${JSON.stringify(fit)})`).toBeLessThanOrEqual(fit.clientWidth)
         await noSideways(page, `Tenants, ${where}`)
       }
     } finally {
@@ -261,7 +268,7 @@ test('support console: the tenant header wraps and shows the whole state line at
   }
 
   const stateLine = main(page).getByText(/Scheduled for deletion on/)
-  await check('unscheduled', stateLine)
+  await check('unscheduled', main(page).getByText('Not scheduled. Use Delete workspace first; Purge now follows.'))
   await actions.getByRole('button', { name: 'Delete workspace', exact: true }).click()
   await confirmModal(page, 'Start deletion', 'e2e narrow')
   await expect(stateLine).toBeVisible()

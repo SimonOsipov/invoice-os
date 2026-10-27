@@ -153,7 +153,9 @@ function Detail({ status, detail, errorText, onRetry, onViewJobs, onDeletion, on
             <div className="mono" style={{ fontSize: 11, color: RED.text, overflowWrap: 'anywhere' }}>{`Purge in progress since ${syncStamp(t.deletion_purge_started_at!)}`}</div>
           ) : scheduled ? (
             <div className="mono" style={{ fontSize: 11, color: AMBER.text, overflowWrap: 'anywhere' }}>{`Scheduled for deletion on ${syncDate(t.deletion_due_at!)}`}</div>
-          ) : null}
+          ) : (
+            <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', overflowWrap: 'anywhere' }}>Not scheduled. Use Delete workspace first; Purge now follows.</div>
+          )}
         </div>
         <button type="button" onClick={() => onViewJobs(t.id)} className="ops-btn v2-btn v2-btn-ghost" style={{ flex: 'none', height: 32, padding: '0 12px', fontSize: 12 }}>
           View jobs
@@ -161,7 +163,7 @@ function Detail({ status, detail, errorText, onRetry, onViewJobs, onDeletion, on
         <div data-testid="tenant-actions" style={{ flex: 'none', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {!scheduled && act('Delete workspace', 'start', DANGER)}
           {scheduled && !started && act('Cancel deletion', 'cancel')}
-          {!started && act('Purge now', 'purge', DANGER)}
+          {scheduled && !started && act('Purge now', 'purge', DANGER)}
         </div>
       </div>
 

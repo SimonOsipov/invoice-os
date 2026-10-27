@@ -347,7 +347,7 @@ describe('Console tenants wiring', () => {
     expect(screen.getByText('sue@x.test')).toBeTruthy()
   })
 
-  it('a tenant with no members and no invoices says so and offers View jobs, Delete workspace and Purge now', async () => {
+  it('a tenant with no members and no invoices says so and offers View jobs and Delete workspace', async () => {
     one.mockResolvedValueOnce({ tenant: X, members: [], invoices: [] })
     render(<App />)
     await openTenants()
@@ -357,7 +357,7 @@ describe('Console tenants wiring', () => {
     expect(screen.getByText('No invoices yet.')).toBeTruthy()
     const card = screen.getByRole('heading', { level: 2 }).closest('div[style*="overflow"]') as HTMLElement
     const buttons = Array.from(card.querySelectorAll('button'))
-    expect(buttons.map((b) => b.textContent)).toEqual(['View jobs', 'Delete workspace', 'Purge now'])
+    expect(buttons.map((b) => b.textContent)).toEqual(['View jobs', 'Delete workspace'])
   })
 
   it('tenant detail: a scheduled tenant shows its deletion date', async () => {
@@ -375,7 +375,7 @@ describe('Console tenants wiring', () => {
 
   it('tenant detail: the actions follow the deletion state', async () => {
     const cases: [StaffTenant, string[], number][] = [
-      [X, ['View jobs', 'Delete workspace', 'Purge now'], 3],
+      [X, ['View jobs', 'Delete workspace'], 3],
       [SCHEDULED, ['View jobs', 'Cancel deletion', 'Purge now'], 0],
       [PURGING, ['View jobs'], 0],
     ]
@@ -394,8 +394,20 @@ describe('Console tenants wiring', () => {
     expect(screen.getAllByRole('button', { name: 'Delete account' })).toHaveLength(1)
   })
 
+  it('tenant detail: an unscheduled tenant says to delete the workspace first', async () => {
+    const line = 'Not scheduled. Use Delete workspace first; Purge now follows.'
+    await openX(X)
+    expect(screen.getByText(line)).toBeTruthy()
+    cleanup()
+    await openX(SCHEDULED)
+    expect(screen.queryByText(line)).toBeNull()
+    cleanup()
+    await openX(PURGING)
+    expect(screen.queryByText(line)).toBeNull()
+  })
+
   it('purge now: the confirm waits for the exact name and a reason', async () => {
-    await openX()
+    await openX(SCHEDULED)
     fireEvent.click(btn('Purge now'))
     const confirm = () => within(dialog()).getByRole('button', { name: 'Purge now' }) as HTMLButtonElement
     expect(confirm().disabled).toBe(true)
@@ -451,6 +463,20 @@ describe('Console tenants wiring', () => {
     expect(cancel).toHaveBeenCalledWith('X', 'changed mind')
   })
 
+  it('a purge refused with 409 shows the server sentence, closes the modal and re-reads', async () => {
+    const sentence = 'this workspace has no scheduled deletion; use Delete workspace first'
+    await openX(SCHEDULED)
+    purge.mockRejectedValueOnce(new ApiError('http', sentence, 409))
+    fireEvent.click(btn('Purge now'))
+    fireEvent.change(within(dialog()).getByLabelText('Workspace name'), { target: { value: 'Okafor & Partners' } })
+    typeReason('r')
+    const reads = one.mock.calls.length
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Purge now' }))
+    await screen.findByText(sentence)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    await waitFor(() => expect(one.mock.calls.length).toBe(reads + 1))
+  })
+
   it('a 500 keeps the modal open and a 401 expires the session', async () => {
     await openX()
     start.mockRejectedValueOnce(new ApiError('http', 'boom', 500))
@@ -502,7 +528,7 @@ describe('Console tenants wiring', () => {
     await waitFor(() => expect(start).toHaveBeenCalledTimes(1))
     expect((within(dialog()).getByRole('button', { name: 'Start deletion' }) as HTMLButtonElement).disabled).toBe(true)
     const behind = Array.from((screen.getByTestId('tenant-actions').parentElement as HTMLElement).querySelectorAll('button')).filter((b) => b.textContent !== 'View jobs')
-    expect(behind.length).toBe(2)
+    expect(behind.length).toBe(1)
     expect(behind.every((b) => b.disabled)).toBe(true)
     expect((screen.getAllByRole('button', { name: 'Delete account' }) as HTMLButtonElement[]).every((b) => b.disabled)).toBe(true)
     release({ deletion_due_at: DUE })
@@ -545,7 +571,7 @@ describe('Console tenants wiring', () => {
 
   it('a 200-character name is typed and posted whole; a rejected purge keeps the modal and the typed name', async () => {
     const long = 'N'.repeat(200)
-    const T = { ...X, name: long }
+    const T = { ...SCHEDULED, name: long }
     await openX(T)
     fireEvent.click(btn('Purge now'))
     expect(within(dialog()).getByText(`Purge ${long} now?`)).toBeTruthy()

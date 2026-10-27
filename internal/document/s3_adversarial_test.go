@@ -58,22 +58,30 @@ func requestText(t *testing.T, rt *fakeRoundTripper) string {
 func TestS3Store_SecretAccessKeyNeverReachesTheWire(t *testing.T) {
 	for _, tc := range []struct {
 		name string
+		body string
 		call func(document.ObjectStore) error
 	}{
-		{"Get", func(s document.ObjectStore) error {
+		{"Get", "", func(s document.ObjectStore) error {
 			obj, err := s.Get(context.Background(), wireKey, "bytes=0-9")
 			if obj.Body != nil {
 				_ = obj.Body.Close()
 			}
 			return err
 		}},
-		{"Put", func(s document.ObjectStore) error {
+		{"Put", "", func(s document.ObjectStore) error {
 			return s.Put(context.Background(), wireKey, bytes.NewReader([]byte("payload")), 7)
+		}},
+		{"List", "<ListBucketResult/>", func(s document.ObjectStore) error {
+			_, err := s.List(context.Background(), wireKey)
+			return err
+		}},
+		{"DeleteMany", "<DeleteResult/>", func(s document.ObjectStore) error {
+			return s.DeleteMany(context.Background(), []string{wireKey})
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := &fakeRoundTripper{respond: func(req *http.Request) *http.Response {
-				return newFakeResponse(req, http.StatusOK, nil, "")
+				return newFakeResponse(req, http.StatusOK, nil, tc.body)
 			}}
 			if err := tc.call(newSentinelStore(t, rt)); err != nil {
 				t.Fatalf("%s() returned unexpected error: %v", tc.name, err)
@@ -97,14 +105,22 @@ func TestS3Store_SecretAccessKeyNeverReachesTheWire(t *testing.T) {
 func TestS3Store_ErrorsNeverEchoTheSecretAccessKey(t *testing.T) {
 	for _, tc := range []struct {
 		name string
+		want string
 		call func(document.ObjectStore) error
 	}{
-		{"Get", func(s document.ObjectStore) error {
+		{"Get", wireKey, func(s document.ObjectStore) error {
 			_, err := s.Get(context.Background(), wireKey, "")
 			return err
 		}},
-		{"Put", func(s document.ObjectStore) error {
+		{"Put", wireKey, func(s document.ObjectStore) error {
 			return s.Put(context.Background(), wireKey, bytes.NewReader([]byte("x")), 1)
+		}},
+		{"List", "tenants/prefix-under-test/", func(s document.ObjectStore) error {
+			_, err := s.List(context.Background(), "tenants/prefix-under-test/")
+			return err
+		}},
+		{"DeleteMany", wireKey, func(s document.ObjectStore) error {
+			return s.DeleteMany(context.Background(), []string{wireKey})
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,9 +133,9 @@ func TestS3Store_ErrorsNeverEchoTheSecretAccessKey(t *testing.T) {
 			if err == nil {
 				t.Fatalf("%s() on a 403 returned nil, so the hygiene assertions below are vacuous", tc.name)
 			}
-			if !strings.Contains(err.Error(), wireKey) {
-				t.Errorf("%s() error = %q, want it to name the key %q — an operator cannot act on an "+
-					"unattributed store failure", tc.name, err, wireKey)
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("%s() error = %q, want it to name %q — an operator cannot act on an "+
+					"unattributed store failure", tc.name, err, tc.want)
 			}
 			if strings.Contains(err.Error(), sentinelSecretAccessKey) {
 				t.Errorf("%s() error echoed the secret access key", tc.name)
@@ -143,6 +159,13 @@ func TestS3Store_CancelledContextIsNotAStoreDefect(t *testing.T) {
 		}},
 		{"Put", func(s document.ObjectStore, ctx context.Context) (document.Object, error) {
 			return document.Object{}, s.Put(ctx, wireKey, bytes.NewReader([]byte("x")), 1)
+		}},
+		{"List", func(s document.ObjectStore, ctx context.Context) (document.Object, error) {
+			_, err := s.List(ctx, wireKey)
+			return document.Object{}, err
+		}},
+		{"DeleteMany", func(s document.ObjectStore, ctx context.Context) (document.Object, error) {
+			return document.Object{}, s.DeleteMany(ctx, []string{wireKey})
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

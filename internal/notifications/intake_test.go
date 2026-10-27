@@ -233,10 +233,10 @@ func TestIntake_UnparseableConsentTimeDropsConsent(t *testing.T) {
 	}
 	var warned bool
 	for _, l := range sink.at(slog.LevelWarn) {
-		warned = warned || strings.Contains(l.Text, uid)
+		warned = warned || strings.Contains(l.Text, "user.id="+uid) && !strings.Contains(l.Text, "user_id=")
 	}
 	if !warned {
-		t.Errorf("no WARN line names user %s; lines: %+v", uid, sink.snapshot())
+		t.Errorf("no WARN line carries user.id=%s alone; lines: %+v", uid, sink.snapshot())
 	}
 	qaRequireNoLeak(t, nil, []*qaLogSink{sink}, email, "Zelda")
 

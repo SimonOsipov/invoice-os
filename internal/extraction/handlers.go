@@ -41,6 +41,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusUnauthorized, "unauthorized"
 	case errors.Is(err, db.ErrNotActiveMember):
 		return http.StatusForbidden, db.NotActiveMemberMessage
+	case errors.Is(err, db.ErrWorkspaceLocked):
+		return http.StatusForbidden, db.WorkspaceLockedMessage
 	// Safe for the collection route, which never raises it
 	// (TestExtractionJobsForDocument_NeverReturnsErrNotFound), and narrow: everything else is
 	// still a 500 (TestStatusForErr_UnknownErrorIsStill500).

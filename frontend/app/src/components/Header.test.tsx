@@ -376,6 +376,10 @@ describe('A03-1: CRUMB_MAP cannot silently degrade at runtime for a new View mem
     expect(keys, "CRUMB_MAP has no 'approvals' key -- Header.tsx:55's `|| 'Overview'` fallback would mask this silently at runtime").toContain('approvals')
   })
 
+  it("CRUMB_MAP reads 'Your account' for the account view", () => {
+    expect(readSrc('src/components/Header.tsx')).toContain("account: 'Your account'")
+  })
+
   it('CRUMB_MAP is a TOTAL map: every current View member has a crumb', () => {
     const keys = crumbMapKeys(readSrc('src/components/Header.tsx'))
     const views = viewMembers(readSrc('src/types.ts'))

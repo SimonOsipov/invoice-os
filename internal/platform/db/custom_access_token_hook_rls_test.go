@@ -182,6 +182,52 @@ func TestRLS_CustomAccessTokenHookLeavesClaimsWithoutActiveMembership(t *testing
 	}
 }
 
+func TestRLS_TokenHookOmitsARemovedMembership(t *testing.T) {
+	h := requireHarness(t)
+	auth := authAdminPool(t)
+
+	userID := uuid.NewString()
+	seedHookMembership(t, h.tenantA, userID, "removed")
+	event, in := hookEvent(t, userID)
+	want := roundTrip(t, in)
+
+	got := outputClaims(t, callHook(t, auth, event))
+	md, ok := got["app_metadata"].(map[string]any)
+	if !ok || len(md) == 0 {
+		t.Fatalf("output claims.app_metadata missing or empty: %v", got)
+	}
+	if v, has := md["tenant_id"]; has {
+		t.Errorf("a removed-only user projected tenant_id = %v, want no key", v)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("claims changed\n got: %v\nwant: %v", got, want)
+	}
+}
+
+func TestRLS_TokenHookProjectsTheActiveTenantBesideARemovedOne(t *testing.T) {
+	h := requireHarness(t)
+	auth := authAdminPool(t)
+
+	userID := uuid.NewString()
+	seedHookMembership(t, h.tenantA, userID, "removed")
+	seedHookMembership(t, h.tenantB, userID, "active")
+	event, in := hookEvent(t, userID)
+	want := roundTrip(t, in)
+
+	got := outputClaims(t, callHook(t, auth, event))
+	md, ok := got["app_metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("output claims.app_metadata missing: %v", got)
+	}
+	if md["tenant_id"] != h.tenantB {
+		t.Errorf("claims.app_metadata.tenant_id = %v, want the active tenant %s", md["tenant_id"], h.tenantB)
+	}
+	delete(md, "tenant_id")
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("claims other than tenant_id changed\n got: %v\nwant: %v", got, want)
+	}
+}
+
 func TestRLS_CustomAccessTokenHookLeavesClaimsForTwoActiveTenants(t *testing.T) {
 	h := requireHarness(t)
 	auth := authAdminPool(t)

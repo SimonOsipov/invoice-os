@@ -262,6 +262,21 @@ func TestRedriveHandler_ConflictsAre409(t *testing.T) {
 	}
 }
 
+func TestRedriveHandler_LockedWorkspaceIs409(t *testing.T) {
+	for name, err := range map[string]error{
+		"bare":    db.ErrWorkspaceLocked,
+		"wrapped": fmt.Errorf("redrive: %w", db.ErrWorkspaceLocked),
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec, call := serveRedrive(t, `{"reason":"r"}`, Detail{}, err)
+			wantBody(t, rec, http.StatusConflict, `{"error":"`+db.WorkspaceLockedMessage+`"}`)
+			if call.n != 1 {
+				t.Errorf("redrive calls = %d, want 1", call.n)
+			}
+		})
+	}
+}
+
 func TestRedriveHandler_ReasonIsRequired(t *testing.T) {
 	for _, reason := range []string{"", "   "} {
 		rec, call := serveRedrive(t, `{"reason":"`+reason+`"}`, Detail{}, nil)

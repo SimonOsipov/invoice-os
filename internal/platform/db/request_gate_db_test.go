@@ -219,6 +219,31 @@ func TestRLS_RequestSeamRefusesAnInvitedCaller(t *testing.T) {
 	}
 }
 
+// A removed row is refused with the suspension sentinel; the active control shows the gate is not refusing everyone.
+func TestRLS_RequestSeamRefusesARemovedCaller(t *testing.T) {
+	h := requireHarness(t)
+
+	active := uuid.NewString()
+	seedMembershipWithStatus(t, h.tenantA, active, "admin", "active")
+	if err := db.WithinRequestTenantTx(requestCtx(active, h.tenantA), h.app, func(pgx.Tx) error { return nil }); err != nil {
+		t.Fatalf("control: an active caller was refused: %v", err)
+	}
+
+	userID := uuid.NewString()
+	seedMembershipWithStatus(t, h.tenantA, userID, "admin", "removed")
+	ran := false
+	err := db.WithinRequestTenantTx(requestCtx(userID, h.tenantA), h.app, func(pgx.Tx) error {
+		ran = true
+		return nil
+	})
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("WithinRequestTenantTx err = %v, want db.ErrNotActiveMember", err)
+	}
+	if ran {
+		t.Error("the closure ran for a removed caller")
+	}
+}
+
 // TestRLS_RequestSeamAdmitsAnActiveCaller (AC-2): an active row proceeds, and the
 // closure's write commits — the gate must not leave the tx half-open or rolled back.
 func TestRLS_RequestSeamAdmitsAnActiveCaller(t *testing.T) {

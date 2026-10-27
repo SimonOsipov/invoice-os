@@ -15,7 +15,7 @@
 // component's oracle is a screenshot — the one gate a fluent paraphrase walks through
 // (§15.8).
 
-import { useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 
 import { ErrorState, Loading, toApiError } from '@invoice-os/api-client'
 import { closeGlyph } from '../glyphs'
@@ -28,9 +28,12 @@ import {
   MEMBER_UNBACKED,
   pickerClients,
   PROTECTED_ADMIN_NOTE,
+  REMOVE_CONFIRMED,
   REMOVE_EXPLANATION,
+  REMOVE_KEEP,
+  removeConfirmQuestion,
   SUSPEND_EXPLANATION,
-  type MemberStatus,
+  type PatchableStatus,
 } from '../lib/members'
 import {
   drawerRoleHelper,
@@ -78,14 +81,16 @@ function UnbackedField({ reason, noteId, dim = false, children }: { reason: stri
   )
 }
 
-export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: {
+export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statusError }: {
   ctx: PlatformCtx
   /** The ID, never the row — see MembersView.tsx and the `row` lookup below. */
   memberId: string
   /** Must be STABLE — it is a `useDismiss` dependency (useDismiss.ts:36-37). */
   onClose: () => void
   /** The live status write. Never rejects — MembersView catches into `statusError`. */
-  onStatus: (id: string, status: Exclude<MemberStatus, 'invited'>) => void
+  onStatus: (id: string, status: PatchableStatus) => void
+  /** The remove write. Never rejects; MembersView closes the drawer on a 200. */
+  onRemove?: (id: string) => void
   /** The last failed write's server reason, and the row it happened on. */
   statusError: { id: string; message: string } | null
 }) {
@@ -106,6 +111,13 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
   const [clientsError, setClientsError] = useState<string | null>(null)
   const [pickerKey, setPickerKey] = useState(0)
   const dropped = useRef(false)
+
+  // The Remove confirm strip; the safe button takes focus when it opens.
+  const [confirmingRemove, setConfirmingRemove] = useState(false)
+  const keepRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (confirmingRemove) keepRef.current?.focus()
+  }, [confirmingRemove])
 
   // Resolved from the CURRENT list on every render, never captured: `isProtectedAdmin` does
   // no identity lookup and answers `true` for a detached row (members.test.ts), so a stale
@@ -444,23 +456,61 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
             </div>
           )}
 
-          {canRemove && (
+          {canRemove && !confirmingRemove && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, paddingTop: 12, borderTop: '1px solid var(--line-1)' }}>
               <span id={removeNoteId} style={{ flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
                 {REMOVE_EXPLANATION}
-                <span style={{ display: 'block', marginTop: 4 }}>{MEMBER_UNBACKED.remove}</span>
               </span>
               <button
                 type="button"
-                disabled
-                title={MEMBER_UNBACKED.remove}
-                aria-describedby={removeNoteId}
+                onClick={() => setConfirmingRemove(true)}
+                disabled={protectedAdmin}
+                title={protectedAdmin ? PROTECTED_ADMIN_NOTE : undefined}
+                aria-describedby={protectedAdmin ? noteId : removeNoteId}
                 className="v2-btn v2-btn-ghost pf-btn"
                 data-testid="member-remove"
-                style={{ flex: 'none', height: 36, color: 'var(--status-red-text)', borderColor: 'var(--status-red-border)', ...disabledGhost }}
+                style={{ flex: 'none', height: 36, color: 'var(--status-red-text)', borderColor: 'var(--status-red-border)', ...(protectedAdmin ? disabledGhost : null) }}
               >
                 Remove
               </button>
+            </div>
+          )}
+
+          {canRemove && confirmingRemove && (
+            <div
+              data-testid="member-remove-confirm"
+              style={{
+                padding: '9px 12px',
+                background: 'var(--status-red-bg)',
+                border: '1px solid var(--status-red-border)',
+                borderRadius: 'var(--radius-md)',
+              }}
+            >
+              <p style={{ margin: '0 0 8px', fontSize: 12.5, lineHeight: 1.5, color: 'var(--status-red-text)' }}>{removeConfirmQuestion(row.name)}</p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <button
+                  type="button"
+                  ref={keepRef}
+                  onClick={() => setConfirmingRemove(false)}
+                  className="v2-btn v2-btn-ghost pf-btn"
+                  data-testid="member-remove-keep"
+                  style={{ height: 32, fontSize: 12.5 }}
+                >
+                  {REMOVE_KEEP}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmingRemove(false)
+                    onRemove?.(row.id)
+                  }}
+                  className="v2-btn pf-btn"
+                  data-testid="member-remove-confirmed"
+                  style={{ height: 32, fontSize: 12.5, background: 'var(--status-red-text)', color: 'var(--primary-foreground)' }}
+                >
+                  {REMOVE_CONFIRMED}
+                </button>
+              </div>
             </div>
           )}
         </div>

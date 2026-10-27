@@ -18,6 +18,8 @@ paths:
   - "internal/gateway/session_check*.go"
   - "internal/gateway/handoff*.go"
   - "internal/gateway/console_handoff*.go"
+  - "internal/gateway/export_download*"
+  - "internal/gateway/export_refused*"
   - "internal/gateway/invitation*.go"
   - "internal/gateway/freemail*.go"
   - "internal/gateway/mock*.go"
@@ -57,6 +59,7 @@ paths:
 - Validate a composed `GOTRUE_JWT_KEYS` offline before you paste it. A malformed value logs the private key at boot.
 
 - Keep GoTrue private. The gateway calls fixed GoTrue paths and forwards no client path or query.
+- The worker calls only `GET` and `DELETE /admin/users/{id}`, with a 60 s `service_role` token.
 - Answer a new, a repeat and a confirmed address on `/auth/register` with the same 202.
 - Answer `POST /auth/invitation` with `account` set to `none`, `unconfirmed`, `confirmed` or `unknown`. Map any other tenancy value to `unknown`.
 - Answer `/auth/invitation/register` with 409 `account_exists` when the preview reads `confirmed` and 409 `account_unconfirmed` when it reads `unconfirmed`. Send both before the claim and the GoTrue call.
@@ -89,6 +92,10 @@ paths:
 - Mint a console hand-off code on `POST /auth/console-handoff` only for a verified, session-checked bearer whose `app_metadata.staff` is true.
 - Store only the caller's access token as that code's answer. Never store a refresh token.
 - Bind that code to the `state` in the request body.
+- Mint an export code on `POST /auth/export-code` only for a verified, session-checked bearer. Store only the caller's access token as its answer.
+- Bind an export code to `sha256("workspace-export:" + state)`. `/auth/exchange` redeems it only under the prefixed state (`TestExportDownload_ExchangeRedeemsAnExportCodeOnlyUnderThePrefixedState`).
+- Redeem an export code only on `POST /auth/export-download`, from the form body. Forward it only to `GET /api/invoice/v1/workspace/export`, through the verifier and the session check, with no client header.
+- Answer each refusal of `/auth/export-download` before the first byte with the export refusal page and its status. Never answer it with JSON.
 - Send a sessionless app visit with exactly `?via=library` to `<landing>/?state=<s>&register`. Any other value takes the sign-in path. An earlier front-door case wins: `?auth=start`, a confirm hop, a pending hand-off or a join offer. `frontDoor_authStartWinsOverVia` and `frontDoor_aPendingHandoffWinsOverVia` pin it.
 - Expect `?register` to open the create-an-account modal, or "Book a demo" when `registrationOpen()` is false.
 - Expect landing's `?demo` to open the book-a-demo modal.
@@ -117,9 +124,10 @@ paths:
 - Reject a token whose `staff` is not a boolean.
 - Accept an invite only for the account whose verified email equals the invited address.
 - Answer a join with 404 `this invite is no longer valid` for every unusable invite. Never tell the cases apart.
-- Answer a join with 409 `you already belong to a workspace` for a caller who holds a membership of any status.
+- Answer a join with 409 `you already belong to a workspace` for a caller who holds a membership that is not `removed`.
 - Keep the live stored session over a verify hand-off code. Show the confirmed notice and post no exchange.
 - Offer the invites from `GET /api/tenancy/v1/invitations/mine` when `/me` answers 403 and no invite is held.
+- Show a caller whose list is empty and whose `removed` is true the app's no-workspace screen. Provision for them only when they press Create a workspace.
 - Set an invitee's password only after proof of the invited mailbox: the confirmation mail's set-password page.
 - Sign up an invite-link registration with a random password. Never store, log or return it.
 - Create no account on register for an address with a pending invite. Answer it as any other register.

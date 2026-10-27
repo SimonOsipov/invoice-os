@@ -125,11 +125,13 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
       expect(Object.keys(body).sort(), 'expected exactly the tenant/user top-level keys').toEqual(['tenant', 'user'])
 
       const tenant = body.tenant as Record<string, unknown>
-      expect(Object.keys(tenant).sort(), 'expected exactly the tenant.{id,name,kind} keys').toEqual([
+      expect(Object.keys(tenant).sort(), 'expected exactly the tenant.{deletion_due_at,id,kind,name} keys').toEqual([
+        'deletion_due_at',
         'id',
         'kind',
         'name',
       ])
+      expect(tenant.deletion_due_at, 'a seeded tenant is not scheduled for deletion').toBeNull()
       // Known seeded values (db/seed.dev.sql) — same convention as
       // isolation.spec.ts's AC1: a real, resolvable identity, not just a
       // well-typed one.

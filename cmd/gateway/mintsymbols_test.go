@@ -24,9 +24,12 @@ const (
 	// MockInvitationTokenHandler is //go:noinline like MockMemberHandler.
 	symMockInvitationToken = "github.com/SimonOsipov/invoice-os/internal/gateway.MockInvitationTokenHandler.func1"
 	symSetInvitationToken  = "github.com/SimonOsipov/invoice-os/internal/platform/db.SetInvitationToken"
+	// MockDeletionLinkTokenHandler is //go:noinline like MockMemberHandler.
+	symMockDeletionLinkToken = "github.com/SimonOsipov/invoice-os/internal/gateway.MockDeletionLinkTokenHandler.func1"
+	symSetDeletionLinkToken  = "github.com/SimonOsipov/invoice-os/internal/platform/db.SetDeletionLinkToken"
 )
 
-var mintSymbols = []string{symMint, symNewIssuer, symSignedString, symECDSASign, symMockMember, symGrantMembership, symMockInvitationToken, symSetInvitationToken}
+var mintSymbols = []string{symMint, symNewIssuer, symSignedString, symECDSASign, symMockMember, symGrantMembership, symMockInvitationToken, symSetInvitationToken, symMockDeletionLinkToken, symSetDeletionLinkToken}
 
 // gatewayBuilds counts local builds, so a test can prove an override never falls back to one.
 var gatewayBuilds atomic.Int32
@@ -125,8 +128,8 @@ func TestProductionGatewayBinaryCannotMint(t *testing.T) {
 	if !hasSymbol(lines, symVerify) {
 		t.Fatalf("%s lacks the control symbol %s; the absence checks below prove nothing", bin, symVerify)
 	}
-	if len(mintSymbols) != 8 {
-		t.Fatalf("mintSymbols has %d needle(s), want 8", len(mintSymbols))
+	if len(mintSymbols) != 10 {
+		t.Fatalf("mintSymbols has %d needle(s), want 10", len(mintSymbols))
 	}
 	for _, sym := range mintSymbols {
 		for _, l := range lines {
@@ -145,8 +148,8 @@ func TestMockIssuerGatewayBinaryCanMint(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := nmLines(t, bin)
-	if len(mintSymbols) != 8 {
-		t.Fatalf("mintSymbols has %d needle(s), want 8", len(mintSymbols))
+	if len(mintSymbols) != 10 {
+		t.Fatalf("mintSymbols has %d needle(s), want 10", len(mintSymbols))
 	}
 	for _, sym := range mintSymbols {
 		if !hasSymbol(lines, sym) {

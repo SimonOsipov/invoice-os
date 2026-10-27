@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import type { AuditEvent } from './audit'
+import { auditEventView } from './auditVocabulary'
 import { AUDIT_CSV_HEADER, auditCsv, auditCsvFilename, auditExportToastCopy } from './auditCsv'
 
 let eventCounter = 0
@@ -116,6 +117,77 @@ describe('auditCsv', () => {
     expect(csv.length, 'auditCsv produced an empty string').toBeGreaterThan(0)
     expect(csv, 'the exact ISO created_at must appear verbatim').toContain('2026-08-20T09:15:00Z')
     expect(csv.toLowerCase(), 'no relative time phrasing ("ago") may appear').not.toContain('ago')
+  })
+})
+
+describe('auditCsv truncation notice (BUG-74)', () => {
+  const trunc = { truncated: true, cap: 2000 }
+
+  it('auditCsv_truncatedEndsWithOneNoticeLine: a truncated export ends with one line naming 2000, the most recent events and more older ones', () => {
+    const events = [makeEvent(), makeEvent(), makeEvent()]
+    const lines = auditCsv(events, trunc).split('\n')
+
+    expect(lines.length, 'header + 3 event rows + 1 notice line').toBe(5)
+    const notice = lines[lines.length - 1]
+    expect(notice, 'the last line names the 2000 cap').toContain('2000')
+    expect(notice, 'the last line says the file holds only the most recent events').toMatch(/most recent/i)
+    expect(notice, 'the last line says the log has more events').toMatch(/more/i)
+    expect(notice, 'the last line says the dropped events are older').toMatch(/older/i)
+    expect(notice, 'the last line must not claim the file holds the first rows').not.toMatch(/first/i)
+  })
+
+  it('auditCsv_truncatedKeepsHeaderFirstAndRowsUntouched: header stays line 1 and event rows match the untruncated output', () => {
+    const events = [makeEvent(), makeEvent()]
+    const plain = auditCsv(events).split('\n')
+    const lines = auditCsv(events, trunc).split('\n')
+
+    expect(lines.length, 'control: the notice line exists').toBe(plain.length + 1)
+    expect(lines[0]).toBe(AUDIT_CSV_HEADER.join(','))
+    expect(lines.slice(0, plain.length)).toEqual(plain)
+  })
+
+  it('auditCsv_notTruncatedIsByteIdentical: no options and truncated:false give today\'s output', () => {
+    const events = [makeEvent(), makeEvent()]
+    const today = [AUDIT_CSV_HEADER.join(','), ...auditCsv(events).split('\n').slice(1)].join('\n')
+
+    expect(auditCsv(events, { truncated: false, cap: 2000 })).toBe(auditCsv(events))
+    expect(auditCsv(events), 'control: output is header + rows only').toBe(today)
+    expect(auditCsv(events).split('\n').length).toBe(3)
+  })
+
+  it('auditCsv_notTruncatedMatchesStoredLiteral: a one-event export equals the pre-fix file byte for byte', () => {
+    const event = makeEvent({ id: 'evt-literal' })
+    const literal =
+      'When,Who,Actor kind,Actor id,What,Event identifier,Company,Company scope,Event id\n' +
+      `2026-08-20T09:15:00Z,Ada Obi,person,actor-uuid-0001,${auditEventView('invoice.created').label},invoice.created,\u2014,unattributed,evt-literal`
+
+    expect(auditCsv([event]), 'no options').toBe(literal)
+    expect(auditCsv([event], { truncated: false, cap: 2000 }), 'truncated:false').toBe(literal)
+  })
+
+  it('auditCsv_truncatedNamesTheCapItWasGiven: cap 50 says 50 and never 2000', () => {
+    const notice = auditCsv([makeEvent()], { truncated: true, cap: 50 }).split('\n').pop() as string
+
+    expect(notice).toContain('50')
+    expect(notice).not.toContain('2000')
+  })
+
+  it('auditCsv_truncatedNoticeIsOneCsvCell: the notice line has no unquoted comma, so a spreadsheet shows one cell', () => {
+    const lines = auditCsv([makeEvent()], trunc).split('\n')
+    const notice = lines[lines.length - 1]
+
+    expect(notice.length, 'control: the notice line is not empty').toBeGreaterThan(0)
+    expect(notice.startsWith('"') ? notice.endsWith('"') : !notice.includes(',')).toBe(true)
+    expect(notice, 'no comma, so any list separator keeps one cell').not.toContain(',')
+    expect(notice, 'no semicolon, so a semicolon-locale Excel keeps one cell').not.toContain(';')
+  })
+
+  it('auditCsv_truncatedWithNoRowsStillHasHeaderThenNotice: header on line 1, notice on line 2', () => {
+    const lines = auditCsv([], trunc).split('\n')
+
+    expect(lines.length).toBe(2)
+    expect(lines[0]).toBe(AUDIT_CSV_HEADER.join(','))
+    expect(lines[1]).toContain('2000')
   })
 })
 

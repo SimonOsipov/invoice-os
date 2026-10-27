@@ -217,7 +217,7 @@ func TestInvitations_CreateAcceptsAnArchivedClient(t *testing.T) {
 	w.requireInvite(t, "the invite", got[0].ID, false, e1)
 
 	user := uuid.NewString()
-	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, "a@x.test"), got[0].Token); err != nil {
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, "a@x.test"), got[0].Token, nil); err != nil {
 		t.Fatalf("accept: %v", err)
 	}
 	w.requireStored(t, "the member", user, false, e1)
@@ -245,7 +245,7 @@ func TestInvitations_CreateThenAcceptCopiesTheChoice(t *testing.T) {
 		wants []string
 	}{{set[0], false, []string{e1, e2}}, {every[0], true, nil}, {none[0], false, nil}} {
 		user := uuid.NewString()
-		if _, _, _, err := w.store.AcceptInvitation(tenantless(user, c.inv.Email), c.inv.Token); err != nil {
+		if _, _, _, err := w.store.AcceptInvitation(tenantless(user, c.inv.Email), c.inv.Token, nil); err != nil {
 			t.Fatalf("accept %s: %v", c.inv.Email, err)
 		}
 		w.requireStored(t, c.inv.Email, user, c.all, c.wants...)
@@ -258,7 +258,7 @@ func TestInvitations_ALaterInviteDoesNotInheritAnOlderInvitesSet(t *testing.T) {
 	accept := func(inv IssuedInvite) string {
 		t.Helper()
 		user := uuid.NewString()
-		if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inv.Email), inv.Token); err != nil {
+		if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inv.Email), inv.Token, nil); err != nil {
 			t.Fatalf("accept %s: %v", inv.Email, err)
 		}
 		return user
@@ -289,7 +289,7 @@ func TestInvitations_ALaterInviteDoesNotInheritAnOlderInvitesSet(t *testing.T) {
 		t.Fatalf("reissue: %v", err)
 	}
 	stale := uuid.NewString()
-	if _, _, _, err := w.store.AcceptInvitation(tenantless(stale, "s@x.test"), first[0].Token); !errors.Is(err, ErrInvitationNotValid) {
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(stale, "s@x.test"), first[0].Token, nil); !errors.Is(err, ErrInvitationNotValid) {
 		t.Fatalf("the replaced link err = %v, want ErrInvitationNotValid", err)
 	}
 	if got := len(membersOf(t, w.super, stale)); got != 0 {
@@ -339,7 +339,7 @@ func TestAccept_AnInHouseInviteGivesNoClientAccess(t *testing.T) {
 		t.Fatalf("invite: %d, err %v", len(got), err)
 	}
 	user := uuid.NewString()
-	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, "in@x.test"), got[0].Token); err != nil {
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, "in@x.test"), got[0].Token, nil); err != nil {
 		t.Fatalf("accept: %v", err)
 	}
 	w.requireStored(t, "the in-house member", user, false)
@@ -360,7 +360,7 @@ func TestAccept_TheSameAddressInTwoWorkspacesCopiesEachOwnSet(t *testing.T) {
 	}
 
 	user := uuid.NewString()
-	tenant, _, _, err := b.store.AcceptInvitation(tenantless(user, "both@x.test"), ib[0].Token)
+	tenant, _, _, err := b.store.AcceptInvitation(tenantless(user, "both@x.test"), ib[0].Token, nil)
 	if err != nil || tenant.ID != b.tenant {
 		t.Fatalf("accept B's invite: tenant %s, err %v", tenant.ID, err)
 	}

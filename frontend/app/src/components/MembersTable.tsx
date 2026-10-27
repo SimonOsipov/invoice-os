@@ -22,13 +22,15 @@ import {
   inviteAccountLine,
   inviteStatusLine,
   isProtectedAdmin,
-  MEMBER_UNBACKED,
   PROTECTED_ADMIN_NOTE,
+  REMOVE_CONFIRMED,
+  REMOVE_KEEP,
+  removeConfirmQuestion,
   REVOKE_CONFIRM,
   REVOKE_CONFIRMED,
   REVOKE_KEEP,
   type Member,
-  type MemberStatus,
+  type PatchableStatus,
   type PendingInvite,
 } from '../lib/members'
 import { rosterRoleCell, stepsForMember, stepsWarning, type Role } from '../lib/roles'
@@ -65,7 +67,7 @@ const MENU_CLEARANCE_NOTED = 256
 // narrower than its content, so `minWidth: 0` is as load-bearing as the other three.
 const ELLIPSIS = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const
 
-export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, statusError, invites = [], onResend, resending, onRevoke, revoking }: {
+export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, onRemove, statusError, invites = [], onResend, resending, onRevoke, revoking }: {
   ctx: PlatformCtx
   /** Already filtered by MembersView — this component never filters. */
   rows: Member[]
@@ -80,7 +82,9 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
   /** Opens that member's drawer. MembersView owns the open id. */
   onOpen: (id: string) => void
   /** The live status write. Never rejects — MembersView catches into `statusError`. */
-  onStatus: (id: string, status: Exclude<MemberStatus, 'invited'>) => void
+  onStatus: (id: string, status: PatchableStatus) => void
+  /** The remove write. Never rejects; MembersView renders a refusal in `statusError`. */
+  onRemove?: (id: string) => void
   /** The last failed write's server reason, and the row it happened on. */
   statusError: { id: string; message: string } | null
   /** Pending invitations, matched to an `invited` row by `Member.id`. */
@@ -112,6 +116,18 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
   useEffect(() => {
     if (revokeId != null && !rows.some((m) => m.id === revokeId)) setRevokeId(null)
   }, [rows, revokeId])
+
+  // The member whose Remove confirm strip is open; same lifecycle as the revoke strip.
+  const [removeId, setRemoveId] = useState<string | null>(null)
+  const closeRemove = useCallback(() => setRemoveId(null), [])
+  useDismiss(removeId != null, closeRemove)
+  const keepRemoveRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (removeId != null) keepRemoveRef.current?.focus()
+  }, [removeId])
+  useEffect(() => {
+    if (removeId != null && !rows.some((m) => m.id === removeId)) setRemoveId(null)
+  }, [rows, removeId])
   // Checked against the rendered rows, not just `!= null`: a filter can narrow the list
   // out from under an open menu, and the clearance below must not be held open for a menu
   // that no longer exists.
@@ -145,7 +161,13 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
     // §6: your own menu has no Remove. A SEPARATE rule from the last-admin lock — `isYou`,
     // not `isProtectedAdmin`.
     if (!m.isYou) {
-      items.push({ label: 'Remove', danger: true, disabled: true, reason: MEMBER_UNBACKED.remove })
+      items.push({
+        label: 'Remove',
+        danger: true,
+        disabled: protectedAdmin,
+        reason: protectedAdmin ? PROTECTED_ADMIN_NOTE : undefined,
+        onSelect: () => setRemoveId(m.id),
+      })
     }
     return items
   }
@@ -205,7 +227,9 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
           const rolesLanded = ctx.rolesState === 'ready' || ctx.rolesState === 'empty'
           const roleCell = rolesLanded ? rosterRoleCell(roles, m.id) : { text: '', tooltip: '' }
           const pending = m.status === 'invited'
-          const clientLine = ctx.mode === 'firm' ? clientAccessLabel(m.clientAccess) : null
+          // A removed row is history: pill and name only, no role, menu or drawer.
+          const removed = m.status === 'removed'
+          const clientLine = ctx.mode === 'firm' && !removed ? clientAccessLabel(m.clientAccess) : null
           const invite = pending ? invites.find((i) => i.id === m.id) : undefined
           const accountLine = invite ? inviteAccountLine(invite) : null
           return (
@@ -224,9 +248,9 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                 // the drawer exists, and InvoicesList.tsx:385-386 records row-level keyboard
                 // access as an app-wide follow-up. Inventing a `role="button"`/`tabIndex`
                 // shape on this one table would be this screen deciding it alone.
-                onClick={pending ? undefined : () => onOpen(m.id)}
+                onClick={pending || removed ? undefined : () => onOpen(m.id)}
                 style={{
-                  cursor: pending ? 'default' : undefined,
+                  cursor: pending || removed ? 'default' : undefined,
                   display: 'grid',
                   gridTemplateColumns: COLS,
                   gap: 12,
@@ -244,7 +268,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                       {/* §10.1 softens the INVITED name only. Suspended keeps full-strength
                           text — its distinctness is carried by the red chip and red pill,
                           and softening it too would make the two states converge. */}
-                      <span style={{ ...ELLIPSIS, fontSize: 13.5, fontWeight: 500, color: m.status === 'invited' ? 'var(--fg-3)' : 'var(--fg-1)' }}>
+                      <span style={{ ...ELLIPSIS, fontSize: 13.5, fontWeight: 500, color: m.status === 'invited' || removed ? 'var(--fg-3)' : 'var(--fg-1)' }}>
                         {m.name}
                       </span>
                       {m.isYou && <YouChip />}
@@ -256,7 +280,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                 </span>
 
                 <span style={{ minWidth: 0 }}>
-                  <span style={{ display: 'block', ...ELLIPSIS, fontSize: 12.5, color: 'var(--fg-2)' }}>{accessRoleLabel(m.role)}</span>
+                  <span style={{ display: 'block', ...ELLIPSIS, fontSize: 12.5, color: 'var(--fg-2)' }}>{removed ? '' : accessRoleLabel(m.role)}</span>
                   {clientLine && (
                     <span
                       data-testid="member-client-access"
@@ -294,14 +318,18 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                   )}
                 </span>
 
-                <MoreMenu
-                  open={openMenuId === m.id}
-                  onOpen={() => setOpenMenuId(m.id)}
-                  onClose={closeMenu}
-                  label={m.name}
-                  items={menuItems(m, protectedAdmin)}
-                  note={accountLine ?? undefined}
-                />
+                {removed ? (
+                  <span />
+                ) : (
+                  <MoreMenu
+                    open={openMenuId === m.id}
+                    onOpen={() => setOpenMenuId(m.id)}
+                    onClose={closeMenu}
+                    label={m.name}
+                    items={menuItems(m, protectedAdmin)}
+                    note={accountLine ?? undefined}
+                  />
+                )}
               </div>
 
               {pending && revokeId === m.id && (
@@ -338,6 +366,44 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                       style={{ height: 32, fontSize: 12.5, background: 'var(--status-red-text)', color: 'var(--primary-foreground)' }}
                     >
                       {REVOKE_CONFIRMED}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {removeId === m.id && (
+                <div
+                  data-testid="member-remove-confirm"
+                  style={{
+                    padding: '9px 16px',
+                    background: 'var(--status-red-bg)',
+                    borderTop: '1px solid var(--status-red-border)',
+                    minWidth,
+                  }}
+                >
+                  <p style={{ margin: '0 0 8px', fontSize: 12.5, lineHeight: 1.5, color: 'var(--status-red-text)' }}>{removeConfirmQuestion(m.name)}</p>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      type="button"
+                      ref={keepRemoveRef}
+                      onClick={closeRemove}
+                      className="v2-btn v2-btn-ghost pf-btn"
+                      data-testid="member-remove-keep"
+                      style={{ height: 32, fontSize: 12.5 }}
+                    >
+                      {REMOVE_KEEP}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRemoveId(null)
+                        onRemove?.(m.id)
+                      }}
+                      className="v2-btn pf-btn"
+                      data-testid="member-remove-confirmed"
+                      style={{ height: 32, fontSize: 12.5, background: 'var(--status-red-text)', color: 'var(--primary-foreground)' }}
+                    >
+                      {REMOVE_CONFIRMED}
                     </button>
                   </div>
                 </div>

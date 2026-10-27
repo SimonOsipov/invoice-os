@@ -58,6 +58,7 @@ const CHIP_TONE: Record<MemberStatus, { background: string; color: string; borde
   invited: { background: 'transparent', color: 'var(--fg-3)', border: '1px dashed var(--line-3)' },
   // Double-encoded with the SUSPENDED pill on purpose.
   suspended: { background: 'var(--status-red-bg)', color: 'var(--status-red-text)', border: '1px solid var(--status-red-border)' },
+  removed: { background: 'var(--status-muted-bg)', color: 'var(--status-muted-text)', border: '1px solid var(--status-muted-border)' },
 }
 
 /** `aria-hidden`: the name it abbreviates is always rendered beside it. */
@@ -102,6 +103,7 @@ const STATUS_TONE: Record<MemberStatus, { bg: string; border: string; text: stri
   active: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'ACTIVE' },
   invited: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)', label: 'INVITED' },
   suspended: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'SUSPENDED' },
+  removed: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'REMOVED' },
 }
 
 /** `compact` is the drawer header's 2px pill; the table's is 3px. */

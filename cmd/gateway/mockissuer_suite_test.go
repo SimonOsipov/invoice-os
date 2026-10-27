@@ -20,8 +20,9 @@ func TestUntaggedGatewayServesNoMintRoutes(t *testing.T) {
 		t.Errorf(`mockIssuerRoutes("development", "true") = (jwks %v, login %v), want (nil, nil) in a build without -tags mockissuer`, jwks, login)
 	}
 	for name, route := range map[string]func(string, *slog.Logger) http.Handler{
-		"mockMemberRoute":          mockMemberRoute,
-		"mockInvitationTokenRoute": mockInvitationTokenRoute,
+		"mockMemberRoute":            mockMemberRoute,
+		"mockInvitationTokenRoute":   mockInvitationTokenRoute,
+		"mockDeletionLinkTokenRoute": mockDeletionLinkTokenRoute,
 	} {
 		rec := httptest.NewRecorder()
 		route("postgres://u@unused.invalid:5432/db", logger).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/mock/x", strings.NewReader(`{}`)))
@@ -44,6 +45,7 @@ func TestMockIssuerBuildPassesItsTaggedTests(t *testing.T) {
 		"TestTaggedMockIssuerRoutesKeepTheirWiring",
 		"TestTaggedMockMemberRouteWiresTheGrant",
 		"TestTaggedMockInvitationTokenRouteWiresTheSetter",
+		"TestTaggedMockDeletionLinkTokenRouteWiresTheSetter",
 		"TestTaggedMockLoginIgnoresDeployEnv",
 		"TestTaggedMockIssuerUsesConfiguredKey",
 		"TestTaggedMockIssuerWithoutKeyGeneratesOne",

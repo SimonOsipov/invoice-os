@@ -75,22 +75,11 @@ func (p *Purger) RunOnce(ctx context.Context) error {
 	}
 	var failures []error
 	for _, id := range tenants {
-		res, err := p.Purge(ctx, id)
-		if err != nil {
+		if err := p.purgeLogged(ctx, log, id); err != nil {
 			if ctx.Err() != nil { // shutdown, not a tenant fault
 				break
 			}
-			step := ""
-			var se *stepError
-			if errors.As(err, &se) {
-				step = se.step
-			}
-			log.ErrorContext(ctx, "workspace purge: tenant failed", "tenant_id", id, "step", step, "error", err)
 			failures = append(failures, err)
-			continue
-		}
-		if res.Purged {
-			log.InfoContext(ctx, "workspace purge: purged", "tenant_id", id, "members", res.Members, "objects", res.Objects)
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -99,8 +88,57 @@ func (p *Purger) RunOnce(ctx context.Context) error {
 	return errors.Join(failures...)
 }
 
-// Purge runs the three steps for one tenant. A tenant that is not due returns Result{} and nil.
+// purgeLogged runs Purge for one tenant and logs the outcome; a failure is logged unless ctx is done.
+func (p *Purger) purgeLogged(ctx context.Context, log *slog.Logger, id string) error {
+	res, err := p.Purge(ctx, id)
+	if err != nil {
+		if ctx.Err() == nil {
+			step := ""
+			var se *stepError
+			if errors.As(err, &se) {
+				step = se.step
+			}
+			log.ErrorContext(ctx, "workspace purge: tenant failed", "tenant_id", id, "step", step, "error", err)
+		}
+		return err
+	}
+	if res.Purged {
+		log.InfoContext(ctx, "workspace purge: purged", "tenant_id", id, "members", res.Members, "objects", res.Objects)
+	}
+	return nil
+}
+
+// lockTenant takes the session advisory lock for one tenant's purge on a held connection.
+// ok is false when another runner holds it; release frees the lock and the connection.
+func (p *Purger) lockTenant(ctx context.Context, tenantID string) (release func(), ok bool, err error) {
+	conn, err := p.Pool.Acquire(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtextextended('workspace_purge:' || $1::text, 0))`, tenantID).Scan(&ok); err != nil || !ok {
+		conn.Release()
+		return nil, false, err
+	}
+	return func() {
+		var unlocked bool
+		uctx := context.WithoutCancel(ctx)
+		if err := conn.QueryRow(uctx, `SELECT pg_advisory_unlock(hashtextextended('workspace_purge:' || $1::text, 0))`, tenantID).Scan(&unlocked); err != nil || !unlocked {
+			_ = conn.Conn().Close(uctx) // closing the session frees the lock; the pool drops the dead conn
+		}
+		conn.Release()
+	}, true, nil
+}
+
+// Purge runs the three steps for one tenant. A tenant that is not due, or that another runner is purging, returns Result{} and nil.
 func (p *Purger) Purge(ctx context.Context, tenantID string) (Result, error) {
+	release, ok, err := p.lockTenant(ctx, tenantID)
+	if err != nil {
+		return Result{}, &stepError{tenantID, stepErase, err}
+	}
+	if !ok {
+		return Result{}, nil
+	}
+	defer release()
 	log := p.Logger
 	if log == nil {
 		log = slog.Default()
@@ -132,9 +170,9 @@ func (p *Purger) Purge(ctx context.Context, tenantID string) (Result, error) {
 	return Result{Purged: true, Members: members, Objects: objects}, nil
 }
 
-// dueTenants lists the tenants whose deletion time has passed, earliest first.
+// dueTenants lists the tenants whose deletion is due or already started, earliest first.
 func dueTenants(ctx context.Context, reader *pgxpool.Pool) ([]string, error) {
-	rows, err := reader.Query(ctx, `SELECT id::text FROM tenants WHERE deletion_due_at <= now() ORDER BY deletion_due_at, id`)
+	rows, err := reader.Query(ctx, `SELECT id::text FROM tenants WHERE deletion_due_at <= now() OR deletion_purge_started_at IS NOT NULL ORDER BY deletion_due_at, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -150,10 +188,10 @@ func dueTenants(ctx context.Context, reader *pgxpool.Pool) ([]string, error) {
 	return ids, rows.Err()
 }
 
-// lockDue takes the tenant row; false means the tenant is not due (never scheduled, cancelled or purged).
+// lockDue takes the tenant row; false means the tenant is not due or started (never scheduled, cancelled or purged).
 func lockDue(ctx context.Context, tx pgx.Tx) (time.Time, bool, error) {
 	var due time.Time
-	err := tx.QueryRow(ctx, `SELECT deletion_due_at FROM tenants WHERE deletion_due_at <= now() FOR UPDATE`).Scan(&due)
+	err := tx.QueryRow(ctx, `SELECT deletion_due_at FROM tenants WHERE deletion_due_at <= now() OR deletion_purge_started_at IS NOT NULL FOR UPDATE`).Scan(&due)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return time.Time{}, false, nil
 	}

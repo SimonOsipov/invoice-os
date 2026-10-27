@@ -129,6 +129,7 @@ var firmWideEvents = map[string]struct{}{
 	"membership.removed":           {},
 	"workspace.deletion_scheduled": {},
 	"workspace.deletion_cancelled": {},
+	"workspace.purge_started":      {},
 	"workspace.exported":           {},
 	"workspace.export_failed":      {},
 	"membership.account_deleted":   {},

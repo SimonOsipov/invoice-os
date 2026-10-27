@@ -14,7 +14,8 @@ import { RuleDrawer } from './components/RuleDrawer'
 import { CodeListDrawer } from './components/CodeListDrawer'
 import { KillConfirm } from './components/KillConfirm'
 import { JobDrawer } from './components/JobDrawer'
-import { JobActionConfirm, type JobAction } from './components/JobActionConfirm'
+import { JobActionConfirm, type JobAction, REASON_NOTICE } from './components/JobActionConfirm'
+import { DeletionConfirm, PURGE_REASON_NOTICE } from './components/DeletionConfirm'
 import { PublishModal } from './components/PublishModal'
 import { DraftTestModal } from './components/DraftTestModal'
 import { Toast } from './components/Toast'
@@ -45,7 +46,7 @@ import { defaultBundlePeriod, downloadBundle, fetchAuditEvents, fetchBundlePrevi
 import { fetchAiCalls, fetchAiTotals, type AiCallsPage, type AiFilters, type AiTotalsPage } from './aiUsageApi'
 import { fetchStaffHealth, type StaffHealth } from './healthApi'
 import { DEFAULT_RANGE, fetchStaffMetrics, HEALTH_REFRESH_MS, type RangeKey, type StaffMetrics } from './metricsApi'
-import { detailStatus, fetchStaffTenant, fetchStaffTenants } from './tenantsApi'
+import { cancelTenantDeletion, deleteMemberAccount, detailStatus, fetchStaffTenant, fetchStaffTenants, memberName, previewMemberDeletion, purgeTenant, startTenantDeletion, type StaffMember } from './tenantsApi'
 import { StaffGate } from '@invoice-os/console-session'
 import { SESSION_KEY, appBase, expireSession, landingBase } from './auth'
 import { keptFor } from './blog'
@@ -90,6 +91,9 @@ function Console() {
   const [jobTenant, setJobTenant] = useState('')
   const [confirmJob, setConfirmJob] = useState<JobAction | null>(null)
   const [jobBusy, setJobBusy] = useState(false)
+  const [deletion, setDeletion] = useState<{ kind: 'start' | 'cancel' | 'purge' } | { kind: 'member'; member: StaffMember } | null>(null)
+  const [deletionBusy, setDeletionBusy] = useState(false)
+  const [acctOpens, setAcctOpens] = useState(0)
   const [auditView, setAuditView] = useState<AuditView>('tenant')
   const [auditFilters, setAuditFilters] = useState<AuditFilters>({})
   const [auditMore, setAuditMore] = useState<{ key: number; events: StaffAuditRow[]; page: StaffAuditPage['page'] } | null>(null)
@@ -149,6 +153,11 @@ function Console() {
     const id = tenantId ?? ''
     try { return await fetchStaffTenant(id) } catch (e) { const error = toApiError(e); failedTenants.current.set(error, id); throw error }
   }, { immediate: onTenants && tenantId !== null, deps: [onTenants, tenantId], isEmpty: () => false })
+  const deletionMember = deletion?.kind === 'member' ? deletion.member.user_id : null
+  const acctKey = `${tenantId}/${deletionMember}/${acctOpens}`
+  // Keyed like previewRead, plus the open count: an answer for another member or an earlier open never shows.
+  const acctRead = useAsync(async () => ({ key: acctKey, res: await previewMemberDeletion(tenantId ?? '', deletionMember ?? '') }), { immediate: deletionMember !== null && tenantId !== null, deps: [acctKey], isEmpty: () => false })
+  const acctPreview = acctRead.data?.key === acctKey ? acctRead.data.res : null
   const tenantsStatus = tenantsRead.status === 'error' ? (tenantsRead.error?.status === 403 ? 'forbidden' : 'error') : tenantsRead.status === 'ready' || tenantsRead.status === 'empty' ? tenantsRead.status : 'loading'
   const onHealth = screen === 'health'
   // Reads carry the visit they started in, so a stale answer from an earlier visit never shows.
@@ -382,7 +391,7 @@ function Console() {
   const jobDetail = freshJob ?? (jobRead.status === 'loading' && lastJob.current?.job.id === openJob ? lastJob.current : null)
   const jobNote = jobRead.status === 'error' ? { text: jobRead.error?.status === 403 ? 'Your account is not ASComply staff.' : (jobRead.error?.message ?? 'Unavailable'), onRetry: jobRead.run } : { text: 'Loading job…' }
   const jobInFlight = useRef(false)
-  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, healthRead, metricsRead, auditRead, auditTenantsRead, aiRead, totalsRead, aiTenantsRead, changesRead, entitiesRead, previewRead].some((r) => r.error?.status === 401)
+  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, acctRead, healthRead, metricsRead, auditRead, auditTenantsRead, aiRead, totalsRead, aiTenantsRead, changesRead, entitiesRead, previewRead].some((r) => r.error?.status === 401)
   useEffect(() => {
     if (expired) void expireSession()
   }, [expired])
@@ -391,6 +400,7 @@ function Console() {
     setScreen(s)
     setDrawer(null)
     setConfirmJob(null)
+    setDeletion(null)
   }
 
   // ---- job actions: one request at a time; a 404 or 409 re-reads what the server now holds ----
@@ -422,6 +432,83 @@ function Console() {
       jobInFlight.current = false
       setJobBusy(false)
     }
+  }
+
+  // ---- deletion actions: one request at a time; a 404 or 409 shows the server sentence and re-reads ----
+  const deletionInFlight = useRef(false)
+  const doDeletion = async (reason: string, typedName: string) => {
+    const t = tenantRead.data?.tenant
+    if (!deletion || !t || deletionInFlight.current) return
+    const id = t.id
+    deletionInFlight.current = true
+    setDeletionBusy(true)
+    try {
+      let done: string
+      if (deletion.kind === 'start') {
+        await startTenantDeletion(id, reason)
+        done = 'Deletion scheduled'
+      } else if (deletion.kind === 'cancel') {
+        await cancelTenantDeletion(id, reason)
+        done = 'Deletion cancelled'
+      } else if (deletion.kind === 'purge') {
+        await purgeTenant(id, typedName, reason)
+        done = 'Purge started'
+      } else if ('member' in deletion) {
+        if (!acctPreview || acctPreview.outcome === 'delete_workspace') return
+        const heir = acctPreview.outcome === 'hand_on' && acctPreview.heir_user_id ? { heir_user_id: acctPreview.heir_user_id } : {}
+        await deleteMemberAccount(id, deletion.member.user_id, { outcome: acctPreview.outcome, ...heir, reason })
+        done = 'Account deleted'
+      } else return
+      setDeletion(null)
+      showToast(done, 'AUDITED')
+      tenantsRead.run()
+      tenantRead.run()
+    } catch (e) {
+      const err = toApiError(e)
+      if (err.status === 401) {
+        void expireSession()
+        return
+      }
+      showToast(err.message, '', 'red')
+      if (err.status === 404 || err.status === 409) {
+        setDeletion(null)
+        tenantsRead.run()
+        tenantRead.run()
+      }
+    } finally {
+      deletionInFlight.current = false
+      setDeletionBusy(false)
+    }
+  }
+  const deletionModal = () => {
+    const t = tenantRead.data?.tenant
+    if (!deletion || !t) return null
+    const common = { busy: deletionBusy, onClose: () => setDeletion(null), onConfirm: (reason: string, typed: string) => void doDeletion(reason, typed) }
+    if (deletion.kind === 'start') {
+      return <DeletionConfirm {...common} title={`Start deleting ${t.name}?`} body="The workspace locks at once and is deleted in 30 days. Every active admin gets an email with a cancel link." confirmLabel="Start deletion" notice={REASON_NOTICE} />
+    }
+    if (deletion.kind === 'cancel') {
+      return <DeletionConfirm {...common} title={`Cancel the deletion of ${t.name}?`} body="The workspace unlocks at once. Every active admin gets an email." confirmLabel="Cancel deletion" notice={REASON_NOTICE} />
+    }
+    if (deletion.kind === 'purge') {
+      return (
+        <DeletionConfirm {...common} title={`Purge ${t.name} now?`} body="Every member's account, every file and every invoice is deleted now. There is no export and no undo." confirmLabel="Purge now" nameToMatch={t.name} notice={PURGE_REASON_NOTICE} />
+      )
+    }
+    if (!('member' in deletion)) return null
+    const who = memberName(deletion.member)
+    const o = acctPreview?.outcome
+    const last = o === 'delete_workspace'
+    const body = !acctPreview
+      ? acctRead.status === 'error'
+        ? (acctRead.error?.message ?? 'Unavailable')
+        : 'Reading…'
+      : last
+        ? `${who} is the last active member. Start a workspace deletion instead.`
+        : `Their account goes at once. Their name stays in the history of ${t.name}, marked (deleted).${o === 'hand_on' ? ` They are the last admin. Admin moves to ${acctPreview.heir_name}, who joined first.` : ''}`
+    return (
+      <DeletionConfirm {...common} title={`Delete ${who}'s account?`} body={body} confirmLabel={last ? undefined : 'Delete account'} ready={acctPreview !== null} notice={REASON_NOTICE} />
+    )
   }
 
   // ---- rule actions ----
@@ -657,6 +744,9 @@ function Console() {
                 setJobState(undefined)
                 go('submissions')
               }}
+              onDeletion={(kind) => setDeletion({ kind })}
+              onDeleteAccount={(member) => { setAcctOpens((n) => n + 1); setDeletion({ kind: 'member', member }) }}
+              actionBusy={deletionBusy}
             />
           )}
           {screen === 'ai' && (
@@ -770,6 +860,8 @@ function Console() {
       {confirmJob && jobDetail && (
         <JobActionConfirm invoiceNumber={jobDetail.job.invoice_number} action={confirmJob} busy={jobBusy} onClose={() => setConfirmJob(null)} onConfirm={(reason) => void doJobAction(reason)} />
       )}
+
+      {deletionModal()}
 
       {confirmKill && (
         <KillConfirm ruleKey={confirmKill.key} action={confirmKill.action} busy={rulesBusy} onClose={() => setConfirmKill(null)} onConfirm={doSwitch} />

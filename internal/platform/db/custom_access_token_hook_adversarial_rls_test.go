@@ -58,7 +58,7 @@ func reapplyHookMigrationOnCleanup(t *testing.T, provider *goose.Provider) {
 	t.Helper()
 	byHouse, house, rules, staff, hook := staffByHouseMigrationVersion(t), houseMigrationVersion(t), rulesRoleMigrationVersion(t), staffMigrationVersion(t), hookMigrationVersion(t)
 	join, hasJoin := joinMigrationVersion(t)
-	staffRead := staffReadMigrationVersions(t)
+	staffRead := withoutStaffDeletionRead(t, staffReadMigrationVersions(t))
 	rollBackRemovedFirst(t, provider)
 	t.Cleanup(func() {
 		ctx := context.Background()
@@ -390,7 +390,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 	ctx := context.Background()
 	byHouse, house, hook, staff, rules := staffByHouseMigrationVersion(t), houseMigrationVersion(t), hookMigrationVersion(t), staffMigrationVersion(t), rulesRoleMigrationVersion(t)
 	join, hasJoin := joinMigrationVersion(t)
-	staffRead := staffReadMigrationVersions(t)
+	staffRead := withoutStaffDeletionRead(t, staffReadMigrationVersions(t))
 
 	sqlDB, err := sql.Open("pgx", os.Getenv("DATABASE_MIGRATION_URL"))
 	if err != nil {

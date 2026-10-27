@@ -16,6 +16,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
+	"github.com/SimonOsipov/invoice-os/internal/workspacepurge"
 )
 
 // companyFreeKinds: job kinds that run for no company, each with its reason.
@@ -116,9 +117,9 @@ func realRegistry(t *testing.T) map[string]reflect.Type {
 			t.Fatalf("contactWorkerSet.%s is nil: the guard would not see its job kind", v.Type().Field(i).Name)
 		}
 	}
-	b := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{})
+	b := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{})
 	kinds := registeredJobArgs(t, b)
-	for _, k := range []string{"submission_submit", "submission_poll", "extraction_extract"} {
+	for _, k := range []string{"submission_submit", "submission_poll", "extraction_extract", "workspace_purge"} {
 		if _, ok := kinds[k]; !ok {
 			t.Fatalf("registry lacks %s: the guard read the wrong bundle", k)
 		}

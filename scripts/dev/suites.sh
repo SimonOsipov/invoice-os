@@ -32,7 +32,10 @@ else
 fi
 suite spa sh -c 'pnpm -r typecheck && pnpm -r build'
 # `pnpm -r test` alone would launch Playwright (e2e's `test` script is the browser suite).
-suite unit sh -c "rc=0; pnpm -r --no-bail --filter '!@invoice-os/e2e' test || rc=1; pnpm --filter @invoice-os/e2e test:unit || rc=1; exit \$rc"
+# pnpm runs 4 packages at once and each vitest starts cores-1 workers: cap each at cores/4, min 1.
+cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null)
+case $cores in ''|*[!0-9]*) workers=1 ;; *) workers=$(( cores / 4 )); [ "$workers" -ge 1 ] || workers=1 ;; esac
+suite unit sh -c "rc=0; pnpm -r --no-bail --filter '!@invoice-os/e2e' test --maxWorkers=$workers || rc=1; pnpm --filter @invoice-os/e2e test:unit || rc=1; exit \$rc"
 
 [ -z "$fs" ] || scripts/dev/suite-summary.sh "$L" $fs
 exit "$failed"

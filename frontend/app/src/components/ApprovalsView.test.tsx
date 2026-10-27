@@ -358,6 +358,130 @@ describe('A03-8: an entity switch never renders a row from the PREVIOUS entity',
   })
 })
 
+describe('the list refetches on the request\'s entity id, not the context\'s', () => {
+  const oneRow = () => listResponse([approvalRow({ id: 'r1', invoice_number: 'INV-R1' })], { limit: 50, offset: 0, total: 1 })
+
+  it('in-house: entityId settling after the list landed does not refetch or show Loading', async () => {
+    const fetchMock = mockFetchSequence([oneRow(), oneRow()])
+    const { rerender } = render(<ApprovalsView ctx={approvalsCtx({ mode: 'inhouse', entityId: null })} />)
+    await screen.findByText('INV-R1')
+
+    rerender(<ApprovalsView ctx={approvalsCtx({ mode: 'inhouse', entityId: 'ent-1' })} />)
+    await act(async () => {})
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText(APPROVALS_COPY.loading)).toBeNull()
+    expect(screen.getByText('INV-R1')).toBeTruthy()
+  })
+
+  it('in-house: entityId settling while the first list is pending sends one request and renders its rows', async () => {
+    const { fetchMock, resolveList } = mockBulkFetch(['PENDING'])
+    const { rerender } = render(<ApprovalsView ctx={approvalsCtx({ mode: 'inhouse', entityId: null })} />)
+    rerender(<ApprovalsView ctx={approvalsCtx({ mode: 'inhouse', entityId: 'ent-1' })} />)
+
+    await act(async () => {
+      resolveList(0, oneRow())
+    })
+
+    expect(await screen.findByText('INV-R1')).toBeTruthy()
+    await act(async () => {})
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('in-house: entityId settling after a failed first fetch does not refetch', async () => {
+    const fetchMock = mockFetchSequence([errorResponse(500, 'boom'), oneRow()])
+    const { rerender } = render(<ApprovalsView ctx={approvalsCtx({ mode: 'inhouse', entityId: null })} />)
+    expect(await screen.findByText('boom')).toBeTruthy()
+
+    rerender(<ApprovalsView ctx={approvalsCtx({ mode: 'inhouse', entityId: 'ent-1' })} />)
+    await act(async () => {})
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('boom')).toBeTruthy()
+    fireEvent.click(screen.getByText('Retry'))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+  })
+
+  it('firm: entityId settling from null refetches with entity_id', async () => {
+    const fetchMock = mockFetchSequence([oneRow(), oneRow()])
+    const { rerender } = render(<ApprovalsView ctx={approvalsCtx({ entityId: null })} />)
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    await act(async () => {})
+
+    rerender(<ApprovalsView ctx={approvalsCtx({ entityId: 'ent-1' })} />)
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(urlParams((fetchMock.mock.calls[0] as [string])[0]).get('entity_id')).toBeNull()
+    expect(urlParams((fetchMock.mock.calls[1] as [string])[0]).get('entity_id')).toBe('ent-1')
+  })
+
+  it('firm: an entity switch refetches with the new entity_id', async () => {
+    const fetchMock = mockFetchSequence([oneRow(), oneRow()])
+    const { rerender } = render(<ApprovalsView ctx={approvalsCtx({ entityId: 'ent-1' })} />)
+    await screen.findByText('INV-R1')
+
+    rerender(<ApprovalsView ctx={approvalsCtx({ entityId: 'ent-2' })} />)
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(urlParams((fetchMock.mock.calls[0] as [string])[0]).get('entity_id')).toBe('ent-1')
+    expect(urlParams((fetchMock.mock.calls[1] as [string])[0]).get('entity_id')).toBe('ent-2')
+  })
+
+  it('mode switch firm to in-house refetches without entity_id', async () => {
+    const { fetchMock, resolveList } = mockBulkFetch([oneRow(), 'PENDING'])
+    const { rerender } = render(<ApprovalsView ctx={approvalsCtx({ mode: 'firm', entityId: 'ent-1' })} />)
+    await screen.findByText('INV-R1')
+
+    rerender(<ApprovalsView ctx={approvalsCtx({ mode: 'inhouse', entityId: null })} />)
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(urlParams((fetchMock.mock.calls[1] as [string])[0]).get('entity_id')).toBeNull()
+    expect(screen.getByText(APPROVALS_COPY.loading)).toBeTruthy()
+    await act(async () => {
+      resolveList(1, oneRow())
+    })
+    await waitFor(() => expect(screen.queryByText(APPROVALS_COPY.loading)).toBeNull())
+  })
+
+  it('mode switch in-house to firm refetches with entity_id', async () => {
+    const fetchMock = mockFetchSequence([oneRow(), oneRow()])
+    const { rerender } = render(<ApprovalsView ctx={approvalsCtx({ mode: 'inhouse', entityId: null })} />)
+    await screen.findByText('INV-R1')
+
+    rerender(<ApprovalsView ctx={approvalsCtx({ mode: 'firm', entityId: 'ent-1' })} />)
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(urlParams((fetchMock.mock.calls[1] as [string])[0]).get('entity_id')).toBe('ent-1')
+  })
+
+  it('mode switch firm to in-house refetches when neither mode has an entity id', async () => {
+    const fetchMock = mockFetchSequence([oneRow(), oneRow()])
+    const { rerender } = render(<ApprovalsView ctx={approvalsCtx({ mode: 'firm', entityId: null })} />)
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    await act(async () => {})
+
+    rerender(<ApprovalsView ctx={approvalsCtx({ mode: 'inhouse', entityId: null })} />)
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+  })
+
+  it('paging Next refetches with the new offset', async () => {
+    const page1 = [approvalRow({ id: 'p1', invoice_number: 'INV-P1' }), approvalRow({ id: 'p2', invoice_number: 'INV-P2' })]
+    const page2 = [approvalRow({ id: 'p3', invoice_number: 'INV-P3' })]
+    const fetchMock = mockFetchSequence([
+      listResponse(page1, { limit: 2, offset: 0, total: 3 }),
+      listResponse(page2, { limit: 2, offset: 2, total: 3 }),
+    ])
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-P1')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next →' }))
+
+    await screen.findByText('INV-P3')
+    expect(urlParams((fetchMock.mock.calls[1] as [string])[0]).get('offset')).toBe('2')
+  })
+})
+
 // A03-9 (NEW, Plan gap G3). App.tsx cannot be rendered in jsdom (Workspace needs a live
 // session + entities fetch), and every A03-2..A03-8 spec above renders ApprovalsView
 // DIRECTLY, so none of them touch App.tsx's own mount -- a forgotten render branch would

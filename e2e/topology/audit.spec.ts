@@ -26,6 +26,9 @@ import { FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 // Narrow enough to force the table past its floor -- see the file header.
 const SCROLL_WIDTH = 900
 
+// ceiling: 20 pages (2000-row export cap) at ~0.8 s; revisit if AUDIT_EXPORT_CAP or the page time grows
+const EXPORT_WAIT_MS = 45_000
+
 async function openAudit(page: Page): Promise<void> {
   await page.getByRole('navigation').getByText('Audit', { exact: true }).click()
   await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
@@ -393,7 +396,7 @@ test.describe('Audit screen', () => {
     const exportButton = page.getByTestId('audit-export')
     await expect(exportButton).toBeEnabled({ timeout: 15_000 })
 
-    const downloadEvent = page.waitForEvent('download', { timeout: 15_000 })
+    const downloadEvent = page.waitForEvent('download', { timeout: EXPORT_WAIT_MS })
     await exportButton.click({ timeout: 15_000 })
     const download = await downloadEvent
 

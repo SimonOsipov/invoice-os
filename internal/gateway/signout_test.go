@@ -702,3 +702,19 @@ func TestSignOut_SubjectlessAccessTokenStillLogsOut(t *testing.T) {
 		})
 	}
 }
+
+// Holds today: a failed revocation write is logged, never answered.
+func TestSignOut_AFailedRevocationWriteStillAnswers204(t *testing.T) {
+	fake := newSignOutFake(t, answer(http.StatusOK, signOutGranted(signOutAccess(t, subjectS1))), answer(http.StatusNoContent, ""))
+	rg := newSignOutRig(t, fake, nil, nil)
+	rg.sessions.Shared(deadPool(t))
+
+	rec := doSignOut(rg.handler, refreshBody(signOutR0))
+
+	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+		t.Errorf("answer = %d %q, want 204 with no body", rec.Code, rec.Body.String())
+	}
+	if !rg.evicted() {
+		t.Error("S1's next request used the cache, want the local eviction to hold")
+	}
+}

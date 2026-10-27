@@ -6,6 +6,8 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -23,7 +25,7 @@ func mockIssuerRoutes(environment, flag string, withCORS func(http.Handler) http
 	if !gateway.MockIssuerEnabled(environment, flag) {
 		return nil, nil
 	}
-	issuer, err := auth.NewMockIssuer(mustEnv("AUTH_ISSUER"))
+	issuer, err := newMockIssuer(mustEnv("AUTH_ISSUER"), os.Getenv("GATEWAY_MOCK_ISSUER_KEY"))
 	if err != nil {
 		platform.Fatal(logger, "gateway: mock issuer: %v", err)
 	}
@@ -33,6 +35,15 @@ func mockIssuerRoutes(environment, flag string, withCORS func(http.Handler) http
 	login = withCORS(gateway.MockLoginHandler(issuer))
 	logger.Warn("mock issuer enabled — unauthenticated login is live on this deployment")
 	return jwks, login
+}
+
+// newMockIssuer signs with keyJSON when set, so every instance of a preview shares
+// one kid; blank generates a key per process.
+func newMockIssuer(issuerURL, keyJSON string) (*auth.MockIssuer, error) {
+	if strings.TrimSpace(keyJSON) == "" {
+		return auth.NewMockIssuer(issuerURL)
+	}
+	return auth.NewMockIssuerFromJWK(issuerURL, keyJSON)
 }
 
 // mockMemberRoute binds the membership grant handler to the owner DSN.

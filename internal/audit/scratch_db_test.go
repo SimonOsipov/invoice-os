@@ -16,7 +16,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
-// ceiling: scratch-DB setup is copied in 5 test files (this one, platform/db, platform, platform/auth, systemhealth); extract a dbtest package before a 6th.
+// ceiling: scratch-DB setup is copied across test files; extract a dbtest package before another copy.
 
 // planScratchDB is the migrated audit_plan_<hex> database the plan corpus lives in, so the
 // plan tests see a fresh database's planner stats instead of the grown dev one.

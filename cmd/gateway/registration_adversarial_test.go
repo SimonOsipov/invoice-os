@@ -119,7 +119,7 @@ func TestGatewayMainWiresAuthSiteURLIntoRegistration(t *testing.T) {
 					siteVar = types.ExprString(as.Lhs[0])
 				}
 			}
-			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 6 {
+			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 7 {
 				wiredArg = types.ExprString(call.Args[1])
 			}
 		}
@@ -213,7 +213,7 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 	t.Cleanup(srv.Close)
 	authURL, _ := url.Parse(srv.URL)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil)
 
 	if rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`); rec.Code != http.StatusBadGateway {
 		t.Errorf("Register = %d, want 502: %s", rec.Code, rec.Body.String())
@@ -261,7 +261,7 @@ func verifyMux(t *testing.T, verify http.Handler, site *url.URL) *http.ServeMux 
 func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil)
 	mux := verifyMux(t, handoffVerify(authURL, site, nil), site)
 	mux.Handle("POST /auth/register", reg.Register)
 	// No method in the pattern, so the handler's own method check answers.
@@ -395,7 +395,7 @@ func TestResetPasswordRoute_OpeningNeverReachesGoTrue(t *testing.T) {
 	authURL, _ := url.Parse(srv.URL)
 	site, _ := url.Parse("https://site.example")
 	mux := http.NewServeMux()
-	mountResetRoutes(t, mux, registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite), authURL, site)
+	mountResetRoutes(t, mux, registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil), authURL, site)
 	const link = "http://gateway.test/auth/reset-password?token=T&type=recovery"
 
 	var page string
@@ -531,7 +531,7 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 	}
 	regs, _ := invitationRegistrationsStub("tunde@obi.test")
 	invitation, register := invitationHandlers(authURL, site, 0, preview, regs, slog.New(slog.DiscardHandler))
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil)
 	resend := invitationResendHandler(authURL, site, reg.ResendByAddress, preview, slog.New(slog.DiscardHandler))
 	withCORS := gateway.CORS([]string{origin})
 	mux := http.NewServeMux()
@@ -581,7 +581,7 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 	}
 	pw := http.NewServeMux()
 	pwLog := slog.New(slog.DiscardHandler)
-	pw.Handle("POST /auth/invitation/password", handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, pwLog), pwLog, nil, nil, nil).InvitationPassword)
+	pw.Handle("POST /auth/invitation/password", handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, pwLog), pwLog, nil, nil, nil, nil).InvitationPassword)
 	for _, method := range []string{http.MethodOptions, http.MethodPost} {
 		req := httptest.NewRequest(method, "/auth/invitation/password", strings.NewReader("type=signup"))
 		req.Header.Set("Origin", origin)
@@ -620,7 +620,7 @@ func TestGatewayMainWiresThePendingInviteLookupIntoRegistration(t *testing.T) {
 		if call, ok := isCallTo(as.Rhs[0], "gateway", "NewHTTPPendingInviteLookup"); ok {
 			lookupVar, lookupCall = types.ExprString(as.Lhs[0]), call
 		}
-		if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 6 {
+		if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 7 {
 			regArg = types.ExprString(call.Args[5])
 		}
 	}
@@ -631,7 +631,7 @@ func TestGatewayMainWiresThePendingInviteLookupIntoRegistration(t *testing.T) {
 		t.Errorf("NewHTTPPendingInviteLookup args = %v, want routed[\"tenancy\"], a client and gatewayToken", lookupCall.Args)
 	}
 	if regArg == "" {
-		t.Fatal("main has no top-level `x := registrationHandlers(...)` with 6 arguments")
+		t.Fatal("main has no top-level `x := registrationHandlers(...)` with 7 arguments")
 	}
 	if regArg != lookupVar {
 		t.Errorf("registrationHandlers sixth argument = %q, want %q", regArg, lookupVar)
@@ -642,7 +642,7 @@ func TestGatewayMainWiresThePendingInviteLookupIntoRegistration(t *testing.T) {
 func TestRegistrationHandlers_NilPendingLookupIsNotConfigured(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, nil)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, nil, nil)
 
 	rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`)
 	if rec.Code != http.StatusServiceUnavailable {

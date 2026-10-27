@@ -101,7 +101,7 @@ func TestHandoffRoutesRegisteredWithPreflight(t *testing.T) {
 // handoffVerify is the POST /auth/verify handler main mounts, built the way main builds it.
 func handoffVerify(authURL, site *url.URL, sink gateway.ContactSink) http.Handler {
 	log := slog.New(slog.DiscardHandler)
-	return handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, sink, nil, nil).Verify
+	return handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, sink, nil, nil, nil).Verify
 }
 
 // One handoffHandlers call builds the verify and exchange handlers over one store.
@@ -110,7 +110,7 @@ func TestHandoffHandlers_VerifyCodeRedeemsThroughExchange(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
 	authURL := goTrueAnswering(t, `{"access_token":"at-1","refresh_token":"rt-1","user":{"id":"u-1","email":"a@corp.example"}}`)
 	log := slog.New(slog.DiscardHandler)
-	h := handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil)
+	h := handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil, nil)
 
 	rec := serveForm(h.Verify, "/auth/verify", "token=T&type=signup&state="+handoffState)
 
@@ -160,7 +160,7 @@ func TestHandoffHandlers_InvitationPasswordCodeRedeemsThroughExchange(t *testing
 	t.Cleanup(gotrue.Close)
 	authURL, _ := url.Parse(gotrue.URL)
 	log := slog.New(slog.DiscardHandler)
-	h := handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil)
+	h := handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil, nil)
 
 	rec := serveForm(h.InvitationPassword, "/auth/invitation/password", "token=T&type=signup&password=n3w-Passw0rd&state="+handoffState)
 
@@ -190,7 +190,7 @@ func TestHandoffHandlers_InvitationPasswordCodeRedeemsThroughExchange(t *testing
 func handoffMux(t *testing.T, authURL *url.URL, withOptions bool) *http.ServeMux {
 	t.Helper()
 	log := slog.New(slog.DiscardHandler)
-	h := handoffHandlers(authURL, nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil)
+	h := handoffHandlers(authURL, nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil, nil)
 	withCORS := gateway.CORS([]string{handoffAllowedOrigin})
 	fields := map[string]http.Handler{"SignIn": h.SignIn, "Exchange": h.Exchange, "Refresh": h.Refresh, "SignOut": h.SignOut}
 	mux := http.NewServeMux()

@@ -10,7 +10,7 @@ import (
 )
 
 // GKE-05 AC 5: the gateway writes a registrant durably before answering, and invoice_gateway can
-// only add rows: it reads and deletes none. The name matches CI's TestRLS_GatewayHandoff filter.
+// only add rows: it reads and deletes none.
 func TestRLS_GatewayHandoffRegistrantOutbox_WritesAndCannotReadBack(t *testing.T) {
 	d := requireHandoffDB(t)
 	ctx := context.Background()

@@ -17,7 +17,6 @@ export const UNITS: Unit[] = [
     specs: [
       'audit.spec.ts',
       'audit-settings-surfaces.spec.ts',
-      'auth.spec.ts',
       'isolation.spec.ts',
       'persona-surfaces.spec.ts',
       'portfolio-workflow-surfaces.spec.ts',
@@ -30,8 +29,6 @@ export const UNITS: Unit[] = [
         'Reads both persona tenants\' audit trails, which need rows the seed and the earlier suites wrote ("the seed alone writes audit rows"; the pager needs more than one page).',
       'audit-settings-surfaces.spec.ts':
         'Reads the seeded firm and in-house rosters and roles of 1111 / 2222 and both audit trails; creates one entity and one invoice in 1111 and prepares one evidence bundle, which appends audit rows.',
-      'auth.spec.ts':
-        'Tests the real sign-in front door and stored-session rules, which the SPA binds to the seeded tenants 1111 / 2222 (the e2e members it signs in as).',
       'isolation.spec.ts':
         'Asserts the exact seeded membership subsets (firm: 7 seeded members, plus the e2e member of each role that exists) and tenant identities of 1111 and 2222.',
       'persona-surfaces.spec.ts':
@@ -44,6 +41,14 @@ export const UNITS: Unit[] = [
         'Reads the real rule list with a staff account and flips then restores one global rule (`no-duplicate-line-items`), so it must not share a lane with a spec that depends on that rule; none does. It also opens or reuses the one global rule draft and adds rules to it; no other topology spec reads the draft. The API suite publishes that draft, but runs in the `e2e` job that the topology jobs wait for. Reads every tenant and the system health through the staff routes. It re-drives one seeded tenant-2222 dead-letter job (`DEMO-2026-7004`, else `-7006`) and cancels it in the same test; no other topology spec reads those jobs. It also reads the audit log of every tenant, the AI calls and totals of every tenant, and downloads one bundle; it writes nothing more.',
       'workflows.spec.ts':
         "Creates and deletes one firm policy in 1111 and asserts the list count as `baseline` / `baseline + 1`, where the baseline includes the demopolicy-seeded firm policy. The count holds only while no other spec writes 1111's policies at the same time, which the lane guarantees. It never publishes (`[topology-never-publishes]`).",
+    },
+  },
+  {
+    name: 'auth',
+    specs: ['auth.spec.ts'],
+    tenants: {
+      firm: '11111111-1111-1111-1111-00000000e2e5',
+      inHouse: '22222222-2222-2222-2222-00000000e2e5',
     },
   },
   {

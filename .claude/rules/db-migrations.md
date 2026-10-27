@@ -70,7 +70,7 @@ paths:
 - Gate `db.Reset` on `platform.DeployEnv()`, never on `ENVIRONMENT`.
 - The migrate job runs the account-state grant on every run, as `supabase_auth_admin`. It logs `not_ready` until GoTrue has created `auth.users`. The next run restores the policy `invitee_account_state_read` after a GoTrue upgrade drops it.
 - Connect as `supabase_auth_admin` only from GoTrue and from `db.GrantAccountStateRead`.
-- Connect as `invoice_gateway` only from the gateway's hand-off store and registrant outbox. Grant it `SELECT`, `INSERT` and `DELETE` on `gateway_handoff_codes` and `INSERT` on `registrant_handoffs`, nothing else.
+- Connect as `invoice_gateway` only from the gateway's hand-off store, registrant outbox, session revocations and throttle counts. Grant it `SELECT`, `INSERT` and `DELETE` on `gateway_handoff_codes`, `INSERT` on `registrant_handoffs`, and `SELECT`, `INSERT`, `UPDATE` and `DELETE` on `gateway_session_revocations` and `gateway_throttle_counts`, nothing else.
 - Create `invoice_gateway` with `migrate bootstrap` before the migrations that grant to it. Those migrations grant only when the role already exists.
 - Keep `db.DemoTenants` a Go literal. Never derive it from `db/seed.dev.sql`.
 - Add every new `tenant_id` table to `purgeTables` or `purgeExcludedTables`. `TestPurgeTableListCoversEveryTenantOwnedTable` fails otherwise.

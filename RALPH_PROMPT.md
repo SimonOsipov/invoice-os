@@ -52,7 +52,7 @@ Neither path licenses a silent feature cut.
 gh pr checks [PR_NUMBER]
 # CI (ci.yml) rolls up: go, frontend, clean-clone, migrations, docker-canary, rls, queue, audit.
 # dev-env.yml (on a ready PR): invariants + prepare-env + build ×18 (ci-watch alongside; red CI stops the run) → deploy (database, migrate, GoTrue, backends, sites) →
-#   health-gate + fleet-gate → e2e (smoke + api) → topology ×7 (serial-lane, import-wizard, import-wizard-2, invoice-surfaces, ui-surfaces, library, blog) → E2E gate.
+#   health-gate + fleet-gate → e2e (smoke + api) → topology ×8 (serial-lane, auth, import-wizard, import-wizard-2, invoice-surfaces, ui-surfaces, library, blog) → E2E gate.
 ```
 
 Not part of the gate: `dev-env-teardown.yml` (deletes the PR's preview on close), `dev-env-sweeper.yml` (daily reaper of previews whose PR is closed). CI tears previews down; never delete a preview resource by hand.

@@ -15,7 +15,7 @@ import (
 	"unicode"
 )
 
-// ceiling: in-process counts; a restart clears them and replicas do not share them. Revisit when the gateway runs more than one replica.
+// ceiling: with no pool, counts are in-process; a restart clears them and replicas do not share them.
 // ceiling: an attacker can spend a victim address's 3 subscribes an hour. Revisit if abuse reports name a victim address.
 const (
 	BlogSubscribePerEmail = 3
@@ -140,11 +140,14 @@ func (s *blogSubscriber) subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	emailHeld := s.perEmail.Reserve(in.Email)
+	emailHeld, admitErr := s.perEmail.Admit(in.Email)
 	refused := false
 	if !emailHeld {
-		s.log.WarnContext(r.Context(), "blog-subscribe: limit reached",
-			slog.String("limit", "email"), slog.Bool("enforced", s.enforce))
+		// A database error is already logged by the throttle.
+		if admitErr == nil {
+			s.log.WarnContext(r.Context(), "blog-subscribe: limit reached",
+				slog.String("limit", "email"), slog.Bool("enforced", s.enforce))
+		}
 		refused = s.enforce
 	}
 

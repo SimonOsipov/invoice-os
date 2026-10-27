@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/net/html"
 )
@@ -1026,5 +1027,43 @@ func TestResetPasswordPage_TokenHoldingAPlaceholderIsNotExpanded(t *testing.T) {
 				t.Errorf("the submit-once script appears %d times, want 1", n)
 			}
 		})
+	}
+}
+
+// Holds today: a link GoTrue refuses ends before EvictSubject, so it writes no revocation.
+// The dead pool turns every write into a logged ERROR on the checker's log, which is the oracle.
+func TestResetPassword_AnExpiredLinkWritesNoRevocation(t *testing.T) {
+	post := func(refuse bool) (*resetGoTrue, *bytes.Buffer) {
+		f := newResetGoTrue(t)
+		if refuse {
+			f.verify = answer(http.StatusForbidden, rpOTPExpired)
+		}
+		log, buf := captureLog()
+		sessions := NewSessionChecker(f.URL, testClient(), time.Now, log)
+		sessions.Shared(deadPool(t))
+		th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
+		h := ResetPasswordHandler(f.URL, siteURL(t), testClient(), sessions, th, log)
+		want := rpOK
+		if refuse {
+			want = rpFailed
+		}
+		rpRequireRedirect(t, rpPost(t, h, rpValues(rpToken, "recovery", rpPass)), want)
+		return f, buf
+	}
+
+	f, buf := post(true)
+	if n := len(recordsNamed(t, buf, rpMsgRefusedLink)); n != 1 {
+		t.Errorf("refused-link records = %d, want 1 (the link was refused): %s", n, buf.String())
+	}
+	if n := len(recordsNamed(t, buf, "session check: record sign-out")); n != 0 {
+		t.Errorf("sign-out write records = %d, want 0", n)
+	}
+	if n := f.count(http.MethodPost, "/logout"); n != 0 {
+		t.Errorf("GoTrue /logout calls = %d, want 0", n)
+	}
+
+	_, ctl := post(false)
+	if n := len(recordsNamed(t, ctl, "session check: record sign-out")); n != 1 {
+		t.Errorf("control: sign-out write records = %d for an accepted link, want 1 (the log sees the write)", n)
 	}
 }

@@ -577,7 +577,7 @@ jobs:
     needs: [e2e, prepare-env, deploy]
     if: "!cancelled() && needs.e2e.result == 'success'"
     runs-on: ubuntu-latest
-    # ceiling: serial-lane runs ~30 min on run.app; split the shard (e2e/topology/shards.ts) if it nears 45.
+    # ceiling: serial-lane is the longest shard, ~23 min on run.app (auth ~17); split it again (e2e/topology/shards.ts) above 25.
     timeout-minutes: 45
     strategy:
       fail-fast: false

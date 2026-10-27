@@ -556,10 +556,10 @@ describe('v2 screens', () => {
     expect(tenantsWith({ status: 'ready', tenants: [T1], query: 'zzz' })).toContain('No tenant matches.')
   })
 
-  it('the tenant detail header offers View jobs, Delete workspace and Purge now on an unscheduled tenant', () => {
+  it('the tenant detail header offers View jobs and Delete workspace on an unscheduled tenant', () => {
     const header = SCREENS.tenants.slice(SCREENS.tenants.indexOf('<h2'), SCREENS.tenants.indexOf('>Members<'))
-    expect(Array.from(header.matchAll(/<button\b[^>]*>([^<]*)<\/button>/g), (m) => m[1])).toEqual(['View jobs', 'Delete workspace', 'Purge now'])
-    expect(header.match(/<button\b/g)).toHaveLength(3)
+    expect(Array.from(header.matchAll(/<button\b[^>]*>([^<]*)<\/button>/g), (m) => m[1])).toEqual(['View jobs', 'Delete workspace'])
+    expect(header.match(/<button\b/g)).toHaveLength(2)
   })
 
   it('the tenants grid holds two columns', () => {

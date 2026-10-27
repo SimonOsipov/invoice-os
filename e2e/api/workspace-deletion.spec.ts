@@ -323,6 +323,8 @@ test.describe.serial('cancel link (API E2E, over the deployed gateway)', () => {
 const REASON_LENGTH = 'reason must be 1 to 500 characters'
 // internal/tenancy/tenancy.go statusForErr: the purge-marked 409.
 const BEING_DELETED = 'this workspace is already being deleted'
+// internal/tenancy/staff_deletion.go staffDeletionStatus: purge now on an unscheduled workspace.
+const NOT_SCHEDULED = 'this workspace has no scheduled deletion; use Delete workspace first'
 const STAFF_TENANTS = '/api/tenancy/v1/staff/tenants'
 
 test.describe('staff workspace deletion (API E2E, over the deployed gateway)', () => {
@@ -392,7 +394,7 @@ test.describe('staff workspace deletion (API E2E, over the deployed gateway)', (
     expect((await me(ws.adminToken)).tenant.deletion_due_at, 'the admin reads no due date').toBeNull()
   })
 
-  test('staff purge now erases a fresh workspace', async () => {
+  test('staff purge now needs a scheduled deletion, then erases a fresh workspace', async () => {
     test.setTimeout(180_000)
     const ws = await fresh('staff-deletion-purge')
 
@@ -400,6 +402,17 @@ test.describe('staff workspace deletion (API E2E, over the deployed gateway)', (
     assertErrorEnvelope(wrong, 400, 'purge with a wrong name')
     expect(errorOf(wrong)).toBe(NAME_MISMATCH)
     expect((await staffRead(ws.tenantId)).status, 'the wrong name purged nothing').toBe(200)
+
+    const unscheduled = await staffPost(staff, `${ws.tenantId}/deletion/purge`, { workspace_name: ws.workspaceName, reason: 'e2e purge' })
+    assertErrorEnvelope(unscheduled, 409, 'purge of an unscheduled workspace')
+    expect(errorOf(unscheduled)).toBe(NOT_SCHEDULED)
+    const read = await staffRead(ws.tenantId)
+    expect(read.status, 'the refused purge left the workspace').toBe(200)
+    expect((read.body as { tenant: { deletion_purge_started_at: string | null } }).tenant.deletion_purge_started_at, 'no purge marker').toBeNull()
+    expect((await me(ws.adminToken)).tenant.deletion_due_at, 'the refusal scheduled nothing').toBeNull()
+
+    const start = await staffPost(staff, `${ws.tenantId}/deletion`, { reason: 'e2e start' })
+    expect(start.status, JSON.stringify(start.body)).toBe(200)
 
     const purge = await staffPost(staff, `${ws.tenantId}/deletion/purge`, { workspace_name: ws.workspaceName, reason: 'e2e purge' })
     expect(purge.status, JSON.stringify(purge.body)).toBe(202)

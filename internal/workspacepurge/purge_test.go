@@ -1925,6 +1925,7 @@ func TestStaffPurgeNow_TheJobPurgesTheWorkspace(t *testing.T) {
 	bUser, bMail := r.user(), r.mail("bystander")
 	r.member(b, bUser, "admin", "active", &bMail, "")
 	r.put(b, 1)
+	r.scheduleAt(a, "now()")
 
 	at, err := store.StaffPurgeWorkspace(ctx, a, r.tenantName(a), "court order")
 	if err != nil {
@@ -1991,6 +1992,7 @@ func TestStaffPurgeNow_TheRemovedCreatorCanCreateAWorkspaceAgain(t *testing.T) {
 	r.member(derived, other, "admin", "active", &otherMail, "")
 	r.exec(`UPDATE memberships SET status = 'removed', email = NULL WHERE tenant_id = $1 AND user_id = $2`, derived, creator)
 
+	r.scheduleAt(derived, "now()")
 	if _, err := staffStore.StaffPurgeWorkspace(ctx, derived, wsName, "court order"); err != nil {
 		t.Fatalf("StaffPurgeWorkspace: %v", err)
 	}

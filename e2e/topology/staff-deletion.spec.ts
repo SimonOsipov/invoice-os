@@ -94,6 +94,12 @@ test('support console: start, cancel and purge a workspace', async ({ page }) =>
   await confirmModal(page, 'Cancel deletion', 'e2e cancel')
   await expect(scheduled).toBeHidden()
   expect((await me(ws.adminToken)).tenant.deletion_due_at, 'the customer reads no due date').toBeNull()
+  await expect(actions.getByRole('button', { name: 'Purge now', exact: true }), 'Purge now waits for a scheduled deletion').toHaveCount(0)
+  await expect(main(page).getByText('Not scheduled. Use Delete workspace first')).toBeVisible()
+
+  await actions.getByRole('button', { name: 'Delete workspace', exact: true }).click()
+  await confirmModal(page, 'Start deletion', 'e2e start again')
+  await expect(scheduled).toBeVisible()
 
   await actions.getByRole('button', { name: 'Purge now', exact: true }).click()
   const dialog = page.getByRole('dialog')
@@ -133,9 +139,28 @@ test('support console: the deletion header, member rows and modal fit at every w
   const text = main(page).getByRole('heading', { level: 2, name }).locator('xpath=../..')
   const viewJobs = header.getByRole('button', { name: 'View jobs', exact: true })
   const deleteButtons = main(page).getByRole('button', { name: 'Delete account', exact: true })
+  // Member rows offer Delete account only while the workspace is unscheduled.
   await expect(deleteButtons).toHaveCount(2)
+  await sweep(page, async (width) => {
+    for (let i = 0; i < 2; i++) {
+      const button = deleteButtons.nth(i)
+      const row = button.locator('xpath=..')
+      const chip = button.locator('xpath=preceding-sibling::*[1]')
+      await settleAnimations(row, button, chip)
+      const [rowBox, buttonBox, chipBox] = await Promise.all([rectOf(`row ${i}`, row, width), rectOf(`Delete account ${i}`, button, width), rectOf(`status chip ${i}`, chip, width)])
+      expect(enclosesRect(rowBox, buttonBox, 1), `Delete account ${i} leaves its row at ${width}px`).toBe(true)
+      expect(rectsOverlap(buttonBox, chipBox), `Delete account ${i} and its status chip overlap at ${width}px`).toBe(false)
+    }
+    await noSideways(page, `Tenants, member rows at ${width}px`)
+  })
+
+  // Purge now shows only on a scheduled workspace.
+  await actions.getByRole('button', { name: 'Delete workspace', exact: true }).click()
+  await confirmModal(page, 'Start deletion', 'e2e layout')
+  await expect(main(page).getByText(/Scheduled for deletion on/)).toBeVisible()
+  await expect(deleteButtons, 'a scheduled workspace offers no Delete account').toHaveCount(0)
   const actionButtons = actions.getByRole('button')
-  await expect(actionButtons, 'Delete workspace and Purge now').toHaveCount(2)
+  await expect(actionButtons, 'Cancel deletion and Purge now').toHaveCount(2)
 
   await sweep(page, async (width) => {
     await settleAnimations(card, header, text, viewJobs, actions)
@@ -161,15 +186,6 @@ test('support console: the deletion header, member rows and modal fit at every w
       expect(rectsOverlap(r[a], r[b]), `${a} and ${b} overlap at ${width}px`).toBe(false)
     }
 
-    for (let i = 0; i < 2; i++) {
-      const button = deleteButtons.nth(i)
-      const row = button.locator('xpath=..')
-      const chip = button.locator('xpath=preceding-sibling::*[1]')
-      await settleAnimations(row, button, chip)
-      const [rowBox, buttonBox, chipBox] = await Promise.all([rectOf(`row ${i}`, row, width), rectOf(`Delete account ${i}`, button, width), rectOf(`status chip ${i}`, chip, width)])
-      expect(enclosesRect(rowBox, buttonBox, 1), `Delete account ${i} leaves its row at ${width}px`).toBe(true)
-      expect(rectsOverlap(buttonBox, chipBox), `Delete account ${i} and its status chip overlap at ${width}px`).toBe(false)
-    }
     await noSideways(page, `Tenants at ${width}px`)
   })
 
@@ -248,11 +264,9 @@ test('support console: the tenant header wraps and shows the whole state line at
         }
         for (let i = 0; i < count; i++) for (let j = i + 1; j < count; j++) expect(rectsOverlap(boxes[i], boxes[j]), `actions ${i} and ${j} overlap, ${where}`).toBe(false)
         expect((await rectOf('the name', heading, width)).width, `the name is 0 wide, ${where}`).toBeGreaterThan(0)
-        if (state === 'scheduled') {
-          expect((await rectOf('the state line', stateLine, width)).width, `the state line is 0 wide, ${where}`).toBeGreaterThan(0)
-          const fit = await stateLine.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
-          expect(fit.scrollWidth, `the state line is truncated, ${where} (${JSON.stringify(fit)})`).toBeLessThanOrEqual(fit.clientWidth)
-        }
+        expect((await rectOf('the state line', stateLine, width)).width, `the state line is 0 wide, ${where}`).toBeGreaterThan(0)
+        const fit = await stateLine.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+        expect(fit.scrollWidth, `the state line is truncated, ${where} (${JSON.stringify(fit)})`).toBeLessThanOrEqual(fit.clientWidth)
         await noSideways(page, `Tenants, ${where}`)
       }
     } finally {
@@ -261,7 +275,7 @@ test('support console: the tenant header wraps and shows the whole state line at
   }
 
   const stateLine = main(page).getByText(/Scheduled for deletion on/)
-  await check('unscheduled', stateLine)
+  await check('unscheduled', main(page).getByText('Not scheduled. Use Delete workspace first; Purge now follows.'))
   await actions.getByRole('button', { name: 'Delete workspace', exact: true }).click()
   await confirmModal(page, 'Start deletion', 'e2e narrow')
   await expect(stateLine).toBeVisible()

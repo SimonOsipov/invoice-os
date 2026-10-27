@@ -210,6 +210,8 @@ func staffDeletionStatus(err error) (int, string) {
 		return http.StatusConflict, "the ASComply staff workspace cannot be deleted"
 	case errors.Is(err, ErrDeletionUnderway):
 		return http.StatusConflict, "this workspace is already being deleted"
+	case errors.Is(err, ErrDeletionNotScheduled):
+		return http.StatusConflict, "this workspace has no scheduled deletion; use Delete workspace first"
 	case errors.Is(err, ErrDeletionOutcomeChanged):
 		return http.StatusConflict, "the workspace changed; review the page and confirm again"
 	case errors.Is(err, ErrLastActiveMember):
@@ -269,7 +271,7 @@ func StaffCancelDeletionHandler(cancel func(ctx context.Context, tenantID, reaso
 	}
 }
 
-// StaffPurgeWorkspace starts the purge of the path tenant now, scheduling it first when it is not.
+// StaffPurgeWorkspace starts the purge of the path tenant now; the tenant must already be scheduled.
 // The staff row and the workspace_purge job commit with the marker.
 func (s *Store) StaffPurgeWorkspace(ctx context.Context, tenantID, typedName, reason string) (time.Time, error) {
 	if s.eraseQueue == nil {
@@ -294,9 +296,10 @@ func (s *Store) StaffPurgeWorkspace(ctx context.Context, tenantID, typedName, re
 			return ErrDeletionUnderway
 		}
 		if !scheduled {
-			if _, err := scheduleTenantDeletion(ctx, tx, actor); err != nil {
+			if err := refuseHouseTenant(ctx, tx, actor); err != nil {
 				return err
 			}
+			return ErrDeletionNotScheduled
 		}
 		// The staff decision is final: the marker closes every cancel before the worker starts.
 		if err := tx.QueryRow(ctx, `UPDATE tenants SET deletion_purge_started_at = now() RETURNING deletion_purge_started_at`).Scan(&startedAt); err != nil {

@@ -82,7 +82,7 @@ func race(a, b func() error) (errA, errB error) {
 func requireNoSentinel(t *testing.T, err error) {
 	t.Helper()
 	for _, s := range []error{ErrDeleteWorkspaceNotPermitted, ErrCancelDeletionNotPermitted, ErrWorkspaceNameMismatch,
-		ErrHouseWorkspace, db.ErrWorkspaceLocked, db.ErrNotActiveMember, db.ErrNoTenant} {
+		ErrHouseWorkspace, ErrDeletionNotScheduled, db.ErrWorkspaceLocked, db.ErrNotActiveMember, db.ErrNoTenant} {
 		if errors.Is(err, s) {
 			t.Errorf("err = %v, want the audit failure, not the refusal %v", err, s)
 		}

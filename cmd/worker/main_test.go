@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -22,13 +24,37 @@ import (
 
 const unreachableDB = "postgres://invoice_app:app@127.0.0.1:1/invoice_os?sslmode=disable"
 
-func buildWorker(t *testing.T) string {
-	t.Helper()
-	bin := filepath.Join(t.TempDir(), "worker")
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+const bootWait = 30 * time.Second
+
+// workerBinDir is set before the build so TestMain removes it even when the build fails.
+var workerBinDir string
+
+var workerBin = sync.OnceValues(func() (string, error) {
+	dir, err := os.MkdirTemp("", "worker-")
+	if err != nil {
+		return "", err
+	}
+	workerBinDir = dir
+	bin := filepath.Join(dir, "worker")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	if out, err := exec.CommandContext(ctx, "go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("go build cmd/worker: %v\n%s", err, out)
+		return "", fmt.Errorf("go build cmd/worker: %w\n%s", err, out)
+	}
+	return bin, nil
+})
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	_ = os.RemoveAll(workerBinDir)
+	os.Exit(code)
+}
+
+func buildWorker(t *testing.T) string {
+	t.Helper()
+	bin, err := workerBin()
+	if err != nil {
+		t.Fatal(err)
 	}
 	return bin
 }
@@ -64,7 +90,7 @@ func bootEnv(vars map[string]string) []string {
 // run boots the binary with exactly vars as its environment and returns its combined output.
 func run(t *testing.T, bin string, vars map[string]string) (string, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), bootWait)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin)
 	cmd.Env = []string{"HOME=" + os.Getenv("HOME"), "PORT=" + strconv.Itoa(freePort(t))}
@@ -75,6 +101,12 @@ func run(t *testing.T, bin string, vars map[string]string) (string, error) {
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()
 	return out.String(), err
+}
+
+// exitedOne is true only for exit status 1; a kill or timeout (ExitCode -1) is not.
+func exitedOne(err error) bool {
+	var exit *exec.ExitError
+	return errors.As(err, &exit) && exit.ExitCode() == 1
 }
 
 func TestWorkerMain_RequiresTheValidationConfig(t *testing.T) {
@@ -91,8 +123,7 @@ func TestWorkerMain_RequiresTheValidationConfig(t *testing.T) {
 				vars[k] = v
 			}
 			out, err := run(t, bin, vars)
-			var exit *exec.ExitError
-			if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+			if !exitedOne(err) {
 				t.Fatalf("ended with %v, want exit status 1 through platform.Fatal\n%s", err, out)
 			}
 			if !strings.Contains(out, tc.missing+" is required") {
@@ -101,12 +132,18 @@ func TestWorkerMain_RequiresTheValidationConfig(t *testing.T) {
 		})
 	}
 
-	// Control: with both set the validation refusal is gone (a later required variable stops the boot instead).
+	// Control: with both set the boot reaches the next refusal, DOCUMENT_BUCKET.
 	vars := map[string]string{"VALIDATION_URL": "http://validation.invalid", "S2S_TOKEN": "tok"}
 	for k, v := range base {
 		vars[k] = v
 	}
-	out, _ := run(t, bin, vars)
+	out, err := run(t, bin, vars)
+	if !exitedOne(err) {
+		t.Fatalf("control ended with %v, want exit status 1\n%s", err, out)
+	}
+	if !strings.Contains(out, "DOCUMENT_BUCKET is required") {
+		t.Fatalf("control did not reach the next refusal, DOCUMENT_BUCKET\n%s", out)
+	}
 	if strings.Contains(out, "VALIDATION_URL is required") || strings.Contains(out, "S2S_TOKEN is required") {
 		t.Errorf("a validation refusal remains with both variables set\n%s", out)
 	}

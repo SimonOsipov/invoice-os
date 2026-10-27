@@ -23,6 +23,8 @@ import (
 	"time"
 )
 
+const bootWait = 30 * time.Second
+
 const bootLandingOrigin = "https://landing.example"
 
 type bootIntake struct {
@@ -148,7 +150,7 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 		_ = cmd.Process.Signal(syscall.SIGTERM)
 		select {
 		case <-done:
-		case <-time.After(10 * time.Second):
+		case <-time.After(bootWait):
 			_ = cmd.Process.Kill()
 			<-done
 		}
@@ -178,8 +180,8 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 		select {
 		case in := <-intake:
 			return in
-		case <-time.After(10 * time.Second):
-			t.Fatalf("notifications received nothing within 10s\n%s", out)
+		case <-time.After(bootWait):
+			t.Fatalf("notifications received nothing within %s\n%s", bootWait, out)
 			return bootIntake{}
 		}
 	}

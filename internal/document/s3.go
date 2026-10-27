@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -69,6 +70,8 @@ const maxKeysPerRequest = 1000
 type s3Store struct {
 	client *s3.Client
 	bucket string
+	// readRetryer is passed per Get only; Put keeps the client default.
+	readRetryer aws.Retryer
 }
 
 // NewS3Store returns an ObjectStore over cfg's bucket. A nil hc yields the SDK
@@ -98,7 +101,14 @@ func NewS3Store(cfg Config, hc *http.Client) (ObjectStore, error) {
 		// virtual-host url style.
 		o.APIOptions = append(o.APIOptions, unsignAcceptEncoding)
 	})
-	return &s3Store{client: client, bucket: cfg.Bucket}, nil
+	// Reads also retry a 408 and a RequestCanceled code (TestS3Store_GetRetries408RequestCanceled).
+	readRetryer := retry.NewStandard(func(o *retry.StandardOptions) {
+		o.Retryables = append(o.Retryables,
+			retry.RetryableHTTPStatusCode{Codes: map[int]struct{}{http.StatusRequestTimeout: {}}},
+			retry.RetryableErrorCode{Codes: map[string]struct{}{"RequestCanceled": {}}},
+		)
+	})
+	return &s3Store{client: client, bucket: cfg.Bucket, readRetryer: readRetryer}, nil
 }
 
 type acceptEncodingKey struct{}
@@ -153,7 +163,7 @@ func (s *s3Store) Get(ctx context.Context, key, rangeHeader string) (Object, err
 		in.Range = aws.String(rangeHeader)
 	}
 
-	out, err := s.client.GetObject(ctx, in)
+	out, err := s.client.GetObject(ctx, in, func(o *s3.Options) { o.Retryer = s.readRetryer })
 	if err != nil {
 		return Object{}, classifyGet(key, err)
 	}

@@ -848,3 +848,18 @@ func TestSignIn_NeverLogsSecrets(t *testing.T) {
 		}
 	}
 }
+
+// D6: a throttle whose shared count cannot be read answers 503, never 429, and never reaches GoTrue.
+func TestSignIn_AnUnreadableThrottleAnswers503(t *testing.T) {
+	fake := newTokenFake(t, http.StatusBadRequest, gtInvalidCredentials)
+	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
+	th.Shared(deadPool(t), slog.New(slog.DiscardHandler))
+	h := SignInHandler(fake.URL, testClient(), NewHandoffStore(HandoffTTL, time.Now), th, slog.New(slog.DiscardHandler), nil)
+
+	rec := serve(h, http.MethodPost, "/auth/sign-in", signInBody(regEmail, regPassword, randomState(t)))
+
+	requireRefusal(t, rec, http.StatusServiceUnavailable, msgUnavailable)
+	if n := fake.Hits(); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+}

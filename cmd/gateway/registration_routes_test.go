@@ -455,7 +455,7 @@ func TestRegistrationRoutes_InvitationPasswordIsMounted(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
 	log := slog.New(slog.DiscardHandler)
 	mux := http.NewServeMux()
-	mux.Handle("POST /auth/invitation/password", handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil).InvitationPassword)
+	mux.Handle("POST /auth/invitation/password", handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil, nil, nil, nil).InvitationPassword)
 
 	rec := serveForm(mux, "/auth/invitation/password", "type=signup&password=new-password-1")
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verify=failed" {
@@ -476,7 +476,7 @@ func registerMux(t *testing.T) (*http.ServeMux, func() []string) {
 	t.Helper()
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil)
 	withCORS := gateway.CORS([]string{registerAllowedOrigin})
 	mux := http.NewServeMux()
 	mux.Handle("POST /auth/register", withCORS(reg.Register))
@@ -574,7 +574,7 @@ func mailLinkMux(t *testing.T, path string, pick func(registration) http.Handler
 	t.Helper()
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite, nil)
 	withCORS := gateway.CORS([]string{registerAllowedOrigin})
 	mux := http.NewServeMux()
 	mux.Handle("POST "+path, withCORS(pick(reg)))
@@ -742,7 +742,7 @@ func demoMux(t *testing.T) (*http.ServeMux, *demoRecSink) {
 	authURL, _ := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	sink := &demoRecSink{}
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), sink, noPendingInvite)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), sink, noPendingInvite, nil)
 	withCORS := gateway.CORS([]string{registerAllowedOrigin})
 	mux := http.NewServeMux()
 	mux.Handle("POST /contacts/demo-request", withCORS(reg.DemoRequest))

@@ -724,8 +724,8 @@ jobs:
         run: scripts/ci/rls-test-gate.sh -count=1 ./cmd/migrate/...
       - name: Gateway hand-off boot test (main wires one notifications sink into verify and sign-in; it must not skip) + per-test visibility & skip gate
         run: scripts/ci/rls-test-gate.sh -count=1 ./cmd/gateway/...
-      - name: Gateway hand-off code store (shared by every instance, as invoice_gateway) + per-test visibility & skip gate
-        run: scripts/ci/rls-test-gate.sh -count=1 -run TestRLS_GatewayHandoff ./internal/gateway
+      - name: Gateway shared state (hand-off codes, revocations, throttle counts; as invoice_gateway) + per-test visibility & skip gate
+        run: scripts/ci/rls-test-gate.sh -count=1 -run TestRLS_Gateway ./internal/gateway
       - name: Invoice /v1 suite (RLS-scoped store CRUD + genesis history + audit as invoice_app) + per-test visibility & skip gate
         # M4-02: proves the invoice store's Create/Get/List/Update resolve to exactly
         # the caller's tenant under RLS and write the genesis invoice_status_history +

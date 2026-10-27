@@ -88,7 +88,7 @@ GATEWAY_URL=... pnpm --filter @invoice-os/e2e test:api
 
 `playwright.topology.config.ts` → `testDir: './topology'`, `fullyParallel: false`,
 `workers: 1`, one Playwright project per unit in `topology/shards.ts`: `serial-lane`,
-`import-wizard`, `import-wizard-2`, `invoice-surfaces`, `ui-surfaces`, `library` and `blog`. CI runs each unit on its own runner in parallel;
+`auth`, `import-wizard`, `import-wizard-2`, `invoice-surfaces`, `ui-surfaces`, `library` and `blog`. CI runs each unit on its own runner in parallel;
 `--project=<unit>` runs one. A spec file not assigned to exactly one unit fails the run at
 config load.
 

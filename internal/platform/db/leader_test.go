@@ -2,6 +2,7 @@ package db_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -248,4 +249,67 @@ func TestLeader_ConnectsWithAPoolParameterInTheDSN(t *testing.T) {
 	if err := l.Lead("test-"+uuid.NewString(), fn)(context.Background()); err != nil || *runs != 1 {
 		t.Fatalf("Lead with pool_max_conns in the DSN: runs=%d err=%v, want 1 run", *runs, err)
 	}
+}
+
+// BUG-67: a claim whose ctx is done must not close the shared connection and drop the other locks.
+func TestLeader_CancelledClaimKeepsOtherLocks(t *testing.T) {
+	// peerTakes reports whether a second Leader runs task, which only happens if the holder lost it.
+	peerTakes := func(t *testing.T, dsn, task string) bool {
+		t.Helper()
+		peer := db.NewLeader(dsn)
+		t.Cleanup(func() { ldStop(t, peer) })
+		fn, runs := ldRuns()
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		if err := peer.Lead(task, fn)(ctx); err != nil {
+			t.Fatalf("peer: %v", err)
+		}
+		return *runs > 0
+	}
+	setup := func(t *testing.T) (a *db.Leader, dsn, held, other string) {
+		dsn = requireHarness(t).appURL
+		held, other = "test-"+uuid.NewString(), "test-"+uuid.NewString()
+		a = db.NewLeader(dsn)
+		t.Cleanup(func() { ldStop(t, a) })
+		ldHold(t, a, held)
+		return
+	}
+
+	t.Run("ctx already cancelled", func(t *testing.T) {
+		a, dsn, held, other := setup(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		fn, runs := ldRuns()
+		err := a.Lead(other, fn)(ctx)
+		if !errors.Is(err, context.Canceled) || *runs != 0 {
+			t.Errorf("cancelled claim: err=%v runs=%d, want the ctx error and no run", err, *runs)
+		}
+		if peerTakes(t, dsn, held) {
+			t.Fatal("a peer took the lock a still holds: a cancelled claim closed the leader connection")
+		}
+	})
+
+	t.Run("ctx cancelled while the claim waits on the mutex", func(t *testing.T) {
+		a, dsn, held, other := setup(t)
+		release := db.ExportLeaderHoldMu(a)
+		ctx, cancel := context.WithCancel(context.Background())
+		fn, runs := ldRuns()
+		res := make(chan error, 1)
+		go func() { res <- a.Lead(other, fn)(ctx) }()
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+		release()
+		var err error
+		select {
+		case err = <-res:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Lead did not return after its ctx was cancelled")
+		}
+		if !errors.Is(err, context.Canceled) || *runs != 0 {
+			t.Errorf("cancelled claim: err=%v runs=%d, want the ctx error and no run", err, *runs)
+		}
+		if peerTakes(t, dsn, held) {
+			t.Fatal("a peer took the lock a still holds: a cancelled claim closed the leader connection")
+		}
+	})
 }

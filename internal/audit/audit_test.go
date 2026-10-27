@@ -76,6 +76,7 @@ func runAudit(m *testing.M) int {
 
 	fx = &fixture{app: app, mig: mig}
 	code := m.Run()
+	closePlanScratch()
 	app.Close()
 	mig.Close()
 	return code

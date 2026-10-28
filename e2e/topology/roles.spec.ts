@@ -646,7 +646,7 @@ test('firm Settings: the live member directory, the live role grid, and every co
   for (const id of ['admin', 'preparer', 'reviewer']) {
     await expect(page.getByTestId(`drawer-role-${id}`).locator('input'), `${id} card`).toBeEnabled()
   }
-  await expect(drawer).not.toContainText('writes status only')
+  await expect(drawer).not.toContainText(/writes status\s+only/)
 
   // Firm's fork: Musa is not an admin, so the client-access picker is live.
   await expect(page.getByTestId('drawer-scope-all').locator('input')).toBeChecked()

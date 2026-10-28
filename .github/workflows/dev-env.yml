@@ -1,6 +1,6 @@
 name: Preview (deploy the PR's fleet to Google Cloud + E2E)
 
-# GKE-11: each ready PR gets its own fleet in ascomply-preview, <svc>-pr-<N> on run.app, and a fresh
+# GKE-11: each ready non-Dependabot PR gets its own fleet in ascomply-preview, <svc>-pr-<N> on run.app, and a fresh
 # database pr_<N> on every deploy. scripts/ci/preview.sh does the gcloud work; invoice-os-infra
 # preview.tf holds what the PRs share. Closing the PR deletes it (dev-env-teardown.yml); the
 # nightly sweep (dev-env-sweeper.yml) deletes what a missed close left. Production deploys from

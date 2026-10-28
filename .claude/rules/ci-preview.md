@@ -7,7 +7,7 @@ paths:
 ---
 # PR previews on Google Cloud
 
-- `dev-env.yml` deploys each ready PR to `ascomply-preview` as `<svc>-pr-<N>` on run.app. `scripts/ci/preview.sh` does every gcloud call.
+- `dev-env.yml` deploys each ready non-Dependabot PR to `ascomply-preview` as `<svc>-pr-<N>` on run.app. `scripts/ci/preview.sh` does every gcloud call.
 - Authenticate as `deploy-preview`. Workload Identity admits it from `pull_request` runs and from `main`. It holds no role in `ascomply-prod`.
 - A PR opened by `dependabot[bot]` runs no preview or teardown job. `E2E gate` passes it by name.
 - Keep the shared preview resources in invoice-os-infra `preview.tf`. Create and delete the per-PR resources only with `preview.sh`.

@@ -994,6 +994,7 @@ describe('ACCESS-01: the drawer saves the access role', () => {
 
     pick('preparer')
     expect(text('member-role-gaps')).toBe(approverGapNotice('Bo Person', ['CFO']))
+    expect(screen.getByTestId('member-role-confirmed').classList.contains('v2-btn-primary')).toBe(true)
   })
 
   it('ACCESS-01: a refused role write then a successful one clears the error', async () => {

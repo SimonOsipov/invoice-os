@@ -358,7 +358,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
                   type="button"
                   onClick={() => void changeRole(confirmRole)}
                   disabled={accessPending}
-                  className="v2-btn pf-btn"
+                  className="v2-btn v2-btn-primary pf-btn"
                   data-testid="member-role-confirmed"
                   style={{ height: 32, fontSize: 12.5 }}
                 >

@@ -82,6 +82,7 @@ func TestSetMemberRoleHandler_BodyAndPath(t *testing.T) {
 		"an empty body":         ``,
 		"a number for the role": `{"role":1}`,
 		"a top-level array":     `["reviewer"]`,
+		"an array for the role": `{"role":["reviewer"]}`,
 		"over 4 KiB":            strings.Repeat(" ", 5*1024) + `{"role":"reviewer"}`,
 	} {
 		t.Run("400 invalid request body: "+name, func(t *testing.T) {
@@ -125,6 +126,45 @@ func TestSetMemberRoleHandler_BodyAndPath(t *testing.T) {
 			t.Errorf("status %d %q with %d calls, want 404 membership not found and 0", rec.Code, rec.Body.String(), len(r.calls))
 		}
 	})
+	t.Run("the 4 KiB cap is exact", func(t *testing.T) {
+		const doc = `{"role":"reviewer"}`
+		for name, tc := range map[string]struct {
+			body string
+			code int
+		}{
+			"4096 bytes": {strings.Repeat(" ", 4096-len(doc)) + doc, 200},
+			"4097 bytes": {strings.Repeat(" ", 4097-len(doc)) + doc, 400},
+		} {
+			var r roleRig
+			if rec := r.patch(t, callerID(), target, tc.body); rec.Code != tc.code {
+				t.Errorf("%s: status %d, want %d", name, rec.Code, tc.code)
+			}
+		}
+	})
+	t.Run("body keys beyond role never reach the store", func(t *testing.T) {
+		var r roleRig
+		other := uuid.NewString()
+		rec := r.patch(t, callerID(), target, `{"role":"reviewer","user_id":"`+other+`","status":"suspended","tenant_id":"`+other+`"}`)
+		if rec.Code != http.StatusOK || len(r.calls) != 1 {
+			t.Fatalf("status %d with %d calls: %s", rec.Code, len(r.calls), rec.Body.String())
+		}
+		if c := r.calls[0]; c.user != target || c.role != "reviewer" {
+			t.Errorf("call = %+v, want the path user %s and reviewer", c, target)
+		}
+	})
+	for name, form := range map[string]string{
+		"braced":    "{" + target + "}",
+		"urn":       "urn:uuid:" + target,
+		"no hyphen": strings.ReplaceAll(target, "-", ""),
+	} {
+		t.Run("a "+name+" uuid reaches the store canonical", func(t *testing.T) {
+			var r roleRig
+			rec := r.patch(t, callerID(), form, `{"role":"reviewer"}`)
+			if rec.Code != http.StatusOK || len(r.calls) != 1 || r.calls[0].user != target {
+				t.Errorf("status %d, calls %+v, want 200 and the canonical %s", rec.Code, r.calls, target)
+			}
+		})
+	}
 	t.Run("a body just under the cap reaches the store", func(t *testing.T) {
 		var r roleRig
 		rec := r.patch(t, callerID(), target, strings.Repeat(" ", 3000)+`{"role":"reviewer"}`)
@@ -247,11 +287,14 @@ func TestSetMemberRoleHandler_RefusalsAndLogsCarryNoNameOrEmail(t *testing.T) {
 	}
 	closed.Close()
 	step("role change on a closed pool", patchRoleViaMux(t, NewStore(closed).SetMemberRole, logger, idOf(ada), prep, `{"role":"reviewer"}`), 500)
+	drop := failAudit(t, super, tenant, roleChangedEvent)
+	step("role change whose audit write fails", patchRoleViaMux(t, store.SetMemberRole, logger, idOf(ada), prep, `{"role":"reviewer"}`), 500)
+	drop()
 	if logs.Len() == 0 {
 		t.Fatal("the 500 wrote no log line, so the absence checks below read nothing")
 	}
-	if len(refusals) != 3 {
-		t.Fatalf("scanned %d refusal bodies, want 3 (403, 409, 500)", len(refusals))
+	if len(refusals) != 4 {
+		t.Fatalf("scanned %d refusal bodies, want 4 (403, 409, 500, 500)", len(refusals))
 	}
 	scanned := strings.ToLower(logs.String() + strings.Join(refusals, "\n"))
 	for _, needle := range []string{adaName, adaEmail} {
@@ -304,5 +347,40 @@ func TestSetMemberRole_WireThroughTheRealStore(t *testing.T) {
 	}
 	if got := w.storedRole(t, prep); got != "reviewer" {
 		t.Errorf("stored role = %q, want reviewer", got)
+	}
+
+	other := newInvWorld(t, "role wire other "+uuid.NewString()[:8], "Zed Okoro")
+	cross := other.addMember(t, "reviewer", "active", "Tunde Bello")
+	invited := w.addMember(t, "preparer", "invited", "")
+	removed := w.addMember(t, "preparer", "removed", "Rex Removed")
+	crossBefore := imageOf(t, other.super, other.tenant, cross)
+	for name, tc := range map[string]struct {
+		caller, target string
+		code           int
+		msg            string
+	}{
+		"a member of another tenant":  {w.admin, cross, 404, "membership not found"},
+		"an unknown member":           {w.admin, uuid.NewString(), 404, "membership not found"},
+		"an invited member":           {w.admin, invited, 409, "an invited member has no sign-in to suspend or reactivate"},
+		"a removed member":            {w.admin, removed, 409, "a removed member must be invited again"},
+		"a caller with no membership": {uuid.NewString(), prep, 403, db.NotActiveMemberMessage},
+	} {
+		rec := do(tc.caller, tc.target, "admin")
+		if rec.Code != tc.code || errorOf(t, rec) != tc.msg {
+			t.Errorf("%s: status %d %q, want %d %q", name, rec.Code, rec.Body.String(), tc.code, tc.msg)
+		}
+	}
+	if imageOf(t, other.super, other.tenant, cross) != crossBefore {
+		t.Error("a cross-tenant request over the handler wrote to the other tenant's row")
+	}
+	if got := w.storedRole(t, invited) + w.storedRole(t, removed); got != "preparerpreparer" {
+		t.Errorf("refused invited/removed requests left roles %q, want both preparer", got)
+	}
+	before := w.auditCountOf(t, roleChangedEvent)
+	if rec := do(w.admin, prep, "reviewer"); rec.Code != http.StatusOK {
+		t.Errorf("same role: status %d, want 200", rec.Code)
+	}
+	if after := w.auditCountOf(t, roleChangedEvent); after != before {
+		t.Errorf("a same-role request wrote %d audit rows, want 0", after-before)
 	}
 }

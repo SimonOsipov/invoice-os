@@ -1,5 +1,5 @@
 version: 2
-# ceiling: 2 open PRs per entry; a merge frees a slot, so AC 6 counts PRs opened. Raise it once the backlog clears.
+# ceiling: 2 open PRs per entry holds the first wave near 10; raise it once the backlog clears.
 updates:
   - package-ecosystem: npm
     directory: /
@@ -43,9 +43,14 @@ updates:
         patterns: ["*"]
         update-types: [minor, patch]
     ignore:
-      # Pinned together; see sidecar/docling/requirements.txt.
+      # docling and its pinned deps move deliberately with regenerated goldens (.claude/rules/docling-sidecar.md).
+      - dependency-name: docling
       - dependency-name: docling-core
       - dependency-name: docling-parse
+      - dependency-name: rapidocr
+      - dependency-name: onnxruntime
+      - dependency-name: pypdfium2
+      - dependency-name: torch
 
   - package-ecosystem: docker
     directories:

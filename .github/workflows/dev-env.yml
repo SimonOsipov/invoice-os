@@ -1,6 +1,6 @@
 name: Preview (deploy the PR's fleet to Google Cloud + E2E)
 
-# GKE-11: each ready non-Dependabot PR gets its own fleet in ascomply-preview, <svc>-pr-<N> on run.app, and a fresh
+# GKE-11: each ready PR, except a Dependabot PR whose every commit is Dependabot's, gets its own fleet in ascomply-preview, <svc>-pr-<N> on run.app, and a fresh
 # database pr_<N> on every deploy. scripts/ci/preview.sh does the gcloud work; invoice-os-infra
 # preview.tf holds what the PRs share. Closing the PR deletes it (dev-env-teardown.yml); the
 # nightly sweep (dev-env-sweeper.yml) deletes what a missed close left. Production deploys from
@@ -25,7 +25,7 @@ env:
   DEPLOYER: deploy-preview@ascomply-preview.iam.gserviceaccount.com
 
 jobs:
-  # Decides whether this PR needs the deploy chain; `E2E gate` passes a PR it marks not relevant or a Dependabot PR.
+  # Decides whether this PR needs the deploy chain; `E2E gate` passes a PR it marks not relevant or a Dependabot PR whose every commit is Dependabot's.
   # A skipped or renamed filter yields '', which the gate fails (e2e/mergeGate.ts).
   changes:
     name: Detect E2E-relevant changes
@@ -70,11 +70,33 @@ jobs:
           FILTER_E2E: ${{ steps.filter.outputs.e2e }}
         run: bash scripts/ci/lane.sh pr-e2e
 
+  # Decides whether Dependabot alone wrote the PR; the preview jobs wait for it. A failure skips them and fails the gate.
+  commit-authors:
+    name: Detect a Dependabot-only PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      dependabot_only: ${{ steps.verdict.outputs.dependabot_only }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          EVENT_SENDER: ${{ github.event.sender.login }}
+          EVENT_ACTION: ${{ github.event.action }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/ci/dependabot-only.sh "$PR"
+
   # A PR deploys alongside CI; a red CI makes this job cancel the run, and e2e needs it.
   ci-watch:
     name: Watch CI (PR; red CI stops the run)
-    needs: [changes]
-    if: github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && github.event.pull_request.user.login != 'dependabot[bot]'
+    needs: [changes, commit-authors]
+    if: github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && needs.commit-authors.outputs.dependabot_only == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -100,10 +122,11 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         run: gh run cancel "$RUN_ID" --repo "$REPO"
 
-  # GKE-11 AC6: runs on every non-Dependabot PR, ready or draft, relevant or not.
+  # GKE-11 AC6: runs on every PR except a Dependabot-only one, ready or draft, relevant or not.
   invariants:
     name: Preview invariants
-    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    needs: [commit-authors]
+    if: needs.commit-authors.outputs.dependabot_only == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -120,8 +143,8 @@ jobs:
   # The PR's secrets and bucket exist before anything deploys; the URLs follow from the PR number.
   prepare-env:
     name: Prepare the preview (secrets, bucket, URLs)
-    needs: [changes]
-    if: github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && github.event.pull_request.user.login != 'dependabot[bot]'
+    needs: [changes, commit-authors]
+    if: github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && needs.commit-authors.outputs.dependabot_only == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -157,8 +180,8 @@ jobs:
   # the gateway is built with the mock issuer.
   build:
     name: Build ${{ matrix.image }}
-    needs: [changes]
-    if: github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && github.event.pull_request.user.login != 'dependabot[bot]'
+    needs: [changes, commit-authors]
+    if: github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && needs.commit-authors.outputs.dependabot_only == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -683,7 +706,7 @@ jobs:
   # The required merge check: always reports on a PR, so a skipped E2E cannot read as a pass.
   e2e-gate:
     name: E2E gate
-    needs: [changes, e2e, topology, ci-watch]
+    needs: [changes, commit-authors, e2e, topology, ci-watch]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -702,3 +725,4 @@ jobs:
           CI_RESULT: ${{ needs.ci-watch.result }}
           CI_CONCLUSION: ${{ needs.ci-watch.outputs.conclusion }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          COMMITS_ONLY_DEPENDABOT: ${{ needs.commit-authors.outputs.dependabot_only }}

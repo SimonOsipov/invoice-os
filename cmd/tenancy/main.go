@@ -80,6 +80,9 @@ func main() {
 	// PUT /v1/memberships/{user_id}/clients — admin-only whole-set replace of a member's client access.
 	app.Mux.HandleFunc("PUT /v1/memberships/{user_id}/clients", tenancy.SetMemberClientsHandler(store.SetMemberClients, app.Logger))
 
+	// PATCH /v1/memberships/{user_id}/role — admin-only change of a member's access role.
+	app.Mux.HandleFunc("PATCH /v1/memberships/{user_id}/role", tenancy.SetMemberRoleHandler(store.SetMemberRole, app.Logger))
+
 	// POST /v1/workspaces — a tenant-less caller provisions their workspace;
 	// the gateway lets a token without a tenant reach this route only.
 	app.Mux.HandleFunc("POST /v1/workspaces", tenancy.ProvisionHandler(store.ProvisionWorkspace, app.Logger))

@@ -24,6 +24,13 @@ import {
   NO_CLIENTS_IN_WORKSPACE,
   pickerClients,
   setMembershipClients,
+  setMembershipRole,
+  roleCardsLock,
+  roleChangeQuestion,
+  ROLE_ADMIN_ONLY,
+  SELF_DEMOTION_WARNING,
+  ROLE_CHANGE_KEEP,
+  ROLE_CHANGE_CONFIRMED,
   companySetupAccess,
   CLIENT_USERS_COPY,
   delegateCandidates,
@@ -2157,7 +2164,8 @@ describe('AC-5 — filterMembers and classifyInvites tolerate a null email', () 
 
 describe('AC-7 — MEMBER_UNBACKED', () => {
   it('supplies one distinct, non-empty sentence per unbacked control', () => {
-    const keys = ['role', 'department'] as const
+    const keys = ['department'] as const
+    expect(Object.keys(MEMBER_UNBACKED)).toEqual(['department'])
     for (const k of keys) expect(MEMBER_UNBACKED[k]).toBeTruthy()
     expect((MEMBER_UNBACKED as Record<string, string>).clientAccess).toBeUndefined()
     const values = keys.map((k) => MEMBER_UNBACKED[k])
@@ -2378,5 +2386,66 @@ describe('LOGFIX-06-02 — companySetupAccess', () => {
     for (const [state, members, want] of rows) {
       expect(companySetupAccess(state, members), `${state} / ${members.map((m) => m.role + ':' + m.status).join() || 'no rows'}`).toBe(want)
     }
+  })
+})
+
+describe('ACCESS-01-04 — the role write and its copy', () => {
+  it('setMembershipRole patches the role', async () => {
+    const answer = wire({ user_id: 'u1', role: 'reviewer' })
+    const af = vi.fn().mockResolvedValue(answer) as unknown as AuthedFetch
+
+    const got = await setMembershipRole(af, 'https://gw', 'u1', 'reviewer')
+
+    expect(af).toHaveBeenCalledTimes(1)
+    expect(af).toHaveBeenCalledWith('https://gw/api/tenancy/v1/memberships/u1/role', { method: 'PATCH', body: { role: 'reviewer' } })
+    expect(got).toBe(answer)
+  })
+
+  const row = (id: string, role: Member['role'], status: MemberStatus, isYou = false): Member => ({
+    ...firmRow(id, status),
+    id,
+    role,
+    isYou,
+  })
+
+  it('roleCardsLock: a non-admin viewer reads the admin-only note', () => {
+    const admin = row('a1', 'admin', 'active')
+    const members = [row('p1', 'preparer', 'active', true), admin]
+    expect(roleCardsLock(members, admin)).toBe(ROLE_ADMIN_ONLY)
+  })
+
+  it('roleCardsLock: the sole active admin is locked with the protected note', () => {
+    const me = row('a1', 'admin', 'active', true)
+    const members = [me, row('a2', 'admin', 'suspended')]
+    expect(roleCardsLock(members, me)).toBe(PROTECTED_ADMIN_NOTE)
+  })
+
+  it('roleCardsLock: an admin viewer on a changeable row gets no lock', () => {
+    const other = row('a2', 'admin', 'active')
+    const prep = row('p1', 'preparer', 'active')
+    const members = [row('a1', 'admin', 'active', true), other, prep]
+    expect(roleCardsLock(members, other)).toBeNull()
+    expect(roleCardsLock(members, prep)).toBeNull()
+  })
+
+  it('roleCardsLock: a suspended admin viewer is not an admin viewer', () => {
+    const me = row('a1', 'admin', 'suspended', true)
+    const prep = row('p1', 'preparer', 'active')
+    expect(roleCardsLock([me, row('a2', 'admin', 'active'), prep], prep)).toBe(ROLE_ADMIN_ONLY)
+  })
+
+  it('roleCardsLock: a suspended sole admin row is not protected', () => {
+    const me = row('a1', 'admin', 'active', true)
+    const gone = row('a2', 'admin', 'suspended')
+    expect(roleCardsLock([me, gone], gone)).toBeNull()
+  })
+
+  it('access-role change copy is byte-pinned', () => {
+    expect(ROLE_ADMIN_ONLY).toBe('Only an admin can change an access role.')
+    expect(SELF_DEMOTION_WARNING).toBe('You will lose admin controls in this workspace. Only another admin can give them back.')
+    expect(ROLE_CHANGE_KEEP).toBe('Keep role')
+    expect(ROLE_CHANGE_CONFIRMED).toBe('Change role')
+    expect(roleChangeQuestion('Ada', 'Reviewer', true)).toBe('Change your access role to Reviewer?')
+    expect(roleChangeQuestion('Ada', 'Reviewer', false)).toBe("Change Ada's access role to Reviewer?")
   })
 })

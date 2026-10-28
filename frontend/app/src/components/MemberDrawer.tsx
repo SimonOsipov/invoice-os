@@ -25,6 +25,7 @@ import {
   CLIENTS_UNREADABLE,
   emailLabel,
   isProtectedAdmin,
+  accessRoleLabel,
   MEMBER_UNBACKED,
   pickerClients,
   PROTECTED_ADMIN_NOTE,
@@ -32,11 +33,21 @@ import {
   REMOVE_EXPLANATION,
   REMOVE_KEEP,
   removeConfirmQuestion,
+  roleCardsLock,
+  ROLE_CHANGE_CONFIRMED,
+  ROLE_CHANGE_KEEP,
+  roleChangeQuestion,
+  SELF_DEMOTION_WARNING,
   SUSPEND_EXPLANATION,
+  type AccessRole,
   type PatchableStatus,
 } from '../lib/members'
 import {
+  approverGapNotice,
+  approverGaps,
+  APPROVERS_UNCHECKED,
   drawerRoleHelper,
+  leavesApproverRole,
   rolesOfMember,
   stepsForMember,
   stepsNamedLine,
@@ -119,6 +130,15 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
     if (confirmingRemove) keepRef.current?.focus()
   }, [confirmingRemove])
 
+  // Access-role write; `confirmRole` is the pending change awaiting the warning strip.
+  const [accessPending, setAccessPending] = useState(false)
+  const [accessError, setAccessError] = useState<string | null>(null)
+  const [confirmRole, setConfirmRole] = useState<AccessRole | null>(null)
+  const keepRoleRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (confirmRole) keepRoleRef.current?.focus()
+  }, [confirmRole])
+
   // Resolved from the CURRENT list on every render, never captured: `isProtectedAdmin` does
   // no identity lookup and answers `true` for a detached row (members.test.ts), so a stale
   // row gives a wrong lock, and a status write replaces the row under this drawer.
@@ -194,6 +214,36 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
     }
   }
 
+  async function changeRole(next: AccessRole) {
+    if (accessPending) return
+    setAccessError(null)
+    setAccessPending(true)
+    try {
+      await ctx.setMemberRole(memberId, next)
+    } catch (err: unknown) {
+      setAccessError(toApiError(err).message)
+    } finally {
+      setAccessPending(false)
+      setConfirmRole(null)
+    }
+  }
+
+  const selfDemotion = (next: AccessRole) => row.isYou && row.role === 'admin' && next !== 'admin'
+  const gapsFor = (next: AccessRole) => (rolesLanded ? approverGaps(ctx.roles, ctx.members, row.id, next) : [])
+
+  const pickRole = (next: AccessRole) => {
+    if (next === row.role) {
+      setConfirmRole(null)
+      return
+    }
+    const unchecked = !rolesLanded && leavesApproverRole(row, next)
+    if (selfDemotion(next) || gapsFor(next).length > 0 || unchecked) setConfirmRole(next)
+    else void changeRole(next)
+  }
+
+  const accessLock = roleCardsLock(ctx.members, row)
+  const confirmGaps = confirmRole ? gapsFor(confirmRole) : []
+
   const clientsLanded = ctx.entitiesState === 'ready' || ctx.entitiesState === 'empty'
   const storedClients = row.clientAccess ?? []
   // `null`: the server withheld this row's set from a non-admin viewer.
@@ -264,11 +314,76 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
           <div className="label" style={{ marginBottom: 8 }}>
             Access role
           </div>
-          {/* Every card disabled: the membership endpoint writes status only. Shown at the
-              person's REAL role rather than hidden, so the drawer still answers "what is she
-              allowed to do" — it just cannot change the answer. `idPrefix="drawer"` names the
-              radio group. */}
-          <RoleCards idPrefix="drawer" value={row.role} disabledIds={ACCESS_ROLE_IDS} note={MEMBER_UNBACKED.role} noteId={roleNoteId} />
+          <fieldset disabled={accessPending} style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0 }}>
+            <RoleCards
+              idPrefix="drawer"
+              value={row.role}
+              disabledIds={accessLock ? ACCESS_ROLE_IDS : undefined}
+              note={accessLock ?? undefined}
+              noteId={roleNoteId}
+              onChange={accessLock ? undefined : pickRole}
+            />
+          </fieldset>
+          {confirmRole && (
+            <div
+              data-testid="member-role-confirm"
+              style={{ marginTop: 8, padding: '9px 12px', background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)' }}
+            >
+              <p style={{ margin: '0 0 8px', fontSize: 12.5, lineHeight: 1.5, color: 'var(--fg-1)' }}>
+                {roleChangeQuestion(row.name, accessRoleLabel(confirmRole), row.isYou)}
+              </p>
+              {selfDemotion(confirmRole) && (
+                <AmberNote testId="member-role-self-warning" style={{ marginBottom: 8, padding: '9px 11px', fontSize: 11.5 }}>
+                  {SELF_DEMOTION_WARNING}
+                </AmberNote>
+              )}
+              {(rolesLanded ? confirmGaps.length > 0 : leavesApproverRole(row, confirmRole)) && (
+                <AmberNote testId="member-role-gaps" style={{ marginBottom: 8, padding: '9px 11px', fontSize: 11.5 }}>
+                  {rolesLanded ? approverGapNotice(row.name, confirmGaps.map((r) => r.title)) : APPROVERS_UNCHECKED}
+                </AmberNote>
+              )}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <button
+                  type="button"
+                  ref={keepRoleRef}
+                  onClick={() => setConfirmRole(null)}
+                  disabled={accessPending}
+                  className="v2-btn v2-btn-ghost pf-btn"
+                  data-testid="member-role-keep"
+                  style={{ height: 32, fontSize: 12.5 }}
+                >
+                  {ROLE_CHANGE_KEEP}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void changeRole(confirmRole)}
+                  disabled={accessPending}
+                  className="v2-btn v2-btn-primary pf-btn"
+                  data-testid="member-role-confirmed"
+                  style={{ height: 32, fontSize: 12.5 }}
+                >
+                  {ROLE_CHANGE_CONFIRMED}
+                </button>
+              </div>
+            </div>
+          )}
+          {accessError && (
+            <div
+              data-testid="member-drawer-access-error"
+              style={{
+                marginTop: 8,
+                padding: '10px 12px',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--status-red-bg)',
+                border: '1px solid var(--status-red-border)',
+                fontSize: 12.5,
+                lineHeight: 1.5,
+                color: 'var(--status-red-text)',
+              }}
+            >
+              {accessError}
+            </div>
+          )}
 
           {ctx.mode === 'firm' ? (
             <>

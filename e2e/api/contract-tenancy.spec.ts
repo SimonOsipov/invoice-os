@@ -56,11 +56,13 @@
 //     (ErrLastActiveAdmin, both shapes), and TestMembership_StatusForErrTable
 //     proves that error maps to HTTP 409 with the sentence the SPA renders.
 //     Neither alone is the wire claim. A cited gap, not a silent one.
+//     The role route's 409 is covered in its own describe below, on a fresh workspace.
 //   - 409 invited-not-transitionable: no seeded row has status `invited` and
 //     nothing mints one.
 import { test, expect } from '@playwright/test'
 import {
   createEntity,
+  getAuditLog,
   grantMembership,
   listEntities,
   login,
@@ -70,6 +72,7 @@ import {
   registerFresh,
   me,
   setMemberClients,
+  setMemberRole,
   setMembershipStatus,
   signInSession,
   subjectOf,
@@ -93,6 +96,12 @@ const NOT_ADMIN_CLIENTS = "only an admin can choose a member's clients"
 const ADMIN_SEES_ALL = 'an admin sees every client'
 const UNKNOWN_CLIENT = 'a client in the list is not in this workspace'
 const NOT_FIRM = 'client access applies to accounting firm workspaces only'
+// statusForErr: ErrRoleChangeNotPermitted, ErrLastActiveAdmin.
+const NOT_ADMIN_ROLE = "only an admin can change a member's role"
+const LAST_ADMIN = "this is the tenant's last active admin — make another member an active admin first"
+// invoice/handlers.go notApproverTransmitReason; approval/handlers.go statusForErr (not an approver).
+const NOT_APPROVER_TRANSMIT = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
+const NOT_APPROVER_DECIDE = 'only an approver can decide an approval step'
 
 // Seeded subjects (db/seed.dev.sql), never a tenant's seeded admin. Every active
 // seeded member can sign in, and the mint takes any subject, so a leaked
@@ -452,6 +461,112 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
       const inHouse = await setMemberClients(tokenB, INHOUSE_REVIEWER_SUBJECT, [crypto.randomUUID()])
       assertErrorEnvelope(inHouse, 409, 'in-house workspace')
       expect(err(inHouse)).toBe(NOT_FIRM) // ErrClientAccessNotFirm
+    })
+  })
+
+  test.describe('PATCH /memberships/{user_id}/role (ACCESS-01)', () => {
+    const err = (res: { body: unknown }) => (res.body as { error: string }).error
+
+    async function freshWorkspace(prefix: string) {
+      const { token: admin } = await registerFormAccount(prefix)
+      const tenantId = (await me(admin)).tenant.id
+      return { admin, tenantId, adminId: subjectOf(admin) }
+    }
+
+    async function freshMember(tenantId: string, prefix: string, role: 'admin' | 'preparer' | 'reviewer') {
+      const account = await registerFresh(prefix)
+      const userId = subjectOf((await signInSession(account.email, account.password)).access_token)
+      await grantMembership({ user_id: userId, tenant_id: tenantId, role, display_name: 'Role E2E Member', email: account.email })
+      return userId
+    }
+
+    test('PATCH /memberships/{user_id}/role: an admin moves a member through every role', async () => {
+      const { admin, tenantId } = await freshWorkspace('role-move')
+      const userId = await freshMember(tenantId, 'role-move-member', 'preparer')
+      const read = async () => (await memberships(admin)).memberships.find((m) => m.user_id === userId)!
+
+      for (const role of ['reviewer', 'admin', 'preparer', 'preparer']) {
+        const res = await setMemberRole(admin, userId, role)
+        expect(res.status, JSON.stringify(res.body)).toBe(200)
+        expect(Object.keys(res.body as object).sort()).toEqual(MEMBERSHIP_KEYS)
+        expect((res.body as Membership).role).toBe(role)
+        expect((await read()).role, 'GET agrees').toBe(role)
+        // A firm demotion to preparer, and the admin seat, both list every client.
+        if (role !== 'reviewer') expect((res.body as Membership).client_access).toBe('all')
+      }
+
+      // The same-role call (last one) wrote nothing: three rows, oldest first.
+      const log = await getAuditLog(admin, { event: ['membership.role_changed'] })
+      const rows = log.events.filter((e) => (e.payload as { user_id: string }).user_id === userId).reverse()
+      expect(rows.map((r) => r.company_scope)).toEqual(['workspace', 'workspace', 'workspace'])
+      expect(rows.map((r) => r.payload)).toEqual([
+        { user_id: userId, from: 'preparer', to: 'reviewer' },
+        { user_id: userId, from: 'reviewer', to: 'admin' },
+        { user_id: userId, from: 'admin', to: 'preparer' },
+      ])
+    })
+
+    test('PATCH /memberships/{user_id}/role: refusals', async () => {
+      const { admin, tenantId } = await freshWorkspace('role-refuse')
+      const userId = await freshMember(tenantId, 'role-refuse-member', 'preparer')
+      const read = async () => (await memberships(admin)).memberships.find((m) => m.user_id === userId)!.role
+
+      const memberToken = await login({ ...PERSONAS.A, subject: userId, tenantId })
+      const forbidden = await setMemberRole(memberToken, userId, 'admin')
+      assertErrorEnvelope(forbidden, 403, 'non-admin PATCH')
+      expect(err(forbidden)).toBe(NOT_ADMIN_ROLE) // ErrRoleChangeNotPermitted
+      expect(await read(), 'the role is unchanged').toBe('preparer')
+
+      // The body is validated before the member is looked up.
+      assertErrorEnvelope(await setMemberRole(admin, crypto.randomUUID(), 'owner'), 400, 'role outside the vocabulary')
+      assertErrorEnvelope(await setMemberRole(admin, crypto.randomUUID(), 'reviewer'), 404, 'unknown member')
+    })
+
+    test('PATCH /memberships/{user_id}/role: the last admin keeps the role', async () => {
+      const { admin, tenantId, adminId } = await freshWorkspace('role-last')
+
+      const refused = await setMemberRole(admin, adminId, 'preparer')
+      assertErrorEnvelope(refused, 409, 'sole admin demotes self')
+      expect(err(refused)).toBe(LAST_ADMIN) // ErrLastActiveAdmin
+      expect((await me(admin)).user.role).toBe('admin')
+
+      await freshMember(tenantId, 'role-last-second', 'admin')
+      const allowed = await setMemberRole(admin, adminId, 'reviewer')
+      expect(allowed.status, JSON.stringify(allowed.body)).toBe(200)
+      expect((allowed.body as Membership).role).toBe('reviewer')
+    })
+
+    test('PATCH /memberships/{user_id}/role: a demoted reviewer is refused on transmit and approve with the same token', async () => {
+      const { admin, tenantId } = await freshWorkspace('role-gate')
+      const userId = await freshMember(tenantId, 'role-gate-reviewer', 'reviewer')
+      const reviewer = await login({ ...PERSONAS.A, subject: userId, tenantId })
+
+      const transmit = () =>
+        rawFetch(`/api/invoice/v1/invoices/${crypto.randomUUID()}/transitions`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${reviewer}` },
+          body: { target: 'queued' },
+        })
+      const approve = () =>
+        rawFetch(`/api/invoice/v1/invoices/${crypto.randomUUID()}/approvals`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${reviewer}` },
+          body: { decision: 'approved' },
+        })
+
+      // Past both role gates: a random invoice id is not found, not forbidden.
+      expect((await transmit()).status, 'reviewer passes the transmit gate').toBe(404)
+      expect((await approve()).status, 'reviewer passes the approve gate').not.toBe(403)
+
+      const demote = await setMemberRole(admin, userId, 'preparer')
+      expect(demote.status, JSON.stringify(demote.body)).toBe(200)
+
+      const transmitRefused = await transmit()
+      assertErrorEnvelope(transmitRefused, 403, 'demoted transmit')
+      expect(err(transmitRefused)).toBe(NOT_APPROVER_TRANSMIT)
+      const approveRefused = await approve()
+      assertErrorEnvelope(approveRefused, 403, 'demoted approve')
+      expect(err(approveRefused)).toBe(NOT_APPROVER_DECIDE)
     })
   })
 })

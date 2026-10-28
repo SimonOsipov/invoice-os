@@ -640,13 +640,13 @@ test('firm Settings: the live member directory, the live role grid, and every co
   }
   await expect(page.getByTestId('drawer-wfrole-helper')).toHaveText(DRAWER_ROLE_HELPER)
 
-  // Access role: shown at the person's REAL role rather than hidden, and unchangeable. The
-  // radios sit inside a card each; the reason is one visible sentence beneath all three.
+  // Access role: the seeded admin viewer sees Musa's real role on three live cards. No click:
+  // the seeded roster stays byte-identical.
   await expect(page.getByTestId('drawer-role-reviewer').locator('input')).toBeChecked()
   for (const id of ['admin', 'preparer', 'reviewer']) {
-    await expect(page.getByTestId(`drawer-role-${id}`).locator('input'), `${id} card`).toBeDisabled()
+    await expect(page.getByTestId(`drawer-role-${id}`).locator('input'), `${id} card`).toBeEnabled()
   }
-  await expect(drawer, 'the access-role reason').toContainText(UNBACKED.role)
+  await expect(drawer).not.toContainText(/writes status\s+only/)
 
   // Firm's fork: Musa is not an admin, so the client-access picker is live.
   await expect(page.getByTestId('drawer-scope-all').locator('input')).toBeChecked()

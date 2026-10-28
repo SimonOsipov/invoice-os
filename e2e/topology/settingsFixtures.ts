@@ -89,7 +89,6 @@ export const MEMBERS_TABLE_HEADS: readonly string[] = ['Person', 'Access role', 
  * sibling is the only layer a screenshot, a keyboard user and an assertion can all reach.
  */
 export const UNBACKED = {
-  role: "The membership endpoint writes status only. Changing someone's access role has no server call behind it.",
   department: 'A membership stores a name, an email, an access role and a status. There is no department column.',
 } as const
 

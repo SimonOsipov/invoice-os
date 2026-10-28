@@ -1715,6 +1715,17 @@ describe('ACCESS-01-04 — the approver gap', () => {
     expect(approverGaps([r], [mem('u1', 'reviewer'), mem('u9', 'reviewer', 'suspended')], 'u1', 'preparer')).toEqual([r])
   })
 
+  it('approverGaps is empty with no roles loaded, no roles staffed, or an unknown member', () => {
+    expect(approverGaps([], members, 'u1', 'preparer')).toEqual([])
+    expect(approverGaps([role('z', 'Role Z', '', [])], members, 'u1', 'preparer')).toEqual([])
+    expect(approverGaps(roles, members, 'nobody', 'preparer')).toEqual([])
+  })
+
+  it('approverGaps names the roles of a lone admin moving to preparer', () => {
+    const got = approverGaps(roles, [mem('u1', 'admin'), mem('u2', 'reviewer'), mem('u3', 'preparer')], 'u1', 'preparer')
+    expect(got).toEqual([A, C])
+  })
+
   it('leavesApproverRole is true only for an active approver moving to preparer', () => {
     expect(leavesApproverRole(mem('x', 'reviewer'), 'preparer')).toBe(true)
     expect(leavesApproverRole(mem('x', 'admin'), 'preparer')).toBe(true)

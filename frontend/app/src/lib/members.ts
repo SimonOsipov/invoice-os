@@ -1,10 +1,9 @@
 // Members (Settings › Members) — types, the memberships wire and read-only derivations.
 //
 // Identity, access role and status are SERVER truth, read through `listMembers` and written
-// through `setMembershipStatus` and `removeMembership`. Pending invites are server truth too (`listInvitations`,
+// through `setMembershipStatus`, `setMembershipRole` and `removeMembership`. Pending invites are server truth too (`listInvitations`,
 // `sendInvitations`, `resendInvitation`, `revokeInvitation`). Per-person client access is server
-// truth too (`setMembershipClients`). Role and department have no endpoint behind them;
-// `MEMBER_UNBACKED` says so in one sentence each.
+// truth too (`setMembershipClients`). Department has no endpoint behind it.
 //
 // This module is a function of a PERSON. Anything that is really a function of the ROLE LIST
 // — who holds a seat, what a policy step resolves to, how a workspace's coverage reads —

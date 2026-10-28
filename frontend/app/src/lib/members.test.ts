@@ -2427,6 +2427,18 @@ describe('ACCESS-01-04 — the role write and its copy', () => {
     expect(roleCardsLock(members, prep)).toBeNull()
   })
 
+  it('roleCardsLock: a suspended admin viewer is not an admin viewer', () => {
+    const me = row('a1', 'admin', 'suspended', true)
+    const prep = row('p1', 'preparer', 'active')
+    expect(roleCardsLock([me, row('a2', 'admin', 'active'), prep], prep)).toBe(ROLE_ADMIN_ONLY)
+  })
+
+  it('roleCardsLock: a suspended sole admin row is not protected', () => {
+    const me = row('a1', 'admin', 'active', true)
+    const gone = row('a2', 'admin', 'suspended')
+    expect(roleCardsLock([me, gone], gone)).toBeNull()
+  })
+
   it('access-role change copy is byte-pinned', () => {
     expect(ROLE_ADMIN_ONLY).toBe('Only an admin can change an access role.')
     expect(SELF_DEMOTION_WARNING).toBe('You will lose admin controls in this workspace. Only another admin can give them back.')

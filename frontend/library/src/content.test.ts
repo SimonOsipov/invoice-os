@@ -217,7 +217,12 @@ describe('content', () => {
 
   it('content_membersEntriesNameNoDepartmentErpOrCertificate', () => {
     const banned = /\b(department|ERP|connectors?|signing certificates?)\b/i
-    expect(JSON.stringify(byId('invite-members'))).not.toMatch(banned)
-    expect(JSON.stringify(byId('roles'))).not.toMatch(banned)
+    for (const id of ['invite-members', 'roles']) {
+      const json = JSON.stringify(byId(id))
+      expect(json.length, id).toBeGreaterThan(500)
+      expect(json, id).toMatch(/audit|invitation|Admin/)
+      expect(json, id).not.toMatch(banned)
+    }
+    expect(JSON.stringify(byId('erp-connectors'))).toMatch(banned)
   })
 })

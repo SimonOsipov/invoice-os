@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -44,18 +45,19 @@ func (c doCommit) json() string {
 }
 
 type doOpts struct {
-	pages [][]doCommit      // one array per page, printed back to back
-	raw   string            // printed instead of pages when set
-	then  string            // printed from the second gh call on when set
-	fail  bool              // gh exits 1
-	env   map[string]string // overrides the defaults
-	omit  []string          // env vars left unset
-	noArg bool
+	pages    [][]doCommit // one array per page, printed back to back
+	raw      string       // printed instead of pages when set
+	then     string       // printed from call thenFrom on (default 2) when set
+	thenFrom int
+	fail     bool              // gh exits 1
+	env      map[string]string // overrides the defaults
+	omit     []string          // env vars left unset
+	noArg    bool
 }
 
 type doRun struct {
 	out, stdout, stderr string
-	calls               []string
+	calls, sleeps       []string
 	code                int
 }
 
@@ -78,7 +80,9 @@ func runDO(t *testing.T, o doOpts) doRun {
 	writeShim(t, filepath.Join(shims, "gh"), `echo "$*" >> "$DO_DIR/calls"
 [ -n "${DO_FAIL:-}" ] && exit 1
 n=$(wc -l < "$DO_DIR/calls")
-if [ "$n" -gt 1 ] && [ -f "$DO_DIR/list2" ]; then cat "$DO_DIR/list2"; else cat "$DO_DIR/list"; fi
+if [ "$n" -ge "${DO_FROM:-2}" ] && [ -f "$DO_DIR/list2" ]; then cat "$DO_DIR/list2"; else cat "$DO_DIR/list"; fi
+`)
+	writeShim(t, filepath.Join(shims, "sleep"), `echo "$*" >> "$DO_DIR/sleeps"
 `)
 	list := o.raw
 	if list == "" {
@@ -119,7 +123,7 @@ if [ "$n" -gt 1 ] && [ -f "$DO_DIR/list2" ]; then cat "$DO_DIR/list2"; else cat 
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
 		skip := false
-		for _, dropped := range doEnvKeys {
+		for _, dropped := range append([]string{"DEPENDABOT_ONLY_RETRY_SLEEP"}, doEnvKeys...) {
 			skip = skip || k == dropped
 		}
 		if !skip {
@@ -129,6 +133,9 @@ if [ "$n" -gt 1 ] && [ -f "$DO_DIR/list2" ]; then cat "$DO_DIR/list2"; else cat 
 	cmdEnv = append(cmdEnv, "PATH="+shims+":"+os.Getenv("PATH"), "DO_DIR="+work)
 	if o.fail {
 		cmdEnv = append(cmdEnv, "DO_FAIL=1")
+	}
+	if o.thenFrom > 0 {
+		cmdEnv = append(cmdEnv, "DO_FROM="+strconv.Itoa(o.thenFrom))
 	}
 	for k, v := range env {
 		cmdEnv = append(cmdEnv, k+"="+v)
@@ -152,8 +159,12 @@ if [ "$n" -gt 1 ] && [ -f "$DO_DIR/list2" ]; then cat "$DO_DIR/list2"; else cat 
 	if b, err := os.ReadFile(filepath.Join(work, "calls")); err == nil {
 		calls = strings.Split(strings.TrimSpace(string(b)), "\n")
 	}
+	var sleeps []string
+	if b, err := os.ReadFile(filepath.Join(work, "sleeps")); err == nil {
+		sleeps = strings.Split(strings.TrimSpace(string(b)), "\n")
+	}
 	out, _ := os.ReadFile(outPath)
-	return doRun{string(out), stdout, stderr, calls, code}
+	return doRun{string(out), stdout, stderr, calls, sleeps, code}
 }
 
 // doPage: one page; its last commit gets the default HEAD_SHA.
@@ -339,6 +350,40 @@ func TestDependabotOnly_StaleListFailsClosedAfterThreeTries(t *testing.T) {
 	wantFailClosed(t, r)
 	if len(r.calls) != 3 {
 		t.Errorf("gh calls = %d, want 3", len(r.calls))
+	}
+}
+
+func TestDependabotOnly_StaleTwiceThenFreshStillReachesTheVerdict(t *testing.T) {
+	t.Parallel()
+	fresh := botCommit()
+	fresh.sha = "shahead"
+	r := runDO(t, doOpts{raw: `[` + botCommit().json() + `]`, then: "[" + fresh.json() + "]", thenFrom: 3})
+	wantVerdict(t, r, "true")
+	if len(r.calls) != 3 {
+		t.Errorf("gh calls = %d, want 3", len(r.calls))
+	}
+}
+
+func TestDependabotOnly_HumanAuthorStaleListMakesOneCallAndWritesFalse(t *testing.T) {
+	t.Parallel()
+	r := runDO(t, doOpts{raw: `[` + botCommit().json() + `]`, env: map[string]string{"PR_AUTHOR": "alice", "EVENT_SENDER": "alice"}})
+	wantVerdict(t, r, "false")
+	if len(r.calls) != 1 || len(r.sleeps) != 0 {
+		t.Errorf("gh calls = %d, sleeps = %v, want 1 call and no sleep", len(r.calls), r.sleeps)
+	}
+}
+
+func TestDependabotOnly_RetrySleepDefaultsToFiveSeconds(t *testing.T) {
+	t.Parallel()
+	stale := `[` + botCommit().json() + `]`
+	r := runDO(t, doOpts{raw: stale, omit: []string{"DEPENDABOT_ONLY_RETRY_SLEEP"}})
+	wantFailClosed(t, r)
+	if strings.Join(r.sleeps, ",") != "5,5" {
+		t.Errorf("sleep args = %v, want two sleeps of 5", r.sleeps)
+	}
+	r = runDO(t, doOpts{raw: stale, env: map[string]string{"DEPENDABOT_ONLY_RETRY_SLEEP": "7"}})
+	if strings.Join(r.sleeps, ",") != "7,7" {
+		t.Errorf("sleep args = %v, want the env value twice", r.sleeps)
 	}
 }
 

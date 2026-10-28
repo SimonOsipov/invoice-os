@@ -515,11 +515,13 @@ describe('mergeGate CLI', () => {
     'COMMIT_AUTHORS_RESULT',
   ]
 
-  const cli = (vars: Record<string, string>) => {
+  const cli = (vars: Record<string, string>, unset: string[] = []) => {
     // Strip the gate vars from the inherited env so a CI runner's values cannot leak in.
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !VARS.includes(k)))
+    const all: Record<string, string> = { ...env, COMMIT_AUTHORS_RESULT: 'success', ...vars }
+    for (const k of unset) delete all[k]
     try {
-      return { code: 0, out: execFileSync(process.execPath, [gate], { encoding: 'utf8', env: { ...env, COMMIT_AUTHORS_RESULT: 'success', ...vars } }) }
+      return { code: 0, out: execFileSync(process.execPath, [gate], { encoding: 'utf8', env: all }) }
     } catch (err) {
       const e = err as { status: number; stdout: string }
       return { code: e.status, out: e.stdout }
@@ -530,6 +532,12 @@ describe('mergeGate CLI', () => {
     const { code, out } = cli({ CHANGES_RESULT: 'success', E2E_RELEVANT: 'false', COMMIT_AUTHORS_RESULT: 'failure' })
     expect(code).toBe(1)
     expect(out).toContain('::error::commit author detection did not succeed (failure)')
+  })
+
+  it('script fails a non-relevant PR when COMMIT_AUTHORS_RESULT is unset', () => {
+    const { code, out } = cli({ CHANGES_RESULT: 'success', E2E_RELEVANT: 'false' }, ['COMMIT_AUTHORS_RESULT'])
+    expect(code).toBe(1)
+    expect(out).toContain('commit author detection did not succeed (no result)')
   })
 
   it('script exits 1 with no env', () => {

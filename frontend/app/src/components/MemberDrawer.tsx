@@ -25,25 +25,35 @@ import {
   CLIENTS_UNREADABLE,
   emailLabel,
   isProtectedAdmin,
-  MEMBER_UNBACKED,
+  accessRoleLabel,
   pickerClients,
   PROTECTED_ADMIN_NOTE,
   REMOVE_CONFIRMED,
   REMOVE_EXPLANATION,
   REMOVE_KEEP,
   removeConfirmQuestion,
+  roleCardsLock,
+  ROLE_CHANGE_CONFIRMED,
+  ROLE_CHANGE_KEEP,
+  roleChangeQuestion,
+  SELF_DEMOTION_WARNING,
   SUSPEND_EXPLANATION,
+  type AccessRole,
   type PatchableStatus,
 } from '../lib/members'
 import {
+  approverGapNotice,
+  approverGaps,
+  APPROVERS_UNCHECKED,
   drawerRoleHelper,
+  leavesApproverRole,
   rolesOfMember,
   stepsForMember,
   stepsNamedLine,
   SUSPENDED_STEPS_NOTE,
 } from '../lib/roles'
 import { useDismiss } from '../lib/useDismiss'
-import { AmberNote, ClientAccessPicker, DepartmentField, InitialsChip, MemberStatusPill, RoleCards, WorkflowRolePills } from './MemberParts'
+import { AmberNote, ClientAccessPicker, InitialsChip, MemberStatusPill, RoleCards, WorkflowRolePills } from './MemberParts'
 import type { PlatformCtx } from '../types'
 
 // §4 names this as the affordance, not as prose, so it stays a component constant rather
@@ -54,9 +64,8 @@ const MANAGE_ROLES = 'Manage roles'
 const ACCESS_ROLE_IDS = ACCESS_ROLES.map((r) => r.id)
 
 /**
- * Controls under ONE lock — `ClientAccessPicker` holds state and takes no `disabled`, and
- * `DepartmentField`'s `WfSelect` has one that would not reach it. A `<fieldset disabled>` gives all
- * four layers without plumbing a prop through a shared component for a Members-only need:
+ * Controls under ONE lock — `ClientAccessPicker` holds state and takes no `disabled`. A
+ * `<fieldset disabled>` gives all four layers without plumbing a prop through a shared component for a Members-only need:
  * HTML natively disables every descendant (1, unclickable and out of the tab order),
  * `pointerEvents: none` is a stronger (2) than any background swap, the sibling below is
  * (3), and `aria-describedby` on the fieldset is (4). This was the first `<fieldset>` in
@@ -64,13 +73,13 @@ const ACCESS_ROLE_IDS = ACCESS_ROLES.map((r) => r.id)
  * the same trade. `minInlineSize: 0` is mandatory: a fieldset defaults to `min-content` and
  * would refuse to shrink inside a 560px drawer.
  */
-function UnbackedField({ reason, noteId, dim = false, children }: { reason: string; noteId: string; dim?: boolean; children: ReactNode }) {
+function UnbackedField({ reason, noteId, children }: { reason: string; noteId: string; children: ReactNode }) {
   return (
     <>
       <fieldset
         disabled
         aria-describedby={noteId}
-        style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0, pointerEvents: 'none', ...(dim ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null) }}
+        style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0, pointerEvents: 'none', opacity: 0.45, cursor: 'not-allowed', filter: 'none' }}
       >
         {children}
       </fieldset>
@@ -118,6 +127,15 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
   useEffect(() => {
     if (confirmingRemove) keepRef.current?.focus()
   }, [confirmingRemove])
+
+  // Access-role write; `confirmRole` is the pending change awaiting the warning strip.
+  const [accessPending, setAccessPending] = useState(false)
+  const [accessError, setAccessError] = useState<string | null>(null)
+  const [confirmRole, setConfirmRole] = useState<AccessRole | null>(null)
+  const keepRoleRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (confirmRole) keepRoleRef.current?.focus()
+  }, [confirmRole])
 
   // Resolved from the CURRENT list on every render, never captured: `isProtectedAdmin` does
   // no identity lookup and answers `true` for a detached row (members.test.ts), so a stale
@@ -194,6 +212,36 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
     }
   }
 
+  async function changeRole(next: AccessRole) {
+    if (accessPending) return
+    setAccessError(null)
+    setAccessPending(true)
+    try {
+      await ctx.setMemberRole(memberId, next)
+    } catch (err: unknown) {
+      setAccessError(toApiError(err).message)
+    } finally {
+      setAccessPending(false)
+      setConfirmRole(null)
+    }
+  }
+
+  const selfDemotion = (next: AccessRole) => row.isYou && row.role === 'admin' && next !== 'admin'
+  const gapsFor = (next: AccessRole) => (rolesLanded ? approverGaps(ctx.roles, ctx.members, row.id, next) : [])
+
+  const pickRole = (next: AccessRole) => {
+    if (next === row.role) {
+      setConfirmRole(null)
+      return
+    }
+    const unchecked = !rolesLanded && leavesApproverRole(row, next)
+    if (selfDemotion(next) || gapsFor(next).length > 0 || unchecked) setConfirmRole(next)
+    else void changeRole(next)
+  }
+
+  const accessLock = roleCardsLock(ctx.members, row)
+  const confirmGaps = confirmRole ? gapsFor(confirmRole) : []
+
   const clientsLanded = ctx.entitiesState === 'ready' || ctx.entitiesState === 'empty'
   const storedClients = row.clientAccess ?? []
   // `null`: the server withheld this row's set from a non-admin viewer.
@@ -264,19 +312,84 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
           <div className="label" style={{ marginBottom: 8 }}>
             Access role
           </div>
-          {/* Every card disabled: the membership endpoint writes status only. Shown at the
-              person's REAL role rather than hidden, so the drawer still answers "what is she
-              allowed to do" — it just cannot change the answer. `idPrefix="drawer"` names the
-              radio group. */}
-          <RoleCards idPrefix="drawer" value={row.role} disabledIds={ACCESS_ROLE_IDS} note={MEMBER_UNBACKED.role} noteId={roleNoteId} />
+          <fieldset disabled={accessPending} style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0 }}>
+            <RoleCards
+              idPrefix="drawer"
+              value={row.role}
+              disabledIds={accessLock ? ACCESS_ROLE_IDS : undefined}
+              note={accessLock ?? undefined}
+              noteId={roleNoteId}
+              onChange={accessLock ? undefined : pickRole}
+            />
+          </fieldset>
+          {confirmRole && (
+            <div
+              data-testid="member-role-confirm"
+              style={{ marginTop: 8, padding: '9px 12px', background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)' }}
+            >
+              <p style={{ margin: '0 0 8px', fontSize: 12.5, lineHeight: 1.5, color: 'var(--fg-1)' }}>
+                {roleChangeQuestion(row.name, accessRoleLabel(confirmRole), row.isYou)}
+              </p>
+              {selfDemotion(confirmRole) && (
+                <AmberNote testId="member-role-self-warning" style={{ marginBottom: 8, padding: '9px 11px', fontSize: 11.5 }}>
+                  {SELF_DEMOTION_WARNING}
+                </AmberNote>
+              )}
+              {(rolesLanded ? confirmGaps.length > 0 : leavesApproverRole(row, confirmRole)) && (
+                <AmberNote testId="member-role-gaps" style={{ marginBottom: 8, padding: '9px 11px', fontSize: 11.5 }}>
+                  {rolesLanded ? approverGapNotice(row.name, confirmGaps.map((r) => r.title)) : APPROVERS_UNCHECKED}
+                </AmberNote>
+              )}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <button
+                  type="button"
+                  ref={keepRoleRef}
+                  onClick={() => setConfirmRole(null)}
+                  disabled={accessPending}
+                  className="v2-btn v2-btn-ghost pf-btn"
+                  data-testid="member-role-keep"
+                  style={{ height: 32, fontSize: 12.5 }}
+                >
+                  {ROLE_CHANGE_KEEP}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void changeRole(confirmRole)}
+                  disabled={accessPending}
+                  className="v2-btn v2-btn-primary pf-btn"
+                  data-testid="member-role-confirmed"
+                  style={{ height: 32, fontSize: 12.5 }}
+                >
+                  {ROLE_CHANGE_CONFIRMED}
+                </button>
+              </div>
+            </div>
+          )}
+          {accessError && (
+            <div
+              data-testid="member-drawer-access-error"
+              style={{
+                marginTop: 8,
+                padding: '10px 12px',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--status-red-bg)',
+                border: '1px solid var(--status-red-border)',
+                fontSize: 12.5,
+                lineHeight: 1.5,
+                color: 'var(--status-red-text)',
+              }}
+            >
+              {accessError}
+            </div>
+          )}
 
-          {ctx.mode === 'firm' ? (
+          {ctx.mode === 'firm' && (
             <>
               <div className="label" style={{ margin: '22px 0 8px' }}>
                 Client access
               </div>
               {row.role === 'admin' ? (
-                <UnbackedField reason={ADMIN_ALL_CLIENTS} noteId={scopeNoteId} dim>
+                <UnbackedField reason={ADMIN_ALL_CLIENTS} noteId={scopeNoteId}>
                   <ClientAccessPicker idPrefix="drawer" value="all" clients={[]} />
                 </UnbackedField>
               ) : clientsUnreadable ? (
@@ -320,12 +433,6 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
                 </>
               )}
             </>
-          ) : (
-            <div style={{ marginTop: 22 }}>
-              <UnbackedField reason={MEMBER_UNBACKED.department} noteId={scopeNoteId}>
-                <DepartmentField department={null} />
-              </UnbackedField>
-            </div>
           )}
 
           {/* BOTH modes — a role staffs people in either workspace now. */}
@@ -349,7 +456,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
             </button>
           </div>
           {/* The visual half of the in-flight lock — UnbackedField's `<fieldset disabled>`
-              shape (line 71 above), inlined rather than reused: that component always renders
+              shape (see its docblock), inlined rather than reused: that component always renders
               a reason note, and a staffing write in flight has none to show. */}
           <fieldset disabled={rolePending} style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0 }}>
             {rolesLanded ? (

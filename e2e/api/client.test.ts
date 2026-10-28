@@ -870,6 +870,20 @@ describe('setInvitationToken and inviteWithToken', () => {
     expect(res.status).toBe(403)
   })
 
+  it("setMemberRole PATCHes {role} to the member's role path and returns the raw answer", async () => {
+    const { setMemberRole } = await import('./client')
+    const stub = stubFetchSequence({ status: 403, body: { error: 'refused' } })
+
+    const res = await setMemberRole('admin-token', 'user-1', 'reviewer')
+
+    const [url, init] = stub.mock.calls[0] as unknown as [string, { method: string; body: string; headers: Record<string, string> }]
+    expect(url.endsWith('/api/tenancy/v1/memberships/user-1/role')).toBe(true)
+    expect(init.method).toBe('PATCH')
+    expect(init.headers.Authorization).toBe('Bearer admin-token')
+    expect(JSON.parse(init.body)).toEqual({ role: 'reviewer' })
+    expect(res.status).toBe(403)
+  })
+
   it('inviteWithToken throws when the invite is refused and seeds nothing', async () => {
     const { inviteWithToken } = await import('./client')
     const stub = stubFetchSequence({ status: 400, body: { error: 'bad' } })

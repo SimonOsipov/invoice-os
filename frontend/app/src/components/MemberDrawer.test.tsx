@@ -9,8 +9,16 @@ import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
-import { PROTECTED_ADMIN_NOTE, removeConfirmQuestion, type Member } from '../lib/members'
-import { drawerRoleHelper, stepsNamedLine, SUSPENDED_STEPS_NOTE, type Role } from '../lib/roles'
+import {
+  ADMIN_ALL_CLIENTS,
+  PROTECTED_ADMIN_NOTE,
+  removeConfirmQuestion,
+  roleChangeQuestion,
+  ROLE_ADMIN_ONLY,
+  SELF_DEMOTION_WARNING,
+  type Member,
+} from '../lib/members'
+import { approverGapNotice, APPROVERS_UNCHECKED, drawerRoleHelper, stepsNamedLine, SUSPENDED_STEPS_NOTE, type Role } from '../lib/roles'
 import type { Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 import { MemberDrawer } from './MemberDrawer'
@@ -325,7 +333,7 @@ describe('RALPH fix (appr-04-06): the drawer read side must not report zero role
 // unlanded policies fetch, but its premise is false: `stepsForMember` answers `null` at zero BY
 // CONTRACT (lib/roles.ts:170-173 — "THE GATE IS THE COUNT: holding a role a policy never names
 // answers `null`, not a section reading 'Named in 0 approval steps' above an empty list"), and
-// MemberDrawer.tsx:306 renders `{steps && …}`. An unlanded fetch renders NOTHING, which makes no
+// MemberDrawer.tsx's `steps &&` gate renders `{steps && …}`. An unlanded fetch renders NOTHING, which makes no
 // false claim. An affordance here would contradict a shipped design note, so this pins the
 // contract instead: the gate stays the null, never a count re-derived off `ctx.policies`.
 
@@ -377,59 +385,6 @@ describe('APPR-09-06 AC-2: an unlanded policies fetch renders no steps line at a
     )
 
     expect(screen.getByTestId('member-steps-named').textContent).toBe(stepsNamedLine(1))
-  })
-})
-
-// ----------------------------------------------------------------------------
-// APPR-10-04 Stage 4 QA — the primitive widened under this screen
-// ----------------------------------------------------------------------------
-
-describe('APPR-10-04 QA AC-1/AC-10: the Department field keeps the fieldset trade', () => {
-  // The drawer's in-house branch reaches the Workflows-owned `WfSelect` through
-  // `DepartmentField` (MemberParts.tsx:427), inside `UnbackedField`'s `<fieldset disabled>`.
-  // APPR-10-04 gave that primitive its first `disabled` prop and rewrote the comment at
-  // MemberDrawer.tsx:63-64 that said it had none — but the trade itself is unchanged, because
-  // the lock still has to reach `ClientAccessPicker` too, which takes no prop of its own.
-  //
-  // Both halves matter and only together: the select must stay inert (the fieldset still bites)
-  // AND its own `.disabled` must stay false (the new prop did not silently reach this site).
-  it('inert by its fieldset ancestor, never by its own prop, and never repainted', () => {
-    render(
-      <MemberDrawer
-        ctx={drawerCtx({ mode: 'inhouse' })}
-        memberId="u2"
-        onClose={vi.fn()}
-        onStatus={vi.fn()}
-        statusError={null}
-      />,
-    )
-
-    const dept = screen.getByLabelText('Department') as HTMLElement
-    const select = (dept.tagName === 'LABEL' ? dept.querySelector('select') : dept) as HTMLSelectElement
-    expect(select, 'the Department field is not a <select>, so the properties below read nothing').toBeTruthy()
-    expect(select.tagName).toBe('SELECT')
-
-    // The lock, unchanged: ancestry, not the control's own attribute. jsdom reflects the CONTENT
-    // attribute only, so these two are genuinely different questions here.
-    const lock = select.closest('fieldset[disabled]')
-    expect(lock, "UnbackedField's fieldset no longer wraps the Department select").toBeTruthy()
-    expect(lock!.getAttribute('aria-describedby'), 'the fieldset lost layer 4').toBeTruthy()
-    expect(select.disabled, "APPR-10-04's new prop leaked into a call site that passes nothing").toBe(false)
-    expect(select.getAttribute('title'), 'the primitive defaulted a tooltip onto this call site').toBeNull()
-    expect(select.getAttribute('aria-describedby'), "the select re-announces the fieldset's reason a second time").toBeNull()
-
-    // Unrepainted: the fieldset's own `pointerEvents: none` is the visual layer here, and the
-    // select must keep its resting colours. An unconditional paint inside the primitive would
-    // mute it and no Members spec would have noticed.
-    expect(select.style.backgroundColor, 'the Department select lost its resting background').toBe('var(--bg-2)')
-    expect(select.style.color, 'the Department select lost its resting foreground').toBe('var(--fg-1)')
-    expect(select.style.cursor, 'the Department select paints itself dead').toBe('pointer')
-
-    // AC-10's behavioural half: the drawer still renders UnbackedField's visible reason note,
-    // which is the layer the fieldset cannot supply and the comment rewrite must not have moved.
-    const note = document.getElementById(lock!.getAttribute('aria-describedby')!)
-    expect(note, 'the fieldset points at a reason node that does not exist').toBeTruthy()
-    expect((note!.textContent ?? '').trim(), 'the reason note rendered empty').not.toBe('')
   })
 })
 
@@ -499,8 +454,9 @@ describe('the drawer shell and bands', () => {
     expect(footer.style.borderTop).toBe('1px solid var(--line-1)')
   })
 
-  it('the three access-role cards show the real role, are all disabled, and dim to .45', () => {
-    open()
+  it('the three access-role cards show the real role, are all disabled for a non-admin viewer, and dim to .45', () => {
+    const setMemberRole = vi.fn()
+    open({ setMemberRole })
 
     const cards = ['admin', 'preparer', 'reviewer'].map((id) => screen.getByTestId(`drawer-role-${id}`))
     expect(cards).toHaveLength(3)
@@ -513,6 +469,9 @@ describe('the drawer shell and bands', () => {
     }
     expect(cards[1].style.border).toBe('1px solid var(--action)')
     expect(cards[0].style.border).toBe('1px solid var(--line-2)')
+    expect(screen.getByTestId('member-drawer').textContent).toContain(ROLE_ADMIN_ONLY)
+    fireEvent.click(radios[2])
+    expect(setMemberRole).not.toHaveBeenCalled()
   })
 
   it('the access-role radios are painted by the design, not by the browser default', () => {
@@ -578,20 +537,30 @@ describe('the drawer shell and bands', () => {
     expect(dims.length, 'nothing above the Client access pair dims it').toBeGreaterThan(0)
     expect(Math.min(...dims)).toBeGreaterThanOrEqual(0.45)
     expect(Math.max(...dims)).toBeLessThanOrEqual(0.7)
-    const dimmed = screen.getByTestId('drawer-scope-all').closest('fieldset') as HTMLElement
+    const dimmed = screen.getByTestId('drawer-scope-all').closest('fieldset') as HTMLFieldSetElement
     expect(dimmed.style.opacity).toBe('0.45')
     expect(dimmed.style.cursor).toBe('not-allowed')
     expect(dimmed.style.filter).toBe('none')
+    expect(dimmed.disabled).toBe(true)
+    const noteId = dimmed.getAttribute('aria-describedby')
+    expect(noteId, 'the fieldset lost layer 4').toBeTruthy()
+    expect(document.getElementById(noteId!)?.textContent).toBe(ADMIN_ALL_CLIENTS)
+    for (const input of dimmed.querySelectorAll('input')) {
+      expect(input.disabled, 'the input carries its own disabled; the lock is the fieldset ancestor').toBe(false)
+      expect(input.closest('fieldset[disabled]')).toBe(dimmed)
+    }
   })
 
-  it('in-house leaves the Department select to its own disabled paint', () => {
-    open({ mode: 'inhouse' })
+  it.each(['firm', 'inhouse'] as const)('the %s drawer renders no Department control', (mode) => {
+    open({ mode })
 
-    const select = screen.getByRole('combobox', { name: 'Department' }) as HTMLSelectElement
-    const fieldset = select.closest('fieldset') as HTMLFieldSetElement
-    expect(fieldset, 'the Department select left its disabled fieldset').toBeTruthy()
-    expect(fieldset.disabled).toBe(true)
-    expect(fieldset.style.opacity, 'a dimmed fieldset would stack on the select disabled paint').toBe('')
+    expect(screen.queryByRole('combobox', { name: 'Department' })).toBeNull()
+    expect(screen.queryByLabelText('Department')).toBeNull()
+    expect(screen.getByTestId('member-drawer').textContent).not.toMatch(/department/i)
+    expect(screen.getByTestId('drawer-manage-roles')).toBeTruthy()
+    expect(screen.getByTestId('drawer-role-admin')).toBeTruthy()
+    expect(screen.getByText('Workflow roles')).toBeTruthy()
+    expect(screen.getByTestId('member-danger-zone')).toBeTruthy()
   })
 
   it('a status error for another member renders no strip here', () => {
@@ -867,5 +836,172 @@ describe('DEL-02-05: Remove in the drawer', () => {
     fireEvent.click(screen.getByTestId('member-remove'))
     expect(screen.getByTestId('member-remove-confirm')).toBeTruthy()
     expect(screen.getByTestId('member-steps-named').textContent).toBe(stepsNamedLine(2))
+  })
+})
+
+describe('ACCESS-01: the drawer saves the access role', () => {
+  const me = () => member({ id: 'me', name: 'Me Admin', role: 'admin', isYou: true })
+  const other = () => member({ id: 'a2', name: 'Other Admin', role: 'admin' })
+  const u2 = (over: Partial<Member> = {}) => member({ id: 'u2', name: 'Bo Person', role: 'preparer', ...over })
+  const REFUSED = "only an admin can change a member's role"
+
+  function mount(over: Record<string, unknown> = {}, id = 'u2') {
+    const setMemberRole = (over.setMemberRole as ReturnType<typeof vi.fn>) ?? vi.fn().mockResolvedValue(undefined)
+    const ctx = drawerCtx({ members: [me(), other(), u2()], ...over, setMemberRole })
+    render(<MemberDrawer ctx={ctx} memberId={id} onClose={vi.fn()} onStatus={vi.fn()} statusError={null} />)
+    return setMemberRole
+  }
+  const card = (id: string) => screen.getByTestId(`drawer-role-${id}`).querySelector('input') as HTMLInputElement
+  const pick = (id: string) => fireEvent.click(card(id))
+  const strip = () => screen.queryByTestId('member-role-confirm')
+  const text = (id: string) => screen.getByTestId(id).textContent
+
+  it("ACCESS-01: an admin viewer's role cards are live and a click writes once", async () => {
+    const setMemberRole = mount()
+
+    expect(['admin', 'preparer', 'reviewer'].map((id) => card(id).disabled)).toEqual([false, false, false])
+    pick('reviewer')
+    await waitFor(() => expect(setMemberRole).toHaveBeenCalledTimes(1))
+    expect(setMemberRole).toHaveBeenCalledWith('u2', 'reviewer')
+    expect(strip()).toBeNull()
+  })
+
+  it('ACCESS-01: clicking the current role sends nothing', () => {
+    const setMemberRole = mount()
+
+    pick('preparer')
+    expect(setMemberRole).not.toHaveBeenCalled()
+    expect(strip()).toBeNull()
+  })
+
+  it('ACCESS-01: a second click while a role write is in flight sends nothing', () => {
+    const setMemberRole = mount({ setMemberRole: vi.fn(() => new Promise(() => {})) })
+
+    pick('reviewer')
+    pick('admin')
+    expect(setMemberRole).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('drawer-role-admin').closest('fieldset')?.hasAttribute('disabled')).toBe(true)
+  })
+
+  it('ACCESS-01: a refused role write shows the server sentence and keeps the stored role', async () => {
+    mount({ setMemberRole: vi.fn().mockRejectedValue(new ApiError('http', REFUSED, 403)) })
+
+    pick('reviewer')
+    await waitFor(() => expect(text('member-drawer-access-error')).toBe(REFUSED))
+    expect(card('preparer').checked).toBe(true)
+    expect(card('reviewer').checked).toBe(false)
+  })
+
+  it("ACCESS-01: the sole active admin's cards are locked with the protected note", () => {
+    mount({ members: [me(), u2({ status: 'suspended' })] }, 'me')
+
+    expect(['admin', 'preparer', 'reviewer'].map((id) => card(id).disabled)).toEqual([true, true, true])
+    const describedBy = card('admin').getAttribute('aria-describedby') as string
+    expect(document.getElementById(describedBy)?.textContent).toBe(PROTECTED_ADMIN_NOTE)
+  })
+
+  it('ACCESS-01: an unlanded roles fetch leaves the cards live and warns that approvers are unchecked', async () => {
+    for (const rolesState of ['loading', 'error']) {
+      cleanup()
+      const setMemberRole = mount({ rolesState, roles: [], members: [me(), other(), u2({ role: 'reviewer' })] })
+
+      expect(['admin', 'preparer', 'reviewer'].map((id) => card(id).disabled)).toEqual([false, false, false])
+      pick('preparer')
+      expect(text('member-role-gaps')).toBe(APPROVERS_UNCHECKED)
+      expect(setMemberRole).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByTestId('member-role-confirmed'))
+      await waitFor(() => expect(setMemberRole).toHaveBeenCalledTimes(1))
+      expect(setMemberRole).toHaveBeenCalledWith('u2', 'preparer')
+      await waitFor(() => expect(strip()).toBeNull())
+
+      pick('admin')
+      expect(strip()).toBeNull()
+      await waitFor(() => expect(setMemberRole).toHaveBeenCalledTimes(2))
+      expect(setMemberRole).toHaveBeenLastCalledWith('u2', 'admin')
+    }
+  })
+
+  it('ACCESS-01: a confirmed self-demotion locks the viewer out of the cards', async () => {
+    const setMemberRole = vi.fn()
+    function Harness() {
+      const [mine, setMine] = useState<Member['role']>('admin')
+      setMemberRole.mockImplementation(async (_id: string, next: Member['role']) => setMine(next))
+      const ctx = drawerCtx({ members: [{ ...me(), role: mine }, other()], setMemberRole })
+      return <MemberDrawer ctx={ctx} memberId="me" onClose={vi.fn()} onStatus={vi.fn()} statusError={null} />
+    }
+    render(<Harness />)
+
+    pick('preparer')
+    fireEvent.click(screen.getByTestId('member-role-confirmed'))
+    await waitFor(() => expect(strip()).toBeNull())
+    expect(setMemberRole).toHaveBeenCalledWith('me', 'preparer')
+    expect(screen.queryByTestId('member-drawer-access-error')).toBeNull()
+    expect(['admin', 'preparer', 'reviewer'].map((id) => card(id).disabled)).toEqual([true, true, true])
+    expect(screen.getByTestId('member-drawer').textContent).toContain(ROLE_ADMIN_ONLY)
+  })
+
+  it('ACCESS-01: a refused write from the confirm strip shows the server sentence and clears the strip', async () => {
+    const setMemberRole = vi.fn().mockRejectedValue(new ApiError('http', 'membership not found', 404))
+    mount({ setMemberRole, roles: [role({ key: 'cfo', title: 'CFO', members: ['u2'] })], members: [me(), other(), u2({ role: 'reviewer' })] })
+
+    pick('preparer')
+    fireEvent.click(screen.getByTestId('member-role-confirmed'))
+    await waitFor(() => expect(text('member-drawer-access-error')).toBe('membership not found'))
+    expect(card('reviewer').checked).toBe(true)
+    expect(strip()).toBeNull()
+
+    pick('preparer')
+    expect(text('member-role-gaps')).toBe(approverGapNotice('Bo Person', ['CFO']))
+    expect(screen.getByTestId('member-role-confirmed').classList.contains('v2-btn-primary')).toBe(true)
+  })
+
+  it('ACCESS-01: a refused role write then a successful one clears the error', async () => {
+    const setMemberRole = vi.fn().mockRejectedValueOnce(new ApiError('http', REFUSED, 403)).mockResolvedValue(undefined)
+    mount({ setMemberRole })
+
+    pick('reviewer')
+    await waitFor(() => expect(text('member-drawer-access-error')).toBe(REFUSED))
+    pick('admin')
+    await waitFor(() => expect(setMemberRole).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.queryByTestId('member-drawer-access-error')).toBeNull())
+  })
+
+  it('ACCESS-01: an admin demoting themselves is warned first', async () => {
+    const setMemberRole = mount({}, 'me')
+
+    pick('preparer')
+    expect(text('member-role-confirm')).toContain(roleChangeQuestion('Me Admin', 'Preparer', true))
+    expect(text('member-role-self-warning')).toBe(SELF_DEMOTION_WARNING)
+    expect(document.activeElement).toBe(screen.getByTestId('member-role-keep'))
+    expect(setMemberRole).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTestId('member-role-keep'))
+    expect(strip()).toBeNull()
+    expect(setMemberRole).not.toHaveBeenCalled()
+    expect(card('admin').checked).toBe(true)
+    expect(card('preparer').checked).toBe(false)
+
+    pick('preparer')
+    fireEvent.click(screen.getByTestId('member-role-confirmed'))
+    await waitFor(() => expect(setMemberRole).toHaveBeenCalledTimes(1))
+    expect(setMemberRole).toHaveBeenCalledWith('me', 'preparer')
+  })
+
+  it('ACCESS-01: demoting the only approver of a role names the role first', async () => {
+    const setMemberRole = mount({ roles: [role({ key: 'cfo', title: 'CFO', members: ['u2'] })], members: [me(), other(), u2({ role: 'reviewer' })] })
+
+    pick('preparer')
+    expect(text('member-role-gaps')).toBe(approverGapNotice('Bo Person', ['CFO']))
+    expect(setMemberRole).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('member-role-confirmed'))
+    await waitFor(() => expect(setMemberRole).toHaveBeenCalledTimes(1))
+  })
+
+  it('ACCESS-01: reviewer to admin opens no strip', async () => {
+    const setMemberRole = mount({ roles: [role({ key: 'cfo', title: 'CFO', members: ['u2'] })], members: [me(), other(), u2({ role: 'reviewer' })] })
+
+    pick('admin')
+    expect(strip()).toBeNull()
+    await waitFor(() => expect(setMemberRole).toHaveBeenCalledTimes(1))
   })
 })

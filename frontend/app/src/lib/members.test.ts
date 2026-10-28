@@ -24,6 +24,13 @@ import {
   NO_CLIENTS_IN_WORKSPACE,
   pickerClients,
   setMembershipClients,
+  setMembershipRole,
+  roleCardsLock,
+  roleChangeQuestion,
+  ROLE_ADMIN_ONLY,
+  SELF_DEMOTION_WARNING,
+  ROLE_CHANGE_KEEP,
+  ROLE_CHANGE_CONFIRMED,
   companySetupAccess,
   CLIENT_USERS_COPY,
   delegateCandidates,
@@ -48,7 +55,6 @@ import {
   listInvitations,
   listMembers,
   memberInitials,
-  MEMBER_UNBACKED,
   membersSurface,
   membersViewState,
   mergeChips,
@@ -90,7 +96,7 @@ import { isApprover } from './roles'
 // The mock roster, moved here verbatim when lib/members.ts stopped shipping a seed. It is a
 // FIXTURE now, not a shipped constant: it exercises the reducers and the derivations over
 // rows the live directory (identity + access role + status only) cannot express — invited
-// rows, departments, per-person client access, `invitedBy`.
+// rows, per-person client access, `invitedBy`.
 const SEED_FIRM_MEMBERS: readonly Member[] = [
   {
     id: 'mf1',
@@ -453,17 +459,39 @@ describe('activeAdmins (T1.38, §9)', () => {
 describe('constants (T1.39–T1.40, §3/§6)', () => {
   it('carries the three access roles with §3 copy verbatim (T1.39)', () => {
     expect(ACCESS_ROLES.map((r) => [r.id, r.label, r.description])).toEqual([
-      ['admin', 'Admin', 'Full access. Manages members, settings, connectors and certificates.'],
+      ['admin', 'Admin', 'Full access. Manages members and settings.'],
       ['preparer', 'Preparer', 'Creates, imports and validates invoices. Cannot approve or transmit.'],
       ['reviewer', 'Reviewer', 'Reviews and signs off on invoices in approval steps. Cannot manage members or settings.'],
     ])
+    expect(ACCESS_ROLES.some((r) => /connector|certificate/i.test(r.description))).toBe(false)
   })
 
-  it('carries eight capability rows: admin all, reviewer the first five, preparer the first three (T1.40)', () => {
-    expect(CAPABILITY_ROWS).toHaveLength(8)
-    expect(CAPABILITY_ROWS.map((r) => r.admin)).toEqual([true, true, true, true, true, true, true, true])
-    expect(CAPABILITY_ROWS.map((r) => r.reviewer)).toEqual([true, true, true, true, true, false, false, false])
-    expect(CAPABILITY_ROWS.map((r) => r.preparer)).toEqual([true, true, true, false, false, false, false, false])
+  it('pins the three role columns per row (T1.40)', () => {
+    expect(CAPABILITY_ROWS).toHaveLength(12)
+    expect(CAPABILITY_ROWS.map((r) => r.admin)).toEqual(Array(12).fill(true))
+    expect(CAPABILITY_ROWS.map((r) => r.reviewer)).toEqual([true, true, true, true, true, false, false, false, false, false, false, false])
+    expect(CAPABILITY_ROWS.map((r) => r.preparer)).toEqual([true, true, true, false, false, false, false, false, false, false, false, false])
+  })
+
+  it('CAPABILITY_ROWS ends with the two Coming soon rows', () => {
+    expect(CAPABILITY_ROWS.slice(-2).map((r) => [r.label, r.soon])).toEqual([
+      ['manage ERP connectors', true],
+      ['manage signing certificates', true],
+    ])
+    expect(CAPABILITY_ROWS.slice(0, -2).some((r) => 'soon' in r)).toBe(false)
+  })
+
+  it('no live row label says ERP; the import row reads as a file import', () => {
+    const live = CAPABILITY_ROWS.filter((r) => !r.soon)
+    expect(live.some((r) => /ERP/.test(r.label))).toBe(false)
+    expect(CAPABILITY_ROWS[1].label).toBe('import invoices from a file')
+  })
+
+  it('at most ten live rows, no department row, unique labels', () => {
+    const labels = CAPABILITY_ROWS.map((r) => r.label)
+    expect(CAPABILITY_ROWS.filter((r) => !r.soon).length).toBeLessThanOrEqual(10)
+    expect(labels.some((l) => /department/i.test(l))).toBe(false)
+    expect(new Set(labels).size).toBe(labels.length)
   })
 })
 
@@ -500,16 +528,18 @@ describe('activeAdmins — status precedence (QA14, §9)', () => {
 })
 
 describe('CAPABILITY_ROWS copy (QA18, §6)', () => {
-  it('carries §6\'s eight capability labels, in §6\'s order (QA18)', () => {
-    // T1.40 pins the row count and the three boolean columns but never looks at a label,
-    // so the copy MEMB-01-05 renders was entirely unenforced.
+  it('carries §6\'s capability labels, in order (QA18)', () => {
     expect(CAPABILITY_ROWS.map((r) => r.label)).toEqual([
       'create and edit invoices',
-      'import from file or ERP',
+      'import invoices from a file',
       'run validation',
       'approve in approval steps',
-      'transmit to NRS/MBS',
-      'invite and manage members',
+      'transmit invoices, change their status and mark failed ones resolved outside',
+      'invite, suspend and remove members; change their role and client access',
+      'manage approval policies and workflow roles',
+      'manage custom rules',
+      'add, edit and archive clients',
+      'export the workspace; schedule or cancel its deletion',
       'manage ERP connectors',
       'manage signing certificates',
     ])
@@ -1043,7 +1073,7 @@ describe('AC-12 — the members banner string is the roles-tab string', () => {
 // Authored WITH the constants rather than before them: MEMB-01-05 is `Test-first: no` and
 // everything else it ships is rendering, whose oracle is the deploy gate. Copy is the one
 // part a screenshot cannot audit — a reviewer reads a fluent paraphrase as correct — and
-// AC#1 requires the footnote VERBATIM. QA18 already pins the eight row labels; this pins
+// AC#1 requires the footnote VERBATIM. QA18 pins the row labels; this pins
 // the other half of that obligation, plus the `Client users` card's sentence.
 
 describe('MEMB-01-05 expander copy (T5.1, §6)', () => {
@@ -1057,6 +1087,11 @@ describe('MEMB-01-05 expander copy (T5.1, §6)', () => {
 // AC-13 — the footnote and the drawer helper both speak in workflow roles now.
 describe('AC-13 — the capability footnote says workflow role, not position', () => {
   it('CAPABILITY_FOOTNOTE mentions a workflow role and no longer a position; REVIEWER_HINT is gone', () => {
+    expect(CAPABILITY_FOOTNOTE).toBe(
+      'An admin or a reviewer can act on approval steps. A workflow role, named by the policy that routes the invoice, decides which steps.',
+    )
+    expect(CAPABILITY_FOOTNOTE).toContain('admin')
+    expect(CAPABILITY_FOOTNOTE).toContain('reviewer')
     expect(CAPABILITY_FOOTNOTE).toContain('workflow role')
     expect(CAPABILITY_FOOTNOTE).not.toContain('position')
     expect('REVIEWER_HINT' in membersModule).toBe(false)
@@ -1414,7 +1449,7 @@ describe('APPR-00 Q1 — delegateCandidates admits the admin in firm mode too', 
 // ============================================================================
 // Authored as Mode A RED specs, and that RED phase is over: listMembers,
 // setMembershipStatus, toMember, memberInitials, emailLabel and membersViewState are
-// implemented, MEMBER_UNBACKED ships populated, and filterMembers/classifyInvites both
+// implemented, and filterMembers/classifyInvites both
 // guard a null email with `(m.email ?? '').toLowerCase()`. Every spec below is green
 // against the shipped implementations.
 
@@ -2155,20 +2190,6 @@ describe('AC-5 — filterMembers and classifyInvites tolerate a null email', () 
   })
 })
 
-describe('AC-7 — MEMBER_UNBACKED', () => {
-  it('supplies one distinct, non-empty sentence per unbacked control', () => {
-    const keys = ['role', 'department'] as const
-    for (const k of keys) expect(MEMBER_UNBACKED[k]).toBeTruthy()
-    expect((MEMBER_UNBACKED as Record<string, string>).clientAccess).toBeUndefined()
-    const values = keys.map((k) => MEMBER_UNBACKED[k])
-    expect(new Set(values).size).toBe(keys.length)
-    expect(Object.keys(MEMBER_UNBACKED).sort()).toEqual([...keys].sort())
-    expect('invite' in MEMBER_UNBACKED, 'the invite endpoint exists; its "not yet" sentence is retired').toBe(false)
-    expect('inviteLink' in MEMBER_UNBACKED).toBe(false)
-    expect('revokeInvite' in MEMBER_UNBACKED).toBe(false)
-  })
-})
-
 describe('AC-8 — membersViewState never turns an error into empty', () => {
   it('null base -> idle', () => {
     expect(membersViewState(null, 'ready')).toBe('idle')
@@ -2378,5 +2399,66 @@ describe('LOGFIX-06-02 — companySetupAccess', () => {
     for (const [state, members, want] of rows) {
       expect(companySetupAccess(state, members), `${state} / ${members.map((m) => m.role + ':' + m.status).join() || 'no rows'}`).toBe(want)
     }
+  })
+})
+
+describe('ACCESS-01-04 — the role write and its copy', () => {
+  it('setMembershipRole patches the role', async () => {
+    const answer = wire({ user_id: 'u1', role: 'reviewer' })
+    const af = vi.fn().mockResolvedValue(answer) as unknown as AuthedFetch
+
+    const got = await setMembershipRole(af, 'https://gw', 'u1', 'reviewer')
+
+    expect(af).toHaveBeenCalledTimes(1)
+    expect(af).toHaveBeenCalledWith('https://gw/api/tenancy/v1/memberships/u1/role', { method: 'PATCH', body: { role: 'reviewer' } })
+    expect(got).toBe(answer)
+  })
+
+  const row = (id: string, role: Member['role'], status: MemberStatus, isYou = false): Member => ({
+    ...firmRow(id, status),
+    id,
+    role,
+    isYou,
+  })
+
+  it('roleCardsLock: a non-admin viewer reads the admin-only note', () => {
+    const admin = row('a1', 'admin', 'active')
+    const members = [row('p1', 'preparer', 'active', true), admin]
+    expect(roleCardsLock(members, admin)).toBe(ROLE_ADMIN_ONLY)
+  })
+
+  it('roleCardsLock: the sole active admin is locked with the protected note', () => {
+    const me = row('a1', 'admin', 'active', true)
+    const members = [me, row('a2', 'admin', 'suspended')]
+    expect(roleCardsLock(members, me)).toBe(PROTECTED_ADMIN_NOTE)
+  })
+
+  it('roleCardsLock: an admin viewer on a changeable row gets no lock', () => {
+    const other = row('a2', 'admin', 'active')
+    const prep = row('p1', 'preparer', 'active')
+    const members = [row('a1', 'admin', 'active', true), other, prep]
+    expect(roleCardsLock(members, other)).toBeNull()
+    expect(roleCardsLock(members, prep)).toBeNull()
+  })
+
+  it('roleCardsLock: a suspended admin viewer is not an admin viewer', () => {
+    const me = row('a1', 'admin', 'suspended', true)
+    const prep = row('p1', 'preparer', 'active')
+    expect(roleCardsLock([me, row('a2', 'admin', 'active'), prep], prep)).toBe(ROLE_ADMIN_ONLY)
+  })
+
+  it('roleCardsLock: a suspended sole admin row is not protected', () => {
+    const me = row('a1', 'admin', 'active', true)
+    const gone = row('a2', 'admin', 'suspended')
+    expect(roleCardsLock([me, gone], gone)).toBeNull()
+  })
+
+  it('access-role change copy is byte-pinned', () => {
+    expect(ROLE_ADMIN_ONLY).toBe('Only an admin can change an access role.')
+    expect(SELF_DEMOTION_WARNING).toBe('You will lose admin controls in this workspace. Only another admin can give them back.')
+    expect(ROLE_CHANGE_KEEP).toBe('Keep role')
+    expect(ROLE_CHANGE_CONFIRMED).toBe('Change role')
+    expect(roleChangeQuestion('Ada', 'Reviewer', true)).toBe('Change your access role to Reviewer?')
+    expect(roleChangeQuestion('Ada', 'Reviewer', false)).toBe("Change Ada's access role to Reviewer?")
   })
 })

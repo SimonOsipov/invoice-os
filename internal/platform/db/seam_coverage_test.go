@@ -1072,6 +1072,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"PATCH /v1/entities/{id}":                                {verdict: scCovered},
 	"PATCH /v1/invoices/{id}":                                {verdict: scCovered},
 	"PATCH /v1/memberships/{user_id}":                        {verdict: scCovered},
+	"PATCH /v1/memberships/{user_id}/role":                   {verdict: scCovered},
 	"POST /v1/me/deletion":                                   {verdict: scCovered},
 	"POST /v1/memberships/{user_id}/remove":                  {verdict: scCovered},
 	"POST /v1/workspace/deletion":                            {verdict: scCovered},

@@ -51,6 +51,7 @@ let membershipCalls = 0
 let clientsPut: { calls: Array<{ url: string; body: unknown }>; answer: () => { status: number; body: unknown } } = { calls: [], answer: () => ({ status: 200, body: {} }) }
 
 // The POST .../remove calls and answer, and the count of workflow-roles GETs.
+let rolePatch: { calls: Array<{ url: string; body: unknown }>; answer: () => { status: number; body: unknown } } = { calls: [], answer: () => ({ status: 200, body: {} }) }
 let removePost: { calls: string[]; answer: () => { status: number; body: unknown } } = { calls: [], answer: () => ({ status: 200, body: {} }) }
 let rolesGets = 0
 
@@ -63,6 +64,11 @@ function stubGateway() {
       if (url.endsWith('/clients')) {
         clientsPut.calls.push({ url, body: init?.body ? JSON.parse(init.body) : undefined })
         const { status, body } = clientsPut.answer()
+        return Promise.resolve({ ok: status < 400, status, statusText: '', json: () => Promise.resolve(body) })
+      }
+      if (url.endsWith('/role')) {
+        rolePatch.calls.push({ url, body: init?.body ? JSON.parse(init.body) : undefined })
+        const { status, body } = rolePatch.answer()
         return Promise.resolve({ ok: status < 400, status, statusText: '', json: () => Promise.resolve(body) })
       }
       if (url.endsWith('/remove')) {
@@ -100,6 +106,7 @@ beforeEach(() => {
   membershipReplies = []
   membershipCalls = 0
   clientsPut = { calls: [], answer: () => ({ status: 200, body: {} }) }
+  rolePatch = { calls: [], answer: () => ({ status: 200, body: {} }) }
   removePost = { calls: [], answer: () => ({ status: 200, body: {} }) }
   rolesGets = 0
   vi.stubGlobal('localStorage', createMemoryStorage())
@@ -166,6 +173,26 @@ describe('App: the members mirror', () => {
       await expect(ctx().setMemberClients('u2', 'all')).rejects.toBeTruthy()
     })
     expect(ctx().members.find((m) => m.id === 'u2')?.clientAccess, 'a refusal rolls nothing in').toEqual(['e1', 'e2'])
+  })
+
+  it('App: setMemberRole patches the role and the mirror takes the server answer; a refusal leaves it', async () => {
+    await boot()
+    await waitFor(() => expect(membershipCalls).toBe(1))
+    await answer(0, [wire('u1'), wire('u2', { role: 'preparer' })])
+
+    rolePatch.answer = () => ({ status: 200, body: wire('u2', { role: 'reviewer' }) })
+    await act(async () => ctx().setMemberRole('u2', 'reviewer'))
+    expect(rolePatch.calls).toHaveLength(1)
+    expect(rolePatch.calls[0].url).toBe(`${GATEWAY}/api/tenancy/v1/memberships/u2/role`)
+    expect(rolePatch.calls[0].body).toEqual({ role: 'reviewer' })
+    expect(ctx().members.find((m) => m.id === 'u2')?.role).toBe('reviewer')
+    expect(ctx().members.find((m) => m.id === 'u1')?.role, 'the other row is untouched').toBe('admin')
+
+    rolePatch.answer = () => ({ status: 403, body: { error: "only an admin can change a member's role" } })
+    await act(async () => {
+      await expect(ctx().setMemberRole('u2', 'preparer')).rejects.toMatchObject({ message: "only an admin can change a member's role" })
+    })
+    expect(ctx().members.find((m) => m.id === 'u2')?.role, 'a refusal rolls nothing in').toBe('reviewer')
   })
 
   it('App: removeMember posts the remove, the mirror takes the removed row and roles refetch; a refusal leaves both', async () => {

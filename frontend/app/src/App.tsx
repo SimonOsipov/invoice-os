@@ -76,9 +76,11 @@ import {
   membersViewState,
   replaceMember,
   setMembershipClients,
+  setMembershipRole,
   removeMembership,
   setMembershipStatus,
   toMember,
+  type AccessRole,
   type Member,
   type PatchableStatus,
   type MembershipWire,
@@ -1684,6 +1686,11 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     setMembers((list) => replaceMember(list, toMember(wire, session.persona.subject)))
   }
 
+  async function setMemberRole(id: string, role: AccessRole) {
+    const wire: MembershipWire = await setMembershipRole(authedFetch, base!, id, role)
+    setMembers((list) => replaceMember(list, toMember(wire, session.persona.subject)))
+  }
+
   // Settings › Roles' four writes, the `setMemberStatus` shape repeated: each calls the
   // gateway first and patches the mirror off the SERVER's own returned row, so a rejection
   // reaches the caller with nothing here to roll back.
@@ -1838,6 +1845,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     setMemberStatus,
     removeMember,
     setMemberClients,
+    setMemberRole,
     createRole,
     renameRole,
     staffRole,

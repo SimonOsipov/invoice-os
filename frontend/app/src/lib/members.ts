@@ -555,6 +555,14 @@ export function setMembershipClients(
   })
 }
 
+/** The answer is the member row; a refusal rejects with the server's sentence. */
+export function setMembershipRole(f: AuthedFetch, base: string, userId: string, role: AccessRole): Promise<MembershipWire> {
+  return f<MembershipWire>(`${base}/api/tenancy/v1/memberships/${userId}/role`, {
+    method: 'PATCH',
+    body: { role },
+  })
+}
+
 /**
  * Sets exactly the keys the wire states and never a mock-only one — a row the server did not
  * state is a row this projection does not invent. An absent `client_access` becomes `null`.
@@ -636,6 +644,14 @@ export type PendingInvite = { id: string; email: string; role: AccessRole; expir
 
 export const INVITE_ADMIN_ONLY = 'Only an admin can invite people.'
 export const CLIENT_ADMIN_ONLY = 'Only an admin can change a client.'
+export const ROLE_ADMIN_ONLY = 'Only an admin can change an access role.'
+export const SELF_DEMOTION_WARNING = 'You will lose admin controls in this workspace. Only another admin can give them back.'
+export const ROLE_CHANGE_KEEP = 'Keep role'
+export const ROLE_CHANGE_CONFIRMED = 'Change role'
+
+export function roleChangeQuestion(name: string, label: string, isYou: boolean): string {
+  return isYou ? `Change your access role to ${label}?` : `Change ${name}'s access role to ${label}?`
+}
 export const COMPANY_ADMIN_ONLY = 'Only an admin can change the company.'
 
 export async function listInvitations(f: AuthedFetch, base: string): Promise<InvitationWire[]> {
@@ -712,6 +728,12 @@ export function rosterWithInvites(members: readonly Member[], invites: readonly 
 
 export function viewerIsAdmin(members: readonly Member[]): boolean {
   return members.some((m) => m.isYou && m.role === 'admin' && m.status === 'active')
+}
+
+/** The note that disables the role cards, or `null`. The roles fetch never locks. */
+export function roleCardsLock(members: readonly Member[], row: Member): string | null {
+  if (!viewerIsAdmin(members)) return ROLE_ADMIN_ONLY
+  return isProtectedAdmin(members, row) ? PROTECTED_ADMIN_NOTE : null
 }
 
 // An empty `[]` only: undefined, `null` (in-house) and 'all' are not "no clients given".

@@ -9,6 +9,10 @@ import type { AuthedFetch } from './portfolio'
 import {
   activeHolders,
   addRole,
+  APPROVERS_UNCHECKED,
+  approverGaps,
+  approverGapNotice,
+  leavesApproverRole,
   canSaveRole,
   createStaffedRole,
   createWorkflowRole,
@@ -1676,5 +1680,57 @@ describe('QA — setRoleMembers resolves whatever order the server sends, not th
     const result = await setRoleMembers(af, wireBase, 'cfo', ['u1', 'u2'])
 
     expect(result.members).toEqual(['u2', 'u1'])
+  })
+})
+
+describe('ACCESS-01-04 — the approver gap', () => {
+  const mem = (id: string, role: Member['role'], status: Member['status'] = 'active'): Member => ({
+    id,
+    name: id,
+    initials: id.toUpperCase(),
+    email: `${id}@x.ng`,
+    role,
+    status,
+    isYou: false,
+  })
+  const A = role('a', 'Role A', '', ['u1'])
+  const B = role('b', 'Role B', '', ['u1', 'u2'])
+  const C = role('c', 'Role C', '', ['u1', 'u3'])
+  const roles = [A, B, C]
+  const members = [mem('u1', 'reviewer'), mem('u2', 'admin'), mem('u3', 'preparer')]
+
+  it('approverGaps names each role the member alone staffs as an approver', () => {
+    expect(approverGaps(roles, members, 'u1', 'preparer')).toEqual([A, C])
+  })
+
+  it('approverGaps is empty unless an active approver moves to preparer', () => {
+    expect(approverGaps(roles, members, 'u1', 'admin')).toEqual([])
+    expect(approverGaps(roles, [mem('u1', 'admin'), ...members.slice(1)], 'u1', 'reviewer')).toEqual([])
+    expect(approverGaps(roles, [mem('u1', 'reviewer', 'suspended'), ...members.slice(1)], 'u1', 'preparer')).toEqual([])
+    expect(approverGaps(roles, [mem('u1', 'preparer'), ...members.slice(1)], 'u1', 'preparer')).toEqual([])
+  })
+
+  it('approverGaps counts a suspended co-holder as no holder', () => {
+    const r = role('a', 'Role A', '', ['u1', 'u9'])
+    expect(approverGaps([r], [mem('u1', 'reviewer'), mem('u9', 'reviewer', 'suspended')], 'u1', 'preparer')).toEqual([r])
+  })
+
+  it('leavesApproverRole is true only for an active approver moving to preparer', () => {
+    expect(leavesApproverRole(mem('x', 'reviewer'), 'preparer')).toBe(true)
+    expect(leavesApproverRole(mem('x', 'admin'), 'preparer')).toBe(true)
+    expect(leavesApproverRole(mem('x', 'reviewer'), 'reviewer')).toBe(false)
+    expect(leavesApproverRole(mem('x', 'reviewer'), 'admin')).toBe(false)
+    expect(leavesApproverRole(mem('x', 'reviewer', 'suspended'), 'preparer')).toBe(false)
+    expect(leavesApproverRole(mem('x', 'preparer'), 'preparer')).toBe(false)
+  })
+
+  it('approverGapNotice reads singular and plural', () => {
+    expect(approverGapNotice('Ada', ['CFO'])).toBe(
+      'Ada is the only admin or reviewer in CFO. Approval steps for this role will block until someone else holds it.',
+    )
+    expect(approverGapNotice('Ada', ['CFO', 'Board'])).toBe(
+      'Ada is the only admin or reviewer in CFO · Board. Approval steps for these roles will block until someone else holds them.',
+    )
+    expect(APPROVERS_UNCHECKED).toBe('Workflow roles did not load, so this change may leave approval steps with no approver.')
   })
 })

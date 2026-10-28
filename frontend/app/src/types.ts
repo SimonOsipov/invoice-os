@@ -20,7 +20,7 @@ import type { InvoiceKind, MappingGroup } from './lib/mappingGroups'
 // erased at compile — this file has zero runtime exports. `tsc` is what enforces it
 // (TS1484, from `verbatimModuleSyntax`), NOT the bundler: `vite build` alone erases a
 // value import here and emits a byte-identical bundle.
-import type { Member, PatchableStatus } from './lib/members'
+import type { AccessRole, Member, PatchableStatus } from './lib/members'
 // Type-only for the reason the `Member` edge above spells out — `lib/roles.ts` type-imports
 // `lib/members.ts`, which closes the same benign compile-erased loop.
 import type { Role } from './lib/roles'
@@ -543,13 +543,14 @@ export type PlatformCtx = {
   // Settings › Members. The ONE membership write the server backs. It resolves once the
   // server's own row has replaced the old one, and REJECTS with the gateway's ApiError
   // unreshaped — the caller renders that message at the control, so nothing here may
-  // swallow it. Access-role writes have no endpoint; their controls ship disabled with
-  // `MEMBER_UNBACKED`'s reason rather than calling a verb that lies.
+  // swallow it.
   setMemberStatus: (id: string, status: PatchableStatus) => Promise<void>
   // Same contract; the server's removed row replaces the old one and roles are refetched.
   removeMember: (id: string) => Promise<void>
   // Replaces the member's whole client access; same reject-unreshaped contract.
   setMemberClients: (id: string, access: 'all' | readonly string[]) => Promise<void>
+  // Sets the member's access role; same reject-unreshaped contract.
+  setMemberRole: (id: string, role: AccessRole) => Promise<void>
   // Settings › Roles. Rename (PATCH) and staffing (PUT /members) are separate server
   // writes, so they are separate verbs rather than one funnel over a whole Role — a
   // partial failure has to say which half failed. Same reject-unreshaped contract as

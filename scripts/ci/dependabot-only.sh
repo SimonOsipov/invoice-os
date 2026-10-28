@@ -23,7 +23,7 @@ verdict=false
 if gh api --paginate "repos/$REPO/pulls/$pr/commits?per_page=100" >"$raw" 2>/dev/null \
   && result=$(jq -rs --arg head "$HEAD_SHA" --arg bot "$bot" '
     (add // []) as $c
-    | if ($c | length) == 0 or ($c | last | .sha) != $head then "unreliable"
+    | if ($c | length) == 0 or ($c | last | .sha) != $head then "unreliable \($c | length)"
       elif all($c[]; .author.login == $bot and .committer.login == "web-flow" and .commit.verification.verified == true) then "true \($c | length)"
       else "false \($c | length)" end' "$raw"); then
   verdict=${result% *}

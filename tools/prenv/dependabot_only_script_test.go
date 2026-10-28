@@ -68,6 +68,9 @@ func (r doRun) verdict() string {
 func runDO(t *testing.T, o doOpts) doRun {
 	t.Helper()
 	if _, err := exec.LookPath("jq"); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal("jq not on PATH in CI")
+		}
 		t.Skip("jq not on PATH")
 	}
 	shims, work := t.TempDir(), t.TempDir()
@@ -355,5 +358,120 @@ func wantExit2(t *testing.T, r doRun) {
 	}
 	if len(r.calls) != 0 {
 		t.Errorf("gh called: %q", r.calls)
+	}
+}
+
+func TestDependabotOnly_CommitterLoginMustBeExactWebFlow(t *testing.T) {
+	t.Parallel()
+	for _, login := range []string{"Web-Flow", "web-flow ", "web-flow[bot]", "web_flow", ""} {
+		t.Run("committer="+login, func(t *testing.T) {
+			t.Parallel()
+			c := botCommit()
+			c.committer = login
+			wantVerdict(t, runDO(t, doOpts{pages: doPage(c)}), "false")
+		})
+	}
+	wantVerdict(t, runDO(t, doOpts{pages: doPage(botCommit())}), "true")
+}
+
+func TestDependabotOnly_VerifiedMustBeBooleanTrue(t *testing.T) {
+	t.Parallel()
+	for _, v := range []string{`"true"`, "1", `"verified"`, "[]"} {
+		t.Run("verified="+v, func(t *testing.T) {
+			t.Parallel()
+			c := botCommit()
+			c.verified = v
+			wantVerdict(t, runDO(t, doOpts{pages: doPage(c)}), "false")
+		})
+	}
+}
+
+func TestDependabotOnly_HeadMatchingANonLastCommitFailsClosed(t *testing.T) {
+	t.Parallel()
+	first, last := botCommit(), botCommit()
+	first.sha, last.sha = "shahead", "shalater"
+	wantFailClosed(t, runDO(t, doOpts{pages: [][]doCommit{{first, last}}}))
+	last.sha = "shahead"
+	first.sha = "shafirst"
+	wantVerdict(t, runDO(t, doOpts{pages: [][]doCommit{{first, last}}}), "true")
+}
+
+func TestDependabotOnly_BadCommitOnAMiddlePageIsFalse(t *testing.T) {
+	t.Parallel()
+	a, b, c := botCommit(), botCommit(), botCommit()
+	b.committer = doHuman
+	c.sha = "shahead"
+	r := runDO(t, doOpts{pages: [][]doCommit{{a}, {b}, {c}}})
+	wantVerdict(t, r, "false")
+	if !strings.Contains(r.stdout, "commits=3") {
+		t.Errorf("stdout lacks commits=3: %s", r.msg())
+	}
+	wantVerdict(t, runDO(t, doOpts{pages: [][]doCommit{{a}, {botCommit()}, {c}}}), "true")
+}
+
+func TestDependabotOnly_ReadsNoCommitDataFromTheEventPayload(t *testing.T) {
+	t.Parallel()
+	payload := filepath.Join(t.TempDir(), "event.json")
+	forged := `{"commits":[{"author":{"login":"dependabot[bot]"},"committer":{"login":"web-flow"}}],"pull_request":{"commits":1}}`
+	if err := os.WriteFile(payload, []byte(forged), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"GITHUB_EVENT_PATH": payload}
+	wantVerdict(t, runDO(t, doOpts{pages: doPage(botCommit(), humanCommit()), env: env}), "false")
+	wantVerdict(t, runDO(t, doOpts{pages: doPage(botCommit()), env: env}), "true")
+}
+
+func TestDependabotOnly_HumanAuthorWithAnUnreliableListIsFalseAndLogsTheCount(t *testing.T) {
+	t.Parallel()
+	human := map[string]string{"PR_AUTHOR": doHuman}
+	r := runDO(t, doOpts{raw: "[]", env: human})
+	wantVerdict(t, r, "false")
+	if !strings.Contains(r.stdout, "commits=0") {
+		t.Errorf("stdout lacks commits=0: %s", r.msg())
+	}
+	human["HEAD_SHA"] = "shaother"
+	r = runDO(t, doOpts{pages: doPage(botCommit(), botCommit()), env: human})
+	wantVerdict(t, r, "false")
+	if !strings.Contains(r.stdout, "commits=2") {
+		t.Errorf("stdout lacks commits=2: %s", r.msg())
+	}
+	r = runDO(t, doOpts{raw: "not json", env: map[string]string{"PR_AUTHOR": doHuman}})
+	wantVerdict(t, r, "false")
+	if !strings.Contains(r.stdout+r.stderr, "::warning::") {
+		t.Errorf("no ::warning:: line: %s", r.msg())
+	}
+}
+
+func TestDependabotOnly_PRAuthorMustBeExactBot(t *testing.T) {
+	t.Parallel()
+	for _, author := range []string{"Dependabot[bot]", "dependabot", "dependabot[bot]x", "dependabot-preview[bot]"} {
+		t.Run(author, func(t *testing.T) {
+			t.Parallel()
+			wantVerdict(t, runDO(t, doOpts{pages: doPage(botCommit()), env: map[string]string{"PR_AUTHOR": author}}), "false")
+		})
+	}
+}
+
+func TestDependabotOnly_ActionMustBeExact(t *testing.T) {
+	t.Parallel()
+	for _, action := range []string{"Opened", "SYNCHRONIZE", "opened ", "synchronized", "labeled"} {
+		t.Run("action="+action, func(t *testing.T) {
+			t.Parallel()
+			wantVerdict(t, runDO(t, doOpts{pages: doPage(botCommit()), env: map[string]string{"EVENT_ACTION": action}}), "false")
+		})
+	}
+}
+
+func TestDependabotOnly_ABotListFailureNeverWritesOutput(t *testing.T) {
+	t.Parallel()
+	for name, o := range map[string]doOpts{
+		"object body":      {raw: `{"message":"Bad credentials"}`},
+		"commit not array": {raw: `"x"`},
+		"empty body":       {raw: " "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			wantFailClosed(t, runDO(t, o))
+		})
 	}
 }

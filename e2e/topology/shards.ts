@@ -84,6 +84,7 @@ export const UNITS: Unit[] = [
       'blog-editor.spec.ts',
       'design-system.spec.ts',
       'environment-posture.spec.ts',
+      'member-access-role.spec.ts',
       'ops-console.spec.ts',
       'overview-register-approvals.spec.ts',
       'portfolio.spec.ts',

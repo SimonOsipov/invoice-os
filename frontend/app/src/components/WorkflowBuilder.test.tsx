@@ -1194,7 +1194,7 @@ describe('APPR-09-05 QA: two writes, one after the other', () => {
 // `save()`/`publish()` re-seed `working` from the answer, so a keystroke typed inside the round
 // trip used to be silently overwritten. Before subtask 05 it could not happen — every keystroke
 // was its own PUT. The remedy is one `submitting` flag disabling the form for the duration
-// (RoleModal.tsx:74,:203; EntityFormModal.tsx:64; MemberDrawer.tsx's `accessPending`), cleared in `finally`.
+// (RoleModal and EntityFormModal `submitting`; MemberDrawer `accessPending`), cleared in `finally`.
 // The spec these replace — 'a re-seed that lands after an edit DISCARDS it' — recorded the race
 // and said in its own comment that a real guard must REPLACE it rather than work around it.
 //

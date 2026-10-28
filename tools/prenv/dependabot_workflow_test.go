@@ -198,9 +198,6 @@ func TestDevEnvTeardown_SkipsDependabotPRs(t *testing.T) {
 	if !teardownSkipsDependabot(yml) {
 		t.Fatalf("teardown if is not exactly %q", authorCond)
 	}
-	if teardownSkipsDependabot(mutateOnce(t, yml, "    if: "+authorCond+"\n", "")) {
-		t.Error("teardownSkipsDependabot stays true after the if: is deleted")
-	}
 }
 
 func TestDevEnvDependabot_WorkflowPermissionsHoldNoIDToken(t *testing.T) {

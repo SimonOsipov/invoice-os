@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -293,5 +294,129 @@ func TestIDTokenCache_StalledAudienceDoesNotBlockAnother(t *testing.T) {
 	releaseSlow()
 	if err := <-slowErr; err == nil {
 		t.Error("slow audience returned no error after a 500")
+	}
+}
+
+func TestIDTokenCache_CancelledCallerDoesNotFailTheWaiter(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	entered := make(chan struct{})
+	var fetches atomic.Int32
+	md := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fetches.Add(1) == 1 {
+			close(entered)
+			<-r.Context().Done()
+			return
+		}
+		fmt.Fprint(w, fakeJWT(now.Add(time.Hour)))
+	}))
+	defer md.Close()
+	tr := newIDTokenTransport(http.DefaultTransport, md.URL, func() time.Time { return now })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	firstErr := make(chan error, 1)
+	go func() {
+		_, err := tr.cache.token(ctx, tr.base, "https://a.run.app")
+		firstErr <- err
+	}()
+	<-entered
+	type result struct {
+		tok string
+		err error
+	}
+	second := make(chan result, 1)
+	go func() {
+		tok, err := tr.cache.token(t.Context(), tr.base, "https://a.run.app")
+		second <- result{tok, err}
+	}()
+	cancel()
+	if err := <-firstErr; err == nil {
+		t.Error("cancelled caller returned no error")
+	}
+	select {
+	case r := <-second:
+		if r.err != nil || r.tok == "" {
+			t.Errorf("waiter: token %q, err %v; want a token", r.tok, r.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiter never returned")
+	}
+}
+
+func TestIDTokenCache_ErrorIsNotCachedAndOtherAudienceKeepsItsToken(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	var badFetches atomic.Int32
+	md := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.RawQuery, "bad.run.app") && badFetches.Add(1) == 1 {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprint(w, fakeJWT(now.Add(time.Hour)))
+	}))
+	defer md.Close()
+	tr := newIDTokenTransport(http.DefaultTransport, md.URL, func() time.Time { return now })
+
+	if _, err := tr.cache.token(t.Context(), tr.base, "https://bad.run.app"); err == nil {
+		t.Fatal("first bad fetch: want error")
+	}
+	if tok, err := tr.cache.token(t.Context(), tr.base, "https://good.run.app"); err != nil || tok == "" {
+		t.Fatalf("good audience: token %q, err %v", tok, err)
+	}
+	if tok, err := tr.cache.token(t.Context(), tr.base, "https://bad.run.app"); err != nil || tok == "" {
+		t.Errorf("bad audience retry: token %q, err %v; want a refetch, not a cached error", tok, err)
+	}
+	if got := badFetches.Load(); got != 2 {
+		t.Errorf("bad audience fetches = %d, want 2", got)
+	}
+}
+
+func TestIDTokenCache_ConcurrentExpiringAudiencesEachRefetchOnce(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	var clock atomic.Int64
+	var mu sync.Mutex
+	fetched := map[string]int{}
+	md := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		fetched[r.URL.Query().Get("audience")]++
+		mu.Unlock()
+		time.Sleep(50 * time.Millisecond)
+		fmt.Fprint(w, fakeJWT(now.Add(time.Duration(clock.Load())+time.Hour)))
+	}))
+	defer md.Close()
+	tr := newIDTokenTransport(http.DefaultTransport, md.URL, func() time.Time { return now.Add(time.Duration(clock.Load())) })
+
+	const n = 6
+	aud := func(i int) string { return fmt.Sprintf("https://svc%d.run.app", i) }
+	for i := range n {
+		if _, err := tr.cache.token(t.Context(), tr.base, aud(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clock.Store(int64(56 * time.Minute))
+	mu.Lock()
+	clear(fetched)
+	mu.Unlock()
+
+	var wg sync.WaitGroup
+	for range 3 {
+		for i := range n {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if tok, err := tr.cache.token(t.Context(), tr.base, aud(i)); err != nil || tok == "" {
+					t.Errorf("%s: token %q err %v", aud(i), tok, err)
+				}
+			}()
+		}
+	}
+	wg.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(fetched) != n {
+		t.Fatalf("refreshed %d audiences, want %d", len(fetched), n)
+	}
+	for a, c := range fetched {
+		if c != 1 {
+			t.Errorf("%s fetched %d times, want 1", a, c)
+		}
 	}
 }

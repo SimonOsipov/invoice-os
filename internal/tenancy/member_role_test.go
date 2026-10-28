@@ -495,3 +495,76 @@ func TestSetMemberRole_SameRoleIsANoOp(t *testing.T) {
 		t.Error("control: a real change succeeded although the update trigger forbids it")
 	}
 }
+
+func TestSetMemberRole_LockedWorkspaceRefusesAndWritesNothing(t *testing.T) {
+	w := newInvWorld(t, "role locked "+uuid.NewString()[:8], "Ada Admin")
+	prep := w.addMember(t, "preparer", "active", "Pia Preparer")
+	before := imageOf(t, w.super, w.tenant, prep)
+	if _, err := w.setRole(w.admin, prep, "reviewer"); err != nil {
+		t.Fatalf("control: unlocked change: %v", err)
+	}
+	if _, err := w.setRole(w.admin, prep, "preparer"); err != nil {
+		t.Fatalf("control: change back: %v", err)
+	}
+	lockByOwner(t, w.super, w.tenant, w.admin)
+	auditBefore := w.auditCountOf(t, roleChangedEvent)
+
+	if _, err := w.setRole(w.admin, prep, "reviewer"); !errors.Is(err, db.ErrWorkspaceLocked) {
+		t.Errorf("locked workspace: err = %v, want db.ErrWorkspaceLocked", err)
+	}
+	if imageOf(t, w.super, w.tenant, prep) != before || w.auditCountOf(t, roleChangedEvent) != auditBefore {
+		t.Error("a refused role change on a locked workspace wrote a row")
+	}
+}
+
+func TestSetMemberRole_AdminOfAnotherTenantCannotDemoteTheirSoleAdmin(t *testing.T) {
+	w := newInvWorld(t, "role cross admin A "+uuid.NewString()[:8], "Ada Admin")
+	b := newInvWorld(t, "role cross admin B "+uuid.NewString()[:8], "Bea Admin")
+	before := imageOf(t, w.super, b.tenant, b.admin)
+
+	if _, err := w.setRole(w.admin, b.admin, "reviewer"); !errors.Is(err, ErrMembershipNotFound) {
+		t.Errorf("err = %v, want ErrMembershipNotFound", err)
+	}
+	if imageOf(t, w.super, b.tenant, b.admin) != before || b.activeAdmins(t) != 1 {
+		t.Error("another tenant's sole admin changed")
+	}
+	if _, err := b.setRole(b.admin, b.admin, "admin"); err != nil {
+		t.Errorf("control: the sole admin's own same-role call: %v", err)
+	}
+}
+
+func TestSetMemberRole_DemotionRacesARemoval(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+
+	for round := range 8 {
+		w := invWorld{super: super, app: app, store: store, tenant: seedTenant(t, super, "role demotion vs removal")}
+		a, b := w.addMember(t, "admin", "active", "A Admin"), w.addMember(t, "admin", "active", "B Admin")
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() { defer wg.Done(); <-start; _, errs[0] = store.SetMemberRole(w.as(a), b, "reviewer") }()
+		go func() { defer wg.Done(); <-start; _, errs[1] = store.RemoveMember(w.as(b), a) }()
+		close(start)
+		wg.Wait()
+
+		oks := 0
+		for i, err := range errs {
+			switch {
+			case err == nil:
+				oks++
+			case errors.Is(err, ErrLastActiveAdmin), errors.Is(err, ErrRoleChangeNotPermitted),
+				errors.Is(err, ErrRemoveNotPermitted), errors.Is(err, db.ErrNotActiveMember):
+			default:
+				t.Fatalf("round %d: errs[%d] = %v, want nil or a last-admin / not-permitted refusal (a deadlock is a defect)", round, i, err)
+			}
+		}
+		if oks != 1 {
+			t.Fatalf("round %d: results = %v, want exactly one success", round, errs)
+		}
+		if n := w.activeAdmins(t); n != 1 {
+			t.Fatalf("round %d: active admins = %d, want 1", round, n)
+		}
+	}
+}

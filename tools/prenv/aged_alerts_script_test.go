@@ -282,8 +282,28 @@ func TestAgedAlertsScript_FailedCommentWritesNoEdit(t *testing.T) {
 	if r.code == 0 {
 		t.Error("exit 0 after a failed comment")
 	}
-	if r.called("issue edit") {
-		t.Errorf("edit after failed comment: %q", r.calls)
+	if r.called("issue edit") || r.bodies != "" {
+		t.Errorf("edit after failed comment: %q, bodies %q", r.calls, r.bodies)
+	}
+}
+
+func TestAgedAlertsScript_AlertNumbersThatArePrefixesAreDistinct(t *testing.T) {
+	t.Parallel()
+	row12 := agedRow("12", "pkg-twelve", "GHSA-aaaa-aaaa-0012", "low", "9")
+	for name, tc := range map[string]struct{ cur, next, want, not string }{
+		"twelve known, one new": {agedTable(row12), agedTable(row12, rowOne), "#1 ", "#12"},
+		"one known, twelve new": {agedTable(rowOne), agedTable(rowOne, row12), "#12 ", "#1 "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runAged(t, openWith(tc.cur), tc.next, true)
+			if n := countPrefix(r, "issue comment"); n != 1 {
+				t.Fatalf("%d comment calls: %q", n, r.calls)
+			}
+			if !strings.Contains(r.comments, tc.want) || strings.Contains(r.comments, tc.not) {
+				t.Errorf("want %q and not %q:\n%s", tc.want, tc.not, r.comments)
+			}
+		})
 	}
 }
 

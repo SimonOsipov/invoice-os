@@ -540,7 +540,7 @@ export type PlatformCtx = {
   deletePolicy: (id: string) => Promise<void>
   savePolicy: (next: Policy) => Promise<Policy>
   publishPolicy: (id: string) => Promise<Policy>
-  // Settings › Members. The ONE membership write the server backs. It resolves once the
+  // Settings › Members. It resolves once the
   // server's own row has replaced the old one, and REJECTS with the gateway's ApiError
   // unreshaped — the caller renders that message at the control, so nothing here may
   // swallow it.

@@ -396,7 +396,7 @@ func TestAuditScopeOf_MatchesTheEventsTheTriggerLeavesNull(t *testing.T) {
 // cross-checks them — an invariant CompanyScope's three-way split now depends on. Needs
 // no audit package call: it guards the fixture data itself. Disjointness is a real
 // structural property, not a restatement of ScopeOf's fallback.
-func TestAuditScopeOf_RuleSetsAreDisjointAndSumToFiftyTwo(t *testing.T) {
+func TestAuditScopeOf_RuleSetsAreDisjointAndSumToTheTotal(t *testing.T) {
 	all := map[string]string{}
 	named := []struct {
 		name   string

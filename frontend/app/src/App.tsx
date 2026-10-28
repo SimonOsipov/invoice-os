@@ -1661,7 +1661,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     return published
   }
 
-  // The one membership write the server backs. The row that lands is the SERVER's own,
+  // The row that lands is the SERVER's own,
   // never a client-composed one — so a status the server declined to set can never appear
   // on screen.
   //

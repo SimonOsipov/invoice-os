@@ -30,9 +30,12 @@ const SR_ONLY: CSSProperties = { position: 'absolute', width: 1, height: 1, over
 
 const MATRIX_COLS = 'minmax(0,1fr) 90px 90px 90px'
 
+// Shared by the Client users NOT BUILT marker and the Coming soon marks.
+const MARK_STYLE: CSSProperties = { fontSize: 9, fontWeight: 700, letterSpacing: '0.09em', color: 'var(--fg-3)', border: '1px dashed var(--line-3)', borderRadius: 4, padding: '3px 9px' }
+
 /**
  * The collapsed "What can each role do?" expander: a card whose full-width header is the toggle,
- * with three role columns x the eight capability rows and §6's footnote in the revealed body.
+ * with three role columns x the capability rows and §6's footnote in the revealed body.
  *
  * State is local. The toggle is a real `<button>` carrying `aria-expanded`; `useDismiss` is not
  * used, because closing an expander on an outside click would throw away the reading position.
@@ -99,8 +102,21 @@ export function MemberRoleMatrix() {
                 {/* Rendered exactly as stored, lowercase: §6's own casing (`text-transform` would corrupt `ERP`). */}
                 <span role="rowheader" style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>
                   {row.label}
+                  {row.soon && (
+                    <span className="mono" data-testid="role-soon-mark" style={{ ...MARK_STYLE, display: 'block', width: 'fit-content', marginTop: 4 }}>
+                      Coming soon
+                    </span>
+                  )}
                 </span>
                 {ACCESS_ROLES.map((r) => {
+                  if (row.soon) {
+                    return (
+                      <span key={r.id} role="cell" style={{ display: 'grid', placeItems: 'center', color: 'var(--fg-4)' }}>
+                        <span aria-hidden="true">{'\u2013'}</span>
+                        <span style={SR_ONLY}>Not available yet</span>
+                      </span>
+                    )
+                  }
                   const allowed = row[r.id]
                   return (
                     <span key={r.id} role="cell" style={{ display: 'grid', placeItems: 'center', color: allowed ? 'var(--action)' : 'var(--fg-4)' }}>
@@ -136,7 +152,7 @@ export function ClientUsersCard() {
         <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--fg-2)' }}>Client users</div>
         <div style={{ marginTop: 3, fontSize: 12, lineHeight: 1.55, color: 'var(--fg-3)' }}>{CLIENT_USERS_COPY}</div>
       </div>
-      <span className="mono" style={{ flex: 'none', fontSize: 9, fontWeight: 700, letterSpacing: '0.09em', color: 'var(--fg-3)', border: '1px dashed var(--line-3)', borderRadius: 4, padding: '3px 9px' }}>
+      <span className="mono" style={{ ...MARK_STYLE, flex: 'none' }}>
         NOT BUILT
       </span>
     </div>

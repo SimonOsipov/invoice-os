@@ -60,7 +60,7 @@ export type Member = {
 
 /** Axis A, with the descriptions rendered verbatim in the drawer's role cards. */
 export const ACCESS_ROLES: readonly { id: AccessRole; label: string; description: string }[] = [
-  { id: 'admin', label: 'Admin', description: 'Full access. Manages members, settings, connectors and certificates.' },
+  { id: 'admin', label: 'Admin', description: 'Full access. Manages members and settings.' },
   { id: 'preparer', label: 'Preparer', description: 'Creates, imports and validates invoices. Cannot approve or transmit.' },
   {
     id: 'reviewer',
@@ -85,24 +85,22 @@ export function accessRoleLabel(role: AccessRole): string {
 export const DEPARTMENTS: readonly Department[] = ['Finance', 'Tax & Compliance', 'Accounts Payable', 'Executive', 'Procurement']
 
 /**
- * The "What can each role do?" expander — eight capability rows × the three roles. Labels
- * are §6's copy, kept lowercase exactly as the story writes them; casing at render time is
- * MEMB-01-05's display call, not a fact to bake in here.
- *
- * Three rows are server-enforced: 'transmit to NRS/MBS' (both transmit handlers reject a
- * non-approver), 'approve in approval steps' (internal/approval/decision.go's two-axis
- * check), and 'invite and manage members' (admin-only memberships PATCH and invitations).
- * The rest remain descriptive only.
+ * The "What can each role do?" rows, one per server gate; lowercase as stored. A `soon` row has
+ * no server gate yet: the matrix draws a Coming soon mark and ignores its three booleans.
  */
-export const CAPABILITY_ROWS: readonly { label: string; admin: boolean; preparer: boolean; reviewer: boolean }[] = [
+export const CAPABILITY_ROWS: readonly { label: string; admin: boolean; preparer: boolean; reviewer: boolean; soon?: true }[] = [
   { label: 'create and edit invoices', admin: true, preparer: true, reviewer: true },
-  { label: 'import from file or ERP', admin: true, preparer: true, reviewer: true },
+  { label: 'import invoices from a file', admin: true, preparer: true, reviewer: true },
   { label: 'run validation', admin: true, preparer: true, reviewer: true },
   { label: 'approve in approval steps', admin: true, preparer: false, reviewer: true },
-  { label: 'transmit to NRS/MBS', admin: true, preparer: false, reviewer: true },
-  { label: 'invite and manage members', admin: true, preparer: false, reviewer: false },
-  { label: 'manage ERP connectors', admin: true, preparer: false, reviewer: false },
-  { label: 'manage signing certificates', admin: true, preparer: false, reviewer: false },
+  { label: 'transmit invoices, change their status and mark failed ones resolved outside', admin: true, preparer: false, reviewer: true },
+  { label: 'invite, suspend and remove members; change their role and client access', admin: true, preparer: false, reviewer: false },
+  { label: 'manage approval policies and workflow roles', admin: true, preparer: false, reviewer: false },
+  { label: 'manage custom rules', admin: true, preparer: false, reviewer: false },
+  { label: 'add, edit and archive clients', admin: true, preparer: false, reviewer: false },
+  { label: 'export the workspace; schedule or cancel its deletion', admin: true, preparer: false, reviewer: false },
+  { label: 'manage ERP connectors', admin: true, preparer: false, reviewer: false, soon: true },
+  { label: 'manage signing certificates', admin: true, preparer: false, reviewer: false, soon: true },
 ]
 
 /**
@@ -110,19 +108,14 @@ export const CAPABILITY_ROWS: readonly { label: string; admin: boolean; preparer
  * placeholder. Both are rendered verbatim by MemberRoleMatrix — MEMB-01-05's AC#1 says so
  * for the footnote and AC#3 for the card — and neither is a derivation of anything.
  *
- * They live here, beside the eight labels QA18 already pins, for the reason task-297's QA
- * moved three display strings out of components: `environment: node` cannot mount a
- * component, so a string authored inside one is a string no spec can hold (§15.8). The
- * footnote is the longest passage in the story, two sentences whose clauses depend on each
- * other, and a fluent paraphrase of it is exactly what a screenshot gate cannot catch.
+ * They live here, not in the component: `environment: node` cannot mount a component, so a
+ * string authored inside one is a string no spec can hold.
  *
  * The expander's own header label stays in the component: §6 names it as the affordance,
  * not as prose, and AC#1's verbatim clause covers the rows and the footnote only.
  */
-// Reworded one noun at a time — "approval position" → "workflow role" — so §6's two-sentence
-// structure and its Reviewer/which-steps distinction both survive the rename.
 export const CAPABILITY_FOOTNOTE =
-  'Approving also requires a workflow role named by the policy that routes the invoice. A person needs the Reviewer role to act on approval steps at all, and a workflow role to decide which steps.'
+  'An admin or a reviewer can act on approval steps. A workflow role, named by the policy that routes the invoice, decides which steps.'
 
 export const CLIENT_USERS_COPY =
   'Give a contact at one of your clients read-only access, or approval rights on their own invoices.'

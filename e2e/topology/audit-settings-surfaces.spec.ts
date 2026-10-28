@@ -1177,11 +1177,41 @@ test('ST-09 the role matrix collapses inside its card and opens to three equal t
   expect(Math.max(...widths) - Math.min(...widths), `the three tracks differ: ${widths.join(', ')}`).toBeLessThanOrEqual(1)
   await attachShot(page, testInfo, 'role-matrix-open')
 
+  const marks = matrix.getByTestId('role-soon-mark')
+  const soonMarks = await sweep(page, 'Role matrix soon marks', async () => {
+    await settle(page, matrix)
+    const problems: string[] = []
+    const rects: Record<string, unknown> = {}
+    const count = await marks.count()
+    if (count === 0) problems.push('no Coming soon mark drew')
+    for (let i = 0; i < count; i++) {
+      const mark = marks.nth(i)
+      const row = mark.locator('xpath=ancestor::*[@role="row"][1]')
+      const named: Named = { mark, row }
+      for (let c = 0; c < 3; c++) named[`cell${c}`] = row.locator('[role="cell"]').nth(c)
+      const read = await boxes(named)
+      problems.push(...read.problems.map((p) => `mark ${i}: ${p}`))
+      const text = (await mark.textContent())?.trim()
+      if (text !== 'Coming soon') problems.push(`mark ${i} reads "${text}"`)
+      const mine: string[] = []
+      inside(read.rects, 'row', ['mark'], mine)
+      noOverlap(read.rects, ['mark', 'cell0'], mine)
+      noOverlap(read.rects, ['mark', 'cell1'], mine)
+      noOverlap(read.rects, ['mark', 'cell2'], mine)
+      problems.push(...mine.map((p) => `mark ${i}: ${p}`))
+      rects[`mark${i}`] = read.rects
+    }
+    const overflow = await matrix.evaluate((el) => el.scrollWidth - el.clientWidth)
+    if (overflow > 0) problems.push(`the matrix overflows sideways by ${overflow}px`)
+    rects.overflow = overflow
+    return { problems, rects }
+  })
+
   const clientUsers = tid(page, 'client-users-card')
   await expect(clientUsers, 'the firm client-users card').toBeVisible()
   expect((await styles(clientUsers, ['border-top-style']))['border-top-style'], 'client-users border style').toBe('dashed')
   await expectCorners(clientUsers, '6px', 'client-users card')
-  await attachJson(testInfo, 'st-09-measurements', { closed: closed.rects, open: open.rects, widths })
+  await attachJson(testInfo, 'st-09-measurements', { closed: closed.rects, open: open.rects, widths, soonMarks })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 

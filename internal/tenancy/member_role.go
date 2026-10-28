@@ -2,10 +2,12 @@ package tenancy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
@@ -98,9 +100,45 @@ func (s *Store) SetMemberRole(ctx context.Context, userID, role string) (MemberA
 	return out, nil
 }
 
-// SetMemberRoleHandler is a compile seam for the red tests; ACCESS-01-02 replaces it.
-func SetMemberRoleHandler(_ func(ctx context.Context, userID, role string) (MemberAccess, error), _ *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+// SetMemberRoleHandler returns PATCH /v1/memberships/{user_id}/role: identity (401) -> capped
+// decode (400) -> role vocabulary (400) -> path uuid (404) -> set -> 200 with the member row.
+// A 500 logs err only, never a name or an email.
+func SetMemberRoleHandler(set func(ctx context.Context, userID, role string) (MemberAccess, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxSetStatusBodyBytes)
+		var req struct {
+			Role string `json:"role"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if req.Role != "admin" && req.Role != "preparer" && req.Role != "reviewer" {
+			status, msg := statusForErr(ErrInvalidRole)
+			writeError(w, status, msg)
+			return
+		}
+		userID, err := uuid.Parse(r.PathValue("user_id"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, "membership not found")
+			return
+		}
+		row, err := set(r.Context(), userID.String(), req.Role)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "tenancy: set member role", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, row)
 	}
 }

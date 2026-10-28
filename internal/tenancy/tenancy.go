@@ -495,6 +495,10 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusForbidden, "only an admin can remove a member"
 	case errors.Is(err, ErrLastActiveAdmin):
 		return http.StatusConflict, "this is the tenant's last active admin — make another member an active admin first"
+	case errors.Is(err, ErrRoleChangeNotPermitted):
+		return http.StatusForbidden, "only an admin can change a member's role"
+	case errors.Is(err, ErrInvalidRole):
+		return http.StatusBadRequest, `role must be "admin", "preparer" or "reviewer"`
 	case errors.Is(err, ErrInviteNotPermitted):
 		return http.StatusForbidden, "only an admin can invite people"
 	case errors.Is(err, ErrClientAccessNotPermitted):

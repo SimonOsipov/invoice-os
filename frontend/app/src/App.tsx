@@ -76,9 +76,11 @@ import {
   membersViewState,
   replaceMember,
   setMembershipClients,
+  setMembershipRole,
   removeMembership,
   setMembershipStatus,
   toMember,
+  type AccessRole,
   type Member,
   type PatchableStatus,
   type MembershipWire,
@@ -1659,7 +1661,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     return published
   }
 
-  // The one membership write the server backs. The row that lands is the SERVER's own,
+  // The row that lands is the SERVER's own,
   // never a client-composed one — so a status the server declined to set can never appear
   // on screen.
   //
@@ -1681,6 +1683,11 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   // `setMemberStatus`'s shape: the server's row replaces the mirror's, and a refusal rejects.
   async function setMemberClients(id: string, access: 'all' | readonly string[]) {
     const wire: MembershipWire = await setMembershipClients(authedFetch, base!, id, access)
+    setMembers((list) => replaceMember(list, toMember(wire, session.persona.subject)))
+  }
+
+  async function setMemberRole(id: string, role: AccessRole) {
+    const wire: MembershipWire = await setMembershipRole(authedFetch, base!, id, role)
     setMembers((list) => replaceMember(list, toMember(wire, session.persona.subject)))
   }
 
@@ -1838,6 +1845,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     setMemberStatus,
     removeMember,
     setMemberClients,
+    setMemberRole,
     createRole,
     renameRole,
     staffRole,

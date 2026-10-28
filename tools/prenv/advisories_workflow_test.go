@@ -1,4 +1,4 @@
-// advisories_workflow_test.go pins the advisories job of ci.yml, its place in the CI rollup and the two jobs of advisories-nightly.yml.
+// advisories_workflow_test.go pins the advisories job of ci.yml, its place in the CI rollup and the three jobs of advisories-nightly.yml.
 package main
 
 import (
@@ -15,7 +15,9 @@ const (
 	nightlyPullReqYML  = "  pull_request:\n    paths:\n" +
 		"      - '.github/workflows/advisories-nightly.yml'\n" +
 		"      - 'scripts/ci/advisories.sh'\n" +
-		"      - 'internal/tools/advisorygate/**'\n"
+		"      - 'internal/tools/advisorygate/**'\n" +
+		"      - 'scripts/ci/aged-alerts-issue.sh'\n" +
+		"      - 'internal/tools/agedalerts/**'\n"
 )
 
 // advisoriesJobProblems checks the parts the ci.yml job and the nightly job share.
@@ -115,7 +117,7 @@ func nightlyProblems(yml string) []string {
 	if !strings.Contains(text, "\n  pull_request:\n") {
 		problems = append(problems, "nightly has no pull_request trigger")
 	} else if !strings.Contains(text, "\n"+nightlyPullReqYML) {
-		problems = append(problems, "nightly pull_request paths are not the workflow, the script and the gate")
+		problems = append(problems, "nightly pull_request paths are not the workflow, the two scripts and the two tools")
 	}
 	var perms []string
 	for i, l := range lines {
@@ -133,9 +135,9 @@ func nightlyProblems(yml string) []string {
 		problems = append(problems, "nightly permissions are not only contents: read; no issues permission allowed")
 	}
 	if strings.Contains(text, "gh issue") {
-		problems = append(problems, "nightly opens an issue (gh issue)")
+		problems = append(problems, "nightly workflow calls gh issue inline; aged-alerts-issue.sh owns the issue")
 	}
-	var advisories, vuln *workflowJob
+	var advisories, vuln, aged *workflowJob
 	jobs := workflowJobsOf(yml)
 	for i := range jobs {
 		switch jobs[i].name {
@@ -143,6 +145,8 @@ func nightlyProblems(yml string) []string {
 			advisories = &jobs[i]
 		case "govulncheck":
 			vuln = &jobs[i]
+		case "aged-alerts":
+			aged = &jobs[i]
 		}
 	}
 	if advisories == nil {
@@ -159,6 +163,11 @@ func nightlyProblems(yml string) []string {
 		}
 		problems = append(problems, advisoriesJobProblems("nightly", *advisories)...)
 	}
+	if aged == nil {
+		problems = append(problems, "nightly has no aged-alerts job")
+	} else {
+		problems = append(problems, agedAlertsJobProblems(*aged)...)
+	}
 	if vuln == nil {
 		return append(problems, "nightly has no govulncheck job")
 	}
@@ -166,6 +175,70 @@ func nightlyProblems(yml string) []string {
 		problems = append(problems, "nightly govulncheck job overrides permissions; no issues permission allowed")
 	}
 	return append(problems, govulncheckJobProblems("nightly govulncheck", *vuln)...)
+}
+
+// agedAlertsJobProblems pins the permissions, the guard and the listing of the aged-alerts job.
+func agedAlertsJobProblems(job workflowJob) []string {
+	const (
+		issueTitle = "Dependabot alerts open more than 7 days"
+		guard      = "github.event_name != 'pull_request'"
+	)
+	var problems []string
+	text := strings.Join(job.lines, "\n")
+	if perms, _ := jobKey(job, "permissions"); perms != "contents: read issues: write vulnerability-alerts: read" {
+		problems = append(problems, "aged-alerts permissions are not contents: read, issues: write, vulnerability-alerts: read")
+	}
+	if strings.Contains(text, "continue-on-error") {
+		problems = append(problems, "aged-alerts has continue-on-error")
+	}
+	if c, _ := jobKey(job, "concurrency"); !strings.Contains(c, "group:") || !strings.Contains(c, "cancel-in-progress: false") {
+		problems = append(problems, "aged-alerts has no concurrency with a group and cancel-in-progress: false")
+	}
+	if env, _ := jobKey(job, "env"); !strings.Contains(env, "GH_TOKEN: ${{ github.token }}") || !strings.Contains(env, "ISSUE_TITLE: "+issueTitle+" ") && !strings.HasSuffix(env, "ISSUE_TITLE: "+issueTitle) {
+		problems = append(problems, "aged-alerts env lacks GH_TOKEN: ${{ github.token }} or the fixed ISSUE_TITLE")
+	}
+	if strings.Contains(text, "secrets.") {
+		problems = append(problems, "aged-alerts uses secrets")
+	}
+	var listBody, issueArg string
+	var listed, issued bool
+	for _, s := range job.steps() {
+		run := s.keys["run"]
+		switch {
+		case strings.Contains(run, "agedalerts"):
+			listed = true
+			if _, ok := s.keys["if"]; ok {
+				problems = append(problems, "aged-alerts listing step has an if:")
+			}
+			if !strings.Contains(run, "--paginate") {
+				problems = append(problems, "aged-alerts listing step lacks --paginate")
+			}
+			if !strings.Contains(run, "?state=open&per_page=100\"") {
+				problems = append(problems, "aged-alerts listing step query is not state=open&per_page=100")
+			}
+			if strings.Contains(run, "||") {
+				problems = append(problems, "aged-alerts listing step swallows the exit code (||)")
+			}
+			_, after, _ := strings.Cut(run, "-body ")
+			listBody, _, _ = strings.Cut(after, "\n")
+		case strings.Contains(run, "aged-alerts-issue.sh"):
+			issued = true
+			if s.keys["if"] != guard {
+				problems = append(problems, "aged-alerts issue step not guarded against pull_request")
+			}
+			_, issueArg, _ = strings.Cut(run, "aged-alerts-issue.sh ")
+		}
+	}
+	if !listed {
+		problems = append(problems, "aged-alerts has no listing step")
+	}
+	if !issued {
+		problems = append(problems, "aged-alerts has no issue step")
+	}
+	if listed && issued && strings.TrimSpace(listBody) != strings.TrimSpace(issueArg) {
+		problems = append(problems, "aged-alerts body path differs between the listing and the issue step")
+	}
+	return problems
 }
 
 func requireAdvisoriesProblem(t *testing.T, ciYML, nightlyYML, want string) {
@@ -295,7 +368,7 @@ func TestAdvisoriesNightly_PullRequestPathsFails(t *testing.T) {
 
 func TestAdvisoriesNightly_IssuesPermissionFails(t *testing.T) {
 	t.Parallel()
-	ci, n := mutateNightly(t, "  contents: read\n", "  contents: read\n  issues: write\n")
+	ci, n := mutateNightly(t, "\npermissions:\n  contents: read\n", "\npermissions:\n  contents: read\n  issues: write\n")
 	requireAdvisoriesProblem(t, ci, n, "issues")
 }
 
@@ -424,6 +497,120 @@ func TestAdvisoriesNightly_GovulncheckJobPermissionsFails(t *testing.T) {
 	t.Parallel()
 	ci, n := mutateNightly(t, "    name: govulncheck nightly\n", "    name: govulncheck nightly\n    permissions:\n      issues: write\n")
 	requireAdvisoriesProblem(t, ci, n, "overrides permissions")
+}
+
+func TestAdvisoriesNightly_AgedJobPermissionsFail(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "      issues: write\n", "")
+	requireAdvisoriesProblem(t, ci, n, "aged-alerts permissions")
+}
+
+func TestAdvisoriesNightly_AgedJobNoVulnerabilityAlertsFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "      vulnerability-alerts: read\n", "")
+	requireAdvisoriesProblem(t, ci, n, "aged-alerts permissions")
+}
+
+const agedGuardLine = "        if: github.event_name != 'pull_request'\n"
+
+func TestAdvisoriesNightly_AgedIssueStepUnguardedFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, agedGuardLine, "")
+	requireAdvisoriesProblem(t, ci, n, "not guarded against pull_request")
+}
+
+func TestAdvisoriesNightly_AgedIssueStepOrGuardFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, agedGuardLine, "        if: github.event_name != 'pull_request' || true\n")
+	requireAdvisoriesProblem(t, ci, n, "not guarded against pull_request")
+}
+
+func TestAdvisoriesNightly_AgedListStepSwallowedFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, `-body "$RUNNER_TEMP/aged.md"`+"\n", `-body "$RUNNER_TEMP/aged.md" || true`+"\n")
+	requireAdvisoriesProblem(t, ci, n, "swallows the exit code")
+}
+
+func TestAdvisoriesNightly_AgedJobContinueOnErrorFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "    name: aged Dependabot alerts\n", "    name: aged Dependabot alerts\n    continue-on-error: true\n")
+	requireAdvisoriesProblem(t, ci, n, "aged-alerts has continue-on-error")
+}
+
+func TestAdvisoriesNightly_AgedJobMissingFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "  aged-alerts:\n", "  aged-alerz:\n")
+	requireAdvisoriesProblem(t, ci, n, "nightly has no aged-alerts job")
+}
+
+func TestAdvisoriesNightly_AgedListStepGuardedFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "      - name: List open Dependabot alerts older than 7 days\n",
+		"      - name: List open Dependabot alerts older than 7 days\n"+agedGuardLine)
+	requireAdvisoriesProblem(t, ci, n, "listing step has an if:")
+}
+
+func TestAdvisoriesNightly_AgedListStepNoPaginateFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "--paginate ", "")
+	requireAdvisoriesProblem(t, ci, n, "lacks --paginate")
+}
+
+func TestAdvisoriesNightly_AgedListStepQueryFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "state=open&per_page=100", "state=open")
+	requireAdvisoriesProblem(t, ci, n, "query is not state=open&per_page=100")
+}
+
+func TestAdvisoriesNightly_AgedBodyPathMismatchFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, `aged-alerts-issue.sh "$RUNNER_TEMP/aged.md"`, `aged-alerts-issue.sh "$RUNNER_TEMP/other.md"`)
+	requireAdvisoriesProblem(t, ci, n, "body path differs")
+}
+
+func TestAdvisoriesNightly_AgedIssueTitleFails(t *testing.T) {
+	t.Parallel()
+	const line = "      ISSUE_TITLE: Dependabot alerts open more than 7 days\n"
+	for name, repl := range map[string]string{
+		"changed": "      ISSUE_TITLE: Dependabot alerts open more than 8 days\n",
+		"deleted": "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ci, n := mutateNightly(t, line, repl)
+			requireAdvisoriesProblem(t, ci, n, "aged-alerts env")
+		})
+	}
+}
+
+func TestAdvisoriesNightly_AgedConcurrencyRemovedFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "    concurrency:\n      group: advisories-nightly-aged-${{ github.ref }}\n      cancel-in-progress: false\n", "")
+	requireAdvisoriesProblem(t, ci, n, "no concurrency")
+}
+
+func TestAdvisoriesNightly_AgedGHTokenMissingFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "      GH_TOKEN: ${{ github.token }}\n", "")
+	requireAdvisoriesProblem(t, ci, n, "aged-alerts env")
+}
+
+func TestAdvisoriesNightly_AgedSecretsReferenceFails(t *testing.T) {
+	t.Parallel()
+	ci, n := mutateNightly(t, "      GH_REPO: ${{ github.repository }}\n", "      GH_REPO: ${{ github.repository }}\n      X: ${{ secrets.X }}\n")
+	requireAdvisoriesProblem(t, ci, n, "uses secrets")
+}
+
+func TestAdvisoriesNightly_MissingGovulncheckKeepsAgedProblems(t *testing.T) {
+	t.Parallel()
+	_, n := mutateNightly(t, "  govulncheck:\n    name:", "  govulnscan:\n    name:")
+	n = mutateOnce(t, n, "      issues: write\n", "")
+	got := nightlyProblems(n)
+	for _, want := range []string{"nightly has no govulncheck job", "aged-alerts permissions"} {
+		if !slices.ContainsFunc(got, func(p string) bool { return strings.Contains(p, want) }) {
+			t.Errorf("problems %q lack one containing %q", got, want)
+		}
+	}
 }
 
 // jobKey returns a job-level key's value, folded onto one line.

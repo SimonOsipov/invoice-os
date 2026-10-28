@@ -6,31 +6,26 @@
 // where the specs are (§15.8). `ClientAccessPicker` is the one that holds state rather than
 // taking it all as props, and its docblock says why.
 //
-// The roster table, the member drawer and the role modal share these. Several of the
-// drawer's — `RoleCards`, `DepartmentField` — now mount read-only,
-// so each takes its writer callback as OPTIONAL rather than growing a `disabled` prop the
-// other call sites would never set.
+// The roster table, the member drawer and the role modal share these. The drawer mounts
+// `RoleCards` read-only, so it takes its writer callback as OPTIONAL rather than growing a
+// `disabled` prop the other call sites would never set.
 
 import { useId, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 
 import { moreGlyph, searchGlyph, tickGlyph11 } from '../glyphs'
 import { useDismiss } from '../lib/useDismiss'
 import {
-  ABSENT_LABEL,
   ACCESS_ROLES,
   clientSelectionCount,
-  DEPARTMENTS,
   filterClientRoster,
   needsClientPick,
   NO_CLIENT_MATCH,
   NO_CLIENTS_IN_WORKSPACE,
   NO_CLIENTS_NOTE,
   type AccessRole,
-  type Department,
   type MemberStatus,
 } from '../lib/members'
 import type { Role } from '../lib/roles'
-import { WfSelect, type WfOption } from './WorkflowParts'
 
 /** A native radio painted as the prototype's ring with a 7px dot when checked. */
 export const radioPaint = (checked: boolean): CSSProperties => ({
@@ -391,41 +386,8 @@ export function ClientAccessPicker({ value, clients, onChange, idPrefix }: {
 }
 
 // ---------------------------------------------------------------------------
-// Department (IN-HOUSE) and the workflow-role pill toggles (BOTH MODES)
+// The workflow-role pill toggles (BOTH MODES)
 // ---------------------------------------------------------------------------
-
-const DEPARTMENT_OPTIONS: WfOption[] = DEPARTMENTS.map((d) => ({ value: d, label: d }))
-
-// A membership row carries no department, so `null` is a reachable value and the control
-// has to render SOMETHING. One option holding the em dash absence renders everywhere else
-// on this tab — never an empty box, which reads as a load failure.
-const ABSENT_OPTIONS: WfOption[] = [{ value: '', label: ABSENT_LABEL }]
-
-/**
- * What is left of `PositionFields` once Axis B became a workflow role. It SPLIT rather than
- * growing a mode branch: the pills below render in both modes and this select renders in
- * neither firm surface, so one atom would have had to know which mode it was in.
- *
- * Fully controlled — there is no internal state a mis-click could destroy, so the caller owns
- * the value outright. `onDepartment` is absent when the caller mounts it read-only.
- */
-export function DepartmentField({ department, onDepartment, marginBottom }: {
-  department: Department | null
-  onDepartment?: (next: Department) => void
-  marginBottom?: number
-}) {
-  return (
-    <WfSelect
-      label="Department"
-      value={department ?? ''}
-      options={department == null ? ABSENT_OPTIONS : DEPARTMENT_OPTIONS}
-      onChange={(v) => onDepartment?.(v as Department)}
-      width={260}
-      background="var(--bg-2)"
-      marginBottom={marginBottom}
-    />
-  )
-}
 
 /**
  * §4's workflow-role picker: a wrapped row of toggle pills, one per role, ticked when held,

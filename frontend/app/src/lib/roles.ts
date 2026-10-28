@@ -233,6 +233,28 @@ export function stepsNamedLine(total: number): string {
   return total === 1 ? 'Named in 1 approval step' : `Named in ${total} approval steps`
 }
 
+export const APPROVERS_UNCHECKED = 'Workflow roles did not load, so this change may leave approval steps with no approver.'
+
+/** An active admin or reviewer moving to preparer stops satisfying approval seats. */
+export function leavesApproverRole(member: Member, next: AccessRole): boolean {
+  return member.status === 'active' && isApprover(member.role) && next === 'preparer'
+}
+
+/** The workflow roles whose only active approver is this member, when the change takes that away. */
+export function approverGaps(roles: readonly Role[], members: readonly Member[], memberId: string, next: AccessRole): Role[] {
+  const member = members.find((m) => m.id === memberId)
+  if (!member || !leavesApproverRole(member, next)) return []
+  return roles.filter((r) => {
+    const active = activeHolders(roles, members, r.key)
+    return active.length === 1 && active[0].id === memberId
+  })
+}
+
+export function approverGapNotice(name: string, titles: readonly string[]): string {
+  const tail = titles.length === 1 ? 'this role will block until someone else holds it.' : 'these roles will block until someone else holds them.'
+  return `${name} is the only admin or reviewer in ${titles.join(' · ')}. Approval steps for ${tail}`
+}
+
 /** The drawer's amber note, and the half `stepsNamedLine` leaves unsaid. */
 export const SUSPENDED_STEPS_NOTE = 'They are suspended, so those steps will block until someone else holds this role.'
 

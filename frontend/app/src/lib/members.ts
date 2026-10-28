@@ -1,9 +1,10 @@
 // Members (Settings › Members) — types, the memberships wire and read-only derivations.
 //
 // Identity, access role and status are SERVER truth, read through `listMembers` and written
-// through `setMembershipStatus`, `setMembershipRole` and `removeMembership`. Pending invites are server truth too (`listInvitations`,
-// `sendInvitations`, `resendInvitation`, `revokeInvitation`). Per-person client access is server
-// truth too (`setMembershipClients`). Department has no endpoint behind it.
+// through `setMembershipStatus`, `setMembershipRole` and `removeMembership`. Pending invites are
+// server truth too (`listInvitations`, `sendInvitations`, `resendInvitation`, `revokeInvitation`).
+// Per-person client access is server truth too (`setMembershipClients`). Only the department has
+// no endpoint behind it.
 //
 // This module is a function of a PERSON. Anything that is really a function of the ROLE LIST
 // — who holds a seat, what a policy step resolves to, how a workspace's coverage reads —
@@ -627,8 +628,7 @@ export const ABSENT_LABEL = '—'
  * One sentence per control the roster still offers but no endpoint backs. Plain and
  * server-stated: what is missing, not an apology or a promise.
  */
-export const MEMBER_UNBACKED: Record<'role' | 'department', string> = {
-  role: 'The membership endpoint writes status only. Changing someone\'s access role has no server call behind it.',
+export const MEMBER_UNBACKED: Record<'department', string> = {
   department: 'A membership stores a name, an email, an access role and a status. There is no department column.',
 }
 

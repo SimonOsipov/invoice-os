@@ -9,8 +9,15 @@ import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
-import { PROTECTED_ADMIN_NOTE, removeConfirmQuestion, type Member } from '../lib/members'
-import { drawerRoleHelper, stepsNamedLine, SUSPENDED_STEPS_NOTE, type Role } from '../lib/roles'
+import {
+  PROTECTED_ADMIN_NOTE,
+  removeConfirmQuestion,
+  roleChangeQuestion,
+  ROLE_ADMIN_ONLY,
+  SELF_DEMOTION_WARNING,
+  type Member,
+} from '../lib/members'
+import { approverGapNotice, APPROVERS_UNCHECKED, drawerRoleHelper, stepsNamedLine, SUSPENDED_STEPS_NOTE, type Role } from '../lib/roles'
 import type { Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 import { MemberDrawer } from './MemberDrawer'
@@ -499,8 +506,9 @@ describe('the drawer shell and bands', () => {
     expect(footer.style.borderTop).toBe('1px solid var(--line-1)')
   })
 
-  it('the three access-role cards show the real role, are all disabled, and dim to .45', () => {
-    open()
+  it('the three access-role cards show the real role, are all disabled for a non-admin viewer, and dim to .45', () => {
+    const setMemberRole = vi.fn()
+    open({ setMemberRole })
 
     const cards = ['admin', 'preparer', 'reviewer'].map((id) => screen.getByTestId(`drawer-role-${id}`))
     expect(cards).toHaveLength(3)
@@ -513,6 +521,9 @@ describe('the drawer shell and bands', () => {
     }
     expect(cards[1].style.border).toBe('1px solid var(--action)')
     expect(cards[0].style.border).toBe('1px solid var(--line-2)')
+    expect(screen.getByTestId('member-drawer').textContent).toContain(ROLE_ADMIN_ONLY)
+    fireEvent.click(radios[2])
+    expect(setMemberRole).not.toHaveBeenCalled()
   })
 
   it('the access-role radios are painted by the design, not by the browser default', () => {
@@ -867,5 +878,158 @@ describe('DEL-02-05: Remove in the drawer', () => {
     fireEvent.click(screen.getByTestId('member-remove'))
     expect(screen.getByTestId('member-remove-confirm')).toBeTruthy()
     expect(screen.getByTestId('member-steps-named').textContent).toBe(stepsNamedLine(2))
+  })
+})
+
+describe('ACCESS-01: the drawer saves the access role', () => {
+  const me = () => member({ id: 'me', name: 'Me Admin', role: 'admin', isYou: true })
+  const other = () => member({ id: 'a2', name: 'Other Admin', role: 'admin' })
+  const u2 = (over: Partial<Member> = {}) => member({ id: 'u2', name: 'Bo Person', role: 'preparer', ...over })
+  const REFUSED = "only an admin can change a member's role"
+
+  function mount(over: Record<string, unknown> = {}, id = 'u2') {
+    const setMemberRole = (over.setMemberRole as ReturnType<typeof vi.fn>) ?? vi.fn().mockResolvedValue(undefined)
+    const ctx = drawerCtx({ members: [me(), other(), u2()], ...over, setMemberRole })
+    render(<MemberDrawer ctx={ctx} memberId={id} onClose={vi.fn()} onStatus={vi.fn()} statusError={null} />)
+    return setMemberRole
+  }
+  const card = (id: string) => screen.getByTestId(`drawer-role-${id}`).querySelector('input') as HTMLInputElement
+  const pick = (id: string) => fireEvent.click(card(id))
+  const strip = () => screen.queryByTestId('member-role-confirm')
+  const text = (id: string) => screen.getByTestId(id).textContent
+
+  it("ACCESS-01: an admin viewer's role cards are live and a click writes once", async () => {
+    const setMemberRole = mount()
+
+    expect(['admin', 'preparer', 'reviewer'].map((id) => card(id).disabled)).toEqual([false, false, false])
+    pick('reviewer')
+    await waitFor(() => expect(setMemberRole).toHaveBeenCalledTimes(1))
+    expect(setMemberRole).toHaveBeenCalledWith('u2', 'reviewer')
+    expect(strip()).toBeNull()
+  })
+
+  it('ACCESS-01: clicking the current role sends nothing', () => {
+    const setMemberRole = mount()
+
+    pick('preparer')
+    expect(setMemberRole).not.toHaveBeenCalled()
+    expect(strip()).toBeNull()
+  })
+
+  it('ACCESS-01: a second click while a role write is in flight sends nothing', () => {
+    const setMemberRole = mount({ setMemberRole: vi.fn(() => new Promise(() => {})) })
+
+    pick('reviewer')
+    pick('admin')
+    expect(setMemberRole).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('drawer-role-admin').closest('fieldset')?.hasAttribute('disabled')).toBe(true)
+  })
+
+  it('ACCESS-01: a refused role write shows the server sentence and keeps the stored role', async () => {
+    mount({ setMemberRole: vi.fn().mockRejectedValue(new ApiError('http', REFUSED, 403)) })
+
+    pick('reviewer')
+    await waitFor(() => expect(text('member-drawer-access-error')).toBe(REFUSED))
+    expect(card('preparer').checked).toBe(true)
+    expect(card('reviewer').checked).toBe(false)
+  })
+
+  it("ACCESS-01: the sole active admin's cards are locked with the protected note", () => {
+    mount({ members: [me(), u2({ status: 'suspended' })] }, 'me')
+
+    expect(['admin', 'preparer', 'reviewer'].map((id) => card(id).disabled)).toEqual([true, true, true])
+    const describedBy = card('admin').getAttribute('aria-describedby') as string
+    expect(document.getElementById(describedBy)?.textContent).toBe(PROTECTED_ADMIN_NOTE)
+  })
+
+  it('ACCESS-01: an unlanded roles fetch leaves the cards live and warns that approvers are unchecked', async () => {
+    for (const rolesState of ['loading', 'error']) {
+      cleanup()
+      const setMemberRole = mount({ rolesState, roles: [], members: [me(), other(), u2({ role: 'reviewer' })] })
+
+      expect(['admin', 'preparer', 'reviewer'].map((id) => card(id).disabled)).toEqual([false, false, false])
+      pick('preparer')
+      expect(text('member-role-gaps')).toBe(APPROVERS_UNCHECKED)
+      expect(setMemberRole).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByTestId('member-role-confirmed'))
+      await waitFor(() => expect(setMemberRole).toHaveBeenCalledTimes(1))
+      expect(setMemberRole).toHaveBeenCalledWith('u2', 'preparer')
+      await waitFor(() => expect(strip()).toBeNull())
+
+      pick('admin')
+      expect(strip()).toBeNull()
+      await waitFor(() => expect(setMemberRole).toHaveBeenCalledTimes(2))
+      expect(setMemberRole).toHaveBeenLastCalledWith('u2', 'admin')
+    }
+  })
+
+  it('ACCESS-01: a confirmed self-demotion locks the viewer out of the cards', async () => {
+    const setMemberRole = vi.fn()
+    function Harness() {
+      const [mine, setMine] = useState<Member['role']>('admin')
+      setMemberRole.mockImplementation(async (_id: string, next: Member['role']) => setMine(next))
+      const ctx = drawerCtx({ members: [{ ...me(), role: mine }, other()], setMemberRole })
+      return <MemberDrawer ctx={ctx} memberId="me" onClose={vi.fn()} onStatus={vi.fn()} statusError={null} />
+    }
+    render(<Harness />)
+
+    pick('preparer')
+    fireEvent.click(screen.getByTestId('member-role-confirmed'))
+    await waitFor(() => expect(strip()).toBeNull())
+    expect(setMemberRole).toHaveBeenCalledWith('me', 'preparer')
+    expect(screen.queryByTestId('member-drawer-access-error')).toBeNull()
+    expect(['admin', 'preparer', 'reviewer'].map((id) => card(id).disabled)).toEqual([true, true, true])
+    expect(screen.getByTestId('member-drawer').textContent).toContain(ROLE_ADMIN_ONLY)
+  })
+
+  it('ACCESS-01: a refused write from the confirm strip shows the server sentence and clears the strip', async () => {
+    const setMemberRole = vi.fn().mockRejectedValue(new ApiError('http', 'membership not found', 404))
+    mount({ setMemberRole, roles: [role({ key: 'cfo', title: 'CFO', members: ['u2'] })], members: [me(), other(), u2({ role: 'reviewer' })] })
+
+    pick('preparer')
+    fireEvent.click(screen.getByTestId('member-role-confirmed'))
+    await waitFor(() => expect(text('member-drawer-access-error')).toBe('membership not found'))
+    expect(card('reviewer').checked).toBe(true)
+    expect(strip()).toBeNull()
+
+    pick('preparer')
+    expect(text('member-role-gaps')).toBe(approverGapNotice('Bo Person', ['CFO']))
+  })
+
+  it('ACCESS-01: an admin demoting themselves is warned first', async () => {
+    const setMemberRole = mount({}, 'me')
+
+    pick('preparer')
+    expect(text('member-role-confirm')).toContain(roleChangeQuestion('Me Admin', 'Preparer', true))
+    expect(text('member-role-self-warning')).toBe(SELF_DEMOTION_WARNING)
+    expect(document.activeElement).toBe(screen.getByTestId('member-role-keep'))
+    expect(setMemberRole).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTestId('member-role-keep'))
+    expect(strip()).toBeNull()
+    expect(setMemberRole).not.toHaveBeenCalled()
+
+    pick('preparer')
+    fireEvent.click(screen.getByTestId('member-role-confirmed'))
+    await waitFor(() => expect(setMemberRole).toHaveBeenCalledTimes(1))
+    expect(setMemberRole).toHaveBeenCalledWith('me', 'preparer')
+  })
+
+  it('ACCESS-01: demoting the only approver of a role names the role first', async () => {
+    const setMemberRole = mount({ roles: [role({ key: 'cfo', title: 'CFO', members: ['u2'] })], members: [me(), other(), u2({ role: 'reviewer' })] })
+
+    pick('preparer')
+    expect(text('member-role-gaps')).toBe(approverGapNotice('Bo Person', ['CFO']))
+    expect(setMemberRole).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('member-role-confirmed'))
+    await waitFor(() => expect(setMemberRole).toHaveBeenCalledTimes(1))
+  })
+
+  it('ACCESS-01: reviewer to admin opens no strip', async () => {
+    const setMemberRole = mount({ roles: [role({ key: 'cfo', title: 'CFO', members: ['u2'] })], members: [me(), other(), u2({ role: 'reviewer' })] })
+
+    pick('admin')
+    expect(strip()).toBeNull()
+    await waitFor(() => expect(setMemberRole).toHaveBeenCalledTimes(1))
   })
 })

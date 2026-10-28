@@ -2164,7 +2164,7 @@ describe('AC-5 — filterMembers and classifyInvites tolerate a null email', () 
 
 describe('AC-7 — MEMBER_UNBACKED', () => {
   it('supplies one distinct, non-empty sentence per unbacked control', () => {
-    const keys = ['role', 'department'] as const
+    const keys = ['department'] as const
     for (const k of keys) expect(MEMBER_UNBACKED[k]).toBeTruthy()
     expect((MEMBER_UNBACKED as Record<string, string>).clientAccess).toBeUndefined()
     const values = keys.map((k) => MEMBER_UNBACKED[k])

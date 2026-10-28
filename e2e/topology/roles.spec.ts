@@ -89,7 +89,6 @@ import {
   SEED_INHOUSE_MEMBERS,
   removeConfirmQuestion,
   SUSPEND_EXPLANATION,
-  UNBACKED,
   type SeededMember,
 } from './settingsFixtures'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA, TENANTS } from './targets'
@@ -652,8 +651,9 @@ test('firm Settings: the live member directory, the live role grid, and every co
   await expect(page.getByTestId('drawer-scope-all').locator('input')).toBeChecked()
   await expect(page.getByTestId('drawer-scope-all').locator('input')).toBeEnabled()
   await expect(drawer).not.toContainText('Client access is not stored per person')
-  // In-house's field must not leak into firm.
-  await expect(drawer).not.toContainText(UNBACKED.department)
+  // The removed field leaves no control and no text in the firm drawer.
+  await expect(wfSelect(page, 'Department')).toHaveCount(0)
+  await expect(drawer).not.toContainText(/department/i)
 
   // The Activity block is GONE — Last active, Joined and Invited by were three mock fields a
   // membership row does not carry. Absent, not em-dashed.
@@ -737,8 +737,7 @@ test('in-house Settings: its own live roster, three unsignable seats, and the su
   for (const m of SEED_FIRM_MEMBERS) {
     await expect(memberRow(page, m.name), `${m.name} must not leak into the in-house roster`).toHaveCount(0)
   }
-  // ONE column set, both modes — byte-identical to the firm's above. In-house's Department
-  // and Approval position went with the fields; the drawer says why, below.
+  // ONE column set, both modes — byte-identical to the firm's above.
   await expect(tableHeads(page)).toHaveText(MEMBERS_TABLE_HEADS)
 
   await expect(page.getByTestId('members-invite')).toBeVisible()
@@ -771,9 +770,9 @@ test('in-house Settings: its own live roster, three unsignable seats, and the su
   await expect(page.getByTestId('member-suspend')).toBeEnabled()
   await expect(drawer, 'the suspend explanation must not appear beside Reactivate').not.toContainText(SUSPEND_EXPLANATION)
 
-  // In-house's fork of the drawer's unbacked field, and the firm's absent.
-  await expect(wfSelect(page, 'Department')).toBeDisabled()
-  await expect(drawer, 'the department reason').toContainText(UNBACKED.department)
+  // Same for the in-house drawer.
+  await expect(wfSelect(page, 'Department')).toHaveCount(0)
+  await expect(drawer, 'no department text').not.toContainText(/department/i)
   await expectRemoveStrip(page, suspended)
 
   await page.getByTestId('member-drawer-close').click()

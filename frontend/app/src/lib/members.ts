@@ -3,8 +3,7 @@
 // Identity, access role and status are SERVER truth, read through `listMembers` and written
 // through `setMembershipStatus`, `setMembershipRole` and `removeMembership`. Pending invites are
 // server truth too (`listInvitations`, `sendInvitations`, `resendInvitation`, `revokeInvitation`).
-// Per-person client access is server truth too (`setMembershipClients`). Only the department has
-// no endpoint behind it.
+// Per-person client access is server truth too (`setMembershipClients`).
 //
 // This module is a function of a PERSON. Anything that is really a function of the ROLE LIST
 // — who holds a seat, what a policy step resolves to, how a workspace's coverage reads —
@@ -33,9 +32,6 @@ export type MemberStatus = 'active' | 'invited' | 'suspended' | 'removed'
 
 /** The two statuses PATCH accepts; `invited` and `removed` are never a PATCH target. */
 export type PatchableStatus = 'active' | 'suspended'
-
-/** In-house grouping primitive. There is no separate Teams/Groups entity. */
-export type Department = 'Finance' | 'Tax & Compliance' | 'Accounts Payable' | 'Executive' | 'Procurement'
 
 /**
  * One flat row per person — exactly what a membership stores. `toMember` is its only
@@ -81,8 +77,6 @@ export const ACCESS_ROLES: readonly { id: AccessRole; label: string; description
 export function accessRoleLabel(role: AccessRole): string {
   return ACCESS_ROLES.find((r) => r.id === role)?.label ?? role
 }
-
-export const DEPARTMENTS: readonly Department[] = ['Finance', 'Tax & Compliance', 'Accounts Payable', 'Executive', 'Procurement']
 
 /**
  * The "What can each role do?" rows, one per server gate; lowercase as stored. A `soon` row has
@@ -163,13 +157,8 @@ export function activeAdmins(list: readonly Member[]): Member[] {
 /** One verdict per pasted address, in input order. */
 export type InviteVerdict = 'ok' | 'member' | 'invited' | 'malformed'
 
-/**
- * Discriminated on `mode`, so the fork is a compile-time fact. `Member` itself carries neither field —
- * this is the argument an invite would take, not the row it would produce.
- */
-export type InviteOptions =
-  | { mode: 'firm'; role: AccessRole; clientAccess: 'all' | string[] }
-  | { mode: 'inhouse'; role: AccessRole; department: Department }
+/** The argument an invite would take, not the row it would produce. */
+export type InviteOptions = { mode: 'firm'; role: AccessRole; clientAccess: 'all' | string[] }
 
 /**
  * Deliberately minimal (Decision `[email-validation-minimal]`): one `@`, a dot in the
@@ -616,14 +605,6 @@ export const REMOVED_NAME = 'Deleted member'
 
 /** Absence, rendered. ONE em dash for the whole tab, so no two cells can disagree. */
 export const ABSENT_LABEL = '—'
-
-/**
- * One sentence per control the roster still offers but no endpoint backs. Plain and
- * server-stated: what is missing, not an apology or a promise.
- */
-export const MEMBER_UNBACKED: Record<'department', string> = {
-  department: 'A membership stores a name, an email, an access role and a status. There is no department column.',
-}
 
 // ---------------------------------------------------------------------------
 // The invitations wire and the invite rules

@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
 import {
+  ADMIN_ALL_CLIENTS,
   PROTECTED_ADMIN_NOTE,
   removeConfirmQuestion,
   roleChangeQuestion,
@@ -332,7 +333,7 @@ describe('RALPH fix (appr-04-06): the drawer read side must not report zero role
 // unlanded policies fetch, but its premise is false: `stepsForMember` answers `null` at zero BY
 // CONTRACT (lib/roles.ts:170-173 — "THE GATE IS THE COUNT: holding a role a policy never names
 // answers `null`, not a section reading 'Named in 0 approval steps' above an empty list"), and
-// MemberDrawer.tsx:306 renders `{steps && …}`. An unlanded fetch renders NOTHING, which makes no
+// MemberDrawer.tsx's `steps &&` gate renders `{steps && …}`. An unlanded fetch renders NOTHING, which makes no
 // false claim. An affordance here would contradict a shipped design note, so this pins the
 // contract instead: the gate stays the null, never a count re-derived off `ctx.policies`.
 
@@ -384,59 +385,6 @@ describe('APPR-09-06 AC-2: an unlanded policies fetch renders no steps line at a
     )
 
     expect(screen.getByTestId('member-steps-named').textContent).toBe(stepsNamedLine(1))
-  })
-})
-
-// ----------------------------------------------------------------------------
-// APPR-10-04 Stage 4 QA — the primitive widened under this screen
-// ----------------------------------------------------------------------------
-
-describe('APPR-10-04 QA AC-1/AC-10: the Department field keeps the fieldset trade', () => {
-  // The drawer's in-house branch reaches the Workflows-owned `WfSelect` through
-  // `DepartmentField` (MemberParts.tsx:427), inside `UnbackedField`'s `<fieldset disabled>`.
-  // APPR-10-04 gave that primitive its first `disabled` prop and rewrote the comment at
-  // MemberDrawer.tsx:63-64 that said it had none — but the trade itself is unchanged, because
-  // the lock still has to reach `ClientAccessPicker` too, which takes no prop of its own.
-  //
-  // Both halves matter and only together: the select must stay inert (the fieldset still bites)
-  // AND its own `.disabled` must stay false (the new prop did not silently reach this site).
-  it('inert by its fieldset ancestor, never by its own prop, and never repainted', () => {
-    render(
-      <MemberDrawer
-        ctx={drawerCtx({ mode: 'inhouse' })}
-        memberId="u2"
-        onClose={vi.fn()}
-        onStatus={vi.fn()}
-        statusError={null}
-      />,
-    )
-
-    const dept = screen.getByLabelText('Department') as HTMLElement
-    const select = (dept.tagName === 'LABEL' ? dept.querySelector('select') : dept) as HTMLSelectElement
-    expect(select, 'the Department field is not a <select>, so the properties below read nothing').toBeTruthy()
-    expect(select.tagName).toBe('SELECT')
-
-    // The lock, unchanged: ancestry, not the control's own attribute. jsdom reflects the CONTENT
-    // attribute only, so these two are genuinely different questions here.
-    const lock = select.closest('fieldset[disabled]')
-    expect(lock, "UnbackedField's fieldset no longer wraps the Department select").toBeTruthy()
-    expect(lock!.getAttribute('aria-describedby'), 'the fieldset lost layer 4').toBeTruthy()
-    expect(select.disabled, "APPR-10-04's new prop leaked into a call site that passes nothing").toBe(false)
-    expect(select.getAttribute('title'), 'the primitive defaulted a tooltip onto this call site').toBeNull()
-    expect(select.getAttribute('aria-describedby'), "the select re-announces the fieldset's reason a second time").toBeNull()
-
-    // Unrepainted: the fieldset's own `pointerEvents: none` is the visual layer here, and the
-    // select must keep its resting colours. An unconditional paint inside the primitive would
-    // mute it and no Members spec would have noticed.
-    expect(select.style.backgroundColor, 'the Department select lost its resting background').toBe('var(--bg-2)')
-    expect(select.style.color, 'the Department select lost its resting foreground').toBe('var(--fg-1)')
-    expect(select.style.cursor, 'the Department select paints itself dead').toBe('pointer')
-
-    // AC-10's behavioural half: the drawer still renders UnbackedField's visible reason note,
-    // which is the layer the fieldset cannot supply and the comment rewrite must not have moved.
-    const note = document.getElementById(lock!.getAttribute('aria-describedby')!)
-    expect(note, 'the fieldset points at a reason node that does not exist').toBeTruthy()
-    expect((note!.textContent ?? '').trim(), 'the reason note rendered empty').not.toBe('')
   })
 })
 
@@ -589,20 +537,30 @@ describe('the drawer shell and bands', () => {
     expect(dims.length, 'nothing above the Client access pair dims it').toBeGreaterThan(0)
     expect(Math.min(...dims)).toBeGreaterThanOrEqual(0.45)
     expect(Math.max(...dims)).toBeLessThanOrEqual(0.7)
-    const dimmed = screen.getByTestId('drawer-scope-all').closest('fieldset') as HTMLElement
+    const dimmed = screen.getByTestId('drawer-scope-all').closest('fieldset') as HTMLFieldSetElement
     expect(dimmed.style.opacity).toBe('0.45')
     expect(dimmed.style.cursor).toBe('not-allowed')
     expect(dimmed.style.filter).toBe('none')
+    expect(dimmed.disabled).toBe(true)
+    const noteId = dimmed.getAttribute('aria-describedby')
+    expect(noteId, 'the fieldset lost layer 4').toBeTruthy()
+    expect(document.getElementById(noteId!)?.textContent).toBe(ADMIN_ALL_CLIENTS)
+    for (const input of dimmed.querySelectorAll('input')) {
+      expect(input.disabled, 'the input carries its own disabled; the lock is the fieldset ancestor').toBe(false)
+      expect(input.closest('fieldset[disabled]')).toBe(dimmed)
+    }
   })
 
-  it('in-house leaves the Department select to its own disabled paint', () => {
-    open({ mode: 'inhouse' })
+  it.each(['firm', 'inhouse'] as const)('the %s drawer renders no Department control', (mode) => {
+    open({ mode })
 
-    const select = screen.getByRole('combobox', { name: 'Department' }) as HTMLSelectElement
-    const fieldset = select.closest('fieldset') as HTMLFieldSetElement
-    expect(fieldset, 'the Department select left its disabled fieldset').toBeTruthy()
-    expect(fieldset.disabled).toBe(true)
-    expect(fieldset.style.opacity, 'a dimmed fieldset would stack on the select disabled paint').toBe('')
+    expect(screen.queryByRole('combobox', { name: 'Department' })).toBeNull()
+    expect(screen.queryByLabelText('Department')).toBeNull()
+    expect(screen.getByTestId('member-drawer').textContent).not.toMatch(/department/i)
+    expect(screen.getByTestId('drawer-manage-roles')).toBeTruthy()
+    expect(screen.getByTestId('drawer-role-admin')).toBeTruthy()
+    expect(screen.getByText('Workflow roles')).toBeTruthy()
+    expect(screen.getByTestId('member-danger-zone')).toBeTruthy()
   })
 
   it('a status error for another member renders no strip here', () => {

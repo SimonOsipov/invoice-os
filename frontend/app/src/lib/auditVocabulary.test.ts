@@ -57,6 +57,7 @@ const EXPECTED: Record<AuditDomain, string[]> = {
   memberships: [
     'membership.suspended',
     'membership.reactivated',
+    'membership.role_changed',
     'membership.client_access_set',
     'membership.removed',
     'workspace.provisioned',
@@ -172,6 +173,7 @@ describe('audit vocabulary', () => {
       'workspace.export_failed',
       'membership.account_deleted',
       'membership.admin_handed_on',
+      'membership.role_changed',
       'membership.client_access_set',
       'membership.removed',
       'invitation.sent',
@@ -209,6 +211,14 @@ describe('audit vocabulary', () => {
     expect(view.tone).toBeNull()
     // Control: the same view function does return a tone for an outcome-bearing event.
     expect(auditEventView('submission.failed').tone).not.toBeNull()
+  })
+
+  it('auditVocabulary: membership.role_changed reads Access role changed', () => {
+    const view = auditEventView('membership.role_changed')
+    expect(view.domain).toBe('memberships')
+    expect(view.label).toBe('Access role changed')
+    expect(AUDIT_EVENTS['membership.role_changed'].outcome).toBe('neutral')
+    expect(view.tone).toBe('amber')
   })
 
   it('auditVocabulary_clientAccessSetIsLabelledInMemberships', () => {

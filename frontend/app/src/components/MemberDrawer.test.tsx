@@ -559,6 +559,8 @@ describe('the drawer shell and bands', () => {
     expect(screen.getByTestId('member-drawer').textContent).not.toMatch(/department/i)
     expect(screen.getByTestId('drawer-manage-roles')).toBeTruthy()
     expect(screen.getByTestId('drawer-role-admin')).toBeTruthy()
+    expect(screen.getByText('Workflow roles')).toBeTruthy()
+    expect(screen.getByTestId('member-danger-zone')).toBeTruthy()
   })
 
   it('a status error for another member renders no strip here', () => {

@@ -208,3 +208,12 @@ func TestAgedAlertsScript_ListFailureWritesNothing(t *testing.T) {
 		t.Errorf("write call: %q", r.calls)
 	}
 }
+
+func TestAgedAlertsScript_ListSearchesAllStatesByTitle(t *testing.T) {
+	t.Parallel()
+	r := runAged(t, agedList(), "Alerts: #1\n", true)
+	want := `issue list --state all --limit 100 --search in:title "` + agedTitle + `"`
+	if !r.called(want) {
+		t.Errorf("list call lacks %q: %q", want, r.calls)
+	}
+}

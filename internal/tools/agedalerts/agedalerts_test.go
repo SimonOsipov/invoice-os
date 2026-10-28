@@ -78,10 +78,10 @@ func TestSelect_OnlyOpenCounts(t *testing.T) {
 	old := "2026-09-28T12:00:00Z"
 	raw := []byte("[" + strings.Join([]string{
 		alertJSON(5, "fixed", old), alertJSON(6, "dismissed", old),
-		alertJSON(7, "auto_dismissed", old), alertJSON(10, "other", old),
+		alertJSON(7, "auto_dismissed", old), alertJSON(10, "other", old), alertJSON(11, "open", old),
 	}, ",") + "]")
-	if got := mustSelect(t, raw, now); len(got) != 0 {
-		t.Fatalf("non-open alerts returned: %v", numbers(got))
+	if got := numbers(mustSelect(t, raw, now)); !reflect.DeepEqual(got, []int{11}) {
+		t.Fatalf("got %v, want only the open #11", got)
 	}
 }
 

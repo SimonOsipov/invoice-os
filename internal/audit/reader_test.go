@@ -391,7 +391,7 @@ func TestAuditScopeOf_MatchesTheEventsTheTriggerLeavesNull(t *testing.T) {
 	}
 }
 
-// AC #4: cross-checks the four DB-pinned rule sets (10+7+4+4+34=59) for pairwise
+// AC #4: cross-checks the four DB-pinned rule sets for pairwise
 // disjointness and total. audit_trigger_test.go pins each set's size alone but never
 // cross-checks them — an invariant CompanyScope's three-way split now depends on. Needs
 // no audit package call: it guards the fixture data itself. Disjointness is a real

@@ -8,9 +8,9 @@
 // reviewer approved stop existing, and the approval now points at history no one
 // read. So the gate asks about the review, not about the act.
 //
-// It clears itself. A fresh review after the rewrite means a human has looked at
-// the new history, which is exactly the remedy — so the check goes green again
-// without anyone editing a file or overriding a branch rule.
+// A fresh review after the rewrite is the remedy, but a review starts no
+// workflow: re-run the CI workflow after it. A PR Dependabot opened passes when
+// only dependabot[bot] pushed after it became reviewable.
 //
 // GitHub's PR timeline is the only place this evidence exists. A force push leaves
 // nothing in the local repository to find, and subagent shell commands are not
@@ -30,6 +30,9 @@ type event struct {
 	CreatedAt   string `json:"created_at"`
 	SubmittedAt string `json:"submitted_at"`
 	State       string `json:"state"`
+	Actor       struct {
+		Login string `json:"login"`
+	} `json:"actor"`
 }
 
 // when returns the event's timestamp. Reviews carry submitted_at; everything
@@ -50,7 +53,13 @@ type pull struct {
 	Number    int    `json:"number"`
 	Draft     bool   `json:"draft"`
 	CreatedAt string `json:"created_at"`
+	User      struct {
+		Login string `json:"login"`
+	} `json:"user"`
 }
+
+// dependabot is compared by exact equality: a near-miss login is not exempt.
+const dependabot = "dependabot[bot]"
 
 type verdict struct {
 	OK     bool
@@ -86,16 +95,27 @@ func decide(pr pull, timeline []event) verdict {
 	}
 
 	var lastRewrite time.Time
+	onlyDependabot := true
 	for _, e := range timeline {
 		if e.Event != "head_ref_force_pushed" {
 			continue
 		}
-		if t, ok := e.when(); ok && !t.Before(readyAt) && t.After(lastRewrite) {
+		t, ok := e.when()
+		if !ok || t.Before(readyAt) {
+			continue
+		}
+		if e.Actor.Login != dependabot {
+			onlyDependabot = false
+		}
+		if t.After(lastRewrite) {
 			lastRewrite = t
 		}
 	}
 	if lastRewrite.IsZero() {
 		return verdict{true, "no force push since the PR became reviewable"}
+	}
+	if pr.User.Login == dependabot && onlyDependabot {
+		return verdict{true, "every force push since the PR became reviewable is by " + dependabot + ", a rebase"}
 	}
 
 	for _, e := range timeline {
@@ -111,8 +131,8 @@ func decide(pr pull, timeline []event) verdict {
 
 	return verdict{false, fmt.Sprintf(
 		"the branch was force-pushed at %s, after the PR became reviewable at %s, and nobody has "+
-			"reviewed it since. The commits a reviewer read may no longer exist. Ask for a fresh "+
-			"review — that clears this check on its own.",
+			"reviewed it since. The commits a reviewer read may no longer exist. Submit a fresh "+
+			"review, then re-run the CI workflow: a review alone starts nothing.",
 		lastRewrite.Format(time.RFC3339), readyAt.Format(time.RFC3339))}
 }
 

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -161,5 +163,135 @@ func TestTraceTransport_CarriesTheIDToken(t *testing.T) {
 	_, _ = rt.RoundTrip(req)
 	if !asked {
 		t.Error("TraceTransport sent a run.app request without asking the metadata server for an ID token")
+	}
+}
+
+func TestIDTokenCache_RefreshesForDifferentAudiencesRunInParallel(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	md := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		fmt.Fprint(w, fakeJWT(now.Add(time.Hour)))
+	}))
+	defer md.Close()
+	tr := newIDTokenTransport(http.DefaultTransport, md.URL, func() time.Time { return now })
+
+	const n = 10
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	start := time.Now()
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := tr.cache.token(t.Context(), tr.base, fmt.Sprintf("https://svc%d.run.app", i))
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	elapsed := time.Since(start)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("token: %v", err)
+		}
+	}
+	if elapsed >= 300*time.Millisecond {
+		t.Errorf("%d audiences took %v, want < 300ms (refreshes must not serialise)", n, elapsed)
+	}
+}
+
+func TestIDTokenCache_ConcurrentSameAudienceFetchesOnce(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	var fetches atomic.Int32
+	md := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		time.Sleep(100 * time.Millisecond)
+		fmt.Fprint(w, fakeJWT(now.Add(time.Hour)))
+	}))
+	defer md.Close()
+	tr := newIDTokenTransport(http.DefaultTransport, md.URL, func() time.Time { return now })
+
+	const n = 10
+	toks := make(chan string, n)
+	var wg sync.WaitGroup
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tok, err := tr.cache.token(t.Context(), tr.base, "https://one.run.app")
+			if err != nil {
+				t.Errorf("token: %v", err)
+			}
+			toks <- tok
+		}()
+	}
+	wg.Wait()
+	close(toks)
+	got := 0
+	for tok := range toks {
+		if tok == "" {
+			t.Error("empty token")
+		}
+		got++
+	}
+	if got != n {
+		t.Errorf("got %d tokens, want %d", got, n)
+	}
+	if f := fetches.Load(); f != 1 {
+		t.Errorf("metadata fetches = %d, want 1", f)
+	}
+}
+
+func TestIDTokenCache_StalledAudienceDoesNotBlockAnother(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	md := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.RawQuery, "slow.run.app") {
+			close(entered)
+			<-release
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprint(w, fakeJWT(now.Add(time.Hour)))
+	}))
+	defer md.Close()
+	var once sync.Once
+	releaseSlow := func() { once.Do(func() { close(release) }) }
+	defer releaseSlow()
+	tr := newIDTokenTransport(http.DefaultTransport, md.URL, func() time.Time { return now })
+
+	slowErr := make(chan error, 1)
+	go func() {
+		_, err := tr.cache.token(t.Context(), tr.base, "https://slow.run.app")
+		slowErr <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("slow audience never reached the metadata server")
+	}
+
+	type result struct {
+		tok string
+		err error
+	}
+	fast := make(chan result, 1)
+	go func() {
+		tok, err := tr.cache.token(t.Context(), tr.base, "https://fast.run.app")
+		fast <- result{tok, err}
+	}()
+	select {
+	case r := <-fast:
+		if r.err != nil || r.tok == "" {
+			t.Errorf("fast audience: token %q, err %v; want a token", r.tok, r.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("fast audience still waiting 2s behind a stalled audience")
+	}
+
+	releaseSlow()
+	if err := <-slowErr; err == nil {
+		t.Error("slow audience returned no error after a 500")
 	}
 }

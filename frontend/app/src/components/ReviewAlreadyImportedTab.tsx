@@ -1,7 +1,7 @@
 // Review · "Already imported" tab (BUG-08-03). The DUPLICATE channel: rows the parser
 // read perfectly, whose invoice this workspace already holds. Deliberately NOT a sibling
 // of ReviewUnreadableTab's copy or palette — nothing here failed, so the muted family
-// (the non-verdict one, MemberParts.tsx:100-104) is the correct family and no row is
+// (the non-verdict one, `STATUS_TONE` in MemberParts.tsx) is the correct family and no row is
 // asked to be corrected.
 
 import { alreadyImportedCsvAll, type AlreadyImportedRowAll, type ReviewUnit } from '../lib/reviewBatch'

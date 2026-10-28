@@ -55,7 +55,6 @@ import {
   listInvitations,
   listMembers,
   memberInitials,
-  MEMBER_UNBACKED,
   membersSurface,
   membersViewState,
   mergeChips,
@@ -97,7 +96,7 @@ import { isApprover } from './roles'
 // The mock roster, moved here verbatim when lib/members.ts stopped shipping a seed. It is a
 // FIXTURE now, not a shipped constant: it exercises the reducers and the derivations over
 // rows the live directory (identity + access role + status only) cannot express — invited
-// rows, departments, per-person client access, `invitedBy`.
+// rows, per-person client access, `invitedBy`.
 const SEED_FIRM_MEMBERS: readonly Member[] = [
   {
     id: 'mf1',
@@ -1450,7 +1449,7 @@ describe('APPR-00 Q1 — delegateCandidates admits the admin in firm mode too', 
 // ============================================================================
 // Authored as Mode A RED specs, and that RED phase is over: listMembers,
 // setMembershipStatus, toMember, memberInitials, emailLabel and membersViewState are
-// implemented, MEMBER_UNBACKED ships populated, and filterMembers/classifyInvites both
+// implemented, and filterMembers/classifyInvites both
 // guard a null email with `(m.email ?? '').toLowerCase()`. Every spec below is green
 // against the shipped implementations.
 
@@ -2188,21 +2187,6 @@ describe('AC-5 — filterMembers and classifyInvites tolerate a null email', () 
     const row = nullEmailMember('Nomail Person')
     expect(() => classifyInvites([row], ['fresh@x.ng'])).not.toThrow()
     expect(classifyInvites([row], ['fresh@x.ng'])).toEqual(['ok'])
-  })
-})
-
-describe('AC-7 — MEMBER_UNBACKED', () => {
-  it('supplies one distinct, non-empty sentence per unbacked control', () => {
-    const keys = ['department'] as const
-    expect(Object.keys(MEMBER_UNBACKED)).toEqual(['department'])
-    for (const k of keys) expect(MEMBER_UNBACKED[k]).toBeTruthy()
-    expect((MEMBER_UNBACKED as Record<string, string>).clientAccess).toBeUndefined()
-    const values = keys.map((k) => MEMBER_UNBACKED[k])
-    expect(new Set(values).size).toBe(keys.length)
-    expect(Object.keys(MEMBER_UNBACKED).sort()).toEqual([...keys].sort())
-    expect('invite' in MEMBER_UNBACKED, 'the invite endpoint exists; its "not yet" sentence is retired').toBe(false)
-    expect('inviteLink' in MEMBER_UNBACKED).toBe(false)
-    expect('revokeInvite' in MEMBER_UNBACKED).toBe(false)
   })
 })
 

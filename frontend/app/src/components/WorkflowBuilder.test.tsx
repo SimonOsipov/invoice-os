@@ -929,8 +929,8 @@ describe('APPR-10-04 QA (R14): the approval panel enumerates its controls', () =
 
 describe('APPR-10-04 QA (R15): the disabled paint is CONDITIONAL', () => {
   // THE MUTATION ORACLE. An unconditional paint spread inside either shared primitive satisfies
-  // every assertion above and silently repaints all ten `WfSelect` call sites — two of them on
-  // the Members screen this story never opens (MemberParts.tsx:427, MembersView.tsx:127). Only
+  // every assertion above and silently repaints all nine `WfSelect` call sites — one of them on
+  // the Members screen this story never opens (MembersView.tsx). Only
   // this spec sees it. Rendered bare rather than through the builder: after this subtask the app
   // has no ENABLED `WfToggle` left, so the primitive is the only place the resting state exists.
   it('an enabled WfSelect and an enabled WfToggle keep their resting style', () => {

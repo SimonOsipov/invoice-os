@@ -26,7 +26,6 @@ import {
   emailLabel,
   isProtectedAdmin,
   accessRoleLabel,
-  MEMBER_UNBACKED,
   pickerClients,
   PROTECTED_ADMIN_NOTE,
   REMOVE_CONFIRMED,
@@ -54,7 +53,7 @@ import {
   SUSPENDED_STEPS_NOTE,
 } from '../lib/roles'
 import { useDismiss } from '../lib/useDismiss'
-import { AmberNote, ClientAccessPicker, DepartmentField, InitialsChip, MemberStatusPill, RoleCards, WorkflowRolePills } from './MemberParts'
+import { AmberNote, ClientAccessPicker, InitialsChip, MemberStatusPill, RoleCards, WorkflowRolePills } from './MemberParts'
 import type { PlatformCtx } from '../types'
 
 // §4 names this as the affordance, not as prose, so it stays a component constant rather
@@ -65,9 +64,8 @@ const MANAGE_ROLES = 'Manage roles'
 const ACCESS_ROLE_IDS = ACCESS_ROLES.map((r) => r.id)
 
 /**
- * Controls under ONE lock — `ClientAccessPicker` holds state and takes no `disabled`, and
- * `DepartmentField`'s `WfSelect` has one that would not reach it. A `<fieldset disabled>` gives all
- * four layers without plumbing a prop through a shared component for a Members-only need:
+ * Controls under ONE lock — `ClientAccessPicker` holds state and takes no `disabled`. A
+ * `<fieldset disabled>` gives all four layers without plumbing a prop through a shared component for a Members-only need:
  * HTML natively disables every descendant (1, unclickable and out of the tab order),
  * `pointerEvents: none` is a stronger (2) than any background swap, the sibling below is
  * (3), and `aria-describedby` on the fieldset is (4). This was the first `<fieldset>` in
@@ -385,7 +383,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
             </div>
           )}
 
-          {ctx.mode === 'firm' ? (
+          {ctx.mode === 'firm' && (
             <>
               <div className="label" style={{ margin: '22px 0 8px' }}>
                 Client access
@@ -435,12 +433,6 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
                 </>
               )}
             </>
-          ) : (
-            <div style={{ marginTop: 22 }}>
-              <UnbackedField reason={MEMBER_UNBACKED.department} noteId={scopeNoteId}>
-                <DepartmentField department={null} />
-              </UnbackedField>
-            </div>
           )}
 
           {/* BOTH modes — a role staffs people in either workspace now. */}
@@ -464,7 +456,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
             </button>
           </div>
           {/* The visual half of the in-flight lock — UnbackedField's `<fieldset disabled>`
-              shape (line 71 above), inlined rather than reused: that component always renders
+              shape (see its docblock), inlined rather than reused: that component always renders
               a reason note, and a staffing write in flight has none to show. */}
           <fieldset disabled={rolePending} style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0 }}>
             {rolesLanded ? (

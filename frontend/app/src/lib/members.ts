@@ -108,11 +108,8 @@ export const CAPABILITY_ROWS: readonly { label: string; admin: boolean; preparer
  * placeholder. Both are rendered verbatim by MemberRoleMatrix — MEMB-01-05's AC#1 says so
  * for the footnote and AC#3 for the card — and neither is a derivation of anything.
  *
- * They live here, beside the labels QA18 pins, for the reason task-297's QA
- * moved three display strings out of components: `environment: node` cannot mount a
- * component, so a string authored inside one is a string no spec can hold (§15.8). The
- * footnote is the longest passage in the story, two sentences whose clauses depend on each
- * other, and a fluent paraphrase of it is exactly what a screenshot gate cannot catch.
+ * They live here, not in the component: `environment: node` cannot mount a component, so a
+ * string authored inside one is a string no spec can hold.
  *
  * The expander's own header label stays in the component: §6 names it as the affordance,
  * not as prose, and AC#1's verbatim clause covers the rows and the footnote only.

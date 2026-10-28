@@ -102,6 +102,7 @@ export function MemberRoleMatrix() {
                 {/* Rendered exactly as stored, lowercase: §6's own casing (`text-transform` would corrupt `ERP`). */}
                 <span role="rowheader" style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>
                   {row.label}
+                  {row.soon && ' '}
                   {row.soon && (
                     <span className="mono" data-testid="role-soon-mark" style={{ ...MARK_STYLE, display: 'block', width: 'fit-content', marginTop: 4 }}>
                       Coming soon

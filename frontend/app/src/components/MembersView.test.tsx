@@ -1983,9 +1983,9 @@ describe('the capability matrix card', () => {
       const row = rows[i + 1]
       const cells = within(row).getAllByRole('cell')
       if (cap.soon) {
-        const header = within(row).getByRole('rowheader')
+        const header = within(row).getByRole('rowheader', { name: `${cap.label} Coming soon` })
         expect(within(header).getByTestId('role-soon-mark').textContent).toBe('Coming soon')
-        expect(header.textContent).toBe(`${cap.label}Coming soon`)
+        expect(header.textContent).toBe(`${cap.label} Coming soon`)
         for (const cell of cells) {
           expect(cell.querySelector('svg'), 'a soon row draws no tick or cross, even with admin: true').toBeNull()
           expect(cell.querySelector('[aria-hidden="true"]')!.textContent).toBe('\u2013')

@@ -467,7 +467,7 @@ describe('constants (T1.39–T1.40, §3/§6)', () => {
     expect(ACCESS_ROLES.some((r) => /connector|certificate/i.test(r.description))).toBe(false)
   })
 
-  it('the three role columns match the server gates (T1.40)', () => {
+  it('pins the three role columns per row (T1.40)', () => {
     expect(CAPABILITY_ROWS).toHaveLength(12)
     expect(CAPABILITY_ROWS.map((r) => r.admin)).toEqual(Array(12).fill(true))
     expect(CAPABILITY_ROWS.map((r) => r.reviewer)).toEqual([true, true, true, true, true, false, false, false, false, false, false, false])

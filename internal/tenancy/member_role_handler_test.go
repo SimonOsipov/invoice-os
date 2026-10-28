@@ -256,11 +256,14 @@ func TestSetMemberRoleHandler_AnswersTheSixKeys(t *testing.T) {
 
 func TestSetMemberRoleHandler_RefusalsAndLogsCarryNoNameOrEmail(t *testing.T) {
 	const adaName, adaEmail = "Ada Obi", "ada.obi@example.test"
+	const boName, boEmail = "Bo Eze", "bo.eze@example.test"
 	super, app := dbTestPools(t)
 	tenant := seedTenant(t, super, "ACCESS-01-02 no pii")
 	ada, prep := uuid.NewString(), uuid.NewString()
 	seedIdentityMembership(t, super, tenant, ada, "admin", "active", strp(adaName), strp(adaEmail))
 	seedMembership(t, super, tenant, prep, "preparer", "active")
+	bo := uuid.NewString()
+	seedIdentityMembership(t, super, tenant, bo, "reviewer", "active", strp(boName), strp(boEmail))
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
 	idOf := func(u string) *auth.Identity {
@@ -288,7 +291,7 @@ func TestSetMemberRoleHandler_RefusalsAndLogsCarryNoNameOrEmail(t *testing.T) {
 	closed.Close()
 	step("role change on a closed pool", patchRoleViaMux(t, NewStore(closed).SetMemberRole, logger, idOf(ada), prep, `{"role":"reviewer"}`), 500)
 	drop := failAudit(t, super, tenant, roleChangedEvent)
-	step("role change whose audit write fails", patchRoleViaMux(t, store.SetMemberRole, logger, idOf(ada), prep, `{"role":"reviewer"}`), 500)
+	step("role change whose audit write fails", patchRoleViaMux(t, store.SetMemberRole, logger, idOf(ada), bo, `{"role":"preparer"}`), 500)
 	drop()
 	if logs.Len() == 0 {
 		t.Fatal("the 500 wrote no log line, so the absence checks below read nothing")
@@ -297,7 +300,7 @@ func TestSetMemberRoleHandler_RefusalsAndLogsCarryNoNameOrEmail(t *testing.T) {
 		t.Fatalf("scanned %d refusal bodies, want 4 (403, 409, 500, 500)", len(refusals))
 	}
 	scanned := strings.ToLower(logs.String() + strings.Join(refusals, "\n"))
-	for _, needle := range []string{adaName, adaEmail} {
+	for _, needle := range []string{adaName, adaEmail, boName, boEmail} {
 		if strings.Contains(scanned, strings.ToLower(needle)) {
 			t.Errorf("a refusal body or log line carries the fixture name or address %q", needle[:3]+"...")
 		}

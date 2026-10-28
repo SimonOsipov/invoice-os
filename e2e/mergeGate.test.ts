@@ -13,6 +13,7 @@ const input = (o: Partial<GateInput>): GateInput => ({
   topologyResult: 'success',
   author: '',
   commitsOnlyDependabot: '',
+  commitAuthorsResult: 'success',
   ...o,
 })
 
@@ -483,6 +484,7 @@ describe('mergeGateVerdict adversarial', () => {
                   topologyResult,
                   author: '',
                   commitsOnlyDependabot: '',
+                  commitAuthorsResult: 'success',
                 })
                 expect(
                   v.pass,
@@ -510,18 +512,25 @@ describe('mergeGate CLI', () => {
     'TOPOLOGY_RESULT',
     'PR_AUTHOR',
     'COMMITS_ONLY_DEPENDABOT',
+    'COMMIT_AUTHORS_RESULT',
   ]
 
   const cli = (vars: Record<string, string>) => {
     // Strip the gate vars from the inherited env so a CI runner's values cannot leak in.
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !VARS.includes(k)))
     try {
-      return { code: 0, out: execFileSync(process.execPath, [gate], { encoding: 'utf8', env: { ...env, ...vars } }) }
+      return { code: 0, out: execFileSync(process.execPath, [gate], { encoding: 'utf8', env: { ...env, COMMIT_AUTHORS_RESULT: 'success', ...vars } }) }
     } catch (err) {
       const e = err as { status: number; stdout: string }
       return { code: e.status, out: e.stdout }
     }
   }
+
+  it('script fails a non-relevant PR when COMMIT_AUTHORS_RESULT is failure', () => {
+    const { code, out } = cli({ CHANGES_RESULT: 'success', E2E_RELEVANT: 'false', COMMIT_AUTHORS_RESULT: 'failure' })
+    expect(code).toBe(1)
+    expect(out).toContain('::error::commit author detection did not succeed (failure)')
+  })
 
   it('script exits 1 with no env', () => {
     const { code, out } = cli({})
@@ -700,5 +709,31 @@ describe('mergeGate CLI', () => {
     const { code, out } = cli(skippedE2e)
     expect(code).toBe(1)
     expect(out).toContain("E2E concluded 'skipped'")
+  })
+})
+
+describe('mergeGateVerdict commit-authors result', () => {
+  const BAD = ['failure', 'cancelled', 'skipped', '']
+  it('fails on every non-success result, before any pass path', () => {
+    for (const commitAuthorsResult of BAD) {
+      const cases = [
+        input({ commitAuthorsResult, relevant: 'false', e2eResult: 'skipped' }),
+        input({ commitAuthorsResult }),
+        input({ commitAuthorsResult, author: 'dependabot[bot]', commitsOnlyDependabot: 'true' }),
+      ]
+      for (const c of cases) {
+        const v = mergeGateVerdict(c)
+        expect(v.pass, commitAuthorsResult).toBe(false)
+        expect(v.reason).toContain('commit author detection did not succeed')
+      }
+    }
+  })
+  it('names the result in the reason', () => {
+    expect(mergeGateVerdict(input({ commitAuthorsResult: 'cancelled' })).reason).toContain('(cancelled)')
+    expect(mergeGateVerdict(input({ commitAuthorsResult: '' })).reason).toContain('(no result)')
+  })
+  it('leaves behaviour unchanged on success', () => {
+    expect(mergeGateVerdict(input({ relevant: 'false', e2eResult: 'skipped' })).pass).toBe(true)
+    expect(mergeGateVerdict(input({ author: 'dependabot[bot]', commitsOnlyDependabot: 'true' })).pass).toBe(true)
   })
 })

@@ -70,7 +70,7 @@ jobs:
           FILTER_E2E: ${{ steps.filter.outputs.e2e }}
         run: bash scripts/ci/lane.sh pr-e2e
 
-  # Decides whether Dependabot alone wrote the PR; the preview jobs wait for it. A failure skips them and fails the gate.
+  # Decides whether Dependabot alone wrote the PR; the preview jobs wait for it. A failure skips them; the gate fails on any result but success.
   commit-authors:
     name: Detect a Dependabot-only PR
     runs-on: ubuntu-latest
@@ -726,3 +726,4 @@ jobs:
           CI_CONCLUSION: ${{ needs.ci-watch.outputs.conclusion }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           COMMITS_ONLY_DEPENDABOT: ${{ needs.commit-authors.outputs.dependabot_only }}
+          COMMIT_AUTHORS_RESULT: ${{ needs.commit-authors.result }}

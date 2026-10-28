@@ -46,6 +46,7 @@ func (c doCommit) json() string {
 type doOpts struct {
 	pages [][]doCommit      // one array per page, printed back to back
 	raw   string            // printed instead of pages when set
+	then  string            // printed from the second gh call on when set
 	fail  bool              // gh exits 1
 	env   map[string]string // overrides the defaults
 	omit  []string          // env vars left unset
@@ -76,7 +77,8 @@ func runDO(t *testing.T, o doOpts) doRun {
 	shims, work := t.TempDir(), t.TempDir()
 	writeShim(t, filepath.Join(shims, "gh"), `echo "$*" >> "$DO_DIR/calls"
 [ -n "${DO_FAIL:-}" ] && exit 1
-cat "$DO_DIR/list"
+n=$(wc -l < "$DO_DIR/calls")
+if [ "$n" -gt 1 ] && [ -f "$DO_DIR/list2" ]; then cat "$DO_DIR/list2"; else cat "$DO_DIR/list"; fi
 `)
 	list := o.raw
 	if list == "" {
@@ -96,10 +98,16 @@ cat "$DO_DIR/list"
 	if err := os.WriteFile(filepath.Join(work, "list"), []byte(list), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if o.then != "" {
+		if err := os.WriteFile(filepath.Join(work, "list2"), []byte(o.then), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	outPath := filepath.Join(work, "output")
 	env := map[string]string{
 		"GH_TOKEN": "t", "REPO": "o/r", "PR_AUTHOR": doBot, "EVENT_SENDER": doBot,
 		"EVENT_ACTION": "synchronize", "HEAD_SHA": "shahead", "GITHUB_OUTPUT": outPath,
+		"DEPENDABOT_ONLY_RETRY_SLEEP": "0",
 	}
 	for k, v := range o.env {
 		env[k] = v
@@ -311,6 +319,27 @@ func TestDependabotOnly_EmptyListFailsClosed(t *testing.T) {
 func TestDependabotOnly_StaleHeadFailsClosed(t *testing.T) {
 	t.Parallel()
 	wantFailClosed(t, runDO(t, doOpts{pages: doPage(botCommit(), botCommit()), env: map[string]string{"HEAD_SHA": "shaother"}}))
+}
+
+func TestDependabotOnly_StaleThenFreshListRetriesToTheVerdict(t *testing.T) {
+	t.Parallel()
+	stale := `[` + botCommit().json() + `]` // sha "" != HEAD_SHA
+	fresh := botCommit()
+	fresh.sha = "shahead"
+	r := runDO(t, doOpts{raw: stale, then: "[" + fresh.json() + "]"})
+	wantVerdict(t, r, "true")
+	if len(r.calls) != 2 {
+		t.Errorf("gh calls = %d, want 2", len(r.calls))
+	}
+}
+
+func TestDependabotOnly_StaleListFailsClosedAfterThreeTries(t *testing.T) {
+	t.Parallel()
+	r := runDO(t, doOpts{raw: `[` + botCommit().json() + `]`})
+	wantFailClosed(t, r)
+	if len(r.calls) != 3 {
+		t.Errorf("gh calls = %d, want 3", len(r.calls))
+	}
 }
 
 func TestDependabotOnly_MalformedJSONFailsClosed(t *testing.T) {

@@ -254,6 +254,7 @@ func TestDevEnvDependabot_GateReadsTheCommitVerdict(t *testing.T) {
 	}
 	want := map[string]string{
 		"COMMITS_ONLY_DEPENDABOT": "${{ needs.commit-authors.outputs.dependabot_only }}",
+		"COMMIT_AUTHORS_RESULT":   "${{ needs.commit-authors.result }}",
 		"PR_AUTHOR":               "${{ github.event.pull_request.user.login }}",
 	}
 	for _, s := range gate.steps() {

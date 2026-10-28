@@ -1,5 +1,5 @@
 // Fails the required "E2E gate" check unless the PR needs no E2E, or CI, E2E and every topology shard succeeded.
-// Usage: node e2e/mergeGate.ts  (reads CHANGES_RESULT, E2E_RELEVANT, PR_AUTHOR, COMMITS_ONLY_DEPENDABOT, PR_DRAFT, E2E_RESULT, CI_RESULT, CI_CONCLUSION, TOPOLOGY_RESULT)
+// Usage: node e2e/mergeGate.ts  (reads CHANGES_RESULT, E2E_RELEVANT, PR_AUTHOR, COMMIT_AUTHORS_RESULT, COMMITS_ONLY_DEPENDABOT, PR_DRAFT, E2E_RESULT, CI_RESULT, CI_CONCLUSION, TOPOLOGY_RESULT)
 // Node >= 22.18 runs this file without flags, so keep it to erasable TypeScript.
 
 import { fileURLToPath } from 'node:url'
@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 export type GateInput = {
   author: string
   commitsOnlyDependabot: string
+  commitAuthorsResult: string
   changesResult: string
   relevant: string
   draft: string
@@ -20,6 +21,10 @@ export type GateInput = {
 export function mergeGateVerdict(i: GateInput): { pass: boolean; reason: string } {
   if (i.changesResult !== 'success') {
     return { pass: false, reason: `path detection did not succeed (${i.changesResult || 'no result'})` }
+  }
+  // A failed commit-authors skips the preview jobs, so no later rule can see the loss.
+  if (i.commitAuthorsResult !== 'success') {
+    return { pass: false, reason: `commit author detection did not succeed (${i.commitAuthorsResult || 'no result'})` }
   }
   // A Dependabot PR with a human commit gets a preview, so it needs E2E; only the exact 'true' skips.
   if (i.author === 'dependabot[bot]' && i.commitsOnlyDependabot === 'true') {
@@ -49,6 +54,7 @@ function main(env: NodeJS.ProcessEnv): number {
   const v = mergeGateVerdict({
     author: env.PR_AUTHOR ?? '',
     commitsOnlyDependabot: env.COMMITS_ONLY_DEPENDABOT ?? '',
+    commitAuthorsResult: env.COMMIT_AUTHORS_RESULT ?? '',
     changesResult: env.CHANGES_RESULT ?? '',
     relevant: env.E2E_RELEVANT ?? '',
     draft: env.PR_DRAFT ?? '',

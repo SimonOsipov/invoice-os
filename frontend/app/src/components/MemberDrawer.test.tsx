@@ -996,6 +996,17 @@ describe('ACCESS-01: the drawer saves the access role', () => {
     expect(text('member-role-gaps')).toBe(approverGapNotice('Bo Person', ['CFO']))
   })
 
+  it('ACCESS-01: a refused role write then a successful one clears the error', async () => {
+    const setMemberRole = vi.fn().mockRejectedValueOnce(new ApiError('http', REFUSED, 403)).mockResolvedValue(undefined)
+    mount({ setMemberRole })
+
+    pick('reviewer')
+    await waitFor(() => expect(text('member-drawer-access-error')).toBe(REFUSED))
+    pick('admin')
+    await waitFor(() => expect(setMemberRole).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.queryByTestId('member-drawer-access-error')).toBeNull())
+  })
+
   it('ACCESS-01: an admin demoting themselves is warned first', async () => {
     const setMemberRole = mount({}, 'me')
 
@@ -1008,6 +1019,8 @@ describe('ACCESS-01: the drawer saves the access role', () => {
     fireEvent.click(screen.getByTestId('member-role-keep'))
     expect(strip()).toBeNull()
     expect(setMemberRole).not.toHaveBeenCalled()
+    expect(card('admin').checked).toBe(true)
+    expect(card('preparer').checked).toBe(false)
 
     pick('preparer')
     fireEvent.click(screen.getByTestId('member-role-confirmed'))

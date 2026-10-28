@@ -3,6 +3,8 @@ package tenancy
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"net/http"
 
 	"github.com/jackc/pgx/v5"
 
@@ -94,4 +96,11 @@ func (s *Store) SetMemberRole(ctx context.Context, userID, role string) (MemberA
 		return MemberAccess{}, err
 	}
 	return out, nil
+}
+
+// SetMemberRoleHandler is a compile seam for the red tests; ACCESS-01-02 replaces it.
+func SetMemberRoleHandler(_ func(ctx context.Context, userID, role string) (MemberAccess, error), _ *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	}
 }

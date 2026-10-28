@@ -215,6 +215,17 @@ func TestDecide(t *testing.T) {
 			wantsMsg: "nobody has reviewed it since",
 		},
 		{
+			name: "review before a later bot push does not clear a dependabot pr with a human push",
+			pr:   prBy(bot, "2026-10-20T08:58:33Z"),
+			timeline: []event{
+				pushBy("SimonOsipov", "2026-10-21T07:00:00Z"),
+				{Event: "reviewed", SubmittedAt: "2026-10-21T08:00:00Z"},
+				pushBy(bot, "2026-10-21T09:00:00Z"),
+			},
+			wantOK:   false,
+			wantsMsg: "nobody has reviewed it since",
+		},
+		{
 			name: "review after a human push on a dependabot pr clears it",
 			pr:   prBy(bot, "2026-10-20T08:58:33Z"),
 			timeline: []event{

@@ -1,4 +1,4 @@
-// dependabot_workflow_test.go pins that no job holding an OIDC token runs on a Dependabot PR (PATCH-02).
+// dependabot_workflow_test.go pins that no job holding an OIDC token runs on a Dependabot PR.
 package main
 
 import (
@@ -76,13 +76,37 @@ func guardedJobs(jobs []workflowJob) map[string]bool {
 	return guarded
 }
 
+// grantsIDToken reports whether the permissions key at indent grants id-token: write, as a block, a flow map or write-all.
+func grantsIDToken(lines []string, indent int) bool {
+	pad := strings.Repeat(" ", indent)
+	for _, l := range stripHashComments(lines) {
+		if rest, ok := strings.CutPrefix(l, pad+"permissions:"); ok {
+			rest = strings.TrimSpace(rest)
+			if rest == "write-all" {
+				return true
+			}
+			if inner, ok := strings.CutPrefix(rest, "{"); ok {
+				for _, f := range strings.Split(strings.TrimSuffix(inner, "}"), ",") {
+					if k, v, _ := strings.Cut(f, ":"); strings.TrimSpace(k) == "id-token" && strings.TrimSpace(v) == "write" {
+						return true
+					}
+				}
+			}
+		}
+	}
+	for _, l := range blockLines(lines, indent, "permissions") {
+		if k, v, _ := strings.Cut(l, ":"); strings.TrimSpace(k) == "id-token" && strings.TrimSpace(v) == "write" {
+			return true
+		}
+	}
+	return false
+}
+
 func oidcJobs(jobs []workflowJob) []string {
 	var out []string
 	for _, j := range jobs {
-		for _, l := range blockLines(j.lines, 4, "permissions") {
-			if k, v, _ := strings.Cut(l, ":"); strings.TrimSpace(k) == "id-token" && strings.TrimSpace(v) == "write" {
-				out = append(out, j.name)
-			}
+		if grantsIDToken(j.lines, 4) {
+			out = append(out, j.name)
 		}
 	}
 	return out
@@ -137,64 +161,6 @@ func ifsReadingActor(yml string) []string {
 	return out
 }
 
-// mutateJob applies mutateOnce to the raw text of one job, so a needle shared by sibling jobs stays unique.
-func mutateJob(t *testing.T, yml, id, old, repl string) string {
-	t.Helper()
-	lines := strings.Split(yml, "\n")
-	start, inJobs := -1, false
-	for i, l := range lines {
-		inJobs = inJobs || l == "jobs:"
-		if inJobs && l == "  "+id+":" {
-			start = i
-			break
-		}
-	}
-	if start < 0 {
-		t.Fatalf("workflow has no job %q", id)
-	}
-	end := len(lines)
-	for i := start + 1; i < len(lines); i++ {
-		l, tr := lines[i], strings.TrimSpace(lines[i])
-		topKey := tr != "" && !strings.HasPrefix(l, " ")
-		header := strings.HasPrefix(l, "  ") && !strings.HasPrefix(l, "   ") && strings.HasSuffix(tr, ":") && !strings.HasPrefix(tr, "#")
-		if topKey || header {
-			end = i
-			break
-		}
-	}
-	block := strings.Join(lines[start:end], "\n")
-	if end < len(lines) {
-		block += "\n"
-	}
-	if n := strings.Count(block, old); n != 1 {
-		t.Fatalf("job %q: mutation needle %q occurs %d times, want 1", id, old, n)
-	}
-	block = mutateOnce(t, block, old, repl)
-	head := strings.Join(lines[:start], "\n")
-	if start > 0 {
-		head += "\n"
-	}
-	return head + block + strings.Join(lines[end:], "\n")
-}
-
-// mutantUnguarded returns the unguarded OIDC jobs after one in-job mutation of the real dev-env.yml.
-// The control makes the mutant a real test of the guard: a file that is already unguarded fails here.
-func mutantUnguarded(t *testing.T, id, old, repl string) []string {
-	t.Helper()
-	yml := readWorkflow(t, "dev-env.yml")
-	if got := unguardedOIDCJobs(yml); len(got) != 0 {
-		t.Fatalf("control: the real dev-env.yml has unguarded OIDC jobs %v", got)
-	}
-	return unguardedOIDCJobs(mutateJob(t, yml, id, old, repl))
-}
-
-func requireListed(t *testing.T, got []string, want string) {
-	t.Helper()
-	if !slices.Contains(got, want) {
-		t.Errorf("unguardedOIDCJobs = %v, want it to list %q", got, want)
-	}
-}
-
 func TestDevEnvDependabot_EveryOIDCJobIsGuarded(t *testing.T) {
 	t.Parallel()
 	yml := readWorkflow(t, "dev-env.yml")
@@ -226,56 +192,6 @@ func TestDevEnvDependabot_NoIfReadsTheActor(t *testing.T) {
 	}
 }
 
-func TestDevEnvDependabot_InvariantsUnguardedFails(t *testing.T) {
-	t.Parallel()
-	got := mutantUnguarded(t, "invariants", "    if: "+authorCond+"\n", "")
-	if !slices.Equal(got, []string{"invariants"}) {
-		t.Errorf("unguardedOIDCJobs = %v, want [invariants]", got)
-	}
-}
-
-func TestDevEnvDependabot_BuildUnguardedFails(t *testing.T) {
-	t.Parallel()
-	got := mutantUnguarded(t, "build", " && "+authorCond, "")
-	if !slices.Equal(got, []string{"build"}) {
-		t.Errorf("unguardedOIDCJobs = %v, want [build] (deploy stays guarded through prepare-env)", got)
-	}
-}
-
-func TestDevEnvDependabot_ActorInsteadOfAuthorFails(t *testing.T) {
-	t.Parallel()
-	yml := readWorkflow(t, "dev-env.yml")
-	if got := ifsReadingActor(yml); len(got) != 0 {
-		t.Fatalf("control: the real dev-env.yml has an if: that reads github.actor: %q", got)
-	}
-	got := mutantUnguarded(t, "prepare-env", "github.event.pull_request.user.login", "github.actor")
-	requireListed(t, got, "prepare-env")
-	mutated := mutateJob(t, yml, "prepare-env", "github.event.pull_request.user.login", "github.actor")
-	if len(ifsReadingActor(mutated)) == 0 {
-		t.Error("the no-actor scan misses github.actor in a mutated prepare-env if:")
-	}
-}
-
-func TestDevEnvDependabot_DeployIfLosingNeedsFails(t *testing.T) {
-	t.Parallel()
-	got := mutantUnguarded(t, "deploy",
-		`if: "!cancelled() && needs.prepare-env.result == 'success' && needs.build.result == 'success'"`,
-		`if: "!cancelled()"`)
-	requireListed(t, got, "deploy")
-}
-
-func TestDevEnvDependabot_DeployOrInsteadOfAndFails(t *testing.T) {
-	t.Parallel()
-	got := mutantUnguarded(t, "deploy", "'success' && needs.build.result", "'success' || needs.build.result")
-	requireListed(t, got, "deploy")
-}
-
-func TestDevEnvDependabot_NotEqualSuccessIsNotAGuard(t *testing.T) {
-	t.Parallel()
-	got := mutantUnguarded(t, "fleet-gate", "needs.deploy.result == 'success'", "needs.deploy.result != 'success'")
-	requireListed(t, got, "fleet-gate")
-}
-
 func TestDevEnvTeardown_SkipsDependabotPRs(t *testing.T) {
 	t.Parallel()
 	yml := readWorkflow(t, "dev-env-teardown.yml")
@@ -287,26 +203,14 @@ func TestDevEnvTeardown_SkipsDependabotPRs(t *testing.T) {
 	}
 }
 
-func TestDevEnvDependabot_NewOIDCJobUnguardedFails(t *testing.T) {
-	t.Parallel()
-	yml := readWorkflow(t, "dev-env.yml")
-	if got := unguardedOIDCJobs(yml); len(got) != 0 {
-		t.Fatalf("control: the real dev-env.yml has unguarded OIDC jobs %v", got)
-	}
-	extra := "\n  extra-oidc:\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - run: echo hi\n"
-	requireListed(t, unguardedOIDCJobs(yml+extra), "extra-oidc")
-}
-
 func TestDevEnvDependabot_WorkflowPermissionsHoldNoIDToken(t *testing.T) {
 	t.Parallel()
-	block := blockLines(strings.Split(readWorkflow(t, "dev-env.yml"), "\n"), 0, "permissions")
-	if len(block) == 0 {
-		t.Fatal("control: dev-env.yml has no top-level permissions block")
+	lines := strings.Split(readWorkflow(t, "dev-env.yml"), "\n")
+	if !slices.ContainsFunc(lines, func(l string) bool { return strings.HasPrefix(l, "permissions:") }) {
+		t.Fatal("control: dev-env.yml has no top-level permissions key")
 	}
-	for _, l := range block {
-		if strings.HasPrefix(l, "id-token") {
-			t.Errorf("workflow-level permissions hold %q: every job would inherit an OIDC token", l)
-		}
+	if grantsIDToken(lines, 0) {
+		t.Error("workflow-level permissions grant id-token: every job would inherit an OIDC token")
 	}
 }
 

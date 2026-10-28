@@ -9,7 +9,12 @@ import (
 	"testing"
 )
 
-const authorCond = "github.event.pull_request.user.login != 'dependabot[bot]'"
+const (
+	authorCond   = "needs.commit-authors.outputs.dependabot_only == 'false'"
+	teardownCond = "github.event.pull_request.user.login != 'dependabot[bot]'"
+)
+
+var rootJobs = []string{"invariants", "ci-watch", "prepare-env", "build"}
 
 var needsSuccess = regexp.MustCompile(`^needs\.([A-Za-z0-9_-]+)\.result == 'success'$`)
 
@@ -126,15 +131,94 @@ func unguardedOIDCJobs(yml string) []string {
 	return out
 }
 
-// teardownSkipsDependabot reports whether the teardown job's if: is exactly the author condition.
+// teardownSkipsDependabot reports whether the teardown job's if: is exactly the PR-author condition.
 func teardownSkipsDependabot(yml string) bool {
 	for _, j := range workflowJobsOf(yml) {
 		if j.name == "teardown" {
 			expr, ok := foldedIf(j)
-			return ok && expr == authorCond
+			return ok && expr == teardownCond
 		}
 	}
 	return false
+}
+
+// needsOf lists a job's needs, from a scalar or a flow list.
+func needsOf(j workflowJob) []string {
+	v, ok := jobKey(j, "needs")
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, f := range strings.Split(strings.Trim(v, "[]"), ",") {
+		out = append(out, strings.TrimSpace(f))
+	}
+	return out
+}
+
+// rootJobsLackingAuthorCond lists the root jobs without the exact author conjunct or without commit-authors in needs.
+func rootJobsLackingAuthorCond(yml string) []string {
+	byName := map[string]workflowJob{}
+	for _, j := range workflowJobsOf(yml) {
+		byName[j.name] = j
+	}
+	var bad []string
+	for _, id := range rootJobs {
+		j, found := byName[id]
+		expr, hasIf := foldedIf(j)
+		if !found || !hasIf || !hasAuthorConjunct(expr) || !slices.Contains(needsOf(j), "commit-authors") {
+			bad = append(bad, id)
+		}
+	}
+	return bad
+}
+
+// mutateJobText replaces from with to on the one line of job that holds it; an empty result drops the line.
+func mutateJobText(t *testing.T, yml, job, from, to string) string {
+	t.Helper()
+	var out []string
+	in, n := false, 0
+	for _, l := range strings.Split(yml, "\n") {
+		if tr := strings.TrimSpace(l); strings.HasPrefix(l, "  ") && !strings.HasPrefix(l, "   ") && !strings.HasPrefix(tr, "#") && strings.HasSuffix(tr, ":") {
+			in = tr == job+":"
+		}
+		if in && strings.Contains(l, from) {
+			n++
+			if l = strings.Replace(l, from, to, 1); strings.TrimSpace(l) == "" {
+				continue
+			}
+		}
+		out = append(out, l)
+	}
+	if n != 1 {
+		t.Fatalf("job %q holds %q on %d lines, want 1", job, from, n)
+	}
+	return strings.Join(out, "\n")
+}
+
+// wrongEventFields lists the verdict-step env vars of commit-authors that do not pass the event field through.
+func wrongEventFields(yml string) []string {
+	var env map[string]string
+	for _, j := range workflowJobsOf(yml) {
+		if j.name != "commit-authors" {
+			continue
+		}
+		for _, s := range j.steps() {
+			if s.keys["id"] == "verdict" {
+				env = s.env
+			}
+		}
+	}
+	var bad []string
+	for k, want := range map[string]string{
+		"EVENT_ACTION": "${{ github.event.action }}",
+		"EVENT_SENDER": "${{ github.event.sender.login }}",
+	} {
+		if env[k] != want {
+			bad = append(bad, k)
+		}
+	}
+	sort.Strings(bad)
+	return bad
 }
 
 // ifsReadingActor returns every if: expression (job or step, folded) that reads github.actor.
@@ -170,6 +254,9 @@ func TestDevEnvDependabot_EveryOIDCJobIsGuarded(t *testing.T) {
 			t.Errorf("control: id-token jobs %v lack %q", oidc, want)
 		}
 	}
+	if slices.Contains(oidc, "commit-authors") {
+		t.Error("commit-authors requests id-token: it runs on every PR, Dependabot's included")
+	}
 	if got := unguardedOIDCJobs(yml); len(got) != 0 {
 		t.Errorf("OIDC jobs that can run on a Dependabot PR: %v", got)
 	}
@@ -177,11 +264,8 @@ func TestDevEnvDependabot_EveryOIDCJobIsGuarded(t *testing.T) {
 
 func TestDevEnvDependabot_RootJobsCarryTheAuthorCondition(t *testing.T) {
 	t.Parallel()
-	for _, id := range []string{"invariants", "ci-watch", "prepare-env", "build"} {
-		expr, ok := foldedIf(devEnvJob(t, id))
-		if !ok || !hasAuthorConjunct(expr) {
-			t.Errorf("%s if = %q, want a top-level && conjunct %q and no ||", id, expr, authorCond)
-		}
+	if got := rootJobsLackingAuthorCond(readWorkflow(t, "dev-env.yml")); len(got) != 0 {
+		t.Errorf("jobs without a top-level && conjunct %q, no ||, and commit-authors in needs: %v", authorCond, got)
 	}
 }
 
@@ -196,7 +280,7 @@ func TestDevEnvTeardown_SkipsDependabotPRs(t *testing.T) {
 	t.Parallel()
 	yml := readWorkflow(t, "dev-env-teardown.yml")
 	if !teardownSkipsDependabot(yml) {
-		t.Fatalf("teardown if is not exactly %q", authorCond)
+		t.Fatalf("teardown if is not exactly %q", teardownCond)
 	}
 }
 
@@ -211,19 +295,128 @@ func TestDevEnvDependabot_WorkflowPermissionsHoldNoIDToken(t *testing.T) {
 	}
 }
 
-func TestDevEnvDependabot_GateReadsThePRAuthor(t *testing.T) {
+func TestDevEnvDependabot_GateReadsTheCommitVerdict(t *testing.T) {
 	t.Parallel()
-	const want = "${{ github.event.pull_request.user.login }}"
-	for _, s := range devEnvJob(t, "e2e-gate").steps() {
+	gate := devEnvJob(t, "e2e-gate")
+	if !slices.Contains(needsOf(gate), "commit-authors") {
+		t.Errorf("e2e-gate needs = %v, want commit-authors", needsOf(gate))
+	}
+	want := map[string]string{
+		"COMMITS_ONLY_DEPENDABOT": "${{ needs.commit-authors.outputs.dependabot_only }}",
+		"PR_AUTHOR":               "${{ github.event.pull_request.user.login }}",
+	}
+	for _, s := range gate.steps() {
 		if !strings.Contains(s.keys["run"], "node e2e/mergeGate.ts") {
 			continue
 		}
-		if s.env["PR_AUTHOR"] != want {
-			t.Errorf("gate env PR_AUTHOR = %q, want %q", s.env["PR_AUTHOR"], want)
+		for k, v := range want {
+			if s.env[k] != v {
+				t.Errorf("gate env %s = %q, want %q", k, s.env[k], v)
+			}
 		}
 		return
 	}
 	t.Fatal("e2e-gate has no node e2e/mergeGate.ts step")
+}
+
+func TestDevEnvDependabot_CommitAuthorsHoldsNoIDToken(t *testing.T) {
+	t.Parallel()
+	j := devEnvJob(t, "commit-authors")
+	if grantsIDToken(j.lines, 4) {
+		t.Error("commit-authors requests id-token: write")
+	}
+	perms := blockLines(j.lines, 4, "permissions")
+	sort.Strings(perms)
+	if want := []string{"contents: read", "pull-requests: read"}; !slices.Equal(perms, want) {
+		t.Errorf("commit-authors permissions = %v, want exactly %v", perms, want)
+	}
+	for _, k := range []string{"needs", "if"} {
+		if v, ok := jobKey(j, k); ok {
+			t.Errorf("commit-authors has %s: %q, want none", k, v)
+		}
+	}
+	if got := blockLines(j.lines, 4, "outputs"); !slices.Equal(got, []string{"dependabot_only: ${{ steps.verdict.outputs.dependabot_only }}"}) {
+		t.Errorf("commit-authors outputs = %v", got)
+	}
+	for _, s := range j.steps() {
+		if s.keys["id"] != "verdict" {
+			continue
+		}
+		if want := `bash scripts/ci/dependabot-only.sh "$PR"`; s.keys["run"] != want {
+			t.Errorf("verdict run = %q, want %q", s.keys["run"], want)
+		}
+		for k, want := range map[string]string{
+			"GH_TOKEN":     "${{ github.token }}",
+			"REPO":         "${{ github.repository }}",
+			"PR_AUTHOR":    "${{ github.event.pull_request.user.login }}",
+			"EVENT_SENDER": "${{ github.event.sender.login }}",
+			"EVENT_ACTION": "${{ github.event.action }}",
+			"HEAD_SHA":     "${{ github.event.pull_request.head.sha }}",
+		} {
+			if s.env[k] != want {
+				t.Errorf("verdict env %s = %q, want %q", k, s.env[k], want)
+			}
+		}
+		return
+	}
+	t.Fatal("commit-authors has no step with id: verdict")
+}
+
+func TestDevEnvDependabot_CommitAuthorsPassesTheEventFields(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	if got := wrongEventFields(yml); len(got) != 0 {
+		t.Fatalf("commit-authors verdict env does not pass through: %v", got)
+	}
+	for _, c := range []struct{ field, line, to string }{
+		{"EVENT_ACTION", "EVENT_ACTION: ${{ github.event.action }}", ""},
+		{"EVENT_ACTION", "EVENT_ACTION: ${{ github.event.action }}", "EVENT_ACTION: opened"},
+		{"EVENT_ACTION", "EVENT_ACTION: ${{ github.event.action }}", "EVENT_ACTION: ${{ github.event_name }}"},
+		{"EVENT_SENDER", "EVENT_SENDER: ${{ github.event.sender.login }}", ""},
+		{"EVENT_SENDER", "EVENT_SENDER: ${{ github.event.sender.login }}", "EVENT_SENDER: ${{ github.actor }}"},
+		{"EVENT_SENDER", "EVENT_SENDER: ${{ github.event.sender.login }}", "EVENT_SENDER: ${{ github.event.pull_request.user.login }}"},
+	} {
+		got := wrongEventFields(mutateJobText(t, yml, "commit-authors", c.line, c.to))
+		if !slices.Equal(got, []string{c.field}) {
+			t.Errorf("%s -> %q: wrong fields = %v, want [%s]", c.line, c.to, got, c.field)
+		}
+	}
+}
+
+func TestDevEnvDependabot_DroppedConjunctLeavesAnOIDCJobUnguarded(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	if got := unguardedOIDCJobs(yml); len(got) != 0 {
+		t.Fatalf("control: OIDC jobs already unguarded: %v", got)
+	}
+	for _, id := range []string{"invariants", "prepare-env", "build"} {
+		if got := unguardedOIDCJobs(mutateJobText(t, yml, id, authorCond, "true")); !slices.Contains(got, id) {
+			t.Errorf("dropping the conjunct of %s leaves unguarded = %v, want it named", id, got)
+		}
+	}
+}
+
+func TestDevEnvDependabot_WidenedConjunctIsRejected(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	if got := rootJobsLackingAuthorCond(yml); len(got) != 0 {
+		t.Fatalf("control: root jobs already lack the conjunct: %v", got)
+	}
+	for _, to := range []string{
+		"needs.commit-authors.outputs.dependabot_only != 'true'",
+		authorCond + " || true",
+		teardownCond,
+	} {
+		for _, id := range rootJobs {
+			if got := rootJobsLackingAuthorCond(mutateJobText(t, yml, id, authorCond, to)); !slices.Equal(got, []string{id}) {
+				t.Errorf("%s with conjunct %q: lacking = %v, want [%s]", id, to, got, id)
+			}
+		}
+	}
+	noNeeds := mutateJobText(t, yml, "invariants", "needs: [commit-authors]", "needs: [changes]")
+	if got := rootJobsLackingAuthorCond(noNeeds); !slices.Equal(got, []string{"invariants"}) {
+		t.Errorf("invariants without commit-authors in needs: lacking = %v", got)
+	}
 }
 
 func TestDevEnvDependabot_InvariantsHasNoOtherCondition(t *testing.T) {
@@ -231,5 +424,8 @@ func TestDevEnvDependabot_InvariantsHasNoOtherCondition(t *testing.T) {
 	expr, ok := foldedIf(devEnvJob(t, "invariants"))
 	if !ok || expr != authorCond {
 		t.Errorf("invariants if = %q, want exactly %q (no draft or path term)", expr, authorCond)
+	}
+	if got := needsOf(devEnvJob(t, "invariants")); !slices.Equal(got, []string{"commit-authors"}) {
+		t.Errorf("invariants needs = %v, want [commit-authors]", got)
 	}
 }

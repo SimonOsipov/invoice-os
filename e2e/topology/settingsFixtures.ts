@@ -5,9 +5,8 @@
 // status, read back over the wire by GET /api/tenancy/v1/memberships. A failure here is a
 // BACKEND contract failure -- the seed, the query, the projection or RLS.
 //
-// UNBACKED_* -- display copy transcribed from frontend/app/src/lib/members.ts's
-// MEMBER_UNBACKED and the drawer's danger-zone strings. Transcribed,
-// never imported: this package has no dependency on frontend/app/src (e2e/tsconfig.json), and
+// Drawer copy -- transcribed from frontend/app/src/lib/members.ts's danger-zone strings.
+// Transcribed, never imported: this package has no dependency on frontend/app/src (e2e/tsconfig.json), and
 // a second copy is what catches a one-sided edit.
 //
 // Split out of roles.spec.ts's old combined fixture module (APPR-04-07): the other half
@@ -79,18 +78,8 @@ export const SEED_INHOUSE_MEMBERS: readonly SeededMember[] = [
 export const MEMBERS_TABLE_HEADS: readonly string[] = ['Person', 'Access role', 'Workflow roles', 'Status', '']
 
 // ---------------------------------------------------------------------------------------
-// UNBACKED — the sentence each dead control states for itself
+// Drawer copy
 // ---------------------------------------------------------------------------------------
-
-/**
- * `MEMBER_UNBACKED` and the drawer's suspend explanation. Every one
- * of these is rendered as VISIBLE text beside its control, not only as a `title`: a disabled
- * control is out of the tab order and `title` never fires on one in Chromium, so the visible
- * sibling is the only layer a screenshot, a keyboard user and an assertion can all reach.
- */
-export const UNBACKED = {
-  department: 'A membership stores a name, an email, an access role and a status. There is no department column.',
-} as const
 
 /** `removeConfirmQuestion` in frontend/app/src/lib/members.ts, transcribed. */
 export const removeConfirmQuestion = (name: string): string =>

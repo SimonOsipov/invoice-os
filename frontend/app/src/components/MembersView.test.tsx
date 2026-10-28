@@ -1998,6 +1998,9 @@ describe('the capability matrix card', () => {
       expect(within(row).getByRole('rowheader').textContent).toBe(cap.label)
       expect(cells.map((c) => c.textContent)).toEqual(ACCESS_ROLES.map((r) => (cap[r.id] ? 'Yes' : 'No')))
     })
+    const soonRows = CAPABILITY_ROWS.filter((c) => c.soon)
+    expect(soonRows.length).toBeGreaterThan(0)
+    expect(within(body).getAllByTestId('role-soon-mark')).toHaveLength(soonRows.length)
     expect(body.textContent).toContain(CAPABILITY_FOOTNOTE)
 
     fireEvent.click(toggle)

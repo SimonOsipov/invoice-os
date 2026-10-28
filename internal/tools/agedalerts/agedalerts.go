@@ -18,7 +18,7 @@ type Alert struct {
 	AgeDays  int
 }
 
-// Plain structs: a null object decodes to zero values, so no nil dereference.
+// Plain structs; see TestSelect_NullFieldsDoNotFail.
 type rawAlert struct {
 	Number     int    `json:"number"`
 	State      string `json:"state"`

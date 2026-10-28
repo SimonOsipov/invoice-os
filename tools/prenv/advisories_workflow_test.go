@@ -135,7 +135,7 @@ func nightlyProblems(yml string) []string {
 		problems = append(problems, "nightly permissions are not only contents: read; no issues permission allowed")
 	}
 	if strings.Contains(text, "gh issue") {
-		problems = append(problems, "nightly opens an issue (gh issue)")
+		problems = append(problems, "nightly workflow calls gh issue inline; aged-alerts-issue.sh owns the issue")
 	}
 	var advisories, vuln, aged *workflowJob
 	jobs := workflowJobsOf(yml)

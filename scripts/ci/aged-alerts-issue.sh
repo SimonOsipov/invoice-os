@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Open, update or close the one aged-alert issue. Usage: aged-alerts-issue.sh <body-file>
-# pipefail: a failed `gh issue list` must not read as "no issue" and create a duplicate.
+# Test: TestAgedAlertsScript_ListFailureWritesNothing.
 set -euo pipefail
 body_file=${1:-}
 if [ -z "$body_file" ] || [ ! -f "$body_file" ]; then

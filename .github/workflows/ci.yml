@@ -1265,9 +1265,9 @@ jobs:
   #
   # It is narrow on purpose. Both force pushes this repo has seen (PR #115 on
   # 2026-07-29, PR #140 on 2026-08-06) landed while the PR was still a draft and
-  # destroyed nothing, so drafts are left alone. It also clears itself: a fresh
-  # review after the rewrite is the actual remedy and turns the check green with
-  # no file to edit and no rule to override.
+  # destroyed nothing, so drafts are left alone. A fresh review after the
+  # rewrite is the remedy, but a review starts nothing: re-run the CI workflow
+  # after it.
   #
   # .claude/hooks/guard-git-history.py denies the same push before it leaves the
   # machine. That hook only covers sessions that have it loaded; this covers the

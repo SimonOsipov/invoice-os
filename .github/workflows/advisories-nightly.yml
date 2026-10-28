@@ -1,6 +1,6 @@
 name: Advisories nightly
 
-# A finding fails the run and opens no issue (Q6).
+# A high finding fails the run. An open Dependabot alert older than 7 days opens one issue (PATCH Q5).
 # govulncheck covers GO-only ids the advisories gate does not count.
 # schedule and workflow_dispatch run only from main; pull_request is the pre-merge run.
 on:
@@ -12,6 +12,8 @@ on:
       - '.github/workflows/advisories-nightly.yml'
       - 'scripts/ci/advisories.sh'
       - 'internal/tools/advisorygate/**'
+      - 'scripts/ci/aged-alerts-issue.sh'
+      - 'internal/tools/agedalerts/**'
 
 permissions:
   contents: read
@@ -42,3 +44,34 @@ jobs:
         run: |
           go version
           go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  aged-alerts:
+    name: aged Dependabot alerts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      vulnerability-alerts: read
+    concurrency:
+      group: advisories-nightly-aged-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ISSUE_TITLE: Dependabot alerts open more than 7 days
+      NOTIFY: ${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: List open Dependabot alerts older than 7 days
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$GH_REPO/dependabot/alerts?state=open&per_page=100" | jq -s 'add // []' > "$RUNNER_TEMP/alerts.json"
+          go run ./internal/tools/agedalerts -alerts "$RUNNER_TEMP/alerts.json" -body "$RUNNER_TEMP/aged.md"
+      - name: Open, update or close the aged-alert issue
+        if: github.event_name != 'pull_request'
+        run: bash scripts/ci/aged-alerts-issue.sh "$RUNNER_TEMP/aged.md"

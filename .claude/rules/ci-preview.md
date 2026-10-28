@@ -7,8 +7,12 @@ paths:
 ---
 # PR previews on Google Cloud
 
-- `dev-env.yml` deploys each ready PR to `ascomply-preview` as `<svc>-pr-<N>` on run.app. `scripts/ci/preview.sh` does every gcloud call.
+- `dev-env.yml` deploys each ready PR, except a Dependabot-only one, to `ascomply-preview` as `<svc>-pr-<N>` on run.app. `scripts/ci/preview.sh` does every gcloud call.
 - Authenticate as `deploy-preview`. Workload Identity admits it from `pull_request` runs and from `main`. It holds no role in `ascomply-prod`.
+- A PR opened by `dependabot[bot]` with every commit by `dependabot[bot]` and verified runs no preview job. `E2E gate` passes it by name.
+- A Dependabot PR with any other commit gets the full preview. Teardown still skips every PR opened by `dependabot[bot]`.
+- When `commit-authors` fails, re-run the whole workflow.
+- A Dependabot PR that was reopened or marked ready runs the full chain. Send `@dependabot recreate` to get the skip back.
 - Keep the shared preview resources in invoice-os-infra `preview.tf`. Create and delete the per-PR resources only with `preview.sh`.
 - Label every per-PR resource `preview-pr=<N>`. The sweeper finds a preview by that label.
 - Recreate `pr_<N>` on every deploy with the `preview-db` job. Cloud SQL refuses `session_replication_role`, so no reset runs in place.

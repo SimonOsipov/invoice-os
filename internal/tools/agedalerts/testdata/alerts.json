@@ -1,0 +1,173 @@
+[
+  {
+    "number": 8,
+    "state": "open",
+    "created_at": "2026-09-28T12:00:00Z",
+    "html_url": "https://github.com/SimonOsipov/invoice-os/security/dependabot/8",
+    "dependency": {
+      "package": {
+        "ecosystem": "npm",
+        "name": "pkg-eight"
+      }
+    },
+    "security_advisory": {
+      "ghsa_id": "GHSA-aaaa-aaaa-0008",
+      "severity": "low"
+    },
+    "security_vulnerability": {
+      "severity": "low"
+    }
+  },
+  {
+    "number": 4,
+    "state": "open",
+    "created_at": "2026-10-20T12:00:00Z",
+    "html_url": "https://github.com/SimonOsipov/invoice-os/security/dependabot/4",
+    "dependency": {
+      "package": {
+        "ecosystem": "npm",
+        "name": "pkg-four"
+      }
+    },
+    "security_advisory": {
+      "ghsa_id": "GHSA-aaaa-aaaa-0004",
+      "severity": "medium"
+    },
+    "security_vulnerability": {
+      "severity": "medium"
+    }
+  },
+  {
+    "number": 1,
+    "state": "open",
+    "created_at": "2026-10-22T12:00:00Z",
+    "html_url": "https://github.com/SimonOsipov/invoice-os/security/dependabot/1",
+    "dependency": {
+      "package": {
+        "ecosystem": "npm",
+        "name": "pkg-one"
+      }
+    },
+    "security_advisory": {
+      "ghsa_id": "GHSA-aaaa-aaaa-0001",
+      "severity": "high"
+    },
+    "security_vulnerability": {
+      "severity": "high"
+    }
+  },
+  {
+    "number": 9,
+    "state": "open",
+    "created_at": "2026-10-20T12:00:00Z",
+    "html_url": "https://github.com/SimonOsipov/invoice-os/security/dependabot/9",
+    "dependency": {
+      "package": {
+        "ecosystem": "npm",
+        "name": "pkg-nine"
+      }
+    },
+    "security_advisory": {
+      "ghsa_id": "GHSA-aaaa-aaaa-0009",
+      "severity": "critical"
+    },
+    "security_vulnerability": {
+      "severity": "critical"
+    }
+  },
+  {
+    "number": 3,
+    "state": "open",
+    "created_at": "2026-10-21T11:59:59Z",
+    "html_url": "https://github.com/SimonOsipov/invoice-os/security/dependabot/3",
+    "dependency": {
+      "package": {
+        "ecosystem": "npm",
+        "name": "pkg-three"
+      }
+    },
+    "security_advisory": {
+      "ghsa_id": "GHSA-aaaa-aaaa-0003",
+      "severity": "medium"
+    },
+    "security_vulnerability": {
+      "severity": "medium"
+    }
+  },
+  {
+    "number": 2,
+    "state": "open",
+    "created_at": "2026-10-21T12:00:00Z",
+    "html_url": "https://github.com/SimonOsipov/invoice-os/security/dependabot/2",
+    "dependency": {
+      "package": {
+        "ecosystem": "npm",
+        "name": "pkg-two"
+      }
+    },
+    "security_advisory": {
+      "ghsa_id": "GHSA-aaaa-aaaa-0002",
+      "severity": "medium"
+    },
+    "security_vulnerability": {
+      "severity": "medium"
+    }
+  },
+  {
+    "number": 5,
+    "state": "fixed",
+    "created_at": "2026-09-28T12:00:00Z",
+    "html_url": "https://github.com/SimonOsipov/invoice-os/security/dependabot/5",
+    "dependency": {
+      "package": {
+        "ecosystem": "npm",
+        "name": "pkg-five"
+      }
+    },
+    "security_advisory": {
+      "ghsa_id": "GHSA-aaaa-aaaa-0005",
+      "severity": "high"
+    },
+    "security_vulnerability": {
+      "severity": "high"
+    }
+  },
+  {
+    "number": 6,
+    "state": "dismissed",
+    "created_at": "2026-09-28T12:00:00Z",
+    "html_url": "https://github.com/SimonOsipov/invoice-os/security/dependabot/6",
+    "dependency": {
+      "package": {
+        "ecosystem": "npm",
+        "name": "pkg-six"
+      }
+    },
+    "security_advisory": {
+      "ghsa_id": "GHSA-aaaa-aaaa-0006",
+      "severity": "high"
+    },
+    "security_vulnerability": {
+      "severity": "high"
+    }
+  },
+  {
+    "number": 7,
+    "state": "auto_dismissed",
+    "created_at": "2026-09-28T12:00:00Z",
+    "html_url": "https://github.com/SimonOsipov/invoice-os/security/dependabot/7",
+    "dependency": {
+      "package": {
+        "ecosystem": "npm",
+        "name": "pkg-seven"
+      }
+    },
+    "security_advisory": {
+      "ghsa_id": "GHSA-aaaa-aaaa-0007",
+      "severity": "high"
+    },
+    "security_vulnerability": {
+      "severity": "high"
+    }
+  }
+]

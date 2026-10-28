@@ -309,6 +309,12 @@ describe('mergeGateVerdict Dependabot', () => {
     )
     expect(v.pass).toBe(false)
     expect(v.reason).toContain('CI did not succeed')
+    const e2e = mergeGateVerdict(input({ author: BOT, commitsOnlyDependabot: 'false', e2eResult: 'failure' }))
+    expect(e2e.pass).toBe(false)
+    expect(e2e.reason).toBe("E2E concluded 'failure'")
+    const topo = mergeGateVerdict(input({ author: BOT, commitsOnlyDependabot: 'false', topologyResult: 'failure' }))
+    expect(topo.pass).toBe(false)
+    expect(topo.reason).toBe("topology shards concluded 'failure'")
   })
 
   it('a Dependabot PR with a human commit and no relevant path passes as a human PR', () => {
@@ -673,6 +679,21 @@ describe('mergeGate CLI', () => {
     const { code, out } = cli({ ...skippedE2e, PR_AUTHOR: 'dependabot[bot]' })
     expect(code).toBe(1)
     expect(out).toContain("::error::E2E concluded 'skipped'")
+    // Positive control, then every non-exact value of the var.
+    expect(cli({ ...skippedE2e, PR_AUTHOR: 'dependabot[bot]', COMMITS_ONLY_DEPENDABOT: 'true' }).code).toBe(0)
+    for (const COMMITS_ONLY_DEPENDABOT of ['', 'false', 'TRUE', ' true', 'true ', 'true\n', 'yes']) {
+      const r = cli({ ...skippedE2e, PR_AUTHOR: 'dependabot[bot]', COMMITS_ONLY_DEPENDABOT })
+      expect(r.code, JSON.stringify(COMMITS_ONLY_DEPENDABOT)).toBe(1)
+      expect(r.out, JSON.stringify(COMMITS_ONLY_DEPENDABOT)).toContain("::error::E2E concluded 'skipped'")
+    }
+  })
+
+  it('script never skips a human author whatever COMMITS_ONLY_DEPENDABOT holds', () => {
+    for (const PR_AUTHOR of ['SimonOsipov', 'Dependabot[bot]', '']) {
+      const { code, out } = cli({ ...skippedE2e, PR_AUTHOR, COMMITS_ONLY_DEPENDABOT: 'true' })
+      expect(code, JSON.stringify(PR_AUTHOR)).toBe(1)
+      expect(out, JSON.stringify(PR_AUTHOR)).toContain("::error::E2E concluded 'skipped'")
+    }
   })
 
   it('script ignores an unset PR_AUTHOR', () => {

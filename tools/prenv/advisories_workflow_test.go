@@ -629,3 +629,11 @@ func jobKey(j workflowJob, key string) (string, bool) {
 	}
 	return "", false
 }
+
+func TestAdvisoriesNightly_AgedAlertsJobPassesNotify(t *testing.T) {
+	t.Parallel()
+	env, _ := jobKey(nightlyJob(t, "aged-alerts"), "env")
+	if !strings.Contains(env, "NOTIFY: ${{ github.repository_owner }}") {
+		t.Errorf("aged-alerts env lacks NOTIFY: ${{ github.repository_owner }}: %q", env)
+	}
+}

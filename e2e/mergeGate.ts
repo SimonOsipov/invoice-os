@@ -1,10 +1,11 @@
 // Fails the required "E2E gate" check unless the PR needs no E2E, or CI, E2E and every topology shard succeeded.
-// Usage: node e2e/mergeGate.ts  (reads CHANGES_RESULT, E2E_RELEVANT, PR_DRAFT, E2E_RESULT, CI_RESULT, CI_CONCLUSION, TOPOLOGY_RESULT)
+// Usage: node e2e/mergeGate.ts  (reads CHANGES_RESULT, E2E_RELEVANT, PR_AUTHOR, PR_DRAFT, E2E_RESULT, CI_RESULT, CI_CONCLUSION, TOPOLOGY_RESULT)
 // Node >= 22.18 runs this file without flags, so keep it to erasable TypeScript.
 
 import { fileURLToPath } from 'node:url'
 
 export type GateInput = {
+  author: string
   changesResult: string
   relevant: string
   draft: string
@@ -18,6 +19,10 @@ export type GateInput = {
 export function mergeGateVerdict(i: GateInput): { pass: boolean; reason: string } {
   if (i.changesResult !== 'success') {
     return { pass: false, reason: `path detection did not succeed (${i.changesResult || 'no result'})` }
+  }
+  // Dependabot PRs get no preview, so no E2E; CI is gated by its own required check.
+  if (i.author === 'dependabot[bot]') {
+    return { pass: true, reason: 'Dependabot PR: the preview and E2E are skipped by design' }
   }
   if (i.relevant === 'false') return { pass: true, reason: 'no E2E-relevant path changed' }
   if (i.relevant !== 'true') {
@@ -41,6 +46,7 @@ export function mergeGateVerdict(i: GateInput): { pass: boolean; reason: string 
 
 function main(env: NodeJS.ProcessEnv): number {
   const v = mergeGateVerdict({
+    author: env.PR_AUTHOR ?? '',
     changesResult: env.CHANGES_RESULT ?? '',
     relevant: env.E2E_RELEVANT ?? '',
     draft: env.PR_DRAFT ?? '',

@@ -2537,6 +2537,8 @@ func TestMembership_StatusForErrTable(t *testing.T) {
 		{ErrLastActiveAdmin, http.StatusConflict, "this is the tenant's last active admin — make another member an active admin first"},
 		{ErrRemoveNotPermitted, http.StatusForbidden, "only an admin can remove a member"},
 		{ErrRemovedNotTransitionable, http.StatusConflict, "a removed member must be invited again"},
+		{ErrRoleChangeNotPermitted, http.StatusForbidden, "only an admin can change a member's role"},
+		{ErrInvalidRole, http.StatusBadRequest, `role must be "admin", "preparer" or "reviewer"`},
 		{errors.New("boom"), http.StatusInternalServerError, "internal server error"},
 	}
 	for _, tc := range cases {

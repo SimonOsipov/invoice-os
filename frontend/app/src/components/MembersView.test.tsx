@@ -1981,10 +1981,26 @@ describe('the capability matrix card', () => {
     rows.forEach((row) => expect(row.style.gridTemplateColumns).toBe('minmax(0,1fr) 90px 90px 90px'))
     CAPABILITY_ROWS.forEach((cap, i) => {
       const row = rows[i + 1]
-      expect(within(row).getByRole('rowheader').textContent).toBe(cap.label)
       const cells = within(row).getAllByRole('cell')
+      if (cap.soon) {
+        const header = within(row).getByRole('rowheader', { name: `${cap.label} Coming soon` })
+        expect(within(header).getByTestId('role-soon-mark').textContent).toBe('Coming soon')
+        expect(header.textContent).toBe(`${cap.label} Coming soon`)
+        for (const cell of cells) {
+          expect(cell.querySelector('svg'), 'a soon row draws no tick or cross, even with admin: true').toBeNull()
+          expect(cell.querySelector('[aria-hidden="true"]')!.textContent).toBe('\u2013')
+          expect(cell.children[1].textContent).toBe('Not available yet')
+          expect(cell.textContent).toBe('\u2013Not available yet')
+        }
+        return
+      }
+      expect(within(row).queryByTestId('role-soon-mark')).toBeNull()
+      expect(within(row).getByRole('rowheader').textContent).toBe(cap.label)
       expect(cells.map((c) => c.textContent)).toEqual(ACCESS_ROLES.map((r) => (cap[r.id] ? 'Yes' : 'No')))
     })
+    const soonRows = CAPABILITY_ROWS.filter((c) => c.soon)
+    expect(soonRows.length).toBeGreaterThan(0)
+    expect(within(body).getAllByTestId('role-soon-mark')).toHaveLength(soonRows.length)
     expect(body.textContent).toContain(CAPABILITY_FOOTNOTE)
 
     fireEvent.click(toggle)
@@ -2013,6 +2029,7 @@ describe('the Client users placeholder', () => {
     const card = screen.getByTestId('client-users-card')
     expect(card.textContent).toContain(CLIENT_USERS_COPY)
     expect(within(card).getByText('NOT BUILT')).toBeTruthy()
+    expect((within(card).getByText('NOT BUILT') as HTMLElement).style.border).toBe('1px dashed var(--line-3)')
     expect(card.style.border).toBe('1px dashed var(--line-2)')
     expect(card.style.background).toBe('var(--bg-1)')
     expect(card.style.padding).toBe('14px 16px')

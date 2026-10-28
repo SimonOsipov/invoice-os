@@ -217,6 +217,7 @@ func TestTenancyMain_StaffTenantsRouteIsRegistered(t *testing.T) {
 		t.Fatalf(`"GET /v1/me" registered with %v, want exactly [tenancy.MeHandler]: the scan reads nothing`, got)
 	}
 	for _, want := range []struct{ pattern, handler, loader string }{
+		{"PATCH /v1/memberships/{user_id}/role", "tenancy.SetMemberRoleHandler", "store.SetMemberRole"},
 		{"GET /v1/staff/tenants", "tenancy.StaffTenantsHandler", "store.StaffTenants"},
 		{"GET /v1/staff/tenants/{id}", "tenancy.StaffTenantHandler", "store.StaffTenant"},
 		{"POST /v1/staff/tenants/{id}/deletion", "tenancy.StaffScheduleDeletionHandler", "notifier.StaffSchedule"},

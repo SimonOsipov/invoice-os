@@ -619,6 +619,15 @@ export function setMemberClients(token: string, userId: string, access: unknown)
   })
 }
 
+// setMemberRole(): PATCH /v1/memberships/{user_id}/role, admin-only. Raw, so a spec asserts the refusals.
+export function setMemberRole(token: string, userId: string, role: unknown): Promise<{ status: number; body: unknown }> {
+  return rawFetch(`/api/tenancy/v1/memberships/${userId}/role`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+    body: { role },
+  })
+}
+
 export function createEntity(token: string, body: EntityInput): Promise<Entity> {
   return apiFetch<Entity>(`${apiBase()}/api/portfolio/v1/entities`, { method: 'POST', body, token })
 }

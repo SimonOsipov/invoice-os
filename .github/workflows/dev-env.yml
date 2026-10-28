@@ -572,7 +572,7 @@ jobs:
       # the only evidence.
       - name: Upload smoke Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smoke-playwright-report
           path: e2e/report-smoke/
@@ -580,7 +580,7 @@ jobs:
           retention-days: 7
       - name: Upload API Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report-api
           path: e2e/report-api/
@@ -588,7 +588,7 @@ jobs:
           retention-days: 7
       - name: Upload the flaky JSON
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: flaky-results-e2e-${{ github.run_attempt }}
           path: e2e/flaky-results/
@@ -688,7 +688,7 @@ jobs:
           node e2e/flakyGate.ts "$FLAKY_JSON_DIR" "$RUNNER_TEMP/pr-files.txt"
       - name: Upload topology Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: topology-playwright-report-${{ matrix.shard }}
           path: e2e/report-topology/
@@ -696,7 +696,7 @@ jobs:
           retention-days: 7
       - name: Upload the flaky JSON
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: flaky-results-topology-${{ matrix.shard }}-${{ github.run_attempt }}
           path: e2e/flaky-results/

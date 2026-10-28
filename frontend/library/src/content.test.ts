@@ -202,4 +202,26 @@ describe('content', () => {
     expect(ws.sc.steps[1].cap).toMatch(/emailed link/i)
     expect(JSON.stringify(byId('delete-account'))).not.toMatch(/e-?mail/i)
   })
+
+  it('content_membersCopyNamesTheRoleChange', () => {
+    expect(byId('invite-members').benefits[2]).toMatch(/role and client access can be changed/i)
+    const roles = byId('roles')
+    expect(roles.desc).toMatch(/an admin can change a member's role/i)
+    expect(roles.desc).toMatch(/role and approval-seat changes are recorded in the audit trail/i)
+    expect(roles.benefits[2]).toMatch(/admins change a role.*audit trail/i)
+    expect(roles.benefits[0]).toMatch(/preparers cannot approve or transmit/i)
+    expect(roles.benefits[1]).toMatch(/only admins invite and manage members/i)
+    expect(roles.desc).toMatch(/preparers cannot approve or transmit/i)
+    expect(roles.desc).toMatch(/only admins invite and manage members/i)
+  })
+
+  it('content_membersEntriesNameNoDepartmentErpOrCertificate', () => {
+    const banned = /\b(department|ERP|connectors?|signing certificates?)\b/i
+    for (const id of ['invite-members', 'roles']) {
+      const e = byId(id)
+      const text = [e.title, e.short, e.desc, ...e.benefits, JSON.stringify(e.sc)].join('\n')
+      expect(text.length, id).toBeGreaterThan(0)
+      expect(text, id).not.toMatch(banned)
+    }
+  })
 })

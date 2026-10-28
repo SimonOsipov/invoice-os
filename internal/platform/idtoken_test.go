@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -312,6 +313,9 @@ func TestIDTokenCache_CancelledCallerDoesNotFailTheWaiter(t *testing.T) {
 	defer md.Close()
 	tr := newIDTokenTransport(http.DefaultTransport, md.URL, func() time.Time { return now })
 
+	waiting := make(chan struct{}, 1)
+	tr.cache.onWait = func() { waiting <- struct{}{} }
+
 	ctx, cancel := context.WithCancel(t.Context())
 	firstErr := make(chan error, 1)
 	go func() {
@@ -328,6 +332,11 @@ func TestIDTokenCache_CancelledCallerDoesNotFailTheWaiter(t *testing.T) {
 		tok, err := tr.cache.token(t.Context(), tr.base, "https://a.run.app")
 		second <- result{tok, err}
 	}()
+	select {
+	case <-waiting:
+	case <-time.After(3 * time.Second):
+		t.Fatal("second caller never waited on the audience lock")
+	}
 	cancel()
 	if err := <-firstErr; err == nil {
 		t.Error("cancelled caller returned no error")
@@ -339,6 +348,57 @@ func TestIDTokenCache_CancelledCallerDoesNotFailTheWaiter(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("waiter never returned")
+	}
+	if f := fetches.Load(); f != 2 {
+		t.Errorf("metadata fetches = %d, want 2 (cancelled, then the waiter's own)", f)
+	}
+}
+
+func TestIDTokenCache_WaiterHonoursItsOwnDeadline(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	md := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-release
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer md.Close()
+	defer close(release)
+	tr := newIDTokenTransport(http.DefaultTransport, md.URL, func() time.Time { return now })
+
+	go func() { _, _ = tr.cache.token(t.Context(), tr.base, "https://a.run.app") }()
+	<-entered
+
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := tr.cache.token(ctx, tr.base, "https://a.run.app")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("waiter err = %v, want context.DeadlineExceeded", err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("waiter took %v, want ~200ms (its own deadline, not the 5s fetch timeout)", d)
+	}
+}
+
+func TestIDTokenCache_CacheHitDoesNotWaitForTheAudienceLock(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	md := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, fakeJWT(now.Add(time.Hour)))
+	}))
+	defer md.Close()
+	tr := newIDTokenTransport(http.DefaultTransport, md.URL, func() time.Time { return now })
+	const aud = "https://a.run.app"
+	if _, err := tr.cache.token(t.Context(), tr.base, aud); err != nil {
+		t.Fatal(err)
+	}
+	tr.cache.locks[aud] <- struct{}{}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	if tok, err := tr.cache.token(ctx, tr.base, aud); err != nil || tok == "" {
+		t.Errorf("cache hit behind a held audience lock: token %q, err %v; want the cached token", tok, err)
 	}
 }
 

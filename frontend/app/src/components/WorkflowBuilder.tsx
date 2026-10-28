@@ -108,7 +108,7 @@ function publishConsequence(server: Policy, policies: readonly Policy[]): string
 
 /**
  * The gateway's own sentence for a write it refused, verbatim. Inline rather than shared:
- * WorkflowsView.tsx:151-160, MembersTable.tsx:274-289, MemberDrawer.tsx:365-379 and
+ * WorkflowsView.tsx:151-160, MembersTable.tsx:274-289, MemberDrawer.tsx's `member-drawer-access-error` strip and
  * RoleModal.tsx:298-305 each carry their own copy, so a local one is the convention.
  */
 function WriteError({ testId, children }: { testId: string; children: ReactNode }) {

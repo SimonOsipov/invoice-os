@@ -162,7 +162,7 @@ const TEXT_BUTTON: CSSProperties = {
 
 const SUM_LINE: CSSProperties = { margin: 0, fontSize: 11.5, color: 'var(--fg-2)', lineHeight: 1.5 }
 
-// EMPTY_PANEL (`:232-239`): `CHIP_TONE.invited`'s rule, a dashed edge over a transparent
+// EMPTY_PANEL (`:232-239`): MemberParts.tsx's `CHIP_TONE.invited` rule, a dashed edge over a transparent
 // ground.
 const EMPTY_PANEL: CSSProperties = {
   display: 'flex',

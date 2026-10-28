@@ -289,7 +289,7 @@ function mkCandidate(value: string, page: number): ExtractionCandidate {
   return { value, region: mkRegion({ page }) }
 }
 
-/** The one dashed panel in the pane. The app's empty idiom, `CHIP_TONE.invited`'s rule. */
+/** The one dashed panel in the pane. The app's empty idiom, MemberParts.tsx's `CHIP_TONE.invited` rule. */
 function dashedPanel(): HTMLElement {
   const found = Array.from(pane().querySelectorAll<HTMLElement>('*')).filter((el) => /^1px dashed /.test(el.style.border))
   expect(found.length, 'the empty pane draws exactly one dashed panel').toBe(1)
@@ -618,7 +618,7 @@ describe('an empty fields array', () => {
 
     expect(rows(), 'a row rendered for an empty wire').toHaveLength(0)
 
-    // `CHIP_TONE.invited` states the rule the copy must satisfy: `1px dashed var(--line-3)`
+    // MemberParts.tsx's `CHIP_TONE.invited` states the rule the copy must satisfy: `1px dashed var(--line-3)`
     // over a TRANSPARENT ground, never over a fill.
     const panel = dashedPanel()
     expect(panel.style.border).toBe('1px dashed var(--line-3)')

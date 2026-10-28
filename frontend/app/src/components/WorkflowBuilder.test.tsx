@@ -1194,11 +1194,11 @@ describe('APPR-09-05 QA: two writes, one after the other', () => {
 // `save()`/`publish()` re-seed `working` from the answer, so a keystroke typed inside the round
 // trip used to be silently overwritten. Before subtask 05 it could not happen — every keystroke
 // was its own PUT. The remedy is one `submitting` flag disabling the form for the duration
-// (RoleModal.tsx:74,:203; EntityFormModal.tsx:64; MemberDrawer.tsx:272), cleared in `finally`.
+// (RoleModal.tsx:74,:203; EntityFormModal.tsx:64; MemberDrawer.tsx's `accessPending`), cleared in `finally`.
 // The spec these replace — 'a re-seed that lands after an edit DISCARDS it' — recorded the race
 // and said in its own comment that a real guard must REPLACE it rather than work around it.
 //
-// TRANSIENT, not the four-layer disabled recipe: MemberDrawer.tsx:269-272 writes that rule down
+// TRANSIENT, not the four-layer disabled recipe: MemberDrawer.tsx's `rolePending` fieldset comment writes that rule down
 // — `UnbackedField` "always renders a reason note, and a staffing write in flight has none to
 // show". A write in flight gets a bare `disabled`, no reason note and no `aria-describedby`.
 

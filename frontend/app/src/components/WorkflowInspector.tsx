@@ -47,10 +47,8 @@ const DELEGATION_BLOCKED = 'Delegation is switched off — the server has nowher
 // Copy reading "not saved" would be the false statement this story removes.
 const NOTIFY_NOT_DELIVERED = 'The target and channel are saved with the policy, but no message is sent yet.'
 
-// ONE reason node, TWO `aria-describedby` pointers: the toggle and the picker share it. A
-// deliberate deviation from MemberDrawer.tsx:343/389, where every disabled control gets its
-// own id — there the causes differ per control, here one cause shuts both,
-// and a second copy of the sentence would put two matches under one `getAllByText`.
+// ONE reason node, TWO `aria-describedby` pointers: the toggle and the picker share it, as one
+// cause shuts both. A second copy of the sentence would put two matches under one `getAllByText`.
 const DELEGATION_BLOCKED_ID = 'delegation-blocked-reason-text'
 
 /** The read-only hint under a select (prototype: 11px / 1.5). */

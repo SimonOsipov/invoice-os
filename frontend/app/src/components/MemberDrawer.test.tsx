@@ -333,7 +333,7 @@ describe('RALPH fix (appr-04-06): the drawer read side must not report zero role
 // unlanded policies fetch, but its premise is false: `stepsForMember` answers `null` at zero BY
 // CONTRACT (lib/roles.ts:170-173 — "THE GATE IS THE COUNT: holding a role a policy never names
 // answers `null`, not a section reading 'Named in 0 approval steps' above an empty list"), and
-// MemberDrawer.tsx:306 renders `{steps && …}`. An unlanded fetch renders NOTHING, which makes no
+// MemberDrawer.tsx's `steps &&` gate renders `{steps && …}`. An unlanded fetch renders NOTHING, which makes no
 // false claim. An affordance here would contradict a shipped design note, so this pins the
 // contract instead: the gate stays the null, never a count re-derived off `ctx.policies`.
 

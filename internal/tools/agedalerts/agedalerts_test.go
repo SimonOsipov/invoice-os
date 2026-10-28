@@ -189,6 +189,25 @@ func TestBody_ListsEachAlert(t *testing.T) {
 	}
 }
 
+func TestBody_RowStartsWithAlertNumber(t *testing.T) {
+	var picked []Alert
+	for _, a := range mustSelect(t, fixture(t), now) {
+		if a.Number == 3 || a.Number == 4 {
+			picked = append(picked, a)
+		}
+	}
+	lines := strings.Split(Body(picked, now, 7), "\n")
+	for _, prefix := range []string{"| #3 | ", "| #4 | "} {
+		found := false
+		for _, l := range lines {
+			found = found || strings.HasPrefix(l, prefix)
+		}
+		if !found {
+			t.Errorf("no row starts with %q", prefix)
+		}
+	}
+}
+
 func runCLI(args ...string) (int, string, string) {
 	var out, errb bytes.Buffer
 	code := run(args, &out, &errb)

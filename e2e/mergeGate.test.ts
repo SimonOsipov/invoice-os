@@ -12,6 +12,8 @@ const input = (o: Partial<GateInput>): GateInput => ({
   ciConclusion: 'success',
   topologyResult: 'success',
   author: '',
+  commitsOnlyDependabot: '',
+  commitAuthorsResult: 'success',
   ...o,
 })
 
@@ -207,10 +209,18 @@ describe('mergeGateVerdict', () => {
 
 describe('mergeGateVerdict Dependabot', () => {
   const BOT = 'dependabot[bot]'
+  const REASON = 'Dependabot PR: the preview and E2E are skipped by design'
 
   it('passes a Dependabot PR whose E2E never ran and names Dependabot', () => {
     const v = mergeGateVerdict(
-      input({ author: BOT, relevant: 'true', e2eResult: 'skipped', topologyResult: 'skipped', ciResult: 'skipped' }),
+      input({
+        author: BOT,
+        commitsOnlyDependabot: 'true',
+        relevant: 'true',
+        e2eResult: 'skipped',
+        topologyResult: 'skipped',
+        ciResult: 'skipped',
+      }),
     )
     expect(v.pass).toBe(true)
     expect(v.reason).toContain('Dependabot')
@@ -219,13 +229,28 @@ describe('mergeGateVerdict Dependabot', () => {
 
   it('names Dependabot even when no path is E2E-relevant', () => {
     // The rule precedes `relevant`, so the reason must not fall to the path-list text.
-    const v = mergeGateVerdict(input({ author: BOT, relevant: 'false', e2eResult: 'skipped' }))
+    const v = mergeGateVerdict(
+      input({ author: BOT, commitsOnlyDependabot: 'true', relevant: 'false', e2eResult: 'skipped' }),
+    )
     expect(v.pass).toBe(true)
     expect(v.reason).toContain('Dependabot')
     expect(v.reason).not.toContain('no E2E-relevant path')
   })
 
-  it('passes a Dependabot PR across every input combination', () => {
+  it('names the exact Dependabot reason', () => {
+    const skip = mergeGateVerdict(
+      input({ author: BOT, commitsOnlyDependabot: 'true', relevant: 'true', e2eResult: 'skipped' }),
+    )
+    expect(skip.pass).toBe(true)
+    expect(skip.reason).toBe(REASON)
+    // The same input with a human commit must not carry that reason.
+    const human = mergeGateVerdict(
+      input({ author: BOT, commitsOnlyDependabot: 'false', relevant: 'true', e2eResult: 'skipped' }),
+    )
+    expect(human.reason).not.toBe(REASON)
+  })
+
+  it('passes an all-Dependabot PR across every input combination', () => {
     const REL = ['true', 'false', '', 'False']
     const DRAFT = ['true', 'false', '']
     const RES = ['success', 'skipped', 'failure', 'cancelled', '']
@@ -237,7 +262,9 @@ describe('mergeGateVerdict Dependabot', () => {
           for (const ciResult of RES)
             for (const topologyResult of RES) {
               n++
-              const v = mergeGateVerdict(input({ author: BOT, relevant, draft, e2eResult, ciResult, topologyResult }))
+              const v = mergeGateVerdict(
+                input({ author: BOT, commitsOnlyDependabot: 'true', relevant, draft, e2eResult, ciResult, topologyResult }),
+              )
               const row = JSON.stringify({ relevant, draft, e2eResult, ciResult, topologyResult })
               expect(v.pass, row).toBe(true)
               expect(v.reason, row).toContain('Dependabot')
@@ -248,11 +275,67 @@ describe('mergeGateVerdict Dependabot', () => {
 
   it('a Dependabot PR still fails when path detection failed', () => {
     // Paired with the passing row: the author rule sits after the changes rule, not before it.
-    expect(mergeGateVerdict(input({ author: BOT, changesResult: 'success', e2eResult: 'skipped' })).pass).toBe(true)
+    expect(
+      mergeGateVerdict(
+        input({ author: BOT, commitsOnlyDependabot: 'true', changesResult: 'success', e2eResult: 'skipped' }),
+      ).pass,
+    ).toBe(true)
     for (const changesResult of ['failure', 'cancelled', '']) {
-      const v = mergeGateVerdict(input({ author: BOT, changesResult, e2eResult: 'skipped' }))
+      const v = mergeGateVerdict(
+        input({ author: BOT, commitsOnlyDependabot: 'true', changesResult, e2eResult: 'skipped' }),
+      )
       expect(v.pass, changesResult).toBe(false)
       expect(v.reason, changesResult).toContain('path detection did not succeed')
+    }
+  })
+
+  it('a Dependabot PR with one human commit needs the E2E result', () => {
+    const v = mergeGateVerdict(
+      input({ author: BOT, commitsOnlyDependabot: 'false', relevant: 'true', e2eResult: 'skipped', ciResult: 'success' }),
+    )
+    expect(v.pass).toBe(false)
+    expect(v.reason).toContain("E2E concluded 'skipped'")
+  })
+
+  it('a Dependabot PR with one human commit passes on a green E2E', () => {
+    const v = mergeGateVerdict(input({ author: BOT, commitsOnlyDependabot: 'false' }))
+    expect(v.pass).toBe(true)
+    expect(v.reason).toBe('E2E concluded success; every topology shard succeeded')
+    expect(v.reason).not.toContain('Dependabot')
+  })
+
+  it('a Dependabot PR with a human commit and a red CI fails', () => {
+    const v = mergeGateVerdict(
+      input({ author: BOT, commitsOnlyDependabot: 'false', ciResult: 'failure', ciConclusion: 'failure' }),
+    )
+    expect(v.pass).toBe(false)
+    expect(v.reason).toContain('CI did not succeed')
+    const e2e = mergeGateVerdict(input({ author: BOT, commitsOnlyDependabot: 'false', e2eResult: 'failure' }))
+    expect(e2e.pass).toBe(false)
+    expect(e2e.reason).toBe("E2E concluded 'failure'")
+    const topo = mergeGateVerdict(input({ author: BOT, commitsOnlyDependabot: 'false', topologyResult: 'failure' }))
+    expect(topo.pass).toBe(false)
+    expect(topo.reason).toBe("topology shards concluded 'failure'")
+  })
+
+  it('a Dependabot PR with a human commit and no relevant path passes as a human PR', () => {
+    const v = mergeGateVerdict(
+      input({ author: BOT, commitsOnlyDependabot: 'false', relevant: 'false', e2eResult: 'skipped' }),
+    )
+    expect(v.pass).toBe(true)
+    expect(v.reason).toBe('no E2E-relevant path changed')
+  })
+
+  it('a missing or malformed commit verdict fails closed', () => {
+    // The exact 'true' passes the same input the variants fail.
+    const skipped = { author: BOT, relevant: 'true', e2eResult: 'skipped' }
+    expect(mergeGateVerdict(input({ ...skipped, commitsOnlyDependabot: 'true' })).pass).toBe(true)
+    const variants = ['', 'TRUE', ' true', 'true ', 'yes', 'unknown']
+    expect(variants.length).toBeGreaterThan(0)
+    for (const commitsOnlyDependabot of variants) {
+      const v = mergeGateVerdict(input({ ...skipped, commitsOnlyDependabot }))
+      expect(v.pass, JSON.stringify(commitsOnlyDependabot)).toBe(false)
+      expect(v.reason, JSON.stringify(commitsOnlyDependabot)).toContain("E2E concluded 'skipped'")
     }
   })
 
@@ -266,13 +349,31 @@ describe('mergeGateVerdict Dependabot', () => {
     expect(green.reason).not.toContain('Dependabot')
   })
 
-  it('only the exact Dependabot login is exempt', () => {
+  it('a human author never skips', () => {
+    // Positive control: the bot with the same commit verdict skips.
+    expect(
+      mergeGateVerdict(input({ author: BOT, commitsOnlyDependabot: 'true', relevant: 'true', e2eResult: 'skipped' })).pass,
+    ).toBe(true)
+    for (const author of ['SimonOsipov', '']) {
+      const v = mergeGateVerdict(
+        input({ author, commitsOnlyDependabot: 'true', relevant: 'true', e2eResult: 'skipped' }),
+      )
+      expect(v.pass, JSON.stringify(author)).toBe(false)
+      expect(v.reason, JSON.stringify(author)).toContain("E2E concluded 'skipped'")
+    }
+  })
+
+  it('only the exact Dependabot login keeps the skip', () => {
     // Positive control first: the exact login passes the same input the variants fail.
-    expect(mergeGateVerdict(input({ author: BOT, relevant: 'true', e2eResult: 'skipped' })).pass).toBe(true)
+    expect(
+      mergeGateVerdict(input({ author: BOT, commitsOnlyDependabot: 'true', relevant: 'true', e2eResult: 'skipped' })).pass,
+    ).toBe(true)
     const variants = ['Dependabot[bot]', 'dependabot', 'dependabot[bot] ', 'dependabot-preview[bot]', 'renovate[bot]', '']
     expect(variants.length).toBeGreaterThan(0)
     for (const author of variants) {
-      const v = mergeGateVerdict(input({ author, relevant: 'true', e2eResult: 'skipped' }))
+      const v = mergeGateVerdict(
+        input({ author, commitsOnlyDependabot: 'true', relevant: 'true', e2eResult: 'skipped' }),
+      )
       expect(v.pass, JSON.stringify(author)).toBe(false)
       expect(v.reason, JSON.stringify(author)).toContain("E2E concluded 'skipped'")
     }
@@ -382,6 +483,8 @@ describe('mergeGateVerdict adversarial', () => {
                   ciConclusion: ciResult,
                   topologyResult,
                   author: '',
+                  commitsOnlyDependabot: '',
+                  commitAuthorsResult: 'success',
                 })
                 expect(
                   v.pass,
@@ -408,18 +511,34 @@ describe('mergeGate CLI', () => {
     'CI_CONCLUSION',
     'TOPOLOGY_RESULT',
     'PR_AUTHOR',
+    'COMMITS_ONLY_DEPENDABOT',
+    'COMMIT_AUTHORS_RESULT',
   ]
 
-  const cli = (vars: Record<string, string>) => {
+  const cli = (vars: Record<string, string>, unset: string[] = []) => {
     // Strip the gate vars from the inherited env so a CI runner's values cannot leak in.
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !VARS.includes(k)))
+    const all: Record<string, string> = { ...env, COMMIT_AUTHORS_RESULT: 'success', ...vars }
+    for (const k of unset) delete all[k]
     try {
-      return { code: 0, out: execFileSync(process.execPath, [gate], { encoding: 'utf8', env: { ...env, ...vars } }) }
+      return { code: 0, out: execFileSync(process.execPath, [gate], { encoding: 'utf8', env: all }) }
     } catch (err) {
       const e = err as { status: number; stdout: string }
       return { code: e.status, out: e.stdout }
     }
   }
+
+  it('script fails a non-relevant PR when COMMIT_AUTHORS_RESULT is failure', () => {
+    const { code, out } = cli({ CHANGES_RESULT: 'success', E2E_RELEVANT: 'false', COMMIT_AUTHORS_RESULT: 'failure' })
+    expect(code).toBe(1)
+    expect(out).toContain('::error::commit author detection did not succeed (failure)')
+  })
+
+  it('script fails a non-relevant PR when COMMIT_AUTHORS_RESULT is unset', () => {
+    const { code, out } = cli({ CHANGES_RESULT: 'success', E2E_RELEVANT: 'false' }, ['COMMIT_AUTHORS_RESULT'])
+    expect(code).toBe(1)
+    expect(out).toContain('commit author detection did not succeed (no result)')
+  })
 
   it('script exits 1 with no env', () => {
     const { code, out } = cli({})
@@ -566,16 +685,63 @@ describe('mergeGate CLI', () => {
     CI_RESULT: 'success', // green CI, so the human path reaches the E2E rule
   }
 
-  it('script exits 0 for a Dependabot PR and prints the Dependabot reason', () => {
-    const { code, out } = cli({ ...skippedE2e, PR_AUTHOR: 'dependabot[bot]' })
+  it('script exits 0 for an all-Dependabot PR', () => {
+    const { code, out } = cli({ ...skippedE2e, PR_AUTHOR: 'dependabot[bot]', COMMITS_ONLY_DEPENDABOT: 'true' })
     expect(code).toBe(0)
     expect(out).toContain('Dependabot')
     expect(out).not.toContain('::error::')
+  })
+
+  it('script exits 1 for a Dependabot PR with no commit verdict', () => {
+    const { code, out } = cli({ ...skippedE2e, PR_AUTHOR: 'dependabot[bot]' })
+    expect(code).toBe(1)
+    expect(out).toContain("::error::E2E concluded 'skipped'")
+    // Positive control, then every non-exact value of the var.
+    expect(cli({ ...skippedE2e, PR_AUTHOR: 'dependabot[bot]', COMMITS_ONLY_DEPENDABOT: 'true' }).code).toBe(0)
+    for (const COMMITS_ONLY_DEPENDABOT of ['', 'false', 'TRUE', ' true', 'true ', 'true\n', 'yes']) {
+      const r = cli({ ...skippedE2e, PR_AUTHOR: 'dependabot[bot]', COMMITS_ONLY_DEPENDABOT })
+      expect(r.code, JSON.stringify(COMMITS_ONLY_DEPENDABOT)).toBe(1)
+      expect(r.out, JSON.stringify(COMMITS_ONLY_DEPENDABOT)).toContain("::error::E2E concluded 'skipped'")
+    }
+  })
+
+  it('script never skips a human author whatever COMMITS_ONLY_DEPENDABOT holds', () => {
+    for (const PR_AUTHOR of ['SimonOsipov', 'Dependabot[bot]', '']) {
+      const { code, out } = cli({ ...skippedE2e, PR_AUTHOR, COMMITS_ONLY_DEPENDABOT: 'true' })
+      expect(code, JSON.stringify(PR_AUTHOR)).toBe(1)
+      expect(out, JSON.stringify(PR_AUTHOR)).toContain("::error::E2E concluded 'skipped'")
+    }
   })
 
   it('script ignores an unset PR_AUTHOR', () => {
     const { code, out } = cli(skippedE2e)
     expect(code).toBe(1)
     expect(out).toContain("E2E concluded 'skipped'")
+  })
+})
+
+describe('mergeGateVerdict commit-authors result', () => {
+  const BAD = ['failure', 'cancelled', 'skipped', '']
+  it('fails on every non-success result, before any pass path', () => {
+    for (const commitAuthorsResult of BAD) {
+      const cases = [
+        input({ commitAuthorsResult, relevant: 'false', e2eResult: 'skipped' }),
+        input({ commitAuthorsResult }),
+        input({ commitAuthorsResult, author: 'dependabot[bot]', commitsOnlyDependabot: 'true' }),
+      ]
+      for (const c of cases) {
+        const v = mergeGateVerdict(c)
+        expect(v.pass, commitAuthorsResult).toBe(false)
+        expect(v.reason).toContain('commit author detection did not succeed')
+      }
+    }
+  })
+  it('names the result in the reason', () => {
+    expect(mergeGateVerdict(input({ commitAuthorsResult: 'cancelled' })).reason).toContain('(cancelled)')
+    expect(mergeGateVerdict(input({ commitAuthorsResult: '' })).reason).toContain('(no result)')
+  })
+  it('leaves behaviour unchanged on success', () => {
+    expect(mergeGateVerdict(input({ relevant: 'false', e2eResult: 'skipped' })).pass).toBe(true)
+    expect(mergeGateVerdict(input({ author: 'dependabot[bot]', commitsOnlyDependabot: 'true' })).pass).toBe(true)
   })
 })

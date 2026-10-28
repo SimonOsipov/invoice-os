@@ -41,8 +41,10 @@ type idTokenCache struct {
 	metadata string
 	now      func() time.Time
 
-	mu     sync.Mutex
+	mu     sync.Mutex // guards tokens and locks, never held across a fetch
 	tokens map[string]idToken
+	locks  map[string]chan struct{} // one per audience; a full channel is a held lock, so a waiter can honour its ctx
+	onWait func()                   // test hook: called when a caller finds its audience's lock held
 }
 
 type idToken struct {
@@ -78,9 +80,36 @@ func (t *idTokenTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 // token returns a cached token for audience until five minutes before it expires.
 func (t *idTokenCache) token(ctx context.Context, rt http.RoundTripper, audience string) (string, error) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if tok, ok := t.tokens[audience]; ok && t.now().Before(tok.expiry.Add(-5*time.Minute)) {
+		t.mu.Unlock()
 		return tok.value, nil
+	}
+	if t.locks == nil {
+		t.locks = map[string]chan struct{}{}
+	}
+	al := t.locks[audience]
+	if al == nil {
+		al = make(chan struct{}, 1)
+		t.locks[audience] = al
+	}
+	t.mu.Unlock()
+
+	select {
+	case al <- struct{}{}:
+	default:
+		if t.onWait != nil {
+			t.onWait()
+		}
+		select {
+		case al <- struct{}{}:
+		case <-ctx.Done():
+			return "", fmt.Errorf("platform: id token for %s: %w", audience, ctx.Err())
+		}
+	}
+	defer func() { <-al }()
+	// A waiter re-reads the cache after the lock, so one fetch serves them all.
+	if v, ok := t.cached(audience); ok {
+		return v, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -103,8 +132,20 @@ func (t *idTokenCache) token(ctx context.Context, rt http.RoundTripper, audience
 	if err != nil {
 		return "", fmt.Errorf("platform: id token for %s: %w", audience, err)
 	}
+	t.mu.Lock()
 	t.tokens[audience] = idToken{value: value, expiry: expiry}
+	t.mu.Unlock()
 	return value, nil
+}
+
+func (t *idTokenCache) cached(audience string) (string, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	tok, ok := t.tokens[audience]
+	if ok && t.now().Before(tok.expiry.Add(-5*time.Minute)) {
+		return tok.value, true
+	}
+	return "", false
 }
 
 // jwtExpiry reads exp from a JWT payload without verifying it: the token came from the metadata server.

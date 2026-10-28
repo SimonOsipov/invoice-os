@@ -16,6 +16,7 @@ permissions:
 
 jobs:
   teardown:
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
     name: Delete the preview of PR ${{ github.event.pull_request.number }}
     runs-on: ubuntu-latest
     timeout-minutes: 20

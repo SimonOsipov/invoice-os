@@ -1,6 +1,6 @@
 name: Preview (deploy the PR's fleet to Google Cloud + E2E)
 
-# GKE-11: each ready PR gets its own fleet in ascomply-preview, <svc>-pr-<N> on run.app, and a fresh
+# GKE-11: each ready non-Dependabot PR gets its own fleet in ascomply-preview, <svc>-pr-<N> on run.app, and a fresh
 # database pr_<N> on every deploy. scripts/ci/preview.sh does the gcloud work; invoice-os-infra
 # preview.tf holds what the PRs share. Closing the PR deletes it (dev-env-teardown.yml); the
 # nightly sweep (dev-env-sweeper.yml) deletes what a missed close left. Production deploys from
@@ -25,7 +25,7 @@ env:
   DEPLOYER: deploy-preview@ascomply-preview.iam.gserviceaccount.com
 
 jobs:
-  # Decides whether this PR needs the deploy chain; `E2E gate` passes a PR it marks not relevant.
+  # Decides whether this PR needs the deploy chain; `E2E gate` passes a PR it marks not relevant or a Dependabot PR.
   # A skipped or renamed filter yields '', which the gate fails (e2e/mergeGate.ts).
   changes:
     name: Detect E2E-relevant changes
@@ -74,7 +74,7 @@ jobs:
   ci-watch:
     name: Watch CI (PR; red CI stops the run)
     needs: [changes]
-    if: github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true'
+    if: github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -100,9 +100,10 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         run: gh run cancel "$RUN_ID" --repo "$REPO"
 
-  # GKE-11 AC6: runs on every PR, ready or draft, relevant or not.
+  # GKE-11 AC6: runs on every non-Dependabot PR, ready or draft, relevant or not.
   invariants:
     name: Preview invariants
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -120,7 +121,7 @@ jobs:
   prepare-env:
     name: Prepare the preview (secrets, bucket, URLs)
     needs: [changes]
-    if: github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true'
+    if: github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -157,7 +158,7 @@ jobs:
   build:
     name: Build ${{ matrix.image }}
     needs: [changes]
-    if: github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true'
+    if: github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -700,3 +701,4 @@ jobs:
           TOPOLOGY_RESULT: ${{ needs.topology.result }}
           CI_RESULT: ${{ needs.ci-watch.result }}
           CI_CONCLUSION: ${{ needs.ci-watch.outputs.conclusion }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}

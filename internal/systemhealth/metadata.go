@@ -45,7 +45,7 @@ type Metadata struct {
 	client *http.Client
 	now    func() time.Time
 
-	mu      sync.Mutex // held across each fetch, as idTokenCache does
+	mu      sync.Mutex // held across each fetch
 	token   string
 	expiry  time.Time
 	project string

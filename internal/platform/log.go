@@ -58,6 +58,7 @@ func newLogger(cfg Config) *slog.Logger {
 }
 
 // sentryLogHandler sends logs only; LevelFatal stays out because the bridge ends the process on it.
+// ceiling: only the four standard levels reach Sentry (exact match); round a custom level down before the bridge if one is ever used
 // ceiling: every logged level goes to Sentry (~5 MB/month of 5 GB); add a level floor above ~1 GB/month
 // ceiling: a []byte or RawMessage attribute reaches Sentry as unscrubbed %+v text; log it as a string first
 func sentryLogHandler(min slog.Level) slog.Handler {

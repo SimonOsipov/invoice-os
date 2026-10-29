@@ -291,14 +291,22 @@ func ciGoTestProblems(j workflowJob) ([]string, int) {
 	n := 0
 	for _, s := range j.steps() {
 		retry, guard, els := "", false, false
+		holdsRC, checksRC := false, false
 		for _, l := range strings.Split(s.keys["run"], "\n") {
 			switch {
 			case strings.HasPrefix(l, "#"):
+			case l == `[ "$rc" -eq 0 ]`:
+				checksRC = true
 			case l == `if [ -n "$NIGHTLY_RESULTS" ]; then`:
 				guard, retry, els = true, "", false
 			case guard && strings.HasPrefix(l, `go run ./internal/tools/gotestretry -out "$NIGHTLY_RESULTS/gotest-`):
 				_, args, _ := strings.Cut(l, " -- ")
-				retry, _, _ = strings.Cut(args, " || ")
+				var tail string
+				retry, tail, _ = strings.Cut(args, " || ")
+				holdsRC = tail == "rc=$?"
+				if tail != "" && !holdsRC {
+					p = append(p, j.name+" job step "+fmt.Sprint(s.keys["name"])+": go test line lacks the full-mode gotestretry branch: the exit of gotestretry is swallowed by "+tail)
+				}
 			case l == "else":
 				els = els || retry != ""
 			case strings.Contains(l, "go test "):
@@ -309,6 +317,9 @@ func ciGoTestProblems(j workflowJob) ([]string, int) {
 					p = append(p, j.name+" job step "+fmt.Sprint(s.keys["name"])+": go test line lacks the full-mode gotestretry branch: "+l)
 				}
 			}
+		}
+		if holdsRC && !checksRC {
+			p = append(p, j.name+" job step "+fmt.Sprint(s.keys["name"])+": go test line lacks the full-mode gotestretry branch: the rc captured from gotestretry is never tested")
 		}
 	}
 	return p, n
@@ -560,6 +571,16 @@ func TestCIResults_GoTestStepsRouteThroughGotestretry(t *testing.T) {
 		{"accuracy retry dropped", "go", `gotest-accuracy.json" -- -count=1 -v`, `gotest-accuracy.json" -- -count=1`},
 		{"wired retry dropped", "queue", `gotest-wired.json" -- -count=1 -v`, `gotest-wired.json" -- -count=1`},
 		{"endtoend retry dropped", "queue", `gotest-endtoend.json" -- -count=1 -v`, `gotest-endtoend.json" -- -count=1`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			requireCIResultsProblem(t, mutateInJob(t, yml, c.job, c.old, c.repl), "go test line lacks")
+		})
+	}
+	for _, c := range []struct{ name, job, old, repl string }{
+		{"accuracy exit swallowed", "go", "-run 'TestTier1Accuracy' ./internal/extraction/ || rc=$?", "-run 'TestTier1Accuracy' ./internal/extraction/ || true"},
+		{"accuracy rc test dropped", "go", "tee accuracy.txt\n            [ \"$rc\" -eq 0 ]\n", "tee accuracy.txt\n"},
+		{"wired rc test dropped", "queue", "tee wired-corpus.txt\n            [ \"$rc\" -eq 0 ]\n", "tee wired-corpus.txt\n"},
+		{"endtoend rc test dropped", "queue", "tee endtoend-corpus.txt\n            [ \"$rc\" -eq 0 ]\n", "tee endtoend-corpus.txt\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			requireCIResultsProblem(t, mutateInJob(t, yml, c.job, c.old, c.repl), "go test line lacks")

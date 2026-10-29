@@ -502,3 +502,35 @@ func TestDevEnvNightly_EveryPreviewJobHasATimeout(t *testing.T) {
 	}
 	requireDevEnvProblem(t, "    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      gateway_url", "    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      gateway_url", "job prepare-env calls")
 }
+
+// The contacts step of fleet-gate at 7b01a4bf, trimmed per line.
+var nlContactsGate = []string{
+	`name: Gate on notifications' contacts delivery mode`,
+	`run: |`,
+	`set -euo pipefail`,
+	`mode=""`,
+	`for _ in $(seq 1 5); do`,
+	`if curl -sS --connect-timeout 5 --max-time 40 -H "X-Gateway-Token: $GATEWAY_TOKEN" -o /tmp/contacts-fleet.json "$GATEWAY_URL/healthz/fleet" \`,
+	`&& jq -e '.services | type == "array"' /tmp/contacts-fleet.json >/dev/null 2>&1; then`,
+	`mode=$(jq -r '[.services[] | select(.name == "notifications") | .contacts // "none"][0] // "absent"' /tmp/contacts-fleet.json)`,
+	`if [ "$mode" = fake ]; then break; fi`,
+	`fi`,
+	`sleep 5`,
+	`done`,
+	`if [ "$mode" != fake ]; then`,
+	`echo "::error::notifications reports contacts='${mode:-unreachable}', want 'fake'. Anything else means the preview could write to HubSpot or Resend: check DEPLOY_ENV is pr-<N>."`,
+	`exit 1`,
+	`fi`,
+	`echo "notifications reports contacts=fake."`,
+}
+
+func TestDevEnvNightly_ContactsGateUnchanged(t *testing.T) {
+	t.Parallel()
+	got := nlRaw(devEnvJob(t, "fleet-gate"), "Gate on notifications' contacts delivery mode")
+	if !slices.Equal(got, nlContactsGate) {
+		t.Errorf("contacts gate changed:\n%s", strings.Join(got, "\n"))
+	}
+	if strings.Contains(strings.Join(got, "\n"), "nightly") {
+		t.Error("contacts gate names the nightly mode")
+	}
+}

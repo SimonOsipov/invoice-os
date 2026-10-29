@@ -495,12 +495,33 @@ func TestPreviewNightlyEnvFilesDifferOnlyByName(t *testing.T) {
 	t.Parallel()
 	got := nameGoldens(t, "nightly")
 	for _, svc := range prAll(t) {
-		if want := asNightly(prGolden(t, "env-"+svc)); got["env-"+svc] != want {
+		if want := asNightly(prGolden(t, "env-"+svc)); strings.Replace(got["env-"+svc], nlContactsFake, "", 1) != want {
 			t.Errorf("env-%s:\n%s\nwant\n%s", svc, got["env-"+svc], want)
 		}
 	}
 	if want := asNightly(prGolden(t, "env-migrate")); got["env-migrate"] != want {
 		t.Errorf("migrate env:\n%s\nwant\n%s", got["env-migrate"], want)
+	}
+}
+
+const nlContactsFake = "CONTACTS_FAKE: 'true'\n"
+
+func TestPreviewNightlyContactsAreFake(t *testing.T) {
+	t.Parallel()
+	got := nameGoldens(t, "nightly")
+	for _, svc := range prAll(t) {
+		fake := svc == "notifications" || svc == "worker"
+		if has := strings.Contains(got["env-"+svc], nlContactsFake); has != fake {
+			t.Errorf("env-%s has CONTACTS_FAKE = %v, want %v", svc, has, fake)
+		}
+	}
+	for _, key := range []string{"HUBSPOT_TOKEN", "RESEND_"} {
+		if strings.Contains(got["deploy-argv"], key) {
+			t.Errorf("nightly deploy argv mounts %s", key)
+		}
+	}
+	if strings.Contains(prGolden(t, "deploy-argv"), "CONTACTS") {
+		t.Error("PR 7 argv names CONTACTS")
 	}
 }
 

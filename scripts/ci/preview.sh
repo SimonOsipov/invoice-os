@@ -192,6 +192,10 @@ env_file() {
         ;;
       blog) echo "VITE_GATEWAY_URL: $(url gateway "$pr")" ;;
     esac
+    # ceiling: the nightly's contacts stay fake until NIGHTLY-06 mounts real keys.
+    case "$svc" in
+      notifications | worker) [ "$pr" != nightly ] || echo "CONTACTS_FAKE: 'true'" ;;
+    esac
     case "$svc" in
       invoice | submission | worker)
         echo "AI_FAKE: 'true'"

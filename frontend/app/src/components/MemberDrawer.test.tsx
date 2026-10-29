@@ -1168,6 +1168,20 @@ describe('MEMB-03: the drawer locks member actions for a non-admin viewer', () =
     expect(staffRole).not.toHaveBeenCalled()
   })
 
+  it('a non-admin viewer on their own row: the pills note and the picker note are distinct, each resolvable', () => {
+    mount([member({ id: 'me', isYou: true, clientAccess: ['e1'] })], 'me', { roles: [role({ key: 'cfo' })] })
+
+    const noteOf = (el: HTMLElement) => {
+      const id = el.closest('fieldset[aria-describedby]')?.getAttribute('aria-describedby') as string
+      return { id, text: document.getElementById(id)?.textContent }
+    }
+    const pills = noteOf(screen.getByTestId('drawer-wfrole-cfo'))
+    const picker = noteOf(screen.getByTestId('drawer-scope-all'))
+    expect(pills.text).toBe(WFROLE_ADMIN_ONLY)
+    expect(picker.text).toBe(MEMBER_CLIENTS_ADMIN_ONLY)
+    expect(pills.id).not.toBe(picker.id)
+  })
+
   it('an admin viewer: the workflow-role pills are live, with no note', () => {
     mount([adminViewer(), target()], 'u2', { roles: [role({ key: 'cfo' })] })
 

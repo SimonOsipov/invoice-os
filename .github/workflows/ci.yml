@@ -4,10 +4,11 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 # Cancel superseded runs on the same branch/PR.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'nightly-' || '' }}${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -20,13 +21,13 @@ jobs:
     name: Detect changes
     runs-on: ubuntu-latest
     outputs:
-      go: ${{ steps.filter.outputs.go }}
-      frontend: ${{ steps.filter.outputs.frontend }}
-      migrations: ${{ steps.filter.outputs.migrations }}
-      sidecar: ${{ steps.filter.outputs.sidecar }}
-      idp: ${{ steps.filter.outputs.idp }}
-      hooks: ${{ steps.filter.outputs.hooks }}
-      caddy: ${{ steps.filter.outputs.caddy }}
+      go: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.go }}
+      frontend: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.frontend }}
+      migrations: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.migrations }}
+      sidecar: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.sidecar }}
+      idp: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.idp }}
+      hooks: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.hooks }}
+      caddy: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.caddy }}
       lane: ${{ steps.lane.outputs.lane }}
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +40,7 @@ jobs:
         run: bash scripts/ci/lane.sh pr
       - uses: dorny/paths-filter@v3
         id: filter
+        if: github.event_name != 'workflow_dispatch'
         with:
           filters: |
             go:
@@ -1064,7 +1066,7 @@ jobs:
   library:
     name: Library
     needs: changes
-    if: needs.changes.outputs.lane == 'library'
+    if: needs.changes.outputs.lane == 'library' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -1088,7 +1090,7 @@ jobs:
   blog:
     name: Blog
     needs: changes
-    if: needs.changes.outputs.lane == 'blog'
+    if: needs.changes.outputs.lane == 'blog' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -1345,7 +1347,7 @@ jobs:
   # and fails only when a job that actually ran failed — so path-filtered
   # skips never leave a required check stuck pending.
   ci:
-    name: CI
+    name: ${{ github.event_name == 'workflow_dispatch' && 'CI (nightly)' || 'CI' }}
     needs: [changes, go, frontend, library, blog, clean-clone, migrations, docker-canary, caddy-headers, docling-canary, docling-test, rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite, govulncheck, advisories]
     if: always()
     runs-on: ubuntu-latest

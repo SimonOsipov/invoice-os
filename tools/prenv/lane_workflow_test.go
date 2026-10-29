@@ -74,7 +74,7 @@ func TestCILibraryJobReplacesFrontendOnTheSmallLane(t *testing.T) {
 	if v, _ := jobKey(lib, "needs"); v != "changes" {
 		t.Errorf("library needs = %q, want changes", v)
 	}
-	if v, _ := jobKey(lib, "if"); v != "needs.changes.outputs.lane == 'library'" {
+	if v, _ := jobKey(lib, "if"); v != "needs.changes.outputs.lane == 'library' || github.event_name == 'workflow_dispatch'" {
 		t.Errorf("library if = %q", v)
 	}
 	var runs []string
@@ -120,7 +120,7 @@ func TestCIBlogJobReplacesFrontendOnTheSmallLane(t *testing.T) {
 	if v, _ := jobKey(j, "needs"); v != "changes" {
 		t.Errorf("blog needs = %q, want changes", v)
 	}
-	if v, _ := jobKey(j, "if"); v != "needs.changes.outputs.lane == 'blog'" {
+	if v, _ := jobKey(j, "if"); v != "needs.changes.outputs.lane == 'blog' || github.event_name == 'workflow_dispatch'" {
 		t.Errorf("blog if = %q", v)
 	}
 	var runs []string

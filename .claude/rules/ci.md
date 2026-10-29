@@ -19,3 +19,4 @@ paths:
 - Start each `tools/prenv` test with `t.Parallel()`. Keep a test serial only when it calls `t.Setenv`, assigns a package-level variable, writes into the repo tree or asserts a real-clock window, and say why in a `// serial:` line.
 - Run a bash script from a `tools/prenv` test through `runToFiles`, not a pipe. Under parallel load `/bin/bash` 3.2 fails an `echo` on a blocked pipe with EINTR.
 - Feed `grep -q` and `head -n 1` a here-string, never a pipe, in a script under `pipefail`. The writer of the pipe gets SIGPIPE when the reader exits early, and the pipeline fails.
+- Dispatch `ci.yml` only from `nightly.yml`. A dispatch is full mode: every job runs, and the roll-up is named `CI (nightly)`.

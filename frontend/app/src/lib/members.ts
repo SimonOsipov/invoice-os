@@ -618,6 +618,9 @@ export type PendingInvite = { id: string; email: string; role: AccessRole; expir
 export const INVITE_ADMIN_ONLY = 'Only an admin can invite people.'
 export const CLIENT_ADMIN_ONLY = 'Only an admin can change a client.'
 export const ROLE_ADMIN_ONLY = 'Only an admin can change an access role.'
+export const MEMBER_ADMIN_ONLY = 'Only an admin can manage members.'
+export const MEMBER_CLIENTS_ADMIN_ONLY = "Only an admin can choose a member's clients."
+export const WFROLE_ADMIN_ONLY = 'Only an admin can change workflow roles.'
 export const SELF_DEMOTION_WARNING = 'You will lose admin controls in this workspace. Only another admin can give them back.'
 export const ROLE_CHANGE_KEEP = 'Keep role'
 export const ROLE_CHANGE_CONFIRMED = 'Change role'
@@ -707,6 +710,22 @@ export function viewerIsAdmin(members: readonly Member[]): boolean {
 export function roleCardsLock(members: readonly Member[], row: Member): string | null {
   if (!viewerIsAdmin(members)) return ROLE_ADMIN_ONLY
   return isProtectedAdmin(members, row) ? PROTECTED_ADMIN_NOTE : null
+}
+
+/** The note that disables Suspend, Reactivate and Remove, or `null`. */
+export function memberActionsLock(members: readonly Member[], row: Member): string | null {
+  if (!viewerIsAdmin(members)) return MEMBER_ADMIN_ONLY
+  return isProtectedAdmin(members, row) ? PROTECTED_ADMIN_NOTE : null
+}
+
+/** The note that disables the client picker, or `null`. */
+export function clientPickerLock(members: readonly Member[]): string | null {
+  return viewerIsAdmin(members) ? null : MEMBER_CLIENTS_ADMIN_ONLY
+}
+
+/** The note that disables the workflow-role pills, or `null`. */
+export function workflowRolesLock(members: readonly Member[]): string | null {
+  return viewerIsAdmin(members) ? null : WFROLE_ADMIN_ONLY
 }
 
 // An empty `[]` only: undefined, `null` (in-house) and 'all' are not "no clients given".

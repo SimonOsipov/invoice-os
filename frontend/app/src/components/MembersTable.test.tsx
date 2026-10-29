@@ -12,7 +12,7 @@ import type { ComponentProps } from 'react'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { invitedMember, PROTECTED_ADMIN_NOTE, removeConfirmQuestion, type Member, type PendingInvite } from '../lib/members'
+import { invitedMember, MEMBER_ADMIN_ONLY, PROTECTED_ADMIN_NOTE, roleCardsLock, removeConfirmQuestion, type Member, type PendingInvite } from '../lib/members'
 import type { Role } from '../lib/roles'
 import type { Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
@@ -295,22 +295,125 @@ describe('the row menu', () => {
     expect(edit.style.opacity, 'an enabled item must not carry the disabled paint').toBe('')
   })
 
-  it("menu: the sole active admin's Remove is disabled with the note, keeping its paint and pointing at its reason", () => {
+  it("menu: a non-admin viewer's Remove next to the sole active admin is disabled with the admin-only reason, keeping its paint", () => {
     renderRows([member({ id: 'me', name: 'Me Preparer', initials: 'MP', isYou: true }), member({ id: 'u2', name: 'Bo Active', initials: 'BA', role: 'admin' })])
 
     fireEvent.click(rowOf('Bo Active').getByTestId('member-menu-trigger'))
 
     const menu = screen.getByTestId('member-menu')
     const remove = within(menu).getByRole('button', { name: 'Remove' }) as HTMLButtonElement
-    expect(remove.disabled, 'the sole active admin, not you').toBe(true)
+    expect(remove.disabled, 'a non-admin viewer').toBe(true)
     expect(remove.style.opacity).toBe('0.45')
     expect(remove.style.cursor).toBe('not-allowed')
     expect(remove.style.filter).toBe('none')
     expect(remove.style.color, 'the enabled paint (red) must survive the dim').toBe('var(--status-red-text)')
     const reason = within(menu).getByTestId('member-menu-reason')
-    expect(reason.textContent).toBe(PROTECTED_ADMIN_NOTE)
+    expect(reason.textContent).toBe(MEMBER_ADMIN_ONLY)
     expect(remove.getAttribute('aria-describedby')).toBe(reason.id)
     expect(reason.style.fontSize).toBe('11px')
+  })
+
+  const viewerPreparer = () => member({ id: 'me', name: 'Me Preparer', initials: 'MP', isYou: true })
+  const openMenu = (name: string) => {
+    fireEvent.click(rowOf(name).getByTestId('member-menu-trigger'))
+    return within(screen.getByTestId('member-menu'))
+  }
+  const btn = (menu: ReturnType<typeof within>, name: string) => menu.getByRole('button', { name }) as HTMLButtonElement
+
+  it('a non-admin viewer: Suspend and Remove are disabled with one shared reason', () => {
+    renderRows([viewerPreparer(), member({ id: 'u2', name: 'Bo Active', initials: 'BA' })])
+    const menu = openMenu('Bo Active')
+
+    for (const name of ['Suspend', 'Remove']) {
+      expect(btn(menu, name).disabled).toBe(true)
+      expect(btn(menu, name).title).toBe(MEMBER_ADMIN_ONLY)
+    }
+    const reasons = menu.getAllByTestId('member-menu-reason')
+    expect(reasons).toHaveLength(1)
+    expect(reasons[0].textContent).toBe(MEMBER_ADMIN_ONLY)
+  })
+
+  it('a non-admin viewer: Edit stays enabled and opens the drawer', () => {
+    const onOpen = vi.fn()
+    renderRows([viewerPreparer(), member({ id: 'u2', name: 'Bo Active', initials: 'BA' })], {}, { onOpen })
+    const edit = btn(openMenu('Bo Active'), 'Edit')
+
+    expect(edit.disabled).toBe(false)
+    fireEvent.click(edit)
+    expect(onOpen).toHaveBeenCalledWith('u2')
+  })
+
+  it('a non-admin viewer: a disabled item does not fire its write', () => {
+    const onStatus = vi.fn()
+    const onRemove = vi.fn()
+    renderRows([viewerPreparer(), member({ id: 'u2', name: 'Bo Active', initials: 'BA' })], {}, { onStatus, onRemove })
+
+    const menu = openMenu('Bo Active')
+    fireEvent.click(btn(menu, 'Suspend'))
+    fireEvent.click(btn(menu, 'Remove'))
+
+    expect(onStatus).not.toHaveBeenCalled()
+    expect(onRemove).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('member-remove-confirm')).toBeNull()
+  })
+
+  it('a non-admin viewer: Reactivate is disabled', () => {
+    renderRows([viewerPreparer(), member({ id: 'u4', name: 'Di Suspended', initials: 'DS', status: 'suspended' })])
+    const reactivate = btn(openMenu('Di Suspended'), 'Reactivate')
+
+    expect(reactivate.disabled).toBe(true)
+    expect(reactivate.title).toBe(MEMBER_ADMIN_ONLY)
+  })
+
+  it("a non-admin viewer's own row: Suspend disabled, no Remove", () => {
+    renderRows([viewerPreparer(), member({ id: 'u2', name: 'Bo Active', initials: 'BA' })])
+    const menu = openMenu('Me Preparer')
+
+    expect(btn(menu, 'Suspend').disabled).toBe(true)
+    expect(menu.queryByRole('button', { name: 'Remove' })).toBeNull()
+    expect(menu.getAllByTestId('member-menu-reason')).toHaveLength(1)
+  })
+
+  it('a non-admin viewer on the sole admin row: the admin-only reason wins', () => {
+    renderRows([viewerPreparer(), member({ id: 'u2', name: 'Bo Active', initials: 'BA', role: 'admin' })])
+    const menu = openMenu('Bo Active')
+
+    expect(menu.getAllByTestId('member-menu-reason')).toHaveLength(1)
+    expect(menu.getByTestId('member-menu-reason').textContent).toBe(MEMBER_ADMIN_ONLY)
+    expect(menu.queryByText(PROTECTED_ADMIN_NOTE)).toBeNull()
+  })
+
+  it('an admin viewer: no row menu item is locked', () => {
+    renderRows(ROSTER())
+
+    for (const [name, items] of [['Bo Active', ['Suspend', 'Remove']], ['Di Suspended', ['Reactivate', 'Remove']]] as const) {
+      const menu = openMenu(name)
+      for (const item of items) expect(btn(menu, item).disabled, `${name} ${item}`).toBe(false)
+      expect(menu.queryByTestId('member-menu-reason')).toBeNull()
+      fireEvent.keyDown(document, { key: 'Escape' })
+    }
+  })
+
+  it('an admin viewer: Remove next to a second admin is enabled', () => {
+    renderRows([
+      member({ id: 'me', name: 'Me Admin', initials: 'MA', role: 'admin', isYou: true }),
+      member({ id: 'u2', name: 'Bo Active', initials: 'BA', role: 'admin' }),
+    ])
+    const menu = openMenu('Bo Active')
+
+    expect(btn(menu, 'Remove').disabled).toBe(false)
+    expect(menu.queryByTestId('member-menu-reason')).toBeNull()
+  })
+
+  it('the row menu agrees with the role cards for the same viewer', () => {
+    for (const viewer of [viewerPreparer(), member({ id: 'me', name: 'Me Admin', initials: 'MA', role: 'admin', isYou: true })]) {
+      const roster = [viewer, member({ id: 'u2', name: 'Bo Active', initials: 'BA' })]
+      renderRows(roster)
+
+      const cardsOpen = roleCardsLock(roster, roster[1]) === null
+      expect(btn(openMenu('Bo Active'), 'Suspend').disabled).toBe(!cardsOpen)
+      cleanup()
+    }
   })
 
   it('an invited row offers Resend and Revoke, both enabled, with no reasons', () => {

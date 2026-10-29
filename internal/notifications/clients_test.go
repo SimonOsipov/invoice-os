@@ -286,6 +286,17 @@ func TestNewsletterClients_PreviewIsCaptureAndFake(t *testing.T) {
 	}
 }
 
+func TestNewsletterClients_NightlyIsFakeAndEnabled(t *testing.T) {
+	vars := clFourKeys("RESEND_BLOG_TOPIC_ID", "bt", "RESEND_BLOG_SEGMENT_ID", "bs", "RESEND_SENDING_KEY", "sk")
+	w := clWiring(t, "nightly", vars)
+	if w.Mode != ModeFake || !w.Enabled {
+		t.Errorf("wiring = %+v, want fake newsletter, enabled", w)
+	}
+	if _, ok := w.Resend.(FakeBlogResend); !ok {
+		t.Errorf("resend client = %T, want FakeBlogResend", w.Resend)
+	}
+}
+
 func TestNewsletterClients_NightlyMailIsCaptureEvenWithASendingKey(t *testing.T) {
 	vars := clFourKeys("RESEND_BLOG_TOPIC_ID", "bt", "RESEND_BLOG_SEGMENT_ID", "bs", "RESEND_SENDING_KEY", "sk")
 	w := clWiring(t, "nightly", vars)

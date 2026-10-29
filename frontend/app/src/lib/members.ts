@@ -728,6 +728,11 @@ export function workflowRolesLock(members: readonly Member[]): string | null {
   return viewerIsAdmin(members) ? null : WFROLE_ADMIN_ONLY
 }
 
+/** The note that disables Resend and Revoke invite, or `null`. */
+export function inviteActionsLock(members: readonly Member[]): string | null {
+  return viewerIsAdmin(members) ? null : INVITE_ADMIN_ONLY
+}
+
 // An empty `[]` only: undefined, `null` (in-house) and 'all' are not "no clients given".
 export function viewerHasNoClients(members: readonly Member[]): boolean {
   return members.some((m) => m.isYou && m.status === 'active' && m.role !== 'admin' && Array.isArray(m.clientAccess) && m.clientAccess.length === 0)

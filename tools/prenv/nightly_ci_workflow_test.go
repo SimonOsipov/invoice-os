@@ -228,6 +228,10 @@ const (
 	ciGoRetryLine    = `go run ./internal/tools/gotestretry -out "$NIGHTLY_RESULTS/gotest-go.json" -- ./...`
 	ciDoclingRetry   = "|| pytest -v --lf --junitxml=/results/junit-docling-retry.xml"
 	ciDoclingToday   = `docker run --rm -v "$GITHUB_WORKSPACE:/repo:ro" -e REPO_ROOT=/repo docling:test`
+	ciGoFullBlock    = "if [ -n \"$NIGHTLY_RESULTS\" ]; then\nmkdir -p \"$NIGHTLY_RESULTS\"\n" + ciGoRetryLine + "\nelse\ngo test ./...\nfi"
+	ciDoclingFull    = "if [ -n \"$NIGHTLY_RESULTS\" ]; then\nmkdir -p \"$NIGHTLY_RESULTS\" && chmod 777 \"$NIGHTLY_RESULTS\"\n" +
+		`docker run --rm -v "$GITHUB_WORKSPACE:/repo:ro" -v "$GITHUB_WORKSPACE/$NIGHTLY_RESULTS:/results" -e REPO_ROOT=/repo docling:test sh -c ` +
+		`'J="-o junit_family=xunit1 -o junit_suite_name=sidecar/docling"; pytest -v --junitxml=/results/junit-docling.xml $J ` + ciDoclingRetry + ` $J'` + "\nelse\n"
 )
 
 var (
@@ -295,7 +299,7 @@ func ciResultsProblems(yaml string) []string {
 		run := s.keys["run"]
 		guard, retry, els, plain := strings.Index(run, `if [ -n "$NIGHTLY_RESULTS" ]; then`), strings.Index(run, ciGoRetryLine),
 			strings.Index(run, "else\ngo test ./...\nfi"), strings.Index(run, "go test ./...")
-		if guard < 0 || retry < guard || els < retry || plain < 0 {
+		if guard < 0 || retry < guard || els < retry || plain < 0 || !strings.Contains(run, ciGoFullBlock) {
 			p = append(p, "go job Test step does not run gotestretry in full mode and go test ./... otherwise")
 		}
 	}
@@ -347,6 +351,7 @@ func ciResultsProblems(yaml string) []string {
 			{"junit_suite_name=sidecar/docling", "no junit_suite_name=sidecar/docling"},
 			{"chmod 777", "no chmod 777 on the results directory"},
 			{"else\n" + ciDoclingToday + "\nfi", "today's command is not the else branch"},
+			{ciDoclingFull, "full-mode branch differs from the pinned command (guard, mkdir, volume, options, exit code)"},
 		} {
 			if !strings.Contains(run, c.need) {
 				p = append(p, "docling pytest step: "+c.why)

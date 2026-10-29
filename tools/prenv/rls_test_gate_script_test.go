@@ -51,6 +51,8 @@ func runRLSGate(t *testing.T, stream string, env map[string]string, args ...stri
 		}
 	}
 	writeShim(t, filepath.Join(bin, "go"), rlsGateShim)
+	// BSD mktemp ignores TMPDIR; without this shim the TMPDIR-empty check is vacuous on macOS.
+	writeShim(t, filepath.Join(bin, "mktemp"), "#!/bin/sh\nif [ $# -eq 0 ]; then exec /usr/bin/mktemp \"$TMPDIR/tmp.XXXXXX\"; fi\nexec /usr/bin/mktemp \"$@\"\n")
 
 	cmd := exec.Command("/bin/bash", append([]string{"scripts/ci/rls-test-gate.sh"}, args...)...)
 	cmd.Dir = repoRoot(t)

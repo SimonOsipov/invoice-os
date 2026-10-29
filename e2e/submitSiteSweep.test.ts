@@ -13,7 +13,8 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import ts from 'typescript'
+// TS 7's root export has no compiler API; @typescript/typescript6 keeps it.
+import ts from '@typescript/typescript6'
 
 const E2E_ROOT = dirname(fileURLToPath(import.meta.url))
 const TOPOLOGY_DIR = join(E2E_ROOT, 'topology')

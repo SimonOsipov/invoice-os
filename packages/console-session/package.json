@@ -18,13 +18,13 @@
     "@invoice-os/api-client": "workspace:*"
   },
   "devDependencies": {
-    "@testing-library/react": "^16.3.2",
-    "@types/node": "^22.10.0",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "jsdom": "^27.4.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.12"
   }

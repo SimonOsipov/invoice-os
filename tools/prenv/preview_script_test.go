@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,6 +19,12 @@ case "$1 $2 $3" in
   prev=
   for a in "$@"; do
     [ "$prev" = --env-vars-file ] && cp "$a" "$D/env-$3"
+    prev=$a
+  done ;;
+"run jobs deploy")
+  prev=
+  for a in "$@"; do
+    [ "$prev" = --env-vars-file ] && cp "$a" "$D/env-job-$4"
     prev=$a
   done ;;
 "secrets create "*) cat > "$D/created-$3" ;;
@@ -305,5 +312,105 @@ func TestPreviewBudgetMatchesWhatDeployAndSecretsUse(t *testing.T) {
 	}
 	if got := budgetFleet(t, runPreview(t, nil, "budget")); got != total {
 		t.Fatalf("budget fleet = %d, deploy and secrets sum to %d", got, total)
+	}
+}
+
+func prAll(t *testing.T) []string {
+	t.Helper()
+	return append(previewList(t, "BACKENDS"), previewList(t, "SITES")...)
+}
+
+var tmpEnvFile = regexp.MustCompile(`--env-vars-file \S+`)
+
+// normCalls sorts the gcloud calls (deploys run four at a time) and masks the temp env-file path.
+func normCalls(calls string) string {
+	lines := nonBlankLines(tmpEnvFile.ReplaceAllString(calls, "--env-vars-file TMP"))
+	sort.Strings(lines)
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// nameGoldens runs every PR-name-dependent command for one name and returns file name -> content.
+func nameGoldens(t *testing.T, name string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	urls := runPreview(t, nil, "urls", name)
+	img := runPreview(t, nil, "image", name, "gateway", "abc123")
+	out["urls"] = urls.stdout
+	out["image"] = img.stdout
+
+	dep := runPreview(t, nil, append([]string{"deploy", name, "abc123"}, prAll(t)...)...)
+	if dep.code != 0 {
+		t.Fatalf("deploy exited %d: %s", dep.code, dep.stderr)
+	}
+	for _, svc := range prAll(t) {
+		out["env-"+svc] = dep.file(t, "env-"+svc+"-"+previewSuffix(name))
+	}
+	out["deploy-argv"] = normCalls(dep.file(t, "calls"))
+
+	mig := runPreview(t, nil, "migrate", name, "abc123")
+	out["env-migrate"] = mig.file(t, "env-job-migrate-"+previewSuffix(name))
+	out["migrate-calls"] = normCalls(mig.file(t, "calls"))
+
+	sec := runPreview(t, nil, "secrets", name)
+	var b strings.Builder
+	for _, n := range previewList(t, "PR_SECRETS") {
+		f := "created-" + previewSuffix(name) + "-" + n
+		b.WriteString(f + "\n")
+		if strings.HasPrefix(n, "database-") {
+			b.WriteString("  " + sec.file(t, f) + "\n")
+		}
+	}
+	out["secrets-created"] = b.String()
+	out["secrets-calls"] = sec.file(t, "calls")
+	out["secrets-stdout"] = sec.stdout
+
+	td := runPreview(t, func(dir string) {
+		var have strings.Builder
+		for _, n := range previewList(t, "PR_SECRETS") {
+			have.WriteString(previewSuffix(name) + "-" + n + "\n")
+		}
+		writeIn(t, dir, "have", have.String())
+	}, "teardown", name)
+	out["teardown-calls"] = td.file(t, "calls")
+	out["teardown-stdout"] = td.stdout
+	return out
+}
+
+func previewSuffix(name string) string {
+	if name == "nightly" {
+		return "nightly"
+	}
+	return "pr-" + name
+}
+
+// Set UPDATE_GOLDEN=1 to rewrite the goldens from the current script.
+func TestPreviewPRSevenIsByteIdenticalToItsGoldens(t *testing.T) {
+	t.Parallel()
+	got := nameGoldens(t, "7")
+	dir := filepath.Join("testdata", "preview-pr7")
+	if os.Getenv("UPDATE_GOLDEN") != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, body := range got {
+			writeIn(t, dir, name+".golden", body)
+		}
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != len(got) {
+		t.Errorf("%d goldens, %d outputs", len(entries), len(got))
+	}
+	for name, body := range got {
+		want, err := os.ReadFile(filepath.Join(dir, name+".golden"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(want) != body {
+			t.Errorf("%s differs from its golden:\n--- want\n%s\n--- got\n%s", name, want, body)
+		}
 	}
 }

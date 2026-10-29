@@ -3,9 +3,11 @@ package accountevents
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -243,6 +245,22 @@ func TestMover_FullBatchLogsABacklogWarning(t *testing.T) {
 			t.Errorf("WARN log holds an address or IP:\n%s", raw())
 		}
 	})
+	t.Run("101 rows", func(t *testing.T) {
+		e := newEnv(t)
+		a, u := e.tenant(t), e.user()
+		e.member(t, a, u, "active", e.email("warn"))
+		seedBatch(t, e, 101, u)
+
+		log, records, raw := capture()
+		mustTick(t, e, log)
+		if warns := atLevel(records(), "WARN"); len(warns) != 1 {
+			t.Fatalf("%d WARN line(s) on the full tick, want 1; log:\n%s", len(warns), raw())
+		}
+		mustTick(t, e, log)
+		if warns := atLevel(records(), "WARN"); len(warns) != 1 {
+			t.Errorf("%d WARN line(s) after the one-row tick, want still 1; log:\n%s", len(warns), raw())
+		}
+	})
 	t.Run("99 rows", func(t *testing.T) {
 		e := newEnv(t)
 		a, u := e.tenant(t), e.user()
@@ -342,5 +360,204 @@ func TestMover_FailedJobInsertKeepsTheRows(t *testing.T) {
 	}
 	if n := len(e.jobs(t, u)); n != 5 {
 		t.Errorf("%d job(s) after the good tick, want 5", n)
+	}
+}
+
+// AC 2 and 3: a user id wins over an email; an email matches trimmed and in any case; a blank email matches nobody.
+func TestMover_MembershipLookupRules(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(t), e.tenant(t)
+	u1, u2 := e.user(), e.user()
+	e.member(t, a, u1, "active", e.email("one"))
+	e.member(t, b, u2, "active", "Two-"+e.tag+"@Corp.Example.Test")
+
+	e.enqueue(t, evSignedIn, u1, e.email("two"), e.tag+"-both", uaChromeMac, time.Now().Add(-3*time.Second))
+	e.enqueue(t, evSignInFailed, nil, "  TWO-"+e.tag+"@corp.example.test  ", e.tag+"-trim", uaChromeMac, time.Now().Add(-2*time.Second))
+	e.enqueue(t, evSignInFailed, nil, "   ", e.tag+"-blank", uaChromeMac, time.Now().Add(-time.Second))
+
+	mustTick(t, e, slog.Default())
+
+	if n := e.outbox(t); n != 0 {
+		t.Errorf("%d outbox row(s) left, want 0", n)
+	}
+	jobs := e.jobs(t, u1, u2)
+	if len(jobs) == 0 {
+		t.Fatal("no job after the tick")
+	}
+	byIP := map[string]AuditArgs{}
+	for _, j := range jobs {
+		byIP[j.IP] = j
+	}
+	if j, ok := byIP[e.tag+"-both"]; !ok || j.UserID != u1 || j.TenantID != a {
+		t.Errorf("row with a user id and another member's email gave %+v, want user %s in tenant %s", j, u1, a)
+	}
+	if j, ok := byIP[e.tag+"-trim"]; !ok || j.UserID != u2 || j.TenantID != b {
+		t.Errorf("row with a padded upper-case email gave %+v, want user %s in tenant %s", j, u2, b)
+	}
+	if _, ok := byIP[e.tag+"-blank"]; ok {
+		t.Errorf("row with a blank email made a job: %+v", byIP[e.tag+"-blank"])
+	}
+	if len(jobs) != 2 {
+		t.Errorf("%d job(s), want exactly 2: %+v", len(jobs), jobs)
+	}
+}
+
+// AC 2 and 7: each of the six events makes a job under its own name; three blocked refusals in one second make three jobs.
+func TestMover_EverySixEventsMakesAJobAndNoBlockedRowIsDropped(t *testing.T) {
+	e := newEnv(t)
+	a, u := e.tenant(t), e.user()
+	e.member(t, a, u, "active", e.email("six"))
+	at := time.Now().UTC().Add(-time.Minute)
+	if len(Events) != 6 {
+		t.Fatalf("Events has %d name(s), want 6", len(Events))
+	}
+	for i, ev := range Events {
+		e.enqueue(t, ev, u, nil, fmt.Sprintf("%s-ev%d", e.tag, i), uaChromeMac, at.Add(time.Duration(i)*time.Millisecond))
+	}
+	for i := 0; i < 2; i++ {
+		e.enqueue(t, "account.sign_in_blocked", u, nil, fmt.Sprintf("%s-blk%d", e.tag, i), uaChromeMac, at)
+	}
+
+	mustTick(t, e, slog.Default())
+
+	counts := map[string]int{}
+	for _, j := range e.jobs(t, u) {
+		counts[j.Event]++
+	}
+	for _, ev := range Events {
+		want := 1
+		if ev == "account.sign_in_blocked" {
+			want = 3
+		}
+		if counts[ev] != want {
+			t.Errorf("%d job(s) for %s, want %d", counts[ev], ev, want)
+		}
+	}
+}
+
+// AC 3: an unknown user id is dropped with one INFO line that holds neither the id nor the IP; an empty tick logs nothing.
+func TestMover_UnknownUserIDIsDroppedAndAnEmptyTickIsSilent(t *testing.T) {
+	e := newEnv(t)
+	a, u, ghost := e.tenant(t), e.user(), e.user()
+	e.member(t, a, u, "active", e.email("known"))
+
+	log, records, raw := capture()
+	mustTick(t, e, log)
+	if len(records()) != 0 {
+		t.Errorf("empty tick logged %s", raw())
+	}
+
+	e.enqueue(t, "account.signed_out", ghost, nil, e.tag+"-ghostip", uaChromeMac, time.Now().Add(-time.Second))
+	e.enqueue(t, evSignedIn, u, nil, e.tag+"-knownip", uaChromeMac, time.Now())
+	mustTick(t, e, log)
+
+	if n := e.outbox(t); n != 0 {
+		t.Errorf("%d outbox row(s) left, want 0", n)
+	}
+	jobs := e.jobs(t, u, ghost)
+	if len(jobs) != 1 || jobs[0].UserID != u {
+		t.Errorf("jobs = %+v, want exactly one, for the known member %s and none for the unknown id", jobs, u)
+	}
+	infos := atLevel(records(), "INFO")
+	if len(infos) != 1 || !mentions(infos[0], "account.signed_out") {
+		t.Errorf("INFO lines = %v, want exactly one naming account.signed_out", infos)
+	}
+	for _, secret := range []string{ghost, e.tag + "-ghostip", u} {
+		if strings.Contains(raw(), secret) {
+			t.Errorf("log holds %q:\n%s", secret, raw())
+		}
+	}
+	if w := atLevel(records(), "WARN"); len(w) != 0 {
+		t.Errorf("%d WARN line(s) for two rows, want none", len(w))
+	}
+}
+
+// AC 4: four movers racing on one outbox move each row exactly once.
+func TestMover_ConcurrentTicksMoveEachRowOnce(t *testing.T) {
+	e := newEnv(t)
+	a, u := e.tenant(t), e.user()
+	e.member(t, a, u, "active", e.email("race"))
+	const rows = 60
+	seedBatch(t, e, rows, u)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 4)
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- e.tick(t, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent tick: %v", err)
+		}
+	}
+	mustTick(t, e, slog.Default())
+
+	if n := e.outbox(t); n != 0 {
+		t.Errorf("%d outbox row(s) left, want 0", n)
+	}
+	jobs := e.jobs(t, u)
+	seen := map[string]int{}
+	for _, j := range jobs {
+		seen[j.IP]++
+	}
+	if len(jobs) != rows || len(seen) != rows {
+		t.Errorf("%d job(s) over %d distinct row(s), want %d each (no row moved twice, none lost)", len(jobs), len(seen), rows)
+	}
+}
+
+// AC 5, 6 and [d-ua]: mover then worker. A member of two workspaces ends with exactly one row in each, none in a
+// suspended third or in another member's; the raw user agent reaches no job; an empty IP is written as "Unknown IP".
+func TestMoverThenWorker_OneRowInEachActiveWorkspace(t *testing.T) {
+	e := newEnv(t)
+	a, b, c := e.tenant(t), e.tenant(t), e.tenant(t)
+	u, other := e.user(), e.user()
+	e.member(t, a, u, "active", e.email("mw"))
+	e.member(t, b, u, "active", e.email("mw"))
+	e.member(t, c, u, "suspended", e.email("mw"))
+	e.member(t, a, other, "active", e.email("other"))
+	rawUA := "Mozilla/5.0 (Windows NT 10.0) Chrome/130.0 Safari/537.36 uniqueagent-" + e.tag
+	e.enqueue(t, evSignInFailed, nil, e.email("mw"), "", rawUA, time.Now())
+
+	mustTick(t, e, slog.Default())
+	jobs := e.jobs(t, u)
+	if len(jobs) != 2 {
+		t.Fatalf("%d job(s), want 2: %+v", len(jobs), jobs)
+	}
+	if n := e.mustCount(t, `SELECT count(*) FROM river_job WHERE kind = 'account_audit' AND args::text LIKE $1`, "%uniqueagent-"+e.tag+"%"); n != 0 {
+		t.Errorf("%d job(s) hold the raw user agent, want 0", n)
+	}
+	mustTick(t, e, slog.Default())
+	if again := e.jobs(t, u); len(again) != 2 {
+		t.Errorf("%d job(s) after a second tick, want still 2", len(again))
+	}
+	for _, j := range jobs {
+		if err := e.work(j); err != nil {
+			t.Fatalf("Work: %v", err)
+		}
+	}
+
+	for _, tn := range []string{a, b} {
+		rows := e.rowsUnder(t, tn, u)
+		if len(rows) != 1 {
+			t.Fatalf("tenant %s holds %d row(s) for the member, want exactly 1", tn, len(rows))
+		}
+		if rows[0].Event != evSignInFailed || rows[0].Payload["ip_address"] != "Unknown IP" || rows[0].Payload["device"] != "Chrome on Windows" {
+			t.Errorf("tenant %s row = %+v, want %s from Unknown IP on Chrome on Windows", tn, rows[0], evSignInFailed)
+		}
+	}
+	if got := e.rowsUnder(t, c, u); len(got) != 0 {
+		t.Errorf("suspended workspace holds %d row(s), want 0", len(got))
+	}
+	if got := e.rowsUnder(t, a, other); len(got) != 0 {
+		t.Errorf("another member of tenant A holds %d row(s), want 0", len(got))
+	}
+	if n := e.auditEverywhere(t, u); n != 2 {
+		t.Errorf("%d row(s) for the member across all tenants, want 2", n)
 	}
 }

@@ -68,3 +68,48 @@ func TestDevice_UnknownCases(t *testing.T) {
 		t.Errorf("Parse(\"Chrome/130\") = %+v, want Browser Chrome, OS empty ([d-unknown-pair])", d)
 	}
 }
+
+// AC 1: each pair of neighbouring rows in [d-ua] order, in one UA that carries both tokens; the earlier row wins.
+func TestDevice_FirstMatchWins(t *testing.T) {
+	cases := []struct{ name, ua, browser, os string }{
+		{"Edge before Opera", "Edg/1 OPR/1 Windows NT", "Edge", "Windows"},
+		{"Opera before Samsung", "OPR/1 SamsungBrowser/1 Windows NT", "Opera", "Windows"},
+		{"Samsung before Firefox", "SamsungBrowser/1 Firefox/1 Windows NT", "Samsung Internet", "Windows"},
+		{"Firefox before Chrome", "Firefox/1 Chrome/1 Windows NT", "Firefox", "Windows"},
+		{"Chrome before Safari", "Chrome/1 Version/1 Safari/1 Windows NT", "Chrome", "Windows"},
+		{"Chromium token alone", "Chromium/130 Safari/537.36 Linux", "Chrome", "Linux"},
+		{"Android WebView says Version, Chrome and Safari", "Mozilla/5.0 (Linux; Android 10) Version/4.0 Chrome/87.0 Mobile Safari/537.36", "Chrome", "Android"},
+		{"Windows before iOS", "Chrome/1 Windows NT iPhone", "Chrome", "Windows"},
+		{"iOS before Android", "Chrome/1 iPhone Android", "Chrome", "iOS"},
+		{"Android before ChromeOS", "Chrome/1 Android CrOS", "Chrome", "Android"},
+		{"ChromeOS before macOS", "Chrome/1 CrOS Mac OS X", "Chrome", "ChromeOS"},
+		{"macOS before Linux", "Chrome/1 Macintosh Linux", "Chrome", "macOS"},
+		{"iPad is iOS", "Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Version/17.5 Mobile/15E148 Safari/604.1", "Safari", "iOS"},
+		{"iPod is iOS", "Mozilla/5.0 (iPod; CPU OS 15_0 like Mac OS X) AppleWebKit/605.1.15 Version/15.0 Mobile/15E148 Safari/604.1", "Safari", "iOS"},
+		{"Mac OS X without Macintosh", "Firefox/131.0 (Mac OS X 10.15)", "Firefox", "macOS"},
+		{"Macintosh without Mac OS X", "Firefox/131.0 (Macintosh; Intel)", "Firefox", "macOS"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if d := Parse(c.ua); d.Browser != c.browser || d.OS != c.os {
+				t.Errorf("Parse(%q) = {%q, %q}, want {%q, %q}", c.ua, d.Browser, d.OS, c.browser, c.os)
+			}
+		})
+	}
+}
+
+// AC 1: Safari needs both Version/ and Safari/; either alone is no browser.
+func TestDevice_SafariNeedsBothTokens(t *testing.T) {
+	for _, ua := range []string{
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15",
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.5",
+	} {
+		d := Parse(ua)
+		if d.OS != "macOS" {
+			t.Fatalf("Parse(%q).OS = %q, want macOS (control: the OS still parses)", ua, d.OS)
+		}
+		if d.Browser != "" || d.Label() != "Unknown device" {
+			t.Errorf("Parse(%q) = %+v, label %q, want no browser and %q", ua, d, d.Label(), "Unknown device")
+		}
+	}
+}

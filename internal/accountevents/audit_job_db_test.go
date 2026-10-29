@@ -3,12 +3,14 @@ package accountevents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -163,5 +165,94 @@ func TestAuditJob_EveryBlockedRefusalWritesARow(t *testing.T) {
 		if r.Event != "account.sign_in_blocked" {
 			t.Errorf("row event = %q, want account.sign_in_blocked", r.Event)
 		}
+	}
+}
+
+// AC 5: an audit.Record failure comes back as the job's error, so River logs it and retries; no row is written.
+func TestAuditJob_RecordFailureIsReturnedAndWritesNothing(t *testing.T) {
+	e := newEnv(t)
+	a, u := e.tenant(t), e.user()
+	e.member(t, a, u, "active", e.email("rf"))
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	if err := e.work(AuditArgs{TenantID: a, UserID: u, Event: evSignedIn, IP: "203.0.113.7", Device: "Chrome on macOS", OccurredAt: now}); err != nil {
+		t.Fatalf("control job: %v", err)
+	}
+	for name, args := range map[string]AuditArgs{
+		"empty event (audit_event_length)": {TenantID: a, UserID: u, Event: "", OccurredAt: now},
+		"empty actor (audit_actor_length)": {TenantID: a, UserID: "", Event: evSignedIn, OccurredAt: now},
+	} {
+		err := e.work(args)
+		var cancel *rivertype.JobCancelError
+		if err == nil || errors.As(err, &cancel) {
+			t.Errorf("%s: Work = %v, want the audit.Record error, retried by River (not cancelled)", name, err)
+		}
+	}
+	if got := e.rowsUnder(t, a, u); len(got) != 1 {
+		t.Errorf("%d row(s) for the member after two refused writes, want only the control's 1", len(got))
+	}
+	if n := e.mustCount(t, `SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND actor = ''`, a); n != 0 {
+		t.Errorf("%d row(s) with an empty actor, want 0", n)
+	}
+}
+
+// AC 5: a tenant id that is not a UUID is refused before any statement; nothing is written anywhere.
+func TestAuditJob_MalformedTenantWritesNothing(t *testing.T) {
+	e := newEnv(t)
+	a, u := e.tenant(t), e.user()
+	e.member(t, a, u, "active", e.email("bad"))
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	if err := e.work(AuditArgs{TenantID: a, UserID: u, Event: evSignedIn, OccurredAt: now}); err != nil {
+		t.Fatalf("control job: %v", err)
+	}
+	for _, tid := range []string{"", "not-a-uuid", a + "x"} {
+		if err := e.work(AuditArgs{TenantID: tid, UserID: u, Event: evSignedIn, OccurredAt: now}); err == nil {
+			t.Errorf("tenant_id %q: Work returned nil, want an error", tid)
+		}
+	}
+	if n := e.auditEverywhere(t, u); n != 1 {
+		t.Errorf("%d row(s) for the member across all tenants, want only the control's 1", n)
+	}
+}
+
+// AC 5: two members in two tenants; each job lands in its own tenant and neither tenant reads the other's row.
+func TestAuditJob_TwoTenantsEachSeeOnlyTheirOwnRow(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(t), e.tenant(t)
+	ua, ub := e.user(), e.user()
+	e.member(t, a, ua, "active", e.email("ta"))
+	e.member(t, b, ub, "active", e.email("tb"))
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	for _, args := range []AuditArgs{
+		{TenantID: a, UserID: ua, Event: evSignedIn, IP: "203.0.113.1", Device: "Chrome on macOS", OccurredAt: now},
+		{TenantID: b, UserID: ub, Event: "account.signed_out", IP: "203.0.113.2", Device: "Safari on iOS", OccurredAt: now},
+	} {
+		if err := e.work(args); err != nil {
+			t.Fatalf("Work: %v", err)
+		}
+	}
+	for _, c := range []struct {
+		tenant, own, other string
+		ev                 string
+	}{{a, ua, ub, evSignedIn}, {b, ub, ua, "account.signed_out"}} {
+		own := e.rowsUnder(t, c.tenant, c.own)
+		if len(own) != 1 || own[0].Event != c.ev {
+			t.Errorf("tenant %s reads %+v for its own member, want one %s row", c.tenant, own, c.ev)
+		}
+		if other := e.rowsUnder(t, c.tenant, c.other); len(other) != 0 {
+			t.Errorf("tenant %s reads %d row(s) of the other tenant's member, want 0", c.tenant, len(other))
+		}
+	}
+}
+
+// AC 5: a tenant that does not exist (a purged workspace) cancels the job; River must not retry it for days.
+func TestAuditJob_UnknownTenantCancelsTheJob(t *testing.T) {
+	e := newEnv(t)
+	err := e.work(AuditArgs{TenantID: "6f1c2a3e-8b4d-4c5e-9a7f-0123456789ab", UserID: e.user(), Event: evSignedIn, OccurredAt: time.Now().UTC().Format(time.RFC3339)})
+	var cancel *rivertype.JobCancelError
+	if !errors.As(err, &cancel) {
+		t.Errorf("Work = %v, want a river.JobCancel error", err)
 	}
 }

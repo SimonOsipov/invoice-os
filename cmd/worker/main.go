@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 
+	"github.com/SimonOsipov/invoice-os/internal/accountevents"
 	"github.com/SimonOsipov/invoice-os/internal/aicalls"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/dashboard"
@@ -172,10 +173,11 @@ func main() {
 	}
 
 	pjw := &workspacepurge.PurgeWorker{}
+	aw := &accountevents.AuditWorker{Pool: pool}
 
 	q, err := queue.New(pool, queue.Config{
 		Queues:  queueConfigs(cw != nil),
-		Workers: workerBundle(sw, pw, ew, rw, cw, xw, xbw, pjw),
+		Workers: workerBundle(sw, pw, ew, rw, cw, xw, xbw, pjw, aw),
 		Logger:  app.Logger,
 	})
 	if err != nil {
@@ -194,6 +196,7 @@ func main() {
 	app.AddBackgroundWorker(codelist.NewWorker(systemhealth.SampleInterval, leader.Lead("health-sample", sampler.Sample)))
 
 	app.AddBackgroundWorker(codelist.NewWorker(notifications.HandoffInterval, leader.Lead("registrant-handoff", notifications.MoveRegistrantHandoffs(pool, q.River()))))
+	app.AddBackgroundWorker(codelist.NewWorker(accountevents.HandoffInterval, leader.Lead("account-event-handoff", accountevents.MoveHandoffs(pool, q.River(), app.Logger))))
 
 	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, leader.Lead("newsletter-purge", notifications.NewNewsletterStore(pool, q.River()).PurgeExpired)))
 
@@ -374,13 +377,14 @@ func queueConfigs(contacts bool) map[string]river.QueueConfig {
 
 // workerBundle is the ONE bundle queue.New reads. A River client takes exactly one, so a second
 // bundle would leave its workers unfetched (TestWorkerBundle_CarriesEveryKind).
-func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet, xw *notifications.EraseWorker, xbw *notifications.EraseByIDWorker, pjw *workspacepurge.PurgeWorker) *river.Workers {
+func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet, xw *notifications.EraseWorker, xbw *notifications.EraseByIDWorker, pjw *workspacepurge.PurgeWorker, aw *accountevents.AuditWorker) *river.Workers {
 	bundle := submission.Workers(sw, pw)
 	extraction.AddTo(bundle, ew)
 	notifications.AddRegistrantTo(bundle, rw)
 	notifications.AddEraseTo(bundle, xw)
 	notifications.AddEraseByIDTo(bundle, xbw)
 	workspacepurge.AddPurgeTo(bundle, pjw)
+	accountevents.AddAuditTo(bundle, aw)
 	if cw != nil {
 		notifications.AddTo(bundle, cw.deliver, cw.deal, cw.blog)
 	}

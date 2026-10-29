@@ -754,6 +754,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "cmd/migrate/purgecheck.go", fn: "purgeCheckRun"},                                // preview-only deploy probe in the migrate job; no request reaches it
 	{file: "internal/archive/workspace.go", fn: "recordExportFailed"},                       // audits a failed export of a possibly locked workspace in its own short tx
 	{file: "internal/archive/workspace.go", fn: "AssembleWorkspace"},                        // exports a locked workspace, which the seam refuses for a read-write tx; the method gates the active admin itself
+	{file: "internal/accountevents/audit_job.go", fn: "Work"},                               // a River job carries its tenant and there is no request identity to gate
 }
 
 // scCoreSite is one call of the ungated core, attributed to the INNERMOST

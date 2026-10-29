@@ -3,6 +3,7 @@ paths:
   - "internal/audit/**"
   - "internal/actor/**"
   - "internal/staffjobs/**"
+  - "internal/accountevents/**"
   - "internal/tenancy/staff_deletion.go"
   - "internal/tenancy/staff_account_deletion.go"
   - "migrations/*audit_log*"
@@ -17,6 +18,7 @@ paths:
 - `RecordStaff` refuses a `TenantID` that differs from the transaction's tenant with `ErrStaffTenantMismatch`.
 - Never write a staff member's id to `audit_log`.
 - Write `submission.job.redriven` and `submission.job.cancelled` only from `internal/staffjobs`, with payload `job_id`, `invoice_id`, `invoice_number` and `reason`.
+- Write `account.*` events only from `internal/accountevents`, with payload `ip_address`, `device` and `occurred_at`, and the member's user id as the actor.
 - Write `workspace.purged` only from `internal/workspacepurge`, with payload `due_at`, `members` and `objects`, before `purge_tenant` in the same transaction.
 - Write a staff `workspace.deletion_scheduled`, `workspace.deletion_cancelled` or `workspace.purge_started` only from `internal/tenancy/staff_deletion.go`, with `reason` in the payload.
 - Link a staff row to its `audit_log` row by `tenant_id`, `event` and `created_at`.

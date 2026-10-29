@@ -331,6 +331,10 @@ var anConstructedEvents = []anIndirect{
 // to be reclassified rather than skipped.
 var anVariableEvents = []anIndirect{
 	{
+		file: "internal/accountevents/audit_job.go", fn: "Work",
+		reason: "the event is the job's account.* name, never invoice-scoped",
+	},
+	{
 		file: "internal/document/document.go", fn: "Upsert",
 		reason: "document.created or document.reused, chosen by whether the row already existed",
 	},

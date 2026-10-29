@@ -325,7 +325,7 @@ cmd_teardown() {
   echo "PR $pr: preview deleted"
 }
 
-# prs: every PR that owns a service, a job, a bucket or a secret, with the oldest creation time.
+# prs: every preview (a PR number or nightly) that owns a service, a job, a bucket or a secret, with the oldest creation time.
 cmd_prs() {
   {
     gcloud run services list "${gc[@]}" --filter "metadata.labels.$LABEL:*" \
@@ -339,7 +339,6 @@ cmd_prs() {
   } | sort -k1,1n -k2,2 | awk '!seen[$1]++ {print $1, $2}'
 }
 
-# budget: Cloud SQL connections one fleet holds at peak (instances x pool), from the deploy and secrets tables.
 # cap: how many previews exist (a nightly counts) and whether three are open (ci-preview.md).
 cmd_cap() {
   local prs n
@@ -349,6 +348,7 @@ cmd_cap() {
   [ "$n" -ge 3 ] && echo "full=true" || echo "full=false"
 }
 
+# budget: Cloud SQL connections one fleet holds at peak (instances x pool), from the deploy and secrets tables.
 cmd_budget() {
   local svc kv name pool n leader total=0
   for svc in "${BACKENDS[@]}"; do

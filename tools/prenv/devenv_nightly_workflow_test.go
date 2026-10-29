@@ -24,6 +24,11 @@ func nlJSONFile(name string) string {
 	return "PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ " + nlOn + " && format('{0}/nightly-results/" + name + "', github.workspace) || '' }}"
 }
 
+// nlCode drops the comments of a run block, so a commented command does not count.
+func nlCode(run string) string {
+	return strings.Join(stripHashComments(strings.Split(run, "\n")), "\n")
+}
+
 func nlJobs(yml string) map[string]workflowJob {
 	m := map[string]workflowJob{}
 	for _, j := range workflowJobsOf(yml) {
@@ -102,7 +107,7 @@ func devEnvNightlyProblems(yml string) []string {
 			bad("changes step " + id + " is not pull_request only")
 		}
 	}
-	if s, ok := nlStepByID(ch, "shards"); !ok || !strings.Contains(s.keys["run"], "node e2e/topology/shards.ts") {
+	if s, ok := nlStepByID(ch, "shards"); !ok || !strings.Contains(nlCode(s.keys["run"]), "node e2e/topology/shards.ts") {
 		bad("changes lacks the shards step")
 	}
 	if va, _ := jobKey(jobs["commit-authors"], "outputs"); !strings.Contains(va, "dependabot_only: ${{ steps.verdict.outputs.dependabot_only }}") {
@@ -143,7 +148,10 @@ func devEnvNightlyProblems(yml string) []string {
 	if c, _ := nlStep(pe, "preview cap reached"); c.keys["if"] != nlOn+" && steps.count.outputs.full == 'true'" {
 		bad("preview cap reached if does not read steps.count.outputs.full")
 	}
-	if c, ok := nlStepByID(pe, "count"); !ok || c.keys["name"] != "Count the previews" || !strings.Contains(c.keys["run"], "preview.sh cap") {
+	if l, _ := nlStep(pe, "Delete a leftover nightly preview"); !strings.Contains(nlCode(l.keys["run"]), `preview.sh teardown "$PR"`) {
+		bad("prepare-env leftover step does not tear down the nightly")
+	}
+	if c, ok := nlStepByID(pe, "count"); !ok || c.keys["name"] != "Count the previews" || !strings.Contains(nlCode(c.keys["run"]), "preview.sh cap") {
 		bad("prepare-env count step missing")
 	}
 
@@ -281,18 +289,6 @@ func TestDevEnvNightly_PRExpressionsUnchanged(t *testing.T) {
 			t.Errorf("%s if = %q, want %q", name, x, g[1])
 		}
 	}
-	// On a PR the mode step writes topology_after=success, so topology starts only on success.
-	for _, c := range []struct {
-		after, result string
-		want          bool
-	}{
-		{"success", "success", true}, {"success", "failure", false}, {"success", "skipped", false}, {"success", "cancelled", false},
-		{"success failure", "success", true}, {"success failure", "failure", true}, {"success failure", "skipped", false}, {"success failure", "cancelled", false},
-	} {
-		if got := strings.Contains(c.after, c.result); got != c.want {
-			t.Errorf("contains(%q, %q) = %v, want %v", c.after, c.result, got, c.want)
-		}
-	}
 }
 
 func TestDevEnvNightly_ModeStepRuns(t *testing.T) {
@@ -385,21 +381,26 @@ func TestDevEnvNightly_PrepareEnvStopsAtTheCap(t *testing.T) {
 	}
 }
 
-// nlRunPreview runs the named prepare-env steps with a stub preview.sh; the stub's prs and cap output are the arguments.
-func nlRunPreview(t *testing.T, step, prs, capOut string, env ...string) (string, int) {
+// nlRunStep runs the named step of a job with a stub preview.sh; the stub's prs and cap output are the arguments.
+func nlRunStep(t *testing.T, job, step, prs, capOut string, env ...string) (string, int) {
 	t.Helper()
-	s, ok := nlStep(devEnvJob(t, "prepare-env"), step)
+	s, ok := nlStep(devEnvJob(t, job), step)
 	if !ok {
-		t.Fatalf("no step %q", step)
+		t.Fatalf("no step %q in %s", step, job)
 	}
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "scripts/ci"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	writeIn(t, filepath.Join(dir, "scripts/ci"), "preview.sh", "case \"$1\" in\nprs) printf '%s' '"+prs+"' ;;\ncap) printf '%s' '"+capOut+"' ;;\nesac\n")
-	script := "cd '" + dir + "'\n" + strings.Join(env, "\n") + "\nexport GITHUB_OUTPUT='" + filepath.Join(dir, "out") + "'\n" + s.keys["run"]
+	script := "cd '" + dir + "'\n" + strings.Join(env, "\n") + "\nexport GITHUB_OUTPUT='" + filepath.Join(dir, "out") + "' GITHUB_STEP_SUMMARY='" + filepath.Join(dir, "summary") + "'\n" + s.keys["run"]
 	stdout, stderr, code := runBashScript(t, script)
 	return stdout + stderr, code
+}
+
+func nlRunPreview(t *testing.T, step, prs, capOut string, env ...string) (string, int) {
+	t.Helper()
+	return nlRunStep(t, "prepare-env", step, prs, capOut, env...)
 }
 
 func TestDevEnvNightly_CapStepsRun(t *testing.T) {
@@ -415,6 +416,15 @@ func TestDevEnvNightly_CapStepsRun(t *testing.T) {
 	}
 	if out, code := nlRunPreview(t, "preview cap reached", "", "", "OPEN=3"); code != 1 || !strings.Contains(out, "preview cap reached: 3") {
 		t.Errorf("cap step: exit %d, out %q, want exit 1 with 'preview cap reached: 3'", code, out)
+	}
+	const gone = "Prove the nightly preview is gone"
+	if out, code := nlRunStep(t, "nightly-teardown", gone, "nightly 2026\n7 2026\n", ""); code != 1 || !strings.Contains(out, "::error::") {
+		t.Errorf("teardown with a nightly line left: exit %d, out %q, want exit 1 with ::error::", code, out)
+	}
+	for _, prs := range []string{"7 2026\n", "", "nightly2 2026\n"} {
+		if out, code := nlRunStep(t, "nightly-teardown", gone, prs, ""); code != 0 {
+			t.Errorf("teardown, prs %q: exit %d, out %q, want 0", prs, code, out)
+		}
 	}
 	out, code := nlRunPreview(t, "Count the previews", "", "open=1\nfull=false\n")
 	if code != 0 || !strings.Contains(out, "full=false") {
@@ -496,6 +506,9 @@ func TestDevEnvNightly_EveryPreviewJobHasATimeout(t *testing.T) {
 		if _, ok := jobKey(j, "timeout-minutes"); !ok {
 			t.Errorf("job %s calls preview.sh without timeout-minutes", name)
 		}
+	}
+	if v, _ := jobKey(nlJobs(yml)["e2e"], "timeout-minutes"); v != "40" {
+		t.Errorf("e2e timeout-minutes = %q, want 40", v)
 	}
 	if n < 8 {
 		t.Errorf("control: only %d jobs call preview.sh", n)

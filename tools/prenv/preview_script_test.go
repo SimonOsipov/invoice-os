@@ -658,11 +658,13 @@ func TestPreviewTeardownNightlyDeletesOnlyItsOwn(t *testing.T) {
 	var deletes []string
 	for _, l := range nonBlankLines(r.file(t, "calls")) {
 		if strings.Contains(l, " delete ") || strings.Contains(l, "storage rm ") {
-			deletes = append(deletes, strings.Fields(l)[2]+" "+strings.Fields(l)[3])
+			head, _, _ := strings.Cut(l, " --project")
+			deletes = append(deletes, head)
 		}
 	}
-	want := []string{"services gateway-nightly", "jobs migrate-nightly", "rm --recursive", "delete nightly-gateway-token", "delete nightly-s2s-token"}
-	if got := strings.Join(deletes, "|"); len(deletes) != len(want) || strings.Contains(got, "pr-7") {
+	want := []string{"run services delete gateway-nightly", "run jobs delete migrate-nightly", "storage rm --recursive gs://ascomply-preview-nightly",
+		"secrets delete nightly-gateway-token", "secrets delete nightly-s2s-token"}
+	if got := strings.Join(deletes, "|"); got != strings.Join(want, "|") {
 		t.Errorf("deletes = %v, want %v", deletes, want)
 	}
 	c := r.file(t, "calls")

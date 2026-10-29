@@ -33,7 +33,7 @@ func nightlyStepLines(j workflowJob, marker string) []string {
 		}
 		return nil
 	}
-	for _, l := range j.lines {
+	for _, l := range stripHashComments(j.lines) {
 		if strings.HasPrefix(l, "      - ") {
 			if got := flush(); got != nil {
 				return got
@@ -149,9 +149,15 @@ func nightlyRunProblems(nightlyYAML, ciYAML, suitesTxt string) []string {
 	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), nightlyE2EFlag) {
 		p = append(p, "assembler step lacks -e2e-suites")
 	}
+	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), `node e2e/topology/shards.ts | jq -r '.[] | "topology-\(.)=E2E topology (\(.))=results"'`) {
+		p = append(p, "assembler step does not append the topology shard suites")
+	}
 	col := nightlyStepLines(summary, "gh run download")
 	if col != nil && !strings.Contains(strings.Join(col, "\n"), nightlyPreviewDL) {
 		p = append(p, "collect step does not download the preview run's results")
+	}
+	if col != nil && !strings.Contains(strings.Join(col, "\n"), `runs+=("$PREVIEW_RUN_ID")`) {
+		p = append(p, "collect step does not write the jobs of each run")
 	}
 	if col != nil && !strings.Contains(strings.Join(col, "\n"), `actions/runs/$run/jobs`) {
 		p = append(p, "collect step does not write the jobs of each run")
@@ -448,6 +454,8 @@ func TestNightly_SummaryFoldsTheE2ERun(t *testing.T) {
 		{"e2e flag dropped", nightlyE2EFlag, "", "lacks -e2e-suites"},
 		{"preview download dropped", "$PREVIEW_RUN_ID\" -R", "$CI_RUN_ID\" -R", "preview run's results"},
 		{"jobs of one run", "actions/runs/$run/jobs", "actions/runs/$CI_RUN_ID/jobs", "jobs of each run"},
+		{"preview run left out of the jobs", `runs+=("$PREVIEW_RUN_ID")`, `runs+=("$CI_RUN_ID")`, "jobs of each run"},
+		{"topology shards not appended", "node e2e/topology/shards.ts | jq", "node e2e/topology/shards.ts > /dev/null; jq", "topology shard suites"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

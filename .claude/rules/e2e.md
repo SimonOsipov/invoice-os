@@ -22,7 +22,7 @@ paths:
 - Set a deletion cancel-link token with `setDeletionLinkToken`.
 - A staff account is an active `reviewer` of the seeded house company `ASComply (dev)`. `provisionStaffAccount` grants it through `/auth/mock/member`.
 - Open a console with a staff session from `provisionStaffAccount` and `seedStaffSession`.
-- Serve `/auth/mock/member`, `/auth/mock/invitation-token` and `/auth/mock/deletion-link-token` only from the `mockissuer` build. Only `pull_request` stamps that tag.
+- Serve `/auth/mock/member`, `/auth/mock/invitation-token` and `/auth/mock/deletion-link-token` only from the `mockissuer` build.
 - Never assume an empty table. Smoke, api and topology run in that order against one deployment, with no reset between them.
 - Expect a Playwright retry to rerun a failed test against the rows its first attempt left.
 - Create per-run-unique data, such as fresh TINs and random UUIDs. Act only on rows the spec created.
@@ -64,4 +64,4 @@ paths:
 - Write `VITE_SUPPORT_URL` on `app` and `VITE_APP_URL` on `support-console` on each fork.
 - Expect `library` to get no `VITE_GATEWAY_URL` on a fork. The blog URL is a CORS origin; the library URL is not.
 - Expect a fork to accept registrations, send no mail and confirm at once. `fork-vars-before-urls` sets `GOTRUE_DISABLE_SIGNUP`, a blank SMTP host and `GOTRUE_MAILER_AUTOCONFIRM`.
-- Expect a CI topology shard to stop at its first failed test, retry included. The `list` reporter prints later tests as "did not run"; the html and json reports mark them `skipped`. A retry-pass does not stop it.
+- Expect a PR topology shard to stop at its first failed test, retry included. The `list` reporter prints later tests as "did not run"; the html and json reports mark them `skipped`. A retry-pass does not stop it.

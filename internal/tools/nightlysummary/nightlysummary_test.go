@@ -1125,6 +1125,37 @@ func TestE2ESuites_KeyAlsoInCISuitesIsUsageError(t *testing.T) {
 	eq(t, r.code, 2)
 }
 
+func TestE2ESuites_NoResultsAndJobEntriesNameDevEnv(t *testing.T) {
+	e := newEnv(t)
+	e.e2e(e2eSuites)
+	e.jobs = append(e.jobs,
+		job{Name: "Prepare the preview (secrets, bucket, URLs)", Conclusion: "failure"},
+		job{Name: "E2E", Conclusion: "success"})
+	r := e.run(e.e2eFlag...)
+	eq(t, r.code, 1)
+	eq(t, r.dec.Failures, []failure{
+		{"environment", "(job)", devEnvWorkflow, "job failure"},
+		{"e2e", "no test results", devEnvWorkflow, "job E2E wrote no results"},
+	})
+}
+
+func TestPlaywright_MessageComesFromTheLastFailingAttempt(t *testing.T) {
+	rep := `{"config":{"rootDir":"/w/e2e"},"suites":[{"title":"a.spec.ts","specs":[{"title":"t","file":"a.spec.ts","tests":[{"status":"unexpected","results":[` +
+		`{"status":"failed","error":{"message":"first attempt"}},{"status":"failed","error":{"message":"last attempt\nsecond line"}}]}]}]}]}`
+	j := judgePlaywright(t, rep)
+	eq(t, len(j.fails), 1)
+	eq(t, j.fails[0].msg, "last attempt")
+}
+
+func TestPlaywright_SkippedOnlyReportIsNotResultsEmpty(t *testing.T) {
+	e := newEnv(t)
+	e.clear("frontend")
+	e.write("frontend", "playwright-a.json", pwReport("skipped", ""))
+	r := e.run()
+	eq(t, r.code, 0)
+	eq(t, len(r.dec.Failures), 0)
+}
+
 func TestRun_E2EWholeRun(t *testing.T) {
 	d := filepath.Join("testdata", "e2e")
 	out := filepath.Join(t.TempDir(), "summary.json")

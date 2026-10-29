@@ -236,8 +236,8 @@ func devEnvNightlyProblems(yml string) []string {
 			}
 		}
 	}
-	if x, _ := jobKey(e2e, "timeout-minutes"); x != "40" {
-		bad("e2e timeout-minutes is not 40")
+	if x, _ := jobKey(e2e, "timeout-minutes"); x != nlE2ETimeout {
+		bad("e2e timeout-minutes is not the nightly-only 40")
 	}
 	if g := unguardedOIDCJobs(yml); len(g) != 0 {
 		bad("unguarded OIDC jobs: " + strings.Join(g, ","))
@@ -380,6 +380,9 @@ func TestDevEnvNightly_PrepareEnvStopsAtTheCap(t *testing.T) {
 		t.Errorf("a cap step after the secrets step went unnoticed: %q", got)
 	}
 }
+
+// nlE2ETimeout: the nightly gets 40 minutes; a PR keeps GitHub's 360-minute default (Q1).
+const nlE2ETimeout = "${{ needs.changes.outputs.nightly == 'true' && 40 || 360 }}"
 
 // nlCapFails as the cap output makes the stub's `cap` exit non-zero.
 const nlCapFails = "!fail"
@@ -527,8 +530,8 @@ func TestDevEnvNightly_EveryPreviewJobHasATimeout(t *testing.T) {
 			t.Errorf("job %s calls preview.sh without timeout-minutes", name)
 		}
 	}
-	if v, _ := jobKey(nlJobs(yml)["e2e"], "timeout-minutes"); v != "40" {
-		t.Errorf("e2e timeout-minutes = %q, want 40", v)
+	if v, _ := jobKey(nlJobs(yml)["e2e"], "timeout-minutes"); v != nlE2ETimeout {
+		t.Errorf("e2e timeout-minutes = %q, want %q (40 nightly, the 360 default on a PR)", v, nlE2ETimeout)
 	}
 	if n < 8 {
 		t.Errorf("control: only %d jobs call preview.sh", n)

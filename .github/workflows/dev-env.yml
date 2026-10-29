@@ -529,7 +529,8 @@ jobs:
       needs.health-gate.result == 'success' &&
       needs.ci-watch.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # A PR keeps the 360-minute default; only the nightly gets a budget.
+    timeout-minutes: ${{ needs.changes.outputs.nightly == 'true' && 40 || 360 }}
     permissions:
       contents: read
       pull-requests: read   # flaky-spec gate lists the PR's changed files

@@ -1,0 +1,13 @@
+{{- define "title"}}New sign-in to your ASComply account{{end}}
+{{- define "preheader"}}Someone signed in to your ASComply account from a new device.{{end}}
+{{- define "eyebrow"}}Account security{{end}}
+{{- define "heading"}}New sign-in.{{end}}
+{{- define "heading_accent"}}Was this you?{{end}}
+{{- define "intro"}}Someone signed in to your ASComply account from {{.Device}} {{.IPNote}} on {{.When}}. If this was you, you can ignore this email. If it was not you, reset your password now:{{end}}
+{{- define "action_url"}}{{.ActionURL}}{{end}}
+{{- define "action_label"}}Reset your password{{end}}
+{{- define "expiry"}}The button opens the ASComply sign-in page with the reset form.{{end}}
+{{- define "details"}}<tr><td width="120" style="{{template "row_label_style"}}">Device</td><td style="{{template "row_value_style"}}">{{.Device}}</td></tr><tr><td width="120" style="{{template "row_label_style"}}">IP address</td><td style="{{template "row_value_style"}}">{{.IPValue}}</td></tr><tr><td width="120" style="{{template "row_label_style_last"}}">Time</td><td style="{{template "row_value_style_last"}}">{{.When}}</td></tr>{{end}}
+{{- define "ignore_note"}}If this was you, no action is needed.{{end}}
+{{- define "reason"}}You received this email because a new browser or device signed in to your ASComply account.{{end}}
+{{- template "layout" .}}

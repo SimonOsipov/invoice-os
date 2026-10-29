@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+
+	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 )
 
 const (
@@ -559,5 +561,69 @@ func TestMoverThenWorker_OneRowInEachActiveWorkspace(t *testing.T) {
 	}
 	if n := e.auditEverywhere(t, u); n != 2 {
 		t.Errorf("%d row(s) for the member across all tenants, want 2", n)
+	}
+}
+
+func TestMover_OneNewDeviceJobPerSignIn(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(t), e.tenant(t)
+	u := e.user()
+	e.member(t, a, u, "active", e.email("u"))
+	e.member(t, b, u, "active", e.email("u"))
+	e.enqueue(t, evSignedIn, u, e.email("u"), e.tag+"-203.0.113.7", uaChromeMac, time.Now().UTC().Truncate(time.Second).Add(-time.Minute))
+
+	mustTick(t, e, slog.Default())
+
+	if got := len(e.jobs(t, u)); got != 2 {
+		t.Errorf("audit jobs = %d, want 2", got)
+	}
+	nd := e.newDeviceJobs(t, u)
+	if len(nd) != 1 {
+		t.Fatalf("new-device jobs = %+v, want exactly 1", nd)
+	}
+	if nd[0].Email != e.email("u") || nd[0].Browser != "Chrome" || nd[0].OS != "macOS" || nd[0].IP != e.tag+"-203.0.113.7" {
+		t.Errorf("job = %+v", nd[0])
+	}
+}
+
+func TestMover_OnlySignInsEnqueueTheNewDeviceJob(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant(t)
+	u, nobody := e.user(), e.user()
+	e.member(t, a, u, "active", e.email("u"))
+	for _, ev := range []string{"account.sign_in_failed", "account.sign_in_blocked", "account.signed_out", evResetRequested, evResetCompleted} {
+		e.enqueue(t, ev, u, e.email("u"), e.tag+"-x", uaChromeMac, time.Now())
+	}
+	e.enqueue(t, evSignedIn, nobody, e.email("nobody"), e.tag+"-nobody", uaChromeMac, time.Now())
+
+	mustTick(t, e, slog.Default())
+
+	if nd := e.newDeviceJobs(t, u, nobody); len(nd) != 0 {
+		t.Errorf("new-device jobs = %+v, want none", nd)
+	}
+	if got := len(e.jobs(t, u)); got != 5 {
+		t.Errorf("control: audit jobs = %d, want 5", got)
+	}
+}
+
+func TestMover_EmptyAgentSignInSendsTheUnknownPair(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant(t)
+	u := e.user()
+	e.member(t, a, u, "active", e.email("u"))
+	c := &accountmail.Capture{}
+	w, _ := e.ndWorker(c)
+	mustWork(t, w, ndJob(u, e.email("u"), "Chrome", "macOS"))
+	e.enqueue(t, evSignedIn, u, e.email("u"), e.tag+"-empty", "", time.Now())
+
+	mustTick(t, e, slog.Default())
+
+	nd := e.newDeviceJobs(t, u)
+	if len(nd) != 1 || nd[0].Browser != "" || nd[0].OS != "" {
+		t.Fatalf("new-device jobs = %+v, want one with browser and os empty", nd)
+	}
+	mustWork(t, w, &river.Job[NewDeviceArgs]{Args: nd[0]})
+	if m := c.Messages(); len(m) != 1 || !strings.Contains(m[0].HTML, "Unknown device") {
+		t.Errorf("messages = %+v, want one naming Unknown device", m)
 	}
 }

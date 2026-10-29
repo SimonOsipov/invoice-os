@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -23,7 +24,16 @@ type handoff struct {
 	at            time.Time
 }
 
-// MoveHandoffs moves outbox rows into one account_audit job per active workspace, in one transaction.
+// newDeviceJob builds the one new-device job of a sign-in; the gateway sets both user id and address.
+func newDeviceJob(h handoff) (NewDeviceArgs, bool) {
+	if h.userID == nil || h.email == nil || strings.TrimSpace(*h.email) == "" {
+		return NewDeviceArgs{}, false
+	}
+	d := Parse(h.ua)
+	return NewDeviceArgs{UserID: *h.userID, Email: strings.TrimSpace(*h.email), Browser: d.Browser, OS: d.OS, IP: h.ip, OccurredAt: h.at.UTC().Format(time.RFC3339)}, true
+}
+
+// MoveHandoffs moves outbox rows into one account_audit job per active workspace, plus one account_new_device job per sign-in, in one transaction.
 func MoveHandoffs(pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger) func(context.Context) error {
 	return func(ctx context.Context) error {
 		return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
@@ -68,6 +78,13 @@ func MoveHandoffs(pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger
 				}
 				if err := found.Err(); err != nil {
 					return fmt.Errorf("accountevents: resolve members: %w", err)
+				}
+				if n > 0 && h.event == "account.signed_in" {
+					if nd, ok := newDeviceJob(h); ok {
+						jobs = append(jobs, river.InsertManyParams{Args: nd})
+					} else {
+						log.Debug("account-event-handoff: sign-in without user or address; no new-device job")
+					}
 				}
 				if n == 0 {
 					log.Info("account-event-handoff: no active member", "event", h.event)

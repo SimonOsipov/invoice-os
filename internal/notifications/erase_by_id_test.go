@@ -677,3 +677,38 @@ func TestEraseByID_AFailedSweepSkipsTheAccountAndLeaksNothing(t *testing.T) {
 	}
 	qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.uid, r.mail)
 }
+
+func TestEraseByID_SweepDeletesKnownDevicesAndAccountEventRows(t *testing.T) {
+	r := newEraseRig(t)
+	ouid, omail := r.person()
+	mine := r.seedAccountEvents(r.uid, r.mail)
+	theirs := r.seedAccountEvents(ouid, omail)
+
+	if err := r.workByID(r.byIDWorker(), r.uid); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if p := r.count(`SELECT count(*) FROM account_known_devices WHERE user_id::text = $1`, r.uid); p != 0 {
+		t.Errorf("person's pairs left: %d", p)
+	}
+	if o := r.count(`SELECT count(*) FROM account_event_handoffs WHERE user_id::text = $1`, r.uid); o != 0 {
+		t.Errorf("person's user-id outbox rows left: %d", o)
+	}
+	// The by-id sweep matches the user id only: the address-only row stays.
+	if o := r.count(`SELECT count(*) FROM account_event_handoffs WHERE lower(btrim(email)) = $1 AND user_id IS NULL`, r.mail); o != 1 {
+		t.Errorf("address-only outbox rows = %d, want 1 (by id matches the user id only)", o)
+	}
+	for _, id := range mine {
+		if r.jobExists(id) {
+			t.Errorf("person's job %d left", id)
+		}
+	}
+	if p, o := r.accountRows(ouid, omail); p != 1 || o != 2 {
+		t.Errorf("another person's pairs = %d, outbox rows = %d, want 1 and 2", p, o)
+	}
+	for _, id := range theirs {
+		if r.count(`SELECT count(*) FROM river_job WHERE id = $1 AND state = 'available'`, id) != 1 {
+			t.Errorf("another person's job %d was touched", id)
+		}
+	}
+}

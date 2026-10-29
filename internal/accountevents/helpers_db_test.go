@@ -81,6 +81,8 @@ func (e *env) mustCount(t *testing.T, sql string, args ...any) int {
 func (e *env) cleanup() {
 	ctx := context.Background()
 	_, _ = e.admin.Exec(ctx, `DELETE FROM account_event_handoffs`)
+	_, _ = e.admin.Exec(ctx, `DELETE FROM river_job WHERE kind = 'account_new_device' AND args->>'user_id' = ANY($1)`, e.users)
+	_, _ = e.admin.Exec(ctx, `DELETE FROM account_known_devices WHERE user_id::text = ANY($1)`, e.users)
 	_, _ = e.admin.Exec(ctx, `DELETE FROM river_job WHERE kind = 'account_audit' AND
 		(args->>'user_id' = ANY($1) OR args->>'tenant_id' = ANY($2) OR args->>'ip' LIKE $3)`, e.users, e.tenants, e.tag+"%")
 	tx, err := e.admin.Begin(ctx)
@@ -208,4 +210,37 @@ func atLevel(records []map[string]any, level string) []map[string]any {
 func mentions(r map[string]any, s string) bool {
 	b, _ := json.Marshal(r)
 	return strings.Contains(string(b), s)
+}
+
+// newDeviceJobs reads the account_new_device jobs of these users.
+func (e *env) newDeviceJobs(t *testing.T, users ...string) []NewDeviceArgs {
+	t.Helper()
+	rows, err := e.admin.Query(context.Background(),
+		`SELECT args FROM river_job WHERE kind = 'account_new_device' AND args->>'user_id' = ANY($1) ORDER BY id`, users)
+	if err != nil {
+		t.Fatalf("read account_new_device jobs: %v", err)
+	}
+	defer rows.Close()
+	var out []NewDeviceArgs
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var a NewDeviceArgs
+		if err := json.Unmarshal(raw, &a); err != nil {
+			t.Fatalf("decode job args %s: %v", raw, err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// pairs counts the known pairs of a user.
+func (e *env) pairs(t *testing.T, user string) int {
+	t.Helper()
+	return e.mustCount(t, `SELECT count(*) FROM account_known_devices WHERE user_id::text = $1`, user)
 }

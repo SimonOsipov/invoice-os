@@ -174,10 +174,11 @@ func main() {
 
 	pjw := &workspacepurge.PurgeWorker{}
 	aw := &accountevents.AuditWorker{Pool: pool}
+	ndw := &accountevents.NewDeviceWorker{Pool: pool, Sender: nl.Sender, Logger: app.Logger}
 
 	q, err := queue.New(pool, queue.Config{
 		Queues:  queueConfigs(cw != nil),
-		Workers: workerBundle(sw, pw, ew, rw, cw, xw, xbw, pjw, aw),
+		Workers: workerBundle(sw, pw, ew, rw, cw, xw, xbw, pjw, aw, ndw),
 		Logger:  app.Logger,
 	})
 	if err != nil {
@@ -377,7 +378,7 @@ func queueConfigs(contacts bool) map[string]river.QueueConfig {
 
 // workerBundle is the ONE bundle queue.New reads. A River client takes exactly one, so a second
 // bundle would leave its workers unfetched (TestWorkerBundle_CarriesEveryKind).
-func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet, xw *notifications.EraseWorker, xbw *notifications.EraseByIDWorker, pjw *workspacepurge.PurgeWorker, aw *accountevents.AuditWorker) *river.Workers {
+func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *extraction.ExtractWorker, rw *notifications.RegistrantWorker, cw *contactWorkerSet, xw *notifications.EraseWorker, xbw *notifications.EraseByIDWorker, pjw *workspacepurge.PurgeWorker, aw *accountevents.AuditWorker, ndw *accountevents.NewDeviceWorker) *river.Workers {
 	bundle := submission.Workers(sw, pw)
 	extraction.AddTo(bundle, ew)
 	notifications.AddRegistrantTo(bundle, rw)
@@ -385,6 +386,7 @@ func workerBundle(sw *submission.SubmitWorker, pw *submission.PollWorker, ew *ex
 	notifications.AddEraseByIDTo(bundle, xbw)
 	workspacepurge.AddPurgeTo(bundle, pjw)
 	accountevents.AddAuditTo(bundle, aw)
+	accountevents.AddNewDeviceTo(bundle, ndw)
 	if cw != nil {
 		notifications.AddTo(bundle, cw.deliver, cw.deal, cw.blog)
 	}

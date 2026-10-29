@@ -29,6 +29,7 @@ var companyFreeKinds = map[string]string{
 	"registrant_intake":    "args hold a registrant's user id and workspace name; registrant_handoffs is global",
 	"person_erase":         "args hold a user id and a generation; person_erasures is global",
 	"person_erase_by_id":   "args hold a user id only; it touches no tenant table",
+	"account_new_device":   "args hold a user id, an email and a device pair; account_known_devices is global",
 }
 
 // registeredJobArgs maps kind to args type for every worker in b.
@@ -118,7 +119,7 @@ func realRegistry(t *testing.T) map[string]reflect.Type {
 			t.Fatalf("contactWorkerSet.%s is nil: the guard would not see its job kind", v.Type().Field(i).Name)
 		}
 	}
-	b := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{})
+	b := workerBundle(&submission.SubmitWorker{}, &submission.PollWorker{}, &extraction.ExtractWorker{}, &notifications.RegistrantWorker{}, cw, &notifications.EraseWorker{}, &notifications.EraseByIDWorker{}, &workspacepurge.PurgeWorker{}, &accountevents.AuditWorker{}, &accountevents.NewDeviceWorker{})
 	kinds := registeredJobArgs(t, b)
 	for _, k := range []string{"submission_submit", "submission_poll", "extraction_extract", "workspace_purge"} {
 		if _, ok := kinds[k]; !ok {

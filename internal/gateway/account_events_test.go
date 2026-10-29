@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -119,6 +121,9 @@ func TestAccountEvents_ThrottleRefusalRecordsOneBlocked(t *testing.T) {
 
 	requireRefusal(t, resp, http.StatusTooManyRequests, msgTooMany)
 	rec.requireNames(t, EventSignInBlocked)
+	if e := rec.events()[0]; e.Email != aeEmail || e.UserID != "" {
+		t.Errorf("event = %+v, want the email and no user id", e)
+	}
 	if n := fake.Hits(); n != 0 {
 		t.Errorf("GoTrue saw %d calls, want 0", n)
 	}
@@ -227,6 +232,22 @@ func TestAccountEvents_ResetRequestRecordsNothingWhenRefusedOrInvalid(t *testing
 		requireAccepted(t, resp, "reset")
 		rec.requireNames(t)
 	})
+	t.Run("budget spent, enforce off", func(t *testing.T) {
+		th := resendThrottle(time.Now)
+		for range ResendPerAddress {
+			th.Admit(aeEmail)
+		}
+		rec := &recEvents{}
+		fake := newFakeGoTrue(t, 200, `{}`)
+
+		resp, _ := aeRequestReset(t, fake, 0, th, false, rec, aeEmail)
+
+		requireAccepted(t, resp, "reset")
+		if n := callsTo(fake, "/recover"); n != 1 {
+			t.Fatalf("GoTrue /recover calls = %d, want 1 (the request goes through)", n)
+		}
+		rec.requireNames(t)
+	})
 	t.Run("validation_failed", func(t *testing.T) {
 		rec := &recEvents{}
 
@@ -237,21 +258,6 @@ func TestAccountEvents_ResetRequestRecordsNothingWhenRefusedOrInvalid(t *testing
 		}
 		rec.requireNames(t)
 	})
-}
-
-// ResendVerificationHandler takes no recorder and mailLinkHandler gets a nil onAdmitted from it.
-func TestAccountEvents_ResendVerificationNeverRecords(t *testing.T) {
-	fake := newFakeGoTrue(t, 200, `{}`)
-	h := mailLinkHandler("resend-verification", "resend", fake.URL.JoinPath("resend").String(),
-		func(email string) map[string]string { return map[string]string{"email": email} },
-		testClient(), 0, resendThrottle(time.Now), true, nopLog(), nil)
-
-	resp, _ := serveResend(t.Context(), h, resendBody(aeEmail))
-
-	requireAccepted(t, resp, "resend")
-	if n := callsTo(fake, "/resend"); n != 1 {
-		t.Errorf("GoTrue /resend calls = %d, want 1", n)
-	}
 }
 
 func TestAccountEvents_ResetRequestTimingUnchanged(t *testing.T) {
@@ -390,6 +396,16 @@ func TestAccountEvents_InvitationPasswordRecordsASignInNotAReset(t *testing.T) {
 	rec2 := &recEvents{}
 	ipPost(t, aeInviteHandler(t, f2, rec2), aeInviteValues())
 	rec2.requireNames(t)
+
+	full := testHandoffStore()
+	fillStore(t, full, HandoffMaxLive)
+	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
+	rec3 := &recEvents{}
+	h := InvitationPasswordHandler(newResetGoTrue(t).URL, siteURL(t), testClient(), liveSessions(t), th, nil, nopLog(), full, rec3)
+	if loc := ipPost(t, h, aeInviteValues()).Header().Get("Location"); strings.Contains(loc, "handoff=") {
+		t.Fatalf("a full store minted a code: %q", loc)
+	}
+	rec3.requireNames(t)
 }
 
 func TestAccountEvents_UserAgentIsCleanedAndCut(t *testing.T) {
@@ -447,5 +463,104 @@ func TestAccountEvents_NilPoolLogsOnly(t *testing.T) {
 		if strings.Contains(out, secret) {
 			t.Errorf("log carries %q: %s", secret, out)
 		}
+	}
+}
+
+// answerOf is what a client can observe, minus the random hand-off code.
+func answerOf(rec *httptest.ResponseRecorder) string {
+	loc := rec.Header().Get("Location")
+	if i := strings.Index(loc, "handoff="); i >= 0 {
+		loc = loc[:i]
+	}
+	return strings.Join([]string{http.StatusText(rec.Code), loc, strings.Join(headerNames(rec), ","), rec.Body.String()}, "|")
+}
+
+func TestAccountEvents_RecorderErrorLeavesEveryAnswerUnchanged(t *testing.T) {
+	routes := []struct {
+		name  string
+		event string
+		run   func(t *testing.T, rec AccountEvents, log *slog.Logger) *httptest.ResponseRecorder
+	}{
+		{"sign-out", EventSignedOut, func(t *testing.T, rec AccountEvents, log *slog.Logger) *httptest.ResponseRecorder {
+			f := newSignOutFake(t, answer(200, signOutGranted(signOutAccess(t, subjectS1))), answer(204, ""))
+			return doSignOut(SignOutHandler(f.URL, testClient(), liveSessions(t), log, rec), `{"refresh_token":"`+signOutR0+`"}`)
+		}},
+		{"reset request", EventPasswordResetRequested, func(t *testing.T, rec AccountEvents, log *slog.Logger) *httptest.ResponseRecorder {
+			h := RequestPasswordResetHandler(newFakeGoTrue(t, 200, `{}`).URL, testClient(), 0, resendThrottle(time.Now), true, log, rec)
+			resp, _ := serveReset(t.Context(), h, resendBody(aeEmail))
+			return resp
+		}},
+		{"reset completed", EventPasswordResetCompleted, func(t *testing.T, rec AccountEvents, log *slog.Logger) *httptest.ResponseRecorder {
+			th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
+			h := ResetPasswordHandler(newResetGoTrue(t).URL, siteURL(t), testClient(), liveSessions(t), th, log, rec)
+			return aeResetPost(t, h)
+		}},
+		{"verify hand-off", EventSignedIn, func(t *testing.T, rec AccountEvents, log *slog.Logger) *httptest.ResponseRecorder {
+			return vhClick(VerifyHandler(newFakeGoTrue(t, 200, gtSession).URL, siteURL(t), testClient(), log, nil, testHandoffStore(), rec), vhState)
+		}},
+		{"invitation set-password", EventSignedIn, func(t *testing.T, rec AccountEvents, log *slog.Logger) *httptest.ResponseRecorder {
+			th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
+			h := InvitationPasswordHandler(newResetGoTrue(t).URL, siteURL(t), testClient(), liveSessions(t), th, nil, log, testHandoffStore(), rec)
+			return ipPost(t, h, aeInviteValues())
+		}},
+	}
+	for _, c := range routes {
+		t.Run(c.name, func(t *testing.T) {
+			ok := &recEvents{}
+			want := c.run(t, ok, nopLog())
+			ok.requireNames(t, c.event)
+
+			log, buf := captureLog()
+			failing := &recEvents{err: context.DeadlineExceeded}
+			got := c.run(t, failing, log)
+
+			failing.requireNames(t, c.event)
+			if answerOf(got) != answerOf(want) {
+				t.Errorf("answer with a recorder error = %q, want %q", answerOf(got), answerOf(want))
+			}
+			out := buf.String()
+			if n := strings.Count(out, `"level":"ERROR"`); n != 1 || !strings.Contains(out, c.event) {
+				t.Errorf("want one ERROR line naming %s, got: %s", c.event, out)
+			}
+			for _, secret := range []string{aeEmail, rpEmail, aeIP, aeUserID, subjectS1} {
+				if strings.Contains(out, secret) {
+					t.Errorf("log carries %q: %s", secret, out)
+				}
+			}
+		})
+	}
+}
+
+func TestAccountEvents_ResetRequestAnswerIsTheSameForMemberAndNonMember(t *testing.T) {
+	var answers []string
+	for _, email := range []string{"member@corp.example", "nobody@corp.example"} {
+		rec := &recEvents{}
+		resp, _ := aeRequestReset(t, newFakeGoTrue(t, 200, `{}`), 0, resendThrottle(time.Now), true, rec, email)
+		rec.requireNames(t, EventPasswordResetRequested)
+		answers = append(answers, answerOf(resp))
+	}
+	if answers[0] != answers[1] {
+		t.Errorf("member answer %q differs from non-member answer %q", answers[0], answers[1])
+	}
+}
+
+func TestAccountEvents_UserAgentCutsAtTheBoundary(t *testing.T) {
+	cases := []struct {
+		name string
+		ua   string
+		want int
+	}{
+		{"511 runes kept", strings.Repeat("é", 511), 511},
+		{"512 runes kept", strings.Repeat("é", 512), 512},
+		{"513 runes cut", strings.Repeat("é", 513), 512},
+		{"NUL dropped", "a\x00b", 2},
+		{"empty", "", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := cleanUserAgent(c.ua); utf8.RuneCountInString(got) != c.want || !utf8.ValidString(got) || strings.ContainsRune(got, 0) {
+				t.Errorf("cleanUserAgent = %d runes %q, want %d valid runes with no NUL", utf8.RuneCountInString(got), got, c.want)
+			}
+		})
 	}
 }

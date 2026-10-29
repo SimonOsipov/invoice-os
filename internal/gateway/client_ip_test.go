@@ -45,3 +45,27 @@ func TestClientIP_NonPublicEntryIsUnknown(t *testing.T) {
 	ipCase(t, platform.PosturePreview, "", one("198.51.100.1, ::1"), "")
 	ipCase(t, platform.PostureLocal, "127.0.0.1:5555", nil, "127.0.0.1")
 }
+
+func TestClientIP_SpoofAndOddForms(t *testing.T) {
+	hosted, preview, local := platform.PostureHosted, platform.PosturePreview, platform.PostureLocal
+	one := func(v string) []string { return []string{v} }
+	ipCase(t, hosted, "", one("1.1.1.1, 2.2.2.2, 3.3.3.3, 198.51.100.9, 203.0.113.7, 34.1.2.3"), "203.0.113.7")
+	ipCase(t, preview, "", one("1.1.1.1, 2.2.2.2, 203.0.113.7"), "203.0.113.7")
+	ipCase(t, hosted, "", one("203.0.113.7, 34.1.2.3, "), "34.1.2.3")
+	ipCase(t, hosted, "", one(", 34.1.2.3"), "")
+	ipCase(t, preview, "", one("::ffff:203.0.113.7"), "203.0.113.7")
+	ipCase(t, preview, "", one("::ffff:10.0.0.1"), "")
+	ipCase(t, preview, "", one("fe80::1%eth0"), "")
+	ipCase(t, preview, "", one("2a00:1450::1%eth0"), "")
+	ipCase(t, preview, "", one("fe80::1"), "")
+	ipCase(t, preview, "", one("fc00::1"), "")
+	ipCase(t, preview, "", one("0.0.0.0"), "")
+	ipCase(t, preview, "", one("255.255.255.255"), "")
+	ipCase(t, preview, "", one("224.0.0.1"), "")
+	ipCase(t, preview, "", one("172.16.0.1"), "")
+	ipCase(t, preview, "", one("127.0.0.1"), "")
+	ipCase(t, preview, "", one("203.0.113.7:443"), "")
+	ipCase(t, local, "[::1]:5555", one("203.0.113.7"), "::1")
+	ipCase(t, local, "garbage", nil, "")
+	ipCase(t, local, "203.0.113.7", nil, "203.0.113.7")
+}

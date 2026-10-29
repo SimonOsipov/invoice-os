@@ -53,6 +53,7 @@ type gotrueFake struct {
 	userBody   string
 
 	userGets, passwordGrants, resends atomic.Int32
+	grantOK                           atomic.Bool // the password grant mints a session
 }
 
 func newGotrueFake(t *testing.T, subject, email string) *gotrueFake {
@@ -74,13 +75,17 @@ func newGotrueFake(t *testing.T, subject, email string) *gotrueFake {
 		case "POST /token":
 			if r.URL.Query().Get("grant_type") == "password" {
 				g.passwordGrants.Add(1)
+				if g.grantOK.Load() {
+					_, _ = io.WriteString(w, `{"access_token":"`+handoffAccessToken(g.subject)+`","refresh_token":"rt"}`)
+					return
+				}
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = io.WriteString(w, `{"error_code":"invalid_credentials","msg":"Invalid login credentials"}`)
 				return
 			}
 			_, _ = io.WriteString(w, `{"access_token":"`+handoffAccessToken(g.subject)+`"}`)
 		case "POST /verify":
-			_, _ = io.WriteString(w, `{"access_token":"`+handoffAccessToken(g.subject)+`","user":{"id":"`+g.subject+`","email":"`+g.email+`"}}`)
+			_, _ = io.WriteString(w, `{"access_token":"`+handoffAccessToken(g.subject)+`","refresh_token":"rt","user":{"id":"`+g.subject+`","email":"`+g.email+`"}}`)
 		case "POST /logout":
 			w.WriteHeader(http.StatusNoContent)
 		case "POST /recover":

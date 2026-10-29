@@ -161,7 +161,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # `prenv jwk-es256` generates the PR's GoTrue key.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false
@@ -348,7 +348,7 @@ jobs:
           fi
 
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false

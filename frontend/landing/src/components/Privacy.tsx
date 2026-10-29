@@ -365,8 +365,9 @@ export function Privacy() {
           </p>
           <p style={P}>
             Our own server also keeps the list of browser and operating-system pairs your account has signed in with.
-            When you sign in with a new pair, we email you through Resend; that email carries the browser, the operating
-            system, the IP address and the time. The erasure of your account deletes the list.
+            The first pair is recorded without an email. When you later sign in with a pair that is not on the list, we
+            email you through Resend; that email carries the browser, the operating system, the IP address and the time.
+            The erasure of your account deletes the list.
           </p>
           <p style={P}>
             You can delete your account yourself. Open {APP_LABELS.page}, from your name at the foot of the sidebar, and

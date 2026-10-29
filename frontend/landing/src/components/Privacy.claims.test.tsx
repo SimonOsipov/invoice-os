@@ -1274,6 +1274,7 @@ describe('AUDIT-13-08: the sign-in record sentences state what the code does', (
       expect(newDeviceMailFacts(tpl.replace(from, to))).toBe(false)
     }
     expect(newDeviceMailFacts(undefined, undefined, swap('internal/accountevents/new_device.go', 'if !had || !inserted {', 'if false {'))).toBe(false)
+    expect(newDeviceMailFacts(undefined, undefined, swap('internal/accountevents/new_device.go', 'if !had || !inserted {', 'if !inserted {'))).toBe(false)
     expect(newDeviceMailFacts(undefined, undefined, undefined, swap('internal/accountmail/sender.go', 'https://api.resend.com', 'https://mail.example.com'))).toBe(false)
     expect(newDeviceMailFacts(undefined, undefined, undefined, undefined, swap('internal/accountevents/mover.go', 'n > 0 && h.event == "account.signed_in"', 'n > 0 && h.event == "account.signed_out"'))).toBe(false)
     expect(newDeviceMailFacts(undefined, undefined, undefined, undefined, undefined, swap('cmd/worker/main.go', 'NewDeviceWorker{Pool: pool, Sender: nl.Sender,', 'NewDeviceWorker{Pool: pool, Sender: nil,'))).toBe(false)
@@ -1281,6 +1282,8 @@ describe('AUDIT-13-08: the sign-in record sentences state what the code does', (
     const del = 'DELETE FROM account_known_devices WHERE user_id::text = $1'
     expect(eraseDeletesKnownDevices(swap('internal/notifications/erase.go', del, 'SELECT 1'))).toBe(false)
     expect(eraseDeletesKnownDevices(undefined, swap('internal/notifications/erase_by_id.go', del, 'SELECT 1'))).toBe(false)
+    expect(sentence('P4')).toContain('The first pair is recorded without an email')
+    expect(sentence('P4')).toContain('a pair that is not on the list, we email you through Resend')
     expect(sentence('P4')).toContain('the browser, the operating system, the IP address and the time')
     expect(sentence('P4')).toContain('The erasure of your account deletes the list')
   })

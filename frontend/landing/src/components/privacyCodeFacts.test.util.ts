@@ -597,7 +597,7 @@ export const ACCOUNT_RECORD_SENTENCES: readonly { id: string; text: string }[] =
   { id: 'P1', text: 'Each time someone signs in to your account, fails to sign in with a wrong password, is blocked after too many attempts, signs out, or asks for or completes a password reset, our own server records it in the audit log of your workspace, with the IP address and the browser and operating system.' },
   { id: 'P2', text: "Your workspace's admins see these records for every member. Every other member sees only their own. ASComply's support staff can also read them." },
   { id: 'P3', text: 'These records stay with the audit log, which keeps every record until the workspace is deleted.' },
-  { id: 'P4', text: 'Our own server also keeps the list of browser and operating-system pairs your account has signed in with. When you sign in with a new pair, we email you through Resend; that email carries the browser, the operating system, the IP address and the time. The erasure of your account deletes the list.' },
+  { id: 'P4', text: 'Our own server also keeps the list of browser and operating-system pairs your account has signed in with. The first pair is recorded without an email. When you later sign in with a pair that is not on the list, we email you through Resend; that email carries the browser, the operating system, the IP address and the time. The erasure of your account deletes the list.' },
 ]
 
 // The six account event names, sorted.
@@ -653,7 +653,7 @@ export function auditLogDeletes(
   )
 }
 
-// The new-device mail shows device, IP and time; the mover queues it for a sign-in; the worker mails only a second-or-later pair, through the Resend sender.
+// The new-device mail shows device, IP and time; the mover queues it for a sign-in; the worker records the first pair silently (`!had`) and mails only a later new pair, through the Resend sender.
 export function newDeviceMailFacts(
   tpl: string = readFileSync(join(REPO, 'internal/accountmail/new_device.html'), 'utf8'),
   render: string = readSource('internal/accountmail/accountmail.go'),

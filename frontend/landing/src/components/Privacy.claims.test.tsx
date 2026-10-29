@@ -22,6 +22,14 @@ import { CHAT_SCRIPT_HOST, HUBSPOT_CHAT_DOMAINS, HUBSPOT_COOKIE_NAMES } from '..
 import { APP_HOSTNAMES, PRODUCTION_HOSTNAMES } from '../hubspot'
 import { BLOG_BASE, LIBRARY_BASE } from '../sitePaths'
 import {
+  ACCOUNT_RECORD_SENTENCES,
+  accountEventNames,
+  accountEventPayloadKeys,
+  accountRowsAreSelfOnly,
+  auditLogDeletes,
+  eraseDeletesKnownDevices,
+  newDeviceMailFacts,
+  staffReadsAuditPayload,
   aiModelVendors,
   anyAdminCancels,
   cancelRefusedOnceThePurgeStarted,
@@ -1166,5 +1174,77 @@ describe('DEL-10-03: the retention section states how long each copy lasts', () 
     const planted = src.replace('"objects": objects,', '"objects": objects,\n\t\t\t\t"name": name,')
     expect(planted).not.toBe(src)
     expect(staffLogEntryFacts(planted).keys).not.toEqual(staffLogEntryFacts().keys)
+  })
+})
+
+describe('AUDIT-13-08: the sign-in record sentences state what the code does', () => {
+  const ROOT = join(SRC_DIR, '..', '..', '..', '..')
+  const sentence = (id: string): string => ACCOUNT_RECORD_SENTENCES.find((x) => x.id === id)!.text
+  const swap = (rel: string, from: string | RegExp, to: string): string => {
+    const src = readSource(rel)
+    const out = src.replace(from, to)
+    expect(out, `the planted edit missed ${rel}`).not.toBe(src)
+    return out
+  }
+
+  it('accountEventsRecordIpAndDevice', () => {
+    const phrases: Record<string, string> = {
+      'account.password_reset_completed': 'completes a password reset',
+      'account.password_reset_requested': 'asks for',
+      'account.sign_in_blocked': 'is blocked after too many attempts',
+      'account.sign_in_failed': 'fails to sign in with a wrong password',
+      'account.signed_in': 'signs in to your account',
+      'account.signed_out': 'signs out',
+    }
+    expect(accountEventNames()).toEqual(Object.keys(phrases).sort())
+    for (const p of Object.values(phrases)) expect(sentence('P1')).toContain(p)
+    expect(accountEventNames(swap('internal/audit/account_events.go', '"account.signed_out",', '"account.signed_out",\n"account.x",'))).not.toEqual(Object.keys(phrases).sort())
+    expect(accountEventPayloadKeys()).toEqual(['device', 'ip_address', 'occurred_at'])
+    expect(sentence('P1')).toContain('with the IP address and the browser and operating system')
+    expect(accountEventPayloadKeys(swap('internal/accountevents/audit_job.go', 'json:"ip_address"', 'json:"ip"'))).not.toContain('ip_address')
+    expect(accountEventPayloadKeys(swap('internal/accountevents/audit_job.go', 'a.Event, p)', 'a.Event, nil)'))).toEqual([])
+  })
+
+  it('accountEventsSelfOnlyForNonAdmins', () => {
+    const F = 'internal/audit/filter.go'
+    expect(accountRowsAreSelfOnly()).toBe(true)
+    expect(accountRowsAreSelfOnly(swap(F, '(a.event <> ALL("+names+") OR a.actor = "+bind(f.scope.self)+")', '(a.event <> ALL("+names+") OR true)'))).toBe(false)
+    expect(accountRowsAreSelfOnly(swap(F, 'AND a.actor = "+bind(f.scope.self)', 'AND true"+bind(f.scope.self)'))).toBe(false)
+    expect(staffReadsAuditPayload()).toBe(true)
+    const ups = migrationUps()
+    expect(staffReadsAuditPayload([...ups, '-- +goose Up\nREVOKE SELECT (id, event, actor, payload) ON public.audit_log FROM staff_reader;'])).toBe(false)
+    expect(staffReadsAuditPayload([...ups, '-- +goose Up\n-- REVOKE SELECT (payload) ON public.audit_log FROM staff_reader;'])).toBe(true)
+    expect(staffReadsAuditPayload([])).toBe(false)
+    expect(sentence('P2')).toContain('Every other member sees only their own')
+    expect(sentence('P2')).toContain("ASComply's support staff can also read them")
+  })
+
+  it('accountEventsStayUntilWorkspaceDeleted', () => {
+    const hits = auditLogDeletes()
+    expect(hits.map(([f]) => f)).toEqual(['20261026120001_purge_tenant.sql'])
+    expect(hits[0][1]).toMatch(/WHERE tenant_id = p_tenant_id$/)
+    expect(hits[0][1]).not.toMatch(/interval|now\(\)/i)
+    expect(auditLogDeletes([['a.sql', "DELETE FROM audit_log WHERE created_at < now() - interval '6 years';"]])).toHaveLength(1)
+    expect(auditLogDeletes([['a.sql', 'delete from\n public.audit_log where 1=1;']])).toHaveLength(1)
+    expect(auditLogDeletes([['a.sql', '-- DELETE FROM audit_log;\n/* DELETE FROM audit_log */']])).toHaveLength(0)
+    expect(sentence('P3')).toContain('until the workspace is deleted')
+    expect(sentence('P3')).not.toMatch(/\d|years/)
+  })
+
+  it('newDeviceMailAndErasure', () => {
+    expect(newDeviceMailFacts()).toBe(true)
+    const tpl = readFileSync(join(ROOT, 'internal/accountmail/new_device.html'), 'utf8')
+    for (const [from, to] of [['{{.Device}}</td>', '</td>'], ['{{.IPValue}}', ''], ['{{.When}}</td>', '</td>']] as const) {
+      expect(tpl).toContain(from)
+      expect(newDeviceMailFacts(tpl.replace(from, to))).toBe(false)
+    }
+    expect(newDeviceMailFacts(undefined, undefined, swap('internal/accountevents/new_device.go', 'if !had || !inserted {', 'if false {'))).toBe(false)
+    expect(newDeviceMailFacts(undefined, undefined, undefined, swap('internal/accountmail/sender.go', 'https://api.resend.com', 'https://mail.example.com'))).toBe(false)
+    expect(eraseDeletesKnownDevices()).toBe(true)
+    const del = 'DELETE FROM account_known_devices WHERE user_id::text = $1'
+    expect(eraseDeletesKnownDevices(swap('internal/notifications/erase.go', del, 'SELECT 1'))).toBe(false)
+    expect(eraseDeletesKnownDevices(undefined, swap('internal/notifications/erase_by_id.go', del, 'SELECT 1'))).toBe(false)
+    expect(sentence('P4')).toContain('the browser, the operating system, the IP address and the time')
+    expect(sentence('P4')).toContain('The erasure of your account deletes the list')
   })
 })

@@ -591,3 +591,100 @@ export function staffLogIsAppendOnly(migrations: string[] = migrationUps()): boo
   }
   return raises && rowTrigger && truncTrigger
 }
+
+// Sentences the page states about sign-in records; Privacy.render.test.tsx pins each verbatim on the page.
+export const ACCOUNT_RECORD_SENTENCES: readonly { id: string; text: string }[] = [
+  { id: 'P1', text: 'Each time someone signs in to your account, fails to sign in with a wrong password, is blocked after too many attempts, signs out, or asks for or completes a password reset, our own server records it in the audit log of your workspace, with the IP address and the browser and operating system.' },
+  { id: 'P2', text: "Your workspace's admins see these records for every member. Every other member sees only their own. ASComply's support staff can also read them." },
+  { id: 'P3', text: 'These records stay with the audit log, which keeps every record until the workspace is deleted.' },
+  { id: 'P4', text: 'Our own server also keeps the list of browser and operating-system pairs your account has signed in with. When you sign in with a new pair, we email you through Resend; that email carries the browser, the operating system, the IP address and the time. The erasure of your account deletes the list.' },
+]
+
+// The six account event names, sorted.
+export function accountEventNames(src: string = readSource('internal/audit/account_events.go')): string[] {
+  const list = found(/var AccountEvents = \[\]string\{([^}]*)\}/.exec(src)?.[1], 'AccountEvents')
+  const names = unique(keysOf(/"(account\.[a-z_]+)"/g, list))
+  if (names.length === 0) throw new Error('privacyCodeFacts: no account event names')
+  return names
+}
+
+// Payload keys the audit job writes; empty unless Work records that payload.
+export function accountEventPayloadKeys(src: string = readSource('internal/accountevents/audit_job.go')): string[] {
+  const body = found(/type auditPayload struct \{([^}]*)\}/.exec(src)?.[1], 'auditPayload')
+  const work = found(/func \(w \*AuditWorker\) Work\b[\s\S]*?\n}\n/.exec(src)?.[0], 'AuditWorker.Work')
+  if (!/audit\.Record\(ctx, tx, a\.UserID, a\.Event, p\)/.test(work)) return []
+  return unique(keysOf(/json:"([a-z_]+)"/g, body))
+}
+
+// In the reader's scope switch, only an admin with no company set adds no account arm; a set or a non-admin gets a self-bound arm.
+export function accountRowsAreSelfOnly(src: string = readSource('internal/audit/filter.go')): boolean {
+  const sw = found(/switch \{\s*case f\.scope\.set && f\.scope\.admin:[\s\S]*?\n\t\}\n/.exec(src)?.[0], 'the scope switch')
+  const setCase = found(/case f\.scope\.set:([\s\S]*?)case !f\.scope\.admin:/.exec(sw)?.[1], 'the set case')
+  const nonAdmin = found(/case !f\.scope\.admin:([\s\S]*)$/.exec(sw)?.[1], 'the non-admin case')
+  return (
+    /names := bind\(AccountEvents\)/.test(setCase) &&
+    /a\.event = ANY\("\+names\+"\) AND a\.actor = "\+bind\(f\.scope\.self\)/.test(setCase) &&
+    /names := bind\(AccountEvents\)/.test(nonAdmin) &&
+    /a\.event <> ALL\("\+names\+"\) OR a\.actor = "\+bind\(f\.scope\.self\)/.test(nonAdmin)
+  )
+}
+
+// After the last migration, staff_reader can select audit_log.payload.
+export function staffReadsAuditPayload(migrations: string[] = migrationUps()): boolean {
+  let granted = false
+  for (const sql of migrations) {
+    const up = sqlCode(sql.split('-- +goose Down')[0])
+    for (const m of up.matchAll(/\b(GRANT|REVOKE)\s+SELECT\s*\(([^)]*)\)\s+ON\s+(?:TABLE\s+)?(?:public\.)?audit_log\s+(?:TO|FROM)\s+staff_reader\b/gi)) {
+      if (/\bpayload\b/.test(m[2])) granted = m[1].toUpperCase() === 'GRANT'
+    }
+  }
+  return granted
+}
+
+// Every DELETE FROM audit_log in migrations/, both goose sections, as [file, statement].
+export function auditLogDeletes(
+  files: [string, string][] = readdirSync(join(REPO, 'migrations'))
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+    .map((f): [string, string] => [f, readFileSync(join(REPO, 'migrations', f), 'utf8')]),
+): [string, string][] {
+  return files.flatMap(([f, sql]) =>
+    Array.from(sqlCode(sql).matchAll(/DELETE\s+FROM\s+(?:ONLY\s+)?(?:public\.)?"?audit_log\b[^;]*/gi), (m): [string, string] => [f, m[0].replace(/\s+/g, ' ')]),
+  )
+}
+
+// The new-device mail shows device, IP and time; the worker mails only a second-or-later pair, through the Resend sender.
+export function newDeviceMailFacts(
+  tpl: string = readFileSync(join(REPO, 'internal/accountmail/new_device.html'), 'utf8'),
+  render: string = readSource('internal/accountmail/accountmail.go'),
+  worker: string = readSource('internal/accountevents/new_device.go'),
+  sender: string = readSource('internal/accountmail/sender.go'),
+): boolean {
+  const details = found(/\{\{-?\s*define "details"\}\}([\s\S]*?)\{\{end\}\}/.exec(tpl.replace(/\{\{\/\*[\s\S]*?\*\/\}\}/g, ''))?.[1], 'the details block')
+  const view = found(/v := newDeviceView\{([\s\S]*?)\n\t\}/.exec(render)?.[1], 'the new-device view')
+  const work = found(/func \(w \*NewDeviceWorker\) Work\b[\s\S]*?\n}\n/.exec(worker)?.[0], 'NewDeviceWorker.Work')
+  const guard = work.indexOf('if !had || !inserted {')
+  return (
+    />Device<\/td><td[^>]*>\{\{\.Device\}\}/.test(details) &&
+    />IP address<\/td><td[^>]*>\{\{\.IPValue\}\}/.test(details) &&
+    />Time<\/td><td[^>]*>\{\{\.When\}\}/.test(details) &&
+    /IPValue: m\.IP/.test(view) &&
+    /When: m\.At/.test(view) &&
+    /Sender\s+accountmail\.Sender/.test(worker) &&
+    guard > -1 &&
+    guard < work.indexOf('w.Sender.Send(') &&
+    /ResendBaseURL\s*=\s*"https:\/\/api\.resend\.com"/.test(sender) &&
+    /func \(r \*Resend\) Send\(/.test(sender)
+  )
+}
+
+// Both erase workers delete the person's account_known_devices rows in the statement list they execute.
+export function eraseDeletesKnownDevices(
+  erase: string = readSource('internal/notifications/erase.go'),
+  byID: string = readSource('internal/notifications/erase_by_id.go'),
+): boolean {
+  const del = 'DELETE FROM account_known_devices WHERE user_id::text = $1'
+  const a = found(/deletes := \[\]del\{[\s\S]*?for _, d := range deletes \{[\s\S]*?tx\.Exec\(ctx, d\.sql/.exec(erase)?.[0], 'the erase delete list')
+  const b = found(/for _, d := range \[\]struct \{[\s\S]*?tx\.Exec\(ctx, d\.sql/.exec(byID)?.[0], 'the erase-by-id delete list')
+  return a.includes(del) && b.includes(del)
+}

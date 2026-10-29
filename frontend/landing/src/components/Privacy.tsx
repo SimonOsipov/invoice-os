@@ -352,6 +352,23 @@ export function Privacy() {
             word, with the time you submitted the form: “{MARKETING_CONSENT_TEXT}”
           </p>
           <p style={P}>
+            Each time someone signs in to your account, fails to sign in with a wrong password, is blocked after too many
+            attempts, signs out, or asks for or completes a password reset, our own server records it in the audit log of
+            your workspace, with the IP address and the browser and operating system.
+          </p>
+          <p style={P}>
+            Your workspace's admins see these records for every member. Every other member sees only their own.
+            ASComply's support staff can also read them.
+          </p>
+          <p style={P}>
+            These records stay with the audit log, which keeps every record until the workspace is deleted.
+          </p>
+          <p style={P}>
+            Our own server also keeps the list of browser and operating-system pairs your account has signed in with.
+            When you sign in with a new pair, we email you through Resend; that email carries the browser, the operating
+            system, the IP address and the time. The erasure of your account deletes the list.
+          </p>
+          <p style={P}>
             You can delete your account yourself. Open {APP_LABELS.page}, from your name at the foot of the sidebar, and
             choose {APP_LABELS.deleteAccount}.
           </p>

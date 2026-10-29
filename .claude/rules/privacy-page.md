@@ -31,6 +31,12 @@ paths:
   - "internal/tenancy/workspace_deletion.go"
   - "internal/workspacepurge/**"
   - "internal/notifications/erase.go"
+  - "internal/notifications/erase_by_id.go"
+  - "internal/accountevents/**"
+  - "internal/audit/filter.go"
+  - "internal/audit/account_events.go"
+  - "internal/accountmail/new_device.html"
+  - "migrations/20261026120001_purge_tenant.sql"
   - "internal/notifications/vendor_erase.go"
   - "internal/platform/db/tenant.go"
   - "internal/platform/auth/gotrueadmin/**"
@@ -142,3 +148,8 @@ Each line names a sentence of `DELETION_SENTENCES` and its backing. Check date: 
 - Change `BACKUP_DAYS`, `FILE_RECOVERY_DAYS` and `R3`..`R4` together with the infra.
 - Change `R2` and `A6` in the PR that adds a staff path to start or purge a deletion (DEL-09).
 - Change the retention paragraphs when the sign-in service version changes. Re-read `adminUserDelete` first.
+
+## Sign-in records
+
+- `P1`..`P4` are `ACCOUNT_RECORD_SENTENCES`. `accountEventNames()`, `accountEventPayloadKeys()`, `accountRowsAreSelfOnly()`, `staffReadsAuditPayload()`, `auditLogDeletes()`, `newDeviceMailFacts()` and `eraseDeletesKnownDevices()` back them.
+- `P3`: no job prunes `audit_log` by age. The workspace purge is the only delete. Retention answer: AUDIT-13 Q1 = B.

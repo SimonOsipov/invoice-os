@@ -1,0 +1,70 @@
+name: Nightly
+
+# Dispatches ci.yml in full mode, sums its results into the nightly-summary artifact and opens no issue.
+# The schedule runs from main only; main-only fails a dispatch from any other ref.
+on:
+  schedule:
+    - cron: '17 1 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  main-only:
+    name: Main only
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: '[ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::Nightly runs on main only, not on $GITHUB_REF"; exit 1; }'
+
+  summary:
+    name: Nightly summary
+    needs: main-only
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run CI in full on this ref
+        id: ci
+        run: bash scripts/ci/nightly-ci.sh "$GITHUB_REF_NAME"
+      - name: Collect the CI results
+        id: collect
+        if: always() && steps.ci.outputs.run_id != ''
+        env:
+          CI_RUN_ID: ${{ steps.ci.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh run download "$CI_RUN_ID" -R "$REPO" -p 'results-*' -D "$RUNNER_TEMP/results" || echo "::warning::no result artifacts to download"
+          gh api --paginate "repos/$REPO/actions/runs/$CI_RUN_ID/jobs" --jq '.jobs[]' | jq -s . > "$RUNNER_TEMP/jobs.json"
+          echo "sha=$(gh run view "$CI_RUN_ID" -R "$REPO" --json headSha --jq .headSha)" >> "$GITHUB_OUTPUT"
+      - name: Write summary.json
+        if: always()
+        env:
+          CI_SHA: ${{ steps.collect.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [ -f "$RUNNER_TEMP/jobs.json" ] || echo '[]' > "$RUNNER_TEMP/jobs.json"
+          started=$(gh api "repos/$REPO/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
+          go run ./internal/tools/nightlysummary -suites scripts/ci/nightly-suites.txt -jobs "$RUNNER_TEMP/jobs.json" -results "$RUNNER_TEMP/results" -run-id "$GITHUB_RUN_ID" -sha "${CI_SHA:-$GITHUB_SHA}" -started "$started" -workspace "$GITHUB_WORKSPACE" -out "$RUNNER_TEMP/summary.json"
+      - name: Upload nightly-summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-summary
+          path: ${{ runner.temp }}/summary.json
+          if-no-files-found: error
+          retention-days: 14

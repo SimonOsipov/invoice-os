@@ -14,18 +14,18 @@
   "dependencies": {
     "@invoice-os/design-tokens": "workspace:*",
     "@invoice-os/monitoring": "workspace:*",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@sentry/vite-plugin": "5.4.0",
-    "@types/node": "^22.10.0",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.3",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
     "jsdom": "^27.4.0",
     "typescript": "^7.0.2",
-    "vite": "^8.1.2",
+    "vite": "^8.3.5",
     "vitest": "^4.1.12"
   }
 }

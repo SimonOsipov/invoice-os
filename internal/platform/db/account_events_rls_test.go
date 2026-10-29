@@ -161,6 +161,48 @@ func TestRLS_AccountEventTablesGrantExactlyTheseVerbs(t *testing.T) {
 			t.Errorf("invoice_app privileges on %s = %v, want exactly %v", c.table, got, c.want)
 		}
 	}
+	// whole ACL: no other role and not PUBLIC holds a verb on either table
+	for table, want := range map[string][]string{
+		aeHandoffs: {"invoice_app=DELETE", "invoice_app=SELECT", "invoice_gateway=INSERT"},
+		aeDevices:  {"invoice_app=DELETE", "invoice_app=INSERT", "invoice_app=SELECT"},
+	} {
+		if got := aeNonOwnerACL(t, table); !reflect.DeepEqual(got, want) {
+			t.Errorf("ACL of %s = %v, want exactly %v", table, got, want)
+		}
+	}
+	for _, role := range []string{"invoice_tenant_reader", "supabase_auth_admin", "auth_hook_reader"} {
+		for _, table := range []string{aeHandoffs, aeDevices} {
+			if got := aeVerbs(t, role, table); len(got) != 0 {
+				t.Errorf("%s privileges on %s = %v, want none", role, table, got)
+			}
+		}
+	}
+}
+
+// aeNonOwnerACL lists "grantee=VERB" for every grant on table to a role other than its owner; PUBLIC shows as "PUBLIC".
+func aeNonOwnerACL(t *testing.T, table string) []string {
+	t.Helper()
+	rows, err := h.super.Query(context.Background(), `
+		SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END || '=' || a.privilege_type
+		  FROM pg_class c, aclexplode(c.relacl) a
+		 WHERE c.oid = to_regclass($1) AND a.grantee <> c.relowner
+		 ORDER BY 1`, "public."+table)
+	if err != nil {
+		t.Fatalf("read the ACL of %s: %v", table, err)
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var g string
+		if err := rows.Scan(&g); err != nil {
+			t.Fatalf("scan ACL of %s: %v", table, err)
+		}
+		out = append(out, g)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read the ACL of %s: %v", table, err)
+	}
+	return out
 }
 
 func TestRLS_AccountEventGatewayMayOnlyInsert(t *testing.T) {
@@ -510,5 +552,102 @@ func TestRLS_AccountEventMigrationDownAndUp(t *testing.T) {
 	}
 	if again := aeHookReaderColumns(t); !reflect.DeepEqual(again, before) {
 		t.Errorf("after the Up: auth_hook_reader memberships column grants = %v, want unchanged %v", again, before)
+	}
+}
+
+// A real row: the grants must work as invoice_app, not only read as privileges.
+func TestRLS_AccountEventAppReadsDeletesHandoffsAndOwnsDevices(t *testing.T) {
+	aeRequireTables(t)
+	ctx := context.Background()
+	marker := aeAddr()
+	t.Cleanup(func() {
+		_, _ = h.super.Exec(ctx, `DELETE FROM account_event_handoffs WHERE email = $1`, marker)
+	})
+	if err := aeAsGateway(t, true, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, aeInsert, "account.signed_in", nil, marker, "ua")
+		return err
+	}); err != nil {
+		t.Fatalf("INSERT as invoice_gateway: %v", err)
+	}
+	if n := mustCount(t, h.app, `SELECT count(*) FROM account_event_handoffs WHERE email = $1`, marker); n != 1 {
+		t.Fatalf("invoice_app reads %d handoff rows, want 1", n)
+	}
+	for _, sql := range []string{
+		`UPDATE account_event_handoffs SET ip = 'x' WHERE email = $1`,
+		`INSERT INTO account_event_handoffs (event, email) VALUES ('account.signed_in', $1)`,
+	} {
+		_, err := h.app.Exec(ctx, sql, marker)
+		assertPgRefusal(t, "invoice_app "+sql, err, "42501", "permission denied for table account_event_handoffs")
+	}
+	if tag, err := h.app.Exec(ctx, `DELETE FROM account_event_handoffs WHERE email = $1`, marker); err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("invoice_app DELETE of a handoff: %v, rows %d, want 1", err, tag.RowsAffected())
+	}
+
+	user := uuid.NewString()
+	t.Cleanup(func() { _, _ = h.super.Exec(ctx, `DELETE FROM account_known_devices WHERE user_id = $1`, user) })
+	add := func(browser, os string) error {
+		_, err := h.app.Exec(ctx, `INSERT INTO account_known_devices (user_id, browser, os) VALUES ($1, $2, $3)`, user, browser, os)
+		return err
+	}
+	if err := add("Chrome", "macOS"); err != nil {
+		t.Fatalf("invoice_app INSERT of a device: %v", err)
+	}
+	// the pair is the key: another OS or another browser for the same account is a new device
+	for _, p := range [][2]string{{"Chrome", "Windows"}, {"Firefox", "macOS"}} {
+		if err := add(p[0], p[1]); err != nil {
+			t.Errorf("INSERT of the new pair %v: %v, want it accepted", p, err)
+		}
+	}
+	var pgErr *pgconn.PgError
+	if err := add("Chrome", "macOS"); !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		t.Errorf("INSERT of a known pair = %v, want SQLSTATE 23505", err)
+	}
+	if n := mustCount(t, h.app, `SELECT count(*) FROM account_known_devices WHERE user_id = $1`, user); n != 3 {
+		t.Errorf("invoice_app reads %d device rows, want 3", n)
+	}
+	_, err := h.app.Exec(ctx, `UPDATE account_known_devices SET os = 'x' WHERE user_id = $1`, user)
+	assertPgRefusal(t, "invoice_app UPDATE of a device", err, "42501", "permission denied for table account_known_devices")
+	for _, tbl := range []string{aeHandoffs, aeDevices} {
+		_, err := h.reader.Exec(ctx, `SELECT 1 FROM `+tbl)
+		assertPgRefusal(t, "invoice_tenant_reader SELECT "+tbl, err, "42501", "permission denied for table "+tbl)
+	}
+	if tag, err := h.app.Exec(ctx, `DELETE FROM account_known_devices WHERE user_id = $1`, user); err != nil || tag.RowsAffected() != 3 {
+		t.Errorf("invoice_app DELETE of the devices: %v, rows %d, want 3", err, tag.RowsAffected())
+	}
+}
+
+// The definer function must read public.memberships, not a table a caller's search_path puts first.
+func TestRLS_AccountEventMembershipsIgnoreACallerSearchPath(t *testing.T) {
+	aeRequireFunction(t)
+	ctx := context.Background()
+	tenant, user, addr := aeTenant(t), uuid.NewString(), aeAddr()
+	seedMemberRow(t, tenant, user, "admin", "active", nil, addr)
+	decoyTenant, decoyUser := uuid.NewString(), uuid.NewString()
+
+	tx, err := h.super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, sql := range []string{
+		`CREATE SCHEMA ae_decoy`,
+		`CREATE TABLE ae_decoy.memberships (tenant_id uuid, user_id uuid, status text, email text)`,
+		`INSERT INTO ae_decoy.memberships VALUES ('` + decoyTenant + `', '` + decoyUser + `', 'active', '` + addr + `')`,
+		`GRANT USAGE ON SCHEMA ae_decoy TO PUBLIC`,
+		`GRANT SELECT ON ae_decoy.memberships TO PUBLIC`,
+		`SET LOCAL ROLE invoice_app`,
+		`SET LOCAL search_path = ae_decoy, public`,
+	} {
+		if _, err := tx.Exec(ctx, sql); err != nil {
+			t.Fatalf("test setup %q: %v", sql, err)
+		}
+	}
+	// the decoy would win a plain read, so the function result proves the path was ignored
+	if n := mustCount(t, tx, `SELECT count(*) FROM memberships WHERE email = $1`, addr); n != 1 {
+		t.Fatalf("test setup: unqualified memberships reads %d decoy rows, want 1", n)
+	}
+	got := aeMemberships(t, tx, nil, addr)
+	if want := aeWant(user, tenant); !reflect.DeepEqual(got, want) {
+		t.Errorf("rows with a hijacked search_path = %v, want only the real %v", got, want)
 	}
 }

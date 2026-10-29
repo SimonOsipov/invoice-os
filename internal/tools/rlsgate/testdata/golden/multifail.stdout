@@ -1,0 +1,6 @@
+FAIL  pkgA.TestA
+boom A
+FAIL  pkgB.TestA
+boom B
+PASS  pkgA.TestB
+rlsgate: 1 passed, 0 skipped, 2 failed (3 test-level results)

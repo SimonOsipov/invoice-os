@@ -520,7 +520,7 @@ func TestEvaluate_NoRepeatOutputUnchanged(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantOut, err := os.ReadFile(base + ".out")
+			wantOut, err := os.ReadFile(base + ".stdout")
 			if err != nil {
 				t.Fatal(err)
 			}

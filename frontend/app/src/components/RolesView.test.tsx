@@ -11,7 +11,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError, type AsyncStatus } from '@invoice-os/api-client'
-import type { Member } from '../lib/members'
+import { WFROLE_ADMIN_ONLY, type Member } from '../lib/members'
 import type { Role } from '../lib/roles'
 import type { Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
@@ -59,6 +59,7 @@ function Harness({
   membersError = null,
   refetchRoles,
   refetchMembers,
+  renameRole,
 }: {
   members?: Member[]
   roles?: Role[]
@@ -70,6 +71,7 @@ function Harness({
   membersError?: ApiError | null
   refetchRoles?: () => void
   refetchMembers?: () => void
+  renameRole?: () => Promise<void>
 }) {
   const ctx = {
     members,
@@ -86,7 +88,7 @@ function Harness({
     membersError,
     refetchMembers: refetchMembers ?? vi.fn(),
     createRole: vi.fn(),
-    renameRole: vi.fn(),
+    renameRole: renameRole ?? vi.fn(),
     staffRole: vi.fn(),
     deleteRole: vi.fn(),
   }
@@ -320,10 +322,12 @@ describe('APPR-09-06 AC-1/AC-3: a role card claims policy usage only off a lande
 
 describe('a null-email member in the role modal picker renders the shared em dash, not "null"', () => {
   it('the picker row shows the em dash label', () => {
-    render(<Harness members={[member({ email: null })]} roles={[role()]} rolesState="ready" membersState="ready" />)
+    render(<Harness members={[member({ id: 'me', role: 'admin', isYou: true }), member({ email: null })]} roles={[role()]} rolesState="ready" membersState="ready" />)
 
     fireEvent.click(screen.getByTestId('role-card-edit'))
-    const picker = screen.getByTestId('role-modal-member')
+    // the admin viewer row is a picker row too; the null-email row is the one with the em dash
+    const picker = screen.getAllByTestId('role-modal-member').find((r) => r.textContent?.includes('—')) as HTMLElement
+    expect(picker).toBeTruthy()
     expect(within(picker).getByText('—')).toBeTruthy()
     expect(within(picker).queryByText(/null/i)).toBeNull()
   })
@@ -353,7 +357,7 @@ describe('Roles tab v2 paint', () => {
     screen.getAllByTestId('role-card').find((c) => c.textContent?.includes(title)) as HTMLElement
 
   function renderCrew() {
-    render(<Harness members={crew} roles={crewRoles} policies={[policy()]} rolesState="ready" membersState="ready" />)
+    render(<Harness members={[member({ id: 'me', role: 'admin', isYou: true }), ...crew]} roles={crewRoles} policies={[policy()]} rolesState="ready" membersState="ready" />)
   }
 
   it('no oklch, no 99/999 radius and no avatar box-shadow in the grid, the no-match card or the empty card', () => {
@@ -510,5 +514,186 @@ describe('Roles tab v2 paint', () => {
     const note = screen.getByTestId('roles-unassigned')
     const toolbar = screen.getByTestId('roles-new').parentElement as HTMLElement
     expect(note.compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING, 'notice precedes toolbar').toBeTruthy()
+  })
+})
+
+// ============================================================================
+// Write controls lock for a non-admin viewer
+// ============================================================================
+
+describe('Roles tab write lock', () => {
+  const me = (over: Partial<Member> = {}) => member({ id: 'me', isYou: true, role: 'preparer', ...over })
+  const nonAdmin = [me(), member()]
+  const admin = [me({ role: 'admin' }), member()]
+  const two = [role({ key: 'a', title: 'Alpha', members: ['u1'] }), role({ key: 'b', title: 'Beta' })]
+  const btn = (id: string) => screen.getByTestId(id) as HTMLButtonElement
+  const describedBy = (el: HTMLElement) => document.getElementById(el.getAttribute('aria-describedby') ?? '')
+
+  it('a non-admin viewer: New role and every Edit are disabled and open no modal', () => {
+    render(<Harness members={nonAdmin} roles={two} />)
+
+    const controls = [btn('roles-new'), ...(screen.getAllByTestId('role-card-edit') as HTMLButtonElement[])]
+    expect(controls).toHaveLength(3)
+    for (const c of controls) {
+      expect(c.disabled).toBe(true)
+      fireEvent.click(c)
+    }
+    expect(screen.queryByTestId('role-modal')).toBeNull()
+  })
+
+  it('a non-admin viewer on the empty state: both New role buttons are disabled', () => {
+    render(<Harness members={nonAdmin} roles={[]} />)
+
+    for (const id of ['roles-new', 'roles-empty-new']) {
+      expect(btn(id).disabled).toBe(true)
+      fireEvent.click(btn(id))
+    }
+    expect(screen.queryByTestId('role-modal')).toBeNull()
+  })
+
+  it('a viewer who is a suspended or invited admin is locked', () => {
+    for (const status of ['suspended', 'invited'] as const) {
+      cleanup()
+      render(<Harness members={[me({ role: 'admin', status }), member()]} roles={two} />)
+      expect(btn('roles-new').disabled, status).toBe(true)
+      expect(screen.getByTestId('roles-admin-only').textContent, status).toBe(WFROLE_ADMIN_ONLY)
+    }
+  })
+
+  it('a non-admin viewer on a stale landed roster after a failed refetch is still locked', () => {
+    render(<Harness members={nonAdmin} roles={two} membersState="error" membersError={new ApiError('http', 'down', 503)} />)
+
+    expect(screen.getByTestId('roles-admin-only').textContent).toBe(WFROLE_ADMIN_ONLY)
+  })
+
+  it('each locked control carries its own note as title and description', () => {
+    render(<Harness members={nonAdmin} roles={two} />)
+
+    const header = btn('roles-new')
+    expect(header.title).toBe(WFROLE_ADMIN_ONLY)
+    expect(describedBy(header)).toBe(screen.getByTestId('roles-admin-only'))
+    expect(screen.getByTestId('roles-admin-only').textContent).toBe(WFROLE_ADMIN_ONLY)
+    const notes = screen.getAllByTestId('role-card-admin-only')
+    expect(notes).toHaveLength(2)
+    for (const card of screen.getAllByTestId('role-card')) {
+      const edit = within(card).getByTestId('role-card-edit')
+      const note = within(card).getByTestId('role-card-admin-only')
+      expect(describedBy(edit)).toBe(note)
+      expect(edit.title).toBe(WFROLE_ADMIN_ONLY)
+      expect(note.textContent).toBe(WFROLE_ADMIN_ONLY)
+    }
+  })
+
+  it('the empty state has its own note beside its button', () => {
+    render(<Harness members={nonAdmin} roles={[]} />)
+
+    const note = screen.getByTestId('roles-empty-admin-only')
+    expect(describedBy(btn('roles-empty-new'))).toBe(note)
+    expect(note.textContent).toBe(WFROLE_ADMIN_ONLY)
+    expect(screen.getByTestId('roles-admin-only')).toBeTruthy()
+  })
+
+  it('the header note stays on the no-match card', () => {
+    render(<Harness members={nonAdmin} roles={two} />)
+    fireEvent.change(screen.getByLabelText('Search roles'), { target: { value: 'zzzz' } })
+
+    expect(screen.getByTestId('roles-no-match')).toBeTruthy()
+    expect(describedBy(btn('roles-new'))).toBe(screen.getByTestId('roles-admin-only'))
+  })
+
+  it('a non-admin viewer still reads the whole tab', () => {
+    const roles = [
+      role({ key: 'a', title: 'Alpha', desc: 'Alpha desc', members: ['u1'] }),
+      role({ key: 'b', title: 'Beta', desc: 'Beta desc', members: [] }),
+    ]
+    render(<Harness members={nonAdmin} roles={roles} policies={[policy({ nodes: [{ id: 'n1', type: 'approval', role: 'a', sla: '24', delegate: false }] })]} />)
+
+    const alpha = screen.getAllByTestId('role-card')[0]
+    expect(alpha.textContent).toContain('Alpha desc')
+    expect(alpha.textContent).toContain('Ada Person')
+    expect(alpha.textContent).toContain('1 person')
+    expect(alpha.textContent).toContain('approval step')
+    expect(screen.getAllByTestId('role-card')[1].textContent).toContain('Beta desc')
+    expect(screen.getByTestId('roles-unassigned').textContent).toContain('Beta')
+    fireEvent.change(screen.getByLabelText('Search roles'), { target: { value: 'Beta' } })
+    expect(screen.getAllByTestId('role-card')).toHaveLength(1)
+  })
+
+  it('an admin viewer: New role and Edit are live with no note', () => {
+    render(<Harness members={admin} roles={two} />)
+
+    for (const c of [btn('roles-new'), ...(screen.getAllByTestId('role-card-edit') as HTMLButtonElement[])]) {
+      expect(c.disabled).toBe(false)
+      expect(c.hasAttribute('title')).toBe(false)
+      expect(c.hasAttribute('aria-describedby')).toBe(false)
+    }
+    for (const id of ['roles-admin-only', 'roles-empty-admin-only', 'role-card-admin-only']) expect(screen.queryByTestId(id)).toBeNull()
+    fireEvent.click(screen.getAllByTestId('role-card-edit')[0])
+    expect(screen.getByTestId('role-modal')).toBeTruthy()
+
+    cleanup()
+    render(<Harness members={admin} roles={[]} />)
+    expect(btn('roles-empty-new').disabled).toBe(false)
+    expect(screen.queryByTestId('roles-empty-admin-only')).toBeNull()
+  })
+
+  it('a stale landed admin roster on a failed refetch stays enabled', () => {
+    render(<Harness members={admin} roles={two} membersState="error" membersError={new ApiError('http', 'down', 503)} />)
+
+    // an errored members fetch blocks the grid but the toolbar still renders
+    expect(btn('roles-new').disabled).toBe(false)
+    expect(screen.queryByTestId('roles-admin-only')).toBeNull()
+  })
+
+  it('a viewer promoted to admin unlocks on the next render', () => {
+    const { rerender } = render(<Harness members={nonAdmin} roles={two} />)
+    expect(btn('roles-new').disabled).toBe(true)
+
+    rerender(<Harness members={admin} roles={two} />)
+    expect(btn('roles-new').disabled).toBe(false)
+    expect(screen.queryByTestId('roles-admin-only')).toBeNull()
+    expect(screen.queryByTestId('role-card-admin-only')).toBeNull()
+    for (const e of screen.getAllByTestId('role-card-edit') as HTMLButtonElement[]) expect(e.disabled).toBe(false)
+  })
+
+  it('an unknown viewer: the controls are disabled with no note', () => {
+    for (const membersState of ['loading', 'ready', 'empty', 'error'] as const) {
+      for (const rolesList of [two, []]) {
+        cleanup()
+        render(<Harness members={[]} roles={rolesList} membersState={membersState} membersError={membersState === 'error' ? new ApiError('http', 'down', 503) : null} />)
+        const ids = ['roles-new', 'roles-empty-new'].filter((id) => screen.queryByTestId(id))
+        const all = [...ids.map(btn), ...(screen.queryAllByTestId('role-card-edit') as HTMLButtonElement[])]
+        expect(all.length, membersState).toBeGreaterThan(0)
+        for (const c of all) {
+          expect(c.disabled, membersState).toBe(true)
+          expect(c.hasAttribute('title')).toBe(false)
+          expect(c.hasAttribute('aria-describedby')).toBe(false)
+        }
+        for (const id of ['roles-admin-only', 'roles-empty-admin-only', 'role-card-admin-only']) expect(screen.queryByTestId(id)).toBeNull()
+      }
+    }
+  })
+
+  it('no gateway leaves the controls enabled', () => {
+    render(<Harness members={[]} roles={two} membersState="idle" />)
+
+    expect(btn('roles-new').disabled).toBe(false)
+    expect(screen.queryByTestId('roles-admin-only')).toBeNull()
+  })
+
+  it('an open modal survives the viewer flipping to non-admin, and a 403 shows the server sentence', async () => {
+    const sentence = 'only an admin can change workflow roles'
+    const renameRole = vi.fn().mockRejectedValue(new ApiError('http', sentence, 403))
+    const { rerender } = render(<Harness members={admin} roles={two} renameRole={renameRole} />)
+    fireEvent.click(screen.getAllByTestId('role-card-edit')[0])
+    fireEvent.change(screen.getByTestId('role-modal-name'), { target: { value: 'Alpha 2' } })
+
+    rerender(<Harness members={nonAdmin} roles={two} renameRole={renameRole} />)
+    expect(screen.getByTestId('role-modal')).toBeTruthy()
+    const save = screen.getByTestId('role-modal-save') as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+    fireEvent.click(save)
+
+    expect((await screen.findByTestId('role-modal-error')).textContent).toBe(sentence)
   })
 })

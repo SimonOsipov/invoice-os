@@ -269,4 +269,11 @@ func TestRun_RerunAfterMidLineEndKeepsEveryRerunEvent(t *testing.T) {
 	if out != partial+"\n"+r {
 		t.Fatalf("out = %q", out)
 	}
+
+	clean := ev("fail", "p", "TestX", "") + ev("fail", "p", "", "")
+	f = &fake{calls: []call{{clean, 1}, {r, 0}}}
+	_, out, _ = invoke(t, f, "./p")
+	if out != clean+r {
+		t.Fatalf("clean end got a stray newline: out = %q", out)
+	}
 }

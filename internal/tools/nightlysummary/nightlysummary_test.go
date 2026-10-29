@@ -215,6 +215,10 @@ func TestGoJSON_PausedTestWithNoResultIsNotAFailedAttempt(t *testing.T) {
 			t.Fatalf("paused TestP counted as failed: %+v", o)
 		}
 	}
+
+	resumed := append(paused, ge{Action: "cont", Package: pkgX, Test: "TestP"})
+	j = judgeStreams(t, stream(attemptOf(pkgX, "fail", resumed)))
+	eq(t, tests(j.fails), []string{"TestP"})
 }
 
 func TestGoJSON_PanicThenWholeRerunPass(t *testing.T) {

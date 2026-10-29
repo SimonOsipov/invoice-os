@@ -145,8 +145,6 @@ func filterPredicates(f Filter, s searchTargets) (string, []any, error) {
 	}
 
 	switch {
-	case f.scope.set && f.scope.admin:
-		conditions = append(conditions, "a.entity_id = ANY("+bind(f.scope.ids)+"::uuid[])")
 	case f.scope.set:
 		// One group: a bare OR would escape the AND-joined filters beside it.
 		ids := bind(f.scope.ids)

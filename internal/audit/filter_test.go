@@ -5,6 +5,7 @@ package audit_test
 import (
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -312,7 +313,7 @@ func TestAuditFilter_GenericValueArmSkipsTheNumberKey(t *testing.T) {
 // array literal binds its ids; every other input fails closed to the empty set.
 func TestAuditFilter_CallerScopePredicate(t *testing.T) {
 	a, c := uuid.NewString(), uuid.NewString()
-	const set = "a.entity_id = ANY($1::uuid[])"
+	const set = "(a.entity_id = ANY($1::uuid[]) OR (a.event = ANY($2) AND a.actor = $3))"
 
 	cases := []struct {
 		name     string
@@ -361,8 +362,9 @@ func TestAuditFilter_CallerScopePredicate(t *testing.T) {
 			if where != set {
 				t.Errorf("scope %q produced %q, want %q", tc.scope, where, set)
 			}
-			if !reflect.DeepEqual(args, tc.wantArgs) {
-				t.Errorf("scope %q bound %#v, want %#v (an empty set must be non-nil)", tc.scope, args, tc.wantArgs)
+			wantArgs := append(slices.Clone(tc.wantArgs), any(aeFSQLSix), any(""))
+			if !reflect.DeepEqual(args, wantArgs) {
+				t.Errorf("scope %q bound %#v, want %#v (an empty set must be non-nil)", tc.scope, args, wantArgs)
 			}
 		})
 	}
@@ -373,8 +375,8 @@ func TestAuditFilter_CallerScopePredicate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error %v", err)
 		}
-		if !strings.Contains(where, "a.event = ANY(") || !strings.Contains(where, "a.entity_id = ANY(") || len(args) != 2 {
-			t.Errorf("produced %q with %d args, want the event and the scope predicates, 2 args", where, len(args))
+		if !strings.Contains(where, "a.event = ANY(") || !strings.Contains(where, "a.entity_id = ANY(") || len(args) != 4 {
+			t.Errorf("produced %q with %d args, want the event and the scope predicates, 4 args", where, len(args))
 		}
 	})
 }

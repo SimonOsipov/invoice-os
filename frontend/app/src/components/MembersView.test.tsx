@@ -1684,6 +1684,22 @@ describe('RESEND-07-04', () => {
       expect(screen.queryByTestId('invite-revoke-confirm')).toBeNull()
     })
 
+    it('MembersView: a viewer who loses admin with the revoke strip open on a legacy invited row sees it close', async () => {
+      const gw = gateway({ list: [answer(listOf())] })
+      const controls: { current: HarnessControls | null } = { current: null }
+      render(<Harness initial={[selfRow(), otherMember()]} authedFetch={gw.authedFetch} controls={controls} />)
+      await landed()
+      fireEvent.click(within(inviteRows()[0]).getByTestId('member-menu-trigger'))
+      fireEvent.click(within(screen.getByTestId('member-menu')).getByRole('button', { name: 'Revoke invite' }))
+      expect(screen.getByTestId('invite-revoke-confirm')).toBeTruthy()
+
+      act(() => controls.current!.setMembers([selfRow({ role: 'reviewer' }), otherMember()]))
+
+      expect(screen.queryByTestId('invite-revoke-confirm')).toBeNull()
+      await act(async () => {})
+      expect(gw.revokes()).toEqual([])
+    })
+
     it("MembersView: another member's admin row does not make the viewer an admin", async () => {
       const gw = gateway({ list: [answer(listOf())] })
       const boss = member({ id: 'boss', name: 'Boss Admin', initials: 'BA', email: 'boss@x.ng', role: 'admin', status: 'active', isYou: false })

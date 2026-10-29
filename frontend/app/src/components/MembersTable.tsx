@@ -113,9 +113,11 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, onR
     if (revokeId != null) keepRef.current?.focus()
   }, [revokeId])
   // A filter can drop the row; the strip must not return when it comes back.
+  // Losing admin also closes it: a legacy invited membership stays in `rows`.
+  const inviteLocked = inviteActionsLock(members) != null
   useEffect(() => {
-    if (revokeId != null && !rows.some((m) => m.id === revokeId)) setRevokeId(null)
-  }, [rows, revokeId])
+    if (revokeId != null && (inviteLocked || !rows.some((m) => m.id === revokeId))) setRevokeId(null)
+  }, [rows, revokeId, inviteLocked])
 
   // The member whose Remove confirm strip is open; same lifecycle as the revoke strip.
   const [removeId, setRemoveId] = useState<string | null>(null)

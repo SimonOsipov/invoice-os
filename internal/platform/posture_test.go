@@ -49,7 +49,7 @@ func TestPosture(t *testing.T) {
 		{"leading non-breaking space, fail-closed", " pr-7", PostureHosted},
 
 		// --- nightly: exact match only; PostureKind("nightly") compiles before the constant exists ---
-		{"nightly, exact", "nightly", PostureKind("nightly")},
+		{"nightly, exact", "nightly", PostureNightly},
 		{"nightly near-miss: PR-shaped suffix stays preview", "nightly-pr-3", PosturePreview},
 		{"nightly near-miss: capitalised", "Nightly", PostureHosted},
 		{"nightly near-miss: suffix", "nightly2", PostureHosted},

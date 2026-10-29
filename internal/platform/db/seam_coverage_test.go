@@ -208,6 +208,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/platform/db/account_state_read.go", fn: "GrantAccountStateRead"}, // boot-time grant on the supabase_auth_admin DSN, before any request or tenant exists
 	{file: "internal/platform/db/leader.go", fn: "claim"},                             // worker-only advisory locks; reads no table and serves no request
 	{file: "internal/gateway/registrant_outbox.go", fn: "Registrant"},                 // global outbox, no tenant data; invoice_gateway may only INSERT into it
+	{file: "internal/gateway/account_events.go", fn: "Record"},                        // global outbox, no tenant data; invoice_gateway may only INSERT into it
 	{file: "internal/notifications/store.go"},                                         // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
 	{file: "internal/notifications/worker.go"},                                        // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
 	{file: "internal/validation/codelist/store.go"},                                   // global NRS reference data written by a schedule; the package serves no HTTP
@@ -215,6 +216,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/notifications/deal.go"},                                          // a River job carries no caller identity and no tenant; the job only takes an advisory lock on the pool
 	{file: "internal/notifications/newsletter_worker.go"},                             // a River job carries no caller identity and no tenant; subscribers are not tenant data, and the worker reads and updates them on the pool
 	{file: "internal/notifications/erase.go"},                                         // a River job carries no caller identity and no tenant; the erase sweeps global tables on the pool
+	{file: "internal/accountevents/new_device.go"},                                    // a River job carries no caller identity and no tenant; it reads and writes account_known_devices on the pool
 	{file: "internal/notifications/erase_by_id.go"},                                   // a River job carries no caller identity and no tenant; it reads contacts and person_erasures on the pool
 	{file: "internal/notifications/newsletter.go"},                                    // subscription requests and subscribers carry no tenant; the store and the hourly purge run on the pool with no caller identity
 	{file: "internal/systemhealth/store.go", fn: "Record"},                            // a scheduled global sample with no caller identity; the package serves HTTP, so the exemption is func-scoped
@@ -753,6 +755,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "cmd/migrate/purgecheck.go", fn: "purgeCheckRun"},                                // preview-only deploy probe in the migrate job; no request reaches it
 	{file: "internal/archive/workspace.go", fn: "recordExportFailed"},                       // audits a failed export of a possibly locked workspace in its own short tx
 	{file: "internal/archive/workspace.go", fn: "AssembleWorkspace"},                        // exports a locked workspace, which the seam refuses for a read-write tx; the method gates the active admin itself
+	{file: "internal/accountevents/audit_job.go", fn: "Work"},                               // a River job carries its tenant and there is no request identity to gate
 }
 
 // scCoreSite is one call of the ungated core, attributed to the INNERMOST

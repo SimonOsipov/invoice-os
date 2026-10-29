@@ -105,7 +105,7 @@ func writeResetPage(w http.ResponseWriter, method string, status int, page strin
 }
 
 // ResetPasswordHandler answers the page's form POST: verify, set the password, end every session.
-func ResetPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, log *slog.Logger) http.Handler {
+func ResetPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, log *slog.Logger, events AccountEvents) http.Handler {
 	if authURL == nil || siteURL == nil {
 		return RegistrationNotConfigured()
 	}
@@ -113,13 +113,16 @@ func ResetPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessio
 	return passwordLinkHandler(authURL, client, sessions, signIn, log, passwordLinkFlow{
 		verifyType: "recovery", label: "reset-password", page: resetPageHTML,
 		done: site + "/?reset=1", failed: resetFailedURL(siteURL),
+		onConfirmed: func(r *http.Request, user gotrueUser) {
+			recordAccountEvent(r, events, log, AccountEvent{Event: EventPasswordResetCompleted, UserID: user.ID, Email: user.Email})
+		},
 	})
 }
 
 // passwordLinkFlow is what differs between the reset and the invitee set-password POST.
 type passwordLinkFlow struct {
 	verifyType, label, page, done, failed string
-	onConfirmed                           func(ctx context.Context, user gotrueUser)
+	onConfirmed                           func(r *http.Request, user gotrueUser)
 	// handOff returns a hand-off code, or "" to fall back to done with no code.
 	handOff func(r *http.Request, user gotrueUser, password, state string) string
 }
@@ -206,7 +209,7 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 		}
 		signIn.Reset(confirmed.User.Email)
 		if flow.onConfirmed != nil {
-			flow.onConfirmed(ctx, confirmed.User)
+			flow.onConfirmed(rr, confirmed.User)
 		}
 		location := done
 		if state := formState(r); flow.handOff != nil && loggedOut && state != "" {

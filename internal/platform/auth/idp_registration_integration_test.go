@@ -94,17 +94,17 @@ func gatewayMux(t *testing.T, authBase string, minResponse time.Duration, sink g
 	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, log, tenancy.NewStore(pool).InvitationPendingForEmail))
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	mux.Handle("POST /auth/resend-verification", gateway.ResendVerificationHandler(authURL, noRedirect, minResponse, perAddress, true, log))
-	mux.Handle("POST /auth/request-password-reset", gateway.RequestPasswordResetHandler(authURL, noRedirect, minResponse, perAddress, true, log))
+	mux.Handle("POST /auth/request-password-reset", gateway.RequestPasswordResetHandler(authURL, noRedirect, minResponse, perAddress, true, log, nil))
 	verifyPage, err := gateway.VerifyPageHandler(site)
 	if err != nil {
 		t.Fatal(err)
 	}
 	mux.Handle("GET /auth/verify", verifyPage)
 	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
-	mux.Handle("POST /auth/verify", gateway.VerifyHandler(authURL, site, noRedirect, log, sink, store))
+	mux.Handle("POST /auth/verify", gateway.VerifyHandler(authURL, site, noRedirect, log, sink, store, nil))
 	mux.Handle("POST /auth/exchange", gateway.ExchangeHandler(store))
 	inviteeSignIn := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
-	mux.Handle("POST /auth/invitation/password", gateway.InvitationPasswordHandler(authURL, site, noRedirect, gateway.NewSessionChecker(authURL, noRedirect, time.Now, log), inviteeSignIn, sink, log, store))
+	mux.Handle("POST /auth/invitation/password", gateway.InvitationPasswordHandler(authURL, site, noRedirect, gateway.NewSessionChecker(authURL, noRedirect, time.Now, log), inviteeSignIn, sink, log, store, nil))
 	confirmationMail, err := gateway.MailTemplate("confirmation")
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func gatewayMux(t *testing.T, authBase string, minResponse time.Duration, sink g
 	mux.Handle("GET /emails/confirmation.html", confirmationMail)
 	mux.Handle("GET /auth/reset-password", gateway.ResetPasswordPageHandler(site))
 	resetSignIn := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
-	mux.Handle("POST /auth/reset-password", gateway.ResetPasswordHandler(authURL, site, noRedirect, gateway.NewSessionChecker(authURL, noRedirect, time.Now, log), resetSignIn, log))
+	mux.Handle("POST /auth/reset-password", gateway.ResetPasswordHandler(authURL, site, noRedirect, gateway.NewSessionChecker(authURL, noRedirect, time.Now, log), resetSignIn, log, nil))
 	recoveryMail, err := gateway.MailTemplate("recovery")
 	if err != nil {
 		t.Fatal(err)

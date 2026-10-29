@@ -39,6 +39,8 @@ import {
   resendContactKeys,
   resendSkipsUntickedDemoBooker,
   BLOG_CHAT_PARAGRAPH,
+  ACCOUNT_RECORD_SENTENCES,
+  auditLogDeletes,
   DELETION_SENTENCES,
   appLabels,
   onlyActiveMemberDeletesWorkspace,
@@ -1086,5 +1088,26 @@ describe('the Library shares the landing\'s choice', () => {
     const body = text(html)
     expect(body).toContain('Our preview and test builds of this site, the Library and the Blog run the same code')
     expect(body).not.toContain('Our preview and test builds run the same code')
+  })
+})
+
+describe('AUDIT-13-08: sign-in records on the page', () => {
+  const html = renderToStaticMarkup(createElement(Privacy))
+  const paras = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g), (m) =>
+    m[1].replace(/<[^>]*>/g, '').replace(/&#x27;/g, "'").replace(/\s+/g, ' ').trim(),
+  )
+
+  it('privacyAccountRecordsStayUntilWorkspaceDeleted', () => {
+    const [p1, p2, p3, p4] = ACCOUNT_RECORD_SENTENCES.map((x) => x.text)
+    const at = paras.indexOf(p1)
+    expect(at).toBeGreaterThan(-1)
+    expect(paras.slice(at, at + 4)).toEqual([p1, p2, p3, p4])
+    expect(p3).toContain('until the workspace is deleted')
+    expect(paras.slice(at, at + 4).join(' ')).not.toMatch(/six years/i)
+    const hits = auditLogDeletes()
+    expect(hits).toHaveLength(1)
+    expect(hits[0][0]).toBe('20261026120001_purge_tenant.sql')
+    expect(hits[0][1]).toContain('tenant_id')
+    expect(hits[0][1]).not.toMatch(/interval/i)
   })
 })

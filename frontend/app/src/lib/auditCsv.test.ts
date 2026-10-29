@@ -120,6 +120,21 @@ describe('auditCsv', () => {
   })
 })
 
+describe('auditCsv account rows', () => {
+  it('auditCsv_accountRowKeepsNineColumnsAndNoPayload', () => {
+    const e = makeEvent({
+      event: 'account.sign_in_failed',
+      company_scope: 'workspace',
+      payload: { ip_address: 'Unknown IP', device: 'Unknown device', occurred_at: '2026-10-29T10:00:00Z' },
+    })
+    const lines = auditCsv([e]).split('\n')
+    expect(lines).toHaveLength(2)
+    expect(lines[1]).toContain('Sign-in failed — wrong password,account.sign_in_failed,Workspace,workspace')
+    expect(lines[1].split(',').length).toBe(AUDIT_CSV_HEADER.length)
+    expect(lines[1]).not.toMatch(/Unknown IP|Unknown device|203\./)
+  })
+})
+
 describe('auditCsv truncation notice (BUG-74)', () => {
   const trunc = { truncated: true, cap: 2000 }
 

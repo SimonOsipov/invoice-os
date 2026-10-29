@@ -9,8 +9,11 @@ import (
 
 // RequestPasswordResetHandler answers POST /auth/request-password-reset with one answer for every account state.
 // It shares the resend throttle: pass the same perAddress.
-func RequestPasswordResetHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perAddress *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
+func RequestPasswordResetHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perAddress *SignInThrottle, enforce bool, log *slog.Logger, events AccountEvents) http.Handler {
 	return mailLinkHandler("reset-request", "recover", authURL.JoinPath("recover").String(),
 		func(email string) map[string]string { return map[string]string{"email": email} },
-		client, minResponse, perAddress, enforce, log)
+		client, minResponse, perAddress, enforce, log,
+		func(r *http.Request, email string) {
+			recordAccountEvent(r, events, log, AccountEvent{Event: EventPasswordResetRequested, Email: email})
+		})
 }

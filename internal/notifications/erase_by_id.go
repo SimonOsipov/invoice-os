@@ -174,6 +174,8 @@ func (w *EraseByIDWorker) sweep(ctx context.Context, tx pgx.Tx, uid string) (int
 		{`DELETE FROM river_job WHERE state IN ('completed', 'cancelled', 'discarded') AND ` + where, []any{eraseKinds, uid}},
 		{`DELETE FROM registrant_handoffs WHERE lower(user_id) = $1`, []any{uid}},
 		{`DELETE FROM contacts WHERE user_id::text = $1`, []any{uid}},
+		{`DELETE FROM account_known_devices WHERE user_id::text = $1`, []any{uid}},
+		{`DELETE FROM account_event_handoffs WHERE user_id::text = $1`, []any{uid}},
 	} {
 		tag, err := tx.Exec(ctx, d.sql, d.args...)
 		if err != nil {

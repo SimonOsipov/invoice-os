@@ -39,7 +39,7 @@ const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
 ])
 
 // Params the boot reads once and removes from the address bar.
-const BOOT_PARAMS = ['state', 'console', 'signin', VERIFIED_PARAM, VERIFY_PARAM, RESET_PARAM, INVITE_PARAM, 'confirm', 'handoff', 'register', 'demo']
+const BOOT_PARAMS = ['state', 'console', 'signin', VERIFIED_PARAM, VERIFY_PARAM, RESET_PARAM, INVITE_PARAM, 'confirm', 'handoff', 'register', 'demo', 'forgot']
 
 // Held a minute short of the 10-minute state TTL, so a posted state is still live.
 const STATE_HOLD_MS = 9 * 60 * 1000
@@ -51,12 +51,13 @@ function readSignInBoot(search: string) {
   return { state, consoleTarget: readSignInConsole(search), bootAt: Date.now(), error: SIGN_IN_OUTCOMES.get(outcome), open: SIGN_IN_OUTCOMES.has(outcome) }
 }
 
-// Deep-link modal: a ?signin= outcome wins, then register (when open), then demo. Any value opens.
-function readDeepLink(search: string, signInOpens: boolean): 'register' | 'demo' | null {
+// Deep-link modal: a ?signin= outcome wins, then register (when open), then demo, then forgot. Any value opens.
+function readDeepLink(search: string, signInOpens: boolean): 'register' | 'demo' | 'forgot' | null {
   if (signInOpens) return null
   const p = new URLSearchParams(search)
   if (p.has('register') && registrationOpen()) return 'register'
-  return p.has('register') || p.has('demo') ? 'demo' : null
+  if (p.has('register') || p.has('demo')) return 'demo'
+  return p.has('forgot') ? 'forgot' : null
 }
 
 // Tokens and utility classes (.v2-btn, .label, .mono) are global: v2 plus bridge.css.
@@ -70,16 +71,17 @@ export default function App() {
     () => (!stateDropped && Date.now() - signInBoot.bootAt < STATE_HOLD_MS ? signInBoot.state : null),
     [signInBoot, stateDropped],
   )
-  const [signInOpen, setSignInOpen] = useState(signInBoot.open)
+  // Before deepLink so the forgot link opens the window on first render: no open to count, no double init.
+  const [deepLink] = useState(() => readDeepLink(window.location.search, signInBoot.open))
+  const [signInOpen, setSignInOpen] = useState(signInBoot.open || deepLink === 'forgot')
   const [signInError, setSignInError] = useState(signInBoot.error)
   // Read once at mount; the strip below removes the params, so a re-read would lose the notice.
   // Precedence: verify, then reset, then invite.
   const [notice, setNotice] = useState(
     () => readVerifyOutcome(window.location.search) ?? readResetOutcome(window.location.search) ?? readInviteOutcome(window.location.search),
   )
-  const [signInView, setSignInView] = useState<'sign-in' | 'forgot'>('sign-in')
+  const [signInView, setSignInView] = useState<'sign-in' | 'forgot'>(deepLink === 'forgot' ? 'forgot' : 'sign-in')
   // No trackDemoOpen: a deep link is not a CTA click.
-  const [deepLink] = useState(() => readDeepLink(window.location.search, signInBoot.open))
   const [demoOpen, setDemoOpen] = useState(deepLink === 'demo')
   const [registerOpen, setRegisterOpen] = useState(deepLink === 'register')
   // A stored choice keeps the notice down until `reopened` flips.

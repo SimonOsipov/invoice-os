@@ -2,6 +2,7 @@ package audit_test
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"strconv"
 	"testing"
@@ -206,5 +207,38 @@ func TestExportCSV_CreatedAtIsUTCRFC3339NanoAndEventAndActorAreVerbatim(t *testi
 	}
 	if r[exportCol(t, "id")] != strconv.FormatInt(ids[0], 10) {
 		t.Fatalf("id cell = %q", r[exportCol(t, "id")])
+	}
+}
+
+// The workspace export is admin-only and unfiltered: an account row is written with its payload and as workspace-level.
+func TestExportCSV_WritesAccountRowsWithPayload(t *testing.T) {
+	f := requireFixture(t)
+	p := pageSeedTenant(t, f)
+	member := uuid.NewString()
+	filtInsert(t, f, p, []filtRow{{
+		event: "account.signed_in", actor: member, ageSeconds: 10,
+		payload: `{"ip_address":"198.51.100.7","device":"Chrome on macOS","occurred_at":"2026-10-29T08:00:00Z"}`,
+	}})
+
+	n, recs := exportCSV(t, f, p)
+
+	if n != 1 || len(recs) != 2 {
+		t.Fatalf("n = %d, records = %d, want 1 and 2", n, len(recs))
+	}
+	row := recs[1]
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(row[exportCol(t, "payload")]), &payload); err != nil {
+		t.Fatalf("payload cell %q is not JSON: %v", row[exportCol(t, "payload")], err)
+	}
+	for _, k := range []string{"ip_address", "device", "occurred_at"} {
+		if payload[k] == "" {
+			t.Errorf("payload %v lacks %s", payload, k)
+		}
+	}
+	if got := row[exportCol(t, "actor")]; got != member {
+		t.Errorf("actor = %q, want %q", got, member)
+	}
+	if got := row[exportCol(t, "company_scope")]; got != "workspace" {
+		t.Errorf("company_scope = %q, want workspace", got)
 	}
 }

@@ -74,6 +74,55 @@ describe('AuditRow', () => {
     expect(screen.queryByText(/duration/i)).toBeNull()
   })
 
+  it('auditRow_accountExpansionLabels', () => {
+    const payload = { ip_address: '203.0.113.7', device: 'Chrome on macOS', occurred_at: '2026-10-29T10:00:00Z' }
+    render(<AuditRow event={ev({ event: 'account.signed_in', payload })} expanded onToggle={() => {}} />)
+    const fields = screen.getAllByTestId('audit-payload-field').map((f) => f.textContent)
+    expect(fields).toEqual([
+      'IP address203.0.113.7',
+      'DeviceChrome on macOS',
+      'Occurred at2026-10-29T10:00:00Z',
+    ])
+  })
+
+  it('auditRow_accountUnknownValuesShowVerbatim', () => {
+    const payload = { ip_address: 'Unknown IP', device: 'Unknown device', occurred_at: '2026-10-29T10:00:00Z' }
+    render(<AuditRow event={ev({ event: 'account.sign_in_failed', payload })} expanded onToggle={() => {}} />)
+    const fields = screen.getAllByTestId('audit-payload-field').map((f) => f.textContent)
+    expect(fields).toEqual(['IP addressUnknown IP', 'DeviceUnknown device', 'Occurred at2026-10-29T10:00:00Z'])
+  })
+
+  it('auditRow_accountWithoutOccurredAtShowsTwoFields', () => {
+    const payload = { ip_address: '203.0.113.7', device: 'Chrome on macOS' }
+    render(<AuditRow event={ev({ event: 'account.signed_in', payload })} expanded onToggle={() => {}} />)
+    const fields = screen.getAllByTestId('audit-payload-field').map((f) => f.textContent)
+    expect(fields).toEqual(['IP address203.0.113.7', 'DeviceChrome on macOS'])
+    expect(screen.queryByText('Occurred at')).toBeNull()
+  })
+
+  it('auditRow_accountLongDeviceWrapsInsteadOfOverflowing', () => {
+    const device = 'Mozilla/5.0 ' + 'X11LinuxWebKitGecko'.repeat(12)
+    render(<AuditRow event={ev({ event: 'account.signed_in', payload: { ip_address: '1.1.1.1', device } })} expanded onToggle={() => {}} />)
+    const value = screen.getAllByTestId('audit-payload-field')[1].querySelector('.mono') as HTMLElement
+    expect(value.textContent).toBe(device)
+    expect(value.getAttribute('style')).toContain('overflow-wrap: anywhere')
+    expect(value.getAttribute('style')).not.toContain('nowrap')
+  })
+
+  it('auditRow_accountFailureLabelTakesRedAndSuccessTakesNone', () => {
+    const { unmount } = render(<AuditRow event={ev({ event: 'account.sign_in_blocked', payload: {} })} expanded={false} onToggle={() => {}} />)
+    expect(screen.getByTestId('audit-what').textContent).toBe('Sign-in blocked — too many attempts')
+    expect(screen.getByTestId('audit-what').getAttribute('style')).toContain('var(--status-red-text)')
+    unmount()
+    render(<AuditRow event={ev({ event: 'account.signed_in', payload: {} })} expanded={false} onToggle={() => {}} />)
+    expect(screen.getByTestId('audit-what').getAttribute('style')).not.toContain('--status-')
+  })
+
+  it('auditRow_otherKeysKeepTheGenericLabel', () => {
+    render(<AuditRow event={ev({ payload: { invoice_number: 'INV-1' } })} expanded onToggle={() => {}} />)
+    expect(screen.getByTestId('audit-payload-field').textContent).toBe('Invoice numberINV-1')
+  })
+
   it('auditRow_invoiceAffordanceReadsBothKeys', () => {
     // The invoice key is inconsistent by design: `id` from internal/invoice/* and
     // approval/engine.go, `invoice_id` from approval/decision.go and

@@ -166,7 +166,7 @@ func main() {
 	app.Mux.Handle("OPTIONS /auth/refresh", withCORS(h.Refresh))
 	app.Mux.Handle("POST /auth/sign-out", withCORS(h.SignOut))
 	app.Mux.Handle("OPTIONS /auth/sign-out", withCORS(h.SignOut))
-	app.Mux.Handle("POST /auth/reset-password", resetPasswordHandler(probed["auth"], siteURL, sessions, h.SignInThrottle, app.Logger))
+	app.Mux.Handle("POST /auth/reset-password", resetPasswordHandler(probed["auth"], siteURL, sessions, h.SignInThrottle, app.Logger, h.AccountEvents))
 	app.Mux.Handle("POST /auth/invitation/password", h.InvitationPassword)
 
 	// Mint routes exist only in a -tags mockissuer build; ENVIRONMENT is read raw, as for provisioning.
@@ -287,7 +287,7 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 		Register:             gateway.RegisterHandler(authURL, client, minResponse, log, pending),
 		ResendByAddress:      perAddress,
 		ResendVerification:   gateway.ResendVerificationHandler(authURL, client, minResponse, perAddress, enforce, log),
-		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, enforce, log),
+		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, enforce, log, gateway.NewAccountEvents(pool, log)),
 		DemoRequest:          gateway.DemoRequestHandler(sink, log),
 	}
 }
@@ -306,13 +306,13 @@ func blogSubscribeHandlers(notifications *url.URL, gatewayToken string, minRespo
 }
 
 // resetPasswordHandler builds the reset-form handler; a nil authURL or siteURL makes it answer 503.
-func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, signIn *gateway.SignInThrottle, log *slog.Logger) http.Handler {
+func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, signIn *gateway.SignInThrottle, log *slog.Logger, events gateway.AccountEvents) http.Handler {
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Transport:     platform.IDTokenTransport(nil),
 	}
-	return gateway.ResetPasswordHandler(authURL, siteURL, client, sessions, signIn, log)
+	return gateway.ResetPasswordHandler(authURL, siteURL, client, sessions, signIn, log, events)
 }
 
 // gatewayPool connects as invoice_gateway when DATABASE_GATEWAY_URL is set, else nil.
@@ -352,6 +352,7 @@ func registrantSink(pool *pgxpool.Pool, sink gateway.ContactSink) gateway.Contac
 type handoff struct {
 	SignIn, Exchange, Refresh, SignOut, Verify, InvitationPassword, ConsoleHandoff http.Handler
 	SignInThrottle                                                                 *gateway.SignInThrottle
+	AccountEvents                                                                  gateway.AccountEvents
 }
 
 // handoffHandlers builds the sign-in, exchange, refresh and sign-out handlers against GoTrue at authURL.
@@ -371,17 +372,19 @@ func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Transport:     platform.IDTokenTransport(nil),
 	}
+	events := gateway.NewAccountEvents(pool, log)
 	return handoff{
-		SignIn:   gateway.SignInHandler(authURL, client, store, throttle, log, sink),
+		SignIn:   gateway.SignInHandler(authURL, client, store, throttle, log, sink, events),
 		Exchange: gateway.ExchangeHandler(store),
 		Refresh:  gateway.RefreshHandler(authURL, client, log),
-		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log),
-		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log, sink, store),
+		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log, events),
+		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log, sink, store, events),
 
-		InvitationPassword: gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, throttle, sink, log, store),
+		InvitationPassword: gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, throttle, sink, log, store, events),
 		ConsoleHandoff:     verifier.Middleware(sessions.Middleware(auth.RequireStaff(gateway.ConsoleHandoffHandler(store, log)))),
 
 		SignInThrottle: throttle,
+		AccountEvents:  events,
 	}
 }
 

@@ -28,7 +28,7 @@ func newIHRig(t *testing.T, store *HandoffStore) *ihRig {
 	f := newResetGoTrue(t)
 	log, buf := captureLog()
 	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-	h := InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nil, log, store)
+	h := InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nil, log, store, nil)
 	return &ihRig{f: f, store: store, h: h, log: buf}
 }
 

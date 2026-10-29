@@ -1693,7 +1693,12 @@ test('firm Roles: a reviewer sees the write controls locked, still reads the tab
     await expect(cardNotes).toHaveCount(count)
     for (const note of await cardNotes.all()) await expect(note).toHaveText(WFROLE_ADMIN_ONLY_COPY)
 
-    // Reads stay: search narrows, clearing restores.
+    // Reads stay: a real title keeps its card, a nonsense query empties the grid, clearing restores.
+    const title = (await cards.first().innerText()).split('\n')[0].trim()
+    expect(title, 'the first card has a title').not.toBe('')
+    await search.fill(title)
+    await expect(cards.first()).toContainText(title)
+    await expect(member.getByTestId('roles-no-match')).toHaveCount(0)
     await search.fill('zzzz-no-such-role')
     await expect(cards).toHaveCount(0)
     await expect(member.getByTestId('roles-no-match')).toBeVisible()
@@ -1728,6 +1733,7 @@ test('firm Roles: a reviewer sees the write controls locked, still reads the tab
     // A hovered disabled Edit keeps its disabled look: the ghost button's :hover fill must not win.
     const edit = edits.first()
     await edit.hover({ force: true })
+    expect(await edit.evaluate((el) => el.matches(':hover')), 'the pointer is over Edit, so :hover applies').toBe(true)
     const look = await edit.evaluate((el) => {
       const s = getComputedStyle(el)
       return { opacity: s.opacity, background: s.backgroundColor }

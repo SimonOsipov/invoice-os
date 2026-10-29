@@ -257,7 +257,7 @@ type Filter struct {
 	Company   CompanyFilter
 	Q         string
 	InvoiceID string
-	// scope is the caller's client scope, set by Store.List from app.entity_scope.
+	// scope is the caller's scope, set by Store.List.
 	scope callerScope
 }
 

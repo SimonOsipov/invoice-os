@@ -100,6 +100,11 @@ test.describe('account events (API E2E, over the deployed preview)', () => {
   let preparer: Member
   let blocked: Member
 
+  // Sign-out is global: it revokes every session of the account, so reads need a new token.
+  async function refreshAdminToken(): Promise<void> {
+    adminToken = (await signIn(admin.email, admin.password)).access_token
+  }
+
   test.beforeAll(async () => {
     admin = await provisionRealAccount('acct-events')
     const session = await signIn(admin.email, admin.password)
@@ -129,6 +134,7 @@ test.describe('account events (API E2E, over the deployed preview)', () => {
     const wrong = await signInAttempt(admin.email, `${admin.password}-wrong`)
     expect(wrong.status).toBe(401)
     await signOut(await signIn(admin.email, admin.password))
+    await refreshAdminToken()
     // A fork sends no mail (GOTRUE_MAILER_AUTOCONFIRM, blank SMTP host).
     expect((await requestPasswordReset({ email: admin.email })).status).toBe(202)
 
@@ -157,6 +163,7 @@ test.describe('account events (API E2E, over the deployed preview)', () => {
     expect(res.status).toBe(401)
     // The marker shows the mover has passed the unknown attempt (it moves by occurred_at); jobs run concurrently, so wait one more tick before the read.
     await signOut(await signIn(admin.email, admin.password))
+    await refreshAdminToken()
     await expect.poll(async () => (await getAuditLog(adminToken, { event: [SIGNED_OUT], limit: 100 })).total, POLL).toBeGreaterThan(outBefore)
 
     await new Promise((r) => setTimeout(r, 6_000)) // one HandoffInterval (5 s) plus job time

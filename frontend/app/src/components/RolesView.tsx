@@ -13,7 +13,7 @@ import { useCallback, useEffect, useId, useState } from 'react'
 
 import { EmptyState, ErrorState, Loading } from '@invoice-os/api-client'
 import { plusGlyph } from '../glyphs'
-import { membersSurface, viewerIsAdmin, WFROLE_ADMIN_ONLY } from '../lib/members'
+import { membersSurface, viewerIsAdmin, workflowRolesLock } from '../lib/members'
 import {
   filterRoles,
   holderCount,
@@ -44,11 +44,16 @@ const DISABLED = { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } as con
 
 export function RolesView({ ctx }: { ctx: PlatformCtx }) {
   const { roles, members } = ctx
+  // Worst-of BOTH fetches: every count and avatar below resolves against `roles` AND
+  // `members`, so either one erroring would otherwise paint the grid off half-loaded data.
+  const surface = rolesSurface(ctx.rolesState, ctx.membersState)
+  const landed = surface !== 'loading' && surface !== 'error'
   // A roster with rows names the viewer; none means unknown: fail closed, no note.
+  // The note shows only where a note element renders, so loading and error stay silent.
   const known = members.length > 0
-  const lock = ctx.membersState !== 'idle' && known && !viewerIsAdmin(members) ? WFROLE_ADMIN_ONLY : null
-  const unknownViewer = ctx.membersState !== 'idle' && !known
-  const disabled = lock != null || unknownViewer
+  const gated = ctx.membersState !== 'idle'
+  const lock = landed && gated && known ? workflowRolesLock(members) : null
+  const disabled = gated && !(known && viewerIsAdmin(members))
   const headerNoteId = useId()
   const emptyNoteId = useId()
   const [query, setQuery] = useState('')
@@ -72,9 +77,6 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
   // STABLE — it is a `useDismiss` dependency inside the modal (useDismiss.ts:36-37).
   const closeModal = useCallback(() => setModal(null), [])
 
-  // Worst-of BOTH fetches: every count and avatar below resolves against `roles` AND
-  // `members`, so either one erroring would otherwise paint the grid off half-loaded data.
-  const surface = rolesSurface(ctx.rolesState, ctx.membersState)
   // Whichever fetch(es) actually failed — a roles-only failure must not re-kick members.
   const retry = useCallback(() => {
     if (ctx.rolesState === 'error') ctx.refetchRoles()
@@ -110,9 +112,9 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
             {flash}
           </span>
         )}
-        <NewRoleButton testId="roles-new" onClick={() => openRoleModal('create')} disabled={disabled} lock={lock} noteId={headerNoteId} />
+        <NewRoleButton testId="roles-new" onClick={() => openRoleModal('create')} disabled={disabled} lock={lock} noteId={noRoles ? emptyNoteId : headerNoteId} />
       </div>
-      {lock && (
+      {lock && !noRoles && (
         <div id={headerNoteId} data-testid="roles-admin-only" style={{ ...NOTE_STYLE, margin: '-6px 0 14px' }}>
           {lock}
         </div>
@@ -124,7 +126,7 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
         <ErrorState error={(ctx.rolesError ?? ctx.membersError)!} onRetry={retry} />
       )}
 
-      {surface !== 'loading' && surface !== 'error' && (
+      {landed && (
         <>
           {noRoles ? (
             <div data-testid="roles-empty">

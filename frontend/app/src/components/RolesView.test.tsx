@@ -560,12 +560,6 @@ describe('Roles tab write lock', () => {
     }
   })
 
-  it('a non-admin viewer on a stale landed roster after a failed refetch is still locked', () => {
-    render(<Harness members={nonAdmin} roles={two} membersState="error" membersError={new ApiError('http', 'down', 503)} />)
-
-    expect(screen.getByTestId('roles-admin-only').textContent).toBe(WFROLE_ADMIN_ONLY)
-  })
-
   it('each locked control carries its own note as title and description', () => {
     render(<Harness members={nonAdmin} roles={two} />)
 
@@ -590,7 +584,11 @@ describe('Roles tab write lock', () => {
     const note = screen.getByTestId('roles-empty-admin-only')
     expect(describedBy(btn('roles-empty-new'))).toBe(note)
     expect(note.textContent).toBe(WFROLE_ADMIN_ONLY)
-    expect(screen.getByTestId('roles-admin-only')).toBeTruthy()
+    // One note on the empty state: the header button points at it, and the header note is not rendered.
+    expect(screen.queryByTestId('roles-admin-only')).toBeNull()
+    const header = btn('roles-new')
+    expect(header.title).toBe(WFROLE_ADMIN_ONLY)
+    expect(describedBy(header)).toBe(note)
   })
 
   it('the header note stays on the no-match card', () => {
@@ -637,12 +635,29 @@ describe('Roles tab write lock', () => {
     expect(screen.queryByTestId('roles-empty-admin-only')).toBeNull()
   })
 
-  it('a stale landed admin roster on a failed refetch stays enabled', () => {
-    render(<Harness members={admin} roles={two} membersState="error" membersError={new ApiError('http', 'down', 503)} />)
+  // Loading and error render no note element, so a locked control there would point at nothing.
+  it.each([
+    ['loading members, roster in hand', { members: nonAdmin, membersState: 'loading' as const }],
+    ['loading roles', { members: nonAdmin, rolesState: 'loading' as const }],
+    ['failed roles fetch, roster in hand', { members: nonAdmin, rolesState: 'error' as const, rolesError: new ApiError('http', 'down', 503) }],
+    ['failed members fetch (App empties the roster)', { members: [], membersState: 'error' as const, membersError: new ApiError('http', 'down', 503) }],
+  ])('%s: New role is disabled with no note, title or description', (_name, props) => {
+    render(<Harness roles={two} {...props} />)
 
-    // an errored members fetch blocks the grid but the toolbar still renders
-    expect(btn('roles-new').disabled).toBe(false)
-    expect(screen.queryByTestId('roles-admin-only')).toBeNull()
+    expect(screen.queryByTestId('roles-grid')).toBeNull()
+    const header = btn('roles-new')
+    expect(header.disabled).toBe(true)
+    expect(header.hasAttribute('title')).toBe(false)
+    expect(header.hasAttribute('aria-describedby')).toBe(false)
+    for (const id of ['roles-admin-only', 'roles-empty-admin-only', 'role-card-admin-only']) expect(screen.queryByTestId(id)).toBeNull()
+  })
+
+  it('a failed members fetch disables the controls for an admin too, since the roster is gone', () => {
+    // App sets members to [] on error (App.tsx), so an admin and a non-admin render the same.
+    render(<Harness members={[]} roles={[]} membersState="error" membersError={new ApiError('http', 'down', 503)} />)
+
+    expect(btn('roles-new').disabled).toBe(true)
+    expect(screen.queryByTestId('roles-empty-new')).toBeNull()
   })
 
   it('a viewer promoted to admin unlocks on the next render', () => {

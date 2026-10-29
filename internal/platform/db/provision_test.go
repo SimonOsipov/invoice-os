@@ -915,3 +915,36 @@ func TestProvisionRedeployDoesNotDestroyPreexistingData(t *testing.T) {
 		t.Fatalf("probe business_entities row (tin=%s): found %d row(s) after Provision, want exactly 1 — the demo-tenant purge must reach no tenant outside db.DemoTenants", probeTIN, entities)
 	}
 }
+
+// Nightly seeds the shards but never resets: its data survives between runs.
+func TestProvisionConfig_NightlySeedsShardsAndNeverResets(t *testing.T) {
+	cases := []struct {
+		name                 string
+		deployEnv, bootstrap string
+		reset                string
+		wantSeed             bool
+	}{
+		{"nightly, no reset flag", "nightly", "true", "", true},
+		{"nightly, reset flag true", "nightly", "true", "true", true},
+		{"preview still seeds", "pr-12", "true", "true", true},
+		{"production", "production", "true", "", false},
+		{"Nightly", "Nightly", "true", "", false},
+		{"nightly2", "nightly2", "true", "", false},
+		{"nightly, bootstrap flag empty", "nightly", "", "", false},
+		{"nightly, bootstrap flag false", "nightly", "false", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := db.ProvisionConfig{
+				Environment: "development", BootstrapFlag: tc.bootstrap,
+				DeployEnv: tc.deployEnv, ResetFlag: tc.reset,
+			}
+			if got := cfg.ShardsWillSeed(); got != tc.wantSeed {
+				t.Errorf("ShardsWillSeed() = %v, want %v", got, tc.wantSeed)
+			}
+			if tc.deployEnv == "nightly" && cfg.ResetWillRun() {
+				t.Errorf("ResetWillRun() = true for nightly, want false")
+			}
+		})
+	}
+}

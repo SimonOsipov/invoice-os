@@ -47,6 +47,16 @@ func TestPosture(t *testing.T) {
 		// breaks the anchored match, same as the ASCII near-miss rows above ---
 		{"trailing non-breaking space, fail-closed", "pr-7 ", PostureHosted},
 		{"leading non-breaking space, fail-closed", " pr-7", PostureHosted},
+
+		// --- nightly: exact match only; PostureKind("nightly") compiles before the constant exists ---
+		{"nightly, exact", "nightly", PostureKind("nightly")},
+		{"nightly near-miss: PR-shaped suffix stays preview", "nightly-pr-3", PosturePreview},
+		{"nightly near-miss: capitalised", "Nightly", PostureHosted},
+		{"nightly near-miss: suffix", "nightly2", PostureHosted},
+		{"nightly near-miss: trailing space", "nightly ", PostureHosted},
+		{"nightly near-miss: leading space", " nightly", PostureHosted},
+		{"nightly near-miss: trailing newline", "nightly\n", PostureHosted},
+		{"nightly near-miss: prefixed", "pr-nightly", PostureHosted},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

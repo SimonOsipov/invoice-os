@@ -1135,6 +1135,21 @@ describe('RESEND-07-04', () => {
       await waitFor(() => expect(inviteRows()).toHaveLength(1))
     })
 
+    it('MembersView: a 403 on resend renders the server sentence on that row', async () => {
+      const gw = gateway({ list: [answer(two())], resend: [refuse(403, 'only an admin can invite people')] })
+      const refetchMembers = vi.fn()
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} refetchMembers={refetchMembers} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(2))
+
+      clickResendOn(inviteRowFor('zed@x.ng'))
+
+      const err = await screen.findByTestId('member-status-error')
+      expect(err.textContent).toBe('only an admin can invite people')
+      expect(inviteRowFor('zed@x.ng').nextElementSibling).toBe(err)
+      expect(inviteRows()).toHaveLength(2)
+      expect(refetchMembers).not.toHaveBeenCalled()
+    })
+
     it.each([
       [409, ERR_NOT_PENDING],
       [404, ERR_NOT_FOUND],
@@ -1643,6 +1658,30 @@ describe('RESEND-07-04', () => {
       expect(screen.getByTestId('members-invite-reason').textContent).toBe(ADMIN_ONLY)
       await act(async () => {})
       expect(gw.lists(), 'losing admin never refetches').toHaveLength(1)
+    })
+
+    it("MembersView: a non-admin viewer's legacy invited membership locks Resend and Revoke", async () => {
+      const gw = gateway({})
+      render(<Harness initial={[selfRow({ role: 'preparer' }), otherMember()]} authedFetch={gw.authedFetch} />)
+
+      expect(inviteRows()).toHaveLength(1)
+      fireEvent.click(within(inviteRows()[0]).getByTestId('member-menu-trigger'))
+      const menu = within(screen.getByTestId('member-menu'))
+      expect((menu.getByRole('button', { name: 'Resend invite' }) as HTMLButtonElement).disabled).toBe(true)
+      expect((menu.getByRole('button', { name: 'Revoke invite' }) as HTMLButtonElement).disabled).toBe(true)
+      expect(menu.getAllByTestId('member-menu-reason')).toHaveLength(1)
+      expect(menu.getByTestId('member-menu-reason').textContent).toBe(ADMIN_ONLY)
+      await act(async () => {})
+      expect(gw.invitationCalls()).toEqual([])
+    })
+
+    it("MembersView: a non-admin viewer's legacy invited row cannot open the revoke strip", async () => {
+      const gw = gateway({})
+      render(<Harness initial={[selfRow({ role: 'preparer' }), otherMember()]} authedFetch={gw.authedFetch} />)
+
+      openRevokeStrip(inviteRows()[0])
+
+      expect(screen.queryByTestId('invite-revoke-confirm')).toBeNull()
     })
 
     it("MembersView: another member's admin row does not make the viewer an admin", async () => {

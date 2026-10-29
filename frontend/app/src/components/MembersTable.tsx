@@ -20,6 +20,7 @@ import {
   clientAccessTitle,
   emailLabel,
   inviteAccountLine,
+  inviteActionsLock,
   inviteStatusLine,
   memberActionsLock,
   REMOVE_CONFIRMED,
@@ -136,10 +137,12 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, onR
 
   function menuItems(m: Member, lock: string | null): MenuAction[] {
     if (m.status === 'invited') {
+      const inviteLock = inviteActionsLock(members)
       // Resend and Revoke exclude each other on one row while either is in flight.
+      const busy = resending?.has(m.id) || revoking?.has(m.id)
       return [
-        { label: 'Resend invite', disabled: resending?.has(m.id) || revoking?.has(m.id), onSelect: () => onResend?.(m.id) },
-        { label: 'Revoke invite', danger: true, disabled: revoking?.has(m.id) || resending?.has(m.id), onSelect: () => setRevokeId(m.id) },
+        { label: 'Resend invite', disabled: inviteLock != null || busy, reason: inviteLock ?? undefined, onSelect: () => onResend?.(m.id) },
+        { label: 'Revoke invite', danger: true, disabled: inviteLock != null || busy, reason: inviteLock ?? undefined, onSelect: () => setRevokeId(m.id) },
       ]
     }
     const items: MenuAction[] = [

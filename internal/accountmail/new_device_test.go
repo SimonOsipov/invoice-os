@@ -24,12 +24,15 @@ func TestRenderNewDevice_Copy(t *testing.T) {
 	if subject != "New sign-in to your ASComply account" {
 		t.Errorf("subject = %q", subject)
 	}
-	for _, want := range []string{
-		"Chrome on macOS", "(IP 203.0.113.7)", "29 October 2026, 14:05 WAT",
-		"If this was you, you can ignore this email.", "If it was not you, reset your password now:",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("mail does not hold %q", want)
+	const body = "Someone signed in to your ASComply account from Chrome on macOS (IP 203.0.113.7) on 29 October 2026, 14:05 WAT. " +
+		"If this was you, you can ignore this email. If it was not you, reset your password now: " +
+		`<a href="https://www.ascomply.com/?forgot" style="color:#f5bb86">https://www.ascomply.com/?forgot</a>.`
+	if !strings.Contains(out, ">"+body+"</td>") {
+		t.Errorf("intro cell is not exactly the decided body %q", body)
+	}
+	for _, gone := range []string{"The button opens", "no action is needed"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("mail holds invented line %q", gone)
 		}
 	}
 	var found bool

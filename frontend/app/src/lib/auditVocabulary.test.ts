@@ -149,7 +149,8 @@ describe('audit vocabulary', () => {
   it('auditVocabulary_everyAccountEventHasALabel', () => {
     // AccountEvents in internal/audit/account_events.go; its names are not audit.Record literals.
     const src = readFileSync(resolve(REPO_ROOT, 'internal/audit/account_events.go'), 'utf8')
-    const names = [...src.matchAll(/"(account\.[a-z_]+)"/g)].map((m) => m[1])
+    const code = src.replace(/\/\/.*$/gm, '')
+    const names = [...code.matchAll(/"(account\.[a-z_]+)"/g)].map((m) => m[1])
     expect(names.length, 'population floor: the six account names').toBeGreaterThanOrEqual(6)
     expect(AUDIT_EVENTS['submission.failed']).toBeDefined()
     for (const id of names) expect(AUDIT_EVENTS[id], `${id} must carry a label`).toBeDefined()

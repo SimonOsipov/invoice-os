@@ -312,6 +312,19 @@ describe('AuditFilterCard: event type', () => {
     expect(cleared.events, 'other groups untouched').toEqual(['invoice.created'])
   })
 
+  it('auditFilterCard_accountOnlySelectionCountsAndTogglesWithoutTouchingOthers', () => {
+    const ids = idsInDomain('account')
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, events: [...ids] }
+    const { onChange } = renderCard(state)
+    expect(screen.getByTestId('audit-event-trigger').textContent).toContain('6 selected')
+    openEventPopover()
+    expect(ids.length).toBe(6)
+    for (const id of ids) expect(screen.getByTestId(`audit-event-row-${id}`).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('audit-event-row-membership.suspended').getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(screen.getByTestId('audit-event-row-account.signed_out'))
+    expect((onChange.mock.calls[0][0] as AuditFilterState).events).toEqual(ids.filter((i) => i !== 'account.signed_out'))
+  })
+
   it('auditFilterCard_accountCountsComeFromFacets', () => {
     const f = facets()
     f.event = [{ value: 'account.signed_in', name: null, count: 4 }]

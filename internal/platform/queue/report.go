@@ -39,7 +39,7 @@ func finalAttemptHub(job *rivertype.JobRow, class, trace string) *sentry.Hub {
 		return nil
 	}
 	hub := sentry.CurrentHub()
-	if hub.Client() == nil {
+	if !hub.Client().IsEnabled() {
 		return nil
 	}
 	hub = hub.Clone()

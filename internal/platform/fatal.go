@@ -23,7 +23,7 @@ func Fatal(logger *slog.Logger, format string, args ...any) {
 	}
 	msg := fmt.Sprintf(format, args...)
 	logger.Error(msg)
-	if hub := sentry.CurrentHub(); hub.Client() != nil && !isShutdownErr(args) {
+	if hub := sentry.CurrentHub(); hub.Client().IsEnabled() && !isShutdownErr(args) {
 		hub = hub.Clone()
 		hub.ConfigureScope(func(scope *sentry.Scope) {
 			scope.SetLevel(sentry.LevelFatal)
@@ -51,7 +51,7 @@ func ReportBootPanic() {
 	if rec == nil {
 		return
 	}
-	if hub := sentry.CurrentHub(); hub.Client() != nil {
+	if hub := sentry.CurrentHub(); hub.Client().IsEnabled() {
 		hub = hub.Clone()
 		hub.ConfigureScope(func(scope *sentry.Scope) { scope.SetLevel(sentry.LevelFatal) })
 		hub.Recover(rec)

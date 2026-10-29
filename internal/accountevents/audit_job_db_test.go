@@ -256,3 +256,48 @@ func TestAuditJob_UnknownTenantCancelsTheJob(t *testing.T) {
 		t.Errorf("Work = %v, want a river.JobCancel error", err)
 	}
 }
+
+// A job that reads the tenant while purge_tenant has deleted it but not committed must not leave a row behind.
+func TestAuditJob_PurgeInFlightLeavesNoRow(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	a, u := e.tenant(t), e.user()
+
+	purge, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin purge: %v", err)
+	}
+	defer func() { _ = purge.Rollback(ctx) }()
+	if _, err := purge.Exec(ctx, `SET LOCAL session_replication_role = 'replica'`); err != nil {
+		t.Fatalf("replica role: %v", err)
+	}
+	if _, err := purge.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, a); err != nil {
+		t.Fatalf("purge tenant: %v", err)
+	}
+	if _, err := purge.Exec(ctx, `DELETE FROM audit_log WHERE tenant_id = $1`, a); err != nil {
+		t.Fatalf("purge audit: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- e.work(AuditArgs{TenantID: a, UserID: u, Event: evSignedIn, IP: e.tag + "-purge"})
+	}()
+	time.Sleep(500 * time.Millisecond)
+	if err := purge.Commit(ctx); err != nil {
+		t.Fatalf("commit purge: %v", err)
+	}
+
+	var jobErr error
+	select {
+	case jobErr = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("job did not return after the purge committed")
+	}
+	var cancel *rivertype.JobCancelError
+	if !errors.As(jobErr, &cancel) {
+		t.Fatalf("job returned %v, want a cancel", jobErr)
+	}
+	if n := e.mustCount(t, `SELECT count(*) FROM audit_log WHERE tenant_id = $1`, a); n != 0 {
+		t.Fatalf("%d audit row(s) outlive the purged tenant, want 0", n)
+	}
+}

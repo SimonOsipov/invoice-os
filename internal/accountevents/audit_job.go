@@ -50,9 +50,9 @@ func (w *AuditWorker) Work(ctx context.Context, job *river.Job[AuditArgs]) error
 		p.Device = unknownDevice
 	}
 	return db.WithinTenantTx(ctx, w.Pool, a.TenantID, func(tx pgx.Tx) error {
-		// audit_log has no FK to tenants; RLS shows this tenant's own row only while it exists.
+		// audit_log has no FK to tenants. KEY SHARE blocks behind an uncommitted purge_tenant delete, so no row outlives the purge.
 		var one int
-		if err := tx.QueryRow(ctx, `SELECT 1 FROM tenants WHERE id = $1`, a.TenantID).Scan(&one); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT 1 FROM tenants WHERE id = $1 FOR KEY SHARE`, a.TenantID).Scan(&one); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return river.JobCancel(fmt.Errorf("accountevents: tenant %s does not exist", a.TenantID))
 			}

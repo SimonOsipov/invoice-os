@@ -153,6 +153,19 @@ func TestDeliveryClients_RealUsesTheTransport(t *testing.T) {
 	}
 }
 
+func TestDeliveryClients_NightlyReadsTheKeys(t *testing.T) {
+	mode, hs, rs, err := DeliveryClients(clGetenv(clFourKeys()), "nightly", &clSpyTransport{})
+	if err != nil || mode != ModeReal {
+		t.Fatalf("DeliveryClients = %q, err %v, want real", mode, err)
+	}
+	if _, fake := hs.(FakeHubSpot); fake || hs == nil {
+		t.Errorf("hubspot = %T, want the real client", hs)
+	}
+	if _, fake := rs.(FakeResend); fake || rs == nil {
+		t.Errorf("resend = %T, want the real client", rs)
+	}
+}
+
 func TestDeliveryClients_OffReturnsNoClients(t *testing.T) {
 	for _, env := range []string{"production", ""} {
 		spy := &clSpyTransport{}
@@ -270,6 +283,25 @@ func TestNewsletterClients_PreviewIsCaptureAndFake(t *testing.T) {
 	}
 	if _, ok := w.Resend.(FakeBlogResend); !ok {
 		t.Errorf("resend client = %T, want FakeBlogResend", w.Resend)
+	}
+}
+
+func TestNewsletterClients_NightlyIsFakeAndEnabled(t *testing.T) {
+	vars := clFourKeys("RESEND_BLOG_TOPIC_ID", "bt", "RESEND_BLOG_SEGMENT_ID", "bs", "RESEND_SENDING_KEY", "sk")
+	w := clWiring(t, "nightly", vars)
+	if w.Mode != ModeFake || !w.Enabled {
+		t.Errorf("wiring = %+v, want fake newsletter, enabled", w)
+	}
+	if _, ok := w.Resend.(FakeBlogResend); !ok {
+		t.Errorf("resend client = %T, want FakeBlogResend", w.Resend)
+	}
+}
+
+func TestNewsletterClients_NightlyMailIsCaptureEvenWithASendingKey(t *testing.T) {
+	vars := clFourKeys("RESEND_BLOG_TOPIC_ID", "bt", "RESEND_BLOG_SEGMENT_ID", "bs", "RESEND_SENDING_KEY", "sk")
+	w := clWiring(t, "nightly", vars)
+	if _, ok := w.Sender.(*accountmail.Capture); !ok || w.MailMode != accountmail.ModeCapture {
+		t.Errorf("wiring = %+v, want capture mail", w)
 	}
 }
 

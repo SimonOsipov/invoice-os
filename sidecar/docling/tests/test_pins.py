@@ -102,7 +102,7 @@ def test_t03_11_no_surya_no_olmocr_no_cuda_torch_wheel():
 
 
 def test_sentry_sdk_is_exact_pinned():
-    # Version-agnostic: a Dependabot bump must pass; dropping the pin fails the image build, not a unit.
+    # Version-agnostic: a Dependabot bump must pass.
     lines = _requirement_lines()
     assert len(lines) >= MIN_DIRECT_REQUIREMENTS
     sentry_lines = [line for line in lines if line.split("==", 1)[0].lower() == "sentry-sdk"]

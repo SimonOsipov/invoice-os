@@ -210,9 +210,11 @@ jobs:
       - name: Count the previews
         id: count
         if: needs.changes.outputs.nightly == 'true'
-        run: bash scripts/ci/preview.sh cap | tee -a "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          bash scripts/ci/preview.sh cap | tee -a "$GITHUB_OUTPUT"
       - name: preview cap reached
-        if: needs.changes.outputs.nightly == 'true' && steps.count.outputs.full == 'true'
+        if: needs.changes.outputs.nightly == 'true' && steps.count.outputs.full != 'false'
         env:
           OPEN: ${{ steps.count.outputs.open }}
         run: |

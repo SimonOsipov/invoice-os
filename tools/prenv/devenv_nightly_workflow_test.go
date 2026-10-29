@@ -145,7 +145,7 @@ func devEnvNightlyProblems(yml string) []string {
 	if !slices.Equal(order, []string{"Delete a leftover nightly preview", "Prove no nightly preview is left", "Count the previews", "preview cap reached", "Create the PR's secrets (generated, never copied from production)"}) {
 		bad("prepare-env cap steps are out of order: " + strings.Join(order, " | "))
 	}
-	if c, _ := nlStep(pe, "preview cap reached"); c.keys["if"] != nlOn+" && steps.count.outputs.full == 'true'" {
+	if c, _ := nlStep(pe, "preview cap reached"); c.keys["if"] != nlOn+" && steps.count.outputs.full != 'false'" {
 		bad("preview cap reached if does not read steps.count.outputs.full")
 	}
 	if l, _ := nlStep(pe, "Delete a leftover nightly preview"); !strings.Contains(nlCode(l.keys["run"]), `preview.sh teardown "$PR"`) {
@@ -363,7 +363,7 @@ func TestDevEnvNightly_PrepareEnvStopsAtTheCap(t *testing.T) {
 	}
 	yml := readWorkflow(t, "dev-env.yml")
 	for _, c := range []struct{ old, repl, want string }{
-		{"        if: " + nlOn + " && steps.count.outputs.full == 'true'\n", "        if: " + nlOn + "\n", "preview cap reached if"},
+		{"        if: " + nlOn + " && steps.count.outputs.full != 'false'\n", "        if: " + nlOn + "\n", "preview cap reached if"},
 		{"      - name: preview cap reached\n", "      - name: preview cap reached early\n", "out of order"},
 		{"      - name: Delete a leftover nightly preview\n        if: " + nlOn + "\n", "      - name: Delete a leftover nightly preview\n", "not nightly only"},
 	} {
@@ -373,13 +373,16 @@ func TestDevEnvNightly_PrepareEnvStopsAtTheCap(t *testing.T) {
 		}
 	}
 	// Moving the cap step after the secrets step.
-	capStep := "      - name: preview cap reached\n        if: " + nlOn + " && steps.count.outputs.full == 'true'\n        env:\n          OPEN: ${{ steps.count.outputs.open }}\n        run: |\n          echo \"::error::preview cap reached: $OPEN previews open (.claude/rules/ci-preview.md)\"\n          exit 1\n"
+	capStep := "      - name: preview cap reached\n        if: " + nlOn + " && steps.count.outputs.full != 'false'\n        env:\n          OPEN: ${{ steps.count.outputs.open }}\n        run: |\n          echo \"::error::preview cap reached: $OPEN previews open (.claude/rules/ci-preview.md)\"\n          exit 1\n"
 	secrets := "      - name: Create the PR's secrets (generated, never copied from production)\n        run: bash scripts/ci/preview.sh secrets \"$PR\"\n"
 	moved := mutateOnce(t, mutateOnce(t, yml, capStep, ""), secrets, secrets+capStep)
 	if got := devEnvNightlyProblems(moved); !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "out of order") }) {
 		t.Errorf("a cap step after the secrets step went unnoticed: %q", got)
 	}
 }
+
+// nlCapFails as the cap output makes the stub's `cap` exit non-zero.
+const nlCapFails = "!fail"
 
 // nlRunStep runs the named step of a job with a stub preview.sh; the stub's prs and cap output are the arguments.
 func nlRunStep(t *testing.T, job, step, prs, capOut string, env ...string) (string, int) {
@@ -392,7 +395,11 @@ func nlRunStep(t *testing.T, job, step, prs, capOut string, env ...string) (stri
 	if err := os.MkdirAll(filepath.Join(dir, "scripts/ci"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeIn(t, filepath.Join(dir, "scripts/ci"), "preview.sh", "case \"$1\" in\nprs) printf '%s' '"+prs+"' ;;\ncap) printf '%s' '"+capOut+"' ;;\nesac\n")
+	capBody := "printf '%s' '" + capOut + "'"
+	if capOut == nlCapFails {
+		capBody = "echo 'gcloud blip' >&2; exit 3"
+	}
+	writeIn(t, filepath.Join(dir, "scripts/ci"), "preview.sh", "case \"$1\" in\nprs) printf '%s' '"+prs+"' ;;\ncap) "+capBody+" ;;\nesac\n")
 	script := "cd '" + dir + "'\n" + strings.Join(env, "\n") + "\nexport GITHUB_OUTPUT='" + filepath.Join(dir, "out") + "' GITHUB_STEP_SUMMARY='" + filepath.Join(dir, "summary") + "'\n" + s.keys["run"]
 	stdout, stderr, code := runBashScript(t, script)
 	return stdout + stderr, code
@@ -429,6 +436,19 @@ func TestDevEnvNightly_CapStepsRun(t *testing.T) {
 	out, code := nlRunPreview(t, "Count the previews", "", "open=1\nfull=false\n")
 	if code != 0 || !strings.Contains(out, "full=false") {
 		t.Errorf("count step: exit %d, out %q", code, out)
+	}
+}
+
+// A failing `cap` must fail the step (GitHub's default shell has no pipefail), and a missing
+// `full` must not read as "not full".
+func TestDevEnvNightly_FailedCapCountFailsTheStep(t *testing.T) {
+	t.Parallel()
+	if out, code := nlRunPreview(t, "Count the previews", "", nlCapFails); code == 0 {
+		t.Errorf("count step exited 0 with a failing cap, out %q", out)
+	}
+	pe := devEnvJob(t, "prepare-env")
+	if c, _ := nlStep(pe, "preview cap reached"); !strings.Contains(c.keys["if"], "steps.count.outputs.full != 'false'") {
+		t.Errorf("cap guard if = %q, want it to fire unless full is 'false'", c.keys["if"])
 	}
 }
 

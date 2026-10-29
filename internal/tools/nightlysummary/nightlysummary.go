@@ -226,7 +226,7 @@ func classify(attempts []attempt) []outcome {
 	return out
 }
 
-// hideGoParents drops package passes and any entry a failed or flaky descendant already explains (D-02-15).
+// hideGoParents drops package passes, and any entry a failed or flaky descendant already explains.
 func hideGoParents(outs []outcome) []outcome {
 	type pk struct{ set, pkg string }
 	bad := map[pk][]string{}
@@ -276,6 +276,7 @@ type openTest struct {
 	pkg, test string
 	out       []string
 	done      bool
+	paused    bool
 }
 
 type goParser struct {
@@ -322,6 +323,7 @@ func parseGo(r io.Reader, set string) (parsedFile, error) {
 	}
 	br := bufio.NewReader(r)
 	good, bad, lastBad := 0, 0, false
+	started, midBad := map[string]bool{}, false
 	for {
 		line, err := br.ReadString('\n')
 		if s := strings.TrimSpace(line); s != "" {
@@ -329,9 +331,18 @@ func parseGo(r io.Reader, set string) (parsedFile, error) {
 			if json.Unmarshal([]byte(s), &e) != nil {
 				bad++
 				lastBad = true
+				midBad = true
 			} else {
 				good++
 				lastBad = false
+				// A cut-off line followed by a second start of a package is a cut-off first run.
+				if e.Action == "start" && e.Test == "" {
+					if midBad && started[e.Package] {
+						p.pf.truncated = true
+					}
+					started[e.Package] = true
+				}
+				midBad = false
 				p.event(e)
 			}
 		}
@@ -348,7 +359,7 @@ func parseGo(r io.Reader, set string) (parsedFile, error) {
 	for _, o := range p.opens {
 		p.finishUnfinished(o)
 	}
-	p.pf.truncated = lastBad
+	p.pf.truncated = p.pf.truncated || lastBad
 	return p.pf, nil
 }
 
@@ -358,8 +369,9 @@ func (p *goParser) add(a attempt) {
 }
 
 // finishUnfinished records a test that started and never reported (timeout, panic) as a failed attempt.
+// A test paused at that point never ran on; the binary died under another test.
 func (p *goParser) finishUnfinished(o *openTest) {
-	if o.done {
+	if o.done || o.paused {
 		return
 	}
 	o.done = true
@@ -391,6 +403,14 @@ func (p *goParser) testEvent(e goEvent) {
 		o = &openTest{pkg: e.Package, test: e.Test}
 		p.open[k] = o
 		p.opens = append(p.opens, o)
+	case "pause":
+		if o != nil {
+			o.paused = true
+		}
+	case "cont":
+		if o != nil {
+			o.paused = false
+		}
 	case "output":
 		if o != nil {
 			o.out = append(o.out, e.Output)

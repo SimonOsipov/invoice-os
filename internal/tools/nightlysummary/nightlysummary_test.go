@@ -200,6 +200,23 @@ func TestGoJSON_UnfinishedTestOnlyAttemptIsFailure(t *testing.T) {
 	eq(t, r.dec.Verdict, "red")
 }
 
+func TestGoJSON_PausedParallelTestsAreNotFlakesAfterAPanicElsewhere(t *testing.T) {
+	j := judgeStreams(t, string(fixture(t, "real", "gotest-parallel-panic.json"))+string(fixture(t, "real", "gotest-parallel-panic-rerun.json")))
+	eq(t, tests(j.flakes), []string{"TestSeq"})
+	eq(t, tests(j.passed), []string{"TestP1", "TestP2", "TestP3"})
+	eq(t, len(j.fails), 0)
+}
+
+func TestGoJSON_PausedTestWithNoResultIsNotAFailedAttempt(t *testing.T) {
+	paused := []ge{{Action: "run", Package: pkgX, Test: "TestP"}, {Action: "pause", Package: pkgX, Test: "TestP"}}
+	j := judgeStreams(t, stream(attemptOf(pkgX, "fail", paused)))
+	for _, o := range j.fails {
+		if o.test == "TestP" {
+			t.Fatalf("paused TestP counted as failed: %+v", o)
+		}
+	}
+}
+
 func TestGoJSON_PanicThenWholeRerunPass(t *testing.T) {
 	j := judgeStreams(t, string(fixture(t, "real", "gotest-panic-rerun.json")))
 	eq(t, tests(j.flakes), []string{"TestB"})
@@ -852,6 +869,17 @@ func TestRun_CorruptMiddleLineOfGoStreamIsNotUnreadable(t *testing.T) {
 		}
 	}
 	eq(t, r.suite("go").Passed, 1)
+}
+
+func TestRun_CutOffFirstRunBeforeARerunIsUnreadable(t *testing.T) {
+	e := newEnv(t)
+	e.clear("go")
+	first := stream(attemptOf(pkgX, "fail", tst(pkgX, "TestA", "fail")))
+	first = first[:len(first)-20] + "\n"
+	e.write("go", "gotest-x.json", first+stream(attemptOf(pkgX, "pass", tst(pkgX, "TestA", "pass"))))
+	r := e.run()
+	eq(t, r.code, 1)
+	eq(t, r.dec.Failures[0].Test, "results unreadable")
 }
 
 func TestRun_GoFileOfOnlyGarbageIsUnreadable(t *testing.T) {

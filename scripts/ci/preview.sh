@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
-# preview.sh — one PR's preview in ascomply-preview (GKE-11). Needs gcloud signed in as deploy-preview.
+# preview.sh — one preview (a PR's, or the nightly's) in ascomply-preview (GKE-11). Needs gcloud signed in as deploy-preview.
 # The shared resources (network, Cloud SQL, preview-db job, shared secrets) are invoice-os-infra preview.tf.
 #
-#   preview.sh urls <pr>                  print <name>_url=<address> for each public site
-#   preview.sh image <pr> <image> <sha>   print the image reference
-#   preview.sh secrets <pr>               create this PR's secrets that do not exist yet
-#   preview.sh bucket <pr>                create this PR's documents bucket if it does not exist
-#   preview.sh database <pr>              drop and recreate pr_<pr>
-#   preview.sh migrate <pr> <sha>         deploy the migrate job and run it
-#   preview.sh grant <pr>                 run the migrate job for the auth.users grant only
-#   preview.sh deploy <pr> <sha> <svc>... deploy services, four at a time
-#   preview.sh token <pr>                 print the PR's gateway token
-#   preview.sh teardown <pr>              delete everything this PR owns
-#   preview.sh prs                        print "<pr> <created>" for each PR that owns a service
+#   preview.sh urls <pr|nightly>                  print <name>_url=<address> for each public site
+#   preview.sh image <pr|nightly> <image> <sha>   print the image reference
+#   preview.sh secrets <pr|nightly>               create this preview's secrets that do not exist yet
+#   preview.sh bucket <pr|nightly>                create this preview's documents bucket if it does not exist
+#   preview.sh database <pr|nightly>              drop and recreate its database (pr_<pr>, pr_0 for nightly)
+#   preview.sh migrate <pr|nightly> <sha>         deploy the migrate job and run it
+#   preview.sh grant <pr|nightly>                 run the migrate job for the auth.users grant only
+#   preview.sh deploy <pr|nightly> <sha> <svc>... deploy services, four at a time
+#   preview.sh token <pr|nightly>                 print the preview's gateway token
+#   preview.sh teardown <pr|nightly>              delete everything this preview owns
+#   preview.sh prs                        print "<pr|nightly> <created>" for each preview that owns a resource
+#   preview.sh cap                        print open=<n> and full=true|false (full at 3 previews or more)
 #   preview.sh invariants                 fail when preview holds a production secret or reaches prod
 #   preview.sh budget                     print the connections one PR fleet can hold at peak
 set -euo pipefail
@@ -36,11 +37,16 @@ die() {
   exit 1
 }
 
-pr_arg() {
-  [[ "${1:-}" =~ ^[0-9]+$ ]] || die "a PR number is required, got '${1:-}'"
+# name_arg: a PR number without a leading zero, or exactly nightly.
+name_arg() {
+  [[ "${1:-}" =~ ^[1-9][0-9]*$ || "${1:-}" == nightly ]] || die "a PR number or nightly is required, got '${1:-}'"
 }
 
-url() { printf 'https://%s-pr-%s-%s.%s.run.app' "$1" "$2" "$PROJECT_NUMBER" "$REGION"; }
+# suffix <name>: the resource-name part (pr-7, nightly). dbname <name>: preview-db accepts only pr_<N>, so nightly is pr_0.
+suffix() { if [ "$1" = nightly ]; then echo nightly; else echo "pr-$1"; fi; }
+dbname() { if [ "$1" = nightly ]; then echo pr_0; else echo "pr_$1"; fi; }
+
+url() { printf 'https://%s-%s-%s.%s.run.app' "$1" "$(suffix "$2")" "$PROJECT_NUMBER" "$REGION"; }
 
 cmd_urls() {
   local pr=$1
@@ -53,9 +59,9 @@ cmd_urls() {
   echo "support_console_url=$(url support-console "$pr")"
 }
 
-image() { printf '%s/%s:pr-%s-%s' "$REGISTRY" "$2" "$1" "$3"; }
+image() { printf '%s/%s:%s-%s' "$REGISTRY" "$2" "$(suffix "$1")" "$3"; }
 
-secret() { printf 'pr-%s-%s' "$1" "$2"; }
+secret() { printf '%s-%s' "$(suffix "$1")" "$2"; }
 
 # The tables are case functions: bash 3.2 has no associative arrays, and only a function crosses export -f.
 max_instances() {
@@ -99,7 +105,8 @@ repool() {
 }
 
 cmd_secrets() {
-  local pr=$1 db="pr_$1" have name ip pool
+  local pr=$1 db have name ip pool
+  db=$(dbname "$pr")
   have=$(gcloud secrets list --project "$PROJECT" --filter "labels.$LABEL=$pr" --format 'value(name)')
   ip=$(gcloud sql instances describe preview --project "$PROJECT" --format 'value(ipAddresses[0].ipAddress)')
   [ -n "$ip" ] || die "the preview Cloud SQL instance has no private IP"
@@ -125,7 +132,7 @@ cmd_secrets() {
   done
 }
 
-bucket() { printf 'gs://ascomply-preview-pr-%s' "$1"; }
+bucket() { printf 'gs://ascomply-preview-%s' "$(suffix "$1")"; }
 
 cmd_bucket() {
   local pr=$1
@@ -138,20 +145,20 @@ cmd_bucket() {
   echo "created $(bucket "$pr")"
 }
 
-# database <pr> <action>: the preview-db job drops pr_<N> WITH (FORCE), then creates it for recreate.
+# database <name> <action>: the preview-db job drops the database WITH (FORCE), then creates it for recreate.
 database() {
-  gcloud run jobs execute preview-db "${gc[@]}" --wait --update-env-vars "PR_DB=pr_$1,ACTION=$2"
+  gcloud run jobs execute preview-db "${gc[@]}" --wait --update-env-vars "PR_DB=$(dbname "$1"),ACTION=$2"
 }
 
 # env_file <pr> <svc> <file>: the plain environment of one service, as gcloud --env-vars-file YAML.
 env_file() {
   local pr=$1 svc=$2 file=$3 issuers
   {
-    echo "DEPLOY_ENV: pr-$pr"
+    echo "DEPLOY_ENV: $(suffix "$pr")"
     echo "ENVIRONMENT: development"
     case "$svc" in
       gateway)
-        issuers=$(jq -cn --arg i "urn:ascomply:auth:pr-$pr" --arg u "$(url auth "$pr")/.well-known/jwks.json" \
+        issuers=$(jq -cn --arg i "urn:ascomply:auth:$(suffix "$pr")" --arg u "$(url auth "$pr")/.well-known/jwks.json" \
           '[{issuer: $i, jwks_url: $u}]')
         # The PR build serves a mock issuer on its own port; its own GoTrue is the second issuer.
         echo "GATEWAY_MOCK_ISSUER: 'true'"
@@ -166,7 +173,7 @@ env_file() {
         ;;
       auth)
         echo "API_EXTERNAL_URL: $(url auth "$pr")"
-        echo "GOTRUE_JWT_ISSUER: urn:ascomply:auth:pr-$pr"
+        echo "GOTRUE_JWT_ISSUER: urn:ascomply:auth:$(suffix "$pr")"
         echo "GOTRUE_SITE_URL: $(url landing "$pr")"
         echo "GOTRUE_DISABLE_SIGNUP: 'false'"
         # No mail: a preview confirms a sign-up at once.
@@ -189,7 +196,7 @@ env_file() {
       invoice | submission | worker)
         echo "AI_FAKE: 'true'"
         echo "JEV_FAKE: 'true'"
-        echo "DOCUMENT_BUCKET: ascomply-preview-pr-$pr"
+        echo "DOCUMENT_BUCKET: ascomply-preview-$(suffix "$pr")"
         echo "DOCUMENT_ENDPOINT: https://storage.googleapis.com"
         echo "DOCUMENT_REGION: auto"
         ;;
@@ -221,7 +228,7 @@ secrets_of() {
   printf '%s' "${out[*]-}"
 }
 
-# deploy_one <pr> <sha> <svc>: one Cloud Run service, <svc>-pr-<N>, from this commit's image.
+# deploy_one <name> <sha> <svc>: one Cloud Run service, <svc>-<suffix>, from this commit's image.
 deploy_one() {
   local pr=$1 sha=$2 svc=$3 envf secrets min=0 cpu=1 memory=512Mi args
   case "$svc" in
@@ -247,14 +254,14 @@ deploy_one() {
   esac
   # The worker runs River and the sweepers between requests.
   [ "$svc" != worker ] || args+=(--no-cpu-throttling)
-  gcloud run deploy "$svc-pr-$pr" "${gc[@]}" "${args[@]}"
+  gcloud run deploy "$svc-$(suffix "$pr")" "${gc[@]}" "${args[@]}"
   rm -f "$envf"
 }
 
 cmd_deploy() {
   local pr=$1 sha=$2 failed=0 svc
   shift 2
-  export -f deploy_one env_file secrets_of url image secret max_instances gotrue_pool
+  export -f deploy_one env_file secrets_of url image secret suffix dbname max_instances gotrue_pool
   export PROJECT PROJECT_NUMBER REGION REGISTRY RUNTIME LABEL
   # Four at a time: africa-south1 allows 20 vCPU of allocation per minute per project.
   # shellcheck disable=SC2016 # the child bash expands its own arguments
@@ -267,41 +274,41 @@ cmd_deploy() {
   [ "$failed" = 0 ] || die "a service did not deploy; its log is above"
 }
 
-# migrate_job <pr> <sha>: the per-PR migrate job; it bootstraps, migrates and seeds pr_<N>.
+# migrate_job <name> <sha>: the per-preview migrate job; it bootstraps, migrates and seeds the database.
 migrate_job() {
   local pr=$1 sha=$2 envf
   envf=$(mktemp)
   {
-    echo "DEPLOY_ENV: pr-$pr"
+    echo "DEPLOY_ENV: $(suffix "$pr")"
     echo "ENVIRONMENT: development"
     echo "GATEWAY_DB_BOOTSTRAP: 'true'"
-    echo "DOCUMENT_BUCKET: ascomply-preview-pr-$pr"
+    echo "DOCUMENT_BUCKET: ascomply-preview-$(suffix "$pr")"
     echo "DOCUMENT_ENDPOINT: https://storage.googleapis.com"
     echo "DOCUMENT_REGION: auto"
   } >"$envf"
-  gcloud run jobs deploy "migrate-pr-$pr" "${gc[@]}" --image "$(image "$pr" migrate "$sha")" \
+  gcloud run jobs deploy "migrate-$(suffix "$pr")" "${gc[@]}" --image "$(image "$pr" migrate "$sha")" \
     --service-account "$RUNTIME" --labels "$LABEL=$pr" --env-vars-file "$envf" --max-retries 0 --task-timeout 900s \
     --network preview --subnet run --vpc-egress private-ranges-only \
     --set-secrets "DATABASE_SUPERUSER_URL=$(secret "$pr" database-superuser-url):latest,DATABASE_MIGRATION_URL=$(secret "$pr" database-migration-url):latest,DATABASE_URL=$(secret "$pr" database-app-url):latest,MIGRATOR_PASSWORD=migrator-password:latest,APP_PASSWORD=app-password:latest,READER_PASSWORD=reader-password:latest,GATEWAY_PASSWORD=gateway-password:latest,AUTH_ADMIN_PASSWORD=auth-admin-password:latest,DOCUMENT_ACCESS_KEY_ID=document-access-key-id:latest,DOCUMENT_SECRET_ACCESS_KEY=document-secret-key:latest"
   rm -f "$envf"
-  gcloud run jobs execute "migrate-pr-$pr" "${gc[@]}" --wait
+  gcloud run jobs execute "migrate-$(suffix "$pr")" "${gc[@]}" --wait
 }
 
-# grant <pr>: GoTrue creates auth.users on its first boot, after the migrate job; the
+# grant <name>: GoTrue creates auth.users on its first boot, after the migrate job; the
 # second run migrates nothing, seeds nothing and grants.
 cmd_grant() {
-  gcloud run jobs execute "migrate-pr-$1" "${gc[@]}" --wait --update-env-vars GATEWAY_DB_BOOTSTRAP=false
+  gcloud run jobs execute "migrate-$(suffix "$1")" "${gc[@]}" --wait --update-env-vars GATEWAY_DB_BOOTSTRAP=false
 }
 
 cmd_teardown() {
   local pr=$1 svc name failed=0
   for svc in "${BACKENDS[@]}" "${SITES[@]}"; do
-    if gcloud run services describe "$svc-pr-$pr" "${gc[@]}" >/dev/null 2>&1; then
-      gcloud run services delete "$svc-pr-$pr" "${gc[@]}" || failed=1
+    if gcloud run services describe "$svc-$(suffix "$pr")" "${gc[@]}" >/dev/null 2>&1; then
+      gcloud run services delete "$svc-$(suffix "$pr")" "${gc[@]}" || failed=1
     fi
   done
-  if gcloud run jobs describe "migrate-pr-$pr" "${gc[@]}" >/dev/null 2>&1; then
-    gcloud run jobs delete "migrate-pr-$pr" "${gc[@]}" || failed=1
+  if gcloud run jobs describe "migrate-$(suffix "$pr")" "${gc[@]}" >/dev/null 2>&1; then
+    gcloud run jobs delete "migrate-$(suffix "$pr")" "${gc[@]}" || failed=1
   fi
   database "$pr" drop || failed=1
   if gcloud storage buckets describe "$(bucket "$pr")" --project "$PROJECT" >/dev/null 2>&1; then
@@ -329,6 +336,15 @@ cmd_prs() {
 }
 
 # budget: Cloud SQL connections one fleet holds at peak (instances x pool), from the deploy and secrets tables.
+# cap: how many previews exist (a nightly counts) and whether three are open (ci-preview.md).
+cmd_cap() {
+  local prs n
+  prs=$(cmd_prs)
+  n=$(grep -c . <<<"$prs" || true)
+  echo "open=$n"
+  [ "$n" -ge 3 ] && echo "full=true" || echo "full=false"
+}
+
 cmd_budget() {
   local svc kv name pool n leader total=0
   for svc in "${BACKENDS[@]}"; do
@@ -390,18 +406,19 @@ cmd_invariants() {
 }
 
 case "${1:-}" in
-  urls) pr_arg "${2:-}"; cmd_urls "$2" ;;
-  image) pr_arg "${2:-}"; image "$2" "${3:?image}" "${4:?sha}" ;;
-  secrets) pr_arg "${2:-}"; cmd_secrets "$2" ;;
-  bucket) pr_arg "${2:-}"; cmd_bucket "$2" ;;
-  database) pr_arg "${2:-}"; database "$2" recreate ;;
-  migrate) pr_arg "${2:-}"; migrate_job "$2" "${3:?sha}" ;;
-  grant) pr_arg "${2:-}"; cmd_grant "$2" ;;
-  deploy) pr_arg "${2:-}"; [ "$#" -ge 4 ] || die "usage: preview.sh deploy <pr> <sha> <svc>..."; shift; cmd_deploy "$@" ;;
-  token) pr_arg "${2:-}"; gcloud secrets versions access latest --secret "$(secret "$2" gateway-token)" --project "$PROJECT" ;;
-  teardown) pr_arg "${2:-}"; cmd_teardown "$2" ;;
+  urls) name_arg "${2:-}"; cmd_urls "$2" ;;
+  image) name_arg "${2:-}"; image "$2" "${3:?image}" "${4:?sha}" ;;
+  secrets) name_arg "${2:-}"; cmd_secrets "$2" ;;
+  bucket) name_arg "${2:-}"; cmd_bucket "$2" ;;
+  database) name_arg "${2:-}"; database "$2" recreate ;;
+  migrate) name_arg "${2:-}"; migrate_job "$2" "${3:?sha}" ;;
+  grant) name_arg "${2:-}"; cmd_grant "$2" ;;
+  deploy) name_arg "${2:-}"; [ "$#" -ge 4 ] || die "usage: preview.sh deploy <pr|nightly> <sha> <svc>..."; shift; cmd_deploy "$@" ;;
+  token) name_arg "${2:-}"; gcloud secrets versions access latest --secret "$(secret "$2" gateway-token)" --project "$PROJECT" ;;
+  teardown) name_arg "${2:-}"; cmd_teardown "$2" ;;
   prs) cmd_prs ;;
+  cap) cmd_cap ;;
   invariants) cmd_invariants ;;
   budget) cmd_budget ;;
-  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|prs|invariants|budget" ;;
+  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|prs|cap|invariants|budget" ;;
 esac

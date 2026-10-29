@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -28,7 +29,22 @@ case "$1 $2 $3" in
     prev=$a
   done ;;
 "secrets create "*) cat > "$D/created-$3" ;;
-"secrets list "*) cat "$D/have" 2>/dev/null || : ;;
+"secrets list "*)
+  f=
+  prev=
+  for a in "$@"; do
+    [ "$prev" = --filter ] && f=$a
+    prev=$a
+  done
+  case "$f" in
+  *:\*) cat "$D/list-secrets" 2>/dev/null || : ;;
+  labels.preview-pr=*) cat "$D/have-${f#*=}" 2>/dev/null || cat "$D/have" 2>/dev/null || : ;;
+  *) cat "$D/have" 2>/dev/null || : ;;
+  esac ;;
+"run services describe" | "run jobs describe" | "storage buckets describe") [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
+"run services list") cat "$D/list-services" 2>/dev/null || : ;;
+"run jobs list") cat "$D/list-jobs" 2>/dev/null || : ;;
+"storage buckets list") cat "$D/list-buckets" 2>/dev/null || : ;;
 "secrets versions add") cat > "$D/added-$4" ;;
 "secrets versions access")
   prev=
@@ -264,20 +280,25 @@ func TestPreviewSecretsMakesAValidMockKey(t *testing.T) {
 
 func TestPreviewSecretsNeverPrintsTheKey(t *testing.T) {
 	t.Parallel()
-	r := runPreview(t, nil, "secrets", "7")
-	var keys []map[string]any
-	if err := json.Unmarshal([]byte(r.file(t, "created-pr-7-mock-issuer-key")), &keys); err != nil || len(keys) != 1 {
-		t.Fatalf("mock key is not a one-key JWK array: %v", err)
-	}
-	d, _ := keys[0]["d"].(string)
-	if d == "" {
-		t.Fatal("mock key has no d member")
-	}
-	if strings.Contains(r.stdout, d) || strings.Contains(r.stderr, d) {
-		t.Fatal("the key's d member reached stdout or stderr")
-	}
-	if strings.Contains(r.file(t, "calls"), d) {
-		t.Fatal("the key's d member reached gcloud argv")
+	for _, name := range []string{"7", "nightly"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, nil, "secrets", name)
+			var keys []map[string]any
+			if err := json.Unmarshal([]byte(r.file(t, "created-"+previewSuffix(name)+"-mock-issuer-key")), &keys); err != nil || len(keys) != 1 {
+				t.Fatalf("mock key is not a one-key JWK array: %v", err)
+			}
+			d, _ := keys[0]["d"].(string)
+			if d == "" {
+				t.Fatal("mock key has no d member")
+			}
+			if strings.Contains(r.stdout, d) || strings.Contains(r.stderr, d) {
+				t.Fatal("the key's d member reached stdout or stderr")
+			}
+			if strings.Contains(r.file(t, "calls"), d) {
+				t.Fatal("the key's d member reached gcloud argv")
+			}
+		})
 	}
 }
 
@@ -320,7 +341,11 @@ func prAll(t *testing.T) []string {
 	return append(previewList(t, "BACKENDS"), previewList(t, "SITES")...)
 }
 
-var tmpEnvFile = regexp.MustCompile(`--env-vars-file \S+`)
+var (
+	goldenMu    sync.Mutex
+	goldenCache = map[string]map[string]string{}
+	tmpEnvFile  = regexp.MustCompile(`--env-vars-file \S+`)
+)
 
 // normCalls sorts the gcloud calls (deploys run four at a time) and masks the temp env-file path.
 func normCalls(calls string) string {
@@ -332,7 +357,13 @@ func normCalls(calls string) string {
 // nameGoldens runs every PR-name-dependent command for one name and returns file name -> content.
 func nameGoldens(t *testing.T, name string) map[string]string {
 	t.Helper()
+	goldenMu.Lock()
+	defer goldenMu.Unlock()
+	if g, ok := goldenCache[name]; ok {
+		return g
+	}
 	out := map[string]string{}
+	goldenCache[name] = out
 	urls := runPreview(t, nil, "urls", name)
 	img := runPreview(t, nil, "image", name, "gateway", "abc123")
 	out["urls"] = urls.stdout
@@ -412,5 +443,250 @@ func TestPreviewPRSevenIsByteIdenticalToItsGoldens(t *testing.T) {
 		if string(want) != body {
 			t.Errorf("%s differs from its golden:\n--- want\n%s\n--- got\n%s", name, want, body)
 		}
+	}
+}
+
+func prGolden(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", "preview-pr7", name+".golden"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// asNightly rewrites a PR 7 output into what the nightly must print.
+func asNightly(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "ascomply-preview-pr-7", "ascomply-preview-nightly"), "pr-7", "nightly")
+}
+
+func TestPreviewNameArgRefusesNearMisses(t *testing.T) {
+	t.Parallel()
+	for _, bad := range []string{"Nightly", "nightly2", "nightly ", "pr-7", "", "-1", "7a", "0", "07"} {
+		for _, cmd := range []string{"urls", "token", "teardown"} {
+			t.Run(cmd+"/"+bad, func(t *testing.T) {
+				t.Parallel()
+				r := runPreview(t, nil, cmd, bad)
+				if r.code != 1 || !strings.Contains(r.stderr, "a PR number or nightly is required, got '"+bad+"'") || r.exists("calls") {
+					t.Fatalf("exit %d, gcloud called %v, stderr %q", r.code, r.exists("calls"), r.stderr)
+				}
+			})
+		}
+	}
+}
+
+func TestPreviewNightlyURLsAndImage(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "urls", "nightly")
+	const host = "-nightly-944095690109.africa-south1.run.app"
+	want := "gateway_url=https://gateway" + host + "\napp_url=https://app" + host + "\nlanding_url=https://landing" + host +
+		"\nlibrary_url=https://library" + host + "/library\nblog_url=https://blog" + host + "/blog\nops_console_url=https://ops-console" + host +
+		"\nsupport_console_url=https://support-console" + host + "\n"
+	if r.stdout != want {
+		t.Errorf("urls:\n%s\nwant\n%s", r.stdout, want)
+	}
+	img := runPreview(t, nil, "image", "nightly", "gateway", "abc123")
+	if img.stdout != "africa-south1-docker.pkg.dev/ascomply-preview/images/pr/gateway:nightly-abc123" {
+		t.Errorf("image = %q", img.stdout)
+	}
+}
+
+func TestPreviewNightlyEnvFilesDifferOnlyByName(t *testing.T) {
+	t.Parallel()
+	got := nameGoldens(t, "nightly")
+	for _, svc := range prAll(t) {
+		if want := asNightly(prGolden(t, "env-"+svc)); got["env-"+svc] != want {
+			t.Errorf("env-%s:\n%s\nwant\n%s", svc, got["env-"+svc], want)
+		}
+	}
+	if want := asNightly(prGolden(t, "env-migrate")); got["env-migrate"] != want {
+		t.Errorf("migrate env:\n%s\nwant\n%s", got["env-migrate"], want)
+	}
+}
+
+func TestPreviewNightlyIssuer(t *testing.T) {
+	t.Parallel()
+	got := nameGoldens(t, "nightly")
+	if !strings.Contains(got["env-auth"], "GOTRUE_JWT_ISSUER: urn:ascomply:auth:nightly\n") {
+		t.Errorf("auth env lacks the nightly issuer:\n%s", got["env-auth"])
+	}
+	gw := got["env-gateway"]
+	for _, w := range []string{`"issuer":"urn:ascomply:auth:nightly"`, `"jwks_url":"https://auth-nightly-944095690109.africa-south1.run.app/.well-known/jwks.json"`, "DEPLOY_ENV: nightly\n"} {
+		if !strings.Contains(gw, w) {
+			t.Errorf("gateway env lacks %s:\n%s", w, gw)
+		}
+	}
+}
+
+// argvBySvc maps service -> its deploy line from a normalised deploy-argv golden.
+func argvBySvc(argv, suffix string) map[string]string {
+	out := map[string]string{}
+	for _, line := range nonBlankLines(argv) {
+		f := strings.Fields(line)
+		out[strings.TrimSuffix(f[2], "-"+suffix)] = line
+	}
+	return out
+}
+
+func TestPreviewNightlySetSecretsMirrorThePR(t *testing.T) {
+	t.Parallel()
+	pr, ni := argvBySvc(prGolden(t, "deploy-argv"), "pr-7"), argvBySvc(nameGoldens(t, "nightly")["deploy-argv"], "nightly")
+	for _, svc := range prAll(t) {
+		want := strings.ReplaceAll(flagValue(pr[svc], "--set-secrets"), "pr-7-", "nightly-")
+		if got := flagValue(ni[svc], "--set-secrets"); got != want {
+			t.Errorf("%s --set-secrets = %q, want %q", svc, got, want)
+		}
+		if !strings.Contains(ni[svc], "--labels preview-pr=nightly ") {
+			t.Errorf("%s is not labelled preview-pr=nightly: %s", svc, ni[svc])
+		}
+	}
+}
+
+func TestPreviewNightlyDeployMatchesTheBudgetTables(t *testing.T) {
+	t.Parallel()
+	pr, ni := argvBySvc(prGolden(t, "deploy-argv"), "pr-7"), argvBySvc(nameGoldens(t, "nightly")["deploy-argv"], "nightly")
+	for _, svc := range prAll(t) {
+		if a, b := flagValue(pr[svc], "--max-instances"), flagValue(ni[svc], "--max-instances"); a != b {
+			t.Errorf("%s --max-instances: PR %s, nightly %s", svc, a, b)
+		}
+	}
+	if want := strings.ReplaceAll(prGolden(t, "secrets-created"), "pr-7-", "nightly-"); strings.ReplaceAll(nameGoldens(t, "nightly")["secrets-created"], "/pr_0?", "/pr_7?") != want {
+		t.Errorf("nightly secrets and pools differ from the PR's:\n%s", nameGoldens(t, "nightly")["secrets-created"])
+	}
+	if n := budgetFleet(t, runPreview(t, nil, "budget")); n != 30 {
+		t.Errorf("fleet = %d, want 30", n)
+	}
+}
+
+func TestPreviewSecretsNightlyMakesOnlyThePRSet(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "secrets", "nightly")
+	if r.code != 0 {
+		t.Fatalf("secrets exited %d: %s", r.code, r.stderr)
+	}
+	want := map[string]bool{}
+	for _, n := range previewList(t, "PR_SECRETS") {
+		want["created-nightly-"+n] = true
+	}
+	entries, _ := os.ReadDir(r.dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "created-") {
+			if !want[e.Name()] {
+				t.Errorf("unexpected secret %s", e.Name())
+			}
+			delete(want, e.Name())
+		}
+	}
+	for n := range want {
+		t.Errorf("secret %s not created", n)
+	}
+	calls := r.file(t, "calls")
+	if n := strings.Count(calls, "secrets create nightly-"); n != len(previewList(t, "PR_SECRETS")) || strings.Count(calls, "--labels preview-pr=nightly") != n {
+		t.Errorf("creates or labels wrong:\n%s", calls)
+	}
+	for _, db := range []string{"superuser", "migration", "app", "worker", "reader", "gateway", "auth"} {
+		if dsn := r.file(t, "created-nightly-database-"+db+"-url"); !strings.Contains(dsn, ":5432/pr_0?sslmode=require") {
+			t.Errorf("database-%s-url = %q, want database pr_0", db, dsn)
+		}
+	}
+}
+
+func TestPreviewNightlyBucketDatabaseMigrateGrantToken(t *testing.T) {
+	t.Parallel()
+	absent := func(dir string) { writeIn(t, dir, "exists", "none\n") }
+	b := runPreview(t, absent, "bucket", "nightly")
+	bc := b.file(t, "calls")
+	for _, w := range []string{"storage buckets create gs://ascomply-preview-nightly ", "storage buckets update gs://ascomply-preview-nightly ", "--update-labels preview-pr=nightly"} {
+		if !strings.Contains(bc, w) {
+			t.Errorf("bucket calls lack %q:\n%s", w, bc)
+		}
+	}
+	if c := runPreview(t, nil, "database", "nightly").file(t, "calls"); !strings.Contains(c, "run jobs execute preview-db ") || !strings.HasSuffix(strings.TrimSpace(c), "--update-env-vars PR_DB=pr_0,ACTION=recreate") {
+		t.Errorf("database calls:\n%s", c)
+	}
+	m := runPreview(t, nil, "migrate", "nightly", "abc123")
+	for _, w := range []string{"run jobs deploy migrate-nightly ", "--labels preview-pr=nightly ", "images/pr/migrate:nightly-abc123", "run jobs execute migrate-nightly "} {
+		if !strings.Contains(m.file(t, "calls"), w) {
+			t.Errorf("migrate calls lack %q", w)
+		}
+	}
+	env := m.file(t, "env-job-migrate-nightly")
+	for _, w := range []string{"DEPLOY_ENV: nightly\n", "DOCUMENT_BUCKET: ascomply-preview-nightly\n"} {
+		if !strings.Contains(env, w) {
+			t.Errorf("migrate env lacks %q:\n%s", w, env)
+		}
+	}
+	if c := runPreview(t, nil, "grant", "nightly").file(t, "calls"); !strings.HasPrefix(c, "run jobs execute migrate-nightly ") {
+		t.Errorf("grant calls:\n%s", c)
+	}
+	if c := runPreview(t, nil, "token", "nightly").file(t, "calls"); !strings.Contains(c, "--secret nightly-gateway-token ") {
+		t.Errorf("token calls:\n%s", c)
+	}
+}
+
+func TestPreviewTeardownNightlyDeletesOnlyItsOwn(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) {
+		writeIn(t, dir, "exists", "gateway-nightly\ngateway-pr-7\nmigrate-nightly\nmigrate-pr-7\ngs://ascomply-preview-nightly\n")
+		writeIn(t, dir, "have-nightly", "nightly-gateway-token\nnightly-s2s-token\n")
+		writeIn(t, dir, "have-7", "pr-7-gateway-token\n")
+	}, "teardown", "nightly")
+	if r.code != 0 || r.stdout != "PR nightly: preview deleted\n" {
+		t.Fatalf("exit %d, stdout %q, stderr %q", r.code, r.stdout, r.stderr)
+	}
+	var deletes []string
+	for _, l := range nonBlankLines(r.file(t, "calls")) {
+		if strings.Contains(l, " delete ") || strings.Contains(l, "storage rm ") {
+			deletes = append(deletes, strings.Fields(l)[2]+" "+strings.Fields(l)[3])
+		}
+	}
+	want := []string{"services gateway-nightly", "jobs migrate-nightly", "rm --recursive", "delete nightly-gateway-token", "delete nightly-s2s-token"}
+	if got := strings.Join(deletes, "|"); len(deletes) != len(want) || strings.Contains(got, "pr-7") {
+		t.Errorf("deletes = %v, want %v", deletes, want)
+	}
+	c := r.file(t, "calls")
+	for _, w := range []string{"gs://ascomply-preview-nightly", "--filter labels.preview-pr=nightly ", "PR_DB=pr_0,ACTION=drop"} {
+		if !strings.Contains(c, w) {
+			t.Errorf("calls lack %q", w)
+		}
+	}
+	if strings.Contains(c, "delete gateway-pr-7") || strings.Contains(c, "migrate-pr-7") || strings.Contains(c, "pr_7") {
+		t.Errorf("teardown reached a PR's resources:\n%s", c)
+	}
+}
+
+func TestPreviewPrsListsTheNightly(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) {
+		writeIn(t, dir, "list-services", "nightly 2026-10-29T03:00:00Z\n7 2026-10-28T05:00:00Z\n")
+		writeIn(t, dir, "list-jobs", "nightly 2026-10-29T01:00:00Z\n")
+		writeIn(t, dir, "list-buckets", "7 2026-10-28T02:00:00Z\n")
+		writeIn(t, dir, "list-secrets", "nightly 2026-10-29T00:30:00Z\n7 2026-10-28T06:00:00Z\n")
+	}, "prs")
+	if want := "nightly 2026-10-29T00:30:00Z\n7 2026-10-28T02:00:00Z\n"; r.code != 0 || r.stdout != want {
+		t.Fatalf("exit %d, prs = %q, want %q", r.code, r.stdout, want)
+	}
+}
+
+func TestPreviewCapCountsEveryPreview(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		entries string
+		n       int
+		full    bool
+	}{
+		{"", 0, false},
+		{"5 t\n6 t\n", 2, false},
+		{"nightly t\n5 t\n6 t\n", 3, true},
+		{"nightly t\n5 t\n6 t\n9 t\n", 4, true},
+	} {
+		t.Run(strconv.Itoa(c.n), func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, func(dir string) { writeIn(t, dir, "list-secrets", c.entries) }, "cap")
+			want := "open=" + strconv.Itoa(c.n) + "\nfull=" + strconv.FormatBool(c.full) + "\n"
+			if r.code != 0 || r.stdout != want {
+				t.Fatalf("exit %d, cap = %q, want %q", r.code, r.stdout, want)
+			}
+		})
 	}
 }

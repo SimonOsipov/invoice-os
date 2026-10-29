@@ -40,7 +40,8 @@ paths:
 - Pick the mode from the vendor keys and `CONTACTS_FAKE`: `real`, `fake` or `off`. In `off` the worker fetches no `contacts` job.
 - Refuse to boot when `CONTACTS_FAKE` is true and any key is set, or when only some keys are set.
 - Name variables in a boot error, never their values.
-- Run a preview environment in `fake` mode and discard its vendor keys.
+- Run a preview in `fake` mode and discard its vendor keys.
+- The nightly reads the contact keys like production. Its newsletter is `fake` and its mail is captured.
 - Answer 404 to an intake request that carries `X-User-ID`. Require the gateway token on every intake route.
 - Answer 404 at the gateway for any `/api/<service>/internal/...` path, raw and cleaned.
 - Open one HubSpot deal per demo request and one per first registration.

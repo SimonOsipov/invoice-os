@@ -5,12 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SimonOsipov/invoice-os/internal/accountevents"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 )
 
-// The reader's list, the gateway constants, the mover's list and firmWideEvents name the same six events.
+// The reader's list, the gateway constants, and firmWideEvents name the same six events.
 func TestAccountEvents_ListMatchesTheGateway(t *testing.T) {
 	gw := []string{
 		gateway.EventSignedIn, gateway.EventSignInFailed, gateway.EventSignInBlocked,
@@ -32,7 +31,6 @@ func TestAccountEvents_ListMatchesTheGateway(t *testing.T) {
 	}
 	for name, got := range map[string][]string{
 		"audit.AccountEvents":      audit.AccountEvents,
-		"accountevents.Events":     accountevents.Events,
 		"firmWideEvents (account)": firm,
 	} {
 		if g := slices.Sorted(slices.Values(got)); !slices.Equal(g, want) {

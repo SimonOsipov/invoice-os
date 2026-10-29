@@ -6,10 +6,11 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 )
 
-// AC 8: the gateway constants, the package list and the outbox CHECK name the same six events.
+// AC 8: the gateway constants, audit.AccountEvents and the outbox CHECK name the same six events.
 func TestEvents_TheThreeListsAgree(t *testing.T) {
 	e := newEnv(t)
 
@@ -28,13 +29,10 @@ func TestEvents_TheThreeListsAgree(t *testing.T) {
 		check = append(check, m[1])
 	}
 
-	if len(Events) == 0 {
-		t.Fatal("accountevents.Events is empty, want the six names")
-	}
 	if len(check) != 6 || len(gw) != 6 {
 		t.Fatalf("CHECK names %d event(s), gateway %d, want 6 each; CHECK: %s", len(check), len(gw), def)
 	}
-	for name, got := range map[string][]string{"accountevents": Events, "gateway": gw, "outbox CHECK": check} {
+	for name, got := range map[string][]string{"audit.AccountEvents": audit.AccountEvents, "gateway": gw, "outbox CHECK": check} {
 		if want := sorted(slices.Clone(check)...); !slices.Equal(sorted(slices.Clone(got)...), want) {
 			t.Errorf("%s names %v, want the CHECK's %v", name, sorted(slices.Clone(got)...), want)
 		}

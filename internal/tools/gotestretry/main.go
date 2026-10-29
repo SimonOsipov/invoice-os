@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, goRunner))
+	os.Exit(run(os.Args[1:], os.Stderr, goRunner))
 }
 
 // goRunner runs `go args...`, streaming its stdout to out. Exit 1 when go cannot start.

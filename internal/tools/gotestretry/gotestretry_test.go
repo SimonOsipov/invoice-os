@@ -47,7 +47,7 @@ func invoke(t *testing.T, f *fake, goArgs ...string) (code int, out string, stde
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "r.jsonl")
 	var eb bytes.Buffer
-	code = run(append([]string{"-out", path, "--"}, goArgs...), io.Discard, &eb, f.run)
+	code = run(append([]string{"-out", path, "--"}, goArgs...), &eb, f.run)
 	b, _ := os.ReadFile(path)
 	return code, string(b), eb.String()
 }
@@ -198,7 +198,7 @@ func TestRun_UsageErrors(t *testing.T) {
 		{"-out", "f", "stray", "--", "./..."},
 	} {
 		f := &fake{}
-		code := run(args, io.Discard, io.Discard, f.run)
+		code := run(args, io.Discard, f.run)
 		if code != 2 || len(f.argvs) != 0 {
 			t.Errorf("args %q: code=%d runner calls=%d", args, code, len(f.argvs))
 		}
@@ -233,10 +233,40 @@ func TestRun_TruncatesExistingOutFile(t *testing.T) {
 	}
 	stream := ev("pass", "x", "TestA", "")
 	f := &fake{calls: []call{{stream, 0}}}
-	if code := run([]string{"-out", path, "--", "./x"}, io.Discard, io.Discard, f.run); code != 0 {
+	if code := run([]string{"-out", path, "--", "./x"}, io.Discard, f.run); code != 0 {
 		t.Fatalf("code=%d", code)
 	}
 	if b, _ := os.ReadFile(path); string(b) != stream {
 		t.Fatalf("out = %q", b)
+	}
+}
+
+func TestRun_PackageLevelOutputFromTestMainRerunsWholePackage(t *testing.T) {
+	s := ev("fail", "p", "TestX", "") + ev("output", "p", "", "leak: goroutine still running\n") +
+		ev("output", "p", "", "FAIL\tp\t0.1s\n") + ev("fail", "p", "", "")
+	f := &fake{calls: []call{{s, 1}, {"", 0}}}
+	code, _, _ := invoke(t, f, "-run", "Test", "./p")
+	if code != 0 || len(f.argvs) != 2 || f.argvs[1] != "test -json -count=1 -run Test p" {
+		t.Fatalf("code=%d argvs=%q", code, f.argvs)
+	}
+}
+
+func TestRun_StandardPackageLinesKeepTheNarrowRerun(t *testing.T) {
+	s := ev("fail", "p", "TestX", "") + ev("output", "p", "", "FAIL\n") + ev("output", "p", "", "exit status 1\n") +
+		ev("output", "p", "", "coverage: 10.0% of statements\n") + ev("output", "p", "", "FAIL\tp\t0.1s\n") + ev("fail", "p", "", "")
+	f := &fake{calls: []call{{s, 1}, {"", 0}}}
+	invoke(t, f, "./p")
+	if len(f.argvs) != 2 || f.argvs[1] != "test -json -count=1 -run ^(TestX)$ p" {
+		t.Fatalf("argvs=%q", f.argvs)
+	}
+}
+
+func TestRun_RerunAfterMidLineEndKeepsEveryRerunEvent(t *testing.T) {
+	partial := ev("fail", "p", "TestX", "") + ev("fail", "p", "", "") + `{"Action":"out`
+	r := ev("run", "p", "TestX", "") + ev("pass", "p", "TestX", "") + ev("pass", "p", "", "")
+	f := &fake{calls: []call{{partial, 1}, {r, 0}}}
+	_, out, _ := invoke(t, f, "./p")
+	if out != partial+"\n"+r {
+		t.Fatalf("out = %q", out)
 	}
 }

@@ -25,10 +25,11 @@ type pkgState struct {
 	failed      bool // package-level fail action
 	buildFailed bool
 	panicked    bool
+	foreign     bool              // package-level output that is not a standard go test line
 	tests       map[string]string // test -> last run/pass/fail/skip action
 }
 
-func run(args []string, stdout, stderr io.Writer, runGo runner) int {
+func run(args []string, stderr io.Writer, runGo runner) int {
 	usage := func() int {
 		fmt.Fprintln(stderr, "usage: gotestretry -out <file> -- <go test args>")
 		return 2
@@ -84,7 +85,7 @@ func run(args []string, stdout, stderr io.Writer, runGo runner) int {
 		}
 		argv := []string{"test", "-json", "-count=1"}
 		var label string
-		if failed := failedTopLevel(p); p.panicked || unfinished(p) || len(failed) == 0 {
+		if failed := failedTopLevel(p); p.panicked || p.foreign || unfinished(p) || len(failed) == 0 {
 			argv = append(argv, flags...)
 			if runVal != "" {
 				argv = append(argv, "-run", runVal)
@@ -116,6 +117,17 @@ func rerun(path string, argv []string, runGo runner) int {
 		return 1
 	}
 	defer f.Close()
+	// A cut-off stream must not swallow the first re-run event.
+	if st, err := f.Stat(); err == nil && st.Size() > 0 {
+		last := make([]byte, 1)
+		if rf, err := os.Open(path); err == nil {
+			_, rerr := rf.ReadAt(last, st.Size()-1)
+			rf.Close()
+			if rerr == nil && last[0] != '\n' {
+				f.WriteString("\n")
+			}
+		}
+	}
 	return runGo(argv, f)
 }
 
@@ -149,6 +161,9 @@ func consume(p *pkgState, e event) {
 		p.panicked = true
 	}
 	if e.Test == "" {
+		if e.Action == "output" && !standardPkgLine(e.Output) {
+			p.foreign = true
+		}
 		if e.Action == "fail" {
 			p.failed = true
 			p.buildFailed = e.FailedBuild != ""
@@ -159,6 +174,13 @@ func consume(p *pkgState, e event) {
 	case "run", "pass", "fail", "skip":
 		p.tests[e.Test] = e.Action
 	}
+}
+
+// standardPkgLine reports whether a package-level output line is one go test prints on its own.
+func standardPkgLine(out string) bool {
+	l := strings.TrimSpace(out)
+	return l == "" || l == "FAIL" || l == "PASS" || l == "ok" || strings.HasPrefix(l, "FAIL\t") ||
+		strings.HasPrefix(l, "ok\t") || strings.HasPrefix(l, "coverage:") || strings.HasPrefix(l, "exit status ")
 }
 
 func failedTopLevel(p *pkgState) []string {

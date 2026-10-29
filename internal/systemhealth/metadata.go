@@ -25,7 +25,7 @@ type Google struct {
 	Monitoring, Run string // base URLs; a test points them at an httptest.Server
 	Client          *http.Client
 	Meta            *Metadata
-	// Suffix is "-pr-<N>" on a PR preview or "-nightly" on the nightly: reads keep that PR's services and drop it from names.
+	// Suffix is "-pr-<N>" on a PR preview or "-nightly" on the nightly: reads keep services with that suffix and drop it from names.
 	Suffix string
 }
 

@@ -14,6 +14,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  NIGHTLY_RESULTS: ${{ github.event_name == 'workflow_dispatch' && 'nightly-results' || '' }}
+
 jobs:
   # Detect which parts of the monorepo changed so SPA-only PRs skip Go and
   # Go-only PRs skip the frontend. A change to this workflow triggers both.
@@ -217,7 +220,12 @@ jobs:
       - name: Test
         run: |
           if [ -n "$(go list ./...)" ]; then
-            go test ./...
+            if [ -n "$NIGHTLY_RESULTS" ]; then
+              mkdir -p "$NIGHTLY_RESULTS"
+              go run ./internal/tools/gotestretry -out "$NIGHTLY_RESULTS/gotest-go.json" -- ./...
+            else
+              go test ./...
+            fi
           else
             echo "No Go packages yet — skipping test (wired for M2)."
           fi
@@ -235,6 +243,14 @@ jobs:
           set -o pipefail
           go test -count=1 -v -run 'TestTier1Accuracy' ./internal/extraction/ | tee accuracy.txt
           grep -q 'tier-1 accuracy over the golden corpus' accuracy.txt
+      - name: Upload the nightly results
+        if: always() && env.NIGHTLY_RESULTS != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-${{ github.job }}
+          path: nightly-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   # Prove the shared multi-service Dockerfile builds before a deploy. All nine Go services stamp the same root Dockerfile
   # with only the SERVICE build arg differing, so one plain service (tenancy) is
@@ -517,7 +533,21 @@ jobs:
       - name: Lint with ruff
         run: docker run --rm --entrypoint ruff docling:test check --no-cache .
       - name: Run the pytest suite
-        run: docker run --rm -v "$GITHUB_WORKSPACE:/repo:ro" -e REPO_ROOT=/repo docling:test
+        run: |
+          if [ -n "$NIGHTLY_RESULTS" ]; then
+            mkdir -p "$NIGHTLY_RESULTS" && chmod 777 "$NIGHTLY_RESULTS"
+            docker run --rm -v "$GITHUB_WORKSPACE:/repo:ro" -v "$GITHUB_WORKSPACE/$NIGHTLY_RESULTS:/results" -e REPO_ROOT=/repo docling:test sh -c 'J="-o junit_family=xunit1 -o junit_suite_name=sidecar/docling"; pytest -v --junitxml=/results/junit-docling.xml $J || pytest -v --lf --junitxml=/results/junit-docling-retry.xml $J'
+          else
+            docker run --rm -v "$GITHUB_WORKSPACE:/repo:ro" -e REPO_ROOT=/repo docling:test
+          fi
+      - name: Upload the nightly results
+        if: always() && env.NIGHTLY_RESULTS != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-${{ github.job }}
+          path: nightly-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   # The independent migration gate (M2-01, task-9.2): prove the goose harness end to
   # end against a FRESH, ephemeral Postgres. Bootstrap the
@@ -633,6 +663,14 @@ jobs:
         # that drops DATABASE_URL again) into a failed step instead of a quiet pass.
         # `TestShard` covers the shard-tenant seed tests; TestShardFirmPolicyIsAnUnpublishedCopyOfTheShippedFirmPlan skips without DATABASE_URL.
         run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestProvision|TestReset|TestPurge|TestShard|TestSuperuserDSNNotRetainedForRequestPath|TestMigrateMain|TestHandlerMapping' ./internal/platform/db/...
+      - name: Upload the nightly results
+        if: always() && env.NIGHTLY_RESULTS != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-${{ github.job }}
+          path: nightly-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   # The M2-07 adversarial RLS suite. Proves the M2-06 tenant-isolation mechanism
   # (FORCE RLS + WithinTenantTx) holds by attacking it as each role against a real
@@ -810,6 +848,14 @@ jobs:
         # The 47 TestSeed* functions self-seed (db.Seed is the system under test); must run
         # last in the job since db.Seed re-anchors created_at and re-enables every rule.
         run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestSeed|TestCIRunFilters|TestQueryTracer|TestNewPool|TestAuthAdminDSN|TestGrantAccountStateRead|TestLeader' ./internal/platform/db/...
+      - name: Upload the nightly results
+        if: always() && env.NIGHTLY_RESULTS != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-${{ github.job }}
+          path: nightly-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   # Real supabase/auth containers against a bootstrapped, migrated Postgres. They connect as
   # supabase_auth_admin: a superuser bypasses the grants and search_path this job exists to prove.
@@ -863,6 +909,14 @@ jobs:
       - name: Container logs on failure
         if: failure()
         run: for c in idp-es256 idp-hs256 idp-rebuild idp-mail idp-short mailpit; do echo "::group::$c"; docker logs --tail 100 "$c" || true; echo "::endgroup::"; done
+      - name: Upload the nightly results
+        if: always() && env.NIGHTLY_RESULTS != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-${{ github.job }}
+          path: nightly-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   # The M2-08 smoke + M2-09 exactly-once queue suites. Prove the async job spine end to end
   # against a real Postgres AS invoice_app (non-superuser, NOBYPASSRLS): the transactional-
@@ -959,6 +1013,14 @@ jobs:
           set -o pipefail
           go test -count=1 -v -run 'TestRLS_EndToEnd' ./internal/extraction/endtoend/ | tee endtoend-corpus.txt
           grep -q 'end-to-end field accuracy, document in to invoice row out' endtoend-corpus.txt
+      - name: Upload the nightly results
+        if: always() && env.NIGHTLY_RESULTS != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-${{ github.job }}
+          path: nightly-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   # M2-10 audit suite: proves audit_log rows are append-only (UPDATE/DELETE/TRUNCATE rejected
   # for the app by the missing grant and for the table owner by the append-only trigger) and
@@ -1014,6 +1076,14 @@ jobs:
         # -run filter, so new tests in ./internal/audit are picked up automatically; each
         # DB-backed test self-skips without its DATABASE_* URLs.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/audit/...
+      - name: Upload the nightly results
+        if: always() && env.NIGHTLY_RESULTS != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-${{ github.job }}
+          path: nightly-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   frontend:
     name: Frontend
@@ -1035,32 +1105,40 @@ jobs:
       - name: Build
         run: pnpm -r build
       - name: Unit tests (api-client)
-        run: pnpm --filter @invoice-os/api-client test
+        run: pnpm --filter @invoice-os/api-client test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-api-client.json}
       - name: Unit tests (monitoring)
-        run: pnpm --filter @invoice-os/monitoring test
+        run: pnpm --filter @invoice-os/monitoring test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-monitoring.json}
       - name: Unit tests (console-session)
-        run: pnpm --filter @invoice-os/console-session test
+        run: pnpm --filter @invoice-os/console-session test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-console-session.json}
       - name: Unit tests (app)
-        run: pnpm --filter @invoice-os/app test
+        run: pnpm --filter @invoice-os/app test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-app.json}
       - name: Unit tests (ops-console)
-        run: pnpm --filter @invoice-os/ops-console test
+        run: pnpm --filter @invoice-os/ops-console test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-ops-console.json}
       - name: Unit tests (landing)
-        run: pnpm --filter @invoice-os/landing test
+        run: pnpm --filter @invoice-os/landing test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-landing.json}
       # Shipped with 50 tests and no runner: this SPA appeared nowhere in this file
       # until 2026-08-13. workspaceCoverage.test.ts now fails when the next package
       # arrives the same way.
       - name: Unit tests (support-console)
-        run: pnpm --filter @invoice-os/support-console test
+        run: pnpm --filter @invoice-os/support-console test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-support-console.json}
       - name: Unit tests (library)
-        run: pnpm --filter @invoice-os/library test
+        run: pnpm --filter @invoice-os/library test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-library.json}
       - name: Unit tests (blog)
-        run: pnpm --filter @invoice-os/blog test
+        run: pnpm --filter @invoice-os/blog test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-blog.json}
       # e2e's *.test.ts files are vitest, not Playwright, so the deploy gate's
       # test:api/topology/smoke/demo jobs never ran them — they had no runner at all
       # until this line. Cheap and deployment-free: they assert local seam logic
       # (requireDbInCI, resolveTarget), not anything about a live environment.
       - name: Unit tests (e2e seams)
-        run: pnpm --filter @invoice-os/e2e test:unit
+        run: pnpm --filter @invoice-os/e2e test:unit ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-e2e.json}
+      - name: Upload the nightly results
+        if: always() && env.NIGHTLY_RESULTS != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-${{ github.job }}
+          path: nightly-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   # Small lane: a library-only PR runs this in place of Frontend.
   library:
@@ -1078,13 +1156,21 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
       - name: Unit tests (library)
-        run: pnpm --filter @invoice-os/library test
+        run: pnpm --filter @invoice-os/library test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-library.json}
       - name: Build (library)
         run: pnpm --filter @invoice-os/library build
       - name: Unit tests (monitoring)
-        run: pnpm --filter @invoice-os/monitoring test
+        run: pnpm --filter @invoice-os/monitoring test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-monitoring.json}
       - name: Unit tests (e2e seams)
-        run: pnpm --filter @invoice-os/e2e test:unit
+        run: pnpm --filter @invoice-os/e2e test:unit ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-e2e.json}
+      - name: Upload the nightly results
+        if: always() && env.NIGHTLY_RESULTS != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-${{ github.job }}
+          path: nightly-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   # Small lane: a blog-only PR runs this in place of Frontend.
   blog:
@@ -1102,13 +1188,21 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
       - name: Unit tests (blog)
-        run: pnpm --filter @invoice-os/blog test
+        run: pnpm --filter @invoice-os/blog test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-blog.json}
       - name: Build (blog)
         run: pnpm --filter @invoice-os/blog build
       - name: Unit tests (monitoring)
-        run: pnpm --filter @invoice-os/monitoring test
+        run: pnpm --filter @invoice-os/monitoring test ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-monitoring.json}
       - name: Unit tests (e2e seams)
-        run: pnpm --filter @invoice-os/e2e test:unit
+        run: pnpm --filter @invoice-os/e2e test:unit ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-e2e.json}
+      - name: Upload the nightly results
+        if: always() && env.NIGHTLY_RESULTS != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-${{ github.job }}
+          path: nightly-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   # Tests the .claude/hooks git-history guard. Not in the `ci` roll-up's needs, so not a required check.
   hooks:
@@ -1126,7 +1220,15 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
       - name: Hook tests
-        run: pnpm --filter @invoice-os/e2e test:hooks
+        run: pnpm --filter @invoice-os/e2e test:hooks ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-e2e-hooks.json}
+      - name: Upload the nightly results
+        if: always() && env.NIGHTLY_RESULTS != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-${{ github.job }}
+          path: nightly-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   # Unconditional clean-clone guard (M1-09). The path-filtered go/frontend jobs
   # above only rebuild the half that changed, and the frontend job warms the pnpm

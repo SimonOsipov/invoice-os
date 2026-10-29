@@ -1,7 +1,8 @@
-// nightly_ci_workflow_test.go pins the full mode of ci.yml: a workflow_dispatch runs every job.
+// nightly_ci_workflow_test.go pins the full mode of ci.yml: a dispatch runs every job and each results job writes and uploads its files.
 package main
 
 import (
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -219,4 +220,269 @@ func TestCIFullMode_RollupNameNotDispatchGatedFails(t *testing.T) {
 	requireCIFullModeProblems(t, mutateOnce(t, ci, "    name: "+ciNameLine+"\n", "    name: CI\n"), "roll-up")
 	swapped := "${{ " + ciDispatch + " && 'CI' || 'CI (nightly)' }}"
 	requireCIFullModeProblems(t, mutateOnce(t, ci, ciNameLine, swapped), "roll-up")
+}
+
+const (
+	ciUploadStepName = "Upload the nightly results"
+	ciEnvLine        = "NIGHTLY_RESULTS: ${{ " + ciDispatch + " && 'nightly-results' || '' }}"
+	ciGoRetryLine    = `go run ./internal/tools/gotestretry -out "$NIGHTLY_RESULTS/gotest-go.json" -- ./...`
+	ciDoclingRetry   = "|| pytest -v --lf --junitxml=/results/junit-docling-retry.xml"
+	ciDoclingToday   = `docker run --rm -v "$GITHUB_WORKSPACE:/repo:ro" -e REPO_ROOT=/repo docling:test`
+)
+
+var (
+	ciResultsJobs  = []string{"go", "migrations", "rls", "idp", "queue", "audit", "frontend", "library", "blog", "hooks", "docling-test"}
+	ciVitestJobs   = []string{"frontend", "library", "blog", "hooks"}
+	ciUploadLines  = []string{"if: always() && env.NIGHTLY_RESULTS != ''", "uses: actions/upload-artifact@v7", "with:", "name: results-${{ github.job }}", "path: nightly-results/", "if-no-files-found: warn", "retention-days: 14"}
+	ciVitestRun    = regexp.MustCompile(`^pnpm --filter @invoice-os/([\w-]+) (test(?::unit|:hooks)?)( .*)?$`)
+	ciVitestSuffix = regexp.MustCompile(`^ \$\{NIGHTLY_RESULTS:\+--retry=1 --reporter=default --reporter=json --outputFile\.json=\$GITHUB_WORKSPACE/\$NIGHTLY_RESULTS/(vitest-[\w-]+\.json)\}$`)
+)
+
+func ciVitestSuffixFor(name string) string {
+	return " ${NIGHTLY_RESULTS:+--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-" + name + ".json}"
+}
+
+func ciStepNamed(j workflowJob, name string) (workflowStep, bool) {
+	for _, s := range j.steps() {
+		if s.keys["name"] == name {
+			return s, true
+		}
+	}
+	return workflowStep{}, false
+}
+
+// ciUploadStepProblems checks the upload step of one job: present, last, exact fields.
+func ciUploadStepProblems(j workflowJob) []string {
+	steps := j.steps()
+	if len(steps) == 0 || steps[len(steps)-1].keys["name"] != ciUploadStepName {
+		return []string{j.name + " job does not end with the upload step"}
+	}
+	var got []string
+	in := false
+	for _, l := range j.lines {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(l, "      - ") {
+			in = t == "- name: "+ciUploadStepName
+			continue
+		}
+		if in && t != "" {
+			got = append(got, t)
+		}
+	}
+	if !slices.Equal(got, ciUploadLines) {
+		return []string{j.name + " job upload step differs: " + strings.Join(got, " / ")}
+	}
+	return nil
+}
+
+// ciResultsProblems names each rule of the full-mode results wiring that ci.yml breaks.
+func ciResultsProblems(yaml string) []string {
+	lines := strings.Split(yaml, "\n")
+	var p []string
+
+	if env := blockLines(lines, 0, "env"); !slices.Equal(env, []string{ciEnvLine}) {
+		p = append(p, "workflow env is not the single NIGHTLY_RESULTS line: "+strings.Join(env, " / "))
+	}
+	if n := strings.Count(yaml, "\n      NIGHTLY_RESULTS:") + strings.Count(yaml, "\n        NIGHTLY_RESULTS:"); n != 0 {
+		p = append(p, "NIGHTLY_RESULTS is defined below the workflow level")
+	}
+
+	if j, ok := ciJobOf(yaml, "go"); !ok {
+		p = append(p, "no go job")
+	} else if s, ok := ciStepNamed(j, "Test"); !ok {
+		p = append(p, "go job has no Test step")
+	} else {
+		run := s.keys["run"]
+		guard, retry, els, plain := strings.Index(run, `if [ -n "$NIGHTLY_RESULTS" ]; then`), strings.Index(run, ciGoRetryLine),
+			strings.Index(run, "else\ngo test ./...\nfi"), strings.Index(run, "go test ./...")
+		if guard < 0 || retry < guard || els < retry || plain < 0 {
+			p = append(p, "go job Test step does not run gotestretry in full mode and go test ./... otherwise")
+		}
+	}
+
+	for _, id := range ciVitestJobs {
+		j, ok := ciJobOf(yaml, id)
+		if !ok {
+			p = append(p, "no "+id+" job")
+			continue
+		}
+		seen := map[string]bool{}
+		for _, s := range j.steps() {
+			m := ciVitestRun.FindStringSubmatch(s.keys["run"])
+			if m == nil {
+				continue
+			}
+			pkg, script, rest := m[1], m[2], m[3]
+			if strings.Contains(s.keys["run"], "NIGHTLY_RESULTS") && !ciVitestSuffix.MatchString(rest) {
+				p = append(p, id+" job "+pkg+" step has a malformed results suffix")
+				continue
+			}
+			sm := ciVitestSuffix.FindStringSubmatch(rest)
+			if sm == nil {
+				p = append(p, id+" job "+pkg+" "+script+" step lacks the results suffix")
+				continue
+			}
+			if seen[sm[1]] {
+				p = append(p, id+" job writes "+sm[1]+" twice")
+			}
+			seen[sm[1]] = true
+		}
+		for _, s := range j.steps() {
+			if r := s.keys["run"]; strings.Contains(r, " build") && strings.Contains(r, "NIGHTLY_RESULTS") {
+				p = append(p, id+" job build step carries the results suffix")
+			}
+		}
+	}
+
+	if j, ok := ciJobOf(yaml, "docling-test"); !ok {
+		p = append(p, "no docling-test job")
+	} else if s, ok := ciStepNamed(j, "Run the pytest suite"); !ok {
+		p = append(p, "docling-test has no pytest step")
+	} else {
+		run := s.keys["run"]
+		for _, c := range []struct{ need, why string }{
+			{"--junitxml=/results/junit-docling.xml", "no junit-docling.xml output"},
+			{ciDoclingRetry, "no --lf re-run into junit-docling-retry.xml on failure"},
+			{"junit_family=xunit1", "no junit_family=xunit1"},
+			{"junit_suite_name=sidecar/docling", "no junit_suite_name=sidecar/docling"},
+			{"chmod 777", "no chmod 777 on the results directory"},
+			{"else\n" + ciDoclingToday + "\nfi", "today's command is not the else branch"},
+		} {
+			if !strings.Contains(run, c.need) {
+				p = append(p, "docling pytest step: "+c.why)
+			}
+		}
+	}
+
+	for _, id := range ciResultsJobs {
+		if j, ok := ciJobOf(yaml, id); !ok {
+			p = append(p, "no "+id+" job")
+		} else {
+			p = append(p, ciUploadStepProblems(j)...)
+		}
+	}
+	for _, j := range workflowJobsOf(yaml) {
+		if _, has := ciStepNamed(j, ciUploadStepName); has && !slices.Contains(ciResultsJobs, j.name) {
+			p = append(p, j.name+" job has the upload step but no results")
+		}
+	}
+	return p
+}
+
+// mutateInJob replaces old once inside the named job's block.
+func mutateInJob(t *testing.T, yml, job, old, repl string) string {
+	t.Helper()
+	loc := regexp.MustCompile(`(?m)^  ` + regexp.QuoteMeta(job) + `:$`).FindStringIndex(yml)
+	if loc == nil {
+		t.Fatalf("no job %q", job)
+	}
+	end := len(yml)
+	if next := regexp.MustCompile(`(?m)^  [a-z-]+:$`).FindStringIndex(yml[loc[1]:]); next != nil {
+		end = loc[1] + next[0]
+	}
+	return yml[:loc[0]] + mutateOnce(t, yml[loc[0]:end], old, repl) + yml[end:]
+}
+
+func requireCIResultsProblem(t *testing.T, yml string, want ...string) {
+	t.Helper()
+	got := ciResultsProblems(yml)
+	if len(got) == 0 {
+		t.Fatalf("no problems, want one naming %q", want)
+	}
+	for _, w := range want {
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, w) }) {
+			t.Errorf("problems %q lack one naming %q", got, w)
+		}
+	}
+}
+
+func ciUploadStepText() string {
+	return "      - name: " + ciUploadStepName + "\n        " + strings.Join(ciUploadLines[:3], "\n        ") +
+		"\n          " + strings.Join(ciUploadLines[3:], "\n          ") + "\n"
+}
+
+func TestCIResults_RealFileHasNoProblems(t *testing.T) {
+	t.Parallel()
+	if got := ciResultsProblems(readWorkflow(t, "ci.yml")); len(got) != 0 {
+		t.Fatalf("ci.yml results problems: %q", got)
+	}
+}
+
+func TestCIResults_EnvNotDispatchGatedFails(t *testing.T) {
+	t.Parallel()
+	yml := mutateOnce(t, readWorkflow(t, "ci.yml"), "  "+ciEnvLine+"\n", "  NIGHTLY_RESULTS: nightly-results\n")
+	requireCIResultsProblem(t, yml, "NIGHTLY_RESULTS")
+}
+
+func TestCIResults_EnvRedefinedInAJobFails(t *testing.T) {
+	t.Parallel()
+	yml := mutateInJob(t, readWorkflow(t, "ci.yml"), "audit", "    runs-on: ubuntu-latest\n",
+		"    runs-on: ubuntu-latest\n    env:\n      NIGHTLY_RESULTS: x\n")
+	requireCIResultsProblem(t, yml, "below the workflow level")
+}
+
+func TestCIResults_GoJobWritesJSONOnlyInFullMode(t *testing.T) {
+	t.Parallel()
+	yml := mutateOnce(t, readWorkflow(t, "ci.yml"), ciGoRetryLine, "go test -json ./... > x")
+	requireCIResultsProblem(t, yml, "go job Test step")
+	yml = mutateOnce(t, readWorkflow(t, "ci.yml"), "              go test ./...\n            fi", "              echo skipped\n            fi")
+	requireCIResultsProblem(t, yml, "go job Test step")
+}
+
+func TestCIResults_EveryVitestStepHasTheSuffix(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "ci.yml")
+	count := 0
+	for _, id := range ciVitestJobs {
+		j, _ := ciJobOf(yml, id)
+		for _, s := range j.steps() {
+			if ciVitestRun.MatchString(s.keys["run"]) {
+				count++
+			}
+		}
+	}
+	if count != 17 {
+		t.Fatalf("found %d vitest steps in the four jobs, want 17", count)
+	}
+	drop := mutateInJob(t, yml, "frontend", ciVitestSuffixFor("app"), "")
+	requireCIResultsProblem(t, drop, "frontend job app")
+	noRetry := mutateInJob(t, yml, "blog", "--retry=1 --reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-blog.json",
+		"--reporter=default --reporter=json --outputFile.json=$GITHUB_WORKSPACE/$NIGHTLY_RESULTS/vitest-blog.json")
+	requireCIResultsProblem(t, noRetry, "blog job blog")
+	hooks := mutateInJob(t, yml, "hooks", ciVitestSuffixFor("e2e-hooks"), "")
+	requireCIResultsProblem(t, hooks, "hooks job e2e")
+}
+
+func TestCIResults_VitestFileNamesUniquePerJob(t *testing.T) {
+	t.Parallel()
+	yml := mutateInJob(t, readWorkflow(t, "ci.yml"), "frontend", ciVitestSuffixFor("app"), ciVitestSuffixFor("library"))
+	requireCIResultsProblem(t, yml, "writes vitest-library.json twice")
+}
+
+func TestCIResults_BuildStepsUntouched(t *testing.T) {
+	t.Parallel()
+	yml := mutateInJob(t, readWorkflow(t, "ci.yml"), "library", "pnpm --filter @invoice-os/library build", "pnpm --filter @invoice-os/library build"+ciVitestSuffixFor("library"))
+	requireCIResultsProblem(t, yml, "library job build step")
+}
+
+func TestCIResults_DoclingStepWritesJUnitInFullMode(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "ci.yml")
+	requireCIResultsProblem(t, mutateOnce(t, yml, " -o junit_suite_name=sidecar/docling", ""), "junit_suite_name")
+	requireCIResultsProblem(t, mutateOnce(t, yml, " "+ciDoclingRetry+" $J", ""), "--lf re-run")
+	requireCIResultsProblem(t, mutateOnce(t, yml, "junit_family=xunit1", "junit_family=legacy"), "junit_family")
+	requireCIResultsProblem(t, mutateOnce(t, yml, "chmod 777", "chmod 755"), "chmod 777")
+	requireCIResultsProblem(t, mutateOnce(t, yml, "            "+ciDoclingToday+"\n          fi", "            true\n          fi"), "today's command")
+}
+
+func TestCIResults_UploadStepOnExactlyTheResultsJobs(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "ci.yml")
+	requireCIResultsProblem(t, mutateInJob(t, yml, "audit", ciUploadStepText(), ""), "audit job does not end")
+	requireCIResultsProblem(t, mutateInJob(t, yml, "audit", "        if: always() && env.NIGHTLY_RESULTS != ''\n", "        if: always()\n"), "audit job upload step differs")
+	requireCIResultsProblem(t, mutateInJob(t, yml, "queue", "retention-days: 14", "retention-days: 90"), "queue job upload step differs")
+	requireCIResultsProblem(t, mutateInJob(t, yml, "queue", "name: results-${{ github.job }}", "name: results"), "queue job upload step differs")
+	requireCIResultsProblem(t, mutateInJob(t, yml, "idp", "if-no-files-found: warn", "if-no-files-found: error"), "idp job upload step differs")
+	only := mutateInJob(t, yml, "stale-refs", "      - uses: actions/checkout@v4\n", "      - uses: actions/checkout@v4\n"+ciUploadStepText())
+	requireCIResultsProblem(t, only, "stale-refs job has the upload step")
 }

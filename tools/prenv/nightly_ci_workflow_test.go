@@ -3,6 +3,9 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -588,4 +591,49 @@ func TestCIResults_GoTestStepsRouteThroughGotestretry(t *testing.T) {
 	}
 	// A bare go test line outside any guard fails the same check.
 	requireCIResultsProblem(t, mutateInJob(t, yml, "queue", "      - name: Upload the nightly results\n", "      - name: Bare\n        run: go test ./x/\n      - name: Upload the nightly results\n"), "go test line lacks")
+}
+
+// TestCIResults_FullModeReportStepsRebuildTheText runs each full-mode report step with a shim
+// gotestretry: the rebuilt .txt must hold the marker its grep -q reads, and the step must go red without it.
+func TestCIResults_FullModeReportStepsRebuildTheText(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq is not installed; the report steps rebuild their text with jq")
+	}
+	yml := readWorkflow(t, "ci.yml")
+	for _, c := range []struct{ job, step, txt, fixture, marker string }{
+		{"go", "Report the Tier-1 accuracy table", "accuracy.txt", "ci_report_accuracy.jsonl", "tier-1 accuracy over the golden corpus"},
+		{"queue", "Report the wired-path decision rate", "wired-corpus.txt", "ci_report_wired.jsonl", "tier-1 decision rate through the wired worker path"},
+		{"queue", "Report the end-to-end field accuracy", "endtoend-corpus.txt", "ci_report_endtoend.jsonl", "end-to-end field accuracy, document in to invoice row out"},
+	} {
+		t.Run(c.step, func(t *testing.T) {
+			j, ok := ciJobOf(yml, c.job)
+			if !ok {
+				t.Fatalf("no %s job", c.job)
+			}
+			s, ok := ciStepNamed(j, c.step)
+			if !ok || s.keys["run"] == "" {
+				t.Fatalf("no run step %q in the %s job", c.step, c.job)
+			}
+			run := func(fixture string) (string, error) {
+				work, bin := t.TempDir(), t.TempDir()
+				writeShim(t, filepath.Join(bin, "go"), "#!/bin/sh\ncp \"$FIXTURE\" \"$4\"\n")
+				cmd := exec.Command("/bin/bash", "-e", "-c", s.keys["run"])
+				cmd.Dir = work
+				cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "NIGHTLY_RESULTS="+filepath.Join(work, "res"), "FIXTURE="+filepath.Join(repoRoot(t), "tools/prenv/testdata", fixture))
+				_, _, err := runToFiles(t, cmd, true)
+				txt, _ := os.ReadFile(filepath.Join(work, c.txt))
+				return string(txt), err
+			}
+			txt, err := run(c.fixture)
+			if err != nil {
+				t.Fatalf("step with the marker fixture: %v", err)
+			}
+			if !strings.Contains(txt, c.marker) {
+				t.Fatalf("%s lacks %q: %q", c.txt, c.marker, txt)
+			}
+			if _, err := run("ci_report_nomarker.jsonl"); err == nil {
+				t.Fatal("step passed on a fixture without the marker")
+			}
+		})
+	}
 }

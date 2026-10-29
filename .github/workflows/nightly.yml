@@ -6,8 +6,6 @@ on:
   schedule:
     - cron: '17 1 * * *'
   workflow_dispatch:
-  push:
-    branches: [feature/nightly-02-every-suite-writes-results]
 
 concurrency:
   group: nightly
@@ -22,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - run: '[ "$GITHUB_REF" = refs/heads/main ] || [ "$GITHUB_REF" = refs/heads/feature/nightly-02-every-suite-writes-results ] || { echo "::error::Nightly runs on main only, not on $GITHUB_REF"; exit 1; }'
+      - run: '[ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::Nightly runs on main only, not on $GITHUB_REF"; exit 1; }'
 
   summary:
     name: Nightly summary

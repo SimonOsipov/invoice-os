@@ -44,8 +44,11 @@ func TestInitSentryDisabled(t *testing.T) {
 	if err := initSentry(Config{Service: "svc"}, nil); err != nil {
 		t.Fatalf("initSentry with empty DSN should be a no-op, got: %v", err)
 	}
-	if c := sentry.CurrentHub().Client(); c != nil {
+	if c := sentry.CurrentHub().Client(); c.IsEnabled() {
 		t.Errorf("initSentry with empty DSN bound a client (dsn %q), want none", c.Options().Dsn)
+	}
+	if hub := taggedHub(context.Background()); hub != nil {
+		t.Error("taggedHub returned a hub while Sentry is off, want nil")
 	}
 	// Capture must be safe (no panic, no send) while disabled.
 	CaptureError(context.Background(), errors.New("ignored"))
@@ -161,8 +164,8 @@ func TestHealthzCarriesSentryState(t *testing.T) {
 		}
 		sentry.CurrentHub().BindClient(client)
 		t.Cleanup(func() { sentry.CurrentHub().BindClient(nil) })
-		if sentry.CurrentHub().Client() == nil {
-			t.Fatal("precondition: the no-op client did not bind")
+		if sentry.CurrentHub().Client() != client {
+			t.Fatal("precondition: the empty-DSN client did not bind")
 		}
 
 		assertHealthzSentry(t, h, "off")

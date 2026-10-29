@@ -29,6 +29,9 @@ updates:
         applies-to: version-updates
         patterns: ["*"]
         update-types: [minor, patch]
+    ignore:
+      # go-pdfium moves deliberately with regenerated goldens (TestPDFium_ModuleVersionIsPinned).
+      - dependency-name: github.com/klippa-app/go-pdfium
 
   - package-ecosystem: pip
     directory: /sidecar/docling

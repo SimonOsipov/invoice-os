@@ -53,7 +53,7 @@ func (*jobTracing) InsertMany(ctx context.Context, manyParams []*rivertype.JobIn
 // ceiling: one transaction per job attempt; sample job transactions apart above ~1M spans/month on Sentry Stats
 func (*jobTracing) Work(ctx context.Context, job *rivertype.JobRow, doInner func(context.Context) error) (err error) {
 	hub := sentry.CurrentHub()
-	if hub.Client() == nil {
+	if !hub.Client().IsEnabled() {
 		return doInner(ctx)
 	}
 	hub = hub.Clone()

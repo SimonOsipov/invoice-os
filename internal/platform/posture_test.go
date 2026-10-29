@@ -57,6 +57,8 @@ func TestPosture(t *testing.T) {
 		{"nightly near-miss: leading space", " nightly", PostureHosted},
 		{"nightly near-miss: trailing newline", "nightly\n", PostureHosted},
 		{"nightly near-miss: prefixed", "pr-nightly", PostureHosted},
+		{"nightly near-miss: all caps", "NIGHTLY", PostureHosted},
+		{"nightly near-miss: trailing dash", "nightly-", PostureHosted},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

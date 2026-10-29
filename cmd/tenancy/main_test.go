@@ -169,6 +169,8 @@ func TestInviteSender_EnvironmentNamesThatAreNotAPullRequestFork(t *testing.T) {
 		{"upper-case pr", "PR-123", "k_live", true, "real"},
 		{"capitalised nightly, no key", "Nightly", "", false, "off"},
 		{"nightly2, no key", "nightly2", "", false, "off"},
+		{"leading space nightly, no key", " nightly", "", false, "off"},
+		{"nightly with key, trailing newline", "nightly\n", "k_live", true, "real"},
 		{"pr without a number", "pr-", "", false, "off"},
 		{"local, no environment name, no key", "", "", false, "off"},
 	}

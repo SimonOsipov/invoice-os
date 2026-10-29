@@ -919,24 +919,32 @@ func TestProvisionRedeployDoesNotDestroyPreexistingData(t *testing.T) {
 // Nightly seeds the shards but never resets: its data survives between runs.
 func TestProvisionConfig_NightlySeedsShardsAndNeverResets(t *testing.T) {
 	cases := []struct {
-		name                 string
-		deployEnv, bootstrap string
-		reset                string
-		wantSeed             bool
+		name                   string
+		environment, deployEnv string
+		bootstrap, reset       string
+		wantSeed               bool
 	}{
-		{"nightly, no reset flag", "nightly", "true", "", true},
-		{"nightly, reset flag true", "nightly", "true", "true", true},
-		{"preview still seeds", "pr-12", "true", "true", true},
-		{"production", "production", "true", "", false},
-		{"Nightly", "Nightly", "true", "", false},
-		{"nightly2", "nightly2", "true", "", false},
-		{"nightly, bootstrap flag empty", "nightly", "", "", false},
-		{"nightly, bootstrap flag false", "nightly", "false", "", false},
+		{"nightly, no reset flag", "development", "nightly", "true", "", true},
+		{"nightly, reset flag true", "development", "nightly", "true", "true", true},
+		{"preview still seeds", "development", "pr-12", "true", "true", true},
+		{"nightly-pr-3 is a preview", "development", "nightly-pr-3", "true", "", true},
+		{"production", "development", "production", "true", "", false},
+		{"Nightly", "development", "Nightly", "true", "", false},
+		{"NIGHTLY", "development", "NIGHTLY", "true", "", false},
+		{"nightly2", "development", "nightly2", "true", "", false},
+		{"leading space", "development", " nightly", "true", "", false},
+		{"trailing newline", "development", "nightly\n", "true", "", false},
+		{"pr-nightly", "development", "pr-nightly", "true", "", false},
+		{"empty deploy env", "development", "", "true", "", false},
+		{"nightly, bootstrap flag empty", "development", "nightly", "", "", false},
+		{"nightly, bootstrap flag false", "development", "nightly", "false", "", false},
+		{"nightly, ENVIRONMENT production", "production", "nightly", "true", "", false},
+		{"nightly, ENVIRONMENT nightly", "nightly", "nightly", "true", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := db.ProvisionConfig{
-				Environment: "development", BootstrapFlag: tc.bootstrap,
+				Environment: tc.environment, BootstrapFlag: tc.bootstrap,
 				DeployEnv: tc.deployEnv, ResetFlag: tc.reset,
 			}
 			if got := cfg.ShardsWillSeed(); got != tc.wantSeed {

@@ -3,6 +3,7 @@ paths:
   - ".github/workflows/dev-env.yml"
   - ".github/workflows/dev-env-teardown.yml"
   - ".github/workflows/dev-env-sweeper.yml"
+  - ".github/workflows/nightly.yml"
   - "scripts/ci/preview.sh"
 ---
 # PR previews on Google Cloud
@@ -15,6 +16,9 @@ paths:
 - A Dependabot PR that was reopened or marked ready runs the full chain. Send `@dependabot recreate` to get the skip back.
 - Keep the shared preview resources in invoice-os-infra `preview.tf`. Create and delete the per-PR resources only with `preview.sh`.
 - Label every per-PR resource `preview-pr=<N>`. The sweeper finds a preview by that label.
+- `preview.sh` also takes the exact name `nightly`: `<svc>-nightly`, `migrate-nightly`, database `pr_0`, bucket `ascomply-preview-nightly`, secrets `nightly-<name>`, label `preview-pr=nightly`.
+- A dispatched `dev-env.yml` run creates the nightly preview and deletes it in `Delete the nightly preview`. The sweeper skips it.
+- Leave the `preview-pr` label off the user's `nightly-*` vendor secrets. Teardown deletes every labelled secret.
 - Recreate `pr_<N>` on every deploy with the `preview-db` job. Cloud SQL refuses `session_replication_role`, so no reset runs in place.
 - Run the migrate job before GoTrue. Run it again with `preview.sh grant` after GoTrue is up: GoTrue creates `auth.users` on its first boot.
 - Generate each PR's tokens and GoTrue key in `preview.sh secrets`. Never copy a production value into preview.
@@ -26,4 +30,4 @@ paths:
 - Re-run the whole workflow to retry an `E2E gate`, never "Re-run failed jobs". The database is recreated only when the `deploy` job runs.
 - Teardown deletes the PR's services, migrate job, database, bucket and secrets on close. The nightly sweep deletes a preview older than 24 h whose PR reads closed.
 - Keep a preview fleet at 30 database connections or fewer at peak (`preview.sh budget`) and open at most 3 previews: 3 x 30 fits the 95 usable slots of the `preview` instance's `max_connections` 100 (100 - 3 superuser-reserved - 2 `cloudsqladmin` = 95). Nothing enforces the cap; past it, any open preview's services can fail with 53300.
-- A `workflow_dispatch` run of `dev-env.yml` builds one preview named `nightly` and runs E2E without the PR gates. `nightly-teardown` deletes it on success, failure and cancel. `prepare-env` stops at the cap before it creates anything.
+- The nightly counts toward the cap. `Prepare the preview` stops at `preview cap reached` when 3 previews are open.

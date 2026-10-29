@@ -9,11 +9,11 @@
 // count on a card comes from lib/roles.ts, `filterRoles` and `intro` included. The one
 // exception is marked below.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useId, useState } from 'react'
 
 import { EmptyState, ErrorState, Loading } from '@invoice-os/api-client'
 import { plusGlyph } from '../glyphs'
-import { membersSurface } from '../lib/members'
+import { membersSurface, viewerIsAdmin, workflowRolesLock } from '../lib/members'
 import {
   filterRoles,
   holderCount,
@@ -39,8 +39,23 @@ const NO_MATCH = 'No role matches that search.'
 /** Beyond this the stack overflows to a `+N` chip. */
 const AVATAR_MAX = 5
 
+const NOTE_STYLE = { fontSize: 11.5, color: 'var(--fg-3)', textAlign: 'right' } as const
+const DISABLED = { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } as const
+
 export function RolesView({ ctx }: { ctx: PlatformCtx }) {
   const { roles, members } = ctx
+  // Worst-of BOTH fetches: every count and avatar below resolves against `roles` AND
+  // `members`, so either one erroring would otherwise paint the grid off half-loaded data.
+  const surface = rolesSurface(ctx.rolesState, ctx.membersState)
+  const landed = surface !== 'loading' && surface !== 'error'
+  // A roster with rows names the viewer; none means unknown: fail closed, no note.
+  // The note shows only where a note element renders, so loading and error stay silent.
+  const known = members.length > 0
+  const gated = ctx.membersState !== 'idle'
+  const lock = landed && gated && known ? workflowRolesLock(members) : null
+  const disabled = gated && !(known && viewerIsAdmin(members))
+  const headerNoteId = useId()
+  const emptyNoteId = useId()
   const [query, setQuery] = useState('')
   // MembersView's flash idiom (MembersView.tsx:72-77) retimed to 3000ms: one transient
   // string plus one effect-owned timer, so a second save restarts the flash rather than
@@ -62,9 +77,6 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
   // STABLE — it is a `useDismiss` dependency inside the modal (useDismiss.ts:36-37).
   const closeModal = useCallback(() => setModal(null), [])
 
-  // Worst-of BOTH fetches: every count and avatar below resolves against `roles` AND
-  // `members`, so either one erroring would otherwise paint the grid off half-loaded data.
-  const surface = rolesSurface(ctx.rolesState, ctx.membersState)
   // Whichever fetch(es) actually failed — a roles-only failure must not re-kick members.
   const retry = useCallback(() => {
     if (ctx.rolesState === 'error') ctx.refetchRoles()
@@ -100,8 +112,13 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
             {flash}
           </span>
         )}
-        <NewRoleButton testId="roles-new" onClick={() => openRoleModal('create')} />
+        <NewRoleButton testId="roles-new" onClick={() => openRoleModal('create')} disabled={disabled} lock={lock} noteId={noRoles ? emptyNoteId : headerNoteId} />
       </div>
+      {lock && !noRoles && (
+        <div id={headerNoteId} data-testid="roles-admin-only" style={{ ...NOTE_STYLE, margin: '-6px 0 14px' }}>
+          {lock}
+        </div>
+      )}
 
       {surface === 'loading' && <Loading label="Loading members…" />}
 
@@ -109,7 +126,7 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
         <ErrorState error={(ctx.rolesError ?? ctx.membersError)!} onRetry={retry} />
       )}
 
-      {surface !== 'loading' && surface !== 'error' && (
+      {landed && (
         <>
           {noRoles ? (
             <div data-testid="roles-empty">
@@ -117,7 +134,16 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
                 title={EMPTY_TITLE}
                 message={EMPTY_MESSAGE}
                 messageMaxWidth={460}
-                action={<NewRoleButton testId="roles-empty-new" onClick={() => openRoleModal('create')} />}
+                action={
+                  <>
+                    <NewRoleButton testId="roles-empty-new" onClick={() => openRoleModal('create')} disabled={disabled} lock={lock} noteId={emptyNoteId} />
+                    {lock && (
+                      <div id={emptyNoteId} data-testid="roles-empty-admin-only" style={{ ...NOTE_STYLE, marginTop: 8 }}>
+                        {lock}
+                      </div>
+                    )}
+                  </>
+                }
               />
             </div>
           ) : shown.length === 0 ? (
@@ -132,7 +158,7 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
           ) : (
             <div data-testid="roles-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 14 }}>
               {shown.map((r) => (
-                <RoleCard key={r.key} ctx={ctx} role={r} onEdit={() => openRoleModal('edit', r)} />
+                <RoleCard key={r.key} ctx={ctx} role={r} onEdit={() => openRoleModal('edit', r)} disabled={disabled} lock={lock} />
               ))}
             </div>
           )}
@@ -145,21 +171,27 @@ export function RolesView({ ctx }: { ctx: PlatformCtx }) {
   )
 }
 
-function NewRoleButton({ onClick, testId }: { onClick: () => void; testId: string }) {
+type LockProps = { disabled: boolean; lock: string | null }
+
+function NewRoleButton({ onClick, testId, disabled, lock, noteId }: LockProps & { onClick: () => void; testId: string; noteId: string }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
+      title={lock ?? undefined}
+      aria-describedby={lock ? noteId : undefined}
       data-testid={testId}
       className="v2-btn v2-btn-primary pf-btn"
-      style={{ flex: 'none', height: 36, gap: 7 }}
+      style={{ flex: 'none', height: 36, gap: 7, ...(disabled ? DISABLED : null) }}
     >
       <span style={{ display: 'inline-flex' }}>{plusGlyph}</span> New role
     </button>
   )
 }
 
-function RoleCard({ ctx, role, onEdit }: { ctx: PlatformCtx; role: Role; onEdit: () => void }) {
+function RoleCard({ ctx, role, onEdit, disabled, lock }: LockProps & { ctx: PlatformCtx; role: Role; onEdit: () => void }) {
+  const noteId = useId()
   const { roles, members, policies } = ctx
   const held = holders(roles, members, role.key)
   const who = resolve(roles, members, role.key)
@@ -191,13 +223,21 @@ function RoleCard({ ctx, role, onEdit }: { ctx: PlatformCtx; role: Role; onEdit:
         <button
           type="button"
           onClick={onEdit}
+          disabled={disabled}
+          title={lock ?? undefined}
+          aria-describedby={lock ? noteId : undefined}
           data-testid="role-card-edit"
           className="v2-btn v2-btn-ghost pf-btn"
-          style={{ flex: 'none', height: 28, padding: '0 11px', fontSize: 12 }}
+          style={{ flex: 'none', height: 28, padding: '0 11px', fontSize: 12, ...(disabled ? { background: 'transparent', ...DISABLED } : null) }}
         >
           Edit
         </button>
       </div>
+      {lock && (
+        <div id={noteId} data-testid="role-card-admin-only" style={NOTE_STYLE}>
+          {lock}
+        </div>
+      )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 26 }}>
         {held.length > 0 && (

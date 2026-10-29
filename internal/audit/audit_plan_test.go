@@ -624,7 +624,7 @@ func planTrace(t *testing.T, filter audit.Filter) []planStmt {
 
 	ctx := context.Background()
 	if err := db.WithinTenantTx(ctx, pool, planData.tenant, func(tx pgx.Tx) error {
-		_, e := audit.Query(ctx, tx, filter)
+		_, e := audit.QueryAsAdminForTest(ctx, tx, filter)
 		return e
 	}); err != nil {
 		t.Fatalf("Query: %v", err)

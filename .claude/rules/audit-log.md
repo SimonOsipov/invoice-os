@@ -32,7 +32,7 @@ paths:
 - Run the page, the count, the facets and the empty probe in one transaction.
 - Read a NULL `entity_id` as workspace-level or unattributed. Never render it as unknown.
 - Classify a NULL-`entity_id` event as `workspace` only when it is in `firmWideEvents`. Add every new firm-wide event to that map.
-- The tenant request reader (`Store.List`: page, count, facets, probe) limits rows to the caller scope through `filterPredicates`. A limited member gets no row with `entity_id` NULL from it.
+- The tenant request reader (`Store.List`: page, count, facets, probe) limits rows to the caller scope through `filterPredicates`. A limited member gets no row with `entity_id` NULL from it, except their own account events. A member who is not an admin gets no other member's account event.
 - Offer three company filters: all, one company and workspace-level. Never write `entity_id = $1 OR entity_id IS NULL`.
 - Resolve company names with a `LEFT JOIN`. Show a dangling `entity_id` as a deleted company.
 - The UUID grammar has several live copies: the resolver, the generated column and `actor.Resolve`. Change all live copies together.

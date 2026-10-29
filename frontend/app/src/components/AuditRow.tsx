@@ -44,6 +44,7 @@ function asRecord(payload: unknown): Record<string, unknown> | null {
 }
 
 function fieldLabel(key: string): string {
+  if (key === 'ip_address') return 'IP address'
   const words = key.replace(/_/g, ' ').trim()
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : key
 }

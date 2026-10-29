@@ -74,6 +74,22 @@ describe('AuditRow', () => {
     expect(screen.queryByText(/duration/i)).toBeNull()
   })
 
+  it('auditRow_accountExpansionLabels', () => {
+    const payload = { ip_address: '203.0.113.7', device: 'Chrome on macOS', occurred_at: '2026-10-29T10:00:00Z' }
+    render(<AuditRow event={ev({ event: 'account.signed_in', payload })} expanded onToggle={() => {}} />)
+    const fields = screen.getAllByTestId('audit-payload-field').map((f) => f.textContent)
+    expect(fields).toEqual([
+      'IP address203.0.113.7',
+      'DeviceChrome on macOS',
+      'Occurred at2026-10-29T10:00:00Z',
+    ])
+  })
+
+  it('auditRow_otherKeysKeepTheGenericLabel', () => {
+    render(<AuditRow event={ev({ payload: { invoice_number: 'INV-1' } })} expanded onToggle={() => {}} />)
+    expect(screen.getByTestId('audit-payload-field').textContent).toBe('Invoice numberINV-1')
+  })
+
   it('auditRow_invoiceAffordanceReadsBothKeys', () => {
     // The invoice key is inconsistent by design: `id` from internal/invoice/* and
     // approval/engine.go, `invoice_id` from approval/decision.go and

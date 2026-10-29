@@ -13,6 +13,7 @@ export type AuditDomain =
   | 'companies'
   | 'documents'
   | 'memberships'
+  | 'account'
   | 'validation'
   | 'submissions'
   | 'reconciliation'
@@ -89,6 +90,13 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
   'invitation.resent': { label: 'Invite resent', domain: 'memberships' },
   'invitation.accepted': { label: 'Invite accepted', domain: 'memberships' },
   'invitation.revoked': { label: 'Invite revoked', domain: 'memberships' },
+
+  'account.signed_in': { label: 'Signed in', domain: 'account' },
+  'account.sign_in_failed': { label: 'Sign-in failed — wrong password', domain: 'account', outcome: 'bad' },
+  'account.sign_in_blocked': { label: 'Sign-in blocked — too many attempts', domain: 'account', outcome: 'bad' },
+  'account.signed_out': { label: 'Signed out', domain: 'account' },
+  'account.password_reset_requested': { label: 'Password reset requested', domain: 'account' },
+  'account.password_reset_completed': { label: 'Password reset completed', domain: 'account' },
 
   'validation.rule.enabled': { label: 'Rule enabled', domain: 'validation' },
   'validation.rule.disabled': { label: 'Rule disabled', domain: 'validation' },

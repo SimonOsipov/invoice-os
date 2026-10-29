@@ -282,16 +282,38 @@ func TestAuditJob_PurgeInFlightLeavesNoRow(t *testing.T) {
 	go func() {
 		done <- e.work(AuditArgs{TenantID: a, UserID: u, Event: evSignedIn, IP: e.tag + "-purge"})
 	}()
-	time.Sleep(500 * time.Millisecond)
+	// Commit only once the job has either finished (no lock) or is parked on the tenant row lock.
+	var jobErr error
+	finished := false
+	for deadline := time.Now().Add(10 * time.Second); !finished; {
+		select {
+		case jobErr = <-done:
+			finished = true
+			continue
+		default:
+		}
+		var waiting int
+		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%FOR KEY SHARE%'`).Scan(&waiting); err != nil {
+			t.Fatalf("read lock waiters: %v", err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("job neither finished nor waited on the tenant lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if err := purge.Commit(ctx); err != nil {
 		t.Fatalf("commit purge: %v", err)
 	}
-
-	var jobErr error
-	select {
-	case jobErr = <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("job did not return after the purge committed")
+	if !finished {
+		select {
+		case jobErr = <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("job did not return after the purge committed")
+		}
 	}
 	var cancel *rivertype.JobCancelError
 	if !errors.As(jobErr, &cancel) {

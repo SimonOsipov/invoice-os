@@ -208,6 +208,107 @@ describe('deep links', () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain('app.x')
   })
 
+  const heading = () => document.querySelector(`${DIALOG} h3`)?.textContent
+  const click = async (label: string) => {
+    const b = Array.from(document.querySelectorAll<HTMLButtonElement>(`${DIALOG} button`)).find((x) => x.textContent?.includes(label))!
+    await act(async () => b.click())
+  }
+
+  it.each(['/?forgot=', '/?forgot=0', '/?forgot=false'])('deepLink_forgotAnyValueOpens %s', async (path) => {
+    await bootAt(path)
+    expect(dialogs()).toEqual(['Sign in'])
+    expect(heading()).toBe('Reset your password')
+    expect(window.location.search).toBe('')
+  })
+
+  it('deepLink_deepLinksAreCaseSensitive', async () => {
+    await bootAt('/?DEMO&FORGOT')
+    expect(dialogs()).toEqual([])
+    expect(window.location.search).toBe('?DEMO&FORGOT')
+  })
+
+  it('deepLink_forgotKeepsTheHash', async () => {
+    await bootAt('/?forgot#faq')
+    expect(heading()).toBe('Reset your password')
+    expect(window.location.search).toBe('')
+    expect(window.location.hash).toBe('#faq')
+  })
+
+  it('deepLink_forgotDoesNotReopenAfterTheStrip', async () => {
+    await bootAt('/?forgot')
+    expect(dialogs()).toEqual(['Sign in'])
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    const mod = (await import('./App')) as { default: () => ReturnType<typeof createElement> }
+    await act(async () => root.render(createElement(mod.default)))
+    expect(window.location.search).toBe('')
+    expect(dialogs()).toEqual([])
+  })
+
+  it('deepLink_forgotStrictModeOpensOnce', async () => {
+    await bootAt('/?forgot', true)
+    expect(dialogs()).toEqual(['Sign in'])
+    expect(heading()).toBe('Reset your password')
+    expect(window.location.search).toBe('')
+  })
+
+  it('deepLink_forgotSubmitPostsToRequestPasswordReset', async () => {
+    fetchMock.mockResolvedValue(new Response('', { status: 202 }))
+    await bootAt('/?forgot')
+    const d = document.querySelector<HTMLElement>(DIALOG)!
+    const email = d.querySelector<HTMLInputElement>('input[type="email"]')!
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setValue.call(email, ' ada@okafor.ng ')
+      email.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => d.querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw.x/auth/request-password-reset')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual({ email: 'ada@okafor.ng' })
+  })
+
+  it('deepLink_forgotBackThenCloseReopensOnSignIn', async () => {
+    await bootAt('/?forgot')
+    await click('Back to sign in')
+    expect(heading()).toBe('Sign in to your workspace')
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(dialogs()).toEqual([])
+  })
+
+  it('deepLink_forgotCloseThenSignInOpensTheSignInView', async () => {
+    await bootAt('/?forgot')
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(dialogs()).toEqual([])
+    fetchMock.mockClear()
+    const login = Array.from(document.querySelectorAll<HTMLButtonElement>('header button')).find((b) => b.textContent?.trim() === 'Sign in')!
+    await act(async () => login.click())
+    // No held state: the click bounces to the app start, not the form.
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('app.x')
+  })
+
+  it('deepLink_forgotWithBareStateKeepsTheHeldState', async () => {
+    await bootAt(`/?state=${STATE}&forgot`)
+    expect(heading()).toBe('Reset your password')
+    await click('Back to sign in')
+    expect(heading()).toBe('Sign in to your workspace')
+    const d = document.querySelector<HTMLElement>(DIALOG)!
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    const email = d.querySelector<HTMLInputElement>('input[type="email"]')!
+    const password = d.querySelector<HTMLInputElement>('input[type="password"]')!
+    await act(async () => {
+      setValue.call(email, 'ada@okafor.ng')
+      email.dispatchEvent(new Event('input', { bubbles: true }))
+      setValue.call(password, 'pw')
+      password.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => d.querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string).state).toBe(STATE)
+  })
+
   it('deepLink_noParamOpensNothing', async () => {
     await bootAt('/')
     expect(dialogs()).toEqual([])

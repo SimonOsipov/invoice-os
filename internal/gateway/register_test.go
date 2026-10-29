@@ -221,7 +221,7 @@ func doVerifyStore(t *testing.T, store *HandoffStore, authURL, site *url.URL, lo
 		log = slog.New(slog.DiscardHandler)
 	}
 	rec := httptest.NewRecorder()
-	VerifyHandler(authURL, site, testClient(), log, nil, store).ServeHTTP(rec, verifyRequest(context.Background(), query))
+	VerifyHandler(authURL, site, testClient(), log, nil, store, nil).ServeHTTP(rec, verifyRequest(context.Background(), query))
 	return rec
 }
 

@@ -218,7 +218,7 @@ describe('AuditFilterCard: date range', () => {
   })
 })
 
-// AUDIT-07-04 (task-656): event-type control -- eleven domains, live counts, All/Clear, sticky
+// AUDIT-07-04 (task-656): event-type control -- one group per domain, live counts, All/Clear, sticky
 // Clear all.
 const DOMAIN_ORDER: AuditDomain[] = [
   'invoices',
@@ -228,6 +228,7 @@ const DOMAIN_ORDER: AuditDomain[] = [
   'companies',
   'documents',
   'memberships',
+  'account',
   'validation',
   'submissions',
   'reconciliation',
@@ -242,6 +243,7 @@ const DOMAIN_HEADING_TEXT: Record<AuditDomain, string> = {
   companies: 'Companies',
   documents: 'Documents',
   memberships: 'Memberships',
+  account: 'Account',
   validation: 'Validation rules',
   submissions: 'Submissions',
   reconciliation: 'Reconciliation',
@@ -259,18 +261,77 @@ function openEventPopover() {
 }
 
 describe('AuditFilterCard: event type', () => {
-  it('auditEventFilter_elevenGroupsCoverEveryType', () => {
+  it('auditEventFilter_everyGroupCoversEveryType', () => {
     renderCard()
     openEventPopover()
 
     const groups = screen.getAllByTestId(/^audit-event-group-.*-heading$/)
-    expect(groups.length, 'population floor: eleven group headings').toBe(11)
+    expect(groups.length, 'population floor: one heading per domain').toBe(DOMAIN_ORDER.length)
 
     const rows = screen.getAllByTestId(/^audit-event-row-/)
     expect(rows.length, 'population floor: one row per vocabulary entry').toBe(Object.keys(AUDIT_EVENTS).length)
 
     const flattenedIds = rows.map((r) => r.getAttribute('data-testid')!.replace('audit-event-row-', ''))
     expect(flattenedIds, 'the union of every group must equal the vocabulary exactly').toEqual(Object.keys(AUDIT_EVENTS))
+  })
+
+  it('auditFilterCard_accountGroupFollowsMemberships', () => {
+    renderCard()
+    openEventPopover()
+    const headings = screen.getAllByTestId(/^audit-event-group-.*-heading$/).map((h) => h.getAttribute('data-testid'))
+    const at = headings.indexOf('audit-event-group-account-heading')
+    expect(at).toBeGreaterThan(0)
+    expect(headings[at - 1]).toBe('audit-event-group-memberships-heading')
+    expect(screen.getByTestId('audit-event-group-account-heading').textContent).toBe('Account')
+    const ids = idsInDomain('account')
+    expect(ids).toEqual([
+      'account.signed_in',
+      'account.sign_in_failed',
+      'account.sign_in_blocked',
+      'account.signed_out',
+      'account.password_reset_requested',
+      'account.password_reset_completed',
+    ])
+    for (const id of ids) expect(screen.getByTestId(`audit-event-row-${id}`)).toBeTruthy()
+  })
+
+  it('auditFilterCard_accountGroupAllAndClear', () => {
+    const ids = idsInDomain('account')
+    const { onChange } = renderCard()
+    openEventPopover()
+    fireEvent.click(screen.getByTestId('audit-event-group-account-all'))
+    const all = onChange.mock.calls[0][0] as AuditFilterState
+    expect([...all.events].sort()).toEqual([...ids].sort())
+
+    cleanup()
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, events: [...ids, 'invoice.created'] }
+    const second = renderCard(state)
+    openEventPopover()
+    fireEvent.click(screen.getByTestId('audit-event-group-account-clear'))
+    const cleared = second.onChange.mock.calls[0][0] as AuditFilterState
+    expect(cleared.events, 'other groups untouched').toEqual(['invoice.created'])
+  })
+
+  it('auditFilterCard_accountOnlySelectionCountsAndTogglesWithoutTouchingOthers', () => {
+    const ids = idsInDomain('account')
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, events: [...ids] }
+    const { onChange } = renderCard(state)
+    expect(screen.getByTestId('audit-event-trigger').textContent).toContain('6 selected')
+    openEventPopover()
+    expect(ids.length).toBe(6)
+    for (const id of ids) expect(screen.getByTestId(`audit-event-row-${id}`).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('audit-event-row-membership.suspended').getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(screen.getByTestId('audit-event-row-account.signed_out'))
+    expect((onChange.mock.calls[0][0] as AuditFilterState).events).toEqual(ids.filter((i) => i !== 'account.signed_out'))
+  })
+
+  it('auditFilterCard_accountCountsComeFromFacets', () => {
+    const f = facets()
+    f.event = [{ value: 'account.signed_in', name: null, count: 4 }]
+    renderCard(AUDIT_FILTER_DEFAULT, f)
+    openEventPopover()
+    expect(screen.getByTestId('audit-event-count-account.signed_in').textContent).toBe('4')
+    expect(screen.getByTestId('audit-event-count-account.signed_out').textContent).toBe('0')
   })
 
   it('auditEventFilter_workspaceCreatedIsAMembershipsRow', () => {
@@ -292,7 +353,7 @@ describe('AuditFilterCard: event type', () => {
     function headingTexts(): (string | null)[] {
       openEventPopover()
       const headings = screen.getAllByTestId(/^audit-event-group-.*-heading$/)
-      expect(headings.length, 'population floor: eleven group headings').toBe(11)
+      expect(headings.length, 'population floor: one heading per domain').toBe(DOMAIN_ORDER.length)
       return headings.map((h) => h.textContent)
     }
 

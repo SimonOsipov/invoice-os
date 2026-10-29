@@ -1,0 +1,26 @@
+{"Action":"start","Package":"example.com/gj/pan"}
+{"Action":"run","Package":"example.com/gj/pan","Test":"TestA"}
+{"Action":"output","Package":"example.com/gj/pan","Test":"TestA","Output":"=== RUN   TestA\n"}
+{"Action":"output","Package":"example.com/gj/pan","Test":"TestA","Output":"--- PASS: TestA (0.00s)\n"}
+{"Action":"pass","Package":"example.com/gj/pan","Test":"TestA"}
+{"Action":"run","Package":"example.com/gj/pan","Test":"TestB"}
+{"Action":"output","Package":"example.com/gj/pan","Test":"TestB","Output":"=== RUN   TestB\n"}
+{"Action":"output","Package":"example.com/gj/pan","Test":"TestB","Output":"--- FAIL: TestB (0.00s)\n"}
+{"Action":"output","Package":"example.com/gj/pan","Test":"TestB","Output":"panic: boom [recovered, repanicked]\n"}
+{"Action":"fail","Package":"example.com/gj/pan","Test":"TestB"}
+{"Action":"output","Package":"example.com/gj/pan","Output":"FAIL\texample.com/gj/pan\t0.311s\n"}
+{"Action":"fail","Package":"example.com/gj/pan"}
+{"Action":"start","Package":"example.com/gj/pan"}
+{"Action":"run","Package":"example.com/gj/pan","Test":"TestA"}
+{"Action":"output","Package":"example.com/gj/pan","Test":"TestA","Output":"=== RUN   TestA\n"}
+{"Action":"output","Package":"example.com/gj/pan","Test":"TestA","Output":"--- PASS: TestA (0.00s)\n"}
+{"Action":"pass","Package":"example.com/gj/pan","Test":"TestA"}
+{"Action":"run","Package":"example.com/gj/pan","Test":"TestB"}
+{"Action":"output","Package":"example.com/gj/pan","Test":"TestB","Output":"=== RUN   TestB\n"}
+{"Action":"output","Package":"example.com/gj/pan","Test":"TestB","Output":"--- PASS: TestB (0.00s)\n"}
+{"Action":"pass","Package":"example.com/gj/pan","Test":"TestB"}
+{"Action":"run","Package":"example.com/gj/pan","Test":"TestC"}
+{"Action":"output","Package":"example.com/gj/pan","Test":"TestC","Output":"=== RUN   TestC\n"}
+{"Action":"output","Package":"example.com/gj/pan","Test":"TestC","Output":"--- PASS: TestC (0.00s)\n"}
+{"Action":"pass","Package":"example.com/gj/pan","Test":"TestC"}
+{"Action":"pass","Package":"example.com/gj/pan"}

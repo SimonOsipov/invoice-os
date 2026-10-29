@@ -229,7 +229,7 @@ func holdMinimum(ctx context.Context, log *slog.Logger, msg string, start time.T
 
 // VerifyHandler answers the confirm page's form POST by calling GoTrue's /verify, then redirects to siteURL.
 // The token is read from the form body only; any bad form redirects to the failure notice with no GoTrue call.
-func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Logger, sink ContactSink, store Handoffs) http.Handler {
+func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Logger, sink ContactSink, store Handoffs, events AccountEvents) http.Handler {
 	if siteURL == nil {
 		return RegistrationNotConfigured()
 	}
@@ -271,6 +271,7 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 				answer, _ := json.Marshal(map[string]string{"access_token": confirmed.AccessToken, "refresh_token": confirmed.RefreshToken}) // cannot fail
 				if code, ok := store.Put(string(answer), sha256.Sum256([]byte(state))); ok {
 					location = verified + "&handoff=" + code
+					recordAccountEvent(r, events, log, AccountEvent{Event: EventSignedIn, UserID: confirmed.User.ID, Email: confirmed.User.Email})
 				} else {
 					log.WarnContext(r.Context(), "verify: hand-off store full")
 				}

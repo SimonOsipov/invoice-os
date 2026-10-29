@@ -105,7 +105,7 @@ func TestSignIn_FullStoreAnswers503(t *testing.T) {
 	clk := newTestClock()
 	store := NewHandoffStore(HandoffTTL, clk.Now)
 	th := NewSignInThrottle("sign-in", 1, SignInMaxKeys, SignInWindow, clk.Now)
-	h := SignInHandler(fake.URL, testClient(), store, th, slog.New(slog.DiscardHandler), nil)
+	h := SignInHandler(fake.URL, testClient(), store, th, slog.New(slog.DiscardHandler), nil, nil)
 	fillStore(t, store, HandoffMaxLive)
 
 	for i := 1; i <= 2; i++ {

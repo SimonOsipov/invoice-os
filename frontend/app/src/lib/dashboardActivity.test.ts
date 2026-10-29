@@ -103,3 +103,23 @@ describe('relativeAgo', () => {
     expect(relativeAgo('x', NOW)).toBe('—')
   })
 })
+
+describe('activityRow account events', () => {
+  it('dashboardActivity_accountEventsRenderLabelAndTone', () => {
+    const want: Array<[string, string, string]> = [
+      ['account.signed_in', 'Signed in', 'var(--line-3)'],
+      ['account.sign_in_failed', 'Sign-in failed — wrong password', 'var(--status-red-text)'],
+      ['account.sign_in_blocked', 'Sign-in blocked — too many attempts', 'var(--status-red-text)'],
+      ['account.signed_out', 'Signed out', 'var(--line-3)'],
+      ['account.password_reset_requested', 'Password reset requested', 'var(--line-3)'],
+      ['account.password_reset_completed', 'Password reset completed', 'var(--line-3)'],
+    ]
+    expect(want.length).toBe(6)
+    for (const [event, label, dot] of want) {
+      const r = activityRow(ev({ event, company_scope: 'workspace', company_name: null }), NOW)
+      expect(r.label, event).toBe(label)
+      expect(r.dot, event).toBe(dot)
+      expect(r.company, event).toBeNull()
+    }
+  })
+})

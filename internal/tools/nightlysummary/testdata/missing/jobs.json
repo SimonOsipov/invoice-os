@@ -1,0 +1,60 @@
+[
+  {
+    "name": "Go",
+    "conclusion": "success",
+    "steps": [
+      {
+        "name": "Set up job",
+        "conclusion": "success",
+        "number": 1
+      },
+      {
+        "name": "Test",
+        "conclusion": "success",
+        "number": 8
+      },
+      {
+        "name": "Upload the nightly results",
+        "conclusion": "success",
+        "number": 20
+      }
+    ]
+  },
+  {
+    "name": "Frontend",
+    "conclusion": "success",
+    "steps": [
+      {
+        "name": "Set up job",
+        "conclusion": "success",
+        "number": 1
+      },
+      {
+        "name": "Test the app",
+        "conclusion": "success",
+        "number": 9
+      },
+      {
+        "name": "Upload the nightly results",
+        "conclusion": "success",
+        "number": 20
+      }
+    ]
+  },
+  {
+    "name": "Docker image (canary)",
+    "conclusion": "success",
+    "steps": [
+      {
+        "name": "Set up job",
+        "conclusion": "success",
+        "number": 1
+      },
+      {
+        "name": "Build one plain service image (SERVICE=tenancy)",
+        "conclusion": "success",
+        "number": 4
+      }
+    ]
+  }
+]

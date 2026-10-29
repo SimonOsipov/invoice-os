@@ -33,16 +33,18 @@ type event struct {
 type summarizer struct {
 	out io.Writer
 
-	passed    int
-	skipped   int
-	failed    int
-	skipNames []string
+	// last holds each Package\tTest key's final pass/fail/skip action, so a
+	// re-run result replaces the first run's.
+	last     map[string]string
+	skipKeys []skipKey
 
 	// pending holds buffered Output events per test (keyed by
 	// Package\tTest), replayed only if that test ultimately fails so a
 	// human reading CI logs sees why without re-running.
 	pending map[string][]string
 }
+
+type skipKey struct{ key, name string }
 
 // consume decodes one input line and folds it into the running summary. A
 // non-JSON / malformed line is silently ignored (never panics, never
@@ -60,20 +62,24 @@ func (s *summarizer) consume(line string) {
 	switch e.Action {
 	case "output":
 		s.pending[key] = append(s.pending[key], e.Output)
-	case "pass":
-		s.passed++
-		fmt.Fprintf(s.out, "PASS  %s.%s\n", e.Package, e.Test)
-		delete(s.pending, key)
-	case "skip":
-		s.skipped++
-		s.skipNames = append(s.skipNames, e.Test)
-		fmt.Fprintf(s.out, "SKIP  %s.%s\n", e.Package, e.Test)
-		delete(s.pending, key)
-	case "fail":
-		s.failed++
-		fmt.Fprintf(s.out, "FAIL  %s.%s\n", e.Package, e.Test)
-		for _, o := range s.pending[key] {
-			io.WriteString(s.out, o)
+	case "pass", "skip", "fail":
+		prev := s.last[key]
+		s.last[key] = e.Action
+		switch {
+		case e.Action == "pass" && prev == "fail":
+			fmt.Fprintf(s.out, "FLAKY %s.%s\n", e.Package, e.Test)
+		case e.Action == "pass":
+			fmt.Fprintf(s.out, "PASS  %s.%s\n", e.Package, e.Test)
+		case e.Action == "skip":
+			if prev != "skip" {
+				s.skipKeys = append(s.skipKeys, skipKey{key, e.Test})
+			}
+			fmt.Fprintf(s.out, "SKIP  %s.%s\n", e.Package, e.Test)
+		default:
+			fmt.Fprintf(s.out, "FAIL  %s.%s\n", e.Package, e.Test)
+			for _, o := range s.pending[key] {
+				io.WriteString(s.out, o)
+			}
 		}
 		delete(s.pending, key)
 	}
@@ -84,11 +90,12 @@ func (s *summarizer) consume(line string) {
 // returns the process exit code: 0 iff every test-level result was a pass
 // (and at least one test-level result was seen); non-zero if any
 // test-level result was a skip or fail, or if zero test-level results were
-// seen at all (including empty or malformed input). Precedence: skip →
+// seen at all (including empty or malformed input). A key counts once, by
+// its last result; fail then pass prints FLAKY. Precedence: skip →
 // zero-ran → fail. The skip branch names the skipped tests so CI surfaces
 // which DB-backed suites lost their env.
 func evaluate(r io.Reader, out io.Writer) (exitCode int) {
-	s := &summarizer{out: out, pending: make(map[string][]string)}
+	s := &summarizer{out: out, pending: make(map[string][]string), last: make(map[string]string)}
 
 	// bufio.Reader.ReadString avoids Scanner's token-size limit, so an
 	// arbitrarily long Output line can never truncate or error the stream.
@@ -103,19 +110,36 @@ func evaluate(r io.Reader, out io.Writer) (exitCode int) {
 		}
 	}
 
-	total := s.passed + s.skipped + s.failed
+	var passed, skipped, failed int
+	for _, a := range s.last {
+		switch a {
+		case "pass":
+			passed++
+		case "skip":
+			skipped++
+		case "fail":
+			failed++
+		}
+	}
+	var skipNames []string
+	for _, k := range s.skipKeys {
+		if s.last[k.key] == "skip" {
+			skipNames = append(skipNames, k.name)
+		}
+	}
+	total := passed + skipped + failed
 	fmt.Fprintf(out, "rlsgate: %d passed, %d skipped, %d failed (%d test-level results)\n",
-		s.passed, s.skipped, s.failed, total)
+		passed, skipped, failed, total)
 
 	switch {
-	case s.skipped > 0:
+	case skipped > 0:
 		fmt.Fprintf(out, "::error::rlsgate: %d DB-backed test(s) SKIPPED (DB env broke): %s\n",
-			s.skipped, strings.Join(s.skipNames, ", "))
+			skipped, strings.Join(skipNames, ", "))
 		return 1
 	case total == 0:
 		fmt.Fprintln(out, "::error::rlsgate: zero test-level results — the suite ran no tests (silent whole-suite skip or unmatched selection)")
 		return 1
-	case s.failed > 0:
+	case failed > 0:
 		return 1
 	default:
 		return 0

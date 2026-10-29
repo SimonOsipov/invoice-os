@@ -16,6 +16,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
+	"github.com/SimonOsipov/invoice-os/internal/accountevents"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth/gotrueadmin"
 )
 
@@ -116,6 +117,8 @@ func (r *eraseRig) track(email, uid string) {
 			{`DELETE FROM person_erasures WHERE user_id = $1::uuid`, []any{uid}},
 			{`DELETE FROM registrant_handoffs WHERE user_id = $1 OR email = $2`, []any{uid, email}},
 			{`DELETE FROM contacts WHERE email = $1`, []any{email}},
+			{`DELETE FROM account_known_devices WHERE user_id::text = $1`, []any{uid}},
+			{`DELETE FROM account_event_handoffs WHERE user_id::text = $1 OR lower(btrim(email)) = $2`, []any{uid, email}},
 			{`DELETE FROM blog_subscribers WHERE email = $1`, []any{email}},
 			{`DELETE FROM blog_subscription_requests WHERE email = $1`, []any{email}},
 		} {
@@ -1687,4 +1690,46 @@ func TestErase_TheFailSafeLogsNoPersonalData(t *testing.T) {
 		t.Fatalf("warns = %d, restores = %+v", warns, r.rs.restored)
 	}
 	qaRequireNoLeak(t, err, []*qaLogSink{r.sink}, r.mail, strings.Split(r.mail, "@")[0], "Bola", "Eze", r.uid)
+}
+
+// seedAccountEvents gives a person a known pair, an outbox row and a queued job of each account kind.
+func (r *eraseRig) seedAccountEvents(uid, email string) (jobs []int64) {
+	r.exec(`INSERT INTO account_known_devices (user_id, browser, os) VALUES ($1::uuid, 'Chrome', 'macOS')`, uid)
+	r.exec(`INSERT INTO account_event_handoffs (event, user_id, email) VALUES ('account.signed_in', $1::uuid, $2)`, uid, email)
+	r.exec(`INSERT INTO account_event_handoffs (event, email) VALUES ('account.sign_in_failed', $1)`, " "+strings.ToUpper(email)+" ")
+	jobs = append(jobs, r.insertJob(accountevents.NewDeviceArgs{UserID: uid, Email: email}))
+	jobs = append(jobs, r.insertJob(accountevents.AuditArgs{UserID: uid}))
+	return jobs
+}
+
+func (r *eraseRig) accountRows(uid, email string) (pairs, outbox int) {
+	return r.count(`SELECT count(*) FROM account_known_devices WHERE user_id::text = $1`, uid),
+		r.count(`SELECT count(*) FROM account_event_handoffs WHERE user_id::text = $1 OR lower(btrim(email)) = $2`, uid, email)
+}
+
+func TestErase_SweepDeletesKnownDevicesAndAccountEventRows(t *testing.T) {
+	r := newEraseRig(t)
+	gen := r.start()
+	ouid, omail := r.person()
+	mine := r.seedAccountEvents(r.uid, r.mail)
+	theirs := r.seedAccountEvents(ouid, omail)
+	r.failAll()
+	_ = r.work(gen)
+
+	if p, o := r.accountRows(r.uid, r.mail); p != 0 || o != 0 {
+		t.Errorf("person's pairs = %d, outbox rows = %d, want 0 and 0", p, o)
+	}
+	for _, id := range mine {
+		if r.jobExists(id) && r.count(`SELECT count(*) FROM river_job WHERE id = $1 AND state = 'cancelled'`, id) == 0 {
+			t.Errorf("person's job %d is still live", id)
+		}
+	}
+	if p, o := r.accountRows(ouid, omail); p != 1 || o != 2 {
+		t.Errorf("another person's pairs = %d, outbox rows = %d, want 1 and 2", p, o)
+	}
+	for _, id := range theirs {
+		if r.count(`SELECT count(*) FROM river_job WHERE id = $1 AND state = 'available'`, id) != 1 {
+			t.Errorf("another person's job %d was touched", id)
+		}
+	}
 }

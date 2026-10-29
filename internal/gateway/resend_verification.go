@@ -22,12 +22,12 @@ const (
 func ResendVerificationHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perAddress *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
 	return mailLinkHandler("resend-verification", "resend", authURL.JoinPath("resend").String(),
 		func(email string) map[string]string { return map[string]string{"type": "signup", "email": email} },
-		client, minResponse, perAddress, enforce, log)
+		client, minResponse, perAddress, enforce, log, nil)
 }
 
 // mailLinkHandler serves the mail-link routes (resend, reset); both share one per-address throttle.
 // name prefixes every log line; verb names the GoTrue call in the failure line.
-func mailLinkHandler(name, verb, endpoint string, payload func(email string) map[string]string, client *http.Client, minResponse time.Duration, perAddress *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
+func mailLinkHandler(name, verb, endpoint string, payload func(email string) map[string]string, client *http.Client, minResponse time.Duration, perAddress *SignInThrottle, enforce bool, log *slog.Logger, onAdmitted func(r *http.Request, email string)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Not postOnly: it sets headers on a POST, and a gone client must see no write.
 		if r.Method != http.MethodPost {
@@ -84,6 +84,10 @@ func mailLinkHandler(name, verb, endpoint string, payload func(email string) map
 			default:
 				log.WarnContext(r.Context(), name+": gotrue "+verb+" failed",
 					slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode))
+			}
+			// Inside the floor: the insert time is absorbed for a member and a non-member alike.
+			if addrHeld && onAdmitted != nil {
+				onAdmitted(r, email)
 			}
 		}
 

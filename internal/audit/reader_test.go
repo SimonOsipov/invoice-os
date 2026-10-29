@@ -695,3 +695,25 @@ func TestAuditFilter_NumberArmAddsNoWireField(t *testing.T) {
 		}
 	}
 }
+
+// --- AUDIT-13-05: account events are workspace-level ---
+
+// The six names are a second literal: the test pins ScopeOf against the spec, not against reader.go.
+func TestScopeOf_AccountEventsAreWorkspace(t *testing.T) {
+	six := []string{
+		"account.signed_in", "account.sign_in_failed", "account.sign_in_blocked",
+		"account.signed_out", "account.password_reset_requested", "account.password_reset_completed",
+	}
+	company := uuid.NewString()
+	for _, e := range six {
+		if got := audit.ScopeOf(e, nil); got != audit.ScopeWorkspace {
+			t.Errorf("ScopeOf(%q, nil) = %q, want %q", e, got, audit.ScopeWorkspace)
+		}
+		if got := audit.ScopeOf(e, &company); got != audit.ScopeCompany {
+			t.Errorf("ScopeOf(%q, entityID set) = %q, want %q", e, got, audit.ScopeCompany)
+		}
+	}
+	if got := audit.ScopeOf("account.unknown", nil); got != audit.ScopeUnattributed {
+		t.Errorf("ScopeOf(account.unknown, nil) = %q, want %q: the prefix alone must not classify", got, audit.ScopeUnattributed)
+	}
+}

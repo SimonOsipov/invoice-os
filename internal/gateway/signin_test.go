@@ -119,7 +119,7 @@ func newSignInRigSink(t *testing.T, authURL *url.URL, log *slog.Logger, sink Con
 		store:    store,
 		throttle: th,
 		clock:    clk,
-		signIn:   SignInHandler(authURL, testClient(), store, th, log, sink),
+		signIn:   SignInHandler(authURL, testClient(), store, th, log, sink, nil),
 		exchange: ExchangeHandler(store),
 	}
 }
@@ -293,7 +293,7 @@ func TestSignIn_MissingRefreshToken502(t *testing.T) {
 			clk := newTestClock()
 			store := NewHandoffStore(HandoffTTL, clk.Now)
 			th := NewSignInThrottle("sign-in", 1, SignInMaxKeys, SignInWindow, clk.Now)
-			h := SignInHandler(fake.URL, testClient(), store, th, slog.New(slog.DiscardHandler), nil)
+			h := SignInHandler(fake.URL, testClient(), store, th, slog.New(slog.DiscardHandler), nil, nil)
 			s := randomState(t)
 
 			for i := 1; i <= 2; i++ {
@@ -854,7 +854,7 @@ func TestSignIn_AnUnreadableThrottleAnswers503(t *testing.T) {
 	fake := newTokenFake(t, http.StatusBadRequest, gtInvalidCredentials)
 	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
 	th.Shared(deadPool(t), slog.New(slog.DiscardHandler))
-	h := SignInHandler(fake.URL, testClient(), NewHandoffStore(HandoffTTL, time.Now), th, slog.New(slog.DiscardHandler), nil)
+	h := SignInHandler(fake.URL, testClient(), NewHandoffStore(HandoffTTL, time.Now), th, slog.New(slog.DiscardHandler), nil, nil)
 
 	rec := serve(h, http.MethodPost, "/auth/sign-in", signInBody(regEmail, regPassword, randomState(t)))
 

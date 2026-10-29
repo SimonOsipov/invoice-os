@@ -1,0 +1,26 @@
+{"Action":"start","Package":"example.com/gj/basic"}
+{"Action":"run","Package":"example.com/gj/basic","Test":"TestOK"}
+{"Action":"output","Package":"example.com/gj/basic","Test":"TestOK","Output":"=== RUN   TestOK\n"}
+{"Action":"output","Package":"example.com/gj/basic","Test":"TestOK","Output":"--- PASS: TestOK (0.00s)\n"}
+{"Action":"pass","Package":"example.com/gj/basic","Test":"TestOK"}
+{"Action":"run","Package":"example.com/gj/basic","Test":"TestBad"}
+{"Action":"output","Package":"example.com/gj/basic","Test":"TestBad","Output":"=== RUN   TestBad\n"}
+{"Action":"run","Package":"example.com/gj/basic","Test":"TestBad/sub"}
+{"Action":"output","Package":"example.com/gj/basic","Test":"TestBad/sub","Output":"=== RUN   TestBad/sub\n"}
+{"Action":"output","Package":"example.com/gj/basic","Test":"TestBad/sub","Output":"    a_test.go:7: want 1, got 2\n"}
+{"Action":"output","Package":"example.com/gj/basic","Test":"TestBad/sub","Output":"--- FAIL: TestBad/sub (0.00s)\n"}
+{"Action":"fail","Package":"example.com/gj/basic","Test":"TestBad/sub"}
+{"Action":"run","Package":"example.com/gj/basic","Test":"TestBad/fine"}
+{"Action":"output","Package":"example.com/gj/basic","Test":"TestBad/fine","Output":"=== RUN   TestBad/fine\n"}
+{"Action":"output","Package":"example.com/gj/basic","Test":"TestBad/fine","Output":"--- PASS: TestBad/fine (0.00s)\n"}
+{"Action":"pass","Package":"example.com/gj/basic","Test":"TestBad/fine"}
+{"Action":"output","Package":"example.com/gj/basic","Test":"TestBad","Output":"--- FAIL: TestBad (0.00s)\n"}
+{"Action":"fail","Package":"example.com/gj/basic","Test":"TestBad"}
+{"Action":"run","Package":"example.com/gj/basic","Test":"TestSkip"}
+{"Action":"output","Package":"example.com/gj/basic","Test":"TestSkip","Output":"=== RUN   TestSkip\n"}
+{"Action":"output","Package":"example.com/gj/basic","Test":"TestSkip","Output":"    a_test.go:10: no db\n"}
+{"Action":"output","Package":"example.com/gj/basic","Test":"TestSkip","Output":"--- SKIP: TestSkip (0.00s)\n"}
+{"Action":"skip","Package":"example.com/gj/basic","Test":"TestSkip"}
+{"Action":"output","Package":"example.com/gj/basic","Output":"FAIL\n"}
+{"Action":"output","Package":"example.com/gj/basic","Output":"FAIL\texample.com/gj/basic\t0.493s\n"}
+{"Action":"fail","Package":"example.com/gj/basic"}

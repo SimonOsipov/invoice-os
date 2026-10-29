@@ -130,6 +130,11 @@ func TestVerify_Rejections(t *testing.T) {
 		{"non-uuid subject", func() string {
 			return mustMint(t, iss, MintOptions{Subject: "not-a-uuid"})
 		}},
+		{"missing subject", func() string {
+			c := validClaims(iss)
+			c.Subject = ""
+			return signClaims(t, iss, c)
+		}},
 		{"missing role", func() string {
 			c := validClaims(iss)
 			c.Role = ""

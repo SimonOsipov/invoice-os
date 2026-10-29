@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-//go:embed layout.html blog_confirm.html confirmation.html deletion_cancelled.html deletion_notice.html invite.html recovery.html
+//go:embed layout.html blog_confirm.html confirmation.html deletion_cancelled.html deletion_notice.html invite.html new_device.html recovery.html
 var files embed.FS
 
 // LogoURL is the absolute public URL of the mark in every mail.
@@ -20,7 +20,7 @@ const LogoURL = "https://api.ascomply.com/emails/mark.png"
 // Template returns layout.html plus <name>.html as one html/template source.
 func Template(name string) ([]byte, error) {
 	switch name {
-	case "blog_confirm", "confirmation", "deletion_cancelled", "deletion_notice", "invite", "recovery":
+	case "blog_confirm", "confirmation", "deletion_cancelled", "deletion_notice", "invite", "new_device", "recovery":
 	default:
 		return nil, fmt.Errorf("accountmail: unknown mail %q", name)
 	}
@@ -207,4 +207,53 @@ func RenderBlogConfirm(m BlogConfirmMail) (subject, html string, err error) {
 		return "", "", err
 	}
 	return BlogConfirmSubject, buf.String(), nil
+}
+
+const (
+	// ForgotPasswordURL opens the landing sign-in on its forgot-password view.
+	ForgotPasswordURL = "https://www.ascomply.com/?forgot"
+	NewDeviceSubject  = "New sign-in to your ASComply account"
+)
+
+// wat is Nigeria's fixed UTC+1 zone; it keeps no daylight saving.
+var wat = time.FixedZone("WAT", 60*60)
+
+// NewDeviceMail is the data of one new-device mail; an empty Device or IP renders as unknown.
+type NewDeviceMail struct {
+	Device, IP string
+	At         time.Time
+}
+
+type newDeviceView struct {
+	Device, IPNote, IPValue, When, ActionURL string
+}
+
+// RenderNewDevice renders the new-device mail; the subject is fixed so it never carries user text.
+func RenderNewDevice(m NewDeviceMail) (subject, html string, err error) {
+	if m.At.IsZero() {
+		return "", "", fmt.Errorf("accountmail: new-device mail needs a time")
+	}
+	v := newDeviceView{
+		Device: m.Device, IPValue: m.IP, IPNote: "(IP " + m.IP + ")",
+		When: m.At.In(wat).Format("2 January 2006, 15:04") + " WAT", ActionURL: ForgotPasswordURL,
+	}
+	if v.Device == "" {
+		v.Device = "Unknown device"
+	}
+	if m.IP == "" {
+		v.IPValue, v.IPNote = "Unknown IP", "(Unknown IP)"
+	}
+	src, err := Template("new_device")
+	if err != nil {
+		return "", "", err
+	}
+	tpl, err := template.New("new_device").Parse(string(src))
+	if err != nil {
+		return "", "", err
+	}
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, v); err != nil {
+		return "", "", err
+	}
+	return NewDeviceSubject, buf.String(), nil
 }

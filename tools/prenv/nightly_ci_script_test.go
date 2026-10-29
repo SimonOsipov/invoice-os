@@ -121,16 +121,16 @@ func TestNightlyCIScript_RunIDFromURL(t *testing.T) {
 func TestNightlyCIScript_RunIDFromListFallback(t *testing.T) {
 	t.Parallel()
 	s := newNightlyShim(t)
-	s.always(t, "run_list", `[{"databaseId":7,"createdAt":"2000-01-01T00:00:00Z"},{"databaseId":9,"createdAt":"2999-01-01T00:00:00Z"}]`)
+	s.always(t, "run_list", `[{"databaseId":9,"createdAt":"2999-01-01T00:00:00Z"},{"databaseId":7,"createdAt":"2000-01-01T00:00:00Z"},{"databaseId":8,"createdAt":"2998-01-01T00:00:00Z"}]`)
 	s.always(t, "run_view", "completed")
-	out, code := s.run(t, s.defaultEnv(), "main")
+	out, code := s.run(t, s.defaultEnv(), "epic/nightly")
 	if code != 0 {
 		t.Fatalf("exit %d, want 0\n%s", code, out)
 	}
 	if got := s.outputText(t); got != "run_id=9\n" {
 		t.Errorf("GITHUB_OUTPUT = %q, want run_id=9 (run 7 predates the dispatch)", got)
 	}
-	if n := s.calls(t, "run\tlist\t-R\to/r\t--workflow\tci.yml\t--event\tworkflow_dispatch\t--branch\tmain"); n != 1 {
+	if n := s.calls(t, "run\tlist\t-R\to/r\t--workflow\tci.yml\t--event\tworkflow_dispatch\t--branch\tepic/nightly"); n != 1 {
 		t.Errorf("gh run list for the dispatch called %d times, want 1", n)
 	}
 }
@@ -151,6 +151,22 @@ func TestNightlyCIScript_NoRunFoundExitsOne(t *testing.T) {
 	}
 }
 
+func TestNightlyCIScript_OnlyRunsBeforeTheDispatchExitsOne(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.always(t, "run_list", `[{"databaseId":7,"createdAt":"2000-01-01T00:00:00Z"}]`)
+	out, code := s.run(t, s.defaultEnv(), "main")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 (run 7 predates the dispatch)\n%s", code, out)
+	}
+	if n := s.calls(t, "run\tlist"); n != 12 {
+		t.Errorf("gh run list called %d times, want 12", n)
+	}
+	if got := s.outputText(t); got != "" {
+		t.Errorf("GITHUB_OUTPUT = %q, want empty", got)
+	}
+}
+
 func TestNightlyCIScript_RedCIStillExitsZero(t *testing.T) {
 	t.Parallel()
 	s := newNightlyShim(t)
@@ -159,6 +175,12 @@ func TestNightlyCIScript_RedCIStillExitsZero(t *testing.T) {
 	s.always(t, "run_view", "completed")
 	if out, code := s.run(t, s.defaultEnv(), "main"); code != 0 {
 		t.Fatalf("exit %d, want 0\n%s", code, out)
+	}
+	if n := s.calls(t, "run\tview\t42\t-R\to/r\t--json\tstatus\t--jq\t.status"); n != 1 {
+		t.Errorf("gh run view asking only for the status called %d times, want 1", n)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(s.dir, "argv.log")); strings.Contains(string(raw), "conclusion") {
+		t.Errorf("gh was asked for the conclusion: %s", raw)
 	}
 }
 
@@ -193,6 +215,20 @@ func TestNightlyCIScript_TimeoutCancelsAndExitsOne(t *testing.T) {
 	}
 }
 
+func TestNightlyCIScript_DefaultPollBudgetIs120(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.always(t, "workflow_run", "https://github.com/o/r/actions/runs/42")
+	s.always(t, "run_view", "in_progress")
+	out, code := s.run(t, s.defaultEnv(), "main")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1\n%s", code, out)
+	}
+	if n := s.calls(t, "run\tview\t42"); n != 120 {
+		t.Errorf("gh run view called %d times, want 120", n)
+	}
+}
+
 func TestNightlyCIScript_DispatchFailureExitsOne(t *testing.T) {
 	t.Parallel()
 	s := newNightlyShim(t)
@@ -214,6 +250,9 @@ func TestNightlyCIScript_UsageErrors(t *testing.T) {
 	s := newNightlyShim(t)
 	if out, code := s.run(t, s.defaultEnv()); code != 2 {
 		t.Errorf("no argument: exit %d, want 2\n%s", code, out)
+	}
+	if out, code := s.run(t, s.defaultEnv(), ""); code != 2 {
+		t.Errorf("empty ref: exit %d, want 2\n%s", code, out)
 	}
 	if out, code := s.run(t, "unset REPO\n", "main"); code != 2 {
 		t.Errorf("REPO unset: exit %d, want 2\n%s", code, out)

@@ -134,6 +134,10 @@ func nightlyRunProblems(nightlyYAML, ciYAML, suitesTxt string) []string {
 			p = append(p, "assembler step lacks "+nightlySuitesFlag)
 		}
 	}
+	col := nightlyStepLines(summary, "gh run download")
+	if col == nil || !slices.Contains(col, "if: always() && steps.ci.outputs.run_id != ''") {
+		p = append(p, "collect step does not run after a red CI (always() with a run id)")
+	}
 	up := nightlyStepLines(summary, "uses: actions/upload-artifact@")
 	if up == nil {
 		p = append(p, "summary has no upload step")
@@ -364,6 +368,7 @@ func TestNightly_AssemblerStepMutations(t *testing.T) {
 	for _, tc := range []struct{ name, old, repl, want string }{
 		{"suites flag dropped", nightlySuitesFlag + " ", "", "lacks " + nightlySuitesFlag},
 		{"always dropped", "      - name: Write summary.json\n        if: always()\n", "      - name: Write summary.json\n", "does not run always()"},
+		{"collect always dropped", "if: always() && steps.ci.outputs.run_id != ''", "if: steps.ci.outputs.run_id != ''", "collect step does not run"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

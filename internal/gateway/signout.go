@@ -12,7 +12,7 @@ import (
 
 // SignOutHandler answers POST /auth/sign-out by revoking every session of the account through GoTrue.
 // GoTrue's /logout needs a live access token, so a refresh grant mints one first.
-func SignOutHandler(authURL *url.URL, client *http.Client, sessions *SessionChecker, log *slog.Logger) http.Handler {
+func SignOutHandler(authURL *url.URL, client *http.Client, sessions *SessionChecker, log *slog.Logger, events AccountEvents) http.Handler {
 	tokenURL := authURL.JoinPath("token")
 	tokenURL.RawQuery = "grant_type=refresh_token"
 	token := tokenURL.String()
@@ -78,6 +78,7 @@ func SignOutHandler(authURL *url.URL, client *http.Client, sessions *SessionChec
 		case status >= 200 && status < 300, gone:
 			if claims.Subject != "" {
 				sessions.EvictSubject(ctx, claims.Subject)
+				recordAccountEvent(r, events, log, AccountEvent{Event: EventSignedOut, UserID: claims.Subject})
 			}
 			w.WriteHeader(http.StatusNoContent)
 		default:

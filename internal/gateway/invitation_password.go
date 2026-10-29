@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"context"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
@@ -34,7 +33,7 @@ func serveInvitationPasswordPage(w http.ResponseWriter, r *http.Request, site, f
 }
 
 // InvitationPasswordHandler answers the invitee page's form POST: confirm the address, set the password, end every session.
-func InvitationPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, sink ContactSink, log *slog.Logger, store Handoffs) http.Handler {
+func InvitationPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, sink ContactSink, log *slog.Logger, store Handoffs, events AccountEvents) http.Handler {
 	if authURL == nil || siteURL == nil {
 		return RegistrationNotConfigured()
 	}
@@ -45,8 +44,8 @@ func InvitationPasswordHandler(authURL, siteURL *url.URL, client *http.Client, s
 	return passwordLinkHandler(authURL, client, sessions, signIn, log, passwordLinkFlow{
 		verifyType: "signup", label: "invitation-password", page: invitationPageHTML,
 		done: site + "/?verified=1", failed: verifyFailedURL(siteURL),
-		onConfirmed: func(ctx context.Context, user gotrueUser) {
-			handOffRegistrant(ctx, log, "invitation-password", sink, user.contact())
+		onConfirmed: func(r *http.Request, user gotrueUser) {
+			handOffRegistrant(r.Context(), log, "invitation-password", sink, user.contact())
 		},
 		handOff: func(r *http.Request, user gotrueUser, password, state string) string {
 			ctx := r.Context()
@@ -68,6 +67,9 @@ func InvitationPasswordHandler(authURL, siteURL *url.URL, client *http.Client, s
 			code, ok := store.Put(string(answer), sha256.Sum256([]byte(state)))
 			if !ok {
 				log.WarnContext(ctx, "invitation-password: hand-off store full")
+			}
+			if code != "" {
+				recordAccountEvent(r, events, log, AccountEvent{Event: EventSignedIn, UserID: user.ID, Email: user.Email})
 			}
 			return code
 		},

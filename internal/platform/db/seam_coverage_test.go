@@ -208,6 +208,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/platform/db/account_state_read.go", fn: "GrantAccountStateRead"}, // boot-time grant on the supabase_auth_admin DSN, before any request or tenant exists
 	{file: "internal/platform/db/leader.go", fn: "claim"},                             // worker-only advisory locks; reads no table and serves no request
 	{file: "internal/gateway/registrant_outbox.go", fn: "Registrant"},                 // global outbox, no tenant data; invoice_gateway may only INSERT into it
+	{file: "internal/gateway/account_events.go", fn: "Record"},                        // global outbox, no tenant data; invoice_gateway may only INSERT into it
 	{file: "internal/notifications/store.go"},                                         // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
 	{file: "internal/notifications/worker.go"},                                        // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
 	{file: "internal/validation/codelist/store.go"},                                   // global NRS reference data written by a schedule; the package serves no HTTP

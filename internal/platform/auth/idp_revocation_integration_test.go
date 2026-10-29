@@ -80,7 +80,7 @@ func newRevocation(t *testing.T, base string) revocation {
 
 			GatewayToken: "gw-test-token",
 		}),
-		signOut: gateway.SignOutHandler(authURL, idpHTTP, sessions, log),
+		signOut: gateway.SignOutHandler(authURL, idpHTTP, sessions, log, nil),
 		hits:    hits,
 	}
 }

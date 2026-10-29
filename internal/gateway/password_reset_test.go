@@ -26,7 +26,7 @@ func newReset(authURL *url.URL, client *http.Client, floor time.Duration, log *s
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return RequestPasswordResetHandler(authURL, client, floor, resendThrottle(time.Now), true, log)
+	return RequestPasswordResetHandler(authURL, client, floor, resendThrottle(time.Now), true, log, nil)
 }
 
 // serveReset posts body and times ServeHTTP.
@@ -227,7 +227,7 @@ func TestRequestPasswordReset_EveryNon400AnswerWaitsTheFloor(t *testing.T) {
 			for range ResendPerAddress {
 				perAddress.Reserve(addr)
 			}
-			return RequestPasswordResetHandler(f.URL, testClient(), floor, perAddress, true, log), f
+			return RequestPasswordResetHandler(f.URL, testClient(), floor, perAddress, true, log, nil), f
 		}, 0},
 		{"refused connection", func(t *testing.T, log *slog.Logger) (http.Handler, *fakeGoTrue) {
 			return newReset(closedURL(t), testClient(), floor, log), nil
@@ -292,7 +292,7 @@ func TestRequestPasswordReset_SharesTheResendLimits(t *testing.T) {
 		if !shared {
 			perAddress = resendThrottle(time.Now)
 		}
-		return resend, RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, true, log)
+		return resend, RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, true, log, nil)
 	}
 	for _, shared := range []bool{true, false} {
 		name := "shared instances"
@@ -352,7 +352,7 @@ func TestRequestPasswordReset_CooldownRefusalsAreRefunded(t *testing.T) {
 	ok, cooldown := gtAnswer{http.StatusOK, `{}`}, gtAnswer{http.StatusTooManyRequests, gtOverEmailSendRateLimit}
 	fake := sequenceGoTrue(t, ok, cooldown, cooldown, ok, ok, ok)
 	log, buf := captureLog()
-	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), true, log)
+	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), true, log, nil)
 
 	for range 6 {
 		rec, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"))
@@ -368,7 +368,7 @@ func TestRequestPasswordReset_CooldownRefusalsAreRefunded(t *testing.T) {
 func TestRequestPasswordReset_UnenforcedLimitOnlyLogs(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
 	log, buf := captureLog()
-	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), false, log)
+	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, resendThrottle(time.Now), false, log, nil)
 
 	for range ResendPerAddress + 1 {
 		rec, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"))
@@ -390,7 +390,7 @@ func TestRequestPasswordReset_LogsCarryNoAddress(t *testing.T) {
 	log, buf := captureLog()
 	run := func(auth *url.URL, perAddress *SignInThrottle) {
 		t.Helper()
-		serveReset(t.Context(), RequestPasswordResetHandler(auth, testClient(), floor, perAddress, true, log), resendBody(email))
+		serveReset(t.Context(), RequestPasswordResetHandler(auth, testClient(), floor, perAddress, true, log, nil), resendBody(email))
 	}
 
 	run(newFakeGoTrue(t, http.StatusOK, echo("ok")).URL, resendThrottle(time.Now))
@@ -455,7 +455,7 @@ func TestRequestPasswordReset_ValidationFailedRefundsTheAddressCount(t *testing.
 	fake := newFakeGoTrue(t, http.StatusBadRequest, gtValidationFailed)
 	log, buf := captureLog()
 	perAddress := NewSignInThrottle("resend-address", 2, ResendMaxKeys, ResendWindow, time.Now)
-	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, true, log)
+	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, true, log, nil)
 
 	for range 3 {
 		rec, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"))
@@ -476,7 +476,7 @@ func TestRequestPasswordReset_FullMapFailsClosed(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, `{}`)
 	log, buf := captureLog()
 	perAddress := NewSignInThrottle("resend-address", ResendPerAddress, 1, ResendWindow, time.Now)
-	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, true, log)
+	h := RequestPasswordResetHandler(fake.URL, testClient(), 0, perAddress, true, log, nil)
 
 	first, _ := serveReset(t.Context(), h, resendBody("ada@corp.example"))
 	newAddress, _ := serveReset(t.Context(), h, resendBody("bob@corp.example"))

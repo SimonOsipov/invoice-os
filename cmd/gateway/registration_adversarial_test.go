@@ -231,7 +231,7 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 
 	log := slog.New(slog.DiscardHandler)
 	signIn := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
-	reset := resetPasswordHandler(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), signIn, log)
+	reset := resetPasswordHandler(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), signIn, log, nil)
 	rec = serveForm(reset, "/auth/reset-password", "token=T&type=recovery&password=new-password-1")
 	if loc := rec.Header().Get("Location"); loc != "https://site.example/?reset=failed" {
 		t.Errorf("reset form Location = %q, want https://site.example/?reset=failed", loc)
@@ -368,7 +368,7 @@ func mountResetRoutes(t *testing.T, mux *http.ServeMux, reg registration, authUR
 	mux.Handle("POST /auth/request-password-reset", reg.RequestPasswordReset)
 	mux.Handle("OPTIONS /auth/request-password-reset", reg.RequestPasswordReset)
 	mux.Handle("GET /auth/reset-password", gateway.ResetPasswordPageHandler(site))
-	mux.Handle("POST /auth/reset-password", resetPasswordHandler(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), signIn, log))
+	mux.Handle("POST /auth/reset-password", resetPasswordHandler(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), signIn, log, nil))
 }
 
 // Opening the reset link, by GET or HEAD, spends nothing; only the POST of the page's own form reaches GoTrue.

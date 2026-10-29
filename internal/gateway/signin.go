@@ -19,7 +19,7 @@ const (
 var stateShape = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
 // SignInHandler answers POST /auth/sign-in with a single-use exchange code.
-func SignInHandler(authURL *url.URL, client *http.Client, store Handoffs, throttle *SignInThrottle, log *slog.Logger, sink ContactSink) http.Handler {
+func SignInHandler(authURL *url.URL, client *http.Client, store Handoffs, throttle *SignInThrottle, log *slog.Logger, sink ContactSink, events AccountEvents) http.Handler {
 	tokenURL := authURL.JoinPath("token")
 	tokenURL.RawQuery = "grant_type=password"
 	token := tokenURL.String()
@@ -57,6 +57,7 @@ func SignInHandler(authURL *url.URL, client *http.Client, store Handoffs, thrott
 			return
 		}
 		if !admitted {
+			recordAccountEvent(r, events, log, AccountEvent{Event: EventSignInBlocked, Email: in.Email})
 			writeError(w, http.StatusTooManyRequests, "too many requests")
 			return
 		}
@@ -84,12 +85,16 @@ func SignInHandler(authURL *url.URL, client *http.Client, store Handoffs, thrott
 				return
 			}
 			throttle.Reset(in.Email)
+			recordAccountEvent(r, events, log, AccountEvent{Event: EventSignedIn, UserID: sess.User.ID, Email: sess.User.Email})
 			if sess.User.UserMetadata.Registration != nil {
 				handOffRegistrant(r.Context(), log, "sign-in", sink, sess.User.contact())
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"code": code})
 		// A banned address answers exactly like a wrong password; the reservation stands.
 		case gt.ErrorCode == "invalid_credentials", gt.ErrorCode == "user_banned":
+			if gt.ErrorCode == "invalid_credentials" {
+				recordAccountEvent(r, events, log, AccountEvent{Event: EventSignInFailed, Email: in.Email})
+			}
 			writeError(w, http.StatusUnauthorized, "invalid email or password")
 		case gt.ErrorCode == "email_not_confirmed":
 			throttle.Refund(in.Email)

@@ -83,6 +83,8 @@ func newGotrueFake(t *testing.T, subject, email string) *gotrueFake {
 			_, _ = io.WriteString(w, `{"access_token":"`+handoffAccessToken(g.subject)+`","user":{"id":"`+g.subject+`","email":"`+g.email+`"}}`)
 		case "POST /logout":
 			w.WriteHeader(http.StatusNoContent)
+		case "POST /recover":
+			_, _ = io.WriteString(w, `{}`)
 		case "POST /resend":
 			g.resends.Add(1)
 			_, _ = io.WriteString(w, `{}`)
@@ -195,7 +197,7 @@ func newTwoInstances(t *testing.T) *twoInstances {
 		return instance{
 			api:       api,
 			h:         h,
-			reset:     resetPasswordHandler(authURL, site, sessions, h.SignInThrottle, log),
+			reset:     resetPasswordHandler(authURL, site, sessions, h.SignInThrottle, log, nil),
 			resend:    reg.ResendVerification,
 			subscribe: blogSubscribeHandlers(notificationsURL, instToken, 0, log, pool).Subscribe,
 		}

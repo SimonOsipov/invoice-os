@@ -95,7 +95,7 @@ func (r *Resend) Send(ctx context.Context, msgs []Message) error {
 	return nil
 }
 
-// Capture keeps the last 100 messages in memory for preview environments.
+// Capture keeps the last 100 messages in memory.
 type Capture struct {
 	mu   sync.Mutex
 	msgs []Message
@@ -129,7 +129,8 @@ const (
 	ModeOff     Mode = "off"
 )
 
-// ModeFromEnv reads only RESEND_SENDING_KEY; RESEND_API_KEY is the contacts key and never picks real.
+// ModeFromEnv captures when preview is true (a preview or the nightly).
+// It reads only RESEND_SENDING_KEY; RESEND_API_KEY is the contacts key and never picks real.
 func ModeFromEnv(getenv func(string) string, preview bool) (Mode, string) {
 	if preview {
 		return ModeCapture, ""

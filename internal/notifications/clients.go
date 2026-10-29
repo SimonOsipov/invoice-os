@@ -48,7 +48,7 @@ func NewsletterClients(getenv func(string) string, deployEnv string, contacts Mo
 	if err != nil {
 		return NewsletterWiring{}, err
 	}
-	mailMode, mailKey := accountmail.ModeFromEnv(getenv, posture == platform.PosturePreview)
+	mailMode, mailKey := accountmail.ModeFromEnv(getenv, posture.Ephemeral())
 	w := NewsletterWiring{Mode: mode, MailMode: mailMode, Sender: accountmail.NewSender(mailMode, mailKey, transport)}
 	switch mode {
 	case ModeFake:

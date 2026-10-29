@@ -16,11 +16,11 @@ const (
 	envBlogSegment = "RESEND_BLOG_SEGMENT_ID"
 )
 
-// NewsletterModeFromEnv follows the contacts mode: preview and fake are fake, off is off. Under
+// NewsletterModeFromEnv follows the contacts mode: an ephemeral posture (preview, nightly) and fake are fake, off is off. Under
 // real, no blog id means off and one id alone is a boot error naming the missing variable.
 func NewsletterModeFromEnv(getenv func(string) string, posture platform.PostureKind, contacts Mode) (Mode, BlogKeys, error) {
 	switch {
-	case posture == platform.PosturePreview, contacts == ModeFake:
+	case posture.Ephemeral(), contacts == ModeFake:
 		return ModeFake, BlogKeys{}, nil
 	case contacts != ModeReal:
 		return ModeOff, BlogKeys{}, nil

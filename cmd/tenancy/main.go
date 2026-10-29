@@ -116,9 +116,9 @@ func main() {
 	}
 }
 
-// inviteSender picks the mail sender: capture in a preview, Resend with a key, else off.
+// inviteSender picks the mail sender: capture on a preview or the nightly, Resend with a key, else off.
 func inviteSender(getenv func(string) string, rt http.RoundTripper, logger *slog.Logger) accountmail.Sender {
-	mode, key := accountmail.ModeFromEnv(getenv, platform.Posture(platform.DeployEnvFrom(getenv)) == platform.PosturePreview)
+	mode, key := accountmail.ModeFromEnv(getenv, platform.Posture(platform.DeployEnvFrom(getenv)).Ephemeral())
 	logger.Info("tenancy: invite mail mode", slog.String("mode", string(mode)))
 	return accountmail.NewSender(mode, key, rt)
 }

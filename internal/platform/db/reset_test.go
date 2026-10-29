@@ -70,6 +70,8 @@ func TestResetEnabledAllowlist(t *testing.T) {
 		{`("staging","true") — unrecognised value`, "staging", "true", false},
 		{`("Production","true")`, "Production", "true", false},
 		{`("prod","true")`, "prod", "true", false},
+		{`("nightly","true") -- nightly never resets`, "nightly", "true", false},
+		{`("Nightly","true")`, "Nightly", "true", false},
 
 		// --- production/allowlist lookalikes (whitespace/case) ---
 		{"leading-whitespace production", " production", "true", false},

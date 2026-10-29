@@ -14,7 +14,9 @@ if [ -z "${REPO:-}" ]; then
 fi
 ref="$1"
 
-since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# Runs that exist before the dispatch; the fallback skips them, so no clock compare is needed.
+before=$(gh run list -R "$REPO" --workflow ci.yml --event workflow_dispatch --branch "$ref" --limit 30 \
+  --json databaseId 2>/dev/null || echo '[]')
 out=$(gh workflow run ci.yml -R "$REPO" --ref "$ref") || {
   echo "::error::could not dispatch ci.yml on $ref." >&2
   exit 1
@@ -26,10 +28,9 @@ if [[ "$out" =~ /actions/runs/([0-9]+) ]]; then id="${BASH_REMATCH[1]}"; fi
 if [ -z "$id" ]; then
   for _ in $(seq 1 12); do
     sleep 5
-    runs=$(gh run list -R "$REPO" --workflow ci.yml --event workflow_dispatch --branch "$ref" --limit 10 \
-      --json databaseId,createdAt 2>/dev/null || echo '[]')
-    # ISO timestamps in one format compare as strings.
-    id=$(jq -r --arg since "$since" '[.[]? | select(.createdAt >= $since)] | sort_by(.createdAt) | last | .databaseId // empty' <<< "$runs" 2>/dev/null || true)
+    runs=$(gh run list -R "$REPO" --workflow ci.yml --event workflow_dispatch --branch "$ref" --limit 30 \
+      --json databaseId 2>/dev/null || echo '[]')
+    id=$(jq -r --argjson before "$before" '[.[]? | select(.databaseId as $i | $before | map(.databaseId) | index($i) | not)] | map(.databaseId) | max // empty' <<< "$runs" 2>/dev/null || true)
     if [ -n "$id" ]; then break; fi
   done
 fi

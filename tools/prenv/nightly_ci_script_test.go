@@ -107,8 +107,8 @@ func TestNightlyCIScript_RunIDFromURL(t *testing.T) {
 	if got := s.outputText(t); got != "run_id=42\n" {
 		t.Errorf("GITHUB_OUTPUT = %q, want run_id=42", got)
 	}
-	if n := s.calls(t, "run\tlist"); n != 0 {
-		t.Errorf("gh run list called %d times, want 0", n)
+	if n := s.calls(t, "run\tlist"); n != 1 {
+		t.Errorf("gh run list called %d times, want 1 (the pre-dispatch snapshot)", n)
 	}
 	if n := s.calls(t, "workflow\trun\tci.yml\t-R\to/r\t--ref\tepic/nightly"); n != 1 {
 		t.Errorf("gh workflow run with ci.yml, --ref and the ref called %d times, want 1", n)
@@ -121,7 +121,8 @@ func TestNightlyCIScript_RunIDFromURL(t *testing.T) {
 func TestNightlyCIScript_RunIDFromListFallback(t *testing.T) {
 	t.Parallel()
 	s := newNightlyShim(t)
-	s.always(t, "run_list", `[{"databaseId":9,"createdAt":"2999-01-01T00:00:00Z"},{"databaseId":7,"createdAt":"2000-01-01T00:00:00Z"},{"databaseId":8,"createdAt":"2998-01-01T00:00:00Z"}]`)
+	s.answer(t, "run_list", `[{"databaseId":7}]`)
+	s.always(t, "run_list", `[{"databaseId":9},{"databaseId":7},{"databaseId":8}]`)
 	s.always(t, "run_view", "completed")
 	out, code := s.run(t, s.defaultEnv(), "epic/nightly")
 	if code != 0 {
@@ -130,8 +131,39 @@ func TestNightlyCIScript_RunIDFromListFallback(t *testing.T) {
 	if got := s.outputText(t); got != "run_id=9\n" {
 		t.Errorf("GITHUB_OUTPUT = %q, want run_id=9 (run 7 predates the dispatch)", got)
 	}
-	if n := s.calls(t, "run\tlist\t-R\to/r\t--workflow\tci.yml\t--event\tworkflow_dispatch\t--branch\tepic/nightly"); n != 1 {
-		t.Errorf("gh run list for the dispatch called %d times, want 1", n)
+	if n := s.calls(t, "run\tlist\t-R\to/r\t--workflow\tci.yml\t--event\tworkflow_dispatch\t--branch\tepic/nightly"); n != 2 {
+		t.Errorf("gh run list for the dispatch called %d times, want 2 (before and after)", n)
+	}
+}
+
+// The runner clock is ignored: a run GitHub dates far in the past is still the new one.
+func TestNightlyCIScript_FallbackIgnoresClockSkew(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.answer(t, "run_list", `[]`)
+	s.always(t, "run_list", `[{"databaseId":5,"createdAt":"2000-01-01T00:00:00Z"}]`)
+	s.always(t, "run_view", "completed")
+	out, code := s.run(t, s.defaultEnv(), "main")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0\n%s", code, out)
+	}
+	if got := s.outputText(t); got != "run_id=5\n" {
+		t.Errorf("GITHUB_OUTPUT = %q, want run_id=5", got)
+	}
+}
+
+func TestNightlyCIScript_FallbackSkipsManualDispatchAlreadyPresent(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.answer(t, "run_list", `[{"databaseId":5}]`)
+	s.always(t, "run_list", `[{"databaseId":6},{"databaseId":5}]`)
+	s.always(t, "run_view", "completed")
+	out, code := s.run(t, s.defaultEnv(), "main")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0\n%s", code, out)
+	}
+	if got := s.outputText(t); got != "run_id=6\n" {
+		t.Errorf("GITHUB_OUTPUT = %q, want run_id=6 (run 5 was there before the dispatch)", got)
 	}
 }
 
@@ -143,8 +175,8 @@ func TestNightlyCIScript_NoRunFoundExitsOne(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit %d, want 1\n%s", code, out)
 	}
-	if n := s.calls(t, "run\tlist"); n != 12 {
-		t.Errorf("gh run list called %d times, want 12", n)
+	if n := s.calls(t, "run\tlist"); n != 13 {
+		t.Errorf("gh run list called %d times, want 13 (1 before, 12 after)", n)
 	}
 	if got := s.outputText(t); got != "" {
 		t.Errorf("GITHUB_OUTPUT = %q, want empty", got)
@@ -154,13 +186,13 @@ func TestNightlyCIScript_NoRunFoundExitsOne(t *testing.T) {
 func TestNightlyCIScript_OnlyRunsBeforeTheDispatchExitsOne(t *testing.T) {
 	t.Parallel()
 	s := newNightlyShim(t)
-	s.always(t, "run_list", `[{"databaseId":7,"createdAt":"2000-01-01T00:00:00Z"}]`)
+	s.always(t, "run_list", `[{"databaseId":7}]`)
 	out, code := s.run(t, s.defaultEnv(), "main")
 	if code != 1 {
 		t.Fatalf("exit %d, want 1 (run 7 predates the dispatch)\n%s", code, out)
 	}
-	if n := s.calls(t, "run\tlist"); n != 12 {
-		t.Errorf("gh run list called %d times, want 12", n)
+	if n := s.calls(t, "run\tlist"); n != 13 {
+		t.Errorf("gh run list called %d times, want 13", n)
 	}
 	if got := s.outputText(t); got != "" {
 		t.Errorf("GITHUB_OUTPUT = %q, want empty", got)
@@ -240,8 +272,8 @@ func TestNightlyCIScript_DispatchFailureExitsOne(t *testing.T) {
 	if !strings.Contains(out, "HTTP 404") {
 		t.Errorf("output lacks the HTTP 404 text: %q", out)
 	}
-	if n := s.calls(t, "run\t"); n != 0 {
-		t.Errorf("gh run called %d times after a failed dispatch, want 0", n)
+	if n := s.calls(t, "run\t"); n != 1 {
+		t.Errorf("gh run called %d times around a failed dispatch, want 1 (the snapshot only)", n)
 	}
 }
 

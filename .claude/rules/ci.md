@@ -9,7 +9,7 @@ paths:
 - Production deploys are in `ci-gcp.md`. PR previews are in `ci-preview.md`.
 - Never trigger a workflow on `pull_request_target`, `workflow_run` or `workflow_call`. Never use `secrets: inherit` or a local `uses: ./` step. `TestNoWorkflowReachesSecretsThroughATrustedTrigger` pins it.
 - Run E2E only on `pull_request`. The api suite writes data, so it never runs against production.
-- Start the `topology` job only when the `e2e` job succeeded. A red `e2e` job skips topology and fails the gate.
+- On a PR, start the `topology` job only when the `e2e` job succeeded. A red `e2e` job skips topology and fails the gate. In a `workflow_dispatch` (nightly) run, topology also starts after a failed `e2e`.
 - Expect a superseded commit's preview to fail at the CI watch. `ci.yml` cancels the earlier run on the same ref.
 - Give a PR the library lane when every changed path is under `frontend/library/` and none is in `SHARED_WITH_BLOG` in `scripts/ci/lane.sh`.
 - Give a PR the blog lane when every changed path is under `frontend/blog/`. `frontend/blog/index.html`, `frontend/blog/Dockerfile` and `frontend/blog/Dockerfile.dockerignore` give the full lane: they are inputs of `cmd/blog`.

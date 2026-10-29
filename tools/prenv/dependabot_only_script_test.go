@@ -53,6 +53,7 @@ type doOpts struct {
 	env      map[string]string // overrides the defaults
 	omit     []string          // env vars left unset
 	noArg    bool
+	arg      string // the argument; default 12
 }
 
 type doRun struct {
@@ -142,7 +143,11 @@ if [ "$n" -ge "${DO_FROM:-2}" ] && [ -f "$DO_DIR/list2" ]; then cat "$DO_DIR/lis
 	}
 	args := []string{filepath.Join(repoRoot(t), "scripts", "ci", "dependabot-only.sh")}
 	if !o.noArg {
-		args = append(args, "12")
+		arg := o.arg
+		if arg == "" {
+			arg = "12"
+		}
+		args = append(args, arg)
 	}
 	cmd := exec.Command("bash", args...)
 	cmd.Env = cmdEnv
@@ -547,5 +552,24 @@ func TestDependabotOnly_ABotListFailureNeverWritesOutput(t *testing.T) {
 			t.Parallel()
 			wantFailClosed(t, runDO(t, o))
 		})
+	}
+}
+
+func TestDependabotOnly_NightlyIsNotAPR(t *testing.T) {
+	t.Parallel()
+	r := runDO(t, doOpts{arg: "nightly", omit: []string{"GH_TOKEN", "REPO", "PR_AUTHOR", "EVENT_SENDER", "HEAD_SHA"}})
+	wantVerdict(t, r, "false")
+	if len(r.calls) != 0 {
+		t.Errorf("gh called: %q", r.calls)
+	}
+	if !strings.Contains(r.stdout, "dependabot-only: nightly preview, not a PR") {
+		t.Errorf("no nightly log line: %s", r.msg())
+	}
+}
+
+func TestDependabotOnly_NightlyNearMissesStillNeedTheEnv(t *testing.T) {
+	t.Parallel()
+	for _, arg := range []string{"Nightly", "nightly2", "nightly "} {
+		wantExit2(t, runDO(t, doOpts{arg: arg, pages: doPage(botCommit()), omit: []string{"GH_TOKEN", "REPO", "PR_AUTHOR", "EVENT_SENDER", "HEAD_SHA"}}))
 	}
 }

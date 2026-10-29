@@ -627,3 +627,38 @@ func TestMover_EmptyAgentSignInSendsTheUnknownPair(t *testing.T) {
 		t.Errorf("messages = %+v, want one naming Unknown device", m)
 	}
 }
+
+func TestMover_SignInWithoutAnAddressEnqueuesNoNewDeviceJob(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant(t)
+	u, w := e.user(), e.user()
+	e.member(t, a, u, "active", e.email("u"))
+	e.member(t, a, w, "active", e.email("w"))
+	e.enqueue(t, evSignedIn, u, nil, e.tag+"-noaddr", uaChromeMac, time.Now())
+	e.enqueue(t, evSignedIn, w, "  ", e.tag+"-blank", uaChromeMac, time.Now())
+
+	mustTick(t, e, slog.Default())
+
+	if nd := e.newDeviceJobs(t, u, w); len(nd) != 0 {
+		t.Errorf("new-device jobs = %+v, want none", nd)
+	}
+	if got := len(e.jobs(t, u, w)); got != 2 {
+		t.Errorf("control: audit jobs = %d, want 2", got)
+	}
+}
+
+func TestMover_OneNewDeviceJobPerSignInForRepeatedSignIns(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant(t)
+	u := e.user()
+	e.member(t, a, u, "active", e.email("u"))
+	now := time.Now().UTC().Truncate(time.Second)
+	e.enqueue(t, evSignedIn, u, e.email("u"), e.tag+"-1", uaChromeMac, now.Add(-2*time.Minute))
+	e.enqueue(t, evSignedIn, u, e.email("u"), e.tag+"-2", uaChromeMac, now.Add(-time.Minute))
+
+	mustTick(t, e, slog.Default())
+
+	if nd := e.newDeviceJobs(t, u); len(nd) != 2 {
+		t.Errorf("new-device jobs = %d, want 2 (one per sign-in)", len(nd))
+	}
+}

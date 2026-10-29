@@ -16,6 +16,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
+	"github.com/SimonOsipov/invoice-os/internal/accountevents"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth/gotrueadmin"
 )
 
@@ -1696,24 +1697,10 @@ func (r *eraseRig) seedAccountEvents(uid, email string) (jobs []int64) {
 	r.exec(`INSERT INTO account_known_devices (user_id, browser, os) VALUES ($1::uuid, 'Chrome', 'macOS')`, uid)
 	r.exec(`INSERT INTO account_event_handoffs (event, user_id, email) VALUES ('account.signed_in', $1::uuid, $2)`, uid, email)
 	r.exec(`INSERT INTO account_event_handoffs (event, email) VALUES ('account.sign_in_failed', $1)`, " "+strings.ToUpper(email)+" ")
-	jobs = append(jobs, r.insertJob(newDeviceJob{UserID: uid, Email: email}))
-	jobs = append(jobs, r.insertJob(auditJob{UserID: uid}))
+	jobs = append(jobs, r.insertJob(accountevents.NewDeviceArgs{UserID: uid, Email: email}))
+	jobs = append(jobs, r.insertJob(accountevents.AuditArgs{UserID: uid}))
 	return jobs
 }
-
-// The job kinds live in accountevents, which imports this package; these stand-ins carry the same kind and args.
-type newDeviceJob struct {
-	UserID string `json:"user_id"`
-	Email  string `json:"email"`
-}
-
-func (newDeviceJob) Kind() string { return "account_new_device" }
-
-type auditJob struct {
-	UserID string `json:"user_id"`
-}
-
-func (auditJob) Kind() string { return "account_audit" }
 
 func (r *eraseRig) accountRows(uid, email string) (pairs, outbox int) {
 	return r.count(`SELECT count(*) FROM account_known_devices WHERE user_id::text = $1`, uid),

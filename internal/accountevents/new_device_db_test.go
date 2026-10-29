@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -120,6 +121,9 @@ func TestNewDevice_SendFailureFailsTheOnlyAttempt(t *testing.T) {
 	if got := (NewDeviceArgs{}).InsertOpts().MaxAttempts; got != 1 {
 		t.Errorf("MaxAttempts = %d, want 1", got)
 	}
+	if !strings.Contains(raw(), "send failed") {
+		t.Errorf("the failure is not logged: %q", raw())
+	}
 	if strings.Contains(raw(), "@") || strings.Contains(raw(), mail) {
 		t.Errorf("log holds an address: %s", raw())
 	}
@@ -139,5 +143,86 @@ func TestNewDevice_OffSenderCountsAsAFailure(t *testing.T) {
 	}
 	if n := e.pairs(t, u); n != 2 {
 		t.Errorf("pairs = %d, want 2", n)
+	}
+}
+
+func TestNewDevice_AnotherAccountsPairsDoNotMakeThisOneKnown(t *testing.T) {
+	e := newEnv(t)
+	u, v, mail := e.user(), e.user(), e.email("nd")
+	c := &accountmail.Capture{}
+	w, _ := e.ndWorker(c)
+	mustWork(t, w, ndJob(v, e.email("v"), "Chrome", "macOS"))
+	mustWork(t, w, ndJob(u, mail, "Chrome", "macOS"))
+	if m := c.Messages(); len(m) != 0 {
+		t.Errorf("%d message(s) for U's first pair while V holds the same pair, want 0", len(m))
+	}
+	if e.pairs(t, u) != 1 || e.pairs(t, v) != 1 {
+		t.Errorf("pairs U=%d V=%d, want 1 and 1", e.pairs(t, u), e.pairs(t, v))
+	}
+}
+
+func TestNewDevice_ParallelSignInsFromOneNewPairSendOneMail(t *testing.T) {
+	e := newEnv(t)
+	u, mail := e.user(), e.email("nd")
+	c := &accountmail.Capture{}
+	w, _ := e.ndWorker(c)
+	mustWork(t, w, ndJob(u, mail, "Chrome", "macOS"))
+	const n = 6
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- w.Work(context.Background(), ndJob(u, mail, "Firefox", "Windows"))
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("Work: %v", err)
+		}
+	}
+	if m := c.Messages(); len(m) != 1 {
+		t.Errorf("%d messages for %d parallel sign-ins from one new pair, want 1", len(m), n)
+	}
+	if got := e.pairs(t, u); got != 2 {
+		t.Errorf("pairs = %d, want 2", got)
+	}
+}
+
+func TestNewDevice_BadSignInTimeCancelsWithoutMail(t *testing.T) {
+	e := newEnv(t)
+	u, mail := e.user(), e.email("nd")
+	c := &accountmail.Capture{}
+	w, _ := e.ndWorker(c)
+	mustWork(t, w, ndJob(u, mail, "Chrome", "macOS"))
+	j := ndJob(u, mail, "Firefox", "Windows")
+	j.Args.OccurredAt = "not a time"
+	var cancel *river.JobCancelError
+	if err := w.Work(context.Background(), j); !errors.As(err, &cancel) {
+		t.Fatalf("Work error = %v, want a JobCancel", err)
+	}
+	if m := c.Messages(); len(m) != 0 {
+		t.Errorf("%d message(s) for an unreadable time, want 0", len(m))
+	}
+}
+
+func TestNewDevice_EmptyIPRendersUnknownIP(t *testing.T) {
+	e := newEnv(t)
+	u, mail := e.user(), e.email("nd")
+	c := &accountmail.Capture{}
+	w, _ := e.ndWorker(c)
+	mustWork(t, w, ndJob(u, mail, "Chrome", "macOS"))
+	j := ndJob(u, mail, "Firefox", "Windows")
+	j.Args.IP = ""
+	mustWork(t, w, j)
+	m := c.Messages()
+	if len(m) != 1 || !strings.Contains(m[0].HTML, "(Unknown IP)") {
+		t.Fatalf("messages = %+v, want one naming (Unknown IP)", m)
 	}
 }

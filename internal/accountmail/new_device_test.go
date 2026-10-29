@@ -69,3 +69,30 @@ func TestRenderNewDevice_ZeroTimeFails(t *testing.T) {
 		t.Error("a zero time rendered")
 	}
 }
+
+func TestRenderNewDevice_WATAroundMidnight(t *testing.T) {
+	for _, c := range []struct {
+		at   time.Time
+		want string
+	}{
+		{time.Date(2026, 10, 29, 22, 59, 59, 0, time.UTC), "29 October 2026, 23:59 WAT"},
+		{time.Date(2026, 10, 29, 23, 0, 0, 0, time.UTC), "30 October 2026, 00:00 WAT"},
+		{time.Date(2026, 12, 31, 23, 30, 0, 0, time.UTC), "1 January 2027, 00:30 WAT"},
+		{time.Date(2026, 7, 1, 12, 0, 0, 0, time.FixedZone("EST", -5*3600)), "1 July 2026, 18:00 WAT"},
+	} {
+		_, out := renderND(t, NewDeviceMail{Device: "x", IP: "1.2.3.4", At: c.at})
+		if !strings.Contains(out, c.want) {
+			t.Errorf("at %s: mail lacks %q", c.at, c.want)
+		}
+	}
+}
+
+func TestRenderNewDevice_UnknownIPReadsOnceAndLeavesNoEmptyIP(t *testing.T) {
+	_, out := renderND(t, NewDeviceMail{Device: "Chrome on macOS", At: newDeviceAt})
+	if !strings.Contains(out, "(Unknown IP)") || !strings.Contains(out, ">Unknown IP<") {
+		t.Error("an empty IP does not render as Unknown IP in the sentence and the detail row")
+	}
+	if strings.Contains(out, "(IP )") || strings.Contains(out, "(IP Unknown") {
+		t.Error("an empty IP leaves a broken IP clause")
+	}
+}

@@ -83,10 +83,12 @@ func TestRun_RetryPassExitsZero(t *testing.T) {
 }
 
 func TestRun_RetryFailExitsOne(t *testing.T) {
-	f := &fake{calls: []call{{twoPkgStream(), 1}, {"", 0}, {"", 1}}}
-	code, _, _ := invoke(t, f, "./...")
-	if code != 1 || len(f.argvs) != 3 {
-		t.Fatalf("code=%d argvs=%q", code, f.argvs)
+	for _, codes := range [][2]int{{0, 1}, {1, 0}, {1, 1}} {
+		f := &fake{calls: []call{{twoPkgStream(), 1}, {"", codes[0]}, {"", codes[1]}}}
+		code, _, _ := invoke(t, f, "./...")
+		if code != 1 || len(f.argvs) != 3 {
+			t.Fatalf("rerun exits %v: code=%d argvs=%q", codes, code, f.argvs)
+		}
 	}
 }
 
@@ -193,11 +195,48 @@ func TestRun_UsageErrors(t *testing.T) {
 		{"--", "./..."},
 		{"-out", "f", "./..."},
 		{"-out", "f", "--"},
+		{"-out", "f", "stray", "--", "./..."},
 	} {
 		f := &fake{}
 		code := run(args, io.Discard, io.Discard, f.run)
 		if code != 2 || len(f.argvs) != 0 {
 			t.Errorf("args %q: code=%d runner calls=%d", args, code, len(f.argvs))
 		}
+	}
+}
+
+func TestRun_UnfinishedTestAlongsideFailedTestRerunsWholePackage(t *testing.T) {
+	s := ev("fail", "p", "TestA", "") + ev("run", "p", "TestB", "") + ev("fail", "p", "", "")
+	f := &fake{calls: []call{{s, 1}, {"", 0}}}
+	code, _, stderr := invoke(t, f, "./p")
+	if code != 0 || len(f.argvs) != 2 || f.argvs[1] != "test -json -count=1 p" {
+		t.Fatalf("code=%d argvs=%q", code, f.argvs)
+	}
+	if !strings.Contains(stderr, "gotestretry: re-run p whole package") {
+		t.Errorf("stderr = %q", stderr)
+	}
+}
+
+func TestRun_FailureWithNoPackageFailEventStaysRed(t *testing.T) {
+	s := ev("pass", "p", "TestA", "")
+	f := &fake{calls: []call{{s, 1}, {"", 0}}}
+	code, _, _ := invoke(t, f, "./p")
+	if code != 1 || len(f.argvs) != 1 {
+		t.Fatalf("code=%d argvs=%q", code, f.argvs)
+	}
+}
+
+func TestRun_TruncatesExistingOutFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "r.jsonl")
+	if err := os.WriteFile(path, []byte("stale stale stale stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stream := ev("pass", "x", "TestA", "")
+	f := &fake{calls: []call{{stream, 0}}}
+	if code := run([]string{"-out", path, "--", "./x"}, io.Discard, io.Discard, f.run); code != 0 {
+		t.Fatalf("code=%d", code)
+	}
+	if b, _ := os.ReadFile(path); string(b) != stream {
+		t.Fatalf("out = %q", b)
 	}
 }

@@ -588,3 +588,20 @@ func TestEvaluate_SkipStillWinsAfterRetry(t *testing.T) {
 		t.Errorf("missing skip error; out=%q", buf.String())
 	}
 }
+
+func TestEvaluate_SkipTwiceCountsOnce(t *testing.T) {
+	fixture := `{"Action":"skip","Package":"p","Test":"TestZ"}
+{"Action":"skip","Package":"p","Test":"TestZ"}
+`
+	var buf bytes.Buffer
+	if code := evaluate(strings.NewReader(fixture), &buf); code != 1 {
+		t.Fatalf("exit = %d, want 1; out=%q", code, buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, "0 passed, 1 skipped, 0 failed") {
+		t.Errorf("summary wrong; out=%q", out)
+	}
+	if !strings.Contains(out, "SKIPPED (DB env broke): TestZ\n") {
+		t.Errorf("skip name should print once; out=%q", out)
+	}
+}

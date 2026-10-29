@@ -14,6 +14,9 @@ const (
 	nightlyGuardRun   = `[ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::Nightly runs on main only, not on $GITHUB_REF"; exit 1; }`
 	nightlyCron       = "- cron: '17 1 * * *'"
 	nightlySuitesFlag = "-suites scripts/ci/nightly-suites.txt"
+	nightlyCIRunLine  = `run: bash scripts/ci/nightly-ci.sh "$GITHUB_REF_NAME" ci.yml=run_id dev-env.yml=preview_run_id`
+	nightlyE2EFlag    = `-e2e-suites "$RUNNER_TEMP/e2e-suites.txt" `
+	nightlyPreviewDL  = `gh run download "$PREVIEW_RUN_ID" -R "$REPO" -p 'results-*' -D "$RUNNER_TEMP/results"`
 )
 
 var (
@@ -134,7 +137,25 @@ func nightlyRunProblems(nightlyYAML, ciYAML, suitesTxt string) []string {
 			p = append(p, "assembler step lacks "+nightlySuitesFlag)
 		}
 	}
+	if v, _ := jobKey(summary, "timeout-minutes"); v != "120" {
+		p = append(p, "summary timeout-minutes is not 120")
+	}
+	if n := nightlyStepLines(summary, "uses: actions/setup-node@"); n == nil || !slices.Contains(n, "node-version: 22") {
+		p = append(p, "summary lacks setup-node with node-version: 22")
+	}
+	if ci := nightlyStepLines(summary, "nightly-ci.sh"); ci == nil || !slices.Contains(ci, nightlyCIRunLine) || !slices.Contains(ci, "NIGHTLY_CI_POLLS: 200") {
+		p = append(p, "CI step lacks the two-workflow call or NIGHTLY_CI_POLLS: 200")
+	}
+	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), nightlyE2EFlag) {
+		p = append(p, "assembler step lacks -e2e-suites")
+	}
 	col := nightlyStepLines(summary, "gh run download")
+	if col != nil && !strings.Contains(strings.Join(col, "\n"), nightlyPreviewDL) {
+		p = append(p, "collect step does not download the preview run's results")
+	}
+	if col != nil && !strings.Contains(strings.Join(col, "\n"), `actions/runs/$run/jobs`) {
+		p = append(p, "collect step does not write the jobs of each run")
+	}
 	if col == nil || !slices.Contains(col, "if: always() && steps.ci.outputs.run_id != ''") {
 		p = append(p, "collect step does not run after a red CI (always() with a run id)")
 	}
@@ -413,6 +434,79 @@ func TestNightly_ActionsWriteOnlyOnTheJob(t *testing.T) {
 	for _, want := range []string{"workflow permissions", "summary permissions"} {
 		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, want) }) {
 			t.Errorf("problems %q lack one naming %q", got, want)
+		}
+	}
+}
+
+func TestNightly_SummaryFoldsTheE2ERun(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, old, repl, want string }{
+		{"timeout", "timeout-minutes: 120", "timeout-minutes: 90", "timeout-minutes is not 120"},
+		{"setup-node dropped", "node-version: 22", "node-version: 20", "setup-node"},
+		{"preview dispatch dropped", " dev-env.yml=preview_run_id", "", "two-workflow call"},
+		{"poll budget", "NIGHTLY_CI_POLLS: 200", "NIGHTLY_CI_POLLS: 120", "NIGHTLY_CI_POLLS"},
+		{"e2e flag dropped", nightlyE2EFlag, "", "lacks -e2e-suites"},
+		{"preview download dropped", "$PREVIEW_RUN_ID\" -R", "$CI_RUN_ID\" -R", "preview run's results"},
+		{"jobs of one run", "actions/runs/$run/jobs", "actions/runs/$CI_RUN_ID/jobs", "jobs of each run"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			requireNightlyMutation(t, tc.old, tc.repl, tc.want)
+		})
+	}
+}
+
+// nightlyE2ESuitesProblems checks nightly-e2e-suites.txt against the jobs of dev-env.yml.
+func nightlyE2ESuitesProblems(devEnvYAML, suitesTxt string) []string {
+	var p []string
+	names := map[string]workflowJob{}
+	for _, j := range workflowJobsOf(devEnvYAML) {
+		n, _ := jobKey(j, "name")
+		names[n] = j
+	}
+	for _, l := range strings.Split(suitesTxt, "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		f := strings.Split(l, "=")
+		if len(f) < 2 || len(f) > 3 {
+			p = append(p, "e2e suites line is malformed: "+l)
+			continue
+		}
+		if strings.HasPrefix(f[0], "topology-") {
+			p = append(p, "e2e suites lists "+f[0]+"; nightly.yml appends the shards")
+		}
+		j, ok := names[f[1]]
+		if !ok {
+			p = append(p, "e2e suites "+f[0]+": dev-env.yml has no job named \""+f[1]+"\"")
+			continue
+		}
+		if len(f) == 3 && !strings.Contains(strings.Join(j.lines, "\n"), "name: results-"+f[0]+"\n") {
+			p = append(p, "e2e suites "+f[0]+": its job uploads no results-"+f[0])
+		}
+	}
+	return p
+}
+
+func TestNightlyE2ESuites_MatchDevEnvJobs(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "ci", "nightly-e2e-suites.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	suites, devEnv := string(raw), readWorkflow(t, "dev-env.yml")
+	if got := nightlyE2ESuitesProblems(devEnv, suites); len(got) > 0 {
+		t.Fatalf("problems: %q", got)
+	}
+	for _, tc := range []struct{ name, yml, txt, want string }{
+		{"deploy renamed", mutateOnce(t, devEnv, "name: Deploy the PR's fleet", "name: Deploy the fleet"), suites, "Deploy the PR's fleet"},
+		{"results key wrong", devEnv, mutateOnce(t, suites, "e2e=E2E (smoke + api)=results", "e2ee=E2E (smoke + api)=results"), "results-e2ee"},
+		{"topology listed", devEnv, suites + "topology-auth=E2E topology (auth)=results\n", "topology-auth"},
+	} {
+		got := nightlyE2ESuitesProblems(tc.yml, tc.txt)
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, tc.want) }) {
+			t.Errorf("%s: problems %q lack one naming %q", tc.name, got, tc.want)
 		}
 	}
 }

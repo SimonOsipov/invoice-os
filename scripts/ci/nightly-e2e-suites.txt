@@ -1,0 +1,9 @@
+# key=Display name[=results]: one line per dev-env.yml job of the nightly preview that the Nightly summary reports.
+# The name is the job's exact `name:`; =results marks the jobs that upload results-<key>. nightly.yml appends the topology-<shard> lines.
+invariants=Preview invariants
+environment=Prepare the preview (secrets, bucket, URLs)
+deploy=Deploy the PR's fleet
+health-gate=Gate on gateway /health (commit, mock issuer, issuers)
+fleet-gate=Fleet /healthz gate (all backends green)
+e2e=E2E (smoke + api)=results
+teardown=Delete the nightly preview

@@ -605,6 +605,16 @@ describe('isYou and the member-actions lock', () => {
     expect(mockedSetMembershipStatus).not.toHaveBeenCalled()
   })
 
+  it("a non-admin viewer: Edit then the drawer is locked", () => {
+    render(<Harness initial={[member({ id: 'me', name: 'Me Viewer', initials: 'MV', isYou: true }), member(), otherMember()]} />)
+    const row = rowFor('Ada Person')
+    fireEvent.click(within(row).getByTestId('member-menu-trigger'))
+    fireEvent.click(within(screen.getByTestId('member-menu')).getByText('Edit'))
+
+    expect((screen.getByTestId('member-suspend') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('member-remove') as HTMLButtonElement).disabled).toBe(true)
+  })
+
   it('an admin isYou row suspends when another active admin exists', async () => {
     const [m, other] = adminRows()
     mockedSetMembershipStatus.mockResolvedValue(wireFor(m, 'suspended'))
@@ -1896,7 +1906,7 @@ describe('the roster table chrome', () => {
     const m = member()
     mockedSetMembershipStatus.mockRejectedValue(new ApiError('http', REASON, 409))
 
-    render(<Harness initial={[m, otherMember()]} />)
+    render(<Harness initial={[adminViewer(), m, otherMember()]} />)
     const row = rowFor('Ada Person')
     suspendFromRowMenu(row)
 

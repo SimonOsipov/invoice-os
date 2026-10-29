@@ -50,6 +50,7 @@ import {
   CLIENT_ADMIN_ONLY,
   COMPANY_ADMIN_ONLY,
   INVITE_ADMIN_ONLY,
+  inviteActionsLock,
   INVITE_ERROR,
   invitedMember,
   inviteSentNotice,
@@ -2473,6 +2474,42 @@ describe('ACCESS-01-04 — the role write and its copy', () => {
     expect(workflowRolesLock(admin)).toBeNull()
     expect(clientPickerLock(suspended)).toBe(MEMBER_CLIENTS_ADMIN_ONLY)
     expect(workflowRolesLock([])).toBe(WFROLE_ADMIN_ONLY)
+  })
+
+  it('inviteActionsLock: a non-admin viewer reads the invite note', () => {
+    expect(inviteActionsLock([row('p1', 'preparer', 'active', true), row('a1', 'admin', 'active')])).toBe(INVITE_ADMIN_ONLY)
+  })
+
+  it('inviteActionsLock: a reviewer viewer is locked', () => {
+    expect(inviteActionsLock([row('r1', 'reviewer', 'active', true)])).toBe(INVITE_ADMIN_ONLY)
+  })
+
+  it('inviteActionsLock: a suspended admin viewer is locked', () => {
+    expect(inviteActionsLock([row('a1', 'admin', 'suspended', true), row('a2', 'admin', 'active')])).toBe(INVITE_ADMIN_ONLY)
+  })
+
+  it('inviteActionsLock: an empty roster and a roster with no self row lock', () => {
+    expect(inviteActionsLock([])).toBe(INVITE_ADMIN_ONLY)
+    expect(inviteActionsLock([row('a1', 'admin', 'active')])).toBe(INVITE_ADMIN_ONLY)
+  })
+
+  it('inviteActionsLock: an active admin viewer gets no lock', () => {
+    expect(inviteActionsLock([row('a1', 'admin', 'active', true)])).toBeNull()
+  })
+
+  it('inviteActionsLock agrees with viewerIsAdmin and roleCardsLock for every viewer', () => {
+    const rosters: [string, Member[]][] = [
+      ['admin', [row('a1', 'admin', 'active', true), row('a2', 'admin', 'active'), row('p1', 'preparer', 'active'), row('r1', 'reviewer', 'active')]],
+      ['sole admin', [row('a1', 'admin', 'active', true), row('a2', 'admin', 'suspended'), row('p1', 'preparer', 'active'), row('r1', 'reviewer', 'active')]],
+      ['suspended admin', [row('a1', 'admin', 'suspended', true), row('a2', 'admin', 'active'), row('p1', 'preparer', 'active'), row('r1', 'reviewer', 'active')]],
+      ['preparer', [row('p1', 'preparer', 'active', true), row('a2', 'admin', 'active'), row('r1', 'reviewer', 'active')]],
+      ['reviewer', [row('r1', 'reviewer', 'active', true), row('a2', 'admin', 'active'), row('p1', 'preparer', 'active')]],
+    ]
+    for (const [viewer, members] of rosters) {
+      const isNull = inviteActionsLock(members) === null
+      expect(isNull, viewer).toBe(viewerIsAdmin(members))
+      expect(isNull, viewer).toBe(roleCardsLock(members, members[1]) !== ROLE_ADMIN_ONLY)
+    }
   })
 
   it('memberActionsLock: a non-admin viewer reads the admin-only note', () => {

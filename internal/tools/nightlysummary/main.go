@@ -24,6 +24,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("nightlysummary", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	suitesPath := fs.String("suites", "", "suites file: key=Display name[=results] per line (required)")
+	e2eSuitesPath := fs.String("e2e-suites", "", "suites file for the jobs of dev-env.yml, judged after -suites")
 	jobsPath := fs.String("jobs", "", "JSON array of the run's jobs (required)")
 	resultsDir := fs.String("results", "", "directory holding results-<key>/ (required; may be absent)")
 	outPath := fs.String("out", "", "summary.json to write (required)")
@@ -42,7 +43,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if *suitesPath == "" || *jobsPath == "" || *resultsDir == "" || *outPath == "" || fs.NArg() != 0 {
-		return fail("usage: nightlysummary -suites <file> -jobs <file> -results <dir> -out <file> [-run-id N] [-sha S] [-started RFC3339] [-now RFC3339] [-workspace P] [-section name=file]...")
+		return fail("usage: nightlysummary -suites <file> -jobs <file> -results <dir> -out <file> [-run-id N] [-sha S] [-started RFC3339] [-now RFC3339] [-workspace P] [-e2e-suites <file>] [-section name=file]...")
 	}
 	now := time.Now().UTC()
 	if *nowFlag != "" {
@@ -64,9 +65,27 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail("%v", err)
 	}
-	suites, err := parseSuites(string(rawSuites))
+	suites, err := parseSuites(string(rawSuites), ciFile)
 	if err != nil {
 		return fail("%s: %v", *suitesPath, err)
+	}
+	if *e2eSuitesPath != "" {
+		raw, err := os.ReadFile(*e2eSuitesPath)
+		if err != nil {
+			return fail("%v", err)
+		}
+		e2e, err := parseSuites(string(raw), devEnvFile)
+		if err != nil {
+			return fail("%s: %v", *e2eSuitesPath, err)
+		}
+		for _, sp := range e2e {
+			for _, ci := range suites {
+				if sp.key == ci.key {
+					return fail("%s: key %q is also in %s", *e2eSuitesPath, sp.key, *suitesPath)
+				}
+			}
+		}
+		suites = append(suites, e2e...)
 	}
 	rawJobs, err := os.ReadFile(*jobsPath)
 	if err != nil {

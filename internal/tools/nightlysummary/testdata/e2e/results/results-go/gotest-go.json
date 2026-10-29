@@ -1,0 +1,14 @@
+{"Action":"start","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy"}
+{"Action":"run","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestA"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestA","Output":"=== RUN   TestA\n"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestA","Output":"--- PASS: TestA (0.00s)\n"}
+{"Action":"pass","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestA"}
+{"Action":"run","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestB"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestB","Output":"=== RUN   TestB\n"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestB","Output":"--- PASS: TestB (0.00s)\n"}
+{"Action":"pass","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestB"}
+{"Action":"run","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestC"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestC","Output":"=== RUN   TestC\n"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestC","Output":"--- PASS: TestC (0.00s)\n"}
+{"Action":"pass","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestC"}
+{"Action":"pass","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy"}

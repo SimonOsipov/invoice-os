@@ -13,10 +13,17 @@ import (
 )
 
 // callerScope is the reader's client scope: the whole tenant, or only the listed clients.
+// admin and self gate account events; the zero value is a non-admin with no subject, so it
+// reads no account row (fail closed).
 type callerScope struct {
-	set bool
-	ids []string
+	set   bool
+	ids   []string
+	admin bool
+	self  string
 }
+
+// restricts reports whether the scope hides any row from the caller.
+func (s callerScope) restricts() bool { return s.set || !s.admin }
 
 // scopeFromGUC maps app.entity_scope: an empty or "*" value is full, an array literal is a set, anything
 // else is the empty set (fail closed).
@@ -137,8 +144,15 @@ func filterPredicates(f Filter, s searchTargets) (string, []any, error) {
 		return fmt.Sprintf("$%d", len(args))
 	}
 
-	if f.scope.set {
-		conditions = append(conditions, "a.entity_id = ANY("+bind(f.scope.ids)+"::uuid[])")
+	switch {
+	case f.scope.set:
+		// One group: a bare OR would escape the AND-joined filters beside it.
+		ids := bind(f.scope.ids)
+		names := bind(AccountEvents)
+		conditions = append(conditions, "(a.entity_id = ANY("+ids+"::uuid[]) OR (a.event = ANY("+names+") AND a.actor = "+bind(f.scope.self)+"))")
+	case !f.scope.admin:
+		names := bind(AccountEvents)
+		conditions = append(conditions, "(a.event <> ALL("+names+") OR a.actor = "+bind(f.scope.self)+")")
 	}
 	if !f.From.IsZero() {
 		conditions = append(conditions, "a.created_at >= "+bind(f.From))

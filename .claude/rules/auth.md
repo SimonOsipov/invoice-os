@@ -13,6 +13,8 @@ paths:
   - "internal/gateway/invitation_password*"
   - "internal/gateway/verify_page*"
   - "internal/gateway/signin*.go"
+  - "internal/gateway/account_events*.go"
+  - "internal/gateway/client_ip*.go"
   - "internal/gateway/signout*.go"
   - "internal/gateway/refresh*.go"
   - "internal/gateway/session_check*.go"
@@ -75,6 +77,10 @@ paths:
 - Wait `AUTH_REGISTER_MIN_RESPONSE` before each register, resend or reset answer that passes the 400 checks. `/auth/invitation/resend` does not wait.
 - Spend one shared budget on resend and password-reset requests.
 - Log no email address, password, token, code or client IP.
+- Write one `account_event_handoffs` row through `AccountEvents.Record` before the answer, for each of these and no other outcome: a sign-in session mint (`account.signed_in`), a wrong password (`account.sign_in_failed`), a sign-in throttle 429 (`account.sign_in_blocked`), a sign-out 204 with a subject (`account.signed_out`), an admitted reset request that GoTrue did not refuse as `validation_failed` (`account.password_reset_requested`) and a completed reset (`account.password_reset_completed`).
+- Count a session mint as `POST /auth/sign-in`, a verify hand-off that minted a code and an invitation set-password hand-off that minted a code.
+- Keep the answer and its timing as they are when a recorder write fails. Log the event name only, then call `platform.CaptureError`.
+- Read the client IP only through `clientIP`. Hosted takes the `X-Forwarded-For` entry second from the right, preview the rightmost, local the `RemoteAddr` host. A hosted or preview entry that is not a public unicast address gives no IP.
 - Read the confirm token and the `state` from the POST form body only. The GET page makes no GoTrue call.
 - Answer `GET /auth/verify` with 303 to `<AUTH_SITE_URL>/?confirm=1#token=<token>` for a confirm link, when the request carries no valid `state`.
 - Answer it with 303 to `<AUTH_SITE_URL>/?confirm=invite#token=<token>` for `invite=1`, when the request carries no valid `state`.
@@ -100,6 +106,7 @@ paths:
 - Expect `?register` to open the create-an-account modal, or "Book a demo" when `registrationOpen()` is false.
 - Expect landing's `?demo` to open the book-a-demo modal.
 - Expect a `?signin` outcome to suppress `?register` and `?demo` in `readDeepLink`. `?register` wins over `?demo`.
+- Expect `?forgot` to open the sign-in window on its reset-password view. `?register` and `?demo` win over it, and a `?signin` outcome suppresses it.
 - Reserve a sign-in throttle attempt before the GoTrue call.
 - Accept a tenant-less token only on four routes: `POST /api/tenancy/v1/workspaces`, `POST /api/tenancy/v1/invitations/accept`, `GET /api/tenancy/v1/invitations/mine` and `POST /api/tenancy/v1/invitations/{id}/accept`.
 - Admit the two join routes only when GoTrue confirmed the email and it equals the token's `email` claim after trim and case folding.

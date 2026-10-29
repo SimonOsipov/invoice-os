@@ -624,7 +624,7 @@ func planTrace(t *testing.T, filter audit.Filter) []planStmt {
 
 	ctx := context.Background()
 	if err := db.WithinTenantTx(ctx, pool, planData.tenant, func(tx pgx.Tx) error {
-		_, e := audit.Query(ctx, tx, filter)
+		_, e := audit.QueryAsAdminForTest(ctx, tx, filter)
 		return e
 	}); err != nil {
 		t.Fatalf("Query: %v", err)
@@ -1645,5 +1645,119 @@ func TestAudit_ScopedEmptyProbeIsIndexServed(t *testing.T) {
 		if !strings.Contains(cond, col) {
 			t.Errorf("Index Cond = %q, want %s in it\nplan = %s", cond, col, plan)
 		}
+	}
+}
+
+// --- AUDIT-13-05: the non-admin account arm on its own corpus ---
+//
+// Corpus: a scratch database of its own, so the 20-tenant corpus above keeps its statistics. One
+// tenant (the one read) holds 50,000 rows over 20 actors: every tenth row (5,000) is an account event, spread
+// evenly over the 20 actors and the six names, and the rest are five invoice and document events.
+// Nineteen other tenants hold 5,000 rows each. VACUUM (ANALYZE) runs as the owner.
+
+const (
+	aePlanRows    = 50000
+	aePlanActors  = 20
+	aePlanOthers  = 19   // tenants beside the one read, so the tenant-led index has a tenant to lead with
+	aePlanOtherRs = 5000 // rows in each of them
+)
+
+// aePlanScratch builds that database and points planScratch at it until the test ends.
+func aePlanScratch(t *testing.T) *fixture {
+	t.Helper()
+	requireFixture(t)
+	if os.Getenv("DATABASE_SUPERUSER_URL") == "" {
+		t.Fatal("DATABASE_SUPERUSER_URL is unset: the account-arm plan test needs a scratch database")
+	}
+	prev := planScratch
+	t.Cleanup(func() {
+		closePlanScratch()
+		planScratch = prev
+	})
+	if _, err := newPlanScratch(); err != nil {
+		t.Fatalf("scratch database: %v", err)
+	}
+	return planScratch.fx
+}
+
+func TestAudit_NonAdminPageKeepsTheTenantIndex(t *testing.T) {
+	f := aePlanScratch(t)
+	ctx := context.Background()
+	tenant := uuid.NewString()
+	actors := make([]string, aePlanActors)
+	for i := range actors {
+		actors[i] = uuid.NewString()
+	}
+	if err := db.WithinTenantTx(ctx, f.mig, tenant, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `INSERT INTO tenants (id, name) VALUES ($1, $2)`, tenant, "audit-13-05-plan")
+		return e
+	}); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	member := csMemberUser(t, planScratch.super, actors[0], tenant, "preparer", true)
+	if err := db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `
+			INSERT INTO audit_log (tenant_id, actor, event, payload, created_at)
+			SELECT $1,
+			       CASE WHEN g % 10 = 0 THEN ($2::text[])[1 + (g / 10) % 20] ELSE ($2::text[])[1 + g % 20] END,
+			       CASE WHEN g % 10 = 0 THEN ($3::text[])[1 + (g / 10) % 6] ELSE ($4::text[])[1 + g % 5] END,
+			       CASE WHEN g % 10 = 0
+			            THEN '{"ip_address":"198.51.100.7","device":"Chrome on macOS","occurred_at":"2026-10-29T08:00:00Z"}'::jsonb
+			            ELSE '{}'::jsonb END,
+			       now() - g * interval '10 seconds'
+			  FROM generate_series(1, $5::int) g`,
+			tenant, actors,
+			[]string{"account.signed_in", "account.sign_in_failed", "account.sign_in_blocked",
+				"account.signed_out", "account.password_reset_requested", "account.password_reset_completed"},
+			[]string{"invoice.created", "invoice.updated", "invoice.validated", "submission.submitted", "document.created"},
+			aePlanRows)
+		return e
+	}); err != nil {
+		t.Fatalf("seed %d audit rows: %v", aePlanRows, err)
+	}
+	for i := 0; i < aePlanOthers; i++ {
+		other := uuid.NewString()
+		if err := db.WithinTenantTx(ctx, f.mig, other, func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, `INSERT INTO tenants (id, name) VALUES ($1, $2)`, other, "audit-13-05-other-"+other[:8])
+			return e
+		}); err != nil {
+			t.Fatalf("seed other tenant: %v", err)
+		}
+		if err := db.WithinTenantTx(ctx, f.app, other, func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, `
+				INSERT INTO audit_log (tenant_id, actor, event, payload, created_at)
+				SELECT $1, $2, 'invoice.updated', '{}'::jsonb, now() - g * interval '100 seconds'
+				  FROM generate_series(1, $3::int) g`, other, uuid.NewString(), aePlanOtherRs)
+			return e
+		}); err != nil {
+			t.Fatalf("seed other tenant rows: %v", err)
+		}
+	}
+	if _, err := f.mig.Exec(ctx, `VACUUM (ANALYZE) audit_log`); err != nil {
+		t.Fatalf("analyze as the owner: %v", err)
+	}
+
+	// Floor: the admin's page, with no account arm, is index-served here, so a later failure is the arm's.
+	admin := csMemberUser(t, planScratch.super, uuid.NewString(), tenant, "admin", false)
+	_, adminStmts := planTraceList(t, admin, audit.Filter{Limit: 50})
+	base := adminStmts[planKindPage]
+	assertServedByIndex(t, f, tenant, "", nil, base.sql, base.args...)
+
+	got, stmts := planTraceList(t, member, audit.Filter{Limit: 50})
+
+	// 45,000 other rows plus the member's own 250 account rows.
+	if want := aePlanRows - aePlanRows/10 + aePlanRows/10/aePlanActors; got.Total != want {
+		t.Fatalf("the member read %d rows, want %d: the plan below is not the plan of the account arm", got.Total, want)
+	}
+	page, ok := stmts[planKindPage]
+	if !ok {
+		t.Fatal("Store.List issued no page statement")
+	}
+	plan := assertServedByIndex(t, f, tenant, "", nil, page.sql, page.args...)
+	if !strings.Contains(plan, "Index Scan") {
+		t.Errorf("plan = %s\nwant an Index Scan on a tenant_id-led index", plan)
+	}
+	if planHasSort(plan) {
+		t.Errorf("plan = %s\nthe non-admin page must keep index order, with no Sort node", plan)
 	}
 }

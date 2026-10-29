@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
@@ -73,6 +74,14 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'membership.account_deleted',
     'membership.admin_handed_on',
   ],
+  account: [
+    'account.signed_in',
+    'account.sign_in_failed',
+    'account.sign_in_blocked',
+    'account.signed_out',
+    'account.password_reset_requested',
+    'account.password_reset_completed',
+  ],
   validation: [
     'validation.rule.enabled',
     'validation.rule.disabled',
@@ -107,9 +116,10 @@ describe('audit vocabulary', () => {
     expect(new Set(shipped)).toEqual(new Set(ALL))
   })
 
-  it('auditVocabulary_domainsAreExactlyEleven', () => {
+  it('auditVocabulary_domainsMatchExpected', () => {
     const domains = new Set(Object.values(AUDIT_EVENTS).map((e) => e.domain))
-    expect(domains.size).toBe(11)
+    expect(domains.size).toBe(Object.keys(EXPECTED).length)
+    expect(Object.values(AUDIT_EVENTS).filter((e) => e.domain === 'account')).toHaveLength(6)
     for (const [domain, ids] of Object.entries(EXPECTED)) {
       for (const id of ids) {
         // Named before it is dereferenced: a missing id would otherwise crash the loop with a
@@ -118,6 +128,32 @@ describe('audit vocabulary', () => {
         expect(AUDIT_EVENTS[id].domain).toBe(domain)
       }
     }
+  })
+
+  it('auditVocabulary_accountLabels', () => {
+    const want: Array<[string, string, 'red' | null]> = [
+      ['account.signed_in', 'Signed in', null],
+      ['account.sign_in_failed', 'Sign-in failed — wrong password', 'red'],
+      ['account.sign_in_blocked', 'Sign-in blocked — too many attempts', 'red'],
+      ['account.signed_out', 'Signed out', null],
+      ['account.password_reset_requested', 'Password reset requested', null],
+      ['account.password_reset_completed', 'Password reset completed', null],
+    ]
+    for (const [id, label, tone] of want) {
+      const view = auditEventView(id)
+      expect(view.label).toBe(label)
+      expect(view.tone, id).toBe(tone)
+    }
+  })
+
+  it('auditVocabulary_everyAccountEventHasALabel', () => {
+    // AccountEvents in internal/audit/account_events.go; its names are not audit.Record literals.
+    const src = readFileSync(resolve(REPO_ROOT, 'internal/audit/account_events.go'), 'utf8')
+    const code = src.replace(/\/\/.*$/gm, '')
+    const names = [...code.matchAll(/"(account\.[a-z_]+)"/g)].map((m) => m[1])
+    expect(names.length, 'population floor: the six account names').toBeGreaterThanOrEqual(6)
+    expect(AUDIT_EVENTS['submission.failed']).toBeDefined()
+    for (const id of names) expect(AUDIT_EVENTS[id], `${id} must carry a label`).toBeDefined()
   })
 
   it('auditVocabulary_everyEmittedEventHasALabel', () => {

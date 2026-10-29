@@ -3,6 +3,7 @@ paths:
   - "internal/audit/**"
   - "internal/actor/**"
   - "internal/staffjobs/**"
+  - "internal/accountevents/**"
   - "internal/tenancy/staff_deletion.go"
   - "internal/tenancy/staff_account_deletion.go"
   - "migrations/*audit_log*"
@@ -17,6 +18,7 @@ paths:
 - `RecordStaff` refuses a `TenantID` that differs from the transaction's tenant with `ErrStaffTenantMismatch`.
 - Never write a staff member's id to `audit_log`.
 - Write `submission.job.redriven` and `submission.job.cancelled` only from `internal/staffjobs`, with payload `job_id`, `invoice_id`, `invoice_number` and `reason`.
+- Write `account.*` events only from `internal/accountevents`, with payload `ip_address`, `device` and `occurred_at`, and the member's user id as the actor.
 - Write `workspace.purged` only from `internal/workspacepurge`, with payload `due_at`, `members` and `objects`, before `purge_tenant` in the same transaction.
 - Write a staff `workspace.deletion_scheduled`, `workspace.deletion_cancelled` or `workspace.purge_started` only from `internal/tenancy/staff_deletion.go`, with `reason` in the payload.
 - Link a staff row to its `audit_log` row by `tenant_id`, `event` and `created_at`.
@@ -30,7 +32,7 @@ paths:
 - Run the page, the count, the facets and the empty probe in one transaction.
 - Read a NULL `entity_id` as workspace-level or unattributed. Never render it as unknown.
 - Classify a NULL-`entity_id` event as `workspace` only when it is in `firmWideEvents`. Add every new firm-wide event to that map.
-- The tenant request reader (`Store.List`: page, count, facets, probe) limits rows to the caller scope through `filterPredicates`. A limited member gets no row with `entity_id` NULL from it.
+- The tenant request reader (`Store.List`: page, count, facets, probe) limits rows to the caller scope through `filterPredicates`. A limited member gets no row with `entity_id` NULL from it, except their own account events. A member who is not an admin gets no other member's account event.
 - Offer three company filters: all, one company and workspace-level. Never write `entity_id = $1 OR entity_id IS NULL`.
 - Resolve company names with a `LEFT JOIN`. Show a dangling `entity_id` as a deleted company.
 - The UUID grammar has several live copies: the resolver, the generated column and `actor.Resolve`. Change all live copies together.

@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -29,12 +31,22 @@ func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 func (s *Store) List(ctx context.Context, f Filter) (Response, error) {
 	var out Response
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// A non-UUID subject is an in-process actor (the seam skips its membership gate): admin.
+		// A UUID subject with no membership row is not admin and keeps its own account rows only.
+		id, _ := auth.IdentityFromContext(ctx)
+		_, uuidErr := uuid.Parse(id.Subject)
+		inProcess := uuidErr != nil
 		var scope string
+		var admin bool
 		if err := tx.QueryRow(ctx,
-			`SELECT coalesce(current_setting('app.entity_scope', true), '')`).Scan(&scope); err != nil {
+			`SELECT coalesce(current_setting('app.entity_scope', true), ''),
+			        coalesce((SELECT m.role = 'admin' FROM memberships m WHERE m.user_id = $1::uuid), false)`,
+			nullUUID(id.Subject, uuidErr)).Scan(&scope, &admin); err != nil {
 			return fmt.Errorf("audit: read client scope: %w", err)
 		}
 		f.scope = scopeFromGUC(scope)
+		f.scope.admin = admin || inProcess
+		f.scope.self = id.Subject
 		var err error
 		out, err = Query(ctx, tx, f)
 		if err != nil {
@@ -64,7 +76,7 @@ func logIsEmpty(ctx context.Context, tx pgx.Tx, scope callerScope) (bool, error)
 	var one int
 	sql := `SELECT 1 FROM audit_log ORDER BY created_at DESC, id DESC LIMIT 1`
 	var args []any
-	if scope.set {
+	if scope.restricts() {
 		where, scopeArgs, err := filterPredicates(Filter{scope: scope}, searchTargets{})
 		if err != nil {
 			return false, fmt.Errorf("audit: probe scope: %w", err)
@@ -80,4 +92,12 @@ func logIsEmpty(ctx context.Context, tx pgx.Tx, scope callerScope) (bool, error)
 		return false, fmt.Errorf("audit: probe for an empty log: %w", err)
 	}
 	return false, nil
+}
+
+// nullUUID is the subject as a bind value: NULL when it is not a UUID, so the role lookup finds no row.
+func nullUUID(subject string, parseErr error) any {
+	if parseErr != nil {
+		return nil
+	}
+	return subject
 }

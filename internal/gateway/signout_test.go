@@ -139,7 +139,7 @@ func newSignOutRig(t *testing.T, gotrue *signOutFake, authURL *url.URL, log *slo
 		sessionRig: rg,
 		user:       user,
 		gotrue:     gotrue,
-		handler:    SignOutHandler(authURL, testClient(), rg.sessions, log),
+		handler:    SignOutHandler(authURL, testClient(), rg.sessions, log, nil),
 		tokS1:      rg.signer.token(t, subjectS1, sid1),
 	}
 	if rec := rg.get(r.tokS1); rec.Code != http.StatusOK || user.Hits() != 1 {
@@ -303,7 +303,7 @@ func ptr(b bool) *bool { return &b }
 
 func TestSignOut_BadBody400NoUpstreamCall(t *testing.T) {
 	fake := newSignOutFake(t, answer(http.StatusOK, signOutGranted(signOutAccess(t, subjectS1))), answer(http.StatusNoContent, ""))
-	h := SignOutHandler(fake.URL, testClient(), liveSessions(t), slog.New(slog.DiscardHandler))
+	h := SignOutHandler(fake.URL, testClient(), liveSessions(t), slog.New(slog.DiscardHandler), nil)
 
 	// The contract's limit, not the constant: refreshBody adds 20 bytes around the token.
 	const oneKiB = 1024
@@ -352,7 +352,7 @@ func TestSignOut_NoStoreAndPostOnly(t *testing.T) {
 	ok := answer(http.StatusNoContent, "")
 	handler := func(token, logout http.HandlerFunc) (http.Handler, *signOutFake) {
 		f := newSignOutFake(t, token, logout)
-		return SignOutHandler(f.URL, testClient(), liveSessions(t), slog.New(slog.DiscardHandler)), f
+		return SignOutHandler(f.URL, testClient(), liveSessions(t), slog.New(slog.DiscardHandler), nil), f
 	}
 	h, fake := handler(granted, ok)
 	answers := map[string]*httptest.ResponseRecorder{}
@@ -418,7 +418,7 @@ func TestSignOut_NeverLogsSecrets(t *testing.T) {
 			authURL = closedURL(t)
 		}
 		log, buf := captureLog()
-		doSignOut(SignOutHandler(authURL, testClient(), liveSessions(t), log), refreshBody(signOutR0))
+		doSignOut(SignOutHandler(authURL, testClient(), liveSessions(t), log, nil), refreshBody(signOutR0))
 		logs[c.name] = buf.String()
 		for _, secret := range []string{signOutR0, signOutR1, access, sig, subjectS1} {
 			if strings.Contains(buf.String(), secret) {
@@ -584,7 +584,7 @@ func TestSignOut_GrantSurvivesClientCancel(t *testing.T) {
 
 func TestSignOut_JoinsUnderAnAuthURLPrefix(t *testing.T) {
 	fake := newSignOutFake(t, answer(http.StatusOK, signOutGranted(signOutAccess(t, subjectS1))), answer(http.StatusNoContent, ""))
-	h := SignOutHandler(fake.URL.JoinPath("prefix"), testClient(), liveSessions(t), slog.New(slog.DiscardHandler))
+	h := SignOutHandler(fake.URL.JoinPath("prefix"), testClient(), liveSessions(t), slog.New(slog.DiscardHandler), nil)
 
 	if rec := doSignOut(h, refreshBody(signOutR0)); rec.Code != http.StatusNoContent {
 		t.Errorf("status = %d, want 204: %s", rec.Code, rec.Body.String())

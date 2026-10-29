@@ -54,7 +54,7 @@ const (
 )
 
 // eraseKinds are the job kinds that can carry a person.
-var eraseKinds = []string{DeliverArgs{}.Kind(), DemoDealArgs{}.Kind(), RegistrantArgs{}.Kind(), BlogSyncArgs{}.Kind()}
+var eraseKinds = []string{DeliverArgs{}.Kind(), DemoDealArgs{}.Kind(), RegistrantArgs{}.Kind(), BlogSyncArgs{}.Kind(), "account_new_device", "account_audit"}
 
 // UsableEraseEmail reports whether EnqueueErasure accepts the address.
 func UsableEraseEmail(email string) bool {
@@ -257,6 +257,8 @@ func (w *EraseWorker) sweep(ctx context.Context, tx pgx.Tx, uid, email string) (
 		{`DELETE FROM river_job WHERE state IN ('completed', 'cancelled', 'discarded') AND ` + byEmail, byEmailArgs},
 		{`DELETE FROM registrant_handoffs WHERE lower(user_id) = $1`, []any{uid}},
 		{`DELETE FROM contacts WHERE email = $1 AND (user_id IS NULL OR user_id::text = $2)`, []any{email, uid}},
+		{`DELETE FROM account_known_devices WHERE user_id::text = $1`, []any{uid}},
+		{`DELETE FROM account_event_handoffs WHERE user_id::text = $1 OR lower(btrim(email)) = $2`, []any{uid, email}},
 	}
 	if !res.superseded {
 		deletes = append(deletes,

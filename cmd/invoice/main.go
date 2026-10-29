@@ -104,8 +104,7 @@ func main() {
 
 	// GET /v1/audit-log -- the workspace audit reader (AUDIT-04). Mounts here rather
 	// than on a new service: the gateway routes on the first segment under /api/, so
-	// this is reached as /api/invoice/v1/audit-log with no gateway change. authorize()
-	// requires only a tenant, so every active member of the workspace can read it.
+	// this is reached as /api/invoice/v1/audit-log with no gateway change.
 	auditStore := audit.NewStore(pool)
 	app.Mux.HandleFunc("GET /v1/audit-log", audit.ListHandler(auditStore.List, app.Logger))
 	// GET /v1/staff/audit-log and /v1/staff/staff-audit-log: staff reads of every tenant's log and of staff changes.

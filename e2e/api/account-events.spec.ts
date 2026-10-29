@@ -72,6 +72,10 @@ interface Payload {
 }
 const payloadOf = (e: AuditEvent): Payload => e.payload as Payload
 
+async function chromeSignIns(token: string, actor: string): Promise<AuditEvent[]> {
+  return rowsOf(await rows(token, SIGNED_IN), actor).filter((e) => payloadOf(e).device === CHROME_ON_MACOS)
+}
+
 interface Member {
   email: string
   password: string
@@ -105,15 +109,15 @@ test.describe('account events (API E2E, over the deployed preview)', () => {
     preparer = await member(tenantId, 'acct-events-p')
     // K is used only by the blocked case.
     blocked = await member(tenantId, 'acct-events-k')
+    // The setup sign-in above also uses the Chrome UA; wait until it is moved so test 1 counts only its own.
+    await expect.poll(async () => (await chromeSignIns(adminToken, adminId)).length, POLL).toBeGreaterThan(0)
   })
 
   test('a sign-in is recorded with device and IP', async () => {
+    const before = (await chromeSignIns(adminToken, adminId)).length
     await signIn(admin.email, admin.password)
-    await expect
-      .poll(async () => rowsOf(await rows(adminToken, SIGNED_IN), adminId).filter((e) => payloadOf(e).device === CHROME_ON_MACOS).length, POLL)
-      .toBeGreaterThan(0)
-    const mine = rowsOf(await rows(adminToken, SIGNED_IN), adminId).filter((e) => payloadOf(e).device === CHROME_ON_MACOS)
-    expect(mine.length).toBeGreaterThan(0)
+    await expect.poll(async () => (await chromeSignIns(adminToken, adminId)).length, POLL).toBeGreaterThan(before)
+    const mine = await chromeSignIns(adminToken, adminId)
     for (const e of mine) {
       expect(payloadOf(e).ip_address).toMatch(IP_PATTERN)
       expect(payloadOf(e).ip_address).not.toBe('Unknown IP')
@@ -151,10 +155,11 @@ test.describe('account events (API E2E, over the deployed preview)', () => {
 
     const res = await signInAttempt(`nobody-${crypto.randomUUID()}@example.com`, 'not-a-password')
     expect(res.status).toBe(401)
-    // The later marker: events move in order, so once it shows the unknown attempt has been dropped or recorded.
+    // The marker shows the mover has passed the unknown attempt (it moves by occurred_at); jobs run concurrently, so wait one more tick before the read.
     await signOut(await signIn(admin.email, admin.password))
     await expect.poll(async () => (await getAuditLog(adminToken, { event: [SIGNED_OUT], limit: 100 })).total, POLL).toBeGreaterThan(outBefore)
 
+    await new Promise((r) => setTimeout(r, 6_000)) // one HandoffInterval (5 s) plus job time
     expect((await getAuditLog(adminToken, { event: [SIGN_IN_FAILED], limit: 100 })).total).toBe(failedBefore)
   })
 

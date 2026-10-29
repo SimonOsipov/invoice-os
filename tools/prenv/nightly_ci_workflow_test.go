@@ -43,6 +43,9 @@ func ciFullModeProblems(yaml string) []string {
 			p = append(p, "on: names "+l)
 		}
 	}
+	if !slices.Contains(on, "pull_request:") {
+		p = append(p, "on: lacks pull_request")
+	}
 	if len(blockLines(lines, 2, "workflow_dispatch")) > 0 {
 		p = append(p, "workflow_dispatch has inputs")
 	}
@@ -132,6 +135,12 @@ func TestCIFullMode_DispatchTriggerRemovedFails(t *testing.T) {
 	t.Parallel()
 	yml := mutateOnce(t, readWorkflow(t, "ci.yml"), "  workflow_dispatch:\n", "")
 	requireCIFullModeProblems(t, yml, "on: lacks workflow_dispatch")
+}
+
+func TestCIFullMode_PullRequestTriggerRemovedFails(t *testing.T) {
+	t.Parallel()
+	yml := mutateOnce(t, readWorkflow(t, "ci.yml"), "  pull_request:\n", "")
+	requireCIFullModeProblems(t, yml, "on: lacks pull_request")
 }
 
 func TestCIFullMode_DispatchInputsFail(t *testing.T) {

@@ -15,6 +15,7 @@ import {
   MEMBER_ADMIN_ONLY,
   MEMBER_CLIENTS_ADMIN_ONLY,
   PROTECTED_ADMIN_NOTE,
+  REMOVE_EXPLANATION,
   removeConfirmQuestion,
   roleChangeQuestion,
   ROLE_ADMIN_ONLY,
@@ -1129,5 +1130,28 @@ describe('MEMB-03: the drawer locks member actions for a non-admin viewer', () =
 
     expect((screen.getByTestId('member-remove') as HTMLButtonElement).disabled).toBe(false)
     expect(screen.queryByTestId('member-remove-note')).toBeNull()
+  })
+
+  it('an admin viewer on an invited row: Remove is live and describes itself with the explanation', () => {
+    mount([adminViewer(), target({ status: 'invited' })])
+
+    const remove = screen.getByTestId('member-remove') as HTMLButtonElement
+    expect(remove.disabled).toBe(false)
+    expect(remove.title).toBe('')
+    expect(describedText(remove)).toBe(REMOVE_EXPLANATION)
+  })
+
+  it('a viewer demoted mid-session: the open drawer locks on the next roster', () => {
+    const ui = (members: Member[]) => (
+      <MemberDrawer ctx={drawerCtx({ members })} memberId="u2" onClose={vi.fn()} onStatus={vi.fn()} onRemove={vi.fn()} statusError={null} />
+    )
+    const { rerender } = render(ui([adminViewer(), target()]))
+    expect((screen.getByTestId('member-suspend') as HTMLButtonElement).disabled).toBe(false)
+
+    rerender(ui([{ ...adminViewer(), role: 'preparer' }, target()]))
+
+    expect((screen.getByTestId('member-suspend') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('member-remove') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTestId('member-danger-note').textContent).toBe(MEMBER_ADMIN_ONLY)
   })
 })

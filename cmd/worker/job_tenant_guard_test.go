@@ -128,8 +128,16 @@ func realRegistry(t *testing.T) map[string]reflect.Type {
 }
 
 func TestJobTenantGuard_RealBundleIsClean(t *testing.T) {
-	if problems := tenantTagProblems(realRegistry(t), companyFreeKinds); len(problems) != 0 {
+	kinds := realRegistry(t)
+	if problems := tenantTagProblems(kinds, companyFreeKinds); len(problems) != 0 {
 		t.Fatalf("job tenant guard:\n%s", strings.Join(problems, "\n"))
+	}
+	audit, ok := kinds["account_audit"]
+	if !ok {
+		t.Fatal("real bundle lacks account_audit: add the audit worker to workerBundle and realRegistry")
+	}
+	if _, free := companyFreeKinds["account_audit"]; free || !carriesTenantID(audit) {
+		t.Errorf("account_audit must carry a top-level tenant_id and stay off the company-free list")
 	}
 }
 

@@ -1,0 +1,5 @@
+# key=Display name[=results]; =results marks a job that uploads result files
+go=Go=results
+frontend=Frontend=results
+docling-test=Docling image (test suite)=results
+docker-canary=Docker image (canary)

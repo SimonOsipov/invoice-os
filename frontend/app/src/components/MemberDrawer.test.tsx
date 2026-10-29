@@ -14,6 +14,7 @@ import {
   CLIENTS_UNREADABLE,
   MEMBER_ADMIN_ONLY,
   MEMBER_CLIENTS_ADMIN_ONLY,
+  WFROLE_ADMIN_ONLY,
   PROTECTED_ADMIN_NOTE,
   REMOVE_EXPLANATION,
   removeConfirmQuestion,
@@ -52,7 +53,7 @@ function entity(id: string, name: string, status = 'active') {
 
 function drawerCtx(over: Record<string, unknown> = {}): PlatformCtx {
   return {
-    members: [member(), member({ id: 'u2', name: 'Bo Person', initials: 'BP', email: 'bo@x.ng' })],
+    members: [adminViewer(), member(), member({ id: 'u2', name: 'Bo Person', initials: 'BP', email: 'bo@x.ng' })],
     roles: [],
     rolesState: 'ready',
     policies: [],
@@ -462,7 +463,7 @@ describe('the drawer shell and bands', () => {
 
   it('the three access-role cards show the real role, are all disabled for a non-admin viewer, and dim to .45', () => {
     const setMemberRole = vi.fn()
-    open({ setMemberRole })
+    open({ setMemberRole, members: [member({ id: 'me', isYou: true }), member({ id: 'u2' })] })
 
     const cards = ['admin', 'preparer', 'reviewer'].map((id) => screen.getByTestId(`drawer-role-${id}`))
     expect(cards).toHaveLength(3)
@@ -1153,5 +1154,43 @@ describe('MEMB-03: the drawer locks member actions for a non-admin viewer', () =
     expect((screen.getByTestId('member-suspend') as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByTestId('member-remove') as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByTestId('member-danger-note').textContent).toBe(MEMBER_ADMIN_ONLY)
+  })
+
+  it('a non-admin viewer: the workflow-role pills are disabled with the admin-only note', () => {
+    const staffRole = vi.fn()
+    mount([viewer(), target()], 'u2', { roles: [role({ key: 'cfo' })], staffRole })
+
+    const pill = screen.getByTestId('drawer-wfrole-cfo')
+    expect(pill.matches(':disabled')).toBe(true)
+    const fieldset = pill.closest('fieldset[aria-describedby]') as HTMLFieldSetElement
+    expect(document.getElementById(fieldset.getAttribute('aria-describedby') as string)?.textContent).toBe(WFROLE_ADMIN_ONLY)
+    fireEvent.click(pill)
+    expect(staffRole).not.toHaveBeenCalled()
+  })
+
+  it('an admin viewer: the workflow-role pills are live, with no note', () => {
+    mount([adminViewer(), target()], 'u2', { roles: [role({ key: 'cfo' })] })
+
+    expect(screen.getByTestId('drawer-wfrole-cfo').matches(':disabled')).toBe(false)
+    expect(screen.getByTestId('member-drawer').textContent).not.toContain(WFROLE_ADMIN_ONLY)
+  })
+
+  it('the role cards, Suspend, Remove, the picker and the pills all lock together on viewer demotion', () => {
+    const ctxFor = (members: Member[]) => drawerCtx({ members, roles: [role({ key: 'cfo' })] })
+    const ui = (members: Member[]) => (
+      <MemberDrawer ctx={ctxFor(members)} memberId="u2" onClose={vi.fn()} onStatus={vi.fn()} onRemove={vi.fn()} statusError={null} />
+    )
+    const locked = () => [
+      (screen.getByTestId('drawer-role-admin').querySelector('input') as HTMLInputElement).disabled,
+      (screen.getByTestId('member-suspend') as HTMLButtonElement).disabled,
+      (screen.getByTestId('member-remove') as HTMLButtonElement).disabled,
+      (screen.getByTestId('drawer-scope-all').closest('fieldset') as HTMLFieldSetElement).disabled,
+      screen.getByTestId('drawer-wfrole-cfo').matches(':disabled'),
+    ]
+    const { rerender } = render(ui([adminViewer(), target({ clientAccess: ['e1'] })]))
+    expect(locked()).toEqual([false, false, false, false, false])
+
+    rerender(ui([{ ...adminViewer(), role: 'preparer' }, target({ clientAccess: ['e1'] })]))
+    expect(locked()).toEqual([true, true, true, true, true])
   })
 })

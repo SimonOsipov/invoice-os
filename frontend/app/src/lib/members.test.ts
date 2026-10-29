@@ -29,6 +29,9 @@ import {
   memberActionsLock,
   MEMBER_ADMIN_ONLY,
   MEMBER_CLIENTS_ADMIN_ONLY,
+  WFROLE_ADMIN_ONLY,
+  clientPickerLock,
+  workflowRolesLock,
   roleChangeQuestion,
   ROLE_ADMIN_ONLY,
   SELF_DEMOTION_WARNING,
@@ -2454,6 +2457,22 @@ describe('ACCESS-01-04 — the role write and its copy', () => {
     const me = row('a1', 'admin', 'active', true)
     const gone = row('a2', 'admin', 'suspended')
     expect(roleCardsLock([me, gone], gone)).toBeNull()
+  })
+
+  it('WFROLE_ADMIN_ONLY is byte-pinned', () => {
+    expect(WFROLE_ADMIN_ONLY).toBe('Only an admin can change workflow roles.')
+  })
+
+  it('clientPickerLock and workflowRolesLock: a non-admin viewer reads the note, an admin viewer none', () => {
+    const nonAdmin = [row('p1', 'preparer', 'active', true), row('a1', 'admin', 'active')]
+    const admin = [row('a1', 'admin', 'active', true), row('p1', 'preparer', 'active')]
+    const suspended = [row('a1', 'admin', 'suspended', true), row('a2', 'admin', 'active')]
+    expect(clientPickerLock(nonAdmin)).toBe(MEMBER_CLIENTS_ADMIN_ONLY)
+    expect(workflowRolesLock(nonAdmin)).toBe(WFROLE_ADMIN_ONLY)
+    expect(clientPickerLock(admin)).toBeNull()
+    expect(workflowRolesLock(admin)).toBeNull()
+    expect(clientPickerLock(suspended)).toBe(MEMBER_CLIENTS_ADMIN_ONLY)
+    expect(workflowRolesLock([])).toBe(WFROLE_ADMIN_ONLY)
   })
 
   it('memberActionsLock: a non-admin viewer reads the admin-only note', () => {

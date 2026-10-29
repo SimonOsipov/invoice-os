@@ -25,7 +25,7 @@ import {
   CLIENTS_UNREADABLE,
   emailLabel,
   accessRoleLabel,
-  MEMBER_CLIENTS_ADMIN_ONLY,
+  clientPickerLock,
   memberActionsLock,
   pickerClients,
   REMOVE_CONFIRMED,
@@ -33,7 +33,7 @@ import {
   REMOVE_KEEP,
   removeConfirmQuestion,
   roleCardsLock,
-  viewerIsAdmin,
+  workflowRolesLock,
   ROLE_CHANGE_CONFIRMED,
   ROLE_CHANGE_KEEP,
   roleChangeQuestion,
@@ -107,6 +107,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
   const noteId = useId()
   const roleNoteId = useId()
   const scopeNoteId = useId()
+  const wfRoleNoteId = useId()
   const removeNoteId = useId()
   const removeLockNoteId = useId()
   useDismiss(true, onClose)
@@ -139,13 +140,15 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
     if (confirmRole) keepRoleRef.current?.focus()
   }, [confirmRole])
 
-  // Resolved from the CURRENT list on every render, never captured: `isProtectedAdmin` does
-  // no identity lookup and answers `true` for a detached row (members.test.ts), so a stale
-  // row gives a wrong lock, and a status write replaces the row under this drawer.
+  // Resolved from the CURRENT list on every render, never captured: the locks read this row and
+  // the viewer's own row, `isProtectedAdmin` answers `true` for a detached row (members.test.ts),
+  // and a status write replaces the row under this drawer.
   const row = ctx.members.find((m) => m.id === memberId) ?? null
   if (!row) return null
 
   const actionLock = memberActionsLock(ctx.members, row)
+  const pickerLock = clientPickerLock(ctx.members)
+  const wfRolesLock = workflowRolesLock(ctx.members)
 
   // BOTH halves of the gate — holding a role, and actually being named in a step — are
   // `stepsForMember`'s, not this component's. It is the rule that stops the drawers of people
@@ -161,6 +164,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
   const rolesLanded = ctx.rolesState === 'ready' || ctx.rolesState === 'empty'
   const steps = rolesLanded ? stepsForMember(ctx.policies, ctx.roles, row.id) : null
   const heldRoleKeys = rolesLanded ? rolesOfMember(ctx.roles, row.id).map((r) => r.key) : []
+  const pills = <WorkflowRolePills idPrefix="drawer" roles={ctx.roles} held={heldRoleKeys} onToggle={toggleWorkflowRole} />
 
   // §6's rule, and a SEPARATE one from the last-admin lock: your own row has no Remove.
   // The `⋯` menu holds the same line (MembersTable.tsx). OMITTED, not disabled — a control
@@ -179,7 +183,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
   // `staffRole`. The `rolePending` guard is load-bearing, not the fieldset below: jsdom never
   // propagates `<fieldset disabled>` to a descendant button's IDL `disabled` property.
   async function toggleWorkflowRole(key: string) {
-    if (rolePending) return
+    if (rolePending || wfRolesLock) return
     const role = ctx.roles.find((r) => r.key === key)
     if (!role) return
     const members = role.members.includes(memberId) ? role.members.filter((id) => id !== memberId) : [...role.members, memberId]
@@ -246,6 +250,15 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
 
   const clientsLanded = ctx.entitiesState === 'ready' || ctx.entitiesState === 'empty'
   const storedClients = row.clientAccess ?? []
+  const picker = (
+    <ClientAccessPicker
+      key={pickerKey}
+      idPrefix="drawer"
+      value={storedClients}
+      clients={pickerClients(ctx.entities, storedClients)}
+      onChange={pickerLock ? undefined : changeClients}
+    />
+  )
   // `null`: the server withheld this row's set from a non-admin viewer.
   const clientsUnreadable = row.clientAccess == null
 
@@ -401,23 +414,14 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
               ) : (
                 <>
                   <fieldset disabled={clientsPending} style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0 }}>
-                    {clientsLanded && !viewerIsAdmin(ctx.members) ? (
-                      <UnbackedField reason={MEMBER_CLIENTS_ADMIN_ONLY} noteId={scopeNoteId}>
-                        <ClientAccessPicker
-                          key={pickerKey}
-                          idPrefix="drawer"
-                          value={storedClients}
-                          clients={pickerClients(ctx.entities, storedClients)}
-                        />
-                      </UnbackedField>
-                    ) : clientsLanded ? (
-                      <ClientAccessPicker
-                        key={pickerKey}
-                        idPrefix="drawer"
-                        value={storedClients}
-                        clients={pickerClients(ctx.entities, storedClients)}
-                        onChange={changeClients}
-                      />
+                    {clientsLanded ? (
+                      pickerLock ? (
+                        <UnbackedField reason={pickerLock} noteId={scopeNoteId}>
+                          {picker}
+                        </UnbackedField>
+                      ) : (
+                        picker
+                      )
                     ) : ctx.entitiesState === 'error' ? (
                       <ErrorState error={ctx.entitiesError ?? toApiError(new Error('Could not load clients.'))} onRetry={ctx.refetchEntities} />
                     ) : (
@@ -471,7 +475,13 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
               a reason note, and a staffing write in flight has none to show. */}
           <fieldset disabled={rolePending} style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0 }}>
             {rolesLanded ? (
-              <WorkflowRolePills idPrefix="drawer" roles={ctx.roles} held={heldRoleKeys} onToggle={toggleWorkflowRole} />
+              wfRolesLock ? (
+                <UnbackedField reason={wfRolesLock} noteId={wfRoleNoteId}>
+                  {pills}
+                </UnbackedField>
+              ) : (
+                pills
+              )
             ) : ctx.rolesState === 'error' ? (
               ctx.rolesError && <ErrorState error={ctx.rolesError} onRetry={ctx.refetchRoles} />
             ) : (

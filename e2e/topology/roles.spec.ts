@@ -1660,3 +1660,89 @@ test('firm Clients: a member with no clients sees why, on Clients and in the swi
 
   expect(adminErrors, `console errors on the admin's app:\n${adminErrors.join('\n')}`).toEqual([])
 })
+
+// frontend/app/src/lib/members.ts: WFROLE_ADMIN_ONLY.
+const WFROLE_ADMIN_ONLY_COPY = 'Only an admin can change workflow roles.'
+
+test('firm Roles: a reviewer sees the write controls locked, still reads the tab, and the notes fit', async ({ browser }) => {
+  test.setTimeout(300_000)
+  const reviewer = await ensureMember(TENANTS.a.id, 'firm', 'reviewer')
+  const context = await browser.newContext()
+  try {
+    const member = await context.newPage()
+    const errors = collectErrors(member)
+    await signInAtFrontDoor(member, { ...reviewer, workspaceName: TENANTS.a.name }, '/')
+    await goTo(member, 'Settings')
+    await openSettingsTab(member, 'Roles')
+
+    const cards = member.getByTestId('role-card')
+    const edits = member.getByTestId('role-card-edit')
+    const newRole = member.getByTestId('roles-new')
+    const search = member.getByTestId('roles-search')
+    const headerNote = member.getByTestId('roles-admin-only')
+
+    // Locked: the roster has landed once the header note renders, so the count below is stable.
+    await expect(headerNote).toHaveText(WFROLE_ADMIN_ONLY_COPY)
+    await expect(member.getByTestId('roles-grid')).toBeVisible()
+    const count = await cards.count()
+    expect(count, 'the tab has role cards').toBeGreaterThan(0)
+    await expect(newRole).toBeDisabled()
+    await expect(edits).toHaveCount(count)
+    for (const edit of await edits.all()) await expect(edit).toBeDisabled()
+    const cardNotes = member.getByTestId('role-card-admin-only')
+    await expect(cardNotes).toHaveCount(count)
+    for (const note of await cardNotes.all()) await expect(note).toHaveText(WFROLE_ADMIN_ONLY_COPY)
+
+    // Reads stay: a real title keeps its card, a nonsense query empties the grid, clearing restores.
+    const title = (await cards.first().innerText()).split('\n')[0].trim()
+    expect(title, 'the first card has a title').not.toBe('')
+    await search.fill(title)
+    await expect(cards.first()).toContainText(title)
+    await expect(member.getByTestId('roles-no-match')).toHaveCount(0)
+    await search.fill('zzzz-no-such-role')
+    await expect(cards).toHaveCount(0)
+    await expect(member.getByTestId('roles-no-match')).toBeVisible()
+    await search.fill('')
+    await expect(cards).toHaveCount(count)
+
+    // Each note sits inside its card; the header note clears the toolbar and stays on screen.
+    const layout = await atEachWidth(member, async (width) => {
+      await settleAnimations(headerNote, newRole, search)
+      const viewport: Rect = { x: 0, y: 0, width, height: 1080 }
+      const noteBox = await boxOf(headerNote, `the header note at ${width}px`)
+      const newBox = await boxOf(newRole, `New role at ${width}px`)
+      const searchBox = await boxOf(search, `the search box at ${width}px`)
+      expect(rectsOverlap(noteBox, newBox), `the header note must not overlap New role at ${width}px`).toBe(false)
+      expect(rectsOverlap(noteBox, searchBox), `the header note must not overlap the search box at ${width}px`).toBe(false)
+      expect(enclosesRect(viewport, noteBox, 1), `the header note must sit inside the viewport at ${width}px`).toBe(true)
+      for (let i = 0; i < count; i++) {
+        const card = cards.nth(i)
+        const cardBox = await boxOf(card, `role card ${i} at ${width}px`)
+        const cardNote = await boxOf(card.getByTestId('role-card-admin-only'), `role card ${i}'s note at ${width}px`)
+        expect(enclosesRect(cardBox, cardNote, 1), `card ${i}'s note must sit inside its card at ${width}px`).toBe(true)
+      }
+      const { scrollWidth, innerWidth } = await member.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        innerWidth: window.innerWidth,
+      }))
+      expect(scrollWidth, `the page must not scroll sideways at ${width}px`).toBeLessThanOrEqual(innerWidth)
+      return { width, noteBox, newBox, searchBox }
+    })
+    expect(layout.map((m) => m.width)).toEqual([...WIDE_WIDTHS])
+
+    // A hovered disabled Edit keeps its disabled look: the ghost button's :hover fill must not win.
+    const edit = edits.first()
+    await edit.hover({ force: true })
+    expect(await edit.evaluate((el) => el.matches(':hover')), 'the pointer is over Edit, so :hover applies').toBe(true)
+    const look = await edit.evaluate((el) => {
+      const s = getComputedStyle(el)
+      return { opacity: s.opacity, background: s.backgroundColor }
+    })
+    expect(look.opacity, 'a hovered disabled Edit keeps its 0.45 opacity').toBe('0.45')
+    expect(look.background, 'a hovered disabled Edit keeps a transparent fill').toBe('rgba(0, 0, 0, 0)')
+
+    expect(errors, `console errors on the reviewer's app:\n${errors.join('\n')}`).toEqual([])
+  } finally {
+    await context.close()
+  }
+})

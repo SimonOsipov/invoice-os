@@ -108,6 +108,36 @@ func TestInviteSender_ProductionWithKeySendsThroughTheTransport(t *testing.T) {
 	}
 }
 
+func TestInviteSender_NightlyCapturesWithOrWithoutTheKey(t *testing.T) {
+	for name, key := range map[string]string{"with key": "k_live", "no key": ""} {
+		t.Run(name, func(t *testing.T) {
+			spy := &spyTransport{}
+			var logs bytes.Buffer
+			env := getenvOf(map[string]string{"DEPLOY_ENV": "nightly", "RESEND_SENDING_KEY": key})
+
+			s := inviteSender(env, spy, textLogger(&logs))
+
+			c, ok := s.(*accountmail.Capture)
+			if !ok {
+				t.Fatalf("sender = %T, want *accountmail.Capture", s)
+			}
+			if err := s.Send(context.Background(), oneMail); err != nil {
+				t.Errorf("Send err = %v, want nil", err)
+			}
+			if got := spy.seen(); len(got) != 0 {
+				t.Errorf("the transport saw %d request(s), want none", len(got))
+			}
+			if got := c.Messages(); len(got) != 1 {
+				t.Errorf("captured = %+v, want the one mail", got)
+			}
+			assertModeLine(t, logs.String(), "capture")
+			if strings.Contains(logs.String(), "k_live") {
+				t.Errorf("log holds the key: %s", logs.String())
+			}
+		})
+	}
+}
+
 func TestInviteSender_ProductionWithoutKeyIsOff(t *testing.T) {
 	spy := &spyTransport{}
 	var logs bytes.Buffer
@@ -137,6 +167,8 @@ func TestInviteSender_EnvironmentNamesThatAreNotAPullRequestFork(t *testing.T) {
 		{"unknown name without the key", "staging", "", false, "off"},
 		{"suffix after the pr number", "pr-123-hotfix", "k_live", true, "real"},
 		{"upper-case pr", "PR-123", "k_live", true, "real"},
+		{"capitalised nightly, no key", "Nightly", "", false, "off"},
+		{"nightly2, no key", "nightly2", "", false, "off"},
 		{"pr without a number", "pr-", "", false, "off"},
 		{"local, no environment name, no key", "", "", false, "off"},
 	}
@@ -152,7 +184,7 @@ func TestInviteSender_EnvironmentNamesThatAreNotAPullRequestFork(t *testing.T) {
 				t.Errorf("sender = %T, want real %v", s, c.wantReal)
 			}
 			if _, ok := s.(*accountmail.Capture); ok {
-				t.Errorf("sender = %T: only a pr-<n> environment may capture", s)
+				t.Errorf("sender = %T: only a preview (pr-<n>) or the nightly may capture", s)
 			}
 			if !c.wantReal {
 				if err := s.Send(context.Background(), oneMail); !errors.Is(err, accountmail.ErrNotConfigured) {

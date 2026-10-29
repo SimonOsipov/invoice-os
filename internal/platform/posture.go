@@ -15,6 +15,9 @@ const (
 	PostureNightly PostureKind = "nightly"
 )
 
+// Ephemeral reports a posture that captures mail and holds no real customer data.
+func (p PostureKind) Ephemeral() bool { return p == PosturePreview || p == PostureNightly }
+
 // Same shape as internal/platform/db's prEnvironmentPattern, duplicated because that
 // one is unexported and its package must not be touched here.
 var prNamePattern = regexp.MustCompile(`^(?:.+-)?pr-[0-9]+$`)

@@ -111,3 +111,12 @@ func TestDeployEnv(t *testing.T) {
 		})
 	}
 }
+
+func TestPostureEphemeral(t *testing.T) {
+	cases := map[PostureKind]bool{PosturePreview: true, PostureNightly: true, PostureHosted: false, PostureLocal: false}
+	for p, want := range cases {
+		if got := p.Ephemeral(); got != want {
+			t.Errorf("%q.Ephemeral() = %v, want %v", p, got, want)
+		}
+	}
+}

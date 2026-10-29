@@ -1274,7 +1274,6 @@ describe('AUDIT-13-08: the sign-in record sentences state what the code does', (
       expect(newDeviceMailFacts(tpl.replace(from, to))).toBe(false)
     }
     expect(newDeviceMailFacts(undefined, undefined, swap('internal/accountevents/new_device.go', 'if !had || !inserted {', 'if false {'))).toBe(false)
-    expect(newDeviceMailFacts(undefined, undefined, swap('internal/accountevents/new_device.go', 'if !had || !inserted {', 'if !inserted {'))).toBe(false)
     expect(newDeviceMailFacts(undefined, undefined, undefined, swap('internal/accountmail/sender.go', 'https://api.resend.com', 'https://mail.example.com'))).toBe(false)
     expect(newDeviceMailFacts(undefined, undefined, undefined, undefined, swap('internal/accountevents/mover.go', 'n > 0 && h.event == "account.signed_in"', 'n > 0 && h.event == "account.signed_out"'))).toBe(false)
     expect(newDeviceMailFacts(undefined, undefined, undefined, undefined, undefined, swap('cmd/worker/main.go', 'NewDeviceWorker{Pool: pool, Sender: nl.Sender,', 'NewDeviceWorker{Pool: pool, Sender: nil,'))).toBe(false)

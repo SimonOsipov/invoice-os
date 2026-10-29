@@ -675,6 +675,9 @@ export function newDeviceMailFacts(
     /Sender\s+accountmail\.Sender/.test(worker) &&
     guard > -1 &&
     guard < work.indexOf('w.Sender.Send(') &&
+    /QueryRow\(ctx, recordPair,/.test(work) &&
+    work.indexOf('recordPair') < guard &&
+    /const recordPair = `WITH had AS \(SELECT EXISTS \(SELECT 1 FROM account_known_devices WHERE user_id = \$1::uuid\) AS v\),\s*ins AS \(INSERT INTO account_known_devices \(user_id, browser, os\)/.test(worker) &&
     /ResendBaseURL\s*=\s*"https:\/\/api\.resend\.com"/.test(sender) &&
     /func \(r \*Resend\) Send\(/.test(sender) &&
     /n > 0 && h\.event == "account\.signed_in"/.test(mover) &&

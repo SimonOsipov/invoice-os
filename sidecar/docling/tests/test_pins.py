@@ -101,8 +101,12 @@ def test_t03_11_no_surya_no_olmocr_no_cuda_torch_wheel():
     assert "olmocr" not in text.lower(), f"{REQUIREMENTS} names olmocr"
 
 
-def test_sentry_sdk_is_pinned_at_2_71_0():
-    # A scan: the pin only exists in requirements.txt; dropping it fails the image build, not a unit.
+def test_sentry_sdk_is_exact_pinned():
+    # Version-agnostic: a Dependabot bump must pass; dropping the pin fails the image build, not a unit.
     lines = _requirement_lines()
     assert len(lines) >= MIN_DIRECT_REQUIREMENTS
-    assert "sentry-sdk==2.71.0" in lines
+    sentry_lines = [line for line in lines if line.split("==", 1)[0].lower() == "sentry-sdk"]
+    assert len(sentry_lines) == 1, f"want one sentry-sdk line in {REQUIREMENTS}, got {sentry_lines}"
+    assert re.fullmatch(r"sentry-sdk==\S+", sentry_lines[0]), (
+        f"{sentry_lines[0]!r} is not an exact == pin"
+    )

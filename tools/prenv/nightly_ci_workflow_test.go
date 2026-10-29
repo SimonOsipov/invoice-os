@@ -2,6 +2,7 @@
 package main
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -279,6 +280,40 @@ func ciUploadStepProblems(j workflowJob) []string {
 	return nil
 }
 
+// ciMinGoTestLines counts the bare `go test` lines of the results jobs: go Test, JWKS,
+// mockissuer, Tier-1 accuracy, wired corpus, end-to-end corpus.
+const ciMinGoTestLines = 6
+
+// ciGoTestProblems checks every `go test` line of a job's run blocks: it must sit in the else
+// branch of a NIGHTLY_RESULTS guard whose gotestretry line carries the same arguments.
+func ciGoTestProblems(j workflowJob) ([]string, int) {
+	var p []string
+	n := 0
+	for _, s := range j.steps() {
+		retry, guard, els := "", false, false
+		for _, l := range strings.Split(s.keys["run"], "\n") {
+			switch {
+			case strings.HasPrefix(l, "#"):
+			case l == `if [ -n "$NIGHTLY_RESULTS" ]; then`:
+				guard, retry, els = true, "", false
+			case guard && strings.HasPrefix(l, `go run ./internal/tools/gotestretry -out "$NIGHTLY_RESULTS/gotest-`):
+				_, args, _ := strings.Cut(l, " -- ")
+				retry, _, _ = strings.Cut(args, " || ")
+			case l == "else":
+				els = els || retry != ""
+			case strings.Contains(l, "go test "):
+				n++
+				_, args, _ := strings.Cut(l, "go test ")
+				args, _, _ = strings.Cut(args, " | ")
+				if !els || retry == "" || retry != strings.TrimSpace(args) {
+					p = append(p, j.name+" job step "+fmt.Sprint(s.keys["name"])+": go test line lacks the full-mode gotestretry branch: "+l)
+				}
+			}
+		}
+	}
+	return p, n
+}
+
 // ciResultsProblems names each rule of the full-mode results wiring that ci.yml breaks.
 func ciResultsProblems(yaml string) []string {
 	lines := strings.Split(yaml, "\n")
@@ -359,12 +394,18 @@ func ciResultsProblems(yaml string) []string {
 		}
 	}
 
+	goTests := 0
 	for _, id := range ciResultsJobs {
 		if j, ok := ciJobOf(yaml, id); !ok {
 			p = append(p, "no "+id+" job")
 		} else {
 			p = append(p, ciUploadStepProblems(j)...)
+			gp, n := ciGoTestProblems(j)
+			p, goTests = append(p, gp...), goTests+n
 		}
+	}
+	if goTests < ciMinGoTestLines {
+		p = append(p, fmt.Sprintf("inspected %d go test lines in the results jobs, want at least %d", goTests, ciMinGoTestLines))
 	}
 	for _, j := range workflowJobsOf(yaml) {
 		if _, has := ciStepNamed(j, ciUploadStepName); has && !slices.Contains(ciResultsJobs, j.name) {
@@ -490,4 +531,40 @@ func TestCIResults_UploadStepOnExactlyTheResultsJobs(t *testing.T) {
 	requireCIResultsProblem(t, mutateInJob(t, yml, "idp", "if-no-files-found: warn", "if-no-files-found: error"), "idp job upload step differs")
 	only := mutateInJob(t, yml, "stale-refs", "      - uses: actions/checkout@v4\n", "      - uses: actions/checkout@v4\n"+ciUploadStepText())
 	requireCIResultsProblem(t, only, "stale-refs job has the upload step")
+}
+
+func TestCIResults_EveryGoTestLineHasTheRetryBranch(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "ci.yml")
+	total := 0
+	for _, id := range ciResultsJobs {
+		j, _ := ciJobOf(yml, id)
+		_, n := ciGoTestProblems(j)
+		total += n
+	}
+	if total < ciMinGoTestLines {
+		t.Fatalf("inspected %d go test lines, want at least %d", total, ciMinGoTestLines)
+	}
+	if got := ciResultsProblems(yml); len(got) != 0 {
+		t.Fatalf("ci.yml results problems: %q", got)
+	}
+}
+
+func TestCIResults_GoTestStepsRouteThroughGotestretry(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "ci.yml")
+	for _, c := range []struct{ name, job, old, repl string }{
+		{"jwks retry dropped", "go", `-out "$NIGHTLY_RESULTS/gotest-jwks.json" -- -race`, `-out "$NIGHTLY_RESULTS/gotest-jwks.json" -- -x -race`},
+		{"jwks guard dropped", "go", "if [ -n \"$NIGHTLY_RESULTS\" ]; then\n            mkdir -p \"$NIGHTLY_RESULTS\"\n            go run ./internal/tools/gotestretry -out \"$NIGHTLY_RESULTS/gotest-jwks.json\"", "if true; then\n            go run ./internal/tools/gotestretry -out \"$NIGHTLY_RESULTS/gotest-jwks.json\""},
+		{"mockissuer retry dropped", "go", `gotest-mockissuer.json" -- -tags mockissuer`, `gotest-mockissuer.json" -- -tags other`},
+		{"accuracy retry dropped", "go", `gotest-accuracy.json" -- -count=1 -v`, `gotest-accuracy.json" -- -count=1`},
+		{"wired retry dropped", "queue", `gotest-wired.json" -- -count=1 -v`, `gotest-wired.json" -- -count=1`},
+		{"endtoend retry dropped", "queue", `gotest-endtoend.json" -- -count=1 -v`, `gotest-endtoend.json" -- -count=1`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			requireCIResultsProblem(t, mutateInJob(t, yml, c.job, c.old, c.repl), "go test line lacks")
+		})
+	}
+	// A bare go test line outside any guard fails the same check.
+	requireCIResultsProblem(t, mutateInJob(t, yml, "queue", "      - name: Upload the nightly results\n", "      - name: Bare\n        run: go test ./x/\n      - name: Upload the nightly results\n"), "go test line lacks")
 }

@@ -276,3 +276,21 @@ func TestErrorReporter_SentryOffIsNoop(t *testing.T) {
 		t.Errorf("HandlePanic result = %+v, want nil", res)
 	}
 }
+
+func TestFinalAttemptHub_NilWhenOffAndSetWhenOn(t *testing.T) {
+	hub := sentry.CurrentHub()
+	prev := hub.Client()
+	hub.BindClient(nil)
+	t.Cleanup(func() { hub.BindClient(prev) })
+	if h := finalAttemptHub(jobRow(8, 8), "error", ""); h != nil {
+		t.Error("finalAttemptHub returned a hub while Sentry is off, want nil")
+	}
+
+	sentrytest.Boot(t, "submission")
+	if h := finalAttemptHub(jobRow(8, 8), "error", ""); h == nil {
+		t.Error("finalAttemptHub returned nil with an enabled client, want a hub")
+	}
+	if h := finalAttemptHub(jobRow(7, 8), "error", ""); h != nil {
+		t.Error("finalAttemptHub returned a hub for a retrying attempt, want nil")
+	}
+}

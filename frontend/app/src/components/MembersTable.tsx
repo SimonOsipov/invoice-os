@@ -20,9 +20,9 @@ import {
   clientAccessTitle,
   emailLabel,
   inviteAccountLine,
+  inviteActionsLock,
   inviteStatusLine,
-  isProtectedAdmin,
-  PROTECTED_ADMIN_NOTE,
+  memberActionsLock,
   REMOVE_CONFIRMED,
   REMOVE_KEEP,
   removeConfirmQuestion,
@@ -113,9 +113,11 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, onR
     if (revokeId != null) keepRef.current?.focus()
   }, [revokeId])
   // A filter can drop the row; the strip must not return when it comes back.
+  // Losing admin also closes it: a legacy invited membership stays in `rows`.
+  const inviteLocked = inviteActionsLock(members) != null
   useEffect(() => {
-    if (revokeId != null && !rows.some((m) => m.id === revokeId)) setRevokeId(null)
-  }, [rows, revokeId])
+    if (revokeId != null && (inviteLocked || !rows.some((m) => m.id === revokeId))) setRevokeId(null)
+  }, [rows, revokeId, inviteLocked])
 
   // The member whose Remove confirm strip is open; same lifecycle as the revoke strip.
   const [removeId, setRemoveId] = useState<string | null>(null)
@@ -135,12 +137,14 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, onR
   const openNoted = openRow?.status === 'invited' && invites.some((i) => i.id === openRow.id && inviteAccountLine(i) != null)
   const clearance = !openRow ? 0 : openNoted ? MENU_CLEARANCE_NOTED : MENU_CLEARANCE
 
-  function menuItems(m: Member, protectedAdmin: boolean): MenuAction[] {
+  function menuItems(m: Member, lock: string | null): MenuAction[] {
     if (m.status === 'invited') {
+      const inviteLock = inviteActionsLock(members)
       // Resend and Revoke exclude each other on one row while either is in flight.
+      const busy = resending?.has(m.id) || revoking?.has(m.id)
       return [
-        { label: 'Resend invite', disabled: resending?.has(m.id) || revoking?.has(m.id), onSelect: () => onResend?.(m.id) },
-        { label: 'Revoke invite', danger: true, disabled: revoking?.has(m.id) || resending?.has(m.id), onSelect: () => setRevokeId(m.id) },
+        { label: 'Resend invite', disabled: inviteLock != null || busy, reason: inviteLock ?? undefined, onSelect: () => onResend?.(m.id) },
+        { label: 'Revoke invite', danger: true, disabled: inviteLock != null || busy, reason: inviteLock ?? undefined, onSelect: () => setRevokeId(m.id) },
       ]
     }
     const items: MenuAction[] = [
@@ -150,22 +154,21 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, onR
       // renders on the ROW below rather than in here.
       { label: 'Edit', onSelect: () => onOpen(m.id) },
       m.status === 'suspended'
-        ? { label: 'Reactivate', onSelect: () => onStatus(m.id, 'active') }
+        ? { label: 'Reactivate', disabled: lock != null, reason: lock ?? undefined, onSelect: () => onStatus(m.id, 'active') }
         : {
             label: 'Suspend',
-            disabled: protectedAdmin,
-            reason: protectedAdmin ? PROTECTED_ADMIN_NOTE : undefined,
+            disabled: lock != null,
+            reason: lock ?? undefined,
             onSelect: () => onStatus(m.id, 'suspended'),
           },
     ]
-    // §6: your own menu has no Remove. A SEPARATE rule from the last-admin lock — `isYou`,
-    // not `isProtectedAdmin`.
+    // Your own menu has no Remove: a separate rule from the lock.
     if (!m.isYou) {
       items.push({
         label: 'Remove',
         danger: true,
-        disabled: protectedAdmin,
-        reason: protectedAdmin ? PROTECTED_ADMIN_NOTE : undefined,
+        disabled: lock != null,
+        reason: lock ?? undefined,
         onSelect: () => setRemoveId(m.id),
       })
     }
@@ -212,10 +215,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, onR
         )}
 
         {rows.map((m) => {
-          // The CURRENT row from the CURRENT list. `isProtectedAdmin` does no identity lookup
-          // — it returns true for a detached object that is not in the list at all
-          // (members.test.ts QA38) — so a stale row read from a closure gives a wrong answer.
-          const protectedAdmin = isProtectedAdmin(members, m)
+          const lock = memberActionsLock(members, m)
           // Status alone: `stepsForMember` unions every role they hold and already answers
           // `null` for someone no policy names, so a second gate here would be a rule that
           // can drift from that one.
@@ -326,7 +326,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, onR
                     onOpen={() => setOpenMenuId(m.id)}
                     onClose={closeMenu}
                     label={m.name}
-                    items={menuItems(m, protectedAdmin)}
+                    items={menuItems(m, lock)}
                     note={accountLine ?? undefined}
                   />
                 )}

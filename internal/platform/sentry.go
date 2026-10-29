@@ -91,7 +91,7 @@ func taggedHub(ctx context.Context) *sentry.Hub {
 	if hub == nil {
 		hub = sentry.CurrentHub()
 	}
-	if hub.Client() == nil {
+	if !hub.Client().IsEnabled() {
 		return nil
 	}
 	hub = hub.Clone()

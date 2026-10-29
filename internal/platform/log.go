@@ -49,7 +49,7 @@ func newLogger(cfg Config) *slog.Logger {
 	level := parseLevel(cfg.LogLevel)
 	var h slog.Handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
 	if cfg.SentryDSN != "" {
-		h = slog.NewMultiHandler(h, escapePercent{sentryLogHandler(level)})
+		h = slog.NewMultiHandler(h, sentryLogHandler(level))
 	}
 	return slog.New(&contextHandler{Handler: h}).With(
 		slog.String("service", cfg.Service),
@@ -77,23 +77,6 @@ func sentryLogHandler(min slog.Level) slog.Handler {
 			return a
 		},
 	}.NewSentryHandler(context.Background())
-}
-
-// escapePercent doubles "%" in the message: the bridge uses it as a format string.
-// ceiling: only the four standard levels reach Sentry; round a custom level down before the bridge if one is ever used
-type escapePercent struct{ slog.Handler }
-
-func (h escapePercent) Handle(ctx context.Context, r slog.Record) error {
-	r.Message = strings.ReplaceAll(r.Message, "%", "%%")
-	return h.Handler.Handle(ctx, r)
-}
-
-func (h escapePercent) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return escapePercent{h.Handler.WithAttrs(attrs)}
-}
-
-func (h escapePercent) WithGroup(name string) slog.Handler {
-	return escapePercent{h.Handler.WithGroup(name)}
 }
 
 func parseLevel(s string) slog.Level {

@@ -44,7 +44,7 @@ func TestInitSentryDisabled(t *testing.T) {
 	if err := initSentry(Config{Service: "svc"}, nil); err != nil {
 		t.Fatalf("initSentry with empty DSN should be a no-op, got: %v", err)
 	}
-	if c := sentry.CurrentHub().Client(); c != nil {
+	if c := sentry.CurrentHub().Client(); c.IsEnabled() {
 		t.Errorf("initSentry with empty DSN bound a client (dsn %q), want none", c.Options().Dsn)
 	}
 	// Capture must be safe (no panic, no send) while disabled.

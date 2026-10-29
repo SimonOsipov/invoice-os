@@ -323,19 +323,41 @@ func TestNightlyCIScript_TwoWorkflowsTimeoutCancelsBoth(t *testing.T) {
 	}
 }
 
-func TestNightlyCIScript_SecondDispatchFailsCancelsFirst(t *testing.T) {
+func TestNightlyCIScript_SecondDispatchFailsKeepsFirst(t *testing.T) {
 	t.Parallel()
 	s := newNightlyShim(t)
 	s.answer(t, "workflow_run", "https://github.com/o/r/actions/runs/41", "EXIT1:HTTP 422")
+	s.always(t, "run_view", "completed")
 	out, code := s.run(t, s.defaultEnv(), "main", "ci.yml=run_id", twoWF)
 	if code != 1 {
 		t.Fatalf("exit %d, want 1\n%s", code, out)
 	}
-	if n := s.calls(t, "run\tcancel\t41\t-R\to/r"); n != 1 {
-		t.Errorf("gh run cancel 41 called %d times, want 1", n)
+	if !strings.Contains(out, "could not dispatch dev-env.yml") {
+		t.Errorf("the failed dispatch is not reported:\n%s", out)
 	}
-	if n := s.calls(t, "run\tview"); n != 0 {
-		t.Errorf("gh run view called %d times, want 0 (no polling after a failed dispatch)", n)
+	if n := s.calls(t, "run\tcancel"); n != 0 {
+		t.Errorf("gh run cancel called %d times, want 0 (the first run is still good)", n)
+	}
+	if n := s.calls(t, "run\tview\t41"); n == 0 {
+		t.Errorf("run 41 was not awaited after the second dispatch failed")
+	}
+	if got := s.outputText(t); !strings.Contains(got, "run_id=41") {
+		t.Errorf("output %q lacks run_id=41", got)
+	}
+}
+
+func TestNightlyCIScript_SecondRunNotFoundKeepsFirst(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.answer(t, "workflow_run", "https://github.com/o/r/actions/runs/41", "queued, no url")
+	s.always(t, "run_view", "completed")
+	s.always(t, "run_list", "[]")
+	out, code := s.run(t, s.defaultEnv(), "main", "ci.yml=run_id", twoWF)
+	if code != 1 {
+		t.Fatalf("exit %d, want 1\n%s", code, out)
+	}
+	if n := s.calls(t, "run\tcancel"); n != 0 {
+		t.Errorf("gh run cancel called %d times, want 0", n)
 	}
 }
 

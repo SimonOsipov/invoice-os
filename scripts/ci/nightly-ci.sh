@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # nightly-ci.sh <ref> [<workflow>=<output>]...   (default: ci.yml=run_id)
 # Dispatches each workflow on <ref>, writes <output>=<run id> to $GITHUB_OUTPUT and waits for every run to complete. Needs REPO; gh reads GH_TOKEN.
-# Exit 0 when every run completed, whatever its conclusion; 1 on a dispatch failure, no run or a timeout (every incomplete run is cancelled); 2 on a usage error.
+# Exit 0 when every run completed, whatever its conclusion; 1 on a dispatch failure, no run or a timeout. A dispatch or lookup failure of one workflow does not cancel the others: they are awaited, then exit 1. Only a timeout cancels the incomplete runs; 2 on a usage error.
 set -euo pipefail
 
 if [ "$#" -lt 1 ] || [ -z "$1" ]; then
@@ -25,6 +25,7 @@ done
 workflows=()
 ids=()
 done_=()
+failed=0
 cancel_incomplete() {
   local i
   if [ "${#ids[@]}" -eq 0 ]; then return 0; fi
@@ -41,8 +42,8 @@ for pair in "$@"; do
     --json databaseId 2>/dev/null || echo '[]')
   out=$(gh workflow run "$wf" -R "$REPO" --ref "$ref") || {
     echo "::error::could not dispatch $wf on $ref." >&2
-    cancel_incomplete
-    exit 1
+    failed=1
+    continue
   }
   echo "$out"
 
@@ -59,8 +60,8 @@ for pair in "$@"; do
   fi
   if [ -z "$id" ]; then
     echo "::error::no $wf run appeared for $ref after the dispatch." >&2
-    cancel_incomplete
-    exit 1
+    failed=1
+    continue
   fi
   echo "Dispatched $wf run $id."
   if [ -n "${GITHUB_OUTPUT:-}" ]; then echo "$outname=$id" >> "$GITHUB_OUTPUT"; fi
@@ -78,7 +79,7 @@ for _ in $(seq 1 "${NIGHTLY_CI_POLLS:-120}"); do
     echo "  ${workflows[$i]} run ${ids[$i]}: status=${status:-unknown}"
     if [ "$status" = "completed" ]; then done_[$i]=1; else pending=1; fi
   done
-  if [ "$pending" = 0 ]; then exit 0; fi
+  if [ "$pending" = 0 ]; then exit "$failed"; fi
   sleep 30
 done
 echo "::error::a dispatched run did not complete in time; cancelling the incomplete ones." >&2

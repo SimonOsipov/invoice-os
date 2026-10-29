@@ -180,9 +180,10 @@ type outcome struct {
 
 // parsedFile is one result file; seen counts every test result in it, skips included.
 type parsedFile struct {
-	attempts []attempt
-	direct   []outcome
-	seen     int
+	attempts  []attempt
+	direct    []outcome
+	seen      int
+	truncated bool // a Go stream whose last line is not an event
 }
 
 // classify judges the attempts of each set+key: all failed is a failure, some failed a flake.
@@ -320,15 +321,17 @@ func parseGo(r io.Reader, set string) (parsedFile, error) {
 		pkgOut: map[string][]string{}, buildOut: map[string][]string{},
 	}
 	br := bufio.NewReader(r)
-	good, bad := 0, 0
+	good, bad, lastBad := 0, 0, false
 	for {
 		line, err := br.ReadString('\n')
 		if s := strings.TrimSpace(line); s != "" {
 			var e goEvent
 			if json.Unmarshal([]byte(s), &e) != nil {
 				bad++
+				lastBad = true
 			} else {
 				good++
+				lastBad = false
 				p.event(e)
 			}
 		}
@@ -345,6 +348,7 @@ func parseGo(r io.Reader, set string) (parsedFile, error) {
 	for _, o := range p.opens {
 		p.finishUnfinished(o)
 	}
+	p.pf.truncated = lastBad
 	return p.pf, nil
 }
 
@@ -384,9 +388,6 @@ func (p *goParser) testEvent(e goEvent) {
 	o := p.open[k]
 	switch e.Action {
 	case "run":
-		if o != nil {
-			p.finishUnfinished(o)
-		}
 		o = &openTest{pkg: e.Package, test: e.Test}
 		p.open[k] = o
 		p.opens = append(p.opens, o)
@@ -686,6 +687,10 @@ func readSuiteFiles(dir, key, workspace string) suiteFiles {
 			sf.unreadable = true
 			problem(n, "results unreadable", firstLine(err.Error()))
 			continue
+		}
+		if pf.truncated {
+			sf.unreadable = true
+			problem(n, "results unreadable", "the go test -json stream ends mid-line")
 		}
 		if pf.seen == 0 {
 			problem(n, "results empty", "the file holds no test results")

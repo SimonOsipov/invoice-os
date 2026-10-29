@@ -829,6 +829,31 @@ func TestRun_UnparseableResultIsRed(t *testing.T) {
 	eq(t, r.suite("go").Passed, 1)
 }
 
+func TestRun_TruncatedGoStreamIsUnreadable(t *testing.T) {
+	e := newEnv(t)
+	e.clear("go")
+	e.write("go", "gotest-x.json", stream(attemptOf(pkgX, "pass", tst(pkgX, "TestA", "pass")))+`{"Action":"pa`)
+	r := e.run()
+	eq(t, r.code, 1)
+	eq(t, len(r.dec.Failures), 1)
+	eq(t, r.dec.Failures[0].Test, "results unreadable")
+	eq(t, r.dec.Failures[0].File, "gotest-x.json")
+	eq(t, r.suite("go").Passed, 1)
+}
+
+func TestRun_CorruptMiddleLineOfGoStreamIsNotUnreadable(t *testing.T) {
+	e := newEnv(t)
+	e.clear("go")
+	e.write("go", "gotest-x.json", `{"Action":"pa`+"\n"+stream(attemptOf(pkgX, "pass", tst(pkgX, "TestA", "pass"))))
+	r := e.run()
+	for _, f := range r.dec.Failures {
+		if f.Test == "results unreadable" {
+			t.Fatalf("unexpected results unreadable: %+v", f)
+		}
+	}
+	eq(t, r.suite("go").Passed, 1)
+}
+
 func TestRun_GoFileOfOnlyGarbageIsUnreadable(t *testing.T) {
 	e := newEnv(t)
 	e.clear("go")

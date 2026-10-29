@@ -12,7 +12,7 @@ import type { ComponentProps } from 'react'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { invitedMember, MEMBER_ADMIN_ONLY, PROTECTED_ADMIN_NOTE, roleCardsLock, removeConfirmQuestion, type Member, type PendingInvite } from '../lib/members'
+import { INVITE_ADMIN_ONLY, invitedMember, MEMBER_ADMIN_ONLY, PROTECTED_ADMIN_NOTE, roleCardsLock, removeConfirmQuestion, type Member, type PendingInvite } from '../lib/members'
 import type { Role } from '../lib/roles'
 import type { Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
@@ -614,12 +614,14 @@ const INVITE: PendingInvite = {
   delivery: 'sent',
 }
 
-function renderPending(over: { invites?: PendingInvite[]; onResend?: (id: string) => void; resending?: ReadonlySet<string>; onRevoke?: (id: string) => void; revoking?: ReadonlySet<string>; onOpen?: (id: string) => void; extra?: Member[] } = {}) {
+const ADMIN_VIEWER = member({ id: 'me', name: 'Me Admin', initials: 'MA', role: 'admin', isYou: true })
+
+function renderPending(over: { viewer?: Member; invites?: PendingInvite[]; onResend?: (id: string) => void; resending?: ReadonlySet<string>; onRevoke?: (id: string) => void; revoking?: ReadonlySet<string>; onOpen?: (id: string) => void; extra?: Member[] } = {}) {
   const pending = invitedMember(over.invites?.[0] ?? INVITE)
   const rows = [...(over.extra ?? []), pending]
   render(
     <MembersTable
-      ctx={ctxWith({ members: rows })}
+      ctx={ctxWith({ members: [over.viewer ?? ADMIN_VIEWER, ...rows] })}
       rows={rows}
       policies={[]}
       roles={[]}
@@ -711,7 +713,7 @@ describe('RESEND-07-04: the pending row menu', () => {
 
   it('MembersTable: a strip opened for a row that leaves the list does not return with the row', () => {
     const inv = invitedMember(INVITE)
-    const base = { ctx: ctxWith({ members: [inv] }), policies: [], roles: [], onOpen: vi.fn(), onStatus: vi.fn(), statusError: null, invites: [INVITE], onResend: vi.fn(), onRevoke: vi.fn() }
+    const base = { ctx: ctxWith({ members: [ADMIN_VIEWER, inv] }), policies: [], roles: [], onOpen: vi.fn(), onStatus: vi.fn(), statusError: null, invites: [INVITE], onResend: vi.fn(), onRevoke: vi.fn() }
     const { rerender } = render(<MembersTable {...base} rows={[inv]} />)
     fireEvent.click(within(openMenuOf(screen.getByTestId('invite-row'))).getByRole('button', { name: 'Revoke invite' }))
     expect(screen.getByTestId('invite-revoke-confirm')).toBeTruthy()
@@ -736,17 +738,108 @@ describe('RESEND-07-04: the pending row menu', () => {
 
   it('MembersTable: Revoke is disabled while that id revokes or resends, and Resend while it revokes', () => {
     renderPending({ revoking: new Set(['inv-1']) })
-    let items = within(openMenuOf(screen.getByTestId('invite-row'))).getAllByRole('button') as HTMLButtonElement[]
+    let menu = openMenuOf(screen.getByTestId('invite-row'))
+    let items = within(menu).getAllByRole('button') as HTMLButtonElement[]
     expect(items.map((i) => i.disabled)).toEqual([true, true])
+    expect(within(menu).queryByTestId('member-menu-reason')).toBeNull()
     cleanup()
     renderPending({ resending: new Set(['inv-1']) })
-    items = within(openMenuOf(screen.getByTestId('invite-row'))).getAllByRole('button') as HTMLButtonElement[]
+    menu = openMenuOf(screen.getByTestId('invite-row'))
+    items = within(menu).getAllByRole('button') as HTMLButtonElement[]
     expect(items.map((i) => i.disabled)).toEqual([true, true])
+    expect(within(menu).queryByTestId('member-menu-reason')).toBeNull()
+  })
+
+  describe('a non-admin viewer', () => {
+    const PREPARER = member({ id: 'me', name: 'Me Preparer', initials: 'MP', role: 'preparer', isYou: true })
+    const itemsOf = (menu: HTMLElement) => within(menu).getAllByRole('button') as HTMLButtonElement[]
+
+    it('MembersTable: a non-admin viewer sees Resend and Revoke invite disabled with the admin-only note', () => {
+      renderPending({ viewer: PREPARER })
+      const items = itemsOf(openMenuOf(screen.getByTestId('invite-row')))
+
+      expect(items.map((i) => i.textContent)).toEqual(['Resend invite', 'Revoke invite'])
+      for (const i of items) {
+        expect(i.disabled).toBe(true)
+        expect(i.title).toBe(INVITE_ADMIN_ONLY)
+        expect(i.style.opacity).toBe('0.45')
+        expect(i.style.cursor).toBe('not-allowed')
+        expect(i.style.filter).toBe('none')
+      }
+      expect(items[1].style.color, 'the enabled paint (red) must survive the dim').toBe('var(--status-red-text)')
+    })
+
+    it('MembersTable: the locked invite items point at the reason line', () => {
+      renderPending({ viewer: PREPARER })
+      const menu = openMenuOf(screen.getByTestId('invite-row'))
+      const reason = within(menu).getByTestId('member-menu-reason')
+      for (const i of itemsOf(menu)) expect(i.getAttribute('aria-describedby')).toBe(reason.id)
+    })
+
+    it('MembersTable: a non-admin confirmed-account pending row locks the same two items', () => {
+      renderPending({ viewer: PREPARER, invites: [{ ...INVITE, account: 'confirmed' }] })
+      const menu = openMenuOf(screen.getByTestId('invite-row'))
+
+      expect(itemsOf(menu).map((i) => i.disabled)).toEqual([true, true])
+      expect(within(menu).getByTestId('member-menu-state').textContent).toBe('Confirmed, not joined')
+      expect(within(menu).getAllByTestId('member-menu-reason')).toHaveLength(1)
+    })
+
+    it("MembersTable: a non-admin viewer's invited membership without an invitation locks too", () => {
+      const lone = member({ id: 'u9', name: 'Lone Invitee', email: 'lone@x.ng', status: 'invited' })
+      render(
+        <MembersTable
+          ctx={ctxWith({ members: [PREPARER, lone] })}
+          rows={[lone]}
+          policies={[]}
+          roles={[]}
+          onOpen={vi.fn()}
+          onStatus={vi.fn()}
+          statusError={null}
+          invites={[]}
+          onResend={vi.fn()}
+        />,
+      )
+      const menu = openMenuOf(screen.getByTestId('invite-row'))
+
+      expect(itemsOf(menu).map((i) => i.disabled)).toEqual([true, true])
+      expect(within(menu).getAllByTestId('member-menu-reason')).toHaveLength(1)
+    })
+
+    it('MembersTable: both locked invite items share one reason line', () => {
+      renderPending({ viewer: PREPARER })
+      const reasons = within(openMenuOf(screen.getByTestId('invite-row'))).getAllByTestId('member-menu-reason')
+
+      expect(reasons).toHaveLength(1)
+      expect(reasons[0].textContent).toBe(INVITE_ADMIN_ONLY)
+      expect(reasons[0].style.fontSize).toBe('11px')
+    })
+
+    it('MembersTable: a non-admin viewer cannot open the revoke strip or resend', () => {
+      const onResend = vi.fn()
+      const onRevoke = vi.fn()
+      renderPending({ viewer: PREPARER, onResend, onRevoke })
+
+      fireEvent.click(within(openMenuOf(screen.getByTestId('invite-row'))).getByRole('button', { name: 'Revoke invite' }))
+      expect(screen.queryByTestId('invite-revoke-confirm')).toBeNull()
+      fireEvent.click(within(screen.getByTestId('member-menu')).getByRole('button', { name: 'Resend invite' }))
+
+      expect(onRevoke).not.toHaveBeenCalled()
+      expect(onResend).not.toHaveBeenCalled()
+    })
+
+    it('MembersTable: a locked non-admin menu stays locked while a resend is in flight', () => {
+      renderPending({ viewer: PREPARER, resending: new Set(['inv-1']) })
+      const menu = openMenuOf(screen.getByTestId('invite-row'))
+
+      expect(itemsOf(menu).map((i) => i.disabled)).toEqual([true, true])
+      expect(within(menu).getAllByTestId('member-menu-reason')).toHaveLength(1)
+    })
   })
 
   it("MembersTable: an open strip's Revoke invite is disabled while that id resends or revokes", () => {
     const onRevoke = vi.fn()
-    const base = { ctx: ctxWith({ members: [invitedMember(INVITE)] }), rows: [invitedMember(INVITE)], policies: [], roles: [], onOpen: vi.fn(), onStatus: vi.fn(), statusError: null, invites: [INVITE], onResend: vi.fn(), onRevoke }
+    const base = { ctx: ctxWith({ members: [ADMIN_VIEWER, invitedMember(INVITE)] }), rows: [invitedMember(INVITE)], policies: [], roles: [], onOpen: vi.fn(), onStatus: vi.fn(), statusError: null, invites: [INVITE], onResend: vi.fn(), onRevoke }
     const { rerender } = render(<MembersTable {...base} />)
     fireEvent.click(within(openMenuOf(screen.getByTestId('invite-row'))).getByRole('button', { name: 'Revoke invite' }))
     const confirm = () => screen.getByTestId('invite-revoke-confirmed') as HTMLButtonElement

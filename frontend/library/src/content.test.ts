@@ -219,7 +219,7 @@ describe('content', () => {
     const d = byId('audit-trail').desc
     expect(d).toMatch(/creation, edits, approvals and submissions/)
     expect(d).toMatch(/each sign-in is recorded too/i)
-    expect(d).toMatch(/a sign-in from a browser or operating system your account has not used before sends you an email/i)
+    expect(d).toMatch(/a later sign-in from a browser or operating system your account has not used before sends you an email/i)
     expect(d).toMatch(/entries cannot be edited\.$/i)
   })
 

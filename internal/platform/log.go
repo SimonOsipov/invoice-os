@@ -57,8 +57,7 @@ func newLogger(cfg Config) *slog.Logger {
 	)
 }
 
-// sentryLogHandler sends logs only: an empty non-nil EventLevel stops the bridge opening
-// issues, and LevelFatal stays out because the bridge ends the process on it.
+// sentryLogHandler sends logs only; LevelFatal stays out because the bridge ends the process on it.
 // ceiling: every logged level goes to Sentry (~5 MB/month of 5 GB); add a level floor above ~1 GB/month
 // ceiling: a []byte or RawMessage attribute reaches Sentry as unscrubbed %+v text; log it as a string first
 func sentryLogHandler(min slog.Level) slog.Handler {
@@ -69,8 +68,7 @@ func sentryLogHandler(min slog.Level) slog.Handler {
 		}
 	}
 	return sentryslog.Option{
-		EventLevel: []slog.Level{},
-		LogLevel:   levels,
+		LogLevel: levels,
 		// initSentry's sentry.environment is the only environment label.
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			if len(groups) == 0 && a.Key == "environment" {

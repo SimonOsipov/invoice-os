@@ -20,6 +20,23 @@ func ScopedFilterSQLForTest(f Filter, scope string) (string, []any, error) {
 	return filterPredicates(f, searchTargets{})
 }
 
+// AccountScopedFilterSQLForTest is ScopedFilterSQLForTest with the caller's admin flag and subject.
+func AccountScopedFilterSQLForTest(f Filter, scope string, admin bool, self string) (string, []any, error) {
+	f.scope = scopeFromGUC(scope)
+	f.scope.admin = admin
+	f.scope.self = self
+	return filterPredicates(f, searchTargets{})
+}
+
+// FirmWideEventsForTest lists the names in firmWideEvents.
+func FirmWideEventsForTest() []string {
+	out := make([]string, 0, len(firmWideEvents))
+	for e := range firmWideEvents {
+		out = append(out, e)
+	}
+	return out
+}
+
 // FacetSQLForTest exposes the three built facet statements — event, actor, company, in
 // that order — for the same reason: a facet's ORDER BY is invisible to a behavioural test,
 // because Postgres returns a small GROUP BY in a stable order whether or not one is

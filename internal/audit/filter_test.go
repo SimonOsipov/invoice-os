@@ -4,6 +4,8 @@ package audit_test
 
 import (
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -375,4 +377,94 @@ func TestAuditFilter_CallerScopePredicate(t *testing.T) {
 			t.Errorf("produced %q with %d args, want the event and the scope predicates, 2 args", where, len(args))
 		}
 	})
+}
+
+// --- AUDIT-13-05: the account-event arm ---
+
+// aeFSQLSix is the six account names as a literal, so the test does not read the list it checks.
+var aeFSQLSix = []string{
+	"account.signed_in", "account.sign_in_failed", "account.sign_in_blocked",
+	"account.signed_out", "account.password_reset_requested", "account.password_reset_completed",
+}
+
+func aeFSQLHasStrings(args []any, want []string) bool {
+	for _, a := range args {
+		if got, ok := a.([]string); ok && reflect.DeepEqual(got, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// A non-admin with full scope reads other rows whole and an account row only as its subject.
+func TestAuditFilter_AccountArmBindsTheSubject(t *testing.T) {
+	self := uuid.NewString()
+	where, args, err := audit.AccountScopedFilterSQLForTest(audit.Filter{Limit: 50}, "*", false, self)
+	if err != nil {
+		t.Fatalf("unexpected error %v", err)
+	}
+	if where == "" {
+		t.Fatal("a non-admin with full scope rendered no predicate, want the account arm")
+	}
+	if !strings.Contains(where, "a.event <> ALL(") {
+		t.Errorf("where = %q, want a.event <> ALL( for the six names", where)
+	}
+	m := regexp.MustCompile(`a\.actor = \$(\d+)`).FindStringSubmatch(where)
+	if m == nil {
+		t.Fatalf("where = %q, want a.actor = $n", where)
+	}
+	n, _ := strconv.Atoi(m[1])
+	if n < 1 || n > len(args) || args[n-1] != self {
+		t.Errorf("a.actor = $%d does not bind the subject %s; args = %#v", n, self, args)
+	}
+	if !aeFSQLHasStrings(args, aeFSQLSix) {
+		t.Errorf("args = %#v, want the six names as one []string", args)
+	}
+	if strings.Contains(where, "entity_id IS NULL") {
+		t.Errorf("where = %q, want no entity_id IS NULL (it would swallow the workspace rows)", where)
+	}
+}
+
+var aeFSQLLimitedGroup = regexp.MustCompile(
+	`\(a\.entity_id = ANY\(\$\d+::uuid\[\]\) OR \(a\.event = ANY\(\$\d+(::text\[\])?\) AND a\.actor = \$\d+(::text)?\)\)`)
+
+// The two arms are one OR-group; a bare OR would escape the AND-joined event filter beside it.
+func TestAuditFilter_LimitedAccountArmIsOneParenthesisedGroup(t *testing.T) {
+	client := uuid.NewString()
+	scope := "{" + client + "}"
+	self := uuid.NewString()
+
+	where, _, err := audit.AccountScopedFilterSQLForTest(audit.Filter{Limit: 50}, scope, false, self)
+	if err != nil {
+		t.Fatalf("unexpected error %v", err)
+	}
+	if !aeFSQLLimitedGroup.MatchString(where) || aeFSQLLimitedGroup.FindString(where) != where {
+		t.Errorf("where = %q, want exactly one group (a.entity_id = ANY(...) OR (a.event = ANY(...) AND a.actor = ...))", where)
+	}
+
+	with, _, err := audit.AccountScopedFilterSQLForTest(
+		audit.Filter{Limit: 50, Events: []string{"invoice.created"}}, scope, false, self)
+	if err != nil {
+		t.Fatalf("unexpected error %v", err)
+	}
+	if got := aeFSQLLimitedGroup.FindString(with); got == "" || strings.Count(with, " OR ") != 1 {
+		t.Errorf("with an event filter where = %q, want the group intact and the only OR inside it", with)
+	}
+}
+
+// Admin reads every row, so the arm is absent; the non-admin control proves the arm is the difference.
+func TestAuditFilter_AdminAddsNoAccountArm(t *testing.T) {
+	self := uuid.NewString()
+	nonAdmin, _, err := audit.AccountScopedFilterSQLForTest(audit.Filter{Limit: 50}, "*", false, self)
+	if err != nil || nonAdmin == "" {
+		t.Fatalf("non-admin control rendered %q (err %v), want the account arm", nonAdmin, err)
+	}
+
+	where, args, err := audit.AccountScopedFilterSQLForTest(audit.Filter{Limit: 50}, "*", true, self)
+	if err != nil {
+		t.Fatalf("unexpected error %v", err)
+	}
+	if where != "" || len(args) != 0 {
+		t.Errorf("admin rendered %q with args %#v, want no predicate", where, args)
+	}
 }

@@ -14,8 +14,10 @@ import (
 
 // callerScope is the reader's client scope: the whole tenant, or only the listed clients.
 type callerScope struct {
-	set bool
-	ids []string
+	set   bool
+	ids   []string
+	admin bool   // red stub: AUDIT-13-05 reads it
+	self  string // red stub: AUDIT-13-05 reads it
 }
 
 // scopeFromGUC maps app.entity_scope: an empty or "*" value is full, an array literal is a set, anything

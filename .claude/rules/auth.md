@@ -106,6 +106,7 @@ paths:
 - Expect `?register` to open the create-an-account modal, or "Book a demo" when `registrationOpen()` is false.
 - Expect landing's `?demo` to open the book-a-demo modal.
 - Expect a `?signin` outcome to suppress `?register` and `?demo` in `readDeepLink`. `?register` wins over `?demo`.
+- Expect `?forgot` to open the sign-in window on its reset-password view. `?register` and `?demo` win over it, and a `?signin` outcome suppresses it.
 - Reserve a sign-in throttle attempt before the GoTrue call.
 - Accept a tenant-less token only on four routes: `POST /api/tenancy/v1/workspaces`, `POST /api/tenancy/v1/invitations/accept`, `GET /api/tenancy/v1/invitations/mine` and `POST /api/tenancy/v1/invitations/{id}/accept`.
 - Admit the two join routes only when GoTrue confirmed the email and it equals the token's `email` claim after trim and case folding.

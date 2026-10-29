@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
 /// <reference types="node" />
-// ?demo and ?register open their modals at mount. Setup mirrors App.register.dom.test.tsx.
+// ?demo, ?register and ?forgot open their modals at mount. Setup mirrors App.register.dom.test.tsx.
 import { StrictMode, act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -158,6 +158,54 @@ describe('deep links', () => {
     await bootAt(path, true)
     expect(dialogs()).toEqual([title])
     expect(window.location.search).toBe('')
+  })
+
+  it('deepLink_forgotOpensTheResetView', async () => {
+    await bootAt('/?forgot')
+    expect(dialogs()).toEqual(['Sign in'])
+    expect(document.querySelector(`${DIALOG} h3`)?.textContent).toBe('Reset your password')
+    expect(document.querySelector(`${DIALOG} input[type="email"]`)).not.toBeNull()
+  })
+
+  it('deepLink_registerAndDemoWinOverForgot', async () => {
+    await bootAt('/?forgot&register')
+    expect(dialogs()).toEqual(['Create an account'])
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await bootAt('/?forgot&demo')
+    expect(dialogs()).toEqual(['Book a demo'])
+  })
+
+  it('deepLink_aSignInOutcomeWinsOverForgot', async () => {
+    await bootAt(`/?state=${STATE}&signin=ready&forgot`)
+    expect(dialogs()).toEqual(['Sign in'])
+    expect(document.querySelector(`${DIALOG} h3`)?.textContent).toBe('Sign in to your workspace')
+  })
+
+  it('deepLink_forgotIsStripped', async () => {
+    await bootAt('/?forgot&utm_source=mail')
+    expect(window.location.search).toBe('?utm_source=mail')
+  })
+
+  it('deepLink_forgotBackWithoutStateBounces', async () => {
+    await bootAt('/?forgot')
+    const d = document.querySelector<HTMLElement>(DIALOG)!
+    const back = Array.from(d.querySelectorAll<HTMLButtonElement>('button')).find((b) => b.textContent?.trim() === 'Back to sign in')!
+    await act(async () => back.click())
+    const cont = Array.from(d.querySelectorAll<HTMLButtonElement>('button')).find((b) => b.textContent?.includes('Continue with email'))
+    if (cont) await act(async () => cont.click())
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    const email = d.querySelector<HTMLInputElement>('input[type="email"]')!
+    const password = d.querySelector<HTMLInputElement>('input[type="password"]')!
+    await act(async () => {
+      setValue.call(email, 'ada@okafor.ng')
+      email.dispatchEvent(new Event('input', { bubbles: true }))
+      setValue.call(password, 'pw')
+      password.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => d.querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0][0])).toContain('app.x')
   })
 
   it('deepLink_noParamOpensNothing', async () => {

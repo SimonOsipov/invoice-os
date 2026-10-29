@@ -1,0 +1,9 @@
+{"Time":"2026-01-01T00:00:00Z","Action":"start","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy"}
+{"Action":"run","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestRLS_A"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestRLS_A","Output":"=== RUN   TestRLS_A\n"}
+{"Action":"pass","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestRLS_A","Elapsed":0.01}
+{"Action":"run","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestRLS_B"}
+{"Action":"pass","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestRLS_B","Elapsed":0.02}
+{"Action":"run","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestRLS_C"}
+{"Action":"pass","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Test":"TestRLS_C","Elapsed":0.03}
+{"Action":"pass","Package":"github.com/SimonOsipov/invoice-os/internal/tenancy","Elapsed":0.2}

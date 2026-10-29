@@ -1,0 +1,7 @@
+{"Action":"run","Package":"pkgA","Test":"TestParent"}
+{"Action":"run","Package":"pkgA","Test":"TestParent/child1"}
+{"Action":"pass","Package":"pkgA","Test":"TestParent/child1","Elapsed":0.01}
+{"Action":"run","Package":"pkgA","Test":"TestParent/child2"}
+{"Action":"pass","Package":"pkgA","Test":"TestParent/child2","Elapsed":0.01}
+{"Action":"pass","Package":"pkgA","Test":"TestParent","Elapsed":0.02}
+{"Action":"pass","Package":"pkgA","Elapsed":0.03}

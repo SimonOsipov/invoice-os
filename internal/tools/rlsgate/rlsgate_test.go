@@ -33,6 +33,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -500,5 +503,88 @@ func TestEvaluate_DuplicateTestNameAcrossPackages_BothCountedAndDistinguishable(
 	}
 	if strings.Count(out, "TestRLS_Dup") < 2 {
 		t.Errorf("evaluate() output does not name TestRLS_Dup for both skip occurrences; buf=%q", out)
+	}
+}
+
+// TestEvaluate_NoRepeatOutputUnchanged pins stdout and exit code to the
+// output of rlsgate at 0a7113fc for streams with no repeated key.
+func TestEvaluate_NoRepeatOutputUnchanged(t *testing.T) {
+	ins, err := filepath.Glob("testdata/golden/*.in")
+	if err != nil || len(ins) < 15 {
+		t.Fatalf("golden inputs: %v, found %d", err, len(ins))
+	}
+	for _, in := range ins {
+		base := strings.TrimSuffix(in, ".in")
+		t.Run(filepath.Base(base), func(t *testing.T) {
+			stream, err := os.ReadFile(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantOut, err := os.ReadFile(base + ".out")
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantCode, err := os.ReadFile(base + ".code")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var buf bytes.Buffer
+			code := evaluate(bytes.NewReader(stream), &buf)
+			if buf.String() != string(wantOut) {
+				t.Errorf("stdout differs from golden\n got: %q\nwant: %q", buf.String(), wantOut)
+			}
+			if got := strconv.Itoa(code); got != strings.TrimSpace(string(wantCode)) {
+				t.Errorf("exit code = %s, want %s", got, wantCode)
+			}
+		})
+	}
+}
+
+func TestEvaluate_FailThenPassCountsAsPassed(t *testing.T) {
+	fixture := `{"Action":"output","Package":"p","Test":"TestX","Output":"boom\n"}
+{"Action":"fail","Package":"p","Test":"TestX"}
+{"Action":"pass","Package":"p","Test":"TestY"}
+{"Action":"pass","Package":"p","Test":"TestX"}
+`
+	var buf bytes.Buffer
+	if code := evaluate(strings.NewReader(fixture), &buf); code != 0 {
+		t.Fatalf("exit = %d, want 0; out=%q", code, buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, "FLAKY p.TestX") {
+		t.Errorf("missing FLAKY line; out=%q", out)
+	}
+	if strings.Count(out, "TestX") != 2 {
+		t.Errorf("TestX should print FAIL then FLAKY only; out=%q", out)
+	}
+	if !strings.Contains(out, "2 passed, 0 skipped, 0 failed") {
+		t.Errorf("summary wrong; out=%q", out)
+	}
+}
+
+func TestEvaluate_FailTwiceFails(t *testing.T) {
+	fixture := `{"Action":"fail","Package":"p","Test":"TestX"}
+{"Action":"fail","Package":"p","Test":"TestX"}
+`
+	var buf bytes.Buffer
+	if code := evaluate(strings.NewReader(fixture), &buf); code != 1 {
+		t.Fatalf("exit = %d, want 1; out=%q", code, buf.String())
+	}
+	if !strings.Contains(buf.String(), "0 passed, 0 skipped, 1 failed") {
+		t.Errorf("summary wrong; out=%q", buf.String())
+	}
+}
+
+func TestEvaluate_SkipStillWinsAfterRetry(t *testing.T) {
+	fixture := `{"Action":"fail","Package":"p","Test":"TestX"}
+{"Action":"pass","Package":"p","Test":"TestX"}
+{"Action":"skip","Package":"p","Test":"TestZ"}
+`
+	var buf bytes.Buffer
+	if code := evaluate(strings.NewReader(fixture), &buf); code != 1 {
+		t.Fatalf("exit = %d, want 1; out=%q", code, buf.String())
+	}
+	if !strings.Contains(buf.String(), "::error::rlsgate: 1 DB-backed test(s) SKIPPED (DB env broke): TestZ") {
+		t.Errorf("missing skip error; out=%q", buf.String())
 	}
 }

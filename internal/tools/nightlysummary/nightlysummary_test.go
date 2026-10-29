@@ -169,6 +169,9 @@ func TestGoJSON_FileIsPackageDirWithoutModule(t *testing.T) {
 func TestGoJSON_MessageSkipsRunAndResultLines(t *testing.T) {
 	j := judgeStreams(t, stream(tst(pkgX, "TestX", "fail", "=== RUN   TestX\n", "    x_test.go:4: want 1\n", "--- FAIL: TestX\n")))
 	eq(t, j.fails[0].msg, "x_test.go:4: want 1")
+
+	j = judgeStreams(t, stream(tst(pkgX, "TestX", "fail", "--- FAIL: TestX\n", "    x_test.go:4: want 1\n")))
+	eq(t, j.fails[0].msg, "x_test.go:4: want 1")
 }
 
 func TestGoJSON_MessageCappedAt300(t *testing.T) {
@@ -253,6 +256,9 @@ func TestVitest_FlakeFailureAndPassInOneFile(t *testing.T) {
 	eq(t, tests(j.fails), []string{"always fails"})
 	eq(t, j.fails[0].msg, "AssertionError: expected 1 to be 2 // Object.is equality")
 	eq(t, len(j.passed), 1)
+
+	m := judgeVitest(t, vitest("/w/a.test.ts", "failed", "", va("x", "failed", "first line\nsecond line", "other")), "")
+	eq(t, m.fails[0].msg, "first line")
 }
 
 func TestVitest_SkippedPendingTodoNotCounted(t *testing.T) {
@@ -272,6 +278,7 @@ func TestVitest_FileStripsWorkspace(t *testing.T) {
 	d := vitest("/home/runner/work/invoice-os/invoice-os/frontend/app/src/a.test.ts", "failed", "", va("x", "failed", "boom"))
 	eq(t, judgeVitest(t, d, "/home/runner/work/invoice-os/invoice-os").fails[0].file, "frontend/app/src/a.test.ts")
 	eq(t, judgeVitest(t, d, "/other/place").fails[0].file, "/home/runner/work/invoice-os/invoice-os/frontend/app/src/a.test.ts")
+	eq(t, judgeVitest(t, d, "").fails[0].file, "/home/runner/work/invoice-os/invoice-os/frontend/app/src/a.test.ts")
 }
 
 func TestVitest_DuplicateFullNameJudgedOneByOne(t *testing.T) {
@@ -679,6 +686,10 @@ func TestRun_SkippedStepsAfterFailureAreListed(t *testing.T) {
 		"JWKS failure budget under the race detector":   "not run: an earlier step failed",
 		"Test the mock-issuer build (-tags mockissuer)": "not run: an earlier step failed",
 	})
+
+	j.Steps = []step{{"Late skipped", "skipped", 3}, {"Fails", "failure", 2}, {"Early skipped", "skipped", 1}}
+	e.write("go", "gotest-go.json", stream(attemptOf(pkgX, "pass", tst(pkgX, "TestA", "pass"))))
+	eq(t, e.run().failureTests("go"), []string{"Fails", "Late skipped"})
 }
 
 func TestRun_SkippedStepBeforeFailureNotListed(t *testing.T) {
@@ -735,8 +746,14 @@ func TestRun_EmptyResultFilesAreRed(t *testing.T) {
 func TestRun_OneEmptyFileBesideAFullOne(t *testing.T) {
 	e := newEnv(t)
 	e.write("go", "gotest-empty.json", stream([]ge{{Action: "start", Package: pkgX}}))
+	e.write("go", "vitest-zero.json", "")
+	e.write("go", "junit-zero.xml", "\n")
 	r := e.run()
-	eq(t, r.dec.Failures, []failure{{"go", "results empty", "gotest-empty.json", "the file holds no test results"}})
+	eq(t, r.dec.Failures, []failure{
+		{"go", "results empty", "gotest-empty.json", "the file holds no test results"},
+		{"go", "results empty", "junit-zero.xml", "the file holds no test results"},
+		{"go", "results empty", "vitest-zero.json", "the file holds no test results"},
+	})
 }
 
 func TestRun_SuitesLineThirdFieldMustBeResults(t *testing.T) {
@@ -776,6 +793,17 @@ func TestRun_SectionFileMissingIsAbsentAndRed(t *testing.T) {
 	eq(t, has, false)
 	eq(t, r.dec.Failures[0].Suite, "ai")
 	eq(t, r.dec.Failures[0].Test, "section did not run")
+
+	for _, body := range []string{"null", "[1]", "{"} {
+		e := newEnv(t)
+		sec := filepath.Join(e.dir, "ai.json")
+		e.writeFile(sec, body)
+		r := e.run("-section", "ai="+sec)
+		eq(t, r.code, 1)
+		_, has := r.obj["ai"]
+		eq(t, has, false)
+		eq(t, r.dec.Failures[0].Test, "section did not run")
+	}
 }
 
 func TestRun_NoSectionFlagWritesNoSectionKeys(t *testing.T) {
@@ -825,6 +853,12 @@ func TestRun_UsageErrorsReturnTwo(t *testing.T) {
 		"jobs file not JSON": func(e *env) []string {
 			e.writeFile(e.jobsPath, "{")
 			return []string{"-suites", e.suites, "-jobs", e.jobsPath, "-results", e.results, "-out", e.out}
+		},
+		"missing -results": func(e *env) []string {
+			return []string{"-suites", e.suites, "-jobs", e.jobsPath, "-out", e.out}
+		},
+		"positional argument": func(e *env) []string {
+			return []string{"-suites", e.suites, "-jobs", e.jobsPath, "-results", e.results, "-out", e.out, "extra"}
 		},
 		"bad section flag": func(e *env) []string {
 			return []string{"-suites", e.suites, "-jobs", e.jobsPath, "-results", e.results, "-out", e.out, "-section", "verdict=x"}
@@ -919,4 +953,11 @@ func TestRun_ReportLines(t *testing.T) {
 	}
 	eq(t, n, 4)
 	eq(t, lines[1], "FAIL go internal/basic TestBad/sub: a_test.go:7: want 1, got 2")
+
+	fl := strings.Split(strings.TrimSpace(runFixture(t, "flake").stdout), "\n")
+	eq(t, fl[0], "nightlysummary: green, 4 suites, 0 failures, 2 flakes")
+	eq(t, len(fl), 3)
+	eq(t, fl[1], "FLAKE frontend frontend/app/src/flake.test.ts flips")
+	eq(t, strings.HasPrefix(fl[2], "FLAKE docling-test "), true)
+	eq(t, strings.HasSuffix(fl[2], " tests.test_x::test_bad"), true)
 }

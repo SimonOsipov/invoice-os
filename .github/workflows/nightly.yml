@@ -26,7 +26,7 @@ jobs:
     name: Nightly summary
     needs: main-only
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 270
     permissions:
       contents: read
       actions: write
@@ -44,7 +44,8 @@ jobs:
       - name: Run CI and the nightly preview on this ref
         id: ci
         env:
-          NIGHTLY_CI_POLLS: 200
+          # 420 polls x 30 s = 210 min: dev-env.yml's nightly path (commit-authors 5, build 30, deploy 40, gate 15, e2e 40, topology 45, teardown 20 = 195) + 15.
+          NIGHTLY_CI_POLLS: 420
         run: bash scripts/ci/nightly-ci.sh "$GITHUB_REF_NAME" ci.yml=run_id dev-env.yml=preview_run_id
       - name: Collect the CI results
         id: collect

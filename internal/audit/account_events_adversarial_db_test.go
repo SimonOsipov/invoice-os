@@ -145,3 +145,25 @@ func TestAccountEvents_EverySixNamesAreSelfOnly(t *testing.T) {
 		})
 	}
 }
+
+// An admin row that still holds client assignments (a promoted limited member, or one seeded
+// directly) reads every account row: the seam gives an admin the full scope.
+func TestAccountEvents_AdminWithClientAssignmentsSeesEveryMember(t *testing.T) {
+	f := requireFixture(t)
+	super := csSuper(t)
+	w := aeNewFirm(t, f)
+
+	csAssertRows(t, "limited member before promotion", csList(t, f, w.ctx["L"], audit.Filter{Limit: 50}), w.want()["L"])
+	aeRole(t, w.p.tenant, w.ids["L"], "admin")
+	var held int
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(*) FROM membership_clients WHERE user_id = $1`, w.ids["L"]).Scan(&held); err != nil || held == 0 {
+		t.Fatalf("promoted admin holds %d client assignments (err %v), want at least 1", held, err)
+	}
+	csAssertRows(t, "promoted limited member", csList(t, f, w.ctx["L"], audit.Filter{Limit: 50}), w.want()["A"])
+
+	d := uuid.NewString()
+	dctx := csMemberUser(t, super, d, w.p.tenant, "admin", false, w.c1Entity)
+	dRow := w.account(t, f, d, aeSignedIn, "Edge on Windows", 100)
+	csAssertRows(t, "admin seeded with a client", csList(t, f, dctx, audit.Filter{Limit: 50}), append(w.want()["A"], dRow))
+}

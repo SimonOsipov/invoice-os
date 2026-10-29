@@ -641,7 +641,7 @@ export function staffReadsAuditPayload(migrations: string[] = migrationUps()): b
   return granted
 }
 
-// Every DELETE FROM audit_log in migrations/, both goose sections, as [file, statement].
+// Every DELETE FROM or TRUNCATE of audit_log in migrations/, both goose sections, as [file, statement].
 export function auditLogDeletes(
   files: [string, string][] = readdirSync(join(REPO, 'migrations'))
     .filter((f) => f.endsWith('.sql'))
@@ -649,16 +649,18 @@ export function auditLogDeletes(
     .map((f): [string, string] => [f, readFileSync(join(REPO, 'migrations', f), 'utf8')]),
 ): [string, string][] {
   return files.flatMap(([f, sql]) =>
-    Array.from(sqlCode(sql).matchAll(/DELETE\s+FROM\s+(?:ONLY\s+)?(?:public\.)?"?audit_log\b[^;]*/gi), (m): [string, string] => [f, m[0].replace(/\s+/g, ' ')]),
+    Array.from(sqlCode(sql).matchAll(/(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+(?:ONLY\s+)?(?:"?public"?\.)?"?audit_log\b[^;]*/gi), (m): [string, string] => [f, m[0].replace(/\s+/g, ' ')]),
   )
 }
 
-// The new-device mail shows device, IP and time; the worker mails only a second-or-later pair, through the Resend sender.
+// The new-device mail shows device, IP and time; the mover queues it for a sign-in; the worker mails only a second-or-later pair, through the Resend sender.
 export function newDeviceMailFacts(
   tpl: string = readFileSync(join(REPO, 'internal/accountmail/new_device.html'), 'utf8'),
   render: string = readSource('internal/accountmail/accountmail.go'),
   worker: string = readSource('internal/accountevents/new_device.go'),
   sender: string = readSource('internal/accountmail/sender.go'),
+  mover: string = readSource('internal/accountevents/mover.go'),
+  workerMain: string = readSource('cmd/worker/main.go'),
 ): boolean {
   const details = found(/\{\{-?\s*define "details"\}\}([\s\S]*?)\{\{end\}\}/.exec(tpl.replace(/\{\{\/\*[\s\S]*?\*\/\}\}/g, ''))?.[1], 'the details block')
   const view = found(/v := newDeviceView\{([\s\S]*?)\n\t\}/.exec(render)?.[1], 'the new-device view')
@@ -674,7 +676,10 @@ export function newDeviceMailFacts(
     guard > -1 &&
     guard < work.indexOf('w.Sender.Send(') &&
     /ResendBaseURL\s*=\s*"https:\/\/api\.resend\.com"/.test(sender) &&
-    /func \(r \*Resend\) Send\(/.test(sender)
+    /func \(r \*Resend\) Send\(/.test(sender) &&
+    /n > 0 && h\.event == "account\.signed_in"/.test(mover) &&
+    /newDeviceJob\(h\)/.test(mover) &&
+    /NewDeviceWorker\{Pool: pool, Sender: nl\.Sender,/.test(workerMain)
   )
 }
 
@@ -687,4 +692,67 @@ export function eraseDeletesKnownDevices(
   const a = found(/deletes := \[\]del\{[\s\S]*?for _, d := range deletes \{[\s\S]*?tx\.Exec\(ctx, d\.sql/.exec(erase)?.[0], 'the erase delete list')
   const b = found(/for _, d := range \[\]struct \{[\s\S]*?tx\.Exec\(ctx, d\.sql/.exec(byID)?.[0], 'the erase-by-id delete list')
   return a.includes(del) && b.includes(del)
+}
+
+// Go files outside tests that DELETE FROM or TRUNCATE audit_log, with the count of files scanned.
+export function auditLogGoDeletes(files?: [string, string][]): { hits: string[]; scanned: number } {
+  const all: [string, string][] =
+    files ??
+    ['internal', 'cmd'].flatMap((dir) =>
+      (readdirSync(join(REPO, dir), { recursive: true }) as string[])
+        .filter((f) => f.endsWith('.go') && !f.endsWith('_test.go'))
+        .map((f): [string, string] => [`${dir}/${f}`, stripComments(readFileSync(join(REPO, dir, f), 'utf8'))]),
+    )
+  const re = /(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+(?:ONLY\s+)?(?:"?public"?\.)?"?audit_log\b|TRUNCATE\s+[^`;"]*?\baudit_log\b/i
+  return { hits: all.filter(([, src]) => re.test(src)).map(([f]) => f).sort(), scanned: all.length }
+}
+
+// The gateway's non-test source, joined.
+export function gatewaySource(): string {
+  return readdirSync(join(REPO, 'internal/gateway'))
+    .filter((f) => f.endsWith('.go') && !f.endsWith('_test.go'))
+    .sort()
+    .map((f) => readSource(`internal/gateway/${f}`))
+    .join('\n')
+}
+
+// The account events the gateway records through recordAccountEvent, sorted.
+export function accountEventsRecorded(src: string = gatewaySource()): string[] {
+  const consts = new Map(Array.from(src.matchAll(/\b(Event\w+)\s*=\s*"(account\.[a-z_]+)"/g), (m) => [m[1], m[2]] as const))
+  if (consts.size === 0) throw new Error('privacyCodeFacts: no gateway event constants')
+  const used = keysOf(/recordAccountEvent\([^)]*AccountEvent\{Event: (Event\w+)/g, src)
+  return unique(used.map((c) => consts.get(c) ?? c))
+}
+
+// The request reader's admin flag comes from the member's role, and the seam gives an admin the full client scope.
+export function adminFollowsTheRole(
+  store: string = readSource('internal/audit/store.go'),
+  seam: string = readSource('internal/platform/db/tenant.go'),
+): boolean {
+  return (
+    /coalesce\(\(SELECT m\.role = 'admin' FROM memberships m WHERE m\.user_id = \$1::uuid\), false\)/.test(store) &&
+    /f\.scope\.admin = admin \|\| inProcess/.test(store) &&
+    /f\.scope\.self = id\.Subject/.test(store) &&
+    /CASE WHEN t\.kind <> 'firm' OR m\.role = 'admin' OR m\.all_clients THEN '\*'/.test(seam)
+  )
+}
+
+// The staff route returns every event of every tenant with its payload: no event filter in the last staff_read_audit_log.
+export function staffSearchReadsAccountRows(
+  migrations: string[] = migrationUps(),
+  reader: string = readSource('internal/audit/staff_read.go'),
+  main: string = readSource('cmd/invoice/main.go'),
+): boolean {
+  let fn = ''
+  for (const sql of migrations) {
+    const m = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+public\.staff_read_audit_log\b[\s\S]*?END \$\$;/i.exec(sqlCode(sql.split('-- +goose Down')[0]))
+    if (m) fn = m[0]
+  }
+  if (fn === '') throw new Error('privacyCodeFacts: staff_read_audit_log not found')
+  return (
+    /a\.event, a\.actor, m\.display_name, m\.email, a\.payload\s+FROM public\.audit_log a/.test(fn) &&
+    !/account/i.test(fn) &&
+    /member_email, payload\s+FROM public\.staff_read_audit_log\(/.test(reader) &&
+    /"GET \/v1\/staff\/audit-log", audit\.StaffSearchHandler/.test(main)
+  )
 }

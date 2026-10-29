@@ -215,6 +215,14 @@ describe('content', () => {
     expect(roles.desc).toMatch(/only admins invite and manage members/i)
   })
 
+  it('content_auditTrailNamesSignInsAndTheNewDeviceEmail', () => {
+    const d = byId('audit-trail').desc
+    expect(d).toMatch(/creation, edits, approvals and submissions/)
+    expect(d).toMatch(/each sign-in is recorded too/i)
+    expect(d).toMatch(/a sign-in from a new device sends you an email/i)
+    expect(d).toMatch(/entries cannot be edited\.$/i)
+  })
+
   it('content_membersEntriesNameNoDepartmentErpOrCertificate', () => {
     const banned = /\b(department|ERP|connectors?|signing certificates?)\b/i
     for (const id of ['invite-members', 'roles']) {

@@ -37,6 +37,10 @@ paths:
   - "internal/audit/account_events.go"
   - "internal/accountmail/new_device.html"
   - "migrations/20261026120001_purge_tenant.sql"
+  - "migrations/20261014130255_staff_read_audit_log.sql"
+  - "internal/audit/store.go"
+  - "internal/audit/staff_read.go"
+  - "internal/gateway/account_events.go"
   - "internal/notifications/vendor_erase.go"
   - "internal/platform/db/tenant.go"
   - "internal/platform/auth/gotrueadmin/**"
@@ -151,5 +155,5 @@ Each line names a sentence of `DELETION_SENTENCES` and its backing. Check date: 
 
 ## Sign-in records
 
-- `P1`..`P4` are `ACCOUNT_RECORD_SENTENCES`. `accountEventNames()`, `accountEventPayloadKeys()`, `accountRowsAreSelfOnly()`, `staffReadsAuditPayload()`, `auditLogDeletes()`, `newDeviceMailFacts()` and `eraseDeletesKnownDevices()` back them.
-- `P3`: no job prunes `audit_log` by age. The workspace purge is the only delete. Retention answer: AUDIT-13 Q1 = B.
+- `P1`..`P4` are `ACCOUNT_RECORD_SENTENCES`. `accountEventNames()`, `accountEventsRecorded()`, `accountEventPayloadKeys()`, `accountRowsAreSelfOnly()`, `adminFollowsTheRole()`, `staffReadsAuditPayload()`, `staffSearchReadsAccountRows()`, `auditLogDeletes()`, `auditLogGoDeletes()`, `newDeviceMailFacts()` and `eraseDeletesKnownDevices()` back them.
+- `P3`: no job prunes `audit_log` by age. The workspace purge is the only delete in `migrations/` and in non-test Go, except the PR-environment `db.Reset` truncate. Retention answer: AUDIT-13 Q1 = B.

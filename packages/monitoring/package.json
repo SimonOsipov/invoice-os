@@ -16,7 +16,7 @@
     "react": ">=19"
   },
   "dependencies": {
-    "@sentry/core": "10.75.3",
+    "@sentry/core": "11.8.0",
     "@sentry/react": "10.75.3"
   },
   "devDependencies": {

@@ -616,9 +616,9 @@ export function accountEventPayloadKeys(src: string = readSource('internal/accou
   return unique(keysOf(/json:"([a-z_]+)"/g, body))
 }
 
-// In the reader's scope switch, only an admin with no company set adds no account arm; a set or a non-admin gets a self-bound arm.
+// In the reader's scope switch, a company set or a non-admin gets a self-bound account arm; an admin with no set adds none.
 export function accountRowsAreSelfOnly(src: string = readSource('internal/audit/filter.go')): boolean {
-  const sw = found(/switch \{\s*case f\.scope\.set && f\.scope\.admin:[\s\S]*?\n\t\}\n/.exec(src)?.[0], 'the scope switch')
+  const sw = found(/switch \{\s*case f\.scope\.set:[\s\S]*?\n\t\}\n/.exec(src)?.[0], 'the scope switch')
   const setCase = found(/case f\.scope\.set:([\s\S]*?)case !f\.scope\.admin:/.exec(sw)?.[1], 'the set case')
   const nonAdmin = found(/case !f\.scope\.admin:([\s\S]*)$/.exec(sw)?.[1], 'the non-admin case')
   return (

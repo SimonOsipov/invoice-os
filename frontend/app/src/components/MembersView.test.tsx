@@ -27,6 +27,7 @@ import {
   CAPABILITY_ROWS,
   CLIENT_USERS_COPY,
   INVITE_ADMIN_ONLY,
+  MEMBER_ADMIN_ONLY,
   PROTECTED_ADMIN_NOTE,
   removeMembership,
   replaceMember,
@@ -103,6 +104,8 @@ function member(over: Partial<Member> = {}): Member {
 function wireFor(m: Member, status: Member['status']): MembershipWire {
   return { user_id: m.id, role: m.role, status, display_name: m.name, email: m.email }
 }
+
+const adminViewer = () => member({ id: 'me', name: 'Me Admin', initials: 'MA', role: 'admin', isYou: true })
 
 // A second, unrelated row -- a roster of exactly one member renders MembersView's "Just you"
 // empty state instead of the table (MembersView.tsx:101), which every test below that needs
@@ -230,7 +233,7 @@ describe('AC2: a successful suspend leaves no stale row', () => {
     const other = member({ id: 'other1', name: 'Other Person', initials: 'OP', status: 'invited' })
     mockedSetMembershipStatus.mockResolvedValue(wireFor(m, 'suspended'))
 
-    render(<Harness initial={[m, other]} />)
+    render(<Harness initial={[adminViewer(), m, other]} />)
     openDrawer('Ada Person')
     const row = rowFor('Ada Person')
     clickSuspend()
@@ -253,7 +256,7 @@ describe('AC2: a failed suspend does not leave an optimistic status on screen', 
     const other = member({ id: 'other1', name: 'Other Person', initials: 'OP', status: 'invited' })
     mockedSetMembershipStatus.mockRejectedValue(new ApiError('http', REASON, 409))
 
-    render(<Harness initial={[m, other]} />)
+    render(<Harness initial={[adminViewer(), m, other]} />)
     openDrawer('Ada Person')
     const row = rowFor('Ada Person')
     clickSuspend()
@@ -276,7 +279,7 @@ describe("AC4: a rejected write renders the server's own reason at the control",
     const other = member({ id: 'other1', name: 'Other Person', initials: 'OP', status: 'invited' })
     mockedSetMembershipStatus.mockRejectedValue(new ApiError('http', REASON, 409))
 
-    render(<Harness initial={[m, other]} />)
+    render(<Harness initial={[adminViewer(), m, other]} />)
     openDrawer('Ada Person')
     clickSuspend()
 
@@ -292,7 +295,7 @@ describe("AC4: a rejected write renders the server's own reason at the control",
     const other = member({ id: 'other1', name: 'Other Person', initials: 'OP', status: 'invited' })
     mockedSetMembershipStatus.mockRejectedValue(new ApiError('http', REASON, 409))
 
-    render(<Harness initial={[m, other]} />)
+    render(<Harness initial={[adminViewer(), m, other]} />)
     openDrawer('Ada Person')
     clickSuspend()
 
@@ -315,7 +318,7 @@ describe('DEL-02-05: Remove through the view', () => {
   it('view: a refused remove shows the server reason on that row', async () => {
     mockedRemoveMembership.mockRejectedValue(new ApiError('http', REASON, 409))
 
-    render(<Harness initial={[ada(), other()]} />)
+    render(<Harness initial={[adminViewer(), ada(), other()]} />)
     openDrawer('Ada Person')
     confirmRemove()
 
@@ -329,7 +332,7 @@ describe('DEL-02-05: Remove through the view', () => {
     mockedRemoveMembership.mockResolvedValue({ ...wireFor(m, 'removed'), email: null })
     const refetchRoles = vi.fn()
 
-    render(<Harness initial={[m, other(), third()]} refetchRoles={refetchRoles} />)
+    render(<Harness initial={[adminViewer(), m, other(), third()]} refetchRoles={refetchRoles} />)
     openDrawer('Ada Person')
     confirmRemove()
 
@@ -344,7 +347,7 @@ describe('DEL-02-05: Remove through the view', () => {
   it('view: a refused remove from the menu shows the reason under the row', async () => {
     mockedRemoveMembership.mockRejectedValue(new ApiError('http', REASON, 409))
 
-    render(<Harness initial={[ada(), other()]} />)
+    render(<Harness initial={[adminViewer(), ada(), other()]} />)
     fireEvent.click(within(rowFor('Ada Person')).getByTestId('member-menu-trigger'))
     fireEvent.click(within(screen.getByTestId('member-menu')).getByRole('button', { name: 'Remove' }))
     fireEvent.click(screen.getByTestId('member-remove-confirmed'))
@@ -359,7 +362,7 @@ describe('DEL-02-05: Remove through the view', () => {
   ])('view: a %i refusal renders its sentence and leaves the row unchanged', async (status, sentence) => {
     mockedRemoveMembership.mockRejectedValue(new ApiError('http', sentence, status))
 
-    render(<Harness initial={[ada(), other()]} />)
+    render(<Harness initial={[adminViewer(), ada(), other()]} />)
     openDrawer('Ada Person')
     confirmRemove()
 
@@ -372,7 +375,7 @@ describe('DEL-02-05: Remove through the view', () => {
     mockedRemoveMembership.mockRejectedValue(new TypeError('Failed to fetch'))
     const refetchRoles = vi.fn()
 
-    render(<Harness initial={[ada(), other()]} refetchRoles={refetchRoles} />)
+    render(<Harness initial={[adminViewer(), ada(), other()]} refetchRoles={refetchRoles} />)
     openDrawer('Ada Person')
     confirmRemove()
 
@@ -385,7 +388,7 @@ describe('DEL-02-05: Remove through the view', () => {
   it('view: a double click on the confirm sends one request', async () => {
     mockedRemoveMembership.mockReturnValue(new Promise(() => {}))
 
-    render(<Harness initial={[ada(), other()]} />)
+    render(<Harness initial={[adminViewer(), ada(), other()]} />)
     openDrawer('Ada Person')
     fireEvent.click(screen.getByTestId('member-remove'))
     const confirm = screen.getByTestId('member-remove-confirmed')
@@ -399,7 +402,7 @@ describe('DEL-02-05: Remove through the view', () => {
     const m = ada()
     mockedRemoveMembership.mockResolvedValue({ ...wireFor(m, 'removed'), display_name: null, email: null })
 
-    render(<Harness initial={[m, other(), third()]} />)
+    render(<Harness initial={[adminViewer(), m, other(), third()]} />)
     openDrawer('Ada Person')
     confirmRemove()
 
@@ -516,7 +519,7 @@ describe('a second suspend fired while the first write is still in flight', () =
       .mockImplementationOnce(() => new Promise((res) => (resolveFirst = res)))
       .mockImplementationOnce(() => new Promise((res) => (resolveSecond = res)))
 
-    render(<Harness initial={[m, otherMember()]} />)
+    render(<Harness initial={[adminViewer(), m, otherMember()]} />)
     openDrawer('Ada Person')
     const row = rowFor('Ada Person')
     clickSuspend()
@@ -538,7 +541,7 @@ describe('the drawer and the row menu act on the same directory', () => {
     const m = member()
     mockedSetMembershipStatus.mockResolvedValue(wireFor(m, 'suspended'))
 
-    render(<Harness initial={[m, otherMember()]} />)
+    render(<Harness initial={[adminViewer(), m, otherMember()]} />)
     const row = rowFor('Ada Person')
     suspendFromRowMenu(row)
     await within(row).findByText('SUSPENDED', { exact: true })
@@ -555,7 +558,7 @@ describe('statusError clears on the next write, success or failure', () => {
     const m = member()
     mockedSetMembershipStatus.mockRejectedValueOnce(new ApiError('http', REASON, 409)).mockResolvedValueOnce(wireFor(m, 'suspended'))
 
-    render(<Harness initial={[m, otherMember()]} />)
+    render(<Harness initial={[adminViewer(), m, otherMember()]} />)
     openDrawer('Ada Person')
     const row = rowFor('Ada Person')
     clickSuspend()
@@ -588,12 +591,25 @@ describe('a null email renders the shared em-dash label, not blank text or the l
   })
 })
 
-describe('isYou can still be suspended when not the protected admin', () => {
-  it('a non-admin isYou row suspends through the same control as anyone else', async () => {
-    const m = member({ isYou: true })
+describe('isYou and the member-actions lock', () => {
+  const adminRows = () => [member({ isYou: true, role: 'admin' }), member({ id: 'other1', name: 'Other Admin', initials: 'OA', role: 'admin' })]
+
+  it('a non-admin isYou row cannot suspend', () => {
+    render(<Harness initial={[member({ isYou: true }), otherMember()]} />)
+    openDrawer('Ada Person')
+    const suspend = screen.getByTestId('member-suspend') as HTMLButtonElement
+
+    expect(suspend.disabled).toBe(true)
+    expect(suspend.title).toBe(MEMBER_ADMIN_ONLY)
+    clickSuspend()
+    expect(mockedSetMembershipStatus).not.toHaveBeenCalled()
+  })
+
+  it('an admin isYou row suspends when another active admin exists', async () => {
+    const [m, other] = adminRows()
     mockedSetMembershipStatus.mockResolvedValue(wireFor(m, 'suspended'))
 
-    render(<Harness initial={[m, otherMember()]} />)
+    render(<Harness initial={[m, other]} />)
     openDrawer('Ada Person')
     const row = rowFor('Ada Person')
     clickSuspend()
@@ -602,17 +618,52 @@ describe('isYou can still be suspended when not the protected admin', () => {
     await within(row).findByText('SUSPENDED', { exact: true })
   })
 
-  it("the last-active-admin 409 renders verbatim on the isYou row too, and YOU doesn't collide with the reason text", async () => {
-    const m = member({ isYou: true })
+  it("the last-active-admin 409 renders verbatim on an admin isYou row, and YOU doesn't collide with the reason text", async () => {
     const LAST_ADMIN_REASON = "this is the tenant's last active admin -- make another member an active admin first"
     mockedSetMembershipStatus.mockRejectedValue(new ApiError('http', LAST_ADMIN_REASON, 409))
 
-    render(<Harness initial={[m, otherMember()]} />)
+    render(<Harness initial={adminRows()} />)
     openDrawer('Ada Person')
     clickSuspend()
 
     const matches = await screen.findAllByText(LAST_ADMIN_REASON)
     expect(matches.length).toBeGreaterThan(0)
+  })
+
+  it('a 403 on Suspend renders the server sentence verbatim', async () => {
+    const SENTENCE = "only an admin can change a member's status"
+    mockedSetMembershipStatus.mockRejectedValue(new ApiError('http', SENTENCE, 403))
+
+    render(<Harness initial={[adminViewer(), member(), otherMember()]} />)
+    openDrawer('Ada Person')
+    clickSuspend()
+
+    const err = await screen.findByTestId('member-drawer-status-error')
+    expect(err.textContent).toBe(SENTENCE)
+    expect(screen.queryByText(MEMBER_ADMIN_ONLY)).toBeNull()
+    expect(screen.queryByText(/something went wrong/i)).toBeNull()
+  })
+
+  it("the drawer's controls agree with the role cards for the same viewer", () => {
+    const states = () => {
+      const radios = ['admin', 'preparer', 'reviewer'].map((id) => (screen.getByTestId(`drawer-role-${id}`).querySelector('input') as HTMLInputElement).disabled)
+      return [
+        ...radios,
+        (screen.getByTestId('member-suspend') as HTMLButtonElement).disabled,
+        (screen.getByTestId('member-remove') as HTMLButtonElement).disabled,
+        (screen.getByTestId('drawer-scope-all').closest('fieldset') as HTMLFieldSetElement).hasAttribute('disabled'),
+      ]
+    }
+    const roster = (viewer: Member) => [viewer, member({ role: 'preparer', clientAccess: ['e1'] })]
+
+    render(<Harness initial={roster(member({ id: 'me', name: 'Me Viewer', role: 'preparer', isYou: true }))} mode="firm" />)
+    openDrawer('Ada Person')
+    expect(states()).toEqual([true, true, true, true, true, true])
+    cleanup()
+
+    render(<Harness initial={roster(adminViewer())} mode="firm" />)
+    openDrawer('Ada Person')
+    expect(states()).toEqual([false, false, false, false, false, false])
   })
 })
 

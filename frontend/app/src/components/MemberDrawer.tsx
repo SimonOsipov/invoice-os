@@ -24,15 +24,16 @@ import {
   ADMIN_ALL_CLIENTS,
   CLIENTS_UNREADABLE,
   emailLabel,
-  isProtectedAdmin,
   accessRoleLabel,
+  MEMBER_CLIENTS_ADMIN_ONLY,
+  memberActionsLock,
   pickerClients,
-  PROTECTED_ADMIN_NOTE,
   REMOVE_CONFIRMED,
   REMOVE_EXPLANATION,
   REMOVE_KEEP,
   removeConfirmQuestion,
   roleCardsLock,
+  viewerIsAdmin,
   ROLE_CHANGE_CONFIRMED,
   ROLE_CHANGE_KEEP,
   roleChangeQuestion,
@@ -107,6 +108,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
   const roleNoteId = useId()
   const scopeNoteId = useId()
   const removeNoteId = useId()
+  const removeLockNoteId = useId()
   useDismiss(true, onClose)
 
   // The staffing write's own in-flight flag and failure reason -- the MembersView.tsx:79-89
@@ -143,7 +145,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
   const row = ctx.members.find((m) => m.id === memberId) ?? null
   if (!row) return null
 
-  const protectedAdmin = isProtectedAdmin(ctx.members, row)
+  const actionLock = memberActionsLock(ctx.members, row)
 
   // BOTH halves of the gate — holding a role, and actually being named in a step — are
   // `stepsForMember`'s, not this component's. It is the rule that stops the drawers of people
@@ -399,7 +401,16 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
               ) : (
                 <>
                   <fieldset disabled={clientsPending} style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0 }}>
-                    {clientsLanded ? (
+                    {clientsLanded && !viewerIsAdmin(ctx.members) ? (
+                      <UnbackedField reason={MEMBER_CLIENTS_ADMIN_ONLY} noteId={scopeNoteId}>
+                        <ClientAccessPicker
+                          key={pickerKey}
+                          idPrefix="drawer"
+                          value={storedClients}
+                          clients={pickerClients(ctx.entities, storedClients)}
+                        />
+                      </UnbackedField>
+                    ) : clientsLanded ? (
                       <ClientAccessPicker
                         key={pickerKey}
                         idPrefix="drawer"
@@ -523,22 +534,22 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
                 {/* SUSPEND ONLY: beside `Reactivate` this sentence would assert the opposite of the button's effect. */}
                 {suspending && <span>{SUSPEND_EXPLANATION}</span>}
                 {/* Layer (3) for the SUSPEND lock: a disabled control is out of the tab order and `title` never fires on one. */}
-                {protectedAdmin && (
+                {actionLock && (
                   <div id={noteId} data-testid="member-danger-note" style={{ marginTop: 4, color: 'var(--status-amber-text)' }}>
-                    {PROTECTED_ADMIN_NOTE}
+                    {actionLock}
                   </div>
                 )}
               </div>
               <button
                 type="button"
                 onClick={() => onStatus(row.id, suspending ? 'suspended' : 'active')}
-                disabled={protectedAdmin}
-                title={protectedAdmin ? PROTECTED_ADMIN_NOTE : undefined}
-                aria-describedby={protectedAdmin ? noteId : undefined}
+                disabled={actionLock != null}
+                title={actionLock ?? undefined}
+                aria-describedby={actionLock ? noteId : undefined}
                 className="v2-btn v2-btn-ghost pf-btn"
                 data-testid="member-suspend"
                 // `disabledGhost` outranks `.v2-btn-ghost:hover`'s unguarded background.
-                style={{ flex: 'none', height: 36, ...(protectedAdmin ? disabledGhost : null) }}
+                style={{ flex: 'none', height: 36, ...(actionLock ? disabledGhost : null) }}
               >
                 {suspending ? 'Suspend' : 'Reactivate'}
               </button>
@@ -565,18 +576,23 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, onRemove, statu
 
           {canRemove && !confirmingRemove && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, paddingTop: 12, borderTop: '1px solid var(--line-1)' }}>
-              <span id={removeNoteId} style={{ flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
-                {REMOVE_EXPLANATION}
-              </span>
+              <div style={{ flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
+                <span id={removeNoteId}>{REMOVE_EXPLANATION}</span>
+                {actionLock && (
+                  <div id={removeLockNoteId} data-testid="member-remove-note" style={{ marginTop: 4, color: 'var(--status-amber-text)' }}>
+                    {actionLock}
+                  </div>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={() => setConfirmingRemove(true)}
-                disabled={protectedAdmin}
-                title={protectedAdmin ? PROTECTED_ADMIN_NOTE : undefined}
-                aria-describedby={protectedAdmin ? noteId : removeNoteId}
+                disabled={actionLock != null}
+                title={actionLock ?? undefined}
+                aria-describedby={actionLock ? removeLockNoteId : removeNoteId}
                 className="v2-btn v2-btn-ghost pf-btn"
                 data-testid="member-remove"
-                style={{ flex: 'none', height: 36, color: 'var(--status-red-text)', borderColor: 'var(--status-red-border)', ...(protectedAdmin ? disabledGhost : null) }}
+                style={{ flex: 'none', height: 36, color: 'var(--status-red-text)', borderColor: 'var(--status-red-border)', ...(actionLock ? disabledGhost : null) }}
               >
                 Remove
               </button>

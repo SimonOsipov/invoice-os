@@ -11,6 +11,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client'
 import {
   ADMIN_ALL_CLIENTS,
+  CLIENTS_UNREADABLE,
+  MEMBER_ADMIN_ONLY,
+  MEMBER_CLIENTS_ADMIN_ONLY,
   PROTECTED_ADMIN_NOTE,
   removeConfirmQuestion,
   roleChangeQuestion,
@@ -35,6 +38,8 @@ function member(over: Partial<Member> = {}): Member {
     ...over,
   }
 }
+
+const adminViewer = () => member({ id: 'me', name: 'Me Admin', role: 'admin', isYou: true })
 
 function role(over: Partial<Role> = {}): Role {
   return { key: 'cfo', title: 'CFO', desc: '', members: [], ...over }
@@ -573,7 +578,7 @@ describe('the drawer shell and bands', () => {
   })
 
   it('drawer: Remove is a red ghost, enabled, and your own drawer has none', () => {
-    open()
+    open({ members: [adminViewer(), member({ id: 'u2' })] })
 
     const remove = screen.getByTestId('member-remove') as HTMLButtonElement
     expect(remove.disabled).toBe(false)
@@ -600,7 +605,7 @@ describe('FIRMS-02-05: the drawer edits client access', () => {
     return screen.getByTestId(`drawer-scope-${scope}`).querySelector('input') as HTMLInputElement
   }
   function mount(setMemberClients: unknown, access: 'all' | string[] = ['e1'], over: Record<string, unknown> = {}) {
-    const ctx = drawerCtx({ members: [member({ id: 'u2', clientAccess: access })], setMemberClients, ...over })
+    const ctx = drawerCtx({ members: [adminViewer(), member({ id: 'u2', clientAccess: access })], setMemberClients, ...over })
     const view = render(<MemberDrawer ctx={ctx} memberId="u2" onClose={vi.fn()} onStatus={vi.fn()} statusError={null} />)
     return { ctx, view }
   }
@@ -629,7 +634,7 @@ describe('FIRMS-02-05: the drawer edits client access', () => {
     function Harness({ initial }: { initial: 'all' | string[] }) {
       const [access, setAccess] = useState(initial)
       setMemberClients.mockImplementation(async (_id: string, next: 'all' | string[]) => setAccess(next))
-      const ctx = drawerCtx({ members: [member({ id: 'u2', clientAccess: access })], setMemberClients })
+      const ctx = drawerCtx({ members: [adminViewer(), member({ id: 'u2', clientAccess: access })], setMemberClients })
       return <MemberDrawer ctx={ctx} memberId="u2" onClose={vi.fn()} onStatus={vi.fn()} statusError={null} />
     }
     render(<Harness initial={['e1']} />)
@@ -673,7 +678,7 @@ describe('FIRMS-02-05: the drawer edits client access', () => {
       setMemberClients.mockImplementation(
         (_id: string, next: 'all' | string[]) => new Promise<void>((resolve) => { release = () => { setAccess(next); resolve() } }),
       )
-      const ctx = drawerCtx({ members: [member({ id: 'u2', clientAccess: access })], setMemberClients, entities })
+      const ctx = drawerCtx({ members: [adminViewer(), member({ id: 'u2', clientAccess: access })], setMemberClients, entities })
       return <MemberDrawer ctx={ctx} memberId="u2" onClose={vi.fn()} onStatus={vi.fn()} statusError={null} />
     }
     render(<Harness />)
@@ -777,7 +782,8 @@ describe('FIRMS-02-05: the drawer edits client access', () => {
 
 describe('DEL-02-05: Remove in the drawer', () => {
   function mount(over: Record<string, unknown> = {}, id = 'u2', onRemove = vi.fn()) {
-    render(<MemberDrawer ctx={drawerCtx(over)} memberId={id} onClose={vi.fn()} onStatus={vi.fn()} onRemove={onRemove} statusError={null} />)
+    const members = [adminViewer(), member({ id: 'u1' }), member({ id: 'u2', name: 'Bo Person', initials: 'BP', email: 'bo@x.ng' })]
+    render(<MemberDrawer ctx={drawerCtx({ members, ...over })} memberId={id} onClose={vi.fn()} onStatus={vi.fn()} onRemove={onRemove} statusError={null} />)
     return onRemove
   }
 
@@ -806,13 +812,13 @@ describe('DEL-02-05: Remove in the drawer', () => {
     expect(onRemove).toHaveBeenCalledWith('u2')
   })
 
-  it("drawer: the sole active admin's Remove is disabled with the note", () => {
+  it("drawer: a non-admin viewer's Remove next to the sole active admin is disabled with the admin-only note", () => {
     const onRemove = mount({ members: [member({ id: 'me', isYou: true }), member({ id: 'u2', name: 'Bo Admin', role: 'admin' })] })
 
     const remove = screen.getByTestId('member-remove') as HTMLButtonElement
     expect(remove.disabled).toBe(true)
-    expect(remove.title).toBe(PROTECTED_ADMIN_NOTE)
-    expect(screen.getByTestId('member-danger-note').textContent).toBe(PROTECTED_ADMIN_NOTE)
+    expect(remove.title).toBe(MEMBER_ADMIN_ONLY)
+    expect(screen.getByTestId('member-remove-note').textContent).toBe(MEMBER_ADMIN_ONLY)
     fireEvent.click(remove)
     expect(screen.queryByTestId('member-remove-confirm')).toBeNull()
     expect(onRemove).not.toHaveBeenCalled()
@@ -1003,5 +1009,125 @@ describe('ACCESS-01: the drawer saves the access role', () => {
     pick('admin')
     expect(strip()).toBeNull()
     await waitFor(() => expect(setMemberRole).toHaveBeenCalledTimes(1))
+  })
+})
+
+describe('MEMB-03: the drawer locks member actions for a non-admin viewer', () => {
+  const viewer = () => member({ id: 'me', name: 'Me Preparer', isYou: true })
+  const target = (over: Partial<Member> = {}) => member({ id: 'u2', name: 'Bo Person', ...over })
+  function mount(members: Member[], id = 'u2', over: Record<string, unknown> = {}) {
+    const onRemove = vi.fn()
+    const onStatus = vi.fn()
+    render(<MemberDrawer ctx={drawerCtx({ members, ...over })} memberId={id} onClose={vi.fn()} onStatus={onStatus} onRemove={onRemove} statusError={null} />)
+    return { onRemove, onStatus }
+  }
+  const describedText = (btn: HTMLElement) => document.getElementById(btn.getAttribute('aria-describedby') as string)?.textContent
+
+  it("a non-admin viewer: Suspend is disabled with the admin-only note", () => {
+    const { onStatus } = mount([viewer(), target()])
+
+    const suspend = screen.getByTestId('member-suspend') as HTMLButtonElement
+    expect(suspend.disabled).toBe(true)
+    expect(suspend.title).toBe(MEMBER_ADMIN_ONLY)
+    expect(screen.getByTestId('member-danger-note').textContent).toBe(MEMBER_ADMIN_ONLY)
+    expect(describedText(suspend)).toBe(MEMBER_ADMIN_ONLY)
+    fireEvent.click(suspend)
+    expect(onStatus).not.toHaveBeenCalled()
+  })
+
+  it('a non-admin viewer: Remove is disabled with its own note', () => {
+    const { onRemove } = mount([viewer(), target()])
+
+    const remove = screen.getByTestId('member-remove') as HTMLButtonElement
+    expect(remove.disabled).toBe(true)
+    expect(screen.getByTestId('member-remove-note').textContent).toBe(MEMBER_ADMIN_ONLY)
+    expect(describedText(remove)).toBe(MEMBER_ADMIN_ONLY)
+    fireEvent.click(remove)
+    expect(screen.queryByTestId('member-remove-confirm')).toBeNull()
+    expect(onRemove).not.toHaveBeenCalled()
+  })
+
+  it('a non-admin viewer: Reactivate is disabled', () => {
+    mount([viewer(), target({ status: 'suspended' })])
+
+    const btn = screen.getByTestId('member-suspend') as HTMLButtonElement
+    expect(btn.textContent).toBe('Reactivate')
+    expect(btn.disabled).toBe(true)
+    expect(screen.getByTestId('member-danger-note').textContent).toBe(MEMBER_ADMIN_ONLY)
+  })
+
+  it('a non-admin viewer on an invited row: Remove note is still present', () => {
+    mount([viewer(), target({ status: 'invited' })])
+
+    expect(screen.queryByTestId('member-suspend')).toBeNull()
+    expect(describedText(screen.getByTestId('member-remove'))).toBe(MEMBER_ADMIN_ONLY)
+    expect(screen.getByTestId('member-remove-note').textContent).toBe(MEMBER_ADMIN_ONLY)
+  })
+
+  it("a non-admin viewer's own row: Suspend is disabled and Remove is absent", () => {
+    mount([viewer()], 'me')
+
+    expect((screen.getByTestId('member-suspend') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByTestId('member-remove')).toBeNull()
+  })
+
+  it('a non-admin viewer on their own row: the client picker is locked', () => {
+    const setMemberClients = vi.fn()
+    mount([member({ id: 'me', isYou: true, clientAccess: ['e1'] })], 'me', { setMemberClients })
+
+    const fieldset = screen.getByTestId('drawer-scope-all').closest('fieldset') as HTMLFieldSetElement
+    expect(fieldset.hasAttribute('disabled')).toBe(true)
+    expect(document.getElementById(fieldset.getAttribute('aria-describedby') as string)?.textContent).toBe(MEMBER_CLIENTS_ADMIN_ONLY)
+    expect(screen.getAllByTestId('drawer-client-row').map((r) => (r.querySelector('input') as HTMLInputElement).checked)).toEqual([true, false])
+    fireEvent.click(screen.getAllByTestId('drawer-client-row')[1].querySelector('input') as HTMLInputElement)
+    expect(setMemberClients).not.toHaveBeenCalled()
+  })
+
+  it('a non-admin viewer on another member: still the unreadable note', () => {
+    mount([viewer(), target({ clientAccess: null })])
+
+    expect(screen.getByTestId('member-drawer-clients-unreadable').textContent).toBe(CLIENTS_UNREADABLE)
+    expect(screen.queryByTestId('drawer-scope-all')).toBeNull()
+  })
+
+  it('a non-admin viewer: clients not landed shows loading, not a lock', () => {
+    mount([member({ id: 'me', isYou: true, clientAccess: ['e1'] })], 'me', { entities: [], entitiesState: 'loading' })
+
+    expect(screen.getByText('Loading clients…')).toBeTruthy()
+    expect(screen.getByTestId('member-drawer').textContent).not.toContain(MEMBER_CLIENTS_ADMIN_ONLY)
+  })
+
+  it('a non-admin viewer on the sole admin: the admin-only note wins', () => {
+    mount([viewer(), target({ role: 'admin' })])
+
+    expect(screen.getByTestId('member-danger-note').textContent).toBe(MEMBER_ADMIN_ONLY)
+    expect(screen.getByTestId('member-drawer').textContent).not.toContain(PROTECTED_ADMIN_NOTE)
+  })
+
+  it('an admin viewer: Suspend, Remove and the picker are live, with no note', () => {
+    mount([adminViewer(), target({ clientAccess: ['e1'] })])
+
+    expect((screen.getByTestId('member-suspend') as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByTestId('member-remove') as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByTestId('member-danger-note')).toBeNull()
+    expect(screen.queryByTestId('member-remove-note')).toBeNull()
+    expect(screen.getByTestId('drawer-scope-all').closest('fieldset')?.hasAttribute('disabled')).toBe(false)
+  })
+
+  it('an admin viewer on their own sole-admin drawer: Suspend keeps PROTECTED_ADMIN_NOTE, Remove is absent', () => {
+    mount([adminViewer(), target({ status: 'suspended' })], 'me')
+
+    const suspend = screen.getByTestId('member-suspend') as HTMLButtonElement
+    expect(suspend.disabled).toBe(true)
+    expect(suspend.title).toBe(PROTECTED_ADMIN_NOTE)
+    expect(screen.getByTestId('member-danger-note').textContent).toBe(PROTECTED_ADMIN_NOTE)
+    expect(screen.queryByTestId('member-remove')).toBeNull()
+  })
+
+  it('an admin viewer: Remove next to a second admin is live', () => {
+    mount([adminViewer(), target({ role: 'admin' })])
+
+    expect((screen.getByTestId('member-remove') as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByTestId('member-remove-note')).toBeNull()
   })
 })

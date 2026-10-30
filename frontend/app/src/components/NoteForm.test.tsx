@@ -151,6 +151,7 @@ describe('NoteForm', () => {
     for (const [status, error] of [
       [409, 'a note needs an accepted invoice with an IRN'],
       [500, 'internal error'],
+      [500, 'duplicate invoice number'],
       [400, 'invoice: validation failed: quantity has more than 3 decimals'],
     ] as const) {
       setup({ reply: { ok: false, status, json: () => Promise.resolve({ error }) } })
@@ -171,5 +172,79 @@ describe('NoteForm', () => {
     fireEvent.click(btn)
     await waitFor(() => expect(posts).toHaveLength(1))
     expect(posts).toHaveLength(1)
+  })
+  it('a repeated submit event posts once', async () => {
+    const { posts } = setup()
+    tick(0)
+    const form = screen.getByTestId('note-form')
+    fireEvent.submit(form)
+    fireEvent.submit(form)
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts).toHaveLength(1)
+  })
+
+  it('submit sends the edited quantity and price of a ticked line', async () => {
+    const { posts } = setup()
+    tick(0)
+    fireEvent.change(screen.getAllByTestId('note-line-qty')[0], { target: { value: '1' } })
+    fireEvent.change(screen.getAllByTestId('note-line-price')[0], { target: { value: '9.50' } })
+    fireEvent.click(submit())
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].body.lines).toEqual([{ line_id: 'l1', quantity: '1', unit_price: '9.50' }])
+  })
+
+  it('an over-cap line blocks Submit only while it is ticked', () => {
+    setup({ type: 'credit_note' })
+    tick(1)
+    tick(0)
+    fireEvent.change(screen.getAllByTestId('note-line-qty')[0], { target: { value: '9' } })
+    expect(submit().disabled).toBe(true)
+    tick(0)
+    expect(screen.getAllByTestId('note-line-error')).toHaveLength(1)
+    expect(submit().disabled).toBe(false)
+  })
+
+  it('a ticked line with quantity 0 or a negative price blocks Submit on either note type', () => {
+    for (const type of ['credit_note', 'debit_note'] as const) {
+      setup({ type })
+      tick(0)
+      fireEvent.change(screen.getAllByTestId('note-line-qty')[0], { target: { value: '0' } })
+      expect(screen.getAllByTestId('note-line-error'), `${type} qty 0`).toHaveLength(1)
+      expect(submit().disabled).toBe(true)
+      fireEvent.change(screen.getAllByTestId('note-line-qty')[0], { target: { value: '1' } })
+      fireEvent.change(screen.getAllByTestId('note-line-price')[0], { target: { value: '-1' } })
+      expect(screen.getAllByTestId('note-line-error'), `${type} price -1`).toHaveLength(1)
+      expect(submit().disabled).toBe(true)
+      cleanup()
+    }
+  })
+
+  it('a credit note takes a quantity equal to the original and caps one unit price above it', () => {
+    setup({ type: 'credit_note' })
+    tick(0)
+    expect(screen.queryByTestId('note-line-error')).toBeNull()
+    fireEvent.change(screen.getAllByTestId('note-line-price')[0], { target: { value: '10.01' } })
+    expect(screen.getAllByTestId('note-line-error')).toHaveLength(1)
+    fireEvent.change(screen.getAllByTestId('note-line-price')[0], { target: { value: '10.00' } })
+    expect(screen.queryByTestId('note-line-error')).toBeNull()
+  })
+
+  it('a server 400 shows its message in the banner and keeps the form editable', async () => {
+    setup({ reply: { ok: false, status: 400, json: () => Promise.resolve({ error: 'quantity "1e5" is not a decimal' }) } })
+    tick(0)
+    fireEvent.click(submit())
+    const banner = await screen.findByTestId('note-form-error')
+    expect(banner.textContent).toContain('1e5')
+    await waitFor(() => expect(submit().disabled).toBe(false))
+    expect((screen.getByTestId('note-number') as HTMLInputElement).disabled).toBe(false)
+  })
+
+  it('typing a new number clears the number clash', async () => {
+    setup({ reply: { ok: false, status: 409, json: () => Promise.resolve({ error: 'duplicate invoice number' }) } })
+    tick(0)
+    fireEvent.click(submit())
+    await screen.findByTestId('note-number-error')
+    fireEvent.change(screen.getByTestId('note-number'), { target: { value: 'CN-NEW' } })
+    expect(screen.queryByTestId('note-number-error')).toBeNull()
   })
 })

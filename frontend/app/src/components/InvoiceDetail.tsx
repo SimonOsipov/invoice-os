@@ -656,16 +656,16 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
           </div>
 
           {/* Always present ([actions-visibility]); each control disables off its own wire flag
-              ([gates-on-the-wire]); `!editing` hides it ([D-actions-hidden-while-editing]). canEdit/canRevalidate: store.go:1536-1538 / :1558. */}
+              ([gates-on-the-wire]); `!formOpen` hides it ([D-actions-hidden-while-editing]). canEdit/canRevalidate: store.go:1536-1538 / :1558. */}
           {/* Outer column wraps the actions bar AND the submit skip/error banners together,
               so both stay in one right-aligned flex item ([D-actions-column]). The banners
               live OUTSIDE the `invoice-actions` gate on purpose: the bar unmounts while the
-              inline editor owns the screen, and the banner describing a skipped submit must
+              editor or note form owns the screen, and the banner describing a skipped submit must
               still render -- [never-report-success-on-a-skip] is not allowed to depend on
               the bar being mounted. */}
           {(!formOpen || submitSkipped != null || submitError != null) && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10, maxWidth: 320 }}>
-              {/* The decision pair, gated on `!editing` alone -- NOT
+              {/* The decision pair, gated on `!formOpen` alone -- NOT
                   `can_edit` (task-554, AC-1/AC-2): approve/reject must survive on statuses
                   where `can_edit` is false (queued, submitted, failed, ...), and a decision
                   is taken on the STORED record, never on a dirty edit form.

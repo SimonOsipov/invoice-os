@@ -7357,4 +7357,39 @@ describe('InvoiceDetail: credit and debit note actions (CRDDBTNOTE-02-05)', () =
     expect(screen.getByTestId('detail-decision-actions')).toBeTruthy()
     expect(fetchMock.mock.calls.length).toBe(calls)
   })
+  it('the notes read starts only for a commercial fiscal record', async () => {
+    const cases: [string, Partial<InvoiceDetailRecord>, number][] = [
+      ['draft', { status: 'draft' }, 0],
+      ['accepted without IRN', { status: 'accepted', irn: null }, 0],
+      ['accepted note', { status: 'accepted', irn: 'IRN-2026-0001', document_type: 'credit_note', can_issue_note: false }, 0],
+      ['accepted commercial', { status: 'accepted', irn: 'IRN-2026-0001', can_issue_note: true }, 1],
+    ]
+    for (const [name, over, want] of cases) {
+      const { fetchMock } = mockDetailFetch(detailRecord({ id: ID, ...over }))
+      render(<InvoiceDetail ctx={detailCtx(ID)} />)
+      await screen.findByTestId('invoice-status-badge')
+      await new Promise((r) => setTimeout(r, 20))
+      const reads = fetchMock.mock.calls.filter(([u, i]) => String(u).endsWith('/notes') && (i?.method ?? 'GET') === 'GET')
+      expect(reads, name).toHaveLength(want)
+      cleanup()
+    }
+  })
+
+  it('the form number counts the notes the read returned', async () => {
+    const note = (n: number) => ({ id: `n${n}`, document_type: 'credit_note', invoice_number: `CN-${n}`, status: 'accepted', total: '1.00' })
+    mockDetailFetch(
+      detailRecord({
+        id: ID,
+        status: 'accepted',
+        irn: 'IRN-2026-0001',
+        can_issue_note: true,
+        line_items: [{ id: 'l1', line_no: 1, description: 'Widget', quantity: '2.000', unit_price: '10.00', line_total: '20.00', line_tax: null }],
+      }),
+      [],
+      { notesResponse: { ok: true, status: 200, json: () => Promise.resolve({ notes: [note(1), note(2)], credited_so_far: '2.00', still_creditable: '18.00' }) } },
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('issue-debit-note'))
+    await waitFor(() => expect((screen.getByTestId('note-number') as HTMLInputElement).value).toBe('DN-INV-FAILED-1-3'))
+  })
 })

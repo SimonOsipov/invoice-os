@@ -1915,9 +1915,11 @@ describe('CRDDBTNOTE-04-04: the queue shows the document type and the signed amo
     const rows = await renderRows([
       approvalRow({ id: 'a-1', invoice_number: 'CN-A', document_type: 'credit_note', total: '322.50' }),
       approvalRow({ id: 'a-2', invoice_number: 'INV-A', total: '1075.00' }),
+      approvalRow({ id: 'a-3', invoice_number: 'CN-B', document_type: 'credit_note', total: null }),
     ])
     expect(within(rows[0]).getByText('-₦323')).toBeTruthy()
     expect(within(rows[1]).getByText('₦1,075')).toBeTruthy()
+    expect(rows[2].querySelector('.money')?.textContent, 'a NULL total stays a dash').toBe('—')
   })
 
   it('approvalsBadge_showsOnNotesOnly', async () => {

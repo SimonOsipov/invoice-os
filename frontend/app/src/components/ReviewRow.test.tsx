@@ -1677,6 +1677,8 @@ describe('CRDDBTNOTE-04-04: the review row shows the document type and the signe
     expect(amountOf({ document_type: 'credit_note', total: '322.50' })).toBe('-₦323')
     cleanup()
     expect(amountOf({ document_type: 'debit_note', total: '53.75' })).toBe('₦54')
+    cleanup()
+    expect(amountOf({ document_type: 'credit_note', total: null })).toBe('—')
   })
 
   it('reviewRowBadge_showsOnNotesOnly', () => {

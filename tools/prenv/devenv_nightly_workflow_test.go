@@ -205,7 +205,7 @@ func devEnvNightlyProblems(yml string) []string {
 		}
 	}
 	for _, l := range top {
-		if strings.Contains(l, "ARGOS_TOKEN") && strings.TrimSpace(l) != nlArgosFlag {
+		if strings.Contains(strings.ToLower(l), "argos_token") && strings.TrimSpace(l) != nlArgosFlag {
 			bad("dev-env.yml reads ARGOS_TOKEN outside the ARGOS_SHOTS compare: " + strings.TrimSpace(l))
 		}
 	}
@@ -609,4 +609,12 @@ func TestDevEnvNightly_NoArgosTokenInDevEnv(t *testing.T) {
 	t.Parallel()
 	requireDevEnvProblem(t, "      FLAKY_JSON_DIR: ${{ github.workspace }}/e2e/flaky-results\n      GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}\n      APP_URL: ${{ needs.prepare-env.outputs.app_url }}\n      LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}\n      OPS_CONSOLE_URL: ${{ needs.prepare-env.outputs.ops_console_url }}\n      SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}\n      LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}\n      BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}\n      "+nlArgosFlag+"\n      "+nlTarget+"\n    steps:\n      # \"Re-run",
 		"      FLAKY_JSON_DIR: ${{ github.workspace }}/e2e/flaky-results\n      GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}\n      APP_URL: ${{ needs.prepare-env.outputs.app_url }}\n      LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}\n      OPS_CONSOLE_URL: ${{ needs.prepare-env.outputs.ops_console_url }}\n      SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}\n      LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}\n      BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}\n      "+nlArgosFlag+"\n      ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}\n      "+nlTarget+"\n    steps:\n      # \"Re-run", "reads ARGOS_TOKEN")
+}
+
+func TestDevEnvNightly_NoArgosTokenInDevEnvAnyCase(t *testing.T) {
+	t.Parallel()
+	old := "      " + nlArgosFlag + "\n      " + nlTarget + "\n    steps:\n      # \"Re-run"
+	for _, read := range []string{"${{ secrets.argos_token }}", "${{ secrets['ARGOS_TOKEN'] }}"} {
+		requireDevEnvProblem(t, old, strings.Replace(old, "\n      "+nlTarget, "\n      X: "+read+"\n      "+nlTarget, 1), "reads ARGOS_TOKEN")
+	}
 }

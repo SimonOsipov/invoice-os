@@ -53,6 +53,8 @@ func nightlyStepLines(j workflowJob, marker string) []string {
 }
 
 // nightlyRunProblems names each rule of nightly.yml and nightly-suites.txt that the files break.
+var argosSecretRead = regexp.MustCompile(`(?i)secrets\s*(?:\.|\[\s*['"])\s*argos_token`)
+
 func nightlyRunProblems(nightlyYAML, ciYAML, suitesTxt string) []string {
 	lines := strings.Split(nightlyYAML, "\n")
 	var p []string
@@ -194,7 +196,7 @@ func nightlyRunProblems(nightlyYAML, ciYAML, suitesTxt string) []string {
 			p = append(p, "Argos step lacks ARGOS_BRANCH or PREVIEW_RUN_ID")
 		}
 	}
-	if n := strings.Count(strings.Join(stripHashComments(lines), "\n"), "secrets.ARGOS_TOKEN"); n != 1 {
+	if n := len(argosSecretRead.FindAllString(strings.Join(stripHashComments(lines), "\n"), -1)); n != 1 {
 		p = append(p, "ARGOS_TOKEN is read "+strconv.Itoa(n)+" times, want once in the Argos step")
 	}
 	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), `-section argos="$RUNNER_TEMP/argos.json"`) {
@@ -603,6 +605,8 @@ func TestNightly_ArgosTokenOnlyInItsStep(t *testing.T) {
 	for _, tc := range []struct{ name, old, repl string }{
 		{"job env", "      REPO: ${{ github.repository }}\n", "      REPO: ${{ github.repository }}\n      " + tok + "\n"},
 		{"second step", "      - name: Upload nightly-summary\n", "      - run: echo\n        env:\n          " + tok + "\n      - name: Upload nightly-summary\n"},
+		{"lower-case name", "      REPO: ${{ github.repository }}\n", "      REPO: ${{ github.repository }}\n      X: ${{ secrets.argos_token }}\n"},
+		{"bracket form", "      REPO: ${{ github.repository }}\n", "      REPO: ${{ github.repository }}\n      X: ${{ secrets['ARGOS_TOKEN'] }}\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

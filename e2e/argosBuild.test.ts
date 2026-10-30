@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, matchesGlob } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ARGOS_MAX_SHOTS, ARGOS_SCREENS, changedOf, main, mergeName, run, type Build, type Deps, type Stats } from './argosBuild'
+import { ARGOS_SCREENS, changedOf, main, mergeName, run, type Build, type Deps, type Stats } from './argosBuild'
 
 let dir: string
 let out: string
@@ -63,7 +63,7 @@ const read = async () => JSON.parse(await readFile(out, 'utf8'))
 
 describe('count', () => {
   it('161 shots are refused', async () => {
-    const names = Array.from({ length: ARGOS_MAX_SHOTS + 1 }, (_, i) => `app/s${i}/1440`)
+    const names = Array.from({ length: 161 }, (_, i) => `app/s${i}/1440`)
     await putShots(names)
     const { d, upload } = deps()
     const s = await run(dl(), out, d)
@@ -73,7 +73,7 @@ describe('count', () => {
   })
 
   it('160 shots are uploaded', async () => {
-    await putShots(Array.from({ length: ARGOS_MAX_SHOTS }, (_, i) => `app/s${i}/1440`))
+    await putShots(Array.from({ length: 160 }, (_, i) => `app/s${i}/1440`))
     const { d, upload } = deps()
     const s = await run(dl(), out, d)
     expect(upload).toHaveBeenCalledTimes(1)
@@ -81,7 +81,7 @@ describe('count', () => {
   })
 
   it('a metadata file is not counted', async () => {
-    const names = Array.from({ length: ARGOS_MAX_SHOTS }, (_, i) => `app/s${i}/1440`)
+    const names = Array.from({ length: 160 }, (_, i) => `app/s${i}/1440`)
     await putShots(names)
     for (const n of names) await put(`argos-shots-e2e/chromium/${n}.png.argos.json`, '{}')
     const { d, upload } = deps()
@@ -113,6 +113,25 @@ describe('upload', () => {
     await run(dl(), out, d)
     expect(upload.mock.calls[0][0]).toMatchObject({ mode: 'monitoring', commit: 'abc', branch: 'main', token: 't' })
     expect(upload.mock.calls[0][0].files).toEqual(['**/*.png'])
+  })
+
+  it('the uploaded tree holds the PNGs with their metadata and no failed note', async () => {
+    await put('argos-shots-e2e/chromium/landing/home/1440.png')
+    await put('argos-shots-e2e/chromium/landing/home/1440.png.argos.json', '{}')
+    await put('argos-shots-topology-blog/blog/blog/home/375.png')
+    await put('argos-shots-topology-blog/blog/blog/home/1440.failed.txt', 'boom\n')
+    const { d, upload } = deps()
+    let tree: string[] = []
+    let files: string[] = []
+    upload.mockImplementationOnce(async (a: Record<string, unknown>) => {
+      const root = a.root as string
+      tree = (await readdir(root, { recursive: true, withFileTypes: true })).filter((e) => e.isFile()).map((e) => join(e.parentPath, e.name).slice(root.length + 1)).sort()
+      files = a.files as string[]
+      return { build: build() }
+    })
+    await run(dl(), out, d)
+    expect(tree).toEqual(['blog/home/375.png', 'landing/home/1440.png', 'landing/home/1440.png.argos.json'])
+    expect(tree.filter((f) => files.some((g) => matchesGlob(f, g)))).toEqual(['blog/home/375.png', 'landing/home/1440.png'])
   })
 
   it('differences keep ok true', async () => {
@@ -195,8 +214,9 @@ describe('changed', () => {
 
   it('an unfinished build gives changed null', async () => {
     await putShots(['landing/home/1440'])
-    const { d } = deps({ builds: [{ status: 'progress', stats: null }] })
+    const { d, reads } = deps({ builds: [{ status: 'progress', stats: null }] })
     expect(await run(dl(), out, d)).toMatchObject({ ok: true, changed: null })
+    expect(reads.length, 'polls for the whole 5 min at 10 s').toBeGreaterThanOrEqual(30)
   })
 
   it('a refused read gives changed null', async () => {

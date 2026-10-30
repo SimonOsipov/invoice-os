@@ -126,6 +126,7 @@ describe('MOVING_TEXT', () => {
   it('MOVING_TEXT matches moving text', () => {
     for (const t of [
       '30 Oct 2026',
+      'Oct 30, 2026',
       '2026-10-30',
       '14:02',
       '3h ago',
@@ -133,11 +134,14 @@ describe('MOVING_TEXT', () => {
       '0b8c1d2e-3f4a-4b5c-8d6e-7f8091a2b3c4',
       '83d9d017',
       '1761823000000',
+      'abcdefab-abcd-abcd-abcd-abcdefabcdef',
+      'ref x1761823000000y',
+      `id ${'7'.repeat(41)}`,
     ]) expect(MOVING_TEXT.test(t), t).toBe(true)
   })
 
   it('MOVING_TEXT leaves fixed text', () => {
-    for (const t of ['Invoices', 'Overview', '₦1,250,000', 'Rules', '1440'])
+    for (const t of ['Invoices', 'Overview', '₦1,250,000', 'Rules', '1440', 'Defaced'])
       expect(MOVING_TEXT.test(t), t).toBe(false)
   })
 

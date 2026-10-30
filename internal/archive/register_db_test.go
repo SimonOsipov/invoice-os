@@ -95,7 +95,7 @@ func mustBuild(t *testing.T, g *registerRig, from, to string, maxInvoices int) [
 func numbers(t *testing.T, rows [][]string) []string {
 	t.Helper()
 	var out []string
-	for _, r := range rows[1:] {
+	for _, r := range dataRows(rows) {
 		out = append(out, r[headerIndex(t, "invoice_number")])
 	}
 	return out
@@ -226,7 +226,7 @@ func TestRegister_ExcludesDraftsAndKeepsEveryOtherStatus(t *testing.T) {
 	g.act(t)
 	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
 	var got []string
-	for _, r := range rows[1:] {
+	for _, r := range dataRows(rows) {
 		got = append(got, r[headerIndex(t, "status")])
 	}
 	if want := states[1:]; !reflect.DeepEqual(got, want) {
@@ -283,14 +283,14 @@ func TestRegister_RowCellsEqualTheBundleCSVCells(t *testing.T) {
 		t.Fatalf("parse csv: %v", err)
 	}
 	regRows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
-	if len(csvRows) != 4 || len(regRows) != 4 {
-		t.Fatalf("csv rows %d, register rows %d, want 4 each", len(csvRows), len(regRows))
+	if len(csvRows) != 4 || len(regRows) != 5 {
+		t.Fatalf("csv rows %d, register rows %d, want 4 and 5 (header, 3, footer)", len(csvRows), len(regRows))
 	}
 	byID := map[string][]string{}
 	for _, r := range csvRows[1:] {
 		byID[r[0]] = r
 	}
-	for _, r := range regRows[1:] {
+	for _, r := range dataRows(regRows) {
 		if want := byID[r[0]]; !reflect.DeepEqual(r, want) {
 			t.Errorf("register row %v != csv row %v", r, want)
 		}

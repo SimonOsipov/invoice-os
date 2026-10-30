@@ -40,3 +40,4 @@ paths:
 - Build the workspace export only through `AssembleWorkspace`: one `REPEATABLE READ` read-write transaction, the company stages through `writeEntityStages`, `workspace.exported` last, and `bw.Close()` after the commit.
 - After the first write to the client, audit a failed export as `workspace.export_failed` in its own short transaction. A failure before it answers a plain error and writes no row. Keep the original error when that write fails.
 - Stream documents and `audit_log.csv`. Buffer a company CSV as the bundle does.
+- Net the register footer by `document_type`. Keep stored amounts in every data row and every CSV.

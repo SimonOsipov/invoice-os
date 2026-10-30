@@ -178,7 +178,7 @@ export function Row({
             two-lines-in-one-cell idiom the Buyer column already uses below (name +
             TIN) -- an extra line inside the existing cell, never a new grid column. */}
         <span style={{ minWidth: 0 }}>
-          <span className="mono" style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg-1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <span className="mono" title={r.invoice_number} style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg-1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {r.invoice_number}
           </span>
           {typeBadge != null && (

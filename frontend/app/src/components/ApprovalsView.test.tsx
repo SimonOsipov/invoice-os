@@ -1933,4 +1933,11 @@ describe('CRDDBTNOTE-04-04: the queue shows the document type and the signed amo
     expect(debit?.textContent).toBe('DEBIT')
     expect(plain).toBeNull()
   })
+
+  it('approvalsNumber_titleCarriesTheWholeNumber', async () => {
+    const number = `CN-INV-2026-00001-${'9'.repeat(22)}`
+    expect(number).toHaveLength(40)
+    const rows = await renderRows([approvalRow({ id: 't-1', invoice_number: number })])
+    expect(within(rows[0]).getByText(number).getAttribute('title')).toBe(number)
+  })
 })

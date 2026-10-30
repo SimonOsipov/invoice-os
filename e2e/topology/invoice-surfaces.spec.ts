@@ -916,6 +916,29 @@ test("(fixture check) a note's type badge and signed amount stay inside their ce
     return 'ok'
   })
   expect(seen.length, 'the sweep measured every width').toBe(WIDE_WIDTHS.length)
+
+  // At 1180px the number track shrinks to its floor: the last cell stays inside the card.
+  const entryViewport = page.viewportSize()
+  try {
+    await page.setViewportSize({ width: 1180, height: 1080 })
+    const card = page.getByTestId('invoices-list')
+    const lastCell = noteRow.locator(':scope > *').last()
+    const cell = noteRow.getByTestId('invoice-number-cell')
+    const badge = noteRow.getByTestId('invoice-type-badge')
+    await expect
+      .poll(async () => {
+        await settleAnimations(cell, badge)
+        const [k, l, c, b] = await Promise.all([card.boundingBox(), lastCell.boundingBox(), cell.boundingBox(), badge.boundingBox()])
+        if (!k || !l || !c || !b) return 'an element has no box'
+        if (l.x + l.width > k.x + k.width + 1) return `last cell ${JSON.stringify(l)} leaves the card ${JSON.stringify(k)}`
+        if (!enclosesRect(c, b, 1)) return `badge ${JSON.stringify(b)} leaves the number cell ${JSON.stringify(c)}`
+        return 'ok'
+      }, { message: 'note row at 1180px', timeout: 10_000 })
+      .toBe('ok')
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
   const heights = await assertSameHeight(page, noteRow, plainRow, 'a note row and an invoice row')
   expect(heights.length, 'the height sweep measured every width').toBe(WIDE_WIDTHS.length)
 

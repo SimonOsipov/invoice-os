@@ -1344,7 +1344,7 @@ describe('ReportsView: top customers take the record name (CUST-02-05, AC 7, D17
   })
 })
 
-// CRDDBTNOTE-04-03: KPIs and Top customers net a credit note against its buyer.
+// KPIs and Top customers net a credit note against its buyer.
 describe('ReportsView: totals count a note with its sign (CRDDBTNOTE-04-03)', () => {
   // Design fixture: net subtotal 750, vat 56.25, total 806.25.
   const fixture = (tin = T, name = 'Fixture Buyer'): InvoiceRecord[] => [

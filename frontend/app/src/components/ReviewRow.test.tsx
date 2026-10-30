@@ -1690,4 +1690,11 @@ describe('CRDDBTNOTE-04-04: the review row shows the document type and the signe
     }
     expect(badges).toEqual(['CREDIT', 'DEBIT', undefined])
   })
+
+  it('reviewRowNumber_titleCarriesTheWholeNumber', () => {
+    const number = `CN-INV-2026-00001-${'9'.repeat(22)}`
+    expect(number).toHaveLength(40)
+    renderRow({ invoice_number: number })
+    expect(screen.getByText(number).getAttribute('title')).toBe(number)
+  })
 })

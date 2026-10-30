@@ -2685,9 +2685,9 @@ describe('BUG-17-02 register status markers', () => {
     await screen.findByText('INV-REG-GRID-1')
 
     const head = screen.getByTestId('invoices-list').querySelector('.pf-list-head')
-    expect(head?.getAttribute('style')).toContain('grid-template-columns: 24px 210px 1fr 140px 120px 200px')
+    expect(head?.getAttribute('style')).toContain('grid-template-columns: 24px minmax(150px, 210px) 1fr 140px 120px 200px')
     for (const r of screen.getAllByTestId('invoice-row')) {
-      expect(r.getAttribute('style')).toContain('grid-template-columns: 24px 210px 1fr 140px 120px 200px')
+      expect(r.getAttribute('style')).toContain('grid-template-columns: 24px minmax(150px, 210px) 1fr 140px 120px 200px')
     }
   })
 

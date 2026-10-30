@@ -1040,6 +1040,24 @@ test("(fixture check) AP: a note's type badge stays inside the approvals number 
   })
   expect(measured.length, 'the sweep measured every width').toBe(WIDE_WIDTHS.length)
 
+  // At 1180px the number track shrinks to its floor: the last cell stays inside the card.
+  const entry = page.viewportSize()
+  try {
+    await page.setViewportSize({ width: 1180, height: 1080 })
+    const card = page.getByTestId('approvals-list')
+    const lastCell = row.locator(':scope > *').last()
+    await expect
+      .poll(async () => {
+        await settleAnimations(cell, badge)
+        const [k, l, c, b] = await Promise.all([card.boundingBox(), lastCell.boundingBox(), cell.boundingBox(), badge.boundingBox()])
+        if (!k || !l || !c || !b) return 'an element has no box'
+        return [...within(k, l, 'last cell in the card'), ...within(c, b, 'badge in the number cell')].join('; ') || 'ok'
+      }, { message: 'approvals note row at 1180px', timeout: 10_000 })
+      .toBe('ok')
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 

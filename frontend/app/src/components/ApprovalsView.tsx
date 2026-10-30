@@ -59,7 +59,7 @@ import { SEVERITY_TONE } from './RulePills'
 // -- kept as ONE shared const across head and rows (InvoicesList.tsx:69's shape), not
 // ClientsView.tsx's two-literal shape. The leading checkbox track is InvoicesList's 24px,
 // this grid's own shape, not ReviewRow's 26px.
-const APPROVALS_GRID_COLUMNS = '24px 210px 1fr 130px 90px 180px 110px'
+const APPROVALS_GRID_COLUMNS = '24px minmax(140px, 210px) 1fr 130px 90px 180px 110px'
 
 const CHECKBOX_STYLE = { width: 15, height: 15, accentColor: 'var(--action)', margin: 0 } as const
 
@@ -429,6 +429,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                   <span data-testid="approval-number-cell" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                     <span
                       className="mono"
+                      title={r.invoice_number}
                       style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                     >
                       {r.invoice_number}

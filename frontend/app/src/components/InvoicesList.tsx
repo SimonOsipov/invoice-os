@@ -71,7 +71,7 @@ import type { PlatformCtx } from '../types'
 import { Pager } from './Pager'
 import { SEVERITY_TONE } from './RulePills'
 
-const INVOICE_GRID_COLUMNS = '24px 210px 1fr 140px 120px 200px'
+const INVOICE_GRID_COLUMNS = '24px minmax(150px, 210px) 1fr 140px 120px 200px'
 
 const CHECKBOX_STYLE = { width: 15, height: 15, accentColor: 'var(--action)', margin: 0 } as const
 

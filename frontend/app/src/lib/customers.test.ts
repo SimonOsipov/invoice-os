@@ -149,7 +149,7 @@ describe('aggregateCustomers', () => {
   })
 })
 
-// CRDDBTNOTE-04-03: a credit note nets against its buyer; every note still counts once.
+// A credit note nets against its buyer; every note still counts once.
 describe('aggregateCustomers nets credit and debit notes', () => {
   const TIN = '20000000-0001'
   // Design fixture: net subtotal 750, vat 56.25, total 806.25.

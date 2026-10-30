@@ -627,9 +627,9 @@ func TestGetHandler_NoIdentity401(t *testing.T) {
 // 200 with the {"invoices":[...],"pagination":{...}} envelope.
 func TestListHandler_200Envelope(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
-	invID := uuid.NewString()
+	invID, origID := uuid.NewString(), uuid.NewString()
 	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
-		return []Invoice{{ID: invID, Status: StatusDraft}}, 1, nil
+		return []Invoice{{ID: invID, Status: StatusDraft, DocumentType: submission.CreditNote, OriginalInvoiceID: &origID}}, 1, nil
 	}
 	rec, resp := doInvoiceList(t, list, &id, "")
 
@@ -638,6 +638,9 @@ func TestListHandler_200Envelope(t *testing.T) {
 	}
 	if len(resp.Invoices) != 1 || resp.Invoices[0].ID != invID {
 		t.Errorf("invoices = %+v, want one invoice with id %q", resp.Invoices, invID)
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"document_type":"credit_note"`)) || !bytes.Contains(rec.Body.Bytes(), []byte(`"original_invoice_id":"`+origID+`"`)) {
+		t.Errorf("envelope body lacks the type keys: %s", rec.Body.String())
 	}
 	if resp.Pagination.Total != 1 {
 		t.Errorf("pagination.total = %d, want 1", resp.Pagination.Total)

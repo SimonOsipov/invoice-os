@@ -54,6 +54,40 @@ func seedInvoiceWithVAT(t *testing.T, super *pgxpool.Pool, tenantID, entityID, n
 	return id
 }
 
+// stampDocumentType makes an invoice a credit or debit note of originalID. No route
+// creates a note yet, so the fixture writes it as the superuser.
+func stampDocumentType(t *testing.T, super *pgxpool.Pool, invoiceID, documentType, originalID string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET document_type = $1, original_invoice_id = $2 WHERE id = $3`,
+		documentType, originalID, invoiceID,
+	); err != nil {
+		t.Fatalf("stamp document_type %s: %v", documentType, err)
+	}
+}
+
+// seedNote seeds a note of originalID at status. vat "" leaves vat NULL.
+func seedNote(t *testing.T, super *pgxpool.Pool, tenantID, entityID, number, documentType, originalID, status, vat string) string {
+	t.Helper()
+	id := seedInvoiceAtStatus(t, super, tenantID, entityID, number, status)
+	stampDocumentType(t, super, id, documentType, originalID)
+	if vat != "" {
+		if _, err := super.Exec(context.Background(), `UPDATE invoices SET vat = $1::numeric WHERE id = $2`, vat, id); err != nil {
+			t.Fatalf("stamp vat: %v", err)
+		}
+	}
+	return id
+}
+
+// seedDesignFixture seeds the story's one fixture: invoice 75.00, credit note 22.50,
+// debit note 3.75 of VAT. Net 56.25 = 5625 kobo.
+func seedDesignFixture(t *testing.T, super *pgxpool.Pool, tenantID, entityID, prefix string) {
+	t.Helper()
+	inv := seedInvoiceWithVAT(t, super, tenantID, entityID, prefix+"-INV", "75.00")
+	seedNote(t, super, tenantID, entityID, prefix+"-CN", "credit_note", inv, "draft", "22.50")
+	seedNote(t, super, tenantID, entityID, prefix+"-DN", "debit_note", inv, "draft", "3.75")
+}
+
 func rollupFor(t *testing.T, app *pgxpool.Pool, tenantID string) Rollup {
 	t.Helper()
 	store := NewStore(app)
@@ -395,18 +429,131 @@ func TestMetrics_EmptyTenantMarshalsEmptyObject(t *testing.T) {
 
 // --- MET-13: vat_tracked kobo conversion ----------------------------------
 
-// MET-13: vat_tracked sums round(vat*100) in kobo; a NULL vat adds 0 to num
-// but still counts toward den.
+// MET-13: vat_tracked sums round(vat*100) in kobo, signed by document type; a NULL
+// vat adds 0 to num but still counts toward den, a note included.
 func TestMetrics_VATTrackedSumsKoboIgnoringNullNumerator(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "MET-13 tenant")
 	entityID := seedEntity(t, super, tenantID, "MET-13 entity")
-	seedInvoiceWithVAT(t, super, tenantID, entityID, "MET-13-1", "123.45")
+	inv := seedInvoiceWithVAT(t, super, tenantID, entityID, "MET-13-1", "123.45")
 	seedInvoice(t, super, tenantID, entityID, "MET-13-2") // vat left NULL
+	seedNote(t, super, tenantID, entityID, "MET-13-CN1", "credit_note", inv, "draft", "20.00")
+	seedNote(t, super, tenantID, entityID, "MET-13-DN", "debit_note", inv, "draft", "5.50")
+	seedNote(t, super, tenantID, entityID, "MET-13-CN2", "credit_note", inv, "draft", "")
 
 	got := rollupFor(t, app, tenantID)
-	want := Metric{Num: 12345, Den: 2}
+	want := Metric{Num: 10895, Den: 5}
 	if m := got.Clients[0].Metrics["vat_tracked"]; m != want {
+		t.Errorf("vat_tracked = %+v, want %+v", m, want)
+	}
+}
+
+// Invoice 75.00, credit note 22.50, debit note 3.75: an unsigned sum is 10125, a sum
+// that negates the debit note too is 4875, one that ignores notes is 7500.
+func TestMetrics_VATTrackedNetsNotesBySign(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "NET tenant")
+	entityID := seedEntity(t, super, tenantID, "NET entity")
+	seedDesignFixture(t, super, tenantID, entityID, "NET")
+
+	got := rollupFor(t, app, tenantID)
+	if len(got.Clients) != 1 {
+		t.Fatalf("Clients = %d rows, want 1", len(got.Clients))
+	}
+	if m, want := got.Clients[0].Metrics["vat_tracked"], (Metric{Num: 5625, Den: 3}); m != want {
+		t.Errorf("vat_tracked = %+v, want %+v", m, want)
+	}
+}
+
+// A note takes the status scope of an invoice: every status adds, none is skipped.
+func TestMetrics_VATTrackedNotesFollowTheInvoiceStatusScope(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "SCOPE tenant")
+	entityID := seedEntity(t, super, tenantID, "SCOPE entity")
+	inv := seedInvoiceAtStatus(t, super, tenantID, entityID, "SCOPE-INV", "accepted")
+	if _, err := super.Exec(context.Background(), `UPDATE invoices SET vat = 100.00 WHERE id = $1`, inv); err != nil {
+		t.Fatalf("stamp vat: %v", err)
+	}
+	seedNote(t, super, tenantID, entityID, "SCOPE-CN-REJ", "credit_note", inv, "rejected", "30.00")
+	seedNote(t, super, tenantID, entityID, "SCOPE-CN-DRAFT", "credit_note", inv, "draft", "10.00")
+	seedNote(t, super, tenantID, entityID, "SCOPE-DN-FAIL", "debit_note", inv, "failed", "5.00")
+
+	got := rollupFor(t, app, tenantID)
+	if m, want := got.Clients[0].Metrics["vat_tracked"], (Metric{Num: 6500, Den: 4}); m != want {
+		t.Errorf("vat_tracked = %+v, want %+v", m, want)
+	}
+}
+
+// Credits above invoices make the net negative, and the tenant total adds it with its sign.
+func TestMetrics_VATTrackedGoesNegativeWhenCreditsExceedInvoices(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "NEG tenant")
+	entityID := seedEntity(t, super, tenantID, "NEG entity")
+	inv := seedInvoiceWithVAT(t, super, tenantID, entityID, "NEG-INV", "10.00")
+	seedNote(t, super, tenantID, entityID, "NEG-CN", "credit_note", inv, "draft", "30.00")
+
+	got := rollupFor(t, app, tenantID)
+	if m, want := got.Clients[0].Metrics["vat_tracked"], (Metric{Num: -2000, Den: 2}); m != want {
+		t.Errorf("vat_tracked = %+v, want %+v", m, want)
+	}
+}
+
+func TestMetrics_TotalsAddSignedClientVAT(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "TOT tenant")
+	a := seedEntity(t, super, tenantID, "TOT A")
+	b := seedEntity(t, super, tenantID, "TOT B")
+	inv := seedInvoiceWithVAT(t, super, tenantID, a, "TOT-A-INV", "10.00")
+	seedNote(t, super, tenantID, a, "TOT-A-CN", "credit_note", inv, "draft", "30.00")
+	seedInvoiceWithVAT(t, super, tenantID, b, "TOT-B-INV", "75.00")
+
+	got := rollupFor(t, app, tenantID)
+	if len(got.Clients) != 2 {
+		t.Fatalf("Clients = %d rows, want 2", len(got.Clients))
+	}
+	byName := map[string]int64{}
+	for _, c := range got.Clients {
+		byName[c.EntityName] = c.Metrics["vat_tracked"].Num
+	}
+	if byName["TOT A"] != -2000 || byName["TOT B"] != 7500 {
+		t.Errorf("client vat_tracked = %v, want TOT A -2000 and TOT B 7500", byName)
+	}
+	if m := got.Totals.Metrics["vat_tracked"]; m.Num != 5500 {
+		t.Errorf("Totals vat_tracked.num = %d, want 5500", m.Num)
+	}
+}
+
+// A note is one document in every count, whatever its type and status.
+func TestMetrics_ANoteCountsAsOneDocument(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "DOC tenant")
+	entityID := seedEntity(t, super, tenantID, "DOC entity")
+	inv := seedInvoiceAtStatus(t, super, tenantID, entityID, "DOC-INV", "accepted")
+	seedNote(t, super, tenantID, entityID, "DOC-CN", "credit_note", inv, "draft", "22.50")
+	seedNote(t, super, tenantID, entityID, "DOC-DN", "debit_note", inv, "validated", "3.75")
+
+	row := rollupFor(t, app, tenantID).Clients[0]
+	if c := row.Counts; c.Accepted != 1 || c.Draft != 1 || c.Validated != 1 {
+		t.Errorf("Counts = %+v, want accepted 1, draft 1, validated 1", c)
+	}
+	if m := row.Metrics["readiness"]; m.Den != 3 {
+		t.Errorf("readiness.den = %d, want 3", m.Den)
+	}
+	if m := row.Metrics["vat_tracked"]; m.Den != 3 {
+		t.Errorf("vat_tracked.den = %d, want 3", m.Den)
+	}
+}
+
+// A NULL-VAT note adds 0 even with no NULL invoice beside it to cancel a wrong default.
+func TestMetrics_VATTrackedANullVATCreditNoteAddsZero(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "NULLCN tenant")
+	entityID := seedEntity(t, super, tenantID, "NULLCN entity")
+	inv := seedInvoiceWithVAT(t, super, tenantID, entityID, "NULLCN-INV", "10.00")
+	seedNote(t, super, tenantID, entityID, "NULLCN-CN", "credit_note", inv, "draft", "")
+
+	got := rollupFor(t, app, tenantID)
+	if m, want := got.Clients[0].Metrics["vat_tracked"], (Metric{Num: 1000, Den: 2}); m != want {
 		t.Errorf("vat_tracked = %+v, want %+v", m, want)
 	}
 }

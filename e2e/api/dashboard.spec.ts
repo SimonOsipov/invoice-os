@@ -257,10 +257,12 @@ test.describe('dashboard rollup history contract (API E2E, over the deployed gat
       expect(Object.keys(row).sort()).toEqual(HISTORY_KEYS)
       expect(row.day).toMatch(/^\d{4}-\d{2}-\d{2}$/)
       expect(typeof row.entity_id).toBe('string')
-      for (const n of [row.total, row.readiness_num, row.needs_attention, row.not_submitted, row.vat_kobo]) {
+      for (const n of [row.total, row.readiness_num, row.needs_attention, row.not_submitted]) {
         expect(Number.isInteger(n), `${n} should be an integer`).toBe(true)
         expect(n).toBeGreaterThanOrEqual(0)
       }
+      // A net of credit notes can be negative.
+      expect(Number.isInteger(row.vat_kobo), `${row.vat_kobo} should be an integer`).toBe(true)
       expect(row.readiness_num).toBeLessThanOrEqual(row.total)
       expect(row.needs_attention).toBeLessThanOrEqual(row.total)
       expect(row.not_submitted).toBeLessThanOrEqual(row.total)

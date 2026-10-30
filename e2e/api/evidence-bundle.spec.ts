@@ -252,14 +252,16 @@ test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
     )
 
     const invoiceRows = parseCsv(invoicesCsv)
-    expect(Object.keys(invoiceRows[0]).slice(-22), 'invoices.csv header ends with the 22 NRS columns').toEqual([
+    expect(Object.keys(invoiceRows[0]).slice(-24, -2), 'invoices.csv header holds the 22 NRS columns before the type pair').toEqual([
       'invoice_kind', 'tax_currency_code', 'payment_status', 'due_date', 'tax_point_date', 'issue_time',
       'supplier_email', 'supplier_telephone', 'supplier_street', 'supplier_city',
       'supplier_postal_zone', 'supplier_country', 'supplier_state', 'supplier_lga',
       'buyer_email', 'buyer_telephone', 'buyer_street', 'buyer_city',
       'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga',
     ])
+    expect(Object.keys(invoiceRows[0]).slice(-2), 'invoices.csv header ends with the type pair').toEqual(['document_type', 'original_invoice_number'])
     expect(invoiceRows.find((r) => r.invoice_number === invoiceNumber)?.buyer_state, 'the invoice row carries buyer_state').toBe('NG-LA')
+    expect(invoiceRows.find((r) => r.invoice_number === invoiceNumber)?.document_type, 'the invoice row carries its type').toBe('commercial_invoice')
 
     const lineRows = parseCsv(decoder.decode(zip['line_items.csv']))
     expect(lineRows, 'line_items.csv holds the invoice\'s one line').toHaveLength(1)

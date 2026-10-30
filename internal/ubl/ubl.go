@@ -28,7 +28,7 @@ const (
 	nsCAC = "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
 	nsCBC = "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2"
 
-	// Same values as internal/submission/mock_wire.go:37-40 -- two citations of one external
+	// Same values as the mock wire's -- two citations of one external
 	// standard, not two derivations [ubl-bis-constants-mirror-the-wire].
 	customizationID = "urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0"
 	profileID       = "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0"
@@ -44,21 +44,31 @@ type document struct {
 	XMLNSCAC string   `xml:"xmlns:cac,attr"`
 	XMLNSCBC string   `xml:"xmlns:cbc,attr"`
 
-	CustomizationID      string         `xml:"cbc:CustomizationID"`
-	ProfileID            string         `xml:"cbc:ProfileID"`
-	ID                   string         `xml:"cbc:ID"`
-	IssueDate            string         `xml:"cbc:IssueDate"` // pre-formatted, never time.Time
-	IssueTime            *string        `xml:"cbc:IssueTime,omitempty"`
-	DueDate              *string        `xml:"cbc:DueDate,omitempty"`
-	InvoiceTypeCode      string         `xml:"cbc:InvoiceTypeCode"`
-	TaxPointDate         *string        `xml:"cbc:TaxPointDate,omitempty"`
-	DocumentCurrencyCode string         `xml:"cbc:DocumentCurrencyCode,omitempty"`
-	TaxCurrencyCode      *string        `xml:"cbc:TaxCurrencyCode,omitempty"`
-	Supplier             party          `xml:"cac:AccountingSupplierParty"`
-	Buyer                party          `xml:"cac:AccountingCustomerParty"`
-	TaxTotal             *taxTotal      `xml:"cac:TaxTotal,omitempty"`
-	LegalMonetaryTotal   *monetaryTotal `xml:"cac:LegalMonetaryTotal,omitempty"`
-	Lines                []line         `xml:"cac:InvoiceLine"`
+	CustomizationID      string            `xml:"cbc:CustomizationID"`
+	ProfileID            string            `xml:"cbc:ProfileID"`
+	ID                   string            `xml:"cbc:ID"`
+	IssueDate            string            `xml:"cbc:IssueDate"` // pre-formatted, never time.Time
+	IssueTime            *string           `xml:"cbc:IssueTime,omitempty"`
+	DueDate              *string           `xml:"cbc:DueDate,omitempty"`
+	InvoiceTypeCode      string            `xml:"cbc:InvoiceTypeCode"`
+	TaxPointDate         *string           `xml:"cbc:TaxPointDate,omitempty"`
+	DocumentCurrencyCode string            `xml:"cbc:DocumentCurrencyCode,omitempty"`
+	TaxCurrencyCode      *string           `xml:"cbc:TaxCurrencyCode,omitempty"`
+	BillingReference     *billingReference `xml:"cac:BillingReference,omitempty"`
+	Supplier             party             `xml:"cac:AccountingSupplierParty"`
+	Buyer                party             `xml:"cac:AccountingCustomerParty"`
+	TaxTotal             *taxTotal         `xml:"cac:TaxTotal,omitempty"`
+	LegalMonetaryTotal   *monetaryTotal    `xml:"cac:LegalMonetaryTotal,omitempty"`
+	Lines                []line            `xml:"cac:InvoiceLine"`
+}
+
+type billingReference struct {
+	InvoiceDocumentReference invoiceDocumentReference `xml:"cac:InvoiceDocumentReference"`
+}
+
+type invoiceDocumentReference struct {
+	ID        string  `xml:"cbc:ID"`
+	IssueDate *string `xml:"cbc:IssueDate,omitempty"`
 }
 
 type party struct {
@@ -243,6 +253,9 @@ func build(c submission.Canonical) document {
 	doc.DueDate = dateText(c.DueDate)
 	doc.TaxPointDate = dateText(c.TaxPointDate)
 	doc.TaxCurrencyCode = c.TaxCurrencyCode
+	if ref := c.BillingReference; ref != nil && ref.IRN != nil && strings.TrimSpace(*ref.IRN) != "" {
+		doc.BillingReference = &billingReference{invoiceDocumentReference{ID: *ref.IRN, IssueDate: dateText(ref.IssueDate)}}
+	}
 	if a := amountFrom(c.VAT, c.Currency); a != nil {
 		doc.TaxTotal = &taxTotal{TaxAmount: *a, TaxSubtotal: subtotalsFrom(c)}
 	}

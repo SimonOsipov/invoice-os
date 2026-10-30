@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -46,19 +47,25 @@ const (
 // errors.Is rather than matching on message text (the registry.go:47-51 pattern).
 var ErrMockUnparseableWire = errors.New("submission: mock wire is not a parseable envelope")
 
+type mockBillingReference struct {
+	IRN       string `json:"IRN,omitempty"`
+	IssueDate string `json:"IssueDate,omitempty"` // YYYY-MM-DD
+}
+
 type mockEnvelope struct {
-	CustomizationID         string            `json:"CustomizationID"`
-	ProfileID               string            `json:"ProfileID"`
-	ID                      string            `json:"ID"`                  // Canonical.InvoiceNumber
-	UUID                    string            `json:"UUID,omitempty"`      // Canonical.InvoiceID
-	IssueDate               string            `json:"IssueDate,omitempty"` // YYYY-MM-DD
-	InvoiceTypeCode         string            `json:"InvoiceTypeCode"`
-	DocumentCurrencyCode    string            `json:"DocumentCurrencyCode,omitempty"`
-	AccountingSupplierParty mockParty         `json:"AccountingSupplierParty"`
-	AccountingCustomerParty mockParty         `json:"AccountingCustomerParty"`
-	TaxTotal                *mockTaxTotal     `json:"TaxTotal,omitempty"` // Canonical.VAT
-	LegalMonetaryTotal      mockMonetaryTotal `json:"LegalMonetaryTotal"`
-	InvoiceLine             []mockLine        `json:"InvoiceLine"` // NEVER omitempty -- [zero-line-invoice]
+	CustomizationID         string                 `json:"CustomizationID"`
+	ProfileID               string                 `json:"ProfileID"`
+	ID                      string                 `json:"ID"`                  // Canonical.InvoiceNumber
+	UUID                    string                 `json:"UUID,omitempty"`      // Canonical.InvoiceID
+	IssueDate               string                 `json:"IssueDate,omitempty"` // YYYY-MM-DD
+	InvoiceTypeCode         string                 `json:"InvoiceTypeCode"`
+	DocumentCurrencyCode    string                 `json:"DocumentCurrencyCode,omitempty"`
+	BillingReference        []mockBillingReference `json:"BillingReference,omitempty"`
+	AccountingSupplierParty mockParty              `json:"AccountingSupplierParty"`
+	AccountingCustomerParty mockParty              `json:"AccountingCustomerParty"`
+	TaxTotal                *mockTaxTotal          `json:"TaxTotal,omitempty"` // Canonical.VAT
+	LegalMonetaryTotal      mockMonetaryTotal      `json:"LegalMonetaryTotal"`
+	InvoiceLine             []mockLine             `json:"InvoiceLine"` // NEVER omitempty -- [zero-line-invoice]
 }
 
 type mockParty struct {
@@ -143,6 +150,13 @@ func buildMockEnvelope(c Canonical) mockEnvelope {
 		// a `date` to UTC so it is a no-op in production, but .UTC() on a hand-built FixedZone
 		// time would silently shift the date by a day.
 		env.IssueDate = c.IssueDate.Format(mockIssueDateLayout)
+	}
+	if ref := c.BillingReference; ref != nil && ref.IRN != nil && strings.TrimSpace(*ref.IRN) != "" {
+		br := mockBillingReference{IRN: *ref.IRN}
+		if ref.IssueDate != nil {
+			br.IssueDate = ref.IssueDate.Format(mockIssueDateLayout)
+		}
+		env.BillingReference = []mockBillingReference{br}
 	}
 	if c.Currency != nil {
 		env.DocumentCurrencyCode = *c.Currency

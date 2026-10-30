@@ -446,6 +446,18 @@ func getTx(ctx context.Context, tx pgx.Tx, id string) (Invoice, error) {
 		}
 	}
 
+	if inv.OriginalInvoiceID != nil {
+		var ref submission.BillingReference
+		err := tx.QueryRow(ctx,
+			`SELECT irn, issue_date FROM invoices WHERE id = $1`, *inv.OriginalInvoiceID,
+		).Scan(&ref.IRN, &ref.IssueDate)
+		if err == nil {
+			inv.Original = &ref
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return Invoice{}, err
+		}
+	}
+
 	// EverSubmitted: feeds canCorrectNumber's history-aware half (the rename
 	// gate) -- a status-only check would wrongly re-admit a draft demoted
 	// back from queued/submitted.

@@ -299,6 +299,7 @@ func TestSubmissionCanonical_NoCanonicalFieldIsLeftZero(t *testing.T) {
 	li.LineTotal, li.LineTax, li.TaxPercent = strPtr("10.00"), strPtr("0.75"), strPtr("7.50")
 
 	inv.DocumentType = submission.CreditNote
+	inv.Original = &submission.BillingReference{IRN: strPtr("IRN-ORIG-1"), IssueDate: inv.IssueDate}
 	assertNoZeroField(t, reflect.ValueOf(SubmissionCanonical(inv)), "Canonical")
 }
 
@@ -469,5 +470,16 @@ func TestSubmissionCanonical_NoLines(t *testing.T) {
 
 	if len(got.Lines) != 0 {
 		t.Errorf("len(Lines) = %d, want 0", len(got.Lines))
+	}
+}
+
+func TestSubmissionCanonical_CarriesTheOriginalReference(t *testing.T) {
+	issued := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	ref := &submission.BillingReference{IRN: strPtr("IRN-ORIG-1"), IssueDate: &issued}
+	if got := SubmissionCanonical(Invoice{Original: ref}).BillingReference; got != ref {
+		t.Errorf("BillingReference = %+v, want %+v", got, ref)
+	}
+	if got := SubmissionCanonical(Invoice{}).BillingReference; got != nil {
+		t.Errorf("BillingReference = %+v, want nil", got)
 	}
 }

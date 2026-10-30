@@ -9,9 +9,11 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
@@ -388,5 +390,72 @@ func TestStoreCreate_UpperCaseEntityIDStillMatchesTheOriginalsEntity(t *testing.
 	}
 	if inv.OriginalInvoiceID == nil || *inv.OriginalInvoiceID != original {
 		t.Errorf("OriginalInvoiceID = %v, want %s", inv.OriginalInvoiceID, original)
+	}
+}
+
+func TestStoreCanonical_CarriesTheOriginalReference(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "DT canonical")
+	ent := seedEntity(t, super, tenant, "E1")
+	original := seedInvoice(t, super, tenant, ent, "DT-ORIG")
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET irn = 'IRN-ORIG-1', issue_date = '2026-09-10' WHERE id = $1`, original); err != nil {
+		t.Fatalf("set original IRN: %v", err)
+	}
+	var noteID string
+	if err := super.QueryRow(context.Background(),
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, document_type, original_invoice_id)
+		 VALUES ($1, $2, 'DT-CN', 'credit_note', $3) RETURNING id`, tenant, ent, original).Scan(&noteID); err != nil {
+		t.Fatalf("seed credit note: %v", err)
+	}
+	store := NewStore(app)
+	canonical := func(id string) submission.Canonical {
+		var c submission.Canonical
+		if err := db.WithinTenantTx(context.Background(), app, tenant, func(tx pgx.Tx) error {
+			var err error
+			c, err = store.Canonical(context.Background(), tx, id)
+			return err
+		}); err != nil {
+			t.Fatalf("Canonical %s: %v", id, err)
+		}
+		return c
+	}
+
+	ref := canonical(noteID).BillingReference
+	if ref == nil || ref.IRN == nil || *ref.IRN != "IRN-ORIG-1" || ref.IssueDate == nil || ref.IssueDate.Format("2006-01-02") != "2026-09-10" {
+		t.Errorf("note BillingReference = %+v, want IRN-ORIG-1 / 2026-09-10", ref)
+	}
+	if got := canonical(original).BillingReference; got != nil {
+		t.Errorf("original BillingReference = %+v, want nil", got)
+	}
+}
+
+func TestStoreGet_NoteWhoseOriginalIsOutsideTheScopeReadsWithoutTheReference(t *testing.T) {
+	f := newCSFixture(t, "DT scope read")
+	ctx := context.Background()
+	if _, err := f.super.Exec(ctx, `UPDATE invoices SET irn = 'IRN-B-1' WHERE id = $1`, f.invB); err != nil {
+		t.Fatalf("set IRN: %v", err)
+	}
+	var noteID string
+	if err := f.super.QueryRow(ctx,
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, document_type, original_invoice_id)
+		 VALUES ($1, $2, 'DT-SCOPE-CN', 'credit_note', $3) RETURNING id`, f.tenant, f.entA, f.invB).Scan(&noteID); err != nil {
+		t.Fatalf("seed credit note: %v", err)
+	}
+
+	got, err := f.store.Get(f.limited, noteID)
+	if err != nil {
+		t.Fatalf("limited Get: %v", err)
+	}
+	if got.OriginalInvoiceID == nil || *got.OriginalInvoiceID != f.invB || got.Original != nil {
+		t.Errorf("limited: OriginalInvoiceID = %v, Original = %+v; want %s, nil", got.OriginalInvoiceID, got.Original, f.invB)
+	}
+
+	got, err = f.store.Get(f.admin, noteID)
+	if err != nil {
+		t.Fatalf("admin Get: %v", err)
+	}
+	if got.Original == nil || got.Original.IRN == nil || *got.Original.IRN != "IRN-B-1" {
+		t.Errorf("admin: Original = %+v, want IRN-B-1", got.Original)
 	}
 }

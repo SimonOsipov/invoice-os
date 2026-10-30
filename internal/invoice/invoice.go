@@ -161,6 +161,9 @@ type Invoice struct {
 
 	LineItems []LineItem `json:"line_items,omitempty"`
 
+	// Original is the note's original, filled by getTx only; nil when absent or out of scope.
+	Original *submission.BillingReference `json:"-"`
+
 	// RuleSetVersion is the human-facing integer resolved from
 	// RuleSetVersionID (rule_set_versions.version) -- populated by
 	// Store.Get only (a Get-local correlated subselect, M4-09-01), and

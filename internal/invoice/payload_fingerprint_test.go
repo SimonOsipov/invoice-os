@@ -784,6 +784,8 @@ func TestContentFingerprint_EveryNonContentFieldIsNamedAndIgnored(t *testing.T) 
 			f.Set(reflect.ValueOf(&n))
 		case reflect.TypeOf(time.Time{}):
 			f.Set(reflect.ValueOf(time.Date(2040, 1, 1, 0, 0, 0, 0, time.UTC)))
+		case reflect.TypeOf((*submission.BillingReference)(nil)):
+			f.Set(reflect.ValueOf(&submission.BillingReference{IRN: new(string)}))
 		case reflect.TypeOf(json.RawMessage(nil)):
 			f.SetBytes([]byte(`[{"zz":1}]`))
 		case reflect.TypeOf(Status("")), reflect.TypeOf(submission.DocumentType("")):

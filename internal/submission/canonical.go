@@ -25,6 +25,14 @@ type Canonical struct {
 	TaxPointDate    *time.Time
 	PaymentStatus   *string
 	TaxSubtotals    []TaxSubtotal
+
+	BillingReference *BillingReference // a note's original; nil for a commercial invoice
+}
+
+// BillingReference names the original document of a credit or debit note.
+type BillingReference struct {
+	IRN       *string
+	IssueDate *time.Time
 }
 
 type Party struct {

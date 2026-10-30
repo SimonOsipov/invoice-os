@@ -10,6 +10,7 @@ import {
   isDuplicateNumberError,
   issueNote,
   noteDraftLines,
+  NOTE_COPY,
   noteLineError,
   noteSign,
   noteTypeBadge,
@@ -34,6 +35,24 @@ describe('noteLineError', () => {
     expect(noteLineError('credit_note', 'unit_price', '100.00', '100.00')).toBeNull()
     // Read as text, '9.9' > '10'; as a number it is below the cap.
     expect(noteLineError('credit_note', 'quantity', '9.9', '10')).toBeNull()
+  })
+
+  it('noteLineError caps a credit note only when the original is known', () => {
+    expect(noteLineError('credit_note', 'quantity', '1000000', null)).toBeNull()
+    expect(noteLineError('credit_note', 'unit_price', '1000000', null)).toBeNull()
+    expect(noteLineError('credit_note', 'quantity', '1000000', 'n/a')).toBeNull()
+    // Exact decimal: a double cannot tell these apart.
+    expect(noteLineError('credit_note', 'unit_price', '0.30000000000000001', '0.3')).not.toBeNull()
+    expect(noteLineError('credit_note', 'quantity', '10.0000', '10')).toBeNull()
+    // A bad value is refused even when the original is null.
+    expect(noteLineError('credit_note', 'quantity', '0', null)).not.toBeNull()
+  })
+
+  it('noteLineError names the field it refuses', () => {
+    expect(noteLineError('credit_note', 'quantity', '11', '10')).toBe(NOTE_COPY.quantityOverOriginal)
+    expect(noteLineError('credit_note', 'unit_price', '101', '100')).toBe(NOTE_COPY.unitPriceOverOriginal)
+    expect(noteLineError('debit_note', 'quantity', '0', '10')).toBe(NOTE_COPY.quantityPositive)
+    expect(noteLineError('debit_note', 'unit_price', '-1', '10')).toBe(NOTE_COPY.unitPriceInvalid)
   })
 
   it('noteLineError leaves a debit note uncapped', () => {
@@ -86,6 +105,19 @@ describe('noteDraftLines', () => {
   })
 })
 
+describe('noteDraftLines near the route bounds', () => {
+  it('the live total stays exact at the largest quantity and price the route takes', () => {
+    const line = { id: 'l', line_no: 1, description: 'x', tax_category: null, tax_percent: null } as InvoiceLineItem
+    const t = draftTotals(noteDraftLines([{ line, quantity: '99999999999.999', unit_price: '999999999999.99' }]))
+    // exact product 99999999999998000000000.00001, rounded to 2dp
+    expect(t.subtotal).toBe('99999999999998000000000.00')
+    const small = draftTotals(noteDraftLines([{ line, quantity: '0.001', unit_price: '0.01' }]))
+    expect(small.subtotal).toBe('0.00')
+    const tidy = draftTotals(noteDraftLines([{ line, quantity: '1.500', unit_price: '33.330' }]))
+    expect(tidy.subtotal).toBe('50.00')
+  })
+})
+
 describe('signedNoteTotal', () => {
   it('signedNoteTotal', () => {
     expect(signedNoteTotal('credit_note', '100.00').startsWith('-₦')).toBe(true)
@@ -93,6 +125,13 @@ describe('signedNoteTotal', () => {
     expect(signedNoteTotal('credit_note', null)).toBe('—')
     expect(signedNoteTotal('credit_note', '100.00')).not.toMatch(/[−+]/)
     expect(signedNoteTotal('debit_note', '100.00')).not.toMatch(/[−+]/)
+    expect(signedNoteTotal('debit_note', null)).toBe('—')
+    expect(signedNoteTotal('credit_note', '1234567.00')).toBe('-₦1,234,567')
+  })
+
+  it('signedNoteTotal shows a kobo total in whole naira, as the invoice total beside it does', () => {
+    expect(signedNoteTotal('debit_note', '53.75')).toBe('₦54')
+    expect(signedNoteTotal('credit_note', '0.40')).toBe('-₦0')
   })
 })
 
@@ -102,6 +141,7 @@ describe('isDuplicateNumberError', () => {
     expect(isDuplicateNumberError(new ApiError('http', 'a note needs an accepted invoice with an IRN', 409))).toBe(false)
     expect(isDuplicateNumberError(new ApiError('http', 'duplicate invoice number', 400))).toBe(false)
     expect(isDuplicateNumberError(new Error('duplicate invoice number'))).toBe(false)
+    expect(isDuplicateNumberError({ status: 409, message: 'duplicate invoice number' })).toBe(false)
   })
 })
 

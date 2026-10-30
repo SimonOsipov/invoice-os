@@ -3,7 +3,8 @@
 import type { LineItem } from '../types'
 
 export function fmt(n: number): string {
-  return '₦' + Math.round(Number(n) || 0).toLocaleString('en-NG')
+  const m = Math.round(Math.abs(Number(n) || 0))
+  return (Number(n) < 0 && m > 0 ? '-' : '') + '₦' + m.toLocaleString('en-NG')
 }
 
 export function fmtPlain(n: number): string {
@@ -11,7 +12,9 @@ export function fmtPlain(n: number): string {
 }
 
 export function fmtShort(n: number): string {
-  return n >= 1e6 ? '₦' + (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? '₦' + Math.round(n / 1e3) + 'k' : '₦' + Math.round(n)
+  const a = Math.abs(n)
+  const body = a >= 1e6 ? (a / 1e6).toFixed(1) + 'M' : a >= 1e3 ? Math.round(a / 1e3) + 'k' : String(Math.round(a))
+  return (n < 0 && body !== '0' ? '-' : '') + '₦' + body
 }
 
 export function pad2(n: number): string {

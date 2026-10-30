@@ -942,16 +942,18 @@ export function hasBlockingViolation(inv: Pick<InvoiceRecord, 'violations'>): bo
   return inv.violations.some((v) => v.severity === 'error')
 }
 
-// Compile stub (CRDDBTNOTE-04-01): real bodies land with the executor.
-export function documentSign(_r: Pick<InvoiceRecord, 'document_type'>): 1 | -1 {
-  return 1
+export function documentSign(r: Pick<InvoiceRecord, 'document_type'>): 1 | -1 {
+  return r.document_type === 'credit_note' ? -1 : 1
 }
 
-export function signedAmount(_r: Pick<InvoiceRecord, 'document_type'>, amount: string | null | undefined): number {
-  return Number(amount)
+export function signedAmount(r: Pick<InvoiceRecord, 'document_type'>, amount: string | null | undefined): number {
+  const n = Number(amount) || 0
+  return n === 0 ? 0 : documentSign(r) * n
 }
 
-export function documentTypeBadge(_r: Pick<InvoiceRecord, 'document_type'>): { label: string; title: string } | null {
+export function documentTypeBadge(r: Pick<InvoiceRecord, 'document_type'>): { label: string; title: string } | null {
+  if (r.document_type === 'credit_note') return { label: 'CREDIT', title: 'Credit note' }
+  if (r.document_type === 'debit_note') return { label: 'DEBIT', title: 'Debit note' }
   return null
 }
 

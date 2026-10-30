@@ -1,4 +1,4 @@
-// Suite for invoices.document_type and invoices.original_invoice_id (CRDDBTNOTE-01-01).
+// Suite for invoices.document_type and invoices.original_invoice_id.
 package db_test
 
 import (
@@ -219,7 +219,7 @@ func TestRLS_InvoicesDocumentType_TypeAndOriginalMustAgree(t *testing.T) {
 	}
 }
 
-// AC 7 (Decision 40).
+// AC 7: a one-statement tenant delete removes a note with its original.
 func TestRLS_InvoicesDocumentType_PurgeTenantRemovesANoteWithItsOriginal(t *testing.T) {
 	h := requireHarness(t)
 	requireInvoicesDocTypeColumns(t, h.super)

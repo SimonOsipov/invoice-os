@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -257,5 +258,185 @@ func TestSupportTransitions_RefuseAnUnknownMalformedOrOtherTenantInvoice(t *test
 	}
 	if got := other.read(t, foreignQueued); got.status != "queued" {
 		t.Errorf("other tenant's queued invoice moved to %q", got.status)
+	}
+}
+
+// rqOriginal seeds an accepted commercial original with the given total.
+func rqOriginal(t *testing.T, f supportFix, number, total string) string {
+	t.Helper()
+	id := seedInvoice(t, f.super, f.tenantID, f.entityID, number)
+	ncAccepted(t, f.super, id, "IRN-"+number, total)
+	return id
+}
+
+func (f supportFix) requeue(t *testing.T, id string) error {
+	t.Helper()
+	return f.run(t, func(ctx context.Context, tx pgx.Tx) error {
+		return f.store.RequeueFailedTx(ctx, tx, id, f.tenantID)
+	})
+}
+
+func TestRequeueFailed_CreditNoteOverTheCapIsRefused(t *testing.T) {
+	f := newSupportFix(t, "03-04 over cap")
+	o := rqOriginal(t, f, "RQ-O", "100.00")
+	a := csNote(t, f.super, f.tenantID, f.entityID, "RQ-A", "credit_note", o, "failed", csAmount("60.00"))
+	csNote(t, f.super, f.tenantID, f.entityID, "RQ-B", "credit_note", o, "accepted", csAmount("60.00"))
+	before := f.read(t, a)
+
+	err := f.requeue(t, a)
+	if !errors.Is(err, ErrNoteChecksFailed) {
+		t.Fatalf("RequeueFailedTx = %v, want ErrNoteChecksFailed", err)
+	}
+	after := f.read(t, a)
+	if after.status != "failed" {
+		t.Errorf("status = %q, want failed", after.status)
+	}
+	if after != before {
+		t.Errorf("a refused re-drive wrote: %+v -> %+v (history and audit rows must not move)", before, after)
+	}
+}
+
+func TestRequeueFailed_ASiblingResolvedOutsideTakesTheRoom(t *testing.T) {
+	f := newSupportFix(t, "03-02 resolved sibling")
+	o := rqOriginal(t, f, "RQ-O", "100.00")
+	sibling := csNote(t, f.super, f.tenantID, f.entityID, "RQ-S", "credit_note", o, "failed", csAmount("60.00"))
+	csStamp(t, f.super, sibling)
+	n := csNote(t, f.super, f.tenantID, f.entityID, "RQ-N", "credit_note", o, "failed", csAmount("60.00"))
+
+	if err := f.requeue(t, n); !errors.Is(err, ErrNoteChecksFailed) {
+		t.Fatalf("RequeueFailedTx = %v, want ErrNoteChecksFailed: the resolved sibling took 60.00", err)
+	}
+	if got := f.read(t, n); got.status != "failed" {
+		t.Errorf("status = %q, want failed", got.status)
+	}
+
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE invoices SET kept_as_is_at = NULL, kept_as_is_by = NULL, kept_as_is_reason = NULL WHERE id = $1`, sibling); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.requeue(t, n); err != nil {
+		t.Fatalf("RequeueFailedTx after the sibling is unresolved = %v, want nil", err)
+	}
+	if got := f.read(t, n); got.status != "queued" {
+		t.Errorf("status = %q, want queued", got.status)
+	}
+}
+
+func TestRequeueFailed_CreditNoteInAnotherCurrencyIsRefused(t *testing.T) {
+	for _, c := range []struct{ name, note, orig string }{
+		{"note in USD", "'USD'", "'NGN'"},
+		{"original has no currency", "'NGN'", "NULL"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newSupportFix(t, "03-04 currency")
+			o := rqOriginal(t, f, "RQ-O", "100000.00")
+			n := csNote(t, f.super, f.tenantID, f.entityID, "RQ-USD", "credit_note", o, "failed", csAmount("5000.00"))
+			if _, err := f.super.Exec(context.Background(), `UPDATE invoices SET currency = `+c.note+` WHERE id = $1`, n); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.super.Exec(context.Background(), `UPDATE invoices SET currency = `+c.orig+` WHERE id = $1`, o); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.requeue(t, n); !errors.Is(err, ErrNoteChecksFailed) {
+				t.Fatalf("RequeueFailedTx = %v, want ErrNoteChecksFailed", err)
+			}
+			if got := f.read(t, n); got.status != "failed" {
+				t.Errorf("status = %q, want failed", got.status)
+			}
+		})
+	}
+}
+
+func TestRequeueFailed_ANoteWhoseOriginalHasNoIRNIsRefused(t *testing.T) {
+	f := newSupportFix(t, "03-04 no irn")
+	o := rqOriginal(t, f, "RQ-O", "100.00")
+	if _, err := f.super.Exec(context.Background(), `UPDATE invoices SET irn = NULL WHERE id = $1`, o); err != nil {
+		t.Fatal(err)
+	}
+	for _, typ := range []string{"credit_note", "debit_note"} {
+		n := csNote(t, f.super, f.tenantID, f.entityID, "RQ-"+typ, typ, o, "failed", csAmount("10.00"))
+		if err := f.requeue(t, n); !errors.Is(err, ErrNoteChecksFailed) {
+			t.Errorf("%s: RequeueFailedTx = %v, want ErrNoteChecksFailed", typ, err)
+		}
+		if got := f.read(t, n); got.status != "failed" {
+			t.Errorf("%s: status = %q, want failed", typ, got.status)
+		}
+	}
+}
+
+func TestRequeueFailed_ExactlyAtTheCapRequeues(t *testing.T) {
+	f := newSupportFix(t, "03-04 at cap")
+	o := rqOriginal(t, f, "RQ-O", "100.00")
+	a := csNote(t, f.super, f.tenantID, f.entityID, "RQ-A", "credit_note", o, "failed", csAmount("100.00"))
+
+	if err := f.requeue(t, a); err != nil {
+		t.Fatalf("RequeueFailedTx at the cap = %v, want nil", err)
+	}
+	if got := f.read(t, a); got.status != "queued" {
+		t.Errorf("status = %q, want queued", got.status)
+	}
+}
+
+func TestRequeueFailed_CreditNoteThatFitsRequeues(t *testing.T) {
+	f := newSupportFix(t, "03-04 fits")
+	o := rqOriginal(t, f, "RQ-O", "100.00")
+	a := csNote(t, f.super, f.tenantID, f.entityID, "RQ-A", "credit_note", o, "failed", csAmount("40.00"))
+	csNote(t, f.super, f.tenantID, f.entityID, "RQ-B", "credit_note", o, "accepted", csAmount("60.00"))
+
+	if err := f.requeue(t, a); err != nil {
+		t.Fatalf("RequeueFailedTx = %v, want nil", err)
+	}
+	if got := f.read(t, a); got.status != "queued" {
+		t.Errorf("status = %q, want queued", got.status)
+	}
+}
+
+func TestRequeueFailed_CommercialAndDebitUnchanged(t *testing.T) {
+	f := newSupportFix(t, "03-04 unchanged")
+	ci := seedInvoiceAtStatus(t, f.super, f.tenantID, f.entityID, "RQ-CI", StatusFailed)
+	if err := f.requeue(t, ci); err != nil {
+		t.Fatalf("commercial invoice: %v", err)
+	}
+	if got := f.read(t, ci); got.status != "queued" {
+		t.Errorf("commercial status = %q, want queued", got.status)
+	}
+
+	o := rqOriginal(t, f, "RQ-O", "100.00")
+	d := csNote(t, f.super, f.tenantID, f.entityID, "RQ-D", "debit_note", o, "failed", csAmount("500.00"))
+	// A debit note takes no lock on the original (Decision 44): a held row lock must not stall it.
+	hold, err := f.super.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hold.Rollback(context.Background())
+	if _, err := hold.Exec(context.Background(), `SELECT 1 FROM invoices WHERE id = $1 FOR UPDATE`, o); err != nil {
+		t.Fatal(err)
+	}
+	err = f.run(t, func(ctx context.Context, tx pgx.Tx) error {
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		return f.store.RequeueFailedTx(ctx, tx, d, f.tenantID)
+	})
+	if err != nil {
+		t.Fatalf("debit note above the original's total: %v, want nil with no wait", err)
+	}
+	if got := f.read(t, d); got.status != "queued" {
+		t.Errorf("debit status = %q, want queued", got.status)
+	}
+}
+
+func TestRequeueFailed_ResolvedOutsideRefusesFirst(t *testing.T) {
+	f := newSupportFix(t, "03-04 resolved first")
+	o := rqOriginal(t, f, "RQ-O", "100.00")
+	a := csNote(t, f.super, f.tenantID, f.entityID, "RQ-A", "credit_note", o, "failed", csAmount("60.00"))
+	csNote(t, f.super, f.tenantID, f.entityID, "RQ-B", "credit_note", o, "accepted", csAmount("60.00"))
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = 'someone', kept_as_is_reason = 'filed by hand' WHERE id = $1`, a); err != nil {
+		t.Fatal(err)
+	}
+
+	err := f.requeue(t, a)
+	if !errors.Is(err, ErrResolvedOutside) || errors.Is(err, ErrNoteChecksFailed) {
+		t.Fatalf("RequeueFailedTx = %v, want ErrResolvedOutside and not ErrNoteChecksFailed", err)
 	}
 }

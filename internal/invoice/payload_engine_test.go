@@ -691,8 +691,8 @@ func TestPayloadEngine_V5CompliantInvoiceThroughTheMapper(t *testing.T) {
 	pool := rulesAppPool(t) // skips when no DB is configured
 	seedV5MapperLists(t)
 	rs := ruleSetOn(t, validation.NewStore(pool), "2027-01-15")
-	if rs.Version != 5 {
-		t.Fatalf("rule set on 2027-01-15 = version %d, want 5", rs.Version)
+	if rs.Version != 6 {
+		t.Fatalf("rule set on 2027-01-15 = version %d, want 6", rs.Version)
 	}
 
 	date := time.Date(2027, 1, 15, 0, 0, 0, 0, time.UTC)

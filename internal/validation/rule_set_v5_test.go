@@ -549,6 +549,11 @@ func TestV5_DownRemovesV5(t *testing.T) {
 	}
 
 	tx := edBegin(t, ctx, super)
+	for _, stmt := range gooseDownStatements(t, v6MigrationSQL(t)) {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			t.Fatalf("v6 Down statement failed: %v\n%s", err, stmt)
+		}
+	}
 	var v5ID string
 	var v5Rules int
 	if err := tx.QueryRow(ctx,

@@ -249,6 +249,7 @@ func TestRedriveHandler_ConflictsAre409(t *testing.T) {
 		{"river duplicate", ErrRiverDuplicate, "another River job already holds this submission"},
 		{"river running", ErrRiverRunning, "the previous River job is still running; retry shortly"},
 		{"resolved outside", invoice.ErrResolvedOutside, "the invoice was resolved outside the system"},
+		{"note checks", invoice.ErrNoteChecksFailed, "the note no longer passes its checks"},
 		{"invoice status", invoice.StatusError{Have: invoice.StatusAccepted}, "the invoice is accepted, not failed"},
 		{"wrapped", fmt.Errorf("redrive: %w", ErrJobState), "only a dead_lettered job can be re-driven"},
 	} {

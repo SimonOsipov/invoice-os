@@ -51,6 +51,9 @@ var ruleCategories = map[string]Category{
 	"supplier-street-required":      CategoryFieldCompleteness,
 	"tax-currency-required":         CategoryFieldCompleteness,
 
+	"billing-reference-irn-required":        CategoryFieldCompleteness,
+	"billing-reference-issue-date-required": CategoryFieldCompleteness,
+
 	"vat-required":                    CategoryTaxAccuracy,
 	"vat-non-negative":                CategoryTaxAccuracy,
 	"vat-standard-rate":               CategoryTaxAccuracy,

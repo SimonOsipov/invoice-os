@@ -262,6 +262,22 @@ func nightlyProdCheckProblems(j workflowJob, all []string) []string {
 	if n := count(j.lines, "secrets.PROD_PROBE_"); n != 2 {
 		p = append(p, "prod-check names the probe secrets "+strconv.Itoa(n)+" times, want 2 (the tool step)")
 	}
+	reads := nightlyStepLines(j, "gateway-token")
+	if reads == nil {
+		return append(p, "prod-check has no gcloud read step")
+	}
+	readsText := strings.Join(reads, "\n")
+	if !strings.Contains(readsText, "for n in 1 2 3;") || !strings.Contains(readsText, "sleep 20;") {
+		p = append(p, "prod-check gcloud reads lack the 3 tries, 20 s apart")
+	}
+	for _, l := range reads {
+		if strings.Contains(l, "gcloud ") && !strings.Contains(l, "retry gcloud ") {
+			p = append(p, "prod-check gcloud read is not retried: "+l)
+		}
+	}
+	if !strings.Contains(readsText, ".status.traffic") || !strings.Contains(readsText, "latestCreatedRevisionName") {
+		p = append(p, "prod-check reads the auth image from the revision serving traffic, not the newest one")
+	}
 	up := nightlyStepLines(j, "uses: actions/upload-artifact@")
 	if up == nil {
 		p = append(p, "prod-check has no upload step")
@@ -534,6 +550,13 @@ func TestNightly_ProdCheckJobMutations(t *testing.T) {
 		{"id-token added to summary", func(t *testing.T, n string) string {
 			return mutateOnce(t, n, "      actions: write\n", "      actions: write\n      id-token: write\n")
 		}, []string{"id-token is named outside prod-check", "summary permissions"}},
+		{"token read not retried", func(t *testing.T, n string) string {
+			return mutateOnce(t, n, "token=$(retry gcloud", "token=$(gcloud")
+		}, []string{"gcloud read is not retried"}},
+		{"retry loses its pause", func(t *testing.T, n string) string { return mutateOnce(t, n, "sleep 20;", "true;") }, []string{"3 tries, 20 s apart"}},
+		{"auth image read from the newest revision", func(t *testing.T, n string) string {
+			return mutateOnce(t, n, ".status.traffic", ".status.other")
+		}, []string{"not the newest one"}},
 		{"gateway token read in summary", func(t *testing.T, n string) string {
 			return mutateOnce(t, n, "      REPO: ${{ github.repository }}\n", "      REPO: ${{ github.repository }}\n      T: gateway-token\n")
 		}, []string{"gateway-token is named outside prod-check"}},

@@ -26,7 +26,7 @@ jobs:
     name: Production check
     needs: main-only
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     permissions:
       contents: read
       id-token: write
@@ -50,11 +50,14 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          token=$(gcloud secrets versions access latest --secret gateway-token --project "$PROJECT")
+          retry() { for n in 1 2 3; do "$@" && return 0; if [ "$n" -lt 3 ]; then sleep 20; fi; done; return 1; }
+          token=$(retry gcloud secrets versions access latest --secret gateway-token --project "$PROJECT")
           echo "::add-mask::$token"
           echo "PROD_GATEWAY_TOKEN=$token" >>"$GITHUB_ENV"
-          image=$(gcloud run services describe auth --project "$PROJECT" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')
-          echo "AUTH_BUILD=${image##*:}" >>"$GITHUB_ENV"
+          # the tag counts only when the revision serving 100 % is the newest; a revision's own image is a digest
+          svc=$(retry gcloud run services describe auth --project "$PROJECT" --region "$REGION" --format=json)
+          image=$(jq -r '. as $s | ([.status.traffic[]? | select(.percent == 100)] | if length == 1 then (.[0] | if .latestRevision then $s.status.latestReadyRevisionName else .revisionName end) // "" else "" end) as $rev | if $rev != "" and $rev == $s.status.latestCreatedRevisionName then $s.spec.template.spec.containers[0].image else "" end' <<<"$svc")
+          if [ -n "$image" ]; then echo "AUTH_BUILD=${image##*:}" >>"$GITHUB_ENV"; fi
       - name: Resolve main
         id: main
         continue-on-error: true

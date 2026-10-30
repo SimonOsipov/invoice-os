@@ -248,14 +248,21 @@ func (c *checker) fleetStep() (string, string) {
 func (c *checker) readFleet(token string) string {
 	c.fleet = nil
 	code, body := c.getOnce(c.t.api+"/healthz/fleet", map[string]string{"X-Gateway-Token": token})
-	if code != http.StatusOK {
+	if code != http.StatusOK && code != http.StatusServiceUnavailable {
 		return "fleet " + answered(code)
 	}
 	var doc struct {
 		Services []serviceHealth `json:"services"`
 	}
+	// A 503 is the roll-up naming what is down; an unreadable one stays "answered 503".
 	if err := json.Unmarshal(body, &doc); err != nil {
+		if code == http.StatusServiceUnavailable {
+			return "fleet " + answered(code)
+		}
 		return "fleet body is unreadable"
+	}
+	if code == http.StatusServiceUnavailable && len(doc.Services) == 0 {
+		return "fleet " + answered(code)
 	}
 	if len(doc.Services) > 0 {
 		c.fleet = doc.Services
@@ -278,6 +285,9 @@ func (c *checker) readFleet(token string) string {
 		case found[0].Ready != nil && !*found[0].Ready:
 			problems = append(problems, name+" not ready: "+strings.Join(found[0].NotReady, ","))
 		}
+	}
+	if len(problems) == 0 && code != http.StatusOK {
+		return "fleet " + answered(code)
 	}
 	return strings.Join(problems, "; ")
 }
@@ -378,7 +388,10 @@ func (c *checker) gaStep() (string, string) {
 		return "failed", "landing names no script"
 	}
 	for _, src := range srcs {
-		ref, _ := url.Parse(src)
+		ref, err := url.Parse(src)
+		if err != nil {
+			return "failed", "landing names a bad script address"
+		}
 		code, js, try := c.get(base.ResolveReference(ref).String(), nil)
 		worst = max(worst, try)
 		if code != http.StatusOK {

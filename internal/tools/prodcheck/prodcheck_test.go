@@ -318,10 +318,11 @@ func TestFleet_ServiceMissingOrDownFails(t *testing.T) {
 		code         int
 		body, detail string
 	}{
-		"worker absent":  {200, fleetBody(func(m map[string]map[string]any) { delete(m, "worker") }), "worker missing"},
-		"invoice down":   {200, fleetBody(func(m map[string]map[string]any) { m["invoice"]["status"] = "down" }), "invoice down"},
-		"empty services": {200, `{"status":"ok","services":[]}`, "gateway missing"},
-		"503":            {503, fleetBody(nil), "fleet answered 503"},
+		"worker absent":        {200, fleetBody(func(m map[string]map[string]any) { delete(m, "worker") }), "worker missing"},
+		"invoice down":         {200, fleetBody(func(m map[string]map[string]any) { m["invoice"]["status"] = "down" }), "invoice down"},
+		"empty services":       {200, `{"status":"ok","services":[]}`, "gateway missing"},
+		"503 without services": {503, `{"status":"degraded","services":[]}`, "fleet answered 503"},
+		"503 not json":         {503, "<html>bad gateway</html>", "fleet answered 503"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -330,6 +331,29 @@ func TestFleet_ServiceMissingOrDownFails(t *testing.T) {
 			f.run(t, nil).want(t, 0, "failed", c.detail)
 		})
 	}
+}
+
+// degradedFleet is the 503 body the gateway sends when a service is down: status degraded,
+// the down entry carries an error and no build.
+func degradedFleet(down string) string {
+	var doc map[string]any
+	_ = json.Unmarshal([]byte(fleetBody(func(m map[string]map[string]any) {
+		m[down] = map[string]any{"name": down, "status": "down", "error": "health returned 500"}
+	})), &doc)
+	doc["status"] = "degraded"
+	raw, _ := json.Marshal(doc)
+	return string(raw)
+}
+
+func TestFleet_503NamesTheDownServiceAndBuildsStillReport(t *testing.T) {
+	f := newFake(t)
+	f.fleet = func(int) (int, string) { return 503, degradedFleet("invoice") }
+	r := f.run(t, nil)
+	r.want(t, 0, "failed", "invoice down")
+	if strings.Contains(r.step(t, 0).Detail, "answered 503") {
+		t.Errorf("detail %q does not name the service", r.step(t, 0).Detail)
+	}
+	r.want(t, 1, "failed", "invoice=none")
 }
 
 func TestFleet_UnreadableBodyFails(t *testing.T) {
@@ -476,6 +500,14 @@ func TestGA_NoScriptFails(t *testing.T) {
 	f := newFake(t)
 	f.landing = "<html>no scripts</html>"
 	f.run(t, nil).want(t, 3, "failed", "landing names no script")
+}
+
+func TestGA_BadScriptAddressFails(t *testing.T) {
+	f := newFake(t)
+	f.landing = `<html><script src="/assets/%zz.js"></script></html>`
+	r := f.run(t, nil)
+	r.want(t, 3, "failed", "landing names a bad script address")
+	r.want(t, 4, "passed", "")
 }
 
 func TestGA_LandingOrBundleUnreadableFails(t *testing.T) {

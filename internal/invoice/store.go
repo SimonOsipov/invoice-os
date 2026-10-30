@@ -278,11 +278,12 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 		DefaultSupplierContact(&in, contact)
 
 		if in.OriginalInvoiceID != nil {
-			var origEntity string
+			var sameEntity bool
 			var origType submission.DocumentType
 			if err := tx.QueryRow(ctx,
-				`SELECT entity_id, document_type FROM invoices WHERE id = $1`, *in.OriginalInvoiceID,
-			).Scan(&origEntity, &origType); err != nil {
+				`SELECT entity_id = $2::uuid, document_type FROM invoices WHERE id = $1`,
+				*in.OriginalInvoiceID, in.EntityID,
+			).Scan(&sameEntity, &origType); err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return ErrOriginalNotFound
 				}
@@ -294,7 +295,8 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			if origType != submission.CommercialInvoice {
 				return ErrOriginalIsANote
 			}
-			if origEntity != in.EntityID {
+			// uuid compare in SQL: a string compare rejects an upper-case entity_id
+			if !sameEntity {
 				return ErrOriginalOtherEntity
 			}
 		}

@@ -21,3 +21,4 @@ paths:
 - Feed `grep -q` and `head -n 1` a here-string, never a pipe, in a script under `pipefail`. The writer of the pipe gets SIGPIPE when the reader exits early, and the pipeline fails.
 - Dispatch `ci.yml` only from `nightly.yml`. A dispatch is full mode: every job runs, and the roll-up is named `CI (nightly)`.
 - Dispatch `dev-env.yml` only from `nightly.yml`. A dispatch deploys the `nightly` preview, runs E2E without the flaky gate and the `E2E gate`, and deletes the preview.
+- Read `ARGOS_TOKEN` only in the `Send the screenshots to Argos` step of `nightly.yml`.

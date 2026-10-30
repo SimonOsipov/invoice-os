@@ -18,6 +18,7 @@ const (
 	nightlySuitesFlag     = "-suites scripts/ci/nightly-suites.txt"
 	nightlyCIRunLine      = `run: bash scripts/ci/nightly-ci.sh "$GITHUB_REF_NAME" ci.yml=run_id dev-env.yml=preview_run_id`
 	nightlyE2EFlag        = `-e2e-suites "$RUNNER_TEMP/e2e-suites.txt" `
+	nightlyArgosStep      = "Send the screenshots to Argos"
 	nightlyPolls          = "420"
 	nightlySummaryTimeout = "270"
 	nightlyPreviewDL      = `gh run download "$PREVIEW_RUN_ID" -R "$REPO" -p 'results-*' -D "$RUNNER_TEMP/results"`
@@ -168,6 +169,36 @@ func nightlyRunProblems(nightlyYAML, ciYAML, suitesTxt string) []string {
 	}
 	if col == nil || !slices.Contains(col, "if: always() && steps.ci.outputs.run_id != ''") {
 		p = append(p, "collect step does not run after a red CI (always() with a run id)")
+	}
+	if n := nightlyStepLines(summary, "uses: pnpm/action-setup@"); n == nil {
+		p = append(p, "summary lacks pnpm/action-setup")
+	}
+	ar := nightlyStepLines(summary, "node e2e/argosBuild.ts")
+	switch {
+	case ar == nil:
+		p = append(p, "summary has no Argos step")
+	default:
+		if !slices.Contains(ar, "name: "+nightlyArgosStep) {
+			p = append(p, "Argos step is not named "+nightlyArgosStep)
+		}
+		if !slices.Contains(ar, "if: always()") {
+			p = append(p, "Argos step does not run always()")
+		}
+		if !slices.Contains(ar, "ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}") {
+			p = append(p, "Argos step lacks ARGOS_TOKEN")
+		}
+		if !slices.Contains(ar, "ARGOS_COMMIT: ${{ steps.collect.outputs.sha }}") {
+			p = append(p, "ARGOS_COMMIT is not the collected sha")
+		}
+		if !slices.Contains(ar, "ARGOS_BRANCH: main") || !slices.Contains(ar, "PREVIEW_RUN_ID: ${{ steps.ci.outputs.preview_run_id }}") {
+			p = append(p, "Argos step lacks ARGOS_BRANCH or PREVIEW_RUN_ID")
+		}
+	}
+	if n := strings.Count(strings.Join(stripHashComments(lines), "\n"), "secrets.ARGOS_TOKEN"); n != 1 {
+		p = append(p, "ARGOS_TOKEN is read "+strconv.Itoa(n)+" times, want once in the Argos step")
+	}
+	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), `-section argos="$RUNNER_TEMP/argos.json"`) {
+		p = append(p, "assembler step does not pass -section argos=")
 	}
 	up := nightlyStepLines(summary, "uses: actions/upload-artifact@")
 	if up == nil {
@@ -564,4 +595,33 @@ func TestNightly_PollBudgetCoversTheDevEnvPath(t *testing.T) {
 	if timeout, _ := strconv.Atoi(v); timeout <= budget {
 		t.Errorf("Nightly summary timeout-minutes %d does not exceed the poll budget %d min", timeout, budget)
 	}
+}
+
+func TestNightly_ArgosTokenOnlyInItsStep(t *testing.T) {
+	t.Parallel()
+	tok := "ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}"
+	for _, tc := range []struct{ name, old, repl string }{
+		{"job env", "      REPO: ${{ github.repository }}\n", "      REPO: ${{ github.repository }}\n      " + tok + "\n"},
+		{"second step", "      - name: Upload nightly-summary\n", "      - run: echo\n        env:\n          " + tok + "\n      - name: Upload nightly-summary\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			requireNightlyMutation(t, tc.old, tc.repl, "ARGOS_TOKEN is read 2 times")
+		})
+	}
+}
+
+func TestNightly_ArgosSectionIsPassed(t *testing.T) {
+	t.Parallel()
+	requireNightlyMutation(t, `-section argos="$RUNNER_TEMP/argos.json" `, "", "-section argos=")
+}
+
+func TestNightly_ArgosStepAlwaysRuns(t *testing.T) {
+	t.Parallel()
+	requireNightlyMutation(t, "      - name: "+nightlyArgosStep+"\n        if: always()\n", "      - name: "+nightlyArgosStep+"\n        if: success()\n", "Argos step does not run always()")
+}
+
+func TestNightly_ArgosCommitIsTheCollectedSha(t *testing.T) {
+	t.Parallel()
+	requireNightlyMutation(t, "ARGOS_COMMIT: ${{ steps.collect.outputs.sha }}", "ARGOS_COMMIT: ${{ github.sha }}", "ARGOS_COMMIT is not the collected sha")
 }

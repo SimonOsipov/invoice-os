@@ -38,9 +38,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - run: pnpm install --filter @invoice-os/e2e --frozen-lockfile --ignore-scripts
       - name: Run CI and the nightly preview on this ref
         id: ci
         env:
@@ -63,6 +65,20 @@ jobs:
           fi
           for run in "${runs[@]}"; do gh api --paginate "repos/$REPO/actions/runs/$run/jobs" --jq '.jobs[]'; done | jq -s . > "$RUNNER_TEMP/jobs.json"
           echo "sha=$(gh run view "$CI_RUN_ID" -R "$REPO" --json headSha --jq .headSha)" >> "$GITHUB_OUTPUT"
+      - name: Send the screenshots to Argos
+        if: always()
+        env:
+          ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
+          ARGOS_COMMIT: ${{ steps.collect.outputs.sha }}
+          ARGOS_BRANCH: main
+          PREVIEW_RUN_ID: ${{ steps.ci.outputs.preview_run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/argos-shots"
+          if [ -n "$PREVIEW_RUN_ID" ]; then
+            gh run download -R "$REPO" "$PREVIEW_RUN_ID" -p 'argos-shots-*' -D "$RUNNER_TEMP/argos-shots" || echo "::warning::no Argos shot artifacts to download"
+          fi
+          node e2e/argosBuild.ts "$RUNNER_TEMP/argos-shots" "$RUNNER_TEMP/argos.json"
       - name: Write summary.json
         if: always()
         env:
@@ -72,7 +88,7 @@ jobs:
           [ -f "$RUNNER_TEMP/jobs.json" ] || echo '[]' > "$RUNNER_TEMP/jobs.json"
           { cat scripts/ci/nightly-e2e-suites.txt; node e2e/topology/shards.ts | jq -r '.[] | "topology-\(.)=E2E topology (\(.))=results"'; } > "$RUNNER_TEMP/e2e-suites.txt"
           started=$(gh api "repos/$REPO/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
-          go run ./internal/tools/nightlysummary -suites scripts/ci/nightly-suites.txt -e2e-suites "$RUNNER_TEMP/e2e-suites.txt" -jobs "$RUNNER_TEMP/jobs.json" -results "$RUNNER_TEMP/results" -run-id "$GITHUB_RUN_ID" -sha "${CI_SHA:-$GITHUB_SHA}" -started "$started" -workspace "$GITHUB_WORKSPACE" -out "$RUNNER_TEMP/summary.json"
+          go run ./internal/tools/nightlysummary -suites scripts/ci/nightly-suites.txt -e2e-suites "$RUNNER_TEMP/e2e-suites.txt" -jobs "$RUNNER_TEMP/jobs.json" -results "$RUNNER_TEMP/results" -run-id "$GITHUB_RUN_ID" -sha "${CI_SHA:-$GITHUB_SHA}" -started "$started" -workspace "$GITHUB_WORKSPACE" -section argos="$RUNNER_TEMP/argos.json" -out "$RUNNER_TEMP/summary.json"
       - name: Upload nightly-summary
         if: always()
         uses: actions/upload-artifact@v7

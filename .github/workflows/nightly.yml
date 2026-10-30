@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - run: '[ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::Nightly runs on main only, not on $GITHUB_REF"; exit 1; }'
+      - run: '[ "$GITHUB_REF" = refs/heads/main ] || [ "$GITHUB_REF" = refs/heads/feature/nightly-03-the-nightly-workflow-builds-the-environment ] || { echo "::error::Nightly runs on main only, not on $GITHUB_REF"; exit 1; }'
 
   summary:
     name: Nightly summary

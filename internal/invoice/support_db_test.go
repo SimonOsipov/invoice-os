@@ -296,6 +296,23 @@ func TestRequeueFailed_CreditNoteOverTheCapIsRefused(t *testing.T) {
 	}
 }
 
+func TestRequeueFailed_ANoteWhoseOriginalHasNoIRNIsRefused(t *testing.T) {
+	f := newSupportFix(t, "03-04 no irn")
+	o := rqOriginal(t, f, "RQ-O", "100.00")
+	if _, err := f.super.Exec(context.Background(), `UPDATE invoices SET irn = NULL WHERE id = $1`, o); err != nil {
+		t.Fatal(err)
+	}
+	for _, typ := range []string{"credit_note", "debit_note"} {
+		n := csNote(t, f.super, f.tenantID, f.entityID, "RQ-"+typ, typ, o, "failed", csAmount("10.00"))
+		if err := f.requeue(t, n); !errors.Is(err, ErrNoteChecksFailed) {
+			t.Errorf("%s: RequeueFailedTx = %v, want ErrNoteChecksFailed", typ, err)
+		}
+		if got := f.read(t, n); got.status != "failed" {
+			t.Errorf("%s: status = %q, want failed", typ, got.status)
+		}
+	}
+}
+
 func TestRequeueFailed_ExactlyAtTheCapRequeues(t *testing.T) {
 	f := newSupportFix(t, "03-04 at cap")
 	o := rqOriginal(t, f, "RQ-O", "100.00")

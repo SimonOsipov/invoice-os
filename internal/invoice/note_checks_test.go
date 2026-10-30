@@ -149,6 +149,12 @@ func TestNoteViolations_OverCapStatesTheAmountStillCreditable(t *testing.T) {
 	if !strings.Contains(v.Message, "40.00") || !strings.Contains(v.Message, "INV-1") {
 		t.Errorf("message %q must state 40.00 and name INV-1", v.Message)
 	}
+	// credited 30.00 and total 80.00 tell original-credited (70.00) from original-total (20.00).
+	v = ncOnly(t, noteViolations(ncNote(submission.CreditNote, strPtr("80.00")), ncFacts("100.00", "30.00")),
+		"credit-note-over-cap", "total")
+	if !strings.Contains(v.Message, "70.00 still creditable") || !strings.Contains(v.Message, "total 80.00") {
+		t.Errorf("message %q must state 80.00 against 70.00 creditable", v.Message)
+	}
 }
 
 func TestNoteViolations_CapBoundary(t *testing.T) {

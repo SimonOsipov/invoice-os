@@ -99,6 +99,12 @@ func TestMBSPayload_CommercialInvoiceGainsOnlyDocumentType(t *testing.T) {
 	if !reflect.DeepEqual(added, []string{"document_type"}) {
 		t.Errorf("keys gained = %v, want [document_type]", added)
 	}
+	// head comes from the code under test, so a key added unconditionally would sit in both sets.
+	for _, k := range []string{"billing_reference", "original_total", "credited_before"} {
+		if v, ok := head[k]; ok {
+			t.Errorf("a commercial invoice carries %s = %#v", k, v)
+		}
+	}
 }
 
 func TestContentFingerprint_IgnoresTheNoteFacts(t *testing.T) {

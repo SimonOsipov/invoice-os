@@ -664,6 +664,16 @@ func TestGateEvaluate_SendsTheFactsAndReturnsTheViolations(t *testing.T) {
 	if rows := mustCount(t, f.super, `SELECT count(*) FROM audit_log WHERE tenant_id = $1`, f.tenant); rows != auditBefore {
 		t.Errorf("audit rows = %d, want %d: Evaluate writes nothing", rows, auditBefore)
 	}
+
+	// Store.Create returns a note with no Original (only Get fills it), so Evaluate fills it from the read.
+	inv.Original = nil
+	fresh := newNGStub(t, f.super)
+	if _, err := fresh.gate(f).Evaluate(f.ctx, []EvalItem{{Ref: n, Invoice: inv}}); err != nil {
+		t.Fatalf("Evaluate without an Original: %v", err)
+	}
+	if br, _ := fresh.item(t, n)["billing_reference"].(map[string]any); br["irn"] != "IRN-NG-O" || br["issue_date"] != "2026-03-04" {
+		t.Errorf("billing_reference of a note with no Original = %#v, want the original's IRN and issue date", br)
+	}
 }
 
 func TestGateEvaluate_AFactsReadFailureSendsNothing(t *testing.T) {
@@ -897,6 +907,30 @@ func TestApplyValidation_OriginalOutsideTheMembersClientsIsMissing(t *testing.T)
 	}
 	if hasViolation(ngStored(t, adm), ruleNoteOriginalMissing) || !hasViolation(ngStored(t, adm), ruleNoteOriginalNotAccepted) {
 		t.Errorf("admin: %v, want %s and no %s", ngKeys(ngStored(t, adm)), ruleNoteOriginalNotAccepted, ruleNoteOriginalMissing)
+	}
+}
+
+func TestGateEvaluate_AHiddenOriginalSendsNoFactsAndReportsMissing(t *testing.T) {
+	f := newCSFixture(t, "NG hidden eval")
+	n := csNote(t, f.super, f.tenant, f.entA, "NG-HEV", "credit_note", f.invB, "draft", csAmount("10.00"))
+	inv, err := f.store.Get(f.limited, n)
+	if err != nil {
+		t.Fatalf("Get as the limited member: %v", err)
+	}
+	stub := newNGStub(t, f.super)
+
+	res, err := NewGate(f.store, NewValidator(stub.URL, gapiS2SToken, nil)).Evaluate(f.limited, []EvalItem{{Ref: n, Invoice: inv}})
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if got := ngKeys(res.ByRef[n]); !slices.Equal(got, []string{ruleNoteOriginalMissing}) {
+		t.Errorf("ByRef keys = %v, want exactly [%s]", got, ruleNoteOriginalMissing)
+	}
+	p := stub.item(t, n)
+	for _, k := range []string{"original_total", "credited_before", "billing_reference"} {
+		if v, ok := p[k]; ok {
+			t.Errorf("04 received %s = %#v for an original the member cannot see", k, v)
+		}
 	}
 }
 

@@ -8,6 +8,7 @@ import "time"
 type Canonical struct {
 	InvoiceID     string // invoices.id — the adapter's correlation handle
 	InvoiceNumber string
+	DocumentType  DocumentType
 	IssueDate     *time.Time
 	Supplier      Party
 	Buyer         Party
@@ -24,6 +25,14 @@ type Canonical struct {
 	TaxPointDate    *time.Time
 	PaymentStatus   *string
 	TaxSubtotals    []TaxSubtotal
+
+	BillingReference *BillingReference // a note's original; nil for a commercial invoice
+}
+
+// BillingReference names the original document of a credit or debit note.
+type BillingReference struct {
+	IRN       *string
+	IssueDate *time.Time
 }
 
 type Party struct {

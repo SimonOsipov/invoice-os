@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 // Status is one of the seven canonical invoice lifecycle states, matching the
@@ -154,7 +156,13 @@ type Invoice struct {
 	BuyerState         *string    `json:"buyer_state"`
 	BuyerLGA           *string    `json:"buyer_lga"`
 
+	DocumentType      submission.DocumentType `json:"document_type"`
+	OriginalInvoiceID *string                 `json:"original_invoice_id"`
+
 	LineItems []LineItem `json:"line_items,omitempty"`
+
+	// Original is the note's original, filled by getTx only; nil when absent or out of scope.
+	Original *submission.BillingReference `json:"-"`
 
 	// RuleSetVersion is the human-facing integer resolved from
 	// RuleSetVersionID (rule_set_versions.version) -- populated by
@@ -312,6 +320,8 @@ type CreateInput struct {
 	BuyerCountry       *string
 	BuyerState         *string
 	BuyerLGA           *string
+	DocumentType       submission.DocumentType
+	OriginalInvoiceID  *string
 	LineItems          []LineItemInput
 	ImportBatchID      *string
 	// SourceDocumentID points at the documents row an import read this invoice
@@ -489,6 +499,9 @@ type ListFilter struct {
 var (
 	ErrValidation          = errors.New("invoice: validation")
 	ErrNotFound            = errors.New("invoice: not found")
+	ErrOriginalNotFound    = errors.New("invoice: original not found")
+	ErrOriginalIsANote     = errors.New("invoice: original is a note")
+	ErrOriginalOtherEntity = errors.New("invoice: original in another entity")
 	ErrDuplicateNumber     = errors.New("invoice: duplicate number")
 	ErrRedundantTransition = errors.New("invoice: redundant transition")
 	ErrIllegalTransition   = errors.New("invoice: illegal transition")

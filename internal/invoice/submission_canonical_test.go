@@ -1,12 +1,14 @@
 package invoice
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/submission"
+	"github.com/SimonOsipov/invoice-os/internal/ubl"
 )
 
 // strOrNil renders a *string for a t.Errorf message -- "nil" or the pointee
@@ -296,7 +298,46 @@ func TestSubmissionCanonical_NoCanonicalFieldIsLeftZero(t *testing.T) {
 	li.LineNo = 1
 	li.LineTotal, li.LineTax, li.TaxPercent = strPtr("10.00"), strPtr("0.75"), strPtr("7.50")
 
+	inv.DocumentType = submission.CreditNote
+	inv.Original = &submission.BillingReference{IRN: strPtr("IRN-ORIG-1"), IssueDate: inv.IssueDate}
 	assertNoZeroField(t, reflect.ValueOf(SubmissionCanonical(inv)), "Canonical")
+}
+
+func TestSubmissionCanonical_MapsTheDocumentType(t *testing.T) {
+	for _, dt := range []submission.DocumentType{submission.CommercialInvoice, submission.CreditNote, submission.DebitNote} {
+		if got := SubmissionCanonical(Invoice{DocumentType: dt}).DocumentType; got != dt {
+			t.Errorf("Canonical.DocumentType = %q, want %q", got, dt)
+		}
+	}
+}
+
+// The stored type reaches both wires through SubmissionCanonical, not through a hand-built Canonical.
+func TestSubmissionCanonical_StoredTypeReachesBothWires(t *testing.T) {
+	for _, tc := range []struct {
+		dt   submission.DocumentType
+		code string
+	}{
+		{submission.CommercialInvoice, "381"}, {submission.CreditNote, "380"}, {submission.DebitNote, "384"}, {"", "381"},
+	} {
+		inv := completeUBLInvoice(t, "INV-TYPE")
+		inv.DocumentType = tc.dt
+		c := SubmissionCanonical(inv)
+
+		wire, err := submission.NewMockAdapter(submission.MockConfig{}).Transform(context.Background(), c)
+		if err != nil {
+			t.Fatalf("%q: Transform: %v", tc.dt, err)
+		}
+		if want := `"InvoiceTypeCode":"` + tc.code + `"`; !strings.Contains(string(wire), want) {
+			t.Errorf("%q: mock wire lacks %s", tc.dt, want)
+		}
+		doc, err := ubl.Render(c)
+		if err != nil {
+			t.Fatalf("%q: Render: %v", tc.dt, err)
+		}
+		if want := "<cbc:InvoiceTypeCode>" + tc.code + "</cbc:InvoiceTypeCode>"; !strings.Contains(string(doc), want) {
+			t.Errorf("%q: UBL lacks %s", tc.dt, want)
+		}
+	}
 }
 
 func TestSubmissionCanonical_TaxSubtotalsFromLines(t *testing.T) {
@@ -429,5 +470,16 @@ func TestSubmissionCanonical_NoLines(t *testing.T) {
 
 	if len(got.Lines) != 0 {
 		t.Errorf("len(Lines) = %d, want 0", len(got.Lines))
+	}
+}
+
+func TestSubmissionCanonical_CarriesTheOriginalReference(t *testing.T) {
+	issued := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	ref := &submission.BillingReference{IRN: strPtr("IRN-ORIG-1"), IssueDate: &issued}
+	if got := SubmissionCanonical(Invoice{Original: ref}).BillingReference; got != ref {
+		t.Errorf("BillingReference = %+v, want %+v", got, ref)
+	}
+	if got := SubmissionCanonical(Invoice{}).BillingReference; got != nil {
+		t.Errorf("BillingReference = %+v, want nil", got)
 	}
 }

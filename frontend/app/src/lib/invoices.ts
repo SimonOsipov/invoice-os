@@ -163,6 +163,9 @@ export interface RejectionReason {
   path?: string
 }
 
+// Mirrors submission.CommercialInvoice, CreditNote, DebitNote.
+export type InvoiceDocumentType = 'commercial_invoice' | 'credit_note' | 'debit_note'
+
 // The invoice record shape shared by listInvoices/getInvoice (invoice.go:83-114 plus the
 // getResponse/validateResponse sibling key, handlers.go:180-183/376-379).
 // `rule_set_version` is typed as always-present (number | null) even though the raw List
@@ -231,6 +234,8 @@ export interface InvoiceRecord {
   buyer_country?: string | null
   buyer_state?: string | null
   buyer_lga?: string | null
+  document_type?: InvoiceDocumentType
+  original_invoice_id?: string | null
   line_items?: InvoiceLineItem[]
   rule_set_version: number | null
   // approval (APPR-08-08) -- a LIST-wire key ONLY: Go emits it on listItem, never on

@@ -561,7 +561,7 @@ func TestMockWire_ZeroCanonicalDoesNotPanic(t *testing.T) {
 	wire := string(w)
 	mwWantContains(t, wire, `"CustomizationID":"`+mockCustomizationID+`"`, "AC-6: the BIS constants are unconditional")
 	mwWantContains(t, wire, `"ProfileID":"`+mockProfileID+`"`, "AC-6: the BIS constants are unconditional")
-	mwWantContains(t, wire, `"InvoiceTypeCode":"`+mockInvoiceTypeCode+`"`, "AC-6: the BIS constants are unconditional")
+	mwWantContains(t, wire, `"InvoiceTypeCode":"381"`, "AC-6: a zero DocumentType declares 381")
 	mwWantContains(t, wire, `"ID":""`, "AC-6: ID is a value string -- an empty InvoiceNumber renders as \"\", it does not vanish")
 	mwWantContains(t, wire, `"InvoiceLine":[]`, "AC-6: a zero Canonical still gets an empty line array")
 	mwWantContains(t, wire, `"AccountingSupplierParty"`, "AC-1: both party keys are BIS-mandatory and unconditional")
@@ -670,9 +670,18 @@ func TestMockWire_CarriesTheBISConstants(t *testing.T) {
 				"AC-1: CustomizationID is unconditional")
 			mwWantContains(t, wire, `"ProfileID":"`+mockProfileID+`"`,
 				"AC-1: ProfileID is unconditional")
-			mwWantContains(t, wire, `"InvoiceTypeCode":"`+mockInvoiceTypeCode+`"`,
-				"AC-1: InvoiceTypeCode 380 (commercial invoice) is unconditional")
 		})
+		for _, dt := range []struct {
+			docType DocumentType
+			code    string
+		}{{CommercialInvoice, "381"}, {CreditNote, "380"}, {DebitNote, "384"}, {"bogus_type", "381"}} { // values of InvoiceTypeCode
+			t.Run(tc.name+"/"+string(dt.docType), func(t *testing.T) {
+				c := tc.build()
+				c.DocumentType = dt.docType
+				mwWantContains(t, mwWire(t, c), `"InvoiceTypeCode":"`+dt.code+`"`,
+					"InvoiceTypeCode follows DocumentType")
+			})
+		}
 	}
 }
 
@@ -932,7 +941,7 @@ func TestMockWire_NRSFieldsLeaveTheWireUnchanged(t *testing.T) {
 	base := mwFullCanonical()
 	withNRS := mwDeepCopyCanonical(base)
 	d := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	withNRS.InvoiceKind, withNRS.TaxCurrencyCode = mwStrPtr("381"), mwStrPtr("USD")
+	withNRS.InvoiceKind, withNRS.TaxCurrencyCode = mwStrPtr("B2B"), mwStrPtr("USD")
 	withNRS.DueDate, withNRS.TaxPointDate = &d, &d
 	withNRS.IssueTime, withNRS.PaymentStatus = mwStrPtr("14:30:00"), mwStrPtr("PAID")
 	withNRS.TaxSubtotals = []TaxSubtotal{{Category: "STANDARD_VAT", Percent: mwStrPtr("7.50"), TaxableAmount: mwStrPtr("1000.00"), TaxAmount: mwStrPtr("75.00")}}
@@ -982,7 +991,7 @@ func mwBareLineCanonical() Canonical {
 
 func TestMockWire_NoNRSValueReachesTheWire(t *testing.T) {
 	legacyCanonical := map[string]bool{"InvoiceID": true, "InvoiceNumber": true, "IssueDate": true, "Supplier": true, "Buyer": true,
-		"Currency": true, "Subtotal": true, "VAT": true, "Total": true, "Lines": true}
+		"DocumentType": true, "BillingReference": true, "Currency": true, "Subtotal": true, "VAT": true, "Total": true, "Lines": true}
 	legacyParty := map[string]bool{"TIN": true, "Name": true}
 	legacyLine := map[string]bool{"LineID": true, "LineNo": true, "Description": true, "Quantity": true,
 		"UnitPrice": true, "LineTotal": true, "LineTax": true}
@@ -1005,5 +1014,55 @@ func TestMockWire_NoNRSValueReachesTheWire(t *testing.T) {
 			mwWantAbsent(t, got, "NRSX-", "an NRS value reached the wire")
 			mwWantContains(t, got, base.InvoiceNumber, "the legacy wire content is still there")
 		})
+	}
+}
+
+func mwNoteCanonical(ref *BillingReference) Canonical {
+	c := mwFullCanonical()
+	c.DocumentType, c.BillingReference = CreditNote, ref
+	return c
+}
+
+func TestMockWire_NoteCarriesBillingReference(t *testing.T) {
+	d := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	wire := mwWire(t, mwNoteCanonical(&BillingReference{IRN: mwStrPtr("IRN-ORIG-1"), IssueDate: &d}))
+	want := `"BillingReference":[{"IRN":"IRN-ORIG-1","IssueDate":"2026-09-10"}]`
+	i := strings.Index(wire, want)
+	if i < 0 {
+		t.Fatalf("wire lacks %s: %s", want, wire)
+	}
+	if j := strings.Index(wire, `"AccountingSupplierParty"`); i > j {
+		t.Errorf("BillingReference at %d is after AccountingSupplierParty at %d", i, j)
+	}
+}
+
+func TestMockWire_BillingReferenceOmittedWithoutAnIRN(t *testing.T) {
+	d := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	for name, ref := range map[string]*BillingReference{
+		"nil IRN":   {IssueDate: &d},
+		"blank IRN": {IRN: mwStrPtr("  "), IssueDate: &d},
+		"empty":     {},
+	} {
+		if wire := mwWire(t, mwNoteCanonical(ref)); strings.Contains(wire, "BillingReference") {
+			t.Errorf("%s: wire carries BillingReference: %s", name, wire)
+		}
+	}
+}
+
+func TestMockWire_BillingReferenceOmitsANilIssueDate(t *testing.T) {
+	wire := mwWire(t, mwNoteCanonical(&BillingReference{IRN: mwStrPtr("IRN-ORIG-1")}))
+	if want := `"BillingReference":[{"IRN":"IRN-ORIG-1"}]`; !strings.Contains(wire, want) {
+		t.Errorf("wire lacks %s: %s", want, wire)
+	}
+	if strings.Contains(wire, `"IssueDate":""`) {
+		t.Errorf("wire carries an empty IssueDate: %s", wire)
+	}
+}
+
+func TestMockWire_CommercialInvoiceWritesNoBillingReference(t *testing.T) {
+	for _, tc := range mwCorpus() {
+		if wire := mwWire(t, tc.build()); strings.Contains(wire, "BillingReference") {
+			t.Errorf("%s: wire carries BillingReference: %s", tc.name, wire)
+		}
 	}
 }

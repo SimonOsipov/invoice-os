@@ -321,8 +321,9 @@ func TestInvoiceWire_NRSKeysSitBetweenFailureKindAndLineItems(t *testing.T) {
 	if at < 0 || !reflect.DeepEqual(keys[at+1:at+1+len(nrsHeaderKeys)], nrsHeaderKeys) {
 		t.Fatalf("keys after failure_kind = %v, want %v", keys, nrsHeaderKeys)
 	}
-	if keys[at+1+len(nrsHeaderKeys)] != "line_items" {
-		t.Errorf("key after the NRS keys = %q, want line_items", keys[at+1+len(nrsHeaderKeys)])
+	after := keys[at+1+len(nrsHeaderKeys):]
+	if len(after) < 3 || after[0] != "document_type" || after[1] != "original_invoice_id" || after[2] != "line_items" {
+		t.Errorf("keys after the NRS keys = %v, want document_type, original_invoice_id, line_items", after)
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(b, &raw); err != nil {

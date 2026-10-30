@@ -19,6 +19,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/customrule"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 // Store persists invoices/line_items/invoice_status_history rows as the
@@ -54,7 +55,7 @@ const invoiceColumns = `id, entity_id, import_batch_id, invoice_number, status, 
 	`violations, rule_set_version_id, created_at, ` +
 	`irn, csid, qr_payload, rejection_reasons, ` +
 	`kept_as_is_at, kept_as_is_by, kept_as_is_reason, failure_kind, ` +
-	`invoice_kind, tax_currency_code, due_date, issue_time::text, tax_point_date, payment_status, supplier_email, supplier_telephone, supplier_street, supplier_city, supplier_postal_zone, supplier_country, supplier_state, supplier_lga, buyer_email, buyer_telephone, buyer_street, buyer_city, buyer_postal_zone, buyer_country, buyer_state, buyer_lga`
+	`invoice_kind, tax_currency_code, due_date, issue_time::text, tax_point_date, payment_status, supplier_email, supplier_telephone, supplier_street, supplier_city, supplier_postal_zone, supplier_country, supplier_state, supplier_lga, buyer_email, buyer_telephone, buyer_street, buyer_city, buyer_postal_zone, buyer_country, buyer_state, buyer_lga, document_type, original_invoice_id`
 
 func scanInvoice(row scanner, inv *Invoice) error {
 	return row.Scan(
@@ -86,6 +87,8 @@ func scanInvoice(row scanner, inv *Invoice) error {
 		&inv.BuyerCountry,
 		&inv.BuyerState,
 		&inv.BuyerLGA,
+		&inv.DocumentType,
+		&inv.OriginalInvoiceID,
 	)
 }
 
@@ -207,6 +210,22 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 		return Invoice{}, fmt.Errorf("%w: a supplied number needs its source document", ErrValidation)
 	}
 
+	if in.DocumentType == "" {
+		in.DocumentType = submission.CommercialInvoice
+	}
+	switch in.DocumentType {
+	case submission.CommercialInvoice:
+		if in.OriginalInvoiceID != nil {
+			return Invoice{}, fmt.Errorf("%w: a commercial invoice has no original", ErrValidation)
+		}
+	case submission.CreditNote, submission.DebitNote:
+		if in.OriginalInvoiceID == nil {
+			return Invoice{}, fmt.Errorf("%w: a note needs its original", ErrValidation)
+		}
+	default:
+		return Invoice{}, fmt.Errorf("%w: unknown document_type", ErrValidation)
+	}
+
 	var inv Invoice
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		// The identity is guaranteed present here: WithinRequestTenantTx already
@@ -258,20 +277,44 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 		in.SupplierName = &entityName
 		DefaultSupplierContact(&in, contact)
 
+		if in.OriginalInvoiceID != nil {
+			var sameEntity bool
+			var origType submission.DocumentType
+			if err := tx.QueryRow(ctx,
+				`SELECT entity_id = $2::uuid, document_type FROM invoices WHERE id = $1`,
+				*in.OriginalInvoiceID, in.EntityID,
+			).Scan(&sameEntity, &origType); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrOriginalNotFound
+				}
+				if pgCode(err) == "22P02" {
+					return ErrValidation
+				}
+				return err
+			}
+			if origType != submission.CommercialInvoice {
+				return ErrOriginalIsANote
+			}
+			// uuid compare in SQL: a string compare rejects an upper-case entity_id
+			if !sameEntity {
+				return ErrOriginalOtherEntity
+			}
+		}
+
 		if err := scanInvoice(tx.QueryRow(ctx,
 			`INSERT INTO invoices
 			   (tenant_id, entity_id, invoice_number,
 			    issue_date, supplier_tin, supplier_name, buyer_tin, buyer_name,
 			    currency, subtotal, vat, total, import_batch_id, source_document_id, source_rows,
-			    invoice_kind, tax_currency_code, due_date, issue_time, tax_point_date, payment_status, supplier_email, supplier_telephone, supplier_street, supplier_city, supplier_postal_zone, supplier_country, supplier_state, supplier_lga, buyer_email, buyer_telephone, buyer_street, buyer_city, buyer_postal_zone, buyer_country, buyer_state, buyer_lga)
+			    invoice_kind, tax_currency_code, due_date, issue_time, tax_point_date, payment_status, supplier_email, supplier_telephone, supplier_street, supplier_city, supplier_postal_zone, supplier_country, supplier_state, supplier_lga, buyer_email, buyer_telephone, buyer_street, buyer_city, buyer_postal_zone, buyer_country, buyer_state, buyer_lga, document_type, original_invoice_id)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
 			         $10::text::numeric, $11::text::numeric, $12::text::numeric, $13, $14, $15,
-			         $16, $17, $18, $19::text::time, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)
+			         $16, $17, $18, $19::text::time, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39)
 			 RETURNING `+invoiceColumns,
 			id.TenantID, in.EntityID, in.InvoiceNumber,
 			in.IssueDate, in.SupplierTIN, in.SupplierName, in.BuyerTIN, in.BuyerName,
 			in.Currency, in.Subtotal, in.VAT, in.Total, in.ImportBatchID, in.SourceDocumentID, in.SourceRows,
-			in.InvoiceKind, in.TaxCurrencyCode, in.DueDate, in.IssueTime, in.TaxPointDate, in.PaymentStatus, in.SupplierEmail, in.SupplierTelephone, in.SupplierStreet, in.SupplierCity, in.SupplierPostalZone, in.SupplierCountry, in.SupplierState, in.SupplierLGA, in.BuyerEmail, in.BuyerTelephone, in.BuyerStreet, in.BuyerCity, in.BuyerPostalZone, in.BuyerCountry, in.BuyerState, in.BuyerLGA,
+			in.InvoiceKind, in.TaxCurrencyCode, in.DueDate, in.IssueTime, in.TaxPointDate, in.PaymentStatus, in.SupplierEmail, in.SupplierTelephone, in.SupplierStreet, in.SupplierCity, in.SupplierPostalZone, in.SupplierCountry, in.SupplierState, in.SupplierLGA, in.BuyerEmail, in.BuyerTelephone, in.BuyerStreet, in.BuyerCity, in.BuyerPostalZone, in.BuyerCountry, in.BuyerState, in.BuyerLGA, in.DocumentType, in.OriginalInvoiceID,
 		), &inv); err != nil {
 			switch pgCode(err) {
 			case "23505":
@@ -400,6 +443,18 @@ func getTx(ctx context.Context, tx pgx.Tx, id string) (Invoice, error) {
 			}
 		} else {
 			inv.RuleSetVersion = &v
+		}
+	}
+
+	if inv.OriginalInvoiceID != nil {
+		var ref submission.BillingReference
+		err := tx.QueryRow(ctx,
+			`SELECT irn, issue_date FROM invoices WHERE id = $1`, *inv.OriginalInvoiceID,
+		).Scan(&ref.IRN, &ref.IssueDate)
+		if err == nil {
+			inv.Original = &ref
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return Invoice{}, err
 		}
 	}
 

@@ -31,12 +31,12 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 const (
 	mockCustomizationID = "urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0"
 	mockProfileID       = "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0"
-	mockInvoiceTypeCode = "380" // commercial invoice
 	mockTaxSchemeID     = "TIN"
 	// mockIssueDateLayout is named, not inlined, because M5-03-02 parses the date part of the
 	// IRN back out of it. Mirrors internal/invoice/payload.go:31 mbsDateLayout.
@@ -47,19 +47,25 @@ const (
 // errors.Is rather than matching on message text (the registry.go:47-51 pattern).
 var ErrMockUnparseableWire = errors.New("submission: mock wire is not a parseable envelope")
 
+type mockBillingReference struct {
+	IRN       string `json:"IRN,omitempty"`
+	IssueDate string `json:"IssueDate,omitempty"` // YYYY-MM-DD
+}
+
 type mockEnvelope struct {
-	CustomizationID         string            `json:"CustomizationID"`
-	ProfileID               string            `json:"ProfileID"`
-	ID                      string            `json:"ID"`                  // Canonical.InvoiceNumber
-	UUID                    string            `json:"UUID,omitempty"`      // Canonical.InvoiceID
-	IssueDate               string            `json:"IssueDate,omitempty"` // YYYY-MM-DD
-	InvoiceTypeCode         string            `json:"InvoiceTypeCode"`
-	DocumentCurrencyCode    string            `json:"DocumentCurrencyCode,omitempty"`
-	AccountingSupplierParty mockParty         `json:"AccountingSupplierParty"`
-	AccountingCustomerParty mockParty         `json:"AccountingCustomerParty"`
-	TaxTotal                *mockTaxTotal     `json:"TaxTotal,omitempty"` // Canonical.VAT
-	LegalMonetaryTotal      mockMonetaryTotal `json:"LegalMonetaryTotal"`
-	InvoiceLine             []mockLine        `json:"InvoiceLine"` // NEVER omitempty -- [zero-line-invoice]
+	CustomizationID         string                 `json:"CustomizationID"`
+	ProfileID               string                 `json:"ProfileID"`
+	ID                      string                 `json:"ID"`                  // Canonical.InvoiceNumber
+	UUID                    string                 `json:"UUID,omitempty"`      // Canonical.InvoiceID
+	IssueDate               string                 `json:"IssueDate,omitempty"` // YYYY-MM-DD
+	InvoiceTypeCode         string                 `json:"InvoiceTypeCode"`
+	DocumentCurrencyCode    string                 `json:"DocumentCurrencyCode,omitempty"`
+	BillingReference        []mockBillingReference `json:"BillingReference,omitempty"`
+	AccountingSupplierParty mockParty              `json:"AccountingSupplierParty"`
+	AccountingCustomerParty mockParty              `json:"AccountingCustomerParty"`
+	TaxTotal                *mockTaxTotal          `json:"TaxTotal,omitempty"` // Canonical.VAT
+	LegalMonetaryTotal      mockMonetaryTotal      `json:"LegalMonetaryTotal"`
+	InvoiceLine             []mockLine             `json:"InvoiceLine"` // NEVER omitempty -- [zero-line-invoice]
 }
 
 type mockParty struct {
@@ -134,7 +140,7 @@ func buildMockEnvelope(c Canonical) mockEnvelope {
 		ProfileID:               mockProfileID,
 		ID:                      c.InvoiceNumber,
 		UUID:                    c.InvoiceID,
-		InvoiceTypeCode:         mockInvoiceTypeCode,
+		InvoiceTypeCode:         InvoiceTypeCode(c.DocumentType),
 		AccountingSupplierParty: mockPartyFrom(c.Supplier),
 		AccountingCustomerParty: mockPartyFrom(c.Buyer),
 	}
@@ -144,6 +150,13 @@ func buildMockEnvelope(c Canonical) mockEnvelope {
 		// a `date` to UTC so it is a no-op in production, but .UTC() on a hand-built FixedZone
 		// time would silently shift the date by a day.
 		env.IssueDate = c.IssueDate.Format(mockIssueDateLayout)
+	}
+	if ref := c.BillingReference; ref != nil && ref.IRN != nil && strings.TrimSpace(*ref.IRN) != "" {
+		br := mockBillingReference{IRN: *ref.IRN}
+		if ref.IssueDate != nil {
+			br.IssueDate = ref.IssueDate.Format(mockIssueDateLayout)
+		}
+		env.BillingReference = []mockBillingReference{br}
 	}
 	if c.Currency != nil {
 		env.DocumentCurrencyCode = *c.Currency

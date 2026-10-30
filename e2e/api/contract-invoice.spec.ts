@@ -1920,7 +1920,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
   test.describe('nrs fields', () => {
     // Values are in stored form (dates RFC3339 midnight, numerics at column scale) so GET equals the input.
     const NRS_HEADER = {
-      invoice_kind: '380',
+      invoice_kind: 'B2B',
       tax_currency_code: 'NGN',
       due_date: '2026-02-01T00:00:00Z',
       issue_time: '09:30:15',
@@ -1966,6 +1966,13 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(got, 'GET returns every header and party field as sent').toMatchObject(NRS_HEADER)
       expect(got.line_items, 'one line').toHaveLength(1)
       expect(got.line_items![0], 'GET returns every line field as sent').toMatchObject(NRS_LINE)
+    })
+
+    test('document type: a created invoice reads back as a commercial invoice with no original', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-DT-${freshTin()}`) })
+      const got = await getInvoice(token, created.id)
+      expect(got.document_type, 'submission.CommercialInvoice').toBe('commercial_invoice')
+      expect(got.original_invoice_id, 'no original').toBeNull()
     })
 
     test('nrs fields: a patch of header, party and line fields is read back', async () => {

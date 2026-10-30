@@ -75,7 +75,8 @@ import {
   type StatusChange,
 } from '../lib/invoices'
 import { bulkPhaseReducer, ROW_EXPANSION_COPY, type BulkPhase } from '../lib/reviewBatch'
-import { getInvoiceNotes, isNote, type NoteType, type NotesOnInvoice } from '../lib/notes'
+import { getInvoiceNotes, isNote, noteTypeBadge, type NoteType, type NotesOnInvoice } from '../lib/notes'
+import { NotesCard } from './NotesCard'
 import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import { ExplainPanel } from './ExplainPanel'
@@ -384,6 +385,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     content = <EmptyState title="Invoice not found" message="This invoice could not be loaded." />
   } else {
     const st = invoiceStatusStyle(inv.status)
+    const typeBadge = noteTypeBadge(inv.document_type)
     const items = inv.line_items ?? []
     const subtotal = inv.subtotal != null ? Number(inv.subtotal) : null
     const vat = inv.vat != null ? Number(inv.vat) : null
@@ -651,8 +653,28 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 <span style={{ width: 6, height: 6, borderRadius: '50%', background: st.text }} />
                 <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text, letterSpacing: '0.04em' }}>{st.label}</span>
               </span>
+              {typeBadge && (
+                <span data-testid="document-type-badge" title={typeBadge.title} className="mono" style={{ display: 'inline-flex', alignItems: 'center', background: 'var(--status-muted-bg)', border: '1px solid var(--status-muted-border)', borderRadius: 'var(--radius-sm)', padding: '3px 9px', fontSize: 10, fontWeight: 600, color: 'var(--status-muted-text)', letterSpacing: '0.04em' }}>
+                  {typeBadge.label}
+                </span>
+              )}
             </div>
-            <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{inv.buyer_name ?? '—'} · {fmtDate(inv.issue_date ?? inv.created_at)}</p>
+            <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
+              {inv.buyer_name ?? '—'} · {fmtDate(inv.issue_date ?? inv.created_at)}
+              {isNote(inv) && inv.original_invoice_id && (
+                <>
+                  {' · '}
+                  <button
+                    type="button"
+                    data-testid="original-invoice-link"
+                    onClick={() => ctx.openImportedInvoice(inv.original_invoice_id!)}
+                    style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--fg-1)', textDecoration: 'underline', font: 'inherit' }}
+                  >
+                    Original invoice
+                  </button>
+                </>
+              )}
+            </p>
           </div>
 
           {/* Always present ([actions-visibility]); each control disables off its own wire flag
@@ -1288,6 +1310,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 </div>
               </div>
             )}
+
+            {notesWanted && <NotesCard run={notes} onOpen={ctx.openImportedInvoice} />}
 
             <ApprovalStateCard run={approval} />
 

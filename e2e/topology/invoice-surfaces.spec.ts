@@ -3769,6 +3769,90 @@ test("detail surface: the note form's columns fit and align", async ({ page }) =
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// Issues a credit note with a 40-character number through the form; the page lands on the note.
+async function issueLongNumberedNote(page: Page): Promise<string> {
+  await openAcceptedThreeLineInvoice(page)
+  const number = `CN-LONG-${Date.now()}-`.padEnd(40, 'X')
+  await page.getByTestId('issue-credit-note').click()
+  await page.getByTestId('note-line-check').first().check()
+  await page.getByTestId('note-number').fill(number)
+  await page.getByTestId('note-form-submit').click()
+  await expect(page.getByTestId('document-type-badge')).toBeVisible()
+  return number
+}
+
+test('detail surface: a long note number stays inside the notes card', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+  const number = await issueLongNumberedNote(page)
+  await page.getByTestId('original-invoice-link').click()
+  const card = page.getByTestId('notes-card')
+  await expect(card).toBeVisible()
+  const row = card.getByTestId('note-row').filter({ hasText: number })
+  await expect(row).toBeVisible()
+
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await expect.poll(() => page.evaluate(() => window.innerWidth), { timeout: 5_000 }).toBe(width)
+
+      const cardBox = await card.boundingBox()
+      const rowBox = await row.boundingBox()
+      const recordBox = await page.getByTestId('fiscal-record-card').boundingBox()
+      const numberBox = await row.getByTestId('note-row-open').boundingBox()
+      const pillBox = await row.getByTestId('note-row-status').boundingBox()
+      const totalBox = await row.getByTestId('note-row-total').boundingBox()
+      expect(cardBox && rowBox && recordBox && numberBox && pillBox && totalBox, `notes card parts must render at ${width}px`).toBeTruthy()
+
+      expect(enclosesRect(cardBox!, rowBox!, 1), `the note row must sit inside notes-card at ${width}px`).toBe(true)
+      expect(rectsOverlap(numberBox!, pillBox!), `the number overlaps the status pill at ${width}px`).toBe(false)
+      expect(rectsOverlap(numberBox!, totalBox!), `the number overlaps the total at ${width}px`).toBe(false)
+      expect(rectsOverlap(pillBox!, totalBox!), `the status pill overlaps the total at ${width}px`).toBe(false)
+      expect(Math.abs(cardBox!.x - recordBox!.x), `notes-card and fiscal-record-card share a left edge at ${width}px`).toBeLessThanOrEqual(1)
+      expect(
+        Math.abs(cardBox!.x + cardBox!.width - (recordBox!.x + recordBox!.width)),
+        `notes-card and fiscal-record-card share a right edge at ${width}px`,
+      ).toBeLessThanOrEqual(1)
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('detail surface: the type badge sits beside the status badge', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+  await issueLongNumberedNote(page)
+  await expect(page.getByTestId('invoice-status-badge')).toBeVisible()
+
+  const column = actionCluster(page)
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await expect.poll(() => page.evaluate(() => window.innerWidth), { timeout: 5_000 }).toBe(width)
+
+      const typeBox = await page.getByTestId('document-type-badge').boundingBox()
+      const statusBox = await page.getByTestId('invoice-status-badge').boundingBox()
+      const columnBox = await column.boundingBox()
+      expect(typeBox && statusBox && columnBox, `badges and action column must render at ${width}px`).toBeTruthy()
+
+      expect(rectsOverlap(typeBox!, statusBox!), `the type badge overlaps the status badge at ${width}px`).toBe(false)
+      expect(rectsOverlap(typeBox!, columnBox!), `the type badge overlaps the action column at ${width}px`).toBe(false)
+      expect(rectsOverlap(statusBox!, columnBox!), `the status badge overlaps the action column at ${width}px`).toBe(false)
+      expect(
+        Math.abs(typeBox!.y + typeBox!.height / 2 - (statusBox!.y + statusBox!.height / 2)),
+        `the badges share a vertical centre at ${width}px`,
+      ).toBeLessThanOrEqual(1)
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 // The four claims the state strip makes that jsdom cannot see. StatusStrip.test.tsx
 // reads inline style PROPS -- it can prove the component ASKED for flex:none/max-content/nowrap,
 // never that a browser delivered them. These four are the only oracle for the delivered layout.
@@ -5183,7 +5267,7 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
 // `accepted`, because Fiscal record is the rail's first member and shouldShowFiscalRecord
 // mounts it only on `accepted` with a real IRN. BUG-13-02 moved Compliance out of the rail
 // and gave it `compliance-card`, so it is watched-and-absent here rather than a member.
-const RAIL_ORDER = ['fiscal-record-card', 'approval-card', 'source-document-card', 'ubl-document-card']
+const RAIL_ORDER = ['fiscal-record-card', 'notes-card', 'approval-card', 'source-document-card', 'ubl-document-card']
 // Wider than RAIL_ORDER on purpose: `status-history` is the card AUDIT-09-02 retired, and
 // failed-dead-end / rejection-reasons are the two rail members an accepted invoice
 // suppresses. Any of them mounting lands in the read below and breaks the equality, so
@@ -5235,7 +5319,7 @@ test('detail surface: the untouched rail order is unchanged', async ({ page }) =
   )
   expect(
     order,
-    "the rail's cards in document order: Fiscal record -> Approvals -> Source document -> UBL document, with Compliance no longer among them",
+    "the rail's cards in document order: Fiscal record -> Notes -> Approvals -> Source document -> UBL document, with Compliance no longer among them",
   ).toEqual(RAIL_ORDER)
 
   // The page-wide half of the absence: the retired card must not have come back outside the

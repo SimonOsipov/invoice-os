@@ -4496,7 +4496,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
   const EXTR_27_TESTIDS = ['edit-invoice-number']
   const ENGI_17_TESTIDS = ['violation-explain']
   const ENGI_06_TESTIDS = ['buyer-type-note', 'line-nrs']
-  const CRDDBTNOTE_02_TESTIDS = ['issue-credit-note', 'issue-debit-note']
+  const CRDDBTNOTE_02_TESTIDS = ['issue-credit-note', 'issue-debit-note', 'notes-card', 'notes-empty', 'still-creditable', 'note-row', 'note-row-open', 'note-row-type', 'note-row-status', 'note-row-total', 'document-type-badge', 'original-invoice-link']
 
   // The rail's UBL document card.
   const BUG_18_TESTIDS = [
@@ -4778,7 +4778,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
   // A LIST, never presence checks: presence checks are satisfied by any permutation of the
   // cards, and reordering the rail's JSX is precisely what
   // AUDIT-09-02 and AUDIT-09-06 both did.
-  const RAIL_ORDER = ['fiscal-record-card', 'approval-card', 'source-document-card', 'ubl-document-card']
+  const RAIL_ORDER = ['fiscal-record-card', 'notes-card', 'approval-card', 'source-document-card', 'ubl-document-card']
   // Wider than RAIL_ORDER: `status-history` is the retired card, and failed-dead-end /
   // rejection-reasons are the two rail members an accepted invoice suppresses. Any of them
   // mounting lands in the read and breaks the equality, so absence and order are one
@@ -4814,7 +4814,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
       .filter((id) => RAIL_WATCHED.includes(id))
     expect(
       order,
-      "the rail's cards in document order: Fiscal record -> Approvals -> Source document -> UBL document, with Compliance no longer among them",
+      "the rail's cards in document order: Fiscal record -> Notes -> Approvals -> Source document -> UBL document, with Compliance no longer among them",
     ).toEqual(RAIL_ORDER)
   })
 
@@ -7391,5 +7391,90 @@ describe('InvoiceDetail: credit and debit note actions (CRDDBTNOTE-02-05)', () =
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     fireEvent.click(await screen.findByTestId('issue-debit-note'))
     await waitFor(() => expect((screen.getByTestId('note-number') as HTMLInputElement).value).toBe('DN-INV-FAILED-1-3'))
+  })
+
+  it('the card mounts only on an accepted original', async () => {
+    const cases: [string, Partial<InvoiceDetailRecord>, boolean][] = [
+      ['draft', { status: 'draft' }, false],
+      ['validated', { status: 'validated' }, false],
+      ['failed', { status: 'failed' }, false],
+      ['accepted without IRN', { status: 'accepted', irn: null }, false],
+      ['accepted note', { status: 'accepted', irn: 'IRN-2026-0001', document_type: 'credit_note', can_issue_note: false }, false],
+      ['accepted commercial', { status: 'accepted', irn: 'IRN-2026-0001', can_issue_note: true }, true],
+    ]
+    for (const [name, over, want] of cases) {
+      const { fetchMock } = mockDetailFetch(detailRecord({ id: ID, ...over }))
+      render(<InvoiceDetail ctx={detailCtx(ID)} />)
+      await screen.findByTestId('invoice-status-badge')
+      await new Promise((r) => setTimeout(r, 20))
+      const reads = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/notes'))
+      expect(reads, name).toHaveLength(want ? 1 : 0)
+      expect(screen.queryByTestId('notes-card') != null, name).toBe(want)
+      if (want) {
+        const record = screen.getByTestId('fiscal-record-card')
+        expect(record.nextElementSibling, 'directly after the fiscal record card').toBe(screen.getByTestId('notes-card'))
+      }
+      cleanup()
+    }
+  })
+
+  it('a failed read stays inside the card', async () => {
+    const reply = { ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) } as MockResponse
+    mockDetailFetch(detailRecord({ id: ID, status: 'accepted', irn: 'IRN-2026-0001', can_issue_note: true }), [], { notesResponse: reply })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const card = await screen.findByTestId('notes-card')
+    const retry = await within(card).findByRole('button', { name: 'Retry' })
+    expect(screen.getByTestId('fiscal-record-card')).toBeTruthy()
+    expect(screen.getByTestId('invoice-actions')).toBeTruthy()
+
+    Object.assign(reply, {
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          notes: [{ id: 'n1', document_type: 'credit_note', invoice_number: 'CN-1', status: 'draft', total: '5.00' }],
+          credited_so_far: '5.00',
+          still_creditable: '15.00',
+        }),
+    })
+    fireEvent.click(retry)
+    expect((await within(card).findByTestId('note-row-total')).textContent).toBe('-₦5')
+  })
+
+  it('a note shows its type badge', async () => {
+    const cases: [string, Partial<InvoiceDetailRecord>, { label: string; title: string } | null][] = [
+      ['credit', { document_type: 'credit_note' }, { label: 'CREDIT', title: 'Credit note' }],
+      ['debit', { document_type: 'debit_note' }, { label: 'DEBIT', title: 'Debit note' }],
+      ['commercial', { document_type: 'commercial_invoice' }, null],
+      ['undefined type', { document_type: undefined }, null],
+    ]
+    for (const [name, over, want] of cases) {
+      mockDetailFetch(detailRecord({ id: ID, ...over }))
+      render(<InvoiceDetail ctx={detailCtx(ID)} />)
+      await screen.findByTestId('invoice-status-badge')
+      const badge = screen.queryByTestId('document-type-badge')
+      if (want === null) expect(badge, name).toBeNull()
+      else {
+        expect(badge!.textContent, name).toBe(want.label)
+        expect(badge!.getAttribute('title'), name).toBe(want.title)
+        expect(badge!.previousElementSibling, name).toBe(screen.getByTestId('invoice-status-badge'))
+      }
+      cleanup()
+    }
+  })
+
+  it('a note links to its original', async () => {
+    mockDetailFetch(detailRecord({ id: ID, document_type: 'credit_note', original_invoice_id: 'orig-1' }))
+    const open = vi.fn()
+    render(<InvoiceDetail ctx={Object.assign(detailCtx(ID), { openImportedInvoice: open })} />)
+    fireEvent.click(await screen.findByTestId('original-invoice-link'))
+    expect(open).toHaveBeenCalledWith('orig-1')
+    cleanup()
+
+    mockDetailFetch(detailRecord({ id: ID, document_type: 'commercial_invoice' }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-status-badge')
+    expect(screen.queryByTestId('original-invoice-link')).toBeNull()
   })
 })

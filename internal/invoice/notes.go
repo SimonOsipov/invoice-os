@@ -117,3 +117,22 @@ func (s *Store) IssueNote(ctx context.Context, originalID string, in NoteInput) 
 		LineItems: items,
 	})
 }
+
+type NoteSummary struct {
+	ID            string                  `json:"id"`
+	DocumentType  submission.DocumentType `json:"document_type"`
+	InvoiceNumber string                  `json:"invoice_number"`
+	Status        Status                  `json:"status"`
+	Total         *string                 `json:"total"`
+}
+
+type NotesOnInvoice struct {
+	Notes           []NoteSummary `json:"notes"`
+	CreditedSoFar   string        `json:"credited_so_far"`
+	StillCreditable *string       `json:"still_creditable"`
+}
+
+// Notes is a compile stub; the executor replaces it.
+func (s *Store) Notes(ctx context.Context, originalID string) (NotesOnInvoice, error) {
+	return NotesOnInvoice{}, ErrValidation
+}

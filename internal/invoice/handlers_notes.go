@@ -81,3 +81,10 @@ func IssueNoteHandler(issue func(ctx context.Context, id string, in NoteInput) (
 		writeJSON(w, http.StatusCreated, inv)
 	}
 }
+
+// NotesHandler returns GET /v1/invoices/{id}/notes. Compile stub; the executor replaces it.
+func NotesHandler(notes func(ctx context.Context, id string) (NotesOnInvoice, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusInternalServerError, "not implemented")
+	}
+}

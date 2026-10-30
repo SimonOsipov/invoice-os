@@ -614,3 +614,242 @@ func TestNoteRefusal_EmptyDocumentTypeIsCommercial(t *testing.T) {
 		}
 	}
 }
+
+// ntOriginal seeds an original with a stored total; nil stores NULL.
+func ntOriginal(t *testing.T, super *pgxpool.Pool, tenant, entity, number string, total *string) string {
+	t.Helper()
+	id := seedInvoice(t, super, tenant, entity, number)
+	if _, err := super.Exec(context.Background(), `UPDATE invoices SET total = $1::numeric WHERE id = $2`, total, id); err != nil {
+		t.Fatalf("seed total of %s: %v", number, err)
+	}
+	return id
+}
+
+// ntNoteAt seeds a note created at a fixed offset from a base time, so ordering is not insertion order.
+func ntNoteAt(t *testing.T, super *pgxpool.Pool, tenant, entity, number, docType, original, status, total string, minutes int) string {
+	t.Helper()
+	id := csNote(t, super, tenant, entity, number, docType, original, status, csAmount(total))
+	at := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC).Add(time.Duration(minutes) * time.Minute)
+	if _, err := super.Exec(context.Background(), `UPDATE invoices SET created_at = $1 WHERE id = $2`, at, id); err != nil {
+		t.Fatalf("seed created_at of %s: %v", number, err)
+	}
+	return id
+}
+
+func ntWantStr(t *testing.T, what string, got *string, want string) {
+	t.Helper()
+	if got == nil || *got != want {
+		t.Errorf("%s = %s, want %q", what, inStr(got), want)
+	}
+}
+
+func TestNotes_ListsOldestFirstWithStoredTotals(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	tenant := seedTenant(t, super, "NT order")
+	ent := seedEntity(t, super, tenant, "NT client")
+	orig := ntOriginal(t, super, tenant, ent, "NT-O1", csAmount("1000.00"))
+	// Inserted newest first, and numbered so neither insertion order nor the number sorts oldest first.
+	mid := ntNoteAt(t, super, tenant, ent, "NT-M", "debit_note", orig, "validated", "70.25", 20)
+	newest := ntNoteAt(t, super, tenant, ent, "NT-A", "credit_note", orig, "draft", "5.00", 30)
+	oldest := ntNoteAt(t, super, tenant, ent, "NT-Z", "credit_note", orig, "accepted", "107.50", 10)
+
+	got, err := store.Notes(dtCtx(tenant), orig)
+	if err != nil {
+		t.Fatalf("Notes: %v", err)
+	}
+	want := []NoteSummary{
+		{oldest, submission.CreditNote, "NT-Z", StatusAccepted, csAmount("107.50")},
+		{mid, submission.DebitNote, "NT-M", StatusValidated, csAmount("70.25")},
+		{newest, submission.CreditNote, "NT-A", StatusDraft, csAmount("5.00")},
+	}
+	if len(got.Notes) != len(want) {
+		t.Fatalf("notes = %+v, want %d rows", got.Notes, len(want))
+	}
+	for i, w := range want {
+		g := got.Notes[i]
+		if g.ID != w.ID || g.DocumentType != w.DocumentType || g.InvoiceNumber != w.InvoiceNumber || g.Status != w.Status {
+			t.Errorf("row %d = %+v, want %+v", i, g, w)
+		}
+		ntWantStr(t, fmt.Sprintf("row %d total", i), g.Total, *w.Total)
+	}
+}
+
+func TestNotes_ScopedToThisOriginal(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	tenant := seedTenant(t, super, "NT scope")
+	ent := seedEntity(t, super, tenant, "NT client")
+	o1 := ntOriginal(t, super, tenant, ent, "NT-O1", csAmount("900.00"))
+	o2 := ntOriginal(t, super, tenant, ent, "NT-O2", csAmount("900.00"))
+	a := ntNoteAt(t, super, tenant, ent, "NT-1", "credit_note", o1, "accepted", "100.00", 1)
+	b := ntNoteAt(t, super, tenant, ent, "NT-2", "credit_note", o1, "submitted", "20.00", 2)
+	c := ntNoteAt(t, super, tenant, ent, "NT-3", "credit_note", o1, "validated", "3.00", 3)
+	other := ntNoteAt(t, super, tenant, ent, "NT-4", "credit_note", o2, "accepted", "4000.00", 4)
+
+	ctx := dtCtx(tenant)
+	got, err := store.Notes(ctx, o1)
+	if err != nil {
+		t.Fatalf("Notes(o1): %v", err)
+	}
+	if len(got.Notes) != 3 || got.Notes[0].ID != a || got.Notes[1].ID != b || got.Notes[2].ID != c {
+		t.Errorf("o1 notes = %+v, want %s %s %s", got.Notes, a, b, c)
+	}
+	if got.CreditedSoFar != "123.00" {
+		t.Errorf("o1 credited_so_far = %q, want 123.00 (the other original's 4000.00 must not count)", got.CreditedSoFar)
+	}
+	ntWantStr(t, "o1 still_creditable", got.StillCreditable, "777.00")
+
+	got2, err := store.Notes(ctx, o2)
+	if err != nil {
+		t.Fatalf("Notes(o2): %v", err)
+	}
+	if len(got2.Notes) != 1 || got2.Notes[0].ID != other || got2.CreditedSoFar != "4000.00" {
+		t.Errorf("o2 = %+v, want only %s and 4000.00", got2, other)
+	}
+}
+
+func TestNotes_CreditedCountsPerD9(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	tenant := seedTenant(t, super, "NT d9")
+	ent := seedEntity(t, super, tenant, "NT client")
+	orig := ntOriginal(t, super, tenant, ent, "NT-O1", csAmount("1000.00"))
+	// Power-of-two amounts: any one status counted wrongly gives a different sum.
+	amounts := []struct {
+		st  Status
+		amt string
+	}{
+		{StatusDraft, "1.00"}, {StatusValidated, "2.00"}, {StatusQueued, "4.00"}, {StatusSubmitted, "8.00"},
+		{StatusAccepted, "16.00"}, {StatusRejected, "32.00"}, {StatusFailed, "64.00"},
+	}
+	for i, a := range amounts {
+		ntNoteAt(t, super, tenant, ent, "NT-C-"+string(a.st), "credit_note", orig, string(a.st), a.amt, i)
+	}
+	ntNoteAt(t, super, tenant, ent, "NT-D", "debit_note", orig, "validated", "128.00", 9)
+
+	got, err := store.Notes(dtCtx(tenant), orig)
+	if err != nil {
+		t.Fatalf("Notes: %v", err)
+	}
+	if len(got.Notes) != 8 {
+		t.Errorf("listed %d notes, want all 8 at every status and type", len(got.Notes))
+	}
+	if got.CreditedSoFar != "30.00" {
+		t.Errorf("credited_so_far = %q, want 30.00 (validated, queued, submitted, accepted credit notes only)", got.CreditedSoFar)
+	}
+	ntWantStr(t, "still_creditable", got.StillCreditable, "970.00")
+}
+
+func TestNotes_StillCreditableIsTotalMinusCredited(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	tenant := seedTenant(t, super, "NT still")
+	ent := seedEntity(t, super, tenant, "NT client")
+	orig := ntOriginal(t, super, tenant, ent, "NT-O1", csAmount("500.00"))
+	ntNoteAt(t, super, tenant, ent, "NT-1", "credit_note", orig, "accepted", "100.00", 1)
+	ntNoteAt(t, super, tenant, ent, "NT-2", "credit_note", orig, "draft", "50.00", 2)
+	ntNoteAt(t, super, tenant, ent, "NT-3", "debit_note", orig, "validated", "70.00", 3)
+
+	got, err := store.Notes(dtCtx(tenant), orig)
+	if err != nil {
+		t.Fatalf("Notes: %v", err)
+	}
+	if got.CreditedSoFar != "100.00" {
+		t.Errorf("credited_so_far = %q, want 100.00", got.CreditedSoFar)
+	}
+	ntWantStr(t, "still_creditable", got.StillCreditable, "400.00")
+}
+
+func TestNotes_StillCreditableMayGoNegativeAndNullTotalIsNull(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	tenant := seedTenant(t, super, "NT negative")
+	ent := seedEntity(t, super, tenant, "NT client")
+	ctx := dtCtx(tenant)
+
+	over := ntOriginal(t, super, tenant, ent, "NT-OVER", csAmount("500.00"))
+	ntNoteAt(t, super, tenant, ent, "NT-OVER-1", "credit_note", over, "accepted", "600.00", 1)
+	got, err := store.Notes(ctx, over)
+	if err != nil {
+		t.Fatalf("Notes(over-credited): %v", err)
+	}
+	ntWantStr(t, "over-credited still_creditable", got.StillCreditable, "-100.00")
+
+	nullTotal := ntOriginal(t, super, tenant, ent, "NT-NULL", nil)
+	ntNoteAt(t, super, tenant, ent, "NT-NULL-1", "credit_note", nullTotal, "accepted", "40.00", 2)
+	got, err = store.Notes(ctx, nullTotal)
+	if err != nil {
+		t.Fatalf("Notes(NULL total): %v", err)
+	}
+	if got.StillCreditable != nil {
+		t.Errorf("NULL total: still_creditable = %q, want nil", *got.StillCreditable)
+	}
+	if got.CreditedSoFar != "40.00" {
+		t.Errorf("NULL total: credited_so_far = %q, want 40.00 (still counted)", got.CreditedSoFar)
+	}
+}
+
+func TestNotes_NoNotesStoresAnEmptyListAndZeroCredited(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	tenant := seedTenant(t, super, "NT none")
+	ent := seedEntity(t, super, tenant, "NT client")
+	orig := ntOriginal(t, super, tenant, ent, "NT-O1", csAmount("500.00"))
+
+	got, err := store.Notes(dtCtx(tenant), orig)
+	if err != nil {
+		t.Fatalf("Notes: %v", err)
+	}
+	if len(got.Notes) != 0 || got.CreditedSoFar != "0.00" {
+		t.Errorf("notes = %+v, credited = %q, want none and 0.00", got.Notes, got.CreditedSoFar)
+	}
+	ntWantStr(t, "still_creditable", got.StillCreditable, "500.00")
+}
+
+func TestNotes_OtherTenantAndOutsideClientsAreNotFound(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	tenant := seedTenant(t, super, "NT outside")
+	entA := seedEntity(t, super, tenant, "NT client A")
+	entB := seedEntity(t, super, tenant, "NT client B")
+	origA := ntOriginal(t, super, tenant, entA, "NT-A", csAmount("100.00"))
+	origB := ntOriginal(t, super, tenant, entB, "NT-B", csAmount("100.00"))
+	ntNoteAt(t, super, tenant, entB, "NT-B-1", "credit_note", origB, "accepted", "10.00", 1)
+	limited := csMember(t, super, tenant, "reviewer", entA)
+
+	otherTenant := seedTenant(t, super, "NT outside other tenant")
+	otherEnt := seedEntity(t, super, otherTenant, "NT other client")
+	otherOrig := ntOriginal(t, super, otherTenant, otherEnt, "NT-T2", csAmount("100.00"))
+
+	// Controls: each caller reads what is theirs.
+	if got, err := store.Notes(dtCtx(tenant), origB); err != nil || len(got.Notes) != 1 {
+		t.Fatalf("control: all-clients caller on client B's original: %+v, %v", got, err)
+	}
+	if _, err := store.Notes(limited, origA); err != nil {
+		t.Fatalf("control: client-limited member on client A's original: %v", err)
+	}
+	if _, err := store.Notes(dtCtx(otherTenant), otherOrig); err != nil {
+		t.Fatalf("control: the other tenant on its own original: %v", err)
+	}
+
+	for _, c := range []struct {
+		name string
+		ctx  context.Context
+		id   string
+		want error
+	}{
+		{"client-limited member names client B's original", limited, origB, ErrNotFound},
+		{"tenant 1 names tenant 2's original", dtCtx(tenant), otherOrig, ErrNotFound},
+		{"unknown id", dtCtx(tenant), uuid.NewString(), ErrNotFound},
+		{"malformed id", dtCtx(tenant), "not-a-uuid", ErrValidation},
+	} {
+		got, err := store.Notes(c.ctx, c.id)
+		if !errors.Is(err, c.want) {
+			t.Errorf("%s: err = %v, want %v", c.name, err, c.want)
+		}
+		if len(got.Notes) != 0 {
+			t.Errorf("%s: leaked notes %+v", c.name, got.Notes)
+		}
+	}
+}

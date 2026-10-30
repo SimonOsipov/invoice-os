@@ -250,6 +250,7 @@ func TestClientScope_InvoiceRoutesAnswerOneNotFoundForOutsideUnknownAndForeign(t
 		{"DELETE /v1/invoices/{id}/resolved-outside", "DELETE", "", UnresolveOutsideHandler(f.store.UnresolveOutside, nil)},
 		{"POST /v1/invoices/{id}/validate", "POST", "", ValidateHandler(gate.Validate, nil)},
 		{"POST /v1/invoices/{id}/notes", "POST", `{"document_type":"credit_note","invoice_number":"CS-N-1","issue_date":"2026-10-30T00:00:00Z","lines":[{"line_id":"` + uuid.NewString() + `","quantity":"1","unit_price":"1.00"}]}`, IssueNoteHandler(f.store.IssueNote, nil)},
+		{"GET /v1/invoices/{id}/notes", "GET", "", NotesHandler(f.store.Notes, nil)},
 	}
 	for _, rt := range routes {
 		outside := csServe(rt.h, f.limited, rt.method, "/", f.invB, rt.body)
@@ -267,6 +268,9 @@ func TestClientScope_InvoiceRoutesAnswerOneNotFoundForOutsideUnknownAndForeign(t
 	}
 	if w := csServe(routes[0].h, f.limited, "GET", "/", f.invA, ""); w.Code != http.StatusOK {
 		t.Errorf("GET own invoice control: %d %s, want 200", w.Code, w.Body.String())
+	}
+	if w := csServe(NotesHandler(f.store.Notes, nil), f.limited, "GET", "/", f.invA, ""); w.Code != http.StatusOK {
+		t.Errorf("GET own invoice's notes control: %d %s, want 200", w.Code, w.Body.String())
 	}
 
 	ident, _ := auth.IdentityFromContext(f.limited)

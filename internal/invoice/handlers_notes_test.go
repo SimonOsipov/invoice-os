@@ -150,3 +150,111 @@ func TestIssueNoteGate_Table(t *testing.T) {
 		}
 	}
 }
+
+func doNotes(notes func(context.Context, string) (NotesOnInvoice, error), withID bool, id string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest("GET", "/v1/invoices/"+id+"/notes", nil)
+	r.SetPathValue("id", id)
+	if withID {
+		r = r.WithContext(auth.WithIdentity(r.Context(), auth.Identity{Subject: "u", Role: "authenticated", TenantID: uuid.NewString()}))
+	}
+	rec := httptest.NewRecorder()
+	NotesHandler(notes, nil).ServeHTTP(rec, r)
+	return rec
+}
+
+func TestNotes_NoNotesIsAnEmptyArray(t *testing.T) {
+	pathID := uuid.NewString()
+	total := "500.00"
+	var gotID string
+	// A nil slice from the store must still reach the wire as [].
+	notes := func(_ context.Context, id string) (NotesOnInvoice, error) {
+		gotID = id
+		return NotesOnInvoice{CreditedSoFar: "0.00", StillCreditable: &total}, nil
+	}
+	rec := doNotes(notes, true, pathID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if gotID != pathID {
+		t.Errorf("store id = %q, want %q", gotID, pathID)
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+	if len(body) != 3 || string(body["notes"]) != "[]" || string(body["credited_so_far"]) != `"0.00"` || string(body["still_creditable"]) != `"500.00"` {
+		t.Errorf("body = %s, want keys notes [], credited_so_far \"0.00\", still_creditable \"500.00\"", rec.Body.String())
+	}
+}
+
+func TestNotes_ListWireKeysAndNullStillCreditable(t *testing.T) {
+	notes := func(context.Context, string) (NotesOnInvoice, error) {
+		t100 := "100.00"
+		return NotesOnInvoice{
+			Notes:         []NoteSummary{{ID: "n1", DocumentType: submission.DebitNote, InvoiceNumber: "DN-1", Status: StatusDraft, Total: &t100}, {ID: "n2", DocumentType: submission.CreditNote, InvoiceNumber: "CN-1", Status: StatusAccepted}},
+			CreditedSoFar: "7.00",
+		}, nil
+	}
+	rec := doNotes(notes, true, uuid.NewString())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Notes           []map[string]json.RawMessage `json:"notes"`
+		StillCreditable json.RawMessage              `json:"still_creditable"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if string(body.StillCreditable) != "null" {
+		t.Errorf("still_creditable = %s, want literal null, present", body.StillCreditable)
+	}
+	if len(body.Notes) != 2 {
+		t.Fatalf("notes = %d rows, want 2", len(body.Notes))
+	}
+	first := body.Notes[0]
+	if len(first) != 5 || string(first["id"]) != `"n1"` || string(first["document_type"]) != `"debit_note"` || string(first["invoice_number"]) != `"DN-1"` || string(first["status"]) != `"draft"` || string(first["total"]) != `"100.00"` {
+		t.Errorf("first note = %v, want id, document_type, invoice_number, status, total", first)
+	}
+	if string(body.Notes[1]["total"]) != "null" {
+		t.Errorf("a NULL stored total = %s, want literal null", body.Notes[1]["total"])
+	}
+}
+
+func TestNotesHandler_MapsErrors(t *testing.T) {
+	ok := func(context.Context, string) (NotesOnInvoice, error) {
+		return NotesOnInvoice{CreditedSoFar: "0.00"}, nil
+	}
+	if rec := doNotes(ok, true, uuid.NewString()); rec.Code != http.StatusOK {
+		t.Fatalf("control: success answered %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	for _, tc := range []struct {
+		err    error
+		status int
+		msg    string
+	}{
+		{ErrNotFound, 404, "not found"},
+		{fmt.Errorf("%w: bad id", ErrValidation), 400, "invoice: validation: bad id"},
+		{db.ErrWorkspaceLocked, 403, db.WorkspaceLockedMessage},
+	} {
+		rec := doNotes(func(context.Context, string) (NotesOnInvoice, error) { return NotesOnInvoice{}, tc.err }, true, uuid.NewString())
+		var body map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%v: decode %q: %v", tc.err, rec.Body.String(), err)
+		}
+		if rec.Code != tc.status || body["error"] != tc.msg || len(body) != 1 {
+			t.Errorf("%v: status = %d body = %v, want %d {error: %q}", tc.err, rec.Code, body, tc.status, tc.msg)
+		}
+	}
+
+	called := false
+	spy := func(context.Context, string) (NotesOnInvoice, error) { called = true; return NotesOnInvoice{}, nil }
+	if rec := doNotes(spy, false, uuid.NewString()); rec.Code != http.StatusUnauthorized || called {
+		t.Errorf("no identity: status = %d, called = %v, want 401 and not called", rec.Code, called)
+	}
+
+	boom := func(context.Context, string) (NotesOnInvoice, error) { return NotesOnInvoice{}, errors.New("boom") }
+	if rec := doNotes(boom, true, uuid.NewString()); rec.Code != 500 || strings.Contains(rec.Body.String(), "boom") {
+		t.Errorf("unmapped: %d %s, want 500 without the cause", rec.Code, rec.Body.String())
+	}
+}

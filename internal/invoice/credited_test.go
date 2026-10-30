@@ -137,3 +137,110 @@ func TestCreditedSoFar_ExcludesTheNamedNote(t *testing.T) {
 	csWant(t, csCredited(t, app, tenant, o1, ""), "120.00")
 	csWant(t, csCredited(t, app, tenant, o1, m), "120.00")
 }
+
+func TestCreditedSoFar_CountsEachStatusByName(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "CS each status")
+	ent := seedEntity(t, super, tenant, "E1")
+	o1 := seedInvoice(t, super, tenant, ent, "CS-O1")
+	// power-of-two amounts: any one status flipped gives a different sum
+	amounts := map[Status]string{
+		StatusDraft: "1.00", StatusValidated: "2.00", StatusQueued: "4.00", StatusSubmitted: "8.00",
+		StatusAccepted: "16.00", StatusRejected: "32.00", StatusFailed: "64.00",
+	}
+	if len(amounts) != 7 {
+		t.Fatalf("status table has %d entries, want 7", len(amounts))
+	}
+	for st, amt := range amounts {
+		csNote(t, super, tenant, ent, "CS-"+string(st), "credit_note", o1, string(st), csAmount(amt))
+	}
+
+	csWant(t, csCredited(t, app, tenant, o1, ""), "30.00")
+}
+
+func TestCreditedSoFar_NullTotalDoesNotHideCountedNotes(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "CS null mix")
+	ent := seedEntity(t, super, tenant, "E1")
+	o1 := seedInvoice(t, super, tenant, ent, "CS-O1")
+	csNote(t, super, tenant, ent, "CS-A", "credit_note", o1, "accepted", csAmount("10.00"))
+	csNote(t, super, tenant, ent, "CS-N", "credit_note", o1, "submitted", nil)
+
+	csWant(t, csCredited(t, app, tenant, o1, ""), "10.00")
+}
+
+func TestCreditedSoFar_SumsDecimalsExactlyAtScaleTwo(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "CS decimals")
+	ent := seedEntity(t, super, tenant, "E1")
+	small := seedInvoice(t, super, tenant, ent, "CS-SMALL")
+	whole := seedInvoice(t, super, tenant, ent, "CS-WHOLE")
+	big := seedInvoice(t, super, tenant, ent, "CS-BIG")
+	csNote(t, super, tenant, ent, "CS-S1", "credit_note", small, "accepted", csAmount("0.10"))
+	csNote(t, super, tenant, ent, "CS-S2", "credit_note", small, "accepted", csAmount("0.20"))
+	csNote(t, super, tenant, ent, "CS-W1", "credit_note", whole, "accepted", csAmount("5"))
+	csNote(t, super, tenant, ent, "CS-B1", "credit_note", big, "accepted", csAmount("99999999999.99"))
+	csNote(t, super, tenant, ent, "CS-B2", "credit_note", big, "queued", csAmount("99999999999.99"))
+
+	csWant(t, csCredited(t, app, tenant, small, ""), "0.30")
+	csWant(t, csCredited(t, app, tenant, whole, ""), "5.00")
+	csWant(t, csCredited(t, app, tenant, big, ""), "199999999999.98")
+}
+
+func TestCreditedSoFar_ExcludesOnlyTheNamedNoteNotItsAmount(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "CS exclude one")
+	ent := seedEntity(t, super, tenant, "E1")
+	o1 := seedInvoice(t, super, tenant, ent, "CS-O1")
+	a := csNote(t, super, tenant, ent, "CS-A", "credit_note", o1, "accepted", csAmount("20.00"))
+	csNote(t, super, tenant, ent, "CS-B", "credit_note", o1, "accepted", csAmount("20.00"))
+	draft := csNote(t, super, tenant, ent, "CS-D", "credit_note", o1, "draft", csAmount("3.00"))
+	debit := csNote(t, super, tenant, ent, "CS-DB", "debit_note", o1, "accepted", csAmount("9.00"))
+
+	csWant(t, csCredited(t, app, tenant, o1, a), "20.00")
+	csWant(t, csCredited(t, app, tenant, o1, draft), "40.00")
+	csWant(t, csCredited(t, app, tenant, o1, debit), "40.00")
+	csWant(t, csCredited(t, app, tenant, o1, ""), "40.00")
+}
+
+func TestCreditedSoFar_MalformedIDsReturnAnError(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "CS malformed")
+	ent := seedEntity(t, super, tenant, "E1")
+	o1 := seedInvoice(t, super, tenant, ent, "CS-O1")
+	csNote(t, super, tenant, ent, "CS-A", "credit_note", o1, "accepted", csAmount("10.00"))
+
+	ctx := context.Background()
+	for _, tc := range []struct{ name, original, exclude string }{
+		{"exclude", o1, "not-a-uuid"},
+		{"original", "not-a-uuid", ""},
+	} {
+		got := "unset"
+		err := db.WithinTenantTx(ctx, app, tenant, func(tx pgx.Tx) error {
+			var e error
+			got, e = CreditedSoFarTx(ctx, tx, tc.original, tc.exclude)
+			return e
+		})
+		if err == nil {
+			t.Errorf("%s: malformed id returned %q with no error", tc.name, got)
+		}
+	}
+	csWant(t, csCredited(t, app, tenant, o1, ""), "10.00")
+}
+
+func TestCreditedSoFar_EachTenantSeesOnlyItsOwnNotes(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantA := seedTenant(t, super, "CS own A")
+	entA := seedEntity(t, super, tenantA, "A1")
+	tenantB := seedTenant(t, super, "CS own B")
+	entB := seedEntity(t, super, tenantB, "B1")
+	oA := seedInvoice(t, super, tenantA, entA, "CS-OA")
+	oB := seedInvoice(t, super, tenantB, entB, "CS-OB")
+	csNote(t, super, tenantA, entA, "CS-NA", "credit_note", oA, "accepted", csAmount("100.00"))
+	csNote(t, super, tenantB, entB, "CS-NB", "credit_note", oB, "accepted", csAmount("7.00"))
+
+	csWant(t, csCredited(t, app, tenantA, oA, ""), "100.00")
+	csWant(t, csCredited(t, app, tenantB, oB, ""), "7.00")
+	csWant(t, csCredited(t, app, tenantA, oB, ""), "0.00")
+	csWant(t, csCredited(t, app, tenantB, oA, ""), "0.00")
+}

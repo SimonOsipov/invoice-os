@@ -43,3 +43,18 @@ func TestRender_BillingReferenceOmittedWithoutAnIRN(t *testing.T) {
 func TestRender_CommercialInvoiceWritesNoBillingReference(t *testing.T) {
 	wantAbsent(t, mustRender(t, completeCanonical(t)), "cac:BillingReference", "commercial invoice")
 }
+
+func TestRender_BillingReferenceOmitsANilIssueDateAndSitsAfterTaxCurrencyCode(t *testing.T) {
+	c := noteCanonical(t, &submission.BillingReference{IRN: ublStr("IRN-ORIG-1")})
+	c.TaxCurrencyCode = ublStr("USD")
+	nodes := walkDocument(t, mustRender(t, c))
+	wantTextAt(t, nodes, "Invoice/cac:BillingReference/cac:InvoiceDocumentReference/cbc:ID", "IRN-ORIG-1", "original IRN")
+	if n := len(nodesAt(nodes, "Invoice/cac:BillingReference/cac:InvoiceDocumentReference/cbc:IssueDate")); n != 0 {
+		t.Errorf("reference IssueDate elements = %d, want 0", n)
+	}
+	wantChildOrder(t, nodes, "Invoice", []string{
+		"cbc:CustomizationID", "cbc:ProfileID", "cbc:ID", "cbc:IssueDate", "cbc:InvoiceTypeCode",
+		"cbc:DocumentCurrencyCode", "cbc:TaxCurrencyCode", "cac:BillingReference", "cac:AccountingSupplierParty", "cac:AccountingCustomerParty",
+		"cac:TaxTotal", "cac:LegalMonetaryTotal", "cac:InvoiceLine", "cac:InvoiceLine",
+	})
+}

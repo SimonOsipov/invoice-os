@@ -459,3 +459,103 @@ func TestStoreGet_NoteWhoseOriginalIsOutsideTheScopeReadsWithoutTheReference(t *
 		t.Errorf("admin: Original = %+v, want IRN-B-1", got.Original)
 	}
 }
+
+func TestStoreCanonical_EachNoteGetsItsOwnOriginalsReference(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "DT two originals")
+	ent := seedEntity(t, super, tenant, "E1")
+	ctx := context.Background()
+	o1 := seedInvoice(t, super, tenant, ent, "DT-O1")
+	o2 := seedInvoice(t, super, tenant, ent, "DT-O2")
+	o3 := seedInvoice(t, super, tenant, ent, "DT-O3")
+	for _, q := range []struct{ id, sql string }{
+		{o1, `UPDATE invoices SET irn = 'IRN-ONE', issue_date = '2026-01-01' WHERE id = $1`},
+		{o2, `UPDATE invoices SET irn = 'IRN-TWO', issue_date = '2026-02-02' WHERE id = $1`},
+		{o3, `UPDATE invoices SET irn = 'IRN-THREE' WHERE id = $1`},
+	} {
+		if _, err := super.Exec(ctx, q.sql, q.id); err != nil {
+			t.Fatalf("set original: %v", err)
+		}
+	}
+	note := func(n, orig string) string {
+		var id string
+		if err := super.QueryRow(ctx,
+			`INSERT INTO invoices (tenant_id, entity_id, invoice_number, document_type, original_invoice_id)
+			 VALUES ($1, $2, $3, 'debit_note', $4) RETURNING id`, tenant, ent, n, orig).Scan(&id); err != nil {
+			t.Fatalf("seed note: %v", err)
+		}
+		return id
+	}
+	store := NewStore(app)
+	want := map[string][2]string{note("DT-N1", o1): {"IRN-ONE", "2026-01-01"}, note("DT-N2", o2): {"IRN-TWO", "2026-02-02"}, note("DT-N3", o3): {"IRN-THREE", ""}}
+	if len(want) != 3 {
+		t.Fatalf("seeded %d notes, want 3", len(want))
+	}
+	for id, w := range want {
+		var c submission.Canonical
+		if err := db.WithinTenantTx(ctx, app, tenant, func(tx pgx.Tx) error {
+			var err error
+			c, err = store.Canonical(ctx, tx, id)
+			return err
+		}); err != nil {
+			t.Fatalf("Canonical: %v", err)
+		}
+		ref := c.BillingReference
+		if ref == nil || ref.IRN == nil || *ref.IRN != w[0] {
+			t.Errorf("note %s: reference = %+v, want IRN %s", id, ref, w[0])
+			continue
+		}
+		got := ""
+		if ref.IssueDate != nil {
+			got = ref.IssueDate.Format("2006-01-02")
+		}
+		if got != w[1] {
+			t.Errorf("note %s: IssueDate = %q, want %q", id, got, w[1])
+		}
+	}
+}
+
+func TestStoreCanonical_NoteOnAnOriginalWithoutAnIRNCarriesANilIRN(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "DT draft original")
+	ent := seedEntity(t, super, tenant, "E1")
+	original := seedInvoice(t, super, tenant, ent, "DT-DRAFT-O")
+	var noteID string
+	if err := super.QueryRow(context.Background(),
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, document_type, original_invoice_id)
+		 VALUES ($1, $2, 'DT-DRAFT-N', 'credit_note', $3) RETURNING id`, tenant, ent, original).Scan(&noteID); err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+	var c submission.Canonical
+	if err := db.WithinTenantTx(context.Background(), app, tenant, func(tx pgx.Tx) error {
+		var err error
+		c, err = NewStore(app).Canonical(context.Background(), tx, noteID)
+		return err
+	}); err != nil {
+		t.Fatalf("Canonical: %v", err)
+	}
+	if c.BillingReference == nil || c.BillingReference.IRN != nil {
+		t.Errorf("BillingReference = %+v, want non-nil with nil IRN", c.BillingReference)
+	}
+}
+
+func TestStoreCanonical_ANoteIsNotReadableFromAnotherTenant(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "DT note owner")
+	other := seedTenant(t, super, "DT note stranger")
+	ent := seedEntity(t, super, tenant, "E1")
+	original := seedInvoice(t, super, tenant, ent, "DT-X-O")
+	var noteID string
+	if err := super.QueryRow(context.Background(),
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, document_type, original_invoice_id)
+		 VALUES ($1, $2, 'DT-X-N', 'credit_note', $3) RETURNING id`, tenant, ent, original).Scan(&noteID); err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+	err := db.WithinTenantTx(context.Background(), app, other, func(tx pgx.Tx) error {
+		_, err := NewStore(app).Canonical(context.Background(), tx, noteID)
+		return err
+	})
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("Canonical of another tenant's note: err = %v, want ErrNotFound", err)
+	}
+}

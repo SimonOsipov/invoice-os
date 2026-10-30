@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -19,7 +22,14 @@ const (
 	maxBody      = 8 << 20
 	sectionSuite = "prod_check"
 	sectionFile  = ".github/workflows/nightly.yml"
+	secretsUnset = "secrets PROD_PROBE_EMAIL and PROD_PROBE_PASSWORD are not set"
 )
+
+// allowedPosts is every non-GET the run may send.
+var allowedPosts = map[string]bool{"/auth/sign-in": true, "/auth/exchange": true}
+
+// workspaceReads are the reads the app makes on load, one per service.
+var workspaceReads = []string{"/api/tenancy/v1/me", "/api/portfolio/v1/entities", "/api/invoice/v1/invoices", "/api/dashboard/v1/rollup"}
 
 var (
 	wantServices = []string{"gateway", "auth", "tenancy", "portfolio", "invoice", "validation", "dashboard", "submission", "notifications", "worker", "docling"}
@@ -81,11 +91,11 @@ type serviceHealth struct {
 	NotReady []string `json:"not_ready"`
 }
 
-// guard is the one choke point for what the run may send: GET only.
+// guard is the one choke point for what the run may send: GET, and POST to allowedPosts.
 type guard struct{ next http.RoundTripper }
 
 func (g guard) RoundTrip(r *http.Request) (*http.Response, error) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && !(r.Method == http.MethodPost && allowedPosts[r.URL.Path]) {
 		return nil, fmt.Errorf("prodcheck: %s %s is not an allowed call", r.Method, r.URL.Path)
 	}
 	return g.next.RoundTrip(r)
@@ -98,6 +108,7 @@ type checker struct {
 
 	head, expected, authBuild string
 	fleet                     []serviceHealth
+	access                    string
 	steps                     []stepResult
 }
 
@@ -132,6 +143,9 @@ func runWith(args []string, stdout, stderr io.Writer, cfg config) int {
 	c.step("services run main's head", c.buildsStep)
 	c.step("sites serve main's head", c.sitesStep)
 	c.step("landing carries the production GA4 id", c.gaStep)
+	c.step("probe signs in", c.signInStep)
+	c.step("probe has no registration metadata", c.registrationStep)
+	c.step("probe loads its workspace", c.workspaceStep)
 
 	sec := sectionOut{OK: true, Failures: []failureEntry{}, Steps: c.steps}
 	for _, s := range c.steps {
@@ -375,4 +389,119 @@ func (c *checker) gaStep() (string, string) {
 		}
 	}
 	return "failed", "landing bundle lacks " + gaID
+}
+
+// post sends one JSON POST with no retry; code is 0 when nothing answered.
+func (c *checker) post(path string, payload any) (int, []byte) {
+	raw, _ := json.Marshal(payload) // string maps cannot fail
+	req, err := http.NewRequest(http.MethodPost, c.t.api+path, bytes.NewReader(raw))
+	if err != nil {
+		return 0, nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return 0, nil
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if err != nil {
+		return 0, nil
+	}
+	return resp.StatusCode, body
+}
+
+func (c *checker) signInStep() (string, string) {
+	email, password := c.getenv("PROD_PROBE_EMAIL"), c.getenv("PROD_PROBE_PASSWORD")
+	if email == "" || password == "" {
+		return "failed", secretsUnset
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "failed", "state could not be minted"
+	}
+	state := base64.RawURLEncoding.EncodeToString(raw)
+
+	// ceiling: no sign-out, one GoTrue session a night; add sign-out to allowedPosts if the ~365 rows a year matter
+	code, body := c.post("/auth/sign-in", map[string]string{"email": email, "password": password, "state": state})
+	if code != http.StatusOK {
+		return "failed", "sign-in " + answered(code)
+	}
+	var in struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(body, &in) != nil || in.Code == "" {
+		return "failed", "sign-in answered 200 with no code"
+	}
+	code, body = c.post("/auth/exchange", map[string]string{"code": in.Code, "state": state})
+	if code != http.StatusOK {
+		return "failed", "exchange " + answered(code)
+	}
+	var tok struct {
+		Access  string `json:"access_token"`
+		Refresh string `json:"refresh_token"`
+	}
+	if json.Unmarshal(body, &tok) != nil || tok.Access == "" || tok.Refresh == "" {
+		return "failed", "exchange answered 200 without both tokens"
+	}
+	c.access = tok.Access
+	return "passed", ""
+}
+
+func (c *checker) registrationStep() (string, string) {
+	if c.access == "" {
+		return "skipped", "sign-in did not pass"
+	}
+	parts := strings.Split(c.access, ".")
+	if len(parts) != 3 {
+		return "failed", "token is not a JWT"
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "failed", "token is not a JWT"
+	}
+	var claims map[string]json.RawMessage
+	if json.Unmarshal(payload, &claims) != nil {
+		return "failed", "token is not a JWT"
+	}
+	raw, ok := claims["user_metadata"]
+	var meta map[string]json.RawMessage
+	if !ok || json.Unmarshal(raw, &meta) != nil {
+		return "failed", "token has no user_metadata claim"
+	}
+	if reg, set := meta["registration"]; set && string(bytes.TrimSpace(reg)) != "null" {
+		return "failed", "user_metadata.registration is set"
+	}
+	return "passed", ""
+}
+
+func (c *checker) workspaceStep() (string, string) {
+	if c.access == "" {
+		return "skipped", "sign-in did not pass"
+	}
+	bearer := map[string]string{"Authorization": "Bearer " + c.access}
+	var problems []string
+	worst := 1
+	for _, path := range workspaceReads {
+		code, body, try := c.get(c.t.api+path, bearer)
+		worst = max(worst, try)
+		if code != http.StatusOK {
+			problems = append(problems, path+" "+answered(code))
+			continue
+		}
+		if path == "/api/tenancy/v1/me" {
+			var me struct {
+				Tenant *struct {
+					ID string `json:"id"`
+				} `json:"tenant"`
+			}
+			if json.Unmarshal(body, &me) != nil || me.Tenant == nil || me.Tenant.ID == "" {
+				problems = append(problems, "/me has no tenant")
+			}
+		}
+	}
+	if len(problems) > 0 {
+		return "failed", strings.Join(problems, "; ")
+	}
+	return "passed", passedOn(worst)
 }

@@ -7476,5 +7476,18 @@ describe('InvoiceDetail: credit and debit note actions (CRDDBTNOTE-02-05)', () =
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('invoice-status-badge')
     expect(screen.queryByTestId('original-invoice-link')).toBeNull()
+    cleanup()
+
+    // A commercial invoice never links, even if the wire carries an original id; a note without one has nothing to open.
+    for (const over of [
+      { document_type: 'commercial_invoice' as const, original_invoice_id: 'orig-1' },
+      { document_type: 'credit_note' as const, original_invoice_id: null },
+    ]) {
+      mockDetailFetch(detailRecord({ id: ID, ...over }))
+      render(<InvoiceDetail ctx={detailCtx(ID)} />)
+      await screen.findByTestId('invoice-status-badge')
+      expect(screen.queryByTestId('original-invoice-link'), JSON.stringify(over)).toBeNull()
+      cleanup()
+    }
   })
 })

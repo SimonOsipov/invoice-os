@@ -3837,7 +3837,13 @@ test('detail surface: the type badge sits beside the status badge', async ({ pag
       const typeBox = await page.getByTestId('document-type-badge').boundingBox()
       const statusBox = await page.getByTestId('invoice-status-badge').boundingBox()
       const columnBox = await column.boundingBox()
-      expect(typeBox && statusBox && columnBox, `badges and action column must render at ${width}px`).toBeTruthy()
+      const h1Box = await page.getByRole('heading', { level: 1 }).boundingBox()
+      expect(typeBox && statusBox && columnBox && h1Box, `badges, title and action column must render at ${width}px`).toBeTruthy()
+
+      // The h1 is nowrap: a long number must not push a badge onto the title or off the page.
+      expect(rectsOverlap(h1Box!, typeBox!), `the title overlaps the type badge at ${width}px`).toBe(false)
+      expect(rectsOverlap(h1Box!, statusBox!), `the title overlaps the status badge at ${width}px`).toBe(false)
+      expect(typeBox!.x + typeBox!.width, `the type badge runs off the page at ${width}px`).toBeLessThanOrEqual(width)
 
       expect(rectsOverlap(typeBox!, statusBox!), `the type badge overlaps the status badge at ${width}px`).toBe(false)
       expect(rectsOverlap(typeBox!, columnBox!), `the type badge overlaps the action column at ${width}px`).toBe(false)

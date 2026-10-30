@@ -37,6 +37,21 @@ describe('NotesCard', () => {
     expect(onOpen).toHaveBeenCalledWith('b')
   })
 
+  it('a note with no total shows a dash and a debit note is unsigned', () => {
+    renderCard({ notes: [note('a', 'credit_note', 'draft', null), note('b', 'debit_note', 'accepted', '0.50')], credited_so_far: '0.00', still_creditable: '10.00' })
+    const totals = screen.getAllByTestId('note-row-total').map((e) => e.textContent)
+    expect(totals).toHaveLength(2)
+    expect(totals[0]).toBe('—')
+    expect(totals[1]).not.toMatch(/^-/)
+  })
+
+  it('shows loading, not the figure, until the read lands', () => {
+    render(<NotesCard run={{ status: 'loading', data: null, error: null, run: vi.fn() } as never} onOpen={vi.fn()} />)
+    expect(screen.getByTestId('notes-card')).toBeTruthy()
+    expect(screen.queryByTestId('still-creditable')).toBeNull()
+    expect(screen.queryByTestId('notes-empty')).toBeNull()
+  })
+
   it('still creditable reads the wire', () => {
     renderCard({ notes: [note('a', 'credit_note', 'accepted', '100.00')], credited_so_far: '100.00', still_creditable: '400.00' })
     expect(screen.getByTestId('still-creditable').textContent).toBe('₦400')

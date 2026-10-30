@@ -261,7 +261,7 @@ const TOPOLOGY_MANIFEST: ManifestEntry[] = [
   [INVOICE_SURFACES, 'test:DV-02 submitted invoice detail', 'transitionInvoice:queued', 1],
   // DV-03 submits from the register with MOCK_TIN_ACCEPT, so the mock APP adapter answers.
   [INVOICE_SURFACES, 'test:DV-03 accepted invoice detail and the XML modal', 'click:batch-submit-confirm', 1],
-  // CRDDBTNOTE-02-05: the note layout specs need an accepted invoice of 3 lines, reached from the register.
+  // The note layout specs need an accepted invoice of 3 lines, reached from the register.
   [INVOICE_SURFACES, 'helper:openAcceptedThreeLineInvoice', 'click:batch-submit-confirm', 1],
 ]
 

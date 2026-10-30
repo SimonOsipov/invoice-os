@@ -193,15 +193,48 @@ describe('NoteForm', () => {
     expect(posts[0].body.lines).toEqual([{ line_id: 'l1', quantity: '1', unit_price: '9.50' }])
   })
 
-  it('an over-cap line blocks Submit only while it is ticked', () => {
+  it('an over-cap line blocks Submit and shows its error only while it is ticked', () => {
     setup({ type: 'credit_note' })
     tick(1)
     tick(0)
     fireEvent.change(screen.getAllByTestId('note-line-qty')[0], { target: { value: '9' } })
     expect(submit().disabled).toBe(true)
+    expect(screen.getAllByTestId('note-line-error')).toHaveLength(1)
+    tick(0)
+    expect(screen.queryByTestId('note-line-error')).toBeNull()
+    expect(submit().disabled).toBe(false)
     tick(0)
     expect(screen.getAllByTestId('note-line-error')).toHaveLength(1)
-    expect(submit().disabled).toBe(false)
+  })
+
+  it('a ticked row with a blank value shows its error and no total', () => {
+    setup({ type: 'debit_note' })
+    tick(0)
+    expect(total()).toBe('21.50')
+    fireEvent.change(screen.getAllByTestId('note-line-qty')[0], { target: { value: '' } })
+    expect(screen.getAllByTestId('note-line-error')).toHaveLength(1)
+    expect(total()).toBe('—')
+    expect(screen.getByTestId('note-subtotal').textContent).toBe('—')
+    expect(screen.getAllByTestId('note-line-amount')[0].textContent).toBe('—')
+    expect(submit().disabled).toBe(true)
+  })
+
+  it('an exponent typed into a line does not throw and keeps Submit disabled', () => {
+    setup({ type: 'debit_note' })
+    tick(0)
+    for (const v of ['1e999999999', '1e99999999']) {
+      fireEvent.change(screen.getAllByTestId('note-line-qty')[0], { target: { value: v } })
+      expect(screen.getAllByTestId('note-line-error')).toHaveLength(1)
+      expect(submit().disabled).toBe(true)
+    }
+  })
+
+  it('a price with three decimals keeps Submit disabled', () => {
+    setup({ type: 'debit_note' })
+    tick(0)
+    fireEvent.change(screen.getAllByTestId('note-line-price')[0], { target: { value: '10.123' } })
+    expect(screen.getAllByTestId('note-line-error')).toHaveLength(1)
+    expect(submit().disabled).toBe(true)
   })
 
   it('a ticked line with quantity 0 or a negative price blocks Submit on either note type', () => {

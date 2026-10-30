@@ -918,7 +918,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           </button>
                         </>
                       )}
-                    {/* Shown only on a fiscal record (Decision 22); an accepted note is disabled with the wire's reason. */}
+                    {/* Shown only on a fiscal record; an accepted note is disabled with the wire's reason. */}
                     {shouldShowFiscalRecord(inv) &&
                       (['credit_note', 'debit_note'] as const).map((type) => (
                         <button

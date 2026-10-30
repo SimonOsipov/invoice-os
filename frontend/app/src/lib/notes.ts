@@ -7,6 +7,7 @@ import { draftLine } from './clients'
 import {
   addScaled,
   parseScaled,
+  renderScaled,
   type InvoiceDocumentType,
   type InvoiceLineItem,
   type InvoiceRecord,
@@ -43,6 +44,8 @@ export const NOTE_COPY = {
   // Same sentence as internal/invoice/handlers.go NumberTakenReason.
   numberTaken: 'This invoice number is already in the register for this company. Enter a different number.',
   quantityPositive: 'Enter a quantity above 0.',
+  quantityFormat: 'Enter a quantity as plain digits: above 0, at most 3 decimals, below 100,000,000,000.',
+  unitPriceFormat: 'Enter a unit price as plain digits: 0 or more, at most 2 decimals, below 1,000,000,000,000.',
   unitPriceInvalid: 'Enter a unit price of 0 or more.',
   quantityOverOriginal: 'A credit note cannot take more than the original quantity.',
   unitPriceOverOriginal: 'A credit note cannot take more than the original unit price.',
@@ -78,25 +81,54 @@ function compare(a: Scaled, b: Scaled): number {
   return diff > 0n ? 1 : diff < 0n ? -1 : 0
 }
 
+// Mirrors internal/invoice/note_amounts.go parsePlain, noteQuantity and noteUnitPrice (plain text, scale, bound).
+const PLAIN_DECIMAL = /^-?[0-9]+(\.[0-9]+)?$/
+const NOTE_LIMITS = {
+  quantity: { scale: 3, bound: { u: 10n ** 11n, s: 0 } as Scaled },
+  unit_price: { scale: 2, bound: { u: 10n ** 12n, s: 0 } as Scaled },
+}
+
 // Quantity above 0, unit price 0 or more; a credit note is also capped at the original's value, by exact decimal.
+// Text that is not a plain decimal is refused before parseScaled, which would expand an exponent without bound.
 export function noteLineError(
   type: NoteType,
   field: 'quantity' | 'unit_price',
   value: string,
   original: string | null,
 ): string | null {
-  const entered = parseScaled(value)
+  const format = field === 'quantity' ? NOTE_COPY.quantityFormat : NOTE_COPY.unitPriceFormat
+  if (!PLAIN_DECIMAL.test(value)) return format
+  // parseScaled refuses leading zeros; the server accepts them.
+  const entered = parseScaled(value.replace(/^(-?)0+(?=[0-9])/, '$1'))
+  if (entered === null) return format
   if (field === 'quantity') {
-    if (entered === null || entered.u <= 0n) return NOTE_COPY.quantityPositive
-  } else if (entered === null || entered.u < 0n) {
+    if (entered.u <= 0n) return NOTE_COPY.quantityPositive
+  } else if (entered.u < 0n) {
     return NOTE_COPY.unitPriceInvalid
   }
+  const { scale, bound } = NOTE_LIMITS[field]
+  let { u, s } = entered
+  while (s > scale && u % 10n === 0n) {
+    u /= 10n
+    s -= 1
+  }
+  if (s > scale || compare(entered, bound) >= 0) return format
   if (type !== 'credit_note' || original === null) return null
   const cap = parseScaled(original)
   if (cap !== null && compare(entered, cap) > 0) {
     return field === 'quantity' ? NOTE_COPY.quantityOverOriginal : NOTE_COPY.unitPriceOverOriginal
   }
   return null
+}
+
+// Exact kobo-preserving naira for a limit: ₦1,000.50, -₦100.00; null is a dash.
+export function fmtNairaExact(wire: string | null): string {
+  const scaled = wire === null ? null : parseScaled(wire)
+  if (scaled === null) return '—'
+  const [whole, frac] = renderScaled(scaled).split('.')
+  const neg = whole.startsWith('-')
+  const digits = neg ? whole.slice(1) : whole
+  return `${neg ? '-' : ''}₦${digits.replace(/\B(?=(\d{3})+$)/g, ',')}.${frac}`
 }
 
 // A NULL tax_percent becomes '', so draftTotals counts the line as categorised with no tax, as the server does.

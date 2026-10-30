@@ -54,15 +54,28 @@ describe('NotesCard', () => {
 
   it('still creditable reads the wire', () => {
     renderCard({ notes: [note('a', 'credit_note', 'accepted', '100.00')], credited_so_far: '100.00', still_creditable: '400.00' })
-    expect(screen.getByTestId('still-creditable').textContent).toBe('₦400')
+    expect(screen.getByTestId('still-creditable').textContent).toBe('₦400.00')
     cleanup()
 
     renderCard({ notes: [], credited_so_far: '0.00', still_creditable: '1000.00' })
     expect(screen.getByTestId('notes-empty')).toBeTruthy()
-    expect(screen.getByTestId('still-creditable').textContent).toBe('₦1,000')
+    expect(screen.getByTestId('still-creditable').textContent).toBe('₦1,000.00')
     cleanup()
 
     renderCard({ notes: [], credited_so_far: '0.00', still_creditable: null })
     expect(screen.getByTestId('still-creditable').textContent).toBe('—')
+    cleanup()
+
+    renderCard({ notes: [], credited_so_far: '0.00', still_creditable: '100.50' })
+    expect(screen.getByTestId('still-creditable').textContent).toBe('₦100.50')
+    cleanup()
+
+    renderCard({ notes: [], credited_so_far: '0.00', still_creditable: '-100.00' })
+    expect(screen.getByTestId('still-creditable').textContent).toBe('-₦100.00')
+  })
+
+  it('the card title reads Notes on this invoice', () => {
+    renderCard({ notes: [], credited_so_far: '0.00', still_creditable: null })
+    expect(within(screen.getByTestId('notes-card')).getByText('Notes on this invoice')).toBeTruthy()
   })
 })

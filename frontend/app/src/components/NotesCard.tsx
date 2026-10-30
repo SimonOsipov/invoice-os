@@ -3,9 +3,8 @@ import type { ReactNode } from 'react'
 
 import { ErrorState, Loading, type AsyncState } from '@invoice-os/api-client'
 
-import { fmt } from '../lib/format'
 import { invoiceStatusStyle } from '../lib/invoices'
-import { noteTypeBadge, signedNoteTotal, type NotesOnInvoice } from '../lib/notes'
+import { fmtNairaExact, noteTypeBadge, signedNoteTotal, type NotesOnInvoice } from '../lib/notes'
 
 export function NotesCard({
   run,
@@ -58,7 +57,7 @@ export function NotesCard({
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 12 }}>
           <span className="label">Still creditable</span>
           <span data-testid="still-creditable" className="money" style={{ fontWeight: 600 }}>
-            {data.still_creditable === null ? '—' : fmt(Number(data.still_creditable))}
+            {fmtNairaExact(data.still_creditable)}
           </span>
         </div>
       </>
@@ -68,7 +67,7 @@ export function NotesCard({
   return (
     <div data-testid="notes-card" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
       <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
-        <span className="card-title">Notes</span>
+        <span className="card-title">Notes on this invoice</span>
       </div>
       <div style={{ padding: '14px 18px', fontSize: 12.5, lineHeight: 1.5 }}>{body}</div>
     </div>

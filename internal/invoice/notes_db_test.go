@@ -495,6 +495,23 @@ func TestIssueNote_DuplicateNumberWritesNothing(t *testing.T) {
 	f.issueOK(t, "CN-FREE") // the same request with a free number is created
 }
 
+func TestIssueNote_NumberIsStoredTrimmedAndPaddedCopyIsADuplicate(t *testing.T) {
+	f := newInFixture(t, "IN padded")
+	seedInvoice(t, f.super, f.tenant, f.entity, "CN-PAD")
+	before := f.counts(t)
+
+	_, err := f.store.IssueNote(f.ctx, f.original, f.req("  CN-PAD "))
+	if !errors.Is(err, ErrDuplicateNumber) {
+		t.Fatalf("IssueNote with a padded taken number: err = %v, want ErrDuplicateNumber", err)
+	}
+	f.wantCounts(t, before, "padded duplicate")
+
+	inv := f.issueOK(t, " CN-NEW\t")
+	if inv.InvoiceNumber != "CN-NEW" {
+		t.Errorf("stored number = %q, want %q", inv.InvoiceNumber, "CN-NEW")
+	}
+}
+
 func TestIssueNote_SameNumberInAnotherEntityIsAllowed(t *testing.T) {
 	f := newInFixture(t, "IN other entity")
 	entB := seedEntity(t, f.super, f.tenant, "IN client B")

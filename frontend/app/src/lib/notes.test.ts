@@ -11,6 +11,7 @@ import {
   issueNote,
   noteDraftLines,
   NOTE_COPY,
+  fmtNairaExact,
   noteLineError,
   noteSign,
   noteTypeBadge,
@@ -46,6 +47,53 @@ describe('noteLineError', () => {
     expect(noteLineError('credit_note', 'quantity', '10.0000', '10')).toBeNull()
     // A bad value is refused even when the original is null.
     expect(noteLineError('credit_note', 'quantity', '0', null)).not.toBeNull()
+  })
+
+  it('noteLineError refuses an exponent without throwing or expanding it', () => {
+    for (const v of ['1e999999999', '1e99999999', '1e2', '1E2', '1e-2']) {
+      for (const field of ['quantity', 'unit_price'] as const) {
+        expect(() => noteLineError('debit_note', field, v, null), `${field} ${v}`).not.toThrow()
+        expect(noteLineError('debit_note', field, v, null), `${field} ${v}`).not.toBeNull()
+      }
+    }
+  })
+
+  // Rows mirror internal/invoice/note_amounts.go noteQuantity / noteUnitPrice.
+  it.each([
+    ['quantity', '1.2345', false],
+    ['quantity', '1.2340', true],
+    ['quantity', '1.234', true],
+    ['quantity', '+1', false],
+    ['quantity', '.5', false],
+    ['quantity', '1.', false],
+    ['quantity', '', false],
+    ['quantity', ' 1', false],
+    ['quantity', '007', true],
+    ['quantity', '0', false],
+    ['quantity', '-1', false],
+    ['quantity', '99999999999.999', true],
+    ['quantity', '100000000000', false],
+    ['unit_price', '10.123', false],
+    ['unit_price', '10.100', true],
+    ['unit_price', '10.12', true],
+    ['unit_price', '+1', false],
+    ['unit_price', '.5', false],
+    ['unit_price', '0', true],
+    ['unit_price', '-0', true],
+    ['unit_price', '-0.01', false],
+    ['unit_price', '999999999999.99', true],
+    ['unit_price', '1000000000000', false],
+  ] as const)('noteLineError matches the route: %s %j accepted=%s', (field, value, accepted) => {
+    expect(noteLineError('debit_note', field, value, null) === null).toBe(accepted)
+  })
+
+  it('fmtNairaExact keeps kobo, groups thousands, signs before the naira', () => {
+    expect(fmtNairaExact('100.50')).toBe('₦100.50')
+    expect(fmtNairaExact('0.40')).toBe('₦0.40')
+    expect(fmtNairaExact('1234567.00')).toBe('₦1,234,567.00')
+    expect(fmtNairaExact('-100.00')).toBe('-₦100.00')
+    expect(fmtNairaExact('-1000.05')).toBe('-₦1,000.05')
+    expect(fmtNairaExact(null)).toBe('—')
   })
 
   it('noteLineError names the field it refuses', () => {

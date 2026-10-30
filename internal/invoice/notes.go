@@ -42,7 +42,8 @@ func (s *Store) IssueNote(ctx context.Context, originalID string, in NoteInput) 
 	if in.DocumentType != submission.CreditNote && in.DocumentType != submission.DebitNote {
 		return Invoice{}, fmt.Errorf("%w: document_type must be credit_note or debit_note", ErrValidation)
 	}
-	if strings.TrimSpace(in.InvoiceNumber) == "" || in.IssueDate == nil || len(in.Lines) == 0 {
+	in.InvoiceNumber = strings.TrimSpace(in.InvoiceNumber)
+	if in.InvoiceNumber == "" || in.IssueDate == nil || len(in.Lines) == 0 {
 		return Invoice{}, fmt.Errorf("%w: a note needs a number, an issue date and lines", ErrValidation)
 	}
 	seen := make(map[string]bool, len(in.Lines))

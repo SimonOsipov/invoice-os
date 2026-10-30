@@ -69,9 +69,10 @@ export function NoteForm({
     noteLineError(documentType, 'unit_price', rows[i].unit_price, lines[i].unit_price)
   const errors = rows.map((_, i) => rowError(i))
   const picked = lines.flatMap((line, i) => (rows[i].checked ? [{ line, quantity: rows[i].quantity, unit_price: rows[i].unit_price }] : []))
-  const totals = draftTotals(noteDraftLines(picked))
-  const complete =
-    number.trim() !== '' && date !== '' && picked.length > 0 && rows.every((r, i) => !r.checked || errors[i] === null)
+  const pickedInvalid = rows.some((r, i) => r.checked && errors[i] !== null)
+  // A ticked invalid row shows no figure: Number('') would otherwise count as a 0.00 line.
+  const totals = pickedInvalid ? { subtotal: null, vat: null, total: null } : draftTotals(noteDraftLines(picked))
+  const complete = number.trim() !== '' && date !== '' && picked.length > 0 && !pickedInvalid
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -190,10 +191,10 @@ export function NoteForm({
                       disabled={submitting}
                     />
                     <span data-testid="note-line-amount" className="money" style={{ fontSize: 13, textAlign: 'right' }}>
-                      {draftTotals(noteDraftLines([{ line, quantity: rows[i].quantity, unit_price: rows[i].unit_price }])).subtotal ?? '—'}
+                      {errors[i] ? '—' : draftTotals(noteDraftLines([{ line, quantity: rows[i].quantity, unit_price: rows[i].unit_price }])).subtotal ?? '—'}
                     </span>
                   </div>
-                  {errors[i] && (
+                  {rows[i].checked && errors[i] && (
                     <div data-testid="note-line-error" style={{ padding: '0 12px 8px', fontSize: 12, color: 'var(--status-red-text)', lineHeight: 1.4 }}>
                       {errors[i]}
                     </div>

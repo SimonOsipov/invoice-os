@@ -164,6 +164,10 @@ type Invoice struct {
 	// Original is the note's original, filled by getTx only; nil when absent or out of scope.
 	Original *submission.BillingReference `json:"-"`
 
+	// Gate facts about the original: its total and the sum already credited.
+	OriginalTotal  *string `json:"-"`
+	CreditedBefore *string `json:"-"`
+
 	// RuleSetVersion is the human-facing integer resolved from
 	// RuleSetVersionID (rule_set_versions.version) -- populated by
 	// Store.Get only (a Get-local correlated subselect, M4-09-01), and

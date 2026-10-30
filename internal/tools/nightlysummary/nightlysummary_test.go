@@ -467,6 +467,7 @@ type env struct {
 	dir, suites, jobsPath, results string
 	out                            string
 	jobs                           []job
+	e2eFlag                        []string
 }
 
 const defaultSuites = "go=Go=results\nfrontend=Frontend=results\ndocling-test=Docling image (test suite)=results\ndocker-canary=Docker image (canary)\n"
@@ -1017,4 +1018,156 @@ func TestRun_ReportLines(t *testing.T) {
 	eq(t, fl[1], "FLAKE frontend frontend/app/src/flake.test.ts flips")
 	eq(t, strings.HasPrefix(fl[2], "FLAKE docling-test "), true)
 	eq(t, strings.HasSuffix(fl[2], " tests.test_x::test_bad"), true)
+}
+
+// ---- Playwright ----
+
+const devEnvWorkflow = ".github/workflows/dev-env.yml"
+
+const pwWorkspace = "/home/runner/work/invoice-os/invoice-os"
+
+func judgePlaywright(t *testing.T, data string) judged {
+	t.Helper()
+	pf, err := parsePlaywright([]byte(data), pwWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return split(judgeFiles([]parsedFile{pf}))
+}
+
+// pwReport is a one-test report; msg is the error of the last result.
+func pwReport(status, msg string) string {
+	raw, _ := json.Marshal(msg)
+	return fmt.Sprintf(`{"config":{"rootDir":%q},"suites":[{"title":"a.spec.ts","specs":[{"title":"t","file":"a.spec.ts","tests":[{"status":%q,"results":[{"status":"failed","error":{"message":%s}}]}]}]}]}`,
+		pwWorkspace+"/e2e", status, raw)
+}
+
+func TestPlaywright_StatusesMapToPassFailFlake(t *testing.T) {
+	j := judgePlaywright(t, string(fixture(t, "playwright", "mixed.json")))
+	eq(t, len(j.passed), 1)
+	eq(t, len(j.fails), 1)
+	eq(t, len(j.flakes), 1)
+}
+
+func TestPlaywright_TitleFileAndMessage(t *testing.T) {
+	j := judgePlaywright(t, string(fixture(t, "playwright", "mixed.json")))
+	f := j.fails[0]
+	eq(t, f.test, "outer › inner › fails twice")
+	eq(t, f.file, "e2e/scratch/x.spec.ts")
+	eq(t, strings.Contains(f.msg, "\x1b["), false)
+	eq(t, strings.Contains(f.msg, "\n"), false)
+	eq(t, strings.HasPrefix(f.msg, "Error: expect(received).toBe(expected)"), true)
+	eq(t, j.flakes[0].test, "flaky one")
+}
+
+func TestPlaywright_MessageClippedAt300(t *testing.T) {
+	j := judgePlaywright(t, pwReport("unexpected", strings.Repeat("x", 400)))
+	eq(t, len([]rune(j.fails[0].msg)), 300)
+}
+
+func TestPlaywright_UnreadableAndEmpty(t *testing.T) {
+	e := newEnv(t)
+	e.clear("frontend")
+	e.write("frontend", "playwright-a.json", "{")
+	e.write("frontend", "playwright-b.json", `{"config":{"rootDir":"/x"},"suites":[]}`)
+	r := e.run()
+	eq(t, r.code, 1)
+	eq(t, r.failureTests("frontend"), []string{"results unreadable", "results empty"})
+}
+
+func TestPlaywright_SkippedOnlyReportIsNotEmpty(t *testing.T) {
+	j := judgePlaywright(t, pwReport("skipped", ""))
+	eq(t, len(j.fails)+len(j.passed)+len(j.flakes), 0)
+}
+
+// ---- -e2e-suites ----
+
+const e2eSuites = "environment=Prepare the preview (secrets, bucket, URLs)\ne2e=E2E=results\n"
+
+func (e *env) e2e(suites string) {
+	e.t.Helper()
+	p := filepath.Join(e.dir, "e2e-suites.txt")
+	e.writeFile(p, suites)
+	e.e2eFlag = []string{"-e2e-suites", p}
+}
+
+func TestE2ESuites_OrderAndWorkflowFile(t *testing.T) {
+	e := newEnv(t)
+	e.e2e(e2eSuites)
+	e.jobs = append(e.jobs, job{Name: "Prepare the preview (secrets, bucket, URLs)", Conclusion: "success"})
+	r := e.run(e.e2eFlag...)
+	eq(t, r.code, 1)
+	names := []string{}
+	for _, s := range r.dec.Suites {
+		names = append(names, s.Name)
+	}
+	eq(t, names, []string{"go", "frontend", "docling-test", "docker-canary", "environment"})
+	eq(t, r.dec.Failures, []failure{{"e2e", "suite did not run", devEnvWorkflow, "job E2E missing"}})
+}
+
+func TestE2ESuites_PreviewCapReached(t *testing.T) {
+	e := newEnv(t)
+	e.e2e(e2eSuites)
+	e.jobs = append(e.jobs, job{
+		Name: "Prepare the preview (secrets, bucket, URLs)", Conclusion: "failure",
+		Steps: steps("Set up job", "success", "preview cap reached", "failure"),
+	})
+	r := e.run(e.e2eFlag...)
+	eq(t, r.code, 1)
+	eq(t, r.dec.Verdict, "red")
+	eq(t, r.dec.Failures[0], failure{"environment", "preview cap reached", devEnvWorkflow, "step failure"})
+}
+
+func TestE2ESuites_KeyAlsoInCISuitesIsUsageError(t *testing.T) {
+	e := newEnv(t)
+	e.e2e("go=Go again\n")
+	r := e.run(e.e2eFlag...)
+	eq(t, r.code, 2)
+}
+
+func TestE2ESuites_NoResultsAndJobEntriesNameDevEnv(t *testing.T) {
+	e := newEnv(t)
+	e.e2e(e2eSuites)
+	e.jobs = append(e.jobs,
+		job{Name: "Prepare the preview (secrets, bucket, URLs)", Conclusion: "failure"},
+		job{Name: "E2E", Conclusion: "success"})
+	r := e.run(e.e2eFlag...)
+	eq(t, r.code, 1)
+	eq(t, r.dec.Failures, []failure{
+		{"environment", "(job)", devEnvWorkflow, "job failure"},
+		{"e2e", "no test results", devEnvWorkflow, "job E2E wrote no results"},
+	})
+}
+
+func TestPlaywright_MessageComesFromTheLastFailingAttempt(t *testing.T) {
+	rep := `{"config":{"rootDir":"/w/e2e"},"suites":[{"title":"a.spec.ts","specs":[{"title":"t","file":"a.spec.ts","tests":[{"status":"unexpected","results":[` +
+		`{"status":"failed","error":{"message":"first attempt"}},{"status":"failed","error":{"message":"last attempt\nsecond line"}}]}]}]}]}`
+	j := judgePlaywright(t, rep)
+	eq(t, len(j.fails), 1)
+	eq(t, j.fails[0].msg, "last attempt")
+}
+
+func TestPlaywright_SkippedOnlyReportIsNotResultsEmpty(t *testing.T) {
+	e := newEnv(t)
+	e.clear("frontend")
+	e.write("frontend", "playwright-a.json", pwReport("skipped", ""))
+	r := e.run()
+	eq(t, r.code, 0)
+	eq(t, len(r.dec.Failures), 0)
+}
+
+func TestRun_E2EWholeRun(t *testing.T) {
+	d := filepath.Join("testdata", "e2e")
+	out := filepath.Join(t.TempDir(), "summary.json")
+	args := append([]string{"-suites", filepath.Join("testdata", "suites.txt"), "-e2e-suites", filepath.Join(d, "e2e-suites.txt"),
+		"-jobs", filepath.Join(d, "jobs.json"), "-results", filepath.Join(d, "results"), "-out", out}, strings.Fields(fixtureFlags)...)
+	r := runArgs(t, out, args)
+	eq(t, r.code, 1)
+	eq(t, r.dec.Verdict, "red")
+	eq(t, *r.suite("environment"), suiteResult{Name: "environment", Passed: 1})
+	eq(t, *r.suite("e2e"), suiteResult{Name: "e2e", Passed: 1, Flaky: 1})
+	eq(t, *r.suite("topology-auth"), suiteResult{Name: "topology-auth", Failed: 1})
+	eq(t, r.dec.Flakes, []flake{{"e2e", "flaky one", "e2e/scratch/x.spec.ts"}})
+	eq(t, r.dec.Failures, []failure{{"topology-auth", "outer › inner › fails twice", "e2e/scratch/x.spec.ts", r.dec.Failures[0].Message}})
+	eq(t, strings.HasPrefix(r.dec.Failures[0].Message, "Error: expect(received)"), true)
 }

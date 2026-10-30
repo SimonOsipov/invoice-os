@@ -1,6 +1,6 @@
 name: Nightly
 
-# Dispatches ci.yml in full mode, sums its results into the nightly-summary artifact and opens no issue.
+# Dispatches ci.yml in full mode and dev-env.yml (the nightly preview + E2E), sums their results into the nightly-summary artifact and opens no issue.
 # The schedule runs from main only; main-only fails a dispatch from any other ref.
 on:
   schedule:
@@ -26,7 +26,7 @@ jobs:
     name: Nightly summary
     needs: main-only
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 270
     permissions:
       contents: read
       actions: write
@@ -38,18 +38,30 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Run CI in full on this ref
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run CI and the nightly preview on this ref
         id: ci
-        run: bash scripts/ci/nightly-ci.sh "$GITHUB_REF_NAME"
+        env:
+          # 420 polls x 30 s = 210 min: dev-env.yml's nightly path (commit-authors 5, build 30, deploy 40, gate 15, e2e 40, topology 45, teardown 20 = 195) + 15.
+          NIGHTLY_CI_POLLS: 420
+        run: bash scripts/ci/nightly-ci.sh "$GITHUB_REF_NAME" ci.yml=run_id dev-env.yml=preview_run_id
       - name: Collect the CI results
         id: collect
         if: always() && steps.ci.outputs.run_id != ''
         env:
           CI_RUN_ID: ${{ steps.ci.outputs.run_id }}
+          PREVIEW_RUN_ID: ${{ steps.ci.outputs.preview_run_id }}
         run: |
           set -euo pipefail
           gh run download "$CI_RUN_ID" -R "$REPO" -p 'results-*' -D "$RUNNER_TEMP/results" || echo "::warning::no result artifacts to download"
-          gh api --paginate "repos/$REPO/actions/runs/$CI_RUN_ID/jobs" --jq '.jobs[]' | jq -s . > "$RUNNER_TEMP/jobs.json"
+          runs=("$CI_RUN_ID")
+          if [ -n "$PREVIEW_RUN_ID" ]; then
+            runs+=("$PREVIEW_RUN_ID")
+            gh run download "$PREVIEW_RUN_ID" -R "$REPO" -p 'results-*' -D "$RUNNER_TEMP/results" || echo "::warning::no preview result artifacts to download"
+          fi
+          for run in "${runs[@]}"; do gh api --paginate "repos/$REPO/actions/runs/$run/jobs" --jq '.jobs[]'; done | jq -s . > "$RUNNER_TEMP/jobs.json"
           echo "sha=$(gh run view "$CI_RUN_ID" -R "$REPO" --json headSha --jq .headSha)" >> "$GITHUB_OUTPUT"
       - name: Write summary.json
         if: always()
@@ -58,8 +70,9 @@ jobs:
         run: |
           set -euo pipefail
           [ -f "$RUNNER_TEMP/jobs.json" ] || echo '[]' > "$RUNNER_TEMP/jobs.json"
+          { cat scripts/ci/nightly-e2e-suites.txt; node e2e/topology/shards.ts | jq -r '.[] | "topology-\(.)=E2E topology (\(.))=results"'; } > "$RUNNER_TEMP/e2e-suites.txt"
           started=$(gh api "repos/$REPO/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
-          go run ./internal/tools/nightlysummary -suites scripts/ci/nightly-suites.txt -jobs "$RUNNER_TEMP/jobs.json" -results "$RUNNER_TEMP/results" -run-id "$GITHUB_RUN_ID" -sha "${CI_SHA:-$GITHUB_SHA}" -started "$started" -workspace "$GITHUB_WORKSPACE" -out "$RUNNER_TEMP/summary.json"
+          go run ./internal/tools/nightlysummary -suites scripts/ci/nightly-suites.txt -e2e-suites "$RUNNER_TEMP/e2e-suites.txt" -jobs "$RUNNER_TEMP/jobs.json" -results "$RUNNER_TEMP/results" -run-id "$GITHUB_RUN_ID" -sha "${CI_SHA:-$GITHUB_SHA}" -started "$started" -workspace "$GITHUB_WORKSPACE" -out "$RUNNER_TEMP/summary.json"
       - name: Upload nightly-summary
         if: always()
         uses: actions/upload-artifact@v7

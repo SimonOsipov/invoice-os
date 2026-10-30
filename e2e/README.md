@@ -113,6 +113,7 @@ Without `--project` the command runs every unit, all on its one worker, one afte
 Add `--project=serial-lane` (or another unit name) after `test:topology` to run one, as CI does.
 
 CI sets `maxFailures: 1`, so a shard stops at the first test whose retry also failed; a local run has no limit.
+With `E2E_TARGET=nightly` the shard has no limit and each of the three configs adds a `json` reporter (the workflow sets `PLAYWRIGHT_JSON_OUTPUT_FILE`); `retries` stays 1.
 
 **There is no fleet-health gate in this suite.** The only fleet-health assertion in the
 package is `api/perf.spec.ts`'s PERF-06: `GET /healthz/fleet` returns 200 with

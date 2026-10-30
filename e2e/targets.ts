@@ -18,3 +18,11 @@ export function resolveTarget(envVar: string): string {
   }
   return raw.replace(/\/+$/, '')
 }
+
+// The one E2E variable the nightly sets; any other value is a typo that must not pass as a PR run.
+export function nightlyTarget(): boolean {
+  const raw = process.env.E2E_TARGET
+  if (raw === undefined || raw === '') return false
+  if (raw === 'nightly') return true
+  throw new Error(`E2E_TARGET must be unset or exactly "nightly", got "${raw}".`)
+}

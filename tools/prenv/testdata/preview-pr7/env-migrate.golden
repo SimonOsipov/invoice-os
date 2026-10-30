@@ -1,0 +1,6 @@
+DEPLOY_ENV: pr-7
+ENVIRONMENT: development
+GATEWAY_DB_BOOTSTRAP: 'true'
+DOCUMENT_BUCKET: ascomply-preview-pr-7
+DOCUMENT_ENDPOINT: https://storage.googleapis.com
+DOCUMENT_REGION: auto

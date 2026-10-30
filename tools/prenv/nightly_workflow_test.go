@@ -5,15 +5,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 const (
-	nightlyGuardRun   = `[ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::Nightly runs on main only, not on $GITHUB_REF"; exit 1; }`
-	nightlyCron       = "- cron: '17 1 * * *'"
-	nightlySuitesFlag = "-suites scripts/ci/nightly-suites.txt"
+	nightlyGuardRun       = `[ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::Nightly runs on main only, not on $GITHUB_REF"; exit 1; }`
+	nightlyCron           = "- cron: '17 1 * * *'"
+	nightlySuitesFlag     = "-suites scripts/ci/nightly-suites.txt"
+	nightlyCIRunLine      = `run: bash scripts/ci/nightly-ci.sh "$GITHUB_REF_NAME" ci.yml=run_id dev-env.yml=preview_run_id`
+	nightlyE2EFlag        = `-e2e-suites "$RUNNER_TEMP/e2e-suites.txt" `
+	nightlyPolls          = "420"
+	nightlySummaryTimeout = "270"
+	nightlyPreviewDL      = `gh run download "$PREVIEW_RUN_ID" -R "$REPO" -p 'results-*' -D "$RUNNER_TEMP/results"`
 )
 
 var (
@@ -30,7 +37,7 @@ func nightlyStepLines(j workflowJob, marker string) []string {
 		}
 		return nil
 	}
-	for _, l := range j.lines {
+	for _, l := range stripHashComments(j.lines) {
 		if strings.HasPrefix(l, "      - ") {
 			if got := flush(); got != nil {
 				return got
@@ -134,7 +141,31 @@ func nightlyRunProblems(nightlyYAML, ciYAML, suitesTxt string) []string {
 			p = append(p, "assembler step lacks "+nightlySuitesFlag)
 		}
 	}
+	if v, _ := jobKey(summary, "timeout-minutes"); v != nightlySummaryTimeout {
+		p = append(p, "summary timeout-minutes is not "+nightlySummaryTimeout)
+	}
+	if n := nightlyStepLines(summary, "uses: actions/setup-node@"); n == nil || !slices.Contains(n, "node-version: 22") {
+		p = append(p, "summary lacks setup-node with node-version: 22")
+	}
+	if ci := nightlyStepLines(summary, "nightly-ci.sh"); ci == nil || !slices.Contains(ci, nightlyCIRunLine) || !slices.Contains(ci, "NIGHTLY_CI_POLLS: "+nightlyPolls) {
+		p = append(p, "CI step lacks the two-workflow call or NIGHTLY_CI_POLLS: "+nightlyPolls)
+	}
+	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), nightlyE2EFlag) {
+		p = append(p, "assembler step lacks -e2e-suites")
+	}
+	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), `node e2e/topology/shards.ts | jq -r '.[] | "topology-\(.)=E2E topology (\(.))=results"'`) {
+		p = append(p, "assembler step does not append the topology shard suites")
+	}
 	col := nightlyStepLines(summary, "gh run download")
+	if col != nil && !strings.Contains(strings.Join(col, "\n"), nightlyPreviewDL) {
+		p = append(p, "collect step does not download the preview run's results")
+	}
+	if col != nil && !strings.Contains(strings.Join(col, "\n"), `runs+=("$PREVIEW_RUN_ID")`) {
+		p = append(p, "collect step does not write the jobs of each run")
+	}
+	if col != nil && !strings.Contains(strings.Join(col, "\n"), `actions/runs/$run/jobs`) {
+		p = append(p, "collect step does not write the jobs of each run")
+	}
 	if col == nil || !slices.Contains(col, "if: always() && steps.ci.outputs.run_id != ''") {
 		p = append(p, "collect step does not run after a red CI (always() with a run id)")
 	}
@@ -414,5 +445,123 @@ func TestNightly_ActionsWriteOnlyOnTheJob(t *testing.T) {
 		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, want) }) {
 			t.Errorf("problems %q lack one naming %q", got, want)
 		}
+	}
+}
+
+func TestNightly_SummaryFoldsTheE2ERun(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, old, repl, want string }{
+		{"timeout", "timeout-minutes: " + nightlySummaryTimeout, "timeout-minutes: 90", "timeout-minutes is not " + nightlySummaryTimeout},
+		{"setup-node dropped", "node-version: 22", "node-version: 20", "setup-node"},
+		{"preview dispatch dropped", " dev-env.yml=preview_run_id", "", "two-workflow call"},
+		{"poll budget", "NIGHTLY_CI_POLLS: " + nightlyPolls, "NIGHTLY_CI_POLLS: 120", "NIGHTLY_CI_POLLS"},
+		{"e2e flag dropped", nightlyE2EFlag, "", "lacks -e2e-suites"},
+		{"preview download dropped", "$PREVIEW_RUN_ID\" -R", "$CI_RUN_ID\" -R", "preview run's results"},
+		{"jobs of one run", "actions/runs/$run/jobs", "actions/runs/$CI_RUN_ID/jobs", "jobs of each run"},
+		{"preview run left out of the jobs", `runs+=("$PREVIEW_RUN_ID")`, `runs+=("$CI_RUN_ID")`, "jobs of each run"},
+		{"topology shards not appended", "node e2e/topology/shards.ts | jq", "node e2e/topology/shards.ts > /dev/null; jq", "topology shard suites"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			requireNightlyMutation(t, tc.old, tc.repl, tc.want)
+		})
+	}
+}
+
+// nightlyE2ESuitesProblems checks nightly-e2e-suites.txt against the jobs of dev-env.yml.
+func nightlyE2ESuitesProblems(devEnvYAML, suitesTxt string) []string {
+	var p []string
+	names := map[string]workflowJob{}
+	for _, j := range workflowJobsOf(devEnvYAML) {
+		n, _ := jobKey(j, "name")
+		names[n] = j
+	}
+	for _, l := range strings.Split(suitesTxt, "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		f := strings.Split(l, "=")
+		if len(f) < 2 || len(f) > 3 {
+			p = append(p, "e2e suites line is malformed: "+l)
+			continue
+		}
+		if strings.HasPrefix(f[0], "topology-") {
+			p = append(p, "e2e suites lists "+f[0]+"; nightly.yml appends the shards")
+		}
+		j, ok := names[f[1]]
+		if !ok {
+			p = append(p, "e2e suites "+f[0]+": dev-env.yml has no job named \""+f[1]+"\"")
+			continue
+		}
+		if len(f) == 3 && !strings.Contains(strings.Join(j.lines, "\n"), "name: results-"+f[0]+"\n") {
+			p = append(p, "e2e suites "+f[0]+": its job uploads no results-"+f[0])
+		}
+	}
+	return p
+}
+
+func TestNightlyE2ESuites_MatchDevEnvJobs(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "ci", "nightly-e2e-suites.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	suites, devEnv := string(raw), readWorkflow(t, "dev-env.yml")
+	if got := nightlyE2ESuitesProblems(devEnv, suites); len(got) > 0 {
+		t.Fatalf("problems: %q", got)
+	}
+	for _, tc := range []struct{ name, yml, txt, want string }{
+		{"deploy renamed", mutateOnce(t, devEnv, "name: Deploy the PR's fleet", "name: Deploy the fleet"), suites, "Deploy the PR's fleet"},
+		{"results key wrong", devEnv, mutateOnce(t, suites, "e2e=E2E (smoke + api)=results", "e2ee=E2E (smoke + api)=results"), "results-e2ee"},
+		{"topology listed", devEnv, suites + "topology-auth=E2E topology (auth)=results\n", "topology-auth"},
+	} {
+		got := nightlyE2ESuitesProblems(tc.yml, tc.txt)
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, tc.want) }) {
+			t.Errorf("%s: problems %q lack one naming %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// nightlyJobMinutes reads a job's timeout-minutes; an expression `... && N || M` counts as N, its nightly value.
+func nightlyJobMinutes(t *testing.T, devEnv map[string]workflowJob, id string) int {
+	t.Helper()
+	v, ok := jobKey(devEnv[id], "timeout-minutes")
+	if !ok {
+		t.Fatalf("dev-env.yml job %s has no timeout-minutes", id)
+	}
+	if m := regexp.MustCompile(`&& (\d+) \|\|`).FindStringSubmatch(v); m != nil {
+		v = m[1]
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		t.Fatalf("job %s timeout-minutes %q is not a number", id, v)
+	}
+	return n
+}
+
+// The poll budget (30 s a poll) covers the nightly path of dev-env.yml, and the Nightly job outlives it.
+func TestNightly_PollBudgetCoversTheDevEnvPath(t *testing.T) {
+	t.Parallel()
+	devEnv := nlJobs(readWorkflow(t, "dev-env.yml"))
+	m := func(id string) int { return nightlyJobMinutes(t, devEnv, id) }
+	path := m("commit-authors") + m("build") + m("deploy") + max(m("health-gate"), m("fleet-gate")) + m("e2e") + m("topology") + m("nightly-teardown")
+	if path < 150 {
+		t.Fatalf("control: path sum %d min is implausibly small", path)
+	}
+	summary := nlJobs(readWorkflow(t, "nightly.yml"))["summary"]
+	var polls int
+	for _, l := range nightlyStepLines(summary, "nightly-ci.sh") {
+		if v, ok := strings.CutPrefix(l, "NIGHTLY_CI_POLLS: "); ok {
+			polls, _ = strconv.Atoi(v)
+		}
+	}
+	budget := polls * 30 / 60
+	if budget < path {
+		t.Errorf("poll budget %d min (%d polls) is below the dev-env nightly path %d min", budget, polls, path)
+	}
+	v, _ := jobKey(summary, "timeout-minutes")
+	if timeout, _ := strconv.Atoi(v); timeout <= budget {
+		t.Errorf("Nightly summary timeout-minutes %d does not exceed the poll budget %d min", timeout, budget)
 	}
 }

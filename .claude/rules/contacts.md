@@ -41,7 +41,10 @@ paths:
 - Refuse to boot when `CONTACTS_FAKE` is true and any key is set, or when only some keys are set.
 - Name variables in a boot error, never their values.
 - Run a preview in `fake` mode and discard its vendor keys.
-- The nightly reads the contact keys like production. Its newsletter is `fake` and its mail is captured.
+- The nightly posture reads the contact keys like production.
+- Its newsletter is `fake` and its mail is captured.
+- `scripts/ci/preview.sh` gives the nightly preview `CONTACTS_FAKE` and no contact key. Contacts run `fake` there.
+- `TestPreviewNightlyContactsAreFake` pins this.
 - Answer 404 to an intake request that carries `X-User-ID`. Require the gateway token on every intake route.
 - Answer 404 at the gateway for any `/api/<service>/internal/...` path, raw and cleaned.
 - Open one HubSpot deal per demo request and one per first registration.

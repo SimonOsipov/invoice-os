@@ -8,8 +8,8 @@ paths:
 
 - Production deploys are in `ci-gcp.md`. PR previews are in `ci-preview.md`.
 - Never trigger a workflow on `pull_request_target`, `workflow_run` or `workflow_call`. Never use `secrets: inherit` or a local `uses: ./` step. `TestNoWorkflowReachesSecretsThroughATrustedTrigger` pins it.
-- Run E2E only on `pull_request`. The api suite writes data, so it never runs against production.
-- Start the `topology` job only when the `e2e` job succeeded. A red `e2e` job skips topology and fails the gate.
+- Run E2E only on `pull_request` and on the nightly preview. The api suite writes data, so it never runs against production.
+- Start the `topology` job on a PR only when the `e2e` job succeeded. A red `e2e` job skips topology and fails the gate. On the nightly, start topology when `e2e` has ended.
 - Expect a superseded commit's preview to fail at the CI watch. `ci.yml` cancels the earlier run on the same ref.
 - Give a PR the library lane when every changed path is under `frontend/library/` and none is in `SHARED_WITH_BLOG` in `scripts/ci/lane.sh`.
 - Give a PR the blog lane when every changed path is under `frontend/blog/`. `frontend/blog/index.html`, `frontend/blog/Dockerfile` and `frontend/blog/Dockerfile.dockerignore` give the full lane: they are inputs of `cmd/blog`.
@@ -20,3 +20,4 @@ paths:
 - Run a bash script from a `tools/prenv` test through `runToFiles`, not a pipe. Under parallel load `/bin/bash` 3.2 fails an `echo` on a blocked pipe with EINTR.
 - Feed `grep -q` and `head -n 1` a here-string, never a pipe, in a script under `pipefail`. The writer of the pipe gets SIGPIPE when the reader exits early, and the pipeline fails.
 - Dispatch `ci.yml` only from `nightly.yml`. A dispatch is full mode: every job runs, and the roll-up is named `CI (nightly)`.
+- Dispatch `dev-env.yml` only from `nightly.yml`. A dispatch deploys the `nightly` preview, runs E2E without the flaky gate and the `E2E gate`, and deletes the preview.

@@ -1,0 +1,4 @@
+# key=Display name[=results]
+environment=Prepare the preview (secrets, bucket, URLs)
+e2e=E2E=results
+topology-auth=E2E topology (auth)=results

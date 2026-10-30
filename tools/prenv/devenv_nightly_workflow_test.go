@@ -1,0 +1,572 @@
+// devenv_nightly_workflow_test.go pins the nightly mode of .github/workflows/dev-env.yml.
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+)
+
+const (
+	nlOn        = "needs.changes.outputs.nightly == 'true'"
+	nlOff       = "needs.changes.outputs.nightly != 'true'"
+	nlTarget    = "E2E_TARGET: ${{ needs.changes.outputs.nightly == 'true' && 'nightly' || '' }}"
+	nlTopoIf    = "!cancelled() && contains(needs.changes.outputs.topology_after, needs.e2e.result) && " + authorCond
+	nlTeardown  = "always() && " + nlOn + " && " + authorCond
+	nlGroup     = "group: dev-preview-${{ github.event.pull_request.number || 'nightly' }}"
+	nlPRVar     = "PR: ${{ github.event.pull_request.number || 'nightly' }}"
+	nlFlakyStep = "Fail on a retry-pass in a spec this PR changed"
+)
+
+func nlJSONFile(name string) string {
+	return "PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ " + nlOn + " && format('{0}/nightly-results/" + name + "', github.workspace) || '' }}"
+}
+
+// nlCode drops the comments of a run block, so a commented command does not count.
+func nlCode(run string) string {
+	return strings.Join(stripHashComments(strings.Split(run, "\n")), "\n")
+}
+
+func nlJobs(yml string) map[string]workflowJob {
+	m := map[string]workflowJob{}
+	for _, j := range workflowJobsOf(yml) {
+		m[j.name] = j
+	}
+	return m
+}
+
+func nlStep(j workflowJob, name string) (workflowStep, bool) {
+	for _, s := range j.steps() {
+		if s.keys["name"] == name {
+			return s, true
+		}
+	}
+	return workflowStep{}, false
+}
+
+func nlStepByID(j workflowJob, id string) (workflowStep, bool) {
+	for _, s := range j.steps() {
+		if s.keys["id"] == id {
+			return s, true
+		}
+	}
+	return workflowStep{}, false
+}
+
+// nlRaw returns the trimmed lines of the step named name.
+func nlRaw(j workflowJob, name string) []string {
+	for _, s := range rawSteps(j) {
+		if slices.Contains(s, "name: "+name) {
+			return s
+		}
+	}
+	return nil
+}
+
+// devEnvNightlyProblems names each nightly-mode clause of dev-env.yml that the text breaks.
+func devEnvNightlyProblems(yml string) []string {
+	var p []string
+	bad := func(msg string) { p = append(p, msg) }
+	jobs := nlJobs(yml)
+	top := stripHashComments(strings.Split(yml, "\n"))
+
+	if !slices.Contains(onBlockLines(strings.Split(yml, "\n")), "workflow_dispatch:") {
+		bad("on: lacks workflow_dispatch")
+	}
+	if !slices.Contains(top, "  "+nlGroup) {
+		bad("concurrency group is not " + nlGroup)
+	}
+	if !slices.Contains(top, "  "+nlPRVar) {
+		bad("env.PR is not " + nlPRVar)
+	}
+
+	ch, ok := jobs["changes"]
+	if !ok {
+		return append(p, "no changes job")
+	}
+	outs := blockLines(ch.lines, 4, "outputs")
+	for _, w := range []string{
+		"e2e: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.lane.outputs.e2e }}",
+		"nightly: ${{ steps.mode.outputs.nightly }}",
+		"topology_after: ${{ steps.mode.outputs.topology_after }}",
+		"shards: ${{ steps.shards.outputs.shards }}",
+	} {
+		if !slices.Contains(outs, w) {
+			bad("changes outputs lack " + w)
+		}
+	}
+	if m, ok := nlStepByID(ch, "mode"); !ok || m.env["NIGHTLY"] != "${{ github.event_name == 'workflow_dispatch' }}" {
+		bad("changes mode step NIGHTLY is not the dispatch test")
+	} else if strings.Count(m.keys["run"], "topology_after=success failure") != 1 {
+		bad("mode step: only the nightly branch may write topology_after=success failure")
+	}
+	for _, id := range []string{"filter", "lane"} {
+		if s, ok := nlStepByID(ch, id); !ok || s.keys["if"] != "github.event_name == 'pull_request'" {
+			bad("changes step " + id + " is not pull_request only")
+		}
+	}
+	if s, ok := nlStepByID(ch, "shards"); !ok || !strings.Contains(nlCode(s.keys["run"]), "node e2e/topology/shards.ts") {
+		bad("changes lacks the shards step")
+	}
+	if va, _ := jobKey(jobs["commit-authors"], "outputs"); !strings.Contains(va, "dependabot_only: ${{ steps.verdict.outputs.dependabot_only }}") {
+		bad("commit-authors output changed")
+	}
+
+	e2e, topo := jobs["e2e"], jobs["topology"]
+	if _, ok := nlStepByID(e2e, "shards"); ok {
+		bad("e2e keeps the shards step")
+	}
+	if strings.Contains(strings.Join(e2e.lines, "\n"), "shards:") {
+		bad("e2e keeps a shards output")
+	}
+	if !slices.Equal(needsOf(topo), []string{"changes", "commit-authors", "e2e", "prepare-env", "deploy"}) {
+		bad("topology needs are not changes, commit-authors, e2e, prepare-env, deploy")
+	}
+	if x, _ := foldedIf(topo); x != nlTopoIf {
+		bad("topology if is not exactly " + nlTopoIf)
+	}
+	if !strings.Contains(strings.Join(topo.lines, "\n"), "shard: ${{ fromJSON(needs.changes.outputs.shards) }}") {
+		bad("topology matrix does not read changes shards")
+	}
+
+	pe := jobs["prepare-env"]
+	var order []string
+	for _, s := range pe.steps() {
+		switch s.keys["name"] {
+		case "Delete a leftover nightly preview", "Prove no nightly preview is left", "Count the previews", "preview cap reached", "Create the PR's secrets (generated, never copied from production)":
+			order = append(order, s.keys["name"])
+			if !strings.HasPrefix(s.keys["name"], "Create") && !strings.HasPrefix(s.keys["if"], nlOn) {
+				bad("prepare-env step " + s.keys["name"] + " is not nightly only")
+			}
+		}
+	}
+	if !slices.Equal(order, []string{"Delete a leftover nightly preview", "Prove no nightly preview is left", "Count the previews", "preview cap reached", "Create the PR's secrets (generated, never copied from production)"}) {
+		bad("prepare-env cap steps are out of order: " + strings.Join(order, " | "))
+	}
+	if c, _ := nlStep(pe, "preview cap reached"); c.keys["if"] != nlOn+" && steps.count.outputs.full != 'false'" {
+		bad("preview cap reached if does not read steps.count.outputs.full")
+	}
+	if l, _ := nlStep(pe, "Delete a leftover nightly preview"); !strings.Contains(nlCode(l.keys["run"]), `preview.sh teardown "$PR"`) {
+		bad("prepare-env leftover step does not tear down the nightly")
+	}
+	if c, ok := nlStepByID(pe, "count"); !ok || c.keys["name"] != "Count the previews" || !strings.Contains(nlCode(c.keys["run"]), "preview.sh cap") {
+		bad("prepare-env count step missing")
+	}
+
+	if w, ok := nlStepByID(jobs["ci-watch"], "wait"); !ok || w.keys["if"] != nlOff {
+		bad("ci-watch wait step lacks the nightly clause")
+	}
+	for _, j := range []string{"e2e", "topology"} {
+		if s, ok := nlStep(jobs[j], nlFlakyStep); !ok || !strings.HasSuffix(s.keys["if"], " && "+nlOff) {
+			bad(j + " flaky gate lacks the nightly clause")
+		}
+	}
+	if x, _ := jobKey(jobs["e2e-gate"], "if"); x != "always() && "+nlOff {
+		bad("e2e-gate if is not always() && nightly off")
+	}
+
+	for _, j := range []string{"e2e", "topology"} {
+		if !slices.Contains(blockLines(jobs[j].lines, 4, "env"), nlTarget) {
+			bad(j + " env lacks E2E_TARGET")
+		}
+	}
+	for step, f := range map[string]string{
+		"Smoke (landing, library, blog and both consoles render)": "playwright-smoke.json",
+		"API E2E (typed contract suite)":                          "playwright-api.json",
+	} {
+		if s, ok := nlStep(e2e, step); !ok || s.env["PLAYWRIGHT_JSON_OUTPUT_FILE"] != strings.TrimPrefix(nlJSONFile(f), "PLAYWRIGHT_JSON_OUTPUT_FILE: ") {
+			bad("e2e " + step + " does not write " + f)
+		}
+	}
+	if s, ok := nlStep(topo, "Topology (${{ matrix.shard }})"); !ok || !strings.Contains(s.env["PLAYWRIGHT_JSON_OUTPUT_FILE"], "playwright-topology-{1}.json', github.workspace, matrix.shard)") {
+		bad("topology step does not write playwright-topology-<shard>.json")
+	}
+	for j, art := range map[string]string{"e2e": "results-e2e", "topology": "results-topology-${{ matrix.shard }}"} {
+		raw := nlRaw(jobs[j], "Upload the nightly results")
+		for _, w := range []string{"if: always() && " + nlOn, "uses: actions/upload-artifact@v7", "name: " + art, "path: nightly-results/", "if-no-files-found: ignore", "retention-days: 14"} {
+			if !slices.Contains(raw, w) {
+				bad(j + " results upload lacks " + w)
+			}
+		}
+	}
+
+	hg, _ := nlStep(jobs["health-gate"], "Wait for gateway /health 200 on the commit under test")
+	for _, w := range []string{`"$mock" != on`, `"$issuers" != 2`} {
+		if !strings.Contains(hg.keys["run"], w) {
+			bad("health-gate lacks " + w)
+		}
+	}
+	if strings.Contains(strings.Join(jobs["health-gate"].lines, "\n"), "nightly") {
+		bad("health-gate names the nightly mode")
+	}
+
+	td, ok := jobs["nightly-teardown"]
+	if !ok {
+		return append(p, "no nightly-teardown job")
+	}
+	if x, _ := jobKey(td, "name"); x != "Delete the nightly preview" {
+		bad("nightly-teardown name is " + x)
+	}
+	if !slices.Equal(needsOf(td), []string{"changes", "commit-authors", "prepare-env", "build", "deploy", "health-gate", "fleet-gate", "e2e", "topology"}) {
+		bad("nightly-teardown needs are wrong")
+	}
+	if x, _ := foldedIf(td); x != nlTeardown {
+		bad("nightly-teardown if is not exactly " + nlTeardown)
+	}
+	if x, _ := jobKey(td, "timeout-minutes"); x != "20" {
+		bad("nightly-teardown timeout-minutes is not 20")
+	}
+	var runs []string
+	for _, s := range td.steps() {
+		if r := s.keys["run"]; r != "" {
+			runs = append(runs, r)
+		}
+	}
+	if len(runs) != 2 || runs[0] != `bash scripts/ci/preview.sh teardown "$PR"` ||
+		!strings.Contains(runs[1], "preview.sh prs") || !strings.Contains(runs[1], "$GITHUB_STEP_SUMMARY") || !strings.Contains(runs[1], "::error::") {
+		bad("nightly-teardown does not tear down, then print and check prs")
+	}
+
+	for name, j := range jobs {
+		if strings.Contains(strings.Join(j.lines, "\n"), "scripts/ci/preview.sh") {
+			if _, ok := jobKey(j, "timeout-minutes"); !ok {
+				bad("job " + name + " calls preview.sh without timeout-minutes")
+			}
+		}
+	}
+	if x, _ := jobKey(e2e, "timeout-minutes"); x != nlE2ETimeout {
+		bad("e2e timeout-minutes is not the nightly-only 40")
+	}
+	if g := unguardedOIDCJobs(yml); len(g) != 0 {
+		bad("unguarded OIDC jobs: " + strings.Join(g, ","))
+	}
+	return p
+}
+
+func requireDevEnvProblem(t *testing.T, old, repl, want string) {
+	t.Helper()
+	got := devEnvNightlyProblems(mutateOnce(t, readWorkflow(t, "dev-env.yml"), old, repl))
+	if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, want) }) {
+		t.Errorf("problems %q lack one naming %q", got, want)
+	}
+}
+
+func TestDevEnvNightly_RealFileHasNoProblems(t *testing.T) {
+	t.Parallel()
+	if got := devEnvNightlyProblems(readWorkflow(t, "dev-env.yml")); len(got) > 0 {
+		t.Errorf("problems: %q", got)
+	}
+}
+
+// The job if: and needs of dev-env.yml at 7b01a4bf.
+var nlGolden = map[string][2]string{
+	"ci-watch":    {"[changes, commit-authors]", "github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && " + authorCond},
+	"invariants":  {"[commit-authors]", authorCond},
+	"prepare-env": {"[changes, commit-authors]", "github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && " + authorCond},
+	"build":       {"[changes, commit-authors]", "github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true' && " + authorCond},
+	"deploy":      {"[prepare-env, build]", "!cancelled() && needs.prepare-env.result == 'success' && needs.build.result == 'success'"},
+	"health-gate": {"[deploy, prepare-env]", "!cancelled() && needs.deploy.result == 'success'"},
+	"fleet-gate":  {"[deploy, prepare-env]", "!cancelled() && needs.deploy.result == 'success'"},
+	"e2e": {"[fleet-gate, health-gate, prepare-env, deploy, ci-watch]",
+		"!cancelled() && needs.fleet-gate.result == 'success' && needs.health-gate.result == 'success' && needs.ci-watch.result == 'success'"},
+}
+
+func TestDevEnvNightly_PRExpressionsUnchanged(t *testing.T) {
+	t.Parallel()
+	jobs := nlJobs(readWorkflow(t, "dev-env.yml"))
+	for name, g := range nlGolden {
+		j := jobs[name]
+		needs, _ := jobKey(j, "needs")
+		if name == "e2e" {
+			needs = strings.Replace(needs, "[changes, ", "[", 1) // the one added edge
+		}
+		if needs != g[0] {
+			t.Errorf("%s needs = %q, want %q", name, needs, g[0])
+		}
+		if x, _ := foldedIf(j); x != g[1] {
+			t.Errorf("%s if = %q, want %q", name, x, g[1])
+		}
+	}
+}
+
+func TestDevEnvNightly_ModeStepRuns(t *testing.T) {
+	t.Parallel()
+	step, ok := nlStepByID(devEnvJob(t, "changes"), "mode")
+	if !ok {
+		t.Fatal("changes has no mode step")
+	}
+	for nightly, want := range map[string]string{
+		"true":  "nightly=true\ntopology_after=success failure\n",
+		"false": "nightly=false\ntopology_after=success\n",
+	} {
+		out := filepath.Join(t.TempDir(), "out")
+		_, stderr, code := runBashScript(t, "NIGHTLY="+nightly+" GITHUB_OUTPUT="+out+"\nexport NIGHTLY GITHUB_OUTPUT\n"+step.keys["run"])
+		got, _ := os.ReadFile(out)
+		if code != 0 || string(got) != want {
+			t.Errorf("NIGHTLY=%s: exit %d, output %q, want %q; %s", nightly, code, got, want, stderr)
+		}
+	}
+}
+
+func TestDevEnvNightly_TopologyWaitsForE2EToEnd(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	for _, c := range []struct{ old, repl, want string }{
+		{`if: "` + nlTopoIf + `"`, `if: "!cancelled() && contains(needs.changes.outputs.topology_after, needs.e2e.result)"`, "topology if"},
+		{"needs: [changes, commit-authors, e2e, prepare-env, deploy]", "needs: [changes, e2e, prepare-env, deploy]", "topology needs"},
+		{"shard: ${{ fromJSON(needs.changes.outputs.shards) }}", "shard: ${{ fromJSON(needs.e2e.outputs.shards) }}", "topology matrix"},
+		{"            echo \"topology_after=success\" >>\"$GITHUB_OUTPUT\"", "            echo \"topology_after=success failure\" >>\"$GITHUB_OUTPUT\"", "mode"},
+	} {
+		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
+			t.Errorf("mutation of %q: problems %q lack %q", c.old, got, c.want)
+		}
+	}
+	// Dropping the author conjunct leaves topology unguarded for Dependabot.
+	dropped := mutateOnce(t, yml, " && "+authorCond+"\"\n    runs-on: ubuntu-latest\n    # ceiling", "\"\n    runs-on: ubuntu-latest\n    # ceiling")
+	if got := unguardedOIDCJobs(dropped); !slices.Contains(got, "topology") {
+		t.Errorf("unguarded OIDC jobs = %v, want topology", got)
+	}
+	// An e2e shard step brings the shard list back to e2e.
+	withShard := mutateOnce(t, yml, "      - name: Install deps\n        run: pnpm install --frozen-lockfile --ignore-scripts",
+		"      - id: shards\n        run: echo\n      - name: Install deps\n        run: pnpm install --frozen-lockfile --ignore-scripts")
+	if got := devEnvNightlyProblems(withShard); !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "e2e keeps the shards step") }) {
+		t.Errorf("problems %q lack the e2e shard step", got)
+	}
+}
+
+func TestDevEnvNightly_ModeComesFromTheDispatch(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ old, repl, want string }{
+		{"  workflow_dispatch:\n", "", "workflow_dispatch"},
+		{"github.event.pull_request.number || 'nightly' }}\n  cancel", "github.event.pull_request.number }}\n  cancel", "concurrency group"},
+		{"  PR: ${{ github.event.pull_request.number || 'nightly' }}", "  PR: ${{ github.event.pull_request.number }}", "env.PR"},
+		{"nightly: ${{ steps.mode.outputs.nightly }}", "nightly: ${{ steps.mode.outputs.x }}", "changes outputs"},
+		{"e2e: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.lane.outputs.e2e }}", "e2e: ${{ steps.lane.outputs.e2e }}", "changes outputs"},
+		{"NIGHTLY: ${{ github.event_name == 'workflow_dispatch' }}", "NIGHTLY: false", "mode step"},
+		{"        id: filter\n        if: github.event_name == 'pull_request'\n", "        id: filter\n", "step filter"},
+	} {
+		requireDevEnvProblem(t, c.old, c.repl, c.want)
+	}
+}
+
+func TestDevEnvNightly_PrepareEnvStopsAtTheCap(t *testing.T) {
+	t.Parallel()
+	pe := devEnvJob(t, "prepare-env")
+	for _, n := range []string{"Delete a leftover nightly preview", "Prove no nightly preview is left", "Count the previews", "preview cap reached"} {
+		s, ok := nlStep(pe, n)
+		if !ok || !strings.HasPrefix(s.keys["if"], nlOn) {
+			t.Errorf("step %q is missing or not nightly only (if = %q)", n, s.keys["if"])
+		}
+	}
+	yml := readWorkflow(t, "dev-env.yml")
+	for _, c := range []struct{ old, repl, want string }{
+		{"        if: " + nlOn + " && steps.count.outputs.full != 'false'\n", "        if: " + nlOn + "\n", "preview cap reached if"},
+		{"      - name: preview cap reached\n", "      - name: preview cap reached early\n", "out of order"},
+		{"      - name: Delete a leftover nightly preview\n        if: " + nlOn + "\n", "      - name: Delete a leftover nightly preview\n", "not nightly only"},
+	} {
+		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
+			t.Errorf("mutation %q: problems %q lack %q", c.old, got, c.want)
+		}
+	}
+	// Moving the cap step after the secrets step.
+	capStep := "      - name: preview cap reached\n        if: " + nlOn + " && steps.count.outputs.full != 'false'\n        env:\n          OPEN: ${{ steps.count.outputs.open }}\n        run: |\n          echo \"::error::preview cap reached: $OPEN previews open (.claude/rules/ci-preview.md)\"\n          exit 1\n"
+	secrets := "      - name: Create the PR's secrets (generated, never copied from production)\n        run: bash scripts/ci/preview.sh secrets \"$PR\"\n"
+	moved := mutateOnce(t, mutateOnce(t, yml, capStep, ""), secrets, secrets+capStep)
+	if got := devEnvNightlyProblems(moved); !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "out of order") }) {
+		t.Errorf("a cap step after the secrets step went unnoticed: %q", got)
+	}
+}
+
+// nlE2ETimeout: the nightly gets 40 minutes; a PR keeps GitHub's 360-minute default (Q1).
+const nlE2ETimeout = "${{ needs.changes.outputs.nightly == 'true' && 40 || 360 }}"
+
+// nlCapFails as the cap output makes the stub's `cap` exit non-zero.
+const nlCapFails = "!fail"
+
+// nlRunStep runs the named step of a job with a stub preview.sh; the stub's prs and cap output are the arguments.
+func nlRunStep(t *testing.T, job, step, prs, capOut string, env ...string) (string, int) {
+	t.Helper()
+	s, ok := nlStep(devEnvJob(t, job), step)
+	if !ok {
+		t.Fatalf("no step %q in %s", step, job)
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "scripts/ci"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	capBody := "printf '%s' '" + capOut + "'"
+	if capOut == nlCapFails {
+		capBody = "echo 'gcloud blip' >&2; exit 3"
+	}
+	writeIn(t, filepath.Join(dir, "scripts/ci"), "preview.sh", "case \"$1\" in\nprs) printf '%s' '"+prs+"' ;;\ncap) "+capBody+" ;;\nesac\n")
+	script := "cd '" + dir + "'\n" + strings.Join(env, "\n") + "\nexport GITHUB_OUTPUT='" + filepath.Join(dir, "out") + "' GITHUB_STEP_SUMMARY='" + filepath.Join(dir, "summary") + "'\n" + s.keys["run"]
+	stdout, stderr, code := runBashScript(t, script)
+	return stdout + stderr, code
+}
+
+func nlRunPreview(t *testing.T, step, prs, capOut string, env ...string) (string, int) {
+	t.Helper()
+	return nlRunStep(t, "prepare-env", step, prs, capOut, env...)
+}
+
+func TestDevEnvNightly_CapStepsRun(t *testing.T) {
+	t.Parallel()
+	const prove = "Prove no nightly preview is left"
+	if out, code := nlRunPreview(t, prove, "nightly 2026\n7 2026\n", ""); code != 1 || !strings.Contains(out, "::error::") {
+		t.Errorf("a nightly line: exit %d, out %q, want exit 1 with ::error::", code, out)
+	}
+	for _, prs := range []string{"7 2026\n", "", "nightly2 2026\n"} {
+		if out, code := nlRunPreview(t, prove, prs, ""); code != 0 {
+			t.Errorf("prs %q: exit %d, out %q, want 0", prs, code, out)
+		}
+	}
+	if out, code := nlRunPreview(t, "preview cap reached", "", "", "OPEN=3"); code != 1 || !strings.Contains(out, "preview cap reached: 3") {
+		t.Errorf("cap step: exit %d, out %q, want exit 1 with 'preview cap reached: 3'", code, out)
+	}
+	const gone = "Prove the nightly preview is gone"
+	if out, code := nlRunStep(t, "nightly-teardown", gone, "nightly 2026\n7 2026\n", ""); code != 1 || !strings.Contains(out, "::error::") {
+		t.Errorf("teardown with a nightly line left: exit %d, out %q, want exit 1 with ::error::", code, out)
+	}
+	for _, prs := range []string{"7 2026\n", "", "nightly2 2026\n"} {
+		if out, code := nlRunStep(t, "nightly-teardown", gone, prs, ""); code != 0 {
+			t.Errorf("teardown, prs %q: exit %d, out %q, want 0", prs, code, out)
+		}
+	}
+	out, code := nlRunPreview(t, "Count the previews", "", "open=1\nfull=false\n")
+	if code != 0 || !strings.Contains(out, "full=false") {
+		t.Errorf("count step: exit %d, out %q", code, out)
+	}
+}
+
+// A failing `cap` must fail the step (GitHub's default shell has no pipefail), and a missing
+// `full` must not read as "not full".
+func TestDevEnvNightly_FailedCapCountFailsTheStep(t *testing.T) {
+	t.Parallel()
+	if out, code := nlRunPreview(t, "Count the previews", "", nlCapFails); code == 0 {
+		t.Errorf("count step exited 0 with a failing cap, out %q", out)
+	}
+	pe := devEnvJob(t, "prepare-env")
+	if c, _ := nlStep(pe, "preview cap reached"); !strings.Contains(c.keys["if"], "steps.count.outputs.full != 'false'") {
+		t.Errorf("cap guard if = %q, want it to fire unless full is 'false'", c.keys["if"])
+	}
+}
+
+func TestDevEnvNightly_PRGatesSkipped(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ old, repl, want string }{
+		{"        name: Wait for the CI check to succeed on this commit\n        if: " + nlOff + "\n", "        name: Wait for the CI check to succeed on this commit\n", "ci-watch wait"},
+		{"    if: always() && " + nlOff + "\n    runs-on: ubuntu-latest\n    timeout-minutes: 5", "    if: always()\n    runs-on: ubuntu-latest\n    timeout-minutes: 5", "e2e-gate"},
+		{"if: always() && steps.attempt.outcome == 'success' && " + nlOff + "\n", "if: always() && steps.attempt.outcome == 'success'\n", "e2e flaky gate"},
+		{"steps.targets.outcome == 'success' && " + nlOff, "steps.targets.outcome == 'success'", "topology flaky gate"},
+	} {
+		requireDevEnvProblem(t, c.old, c.repl, c.want)
+	}
+}
+
+func TestDevEnvNightly_ResultsUploaded(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ old, repl, want string }{
+		{"      " + nlTarget + "\n    steps:\n      # \"Re-run", "    steps:\n      # \"Re-run", "e2e env lacks E2E_TARGET"},
+		{nlJSONFile("playwright-smoke.json"), "PLAYWRIGHT_JSON_OUTPUT_FILE: ''", "Smoke"},
+		{nlJSONFile("playwright-api.json"), "PLAYWRIGHT_JSON_OUTPUT_FILE: ''", "API E2E"},
+		{"name: results-e2e", "name: results", "results upload lacks name: results-e2e"},
+		{"name: results-topology-${{ matrix.shard }}", "name: results-topology", "topology results upload lacks"},
+		{"        if: always() && " + nlOn + "\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-e2e", "        if: always()\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-e2e", "e2e results upload lacks if"},
+		{"          name: results-e2e\n          path: nightly-results/\n          if-no-files-found: ignore\n          retention-days: 14", "          name: results-e2e\n          path: nightly-results/\n          if-no-files-found: ignore\n          retention-days: 7", "retention-days: 14"},
+	} {
+		got := devEnvNightlyProblems(mutateOnce(t, readWorkflow(t, "dev-env.yml"), c.old, c.repl))
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
+			t.Errorf("mutation %q: problems %q lack %q", c.old, got, c.want)
+		}
+	}
+}
+
+func TestDevEnvNightly_HealthGateHasNoModeBranch(t *testing.T) {
+	t.Parallel()
+	hg := devEnvJob(t, "health-gate")
+	s, _ := nlStep(hg, "Wait for gateway /health 200 on the commit under test")
+	for _, w := range []string{`"$mock" != on`, `"$issuers" != 2`} {
+		if !strings.Contains(s.keys["run"], w) {
+			t.Errorf("health gate lacks %q", w)
+		}
+	}
+	if strings.Contains(strings.Join(hg.lines, "\n"), "nightly") {
+		t.Error("health-gate names the nightly mode")
+	}
+	requireDevEnvProblem(t, `if [ "$issuers" != 2 ]; then`, `if [ "$issuers" != 1 ]; then`, "health-gate lacks")
+}
+
+func TestDevEnvNightly_TeardownAlwaysRunsInNightlyModeOnly(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	for _, c := range []struct{ old, repl, want string }{
+		{"    if: " + nlTeardown + "\n", "    if: success() && " + nlOn + " && " + authorCond + "\n", "nightly-teardown if"},
+		{"    if: " + nlTeardown + "\n", "    if: always() && " + authorCond + "\n", "nightly-teardown if"},
+		{"    timeout-minutes: 20\n", "    timeout-minutes: 30\n", "timeout-minutes is not 20"},
+		{"needs: [changes, commit-authors, prepare-env, build, deploy, health-gate, fleet-gate, e2e, topology]", "needs: [changes, commit-authors, prepare-env, build, deploy]", "nightly-teardown needs"},
+		{"        run: bash scripts/ci/preview.sh teardown \"$PR\"\n      - name: Prove the nightly preview is gone", "        run: echo skip\n      - name: Prove the nightly preview is gone", "does not tear down"},
+	} {
+		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
+			t.Errorf("mutation %q: problems %q lack %q", c.old, got, c.want)
+		}
+	}
+}
+
+func TestDevEnvNightly_EveryPreviewJobHasATimeout(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	n := 0
+	for name, j := range nlJobs(yml) {
+		if !strings.Contains(strings.Join(j.lines, "\n"), "scripts/ci/preview.sh") {
+			continue
+		}
+		n++
+		if _, ok := jobKey(j, "timeout-minutes"); !ok {
+			t.Errorf("job %s calls preview.sh without timeout-minutes", name)
+		}
+	}
+	if v, _ := jobKey(nlJobs(yml)["e2e"], "timeout-minutes"); v != nlE2ETimeout {
+		t.Errorf("e2e timeout-minutes = %q, want %q (40 nightly, the 360 default on a PR)", v, nlE2ETimeout)
+	}
+	if n < 8 {
+		t.Errorf("control: only %d jobs call preview.sh", n)
+	}
+	requireDevEnvProblem(t, "    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      gateway_url", "    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      gateway_url", "job prepare-env calls")
+}
+
+// The contacts step of fleet-gate at 7b01a4bf, trimmed per line.
+var nlContactsGate = []string{
+	`name: Gate on notifications' contacts delivery mode`,
+	`run: |`,
+	`set -euo pipefail`,
+	`mode=""`,
+	`for _ in $(seq 1 5); do`,
+	`if curl -sS --connect-timeout 5 --max-time 40 -H "X-Gateway-Token: $GATEWAY_TOKEN" -o /tmp/contacts-fleet.json "$GATEWAY_URL/healthz/fleet" \`,
+	`&& jq -e '.services | type == "array"' /tmp/contacts-fleet.json >/dev/null 2>&1; then`,
+	`mode=$(jq -r '[.services[] | select(.name == "notifications") | .contacts // "none"][0] // "absent"' /tmp/contacts-fleet.json)`,
+	`if [ "$mode" = fake ]; then break; fi`,
+	`fi`,
+	`sleep 5`,
+	`done`,
+	`if [ "$mode" != fake ]; then`,
+	`echo "::error::notifications reports contacts='${mode:-unreachable}', want 'fake'. Anything else means the preview could write to HubSpot or Resend: check DEPLOY_ENV is pr-<N>."`,
+	`exit 1`,
+	`fi`,
+	`echo "notifications reports contacts=fake."`,
+}
+
+func TestDevEnvNightly_ContactsGateUnchanged(t *testing.T) {
+	t.Parallel()
+	got := nlRaw(devEnvJob(t, "fleet-gate"), "Gate on notifications' contacts delivery mode")
+	if !slices.Equal(got, nlContactsGate) {
+		t.Errorf("contacts gate changed:\n%s", strings.Join(got, "\n"))
+	}
+	if strings.Contains(strings.Join(got, "\n"), "nightly") {
+		t.Error("contacts gate names the nightly mode")
+	}
+}

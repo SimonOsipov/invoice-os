@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -17,12 +19,14 @@ import (
 const (
 	modulePrefix = "github.com/SimonOsipov/invoice-os"
 	ciFile       = ".github/workflows/ci.yml"
+	devEnvFile   = ".github/workflows/dev-env.yml"
 	maxMessage   = 300
 )
 
 type suiteSpec struct {
 	key, name string
 	results   bool
+	workflow  string // the workflow file that runs the job
 }
 
 type step struct {
@@ -87,7 +91,7 @@ var reservedKeys = map[string]bool{
 	"verdict": true, "suites": true, "failures": true, "flakes": true,
 }
 
-func parseSuites(text string) ([]suiteSpec, error) {
+func parseSuites(text, workflow string) ([]suiteSpec, error) {
 	var out []suiteSpec
 	seen := map[string]bool{}
 	for i, line := range strings.Split(text, "\n") {
@@ -106,7 +110,7 @@ func parseSuites(text string) ([]suiteSpec, error) {
 			return nil, fmt.Errorf("line %d: duplicate key %q", i+1, parts[0])
 		}
 		seen[parts[0]] = true
-		out = append(out, suiteSpec{key: parts[0], name: parts[1], results: len(parts) == 3})
+		out = append(out, suiteSpec{key: parts[0], name: parts[1], results: len(parts) == 3, workflow: workflow})
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no suites")
@@ -544,6 +548,83 @@ func parseVitest(data []byte, workspace string) (parsedFile, error) {
 	return pf, nil
 }
 
+// ---- Playwright ----
+
+type playwrightSuite struct {
+	Title string `json:"title"`
+	Specs []struct {
+		Title string `json:"title"`
+		File  string `json:"file"`
+		Tests []struct {
+			Status  string `json:"status"`
+			Results []struct {
+				Status string `json:"status"`
+				Error  *struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			} `json:"results"`
+		} `json:"tests"`
+	} `json:"specs"`
+	Suites []playwrightSuite `json:"suites"`
+}
+
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+
+// parsePlaywright reads a --reporter=json report; Playwright judges its own retries, so outcomes are direct.
+func parsePlaywright(data []byte, workspace string) (parsedFile, error) {
+	var rep struct {
+		Config struct {
+			RootDir string `json:"rootDir"`
+		} `json:"config"`
+		Suites []playwrightSuite `json:"suites"`
+	}
+	if err := json.Unmarshal(data, &rep); err != nil {
+		return parsedFile{}, err
+	}
+	var pf parsedFile
+	// The top-level suites are files; their titles are not part of a test title.
+	var walk func(s playwrightSuite, describes []string)
+	walk = func(s playwrightSuite, describes []string) {
+		for _, sp := range s.Specs {
+			file := path.Join(rep.Config.RootDir, sp.File)
+			if workspace != "" {
+				file = strings.TrimPrefix(file, strings.TrimRight(workspace, "/")+"/")
+			}
+			title := strings.Join(append(append([]string(nil), describes...), sp.Title), " › ")
+			for _, t := range sp.Tests {
+				pf.seen++
+				o := outcome{test: title, file: file}
+				switch t.Status {
+				case "expected":
+				case "unexpected":
+					o.status = statusFail
+					o.msg = "test failed"
+					for i := len(t.Results) - 1; i >= 0; i-- {
+						if e := t.Results[i].Error; t.Results[i].Status != "passed" && e != nil {
+							if m := firstLine(ansiEscape.ReplaceAllString(e.Message, "")); m != "" {
+								o.msg = m
+							}
+							break
+						}
+					}
+				case "flaky":
+					o.status = statusFlake
+				default:
+					continue
+				}
+				pf.direct = append(pf.direct, o)
+			}
+		}
+		for _, sub := range s.Suites {
+			walk(sub, append(describes, sub.Title))
+		}
+	}
+	for _, s := range rep.Suites {
+		walk(s, nil)
+	}
+	return pf, nil
+}
+
 // ---- JUnit ----
 
 type junitProblem struct {
@@ -676,6 +757,7 @@ func readSuiteFiles(dir, key, workspace string) suiteFiles {
 		n := e.Name()
 		if !e.IsDir() && (strings.HasPrefix(n, "gotest-") && strings.HasSuffix(n, ".json") ||
 			strings.HasPrefix(n, "vitest-") && strings.HasSuffix(n, ".json") ||
+			strings.HasPrefix(n, "playwright-") && strings.HasSuffix(n, ".json") ||
 			strings.HasPrefix(n, "junit-") && strings.HasSuffix(n, ".xml")) {
 			names = append(names, n)
 		}
@@ -699,6 +781,8 @@ func readSuiteFiles(dir, key, workspace string) suiteFiles {
 				pf, err = parseGo(bytes.NewReader(data), n)
 			case strings.HasPrefix(n, "vitest-"):
 				pf, err = parseVitest(data, workspace)
+			case strings.HasPrefix(n, "playwright-"):
+				pf, err = parsePlaywright(data, workspace)
 			default:
 				pf, err = parseJUnit(data, junitSet(n))
 			}
@@ -749,7 +833,7 @@ func judgeSuite(spec suiteSpec, jobs []job, resultsDir, workspace string) (*suit
 				conc = "unfinished"
 			}
 		}
-		return nil, []failure{{Suite: spec.key, Test: "suite did not run", File: ciFile, Message: "job " + spec.name + " " + conc}}, nil
+		return nil, []failure{{Suite: spec.key, Test: "suite did not run", File: spec.workflow, Message: "job " + spec.name + " " + conc}}, nil
 	}
 
 	var fails []failure
@@ -770,19 +854,19 @@ func judgeSuite(spec suiteSpec, jobs []job, resultsDir, workspace string) (*suit
 			}
 		}
 		if sf.seen == 0 && !sf.unreadable {
-			fails = append(fails, failure{spec.key, "no test results", ciFile, "job " + spec.name + " wrote no results"})
+			fails = append(fails, failure{spec.key, "no test results", spec.workflow, "job " + spec.name + " wrote no results"})
 		}
 	} else if j.Conclusion == "success" {
 		passed = 1
 	}
 	if j.Conclusion != "success" {
-		fails = append(fails, stepFailures(spec.key, j, testFails == 0)...)
+		fails = append(fails, stepFailures(spec.key, spec.workflow, j, testFails == 0)...)
 	}
 	return &suiteResult{Name: spec.key, Passed: passed, Failed: len(fails), Flaky: len(flakes)}, fails, flakes
 }
 
 // stepFailures lists failed steps (when no test failure explains the job) and the steps an earlier failure skipped.
-func stepFailures(key string, j *job, listFailed bool) []failure {
+func stepFailures(key, workflow string, j *job, listFailed bool) []failure {
 	steps := append([]step(nil), j.Steps...)
 	sort.SliceStable(steps, func(a, b int) bool { return steps[a].Number < steps[b].Number })
 	var out []failure
@@ -793,14 +877,14 @@ func stepFailures(key string, j *job, listFailed bool) []failure {
 			failedSteps++
 			afterFailure = true
 			if listFailed {
-				out = append(out, failure{key, s.Name, ciFile, "step failure"})
+				out = append(out, failure{key, s.Name, workflow, "step failure"})
 			}
 		case afterFailure && s.Conclusion == "skipped" && !strings.HasPrefix(s.Name, "Post "):
-			out = append(out, failure{key, s.Name, ciFile, "not run: an earlier step failed"})
+			out = append(out, failure{key, s.Name, workflow, "not run: an earlier step failed"})
 		}
 	}
 	if listFailed && failedSteps == 0 {
-		out = append(out, failure{key, "(job)", ciFile, "job " + j.Conclusion})
+		out = append(out, failure{key, "(job)", workflow, "job " + j.Conclusion})
 	}
 	return out
 }

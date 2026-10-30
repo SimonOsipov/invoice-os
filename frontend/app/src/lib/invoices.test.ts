@@ -1271,6 +1271,8 @@ describe('getInvoice', () => {
       reject_blocked_reason: null,
       can_correct_invoice_number: false,
       invoice_number_blocked_reason: null,
+      can_issue_note: false,
+      issue_note_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(fiscalInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -1307,6 +1309,8 @@ describe('getInvoice', () => {
       reject_blocked_reason: null,
       can_correct_invoice_number: true,
       invoice_number_blocked_reason: null,
+      can_issue_note: false,
+      issue_note_blocked_reason: null,
     }
     const { qr_png_base64: _omittedQr, ...withoutQrKey } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutQrKey) })
@@ -1339,6 +1343,8 @@ describe('getInvoice', () => {
       reject_blocked_reason: null,
       can_correct_invoice_number: false,
       invoice_number_blocked_reason: null,
+      can_issue_note: false,
+      issue_note_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(detailInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -1392,6 +1398,8 @@ describe('getInvoice', () => {
       reject_blocked_reason: null,
       can_correct_invoice_number: false,
       invoice_number_blocked_reason: null,
+      can_issue_note: false,
+      issue_note_blocked_reason: null,
     }
     const { can_submit: _omittedCanSubmit, ...withoutCanSubmit } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanSubmit) })
@@ -1581,6 +1589,8 @@ describe('getInvoice', () => {
       reject_blocked_reason: null,
       can_correct_invoice_number: true,
       invoice_number_blocked_reason: null,
+      can_issue_note: false,
+      issue_note_blocked_reason: null,
     }
     const { can_view_ubl: _omittedCanViewUbl, ...withoutCanViewUbl } = wire
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanViewUbl) })
@@ -1851,6 +1861,27 @@ describe('getInvoice', () => {
     const fixed = await getInvoice(af, base, 'inv-1')
     expect(fixed.can_correct_invoice_number).toBe(false)
     expect(fixed.invoice_number_blocked_reason).toBe(NUMBER_FIXED_REASON)
+  })
+})
+
+describe('getInvoice: the note gate', () => {
+  it('getInvoice normalises can_issue_note', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    const { can_issue_note: _f, issue_note_blocked_reason: _r, ...bare } = draftInvoice as unknown as Record<string, unknown>
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(bare) })
+    const absent = await getInvoice(af, base, 'inv-1')
+    expect(absent.can_issue_note).toBe(false)
+    expect(absent.issue_note_blocked_reason).toBeNull()
+    expect('issue_note_blocked_reason' in absent).toBe(true)
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...bare, can_issue_note: 'true' }) })
+    expect((await getInvoice(af, base, 'inv-1')).can_issue_note).toBe(false)
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...bare, can_issue_note: true }) })
+    expect((await getInvoice(af, base, 'inv-1')).can_issue_note).toBe(true)
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...bare, issue_note_blocked_reason: 'why' }) })
+    expect((await getInvoice(af, base, 'inv-1')).issue_note_blocked_reason).toBe('why')
   })
 })
 
@@ -2155,6 +2186,8 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
       reject_blocked_reason: null,
       can_correct_invoice_number: false,
       invoice_number_blocked_reason: null,
+      can_issue_note: false,
+      issue_note_blocked_reason: null,
     }
     const af = createAuthedFetch(() => 'tok', vi.fn())
 
@@ -2301,6 +2334,8 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
       reject_blocked_reason: null,
       can_correct_invoice_number: false,
       invoice_number_blocked_reason: null,
+      can_issue_note: false,
+      issue_note_blocked_reason: null,
     }
 
     const fromList = resolvedOutside(listRow)

@@ -87,6 +87,8 @@ function detailFixture(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRe
     reject_blocked_reason: null,
     can_correct_invoice_number: false,
     invoice_number_blocked_reason: null,
+    can_issue_note: false,
+    issue_note_blocked_reason: null,
     ...over,
   }
 }

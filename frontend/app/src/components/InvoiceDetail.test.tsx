@@ -110,6 +110,8 @@ function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRec
     reject_blocked_reason: null,
     can_correct_invoice_number: true,
     invoice_number_blocked_reason: null,
+    can_issue_note: false,
+    issue_note_blocked_reason: null,
     ...over,
   }
 }

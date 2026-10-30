@@ -947,6 +947,38 @@ export function editInvoice(token: string, id: string, body: InvoiceEditInput): 
   return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices/${id}`, { method: 'PATCH', body, token })
 }
 
+// NoteSummary / NotesOnInvoice mirror internal/invoice/notes.go; money is a decimal string.
+export interface NoteSummary {
+  id: string
+  document_type: Invoice['document_type']
+  invoice_number: string
+  status: Invoice['status']
+  total: string | null
+}
+
+export interface NotesOnInvoice {
+  notes: NoteSummary[]
+  credited_so_far: string
+  still_creditable: string | null
+}
+
+export interface NoteIssueInput {
+  document_type: 'credit_note' | 'debit_note'
+  invoice_number: string
+  issue_date: string
+  lines: { line_id: string; quantity: string; unit_price: string }[]
+}
+
+// issueNote(): POST /v1/invoices/{id}/notes -- 201 with the new draft note.
+export function issueNote(token: string, id: string, body: NoteIssueInput): Promise<Invoice> {
+  return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices/${id}/notes`, { method: 'POST', body, token })
+}
+
+// getInvoiceNotes(): GET /v1/invoices/{id}/notes.
+export function getInvoiceNotes(token: string, id: string): Promise<NotesOnInvoice> {
+  return apiFetch<NotesOnInvoice>(`${apiBase()}/api/invoice/v1/invoices/${id}/notes`, { token })
+}
+
 // StatusChange mirrors internal/invoice/invoice.go's StatusChange exactly: one
 // invoice_status_history row (task-160/M4-22-01). from_status is nullable -- the
 // genesis row has no predecessor state.

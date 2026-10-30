@@ -4,9 +4,11 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -260,4 +262,51 @@ func TestCreditedSoFar_SumStaysExactPastFloatPrecision(t *testing.T) {
 	csNote(t, super, tenant, ent, "CS-ONE", "credit_note", o1, "accepted", csAmount("0.12"))
 
 	csWant(t, csCredited(t, app, tenant, o1, ""), "100999999999999.11")
+}
+
+func csStamp(t *testing.T, super *pgxpool.Pool, id string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = 'someone', kept_as_is_reason = 'r' WHERE id = $1`, id); err != nil {
+		t.Fatalf("stamp %s: %v", id, err)
+	}
+}
+
+func TestCreditedSoFar_ResolvedOutsideFailedNoteCounts(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "CS resolved outside")
+	ent := seedEntity(t, super, tenant, "E1")
+	o1 := seedInvoice(t, super, tenant, ent, "CS-O1")
+	csNote(t, super, tenant, ent, "CS-A", "credit_note", o1, "accepted", csAmount("1.00"))
+	csStamp(t, super, csNote(t, super, tenant, ent, "CS-FS", "credit_note", o1, "failed", csAmount("2.00")))
+	csNote(t, super, tenant, ent, "CS-FN", "credit_note", o1, "failed", csAmount("4.00"))
+	csStamp(t, super, csNote(t, super, tenant, ent, "CS-DS", "credit_note", o1, "draft", csAmount("8.00")))
+	// invoices_kept_as_is_status forbids a stamp on a rejected note, so the unstamped row stands for it.
+	csNote(t, super, tenant, ent, "CS-R", "credit_note", o1, "rejected", csAmount("16.00"))
+
+	csWant(t, csCredited(t, app, tenant, o1, ""), "3.00")
+}
+
+func TestCreditedSoFar_ResolveAndUnresolveOutsideMoveTheSum(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "CS resolve cycle")
+	ent := seedEntity(t, super, tenant, "E1")
+	o1 := seedInvoice(t, super, tenant, ent, "CS-O1")
+	csNote(t, super, tenant, ent, "CS-A", "credit_note", o1, "accepted", csAmount("1.00"))
+	failed := csNote(t, super, tenant, ent, "CS-F", "credit_note", o1, "failed", csAmount("4.00"))
+
+	approver := uuid.NewString()
+	seedMembership(t, super, tenant, approver, "admin")
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: approver, Role: "authenticated", TenantID: tenant})
+	store := NewStore(app)
+
+	csWant(t, csCredited(t, app, tenant, o1, ""), "1.00")
+	if _, err := store.ResolveOutside(c, failed, "filed manually"); err != nil {
+		t.Fatalf("ResolveOutside: %v", err)
+	}
+	csWant(t, csCredited(t, app, tenant, o1, ""), "5.00")
+	if _, err := store.UnresolveOutside(c, failed); err != nil {
+		t.Fatalf("UnresolveOutside: %v", err)
+	}
+	csWant(t, csCredited(t, app, tenant, o1, ""), "1.00")
 }

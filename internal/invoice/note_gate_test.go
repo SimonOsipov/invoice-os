@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -663,7 +664,42 @@ func TestGateValidate_RejectedAndFailedEarlierNotesLeaveRoom(t *testing.T) {
 		t.Fatalf("Validate: %v", err)
 	}
 	if got.Status != StatusValidated {
-		t.Errorf("note of 100.00 = %s %v, want validated: rejected, failed and draft notes do not count", got.Status, ngKeys(ngStored(t, got)))
+		t.Errorf("note of 100.00 = %s %v, want validated: rejected, unresolved failed and draft notes do not count", got.Status, ngKeys(ngStored(t, got)))
+	}
+}
+
+func TestGateValidate_ResolvedOutsideFailedNoteCountsUntilUnresolved(t *testing.T) {
+	f := newNGFix(t, "NG resolved outside", "100.00")
+	failed := csNote(t, f.super, f.tenant, f.entity, "NG-RO-F", "credit_note", f.orig, "failed", csAmount("60.00"))
+	approver := uuid.NewString()
+	seedMembership(t, f.super, f.tenant, approver, "admin")
+	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: approver, Role: "authenticated", TenantID: f.tenant})
+	if _, err := f.store.ResolveOutside(c, failed, "filed manually"); err != nil {
+		t.Fatalf("ResolveOutside: %v", err)
+	}
+	n := f.credit("NG-RO-N", "60.00")
+	gate := f.realGate()
+
+	got, _, err := gate.Validate(f.ctx, n)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if got.Status != StatusDraft || !hasViolation(ngStored(t, got), ruleCreditNoteOverCap) {
+		t.Fatalf("note of 60.00 = %s %v, want draft with %s: the resolved failed note took 60.00", got.Status, ngKeys(ngStored(t, got)), ruleCreditNoteOverCap)
+	}
+	if msg := ngMessage(ngStored(t, got), ruleCreditNoteOverCap); !strings.Contains(msg, "40.00") {
+		t.Errorf("over-cap message = %q, want it to state the 40.00 still creditable", msg)
+	}
+
+	if _, err := f.store.UnresolveOutside(c, failed); err != nil {
+		t.Fatalf("UnresolveOutside: %v", err)
+	}
+	got, _, err = gate.Validate(f.ctx, n)
+	if err != nil {
+		t.Fatalf("Validate after unresolve: %v", err)
+	}
+	if got.Status != StatusValidated {
+		t.Errorf("note of 60.00 = %s %v after UnresolveOutside, want validated", got.Status, ngKeys(ngStored(t, got)))
 	}
 }
 

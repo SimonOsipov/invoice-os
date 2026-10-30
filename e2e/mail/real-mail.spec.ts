@@ -10,7 +10,7 @@ import { openInvite, readSessionIdentity, registerOnAcceptPage } from '../invite
 import { seedConsent } from '../smoke/landingConsent'
 import { resolveTarget } from '../targets'
 import { collectSourcedErrors, expectedStatusDropper } from '../topology/consoleGate'
-import { CheckSteps, judgeSends, mailTextDiff, nightlySendsToday, readAccounts, requireEnv } from './mailChecks'
+import { CheckSteps, judgeSends, mailTextDiff, nightlySendsToday, overBudget, readAccounts, requireEnv } from './mailChecks'
 import { getReceived, listSent, waitForMail } from './resendClient'
 
 // Copies of the Go values: accountmail.InviteSubject and InviteAcceptURL; the recovery and confirmation
@@ -75,9 +75,11 @@ test('real mail: the invite and the reset arrive, read right, and their links wo
 
   try {
     await steps.run('mail budget', async () => {
-      const dayStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()))
-      const n = nightlySendsToday(await listSent(key, dayStart), env.RESEND_RECEIVING_DOMAIN)
-      if (n > 22) throw new Error(`${n} nightly mails went out today; a run needs 3; the stop is 25`)
+      const sends = await listSent(key, new Date(Date.now() - 24 * 3600 * 1000))
+      if (overBudget(sends, env.RESEND_RECEIVING_DOMAIN)) {
+        const n = nightlySendsToday(sends, env.RESEND_RECEIVING_DOMAIN)
+        throw new Error(`${n} nightly mails went out today; the budget is spent`)
+      }
     })
 
     await steps.run('invite mail arrives', async () => {

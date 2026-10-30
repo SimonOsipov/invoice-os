@@ -257,7 +257,7 @@ func TestCreditedSoFar_SumStaysExactPastFloatPrecision(t *testing.T) {
 		tenant, ent, o1); err != nil {
 		t.Fatalf("seed bulk: %v", err)
 	}
-	csNote(t, super, tenant, ent, "CS-ONE", "credit_note", o1, "accepted", csAmount("0.01"))
+	csNote(t, super, tenant, ent, "CS-ONE", "credit_note", o1, "accepted", csAmount("0.12"))
 
-	csWant(t, csCredited(t, app, tenant, o1, ""), "100999999999999.00")
+	csWant(t, csCredited(t, app, tenant, o1, ""), "100999999999999.11")
 }

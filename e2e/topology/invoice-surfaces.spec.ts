@@ -3839,10 +3839,10 @@ test('detail surface: a user issues a credit note on chosen lines', async ({ pag
   await expect(page.getByTestId('invoice-status-badge')).toContainText('DRAFT')
   await page.getByTestId('original-invoice-link').click()
 
-  // 2 x 100 + 3 x 100 = 500, plus 7.5% VAT: 537.50, signed negative on the card.
+  // 2 x 100 + 3 x 100 = 500, plus 7.5% VAT = 537.50; the card's fmt rounds to whole naira, signed negative.
   const noteRow = page.getByTestId('notes-card').getByTestId('note-row').filter({ hasText: number })
   await expect(noteRow).toBeVisible()
-  await expect(noteRow.getByTestId('note-row-total')).toHaveText(/^-.*537\.50$/)
+  await expect(noteRow.getByTestId('note-row-total')).toHaveText('-₦538')
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 

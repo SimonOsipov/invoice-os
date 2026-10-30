@@ -850,17 +850,20 @@ func TestRun_SuitesLineThirdFieldMustBeResults(t *testing.T) {
 	eq(t, r.raw == nil, true)
 }
 
+const okStep = `[{"name":"extract","status":"passed","duration_ms":12}]`
+
 func TestRun_SectionOkTrueStaysGreen(t *testing.T) {
 	e := newEnv(t)
 	sec := filepath.Join(e.dir, "ai.json")
-	e.writeFile(sec, `{"ok":true,"accuracy":0.97,"threshold":0.95}`)
+	body := `{"ok":true,"accuracy":0.97,"threshold":0.95,"steps":` + okStep + `}`
+	e.writeFile(sec, body)
 	r := e.run("-section", "ai="+sec)
 	eq(t, r.code, 0)
-	eq(t, string(r.obj["ai"]), `{"ok":true,"accuracy":0.97,"threshold":0.95}`)
+	eq(t, string(r.obj["ai"]), body)
 }
 
 func TestRun_SectionOkFalseOrMissingOkIsRed(t *testing.T) {
-	for _, body := range []string{`{"ok":false,"accuracy":0.1}`, `{"accuracy":1}`} {
+	for _, body := range []string{`{"ok":false,"accuracy":0.1,"steps":` + okStep + `}`, `{"accuracy":1,"steps":` + okStep + `}`} {
 		e := newEnv(t)
 		sec := filepath.Join(e.dir, "ai.json")
 		e.writeFile(sec, body)
@@ -869,6 +872,86 @@ func TestRun_SectionOkFalseOrMissingOkIsRed(t *testing.T) {
 		eq(t, r.dec.Verdict, "red")
 		eq(t, string(r.obj["ai"]), body)
 	}
+}
+
+func TestRun_SectionWithoutStepsIsAFailureAndAbsent(t *testing.T) {
+	for _, name := range []string{"ai", "email", "hubspot", "prod_check"} {
+		for _, body := range []string{`{"ok":true}`, `{"ok":true,"steps":null}`, `{"ok":true,"steps":[]}`, `{"ok":true,"steps":"x"}`} {
+			e := newEnv(t)
+			sec := filepath.Join(e.dir, name+".json")
+			e.writeFile(sec, body)
+			r := e.run("-section", name+"="+sec)
+			eq(t, r.code, 1)
+			eq(t, r.dec.Verdict, "red")
+			_, has := r.obj[name]
+			eq(t, has, false)
+			eq(t, r.dec.Failures[0], failure{name, "section has no steps", sec, "no steps array"})
+		}
+	}
+}
+
+func TestRun_StepWithoutNameOrStatusIsAFailure(t *testing.T) {
+	cases := []struct{ steps, msg string }{
+		{`[{"name":"a","status":"passed"},{"name":"b"}]`, "step 2 lacks name or status"},
+		{`[{"status":"passed"}]`, "step 1 lacks name or status"},
+		{`[{"name":"","status":"passed"}]`, "step 1 lacks name or status"},
+		{`[{"name":1,"status":"passed"}]`, "step 1 lacks name or status"},
+		{`["x"]`, "step 1 lacks name or status"},
+		{`[{"name":"a","status":"passed"},{"name":"b","status":"passed"},{"name":"c","status":"passed"},{"name":"d","status":1}]`, "step 4 lacks name or status"},
+	}
+	for _, c := range cases {
+		e := newEnv(t)
+		sec := filepath.Join(e.dir, "ai.json")
+		e.writeFile(sec, `{"ok":true,"steps":`+c.steps+`}`)
+		r := e.run("-section", "ai="+sec)
+		eq(t, r.code, 1)
+		_, has := r.obj["ai"]
+		eq(t, has, false)
+		eq(t, r.dec.Failures[0], failure{"ai", "section has no steps", sec, c.msg})
+	}
+}
+
+func TestRun_SectionWithStepsIsCopiedByteForByte(t *testing.T) {
+	e := newEnv(t)
+	sec := filepath.Join(e.dir, "ai.json")
+	body := `{"ok":true,"accuracy":0.97,"threshold":0.95,"steps":[{"name":"a","status":"passed","duration_ms":1},{"name":"b","status":"passed","duration_ms":2,"detail":"x"},{"name":"c","status":"skipped"}]}`
+	e.writeFile(sec, body)
+	r := e.run("-section", "ai="+sec)
+	eq(t, r.code, 0)
+	eq(t, string(r.obj["ai"]), body)
+}
+
+func TestRun_SectionWithoutStepsNeedsNoStepsForArgos(t *testing.T) {
+	e := newEnv(t)
+	sec := filepath.Join(e.dir, "argos.json")
+	e.writeFile(sec, `{"ok":true,"build_url":"https://x","changed":4}`)
+	r := e.run("-section", "argos="+sec)
+	eq(t, r.code, 0)
+	_, has := r.obj["argos"]
+	eq(t, has, true)
+}
+
+func TestRun_FailedStepMakesTheVerdictRed(t *testing.T) {
+	for _, ok := range []string{"true", "false"} {
+		e := newEnv(t)
+		sec := filepath.Join(e.dir, "ai.json")
+		body := `{"ok":` + ok + `,"steps":[{"name":"a","status":"failed"}]}`
+		e.writeFile(sec, body)
+		r := e.run("-section", "ai="+sec)
+		eq(t, r.code, 1)
+		eq(t, r.dec.Verdict, "red")
+		eq(t, string(r.obj["ai"]), body)
+		eq(t, len(r.dec.Failures), 0)
+	}
+}
+
+func TestRun_SkippedStepKeepsTheVerdictGreen(t *testing.T) {
+	e := newEnv(t)
+	sec := filepath.Join(e.dir, "ai.json")
+	e.writeFile(sec, `{"ok":true,"steps":[{"name":"a","status":"passed"},{"name":"b","status":"skipped"}]}`)
+	r := e.run("-section", "ai="+sec)
+	eq(t, r.code, 0)
+	eq(t, r.dec.Verdict, "green")
 }
 
 func TestRun_SectionFileMissingIsAbsentAndRed(t *testing.T) {

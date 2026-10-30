@@ -89,6 +89,9 @@ type summary struct {
 	sectionBodies     map[string]json.RawMessage
 }
 
+// stepSections must list their steps; other sections (argos) do not.
+var stepSections = map[string]bool{"ai": true, "email": true, "hubspot": true, "prod_check": true}
+
 var reservedKeys = map[string]bool{
 	"schema": true, "run_id": true, "sha": true, "started_at": true, "finished_at": true,
 	"verdict": true, "suites": true, "failures": true, "flakes": true, "scenarios": true,
@@ -957,11 +960,17 @@ func assemble(in input) *summary {
 			s.failures = append(s.failures, failure{sec.name, "section did not run", sec.path, msg})
 			continue
 		}
+		if stepSections[sec.name] {
+			if msg := stepsProblem(body); msg != "" {
+				s.failures = append(s.failures, failure{sec.name, "section has no steps", sec.path, msg})
+				continue
+			}
+		}
 		s.sectionNames = append(s.sectionNames, sec.name)
 		s.sectionBodies[sec.name] = body
 		var m map[string]json.RawMessage
 		_ = json.Unmarshal(body, &m)
-		if string(bytes.TrimSpace(m["ok"])) != "true" {
+		if string(bytes.TrimSpace(m["ok"])) != "true" || anyStepFailed(body) {
 			red = true
 		}
 	}
@@ -1003,6 +1012,44 @@ func readSection(path string) (json.RawMessage, string) {
 		return nil, "section file is not a JSON object"
 	}
 	return json.RawMessage(bytes.TrimSpace(raw)), ""
+}
+
+// stepsProblem is why the section's steps array is unusable, or "".
+func stepsProblem(body json.RawMessage) string {
+	var m struct {
+		Steps []json.RawMessage `json:"steps"`
+	}
+	if json.Unmarshal(body, &m) != nil || len(m.Steps) == 0 {
+		return "no steps array"
+	}
+	for i, raw := range m.Steps {
+		var st struct {
+			Name, Status string
+		}
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(raw, &fields) != nil ||
+			json.Unmarshal(fields["name"], &st.Name) != nil || st.Name == "" ||
+			json.Unmarshal(fields["status"], &st.Status) != nil || st.Status == "" {
+			return fmt.Sprintf("step %d lacks name or status", i+1)
+		}
+	}
+	return ""
+}
+
+// anyStepFailed reports a step with status "failed"; stepsProblem has already vetted the array.
+func anyStepFailed(body json.RawMessage) bool {
+	var m struct {
+		Steps []struct {
+			Status string `json:"status"`
+		} `json:"steps"`
+	}
+	_ = json.Unmarshal(body, &m)
+	for _, st := range m.Steps {
+		if st.Status == "failed" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *summary) marshal() ([]byte, error) {

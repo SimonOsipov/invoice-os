@@ -875,12 +875,13 @@ jobs:
       - name: Prepare the mail accounts
         run: pnpm --filter @invoice-os/e2e test:mail prepare.spec.ts
       - name: Turn real mail on
+        id: mailon
         run: bash scripts/ci/preview.sh mail-on "$PR"
       - name: Real invite and reset mail
         timeout-minutes: 16
         run: pnpm --filter @invoice-os/e2e test:mail real-mail.spec.ts
       - name: Turn real mail off
-        if: always()
+        if: always() && steps.mailon.outcome != 'skipped'
         run: bash scripts/ci/preview.sh mail-off "$PR"
       - name: Upload the nightly results
         if: always() && needs.changes.outputs.nightly == 'true'

@@ -83,6 +83,7 @@ func main() {
 	app.Mux.HandleFunc("POST /v1/invoices", invoice.CreateHandler(store.Create, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}", invoice.GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, app.Logger))
 	app.Mux.HandleFunc("POST /v1/invoices/{id}/notes", invoice.IssueNoteHandler(store.IssueNote, app.Logger))
+	app.Mux.HandleFunc("GET /v1/invoices/{id}/notes", invoice.NotesHandler(store.Notes, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/history", invoice.HistoryHandler(store.History, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/source-document", invoice.SourceDocumentHandler(store.SourceDocument, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/ubl", invoice.UBLHandler(store.Get, app.Logger))

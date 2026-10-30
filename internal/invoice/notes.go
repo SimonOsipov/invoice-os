@@ -2,11 +2,16 @@ package invoice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/shopspring/decimal"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
@@ -132,7 +137,58 @@ type NotesOnInvoice struct {
 	StillCreditable *string       `json:"still_creditable"`
 }
 
-// Notes is a compile stub; the executor replaces it.
+// Notes lists the notes on originalID and what is still creditable. A missing or hidden original is ErrNotFound.
 func (s *Store) Notes(ctx context.Context, originalID string) (NotesOnInvoice, error) {
-	return NotesOnInvoice{}, ErrValidation
+	out := NotesOnInvoice{Notes: []NoteSummary{}}
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var total *string
+		if err := tx.QueryRow(ctx, `SELECT total::text FROM invoices WHERE id = $1`, originalID).Scan(&total); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			if pgCode(err) == "22P02" {
+				return ErrValidation
+			}
+			return err
+		}
+		rows, err := tx.Query(ctx,
+			`SELECT id::text, document_type, invoice_number, status, total::text
+			   FROM invoices WHERE original_invoice_id = $1 ORDER BY created_at, id`, originalID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var n NoteSummary
+			if err := rows.Scan(&n.ID, &n.DocumentType, &n.InvoiceNumber, &n.Status, &n.Total); err != nil {
+				return err
+			}
+			out.Notes = append(out.Notes, n)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+
+		if out.CreditedSoFar, err = CreditedSoFarTx(ctx, tx, originalID, ""); err != nil {
+			return err
+		}
+		if total != nil {
+			t, err := decimal.NewFromString(*total)
+			if err != nil {
+				return err
+			}
+			c, err := decimal.NewFromString(out.CreditedSoFar)
+			if err != nil {
+				return err
+			}
+			left := t.Sub(c).StringFixed(2)
+			out.StillCreditable = &left
+		}
+		return nil
+	})
+	if err != nil {
+		return NotesOnInvoice{}, err
+	}
+	return out, nil
 }

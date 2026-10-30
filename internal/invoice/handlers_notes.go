@@ -82,9 +82,28 @@ func IssueNoteHandler(issue func(ctx context.Context, id string, in NoteInput) (
 	}
 }
 
-// NotesHandler returns GET /v1/invoices/{id}/notes. Compile stub; the executor replaces it.
+// NotesHandler returns GET /v1/invoices/{id}/notes.
 func NotesHandler(notes func(ctx context.Context, id string) (NotesOnInvoice, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusInternalServerError, "not implemented")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		out, err := notes(r.Context(), r.PathValue("id"))
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "invoice: notes", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		if out.Notes == nil {
+			out.Notes = []NoteSummary{}
+		}
+		writeJSON(w, http.StatusOK, out)
 	}
 }

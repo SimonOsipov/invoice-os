@@ -1043,6 +1043,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/invoices/{id}":                                  {verdict: scCovered},
 	"GET /v1/invoices/{id}/approval":                         {verdict: scCovered},
 	"GET /v1/invoices/{id}/history":                          {verdict: scCovered},
+	"GET /v1/invoices/{id}/notes":                            {verdict: scCovered},
 	"GET /v1/invoices/{id}/source-document":                  {verdict: scCovered},
 	"GET /v1/invoices/{id}/ubl":                              {verdict: scCovered},
 	"GET /v1/me":                                             {verdict: scExempt, reason: "the SPA's boot round trip; gating it would make the 403 unreachable"},

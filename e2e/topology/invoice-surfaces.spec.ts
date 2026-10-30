@@ -3821,6 +3821,47 @@ test('detail surface: a long note number stays inside the notes card', async ({ 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+test('detail surface: a user issues a credit note on chosen lines', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+  await openAcceptedThreeLineInvoice(page)
+
+  const number = `CN-JOURNEY-${Date.now()}`
+  await page.getByTestId('issue-credit-note').click()
+  const rows = page.getByTestId('note-line-row')
+  await rows.nth(0).getByTestId('note-line-check').check()
+  await rows.nth(0).getByTestId('note-line-qty').fill('2')
+  await rows.nth(1).getByTestId('note-line-check').check()
+  await page.getByTestId('note-number').fill(number)
+  await page.getByTestId('note-form-submit').click()
+
+  await expect(page.getByTestId('document-type-badge')).toHaveText('CREDIT')
+  await expect(page.getByTestId('invoice-status-badge')).toContainText('DRAFT')
+  await page.getByTestId('original-invoice-link').click()
+
+  // 2 x 100 + 3 x 100 = 500, plus 7.5% VAT: 537.50, signed negative on the card.
+  const noteRow = page.getByTestId('notes-card').getByTestId('note-row').filter({ hasText: number })
+  await expect(noteRow).toBeVisible()
+  await expect(noteRow.getByTestId('note-row-total')).toHaveText(/^-.*537\.50$/)
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('detail surface: a taken note number is a field error', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page, expectedStatusDropper(page, 409, /\/api\/invoice\/v1\/invoices\/[^/]+\/notes$/))
+  const number = await issueLongNumberedNote(page)
+  await page.getByTestId('original-invoice-link').click()
+
+  await page.getByTestId('issue-credit-note').click()
+  await page.getByTestId('note-line-check').first().check()
+  await page.getByTestId('note-number').fill(number)
+  await page.getByTestId('note-form-submit').click()
+
+  await expect(page.getByTestId('note-number-error')).toBeVisible()
+  await expect(page.getByTestId('note-form')).toBeVisible()
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 test('detail surface: the type badge sits beside the status badge', async ({ page }) => {
   test.setTimeout(120_000)
   const errors = collectErrors(page)

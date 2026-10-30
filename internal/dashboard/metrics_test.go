@@ -544,6 +544,20 @@ func TestMetrics_ANoteCountsAsOneDocument(t *testing.T) {
 	}
 }
 
+// A NULL-VAT note adds 0 even with no NULL invoice beside it to cancel a wrong default.
+func TestMetrics_VATTrackedANullVATCreditNoteAddsZero(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "NULLCN tenant")
+	entityID := seedEntity(t, super, tenantID, "NULLCN entity")
+	inv := seedInvoiceWithVAT(t, super, tenantID, entityID, "NULLCN-INV", "10.00")
+	seedNote(t, super, tenantID, entityID, "NULLCN-CN", "credit_note", inv, "draft", "")
+
+	got := rollupFor(t, app, tenantID)
+	if m, want := got.Clients[0].Metrics["vat_tracked"], (Metric{Num: 1000, Den: 2}); m != want {
+		t.Errorf("vat_tracked = %+v, want %+v", m, want)
+	}
+}
+
 // --- MET-14: non-array violations shapes -----------------------------------
 
 // MET-14: a non-array violations value (object, scalar) must neither error

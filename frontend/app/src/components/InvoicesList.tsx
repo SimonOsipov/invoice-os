@@ -38,6 +38,7 @@ import { fmt, fmtDate } from '../lib/format'
 import {
   BUYER_TIN_MISSING,
   demotionSentence,
+  documentTypeBadge,
   gateByActiveEntity,
   hasBlockingViolation,
   invoiceListIsEmpty,
@@ -56,6 +57,7 @@ import {
   selectBlockedReason,
   shouldFetchInvoices,
   shouldPollList,
+  signedAmount,
   skipReasonLabel,
   submitInvoices,
   toggleSelection,
@@ -69,12 +71,12 @@ import type { PlatformCtx } from '../types'
 import { Pager } from './Pager'
 import { SEVERITY_TONE } from './RulePills'
 
-const INVOICE_GRID_COLUMNS = '24px 150px 1fr 140px 120px 200px'
+const INVOICE_GRID_COLUMNS = '24px minmax(150px, 210px) 1fr 140px 120px 200px'
 
 const CHECKBOX_STYLE = { width: 15, height: 15, accentColor: 'var(--action)', margin: 0 } as const
 
 // Same box as the status pill beside it, minus the dot.
-function MarkerPill({ testId, tone, label, title }: { testId: string; tone: { bg: string; border: string; text: string }; label: string; title?: string }) {
+export function MarkerPill({ testId, tone, label, title }: { testId: string; tone: { bg: string; border: string; text: string }; label: string; title?: string }) {
   return (
     <span data-testid={testId} title={title} aria-label={title} style={{ display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 'var(--radius-sm)', padding: '3px 9px' }}>
       <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: tone.text, letterSpacing: '0.04em' }}>
@@ -598,6 +600,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
               const st = invoiceStatusStyle(r.status)
               const errorCount = r.violations.filter((v) => v.severity === 'error').length
               const blockedReason = selectBlockedReason(r)
+              const typeBadge = documentTypeBadge(r)
               return (
                 // Click-only row (no keyboard affordance) predates this story --
                 // CodeRabbit fix cycle 2 flagged it alongside the checkbox aria-label gap,
@@ -630,12 +633,19 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                       disarm()
                     }}
                   />
-                  <span className="mono" style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)' }}>{r.invoice_number}</span>
+                  <span data-testid="invoice-number-cell" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                    <span data-testid="invoice-number" title={r.invoice_number} className="mono" style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.invoice_number}</span>
+                    {typeBadge != null && (
+                      <span style={{ flexShrink: 0, display: 'inline-flex' }}>
+                        <MarkerPill testId="invoice-type-badge" tone={SEVERITY_TONE.info} label={typeBadge.label} title={typeBadge.title} />
+                      </span>
+                    )}
+                  </span>
                   <span style={{ minWidth: 0 }}>
-                    <span style={{ display: 'block', fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name}</span>
+                    <span data-testid="invoice-buyer-cell" style={{ display: 'block', fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name}</span>
                     <span data-testid="buyer-tin" className="mono" style={{ fontSize: 11, color: isBuyerTinMissing(r.buyer_tin) ? 'var(--status-red-text)' : 'var(--fg-3)' }}>{isBuyerTinMissing(r.buyer_tin) ? BUYER_TIN_MISSING : r.buyer_tin}</span>
                   </span>
-                  <span className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(Number(r.total)) : '—'}</span>
+                  <span data-testid="invoice-amount" className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(signedAmount(r, r.total)) : '—'}</span>
                   <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{fmtDate(r.issue_date ?? r.created_at)}</span>
                   <span style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 6px', minWidth: 0 }}>
                     <span

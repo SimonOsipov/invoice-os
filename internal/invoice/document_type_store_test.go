@@ -559,3 +559,37 @@ func TestStoreCanonical_ANoteIsNotReadableFromAnotherTenant(t *testing.T) {
 		t.Errorf("Canonical of another tenant's note: err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestStoreList_ReturnsDocumentTypeAndOriginal(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "DT list")
+	ent := seedEntity(t, super, tenant, "E1")
+	original := seedInvoice(t, super, tenant, ent, "DT-LIST-ORIG")
+	store := NewStore(app)
+
+	note, err := store.Create(dtCtx(tenant), dtNote(ent, "DT-LIST-CN", submission.CreditNote, &original))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	items, total, err := store.List(dtCtx(tenant), ListFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 2 || len(items) != 2 {
+		t.Fatalf("List = %d rows, total %d, want 2 and 2", len(items), total)
+	}
+	for _, it := range items {
+		switch it.ID {
+		case original:
+			if it.DocumentType != submission.CommercialInvoice || it.OriginalInvoiceID != nil {
+				t.Errorf("invoice row = (%q, %v), want (commercial_invoice, nil)", it.DocumentType, it.OriginalInvoiceID)
+			}
+		case note.ID:
+			if it.DocumentType != submission.CreditNote || it.OriginalInvoiceID == nil || *it.OriginalInvoiceID != original {
+				t.Errorf("note row = (%q, %v), want (credit_note, %s)", it.DocumentType, it.OriginalInvoiceID, original)
+			}
+		default:
+			t.Errorf("unexpected row %s", it.ID)
+		}
+	}
+}

@@ -18,6 +18,7 @@ const HEADER = [
   'supplier_postal_zone', 'supplier_country', 'supplier_state', 'supplier_lga',
   'buyer_email', 'buyer_telephone', 'buyer_street', 'buyer_city',
   'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga',
+  'document_type', 'original_invoice_number',
 ]
 
 // internal/archive/register.go xlsxContentType.
@@ -117,10 +118,19 @@ test.describe('invoice register (API E2E, over the deployed gateway)', () => {
     expect(() => unzipSync(bytes), 'the body must open as a ZIP').not.toThrow()
   })
 
-  test('the register lists the in-period, non-draft invoices under the 39-column header', async () => {
+  test('the register lists the in-period, non-draft invoices under the 41-column header, then the footer', async () => {
     const { bytes } = await download()
-    const [header, ...rows] = sheetRows(bytes)
+    const [header, ...sheet] = sheetRows(bytes)
     expect(header, 'header row').toEqual(HEADER)
+    const rows = sheet.slice(0, -1)
+    const footer = sheet[sheet.length - 1]
+    const col = (name: string) => HEADER.indexOf(name)
+    expect(footer[col('invoice_number')], 'footer label').toBe('Net total')
+    expect(
+      ['subtotal', 'vat', 'total'].map((c) => footer[col(c)]),
+      'footer nets the two invoices',
+    ).toEqual(['2000.00', '150.00', '2150.00'])
+    expect(footer.filter((v, i) => v !== '' && ![1, col('subtotal'), col('vat'), col('total')].includes(i)), 'every other footer cell is empty').toEqual([])
     expect(rows.map((r) => r[1]).sort(), 'the register holds exactly the two in-period, non-draft invoices').toEqual(
       [inFirst, inLast].sort(),
     )

@@ -1,7 +1,7 @@
 // Per-buyer invoice counts and totals, keyed by trimmed TIN (the fill files btrim(buyer_tin)).
 // Shared by Customers (joined to the record) and Reports.
 
-import type { InvoiceRecord } from './invoices'
+import { signedAmount, type InvoiceRecord } from './invoices'
 
 export type CustomerAgg = {
   name: string
@@ -18,7 +18,7 @@ export function aggregateCustomers(invoices: InvoiceRecord[]): CustomerAgg[] {
     const tin = (i.buyer_tin ?? '').trim()
     const name = i.buyer_name ?? '—'
     const k = tin !== '' ? tin : `name:${name.toLowerCase()}`
-    const amt = i.total != null ? Number(i.total) : 0
+    const amt = signedAmount(i, i.total)
     // issue_date ?? created_at mirrors fmtDate's own fallback elsewhere (InvoicesList.tsx,
     // InvoiceDetail.tsx) — created_at is NOT NULL, so this is always a real string.
     const rowDate = i.issue_date ?? i.created_at

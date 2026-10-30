@@ -56,6 +56,28 @@ func TestStoreHistory_OldestFirstThenEntity(t *testing.T) {
 	}
 }
 
+func TestStoreHistory_ReturnsANegativeVATKobo(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "history negative vat")
+	e := seedEntity(t, super, tenant, "H A")
+	seedSnap(t, super, tenant, e, "2026-10-20", 2)
+	if _, err := super.Exec(context.Background(),
+		`UPDATE rollup_snapshots SET vat_kobo = -2000 WHERE tenant_id = $1 AND entity_id = $2`, tenant, e); err != nil {
+		t.Fatalf("stamp vat_kobo: %v", err)
+	}
+
+	got, err := NewStore(app).History(csMember(t, super, tenant, "admin"), "2026-10-01")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("rows = %d, want 1", len(got))
+	}
+	if got[0].VATKobo != -2000 {
+		t.Errorf("vat_kobo = %d, want -2000", got[0].VATKobo)
+	}
+}
+
 func TestStoreHistory_SinceBoundIsInclusive(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenant := seedTenant(t, super, "history since")

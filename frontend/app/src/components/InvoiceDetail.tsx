@@ -1635,7 +1635,7 @@ function InvoiceEditBody({
                 Deliberately PASSIVE: it never writes subtotal/VAT/total, never blocks Save,
                 and carries no red/amber/border/icon and no "mismatch" wording, so it cannot
                 be misread as a validation error. `lineSum` is rendered RAW — never through
-                fmt(), which rounds to whole naira (lib/format.ts:5-7) and would erase the
+                fmt(), which rounds to whole naira, and would erase the
                 sub-naira disagreement this hint exists to expose. No subtotal-vs-hint
                 comparison is drawn here: deciding they disagree is the rule engine's job. */}
             <div data-testid="computed-line-sum" style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 4, lineHeight: 1.5 }}>

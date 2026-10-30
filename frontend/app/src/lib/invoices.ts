@@ -947,6 +947,21 @@ export function hasBlockingViolation(inv: Pick<InvoiceRecord, 'violations'>): bo
   return inv.violations.some((v) => v.severity === 'error')
 }
 
+export function documentSign(r: Pick<InvoiceRecord, 'document_type'>): 1 | -1 {
+  return r.document_type === 'credit_note' ? -1 : 1
+}
+
+export function signedAmount(r: Pick<InvoiceRecord, 'document_type'>, amount: string | null | undefined): number {
+  const n = Number(amount) || 0
+  return n === 0 ? 0 : documentSign(r) * n
+}
+
+export function documentTypeBadge(r: Pick<InvoiceRecord, 'document_type'>): { label: string; title: string } | null {
+  if (r.document_type === 'credit_note') return { label: 'CREDIT', title: 'Credit note' }
+  if (r.document_type === 'debit_note') return { label: 'DEBIT', title: 'Debit note' }
+  return null
+}
+
 // Shared missing-buyer-TIN signal for the register, review row and Bill-to block --
 // blank/whitespace counts as missing, closing the `??` hole all three used to have.
 export const BUYER_TIN_MISSING = 'TIN MISSING'
@@ -1059,7 +1074,7 @@ export function diffLineItems(
 // from the story's `number | null` (AC #5's arithmetic is unchanged). Money is strings
 // end-to-end ([D13]) precisely so no float touches it; the rule this mirrors has a 0.005
 // tolerance, so precision below the kobo is load-bearing; and the app's only money
-// formatter (fmt(), lib/format.ts:5-7) rounds to WHOLE naira, so a numeric return would
+// formatter (fmt()) rounds to WHOLE naira, so a numeric return would
 // invite the component to render a hint that reads EQUAL to a subtotal it actually
 // differs from -- fabricating the very agreement this hint exists to question.
 //

@@ -140,6 +140,8 @@ test.describe('blog layout at wide widths', () => {
 
 const WHAT_CHANGES = 'What structured e-invoicing changes for a Nigerian finance team'
 const GRID = 'div[style*="grid-template-columns"]'
+// SUP-BLOG-06 publishes and removes posts on the same preview, so the lists move.
+const postLists = (page: Page) => [main(page).locator(`${GRID} button`), main(page).locator('button.blog-row')]
 
 async function expectCardsInside(grid: Locator, label: string): Promise<string[]> {
   const g = await rectOf(grid, `${label} grid`)
@@ -211,7 +213,7 @@ test.describe('blog home, category and search at wide widths', () => {
       const input = field.getByRole('textbox')
       await input.fill('invoice')
       await expect(main(page).locator('h2')).toContainText(/match/)
-      if (width === 1440) await shoot(page, 'blog', 'search')
+      if (width === 1440) await shoot(page, 'blog', 'search', { mask: postLists(page) })
       const rows = main(page).locator('button.blog-row')
       const n = await rows.count()
       expect(n, 'control: no result row').toBeGreaterThan(0)
@@ -618,7 +620,7 @@ test('blog home: live posts render', async ({ page }) => {
   await expect(main(page).locator(`section ${GRID} button`).first(), 'no band card rendered').toBeVisible()
   const titles = await main(page).locator(`section ${GRID} button > span:nth-child(2)`).allTextContents()
   expect(titles.some((t) => SEEDED_TITLES.includes(t)), `no band holds a seeded post; saw ${titles.join(' | ')}`).toBe(true)
-  await shoot(page, 'blog', 'home')
+  await shoot(page, 'blog', 'home', { mask: postLists(page) })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
@@ -640,7 +642,7 @@ test.describe('blog routes', () => {
       await visit(page, path)
       await expect(crumbs(page).getByRole('button').first(), `${path}: first crumb`).toHaveText('Blog')
       await expect(aside(page).getByRole('button', { name: 'Subscribe' }), `${path}: the Subscribe button`).toBeVisible()
-      await shoot(page, 'blog', ['subscribe', 'confirm', 'category', 'post'][i])
+      await shoot(page, 'blog', ['subscribe', 'confirm', 'category', 'post'][i], { mask: postLists(page) })
     }
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })

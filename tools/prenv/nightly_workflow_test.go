@@ -175,6 +175,14 @@ func nightlyRunProblems(nightlyYAML, ciYAML, suitesTxt string) []string {
 	if n := nightlyStepLines(summary, "uses: pnpm/action-setup@"); n == nil {
 		p = append(p, "summary lacks pnpm/action-setup")
 	}
+	body := strings.Join(stripHashComments(summary.lines), "\n")
+	dispatch, argosAt := strings.Index(body, "nightly-ci.sh"), strings.Index(body, "node e2e/argosBuild.ts")
+	for _, marker := range []string{"uses: pnpm/action-setup@", "pnpm install"} {
+		at, st := strings.Index(body, marker), nightlyStepLines(summary, marker)
+		if at < dispatch || at > argosAt || !slices.Contains(st, "if: always()") {
+			p = append(p, "summary runs "+marker+" before the CI dispatch or without always(): an install failure skips every suite")
+		}
+	}
 	ar := nightlyStepLines(summary, "node e2e/argosBuild.ts")
 	switch {
 	case ar == nil:
@@ -185,6 +193,9 @@ func nightlyRunProblems(nightlyYAML, ciYAML, suitesTxt string) []string {
 		}
 		if !slices.Contains(ar, "if: always()") {
 			p = append(p, "Argos step does not run always()")
+		}
+		if !slices.Contains(ar, "timeout-minutes: 15") {
+			p = append(p, "Argos step lacks timeout-minutes: 15")
 		}
 		if !slices.Contains(ar, "ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}") {
 			p = append(p, "Argos step lacks ARGOS_TOKEN")
@@ -618,6 +629,20 @@ func TestNightly_ArgosTokenOnlyInItsStep(t *testing.T) {
 func TestNightly_ArgosSectionIsPassed(t *testing.T) {
 	t.Parallel()
 	requireNightlyMutation(t, `-section argos="$RUNNER_TEMP/argos.json" `, "", "-section argos=")
+}
+
+func TestNightly_ArgosInstallAfterTheDispatch(t *testing.T) {
+	t.Parallel()
+	pnpm := "      - uses: pnpm/action-setup@v6\n        if: always()\n"
+	install := "      - name: Install the e2e workspace\n        if: always()\n        run: pnpm install --filter @invoice-os/e2e --frozen-lockfile --ignore-scripts\n"
+	nightly, ci, suites := nightlyFiles(t)
+	early := mutateOnce(t, nightly, pnpm+install, "")
+	early = mutateOnce(t, early, "      - uses: actions/setup-node@v4\n", pnpm+install+"      - uses: actions/setup-node@v4\n")
+	if got := nightlyRunProblems(early, ci, suites); !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "before the CI dispatch") }) {
+		t.Errorf("install before the dispatch: problems %q name no such rule", got)
+	}
+	requireNightlyMutation(t, install, strings.Replace(install, "        if: always()\n", "", 1), "without always()")
+	requireNightlyMutation(t, "        timeout-minutes: 15\n", "", "timeout-minutes: 15")
 }
 
 func TestNightly_ArgosStepAlwaysRuns(t *testing.T) {

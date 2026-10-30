@@ -226,6 +226,33 @@ describe('changed', () => {
     expect(warn.mock.calls.flat().join('\n')).toContain('403')
   })
 
+  it('a 503 during polling is retried', async () => {
+    await putShots(['landing/home/1440'])
+    const { d, reads } = deps({ builds: [503, 502, { status: 'changes-detected', stats: { added: 0, removed: 0, changed: 4 } }] })
+    expect(await run(dl(), out, d)).toMatchObject({ ok: true, changed: 4 })
+    expect(reads).toHaveLength(3)
+  })
+
+  it('a hung read ends at the deadline', async () => {
+    await putShots(['landing/home/1440'])
+    const { d, reads, warn } = deps()
+    d.fetch = (async (url: string | URL | Request) => {
+      reads.push(String(url))
+      throw new DOMException('timed out', 'TimeoutError')
+    }) as unknown as typeof fetch
+    expect(await run(dl(), out, d)).toMatchObject({ ok: true, changed: null })
+    expect(reads.length).toBeGreaterThan(1)
+    expect(reads.length).toBeLessThanOrEqual(32)
+    expect(warn.mock.calls.flat().join('\n')).toContain('timed out')
+  })
+
+  it('a 401 during polling ends at once', async () => {
+    await putShots(['landing/home/1440'])
+    const { d, reads } = deps({ builds: [401] })
+    expect(await run(dl(), out, d)).toMatchObject({ ok: true, changed: null })
+    expect(reads).toHaveLength(1)
+  })
+
   it('an errored build gives changed null', async () => {
     await putShots(['landing/home/1440'])
     const { d } = deps({ builds: [{ status: 'error', stats: null }] })
@@ -246,9 +273,11 @@ describe('missing', () => {
 
   it('a failed shot gives its reason', async () => {
     await putShots(allNames().filter((n) => n !== 'app/firm-invoices/375'))
-    await put('argos-shots-e2e/chromium/app/firm-invoices/375.failed.txt', 'shot exceeded 30 s\nmore\n')
+    await put('argos-shots-e2e/chromium/app/firm-invoices/375.failed.txt', 'Failed to stabilize screenshot, found the following issues:\n- 2 fonts are loading\n')
     const { d } = deps()
-    expect((await run(dl(), out, d)).missing).toEqual(['app/firm-invoices/375: shot exceeded 30 s'])
+    expect((await run(dl(), out, d)).missing).toEqual([
+      'app/firm-invoices/375: Failed to stabilize screenshot, found the following issues: - 2 fonts are loading',
+    ])
   })
 
   it('a retried shot is not missing', async () => {

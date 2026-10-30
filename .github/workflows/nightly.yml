@@ -38,11 +38,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: pnpm install --filter @invoice-os/e2e --frozen-lockfile --ignore-scripts
       - name: Run CI and the nightly preview on this ref
         id: ci
         env:
@@ -65,8 +63,15 @@ jobs:
           fi
           for run in "${runs[@]}"; do gh api --paginate "repos/$REPO/actions/runs/$run/jobs" --jq '.jobs[]'; done | jq -s . > "$RUNNER_TEMP/jobs.json"
           echo "sha=$(gh run view "$CI_RUN_ID" -R "$REPO" --json headSha --jq .headSha)" >> "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@v6
+        if: always()
+      - name: Install the e2e workspace
+        if: always()
+        run: pnpm install --filter @invoice-os/e2e --frozen-lockfile --ignore-scripts
       - name: Send the screenshots to Argos
         if: always()
+        # 15 min: the upload and the 5 min poll, each with a 30 s fetch timeout, and a margin.
+        timeout-minutes: 15
         env:
           ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
           ARGOS_COMMIT: ${{ steps.collect.outputs.sha }}

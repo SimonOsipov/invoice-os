@@ -1,5 +1,5 @@
-import { isAbsolute } from 'node:path'
-import { readFile, rm } from 'node:fs/promises'
+import { dirname, isAbsolute } from 'node:path'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const argosScreenshot = vi.fn()
@@ -13,7 +13,7 @@ const info = {
 vi.mock('@argos-ci/playwright', () => ({ argosScreenshot: (...a: unknown[]) => argosScreenshot(...a) }))
 vi.mock('@playwright/test', () => ({ test: { info: () => info } }))
 
-const { ARGOS_ROOT, MOVING_TEXT, moving, shoot } = await import('./argos')
+const { ARGOS_ROOT, MOVING_TEXT, moving, reasonOf, shoot } = await import('./argos')
 
 const MOVING = Symbol('moving')
 function fakePage() {
@@ -69,7 +69,7 @@ describe('shoot', () => {
 
   it('shoot extends the test timeout per width', async () => {
     await shoot(fakePage().page, 'app', 'firm-invoices')
-    expect(info.timeout).toBe(360_000)
+    expect(info.timeout).toBe(390_000)
   })
 
   it("shoot passes the spec's masks after the moving mask", async () => {
@@ -90,7 +90,7 @@ describe('shoot', () => {
   it('a failed shot leaves the test running', async () => {
     argosScreenshot.mockRejectedValueOnce(new Error('Failed to stabilize\nsecond line'))
     await expect(shoot(fakePage().page, 'app', 'firm-invoices')).resolves.toBeUndefined()
-    expect(await readFile(failedFile(1440), 'utf8')).toBe('Failed to stabilize\n')
+    expect(await readFile(failedFile(1440), 'utf8')).toBe('Failed to stabilize second line\n')
     expect(argosScreenshot.mock.calls.map((c) => c[1])).toEqual([
       'app/firm-invoices/1440',
       'app/firm-invoices/375',
@@ -106,6 +106,50 @@ describe('shoot', () => {
     vi.useRealTimers()
     expect(await readFile(failedFile(1440), 'utf8')).toBe('shot exceeded 30 s\n')
     expect(argosScreenshot).toHaveBeenCalledTimes(2)
+  })
+
+  it('a late shot deletes its PNG and metadata and keeps the failure', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const png = `${ARGOS_ROOT}/unit-argos/app/firm-invoices/1440.png`
+    let finish: () => void = () => {}
+    argosScreenshot.mockImplementationOnce(
+      () =>
+        new Promise<void>((r) => {
+          finish = r
+        }),
+    )
+    const done = shoot(fakePage().page, 'app', 'firm-invoices')
+    await vi.advanceTimersByTimeAsync(30_000)
+    await done
+    vi.useRealTimers()
+    await mkdir(dirname(png), { recursive: true })
+    await writeFile(png, 'x')
+    await writeFile(`${png}.argos.json`, '{}')
+    finish()
+    await vi.waitFor(async () => {
+      await expect(readFile(png)).rejects.toThrow()
+      await expect(readFile(`${png}.argos.json`)).rejects.toThrow()
+    })
+    expect(await readFile(failedFile(1440), 'utf8')).toBe('shot exceeded 30 s\n')
+  })
+
+  it('a failed viewport restore leaves shoot resolved', async () => {
+    const { page } = fakePage()
+    let n = 0
+    ;(page as never as { setViewportSize: unknown }).setViewportSize = vi.fn(async () => {
+      if (++n === 3) throw new Error('restore boom')
+    })
+    await expect(shoot(page, 'app', 'firm-invoices')).resolves.toBeUndefined()
+    const f = `${ARGOS_ROOT}/unit-argos/app/firm-invoices/restore.failed.txt`
+    expect(await readFile(f, 'utf8')).toBe('restore boom\n')
+  })
+
+  it('reasonOf keeps the SDK cause on one capped line', () => {
+    const sdk = 'Failed to stabilize screenshot, found the following issues:\n- 2 fonts are loading'
+    expect(reasonOf(new Error(sdk))).toBe(
+      'Failed to stabilize screenshot, found the following issues: - 2 fonts are loading',
+    )
+    expect(reasonOf(new Error('x'.repeat(500)))).toHaveLength(300)
   })
 
   it('a failed shot restores the timeout and the viewport', async () => {
@@ -126,6 +170,10 @@ describe('MOVING_TEXT', () => {
   it('MOVING_TEXT matches moving text', () => {
     for (const t of [
       '30 Oct 2026',
+      '30/10/2026',
+      '30/10/2026, 14:02:11',
+      '30 Oct',
+      'since 5 Jan',
       'Oct 30, 2026',
       '2026-10-30',
       '14:02',
@@ -141,7 +189,7 @@ describe('MOVING_TEXT', () => {
   })
 
   it('MOVING_TEXT leaves fixed text', () => {
-    for (const t of ['Invoices', 'Overview', '₦1,250,000', 'Rules', '1440', 'Defaced'])
+    for (const t of ['Invoices', 'Overview', '₦1,250,000', 'Rules', '1440', '5 marketplaces', '₦1,250,000.00', 'Defaced'])
       expect(MOVING_TEXT.test(t), t).toBe(false)
   })
 

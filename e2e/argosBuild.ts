@@ -81,7 +81,7 @@ export async function collect(downloadDir: string): Promise<Shots> {
     if (!name) continue
     const src = join(downloadDir, rel)
     if (name.endsWith('.failed.txt')) {
-      const reason = (await readFile(src, 'utf8')).split('\n')[0].trim()
+      const reason = reasonOf(await readFile(src, 'utf8'))
       shots.failed.set(name.replace(/\.failed\.txt$/, ''), reason)
       continue
     }
@@ -127,22 +127,48 @@ export function sectionOf(r: { failure?: string; url?: string; changed?: number 
   return s
 }
 
+export const FETCH_TIMEOUT_MS = 30_000
+
+/** reasonOf: the text's lines joined into one line of at most 300 characters. */
+export function reasonOf(text: string): string {
+  return text.split('\n').map((l) => l.trim()).filter(Boolean).join(' ').slice(0, 300)
+}
+
+class HttpError extends Error {
+  status: number
+  constructor(status: number) {
+    super(`Argos refused the read: HTTP ${status}`)
+    this.status = status
+  }
+}
+
 async function readChanged(build: Build, token: string, d: Deps): Promise<number | null> {
   const get = async (path: string) => {
-    const res = await d.fetch(`${API}${path}`, { headers: { Authorization: `Bearer ${token}` } })
-    if (!res.ok) throw new Error(`Argos refused the read: HTTP ${res.status}`)
+    const res = await d.fetch(`${API}${path}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    })
+    if (!res.ok) throw new HttpError(res.status)
     return res.json()
   }
+  const deadline = d.now() + POLL_LIMIT_MS
+  let path = ''
   try {
-    const project = (await get('/project')) as { account: { slug: string }; name: string }
-    const path = `/projects/${project.account.slug}/${project.name}/builds/${build.number}`
-    const deadline = d.now() + POLL_LIMIT_MS
     for (;;) {
-      const b = (await get(path)) as Build
-      if (b.status !== 'pending' && b.status !== 'progress') return changedOf(b.stats)
-      if (d.now() >= deadline) {
-        d.warn(`argos: build ${build.number} still ${b.status} after 5 min`)
-        return null
+      try {
+        if (!path) {
+          const project = (await get('/project')) as { account: { slug: string }; name: string }
+          path = `/projects/${project.account.slug}/${project.name}/builds/${build.number}`
+        }
+        const b = (await get(path)) as Build
+        if (b.status !== 'pending' && b.status !== 'progress') return changedOf(b.stats)
+        if (d.now() >= deadline) {
+          d.warn(`argos: build ${build.number} still ${b.status} after 5 min`)
+          return null
+        }
+      } catch (err) {
+        const retry = !(err instanceof HttpError) || err.status >= 500
+        if (!retry || d.now() >= deadline) throw err
       }
       await d.sleep(POLL_MS)
     }

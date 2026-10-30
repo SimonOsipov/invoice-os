@@ -15,7 +15,7 @@ const (
 	PostureNightly PostureKind = "nightly"
 )
 
-// Ephemeral reports a posture that captures account mail.
+// Ephemeral reports a preview or the nightly.
 func (p PostureKind) Ephemeral() bool { return p == PosturePreview || p == PostureNightly }
 
 // Same shape as internal/platform/db's prEnvironmentPattern, duplicated because that

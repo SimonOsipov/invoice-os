@@ -139,7 +139,12 @@ func TestNoteAmounts_GroupsByCategoryAndPercentToTwoDecimals(t *testing.T) {
 			"0.01", "0.00", "0.01", []*string{nil}},
 	}
 	for _, v := range cases {
-		t.Run(v.name, func(t *testing.T) { nmCheck(t, v) })
+		t.Run(v.name, func(t *testing.T) {
+			got := nmCheck(t, v)
+			if v.name == "a line total rounds half up" && got.LineTotals[0] != "0.01" {
+				t.Errorf("line total = %s, want 0.01", got.LineTotals[0])
+			}
+		})
 	}
 }
 

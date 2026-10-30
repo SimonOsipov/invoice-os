@@ -942,6 +942,19 @@ export function hasBlockingViolation(inv: Pick<InvoiceRecord, 'violations'>): bo
   return inv.violations.some((v) => v.severity === 'error')
 }
 
+// Compile stub (CRDDBTNOTE-04-01): real bodies land with the executor.
+export function documentSign(_r: Pick<InvoiceRecord, 'document_type'>): 1 | -1 {
+  return 1
+}
+
+export function signedAmount(_r: Pick<InvoiceRecord, 'document_type'>, amount: string | null | undefined): number {
+  return Number(amount)
+}
+
+export function documentTypeBadge(_r: Pick<InvoiceRecord, 'document_type'>): { label: string; title: string } | null {
+  return null
+}
+
 // Shared missing-buyer-TIN signal for the register, review row and Bill-to block --
 // blank/whitespace counts as missing, closing the `??` hole all three used to have.
 export const BUYER_TIN_MISSING = 'TIN MISSING'

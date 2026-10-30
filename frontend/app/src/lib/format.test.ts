@@ -12,7 +12,8 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-import { fmtDateTime, fmtTime, fmtTimeWAT, toDateInputValue } from './format'
+import { fmt, fmtDateTime, fmtShort, fmtTime, fmtTimeWAT, toDateInputValue } from './format'
+import { signedAmount } from './invoices'
 
 describe('fmtDateTime', () => {
   it('F-1: renders date and time, and guards bad input', () => {
@@ -268,5 +269,43 @@ describe('fmtTimeWAT', () => {
 
     expect(src, "the ' WAT' suffix is only true if the formatter names the zone").toContain("'Africa/Lagos'")
     expect(src, 'a small-ICU build falls back to a 12-hour default without it').toContain("hourCycle: 'h23'")
+  })
+})
+
+describe('CRDDBTNOTE-04-01: negative money formats', () => {
+  it('fmt_prefixesTheSignBeforeTheCurrency', () => {
+    expect(fmt(-1075)).toBe('-₦1,075')
+    expect(fmt(1075)).toBe('₦1,075')
+    expect(fmt(0)).toBe('₦0')
+  })
+
+  it('fmt_roundsTheMagnitudeSoASignMirrors', () => {
+    expect(fmt(-322.5)).toBe('-₦323')
+    expect(fmt(322.5)).toBe('₦323')
+  })
+
+  it('fmtShort_keepsItsShortFormsForANegative', () => {
+    expect(fmtShort(-2500000)).toBe('-₦2.5M')
+    expect(fmtShort(-1500)).toBe('-₦2k')
+    expect(fmtShort(-500)).toBe('-₦500')
+    expect(fmtShort(2500000)).toBe('₦2.5M')
+    expect(fmtShort(1500)).toBe('₦2k')
+    expect(fmtShort(500)).toBe('₦500')
+  })
+
+  it('fmtShort_boundariesAtBothSigns', () => {
+    expect(fmtShort(-1000)).toBe('-₦1k')
+    expect(fmtShort(-999)).toBe('-₦999')
+    expect(fmtShort(-1000000)).toBe('-₦1.0M')
+    expect(fmtShort(1000)).toBe('₦1k')
+    expect(fmtShort(999)).toBe('₦999')
+    expect(fmtShort(1000000)).toBe('₦1.0M')
+  })
+
+  it('moneyFormats_noSignOnARoundedZero', () => {
+    expect(fmt(-0.4)).toBe('₦0')
+    expect(fmtShort(-0.4)).toBe('₦0')
+    expect(fmt(-0)).toBe('₦0')
+    expect(fmt(signedAmount({ document_type: 'credit_note' }, '0.00'))).toBe('₦0')
   })
 })

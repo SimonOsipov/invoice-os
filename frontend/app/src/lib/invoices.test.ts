@@ -38,6 +38,9 @@ import {
   DETAIL_SUBMIT_COPY,
   diffEditInput,
   diffLineItems,
+  documentSign,
+  documentTypeBadge,
+  signedAmount,
   editInvoice,
   editValueToWire,
   FAILURE_EXPLANATION_FALLBACK,
@@ -5685,5 +5688,34 @@ describe('demotion (ENGI-15-08, D11)', () => {
 
   it('latestDemotion_aNonDraftStatusIsNeverDemoted', () => {
     expect(latestDemotion([genesis, validated, demoted], 'validated')).toBeNull()
+  })
+})
+
+describe('CRDDBTNOTE-04-01: document sign helpers', () => {
+  const doc = (document_type?: string) => ({ document_type }) as Pick<InvoiceRecord, 'document_type'>
+
+  it('documentSign_creditIsNegativeAllElsePositive', () => {
+    expect(documentSign(doc('credit_note'))).toBe(-1)
+    expect(documentSign(doc('commercial_invoice'))).toBe(1)
+    expect(documentSign(doc('debit_note'))).toBe(1)
+    expect(documentSign(doc(undefined))).toBe(1)
+    expect(documentSign(doc('something_new'))).toBe(1)
+  })
+
+  it('signedAmount_signsAndTreatsNullAsZero', () => {
+    expect(signedAmount(doc('credit_note'), '322.50')).toBe(-322.5)
+    expect(signedAmount(doc('debit_note'), '53.75')).toBe(53.75)
+    expect(signedAmount(doc('commercial_invoice'), '1075.00')).toBe(1075)
+    expect(signedAmount(doc('credit_note'), null)).toBe(0)
+    expect(signedAmount(doc('debit_note'), undefined)).toBe(0)
+    expect(signedAmount(doc('commercial_invoice'), null)).toBe(0)
+  })
+
+  it('documentTypeBadge_namesOnlyNotes', () => {
+    expect(documentTypeBadge(doc('credit_note'))).toEqual({ label: 'CREDIT', title: 'Credit note' })
+    expect(documentTypeBadge(doc('debit_note'))).toEqual({ label: 'DEBIT', title: 'Debit note' })
+    expect(documentTypeBadge(doc('commercial_invoice'))).toBeNull()
+    expect(documentTypeBadge(doc(undefined))).toBeNull()
+    expect(documentTypeBadge(doc('something_new'))).toBeNull()
   })
 })

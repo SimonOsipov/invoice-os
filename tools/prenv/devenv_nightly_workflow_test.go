@@ -4,6 +4,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -19,6 +20,8 @@ const (
 	nlPRVar     = "PR: ${{ github.event.pull_request.number || 'nightly' }}"
 	nlFlakyStep = "Fail on a retry-pass in a spec this PR changed"
 )
+
+var regexpExpr = regexp.MustCompile(`\$\{\{\s*([A-Za-z0-9_.-]+)`)
 
 func nlJSONFile(name string) string {
 	return "PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ " + nlOn + " && format('{0}/nightly-results/" + name + "', github.workspace) || '' }}"
@@ -209,7 +212,7 @@ func devEnvNightlyProblems(yml string) []string {
 	if x, _ := jobKey(td, "name"); x != "Delete the nightly preview" {
 		bad("nightly-teardown name is " + x)
 	}
-	if !slices.Equal(needsOf(td), []string{"changes", "commit-authors", "prepare-env", "build", "deploy", "health-gate", "fleet-gate", "e2e", "topology"}) {
+	if !slices.Equal(needsOf(td), []string{"changes", "commit-authors", "prepare-env", "build", "deploy", "health-gate", "fleet-gate", "e2e", "topology", "email"}) {
 		bad("nightly-teardown needs are wrong")
 	}
 	if x, _ := foldedIf(td); x != nlTeardown {
@@ -241,6 +244,109 @@ func devEnvNightlyProblems(yml string) []string {
 	}
 	if g := unguardedOIDCJobs(yml); len(g) != 0 {
 		bad("unguarded OIDC jobs: " + strings.Join(g, ","))
+	}
+	return append(p, emailProblems(jobs)...)
+}
+
+const nlEmailIf = "!cancelled() && " + nlOn + " && " + authorCond +
+	" && needs.deploy.result == 'success' && needs.health-gate.result == 'success' && needs.fleet-gate.result == 'success'"
+
+// emailProblems names each clause of the nightly-only email job that the text breaks.
+func emailProblems(jobs map[string]workflowJob) []string {
+	var p []string
+	bad := func(msg string) { p = append(p, msg) }
+	em, ok := jobs["email"]
+	if !ok {
+		return []string{"no email job"}
+	}
+	if x, _ := jobKey(em, "name"); x != "Real invite and reset mail" {
+		bad("email name is " + x)
+	}
+	if x, _ := jobKey(em, "timeout-minutes"); x != "25" {
+		bad("email timeout-minutes is not 25")
+	}
+	if x, _ := foldedIf(em); x != nlEmailIf {
+		bad("email if is not exactly " + nlEmailIf)
+	}
+	if !slices.Equal(needsOf(em), []string{"changes", "commit-authors", "invariants", "prepare-env", "deploy", "health-gate", "fleet-gate", "e2e", "topology"}) {
+		bad("email needs are wrong")
+	}
+	for _, e := range blockLines(em.lines, 4, "env") {
+		if strings.Contains(e, "${{ runner.") {
+			bad("email job env reads the runner context: " + e)
+		}
+		for _, x := range regexpExpr.FindAllStringSubmatch(e, -1) {
+			if !strings.HasPrefix(x[1], "github.") && !strings.HasPrefix(x[1], "needs.") {
+				bad("email job env reads a context beyond github and needs: " + e)
+			}
+		}
+	}
+	if _, ok := jobs["e2e-gate"]; ok && slices.Contains(needsOf(jobs["e2e-gate"]), "email") {
+		bad("e2e-gate needs email")
+	}
+	if !slices.Contains(needsOf(jobs["nightly-teardown"]), "email") {
+		bad("nightly-teardown needs lack email")
+	}
+
+	seen := map[string]bool{}
+	var walk func(string)
+	walk = func(id string) {
+		for _, n := range needsOf(jobs[id]) {
+			if !seen[n] {
+				seen[n] = true
+				walk(n)
+			}
+		}
+	}
+	walk("email")
+	for id, j := range jobs {
+		if id == "email" || id == "nightly-teardown" {
+			continue
+		}
+		if x, _ := foldedIf(j); !strings.Contains(x, nlOff) && !seen[id] {
+			bad("job " + id + " can run beside the mail phase: not in email's needs")
+		}
+	}
+
+	idx := func(match func(workflowStep) bool) int {
+		for i, s := range em.steps() {
+			if match(s) {
+				return i
+			}
+		}
+		return -1
+	}
+	run := func(sub string) int {
+		return idx(func(s workflowStep) bool { return strings.Contains(nlCode(s.keys["run"]), sub) })
+	}
+	auth := idx(func(s workflowStep) bool { return strings.HasPrefix(s.keys["uses"], "google-github-actions/auth@") })
+	pre := run("preview.sh mail-preflight")
+	key := run("preview.sh mail-read-key")
+	prep := run("test:mail prepare.spec.ts")
+	on := run("preview.sh mail-on")
+	spec := run("test:mail real-mail.spec.ts")
+	if !(0 <= auth && auth < pre && pre < key && key < prep && prep < on && on < spec) {
+		bad("email steps are out of order: auth, preflight, key read, prepare, mail-on, real-mail")
+	}
+	if st, ok := nlStep(em, "Read the Resend read key and receiving domain"); ok {
+		r := nlCode(st.keys["run"])
+		if strings.Count(r, "::add-mask::") != 2 || strings.Index(r, "::add-mask::$key") > strings.Index(r, "GITHUB_ENV") || strings.Index(r, "::add-mask::$domain") > strings.Index(r, "GITHUB_ENV") {
+			bad("email masks the key and domain after writing GITHUB_ENV")
+		}
+	} else {
+		bad("email lacks the key read step")
+	}
+	if st, ok := nlStep(em, "Real invite and reset mail"); !ok || st.keys["timeout-minutes"] != "16" {
+		bad("email spec step timeout-minutes is not 16")
+	}
+	raw := nlRaw(em, "Upload the nightly results")
+	for _, w := range []string{"if: always() && " + nlOn, "name: results-email", "path: nightly-results/", "retention-days: 14"} {
+		if !slices.Contains(raw, w) {
+			bad("email results upload lacks " + w)
+		}
+	}
+	if strings.Contains(strings.Join(em.lines, "\n"), "playwright-report") {
+		bad("email job names a playwright-report")
 	}
 	return p
 }
@@ -507,7 +613,7 @@ func TestDevEnvNightly_TeardownAlwaysRunsInNightlyModeOnly(t *testing.T) {
 		{"    if: " + nlTeardown + "\n", "    if: success() && " + nlOn + " && " + authorCond + "\n", "nightly-teardown if"},
 		{"    if: " + nlTeardown + "\n", "    if: always() && " + authorCond + "\n", "nightly-teardown if"},
 		{"    timeout-minutes: 20\n", "    timeout-minutes: 30\n", "timeout-minutes is not 20"},
-		{"needs: [changes, commit-authors, prepare-env, build, deploy, health-gate, fleet-gate, e2e, topology]", "needs: [changes, commit-authors, prepare-env, build, deploy]", "nightly-teardown needs"},
+		{"needs: [changes, commit-authors, prepare-env, build, deploy, health-gate, fleet-gate, e2e, topology, email]", "needs: [changes, commit-authors, prepare-env, build, deploy]", "nightly-teardown needs"},
 		{"        run: bash scripts/ci/preview.sh teardown \"$PR\"\n      - name: Prove the nightly preview is gone", "        run: echo skip\n      - name: Prove the nightly preview is gone", "does not tear down"},
 	} {
 		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
@@ -569,4 +675,93 @@ func TestDevEnvNightly_ContactsGateUnchanged(t *testing.T) {
 	if strings.Contains(strings.Join(got, "\n"), "nightly") {
 		t.Error("contacts gate names the nightly mode")
 	}
+}
+
+func requireEmailMutations(t *testing.T, rows []struct{ old, repl, want string }) {
+	t.Helper()
+	yml := readWorkflow(t, "dev-env.yml")
+	for _, c := range rows {
+		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
+			t.Errorf("mutation %q: problems %q lack %q", c.old, got, c.want)
+		}
+	}
+}
+
+func TestDevEnvNightly_EmailJobRunsInNightlyModeOnly(t *testing.T) {
+	t.Parallel()
+	requireEmailMutations(t, []struct{ old, repl, want string }{
+		{"      needs.changes.outputs.nightly == 'true' &&\n      needs.commit-authors.outputs.dependabot_only == 'false' &&\n      needs.deploy.result", "      needs.commit-authors.outputs.dependabot_only == 'false' &&\n      needs.deploy.result", "email if"},
+		{"    name: Real invite and reset mail\n", "    name: Mail\n", "email name"},
+		{"    timeout-minutes: 25\n    permissions:\n      contents: read\n      actions: read", "    timeout-minutes: 40\n    permissions:\n      contents: read\n      actions: read", "email timeout-minutes"},
+		{"        timeout-minutes: 16\n", "        timeout-minutes: 30\n", "timeout-minutes is not 16"},
+		{"        if: always() && " + nlOn + "\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-email", "        if: always()\n        uses: actions/upload-artifact@v7\n        with:\n          name: results-email", "email results upload lacks"},
+	})
+}
+
+func TestDevEnvNightly_EmailJobEnvUsesAllowedContexts(t *testing.T) {
+	t.Parallel()
+	requireEmailMutations(t, []struct{ old, repl, want string }{
+		{"      MAIL_SECTION_FILE: ${{ github.workspace }}/nightly-results/email.json", "      MAIL_SECTION_FILE: ${{ runner.temp }}/email.json", "runner context"},
+	})
+}
+
+func TestDevEnvNightly_MailOnWaitsForE2E(t *testing.T) {
+	t.Parallel()
+	n := "needs: [changes, commit-authors, invariants, prepare-env, deploy, health-gate, fleet-gate, e2e, topology]"
+	requireEmailMutations(t, []struct{ old, repl, want string }{
+		{n, strings.Replace(n, "e2e, ", "", 1), "email needs"},
+		{n, strings.Replace(n, ", topology", "", 1), "email needs"},
+		{"fleet-gate, e2e, topology, email]", "fleet-gate, e2e, topology]", "nightly-teardown needs"},
+	})
+}
+
+func TestDevEnvNightly_EmailSkipsARedFleet(t *testing.T) {
+	t.Parallel()
+	requireEmailMutations(t, []struct{ old, repl, want string }{
+		{" &&\n      needs.health-gate.result == 'success' &&\n      needs.fleet-gate.result == 'success'\n    runs-on: ubuntu-latest\n    timeout-minutes: 25", "\n    runs-on: ubuntu-latest\n    timeout-minutes: 25", "email if"},
+		{"      needs.deploy.result == 'success' &&\n      needs.health-gate.result == 'success' &&\n      needs.fleet-gate.result == 'success'\n    runs-on: ubuntu-latest\n    timeout-minutes: 25", "      needs.deploy.result == 'success' &&\n      needs.health-gate.result == 'success'\n    runs-on: ubuntu-latest\n    timeout-minutes: 25", "email if"},
+	})
+}
+
+func TestDevEnvNightly_NothingRunsBesideTheMailPhase(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	add := func(job string) string {
+		return mutateOnce(t, yml, "  # Real invite and reset mail, after", job+"\n  # Real invite and reset mail, after")
+	}
+	for _, needs := range []string{"needs: [deploy]\n", "needs: [changes]\n", ""} {
+		got := devEnvNightlyProblems(add("  extra:\n    runs-on: ubuntu-latest\n    " + needs + "    steps:\n      - run: echo\n"))
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "job extra can run beside the mail phase") }) {
+			t.Errorf("job with %q: problems %q", needs, got)
+		}
+	}
+	// A job that email needs is clean.
+	clean := mutateOnce(t, add("  extra:\n    runs-on: ubuntu-latest\n    needs: [deploy]\n    steps:\n      - run: echo\n"),
+		"fleet-gate, e2e, topology]\n    if: >-\n      !cancelled() &&\n      needs.changes.outputs.nightly == 'true' &&", "fleet-gate, e2e, topology, extra]\n    if: >-\n      !cancelled() &&\n      needs.changes.outputs.nightly == 'true' &&")
+	if got := emailProblems(nlJobs(clean)); slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "beside the mail phase") }) {
+		t.Errorf("a job in email's needs is a problem: %q", got)
+	}
+}
+
+func TestDevEnvNightly_EmailStepOrder(t *testing.T) {
+	t.Parallel()
+	cmd := map[string]string{
+		"pf":   "        run: bash scripts/ci/preview.sh mail-preflight \"$PR\"\n",
+		"on":   "        run: bash scripts/ci/preview.sh mail-on \"$PR\"\n",
+		"prep": "        run: pnpm --filter @invoice-os/e2e test:mail prepare.spec.ts\n",
+		"spec": "        run: pnpm --filter @invoice-os/e2e test:mail real-mail.spec.ts\n",
+	}
+	yml := readWorkflow(t, "dev-env.yml")
+	for _, pair := range [][2]string{{"pf", "prep"}, {"prep", "on"}, {"on", "spec"}} {
+		a, b := cmd[pair[0]], cmd[pair[1]]
+		sw := mutateOnce(t, mutateOnce(t, yml, a, "@@A@@"), b, a)
+		sw = strings.Replace(sw, "@@A@@", b, 1)
+		if got := emailProblems(nlJobs(sw)); !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "out of order") }) {
+			t.Errorf("swap %v: problems %q", pair, got)
+		}
+	}
+	requireEmailMutations(t, []struct{ old, repl, want string }{
+		{"          echo \"::add-mask::$domain\"\n", "", "masks the key and domain"},
+	})
 }

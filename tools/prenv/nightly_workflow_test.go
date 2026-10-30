@@ -18,7 +18,7 @@ const (
 	nightlySuitesFlag     = "-suites scripts/ci/nightly-suites.txt"
 	nightlyCIRunLine      = `run: bash scripts/ci/nightly-ci.sh "$GITHUB_REF_NAME" ci.yml=run_id dev-env.yml=preview_run_id`
 	nightlyE2EFlag        = `-e2e-suites "$RUNNER_TEMP/e2e-suites.txt" `
-	nightlyPolls          = "420"
+	nightlyPolls          = "470"
 	nightlySummaryTimeout = "270"
 	nightlyPreviewDL      = `gh run download "$PREVIEW_RUN_ID" -R "$REPO" -p 'results-*' -D "$RUNNER_TEMP/results"`
 )
@@ -545,7 +545,7 @@ func TestNightly_PollBudgetCoversTheDevEnvPath(t *testing.T) {
 	t.Parallel()
 	devEnv := nlJobs(readWorkflow(t, "dev-env.yml"))
 	m := func(id string) int { return nightlyJobMinutes(t, devEnv, id) }
-	path := m("commit-authors") + m("build") + m("deploy") + max(m("health-gate"), m("fleet-gate")) + m("e2e") + m("topology") + m("nightly-teardown")
+	path := m("commit-authors") + m("build") + m("deploy") + max(m("health-gate"), m("fleet-gate")) + m("e2e") + m("topology") + m("email") + m("nightly-teardown")
 	if path < 150 {
 		t.Fatalf("control: path sum %d min is implausibly small", path)
 	}

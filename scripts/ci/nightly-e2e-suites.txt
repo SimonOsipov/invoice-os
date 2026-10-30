@@ -6,4 +6,5 @@ deploy=Deploy the PR's fleet
 health-gate=Gate on gateway /health (commit, mock issuer, issuers)
 fleet-gate=Fleet /healthz gate (all backends green)
 e2e=E2E (smoke + api)=results
+email=Real invite and reset mail
 teardown=Delete the nightly preview

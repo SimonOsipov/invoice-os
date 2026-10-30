@@ -109,6 +109,56 @@ func wantNumbers(t *testing.T, rows [][]string, want ...string) {
 	}
 }
 
+// dataRows drops the header and, when there is one, the footer.
+func dataRows(rows [][]string) [][]string {
+	if len(rows) < 2 {
+		return nil
+	}
+	return rows[1 : len(rows)-1]
+}
+
+// doc plants an invoice or note; "" for an amount stores NULL. original is the row id
+// of the note's invoice, "" for an invoice.
+func (g *registerRig) doc(t *testing.T, number, docType, status, issueDate, original, subtotal, vat, total string) string {
+	t.Helper()
+	id := g.invoice(t, number, status, issueDate)
+	var orig any
+	if original != "" {
+		orig = original
+	}
+	if _, err := g.tx.Exec(context.Background(), `
+		UPDATE invoices SET document_type = $2, original_invoice_id = $3::uuid,
+		  subtotal = NULLIF($4::text, '')::numeric, vat = NULLIF($5::text, '')::numeric, total = NULLIF($6::text, '')::numeric
+		WHERE id = $1`, id, docType, orig, subtotal, vat, total); err != nil {
+		t.Fatalf("set %s amounts: %v", number, err)
+	}
+	return id
+}
+
+// designFixture plants the story's invoice, credit note and debit note; the net is 750.00 / 56.25 / 806.25.
+func (g *registerRig) designFixture(t *testing.T) {
+	t.Helper()
+	inv := g.doc(t, "INV-1", "commercial_invoice", "validated", "2026-09-10", "", "1000.00", "75.00", "1075.00")
+	g.doc(t, "CN-1", "credit_note", "validated", "2026-09-11", inv, "300.00", "22.50", "322.50")
+	g.doc(t, "DN-1", "debit_note", "validated", "2026-09-12", inv, "50.00", "3.75", "53.75")
+}
+
+// wantFooter asserts the last row is the footer: Net total, the three sums, every other cell empty.
+func wantFooter(t *testing.T, rows [][]string, subtotal, vat, total string) {
+	t.Helper()
+	if len(rows) < 2 {
+		t.Fatalf("%d rows, want a footer after the data rows", len(rows))
+	}
+	want := make([]string, len(invoicesCSVHeader))
+	want[headerIndex(t, "invoice_number")] = "Net total"
+	want[headerIndex(t, "subtotal")] = subtotal
+	want[headerIndex(t, "vat")] = vat
+	want[headerIndex(t, "total")] = total
+	if got := rows[len(rows)-1]; !reflect.DeepEqual(got, want) {
+		t.Errorf("footer = %q, want %q", got, want)
+	}
+}
+
 // registerAuditRows counts export rows of the given tenants, as the superuser.
 func registerAuditRows(t *testing.T, tx pgx.Tx, tenants ...string) int {
 	t.Helper()
@@ -285,7 +335,13 @@ func TestRegister_ExactlyTheCapSucceeds(t *testing.T) {
 	g.invoice(t, "INV-1", "validated", "2026-09-10")
 	g.invoice(t, "INV-2", "validated", "2026-09-11")
 	g.act(t)
-	wantNumbers(t, mustBuild(t, g, "2026-09-01", "2026-09-30", 2), "INV-1", "INV-2")
+	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 2)
+	if n := len(dataRows(rows)); n != 2 {
+		t.Errorf("%d data rows, want exactly the cap, 2", n)
+	}
+	if len(rows) != 4 {
+		t.Errorf("%d sheet rows, want 4: header, 2 data rows and the footer outside the cap", len(rows))
+	}
 }
 
 func TestRegister_DraftsDoNotCountTowardTheCap(t *testing.T) {
@@ -391,6 +447,74 @@ func TestRegister_EmptyPeriodIsAHeaderOnlyFileAndStillAudited(t *testing.T) {
 		t.Errorf("%d rows, want the header only", len(rows))
 	}
 	assertRegisterAudit(t, readRegisterAudit(t, g.tx), g.entity, 0)
+}
+
+func TestRegister_FooterNetsNotesBySign(t *testing.T) {
+	g := newRegisterRig(t)
+	g.designFixture(t)
+	g.act(t)
+	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
+	wantFooter(t, rows, "750.00", "56.25", "806.25")
+}
+
+func TestRegister_FooterCoversOnlyTheRowsOnTheSheet(t *testing.T) {
+	g := newRegisterRig(t)
+	inv := g.doc(t, "INV-A", "commercial_invoice", "accepted", "2026-09-10", "", "1000.00", "100.00", "1100.00")
+	g.doc(t, "INV-R", "commercial_invoice", "rejected", "2026-09-11", "", "200.00", "20.00", "220.00")
+	g.doc(t, "CN-R", "credit_note", "rejected", "2026-09-12", inv, "300.00", "30.00", "330.00")
+	g.doc(t, "CN-DRAFT", "credit_note", "draft", "2026-09-13", inv, "70.00", "7.00", "77.00")
+	g.doc(t, "CN-OUT", "credit_note", "validated", "2026-10-02", inv, "11.00", "1.10", "12.10")
+	g.act(t)
+	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
+	wantFooter(t, rows, "900.00", "90.00", "990.00")
+}
+
+func TestRegister_FooterNullAmountAddsZero(t *testing.T) {
+	g := newRegisterRig(t)
+	inv := g.doc(t, "INV-1", "commercial_invoice", "validated", "2026-09-10", "", "100.00", "7.50", "107.50")
+	g.doc(t, "CN-NULL", "credit_note", "validated", "2026-09-11", inv, "", "", "")
+	g.act(t)
+	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
+	wantFooter(t, rows, "100.00", "7.50", "107.50")
+	if len(rows) != 4 {
+		t.Fatalf("%d sheet rows, want 4: header, INV-1, CN-NULL and the footer", len(rows))
+	}
+	for _, c := range []string{"subtotal", "vat", "total"} {
+		if got := rows[2][headerIndex(t, c)]; got != "" {
+			t.Errorf("CN-NULL %s cell = %q, want empty", c, got)
+		}
+	}
+}
+
+func TestRegister_FooterGoesNegative(t *testing.T) {
+	g := newRegisterRig(t)
+	inv := g.doc(t, "INV-1", "commercial_invoice", "validated", "2026-09-10", "", "100.00", "7.50", "107.50")
+	g.doc(t, "CN-1", "credit_note", "validated", "2026-09-11", inv, "300.00", "22.50", "322.50")
+	g.act(t)
+	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
+	wantFooter(t, rows, "-200.00", "-15.00", "-215.00")
+}
+
+// 0.1 + 0.2 - 0.05 is 0.25000000000000006 in float64.
+func TestRegister_FooterKeepsFullScale(t *testing.T) {
+	g := newRegisterRig(t)
+	g.doc(t, "INV-1", "commercial_invoice", "validated", "2026-09-10", "", "0.10", "0.01", "0.11")
+	inv2 := g.doc(t, "INV-2", "commercial_invoice", "validated", "2026-09-11", "", "0.20", "0.02", "0.22")
+	g.doc(t, "CN-1", "credit_note", "validated", "2026-09-12", inv2, "0.05", "0.01", "0.06")
+	g.act(t)
+	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
+	wantFooter(t, rows, "0.25", "0.02", "0.27")
+}
+
+func TestRegister_FooterIsNotInTheAuditCount(t *testing.T) {
+	g := newRegisterRig(t)
+	g.designFixture(t)
+	g.act(t)
+	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
+	if len(rows) != 5 {
+		t.Fatalf("%d sheet rows, want 5: header, 3 data rows and the footer", len(rows))
+	}
+	assertRegisterAudit(t, readRegisterAudit(t, g.tx), g.entity, 3)
 }
 
 func TestRegister_TooLongCellRefusesBeforeAnyByte(t *testing.T) {

@@ -282,6 +282,67 @@ func TestAssemble_InvoicesWithoutSubmissionsProduceAMixedBundle(t *testing.T) {
 	}
 }
 
+// invoices.csv keeps stored amounts and carries no register footer.
+func TestAssemble_InvoicesCSVHasNoFooter(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-assemble-no-footer")
+	entity := mustCreateEntity(t, tx, tenant, "No Footer Co", "80000008-0001")
+	from := time.Date(2027, 6, 1, 0, 0, 0, 0, time.UTC)
+	mk := func(i int, number string) string {
+		return mustCreateInvoice(t, tx, invoiceFixture{
+			tenantID: tenant, entityID: entity, invoiceNumber: number, status: "validated",
+			createdAt: from.Add(time.Duration(i) * time.Minute),
+		})
+	}
+	inv := mk(0, "INV-1")
+	cn, dn := mk(1, "CN-1"), mk(2, "DN-1")
+	for _, u := range []struct {
+		id, docType, sub, vat, total string
+		orig                         any
+	}{
+		{inv, "commercial_invoice", "1000.00", "75.00", "1075.00", nil},
+		{cn, "credit_note", "300.00", "22.50", "322.50", inv},
+		{dn, "debit_note", "50.00", "3.75", "53.75", inv},
+	} {
+		if _, err := tx.Exec(context.Background(),
+			`UPDATE invoices SET document_type=$2, original_invoice_id=$3::uuid, subtotal=$4::numeric, vat=$5::numeric, total=$6::numeric WHERE id=$1`,
+			u.id, u.docType, u.orig, u.sub, u.vat, u.total); err != nil {
+			t.Fatalf("set amounts: %v", err)
+		}
+	}
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	err := assemble(context.Background(), tx, Request{EntityID: entity, From: from, To: from.Add(time.Hour)}, &buf,
+		assembleOpts{tenantID: tenant, subject: "system", maxInvoices: maxBundleInvoices, now: time.Now()})
+	if err != nil {
+		t.Fatalf("assemble: unexpected error: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("zip.NewReader: %v", err)
+	}
+	rows := parseCSV(t, mustReadZipEntry(t, zr, "invoices.csv"))
+	if len(rows) != 4 {
+		t.Fatalf("invoices.csv has %d rows, want 4 (header + 3 documents)", len(rows))
+	}
+	for _, r := range rows[1:] {
+		if _, err := uuid.Parse(r[0]); err != nil {
+			t.Errorf("invoices.csv row %q: invoice_id is not a uuid, want data rows only", r)
+		}
+	}
+	var doc struct {
+		Counts struct{ Invoices int } `json:"counts"`
+	}
+	if err := json.Unmarshal(mustReadZipEntry(t, zr, "manifest.json"), &doc); err != nil {
+		t.Fatalf("unmarshal manifest.json: %v", err)
+	}
+	if doc.Counts.Invoices != 3 {
+		t.Errorf("manifest counts.invoices = %d, want 3", doc.Counts.Invoices)
+	}
+}
+
 // --- AC-1 (RLS): tenant B cannot reach tenant A's entity ----------------------------
 
 func TestRLS_AssembleUnderTenantBSeesNothingOfTenantA(t *testing.T) {

@@ -1,6 +1,7 @@
 // Blog shell layout, phone layout and cold deep links on the PR fork. Each case asserts a
 // relationship (side by side, containment, alignment, no overflow), never a raw dimension.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
+import { shoot } from '../argos'
 import { resolveTarget } from '../targets'
 import { GATEWAY_URL } from './targets'
 import {
@@ -210,6 +211,7 @@ test.describe('blog home, category and search at wide widths', () => {
       const input = field.getByRole('textbox')
       await input.fill('invoice')
       await expect(main(page).locator('h2')).toContainText(/match/)
+      if (width === 1440) await shoot(page, 'blog', 'search')
       const rows = main(page).locator('button.blog-row')
       const n = await rows.count()
       expect(n, 'control: no result row').toBeGreaterThan(0)
@@ -616,6 +618,7 @@ test('blog home: live posts render', async ({ page }) => {
   await expect(main(page).locator(`section ${GRID} button`).first(), 'no band card rendered').toBeVisible()
   const titles = await main(page).locator(`section ${GRID} button > span:nth-child(2)`).allTextContents()
   expect(titles.some((t) => SEEDED_TITLES.includes(t)), `no band holds a seeded post; saw ${titles.join(' | ')}`).toBe(true)
+  await shoot(page, 'blog', 'home')
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
@@ -633,10 +636,11 @@ test.describe('blog routes', () => {
   test('blog routes: a cold deep link renders the shell', async ({ page }) => {
     const errors = collectErrors(page)
     await prepare(page)
-    for (const [path] of COLD) {
+    for (const [i, [path]] of COLD.entries()) {
       await visit(page, path)
       await expect(crumbs(page).getByRole('button').first(), `${path}: first crumb`).toHaveText('Blog')
       await expect(aside(page).getByRole('button', { name: 'Subscribe' }), `${path}: the Subscribe button`).toBeVisible()
+      await shoot(page, 'blog', ['subscribe', 'confirm', 'category', 'post'][i])
     }
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
@@ -665,6 +669,7 @@ test.describe('blog routes', () => {
     expect(response?.status(), 'status of an unknown slug').toBe(404)
     await expect(main(page), '#blog-main never rendered').toBeVisible()
     await expect(header(page), '#blog-header never rendered').toBeVisible()
+    await shoot(page, 'blog', 'not-found')
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 })

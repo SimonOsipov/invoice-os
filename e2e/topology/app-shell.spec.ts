@@ -8,6 +8,7 @@ import { freshTin } from '../api/fixtures'
 import { collectErrors, signInAs } from '../personaSession'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { argosOn, shoot } from '../argos'
 import { resolveTarget } from '../targets'
 import { APP_URL, GATEWAY_URL, shardTenants } from './targets'
 
@@ -595,6 +596,13 @@ test('AS-06 every nav destination of both modes: no sideways scroll, no unresolv
         expect(s.badChips, `${where}: .pf-chip corners`).toEqual([])
         chipTotal += s.chips
         report.push({ where, scroll, scanned: s.scanned, buttons: s.buttons, chips: s.chips })
+        await shoot(page, 'app', `${persona}-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`, { mask: [page.getByTestId('identity-card')] })
+      }
+      if (argosOn()) {
+        await page.getByTestId('identity-card-account').click()
+        await expect(page).toHaveURL(/\/account$/)
+        await expect(page.getByRole('heading', { level: 1, name: 'Your account' })).toBeVisible()
+        await shoot(page, 'app', `${persona}-account`, { mask: [page.getByTestId('identity-card'), page.getByTestId('account-delete-body')] })
       }
     })
   }

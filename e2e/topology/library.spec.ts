@@ -3,6 +3,7 @@
 // nothing is exempt. Groups and features are discovered from the DOM (`nav-<gid>`, `fc-<fid>`);
 // nothing is imported from frontend/.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
+import { shoot } from '../argos'
 import { resolveTarget } from '../targets'
 import { enclosesRect, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 
@@ -402,6 +403,7 @@ test.describe('library sidebar links', () => {
 
 test.describe('library at phone widths, 768 and the tour', () => {
   const PAGES = ['/', '/rules', '/rules/validate']
+  const SHOT_NAMES: Record<string, string> = { '/': 'home', '/rules': 'group', '/rules/validate': 'feature' }
 
   test('library phone: no sideways scroll, aside above main, content inside the viewport', async ({ page }, testInfo) => {
     test.setTimeout(120_000)
@@ -520,6 +522,7 @@ test.describe('library at phone widths, 768 and the tour', () => {
       expect.soft(Math.abs(a.y - m.y), `${path}: the sidebar and main tops line up`).toBeLessThanOrEqual(1)
       expect.soft(sc.scrollWidth - sc.clientWidth, `${path}: #lib-main scrolls sideways`).toBeLessThanOrEqual(1)
       expect.soft(tour, `${path}: the tour button shows`).toBeGreaterThanOrEqual(1)
+      await shoot(page, 'library', SHOT_NAMES[path])
     }
     await attachJson(testInfo, 'library-768', measured)
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])

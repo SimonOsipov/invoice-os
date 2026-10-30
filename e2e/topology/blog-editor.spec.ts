@@ -3,6 +3,7 @@
 import { randomBytes } from 'node:crypto'
 import { test, expect, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'
 import { apiBase, provisionStaffAccount, rawFetch, signInSession, type StaffAccount } from '../api/client'
+import { shoot } from '../argos'
 import { collectErrors } from '../personaSession'
 import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession } from '../staffSession'
 import { resolveTarget } from '../targets'
@@ -135,6 +136,7 @@ test('SUP-BLOG-05 blog list: header, filters and table hold together at every wi
   await expect(page.getByRole('heading', { level: 1, name: 'Blog', exact: true }), 'Blog drew no h1').toBeVisible()
   await expect(firstRow(page), 'the Blog list drew no post row').toBeVisible({ timeout: 15_000 })
   await settle(page, pad(page))
+  await shoot(page, 'support', 'blog', { mask: [page.locator('[data-blog-table] .ops-row')] })
 
   const table = page.locator('[data-blog-table]')
   const cells = (row: Locator) => row.locator('xpath=./*')

@@ -502,6 +502,7 @@ var (
 	ErrOriginalNotFound    = errors.New("invoice: original not found")
 	ErrOriginalIsANote     = errors.New("invoice: original is a note")
 	ErrOriginalOtherEntity = errors.New("invoice: original in another entity")
+	ErrOriginalNotIssued   = errors.New("invoice: original is not an issued invoice")
 	ErrDuplicateNumber     = errors.New("invoice: duplicate number")
 	ErrRedundantTransition = errors.New("invoice: redundant transition")
 	ErrIllegalTransition   = errors.New("invoice: illegal transition")

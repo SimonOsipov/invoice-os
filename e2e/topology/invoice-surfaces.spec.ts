@@ -3794,6 +3794,260 @@ test('detail surface: the armed decision block and approval card, plus their lay
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// An accepted invoice of 3 lines, reached through the register's own submit path.
+async function openAcceptedThreeLineInvoice(page: Page): Promise<void> {
+  const token = await login(PERSONAS.A)
+  const stamp = Date.now()
+  const entity = await createEntity(token, { name: `CRDDBTNOTE-02 ${stamp}`, tin: freshTin() })
+  const invoiceNumber = `INV-CRDDBTNOTE-02-${stamp}`
+  const inv = await createInvoice(token, {
+    entity_id: entity.id,
+    ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_ACCEPT),
+    line_items: [
+      { description: 'Widget A', quantity: '4', unit_price: '100', line_total: '400' },
+      { description: 'Widget B', quantity: '3', unit_price: '100', line_total: '300' },
+      { description: 'Widget C', quantity: '3', unit_price: '100', line_total: '300' },
+    ],
+  })
+  await validateInvoice(token, inv.id)
+  await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  const row = invoiceRowByNumber(page, invoiceNumber)
+  await row.getByTestId('invoice-select').check()
+  await submitSelected(page)
+  await expect(row.getByTestId('invoice-status-badge')).toContainText('ACCEPTED')
+  await openInvoiceRow(page, invoiceNumber)
+  await expect(page.getByTestId('issue-credit-note')).toBeEnabled()
+}
+
+test('detail surface: the note actions fit the action column', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+  await openAcceptedThreeLineInvoice(page)
+
+  const BAR = ['edit-toggle', 'revalidate', 'detail-submit', 'issue-credit-note', 'issue-debit-note'] as const
+  const column = actionCluster(page)
+  const titleBlock = page.getByTestId('invoice-status-badge').locator('xpath=../..')
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await expect.poll(() => page.evaluate(() => window.innerWidth), { timeout: 5_000 }).toBe(width)
+
+      const boxes = await Promise.all(BAR.map((t) => page.getByTestId(t).boundingBox()))
+      const columnBox = await column.boundingBox()
+      const titleBox = await titleBlock.boundingBox()
+      expect(columnBox && titleBox, `column and title block must render at ${width}px`).toBeTruthy()
+      boxes.forEach((b, i) => expect(b, `${BAR[i]} must render at ${width}px`).toBeTruthy())
+
+      for (let i = 0; i < BAR.length; i++) {
+        expect(enclosesRect(columnBox!, boxes[i]!, 1), `${BAR[i]} must sit inside the action column at ${width}px`).toBe(true)
+        for (let j = i + 1; j < BAR.length; j++) {
+          expect(rectsOverlap(boxes[i]!, boxes[j]!), `${BAR[i]} overlaps ${BAR[j]} at ${width}px`).toBe(false)
+        }
+      }
+      expect(rectsOverlap(columnBox!, titleBox!), `the action column overlaps the title block at ${width}px`).toBe(false)
+      await assertPageDoesNotScrollSideways(page, `accepted invoice at ${width}px`)
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test("detail surface: the note form's columns fit and align", async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+  await openAcceptedThreeLineInvoice(page)
+
+  await page.getByTestId('issue-credit-note').click()
+  const form = page.getByTestId('note-form')
+  await expect(form).toBeVisible()
+  await expect(page.getByTestId('note-line-row')).toHaveCount(3)
+  for (const check of await page.getByTestId('note-line-check').all()) await check.check()
+
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await expect.poll(() => page.evaluate(() => window.innerWidth), { timeout: 5_000 }).toBe(width)
+
+      const formBox = await form.boundingBox()
+      expect(formBox, `the note form must render at ${width}px`).toBeTruthy()
+      const controls: { name: string; box: Rect }[] = []
+      for (const testid of ['note-line-qty', 'note-line-price', 'note-line-amount']) {
+        const all = await page.getByTestId(testid).all()
+        expect(all, `${testid} must render a control per line at ${width}px`).toHaveLength(3)
+        for (const [i, el] of all.entries()) {
+          const box = await el.boundingBox()
+          expect(box, `${testid} ${i} must render at ${width}px`).toBeTruthy()
+          controls.push({ name: `${testid}[${i}]`, box: box! })
+        }
+      }
+      for (const [i, a] of controls.entries()) {
+        expect(enclosesRect(formBox!, a.box, 1), `${a.name} must sit inside the form at ${width}px`).toBe(true)
+        for (const b of controls.slice(i + 1)) {
+          expect(rectsOverlap(a.box, b.box), `${a.name} overlaps ${b.name} at ${width}px`).toBe(false)
+        }
+      }
+
+      // The form and the row box that owns the sideways scroll: neither may scroll at a wide width.
+      const scroll = await form.evaluate((el) => {
+        const box = el.querySelector('[data-testid="note-line-row"]')!.parentElement!.parentElement!
+        return { form: el.scrollWidth - el.clientWidth, rows: box.scrollWidth - box.clientWidth }
+      })
+      expect(scroll.form, `the note form scrolls sideways at ${width}px`).toBe(0)
+      expect(scroll.rows, `the note lines box scrolls sideways at ${width}px`).toBe(0)
+
+      const totalBox = await page.getByTestId('note-total').boundingBox()
+      expect(totalBox, `note-total must render at ${width}px`).toBeTruthy()
+      for (const amount of controls.filter((c) => c.name.startsWith('note-line-amount'))) {
+        expect(
+          Math.abs(totalBox!.x + totalBox!.width - (amount.box.x + amount.box.width)),
+          `note-total's right edge must align with ${amount.name} at ${width}px`,
+        ).toBeLessThanOrEqual(1)
+      }
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Issues a credit note with a 40-character number through the form; the page lands on the note.
+async function issueLongNumberedNote(page: Page): Promise<string> {
+  await openAcceptedThreeLineInvoice(page)
+  const number = `CN-LONG-${Date.now()}-`.padEnd(40, 'X')
+  await page.getByTestId('issue-credit-note').click()
+  await page.getByTestId('note-line-check').first().check()
+  await page.getByTestId('note-number').fill(number)
+  await page.getByTestId('note-form-submit').click()
+  await expect(page.getByTestId('document-type-badge')).toBeVisible()
+  return number
+}
+
+test('detail surface: a long note number stays inside the notes card', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+  const number = await issueLongNumberedNote(page)
+  await page.getByTestId('original-invoice-link').click()
+  const card = page.getByTestId('notes-card')
+  await expect(card).toBeVisible()
+  const row = card.getByTestId('note-row').filter({ hasText: number })
+  await expect(row).toBeVisible()
+
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await expect.poll(() => page.evaluate(() => window.innerWidth), { timeout: 5_000 }).toBe(width)
+
+      const cardBox = await card.boundingBox()
+      const rowBox = await row.boundingBox()
+      const recordBox = await page.getByTestId('fiscal-record-card').boundingBox()
+      const numberBox = await row.getByTestId('note-row-open').boundingBox()
+      const pillBox = await row.getByTestId('note-row-status').boundingBox()
+      const totalBox = await row.getByTestId('note-row-total').boundingBox()
+      expect(cardBox && rowBox && recordBox && numberBox && pillBox && totalBox, `notes card parts must render at ${width}px`).toBeTruthy()
+
+      expect(enclosesRect(cardBox!, rowBox!, 1), `the note row must sit inside notes-card at ${width}px`).toBe(true)
+      expect(rectsOverlap(numberBox!, pillBox!), `the number overlaps the status pill at ${width}px`).toBe(false)
+      expect(rectsOverlap(numberBox!, totalBox!), `the number overlaps the total at ${width}px`).toBe(false)
+      expect(rectsOverlap(pillBox!, totalBox!), `the status pill overlaps the total at ${width}px`).toBe(false)
+      expect(Math.abs(cardBox!.x - recordBox!.x), `notes-card and fiscal-record-card share a left edge at ${width}px`).toBeLessThanOrEqual(1)
+      expect(
+        Math.abs(cardBox!.x + cardBox!.width - (recordBox!.x + recordBox!.width)),
+        `notes-card and fiscal-record-card share a right edge at ${width}px`,
+      ).toBeLessThanOrEqual(1)
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('detail surface: a user issues a credit note on chosen lines', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+  await openAcceptedThreeLineInvoice(page)
+
+  const number = `CN-JOURNEY-${Date.now()}`
+  await page.getByTestId('issue-credit-note').click()
+  const rows = page.getByTestId('note-line-row')
+  await rows.nth(0).getByTestId('note-line-check').check()
+  await rows.nth(0).getByTestId('note-line-qty').fill('2')
+  await rows.nth(1).getByTestId('note-line-check').check()
+  await page.getByTestId('note-number').fill(number)
+  await page.getByTestId('note-form-submit').click()
+
+  await expect(page.getByTestId('document-type-badge')).toHaveText('CREDIT')
+  await expect(page.getByTestId('invoice-status-badge')).toContainText('DRAFT')
+  await page.getByTestId('original-invoice-link').click()
+
+  // 2 x 100 + 3 x 100 = 500, plus 7.5% VAT = 537.50; the card's fmt rounds to whole naira, signed negative.
+  const noteRow = page.getByTestId('notes-card').getByTestId('note-row').filter({ hasText: number })
+  await expect(noteRow).toBeVisible()
+  await expect(noteRow.getByTestId('note-row-total')).toHaveText('-₦538')
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('detail surface: a taken note number is a field error', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page, expectedStatusDropper(page, 409, /\/api\/invoice\/v1\/invoices\/[^/]+\/notes$/))
+  const number = await issueLongNumberedNote(page)
+  await page.getByTestId('original-invoice-link').click()
+
+  await page.getByTestId('issue-credit-note').click()
+  await page.getByTestId('note-line-check').first().check()
+  await page.getByTestId('note-number').fill(number)
+  await page.getByTestId('note-form-submit').click()
+
+  await expect(page.getByTestId('note-number-error')).toBeVisible()
+  await expect(page.getByTestId('note-form')).toBeVisible()
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('detail surface: the type badge sits beside the status badge', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+  await issueLongNumberedNote(page)
+  await expect(page.getByTestId('invoice-status-badge')).toBeVisible()
+
+  const column = actionCluster(page)
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await expect.poll(() => page.evaluate(() => window.innerWidth), { timeout: 5_000 }).toBe(width)
+
+      const typeBox = await page.getByTestId('document-type-badge').boundingBox()
+      const statusBox = await page.getByTestId('invoice-status-badge').boundingBox()
+      const columnBox = await column.boundingBox()
+      const h1Box = await page.getByRole('heading', { level: 1 }).boundingBox()
+      expect(typeBox && statusBox && columnBox && h1Box, `badges, title and action column must render at ${width}px`).toBeTruthy()
+
+      // The h1 is nowrap: a long number must not push a badge onto the title or off the page.
+      expect(rectsOverlap(h1Box!, typeBox!), `the title overlaps the type badge at ${width}px`).toBe(false)
+      expect(rectsOverlap(h1Box!, statusBox!), `the title overlaps the status badge at ${width}px`).toBe(false)
+      expect(typeBox!.x + typeBox!.width, `the type badge runs off the page at ${width}px`).toBeLessThanOrEqual(width)
+
+      expect(rectsOverlap(typeBox!, statusBox!), `the type badge overlaps the status badge at ${width}px`).toBe(false)
+      expect(rectsOverlap(typeBox!, columnBox!), `the type badge overlaps the action column at ${width}px`).toBe(false)
+      expect(rectsOverlap(statusBox!, columnBox!), `the status badge overlaps the action column at ${width}px`).toBe(false)
+      expect(
+        Math.abs(typeBox!.y + typeBox!.height / 2 - (statusBox!.y + statusBox!.height / 2)),
+        `the badges share a vertical centre at ${width}px`,
+      ).toBeLessThanOrEqual(1)
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 // The four claims the state strip makes that jsdom cannot see. StatusStrip.test.tsx
 // reads inline style PROPS -- it can prove the component ASKED for flex:none/max-content/nowrap,
 // never that a browser delivered them. These four are the only oracle for the delivered layout.
@@ -5208,7 +5462,7 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
 // `accepted`, because Fiscal record is the rail's first member and shouldShowFiscalRecord
 // mounts it only on `accepted` with a real IRN. BUG-13-02 moved Compliance out of the rail
 // and gave it `compliance-card`, so it is watched-and-absent here rather than a member.
-const RAIL_ORDER = ['fiscal-record-card', 'approval-card', 'source-document-card', 'ubl-document-card']
+const RAIL_ORDER = ['fiscal-record-card', 'notes-card', 'approval-card', 'source-document-card', 'ubl-document-card']
 // Wider than RAIL_ORDER on purpose: `status-history` is the card AUDIT-09-02 retired, and
 // failed-dead-end / rejection-reasons are the two rail members an accepted invoice
 // suppresses. Any of them mounting lands in the read below and breaks the equality, so
@@ -5260,7 +5514,7 @@ test('detail surface: the untouched rail order is unchanged', async ({ page }) =
   )
   expect(
     order,
-    "the rail's cards in document order: Fiscal record -> Approvals -> Source document -> UBL document, with Compliance no longer among them",
+    "the rail's cards in document order: Fiscal record -> Notes -> Approvals -> Source document -> UBL document, with Compliance no longer among them",
   ).toEqual(RAIL_ORDER)
 
   // The page-wide half of the absence: the retired card must not have come back outside the

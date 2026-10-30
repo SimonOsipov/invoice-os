@@ -42,6 +42,7 @@ case "$1 $2 $3" in
   *) cat "$D/have" 2>/dev/null || : ;;
   esac ;;
 "run services describe" | "run jobs describe" | "storage buckets describe") [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
+"run services update") if grep -qxF -- "$4" "$D/failupdate" 2>/dev/null; then echo "ERROR: update $4 failed" >&2; exit 1; fi ;;
 "run services list") cat "$D/list-services" 2>/dev/null || : ;;
 "run jobs list") cat "$D/list-jobs" 2>/dev/null || : ;;
 "storage buckets list") cat "$D/list-buckets" 2>/dev/null || : ;;
@@ -836,6 +837,17 @@ func TestPreviewMailOffUnmountsAndTurnsAutoConfirmOn(t *testing.T) {
 	}
 	if !strings.HasPrefix(lines[1], "run services update tenancy-nightly ") || !strings.Contains(lines[1], "--remove-secrets RESEND_SENDING_KEY") {
 		t.Errorf("tenancy update = %q", lines[1])
+	}
+}
+
+func TestPreviewMailOffTriesBothServicesAndFailsWhenOneFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "failupdate", "auth-nightly\n") }, "mail-off", "nightly")
+	if r.code == 0 || !strings.Contains(r.stderr, "mail-off left real mail mounted") {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	if !strings.Contains(r.file(t, "calls"), "run services update tenancy-nightly ") {
+		t.Errorf("tenancy was not tried after auth failed: %s", r.file(t, "calls"))
 	}
 }
 

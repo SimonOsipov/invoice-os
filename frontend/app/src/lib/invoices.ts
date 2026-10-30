@@ -174,6 +174,9 @@ export interface RejectionReason {
 // Core AC #1) re-sync this mirror against invoice.go:83-105 -- all five are `json:"..."`
 // with no `omitempty` on the Go struct, so every one of them is present on BOTH the
 // list and get wire as an explicit value or explicit null, never an absent key.
+// Mirrors submission.CommercialInvoice, CreditNote, DebitNote.
+export type InvoiceDocumentType = 'commercial_invoice' | 'credit_note' | 'debit_note'
+
 export interface InvoiceRecord {
   id: string
   entity_id: string
@@ -231,6 +234,8 @@ export interface InvoiceRecord {
   buyer_country?: string | null
   buyer_state?: string | null
   buyer_lga?: string | null
+  document_type?: InvoiceDocumentType
+  original_invoice_id?: string | null
   line_items?: InvoiceLineItem[]
   rule_set_version: number | null
   // approval (APPR-08-08) -- a LIST-wire key ONLY: Go emits it on listItem, never on

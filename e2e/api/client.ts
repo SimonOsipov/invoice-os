@@ -749,6 +749,8 @@ export interface Invoice {
   buyer_country: string | null
   buyer_state: string | null
   buyer_lga: string | null
+  document_type: 'commercial_invoice' | 'credit_note' | 'debit_note'
+  original_invoice_id: string | null
   line_items?: InvoiceLineItem[]
 }
 

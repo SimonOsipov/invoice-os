@@ -788,6 +788,18 @@ describe('wire mirror: Go Invoice, LineItem and TaxSubtotal <-> the e2e read typ
     }
   })
 
+  it('wire mirror: Invoice names document_type and original_invoice_id on every leg', () => {
+    const legs = {
+      'Go Invoice': goStructKeys(repoFile(GO_INVOICE), 'Invoice'),
+      'SPA InvoiceRecord': tsInterfaceKeys(repoFile(SPA_INVOICES), 'InvoiceRecord'),
+      'e2e Invoice': tsInterfaceKeys(repoFile(E2E_CLIENT), 'Invoice'),
+    }
+    for (const [name, keys] of Object.entries(legs)) {
+      expect(keys, `${name} lacks document_type`).toContain('document_type')
+      expect(keys, `${name} lacks original_invoice_id`).toContain('original_invoice_id')
+    }
+  })
+
   it('wire mirror: TaxSubtotal <-> InvoiceTaxSubtotal, and GetInvoiceResult carries tax_subtotals', () => {
     const go = goStructKeys(repoFile('internal/invoice/tax_subtotals.go'), 'TaxSubtotal')
     const e2e = tsInterfaceKeys(repoFile(E2E_CLIENT), 'InvoiceTaxSubtotal')

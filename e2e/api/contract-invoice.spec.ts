@@ -1968,6 +1968,13 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(got.line_items![0], 'GET returns every line field as sent').toMatchObject(NRS_LINE)
     })
 
+    test('document type: a created invoice reads back as a commercial invoice with no original', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-DT-${freshTin()}`) })
+      const got = await getInvoice(token, created.id)
+      expect(got.document_type, 'submission.CommercialInvoice').toBe('commercial_invoice')
+      expect(got.original_invoice_id, 'no original').toBeNull()
+    })
+
     test('nrs fields: a patch of header, party and line fields is read back', async () => {
       const created = await createInvoice(token, {
         entity_id: entity.id,

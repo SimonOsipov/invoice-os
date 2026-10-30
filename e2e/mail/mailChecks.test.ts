@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -223,7 +223,8 @@ describe('writeAccounts', () => {
 
   it('narrows a file that already exists', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'mail-accounts-')), 'accounts.json')
-    writeAccounts(file, accounts)
+    writeFileSync(file, '{}', { mode: 0o644 })
+    chmodSync(file, 0o644)
     writeAccounts(file, accounts)
     expect(statSync(file).mode & 0o777).toBe(0o600)
   })

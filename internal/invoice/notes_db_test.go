@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -787,6 +788,90 @@ func TestNotes_StillCreditableMayGoNegativeAndNullTotalIsNull(t *testing.T) {
 	}
 	if got.CreditedSoFar != "40.00" {
 		t.Errorf("NULL total: credited_so_far = %q, want 40.00 (still counted)", got.CreditedSoFar)
+	}
+
+	exact := ntOriginal(t, super, tenant, ent, "NT-EXACT", csAmount("500.00"))
+	ntNoteAt(t, super, tenant, ent, "NT-EXACT-1", "credit_note", exact, "accepted", "500.00", 3)
+	got, err = store.Notes(ctx, exact)
+	if err != nil {
+		t.Fatalf("Notes(fully credited): %v", err)
+	}
+	ntWantStr(t, "fully credited still_creditable", got.StillCreditable, "0.00")
+}
+
+func TestNotes_StillCreditableIsExactAtTheLargestTotal(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	tenant := seedTenant(t, super, "NT big")
+	ent := seedEntity(t, super, tenant, "NT client")
+	orig := ntOriginal(t, super, tenant, ent, "NT-BIG", csAmount("999999999999.99"))
+	ntNoteAt(t, super, tenant, ent, "NT-BIG-1", "credit_note", orig, "accepted", "0.01", 1)
+
+	got, err := store.Notes(dtCtx(tenant), orig)
+	if err != nil {
+		t.Fatalf("Notes: %v", err)
+	}
+	ntWantStr(t, "still_creditable", got.StillCreditable, "999999999999.98")
+}
+
+func TestNotes_NullNoteTotalListsAsNullAndAddsNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	tenant := seedTenant(t, super, "NT null note")
+	ent := seedEntity(t, super, tenant, "NT client")
+	orig := ntOriginal(t, super, tenant, ent, "NT-O1", csAmount("500.00"))
+	ntNoteAt(t, super, tenant, ent, "NT-1", "credit_note", orig, "accepted", "100.00", 1)
+	nullNote := csNote(t, super, tenant, ent, "NT-2", "credit_note", orig, "validated", nil)
+
+	got, err := store.Notes(dtCtx(tenant), orig)
+	if err != nil {
+		t.Fatalf("Notes: %v", err)
+	}
+	if len(got.Notes) != 2 {
+		t.Fatalf("notes = %+v, want 2", got.Notes)
+	}
+	var seen bool
+	for _, n := range got.Notes {
+		if n.ID == nullNote {
+			seen = true
+			if n.Total != nil {
+				t.Errorf("NULL stored total listed as %q, want nil", *n.Total)
+			}
+		}
+	}
+	if !seen {
+		t.Errorf("the NULL-total note %s is not listed", nullNote)
+	}
+	if got.CreditedSoFar != "100.00" {
+		t.Errorf("credited_so_far = %q, want 100.00", got.CreditedSoFar)
+	}
+	ntWantStr(t, "still_creditable", got.StillCreditable, "400.00")
+}
+
+func TestNotesHandler_RealStoreWireShape(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	tenant := seedTenant(t, super, "NT wire")
+	ent := seedEntity(t, super, tenant, "NT client")
+	empty := ntOriginal(t, super, tenant, ent, "NT-EMPTY", csAmount("500.00"))
+	h := NotesHandler(store.Notes, nil)
+
+	w := csServe(h, dtCtx(tenant), "GET", "/", empty, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("empty original: %d %s, want 200", w.Code, w.Body.String())
+	}
+	const want = `{"notes":[],"credited_so_far":"0.00","still_creditable":"500.00"}`
+	if got := strings.TrimSpace(w.Body.String()); got != want {
+		t.Errorf("empty original body = %s, want %s", got, want)
+	}
+
+	w = csServe(h, dtCtx(tenant), "GET", "/", "not-a-uuid", "")
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("malformed id: %d %s, want 400", w.Code, w.Body.String())
+	}
+	unknown := csServe(h, dtCtx(tenant), "GET", "/", uuid.NewString(), "")
+	if unknown.Code != http.StatusNotFound {
+		t.Errorf("unknown id: %d %s, want 404", unknown.Code, unknown.Body.String())
 	}
 }
 

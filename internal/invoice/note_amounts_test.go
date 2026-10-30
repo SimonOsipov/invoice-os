@@ -1,6 +1,7 @@
 package invoice
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -116,6 +117,53 @@ func TestNoteAmounts_CategorisedLineWithNoPercentHasNoTax(t *testing.T) {
 		flat := map[string]string{"nopct": "0.75", "nopctmix": "1.13"}[name]
 		if got.VAT == flat {
 			t.Errorf("%s: vat = %s, the flat-rate fallback", name, got.VAT)
+		}
+	}
+}
+
+// Groups key on (category, percent to 2dp): the same percent spelled two ways is one group, another category is another.
+func TestNoteAmounts_GroupsByCategoryAndPercentToTwoDecimals(t *testing.T) {
+	other := strPtr("OTHER_VAT")
+	cases := []nmWant{
+		{"7.5 and 7.50 are one group", []noteMoneyLine{nmLine("1", "10.06", nmStd, nmP75), nmLine("1", "10.06", nmStd, strPtr("7.50"))},
+			"20.12", "1.51", "21.63", []*string{strPtr("0.76"), strPtr("0.75")}},
+		{"7.5 and 7.501 are one group", []noteMoneyLine{nmLine("1", "10.06", nmStd, nmP75), nmLine("1", "10.06", nmStd, strPtr("7.501"))},
+			"20.12", "1.51", "21.63", []*string{strPtr("0.76"), strPtr("0.75")}},
+		{"another category is another group", []noteMoneyLine{nmLine("1", "10.06", nmStd, nmP75), nmLine("1", "10.06", other, nmP75)},
+			"20.12", "1.50", "21.62", []*string{strPtr("0.75"), strPtr("0.75")}},
+		{"another percent is another group", []noteMoneyLine{nmLine("1", "10.06", nmStd, nmP75), nmLine("1", "10.06", nmStd, strPtr("8"))},
+			"20.12", "1.55", "21.67", []*string{strPtr("0.75"), strPtr("0.80")}},
+		{"an empty category is no category: flat rate", []noteMoneyLine{nmLine("1", "10.00", strPtr(""), nmP75)},
+			"10.00", "0.75", "10.75", []*string{nil}},
+		{"a line total rounds half up", []noteMoneyLine{nmLine("0.001", "5.00", nil, nil)},
+			"0.01", "0.00", "0.01", []*string{nil}},
+	}
+	for _, v := range cases {
+		t.Run(v.name, func(t *testing.T) { nmCheck(t, v) })
+	}
+}
+
+// A value the quantity, unit price, line total or total column cannot hold is refused here, before the database.
+func TestNoteAmounts_RefusesWhatTheColumnsCannotHold(t *testing.T) {
+	if _, err := noteAmounts([]noteMoneyLine{nmLine("1.000", "100.00", nil, nil)}); err != nil {
+		t.Fatalf("control: a valid line: %v", err)
+	}
+	for _, c := range []struct{ name, qty, price string }{
+		{"quantity 10^11", "100000000000", "0.00"},
+		{"quantity 4 decimals", "1.0005", "1.00"},
+		{"quantity zero", "0", "1.00"},
+		{"unit price 10^12 on a small quantity", "0.001", "1000000000000"},
+		{"unit price 3 decimals", "1", "1.005"},
+		{"unit price negative", "1", "-0.01"},
+		{"line total 10^12", "1000", "1000000000.00"},
+		{"total 10^12 through two lines", "1", "999999999999.99"},
+	} {
+		lines := []noteMoneyLine{nmLine(c.qty, c.price, nil, nil)}
+		if c.name == "total 10^12 through two lines" {
+			lines = append(lines, nmLine("1", "0.01", nil, nil))
+		}
+		if _, err := noteAmounts(lines); !errors.Is(err, ErrValidation) {
+			t.Errorf("%s: err = %v, want ErrValidation", c.name, err)
 		}
 	}
 }

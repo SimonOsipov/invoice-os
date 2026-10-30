@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -274,14 +275,17 @@ func TestIssueNote_RefusesANoteAsOriginal(t *testing.T) {
 		name   string
 		status Status
 		irn    *string
+		typ    string
 	}{
-		{"accepted with an IRN: only the note clause can refuse", StatusAccepted, strPtr("IRN-IN-NOTE")},
-		{"draft without an IRN: the note clause comes before the status test", StatusDraft, nil},
+		{"accepted with an IRN: only the note clause can refuse", StatusAccepted, strPtr("IRN-IN-NOTE"), "credit_note"},
+		{"draft without an IRN: the note clause comes before the status test", StatusDraft, nil, "credit_note"},
+		{"debit note, accepted with an IRN", StatusAccepted, strPtr("IRN-IN-DEBIT"), "debit_note"},
+		{"debit note, draft without an IRN", StatusDraft, nil, "debit_note"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			id := seedInvoiceAtStatus(t, f.super, f.tenant, f.entity, "IN-NOTE-"+string(c.status), c.status)
+			id := seedInvoiceAtStatus(t, f.super, f.tenant, f.entity, "IN-NOTE-"+c.typ+string(c.status), c.status)
 			if _, err := f.super.Exec(context.Background(),
-				`UPDATE invoices SET document_type = 'credit_note', original_invoice_id = $1, irn = $2 WHERE id = $3`, f.original, c.irn, id); err != nil {
+				`UPDATE invoices SET document_type = $4, original_invoice_id = $1, irn = $2 WHERE id = $3`, f.original, c.irn, id, c.typ); err != nil {
 				t.Fatalf("seed note: %v", err)
 			}
 			before := f.counts(t)
@@ -409,9 +413,20 @@ func TestIssueNote_RefusesBadInput(t *testing.T) {
 		{"price 1.234", func(in *NoteInput) { in.Lines = []NoteLineInput{with("1.000", "1.234")} }},
 		{"price 10^12", func(in *NoteInput) { in.Lines = []NoteLineInput{with("1.000", "1000000000000")} }},
 		{"price blank", func(in *NoteInput) { in.Lines = []NoteLineInput{with("1.000", "")} }},
+		{"price 10^12 on a small quantity", func(in *NoteInput) { in.Lines = []NoteLineInput{with("0.001", "1000000000000")} }},
+		{"quantity -0", func(in *NoteInput) { in.Lines = []NoteLineInput{with("-0", "100.00")} }},
+		{"quantity +1", func(in *NoteInput) { in.Lines = []NoteLineInput{with("+1", "100.00")} }},
+		{"quantity padded", func(in *NoteInput) { in.Lines = []NoteLineInput{with(" 1.000", "100.00")} }},
+		{"quantity .5", func(in *NoteInput) { in.Lines = []NoteLineInput{with(".5", "100.00")} }},
+		{"price 1,50", func(in *NoteInput) { in.Lines = []NoteLineInput{with("1.000", "1,50")} }},
+		{"line id repeated in upper case", func(in *NoteInput) {
+			in.Lines = []NoteLineInput{good, {LineID: strings.ToUpper(good.LineID), Quantity: "1.000", UnitPrice: "1.00"}}
+		}},
 		{"line total reaches 10^12", func(in *NoteInput) { in.Lines = []NoteLineInput{with("1000.000", "1000000000.00")} }},
 		{"total reaches 10^12 through the VAT", func(in *NoteInput) { in.Lines = []NoteLineInput{with("1.000", "999999999999.00")} }},
 	}
+	// These two are computed from the original's lines, after the read.
+	late := map[string]bool{"line total reaches 10^12": true, "total reaches 10^12 through the VAT": true}
 	before := f.counts(t)
 	for i, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -425,11 +440,20 @@ func TestIssueNote_RefusesBadInput(t *testing.T) {
 				t.Errorf("err = %v, want only ErrValidation", err)
 			}
 			f.wantCounts(t, before, c.name)
+			if late[c.name] {
+				return
+			}
+			// Input is checked before the original is read: an unknown original does not mask it.
+			if _, err := f.store.IssueNote(f.ctx, uuid.NewString(), in); !errors.Is(err, ErrValidation) {
+				t.Errorf("same input on an unknown original: err = %v, want ErrValidation before any read", err)
+			}
 		})
 	}
 
 	// Boundaries just inside the bounds are accepted.
-	for i, in := range []NoteLineInput{with("0.001", "0.00"), with("99999999999.999", "0.00")} {
+	edges := []NoteLineInput{with("0.001", "0.00"), with("99999999999.999", "0.00"),
+		{LineID: f.lineIDs[2], Quantity: "1.000", UnitPrice: "999999999999.99"}} // line 3 is ZERO_VAT: total is 10^12 less one kobo
+	for i, in := range edges {
 		if _, err := f.store.IssueNote(f.ctx, f.original, f.req(fmt.Sprintf("CN-EDGE-%d", i), in)); err != nil {
 			t.Errorf("boundary line (%s x %s): err = %v, want created", in.Quantity, in.UnitPrice, err)
 		}
@@ -442,7 +466,7 @@ func TestIssueNote_RefusesALineOfAnotherInvoice(t *testing.T) {
 	f.issueOK(t, "CN-IN-CTRL")
 	before := f.counts(t)
 
-	for name, id := range map[string]string{"a line of a second original": otherLines[0], "a random uuid": uuid.NewString()} {
+	for name, id := range map[string]string{"a line of a second original": otherLines[0], "a random uuid": uuid.NewString(), "a blank id": "", "a padded blank id": "  ", "text": "not-a-uuid"} {
 		_, err := f.store.IssueNote(f.ctx, f.original, f.req("CN-FOREIGN",
 			NoteLineInput{LineID: f.lineIDs[0], Quantity: "1.000", UnitPrice: "1.00"},
 			NoteLineInput{LineID: id, Quantity: "1.000", UnitPrice: "1.00"}))
@@ -524,5 +548,69 @@ func TestIssueNote_NoLineCapOnTheServer(t *testing.T) {
 	}
 	if got := inStr(inCol(t, f.super, inv.ID, "subtotal")); got != "750.00" {
 		t.Errorf("subtotal = %s, want 750.00", got)
+	}
+}
+
+func TestIssueNote_DebitNoteIsCreatedWithItsType(t *testing.T) {
+	f := newInFixture(t, "IN debit")
+	in := f.req("DN-IN-1")
+	in.DocumentType = submission.DebitNote
+	inv, err := f.store.IssueNote(f.ctx, f.original, in)
+	if err != nil {
+		t.Fatalf("IssueNote debit_note: %v", err)
+	}
+	if typ, orig := dtRow(t, f.super, inv.ID); typ != "debit_note" || orig == nil || *orig != f.original {
+		t.Errorf("row (document_type, original) = (%q, %v), want (debit_note, %s)", typ, orig, f.original)
+	}
+}
+
+func TestIssueNote_LineIDMatchesInAnyLetterCase(t *testing.T) {
+	f := newInFixture(t, "IN case")
+	inv, err := f.store.IssueNote(f.ctx, f.original, f.req("CN-IN-UP",
+		NoteLineInput{LineID: strings.ToUpper(f.lineIDs[1]), Quantity: "1.000", UnitPrice: "50.00"}))
+	if err != nil {
+		t.Fatalf("IssueNote with an upper-case line id: %v", err)
+	}
+	lines := inStoredLines(t, f.super, inv.ID)
+	if len(lines) != 1 || lines[0].desc != "Gadget" {
+		t.Errorf("stored lines = %+v, want the one Gadget line", lines)
+	}
+}
+
+// Pinned: a NULL supplier contact on the original is filled from the company's current contact by Store.Create.
+func TestIssueNote_NullSupplierContactTakesTheCompanysCurrentOne(t *testing.T) {
+	f := newInFixture(t, "IN null contact")
+	if _, err := f.super.Exec(context.Background(), `UPDATE business_entities SET email = 'now@x.test' WHERE id = $1`, f.entity); err != nil {
+		t.Fatalf("seed company email: %v", err)
+	}
+	if got := inCol(t, f.super, f.original, "supplier_email"); got != nil {
+		t.Fatalf("seed: original supplier_email = %s, want NULL", *got)
+	}
+	inv := f.issueOK(t, "CN-IN-NULLC")
+	if got := inStr(inCol(t, f.super, inv.ID, "supplier_email")); got != "now@x.test" {
+		t.Errorf("note supplier_email = %s, want now@x.test", got)
+	}
+}
+
+// The empty type is a commercial invoice: a hand-built Invoice has no stored default.
+func TestNoteRefusal_EmptyDocumentTypeIsCommercial(t *testing.T) {
+	irn := "IRN-X"
+	cases := []struct {
+		name string
+		inv  Invoice
+		want error
+	}{
+		{"empty type, accepted with an IRN", Invoice{Status: StatusAccepted, IRN: &irn}, nil},
+		{"commercial, accepted with an IRN", Invoice{DocumentType: submission.CommercialInvoice, Status: StatusAccepted, IRN: &irn}, nil},
+		{"empty type, accepted without an IRN", Invoice{Status: StatusAccepted}, ErrOriginalNotIssued},
+		{"empty type, validated", Invoice{Status: StatusValidated, IRN: &irn}, ErrOriginalNotIssued},
+		{"credit note, accepted with an IRN", Invoice{DocumentType: submission.CreditNote, Status: StatusAccepted, IRN: &irn}, ErrOriginalIsANote},
+		{"debit note, accepted with an IRN", Invoice{DocumentType: submission.DebitNote, Status: StatusAccepted, IRN: &irn}, ErrOriginalIsANote},
+		{"credit note, draft", Invoice{DocumentType: submission.CreditNote, Status: StatusDraft}, ErrOriginalIsANote},
+	}
+	for _, c := range cases {
+		if got := noteRefusal(c.inv); !errors.Is(got, c.want) || (c.want == nil && got != nil) {
+			t.Errorf("%s: noteRefusal = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

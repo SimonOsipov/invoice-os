@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { unzipSync } from 'fflate'
 import { apiBase, fleetHeaders, getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, provisionStaffAccount, rawFetch, signInSession, type AuditEvent, type StaffAccount } from '../api/client'
+import { argosOn, shoot } from '../argos'
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -2078,6 +2079,12 @@ for (const s of SCREENS) {
     await settle(page, mainOf(page))
 
     await expectHeader(page, s.nav, s.h1, s.rowUp)
+    if (argosOn()) {
+      // Shots block nothing: a screen still loading at the cap is shot as it is.
+      await expect(mainOf(page).getByText(/^Loading .+…$/)).toHaveCount(0, { timeout: 15_000 }).catch(() => {})
+      await settle(page, mainOf(page))
+    }
+    await shoot(page, 'support', s.nav.toLowerCase().replace(/ /g, '-'), { mask: [mainOf(page).locator('table tbody'), page.locator('[data-panel]')] })
     await s.reads(page, testInfo, armed)
 
     await atWidths(page, `SUP-03 ${s.nav} title block`, () => titleBlockRead(page, s.h1))

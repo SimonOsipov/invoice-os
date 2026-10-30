@@ -81,6 +81,7 @@ import {
 } from '../api/client'
 import { ensureFirmPolicyActive, ensureInhousePolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
+import { shoot } from '../argos'
 import {
   assertFillsColumn,
   assertPageDoesNotScrollSideways,
@@ -1404,6 +1405,7 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
   await expect(page.locator('label[for="pf-import-file"]'), 'in-house gets the dropzone too').toBeVisible({
     timeout: 30_000,
   })
+  await shoot(page, 'app', 'inhouse-create', { mask: [page.locator('aside nav button.pf-nav span.mono'), page.getByTestId('company-chip'), page.locator('aside nav.pf-nav-list div.label')] })
 
   // Inverts the old test's positive assertion of this exact panel (AC-7/8:662-669): with
   // a real entity resolved, the amber refusal — and its in-house-only sentence,
@@ -1465,6 +1467,7 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
   // path gets (E2E-01 above), now available to in-house too.
   await expect(page.getByTestId('invoice-detail'), 'the import actually filed a real invoice, not a refusal').toBeVisible({ timeout: 30_000 })
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(invoiceNumber)
+  await shoot(page, 'app', 'inhouse-detail', { mask: [page.getByTestId('invoice-detail').locator('tbody'), page.getByTestId('status-strip'), page.locator('aside nav button.pf-nav span.mono'), page.getByTestId('company-chip'), page.locator('aside nav.pf-nav-list div.label')] })
 
   // And manual entry — the OTHER path [inhouse-can-start] proved was also a dead end
   // (:725-729). Re-opens the wizard fresh via the header CTA rather than navigating back

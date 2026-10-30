@@ -39,6 +39,7 @@ import {
 } from '../api/client'
 import { codeListsReady, ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshBuyerTin, freshTin } from '../api/fixtures'
+import { shoot } from '../argos'
 import { buildMixedCsv, buildPerfCsv, steerExplainMarker } from '../importFixtures'
 import { approvalRun404Dropper, type Dropper, expectedStatusDropper, notFoundIdDropper } from './consoleGate'
 import {
@@ -1185,6 +1186,7 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await selectEntity(page, entity.name)
   await goToInvoices(page)
   await openInvoiceRow(page, invoiceNumber)
+  await shoot(page, 'app', 'firm-detail', { mask: [page.getByTestId('company-switcher'), page.locator('aside nav.pf-nav-list div.label'), page.getByTestId('invoice-detail').locator('tbody')] })
 
   // 1. Not yet validated -- the Draft node is `current` and nothing downstream is reached.
   await expect(page.getByTestId('not-validated')).toBeVisible()

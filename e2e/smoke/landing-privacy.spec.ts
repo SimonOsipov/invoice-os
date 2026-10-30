@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { shoot } from '../argos'
 import { resolveTarget } from '../targets'
 import { gaps, WIDE_WIDTHS } from '../topology/layout'
 
@@ -70,6 +71,7 @@ async function openPrivacy(page: Page, url: string = PRIVACY_URL) {
 test('landing privacy: typing /privacy serves the page and not the sales page', async ({ page }) => {
   const { errors } = await openPrivacy(page)
   await expect(page.locator('#problem')).toHaveCount(0)
+  await shoot(page, 'landing', 'privacy')
   expectNoConsoleErrors(errors)
 })
 
@@ -105,6 +107,7 @@ test('landing privacy: the site root still serves the sales page', async ({ page
 
   await expect(page.getByTestId('privacy-container')).toHaveCount(0)
   await expect(page.locator('#problem')).toBeVisible()
+  await shoot(page, 'landing', 'home')
   expectNoConsoleErrors(errors)
 })
 

@@ -3,6 +3,7 @@
 // Value reads copy a value from its source (token or prototype) and name it; screenshots are attached, never asserted.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { provisionStaffAccount, type StaffAccount } from '../api/client'
+import { shoot } from '../argos'
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -694,6 +695,7 @@ for (const s of SCREENS) {
     expect(grow.growing, 'elements still running opsGrow').toBe(0)
     expect(await noSidewaysScroll(page, s.key), 'screen scrolls sideways').toEqual([])
     await attachShot(page, testInfo, s.key)
+    await shoot(page, 'ops', s.key)
 
     const ctx: Ctx = { page, measured, fg3: await resolveColor(pad(page), '--fg-3'), ink: await resolveColor(pad(page), '--ink') }
     await SCREEN_TESTS[s.key](ctx)

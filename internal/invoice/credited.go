@@ -14,7 +14,7 @@ func CreditedSoFarTx(ctx context.Context, tx pgx.Tx, originalID, excludeID strin
 		   FROM invoices
 		  WHERE original_invoice_id = $1
 		    AND document_type = 'credit_note'
-		    AND status IN ('validated', 'queued', 'submitted', 'accepted')
+		    AND status NOT IN ('draft', 'rejected', 'failed')
 		    AND ($2 = '' OR id <> NULLIF($2, '')::uuid)`,
 		originalID, excludeID).Scan(&sum)
 	return sum, err

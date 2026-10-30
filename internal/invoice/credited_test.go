@@ -244,3 +244,20 @@ func TestCreditedSoFar_EachTenantSeesOnlyItsOwnNotes(t *testing.T) {
 	csWant(t, csCredited(t, app, tenantA, oB, ""), "0.00")
 	csWant(t, csCredited(t, app, tenantB, oA, ""), "0.00")
 }
+
+// 101 near-max totals push the sum past 2^53 cents, where a float sum drifts.
+func TestCreditedSoFar_SumStaysExactPastFloatPrecision(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "CS huge sum")
+	ent := seedEntity(t, super, tenant, "E1")
+	o1 := seedInvoice(t, super, tenant, ent, "CS-O1")
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, document_type, original_invoice_id, status, total)
+		 SELECT $1, $2, 'CS-BULK-' || g, 'credit_note', $3, 'accepted', 999999999999.99 FROM generate_series(1, 101) g`,
+		tenant, ent, o1); err != nil {
+		t.Fatalf("seed bulk: %v", err)
+	}
+	csNote(t, super, tenant, ent, "CS-ONE", "credit_note", o1, "accepted", csAmount("0.01"))
+
+	csWant(t, csCredited(t, app, tenant, o1, ""), "100999999999999.00")
+}

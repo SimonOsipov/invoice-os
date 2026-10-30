@@ -336,9 +336,13 @@ func TestStoreCreate_OriginalRefusalsAnswerTenantFirst(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed tenant B credit note: %v", err)
 	}
+	aDebit, err := store.Create(dtCtx(tenantA), dtNote(a1, "DT-A-DN", submission.DebitNote, &aOrig))
+	if err != nil {
+		t.Fatalf("seed tenant A debit note: %v", err)
+	}
 	before := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenantA)
-	if before != 2 {
-		t.Fatalf("tenant A invoices = %d, want 2", before)
+	if before != 3 {
+		t.Fatalf("tenant A invoices = %d, want 3", before)
 	}
 
 	cases := []struct {
@@ -348,6 +352,7 @@ func TestStoreCreate_OriginalRefusalsAnswerTenantFirst(t *testing.T) {
 		want     error
 	}{
 		{"own note as original", a1, aNote.ID, ErrOriginalIsANote},
+		{"own debit note as original", a1, aDebit.ID, ErrOriginalIsANote},
 		{"own invoice in the other entity", a2, aOrig, ErrOriginalOtherEntity},
 		{"other tenant's invoice, same-shaped entity", a1, bOrig, ErrOriginalNotFound},
 		{"other tenant's invoice, other entity", a2, bOrig, ErrOriginalNotFound},

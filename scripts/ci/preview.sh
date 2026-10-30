@@ -12,6 +12,10 @@
 #   preview.sh deploy <pr|nightly> <sha> <svc>... deploy services, four at a time
 #   preview.sh token <pr|nightly>                 print the preview's gateway token
 #   preview.sh teardown <pr|nightly>              delete everything this preview owns
+#   preview.sh mail-preflight nightly     fail when a nightly mail secret has no version
+#   preview.sh mail-on nightly            mount the mail secrets and turn real mail on
+#   preview.sh mail-read-key nightly      print the Resend read key
+#   preview.sh mail-domain nightly        print the Resend receiving domain
 #   preview.sh prs                        print "<pr|nightly> <created>" for each preview that owns a resource
 #   preview.sh cap                        print open=<n> and full=true|false (full at 3 previews or more)
 #   preview.sh invariants                 fail when preview holds a production secret or reaches prod
@@ -41,6 +45,10 @@ die() {
 name_arg() {
   [[ "${1:-}" =~ ^[1-9][0-9]*$ || "${1:-}" == nightly ]] || die "a PR number or nightly is required, got '${1:-}'"
 }
+
+# mail_arg: the mail commands serve the nightly only.
+mail_arg() { [ "${1:-}" = nightly ] || die "nightly is required, got '${1:-}'"; }
+MAIL_SECRETS=(nightly-gotrue-smtp-pass nightly-resend-sending-key nightly-resend-read-key nightly-resend-receiving-domain)
 
 # suffix <name>: the resource-name part (pr-7, nightly). dbname <name>: preview-db accepts only pr_<N>, so nightly is pr_0.
 suffix() { if [ "$1" = nightly ]; then echo nightly; else echo "pr-$1"; fi; }
@@ -325,6 +333,27 @@ cmd_teardown() {
   echo "PR $pr: preview deleted"
 }
 
+# mail-preflight: each mail secret has a version. Reads no value.
+cmd_mail_preflight() {
+  local name missing=()
+  for name in "${MAIL_SECRETS[@]}"; do
+    gcloud secrets versions describe latest --secret "$name" --project "$PROJECT" --format 'value(name)' >/dev/null 2>&1 || missing+=("$name")
+  done
+  [ "${#missing[@]}" = 0 ] || die "nightly mail secrets with no version: ${missing[*]}"
+  echo "nightly mail secrets present"
+}
+
+# mail-on: after E2E, mount the mail secrets. Only secret names go in argv.
+cmd_mail_on() {
+  local gw
+  gw=$(url gateway nightly)
+  gcloud run services update auth-nightly "${gc[@]}" \
+    --update-secrets GOTRUE_SMTP_PASS=nightly-gotrue-smtp-pass:latest \
+    --update-env-vars "GOTRUE_MAILER_TEMPLATES_RECOVERY=$gw/emails/recovery.html,GOTRUE_MAILER_URLPATHS_RECOVERY=$gw/auth/reset-password,GOTRUE_MAILER_SUBJECTS_RECOVERY=Reset your ASComply password,GOTRUE_MAILER_TEMPLATES_CONFIRMATION=$gw/emails/confirmation.html,GOTRUE_MAILER_URLPATHS_CONFIRMATION=$gw/auth/verify,GOTRUE_MAILER_SUBJECTS_CONFIRMATION=Confirm your ASComply account,GOTRUE_MAILER_AUTOCONFIRM=false"
+  gcloud run services update tenancy-nightly "${gc[@]}" \
+    --update-secrets RESEND_SENDING_KEY=nightly-resend-sending-key:latest
+}
+
 # prs: every preview (a PR number or nightly) that owns a service, a job, a bucket or a secret, with the oldest creation time.
 cmd_prs() {
   {
@@ -420,9 +449,13 @@ case "${1:-}" in
   deploy) name_arg "${2:-}"; [ "$#" -ge 4 ] || die "usage: preview.sh deploy <pr|nightly> <sha> <svc>..."; shift; cmd_deploy "$@" ;;
   token) name_arg "${2:-}"; gcloud secrets versions access latest --secret "$(secret "$2" gateway-token)" --project "$PROJECT" ;;
   teardown) name_arg "${2:-}"; cmd_teardown "$2" ;;
+  mail-preflight) mail_arg "${2:-}"; cmd_mail_preflight ;;
+  mail-on) mail_arg "${2:-}"; cmd_mail_on ;;
+  mail-read-key) mail_arg "${2:-}"; gcloud secrets versions access latest --secret nightly-resend-read-key --project "$PROJECT" ;;
+  mail-domain) mail_arg "${2:-}"; gcloud secrets versions access latest --secret nightly-resend-receiving-domain --project "$PROJECT" ;;
   prs) cmd_prs ;;
   cap) cmd_cap ;;
   invariants) cmd_invariants ;;
   budget) cmd_budget ;;
-  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|prs|cap|invariants|budget" ;;
+  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-read-key|mail-domain|prs|cap|invariants|budget" ;;
 esac

@@ -2471,6 +2471,7 @@ func TestValidateHandler_TopLevelKeysNotNested(t *testing.T) {
 		"supplier_email", "supplier_telephone", "supplier_street", "supplier_city", "supplier_postal_zone", "supplier_country",
 		"supplier_state", "supplier_lga", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
 		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
+		"document_type", "original_invoice_id",
 	}
 	for _, k := range wantKeys {
 		if _, ok := raw[k]; !ok {
@@ -4165,6 +4166,7 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 		"supplier_email", "supplier_telephone", "supplier_street", "supplier_city", "supplier_postal_zone", "supplier_country",
 		"supplier_state", "supplier_lga", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
 		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
+		"document_type", "original_invoice_id",
 		"tax_subtotals",
 		"rule_set_version", "qr_png_base64",
 	}
@@ -4327,6 +4329,7 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		"supplier_email", "supplier_telephone", "supplier_street", "supplier_city", "supplier_postal_zone", "supplier_country",
 		"supplier_state", "supplier_lga", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
 		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
+		"document_type", "original_invoice_id",
 		"line_items",
 		// getResponse's tax_subtotals sits directly after the Invoice keys.
 		"tax_subtotals",

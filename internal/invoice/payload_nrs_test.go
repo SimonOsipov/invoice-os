@@ -13,7 +13,7 @@ var nonContentTags = map[string]bool{
 	"id": true, "entity_id": true, "import_batch_id": true, "status": true, "violations": true,
 	"rule_set_version_id": true, "created_at": true, "irn": true, "csid": true, "qr_payload": true,
 	"rejection_reasons": true, "kept_as_is_at": true, "kept_as_is_by": true, "kept_as_is_reason": true,
-	"failure_kind": true, "line_items": true, "-": true,
+	"failure_kind": true, "document_type": true, "original_invoice_id": true, "line_items": true, "-": true,
 }
 
 // contentFields lists the struct fields of typ whose JSON tag is content, with their tags.

@@ -156,9 +156,8 @@ type Invoice struct {
 	BuyerState         *string    `json:"buyer_state"`
 	BuyerLGA           *string    `json:"buyer_lga"`
 
-	// Compile stub: the real JSON tags land with the implementation.
-	DocumentType      submission.DocumentType `json:"-"`
-	OriginalInvoiceID *string                 `json:"-"`
+	DocumentType      submission.DocumentType `json:"document_type"`
+	OriginalInvoiceID *string                 `json:"original_invoice_id"`
 
 	LineItems []LineItem `json:"line_items,omitempty"`
 

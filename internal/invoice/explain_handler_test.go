@@ -19,6 +19,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 const explainTestMessage = "Line cost must not be negative."
@@ -396,5 +397,33 @@ func TestExplainHandler_UnavailableIs200(t *testing.T) {
 	}
 	if got, want := strings.TrimSpace(rec.Body.String()), `{"status":"unavailable","explanation":null,"fix":null}`; got != want {
 		t.Errorf("body = %s, want %s", got, want)
+	}
+}
+
+func TestExplain_NotePromptCarriesTheStoredAmountNotTheFacts(t *testing.T) {
+	over := Violation{RuleKey: ruleCreditNoteOverCap, Severity: "error", Path: "total",
+		Message: "Credit note total 60.00 exceeds the 40.00 still creditable on original invoice INV-1."}
+	inv := explainInvoice(t, []Violation{over}, "a")
+	inv.DocumentType = submission.CreditNote
+	inv.Original = &submission.BillingReference{IRN: strPtr("IRN-1")}
+	rec := newExplainRecorder()
+
+	if _, err := NewExplainer(explainGet(inv), rec).Explain(context.Background(), "inv-1",
+		ViolationKey{RuleKey: ruleCreditNoteOverCap, Path: "total"}); err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+	if rec.callCount() != 1 {
+		t.Fatalf("AI calls = %d, want 1", rec.callCount())
+	}
+	text := rec.calls[0].Text
+	for _, want := range []string{"40.00", "INV-1", "billing_reference"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, text)
+		}
+	}
+	for _, banned := range []string{"original_total", "credited_before"} {
+		if strings.Contains(text, banned) {
+			t.Errorf("prompt carries %q, which Explain does not read:\n%s", banned, text)
+		}
 	}
 }

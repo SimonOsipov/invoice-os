@@ -185,8 +185,7 @@ func TestRender_DoesNotDeduplicateOrRenumberLineNumbers(t *testing.T) {
 // --- credit-note-shaped input -------------------------------------------------------------------
 
 // TestRender_PassesNegativeAndZeroAmountsThroughUnchanged PINS: money is copied verbatim, so a
-// fully negative invoice renders -- but cbc:InvoiceTypeCode stays 380 (commercial invoice)
-// because Canonical carries no document type. A credit note is 381. Owner decision.
+// fully negative invoice renders. The type code follows DocumentType, never the sign.
 func TestRender_PassesNegativeAndZeroAmountsThroughUnchanged(t *testing.T) {
 	c := completeCanonical(t)
 	c.Subtotal, c.VAT, c.Total = ublStr("-1000.00"), ublStr("0"), ublStr("-1000.00")
@@ -202,8 +201,12 @@ func TestRender_PassesNegativeAndZeroAmountsThroughUnchanged(t *testing.T) {
 	wantTextAt(t, nodes, "Invoice/cac:TaxTotal/cbc:TaxAmount", "0",
 		"a zero tax amount is emitted, not treated as absent")
 	wantTextsAt(t, nodes, linePath+"/cbc:InvoicedQuantity", []string{"-2"}, "a negative quantity passes through")
-	wantTextAt(t, nodes, "Invoice/cbc:InvoiceTypeCode", "380",
-		"PINNED: the type code is unconditional; Canonical carries no document type, so a credit note still declares 380")
+	wantTextAt(t, nodes, "Invoice/cbc:InvoiceTypeCode", "381",
+		"the type code follows DocumentType, not the sign: a negative commercial invoice stays 381")
+
+	c.DocumentType = submission.CreditNote
+	wantTextAt(t, walkDocument(t, mustRender(t, c)), "Invoice/cbc:InvoiceTypeCode", "380",
+		"a credit note declares 380")
 }
 
 // --- free text ---------------------------------------------------------------------------------

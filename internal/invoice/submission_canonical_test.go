@@ -296,7 +296,16 @@ func TestSubmissionCanonical_NoCanonicalFieldIsLeftZero(t *testing.T) {
 	li.LineNo = 1
 	li.LineTotal, li.LineTax, li.TaxPercent = strPtr("10.00"), strPtr("0.75"), strPtr("7.50")
 
+	inv.DocumentType = submission.CreditNote
 	assertNoZeroField(t, reflect.ValueOf(SubmissionCanonical(inv)), "Canonical")
+}
+
+func TestSubmissionCanonical_MapsTheDocumentType(t *testing.T) {
+	for _, dt := range []submission.DocumentType{submission.CommercialInvoice, submission.CreditNote, submission.DebitNote} {
+		if got := SubmissionCanonical(Invoice{DocumentType: dt}).DocumentType; got != dt {
+			t.Errorf("Canonical.DocumentType = %q, want %q", got, dt)
+		}
+	}
 }
 
 func TestSubmissionCanonical_TaxSubtotalsFromLines(t *testing.T) {

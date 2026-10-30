@@ -561,7 +561,7 @@ func TestMockWire_ZeroCanonicalDoesNotPanic(t *testing.T) {
 	wire := string(w)
 	mwWantContains(t, wire, `"CustomizationID":"`+mockCustomizationID+`"`, "AC-6: the BIS constants are unconditional")
 	mwWantContains(t, wire, `"ProfileID":"`+mockProfileID+`"`, "AC-6: the BIS constants are unconditional")
-	mwWantContains(t, wire, `"InvoiceTypeCode":"`+mockInvoiceTypeCode+`"`, "AC-6: the BIS constants are unconditional")
+	mwWantContains(t, wire, `"InvoiceTypeCode":"381"`, "AC-6: a zero DocumentType declares 381")
 	mwWantContains(t, wire, `"ID":""`, "AC-6: ID is a value string -- an empty InvoiceNumber renders as \"\", it does not vanish")
 	mwWantContains(t, wire, `"InvoiceLine":[]`, "AC-6: a zero Canonical still gets an empty line array")
 	mwWantContains(t, wire, `"AccountingSupplierParty"`, "AC-1: both party keys are BIS-mandatory and unconditional")
@@ -670,9 +670,18 @@ func TestMockWire_CarriesTheBISConstants(t *testing.T) {
 				"AC-1: CustomizationID is unconditional")
 			mwWantContains(t, wire, `"ProfileID":"`+mockProfileID+`"`,
 				"AC-1: ProfileID is unconditional")
-			mwWantContains(t, wire, `"InvoiceTypeCode":"`+mockInvoiceTypeCode+`"`,
-				"AC-1: InvoiceTypeCode 380 (commercial invoice) is unconditional")
 		})
+		for _, dt := range []struct {
+			docType DocumentType
+			code    string
+		}{{CommercialInvoice, "381"}, {CreditNote, "380"}, {DebitNote, "384"}} { // values of InvoiceTypeCode
+			t.Run(tc.name+"/"+string(dt.docType), func(t *testing.T) {
+				c := tc.build()
+				c.DocumentType = dt.docType
+				mwWantContains(t, mwWire(t, c), `"InvoiceTypeCode":"`+dt.code+`"`,
+					"InvoiceTypeCode follows DocumentType")
+			})
+		}
 	}
 }
 
@@ -982,7 +991,7 @@ func mwBareLineCanonical() Canonical {
 
 func TestMockWire_NoNRSValueReachesTheWire(t *testing.T) {
 	legacyCanonical := map[string]bool{"InvoiceID": true, "InvoiceNumber": true, "IssueDate": true, "Supplier": true, "Buyer": true,
-		"Currency": true, "Subtotal": true, "VAT": true, "Total": true, "Lines": true}
+		"DocumentType": true, "Currency": true, "Subtotal": true, "VAT": true, "Total": true, "Lines": true}
 	legacyParty := map[string]bool{"TIN": true, "Name": true}
 	legacyLine := map[string]bool{"LineID": true, "LineNo": true, "Description": true, "Quantity": true,
 		"UnitPrice": true, "LineTotal": true, "LineTax": true}

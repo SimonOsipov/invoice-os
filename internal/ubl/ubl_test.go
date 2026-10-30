@@ -42,7 +42,6 @@ const (
 
 	wantCustomizationID = "urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0"
 	wantProfileID       = "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0"
-	wantInvoiceTypeCode = "380"
 
 	wantXMLDeclaration = `<?xml version="1.0" encoding="UTF-8"?>`
 	issueDateLayout    = "2006-01-02"
@@ -231,8 +230,42 @@ func TestRender_DeclaresTheBISProfileConstants(t *testing.T) {
 		"the EN 16931 / BIS 3.0 customization the document declares")
 	wantContains(t, out, "<cbc:ProfileID>"+wantProfileID+"</cbc:ProfileID>",
 		"the PEPPOL billing profile the document declares")
-	wantContains(t, out, "<cbc:InvoiceTypeCode>"+wantInvoiceTypeCode+"</cbc:InvoiceTypeCode>",
-		"380 = commercial invoice")
+	for _, tc := range wantTypeCodes {
+		c := completeCanonical(t)
+		c.DocumentType = tc.docType
+		wantContains(t, mustRender(t, c), "<cbc:InvoiceTypeCode>"+tc.code+"</cbc:InvoiceTypeCode>",
+			"the type code follows DocumentType "+string(tc.docType))
+	}
+}
+
+// wantTypeCodes holds the values of submission.InvoiceTypeCode (document_type.go).
+var wantTypeCodes = []struct {
+	docType submission.DocumentType
+	code    string
+}{
+	{submission.CommercialInvoice, "381"},
+	{submission.CreditNote, "380"},
+	{submission.DebitNote, "384"},
+}
+
+func TestRender_KeepsTheInvoice2RootForEveryType(t *testing.T) {
+	for _, tc := range wantTypeCodes {
+		c := completeCanonical(t)
+		c.DocumentType = tc.docType
+		dec := xml.NewDecoder(bytes.NewReader(mustRender(t, c)))
+		for {
+			tok, err := dec.Token()
+			if err != nil {
+				t.Fatalf("%s: no start element: %v", tc.docType, err)
+			}
+			if se, ok := tok.(xml.StartElement); ok {
+				if se.Name.Local != "Invoice" || se.Name.Space != wantNSInvoice {
+					t.Errorf("%s: root = %q in %q, want Invoice in %q", tc.docType, se.Name.Local, se.Name.Space, wantNSInvoice)
+				}
+				break
+			}
+		}
+	}
 }
 
 // --- AC #3: xsd:date ------------------------------------------------------------------------

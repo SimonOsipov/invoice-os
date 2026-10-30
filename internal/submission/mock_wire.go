@@ -36,7 +36,6 @@ import (
 const (
 	mockCustomizationID = "urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0"
 	mockProfileID       = "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0"
-	mockInvoiceTypeCode = "380" // commercial invoice
 	mockTaxSchemeID     = "TIN"
 	// mockIssueDateLayout is named, not inlined, because M5-03-02 parses the date part of the
 	// IRN back out of it. Mirrors internal/invoice/payload.go:31 mbsDateLayout.
@@ -134,7 +133,7 @@ func buildMockEnvelope(c Canonical) mockEnvelope {
 		ProfileID:               mockProfileID,
 		ID:                      c.InvoiceNumber,
 		UUID:                    c.InvoiceID,
-		InvoiceTypeCode:         mockInvoiceTypeCode,
+		InvoiceTypeCode:         InvoiceTypeCode(c.DocumentType),
 		AccountingSupplierParty: mockPartyFrom(c.Supplier),
 		AccountingCustomerParty: mockPartyFrom(c.Buyer),
 	}

@@ -50,6 +50,7 @@ func SubmissionCanonical(inv Invoice) submission.Canonical {
 	return submission.Canonical{
 		InvoiceID:     inv.ID,
 		InvoiceNumber: inv.InvoiceNumber,
+		DocumentType:  inv.DocumentType,
 		IssueDate:     inv.IssueDate,
 		Supplier: submission.Party{
 			TIN:  inv.SupplierTIN,

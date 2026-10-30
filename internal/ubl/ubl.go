@@ -32,7 +32,6 @@ const (
 	// standard, not two derivations [ubl-bis-constants-mirror-the-wire].
 	customizationID = "urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0"
 	profileID       = "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0"
-	invoiceTypeCode = "380" // commercial invoice
 	taxSchemeID     = "TIN"
 	vatSchemeID     = "VAT"
 	issueDateLayout = "2006-01-02"
@@ -227,7 +226,7 @@ func build(c submission.Canonical) document {
 		CustomizationID: customizationID,
 		ProfileID:       profileID,
 		ID:              c.InvoiceNumber,
-		InvoiceTypeCode: invoiceTypeCode,
+		InvoiceTypeCode: submission.InvoiceTypeCode(c.DocumentType),
 		Supplier:        partyFrom(c.Supplier),
 		Buyer:           partyFrom(c.Buyer),
 	}

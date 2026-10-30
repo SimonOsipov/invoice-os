@@ -8,6 +8,7 @@ import "time"
 type Canonical struct {
 	InvoiceID     string // invoices.id — the adapter's correlation handle
 	InvoiceNumber string
+	DocumentType  DocumentType
 	IssueDate     *time.Time
 	Supplier      Party
 	Buyer         Party

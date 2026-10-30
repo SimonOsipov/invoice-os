@@ -42,9 +42,19 @@ case "$1 $2 $3" in
   *) cat "$D/have" 2>/dev/null || : ;;
   esac ;;
 "run services describe" | "run jobs describe" | "storage buckets describe") [ ! -e "$D/exists" ] || grep -qxF -- "$4" "$D/exists" ;;
+"run services update") if grep -qxF -- "$4" "$D/failupdate" 2>/dev/null; then echo "ERROR: update $4 failed" >&2; exit 1; fi ;;
 "run services list") cat "$D/list-services" 2>/dev/null || : ;;
 "run jobs list") cat "$D/list-jobs" 2>/dev/null || : ;;
 "storage buckets list") cat "$D/list-buckets" 2>/dev/null || : ;;
+"secrets versions describe")
+  prev=
+  for a in "$@"; do
+    [ "$prev" = --secret ] && name=$a
+    prev=$a
+  done
+  if grep -qxF -- "$name" "$D/missing" 2>/dev/null; then echo "ERROR: NOT_FOUND: $name" >&2; exit 1; fi
+  if grep -qxF -- "$name" "$D/denied" 2>/dev/null; then echo "ERROR: PERMISSION_DENIED: no access to $name" >&2; exit 1; fi
+  if grep -qxF -- "$name" "$D/disabled" 2>/dev/null; then echo DISABLED; else echo ENABLED; fi ;;
 "secrets versions add") cat > "$D/added-$4" ;;
 "secrets versions access")
   prev=
@@ -711,5 +721,146 @@ func TestPreviewCapCountsEveryPreview(t *testing.T) {
 				t.Fatalf("exit %d, cap = %q, want %q", r.code, r.stdout, want)
 			}
 		})
+	}
+}
+
+var mailSecrets = []string{"nightly-gotrue-smtp-pass", "nightly-resend-sending-key", "nightly-resend-read-key", "nightly-resend-receiving-domain"}
+
+func TestPreviewMailOnMountsOnlyTheNightlysMail(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "mail-on", "nightly")
+	if r.code != 0 {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	lines := nonBlankLines(r.file(t, "calls"))
+	if len(lines) != 2 {
+		t.Fatalf("calls = %v, want two service updates", lines)
+	}
+	gw := "https://gateway-nightly-944095690109.africa-south1.run.app"
+	for _, w := range []string{"run services update auth-nightly ", "--update-secrets GOTRUE_SMTP_PASS=nightly-gotrue-smtp-pass:latest",
+		"GOTRUE_MAILER_TEMPLATES_RECOVERY=" + gw + "/emails/recovery.html", "GOTRUE_MAILER_URLPATHS_RECOVERY=" + gw + "/auth/reset-password",
+		"GOTRUE_MAILER_SUBJECTS_RECOVERY=Reset your ASComply password", "GOTRUE_MAILER_TEMPLATES_CONFIRMATION=" + gw + "/emails/confirmation.html",
+		"GOTRUE_MAILER_URLPATHS_CONFIRMATION=" + gw + "/auth/verify", "GOTRUE_MAILER_SUBJECTS_CONFIRMATION=Confirm your ASComply account",
+		"GOTRUE_MAILER_AUTOCONFIRM=false"} {
+		if !strings.Contains(lines[0], w) {
+			t.Errorf("auth update lacks %q:\n%s", w, lines[0])
+		}
+	}
+	if !strings.HasPrefix(lines[1], "run services update tenancy-nightly ") || !strings.Contains(lines[1], "--update-secrets RESEND_SENDING_KEY=nightly-resend-sending-key:latest") {
+		t.Errorf("tenancy update = %q", lines[1])
+	}
+	if strings.Contains(r.file(t, "calls"), "versions access") {
+		t.Error("mail-on read a secret value")
+	}
+}
+
+func TestPreviewMailCommandsRefuseAPR(t *testing.T) {
+	t.Parallel()
+	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-off", "mail-read-key", "mail-domain"} {
+		for _, bad := range []string{"7", ""} {
+			t.Run(cmd+"/"+bad, func(t *testing.T) {
+				t.Parallel()
+				r := runPreview(t, nil, cmd, bad)
+				if r.code == 0 || r.exists("calls") {
+					t.Fatalf("exit %d, gcloud called %v", r.code, r.exists("calls"))
+				}
+			})
+		}
+	}
+}
+
+func TestPreviewMailReadCommandsReadOneSecret(t *testing.T) {
+	t.Parallel()
+	const shimOutput = "shim-output"
+	for cmd, name := range map[string]string{"mail-read-key": "nightly-resend-read-key", "mail-domain": "nightly-resend-receiving-domain"} {
+		t.Run(cmd, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, func(dir string) { writeIn(t, dir, "access-"+name, shimOutput) }, cmd, "nightly")
+			calls := nonBlankLines(r.file(t, "calls"))
+			wantCall := "secrets versions access latest --secret " + name + " "
+			if r.code != 0 || r.stdout != shimOutput || len(calls) != 1 || !strings.HasPrefix(calls[0], wantCall) {
+				t.Fatalf("exit %d, stdout %q, calls %v", r.code, r.stdout, calls)
+			}
+		})
+	}
+}
+
+func TestPreviewMailPreflightNamesEveryMissingSecret(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "missing", mailSecrets[1]+"\n"+mailSecrets[3]+"\n") }, "mail-preflight", "nightly")
+	if r.code != 1 {
+		t.Fatalf("exit %d, want 1", r.code)
+	}
+	for i, n := range mailSecrets {
+		if got, want := strings.Contains(r.stderr, n), i == 1 || i == 3; got != want {
+			t.Errorf("stderr names %s = %v, want %v:\n%s", n, got, want, r.stderr)
+		}
+	}
+	for _, l := range nonBlankLines(r.file(t, "calls")) {
+		if !strings.HasPrefix(l, "secrets versions describe ") {
+			t.Errorf("unexpected call %q", l)
+		}
+	}
+}
+
+func TestPreviewMailPreflightNamesADisabledSecret(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "disabled", mailSecrets[2]+"\n") }, "mail-preflight", "nightly")
+	if r.code != 1 || !strings.Contains(r.stderr, mailSecrets[2]) || strings.Contains(r.stderr, mailSecrets[0]) {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	if !strings.Contains(r.file(t, "calls"), "--format value(state)") {
+		t.Errorf("preflight did not read the state: %s", r.file(t, "calls"))
+	}
+}
+
+func TestPreviewMailPreflightReportsAFailureThatIsNotNotFound(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "denied", mailSecrets[1]+"\n") }, "mail-preflight", "nightly")
+	if r.code != 1 || !strings.Contains(r.stderr, "PERMISSION_DENIED") || strings.Contains(r.stderr, "missing or not enabled") {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+}
+
+func TestPreviewMailOffUnmountsAndTurnsAutoConfirmOn(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "mail-off", "nightly")
+	if r.code != 0 {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	lines := nonBlankLines(r.file(t, "calls"))
+	if len(lines) != 2 {
+		t.Fatalf("calls = %v, want two service updates", lines)
+	}
+	if !strings.HasPrefix(lines[0], "run services update auth-nightly ") || !strings.Contains(lines[0], "--remove-secrets GOTRUE_SMTP_PASS") || !strings.Contains(lines[0], "GOTRUE_MAILER_AUTOCONFIRM=true") {
+		t.Errorf("auth update = %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "run services update tenancy-nightly ") || !strings.Contains(lines[1], "--remove-secrets RESEND_SENDING_KEY") {
+		t.Errorf("tenancy update = %q", lines[1])
+	}
+}
+
+func TestPreviewMailOffTriesBothServicesAndFailsWhenOneFails(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "failupdate", "auth-nightly\n") }, "mail-off", "nightly")
+	if r.code == 0 || !strings.Contains(r.stderr, "mail-off left real mail mounted") {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	if !strings.Contains(r.file(t, "calls"), "run services update tenancy-nightly ") {
+		t.Errorf("tenancy was not tried after auth failed: %s", r.file(t, "calls"))
+	}
+}
+
+func TestPreviewMailPreflightPassesWithAllFour(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "mail-preflight", "nightly")
+	calls := nonBlankLines(r.file(t, "calls"))
+	if r.code != 0 || len(calls) != 4 {
+		t.Fatalf("exit %d, calls %v", r.code, calls)
+	}
+	for i, n := range mailSecrets {
+		if !strings.Contains(calls[i], "--secret "+n+" ") {
+			t.Errorf("call %d = %q, want secret %s", i, calls[i], n)
+		}
 	}
 }

@@ -108,34 +108,50 @@ func TestInviteSender_ProductionWithKeySendsThroughTheTransport(t *testing.T) {
 	}
 }
 
-func TestInviteSender_NightlyCapturesWithOrWithoutTheKey(t *testing.T) {
-	for name, key := range map[string]string{"with key": "k_live", "no key": ""} {
-		t.Run(name, func(t *testing.T) {
-			spy := &spyTransport{}
-			var logs bytes.Buffer
-			env := getenvOf(map[string]string{"DEPLOY_ENV": "nightly", "RESEND_SENDING_KEY": key})
+func TestInviteSender_NightlySendsWithTheKey(t *testing.T) {
+	spy := &spyTransport{}
+	var logs bytes.Buffer
+	env := getenvOf(map[string]string{"DEPLOY_ENV": "nightly", "RESEND_SENDING_KEY": "k_live"})
 
-			s := inviteSender(env, spy, textLogger(&logs))
+	s := inviteSender(env, spy, textLogger(&logs))
 
-			c, ok := s.(*accountmail.Capture)
-			if !ok {
-				t.Fatalf("sender = %T, want *accountmail.Capture", s)
-			}
-			if err := s.Send(context.Background(), oneMail); err != nil {
-				t.Errorf("Send err = %v, want nil", err)
-			}
-			if got := spy.seen(); len(got) != 0 {
-				t.Errorf("the transport saw %d request(s), want none", len(got))
-			}
-			if got := c.Messages(); len(got) != 1 {
-				t.Errorf("captured = %+v, want the one mail", got)
-			}
-			assertModeLine(t, logs.String(), "capture")
-			if strings.Contains(logs.String(), "k_live") {
-				t.Errorf("log holds the key: %s", logs.String())
-			}
-		})
+	if _, ok := s.(*accountmail.Resend); !ok {
+		t.Fatalf("sender = %T, want *accountmail.Resend", s)
 	}
+	if err := s.Send(context.Background(), oneMail); err != nil {
+		t.Fatalf("Send err = %v, want nil", err)
+	}
+	got := spy.seen()
+	if len(got) != 1 || got[0].Method != http.MethodPost || got[0].Auth != "Bearer k_live" {
+		t.Fatalf("requests = %+v, want one POST with Authorization: Bearer k_live", got)
+	}
+	assertModeLine(t, logs.String(), "real")
+	if strings.Contains(logs.String(), "k_live") {
+		t.Errorf("log holds the key: %s", logs.String())
+	}
+}
+
+func TestInviteSender_NightlyCapturesWithoutTheKey(t *testing.T) {
+	spy := &spyTransport{}
+	var logs bytes.Buffer
+	env := getenvOf(map[string]string{"DEPLOY_ENV": "nightly"})
+
+	s := inviteSender(env, spy, textLogger(&logs))
+
+	c, ok := s.(*accountmail.Capture)
+	if !ok {
+		t.Fatalf("sender = %T, want *accountmail.Capture", s)
+	}
+	if err := s.Send(context.Background(), oneMail); err != nil {
+		t.Errorf("Send err = %v, want nil", err)
+	}
+	if got := spy.seen(); len(got) != 0 {
+		t.Errorf("the transport saw %d request(s), want none", len(got))
+	}
+	if got := c.Messages(); len(got) != 1 {
+		t.Errorf("captured = %+v, want the one mail", got)
+	}
+	assertModeLine(t, logs.String(), "capture")
 }
 
 func TestInviteSender_ProductionWithoutKeyIsOff(t *testing.T) {

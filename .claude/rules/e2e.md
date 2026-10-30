@@ -19,7 +19,7 @@ paths:
 - Run `blog-subscribe.spec.ts` in the `blog` unit. It submits the newsletter form to the fork gateway and uses no tenant.
 - Keep a spec on `serial-lane` while it needs the seeded tenants 1111 and 2222. A shard gets its own tenant pair from `db/seed.e2e-shards.sql`.
 - Sign in an app session with `signInAs(page, id, { tenantId })` from `e2e/personaSession.ts`. It admits the e2e member through `ensureMember`.
-- Set an invitation token with `setInvitationToken`, or invite with `inviteWithToken`. A fork captures mail, so a spec cannot read a real token.
+- Set an invitation token with `setInvitationToken`, or invite with `inviteWithToken`. A fork captures mail, so a spec cannot read a real token. `e2e/mail/` is the one exception: it reads real mail on the nightly.
 - Set a deletion cancel-link token with `setDeletionLinkToken`.
 - A staff account is an active `reviewer` of the seeded house company `ASComply (dev)`. `provisionStaffAccount` grants it through `/auth/mock/member`.
 - Open a console with a staff session from `provisionStaffAccount` and `seedStaffSession`.

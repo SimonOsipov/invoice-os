@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -1575,4 +1576,42 @@ func TestRun_E2ESuiteOfOnlyFlakyTestsIsGreen(t *testing.T) {
 	eq(t, r.code, 0)
 	eq(t, len(r.dec.Failures), 0)
 	eq(t, r.scenarios[0].Status, "flaky")
+}
+
+const emailSuites = "environment=Prepare the preview (secrets, bucket, URLs)\nemail=Real invite and reset mail\n"
+
+func TestRun_EmailSectionFromTheCheckIsCopied(t *testing.T) {
+	names := []string{"mail budget", "invite mail arrives", "invite text matches", "invite page registers the invitee", "password mail arrives",
+		"password mail text matches", "password link opens the workspace", "used invite link is refused", "reset mail arrives",
+		"reset text matches", "reset link sets the password", "sign-in with the new password", "only these mails are real"}
+	var parts []string
+	for _, n := range names {
+		parts = append(parts, `{"name":"`+n+`","status":"passed","duration_ms":3}`)
+	}
+	body := `{"ok":true,"steps":[` + strings.Join(parts, ",") + `],"failures":[]}`
+	e := newEnv(t)
+	sec := filepath.Join(e.dir, "email.json")
+	e.writeFile(sec, body)
+	r := e.run("-section", "email="+sec)
+	eq(t, r.code, 0)
+	eq(t, string(r.obj["email"]), body)
+}
+
+func TestRun_MissingSecretsReadAsARedEmailSuite(t *testing.T) {
+	e := newEnv(t)
+	e.e2e(emailSuites)
+	e.jobs = append(e.jobs,
+		job{Name: "Prepare the preview (secrets, bucket, URLs)", Conclusion: "success"},
+		job{Name: "Real invite and reset mail", Conclusion: "failure",
+			Steps: steps("Set up job", "success", "Check the nightly mail secrets", "failure", "Turn real mail on", "skipped", "Real invite and reset mail", "skipped")})
+	r := e.run(append(e.e2eFlag, "-section", "email="+filepath.Join(e.dir, "nope.json"))...)
+	eq(t, r.code, 1)
+	eq(t, r.dec.Verdict, "red")
+	var got []string
+	for _, f := range r.dec.Failures {
+		got = append(got, f.Suite+"|"+f.Test)
+	}
+	if !slices.Contains(got, "email|Check the nightly mail secrets") || !slices.Contains(got, "email|section did not run") {
+		t.Errorf("failures %q lack the step and 'section did not run'", got)
+	}
 }

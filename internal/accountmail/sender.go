@@ -129,7 +129,7 @@ const (
 	ModeOff     Mode = "off"
 )
 
-// ModeFromEnv captures when preview is true (a preview or the nightly).
+// ModeFromEnv captures when preview is true (a preview, or the nightly with no key).
 // It reads only RESEND_SENDING_KEY; RESEND_API_KEY is the contacts key and never picks real.
 func ModeFromEnv(getenv func(string) string, preview bool) (Mode, string) {
 	if preview {

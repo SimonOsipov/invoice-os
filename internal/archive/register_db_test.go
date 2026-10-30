@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"reflect"
 	"strings"
 	"testing"
@@ -211,10 +212,20 @@ func TestRegister_SingleDayPeriod(t *testing.T) {
 func TestRegister_OtherClientOfTheSameTenantIsExcluded(t *testing.T) {
 	g := newRegisterRig(t)
 	other := mustCreateEntity(t, g.tx, g.tenant, "Other Co", "")
-	g.invoice(t, "INV-E1", "validated", "2026-09-10")
-	mustCreateInvoice(t, g.tx, invoiceFixture{tenantID: g.tenant, entityID: other, invoiceNumber: "INV-E2", status: "validated", issueDate: "2026-09-10"})
+	otherID := mustCreateInvoice(t, g.tx, invoiceFixture{tenantID: g.tenant, entityID: other, invoiceNumber: "INV-E2", status: "validated", issueDate: "2026-09-10"})
+	g.doc(t, "INV-E1", "commercial_invoice", "validated", "2026-09-10", "", "5.00", "0.50", "5.50")
+	if _, err := g.tx.Exec(context.Background(), `UPDATE invoices SET subtotal = 9000, vat = 900, total = 9900 WHERE id = $1`, otherID); err != nil {
+		t.Fatalf("set other client amounts: %v", err)
+	}
+	tenantB := mustCreateTenant(t, g.tx, "archive-register-footer-foreign-"+uuid.NewString())
+	foreignID := mustCreateInvoice(t, g.tx, invoiceFixture{tenantID: tenantB, entityID: mustCreateEntity(t, g.tx, tenantB, "Foreign Co", ""), invoiceNumber: "INV-F1", status: "validated", issueDate: "2026-09-10"})
+	if _, err := g.tx.Exec(context.Background(), `UPDATE invoices SET subtotal = 7000, vat = 700, total = 7700 WHERE id = $1`, foreignID); err != nil {
+		t.Fatalf("set foreign amounts: %v", err)
+	}
 	g.act(t)
-	wantNumbers(t, mustBuild(t, g, "2026-09-01", "2026-09-30", 10), "INV-E1")
+	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
+	wantNumbers(t, rows, "INV-E1")
+	wantFooter(t, rows, "5.00", "0.50", "5.50")
 }
 
 func TestRegister_ExcludesDraftsAndKeepsEveryOtherStatus(t *testing.T) {
@@ -506,6 +517,19 @@ func TestRegister_FooterKeepsFullScale(t *testing.T) {
 	wantFooter(t, rows, "0.25", "0.02", "0.27")
 }
 
+// 120 x 999999999999.99 is past the 15-16 digits a float64 keeps, and fits the footer's numeric(20,2).
+func TestRegister_FooterKeepsEveryCentOfALargeSum(t *testing.T) {
+	g := newRegisterRig(t)
+	var inv string
+	for i := 0; i < 120; i++ {
+		inv = g.doc(t, fmt.Sprintf("INV-%03d", i), "commercial_invoice", "validated", "2026-09-10", "", "999999999999.99", "999999999999.99", "999999999999.99")
+	}
+	g.doc(t, "CN-1", "credit_note", "validated", "2026-09-11", inv, "0.01", "0.01", "0.01")
+	g.act(t)
+	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 200)
+	wantFooter(t, rows, "119999999999998.79", "119999999999998.79", "119999999999998.79")
+}
+
 func TestRegister_FooterIsNotInTheAuditCount(t *testing.T) {
 	g := newRegisterRig(t)
 	g.designFixture(t)
@@ -515,6 +539,102 @@ func TestRegister_FooterIsNotInTheAuditCount(t *testing.T) {
 		t.Fatalf("%d sheet rows, want 5: header, 3 data rows and the footer", len(rows))
 	}
 	assertRegisterAudit(t, readRegisterAudit(t, g.tx), g.entity, 3)
+}
+
+// A period of one kind of document, and a period of NULL amounts, each foot to what its rows say.
+func TestRegister_FooterOfASingleKindOfPeriod(t *testing.T) {
+	for _, tc := range []struct {
+		name, docType, sub, vat, total string
+		want                           [3]string
+	}{
+		{"credit notes only", "credit_note", "300.00", "22.50", "322.50", [3]string{"-600.00", "-45.00", "-645.00"}},
+		{"debit notes only", "debit_note", "300.00", "22.50", "322.50", [3]string{"600.00", "45.00", "645.00"}},
+		{"NULL amounts only", "commercial_invoice", "", "", "", [3]string{"0.00", "0.00", "0.00"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newRegisterRig(t)
+			orig := ""
+			if tc.docType != "commercial_invoice" {
+				orig = g.doc(t, "INV-0", "commercial_invoice", "draft", "2026-09-09", "", "1.00", "0.10", "1.10")
+			}
+			g.doc(t, "N-1", tc.docType, "validated", "2026-09-10", orig, tc.sub, tc.vat, tc.total)
+			g.doc(t, "N-2", tc.docType, "rejected", "2026-09-11", orig, tc.sub, tc.vat, tc.total)
+			g.act(t)
+			rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
+			wantNumbers(t, rows, "N-1", "N-2")
+			wantFooter(t, rows, tc.want[0], tc.want[1], tc.want[2])
+		})
+	}
+}
+
+// Re-adding the sheet's own column with the type's sign gives the footer.
+func TestRegister_FooterEqualsTheSignedSumOfTheSheetColumn(t *testing.T) {
+	g := newRegisterRig(t)
+	g.designFixture(t)
+	inv := g.doc(t, "INV-2", "commercial_invoice", "rejected", "2026-09-13", "", "123.45", "9.26", "132.71")
+	g.doc(t, "CN-2", "credit_note", "accepted", "2026-09-14", inv, "0.07", "0.01", "0.08")
+	g.doc(t, "CN-NULL", "credit_note", "validated", "2026-09-15", inv, "", "", "")
+	g.act(t)
+	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
+	data := dataRows(rows)
+	if len(data) != 6 {
+		t.Fatalf("%d data rows, want 6", len(data))
+	}
+	for _, col := range []string{"subtotal", "vat", "total"} {
+		sum := new(big.Rat)
+		for _, r := range data {
+			v := r[headerIndex(t, col)]
+			if v == "" {
+				continue
+			}
+			x, ok := new(big.Rat).SetString(v)
+			if !ok || x.Sign() < 0 {
+				t.Fatalf("data row %v: %s cell %q, want a stored positive amount", r, col, v)
+			}
+			if r[headerIndex(t, "document_type")] == "credit_note" {
+				x.Neg(x)
+			}
+			sum.Add(sum, x)
+		}
+		if got, want := rows[len(rows)-1][headerIndex(t, col)], sum.FloatString(2); got != want {
+			t.Errorf("footer %s = %q, want the re-added %q", col, got, want)
+		}
+	}
+}
+
+// The footer cell has the data rows' cell type.
+func TestRegister_FooterCellsHaveTheTypeOfTheDataCells(t *testing.T) {
+	g := newRegisterRig(t)
+	g.designFixture(t)
+	g.act(t)
+	f, _, err := g.build(t, "2026-09-01", "2026-09-30", 10)
+	if err != nil {
+		t.Fatalf("buildRegister: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := f.Write(&buf); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	f.Close()
+	back, err := excelize.OpenReader(&buf)
+	if err != nil {
+		t.Fatalf("OpenReader: %v", err)
+	}
+	defer back.Close()
+	for _, c := range []string{"subtotal", "vat", "total"} {
+		col, _ := excelize.ColumnNumberToName(headerIndex(t, c) + 1)
+		dataType, err1 := back.GetCellType(registerSheet, col+"2")
+		footType, err2 := back.GetCellType(registerSheet, col+"5")
+		if err1 != nil || err2 != nil {
+			t.Fatalf("GetCellType: %v %v", err1, err2)
+		}
+		if dataType != footType {
+			t.Errorf("%s: footer cell type %v, data cell type %v", c, footType, dataType)
+		}
+		if v, _ := back.GetCellValue(registerSheet, col+"5"); v == "" {
+			t.Errorf("%s: footer cell is empty", c)
+		}
+	}
 }
 
 func TestRegister_TooLongCellRefusesBeforeAnyByte(t *testing.T) {

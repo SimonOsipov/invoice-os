@@ -278,13 +278,16 @@ func TestCreditedSoFar_ResolvedOutsideFailedNoteCounts(t *testing.T) {
 	ent := seedEntity(t, super, tenant, "E1")
 	o1 := seedInvoice(t, super, tenant, ent, "CS-O1")
 	csNote(t, super, tenant, ent, "CS-A", "credit_note", o1, "accepted", csAmount("1.00"))
-	csStamp(t, super, csNote(t, super, tenant, ent, "CS-FS", "credit_note", o1, "failed", csAmount("2.00")))
+	stamped := csNote(t, super, tenant, ent, "CS-FS", "credit_note", o1, "failed", csAmount("2.00"))
+	csStamp(t, super, stamped)
 	csNote(t, super, tenant, ent, "CS-FN", "credit_note", o1, "failed", csAmount("4.00"))
 	csStamp(t, super, csNote(t, super, tenant, ent, "CS-DS", "credit_note", o1, "draft", csAmount("8.00")))
 	// invoices_kept_as_is_status forbids a stamp on a rejected note, so the unstamped row stands for it.
 	csNote(t, super, tenant, ent, "CS-R", "credit_note", o1, "rejected", csAmount("16.00"))
 
 	csWant(t, csCredited(t, app, tenant, o1, ""), "3.00")
+	// A stamped failed note does not count itself when it is the note under check.
+	csWant(t, csCredited(t, app, tenant, o1, stamped), "1.00")
 }
 
 func TestCreditedSoFar_ResolveAndUnresolveOutsideMoveTheSum(t *testing.T) {

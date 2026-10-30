@@ -296,6 +296,32 @@ func TestRequeueFailed_CreditNoteOverTheCapIsRefused(t *testing.T) {
 	}
 }
 
+func TestRequeueFailed_ASiblingResolvedOutsideTakesTheRoom(t *testing.T) {
+	f := newSupportFix(t, "03-02 resolved sibling")
+	o := rqOriginal(t, f, "RQ-O", "100.00")
+	sibling := csNote(t, f.super, f.tenantID, f.entityID, "RQ-S", "credit_note", o, "failed", csAmount("60.00"))
+	csStamp(t, f.super, sibling)
+	n := csNote(t, f.super, f.tenantID, f.entityID, "RQ-N", "credit_note", o, "failed", csAmount("60.00"))
+
+	if err := f.requeue(t, n); !errors.Is(err, ErrNoteChecksFailed) {
+		t.Fatalf("RequeueFailedTx = %v, want ErrNoteChecksFailed: the resolved sibling took 60.00", err)
+	}
+	if got := f.read(t, n); got.status != "failed" {
+		t.Errorf("status = %q, want failed", got.status)
+	}
+
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE invoices SET kept_as_is_at = NULL, kept_as_is_by = NULL, kept_as_is_reason = NULL WHERE id = $1`, sibling); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.requeue(t, n); err != nil {
+		t.Fatalf("RequeueFailedTx after the sibling is unresolved = %v, want nil", err)
+	}
+	if got := f.read(t, n); got.status != "queued" {
+		t.Errorf("status = %q, want queued", got.status)
+	}
+}
+
 func TestRequeueFailed_CreditNoteInAnotherCurrencyIsRefused(t *testing.T) {
 	for _, c := range []struct{ name, note, orig string }{
 		{"note in USD", "'USD'", "'NGN'"},

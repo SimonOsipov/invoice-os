@@ -149,6 +149,67 @@ describe('aggregateCustomers', () => {
   })
 })
 
+// CRDDBTNOTE-04-03: a credit note nets against its buyer; every note still counts once.
+describe('aggregateCustomers nets credit and debit notes', () => {
+  const TIN = '20000000-0001'
+  // Design fixture: net subtotal 750, vat 56.25, total 806.25.
+  const fixture = (tin: string, name: string): InvoiceRecord[] => [
+    invoiceRecord({ id: `${tin}-inv`, buyer_tin: tin, buyer_name: name, total: '1075.00' }),
+    invoiceRecord({ id: `${tin}-cn`, buyer_tin: tin, buyer_name: name, total: '322.50', document_type: 'credit_note' }),
+    invoiceRecord({ id: `${tin}-dn`, buyer_tin: tin, buyer_name: name, total: '53.75', document_type: 'debit_note' }),
+  ]
+
+  it('aggregateCustomers_netsPerBuyerAndCountsEachDocument', () => {
+    const result = aggregateCustomers(fixture(TIN, 'Beta Traders'))
+
+    expect(result).toHaveLength(1)
+    expect(result[0].totalNum).toBe(806.25)
+    expect(result[0].count).toBe(3)
+  })
+
+  it('aggregateCustomers_netsWithinABuyerNotAcross', () => {
+    const rows = [
+      ...fixture(TIN, 'Buyer A'),
+      invoiceRecord({ id: 'b-inv', buyer_tin: '30000000-0002', buyer_name: 'Buyer B', total: '500.00' }),
+      invoiceRecord({ id: 'b-cn', buyer_tin: '30000000-0002', buyer_name: 'Buyer B', total: '700.00', document_type: 'credit_note' }),
+    ]
+
+    const result = aggregateCustomers(rows)
+
+    expect(result.map((c) => [c.name, c.totalNum])).toEqual([
+      ['Buyer A', 806.25],
+      ['Buyer B', -200],
+    ])
+  })
+
+  it('aggregateCustomers_nullTotalNoteAddsZeroButCounts', () => {
+    const rows = [
+      invoiceRecord({ id: 'a', buyer_tin: TIN, total: '100.00' }),
+      invoiceRecord({ id: 'b', buyer_tin: TIN, total: null, document_type: 'credit_note' }),
+    ]
+
+    const result = aggregateCustomers(rows)
+
+    expect(result).toHaveLength(1)
+    expect(result[0].totalNum).toBe(100)
+    expect(result[0].count).toBe(2)
+  })
+
+  it('aggregateCustomers_everyStatusNets', () => {
+    const rows = [
+      invoiceRecord({ id: 'a', buyer_tin: TIN, status: 'accepted', total: '1000.00' }),
+      invoiceRecord({ id: 'b', buyer_tin: TIN, status: 'rejected', total: '300.00', document_type: 'credit_note' }),
+      invoiceRecord({ id: 'c', buyer_tin: TIN, status: 'draft', total: '100.00', document_type: 'credit_note' }),
+    ]
+
+    const result = aggregateCustomers(rows)
+
+    expect(result).toHaveLength(1)
+    expect(result[0].totalNum).toBe(600)
+    expect(result[0].count).toBe(3)
+  })
+})
+
 // task-334 (BUG-01-08): aggregateCustomers itself is a plain forEach reduce with no
 // page-size assumption -- this pins that it already handles a whole-set (259-row,
 // 256-buyer) input correctly. The real gap this story fixes is the CALLER only ever

@@ -1343,3 +1343,94 @@ describe('ReportsView: top customers take the record name (CUST-02-05, AC 7, D17
     expect(reports.queryByText('Inv Ltd')).toBeNull()
   })
 })
+
+// CRDDBTNOTE-04-03: KPIs and Top customers net a credit note against its buyer.
+describe('ReportsView: totals count a note with its sign (CRDDBTNOTE-04-03)', () => {
+  // Design fixture: net subtotal 750, vat 56.25, total 806.25.
+  const fixture = (tin = T, name = 'Fixture Buyer'): InvoiceRecord[] => [
+    row({ id: `${tin}-inv`, buyer_tin: tin, buyer_name: name, subtotal: '1000.00', vat: '75.00', total: '1075.00' }),
+    row({ id: `${tin}-cn`, buyer_tin: tin, buyer_name: name, subtotal: '300.00', vat: '22.50', total: '322.50', document_type: 'credit_note' }),
+    row({ id: `${tin}-dn`, buyer_tin: tin, buyer_name: name, subtotal: '50.00', vat: '3.75', total: '53.75', document_type: 'debit_note' }),
+  ]
+
+  async function renderKpis(rows: InvoiceRecord[]) {
+    mockFetch([onePage(rows)])
+    const utils = render(<ReportsView ctx={reportsCtx()} />)
+    await screen.findByText('Invoices in period')
+    return utils.container
+  }
+
+  // One entry per top-customer row: name, total text, and the bar's inline width.
+  function topCustomerRows(container: HTMLElement) {
+    const title = Array.from(container.querySelectorAll('span.card-title')).find((s) => s.textContent === 'Top customers by value')
+    const list = title?.parentElement?.nextElementSibling
+    return Array.from(list?.children ?? []).map((r) => ({
+      total: r.querySelector('.money')?.textContent,
+      width: (r.lastElementChild?.firstElementChild as HTMLElement | null)?.style.width,
+    }))
+  }
+
+  it('reportsKpis_netEachSumBySign', async () => {
+    const c = await renderKpis(fixture())
+
+    expect(kpiValue(c, 'Taxable value')).toBe('₦750')
+    expect(kpiValue(c, 'Output VAT')).toBe('₦56')
+    expect(kpiValue(c, 'Total invoiced')).toBe('₦806')
+  })
+
+  it('reportsKpis_goNegativeWithTheSign', async () => {
+    const c = await renderKpis([
+      row({ id: 'inv', total: '1000.00' }),
+      row({ id: 'cn', total: '3000.00', document_type: 'credit_note' }),
+    ])
+
+    expect(kpiValue(c, 'Total invoiced')).toBe('-₦2k')
+  })
+
+  it('reportsKpis_everyStatusNetsLikeAnInvoice', async () => {
+    const c = await renderKpis([
+      row({ id: 'a', status: 'accepted', total: '1000.00' }),
+      row({ id: 'b', status: 'rejected', total: '300.00', document_type: 'credit_note' }),
+      row({ id: 'c', status: 'draft', total: '100.00', document_type: 'credit_note' }),
+    ])
+
+    expect(kpiValue(c, 'Total invoiced')).toBe('₦600')
+  })
+
+  it('reportsKpis_whtSampleFollowsTheNet', async () => {
+    const c = await renderKpis([
+      row({ id: 'inv', subtotal: '100000.00' }),
+      row({ id: 'cn', subtotal: '30000.00', document_type: 'credit_note' }),
+      row({ id: 'dn', subtotal: '5000.00', document_type: 'debit_note' }),
+    ])
+
+    expect(kpiValue(c, 'WHT withheld · 5%')).toBe('~₦4k')
+  })
+
+  // Guard: passes before the change, each note is already one row.
+  it('reportsInPeriod_countsEachNoteOnce', async () => {
+    const c = await renderKpis(fixture())
+
+    expect(kpiValue(c, 'Invoices in period')).toBe('3')
+  })
+
+  it('topCustomers_aNetNegativeBuyerHasAZeroBar', async () => {
+    const c = await renderKpis([
+      ...fixture('20000000-0001', 'Buyer A'),
+      row({ id: 'b-inv', buyer_tin: '30000000-0002', buyer_name: 'Buyer B', total: '500.00' }),
+      row({ id: 'b-cn', buyer_tin: '30000000-0002', buyer_name: 'Buyer B', total: '700.00', document_type: 'credit_note' }),
+    ])
+
+    expect(topCustomerNames(c)).toEqual(['Buyer A', 'Buyer B'])
+    expect(topCustomerRows(c)).toEqual([
+      { total: '₦806', width: '100%' },
+      { total: '-₦200', width: '0%' },
+    ])
+  })
+
+  it('topCustomers_allNegativeStillHasValidBars', async () => {
+    const c = await renderKpis([row({ id: 'cn', buyer_name: 'Only Buyer', total: '300.00', document_type: 'credit_note' })])
+
+    expect(topCustomerRows(c)).toEqual([{ total: '-₦300', width: '0%' }])
+  })
+})

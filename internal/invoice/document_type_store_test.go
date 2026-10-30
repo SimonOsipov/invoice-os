@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -313,4 +314,74 @@ func TestStoreCreate_MalformedOriginalIsValidation(t *testing.T) {
 	}
 	dtWantRefusal(t, err, nil)
 	dtNothingWritten(t, super, app, tenant)
+}
+
+func TestStoreCreate_OriginalRefusalsAnswerTenantFirst(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantA := seedTenant(t, super, "DT two tenants A")
+	a1 := seedEntity(t, super, tenantA, "A1")
+	a2 := seedEntity(t, super, tenantA, "A2")
+	tenantB := seedTenant(t, super, "DT two tenants B")
+	b1 := seedEntity(t, super, tenantB, "B1")
+	b2 := seedEntity(t, super, tenantB, "B2")
+	store := NewStore(app)
+
+	aOrig := seedInvoice(t, super, tenantA, a1, "DT-A1")
+	bOrig := seedInvoice(t, super, tenantB, b1, "DT-B1")
+	aNote, err := store.Create(dtCtx(tenantA), dtNote(a1, "DT-A-CN", submission.CreditNote, &aOrig))
+	if err != nil {
+		t.Fatalf("seed tenant A credit note: %v", err)
+	}
+	bNote, err := store.Create(dtCtx(tenantB), dtNote(b1, "DT-B-CN", submission.CreditNote, &bOrig))
+	if err != nil {
+		t.Fatalf("seed tenant B credit note: %v", err)
+	}
+	before := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenantA)
+	if before != 2 {
+		t.Fatalf("tenant A invoices = %d, want 2", before)
+	}
+
+	cases := []struct {
+		name     string
+		entity   string
+		original string
+		want     error
+	}{
+		{"own note as original", a1, aNote.ID, ErrOriginalIsANote},
+		{"own invoice in the other entity", a2, aOrig, ErrOriginalOtherEntity},
+		{"other tenant's invoice, same-shaped entity", a1, bOrig, ErrOriginalNotFound},
+		{"other tenant's invoice, other entity", a2, bOrig, ErrOriginalNotFound},
+		{"other tenant's note", a1, bNote.ID, ErrOriginalNotFound},
+		{"other tenant's invoice in a second entity", a1, seedInvoice(t, super, tenantB, b2, "DT-B2"), ErrOriginalNotFound},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := store.Create(dtCtx(tenantA), dtNote(c.entity, fmt.Sprintf("DT-REF-%d", i), submission.DebitNote, &c.original))
+			if !errors.Is(err, c.want) {
+				t.Fatalf("err = %v, want %v", err, c.want)
+			}
+			dtWantRefusal(t, err, c.want)
+		})
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenantA); n != before {
+		t.Errorf("tenant A invoices = %d, want %d", n, before)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenantB); n != 3 {
+		t.Errorf("tenant B invoices = %d, want 3", n)
+	}
+}
+
+func TestStoreCreate_UpperCaseEntityIDStillMatchesTheOriginalsEntity(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "DT case")
+	ent := seedEntity(t, super, tenant, "E1")
+	original := seedInvoice(t, super, tenant, ent, "DT-ORIG")
+
+	inv, err := NewStore(app).Create(dtCtx(tenant), dtNote(strings.ToUpper(ent), "DT-UP", submission.CreditNote, &original))
+	if err != nil {
+		t.Fatalf("Create with an upper-case entity_id naming a same-entity original: %v", err)
+	}
+	if inv.OriginalInvoiceID == nil || *inv.OriginalInvoiceID != original {
+		t.Errorf("OriginalInvoiceID = %v, want %s", inv.OriginalInvoiceID, original)
+	}
 }

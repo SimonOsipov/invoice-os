@@ -22,7 +22,7 @@ permissions:
   checks: read
 
 env:
-  PR: nightly
+  PR: ${{ github.event.pull_request.number || 'nightly' }}
   WIF_PROVIDER: projects/428987361227/locations/global/workloadIdentityPools/github/providers/github-actions
   DEPLOYER: deploy-preview@ascomply-preview.iam.gserviceaccount.com
 
@@ -47,7 +47,7 @@ jobs:
           fetch-depth: 2
       - id: mode
         env:
-          NIGHTLY: 'true'
+          NIGHTLY: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           echo "nightly=$NIGHTLY" >>"$GITHUB_OUTPUT"
           if [ "$NIGHTLY" = true ]; then

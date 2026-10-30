@@ -761,6 +761,11 @@ func TestDevEnvNightly_EmailStepOrder(t *testing.T) {
 			t.Errorf("swap %v: problems %q", pair, got)
 		}
 	}
+	auth := "      - uses: google-github-actions/auth@v3\n        with:\n          workload_identity_provider: ${{ env.WIF_PROVIDER }}\n          service_account: ${{ env.DEPLOYER }}\n"
+	pf := "      - name: Check the nightly mail secrets\n        run: bash scripts/ci/preview.sh mail-preflight \"$PR\"\n"
+	if got := emailProblems(nlJobs(mutateOnce(t, yml, auth+pf, pf+auth))); !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "out of order") }) {
+		t.Errorf("swap auth and preflight: problems %q", got)
+	}
 	requireEmailMutations(t, []struct{ old, repl, want string }{
 		{"          echo \"::add-mask::$domain\"\n", "", "masks the key and domain"},
 	})

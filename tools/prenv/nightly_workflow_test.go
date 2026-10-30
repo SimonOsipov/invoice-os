@@ -18,6 +18,7 @@ const (
 	nightlySuitesFlag     = "-suites scripts/ci/nightly-suites.txt"
 	nightlyCIRunLine      = `run: bash scripts/ci/nightly-ci.sh "$GITHUB_REF_NAME" ci.yml=run_id dev-env.yml=preview_run_id`
 	nightlyE2EFlag        = `-e2e-suites "$RUNNER_TEMP/e2e-suites.txt" `
+	nightlyEmailSection   = `-section email="$RUNNER_TEMP/results/results-email/email.json"`
 	nightlyPolls          = "470"
 	nightlySummaryTimeout = "270"
 	nightlyPreviewDL      = `gh run download "$PREVIEW_RUN_ID" -R "$REPO" -p 'results-*' -D "$RUNNER_TEMP/results"`
@@ -152,6 +153,9 @@ func nightlyRunProblems(nightlyYAML, ciYAML, suitesTxt string) []string {
 	}
 	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), nightlyE2EFlag) {
 		p = append(p, "assembler step lacks -e2e-suites")
+	}
+	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), nightlyEmailSection) {
+		p = append(p, "assembler step lacks -section email")
 	}
 	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), `node e2e/topology/shards.ts | jq -r '.[] | "topology-\(.)=E2E topology (\(.))=results"'`) {
 		p = append(p, "assembler step does not append the topology shard suites")
@@ -456,6 +460,7 @@ func TestNightly_SummaryFoldsTheE2ERun(t *testing.T) {
 		{"preview dispatch dropped", " dev-env.yml=preview_run_id", "", "two-workflow call"},
 		{"poll budget", "NIGHTLY_CI_POLLS: " + nightlyPolls, "NIGHTLY_CI_POLLS: 120", "NIGHTLY_CI_POLLS"},
 		{"e2e flag dropped", nightlyE2EFlag, "", "lacks -e2e-suites"},
+		{"email section dropped", " " + nightlyEmailSection, "", "lacks -section email"},
 		{"preview download dropped", "$PREVIEW_RUN_ID\" -R", "$CI_RUN_ID\" -R", "preview run's results"},
 		{"jobs of one run", "actions/runs/$run/jobs", "actions/runs/$CI_RUN_ID/jobs", "jobs of each run"},
 		{"preview run left out of the jobs", `runs+=("$PREVIEW_RUN_ID")`, `runs+=("$CI_RUN_ID")`, "jobs of each run"},

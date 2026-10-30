@@ -185,6 +185,8 @@ interface DetailFetchOptions {
   auditLogResponse?: MockResponse
   // POST .../explain. Every call body is recorded into `explainCalls`.
   explainResponse?: MockResponse
+  // GET .../notes. Defaults to no notes; answered before the detail-refetch counter.
+  notesResponse?: MockResponse
 }
 
 // getInvoice and getInvoiceHistory fire concurrently (two independent useAsync effects) --
@@ -280,6 +282,16 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
         json: () => Promise.reject(new Error('the ubl route is text, not json')),
         text: () => Promise.resolve(UBL_FIXTURE),
       })
+    }
+    // The notes read of an accepted+IRN invoice: its own arm, so it takes no detailSequence slot.
+    if (method === 'GET' && url.endsWith('/notes')) {
+      return Promise.resolve<MockResponse>(
+        opts.notesResponse ?? {
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ notes: [], credited_so_far: '0.00', still_creditable: '0.00' }),
+        },
+      )
     }
     if (url.endsWith('/source-document')) {
       return Promise.resolve<MockResponse>(
@@ -4484,6 +4496,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
   const EXTR_27_TESTIDS = ['edit-invoice-number']
   const ENGI_17_TESTIDS = ['violation-explain']
   const ENGI_06_TESTIDS = ['buyer-type-note', 'line-nrs']
+  const CRDDBTNOTE_02_TESTIDS = ['issue-credit-note', 'issue-debit-note']
 
   // The rail's UBL document card.
   const BUG_18_TESTIDS = [
@@ -4749,7 +4762,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
 
     // Closed-world, and deliberately so: "no card gained a testid" is half of AC-5. A new
     // element on this page must be declared, in one of the three lists above, by whoever adds it.
-    const declared = new Set([...UNTOUCHED_TESTIDS, ...AUDIT_09_TESTIDS, ...BUG_13_TESTIDS, ...EXTR_27_TESTIDS, ...ENGI_17_TESTIDS, ...ENGI_06_TESTIDS, ...BUG_18_TESTIDS])
+    const declared = new Set([...UNTOUCHED_TESTIDS, ...AUDIT_09_TESTIDS, ...BUG_13_TESTIDS, ...EXTR_27_TESTIDS, ...ENGI_17_TESTIDS, ...ENGI_06_TESTIDS, ...BUG_18_TESTIDS, ...CRDDBTNOTE_02_TESTIDS])
     const undeclared = [...seen.keys()].filter((id) => !declared.has(id)).sort()
     expect(
       undeclared,
@@ -7262,5 +7275,86 @@ describe('InvoiceDetail demotion banner and race 409 (ENGI-15-08)', () => {
 
     fireEvent.click(await screen.findByTestId('revalidate'))
     await screen.findByText(SENTENCE)
+  })
+})
+
+describe('InvoiceDetail: credit and debit note actions (CRDDBTNOTE-02-05)', () => {
+  const ID = 'inv-note-actions-1'
+  const NOTE_ACTIONS = ['issue-credit-note', 'issue-debit-note']
+  const STATUSES: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
+
+  it('the note actions show only on a fiscal record', async () => {
+    for (const status of STATUSES) {
+      for (const irn of [null, 'IRN-2026-0001']) {
+        mockDetailFetch(detailRecord({ id: ID, status, irn, can_issue_note: status === 'accepted' && irn != null }))
+        render(<InvoiceDetail ctx={detailCtx(ID)} />)
+        await screen.findByTestId('invoice-status-badge')
+        const expected = status === 'accepted' && irn !== null
+        for (const id of NOTE_ACTIONS) {
+          expect(screen.queryByTestId(id) !== null, `${id} at ${status} irn=${irn}`).toBe(expected)
+          if (expected) expect((screen.getByTestId(id) as HTMLButtonElement).disabled).toBe(false)
+        }
+        cleanup()
+      }
+    }
+  })
+
+  it('an accepted note disables both actions with the reason', async () => {
+    const reason = 'A note cannot be the original of a note.'
+    mockDetailFetch(
+      detailRecord({ id: ID, status: 'accepted', irn: 'IRN-2026-0001', document_type: 'credit_note', can_issue_note: false, issue_note_blocked_reason: reason }),
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    for (const id of NOTE_ACTIONS) {
+      const btn = (await screen.findByTestId(id)) as HTMLButtonElement
+      expect(btn.disabled).toBe(true)
+      expect(btn.getAttribute('title')).toBe(reason)
+      expect(btn.style.background).toBe('var(--bg-3)')
+      fireEvent.click(btn)
+    }
+    expect(screen.queryByTestId('note-form')).toBeNull()
+  })
+
+  it('the bar keeps its siblings', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-status-badge')
+    expect(screen.queryByTestId('invoice-actions')).not.toBeNull()
+    for (const id of ['edit-toggle', 'revalidate', 'detail-submit']) expect(screen.queryByTestId(id), id).not.toBeNull()
+    for (const id of NOTE_ACTIONS) expect(screen.queryByTestId(id), id).toBeNull()
+    cleanup()
+
+    mockDetailFetch(detailRecord({ id: ID, status: 'accepted', irn: 'IRN-2026-0001', can_issue_note: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('issue-credit-note')
+    for (const id of ['edit-toggle', 'revalidate', 'detail-submit']) {
+      expect((screen.getByTestId(id) as HTMLButtonElement).disabled, id).toBe(true)
+    }
+  })
+
+  it('the form replaces the record body and hides the bar', async () => {
+    const { fetchMock } = mockDetailFetch(
+      detailRecord({
+        id: ID,
+        status: 'accepted',
+        irn: 'IRN-2026-0001',
+        can_issue_note: true,
+        line_items: [{ id: 'l1', line_no: 1, description: 'Widget', quantity: '2.000', unit_price: '10.00', line_total: '20.00', line_tax: null }],
+      }),
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('issue-credit-note'))
+
+    expect(screen.getByTestId('note-form')).toBeTruthy()
+    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+    expect(screen.queryByTestId('detail-decision-actions')).toBeNull()
+    const calls = fetchMock.mock.calls.length
+
+    fireEvent.click(screen.getByTestId('note-form-cancel'))
+    expect(screen.queryByTestId('note-form')).toBeNull()
+    expect(screen.getByTestId('invoice-actions')).toBeTruthy()
+    expect(screen.getByTestId('detail-decision-actions')).toBeTruthy()
+    expect(fetchMock.mock.calls.length).toBe(calls)
   })
 })

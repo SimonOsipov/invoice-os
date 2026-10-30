@@ -1069,7 +1069,7 @@ export function diffLineItems(
 // from the story's `number | null` (AC #5's arithmetic is unchanged). Money is strings
 // end-to-end ([D13]) precisely so no float touches it; the rule this mirrors has a 0.005
 // tolerance, so precision below the kobo is load-bearing; and the app's only money
-// formatter (fmt(), lib/format.ts:5-7) rounds to WHOLE naira, so a numeric return would
+// formatter (fmt()) rounds to WHOLE naira, so a numeric return would
 // invite the component to render a hint that reads EQUAL to a subtotal it actually
 // differs from -- fabricating the very agreement this hint exists to question.
 //

@@ -1,5 +1,3 @@
-// Formatters ported exactly from the prototype (Platform.dc.html ~L1008-1011, 1089).
-
 import type { LineItem } from '../types'
 
 export function fmt(n: number): string {

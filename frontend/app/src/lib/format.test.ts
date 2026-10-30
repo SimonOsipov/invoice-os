@@ -308,4 +308,14 @@ describe('CRDDBTNOTE-04-01: negative money formats', () => {
     expect(fmt(-0)).toBe('₦0')
     expect(fmt(signedAmount({ document_type: 'credit_note' }, '0.00'))).toBe('₦0')
   })
+
+  it('moneyFormats_halfNairaMirrorsAndGarbageIsZero', () => {
+    expect(fmt(-0.5)).toBe('-₦1')
+    expect(fmt(0.5)).toBe('₦1')
+    expect(fmtShort(-0.5)).toBe('-₦1')
+    expect(fmtShort(0.5)).toBe('₦1')
+    expect(fmt(NaN)).toBe('₦0')
+    expect(fmt(signedAmount({ document_type: 'credit_note' }, 'abc'))).toBe('₦0')
+    expect(fmt(signedAmount({ document_type: 'credit_note' }, ''))).toBe('₦0')
+  })
 })

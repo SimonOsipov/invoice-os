@@ -1559,12 +1559,12 @@ func TestRun_E2EReportsAreJudgedOneByOne(t *testing.T) {
 
 func TestRun_E2EAllSkippedReportBesideAPassingOneIsRed(t *testing.T) {
 	e := e2eEnv(t)
-	e.write("e2e", "playwright-smoke.json", pwFile(pwSpec("ran", "expected", pwResult("passed", 1))))
-	e.write("e2e", "playwright-api.json", pwFile(pwSpec("skipped", "skipped", pwResult("skipped", 0))))
+	e.write("e2e", "playwright-api.json", pwFile(pwSpec("ran", "expected", pwResult("passed", 1))))
+	e.write("e2e", "playwright-smoke.json", pwFile(pwSpec("skipped", "skipped", pwResult("skipped", 0))))
 	e.write("topology-auth", "playwright-topology-auth.json", pwFile(pwSpec("t", "expected", pwResult("passed", 1))))
 	r := e.run(e.e2eFlag...)
 	eq(t, r.code, 1)
-	eq(t, r.dec.Failures, []failure{{"e2e", "no test results", "results-e2e/playwright-api.json", "no passed, failed or flaky test in the report"}})
+	eq(t, r.dec.Failures, []failure{{"e2e", "no test results", "results-e2e/playwright-smoke.json", "no passed, failed or flaky test in the report"}})
 }
 
 func TestRun_E2ESuiteOfOnlyFlakyTestsIsGreen(t *testing.T) {

@@ -246,6 +246,30 @@ describe('changed', () => {
     expect(warn.mock.calls.flat().join('\n')).toContain('timed out')
   })
 
+  it('a 503 that never clears ends at the deadline', async () => {
+    await putShots(['landing/home/1440'])
+    const { d, reads, warn } = deps({ builds: [503] })
+    expect(await run(dl(), out, d)).toMatchObject({ ok: true, changed: null })
+    expect(reads.length).toBeGreaterThan(1)
+    expect(reads.length).toBeLessThanOrEqual(32)
+    expect(warn.mock.calls.flat().join('\n')).toContain('HTTP 503')
+  })
+
+  it('each read carries a 30 s abort signal that ends a hung read', async () => {
+    await putShots(['landing/home/1440'])
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => AbortSignal.abort())
+    const { d, reads } = deps()
+    d.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      reads.push(String(url))
+      if (init?.signal?.aborted) throw new DOMException('timed out', 'TimeoutError')
+      return Response.json(build())
+    }) as unknown as typeof fetch
+    expect(await run(dl(), out, d)).toMatchObject({ ok: true, changed: null })
+    expect(timeout).toHaveBeenCalledWith(30_000)
+    expect(reads.length).toBeGreaterThan(1)
+    timeout.mockRestore()
+  })
+
   it('a 401 during polling ends at once', async () => {
     await putShots(['landing/home/1440'])
     const { d, reads } = deps({ builds: [401] })
@@ -278,6 +302,34 @@ describe('missing', () => {
     expect((await run(dl(), out, d)).missing).toEqual([
       'app/firm-invoices/375: Failed to stabilize screenshot, found the following issues: - 2 fonts are loading',
     ])
+  })
+
+  it('a failure reason is trimmed, joined on one line and capped at 300', async () => {
+    await putShots(allNames().filter((n) => !n.startsWith('app/firm-invoices/')))
+    await put('argos-shots-e2e/chromium/app/firm-invoices/375.failed.txt', '  a  \n\n  b  \n')
+    await put('argos-shots-e2e/chromium/app/firm-invoices/1440.failed.txt', 'x'.repeat(500))
+    const { d } = deps()
+    expect((await run(dl(), out, d)).missing).toEqual([
+      `app/firm-invoices/1440: ${'x'.repeat(300)}`,
+      'app/firm-invoices/375: a b',
+    ])
+  })
+
+  it('a restore note is neither uploaded nor listed as missing', async () => {
+    await putShots(allNames())
+    await put('argos-shots-e2e/chromium/app/firm-invoices/restore.failed.txt', 'restore boom\n')
+    const { d, upload } = deps()
+    let tree: string[] = []
+    upload.mockImplementationOnce(async (a: Record<string, unknown>) => {
+      const root = a.root as string
+      tree = (await readdir(root, { recursive: true, withFileTypes: true })).filter((e) => e.isFile()).map((e) => join(e.parentPath, e.name).slice(root.length + 1))
+      return { build: build() }
+    })
+    const s = await run(dl(), out, d)
+    expect(tree).toHaveLength(allNames().length)
+    expect(tree.some((f) => f.includes('restore'))).toBe(false)
+    expect(s.ok).toBe(true)
+    expect('missing' in s).toBe(false)
   })
 
   it('a retried shot is not missing', async () => {

@@ -133,6 +133,32 @@ describe('shoot', () => {
     expect(await readFile(failedFile(1440), 'utf8')).toBe('shot exceeded 30 s\n')
   })
 
+  it('a shot in time keeps its PNG and metadata', async () => {
+    const png = `${ARGOS_ROOT}/unit-argos/app/firm-invoices/1440.png`
+    argosScreenshot.mockImplementationOnce(async () => {
+      await mkdir(dirname(png), { recursive: true })
+      await writeFile(png, 'x')
+      await writeFile(`${png}.argos.json`, '{}')
+    })
+    await shoot(fakePage().page, 'app', 'firm-invoices')
+    await new Promise((r) => setTimeout(r, 50))
+    expect(await readFile(png, 'utf8')).toBe('x')
+    expect(await readFile(`${png}.argos.json`, 'utf8')).toBe('{}')
+  })
+
+  it('a hung viewport restore is capped', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const { page } = fakePage()
+    let n = 0
+    ;(page as never as { setViewportSize: unknown }).setViewportSize = vi.fn(() => (++n === 3 ? new Promise(() => {}) : Promise.resolve()))
+    const done = shoot(page, 'app', 'firm-invoices')
+    await vi.advanceTimersByTimeAsync(30_000)
+    await expect(done).resolves.toBeUndefined()
+    vi.useRealTimers()
+    const f = `${ARGOS_ROOT}/unit-argos/app/firm-invoices/restore.failed.txt`
+    expect(await readFile(f, 'utf8')).toBe('shot exceeded 30 s\n')
+  })
+
   it('a failed viewport restore leaves shoot resolved', async () => {
     const { page } = fakePage()
     let n = 0
@@ -150,6 +176,7 @@ describe('shoot', () => {
       'Failed to stabilize screenshot, found the following issues: - 2 fonts are loading',
     )
     expect(reasonOf(new Error('x'.repeat(500)))).toHaveLength(300)
+    expect(reasonOf(new Error('  a  \n\n  b  \n'))).toBe('a b')
   })
 
   it('a failed shot restores the timeout and the viewport', async () => {
@@ -170,6 +197,7 @@ describe('MOVING_TEXT', () => {
   it('MOVING_TEXT matches moving text', () => {
     for (const t of [
       '30 Oct 2026',
+      '30 October 2026',
       '30/10/2026',
       '30/10/2026, 14:02:11',
       '30 Oct',

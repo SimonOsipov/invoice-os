@@ -26,6 +26,11 @@ describe('overBudget', () => {
     expect(overBudget(other, DOMAIN, NOW)).toBe(false)
   })
 
+  it('ignores a name on the domain that is not nightly-', () => {
+    const other = Array.from({ length: 30 }, (_, i) => send(`buyer${i}@${DOMAIN}`))
+    expect(overBudget(other, DOMAIN, NOW)).toBe(false)
+  })
+
   it('ignores mail from before 00:00 UTC', () => {
     expect(overBudget(nightly(30, YESTERDAY), DOMAIN, NOW)).toBe(false)
   })
@@ -89,6 +94,10 @@ describe('mailTextDiff', () => {
     expect(mailTextDiff(want, got) !== null).toBe(differs)
   })
 
+  it('names the position of the first difference', () => {
+    expect(mailTextDiff('abc def', 'abc xyz')).toContain('character 4')
+  })
+
   it('holds none of the mail', () => {
     const out = mailTextDiff('Hello ada@secret.test token=tok123', 'Howdy ada@secret.test token=tok123') ?? ''
     for (const s of ['@', 'tok123', 'Hello', 'Howdy']) expect(out).not.toContain(s)
@@ -109,7 +118,7 @@ describe('CheckSteps', () => {
     const f = tmpFile()
     const cs = new CheckSteps(f, three)
     const never = vi.fn()
-    await cs.run('a', () => {})
+    await cs.run('a', () => new Promise<void>((r) => setTimeout(r, 30)))
     await cs.run('b', () => {
       throw new Error('boom for ada@secret.test')
     })
@@ -120,9 +129,24 @@ describe('CheckSteps', () => {
     expect(s.steps[1].detail).toBe('boom for <address>')
     expect(s.ok).toBe(false)
     expect(s.failures).toHaveLength(1)
-    expect(s.failures[0]).toMatchObject({ suite: 'email', test: 'b' })
+    expect(s.failures[0]).toMatchObject({
+      suite: 'email',
+      test: 'b',
+      file: 'e2e/mail/real-mail.spec.ts',
+      message: 'boom for <address>',
+    })
+    expect(s.steps[0].duration_ms).toBeGreaterThanOrEqual(20)
     expect(never).not.toHaveBeenCalled()
     expect(read(f)).toEqual(s)
+  })
+
+  it('a failed step with nothing skipped is not ok', async () => {
+    const cs = new CheckSteps(tmpFile(), [{ name: 'a', needs: [] }, { name: 'b', needs: [] }])
+    await cs.run('a', () => {})
+    await cs.run('b', () => {
+      throw new Error('x')
+    })
+    expect(cs.section().ok).toBe(false)
   })
 
   it('a failed budget runs no other step', async () => {
@@ -158,7 +182,9 @@ describe('CheckSteps', () => {
     expect(s.steps.filter((x) => x.status === 'passed')).toHaveLength(2)
     expect(s.steps.filter((x) => x.status === 'skipped')).toHaveLength(11)
     expect(s.ok).toBe(false)
-    expect(s.failures.map((x) => x.message)).toEqual(['check did not finish'])
+    expect(s.failures).toEqual([
+      { suite: 'email', test: 'check', file: 'e2e/mail/real-mail.spec.ts', message: 'check did not finish' },
+    ])
   })
 
   it('a finished check clears the marker', async () => {

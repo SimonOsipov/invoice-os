@@ -75,6 +75,15 @@ describe('waitForMail', () => {
     expect((await p).id).toBe('confirm')
   })
 
+  it('ignores a mail from before the lookback', async () => {
+    vi.useFakeTimers()
+    const stale = new Date(Date.now() - 120_000).toISOString().replace('T', ' ').replace('Z', '000+00')
+    const p = waitForMail('k', 'me@x.test', 'S', 180_000, polls([item('old', stale, 'me@x.test', 'S')]))
+    const assertion = expect(p).rejects.toThrow('no mail in 3 minutes')
+    await vi.advanceTimersByTimeAsync(200_000)
+    await assertion
+  })
+
   it('throws at the deadline', async () => {
     vi.useFakeTimers()
     const p = waitForMail('k', 'me@x.test', 'S', 180_000, polls([]))

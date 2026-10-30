@@ -897,6 +897,9 @@ func TestRun_StepWithoutNameOrStatusIsAFailure(t *testing.T) {
 		{`[{"name":"","status":"passed"}]`, "step 1 lacks name or status"},
 		{`[{"name":1,"status":"passed"}]`, "step 1 lacks name or status"},
 		{`["x"]`, "step 1 lacks name or status"},
+		{`[{"name":"a","status":""}]`, "step 1 lacks name or status"},
+		{`[{"name":null,"status":"passed"}]`, "step 1 lacks name or status"},
+		{`[null]`, "step 1 lacks name or status"},
 		{`[{"name":"a","status":"passed"},{"name":"b","status":"passed"},{"name":"c","status":"passed"},{"name":"d","status":1}]`, "step 4 lacks name or status"},
 	}
 	for _, c := range cases {
@@ -1536,6 +1539,7 @@ func TestRun_E2EReportNamedByFirstFileWithTests(t *testing.T) {
 	e := e2eEnv(t)
 	e.write("e2e", "playwright-api.json", `{"config":{"rootDir":"/x"},"suites":[]}`)
 	e.write("e2e", "playwright-smoke.json", pwFile(pwSpec("skipped", "skipped", pwResult("skipped", 0))))
+	e.write("e2e", "playwright-zeta.json", pwFile(pwSpec("skipped", "skipped", pwResult("skipped", 0))))
 	e.write("topology-auth", "playwright-topology-auth.json", pwFile(pwSpec("t", "expected", pwResult("passed", 1))))
 	r := e.run(e.e2eFlag...)
 	eq(t, r.code, 1)
@@ -1543,4 +1547,14 @@ func TestRun_E2EReportNamedByFirstFileWithTests(t *testing.T) {
 		{"e2e", "results empty", "playwright-api.json", "the file holds no test results"},
 		{"e2e", "no test results", "results-e2e/playwright-smoke.json", "no passed, failed or flaky test in the reports"},
 	})
+}
+
+func TestRun_E2ESuiteOfOnlyFlakyTestsIsGreen(t *testing.T) {
+	e := e2eEnv(t)
+	e.write("e2e", "playwright-e2e.json", pwFile(pwSpec("flaky", "flaky", pwResult("failed", 1), pwResult("passed", 1))))
+	e.write("topology-auth", "playwright-topology-auth.json", pwFile(pwSpec("t", "expected", pwResult("passed", 1))))
+	r := e.run(e.e2eFlag...)
+	eq(t, r.code, 0)
+	eq(t, len(r.dec.Failures), 0)
+	eq(t, r.scenarios[0].Status, "flaky")
 }

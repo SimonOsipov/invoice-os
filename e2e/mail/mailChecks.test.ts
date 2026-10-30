@@ -1,10 +1,10 @@
-import { mkdtempSync, readdirSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { CheckSteps, isFakeAddress, judgeSends, MAIL_STEPS, mailTextDiff, overBudget, scrub, type Section } from './mailChecks'
+import { CheckSteps, isFakeAddress, judgeSends, MAIL_STEPS, mailTextDiff, overBudget, readAccounts, requireEnv, scrub, writeAccounts, type Section } from './mailChecks'
 
 const NOW = new Date('2026-10-30T13:00:00Z')
 const DOMAIN = 'inbox.mailbox.app'
@@ -205,5 +205,58 @@ describe('CheckSteps', () => {
 
   it('names the 13 steps of the section', () => {
     expect(MAIL_STEPS.map((s) => s.name)).toHaveLength(13)
+  })
+})
+
+describe('writeAccounts', () => {
+  const accounts = {
+    admin: { email: 'a@example.com', password: 'pw-admin-secret', displayName: 'Mail Admin', workspaceName: 'Mail Workspace' },
+    reset: { email: 'r@example.com', password: 'pw-reset-secret' },
+  }
+
+  it('keeps the file private', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'mail-accounts-')), 'accounts.json')
+    writeAccounts(file, accounts)
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expect(readAccounts(file)).toEqual(accounts)
+  })
+
+  it('narrows a file that already exists', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'mail-accounts-')), 'accounts.json')
+    writeAccounts(file, accounts)
+    writeAccounts(file, accounts)
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+  })
+
+  it('throws on a missing file with no path or value in the text', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'mail-accounts-')), 'absent-accounts.json')
+    expect(() => readAccounts(file)).toThrow(/missing or unreadable/)
+    try {
+      readAccounts(file)
+    } catch (e) {
+      expect((e as Error).message).not.toContain('absent-accounts')
+    }
+  })
+})
+
+describe('requireEnv', () => {
+  it('names every missing variable and no value', () => {
+    vi.stubEnv('MAIL_TEST_SET', 'a-secret-value')
+    vi.stubEnv('MAIL_TEST_BLANK', '  ')
+    vi.stubEnv('MAIL_TEST_ABSENT', undefined)
+    try {
+      requireEnv('MAIL_TEST_SET', 'MAIL_TEST_BLANK', 'MAIL_TEST_ABSENT')
+      expect.unreachable()
+    } catch (e) {
+      expect((e as Error).message).toBe('not set: MAIL_TEST_BLANK, MAIL_TEST_ABSENT')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('returns the trimmed values', () => {
+    vi.stubEnv('MAIL_TEST_SET', ' v ')
+    expect(requireEnv('MAIL_TEST_SET')).toEqual({ MAIL_TEST_SET: 'v' })
+    vi.unstubAllEnvs()
   })
 })

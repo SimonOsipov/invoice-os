@@ -1,5 +1,5 @@
 // Rules of the nightly mail check: budget, fake addresses, scrubbing, text diff and the section file.
-import { renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 
 import { parseCreatedAt } from './resendClient'
 
@@ -9,7 +9,7 @@ export type Sent = { to: string[]; created_at: string }
 const BUDGET_BEFORE_RUN = 22
 const SPEC_FILE = 'e2e/mail/real-mail.spec.ts'
 
-export function overBudget(sends: Sent[], domain: string, now: Date = new Date()): boolean {
+export function nightlySendsToday(sends: Sent[], domain: string, now: Date = new Date()): number {
   const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
   const suffix = `@${domain.toLowerCase()}`
   const today = sends.filter(
@@ -17,8 +17,11 @@ export function overBudget(sends: Sent[], domain: string, now: Date = new Date()
       parseCreatedAt(s.created_at) >= dayStart &&
       s.to.some((a) => a.toLowerCase().startsWith('nightly-') && a.toLowerCase().endsWith(suffix)),
   )
-  return today.length > BUDGET_BEFORE_RUN
+  return today.length
 }
+
+export const overBudget = (sends: Sent[], domain: string, now: Date = new Date()): boolean =>
+  nightlySendsToday(sends, domain, now) > BUDGET_BEFORE_RUN
 
 export function isFakeAddress(address: string): boolean {
   const domain = address.slice(address.lastIndexOf('@') + 1).toLowerCase()
@@ -120,4 +123,30 @@ export class CheckSteps {
     writeFileSync(tmp, JSON.stringify(this.section(), null, 2))
     renameSync(tmp, this.file)
   }
+}
+
+export type MailAccounts = {
+  admin: { email: string; password: string; displayName: string; workspaceName: string }
+  reset: { email: string; password: string }
+}
+
+// Holds passwords: mode 600, and the reader's error names no path or value.
+export function writeAccounts(file: string, accounts: MailAccounts): void {
+  writeFileSync(file, JSON.stringify(accounts), { mode: 0o600 })
+  chmodSync(file, 0o600)
+}
+
+export function readAccounts(file: string): MailAccounts {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8')) as MailAccounts
+  } catch {
+    throw new Error('the mail accounts file is missing or unreadable')
+  }
+}
+
+// Names the missing variables, never a value.
+export function requireEnv<K extends string>(...names: K[]): Record<K, string> {
+  const missing = names.filter((n) => !process.env[n]?.trim())
+  if (missing.length > 0) throw new Error(`not set: ${missing.join(', ')}`)
+  return Object.fromEntries(names.map((n) => [n, process.env[n]!.trim()])) as Record<K, string>
 }

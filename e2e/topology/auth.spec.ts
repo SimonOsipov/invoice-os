@@ -38,6 +38,7 @@ import {
 } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { seedConsent } from '../smoke/landingConsent'
+import { openInvite, readSessionIdentity, registerOnAcceptPage } from '../inviteSession'
 import { approvalRun404Dropper, consoleErrorsLine, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS } from './layout'
 
@@ -2906,7 +2907,6 @@ test('deployed landing: "Forgot password?" sends a reset request, and a bogus re
 
 // The accept page of an invite link (frontend/landing/src/components/InvitePage.tsx).
 const INVITE_INVALID = 'This invite is no longer valid'
-const inviteUrl = (token: string) => `${LANDING_URL}/invite#token=${token}`
 
 // A fresh admin with a workspace of `workspaceName` (default: a short one; maxNameChars, internal/tenancy/tenancy.go, is 200).
 async function inviteWorkspace(workspaceName?: string, displayName = 'Invite E2E'): Promise<{ adminToken: string; tenantId: string; name: string }> {
@@ -2931,12 +2931,6 @@ async function expectAcceptStack(page: Page, width: number, heading: Locator, pa
   if (!box) throw new Error(`the accept card rendered no box at ${width}px`)
   expect(box.x, `the card starts left of the viewport at ${width}px`).toBeGreaterThanOrEqual(-1)
   expect(box.x + box.width, `the card ends right of the viewport at ${width}px`).toBeLessThanOrEqual(width + 1)
-}
-
-// A fragment-only goto is a same-document navigation: the page would keep its view and its address-bar fragment. Load afresh.
-async function openInvite(page: Page, token: string): Promise<void> {
-  await page.goto('about:blank')
-  await page.goto(inviteUrl(token))
 }
 
 // Opens the link at `width`, then asserts the ready view stacks and the address bar holds no fragment.
@@ -3032,21 +3026,6 @@ test('deployed landing: the accept page names the workspace and role at every wi
     await context.close()
   }
 })
-
-// Registers the invitee on the accept page and ends on "Check your email".
-async function registerOnAcceptPage(page: Page, token: string): Promise<void> {
-  await seedConsent(page, false)
-  await openInvite(page, token)
-  await page.getByRole('button', { name: 'Create account', exact: true }).click()
-  await page.getByRole('button', { name: 'Create account →', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Check your email', exact: true })).toBeVisible({ timeout: 30_000 })
-}
-
-// Waits for the app to draw, then returns the browser session's /v1/me.
-async function readSessionIdentity(page: Page): Promise<Me> {
-  await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
-  return me(await browserToken(page))
-}
 
 // Sign in stays disabled until the accept page holds a name.
 async function signInFromAcceptPage(page: Page): Promise<void> {

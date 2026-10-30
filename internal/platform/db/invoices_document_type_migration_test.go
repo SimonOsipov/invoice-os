@@ -358,3 +358,66 @@ func TestRLS_InvoicesDocumentType_AddsExactlyItsConstraintsAndIndex(t *testing.T
 		t.Errorf("%s is not partial on original_invoice_id IS NOT NULL: %q", invoicesDocTypeIndex, afterUp.indexes[invoicesDocTypeIndex])
 	}
 }
+
+func invoicesDocTypeExecAsApp(tenant, sql string, args ...any) error {
+	ctx := context.Background()
+	return db.WithinTenantTx(ctx, h.app, tenant, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, sql, args...)
+		return err
+	})
+}
+
+// AC 1, 2, 3: the invariants hold on UPDATE and on an explicit NULL type, not only on INSERT.
+func TestRLS_InvoicesDocumentType_UpdateAndNullCannotBreakTheInvariants(t *testing.T) {
+	h := requireHarness(t)
+	requireInvoicesDocTypeColumns(t, h.super)
+	entityA, prefix := invoicesDocTypeFixture(t, h.tenantA)
+	entityB, prefixB := invoicesDocTypeFixture(t, h.tenantB)
+	origA1 := invoicesDocTypeOriginal(t, h.tenantA, entityA, prefix+"-o1")
+	origA2 := invoicesDocTypeOriginal(t, h.tenantA, entityA, prefix+"-o2")
+	origB := invoicesDocTypeOriginal(t, h.tenantB, entityB, prefixB+"-oB")
+	note := uuid.NewString()
+	execSetup(t, h.super,
+		`INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, document_type, original_invoice_id)
+		 VALUES ($1, $2, $3, $4, 'credit_note', $5)`, note, h.tenantA, entityA, prefix+"-note", origA1)
+
+	err := invoicesDocTypeExecAsApp(h.tenantA,
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, document_type) VALUES ($1, $2, $3, NULL)`,
+		h.tenantA, entityA, prefix+"-null")
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23502" || pgErr.ColumnName != "document_type" {
+		t.Errorf("INSERT with an explicit NULL document_type: %v, want SQLSTATE 23502 on document_type", err)
+	}
+
+	for _, c := range []struct {
+		what, sql, code, constraint string
+		arg                         any
+	}{
+		{"promote a plain invoice to credit_note", `UPDATE invoices SET document_type = 'credit_note' WHERE id = $1`, "23514", "invoices_original_matches_type", origA2},
+		{"clear a note's original", `UPDATE invoices SET original_invoice_id = NULL WHERE id = $1`, "23514", "invoices_original_matches_type", note},
+		{"turn a note into a commercial_invoice", `UPDATE invoices SET document_type = 'commercial_invoice' WHERE id = $1`, "23514", "invoices_original_matches_type", note},
+		{"retype a note to refund", `UPDATE invoices SET document_type = 'refund' WHERE id = $1`, "23514", "invoices_document_type_check", note},
+		{"repoint a note at a tenant-B original", `UPDATE invoices SET original_invoice_id = ` + "'" + origB + "'" + ` WHERE id = $1`, "23503", "invoices_original_invoice_fk", note},
+	} {
+		wantPgError(t, c.what, invoicesDocTypeExecAsApp(h.tenantA, c.sql, c.arg), c.code, c.constraint)
+	}
+	var kept, docType string
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT original_invoice_id::text, document_type FROM invoices WHERE id = $1`, note).Scan(&kept, &docType); err != nil {
+		t.Fatalf("read the note: %v", err)
+	}
+	if kept != origA1 || docType != "credit_note" {
+		t.Errorf("note after the refused updates = (%s, %s), want (credit_note, %s)", docType, kept, origA1)
+	}
+
+	if err := invoicesDocTypeExecAsApp(h.tenantA, `UPDATE invoices SET original_invoice_id = $2 WHERE id = $1`, note, origA2); err != nil {
+		t.Fatalf("control: repoint a note at another tenant-A original: %v", err)
+	}
+	// The original is only held by a note: deleting the note alone is allowed and keeps the original.
+	if _, err := h.super.Exec(context.Background(), `DELETE FROM invoices WHERE id = $1`, note); err != nil {
+		t.Fatalf("control: DELETE of a note alone: %v", err)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM invoices WHERE id = ANY($1)`, []string{origA1, origA2}); n != 2 {
+		t.Errorf("originals after deleting their note = %d, want 2", n)
+	}
+}

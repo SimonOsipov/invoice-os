@@ -229,6 +229,30 @@ describe('NoteForm', () => {
     }
   })
 
+  it('an unticked row with a bad value shows no error and a dash; a ticked leading-zero quantity is accepted', () => {
+    setup({ type: 'debit_note' })
+    fireEvent.change(screen.getAllByTestId('note-line-qty')[1], { target: { value: '1e999999999' } })
+    expect(screen.queryByTestId('note-line-error')).toBeNull()
+    expect(screen.getAllByTestId('note-line-amount')[1].textContent).toBe('—')
+    tick(0)
+    expect(screen.queryByTestId('note-line-error')).toBeNull()
+    expect(total()).toBe('21.50')
+    expect(submit().disabled).toBe(false)
+    fireEvent.change(screen.getAllByTestId('note-line-qty')[0], { target: { value: '002' } })
+    expect(screen.queryByTestId('note-line-error')).toBeNull()
+    expect(screen.getAllByTestId('note-line-amount')[0].textContent).toBe('20.00')
+    expect(submit().disabled).toBe(false)
+    tick(1)
+    expect(screen.getAllByTestId('note-line-error')).toHaveLength(1)
+    expect(total()).toBe('—')
+    expect(submit().disabled).toBe(true)
+    // A numeric but refused value (3 decimals) shows no figure on its row, ticked or not.
+    fireEvent.change(screen.getAllByTestId('note-line-price')[2], { target: { value: '10.123' } })
+    expect(screen.getAllByTestId('note-line-amount')[2].textContent).toBe('—')
+    tick(2)
+    expect(screen.getAllByTestId('note-line-amount')[2].textContent).toBe('—')
+  })
+
   it('a price with three decimals keeps Submit disabled', () => {
     setup({ type: 'debit_note' })
     tick(0)

@@ -172,3 +172,39 @@ func TestNoteAmounts_RefusesWhatTheColumnsCannotHold(t *testing.T) {
 		}
 	}
 }
+
+// Same rows as noteLineError "matches the route" in frontend/app/src/lib/notes.test.ts.
+func TestNoteQuantityAndUnitPrice_AcceptSetMatchesTheForm(t *testing.T) {
+	for _, c := range []struct {
+		field, value string
+		accepted     bool
+	}{
+		{"quantity", "1.2345", false}, {"quantity", "1.2340", true}, {"quantity", "+1", false},
+		{"quantity", ".5", false}, {"quantity", "1.", false}, {"quantity", "", false}, {"quantity", " 1", false},
+		{"quantity", "007", true}, {"quantity", "0", false}, {"quantity", "-1", false},
+		{"quantity", "99999999999.999", true}, {"quantity", "100000000000", false},
+		{"quantity", "1\n", false}, {"quantity", "1 ", false}, {"quantity", "\t1", false}, {"quantity", "１", false},
+		{"quantity", "00.5", true}, {"quantity", "-0", false}, {"quantity", "0.0004", false}, {"quantity", "0.001", true},
+		{"quantity", "99999999999.9990", true}, {"quantity", "99999999999.9999", false},
+		{"quantity", "100000000000.0", false}, {"quantity", "0099999999999", true},
+		{"quantity", "000100000000000", false}, {"quantity", "1.0000000000000000000000", true},
+		{"quantity", "--1", false}, {"quantity", "1_000", false}, {"quantity", "1,5", false}, {"quantity", "00", false},
+		{"quantity", "1e5", false},
+		{"unit_price", "10.123", false}, {"unit_price", "10.100", true}, {"unit_price", "+1", false},
+		{"unit_price", "0", true}, {"unit_price", "-0", true}, {"unit_price", "-0.01", false},
+		{"unit_price", "999999999999.99", true}, {"unit_price", "1000000000000", false},
+		{"unit_price", "-00", true}, {"unit_price", "0.0", true}, {"unit_price", "0.000", true},
+		{"unit_price", "0.001", false}, {"unit_price", "00.99", true}, {"unit_price", "1.", false},
+		{"unit_price", "1\n", false}, {"unit_price", "999999999999.990", true},
+		{"unit_price", "999999999999.999", false}, {"unit_price", "0001000000000000", false},
+	} {
+		fn := noteQuantity
+		if c.field == "unit_price" {
+			fn = noteUnitPrice
+		}
+		_, err := fn(c.value)
+		if (err == nil) != c.accepted {
+			t.Errorf("%s %q: err = %v, accepted want %v", c.field, c.value, err, c.accepted)
+		}
+	}
+}

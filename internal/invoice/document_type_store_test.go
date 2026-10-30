@@ -1,0 +1,316 @@
+package invoice
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
+)
+
+func dtCtx(tenant string) context.Context {
+	return auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenant})
+}
+
+// dtRow reads the stored columns as the superuser, so only the row is under test.
+func dtRow(t *testing.T, super *pgxpool.Pool, id string) (docType string, original *string) {
+	t.Helper()
+	if err := super.QueryRow(context.Background(),
+		`SELECT document_type, original_invoice_id::text FROM invoices WHERE id = $1`, id,
+	).Scan(&docType, &original); err != nil {
+		t.Fatalf("read invoice %s: %v", id, err)
+	}
+	return docType, original
+}
+
+// dtNothingWritten requires zero invoices, history rows and invoice.created audit rows in the tenant.
+func dtNothingWritten(t *testing.T, super, app *pgxpool.Pool, tenant string) {
+	t.Helper()
+	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenant); n != 0 {
+		t.Errorf("invoices written = %d, want 0", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE tenant_id = $1`, tenant); n != 0 {
+		t.Errorf("history rows written = %d, want 0", n)
+	}
+	if n := auditCount(t, app, tenant, "invoice.created"); n != 0 {
+		t.Errorf("invoice.created audit rows = %d, want 0", n)
+	}
+}
+
+// dtWantRefusal requires err to be want and none of the other two original sentinels.
+func dtWantRefusal(t *testing.T, err, want error) {
+	t.Helper()
+	for _, s := range []error{ErrOriginalNotFound, ErrOriginalIsANote, ErrOriginalOtherEntity} {
+		if errors.Is(err, s) != (s == want) {
+			t.Errorf("err = %v; errors.Is(err, %v) = %t, want %t", err, s, errors.Is(err, s), s == want)
+		}
+	}
+}
+
+func dtNote(entity, number string, typ submission.DocumentType, original *string) CreateInput {
+	return CreateInput{EntityID: entity, InvoiceNumber: number, DocumentType: typ, OriginalInvoiceID: original}
+}
+
+func TestStoreCreate_DefaultsToACommercialInvoice(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "DT default")
+	ent := seedEntity(t, super, tenant, "E1")
+
+	inv, err := NewStore(app).Create(dtCtx(tenant), CreateInput{EntityID: ent, InvoiceNumber: "DT-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if inv.DocumentType != submission.CommercialInvoice {
+		t.Errorf("returned DocumentType = %q, want %q", inv.DocumentType, submission.CommercialInvoice)
+	}
+	if inv.OriginalInvoiceID != nil {
+		t.Errorf("returned OriginalInvoiceID = %q, want nil", *inv.OriginalInvoiceID)
+	}
+	typ, orig := dtRow(t, super, inv.ID)
+	if typ != "commercial_invoice" || orig != nil {
+		t.Errorf("row = (%q, %v), want (commercial_invoice, nil)", typ, orig)
+	}
+}
+
+func TestStoreCreate_StoresANoteAgainstItsOriginal(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "DT note")
+	ent := seedEntity(t, super, tenant, "E1")
+	original := seedInvoice(t, super, tenant, ent, "DT-ORIG")
+	store := NewStore(app)
+
+	for _, typ := range []submission.DocumentType{submission.CreditNote, submission.DebitNote} {
+		t.Run(string(typ), func(t *testing.T) {
+			inv, err := store.Create(dtCtx(tenant), dtNote(ent, "DT-"+string(typ), typ, &original))
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			if inv.DocumentType != typ || inv.OriginalInvoiceID == nil || *inv.OriginalInvoiceID != original {
+				t.Errorf("returned = (%q, %v), want (%q, %s)", inv.DocumentType, inv.OriginalInvoiceID, typ, original)
+			}
+			gotType, gotOrig := dtRow(t, super, inv.ID)
+			if gotType != string(typ) || gotOrig == nil || *gotOrig != original {
+				t.Errorf("row = (%q, %v), want (%q, %s)", gotType, gotOrig, typ, original)
+			}
+		})
+	}
+}
+
+func TestStoreCreate_RefusesAnOriginalInAnotherTenant(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantA := seedTenant(t, super, "DT tenant A")
+	entA := seedEntity(t, super, tenantA, "A1")
+	tenantB := seedTenant(t, super, "DT tenant B")
+	entB := seedEntity(t, super, tenantB, "B1")
+	original := seedInvoice(t, super, tenantB, entB, "DT-B-ORIG")
+	store := NewStore(app)
+
+	_, err := store.Create(dtCtx(tenantA), dtNote(entA, "DT-A-NOTE", submission.CreditNote, &original))
+	if !errors.Is(err, ErrOriginalNotFound) {
+		t.Fatalf("Create in tenant A naming tenant B's invoice: err = %v, want ErrOriginalNotFound", err)
+	}
+	dtWantRefusal(t, err, ErrOriginalNotFound)
+	dtNothingWritten(t, super, app, tenantA)
+
+	// The original is real: tenant B names it without trouble, so tenancy refused A.
+	inv, err := store.Create(dtCtx(tenantB), dtNote(entB, "DT-B-NOTE", submission.CreditNote, &original))
+	if err != nil {
+		t.Fatalf("Create in tenant B naming its own invoice: %v", err)
+	}
+	if inv.DocumentType != submission.CreditNote {
+		t.Errorf("tenant B note DocumentType = %q, want credit_note", inv.DocumentType)
+	}
+}
+
+func TestStoreCreate_RefusesAnOriginalInAnotherEntity(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "DT other entity")
+	e1 := seedEntity(t, super, tenant, "E1")
+	e2 := seedEntity(t, super, tenant, "E2")
+	original := seedInvoice(t, super, tenant, e1, "DT-E1")
+	store := NewStore(app)
+
+	_, err := store.Create(dtCtx(tenant), dtNote(e2, "DT-E2-NOTE", submission.CreditNote, &original))
+	if !errors.Is(err, ErrOriginalOtherEntity) {
+		t.Fatalf("Create in E2 naming E1's invoice: err = %v, want ErrOriginalOtherEntity", err)
+	}
+	dtWantRefusal(t, err, ErrOriginalOtherEntity)
+	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1 AND entity_id = $2`, tenant, e2); n != 0 {
+		t.Errorf("invoices written in E2 = %d, want 0", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE tenant_id = $1`, tenant); n != 0 {
+		t.Errorf("history rows = %d, want 0 (the seeded original has none)", n)
+	}
+	if n := auditCount(t, app, tenant, "invoice.created"); n != 0 {
+		t.Errorf("invoice.created audit rows = %d, want 0", n)
+	}
+
+	// Same entity as the original: accepted.
+	if _, err := store.Create(dtCtx(tenant), dtNote(e1, "DT-E1-NOTE", submission.CreditNote, &original)); err != nil {
+		t.Errorf("Create in E1 naming E1's invoice: %v", err)
+	}
+}
+
+func TestStoreCreate_RefusesANoteAsTheOriginal(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "DT note original")
+	ent := seedEntity(t, super, tenant, "E1")
+	original := seedInvoice(t, super, tenant, ent, "DT-ORIG")
+	store := NewStore(app)
+
+	credit, err := store.Create(dtCtx(tenant), dtNote(ent, "DT-CN", submission.CreditNote, &original))
+	if err != nil {
+		t.Fatalf("Create credit note on the original: %v", err)
+	}
+	_, err = store.Create(dtCtx(tenant), dtNote(ent, "DT-DN", submission.DebitNote, &credit.ID))
+	if !errors.Is(err, ErrOriginalIsANote) {
+		t.Fatalf("Create a debit note naming a credit note: err = %v, want ErrOriginalIsANote", err)
+	}
+	dtWantRefusal(t, err, ErrOriginalIsANote)
+	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1 AND invoice_number = 'DT-DN'`, tenant); n != 0 {
+		t.Errorf("debit note rows = %d, want 0", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history h JOIN invoices i ON i.id = h.invoice_id WHERE i.invoice_number = 'DT-DN' AND i.tenant_id = $1`, tenant); n != 0 {
+		t.Errorf("debit note history rows = %d, want 0", n)
+	}
+	if n := auditCount(t, app, tenant, "invoice.created"); n != 1 {
+		t.Errorf("invoice.created audit rows = %d, want 1 (the credit note only)", n)
+	}
+}
+
+func TestStoreCreate_RefusesAnAbsentOriginal(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "DT absent")
+	ent := seedEntity(t, super, tenant, "E1")
+	absent := uuid.NewString()
+
+	_, err := NewStore(app).Create(dtCtx(tenant), dtNote(ent, "DT-ABS", submission.CreditNote, &absent))
+	if !errors.Is(err, ErrOriginalNotFound) {
+		t.Fatalf("Create naming a random uuid: err = %v, want ErrOriginalNotFound", err)
+	}
+	dtWantRefusal(t, err, ErrOriginalNotFound)
+	dtNothingWritten(t, super, app, tenant)
+}
+
+func TestStoreCreate_RefusesAMismatchedTypeAndOriginalBeforeTheTx(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "DT mismatch")
+	ent := seedEntity(t, super, tenant, "E1")
+	original := seedInvoice(t, super, tenant, ent, "DT-ORIG")
+
+	// A closed pool cannot open a transaction: only a refusal before the tx returns ErrValidation.
+	closed, err := pgxpool.New(context.Background(), os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("open pool: %v", err)
+	}
+	closed.Close()
+
+	cases := []struct {
+		name string
+		typ  submission.DocumentType
+		orig *string
+	}{
+		{"unknown type with an original", "refund", &original},
+		{"credit note without an original", submission.CreditNote, nil},
+		{"debit note without an original", submission.DebitNote, nil},
+		{"commercial invoice with an original", submission.CommercialInvoice, &original},
+		{"empty type with an original", "", &original},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			in := dtNote(ent, fmt.Sprintf("DT-BAD-%d", i), c.typ, c.orig)
+			if _, err := NewStore(app).Create(dtCtx(tenant), in); !errors.Is(err, ErrValidation) {
+				t.Errorf("Create: err = %v, want ErrValidation", err)
+			}
+			if _, err := NewStore(closed).Create(dtCtx(tenant), in); !errors.Is(err, ErrValidation) {
+				t.Errorf("Create on a closed pool: err = %v, want ErrValidation before any transaction", err)
+			}
+		})
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1 AND invoice_number LIKE 'DT-BAD-%'`, tenant); n != 0 {
+		t.Errorf("rows written = %d, want 0", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, tenant); n != 1 {
+		t.Errorf("tenant invoices = %d, want 1 (the seeded original)", n)
+	}
+}
+
+func TestStoreGet_ReadsTheTypeAndTheOriginal(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "DT get")
+	ent := seedEntity(t, super, tenant, "E1")
+	original := seedInvoice(t, super, tenant, ent, "DT-ORIG")
+	var noteID string
+	if err := super.QueryRow(context.Background(),
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, document_type, original_invoice_id)
+		 VALUES ($1, $2, 'DT-CN', 'credit_note', $3) RETURNING id`, tenant, ent, original).Scan(&noteID); err != nil {
+		t.Fatalf("seed credit note: %v", err)
+	}
+	store := NewStore(app)
+
+	note, err := store.Get(dtCtx(tenant), noteID)
+	if err != nil {
+		t.Fatalf("Get note: %v", err)
+	}
+	if note.DocumentType != submission.CreditNote || note.OriginalInvoiceID == nil || *note.OriginalInvoiceID != original {
+		t.Errorf("note = (%q, %v), want (credit_note, %s)", note.DocumentType, note.OriginalInvoiceID, original)
+	}
+	plain, err := store.Get(dtCtx(tenant), original)
+	if err != nil {
+		t.Fatalf("Get original: %v", err)
+	}
+	if plain.DocumentType != submission.CommercialInvoice || plain.OriginalInvoiceID != nil {
+		t.Errorf("original = (%q, %v), want (commercial_invoice, nil)", plain.DocumentType, plain.OriginalInvoiceID)
+	}
+}
+
+func TestStoreCreate_RefusesAnOriginalOutsideTheMembersClients(t *testing.T) {
+	f := newCSFixture(t, "DT scope")
+	before := mustCount(t, f.super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, f.tenant)
+	in := dtNote(f.entA, "DT-SCOPE", submission.CreditNote, &f.invB)
+
+	_, err := f.store.Create(f.limited, in)
+	if !errors.Is(err, ErrOriginalNotFound) {
+		t.Fatalf("limited member naming a client-B invoice: err = %v, want ErrOriginalNotFound", err)
+	}
+	dtWantRefusal(t, err, ErrOriginalNotFound)
+	if n := mustCount(t, f.super, `SELECT count(*) FROM invoices WHERE tenant_id = $1`, f.tenant); n != before {
+		t.Errorf("tenant invoices = %d, want %d", n, before)
+	}
+
+	// Control: the admin sees invB, so the entity rule answers, not the scope.
+	_, err = f.store.Create(f.admin, in)
+	if !errors.Is(err, ErrOriginalOtherEntity) {
+		t.Fatalf("admin naming the same invoice: err = %v, want ErrOriginalOtherEntity", err)
+	}
+	dtWantRefusal(t, err, ErrOriginalOtherEntity)
+
+	// An original inside the member's client is accepted.
+	inv, err := f.store.Create(f.limited, dtNote(f.entA, "DT-SCOPE-OK", submission.CreditNote, &f.invA))
+	if err != nil {
+		t.Fatalf("limited member naming a client-A invoice: %v", err)
+	}
+	if inv.DocumentType != submission.CreditNote {
+		t.Errorf("DocumentType = %q, want credit_note", inv.DocumentType)
+	}
+}
+
+func TestStoreCreate_MalformedOriginalIsValidation(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "DT malformed")
+	ent := seedEntity(t, super, tenant, "E1")
+	bad := "not-a-uuid"
+
+	_, err := NewStore(app).Create(dtCtx(tenant), dtNote(ent, "DT-MAL", submission.CreditNote, &bad))
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create naming %q: err = %v, want ErrValidation", bad, err)
+	}
+	dtWantRefusal(t, err, nil)
+	dtNothingWritten(t, super, app, tenant)
+}

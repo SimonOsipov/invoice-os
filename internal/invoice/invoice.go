@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 // Status is one of the seven canonical invoice lifecycle states, matching the
@@ -153,6 +155,10 @@ type Invoice struct {
 	BuyerCountry       *string    `json:"buyer_country"`
 	BuyerState         *string    `json:"buyer_state"`
 	BuyerLGA           *string    `json:"buyer_lga"`
+
+	// Compile stub: the real JSON tags land with the implementation.
+	DocumentType      submission.DocumentType `json:"-"`
+	OriginalInvoiceID *string                 `json:"-"`
 
 	LineItems []LineItem `json:"line_items,omitempty"`
 
@@ -312,6 +318,8 @@ type CreateInput struct {
 	BuyerCountry       *string
 	BuyerState         *string
 	BuyerLGA           *string
+	DocumentType       submission.DocumentType
+	OriginalInvoiceID  *string
 	LineItems          []LineItemInput
 	ImportBatchID      *string
 	// SourceDocumentID points at the documents row an import read this invoice
@@ -489,6 +497,9 @@ type ListFilter struct {
 var (
 	ErrValidation          = errors.New("invoice: validation")
 	ErrNotFound            = errors.New("invoice: not found")
+	ErrOriginalNotFound    = errors.New("invoice: original not found")
+	ErrOriginalIsANote     = errors.New("invoice: original is a note")
+	ErrOriginalOtherEntity = errors.New("invoice: original in another entity")
 	ErrDuplicateNumber     = errors.New("invoice: duplicate number")
 	ErrRedundantTransition = errors.New("invoice: redundant transition")
 	ErrIllegalTransition   = errors.New("invoice: illegal transition")

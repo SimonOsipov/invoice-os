@@ -31,6 +31,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 // fullFingerprintFixture is a base Invoice with all ten content columns set
@@ -784,7 +786,7 @@ func TestContentFingerprint_EveryNonContentFieldIsNamedAndIgnored(t *testing.T) 
 			f.Set(reflect.ValueOf(time.Date(2040, 1, 1, 0, 0, 0, 0, time.UTC)))
 		case reflect.TypeOf(json.RawMessage(nil)):
 			f.SetBytes([]byte(`[{"zz":1}]`))
-		case reflect.TypeOf(Status("")):
+		case reflect.TypeOf(Status("")), reflect.TypeOf(submission.DocumentType("")):
 			f.SetString("zz")
 		case reflect.TypeOf(""):
 			f.SetString("zz")

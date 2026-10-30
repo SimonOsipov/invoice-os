@@ -68,6 +68,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 	"github.com/SimonOsipov/invoice-os/internal/ubl"
 )
 
@@ -2542,6 +2543,33 @@ func TestGetHandler_RuleSetVersionMarshalsNull(t *testing.T) {
 		t.Errorf("body = %s, want it to contain the literal \"rule_set_version\":null (explicit null, not "+
 			"omitted, not a false 0) -- GetHandler must wrap the result in a getResponse sibling like "+
 			"validateResponse", body)
+	}
+}
+
+func TestGetHandler_CarriesDocumentTypeAndOriginalInvoiceID(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	originalID := uuid.NewString()
+	for _, c := range []struct {
+		name string
+		inv  Invoice
+		want string
+	}{
+		{"commercial invoice", Invoice{ID: invoiceID, Status: StatusDraft, DocumentType: submission.CommercialInvoice},
+			`"document_type":"commercial_invoice","original_invoice_id":null`},
+		{"credit note", Invoice{ID: invoiceID, Status: StatusDraft, DocumentType: submission.CreditNote, OriginalInvoiceID: &originalID},
+			`"document_type":"credit_note","original_invoice_id":"` + originalID + `"`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			get := func(ctx context.Context, gotID string) (Invoice, error) { return c.inv, nil }
+			rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), c.want) {
+				t.Errorf("body does not contain %s", c.want)
+			}
+		})
 	}
 }
 

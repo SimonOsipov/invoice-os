@@ -236,6 +236,21 @@ describe('CustomersView: the record list', () => {
     expect(cells(rows()[0]).slice(3, 5)).toEqual(['3', '₦806'])
   })
 
+  it('customersView_netNegativeBuyerShowsItsNegativeTotal', async () => {
+    mockApi({
+      customers: () => recordsPage([record()]),
+      invoices: () =>
+        invoicesPage([
+          row({ id: 'inv', buyer_tin: '20000000-0001', total: '500.00' }),
+          row({ id: 'cn', buyer_tin: '20000000-0001', total: '700.00', document_type: 'credit_note' }),
+        ]),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+
+    expect(cells(rows()[0]).slice(3, 5)).toEqual(['2', '-₦200'])
+  })
+
   it('CU-14 a record with no invoice shows 0 and a zero total', async () => {
     mockApi({
       customers: () => recordsPage([record()]),

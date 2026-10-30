@@ -1433,4 +1433,24 @@ describe('ReportsView: totals count a note with its sign (CRDDBTNOTE-04-03)', ()
 
     expect(topCustomerRows(c)).toEqual([{ total: '-₦300', width: '0%' }])
   })
+
+  it('topCustomers_aZeroNetBuyerHasAZeroBarNotNaN', async () => {
+    const c = await renderKpis([
+      row({ id: 'inv', buyer_name: 'Wash Buyer', total: '500.00' }),
+      row({ id: 'cn', buyer_name: 'Wash Buyer', total: '500.00', document_type: 'credit_note' }),
+    ])
+
+    expect(topCustomerRows(c)).toEqual([{ total: '₦0', width: '0%' }])
+  })
+
+  it('topCustomers_negativeBuyersRankLeastNegativeFirstBehindAPositive', async () => {
+    const c = await renderKpis([
+      row({ id: 'p', buyer_tin: '10000000-0001', buyer_name: 'Pos', total: '100.00' }),
+      row({ id: 'n1', buyer_tin: '20000000-0002', buyer_name: 'Deep', total: '900.00', document_type: 'credit_note' }),
+      row({ id: 'n2', buyer_tin: '30000000-0003', buyer_name: 'Shallow', total: '50.00', document_type: 'credit_note' }),
+    ])
+
+    expect(topCustomerNames(c)).toEqual(['Pos', 'Shallow', 'Deep'])
+    expect(topCustomerRows(c).map((r) => r.width)).toEqual(['100%', '0%', '0%'])
+  })
 })

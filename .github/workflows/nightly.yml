@@ -1,6 +1,6 @@
 name: Nightly
 
-# Dispatches ci.yml in full mode and dev-env.yml (the nightly preview + E2E), sums their results into the nightly-summary artifact and opens no issue.
+# Dispatches ci.yml in full mode and dev-env.yml (the nightly preview + E2E), checks production, sums the results into the nightly-summary artifact and opens no issue.
 # The schedule runs from main only; main-only fails a dispatch from any other ref.
 on:
   schedule:
@@ -22,9 +22,63 @@ jobs:
     steps:
       - run: '[ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::Nightly runs on main only, not on $GITHUB_REF"; exit 1; }'
 
+  prod-check:
+    name: Production check
+    needs: main-only
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT: ascomply-prod
+      REGION: africa-south1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: google-github-actions/auth@v3
+        continue-on-error: true
+        with:
+          workload_identity_provider: projects/428987361227/locations/global/workloadIdentityPools/github/providers/github-actions
+          service_account: deploy-prod@ascomply-prod.iam.gserviceaccount.com
+      - name: Read the gateway token and the auth image
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          token=$(gcloud secrets versions access latest --secret gateway-token --project "$PROJECT")
+          echo "::add-mask::$token"
+          echo "PROD_GATEWAY_TOKEN=$token" >>"$GITHUB_ENV"
+          image=$(gcloud run services describe auth --project "$PROJECT" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')
+          echo "AUTH_BUILD=${image##*:}" >>"$GITHUB_ENV"
+      - name: Resolve main
+        id: main
+        continue-on-error: true
+        run: bash scripts/ci/nightly-prod-sha.sh
+      - name: Check production
+        env:
+          HEAD: ${{ steps.main.outputs.head }}
+          EXPECTED: ${{ steps.main.outputs.expected }}
+          PROD_PROBE_EMAIL: ${{ secrets.PROD_PROBE_EMAIL }}
+          PROD_PROBE_PASSWORD: ${{ secrets.PROD_PROBE_PASSWORD }}
+        run: go run ./internal/tools/prodcheck -head "$HEAD" -expected "$EXPECTED" -auth-build "${AUTH_BUILD:-}" -out "$RUNNER_TEMP/prod_check.json"
+      - name: Upload prod-check
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: prod-check
+          path: ${{ runner.temp }}/prod_check.json
+          if-no-files-found: warn
+          retention-days: 14
+
   summary:
     name: Nightly summary
-    needs: main-only
+    needs: [main-only, prod-check]
+    if: ${{ !cancelled() && needs.main-only.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 270
     permissions:
@@ -63,6 +117,13 @@ jobs:
           fi
           for run in "${runs[@]}"; do gh api --paginate "repos/$REPO/actions/runs/$run/jobs" --jq '.jobs[]'; done | jq -s . > "$RUNNER_TEMP/jobs.json"
           echo "sha=$(gh run view "$CI_RUN_ID" -R "$REPO" --json headSha --jq .headSha)" >> "$GITHUB_OUTPUT"
+      - name: Download the prod check
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: prod-check
+          path: ${{ runner.temp }}/prod-check
       - name: Write summary.json
         if: always()
         env:
@@ -72,7 +133,7 @@ jobs:
           [ -f "$RUNNER_TEMP/jobs.json" ] || echo '[]' > "$RUNNER_TEMP/jobs.json"
           { cat scripts/ci/nightly-e2e-suites.txt; node e2e/topology/shards.ts | jq -r '.[] | "topology-\(.)=E2E topology (\(.))=results"'; } > "$RUNNER_TEMP/e2e-suites.txt"
           started=$(gh api "repos/$REPO/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
-          go run ./internal/tools/nightlysummary -suites scripts/ci/nightly-suites.txt -e2e-suites "$RUNNER_TEMP/e2e-suites.txt" -jobs "$RUNNER_TEMP/jobs.json" -results "$RUNNER_TEMP/results" -run-id "$GITHUB_RUN_ID" -sha "${CI_SHA:-$GITHUB_SHA}" -started "$started" -workspace "$GITHUB_WORKSPACE" -section email="$RUNNER_TEMP/results/results-email/email.json" -out "$RUNNER_TEMP/summary.json"
+          go run ./internal/tools/nightlysummary -suites scripts/ci/nightly-suites.txt -e2e-suites "$RUNNER_TEMP/e2e-suites.txt" -jobs "$RUNNER_TEMP/jobs.json" -results "$RUNNER_TEMP/results" -run-id "$GITHUB_RUN_ID" -sha "${CI_SHA:-$GITHUB_SHA}" -started "$started" -workspace "$GITHUB_WORKSPACE" -section email="$RUNNER_TEMP/results/results-email/email.json" -section prod_check="$RUNNER_TEMP/prod-check/prod_check.json" -out "$RUNNER_TEMP/summary.json"
       - name: Upload nightly-summary
         if: always()
         uses: actions/upload-artifact@v7

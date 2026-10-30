@@ -191,6 +191,9 @@ func TestRegister_HeaderRowIsTheInvoicesCSVHeader(t *testing.T) {
 	if len(rows) != 1 || !reflect.DeepEqual(rows[0], invoicesCSVHeader) {
 		t.Errorf("rows = %v, want the header row alone equal to invoicesCSVHeader", rows)
 	}
+	if n := len(rows[0]); rows[0][n-2] != "document_type" || rows[0][n-1] != "original_invoice_number" {
+		t.Errorf("header ends %v, want document_type, original_invoice_number", rows[0][n-2:])
+	}
 }
 
 func TestRegister_RowCellsEqualTheBundleCSVCells(t *testing.T) {
@@ -211,6 +214,11 @@ func TestRegister_RowCellsEqualTheBundleCSVCells(t *testing.T) {
 		t.Fatalf("fill nullable columns: %v", err)
 	}
 	mustCreateInvoice(t, g.tx, invoiceFixture{tenantID: g.tenant, entityID: g.entity, invoiceNumber: "INV-NULLS", status: "validated", issueDate: "2026-09-11", createdAt: time.Date(2026, 9, 11, 8, 0, 0, 0, time.UTC)})
+	credit := mustCreateInvoice(t, g.tx, invoiceFixture{tenantID: g.tenant, entityID: g.entity, invoiceNumber: "CN-FULL", status: "accepted", issueDate: "2026-09-12", createdAt: time.Date(2026, 9, 12, 8, 0, 0, 0, time.UTC)})
+	if _, err := g.tx.Exec(context.Background(),
+		`UPDATE invoices SET document_type='credit_note', original_invoice_id=$2, subtotal=300.00, vat=22.50, total=322.50 WHERE id=$1`, credit, full); err != nil {
+		t.Fatalf("make the credit note: %v", err)
+	}
 	g.act(t)
 
 	var buf bytes.Buffer
@@ -225,8 +233,8 @@ func TestRegister_RowCellsEqualTheBundleCSVCells(t *testing.T) {
 		t.Fatalf("parse csv: %v", err)
 	}
 	regRows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
-	if len(csvRows) != 3 || len(regRows) != 3 {
-		t.Fatalf("csv rows %d, register rows %d, want 3 each", len(csvRows), len(regRows))
+	if len(csvRows) != 4 || len(regRows) != 4 {
+		t.Fatalf("csv rows %d, register rows %d, want 4 each", len(csvRows), len(regRows))
 	}
 	byID := map[string][]string{}
 	for _, r := range csvRows[1:] {
@@ -236,6 +244,9 @@ func TestRegister_RowCellsEqualTheBundleCSVCells(t *testing.T) {
 		if want := byID[r[0]]; !reflect.DeepEqual(r, want) {
 			t.Errorf("register row %v != csv row %v", r, want)
 		}
+	}
+	if r := byID[credit]; r[headerIndex(t, "document_type")] != "credit_note" || r[headerIndex(t, "original_invoice_number")] != "INV-FULL" {
+		t.Errorf("credit note cells = %v, want credit_note and INV-FULL", r)
 	}
 }
 

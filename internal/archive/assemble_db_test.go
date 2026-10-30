@@ -166,6 +166,11 @@ func TestAssemble_EmptyPeriodProducesHeaderOnlyCSVs(t *testing.T) {
 		if len(rows) != 1 {
 			t.Errorf("%s has %d rows, want 1 (header only)", name, len(rows))
 		}
+		if name == "invoices.csv" && len(rows) == 1 {
+			if n := len(rows[0]); n < 2 || rows[0][n-2] != "document_type" || rows[0][n-1] != "original_invoice_number" {
+				t.Errorf("invoices.csv header ends %v, want document_type, original_invoice_number", rows[0])
+			}
+		}
 	}
 	if len(zr.File) < 2 || zr.File[0].Name != "invoices.csv" || zr.File[1].Name != "line_items.csv" {
 		t.Errorf("entries = %v, want line_items.csv directly after invoices.csv", entryNames(zr))

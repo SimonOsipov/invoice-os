@@ -18,6 +18,7 @@ const HEADER = [
   'supplier_postal_zone', 'supplier_country', 'supplier_state', 'supplier_lga',
   'buyer_email', 'buyer_telephone', 'buyer_street', 'buyer_city',
   'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga',
+  'document_type', 'original_invoice_number',
 ]
 
 // internal/archive/register.go xlsxContentType.
@@ -117,7 +118,7 @@ test.describe('invoice register (API E2E, over the deployed gateway)', () => {
     expect(() => unzipSync(bytes), 'the body must open as a ZIP').not.toThrow()
   })
 
-  test('the register lists the in-period, non-draft invoices under the 39-column header', async () => {
+  test('the register lists the in-period, non-draft invoices under the 41-column header', async () => {
     const { bytes } = await download()
     const [header, ...rows] = sheetRows(bytes)
     expect(header, 'header row').toEqual(HEADER)

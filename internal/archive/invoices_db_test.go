@@ -728,14 +728,120 @@ func TestInvoicesCSVHeader_AppendsTheNRSColumns(t *testing.T) {
 		"subtotal", "vat", "total", "supplier_tin", "supplier_name", "buyer_tin", "buyer_name",
 		"irn", "csid", "qr_payload", "rejection_reasons", "created_at",
 	}
-	if len(invoicesCSVHeader) != 39 {
-		t.Fatalf("invoicesCSVHeader has %d columns, want 39", len(invoicesCSVHeader))
+	if len(invoicesCSVHeader) != 41 {
+		t.Fatalf("invoicesCSVHeader has %d columns, want 41", len(invoicesCSVHeader))
 	}
 	if !reflect.DeepEqual(invoicesCSVHeader[:17], legacy) {
 		t.Errorf("invoicesCSVHeader[:17] = %v, want %v", invoicesCSVHeader[:17], legacy)
 	}
-	if !reflect.DeepEqual(invoicesCSVHeader[17:], nrsInvoiceColumns) {
-		t.Errorf("invoicesCSVHeader[17:] = %v, want %v", invoicesCSVHeader[17:], nrsInvoiceColumns)
+	if !reflect.DeepEqual(invoicesCSVHeader[17:39], nrsInvoiceColumns) {
+		t.Errorf("invoicesCSVHeader[17:39] = %v, want %v", invoicesCSVHeader[17:39], nrsInvoiceColumns)
+	}
+	if want := []string{"document_type", "original_invoice_number"}; !reflect.DeepEqual(invoicesCSVHeader[39:], want) {
+		t.Errorf("invoicesCSVHeader[39:] = %v, want %v", invoicesCSVHeader[39:], want)
+	}
+}
+
+// noteFixture seeds an invoice and a credit and a debit note on it, as the superuser.
+// originalAt places the original inside or outside the period.
+func noteFixture(t *testing.T, tx pgx.Tx, tenant, entity string, originalAt time.Time) (orig, credit, debit string) {
+	t.Helper()
+	noteAt := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
+	orig = mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-ORIG", status: "accepted", createdAt: originalAt})
+	credit = mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "CN-1", status: "accepted", createdAt: noteAt})
+	debit = mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "DN-1", status: "accepted", createdAt: noteAt.Add(time.Minute)})
+	for _, q := range []struct{ id, typ string }{{credit, "credit_note"}, {debit, "debit_note"}} {
+		if _, err := tx.Exec(context.Background(),
+			`UPDATE invoices SET document_type = $2, original_invoice_id = $3, subtotal = 300.00, vat = 22.50, total = 322.50 WHERE id = $1`,
+			q.id, q.typ, orig); err != nil {
+			t.Fatalf("make %s a %s: %v", q.id, q.typ, err)
+		}
+	}
+	return orig, credit, debit
+}
+
+func selectInvoiceCSV(t *testing.T, tx pgx.Tx, entity string, from, to time.Time) [][]string {
+	t.Helper()
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	if _, err := selectInvoices(context.Background(), tx, Request{EntityID: entity, From: from, To: to}, w); err != nil {
+		t.Fatalf("selectInvoices: %v", err)
+	}
+	w.Flush()
+	rows, err := csv.NewReader(&buf).ReadAll()
+	if err != nil {
+		t.Fatalf("parse csv: %v", err)
+	}
+	return rows
+}
+
+func TestSelectInvoices_ExportsTheTypeAndTheOriginalNumber(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-invoices-notes")
+	entity := mustCreateEntity(t, tx, tenant, "Notes Co", "80000009-0001")
+	orig, credit, debit := noteFixture(t, tx, tenant, entity, time.Date(2026, 9, 9, 8, 0, 0, 0, time.UTC))
+	actingAs(t, tx, tenant)
+
+	rows := selectInvoiceCSV(t, tx, entity, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC))
+	typ, orn := headerIndex(t, "document_type"), headerIndex(t, "original_invoice_number")
+	want := map[string][2]string{orig: {"commercial_invoice", ""}, credit: {"credit_note", "INV-ORIG"}, debit: {"debit_note", "INV-ORIG"}}
+	if len(rows) != 4 {
+		t.Fatalf("rows = %d, want 4 (header + 3)", len(rows))
+	}
+	for _, r := range rows[1:] {
+		if got := [2]string{r[typ], r[orn]}; got != want[r[0]] {
+			t.Errorf("invoice %s: type and original = %v, want %v", r[0], got, want[r[0]])
+		}
+	}
+}
+
+func TestSelectInvoices_OriginalOutsideThePeriodStillNames(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-invoices-note-outside")
+	entity := mustCreateEntity(t, tx, tenant, "Outside Co", "80000009-0002")
+	orig, credit, _ := noteFixture(t, tx, tenant, entity, time.Date(2026, 8, 1, 8, 0, 0, 0, time.UTC))
+	actingAs(t, tx, tenant)
+
+	rows := selectInvoiceCSV(t, tx, entity, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC))
+	var sawCredit bool
+	for _, r := range rows[1:] {
+		if r[0] == orig {
+			t.Errorf("original %s is a row, want it outside the period", orig)
+		}
+		if r[0] == credit {
+			sawCredit = true
+			if got := r[headerIndex(t, "original_invoice_number")]; got != "INV-ORIG" {
+				t.Errorf("credit note original = %q, want INV-ORIG", got)
+			}
+		}
+	}
+	if !sawCredit {
+		t.Errorf("credit note %s is not a row", credit)
+	}
+}
+
+func TestSelectInvoices_NoteKeepsStoredPositiveAmounts(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-invoices-note-amounts")
+	entity := mustCreateEntity(t, tx, tenant, "Amounts Co", "80000009-0003")
+	_, credit, _ := noteFixture(t, tx, tenant, entity, time.Date(2026, 9, 9, 8, 0, 0, 0, time.UTC))
+	actingAs(t, tx, tenant)
+
+	rows := selectInvoiceCSV(t, tx, entity, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC))
+	if len(rows) != 4 {
+		t.Fatalf("rows = %d, want 4 (header + 3, no footer)", len(rows))
+	}
+	for _, r := range rows[1:] {
+		if r[0] != credit {
+			continue
+		}
+		got := [3]string{r[headerIndex(t, "subtotal")], r[headerIndex(t, "vat")], r[headerIndex(t, "total")]}
+		if want := [3]string{"300.00", "22.50", "322.50"}; got != want {
+			t.Errorf("credit note amounts = %v, want %v", got, want)
+		}
 	}
 }
 
@@ -801,8 +907,8 @@ func TestSelectInvoices_NullNRSFieldsWriteEmptyCells(t *testing.T) {
 	}
 	w.Flush()
 	record := findCSVRow(t, buf.Bytes(), invID)
-	if len(record) != 39 {
-		t.Fatalf("row length = %d, want 39", len(record))
+	if len(record) != len(invoicesCSVHeader) {
+		t.Fatalf("row length = %d, want %d", len(record), len(invoicesCSVHeader))
 	}
 	for _, col := range nrsInvoiceColumns {
 		if got := record[headerIndex(t, col)]; got != "" {

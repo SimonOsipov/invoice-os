@@ -16,9 +16,10 @@ type csvWriter interface {
 	Write(record []string) error
 }
 
-// invoicesCSVHeader: the 39 invoices.csv columns (D-3 keeps issue_date for a
+// invoicesCSVHeader: the 41 invoices.csv columns (D-3 keeps issue_date for a
 // regulator to re-filter by; D-8 governs the three fiscal-outcome columns). The
-// first 17 keep their positions; the 22 NRS header and party columns follow.
+// first 17 keep their positions; the 22 NRS columns, document_type and
+// original_invoice_number follow.
 var invoicesCSVHeader = []string{
 	"invoice_id", "invoice_number", "status", "issue_date", "currency",
 	"subtotal", "vat", "total", "supplier_tin", "supplier_name", "buyer_tin", "buyer_name",
@@ -28,6 +29,7 @@ var invoicesCSVHeader = []string{
 	"supplier_postal_zone", "supplier_country", "supplier_state", "supplier_lga",
 	"buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
 	"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
+	"document_type", "original_invoice_number",
 }
 
 // invoicesScope: the FROM/WHERE every invoices.go statement shares (D-47).
@@ -45,7 +47,8 @@ const invoicesColumns = `id, invoice_number, status, issue_date::text, currency,
        supplier_email, supplier_telephone, supplier_street, supplier_city,
        supplier_postal_zone, supplier_country, supplier_state, supplier_lga,
        buyer_email, buyer_telephone, buyer_street, buyer_city,
-       buyer_postal_zone, buyer_country, buyer_state, buyer_lga`
+       buyer_postal_zone, buyer_country, buyer_state, buyer_lga,
+       document_type, (SELECT o.invoice_number FROM invoices o WHERE o.id = invoices.original_invoice_id) AS original_invoice_number`
 
 const selectInvoicesSQL = `
 SELECT ` + invoicesColumns +
@@ -85,12 +88,15 @@ func writeInvoiceRows(ctx context.Context, tx pgx.Tx, sql string, args []any, w 
 		var id, invoiceNumber, status, rejectionReasons string
 		var issueDate, currency, subtotal, vat, total, supplierTIN, supplierName, buyerTIN, buyerName, irn, csid, qrPayload *string
 		var createdAt time.Time
+		var documentType string
+		var originalNumber *string
 		nrs := make([]*string, 22)
 		dest := []any{&id, &invoiceNumber, &status, &issueDate, &currency, &subtotal, &vat, &total,
 			&supplierTIN, &supplierName, &buyerTIN, &buyerName, &irn, &csid, &qrPayload, &rejectionReasons, &createdAt}
 		for i := range nrs {
 			dest = append(dest, &nrs[i])
 		}
+		dest = append(dest, &documentType, &originalNumber)
 		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("archive: scan invoice row: %w", err)
 		}
@@ -105,6 +111,7 @@ func writeInvoiceRows(ctx context.Context, tx pgx.Tx, sql string, args []any, w 
 		for _, v := range nrs {
 			record = append(record, emptyIfNil(v))
 		}
+		record = append(record, documentType, emptyIfNil(originalNumber))
 		if err := w.Write(record); err != nil {
 			return nil, fmt.Errorf("archive: write invoices.csv row %s: %w", id, err)
 		}

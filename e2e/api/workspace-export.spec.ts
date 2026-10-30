@@ -131,6 +131,10 @@ test.describe.serial('workspace export (API E2E, over the deployed gateway)', ()
     expect(names.some((n) => /^companies\/[^/]+\/invoices\.csv$/.test(n)), 'a company invoices.csv').toBe(true)
     const invoices = names.filter((n) => /^companies\/[^/]+\/invoices\.csv$/.test(n)).map((n) => utf8(zip[n])).join('\n')
     expect(invoices).toContain('INV-EXPORT-')
+    for (const n of names.filter((n) => /^companies\/[^/]+\/invoices\.csv$/.test(n))) {
+      const header = utf8(zip[n]).split('\n')[0].replace(/\r$/, '').split(',')
+      expect(header.slice(-2), `${n} header ends with the type pair`).toEqual(['document_type', 'original_invoice_number'])
+    }
 
     expect(names, 'the upload is named by its SHA-256').toContain(`documents/${PDF_SHA}.pdf`)
     expect(Buffer.from(zip[`documents/${PDF_SHA}.pdf`]).equals(Buffer.from(PDF_BYTES)), 'the upload bytes are intact').toBe(true)

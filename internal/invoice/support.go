@@ -14,6 +14,10 @@ import (
 // (kept_as_is_at set), so support must not re-queue it.
 var ErrResolvedOutside = errors.New("invoice: resolved outside the platform")
 
+// ErrNoteChecksFailed: a failed note no longer passes its checks, so support
+// cannot re-queue it.
+var ErrNoteChecksFailed = errors.New("invoice: the note no longer passes its checks")
+
 // StatusError reports the status that made a support transition refuse.
 type StatusError struct{ Have Status }
 

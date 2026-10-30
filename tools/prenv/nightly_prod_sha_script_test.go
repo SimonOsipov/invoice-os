@@ -114,3 +114,18 @@ func TestNightlyProdSha_FetchFailureWritesNothing(t *testing.T) {
 		t.Errorf("exit %d output %q, want non-zero exit and no output", code, out)
 	}
 }
+
+func TestNightlyProdSha_StaleRefAfterFailedFetchWritesNothing(t *testing.T) {
+	t.Parallel()
+	origin, work := newProdShaRepos(t)
+	prodShaCommit(t, origin, "a.go")
+	prodShaGit(t, work, "fetch", "origin", "main")
+	if _, code := runProdSha(t, work); code != 0 {
+		t.Fatalf("control run with a reachable origin exited %d", code)
+	}
+	prodShaGit(t, work, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone"))
+	out, code := runProdSha(t, work)
+	if code == 0 || out != "" {
+		t.Errorf("exit %d output %q, want non-zero exit and no output when the fetch fails but origin/main is cached", code, out)
+	}
+}

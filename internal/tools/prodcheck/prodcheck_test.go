@@ -965,6 +965,13 @@ func TestNoSecretInAnyOutput(t *testing.T) {
 	r = g.run(t, nil)
 	assertAbsent(t, r, append(secrets, g.access)...)
 
+	// exchange refuses with an echo body
+	x := newFake(t)
+	x.exchange = func(map[string]string) (int, string) { return 400, echo + " " + x.access }
+	r = x.run(t, nil)
+	assertAbsent(t, r, append(secrets, x.access)...)
+	r.want(t, 4, "failed", "exchange answered 400")
+
 	// the tokens are bad: nothing of them reaches the section
 	h := newFake(t)
 	h.access = "opaque-" + authCode

@@ -161,7 +161,7 @@ type Invoice struct {
 
 	LineItems []LineItem `json:"line_items,omitempty"`
 
-	// Original is the note's original, filled by getTx only; nil when absent or out of scope.
+	// Original is the note's original; nil when absent or out of scope.
 	Original *submission.BillingReference `json:"-"`
 
 	// Gate facts about the original: its total and the sum already credited.

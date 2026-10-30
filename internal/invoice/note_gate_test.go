@@ -458,8 +458,7 @@ func TestApplyValidation_DropsAStaleOverCapViolation(t *testing.T) {
 	}
 }
 
-// The stub demotes N1 while Evaluate's unlocked read already counted it. The stub also echoes
-// the stale key, so a gate that stores Evaluate's list as it is fails here today.
+// The stub demotes N1 while Evaluate's unlocked read already counted it, and echoes the stale key.
 func TestGateValidate_AStaleOverCapFromEvaluateDoesNotSurvive(t *testing.T) {
 	f := newNGFix(t, "NG stale gate", "100.00")
 	n1, n2 := f.credit("NG-SG-1", "60.00"), f.credit("NG-SG-2", "60.00")

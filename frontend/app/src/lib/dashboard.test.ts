@@ -522,6 +522,11 @@ describe('formatMetric', () => {
     expect(formatMetric(m, 'vat_tracked')).toBe('₦2.4M')
   })
 
+  it('formatMetric_printsANegativeVATWithItsSign', () => {
+    const m: Metrics = { vat_tracked: { num: -225_000, den: 3 } }
+    expect(formatMetric(m, 'vat_tracked')).toBe('-₦2k')
+  })
+
   it('FMR-05: a count metric renders the plain integer, not a percentage', () => {
     const m: Metrics = { blocked_by_rules: { num: 12, den: 259 } }
     expect(formatMetric(m, 'blocked_by_rules')).toBe('12')

@@ -822,6 +822,154 @@ test('(fixture check) the demotion marker stays inside the status cell', async (
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// No deployed route creates a note before CRDDBTNOTE-02 merges, so page.route turns real rows into notes.
+// These pin the layout of the number cell, not the server's document_type contract.
+const NOTE_NUMBER = 'CN-INV-2026-0001-1'
+const LONG_NOTE_NUMBER = 'CN-INV-2026-0001-1-EXTRA-LONG-NUMBER-099'
+
+async function noteFixtureRows(page: Page, label: string, patches: Record<string, Record<string, unknown>>): Promise<{ plainNumber: string; ids: string[]; patched: () => number }> {
+  const token = await login(PERSONAS.A)
+  const stamp = Date.now()
+  const entity = await createEntity(token, { name: `CRDDBTNOTE-04 ${label} ${stamp}`, tin: freshTin() })
+  const ids: string[] = []
+  for (const suffix of Object.keys(patches)) {
+    const invoice = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-CN04-${suffix}-${stamp}`) })
+    await validateInvoice(token, invoice.id)
+    ids.push(invoice.id)
+  }
+  const byId = new Map(ids.map((id, i) => [id, Object.values(patches)[i]]))
+  let patched = 0
+  await page.route(/\/api\/invoice\/v1\/invoices(\?[^/]*)?$/, async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    const response = await route.fetch()
+    const body = (await response.json()) as { invoices: Array<{ id: string }> }
+    for (const row of body.invoices) {
+      const patch = byId.get(row.id)
+      if (!patch) continue
+      Object.assign(row, patch)
+      patched++
+    }
+    await route.fulfill({ response, json: body })
+  })
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  return { plainNumber: `INV-CN04-PLAIN-${stamp}`, ids, patched: () => patched }
+}
+
+// The badge sits inside the number cell, clear of the number and the buyer cell, at every wide width.
+async function expectNoteCellFits(page: Page, noteRow: Locator, label: string, also?: (width: number) => Promise<string>): Promise<void> {
+  const cell = noteRow.getByTestId('invoice-number-cell')
+  const number = noteRow.getByTestId('invoice-number')
+  const badge = noteRow.getByTestId('invoice-type-badge')
+  const buyer = noteRow.getByTestId('invoice-buyer-cell')
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await expect
+        .poll(async () => {
+          await settleAnimations(cell, badge)
+          const [c, n, b, y] = await Promise.all([cell.boundingBox(), number.boundingBox(), badge.boundingBox(), buyer.boundingBox()])
+          if (!c || !n || !b || !y) return 'an element has no box'
+          if (!enclosesRect(c, b, 1)) return `badge ${JSON.stringify(b)} leaves the number cell ${JSON.stringify(c)}`
+          if (!enclosesRect(c, n, 1)) return `number ${JSON.stringify(n)} leaves the number cell ${JSON.stringify(c)}`
+          if (rectsOverlap(n, b)) return 'number overlaps the badge'
+          if (rectsOverlap(c, y)) return 'number cell overlaps the buyer cell'
+          return also ? await also(width) : 'ok'
+        }, { message: `${label} at ${width}px`, timeout: 10_000 })
+        .toBe('ok')
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+}
+
+test("(fixture check) a note's type badge and signed amount stay inside their cells", async ({ page }) => {
+  test.setTimeout(90_000)
+  const errors = collectErrors(page)
+
+  const fixture = await noteFixtureRows(page, 'note cell', {
+    NOTE: { document_type: 'credit_note', invoice_number: NOTE_NUMBER, total: '1075.00' },
+    PLAIN: {},
+  })
+  const noteRow = page.getByTestId('invoice-row').filter({ hasText: NOTE_NUMBER })
+  const plainRow = page.getByTestId('invoice-row').filter({ hasText: fixture.plainNumber })
+  await expect(noteRow).toBeVisible()
+  await expect(plainRow).toBeVisible()
+  expect(fixture.patched(), 'the list response was patched').toBeGreaterThan(0)
+  await expect(noteRow.getByTestId('invoice-type-badge')).toHaveText('CREDIT')
+  await expect(plainRow.getByTestId('invoice-type-badge')).toHaveCount(0)
+  const amount = noteRow.getByTestId('invoice-amount')
+  await expect(amount).toHaveText('-₦1,075')
+
+  const seen: number[] = []
+  await expectNoteCellFits(page, noteRow, 'credit note number cell', async (width) => {
+    const [number, amountOverflows] = await Promise.all([
+      noteRow.getByTestId('invoice-number').evaluate((el) => el.scrollWidth <= el.clientWidth),
+      amount.evaluate((el) => el.scrollWidth > el.clientWidth),
+    ])
+    if (!number) return 'an 18-character note number is clipped'
+    if (amountOverflows) return 'the amount is clipped'
+    if (!seen.includes(width)) seen.push(width)
+    return 'ok'
+  })
+  expect(seen.length, 'the sweep measured every width').toBe(WIDE_WIDTHS.length)
+
+  // At 1180px the number track shrinks to its floor: the last cell stays inside the card.
+  const entryViewport = page.viewportSize()
+  try {
+    await page.setViewportSize({ width: 1180, height: 1080 })
+    const card = page.getByTestId('invoices-list')
+    const lastCell = noteRow.locator(':scope > *').last()
+    const cell = noteRow.getByTestId('invoice-number-cell')
+    const badge = noteRow.getByTestId('invoice-type-badge')
+    await expect
+      .poll(async () => {
+        await settleAnimations(cell, badge)
+        const [k, l, c, b] = await Promise.all([card.boundingBox(), lastCell.boundingBox(), cell.boundingBox(), badge.boundingBox()])
+        if (!k || !l || !c || !b) return 'an element has no box'
+        if (l.x + l.width > k.x + k.width + 1) return `last cell ${JSON.stringify(l)} leaves the card ${JSON.stringify(k)}`
+        if (!enclosesRect(c, b, 1)) return `badge ${JSON.stringify(b)} leaves the number cell ${JSON.stringify(c)}`
+        return 'ok'
+      }, { message: 'note row at 1180px', timeout: 10_000 })
+      .toBe('ok')
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  const heights = await assertSameHeight(page, noteRow, plainRow, 'a note row and an invoice row')
+  expect(heights.length, 'the height sweep measured every width').toBe(WIDE_WIDTHS.length)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('(fixture check) a long note number truncates inside its cell', async ({ page }) => {
+  test.setTimeout(90_000)
+  const errors = collectErrors(page)
+
+  const fixture = await noteFixtureRows(page, 'long number', {
+    LONG: { document_type: 'credit_note', invoice_number: LONG_NOTE_NUMBER },
+    PLAIN: {},
+  })
+  const noteRow = page.getByTestId('invoice-row').filter({ hasText: LONG_NOTE_NUMBER.slice(0, 20) })
+  const plainRow = page.getByTestId('invoice-row').filter({ hasText: fixture.plainNumber })
+  await expect(noteRow).toBeVisible()
+  await expect(plainRow).toBeVisible()
+  expect(fixture.patched(), 'the list response was patched').toBeGreaterThan(0)
+  await expect(noteRow.getByTestId('invoice-number')).toHaveAttribute('title', LONG_NOTE_NUMBER)
+
+  // Control: the number really is clipped, so the relations below are not met by a number that fits.
+  await expectNoteCellFits(page, noteRow, 'long note number cell', async () =>
+    (await noteRow.getByTestId('invoice-number').evaluate((el) => el.scrollWidth > el.clientWidth)) ? 'ok' : 'a 40-character number is not truncated',
+  )
+  const heights = await assertSameHeight(page, noteRow, plainRow, 'a long-number note row and an invoice row')
+  expect(heights.length, 'the height sweep measured every width').toBe(WIDE_WIDTHS.length)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 test('(fixture check) the demotion banner fills its column', async ({ page }) => {
   test.setTimeout(90_000)
   const errors = collectErrors(page)

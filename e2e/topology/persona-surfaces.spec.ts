@@ -724,7 +724,7 @@ test('firm Approvals: the nav item opens the Approvals screen, not the Invoices 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// APPROVALS_GRID_COLUMNS is '24px 140px 1fr 130px 90px 180px 110px' (ApprovalsView.tsx):
+// APPROVALS_GRID_COLUMNS is '24px minmax(140px, 210px) 1fr 130px 90px 180px 110px' (ApprovalsView.tsx):
 // seven tracks, one of them fluid. The indices below name what the two layout claims are
 // about; neither claim ever asserts one of these px values.
 const APPROVALS_TRACKS = 7

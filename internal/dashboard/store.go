@@ -144,7 +144,7 @@ func queryClients(ctx context.Context, tx pgx.Tx) ([]Client, error) {
 	clients := []Client{}
 	rows, err := tx.Query(ctx,
 		`WITH flagged AS (
-		    SELECT i.id, i.entity_id, e.name AS entity_name, i.status, i.vat, i.kept_as_is_at, i.violations,
+		    SELECT i.id, i.entity_id, e.name AS entity_name, i.status, i.vat, i.document_type, i.kept_as_is_at, i.violations,
 		           (i.status = 'draft' AND i.rule_set_version_id IS NULL)                       AS is_never_validated,
 		           (i.status = 'draft' AND i.violations @> '[{"severity": "error"}]'::jsonb)    AS is_blocked_by_rules,
 		           (i.status = 'rejected' OR (i.status = 'failed' AND i.kept_as_is_at IS NULL)) AS is_failed_in_transmission,
@@ -206,7 +206,7 @@ func queryClients(ctx context.Context, tx pgx.Tx) ([]Client, error) {
 		       count(*) FILTER (WHERE NOT i.is_never_validated AND NOT i.fails_field) AS bar_field_num,
 		       count(*) FILTER (WHERE NOT i.is_never_validated AND NOT i.fails_tax)   AS bar_tax_num,
 		       count(*) FILTER (WHERE NOT i.is_never_validated AND NOT i.fails_ident) AS bar_ident_num,
-		       coalesce(sum(round(i.vat * 100)), 0)::bigint                           AS vat_kobo
+		       coalesce(sum(round(i.vat * 100) * CASE i.document_type WHEN 'credit_note' THEN -1 ELSE 1 END), 0)::bigint AS vat_kobo
 		FROM flagged i
 		GROUP BY i.entity_id, i.entity_name
 		ORDER BY needs_attention DESC, i.entity_name ASC, i.entity_id ASC`,

@@ -219,6 +219,38 @@ describe('CustomersView: the record list', () => {
     expect(invoiceCalls().map((u) => paramsOf(u).get('offset')).sort()).toEqual(['0', String(AGGREGATE_PAGE_SIZE)])
   })
 
+  it('customersView_showsTheNetAndTheDocumentCount', async () => {
+    // Design fixture: net total 806.25, three documents.
+    mockApi({
+      customers: () => recordsPage([record()]),
+      invoices: () =>
+        invoicesPage([
+          row({ id: 'inv', buyer_tin: '20000000-0001', total: '1075.00' }),
+          row({ id: 'cn', buyer_tin: '20000000-0001', total: '322.50', document_type: 'credit_note' }),
+          row({ id: 'dn', buyer_tin: '20000000-0001', total: '53.75', document_type: 'debit_note' }),
+        ]),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+
+    expect(cells(rows()[0]).slice(3, 5)).toEqual(['3', '₦806'])
+  })
+
+  it('customersView_netNegativeBuyerShowsItsNegativeTotal', async () => {
+    mockApi({
+      customers: () => recordsPage([record()]),
+      invoices: () =>
+        invoicesPage([
+          row({ id: 'inv', buyer_tin: '20000000-0001', total: '500.00' }),
+          row({ id: 'cn', buyer_tin: '20000000-0001', total: '700.00', document_type: 'credit_note' }),
+        ]),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+
+    expect(cells(rows()[0]).slice(3, 5)).toEqual(['2', '-₦200'])
+  })
+
   it('CU-14 a record with no invoice shows 0 and a zero total', async () => {
     mockApi({
       customers: () => recordsPage([record()]),

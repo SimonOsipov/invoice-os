@@ -2685,9 +2685,9 @@ describe('BUG-17-02 register status markers', () => {
     await screen.findByText('INV-REG-GRID-1')
 
     const head = screen.getByTestId('invoices-list').querySelector('.pf-list-head')
-    expect(head?.getAttribute('style')).toContain('grid-template-columns: 24px 150px 1fr 140px 120px 200px')
+    expect(head?.getAttribute('style')).toContain('grid-template-columns: 24px minmax(150px, 210px) 1fr 140px 120px 200px')
     for (const r of screen.getAllByTestId('invoice-row')) {
-      expect(r.getAttribute('style')).toContain('grid-template-columns: 24px 150px 1fr 140px 120px 200px')
+      expect(r.getAttribute('style')).toContain('grid-template-columns: 24px minmax(150px, 210px) 1fr 140px 120px 200px')
     }
   })
 
@@ -2883,5 +2883,51 @@ describe('IL-LOOK: register checkboxes and the bulk bar take the v2 look (D-11, 
     const empty = await screen.findByTestId('invoices-empty-page')
     expect(screen.queryByTestId('invoices-list'), 'no list card on an empty page').toBeNull()
     expect(within(empty).getByTestId('invoices-pager'), 'the empty-page pager sits inside its own wrapper').toBeTruthy()
+  })
+})
+
+describe('CRDDBTNOTE-04-04: the list shows the document type and the signed amount', () => {
+  async function renderRows(rows: InvoiceRecord[]) {
+    mockFetchSequence([listResponse(rows, { limit: 50, offset: 0, total: rows.length })])
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findAllByTestId('invoice-row')
+    return screen.getAllByTestId('invoice-row')
+  }
+
+  it('invoiceTypeBadge_showsOnNotesOnly', async () => {
+    const rows = await renderRows([
+      row({ id: 'n-1', invoice_number: 'CN-1', document_type: 'credit_note' }),
+      row({ id: 'n-2', invoice_number: 'DN-1', document_type: 'debit_note' }),
+      row({ id: 'n-3', invoice_number: 'INV-1', document_type: 'commercial_invoice' }),
+    ])
+    const [credit, debit, plain] = rows.map((r) => r.querySelector('[data-testid="invoice-type-badge"]'))
+    expect(credit?.textContent).toBe('CREDIT')
+    expect(credit?.getAttribute('title')).toBe('Credit note')
+    expect(debit?.textContent).toBe('DEBIT')
+    expect(debit?.getAttribute('title')).toBe('Debit note')
+    expect(plain, 'an invoice row has no badge').toBeNull()
+  })
+
+  it('invoiceTypeBadge_absentKeyIsAnInvoice', async () => {
+    const [r] = await renderRows([row({ id: 'n-4', invoice_number: 'INV-2' })])
+    expect(r.querySelector('[data-testid="invoice-type-badge"]')).toBeNull()
+    expect(within(r).getByTestId('invoice-amount').textContent).toBe('₦1,075')
+  })
+
+  it('invoiceNumber_titleCarriesTheWholeNumber', async () => {
+    const long = 'CN-INV-2026-0001-1-EXTRA-LONG-NUMBER-0099'
+    expect(long).toHaveLength(41)
+    const [r] = await renderRows([row({ id: 'n-5', invoice_number: long, document_type: 'credit_note' })])
+    expect(within(r).getByTestId('invoice-number').getAttribute('title')).toBe(long)
+  })
+
+  it('invoiceAmount_signFollowsTheType', async () => {
+    const rows = await renderRows([
+      row({ id: 'a-1', invoice_number: 'CN-A', document_type: 'credit_note', total: '322.50' }),
+      row({ id: 'a-2', invoice_number: 'DN-A', document_type: 'debit_note', total: '53.75' }),
+      row({ id: 'a-3', invoice_number: 'INV-A', total: '1075.00' }),
+      row({ id: 'a-4', invoice_number: 'CN-B', document_type: 'credit_note', total: null }),
+    ])
+    expect(rows.map((r) => within(r).getByTestId('invoice-amount').textContent)).toEqual(['-₦323', '₦54', '₦1,075', '—'])
   })
 })

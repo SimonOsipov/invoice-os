@@ -771,7 +771,7 @@ type suiteFiles struct {
 	problems   []failure // unreadable and empty files
 	seen       int
 	unreadable bool
-	report     string // first file that holds a test
+	noRun      []string // Playwright reports with tests but none passed, failed or flaky
 }
 
 func readSuiteFiles(dir, key, workspace string) suiteFiles {
@@ -828,8 +828,14 @@ func readSuiteFiles(dir, key, workspace string) suiteFiles {
 			problem(n, "results empty", "the file holds no test results")
 			continue
 		}
-		if sf.seen == 0 {
-			sf.report = n
+		if strings.HasPrefix(n, "playwright-") {
+			ran := false
+			for _, o := range pf.direct {
+				ran = ran || o.status != statusSkip
+			}
+			if !ran {
+				sf.noRun = append(sf.noRun, n)
+			}
 		}
 		sf.seen += pf.seen
 		parsed = append(parsed, pf)
@@ -894,8 +900,10 @@ func judgeSuite(spec suiteSpec, jobs []job, resultsDir, workspace string) (*suit
 				scenarios = append(scenarios, sc)
 			}
 		}
-		if spec.e2e && sf.seen > 0 && passed+testFails+len(flakes) == 0 {
-			fails = append(fails, failure{spec.key, "no test results", "results-" + spec.key + "/" + sf.report, "no passed, failed or flaky test in the reports"})
+		if spec.e2e {
+			for _, n := range sf.noRun {
+				fails = append(fails, failure{spec.key, "no test results", "results-" + spec.key + "/" + n, "no passed, failed or flaky test in the report"})
+			}
 		}
 		if sf.seen == 0 && !sf.unreadable {
 			fails = append(fails, failure{spec.key, "no test results", spec.workflow, "job " + spec.name + " wrote no results"})
@@ -1014,38 +1022,53 @@ func readSection(path string) (json.RawMessage, string) {
 	return json.RawMessage(bytes.TrimSpace(raw)), ""
 }
 
+type rawStep struct{ name, status string }
+
+// readSteps decodes "steps" and each step by exact key. bad is the 1-based first bad step, or -1 for no array.
+func readSteps(body json.RawMessage) (steps []rawStep, bad int) {
+	var m map[string]json.RawMessage
+	var arr []json.RawMessage
+	if json.Unmarshal(body, &m) != nil || json.Unmarshal(m["steps"], &arr) != nil || len(arr) == 0 {
+		return nil, -1
+	}
+	for i, raw := range arr {
+		var f map[string]json.RawMessage
+		var st rawStep
+		if json.Unmarshal(raw, &f) != nil ||
+			json.Unmarshal(f["name"], &st.name) != nil || st.name == "" ||
+			json.Unmarshal(f["status"], &st.status) != nil || st.status == "" {
+			if bad == 0 {
+				bad = i + 1
+			}
+			continue
+		}
+		steps = append(steps, st)
+	}
+	return steps, bad
+}
+
 // stepsProblem is why the section's steps array is unusable, or "".
 func stepsProblem(body json.RawMessage) string {
-	var m struct {
-		Steps []json.RawMessage `json:"steps"`
-	}
-	if json.Unmarshal(body, &m) != nil || len(m.Steps) == 0 {
+	steps, bad := readSteps(body)
+	switch {
+	case bad < 0:
 		return "no steps array"
+	case bad > 0:
+		return fmt.Sprintf("step %d lacks name or status", bad)
 	}
-	for i, raw := range m.Steps {
-		var st struct {
-			Name, Status string
-		}
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(raw, &fields) != nil ||
-			json.Unmarshal(fields["name"], &st.Name) != nil || st.Name == "" ||
-			json.Unmarshal(fields["status"], &st.Status) != nil || st.Status == "" {
-			return fmt.Sprintf("step %d lacks name or status", i+1)
+	for i, st := range steps {
+		if st.status != "passed" && st.status != "failed" && st.status != "skipped" {
+			return fmt.Sprintf("step %d has unknown status", i+1)
 		}
 	}
 	return ""
 }
 
-// anyStepFailed reports a step with status "failed"; stepsProblem has already vetted the array.
+// anyStepFailed reports a step with status "failed"; assemble calls it on every section, gated or not.
 func anyStepFailed(body json.RawMessage) bool {
-	var m struct {
-		Steps []struct {
-			Status string `json:"status"`
-		} `json:"steps"`
-	}
-	_ = json.Unmarshal(body, &m)
-	for _, st := range m.Steps {
-		if st.Status == "failed" {
+	steps, _ := readSteps(body)
+	for _, st := range steps {
+		if st.status == "failed" {
 			return true
 		}
 	}

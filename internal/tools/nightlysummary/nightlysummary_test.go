@@ -571,8 +571,8 @@ func (r runResult) failureTests(suite string) []string {
 	return out
 }
 
-// assertScenariosMatchCounts checks each E2E suite's scenarios against its counts;
-// failed is counted from failures[], not suites[].failed, which also holds job and step entries.
+// assertScenariosMatchCounts checks each E2E suite's scenarios against its counts.
+// Failed is counted from failures[] minus the job, step and results-file entries, so a dropped failed scenario shows.
 func assertScenariosMatchCounts(t *testing.T, r runResult, e2eKeys ...string) {
 	t.Helper()
 	isE2E := map[string]bool{}
@@ -580,7 +580,6 @@ func assertScenariosMatchCounts(t *testing.T, r runResult, e2eKeys ...string) {
 		isE2E[k] = true
 	}
 	got := map[string]map[string]int{}
-	failedScenario := map[[3]string]bool{}
 	for _, sc := range r.scenarios {
 		if !isE2E[sc.Suite] {
 			t.Fatalf("scenario of non-E2E suite: %+v", sc)
@@ -589,9 +588,13 @@ func assertScenariosMatchCounts(t *testing.T, r runResult, e2eKeys ...string) {
 			got[sc.Suite] = map[string]int{}
 		}
 		got[sc.Suite][sc.Status]++
-		if sc.Status == "failed" {
-			failedScenario[[3]string{sc.Suite, sc.Test, sc.File}] = true
+	}
+	notTest := func(f failure) bool {
+		switch f.Test {
+		case "suite did not run", "no test results", "results unreadable", "results empty", "(job)":
+			return true
 		}
+		return f.Message == "step failure" || f.Message == "not run: an earlier step failed"
 	}
 	for _, k := range e2eKeys {
 		sr := r.suite(k)
@@ -600,7 +603,7 @@ func assertScenariosMatchCounts(t *testing.T, r runResult, e2eKeys ...string) {
 		}
 		testFails := 0
 		for _, f := range r.dec.Failures {
-			if f.Suite == k && failedScenario[[3]string{f.Suite, f.Test, f.File}] {
+			if f.Suite == k && !notTest(f) {
 				testFails++
 			}
 		}
@@ -876,7 +879,7 @@ func TestRun_SectionOkFalseOrMissingOkIsRed(t *testing.T) {
 
 func TestRun_SectionWithoutStepsIsAFailureAndAbsent(t *testing.T) {
 	for _, name := range []string{"ai", "email", "hubspot", "prod_check"} {
-		for _, body := range []string{`{"ok":true}`, `{"ok":true,"steps":null}`, `{"ok":true,"steps":[]}`, `{"ok":true,"steps":"x"}`} {
+		for _, body := range []string{`{"ok":true}`, `{"ok":true,"steps":null}`, `{"ok":true,"steps":[]}`, `{"ok":true,"steps":"x"}`, `{"ok":true,"Steps":[{"name":"a","status":"passed"}]}`} {
 			e := newEnv(t)
 			sec := filepath.Join(e.dir, name+".json")
 			e.writeFile(sec, body)
@@ -900,6 +903,10 @@ func TestRun_StepWithoutNameOrStatusIsAFailure(t *testing.T) {
 		{`[{"name":"a","status":""}]`, "step 1 lacks name or status"},
 		{`[{"name":null,"status":"passed"}]`, "step 1 lacks name or status"},
 		{`[null]`, "step 1 lacks name or status"},
+		{`[{"name":"a","status":"failure"}]`, "step 1 has unknown status"},
+		{`[{"name":"a","status":"Failed"}]`, "step 1 has unknown status"},
+		{`[{"name":"a","status":"passed"},{"name":"b","status":"error"}]`, "step 2 has unknown status"},
+		{`[{"Name":"a","Status":"passed"}]`, "step 1 lacks name or status"},
 		{`[{"name":"a","status":"passed"},{"name":"b","status":"passed"},{"name":"c","status":"passed"},{"name":"d","status":1}]`, "step 4 lacks name or status"},
 	}
 	for _, c := range cases {
@@ -1508,7 +1515,7 @@ func TestRun_E2ESuiteOfOnlySkippedTestsIsRed(t *testing.T) {
 	e.write("topology-auth", "playwright-topology-auth.json", pwFile(pwSpec("t", "expected", pwResult("passed", 1))))
 	r := e.run(e.e2eFlag...)
 	eq(t, r.code, 1)
-	eq(t, r.dec.Failures, []failure{{"e2e", "no test results", "results-e2e/playwright-e2e.json", "no passed, failed or flaky test in the reports"}})
+	eq(t, r.dec.Failures, []failure{{"e2e", "no test results", "results-e2e/playwright-e2e.json", "no passed, failed or flaky test in the report"}})
 	eq(t, r.scenarios[0].Status, "skipped")
 	eq(t, *r.suite("e2e"), suiteResult{Name: "e2e", Failed: 1})
 }
@@ -1535,7 +1542,7 @@ func TestRun_E2EOneRanTestBesideSkippedIsGreen(t *testing.T) {
 	eq(t, strings.Contains(string(r.obj["scenarios"]), "message"), false)
 }
 
-func TestRun_E2EReportNamedByFirstFileWithTests(t *testing.T) {
+func TestRun_E2EReportsAreJudgedOneByOne(t *testing.T) {
 	e := e2eEnv(t)
 	e.write("e2e", "playwright-api.json", `{"config":{"rootDir":"/x"},"suites":[]}`)
 	e.write("e2e", "playwright-smoke.json", pwFile(pwSpec("skipped", "skipped", pwResult("skipped", 0))))
@@ -1545,8 +1552,19 @@ func TestRun_E2EReportNamedByFirstFileWithTests(t *testing.T) {
 	eq(t, r.code, 1)
 	eq(t, r.dec.Failures, []failure{
 		{"e2e", "results empty", "playwright-api.json", "the file holds no test results"},
-		{"e2e", "no test results", "results-e2e/playwright-smoke.json", "no passed, failed or flaky test in the reports"},
+		{"e2e", "no test results", "results-e2e/playwright-smoke.json", "no passed, failed or flaky test in the report"},
+		{"e2e", "no test results", "results-e2e/playwright-zeta.json", "no passed, failed or flaky test in the report"},
 	})
+}
+
+func TestRun_E2EAllSkippedReportBesideAPassingOneIsRed(t *testing.T) {
+	e := e2eEnv(t)
+	e.write("e2e", "playwright-smoke.json", pwFile(pwSpec("ran", "expected", pwResult("passed", 1))))
+	e.write("e2e", "playwright-api.json", pwFile(pwSpec("skipped", "skipped", pwResult("skipped", 0))))
+	e.write("topology-auth", "playwright-topology-auth.json", pwFile(pwSpec("t", "expected", pwResult("passed", 1))))
+	r := e.run(e.e2eFlag...)
+	eq(t, r.code, 1)
+	eq(t, r.dec.Failures, []failure{{"e2e", "no test results", "results-e2e/playwright-api.json", "no passed, failed or flaky test in the report"}})
 }
 
 func TestRun_E2ESuiteOfOnlyFlakyTestsIsGreen(t *testing.T) {

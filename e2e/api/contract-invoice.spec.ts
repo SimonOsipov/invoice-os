@@ -1454,7 +1454,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
   // validates. Every test below creates its own one-step policy and deletes it in a
   // `finally`, so the tenant returns to zero active versions before the next spec runs.
   // Boundary: above here the seeded firm policy governs (armed in this file's beforeAll);
-  // below, armedInvoice() owns the active slot per test, unarmed between them.
+  // below, armedInvoice() owns the active slot per test, unarmed between them. `notes` re-arms the firm policy.
   test.describe('approval decision', () => {
     // armedInvoice(): a fresh one-step policy naming roleKey, published, then a clean
     // invoice validated against it -- ApplyValidation's promotion arms exactly one open
@@ -2220,6 +2220,10 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
 
   test.describe('notes', () => {
     test.describe.configure({ timeout: 240_000 })
+    // `approval decision` leaves no active policy; notes need one to arm a run.
+    test.beforeAll(async () => {
+      await ensureFirmPolicyActive(token)
+    })
     const notesUrl = (id: string) => `/api/invoice/v1/invoices/${id}/notes`
 
     test('notes: a credit note validates, submits and is accepted', async () => {

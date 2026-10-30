@@ -73,7 +73,9 @@ describe('isFakeAddress', () => {
 })
 
 describe('scrub', () => {
-  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl'
+  const jwt = ['{"alg":"HS256"}', '{"sub":"1"}', 'signature']
+    .map((part) => Buffer.from(part).toString('base64url'))
+    .join('.')
   it.each([
     ['sent to nightly-1-invite@inbox.mailbox.app now', 'sent to <address> now'],
     ['link ?token=abc123&type=x', 'link ?token=<redacted>&type=x'],

@@ -768,12 +768,14 @@ func TestPreviewMailCommandsRefuseAPR(t *testing.T) {
 
 func TestPreviewMailReadCommandsReadOneSecret(t *testing.T) {
 	t.Parallel()
+	const shimOutput = "shim-output"
 	for cmd, name := range map[string]string{"mail-read-key": "nightly-resend-read-key", "mail-domain": "nightly-resend-receiving-domain"} {
 		t.Run(cmd, func(t *testing.T) {
 			t.Parallel()
-			r := runPreview(t, func(dir string) { writeIn(t, dir, "access-"+name, "the-value") }, cmd, "nightly")
+			r := runPreview(t, func(dir string) { writeIn(t, dir, "access-"+name, shimOutput) }, cmd, "nightly")
 			calls := nonBlankLines(r.file(t, "calls"))
-			if r.code != 0 || r.stdout != "the-value" || len(calls) != 1 || !strings.HasPrefix(calls[0], "secrets versions access latest --secret "+name+" ") {
+			wantCall := "secrets versions access latest --secret " + name + " "
+			if r.code != 0 || r.stdout != shimOutput || len(calls) != 1 || !strings.HasPrefix(calls[0], wantCall) {
 				t.Fatalf("exit %d, stdout %q, calls %v", r.code, r.stdout, calls)
 			}
 		})

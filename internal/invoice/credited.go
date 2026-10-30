@@ -8,5 +8,14 @@ import (
 
 // CreditedSoFarTx sums the credit notes on originalID that can still reach NRS, except excludeID ("" excludes none).
 func CreditedSoFarTx(ctx context.Context, tx pgx.Tx, originalID, excludeID string) (string, error) {
-	return "", nil
+	var sum string
+	err := tx.QueryRow(ctx,
+		`SELECT COALESCE(SUM(total), 0)::numeric(20,2)::text
+		   FROM invoices
+		  WHERE original_invoice_id = $1
+		    AND document_type = 'credit_note'
+		    AND status IN ('validated', 'queued', 'submitted', 'accepted')
+		    AND ($2 = '' OR id <> NULLIF($2, '')::uuid)`,
+		originalID, excludeID).Scan(&sum)
+	return sum, err
 }

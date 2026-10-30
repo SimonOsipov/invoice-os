@@ -359,7 +359,6 @@ func TestGetHandler_ApproveFlagsTrackTheInjectedFacts(t *testing.T) {
 // TestGetHandler_ApproveFlagsAreLastInWireOrder (AC #2/#4): writeJSON marshals with
 // json.NewEncoder, so declaration order IS wire order -- appending the four LAST is
 // what keeps every pre-existing key's position untouched.
-// The two invoice-number keys now follow the quartet and take the tail.
 func TestGetHandler_ApproveFlagsAreLastInWireOrder(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	rec, _ := doInvoiceGetGated(t, invoiceAtStatusStub(StatusValidated), fixedRoleStub("admin", nil), factsStub(liveRunFacts()), &id, uuid.NewString())

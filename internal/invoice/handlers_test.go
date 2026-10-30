@@ -4402,8 +4402,7 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		// so THESE now land last of all -- one approvalGate call feeds both pairs,
 		// and the approve pair is declared before the reject pair.
 		"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason",
-		// EXTR-27-01: appended after reject_blocked_reason, so these now land
-		// last of all.
+		// EXTR-27-01: appended after reject_blocked_reason.
 		"can_correct_invoice_number", "invoice_number_blocked_reason",
 		"can_issue_note", "issue_note_blocked_reason",
 		// ENGI-17: appended after issue_note_blocked_reason.

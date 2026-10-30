@@ -57,6 +57,11 @@ func TestIssueNoteHandler_201PassesPathIdAndBody(t *testing.T) {
 	if !reflect.DeepEqual(got.Lines, want) {
 		t.Errorf("lines = %+v, want %+v", got.Lines, want)
 	}
+
+	rec = doIssueNote(issue, true, pathID, strings.Replace(validNoteBody, "credit_note", "debit_note", 1))
+	if rec.Code != http.StatusCreated || got.DocumentType != submission.DebitNote {
+		t.Errorf("debit: status = %d, type = %q, want 201 and debit_note", rec.Code, got.DocumentType)
+	}
 }
 
 func TestIssueNoteHandler_NoIdentityIs401(t *testing.T) {
@@ -70,8 +75,9 @@ func TestIssueNoteHandler_NoIdentityIs401(t *testing.T) {
 
 func TestIssueNoteHandler_MalformedBodyIs400(t *testing.T) {
 	for name, body := range map[string]string{
-		"bad json":  `{"document_type":`,
-		"bare date": `{"document_type":"credit_note","invoice_number":"CN-1","issue_date":"2026-10-30","lines":[]}`,
+		"bad json":   `{"document_type":`,
+		"bare date":  `{"document_type":"credit_note","invoice_number":"CN-1","issue_date":"2026-10-30","lines":[]}`,
+		"empty body": ``,
 	} {
 		called := false
 		issue := func(context.Context, string, NoteInput) (Invoice, error) { called = true; return Invoice{}, nil }
@@ -97,6 +103,8 @@ func TestIssueNoteHandler_StoreErrorsMapToStatus(t *testing.T) {
 		{ErrNotFound, 404, "not found"},
 		{ErrDuplicateNumber, 409, "duplicate invoice number"},
 		{db.ErrWorkspaceLocked, 403, db.WorkspaceLockedMessage},
+		{db.ErrNotActiveMember, 403, db.NotActiveMemberMessage},
+		{db.ErrNoTenant, 401, "unauthorized"},
 	} {
 		issue := func(context.Context, string, NoteInput) (Invoice, error) { return Invoice{}, tc.err }
 		rec := doIssueNote(issue, true, uuid.NewString(), validNoteBody)
@@ -125,9 +133,10 @@ func TestIssueNoteGate_Table(t *testing.T) {
 	}{
 		{"commercial accepted irn", Invoice{DocumentType: submission.CommercialInvoice, Status: StatusAccepted, IRN: &irn}, true, ""},
 		{"empty type accepted irn", Invoice{Status: StatusAccepted, IRN: &irn}, true, ""},
-		{"accepted null irn", Invoice{Status: StatusAccepted}, false, noteNotIssuedReason},
-		{"credit note accepted irn", Invoice{DocumentType: submission.CreditNote, Status: StatusAccepted, IRN: &irn}, false, noteOnNoteReason},
-		{"debit note accepted irn", Invoice{DocumentType: submission.DebitNote, Status: StatusAccepted, IRN: &irn}, false, noteOnNoteReason},
+		{"accepted null irn", Invoice{Status: StatusAccepted}, false, "Only an accepted invoice with an IRN can carry a note."},
+		{"credit note accepted irn", Invoice{DocumentType: submission.CreditNote, Status: StatusAccepted, IRN: &irn}, false, "A note cannot have its own note. Open the original invoice to issue another."},
+		{"debit note accepted irn", Invoice{DocumentType: submission.DebitNote, Status: StatusAccepted, IRN: &irn}, false, "A note cannot have its own note. Open the original invoice to issue another."},
+		{"draft credit note, no irn", Invoice{DocumentType: submission.CreditNote, Status: StatusDraft}, false, "A note cannot have its own note. Open the original invoice to issue another."},
 	} {
 		ok, reason := issueNoteGate(tc.inv)
 		if ok != tc.want || (tc.wantReason == "") != (reason == nil) || (reason != nil && *reason != tc.wantReason) {
@@ -136,8 +145,8 @@ func TestIssueNoteGate_Table(t *testing.T) {
 	}
 	for _, st := range []Status{StatusDraft, StatusValidated, StatusRejected, StatusQueued, StatusSubmitted, StatusFailed} {
 		ok, reason := issueNoteGate(Invoice{Status: st, IRN: &irn})
-		if ok || reason == nil || *reason != noteNotIssuedReason {
-			t.Errorf("%s: gate = %v, %v; want false, %q", st, ok, reason, noteNotIssuedReason)
+		if ok || reason == nil || *reason != "Only an accepted invoice with an IRN can carry a note." {
+			t.Errorf("%s: gate = %v, %v; want false, the not-issued sentence", st, ok, reason)
 		}
 	}
 }

@@ -44,6 +44,7 @@ import { fmt, fmtDate } from '../lib/format'
 import {
   BUYER_TIN_MISSING,
   diffLineItems,
+  documentTypeBadge,
   editInvoice,
   getInvoice,
   isBuyerTinMissing,
@@ -51,6 +52,7 @@ import {
   keepInvoiceAsIs,
   revalidateInvoice,
   selectBlockedReason,
+  signedAmount,
   type EditFieldKey,
   type InvoiceDetailRecord,
   type InvoiceEditInput,
@@ -71,6 +73,8 @@ import { ruleKeyLabel } from '../lib/rulesApi'
 import { severityStyle, violationKey, type LineTarget, type Violation } from '../lib/validationApi'
 import type { PlatformCtx } from '../types'
 import { ExplainPanel } from './ExplainPanel'
+import { MarkerPill } from './InvoicesList'
+import { SEVERITY_TONE } from './RulePills'
 
 // Decision 19's grid, minus the 40px `Ln` track (ReviewInvoicesTab.tsx's own file-header
 // comment explains why): select-all · Invoice # (mono) · Buyer · Issue date · Total ·
@@ -138,6 +142,7 @@ export function Row({
   // selectBlockedReason (shared with InvoicesList's own select checkbox) is the sole
   // source of this reason -- ReviewRow authors no reason literal (Core AC-2 overrule).
   const blockedReason = selectBlockedReason(r)
+  const typeBadge = documentTypeBadge(r)
 
   // Click-only row, matching the shipped InvoicesList.tsx precedent this table's OLD
   // (task-286) row already followed. Keyboard activation (role/tabIndex/onKeyDown) for
@@ -176,6 +181,11 @@ export function Row({
           <span className="mono" style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--fg-1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {r.invoice_number}
           </span>
+          {typeBadge != null && (
+            <span style={{ display: 'block', marginTop: 2 }}>
+              <MarkerPill testId="review-type-badge" tone={SEVERITY_TONE.info} label={typeBadge.label} title={typeBadge.title} />
+            </span>
+          )}
           {sourceLabel != null && (
             <span data-testid="review-row-source-file" className="mono" style={{ display: 'block', fontSize: 10.5, color: 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {sourceLabel}
@@ -191,7 +201,7 @@ export function Row({
             labelled "Date"; this one says "Issue date", and labelling a creation timestamp
             as the issue date is a small lie on a compliance screen. */}
         <span className="mono" style={{ fontSize: 11.5, color: 'var(--fg-2)' }}>{r.issue_date != null ? fmtDate(r.issue_date) : '—'}</span>
-        <span className="money" style={{ fontSize: 13, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(Number(r.total)) : '—'}</span>
+        <span className="money" style={{ fontSize: 13, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(signedAmount(r, r.total)) : '—'}</span>
         {/* Driven entirely by verdictPill(...).status — no colour and no label is authored here. The
             derived badge stacks BENEATH rather than beside it: 124px cannot hold both. */}
         {/* `data-testid="review-verdict"` sits on this OUTER span, not the inner status

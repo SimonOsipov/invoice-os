@@ -1007,6 +1007,42 @@ test('AP-01 approvals queue: heading, card, bulk bar, pager relations', async ({
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
+// No deployed route creates a note before CRDDBTNOTE-02 merges, so page.route turns the first queue row into one.
+test("(fixture check) AP: a note's type badge stays inside the approvals number cell", async ({ page }) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  await stubGet(page, isQueue, {
+    mode: 'transform',
+    source: (url) => {
+      const u = new URL(url)
+      u.searchParams.delete('awaiting_approval')
+      return u
+    },
+    transform: (body) => ({
+      ...body,
+      invoices: body.invoices.map((r: object, i: number) => (i === 0 ? { ...r, document_type: 'credit_note', invoice_number: 'CN-INV-2026-0001-1', can_approve: true, approve_blocked_reason: null } : r)),
+    }),
+  })
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await openNav(page, navButton(page, /^Approvals/))
+  await expectVisibleRows(page.getByTestId('approval-row'), 'the approvals queue is served from the firm register page (D-14), which must hold at least one invoice on the PR environment')
+  const row = page.getByTestId('approval-row').filter({ hasText: 'CN-INV-2026-0001-1' })
+  const badge = row.getByTestId('approval-type-badge')
+  const cell = row.getByTestId('approval-number-cell')
+  const buyer = row.getByTestId('approval-buyer-cell')
+  await expect(badge).toHaveText('CREDIT')
+
+  const measured = await atWidths(page, 'approvals note badge', async () => {
+    await settleAnimations(cell, badge)
+    const [b, c, y] = await Promise.all([badge.boundingBox(), cell.boundingBox(), buyer.boundingBox()])
+    if (!b || !c || !y) throw new Error('an element has no box')
+    return { problems: [...within(c, b, 'badge in the number cell'), ...apart(b, y, 'badge vs buyer cell')], rects: { b, c, y } }
+  })
+  expect(measured.length, 'the sweep measured every width').toBe(WIDE_WIDTHS.length)
+
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
 test('AP-02 approvals states: loading, error, empty, empty page', async ({ page }, testInfo) => {
   const errors = gatedErrors(page, [expectedStatusDropper(page, 503, /\/api\/invoice\/v1\/invoices/)])
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })

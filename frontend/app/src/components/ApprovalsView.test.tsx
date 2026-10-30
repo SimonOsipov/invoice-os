@@ -1902,3 +1902,33 @@ describe('AP-LOOK: header, checkboxes, bar and pager follow § Design > Approval
     expect(styleOf(wrapper)).toContain('margin-top: 16px')
   })
 })
+
+describe('CRDDBTNOTE-04-04: the queue shows the document type and the signed amount', () => {
+  async function renderRows(rows: InvoiceRecord[]) {
+    mockFetchSequence([listResponse(rows, { limit: 50, offset: 0, total: rows.length })])
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findAllByTestId('approval-row')
+    return screen.getAllByTestId('approval-row')
+  }
+
+  it('approvalsAmount_signFollowsTheType', async () => {
+    const rows = await renderRows([
+      approvalRow({ id: 'a-1', invoice_number: 'CN-A', document_type: 'credit_note', total: '322.50' }),
+      approvalRow({ id: 'a-2', invoice_number: 'INV-A', total: '1075.00' }),
+    ])
+    expect(within(rows[0]).getByText('-₦323')).toBeTruthy()
+    expect(within(rows[1]).getByText('₦1,075')).toBeTruthy()
+  })
+
+  it('approvalsBadge_showsOnNotesOnly', async () => {
+    const rows = await renderRows([
+      approvalRow({ id: 'b-1', invoice_number: 'CN-A', document_type: 'credit_note' }),
+      approvalRow({ id: 'b-2', invoice_number: 'DN-A', document_type: 'debit_note' }),
+      approvalRow({ id: 'b-3', invoice_number: 'INV-A' }),
+    ])
+    const [credit, debit, plain] = rows.map((r) => r.querySelector('[data-testid="approval-type-badge"]'))
+    expect(credit?.textContent).toBe('CREDIT')
+    expect(debit?.textContent).toBe('DEBIT')
+    expect(plain).toBeNull()
+  })
+})

@@ -1666,3 +1666,26 @@ describe('ReviewRow row-expansion: Explain and Accept (ENGI-17-06)', () => {
     expect(JSON.parse(calls('/explain')[0][1]!.body as string)).toEqual({ rule_key: 'line-cost', path: 'line_items[2].unit_price' })
   })
 })
+
+describe('CRDDBTNOTE-04-04: the review row shows the document type and the signed amount', () => {
+  function amountOf(over: Partial<InvoiceRecord>) {
+    renderRow(over)
+    return screen.getByTestId('review-row').querySelector('.money')?.textContent
+  }
+
+  it('reviewRowAmount_signFollowsTheType', () => {
+    expect(amountOf({ document_type: 'credit_note', total: '322.50' })).toBe('-₦323')
+    cleanup()
+    expect(amountOf({ document_type: 'debit_note', total: '53.75' })).toBe('₦54')
+  })
+
+  it('reviewRowBadge_showsOnNotesOnly', () => {
+    const badges: Array<string | undefined> = []
+    for (const document_type of ['credit_note', 'debit_note', 'commercial_invoice'] as const) {
+      renderRow({ document_type })
+      badges.push(screen.queryByTestId('review-type-badge')?.textContent)
+      cleanup()
+    }
+    expect(badges).toEqual(['CREDIT', 'DEBIT', undefined])
+  })
+})

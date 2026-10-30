@@ -1920,7 +1920,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
   test.describe('nrs fields', () => {
     // Values are in stored form (dates RFC3339 midnight, numerics at column scale) so GET equals the input.
     const NRS_HEADER = {
-      invoice_kind: '380',
+      invoice_kind: 'B2B',
       tax_currency_code: 'NGN',
       due_date: '2026-02-01T00:00:00Z',
       issue_time: '09:30:15',

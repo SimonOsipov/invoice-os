@@ -941,7 +941,7 @@ func TestMockWire_NRSFieldsLeaveTheWireUnchanged(t *testing.T) {
 	base := mwFullCanonical()
 	withNRS := mwDeepCopyCanonical(base)
 	d := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	withNRS.InvoiceKind, withNRS.TaxCurrencyCode = mwStrPtr("381"), mwStrPtr("USD")
+	withNRS.InvoiceKind, withNRS.TaxCurrencyCode = mwStrPtr("B2B"), mwStrPtr("USD")
 	withNRS.DueDate, withNRS.TaxPointDate = &d, &d
 	withNRS.IssueTime, withNRS.PaymentStatus = mwStrPtr("14:30:00"), mwStrPtr("PAID")
 	withNRS.TaxSubtotals = []TaxSubtotal{{Category: "STANDARD_VAT", Percent: mwStrPtr("7.50"), TaxableAmount: mwStrPtr("1000.00"), TaxAmount: mwStrPtr("75.00")}}

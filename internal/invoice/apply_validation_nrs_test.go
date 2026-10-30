@@ -21,7 +21,7 @@ func TestApplyValidation_EditingAnNRSFieldMakesTheVerdictStale(t *testing.T) {
 
 	edits := map[string]func(id string, lineID string) error{
 		"header": func(id, _ string) error {
-			_, err := store.Update(c, id, UpdateInput{InvoiceKind: strPtr("381")})
+			_, err := store.Update(c, id, UpdateInput{InvoiceKind: strPtr("B2B")})
 			return err
 		},
 		"party": func(id, _ string) error {

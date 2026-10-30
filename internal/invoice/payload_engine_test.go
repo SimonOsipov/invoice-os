@@ -553,7 +553,7 @@ func pay18NRSInvoice() invoice.Invoice {
 		SupplierTIN: ptr("12345678-0001"), SupplierName: ptr("Acme Ltd"),
 		BuyerTIN: ptr("87654321-0002"), BuyerName: ptr("Beta Ltd"),
 		Subtotal: ptr("250.00"), VAT: ptr("18.75"), Total: ptr("268.75"),
-		InvoiceKind: ptr("380"), TaxCurrencyCode: ptr("NGN"), DueDate: &d, IssueTime: ptr("14:30:00"),
+		InvoiceKind: ptr("B2B"), TaxCurrencyCode: ptr("NGN"), DueDate: &d, IssueTime: ptr("14:30:00"),
 		TaxPointDate: &d, PaymentStatus: ptr("PENDING"),
 		SupplierEmail: ptr("s@acme.ng"), SupplierTelephone: ptr("+2348000000001"), SupplierStreet: ptr("1 Main St"),
 		SupplierCity: ptr("Lagos"), SupplierPostalZone: ptr("100001"), SupplierCountry: ptr("NG"),

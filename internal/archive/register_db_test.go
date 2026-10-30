@@ -201,7 +201,7 @@ func TestRegister_RowCellsEqualTheBundleCSVCells(t *testing.T) {
 		  supplier_tin='S-TIN', supplier_name='Sup, "Ltd"', buyer_tin='B-TIN', buyer_name='Buyer',
 		  irn='IRN-1', csid='CSID-1', qr_payload='QR==',
 		  rejection_reasons='[{"code": "E1", "message": "m"}]',
-		  invoice_kind='380', tax_currency_code='NGN', payment_status='PENDING',
+		  invoice_kind='B2B', tax_currency_code='NGN', payment_status='PENDING',
 		  due_date='2026-09-20', tax_point_date='2026-09-02', issue_time='10:11:12',
 		  supplier_email='s@x.test', supplier_telephone='1', supplier_street='1 Main', supplier_city='Lagos',
 		  supplier_postal_zone='100001', supplier_country='NG', supplier_state='LA', supplier_lga='Ikeja',

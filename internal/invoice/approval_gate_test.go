@@ -371,6 +371,10 @@ func TestGetHandler_ApproveFlagsAreLastInWireOrder(t *testing.T) {
 		t.Fatalf("last wire key = %q, want verdict_stale", last)
 	}
 	got = got[:len(got)-1]
+	if n := len(got); n < 2 || got[n-2] != "can_issue_note" || got[n-1] != "issue_note_blocked_reason" {
+		t.Fatalf("keys before verdict_stale = %v, want the issue-note pair last", got)
+	}
+	got = got[:len(got)-2]
 	quartet := []string{"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason"}
 	numberTail := []string{"can_correct_invoice_number", "invoice_number_blocked_reason"}
 	want := len(quartet) + len(numberTail)

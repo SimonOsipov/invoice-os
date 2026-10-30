@@ -249,6 +249,7 @@ func TestClientScope_InvoiceRoutesAnswerOneNotFoundForOutsideUnknownAndForeign(t
 		{"POST /v1/invoices/{id}/resolved-outside", "POST", `{"reason":"r"}`, ResolveOutsideHandler(f.store.ResolveOutside, nil)},
 		{"DELETE /v1/invoices/{id}/resolved-outside", "DELETE", "", UnresolveOutsideHandler(f.store.UnresolveOutside, nil)},
 		{"POST /v1/invoices/{id}/validate", "POST", "", ValidateHandler(gate.Validate, nil)},
+		{"POST /v1/invoices/{id}/notes", "POST", `{"document_type":"credit_note","invoice_number":"CS-N-1","issue_date":"2026-10-30T00:00:00Z","lines":[{"line_id":"` + uuid.NewString() + `","quantity":"1","unit_price":"1.00"}]}`, IssueNoteHandler(f.store.IssueNote, nil)},
 	}
 	for _, rt := range routes {
 		outside := csServe(rt.h, f.limited, rt.method, "/", f.invB, rt.body)

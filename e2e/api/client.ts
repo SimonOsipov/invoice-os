@@ -867,6 +867,8 @@ export interface GetInvoiceResult extends Invoice {
   // True only for a draft whose history never left draft/validated -- never status alone.
   can_correct_invoice_number: boolean
   invoice_number_blocked_reason: string | null
+  can_issue_note: boolean
+  issue_note_blocked_reason: string | null
 }
 
 export function getInvoice(token: string, id: string): Promise<GetInvoiceResult> {

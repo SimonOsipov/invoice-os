@@ -3138,6 +3138,60 @@ func TestStatusForErr_NumberSentences(t *testing.T) {
 	}
 }
 
+func TestStatusForErr_NoteSentinels(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		status int
+		msg    string
+	}{
+		{ErrOriginalNotFound, http.StatusNotFound, "not found"},
+		{ErrOriginalIsANote, http.StatusConflict, "a note cannot be the original of a note"},
+		{ErrOriginalOtherEntity, http.StatusConflict, "the original belongs to another client"},
+		{ErrOriginalNotIssued, http.StatusConflict, "a note needs an accepted invoice with an IRN"},
+	} {
+		if status, msg := statusForErr(fmt.Errorf("wrapped: %w", tc.err)); status != tc.status || msg != tc.msg {
+			t.Errorf("statusForErr(%v) = (%d, %q), want (%d, %q)", tc.err, status, msg, tc.status, tc.msg)
+		}
+	}
+}
+
+func TestGetHandler_CarriesCanIssueNote(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	irn := "IRN-1"
+	for _, tc := range []struct {
+		name       string
+		inv        Invoice
+		wantFlag   string
+		wantReason bool
+	}{
+		{"accepted with IRN", Invoice{Status: StatusAccepted, IRN: &irn}, `"can_issue_note":true`, false},
+		{"draft", Invoice{Status: StatusDraft}, `"can_issue_note":false`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inv := tc.inv
+			get := func(ctx context.Context, gotID string) (Invoice, error) { return inv, nil }
+			rec, _ := doInvoiceGet(t, get, &id, uuid.NewString())
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tc.wantFlag) {
+				t.Errorf("body lacks %s (body=%s)", tc.wantFlag, rec.Body.String())
+			}
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+				t.Fatal(err)
+			}
+			reason, ok := raw["issue_note_blocked_reason"]
+			if !ok {
+				t.Fatalf("issue_note_blocked_reason omitted (body=%s)", rec.Body.String())
+			}
+			if (string(reason) != "null") != tc.wantReason {
+				t.Errorf("issue_note_blocked_reason = %s, want non-null=%v", reason, tc.wantReason)
+			}
+		})
+	}
+}
+
 // An unknown line id is a 400 with one sentence, whether wrapped or bare, and distinct from ErrValidation's own text.
 func TestStatusForErr_UnknownLineIDIs400WithItsOwnSentence(t *testing.T) {
 	const want = "line_items id must name a line of this invoice"
@@ -4176,10 +4230,10 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 	// APPR-08-06 (task-504): can_approve/approve_blocked_reason/can_reject/
 	// reject_blocked_reason join the same additive set, 37 wire keys -> 41.
 	// EXTR-27-01: can_correct_invoice_number/invoice_number_blocked_reason join
-	// the same way, 41 -> 43.
+	// the same way, 41 -> 43. can_issue_note/issue_note_blocked_reason: 43 -> 45.
 	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason", "can_view_ubl", "ubl_blocked_reason", "can_resolve_outside", "resolve_outside_blocked_reason",
 		"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason",
-		"can_correct_invoice_number", "invoice_number_blocked_reason", "verdict_stale"}
+		"can_correct_invoice_number", "invoice_number_blocked_reason", "can_issue_note", "issue_note_blocked_reason", "verdict_stale"}
 
 	tests := []struct {
 		name              string
@@ -4351,7 +4405,8 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		// EXTR-27-01: appended after reject_blocked_reason, so these now land
 		// last of all.
 		"can_correct_invoice_number", "invoice_number_blocked_reason",
-		// ENGI-17: appended after invoice_number_blocked_reason.
+		"can_issue_note", "issue_note_blocked_reason",
+		// ENGI-17: appended after issue_note_blocked_reason.
 		"verdict_stale",
 	}
 	if !reflect.DeepEqual(got, want2) {

@@ -165,6 +165,20 @@ describe('CheckSteps', () => {
     expect(s.ok).toBe(false)
   })
 
+  it('the used invite link is not tried when the password link failed', async () => {
+    const cs = new CheckSteps(tmpFile())
+    const body = vi.fn()
+    for (const s of MAIL_STEPS) {
+      if (s.name === 'password link opens the workspace') await cs.run(s.name, () => { throw new Error('x') })
+      else await cs.run(s.name, body)
+    }
+    expect(cs.section().steps.find((x) => x.name === 'used invite link is refused')?.status).toBe('skipped')
+  })
+
+  it('an unparsable send date throws', () => {
+    expect(() => overBudget([{ to: ['nightly-1@x.test'], created_at: 'garbage' }], 'x.test')).toThrow('created_at')
+  })
+
   it('all passed', async () => {
     const cs = new CheckSteps(tmpFile(), three.filter((x) => x.name !== 'c'))
     for (const n of ['a', 'b', 'd']) await cs.run(n, () => {})

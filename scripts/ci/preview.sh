@@ -12,8 +12,9 @@
 #   preview.sh deploy <pr|nightly> <sha> <svc>... deploy services, four at a time
 #   preview.sh token <pr|nightly>                 print the preview's gateway token
 #   preview.sh teardown <pr|nightly>              delete everything this preview owns
-#   preview.sh mail-preflight nightly     fail when a nightly mail secret has no version
+#   preview.sh mail-preflight nightly     fail when a nightly mail secret is missing or not enabled
 #   preview.sh mail-on nightly            mount the mail secrets and turn real mail on
+#   preview.sh mail-off nightly           unmount the mail secrets and turn auto-confirm back on
 #   preview.sh mail-read-key nightly      print the Resend read key
 #   preview.sh mail-domain nightly        print the Resend receiving domain
 #   preview.sh prs                        print "<pr|nightly> <created>" for each preview that owns a resource
@@ -333,13 +334,21 @@ cmd_teardown() {
   echo "PR $pr: preview deleted"
 }
 
-# mail-preflight: each mail secret has a version. Reads no value.
+# mail-preflight: each mail secret has an enabled latest version. Reads no value.
 cmd_mail_preflight() {
-  local name missing=()
+  local name state missing=() failed=0
   for name in "${MAIL_SECRETS[@]}"; do
-    gcloud secrets versions describe latest --secret "$name" --project "$PROJECT" --format 'value(name)' >/dev/null 2>&1 || missing+=("$name")
+    if state=$(gcloud secrets versions describe latest --secret "$name" --project "$PROJECT" --format 'value(state)' 2>&1); then
+      [ "$(tail -n 1 <<<"$state")" = ENABLED ] || missing+=("$name")
+    elif grep -q NOT_FOUND <<<"$state"; then
+      missing+=("$name")
+    else
+      echo "::error::could not read the state of $name: $(tail -n 1 <<<"$state")" >&2
+      failed=1
+    fi
   done
-  [ "${#missing[@]}" = 0 ] || die "nightly mail secrets with no version: ${missing[*]}"
+  [ "${#missing[@]}" = 0 ] || echo "::error::nightly mail secrets missing or not enabled: ${missing[*]}" >&2
+  [ "${#missing[@]}" = 0 ] && [ "$failed" = 0 ] || exit 1
   echo "nightly mail secrets present"
 }
 
@@ -352,6 +361,16 @@ cmd_mail_on() {
     --update-env-vars "GOTRUE_MAILER_TEMPLATES_RECOVERY=$gw/emails/recovery.html,GOTRUE_MAILER_URLPATHS_RECOVERY=$gw/auth/reset-password,GOTRUE_MAILER_SUBJECTS_RECOVERY=Reset your ASComply password,GOTRUE_MAILER_TEMPLATES_CONFIRMATION=$gw/emails/confirmation.html,GOTRUE_MAILER_URLPATHS_CONFIRMATION=$gw/auth/verify,GOTRUE_MAILER_SUBJECTS_CONFIRMATION=Confirm your ASComply account,GOTRUE_MAILER_AUTOCONFIRM=false"
   gcloud run services update tenancy-nightly "${gc[@]}" \
     --update-secrets RESEND_SENDING_KEY=nightly-resend-sending-key:latest
+}
+
+# mail-off: unmount the mail secrets and turn auto-confirm back on. Runs after a failed run too.
+cmd_mail_off() {
+  local failed=0
+  gcloud run services update auth-nightly "${gc[@]}" \
+    --remove-secrets GOTRUE_SMTP_PASS --update-env-vars GOTRUE_MAILER_AUTOCONFIRM=true || failed=1
+  gcloud run services update tenancy-nightly "${gc[@]}" \
+    --remove-secrets RESEND_SENDING_KEY || failed=1
+  [ "$failed" = 0 ] || die "mail-off left real mail mounted on the nightly; the errors are above"
 }
 
 # prs: every preview (a PR number or nightly) that owns a service, a job, a bucket or a secret, with the oldest creation time.
@@ -451,11 +470,12 @@ case "${1:-}" in
   teardown) name_arg "${2:-}"; cmd_teardown "$2" ;;
   mail-preflight) mail_arg "${2:-}"; cmd_mail_preflight ;;
   mail-on) mail_arg "${2:-}"; cmd_mail_on ;;
+  mail-off) mail_arg "${2:-}"; cmd_mail_off ;;
   mail-read-key) mail_arg "${2:-}"; gcloud secrets versions access latest --secret nightly-resend-read-key --project "$PROJECT" ;;
   mail-domain) mail_arg "${2:-}"; gcloud secrets versions access latest --secret nightly-resend-receiving-domain --project "$PROJECT" ;;
   prs) cmd_prs ;;
   cap) cmd_cap ;;
   invariants) cmd_invariants ;;
   budget) cmd_budget ;;
-  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-read-key|mail-domain|prs|cap|invariants|budget" ;;
+  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|mail-read-key|mail-domain|prs|cap|invariants|budget" ;;
 esac

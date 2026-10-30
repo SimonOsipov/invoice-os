@@ -65,7 +65,7 @@ export const MAIL_STEPS: StepSpec[] = [
   { name: 'password mail arrives', needs: ['invite page registers the invitee'] },
   { name: 'password mail text matches', needs: ['password mail arrives'] },
   { name: 'password link opens the workspace', needs: ['password mail arrives'] },
-  { name: 'used invite link is refused', needs: ['invite mail arrives'] },
+  { name: 'used invite link is refused', needs: ['password link opens the workspace'] },
   { name: 'reset mail arrives', needs: ['mail budget'] },
   { name: 'reset text matches', needs: ['reset mail arrives'] },
   { name: 'reset link sets the password', needs: ['reset mail arrives'] },

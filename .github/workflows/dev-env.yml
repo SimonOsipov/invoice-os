@@ -847,6 +847,8 @@ jobs:
           go-version-file: go.mod
       - name: Install deps
         run: pnpm install --frozen-lockfile
+      - name: Install Chromium
+        run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
@@ -870,8 +872,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_API: repos/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: echo "MAIL_WINDOW_START=$(gh api "$RUN_API" --jq .run_started_at)" >>"$GITHUB_ENV"
-      - name: Install Chromium
-        run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
       - name: Prepare the mail accounts
         run: pnpm --filter @invoice-os/e2e test:mail prepare.spec.ts
       - name: Turn real mail on
@@ -879,6 +879,9 @@ jobs:
       - name: Real invite and reset mail
         timeout-minutes: 16
         run: pnpm --filter @invoice-os/e2e test:mail real-mail.spec.ts
+      - name: Turn real mail off
+        if: always()
+        run: bash scripts/ci/preview.sh mail-off "$PR"
       - name: Upload the nightly results
         if: always() && needs.changes.outputs.nightly == 'true'
         uses: actions/upload-artifact@v7

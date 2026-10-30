@@ -19,6 +19,7 @@ const INVITE_SUBJECT = 'You are invited to ASComply'
 const INVITE_LINK = 'https://www.ascomply.com/invite#token='
 const PASSWORD_SUBJECT = 'Confirm your ASComply account'
 const RESET_SUBJECT = 'Reset your ASComply password'
+const RESET_LINK_FAILED = 'That reset link did not work. It may have expired or already been used.'
 const INVITE_INVALID = 'This invite is no longer valid'
 const WAIT_MS = 3 * 60_000
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
@@ -164,6 +165,9 @@ test('real mail: the invite and the reset arrive, read right, and their links wo
       await page.getByLabel('New password', { exact: true }).fill(newPassword)
       await page.getByRole('button', { name: 'Set new password', exact: true }).click()
       await page.waitForURL((u) => u.href.startsWith(landing), { timeout: 30_000 })
+      // A failed reset lands here too, with a notice.
+      await expect.poll(() => new URL(page.url()).searchParams.has('reset'), { message: 'the landing strips ?reset' }).toBe(false)
+      await expect(page.getByRole('status').filter({ hasText: RESET_LINK_FAILED })).toHaveCount(0)
     })
 
     await steps.run('sign-in with the new password', async () => {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { listSent, waitForMail, type Fetch } from './resendClient'
+import { listSent, parseCreatedAt, waitForMail, type Fetch } from './resendClient'
 
 const SINCE = new Date('2026-10-30T00:00:00Z')
 const NEW = '2026-10-30 12:00:00.000000+00'
@@ -92,10 +92,86 @@ describe('waitForMail', () => {
     await assertion
   })
 
-  it('a 429 names the status only', async () => {
-    const stub = vi.fn(async () => json({ message: 'slow down someone@secret.test' }, 429)) as unknown as Fetch
-    const err = await waitForMail('k', 'me@x.test', 'S', 180_000, stub).catch((e: Error) => e)
-    expect((err as Error).message).toContain('429')
+  it('a 404 is final and names the status only', async () => {
+    const stub = vi.fn(async () => json({ message: 'no such thing someone@secret.test' }, 404))
+    const err = await waitForMail('k', 'me@x.test', 'S', 180_000, stub as unknown as Fetch).catch((e: Error) => e)
+    expect((err as Error).message).toContain('404')
     expect((err as Error).message).not.toContain('@')
+    expect(stub).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps polling through a 429, a 503 and a dropped connection', async () => {
+    vi.useFakeTimers()
+    const answers = [
+      () => json({ message: 'slow down' }, 429),
+      () => json({}, 503),
+      () => {
+        throw new TypeError('fetch failed')
+      },
+      () => json({ data: [item('mine', now(), 'me@x.test', 'S')], has_more: false }),
+    ]
+    let n = 0
+    const stub = vi.fn(async () => answers[n++]()) as unknown as Fetch
+    const p = waitForMail('k', 'me@x.test', 'S', 180_000, stub)
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect((await p).id).toBe('mine')
+    expect(n).toBe(4)
+  })
+
+  it('at the deadline reports the last status only', async () => {
+    vi.useFakeTimers()
+    const stub = vi.fn(async () => json({ message: 'slow down someone@secret.test' }, 429)) as unknown as Fetch
+    const p = waitForMail('k', 'me@x.test', 'S', 180_000, stub)
+    const assertion = expect(p).rejects.toThrow(/no mail in 3 minutes \(last: Resend answered 429\)$/)
+    await vi.advanceTimersByTimeAsync(200_000)
+    await assertion
+  })
+})
+
+describe('listSent retries', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('retries a 429 and a dropped connection, then returns the page', async () => {
+    vi.useFakeTimers()
+    const answers = [
+      () => json({}, 429),
+      () => {
+        throw new TypeError('fetch failed')
+      },
+      () => json({ data: [item('a', NEW)], has_more: false }),
+    ]
+    let n = 0
+    const stub = vi.fn(async () => answers[n++]()) as unknown as Fetch
+    const p = listSent('k', SINCE, stub)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect((await p).map((m) => m.id)).toEqual(['a'])
+  })
+
+  it('gives up after a bounded number of tries', async () => {
+    vi.useFakeTimers()
+    const stub = vi.fn(async () => json({}, 500))
+    const p = listSent('k', SINCE, stub as unknown as Fetch)
+    const assertion = expect(p).rejects.toThrow('500')
+    await vi.advanceTimersByTimeAsync(60_000)
+    await assertion
+    expect(stub).toHaveBeenCalledTimes(4)
+  })
+
+  it('does not retry a 401', async () => {
+    const stub = vi.fn(async () => json({}, 401))
+    await expect(listSent('k', SINCE, stub as unknown as Fetch)).rejects.toThrow('401')
+    expect(stub).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('parseCreatedAt', () => {
+  it('throws on an unparsable date', () => {
+    expect(() => parseCreatedAt('not a date')).toThrow('not a date')
+  })
+
+  it('listSent rejects an item with an unparsable date', async () => {
+    const stub = vi.fn(async () => json({ data: [item('bad', 'garbage')], has_more: true }))
+    await expect(listSent('k', SINCE, stub as unknown as Fetch)).rejects.toThrow('created_at')
+    expect(stub).toHaveBeenCalledTimes(1)
   })
 })

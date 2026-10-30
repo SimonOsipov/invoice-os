@@ -325,6 +325,18 @@ func emailProblems(jobs map[string]workflowJob) []string {
 	prep := run("test:mail prepare.spec.ts")
 	on := run("preview.sh mail-on")
 	spec := run("test:mail real-mail.spec.ts")
+	chrome := run("playwright install")
+	off := run("preview.sh mail-off")
+	up := idx(func(s workflowStep) bool { return strings.HasPrefix(s.keys["uses"], "actions/upload-artifact@") })
+	if !(0 <= chrome && chrome < auth) {
+		bad("email installs Chromium after Google auth: the install would see the key")
+	}
+	if !(spec < off && off < up) {
+		bad("email mail-off is not between the spec and the upload")
+	}
+	if st, ok := nlStep(em, "Turn real mail off"); !ok || strings.TrimSpace(nlCode(st.keys["if"])) != "always()" {
+		bad("email mail-off step does not run if always()")
+	}
 	if !(0 <= auth && auth < pre && pre < key && key < prep && prep < on && on < spec) {
 		bad("email steps are out of order: auth, preflight, key read, prepare, mail-on, real-mail")
 	}
@@ -766,7 +778,14 @@ func TestDevEnvNightly_EmailStepOrder(t *testing.T) {
 	if got := emailProblems(nlJobs(mutateOnce(t, yml, auth+pf, pf+auth))); !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "out of order") }) {
 		t.Errorf("swap auth and preflight: problems %q", got)
 	}
+	chrome := "      - name: Install Chromium\n        run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium\n"
+	specStep := "      - name: Real invite and reset mail\n        timeout-minutes: 16\n" + cmd["spec"]
+	off := "      - name: Turn real mail off\n        if: always()\n        run: bash scripts/ci/preview.sh mail-off \"$PR\"\n"
 	requireEmailMutations(t, []struct{ old, repl, want string }{
 		{"          echo \"::add-mask::$domain\"\n", "", "masks the key and domain"},
+		{chrome + auth + pf, auth + chrome + pf, "installs Chromium after Google auth"},
+		{off, "", "mail-off is not between"},
+		{specStep + off, off + specStep, "mail-off is not between"},
+		{"      - name: Turn real mail off\n        if: always()\n", "      - name: Turn real mail off\n", "mail-off step does not run if always()"},
 	})
 }

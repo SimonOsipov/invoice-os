@@ -51,7 +51,9 @@ case "$1 $2 $3" in
     [ "$prev" = --secret ] && name=$a
     prev=$a
   done
-  if grep -qxF -- "$name" "$D/missing" 2>/dev/null; then echo "ERROR: NOT_FOUND: $name" >&2; exit 1; fi ;;
+  if grep -qxF -- "$name" "$D/missing" 2>/dev/null; then echo "ERROR: NOT_FOUND: $name" >&2; exit 1; fi
+  if grep -qxF -- "$name" "$D/denied" 2>/dev/null; then echo "ERROR: PERMISSION_DENIED: no access to $name" >&2; exit 1; fi
+  if grep -qxF -- "$name" "$D/disabled" 2>/dev/null; then echo DISABLED; else echo ENABLED; fi ;;
 "secrets versions add") cat > "$D/added-$4" ;;
 "secrets versions access")
   prev=
@@ -753,7 +755,7 @@ func TestPreviewMailOnMountsOnlyTheNightlysMail(t *testing.T) {
 
 func TestPreviewMailCommandsRefuseAPR(t *testing.T) {
 	t.Parallel()
-	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-read-key", "mail-domain"} {
+	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-off", "mail-read-key", "mail-domain"} {
 		for _, bad := range []string{"7", ""} {
 			t.Run(cmd+"/"+bad, func(t *testing.T) {
 				t.Parallel()
@@ -797,6 +799,43 @@ func TestPreviewMailPreflightNamesEveryMissingSecret(t *testing.T) {
 		if !strings.HasPrefix(l, "secrets versions describe ") {
 			t.Errorf("unexpected call %q", l)
 		}
+	}
+}
+
+func TestPreviewMailPreflightNamesADisabledSecret(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "disabled", mailSecrets[2]+"\n") }, "mail-preflight", "nightly")
+	if r.code != 1 || !strings.Contains(r.stderr, mailSecrets[2]) || strings.Contains(r.stderr, mailSecrets[0]) {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	if !strings.Contains(r.file(t, "calls"), "--format value(state)") {
+		t.Errorf("preflight did not read the state: %s", r.file(t, "calls"))
+	}
+}
+
+func TestPreviewMailPreflightReportsAFailureThatIsNotNotFound(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "denied", mailSecrets[1]+"\n") }, "mail-preflight", "nightly")
+	if r.code != 1 || !strings.Contains(r.stderr, "PERMISSION_DENIED") || strings.Contains(r.stderr, "missing or not enabled") {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+}
+
+func TestPreviewMailOffUnmountsAndTurnsAutoConfirmOn(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, nil, "mail-off", "nightly")
+	if r.code != 0 {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	lines := nonBlankLines(r.file(t, "calls"))
+	if len(lines) != 2 {
+		t.Fatalf("calls = %v, want two service updates", lines)
+	}
+	if !strings.HasPrefix(lines[0], "run services update auth-nightly ") || !strings.Contains(lines[0], "--remove-secrets GOTRUE_SMTP_PASS") || !strings.Contains(lines[0], "GOTRUE_MAILER_AUTOCONFIRM=true") {
+		t.Errorf("auth update = %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "run services update tenancy-nightly ") || !strings.Contains(lines[1], "--remove-secrets RESEND_SENDING_KEY") {
+		t.Errorf("tenancy update = %q", lines[1])
 	}
 }
 

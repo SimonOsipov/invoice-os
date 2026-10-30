@@ -1,4 +1,4 @@
-// Command nightlysummary reads the result files of a dispatched CI run and writes summary.json (schema 1).
+// Command nightlysummary reads the result files of a dispatched CI run and writes summary.json (schema 2).
 package main
 
 import (
@@ -78,7 +78,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return fail("%s: %v", *e2eSuitesPath, err)
 		}
-		for _, sp := range e2e {
+		for i, sp := range e2e {
+			e2e[i].e2e = sp.results
 			for _, ci := range suites {
 				if sp.key == ci.key {
 					return fail("%s: key %q is also in %s", *e2eSuitesPath, sp.key, *suitesPath)

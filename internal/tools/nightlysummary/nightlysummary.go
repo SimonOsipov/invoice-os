@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -27,6 +28,7 @@ type suiteSpec struct {
 	key, name string
 	results   bool
 	workflow  string // the workflow file that runs the job
+	e2e       bool   // lists a scenario per test
 }
 
 type step struct {
@@ -82,13 +84,14 @@ type summary struct {
 	suites            []suiteResult
 	failures          []failure
 	flakes            []flake
+	scenarios         []scenario
 	sectionNames      []string
 	sectionBodies     map[string]json.RawMessage
 }
 
 var reservedKeys = map[string]bool{
 	"schema": true, "run_id": true, "sha": true, "started_at": true, "finished_at": true,
-	"verdict": true, "suites": true, "failures": true, "flakes": true,
+	"verdict": true, "suites": true, "failures": true, "flakes": true, "scenarios": true,
 }
 
 func parseSuites(text, workflow string) ([]suiteSpec, error) {
@@ -166,6 +169,7 @@ const (
 	statusPass status = iota
 	statusFail
 	statusFlake
+	statusSkip
 )
 
 // attempt is one run of one test; attempts sharing set+key are judged together.
@@ -180,6 +184,18 @@ type outcome struct {
 	set, pkg, test, file, msg string
 	isPkg                     bool
 	status                    status
+	attempts                  int
+	durationMS                int64
+}
+
+type scenario struct {
+	Suite      string `json:"suite"`
+	Test       string `json:"test"`
+	File       string `json:"file"`
+	Status     string `json:"status"`
+	Attempts   int    `json:"attempts"`
+	DurationMS int64  `json:"duration_ms"`
+	Message    string `json:"message,omitempty"`
 }
 
 // parsedFile is one result file; seen counts every test result in it, skips included.
@@ -558,8 +574,9 @@ type playwrightSuite struct {
 		Tests []struct {
 			Status  string `json:"status"`
 			Results []struct {
-				Status string `json:"status"`
-				Error  *struct {
+				Status   string  `json:"status"`
+				Duration float64 `json:"duration"`
+				Error    *struct {
 					Message string `json:"message"`
 				} `json:"error"`
 			} `json:"results"`
@@ -593,7 +610,12 @@ func parsePlaywright(data []byte, workspace string) (parsedFile, error) {
 			title := strings.Join(append(append([]string(nil), describes...), sp.Title), " › ")
 			for _, t := range sp.Tests {
 				pf.seen++
-				o := outcome{test: title, file: file}
+				o := outcome{test: title, file: file, attempts: len(t.Results)}
+				var ms float64
+				for _, r := range t.Results {
+					ms += r.Duration
+				}
+				o.durationMS = int64(math.Round(ms))
 				switch t.Status {
 				case "expected":
 				case "unexpected":
@@ -609,6 +631,8 @@ func parsePlaywright(data []byte, workspace string) (parsedFile, error) {
 					}
 				case "flaky":
 					o.status = statusFlake
+				case "skipped":
+					o.status = statusSkip
 				default:
 					continue
 				}
@@ -744,6 +768,7 @@ type suiteFiles struct {
 	problems   []failure // unreadable and empty files
 	seen       int
 	unreadable bool
+	report     string // first file that holds a test
 }
 
 func readSuiteFiles(dir, key, workspace string) suiteFiles {
@@ -800,6 +825,9 @@ func readSuiteFiles(dir, key, workspace string) suiteFiles {
 			problem(n, "results empty", "the file holds no test results")
 			continue
 		}
+		if sf.seen == 0 {
+			sf.report = n
+		}
 		sf.seen += pf.seen
 		parsed = append(parsed, pf)
 	}
@@ -818,7 +846,7 @@ func judgeFiles(pfs []parsedFile) []outcome {
 	return append(hideGoParents(classify(attempts)), direct...)
 }
 
-func judgeSuite(spec suiteSpec, jobs []job, resultsDir, workspace string) (*suiteResult, []failure, []flake) {
+func judgeSuite(spec suiteSpec, jobs []job, resultsDir, workspace string) (*suiteResult, []failure, []flake, []scenario) {
 	var j *job
 	for i := range jobs {
 		if jobs[i].Name == spec.name {
@@ -833,25 +861,38 @@ func judgeSuite(spec suiteSpec, jobs []job, resultsDir, workspace string) (*suit
 				conc = "unfinished"
 			}
 		}
-		return nil, []failure{{Suite: spec.key, Test: "suite did not run", File: spec.workflow, Message: "job " + spec.name + " " + conc}}, nil
+		return nil, []failure{{Suite: spec.key, Test: "suite did not run", File: spec.workflow, Message: "job " + spec.name + " " + conc}}, nil, nil
 	}
 
 	var fails []failure
 	var flakes []flake
+	var scenarios []scenario
 	passed, testFails := 0, 0
 	if spec.results {
 		sf := readSuiteFiles(filepath.Join(resultsDir, "results-"+spec.key), spec.key, workspace)
 		fails = append(fails, sf.problems...)
 		for _, o := range sf.outcomes {
+			sc := scenario{Suite: spec.key, Test: o.test, File: o.file, Attempts: o.attempts, DurationMS: o.durationMS}
 			switch o.status {
 			case statusPass:
 				passed++
+				sc.Status = "passed"
 			case statusFail:
 				testFails++
 				fails = append(fails, failure{spec.key, o.test, o.file, o.msg})
+				sc.Status, sc.Message = "failed", o.msg
 			case statusFlake:
 				flakes = append(flakes, flake{spec.key, o.test, o.file})
+				sc.Status = "flaky"
+			case statusSkip:
+				sc.Status = "skipped"
 			}
+			if spec.e2e {
+				scenarios = append(scenarios, sc)
+			}
+		}
+		if spec.e2e && sf.seen > 0 && passed+testFails+len(flakes) == 0 {
+			fails = append(fails, failure{spec.key, "no test results", "results-" + spec.key + "/" + sf.report, "no passed, failed or flaky test in the reports"})
 		}
 		if sf.seen == 0 && !sf.unreadable {
 			fails = append(fails, failure{spec.key, "no test results", spec.workflow, "job " + spec.name + " wrote no results"})
@@ -862,7 +903,7 @@ func judgeSuite(spec suiteSpec, jobs []job, resultsDir, workspace string) (*suit
 	if j.Conclusion != "success" {
 		fails = append(fails, stepFailures(spec.key, spec.workflow, j, testFails == 0)...)
 	}
-	return &suiteResult{Name: spec.key, Passed: passed, Failed: len(fails), Flaky: len(flakes)}, fails, flakes
+	return &suiteResult{Name: spec.key, Passed: passed, Failed: len(fails), Flaky: len(flakes)}, fails, flakes, scenarios
 }
 
 // stepFailures lists failed steps (when no test failure explains the job) and the steps an earlier failure skipped.
@@ -894,18 +935,19 @@ func stepFailures(key, workflow string, j *job, listFailed bool) []failure {
 func assemble(in input) *summary {
 	s := &summary{
 		runID: in.runID, sha: in.sha, started: in.started, finished: in.finished,
-		suites: []suiteResult{}, failures: []failure{}, flakes: []flake{},
+		suites: []suiteResult{}, failures: []failure{}, flakes: []flake{}, scenarios: []scenario{},
 		sectionBodies: map[string]json.RawMessage{},
 	}
 	rank := map[string]int{}
 	for i, spec := range in.suites {
 		rank[spec.key] = i
-		sr, fails, flakes := judgeSuite(spec, in.jobs, in.resultsDir, in.workspace)
+		sr, fails, flakes, scens := judgeSuite(spec, in.jobs, in.resultsDir, in.workspace)
 		if sr != nil {
 			s.suites = append(s.suites, *sr)
 		}
 		s.failures = append(s.failures, fails...)
 		s.flakes = append(s.flakes, flakes...)
+		s.scenarios = append(s.scenarios, scens...)
 	}
 	red := false
 	for i, sec := range in.sections {
@@ -969,9 +1011,10 @@ func (s *summary) marshal() ([]byte, error) {
 		v any
 	}
 	items := []kv{
-		{"schema", 1}, {"run_id", s.runID}, {"sha", s.sha},
+		{"schema", 2}, {"run_id", s.runID}, {"sha", s.sha},
 		{"started_at", s.started.Format(time.RFC3339)}, {"finished_at", s.finished.Format(time.RFC3339)},
 		{"verdict", s.verdict}, {"suites", s.suites}, {"failures", s.failures}, {"flakes", s.flakes},
+		{"scenarios", s.scenarios},
 	}
 	for _, n := range s.sectionNames {
 		items = append(items, kv{n, s.sectionBodies[n]})

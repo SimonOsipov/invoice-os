@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "run_id": 1,
   "sha": "abc",
   "started_at": "2026-10-29T01:17:00Z",
@@ -43,5 +43,6 @@
       "test": "tests.test_x::test_bad",
       "file": "sidecar/docling/tests/test_x.py"
     }
-  ]
+  ],
+  "scenarios": []
 }

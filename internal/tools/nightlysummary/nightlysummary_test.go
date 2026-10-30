@@ -460,6 +460,7 @@ type runResult struct {
 	raw            []byte
 	dec            decoded
 	obj            map[string]json.RawMessage
+	scenarios      []scenario
 }
 
 type env struct {
@@ -545,6 +546,9 @@ func runArgs(t *testing.T, out string, args []string) runResult {
 	if err := json.Unmarshal(raw, &r.obj); err != nil {
 		t.Fatal(err)
 	}
+	if err := json.Unmarshal(r.obj["scenarios"], &r.scenarios); err != nil {
+		t.Fatal(err)
+	}
 	return r
 }
 
@@ -567,20 +571,59 @@ func (r runResult) failureTests(suite string) []string {
 	return out
 }
 
-func TestRun_OutputHasSchemaOneKeysOnly(t *testing.T) {
+// assertScenariosMatchCounts checks each E2E suite's scenarios against its counts;
+// failed is counted from failures[], not suites[].failed, which also holds job and step entries.
+func assertScenariosMatchCounts(t *testing.T, r runResult, e2eKeys ...string) {
+	t.Helper()
+	isE2E := map[string]bool{}
+	for _, k := range e2eKeys {
+		isE2E[k] = true
+	}
+	got := map[string]map[string]int{}
+	failedScenario := map[[3]string]bool{}
+	for _, sc := range r.scenarios {
+		if !isE2E[sc.Suite] {
+			t.Fatalf("scenario of non-E2E suite: %+v", sc)
+		}
+		if got[sc.Suite] == nil {
+			got[sc.Suite] = map[string]int{}
+		}
+		got[sc.Suite][sc.Status]++
+		if sc.Status == "failed" {
+			failedScenario[[3]string{sc.Suite, sc.Test, sc.File}] = true
+		}
+	}
+	for _, k := range e2eKeys {
+		sr := r.suite(k)
+		if sr == nil {
+			t.Fatalf("no suite %q", k)
+		}
+		testFails := 0
+		for _, f := range r.dec.Failures {
+			if f.Suite == k && failedScenario[[3]string{f.Suite, f.Test, f.File}] {
+				testFails++
+			}
+		}
+		eq(t, got[k]["passed"], sr.Passed)
+		eq(t, got[k]["flaky"], sr.Flaky)
+		eq(t, got[k]["failed"], testFails)
+	}
+}
+
+func TestRun_OutputHasSchemaTwoKeys(t *testing.T) {
 	r := newEnv(t).run()
 	keys := []string{}
 	for k := range r.obj {
 		keys = append(keys, k)
 	}
-	want := []string{"schema", "run_id", "sha", "started_at", "finished_at", "verdict", "suites", "failures", "flakes"}
+	want := []string{"schema", "run_id", "sha", "started_at", "finished_at", "verdict", "suites", "failures", "flakes", "scenarios"}
 	eq(t, len(keys), len(want))
 	for _, k := range want {
 		if _, ok := r.obj[k]; !ok {
 			t.Fatalf("missing key %q in %v", k, keys)
 		}
 	}
-	eq(t, string(r.obj["schema"]), "1")
+	eq(t, string(r.obj["schema"]), "2")
 	eq(t, string(r.obj["run_id"]), "1")
 	eq(t, string(r.obj["sha"]), `"abc"`)
 	eq(t, string(r.obj["finished_at"]), `"2026-10-29T02:00:00Z"`)
@@ -589,7 +632,7 @@ func TestRun_OutputHasSchemaOneKeysOnly(t *testing.T) {
 
 func TestRun_EmptyListsAreArraysNotNull(t *testing.T) {
 	r := newEnv(t).run()
-	for _, want := range []string{`"failures":[]`, `"flakes":[]`} {
+	for _, want := range []string{`"failures":[]`, `"flakes":[]`, `"scenarios":[]`} {
 		if !strings.Contains(string(r.raw), want) {
 			t.Fatalf("%s missing in %s", want, r.raw)
 		}
@@ -603,6 +646,27 @@ func TestRun_EmptyListsAreArraysNotNull(t *testing.T) {
 	e.job("Docker image (canary)").Conclusion = "success"
 	r = e.run()
 	eq(t, len(r.dec.Suites), 1)
+}
+
+func TestRun_SchemaOneReaderReadsSchemaTwo(t *testing.T) {
+	r := newEnv(t).run()
+	var old decoded
+	if err := json.Unmarshal(r.raw, &old); err != nil {
+		t.Fatal(err)
+	}
+	eq(t, old.Verdict, "green")
+	eq(t, old.Suites, []suiteResult{{"go", 1, 0, 0}, {"frontend", 1, 0, 0}, {"docling-test", 1, 0, 0}, {"docker-canary", 1, 0, 0}})
+	eq(t, len(old.Failures), 0)
+	eq(t, len(old.Flakes), 0)
+}
+
+func TestRun_SectionNamedScenariosIsUsageError(t *testing.T) {
+	e := newEnv(t)
+	sec := filepath.Join(e.dir, "x.json")
+	e.writeFile(sec, `{"ok":true}`)
+	r := e.run("-section", "scenarios="+sec)
+	eq(t, r.code, 2)
+	eq(t, r.raw == nil, true)
 }
 
 func TestRun_FlakeAloneKeepsVerdictGreen(t *testing.T) {
@@ -967,6 +1031,7 @@ func assertWant(t *testing.T, name string, wantCode int) {
 	t.Helper()
 	r := runFixture(t, name)
 	eq(t, r.code, wantCode)
+	assertScenariosMatchCounts(t, r)
 	var got, want any
 	if err := json.Unmarshal(r.raw, &got); err != nil {
 		t.Fatal(err)
@@ -1156,12 +1221,17 @@ func TestPlaywright_SkippedOnlyReportIsNotResultsEmpty(t *testing.T) {
 	eq(t, len(r.dec.Failures), 0)
 }
 
-func TestRun_E2EWholeRun(t *testing.T) {
+func runE2EFixture(t *testing.T) runResult {
+	t.Helper()
 	d := filepath.Join("testdata", "e2e")
 	out := filepath.Join(t.TempDir(), "summary.json")
 	args := append([]string{"-suites", filepath.Join("testdata", "suites.txt"), "-e2e-suites", filepath.Join(d, "e2e-suites.txt"),
 		"-jobs", filepath.Join(d, "jobs.json"), "-results", filepath.Join(d, "results"), "-out", out}, strings.Fields(fixtureFlags)...)
-	r := runArgs(t, out, args)
+	return runArgs(t, out, args)
+}
+
+func TestRun_E2EWholeRun(t *testing.T) {
+	r := runE2EFixture(t)
 	eq(t, r.code, 1)
 	eq(t, r.dec.Verdict, "red")
 	eq(t, *r.suite("environment"), suiteResult{Name: "environment", Passed: 1})
@@ -1170,4 +1240,209 @@ func TestRun_E2EWholeRun(t *testing.T) {
 	eq(t, r.dec.Flakes, []flake{{"e2e", "flaky one", "e2e/scratch/x.spec.ts"}})
 	eq(t, r.dec.Failures, []failure{{"topology-auth", "outer › inner › fails twice", "e2e/scratch/x.spec.ts", r.dec.Failures[0].Message}})
 	eq(t, strings.HasPrefix(r.dec.Failures[0].Message, "Error: expect(received)"), true)
+	assertScenariosMatchCounts(t, r, "e2e", "topology-auth")
+}
+
+// ---- scenarios ----
+
+func TestPlaywright_ScenarioFieldsFromMixedReport(t *testing.T) {
+	pf, err := parsePlaywright(fixture(t, "playwright", "mixed.json"), pwWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type row struct {
+		test       string
+		status     status
+		attempts   int
+		durationMS int64
+	}
+	got := []row{}
+	for _, o := range pf.direct {
+		got = append(got, row{o.test, o.status, o.attempts, o.durationMS})
+	}
+	eq(t, got, []row{
+		{"passes", statusPass, 1, 3},
+		{"flaky one", statusFlake, 2, 5},
+		{"skipped one", statusSkip, 1, 0},
+		{"outer › inner › fails twice", statusFail, 2, 8},
+	})
+}
+
+// pwSpec is one spec of one test; results are (status, duration) pairs.
+func pwSpec(title, testStatus string, results ...string) string {
+	return fmt.Sprintf(`{"title":%q,"file":"a.spec.ts","tests":[{"status":%q,"results":[%s]}]}`, title, testStatus, strings.Join(results, ","))
+}
+
+func pwResult(status string, duration float64) string {
+	return fmt.Sprintf(`{"status":%q,"duration":%v,"error":{"message":"boom"}}`, status, duration)
+}
+
+func pwFile(specs ...string) string {
+	return fmt.Sprintf(`{"config":{"rootDir":%q},"suites":[{"title":"a.spec.ts","specs":[%s]}]}`, pwWorkspace+"/e2e", strings.Join(specs, ","))
+}
+
+func TestPlaywright_InterruptedOnlyTestIsSkipped(t *testing.T) {
+	pf, err := parsePlaywright([]byte(pwFile(pwSpec("t", "skipped", pwResult("interrupted", 0)))), pwWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, len(pf.direct), 1)
+	eq(t, pf.direct[0].status, statusSkip)
+	eq(t, pf.direct[0].attempts, 1)
+}
+
+func TestPlaywright_FractionalDurationRounds(t *testing.T) {
+	pf, err := parsePlaywright([]byte(pwFile(pwSpec("t", "flaky", pwResult("failed", 1.4), pwResult("passed", 2.2)))), pwWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, pf.direct[0].durationMS, int64(4))
+}
+
+func e2eEnv(t *testing.T) *env {
+	t.Helper()
+	e := newEnv(t)
+	e.e2e("e2e=E2E=results\ntopology-auth=E2E topology (auth)=results\n")
+	e.jobs = append(e.jobs, job{Name: "E2E", Conclusion: "success"}, job{Name: "E2E topology (auth)", Conclusion: "success"})
+	return e
+}
+
+func TestRun_ScenariosMatchFailuresAndFlakes(t *testing.T) {
+	r := runE2EFixture(t)
+	by := map[string]scenario{}
+	for _, sc := range r.scenarios {
+		by[sc.Status] = sc
+	}
+	f := r.dec.Failures[0]
+	eq(t, by["failed"], scenario{Suite: f.Suite, Test: f.Test, File: f.File, Status: "failed", Attempts: 2, DurationMS: 9, Message: f.Message})
+	fl := r.dec.Flakes[0]
+	eq(t, [3]string{by["flaky"].Suite, by["flaky"].Test, by["flaky"].File}, [3]string{fl.Suite, fl.Test, fl.File})
+	var raw []map[string]json.RawMessage
+	if err := json.Unmarshal(r.obj["scenarios"], &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range raw {
+		_, has := m["message"]
+		eq(t, has, string(m["status"]) == `"failed"`)
+	}
+}
+
+func TestRun_ScenariosOnlyForE2ESuites(t *testing.T) {
+	e := newEnv(t)
+	e.write("frontend", "playwright-a.json", pwFile(pwSpec("t", "expected", pwResult("passed", 1))))
+	r := e.run()
+	eq(t, r.code, 0)
+	if !strings.Contains(string(r.raw), `"scenarios":[]`) {
+		t.Fatalf("scenarios not empty in %s", r.raw)
+	}
+}
+
+func TestRun_ScenariosKeepSuiteFileReportOrder(t *testing.T) {
+	e := e2eEnv(t)
+	one := func(title string) string { return pwFile(pwSpec(title, "expected", pwResult("passed", 1))) }
+	e.write("e2e", "playwright-smoke.json", pwFile(
+		pwSpec("smoke 1", "expected", pwResult("passed", 1)), pwSpec("smoke 2", "expected", pwResult("passed", 1))))
+	e.write("e2e", "playwright-api.json", one("api 1"))
+	e.write("topology-auth", "playwright-topology-auth.json", one("auth 1"))
+	r := e.run(e.e2eFlag...)
+	eq(t, r.code, 0)
+	got := []string{}
+	for _, sc := range r.scenarios {
+		got = append(got, sc.Suite+"/"+sc.Test)
+	}
+	eq(t, got, []string{"e2e/api 1", "e2e/smoke 1", "e2e/smoke 2", "topology-auth/auth 1"})
+}
+
+func TestRun_DuplicateTitlesAreSeparateScenarios(t *testing.T) {
+	e := e2eEnv(t)
+	e.write("e2e", "playwright-e2e.json", pwFile(pwSpec("loop", "expected", pwResult("passed", 1)), pwSpec("loop", "expected", pwResult("passed", 2))))
+	e.write("topology-auth", "playwright-topology-auth.json", pwFile(pwSpec("t", "expected", pwResult("passed", 1))))
+	r := e.run(e.e2eFlag...)
+	eq(t, len(r.scenarios), 3)
+	eq(t, r.scenarios[0].Test, r.scenarios[1].Test)
+	eq(t, r.scenarios[1].DurationMS, int64(2))
+}
+
+func TestRun_E2EJobThatDidNotRunHasNoScenarios(t *testing.T) {
+	e := e2eEnv(t)
+	e.job("E2E").Conclusion = "skipped"
+	e.write("e2e", "playwright-e2e.json", pwFile(pwSpec("t", "expected", pwResult("passed", 1))))
+	e.write("topology-auth", "playwright-topology-auth.json", pwFile(pwSpec("u", "expected", pwResult("passed", 1))))
+	r := e.run(e.e2eFlag...)
+	eq(t, r.code, 1)
+	eq(t, r.dec.Failures, []failure{{"e2e", "suite did not run", devEnvWorkflow, "job E2E skipped"}})
+	eq(t, len(r.scenarios), 1)
+	eq(t, r.scenarios[0].Suite, "topology-auth")
+}
+
+func TestRun_ScenarioCountsMatchSuiteCounts(t *testing.T) {
+	for _, name := range []string{"green", "red", "flake", "missing"} {
+		assertScenariosMatchCounts(t, runFixture(t, name))
+	}
+	assertScenariosMatchCounts(t, runE2EFixture(t), "e2e", "topology-auth")
+}
+
+func TestRun_FailedJobStepFailuresAreNotScenarios(t *testing.T) {
+	e := e2eEnv(t)
+	j := e.job("E2E")
+	j.Conclusion = "failure"
+	j.Steps = steps("Run the suite", "failure", "Upload", "skipped")
+	e.write("e2e", "playwright-e2e.json", pwFile(pwSpec("bad", "unexpected", pwResult("failed", 1))))
+	e.write("topology-auth", "playwright-topology-auth.json", pwFile(pwSpec("t", "expected", pwResult("passed", 1))))
+	r := e.run(e.e2eFlag...)
+	failed := 0
+	for _, sc := range r.scenarios {
+		if sc.Status == "failed" {
+			failed++
+		}
+	}
+	eq(t, failed, 1)
+	eq(t, r.suite("e2e").Failed, 2)
+	eq(t, r.failureTests("e2e"), []string{"Upload", "bad"})
+}
+
+func TestRun_E2ESuiteOfOnlySkippedTestsIsRed(t *testing.T) {
+	e := e2eEnv(t)
+	e.write("e2e", "playwright-e2e.json", pwFile(pwSpec("skipped", "skipped", pwResult("skipped", 0))))
+	e.write("topology-auth", "playwright-topology-auth.json", pwFile(pwSpec("t", "expected", pwResult("passed", 1))))
+	r := e.run(e.e2eFlag...)
+	eq(t, r.code, 1)
+	eq(t, r.dec.Failures, []failure{{"e2e", "no test results", "results-e2e/playwright-e2e.json", "no passed, failed or flaky test in the reports"}})
+	eq(t, r.scenarios[0].Status, "skipped")
+	eq(t, *r.suite("e2e"), suiteResult{Name: "e2e", Failed: 1})
+}
+
+func TestRun_E2EOnlyInterruptedTestsIsRed(t *testing.T) {
+	e := e2eEnv(t)
+	e.write("e2e", "playwright-e2e.json", pwFile(pwSpec("cut", "skipped", pwResult("interrupted", 0))))
+	e.write("topology-auth", "playwright-topology-auth.json", pwFile(pwSpec("t", "expected", pwResult("passed", 1))))
+	r := e.run(e.e2eFlag...)
+	eq(t, r.code, 1)
+	eq(t, r.failureTests("e2e"), []string{"no test results"})
+}
+
+func TestRun_E2EOneRanTestBesideSkippedIsGreen(t *testing.T) {
+	e := e2eEnv(t)
+	e.write("e2e", "playwright-e2e.json", pwFile(
+		pwSpec("ran", "expected", pwResult("passed", 1)), pwSpec("skipped", "skipped", pwResult("skipped", 0))))
+	e.write("topology-auth", "playwright-topology-auth.json", pwFile(pwSpec("t", "expected", pwResult("passed", 1))))
+	r := e.run(e.e2eFlag...)
+	eq(t, r.code, 0)
+	eq(t, len(r.dec.Failures), 0)
+	eq(t, len(r.scenarios), 3)
+	eq(t, r.scenarios[1].Status, "skipped")
+	eq(t, strings.Contains(string(r.obj["scenarios"]), "message"), false)
+}
+
+func TestRun_E2EReportNamedByFirstFileWithTests(t *testing.T) {
+	e := e2eEnv(t)
+	e.write("e2e", "playwright-api.json", `{"config":{"rootDir":"/x"},"suites":[]}`)
+	e.write("e2e", "playwright-smoke.json", pwFile(pwSpec("skipped", "skipped", pwResult("skipped", 0))))
+	e.write("topology-auth", "playwright-topology-auth.json", pwFile(pwSpec("t", "expected", pwResult("passed", 1))))
+	r := e.run(e.e2eFlag...)
+	eq(t, r.code, 1)
+	eq(t, r.dec.Failures, []failure{
+		{"e2e", "results empty", "playwright-api.json", "the file holds no test results"},
+		{"e2e", "no test results", "results-e2e/playwright-smoke.json", "no passed, failed or flaky test in the reports"},
+	})
 }

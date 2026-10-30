@@ -270,7 +270,7 @@ func invoicesDocTypeSnap(t *testing.T, ctx context.Context, tx pgx.Tx) invoicesD
 		return out
 	}
 	return invoicesDocTypeSnapshot{
-		constraints: read(`SELECT conname, contype || ' ' || pg_get_constraintdef(oid) || ' ' || confdeltype
+		constraints: read(`SELECT conname, contype::text || ' ' || pg_get_constraintdef(oid) || ' ' || confdeltype::text
 		                     FROM pg_constraint WHERE conrelid = 'public.invoices'::regclass`),
 		indexes: read(`SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'invoices'`),
 		columns: read(`SELECT column_name, data_type || ' ' || is_nullable || ' ' || coalesce(column_default, '')

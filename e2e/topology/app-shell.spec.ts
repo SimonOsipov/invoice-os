@@ -598,7 +598,7 @@ test('AS-06 every nav destination of both modes: no sideways scroll, no unresolv
         report.push({ where, scroll, scanned: s.scanned, buttons: s.buttons, chips: s.chips })
         await shoot(page, 'app', `${persona}-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`, {
           // Other specs of the shard write rows, company names and nav counts.
-          mask: [page.getByTestId('identity-card'), page.getByTestId('company-switcher'), page.locator('main.pf-main tbody'), navButtons(page).locator('span.mono')],
+          mask: [page.getByTestId('identity-card'), page.getByTestId('company-switcher'), page.locator('main.pf-main tbody'), page.getByTestId('audit-table'), navButtons(page).locator('span.mono')],
         })
       }
       if (argosOn()) {

@@ -1,12 +1,14 @@
 package invoice
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/submission"
+	"github.com/SimonOsipov/invoice-os/internal/ubl"
 )
 
 // strOrNil renders a *string for a t.Errorf message -- "nil" or the pointee
@@ -304,6 +306,35 @@ func TestSubmissionCanonical_MapsTheDocumentType(t *testing.T) {
 	for _, dt := range []submission.DocumentType{submission.CommercialInvoice, submission.CreditNote, submission.DebitNote} {
 		if got := SubmissionCanonical(Invoice{DocumentType: dt}).DocumentType; got != dt {
 			t.Errorf("Canonical.DocumentType = %q, want %q", got, dt)
+		}
+	}
+}
+
+// The stored type reaches both wires through SubmissionCanonical, not through a hand-built Canonical.
+func TestSubmissionCanonical_StoredTypeReachesBothWires(t *testing.T) {
+	for _, tc := range []struct {
+		dt   submission.DocumentType
+		code string
+	}{
+		{submission.CommercialInvoice, "381"}, {submission.CreditNote, "380"}, {submission.DebitNote, "384"}, {"", "381"},
+	} {
+		inv := completeUBLInvoice(t, "INV-TYPE")
+		inv.DocumentType = tc.dt
+		c := SubmissionCanonical(inv)
+
+		wire, err := submission.NewMockAdapter(submission.MockConfig{}).Transform(context.Background(), c)
+		if err != nil {
+			t.Fatalf("%q: Transform: %v", tc.dt, err)
+		}
+		if want := `"InvoiceTypeCode":"` + tc.code + `"`; !strings.Contains(string(wire), want) {
+			t.Errorf("%q: mock wire lacks %s", tc.dt, want)
+		}
+		doc, err := ubl.Render(c)
+		if err != nil {
+			t.Fatalf("%q: Render: %v", tc.dt, err)
+		}
+		if want := "<cbc:InvoiceTypeCode>" + tc.code + "</cbc:InvoiceTypeCode>"; !strings.Contains(string(doc), want) {
+			t.Errorf("%q: UBL lacks %s", tc.dt, want)
 		}
 	}
 }

@@ -246,6 +246,7 @@ var wantTypeCodes = []struct {
 	{submission.CommercialInvoice, "381"},
 	{submission.CreditNote, "380"},
 	{submission.DebitNote, "384"},
+	{"bogus_type", "381"},
 }
 
 func TestRender_KeepsTheInvoice2RootForEveryType(t *testing.T) {

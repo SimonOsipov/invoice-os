@@ -674,7 +674,7 @@ func TestMockWire_CarriesTheBISConstants(t *testing.T) {
 		for _, dt := range []struct {
 			docType DocumentType
 			code    string
-		}{{CommercialInvoice, "381"}, {CreditNote, "380"}, {DebitNote, "384"}} { // values of InvoiceTypeCode
+		}{{CommercialInvoice, "381"}, {CreditNote, "380"}, {DebitNote, "384"}, {"bogus_type", "381"}} { // values of InvoiceTypeCode
 			t.Run(tc.name+"/"+string(dt.docType), func(t *testing.T) {
 				c := tc.build()
 				c.DocumentType = dt.docType

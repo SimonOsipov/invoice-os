@@ -1326,6 +1326,21 @@ func TestRun_E2EWholeRun(t *testing.T) {
 	assertScenariosMatchCounts(t, r, "e2e", "topology-auth")
 }
 
+func TestRun_FixtureScenariosAndSteps(t *testing.T) {
+	d := filepath.Join("testdata", "e2e")
+	out := filepath.Join(t.TempDir(), "summary.json")
+	args := append([]string{"-suites", filepath.Join("testdata", "suites.txt"), "-e2e-suites", filepath.Join(d, "e2e-suites.txt"),
+		"-jobs", filepath.Join(d, "jobs.json"), "-results", filepath.Join(d, "results"), "-out", out,
+		"-section", "ai=" + filepath.Join(d, "ai.json")}, strings.Fields(fixtureFlags)...)
+	r := runArgs(t, out, args)
+	eq(t, r.code, 1)
+	want, err := os.ReadFile(filepath.Join(d, "want.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, string(r.raw), string(want))
+}
+
 // ---- scenarios ----
 
 func TestPlaywright_ScenarioFieldsFromMixedReport(t *testing.T) {

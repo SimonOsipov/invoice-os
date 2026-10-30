@@ -201,6 +201,48 @@
           "file": "scratch/x.spec.ts",
           "line": 3,
           "column": 5
+        },
+        {
+          "title": "skipped one",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [
+                {
+                  "type": "skip"
+                }
+              ],
+              "expectedStatus": "skipped",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 0,
+                  "status": "skipped",
+                  "duration": 0,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-29T19:53:13.700Z",
+                  "annotations": [
+                    {
+                      "type": "skip"
+                    }
+                  ],
+                  "attachments": []
+                }
+              ],
+              "status": "skipped"
+            }
+          ],
+          "id": "3150b2b15a46dc1d8ef0-1c2d3e4f5a6b7c8d9e0f",
+          "file": "scratch/x.spec.ts",
+          "line": 4,
+          "column": 6
         }
       ]
     }
@@ -210,7 +252,7 @@
     "startTime": "2026-10-29T19:53:13.042Z",
     "duration": 658.266,
     "expected": 1,
-    "skipped": 0,
+    "skipped": 1,
     "unexpected": 0,
     "flaky": 1
   }

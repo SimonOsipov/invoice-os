@@ -52,7 +52,7 @@ The security reviewer reads this file before each review. Treat a break of a gua
 ## Postures
 
 - `platform.Posture` reads `DEPLOY_ENV`: empty is local, `pr-<N>` is preview, the exact name `nightly` is nightly, any other name is hosted.
-- Only a preview logs the gateway's per-address limits without refusing. Preview and nightly capture account mail.
+- Only a preview logs the gateway's per-address limits without refusing. A preview captures account mail.
 
 ## Untrusted entry points
 

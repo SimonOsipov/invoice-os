@@ -37,3 +37,16 @@ describe('smoke and api configs', () => {
     expect(retries).toBe(1)
   })
 })
+
+describe('mail config', () => {
+  it('never retries and records nothing', async () => {
+    const { reporter, retries, testMatch, workers, use } = await load('./playwright.mail.config', 'nightly')
+    expect(testMatch).toBe('**/*.spec.ts')
+    expect(retries).toBe(0)
+    expect(workers).toBe(1)
+    expect(use.trace).toBe('off')
+    expect(use.video).toBe('off')
+    expect(use.screenshot).toBe('off')
+    expect(reporter).toEqual([['list']])
+  })
+})

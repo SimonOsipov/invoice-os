@@ -42,7 +42,7 @@ paths:
 - Name variables in a boot error, never their values.
 - Run a preview in `fake` mode and discard its vendor keys.
 - The nightly posture reads the contact keys like production.
-- Its newsletter is `fake` and its mail is captured.
+- Its newsletter is `fake`. Its blog and new-device mail is captured. Its invite mail is captured until `mail-on` mounts the key.
 - `scripts/ci/preview.sh` gives the nightly preview `CONTACTS_FAKE` and no contact key. Contacts run `fake` there.
 - `TestPreviewNightlyContactsAreFake` pins this.
 - Answer 404 to an intake request that carries `X-User-ID`. Require the gateway token on every intake route.

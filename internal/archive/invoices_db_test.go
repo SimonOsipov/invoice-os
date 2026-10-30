@@ -822,6 +822,41 @@ func TestSelectInvoices_OriginalOutsideThePeriodStillNames(t *testing.T) {
 	}
 }
 
+func TestSelectInvoices_EachNoteNamesItsOwnOriginal(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-invoices-two-originals")
+	entity := mustCreateEntity(t, tx, tenant, "Two Co", "80000009-0004")
+	at := time.Date(2026, 9, 10, 8, 0, 0, 0, time.UTC)
+	want := map[string]string{}
+	for i, n := range []string{"A", "B"} {
+		orig := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-" + n, status: "accepted", createdAt: at.Add(time.Duration(i) * time.Hour)})
+		note := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "CN-" + n, status: "accepted", createdAt: at.Add(time.Duration(i)*time.Hour + time.Minute)})
+		if _, err := tx.Exec(context.Background(), `UPDATE invoices SET document_type = 'credit_note', original_invoice_id = $2 WHERE id = $1`, note, orig); err != nil {
+			t.Fatalf("make note: %v", err)
+		}
+		want["CN-"+n] = "INV-" + n
+	}
+	actingAs(t, tx, tenant)
+
+	rows := selectInvoiceCSV(t, tx, entity, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC))
+	if len(rows) != 5 {
+		t.Fatalf("rows = %d, want 5 (header + 2 originals + 2 notes)", len(rows))
+	}
+	seen := 0
+	for _, r := range rows[1:] {
+		if orig, ok := want[r[headerIndex(t, "invoice_number")]]; ok {
+			seen++
+			if got := r[headerIndex(t, "original_invoice_number")]; got != orig {
+				t.Errorf("%s original = %q, want %q", r[1], got, orig)
+			}
+		}
+	}
+	if seen != 2 {
+		t.Errorf("saw %d notes, want 2", seen)
+	}
+}
+
 func TestSelectInvoices_NoteKeepsStoredPositiveAmounts(t *testing.T) {
 	super := dbSuperPool(t)
 	tx := beginFixtureTx(t, super)

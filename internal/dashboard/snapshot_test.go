@@ -165,6 +165,29 @@ func TestSnapshot_EarlierDayKeepsItsValueWhenANoteArrives(t *testing.T) {
 	}
 }
 
+func TestSnapshot_SameDayRerunReplacesTheValueWithTheNet(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "snapshot same day")
+	ent := seedEntity(t, super, tenant, "Snap A")
+	inv := seedInvoiceWithVAT(t, super, tenant, ent, "SSD-INV", "10.00")
+
+	snapRun(t, snapAt(time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC), tenant), app)
+	if g := snapRows(t, super, tenant)[ent]["2026-10-20"]; g.VATKobo != 1000 {
+		t.Fatalf("first run vat_kobo = %d, want 1000", g.VATKobo)
+	}
+
+	seedNote(t, super, tenant, ent, "SSD-CN", "credit_note", inv, "draft", "30.00")
+	snapRun(t, snapAt(time.Date(2026, 10, 20, 15, 0, 0, 0, time.UTC), tenant), app)
+
+	got := snapRows(t, super, tenant)[ent]
+	if len(got) != 1 {
+		t.Fatalf("days = %d, want 1 (same day upserts)", len(got))
+	}
+	if g := got["2026-10-20"]; g.VATKobo != -2000 || g.Total != 2 {
+		t.Errorf("same day after rerun = %+v, want vat_kobo -2000 and total 2", g)
+	}
+}
+
 func TestSnapshot_CompanyWithNoInvoicesGetsNoRow(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenant := seedTenant(t, super, "snapshot empty company")

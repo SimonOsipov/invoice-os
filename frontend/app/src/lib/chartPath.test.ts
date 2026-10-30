@@ -22,6 +22,15 @@ describe('sparkPath', () => {
     expect(ys[2]).toBe(3)
   })
 
+  it('sparkPath_drawsAnAllNegativeSeriesFromBottomToTop', () => {
+    const ys = sparkPath([-300, -200, -100])
+      .split(' ')
+      .map((t) => t.replace(/^[ML]/, ''))
+      .filter((_, i) => i % 2 === 1)
+      .map(Number)
+    expect(ys).toEqual([27, 15, 3])
+  })
+
   it('draws a flat series as a flat line, not NaN', () => {
     const d = sparkPath([5, 5, 5])
     expect(d).not.toContain('NaN')

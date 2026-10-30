@@ -163,6 +163,9 @@ export interface RejectionReason {
   path?: string
 }
 
+// Mirrors submission.CommercialInvoice, CreditNote, DebitNote.
+export type InvoiceDocumentType = 'commercial_invoice' | 'credit_note' | 'debit_note'
+
 // The invoice record shape shared by listInvoices/getInvoice (invoice.go:83-114 plus the
 // getResponse/validateResponse sibling key, handlers.go:180-183/376-379).
 // `rule_set_version` is typed as always-present (number | null) even though the raw List
@@ -174,9 +177,6 @@ export interface RejectionReason {
 // Core AC #1) re-sync this mirror against invoice.go:83-105 -- all five are `json:"..."`
 // with no `omitempty` on the Go struct, so every one of them is present on BOTH the
 // list and get wire as an explicit value or explicit null, never an absent key.
-// Mirrors submission.CommercialInvoice, CreditNote, DebitNote.
-export type InvoiceDocumentType = 'commercial_invoice' | 'credit_note' | 'debit_note'
-
 export interface InvoiceRecord {
   id: string
   entity_id: string

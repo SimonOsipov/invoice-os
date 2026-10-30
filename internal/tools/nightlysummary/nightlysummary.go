@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -27,6 +28,7 @@ type suiteSpec struct {
 	key, name string
 	results   bool
 	workflow  string // the workflow file that runs the job
+	e2e       bool   // lists a scenario per test
 }
 
 type step struct {
@@ -82,13 +84,17 @@ type summary struct {
 	suites            []suiteResult
 	failures          []failure
 	flakes            []flake
+	scenarios         []scenario
 	sectionNames      []string
 	sectionBodies     map[string]json.RawMessage
 }
 
+// stepSections must list their steps; other sections (argos) do not.
+var stepSections = map[string]bool{"ai": true, "email": true, "hubspot": true, "prod_check": true}
+
 var reservedKeys = map[string]bool{
 	"schema": true, "run_id": true, "sha": true, "started_at": true, "finished_at": true,
-	"verdict": true, "suites": true, "failures": true, "flakes": true,
+	"verdict": true, "suites": true, "failures": true, "flakes": true, "scenarios": true,
 }
 
 func parseSuites(text, workflow string) ([]suiteSpec, error) {
@@ -166,6 +172,7 @@ const (
 	statusPass status = iota
 	statusFail
 	statusFlake
+	statusSkip
 )
 
 // attempt is one run of one test; attempts sharing set+key are judged together.
@@ -180,6 +187,18 @@ type outcome struct {
 	set, pkg, test, file, msg string
 	isPkg                     bool
 	status                    status
+	attempts                  int
+	durationMS                int64
+}
+
+type scenario struct {
+	Suite      string `json:"suite"`
+	Test       string `json:"test"`
+	File       string `json:"file"`
+	Status     string `json:"status"`
+	Attempts   int    `json:"attempts"`
+	DurationMS int64  `json:"duration_ms"`
+	Message    string `json:"message,omitempty"`
 }
 
 // parsedFile is one result file; seen counts every test result in it, skips included.
@@ -558,8 +577,9 @@ type playwrightSuite struct {
 		Tests []struct {
 			Status  string `json:"status"`
 			Results []struct {
-				Status string `json:"status"`
-				Error  *struct {
+				Status   string  `json:"status"`
+				Duration float64 `json:"duration"`
+				Error    *struct {
 					Message string `json:"message"`
 				} `json:"error"`
 			} `json:"results"`
@@ -593,7 +613,12 @@ func parsePlaywright(data []byte, workspace string) (parsedFile, error) {
 			title := strings.Join(append(append([]string(nil), describes...), sp.Title), " › ")
 			for _, t := range sp.Tests {
 				pf.seen++
-				o := outcome{test: title, file: file}
+				o := outcome{test: title, file: file, attempts: len(t.Results)}
+				var ms float64
+				for _, r := range t.Results {
+					ms += r.Duration
+				}
+				o.durationMS = int64(math.Round(ms))
 				switch t.Status {
 				case "expected":
 				case "unexpected":
@@ -609,6 +634,8 @@ func parsePlaywright(data []byte, workspace string) (parsedFile, error) {
 					}
 				case "flaky":
 					o.status = statusFlake
+				case "skipped":
+					o.status = statusSkip
 				default:
 					continue
 				}
@@ -744,6 +771,7 @@ type suiteFiles struct {
 	problems   []failure // unreadable and empty files
 	seen       int
 	unreadable bool
+	noRun      []string // Playwright reports with tests but none passed, failed or flaky
 }
 
 func readSuiteFiles(dir, key, workspace string) suiteFiles {
@@ -800,6 +828,15 @@ func readSuiteFiles(dir, key, workspace string) suiteFiles {
 			problem(n, "results empty", "the file holds no test results")
 			continue
 		}
+		if strings.HasPrefix(n, "playwright-") {
+			ran := false
+			for _, o := range pf.direct {
+				ran = ran || o.status != statusSkip
+			}
+			if !ran {
+				sf.noRun = append(sf.noRun, n)
+			}
+		}
 		sf.seen += pf.seen
 		parsed = append(parsed, pf)
 	}
@@ -818,7 +855,7 @@ func judgeFiles(pfs []parsedFile) []outcome {
 	return append(hideGoParents(classify(attempts)), direct...)
 }
 
-func judgeSuite(spec suiteSpec, jobs []job, resultsDir, workspace string) (*suiteResult, []failure, []flake) {
+func judgeSuite(spec suiteSpec, jobs []job, resultsDir, workspace string) (*suiteResult, []failure, []flake, []scenario) {
 	var j *job
 	for i := range jobs {
 		if jobs[i].Name == spec.name {
@@ -833,24 +870,39 @@ func judgeSuite(spec suiteSpec, jobs []job, resultsDir, workspace string) (*suit
 				conc = "unfinished"
 			}
 		}
-		return nil, []failure{{Suite: spec.key, Test: "suite did not run", File: spec.workflow, Message: "job " + spec.name + " " + conc}}, nil
+		return nil, []failure{{Suite: spec.key, Test: "suite did not run", File: spec.workflow, Message: "job " + spec.name + " " + conc}}, nil, nil
 	}
 
 	var fails []failure
 	var flakes []flake
+	var scenarios []scenario
 	passed, testFails := 0, 0
 	if spec.results {
 		sf := readSuiteFiles(filepath.Join(resultsDir, "results-"+spec.key), spec.key, workspace)
 		fails = append(fails, sf.problems...)
 		for _, o := range sf.outcomes {
+			sc := scenario{Suite: spec.key, Test: o.test, File: o.file, Attempts: o.attempts, DurationMS: o.durationMS}
 			switch o.status {
 			case statusPass:
 				passed++
+				sc.Status = "passed"
 			case statusFail:
 				testFails++
 				fails = append(fails, failure{spec.key, o.test, o.file, o.msg})
+				sc.Status, sc.Message = "failed", o.msg
 			case statusFlake:
 				flakes = append(flakes, flake{spec.key, o.test, o.file})
+				sc.Status = "flaky"
+			case statusSkip:
+				sc.Status = "skipped"
+			}
+			if spec.e2e {
+				scenarios = append(scenarios, sc)
+			}
+		}
+		if spec.e2e {
+			for _, n := range sf.noRun {
+				fails = append(fails, failure{spec.key, "no test results", "results-" + spec.key + "/" + n, "no passed, failed or flaky test in the report"})
 			}
 		}
 		if sf.seen == 0 && !sf.unreadable {
@@ -862,7 +914,7 @@ func judgeSuite(spec suiteSpec, jobs []job, resultsDir, workspace string) (*suit
 	if j.Conclusion != "success" {
 		fails = append(fails, stepFailures(spec.key, spec.workflow, j, testFails == 0)...)
 	}
-	return &suiteResult{Name: spec.key, Passed: passed, Failed: len(fails), Flaky: len(flakes)}, fails, flakes
+	return &suiteResult{Name: spec.key, Passed: passed, Failed: len(fails), Flaky: len(flakes)}, fails, flakes, scenarios
 }
 
 // stepFailures lists failed steps (when no test failure explains the job) and the steps an earlier failure skipped.
@@ -894,18 +946,19 @@ func stepFailures(key, workflow string, j *job, listFailed bool) []failure {
 func assemble(in input) *summary {
 	s := &summary{
 		runID: in.runID, sha: in.sha, started: in.started, finished: in.finished,
-		suites: []suiteResult{}, failures: []failure{}, flakes: []flake{},
+		suites: []suiteResult{}, failures: []failure{}, flakes: []flake{}, scenarios: []scenario{},
 		sectionBodies: map[string]json.RawMessage{},
 	}
 	rank := map[string]int{}
 	for i, spec := range in.suites {
 		rank[spec.key] = i
-		sr, fails, flakes := judgeSuite(spec, in.jobs, in.resultsDir, in.workspace)
+		sr, fails, flakes, scens := judgeSuite(spec, in.jobs, in.resultsDir, in.workspace)
 		if sr != nil {
 			s.suites = append(s.suites, *sr)
 		}
 		s.failures = append(s.failures, fails...)
 		s.flakes = append(s.flakes, flakes...)
+		s.scenarios = append(s.scenarios, scens...)
 	}
 	red := false
 	for i, sec := range in.sections {
@@ -915,11 +968,17 @@ func assemble(in input) *summary {
 			s.failures = append(s.failures, failure{sec.name, "section did not run", sec.path, msg})
 			continue
 		}
+		if stepSections[sec.name] {
+			if msg := stepsProblem(body); msg != "" {
+				s.failures = append(s.failures, failure{sec.name, "section has no steps", sec.path, msg})
+				continue
+			}
+		}
 		s.sectionNames = append(s.sectionNames, sec.name)
 		s.sectionBodies[sec.name] = body
 		var m map[string]json.RawMessage
 		_ = json.Unmarshal(body, &m)
-		if string(bytes.TrimSpace(m["ok"])) != "true" {
+		if string(bytes.TrimSpace(m["ok"])) != "true" || anyStepFailed(body) {
 			red = true
 		}
 	}
@@ -963,15 +1022,69 @@ func readSection(path string) (json.RawMessage, string) {
 	return json.RawMessage(bytes.TrimSpace(raw)), ""
 }
 
+type rawStep struct{ name, status string }
+
+// readSteps decodes "steps" and each step by exact key. bad is the 1-based first bad step, or -1 for no array.
+func readSteps(body json.RawMessage) (steps []rawStep, bad int) {
+	var m map[string]json.RawMessage
+	var arr []json.RawMessage
+	if json.Unmarshal(body, &m) != nil || json.Unmarshal(m["steps"], &arr) != nil || len(arr) == 0 {
+		return nil, -1
+	}
+	for i, raw := range arr {
+		var f map[string]json.RawMessage
+		var st rawStep
+		if json.Unmarshal(raw, &f) != nil ||
+			json.Unmarshal(f["name"], &st.name) != nil || st.name == "" ||
+			json.Unmarshal(f["status"], &st.status) != nil || st.status == "" {
+			if bad == 0 {
+				bad = i + 1
+			}
+			continue
+		}
+		steps = append(steps, st)
+	}
+	return steps, bad
+}
+
+// stepsProblem is why the section's steps array is unusable, or "".
+func stepsProblem(body json.RawMessage) string {
+	steps, bad := readSteps(body)
+	switch {
+	case bad < 0:
+		return "no steps array"
+	case bad > 0:
+		return fmt.Sprintf("step %d lacks name or status", bad)
+	}
+	for i, st := range steps {
+		if st.status != "passed" && st.status != "failed" && st.status != "skipped" {
+			return fmt.Sprintf("step %d has unknown status", i+1)
+		}
+	}
+	return ""
+}
+
+// anyStepFailed reports a step with status "failed"; assemble calls it on every section, gated or not.
+func anyStepFailed(body json.RawMessage) bool {
+	steps, _ := readSteps(body)
+	for _, st := range steps {
+		if st.status == "failed" {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *summary) marshal() ([]byte, error) {
 	type kv struct {
 		k string
 		v any
 	}
 	items := []kv{
-		{"schema", 1}, {"run_id", s.runID}, {"sha", s.sha},
+		{"schema", 2}, {"run_id", s.runID}, {"sha", s.sha},
 		{"started_at", s.started.Format(time.RFC3339)}, {"finished_at", s.finished.Format(time.RFC3339)},
 		{"verdict", s.verdict}, {"suites", s.suites}, {"failures", s.failures}, {"flakes", s.flakes},
+		{"scenarios", s.scenarios},
 	}
 	for _, n := range s.sectionNames {
 		items = append(items, kv{n, s.sectionBodies[n]})

@@ -12,13 +12,13 @@ import (
 const ncOrigID = "11111111-1111-4111-8111-111111111111"
 
 func ncNote(dt submission.DocumentType, total *string) Invoice {
-	return Invoice{DocumentType: dt, OriginalInvoiceID: strPtr(ncOrigID), Total: total}
+	return Invoice{DocumentType: dt, OriginalInvoiceID: strPtr(ncOrigID), Total: total, Currency: strPtr("NGN")}
 }
 
 // ncFacts is an accepted commercial original INV-1 with an IRN.
 func ncFacts(total, credited string) originalFacts {
 	return originalFacts{
-		Found: true, Number: "INV-1", DocumentType: submission.CommercialInvoice,
+		Found: true, Number: "INV-1", Currency: strPtr("NGN"), DocumentType: submission.CommercialInvoice,
 		Status: StatusAccepted, IRN: strPtr("IRN-1"), Total: strPtr(total), CreditedBefore: credited,
 	}
 }
@@ -241,10 +241,68 @@ func TestNoteViolations_DebitNoteHasNoCap(t *testing.T) {
 	ncOnly(t, noteViolations(debit(strPtr("999.00")), f), "note-original-no-irn", "")
 }
 
-func TestWithoutNoteChecks_DropsExactlyTheSevenKeys(t *testing.T) {
+func TestNoteViolations_CurrencyMismatchRefusesWithoutComparingAmounts(t *testing.T) {
+	cases := []struct {
+		name       string
+		note, orig *string
+		total      string
+		wantKey    string
+		wantInMsg  []string
+	}{
+		{"USD note on NGN original, amount within", strPtr("USD"), strPtr("NGN"), "5000.00", ruleCreditNoteCurrency, []string{"USD", "NGN", "INV-1"}},
+		{"NGN note above the cap", strPtr("NGN"), strPtr("NGN"), "150000.00", ruleCreditNoteOverCap, nil},
+		{"note currency NULL", nil, strPtr("NGN"), "5.00", ruleCreditNoteCurrency, []string{"INV-1"}},
+		{"original currency NULL", strPtr("NGN"), nil, "5.00", ruleCreditNoteCurrency, []string{"INV-1"}},
+		{"note currency blank", strPtr("  "), strPtr("NGN"), "5.00", ruleCreditNoteCurrency, []string{"INV-1"}},
+		{"original currency blank", strPtr("NGN"), strPtr(""), "5.00", ruleCreditNoteCurrency, []string{"INV-1"}},
+		{"both blank", strPtr(""), strPtr(""), "5.00", ruleCreditNoteCurrency, []string{"INV-1"}},
+		{"case differs", strPtr("ngn"), strPtr("NGN"), "5.00", ruleCreditNoteCurrency, []string{"ngn", "NGN"}},
+	}
+	for _, c := range cases {
+		inv := ncNote(submission.CreditNote, strPtr(c.total))
+		inv.Currency = c.note
+		f := ncFacts("100000.00", "0.00")
+		f.Currency = c.orig
+		path := "currency"
+		if c.wantKey == ruleCreditNoteOverCap {
+			path = "total"
+		}
+		v := ncOnly(t, noteViolations(inv, f), c.wantKey, path)
+		for _, s := range c.wantInMsg {
+			if !strings.Contains(v.Message, s) {
+				t.Errorf("%s: message %q does not name %q", c.name, v.Message, s)
+			}
+		}
+	}
+}
+
+func TestNoteViolations_CurrencyMismatchKeepsCollectingOtherChecks(t *testing.T) {
+	inv := ncNote(submission.CreditNote, strPtr("5.00"))
+	inv.Currency = strPtr("USD")
+	f := ncFacts("100.00", "0.00")
+	f.IRN = nil
+	got := ncKeys(noteViolations(inv, f))
+	slices.Sort(got)
+	if want := []string{ruleCreditNoteCurrency, ruleNoteOriginalNoIRN}; !slices.Equal(got, want) {
+		t.Errorf("keys = %v, want %v", got, want)
+	}
+}
+
+func TestNoteViolations_DebitNoteInAnotherCurrencyHasNoKey(t *testing.T) {
+	for _, c := range []*string{strPtr("USD"), nil, strPtr("")} {
+		inv := ncNote(submission.DebitNote, strPtr("5.00"))
+		inv.Currency = c
+		if got := noteViolations(inv, ncFacts("100.00", "0.00")); len(got) != 0 {
+			t.Errorf("debit note currency %v: %v, want none", c, ncKeys(got))
+		}
+	}
+}
+
+func TestWithoutNoteChecks_DropsExactlyTheEightKeys(t *testing.T) {
 	keys := []string{
 		"note-original-missing", "note-original-not-commercial", "note-original-not-accepted",
 		"note-original-no-irn", "credit-note-total-unusable", "credit-note-cap-unreadable", "credit-note-over-cap",
+		"credit-note-currency-mismatch",
 	}
 	var in []Violation
 	for _, k := range keys {

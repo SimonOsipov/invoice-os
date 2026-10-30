@@ -22,18 +22,20 @@ const (
 	ruleCreditNoteTotalUnusable   = "credit-note-total-unusable"
 	ruleCreditNoteCapUnreadable   = "credit-note-cap-unreadable"
 	ruleCreditNoteOverCap         = "credit-note-over-cap"
+	ruleCreditNoteCurrency        = "credit-note-currency-mismatch"
 )
 
 var noteCheckKeys = []string{
 	ruleNoteOriginalMissing, ruleNoteOriginalNotCommercial, ruleNoteOriginalNotAccepted,
 	ruleNoteOriginalNoIRN, ruleCreditNoteTotalUnusable, ruleCreditNoteCapUnreadable,
-	ruleCreditNoteOverCap,
+	ruleCreditNoteOverCap, ruleCreditNoteCurrency,
 }
 
 // originalFacts is what a note's checks read about its original.
 type originalFacts struct {
 	Found          bool
 	Number         string
+	Currency       *string
 	DocumentType   submission.DocumentType
 	Status         Status
 	IRN            *string
@@ -52,14 +54,14 @@ func readOriginalFactsTx(ctx context.Context, tx pgx.Tx, originalID *string, exc
 	if originalID == nil {
 		return originalFacts{}, nil
 	}
-	q := `SELECT invoice_number, document_type, status, irn, issue_date, total::text
+	q := `SELECT invoice_number, currency, document_type, status, irn, issue_date, total::text
 	        FROM invoices WHERE id = $1`
 	if lock {
 		q += ` FOR UPDATE`
 	}
 	f := originalFacts{Found: true}
 	err := tx.QueryRow(ctx, q, *originalID).Scan(
-		&f.Number, &f.DocumentType, &f.Status, &f.IRN, &f.IssueDate, &f.Total)
+		&f.Number, &f.Currency, &f.DocumentType, &f.Status, &f.IRN, &f.IssueDate, &f.Total)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return originalFacts{}, nil
 	}
@@ -114,6 +116,11 @@ func noteViolations(inv Invoice, f originalFacts) []Violation {
 		return append(vs, noteErr(ruleCreditNoteTotalUnusable,
 			"Credit note total is missing or not a valid non-negative amount.", "total"))
 	}
+	if !sameCurrency(inv.Currency, f.Currency) {
+		return append(vs, noteErr(ruleCreditNoteCurrency,
+			fmt.Sprintf("Credit note currency %s does not match currency %s of original invoice %s.",
+				currencyLabel(inv.Currency), currencyLabel(f.Currency), f.Number), "currency"))
+	}
 	orig, okO := parseMoney(f.Total)
 	credited, okC := parseMoney(&f.CreditedBefore)
 	if !okO || !okC {
@@ -127,6 +134,17 @@ func noteViolations(inv Invoice, f originalFacts) []Violation {
 				total.StringFixed(2), left.StringFixed(2), f.Number), "total"))
 	}
 	return vs
+}
+
+func sameCurrency(a, b *string) bool {
+	return a != nil && b != nil && strings.TrimSpace(*a) != "" && *a == *b
+}
+
+func currencyLabel(c *string) string {
+	if c == nil || strings.TrimSpace(*c) == "" {
+		return "(none)"
+	}
+	return *c
 }
 
 func parseMoney(s *string) (decimal.Decimal, bool) {

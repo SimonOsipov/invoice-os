@@ -16,8 +16,8 @@ func csNote(t *testing.T, super *pgxpool.Pool, tenant, entity, number, docType, 
 	t.Helper()
 	var id string
 	if err := super.QueryRow(context.Background(),
-		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, document_type, original_invoice_id, status, total)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7::numeric) RETURNING id`,
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, document_type, original_invoice_id, status, total, currency)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, 'NGN') RETURNING id`,
 		tenant, entity, number, docType, original, status, total,
 	).Scan(&id); err != nil {
 		t.Fatalf("seed %s %s: %v", docType, number, err)

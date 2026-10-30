@@ -69,8 +69,8 @@ func (s *Store) RequeueFailedTx(ctx context.Context, tx pgx.Tx, id, tenantID str
 func (s *Store) requeueNoteChecksTx(ctx context.Context, tx pgx.Tx, id string) error {
 	inv := Invoice{ID: id}
 	if err := tx.QueryRow(ctx,
-		`SELECT document_type, original_invoice_id, total::text FROM invoices WHERE id = $1`, id,
-	).Scan(&inv.DocumentType, &inv.OriginalInvoiceID, &inv.Total); err != nil {
+		`SELECT document_type, original_invoice_id, total::text, currency FROM invoices WHERE id = $1`, id,
+	).Scan(&inv.DocumentType, &inv.OriginalInvoiceID, &inv.Total, &inv.Currency); err != nil {
 		return err
 	}
 	if !isNote(inv) {

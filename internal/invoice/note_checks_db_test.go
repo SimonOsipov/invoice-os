@@ -17,7 +17,7 @@ import (
 func ncAccepted(t *testing.T, super *pgxpool.Pool, id, irn, total string) {
 	t.Helper()
 	if _, err := super.Exec(context.Background(),
-		`UPDATE invoices SET status = 'accepted', irn = $2, total = $3::numeric, issue_date = '2026-03-04' WHERE id = $1`,
+		`UPDATE invoices SET status = 'accepted', irn = $2, total = $3::numeric, currency = 'NGN', issue_date = '2026-03-04' WHERE id = $1`,
 		id, irn, total); err != nil {
 		t.Fatalf("make %s accepted: %v", id, err)
 	}
@@ -55,6 +55,9 @@ func TestReadOriginalFacts_ExcludesTheNamedNoteAndFiltersTheOriginal(t *testing.
 	}
 	if got.IRN == nil || *got.IRN != "IRN-O1" {
 		t.Errorf("IRN = %v, want IRN-O1", got.IRN)
+	}
+	if got.Currency == nil || *got.Currency != "NGN" {
+		t.Errorf("Currency = %v, want NGN", got.Currency)
 	}
 	if got.Total == nil || *got.Total != "100.00" {
 		t.Errorf("Total = %v, want 100.00", got.Total)

@@ -296,6 +296,21 @@ func TestRequeueFailed_CreditNoteOverTheCapIsRefused(t *testing.T) {
 	}
 }
 
+func TestRequeueFailed_CreditNoteInAnotherCurrencyIsRefused(t *testing.T) {
+	f := newSupportFix(t, "03-04 currency")
+	o := rqOriginal(t, f, "RQ-O", "100000.00")
+	n := csNote(t, f.super, f.tenantID, f.entityID, "RQ-USD", "credit_note", o, "failed", csAmount("5000.00"))
+	if _, err := f.super.Exec(context.Background(), `UPDATE invoices SET currency = 'USD' WHERE id = $1`, n); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.requeue(t, n); !errors.Is(err, ErrNoteChecksFailed) {
+		t.Fatalf("RequeueFailedTx = %v, want ErrNoteChecksFailed", err)
+	}
+	if got := f.read(t, n); got.status != "failed" {
+		t.Errorf("status = %q, want failed", got.status)
+	}
+}
+
 func TestRequeueFailed_ANoteWhoseOriginalHasNoIRNIsRefused(t *testing.T) {
 	f := newSupportFix(t, "03-04 no irn")
 	o := rqOriginal(t, f, "RQ-O", "100.00")

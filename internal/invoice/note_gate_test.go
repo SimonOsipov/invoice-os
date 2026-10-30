@@ -571,6 +571,21 @@ func TestGateValidate_BlockedNoteStaysDraftWithItsViolation(t *testing.T) {
 	}
 }
 
+func TestGateValidate_CreditNoteInAnotherCurrencyStaysDraft(t *testing.T) {
+	f := newNGFix(t, "NG currency", "100000.00")
+	n := f.credit("NG-C-1", "5000.00")
+	mustExec(t, f.super, `UPDATE invoices SET currency = 'USD' WHERE id = $1`, n)
+
+	got, _, err := f.realGate().Validate(f.ctx, n)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	vs := ngStored(t, got)
+	if got.Status != StatusDraft || !hasViolation(vs, ruleCreditNoteCurrency) || hasViolation(vs, ruleCreditNoteOverCap) {
+		t.Errorf("note = %s %v, want draft with %s only", got.Status, ngKeys(vs), ruleCreditNoteCurrency)
+	}
+}
+
 func TestBatchSubmit_DoesNotQueueABlockedNote(t *testing.T) {
 	f := newNGFix(t, "NG submit", "100.00")
 	n := f.credit("NG-Q-1", "150.00")

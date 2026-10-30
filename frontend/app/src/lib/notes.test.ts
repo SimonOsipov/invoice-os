@@ -13,8 +13,6 @@ import {
   NOTE_COPY,
   fmtNairaExact,
   noteLineError,
-  noteSign,
-  noteTypeBadge,
   signedNoteTotal,
   suggestedNoteNumber,
 } from './notes'
@@ -229,20 +227,6 @@ describe('isDuplicateNumberError', () => {
     expect(isDuplicateNumberError(new ApiError('http', 'duplicate invoice number', 400))).toBe(false)
     expect(isDuplicateNumberError(new Error('duplicate invoice number'))).toBe(false)
     expect(isDuplicateNumberError({ status: 409, message: 'duplicate invoice number' })).toBe(false)
-  })
-})
-
-describe('noteSign and noteTypeBadge', () => {
-  it('noteSign and noteTypeBadge carry the contract of CRDDBTNOTE-04', () => {
-    expect(noteSign('credit_note')).toBe(-1)
-    for (const other of ['debit_note', 'commercial_invoice', undefined, 'unknown'] as const) {
-      expect(noteSign(other as never), String(other)).toBe(1)
-    }
-    expect(noteTypeBadge('credit_note')).toEqual({ label: 'CREDIT', title: 'Credit note' })
-    expect(noteTypeBadge('debit_note')).toEqual({ label: 'DEBIT', title: 'Debit note' })
-    for (const other of ['commercial_invoice', undefined, 'unknown'] as const) {
-      expect(noteTypeBadge(other as never), String(other)).toBeNull()
-    }
   })
 })
 

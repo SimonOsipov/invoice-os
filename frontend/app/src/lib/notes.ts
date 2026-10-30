@@ -6,6 +6,7 @@ import { fmt } from './format'
 import { draftLine } from './clients'
 import {
   addScaled,
+  documentSign,
   parseScaled,
   renderScaled,
   type InvoiceDocumentType,
@@ -146,24 +147,10 @@ export function noteDraftLines(
   )
 }
 
-// Stand-in for CRDDBTNOTE-04's documentSign: -1 for a credit note, 1 otherwise.
-export function noteSign(type: InvoiceDocumentType | null | undefined): 1 | -1 {
-  return type === 'credit_note' ? -1 : 1
-}
-
-// Stand-in for CRDDBTNOTE-04's documentTypeBadge.
-export function noteTypeBadge(
-  type: InvoiceDocumentType | null | undefined,
-): { label: string; title: string } | null {
-  if (type === 'credit_note') return { label: 'CREDIT', title: 'Credit note' }
-  if (type === 'debit_note') return { label: 'DEBIT', title: 'Debit note' }
-  return null
-}
-
 // ASCII minus on a credit note, none on a debit note, a dash for no total.
 export function signedNoteTotal(type: InvoiceDocumentType, total: string | null): string {
   if (total === null) return '—'
-  return `${noteSign(type) === -1 ? '-' : ''}${fmt(Number(total))}`
+  return `${documentSign({ document_type: type }) === -1 ? '-' : ''}${fmt(Number(total))}`
 }
 
 export function isDuplicateNumberError(err: unknown): boolean {

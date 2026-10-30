@@ -3,8 +3,8 @@ import type { ReactNode } from 'react'
 
 import { ErrorState, Loading, type AsyncState } from '@invoice-os/api-client'
 
-import { invoiceStatusStyle } from '../lib/invoices'
-import { fmtNairaExact, noteTypeBadge, signedNoteTotal, type NotesOnInvoice } from '../lib/notes'
+import { documentTypeBadge, invoiceStatusStyle } from '../lib/invoices'
+import { fmtNairaExact, signedNoteTotal, type NotesOnInvoice } from '../lib/notes'
 
 export function NotesCard({
   run,
@@ -31,7 +31,7 @@ export function NotesCard({
               return (
                 <div key={n.id} data-testid="note-row" style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr) auto auto', alignItems: 'center', gap: 8 }}>
                   <span data-testid="note-row-type" className="mono" style={{ fontSize: 10, fontWeight: 600, color: 'var(--fg-3)' }}>
-                    {noteTypeBadge(n.document_type)?.label}
+                    {documentTypeBadge(n)?.label}
                   </span>
                   <button
                     type="button"

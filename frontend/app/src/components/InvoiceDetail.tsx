@@ -39,6 +39,7 @@ import {
   DETAIL_SUBMIT_COPY,
   diffEditInput,
   diffLineItems,
+  documentTypeBadge,
   editDateError,
   editInvoice,
   failureExplanation,
@@ -75,7 +76,7 @@ import {
   type StatusChange,
 } from '../lib/invoices'
 import { bulkPhaseReducer, ROW_EXPANSION_COPY, type BulkPhase } from '../lib/reviewBatch'
-import { getInvoiceNotes, isNote, noteTypeBadge, type NoteType, type NotesOnInvoice } from '../lib/notes'
+import { getInvoiceNotes, isNote, type NoteType, type NotesOnInvoice } from '../lib/notes'
 import { NotesCard } from './NotesCard'
 import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
@@ -385,7 +386,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     content = <EmptyState title="Invoice not found" message="This invoice could not be loaded." />
   } else {
     const st = invoiceStatusStyle(inv.status)
-    const typeBadge = noteTypeBadge(inv.document_type)
+    const typeBadge = documentTypeBadge(inv)
     const items = inv.line_items ?? []
     const subtotal = inv.subtotal != null ? Number(inv.subtotal) : null
     const vat = inv.vat != null ? Number(inv.vat) : null
@@ -678,7 +679,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
           </div>
 
           {/* Always present ([actions-visibility]); each control disables off its own wire flag
-              ([gates-on-the-wire]); `!formOpen` hides it ([D-actions-hidden-while-editing]). canEdit/canRevalidate: store.go:1536-1538 / :1558. */}
+              ([gates-on-the-wire]); `!formOpen` hides it ([D-actions-hidden-while-editing]). */}
           {/* Outer column wraps the actions bar AND the submit skip/error banners together,
               so both stay in one right-aligned flex item ([D-actions-column]). The banners
               live OUTSIDE the `invoice-actions` gate on purpose: the bar unmounts while the

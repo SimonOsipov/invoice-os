@@ -586,6 +586,30 @@ func TestGateValidate_CreditNoteInAnotherCurrencyStaysDraft(t *testing.T) {
 	}
 }
 
+func TestApplyValidation_DecidesTheCurrencyCheckUnderTheLock(t *testing.T) {
+	f := newNGFix(t, "NG currency lock", "100000.00")
+	usd := f.credit("NG-CL-1", "5000.00")
+	mustExec(t, f.super, `UPDATE invoices SET currency = 'USD' WHERE id = $1`, usd)
+	got, err := f.apply(usd, nil)
+	if err != nil {
+		t.Fatalf("ApplyValidation: %v", err)
+	}
+	vs := ngStored(t, got)
+	if got.Status != StatusDraft || len(vs) != 1 || vs[0].RuleKey != ruleCreditNoteCurrency {
+		t.Errorf("USD note = %s %v, want draft with only %s", got.Status, ngKeys(vs), ruleCreditNoteCurrency)
+	}
+
+	ngn := f.credit("NG-CL-2", "5000.00")
+	stale := Violation{RuleKey: ruleCreditNoteCurrency, Severity: "error", Message: "stale", Path: "currency"}
+	got, err = f.apply(ngn, []Violation{stale})
+	if err != nil {
+		t.Fatalf("ApplyValidation: %v", err)
+	}
+	if got.Status != StatusValidated || hasViolation(ngStored(t, got), ruleCreditNoteCurrency) {
+		t.Errorf("NGN note = %s %v, want validated with a stale currency key dropped", got.Status, ngKeys(ngStored(t, got)))
+	}
+}
+
 func TestBatchSubmit_DoesNotQueueABlockedNote(t *testing.T) {
 	f := newNGFix(t, "NG submit", "100.00")
 	n := f.credit("NG-Q-1", "150.00")

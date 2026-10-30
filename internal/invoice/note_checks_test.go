@@ -251,6 +251,8 @@ func TestNoteViolations_CurrencyMismatchRefusesWithoutComparingAmounts(t *testin
 	}{
 		{"USD note on NGN original, amount within", strPtr("USD"), strPtr("NGN"), "5000.00", ruleCreditNoteCurrency, []string{"USD", "NGN", "INV-1"}},
 		{"NGN note above the cap", strPtr("NGN"), strPtr("NGN"), "150000.00", ruleCreditNoteOverCap, nil},
+		{"USD note above the cap", strPtr("USD"), strPtr("NGN"), "150000.00", ruleCreditNoteCurrency, nil},
+		{"both whitespace", strPtr("  "), strPtr("  "), "5.00", ruleCreditNoteCurrency, nil},
 		{"note currency NULL", nil, strPtr("NGN"), "5.00", ruleCreditNoteCurrency, []string{"INV-1"}},
 		{"original currency NULL", strPtr("NGN"), nil, "5.00", ruleCreditNoteCurrency, []string{"INV-1"}},
 		{"note currency blank", strPtr("  "), strPtr("NGN"), "5.00", ruleCreditNoteCurrency, []string{"INV-1"}},

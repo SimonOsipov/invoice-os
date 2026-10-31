@@ -19,6 +19,8 @@ const (
 	nightlyCIRunLine      = `run: bash scripts/ci/nightly-ci.sh "$GITHUB_REF_NAME" ci.yml=run_id dev-env.yml=preview_run_id`
 	nightlyE2EFlag        = `-e2e-suites "$RUNNER_TEMP/e2e-suites.txt" `
 	nightlyEmailSection   = `-section email="$RUNNER_TEMP/results/results-email/email.json"`
+	nightlyProdSection    = `-section prod_check="$RUNNER_TEMP/prod-check/prod_check.json"`
+	nightlySummaryIf      = `${{ !cancelled() && needs.main-only.result == 'success' }}`
 	nightlyPolls          = "470"
 	nightlySummaryTimeout = "270"
 	nightlyPreviewDL      = `gh run download "$PREVIEW_RUN_ID" -R "$REPO" -p 'results-*' -D "$RUNNER_TEMP/results"`
@@ -26,6 +28,18 @@ const (
 
 var (
 	nightlyNotReported = []string{"changes", "ci", "history-rewrite", "advisories", "govulncheck"}
+	nightlyProdOutFlag = `-out "$RUNNER_TEMP/prod_check.json"`
+	// the tool step's env: HEAD and EXPECTED come from the resolve step, the probe secrets sit here only.
+	nightlyProdToolLines = []string{
+		"HEAD: ${{ steps.main.outputs.head }}",
+		"EXPECTED: ${{ steps.main.outputs.expected }}",
+		"PROD_PROBE_EMAIL: ${{ secrets.PROD_PROBE_EMAIL }}",
+		"PROD_PROBE_PASSWORD: ${{ secrets.PROD_PROBE_PASSWORD }}",
+	}
+	nightlyProdUploadLines   = []string{"if: always()", "uses: actions/upload-artifact@v7", "name: prod-check", "path: ${{ runner.temp }}/prod_check.json", "if-no-files-found: warn", "retention-days: 14"}
+	nightlyProdDownloadLines = []string{"if: always()", "continue-on-error: true", "uses: actions/download-artifact@v4", "name: prod-check", "path: ${{ runner.temp }}/prod-check"}
+	// each is named only inside prod-check.
+	nightlyProdOnly    = []string{"secrets.PROD_PROBE_EMAIL", "secrets.PROD_PROBE_PASSWORD", "gateway-token", "id-token"}
 	nightlyUploadLines = []string{"if: always()", "uses: actions/upload-artifact@v7", "name: nightly-summary", "path: ${{ runner.temp }}/summary.json", "if-no-files-found: error", "retention-days: 14"}
 )
 
@@ -94,12 +108,14 @@ func nightlyRunProblems(nightlyYAML, ciYAML, suitesTxt string) []string {
 		}
 	}
 
-	var mainOnly, summary workflowJob
-	var haveMain, haveSummary bool
+	var mainOnly, summary, prodCheck workflowJob
+	var haveMain, haveSummary, haveProd bool
 	for _, j := range workflowJobsOf(nightlyYAML) {
 		switch j.name {
 		case "main-only":
 			mainOnly, haveMain = j, true
+		case "prod-check":
+			prodCheck, haveProd = j, true
 		case "summary":
 			summary, haveSummary = j, true
 		}
@@ -115,14 +131,22 @@ func nightlyRunProblems(nightlyYAML, ciYAML, suitesTxt string) []string {
 			p = append(p, "main-only guard step differs from the pinned run line")
 		}
 	}
+	if !haveProd {
+		p = append(p, "no prod-check job")
+	} else {
+		p = append(p, nightlyProdCheckProblems(prodCheck, stripHashComments(lines))...)
+	}
 	if !haveSummary {
 		return append(p, "no summary job")
 	}
-	if v, _ := jobKey(summary, "needs"); v != "main-only" {
-		p = append(p, "summary does not need main-only")
+	needs, _ := jobKey(summary, "needs")
+	for _, want := range []string{"main-only", "prod-check"} {
+		if !strings.Contains(needs, want) {
+			p = append(p, "summary does not need "+want)
+		}
 	}
-	if _, ok := jobKey(summary, "if"); ok {
-		p = append(p, "summary has an if")
+	if v, _ := jobKey(summary, "if"); v != nightlySummaryIf {
+		p = append(p, "summary if is not the pinned one")
 	}
 	perms := blockLines(summary.lines, 4, "permissions")
 	slices.Sort(perms)
@@ -160,6 +184,18 @@ func nightlyRunProblems(nightlyYAML, ciYAML, suitesTxt string) []string {
 	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), `node e2e/topology/shards.ts | jq -r '.[] | "topology-\(.)=E2E topology (\(.))=results"'`) {
 		p = append(p, "assembler step does not append the topology shard suites")
 	}
+	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), nightlyProdSection) {
+		p = append(p, "assembler step lacks -section prod_check")
+	}
+	dl := nightlyStepLines(summary, "uses: actions/download-artifact@")
+	if dl == nil {
+		p = append(p, "summary has no download step for the prod check")
+	}
+	for _, want := range nightlyProdDownloadLines {
+		if dl != nil && !slices.Contains(dl, want) {
+			p = append(p, "summary download step lacks "+want)
+		}
+	}
 	col := nightlyStepLines(summary, "gh run download")
 	if col != nil && !strings.Contains(strings.Join(col, "\n"), nightlyPreviewDL) {
 		p = append(p, "collect step does not download the preview run's results")
@@ -184,6 +220,74 @@ func nightlyRunProblems(nightlyYAML, ciYAML, suitesTxt string) []string {
 	}
 
 	return append(p, nightlySuitesProblems(ciYAML, suitesTxt)...)
+}
+
+// nightlyProdCheckProblems names each rule of the prod-check job. all is the comment-stripped file.
+func nightlyProdCheckProblems(j workflowJob, all []string) []string {
+	var p []string
+	if v, _ := jobKey(j, "needs"); v != "main-only" {
+		p = append(p, "prod-check does not need main-only")
+	}
+	perms := blockLines(j.lines, 4, "permissions")
+	slices.Sort(perms)
+	if !slices.Equal(perms, []string{"contents: read", "id-token: write"}) {
+		p = append(p, "prod-check permissions are not contents: read and id-token: write")
+	}
+	count := func(lines []string, needle string) int {
+		n := 0
+		for _, l := range lines {
+			if strings.Contains(l, needle) {
+				n++
+			}
+		}
+		return n
+	}
+	for _, needle := range nightlyProdOnly {
+		if count(all, needle) != count(j.lines, needle) {
+			p = append(p, needle+" is named outside prod-check")
+		}
+	}
+	tool := nightlyStepLines(j, "internal/tools/prodcheck")
+	if tool == nil {
+		return append(p, "prod-check has no tool step")
+	}
+	for _, want := range nightlyProdToolLines {
+		if !slices.Contains(tool, want) {
+			p = append(p, "prod-check tool step lacks "+want)
+		}
+	}
+	if !strings.Contains(strings.Join(tool, "\n"), nightlyProdOutFlag) {
+		p = append(p, "prod-check tool step lacks "+nightlyProdOutFlag)
+	}
+	if n := count(j.lines, "secrets.PROD_PROBE_"); n != 2 {
+		p = append(p, "prod-check names the probe secrets "+strconv.Itoa(n)+" times, want 2 (the tool step)")
+	}
+	reads := nightlyStepLines(j, "gateway-token")
+	if reads == nil {
+		return append(p, "prod-check has no gcloud read step")
+	}
+	readsText := strings.Join(reads, "\n")
+	if !strings.Contains(readsText, "for n in 1 2 3;") || !strings.Contains(readsText, "sleep 20;") {
+		p = append(p, "prod-check gcloud reads lack the 3 tries, 20 s apart")
+	}
+	for _, l := range reads {
+		if strings.Contains(l, "gcloud ") && !strings.Contains(l, "retry gcloud ") {
+			p = append(p, "prod-check gcloud read is not retried: "+l)
+		}
+	}
+	if !strings.Contains(readsText, ".status.traffic") || !strings.Contains(readsText, "latestCreatedRevisionName") {
+		p = append(p, "prod-check reads the auth image from the revision serving traffic, not the newest one")
+	}
+	up := nightlyStepLines(j, "uses: actions/upload-artifact@")
+	if up == nil {
+		p = append(p, "prod-check has no upload step")
+	}
+	for _, want := range nightlyProdUploadLines {
+		if up != nil && !slices.Contains(up, want) {
+			p = append(p, "prod-check upload step lacks "+want)
+		}
+	}
+	return p
 }
 
 // nightlySuitesProblems checks nightly-suites.txt against the jobs of ci.yml.
@@ -314,7 +418,7 @@ func TestNightly_MainOnlyGuard(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, old, repl, want string }{
 		{"job dropped", "  main-only:\n", "  mainonly:\n", "no main-only guard job"},
-		{"needs dropped", "    needs: main-only\n", "", "summary does not need main-only"},
+		{"needs dropped", "    needs: [main-only, prod-check]\n", "", "summary does not need main-only"},
 		{"test inverted", "= refs/heads/main", "!= refs/heads/main", "main-only guard"},
 		{"exit dropped", "; exit 1; }", "; }", "main-only guard"},
 		{"ref dropped from the error", "not on $GITHUB_REF\"", "not on main\"", "main-only guard"},
@@ -416,14 +520,96 @@ func TestNightly_SummaryUploadMutations(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, old, repl, want string }{
 		{"artifact renamed", "          name: nightly-summary\n", "          name: summary\n", "upload step lacks name: nightly-summary"},
-		{"always dropped", "        if: always()\n        uses: actions/upload-artifact@v7\n", "        uses: actions/upload-artifact@v7\n", "upload step lacks if: always()"},
-		{"retention changed", "retention-days: 14", "retention-days: 30", "upload step lacks retention-days: 14"},
+		{"always dropped", "      - name: Upload nightly-summary\n        if: always()\n", "      - name: Upload nightly-summary\n", "upload step lacks if: always()"},
+		{"retention changed", "path: ${{ runner.temp }}/summary.json\n          if-no-files-found: error\n          retention-days: 14", "path: ${{ runner.temp }}/summary.json\n          if-no-files-found: error\n          retention-days: 30", "upload step lacks retention-days: 14"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			requireNightlyMutation(t, tc.old, tc.repl, tc.want)
 		})
 	}
+}
+
+func TestNightly_ProdCheckJobMutations(t *testing.T) {
+	t.Parallel()
+	const pw = "          PROD_PROBE_PASSWORD: ${{ secrets.PROD_PROBE_PASSWORD }}\n"
+	for _, tc := range []struct {
+		name string
+		edit func(t *testing.T, nightly string) string
+		want []string
+	}{
+		{"needs dropped", func(t *testing.T, n string) string { return mutateOnce(t, n, "    needs: main-only\n", "") }, []string{"prod-check does not need main-only"}},
+		{"id-token dropped", func(t *testing.T, n string) string { return mutateOnce(t, n, "      id-token: write\n", "") }, []string{"prod-check permissions"}},
+		{"secret moved to the workflow env", func(t *testing.T, n string) string {
+			n = mutateOnce(t, n, pw, "")
+			return mutateOnce(t, n, "permissions:\n  contents: read\n", "env:\n  PROD_PROBE_PASSWORD: ${{ secrets.PROD_PROBE_PASSWORD }}\n\npermissions:\n  contents: read\n")
+		}, []string{"prod-check tool step lacks PROD_PROBE_PASSWORD", "secrets.PROD_PROBE_PASSWORD is named outside prod-check"}},
+		{"password added to summary", func(t *testing.T, n string) string {
+			return mutateOnce(t, n, "      REPO: ${{ github.repository }}\n", "      REPO: ${{ github.repository }}\n      PROD_PROBE_PASSWORD: ${{ secrets.PROD_PROBE_PASSWORD }}\n")
+		}, []string{"secrets.PROD_PROBE_PASSWORD is named outside prod-check"}},
+		{"id-token added to summary", func(t *testing.T, n string) string {
+			return mutateOnce(t, n, "      actions: write\n", "      actions: write\n      id-token: write\n")
+		}, []string{"id-token is named outside prod-check", "summary permissions"}},
+		{"token read not retried", func(t *testing.T, n string) string {
+			return mutateOnce(t, n, "token=$(retry gcloud", "token=$(gcloud")
+		}, []string{"gcloud read is not retried"}},
+		{"retry loses its pause", func(t *testing.T, n string) string { return mutateOnce(t, n, "sleep 20;", "true;") }, []string{"3 tries, 20 s apart"}},
+		{"auth image read from the newest revision", func(t *testing.T, n string) string {
+			return mutateOnce(t, n, ".status.traffic", ".status.other")
+		}, []string{"not the newest one"}},
+		{"gateway token read in summary", func(t *testing.T, n string) string {
+			return mutateOnce(t, n, "      REPO: ${{ github.repository }}\n", "      REPO: ${{ github.repository }}\n      T: gateway-token\n")
+		}, []string{"gateway-token is named outside prod-check"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			nightly, ci, suites := nightlyFiles(t)
+			requireNightlyProblems(t, tc.edit(t, nightly), ci, suites, tc.want...)
+		})
+	}
+}
+
+func TestNightly_SummaryFoldsTheProdCheck(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, old, repl, want string }{
+		{"section flag dropped", " " + nightlyProdSection, "", "lacks -section prod_check"},
+		{"download always dropped", "      - name: Download the prod check\n        if: always()\n", "      - name: Download the prod check\n", "download step lacks if: always()"},
+		{"summary if removed", "    if: " + nightlySummaryIf + "\n", "", "summary if is not the pinned one"},
+		{"prod-check dropped from needs", "[main-only, prod-check]", "main-only", "summary does not need prod-check"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			requireNightlyMutation(t, tc.old, tc.repl, tc.want)
+		})
+	}
+}
+
+func TestNightly_ProdCheckArtifactHandOff(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, old, repl, want string }{
+		{"out file renamed", nightlyProdOutFlag, `-out "$RUNNER_TEMP/prodcheck.json"`, "tool step lacks -out"},
+		{"upload path changed", "          name: prod-check\n          path: ${{ runner.temp }}/prod_check.json", "          name: prod-check\n          path: ${{ runner.temp }}/prodcheck.json", "upload step lacks path"},
+		{"upload name changed", "          name: prod-check\n          path: ${{ runner.temp }}/prod_check.json", "          name: prodcheck\n          path: ${{ runner.temp }}/prod_check.json", "upload step lacks name: prod-check"},
+		{"download name changed", "          name: prod-check\n          path: ${{ runner.temp }}/prod-check\n", "          name: prodcheck\n          path: ${{ runner.temp }}/prod-check\n", "download step lacks name: prod-check"},
+		{"download path changed", "path: ${{ runner.temp }}/prod-check\n", "path: ${{ runner.temp }}/prodcheck\n", "download step lacks path"},
+		{"section path changed", "$RUNNER_TEMP/prod-check/prod_check.json", "$RUNNER_TEMP/prodcheck/prod_check.json", "lacks -section prod_check"},
+		{"HEAD env dropped", "          HEAD: ${{ steps.main.outputs.head }}\n", "", "tool step lacks HEAD"},
+		{"EXPECTED env dropped", "          EXPECTED: ${{ steps.main.outputs.expected }}\n", "", "tool step lacks EXPECTED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			requireNightlyMutation(t, tc.old, tc.repl, tc.want)
+		})
+	}
+}
+
+func TestNightly_SummaryIfIsPinned(t *testing.T) {
+	t.Parallel()
+	nightly, ci, suites := nightlyFiles(t)
+	n := mutateOnce(t, nightly, "if: "+nightlySummaryIf, "if: ${{ always() }}")
+	requireNightlyProblems(t, n, ci, suites, "summary if is not the pinned one")
+	n = mutateOnce(t, nightly, "[main-only, prod-check]", "[prod-check]")
+	requireNightlyProblems(t, n, ci, suites, "summary does not need main-only")
 }
 
 func TestNightly_NoIssuePermissionOrCommand(t *testing.T) {

@@ -467,6 +467,8 @@ type getResponse struct {
 	RejectBlockedReason         *string       `json:"reject_blocked_reason"`
 	CanCorrectInvoiceNumber     bool          `json:"can_correct_invoice_number"`
 	InvoiceNumberBlockedReason  *string       `json:"invoice_number_blocked_reason"`
+	CanIssueNote                bool          `json:"can_issue_note"`
+	IssueNoteBlockedReason      *string       `json:"issue_note_blocked_reason"`
 	VerdictStale                bool          `json:"verdict_stale"`
 }
 
@@ -724,6 +726,7 @@ func GetHandler(
 			CanCorrectInvoiceNumber:     canCorrectNumber(inv.Status, inv.EverSubmitted),
 			VerdictStale:                inv.VerdictStale,
 		}
+		resp.CanIssueNote, resp.IssueNoteBlockedReason = issueNoteGate(inv)
 		if resp.CanEdit && !resp.CanRevalidate {
 			reason := revalidateBlockedReason // a const is not addressable; copy to a local
 			resp.RevalidateBlockedReason = &reason
@@ -1792,8 +1795,14 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, ErrUnknownLineID):
 		return http.StatusBadRequest, "line_items id must name a line of this invoice"
-	case errors.Is(err, ErrNotFound):
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrOriginalNotFound):
 		return http.StatusNotFound, "not found"
+	case errors.Is(err, ErrOriginalIsANote):
+		return http.StatusConflict, "a note cannot be the original of a note"
+	case errors.Is(err, ErrOriginalOtherEntity):
+		return http.StatusConflict, "the original belongs to another client"
+	case errors.Is(err, ErrOriginalNotIssued):
+		return http.StatusConflict, "a note needs an accepted invoice with an IRN"
 	case errors.Is(err, ErrDuplicateNumber):
 		return http.StatusConflict, "duplicate invoice number"
 	case errors.Is(err, ErrRedundantTransition):

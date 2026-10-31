@@ -334,6 +334,9 @@ export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval' | 'd
   // Same convention; true only for a draft whose history never left draft/validated.
   can_correct_invoice_number: boolean
   invoice_number_blocked_reason: string | null
+  // True only for an accepted invoice with an IRN that is not itself a note.
+  can_issue_note: boolean
+  issue_note_blocked_reason: string | null
 }
 
 // GET /v1/invoices response envelope (listResponse, handlers.go:110-113). Exactly two
@@ -763,6 +766,8 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     reject_blocked_reason: res.reject_blocked_reason ?? null,
     can_correct_invoice_number: res.can_correct_invoice_number === true,
     invoice_number_blocked_reason: res.invoice_number_blocked_reason ?? null,
+    can_issue_note: res.can_issue_note === true,
+    issue_note_blocked_reason: res.issue_note_blocked_reason ?? null,
   }
 }
 

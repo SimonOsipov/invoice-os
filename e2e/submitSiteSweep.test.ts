@@ -261,6 +261,8 @@ const TOPOLOGY_MANIFEST: ManifestEntry[] = [
   [INVOICE_SURFACES, 'test:DV-02 submitted invoice detail', 'transitionInvoice:queued', 1],
   // DV-03 submits from the register with MOCK_TIN_ACCEPT, so the mock APP adapter answers.
   [INVOICE_SURFACES, 'test:DV-03 accepted invoice detail and the XML modal', 'click:batch-submit-confirm', 1],
+  // The note layout specs need an accepted invoice of 3 lines, reached from the register.
+  [INVOICE_SURFACES, 'helper:openAcceptedThreeLineInvoice', 'click:batch-submit-confirm', 1],
 ]
 
 // AC-14: can_submit / awaiting_approval needle matches are deliberately OUT of scope here --

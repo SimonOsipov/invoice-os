@@ -800,6 +800,33 @@ describe('wire mirror: Go Invoice, LineItem and TaxSubtotal <-> the e2e read typ
     }
   })
 
+  it('wire mirror: NoteSummary and the note flags on every leg', () => {
+    const go = goStructKeys(repoFile('internal/invoice/notes.go'), 'NoteSummary')
+    expect(go.length, 'Go NoteSummary under its floor').toBeGreaterThanOrEqual(5)
+    for (const [name, keys] of Object.entries({
+      'SPA NoteSummary': tsInterfaceKeys(repoFile('frontend/app/src/lib/notes.ts'), 'NoteSummary'),
+      'e2e NoteSummary': tsInterfaceKeys(repoFile(E2E_CLIENT), 'NoteSummary'),
+    })) {
+      expect(keySetDiff(go, keys), name).toEqual([])
+    }
+    const notes = goStructKeys(repoFile('internal/invoice/notes.go'), 'NotesOnInvoice')
+    for (const [name, keys] of Object.entries({
+      'SPA NotesOnInvoice': tsInterfaceKeys(repoFile('frontend/app/src/lib/notes.ts'), 'NotesOnInvoice'),
+      'e2e NotesOnInvoice': tsInterfaceKeys(repoFile(E2E_CLIENT), 'NotesOnInvoice'),
+    })) {
+      expect(keySetDiff(notes, keys), name).toEqual([])
+    }
+    const legs = {
+      'Go getResponse': goStructKeys(repoFile('internal/invoice/handlers.go'), 'getResponse'),
+      'SPA InvoiceDetailRecord': tsInterfaceKeys(repoFile(SPA_INVOICES), 'InvoiceDetailRecord'),
+      'e2e GetInvoiceResult': tsInterfaceKeys(repoFile(E2E_CLIENT), 'GetInvoiceResult'),
+    }
+    for (const [name, keys] of Object.entries(legs)) {
+      expect(keys, `${name} lacks can_issue_note`).toContain('can_issue_note')
+      expect(keys, `${name} lacks issue_note_blocked_reason`).toContain('issue_note_blocked_reason')
+    }
+  })
+
   it('wire mirror: TaxSubtotal <-> InvoiceTaxSubtotal, and GetInvoiceResult carries tax_subtotals', () => {
     const go = goStructKeys(repoFile('internal/invoice/tax_subtotals.go'), 'TaxSubtotal')
     const e2e = tsInterfaceKeys(repoFile(E2E_CLIENT), 'InvoiceTaxSubtotal')

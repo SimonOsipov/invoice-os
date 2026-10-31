@@ -291,7 +291,7 @@ deploy_one() {
 cmd_deploy() {
   local pr=$1 sha=$2 failed=0 svc
   shift 2
-  # The token version is pinned at deploy time (P24); deploy_one's child bash has no die.
+  # The token version is pinned at deploy time; deploy_one's child bash has no die.
   if [ "$pr" = nightly ]; then
     for svc in "$@"; do
       case "$svc" in

@@ -112,7 +112,7 @@ func (r *runner) skip(detail string, names ...string) {
 	}
 }
 
-// refuseDomain makes the phase's only step when RECEIVING_DOMAIN is outside A3's pattern. It runs before any vendor call.
+// refuseDomain makes the phase's only step when RECEIVING_DOMAIN is outside the <name>.resend.app pattern. It runs before any vendor call.
 func (r *runner) refuseDomain() bool {
 	if domainPattern.MatchString(r.domain) {
 		return false
@@ -158,6 +158,8 @@ func (r *runner) start() []stepResult {
 			return "failed", listDetail(hsErr, rsErr)
 		}
 		hd, hf := r.sweepHubSpot(hs)
+		dd, df := r.sweepDeals()
+		hd, hf = hd+dd, hf+df
 		rd, rf := r.sweepResend(rs)
 		d := fmt.Sprintf("HubSpot %d deleted, %d failed; Resend %d deleted, %d failed", hd, hf, rd, rf)
 		if hf+rf > 0 {
@@ -184,6 +186,26 @@ func (r *runner) sweepHubSpot(emails []string) (deleted, failed int) {
 			continue
 		}
 		if r.v.eraseHubSpot(e) != nil {
+			failed++
+		} else {
+			deleted++
+		}
+	}
+	return
+}
+
+// sweepDeals deletes every listed run deal, after the contact sweep took the deals it reaches.
+// It lists every page before the first delete. A list failure counts as one failure.
+func (r *runner) sweepDeals() (deleted, failed int) {
+	deals, err := r.v.hsObjects("deals", "dealname")
+	if err != nil {
+		return 0, 1
+	}
+	for _, d := range deals {
+		if !isRunDeal(d.Value) {
+			continue
+		}
+		if r.v.eraseDeal(d.ID) != nil {
 			failed++
 		} else {
 			deleted++
@@ -221,8 +243,7 @@ func (r *runner) poll(limit time.Duration, fn func() (bool, string)) (string, st
 }
 
 func (r *runner) post(path string, body any) int {
-	status, _ := r.v.do(http.MethodPost, strings.TrimRight(r.gateway, "/")+path, "", body)
-	return status
+	return r.v.post(strings.TrimRight(r.gateway, "/")+path, body)
 }
 
 func (r *runner) check() []stepResult {
@@ -325,7 +346,9 @@ func (r *runner) finish(in string, started time.Time) []stepResult {
 			if hsErr != nil {
 				return "failed", hsErr.Error()
 			}
-			return deleteVerdict(r.sweepHubSpot(hs))
+			d, f := r.sweepHubSpot(hs)
+			dd, df := r.sweepDeals()
+			return deleteVerdict(d+dd, f+df)
 		})
 	} else {
 		r.skip("portal guard refused", stDelHS)
@@ -349,13 +372,15 @@ func (r *runner) finish(in string, started time.Time) []stepResult {
 				for _, e := range emails {
 					if isRunContact(e, r.domain) {
 						contacts++
+						_ = r.v.eraseHubSpot(e)
 					}
 				}
-				names, err := r.v.hsList("deals", "dealname")
+				objs, err := r.v.hsObjects("deals", "dealname")
 				errs = append(errs, err)
-				for _, n := range names {
-					if isRunDeal(n) {
+				for _, o := range objs {
+					if isRunDeal(o.Value) {
 						deals++
+						_ = r.v.eraseDeal(o.ID)
 					}
 				}
 			}
@@ -364,6 +389,7 @@ func (r *runner) finish(in string, started time.Time) []stepResult {
 			for _, c := range last {
 				if isRunContact(c.Email, r.domain) {
 					contacts++
+					_ = r.v.eraseResend(c.Email)
 				}
 			}
 			if d := listDetail(errs...); d != "" {

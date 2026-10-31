@@ -19,6 +19,9 @@ const (
 	liveHubSpotPortal = 148915098
 	maxTries          = 5
 	retryWait         = 2 * time.Second
+	coldTries         = 3
+	coldWait          = 10 * time.Second
+	gatewayTimeout    = 40 * time.Second       // the fleet gate's per-call limit; a scaled-to-zero service answers late
 	erasePace         = 200 * time.Millisecond // 5 erases a second per vendor
 	maxPages          = 1000
 	maxBody           = 1 << 20
@@ -34,23 +37,49 @@ type vendors struct {
 	rsErase        notifications.ResendEraser
 }
 
-// retry runs fn until it answers something other than 429, at most maxTries times.
-func (v *vendors) retry(fn func() int) int {
+// policy says how often to run a call and which statuses ask for another run. Status 0 is no answer.
+type policy struct {
+	tries int
+	wait  time.Duration
+	again func(status int) bool
+}
+
+// readPolicy retries a rate limit, a server error and no answer. A 4xx other than 429 is final.
+var readPolicy = policy{maxTries, retryWait, func(s int) bool { return s == 0 || s == http.StatusTooManyRequests || s >= 500 }}
+
+// coldPolicy retries a gateway that is still starting. A 500 is a product fault and is final.
+var coldPolicy = policy{coldTries, coldWait, func(s int) bool {
+	return s == 0 || s == http.StatusBadGateway || s == http.StatusServiceUnavailable || s == http.StatusGatewayTimeout
+}}
+
+func (v *vendors) retry(p policy, fn func() int) int {
 	status := 0
-	for try := 1; try <= maxTries; try++ {
-		if status = fn(); status != http.StatusTooManyRequests {
+	for try := 1; try <= p.tries; try++ {
+		if status = fn(); !p.again(status) {
 			return status
 		}
-		if try < maxTries {
-			v.sleep(retryWait)
+		if try < p.tries {
+			v.sleep(p.wait)
 		}
 	}
 	return status
 }
 
 func (v *vendors) do(method, rawURL, token string, body any) (int, []byte) {
+	return v.doOn(v.hc, readPolicy, method, rawURL, token, body)
+}
+
+// post sends one gateway call with the long timeout and the cold-start policy.
+func (v *vendors) post(rawURL string, body any) int {
+	c := *v.hc
+	c.Timeout = gatewayTimeout
+	status, _ := v.doOn(&c, coldPolicy, http.MethodPost, rawURL, "", body)
+	return status
+}
+
+func (v *vendors) doOn(hc *http.Client, p policy, method, rawURL, token string, body any) (int, []byte) {
 	var raw []byte
-	status := v.retry(func() int {
+	status := v.retry(p, func() int {
 		raw = nil
 		var rd io.Reader
 		if body != nil {
@@ -68,7 +97,7 @@ func (v *vendors) do(method, rawURL, token string, body any) (int, []byte) {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
 		req.Header.Set("Content-Type", "application/json")
-		resp, err := v.hc.Do(req)
+		resp, err := hc.Do(req)
 		if err != nil {
 			return 0
 		}
@@ -161,6 +190,7 @@ func (c resendContact) created() (time.Time, bool) {
 
 type hsPage struct {
 	Results []struct {
+		ID         string             `json:"id"`
 		Properties map[string]*string `json:"properties"`
 	} `json:"results"`
 	Paging struct {
@@ -170,9 +200,24 @@ type hsPage struct {
 	} `json:"paging"`
 }
 
+type hsObject struct{ ID, Value string }
+
 // hsList reads every page of a HubSpot object list and returns the values of one property.
 func (v *vendors) hsList(object, property string) ([]string, error) {
+	objs, err := v.hsObjects(object, property)
+	if err != nil {
+		return nil, err
+	}
 	var out []string
+	for _, o := range objs {
+		out = append(out, o.Value)
+	}
+	return out, nil
+}
+
+// hsObjects reads every page of a HubSpot object list with the id and one property of each object.
+func (v *vendors) hsObjects(object, property string) ([]hsObject, error) {
+	var out []hsObject
 	after := ""
 	for page := 0; page < maxPages; page++ {
 		path := "/crm/v3/objects/" + object + "?limit=100&properties=" + property
@@ -185,7 +230,7 @@ func (v *vendors) hsList(object, property string) ([]string, error) {
 		}
 		for _, r := range p.Results {
 			if val := r.Properties[property]; val != nil {
-				out = append(out, *val)
+				out = append(out, hsObject{r.ID, *val})
 			}
 		}
 		if after = p.Paging.Next.After; after == "" {
@@ -222,11 +267,14 @@ func (v *vendors) rsList() ([]resendContact, error) {
 // erase paces and retries a vendor eraser. Its error is a *notifications.DeliveryError: a status only.
 func (v *vendors) erase(fn func(context.Context) error) error {
 	var err error
-	v.retry(func() int {
+	v.retry(readPolicy, func() int {
 		v.sleep(erasePace)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		err = fn(ctx)
+		if err == nil {
+			return http.StatusOK
+		}
 		var de *notifications.DeliveryError
 		if errors.As(err, &de) {
 			return de.Status
@@ -234,6 +282,23 @@ func (v *vendors) erase(fn func(context.Context) error) error {
 		return 0
 	})
 	return err
+}
+
+// eraseDeal blanks the name, then deletes the deal: a deleted deal stays restorable with its name. A 404 is done.
+func (v *vendors) eraseDeal(id string) error {
+	u := notifications.HubSpotBaseURL + "/crm/v3/objects/deals/" + url.PathEscape(id)
+	for _, step := range []struct {
+		method string
+		body   any
+	}{{http.MethodPatch, map[string]any{"properties": map[string]string{"dealname": "Erased contact"}}}, {http.MethodDelete, nil}} {
+		v.sleep(erasePace)
+		if st, _ := v.do(step.method, u, v.hsToken, step.body); st == http.StatusNotFound {
+			return nil
+		} else if st < 200 || st >= 300 {
+			return fmt.Errorf("HubSpot deal %s", answered(st))
+		}
+	}
+	return nil
 }
 
 func (v *vendors) eraseHubSpot(email string) error {
@@ -244,7 +309,7 @@ func (v *vendors) eraseResend(email string) error {
 	return v.erase(func(ctx context.Context) error { return v.rsErase.EraseContact(ctx, email) })
 }
 
-// hsContact reads a contact's id and tags by address; found is false until it exists.
+// hsContact reads a contact's id and tags by address.
 func (v *vendors) hsContact(email string) (id, tags string, status int) {
 	var c struct {
 		ID         string             `json:"id"`

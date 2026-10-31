@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/notifications"
 )
 
 func greenStart(t *testing.T, w *world) result {
@@ -288,8 +291,12 @@ func TestFinish_ReportsWhatIsLeft(t *testing.T) {
 			w.noopDeletes = true
 			w.rsContacts = []rsContactRow{{"r1", "a@example.com", "2026-01-01T00:00:00Z"}}
 		}, "failed"},
-		"sign-up deal remains": {func(w *world) { w.hsDeals = []hsDealRow{{"d1", "Acme — sign-up", testStage, "none"}} }, "failed"},
-		"other deal remains":   {func(w *world) { w.hsDeals = []hsDealRow{{"d1", "Acme — other", testStage, "none"}} }, "passed"},
+		"sign-up deal survives its delete": {func(w *world) {
+			w.noopDeletes = true
+			w.hsDeals = []hsDealRow{{"d1", "Acme — sign-up", testStage, "none"}}
+		}, "failed"},
+		"contactless sign-up deal is deleted": {func(w *world) { w.hsDeals = []hsDealRow{{"d1", "Acme — sign-up", testStage, "none"}} }, "passed"},
+		"other deal remains":                  {func(w *world) { w.hsDeals = []hsDealRow{{"d1", "Acme — other", testStage, "none"}} }, "passed"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := newWorld()
@@ -601,5 +608,205 @@ func TestReceivingDomain_AcceptsAResendSubdomain(t *testing.T) {
 	res := runPhase(t, w, env, "start")
 	if res.step(stDomain).Status != "absent" || !slices.Equal(w.deleted, []string{"rs:nightly-1-reg@abc123.resend.app"}) {
 		t.Errorf("steps %+v, deleted %v", res.sec.Steps, w.deleted)
+	}
+}
+
+// dealCalls lists the deal calls of a method, in order.
+func dealCalls(w *world, method string) (idx []int) {
+	for i, c := range w.calls {
+		if c.method == method && strings.HasPrefix(c.path, "/crm/v3/objects/deals/") {
+			idx = append(idx, i)
+		}
+	}
+	return
+}
+
+func TestSweep_DeletesARunDealWithNoContact(t *testing.T) {
+	for _, phase := range []string{"start", "finish"} {
+		t.Run(phase, func(t *testing.T) {
+			w := newWorld()
+			w.pageSize = 1
+			w.hsContacts = []hsContactRow{{"1", "a@example.com", ""}}
+			w.hsDeals = []hsDealRow{
+				{"d1", "Acme — sign-up", testStage, "none"},
+				{"d2", "Acme — other", testStage, "none"},
+				{"d3", "Acme — demo request", testStage, "none"},
+				{"d4", "Erased contact", testStage, "none"},
+			}
+			want, got := "HubSpot 4 deleted, 0 failed", ""
+			if phase == "start" {
+				got = greenStart(t, w).step(stLeftovers).Detail
+			} else {
+				got, want = finish(t, w, baseEnv()).step(stDelHS).Detail, "4 deleted, 0 failed"
+			}
+			if !strings.HasPrefix(got, want) {
+				t.Errorf("sweep detail %q, want it to start %q", got, want)
+			}
+			var left []string
+			for _, d := range w.hsDeals {
+				left = append(left, d.id)
+			}
+			if !slices.Equal(left, []string{"d2"}) {
+				t.Fatalf("deals left %v, want only d2 (Acme — other)", left)
+			}
+			dels := dealCalls(w, "DELETE")
+			if len(dels) != 3 {
+				t.Fatalf("%d deal deletes, want 3", len(dels))
+			}
+			// every deal list page comes before the first deal delete, and the contact sweep before both
+			lastList, firstGdpr := 0, -1
+			for i, c := range w.calls {
+				if c.method == "GET" && strings.HasPrefix(c.path, "/crm/v3/objects/deals?") && i < dels[0] {
+					lastList = i
+				}
+				if c.method == "POST" && strings.Contains(c.path, "gdpr-delete") && firstGdpr < 0 {
+					firstGdpr = i
+				}
+			}
+			pages := 0
+			for _, c := range w.calls[:dels[0]] {
+				if c.method == "GET" && strings.HasPrefix(c.path, "/crm/v3/objects/deals?") {
+					pages++
+				}
+			}
+			if pages != 4 || lastList > dels[0] || firstGdpr > lastList {
+				t.Errorf("deal list pages before the first delete = %d (want 4), gdpr at %d, last list at %d", pages, firstGdpr, lastList)
+			}
+		})
+	}
+}
+
+func TestSweep_LivePortalDeletesNoDeal(t *testing.T) {
+	w := newWorld()
+	w.portalBody = `{"portalId":148915098}`
+	w.hsDeals = []hsDealRow{{"d1", "Acme — sign-up", testStage, "none"}}
+	finish(t, w, baseEnv())
+	if len(w.hsDeals) != 1 || len(dealCalls(w, "GET"))+len(dealCalls(w, "DELETE")) != 0 {
+		t.Errorf("deals %v, calls %v", w.hsDeals, w.calls)
+	}
+}
+
+func TestSweep_DealDeleteFailureIsAFailure(t *testing.T) {
+	for phase, step := range map[string]string{"start": stLeftovers, "finish": stDelHS} {
+		t.Run(phase, func(t *testing.T) {
+			w := newWorld()
+			w.hsDeleteStatus = 500
+			w.hsDeals = []hsDealRow{{"d1", "Acme — sign-up", testStage, "none"}}
+			var res result
+			if phase == "start" {
+				res = greenStart(t, w)
+			} else {
+				res = finish(t, w, baseEnv())
+			}
+			if res.code != 1 || res.step(step).Status != "failed" || len(w.hsDeals) != 1 {
+				t.Errorf("code %d, step %+v", res.code, res.step(step))
+			}
+		})
+	}
+}
+
+func TestFinish_RepeatsADeleteThatFailed(t *testing.T) {
+	w := newWorld()
+	w.hsFailFirst, w.rsFailFirst, w.dealFailFirst = 1, 1, 1
+	w.hsDeals = []hsDealRow{{"d1", "Acme — sign-up", testStage, "none"}}
+	w.hsContacts = []hsContactRow{{"1", "a@example.com", ""}}
+	w.rsContacts = []rsContactRow{{"r1", "a@example.com", "2026-01-01T00:00:00Z"}}
+	res := finish(t, w, baseEnv())
+	if got := res.step(stNoneLeft); got.Status != "passed" {
+		t.Errorf("%s = %+v, want a repeat to delete what the first delete missed", stNoneLeft, got)
+	}
+	if res.step(stDelHS).Status != "failed" || res.code != 1 {
+		t.Errorf("the failed first delete must still show: code %d, %+v", res.code, res.step(stDelHS))
+	}
+	if len(w.hsContacts)+len(w.rsContacts)+len(w.hsDeals) != 0 {
+		t.Errorf("left: %v %v", w.hsContacts, w.rsContacts)
+	}
+}
+
+func TestRetry_ReadsRetryServerErrorsAndNoAnswer(t *testing.T) {
+	for name, tc := range map[string]struct {
+		statuses []int
+		calls    int
+		want     int
+	}{
+		"503 then 200":   {[]int{503, 200}, 2, 200},
+		"500 then 200":   {[]int{500, 200}, 2, 200},
+		"no answer once": {[]int{0, 200}, 2, 200},
+		"503 always":     {[]int{503}, 5, 503},
+		"401 is final":   {[]int{401, 200}, 1, 401},
+		"404 is final":   {[]int{404, 200}, 1, 404},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tr := &scripted{statuses: tc.statuses}
+			v := &vendors{hc: &http.Client{Transport: tr}, sleep: func(time.Duration) {}}
+			if status, _ := v.do("GET", "https://api.hubapi.com/x", "k", nil); status != tc.want || tr.n != tc.calls {
+				t.Errorf("status %d after %d calls, want %d after %d", status, tr.n, tc.want, tc.calls)
+			}
+		})
+	}
+
+	w := newWorld()
+	w.portalStatus = 503
+	if res := greenStart(t, w); res.step(stPortal).Status != "failed" || w.count("api.hubapi.com") != 5 {
+		t.Errorf("a portal read that keeps failing: %+v after %d calls", res.step(stPortal), w.count("api.hubapi.com"))
+	}
+}
+
+// deadlines records the time each call had left.
+type deadlines struct {
+	scripted
+	left []time.Duration
+}
+
+func (d *deadlines) RoundTrip(r *http.Request) (*http.Response, error) {
+	if dl, ok := r.Context().Deadline(); ok {
+		d.left = append(d.left, time.Until(dl))
+	}
+	if d.statuses[min(d.n, len(d.statuses)-1)] == 0 {
+		d.n++
+		return nil, io.ErrUnexpectedEOF
+	}
+	return d.scripted.RoundTrip(r)
+}
+
+func TestPost_RetriesAColdGatewayWithALongTimeout(t *testing.T) {
+	for name, tc := range map[string]struct {
+		statuses []int
+		calls    int
+		want     int
+	}{
+		"502 then 202":    {[]int{502, 202}, 2, 202},
+		"503 then 202":    {[]int{503, 202}, 2, 202},
+		"504 then 202":    {[]int{504, 202}, 2, 202},
+		"no answer":       {[]int{0, 202}, 2, 202},
+		"502 always":      {[]int{502}, 3, 502},
+		"500 is final":    {[]int{500, 202}, 1, 500},
+		"400 is final":    {[]int{400, 202}, 1, 400},
+		"429 is final":    {[]int{429, 202}, 1, 429},
+		"202 first try":   {[]int{202}, 1, 202},
+		"401 is final":    {[]int{401, 202}, 1, 401},
+		"501 is final":    {[]int{501, 202}, 1, 501},
+		"403 is final":    {[]int{403, 202}, 1, 403},
+		"404 is final":    {[]int{404, 202}, 1, 404},
+		"409 is final":    {[]int{409, 202}, 1, 409},
+		"422 is final":    {[]int{422, 202}, 1, 422},
+		"408 is final":    {[]int{408, 202}, 1, 408},
+		"505 is final":    {[]int{505, 202}, 1, 505},
+		"200 first try":   {[]int{200}, 1, 200},
+		"502 then 500":    {[]int{502, 500, 202}, 2, 500},
+		"0 then 0 then 0": {[]int{0}, 3, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tr := &deadlines{scripted: scripted{statuses: tc.statuses}}
+			v := &vendors{hc: notifications.NewHTTPClient(tr), sleep: func(time.Duration) {}}
+			if status := v.post("https://gw.test/auth/register", map[string]string{"a": "b"}); status != tc.want || tr.n != tc.calls {
+				t.Errorf("status %d after %d calls, want %d after %d", status, tr.n, tc.want, tc.calls)
+			}
+			for _, l := range tr.left {
+				if l < 35*time.Second {
+					t.Errorf("a call had %v left, want about 40s", l)
+				}
+			}
+		})
 	}
 }

@@ -50,6 +50,9 @@ type world struct {
 	noopDeletes    bool
 	rsDeleteStatus int
 	hsDeleteStatus int
+	hsFailFirst    int // the first n contact erases answer 400, then work
+	rsFailFirst    int
+	dealFailFirst  int // the first n deal deletes answer 400, then work
 	registerStatus int
 	demoStatus     int
 	hsListFail     bool // a list page after the first answers 500
@@ -143,6 +146,10 @@ func (w *world) hubspot(req *http.Request, path, body string) *http.Response {
 		if w.hsDeleteStatus != 200 {
 			return reply(w.hsDeleteStatus, `{}`)
 		}
+		if w.hsFailFirst > 0 {
+			w.hsFailFirst--
+			return reply(400, `{}`)
+		}
 		if !w.noopDeletes {
 			for i, c := range w.hsContacts {
 				if c.email == b.ObjectID {
@@ -160,13 +167,14 @@ func (w *world) hubspot(req *http.Request, path, body string) *http.Response {
 		if w.hsListFail && q.Get("after") != "" {
 			return reply(500, `{}`)
 		}
-		return w.hsPage(q.Get("after"), emails, "email", &w.hsListEnd)
+		return w.hsPage(q.Get("after"), emails, nil, "email", &w.hsListEnd)
 	case req.Method == "GET" && path == objs+"deals":
-		var names []string
+		var names, ids []string
 		for _, d := range w.hsDeals {
 			names = append(names, d.name)
+			ids = append(ids, d.id)
 		}
-		return w.hsPage(q.Get("after"), names, "dealname", new(int))
+		return w.hsPage(q.Get("after"), names, ids, "dealname", new(int))
 	case req.Method == "GET" && strings.HasPrefix(path, objs+"contacts/"):
 		email := strings.TrimPrefix(path, objs+"contacts/")
 		if email == regAddr && w.hsMiss > 0 {
@@ -198,6 +206,16 @@ func (w *world) hubspot(req *http.Request, path, body string) *http.Response {
 			case "GET":
 				return jsonReply(map[string]any{"properties": map[string]string{"dealname": d.name, "dealstage": d.stage}})
 			case "DELETE":
+				if w.hsDeleteStatus != 200 {
+					return reply(w.hsDeleteStatus, `{}`)
+				}
+				if w.dealFailFirst > 0 {
+					w.dealFailFirst--
+					return reply(400, `{}`)
+				}
+				if w.noopDeletes {
+					return reply(204, ``)
+				}
 				w.hsDeals = append(w.hsDeals[:i], w.hsDeals[i+1:]...)
 				return reply(204, ``)
 			}
@@ -208,12 +226,16 @@ func (w *world) hubspot(req *http.Request, path, body string) *http.Response {
 	return reply(404, `{}`)
 }
 
-func (w *world) hsPage(after string, vals []string, prop string, end *int) *http.Response {
+func (w *world) hsPage(after string, vals, ids []string, prop string, end *int) *http.Response {
 	off, _ := strconv.Atoi(after)
 	hi := min(off+w.pageSize, len(vals))
 	var rs []map[string]any
-	for _, v := range vals[off:hi] {
-		rs = append(rs, map[string]any{"properties": map[string]string{prop: v}})
+	for i, v := range vals[off:hi] {
+		row := map[string]any{"properties": map[string]string{prop: v}}
+		if ids != nil {
+			row["id"] = ids[off+i]
+		}
+		rs = append(rs, row)
 	}
 	out := map[string]any{"results": rs}
 	if hi < len(vals) {
@@ -264,6 +286,10 @@ func (w *world) resend(req *http.Request, path string) *http.Response {
 		w.deleted = append(w.deleted, "rs:"+email)
 		if w.rsDeleteStatus != 200 {
 			return reply(w.rsDeleteStatus, `{}`)
+		}
+		if w.rsFailFirst > 0 {
+			w.rsFailFirst--
+			return reply(400, `{}`)
 		}
 		if !w.noopDeletes {
 			for i, c := range w.rsContacts {

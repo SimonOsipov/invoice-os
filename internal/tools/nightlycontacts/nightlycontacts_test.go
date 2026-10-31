@@ -305,6 +305,9 @@ func TestFinish_ReportsWhatIsLeft(t *testing.T) {
 			if got := res.step(stNoneLeft).Status; got != tc.want {
 				t.Errorf("%s = %s (%s), want %s", stNoneLeft, got, res.step(stNoneLeft).Detail, tc.want)
 			}
+			if name == "other deal remains" && (len(w.hsDeals) != 1 || len(dealCalls(w, "DELETE")) != 0) {
+				t.Errorf("a deal outside the rule was touched: %v", w.hsDeals)
+			}
 			if d := res.step(stNoneLeft).Detail; tc.want == "failed" && !strings.Contains(d, "after 2m0s") {
 				t.Errorf("detail %q does not name the limit", d)
 			}

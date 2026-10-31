@@ -19,10 +19,11 @@ const (
 	nightlyCIRunLine      = `run: bash scripts/ci/nightly-ci.sh "$GITHUB_REF_NAME" ci.yml=run_id dev-env.yml=preview_run_id`
 	nightlyE2EFlag        = `-e2e-suites "$RUNNER_TEMP/e2e-suites.txt" `
 	nightlyEmailSection   = `-section email="$RUNNER_TEMP/results/results-email/email.json"`
+	nightlyHubSpotSection = `-section hubspot="$RUNNER_TEMP/results/results-hubspot/hubspot.json"`
 	nightlyProdSection    = `-section prod_check="$RUNNER_TEMP/prod-check/prod_check.json"`
 	nightlySummaryIf      = `${{ !cancelled() && needs.main-only.result == 'success' }}`
-	nightlyPolls          = "470"
-	nightlySummaryTimeout = "270"
+	nightlyPolls          = "540"
+	nightlySummaryTimeout = "300"
 	nightlyPreviewDL      = `gh run download "$PREVIEW_RUN_ID" -R "$REPO" -p 'results-*' -D "$RUNNER_TEMP/results"`
 )
 
@@ -180,6 +181,9 @@ func nightlyRunProblems(nightlyYAML, ciYAML, suitesTxt string) []string {
 	}
 	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), nightlyEmailSection) {
 		p = append(p, "assembler step lacks -section email")
+	}
+	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), nightlyHubSpotSection) {
+		p = append(p, "assembler step lacks -section hubspot")
 	}
 	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), `node e2e/topology/shards.ts | jq -r '.[] | "topology-\(.)=E2E topology (\(.))=results"'`) {
 		p = append(p, "assembler step does not append the topology shard suites")
@@ -647,6 +651,7 @@ func TestNightly_SummaryFoldsTheE2ERun(t *testing.T) {
 		{"poll budget", "NIGHTLY_CI_POLLS: " + nightlyPolls, "NIGHTLY_CI_POLLS: 120", "NIGHTLY_CI_POLLS"},
 		{"e2e flag dropped", nightlyE2EFlag, "", "lacks -e2e-suites"},
 		{"email section dropped", " " + nightlyEmailSection, "", "lacks -section email"},
+		{"hubspot section dropped", " " + nightlyHubSpotSection, "", "lacks -section hubspot"},
 		{"preview download dropped", "$PREVIEW_RUN_ID\" -R", "$CI_RUN_ID\" -R", "preview run's results"},
 		{"jobs of one run", "actions/runs/$run/jobs", "actions/runs/$CI_RUN_ID/jobs", "jobs of each run"},
 		{"preview run left out of the jobs", `runs+=("$PREVIEW_RUN_ID")`, `runs+=("$CI_RUN_ID")`, "jobs of each run"},
@@ -736,7 +741,7 @@ func TestNightly_PollBudgetCoversTheDevEnvPath(t *testing.T) {
 	t.Parallel()
 	devEnv := nlJobs(readWorkflow(t, "dev-env.yml"))
 	m := func(id string) int { return nightlyJobMinutes(t, devEnv, id) }
-	path := m("commit-authors") + m("build") + m("deploy") + max(m("health-gate"), m("fleet-gate")) + m("e2e") + m("topology") + m("email") + m("nightly-teardown")
+	path := m("commit-authors") + m("build") + m("deploy") + max(m("health-gate"), m("fleet-gate")) + m("e2e") + m("topology") + m("contacts") + m("email") + m("nightly-teardown") + m("contacts-cleanup")
 	if path < 150 {
 		t.Fatalf("control: path sum %d min is implausibly small", path)
 	}

@@ -683,6 +683,12 @@ func TestPreviewContactPreflightNamesEveryMissingSecret(t *testing.T) {
 			t.Errorf("stderr names %s = %v, want %v:\n%s", n, got, want, r.stderr)
 		}
 	}
+	for i, n := range contactSecrets {
+		one := runPreview(t, func(dir string) { writeIn(t, dir, "missing", n+"\n") }, "contact-preflight", "nightly")
+		if one.code != 1 || !strings.Contains(one.stderr, n) {
+			t.Errorf("secret %d (%s) missing: exit %d, stderr %q", i, n, one.code, one.stderr)
+		}
+	}
 	d := runPreview(t, func(dir string) { writeIn(t, dir, "disabled", contactSecrets[4]+"\n") }, "contact-preflight", "nightly")
 	if d.code != 1 || !strings.Contains(d.stderr, contactSecrets[4]) || strings.Contains(d.stderr, contactSecrets[0]) {
 		t.Errorf("disabled: exit %d, stderr %q", d.code, d.stderr)

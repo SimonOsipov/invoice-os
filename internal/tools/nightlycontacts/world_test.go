@@ -49,7 +49,11 @@ type world struct {
 	deleted        []string // "hs:<email>", "rs:<email>"
 	noopDeletes    bool
 	rsDeleteStatus int
+	hsDeleteStatus int
 	registerStatus int
+	demoStatus     int
+	hsListFail     bool // a list page after the first answers 500
+	rsListFail     bool
 
 	// check knobs
 	noHS, noRS, noTag, noDeal bool
@@ -68,7 +72,7 @@ type world struct {
 func newWorld() *world {
 	return &world{
 		portalStatus: 200, portalBody: `{"portalId":999}`, stages: []string{testStage, "other"}, propStatus: 200,
-		pageSize: 100, rsDeleteStatus: 200, registerStatus: 202, dealStage: testStage, dealName: "Nightly" + demoSuffix,
+		pageSize: 100, rsDeleteStatus: 200, hsDeleteStatus: 200, registerStatus: 202, demoStatus: 202, dealStage: testStage, dealName: "Nightly" + demoSuffix,
 		firstDelete: -1, hsListEnd: -1, rsEnd: -1,
 	}
 }
@@ -136,6 +140,9 @@ func (w *world) hubspot(req *http.Request, path, body string) *http.Response {
 		}
 		_ = json.Unmarshal([]byte(body), &b)
 		w.deleted = append(w.deleted, "hs:"+b.ObjectID)
+		if w.hsDeleteStatus != 200 {
+			return reply(w.hsDeleteStatus, `{}`)
+		}
 		if !w.noopDeletes {
 			for i, c := range w.hsContacts {
 				if c.email == b.ObjectID {
@@ -149,6 +156,9 @@ func (w *world) hubspot(req *http.Request, path, body string) *http.Response {
 		var emails []string
 		for _, c := range w.hsContacts {
 			emails = append(emails, c.email)
+		}
+		if w.hsListFail && q.Get("after") != "" {
+			return reply(500, `{}`)
 		}
 		return w.hsPage(q.Get("after"), emails, "email", &w.hsListEnd)
 	case req.Method == "GET" && path == objs+"deals":
@@ -218,6 +228,9 @@ func (w *world) resend(req *http.Request, path string) *http.Response {
 	switch {
 	case req.Method == "GET" && path == "/contacts":
 		after := req.URL.Query().Get("after")
+		if w.rsListFail && after != "" {
+			return reply(500, `{}`)
+		}
 		start := 0
 		for i, c := range w.rsContacts {
 			if c.id == after {
@@ -284,12 +297,15 @@ func (w *world) gateway(req *http.Request, path, body string) *http.Response {
 		}
 		return reply(200, `{"code":"c"}`)
 	case "/contacts/demo-request":
+		if w.demoStatus != 202 {
+			return reply(w.demoStatus, fmt.Sprintf(`{"message":"%s"}`, b["email"]))
+		}
 		c := hsContactRow{w.id(), b["email"], ";demo_request"}
 		w.hsContacts = append(w.hsContacts, c)
 		if !w.noDeal {
 			w.hsDeals = append(w.hsDeals, hsDealRow{w.id(), w.dealName, w.dealStage, c.id})
 		}
-		return reply(202, `{}`)
+		return reply(w.demoStatus, `{}`)
 	}
 	return reply(404, `{}`)
 }

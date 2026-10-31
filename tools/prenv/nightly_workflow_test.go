@@ -707,6 +707,11 @@ func TestNightlyE2ESuites_MatchDevEnvJobs(t *testing.T) {
 	if got := nightlyE2ESuitesProblems(devEnv, suites); len(got) > 0 {
 		t.Fatalf("problems: %q", got)
 	}
+	for _, line := range []string{"contacts=Real contact reaches HubSpot and Resend", "contacts-cleanup=Delete the run's contacts"} {
+		if !slices.Contains(strings.Split(suites, "\n"), line) {
+			t.Errorf("the suites file lacks %q", line)
+		}
+	}
 	for _, tc := range []struct{ name, yml, txt, want string }{
 		{"deploy renamed", mutateOnce(t, devEnv, "name: Deploy the PR's fleet", "name: Deploy the fleet"), suites, "Deploy the PR's fleet"},
 		{"results key wrong", devEnv, mutateOnce(t, suites, "e2e=E2E (smoke + api)=results", "e2ee=E2E (smoke + api)=results"), "results-e2ee"},

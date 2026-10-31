@@ -30,6 +30,9 @@ func TestIsRunContact(t *testing.T) {
 		"sam@x.resend.app":                false,
 		"nightly-1@other.resend.app":      false,
 		"nightly-1-reg@x.resend.app.evil": false,
+		"":                                false,
+		"x@example.com ":                  false,
+		"x@example.com.au":                false,
 	} {
 		if got := isRunContact(addr, "x.resend.app"); got != want {
 			t.Errorf("isRunContact(%q) = %v, want %v", addr, got, want)
@@ -41,28 +44,31 @@ func TestPortalGuard_RefusesAndStops(t *testing.T) {
 	for name, tc := range map[string]struct {
 		status int
 		body   string
+		detail string
 	}{
-		"live portal": {200, `{"portalId":148915098}`},
-		"401":         {401, `{"portalId":999}`},
-		"bad JSON":    {200, `not json`},
-		"id zero":     {200, `{"portalId":0}`},
+		"live portal": {200, `{"portalId":148915098}`, "live portal"},
+		"401":         {401, `{"portalId":999}`, "answered 401"},
+		"bad JSON":    {200, `not json`, "no usable answer"},
+		"id zero":     {200, `{"portalId":0}`, "portal id is missing"},
 	} {
-		t.Run(name, func(t *testing.T) {
-			w := newWorld()
-			w.portalStatus, w.portalBody = tc.status, tc.body
-			w.hsContacts = []hsContactRow{{"1", "a@example.com", ""}}
-			w.rsContacts = []rsContactRow{{"r1", "a@example.com", "2026-01-01T00:00:00Z"}}
-			res := greenStart(t, w)
-			if res.code != 1 || res.step(stPortal).Status != "failed" {
-				t.Fatalf("code %d, portal step %+v", res.code, res.step(stPortal))
-			}
-			if n := w.count("api.hubapi.com"); n != 1 {
-				t.Errorf("HubSpot calls = %d, want 1", n)
-			}
-			if len(w.deleted) != 0 || w.count("api.resend.com") != 0 {
-				t.Errorf("a vendor was touched after the refusal: %v", w.deleted)
-			}
-		})
+		for _, phase := range []string{"start", "check"} {
+			t.Run(name+" "+phase, func(t *testing.T) {
+				w := newWorld()
+				w.portalStatus, w.portalBody = tc.status, tc.body
+				w.hsContacts = []hsContactRow{{"1", "a@example.com", ""}}
+				w.rsContacts = []rsContactRow{{"r1", "a@example.com", "2026-01-01T00:00:00Z"}}
+				res := runPhase(t, w, baseEnv(), phase)
+				if res.code != 1 || res.step(stPortal).Status != "failed" || !strings.Contains(res.step(stPortal).Detail, tc.detail) {
+					t.Fatalf("code %d, portal step %+v", res.code, res.step(stPortal))
+				}
+				if n := w.count("api.hubapi.com"); n != 1 {
+					t.Errorf("HubSpot calls = %d, want 1", n)
+				}
+				if len(w.deleted) != 0 || w.count("api.resend.com") != 0 || w.count("gw.test") != 0 {
+					t.Errorf("a vendor or the gateway was touched after the refusal: %v", w.deleted)
+				}
+			})
+		}
 	}
 }
 
@@ -127,7 +133,7 @@ func TestSweep_DeletesOnlyMatchesAcrossPages(t *testing.T) {
 		}
 		w.rsContacts = []rsContactRow{
 			{"r1", "nightly-ops@acme.com", old}, {"r2", "c@example.com", old}, {"r3", "x@example.com.evil.ng", old},
-			{"r4", "nightly-9-demo@x.resend.app", old}, {"r5", "sam@ascomply.com", old},
+			{"r4", "nightly-9-demo@x.resend.app", old}, {"r5", "sam@ascomply.com", old}, {"r6", "", old},
 		}
 		if phase == "start" {
 			greenStart(t, w)
@@ -235,6 +241,13 @@ func TestCheck_RefusedRegistrationSkipsItsReadBacks(t *testing.T) {
 	if w.bodyOf("/auth/sign-in") != "" {
 		t.Error("sign-in was called after a refused registration")
 	}
+
+	w = newWorld()
+	w.demoStatus = 500
+	res = runPhase(t, w, baseEnv(), "check")
+	if res.step(stDemoSent).Status != "failed" || res.step(stDemoDeal).Status != "skipped" || res.step(stRegInHS).Status != "passed" {
+		t.Errorf("demo refused: steps %+v", res.sec.Steps)
+	}
 }
 
 func TestCheck_AddressesCarryTheRunID(t *testing.T) {
@@ -284,6 +297,9 @@ func TestFinish_ReportsWhatIsLeft(t *testing.T) {
 			if got := res.step(stNoneLeft).Status; got != tc.want {
 				t.Errorf("%s = %s (%s), want %s", stNoneLeft, got, res.step(stNoneLeft).Detail, tc.want)
 			}
+			if d := res.step(stNoneLeft).Detail; tc.want == "failed" && !strings.Contains(d, "after 2m0s") {
+				t.Errorf("detail %q does not name the limit", d)
+			}
 		})
 	}
 }
@@ -293,6 +309,7 @@ func TestFinish_NewContactOutsideTheRule(t *testing.T) {
 		"new":          {"2026-10-31T03:00:00Z", "failed"},
 		"old":          {"2026-10-30T03:00:00Z", "passed"},
 		"at the start": {startedAt, "failed"},
+		"unreadable":   {"yesterday", "failed"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := newWorld()
@@ -313,15 +330,76 @@ func TestFinish_NewContactOutsideTheRule(t *testing.T) {
 }
 
 func TestFinish_DeleteFailureIsAFailure(t *testing.T) {
-	w := newWorld()
-	w.rsDeleteStatus = 500
-	w.rsContacts = []rsContactRow{{"r1", "a@example.com", "2026-01-01T00:00:00Z"}}
-	res := finish(t, w, baseEnv())
-	if res.code != 1 || res.step(stDelRS).Status != "failed" || res.sec.OK {
-		t.Fatalf("code %d, ok %v, step %+v", res.code, res.sec.OK, res.step(stDelRS))
+	for name, tc := range map[string]struct {
+		phase, step string
+		set         func(*world)
+	}{
+		"finish Resend":  {"finish", stDelRS, func(w *world) { w.rsDeleteStatus = 500 }},
+		"finish HubSpot": {"finish", stDelHS, func(w *world) { w.hsDeleteStatus = 500 }},
+		"start Resend":   {"start", stLeftovers, func(w *world) { w.rsDeleteStatus = 500 }},
+		"start HubSpot":  {"start", stLeftovers, func(w *world) { w.hsDeleteStatus = 500 }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld()
+			tc.set(w)
+			w.hsContacts = []hsContactRow{{"1", "a@example.com", ""}}
+			w.rsContacts = []rsContactRow{{"r1", "a@example.com", "2026-01-01T00:00:00Z"}}
+			var res result
+			if tc.phase == "finish" {
+				res = finish(t, w, baseEnv())
+			} else {
+				res = greenStart(t, w)
+			}
+			if res.code != 1 || res.step(tc.step).Status != "failed" || res.sec.OK {
+				t.Fatalf("code %d, ok %v, step %+v", res.code, res.sec.OK, res.step(tc.step))
+			}
+			if len(res.sec.Failures) == 0 || res.sec.Failures[0].Suite != "hubspot" {
+				t.Errorf("failures = %+v", res.sec.Failures)
+			}
+		})
 	}
-	if len(res.sec.Failures) == 0 || res.sec.Failures[0].Suite != "hubspot" {
-		t.Errorf("failures = %+v", res.sec.Failures)
+}
+
+func TestSweep_ListFailureDeletesNothing(t *testing.T) {
+	for name, set := range map[string]func(*world){
+		"HubSpot page 2": func(w *world) { w.hsListFail = true },
+		"Resend page 2":  func(w *world) { w.rsListFail = true },
+	} {
+		for _, phase := range []string{"start", "finish"} {
+			t.Run(name+" "+phase, func(t *testing.T) {
+				w := newWorld()
+				w.pageSize = 1
+				set(w)
+				w.hsContacts = []hsContactRow{{"1", "a@example.com", ""}, {"2", "b@example.com", ""}}
+				w.rsContacts = []rsContactRow{{"r1", "a@example.com", "2026-01-01T00:00:00Z"}, {"r2", "b@example.com", "2026-01-01T00:00:00Z"}}
+				var res result
+				if phase == "finish" {
+					res = finish(t, w, baseEnv())
+				} else {
+					res = greenStart(t, w)
+				}
+				if res.code != 1 {
+					t.Fatalf("code %d, steps %+v", res.code, res.sec.Steps)
+				}
+				failed := stLeftovers
+				if phase == "finish" {
+					failed = stDelRS
+					if w.hsListFail {
+						failed = stDelHS
+					}
+				}
+				if res.step(failed).Status != "failed" {
+					t.Errorf("%s = %+v, want failed", failed, res.step(failed))
+				}
+				// A vendor whose list is cut short deletes nothing; the other vendor's list is whole.
+				for _, d := range w.deleted {
+					cut := strings.HasPrefix(d, "hs:") == w.hsListFail
+					if phase == "start" || cut {
+						t.Errorf("%s deleted %s after a cut list", phase, d)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -344,8 +422,16 @@ func TestSection_ShapeAndOrder(t *testing.T) {
 	if res.code != 0 || !res.sec.OK || len(res.sec.Failures) != 0 {
 		t.Fatalf("code %d, section %+v", res.code, res.sec)
 	}
-	if !slices.Equal(res.names(), stepOrder) {
+	wantOrder := []string{
+		"portal is the test account", "test portal is configured", "leftovers deleted", "registration accepted",
+		"registrant in HubSpot", "registrant in Resend", "demo request accepted", "demo deal in HubSpot",
+		"run contacts deleted from HubSpot", "run contacts deleted from Resend", "no run contact or deal left", "no other new Resend contact",
+	}
+	if !slices.Equal(res.names(), wantOrder) {
 		t.Errorf("steps = %v", res.names())
+	}
+	if !strings.Contains(res.raw, `"failures": []`) {
+		t.Errorf("a green section must hold failures as an empty array: %s", res.raw)
 	}
 	for _, s := range res.sec.Steps {
 		if s.Status != "passed" {
@@ -408,8 +494,9 @@ func TestFinish_MissingPhaseFileIsAFailedStep(t *testing.T) {
 
 func TestOutput_HoldsNoAddressOrToken(t *testing.T) {
 	for name, set := range map[string]func(*world){
-		"bodies echo secrets": func(w *world) { w.failAll = true },
-		"errors hold the URL": func(w *world) { w.netError = true },
+		"bodies echo secrets":                    func(w *world) { w.failAll = true },
+		"errors hold the URL":                    func(w *world) { w.netError = true },
+		"gateway refuses and echoes the address": func(w *world) { w.registerStatus, w.demoStatus = 500, 500 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := newWorld()
@@ -420,8 +507,8 @@ func TestOutput_HoldsNoAddressOrToken(t *testing.T) {
 				{"start"}, {"check"}, {"finish", "-in", dir, "-started", startedAt},
 			} {
 				res := runPhase(t, w, baseEnv(), args...)
-				if res.code != 1 {
-					t.Errorf("%v: code %d", args, res.code)
+				if res.code == 2 {
+					t.Errorf("%v: the phase did not run", args)
 				}
 				all += res.stdout + res.stderr + res.raw
 			}

@@ -40,7 +40,7 @@ paths:
 - Pick the mode from the vendor keys and `CONTACTS_FAKE`: `real`, `fake` or `off`. In `off` the worker fetches no `contacts` job.
 - Refuse to boot when `CONTACTS_FAKE` is true and any key is set, or when only some keys are set.
 - Name variables in a boot error, never their values.
-- Run a preview in `fake` mode and discard its vendor keys.
+- Run a PR preview in `fake` mode and discard its vendor keys.
 - The nightly posture reads the contact keys like production.
 - Its newsletter is `fake`. Its blog and new-device mail is captured. Its invite mail is captured until `mail-on` mounts the key.
 - `scripts/ci/preview.sh` mounts the four contact keys on the nightly's `notifications` and `worker`, and no `CONTACTS_FAKE`. Contacts run `real` there. A PR preview gets no key.

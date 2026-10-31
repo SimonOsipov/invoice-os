@@ -642,6 +642,25 @@ func TestNightly_ActionsWriteOnlyOnTheJob(t *testing.T) {
 	}
 }
 
+// The path nightly.yml reads is the one contacts-cleanup uploads (suites lines: TestNightlyE2ESuites_MatchDevEnvJobs).
+func TestNightly_PassesTheHubSpotSection(t *testing.T) {
+	t.Parallel()
+	nightly, _, _ := nightlyFiles(t)
+	if !strings.Contains(nightly, nightlyHubSpotSection) {
+		t.Fatalf("nightly.yml lacks %s", nightlyHubSpotSection)
+	}
+	cl := devEnvJob(t, "contacts-cleanup")
+	up := strings.Join(nlRaw(cl, "Upload the nightly results"), "\n")
+	for _, w := range []string{"name: results-hubspot", "path: nightly-results/"} {
+		if !strings.Contains(up, w) {
+			t.Errorf("contacts-cleanup upload lacks %q", w)
+		}
+	}
+	if !strings.Contains(strings.Join(cl.lines, "\n"), "-out nightly-results/hubspot.json") {
+		t.Error("contacts-cleanup does not write nightly-results/hubspot.json")
+	}
+}
+
 func TestNightly_SummaryFoldsTheE2ERun(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, old, repl, want string }{

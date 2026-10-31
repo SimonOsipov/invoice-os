@@ -847,6 +847,17 @@ jobs:
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
       NIGHTLY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
+      # A re-run of failed jobs would hit a torn-down fleet; finish reports the missing check.
+      - name: Refuse a re-run that skipped the deploy
+        id: attempt
+        env:
+          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$DEPLOYED_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error::Re-run the whole workflow, not failed jobs — the fleet is torn down after each attempt. The deploy last ran in attempt '${DEPLOYED_ATTEMPT:-none}'; this is attempt $RUN_ATTEMPT."
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
@@ -1026,7 +1037,9 @@ jobs:
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
+      # An API error must not skip the delete; finish reports a missing phase file.
       - name: Download the contacts results
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           pattern: contacts-*

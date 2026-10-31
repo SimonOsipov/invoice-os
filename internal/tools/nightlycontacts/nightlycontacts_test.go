@@ -33,6 +33,7 @@ func TestIsRunContact(t *testing.T) {
 		"":                                false,
 		"x@example.com ":                  false,
 		"x@example.com.au":                false,
+		"n\u0130ghtly-1@x.resend.app":     false,
 	} {
 		if got := isRunContact(addr, "x.resend.app"); got != want {
 			t.Errorf("isRunContact(%q) = %v, want %v", addr, got, want)

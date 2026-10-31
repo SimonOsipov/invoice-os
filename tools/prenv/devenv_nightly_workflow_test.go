@@ -328,6 +328,13 @@ func contactProblems(jobs map[string]workflowJob) []string {
 	if !slices.Contains(blockLines(co.lines, 4, "env"), "NIGHTLY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}") {
 		bad("contacts NIGHTLY_RUN_ID is not run_id-run_attempt")
 	}
+	guard, gok := nlStep(co, "Refuse a re-run that skipped the deploy")
+	check, cok := nlStep(co, "Check the contacts")
+	if !gok || !cok || guard.index > check.index || guard.keys["id"] != "attempt" ||
+		guard.env["DEPLOYED_ATTEMPT"] != "${{ needs.deploy.outputs.attempt }}" || guard.env["RUN_ATTEMPT"] != "${{ github.run_attempt }}" ||
+		!strings.Contains(strings.Join(nlRaw(co, "Refuse a re-run that skipped the deploy"), "\n"), `[ "$DEPLOYED_ATTEMPT" != "$RUN_ATTEMPT" ]`) {
+		bad("contacts lacks the re-run guard before the check")
+	}
 	if g := jobs["e2e-gate"]; slices.Contains(needsOf(g), "contacts") || slices.Contains(needsOf(g), "contacts-cleanup") {
 		bad("e2e-gate needs a contacts job")
 	}
@@ -352,6 +359,9 @@ func contactProblems(jobs map[string]workflowJob) []string {
 		bad("contacts-cleanup permissions are wrong")
 	}
 	dl := strings.Join(nlRaw(cl, "Download the contacts results"), "\n")
+	if !strings.Contains(dl, "continue-on-error: true") {
+		bad("contacts-cleanup download can fail the job before the delete")
+	}
 	for _, w := range []string{"uses: actions/download-artifact@v4", "pattern: contacts-*", "merge-multiple: true"} {
 		if !strings.Contains(dl, w) {
 			bad("contacts-cleanup download lacks " + w)
@@ -962,6 +972,21 @@ func TestDevEnvNightly_ContactsJobRunsWhenE2EFails(t *testing.T) {
 		{"needs: [changes, prepare-env, deploy, e2e, topology]", "needs: [changes, prepare-env, deploy, e2e]", "contacts needs"},
 		{"NIGHTLY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}", "NIGHTLY_RUN_ID: ${{ github.run_id }}", "NIGHTLY_RUN_ID"},
 		{"    name: Real contact reaches HubSpot and Resend\n", "    name: Contacts\n", "contacts name"},
+	} {
+		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
+			t.Errorf("mutation %q: problems %q lack %q", c.old, got, c.want)
+		}
+	}
+}
+
+func TestDevEnvNightly_ContactsGuardsAndDownloadSurviveFailure(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	for _, c := range []struct{ old, repl, want string }{
+		{"        continue-on-error: true\n        uses: actions/download-artifact@v4\n        with:\n          pattern: contacts-*", "        uses: actions/download-artifact@v4\n        with:\n          pattern: contacts-*", "download can fail"},
+		{"          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}\n          RUN_ATTEMPT: ${{ github.run_attempt }}\n        run: |\n          if [ \"$DEPLOYED_ATTEMPT\" != \"$RUN_ATTEMPT\" ]; then\n            echo \"::error::Re-run the whole workflow, not failed jobs — the fleet", "          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}\n          RUN_ATTEMPT: ${{ github.run_attempt }}\n        run: |\n          if [ \"$DEPLOYED_ATTEMPT\" = \"$RUN_ATTEMPT\" ]; then\n            echo \"::error::Re-run the whole workflow, not failed jobs — the fleet", "re-run guard"},
+		{"      - name: Refuse a re-run that skipped the deploy\n        id: attempt\n        env:\n          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}\n          RUN_ATTEMPT: ${{ github.run_attempt }}\n        run: |\n          if [ \"$DEPLOYED_ATTEMPT\" != \"$RUN_ATTEMPT\" ]; then\n            echo \"::error::Re-run the whole workflow, not failed jobs — the fleet", "      - name: Refuse a re-run\n        id: attempt\n        env:\n          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}\n          RUN_ATTEMPT: ${{ github.run_attempt }}\n        run: |\n          if [ \"$DEPLOYED_ATTEMPT\" != \"$RUN_ATTEMPT\" ]; then\n            echo \"::error::Re-run the whole workflow, not failed jobs — the fleet", "re-run guard"},
 	} {
 		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
 		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {

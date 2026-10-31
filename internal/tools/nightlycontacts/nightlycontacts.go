@@ -49,8 +49,14 @@ var domainPattern = regexp.MustCompile(`^[a-z0-9-]+\.resend\.app$`)
 
 // isRunContact is the one deletion rule, in both vendors: any @example.com address, and
 // nightly-*@<receiving domain>. Any other address is a person.
+// Folds ASCII only: strings.ToLower maps U+0130 to "i", so "nİghtly-" would match.
 func isRunContact(email, domain string) bool {
-	e := strings.ToLower(email)
+	e := strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + 'a' - 'A'
+		}
+		return r
+	}, email)
 	return strings.HasSuffix(e, "@example.com") || (strings.HasPrefix(e, "nightly-") && strings.HasSuffix(e, "@"+domain))
 }
 

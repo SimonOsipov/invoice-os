@@ -889,14 +889,15 @@ func TestCreateDocumentHandler_TheNoteKeysAreChecked(t *testing.T) {
 		name string
 		body string
 		want int
+		msg  string // the clause that must answer; "" for the body cap
 	}{
-		{"unknown type", with(`"document_type":"receipt"`), 400},
-		{"bad uuid", with(`"document_type":"credit_note","original_invoice_id":"nope","invoice_number":"CN-1"`), 400},
-		{"id without type", with(fmt.Sprintf(`"original_invoice_id":%q`, orig)), 400},
-		{"id with commercial_invoice", with(fmt.Sprintf(`"document_type":"commercial_invoice","original_invoice_id":%q`, orig)), 400},
-		{"note without original", with(`"document_type":"debit_note","invoice_number":"DN-1"`), 400},
-		{"note with blank number", with(fmt.Sprintf(`"document_type":"debit_note","original_invoice_id":%q,"invoice_number":"  "`, orig)), 400},
-		{"oversize", docJSONBodyOversized(ent, doc), 413},
+		{"unknown type", with(`"document_type":"receipt"`), 400, "document_type must be"},
+		{"bad uuid", with(`"document_type":"credit_note","original_invoice_id":"nope","invoice_number":"CN-1"`), 400, "well-formed uuid"},
+		{"id without type", with(fmt.Sprintf(`"original_invoice_id":%q`, orig)), 400, "needs a credit_note or debit_note"},
+		{"id with commercial_invoice", with(fmt.Sprintf(`"document_type":"commercial_invoice","original_invoice_id":%q`, orig)), 400, "needs a credit_note or debit_note"},
+		{"note without original", with(`"document_type":"debit_note","invoice_number":"DN-1"`), 400, "original_invoice_id is required"},
+		{"note with blank number", with(fmt.Sprintf(`"document_type":"debit_note","original_invoice_id":%q,"invoice_number":"  "`, orig)), 400, "invoice_number is required"},
+		{"oversize", docJSONBodyOversized(ent, doc), 413, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec, calls := docPostStub(t, tc.body, BatchResult{}, nil)
@@ -909,8 +910,22 @@ func TestCreateDocumentHandler_TheNoteKeysAreChecked(t *testing.T) {
 			var m map[string]any
 			if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil || len(m) != 1 || m["error"] == nil {
 				t.Errorf("body = %s, want the key error alone", rec.Body.String())
+			} else if msg, _ := m["error"].(string); !strings.Contains(msg, tc.msg) {
+				t.Errorf("error = %q, want the clause %q", msg, tc.msg)
 			}
 		})
+	}
+}
+
+func TestCreateDocumentHandler_CommercialInvoiceReachesTheServiceAsTheOverride(t *testing.T) {
+	ent, doc := uuid.NewString(), uuid.NewString()
+	body := fmt.Sprintf(`{"entity_id":%q,"document_id":%q,"document_type":"commercial_invoice"}`, ent, doc)
+	rec, calls := docPostStub(t, body, BatchResult{Errors: []RowError{}, InvoiceViolations: []InvoiceViolations{}}, nil)
+	if rec.Code != http.StatusCreated || len(calls) != 1 {
+		t.Fatalf("status %d with %d call(s), want 201 and 1", rec.Code, len(calls))
+	}
+	if want := (DocumentImport{EntityID: ent, DocumentID: doc, DocumentType: "commercial_invoice"}); calls[0] != want {
+		t.Errorf("service saw %+v, want %+v", calls[0], want)
 	}
 }
 

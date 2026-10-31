@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -261,6 +262,11 @@ func TestServiceImportDocument_AFiledNoteVerdictDoesNotHoldOrFileAgain(t *testin
 			}
 			return id
 		}},
+		{"two invoices cite it, the older is named", func(tenantID, entityID, documentID string) string {
+			older := seedInvoiceForDocument(t, super, tenantID, entityID, documentID, "FILED-OLD")
+			seedInvoiceForDocument(t, super, tenantID, entityID, documentID, "FILED-NEW")
+			return older
+		}},
 		{"filed as an invoice", func(tenantID, entityID, documentID string) string {
 			return seedInvoiceForDocument(t, super, tenantID, entityID, documentID, "FILED-INV")
 		}},
@@ -279,8 +285,12 @@ func TestServiceImportDocument_AFiledNoteVerdictDoesNotHoldOrFileAgain(t *testin
 			if got.RuleKey != ruleKeyDuplicateInvoiceNumber || got.InvoiceID != filedID || got.Message != documentAlreadyFiledReason {
 				t.Errorf("row = %+v, want rule_key %q, invoice_id %s, message %q", got, ruleKeyDuplicateInvoiceNumber, filedID, documentAlreadyFiledReason)
 			}
-			if n := countInvoicesCitingDocument(t, super, documentID); n != 1 {
-				t.Errorf("invoices citing the document = %d, want 1", n)
+			want := 1
+			if strings.Contains(tc.name, "two invoices") {
+				want = 2
+			}
+			if n := countInvoicesCitingDocument(t, super, documentID); n != want {
+				t.Errorf("invoices citing the document = %d, want %d", n, want)
 			}
 		})
 	}

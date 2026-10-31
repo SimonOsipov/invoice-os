@@ -221,6 +221,20 @@ func (s *Store) DocumentHasInvoice(ctx context.Context, documentID string) (bool
 	return has, err
 }
 
+// FiledInvoiceID is the oldest invoice visible to the caller that cites documentID, or "".
+func (s *Store) FiledInvoiceID(ctx context.Context, documentID string) (string, error) {
+	var id string
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT id FROM invoices WHERE source_document_id = $1 ORDER BY created_at, id LIMIT 1`,
+			documentID).Scan(&id)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
 // EntityVisible answers ErrNotFound for an entity the caller cannot see: unknown, another
 // tenant's, or outside a limited member's client set. A malformed id is ErrValidation.
 func (s *Store) EntityVisible(ctx context.Context, entityID string) error {
@@ -352,6 +366,36 @@ func (s *Store) GetBatch(ctx context.Context, id string) (Batch, error) {
 			b.Errors = []RowError{}
 		}
 	}
+	return s.dropResolvedHolds(ctx, b)
+}
+
+// dropResolvedHolds removes the hold rows of a batch whose document is now filed. The stored
+// row stays; a batch with no hold row runs no extra query.
+func (s *Store) dropResolvedHolds(ctx context.Context, b Batch) (Batch, error) {
+	holds := 0
+	for _, e := range b.Errors {
+		if e.Field == "original_invoice_id" {
+			holds++
+		}
+	}
+	if holds == 0 || b.DocumentID == nil {
+		return b, nil
+	}
+	filed, err := s.DocumentHasInvoice(ctx, *b.DocumentID)
+	if err != nil {
+		return Batch{}, err
+	}
+	if !filed {
+		return b, nil
+	}
+	kept := make([]RowError, 0, len(b.Errors))
+	for _, e := range b.Errors {
+		if e.Field != "original_invoice_id" {
+			kept = append(kept, e)
+		}
+	}
+	b.Errors = kept
+	b.RowsInvalid = max(b.RowsInvalid-holds, 0)
 	return b, nil
 }
 

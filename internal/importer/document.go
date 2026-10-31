@@ -37,9 +37,10 @@ type extractedField struct {
 // SettledExtraction is the newest succeeded extraction job for one document, plus that job's
 // decided readings. Fields is never nil.
 type SettledExtraction struct {
-	JobID    string
-	Filename string // documents.filename, "" when the row carries none
-	Fields   []extractedField
+	JobID        string
+	Filename     string  // documents.filename, "" when the row carries none
+	DocumentType *string // the job's verdict; nil when it holds none
+	Fields       []extractedField
 }
 
 // SettledExtraction reads the newest succeeded extraction_jobs row for documentID plus its
@@ -63,14 +64,14 @@ func (s *Store) SettledExtraction(ctx context.Context, documentID string) (Settl
 
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
-			`SELECT j.id, coalesce(d.filename, '')
+			`SELECT j.id, coalesce(d.filename, ''), j.document_type
 			   FROM extraction_jobs j
 			   JOIN documents d ON d.id = j.document_id
 			  WHERE j.document_id = $1 AND j.state = 'succeeded' AND `+document.ReadableByScope+`
 			  ORDER BY j.created_at DESC, j.id DESC
 			  LIMIT 1`,
 			documentID,
-		).Scan(&ex.JobID, &ex.Filename); err != nil {
+		).Scan(&ex.JobID, &ex.Filename, &ex.DocumentType); err != nil {
 			return err
 		}
 
@@ -145,7 +146,14 @@ const (
 	noInvoiceNumberMessage = "This document was read, but no invoice number was found on it. Enter this invoice manually to carry on."
 
 	aiUnavailableMessage = "AI reading was unavailable when this document was imported, so no invoice fields were taken from it. Enter this invoice manually to carry on."
+
+	noteHeldMessage = "This document reads as a credit or debit note. Open its review and pick the invoice it belongs to."
 )
+
+// isNoteVerdict reports a credit or debit note verdict.
+func isNoteVerdict(t *string) bool {
+	return t != nil && (*t == "credit note" || *t == "debit note")
+}
 
 // isPoorScan reports the field set the extraction worker writes when a document yields no text
 // and its page images add no reading: one document_text_layer row, reason unreadable. The
@@ -367,7 +375,51 @@ func carriedReading(documentID, jobID string, in invoice.CreateInput) *CarriedRe
 // (D-10). CreateBatch runs BEFORE the mapper's RowError is checked, so an unreadable
 // invoice_number still leaves an auditable, completed-and-quarantined batch (D-17/D-9) rather
 // than a silent no-op.
+//
+// A note verdict holds: the batch is minted and finalized with one quarantined row and no
+// invoice, so the review screen has the original left to ask for.
 func (s *Service) ImportDocument(ctx context.Context, entityID, documentID string) (BatchResult, error) {
+	return s.importDocument(ctx, entityID, documentID, true)
+}
+
+// ImportDocumentAsInvoice files the document as an invoice whatever its verdict. A filed
+// document answers ErrDocumentAlreadyFiled before any batch.
+func (s *Service) ImportDocumentAsInvoice(ctx context.Context, entityID, documentID string) (BatchResult, error) {
+	if err := s.batch.EntityVisible(ctx, entityID); err != nil {
+		return BatchResult{}, err
+	}
+	// Read first so a document outside the caller's scope answers 404, not 409.
+	if _, err := s.batch.SettledExtraction(ctx, documentID); err != nil {
+		return BatchResult{}, err
+	}
+	filed, err := s.batch.DocumentHasInvoice(ctx, documentID)
+	if err != nil {
+		return BatchResult{}, err
+	}
+	if filed {
+		return BatchResult{}, ErrDocumentAlreadyFiled
+	}
+	return s.importDocument(ctx, entityID, documentID, false)
+}
+
+// DocumentImport is one POST /v1/imports/document call. An empty DocumentType is the bare call.
+type DocumentImport struct {
+	EntityID, DocumentID, DocumentType, OriginalInvoiceID, InvoiceNumber string
+}
+
+// ImportDocumentFor dispatches a document import on its DocumentType.
+func (s *Service) ImportDocumentFor(ctx context.Context, in DocumentImport) (BatchResult, error) {
+	switch in.DocumentType {
+	case "":
+		return s.ImportDocument(ctx, in.EntityID, in.DocumentID)
+	case "commercial_invoice":
+		return s.ImportDocumentAsInvoice(ctx, in.EntityID, in.DocumentID)
+	default:
+		return BatchResult{}, fmt.Errorf("%w: not supported", ErrValidation)
+	}
+}
+
+func (s *Service) importDocument(ctx context.Context, entityID, documentID string, hold bool) (BatchResult, error) {
 	if err := s.batch.EntityVisible(ctx, entityID); err != nil {
 		return BatchResult{}, err
 	}
@@ -376,7 +428,16 @@ func (s *Service) ImportDocument(ctx context.Context, entityID, documentID strin
 		return BatchResult{}, err
 	}
 
-	in, mapErr := documentCreateInput(entityID, documentID, ex)
+	var in invoice.CreateInput
+	var mapErr *RowError
+	if hold && isNoteVerdict(ex.DocumentType) {
+		mapErr, err = s.holdRow(ctx, documentID)
+		if err != nil {
+			return BatchResult{}, err
+		}
+	} else {
+		in, mapErr = documentCreateInput(entityID, documentID, ex)
+	}
 
 	batchID, err := s.batch.CreateBatch(ctx, entityID, ex.Filename, documentID, 0) // no header row: a document import
 	if err != nil {
@@ -459,6 +520,25 @@ func (s *Service) ImportDocument(ctx context.Context, entityID, documentID strin
 		Errors:            []RowError{},
 		InvoiceViolations: []InvoiceViolations{},
 	}, nil
+}
+
+// holdRow is the one quarantined row of a note-verdict document: the hold sentence, or the filed
+// invoice when one already cites the document.
+func (s *Service) holdRow(ctx context.Context, documentID string) (*RowError, error) {
+	filed, err := s.batch.DocumentHasInvoice(ctx, documentID)
+	if err != nil {
+		return nil, err
+	}
+	if !filed {
+		return &RowError{Field: "original_invoice_id", Message: noteHeldMessage}, nil
+	}
+	filedID, err := s.batch.FiledInvoiceID(ctx, documentID)
+	if err != nil {
+		return nil, err
+	}
+	row := storeDuplicateRowError(1, nil, filedID)
+	row.Message = documentAlreadyFiledReason
+	return &row, nil
 }
 
 // recordImportRuleBreaks is best effort: an Evaluate or write failure is logged and the import

@@ -237,7 +237,7 @@ func TestClientScope_DocumentRoutesAnswerOneNotFoundAndWriteNothing(t *testing.T
 	docSeedExtraction(t, f.super, f.tenant, docImp, docCleanValues("CS-RT-1"))
 	docNum := docSeedDocument(t, f.super, f.tenant)
 	docSeedExtraction(t, f.super, f.tenant, docNum, docNoNumberValues())
-	create := CreateDocumentHandler(f.svc.ImportDocument, nil)
+	create := CreateDocumentHandler(f.svc.ImportDocumentFor, nil)
 	supply := SupplyNumberHandler(f.svc.SupplyInvoiceNumber, nil)
 
 	var bodies []string
@@ -385,7 +385,7 @@ func TestClientScope_MalformedIdsAnswer400BeforeTheEntityCheck(t *testing.T) {
 	suggester := &fakeSuggester{enabled: true}
 	saved := SavedMappingHandler(f.docSvc.OpenLinked, f.store.SavedMapping, f.store.EntityVisible, nil)
 	suggest := SuggestMappingHandler(f.docSvc.OpenLinked, f.store.SavedMapping, f.store.EntityVisible, suggester, nil)
-	create := CreateDocumentHandler(f.svc.ImportDocument, nil)
+	create := CreateDocumentHandler(f.svc.ImportDocumentFor, nil)
 
 	for name, rec := range map[string]*httptest.ResponseRecorder{
 		"saved-mapping, malformed entity":     csGet(saved, f.limitedID, "GET", "/v1/imports/saved-mapping?entity_id=nope&document_id="+doc.ID, ""),
@@ -854,5 +854,47 @@ func TestClientScope_DocumentHasInvoiceSeesAnInvoiceUnderAHiddenClient(t *testin
 	}
 	if has, err := f.store.DocumentHasInvoice(f.limited, docSeedDocument(t, f.super, f.tenant)); err != nil || has {
 		t.Errorf("DocumentHasInvoice(unlinked) = %v, %v, want false", has, err)
+	}
+}
+
+func TestClientScope_AHeldDocumentFollowsItsBatch(t *testing.T) {
+	f := newCSFixture(t, "CS held document")
+	own := docSeedDocument(t, f.super, f.tenant)
+	docSeedExtraction(t, f.super, f.tenant, own, docCleanValues("CS-HELD-A"))
+	dtSetVerdict(t, f.super, own, "credit note")
+	csLinkBatch(t, f.super, f.tenant, f.entA, own)
+	other := docSeedDocument(t, f.super, f.tenant)
+	docSeedExtraction(t, f.super, f.tenant, other, docCleanValues("CS-HELD-B"))
+	dtSetVerdict(t, f.super, other, "credit note")
+	csLinkBatch(t, f.super, f.tenant, f.entB, other)
+
+	if ex, err := f.store.SettledExtraction(f.limited, own); err != nil || ex.DocumentType == nil || *ex.DocumentType != "credit note" {
+		t.Errorf("SettledExtraction of the batch in A = %+v, %v, want the credit note verdict", ex, err)
+	}
+	if _, err := f.store.SettledExtraction(f.limited, other); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SettledExtraction of the batch in B: err = %v, want ErrNotFound", err)
+	}
+	if _, err := f.svc.ImportDocument(f.limited, f.entA, other); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ImportDocument(B's held document): err = %v, want ErrNotFound", err)
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE document_id = $1`, other); n != 1 {
+		t.Errorf("batches for B's document = %d, want the seeded one only", n)
+	}
+}
+
+func TestClientScope_AFiledDocumentHidesAnInvisibleInvoiceID(t *testing.T) {
+	f := newCSFixture(t, "CS filed hidden id")
+	doc := docSeedDocument(t, f.super, f.tenant)
+	docSeedExtraction(t, f.super, f.tenant, doc, docCleanValues("CS-FH-1"))
+	dtSetVerdict(t, f.super, doc, "debit note")
+	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
+	csLinkInvoice(t, f.super, f.tenant, f.entB, doc, "CS-FH-FILED")
+
+	res, err := f.svc.ImportDocument(f.limited, f.entA, doc)
+	if err != nil || len(res.Errors) != 1 {
+		t.Fatalf("ImportDocument: %+v, %v, want one row", res, err)
+	}
+	if got := res.Errors[0]; got.InvoiceID != "" || got.RuleKey != ruleKeyDuplicateInvoiceNumber || got.Message != documentAlreadyFiledReason {
+		t.Errorf("row = %+v, want the sentence and rule_key with no invoice_id", got)
 	}
 }

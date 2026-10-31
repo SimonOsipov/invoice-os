@@ -83,6 +83,13 @@ func (s *docImpSpy) fn() func(ctx context.Context, entityID, documentID string) 
 	}
 }
 
+// docImportOf adapts an (entityID, documentID) func to the handler's DocumentImport func.
+func docImportOf(f func(ctx context.Context, entityID, documentID string) (BatchResult, error)) func(ctx context.Context, in DocumentImport) (BatchResult, error) {
+	return func(ctx context.Context, in DocumentImport) (BatchResult, error) {
+		return f(ctx, in.EntityID, in.DocumentID)
+	}
+}
+
 // docJSONBody renders the POST /v1/imports/document JSON body.
 func docJSONBody(entityID, documentID string) string {
 	return fmt.Sprintf(`{"entity_id":%q,"document_id":%q}`, entityID, documentID)
@@ -97,7 +104,7 @@ func doImportDocumentPost(t *testing.T, imp func(ctx context.Context, entityID, 
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	CreateDocumentHandler(imp, nil).ServeHTTP(rec, r)
+	CreateDocumentHandler(docImportOf(imp), nil).ServeHTTP(rec, r)
 
 	raw := rec.Body.Bytes()
 	var resp importDocumentBody
@@ -326,7 +333,7 @@ func TestImportRoutes_DocumentAndSpreadsheetDoNotCollide(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/imports", CreateHandler(sheetImp, open, noSave, alwaysVisible, nil))
-	mux.HandleFunc("POST /v1/imports/document", CreateDocumentHandler(docSpy.fn(), nil))
+	mux.HandleFunc("POST /v1/imports/document", CreateDocumentHandler(docImportOf(docSpy.fn()), nil))
 
 	id := testIdentity()
 	entityID, documentID := uuid.NewString(), uuid.NewString()
@@ -379,7 +386,7 @@ func TestCreateDocumentHandler_EndToEndOverRealServiceWritesReadableInvoice(t *t
 
 	svc := newTestService(app)
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/imports/document", CreateDocumentHandler(svc.ImportDocument, nil))
+	mux.HandleFunc("POST /v1/imports/document", CreateDocumentHandler(svc.ImportDocumentFor, nil))
 
 	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	r := httptest.NewRequest("POST", "/v1/imports/document", strings.NewReader(docJSONBody(entityID, documentID)))
@@ -747,7 +754,7 @@ func TestImportRoutes_ReadingAndSupplyDoNotCollide(t *testing.T) {
 				t.Fatalf("main.go's import patterns %v conflict on one mux: %v", patterns, r)
 			}
 		}()
-		mux.HandleFunc(patterns["CreateDocumentHandler"], CreateDocumentHandler(docSpy.fn(), nil))
+		mux.HandleFunc(patterns["CreateDocumentHandler"], CreateDocumentHandler(docImportOf(docSpy.fn()), nil))
 		mux.HandleFunc(patterns["GetHandler"], GetHandler(getFn, nil))
 		mux.HandleFunc(patterns["ReadingHandler"], ReadingHandler(readSpy.fn(), nil))
 		mux.HandleFunc(patterns["SupplyNumberHandler"], SupplyNumberHandler(invoiceSpy.fn(), nil))
@@ -853,5 +860,78 @@ func TestSupplyNumberHandler_InvisibleEntityIs404(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound || strings.TrimSpace(string(raw)) != `{"error":"not found"}` {
 		t.Errorf("answer = %d %s, want 404 {\"error\":\"not found\"}", rec.Code, raw)
+	}
+}
+
+// docPostStub drives CreateDocumentHandler with a DocumentImport stub and returns what it saw.
+func docPostStub(t *testing.T, body string, res BatchResult, err error) (*httptest.ResponseRecorder, []DocumentImport) {
+	t.Helper()
+	var calls []DocumentImport
+	h := CreateDocumentHandler(func(_ context.Context, in DocumentImport) (BatchResult, error) {
+		calls = append(calls, in)
+		return res, err
+	}, nil)
+	id := testIdentity()
+	r := httptest.NewRequest("POST", "/v1/imports/document", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = r.WithContext(auth.WithIdentity(r.Context(), id))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	return rec, calls
+}
+
+func TestCreateDocumentHandler_TheNoteKeysAreChecked(t *testing.T) {
+	ent, doc, orig := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	with := func(extra string) string {
+		return fmt.Sprintf(`{"entity_id":%q,"document_id":%q,%s}`, ent, doc, extra)
+	}
+	for _, tc := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{"unknown type", with(`"document_type":"receipt"`), 400},
+		{"bad uuid", with(`"document_type":"credit_note","original_invoice_id":"nope","invoice_number":"CN-1"`), 400},
+		{"id without type", with(fmt.Sprintf(`"original_invoice_id":%q`, orig)), 400},
+		{"id with commercial_invoice", with(fmt.Sprintf(`"document_type":"commercial_invoice","original_invoice_id":%q`, orig)), 400},
+		{"note without original", with(`"document_type":"debit_note","invoice_number":"DN-1"`), 400},
+		{"note with blank number", with(fmt.Sprintf(`"document_type":"debit_note","original_invoice_id":%q,"invoice_number":"  "`, orig)), 400},
+		{"oversize", docJSONBodyOversized(ent, doc), 413},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, calls := docPostStub(t, tc.body, BatchResult{}, nil)
+			if rec.Code != tc.want {
+				t.Errorf("status = %d %s, want %d", rec.Code, rec.Body.String(), tc.want)
+			}
+			if len(calls) != 0 {
+				t.Errorf("the service was called %d time(s), want 0", len(calls))
+			}
+			var m map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil || len(m) != 1 || m["error"] == nil {
+				t.Errorf("body = %s, want the key error alone", rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestCreateDocumentHandler_ABodyWithNoTypeCarriesOnlyTheTwoIDs(t *testing.T) {
+	ent, doc := uuid.NewString(), uuid.NewString()
+	rec, calls := docPostStub(t, docJSONBody(ent, doc), BatchResult{Errors: []RowError{}, InvoiceViolations: []InvoiceViolations{}}, nil)
+	if rec.Code != http.StatusCreated || len(calls) != 1 {
+		t.Fatalf("status %d with %d call(s), want 201 and 1", rec.Code, len(calls))
+	}
+	if want := (DocumentImport{EntityID: ent, DocumentID: doc}); calls[0] != want {
+		t.Errorf("service saw %+v, want %+v", calls[0], want)
+	}
+}
+
+func TestCreateDocumentHandler_AFiledDocumentIsAConflict(t *testing.T) {
+	rec, _ := docPostStub(t, docJSONBody(uuid.NewString(), uuid.NewString()), BatchResult{}, ErrDocumentAlreadyFiled)
+	var m map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if rec.Code != http.StatusConflict || len(m) != 1 || m["error"] != documentAlreadyFiledReason {
+		t.Errorf("answer = %d %s, want 409 with the sentence alone", rec.Code, rec.Body.String())
 	}
 }

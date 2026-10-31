@@ -71,6 +71,37 @@ func debitNoteWrite(t *testing.T, ctx context.Context, tx pgx.Tx, jobID string, 
 	return nil
 }
 
+// The Up body alone, replayed in a transaction: it admits the eight names and NULL, refuses the near misses.
+func TestExtractionJobsDebitNote_TheUpBodyAdmitsTheEightAndRefusesTheRest(t *testing.T) {
+	ctx := t.Context()
+	tx := migratorTx(t, ctx)
+	up := debitNoteSection(t, "Up")
+
+	jobID := seedDocumentTypeJob(t, ctx, tx)
+	if _, err := tx.Exec(ctx, up); err != nil {
+		t.Fatalf("Up body failed: %v", err)
+	}
+	if len(documentTypeStoredEight) != 8 || len(documentTypeRefused) != 4 {
+		t.Fatalf("name lists hold %d and %d, want 8 and 4", len(documentTypeStoredEight), len(documentTypeRefused))
+	}
+	if err := debitNoteWrite(t, ctx, tx, jobID, (*string)(nil)); err != nil {
+		t.Errorf("the Up body's CHECK refuses NULL: %v", err)
+	}
+	for _, v := range documentTypeStoredEight {
+		if err := debitNoteWrite(t, ctx, tx, jobID, v); err != nil {
+			t.Errorf("the Up body's CHECK refuses %q: %v", v, err)
+		}
+	}
+	for _, v := range documentTypeRefused {
+		if err := debitNoteWrite(t, ctx, tx, jobID, v); pgCode(err) != "23514" || pgConstraint(err) != documentTypeConstraint {
+			t.Errorf("write %q after the Up body: %v; want 23514 on %s", v, err, documentTypeConstraint)
+		}
+	}
+	if !documentTypeCheckValidated(t, ctx, tx) {
+		t.Errorf("%s is NOT VALID after the Up body", documentTypeConstraint)
+	}
+}
+
 // A debit note row exists when the Down runs: the Down must succeed, keep the row, and refuse a new one.
 func TestExtractionJobsDebitNote_DownKeepsARowAndRefusesANewOne(t *testing.T) {
 	ctx := t.Context()

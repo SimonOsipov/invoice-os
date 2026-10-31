@@ -4271,7 +4271,7 @@ func TestFixtures_AINRSMergesAsDesigned(t *testing.T) {
 	}
 }
 
-// --- CHECK-01-03: the seven non-invoice builders -----------------------------
+// --- CHECK-01-03: the non-invoice builders -----------------------------
 
 func fxBuildNonInvoiceReceipt() []byte {
 	return fxTextPage(

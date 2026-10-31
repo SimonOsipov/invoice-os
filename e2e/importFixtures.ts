@@ -235,6 +235,7 @@ export const EXTRACT_HEADER_KEYS = [
   'buyer_country',
   'buyer_state',
   'buyer_lga',
+  'original_invoice_number',
 ]
 
 export function nullExtractHeaderKeys(): Record<string, null> {

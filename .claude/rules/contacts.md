@@ -47,6 +47,7 @@ paths:
 - `TestPreviewNightlyContactsAreFake` pins this.
 - Answer 404 to an intake request that carries `X-User-ID`. Require the gateway token on every intake route.
 - Answer 404 at the gateway for any `/api/<service>/internal/...` path, raw and cleaned.
+- Only the nightly sets `HUBSPOT_DEAL_STAGE`; production leaves it unset and deals open in `demoStage`.
 - Open one HubSpot deal per demo request and one per first registration.
 - Open no deal while the contact has an open one, decided by HubSpot `hs_is_closed`.
 - Retry a delivery with River's default policy. Any non-nil worker error retries.

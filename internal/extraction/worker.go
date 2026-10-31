@@ -352,7 +352,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 func flaggedCount(results []FieldResult) int {
 	n := 0
 	for _, r := range results {
-		if r.Reason != ReasonNone {
+		if r.Reason != ReasonNone && r.Name != originalNumberField {
 			n++
 		}
 	}

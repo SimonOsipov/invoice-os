@@ -55,7 +55,7 @@ paths:
 - Add the field to `draftToCreateRequest` in `frontend/app/src/lib/invoiceDraft.ts`.
 - Add the form and editor inputs for the field.
 - Add an `ALIAS` entry in `frontend/app/src/lib/mapping.ts` when the field needs header synonyms.
-- Add the field to `VOCABULARY` in `e2e/topology/importWizardShared.ts` when you add an extract header field.
+- Add the field to `VOCABULARY` in `e2e/topology/importWizardShared.ts` when you add an extract header field. `original_invoice_number` is the one exception: it has no column and no cell, so it stays out of `VOCABULARY` and `documentCreateInput`.
 
 ## Prompts
 
@@ -73,7 +73,7 @@ paths:
 - Import pins: `TestImportKeys_AreTheThirtySixImportFieldsInOrder` and `TestCanonicalFields_AreTheImportKeys`. The vitest pin is `CANON is the import fields, invoice_number alone required` in `frontend/app/src/lib/invoiceFields.test.ts`.
 - The import set is 36 keys. `ImportKeys()` lists the `Lead` fields (the original 11) first, then the rest in list order; the generated `IMPORT_KEYS` carries that order. The 10 `supplier_*` fields stay off the import path: the importer reads the supplier from the entity.
 - The AI schema requires every import key. Mirror a new key in `IMPORT_KEYS` in `e2e/importFixtures.ts`. The three steered answers spread `nullImportKeys()`.
-- Header extract pins: `TestExtractHeaderKeys_AreTheNineteenInOrder` and `TestHeaderFields_AreTheNineteenInOrder`. The vitest pin is `HEADER_FIELDS is the nineteen extraction header fields in order`.
+- Header extract pins: `TestExtractHeaderKeys_AreTheTwentyInOrder` and `TestHeaderFields_AreTheTwentyInOrder`. The vitest pin is `HEADER_FIELDS is the twenty extraction header fields in order`.
 - Line extract pins: `TestExtractLineKeys_AreTheTenInOrder` and `TestLineRoles_AreTheTenRoleConstantsInEmitOrder`.
 - Edit pin: `EDIT_FIELD_KEYS is the nine legacy then the twenty-two NRS header fields in order` in `frontend/app/src/lib/invoiceFields.test.ts`.
 - Form pin: `Draft is the five form keys, the twenty-two NRS header keys, plus items` in `frontend/app/src/lib/invoiceFields.test.ts`.

@@ -284,8 +284,8 @@ func TestReconcile_TheRefereeIsWiredForTotalAlone(t *testing.T) {
 
 	// The behavioural half: the same competing pair on every header field in turn, with both
 	// addends decided except where the field under test IS the addend.
-	if len(extraction.HeaderFields) != 19 {
-		t.Fatalf("HeaderFields names %d field(s), want 19; the partition below was measured over a different vocabulary", len(extraction.HeaderFields))
+	if len(extraction.HeaderFields) != 20 {
+		t.Fatalf("HeaderFields names %d field(s), want 20; the partition below was measured over a different vocabulary", len(extraction.HeaderFields))
 	}
 	var corroborated, untouched []string
 	for _, field := range extraction.HeaderFields {

@@ -327,6 +327,15 @@ func TestCorrectionHandler_UnknownFieldNameIsRefused(t *testing.T) {
 	}
 }
 
+func TestCorrection_TheOriginalNumberIsRefused(t *testing.T) {
+	spy := newCorSpy()
+
+	w := corPost(t, spy, "original_invoice_number", corBody("INV-77", "typed", ""))
+
+	hndAssert(t, w, http.StatusUnprocessableEntity, hndErrBody(t, "the original invoice is chosen in the picker, not corrected here"))
+	corAssertUntouched(t, spy)
+}
+
 // The unknown-name refusal alone stays here: a locked NAME's refusal now depends on the
 // stored rank-0 flag, a database read this dead-pool file cannot make -- T01/T02 in
 // handlers_correction_db_test.go own that claim (AIR-03-06).

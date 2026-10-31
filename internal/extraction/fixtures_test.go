@@ -1818,7 +1818,7 @@ func fxBuildAISteeredInvoice() []byte {
 const fxAINRS = "ai_nrs_invoice.pdf"
 
 const (
-	fxAINRSMarkerPt = 1.5
+	fxAINRSMarkerPt = 1.4
 	fxAINRSMarkerX  = 20
 
 	fxAINRSUnprintedState    = "Ogun"
@@ -4229,11 +4229,11 @@ func TestFixtures_AINRSMergesAsDesigned(t *testing.T) {
 	pages := rvCorpusPages(t, fxAINRS)
 
 	var engine []extraction.FieldResult
-	for _, f := range extraction.HeaderFields[10:] {
+	for _, f := range extraction.HeaderFields[10:19] {
 		engine = append(engine, extraction.FieldResult{Field: extraction.Field{Name: f, Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}})
 	}
 	if len(engine) != 9 {
-		t.Fatalf("HeaderFields[10:] holds %d field(s), want the 9 new ones", len(engine))
+		t.Fatalf("HeaderFields[10:19] holds %d field(s), want the 9 new ones", len(engine))
 	}
 	for _, r := range extraction.MergeAIForTest(engine, header, pages, nil) {
 		if r.Name == "buyer_state" {

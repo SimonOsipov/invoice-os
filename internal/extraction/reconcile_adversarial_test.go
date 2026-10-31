@@ -321,6 +321,7 @@ func TestReconcile_IsPermutationInvariantOnEqualInput(t *testing.T) {
 		{Field: extraction.Field{Name: "buyer_country", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
 		{Field: extraction.Field{Name: "buyer_state", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
 		{Field: extraction.Field{Name: "buyer_lga", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "original_invoice_number", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
 		{Field: extraction.Field{Name: "line_items", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
 	}
 

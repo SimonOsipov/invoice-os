@@ -403,7 +403,7 @@ func TestTier1_AIOnlySpecsBuildNoRule(t *testing.T) {
 		}
 	}
 	if want := []string{"due_date", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
-		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga"}; !slices.Equal(aiOnly, want) {
+		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga", "original_invoice_number"}; !slices.Equal(aiOnly, want) {
 		t.Fatalf("label-less tier1Specs = %v, want %v", aiOnly, want)
 	}
 	for _, r := range Tier1Rules {

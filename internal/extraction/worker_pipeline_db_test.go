@@ -816,7 +816,7 @@ func TestRLS_ExtractWorkerAuditCountsAgreeWithTheRowsItWrote(t *testing.T) {
 			continue
 		}
 		wantFields++
-		if r.reason != nil {
+		if r.reason != nil && r.name != "original_invoice_number" {
 			wantFlagged++
 		}
 	}

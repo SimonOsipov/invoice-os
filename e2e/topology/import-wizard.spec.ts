@@ -3444,7 +3444,7 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
     'supplier_tin',
     'total',
     'vat',
-    // The nine AI-only header fields: Reconcile emits a missing row for each.
+    // The ten AI-only header fields: Reconcile emits a missing row for each.
     'due_date',
     'buyer_email',
     'buyer_telephone',
@@ -3454,6 +3454,7 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
     'buyer_country',
     'buyer_state',
     'buyer_lga',
+    'original_invoice_number',
   ]
   expect(
     [...detail.fields.map((f) => f.name)].sort(),

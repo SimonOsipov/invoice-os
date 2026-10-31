@@ -568,6 +568,8 @@ func TestInvoiceFieldsList_NamesTheWireContentKeys(t *testing.T) {
 	for _, f := range invoicefields.All {
 		if f.Line {
 			line = append(line, f.Key)
+		} else if f.Key == "original_invoice_number" {
+			continue // extraction-only: no invoice column, no wire key
 		} else {
 			header = append(header, f.Key)
 		}

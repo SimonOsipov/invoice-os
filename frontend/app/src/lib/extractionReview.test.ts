@@ -1641,7 +1641,11 @@ describe('document-type notice', () => {
     expect(documentTypeNotice(null)).toBeNull()
     expect(documentTypeNotice('something_new' as DocumentType)).toBeNull()
     expect(documentTypeNotice('constructor' as DocumentType)).toBeNull()
-    expect(keys).toHaveLength(7)
+    // The two notes are held by the import, so the table keeps no sentence for them.
+    expect(documentTypeNotice('credit note')).toBeNull()
+    expect(documentTypeNotice('debit note' as DocumentType)).toBeNull()
+    expect(keys).toHaveLength(6)
+    expect(documentTypeNotice('receipt'), 'control: a kept type has a sentence').not.toBeNull()
     for (const k of keys) {
       expect(documentTypeNotice(k), `key ${k}`).toBe(DOCUMENT_TYPE_NOTICE[k])
       expect(DOCUMENT_TYPE_NOTICE[k], `entry ${k}`).not.toBe('')
@@ -1651,7 +1655,7 @@ describe('document-type notice', () => {
   })
 
   it('DOCUMENT_TYPE_NOTICE claims no outcome', () => {
-    expect(keys).toHaveLength(7)
+    expect(keys).toHaveLength(6)
     for (const k of keys) {
       const s = DOCUMENT_TYPE_NOTICE[k]
       // Positive half: an empty sentence passes every negative below.

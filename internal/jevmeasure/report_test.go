@@ -548,10 +548,10 @@ func TestReport_AnAbsentUsageFieldIsNamedNotZeroed(t *testing.T) {
 	}
 }
 
-// A30's eight document-type options, in A30's fixed order.
+// A30's nine document-type options, in A30's fixed order.
 var jmA30Options = []string{
 	"tax invoice", "receipt", "proforma", "quotation",
-	"credit note", "delivery note", "statement", "purchase order",
+	"credit note", "debit note", "delivery note", "statement", "purchase order",
 }
 
 // AC-11. Registry-driven: the report renders from WordingRegistry() itself,
@@ -560,7 +560,7 @@ var jmA30Options = []string{
 func TestReport_QuotesEveryWordingRegistryEntryVerbatim(t *testing.T) {
 	reg := WordingRegistry()
 	if len(reg) < 15 {
-		t.Fatalf("WordingRegistry() has %d entr(ies), want at least 15 (7 constants + 8 criteria)", len(reg))
+		t.Fatalf("WordingRegistry() has %d entr(ies), want at least 15 (7 constants + 9 criteria)", len(reg))
 	}
 
 	outcomes := []Outcome{

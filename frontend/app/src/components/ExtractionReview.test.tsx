@@ -2956,10 +2956,6 @@ describe('the document type', () => {
     ['receipt', 'This looks like a receipt, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
     ['proforma', 'This looks like a proforma invoice, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
     ['quotation', 'This looks like a quotation, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
-    [
-      'credit note',
-      'This looks like a credit note, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.',
-    ],
     ['delivery note', 'This looks like a delivery note, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
     ['statement', 'This looks like a statement of account, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
     ['purchase order', 'This looks like a purchase order, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
@@ -3004,16 +3000,16 @@ describe('the document type', () => {
     expect(s!.textContent).toBe(sentence)
   })
 
-  it('the document type: a credit note carries no filing claim', async () => {
-    render(review({ ctx: serving(mkDetail({ document_type: 'credit note' })).ctx }))
+  // A note verdict is the import's own business (the hold panel), not a strip.
+  it.each(['credit note', 'debit note'] as const)('the document type: a note verdict shows no strip (%s)', async (t) => {
+    render(review({ ctx: serving(mkDetail({ document_type: t })).ctx }))
     await flush()
 
-    const s = strip()
-    expect(s, 'no strip for a credit note').not.toBeNull()
-    expect(s!.textContent).toBe(NOTICES.find(([t]) => t === 'credit note')![1])
-    expect(s!.textContent).toContain('not a tax invoice')
-    expect(s!.textContent).not.toContain('negative')
-    expect(s!.textContent).not.toContain('files')
+    expect(frames(), 'the document pane rendered no frame').toHaveLength(3)
+    expect(fieldRows(), 'the fields pane rendered no row').toHaveLength(3)
+    expect(strip()).toBeNull()
+
+    await receiptShowsTheStrip()
   })
 
   it('the document type: the strip sits above the body, not in it', async () => {
@@ -3117,8 +3113,8 @@ describe('the document type', () => {
 describe('the document type, adversarial', () => {
   const RECEIPT =
     'This looks like a receipt, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'
-  const CREDIT_NOTE =
-    'This looks like a credit note, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'
+  const PROFORMA =
+    'This looks like a proforma invoice, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'
 
   function strip(): HTMLElement | null {
     return screen.queryByTestId('extraction-document-type')
@@ -3193,12 +3189,12 @@ describe('the document type, adversarial', () => {
     expect(frames(), 'the second job rendered no frame').toHaveLength(3)
     expect(strip(), 'a verdict survived into a job without one').toBeNull()
 
-    next = 'credit note'
+    next = 'proforma'
     rerender(review({ ctx: w.ctx, jobId: JOB_ID }))
     await showsReceipt()
     rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
     await flush()
-    expect(strip()?.textContent).toBe(CREDIT_NOTE)
+    expect(strip()?.textContent).toBe(PROFORMA)
   })
 
   it("the glyph span copies extraction-no-region's", async () => {

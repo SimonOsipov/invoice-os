@@ -583,8 +583,8 @@ func TestValueCheck_AnEmptyDecidedValueIsAsked(t *testing.T) {
 	}
 }
 
-// dtNonInvoice is the seven names a verdict may carry, written out independently of documentTypeOptions.
-var dtNonInvoice = []string{"receipt", "proforma", "quotation", "credit note", "delivery note", "statement", "purchase order"}
+// dtNonInvoice is the eight names a verdict may carry, written out independently of documentTypeOptions.
+var dtNonInvoice = []string{"receipt", "proforma", "quotation", "credit note", "debit note", "delivery note", "statement", "purchase order"}
 
 func dtAnswer(choice string, confidence float64) jev.Response {
 	return jev.Response{Answers: map[string]jev.Answer{
@@ -592,7 +592,7 @@ func dtAnswer(choice string, confidence float64) jev.Response {
 	}}
 }
 
-func TestDocumentType_TheQuestionIsAChoiceOverTheEightTypes(t *testing.T) {
+func TestDocumentType_TheQuestionIsAChoiceOverTheNineOptions(t *testing.T) {
 	q := DocumentTypeQuestion()
 
 	if q.Type != jev.TypeChoice {
@@ -673,17 +673,22 @@ func TestDocumentType_TheThresholdIsTheHighestSwept(t *testing.T) {
 
 func TestDocumentType_TheBoundaryIsInclusive(t *testing.T) {
 	cases := []struct {
+		name       string
 		confidence float64
 		want       string
 	}{
-		{0.9, "receipt"},
-		{1.0, "receipt"},
-		{math.Nextafter(0.9, 0), ""},
-		{0.5, ""},
+		{"receipt", 0.9, "receipt"},
+		{"receipt", 1.0, "receipt"},
+		{"receipt", math.Nextafter(0.9, 0), ""},
+		{"receipt", 0.5, ""},
+		{"debit note", 1.0, "debit note"},
+		{"debit note", 0.9, "debit note"},
+		{"debit note", 0.89, ""},
+		{"debit note", math.NaN(), ""},
 	}
 	for _, c := range cases {
-		if got := documentTypeVerdict(dtAnswer("receipt", c.confidence)); got != c.want {
-			t.Errorf("receipt at %v: verdict = %q, want %q", c.confidence, got, c.want)
+		if got := documentTypeVerdict(dtAnswer(c.name, c.confidence)); got != c.want {
+			t.Errorf("%s at %v: verdict = %q, want %q", c.name, c.confidence, got, c.want)
 		}
 	}
 }
@@ -700,9 +705,9 @@ func TestDocumentType_ATaxInvoiceNeverRecords(t *testing.T) {
 	}
 }
 
-func TestDocumentType_EverySevenNonInvoiceTypeRecordsItsName(t *testing.T) {
-	if len(dtNonInvoice) != 7 {
-		t.Fatalf("dtNonInvoice has %d names, want 7", len(dtNonInvoice))
+func TestDocumentType_EveryEightNonInvoiceTypeRecordsItsName(t *testing.T) {
+	if len(dtNonInvoice) != 8 {
+		t.Fatalf("dtNonInvoice has %d names, want 8", len(dtNonInvoice))
 	}
 	for _, name := range dtNonInvoice {
 		if got := documentTypeVerdict(dtAnswer(name, 1)); got != name {

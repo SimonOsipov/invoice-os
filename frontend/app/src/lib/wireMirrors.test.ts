@@ -846,9 +846,12 @@ describe('wire mirror: the document-type options <-> DOCUMENT_TYPE_NOTICE', () =
 
   it('wire mirror: the document-type options <-> DOCUMENT_TYPE_NOTICE', () => {
     const names = goOptionNames(repoFile('internal/extraction/jevcheck.go'))
-    expect(names.length, 'documentTypeOptions block yielded too few Name: values').toBeGreaterThanOrEqual(8)
+    expect(names.length, 'documentTypeOptions block yielded too few Name: values').toBeGreaterThanOrEqual(9)
     expect(names).toContain('tax invoice')
-    const stored = names.filter((n) => n !== 'tax invoice').sort()
+    expect(names).toContain('credit note')
+    expect(names).toContain('debit note')
+    // The notes are held by the import, so the notice keys the other six.
+    const stored = names.filter((n) => !['tax invoice', 'credit note', 'debit note'].includes(n)).sort()
     expect(Object.keys(DOCUMENT_TYPE_NOTICE).sort()).toEqual(stored)
     for (const k of stored) {
       expect(DOCUMENT_TYPE_NOTICE[k as DocumentType], `${k}: no sentence`).not.toBe('')

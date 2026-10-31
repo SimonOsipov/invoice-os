@@ -1646,24 +1646,29 @@ func TestJevValue_APlantedVariantIsAlwaysLabelledWrong(t *testing.T) {
 	}
 }
 
-// AC-8. jvTrueType's seven non-invoice types are A30's options 2-8, and DocumentTypeOptions()
-// is the closed eight, cloned.
-func TestJevType_TheOptionListIsTheClosedEight(t *testing.T) {
+// AC-8. jvTrueType's seven fixtures' types are among A30's options 2-9, and DocumentTypeOptions()
+// is the closed nine, cloned. "debit note" has no measured fixture.
+func TestJevType_TheOptionListIsTheClosedNine(t *testing.T) {
 	want := []string{
 		"tax invoice", "receipt", "proforma", "quotation",
-		"credit note", "delivery note", "statement", "purchase order",
+		"credit note", "debit note", "delivery note", "statement", "purchase order",
 	}
 	got := jevmeasure.DocumentTypeOptions()
 	if !slices.Equal(got, want) {
 		t.Fatalf("DocumentTypeOptions() = %v, want %v", got, want)
 	}
-	if len(jevmeasure.DocumentTypeCriteria) != 8 {
-		t.Fatalf("DocumentTypeCriteria has %d entr(ies), want 8", len(jevmeasure.DocumentTypeCriteria))
+	if len(jevmeasure.DocumentTypeCriteria) != 9 {
+		t.Fatalf("DocumentTypeCriteria has %d entr(ies), want 9", len(jevmeasure.DocumentTypeCriteria))
 	}
 	for _, opt := range want {
 		if desc := jevmeasure.DocumentTypeCriteria[opt]; desc == "" {
 			t.Errorf("DocumentTypeCriteria has no (or an empty) entry for %q", opt)
 		}
+	}
+
+	const debitDesc = "A document increasing the amount of a previously issued invoice, adding a charge to it rather than starting a new sale."
+	if desc := jevmeasure.DocumentTypeCriteria["debit note"]; desc != debitDesc {
+		t.Errorf("DocumentTypeCriteria[debit note] = %q, want %q", desc, debitDesc)
 	}
 
 	// The clone: mutating one call's result must not move the next call's.
@@ -1687,7 +1692,7 @@ func TestJevType_TheOptionListIsTheClosedEight(t *testing.T) {
 			t.Errorf("jvTrueType[%q] = %q, want the filename transform %q", pdf, mapped, transformed)
 		}
 		if mapped == "tax invoice" || !slices.Contains(want[1:], mapped) {
-			t.Errorf("jvTrueType[%q] = %q, want one of A30's options 2-8", pdf, mapped)
+			t.Errorf("jvTrueType[%q] = %q, want one of A30's options 2-9", pdf, mapped)
 		}
 	}
 }
@@ -1716,9 +1721,12 @@ func TestJevType_TheConfusionTableHasARowPerTrueType(t *testing.T) {
 		t.Errorf("confusion table cells sum to %d, want 21 (one per document asked)", total)
 	}
 	// Every answer was correct, so the whole table sits on the diagonal.
-	wantDiagonal := map[string]int{"tax invoice": 14}
+	// "debit note" has a row and no measured document.
+	wantDiagonal := map[string]int{"tax invoice": 14, "debit note": 0}
 	for _, opt := range options[1:] {
-		wantDiagonal[opt] = 1
+		if opt != "debit note" {
+			wantDiagonal[opt] = 1
+		}
 	}
 	for _, trueType := range options {
 		row, ok := cells[trueType]

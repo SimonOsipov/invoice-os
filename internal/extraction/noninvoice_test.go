@@ -53,7 +53,7 @@ var nonInvoiceFixtures = []nonInvoiceFixture{
 // nonInvoiceTypes is hard-coded, never derived from nonInvoiceFixtures: derived, it could not
 // see a missing type.
 var nonInvoiceTypes = []string{
-	"receipt", "proforma", "quotation", "credit_note", "delivery_note", "statement", "purchase_order",
+	"receipt", "proforma", "quotation", "credit_note", "debit_note", "delivery_note", "statement", "purchase_order",
 }
 
 // niTokenFloor is each fixture's golden token count as MEASURED after generation. Zero is
@@ -159,9 +159,9 @@ func TestNonInvoice_GeneratorIsDeterministic(t *testing.T) {
 	}
 }
 
-// AC-4: mirrors TestCorpus_HasAllSixNamedLayouts for the seven non-invoice types.
-func TestNonInvoice_TheTypeTableNamesExactlySevenTypes(t *testing.T) {
-	const want = 7
+// AC-4: mirrors TestCorpus_HasAllSixNamedLayouts for the eight non-invoice types.
+func TestNonInvoice_TheTypeTableNamesExactlyEightTypes(t *testing.T) {
+	const want = 8
 
 	if len(nonInvoiceTypes) != want {
 		t.Fatalf("nonInvoiceTypes names %d type(s), want %d -- the hard-coded set is the floor and cannot be trimmed to fit the table", len(nonInvoiceTypes), want)
@@ -186,7 +186,7 @@ func TestNonInvoice_TheTypeTableNamesExactlySevenTypes(t *testing.T) {
 	}
 	for n := range got {
 		if !named[n] {
-			t.Errorf("nonInvoiceFixtures carries %s, which is not one of the seven named types", n)
+			t.Errorf("nonInvoiceFixtures carries %s, which is not one of the eight named types", n)
 		}
 	}
 }

@@ -3,6 +3,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -657,35 +658,68 @@ func TestDevEnvNightly_EveryPreviewJobHasATimeout(t *testing.T) {
 	requireDevEnvProblem(t, "    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      gateway_url", "    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      gateway_url", "job prepare-env calls")
 }
 
-// The contacts step of fleet-gate at 7b01a4bf, trimmed per line.
+// The contacts step of fleet-gate, trimmed per line.
 var nlContactsGate = []string{
 	`name: Gate on notifications' contacts delivery mode`,
 	`run: |`,
 	`set -euo pipefail`,
+	`want=fake`,
+	`[ "$PR" != nightly ] || want=real`,
 	`mode=""`,
 	`for _ in $(seq 1 5); do`,
 	`if curl -sS --connect-timeout 5 --max-time 40 -H "X-Gateway-Token: $GATEWAY_TOKEN" -o /tmp/contacts-fleet.json "$GATEWAY_URL/healthz/fleet" \`,
 	`&& jq -e '.services | type == "array"' /tmp/contacts-fleet.json >/dev/null 2>&1; then`,
 	`mode=$(jq -r '[.services[] | select(.name == "notifications") | .contacts // "none"][0] // "absent"' /tmp/contacts-fleet.json)`,
-	`if [ "$mode" = fake ]; then break; fi`,
+	`if [ "$mode" = "$want" ]; then break; fi`,
 	`fi`,
 	`sleep 5`,
 	`done`,
-	`if [ "$mode" != fake ]; then`,
-	`echo "::error::notifications reports contacts='${mode:-unreachable}', want 'fake'. Anything else means the preview could write to HubSpot or Resend: check DEPLOY_ENV is pr-<N>."`,
+	`if [ "$mode" != "$want" ]; then`,
+	`echo "::error::notifications reports contacts='${mode:-unreachable}', want '$want'. On a PR, anything but fake means the preview could write to HubSpot or Resend: check DEPLOY_ENV is pr-<N>."`,
 	`exit 1`,
 	`fi`,
-	`echo "notifications reports contacts=fake."`,
+	`echo "notifications reports contacts=$want."`,
 }
 
-func TestDevEnvNightly_ContactsGateUnchanged(t *testing.T) {
+func TestDevEnvNightly_ContactsGatePinned(t *testing.T) {
 	t.Parallel()
 	got := nlRaw(devEnvJob(t, "fleet-gate"), "Gate on notifications' contacts delivery mode")
 	if !slices.Equal(got, nlContactsGate) {
 		t.Errorf("contacts gate changed:\n%s", strings.Join(got, "\n"))
 	}
-	if strings.Contains(strings.Join(got, "\n"), "nightly") {
-		t.Error("contacts gate names the nightly mode")
+}
+
+// Runs the step's script with a shim curl that serves a fleet roll-up reporting contacts=$mode.
+func TestDevEnvContactsGate_WantsTheModeOfTheRun(t *testing.T) {
+	t.Parallel()
+	raw := nlRaw(devEnvJob(t, "fleet-gate"), "Gate on notifications' contacts delivery mode")
+	i := slices.Index(raw, "run: |")
+	if i < 0 {
+		t.Fatal("contacts gate has no run block")
+	}
+	script := strings.Join(raw[i+1:], "\n")
+	for _, c := range []struct {
+		pr, mode string
+		pass     bool
+	}{
+		{"nightly", "real", true}, {"nightly", "fake", false}, {"7", "fake", true}, {"7", "real", false},
+	} {
+		c := c
+		t.Run(c.pr+"/"+c.mode, func(t *testing.T) {
+			t.Parallel()
+			shims := t.TempDir()
+			writeShim(t, filepath.Join(shims, "curl"), `while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done
+printf '{"services":[{"name":"notifications","contacts":"%s"}]}' "$MODE" >"$out"
+`)
+			writeShim(t, filepath.Join(shims, "sleep"), "exit 0\n")
+			// The step writes a fixed /tmp path; give each case its own.
+			cmd := exec.Command("bash", "-c", strings.ReplaceAll(script, "/tmp/contacts-fleet.json", filepath.Join(shims, "fleet.json")))
+			cmd.Env = append(os.Environ(), "PR="+c.pr, "MODE="+c.mode, "GATEWAY_URL=x", "GATEWAY_TOKEN=x", "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"))
+			_, _, err := runToFiles(t, cmd, false)
+			if got := err == nil; got != c.pass {
+				t.Errorf("PR %s with contacts=%s: pass = %v, want %v (%v)", c.pr, c.mode, got, c.pass, err)
+			}
+		})
 	}
 }
 

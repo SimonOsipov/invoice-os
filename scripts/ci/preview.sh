@@ -17,6 +17,10 @@
 #   preview.sh mail-off nightly           unmount the mail secrets and turn auto-confirm back on
 #   preview.sh mail-read-key nightly      print the Resend read key
 #   preview.sh mail-domain nightly        print the Resend receiving domain
+#   preview.sh contact-preflight nightly  fail when a nightly contact secret is missing or not enabled
+#   preview.sh contact-token nightly [<n>] print the HubSpot token at version <n> (latest when omitted)
+#   preview.sh contact-token-version nightly print the number of the token's latest version
+#   preview.sh deal-stage                 print the HubSpot deal stage the nightly sets
 #   preview.sh prs                        print "<pr|nightly> <created>" for each preview that owns a resource
 #   preview.sh cap                        print open=<n> and full=true|false (full at 3 previews or more)
 #   preview.sh invariants                 fail when preview holds a production secret or reaches prod
@@ -50,6 +54,14 @@ name_arg() {
 # mail_arg: the mail commands serve the nightly only.
 mail_arg() { [ "${1:-}" = nightly ] || die "nightly is required, got '${1:-}'"; }
 MAIL_SECRETS=(nightly-gotrue-smtp-pass nightly-resend-sending-key nightly-resend-read-key nightly-resend-receiving-domain)
+CONTACT_SECRETS=(nightly-hubspot-token nightly-resend-read-key nightly-resend-receiving-domain nightly-resend-segment-id nightly-resend-topic-id)
+HUBSPOT_TOKEN_SECRET=nightly-hubspot-token
+
+# digits_arg <value>: a Secret Manager version number.
+digits_arg() { [[ "${1:-}" =~ ^[0-9]+$ ]] || die "a version number is required, got '${1:-}'"; }
+
+# deal_stage: the stage id of a HubSpot developer test account's default pipeline.
+deal_stage() { echo appointmentscheduled; }
 
 # suffix <name>: the resource-name part (pr-7, nightly). dbname <name>: preview-db accepts only pr_<N>, so nightly is pr_0.
 suffix() { if [ "$1" = nightly ]; then echo nightly; else echo "pr-$1"; fi; }
@@ -201,9 +213,8 @@ env_file() {
         ;;
       blog) echo "VITE_GATEWAY_URL: $(url gateway "$pr")" ;;
     esac
-    # ceiling: the nightly's contacts stay fake until NIGHTLY-06 mounts real keys.
     case "$svc" in
-      notifications | worker) [ "$pr" != nightly ] || echo "CONTACTS_FAKE: 'true'" ;;
+      notifications | worker) [ "$pr" != nightly ] || echo "HUBSPOT_DEAL_STAGE: $(deal_stage)" ;;
     esac
     case "$svc" in
       invoice | submission | worker)
@@ -235,6 +246,12 @@ secrets_of() {
   case "$2" in
     invoice | submission | worker)
       out+=(DOCUMENT_ACCESS_KEY_ID=document-access-key-id:latest DOCUMENT_SECRET_ACCESS_KEY=document-secret-key:latest)
+      ;;
+  esac
+  case "$2" in
+    notifications | worker)
+      [ "$pr" != nightly ] || out+=("HUBSPOT_TOKEN=$HUBSPOT_TOKEN_SECRET:${NIGHTLY_HUBSPOT_TOKEN_VERSION:-}" RESEND_API_KEY=nightly-resend-read-key:latest
+        RESEND_SEGMENT_ID=nightly-resend-segment-id:latest RESEND_TOPIC_ID=nightly-resend-topic-id:latest)
       ;;
   esac
   local IFS=,
@@ -274,8 +291,16 @@ deploy_one() {
 cmd_deploy() {
   local pr=$1 sha=$2 failed=0 svc
   shift 2
-  export -f deploy_one env_file secrets_of url image secret suffix dbname max_instances gotrue_pool
-  export PROJECT PROJECT_NUMBER REGION REGISTRY RUNTIME LABEL
+  # The token version is pinned at deploy time (P24); deploy_one's child bash has no die.
+  if [ "$pr" = nightly ]; then
+    for svc in "$@"; do
+      case "$svc" in
+        notifications | worker) digits_arg "${NIGHTLY_HUBSPOT_TOKEN_VERSION:-}" ;;
+      esac
+    done
+  fi
+  export -f deploy_one env_file secrets_of url image secret suffix dbname max_instances gotrue_pool deal_stage
+  export PROJECT PROJECT_NUMBER REGION REGISTRY RUNTIME LABEL HUBSPOT_TOKEN_SECRET
   # Four at a time: africa-south1 allows 20 vCPU of allocation per minute per project.
   # shellcheck disable=SC2016 # the child bash expands its own arguments
   printf '%s\n' "$@" | xargs -P 4 -I{} bash -c 'gc=(--project "$PROJECT" --region "$REGION" --quiet); deploy_one "$0" "$1" "$2" >"deploy-$2.log" 2>&1' \
@@ -334,10 +359,11 @@ cmd_teardown() {
   echo "PR $pr: preview deleted"
 }
 
-# mail-preflight: each mail secret has an enabled latest version. Reads no value.
-cmd_mail_preflight() {
-  local name state missing=() failed=0
-  for name in "${MAIL_SECRETS[@]}"; do
+# preflight <kind> <secret>...: each secret has an enabled latest version. Reads no value.
+preflight() {
+  local kind=$1 name state missing=() failed=0
+  shift
+  for name in "$@"; do
     if state=$(gcloud secrets versions describe latest --secret "$name" --project "$PROJECT" --format 'value(state)' 2>&1); then
       [ "$(tail -n 1 <<<"$state")" = ENABLED ] || missing+=("$name")
     elif grep -q NOT_FOUND <<<"$state"; then
@@ -347,9 +373,26 @@ cmd_mail_preflight() {
       failed=1
     fi
   done
-  [ "${#missing[@]}" = 0 ] || echo "::error::nightly mail secrets missing or not enabled: ${missing[*]}" >&2
+  [ "${#missing[@]}" = 0 ] || echo "::error::nightly $kind secrets missing or not enabled: ${missing[*]}" >&2
   [ "${#missing[@]}" = 0 ] && [ "$failed" = 0 ] || exit 1
-  echo "nightly mail secrets present"
+  echo "nightly $kind secrets present"
+}
+
+cmd_mail_preflight() { preflight mail "${MAIL_SECRETS[@]}"; }
+cmd_contact_preflight() { preflight contact "${CONTACT_SECRETS[@]}"; }
+
+# contact-token [<n>]: the token at version n; an empty n reads latest.
+cmd_contact_token() {
+  local v=${1:-}
+  if [ -z "$v" ]; then v=latest; else digits_arg "$v"; fi
+  gcloud secrets versions access "$v" --secret "$HUBSPOT_TOKEN_SECRET" --project "$PROJECT"
+}
+
+cmd_contact_token_version() {
+  local v
+  v=$(gcloud secrets versions describe latest --secret "$HUBSPOT_TOKEN_SECRET" --project "$PROJECT" --format='value(name.basename())')
+  digits_arg "$v"
+  echo "$v"
 }
 
 # mail-on: after E2E, mount the mail secrets. Only secret names go in argv.
@@ -473,9 +516,13 @@ case "${1:-}" in
   mail-off) mail_arg "${2:-}"; cmd_mail_off ;;
   mail-read-key) mail_arg "${2:-}"; gcloud secrets versions access latest --secret nightly-resend-read-key --project "$PROJECT" ;;
   mail-domain) mail_arg "${2:-}"; gcloud secrets versions access latest --secret nightly-resend-receiving-domain --project "$PROJECT" ;;
+  contact-preflight) mail_arg "${2:-}"; cmd_contact_preflight ;;
+  contact-token) mail_arg "${2:-}"; cmd_contact_token "${3:-}" ;;
+  contact-token-version) mail_arg "${2:-}"; cmd_contact_token_version ;;
+  deal-stage) deal_stage ;;
   prs) cmd_prs ;;
   cap) cmd_cap ;;
   invariants) cmd_invariants ;;
   budget) cmd_budget ;;
-  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|mail-read-key|mail-domain|prs|cap|invariants|budget" ;;
+  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|mail-read-key|mail-domain|contact-preflight|contact-token|contact-token-version|deal-stage|prs|cap|invariants|budget" ;;
 esac

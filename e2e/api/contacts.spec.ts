@@ -1,10 +1,12 @@
-// Contact sync over the deployed fork: a pr-<N> fork's notifications runs in fake mode, so
-// nothing reaches HubSpot or Resend. Every run uses fresh addresses; contacts rows survive the reset.
+// Contact sync over the deployed gateway: a pr-<N> fork's notifications runs in fake mode, so
+// nothing reaches HubSpot or Resend; the nightly's runs real. Every run uses fresh addresses; contacts rows survive the reset.
 import { test, expect } from '@playwright/test'
+import { expectedContactsMode, nightlyTarget } from '../targets'
 import { apiBase, claimsOf, fleetHeaders, contactsMe, demoRequest, rawFetch, registerFormAccount, type ContactMe } from './client'
 
 const CONSENT = 'Yes, send me product news and offers.'
-const POLL = { timeout: 30_000, intervals: [500, 1000, 2000] }
+// Real vendors on the nightly take longer than a fake delivery.
+const POLL = { timeout: nightlyTarget() ? 120_000 : 30_000, intervals: [500, 1000, 2000] }
 
 // The tags contacts/me returns (internal/notifications/store.go).
 const REGISTERED = 'registered'
@@ -30,13 +32,15 @@ async function delivered(token: string): Promise<ContactMe> {
 }
 
 test.describe('contact sync (API E2E, over the deployed gateway)', () => {
-  test('/healthz/fleet reports notifications contacts "fake" on the fork', async () => {
+  if (nightlyTarget()) test.describe.configure({ timeout: 180_000 })
+
+  test('/healthz/fleet reports the expected notifications contacts mode', async () => {
     const res = await fetch(`${apiBase()}/healthz/fleet`, { headers: fleetHeaders() })
     const body = (await res.json()) as { services: { name: string; contacts?: string }[] }
     expect(body.services.length).toBeGreaterThan(0)
     const notifications = body.services.find((s) => s.name === 'notifications')
     expect(notifications, JSON.stringify(body)).toBeDefined()
-    expect(notifications!.contacts).toBe('fake')
+    expect(notifications!.contacts).toBe(expectedContactsMode())
   })
 
   test('a form registrant who signs in is delivered, tagged registered and not marketing-eligible', async () => {
@@ -49,7 +53,7 @@ test.describe('contact sync (API E2E, over the deployed gateway)', () => {
     expect(row.marketing_eligible).toBe(false)
     expect(row.hubspot.delivered_at).not.toBeNull()
     expect(row.resend.delivered_at).not.toBeNull()
-    expect(row.mode).toBe('fake')
+    expect(row.mode).toBe(expectedContactsMode())
   })
 
   test('a registrant who ticked at register is marketing-eligible', async () => {
@@ -60,7 +64,7 @@ test.describe('contact sync (API E2E, over the deployed gateway)', () => {
   })
 
   test('a demo request with the same email in other case joins the contact; a tick sticks', async () => {
-    test.setTimeout(120_000)
+    test.setTimeout(nightlyTarget() ? 360_000 : 120_000)
     const { account, token } = await registerFormAccount('contacts-demo')
     const first = await delivered(token)
     expect(first.marketing_eligible).toBe(false)

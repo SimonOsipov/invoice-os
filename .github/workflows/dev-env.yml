@@ -499,24 +499,26 @@ jobs:
           fi
           echo "Sentry $direction on $EXPECTED_BUILD for: $names (auth exempt)."
 
-      # A preview must deliver nothing to HubSpot or Resend.
+      # A PR preview must deliver nothing to HubSpot or Resend; the nightly delivers to its test vendors.
       - name: Gate on notifications' contacts delivery mode
         run: |
           set -euo pipefail
+          want=fake
+          [ "$PR" != nightly ] || want=real
           mode=""
           for _ in $(seq 1 5); do
             if curl -sS --connect-timeout 5 --max-time 40 -H "X-Gateway-Token: $GATEWAY_TOKEN" -o /tmp/contacts-fleet.json "$GATEWAY_URL/healthz/fleet" \
               && jq -e '.services | type == "array"' /tmp/contacts-fleet.json >/dev/null 2>&1; then
               mode=$(jq -r '[.services[] | select(.name == "notifications") | .contacts // "none"][0] // "absent"' /tmp/contacts-fleet.json)
-              if [ "$mode" = fake ]; then break; fi
+              if [ "$mode" = "$want" ]; then break; fi
             fi
             sleep 5
           done
-          if [ "$mode" != fake ]; then
-            echo "::error::notifications reports contacts='${mode:-unreachable}', want 'fake'. Anything else means the preview could write to HubSpot or Resend: check DEPLOY_ENV is pr-<N>."
+          if [ "$mode" != "$want" ]; then
+            echo "::error::notifications reports contacts='${mode:-unreachable}', want '$want'. On a PR, anything but fake means the preview could write to HubSpot or Resend: check DEPLOY_ENV is pr-<N>."
             exit 1
           fi
-          echo "notifications reports contacts=fake."
+          echo "notifications reports contacts=$want."
 
   # Smoke (landing, library, blog and both consoles render) and api (typed contract suite) here;
   # topology after it. The api suite writes data, so it runs only against a preview.

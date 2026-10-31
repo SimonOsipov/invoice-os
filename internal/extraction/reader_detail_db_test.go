@@ -1961,8 +1961,8 @@ func TestRLS_ExtractionDetailServesEveryVerdictVerbatimAndNoOtherTenants(t *test
 	}
 
 	verdicts := extraction.DocumentTypeVerdictsForTest()
-	if len(verdicts) != 7 {
-		t.Fatalf("DocumentTypeVerdictsForTest() = %v, want seven names", verdicts)
+	if len(verdicts) != 8 {
+		t.Fatalf("DocumentTypeVerdictsForTest() = %v, want eight names", verdicts)
 	}
 	for _, v := range verdicts {
 		t.Run(v, func(t *testing.T) {

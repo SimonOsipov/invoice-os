@@ -1,4 +1,4 @@
-// noninvoice_test.go: CHECK-01-03's seven synthetic non-invoices -- the document-type check's
+// noninvoice_test.go: CHECK-01-03's eight synthetic non-invoices -- the document-type check's
 // negative half. Each fixture pairs a generated PDF with a docling golden it replays from;
 // AC-8 (jev_value_test.go, package endtoend) is the guard that keeps them out of every
 // corpus_ ratchet the positive half already owns.
@@ -25,6 +25,7 @@ const (
 	fxNonInvoiceProforma      = "noninvoice_proforma.pdf"
 	fxNonInvoiceQuotation     = "noninvoice_quotation.pdf"
 	fxNonInvoiceCreditNote    = "noninvoice_credit_note.pdf"
+	fxNonInvoiceDebitNote     = "noninvoice_debit_note.pdf"
 	fxNonInvoiceDeliveryNote  = "noninvoice_delivery_note.pdf"
 	fxNonInvoiceStatement     = "noninvoice_statement.pdf"
 	fxNonInvoicePurchaseOrder = "noninvoice_purchase_order.pdf"
@@ -45,6 +46,7 @@ var nonInvoiceFixtures = []nonInvoiceFixture{
 	{"proforma", fxBuildNonInvoiceProforma, fxNonInvoiceProforma, "noninvoice_proforma.docling.json", niProvDocling},
 	{"quotation", fxBuildNonInvoiceQuotation, fxNonInvoiceQuotation, "noninvoice_quotation.docling.json", niProvDocling},
 	{"credit_note", fxBuildNonInvoiceCreditNote, fxNonInvoiceCreditNote, "noninvoice_credit_note.docling.json", niProvDocling},
+	{"debit_note", fxBuildNonInvoiceDebitNote, fxNonInvoiceDebitNote, "noninvoice_debit_note.docling.json", niProvDocling},
 	{"delivery_note", fxBuildNonInvoiceDeliveryNote, fxNonInvoiceDeliveryNote, "noninvoice_delivery_note.docling.json", niProvDocling},
 	{"statement", fxBuildNonInvoiceStatement, fxNonInvoiceStatement, "noninvoice_statement.docling.json", niProvDocling},
 	{"purchase_order", fxBuildNonInvoicePurchaseOrder, fxNonInvoicePurchaseOrder, "noninvoice_purchase_order.docling.json", niProvDocling},
@@ -63,16 +65,17 @@ var niTokenFloor = map[string]int{
 	fxNonInvoiceProforma:      10,
 	fxNonInvoiceQuotation:     9,
 	fxNonInvoiceCreditNote:    9,
+	fxNonInvoiceDebitNote:     9,
 	fxNonInvoiceDeliveryNote:  11,
 	fxNonInvoiceStatement:     10,
 	fxNonInvoicePurchaseOrder: 9,
 }
 
-// niTINs are the seven TINs designed for this corpus (see the CHECK-01-03 architecture doc's
+// niTINs are the eight TINs designed for this corpus (see the CHECK-01-03 architecture doc's
 // TIN allocation table). A hit outside this set is in the free block but was never designed.
 var niTINs = []string{
 	"99999999-1401", "99999999-1402", "99999999-1403", "99999999-1404",
-	"99999999-1405", "99999999-1406", "99999999-1407",
+	"99999999-1405", "99999999-1406", "99999999-1407", "99999999-1408",
 }
 
 // niTitleFor is the title token AC-6 requires on each replayed golden, so a golden copied from
@@ -82,6 +85,7 @@ var niTitleFor = map[string]string{
 	fxNonInvoiceProforma:      "PROFORMA INVOICE",
 	fxNonInvoiceQuotation:     "QUOTATION",
 	fxNonInvoiceCreditNote:    "CREDIT NOTE",
+	fxNonInvoiceDebitNote:     "DEBIT NOTE",
 	fxNonInvoiceDeliveryNote:  "DELIVERY NOTE",
 	fxNonInvoiceStatement:     "STATEMENT OF ACCOUNT",
 	fxNonInvoicePurchaseOrder: "PURCHASE ORDER",
@@ -92,8 +96,8 @@ var niTitleFor = map[string]string{
 // AC-2: the committed bytes match their generator, and every fixture has an fxCorpus entry so
 // -update actually regenerates it.
 func TestNonInvoice_FixturesMatchTheirGenerator(t *testing.T) {
-	if len(nonInvoiceFixtures) != 7 {
-		t.Fatalf("nonInvoiceFixtures names %d fixture(s), want 7", len(nonInvoiceFixtures))
+	if len(nonInvoiceFixtures) != 8 {
+		t.Fatalf("nonInvoiceFixtures names %d fixture(s), want 8", len(nonInvoiceFixtures))
 	}
 
 	fx := corpusFxNames()
@@ -121,11 +125,11 @@ func TestNonInvoice_FixturesMatchTheirGenerator(t *testing.T) {
 }
 
 // AC-1: the row's declared type is the one its own file names. Without this, swapping two rows'
-// docType values leaves seven distinct types over seven byte-matching PDFs and every other
+// docType values leaves eight distinct types over eight byte-matching PDFs and every other
 // clause green -- while the answer key the document-type check is scored against is wrong.
 func TestNonInvoice_EachRowNamesItsOwnTypeAndGolden(t *testing.T) {
-	if len(nonInvoiceFixtures) != 7 {
-		t.Fatalf("nonInvoiceFixtures names %d fixture(s), want 7", len(nonInvoiceFixtures))
+	if len(nonInvoiceFixtures) != 8 {
+		t.Fatalf("nonInvoiceFixtures names %d fixture(s), want 8", len(nonInvoiceFixtures))
 	}
 
 	for _, f := range nonInvoiceFixtures {
@@ -192,12 +196,12 @@ func TestNonInvoice_TheTypeTableNamesExactlyEightTypes(t *testing.T) {
 }
 
 // AC-5: every TIN-shaped token on the committed bytes is inside the free reserved block, is not
-// one of the mock adapter's scripted or never-allocate values, and is one of the seven designed
+// one of the mock adapter's scripted or never-allocate values, and is one of the eight designed
 // niTINs. Reads through pdfium regardless of provenance: this is a claim about the committed
 // bytes, and it must hold whichever reader is used downstream.
 func TestNonInvoice_UsesOnlyFreeReservedTINs(t *testing.T) {
-	if len(niTINs) != 7 {
-		t.Fatalf("niTINs names %d TIN(s), want 7", len(niTINs))
+	if len(niTINs) != 8 {
+		t.Fatalf("niTINs names %d TIN(s), want 8", len(niTINs))
 	}
 	pinned := make(map[string]bool, len(niTINs))
 	for _, tin := range niTINs {
@@ -224,7 +228,7 @@ func TestNonInvoice_UsesOnlyFreeReservedTINs(t *testing.T) {
 						}
 					}
 					if !pinned[hit] {
-						t.Errorf("%s carries TIN %q, which is in the free block but is not one of the seven designed niTINs", f.pdf, hit)
+						t.Errorf("%s carries TIN %q, which is in the free block but is not one of the eight designed niTINs", f.pdf, hit)
 					}
 				}
 			}
@@ -235,19 +239,19 @@ func TestNonInvoice_UsesOnlyFreeReservedTINs(t *testing.T) {
 		})
 	}
 
-	if len(all) < 7 {
-		t.Errorf("found %d TIN-shaped token(s) across the seven fixtures, want at least 7", len(all))
+	if len(all) < 8 {
+		t.Errorf("found %d TIN-shaped token(s) across the eight fixtures, want at least 8", len(all))
 	}
 }
 
 // AC-6: every committed golden replays through the real reader its provenance names, past a
 // measured per-fixture token floor, and carries the fixture's title somewhere in its tokens.
 func TestNonInvoice_EveryGoldenReplaysWithTokens(t *testing.T) {
-	if len(niTokenFloor) != 7 {
-		t.Fatalf("niTokenFloor holds %d row(s), want 7 -- filled at Stage 4 from the real read", len(niTokenFloor))
+	if len(niTokenFloor) != 8 {
+		t.Fatalf("niTokenFloor holds %d row(s), want 8 -- filled at Stage 4 from the real read", len(niTokenFloor))
 	}
-	if len(niTitleFor) != 7 {
-		t.Fatalf("niTitleFor holds %d row(s), want 7 -- a missing row makes the needle below strings.Contains(text, \"\"), which every token satisfies", len(niTitleFor))
+	if len(niTitleFor) != 8 {
+		t.Fatalf("niTitleFor holds %d row(s), want 8 -- a missing row makes the needle below strings.Contains(text, \"\"), which every token satisfies", len(niTitleFor))
 	}
 
 	for _, f := range nonInvoiceFixtures {
@@ -304,8 +308,8 @@ func TestNonInvoice_EveryGoldenReplaysWithTokens(t *testing.T) {
 // matches that provenance, and the golden is actually on disk. The suffix clause is what stops
 // a pdfium-produced file named .docling.json from sailing into CI's canary byte-compare.
 func TestNonInvoice_ProvenanceNamesAFileThatExists(t *testing.T) {
-	if len(nonInvoiceFixtures) != 7 {
-		t.Fatalf("nonInvoiceFixtures names %d fixture(s), want 7", len(nonInvoiceFixtures))
+	if len(nonInvoiceFixtures) != 8 {
+		t.Fatalf("nonInvoiceFixtures names %d fixture(s), want 8", len(nonInvoiceFixtures))
 	}
 
 	for _, f := range nonInvoiceFixtures {

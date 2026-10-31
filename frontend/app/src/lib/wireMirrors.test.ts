@@ -15,7 +15,6 @@ import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { NOT_ACTIVE_MEMBER_MESSAGE, WORKSPACE_LOCKED_MESSAGE } from './authedFetch'
 import { CODE_LISTS } from './codeLists'
 import { AI_UNAVAILABLE_FIELD, DOCUMENT_TYPE_NOTICE } from './extractionReview'
-import type { DocumentType } from './extractionReview'
 
 function repoFile(rel: string): string {
   return readFileSync(fileURLToPath(new URL(`../../../../${rel}`, import.meta.url)), 'utf8')
@@ -854,7 +853,7 @@ describe('wire mirror: the document-type options <-> DOCUMENT_TYPE_NOTICE', () =
     const stored = names.filter((n) => !['tax invoice', 'credit note', 'debit note'].includes(n)).sort()
     expect(Object.keys(DOCUMENT_TYPE_NOTICE).sort()).toEqual(stored)
     for (const k of stored) {
-      expect(DOCUMENT_TYPE_NOTICE[k as DocumentType], `${k}: no sentence`).not.toBe('')
+      expect(DOCUMENT_TYPE_NOTICE[k as keyof typeof DOCUMENT_TYPE_NOTICE], `${k}: no sentence`).not.toBe('')
     }
   })
 

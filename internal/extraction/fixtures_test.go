@@ -118,12 +118,13 @@ var fxCorpus = []struct {
 	{fxJevReceipt, fxBuildJevReceiptInvoice},
 	// AIR-08-13's deployed line-items fixture: outside every corpus_ ratchet.
 	{fxAILines, fxBuildAILinesInvoice},
-	// CHECK-01-03's seven non-invoice types: the document-type check's negative half.
+	// CHECK-01-03's eight non-invoice types: the document-type check's negative half.
 	// Byte-compared like the rest, outside every corpus_ ratchet.
 	{fxNonInvoiceReceipt, fxBuildNonInvoiceReceipt},
 	{fxNonInvoiceProforma, fxBuildNonInvoiceProforma},
 	{fxNonInvoiceQuotation, fxBuildNonInvoiceQuotation},
 	{fxNonInvoiceCreditNote, fxBuildNonInvoiceCreditNote},
+	{fxNonInvoiceDebitNote, fxBuildNonInvoiceDebitNote},
 	{fxNonInvoiceDeliveryNote, fxBuildNonInvoiceDeliveryNote},
 	{fxNonInvoiceStatement, fxBuildNonInvoiceStatement},
 	{fxNonInvoicePurchaseOrder, fxBuildNonInvoicePurchaseOrder},
@@ -2383,8 +2384,8 @@ func TestFixtures_JevReceiptPayloadDrivesTheVerdict(t *testing.T) {
 	for _, o := range extraction.DocumentTypeQuestion().Options {
 		names = append(names, o.Name)
 	}
-	if len(names) != 8 {
-		t.Fatalf("DocumentTypeQuestion has %d option(s), want 8", len(names))
+	if len(names) != 9 {
+		t.Fatalf("DocumentTypeQuestion has %d option(s), want 9", len(names))
 	}
 
 	cases := map[string]string{"invoice": ""}
@@ -4327,6 +4328,20 @@ func fxBuildNonInvoiceCreditNote() []byte {
 		fxLine{12, 72, 600, "Reason: goods returned"},
 		fxLine{12, 72, 582, "Credit amount: NGN -750.00"},
 		fxLine{12, 72, 564, "This document reduces the amount owed. It requests no payment."},
+	)
+}
+
+func fxBuildNonInvoiceDebitNote() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "DEBIT NOTE"},
+		fxLine{12, 72, 690, "Debit Note No: DN-3402"},
+		fxLine{12, 72, 672, "Date: 2026-03-21"},
+		fxLine{12, 72, 654, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 636, "Supplier TIN: 99999999-1408"},
+		fxLine{12, 72, 618, "Customer: Honeywell Group"},
+		fxLine{12, 72, 600, "Reason: additional freight charge"},
+		fxLine{12, 72, 582, "Debit amount: NGN 750.00"},
+		fxLine{12, 72, 564, "This document adds to the amount owed on an earlier invoice."},
 	)
 }
 

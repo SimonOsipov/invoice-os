@@ -1635,7 +1635,7 @@ describe('isAIUnavailable, adversarial', () => {
 })
 
 describe('document-type notice', () => {
-  const keys = Object.keys(DOCUMENT_TYPE_NOTICE) as DocumentType[]
+  const keys = Object.keys(DOCUMENT_TYPE_NOTICE) as (keyof typeof DOCUMENT_TYPE_NOTICE)[]
 
   it("documentTypeNotice returns null for no verdict and the table's sentence otherwise", () => {
     expect(documentTypeNotice(null)).toBeNull()

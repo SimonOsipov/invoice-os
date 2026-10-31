@@ -374,8 +374,8 @@ func TestCharsIn_ReproducesEveryRectTextOnAWordLevelPage(t *testing.T) {
 // fixture except the two Chrome ones: the loop is identical and covers the rest for free.
 func TestCharsIn_ReproducesEveryRectTextOnTheCorpus(t *testing.T) {
 	names := pdcNonChromeFixtures(t)
-	if len(names) != 40 {
-		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 40 (42 committed minus %s and %s)", len(names), chrRegister, chrRegisterTwin)
+	if len(names) != 41 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 41 (43 committed minus %s and %s)", len(names), chrRegister, chrRegisterTwin)
 	}
 
 	totalRects := 0
@@ -494,6 +494,7 @@ var pdcTextCharsGoldens = map[string]struct{ pages, withText, textChars int }{
 	"native_3page.pdf":                      {3, 3, 96},
 	"native_invoice.pdf":                    {1, 1, 41},
 	"noninvoice_credit_note.pdf":            {1, 1, 219},
+	"noninvoice_debit_note.pdf":             {1, 1, 222},
 	"noninvoice_delivery_note.pdf":          {1, 1, 285},
 	"noninvoice_proforma.pdf":               {1, 1, 251},
 	"noninvoice_purchase_order.pdf":         {1, 1, 206},
@@ -551,8 +552,8 @@ func TestPDFiumReader_TextCharsGoldensCoverEveryCommittedFixture(t *testing.T) {
 // not against the other's.
 func TestPDFiumTokens_OneTokenPerRectOnEveryWordLevelFixture(t *testing.T) {
 	names := pdcNonChromeFixtures(t)
-	if len(names) != 40 {
-		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 40", len(names))
+	if len(names) != 41 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 41", len(names))
 	}
 
 	totalTokens := 0

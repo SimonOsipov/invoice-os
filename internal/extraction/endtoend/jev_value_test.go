@@ -25,11 +25,11 @@ import (
 
 // --- CHECK-01-03: the ratchet guard ---
 
-// The seven non-invoice fixtures, declared here because internal/extraction's own table is in
+// The eight non-invoice fixtures, declared here because internal/extraction's own table is in
 // package extraction_test and unreachable. Held against that table by the mirror clause below.
 var jvNonInvoicePDFs = []string{
 	"noninvoice_receipt.pdf", "noninvoice_proforma.pdf", "noninvoice_quotation.pdf",
-	"noninvoice_credit_note.pdf", "noninvoice_delivery_note.pdf", "noninvoice_statement.pdf",
+	"noninvoice_credit_note.pdf", "noninvoice_debit_note.pdf", "noninvoice_delivery_note.pdf", "noninvoice_statement.pdf",
 	"noninvoice_purchase_order.pdf",
 }
 
@@ -41,8 +41,8 @@ const jvNonInvoicePrefix = "noninvoice_"
 // own ratchets directly; Half B reuses wildRatchets + wildVarBody, already proved by
 // TestWildLayouts_DoNotEnterTheCorpusRatchets, for the other four.
 func TestNonInvoice_NoFixtureEntersACorpusRatchet(t *testing.T) {
-	if len(jvNonInvoicePDFs) != 7 {
-		t.Fatalf("jvNonInvoicePDFs names %d PDF(s), want 7", len(jvNonInvoicePDFs))
+	if len(jvNonInvoicePDFs) != 8 {
+		t.Fatalf("jvNonInvoicePDFs names %d PDF(s), want 8", len(jvNonInvoicePDFs))
 	}
 	if len(wildRatchets) < 4 {
 		t.Fatalf("wildRatchets names %d collection(s), want at least 4", len(wildRatchets))
@@ -105,8 +105,8 @@ func TestNonInvoice_NoFixtureEntersACorpusRatchet(t *testing.T) {
 			t.Errorf("%s does not mention %s; the two lists have drifted apart", jvNonInvoiceFile, name)
 		}
 	}
-	if n := strings.Count(src, jvNonInvoicePrefix); n < 7 {
-		t.Errorf("%s carries %d occurrence(s) of %q, want at least 7", jvNonInvoiceFile, n, jvNonInvoicePrefix)
+	if n := strings.Count(src, jvNonInvoicePrefix); n < 8 {
+		t.Errorf("%s carries %d occurrence(s) of %q, want at least 8", jvNonInvoiceFile, n, jvNonInvoicePrefix)
 	}
 }
 
@@ -129,12 +129,13 @@ var jvTrueType = map[string]string{
 	"noninvoice_proforma.pdf":       "proforma",
 	"noninvoice_quotation.pdf":      "quotation",
 	"noninvoice_credit_note.pdf":    "credit note",
+	"noninvoice_debit_note.pdf":     "debit note",
 	"noninvoice_delivery_note.pdf":  "delivery note",
 	"noninvoice_statement.pdf":      "statement",
 	"noninvoice_purchase_order.pdf": "purchase order",
 }
 
-// jvDocuments derives the 21-document walk list: the fourteen expectByLayout rows in their own
+// jvDocuments derives the 22-document walk list: the fourteen expectByLayout rows in their own
 // order, then the seven jvNonInvoicePDFs in their declared order.
 func jvDocuments() []jvDoc {
 	docs := make([]jvDoc, 0, len(expectByLayout)+len(jvNonInvoicePDFs))
@@ -404,7 +405,7 @@ func jvValueQuestion(field, value string) jevmeasure.Question {
 	}
 }
 
-// jvWalk runs the measurement pass against baseURL for the given documents (all 21 when only
+// jvWalk runs the measurement pass against baseURL for the given documents (all 22 when only
 // is empty): every document's production and variant Ask() calls, and the outcomes they
 // produce.
 func jvWalk(t *testing.T, baseURL string, only ...string) []jevmeasure.Outcome {
@@ -891,6 +892,7 @@ var jvTypeNeedles = []struct{ needle, answer string }{
 	{"PROFORMA INVOICE", "proforma"},
 	{"QUOTATION", "quotation"},
 	{"CREDIT NOTE", "credit note"},
+	{"DEBIT NOTE", "debit note"},
 	{"DELIVERY NOTE", "delivery note"},
 	{"STATEMENT OF ACCOUNT", "statement"},
 	{"PURCHASE ORDER", "purchase order"},
@@ -906,7 +908,7 @@ func jvReadsAs(state string) string {
 	return "tax invoice"
 }
 
-// jvRequireUniqueNeedle fatals unless needle appears in exactly one of the 21 documents' state
+// jvRequireUniqueNeedle fatals unless needle appears in exactly one of the 22 documents' state
 // -- a needle matching none (or several) would silently misroute the fake's answer.
 func jvRequireUniqueNeedle(t *testing.T, needle string) {
 	t.Helper()
@@ -1300,13 +1302,13 @@ func TestJevValue_TheWalkCoversEveryScoredLayoutAndNonInvoice(t *testing.T) {
 	}
 	for i, doc := range docs {
 		if doc.pdf != want[i] {
-			t.Errorf("jvDocuments()[%d] = %q, want %q -- the fourteen scored layouts must precede the seven non-invoices, both in their own declared order", i, doc.pdf, want[i])
+			t.Errorf("jvDocuments()[%d] = %q, want %q -- the fourteen scored layouts must precede the eight non-invoices, both in their own declared order", i, doc.pdf, want[i])
 		}
 	}
 }
 
 // AC-3. jvRows must deep-equal an independently recomputed Resolve -> LineItems -> Reconcile
-// over the committed Docling golden, for all 21 documents; plus the three discriminators that
+// over the committed Docling golden, for all 22 documents; plus the three discriminators that
 // stop the comparison being a tautology (R-17).
 func TestJevValue_DecidedFieldsMatchTheEngine(t *testing.T) {
 	var pdfs []string
@@ -1497,10 +1499,10 @@ func TestJevValue_ANonInvoiceValueCellIsNotAskedForWantOfAnAnswerKey(t *testing.
 			}
 		}
 	}
-	// Measured 2026-09-22 against today's Tier1Rules and goldens. Re-measure and update in the
+	// Measured against today's Tier1Rules and goldens (17 with the debit note). Re-measure and update in the
 	// same commit if the corpus moves -- never relax this assertion (R-15).
-	if tally != 15 {
-		t.Errorf("no answer key tally = %d, want 15", tally)
+	if tally != 17 {
+		t.Errorf("no answer key tally = %d, want 17", tally)
 	}
 }
 
@@ -1647,7 +1649,7 @@ func TestJevValue_APlantedVariantIsAlwaysLabelledWrong(t *testing.T) {
 }
 
 // AC-8. jvTrueType's seven fixtures' types are among A30's options 2-9, and DocumentTypeOptions()
-// is the closed nine, cloned. "debit note" has no measured fixture.
+// is the closed nine, cloned. Each of the eight non-invoice types has a measured fixture.
 func TestJevType_TheOptionListIsTheClosedNine(t *testing.T) {
 	want := []string{
 		"tax invoice", "receipt", "proforma", "quotation",
@@ -1678,8 +1680,8 @@ func TestJevType_TheOptionListIsTheClosedNine(t *testing.T) {
 		t.Errorf("DocumentTypeOptions() returned a shared slice: mutating one call's result moved the next call's")
 	}
 
-	if len(jvNonInvoicePDFs) != 7 {
-		t.Fatalf("jvNonInvoicePDFs names %d PDF(s), want 7", len(jvNonInvoicePDFs))
+	if len(jvNonInvoicePDFs) != 8 {
+		t.Fatalf("jvNonInvoicePDFs names %d PDF(s), want 8", len(jvNonInvoicePDFs))
 	}
 	for _, pdf := range jvNonInvoicePDFs {
 		transformed := strings.ReplaceAll(strings.TrimSuffix(strings.TrimPrefix(pdf, jvNonInvoicePrefix), ".pdf"), "_", " ")
@@ -1717,16 +1719,13 @@ func TestJevType_TheConfusionTableHasARowPerTrueType(t *testing.T) {
 	if len(cells) != len(options) {
 		t.Fatalf("confusion table has %d row(s), want one per true type (%d): %v", len(cells), len(options), cells)
 	}
-	if total := jvConfusionTotal(cells); total != 21 {
-		t.Errorf("confusion table cells sum to %d, want 21 (one per document asked)", total)
+	if total := jvConfusionTotal(cells); total != 22 {
+		t.Errorf("confusion table cells sum to %d, want 22 (one per document asked)", total)
 	}
 	// Every answer was correct, so the whole table sits on the diagonal.
-	// "debit note" has a row and no measured document.
-	wantDiagonal := map[string]int{"tax invoice": 14, "debit note": 0}
+	wantDiagonal := map[string]int{"tax invoice": 14}
 	for _, opt := range options[1:] {
-		if opt != "debit note" {
-			wantDiagonal[opt] = 1
-		}
+		wantDiagonal[opt] = 1
 	}
 	for _, trueType := range options {
 		row, ok := cells[trueType]
@@ -1751,8 +1750,8 @@ func TestJevType_TheConfusionTableHasARowPerTrueType(t *testing.T) {
 			sum++
 		}
 	}
-	if sum != 21 {
-		t.Errorf("21 documents must ask the document-type question and carry an Answer, got %d", sum)
+	if sum != 22 {
+		t.Errorf("22 documents must ask the document-type question and carry an Answer, got %d", sum)
 	}
 }
 
@@ -1787,8 +1786,8 @@ func TestJevType_ATaxInvoiceReadAsAReceiptIsAFalseAlarm(t *testing.T) {
 	if got := cells["tax invoice"]["tax invoice"]; got != 13 {
 		t.Errorf("confusion cell (tax invoice, tax invoice) = %d, want 13", got)
 	}
-	if total := jvConfusionTotal(cells); total != 21 {
-		t.Errorf("confusion table cells sum to %d, want 21 -- a false alarm stays in the table", total)
+	if total := jvConfusionTotal(cells); total != 22 {
+		t.Errorf("confusion table cells sum to %d, want 22 -- a false alarm stays in the table", total)
 	}
 }
 
@@ -1824,8 +1823,8 @@ func TestJevType_ANonInvoiceReadAsAnotherNonInvoiceIsNotAFalseAlarm(t *testing.T
 	if got := cells["tax invoice"]["tax invoice"]; got != 14 {
 		t.Errorf("confusion cell (tax invoice, tax invoice) = %d, want 14 -- no tax invoice was misread here", got)
 	}
-	if total := jvConfusionTotal(cells); total != 21 {
-		t.Errorf("confusion table cells sum to %d, want 21", total)
+	if total := jvConfusionTotal(cells); total != 22 {
+		t.Errorf("confusion table cells sum to %d, want 22", total)
 	}
 }
 
@@ -2072,11 +2071,11 @@ func TestJevValue_TheRowCountIsTheSameWhetherOrNotACallFails(t *testing.T) {
 	})
 	failValue, failType := jvCountByCheck(jvWalk(t, srvFail.URL))
 
-	if okValue != 224 || failValue != 224 {
-		t.Errorf("value_check row counts = %d (all-succeed), %d (one failure), want 224 both times", okValue, failValue)
+	if okValue != 232 || failValue != 232 {
+		t.Errorf("value_check row counts = %d (all-succeed), %d (one failure), want 232 both times", okValue, failValue)
 	}
-	if okType != 21 || failType != 21 {
-		t.Errorf("document_type_check row counts = %d (all-succeed), %d (one failure), want 21 both times", okType, failType)
+	if okType != 22 || failType != 22 {
+		t.Errorf("document_type_check row counts = %d (all-succeed), %d (one failure), want 22 both times", okType, failType)
 	}
 }
 
@@ -2103,8 +2102,8 @@ func TestJevValue_TheGoHarnessOpensOnlyFixtureRootPaths(t *testing.T) {
 	if len(jvPaths) == 0 {
 		t.Fatalf("the walk recorded 0 path(s) through jvOpen/jvWrite; a walk that touches no golden proves nothing about scope")
 	}
-	if len(jvPaths) < 21 {
-		t.Errorf("the walk recorded %d path(s), want at least 21", len(jvPaths))
+	if len(jvPaths) < 22 {
+		t.Errorf("the walk recorded %d path(s), want at least 22", len(jvPaths))
 	}
 	for _, p := range jvPaths {
 		if !jvPathAllowed(p, out) {

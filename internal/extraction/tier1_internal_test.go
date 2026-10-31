@@ -411,4 +411,15 @@ func TestTier1_AIOnlySpecsBuildNoRule(t *testing.T) {
 			t.Errorf("rule %q names the AI-only field %q", r.Key, r.Field)
 		}
 	}
+	if !tier1Learnable("invoice_number") {
+		t.Fatal("control: invoice_number must be learnable")
+	}
+	for _, f := range aiOnly {
+		if tier1Learnable(f) {
+			t.Errorf("%q is AI-only but tier1Learnable says a correction teaches a rule", f)
+		}
+		if _, ok := LearnBoxlessRule(f, "INV-77", []string{"Against invoice INV-77"}); ok {
+			t.Errorf("LearnBoxlessRule learned a rule for the AI-only field %q", f)
+		}
+	}
 }

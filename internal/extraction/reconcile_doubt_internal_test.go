@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// The behavioural partition (TestReconcile_TheDoubtCoversExactlyFourOfTheNineteenHeaderFields)
+// The behavioural partition (TestReconcile_TheDoubtCoversExactlyFourOfTheTwentyHeaderFields)
 // quantifies over HeaderFields, so an entry naming no header field is invisible there: it
 // widens nothing and reds nothing, and the next reader takes it for a covered field. This is
 // the set-equality pin the list did not have.

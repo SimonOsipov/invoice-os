@@ -45,5 +45,5 @@
 // surface which displays the version. Consumers get ADDED to the list above; they are not
 // discovered by search.
 //
-// The version that judges the 2026-dated e2e fixtures (v4); v5 starts 2027-01-01.
+// The version that judges the 2026-dated e2e fixtures (v4); v6 starts 2027-01-01.
 export const ACTIVE_RULE_SET_VERSION = 4

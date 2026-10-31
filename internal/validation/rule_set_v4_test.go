@@ -382,7 +382,7 @@ func TestV4_CopyForcesEnabledTrueRegardlessOfSourceState(t *testing.T) {
 
 // TestV4_DownRemovesV4 (AC-6): mirrors TestRuleSetV3_DownRemovesV3's
 // pattern -- runs the v4 migration's Down inside a superuser tx that is ALWAYS rolled
-// back. v4 is in force until v5 starts, so no synthetic activation is needed.
+// back. v4 is in force until 2027-01-01, so no synthetic activation is needed.
 func TestV4_DownRemovesV4(t *testing.T) {
 	super, _ := dbTestPools(t)
 	ctx := context.Background()

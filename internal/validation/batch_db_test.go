@@ -285,7 +285,7 @@ func TestBatch_DB_V5StampsInvoicesFromItsStartDate(t *testing.T) {
 	for i, c := range []struct {
 		date    string
 		version int
-	}{{"2026-12-31", 4}, {v5Start, 5}, {"2026-12-31", 4}, {v5Start, 5}} {
+	}{{"2026-12-31", 4}, {v5Start, 6}, {"2026-12-31", 4}, {v5Start, 6}} {
 		var wantID string
 		if err := super.QueryRow(context.Background(),
 			`SELECT id FROM rule_set_versions WHERE version = $1 AND id = rule_set_version_for($2::date)`, c.version, c.date).Scan(&wantID); err != nil {

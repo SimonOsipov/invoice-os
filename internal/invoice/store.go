@@ -2196,6 +2196,7 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 // 256-char one passes that but fails audit_log's char_length(actor)<=255,
 // both 23514, which TestTransition_AtomicityRollsBackOnActorCheckFailure and
 // GATE-13 assert via pgCode.
+// note_gate_test.go calls it to seed notes in a status.
 func transitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor) (Invoice, error) {
 	return transitionCausedTx(ctx, tx, id, current, target, actor, demotionCause{})
 }
@@ -2400,6 +2401,8 @@ func HasBlockingViolation(vs []Violation) bool { return hasBlockingViolation(vs)
 //     authoritative. lockedLines comes from hydrateLinesTx on THIS tx —
 //     scanInvoice leaves LineItems nil, and reading them off the pool instead
 //     would silently see zero rows under RLS (see hydrateLinesTx).
+//     3b. a note: read its original (credit note: FOR UPDATE) and replace the note
+//     violations with the locked verdict, which also decides blocked.
 //  4. stamp violations + rule_set_version_id (always — the version is stamped
 //     even on a blocking verdict; "these violations came from THAT rule set"
 //     is exactly what makes the verdict auditable).
@@ -2463,17 +2466,9 @@ func (s *Store) applyValidation(ctx context.Context, id string, vs []Violation, 
 	if vs == nil {
 		vs = []Violation{}
 	}
-	violationsJSON, err := json.Marshal(vs)
-	if err != nil {
-		return Invoice{}, fmt.Errorf("marshal violations: %w", err)
-	}
-
-	// The verdict is a pure function of the evaluated set, decided once and
-	// used for both the promotion and the audit row's outcome.
-	blocked := hasBlockingViolation(vs)
 
 	var inv Invoice
-	err = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		callerID, _ := auth.IdentityFromContext(ctx)
 
 		// Shared form of the save lock: a custom-rule save either commits before this
@@ -2536,6 +2531,25 @@ func (s *Store) applyValidation(ctx context.Context, id string, vs []Violation, 
 				return ErrRulesChanged
 			}
 		}
+
+		// A note's checks are decided here, replacing Evaluate's. A credit note locks its original,
+		// so the credited total read below cannot move before this commits.
+		// ceiling: BatchSubmit locks in caller order, so a batch of an accepted original then a
+		// draft note can deadlock (40P01); retry, revisit if it shows in logs.
+		vs := vs
+		if isNote(locked) {
+			facts, err := readOriginalFactsTx(ctx, tx, locked.OriginalInvoiceID, id, locksOriginal(locked))
+			if err != nil {
+				return err
+			}
+			vs = append(withoutNoteChecks(vs), noteViolations(locked, facts)...)
+		}
+		violationsJSON, err := json.Marshal(vs)
+		if err != nil {
+			return fmt.Errorf("marshal violations: %w", err)
+		}
+		// The verdict is a pure function of the set, used for the promotion and the audit outcome.
+		blocked := hasBlockingViolation(vs)
 
 		// 4. stamp the verdict, blocking or not.
 		if err := scanInvoice(tx.QueryRow(ctx,

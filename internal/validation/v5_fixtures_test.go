@@ -74,6 +74,11 @@ func v5ReappliedTx(t *testing.T, super *pgxpool.Pool) pgx.Tx {
 	ctx := context.Background()
 	raw := v5MigrationSQL(t)
 	tx := edBegin(t, ctx, super)
+	for _, stmt := range gooseDownStatements(t, v6MigrationSQL(t)) {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			t.Fatalf("roll v6 back before v5: %v\n%s", err, stmt)
+		}
+	}
 	for _, stmt := range gooseDownStatements(t, raw) {
 		if _, err := tx.Exec(ctx, stmt); err != nil {
 			t.Fatalf("roll v5 back before re-applying it: %v\n%s", err, stmt)

@@ -233,6 +233,33 @@ func TestGoldenRules_DB_ListsDatedVersionsWithState(t *testing.T) {
 	}
 }
 
+func TestGoldenRules_DB_ListsV6Scheduled(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := seedGoldenMember(t, super, goldenTenantOkafor, "admin", "active")
+	got := readGoldenAsOf(t, ctx, app, goldenPinnedToday)
+	if state, from, count := got.stateOf(t, 6); state != "scheduled" || from != v6Start || count != 69 {
+		t.Errorf("v6 = %s from %q count %d, want scheduled from %s, count 69", state, from, count, v6Start)
+	}
+	if state, from, count := got.stateOf(t, 5); state != "scheduled" || from != goldenV5Date || count != 67 {
+		t.Errorf("v5 = %s from %q count %d, want scheduled from %s, count 67", state, from, count, goldenV5Date)
+	}
+}
+
+func TestGoldenRules_DB_V6TakesOverV5OnItsDate(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := seedGoldenMember(t, super, goldenTenantOkafor, "admin", "active")
+	got := readGoldenAsOf(t, ctx, app, "2027-06-01")
+	if state, _, _ := got.stateOf(t, 6); state != "in_force" {
+		t.Errorf("v6 on 2027-06-01 = %s, want in_force", state)
+	}
+	if state, _, _ := got.stateOf(t, 5); state != "superseded" {
+		t.Errorf("v5 on 2027-06-01 = %s, want superseded", state)
+	}
+	if got.Version != 6 {
+		t.Errorf("rules block on 2027-06-01 is v%d, want v6", got.Version)
+	}
+}
+
 func TestGoldenRules_DB_StatesFollowTheDates(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := seedGoldenMember(t, super, goldenTenantOkafor, "admin", "active")

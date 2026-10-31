@@ -14,6 +14,10 @@ import (
 // (kept_as_is_at set), so support must not re-queue it.
 var ErrResolvedOutside = errors.New("invoice: resolved outside the platform")
 
+// ErrNoteChecksFailed: a failed note no longer passes its checks, so support
+// cannot re-queue it.
+var ErrNoteChecksFailed = errors.New("invoice: the note no longer passes its checks")
+
 // StatusError reports the status that made a support transition refuse.
 type StatusError struct{ Have Status }
 
@@ -53,9 +57,33 @@ func (s *Store) RequeueFailedTx(ctx context.Context, tx pgx.Tx, id, tenantID str
 	if kept {
 		return ErrResolvedOutside
 	}
+	if err := s.requeueNoteChecksTx(ctx, tx, id); err != nil {
+		return err
+	}
 	_, err = applyTransitionTx(ctx, tx, id, StatusFailed, StatusQueued,
 		Actor{TenantID: tenantID, Subject: audit.SupportActor}, demotionCause{})
 	return err
+}
+
+// requeueNoteChecksTx re-runs the note checks on the locked row; lock order is note, then original.
+func (s *Store) requeueNoteChecksTx(ctx context.Context, tx pgx.Tx, id string) error {
+	inv := Invoice{ID: id}
+	if err := tx.QueryRow(ctx,
+		`SELECT document_type, original_invoice_id, total::text, currency FROM invoices WHERE id = $1`, id,
+	).Scan(&inv.DocumentType, &inv.OriginalInvoiceID, &inv.Total, &inv.Currency); err != nil {
+		return err
+	}
+	if !isNote(inv) {
+		return nil
+	}
+	f, err := readOriginalFactsTx(ctx, tx, inv.OriginalInvoiceID, id, locksOriginal(inv))
+	if err != nil {
+		return err
+	}
+	if hasBlockingViolation(noteViolations(inv, f)) {
+		return ErrNoteChecksFailed
+	}
+	return nil
 }
 
 // CancelQueuedTx moves a queued invoice to failed with no failure_kind.

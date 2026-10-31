@@ -27,6 +27,8 @@ import (
 	"sort"
 	"strconv"
 	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 // mbsDateLayout is dateEval's default layout (internal/validation/
@@ -105,6 +107,15 @@ func MBSPayload(inv Invoice) map[string]any {
 	putDate(p, "tax_point_date", inv.TaxPointDate)
 	putString(p, "payment_status", inv.PaymentStatus)
 
+	if inv.DocumentType != "" {
+		p["document_type"] = string(inv.DocumentType)
+	}
+	if br := billingReference(inv.Original); len(br) > 0 {
+		p["billing_reference"] = br
+	}
+	putNumber(p, "original_total", inv.OriginalTotal)
+	putNumber(p, "credited_before", inv.CreditedBefore)
+
 	// The flat supplier_*/buyer_* columns nest under "supplier"/"buyer" --
 	// v2's supplier-tin-required/supplier-name-required/supplier-tin-format/
 	// buyer-tin-format all resolve dotted paths ("supplier.tin"). An all-NULL
@@ -181,6 +192,16 @@ func mbsLine(li LineItem) map[string]any {
 	putString(m, "price_unit", li.PriceUnit)
 	putNumber(m, "tax_percent", li.TaxPercent)
 	putNumber(m, "base_quantity", li.BaseQuantity)
+	return m
+}
+
+// billingReference builds the {irn, issue_date} object, omitting nil members.
+func billingReference(o *submission.BillingReference) map[string]any {
+	m := make(map[string]any, 2)
+	if o != nil {
+		putString(m, "irn", o.IRN)
+		putDate(m, "issue_date", o.IssueDate)
+	}
 	return m
 }
 

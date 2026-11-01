@@ -1481,8 +1481,10 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   // (enterByHandKeepsTheFailureListIntact).
   function enterByHand(documentId: string) {
     const seq = ++handOffReadSeq.current
+    const fromReview = view === 'extraction'
     const land = (reading: CarriedReading | null) => {
       if (seq !== handOffReadSeq.current) return
+      if (fromReview) navigate('create')
       setHandOffDocumentId(documentId)
       setHandOffReading(reading)
       // A carried filing takes only a number the operator typed, never the seeded one.

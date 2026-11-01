@@ -28,6 +28,9 @@
 // is pure and spec'd (`unreadableCsvAll`, CSV-1 + BULK-06-… File-column siblings); only
 // the Blob/anchor click lives here.
 
+import { useState } from 'react'
+
+import { HELD_FIELD } from '../lib/importRun'
 import { ENTITY_REQUIRED_REASON } from '../lib/invoiceDraft'
 import { unreadableCsvAll, type ReviewUnit, type UnreadableRowAll } from '../lib/reviewBatch'
 import type { PlatformCtx } from '../types'
@@ -58,6 +61,24 @@ function downloadCsv(rows: UnreadableRowAll[], batchIds: string[], unit: ReviewU
   URL.revokeObjectURL(url)
 }
 
+// The amber panel over the rows that are not holds; absent when none remain. Amber, not red:
+// nothing here failed a rule.
+function NeverBecamePanel({ rows, unit }: { rows: UnreadableRowAll[]; unit: ReviewUnit }) {
+  if (rows.length === 0) return null
+  return (
+    <div style={{ padding: '14px 16px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', color: 'var(--status-amber-text)' }}>
+      <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 5 }}>
+        {unit === 'document' ? <>{rows.length} documents never became invoices</> : <>{rows.length} rows never became invoices</>}
+      </div>
+      <p style={{ fontSize: 12.5, margin: 0, lineHeight: 1.55 }}>
+        {unit === 'document'
+          ? 'No invoice was created from them, so no rule was ever run against them. Each document is still stored, and the list below says what stopped it: enter that invoice by hand, or replace the document and import again.'
+          : 'The importer could not read them, so no rule was ever run against them and nothing was stored. They cannot be fixed here: correct the rows in your file and import again.'}
+      </p>
+    </div>
+  )
+}
+
 export function ReviewUnreadableTab({
   ctx,
   rows,
@@ -81,20 +102,39 @@ export function ReviewUnreadableTab({
   // saying "rows", and only the compiler can see that (SW-4a, ReviewUnreadableTab.test.tsx).
   unit: ReviewUnit
 }) {
+  const [reviewErrors, setReviewErrors] = useState<Record<string, string>>({})
+  const [opening, setOpening] = useState<string | null>(null)
+  const isHold = (r: UnreadableRowAll) => unit === 'document' && r.column === HELD_FIELD
+  const heldRows = rows.filter(isHold)
+  const otherRows = rows.filter((r) => !isHold(r))
+
+  async function openReview(documentId: string) {
+    if (opening !== null) return
+    setOpening(documentId)
+    setReviewErrors((m) => ({ ...m, [documentId]: '' }))
+    try {
+      await ctx.openDocumentReview(documentId)
+    } catch (e) {
+      setReviewErrors((m) => ({ ...m, [documentId]: e instanceof Error ? e.message : 'The review could not be opened.' }))
+    } finally {
+      setOpening(null)
+    }
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Amber panel — CreateUpload.tsx:203-226's shape. Amber, not red: nothing here
-          failed a rule, so the red the compliance channel owns would mis-signal it. */}
-      <div style={{ padding: '14px 16px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', color: 'var(--status-amber-text)' }}>
-        <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 5 }}>
-          {unit === 'document' ? <>{rows.length} documents never became invoices</> : <>{rows.length} rows never became invoices</>}
+      {heldRows.length > 0 && (
+        <div
+          data-testid="unreadable-held-panel"
+          style={{ padding: '14px 16px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', color: 'var(--status-amber-text)' }}
+        >
+          <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 5 }}>Waiting for the original invoice: {heldRows.length}</div>
+          <p style={{ fontSize: 12.5, margin: 0, lineHeight: 1.55 }}>
+            These read as credit or debit notes. No note or invoice exists yet. Open each review and pick the invoice it belongs to, or import it as an invoice there.
+          </p>
         </div>
-        <p style={{ fontSize: 12.5, margin: 0, lineHeight: 1.55 }}>
-          {unit === 'document'
-            ? 'No invoice was created from them, so no rule was ever run against them. Each document is still stored, and the list below says what stopped it: enter that invoice by hand, or replace the document and import again.'
-            : 'The importer could not read them, so no rule was ever run against them and nothing was stored. They cannot be fixed here: correct the rows in your file and import again.'}
-        </p>
-      </div>
+      )}
+      <NeverBecamePanel rows={otherRows} unit={unit} />
 
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         <div className="label" style={{ display: 'grid', gridTemplateColumns: UNREADABLE_GRID, gap: 14, padding: '10px 18px', borderBottom: '1px solid var(--line-1)' }}>
@@ -139,7 +179,23 @@ export function ReviewUnreadableTab({
                 {/* Inside the "why" cell, so no new grid track (UT-5). A spreadsheet row
                     has no document to hand off, and neither has a document row whose
                     upload never reached storage — both render no control at all. */}
-                {unit === 'document' && documentId !== null && (
+                {unit === 'document' && documentId !== null && isHold(r) && (
+                  <span style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
+                    <button
+                      data-testid="unreadable-note-review"
+                      onClick={() => void openReview(documentId)}
+                      disabled={opening !== null}
+                      className="v2-btn v2-btn-ghost pf-btn"
+                      style={{ height: 30, padding: '0 12px', fontSize: 12.5, flex: 'none' }}
+                    >
+                      Open its review
+                    </button>
+                    {(reviewErrors[documentId] ?? '') !== '' && (
+                      <span style={{ fontSize: 12, color: 'var(--fg-3)', flex: 'none' }}>{reviewErrors[documentId]}</span>
+                    )}
+                  </span>
+                )}
+                {unit === 'document' && documentId !== null && !isHold(r) && (
                   <span style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
                     {/* Disabled-with-reason, never hidden — ReviewAlreadyImportedTab.tsx's
                         four layers, and CreateFlow.tsx's DocumentFailureRow offers the

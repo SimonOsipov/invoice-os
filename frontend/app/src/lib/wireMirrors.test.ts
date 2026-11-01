@@ -319,6 +319,37 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function supplyInvoiceNumber(',
     floor: 3,
   },
+  // The note picker's read and the document import body (CRDDBTNOTE-05).
+  {
+    ts: 'NoteOriginals',
+    go: 'NoteOriginals',
+    goPath: 'internal/importer/document_note.go',
+    goAnchor: 'func (s *Store) NoteOriginals(',
+    spaPath: 'frontend/app/src/lib/importApi.ts',
+    spaAnchor: 'export function getNoteOriginals(',
+    e2eAnchor: 'export function getNoteOriginals(',
+    floor: 3,
+  },
+  {
+    ts: 'NoteOriginalRow',
+    go: 'NoteOriginalRow',
+    goPath: 'internal/importer/document_note.go',
+    goAnchor: 'func (s *Store) NoteOriginals(',
+    spaPath: 'frontend/app/src/lib/importApi.ts',
+    spaAnchor: 'export function getNoteOriginals(',
+    e2eAnchor: 'export function getNoteOriginals(',
+    floor: 7,
+  },
+  {
+    ts: 'DocumentImportRequest',
+    go: 'createDocumentRequest',
+    goPath: 'internal/importer/handlers_document.go',
+    goAnchor: 'func CreateDocumentHandler(',
+    spaPath: 'frontend/app/src/lib/importApi.ts',
+    spaAnchor: 'export async function importDocument(',
+    e2eAnchor: 'export function postDocumentImport(',
+    floor: 5,
+  },
   // The saved-mapping lookup (internal/importer/saved_mapping.go, handlers.go).
   {
     ts: 'SavedMapping',
@@ -526,6 +557,26 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     }
   })
 
+  it('wire mirror: NoteOriginals and the document import keys on every leg', () => {
+    const e2e = repoFile(E2E_CLIENT)
+    const spa = repoFile('frontend/app/src/lib/importApi.ts')
+    const wants = [
+      ['NoteOriginals', ['entity_id', 'filed_invoice_id', 'originals']],
+      ['DocumentImportRequest', ['document_type', 'original_invoice_id', 'invoice_number']],
+    ] as const
+    for (const [ts, keys] of wants) {
+      for (const [leg, source] of [['SPA', spa], ['e2e', e2e]] as const) {
+        expect(tsInterfaceKeys(source, ts), `${leg} ${ts}`).toEqual(expect.arrayContaining([...keys]))
+      }
+    }
+    expect(goStructKeys(repoFile('internal/importer/handlers_document.go'), 'createDocumentRequest')).toEqual(
+      expect.arrayContaining(['document_type', 'original_invoice_id', 'invoice_number']),
+    )
+    expect(goStructKeys(repoFile('internal/importer/document_note.go'), 'NoteOriginals')).toEqual(
+      expect.arrayContaining(['entity_id', 'filed_invoice_id', 'originals']),
+    )
+  })
+
   it('wireMirrors_plantedPositiveTheComparatorCanReportARealMismatch', () => {
     // Synthetic, in-memory only: 'b' is present on the Go side and missing on the TS side.
     const goFixture = 'type Fixture struct {\n\tA string `json:"a"`\n\tB string `json:"b"`\n}'
@@ -569,6 +620,9 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'CarriedReading',
       'CarriedLine',
       'SupplyNumberRequest',
+      'NoteOriginals',
+      'NoteOriginalRow',
+      'DocumentImportRequest',
       'SavedMapping',
       'SavedMappingResponse',
       'SuggestMappingRequest',

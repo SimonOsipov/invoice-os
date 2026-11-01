@@ -408,13 +408,52 @@ export function getExtractions(authedFetch: AuthedFetch, base: string, documentI
 export async function importDocument(
   authedFetch: AuthedFetch,
   base: string,
-  req: { entityId: string; documentId: string },
+  req: {
+    entityId: string
+    documentId: string
+    documentType?: DocumentImportRequest['document_type']
+    originalInvoiceId?: string
+    invoiceNumber?: string
+  },
 ): Promise<ImportReport> {
-  const raw = await authedFetch<unknown>(`${base}/api/invoice/v1/imports/document`, {
-    method: 'POST',
-    body: { entity_id: req.entityId, document_id: req.documentId },
-  })
+  const body: DocumentImportRequest = { entity_id: req.entityId, document_id: req.documentId }
+  if (req.documentType !== undefined) body.document_type = req.documentType
+  if (req.originalInvoiceId !== undefined) body.original_invoice_id = req.originalInvoiceId
+  if (req.invoiceNumber !== undefined) body.invoice_number = req.invoiceNumber
+  const raw = await authedFetch<unknown>(`${base}/api/invoice/v1/imports/document`, { method: 'POST', body })
   return normalizeReport(raw)
+}
+
+// The POST /v1/imports/document body (createDocumentRequest). The last three keys are sent only for a note or an override.
+export interface DocumentImportRequest {
+  entity_id: string
+  document_id: string
+  document_type?: 'credit_note' | 'debit_note' | 'commercial_invoice'
+  original_invoice_id?: string
+  invoice_number?: string
+}
+
+// GET /v1/imports/document/note-originals (internal/importer/document_note.go).
+export interface NoteOriginalRow {
+  id: string
+  invoice_number: string
+  issue_date: string | null
+  currency: string | null
+  total: string | null
+  buyer_name: string | null
+  note_count: number
+}
+
+export interface NoteOriginals {
+  entity_id: string
+  filed_invoice_id: string | null
+  originals: NoteOriginalRow[]
+}
+
+export function getNoteOriginals(authedFetch: AuthedFetch, base: string, documentId: string): Promise<NoteOriginals> {
+  return authedFetch<NoteOriginals>(
+    `${base}/api/invoice/v1/imports/document/note-originals?document_id=${encodeURIComponent(documentId)}`,
+  )
 }
 
 // GET /v1/imports/document/reading and POST /v1/imports/document/invoice, key for key

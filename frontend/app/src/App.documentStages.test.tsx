@@ -757,6 +757,53 @@ describe('CRDDBTNOTE-05-06: a held note', () => {
     expect(requireCtx().view).toBe('extraction')
   })
 
+  it('a document with no extraction shows its message in the row', async () => {
+    const batch = (id: string, documentId: string, filename: string, errors: unknown[]) => ({
+      ...importReply(id),
+      document_id: documentId,
+      filename,
+      rows_valid: 0,
+      rows_invalid: errors.length,
+      ready_invoices: 0,
+      errors,
+    })
+    const hold = { field: 'original_invoice_id', message: HOLD_SENTENCE }
+    const noNumber = { field: 'invoice_number', message: 'No invoice number was found.' }
+    const jobsByDocument: Record<string, unknown[]> = { [DOC_A]: [extractionJob(JOB_A, DOC_A)], [DOC_B]: [extractionJob(JOB_B, DOC_B)] }
+    await renderApp({
+      jobsByDocument,
+      importReplies: [batch(BATCH_A, DOC_A, 'note.pdf', [hold]), batch(BATCH_B, DOC_B, 'other.pdf', [noNumber])],
+      batchById: {
+        [BATCH_A]: () => batch(BATCH_A, DOC_A, 'note.pdf', [hold]),
+        [BATCH_B]: () => batch(BATCH_B, DOC_B, 'other.pdf', [noNumber]),
+      },
+    })
+    await act(async () => {
+      requireCtx().openCreate()
+    })
+    await waitFor(() => expect(requireCtx().entityId).toBe(ENTITY_ID))
+    await act(async () => {
+      requireCtx().addPickedFiles([
+        new File(['%PDF-1.4 a'], 'note.pdf', { type: 'application/pdf' }),
+        new File(['%PDF-1.4 b'], 'other.pdf', { type: 'application/pdf' }),
+      ])
+    })
+    act(() => {
+      requireCtx().startDocumentRun()
+    })
+    act(() => {
+      FakeXhr.instances[0].respond(201, uploadReply(DOC_A))
+      FakeXhr.instances[1].respond(201, uploadReply(DOC_B))
+    })
+    fireEvent.click(await screen.findByRole('button', { name: /Quarantined documents \(2\)/ }))
+    const rows = await screen.findAllByTestId('unreadable-row')
+    expect(rows).toHaveLength(2)
+    delete jobsByDocument[DOC_A]
+    fireEvent.click(screen.getByTestId('unreadable-note-review'))
+    await waitFor(() => expect(rows[0].textContent).toContain('This document has no extraction to open.'))
+    expect(window.location.pathname).not.toContain('/extraction/')
+  })
+
   it('Back from a held review returns to its run', async () => {
     const batchReads: string[] = []
     let heldDocumentFiled = false

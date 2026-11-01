@@ -464,6 +464,22 @@ describe('CRDDBTNOTE-05-06: a hold row', () => {
     expect((byTestId(rows[0], 'unreadable-note-review')[0] as HTMLButtonElement).disabled).toBe(false)
   })
 
+  it('a second hold row stays disabled while one lookup is in flight', async () => {
+    let settle: () => void = () => {}
+    const openDocumentReview = vi.fn().mockReturnValue(new Promise<void>((res) => { settle = res }))
+    const second: UnreadableRowAll = { ...HOLD_ROW, file: 'note2.pdf', documentId: DOC_B }
+    const { container } = renderTab([HOLD_ROW, second], 'document', { openDocumentReview })
+    const buttons = byTestId(container, 'unreadable-note-review') as HTMLButtonElement[]
+    expect(buttons).toHaveLength(2)
+    fireEvent.click(buttons[0])
+    await waitFor(() => expect(buttons[1].disabled).toBe(true))
+    expect(buttons[0].disabled).toBe(true)
+    fireEvent.click(buttons[1])
+    expect(openDocumentReview).toHaveBeenCalledExactlyOnceWith(DOC_A)
+    settle()
+    await waitFor(() => expect(buttons[1].disabled).toBe(false))
+  })
+
   it('the hold rows have their own panel', () => {
     const both = renderTab([HOLD_ROW, NO_NUMBER_ROW, NO_NUMBER_ROW_2], 'document')
     const panel = byTestId(both.container, 'unreadable-held-panel')

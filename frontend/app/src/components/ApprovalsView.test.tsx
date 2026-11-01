@@ -1940,4 +1940,39 @@ describe('CRDDBTNOTE-04-04: the queue shows the document type and the signed amo
     const rows = await renderRows([approvalRow({ id: 't-1', invoice_number: number })])
     expect(within(rows[0]).getByText(number).getAttribute('title')).toBe(number)
   })
+
+  it('approvalsBuyer_titleCarriesTheWholeName', async () => {
+    const name = 'Fixture Buyer Holdings Limited'
+    const rows = await renderRows([
+      approvalRow({ id: 'y-1', invoice_number: 'INV-Y1', buyer_name: name }),
+      approvalRow({ id: 'y-2', invoice_number: 'INV-Y2', buyer_name: null }),
+    ])
+    const [named, unnamed] = rows.map((r) => r.querySelector('[data-testid="approval-buyer-cell"]'))
+    expect(named?.getAttribute('title')).toBe(name)
+    expect(unnamed?.hasAttribute('title')).toBe(false)
+  })
+})
+
+describe('the Approvals grid keeps the buyer track', () => {
+  it('approvalsGrid_headAndRowsShareTheBuyerFloorTrack', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    mockFetchSequence([
+      listResponse(
+        [
+          approvalRow({ id: 'g-1', invoice_number: 'INV-G' }),
+          approvalRow({ id: 'g-2', invoice_number: 'CN-G', document_type: 'credit_note' }),
+          approvalRow({ id: 'g-3', invoice_number: 'DN-G', document_type: 'debit_note', can_approve: false, approve_blocked_reason: reason, approval: null }),
+        ],
+        { limit: 50, offset: 0, total: 3 },
+      ),
+    ])
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findAllByTestId('approval-row')
+
+    const tracks = 'grid-template-columns: 24px minmax(110px, 210px) minmax(60px, 1fr) 130px 90px 180px 110px'
+    expect(screen.getByTestId('approvals-list').querySelector('.pf-list-head')?.getAttribute('style')).toContain(tracks)
+    const rows = screen.getAllByTestId('approval-row')
+    expect(rows).toHaveLength(3)
+    for (const r of rows) expect(r.getAttribute('style')).toContain(tracks)
+  })
 })

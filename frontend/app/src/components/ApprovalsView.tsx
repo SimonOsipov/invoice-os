@@ -55,11 +55,9 @@ import { MarkerPill } from './InvoicesList'
 import { Pager } from './Pager'
 import { SEVERITY_TONE } from './RulePills'
 
-// Owed topology assertion: A07-5/A07-6 (APPR-12-07, assertFillsColumn over WIDE_WIDTHS)
-// -- kept as ONE shared const across head and rows (InvoicesList.tsx:69's shape), not
-// ClientsView.tsx's two-literal shape. The leading checkbox track is InvoicesList's 24px,
-// this grid's own shape, not ReviewRow's 26px.
-const APPROVALS_GRID_COLUMNS = '24px minmax(140px, 210px) 1fr 130px 90px 180px 110px'
+// One shared const for head and rows. The number track is a minmax that grows before a 1fr,
+// so the buyer track keeps a 60px floor.
+const APPROVALS_GRID_COLUMNS = '24px minmax(110px, 210px) minmax(60px, 1fr) 130px 90px 180px 110px'
 
 const CHECKBOX_STYLE = { width: 15, height: 15, accentColor: 'var(--action)', margin: 0 } as const
 
@@ -441,7 +439,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                     )}
                     {reason != null && <BlockedReason id={reasonId} reason={reason} />}
                   </span>
-                  <span data-testid="approval-buyer-cell" style={{ fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name}</span>
+                  <span data-testid="approval-buyer-cell" title={r.buyer_name ?? undefined} style={{ fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name}</span>
                   <span className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(signedAmount(r, r.total)) : '—'}</span>
                   <span className="mono" style={{ fontSize: 12, color: 'var(--fg-2)' }}>{av.stepLabel}</span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>

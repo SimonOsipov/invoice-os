@@ -138,11 +138,11 @@ const centreY = (r: Rect): number => r.y + r.height / 2
 type Read = { problems: string[]; rects: Record<string, unknown> }
 
 // Reads at every wide width until `read` reports no problem; the entry viewport is restored.
-async function atWidths(page: Page, label: string, read: () => Promise<Read>): Promise<unknown[]> {
+async function atWidths(page: Page, label: string, read: () => Promise<Read>, widths: readonly number[] = WIDE_WIDTHS): Promise<unknown[]> {
   const entry = page.viewportSize()
   const out: unknown[] = []
   try {
-    for (const width of WIDE_WIDTHS) {
+    for (const width of widths) {
       await page.setViewportSize({ width, height: 1080 })
       let rects: unknown
       await expect
@@ -1007,10 +1007,11 @@ test('AP-01 approvals queue: heading, card, bulk bar, pager relations', async ({
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-// No deployed route creates a note before CRDDBTNOTE-02 merges, so page.route turns the first queue row into one.
-test("(fixture check) AP: a note's type badge stays inside the approvals number cell", async ({ page }) => {
+// Fixture: page.route shapes a queue holding a credit note and a blocked debit note.
+test("(fixture check) AP: a note's type badge stays inside the approvals number cell", async ({ page }, testInfo) => {
   test.setTimeout(180_000)
   const errors = collectErrors(page)
+  const buyerName = 'Fixture Buyer Holdings Limited'
   await stubGet(page, isQueue, {
     mode: 'transform',
     source: (url) => {
@@ -1018,45 +1019,110 @@ test("(fixture check) AP: a note's type badge stays inside the approvals number 
       u.searchParams.delete('awaiting_approval')
       return u
     },
-    transform: (body) => ({
-      ...body,
-      invoices: body.invoices.map((r: object, i: number) => (i === 0 ? { ...r, document_type: 'credit_note', invoice_number: 'CN-INV-2026-0001-1', can_approve: true, approve_blocked_reason: null } : r)),
-    }),
+    transform: (body) => {
+      // Fixture: pad the queue to 3 rows so the 1180px buyer-width guard reads more than the two note rows.
+      const invoices: Array<Record<string, unknown>> = [...body.invoices]
+      for (let n = 1; invoices.length > 0 && invoices.length < 3; n++) {
+        invoices.push({ ...invoices[0], id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`, invoice_number: `INV-PAD-${n}`, buyer_name: `Pad Buyer ${n}` })
+      }
+      return {
+        ...body,
+        invoices: invoices.map((r, i) => {
+          if (i === 0) return { ...r, document_type: 'credit_note', invoice_number: 'CN-INV-2026-0001-1', buyer_name: buyerName, can_approve: true, approve_blocked_reason: null }
+          // reason string: handlers.go approve gate (wantApproveStatusReason)
+          if (i === 1) return { ...r, document_type: 'debit_note', invoice_number: 'DN-INV-2026-0001-2', buyer_name: buyerName, can_approve: false, approve_blocked_reason: 'Only a validated invoice can be approved or rejected.' }
+          return r
+        }),
+      }
+    },
   })
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await openNav(page, navButton(page, /^Approvals/))
-  await expectVisibleRows(page.getByTestId('approval-row'), 'the approvals queue is served from the firm register page (D-14), which must hold at least one invoice on the PR environment')
-  const row = page.getByTestId('approval-row').filter({ hasText: 'CN-INV-2026-0001-1' })
-  const badge = row.getByTestId('approval-type-badge')
-  const cell = row.getByTestId('approval-number-cell')
-  const buyer = row.getByTestId('approval-buyer-cell')
-  await expect(badge).toHaveText('CREDIT')
-
-  const measured = await atWidths(page, 'approvals note badge', async () => {
-    await settleAnimations(cell, badge)
-    const [b, c, y] = await Promise.all([badge.boundingBox(), cell.boundingBox(), buyer.boundingBox()])
-    if (!b || !c || !y) throw new Error('an element has no box')
-    return { problems: [...within(c, b, 'badge in the number cell'), ...apart(b, y, 'badge vs buyer cell')], rects: { b, c, y } }
+  const rows = page.getByTestId('approval-row')
+  await expectVisibleRows(rows, 'the approvals queue is served from the firm register page (D-14), which must hold at least one invoice on the PR environment')
+  expect(await rows.count(), 'the fixture pads the queue to at least 3 rows').toBeGreaterThanOrEqual(3)
+  const card = page.getByTestId('approvals-list')
+  const head = card.locator('.pf-list-head')
+  const credit = rows.filter({ hasText: 'CN-INV-2026-0001-1' })
+  const debit = rows.filter({ hasText: 'DN-INV-2026-0001-2' })
+  const parts = (row: Locator) => ({
+    badge: row.getByTestId('approval-type-badge'),
+    cell: row.getByTestId('approval-number-cell'),
+    buyer: row.getByTestId('approval-buyer-cell'),
   })
-  expect(measured.length, 'the sweep measured every width').toBe(WIDE_WIDTHS.length)
+  const c = parts(credit)
+  const d = parts(debit)
+  const icon = debit.getByTestId('approval-blocked-icon')
+  const dNumber = d.cell.locator(':scope > span').first()
+  const cNumber = c.cell.locator(':scope > span').first()
+  await expect(c.buyer).toHaveAttribute('title', buyerName)
+  await expect(d.buyer).toHaveAttribute('title', buyerName)
+  await expect(c.badge).toHaveText('CREDIT')
+  await expect(d.badge).toBeVisible()
 
-  // At 1180px the number track shrinks to its floor: the last cell stays inside the card.
-  const entry = page.viewportSize()
-  try {
-    await page.setViewportSize({ width: 1180, height: 1080 })
-    const card = page.getByTestId('approvals-list')
-    const lastCell = row.locator(':scope > *').last()
-    await expect
-      .poll(async () => {
-        await settleAnimations(cell, badge)
-        const [k, l, c, b] = await Promise.all([card.boundingBox(), lastCell.boundingBox(), cell.boundingBox(), badge.boundingBox()])
-        if (!k || !l || !c || !b) return 'an element has no box'
-        return [...within(k, l, 'last cell in the card'), ...within(c, b, 'badge in the number cell')].join('; ') || 'ok'
-      }, { message: 'approvals note row at 1180px', timeout: 10_000 })
-      .toBe('ok')
-  } finally {
-    if (entry) await page.setViewportSize(entry)
+  const box = async (loc: Locator, what: string): Promise<Rect> => {
+    const r = await loc.boundingBox()
+    if (!r) throw new Error(`${what} has no box`)
+    return r
   }
+  const childBoxes = async (parent: Locator, what: string): Promise<Rect[]> => {
+    const kids = await parent.locator(':scope > *').all()
+    if (kids.length !== 7) throw new Error(`${what} has ${kids.length} children, want 7 (APPROVALS_GRID_COLUMNS tracks)`)
+    return Promise.all(kids.map((k, i) => box(k, `${what} child ${i}`)))
+  }
+
+  const measured = await atWidths(
+    page,
+    'approvals note badge',
+    async () => {
+      await settleAnimations(c.cell, c.badge, d.cell, d.badge, icon)
+      const k = await box(card, 'approvals-list')
+      const problems: string[] = []
+      const [headKids, creditKids, debitKids] = await Promise.all([childBoxes(head, 'head'), childBoxes(credit, 'credit row'), childBoxes(debit, 'debit row')])
+      for (const [what, list] of [['head', headKids], ['credit row', creditKids], ['debit row', debitKids]] as const) {
+        list.forEach((r, i) => problems.push(...within(k, r, `${what} child ${i} in the card`)))
+      }
+      const [cb, cc, cy, db, dc, dy, di, dn, cn] = await Promise.all([
+        box(c.badge, 'credit badge'), box(c.cell, 'credit number cell'), box(c.buyer, 'credit buyer cell'),
+        box(d.badge, 'debit badge'), box(d.cell, 'debit number cell'), box(d.buyer, 'debit buyer cell'),
+        box(icon, 'blocked icon'), box(dNumber, 'debit number'), box(cNumber, 'credit number'),
+      ])
+      problems.push(
+        ...within(cc, cb, 'credit badge in the number cell'),
+        ...apart(cb, cy, 'credit badge vs buyer cell'),
+        ...within(dc, db, 'debit badge in the number cell'),
+        ...within(dc, di, 'blocked icon in the number cell'),
+        ...apart(db, di, 'debit badge vs blocked icon'),
+        ...apart(db, dy, 'debit badge vs buyer cell'),
+        ...apart(di, dy, 'blocked icon vs buyer cell'),
+        ...within(dc, dn, 'debit number in the number cell'),
+        ...leftOf(dn, db, 'debit number vs badge'),
+        ...leftOf(dn, di, 'debit number vs blocked icon'),
+        ...(dn.width > 0 ? [] : ['debit number has no width']),
+        ...(cn.width > 0 ? [] : ['credit number has no width']),
+      )
+      const rects: Record<string, unknown> = { k, cb, cc, cy, db, dc, dy, di, dn }
+      if (page.viewportSize()?.width === 1180) {
+        const buyerWidths: number[] = []
+        for (const row of await rows.all()) {
+          const w = (await box(row.getByTestId('approval-buyer-cell'), 'approval-buyer-cell')).width
+          buyerWidths.push(w)
+          if (w < 50) problems.push(`a buyer cell is ${w}px wide, under 50px`)
+        }
+        for (const [what, loc] of [['credit', c.buyer], ['debit', d.buyer]] as const) {
+          if (!((await loc.textContent()) ?? '').trim()) problems.push(`${what} buyer cell has no text`)
+        }
+        rects.buyerWidths = buyerWidths
+      }
+      return { problems, rects }
+    },
+    [...WIDE_WIDTHS, 1180],
+  )
+  expect(measured.length, 'the sweep measured every width and 1180').toBe(WIDE_WIDTHS.length + 1)
+
+  await expect(c.cell.locator(':scope > span').first(), 'the credit number title is the whole number').toHaveAttribute('title', 'CN-INV-2026-0001-1')
+  await expect(dNumber, 'the debit number title is the whole number').toHaveAttribute('title', 'DN-INV-2026-0001-2')
+  await attachJson(testInfo, 'ap-08-buyer-measurements', measured)
 
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })

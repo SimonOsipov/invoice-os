@@ -68,6 +68,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 	"github.com/SimonOsipov/invoice-os/internal/ubl"
 )
 
@@ -626,9 +627,9 @@ func TestGetHandler_NoIdentity401(t *testing.T) {
 // 200 with the {"invoices":[...],"pagination":{...}} envelope.
 func TestListHandler_200Envelope(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
-	invID := uuid.NewString()
+	invID, origID := uuid.NewString(), uuid.NewString()
 	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
-		return []Invoice{{ID: invID, Status: StatusDraft}}, 1, nil
+		return []Invoice{{ID: invID, Status: StatusDraft, DocumentType: submission.CreditNote, OriginalInvoiceID: &origID}}, 1, nil
 	}
 	rec, resp := doInvoiceList(t, list, &id, "")
 
@@ -637,6 +638,9 @@ func TestListHandler_200Envelope(t *testing.T) {
 	}
 	if len(resp.Invoices) != 1 || resp.Invoices[0].ID != invID {
 		t.Errorf("invoices = %+v, want one invoice with id %q", resp.Invoices, invID)
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"document_type":"credit_note"`)) || !bytes.Contains(rec.Body.Bytes(), []byte(`"original_invoice_id":"`+origID+`"`)) {
+		t.Errorf("envelope body lacks the type keys: %s", rec.Body.String())
 	}
 	if resp.Pagination.Total != 1 {
 		t.Errorf("pagination.total = %d, want 1", resp.Pagination.Total)
@@ -2470,6 +2474,7 @@ func TestValidateHandler_TopLevelKeysNotNested(t *testing.T) {
 		"supplier_email", "supplier_telephone", "supplier_street", "supplier_city", "supplier_postal_zone", "supplier_country",
 		"supplier_state", "supplier_lga", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
 		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
+		"document_type", "original_invoice_id",
 	}
 	for _, k := range wantKeys {
 		if _, ok := raw[k]; !ok {
@@ -2542,6 +2547,33 @@ func TestGetHandler_RuleSetVersionMarshalsNull(t *testing.T) {
 		t.Errorf("body = %s, want it to contain the literal \"rule_set_version\":null (explicit null, not "+
 			"omitted, not a false 0) -- GetHandler must wrap the result in a getResponse sibling like "+
 			"validateResponse", body)
+	}
+}
+
+func TestGetHandler_CarriesDocumentTypeAndOriginalInvoiceID(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	originalID := uuid.NewString()
+	for _, c := range []struct {
+		name string
+		inv  Invoice
+		want string
+	}{
+		{"commercial invoice", Invoice{ID: invoiceID, Status: StatusDraft, DocumentType: submission.CommercialInvoice},
+			`"document_type":"commercial_invoice","original_invoice_id":null`},
+		{"credit note", Invoice{ID: invoiceID, Status: StatusDraft, DocumentType: submission.CreditNote, OriginalInvoiceID: &originalID},
+			`"document_type":"credit_note","original_invoice_id":"` + originalID + `"`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			get := func(ctx context.Context, gotID string) (Invoice, error) { return c.inv, nil }
+			rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), c.want) {
+				t.Errorf("body does not contain %s", c.want)
+			}
+		})
 	}
 }
 
@@ -3106,6 +3138,60 @@ func TestStatusForErr_NumberSentences(t *testing.T) {
 	}
 	if status, msg := statusForErr(ErrDuplicateNumber); status != http.StatusConflict || msg != "duplicate invoice number" {
 		t.Errorf("statusForErr(ErrDuplicateNumber) = (%d, %q), want (409, %q) -- the store-level duplicate sentence, unchanged (PAR-04)", status, msg, "duplicate invoice number")
+	}
+}
+
+func TestStatusForErr_NoteSentinels(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		status int
+		msg    string
+	}{
+		{ErrOriginalNotFound, http.StatusNotFound, "not found"},
+		{ErrOriginalIsANote, http.StatusConflict, "a note cannot be the original of a note"},
+		{ErrOriginalOtherEntity, http.StatusConflict, "the original belongs to another client"},
+		{ErrOriginalNotIssued, http.StatusConflict, "a note needs an accepted invoice with an IRN"},
+	} {
+		if status, msg := statusForErr(fmt.Errorf("wrapped: %w", tc.err)); status != tc.status || msg != tc.msg {
+			t.Errorf("statusForErr(%v) = (%d, %q), want (%d, %q)", tc.err, status, msg, tc.status, tc.msg)
+		}
+	}
+}
+
+func TestGetHandler_CarriesCanIssueNote(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	irn := "IRN-1"
+	for _, tc := range []struct {
+		name       string
+		inv        Invoice
+		wantFlag   string
+		wantReason bool
+	}{
+		{"accepted with IRN", Invoice{Status: StatusAccepted, IRN: &irn}, `"can_issue_note":true`, false},
+		{"draft", Invoice{Status: StatusDraft}, `"can_issue_note":false`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inv := tc.inv
+			get := func(ctx context.Context, gotID string) (Invoice, error) { return inv, nil }
+			rec, _ := doInvoiceGet(t, get, &id, uuid.NewString())
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tc.wantFlag) {
+				t.Errorf("body lacks %s (body=%s)", tc.wantFlag, rec.Body.String())
+			}
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+				t.Fatal(err)
+			}
+			reason, ok := raw["issue_note_blocked_reason"]
+			if !ok {
+				t.Fatalf("issue_note_blocked_reason omitted (body=%s)", rec.Body.String())
+			}
+			if (string(reason) != "null") != tc.wantReason {
+				t.Errorf("issue_note_blocked_reason = %s, want non-null=%v", reason, tc.wantReason)
+			}
+		})
 	}
 }
 
@@ -4137,6 +4223,7 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 		"supplier_email", "supplier_telephone", "supplier_street", "supplier_city", "supplier_postal_zone", "supplier_country",
 		"supplier_state", "supplier_lga", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
 		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
+		"document_type", "original_invoice_id",
 		"tax_subtotals",
 		"rule_set_version", "qr_png_base64",
 	}
@@ -4146,10 +4233,10 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 	// APPR-08-06 (task-504): can_approve/approve_blocked_reason/can_reject/
 	// reject_blocked_reason join the same additive set, 37 wire keys -> 41.
 	// EXTR-27-01: can_correct_invoice_number/invoice_number_blocked_reason join
-	// the same way, 41 -> 43.
+	// the same way, 41 -> 43. can_issue_note/issue_note_blocked_reason: 43 -> 45.
 	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason", "can_view_ubl", "ubl_blocked_reason", "can_resolve_outside", "resolve_outside_blocked_reason",
 		"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason",
-		"can_correct_invoice_number", "invoice_number_blocked_reason", "verdict_stale"}
+		"can_correct_invoice_number", "invoice_number_blocked_reason", "can_issue_note", "issue_note_blocked_reason", "verdict_stale"}
 
 	tests := []struct {
 		name              string
@@ -4299,6 +4386,7 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		"supplier_email", "supplier_telephone", "supplier_street", "supplier_city", "supplier_postal_zone", "supplier_country",
 		"supplier_state", "supplier_lga", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
 		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
+		"document_type", "original_invoice_id",
 		"line_items",
 		// getResponse's tax_subtotals sits directly after the Invoice keys.
 		"tax_subtotals",
@@ -4317,10 +4405,10 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		// so THESE now land last of all -- one approvalGate call feeds both pairs,
 		// and the approve pair is declared before the reject pair.
 		"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason",
-		// EXTR-27-01: appended after reject_blocked_reason, so these now land
-		// last of all.
+		// EXTR-27-01: appended after reject_blocked_reason.
 		"can_correct_invoice_number", "invoice_number_blocked_reason",
-		// ENGI-17: appended after invoice_number_blocked_reason.
+		"can_issue_note", "issue_note_blocked_reason",
+		// ENGI-17: appended after issue_note_blocked_reason.
 		"verdict_stale",
 	}
 	if !reflect.DeepEqual(got, want2) {

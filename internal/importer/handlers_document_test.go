@@ -38,6 +38,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -83,6 +84,13 @@ func (s *docImpSpy) fn() func(ctx context.Context, entityID, documentID string) 
 	}
 }
 
+// docImportOf adapts an (entityID, documentID) func to the handler's DocumentImport func.
+func docImportOf(f func(ctx context.Context, entityID, documentID string) (BatchResult, error)) func(ctx context.Context, in DocumentImport) (BatchResult, error) {
+	return func(ctx context.Context, in DocumentImport) (BatchResult, error) {
+		return f(ctx, in.EntityID, in.DocumentID)
+	}
+}
+
 // docJSONBody renders the POST /v1/imports/document JSON body.
 func docJSONBody(entityID, documentID string) string {
 	return fmt.Sprintf(`{"entity_id":%q,"document_id":%q}`, entityID, documentID)
@@ -97,7 +105,7 @@ func doImportDocumentPost(t *testing.T, imp func(ctx context.Context, entityID, 
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	CreateDocumentHandler(imp, nil).ServeHTTP(rec, r)
+	CreateDocumentHandler(docImportOf(imp), nil).ServeHTTP(rec, r)
 
 	raw := rec.Body.Bytes()
 	var resp importDocumentBody
@@ -326,7 +334,7 @@ func TestImportRoutes_DocumentAndSpreadsheetDoNotCollide(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/imports", CreateHandler(sheetImp, open, noSave, alwaysVisible, nil))
-	mux.HandleFunc("POST /v1/imports/document", CreateDocumentHandler(docSpy.fn(), nil))
+	mux.HandleFunc("POST /v1/imports/document", CreateDocumentHandler(docImportOf(docSpy.fn()), nil))
 
 	id := testIdentity()
 	entityID, documentID := uuid.NewString(), uuid.NewString()
@@ -379,7 +387,7 @@ func TestCreateDocumentHandler_EndToEndOverRealServiceWritesReadableInvoice(t *t
 
 	svc := newTestService(app)
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/imports/document", CreateDocumentHandler(svc.ImportDocument, nil))
+	mux.HandleFunc("POST /v1/imports/document", CreateDocumentHandler(svc.ImportDocumentFor, nil))
 
 	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
 	r := httptest.NewRequest("POST", "/v1/imports/document", strings.NewReader(docJSONBody(entityID, documentID)))
@@ -747,7 +755,7 @@ func TestImportRoutes_ReadingAndSupplyDoNotCollide(t *testing.T) {
 				t.Fatalf("main.go's import patterns %v conflict on one mux: %v", patterns, r)
 			}
 		}()
-		mux.HandleFunc(patterns["CreateDocumentHandler"], CreateDocumentHandler(docSpy.fn(), nil))
+		mux.HandleFunc(patterns["CreateDocumentHandler"], CreateDocumentHandler(docImportOf(docSpy.fn()), nil))
 		mux.HandleFunc(patterns["GetHandler"], GetHandler(getFn, nil))
 		mux.HandleFunc(patterns["ReadingHandler"], ReadingHandler(readSpy.fn(), nil))
 		mux.HandleFunc(patterns["SupplyNumberHandler"], SupplyNumberHandler(invoiceSpy.fn(), nil))
@@ -853,5 +861,272 @@ func TestSupplyNumberHandler_InvisibleEntityIs404(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound || strings.TrimSpace(string(raw)) != `{"error":"not found"}` {
 		t.Errorf("answer = %d %s, want 404 {\"error\":\"not found\"}", rec.Code, raw)
+	}
+}
+
+// docPostStub drives CreateDocumentHandler with a DocumentImport stub and returns what it saw.
+func docPostStub(t *testing.T, body string, res BatchResult, err error) (*httptest.ResponseRecorder, []DocumentImport) {
+	t.Helper()
+	var calls []DocumentImport
+	h := CreateDocumentHandler(func(_ context.Context, in DocumentImport) (BatchResult, error) {
+		calls = append(calls, in)
+		return res, err
+	}, nil)
+	id := testIdentity()
+	r := httptest.NewRequest("POST", "/v1/imports/document", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = r.WithContext(auth.WithIdentity(r.Context(), id))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	return rec, calls
+}
+
+func TestCreateDocumentHandler_TheNoteKeysAreChecked(t *testing.T) {
+	ent, doc, orig := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	with := func(extra string) string {
+		return fmt.Sprintf(`{"entity_id":%q,"document_id":%q,%s}`, ent, doc, extra)
+	}
+	for _, tc := range []struct {
+		name string
+		body string
+		want int
+		msg  string // the clause that must answer; "" for the body cap
+	}{
+		{"unknown type", with(`"document_type":"receipt"`), 400, "document_type must be"},
+		{"bad uuid", with(`"document_type":"credit_note","original_invoice_id":"nope","invoice_number":"CN-1"`), 400, "well-formed uuid"},
+		{"id without type", with(fmt.Sprintf(`"original_invoice_id":%q`, orig)), 400, "needs a credit_note or debit_note"},
+		{"id with commercial_invoice", with(fmt.Sprintf(`"document_type":"commercial_invoice","original_invoice_id":%q`, orig)), 400, "needs a credit_note or debit_note"},
+		{"note without original", with(`"document_type":"debit_note","invoice_number":"DN-1"`), 400, "original_invoice_id is required"},
+		{"note with blank number", with(fmt.Sprintf(`"document_type":"debit_note","original_invoice_id":%q,"invoice_number":"  "`, orig)), 400, "invoice_number is required"},
+		{"oversize", docJSONBodyOversized(ent, doc), 413, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, calls := docPostStub(t, tc.body, BatchResult{}, nil)
+			if rec.Code != tc.want {
+				t.Errorf("status = %d %s, want %d", rec.Code, rec.Body.String(), tc.want)
+			}
+			if len(calls) != 0 {
+				t.Errorf("the service was called %d time(s), want 0", len(calls))
+			}
+			var m map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil || len(m) != 1 || m["error"] == nil {
+				t.Errorf("body = %s, want the key error alone", rec.Body.String())
+			} else if msg, _ := m["error"].(string); !strings.Contains(msg, tc.msg) {
+				t.Errorf("error = %q, want the clause %q", msg, tc.msg)
+			}
+		})
+	}
+}
+
+func TestCreateDocumentHandler_CommercialInvoiceReachesTheServiceAsTheOverride(t *testing.T) {
+	ent, doc := uuid.NewString(), uuid.NewString()
+	body := fmt.Sprintf(`{"entity_id":%q,"document_id":%q,"document_type":"commercial_invoice"}`, ent, doc)
+	rec, calls := docPostStub(t, body, BatchResult{Errors: []RowError{}, InvoiceViolations: []InvoiceViolations{}}, nil)
+	if rec.Code != http.StatusCreated || len(calls) != 1 {
+		t.Fatalf("status %d with %d call(s), want 201 and 1", rec.Code, len(calls))
+	}
+	if want := (DocumentImport{EntityID: ent, DocumentID: doc, DocumentType: "commercial_invoice"}); calls[0] != want {
+		t.Errorf("service saw %+v, want %+v", calls[0], want)
+	}
+}
+
+func TestCreateDocumentHandler_ABodyWithNoTypeCarriesOnlyTheTwoIDs(t *testing.T) {
+	ent, doc := uuid.NewString(), uuid.NewString()
+	rec, calls := docPostStub(t, docJSONBody(ent, doc), BatchResult{Errors: []RowError{}, InvoiceViolations: []InvoiceViolations{}}, nil)
+	if rec.Code != http.StatusCreated || len(calls) != 1 {
+		t.Fatalf("status %d with %d call(s), want 201 and 1", rec.Code, len(calls))
+	}
+	if want := (DocumentImport{EntityID: ent, DocumentID: doc}); calls[0] != want {
+		t.Errorf("service saw %+v, want %+v", calls[0], want)
+	}
+}
+
+func TestCreateDocumentHandler_AFiledDocumentIsAConflict(t *testing.T) {
+	rec, _ := docPostStub(t, docJSONBody(uuid.NewString(), uuid.NewString()), BatchResult{}, ErrDocumentAlreadyFiled)
+	var m map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if rec.Code != http.StatusConflict || len(m) != 1 || m["error"] != documentAlreadyFiledReason {
+		t.Errorf("answer = %d %s, want 409 with the sentence alone", rec.Code, rec.Body.String())
+	}
+}
+
+func noteBody(ent, doc, orig, number string) string {
+	return fmt.Sprintf(`{"entity_id":%q,"document_id":%q,"document_type":"credit_note","original_invoice_id":%q,"invoice_number":%q}`, ent, doc, orig, number)
+}
+
+func TestCreateDocumentHandler_ANoteNeedsItsOriginalAndNumber(t *testing.T) {
+	ent, doc, orig := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	for name, body := range map[string]string{
+		"no original":  fmt.Sprintf(`{"entity_id":%q,"document_id":%q,"document_type":"credit_note","invoice_number":"CN-1"}`, ent, doc),
+		"blank number": noteBody(ent, doc, orig, "   "),
+	} {
+		rec, calls := docPostStub(t, body, BatchResult{}, nil)
+		if rec.Code != http.StatusBadRequest || len(calls) != 0 {
+			t.Errorf("%s: status %d with %d service call(s), want 400 and 0", name, rec.Code, len(calls))
+		}
+	}
+
+	res := BatchResult{ID: "b-1", Status: "completed", RowsTotal: 1, RowsValid: 1, ReadyInvoices: 1, Errors: []RowError{}, InvoiceViolations: []InvoiceViolations{}}
+	rec, calls := docPostStub(t, noteBody(ent, doc, orig, "CN-1"), res, nil)
+	if rec.Code != http.StatusCreated || len(calls) != 1 {
+		t.Fatalf("a note with its original and number: status %d %s with %d call(s), want 201 and 1", rec.Code, rec.Body.String(), len(calls))
+	}
+	if want := (DocumentImport{EntityID: ent, DocumentID: doc, DocumentType: "credit_note", OriginalInvoiceID: orig, InvoiceNumber: "CN-1"}); calls[0] != want {
+		t.Errorf("service saw %+v, want %+v", calls[0], want)
+	}
+}
+
+func TestCreateDocumentHandler_NoteRefusalsMapToStatus(t *testing.T) {
+	ent, doc, orig := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+		msg  string
+	}{
+		{"original of another client", invoice.ErrOriginalOtherEntity, 409, "the original belongs to another client"},
+		{"original is a note", invoice.ErrOriginalIsANote, 409, "a note cannot be the original of a note"},
+		{"original not issued", invoice.ErrOriginalNotIssued, 409, "a note needs an accepted invoice with an IRN"},
+		{"document already filed", ErrDocumentAlreadyFiled, 409, documentAlreadyFiledReason},
+		{"number taken", invoice.ErrDuplicateNumber, 409, invoice.NumberTakenReason},
+		{"number taken, wrapped", fmt.Errorf("create note: %w", invoice.ErrDuplicateNumber), 409, invoice.NumberTakenReason},
+		{"not read as that type", ErrNoteTypeNotRead, 409, "This document was not read as that type of note."},
+		{"original absent", invoice.ErrOriginalNotFound, 404, "not found"},
+		{"original hidden", invoice.ErrNotFound, 404, "not found"},
+		{"document or entity absent", ErrNotFound, 404, "not found"},
+		{"reading is not a decimal", fmt.Errorf("%w: The total on this document reads \"abc\", which is not an amount.", ErrValidation), 400, `reads "abc"`},
+		{"workspace locked", db.ErrWorkspaceLocked, 403, db.WorkspaceLockedMessage},
+		{"the store refused a value", invoice.ErrValidation, 400, "one or more fields failed validation"},
+		{"the store refused a value, wrapped", fmt.Errorf("create note: %w", invoice.ErrValidation), 400, "one or more fields failed validation"},
+		{"operational", errors.New("boom"), 500, "internal server error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, calls := docPostStub(t, noteBody(ent, doc, orig, "CN-1"), BatchResult{}, tc.err)
+			if len(calls) != 1 {
+				t.Fatalf("service calls = %d, want 1 (status %d %s)", len(calls), rec.Code, rec.Body.String())
+			}
+			var m map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+				t.Fatalf("decode %s: %v", rec.Body.String(), err)
+			}
+			msg, _ := m["error"].(string)
+			if rec.Code != tc.want || len(m) != 1 || !strings.Contains(msg, tc.msg) || (tc.want != 400 && msg != tc.msg) {
+				t.Errorf("answer = %d %s, want %d with the key error alone carrying %q", rec.Code, rec.Body.String(), tc.want, tc.msg)
+			}
+		})
+	}
+}
+
+// noteOriginalsSpy records every call NoteOriginalsHandler's read closure receives.
+type noteOriginalsSpy struct {
+	calls []string
+	out   NoteOriginals
+	err   error
+}
+
+func (s *noteOriginalsSpy) fn() func(ctx context.Context, documentID string) (NoteOriginals, error) {
+	return func(ctx context.Context, documentID string) (NoteOriginals, error) {
+		s.calls = append(s.calls, documentID)
+		return s.out, s.err
+	}
+}
+
+func doNoteOriginalsGet(spy *noteOriginalsSpy, id *auth.Identity, rawQuery string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest("GET", "/v1/imports/document/note-originals?"+rawQuery, nil)
+	if id != nil {
+		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
+	}
+	rec := httptest.NewRecorder()
+	NoteOriginalsHandler(spy.fn(), nil).ServeHTTP(rec, r)
+	return rec
+}
+
+func TestNoteOriginalsHandler_EmptyIsAnArray(t *testing.T) {
+	id := testIdentity()
+	spy := &noteOriginalsSpy{out: NoteOriginals{EntityID: uuid.NewString()}}
+
+	rec := doNoteOriginalsGet(spy, &id, "document_id="+uuid.NewString())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("decode %s: %v", rec.Body.String(), err)
+	}
+	if got := string(m["originals"]); got != "[]" {
+		t.Errorf("originals = %s, want []", got)
+	}
+	if got := string(m["filed_invoice_id"]); got != "null" {
+		t.Errorf("filed_invoice_id = %s, want null", got)
+	}
+	if len(m) != 3 {
+		t.Errorf("keys = %d in %s, want entity_id, filed_invoice_id, originals", len(m), rec.Body.String())
+	}
+}
+
+func TestNoteOriginalsHandler_AnswersTheDesignedShape(t *testing.T) {
+	id := testIdentity()
+	doc, issued, filed := uuid.NewString(), time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), uuid.NewString()
+	spy := &noteOriginalsSpy{out: NoteOriginals{EntityID: uuid.NewString(), FiledInvoiceID: &filed, Originals: []NoteOriginalRow{
+		{ID: uuid.NewString(), InvoiceNumber: "INV-1", IssueDate: &issued, Currency: sxPtr("NGN"), Total: sxPtr("1075.00"), BuyerName: sxPtr("Honeywell Group"), NoteCount: 1},
+	}}}
+
+	rec := doNoteOriginalsGet(spy, &id, "document_id="+strings.ToUpper(doc))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	if len(spy.calls) != 1 || spy.calls[0] != doc {
+		t.Errorf("read saw %v, want the one lower-case id %s", spy.calls, doc)
+	}
+	var got struct {
+		Filed     string                       `json:"filed_invoice_id"`
+		Originals []map[string]json.RawMessage `json:"originals"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.Filed != filed || len(got.Originals) != 1 {
+		t.Fatalf("body = %s (%v), want filed_invoice_id %s and one original", rec.Body.String(), err, filed)
+	}
+	row := got.Originals[0]
+	if len(row) != 7 || string(row["issue_date"]) != `"2026-02-01T00:00:00Z"` || string(row["total"]) != `"1075.00"` || string(row["note_count"]) != "1" ||
+		string(row["buyer_name"]) != `"Honeywell Group"` || string(row["currency"]) != `"NGN"` || string(row["invoice_number"]) != `"INV-1"` {
+		t.Errorf("row = %v, want id, invoice_number, issue_date, currency, total, buyer_name, note_count as designed", row)
+	}
+}
+
+func TestNoteOriginalsHandler_MapsErrors(t *testing.T) {
+	id := testIdentity()
+	doc := uuid.NewString()
+
+	for name, err := range map[string]error{"absent": ErrNotFound, "hidden original": invoice.ErrNotFound, "wrapped": fmt.Errorf("read: %w", ErrNotFound)} {
+		spy := &noteOriginalsSpy{err: err}
+		rec := doNoteOriginalsGet(spy, &id, "document_id="+doc)
+		if rec.Code != http.StatusNotFound || strings.TrimSpace(rec.Body.String()) != `{"error":"not found"}` {
+			t.Errorf("%s: answer = %d %s, want 404 {\"error\":\"not found\"}", name, rec.Code, rec.Body.String())
+		}
+		if len(spy.calls) != 1 {
+			t.Errorf("%s: read called %d times, want 1", name, len(spy.calls))
+		}
+	}
+	if rec := doNoteOriginalsGet(&noteOriginalsSpy{err: db.ErrWorkspaceLocked}, &id, "document_id="+doc); rec.Code != http.StatusForbidden {
+		t.Errorf("workspace locked: status = %d, want 403", rec.Code)
+	}
+	if rec := doNoteOriginalsGet(&noteOriginalsSpy{err: errors.New("boom")}, &id, "document_id="+doc); rec.Code != http.StatusInternalServerError ||
+		strings.TrimSpace(rec.Body.String()) != `{"error":"internal server error"}` {
+		t.Errorf("operational: answer = %d %s, want a bare 500", rec.Code, rec.Body.String())
+	}
+
+	for name, q := range map[string]string{"missing": "", "blank": "document_id=", "malformed": "document_id=not-a-uuid"} {
+		spy := &noteOriginalsSpy{}
+		if rec := doNoteOriginalsGet(spy, &id, q); rec.Code != http.StatusBadRequest || len(spy.calls) != 0 {
+			t.Errorf("%s id: answer = %d %s with %d reads, want 400 and no read", name, rec.Code, rec.Body.String(), len(spy.calls))
+		}
+	}
+
+	spy := &noteOriginalsSpy{}
+	if rec := doNoteOriginalsGet(spy, nil, "document_id="+doc); rec.Code != http.StatusUnauthorized || len(spy.calls) != 0 {
+		t.Errorf("no identity: answer = %d with %d reads, want 401 and no read", rec.Code, len(spy.calls))
 	}
 }

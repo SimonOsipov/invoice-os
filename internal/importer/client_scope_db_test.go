@@ -237,7 +237,7 @@ func TestClientScope_DocumentRoutesAnswerOneNotFoundAndWriteNothing(t *testing.T
 	docSeedExtraction(t, f.super, f.tenant, docImp, docCleanValues("CS-RT-1"))
 	docNum := docSeedDocument(t, f.super, f.tenant)
 	docSeedExtraction(t, f.super, f.tenant, docNum, docNoNumberValues())
-	create := CreateDocumentHandler(f.svc.ImportDocument, nil)
+	create := CreateDocumentHandler(f.svc.ImportDocumentFor, nil)
 	supply := SupplyNumberHandler(f.svc.SupplyInvoiceNumber, nil)
 
 	var bodies []string
@@ -279,6 +279,75 @@ func TestClientScope_DocumentRoutesAnswerOneNotFoundAndWriteNothing(t *testing.T
 	}
 	if n := csCount(t, f.super, `SELECT count(*) FROM invoices WHERE entity_id = $1`, f.entB); n != 0 {
 		t.Errorf("invoices for B = %d, want 0", n)
+	}
+
+	// GET /v1/imports/document/note-originals: the same 404 for every document the caller cannot see.
+	seedHeld := func(tenant, entity string) string {
+		doc := docSeedDocument(t, f.super, tenant)
+		docSeedExtraction(t, f.super, tenant, doc, dnReading())
+		dtSetVerdict(t, f.super, doc, "credit note")
+		if entity != "" {
+			csLinkBatch(t, f.super, tenant, entity, doc)
+		}
+		return doc
+	}
+	originals := NoteOriginalsHandler(f.store.NoteOriginals, nil)
+	hidden := map[string]string{
+		"unknown":          uuid.NewString(),
+		"another tenant's": seedHeld(other, foreign),
+		"client B's":       seedHeld(f.tenant, f.entB),
+		"no batch":         seedHeld(f.tenant, ""),
+	}
+	own := seedHeld(f.tenant, f.entA)
+	batches := csCount(t, f.super, `SELECT count(*) FROM import_batches`)
+	reads := csDocumentReads(t, f.super, f.tenant)
+	for name, doc := range hidden {
+		rec := csGet(originals, f.limitedID, "GET", "/v1/imports/document/note-originals?document_id="+doc, "")
+		if rec.Code != http.StatusNotFound || strings.TrimSpace(rec.Body.String()) != `{"error":"not found"}` {
+			t.Errorf("GET note-originals (%s): answer = %d %s, want 404 {\"error\":\"not found\"}", name, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := csGet(originals, f.limitedID, "GET", "/v1/imports/document/note-originals?document_id="+own, ""); rec.Code != http.StatusOK {
+		t.Errorf("GET note-originals (client A's document): status = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches`); n != batches {
+		t.Errorf("import_batches after note-originals reads = %d, want %d", n, batches)
+	}
+	if n := csDocumentReads(t, f.super, f.tenant); n != reads {
+		t.Errorf("document.read rows after note-originals reads = %d, want %d", n, reads)
+	}
+}
+
+func TestClientScope_NoteOriginalsHideAnotherClient(t *testing.T) {
+	f := newCSFixture(t, "CS note originals")
+	doc := docSeedDocument(t, f.super, f.tenant)
+	docSeedExtraction(t, f.super, f.tenant, doc, dnReading())
+	dtSetVerdict(t, f.super, doc, "credit note")
+	origA := dnSeedOriginal(t, f.super, f.tenant, f.entA, "CS-NO-A")
+	origB := dnSeedOriginal(t, f.super, f.tenant, f.entB, "CS-NO-B")
+	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
+	csLinkBatch(t, f.super, f.tenant, f.entB, doc)
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE import_batches SET created_at = now() - interval '1 hour' WHERE document_id = $1 AND entity_id = $2`, doc, f.entA); err != nil {
+		t.Fatalf("age A's batch: %v", err)
+	}
+
+	got, err := f.store.NoteOriginals(f.limited, doc)
+
+	if err != nil {
+		t.Fatalf("NoteOriginals as the member limited to A: %v", err)
+	}
+	if got.EntityID != f.entA {
+		t.Errorf("entity_id = %q, want client A %q: B's batch is hidden from this member", got.EntityID, f.entA)
+	}
+	if ids := noIDs(got.Originals); len(ids) != 1 || ids[0] != origA {
+		t.Errorf("originals = %v, want only client A's %s, never B's %s", ids, origA, origB)
+	}
+
+	// Control: the admin sees the newest batch, B's.
+	admin, err := f.store.NoteOriginals(f.admin, doc)
+	if err != nil || admin.EntityID != f.entB || len(admin.Originals) != 1 || admin.Originals[0].ID != origB {
+		t.Errorf("admin read = %+v, %v, want client B and %s", admin, err, origB)
 	}
 }
 
@@ -385,7 +454,7 @@ func TestClientScope_MalformedIdsAnswer400BeforeTheEntityCheck(t *testing.T) {
 	suggester := &fakeSuggester{enabled: true}
 	saved := SavedMappingHandler(f.docSvc.OpenLinked, f.store.SavedMapping, f.store.EntityVisible, nil)
 	suggest := SuggestMappingHandler(f.docSvc.OpenLinked, f.store.SavedMapping, f.store.EntityVisible, suggester, nil)
-	create := CreateDocumentHandler(f.svc.ImportDocument, nil)
+	create := CreateDocumentHandler(f.svc.ImportDocumentFor, nil)
 
 	for name, rec := range map[string]*httptest.ResponseRecorder{
 		"saved-mapping, malformed entity":     csGet(saved, f.limitedID, "GET", "/v1/imports/saved-mapping?entity_id=nope&document_id="+doc.ID, ""),
@@ -854,5 +923,153 @@ func TestClientScope_DocumentHasInvoiceSeesAnInvoiceUnderAHiddenClient(t *testin
 	}
 	if has, err := f.store.DocumentHasInvoice(f.limited, docSeedDocument(t, f.super, f.tenant)); err != nil || has {
 		t.Errorf("DocumentHasInvoice(unlinked) = %v, %v, want false", has, err)
+	}
+}
+
+func TestClientScope_AHeldDocumentFollowsItsBatch(t *testing.T) {
+	f := newCSFixture(t, "CS held document")
+	own := docSeedDocument(t, f.super, f.tenant)
+	docSeedExtraction(t, f.super, f.tenant, own, docCleanValues("CS-HELD-A"))
+	dtSetVerdict(t, f.super, own, "credit note")
+	csLinkBatch(t, f.super, f.tenant, f.entA, own)
+	other := docSeedDocument(t, f.super, f.tenant)
+	docSeedExtraction(t, f.super, f.tenant, other, docCleanValues("CS-HELD-B"))
+	dtSetVerdict(t, f.super, other, "credit note")
+	csLinkBatch(t, f.super, f.tenant, f.entB, other)
+
+	if ex, err := f.store.SettledExtraction(f.limited, own); err != nil || ex.DocumentType == nil || *ex.DocumentType != "credit note" {
+		t.Errorf("SettledExtraction of the batch in A = %+v, %v, want the credit note verdict", ex, err)
+	}
+	if _, err := f.store.SettledExtraction(f.limited, other); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SettledExtraction of the batch in B: err = %v, want ErrNotFound", err)
+	}
+	if _, err := f.svc.ImportDocument(f.limited, f.entA, other); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ImportDocument(B's held document): err = %v, want ErrNotFound", err)
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE document_id = $1`, other); n != 1 {
+		t.Errorf("batches for B's document = %d, want the seeded one only", n)
+	}
+}
+
+func TestClientScope_AFiledDocumentHidesAnInvisibleInvoiceID(t *testing.T) {
+	f := newCSFixture(t, "CS filed hidden id")
+	doc := docSeedDocument(t, f.super, f.tenant)
+	docSeedExtraction(t, f.super, f.tenant, doc, docCleanValues("CS-FH-1"))
+	dtSetVerdict(t, f.super, doc, "debit note")
+	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
+	csLinkInvoice(t, f.super, f.tenant, f.entB, doc, "CS-FH-FILED")
+
+	res, err := f.svc.ImportDocument(f.limited, f.entA, doc)
+	if err != nil || len(res.Errors) != 1 {
+		t.Fatalf("ImportDocument: %+v, %v, want one row", res, err)
+	}
+	if got := res.Errors[0]; got.InvoiceID != "" || got.RuleKey != ruleKeyDuplicateInvoiceNumber || got.Message != documentAlreadyFiledReason {
+		t.Errorf("row = %+v, want the sentence and rule_key with no invoice_id", got)
+	}
+}
+
+func TestClientScope_AnOriginalOutsideTheSetIsNotFound(t *testing.T) {
+	f := newCSFixture(t, "CS note original")
+	doc := docSeedDocument(t, f.super, f.tenant)
+	docSeedExtraction(t, f.super, f.tenant, doc, dnReading())
+	dtSetVerdict(t, f.super, doc, "credit note")
+	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
+	origA := dnSeedOriginal(t, f.super, f.tenant, f.entA, "CS-NOTE-A")
+	origB := dnSeedOriginal(t, f.super, f.tenant, f.entB, "CS-NOTE-B")
+	create := CreateDocumentHandler(f.svc.ImportDocumentFor, nil)
+	post := func(orig string) *httptest.ResponseRecorder {
+		return csGet(create, f.limitedID, "POST", "/v1/imports/document", noteBody(f.entA, doc, orig, "CN-CS-1"))
+	}
+
+	hidden, random := post(origB), post(uuid.NewString())
+
+	for name, rec := range map[string]*httptest.ResponseRecorder{"original in client B": hidden, "random id": random} {
+		if rec.Code != http.StatusNotFound || strings.TrimSpace(rec.Body.String()) != `{"error":"not found"}` {
+			t.Errorf("%s: answer = %d %s, want 404 {\"error\":\"not found\"}", name, rec.Code, rec.Body.String())
+		}
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE document_id = $1`, doc); n != 1 {
+		t.Errorf("batches for the document = %d, want the seeded one only", n)
+	}
+	if n := countInvoicesCitingDocument(t, f.super, doc); n != 0 {
+		t.Errorf("invoices citing the document = %d, want 0", n)
+	}
+
+	if rec := post(origA); rec.Code != http.StatusCreated {
+		t.Errorf("the original in client A: status = %d %s, want 201", rec.Code, rec.Body.String())
+	}
+}
+
+func TestClientScope_NoteOriginalsWhenOnlyAnInvoiceIsVisible(t *testing.T) {
+	f := newCSFixture(t, "CS note originals invoice only")
+	doc := docSeedDocument(t, f.super, f.tenant)
+	docSeedExtraction(t, f.super, f.tenant, doc, dnReading())
+	dtSetVerdict(t, f.super, doc, "credit note")
+	dnSeedOriginal(t, f.super, f.tenant, f.entB, "CS-NO-B2")
+	csLinkBatch(t, f.super, f.tenant, f.entB, doc)
+	seedInvoiceForDocument(t, f.super, f.tenant, f.entA, doc, "CS-FILED-A")
+
+	// The reading passes the document rule through A's invoice, yet the only batch is B's.
+	if _, err := f.store.SettledExtraction(f.limited, doc); err != nil {
+		t.Fatalf("control: SettledExtraction as the limited member: %v", err)
+	}
+	got, err := f.store.NoteOriginals(f.limited, doc)
+
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("NoteOriginals: err = %v, want ErrNotFound: the member sees no batch", err)
+	}
+	if got.EntityID != "" || got.FiledInvoiceID != nil || got.Originals == nil || len(got.Originals) != 0 {
+		t.Errorf("answer on refusal = %+v, want the empty value, nothing of B", got)
+	}
+}
+
+func TestClientScope_NoteOriginalsCountNotesTheMemberCanSee(t *testing.T) {
+	f := newCSFixture(t, "CS note originals count")
+	doc := docSeedDocument(t, f.super, f.tenant)
+	docSeedExtraction(t, f.super, f.tenant, doc, dnReading())
+	dtSetVerdict(t, f.super, doc, "credit note")
+	origA := dnSeedOriginal(t, f.super, f.tenant, f.entA, "CS-CNT-A")
+	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
+	noteA := dnSeedOriginal(t, f.super, f.tenant, f.entA, "CS-CNT-NOTE-A")
+	noteB := dnSeedOriginal(t, f.super, f.tenant, f.entB, "CS-CNT-NOTE-B")
+	// The app files a note in its original's client; the database does not insist, so plant a stray.
+	for _, n := range []string{noteA, noteB} {
+		if _, err := f.super.Exec(context.Background(),
+			`UPDATE invoices SET document_type = 'credit_note', original_invoice_id = $2 WHERE id = $1`, n, origA); err != nil {
+			t.Fatalf("make note: %v", err)
+		}
+	}
+
+	member, err := f.store.NoteOriginals(f.limited, doc)
+	admin, aerr := f.store.NoteOriginals(f.admin, doc)
+
+	if err != nil || aerr != nil || len(member.Originals) != 1 || len(admin.Originals) != 1 {
+		t.Fatalf("reads = %+v %v / %+v %v, want one original each", member, err, admin, aerr)
+	}
+	if member.Originals[0].NoteCount != 1 || admin.Originals[0].NoteCount != 2 {
+		t.Errorf("note_count member = %d, admin = %d, want 1 and 2: the count follows what the caller can see", member.Originals[0].NoteCount, admin.Originals[0].NoteCount)
+	}
+}
+
+func TestClientScope_NoteOriginalsFiledInvoiceOfAHiddenClientReadsAsNull(t *testing.T) {
+	f := newCSFixture(t, "CS note originals filed hidden")
+	doc := docSeedDocument(t, f.super, f.tenant)
+	docSeedExtraction(t, f.super, f.tenant, doc, dnReading())
+	dtSetVerdict(t, f.super, doc, "credit note")
+	dnSeedOriginal(t, f.super, f.tenant, f.entA, "CS-FH-A")
+	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
+	filedB := seedInvoiceForDocument(t, f.super, f.tenant, f.entB, doc, "CS-FH-NOTE-B")
+
+	member, err := f.store.NoteOriginals(f.limited, doc)
+	admin, aerr := f.store.NoteOriginals(f.admin, doc)
+
+	if err != nil || aerr != nil {
+		t.Fatalf("reads: %v / %v", err, aerr)
+	}
+	if admin.FiledInvoiceID == nil || *admin.FiledInvoiceID != filedB {
+		t.Fatalf("control: admin filed_invoice_id = %v, want %s", admin.FiledInvoiceID, filedB)
+	}
+	if member.FiledInvoiceID != nil {
+		t.Errorf("member filed_invoice_id = %s, want null: B's invoice id never reaches a member limited to A", *member.FiledInvoiceID)
 	}
 }

@@ -112,7 +112,7 @@ func t1Floor(t *testing.T) {
 // t1AIOnlyFields are the header fields whose tier1Specs entry has no label id: a shape for
 // checkAI, no Tier-1 rule, no learned rule (TestTier1_AIOnlySpecsBuildNoRule pins the match).
 var t1AIOnlyFields = []string{"due_date", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
-	"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga"}
+	"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga", "original_invoice_number"}
 
 // t1LabelledFields is HeaderFields without the AI-only fields, in vocabulary order.
 func t1LabelledFields() []string {
@@ -127,8 +127,8 @@ func t1LabelledFields() []string {
 
 // G-02
 func TestTier1_CoversEveryHeaderField(t *testing.T) {
-	if len(extraction.HeaderFields) != 19 {
-		t.Fatalf("HeaderFields holds %d field(s), want 19; the coverage loop below would run over the wrong vocabulary", len(extraction.HeaderFields))
+	if len(extraction.HeaderFields) != 20 {
+		t.Fatalf("HeaderFields holds %d field(s), want 20; the coverage loop below would run over the wrong vocabulary", len(extraction.HeaderFields))
 	}
 	t1Floor(t)
 

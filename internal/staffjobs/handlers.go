@@ -154,6 +154,8 @@ func RedriveHandler(redrive func(ctx context.Context, id, reason string) (Detail
 			writeError(w, http.StatusConflict, "the previous River job is still running; retry shortly")
 		case errors.Is(err, invoice.ErrResolvedOutside):
 			writeError(w, http.StatusConflict, "the invoice was resolved outside the system")
+		case errors.Is(err, invoice.ErrNoteChecksFailed):
+			writeError(w, http.StatusConflict, "the note no longer passes its checks")
 		case errors.As(err, &st):
 			writeError(w, http.StatusConflict, fmt.Sprintf("the invoice is %s, not failed", st.Have))
 		case err != nil:

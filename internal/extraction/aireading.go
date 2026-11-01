@@ -48,7 +48,8 @@ Return a JSON object with exactly these keys. Each value is a string, or null wh
 - buyer_postal_zone: the postal code of the buyer's address, exactly as printed.
 - buyer_country: the country of the buyer's address, exactly as printed.
 - buyer_state: the state of the buyer's address, exactly as printed.
-- buyer_lga: the Local Government Area of the buyer's address, exactly as printed.`
+- buyer_lga: the Local Government Area of the buyer's address, exactly as printed.
+- original_invoice_number: the number of the invoice this credit or debit note corrects, exactly as printed. Null on an invoice.`
 
 const aiTextIntro = `The document text below was read by a PDF parser. Each line is one visual row on the page. y is the row's vertical position and x each text run's horizontal position, both from 0 to 1 measured from the top-left corner.`
 

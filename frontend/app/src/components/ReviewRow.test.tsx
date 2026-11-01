@@ -87,6 +87,8 @@ function detailFixture(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRe
     reject_blocked_reason: null,
     can_correct_invoice_number: false,
     invoice_number_blocked_reason: null,
+    can_issue_note: false,
+    issue_note_blocked_reason: null,
     ...over,
   }
 }
@@ -1664,5 +1666,37 @@ describe('ReviewRow row-expansion: Explain and Accept (ENGI-17-06)', () => {
     fireEvent.click(explainButtons()[0])
     await screen.findByTestId('explain-panel')
     expect(JSON.parse(calls('/explain')[0][1]!.body as string)).toEqual({ rule_key: 'line-cost', path: 'line_items[2].unit_price' })
+  })
+})
+
+describe('CRDDBTNOTE-04-04: the review row shows the document type and the signed amount', () => {
+  function amountOf(over: Partial<InvoiceRecord>) {
+    renderRow(over)
+    return screen.getByTestId('review-row').querySelector('.money')?.textContent
+  }
+
+  it('reviewRowAmount_signFollowsTheType', () => {
+    expect(amountOf({ document_type: 'credit_note', total: '322.50' })).toBe('-₦323')
+    cleanup()
+    expect(amountOf({ document_type: 'debit_note', total: '53.75' })).toBe('₦54')
+    cleanup()
+    expect(amountOf({ document_type: 'credit_note', total: null })).toBe('—')
+  })
+
+  it('reviewRowBadge_showsOnNotesOnly', () => {
+    const badges: Array<string | undefined> = []
+    for (const document_type of ['credit_note', 'debit_note', 'commercial_invoice'] as const) {
+      renderRow({ document_type })
+      badges.push(screen.queryByTestId('review-type-badge')?.textContent)
+      cleanup()
+    }
+    expect(badges).toEqual(['CREDIT', 'DEBIT', undefined])
+  })
+
+  it('reviewRowNumber_titleCarriesTheWholeNumber', () => {
+    const number = `CN-INV-2026-00001-${'9'.repeat(22)}`
+    expect(number).toHaveLength(40)
+    renderRow({ invoice_number: number })
+    expect(screen.getByText(number).getAttribute('title')).toBe(number)
   })
 })

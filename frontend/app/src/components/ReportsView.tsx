@@ -32,7 +32,7 @@ import { fmt, fmtShort } from '../lib/format'
 import { recordNamesByTin } from '../lib/buyerDirectory'
 import { aggregateCustomers, customerName } from '../lib/customers'
 import { dashboardViewState, getRollup, metricCount, scopedBucket, topFailures, type Rollup } from '../lib/dashboard'
-import { allInvoicesIsEmpty, fetchAllInvoices, gateByActiveEntity, invoicesViewState, shouldFetchInvoices, type AllInvoices } from '../lib/invoices'
+import { allInvoicesIsEmpty, fetchAllInvoices, gateByActiveEntity, invoicesViewState, shouldFetchInvoices, signedAmount, type AllInvoices } from '../lib/invoices'
 import { fetchInvoiceRegister, previousMonthPeriod, registerErrorLine, registerPeriodValid } from '../lib/invoiceRegister'
 import { crossGlyph, docGlyph, downloadGlyph, plusGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
@@ -102,9 +102,9 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
   const rollState = dashboardViewState(base, roll)
 
   const custList = aggregateCustomers(rows)
-  const taxable = rows.reduce((s, r) => s + (r.subtotal != null ? Number(r.subtotal) : 0), 0)
-  const outVat = rows.reduce((s, r) => s + (r.vat != null ? Number(r.vat) : 0), 0)
-  const totalInvoiced = rows.reduce((s, r) => s + (r.total != null ? Number(r.total) : 0), 0)
+  const taxable = rows.reduce((s, r) => s + signedAmount(r, r.subtotal), 0)
+  const outVat = rows.reduce((s, r) => s + signedAmount(r, r.vat), 0)
+  const totalInvoiced = rows.reduce((s, r) => s + signedAmount(r, r.total), 0)
   // [wht-sample-restore] (persona-handoff-fix step 6, user-directed reversal of step 3's
   // deletion, see file header): illustrative 5% rate applied to the real `taxable` base
   // above — not a recomputation of the old mock's wht-flag/description-regex logic,
@@ -132,7 +132,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
     key: o.tin || 'name:' + o.name,
     name: customerName(names.data?.get(o.tin), o.name),
     total: fmt(o.totalNum),
-    bar: Math.round((o.totalNum / tcMax) * 100) + '%',
+    bar: Math.max(0, Math.round((o.totalNum / tcMax) * 100)) + '%',
   }))
 
   // scopedBucket/topFailures ([dashboard-scope-per-client]) — the SAME helpers

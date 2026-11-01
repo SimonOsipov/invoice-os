@@ -237,10 +237,13 @@ func newAnchorLearnedAuditor() extraction.RecordAnchorLearned {
 // passes through raw and stays a 500 (TestNewInvoiceFieldApplier_MapsEachDomainError). The
 // rename's own two refusals map the same way (TestNewInvoiceFieldApplier_MapsTheRenameRefusals).
 func newInvoiceFieldApplier(edit invoiceFieldEdit) extraction.ApplyFieldToInvoice {
-	return func(ctx context.Context, tx pgx.Tx, documentID, field string, value *string, _ extraction.CorrectionMethod) (string, error) {
+	return func(ctx context.Context, tx pgx.Tx, documentID, field string, value *string, method extraction.CorrectionMethod) (string, error) {
 		in, err := invoiceEditFor(field, value)
 		if err != nil {
 			return "", err
+		}
+		if method == extraction.MethodUndone {
+			ctx = invoice.WithUndo(ctx)
 		}
 		inv, err := edit(ctx, tx, documentID, in)
 		switch {

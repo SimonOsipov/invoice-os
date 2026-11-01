@@ -467,6 +467,25 @@ func TestRLS_RedriveRefusesAResolvedOutsideInvoice(t *testing.T) {
 	r.refuses(t, invoice.ErrResolvedOutside)
 }
 
+func TestRLS_RedriveRefusesACreditNoteOverTheCap(t *testing.T) {
+	r := newRedriveRig(t, "dead_lettered", "discarded")
+	orig := seedInvoice(t, r.super, r.tenant, "RD-ORIG-"+r.tenant[:8], "accepted")
+	sibling := seedInvoice(t, r.super, r.tenant, "RD-SIB-"+r.tenant[:8], "accepted")
+	if _, err := r.super.Exec(context.Background(),
+		`UPDATE invoices SET irn = 'IRN-RD', total = 100.00, issue_date = '2026-03-04' WHERE id = $1`, orig); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.super.Exec(context.Background(),
+		`UPDATE invoices SET document_type = 'credit_note', original_invoice_id = $2, total = 60.00 WHERE id = ANY($1)`,
+		[]string{r.invoice, sibling}, orig); err != nil {
+		t.Fatal(err)
+	}
+	r.refuses(t, invoice.ErrNoteChecksFailed)
+	if s := r.state(t); s.JobState != "dead_lettered" || s.InvoiceStatus != "failed" {
+		t.Errorf("job %q, invoice %q, want dead_lettered and failed", s.JobState, s.InvoiceStatus)
+	}
+}
+
 func TestRLS_RedriveRefusesALockedWorkspace(t *testing.T) {
 	r := newRedriveRig(t, "dead_lettered", "discarded")
 	if _, err := r.super.Exec(context.Background(),

@@ -42,7 +42,7 @@ func writeThroughXLSXRows(t *testing.T, records ...[]string) (*xlsxRows, *exceli
 	return x, back, werr
 }
 
-// rec39 is a 39-cell record (the width of invoicesCSVHeader) with number and one cell set.
+// rec39 is a record (the width of invoicesCSVHeader) with number and one cell set.
 func rec39(number string, col int, val string) []string {
 	r := make([]string, len(invoicesCSVHeader))
 	r[1] = number

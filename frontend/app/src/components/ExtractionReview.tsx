@@ -24,12 +24,18 @@ import {
 import type { DraftEntries, ExtractionCandidate, ExtractionDetail, ExtractionRegion } from '../lib/extractionReview'
 import { addRow, lineSetChanged, linesFromFields, linesToPost, remapRoles, removeRow } from '../lib/lineItems'
 import type { LineRow } from '../lib/lineItems'
+import { getNoteOriginals } from '../lib/importApi'
+import { noteTypeOfVerdict } from '../lib/notes'
 import type { PlatformCtx } from '../types'
 import { ExtractionCanvas } from './ExtractionCanvas'
 import { ExtractionFields } from './ExtractionFields'
+import { NoteImportPanel, SAVE_DISABLED } from './NoteImportPanel'
 
 const STILL_READING = 'This document is still being read.'
 const SAVE = 'Save what you settled'
+const SAVE_HELD = 'Import this document first. Corrections are saved onto its invoice or note.'
+const SAVE_CHECKING = 'Checking whether this document is imported.'
+const SAVE_CHECK_FAILED = 'We could not check whether this document is imported. Try again above.'
 const OPEN_INVOICE = 'Go to the invoice →'
 
 // River retries a `failed` job, so it is not terminal and takes the still-reading sentence.
@@ -59,15 +65,6 @@ const FOOTER: CSSProperties = {
   padding: '12px 20px',
   borderTop: '1px solid var(--line-1)',
   background: 'var(--bg-2)',
-}
-
-// `.v2-btn-primary:hover` brightens with no `:disabled` guard (v2/app-layer.css), so a disabled
-// Save would light up under the cursor and read pressable. EvidenceBundleDrawer.tsx's spread.
-const SAVE_DISABLED: CSSProperties = {
-  background: 'var(--bg-3)',
-  color: 'var(--fg-4)',
-  cursor: 'not-allowed',
-  filter: 'none',
 }
 
 // ExtractionCanvas's `extraction-no-region` strip, the nearest sibling on this screen.
@@ -152,6 +149,26 @@ export function ExtractionReview({
   const arming = armed && armed.jobId === jobId ? armed.name : null
 
   const data = merged && merged.jobId === jobId ? merged.detail : detail.data
+
+  // The panel's read, only on a note verdict (the `notes` pattern in InvoiceDetail). A re-run
+  // blanks `data` but not the panes, which hang off `detail`.
+  const noteType = noteTypeOfVerdict(data?.document_type ?? null)
+  const noteDocumentId = data?.document_id ?? null
+  const originals = useAsync(
+    async () => {
+      if (!base || !noteDocumentId) throw new Error('no gateway configured')
+      return { documentId: noteDocumentId, read: await getNoteOriginals(ctx.authedFetch, base, noteDocumentId) }
+    },
+    { isEmpty: () => false, immediate: !!base && noteType !== null && noteDocumentId !== null, deps: [noteDocumentId, noteType] },
+  )
+  // Tagged with its document, like the job-tagged state above: a read of another document is no read.
+  const originalsRead = noteType !== null && originals.data?.documentId === noteDocumentId ? originals.data.read : null
+  const filedInvoiceId = originalsRead?.filed_invoice_id ?? null
+  // Held until a read says a document filed: an unread, failed or reloading read is still "not filed".
+  const held = noteType !== null && onOpenInvoice === null && filedInvoiceId === null
+  const heldTitle = originalsRead !== null ? SAVE_HELD : originals.status === 'error' ? SAVE_CHECK_FAILED : SAVE_CHECKING
+  const openFiled = onOpenInvoice ?? (filedInvoiceId === null ? null : () => ctx.openImportedInvoice(filedInvoiceId))
+
   let content: ReactNode
   if (detail.status === 'error' && detail.error) {
     content = (
@@ -285,8 +302,32 @@ export function ExtractionReview({
       setWriting(false)
     }
 
+    let slot: ReactNode = null
+    if (held && noteType !== null) {
+      if (originals.status === 'error' && originals.error) {
+        slot = (
+          <div style={PAD}>
+            <ErrorState error={originals.error} onRetry={originals.run} />
+          </div>
+        )
+      } else if (base && originalsRead !== null) {
+        slot = (
+          <NoteImportPanel
+            ctx={ctx}
+            base={base}
+            documentId={data.document_id}
+            noteType={noteType}
+            fields={wire}
+            originals={originalsRead}
+            onFiled={originals.run}
+          />
+        )
+      }
+    }
+
     content = (
       <>
+        {slot}
         {notice === null ? null : (
           <div data-testid="extraction-document-type" style={DOCUMENT_TYPE_BANNER}>
             <span style={{ display: 'flex', flex: 'none', color: 'var(--fg-3)' }}>{infoGlyph}</span>
@@ -350,8 +391,8 @@ export function ExtractionReview({
             </span>
           )}
           {/* Navigation, not a write: nothing to guard against re-entry, so it stays live while Save writes. */}
-          {onOpenInvoice === null ? null : (
-            <button type="button" data-testid="extraction-open-invoice" className="v2-btn v2-btn-ghost pf-btn" onClick={onOpenInvoice}>
+          {openFiled === null ? null : (
+            <button type="button" data-testid="extraction-open-invoice" className="v2-btn v2-btn-ghost pf-btn" onClick={openFiled}>
               {OPEN_INVOICE}
             </button>
           )}
@@ -359,9 +400,10 @@ export function ExtractionReview({
             type="button"
             data-testid="extraction-save"
             className="v2-btn v2-btn-primary pf-btn"
-            disabled={writing || nothingToSave}
+            disabled={writing || nothingToSave || held}
+            title={held ? heldTitle : undefined}
             onClick={save}
-            style={writing || nothingToSave ? SAVE_DISABLED : undefined}
+            style={writing || nothingToSave || held ? SAVE_DISABLED : undefined}
           >
             {SAVE}
           </button>

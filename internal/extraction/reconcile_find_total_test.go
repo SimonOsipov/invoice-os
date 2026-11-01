@@ -70,8 +70,8 @@ func ftRun(cands []extraction.Candidate, lines []extraction.DocLine, pages []ext
 func ftHeaderDiff(t *testing.T, a, b []extraction.FieldResult) []string {
 	t.Helper()
 	n := len(extraction.HeaderFields)
-	if n != 19 {
-		t.Fatalf("HeaderFields names %d field(s), want 19; the diff below was measured over a different vocabulary", n)
+	if n != 20 {
+		t.Fatalf("HeaderFields names %d field(s), want 20; the diff below was measured over a different vocabulary", n)
 	}
 	if len(a) < n || len(b) < n {
 		t.Fatalf("got %d and %d result(s), want at least %d header cells", len(a), len(b), n)

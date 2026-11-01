@@ -97,7 +97,7 @@ func TestCategories_EveryMappedKeyIsActive(t *testing.T) {
 	}
 }
 
-// MCAT-03: the three categories partition the dated keys 37/11/19. Fails when
+// MCAT-03: the three categories partition the dated keys 39/11/19. Fails when
 // a rule is quietly re-bucketed, moving a bar without a story.
 func TestCategories_PartitionSizesMatchSpec(t *testing.T) {
 	_, app := dbTestPools(t)
@@ -109,7 +109,7 @@ func TestCategories_PartitionSizesMatchSpec(t *testing.T) {
 	}
 
 	want := map[Category]int{
-		CategoryFieldCompleteness: 37,
+		CategoryFieldCompleteness: 39,
 		CategoryTaxAccuracy:       11,
 		CategoryIdentifiers:       19,
 	}
@@ -118,8 +118,8 @@ func TestCategories_PartitionSizesMatchSpec(t *testing.T) {
 			t.Errorf("category %q has %d dated rules, want %d", cat, got, wantCount)
 		}
 	}
-	if total := len(active); total != 67 {
-		t.Fatalf("dated rule keys: %d, want 67 (test's own oracle is stale)", total)
+	if total := len(active); total != 69 {
+		t.Fatalf("dated rule keys: %d, want 69 (test's own oracle is stale)", total)
 	}
 }
 

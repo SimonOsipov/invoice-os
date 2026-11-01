@@ -14,13 +14,13 @@ const (
 	DocumentTypeInstructions  = "Classify which of the following document types this file is, based on its layout, headings and language."
 )
 
-// documentTypeOrder is A30's fixed eight-option list, in its fixed order.
+// documentTypeOrder is A30's fixed nine-option list, in its fixed order.
 var documentTypeOrder = []string{
 	"tax invoice", "receipt", "proforma", "quotation",
-	"credit note", "delivery note", "statement", "purchase order",
+	"credit note", "debit note", "delivery note", "statement", "purchase order",
 }
 
-// DocumentTypeOptions is A30's closed, ordered eight. Cloned: the order is a fixed fact, not a
+// DocumentTypeOptions is A30's closed, ordered nine. Cloned: the order is a fixed fact, not a
 // slice a caller may reorder.
 func DocumentTypeOptions() []string { return slices.Clone(documentTypeOrder) }
 
@@ -30,20 +30,21 @@ const (
 	QuestionTypeChoice = "choice"
 )
 
-// DocumentTypeCriteria describes each of A30's eight options, keyed by option name.
+// DocumentTypeCriteria describes each of A30's nine options, keyed by option name.
 var DocumentTypeCriteria = map[string]string{
 	"tax invoice":    "A demand for payment for goods or services already supplied, addressed to a specific buyer, carrying a VAT amount and a total due.",
 	"receipt":        "A confirmation that a payment has already been received, not a demand for future payment.",
 	"proforma":       "A preliminary bill sent before the goods or services are supplied, declaring a price in advance of a sale.",
 	"quotation":      "An offer of a price for goods or services not yet agreed to or supplied.",
 	"credit note":    "A document reducing or reversing a previously issued invoice, not a new demand for payment.",
+	"debit note":     "A document increasing the amount of a previously issued invoice, adding a charge to it rather than starting a new sale.",
 	"delivery note":  "A record that goods were delivered, carrying quantities but no prices or payment demand.",
 	"statement":      "A running list of an account's transactions over a period, not a single demand for payment.",
 	"purchase order": "A buyer's own request to a supplier to provide goods or services, not a supplier's demand for payment.",
 }
 
 // WordingRegistry returns every wording string the report must quote
-// verbatim: the seven instructions/criteria constants plus the eight
+// verbatim: the seven instructions/criteria constants plus the nine
 // DocumentTypeCriteria entries. Rendering from this map, not a hand-written
 // list, means a constant added here without being wired into Render fails
 // TestReport_QuotesEveryWordingRegistryEntryVerbatim rather than escaping unnoticed.

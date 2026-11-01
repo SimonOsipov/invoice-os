@@ -49,6 +49,8 @@ import {
   rawFetch,
   listInvoices,
   getInvoice,
+  getInvoiceNotes,
+  issueNote,
   editInvoice,
   rollup,
   createApprovalPolicy,
@@ -156,6 +158,41 @@ const APPROVE_NOT_VALIDATED_REASON = 'Only a validated invoice can be approved o
 const APPROVE_RUN_CLOSED_REASON = "This invoice's approval run is already closed."
 const APPROVE_NOT_ROLE_HOLDER_REASON =
   "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role."
+
+// internal/submission/mock_script.go mockTINAccept and mockTINReject: the mock adapter's scripted buyer TINs.
+const MOCK_TIN_ACCEPT = '99999999-0001'
+const MOCK_TIN_REJECT = '99999999-0002'
+
+async function submitAndAwait(tok: string, id: string, want: 'accepted' | 'rejected') {
+  const res = await rawFetch('/api/invoice/v1/invoices/submissions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tok}` },
+    body: { invoice_ids: [id], idempotency_key: crypto.randomUUID() },
+  })
+  expect(res.status, 'batch submit').toBe(200)
+  await expect
+    .poll(async () => (await getInvoice(tok, id)).status, { timeout: 120_000, intervals: [1_000] })
+    .toBe(want)
+  return getInvoice(tok, id)
+}
+
+// A 2-line original that reached accepted through the mock adapter.
+async function acceptedOriginal(tok: string, entityId: string, number: string) {
+  const f = twoLineInvoiceFields(number)
+  const created = await createInvoice(tok, { entity_id: entityId, ...f, buyer_tin: MOCK_TIN_ACCEPT })
+  expect((await validateInvoice(tok, created.id)).status, 'the clean fixture validates').toBe('validated')
+  await approveUntilClosed(created.id, await firmApproverTokens())
+  return submitAndAwait(tok, created.id, 'accepted')
+}
+
+function noteBody(original: { line_items?: { id: string }[] }, number: string) {
+  return {
+    document_type: 'credit_note' as const,
+    invoice_number: number,
+    issue_date: '2026-02-01T00:00:00Z',
+    lines: [{ line_id: original.line_items![0].id, quantity: '4', unit_price: '100' }],
+  }
+}
 
 test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
   let token: string
@@ -1418,7 +1455,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
   // validates. Every test below creates its own one-step policy and deletes it in a
   // `finally`, so the tenant returns to zero active versions before the next spec runs.
   // Boundary: above here the seeded firm policy governs (armed in this file's beforeAll);
-  // below, armedInvoice() owns the active slot per test, unarmed between them.
+  // below, armedInvoice() owns the active slot per test, unarmed between them. `notes` re-arms the firm policy.
   test.describe('approval decision', () => {
     // armedInvoice(): a fresh one-step policy naming roleKey, published, then a clean
     // invoice validated against it -- ApplyValidation's promotion arms exactly one open
@@ -1921,7 +1958,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
   test.describe('nrs fields', () => {
     // Values are in stored form (dates RFC3339 midnight, numerics at column scale) so GET equals the input.
     const NRS_HEADER = {
-      invoice_kind: '380',
+      invoice_kind: 'B2B',
       tax_currency_code: 'NGN',
       due_date: '2026-02-01T00:00:00Z',
       issue_time: '09:30:15',
@@ -1967,6 +2004,13 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(got, 'GET returns every header and party field as sent').toMatchObject(NRS_HEADER)
       expect(got.line_items, 'one line').toHaveLength(1)
       expect(got.line_items![0], 'GET returns every line field as sent').toMatchObject(NRS_LINE)
+    })
+
+    test('document type: a created invoice reads back as a commercial invoice with no original', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-DT-${freshTin()}`) })
+      const got = await getInvoice(token, created.id)
+      expect(got.document_type, 'submission.CommercialInvoice').toBe('commercial_invoice')
+      expect(got.original_invoice_id, 'no original').toBeNull()
     })
 
     test('nrs fields: a patch of header, party and line fields is read back', async () => {
@@ -2175,6 +2219,102 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       const sent = `sent-${tin}@example.com`
       const withKey = await createInvoice(token, { entity_id: own.id, ...fields, invoice_number: `INV-ENGI05-KEY-${tin}`, supplier_email: sent })
       expect((await getInvoice(token, withKey.id)).supplier_email, 'a sent supplier_email wins').toBe(sent)
+    })
+  })
+
+  test.describe('notes', () => {
+    test.describe.configure({ timeout: 240_000 })
+    // `approval decision` leaves no active policy; notes need one to arm a run.
+    test.beforeAll(async () => {
+      await ensureFirmPolicyActive(token)
+    })
+    const notesUrl = (id: string) => `/api/invoice/v1/invoices/${id}/notes`
+
+    test('notes: a credit note validates, submits and is accepted', async () => {
+      const original = await acceptedOriginal(token, entity.id, `INV-N1-${freshTin()}`)
+      const note = await issueNote(token, original.id, noteBody(original, `CN-N1-${freshTin()}`))
+      expect(note.status, 'a new note is a draft').toBe('draft')
+      expect(note.document_type).toBe('credit_note')
+      expect(note.original_invoice_id).toBe(original.id)
+
+      expect((await validateInvoice(token, note.id)).status, 'a note validates clean').toBe('validated')
+      await approveUntilClosed(note.id, await firmApproverTokens())
+      const accepted = await submitAndAwait(token, note.id, 'accepted')
+      expect(accepted.irn, 'the note has its own IRN').toMatch(/-FBMOCK01-\d{8}$/)
+      expect(accepted.irn).not.toBe(original.irn)
+      expect(accepted.document_type).toBe('credit_note')
+      expect(accepted.original_invoice_id).toBe(original.id)
+    })
+
+    test('notes: a rejected note returns to draft', async () => {
+      const original = await acceptedOriginal(token, entity.id, `INV-N2-${freshTin()}`)
+      const note = await issueNote(token, original.id, noteBody(original, `CN-N2-${freshTin()}`))
+      await editInvoice(token, note.id, { buyer_tin: MOCK_TIN_REJECT })
+      await validateInvoice(token, note.id)
+      await approveUntilClosed(note.id, await firmApproverTokens())
+      const rejected = await submitAndAwait(token, note.id, 'rejected')
+      expect(rejected.document_type).toBe('credit_note')
+
+      const back = await rawFetch(`/api/invoice/v1/invoices/${note.id}/transitions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { target: 'draft' },
+      })
+      expect(back.status, 'rejected -> draft').toBe(200)
+      expect((back.body as { status: string }).status).toBe('draft')
+      const edited = await editInvoice(token, note.id, { buyer_tin: MOCK_TIN_ACCEPT })
+      expect(edited.buyer_tin, 'the returned note can be edited again').toBe(MOCK_TIN_ACCEPT)
+    })
+
+    test('notes: the route refuses what D1 and D8 refuse', async () => {
+      const post = (tok: string, id: string, body: unknown) =>
+        rawFetch(notesUrl(id), { method: 'POST', headers: { Authorization: `Bearer ${tok}` }, body })
+      const original = await acceptedOriginal(token, entity.id, `INV-N3-${freshTin()}`)
+      const body = noteBody(original, `CN-N3-${freshTin()}`)
+
+      const draftOriginal = await createInvoice(token, { entity_id: entity.id, ...twoLineInvoiceFields(`INV-N3D-${freshTin()}`) })
+      const draftRes = await post(token, draftOriginal.id, { ...body, invoice_number: `CN-N3D-${freshTin()}` })
+      assertErrorEnvelope(draftRes, 409, 'note on a draft original')
+      expect((draftRes.body as { error: string }).error).toBe('a note needs an accepted invoice with an IRN')
+
+      const note = await issueNote(token, original.id, body)
+      const dup = await post(token, original.id, body)
+      assertErrorEnvelope(dup, 409, 'taken number')
+      expect((dup.body as { error: string }).error).toBe('duplicate invoice number')
+
+      await validateInvoice(token, note.id)
+      await approveUntilClosed(note.id, await firmApproverTokens())
+      await submitAndAwait(token, note.id, 'accepted')
+      const onNote = await post(token, note.id, { ...body, invoice_number: `CN-N3N-${freshTin()}` })
+      assertErrorEnvelope(onNote, 409, 'note on an accepted note')
+      expect((onNote.body as { error: string }).error).toBe('a note cannot be the original of a note')
+
+      const otherTenant = await post(await login(PERSONAS.B), original.id, { ...body, invoice_number: `CN-N3B-${freshTin()}` })
+      assertErrorEnvelope(otherTenant, 404, 'another tenant original')
+      assertErrorEnvelope(await post(token, crypto.randomUUID(), body), 404, 'random id')
+
+      const empty = await post(token, original.id, { ...body, invoice_number: `CN-N3E-${freshTin()}`, lines: [] })
+      assertErrorEnvelope(empty, 400, 'empty lines')
+    })
+
+    test('notes: the original reports its notes and what is creditable', async () => {
+      const original = await acceptedOriginal(token, entity.id, `INV-N4-${freshTin()}`)
+      const before = await getInvoiceNotes(token, original.id)
+      const note = await issueNote(token, original.id, noteBody(original, `CN-N4-${freshTin()}`))
+      expect(note.total, 'the note carries a total').not.toBeNull()
+
+      const draft = await getInvoiceNotes(token, original.id)
+      expect(draft.notes.map((n) => n.id), 'the draft note is listed').toContain(note.id)
+      expect(draft.credited_so_far, 'a draft credits nothing').toBe(before.credited_so_far)
+      expect(draft.still_creditable).toBe(before.still_creditable)
+
+      await validateInvoice(token, note.id)
+      await approveUntilClosed(note.id, await firmApproverTokens())
+      await submitAndAwait(token, note.id, 'accepted')
+      const after = await getInvoiceNotes(token, original.id)
+      expect(after.notes.find((n) => n.id === note.id)?.status).toBe('accepted')
+      expect(Number(after.credited_so_far) - Number(before.credited_so_far), 'credited_so_far rises by the note total').toBeCloseTo(Number(note.total), 2)
+      expect(Number(before.still_creditable) - Number(after.still_creditable), 'still_creditable falls by the same').toBeCloseTo(Number(note.total), 2)
     })
   })
 })

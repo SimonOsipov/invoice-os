@@ -87,6 +87,7 @@ var documentTypeOptions = []jev.Option{
 	{Name: "proforma", Description: "A preliminary bill sent before the goods or services are supplied, declaring a price in advance of a sale."},
 	{Name: "quotation", Description: "An offer of a price for goods or services not yet agreed to or supplied."},
 	{Name: "credit note", Description: "A document reducing or reversing a previously issued invoice, not a new demand for payment."},
+	{Name: "debit note", Description: "A document increasing the amount of a previously issued invoice, adding a charge to it rather than starting a new sale."},
 	{Name: "delivery note", Description: "A record that goods were delivered, carrying quantities but no prices or payment demand."},
 	{Name: "statement", Description: "A running list of an account's transactions over a period, not a single demand for payment."},
 	{Name: "purchase order", Description: "A buyer's own request to a supplier to provide goods or services, not a supplier's demand for payment."},

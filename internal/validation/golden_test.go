@@ -139,8 +139,8 @@ func TestGoldenV5(t *testing.T) {
 		t.Fatalf("LoadForDates: %v", err)
 	}
 	rs := got["2027-01-15"]
-	if rs.Version != 5 {
-		t.Fatalf("rule set on 2027-01-15 = v%d, want v5", rs.Version)
+	if rs.Version != 6 {
+		t.Fatalf("rule set on 2027-01-15 = v%d, want v6", rs.Version)
 	}
 	engine := NewDefaultEngine()
 

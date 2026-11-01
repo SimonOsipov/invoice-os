@@ -26,11 +26,11 @@ func rdqPair(field string) (near, far extraction.Candidate) {
 
 // AC-4. Only the scope members with no corpus witness have a named spec each, so a FIFTH
 // member added to doubtfulFields is silent unless some other spec happens to name that field.
-// invoice_number, currency and subtotal are named by none. This walks all nineteen header fields and
+// invoice_number, currency and subtotal are named by none. This walks all twenty header fields and
 // pins the partition, so the scope list can neither grow nor shrink without a red.
-func TestReconcile_TheDoubtCoversExactlyFourOfTheNineteenHeaderFields(t *testing.T) {
-	if len(extraction.HeaderFields) != 19 {
-		t.Fatalf("HeaderFields names %d field(s), want 19; the partition below was measured over a different vocabulary", len(extraction.HeaderFields))
+func TestReconcile_TheDoubtCoversExactlyFourOfTheTwentyHeaderFields(t *testing.T) {
+	if len(extraction.HeaderFields) != 20 {
+		t.Fatalf("HeaderFields names %d field(s), want 20; the partition below was measured over a different vocabulary", len(extraction.HeaderFields))
 	}
 
 	var doubted, decided []string

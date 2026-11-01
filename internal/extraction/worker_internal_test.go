@@ -913,3 +913,14 @@ func TestExtractWorker_TheBoxlessLayoutWriteReportsItsFailureToTheClassifier(t *
 		t.Errorf("the boxless branch declares a new err with `:=` (%q); use `=` so the classification block sees the failure and the job does not succeed with no layout", shadows)
 	}
 }
+
+func TestFlaggedCount_SkipsAnUnreadOriginalNumber(t *testing.T) {
+	flagged := FieldResult{Field: Field{Name: "buyer_name", Reason: ReasonMissing}}
+	original := FieldResult{Field: Field{Name: originalNumberField, Reason: ReasonMissing}}
+	if got := flaggedCount([]FieldResult{original, flagged}); got != 1 {
+		t.Errorf("flaggedCount = %d, want 1", got)
+	}
+	if got := flaggedCount([]FieldResult{flagged}); got != 1 {
+		t.Errorf("control: flaggedCount without the field = %d, want 1", got)
+	}
+}

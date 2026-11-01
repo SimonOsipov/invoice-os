@@ -237,6 +237,8 @@ const INVOICE_KEYS = Object.keys({
   buyer_country: true,
   buyer_state: true,
   buyer_lga: true,
+  document_type: true,
+  original_invoice_id: true,
   line_items: true,
 } satisfies Record<keyof Invoice, true>) as (keyof Invoice)[]
 

@@ -28,6 +28,14 @@ const registerScope = "\n  FROM invoices WHERE entity_id = $1 AND issue_date >= 
 
 const selectRegisterSQL = "SELECT " + invoicesColumns + registerScope + " ORDER BY issue_date, invoice_number, id"
 
+// Net by sign over the filed rows only, so the footer can differ from the sheet. Debit notes add.
+// ceiling: one currency assumed, split by currency when a register holds two
+const selectRegisterFooterSQL = `SELECT
+  coalesce(sum(CASE document_type WHEN 'credit_note' THEN -subtotal ELSE subtotal END), 0)::numeric(20,2)::text,
+  coalesce(sum(CASE document_type WHEN 'credit_note' THEN -vat ELSE vat END), 0)::numeric(20,2)::text,
+  coalesce(sum(CASE document_type WHEN 'credit_note' THEN -total ELSE total END), 0)::numeric(20,2)::text` + registerScope +
+	` AND (status IN ('submitted', 'accepted') OR (status = 'failed' AND kept_as_is_at IS NOT NULL))`
+
 const countRegisterSQL = "SELECT count(*)" + registerScope
 
 // registerTxOptions: read-write, because the audit row commits with the read.
@@ -135,6 +143,23 @@ func buildRegister(ctx context.Context, tx pgx.Tx, r Request, o registerOpts) (*
 	ids, err := writeInvoiceRows(ctx, tx, selectRegisterSQL, []any{entity.ID, from, to}, xw)
 	if err != nil {
 		return nil, "", err
+	}
+	if len(ids) > 0 {
+		var subtotal, vat, total string
+		if err := tx.QueryRow(ctx, selectRegisterFooterSQL, entity.ID, from, to).Scan(&subtotal, &vat, &total); err != nil {
+			return nil, "", fmt.Errorf("archive: register footer: %w", err)
+		}
+		footer := make([]string, len(invoicesCSVHeader))
+		for name, v := range map[string]string{"invoice_number": "Net total", "subtotal": subtotal, "vat": vat, "total": total} {
+			for i, h := range invoicesCSVHeader {
+				if h == name {
+					footer[i] = v
+				}
+			}
+		}
+		if err := xw.Write(footer); err != nil {
+			return nil, "", err
+		}
 	}
 	if err := sw.Flush(); err != nil {
 		return nil, "", fmt.Errorf("archive: flush register: %w", err)

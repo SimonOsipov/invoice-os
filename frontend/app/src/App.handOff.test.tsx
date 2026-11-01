@@ -124,6 +124,10 @@ vi.mock('./components/InvoiceDetail', () => ({
   InvoiceDetail: () => null,
 }))
 
+vi.mock('./components/ExtractionReview', () => ({
+  ExtractionReview: () => null,
+}))
+
 // Every POST body sent to the create endpoint, in call order. Parsed from the fetch init
 // because apiFetch JSON.stringifies the body -- this is literally what crosses the wire.
 let createBodies: Record<string, unknown>[] = []
@@ -342,6 +346,27 @@ describe('EXTR-15-07: a recorded hand-off does not outlive its create flow', () 
     const body = await fileAndReadBody()
     expect(body.entity_id, 'control: the filing did not go under the incoming company').toBe(ENTITY_B)
     expect('source_document_id' in body, 'a stale hand-off survived a company switch').toBe(false)
+  })
+})
+
+describe('CRDDBTNOTE-05: enterByHand from a review screen', () => {
+  it('leaves the review for the form', async () => {
+    await renderApp()
+    await openCreateAndSettle()
+    await act(async () => {
+      requireCtx().openExtraction('job-1')
+    })
+    expect(requireCtx().view).toBe('extraction')
+
+    await act(async () => {
+      requireCtx().enterByHand(DOC_ID)
+    })
+
+    await waitFor(() => expect(requireCtx().view, 'the button left the user on the review').toBe('create'))
+    expect(requireCtx().createStep).toBe('form')
+
+    const body = await fileAndReadBody()
+    expect(body.source_document_id, 'the hand-off document did not reach the create request').toBe(DOC_ID)
   })
 })
 

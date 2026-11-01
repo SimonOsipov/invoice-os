@@ -78,7 +78,7 @@ var corpusPinned = []struct {
 			{"subtotal", rcStr("1000.00"), extraction.ReasonNone, nil},
 			{"vat", rcStr("75.00"), extraction.ReasonNone, nil},
 			{"total", rcStr("1075.00"), extraction.ReasonNone, nil},
-			// The nine AI-only fields have no Tier-1 rule: the engine reads none.
+			// The ten AI-only fields have no Tier-1 rule: the engine reads none.
 			{"due_date", nil, extraction.ReasonMissing, nil},
 			{"buyer_email", nil, extraction.ReasonMissing, nil},
 			{"buyer_telephone", nil, extraction.ReasonMissing, nil},
@@ -88,6 +88,7 @@ var corpusPinned = []struct {
 			{"buyer_country", nil, extraction.ReasonMissing, nil},
 			{"buyer_state", nil, extraction.ReasonMissing, nil},
 			{"buyer_lga", nil, extraction.ReasonMissing, nil},
+			{"original_invoice_number", nil, extraction.ReasonMissing, nil},
 			{"line_items", nil, extraction.ReasonMissing, nil},
 		},
 	},
@@ -104,7 +105,7 @@ var corpusPinned = []struct {
 			{"subtotal", rcStr("2000.00"), extraction.ReasonNone, nil},
 			{"vat", rcStr("150.00"), extraction.ReasonNone, nil},
 			{"total", rcStr("2150.00"), extraction.ReasonNone, nil},
-			// The nine AI-only fields have no Tier-1 rule: the engine reads none.
+			// The ten AI-only fields have no Tier-1 rule: the engine reads none.
 			{"due_date", nil, extraction.ReasonMissing, nil},
 			{"buyer_email", nil, extraction.ReasonMissing, nil},
 			{"buyer_telephone", nil, extraction.ReasonMissing, nil},
@@ -114,6 +115,7 @@ var corpusPinned = []struct {
 			{"buyer_country", nil, extraction.ReasonMissing, nil},
 			{"buyer_state", nil, extraction.ReasonMissing, nil},
 			{"buyer_lga", nil, extraction.ReasonMissing, nil},
+			{"original_invoice_number", nil, extraction.ReasonMissing, nil},
 			{"line_items", nil, extraction.ReasonMissing, nil},
 		},
 	},
@@ -134,7 +136,7 @@ var corpusPinned = []struct {
 			{"subtotal", nil, extraction.ReasonMissing, nil},
 			{"vat", nil, extraction.ReasonMissing, nil},
 			{"total", rcStr("3225.00"), extraction.ReasonNone, nil},
-			// The nine AI-only fields have no Tier-1 rule: the engine reads none.
+			// The ten AI-only fields have no Tier-1 rule: the engine reads none.
 			{"due_date", nil, extraction.ReasonMissing, nil},
 			{"buyer_email", nil, extraction.ReasonMissing, nil},
 			{"buyer_telephone", nil, extraction.ReasonMissing, nil},
@@ -144,6 +146,7 @@ var corpusPinned = []struct {
 			{"buyer_country", nil, extraction.ReasonMissing, nil},
 			{"buyer_state", nil, extraction.ReasonMissing, nil},
 			{"buyer_lga", nil, extraction.ReasonMissing, nil},
+			{"original_invoice_number", nil, extraction.ReasonMissing, nil},
 			{"line_items", nil, extraction.ReasonMissing, nil},
 		},
 	},
@@ -162,7 +165,7 @@ var corpusPinned = []struct {
 			{"subtotal", nil, extraction.ReasonMissing, nil},
 			{"vat", nil, extraction.ReasonMissing, nil},
 			{"total", rcStr("6450.00"), extraction.ReasonNone, nil},
-			// The nine AI-only fields have no Tier-1 rule: the engine reads none.
+			// The ten AI-only fields have no Tier-1 rule: the engine reads none.
 			{"due_date", nil, extraction.ReasonMissing, nil},
 			{"buyer_email", nil, extraction.ReasonMissing, nil},
 			{"buyer_telephone", nil, extraction.ReasonMissing, nil},
@@ -172,6 +175,7 @@ var corpusPinned = []struct {
 			{"buyer_country", nil, extraction.ReasonMissing, nil},
 			{"buyer_state", nil, extraction.ReasonMissing, nil},
 			{"buyer_lga", nil, extraction.ReasonMissing, nil},
+			{"original_invoice_number", nil, extraction.ReasonMissing, nil},
 			{"line_items", nil, extraction.ReasonMissing, nil},
 		},
 	},
@@ -191,7 +195,7 @@ var corpusPinned = []struct {
 			{"subtotal", nil, extraction.ReasonMissing, nil},
 			{"vat", nil, extraction.ReasonMissing, nil},
 			{"total", rcStr("4300.00"), extraction.ReasonNone, nil},
-			// The nine AI-only fields have no Tier-1 rule: the engine reads none.
+			// The ten AI-only fields have no Tier-1 rule: the engine reads none.
 			{"due_date", nil, extraction.ReasonMissing, nil},
 			{"buyer_email", nil, extraction.ReasonMissing, nil},
 			{"buyer_telephone", nil, extraction.ReasonMissing, nil},
@@ -201,6 +205,7 @@ var corpusPinned = []struct {
 			{"buyer_country", nil, extraction.ReasonMissing, nil},
 			{"buyer_state", nil, extraction.ReasonMissing, nil},
 			{"buyer_lga", nil, extraction.ReasonMissing, nil},
+			{"original_invoice_number", nil, extraction.ReasonMissing, nil},
 			{"line_items", nil, extraction.ReasonMissing, nil},
 		},
 	},
@@ -219,7 +224,7 @@ var corpusPinned = []struct {
 			{"subtotal", rcStr("5000.00"), extraction.ReasonNone, nil},
 			{"vat", rcStr("375.00"), extraction.ReasonNone, nil},
 			{"total", rcStr("5375.00"), extraction.ReasonNone, nil},
-			// The nine AI-only fields have no Tier-1 rule: the engine reads none.
+			// The ten AI-only fields have no Tier-1 rule: the engine reads none.
 			{"due_date", nil, extraction.ReasonMissing, nil},
 			{"buyer_email", nil, extraction.ReasonMissing, nil},
 			{"buyer_telephone", nil, extraction.ReasonMissing, nil},
@@ -229,6 +234,7 @@ var corpusPinned = []struct {
 			{"buyer_country", nil, extraction.ReasonMissing, nil},
 			{"buyer_state", nil, extraction.ReasonMissing, nil},
 			{"buyer_lga", nil, extraction.ReasonMissing, nil},
+			{"original_invoice_number", nil, extraction.ReasonMissing, nil},
 			{"line_items", nil, extraction.ReasonMissing, nil},
 		},
 	},

@@ -39,6 +39,7 @@ import {
   DETAIL_SUBMIT_COPY,
   diffEditInput,
   diffLineItems,
+  documentTypeBadge,
   editDateError,
   editInvoice,
   failureExplanation,
@@ -75,12 +76,15 @@ import {
   type StatusChange,
 } from '../lib/invoices'
 import { bulkPhaseReducer, ROW_EXPANSION_COPY, type BulkPhase } from '../lib/reviewBatch'
+import { getInvoiceNotes, isNote, type NoteType, type NotesOnInvoice } from '../lib/notes'
+import { NotesCard } from './NotesCard'
 import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import { ExplainPanel } from './ExplainPanel'
 import { NrsFieldControl } from './NrsFieldControl'
 import { ApprovalStateCard } from './ApprovalStateCard'
 import { InvoiceActivityCard } from './InvoiceActivityCard'
+import { NoteForm } from './NoteForm'
 import { SourceDocumentCard } from './SourceDocumentCard'
 import { SourceDocumentModal } from './SourceDocumentModal'
 import { StatusStrip } from './StatusStrip'
@@ -232,6 +236,13 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const [live, setLive] = useState<InvoiceDetailRecord | null>(null)
   const inv = live ?? detail.data
 
+  // Only a commercial fiscal record can start a note; any other invoice makes no request (topology console gate).
+  const notesWanted = inv != null && shouldShowFiscalRecord(inv) && !isNote(inv)
+  const notes = useAsync<NotesOnInvoice>(
+    () => (base ? getInvoiceNotes(ctx.authedFetch, base, invoiceId) : Promise.reject(new Error('no gateway configured'))),
+    { immediate: shouldFetchInvoices(base) && notesWanted, deps: [invoiceId, notesWanted] },
+  )
+
   // `gen` closes the in-flight-tick race ([poll-overlay-not-rerun], mirrors InvoicesList's
   // own runId idiom, packages/api-client/src/async-state.ts:89/92/96). `can_edit`
   // (draft/validated/rejected) and isInFlight (queued/submitted) are disjoint, so
@@ -340,6 +351,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   // isInFlight (queued/submitted, lib/invoices.ts:683-688), which is disjoint from the
   // can_edit set the Edit button lives behind (see the `gen` comment above).
   const [editing, setEditing] = useState(false)
+  const [noteType, setNoteType] = useState<NoteType | null>(null)
+  const formOpen = editing || noteType != null
   // onFocusApplied resets this to null after focusing, so a repeat click on the same line re-focuses.
   const [lineFocus, setLineFocus] = useState<{ seq: number; target: LineTarget } | null>(null)
   const [explainOpen, setExplainOpen] = useState<string | null>(null)
@@ -373,6 +386,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     content = <EmptyState title="Invoice not found" message="This invoice could not be loaded." />
   } else {
     const st = invoiceStatusStyle(inv.status)
+    const typeBadge = documentTypeBadge(inv)
     const items = inv.line_items ?? []
     const subtotal = inv.subtotal != null ? Number(inv.subtotal) : null
     const vat = inv.vat != null ? Number(inv.vat) : null
@@ -640,28 +654,48 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 <span style={{ width: 6, height: 6, borderRadius: '50%', background: st.text }} />
                 <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text, letterSpacing: '0.04em' }}>{st.label}</span>
               </span>
+              {typeBadge && (
+                <span data-testid="document-type-badge" title={typeBadge.title} className="mono" style={{ display: 'inline-flex', alignItems: 'center', background: 'var(--status-muted-bg)', border: '1px solid var(--status-muted-border)', borderRadius: 'var(--radius-sm)', padding: '3px 9px', fontSize: 10, fontWeight: 600, color: 'var(--status-muted-text)', letterSpacing: '0.04em' }}>
+                  {typeBadge.label}
+                </span>
+              )}
             </div>
-            <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{inv.buyer_name ?? '—'} · {fmtDate(inv.issue_date ?? inv.created_at)}</p>
+            <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
+              {inv.buyer_name ?? '—'} · {fmtDate(inv.issue_date ?? inv.created_at)}
+              {isNote(inv) && inv.original_invoice_id && (
+                <>
+                  {' · '}
+                  <button
+                    type="button"
+                    data-testid="original-invoice-link"
+                    onClick={() => ctx.openImportedInvoice(inv.original_invoice_id!)}
+                    style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--fg-1)', textDecoration: 'underline', font: 'inherit' }}
+                  >
+                    Original invoice
+                  </button>
+                </>
+              )}
+            </p>
           </div>
 
           {/* Always present ([actions-visibility]); each control disables off its own wire flag
-              ([gates-on-the-wire]); `!editing` hides it ([D-actions-hidden-while-editing]). canEdit/canRevalidate: store.go:1536-1538 / :1558. */}
+              ([gates-on-the-wire]); `!formOpen` hides it ([D-actions-hidden-while-editing]). */}
           {/* Outer column wraps the actions bar AND the submit skip/error banners together,
               so both stay in one right-aligned flex item ([D-actions-column]). The banners
               live OUTSIDE the `invoice-actions` gate on purpose: the bar unmounts while the
-              inline editor owns the screen, and the banner describing a skipped submit must
+              editor or note form owns the screen, and the banner describing a skipped submit must
               still render -- [never-report-success-on-a-skip] is not allowed to depend on
               the bar being mounted. */}
-          {(!editing || submitSkipped != null || submitError != null) && (
+          {(!formOpen || submitSkipped != null || submitError != null) && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10, maxWidth: 320 }}>
-              {/* The decision pair, gated on `!editing` alone -- NOT
+              {/* The decision pair, gated on `!formOpen` alone -- NOT
                   `can_edit` (task-554, AC-1/AC-2): approve/reject must survive on statuses
                   where `can_edit` is false (queued, submitted, failed, ...), and a decision
                   is taken on the STORED record, never on a dirty edit form.
                   A row wrapper (`detail-decision-actions`), not bare siblings, sits outside
                   `invoice-actions` so it survives that div's disappearance. Disabled: the
                   ghost swaps background/color; Approve dims to .45 with `filter: 'none'`. */}
-              {!editing && (
+              {!formOpen && (
                 <>
                   <div data-testid="detail-decision-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     {/* Arm -> confirm, same inline machine as Submit below ([no-modal]) --
@@ -793,7 +827,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   )}
                 </>
               )}
-              {!editing && (
+              {!formOpen && (
                 <div data-testid="invoice-actions" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     <button
@@ -885,6 +919,27 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           </button>
                         </>
                       )}
+                    {/* Shown only on a fiscal record; an accepted note is disabled with the wire's reason. */}
+                    {shouldShowFiscalRecord(inv) &&
+                      (['credit_note', 'debit_note'] as const).map((type) => (
+                        <button
+                          key={type}
+                          type="button"
+                          data-testid={type === 'credit_note' ? 'issue-credit-note' : 'issue-debit-note'}
+                          onClick={() => {
+                            if (inv.can_issue_note) setNoteType(type)
+                          }}
+                          disabled={!inv.can_issue_note}
+                          title={!inv.can_issue_note ? (inv.issue_note_blocked_reason ?? undefined) : undefined}
+                          className="v2-btn v2-btn-ghost pf-btn"
+                          style={{
+                            height: 34,
+                            ...(!inv.can_issue_note ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                          }}
+                        >
+                          {type === 'credit_note' ? 'Issue credit note' : 'Issue debit note'}
+                        </button>
+                      ))}
                   </div>
                   {/* Genuine-failure surface, moved here from the deleted fused card. Style
                       unchanged; only the card-relative `margin` is dropped, since the column's
@@ -964,6 +1019,16 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   onFocusApplied={() => setLineFocus(null)}
                   onSaved={handleSaved}
                   onCancel={() => setEditing(false)}
+                />
+              ) : noteType != null ? (
+                <NoteForm
+                  ctx={ctx}
+                  base={base}
+                  invoiceId={invoiceId}
+                  inv={inv}
+                  documentType={noteType}
+                  noteCount={notes.data?.notes.length ?? null}
+                  onCancel={() => setNoteType(null)}
                 />
               ) : (
                 <>
@@ -1246,6 +1311,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 </div>
               </div>
             )}
+
+            {notesWanted && <NotesCard run={notes} onOpen={ctx.openImportedInvoice} />}
 
             <ApprovalStateCard run={approval} />
 
@@ -1569,7 +1636,7 @@ function InvoiceEditBody({
                 Deliberately PASSIVE: it never writes subtotal/VAT/total, never blocks Save,
                 and carries no red/amber/border/icon and no "mismatch" wording, so it cannot
                 be misread as a validation error. `lineSum` is rendered RAW — never through
-                fmt(), which rounds to whole naira (lib/format.ts:5-7) and would erase the
+                fmt(), which rounds to whole naira, and would erase the
                 sub-naira disagreement this hint exists to expose. No subtotal-vs-hint
                 comparison is drawn here: deciding they disagree is the rule engine's job. */}
             <div data-testid="computed-line-sum" style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 4, lineHeight: 1.5 }}>

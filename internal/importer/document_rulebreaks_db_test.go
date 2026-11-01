@@ -870,8 +870,8 @@ func TestRLS_AV5DocumentImportRecordsAnUncategorisedVatBreak(t *testing.T) {
 		  WHERE v.id = rule_set_version_for('2027-01-15'::date) AND r.key = 'vat-standard-rate-uncategorised'`).Scan(&wantMessage, &wantVersion, &version); err != nil {
 		t.Fatalf("read vat-standard-rate-uncategorised in force on 2027-01-15: %v", err)
 	}
-	if version != 5 {
-		t.Fatalf("rule set in force on 2027-01-15 = v%d, want v5", version)
+	if version != 6 {
+		t.Fatalf("rule set in force on 2027-01-15 = v%d, want v6", version)
 	}
 
 	if _, err := newTestServiceWithGate(app, rbRealGate(t, app)).ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID); err != nil {

@@ -115,7 +115,11 @@ const (
 	msgUnknownField     = "this document field is not one we file on an invoice"
 	msgInvoiceNumberSet = "invoice_number identifies the invoice and is not corrected here"
 	msgSupplierField    = "supplier_tin and supplier_name come from the client record, not from the document"
+	msgOriginalNumber   = "the original invoice is chosen in the picker, not corrected here"
 )
+
+// originalNumberField is read for the note picker only: never counted, shown or corrected.
+const originalNumberField = "original_invoice_number"
 
 // The three fields HeaderFields names whose correction is gated on the extractor's own doubt
 // (AIR-03-06): a field the stored rank-0 row flags ambiguous or unreadable is correctable like
@@ -133,6 +137,9 @@ var lockedFields = map[string]string{
 // gets back must be the real one, not whatever the body happens to be wrong about too. A locked
 // name is not refused here -- lockedFieldFlaggedTx decides it, against the database.
 func refuseField(name string) (msg string, refused bool) {
+	if name == originalNumberField {
+		return msgOriginalNumber, true
+	}
 	for _, f := range HeaderFields {
 		if f == name {
 			return "", false

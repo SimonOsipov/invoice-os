@@ -15,6 +15,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/invoicefields"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 // Copy of internal/invoice/handlers.go issueTimeMsg.
@@ -429,6 +430,8 @@ func TestInvoiceFromCreateInput_CopiesEveryInputField(t *testing.T) {
 	var in invoice.CreateInput
 	var li invoice.LineItemInput
 	want := fill(reflect.ValueOf(&in).Elem(), map[string]bool{"SourceDocumentID": true}) // absent from Invoice by design
+	in.DocumentType = submission.CreditNote
+	want = append(want, "credit_note")
 	want = append(want, fill(reflect.ValueOf(&li).Elem(), map[string]bool{"ID": true})...)
 	in.LineItems = []invoice.LineItemInput{li}
 	if len(want) < 45 {

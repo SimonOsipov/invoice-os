@@ -7,7 +7,7 @@
 // stores/clients it drives, constructed once at boot in cmd/invoice/main.go.
 // It owns the ORDER of the steps -- the payload mapping
 // is payload.go's, the wire contract is validator.go's, the atomicity is
-// Store.ApplyValidation's. It adds no rules of its own.
+// Store.ApplyValidation's. Its only rules are the note checks (note_checks.go).
 //
 // The order is the design, and it is fixed:
 //
@@ -39,11 +39,17 @@ package invoice
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/SimonOsipov/invoice-os/internal/customrule"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 // Gate orchestrates the validate gate over the store and the 04 client. The
@@ -141,6 +147,11 @@ func (g *Gate) Evaluate(ctx context.Context, items []EvalItem) (EvalResult, erro
 		}
 	}
 
+	items, noteVs, err := g.withNoteFacts(ctx, items)
+	if err != nil {
+		return EvalResult{}, fmt.Errorf("read note originals: %w", err)
+	}
+
 	vitems := make([]ValidateItem, len(items))
 	for i, it := range items {
 		vitems[i] = ValidateItem{Ref: it.Ref, Invoice: MBSPayload(it.Invoice)}
@@ -160,6 +171,9 @@ func (g *Gate) Evaluate(ctx context.Context, items []EvalItem) (EvalResult, erro
 		// never render as "this invoice is clean".
 		return EvalResult{}, err
 	}
+	for ref, vs := range noteVs {
+		res.ByRef[ref] = append(res.ByRef[ref], vs...)
+	}
 
 	return EvalResult{
 		RuleSetVersion: res.RuleSetVersion,
@@ -167,6 +181,51 @@ func (g *Gate) Evaluate(ctx context.Context, items []EvalItem) (EvalResult, erro
 		ByRef:          res.ByRef,
 		CustomByRef:    res.CustomByRef,
 	}, nil
+}
+
+// withNoteFacts returns a copy of items with the original's facts set on each note, and the
+// note violations by ref. Unlocked: applyValidation decides under the original's lock.
+// A batch with no stored original opens no transaction.
+func (g *Gate) withNoteFacts(ctx context.Context, items []EvalItem) ([]EvalItem, map[string][]Violation, error) {
+	var noteIdx []int
+	needTx := false
+	for i, it := range items {
+		if isNote(it.Invoice) {
+			noteIdx = append(noteIdx, i)
+			needTx = needTx || it.Invoice.OriginalInvoiceID != nil
+		}
+	}
+	if len(noteIdx) == 0 {
+		return items, nil, nil
+	}
+	out := slices.Clone(items)
+	vs := make(map[string][]Violation, len(noteIdx))
+	read := func(tx pgx.Tx) error {
+		for _, i := range noteIdx {
+			inv := out[i].Invoice
+			var f originalFacts
+			if tx != nil {
+				var err error
+				if f, err = readOriginalFactsTx(ctx, tx, inv.OriginalInvoiceID, inv.ID, false); err != nil {
+					return err
+				}
+			}
+			if f.Found {
+				if inv.Original == nil {
+					inv.Original = &submission.BillingReference{IRN: f.IRN, IssueDate: f.IssueDate}
+				}
+				inv.OriginalTotal = f.Total
+				inv.CreditedBefore = &f.CreditedBefore
+			}
+			out[i].Invoice = inv
+			vs[out[i].Ref] = noteViolations(inv, f)
+		}
+		return nil
+	}
+	if !needTx {
+		return out, vs, read(nil)
+	}
+	return out, vs, db.WithinRequestTenantTx(ctx, g.store.pool, read)
 }
 
 func wireRules(rs []customrule.Rule) []CustomRule {
@@ -305,8 +364,16 @@ func (g *Gate) ValidateBatch(ctx context.Context, invs []Invoice) (BatchOutcome,
 	var changed []Invoice
 	record := func(inv Invoice, res EvalResult) error {
 		vs := res.ByRef[inv.ID]
-		if _, err := g.store.applyValidation(ctx, inv.ID, vs, res.StampByRef[inv.ID].ID, res.CustomByRef[inv.ID], fingerprints[inv.ID]); err != nil {
+		applied, err := g.store.applyValidation(ctx, inv.ID, vs, res.StampByRef[inv.ID].ID, res.CustomByRef[inv.ID], fingerprints[inv.ID])
+		if err != nil {
 			return err
+		}
+		if isNote(inv) {
+			// The locked verdict replaced Evaluate's note violations; report what was stored.
+			vs = nil
+			if err := json.Unmarshal(applied.Violations, &vs); err != nil {
+				return fmt.Errorf("decode stored violations: %w", err)
+			}
 		}
 		out.StampByID[inv.ID] = res.StampByRef[inv.ID]
 		out.ByID[inv.ID] = vs

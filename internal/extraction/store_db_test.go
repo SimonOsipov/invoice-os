@@ -1790,8 +1790,8 @@ func TestRLS_WriteDocumentTypeAcceptsEveryVerdictAndTheCheckRefusesTaxInvoice(t 
 	ctx := t.Context()
 	h := stRequire(t)
 	verdicts := extraction.DocumentTypeVerdictsForTest()
-	if len(verdicts) != 7 {
-		t.Fatalf("DocumentTypeVerdictsForTest() = %v, want the seven non-invoice names", verdicts)
+	if len(verdicts) != 8 {
+		t.Fatalf("DocumentTypeVerdictsForTest() = %v, want the eight non-invoice names", verdicts)
 	}
 	tenantID, documentID := stTenant(t, ctx)
 	write := func(jobID, docType string) error {

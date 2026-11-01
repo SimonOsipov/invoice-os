@@ -48,7 +48,7 @@ func TestCanonical_CarriesNoTenantOrStatus(t *testing.T) {
 		}
 	}
 	walk(reflect.TypeOf(submission.Canonical{}))
-	if len(seen) != 4 {
-		t.Errorf("walked %d struct types, want 4 (Canonical, Party, CanonicalLine, TaxSubtotal)", len(seen))
+	if len(seen) != 5 {
+		t.Errorf("walked %d struct types, want 5 (Canonical, Party, CanonicalLine, TaxSubtotal, BillingReference)", len(seen))
 	}
 }

@@ -128,6 +128,9 @@ interface RouteBook {
   detailByJob?: Record<string, unknown>
   importReplies?: unknown[]
   invoicesByBatch?: Record<string, { id: string }[]>
+  // GET /v1/imports/<id>: a function so a test can change the answer between reads.
+  batchById?: Record<string, () => unknown>
+  onFetch?: (url: string) => void
 }
 
 // One real entity (portfolio/v1/entities) so `active.entityId` resolves to something
@@ -140,6 +143,12 @@ function routeFetch(book: RouteBook = {}) {
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string) => {
+      book.onFetch?.(url)
+      const batchMatch = /\/api\/invoice\/v1\/imports\/([0-9a-f-]{36})$/.exec(url)
+      const batchReply = batchMatch ? book.batchById?.[batchMatch[1]] : undefined
+      if (batchReply) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(batchReply()) })
+      }
       const jobsMatch = /\/extractions\?document_id=([^&]+)/.exec(url)
       if (jobsMatch) {
         const docId = decodeURIComponent(jobsMatch[1])
@@ -716,5 +725,158 @@ describe('EXTR32-A9: a history restore onto a job the map does not hold offers n
     )
     fireEvent.click(screen.getByTestId('extraction-open-invoice'))
     await waitFor(() => expect(window.location.pathname, 'the restored exit must open its own invoice').toBe(`/invoices/${INVOICE_ID}`))
+  })
+})
+
+const HOLD_SENTENCE = 'This document reads as a credit or debit note. Open its review and pick the invoice it belongs to.'
+
+function heldReply(batchId: string) {
+  return {
+    ...importReply(batchId),
+    rows_valid: 0,
+    rows_invalid: 1,
+    ready_invoices: 0,
+    errors: [{ field: 'original_invoice_id', message: HOLD_SENTENCE }],
+  }
+}
+
+describe('CRDDBTNOTE-05-06: a held note', () => {
+  it('a held document lands on its review with no exit', async () => {
+    await landOneDocumentRun(
+      {
+        jobsByDocument: { [DOC_ID]: [extractionJob(JOB_ID, DOC_ID)] },
+        detailByJob: { [JOB_ID]: extractionDetail(JOB_ID, DOC_ID) },
+        importReplies: [heldReply(BATCH_ID)],
+      },
+      DOC_ID,
+    )
+
+    await waitFor(() => expect(window.location.pathname).toBe(`/extraction/${JOB_ID}`))
+    await waitFor(() => expect(screen.queryByTestId('extraction-save'), 'control: the review rendered').not.toBeNull())
+    expect(screen.queryByTestId('extraction-open-invoice'), 'a held document has no invoice to open').toBeNull()
+    expect(requireCtx().view).toBe('extraction')
+  })
+
+  it('a document with no extraction shows its message in the row', async () => {
+    const batch = (id: string, documentId: string, filename: string, errors: unknown[]) => ({
+      ...importReply(id),
+      document_id: documentId,
+      filename,
+      rows_valid: 0,
+      rows_invalid: errors.length,
+      ready_invoices: 0,
+      errors,
+    })
+    const hold = { field: 'original_invoice_id', message: HOLD_SENTENCE }
+    const noNumber = { field: 'invoice_number', message: 'No invoice number was found.' }
+    const jobsByDocument: Record<string, unknown[]> = { [DOC_A]: [extractionJob(JOB_A, DOC_A)], [DOC_B]: [extractionJob(JOB_B, DOC_B)] }
+    await renderApp({
+      jobsByDocument,
+      importReplies: [batch(BATCH_A, DOC_A, 'note.pdf', [hold]), batch(BATCH_B, DOC_B, 'other.pdf', [noNumber])],
+      batchById: {
+        [BATCH_A]: () => batch(BATCH_A, DOC_A, 'note.pdf', [hold]),
+        [BATCH_B]: () => batch(BATCH_B, DOC_B, 'other.pdf', [noNumber]),
+      },
+    })
+    await act(async () => {
+      requireCtx().openCreate()
+    })
+    await waitFor(() => expect(requireCtx().entityId).toBe(ENTITY_ID))
+    await act(async () => {
+      requireCtx().addPickedFiles([
+        new File(['%PDF-1.4 a'], 'note.pdf', { type: 'application/pdf' }),
+        new File(['%PDF-1.4 b'], 'other.pdf', { type: 'application/pdf' }),
+      ])
+    })
+    act(() => {
+      requireCtx().startDocumentRun()
+    })
+    act(() => {
+      FakeXhr.instances[0].respond(201, uploadReply(DOC_A))
+      FakeXhr.instances[1].respond(201, uploadReply(DOC_B))
+    })
+    fireEvent.click(await screen.findByRole('button', { name: /Quarantined documents \(2\)/ }))
+    const rows = await screen.findAllByTestId('unreadable-row')
+    expect(rows).toHaveLength(2)
+    delete jobsByDocument[DOC_A]
+    fireEvent.click(screen.getByTestId('unreadable-note-review'))
+    await waitFor(() => expect(rows[0].textContent).toContain('This document has no extraction to open.'))
+    expect(window.location.pathname).not.toContain('/extraction/')
+  })
+
+  it('Back from a held review returns to its run', async () => {
+    const batchReads: string[] = []
+    let heldDocumentFiled = false
+    const batch = (id: string, documentId: string, filename: string, errors: unknown[]) => ({
+      id,
+      entity_id: ENTITY_ID,
+      filename,
+      document_id: documentId,
+      status: 'completed',
+      rows_total: 1,
+      rows_valid: 0,
+      rows_invalid: errors.length,
+      errors,
+      rule_set_version: null,
+      created_at: '2026-01-01T00:00:00Z',
+    })
+    const noNumber = { field: 'invoice_number', message: 'No invoice number was found.' }
+    await renderApp({
+      jobsByDocument: { [DOC_A]: [extractionJob(JOB_A, DOC_A)], [DOC_B]: [extractionJob(JOB_B, DOC_B)] },
+      detailByJob: { [JOB_A]: extractionDetail(JOB_A, DOC_A) },
+      importReplies: [heldReply(BATCH_A), { ...heldReply(BATCH_B), errors: [noNumber] }],
+      batchById: {
+        [BATCH_A]: () => batch(BATCH_A, DOC_A, 'note.pdf', heldDocumentFiled ? [] : [{ field: 'original_invoice_id', message: HOLD_SENTENCE }]),
+        [BATCH_B]: () => batch(BATCH_B, DOC_B, 'other.pdf', [noNumber]),
+      },
+      onFetch: (url) => {
+        if (/\/imports\/[0-9a-f-]{36}$/.test(url)) batchReads.push(url)
+      },
+    })
+    await act(async () => {
+      requireCtx().openCreate()
+    })
+    await waitFor(() => expect(requireCtx().entityId).toBe(ENTITY_ID))
+    await act(async () => {
+      requireCtx().addPickedFiles([
+        new File(['%PDF-1.4 a'], 'note.pdf', { type: 'application/pdf' }),
+        new File(['%PDF-1.4 b'], 'other.pdf', { type: 'application/pdf' }),
+      ])
+    })
+    act(() => {
+      requireCtx().startDocumentRun()
+    })
+    expect(FakeXhr.instances).toHaveLength(2)
+    act(() => {
+      FakeXhr.instances[0].respond(201, uploadReply(DOC_A))
+      FakeXhr.instances[1].respond(201, uploadReply(DOC_B))
+    })
+
+    await waitFor(() => expect(requireCtx().reviewBatchIds).toEqual([BATCH_A, BATCH_B]))
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Quarantined documents \(2\)/ })).not.toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: /Quarantined documents \(2\)/ }))
+    const holdRow = await screen.findAllByTestId('unreadable-row')
+    expect(holdRow).toHaveLength(2)
+    expect(screen.queryAllByTestId('unreadable-note-review'), 'only the hold row opens a review').toHaveLength(1)
+
+    const reviewUrl = window.location.pathname
+    expect(reviewUrl).toContain(BATCH_A)
+    fireEvent.click(screen.getByTestId('unreadable-note-review'))
+    await waitFor(() => expect(window.location.pathname).toBe(`/extraction/${JOB_A}`))
+
+    heldDocumentFiled = true
+    const readsBefore = batchReads.length
+    await popTo(reviewUrl)
+    await waitFor(() => expect(requireCtx().createStep).toBe('review'))
+    expect(requireCtx().reviewBatchIds).toEqual([BATCH_A, BATCH_B])
+    await waitFor(() => expect(batchReads.length, 'the batch GETs are re-read').toBeGreaterThan(readsBefore))
+    // The files strip survives: the run was never reset.
+    expect(requireCtx().run.files.map((f) => f.name)).toEqual(['note.pdf', 'other.pdf'])
+    // Re-read answers no hold row: the held row is gone, the other stays.
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Quarantined documents \(1\)/ })).not.toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: /Quarantined documents \(1\)/ }))
+    await waitFor(() => expect(screen.getAllByTestId('unreadable-row')).toHaveLength(1))
+    expect(screen.queryByTestId('unreadable-note-review')).toBeNull()
+    expect(screen.queryByTestId('unreadable-held-panel')).toBeNull()
   })
 })

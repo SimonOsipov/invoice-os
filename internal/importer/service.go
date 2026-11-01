@@ -16,6 +16,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/invoicefields"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 // BatchResult is Import's return shape, whether dry-run or real. For a
@@ -666,6 +667,11 @@ func invoiceFromCreateInput(in invoice.CreateInput) invoice.Invoice {
 		BuyerCountry:       in.BuyerCountry,
 		BuyerState:         in.BuyerState,
 		BuyerLGA:           in.BuyerLGA,
+		DocumentType:       in.DocumentType,
+		OriginalInvoiceID:  in.OriginalInvoiceID,
+	}
+	if inv.DocumentType == "" {
+		inv.DocumentType = submission.CommercialInvoice // the store's default on insert
 	}
 	for i, li := range in.LineItems {
 		inv.LineItems = append(inv.LineItems, invoice.LineItem{

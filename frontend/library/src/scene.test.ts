@@ -127,7 +127,7 @@ describe('scene', () => {
         kinds.add(s.kind)
       }
     }
-    expect(FEATURES).toHaveLength(28)
+    expect(FEATURES).toHaveLength(29)
     expect(kinds.size).toBe(6)
   })
 

@@ -321,8 +321,9 @@ func TestInvoiceWire_NRSKeysSitBetweenFailureKindAndLineItems(t *testing.T) {
 	if at < 0 || !reflect.DeepEqual(keys[at+1:at+1+len(nrsHeaderKeys)], nrsHeaderKeys) {
 		t.Fatalf("keys after failure_kind = %v, want %v", keys, nrsHeaderKeys)
 	}
-	if keys[at+1+len(nrsHeaderKeys)] != "line_items" {
-		t.Errorf("key after the NRS keys = %q, want line_items", keys[at+1+len(nrsHeaderKeys)])
+	after := keys[at+1+len(nrsHeaderKeys):]
+	if len(after) < 3 || after[0] != "document_type" || after[1] != "original_invoice_id" || after[2] != "line_items" {
+		t.Errorf("keys after the NRS keys = %v, want document_type, original_invoice_id, line_items", after)
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(b, &raw); err != nil {
@@ -365,8 +366,9 @@ func TestGetHandler_TaxSubtotalsDerivedAfterTheInvoiceKeys(t *testing.T) {
 			}
 		}
 	}
-	if n := len(keys); keys[n-1] != "verdict_stale" || keys[n-3] != "can_correct_invoice_number" || keys[n-2] != "invoice_number_blocked_reason" {
-		t.Errorf("last three keys = %v, want the invoice-number pair then verdict_stale", keys[n-3:])
+	if n := len(keys); keys[n-1] != "verdict_stale" || keys[n-5] != "can_correct_invoice_number" || keys[n-4] != "invoice_number_blocked_reason" ||
+		keys[n-3] != "can_issue_note" || keys[n-2] != "issue_note_blocked_reason" {
+		t.Errorf("last five keys = %v, want the invoice-number pair, the issue-note pair, then verdict_stale", keys[n-5:])
 	}
 	var resp struct {
 		TaxSubtotals []map[string]any `json:"tax_subtotals"`
@@ -566,6 +568,8 @@ func TestInvoiceFieldsList_NamesTheWireContentKeys(t *testing.T) {
 	for _, f := range invoicefields.All {
 		if f.Line {
 			line = append(line, f.Key)
+		} else if f.Key == "original_invoice_number" {
+			continue // extraction-only: no invoice column, no wire key
 		} else {
 			header = append(header, f.Key)
 		}

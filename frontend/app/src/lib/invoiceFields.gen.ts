@@ -353,6 +353,17 @@ export const INVOICE_FIELDS = [
     "extract": true
   },
   {
+    "key": "original_invoice_number",
+    "label": "Original invoice number",
+    "type": "text",
+    "line": false,
+    "importKey": null,
+    "required": false,
+    "formKey": null,
+    "edit": false,
+    "extract": true
+  },
+  {
     "key": "description",
     "label": "Description",
     "type": "text",

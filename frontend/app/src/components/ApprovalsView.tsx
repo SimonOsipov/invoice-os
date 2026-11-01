@@ -38,24 +38,26 @@ import {
 } from '../lib/approvals'
 import { fmt, fmtDate } from '../lib/format'
 import {
+  documentTypeBadge,
   gateByActiveEntity,
   invoiceListIsEmpty,
   invoicesViewState,
   REGISTER_PAGE_SIZE,
   shouldFetchInvoices,
+  signedAmount,
   toggleSelection,
   type InvoiceListResponse,
 } from '../lib/invoices'
 import { bulkPhaseReducer } from '../lib/reviewBatch'
 import { useDismiss } from '../lib/useDismiss'
 import type { PlatformCtx } from '../types'
+import { MarkerPill } from './InvoicesList'
 import { Pager } from './Pager'
+import { SEVERITY_TONE } from './RulePills'
 
-// Owed topology assertion: A07-5/A07-6 (APPR-12-07, assertFillsColumn over WIDE_WIDTHS)
-// -- kept as ONE shared const across head and rows (InvoicesList.tsx:69's shape), not
-// ClientsView.tsx's two-literal shape. The leading checkbox track is InvoicesList's 24px,
-// this grid's own shape, not ReviewRow's 26px.
-const APPROVALS_GRID_COLUMNS = '24px 140px 1fr 130px 90px 180px 110px'
+// One shared const for head and rows. The number track is a minmax that grows before a 1fr,
+// so the buyer track keeps a 60px floor.
+const APPROVALS_GRID_COLUMNS = '24px minmax(110px, 210px) minmax(60px, 1fr) 130px 90px 180px 110px'
 
 const CHECKBOX_STYLE = { width: 15, height: 15, accentColor: 'var(--action)', margin: 0 } as const
 
@@ -394,6 +396,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
               // (ReviewAlreadyImportedTab.tsx:60-63).
               const reasonId = `approve-blocked-reason-${r.id}`
               const reason = av.approvable ? null : av.blockedReason
+              const typeBadge = documentTypeBadge(r)
               return (
                 <div
                   key={r.id}
@@ -421,17 +424,23 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                       }}
                     />
                   </span>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                  <span data-testid="approval-number-cell" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                     <span
                       className="mono"
+                      title={r.invoice_number}
                       style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                     >
                       {r.invoice_number}
                     </span>
+                    {typeBadge != null && (
+                      <span style={{ flexShrink: 0, display: 'inline-flex' }}>
+                        <MarkerPill testId="approval-type-badge" tone={SEVERITY_TONE.info} label={typeBadge.label} title={typeBadge.title} />
+                      </span>
+                    )}
                     {reason != null && <BlockedReason id={reasonId} reason={reason} />}
                   </span>
-                  <span style={{ fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name}</span>
-                  <span className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(Number(r.total)) : '—'}</span>
+                  <span data-testid="approval-buyer-cell" title={r.buyer_name ?? undefined} style={{ fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name}</span>
+                  <span className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(signedAmount(r, r.total)) : '—'}</span>
                   <span className="mono" style={{ fontSize: 12, color: 'var(--fg-2)' }}>{av.stepLabel}</span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                     <span style={{ fontSize: 13, color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{av.roleLabel}</span>

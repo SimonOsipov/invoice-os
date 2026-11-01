@@ -789,6 +789,17 @@ describe('the line-item field filter (EXTR-13-07)', () => {
     )
   })
 
+  it('the pane hides the original invoice number', () => {
+    const original = mkField({ name: 'original_invoice_number', value: 'INV-77' })
+
+    render(fieldsPane({ fields: [...tenFields(), original] }))
+
+    expect(screen.queryByTestId('extraction-field-original_invoice_number')).toBeNull()
+    expect(rowIds().slice().sort(), 'another cell moved').toEqual(
+      HEADER_FIELDS.map((name) => `extraction-field-${name}`).sort(),
+    )
+  })
+
   // AC-5: line_tax is a fifth line-item role, carried on the wire but never rendered in the
   // grid ([vat-carried-not-rendered]); the pane must exclude it the same way it excludes the
   // four rendered roles, not treat the unrecognised suffix as a header field.

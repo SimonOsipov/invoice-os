@@ -601,3 +601,22 @@ func TestInvoiceEditFor_AMalformedDueDateIsRefused(t *testing.T) {
 		t.Errorf("err = %v, want ErrValueRefused", err)
 	}
 }
+
+func TestNewInvoiceFieldApplier_AnUndoMarksTheEditContext(t *testing.T) {
+	for _, tc := range []struct {
+		method extraction.CorrectionMethod
+		want   bool
+	}{{extraction.MethodUndone, true}, {fcMethodTyped, false}} {
+		var got bool
+		edit := func(ctx context.Context, _ pgx.Tx, _ string, _ invoice.EditInput) (invoice.Invoice, error) {
+			got = invoice.IsUndo(ctx)
+			return invoice.Invoice{ID: fcInvoiceID}, nil
+		}
+		if _, err := newInvoiceFieldApplier(edit)(context.Background(), nil, fcDocumentID, "buyer_name", nil, tc.method); err != nil {
+			t.Fatal(err)
+		}
+		if got != tc.want {
+			t.Errorf("method %q: edit context marked undo = %v, want %v", tc.method, got, tc.want)
+		}
+	}
+}

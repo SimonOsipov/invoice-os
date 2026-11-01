@@ -721,3 +721,17 @@ func TestAIRunPy_FieldsIsExactlyHeaderFields(t *testing.T) {
 		t.Errorf("run.py FIELDS = %v, want HeaderFields %v", got, HeaderFields)
 	}
 }
+
+func TestMergeAI_TheOriginalNumberMustBePrinted(t *testing.T) {
+	pages := onePage(1, tok("Against invoice INV-77", 1, 0.10, 0.30, 0.50, 0.32))
+
+	got := mergeWith([]FieldResult{mgMissing("original_invoice_number")}, map[string]any{"original_invoice_number": "INV-77"}, pages, nil)
+	if r := got[0]; r.Value == nil || *r.Value != "INV-77" || r.Reason != ReasonNone || r.Region == nil {
+		t.Errorf("a printed answer = %+v, want INV-77 / none with a region", r)
+	}
+
+	got = mergeWith([]FieldResult{mgMissing("original_invoice_number")}, map[string]any{"original_invoice_number": "INV-78"}, pages, nil)
+	if r := got[0]; r.Value != nil || r.Region != nil {
+		t.Errorf("an unprinted answer = %+v, want no value and no region", r)
+	}
+}

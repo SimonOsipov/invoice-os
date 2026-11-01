@@ -163,6 +163,9 @@ export interface RejectionReason {
   path?: string
 }
 
+// Mirrors submission.CommercialInvoice, CreditNote, DebitNote.
+export type InvoiceDocumentType = 'commercial_invoice' | 'credit_note' | 'debit_note'
+
 // The invoice record shape shared by listInvoices/getInvoice (invoice.go:83-114 plus the
 // getResponse/validateResponse sibling key, handlers.go:180-183/376-379).
 // `rule_set_version` is typed as always-present (number | null) even though the raw List
@@ -231,6 +234,8 @@ export interface InvoiceRecord {
   buyer_country?: string | null
   buyer_state?: string | null
   buyer_lga?: string | null
+  document_type?: InvoiceDocumentType
+  original_invoice_id?: string | null
   line_items?: InvoiceLineItem[]
   rule_set_version: number | null
   // approval (APPR-08-08) -- a LIST-wire key ONLY: Go emits it on listItem, never on
@@ -329,6 +334,9 @@ export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval' | 'd
   // Same convention; true only for a draft whose history never left draft/validated.
   can_correct_invoice_number: boolean
   invoice_number_blocked_reason: string | null
+  // True only for an accepted invoice with an IRN that is not itself a note.
+  can_issue_note: boolean
+  issue_note_blocked_reason: string | null
 }
 
 // GET /v1/invoices response envelope (listResponse, handlers.go:110-113). Exactly two
@@ -758,6 +766,8 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     reject_blocked_reason: res.reject_blocked_reason ?? null,
     can_correct_invoice_number: res.can_correct_invoice_number === true,
     invoice_number_blocked_reason: res.invoice_number_blocked_reason ?? null,
+    can_issue_note: res.can_issue_note === true,
+    issue_note_blocked_reason: res.issue_note_blocked_reason ?? null,
   }
 }
 
@@ -937,6 +947,21 @@ export function hasBlockingViolation(inv: Pick<InvoiceRecord, 'violations'>): bo
   return inv.violations.some((v) => v.severity === 'error')
 }
 
+export function documentSign(r: Pick<InvoiceRecord, 'document_type'>): 1 | -1 {
+  return r.document_type === 'credit_note' ? -1 : 1
+}
+
+export function signedAmount(r: Pick<InvoiceRecord, 'document_type'>, amount: string | null | undefined): number {
+  const n = Number(amount) || 0
+  return n === 0 ? 0 : documentSign(r) * n
+}
+
+export function documentTypeBadge(r: Pick<InvoiceRecord, 'document_type'>): { label: string; title: string } | null {
+  if (r.document_type === 'credit_note') return { label: 'CREDIT', title: 'Credit note' }
+  if (r.document_type === 'debit_note') return { label: 'DEBIT', title: 'Debit note' }
+  return null
+}
+
 // Shared missing-buyer-TIN signal for the register, review row and Bill-to block --
 // blank/whitespace counts as missing, closing the `??` hole all three used to have.
 export const BUYER_TIN_MISSING = 'TIN MISSING'
@@ -1049,7 +1074,7 @@ export function diffLineItems(
 // from the story's `number | null` (AC #5's arithmetic is unchanged). Money is strings
 // end-to-end ([D13]) precisely so no float touches it; the rule this mirrors has a 0.005
 // tolerance, so precision below the kobo is load-bearing; and the app's only money
-// formatter (fmt(), lib/format.ts:5-7) rounds to WHOLE naira, so a numeric return would
+// formatter (fmt()) rounds to WHOLE naira, so a numeric return would
 // invite the component to render a hint that reads EQUAL to a subtotal it actually
 // differs from -- fabricating the very agreement this hint exists to question.
 //

@@ -749,6 +749,8 @@ export interface Invoice {
   buyer_country: string | null
   buyer_state: string | null
   buyer_lga: string | null
+  document_type: 'commercial_invoice' | 'credit_note' | 'debit_note'
+  original_invoice_id: string | null
   line_items?: InvoiceLineItem[]
 }
 
@@ -865,6 +867,8 @@ export interface GetInvoiceResult extends Invoice {
   // True only for a draft whose history never left draft/validated -- never status alone.
   can_correct_invoice_number: boolean
   invoice_number_blocked_reason: string | null
+  can_issue_note: boolean
+  issue_note_blocked_reason: string | null
 }
 
 export function getInvoice(token: string, id: string): Promise<GetInvoiceResult> {
@@ -941,6 +945,38 @@ export interface InvoiceEditInput {
 // draft in the same tx (the fix-loop's demotion edge).
 export function editInvoice(token: string, id: string, body: InvoiceEditInput): Promise<Invoice> {
   return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices/${id}`, { method: 'PATCH', body, token })
+}
+
+// NoteSummary / NotesOnInvoice mirror internal/invoice/notes.go; money is a decimal string.
+export interface NoteSummary {
+  id: string
+  document_type: Invoice['document_type']
+  invoice_number: string
+  status: Invoice['status']
+  total: string | null
+}
+
+export interface NotesOnInvoice {
+  notes: NoteSummary[]
+  credited_so_far: string
+  still_creditable: string | null
+}
+
+export interface NoteIssueInput {
+  document_type: 'credit_note' | 'debit_note'
+  invoice_number: string
+  issue_date: string
+  lines: { line_id: string; quantity: string; unit_price: string }[]
+}
+
+// issueNote(): POST /v1/invoices/{id}/notes -- 201 with the new draft note.
+export function issueNote(token: string, id: string, body: NoteIssueInput): Promise<Invoice> {
+  return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices/${id}/notes`, { method: 'POST', body, token })
+}
+
+// getInvoiceNotes(): GET /v1/invoices/{id}/notes.
+export function getInvoiceNotes(token: string, id: string): Promise<NotesOnInvoice> {
+  return apiFetch<NotesOnInvoice>(`${apiBase()}/api/invoice/v1/invoices/${id}/notes`, { token })
 }
 
 // StatusChange mirrors internal/invoice/invoice.go's StatusChange exactly: one
@@ -1205,6 +1241,43 @@ export function supplyInvoiceNumber(token: string, body: SupplyNumberRequest): P
   return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/imports/document/invoice`, { method: 'POST', body, token })
 }
 
+// POST /v1/imports/document (createDocumentRequest) and GET /v1/imports/document/note-originals
+// (internal/importer/document_note.go).
+export interface DocumentImportRequest {
+  entity_id: string
+  document_id: string
+  document_type?: 'credit_note' | 'debit_note' | 'commercial_invoice'
+  original_invoice_id?: string
+  invoice_number?: string
+}
+
+export interface NoteOriginalRow {
+  id: string
+  invoice_number: string
+  issue_date: string | null
+  currency: string | null
+  total: string | null
+  buyer_name: string | null
+  note_count: number
+}
+
+export interface NoteOriginals {
+  entity_id: string
+  filed_invoice_id: string | null
+  originals: NoteOriginalRow[]
+}
+
+export function postDocumentImport(token: string, body: DocumentImportRequest): Promise<unknown> {
+  return apiFetch<unknown>(`${apiBase()}/api/invoice/v1/imports/document`, { method: 'POST', body, token })
+}
+
+export function getNoteOriginals(token: string, documentId: string): Promise<NoteOriginals> {
+  return apiFetch<NoteOriginals>(
+    `${apiBase()}/api/invoice/v1/imports/document/note-originals?document_id=${encodeURIComponent(documentId)}`,
+    { token },
+  )
+}
+
 // GET /v1/imports/saved-mapping. Mirrors internal/importer/saved_mapping.go's SavedMapping
 // and handlers.go's savedMappingResponse.
 export interface SavedMapping {
@@ -1290,6 +1363,7 @@ export interface DashboardBucket {
   counts: Counts
   needs_attention: number
   awaiting_approval: number
+  metrics: Record<string, { num: number; den: number }>
 }
 
 export interface DashboardClient extends DashboardBucket {

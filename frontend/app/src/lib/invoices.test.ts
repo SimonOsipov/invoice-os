@@ -38,6 +38,9 @@ import {
   DETAIL_SUBMIT_COPY,
   diffEditInput,
   diffLineItems,
+  documentSign,
+  documentTypeBadge,
+  signedAmount,
   editInvoice,
   editValueToWire,
   FAILURE_EXPLANATION_FALLBACK,
@@ -1271,6 +1274,8 @@ describe('getInvoice', () => {
       reject_blocked_reason: null,
       can_correct_invoice_number: false,
       invoice_number_blocked_reason: null,
+      can_issue_note: false,
+      issue_note_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(fiscalInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -1307,6 +1312,8 @@ describe('getInvoice', () => {
       reject_blocked_reason: null,
       can_correct_invoice_number: true,
       invoice_number_blocked_reason: null,
+      can_issue_note: false,
+      issue_note_blocked_reason: null,
     }
     const { qr_png_base64: _omittedQr, ...withoutQrKey } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutQrKey) })
@@ -1339,6 +1346,8 @@ describe('getInvoice', () => {
       reject_blocked_reason: null,
       can_correct_invoice_number: false,
       invoice_number_blocked_reason: null,
+      can_issue_note: false,
+      issue_note_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(detailInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -1392,6 +1401,8 @@ describe('getInvoice', () => {
       reject_blocked_reason: null,
       can_correct_invoice_number: false,
       invoice_number_blocked_reason: null,
+      can_issue_note: false,
+      issue_note_blocked_reason: null,
     }
     const { can_submit: _omittedCanSubmit, ...withoutCanSubmit } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanSubmit) })
@@ -1581,6 +1592,8 @@ describe('getInvoice', () => {
       reject_blocked_reason: null,
       can_correct_invoice_number: true,
       invoice_number_blocked_reason: null,
+      can_issue_note: false,
+      issue_note_blocked_reason: null,
     }
     const { can_view_ubl: _omittedCanViewUbl, ...withoutCanViewUbl } = wire
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanViewUbl) })
@@ -1851,6 +1864,27 @@ describe('getInvoice', () => {
     const fixed = await getInvoice(af, base, 'inv-1')
     expect(fixed.can_correct_invoice_number).toBe(false)
     expect(fixed.invoice_number_blocked_reason).toBe(NUMBER_FIXED_REASON)
+  })
+})
+
+describe('getInvoice: the note gate', () => {
+  it('getInvoice normalises can_issue_note', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    const { can_issue_note: _f, issue_note_blocked_reason: _r, ...bare } = draftInvoice as unknown as Record<string, unknown>
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(bare) })
+    const absent = await getInvoice(af, base, 'inv-1')
+    expect(absent.can_issue_note).toBe(false)
+    expect(absent.issue_note_blocked_reason).toBeNull()
+    expect('issue_note_blocked_reason' in absent).toBe(true)
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...bare, can_issue_note: 'true' }) })
+    expect((await getInvoice(af, base, 'inv-1')).can_issue_note).toBe(false)
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...bare, can_issue_note: true }) })
+    expect((await getInvoice(af, base, 'inv-1')).can_issue_note).toBe(true)
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...bare, issue_note_blocked_reason: 'why' }) })
+    expect((await getInvoice(af, base, 'inv-1')).issue_note_blocked_reason).toBe('why')
   })
 })
 
@@ -2155,6 +2189,8 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
       reject_blocked_reason: null,
       can_correct_invoice_number: false,
       invoice_number_blocked_reason: null,
+      can_issue_note: false,
+      issue_note_blocked_reason: null,
     }
     const af = createAuthedFetch(() => 'tok', vi.fn())
 
@@ -2301,6 +2337,8 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
       reject_blocked_reason: null,
       can_correct_invoice_number: false,
       invoice_number_blocked_reason: null,
+      can_issue_note: false,
+      issue_note_blocked_reason: null,
     }
 
     const fromList = resolvedOutside(listRow)
@@ -5685,5 +5723,34 @@ describe('demotion (ENGI-15-08, D11)', () => {
 
   it('latestDemotion_aNonDraftStatusIsNeverDemoted', () => {
     expect(latestDemotion([genesis, validated, demoted], 'validated')).toBeNull()
+  })
+})
+
+describe('CRDDBTNOTE-04-01: document sign helpers', () => {
+  const doc = (document_type?: string) => ({ document_type }) as Pick<InvoiceRecord, 'document_type'>
+
+  it('documentSign_creditIsNegativeAllElsePositive', () => {
+    expect(documentSign(doc('credit_note'))).toBe(-1)
+    expect(documentSign(doc('commercial_invoice'))).toBe(1)
+    expect(documentSign(doc('debit_note'))).toBe(1)
+    expect(documentSign(doc(undefined))).toBe(1)
+    expect(documentSign(doc('something_new'))).toBe(1)
+  })
+
+  it('signedAmount_signsAndTreatsNullAsZero', () => {
+    expect(signedAmount(doc('credit_note'), '322.50')).toBe(-322.5)
+    expect(signedAmount(doc('debit_note'), '53.75')).toBe(53.75)
+    expect(signedAmount(doc('commercial_invoice'), '1075.00')).toBe(1075)
+    expect(signedAmount(doc('credit_note'), null)).toBe(0)
+    expect(signedAmount(doc('debit_note'), undefined)).toBe(0)
+    expect(signedAmount(doc('commercial_invoice'), null)).toBe(0)
+  })
+
+  it('documentTypeBadge_namesOnlyNotes', () => {
+    expect(documentTypeBadge(doc('credit_note'))).toEqual({ label: 'CREDIT', title: 'Credit note' })
+    expect(documentTypeBadge(doc('debit_note'))).toEqual({ label: 'DEBIT', title: 'Debit note' })
+    expect(documentTypeBadge(doc('commercial_invoice'))).toBeNull()
+    expect(documentTypeBadge(doc(undefined))).toBeNull()
+    expect(documentTypeBadge(doc('something_new'))).toBeNull()
   })
 })

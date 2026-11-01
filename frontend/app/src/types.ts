@@ -518,6 +518,8 @@ export type PlatformCtx = {
   setAuditInvoiceFilter: (invoiceId: string | null, invoiceNumber: string | null) => void
   // Sets extractionJobId and navigates to the review screen in ONE handler, same reason.
   openExtraction: (jobId: string) => void
+  // Opens the newest extraction of a document; rejects with a sentence when it cannot.
+  openDocumentReview: (documentId: string) => Promise<void>
   setSandbox: (v: boolean) => void
   setSettingsTab: (t: SettingsTab) => void
   toggleConnector: (id: ConnectorId) => void

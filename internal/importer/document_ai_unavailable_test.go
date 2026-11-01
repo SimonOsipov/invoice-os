@@ -119,7 +119,7 @@ func TestDocumentRoutes_AnAIUnavailableDocumentQuarantinesAndCarriesNothing(t *t
 
 	svc := newTestService(app)
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/imports/document", CreateDocumentHandler(svc.ImportDocument, nil))
+	mux.HandleFunc("POST /v1/imports/document", CreateDocumentHandler(svc.ImportDocumentFor, nil))
 	mux.HandleFunc("GET /v1/imports/document/reading", ReadingHandler(svc.CarriedReading, nil))
 	mux.HandleFunc("POST /v1/imports/document/invoice", SupplyNumberHandler(svc.SupplyInvoiceNumber, nil))
 	mux.HandleFunc("GET /v1/imports/{id}", GetHandler(NewStore(app).GetBatch, nil))

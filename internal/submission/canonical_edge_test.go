@@ -80,7 +80,7 @@ func TestCanonical_NoFieldAnywhereIsNumeric(t *testing.T) {
 		}
 	}
 	walk(reflect.TypeOf(submission.Canonical{}))
-	if len(seen) != 4 {
-		t.Errorf("walked %d struct types, want 4", len(seen))
+	if len(seen) != 5 {
+		t.Errorf("walked %d struct types, want 5", len(seen))
 	}
 }

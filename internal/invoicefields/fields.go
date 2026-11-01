@@ -62,6 +62,7 @@ var All = []Field{
 	{Key: "buyer_country", Label: "Buyer country", Type: Code, Import: true, FormKey: "buyer_country", Edit: true, Extract: true},
 	{Key: "buyer_state", Label: "Buyer state", Type: Code, Import: true, FormKey: "buyer_state", Edit: true, Extract: true},
 	{Key: "buyer_lga", Label: "Buyer LGA", Type: Code, Import: true, FormKey: "buyer_lga", Edit: true, Extract: true},
+	{Key: "original_invoice_number", Label: "Original invoice number", Type: Text, Extract: true},
 	{Key: "description", Label: "Description", Type: Text, Line: true, Import: true, Lead: true, Edit: true, Extract: true},
 	{Key: "quantity", Label: "Quantity", Type: Quantity, Line: true, Import: true, Lead: true, Edit: true, Extract: true},
 	{Key: "unit_price", Label: "Unit price", Type: Money, Line: true, Import: true, Lead: true, Edit: true, Extract: true},

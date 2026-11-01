@@ -446,3 +446,24 @@ func TestUBLBlockedReason_NilWhenNothingIsMissing(t *testing.T) {
 		t.Errorf("ublBlockedReason([]string{}) = %q, want nil (never a pointer to \"\")", *got)
 	}
 }
+
+// A credit note downloaded from the route declares 380, a debit note 384, an untyped row 381.
+func TestUBLHandler_DeclaresTheInvoiceDocumentType(t *testing.T) {
+	id := ublTestIdentity()
+	for _, tc := range []struct {
+		dt   submission.DocumentType
+		code string
+	}{
+		{submission.CommercialInvoice, "381"}, {submission.CreditNote, "380"}, {submission.DebitNote, "384"}, {"", "381"},
+	} {
+		inv := completeUBLInvoice(t, "INV-TYPE")
+		inv.DocumentType = tc.dt
+		rec := doUBL(t, ublGetOK(inv), &id, inv.ID)
+		if rec.Code != 200 {
+			t.Fatalf("%q: status = %d, want 200 (body=%s)", tc.dt, rec.Code, rec.Body.String())
+		}
+		if want := "<cbc:InvoiceTypeCode>" + tc.code + "</cbc:InvoiceTypeCode>"; !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("%q: body lacks %s", tc.dt, want)
+		}
+	}
+}

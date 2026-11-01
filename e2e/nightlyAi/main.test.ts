@@ -1,9 +1,9 @@
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { run, type CallsPage, type Deps, type TotalsPage } from './main'
+import { realDeps, run, writeSetupFailure, type CallsPage, type Deps, type TotalsPage } from './main'
 import type { KeyRow } from './score'
 
 const T = new Date('2026-11-01T02:00:00.000Z')
@@ -230,5 +230,26 @@ describe('run', () => {
     await run(f.deps, out)
     expect(status(out, 'accuracy').status).toBe('failed')
     expect(status(out, 'accuracy').detail).toContain('provisional')
+  })
+})
+
+describe('a missing target URL', () => {
+  it('rejects realDeps and the setup-failure file holds five failed steps naming the URL', async () => {
+    vi.stubEnv('GATEWAY_URL', '')
+    try {
+      const err = await realDeps().then(
+        () => null,
+        (e: unknown) => e,
+      )
+      expect(err).toBeInstanceOf(Error)
+      const out = outFile()
+      expect(writeSetupFailure(out, err)).toBe(0)
+      const section = read(out)
+      expect(section.ok).toBe(false)
+      expect(section.steps.map((s) => [s.name, s.status])).toEqual(STEPS.map((n) => [n, 'failed']))
+      expect(section.steps.every((s) => s.detail?.includes('GATEWAY_URL'))).toBe(true)
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })

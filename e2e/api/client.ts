@@ -1363,6 +1363,7 @@ export interface DashboardBucket {
   counts: Counts
   needs_attention: number
   awaiting_approval: number
+  metrics: Record<string, { num: number; den: number }>
 }
 
 export interface DashboardClient extends DashboardBucket {

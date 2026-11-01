@@ -30,6 +30,8 @@ import {
   validateInvoice,
   rollup,
   rollupHistory,
+  approveUntilClosed,
+  firmApproverTokens,
   getEntity,
   rawFetch,
   apiBase,
@@ -38,7 +40,7 @@ import {
   type RollupHistoryRow,
 } from './client'
 import { freshTin } from './fixtures'
-import { assertErrorEnvelope } from './contract-helpers'
+import { assertErrorEnvelope, ensureFirmPolicyActive } from './contract-helpers'
 
 // brokenInvoice(): create one invoice on `entity` with only entity_id/invoice_number
 // set, then validate it -- stays draft, stamped with severity:"error" violations
@@ -50,6 +52,38 @@ async function brokenInvoice(token: string, entity: Entity, label: string): Prom
   })
   const validated = await validateInvoice(token, created.id)
   return validated.violations.filter((v) => v.severity === 'error').map((v) => v.rule_key)
+}
+
+// Own copies of contract-invoice.spec.ts's fixtures (no cross-spec imports).
+function cleanInvoiceFields(invoiceNumber: string) {
+  return {
+    invoice_number: invoiceNumber,
+    issue_date: '2026-01-01T00:00:00Z',
+    supplier_tin: freshTin(),
+    supplier_name: 'Acme Nigeria Ltd',
+    buyer_tin: '87654321-0002',
+    buyer_name: 'Buyer Ltd',
+    currency: 'NGN',
+    subtotal: '1000',
+    vat: '75',
+    total: '1075',
+    line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+  }
+}
+
+async function createFailedInvoice(tok: string, entityId: string, invoiceNumber: string): Promise<string> {
+  const created = await createInvoice(tok, { entity_id: entityId, ...cleanInvoiceFields(invoiceNumber) })
+  await validateInvoice(tok, created.id)
+  await approveUntilClosed(created.id, await firmApproverTokens())
+  for (const target of ['queued', 'failed']) {
+    const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tok}` },
+      body: { target },
+    })
+    expect(res.status, `createFailedInvoice setup: -> ${target} should return 200`).toBe(200)
+  }
+  return created.id
 }
 
 test.describe('dashboard rollup contract (API E2E, over the deployed gateway)', () => {
@@ -320,6 +354,29 @@ test.describe('dashboard rollup history contract (API E2E, over the deployed gat
     // 500 clamps to dashboard.HistoryWindowDays rather than failing.
     const big = await rawFetch('/api/dashboard/v1/rollup/history?days=500', { headers: auth })
     expect(big.status).toBe(200)
+  })
+
+  test('DASH-53: only a filed document moves vat_tracked, and resolve and undo move it', async () => {
+    await ensureFirmPolicyActive(tokenA)
+    const tin = freshTin()
+    const entity = await createEntity(tokenA, { name: `DASH-53 ${tin}`, tin })
+    await createInvoice(tokenA, { entity_id: entity.id, ...cleanInvoiceFields(`DASH53-D-${tin}`) })
+    const failedId = await createFailedInvoice(tokenA, entity.id, `DASH53-F-${tin}`)
+    const vatTracked = async () => {
+      const client = (await rollup(tokenA)).clients.find((c) => c.entity_id === entity.id)
+      expect(client, 'the fresh entity should have a rollup row').toBeDefined()
+      return client!.metrics.vat_tracked
+    }
+    const resolved = `/api/invoice/v1/invoices/${failedId}/resolved-outside`
+    const auth = { Authorization: `Bearer ${tokenA}` }
+
+    expect(await vatTracked(), 'a draft and an unresolved failed invoice are not filed').toEqual({ num: 0, den: 2 })
+    const post = await rawFetch(resolved, { method: 'POST', headers: auth, body: { reason: `resolved ${tin}` } })
+    expect(post.status, 'resolving should return 200').toBe(200)
+    expect(await vatTracked(), 'a resolved failed invoice is filed').toEqual({ num: 7500, den: 2 })
+    const del = await rawFetch(resolved, { method: 'DELETE', headers: auth })
+    expect(del.status, 'un-resolving should return 200').toBe(200)
+    expect(await vatTracked(), 'undoing removes its VAT').toEqual({ num: 0, den: 2 })
   })
 
   test('DASH-52: unauthenticated request is refused at the gateway edge', async () => {

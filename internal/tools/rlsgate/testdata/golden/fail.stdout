@@ -1,0 +1,5 @@
+FAIL  pkgA.TestBad
+=== RUN   TestBad
+    bad_test.go:10: expected 42, got 7
+--- FAIL: TestBad (0.00s)
+rlsgate: 0 passed, 0 skipped, 1 failed (1 test-level results)

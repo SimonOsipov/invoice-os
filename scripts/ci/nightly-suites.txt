@@ -1,0 +1,20 @@
+# key=Display name[=results]: one line per ci.yml job that the Nightly summary reports.
+# The name is the job's exact `name:`; =results marks the jobs that upload results-<key>.
+go=Go=results
+docker-canary=Docker image (canary)
+docling-canary=Docling image (canary)
+docling-test=Docling image (test suite)=results
+migrations=Migrations (fresh Postgres)=results
+rls=RLS isolation (adversarial)=results
+idp=IdP integration (supabase/auth)=results
+queue=Queue suites (River outbox + exactly-once)=results
+audit=Audit suite (append-only + atomicity)=results
+frontend=Frontend=results
+library=Library=results
+blog=Blog=results
+hooks=Claude hooks=results
+clean-clone=Clean-clone build
+stale-refs=Stale references
+migration-order=Migration order
+cite-refs=Line-number citations
+caddy-headers=Caddyfile frame headers

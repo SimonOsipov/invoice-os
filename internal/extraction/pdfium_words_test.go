@@ -395,8 +395,8 @@ func TestPDFiumWords_SplitGapStaysInsideItsMeasuredWindow(t *testing.T) {
 // slice must be byte-identical to today's, index for index.
 func TestPDFiumWords_ASingleRectTokenIsUnchanged(t *testing.T) {
 	names := pdcNonChromeFixtures(t)
-	if len(names) != 42 {
-		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 42", len(names))
+	if len(names) != 72 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 72", len(names))
 	}
 
 	compared := 0

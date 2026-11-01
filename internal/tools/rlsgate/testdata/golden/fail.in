@@ -1,0 +1,6 @@
+{"Action":"run","Package":"pkgA","Test":"TestBad"}
+{"Action":"output","Package":"pkgA","Test":"TestBad","Output":"=== RUN   TestBad\n"}
+{"Action":"output","Package":"pkgA","Test":"TestBad","Output":"    bad_test.go:10: expected 42, got 7\n"}
+{"Action":"output","Package":"pkgA","Test":"TestBad","Output":"--- FAIL: TestBad (0.00s)\n"}
+{"Action":"fail","Package":"pkgA","Test":"TestBad","Elapsed":0.00}
+{"Action":"fail","Package":"pkgA","Elapsed":0.01}

@@ -1,0 +1,3 @@
+{"Action":"start","Package":"x/p"}
+{"Action":"output","Package":"x/p","Output":"PASS\n"}
+{"Action":"pass","Package":"x/p"}

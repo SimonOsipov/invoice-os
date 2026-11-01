@@ -1,0 +1,52 @@
+run services describe gateway-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete gateway-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe auth-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete auth-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe tenancy-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete tenancy-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe portfolio-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete portfolio-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe invoice-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete invoice-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe validation-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete validation-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe dashboard-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete dashboard-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe submission-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete submission-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe notifications-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete notifications-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe worker-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete worker-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe docling-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete docling-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe app-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete app-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe landing-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete landing-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe library-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete library-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe blog-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete blog-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe ops-console-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete ops-console-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services describe support-console-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run services delete support-console-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run jobs describe migrate-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run jobs delete migrate-pr-7 --project ascomply-preview --region africa-south1 --quiet
+run jobs execute preview-db --project ascomply-preview --region africa-south1 --quiet --wait --update-env-vars PR_DB=pr_7,ACTION=drop
+storage buckets describe gs://ascomply-preview-pr-7 --project ascomply-preview
+storage rm --recursive gs://ascomply-preview-pr-7 --project ascomply-preview --quiet
+secrets list --project ascomply-preview --filter labels.preview-pr=7 --format value(name)
+secrets delete pr-7-gateway-token --project ascomply-preview --quiet
+secrets delete pr-7-s2s-token --project ascomply-preview --quiet
+secrets delete pr-7-gotrue-jwt-keys --project ascomply-preview --quiet
+secrets delete pr-7-gotrue-jwt-secret --project ascomply-preview --quiet
+secrets delete pr-7-database-superuser-url --project ascomply-preview --quiet
+secrets delete pr-7-database-migration-url --project ascomply-preview --quiet
+secrets delete pr-7-database-app-url --project ascomply-preview --quiet
+secrets delete pr-7-database-worker-url --project ascomply-preview --quiet
+secrets delete pr-7-database-reader-url --project ascomply-preview --quiet
+secrets delete pr-7-database-gateway-url --project ascomply-preview --quiet
+secrets delete pr-7-database-auth-url --project ascomply-preview --quiet
+secrets delete pr-7-mock-issuer-key --project ascomply-preview --quiet

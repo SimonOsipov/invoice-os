@@ -1,0 +1,3 @@
+{"Action":"start","Package":"x/p"}
+{"Action":"output","Package":"x/p","Output":"        tier-1 accuracy over the golden corpus: 44 / 44\n"}
+{"Action":"pass","Package":"x/p"}

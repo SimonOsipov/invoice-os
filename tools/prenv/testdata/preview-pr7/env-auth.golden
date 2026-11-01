@@ -1,0 +1,8 @@
+DEPLOY_ENV: pr-7
+ENVIRONMENT: development
+API_EXTERNAL_URL: https://auth-pr-7-944095690109.africa-south1.run.app
+GOTRUE_JWT_ISSUER: urn:ascomply:auth:pr-7
+GOTRUE_SITE_URL: https://landing-pr-7-944095690109.africa-south1.run.app
+GOTRUE_DISABLE_SIGNUP: 'false'
+GOTRUE_MAILER_AUTOCONFIRM: 'true'
+GOTRUE_DB_MAX_POOL_SIZE: '3'

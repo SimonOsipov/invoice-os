@@ -1,0 +1,408 @@
+// nightly_ci_script_test.go runs scripts/ci/nightly-ci.sh against a scripted gh.
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// nightlyShim is a gh on PATH keyed by its first two arguments (workflow_run, run_list, run_view,
+// run_cancel). Each key answers one line of <key>.seq per call, then <key>.default, else nothing.
+// The line EXIT1:<text> fails with <text> on stderr. argv.log holds the tab-joined argv.
+type nightlyShim struct {
+	dir, out string
+}
+
+func newNightlyShim(t *testing.T) nightlyShim {
+	t.Helper()
+	dir := t.TempDir()
+	stub := `#!/bin/sh
+dir='` + dir + `'
+sep=""
+for a in "$@"; do printf '%s%s' "$sep" "$a"; sep="$(printf '\t')"; done >> "$dir/argv.log"
+printf '\n' >> "$dir/argv.log"
+key="$1_$2"
+line=""
+if [ -s "$dir/$key.seq" ]; then
+  line=$(head -n 1 "$dir/$key.seq"); tail -n +2 "$dir/$key.seq" > "$dir/$key.tmp"; mv "$dir/$key.tmp" "$dir/$key.seq"
+elif [ -f "$dir/$key.default" ]; then line=$(cat "$dir/$key.default"); fi
+case "$line" in EXIT1:*) echo "${line#EXIT1:}" >&2; exit 1;; esac
+printf '%s\n' "$line"
+`
+	writeShim(t, filepath.Join(dir, "gh"), stub)
+	writeSleepStub(t, dir)
+	return nightlyShim{dir: dir, out: filepath.Join(t.TempDir(), "out")}
+}
+
+func (s nightlyShim) answer(t *testing.T, key string, lines ...string) {
+	t.Helper()
+	writeFile(t, filepath.Join(s.dir, key+".seq"), strings.Join(lines, "\n")+"\n")
+}
+
+func (s nightlyShim) always(t *testing.T, key, line string) {
+	t.Helper()
+	writeFile(t, filepath.Join(s.dir, key+".default"), line+"\n")
+}
+
+func (s nightlyShim) run(t *testing.T, env string, args ...string) (output string, code int) {
+	t.Helper()
+	script := filepath.Join(repoRoot(t), "scripts", "ci", "nightly-ci.sh")
+	info, err := os.Stat(script)
+	if err != nil {
+		t.Fatalf("scripts/ci/nightly-ci.sh does not exist: %v", err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("scripts/ci/nightly-ci.sh is not executable (mode %v)", info.Mode())
+	}
+	stdout, stderr, code := runBashScript(t, "export PATH='"+s.dir+"':\"$PATH\"\n"+env+"bash '"+script+"' \"$@\"\n", args...)
+	return stdout + stderr, code
+}
+
+func (s nightlyShim) defaultEnv() string {
+	return "export REPO=o/r GH_TOKEN=fake GITHUB_OUTPUT='" + s.out + "'\n"
+}
+
+// calls counts the gh calls whose argv starts with the tab-joined prefix.
+func (s nightlyShim) calls(t *testing.T, prefix string) int {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(s.dir, "argv.log"))
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, l := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(l, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+func (s nightlyShim) outputText(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(s.out)
+	if os.IsNotExist(err) {
+		return ""
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func TestNightlyCIScript_RunIDFromURL(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.always(t, "workflow_run", "https://github.com/o/r/actions/runs/42")
+	s.answer(t, "run_view", "in_progress", "completed")
+	out, code := s.run(t, s.defaultEnv(), "epic/nightly")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0\n%s", code, out)
+	}
+	if got := s.outputText(t); got != "run_id=42\n" {
+		t.Errorf("GITHUB_OUTPUT = %q, want run_id=42", got)
+	}
+	if n := s.calls(t, "run\tlist"); n != 1 {
+		t.Errorf("gh run list called %d times, want 1 (the pre-dispatch snapshot)", n)
+	}
+	if n := s.calls(t, "workflow\trun\tci.yml\t-R\to/r\t--ref\tepic/nightly"); n != 1 {
+		t.Errorf("gh workflow run with ci.yml, --ref and the ref called %d times, want 1", n)
+	}
+	if n := s.calls(t, "run\tview\t42"); n != 2 {
+		t.Errorf("gh run view 42 called %d times, want 2", n)
+	}
+}
+
+func TestNightlyCIScript_RunIDFromListFallback(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.answer(t, "run_list", `[{"databaseId":7}]`)
+	s.always(t, "run_list", `[{"databaseId":9},{"databaseId":7},{"databaseId":8}]`)
+	s.always(t, "run_view", "completed")
+	out, code := s.run(t, s.defaultEnv(), "epic/nightly")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0\n%s", code, out)
+	}
+	if got := s.outputText(t); got != "run_id=9\n" {
+		t.Errorf("GITHUB_OUTPUT = %q, want run_id=9 (run 7 predates the dispatch)", got)
+	}
+	if n := s.calls(t, "run\tlist\t-R\to/r\t--workflow\tci.yml\t--event\tworkflow_dispatch\t--branch\tepic/nightly"); n != 2 {
+		t.Errorf("gh run list for the dispatch called %d times, want 2 (before and after)", n)
+	}
+}
+
+// The runner clock is ignored: a run GitHub dates far in the past is still the new one.
+func TestNightlyCIScript_FallbackIgnoresClockSkew(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.answer(t, "run_list", `[]`)
+	s.always(t, "run_list", `[{"databaseId":5,"createdAt":"2000-01-01T00:00:00Z"}]`)
+	s.always(t, "run_view", "completed")
+	out, code := s.run(t, s.defaultEnv(), "main")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0\n%s", code, out)
+	}
+	if got := s.outputText(t); got != "run_id=5\n" {
+		t.Errorf("GITHUB_OUTPUT = %q, want run_id=5", got)
+	}
+}
+
+func TestNightlyCIScript_FallbackSkipsManualDispatchAlreadyPresent(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.answer(t, "run_list", `[{"databaseId":5}]`)
+	s.always(t, "run_list", `[{"databaseId":6},{"databaseId":5}]`)
+	s.always(t, "run_view", "completed")
+	out, code := s.run(t, s.defaultEnv(), "main")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0\n%s", code, out)
+	}
+	if got := s.outputText(t); got != "run_id=6\n" {
+		t.Errorf("GITHUB_OUTPUT = %q, want run_id=6 (run 5 was there before the dispatch)", got)
+	}
+}
+
+func TestNightlyCIScript_NoRunFoundExitsOne(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.always(t, "run_list", "[]")
+	out, code := s.run(t, s.defaultEnv(), "main")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1\n%s", code, out)
+	}
+	if n := s.calls(t, "run\tlist"); n != 13 {
+		t.Errorf("gh run list called %d times, want 13 (1 before, 12 after)", n)
+	}
+	if got := s.outputText(t); got != "" {
+		t.Errorf("GITHUB_OUTPUT = %q, want empty", got)
+	}
+}
+
+func TestNightlyCIScript_OnlyRunsBeforeTheDispatchExitsOne(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.always(t, "run_list", `[{"databaseId":7}]`)
+	out, code := s.run(t, s.defaultEnv(), "main")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1 (run 7 predates the dispatch)\n%s", code, out)
+	}
+	if n := s.calls(t, "run\tlist"); n != 13 {
+		t.Errorf("gh run list called %d times, want 13", n)
+	}
+	if got := s.outputText(t); got != "" {
+		t.Errorf("GITHUB_OUTPUT = %q, want empty", got)
+	}
+}
+
+func TestNightlyCIScript_RedCIStillExitsZero(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.always(t, "workflow_run", "https://github.com/o/r/actions/runs/42")
+	// run view asks only for .status; the conclusion of the run is the summary's business.
+	s.always(t, "run_view", "completed")
+	if out, code := s.run(t, s.defaultEnv(), "main"); code != 0 {
+		t.Fatalf("exit %d, want 0\n%s", code, out)
+	}
+	if n := s.calls(t, "run\tview\t42\t-R\to/r\t--json\tstatus\t--jq\t.status"); n != 1 {
+		t.Errorf("gh run view asking only for the status called %d times, want 1", n)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(s.dir, "argv.log")); strings.Contains(string(raw), "conclusion") {
+		t.Errorf("gh was asked for the conclusion: %s", raw)
+	}
+}
+
+func TestNightlyCIScript_GhViewErrorIsNotYet(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.always(t, "workflow_run", "https://github.com/o/r/actions/runs/42")
+	s.answer(t, "run_view", "EXIT1:gh: HTTP 502", "EXIT1:gh: HTTP 502", "completed")
+	out, code := s.run(t, s.defaultEnv(), "main")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0\n%s", code, out)
+	}
+	if n := s.calls(t, "run\tview\t42"); n != 3 {
+		t.Errorf("gh run view called %d times, want 3", n)
+	}
+}
+
+func TestNightlyCIScript_TimeoutCancelsAndExitsOne(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.always(t, "workflow_run", "https://github.com/o/r/actions/runs/42")
+	s.always(t, "run_view", "in_progress")
+	out, code := s.run(t, s.defaultEnv()+"export NIGHTLY_CI_POLLS=3\n", "main")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1\n%s", code, out)
+	}
+	if n := s.calls(t, "run\tview\t42"); n != 3 {
+		t.Errorf("gh run view called %d times, want 3", n)
+	}
+	if n := s.calls(t, "run\tcancel\t42\t-R\to/r"); n != 1 {
+		t.Errorf("gh run cancel 42 called %d times, want 1", n)
+	}
+}
+
+func TestNightlyCIScript_DefaultPollBudgetIs120(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.always(t, "workflow_run", "https://github.com/o/r/actions/runs/42")
+	s.always(t, "run_view", "in_progress")
+	out, code := s.run(t, s.defaultEnv(), "main")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1\n%s", code, out)
+	}
+	if n := s.calls(t, "run\tview\t42"); n != 120 {
+		t.Errorf("gh run view called %d times, want 120", n)
+	}
+}
+
+const twoWF = "dev-env.yml=preview_run_id"
+
+func twoWorkflowShim(t *testing.T) nightlyShim {
+	t.Helper()
+	s := newNightlyShim(t)
+	s.answer(t, "workflow_run", "https://github.com/o/r/actions/runs/41", "https://github.com/o/r/actions/runs/42")
+	return s
+}
+
+func TestNightlyCIScript_TwoWorkflowsBothOutputs(t *testing.T) {
+	t.Parallel()
+	s := twoWorkflowShim(t)
+	// poll 1 41 and 42 pending; poll 3 41 completes; poll 5 42 completes.
+	s.answer(t, "run_view", "in_progress", "in_progress", "in_progress", "in_progress", "completed", "in_progress", "completed")
+	out, code := s.run(t, s.defaultEnv(), "main", "ci.yml=run_id", twoWF)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0\n%s", code, out)
+	}
+	if got := s.outputText(t); got != "run_id=41\npreview_run_id=42\n" {
+		t.Errorf("GITHUB_OUTPUT = %q", got)
+	}
+	if n := s.calls(t, "run\tview\t41"); n != 3 {
+		t.Errorf("gh run view 41 called %d times, want 3 (a completed run is not polled again)", n)
+	}
+	if n := s.calls(t, "run\tview\t42"); n != 4 {
+		t.Errorf("gh run view 42 called %d times, want 4", n)
+	}
+	if n := s.calls(t, "run\tcancel"); n != 0 {
+		t.Errorf("gh run cancel called %d times, want 0", n)
+	}
+	if !strings.Contains(out, "Dispatched dev-env.yml run 42.") {
+		t.Errorf("output lacks the dispatch line: %q", out)
+	}
+}
+
+func TestNightlyCIScript_TwoWorkflowsRedStillExitsZero(t *testing.T) {
+	t.Parallel()
+	s := twoWorkflowShim(t)
+	s.always(t, "run_view", "completed")
+	if out, code := s.run(t, s.defaultEnv(), "main", "ci.yml=run_id", twoWF); code != 0 {
+		t.Fatalf("exit %d, want 0\n%s", code, out)
+	}
+}
+
+func TestNightlyCIScript_TwoWorkflowsTimeoutCancelsBoth(t *testing.T) {
+	t.Parallel()
+	s := twoWorkflowShim(t)
+	// run 41 completes at once; run 42 never does.
+	s.answer(t, "run_view", "completed", "in_progress", "in_progress")
+	s.always(t, "run_view", "in_progress")
+	out, code := s.run(t, s.defaultEnv()+"export NIGHTLY_CI_POLLS=2\n", "main", "ci.yml=run_id", twoWF)
+	if code != 1 {
+		t.Fatalf("exit %d, want 1\n%s", code, out)
+	}
+	if n := s.calls(t, "run\tcancel\t42\t-R\to/r"); n != 1 {
+		t.Errorf("gh run cancel 42 called %d times, want 1", n)
+	}
+	if n := s.calls(t, "run\tcancel\t41"); n != 0 {
+		t.Errorf("gh run cancel 41 called %d times, want 0 (it completed)", n)
+	}
+}
+
+func TestNightlyCIScript_SecondDispatchFailsKeepsFirst(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.answer(t, "workflow_run", "https://github.com/o/r/actions/runs/41", "EXIT1:HTTP 422")
+	s.always(t, "run_view", "completed")
+	out, code := s.run(t, s.defaultEnv(), "main", "ci.yml=run_id", twoWF)
+	if code != 1 {
+		t.Fatalf("exit %d, want 1\n%s", code, out)
+	}
+	if !strings.Contains(out, "could not dispatch dev-env.yml") {
+		t.Errorf("the failed dispatch is not reported:\n%s", out)
+	}
+	if n := s.calls(t, "run\tcancel"); n != 0 {
+		t.Errorf("gh run cancel called %d times, want 0 (the first run is still good)", n)
+	}
+	if n := s.calls(t, "run\tview\t41"); n == 0 {
+		t.Errorf("run 41 was not awaited after the second dispatch failed")
+	}
+	if got := s.outputText(t); !strings.Contains(got, "run_id=41") {
+		t.Errorf("output %q lacks run_id=41", got)
+	}
+}
+
+func TestNightlyCIScript_SecondRunNotFoundKeepsFirst(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.answer(t, "workflow_run", "https://github.com/o/r/actions/runs/41", "queued, no url")
+	s.always(t, "run_view", "completed")
+	s.always(t, "run_list", "[]")
+	out, code := s.run(t, s.defaultEnv(), "main", "ci.yml=run_id", twoWF)
+	if code != 1 {
+		t.Fatalf("exit %d, want 1\n%s", code, out)
+	}
+	if n := s.calls(t, "run\tcancel"); n != 0 {
+		t.Errorf("gh run cancel called %d times, want 0", n)
+	}
+}
+
+func TestNightlyCIScript_MalformedPairIsUsage(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	for _, pair := range []string{"ci.yml", "=run_id", "ci.yml=", "a=b=c"} {
+		if out, code := s.run(t, s.defaultEnv(), "main", pair); code != 2 {
+			t.Errorf("pair %q: exit %d, want 2\n%s", pair, code, out)
+		}
+	}
+	if n := s.calls(t, ""); n > 0 {
+		t.Errorf("gh called %d times on a usage error, want 0", n)
+	}
+}
+
+func TestNightlyCIScript_DispatchFailureExitsOne(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	s.always(t, "workflow_run", "EXIT1:HTTP 404")
+	out, code := s.run(t, s.defaultEnv(), "main")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1\n%s", code, out)
+	}
+	if !strings.Contains(out, "HTTP 404") {
+		t.Errorf("output lacks the HTTP 404 text: %q", out)
+	}
+	if n := s.calls(t, "run\t"); n != 1 {
+		t.Errorf("gh run called %d times around a failed dispatch, want 1 (the snapshot only)", n)
+	}
+}
+
+func TestNightlyCIScript_UsageErrors(t *testing.T) {
+	t.Parallel()
+	s := newNightlyShim(t)
+	if out, code := s.run(t, s.defaultEnv()); code != 2 {
+		t.Errorf("no argument: exit %d, want 2\n%s", code, out)
+	}
+	if out, code := s.run(t, s.defaultEnv(), ""); code != 2 {
+		t.Errorf("empty ref: exit %d, want 2\n%s", code, out)
+	}
+	if out, code := s.run(t, "unset REPO\n", "main"); code != 2 {
+		t.Errorf("REPO unset: exit %d, want 2\n%s", code, out)
+	}
+	if n := s.calls(t, ""); n > 0 {
+		t.Errorf("gh called %d times on a usage error, want 0", n)
+	}
+}

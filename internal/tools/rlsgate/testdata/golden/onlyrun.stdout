@@ -1,0 +1,2 @@
+rlsgate: 0 passed, 0 skipped, 0 failed (0 test-level results)
+::error::rlsgate: zero test-level results — the suite ran no tests (silent whole-suite skip or unmatched selection)

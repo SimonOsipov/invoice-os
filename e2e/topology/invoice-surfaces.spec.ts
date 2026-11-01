@@ -39,6 +39,7 @@ import {
 } from '../api/client'
 import { codeListsReady, ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshBuyerTin, freshTin } from '../api/fixtures'
+import { shoot } from '../argos'
 import { buildMixedCsv, buildPerfCsv, steerExplainMarker } from '../importFixtures'
 import { approvalRun404Dropper, type Dropper, expectedStatusDropper, notFoundIdDropper } from './consoleGate'
 import {
@@ -55,6 +56,7 @@ import {
 } from './layout'
 import { browserToken, signInAs, signInAtFrontDoor } from '../personaSession'
 import { e2eMember } from '../realAccounts'
+import { nightlyTarget, REAL_AI_COVERED } from '../targets'
 import { APP_URL, shardTenants, VALIDATION_EXPECTED } from './targets'
 
 // This file runs in its own shard, on its own tenants: PERSONAS shadows the api client's 1111 / 2222 pair.
@@ -1333,9 +1335,11 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await selectEntity(page, entity.name)
   await goToInvoices(page)
   await openInvoiceRow(page, invoiceNumber)
-
+  // `invoice-detail` wraps the "Loading invoice…" state too; `not-validated` only renders once loaded.
   // 1. Not yet validated -- the Draft node is `current` and nothing downstream is reached.
   await expect(page.getByTestId('not-validated')).toBeVisible()
+  // Masks are full-width rows (title row, supplier row): leaf masks follow the random text width.
+  await shoot(page, 'app', 'firm-detail', { mask: [page.getByTestId('company-switcher'), page.locator('aside nav.pf-nav-list'), page.getByTestId('invoice-detail').locator('tbody'), page.getByTestId('status-strip'), page.getByTestId('invoice-detail').locator(':scope > div').first(), page.getByTestId('invoice-main-column').locator(':scope > div').first().locator(':scope > div').first().locator(':scope > div').first()] })
   await expectStripStates(page, { draft: 'current', validated: 'unreached', queued: 'unreached' })
   // A `current` node renders its own row's attribution -- here the genesis row, written by
   // createInvoice's login(PERSONAS.A): a seeded member, not this page's e2e member.
@@ -6837,6 +6841,7 @@ test('ENGI-16 detail: Line 2 opens the editor on line 2', async ({ page }) => {
 
 // The answer's 300-character unbroken token must wrap inside the table (D23); the line fix is the model's to propose.
 test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(180_000)
   const errors = collectErrors(page)
 

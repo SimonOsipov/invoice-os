@@ -8,10 +8,12 @@ import { test, expect, type Locator, type Page, type Request, type Response, typ
 import { login, createEntity, createImportBatch, getInvoice, listInvoices, approveUntilClosed, firmApproverTokens, type ExtractionDetail, type Persona } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
+import { shoot as argosShoot } from '../argos'
 import { approvalRun404Dropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { GATEWAY_URL, shardTenants } from './targets'
 import { signInAs } from '../personaSession'
+import { nightlyTarget, REAL_AI_COVERED } from '../targets'
 import { buildAir07UnsteeredCsv, buildHeaderOnlyCsv, buildMixedCsv, steerExplainMarker } from '../importFixtures'
 
 const SHARD = shardTenants('import-review-surfaces.spec.ts')
@@ -464,6 +466,7 @@ test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
 
     await startWizard(page, 'RESKIN2-04 upload')
     await expect(page.locator('label[for="pf-import-file"]'), 'dropzone renders').toBeVisible({ timeout: 30_000 })
+    await argosShoot(page, 'app', 'firm-create', { mask: [page.getByTestId('company-switcher'), page.locator('aside nav.pf-nav-list'), page.locator('span.card-title', { hasText: /^Import invoices/ }).locator('xpath=..')] })
 
     // One drop: the PDF sets the run kind, so both CSVs carry a kind note and the 16 MiB one carries the size cap too.
     await dropFiles(page, [
@@ -1011,6 +1014,7 @@ test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
     await extractOneDocument(page, 'RESKIN2-04 extraction flagged')
     const detail = await openExtractionReview(page)
     await expect(page.locator('main h1'), 'no h1 inside main on the extraction view').toHaveCount(0)
+    await argosShoot(page, 'app', 'firm-extraction', { mask: [page.getByTestId('company-switcher'), page.locator('aside nav.pf-nav-list'), page.getByTestId('extraction-fields')] })
 
     const flagged = detail.fields.filter((f) => f.reason !== '')
     expect(flagged.length, 'the default upload must read with flagged fields').toBeGreaterThan(0)
@@ -1243,6 +1247,7 @@ test.describe('ENGI-16 import review opens the editor at the line', () => {
   })
 
   test('ENGI-17 review: Explain proposes a line fix and Accept saves it', async ({ page }) => {
+    test.skip(nightlyTarget(), REAL_AI_COVERED)
     test.setTimeout(180_000)
     const errors = collectErrors(page)
 

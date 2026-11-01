@@ -18,3 +18,13 @@ describe('e2e package declares no pg dependency', () => {
     expect(offenders, `still present in devDependencies: ${offenders.join(', ')}`).toEqual([])
   })
 })
+
+describe('e2e package pins the Argos SDK', () => {
+  const dev = JSON.parse(readFileSync(PACKAGE_JSON, 'utf8')).devDependencies ?? {}
+
+  it('holds both Argos packages at an exact version', () => {
+    const argos = Object.entries(dev).filter(([name]) => name.startsWith('@argos-ci/'))
+    expect(argos.map(([name]) => name).sort()).toEqual(['@argos-ci/core', '@argos-ci/playwright'])
+    for (const [name, range] of argos) expect(range, name).toMatch(/^\d+\.\d+\.\d+$/)
+  })
+})

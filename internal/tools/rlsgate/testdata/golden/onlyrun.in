@@ -1,0 +1,3 @@
+{"Action":"start","Package":"pkgA"}
+{"Action":"run","Package":"pkgA","Test":"TestHang"}
+{"Action":"output","Package":"pkgA","Test":"TestHang","Output":"panic: runtime error: nil pointer dereference\n"}

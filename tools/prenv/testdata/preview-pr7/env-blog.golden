@@ -1,0 +1,3 @@
+DEPLOY_ENV: pr-7
+ENVIRONMENT: development
+VITE_GATEWAY_URL: https://gateway-pr-7-944095690109.africa-south1.run.app

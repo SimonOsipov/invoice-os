@@ -69,6 +69,7 @@ paths:
 - Gate deploy-time provisioning with an allowlist of environment names, never a blocklist.
 - Pass the raw `ENVIRONMENT` value to `BootstrapEnabled`.
 - Gate `db.Reset` on `platform.DeployEnv()`, never on `ENVIRONMENT`.
+- `db.Reset` accepts a `pr-<N>` name only. The shard seeds also accept the exact name `nightly`.
 - The migrate job runs the account-state grant on every run, as `supabase_auth_admin`. It logs `not_ready` until GoTrue has created `auth.users`. The next run restores the policy `invitee_account_state_read` after a GoTrue upgrade drops it.
 - Connect as `supabase_auth_admin` only from GoTrue and from `db.GrantAccountStateRead`.
 - Connect as `invoice_gateway` only from the gateway's hand-off store, registrant and account-event outboxes, session revocations and throttle counts. Grant it `SELECT`, `INSERT` and `DELETE` on `gateway_handoff_codes`, `INSERT` on `registrant_handoffs` and `account_event_handoffs`, and `SELECT`, `INSERT`, `UPDATE` and `DELETE` on `gateway_session_revocations` and `gateway_throttle_counts`, nothing else.

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="sidecar/docling" errors="0" failures="1" skipped="0" tests="3" time="0.019"><testcase classname="tests.test_x" name="test_ok" file="tests/test_x.py" line="0" time="0.000" /><testcase classname="tests.test_x" name="test_bad" file="tests/test_x.py" line="3" time="0.000"><failure message="AssertionError: one is not two&#10;assert 1 == 2">def test_bad():
+&gt;       assert 1 == 2, "one is not two"
+E       AssertionError: one is not two
+E       assert 1 == 2
+
+tests/test_x.py:5: AssertionError</failure></testcase><testcase classname="tests.test_x.TestK" name="test_m" file="tests/test_x.py" line="7" time="0.000" /></testsuite></testsuites>

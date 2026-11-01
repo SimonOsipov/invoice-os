@@ -1,5 +1,5 @@
 -- db/seed.e2e-shards.sql -- per-shard tenant pairs for parallel topology E2E.
--- Runs as superuser in a PR environment's reset-and-seed, after seed.dev.sql
+-- Runs as superuser after seed.dev.sql
 -- (db.SeedShards). Each shard tenant copies its source tenant: firm <- 1111, in-house <- 2222.
 -- Writes nothing for the seed.dev.sql tenants. Tenants, memberships, roles and
 -- entities re-converge on a re-run; shard tenants are not purged.

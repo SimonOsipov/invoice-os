@@ -1,0 +1,42 @@
+{"Time":"2026-10-29T16:01:02.5277+02:00","Action":"start","Package":"example.com/gj/tmo"}
+{"Time":"2026-10-29T16:01:02.950724+02:00","Action":"run","Package":"example.com/gj/tmo","Test":"TestFast"}
+{"Time":"2026-10-29T16:01:02.950971+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestFast","Output":"=== RUN   TestFast\n"}
+{"Time":"2026-10-29T16:01:02.951058+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestFast","Output":"--- PASS: TestFast (0.00s)\n"}
+{"Time":"2026-10-29T16:01:02.951091+02:00","Action":"pass","Package":"example.com/gj/tmo","Test":"TestFast","Elapsed":0}
+{"Time":"2026-10-29T16:01:02.951125+02:00","Action":"run","Package":"example.com/gj/tmo","Test":"TestSlow"}
+{"Time":"2026-10-29T16:01:02.951142+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"=== RUN   TestSlow\n"}
+{"Time":"2026-10-29T16:01:03.954211+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"panic: test timed out after 1s\n"}
+{"Time":"2026-10-29T16:01:03.954293+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\trunning tests:\n"}
+{"Time":"2026-10-29T16:01:03.954312+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\t\tTestSlow (1s)\n"}
+{"Time":"2026-10-29T16:01:03.954326+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\n"}
+{"Time":"2026-10-29T16:01:03.954339+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"goroutine 33 [running]:\n"}
+{"Time":"2026-10-29T16:01:03.954361+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"testing.(*M).startAlarm.func1()\n"}
+{"Time":"2026-10-29T16:01:03.954375+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\ttesting/testing.go:2802 +0x2cc\n"}
+{"Time":"2026-10-29T16:01:03.954387+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"created by time.goFunc\n"}
+{"Time":"2026-10-29T16:01:03.954399+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\ttime/sleep.go:215 +0x38\n"}
+{"Time":"2026-10-29T16:01:03.954411+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\n"}
+{"Time":"2026-10-29T16:01:03.954423+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"goroutine 1 [chan receive]:\n"}
+{"Time":"2026-10-29T16:01:03.954437+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"testing.(*T).Run(0x66a4bcb68008, {0x102162d72?, 0x38a563780211e9e0?}, 0x1022b3f08)\n"}
+{"Time":"2026-10-29T16:01:03.954454+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\ttesting/testing.go:2109 +0x3bc\n"}
+{"Time":"2026-10-29T16:01:03.954473+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"testing.runTests.func1(0x66a4bcb68008)\n"}
+{"Time":"2026-10-29T16:01:03.954495+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\ttesting/testing.go:2585 +0x40\n"}
+{"Time":"2026-10-29T16:01:03.954506+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"testing.tRunner(0x66a4bcb68008, 0x66a4bcb24c48)\n"}
+{"Time":"2026-10-29T16:01:03.954517+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\ttesting/testing.go:2036 +0xc4\n"}
+{"Time":"2026-10-29T16:01:03.95453+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"testing.runTests({0x1021646da, 0xe}, {0x10216592a, 0x12}, 0x66a4bcb36018, {0x1022d9c60, 0x3, 0x3}, {0x8080808080367809?, 0x102164b4a?, ...})\n"}
+{"Time":"2026-10-29T16:01:03.954547+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\ttesting/testing.go:2583 +0x3f0\n"}
+{"Time":"2026-10-29T16:01:03.954559+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"testing.(*M).Run(0x66a4bcb28140)\n"}
+{"Time":"2026-10-29T16:01:03.954572+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\ttesting/testing.go:2443 +0x578\n"}
+{"Time":"2026-10-29T16:01:03.954623+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"main.main()\n"}
+{"Time":"2026-10-29T16:01:03.954634+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\t_testmain.go:50 +0x80\n"}
+{"Time":"2026-10-29T16:01:03.954645+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\n"}
+{"Time":"2026-10-29T16:01:03.954653+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"goroutine 22 [sleep]:\n"}
+{"Time":"2026-10-29T16:01:03.954661+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"time.Sleep(0x12a05f200)\n"}
+{"Time":"2026-10-29T16:01:03.954678+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\truntime/time.go:363 +0x150\n"}
+{"Time":"2026-10-29T16:01:03.954688+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"example.com/gj/tmo.TestSlow(0x66a4bcb68488?)\n"}
+{"Time":"2026-10-29T16:01:03.954698+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\texample.com/gj/tmo/t_test.go:6 +0x28\n"}
+{"Time":"2026-10-29T16:01:03.954707+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"testing.tRunner(0x66a4bcb68488, 0x1022b3f08)\n"}
+{"Time":"2026-10-29T16:01:03.954715+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\ttesting/testing.go:2036 +0xc4\n"}
+{"Time":"2026-10-29T16:01:03.954724+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"created by testing.(*T).Run in goroutine 1\n"}
+{"Time":"2026-10-29T16:01:03.954734+02:00","Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"\ttesting/testing.go:2101 +0x3a8\n"}
+{"Time":"2026-10-29T16:01:03.955845+02:00","Action":"output","Package":"example.com/gj/tmo","Output":"FAIL\texample.com/gj/tmo\t1.428s\n"}
+{"Time":"2026-10-29T16:01:03.95587+02:00","Action":"fail","Package":"example.com/gj/tmo","Elapsed":1.428}

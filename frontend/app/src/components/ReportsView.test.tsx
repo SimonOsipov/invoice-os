@@ -643,6 +643,7 @@ describe('ReportsView: export card', () => {
 
   it('the enable rule: equal dates enable, a cleared side disables', async () => {
     await renderReady()
+    fireEvent.change(screen.getByTestId('register-period-from'), { target: { value: '2026-09-01' } })
     fireEvent.change(screen.getByTestId('register-period-to'), { target: { value: '2026-09-01' } })
     expect(registerButton().disabled).toBe(false)
     fireEvent.change(screen.getByTestId('register-period-to'), { target: { value: '' } })

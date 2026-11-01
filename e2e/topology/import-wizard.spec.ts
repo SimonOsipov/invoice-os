@@ -689,6 +689,7 @@ async function openUnsteeredMapStep(page: Page, label: string): Promise<void> {
 }
 
 test('ENGI07-E2E-01: the buyer-type select sits in the palette card', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(180_000)
   const errors = collectErrors(page)
   await openUnsteeredMapStep(page, 'ENGI-07 select')

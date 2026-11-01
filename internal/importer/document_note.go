@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/shopspring/decimal"
 
@@ -138,4 +141,34 @@ func notePositive(v *string) (*string, error) {
 	}
 	out := d.Abs().StringFixed(max(0, -d.Exponent()))
 	return &out, nil
+}
+
+// NoteOriginalRow is one invoice the review can offer as the original of a note.
+type NoteOriginalRow struct {
+	ID            string     `json:"id"`
+	InvoiceNumber string     `json:"invoice_number"`
+	IssueDate     *time.Time `json:"issue_date"`
+	Currency      *string    `json:"currency"`
+	Total         *string    `json:"total"`
+	BuyerName     *string    `json:"buyer_name"`
+	NoteCount     int        `json:"note_count"`
+}
+
+// NoteOriginals is the answer of GET /v1/imports/document/note-originals.
+type NoteOriginals struct {
+	EntityID       string            `json:"entity_id"`
+	FiledInvoiceID *string           `json:"filed_invoice_id"`
+	Originals      []NoteOriginalRow `json:"originals"`
+}
+
+// NoteOriginals is a compile stub that answers wrongly until CRDDBTNOTE-05-05 lands.
+func (s *Store) NoteOriginals(ctx context.Context, documentID string) (NoteOriginals, error) {
+	return NoteOriginals{}, nil
+}
+
+// NoteOriginalsHandler is a compile stub that answers wrongly until CRDDBTNOTE-05-05 lands.
+func NoteOriginalsHandler(read func(ctx context.Context, documentID string) (NoteOriginals, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	}
 }

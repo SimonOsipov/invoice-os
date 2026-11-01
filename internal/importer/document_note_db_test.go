@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -658,5 +659,213 @@ func TestImportDocumentNote_AnAmountBeyondTheColumnFailsItsBatch(t *testing.T) {
 	}
 	if n := countInvoicesCitingDocument(t, f.super, f.doc); n != 0 {
 		t.Errorf("invoices citing the document = %d, want 0", n)
+	}
+}
+
+// noAge back-dates an invoice so "newest first" has one answer.
+func noAge(t *testing.T, f *dnFix, id string, age time.Duration) {
+	t.Helper()
+	at := time.Now().UTC().Add(-age)
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE invoices SET created_at = $2::timestamptz, issue_date = $3::date WHERE id = $1`, id, at, at.Format("2006-01-02")); err != nil {
+		t.Fatalf("age invoice %s: %v", id, err)
+	}
+}
+
+// noBatch files a batch of f.doc under entity, back-dated by age.
+func noBatch(t *testing.T, f *dnFix, entity string, age time.Duration) {
+	t.Helper()
+	if _, err := f.super.Exec(context.Background(),
+		`INSERT INTO import_batches (tenant_id, entity_id, document_id, status, rows_total, rows_valid, rows_invalid, errors, created_at)
+		 VALUES ($1, $2, $3, 'completed', 0, 0, 0, '[]'::jsonb, $4)`, f.tenant, entity, f.doc, time.Now().UTC().Add(-age)); err != nil {
+		t.Fatalf("seed batch: %v", err)
+	}
+}
+
+func (f *dnFix) originals(t *testing.T) NoteOriginals {
+	t.Helper()
+	got, err := f.svc.batch.NoteOriginals(f.ctx(), f.doc)
+	if err != nil {
+		t.Fatalf("NoteOriginals: %v", err)
+	}
+	return got
+}
+
+func noIDs(rows []NoteOriginalRow) []string {
+	ids := make([]string, len(rows))
+	for i, r := range rows {
+		ids[i] = r.ID
+	}
+	return ids
+}
+
+// noMixed seeds, beside f.orig, every invoice the picker must skip and one more original that
+// carries a note. It returns that original; f.orig is older, so the order is [it, f.orig].
+func noMixed(t *testing.T, f *dnFix) string {
+	t.Helper()
+	ctx := context.Background()
+	withNote := dnSeedOriginal(t, f.super, f.tenant, f.entity, "INV-ORIG-2")
+	noAge(t, f, f.orig, 2*time.Hour)
+	noAge(t, f, withNote, time.Hour)
+	for i, st := range []string{"draft", "validated", "queued", "submitted", "rejected", "failed"} {
+		id := seedInvoice(t, f.super, f.tenant, f.entity, fmt.Sprintf("INV-%s", st))
+		if _, err := f.super.Exec(ctx, `UPDATE invoices SET status = $2, irn = $3 WHERE id = $1`, id, st, fmt.Sprintf("IRN-%d", i)); err != nil {
+			t.Fatalf("make %s invoice: %v", st, err)
+		}
+	}
+	noIRN := seedInvoice(t, f.super, f.tenant, f.entity, "INV-NO-IRN")
+	if _, err := f.super.Exec(ctx, `UPDATE invoices SET status = 'accepted' WHERE id = $1`, noIRN); err != nil {
+		t.Fatalf("make accepted invoice without IRN: %v", err)
+	}
+	note := dnSeedOriginal(t, f.super, f.tenant, f.entity, "CN-ACCEPTED")
+	if _, err := f.super.Exec(ctx, `UPDATE invoices SET document_type = 'credit_note', original_invoice_id = $2 WHERE id = $1`, note, withNote); err != nil {
+		t.Fatalf("make accepted note: %v", err)
+	}
+	otherEntity := seedEntity(t, f.super, f.tenant, "NO other client")
+	dnSeedOriginal(t, f.super, f.tenant, otherEntity, "INV-OTHER-ENTITY")
+	return withNote
+}
+
+func TestNoteOriginals_ListsOnlyIssuableCommercialInvoices(t *testing.T) {
+	f := dnNewFix(t, "NO-list", "credit note", nil)
+	csLinkBatch(t, f.super, f.tenant, f.entity, f.doc)
+	withNote := noMixed(t, f)
+
+	got := f.originals(t)
+
+	// The reading names no original, so this also proves a missing read number still lists rows.
+	if got.EntityID != f.entity {
+		t.Errorf("entity_id = %q, want %q", got.EntityID, f.entity)
+	}
+	if ids := noIDs(got.Originals); len(ids) != 2 || ids[0] != withNote || ids[1] != f.orig {
+		t.Fatalf("originals = %v, want [%s %s]: accepted commercial invoices with an IRN in the batch's entity, newest first", ids, withNote, f.orig)
+	}
+	if a, b := got.Originals[0], got.Originals[1]; a.NoteCount != 1 || b.NoteCount != 0 {
+		t.Errorf("note_count = %d, %d, want 1, 0", a.NoteCount, b.NoteCount)
+	}
+	row := got.Originals[1]
+	if row.InvoiceNumber != "INV-ORIG-1" || row.Currency == nil || *row.Currency != "NGN" || row.Total == nil || *row.Total != "1075.00" ||
+		row.BuyerName == nil || *row.BuyerName != "Original Buyer Ltd" || row.IssueDate == nil || row.IssueDate.Format("2006-01-02") != time.Now().UTC().Add(-2*time.Hour).Format("2006-01-02") {
+		t.Errorf("row = %+v, want its number, NGN, 1075.00, buyer and issue date", row)
+	}
+
+	// No candidate: an empty list, not nil.
+	if _, err := f.super.Exec(context.Background(), `UPDATE invoices SET status = 'draft' WHERE document_type = 'commercial_invoice' AND tenant_id = $1`, f.tenant); err != nil {
+		t.Fatalf("unissue every invoice: %v", err)
+	}
+	if none := f.originals(t); none.Originals == nil || len(none.Originals) != 0 {
+		t.Errorf("originals with no candidate = %#v, want an empty, non-nil slice", none.Originals)
+	}
+}
+
+func TestNoteOriginals_TheMatchSortsFirst(t *testing.T) {
+	values := dnReading()
+	values["original_invoice_number"] = sxPtr("INV-ORIG-1")
+	f := dnNewFix(t, "NO-match", "credit note", values)
+	csLinkBatch(t, f.super, f.tenant, f.entity, f.doc)
+	mid := dnSeedOriginal(t, f.super, f.tenant, f.entity, "INV-MID")
+	newest := dnSeedOriginal(t, f.super, f.tenant, f.entity, "INV-NEWEST")
+	noAge(t, f, f.orig, 3*time.Hour)
+	noAge(t, f, mid, 2*time.Hour)
+	noAge(t, f, newest, time.Hour)
+
+	if ids, want := noIDs(f.originals(t).Originals), []string{f.orig, newest, mid}; fmt.Sprint(ids) != fmt.Sprint(want) {
+		t.Errorf("originals = %v, want the match first, then newest first: %v", ids, want)
+	}
+
+	// A read number that matches nothing leaves plain newest-first.
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE extraction_field_results SET value = 'NO-SUCH-NUMBER' WHERE field_name = 'original_invoice_number'`); err != nil {
+		t.Fatalf("change the read number: %v", err)
+	}
+	if ids, want := noIDs(f.originals(t).Originals), []string{newest, mid, f.orig}; fmt.Sprint(ids) != fmt.Sprint(want) {
+		t.Errorf("originals with no match = %v, want newest first: %v", ids, want)
+	}
+}
+
+func TestNoteOriginals_AMatchPastTheCapIsReturned(t *testing.T) {
+	values := dnReading()
+	values["original_invoice_number"] = sxPtr("INV-ORIG-1")
+	f := dnNewFix(t, "NO-cap", "credit note", values)
+	csLinkBatch(t, f.super, f.tenant, f.entity, f.doc)
+	noAge(t, f, f.orig, 10000*time.Hour)
+	if _, err := f.super.Exec(context.Background(),
+		`INSERT INTO invoices (tenant_id, entity_id, invoice_number, status, irn, created_at)
+		 SELECT $1, $2, 'INV-BULK-' || n, 'accepted', 'IRN-BULK-' || n, now() - n * interval '1 minute'
+		   FROM generate_series(1, 500) n`, f.tenant, f.entity); err != nil {
+		t.Fatalf("seed 500 more originals: %v", err)
+	}
+
+	rows := f.originals(t).Originals
+
+	if len(rows) != 500 {
+		t.Fatalf("originals = %d rows, want the cap of 500", len(rows))
+	}
+	if rows[0].ID != f.orig {
+		t.Errorf("first row = %s (%s), want the match %s though it is the oldest of 501", rows[0].ID, rows[0].InvoiceNumber, f.orig)
+	}
+	if last := rows[len(rows)-1].InvoiceNumber; last != "INV-BULK-499" {
+		t.Errorf("last row = %s, want INV-BULK-499: the cap drops the oldest non-match", last)
+	}
+}
+
+func TestNoteOriginals_EveryRowPassesTheRefusal(t *testing.T) {
+	f := dnNewFix(t, "NO-refusal", "credit note", nil)
+	csLinkBatch(t, f.super, f.tenant, f.entity, f.doc)
+	noMixed(t, f)
+
+	rows := f.originals(t).Originals
+
+	if len(rows) == 0 {
+		t.Fatal("originals is empty, want the issuable invoices")
+	}
+	for _, r := range rows {
+		if _, err := f.svc.inv.NoteOriginal(f.ctx(), r.ID); err != nil {
+			t.Errorf("listed %s (%s): NoteOriginal = %v, want nil", r.ID, r.InvoiceNumber, err)
+		}
+	}
+}
+
+func TestNoteOriginals_FiledFollowsTheInvoice(t *testing.T) {
+	f := dnNewFix(t, "NO-filed", "credit note", nil)
+	csLinkBatch(t, f.super, f.tenant, f.entity, f.doc)
+
+	if got := f.originals(t); got.FiledInvoiceID != nil || len(got.Originals) != 1 {
+		t.Fatalf("held: filed_invoice_id = %v with %d originals, want null with 1", got.FiledInvoiceID, len(got.Originals))
+	}
+
+	_, noteID := f.importOK(t, "credit_note", "CN-NO-1")
+
+	got := f.originals(t)
+	if got.FiledInvoiceID == nil || *got.FiledInvoiceID != noteID {
+		t.Errorf("filed: filed_invoice_id = %v, want the note %s", got.FiledInvoiceID, noteID)
+	}
+	if got.EntityID != f.entity {
+		t.Errorf("entity_id = %q, want %q", got.EntityID, f.entity)
+	}
+}
+
+func TestNoteOriginals_EntityIsTheNewestBatch(t *testing.T) {
+	f := dnNewFix(t, "NO-batch", "credit note", nil)
+	if _, err := f.svc.batch.NoteOriginals(f.ctx(), f.doc); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a document with no batch: err = %v, want ErrNotFound", err)
+	}
+	entB := seedEntity(t, f.super, f.tenant, "NO client B")
+	origB := dnSeedOriginal(t, f.super, f.tenant, entB, "INV-B-1")
+	noBatch(t, f, f.entity, 2*time.Hour)
+	noBatch(t, f, entB, time.Hour)
+
+	got := f.originals(t)
+
+	if got.EntityID != entB {
+		t.Errorf("entity_id = %q, want the newest batch's %q", got.EntityID, entB)
+	}
+	if ids := noIDs(got.Originals); len(ids) != 1 || ids[0] != origB {
+		t.Errorf("originals = %v, want only client B's %s", ids, origB)
+	}
+
+	noBatch(t, f, f.entity, 0)
+	if got := f.originals(t); got.EntityID != f.entity {
+		t.Errorf("entity_id after a newer batch in A = %q, want %q", got.EntityID, f.entity)
 	}
 }

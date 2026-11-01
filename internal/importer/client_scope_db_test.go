@@ -280,6 +280,75 @@ func TestClientScope_DocumentRoutesAnswerOneNotFoundAndWriteNothing(t *testing.T
 	if n := csCount(t, f.super, `SELECT count(*) FROM invoices WHERE entity_id = $1`, f.entB); n != 0 {
 		t.Errorf("invoices for B = %d, want 0", n)
 	}
+
+	// GET /v1/imports/document/note-originals: the same 404 for every document the caller cannot see.
+	seedHeld := func(tenant, entity string) string {
+		doc := docSeedDocument(t, f.super, tenant)
+		docSeedExtraction(t, f.super, tenant, doc, dnReading())
+		dtSetVerdict(t, f.super, doc, "credit note")
+		if entity != "" {
+			csLinkBatch(t, f.super, tenant, entity, doc)
+		}
+		return doc
+	}
+	originals := NoteOriginalsHandler(f.store.NoteOriginals, nil)
+	hidden := map[string]string{
+		"unknown":          uuid.NewString(),
+		"another tenant's": seedHeld(other, foreign),
+		"client B's":       seedHeld(f.tenant, f.entB),
+		"no batch":         seedHeld(f.tenant, ""),
+	}
+	own := seedHeld(f.tenant, f.entA)
+	batches := csCount(t, f.super, `SELECT count(*) FROM import_batches`)
+	reads := csDocumentReads(t, f.super, f.tenant)
+	for name, doc := range hidden {
+		rec := csGet(originals, f.limitedID, "GET", "/v1/imports/document/note-originals?document_id="+doc, "")
+		if rec.Code != http.StatusNotFound || strings.TrimSpace(rec.Body.String()) != `{"error":"not found"}` {
+			t.Errorf("GET note-originals (%s): answer = %d %s, want 404 {\"error\":\"not found\"}", name, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := csGet(originals, f.limitedID, "GET", "/v1/imports/document/note-originals?document_id="+own, ""); rec.Code != http.StatusOK {
+		t.Errorf("GET note-originals (client A's document): status = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches`); n != batches {
+		t.Errorf("import_batches after note-originals reads = %d, want %d", n, batches)
+	}
+	if n := csDocumentReads(t, f.super, f.tenant); n != reads {
+		t.Errorf("document.read rows after note-originals reads = %d, want %d", n, reads)
+	}
+}
+
+func TestClientScope_NoteOriginalsHideAnotherClient(t *testing.T) {
+	f := newCSFixture(t, "CS note originals")
+	doc := docSeedDocument(t, f.super, f.tenant)
+	docSeedExtraction(t, f.super, f.tenant, doc, dnReading())
+	dtSetVerdict(t, f.super, doc, "credit note")
+	origA := dnSeedOriginal(t, f.super, f.tenant, f.entA, "CS-NO-A")
+	origB := dnSeedOriginal(t, f.super, f.tenant, f.entB, "CS-NO-B")
+	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
+	csLinkBatch(t, f.super, f.tenant, f.entB, doc)
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE import_batches SET created_at = now() - interval '1 hour' WHERE document_id = $1 AND entity_id = $2`, doc, f.entA); err != nil {
+		t.Fatalf("age A's batch: %v", err)
+	}
+
+	got, err := f.store.NoteOriginals(f.limited, doc)
+
+	if err != nil {
+		t.Fatalf("NoteOriginals as the member limited to A: %v", err)
+	}
+	if got.EntityID != f.entA {
+		t.Errorf("entity_id = %q, want client A %q: B's batch is hidden from this member", got.EntityID, f.entA)
+	}
+	if ids := noIDs(got.Originals); len(ids) != 1 || ids[0] != origA {
+		t.Errorf("originals = %v, want only client A's %s, never B's %s", ids, origA, origB)
+	}
+
+	// Control: the admin sees the newest batch, B's.
+	admin, err := f.store.NoteOriginals(f.admin, doc)
+	if err != nil || admin.EntityID != f.entB || len(admin.Originals) != 1 || admin.Originals[0].ID != origB {
+		t.Errorf("admin read = %+v, %v, want client B and %s", admin, err, origB)
+	}
 }
 
 func TestClientScope_MappingRoutesAnswerOneNotFoundAndWriteNothing(t *testing.T) {

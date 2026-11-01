@@ -38,6 +38,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -1013,5 +1014,117 @@ func TestCreateDocumentHandler_NoteRefusalsMapToStatus(t *testing.T) {
 				t.Errorf("answer = %d %s, want %d with the key error alone carrying %q", rec.Code, rec.Body.String(), tc.want, tc.msg)
 			}
 		})
+	}
+}
+
+// noteOriginalsSpy records every call NoteOriginalsHandler's read closure receives.
+type noteOriginalsSpy struct {
+	calls []string
+	out   NoteOriginals
+	err   error
+}
+
+func (s *noteOriginalsSpy) fn() func(ctx context.Context, documentID string) (NoteOriginals, error) {
+	return func(ctx context.Context, documentID string) (NoteOriginals, error) {
+		s.calls = append(s.calls, documentID)
+		return s.out, s.err
+	}
+}
+
+func doNoteOriginalsGet(spy *noteOriginalsSpy, id *auth.Identity, rawQuery string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest("GET", "/v1/imports/document/note-originals?"+rawQuery, nil)
+	if id != nil {
+		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
+	}
+	rec := httptest.NewRecorder()
+	NoteOriginalsHandler(spy.fn(), nil).ServeHTTP(rec, r)
+	return rec
+}
+
+func TestNoteOriginalsHandler_EmptyIsAnArray(t *testing.T) {
+	id := testIdentity()
+	spy := &noteOriginalsSpy{out: NoteOriginals{EntityID: uuid.NewString()}}
+
+	rec := doNoteOriginalsGet(spy, &id, "document_id="+uuid.NewString())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("decode %s: %v", rec.Body.String(), err)
+	}
+	if got := string(m["originals"]); got != "[]" {
+		t.Errorf("originals = %s, want []", got)
+	}
+	if got := string(m["filed_invoice_id"]); got != "null" {
+		t.Errorf("filed_invoice_id = %s, want null", got)
+	}
+	if len(m) != 3 {
+		t.Errorf("keys = %d in %s, want entity_id, filed_invoice_id, originals", len(m), rec.Body.String())
+	}
+}
+
+func TestNoteOriginalsHandler_AnswersTheDesignedShape(t *testing.T) {
+	id := testIdentity()
+	doc, issued, filed := uuid.NewString(), time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), uuid.NewString()
+	spy := &noteOriginalsSpy{out: NoteOriginals{EntityID: uuid.NewString(), FiledInvoiceID: &filed, Originals: []NoteOriginalRow{
+		{ID: uuid.NewString(), InvoiceNumber: "INV-1", IssueDate: &issued, Currency: sxPtr("NGN"), Total: sxPtr("1075.00"), BuyerName: sxPtr("Honeywell Group"), NoteCount: 1},
+	}}}
+
+	rec := doNoteOriginalsGet(spy, &id, "document_id="+strings.ToUpper(doc))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	if len(spy.calls) != 1 || spy.calls[0] != doc {
+		t.Errorf("read saw %v, want the one lower-case id %s", spy.calls, doc)
+	}
+	var got struct {
+		Filed     string                       `json:"filed_invoice_id"`
+		Originals []map[string]json.RawMessage `json:"originals"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.Filed != filed || len(got.Originals) != 1 {
+		t.Fatalf("body = %s (%v), want filed_invoice_id %s and one original", rec.Body.String(), err, filed)
+	}
+	row := got.Originals[0]
+	if len(row) != 7 || string(row["issue_date"]) != `"2026-02-01T00:00:00Z"` || string(row["total"]) != `"1075.00"` || string(row["note_count"]) != "1" ||
+		string(row["buyer_name"]) != `"Honeywell Group"` || string(row["currency"]) != `"NGN"` || string(row["invoice_number"]) != `"INV-1"` {
+		t.Errorf("row = %v, want id, invoice_number, issue_date, currency, total, buyer_name, note_count as designed", row)
+	}
+}
+
+func TestNoteOriginalsHandler_MapsErrors(t *testing.T) {
+	id := testIdentity()
+	doc := uuid.NewString()
+
+	for name, err := range map[string]error{"absent": ErrNotFound, "hidden original": invoice.ErrNotFound, "wrapped": fmt.Errorf("read: %w", ErrNotFound)} {
+		spy := &noteOriginalsSpy{err: err}
+		rec := doNoteOriginalsGet(spy, &id, "document_id="+doc)
+		if rec.Code != http.StatusNotFound || strings.TrimSpace(rec.Body.String()) != `{"error":"not found"}` {
+			t.Errorf("%s: answer = %d %s, want 404 {\"error\":\"not found\"}", name, rec.Code, rec.Body.String())
+		}
+		if len(spy.calls) != 1 {
+			t.Errorf("%s: read called %d times, want 1", name, len(spy.calls))
+		}
+	}
+	if rec := doNoteOriginalsGet(&noteOriginalsSpy{err: db.ErrWorkspaceLocked}, &id, "document_id="+doc); rec.Code != http.StatusForbidden {
+		t.Errorf("workspace locked: status = %d, want 403", rec.Code)
+	}
+	if rec := doNoteOriginalsGet(&noteOriginalsSpy{err: errors.New("boom")}, &id, "document_id="+doc); rec.Code != http.StatusInternalServerError ||
+		strings.TrimSpace(rec.Body.String()) != `{"error":"internal server error"}` {
+		t.Errorf("operational: answer = %d %s, want a bare 500", rec.Code, rec.Body.String())
+	}
+
+	for name, q := range map[string]string{"missing": "", "blank": "document_id=", "malformed": "document_id=not-a-uuid"} {
+		spy := &noteOriginalsSpy{}
+		if rec := doNoteOriginalsGet(spy, &id, q); rec.Code != http.StatusBadRequest || len(spy.calls) != 0 {
+			t.Errorf("%s id: answer = %d %s with %d reads, want 400 and no read", name, rec.Code, rec.Body.String(), len(spy.calls))
+		}
+	}
+
+	spy := &noteOriginalsSpy{}
+	if rec := doNoteOriginalsGet(spy, nil, "document_id="+doc); rec.Code != http.StatusUnauthorized || len(spy.calls) != 0 {
+		t.Errorf("no identity: answer = %d with %d reads, want 401 and no read", rec.Code, len(spy.calls))
 	}
 }

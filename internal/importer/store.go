@@ -32,6 +32,8 @@ var (
 	ErrReadingNotCarried = errors.New("importer: reading not carried")
 	// ErrDocumentAlreadyFiled: an invoice already cites the document.
 	ErrDocumentAlreadyFiled = errors.New("importer: document already filed")
+	// ErrNoteTypeNotRead: the document's verdict is not the note type the caller named.
+	ErrNoteTypeNotRead = errors.New("importer: document not read as that type of note")
 )
 
 // RowError is one entry in an import_batches.errors jsonb array — either a

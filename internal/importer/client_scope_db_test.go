@@ -898,3 +898,35 @@ func TestClientScope_AFiledDocumentHidesAnInvisibleInvoiceID(t *testing.T) {
 		t.Errorf("row = %+v, want the sentence and rule_key with no invoice_id", got)
 	}
 }
+
+func TestClientScope_AnOriginalOutsideTheSetIsNotFound(t *testing.T) {
+	f := newCSFixture(t, "CS note original")
+	doc := docSeedDocument(t, f.super, f.tenant)
+	docSeedExtraction(t, f.super, f.tenant, doc, dnReading())
+	dtSetVerdict(t, f.super, doc, "credit note")
+	csLinkBatch(t, f.super, f.tenant, f.entA, doc)
+	origA := dnSeedOriginal(t, f.super, f.tenant, f.entA, "CS-NOTE-A")
+	origB := dnSeedOriginal(t, f.super, f.tenant, f.entB, "CS-NOTE-B")
+	create := CreateDocumentHandler(f.svc.ImportDocumentFor, nil)
+	post := func(orig string) *httptest.ResponseRecorder {
+		return csGet(create, f.limitedID, "POST", "/v1/imports/document", noteBody(f.entA, doc, orig, "CN-CS-1"))
+	}
+
+	hidden, random := post(origB), post(uuid.NewString())
+
+	for name, rec := range map[string]*httptest.ResponseRecorder{"original in client B": hidden, "random id": random} {
+		if rec.Code != http.StatusNotFound || strings.TrimSpace(rec.Body.String()) != `{"error":"not found"}` {
+			t.Errorf("%s: answer = %d %s, want 404 {\"error\":\"not found\"}", name, rec.Code, rec.Body.String())
+		}
+	}
+	if n := csCount(t, f.super, `SELECT count(*) FROM import_batches WHERE document_id = $1`, doc); n != 1 {
+		t.Errorf("batches for the document = %d, want the seeded one only", n)
+	}
+	if n := countInvoicesCitingDocument(t, f.super, doc); n != 0 {
+		t.Errorf("invoices citing the document = %d, want 0", n)
+	}
+
+	if rec := post(origA); rec.Code != http.StatusCreated {
+		t.Errorf("the original in client A: status = %d %s, want 201", rec.Code, rec.Body.String())
+	}
+}

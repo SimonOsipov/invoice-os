@@ -950,3 +950,68 @@ func TestCreateDocumentHandler_AFiledDocumentIsAConflict(t *testing.T) {
 		t.Errorf("answer = %d %s, want 409 with the sentence alone", rec.Code, rec.Body.String())
 	}
 }
+
+func noteBody(ent, doc, orig, number string) string {
+	return fmt.Sprintf(`{"entity_id":%q,"document_id":%q,"document_type":"credit_note","original_invoice_id":%q,"invoice_number":%q}`, ent, doc, orig, number)
+}
+
+func TestCreateDocumentHandler_ANoteNeedsItsOriginalAndNumber(t *testing.T) {
+	ent, doc, orig := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	for name, body := range map[string]string{
+		"no original":  fmt.Sprintf(`{"entity_id":%q,"document_id":%q,"document_type":"credit_note","invoice_number":"CN-1"}`, ent, doc),
+		"blank number": noteBody(ent, doc, orig, "   "),
+	} {
+		rec, calls := docPostStub(t, body, BatchResult{}, nil)
+		if rec.Code != http.StatusBadRequest || len(calls) != 0 {
+			t.Errorf("%s: status %d with %d service call(s), want 400 and 0", name, rec.Code, len(calls))
+		}
+	}
+
+	res := BatchResult{ID: "b-1", Status: "completed", RowsTotal: 1, RowsValid: 1, ReadyInvoices: 1, Errors: []RowError{}, InvoiceViolations: []InvoiceViolations{}}
+	rec, calls := docPostStub(t, noteBody(ent, doc, orig, "CN-1"), res, nil)
+	if rec.Code != http.StatusCreated || len(calls) != 1 {
+		t.Fatalf("a note with its original and number: status %d %s with %d call(s), want 201 and 1", rec.Code, rec.Body.String(), len(calls))
+	}
+	if want := (DocumentImport{EntityID: ent, DocumentID: doc, DocumentType: "credit_note", OriginalInvoiceID: orig, InvoiceNumber: "CN-1"}); calls[0] != want {
+		t.Errorf("service saw %+v, want %+v", calls[0], want)
+	}
+}
+
+func TestCreateDocumentHandler_NoteRefusalsMapToStatus(t *testing.T) {
+	ent, doc, orig := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+		msg  string
+	}{
+		{"original of another client", invoice.ErrOriginalOtherEntity, 409, "the original belongs to another client"},
+		{"original is a note", invoice.ErrOriginalIsANote, 409, "a note cannot be the original of a note"},
+		{"original not issued", invoice.ErrOriginalNotIssued, 409, "a note needs an accepted invoice with an IRN"},
+		{"document already filed", ErrDocumentAlreadyFiled, 409, documentAlreadyFiledReason},
+		{"number taken", invoice.ErrDuplicateNumber, 409, invoice.NumberTakenReason},
+		{"number taken, wrapped", fmt.Errorf("create note: %w", invoice.ErrDuplicateNumber), 409, invoice.NumberTakenReason},
+		{"not read as that type", ErrNoteTypeNotRead, 409, "This document was not read as that type of note."},
+		{"original absent", invoice.ErrOriginalNotFound, 404, "not found"},
+		{"original hidden", invoice.ErrNotFound, 404, "not found"},
+		{"document or entity absent", ErrNotFound, 404, "not found"},
+		{"reading is not a decimal", fmt.Errorf("%w: The total on this document reads \"abc\", which is not an amount.", ErrValidation), 400, `reads "abc"`},
+		{"workspace locked", db.ErrWorkspaceLocked, 403, db.WorkspaceLockedMessage},
+		{"operational", errors.New("boom"), 500, "internal server error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, calls := docPostStub(t, noteBody(ent, doc, orig, "CN-1"), BatchResult{}, tc.err)
+			if len(calls) != 1 {
+				t.Fatalf("service calls = %d, want 1 (status %d %s)", len(calls), rec.Code, rec.Body.String())
+			}
+			var m map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+				t.Fatalf("decode %s: %v", rec.Body.String(), err)
+			}
+			msg, _ := m["error"].(string)
+			if rec.Code != tc.want || len(m) != 1 || !strings.Contains(msg, tc.msg) || (tc.want != 400 && msg != tc.msg) {
+				t.Errorf("answer = %d %s, want %d with the key error alone carrying %q", rec.Code, rec.Body.String(), tc.want, tc.msg)
+			}
+		})
+	}
+}

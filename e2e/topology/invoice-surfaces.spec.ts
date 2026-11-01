@@ -55,6 +55,7 @@ import {
 } from './layout'
 import { browserToken, signInAs, signInAtFrontDoor } from '../personaSession'
 import { e2eMember } from '../realAccounts'
+import { nightlyTarget, REAL_AI_COVERED } from '../targets'
 import { APP_URL, shardTenants, VALIDATION_EXPECTED } from './targets'
 
 // This file runs in its own shard, on its own tenants: PERSONAS shadows the api client's 1111 / 2222 pair.
@@ -6339,6 +6340,7 @@ test('ENGI-16 detail: Line 2 opens the editor on line 2', async ({ page }) => {
 
 // The answer's 300-character unbroken token must wrap inside the table (D23); the line fix is the model's to propose.
 test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(180_000)
   const errors = collectErrors(page)
 

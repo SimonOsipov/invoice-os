@@ -213,7 +213,7 @@ func devEnvNightlyProblems(yml string) []string {
 	if x, _ := jobKey(td, "name"); x != "Delete the nightly preview" {
 		bad("nightly-teardown name is " + x)
 	}
-	if !slices.Equal(needsOf(td), []string{"changes", "commit-authors", "prepare-env", "build", "deploy", "health-gate", "fleet-gate", "e2e", "topology", "contacts", "email"}) {
+	if !slices.Equal(needsOf(td), []string{"changes", "commit-authors", "prepare-env", "build", "deploy", "health-gate", "fleet-gate", "e2e", "topology", "contacts", "nightly-ai", "email"}) {
 		bad("nightly-teardown needs are wrong")
 	}
 	if x, _ := foldedIf(td); x != nlTeardown {
@@ -247,6 +247,7 @@ func devEnvNightlyProblems(yml string) []string {
 		bad("unguarded OIDC jobs: " + strings.Join(g, ","))
 	}
 	p = append(p, contactProblems(jobs)...)
+	p = append(p, aiCheckProblems(jobs)...)
 	return append(p, emailProblems(jobs)...)
 }
 
@@ -401,6 +402,66 @@ func needsTeardown(jobs map[string]workflowJob, id string) bool {
 	return walk(id)
 }
 
+// aiCheckProblems names each clause of the nightly-only nightly-ai job that the text breaks.
+func aiCheckProblems(jobs map[string]workflowJob) []string {
+	var p []string
+	bad := func(msg string) { p = append(p, msg) }
+	ai, ok := jobs["nightly-ai"]
+	if !ok {
+		return []string{"no nightly-ai job"}
+	}
+	if x, _ := jobKey(ai, "name"); x != "AI features and accuracy" {
+		bad("nightly-ai name is " + x)
+	}
+	if x, _ := jobKey(ai, "timeout-minutes"); x != "30" {
+		bad("nightly-ai timeout-minutes is not 30")
+	}
+	if x, _ := foldedIf(ai); x != nlEmailIf {
+		bad("nightly-ai if is not exactly " + nlEmailIf)
+	}
+	if !slices.Equal(needsOf(ai), []string{"changes", "commit-authors", "prepare-env", "deploy", "health-gate", "fleet-gate", "e2e", "topology", "contacts"}) {
+		bad("nightly-ai needs are wrong")
+	}
+	if !slices.Equal(blockLines(ai.lines, 4, "permissions"), []string{"contents: read"}) || strings.Contains(strings.Join(ai.lines, "\n"), "id-token") {
+		bad("nightly-ai permissions are not contents: read alone")
+	}
+	env := strings.Join(blockLines(ai.lines, 4, "env"), "\n")
+	for _, v := range []struct{ name, out string }{
+		{"GATEWAY_URL", "gateway_url"}, {"APP_URL", "app_url"}, {"LANDING_URL", "landing_url"}, {"OPS_CONSOLE_URL", "ops_console_url"},
+		{"SUPPORT_CONSOLE_URL", "support_console_url"}, {"LIBRARY_URL", "library_url"}, {"BLOG_URL", "blog_url"},
+	} {
+		if !strings.Contains(env, v.name+": ${{ needs.prepare-env.outputs."+v.out+" }}") {
+			bad("nightly-ai env lacks " + v.name + " from prepare-env")
+		}
+	}
+	guard, gok := nlStep(ai, "Refuse a re-run that skipped the deploy")
+	check, cok := nlStep(ai, "Check the AI features and accuracy")
+	if !gok || !cok || guard.index > check.index || guard.keys["id"] != "attempt" ||
+		guard.env["DEPLOYED_ATTEMPT"] != "${{ needs.deploy.outputs.attempt }}" || guard.env["RUN_ATTEMPT"] != "${{ github.run_attempt }}" ||
+		!strings.Contains(strings.Join(nlRaw(ai, "Refuse a re-run that skipped the deploy"), "\n"), `[ "$DEPLOYED_ATTEMPT" != "$RUN_ATTEMPT" ]`) {
+		bad("nightly-ai lacks the re-run guard before the check")
+	}
+	if cok && check.keys["run"] != `pnpm --filter @invoice-os/e2e nightly-ai --out "$GITHUB_WORKSPACE/nightly-results/ai.json"` {
+		bad("nightly-ai check step does not write nightly-results/ai.json")
+	}
+	if !slices.Contains(needsOf(jobs["email"]), "nightly-ai") {
+		bad("email needs lack nightly-ai")
+	}
+	if !slices.Contains(needsOf(jobs["nightly-teardown"]), "nightly-ai") {
+		bad("nightly-teardown needs lack nightly-ai")
+	}
+	if slices.Contains(needsOf(jobs["e2e-gate"]), "nightly-ai") {
+		bad("e2e-gate needs nightly-ai")
+	}
+	raw := nlRaw(ai, "Upload the nightly results")
+	for _, w := range []string{"if: always() && " + nlOn, "name: results-ai-check", "path: nightly-results/", "if-no-files-found: ignore", "retention-days: 14"} {
+		if !slices.Contains(raw, w) {
+			bad("nightly-ai results upload lacks " + w)
+		}
+	}
+	return p
+}
+
 // emailProblems names each clause of the nightly-only email job that the text breaks.
 func emailProblems(jobs map[string]workflowJob) []string {
 	var p []string
@@ -418,7 +479,7 @@ func emailProblems(jobs map[string]workflowJob) []string {
 	if x, _ := foldedIf(em); x != nlEmailIf {
 		bad("email if is not exactly " + nlEmailIf)
 	}
-	if !slices.Equal(needsOf(em), []string{"changes", "commit-authors", "invariants", "prepare-env", "deploy", "health-gate", "fleet-gate", "e2e", "topology", "contacts"}) {
+	if !slices.Equal(needsOf(em), []string{"changes", "commit-authors", "invariants", "prepare-env", "deploy", "health-gate", "fleet-gate", "e2e", "topology", "contacts", "nightly-ai"}) {
 		bad("email needs are wrong")
 	}
 	for _, e := range blockLines(em.lines, 4, "env") {
@@ -777,10 +838,10 @@ func TestDevEnvNightly_TeardownAlwaysRunsInNightlyModeOnly(t *testing.T) {
 	t.Parallel()
 	yml := readWorkflow(t, "dev-env.yml")
 	for _, c := range []struct{ old, repl, want string }{
-		{"contacts, email]\n    if: " + nlTeardown + "\n", "contacts, email]\n    if: success() && " + nlOn + " && " + authorCond + "\n", "nightly-teardown if"},
-		{"contacts, email]\n    if: " + nlTeardown + "\n", "contacts, email]\n    if: always() && " + authorCond + "\n", "nightly-teardown if"},
+		{"nightly-ai, email]\n    if: " + nlTeardown + "\n", "nightly-ai, email]\n    if: success() && " + nlOn + " && " + authorCond + "\n", "nightly-teardown if"},
+		{"nightly-ai, email]\n    if: " + nlTeardown + "\n", "nightly-ai, email]\n    if: always() && " + authorCond + "\n", "nightly-teardown if"},
 		{"    timeout-minutes: 20\n    permissions:\n      contents: read\n      id-token: write", "    timeout-minutes: 30\n    permissions:\n      contents: read\n      id-token: write", "timeout-minutes is not 20"},
-		{"needs: [changes, commit-authors, prepare-env, build, deploy, health-gate, fleet-gate, e2e, topology, contacts, email]", "needs: [changes, commit-authors, prepare-env, build, deploy]", "nightly-teardown needs"},
+		{"needs: [changes, commit-authors, prepare-env, build, deploy, health-gate, fleet-gate, e2e, topology, contacts, nightly-ai, email]", "needs: [changes, commit-authors, prepare-env, build, deploy]", "nightly-teardown needs"},
 		{"        run: bash scripts/ci/preview.sh teardown \"$PR\"\n      - name: Prove the nightly preview is gone", "        run: echo skip\n      - name: Prove the nightly preview is gone", "does not tear down"},
 	} {
 		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
@@ -891,7 +952,7 @@ func requireEmailMutations(t *testing.T, rows []struct{ old, repl, want string }
 func TestDevEnvNightly_EmailJobRunsInNightlyModeOnly(t *testing.T) {
 	t.Parallel()
 	requireEmailMutations(t, []struct{ old, repl, want string }{
-		{"      needs.changes.outputs.nightly == 'true' &&\n      needs.commit-authors.outputs.dependabot_only == 'false' &&\n      needs.deploy.result", "      needs.commit-authors.outputs.dependabot_only == 'false' &&\n      needs.deploy.result", "email if"},
+		{"contacts, nightly-ai]\n    if: >-\n      !cancelled() &&\n      needs.changes.outputs.nightly == 'true' &&\n", "contacts, nightly-ai]\n    if: >-\n      !cancelled() &&\n", "email if"},
 		{"    name: Real invite and reset mail\n", "    name: Mail\n", "email name"},
 		{"    timeout-minutes: 25\n    permissions:\n      contents: read\n      actions: read", "    timeout-minutes: 40\n    permissions:\n      contents: read\n      actions: read", "email timeout-minutes"},
 		{"        timeout-minutes: 16\n", "        timeout-minutes: 30\n", "timeout-minutes is not 16"},
@@ -908,13 +969,14 @@ func TestDevEnvNightly_EmailJobEnvUsesAllowedContexts(t *testing.T) {
 
 func TestDevEnvNightly_MailOnWaitsForE2E(t *testing.T) {
 	t.Parallel()
-	n := "needs: [changes, commit-authors, invariants, prepare-env, deploy, health-gate, fleet-gate, e2e, topology, contacts]"
+	n := "needs: [changes, commit-authors, invariants, prepare-env, deploy, health-gate, fleet-gate, e2e, topology, contacts, nightly-ai]"
 	requireEmailMutations(t, []struct{ old, repl, want string }{
 		{n, strings.Replace(n, "e2e, ", "", 1), "email needs"},
 		{n, strings.Replace(n, ", topology", "", 1), "email needs"},
 		{n, strings.Replace(n, ", contacts", "", 1), "email needs"},
-		{"fleet-gate, e2e, topology, contacts, email]", "fleet-gate, e2e, topology, contacts]", "nightly-teardown needs"},
-		{"fleet-gate, e2e, topology, contacts, email]", "fleet-gate, e2e, topology, email]", "nightly-teardown needs"},
+		{n, strings.Replace(n, ", nightly-ai", "", 1), "email needs"},
+		{"fleet-gate, e2e, topology, contacts, nightly-ai, email]", "fleet-gate, e2e, topology, contacts, email]", "nightly-teardown needs"},
+		{"fleet-gate, e2e, topology, contacts, nightly-ai, email]", "fleet-gate, e2e, topology, nightly-ai, email]", "nightly-teardown needs"},
 	})
 }
 
@@ -1048,7 +1110,7 @@ func TestDevEnvNightly_NothingRunsBesideTheMailPhase(t *testing.T) {
 	}
 	// A job that email needs is clean.
 	clean := mutateOnce(t, add("  extra:\n    runs-on: ubuntu-latest\n    needs: [deploy]\n    steps:\n      - run: echo\n"),
-		"fleet-gate, e2e, topology, contacts]\n    if: >-\n      !cancelled() &&\n      needs.changes.outputs.nightly == 'true' &&", "fleet-gate, e2e, topology, contacts, extra]\n    if: >-\n      !cancelled() &&\n      needs.changes.outputs.nightly == 'true' &&")
+		"fleet-gate, e2e, topology, contacts, nightly-ai]\n    if: >-\n      !cancelled() &&\n      needs.changes.outputs.nightly == 'true' &&", "fleet-gate, e2e, topology, contacts, nightly-ai, extra]\n    if: >-\n      !cancelled() &&\n      needs.changes.outputs.nightly == 'true' &&")
 	if got := emailProblems(nlJobs(clean)); slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "beside the mail phase") }) {
 		t.Errorf("a job in email's needs is a problem: %q", got)
 	}
@@ -1086,5 +1148,98 @@ func TestDevEnvNightly_EmailStepOrder(t *testing.T) {
 		{specStep + off, off + specStep, "mail-off is not between"},
 		{"      - name: Turn real mail off\n        if: always() && steps.mailon.outcome != 'skipped'\n", "      - name: Turn real mail off\n", "mail-off step does not run if always()"},
 		{"        if: always() && steps.mailon.outcome != 'skipped'\n", "        if: always()\n", "mail-off step does not run if always()"},
+	})
+}
+
+// requireAIMutations applies each row to the first match inside the nightly-ai job.
+func requireAIMutations(t *testing.T, rows []struct{ old, repl, want string }) {
+	t.Helper()
+	yml := readWorkflow(t, "dev-env.yml")
+	at := strings.Index(yml, "\n  nightly-ai:\n")
+	if at < 0 {
+		t.Fatal("no nightly-ai job")
+	}
+	for _, c := range rows {
+		j := strings.Index(yml[at:], c.old)
+		if j < 0 {
+			t.Fatalf("nightly-ai lacks %q", c.old)
+		}
+		j += at
+		got := devEnvNightlyProblems(yml[:j] + c.repl + yml[j+len(c.old):])
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
+			t.Errorf("mutation %q: problems %q lack %q", c.old, got, c.want)
+		}
+	}
+}
+
+const nlAINeeds = "needs: [changes, commit-authors, prepare-env, deploy, health-gate, fleet-gate, e2e, topology, contacts]"
+
+func TestDevEnvNightly_AICheckJobIsNightlyOnly(t *testing.T) {
+	t.Parallel()
+	rows := []struct{ old, repl, want string }{
+		{"name: AI features and accuracy", "name: AI", "nightly-ai name"},
+		{"timeout-minutes: 30", "timeout-minutes: 40", "nightly-ai timeout-minutes"},
+		{"      contents: read\n", "      contents: read\n      id-token: write\n", "nightly-ai permissions"},
+		{nlAINeeds, strings.Replace(nlAINeeds, ", topology", "", 1), "nightly-ai needs"},
+		{nlAINeeds, strings.Replace(nlAINeeds, ", contacts", "", 1), "nightly-ai needs"},
+		{"      needs.changes.outputs.nightly == 'true' &&\n", "", "nightly-ai if"},
+		{"        if: always() && " + nlOn + "\n", "        if: always()\n", "nightly-ai results upload lacks"},
+		{"name: results-ai-check", "name: results-ai", "name: results-ai-check"},
+	}
+	for _, v := range []string{"GATEWAY_URL", "APP_URL", "LANDING_URL", "OPS_CONSOLE_URL", "SUPPORT_CONSOLE_URL", "LIBRARY_URL", "BLOG_URL"} {
+		rows = append(rows, struct{ old, repl, want string }{"      " + v + ": ", "      " + v + "_: ", "nightly-ai env lacks " + v})
+	}
+	requireAIMutations(t, rows)
+}
+
+func TestDevEnvNightly_AICheckRunsBeforeTheMailPhase(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	for _, c := range []struct{ old, repl, want string }{
+		{"topology, contacts, nightly-ai]\n    if: >-", "topology, contacts]\n    if: >-", "email needs"},
+		{nlAINeeds, strings.Replace(nlAINeeds, ", contacts", "", 1), "nightly-ai needs"},
+	} {
+		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
+			t.Errorf("mutation %q: problems %q lack %q", c.old, got, c.want)
+		}
+	}
+}
+
+func TestDevEnvNightly_TeardownWaitsForTheAICheck(t *testing.T) {
+	t.Parallel()
+	got := devEnvNightlyProblems(mutateOnce(t, readWorkflow(t, "dev-env.yml"), "contacts, nightly-ai, email]", "contacts, email]"))
+	if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "nightly-teardown needs") }) {
+		t.Errorf("problems %q", got)
+	}
+}
+
+func TestDevEnvNightly_AICheckRunsAfterARedTopology(t *testing.T) {
+	t.Parallel()
+	jobs := nlJobs(readWorkflow(t, "dev-env.yml"))
+	x, _ := foldedIf(jobs["nightly-ai"])
+	for _, r := range []string{"needs.e2e.result", "needs.topology.result", "needs.contacts.result"} {
+		if strings.Contains(x, r) {
+			t.Errorf("nightly-ai if names %s", r)
+		}
+	}
+	for _, r := range []string{"needs.deploy.result", "needs.health-gate.result", "needs.fleet-gate.result"} {
+		if !strings.Contains(x, r) {
+			t.Errorf("nightly-ai if lacks %s", r)
+		}
+	}
+	requireAIMutations(t, []struct{ old, repl, want string }{
+		{"      needs.deploy.result == 'success' &&\n", "      needs.deploy.result == 'success' &&\n      needs.e2e.result == 'success' &&\n", "nightly-ai if"},
+		{"      needs.fleet-gate.result == 'success'\n", "      needs.fleet-gate.result == 'success' &&\n      needs.contacts.result == 'success'\n", "nightly-ai if"},
+		{" &&\n      needs.fleet-gate.result == 'success'\n", "\n", "nightly-ai if"},
+	})
+}
+
+func TestDevEnvNightly_AICheckRefusesARerun(t *testing.T) {
+	t.Parallel()
+	requireAIMutations(t, []struct{ old, repl, want string }{
+		{`[ "$DEPLOYED_ATTEMPT" != "$RUN_ATTEMPT" ]`, `[ "$DEPLOYED_ATTEMPT" = "" ]`, "nightly-ai lacks the re-run guard"},
+		{"DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}", "DEPLOYED_ATTEMPT: ${{ needs.build.outputs.attempt }}", "nightly-ai lacks the re-run guard"},
+		{"      - name: Refuse a re-run that skipped the deploy\n", "      - name: Skip the guard\n", "nightly-ai lacks the re-run guard"},
 	})
 }

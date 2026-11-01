@@ -4,6 +4,7 @@
 import { test, expect } from '@playwright/test'
 import { apiBase, checkMapping, createEntity, login, PERSONAS, provisionStaffAccount, rawFetch, signInSession, suggestMapping } from './client'
 import { freshTin } from './fixtures'
+import { nightlyTarget, REAL_AI_COVERED } from '../targets'
 import { assertErrorEnvelope } from './contract-helpers'
 
 const STAFF_CALLS = '/api/invoice/v1/staff/ai-calls'
@@ -137,6 +138,7 @@ test.describe('staff AI usage (API E2E, over the deployed gateway)', () => {
   })
 
   test("staff ai calls: the spec's calls are listed with every field; filters and paging hold; refusals", async () => {
+    test.skip(nightlyTarget(), REAL_AI_COVERED)
     const list = (await calls({ ...forA(), limit: String(MAX_LIMIT) })).calls
     const ai = list.find((c) => c.id === aiId)
     const jev = list.find((c) => c.id === jevId)
@@ -176,6 +178,7 @@ test.describe('staff AI usage (API E2E, over the deployed gateway)', () => {
   })
 
   test('staff ai calls: failed=true keeps only failed calls', async () => {
+    test.skip(nightlyTarget(), REAL_AI_COVERED)
     const failed = (await calls({ ...forA(), failed: 'true', limit: String(MAX_LIMIT) })).calls
     for (const c of failed) expect(c.outcome, `row ${c.id} under failed=true`).not.toBe('ok')
     expect(failed.map((c) => c.id), 'the fake rows are non-ok, so both are listed').toEqual(expect.arrayContaining([aiId, jevId]))

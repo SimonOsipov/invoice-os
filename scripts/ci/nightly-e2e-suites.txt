@@ -7,6 +7,7 @@ health-gate=Gate on gateway /health (commit, mock issuer, issuers)
 fleet-gate=Fleet /healthz gate (all backends green)
 e2e=E2E (smoke + api)=results
 contacts=Real contact reaches HubSpot and Resend
+ai-check=AI features and accuracy
 email=Real invite and reset mail
 teardown=Delete the nightly preview
 contacts-cleanup=Delete the run's contacts

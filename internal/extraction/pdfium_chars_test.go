@@ -374,8 +374,8 @@ func TestCharsIn_ReproducesEveryRectTextOnAWordLevelPage(t *testing.T) {
 // fixture except the two Chrome ones: the loop is identical and covers the rest for free.
 func TestCharsIn_ReproducesEveryRectTextOnTheCorpus(t *testing.T) {
 	names := pdcNonChromeFixtures(t)
-	if len(names) != 40 {
-		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 40 (42 committed minus %s and %s)", len(names), chrRegister, chrRegisterTwin)
+	if len(names) != 70 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 70 (72 committed minus %s and %s)", len(names), chrRegister, chrRegisterTwin)
 	}
 
 	totalRects := 0
@@ -511,6 +511,36 @@ var pdcTextCharsGoldens = map[string]struct{ pages, withText, textChars int }{
 	"wild_stacked_borderless_asprinted.pdf": {1, 1, 197},
 	"wild_two_party_bare_tin.pdf":           {1, 1, 202},
 	"wild_two_party_bare_tin_asprinted.pdf": {1, 1, 225},
+	"nightly_scan_01.pdf":                   {1, 0, 0},
+	"nightly_scan_02.pdf":                   {1, 0, 0},
+	"nightly_scan_03.pdf":                   {1, 0, 0},
+	"nightly_scan_04.pdf":                   {1, 0, 0},
+	"nightly_scan_05.pdf":                   {1, 0, 0},
+	"nightly_scan_06.pdf":                   {1, 0, 0},
+	"nightly_scan_07.pdf":                   {1, 0, 0},
+	"nightly_scan_08.pdf":                   {1, 0, 0},
+	"nightly_text_01.pdf":                   {1, 1, 205},
+	"nightly_text_02.pdf":                   {1, 1, 196},
+	"nightly_text_03.pdf":                   {1, 1, 139},
+	"nightly_text_04.pdf":                   {1, 1, 184},
+	"nightly_text_05.pdf":                   {1, 1, 204},
+	"nightly_text_06.pdf":                   {1, 1, 193},
+	"nightly_text_07.pdf":                   {1, 1, 142},
+	"nightly_text_08.pdf":                   {1, 1, 186},
+	"nightly_text_09.pdf":                   {1, 1, 204},
+	"nightly_text_10.pdf":                   {1, 1, 191},
+	"nightly_text_11.pdf":                   {1, 1, 139},
+	"nightly_text_12.pdf":                   {1, 1, 174},
+	"nightly_text_13.pdf":                   {1, 1, 207},
+	"nightly_text_14.pdf":                   {1, 1, 201},
+	"nightly_text_15.pdf":                   {1, 1, 140},
+	"nightly_text_16.pdf":                   {1, 1, 191},
+	"nightly_tin_01.pdf":                    {1, 1, 204},
+	"nightly_tin_02.pdf":                    {1, 1, 195},
+	"nightly_tin_03.pdf":                    {1, 1, 165},
+	"nightly_tin_04.pdf":                    {1, 1, 187},
+	"nightly_tin_05.pdf":                    {1, 1, 202},
+	"nightly_tin_06.pdf":                    {1, 1, 195},
 }
 
 func TestPDFiumReader_TextCharsUnchanged(t *testing.T) {
@@ -551,8 +581,8 @@ func TestPDFiumReader_TextCharsGoldensCoverEveryCommittedFixture(t *testing.T) {
 // not against the other's.
 func TestPDFiumTokens_OneTokenPerRectOnEveryWordLevelFixture(t *testing.T) {
 	names := pdcNonChromeFixtures(t)
-	if len(names) != 40 {
-		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 40", len(names))
+	if len(names) != 70 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 70", len(names))
 	}
 
 	totalTokens := 0

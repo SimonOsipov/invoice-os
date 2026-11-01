@@ -12,6 +12,7 @@ import { approvalRun404Dropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { GATEWAY_URL, shardTenants } from './targets'
 import { signInAs } from '../personaSession'
+import { nightlyTarget, REAL_AI_COVERED } from '../targets'
 import { buildAir07UnsteeredCsv, buildHeaderOnlyCsv, buildMixedCsv, steerExplainMarker } from '../importFixtures'
 
 const SHARD = shardTenants('import-review-surfaces.spec.ts')
@@ -1243,6 +1244,7 @@ test.describe('ENGI-16 import review opens the editor at the line', () => {
   })
 
   test('ENGI-17 review: Explain proposes a line fix and Accept saves it', async ({ page }) => {
+    test.skip(nightlyTarget(), REAL_AI_COVERED)
     test.setTimeout(180_000)
     const errors = collectErrors(page)
 

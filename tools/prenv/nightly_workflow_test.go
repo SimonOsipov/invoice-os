@@ -18,12 +18,13 @@ const (
 	nightlySuitesFlag     = "-suites scripts/ci/nightly-suites.txt"
 	nightlyCIRunLine      = `run: bash scripts/ci/nightly-ci.sh "$GITHUB_REF_NAME" ci.yml=run_id dev-env.yml=preview_run_id`
 	nightlyE2EFlag        = `-e2e-suites "$RUNNER_TEMP/e2e-suites.txt" `
+	nightlyAISection      = `-section ai="$RUNNER_TEMP/results/results-ai-check/ai.json"`
 	nightlyEmailSection   = `-section email="$RUNNER_TEMP/results/results-email/email.json"`
 	nightlyHubSpotSection = `-section hubspot="$RUNNER_TEMP/results/results-hubspot/hubspot.json"`
 	nightlyProdSection    = `-section prod_check="$RUNNER_TEMP/prod-check/prod_check.json"`
 	nightlySummaryIf      = `${{ !cancelled() && needs.main-only.result == 'success' }}`
-	nightlyPolls          = "540"
-	nightlySummaryTimeout = "300"
+	nightlyPolls          = "600"
+	nightlySummaryTimeout = "330"
 	nightlyPreviewDL      = `gh run download "$PREVIEW_RUN_ID" -R "$REPO" -p 'results-*' -D "$RUNNER_TEMP/results"`
 )
 
@@ -178,6 +179,9 @@ func nightlyRunProblems(nightlyYAML, ciYAML, suitesTxt string) []string {
 	}
 	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), nightlyE2EFlag) {
 		p = append(p, "assembler step lacks -e2e-suites")
+	}
+	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), nightlyAISection) {
+		p = append(p, "assembler step lacks -section ai")
 	}
 	if asm != nil && !strings.Contains(strings.Join(asm, "\n"), nightlyEmailSection) {
 		p = append(p, "assembler step lacks -section email")
@@ -669,6 +673,7 @@ func TestNightly_SummaryFoldsTheE2ERun(t *testing.T) {
 		{"preview dispatch dropped", " dev-env.yml=preview_run_id", "", "two-workflow call"},
 		{"poll budget", "NIGHTLY_CI_POLLS: " + nightlyPolls, "NIGHTLY_CI_POLLS: 120", "NIGHTLY_CI_POLLS"},
 		{"e2e flag dropped", nightlyE2EFlag, "", "lacks -e2e-suites"},
+		{"ai section dropped", " " + nightlyAISection, "", "lacks -section ai"},
 		{"email section dropped", " " + nightlyEmailSection, "", "lacks -section email"},
 		{"hubspot section dropped", " " + nightlyHubSpotSection, "", "lacks -section hubspot"},
 		{"preview download dropped", "$PREVIEW_RUN_ID\" -R", "$CI_RUN_ID\" -R", "preview run's results"},
@@ -726,7 +731,7 @@ func TestNightlyE2ESuites_MatchDevEnvJobs(t *testing.T) {
 	if got := nightlyE2ESuitesProblems(devEnv, suites); len(got) > 0 {
 		t.Fatalf("problems: %q", got)
 	}
-	for _, line := range []string{"contacts=Real contact reaches HubSpot and Resend", "contacts-cleanup=Delete the run's contacts"} {
+	for _, line := range []string{"contacts=Real contact reaches HubSpot and Resend", "contacts-cleanup=Delete the run's contacts", "ai-check=AI features and accuracy"} {
 		if !slices.Contains(strings.Split(suites, "\n"), line) {
 			t.Errorf("the suites file lacks %q", line)
 		}
@@ -765,7 +770,7 @@ func TestNightly_PollBudgetCoversTheDevEnvPath(t *testing.T) {
 	t.Parallel()
 	devEnv := nlJobs(readWorkflow(t, "dev-env.yml"))
 	m := func(id string) int { return nightlyJobMinutes(t, devEnv, id) }
-	path := m("commit-authors") + m("build") + m("deploy") + max(m("health-gate"), m("fleet-gate")) + m("e2e") + m("topology") + m("contacts") + m("email") + m("nightly-teardown") + m("contacts-cleanup")
+	path := m("commit-authors") + m("build") + m("deploy") + max(m("health-gate"), m("fleet-gate")) + m("e2e") + m("topology") + m("contacts") + m("nightly-ai") + m("email") + m("nightly-teardown") + m("contacts-cleanup")
 	if path < 150 {
 		t.Fatalf("control: path sum %d min is implausibly small", path)
 	}
@@ -784,4 +789,13 @@ func TestNightly_PollBudgetCoversTheDevEnvPath(t *testing.T) {
 	if timeout, _ := strconv.Atoi(v); timeout <= budget {
 		t.Errorf("Nightly summary timeout-minutes %d does not exceed the poll budget %d min", timeout, budget)
 	}
+}
+
+func TestNightly_PassesTheAISection(t *testing.T) {
+	t.Parallel()
+	nightly, _, _ := nightlyFiles(t)
+	if !strings.Contains(nightly, nightlyAISection) {
+		t.Fatalf("nightly.yml lacks %s", nightlyAISection)
+	}
+	requireNightlyMutation(t, " "+nightlyAISection, "", "lacks -section ai")
 }

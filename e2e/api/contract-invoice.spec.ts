@@ -65,6 +65,7 @@ import {
 } from './client'
 import { freshTin, freshPolicyName } from './fixtures'
 import { EXPLAIN_UNAVAILABLE_MARKER, steerExplainMarker, steerMarker } from '../importFixtures'
+import { nightlyTarget, REAL_AI_COVERED } from '../targets'
 import { assertErrorEnvelope, ensureFirmPolicyActive } from './contract-helpers'
 
 // cleanInvoiceFields(): own copy (repo convention — no cross-suite imports
@@ -2079,6 +2080,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     }
 
     test('explain answers a steered line fix, and the fix PATCH keeps the other lines', async () => {
+      test.skip(nightlyTarget(), REAL_AI_COVERED)
       const inv = await validatedWith(steerExplainMarker(ANSWER))
       const res = await explainViolation(token, inv.id, { rule_key: RULE, path: PATH })
       expect(res.status).toBe('ok')
@@ -2114,6 +2116,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     })
 
     test('explain says unavailable when the fake AI fails', async () => {
+      test.skip(nightlyTarget(), REAL_AI_COVERED)
       const inv = await validatedWith(EXPLAIN_UNAVAILABLE_MARKER)
       const res = await rawFetch(`/api/invoice/v1/invoices/${inv.id}/explain`, {
         method: 'POST',
@@ -2125,6 +2128,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     })
 
     test('an unscoped AI marker does not steer explain', async () => {
+      test.skip(nightlyTarget(), REAL_AI_COVERED)
       const inv = await validatedWith(steerMarker(ANSWER))
       const res = await rawFetch(`/api/invoice/v1/invoices/${inv.id}/explain`, {
         method: 'POST',

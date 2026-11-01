@@ -469,20 +469,35 @@ func TestNightlyCorpus_DegradationChangesThePixels(t *testing.T) {
 
 var nlTINPattern = regexp.MustCompile(`\d{8}-\d{4}`)
 
-func nlTINAbove(t *testing.T, tin string) {
-	t.Helper()
+// nlTINProblem names why tin is outside the free block, or "" when it is inside.
+func nlTINProblem(tin string) string {
 	var n int
 	if !nlTINPattern.MatchString(tin) || tin[:9] != "99999999-" {
-		t.Errorf("TIN %q is not in the 99999999- block", tin)
-		return
+		return "is not in the 99999999- block"
 	}
 	fmt.Sscanf(tin[9:], "%d", &n)
 	if n < 101 {
-		t.Errorf("TIN %q is below 99999999-0101", tin)
+		return "is below 99999999-0101"
+	}
+	return ""
+}
+
+func nlTINAbove(t *testing.T, tin string) {
+	t.Helper()
+	if p := nlTINProblem(tin); p != "" {
+		t.Errorf("TIN %q %s", tin, p)
 	}
 }
 
 func TestNightlyCorpus_UsesOnlyTheFreeTINBlock(t *testing.T) {
+	for _, bad := range []string{"99999999-0001", "99999999-0009", "99999999-0100", "12345678-0200"} {
+		if nlTINProblem(bad) == "" {
+			t.Errorf("control: TIN %s passes the free-block check", bad)
+		}
+	}
+	if p := nlTINProblem("99999999-0101"); p != "" {
+		t.Errorf("control: 99999999-0101 %s", p)
+	}
 	seen := 0
 	for _, r := range nlRows {
 		if r.Kind == "layout" {
@@ -526,17 +541,35 @@ func TestNightlyCorpus_HasARunOfOneDigitTIN(t *testing.T) {
 	}
 }
 
+var nlMetadataNeedles = []string{"/Info", "/ID", "<x:xmpmeta"}
+
+func nlMetadataHit(b []byte) string {
+	for _, needle := range nlMetadataNeedles {
+		if bytes.Contains(b, []byte(needle)) {
+			return needle
+		}
+	}
+	return ""
+}
+
 func TestNightlyCorpus_CarriesNoMetadata(t *testing.T) {
+	for _, planted := range []string{"/Info", "/ID", "<x:xmpmeta"} {
+		if nlMetadataHit([]byte("1 0 obj << "+planted+" 2 0 R >>")) != planted {
+			t.Errorf("control: a planted %s is not found", planted)
+		}
+	}
+	checked := 0
 	for _, r := range nlRows {
 		if r.Kind == "layout" {
 			continue
 		}
-		b := fxRead(t, r.File)
-		for _, needle := range []string{"/Info", "/ID", "<x:xmpmeta"} {
-			if bytes.Contains(b, []byte(needle)) {
-				t.Errorf("%s carries %s", r.File, needle)
-			}
+		checked++
+		if hit := nlMetadataHit(fxRead(t, r.File)); hit != "" {
+			t.Errorf("%s carries %s", r.File, hit)
 		}
+	}
+	if checked != 30 {
+		t.Errorf("scanned %d file(s), want 30", checked)
 	}
 }
 

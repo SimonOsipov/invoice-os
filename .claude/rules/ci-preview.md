@@ -19,6 +19,7 @@ paths:
 - `preview.sh` also takes the exact name `nightly`: `<svc>-nightly`, `migrate-nightly`, database `pr_0`, bucket `ascomply-preview-nightly`, secrets `nightly-<name>`, label `preview-pr=nightly`.
 - A dispatched `dev-env.yml` run creates the nightly preview and deletes it in `Delete the nightly preview`. The sweeper skips it.
 - Leave the `preview-pr` label off the user's `nightly-*` vendor secrets. Teardown deletes every labelled secret.
+- The nightly's `nightly-ai` job runs after `contacts` and before `email`.
 - The nightly's `email` job runs `preview.sh mail-on nightly` after E2E ends. It mounts `GOTRUE_SMTP_PASS` on `auth-nightly`, turns auto-confirm off there and mounts `RESEND_SENDING_KEY` on `tenancy-nightly`.
 - Finish every other nightly job before `email`. Only `nightly-teardown` and `contacts-cleanup` follow it, and `contacts-cleanup` needs `nightly-teardown`.
 - The nightly contact guard runs in `prepare-env` before `deploy`: `Check the contact secrets`, then `token_version`, then `nightlycontacts start`. A refusal deploys nothing.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -237,4 +238,64 @@ func (s *Store) Notes(ctx context.Context, originalID string) (NotesOnInvoice, e
 		return NotesOnInvoice{}, err
 	}
 	return out, nil
+}
+
+type undoKey struct{}
+
+// WithUndo marks an edit as the review screen's reset to the extractor's reading.
+func WithUndo(ctx context.Context) context.Context { return context.WithValue(ctx, undoKey{}, true) }
+
+// IsUndo reports whether ctx carries WithUndo.
+func IsUndo(ctx context.Context) bool { return ctx.Value(undoKey{}) != nil }
+
+// NotePositive stores a read amount positive (printed notes show -750.00), keeping its scale.
+func NotePositive(v *string) (*string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	d, err := decimal.NewFromString(strings.TrimSpace(*v))
+	if err != nil {
+		return nil, errors.New("reads " + fmt.Sprintf("%q", *v) + ", which is not an amount")
+	}
+	if !d.IsNegative() {
+		return v, nil
+	}
+	out := d.Abs().StringFixed(max(0, -d.Exponent()))
+	return &out, nil
+}
+
+// noteEdit applies D2 to an edit of a note: amounts stay positive, and an undo leaves the
+// parties the note took from its original.
+func noteEdit(ctx context.Context, in EditInput) (EditInput, error) {
+	u := &in.UpdateInput
+	for _, v := range []**string{&u.Subtotal, &u.VAT, &u.Total} {
+		p, err := NotePositive(*v)
+		if err != nil {
+			return in, fmt.Errorf("%w: %s", ErrValidation, err)
+		}
+		*v = p
+	}
+	if in.LineItems != nil {
+		lines := slices.Clone(*in.LineItems)
+		for i := range lines {
+			for _, v := range []**string{&lines[i].Quantity, &lines[i].UnitPrice, &lines[i].LineTotal, &lines[i].LineTax} {
+				p, err := NotePositive(*v)
+				if err != nil {
+					return in, fmt.Errorf("%w: %s", ErrValidation, err)
+				}
+				*v = p
+			}
+		}
+		in.LineItems = &lines
+	}
+	if IsUndo(ctx) {
+		for _, v := range []**string{
+			&u.SupplierEmail, &u.SupplierTelephone, &u.SupplierStreet, &u.SupplierCity, &u.SupplierPostalZone,
+			&u.SupplierCountry, &u.SupplierState, &u.SupplierLGA, &u.BuyerTIN, &u.BuyerName, &u.BuyerEmail,
+			&u.BuyerTelephone, &u.BuyerStreet, &u.BuyerCity, &u.BuyerPostalZone, &u.BuyerCountry, &u.BuyerState, &u.BuyerLGA,
+		} {
+			*v = nil
+		}
+	}
+	return in, nil
 }

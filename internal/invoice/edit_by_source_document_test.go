@@ -973,3 +973,118 @@ func TestReplaceLinesTx_AnOversizedLineAmountIsErrValidation(t *testing.T) {
 		t.Errorf("line_items changed despite a refused edit: before %+v, after %+v", before, after)
 	}
 }
+
+// --- CRDDBTNOTE-05: a note edited through the review screen --------------------------------
+
+// ebsNote files a credit note on the fixture invoice from its own document, buyer taken from the original.
+func (f *ebsFix) note(t *testing.T) (docID, noteID string) {
+	t.Helper()
+	docID = seedDocument(t, f.super, f.tenantID)
+	n, err := f.store.Create(f.ctx, CreateInput{
+		EntityID: f.entityID, InvoiceNumber: "EBS-NOTE", Total: strPtr("750.00"),
+		BuyerName: strPtr("Original Buyer"), DocumentType: submission.CreditNote,
+		OriginalInvoiceID: &f.invoiceID, SourceDocumentID: &docID,
+	})
+	if err != nil {
+		t.Fatalf("seed the note: %v", err)
+	}
+	return docID, n.ID
+}
+
+func (f *ebsFix) col(t *testing.T, id, col string) string {
+	t.Helper()
+	var out *string
+	if err := f.super.QueryRow(context.Background(),
+		`SELECT `+col+`::text FROM invoices WHERE id = $1`, id).Scan(&out); err != nil {
+		t.Fatalf("read %s: %v", col, err)
+	}
+	if out == nil {
+		return "<null>"
+	}
+	return *out
+}
+
+func TestRLS_EditBySourceDocumentTxANoteStoresAmountsPositive(t *testing.T) {
+	f := ebsSeed(t, "EBS-NOTEPOS")
+	doc, id := f.note(t)
+	if _, err := f.edit(t, doc, EditInput{UpdateInput: UpdateInput{Total: strPtr("-900.00"), VAT: strPtr("-60.5")}}); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	if got := f.col(t, id, "total"); got != "900.00" {
+		t.Errorf("note total = %s, want 900.00", got)
+	}
+	if got := f.col(t, id, "vat"); got != "60.50" {
+		t.Errorf("note vat = %s, want 60.50", got)
+	}
+	lines := []LineItemInput{{Description: strPtr("L"), Quantity: strPtr("-1"), UnitPrice: strPtr("-750.00"), LineTotal: strPtr("-750.00"), LineTax: strPtr("-10.00")}}
+	if _, err := f.edit(t, doc, EditInput{LineItems: &lines}); err != nil {
+		t.Fatalf("edit lines: %v", err)
+	}
+	got := readLineItemsForTest(t, f.super, id)
+	if len(got) != 1 {
+		t.Fatalf("note lines = %d, want 1", len(got))
+	}
+	for name, v := range map[string]*string{"quantity": got[0].Quantity, "unit_price": got[0].UnitPrice, "line_total": got[0].LineTotal, "line_tax": got[0].LineTax} {
+		if v == nil || strings.HasPrefix(*v, "-") {
+			t.Errorf("note line %s = %v, want positive", name, v)
+		}
+	}
+}
+
+func TestRLS_EditBySourceDocumentTxAnInvoiceKeepsANegativeAmount(t *testing.T) {
+	f := ebsSeed(t, "EBS-INVNEG")
+	if _, err := f.edit(t, f.documentID, EditInput{UpdateInput: UpdateInput{Total: strPtr("-900.00")}}); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	if got := f.total(t, f.invoiceID); got != "-900.00" {
+		t.Errorf("commercial invoice total = %s, want -900.00 untouched", got)
+	}
+}
+
+func TestRLS_EditBySourceDocumentTxAnUndoKeepsANotesParties(t *testing.T) {
+	f := ebsSeed(t, "EBS-NOTEUNDO")
+	doc, id := f.note(t)
+	undo := WithUndo(f.ctx)
+	run := func(c context.Context, in EditInput) error {
+		return db.WithinRequestTenantTx(c, f.app, func(tx pgx.Tx) error {
+			_, err := f.store.EditBySourceDocumentTx(c, tx, doc, in)
+			return err
+		})
+	}
+	if err := run(undo, EditInput{UpdateInput: UpdateInput{BuyerName: strPtr("PDF Buyer")}}); err != nil {
+		t.Fatalf("undo with a value: %v", err)
+	}
+	if err := run(undo, EditInput{UpdateInput: UpdateInput{BuyerName: ClearText}}); err != nil {
+		t.Fatalf("undo clearing: %v", err)
+	}
+	if got := f.col(t, id, "buyer_name"); got != "Original Buyer" {
+		t.Errorf("note buyer_name after undo = %s, want Original Buyer", got)
+	}
+	// An undo of an amount still lands, and a typed party edit is not an undo.
+	if err := run(undo, EditInput{UpdateInput: UpdateInput{Total: strPtr("-750.00")}}); err != nil {
+		t.Fatalf("undo total: %v", err)
+	}
+	if got := f.col(t, id, "total"); got != "750.00" {
+		t.Errorf("note total after undo = %s, want 750.00", got)
+	}
+	if err := run(f.ctx, EditInput{UpdateInput: UpdateInput{BuyerName: strPtr("Typed")}}); err != nil {
+		t.Fatalf("typed: %v", err)
+	}
+	if got := f.col(t, id, "buyer_name"); got != "Typed" {
+		t.Errorf("note buyer_name after a typed edit = %s, want Typed", got)
+	}
+}
+
+func TestRLS_EditBySourceDocumentTxAnUndoStillClearsAnInvoicesBuyer(t *testing.T) {
+	f := ebsSeed(t, "EBS-INVUNDO")
+	err := db.WithinRequestTenantTx(WithUndo(f.ctx), f.app, func(tx pgx.Tx) error {
+		_, err := f.store.EditBySourceDocumentTx(WithUndo(f.ctx), tx, f.documentID, EditInput{UpdateInput: UpdateInput{BuyerName: strPtr("X")}})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.col(t, f.invoiceID, "buyer_name"); got != "X" {
+		t.Errorf("commercial invoice buyer_name = %s, want X", got)
+	}
+}

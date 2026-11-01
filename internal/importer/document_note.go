@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/shopspring/decimal"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -131,21 +130,7 @@ func positive(name string, v **string) error {
 	return nil
 }
 
-// notePositive stores a read amount positive (printed notes show -750.00), keeping its scale.
-func notePositive(v *string) (*string, error) {
-	if v == nil {
-		return nil, nil
-	}
-	d, err := decimal.NewFromString(strings.TrimSpace(*v))
-	if err != nil {
-		return nil, errors.New("reads " + fmt.Sprintf("%q", *v) + ", which is not an amount")
-	}
-	if !d.IsNegative() {
-		return v, nil
-	}
-	out := d.Abs().StringFixed(max(0, -d.Exponent()))
-	return &out, nil
-}
+var notePositive = invoice.NotePositive
 
 // NoteOriginalRow is one invoice the review can offer as the original of a note.
 type NoteOriginalRow struct {

@@ -1736,6 +1736,15 @@ func (s *Store) EditBySourceDocumentTx(ctx context.Context, tx pgx.Tx, documentI
 		return Invoice{}, ErrNotFound
 	}
 
+	var docType submission.DocumentType
+	if err := tx.QueryRow(ctx, `SELECT document_type FROM invoices WHERE id = $1`, ids[0]).Scan(&docType); err != nil {
+		return Invoice{}, err
+	}
+	if docType != submission.CommercialInvoice {
+		if in, err = noteEdit(ctx, in); err != nil {
+			return Invoice{}, err
+		}
+	}
 	return editTx(ctx, tx, ids[0], in)
 }
 

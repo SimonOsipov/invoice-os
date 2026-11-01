@@ -1289,6 +1289,40 @@ func TestPreviewInvariantsRefuseTheKeySecretUnderAnotherVariableName(t *testing.
 	}
 }
 
+// The volume shape is the Cloud Run v1 (Knative) Volume resource that
+// `gcloud run services describe --format=json` prints: spec.template.spec.volumes[].secret.secretName.
+func TestPreviewInvariantsRefuseTheKeySecretAsAVolume(t *testing.T) {
+	t.Parallel()
+	for _, svc := range []string{"invoice-pr-7", "gateway-nightly", "invoice-nightly"} {
+		t.Run(svc, func(t *testing.T) {
+			t.Parallel()
+			vol := map[string]any{"name": "key", "secret": map[string]any{"secretName": nlKeySecret, "items": []any{map[string]any{"key": "latest", "path": "k"}}}}
+			list := []map[string]any{}
+			for _, s := range append(nlGoodSvcs(), invSvc{name: "gateway-nightly"}, invSvc{name: "invoice-pr-7"}) {
+				spec := map[string]any{"containers": []any{map[string]any{"env": []any{}}}}
+				if s.name == svc {
+					spec["volumes"] = []any{vol}
+				}
+				list = append(list, map[string]any{"metadata": map[string]any{"name": s.name}, "spec": map[string]any{"template": map[string]any{"spec": spec}}})
+			}
+			b, err := json.Marshal(list)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := runPreview(t, func(dir string) {
+				writeIn(t, dir, "have", nlKeySecret+"\n")
+				writeIn(t, dir, "list-services", string(b))
+			}, "invariants")
+			if r.code != 1 {
+				t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+			}
+			if !invLine(r, svc) {
+				t.Errorf("no line names %s:\n%s\n%s", svc, r.stdout, r.stderr)
+			}
+		})
+	}
+}
+
 func TestPreviewInvariantsFailWhenAListingFails(t *testing.T) {
 	t.Parallel()
 	for _, fail := range []string{"fail-secrets-list", "fail-run-services"} {

@@ -470,8 +470,11 @@ cmd_invariants() {
     bad=1
   fi
   envs=$(gcloud run services list "${gc[@]}" --format json |
-    jq -r '.[] | .metadata.name as $s | .spec.template.spec.containers[].env[]? | "\($s) \(.name) \(.valueFrom.secretKeyRef.name // "plain")"')
-  if grep -E '^[^ ]+ (OPENROUTER_API_KEY|SENTRY_DSN|VITE_SENTRY_DSN|SENTRY_AUTH_TOKEN)( |$)' <<<"$envs" |
+    jq -r '.[] | .metadata.name as $s | .spec.template.spec |
+      ((.containers[].env[]? | "\($s) \(.name) \(.valueFrom.secretKeyRef.name // "plain")"),
+       (.volumes[]? | select(.secret) | "\($s) volume:\(.name) \(.secret.secretName)"))')
+  # The key secret may appear only as the nightly mount, under any variable or volume name.
+  if grep -E '^[^ ]+ (OPENROUTER_API_KEY|SENTRY_DSN|VITE_SENTRY_DSN|SENTRY_AUTH_TOKEN)( |$)| nightly-openrouter-api-key$' <<<"$envs" |
     grep -vxE '(invoice|submission|worker)-nightly OPENROUTER_API_KEY nightly-openrouter-api-key'; then
     echo "::error::a preview service sets an OpenRouter or Sentry variable (listed above); only the nightly invoice, submission and worker may set OPENROUTER_API_KEY, from nightly-openrouter-api-key."
     bad=1

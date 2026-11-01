@@ -18,6 +18,7 @@ func TestNewsletterMode_Table(t *testing.T) {
 		wantKeys BlogKeys
 	}{
 		{"preview ignores keys", platform.PosturePreview, ModeReal, both, ModeFake, BlogKeys{}},
+		{"nightly ignores keys", platform.PostureNightly, ModeReal, both, ModeFake, BlogKeys{}},
 		{"contacts fake", platform.PostureHosted, ModeFake, both, ModeFake, BlogKeys{}},
 		{"contacts off with keys", platform.PostureHosted, ModeOff, both, ModeOff, BlogKeys{}},
 		{"real with both", platform.PostureHosted, ModeReal, both, ModeReal, BlogKeys{TopicID: "t-1", SegmentID: "s-1"}},

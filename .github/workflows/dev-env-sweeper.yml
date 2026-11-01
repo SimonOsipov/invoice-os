@@ -47,7 +47,9 @@ jobs:
           while read -r pr created; do
             [ -n "$pr" ] || continue
             decision=""
-            if [ "$(date -u -d "$created" +%s 2>/dev/null || echo 0)" -gt "$cutoff" ]; then
+            if [ "$pr" = nightly ]; then
+              decision="kept: the Nightly run deletes it"
+            elif [ "$(date -u -d "$created" +%s 2>/dev/null || echo 0)" -gt "$cutoff" ]; then
               decision="kept: younger than 24 h"
             elif ! state=$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json state --jq .state 2>/dev/null); then
               decision="skipped: PR state unreadable"

@@ -1,0 +1,3 @@
+{"Action":"start","Package":"x/p"}
+{"Action":"output","Package":"x/p","Output":"        end-to-end field accuracy, document in to invoice row out: 9 / 9\n"}
+{"Action":"pass","Package":"x/p"}

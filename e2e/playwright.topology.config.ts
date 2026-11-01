@@ -1,5 +1,6 @@
 import { readdirSync } from 'node:fs'
 import { defineConfig, devices } from '@playwright/test'
+import { nightlyTarget } from './targets'
 import { partitionErrors, UNITS } from './topology/shards'
 
 const specs = readdirSync(new URL('./topology', import.meta.url), { recursive: true })
@@ -27,11 +28,16 @@ export default defineConfig({
   workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  // A test whose retry also failed stops the shard; a retry-pass does not.
-  maxFailures: process.env.CI ? 1 : 0,
+  // A test whose retry also failed stops the shard; a retry-pass does not. The nightly runs on.
+  maxFailures: process.env.CI && !nightlyTarget() ? 1 : 0,
   // See the note in playwright.config.ts: a retry-pass reports green, so name it.
   reporter: process.env.CI
-    ? [['list'], ['html', { open: 'never' }], ['./flakyReporter.ts', { label: 'topology' }]]
+    ? [
+        ['list'],
+        ['html', { open: 'never' }],
+        ['./flakyReporter.ts', { label: 'topology' }],
+        ...(nightlyTarget() ? [['json'] as const] : []),
+      ]
     : [['list'], ['./flakyReporter.ts', { label: 'topology' }]],
   use: {
     headless: true,

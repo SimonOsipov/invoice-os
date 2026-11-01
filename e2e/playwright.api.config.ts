@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test'
+import { nightlyTarget } from './targets'
 
 // M3-14 API E2E config (task-74). Separate from smoke/topology so all three
 // suites run independently: smoke asserts each SPA renders, topology drives a
@@ -26,7 +27,12 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   // See the note in playwright.config.ts: a retry-pass reports green, so name it.
   reporter: process.env.CI
-    ? [['list'], ['html', { open: 'never' }], ['./flakyReporter.ts', { label: 'api' }]]
+    ? [
+        ['list'],
+        ['html', { open: 'never' }],
+        ['./flakyReporter.ts', { label: 'api' }],
+        ...(nightlyTarget() ? [['json'] as const] : []),
+      ]
     : [['list'], ['./flakyReporter.ts', { label: 'api' }]],
   use: {
     headless: true,

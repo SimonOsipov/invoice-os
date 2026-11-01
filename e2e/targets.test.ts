@@ -2,12 +2,13 @@
 // topology/targets.ts, smoke/apps.ts and api/client.ts are pointed at it.
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { resolveTarget } from './targets'
+import { expectedContactsMode, nightlyTarget, REAL_AI_COVERED, resolveTarget } from './targets'
 
 const ENV_VAR = 'GATEWAY_URL'
 
 afterEach(() => {
   delete process.env[ENV_VAR]
+  delete process.env.E2E_TARGET
 })
 
 describe('resolveTarget', () => {
@@ -27,5 +28,37 @@ describe('resolveTarget', () => {
     process.env[ENV_VAR] = '  https://gw///  '
 
     expect(resolveTarget(ENV_VAR)).toBe('https://gw')
+  })
+})
+
+describe('nightlyTarget', () => {
+  it('nightlyTarget reads E2E_TARGET exactly', () => {
+    delete process.env.E2E_TARGET
+    expect(nightlyTarget()).toBe(false)
+    process.env.E2E_TARGET = ''
+    expect(nightlyTarget()).toBe(false)
+    process.env.E2E_TARGET = 'nightly'
+    expect(nightlyTarget()).toBe(true)
+    for (const bad of ['Nightly', 'pr-7', 'true']) {
+      process.env.E2E_TARGET = bad
+      expect(() => nightlyTarget()).toThrow(/E2E_TARGET/)
+    }
+  })
+})
+
+describe('REAL_AI_COVERED', () => {
+  it('REAL_AI_COVERED names the check', () => {
+    expect(REAL_AI_COVERED).toContain('e2e/nightlyAi')
+  })
+})
+
+describe('expectedContactsMode', () => {
+  it('expectedContactsMode reads E2E_TARGET', () => {
+    delete process.env.E2E_TARGET
+    expect(expectedContactsMode()).toBe('fake')
+    process.env.E2E_TARGET = 'nightly'
+    expect(expectedContactsMode()).toBe('real')
+    process.env.E2E_TARGET = 'pr-7'
+    expect(() => expectedContactsMode()).toThrow(/E2E_TARGET/)
   })
 })

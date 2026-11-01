@@ -9,7 +9,7 @@ import (
 func TestDevEnvTopologyKeepsSiblingShardsRunning(t *testing.T) {
 	t.Parallel()
 	block := strings.Join(blockLines(devEnvJob(t, "topology").lines, 4, "strategy"), "\n")
-	for _, want := range []string{"fail-fast: false", "shard: ${{ fromJSON(needs.e2e.outputs.shards) }}"} {
+	for _, want := range []string{"fail-fast: false", "shard: ${{ fromJSON(needs.changes.outputs.shards) }}"} {
 		if !strings.Contains(block, want) {
 			t.Errorf("topology strategy lacks %q:\n%s", want, block)
 		}

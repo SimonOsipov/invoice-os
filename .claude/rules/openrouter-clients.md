@@ -19,7 +19,7 @@ paths:
 
 - Keep `OPENROUTER_API_KEY` in the production secret `openrouter-api-key`, mounted on `invoice` and `worker` only (invoice-os-infra `secrets.tf`). The AI client and the Jev client share it.
 - Never put the key in the repo or in an example file.
-- Give no PR preview the key. `scripts/ci/preview.sh` sets `AI_FAKE=true` and `JEV_FAKE=true`, and the `Preview invariants` job fails on an OpenRouter secret or env var.
+- Give no PR preview the key. `scripts/ci/preview.sh` sets `AI_FAKE=true` and `JEV_FAKE=true`, and the `Preview invariants` job fails on an OpenRouter secret or env var. The exception is the `nightly` preview: `invoice`, `submission` and `worker` mount `nightly-openrouter-api-key` and set neither fake.
 - Accept an absent key or exactly `""` as a blanked key.
 - Match the key variable name exactly. Never print its value.
 - Read the model, the endpoint and the retry budget from constants. Add no variable for any of them.

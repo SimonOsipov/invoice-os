@@ -1,0 +1,24 @@
+{
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "passes",
+          "status": "passed",
+          "title": "passes",
+          "duration": 0.0828340000000054,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1793280079617,
+      "endTime": 1793280079621.545,
+      "status": "passed",
+      "message": "",
+      "name": "/home/runner/work/invoice-os/invoice-os/frontend/app/src/flake.test.ts"
+    }
+  ],
+  "success": true
+}

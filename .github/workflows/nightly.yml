@@ -1,0 +1,168 @@
+name: Nightly
+
+# Dispatches ci.yml in full mode and dev-env.yml (the nightly preview + E2E), checks production, sums the results into the nightly-summary artifact and opens no issue.
+# The schedule runs from main only; main-only fails a dispatch from any other ref.
+on:
+  schedule:
+    - cron: '17 1 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  main-only:
+    name: Main only
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: '[ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::Nightly runs on main only, not on $GITHUB_REF"; exit 1; }'
+
+  prod-check:
+    name: Production check
+    needs: main-only
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT: ascomply-prod
+      REGION: africa-south1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: google-github-actions/auth@v3
+        continue-on-error: true
+        with:
+          workload_identity_provider: projects/428987361227/locations/global/workloadIdentityPools/github/providers/github-actions
+          service_account: deploy-prod@ascomply-prod.iam.gserviceaccount.com
+      - name: Read the gateway token and the auth image
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          retry() { for n in 1 2 3; do "$@" && return 0; if [ "$n" -lt 3 ]; then sleep 20; fi; done; return 1; }
+          token=$(retry gcloud secrets versions access latest --secret gateway-token --project "$PROJECT")
+          echo "::add-mask::$token"
+          echo "PROD_GATEWAY_TOKEN=$token" >>"$GITHUB_ENV"
+          # the tag counts only when the revision serving 100 % is the newest; a revision's own image is a digest
+          svc=$(retry gcloud run services describe auth --project "$PROJECT" --region "$REGION" --format=json)
+          image=$(jq -r '. as $s | ([.status.traffic[]? | select(.percent == 100)] | if length == 1 then (.[0] | if .latestRevision then $s.status.latestReadyRevisionName else .revisionName end) // "" else "" end) as $rev | if $rev != "" and $rev == $s.status.latestCreatedRevisionName then $s.spec.template.spec.containers[0].image else "" end' <<<"$svc")
+          if [ -n "$image" ]; then echo "AUTH_BUILD=${image##*:}" >>"$GITHUB_ENV"; fi
+      - name: Resolve main
+        id: main
+        continue-on-error: true
+        run: bash scripts/ci/nightly-prod-sha.sh
+      - name: Check production
+        env:
+          HEAD: ${{ steps.main.outputs.head }}
+          EXPECTED: ${{ steps.main.outputs.expected }}
+          PROD_PROBE_EMAIL: ${{ secrets.PROD_PROBE_EMAIL }}
+          PROD_PROBE_PASSWORD: ${{ secrets.PROD_PROBE_PASSWORD }}
+        run: go run ./internal/tools/prodcheck -head "$HEAD" -expected "$EXPECTED" -auth-build "${AUTH_BUILD:-}" -out "$RUNNER_TEMP/prod_check.json"
+      - name: Upload prod-check
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: prod-check
+          path: ${{ runner.temp }}/prod_check.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  summary:
+    name: Nightly summary
+    needs: [main-only, prod-check]
+    if: ${{ !cancelled() && needs.main-only.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    permissions:
+      contents: read
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run CI and the nightly preview on this ref
+        id: ci
+        env:
+          # 600 polls x 30 s = 300 min: dev-env.yml's nightly path (commit-authors 5, build 30, deploy 40, gate 15, e2e 40, topology 45, contacts 15, nightly-ai 30, email 25, teardown 20, contacts-cleanup 20 = 285) + 15.
+          NIGHTLY_CI_POLLS: 600
+        run: bash scripts/ci/nightly-ci.sh "$GITHUB_REF_NAME" ci.yml=run_id dev-env.yml=preview_run_id
+      - name: Collect the CI results
+        id: collect
+        if: always() && steps.ci.outputs.run_id != ''
+        env:
+          CI_RUN_ID: ${{ steps.ci.outputs.run_id }}
+          PREVIEW_RUN_ID: ${{ steps.ci.outputs.preview_run_id }}
+        run: |
+          set -euo pipefail
+          gh run download "$CI_RUN_ID" -R "$REPO" -p 'results-*' -D "$RUNNER_TEMP/results" || echo "::warning::no result artifacts to download"
+          runs=("$CI_RUN_ID")
+          if [ -n "$PREVIEW_RUN_ID" ]; then
+            runs+=("$PREVIEW_RUN_ID")
+            gh run download "$PREVIEW_RUN_ID" -R "$REPO" -p 'results-*' -D "$RUNNER_TEMP/results" || echo "::warning::no preview result artifacts to download"
+          fi
+          for run in "${runs[@]}"; do gh api --paginate "repos/$REPO/actions/runs/$run/jobs" --jq '.jobs[]'; done | jq -s . > "$RUNNER_TEMP/jobs.json"
+          echo "sha=$(gh run view "$CI_RUN_ID" -R "$REPO" --json headSha --jq .headSha)" >> "$GITHUB_OUTPUT"
+      - name: Download the prod check
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: prod-check
+          path: ${{ runner.temp }}/prod-check
+      - uses: pnpm/action-setup@v6
+        if: always()
+      - name: Install the e2e workspace
+        if: always()
+        run: pnpm install --filter @invoice-os/e2e --frozen-lockfile --ignore-scripts
+      - name: Send the screenshots to Argos
+        if: always()
+        # 15 min: the upload and the 5 min poll, each with a 30 s fetch timeout, and a margin.
+        timeout-minutes: 15
+        env:
+          ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
+          ARGOS_COMMIT: ${{ steps.collect.outputs.sha }}
+          ARGOS_BRANCH: main
+          PREVIEW_RUN_ID: ${{ steps.ci.outputs.preview_run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/argos-shots"
+          if [ -n "$PREVIEW_RUN_ID" ]; then
+            gh run download -R "$REPO" "$PREVIEW_RUN_ID" -p 'argos-shots-*' -D "$RUNNER_TEMP/argos-shots" || echo "::warning::no Argos shot artifacts to download"
+          fi
+          node e2e/argosBuild.ts "$RUNNER_TEMP/argos-shots" "$RUNNER_TEMP/argos.json"
+      - name: Write summary.json
+        if: always()
+        env:
+          CI_SHA: ${{ steps.collect.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [ -f "$RUNNER_TEMP/jobs.json" ] || echo '[]' > "$RUNNER_TEMP/jobs.json"
+          { cat scripts/ci/nightly-e2e-suites.txt; node e2e/topology/shards.ts | jq -r '.[] | "topology-\(.)=E2E topology (\(.))=results"'; } > "$RUNNER_TEMP/e2e-suites.txt"
+          started=$(gh api "repos/$REPO/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
+          go run ./internal/tools/nightlysummary -suites scripts/ci/nightly-suites.txt -e2e-suites "$RUNNER_TEMP/e2e-suites.txt" -jobs "$RUNNER_TEMP/jobs.json" -results "$RUNNER_TEMP/results" -run-id "$GITHUB_RUN_ID" -sha "${CI_SHA:-$GITHUB_SHA}" -started "$started" -workspace "$GITHUB_WORKSPACE" -section ai="$RUNNER_TEMP/results/results-ai-check/ai.json" -section email="$RUNNER_TEMP/results/results-email/email.json" -section hubspot="$RUNNER_TEMP/results/results-hubspot/hubspot.json" -section prod_check="$RUNNER_TEMP/prod-check/prod_check.json" -section argos="$RUNNER_TEMP/argos.json" -out "$RUNNER_TEMP/summary.json"
+      - name: Upload nightly-summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-summary
+          path: ${{ runner.temp }}/summary.json
+          if-no-files-found: error
+          retention-days: 14

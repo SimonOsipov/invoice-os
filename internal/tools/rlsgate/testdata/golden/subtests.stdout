@@ -1,0 +1,4 @@
+PASS  pkgA.TestParent/child1
+PASS  pkgA.TestParent/child2
+PASS  pkgA.TestParent
+rlsgate: 3 passed, 0 skipped, 0 failed (3 test-level results)

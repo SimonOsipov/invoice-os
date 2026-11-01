@@ -897,6 +897,7 @@ func TestBootstrapEnabledAllowlist(t *testing.T) {
 		{`("staging","true") — unrecognised value, QA F1`, "staging", "true", false},
 		{`("Production","true")`, "Production", "true", false},
 		{`("prod","true")`, "prod", "true", false},
+		{`("nightly","true") -- not a bootstrap environment name`, "nightly", "true", false},
 
 		// --- additional required assertions: production/allowlist lookalikes ---
 		{"leading-whitespace production", " production", "true", false},

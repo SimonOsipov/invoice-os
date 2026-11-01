@@ -1,0 +1,5 @@
+PASS  example.com/x.TestA
+FAIL  example.com/x.TestB
+    b_test.go:9: boom
+rlsgate: 1 passed, 0 skipped, 1 failed (2 test-level results)
+::error::go test exited 1 (compile error / panic / failure) for: -count=1 ./x/...

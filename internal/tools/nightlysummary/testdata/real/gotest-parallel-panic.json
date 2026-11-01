@@ -1,0 +1,34 @@
+{"Time":"2026-10-29T19:10:25.484658+02:00","Action":"start","Package":"example.com/gj"}
+{"Time":"2026-10-29T19:10:25.881307+02:00","Action":"run","Package":"example.com/gj","Test":"TestP1"}
+{"Time":"2026-10-29T19:10:25.881579+02:00","Action":"output","Package":"example.com/gj","Test":"TestP1","Output":"=== RUN   TestP1\n"}
+{"Time":"2026-10-29T19:10:25.881661+02:00","Action":"output","Package":"example.com/gj","Test":"TestP1","Output":"=== PAUSE TestP1\n"}
+{"Time":"2026-10-29T19:10:25.881673+02:00","Action":"pause","Package":"example.com/gj","Test":"TestP1"}
+{"Time":"2026-10-29T19:10:25.881684+02:00","Action":"run","Package":"example.com/gj","Test":"TestP2"}
+{"Time":"2026-10-29T19:10:25.881694+02:00","Action":"output","Package":"example.com/gj","Test":"TestP2","Output":"=== RUN   TestP2\n"}
+{"Time":"2026-10-29T19:10:25.881703+02:00","Action":"output","Package":"example.com/gj","Test":"TestP2","Output":"=== PAUSE TestP2\n"}
+{"Time":"2026-10-29T19:10:25.881712+02:00","Action":"pause","Package":"example.com/gj","Test":"TestP2"}
+{"Time":"2026-10-29T19:10:25.881721+02:00","Action":"run","Package":"example.com/gj","Test":"TestP3"}
+{"Time":"2026-10-29T19:10:25.88173+02:00","Action":"output","Package":"example.com/gj","Test":"TestP3","Output":"=== RUN   TestP3\n"}
+{"Time":"2026-10-29T19:10:25.881739+02:00","Action":"output","Package":"example.com/gj","Test":"TestP3","Output":"=== PAUSE TestP3\n"}
+{"Time":"2026-10-29T19:10:25.881747+02:00","Action":"pause","Package":"example.com/gj","Test":"TestP3"}
+{"Time":"2026-10-29T19:10:25.881756+02:00","Action":"run","Package":"example.com/gj","Test":"TestSeq"}
+{"Time":"2026-10-29T19:10:25.881764+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"=== RUN   TestSeq\n"}
+{"Time":"2026-10-29T19:10:25.881791+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"--- FAIL: TestSeq (0.00s)\n"}
+{"Time":"2026-10-29T19:10:25.884772+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"panic: boom [recovered, repanicked]\n"}
+{"Time":"2026-10-29T19:10:25.884842+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"\n"}
+{"Time":"2026-10-29T19:10:25.884853+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"goroutine 6 [running]:\n"}
+{"Time":"2026-10-29T19:10:25.884873+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"testing.tRunner.func1.2({0x100259a60, 0x10028ca70})\n"}
+{"Time":"2026-10-29T19:10:25.884894+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"\ttesting/testing.go:1974 +0x1a0\n"}
+{"Time":"2026-10-29T19:10:25.884902+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"testing.tRunner.func1()\n"}
+{"Time":"2026-10-29T19:10:25.88491+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"\ttesting/testing.go:1977 +0x318\n"}
+{"Time":"2026-10-29T19:10:25.88492+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"panic({0x100259a60?, 0x10028ca70?})\n"}
+{"Time":"2026-10-29T19:10:25.884928+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"\truntime/panic.go:860 +0x12c\n"}
+{"Time":"2026-10-29T19:10:25.884935+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"example.com/gj.TestSeq(0x2105b397a908?)\n"}
+{"Time":"2026-10-29T19:10:25.884943+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"\texample.com/gj/p_test.go:14 +0x4c\n"}
+{"Time":"2026-10-29T19:10:25.884969+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"testing.tRunner(0x2105b397a908, 0x10028bf10)\n"}
+{"Time":"2026-10-29T19:10:25.884978+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"\ttesting/testing.go:2036 +0xc4\n"}
+{"Time":"2026-10-29T19:10:25.884985+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"created by testing.(*T).Run in goroutine 1\n"}
+{"Time":"2026-10-29T19:10:25.884992+02:00","Action":"output","Package":"example.com/gj","Test":"TestSeq","Output":"\ttesting/testing.go:2101 +0x3a8\n"}
+{"Time":"2026-10-29T19:10:25.885861+02:00","Action":"fail","Package":"example.com/gj","Test":"TestSeq","Elapsed":0}
+{"Time":"2026-10-29T19:10:25.885894+02:00","Action":"output","Package":"example.com/gj","Output":"FAIL\texample.com/gj\t0.401s\n"}
+{"Time":"2026-10-29T19:10:25.885909+02:00","Action":"fail","Package":"example.com/gj","Elapsed":0.401}

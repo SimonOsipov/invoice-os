@@ -61,9 +61,13 @@ func QueueDepth(c map[string]int64) int64 {
 	return n
 }
 
-// PreviewSuffix is "-pr-<N>" on a PR preview, else "".
+// PreviewSuffix is "-pr-<N>" on a PR preview, "-nightly" on the nightly, else "".
 func PreviewSuffix(deployEnv string) string {
-	if platform.Posture(deployEnv) != platform.PosturePreview {
+	switch platform.Posture(deployEnv) {
+	case platform.PostureNightly:
+		return "-nightly"
+	case platform.PosturePreview:
+	default:
 		return ""
 	}
 	return "-" + deployEnv[strings.LastIndex(deployEnv, "pr-"):]

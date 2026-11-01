@@ -1,0 +1,9 @@
+{"Action":"run","Package":"pkgA","Test":"TestPar1"}
+{"Action":"run","Package":"pkgA","Test":"TestPar2"}
+{"Action":"pause","Package":"pkgA","Test":"TestPar1"}
+{"Action":"cont","Package":"pkgA","Test":"TestPar1"}
+{"Action":"pass","Package":"pkgA","Test":"TestPar1","Elapsed":0.01}
+{"Action":"pause","Package":"pkgA","Test":"TestPar2"}
+{"Action":"cont","Package":"pkgA","Test":"TestPar2"}
+{"Action":"pass","Package":"pkgA","Test":"TestPar2","Elapsed":0.01}
+{"Action":"pass","Package":"pkgA","Elapsed":0.02}

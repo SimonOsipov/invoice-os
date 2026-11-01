@@ -5107,6 +5107,7 @@ func TestSeedDemoCustomers_OneRecordPerFileableBuyerTIN(t *testing.T) {
 	for _, tc := range []struct{ name, posture string }{
 		{"local", ""},
 		{"preview", "invoice-os-pr-12"},
+		{"nightly", "nightly"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			super, app := seedDemoCustomersSetup(t)

@@ -107,6 +107,9 @@ func TestModeFromEnv_Table(t *testing.T) {
 		{"four keys keep their padding", platform.PostureHosted, padded, ModeReal, Keys{
 			HubSpotToken: " tok ", ResendAPIKey: "key\n", ResendSegmentID: "\tseg", ResendTopicID: "top ",
 		}},
+		{"nightly, four keys", platform.PostureNightly, keyEnv(nil), ModeReal, wantKeys()},
+		{"nightly, fake flag", platform.PostureNightly, map[string]string{"CONTACTS_FAKE": "true"}, ModeFake, Keys{}},
+		{"nightly, no keys", platform.PostureNightly, nil, ModeOff, Keys{}},
 		{"no keys, hosted", platform.PostureHosted, nil, ModeOff, Keys{}},
 		{"no keys, local", platform.PostureLocal, nil, ModeOff, Keys{}},
 		{"no keys, empty strings", platform.PostureHosted, map[string]string{"HUBSPOT_TOKEN": "", "RESEND_API_KEY": ""}, ModeOff, Keys{}},
@@ -140,7 +143,7 @@ func refuses(t *testing.T, getenv func(string) string, posture platform.PostureK
 }
 
 func TestModeFromEnv_FakeWithAKeyRefuses(t *testing.T) {
-	for _, posture := range []platform.PostureKind{platform.PostureLocal, platform.PostureHosted} {
+	for _, posture := range []platform.PostureKind{platform.PostureLocal, platform.PostureHosted, platform.PostureNightly} {
 		for _, key := range modeKeyVars {
 			t.Run(string(posture)+"/"+key, func(t *testing.T) {
 				env := map[string]string{"CONTACTS_FAKE": "true", key: "sekret-" + strings.ToLower(key)}
@@ -189,6 +192,16 @@ func TestModeFromEnv_PartialKeysRefuse(t *testing.T) {
 			assertNoSecrets(t, err, env)
 		})
 	}
+
+	t.Run("nightly", func(t *testing.T) {
+		env := keyEnv(nil)
+		delete(env, "RESEND_TOPIC_ID")
+		err := refuses(t, getenvFrom(env), platform.PostureNightly)
+		if err == nil || !strings.Contains(err.Error(), "RESEND_TOPIC_ID") {
+			t.Fatalf("err = %v, want a refusal naming RESEND_TOPIC_ID", err)
+		}
+		assertNoSecrets(t, err, env)
+	})
 
 	t.Run("one key names the other three", func(t *testing.T) {
 		env := map[string]string{"RESEND_TOPIC_ID": "sekret-resend_topic_id"}

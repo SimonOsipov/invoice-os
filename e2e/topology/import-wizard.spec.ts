@@ -81,6 +81,7 @@ import {
 } from '../api/client'
 import { ensureFirmPolicyActive, ensureInhousePolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
+import { argosOn, shoot } from '../argos'
 import {
   assertFillsColumn,
   assertPageDoesNotScrollSideways,
@@ -94,6 +95,7 @@ import {
   type Rect,
 } from './layout'
 import { signInAs } from '../personaSession'
+import { nightlyTarget, REAL_AI_COVERED } from '../targets'
 import { INHOUSE_PERSONA } from './targets'
 import {
   boxOf,
@@ -429,6 +431,7 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
 // so this runs ONLY when the deploy gate exercises this file against a live PR environment.
 // Stage 3/4 locally can only typecheck it (pnpm --filter @invoice-os/e2e typecheck).
 test('AIRL-01: a placement chip stays inside its column at every swept width', async ({ page }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(180_000)
   const errors = collectErrors(page)
 
@@ -503,6 +506,7 @@ test('AIRL-01: a placement chip stays inside its column at every swept width', a
 })
 
 test('AIR07-E2E-01: a steered suggestion opens the Map step placed and badged, and Continue imports it', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(240_000)
   const errors = collectErrors(page)
 
@@ -559,6 +563,7 @@ test('AIR07-E2E-01: a steered suggestion opens the Map step placed and badged, a
 })
 
 test('AIR07-E2E-03: a title-row file maps and imports from row 3', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(240_000)
   const errors = collectErrors(page)
 
@@ -625,6 +630,7 @@ test('AIR07-E2E-03: a title-row file maps and imports from row 3', async ({ page
 })
 
 test("AIR07-E2E-04: an unsteered file opens exactly today's Map step", async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(240_000)
   const errors = collectErrors(page)
 
@@ -684,6 +690,7 @@ async function openUnsteeredMapStep(page: Page, label: string): Promise<void> {
 }
 
 test('ENGI07-E2E-01: the buyer-type select sits in the palette card', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(180_000)
   const errors = collectErrors(page)
   await openUnsteeredMapStep(page, 'ENGI-07 select')
@@ -745,6 +752,7 @@ const CHECK05_AUTOMATIC = ['buyer_tin', 'currency', 'invoice_number', 'issue_dat
 test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and imports once placed by hand, while the other group's placements are as they were", async ({
   page,
 }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -1404,6 +1412,9 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
   await expect(page.locator('label[for="pf-import-file"]'), 'in-house gets the dropzone too').toBeVisible({
     timeout: 30_000,
   })
+  // Header crumb shows "-" until the company initials load.
+  if (argosOn()) await expect(page.locator('header span.mono').first()).not.toHaveText('-', { timeout: 15_000 }).catch(() => {})
+  await shoot(page, 'app', 'inhouse-create', { mask: [page.locator('aside nav button.pf-nav span.mono'), page.getByTestId('company-chip'), page.locator('aside nav.pf-nav-list'), page.locator('span.card-title', { hasText: /^Import invoices/ }).locator('xpath=..')] })
 
   // Inverts the old test's positive assertion of this exact panel (AC-7/8:662-669): with
   // a real entity resolved, the amber refusal — and its in-house-only sentence,
@@ -1465,6 +1476,10 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
   // path gets (E2E-01 above), now available to in-house too.
   await expect(page.getByTestId('invoice-detail'), 'the import actually filed a real invoice, not a refusal').toBeVisible({ timeout: 30_000 })
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(invoiceNumber)
+  // A long file name wraps to 1 or 2 lines; pin one line so the page height holds.
+  const sourceName = page.getByTestId('source-document-card').locator(':scope > div').first().locator(':scope > div').nth(1).locator(':scope > div').first()
+  if (argosOn()) await page.addStyleTag({ content: '[data-testid="source-document-card"] [style*="break-all"] { white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important }' })
+  await shoot(page, 'app', 'inhouse-detail', { mask: [sourceName, page.getByTestId('invoice-detail').locator('tbody'), page.getByTestId('status-strip'), page.locator('aside nav button.pf-nav span.mono'), page.getByTestId('company-chip'), page.locator('aside nav.pf-nav-list')] })
 
   // And manual entry — the OTHER path [inhouse-can-start] proved was also a dead end
   // (:725-729). Re-opens the wizard fresh via the header CTA rather than navigating back

@@ -48,6 +48,7 @@ paths:
 - Make every `corpusExpect` value reachable by `Tier1Rules`. Otherwise list the pair in `t1aGaps` with a reason.
 - A `t1aGaps` entry excuses a pair from the per-pair test only. The rate stays red until the rules reach it.
 - Name a fixture that is not a layout outside the `corpus_` prefix. Add it to no layout registry.
+- A `nightly_` file is not a layout and joins no layout registry. `nightly_key.json` holds its expected values.
 - Keep `learned_*`, `rich_invoice`, `advisory_*`, `chrome_register*` and `dense_invoice` out of `corpusExpect`, `corpusLayouts` and `corpusTokenFloor`.
 - A `wild_*` arrangement joins `expectByLayout` but no `corpus_` registry.
 - Registering an `advisory_register*` fixture in `expectByLayout` removes `withholding_tax` from `wildUnprintedPhraseIDs` in the same commit.

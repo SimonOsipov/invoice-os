@@ -1,0 +1,1 @@
+{"ok":false,"accuracy":0.82,"threshold":0.9,"steps":[{"name":"Load the corpus","status":"passed"},{"name":"Score the extractions","status":"failed","detail":"accuracy 0.82 is below the 0.90 threshold"},{"name":"Post the report","status":"skipped"}]}

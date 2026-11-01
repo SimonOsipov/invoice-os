@@ -18,6 +18,11 @@ func ciJob(t *testing.T, id string) workflowJob {
 	return workflowJob{}
 }
 
+// hasRunPrefix: a vitest step may carry the full-mode ${NIGHTLY_RESULTS:+...} suffix.
+func hasRunPrefix(runs []string, want string) bool {
+	return slices.ContainsFunc(runs, func(r string) bool { return r == want || strings.HasPrefix(r, want+" ") })
+}
+
 func TestCIChangesPublishesThePRLane(t *testing.T) {
 	t.Parallel()
 	j := ciJob(t, "changes")
@@ -74,7 +79,7 @@ func TestCILibraryJobReplacesFrontendOnTheSmallLane(t *testing.T) {
 	if v, _ := jobKey(lib, "needs"); v != "changes" {
 		t.Errorf("library needs = %q, want changes", v)
 	}
-	if v, _ := jobKey(lib, "if"); v != "needs.changes.outputs.lane == 'library'" {
+	if v, _ := jobKey(lib, "if"); v != "needs.changes.outputs.lane == 'library' || github.event_name == 'workflow_dispatch'" {
 		t.Errorf("library if = %q", v)
 	}
 	var runs []string
@@ -83,6 +88,9 @@ func TestCILibraryJobReplacesFrontendOnTheSmallLane(t *testing.T) {
 		t.Fatal("library job has no steps")
 	}
 	for _, s := range libSteps {
+		if s.keys["name"] == ciUploadStepName {
+			continue
+		}
 		for _, k := range []string{"if", "continue-on-error"} {
 			if v, ok := s.keys[k]; ok {
 				t.Errorf("library step %v has %s: %q, want none", s.keys, k, v)
@@ -98,7 +106,7 @@ func TestCILibraryJobReplacesFrontendOnTheSmallLane(t *testing.T) {
 		"pnpm --filter @invoice-os/monitoring test",
 		"pnpm --filter @invoice-os/e2e test:unit",
 	} {
-		if !slices.Contains(runs, want) {
+		if !hasRunPrefix(runs, want) {
 			t.Errorf("library steps lack %q; runs = %v", want, runs)
 		}
 	}
@@ -120,7 +128,7 @@ func TestCIBlogJobReplacesFrontendOnTheSmallLane(t *testing.T) {
 	if v, _ := jobKey(j, "needs"); v != "changes" {
 		t.Errorf("blog needs = %q, want changes", v)
 	}
-	if v, _ := jobKey(j, "if"); v != "needs.changes.outputs.lane == 'blog'" {
+	if v, _ := jobKey(j, "if"); v != "needs.changes.outputs.lane == 'blog' || github.event_name == 'workflow_dispatch'" {
 		t.Errorf("blog if = %q", v)
 	}
 	var runs []string
@@ -129,6 +137,9 @@ func TestCIBlogJobReplacesFrontendOnTheSmallLane(t *testing.T) {
 		t.Fatal("blog job has no steps")
 	}
 	for _, s := range steps {
+		if s.keys["name"] == ciUploadStepName {
+			continue
+		}
 		for _, k := range []string{"if", "continue-on-error"} {
 			if v, ok := s.keys[k]; ok {
 				t.Errorf("blog step %v has %s: %q, want none", s.keys, k, v)
@@ -144,7 +155,7 @@ func TestCIBlogJobReplacesFrontendOnTheSmallLane(t *testing.T) {
 		"pnpm --filter @invoice-os/monitoring test",
 		"pnpm --filter @invoice-os/e2e test:unit",
 	} {
-		if !slices.Contains(runs, want) {
+		if !hasRunPrefix(runs, want) {
 			t.Errorf("blog steps lack %q; runs = %v", want, runs)
 		}
 	}

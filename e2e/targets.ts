@@ -18,3 +18,19 @@ export function resolveTarget(envVar: string): string {
   }
   return raw.replace(/\/+$/, '')
 }
+
+// The one E2E variable the nightly sets; any other value is a typo that must not pass as a PR run.
+export function nightlyTarget(): boolean {
+  const raw = process.env.E2E_TARGET
+  if (raw === undefined || raw === '') return false
+  if (raw === 'nightly') return true
+  throw new Error(`E2E_TARGET must be unset or exactly "nightly", got "${raw}".`)
+}
+
+// The contacts delivery mode notifications reports: real on the nightly, fake on a PR preview.
+export function expectedContactsMode(): 'real' | 'fake' {
+  return nightlyTarget() ? 'real' : 'fake'
+}
+
+// Skip reason for tests that steer the fake AI; the nightly's real AI is covered by the AI check.
+export const REAL_AI_COVERED = 'steers the fake AI; real AI is covered by e2e/nightlyAi'

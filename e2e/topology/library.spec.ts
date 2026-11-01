@@ -11,7 +11,7 @@ const BAKED_APP_URL = resolveTarget('BAKED_APP_URL')
 const BAKED_LANDING_URL = resolveTarget('BAKED_LANDING_URL')
 
 const MIN_GROUPS = 11
-const MIN_FEATURES = 28
+const MIN_FEATURES = 29
 const TOUR_STEPS = 14
 // The tour's seven stops, in order: [group id, feature id]. Odd steps spotlight the group's nav
 // button, even steps its feature card.

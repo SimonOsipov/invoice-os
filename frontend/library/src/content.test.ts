@@ -11,11 +11,11 @@ const byId = (id: string) => {
 }
 
 describe('content', () => {
-  it('content_hasElevenGroupsTwentyEightFeaturesSixStagesSevenTourStops', () => {
-    expect([GROUPS.length, FEATURES.length, STAGES.length, TOUR.length]).toEqual([11, 28, 6, 7])
+  it('content_hasElevenGroupsTwentyNineFeaturesSixStagesSevenTourStops', () => {
+    expect([GROUPS.length, FEATURES.length, STAGES.length, TOUR.length]).toEqual([11, 29, 6, 7])
     expect(FEATURES).toEqual(GROUPS.flatMap((g) => g.feats))
     expect(GROUPS.map((g) => g.n)).toEqual(['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11'])
-    expect(GROUPS.map((g) => g.feats.length)).toEqual([3, 3, 3, 2, 2, 2, 2, 3, 4, 2, 2])
+    expect(GROUPS.map((g) => g.feats.length)).toEqual([4, 3, 3, 2, 2, 2, 2, 3, 4, 2, 2])
   })
 
   it('content_membersGroupEndsWithTheTwoDeletionFeatures', () => {
@@ -27,7 +27,7 @@ describe('content', () => {
     expect(FEATURES.length).toBeGreaterThan(0)
     const counts: Record<SceneKind, number> = { list: 0, form: 0, flow: 0, feed: 0, metrics: 0, toggles: 0 }
     for (const f of FEATURES) counts[f.sc.kind]++
-    expect(counts).toEqual({ list: 6, form: 10, flow: 5, feed: 2, metrics: 2, toggles: 3 })
+    expect(counts).toEqual({ list: 6, form: 11, flow: 5, feed: 2, metrics: 2, toggles: 3 })
     for (const f of FEATURES) {
       expect(f.sc.win).not.toBe('')
       expect(f.sc.steps.length).toBeGreaterThanOrEqual(3)
@@ -87,9 +87,9 @@ describe('content', () => {
     for (const id of COMING_SOON_IDS) expect(FEATURES.map((f) => f.id)).toContain(id)
   })
 
-  it('content_marksTheOtherTwentyThreeShipped', () => {
+  it('content_marksTheOtherTwentyFourShipped', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped').map((f) => f.id)
-    expect(shipped).toEqual(['import-files', 'create-invoice', 'invoice-status', 'read-documents', 'review-fields', 'learns',
+    expect(shipped).toEqual(['import-files', 'create-invoice', 'invoice-status', 'credit-notes', 'read-documents', 'review-fields', 'learns',
       'rule-library', 'validate', 'custom-rules', 'approval-queue', 'workflow-builder', 'overview', 'reports', 'audit-trail',
       'evidence-bundle', 'portfolio', 'onboard-client', 'contacts', 'invite-members', 'roles', 'delete-account', 'delete-workspace', 'company-profile'])
     for (const f of FEATURES) expect(['shipped', 'soon']).toContain(f.status)
@@ -97,7 +97,7 @@ describe('content', () => {
 
   it('content_shippedFeaturesHaveTheirViewsAppPath', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped')
-    expect(shipped).toHaveLength(23)
+    expect(shipped).toHaveLength(24)
     for (const f of shipped) expect(f.path, f.id).toBe(APP_PATHS[f.view])
     expect(byId('overview').path).toBe('/')
     expect(byId('import-files').path).toBe('/create')
@@ -115,6 +115,15 @@ describe('content', () => {
     expect(byId('submit-clear').view).toBe('invoices')
     expect(byId('alerts').view).toBe('settings')
     for (const f of soon) expect('path' in f, f.id).toBe(false)
+  })
+
+  it('content_creditNotesWordsStopAtIssueCheckApproveRegister', () => {
+    const f = byId('credit-notes')
+    const text = [f.title, f.short, f.desc, ...f.benefits, ...f.sc.steps.map((s) => s.cap)].join(' ')
+    expect(text).toMatch(/register/i)
+    expect(text).toMatch(/approval/i)
+    expect(text).toMatch(/checks/i)
+    expect(text).not.toMatch(/\b(send|sent|submit|submission|transmit|clear|clearance|NRS)\b/i)
   })
 
   it('content_usesExactlyTheTwelveAppViews', () => {

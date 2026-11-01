@@ -75,8 +75,8 @@ func TestDocumentType_OnlyTheDocumentTypeIDIsRead(t *testing.T) {
 
 func TestDocumentType_TheOptionNamesAreDistinctAndHoldTheDefault(t *testing.T) {
 	q := DocumentTypeQuestion()
-	if len(q.Options) != 8 {
-		t.Fatalf("%d options, want 8", len(q.Options))
+	if len(q.Options) != 9 {
+		t.Fatalf("%d options, want 9", len(q.Options))
 	}
 	seen := map[string]bool{}
 	for _, o := range q.Options {
@@ -252,8 +252,8 @@ func dtJevcheckDecl(t *testing.T, name string) (*ast.GenDecl, *token.FileSet) {
 func TestDocumentType_TheOptionsAreKeyedOnePerLine(t *testing.T) {
 	gd, fset := dtJevcheckDecl(t, "documentTypeOptions")
 	lit, ok := gd.Specs[0].(*ast.ValueSpec).Values[0].(*ast.CompositeLit)
-	if !ok || len(lit.Elts) != 8 {
-		t.Fatalf("documentTypeOptions is not an eight-element literal")
+	if !ok || len(lit.Elts) != 9 {
+		t.Fatalf("documentTypeOptions is not a nine-element literal")
 	}
 	lines := map[int]bool{}
 	for i, e := range lit.Elts {

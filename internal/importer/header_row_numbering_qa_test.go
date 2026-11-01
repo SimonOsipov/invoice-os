@@ -201,6 +201,35 @@ func TestServiceImport_CreateTimeQuarantineCountsFromTheHeaderRow(t *testing.T) 
 	}
 }
 
+// A header amount beyond the column quarantines its group; it no longer fails the batch.
+func TestServiceImport_AHeaderAmountBeyondTheColumnQuarantinesTheGroup(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "qa header overflow tenant")
+	entityID := seedEntity(t, super, tenantID, "qa header overflow entity")
+
+	svc := newTestService(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	rows := [][]string{
+		mkRow("INV-OK", "2026-01-10", "TIN", "Buyer", "NGN", "100.00", "7.50", "107.50", "Item", "1", "100.00"),
+		mkRow("INV-BIGHDR", "2026-01-10", "TIN", "Buyer", "NGN", "100.00", "7.50", "99999999999999.99", "Item", "1", "100.00"),
+	}
+
+	res, err := svc.Import(c, entityID, "", "", 4, stdMapping, stdHeader, rows, false, "")
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if res.ReadyInvoices != 1 || res.QuarantinedInvoices != 1 {
+		t.Fatalf("Ready/Quarantined = %d/%d, want 1/1 (errors %+v)", res.ReadyInvoices, res.QuarantinedInvoices, res.Errors)
+	}
+	findRowError(t, res.Errors, "", "one or more fields failed validation")
+	if got := countInvoicesByNumber(t, super, entityID, "INV-BIGHDR"); got != 0 {
+		t.Errorf("INV-BIGHDR invoices = %d, want 0", got)
+	}
+}
+
 // A duplicate that races past the ExistingNumbers precheck is reported with
 // its rows counted from the header row. The competing INSERT stays
 // uncommitted until Import's Create is blocked on the unique index.

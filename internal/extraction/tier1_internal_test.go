@@ -403,12 +403,23 @@ func TestTier1_AIOnlySpecsBuildNoRule(t *testing.T) {
 		}
 	}
 	if want := []string{"due_date", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
-		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga"}; !slices.Equal(aiOnly, want) {
+		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga", "original_invoice_number"}; !slices.Equal(aiOnly, want) {
 		t.Fatalf("label-less tier1Specs = %v, want %v", aiOnly, want)
 	}
 	for _, r := range Tier1Rules {
 		if slices.Contains(aiOnly, r.Field) {
 			t.Errorf("rule %q names the AI-only field %q", r.Key, r.Field)
+		}
+	}
+	if !tier1Learnable("invoice_number") {
+		t.Fatal("control: invoice_number must be learnable")
+	}
+	for _, f := range aiOnly {
+		if tier1Learnable(f) {
+			t.Errorf("%q is AI-only but tier1Learnable says a correction teaches a rule", f)
+		}
+		if _, ok := LearnBoxlessRule(f, "INV-77", []string{"Against invoice INV-77"}); ok {
+			t.Errorf("LearnBoxlessRule learned a rule for the AI-only field %q", f)
 		}
 	}
 }

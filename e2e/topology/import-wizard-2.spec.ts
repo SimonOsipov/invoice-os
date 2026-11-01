@@ -11,6 +11,9 @@ import {
   createEntity,
   createInvoice,
   listInvoices,
+  validateInvoice,
+  approveUntilClosed,
+  firmApproverTokens,
   getAuditLog,
   getCarriedReading,
   getExtractions,
@@ -128,6 +131,73 @@ const JEV_RECEIPT_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'jev_receipt_invoic
 
 function uniqueJevReceiptPdfBytes(): Buffer {
   return Buffer.concat([JEV_RECEIPT_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
+// fxJevCreditNote (fxE2ECopies): reads as a credit note of INV-ORIG-3401 (JEVFAKE-CHOICE-Y3JlZGl0IG5vdGU
+// and an AIFAKE-ANSWER marker); the engine reads CN-3401, 100.00 / 7.50 / 107.50.
+const JEV_CREDIT_NOTE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'jev_credit_note.pdf'))
+
+function uniqueJevCreditNotePdfBytes(): Buffer {
+  return Buffer.concat([JEV_CREDIT_NOTE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
+// internal/submission/mock_script.go mockTINAccept: the scripted buyer TIN the mock adapter accepts.
+const MOCK_TIN_ACCEPT = '99999999-0001'
+
+// A 1-line invoice that reached `accepted` through the mock adapter (the recipe in
+// e2e/api/contract-invoice.spec.ts acceptedOriginal; no cross-spec imports).
+async function acceptedOriginal(token: string, entityId: string, invoiceNumber: string): Promise<void> {
+  const inv = await createInvoice(token, {
+    entity_id: entityId,
+    invoice_number: invoiceNumber,
+    issue_date: '2026-01-01T00:00:00Z',
+    supplier_tin: freshTin(),
+    supplier_name: 'Acme Nigeria Ltd',
+    buyer_tin: MOCK_TIN_ACCEPT,
+    buyer_name: 'Buyer Ltd',
+    currency: 'NGN',
+    subtotal: '1000',
+    vat: '75',
+    total: '1075',
+    line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+  })
+  expect((await validateInvoice(token, inv.id)).status, 'the original validates clean').toBe('validated')
+  await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
+  const res = await rawFetch('/api/invoice/v1/invoices/submissions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: { invoice_ids: [inv.id], idempotency_key: crypto.randomUUID() },
+  })
+  expect(res.status, 'batch submit').toBe(200)
+  await expect
+    .poll(async () => (await getInvoice(token, inv.id)).status, { timeout: 120_000, intervals: [1_000] })
+    .toBe('accepted')
+}
+
+// Uploads `file` for a fresh entity holding the accepted `originals`, and waits for the review
+// of a held note. extractOneDocument cannot: it clicks the exit, and a held note has none.
+async function extractHeldNote(
+  page: Page,
+  label: string,
+  file: { name: string; buffer: Buffer },
+  originals: string[],
+): Promise<void> {
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `${label} ${Date.now()}`, tin: freshTin() })
+  for (const number of originals) await acceptedOriginal(token, entity.id, number)
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, entity.name)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"]#pf-import-file')
+    .setInputFiles({ name: file.name, mimeType: 'application/pdf', buffer: file.buffer })
+  await page.getByRole('button', { name: 'Extract invoices' }).click()
+
+  await expect(page.getByTestId('extraction-note-panel'), 'a held note must land on its review with the panel').toBeVisible({
+    timeout: 240_000,
+  })
+  await expect(page.getByTestId('extraction-page-1'), 'the canvas must render at least one frame').toBeVisible({ timeout: 60_000 })
 }
 
 // AIR-08-13's deployed fixture (fxE2ECopies): a ruled 2-row table plus an AIFAKE-LINES-ANSWER
@@ -650,7 +720,7 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
   // EXTR-13-07: the fields pane renders the header vocabulary only -- a line-item cell has its
   // own grid, LineItemGrid -- so every rendered-row count below is bounded to it.
   const wireNamesB = detail.fields.map((f) => f.name)
-  const headerNamesB = wireNamesB.filter((n) => !n.startsWith('line_items'))
+  const headerNamesB = wireNamesB.filter((n) => !n.startsWith('line_items') && n !== 'original_invoice_number')
   expect(headerNamesB.length, 'no header field on this document -- every measurement below is vacuous').toBeGreaterThan(0)
 
   const pane = page.getByTestId('extraction-fields')
@@ -1578,7 +1648,7 @@ test('EXTR13-LAYOUT-03: the grid takes the same left and right edges as the head
 
   // The sibling this aligns to, anchored by what it CONTAINS rather than by position alone: a
   // wrong ancestor resolves zero header cells and reds here instead of measuring the wrong box.
-  const headerNames = detail.fields.map((f) => f.name).filter((n) => !n.startsWith('line_items'))
+  const headerNames = detail.fields.map((f) => f.name).filter((n) => !n.startsWith('line_items') && n !== 'original_invoice_number')
   expect(headerNames.length, 'this document carries no header field -- there is no sibling to align to').toBeGreaterThan(0)
   const paneBody = fieldsPaneBody(page)
   const headerGrid = paneBody.locator('> div').first()
@@ -4536,3 +4606,147 @@ test('CHECK04-E2E-01 (AC-4, AC-5, AC-8): a document read as a receipt shows the 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+test('CRDDBTNOTE05: the note panel fits the review at every wide width', async ({ page }, testInfo) => {
+  // Two accepted originals, one cold-sidecar extraction, then a four-width sweep.
+  test.setTimeout(600_000)
+  const errors = collectErrors(page)
+  const longNumber = `INV-LONG-${'X'.repeat(31)}`
+  expect(longNumber, 'the long original must be 40 characters').toHaveLength(40)
+
+  await extractHeldNote(page, 'Zz CRDDBTNOTE-05 layout', { name: 'jev_credit_note.pdf', buffer: uniqueJevCreditNotePdfBytes() }, [
+    longNumber,
+    'INV-ORIG-3401',
+  ])
+
+  const panel = page.getByTestId('extraction-note-panel')
+  const review = page.getByTestId('extraction-review')
+  const body = page.getByTestId('extraction-review-body')
+  const controls = ['extraction-note-original', 'extraction-note-number', 'extraction-note-import', 'extraction-note-as-invoice'] as const
+
+  // Non-empty floor: the long original is in the list, so the sweep measures the 40-character option.
+  await expect(page.getByTestId('extraction-note-original').locator('option', { hasText: longNumber })).toHaveCount(1)
+
+  const measured: { width: number; scrollWidth: number; clientWidth: number; bodyHeight: number }[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first, WIDE_WIDTHS' own order.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [p, r, b] = await Promise.all([panel.boundingBox(), review.boundingBox(), body.boundingBox()])
+        const boxes = await Promise.all(controls.map((id) => page.getByTestId(id).boundingBox()))
+        const flow = await panel.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+        return { p, r, b, boxes, flow }
+      }, `note panel containment at ${width}px`)
+
+      expect(m.p && m.r && m.b, `the panel, the review and its body must render at ${width}px`).toBeTruthy()
+      expect(m.p!.width, `the panel collapsed to zero width at ${width}px`).toBeGreaterThan(0)
+      controls.forEach((id, i) => {
+        const box = m.boxes[i]
+        expect(box, `${id} did not render at ${width}px`).toBeTruthy()
+        expect(box!.width, `${id} collapsed to zero width at ${width}px`).toBeGreaterThan(0)
+        expect(enclosesRect(m.p as Rect, box as Rect, 1), `${id} leaves the panel at ${width}px`).toBe(true)
+      })
+      for (let i = 0; i < controls.length; i += 1) {
+        for (let j = i + 1; j < controls.length; j += 1) {
+          expect(rectsOverlap(m.boxes[i] as Rect, m.boxes[j] as Rect), `${controls[i]} overlaps ${controls[j]} at ${width}px`).toBe(false)
+        }
+      }
+      expect(enclosesRect(m.r as Rect, m.p as Rect, 1), `the panel leaves the review at ${width}px`).toBe(true)
+      expect(
+        m.flow.scrollWidth,
+        `the panel holds ${m.flow.scrollWidth}px of content in a ${m.flow.clientWidth}px box at ${width}px`,
+      ).toBeLessThanOrEqual(m.flow.clientWidth + 1)
+      expect(m.b!.height, `the review body has no height below the panel at ${width}px`).toBeGreaterThan(0)
+      expect(m.b!.y, `the review body starts above the panel's bottom at ${width}px`).toBeGreaterThanOrEqual(m.p!.y + m.p!.height - 1)
+
+      measured.push({ width, scrollWidth: m.flow.scrollWidth, clientWidth: m.flow.clientWidth, bodyHeight: m.b!.height })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+  await testInfo.attach('crddbtnote05-note-panel.json', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+
+test('CRDDBTNOTE05: a note PDF imports as a note on the review screen', async ({ page }) => {
+  // Two accepted originals, one cold-sidecar extraction, one import.
+  test.setTimeout(600_000)
+  const errors = collectErrors(page)
+
+  // The read original goes first, so newest-first alone would not preselect it.
+  await extractHeldNote(page, 'Zz CRDDBTNOTE-05 import', { name: 'jev_credit_note.pdf', buffer: uniqueJevCreditNotePdfBytes() }, [
+    'INV-ORIG-3401',
+    `INV-OTHER-${freshTin()}`,
+  ])
+
+  await expect(page.getByTestId('extraction-open-invoice'), 'a held note has no invoice exit').toHaveCount(0)
+  await expect(page.getByTestId('extraction-document-type'), 'a note carries no document-type notice').toHaveCount(0)
+  await expect(page.getByText(/not a tax invoice/i)).toHaveCount(0)
+  await expect(page.getByTestId('extraction-note-original').locator('option:checked'), 'the read original is preselected').toContainText(
+    'INV-ORIG-3401',
+  )
+  await expect(page.getByTestId('extraction-note-number'), 'the read number is seeded').toHaveValue('CN-3401')
+
+  await page.getByTestId('extraction-note-import').click()
+  await expect(page.getByTestId('extraction-note-panel'), 'the panel goes once the note is filed').toHaveCount(0, { timeout: 60_000 })
+  await page.getByTestId('extraction-open-invoice').click()
+  await expect(page.getByTestId('invoice-detail')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('CN-3401')
+  await expect(page.getByTestId('document-type-badge')).toBeVisible()
+
+  await page.getByTestId('original-invoice-link').click()
+  await expect(page.getByRole('heading', { level: 1 }), 'the link opens the original').toHaveText('INV-ORIG-3401', { timeout: 60_000 })
+  await expect(page.getByTestId('notes-card').getByTestId('note-row-open'), 'the original lists the note').toHaveText('CN-3401')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('CRDDBTNOTE05: a held file in a two-file run keeps its way back', async ({ page }) => {
+  test.setTimeout(600_000)
+  const errors = collectErrors(page)
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `Zz CRDDBTNOTE-05 held ${Date.now()}`, tin: freshTin() })
+  await acceptedOriginal(token, entity.id, 'INV-ORIG-3401')
+
+  const noteName = 'jev_credit_note.pdf'
+  const denseName = 'dense_invoice.pdf'
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, entity.name)
+  await runDocumentsIn(page, token, [
+    { name: noteName, mimeType: 'application/pdf', buffer: uniqueJevCreditNotePdfBytes() },
+    { name: denseName, mimeType: 'application/pdf', buffer: uniqueDensePdfBytes() },
+  ])
+
+  await expect
+    .poll(() => new URL(page.url()).pathname, { message: 'a two-file run lands on Review', timeout: 180_000 })
+    .toMatch(/^\/imports\/[0-9a-fA-F-]{36},[0-9a-fA-F-]{36}\/review$/)
+  const runPath = new URL(page.url()).pathname
+
+  const tab = page.getByRole('button', { name: /^(Quarantined documents|Unreadable rows) \(/ })
+  await tab.click()
+  const rows = page.getByTestId('unreadable-row')
+  await expect(rows, 'the hold and the no-number document are both unreadable').toHaveCount(2)
+  await expect(rows.filter({ hasText: noteName })).toHaveCount(1)
+  await expect(rows.filter({ hasText: denseName })).toHaveCount(1)
+  await expect(page.getByTestId('unreadable-held-panel')).toContainText('Waiting for the original invoice: 1')
+
+  await rows.filter({ hasText: noteName }).getByTestId('unreadable-note-review').click()
+  await expect(page.getByTestId('extraction-note-panel'), 'Open its review opens the panel').toBeVisible({ timeout: 120_000 })
+  await page.getByTestId('extraction-note-import').click()
+  await expect(page.getByTestId('extraction-note-panel')).toHaveCount(0, { timeout: 60_000 })
+
+  await page.goBack()
+  await expect.poll(() => new URL(page.url()).pathname, { message: 'Back returns to the run' }).toBe(runPath)
+  const tabAfter = page.getByRole('button', { name: /^(Quarantined documents|Unreadable rows) \(/ })
+  await tabAfter.click()
+  await expect(page.getByTestId('unreadable-held-panel'), 'the hold is gone').toHaveCount(0)
+  await expect(rows.filter({ hasText: noteName }), 'the hold row is gone').toHaveCount(0)
+  await expect(rows.filter({ hasText: denseName }), 'the other row stays').toHaveCount(1)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

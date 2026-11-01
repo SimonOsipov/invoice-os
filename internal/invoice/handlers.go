@@ -1797,12 +1797,9 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusBadRequest, "line_items id must name a line of this invoice"
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrOriginalNotFound):
 		return http.StatusNotFound, "not found"
-	case errors.Is(err, ErrOriginalIsANote):
-		return http.StatusConflict, "a note cannot be the original of a note"
-	case errors.Is(err, ErrOriginalOtherEntity):
-		return http.StatusConflict, "the original belongs to another client"
-	case errors.Is(err, ErrOriginalNotIssued):
-		return http.StatusConflict, "a note needs an accepted invoice with an IRN"
+	case isNoteRefusal(err):
+		msg, _ := NoteRefusalMessage(err)
+		return http.StatusConflict, msg
 	case errors.Is(err, ErrDuplicateNumber):
 		return http.StatusConflict, "duplicate invoice number"
 	case errors.Is(err, ErrRedundantTransition):
@@ -1855,3 +1852,5 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
+
+func isNoteRefusal(err error) bool { _, ok := NoteRefusalMessage(err); return ok }

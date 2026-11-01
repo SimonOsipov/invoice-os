@@ -40,7 +40,7 @@ import {
   type RunFile,
   type RunRoute,
 } from './lib/importRun'
-import { pollUntilSettled, startDocumentRun as runDocumentPipelines } from './lib/documentRun'
+import { newestJob, pollUntilSettled, startDocumentRun as runDocumentPipelines } from './lib/documentRun'
 import type { DocumentRowState } from './lib/documentRun'
 import {
   canSubmitAllMappings,
@@ -1110,7 +1110,8 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
       return
     }
     if (route.kind === 'extraction') {
-      setExtractionInvoices((m) => ({ ...m, [route.jobId]: route.invoiceId }))
+      const { invoiceId } = route
+      if (invoiceId !== null) setExtractionInvoices((m) => ({ ...m, [route.jobId]: invoiceId }))
       openExtraction(route.jobId)
       setRun({ files: [], cursor: 0, status: 'idle' })
       return
@@ -1480,8 +1481,10 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   // (enterByHandKeepsTheFailureListIntact).
   function enterByHand(documentId: string) {
     const seq = ++handOffReadSeq.current
+    const fromReview = view === 'extraction'
     const land = (reading: CarriedReading | null) => {
       if (seq !== handOffReadSeq.current) return
+      if (fromReview) navigate('create')
       setHandOffDocumentId(documentId)
       setHandOffReading(reading)
       // A carried filing takes only a number the operator typed, never the seeded one.
@@ -1582,6 +1585,15 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
   function openExtraction(jobId: string) {
     setExtractionJobId(jobId)
     navigate('extraction', { id: jobId })
+  }
+
+  // A held document's review: its newest job. A failed lookup rejects, and the caller shows it.
+  async function openDocumentReview(documentId: string) {
+    const base = gatewayBase()
+    if (base == null) throw new Error('The gateway is not configured.')
+    const job = newestJob((await getExtractions(authedFetch, base, documentId)).jobs)
+    if (job === null) throw new Error('This document has no extraction to open.')
+    openExtraction(job.id)
   }
 
   // A tab click stays on the same screen, so it replaces.
@@ -1830,6 +1842,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
     openAuditForInvoice,
     setAuditInvoiceFilter,
     openExtraction,
+    openDocumentReview,
     setSandbox,
     setSettingsTab,
     toggleConnector,

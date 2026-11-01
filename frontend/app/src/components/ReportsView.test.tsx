@@ -379,6 +379,11 @@ function registerButton() {
 }
 
 describe('ReportsView: export card', () => {
+  // The default period is the previous month; pin the clock so the tests' fixed dates stay in order.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 9, 18, 12))
+  })
   const populated = () => [row({ id: 'inv-r', buyer_tin: tinFor(1), buyer_name: 'Ready Buyer' })]
 
   async function renderReady(ctx: PlatformCtx = reportsCtx(), register?: RegisterHandler) {
@@ -401,6 +406,7 @@ describe('ReportsView: export card', () => {
   }
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
     // @ts-expect-error jsdom defines neither; drop what stubSave installed
     delete URL.createObjectURL

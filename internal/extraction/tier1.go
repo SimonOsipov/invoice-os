@@ -102,6 +102,7 @@ var tier1Specs = []struct {
 	{"", "buyer_country", ShapeName},
 	{"", "buyer_state", ShapeName},
 	{"", "buyer_lga", ShapeName},
+	{"", "original_invoice_number", ShapeInvoiceNumber},
 }
 
 // Tier1Rules is the shipped set, in anchor-lexicon order.

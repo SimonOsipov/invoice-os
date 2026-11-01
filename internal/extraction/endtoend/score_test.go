@@ -70,7 +70,7 @@ var entityDerivedFields = []string{"supplier_tin", "supplier_name"}
 // aiOnlyFields are written by the importer but read only by the AI: no engine run reads them, so
 // no cell scores them. They are the tier1Specs entries with label id "".
 var aiOnlyFields = []string{"due_date", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
-	"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga"}
+	"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga", "original_invoice_number"}
 
 // eeShapeOf is the normaliser each written field's values are compared under.
 var eeShapeOf = map[string]extraction.Shape{
@@ -544,8 +544,8 @@ func eePageTokenReadings(t *testing.T, layout, field string) []string {
 // minus entityDerivedFields and aiOnlyFields must be writtenFields exactly, in order.
 func TestEndToEnd_WrittenFieldsMatchTheMapper(t *testing.T) {
 	// Floors first: an empty vocabulary satisfies every quantifier below.
-	if len(extraction.HeaderFields) != 19 {
-		t.Fatalf("extraction.HeaderFields holds %d name(s), want 19 -- the guard below is comparing against the wrong list", len(extraction.HeaderFields))
+	if len(extraction.HeaderFields) != 20 {
+		t.Fatalf("extraction.HeaderFields holds %d name(s), want 20 -- the guard below is comparing against the wrong list", len(extraction.HeaderFields))
 	}
 	if len(writtenFields) != 8 {
 		t.Errorf("writtenFields holds %d name(s), want 8 -- the fields documentCreateInput writes", len(writtenFields))

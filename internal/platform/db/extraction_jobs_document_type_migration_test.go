@@ -27,9 +27,15 @@ const (
 	documentTypePredecessor = "20260919155430_import_batches_header_row.sql"
 )
 
-// The worker's option names minus "tax invoice", which is never stored.
+// The seven names the original migration file admits: what its own Up replays to.
 var documentTypeStored = []string{
 	"receipt", "proforma", "quotation", "credit note",
+	"delivery note", "statement", "purchase order",
+}
+
+// The worker's option names minus "tax invoice", which is never stored: the live CHECK.
+var documentTypeStoredEight = []string{
+	"receipt", "proforma", "quotation", "credit note", "debit note",
 	"delivery note", "statement", "purchase order",
 }
 
@@ -144,8 +150,9 @@ func TestExtractionJobsDocumentType_MigrationFileIsOrderedAndComplete(t *testing
 	}
 }
 
-// TestExtractionJobsDocumentType_TheCheckAdmitsTheSevenAndRefusesTheRest (AC-2).
-func TestExtractionJobsDocumentType_TheCheckAdmitsTheSevenAndRefusesTheRest(t *testing.T) {
+// TestExtractionJobsDocumentType_TheCheckAdmitsTheEightAndRefusesTheRest: the live CHECK, after
+// extraction_jobs_debit_note.
+func TestExtractionJobsDocumentType_TheCheckAdmitsTheEightAndRefusesTheRest(t *testing.T) {
 	ctx := t.Context()
 	tx := migratorTx(t, ctx) // rolled back on cleanup
 	jobID := seedDocumentTypeJob(t, ctx, tx)
@@ -183,7 +190,10 @@ func TestExtractionJobsDocumentType_TheCheckAdmitsTheSevenAndRefusesTheRest(t *t
 	} else if got := readBack(); got != nil {
 		t.Errorf("after SET NULL the job holds %q, want NULL", *got)
 	}
-	for _, v := range documentTypeStored {
+	if len(documentTypeStoredEight) != 8 {
+		t.Fatalf("documentTypeStoredEight holds %d names, want 8", len(documentTypeStoredEight))
+	}
+	for _, v := range documentTypeStoredEight {
 		n, err := write(v)
 		if err != nil || n != 1 {
 			t.Errorf("SET document_type = %q: rows %d, err %v; want 1 row, no error", v, n, err)

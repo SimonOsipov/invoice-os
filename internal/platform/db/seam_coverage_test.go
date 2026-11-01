@@ -1032,6 +1032,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/extractions":                                    {verdict: scCovered},
 	"GET /v1/extractions/{id}":                               {verdict: scCovered},
 	"GET /v1/extractions/{id}/pages/{n}":                     {verdict: scCovered},
+	"GET /v1/imports/document/note-originals":                {verdict: scCovered},
 	"GET /v1/imports/document/reading":                       {verdict: scCovered},
 	"GET /v1/imports/saved-mapping":                          {verdict: scCovered},
 	"GET /v1/imports/{id}":                                   {verdict: scCovered},

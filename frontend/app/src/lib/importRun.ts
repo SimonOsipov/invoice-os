@@ -316,9 +316,16 @@ export function runFileRows(run: ImportRun): RunFileRow[] {
 
 export type RunRoute =
   | { kind: 'single'; invoiceId: string }
-  | { kind: 'extraction'; jobId: string; invoiceId: string }
+  | { kind: 'extraction'; jobId: string; invoiceId: string | null }
   | { kind: 'review'; batchIds: string[] }
   | { kind: 'none' }
+
+// The importer holds a credit or debit note until the review picks its original: no invoice, one row error on this field.
+export const HELD_FIELD = 'original_invoice_id'
+
+export function isHeldForOriginal(report: Pick<ImportReport, 'errors'>): boolean {
+  return report.errors.some((e) => e.field === HELD_FIELD)
+}
 
 // AC #5, order is load-bearing:
 //  1. No batch ids at all (every file failed) -> 'none'.
@@ -340,6 +347,10 @@ export function routeAfterRun(run: ImportRun, resolvedInvoiceId: string | null):
   if (run.files.length === 1) {
     const outcome = run.files[0].outcome
     if (outcome.kind === 'imported') {
+      // A held note has no invoice yet; its review is where the original is picked.
+      if (outcome.jobId && isHeldForOriginal(outcome.report)) {
+        return { kind: 'extraction', jobId: outcome.jobId, invoiceId: null }
+      }
       const route = routeAfterImport(outcome.report, resolvedInvoiceId)
       if (route.kind === 'single') {
         if (outcome.jobId) return { kind: 'extraction', jobId: outcome.jobId, invoiceId: route.invoiceId }

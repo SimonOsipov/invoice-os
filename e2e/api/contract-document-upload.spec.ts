@@ -29,15 +29,38 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '@playwright/test'
-import { apiBase, createEntity, getCarriedReading, getExtractions, login, PERSONAS, type ExtractionJob } from './client'
+import {
+  apiBase,
+  approveUntilClosed,
+  createEntity,
+  createInvoice,
+  firmApproverTokens,
+  getCarriedReading,
+  getExtractionDetail,
+  getExtractions,
+  getInvoice,
+  getInvoiceNotes,
+  getNoteOriginals,
+  listInvoices,
+  login,
+  PERSONAS,
+  rawFetch,
+  validateInvoice,
+  type DocumentImportRequest,
+  type ExtractionJob,
+} from './client'
 import { freshTin } from './fixtures'
-import { assertErrorEnvelope, type RawResult } from './contract-helpers'
+import { assertErrorEnvelope, ensureFirmPolicyActive, type RawResult } from './contract-helpers'
 
 // e2e/ is ESM, so there is no __dirname, and a relative path would resolve against
 // process.cwd() -- e2e/ under CI's `pnpm --filter`, the repo root for a developer.
 // import.meta.url is the only cwd-independent anchor (topology/import-wizard.spec.ts:95).
 const PDF_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents/native_invoice.pdf')
 const PDF_BYTES = new Uint8Array(readFileSync(PDF_FIXTURE))
+// Reads as a credit note of INV-ORIG-3401, number CN-3401, 100.00 / 7.50 / 107.50 over 2 lines.
+const NOTE_BYTES = new Uint8Array(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents/jev_credit_note.pdf')),
+)
 
 const UPLOAD_PATH = '/api/submission/v1/documents'
 const IMPORT_DOCUMENT_PATH = '/api/invoice/v1/imports/document'
@@ -86,11 +109,11 @@ const DUPLICATE_RULE_KEY = 'no-duplicate-invoice-number'
 // (internal/extraction/enqueue.go) skips the enqueue -- the poll would then settle on a PREVIOUS
 // run's job and stay green while extraction is broken.
 // <ArrayBuffer> is load-bearing: bare Uint8Array widens to ArrayBufferLike, which BlobPart rejects.
-function uniquePdf(): Uint8Array<ArrayBuffer> {
+function uniquePdf(base: Uint8Array = PDF_BYTES): Uint8Array<ArrayBuffer> {
   const marker = new TextEncoder().encode(`%e2e-${crypto.randomUUID()}\n`)
-  const out = new Uint8Array(PDF_BYTES.length + marker.length)
-  out.set(PDF_BYTES, 0)
-  out.set(marker, PDF_BYTES.length)
+  const out = new Uint8Array(base.length + marker.length)
+  out.set(base, 0)
+  out.set(marker, base.length)
   return out
 }
 
@@ -456,5 +479,268 @@ test.describe('document pipeline contract (API E2E, over the deployed gateway)',
     const blankSupply = await supplyFetch(token, { entity_id: entity.id, document_id: unknown, invoice_number: '   ' })
     assertErrorEnvelope(blankSupply, 400, 'EXTR27-API-02 blank invoice_number')
     expect((blankSupply.body as Record<string, unknown>).error).toBe('invoice_number is required')
+  })
+})
+
+// internal/submission/mock_script.go mockTINAccept: the buyer TIN the mock adapter accepts.
+const MOCK_TIN_ACCEPT = '99999999-0001'
+const NOTE_READ = { original: 'INV-ORIG-3401', number: 'CN-3401', total: 107.5, lines: 2 }
+// internal/importer/handlers_document.go documentAlreadyFiledReason.
+const ALREADY_FILED_REASON = 'An invoice has already been filed from this document.'
+// internal/invoice/notes.go NoteRefusalMessage.
+const OTHER_CLIENT_REASON = 'the original belongs to another client'
+const OVER_CAP_KEY = 'credit-note-over-cap'
+
+type Bearer = { Authorization: string }
+const bearer = (tok: string): Bearer => ({ Authorization: `Bearer ${tok}` })
+
+async function postImport(tok: string, body: DocumentImportRequest | Record<string, unknown>) {
+  return rawFetch(IMPORT_DOCUMENT_PATH, { method: 'POST', headers: bearer(tok), body })
+}
+
+// The recipe in contract-invoice.spec.ts acceptedOriginal (no cross-spec imports). `small` keeps the
+// total under the fixture note's 107.50.
+async function acceptedOriginal(tok: string, entityId: string, number: string, small = false) {
+  const created = await createInvoice(tok, {
+    entity_id: entityId,
+    invoice_number: number,
+    issue_date: '2026-01-01T00:00:00Z',
+    supplier_tin: freshTin(),
+    supplier_name: 'Acme Nigeria Ltd',
+    buyer_tin: MOCK_TIN_ACCEPT,
+    buyer_name: 'Buyer Ltd',
+    currency: 'NGN',
+    ...(small
+      ? { subtotal: '90', vat: '6.75', total: '96.75', line_items: [{ description: 'Widget', quantity: '1', unit_price: '90', line_total: '90' }] }
+      : {
+          subtotal: '1000',
+          vat: '75',
+          total: '1075',
+          line_items: [
+            { description: 'Line One', quantity: '2', unit_price: '250', line_total: '500' },
+            { description: 'Line Two', quantity: '5', unit_price: '100', line_total: '500' },
+          ],
+        }),
+  })
+  expect((await validateInvoice(tok, created.id)).status, 'the original validates clean').toBe('validated')
+  await approveUntilClosed(created.id, await firmApproverTokens())
+  const sub = await rawFetch('/api/invoice/v1/invoices/submissions', {
+    method: 'POST',
+    headers: bearer(tok),
+    body: { invoice_ids: [created.id], idempotency_key: crypto.randomUUID() },
+  })
+  expect(sub.status, 'batch submit').toBe(200)
+  await expect
+    .poll(async () => (await getInvoice(tok, created.id)).status, { timeout: 120_000, intervals: [1_000] })
+    .toBe('accepted')
+  return getInvoice(tok, created.id)
+}
+
+// Unique fixture bytes -> upload -> settled. Returns the document and the job it settled on.
+async function settleNote(tok: string, label: string): Promise<{ documentId: string; job: ExtractionJob }> {
+  const res = await uploadFetch(tok, uniquePdf(NOTE_BYTES), 'jev_credit_note.pdf', 'application/pdf')
+  expect(res.status, `${label}: the fixture uploads 201 (body ${JSON.stringify(res.body)})`).toBe(201)
+  const documentId = (res.body as { document_id: string }).document_id
+  return { documentId, job: await pollUntilSucceeded(tok, documentId, label) }
+}
+
+// A fresh entity with its accepted original INV-ORIG-3401 and a settled fixture document.
+async function noteFixture(tok: string, label: string, small = false) {
+  const entity = await createEntity(tok, { name: `Zz CRDDBTNOTE-05 ${label} ${freshTin()}`, tin: freshTin() })
+  const original = await acceptedOriginal(tok, entity.id, NOTE_READ.original, small)
+  const { documentId, job } = await settleNote(tok, label)
+  return { entity, original, documentId, job }
+}
+
+// The invoices of the (fresh) entity: containment is the entity, never a count of the table.
+async function entityInvoices(tok: string, entityId: string) {
+  return (await listInvoices(tok, { entity_id: entityId, limit: 50 })).invoices
+}
+
+test.describe('note documents', () => {
+  test.describe.configure({ timeout: 300_000 })
+  let token: string
+
+  test.beforeAll(async () => {
+    token = await login(PERSONAS.A)
+    await ensureFirmPolicyActive(token)
+  })
+
+  test('note documents: the fixture reads as a credit note', async () => {
+    const { documentId, job } = await settleNote(token, 'note-read')
+    const detail = await getExtractionDetail(token, job.id)
+    expect(detail.document_id, 'the detail is for the document just uploaded').toBe(documentId)
+    expect(detail.document_type).toBe('credit note')
+    const field = detail.fields.find((f) => f.name === 'original_invoice_number')
+    expect(field?.value, 'the original is read off the document').toBe(NOTE_READ.original)
+  })
+
+  test('note documents: the first import holds and creates nothing', async () => {
+    const { entity, original, documentId } = await noteFixture(token, 'hold')
+
+    const res = await postImport(token, { entity_id: entity.id, document_id: documentId })
+    expect(res.status, `the hold is a 201 (body ${JSON.stringify(res.body)})`).toBe(201)
+    const body = res.body as Record<string, unknown>
+    expectImportReportShape(body, 'hold')
+    expect(body.ready_invoices).toBe(0)
+    expect(body.errors).toContainEqual(expect.objectContaining({ field: 'original_invoice_id' }))
+
+    const invoices = await entityInvoices(token, entity.id)
+    expect(invoices.map((i) => i.id), 'the entity still holds only its original').toEqual([original.id])
+    expect(invoices.filter((i) => i.import_batch_id === body.id), 'no invoice cites the hold batch').toEqual([])
+  })
+
+  test('note documents: the picker lists the accepted original first', async () => {
+    const entity = await createEntity(token, { name: `Zz CRDDBTNOTE-05 picker ${freshTin()}`, tin: freshTin() })
+    // The read original goes first, so newest-first alone would put the other one on top.
+    const original = await acceptedOriginal(token, entity.id, NOTE_READ.original)
+    const other = await acceptedOriginal(token, entity.id, `INV-OTHER-${freshTin()}`)
+    const draft = await createInvoice(token, {
+      entity_id: entity.id,
+      invoice_number: `INV-DRAFT-${freshTin()}`,
+      issue_date: '2026-01-01T00:00:00Z',
+      currency: 'NGN',
+    })
+    const { documentId } = await settleNote(token, 'picker')
+    const hold = await postImport(token, { entity_id: entity.id, document_id: documentId })
+    expect(hold.status, 'the hold mints the batch the picker reads its entity from').toBe(201)
+
+    const got = await getNoteOriginals(token, documentId)
+    expect(got.entity_id).toBe(entity.id)
+    expect(got.filed_invoice_id).toBeNull()
+    const ids = got.originals.map((o) => o.id)
+    expect(ids, 'the accepted originals, the read one first').toEqual([original.id, other.id])
+    expect(ids, 'a draft is no original').not.toContain(draft.id)
+    expect(got.originals[0].invoice_number).toBe(NOTE_READ.original)
+  })
+
+  test('note documents: no original and a foreign original create nothing', async () => {
+    const { entity, original, documentId } = await noteFixture(token, 'refusals')
+    const tokenB = await login(PERSONAS.B)
+    const entityB = await createEntity(tokenB, { name: `Zz CRDDBTNOTE-05 foreign ${freshTin()}`, tin: freshTin() })
+    const foreign = await createInvoice(tokenB, {
+      entity_id: entityB.id,
+      invoice_number: `INV-B-${freshTin()}`,
+      issue_date: '2026-01-01T00:00:00Z',
+      currency: 'NGN',
+    })
+
+    const base = { entity_id: entity.id, document_id: documentId, document_type: 'credit_note', invoice_number: NOTE_READ.number }
+    const missing = await postImport(token, base)
+    assertErrorEnvelope(missing, 400, 'no original_invoice_id')
+    expect((missing.body as { error: string }).error).toBe('original_invoice_id is required')
+    assertErrorEnvelope(await postImport(token, { ...base, original_invoice_id: foreign.id }), 404, 'a foreign original')
+
+    expect((await entityInvoices(token, entity.id)).map((i) => i.id), 'neither refusal created an invoice').toEqual([original.id])
+    expect((await getInvoiceNotes(token, original.id)).notes, 'nor a note').toEqual([])
+  })
+
+  test('note documents: the import creates a draft note on its original', async () => {
+    const { entity, original, documentId } = await noteFixture(token, 'import')
+
+    const res = await postImport(token, {
+      entity_id: entity.id,
+      document_id: documentId,
+      document_type: 'credit_note',
+      original_invoice_id: original.id,
+      invoice_number: NOTE_READ.number,
+    })
+    expect(res.status, `the note POST is a 201 (body ${JSON.stringify(res.body)})`).toBe(201)
+    expect((res.body as { ready_invoices: number }).ready_invoices).toBe(1)
+
+    const note = (await entityInvoices(token, entity.id)).find((i) => i.document_type === 'credit_note')
+    expect(note, 'GET /v1/invoices finds the note').toBeDefined()
+    expect(note!.status).toBe('draft')
+    expect(note!.original_invoice_id).toBe(original.id)
+    expect(note!.invoice_number).toBe(NOTE_READ.number)
+    expect(Number(note!.total), 'the total is the read total').toBe(NOTE_READ.total)
+    expect((await getInvoice(token, note!.id)).line_items, 'the read lines').toHaveLength(NOTE_READ.lines)
+
+    expect((await getInvoiceNotes(token, original.id)).notes.map((n) => n.id), 'the original lists it').toContain(note!.id)
+    expect((await getNoteOriginals(token, documentId)).filed_invoice_id, 'the picker now names it').toBe(note!.id)
+  })
+
+  test('note documents: an original of another client is refused', async () => {
+    const { entity, documentId } = await noteFixture(token, 'other-client')
+    const entityB = await createEntity(token, { name: `Zz CRDDBTNOTE-05 client B ${freshTin()}`, tin: freshTin() })
+    const originalB = await acceptedOriginal(token, entityB.id, NOTE_READ.original)
+
+    const res = await postImport(token, {
+      entity_id: entity.id,
+      document_id: documentId,
+      document_type: 'credit_note',
+      original_invoice_id: originalB.id,
+      invoice_number: NOTE_READ.number,
+    })
+    assertErrorEnvelope(res, 409, 'an original of another client')
+    expect((res.body as { error: string }).error).toBe(OTHER_CLIENT_REASON)
+    expect((await entityInvoices(token, entity.id)).filter((i) => i.document_type === 'credit_note')).toEqual([])
+  })
+
+  test('note documents: an over-cap note stays draft at validate', async () => {
+    const { entity, original, documentId } = await noteFixture(token, 'over-cap', true)
+    expect(Number(original.total), 'the original is smaller than the note').toBeLessThan(NOTE_READ.total)
+
+    const res = await postImport(token, {
+      entity_id: entity.id,
+      document_id: documentId,
+      document_type: 'credit_note',
+      original_invoice_id: original.id,
+      invoice_number: NOTE_READ.number,
+    })
+    expect(res.status, `the over-cap note still imports (body ${JSON.stringify(res.body)})`).toBe(201)
+    const note = (await entityInvoices(token, entity.id)).find((i) => i.document_type === 'credit_note')
+    expect(note, 'the draft note exists').toBeDefined()
+
+    const validated = await validateInvoice(token, note!.id)
+    expect(validated.status).toBe('draft')
+    expect(validated.violations.map((v) => v.rule_key)).toContain(OVER_CAP_KEY)
+  })
+
+  test('note documents: this is an invoice files an invoice', async () => {
+    const { entity, original, documentId } = await noteFixture(token, 'override')
+
+    const res = await postImport(token, { entity_id: entity.id, document_id: documentId, document_type: 'commercial_invoice' })
+    expect(res.status, `the override is a 201 (body ${JSON.stringify(res.body)})`).toBe(201)
+    expect((res.body as { ready_invoices: number }).ready_invoices).toBe(1)
+
+    const filed = (await entityInvoices(token, entity.id)).filter((i) => i.id !== original.id)
+    expect(filed, 'exactly the one invoice was filed').toHaveLength(1)
+    expect(filed[0].document_type).toBe('commercial_invoice')
+    expect(filed[0].original_invoice_id).toBeNull()
+  })
+
+  test('note documents: a filed document does not hold or file again', async () => {
+    const { entity, original, documentId } = await noteFixture(token, 'filed')
+    const filedRes = await postImport(token, {
+      entity_id: entity.id,
+      document_id: documentId,
+      document_type: 'credit_note',
+      original_invoice_id: original.id,
+      invoice_number: NOTE_READ.number,
+    })
+    expect(filedRes.status, 'the setup note files').toBe(201)
+    const before = (await entityInvoices(token, entity.id)).map((i) => i.id).sort()
+    const note = (await entityInvoices(token, entity.id)).find((i) => i.document_type === 'credit_note')
+    expect(note, 'the note exists').toBeDefined()
+
+    const bare = await postImport(token, { entity_id: entity.id, document_id: documentId })
+    expect(bare.status, `a bare POST on a filed document is a 201 (body ${JSON.stringify(bare.body)})`).toBe(201)
+    const body = bare.body as { ready_invoices: number; errors: Record<string, unknown>[] }
+    expect(body.ready_invoices).toBe(0)
+    expect(body.errors).toContainEqual(
+      expect.objectContaining({
+        field: 'invoice_number',
+        rule_key: 'no-duplicate-invoice-number',
+        invoice_id: note!.id,
+        message: ALREADY_FILED_REASON,
+      }),
+    )
+
+    const override = await postImport(token, { entity_id: entity.id, document_id: documentId, document_type: 'commercial_invoice' })
+    assertErrorEnvelope(override, 409, 'commercial_invoice on a filed document')
+    expect((override.body as { error: string }).error).toBe(ALREADY_FILED_REASON)
+
+    expect((await entityInvoices(token, entity.id)).map((i) => i.id).sort(), 'neither call added an invoice').toEqual(before)
   })
 })

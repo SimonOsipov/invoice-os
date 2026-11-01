@@ -716,6 +716,8 @@ func TestImporterHandlers_NoSecondSentinel(t *testing.T) {
 		// Supply refusals, each its own 409 sentence; neither restates db.ErrNotActiveMember.
 		"ErrReadingNotCarried":    true,
 		"ErrDocumentAlreadyFiled": true,
+		// Note-import refusal, a 409; not a membership error.
+		"ErrNoteTypeNotRead": true,
 		// Header-row refusal, a 400; not a membership error.
 		"ErrHeaderRowPastEnd": true,
 		// Row-cap refusal, a 400; not a membership error.

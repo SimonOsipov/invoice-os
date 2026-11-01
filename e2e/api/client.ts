@@ -1241,6 +1241,43 @@ export function supplyInvoiceNumber(token: string, body: SupplyNumberRequest): P
   return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/imports/document/invoice`, { method: 'POST', body, token })
 }
 
+// POST /v1/imports/document (createDocumentRequest) and GET /v1/imports/document/note-originals
+// (internal/importer/document_note.go).
+export interface DocumentImportRequest {
+  entity_id: string
+  document_id: string
+  document_type?: 'credit_note' | 'debit_note' | 'commercial_invoice'
+  original_invoice_id?: string
+  invoice_number?: string
+}
+
+export interface NoteOriginalRow {
+  id: string
+  invoice_number: string
+  issue_date: string | null
+  currency: string | null
+  total: string | null
+  buyer_name: string | null
+  note_count: number
+}
+
+export interface NoteOriginals {
+  entity_id: string
+  filed_invoice_id: string | null
+  originals: NoteOriginalRow[]
+}
+
+export function postDocumentImport(token: string, body: DocumentImportRequest): Promise<unknown> {
+  return apiFetch<unknown>(`${apiBase()}/api/invoice/v1/imports/document`, { method: 'POST', body, token })
+}
+
+export function getNoteOriginals(token: string, documentId: string): Promise<NoteOriginals> {
+  return apiFetch<NoteOriginals>(
+    `${apiBase()}/api/invoice/v1/imports/document/note-originals?document_id=${encodeURIComponent(documentId)}`,
+    { token },
+  )
+}
+
 // GET /v1/imports/saved-mapping. Mirrors internal/importer/saved_mapping.go's SavedMapping
 // and handlers.go's savedMappingResponse.
 export interface SavedMapping {

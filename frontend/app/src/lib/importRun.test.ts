@@ -44,6 +44,7 @@ import {
   oversizeNote,
   removeFile,
   routeAfterRun,
+  isHeldForOriginal,
   runBatchIds,
   runFailures,
   runFileRows,
@@ -1348,7 +1349,7 @@ describe('routeAfterRun over document outcomes — a job-less document keeps the
 // CANNOT run here — CI checks out refs/pull/N/merge at fetch-depth 1, so origin/main is
 // unresolvable, which is exactly why EXTR-06-07's RB-07 was deleted one commit ago
 // (702aa274). ROUTE_AFTER_IMPORT_ON_MAIN is a LITERAL copy of main's routeAfterImport;
-// ROUTE_AFTER_RUN_ON_MAIN is routeAfterRun's reviewed body with the extraction fork. Both
+// ROUTE_AFTER_RUN_ON_MAIN is routeAfterRun's reviewed body with the extraction and held forks. Both
 // pins fail on any further edit, in CI and locally alike. Following RB-07's own precedent
 // each covers the declaration through its closing brace, not the doc comment above it.
 const ROUTE_AFTER_IMPORT_ON_MAIN: readonly string[] = [
@@ -1384,6 +1385,10 @@ const ROUTE_AFTER_RUN_ON_MAIN: readonly string[] = [
   '  if (run.files.length === 1) {',
   '    const outcome = run.files[0].outcome',
   '    if (outcome.kind === \'imported\') {',
+  '      // A held note has no invoice yet; its review is where the original is picked.',
+  '      if (outcome.jobId && isHeldForOriginal(outcome.report)) {',
+  '        return { kind: \'extraction\', jobId: outcome.jobId, invoiceId: null }',
+  '      }',
   '      const route = routeAfterImport(outcome.report, resolvedInvoiceId)',
   '      if (route.kind === \'single\') {',
   '        if (outcome.jobId) return { kind: \'extraction\', jobId: outcome.jobId, invoiceId: route.invoiceId }',
@@ -1692,5 +1697,58 @@ describe('routeAfterRun — a document whose job is known lands on its extractio
   ])('EXTR32-R4: a known job never bypasses the run-size gate or the id truthiness ($label)', ({ run, resolvedInvoiceId, expected }) => {
     expect(run.status).toBe('finished')
     expect(routeAfterRun(run, resolvedInvoiceId)).toEqual({ kind: 'review', batchIds: expected })
+  })
+})
+
+// A hold: the importer made no invoice and put one row error on original_invoice_id.
+const HOLD_ERROR = { field: 'original_invoice_id', message: 'This document reads as a credit or debit note.' }
+const NO_NUMBER_ERROR = { field: 'invoice_number', message: 'No invoice number was found.' }
+
+function heldOutcome(batchId: string, error: { field: string; message: string }, jobId = `job-${batchId}`): FileOutcome {
+  return { kind: 'imported', batchId, jobId, report: { ...BASE_RUN_REPORT, id: batchId, ready_invoices: 0, errors: [error] } }
+}
+
+describe('routeAfterRun and a held note', () => {
+  it('routeAfterRun sends a held file to its review', () => {
+    const run = startRun([mkRunFile('f1', 'note.pdf', heldOutcome('b1', HOLD_ERROR))])
+    expect(routeAfterRun(run, null)).toEqual({ kind: 'extraction', jobId: 'job-b1', invoiceId: null })
+  })
+
+  it('routeAfterRun keeps every other landing', () => {
+    const quarantined = startRun([mkRunFile('f1', 'a.pdf', heldOutcome('b1', NO_NUMBER_ERROR))])
+    expect(routeAfterRun(quarantined, null)).toEqual({ kind: 'review', batchIds: ['b1'] })
+
+    const filed: FileOutcome = {
+      kind: 'imported',
+      batchId: 'b2',
+      jobId: 'job-2',
+      report: { ...BASE_RUN_REPORT, id: 'b2', ready_invoices: 1 },
+    }
+    expect(routeAfterRun(startRun([mkRunFile('f2', 'b.pdf', filed)]), 'inv-2')).toEqual({
+      kind: 'extraction',
+      jobId: 'job-2',
+      invoiceId: 'inv-2',
+    })
+    const { jobId: _jobId, ...noJob } = filed as Extract<FileOutcome, { kind: 'imported' }>
+    expect(routeAfterRun(startRun([mkRunFile('f2', 'b.pdf', noJob)]), 'inv-2')).toEqual({ kind: 'single', invoiceId: 'inv-2' })
+  })
+
+  it('a held file with no job id goes to review', () => {
+    const { jobId: _jobId, ...noJob } = heldOutcome('b1', HOLD_ERROR) as Extract<FileOutcome, { kind: 'imported' }>
+    expect(routeAfterRun(startRun([mkRunFile('f1', 'note.pdf', noJob)]), null)).toEqual({ kind: 'review', batchIds: ['b1'] })
+  })
+
+  it('routeAfterRun sends a run with a held file to review', () => {
+    const run = startRun([
+      mkRunFile('f1', 'note.pdf', heldOutcome('b1', HOLD_ERROR)),
+      mkRunFile('f2', 'inv.pdf', { kind: 'imported', batchId: 'b2', jobId: 'job-2', report: { ...BASE_RUN_REPORT, id: 'b2', ready_invoices: 1 } }),
+    ])
+    expect(routeAfterRun(run, null)).toEqual({ kind: 'review', batchIds: ['b1', 'b2'] })
+  })
+
+  it('isHeldForOriginal reads only the original_invoice_id row error', () => {
+    expect(isHeldForOriginal({ errors: [HOLD_ERROR] })).toBe(true)
+    expect(isHeldForOriginal({ errors: [NO_NUMBER_ERROR] })).toBe(false)
+    expect(isHeldForOriginal({ errors: [] })).toBe(false)
   })
 })

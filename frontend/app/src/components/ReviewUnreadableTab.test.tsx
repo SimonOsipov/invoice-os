@@ -19,7 +19,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { ReviewUnit, UnreadableRowAll } from '../lib/reviewBatch'
@@ -418,5 +418,84 @@ describe('EXTR-15-11: the disabled recipe is the shipped sibling’s, not a seco
       unreadableSrc.includes(literal),
       `the hand-off button must reuse the shipped disabled recipe verbatim:\n  ${literal}`,
     ).toBe(true)
+  })
+})
+
+const HOLD_SENTENCE = 'This document reads as a credit or debit note. Open its review and pick the invoice it belongs to.'
+const HOLD_ROW: UnreadableRowAll = { row: null, column: 'original_invoice_id', message: HOLD_SENTENCE, file: 'note.pdf', documentId: DOC_A }
+const NO_NUMBER_ROW: UnreadableRowAll = { row: null, column: '—', message: 'No invoice number was found.', file: 'april-invoice.pdf', documentId: DOC_C }
+const NO_NUMBER_ROW_2: UnreadableRowAll = { ...NO_NUMBER_ROW, file: 'june-invoice.pdf', documentId: DOC_B }
+
+function byTestId(root: HTMLElement, id: string): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(`[data-testid="${id}"]`))
+}
+
+describe('CRDDBTNOTE-05-06: a hold row', () => {
+  it('a hold row offers its review', () => {
+    const openDocumentReview = vi.fn().mockResolvedValue(undefined)
+    const { container } = renderTab([HOLD_ROW, NO_NUMBER_ROW], 'document', { openDocumentReview })
+    const rows = byTestId(container, 'unreadable-row')
+    expect(rows).toHaveLength(2)
+
+    const review = byTestId(rows[0], 'unreadable-note-review')
+    expect(review).toHaveLength(1)
+    expect(review[0].textContent).toBe('Open its review')
+    expect(handOffButtons(rows[0]), 'a hold row has no hand-off').toHaveLength(0)
+    expect(byTestId(rows[1], 'unreadable-note-review')).toHaveLength(0)
+    expect(handOffButtons(rows[1])).toHaveLength(1)
+
+    fireEvent.click(review[0])
+    expect(openDocumentReview).toHaveBeenCalledExactlyOnceWith(DOC_A)
+  })
+
+  it('a failed lookup stays in the row', async () => {
+    const openDocumentReview = vi.fn().mockRejectedValue(new Error('The lookup failed.'))
+    const hand = vi.fn()
+    const { container } = renderTab([HOLD_ROW, NO_NUMBER_ROW], 'document', { openDocumentReview, enterByHand: hand })
+    const rows = byTestId(container, 'unreadable-row')
+
+    fireEvent.click(byTestId(rows[0], 'unreadable-note-review')[0])
+    await waitFor(() => expect(rows[0].textContent).toContain('The lookup failed.'))
+    expect(rows[1].textContent).not.toContain('The lookup failed.')
+
+    fireEvent.click(handOffButtons(rows[1])[0])
+    expect(hand).toHaveBeenCalledExactlyOnceWith(DOC_C)
+    // The failed row's button works again.
+    expect((byTestId(rows[0], 'unreadable-note-review')[0] as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('a second hold row stays disabled while one lookup is in flight', async () => {
+    let settle: () => void = () => {}
+    const openDocumentReview = vi.fn().mockReturnValue(new Promise<void>((res) => { settle = res }))
+    const second: UnreadableRowAll = { ...HOLD_ROW, file: 'note2.pdf', documentId: DOC_B }
+    const { container } = renderTab([HOLD_ROW, second], 'document', { openDocumentReview })
+    const buttons = byTestId(container, 'unreadable-note-review') as HTMLButtonElement[]
+    expect(buttons).toHaveLength(2)
+    fireEvent.click(buttons[0])
+    await waitFor(() => expect(buttons[1].disabled).toBe(true))
+    expect(buttons[0].disabled).toBe(true)
+    fireEvent.click(buttons[1])
+    expect(openDocumentReview).toHaveBeenCalledExactlyOnceWith(DOC_A)
+    settle()
+    await waitFor(() => expect(buttons[1].disabled).toBe(false))
+  })
+
+  it('the hold rows have their own panel', () => {
+    const both = renderTab([HOLD_ROW, NO_NUMBER_ROW, NO_NUMBER_ROW_2], 'document')
+    const panel = byTestId(both.container, 'unreadable-held-panel')
+    expect(panel).toHaveLength(1)
+    expect(panel[0].textContent).toContain('Waiting for the original invoice: 1')
+    expect(panel[0].textContent).toContain('Open each review and pick the invoice it belongs to, or import it as an invoice there.')
+    expect(both.container.textContent).toContain('2 documents never became invoices')
+    cleanup()
+
+    const holdOnly = renderTab([HOLD_ROW], 'document')
+    expect(byTestId(holdOnly.container, 'unreadable-held-panel')).toHaveLength(1)
+    expect(holdOnly.container.textContent).not.toContain('never became invoices')
+    cleanup()
+
+    const plain = renderTab(THREE_ROWS, 'document')
+    expect(byTestId(plain.container, 'unreadable-held-panel')).toHaveLength(0)
+    expect(plain.container.textContent).toContain('3 documents never became invoices')
   })
 })

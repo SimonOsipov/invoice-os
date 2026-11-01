@@ -55,6 +55,18 @@ export const NOTE_COPY = {
 // The server's 409 sentence for a taken number (handlers.go statusForErr, ErrDuplicateNumber).
 const DUPLICATE_NUMBER_MESSAGE = 'duplicate invoice number'
 
+// The two verdict names the review reads as a note; any other name, inherited keys included, is no note.
+const NOTE_TYPE_OF_VERDICT: Record<string, NoteType> = { 'credit note': 'credit_note', 'debit note': 'debit_note' }
+
+export function noteTypeOfVerdict(verdict: string | null): NoteType | null {
+  return verdict !== null && Object.hasOwn(NOTE_TYPE_OF_VERDICT, verdict) ? NOTE_TYPE_OF_VERDICT[verdict] : null
+}
+
+// True only for the 409 the server sends when the typed number is taken.
+export function isNumberTakenError(e: unknown): boolean {
+  return e instanceof ApiError && e.status === 409 && e.message === NOTE_COPY.numberTaken
+}
+
 export function getInvoiceNotes(authedFetch: AuthedFetch, base: string, id: string): Promise<NotesOnInvoice> {
   return authedFetch<NotesOnInvoice>(`${base}/api/invoice/v1/invoices/${id}/notes`)
 }

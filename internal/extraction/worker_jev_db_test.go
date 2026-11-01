@@ -140,7 +140,7 @@ func wjAuditCounts(t *testing.T, r wkAIRun) (fieldCount, flaggedCount int) {
 func wjFlaggedRankZero(rows []wpRow) int {
 	n := 0
 	for _, r := range rows {
-		if r.rank == 0 && r.reason != nil {
+		if r.rank == 0 && r.reason != nil && r.name != "original_invoice_number" {
 			n++
 		}
 	}

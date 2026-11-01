@@ -968,8 +968,8 @@ func TestCheckAI_ADueDateLabelOnThePreviousTokenCounts(t *testing.T) {
 }
 
 func TestAIPrompt_AsksNoSupplierContactField(t *testing.T) {
-	if len(HeaderFields) != 19 {
-		t.Fatalf("HeaderFields holds %d, want 19", len(HeaderFields))
+	if len(HeaderFields) != 20 {
+		t.Fatalf("HeaderFields holds %d, want 20", len(HeaderFields))
 	}
 	for _, f := range []string{"supplier_email", "supplier_telephone", "supplier_street", "supplier_city",
 		"supplier_postal_zone", "supplier_country", "supplier_state", "supplier_lga"} {

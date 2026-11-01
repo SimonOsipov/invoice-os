@@ -215,10 +215,11 @@ func main() {
 	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler(docSvc.Store, app.Logger))
 	// POST /v1/imports/document -- the document-import route (EXTR-06-06): a stored
 	// extraction becomes an invoice with no file/mapping wire at all.
-	app.Mux.HandleFunc("POST /v1/imports/document", importer.CreateDocumentHandler(impSvc.ImportDocument, app.Logger))
+	app.Mux.HandleFunc("POST /v1/imports/document", importer.CreateDocumentHandler(impSvc.ImportDocumentFor, app.Logger))
 	// A no-number document's stored reading, and filing it under the operator's number.
 	app.Mux.HandleFunc("GET /v1/imports/document/reading", importer.ReadingHandler(impSvc.CarriedReading, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports/document/invoice", importer.SupplyNumberHandler(impSvc.SupplyInvoiceNumber, app.Logger))
+	app.Mux.HandleFunc("GET /v1/imports/document/note-originals", importer.NoteOriginalsHandler(impStore.NoteOriginals, app.Logger))
 	// A later import's lookup for a saved mapping. The literal path beats {id} below it
 	// (TestImportRoutes_SavedMappingIsNotSwallowedByBatchID).
 	app.Mux.HandleFunc("GET /v1/imports/saved-mapping", importer.SavedMappingHandler(docSvc.OpenLinked, impStore.SavedMapping, impStore.EntityVisible, app.Logger))

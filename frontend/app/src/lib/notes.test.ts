@@ -8,6 +8,8 @@ import type { InvoiceLineItem } from './invoices'
 import {
   getInvoiceNotes,
   isDuplicateNumberError,
+  isNumberTakenError,
+  noteTypeOfVerdict,
   issueNote,
   noteDraftLines,
   NOTE_COPY,
@@ -227,6 +229,26 @@ describe('isDuplicateNumberError', () => {
     expect(isDuplicateNumberError(new ApiError('http', 'duplicate invoice number', 400))).toBe(false)
     expect(isDuplicateNumberError(new Error('duplicate invoice number'))).toBe(false)
     expect(isDuplicateNumberError({ status: 409, message: 'duplicate invoice number' })).toBe(false)
+  })
+})
+
+describe('noteTypeOfVerdict', () => {
+  it('noteTypeOfVerdict', () => {
+    expect(noteTypeOfVerdict('credit note')).toBe('credit_note')
+    expect(noteTypeOfVerdict('debit note')).toBe('debit_note')
+    expect(noteTypeOfVerdict('receipt')).toBeNull()
+    expect(noteTypeOfVerdict(null)).toBeNull()
+    expect(noteTypeOfVerdict('constructor')).toBeNull()
+  })
+})
+
+describe('isNumberTakenError', () => {
+  it('isNumberTakenError names one error', () => {
+    const sentence = NOTE_COPY.numberTaken
+    expect(isNumberTakenError(new ApiError('http', sentence, 409))).toBe(true)
+    expect(isNumberTakenError(new ApiError('http', 'a note needs an accepted invoice with an IRN', 409))).toBe(false)
+    expect(isNumberTakenError(new ApiError('http', sentence, 400))).toBe(false)
+    expect(isNumberTakenError(new Error(sentence))).toBe(false)
   })
 })
 

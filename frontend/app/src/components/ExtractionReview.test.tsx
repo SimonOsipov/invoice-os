@@ -2948,6 +2948,31 @@ describe('the offered text never rides a Save (AIR-03-04, AC-5)', () => {
 
 // ==========================================================================================
 // The document-type strip
+// -- the note panel's wire ---------------------------------------------------------------------
+
+const NOTE_ORIGINALS = {
+  entity_id: 'e0e0e0e0-0000-4000-8000-000000000001',
+  filed_invoice_id: null as string | null,
+  originals: [
+    { id: 'o-1', invoice_number: 'INV-1', issue_date: '2026-02-01T00:00:00Z', currency: 'NGN', total: '1075.00', buyer_name: 'Honeywell', note_count: 1 },
+    { id: 'o-2', invoice_number: 'INV-2', issue_date: '2026-03-01T00:00:00Z', currency: 'NGN', total: '215.00', buyer_name: 'Dangote', note_count: 0 },
+  ],
+}
+
+/** The detail for every URL but note-originals, which answers `originals` (a function may reject). */
+function noteWire(
+  detail: ExtractionDetail,
+  originals: () => Promise<unknown> = async () => NOTE_ORIGINALS,
+  other?: (url: string, opts?: { method?: string; body?: unknown }) => Promise<unknown>,
+): Wire & { opened: string[] } {
+  const w = wire((_id, url, opts) =>
+    url.includes('/note-originals') ? originals() : url.includes('/imports/document') || url.includes('/corrections') ? (other as NonNullable<typeof other>)(url, opts) : Promise.resolve(detail),
+  )
+  const opened: string[] = []
+  Object.assign(w.ctx, { openImportedInvoice: (id: string) => opened.push(id), enterByHand: () => {}, activeEntity: { id: 'ent' } })
+  return Object.assign(w, { opened })
+}
+
 // ==========================================================================================
 
 describe('the document type', () => {
@@ -2956,10 +2981,6 @@ describe('the document type', () => {
     ['receipt', 'This looks like a receipt, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
     ['proforma', 'This looks like a proforma invoice, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
     ['quotation', 'This looks like a quotation, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
-    [
-      'credit note',
-      'This looks like a credit note, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.',
-    ],
     ['delivery note', 'This looks like a delivery note, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
     ['statement', 'This looks like a statement of account, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
     ['purchase order', 'This looks like a purchase order, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
@@ -3004,16 +3025,16 @@ describe('the document type', () => {
     expect(s!.textContent).toBe(sentence)
   })
 
-  it('the document type: a credit note carries no filing claim', async () => {
-    render(review({ ctx: serving(mkDetail({ document_type: 'credit note' })).ctx }))
+  // A note verdict is the import's own business (the hold panel), not a strip.
+  it.each(['credit note', 'debit note'] as const)('the document type: a note verdict shows no strip (%s)', async (t) => {
+    render(review({ ctx: noteWire(mkDetail({ document_type: t })).ctx }))
     await flush()
 
-    const s = strip()
-    expect(s, 'no strip for a credit note').not.toBeNull()
-    expect(s!.textContent).toBe(NOTICES.find(([t]) => t === 'credit note')![1])
-    expect(s!.textContent).toContain('not a tax invoice')
-    expect(s!.textContent).not.toContain('negative')
-    expect(s!.textContent).not.toContain('files')
+    expect(frames(), 'the document pane rendered no frame').toHaveLength(3)
+    expect(fieldRows(), 'the fields pane rendered no row').toHaveLength(3)
+    expect(strip()).toBeNull()
+
+    await receiptShowsTheStrip()
   })
 
   it('the document type: the strip sits above the body, not in it', async () => {
@@ -3117,8 +3138,8 @@ describe('the document type', () => {
 describe('the document type, adversarial', () => {
   const RECEIPT =
     'This looks like a receipt, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'
-  const CREDIT_NOTE =
-    'This looks like a credit note, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'
+  const PROFORMA =
+    'This looks like a proforma invoice, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'
 
   function strip(): HTMLElement | null {
     return screen.queryByTestId('extraction-document-type')
@@ -3193,12 +3214,12 @@ describe('the document type, adversarial', () => {
     expect(frames(), 'the second job rendered no frame').toHaveLength(3)
     expect(strip(), 'a verdict survived into a job without one').toBeNull()
 
-    next = 'credit note'
+    next = 'proforma'
     rerender(review({ ctx: w.ctx, jobId: JOB_ID }))
     await showsReceipt()
     rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
     await flush()
-    expect(strip()?.textContent).toBe(CREDIT_NOTE)
+    expect(strip()?.textContent).toBe(PROFORMA)
   })
 
   it("the glyph span copies extraction-no-region's", async () => {
@@ -3214,5 +3235,311 @@ describe('the document type, adversarial', () => {
     expect(spans[0].style.flex).toBe('0 0 auto')
     expect(spans[0].style.color).toBe('var(--fg-3)')
     expect(spans[1].textContent).toBe(RECEIPT)
+  })
+})
+
+// ==========================================================================================
+// The note panel: a held credit or debit note asks for its original
+// ==========================================================================================
+
+describe('the note panel', () => {
+  const NOTE_DETAIL = (o: Partial<ExtractionDetail> = {}) =>
+    mkDetail({
+      document_type: 'credit note',
+      fields: [
+        mkField({ name: 'invoice_number', value: 'CN-3401' }),
+        mkField({ name: 'original_invoice_number', value: 'INV-2' }),
+        mkField({ name: 'vat', value: '7.50' }),
+      ],
+      ...o,
+    })
+  const HELD_TITLE = 'Import this document first. Corrections are saved onto its invoice or note.'
+  const CHECKING_TITLE = 'Checking whether this document is imported.'
+  const CHECK_FAILED_TITLE = 'We could not check whether this document is imported. Try again above.'
+  const panel = () => screen.queryByTestId('extraction-note-panel')
+  const originalsCalls = (w: Wire) => w.calls().filter((c) => c.url.includes('/note-originals'))
+
+  it('a note verdict asks for the original; another verdict never reads', async () => {
+    for (const t of ['credit note', 'debit note'] as const) {
+      const w = noteWire(NOTE_DETAIL({ document_type: t }))
+      render(review({ ctx: w.ctx }))
+      await flush()
+      expect(panel(), `no panel for ${t}`).not.toBeNull()
+      expect(screen.queryByTestId('extraction-document-type'), `a notice beside the panel for ${t}`).toBeNull()
+      expect(originalsCalls(w)).toHaveLength(1)
+      expect(originalsCalls(w)[0].url).toContain(`document_id=${DOCUMENT_ID}`)
+      cleanup()
+    }
+    for (const t of ['receipt', null] as const) {
+      const w = noteWire(NOTE_DETAIL({ document_type: t }))
+      render(review({ ctx: w.ctx }))
+      await flush()
+      expect(panel(), `a panel for ${String(t)}`).toBeNull()
+      expect(originalsCalls(w), `an originals read for ${String(t)}`).toHaveLength(0)
+      fireEvent.change(inputOf('vat') as HTMLElement, { target: { value: '9.00' } })
+      await flush()
+      expect(saveButton()!.disabled, `Save held for ${String(t)}`).toBe(false)
+      cleanup()
+    }
+  })
+
+  it('save waits for the filing', async () => {
+    const w = noteWire(NOTE_DETAIL())
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    fireEvent.change(inputOf('vat') as HTMLElement, { target: { value: '9.00' } })
+    await flush()
+    expect(saveButton()!.disabled, 'Save armed while the note is held').toBe(true)
+    expect(saveButton()!.title).toBe(HELD_TITLE)
+    expect(inputOf('vat')!.value, 'typing was dropped while held').toBe('9.00')
+    expect(exitButton(), 'an exit while held').toBeNull()
+  })
+
+  it('a filing opens the exit and saves a kept draft', async () => {
+    let filed = false
+    const w = noteWire(
+      NOTE_DETAIL(),
+      async () => ({ ...NOTE_ORIGINALS, filed_invoice_id: filed ? 'note-9' : null }),
+      async (url) => {
+        if (url.includes('/imports/document')) {
+          filed = true
+          return { id: 'b', status: 'completed', ready_invoices: 1, errors: null }
+        }
+        return mkCorrectionResponse('vat', '9.00', 'typed')
+      },
+    )
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    fireEvent.change(inputOf('vat') as HTMLElement, { target: { value: '9.00' } })
+    await flush()
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('extraction-note-import'))
+    })
+    await flush()
+
+    expect(panel(), 'the panel survived the filing').toBeNull()
+    expect(frames(), 'the canvas unmounted on the re-read').toHaveLength(3)
+    expect(inputOf('vat')!.value, 'the draft was lost').toBe('9.00')
+    expect(saveButton()!.disabled, 'Save stayed held after the filing').toBe(false)
+    fireEvent.click(exitButton() as HTMLElement)
+    expect(w.opened).toEqual(['note-9'])
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+    const posted = w.calls().filter((c) => c.method === 'POST' && c.url.includes('/corrections'))
+    expect(posted).toHaveLength(1)
+    expect(posted[0].url).toContain('/fields/vat/corrections')
+  })
+
+  it('a failed read stays in the slot', async () => {
+    let fail = true
+    const w = noteWire(NOTE_DETAIL(), async () => {
+      if (fail) throw new ApiError('http', 'Boom', 500)
+      return NOTE_ORIGINALS
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    expect(screen.getByText(RETRY_LABEL), 'no retry in the slot').toBeTruthy()
+    expect(panel()).toBeNull()
+    expect(frames(), 'the canvas left with the failed read').toHaveLength(3)
+    expect(fieldRows(), 'the fields left with the failed read').toHaveLength(2)
+    expect(saveButton()!.disabled).toBe(true)
+    expect(saveButton()!.title).toBe(CHECK_FAILED_TITLE)
+    expect(saveButton()!.title).not.toBe(HELD_TITLE)
+
+    fail = false
+    await act(async () => {
+      fireEvent.click(screen.getByText(RETRY_LABEL))
+    })
+    await flush()
+    expect(panel(), 'the retry did not bring the panel').not.toBeNull()
+    expect(frames()).toHaveLength(3)
+  })
+
+  it('save says it is checking while the read is loading', async () => {
+    const w = noteWire(NOTE_DETAIL(), () => new Promise(() => {}))
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    expect(saveButton()!.disabled).toBe(true)
+    expect(saveButton()!.title).toBe(CHECKING_TITLE)
+  })
+
+  it('a successful read with no filed document shows the import title', async () => {
+    const w = noteWire(NOTE_DETAIL(), async () => ({ ...NOTE_ORIGINALS, filed_invoice_id: null }))
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    expect(saveButton()!.disabled).toBe(true)
+    expect(saveButton()!.title).toBe(HELD_TITLE)
+  })
+
+  it('a filed note whose read fails then succeeds ends armed with the exit', async () => {
+    let fail = true
+    const w = noteWire(NOTE_DETAIL(), async () => {
+      if (fail) throw new ApiError('http', 'Boom', 500)
+      return { ...NOTE_ORIGINALS, filed_invoice_id: 'note-7' }
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+    expect(saveButton()!.disabled).toBe(true)
+    expect(saveButton()!.title).toBe(CHECK_FAILED_TITLE)
+    expect(exitButton()).toBeNull()
+    fireEvent.change(inputOf('vat') as HTMLElement, { target: { value: '9.00' } })
+    await flush()
+    expect(inputOf('vat')!.value, 'typing dropped while the read had failed').toBe('9.00')
+
+    fail = false
+    await act(async () => {
+      fireEvent.click(screen.getByText(RETRY_LABEL))
+    })
+    await flush()
+    expect(exitButton(), 'no exit after the retry').not.toBeNull()
+    expect(inputOf('vat')!.value, 'the draft was lost across the retry').toBe('9.00')
+    await flush()
+    expect(saveButton()!.disabled).toBe(false)
+    expect(saveButton()!.title).toBe('')
+  })
+
+  it('a filed note verdict asks nothing', async () => {
+    const w = noteWire(NOTE_DETAIL(), async () => ({ ...NOTE_ORIGINALS, filed_invoice_id: 'note-7' }))
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    expect(panel()).toBeNull()
+    expect(screen.queryByTestId('extraction-document-type')).toBeNull()
+    expect(exitButton(), 'no exit for a filed document').not.toBeNull()
+    expect(saveButton()!.title, 'Save still held').toBe('')
+    fireEvent.click(exitButton() as HTMLElement)
+    expect(w.opened).toEqual(['note-7'])
+  })
+
+  const OTHER_DOCUMENT_ID = 'c3d4e5f6-a7b8-4c3d-8e4f-5a6b7c8d9e0f'
+
+  it('a filed note does not lend its exit to the next document', async () => {
+    const w = wire(async (id, url) => {
+      if (url.includes('/note-originals')) return { ...NOTE_ORIGINALS, filed_invoice_id: 'note-7' }
+      return id === JOB_ID ? NOTE_DETAIL() : mkDetail({ id, document_id: OTHER_DOCUMENT_ID, document_type: 'receipt' })
+    })
+    Object.assign(w.ctx, { openImportedInvoice: () => {}, enterByHand: () => {}, activeEntity: { id: 'ent' } })
+    const { rerender } = render(review({ ctx: w.ctx, jobId: JOB_ID }))
+    await flush()
+    expect(exitButton(), 'the filed note has no exit: the floor is vacuous').not.toBeNull()
+
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    expect(exitButton(), 'the other document carries the filed note’s exit').toBeNull()
+  })
+
+  it('a filed note re-read as a receipt lends no exit', async () => {
+    const w = wire(async (id, url) => {
+      if (url.includes('/note-originals')) return { ...NOTE_ORIGINALS, filed_invoice_id: 'note-7' }
+      return id === JOB_ID ? NOTE_DETAIL() : mkDetail({ id, document_id: DOCUMENT_ID, document_type: 'receipt' })
+    })
+    Object.assign(w.ctx, { openImportedInvoice: () => {}, enterByHand: () => {}, activeEntity: { id: 'ent' } })
+    const { rerender } = render(review({ ctx: w.ctx, jobId: JOB_ID }))
+    await flush()
+    expect(exitButton(), 'the filed note has no exit: the floor is vacuous').not.toBeNull()
+
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    expect(exitButton(), 'the same document read as a receipt carries the note’s exit').toBeNull()
+  })
+
+  it('the next note never shows the filed note’s read, not even for one commit', async () => {
+    let release: (v: unknown) => void = () => {}
+    const w = wire(async (id, url) => {
+      if (url.includes('/note-originals')) {
+        if (url.includes(DOCUMENT_ID)) return { ...NOTE_ORIGINALS, filed_invoice_id: 'note-7' }
+        return new Promise((r) => (release = r))
+      }
+      return id === JOB_ID ? NOTE_DETAIL() : NOTE_DETAIL({ id, document_id: OTHER_DOCUMENT_ID })
+    })
+    Object.assign(w.ctx, { openImportedInvoice: () => {}, enterByHand: () => {}, activeEntity: { id: 'ent' } })
+    const { rerender } = render(review({ ctx: w.ctx, jobId: JOB_ID }))
+    await flush()
+    expect(exitButton(), 'the filed note has no exit: the floor is vacuous').not.toBeNull()
+
+    const seen: string[] = []
+    const watch = (rs: MutationRecord[]) =>
+      rs.forEach((r) => {
+        r.addedNodes.forEach((n) => {
+          if (!(n instanceof HTMLElement)) return
+          for (const id of ['extraction-open-invoice', 'extraction-note-panel']) {
+            if (n.dataset.testid === id || n.querySelector(`[data-testid="${id}"]`)) seen.push(id)
+          }
+        })
+        if (r.type === 'attributes' && r.attributeName === 'title') seen.push(`title:${r.oldValue}`)
+      })
+    const mo = new MutationObserver(watch)
+    mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['title'], attributeOldValue: true })
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    watch(mo.takeRecords())
+
+    expect(saveButton()!.title, 'the second note is still checking: the floor is vacuous').toBe(CHECKING_TITLE)
+    expect(seen.filter((x) => x !== `title:${CHECKING_TITLE}`), 'a commit showed the old note’s read').toEqual([])
+    seen.length = 0
+    await act(async () => release({ ...NOTE_ORIGINALS, filed_invoice_id: null }))
+    await flush()
+    watch(mo.takeRecords())
+    mo.disconnect()
+    expect(seen, 'the observer saw nothing: the control is vacuous').toContain('extraction-note-panel')
+  })
+
+  it('a late read of the old document does not file the new one', async () => {
+    let release: (v: unknown) => void = () => {}
+    const w = wire(async (id, url) => {
+      if (url.includes('/note-originals')) {
+        if (url.includes(DOCUMENT_ID)) return new Promise((r) => (release = r))
+        return { ...NOTE_ORIGINALS, filed_invoice_id: null }
+      }
+      return id === JOB_ID ? NOTE_DETAIL() : NOTE_DETAIL({ id, document_id: OTHER_DOCUMENT_ID })
+    })
+    Object.assign(w.ctx, { openImportedInvoice: () => {}, enterByHand: () => {}, activeEntity: { id: 'ent' } })
+    const { rerender } = render(review({ ctx: w.ctx, jobId: JOB_ID }))
+    await flush()
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    expect(panel(), 'the second note asks for its original: the floor is vacuous').not.toBeNull()
+
+    await act(async () => release({ ...NOTE_ORIGINALS, filed_invoice_id: 'note-7' }))
+    await flush()
+    expect(exitButton(), 'the old document’s late read filed the new one').toBeNull()
+    expect(saveButton()!.title).toBe(HELD_TITLE)
+  })
+
+  it('a retry in flight for the old document does not file the new one', async () => {
+    let release: (v: unknown) => void = () => {}
+    let asked = 0
+    const w = wire(async (id, url) => {
+      if (url.includes('/note-originals')) {
+        if (!url.includes(DOCUMENT_ID)) return { ...NOTE_ORIGINALS, filed_invoice_id: null }
+        if (asked++ === 0) throw new ApiError('http', 'Boom', 500)
+        return new Promise((r) => (release = r))
+      }
+      return id === JOB_ID ? NOTE_DETAIL() : NOTE_DETAIL({ id, document_id: OTHER_DOCUMENT_ID })
+    })
+    Object.assign(w.ctx, { openImportedInvoice: () => {}, enterByHand: () => {}, activeEntity: { id: 'ent' } })
+    const { rerender } = render(review({ ctx: w.ctx, jobId: JOB_ID }))
+    await flush()
+    await act(async () => {
+      fireEvent.click(screen.getByText(RETRY_LABEL))
+    })
+    expect(asked, 'the retry never reached the read: the floor is vacuous').toBe(2)
+
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    expect(panel(), 'the second note asks for its original: the floor is vacuous').not.toBeNull()
+
+    await act(async () => release({ ...NOTE_ORIGINALS, filed_invoice_id: 'note-7' }))
+    await flush()
+    expect(exitButton(), 'the old retry filed the new document').toBeNull()
+    expect(saveButton()!.title).toBe(HELD_TITLE)
   })
 })

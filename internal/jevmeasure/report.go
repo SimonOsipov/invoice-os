@@ -151,7 +151,7 @@ type confusionRow struct {
 }
 
 // confusionTable is CHECK-01-04's document-type confusion matrix: rows are the true types that
-// were actually asked, columns are the closed eight (A30), cells are asked-row counts.
+// were actually asked, columns are the closed set (A30), cells are asked-row counts.
 type confusionTable struct {
 	Options          []string
 	Rows             []confusionRow
@@ -301,7 +301,7 @@ func buildConfusion(outs []Outcome) *confusionTable {
 			rows = append(rows, confusionRow{TrueType: opt, Cells: cells[opt]})
 		}
 	}
-	// A true type outside the closed eight (a bug elsewhere) still gets a row, appended after.
+	// A true type outside the closed set (a bug elsewhere) still gets a row, appended after.
 	for _, t := range trueTypes {
 		if !slices.Contains(documentTypeOrder, t) {
 			rows = append(rows, confusionRow{TrueType: t, Cells: cells[t]})
@@ -651,7 +651,7 @@ func writeCostLine(w *bytes.Buffer, label string, cost *float64, pricing Pricing
 }
 
 // writeConfusionTable renders one check's document-type confusion matrix (AC-8): rows are the
-// true types actually asked, columns the closed eight (A30), cells the asked-row count.
+// true types actually asked, columns the closed set (A30), cells the asked-row count.
 func writeConfusionTable(w *bytes.Buffer, c *confusionTable) {
 	fmt.Fprintf(w, "\nconfusion table (rows: true type, columns: answered type)\n\n")
 	fmt.Fprintf(w, "| true type |")

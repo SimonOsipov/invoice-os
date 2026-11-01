@@ -47,8 +47,8 @@ func TestJevProduct_TheValueQuestionIsTheMeasuredQuestion(t *testing.T) {
 
 func TestJevProduct_TheDocumentTypeQuestionIsTheMeasuredQuestion(t *testing.T) {
 	wantNames := jevmeasure.DocumentTypeOptions()
-	if len(jevmeasure.DocumentTypeCriteria) != 8 || len(wantNames) != 8 || jevmeasure.DocumentTypeInstructions == "" {
-		t.Fatalf("the harness question is not eight described options: %d criteria, %d names", len(jevmeasure.DocumentTypeCriteria), len(wantNames))
+	if len(jevmeasure.DocumentTypeCriteria) != 9 || len(wantNames) != 9 || jevmeasure.DocumentTypeInstructions == "" {
+		t.Fatalf("the harness question is not nine described options: %d criteria, %d names", len(jevmeasure.DocumentTypeCriteria), len(wantNames))
 	}
 
 	got := extraction.DocumentTypeQuestion()

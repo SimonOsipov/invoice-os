@@ -66,6 +66,7 @@ import {
   createImport,
   getImportBatch,
   getSavedMapping,
+  importDocument,
   makeImportAuth,
   normalizeReport,
   previewImport,
@@ -1405,5 +1406,43 @@ describe('xhrJson with an async getter', () => {
     await promise
 
     expect(bearer(FakeXhr.last())).toBe('Bearer A1')
+  })
+})
+
+describe('importDocument request body', () => {
+  async function bodyOf(req: Parameters<typeof importDocument>[2]): Promise<{ url: string; method?: string; body: unknown }> {
+    let seen: { url: string; method?: string; body: unknown } | null = null
+    const authedFetch = (async (url: string, opts?: { method?: string; body?: unknown }) => {
+      seen = { url, method: opts?.method, body: opts?.body }
+      return { id: 'b', errors: null }
+    }) as unknown as AuthedFetch
+    await importDocument(authedFetch, base, req)
+    return seen as unknown as { url: string; method?: string; body: unknown }
+  }
+
+  it('sends the three optional keys on the wire under their snake_case names', async () => {
+    const seen = await bodyOf({
+      entityId: 'e1',
+      documentId: 'd1',
+      documentType: 'credit_note',
+      originalInvoiceId: 'o1',
+      invoiceNumber: 'CN-1',
+    })
+    expect(seen.url).toBe(`${base}/api/invoice/v1/imports/document`)
+    expect(seen.method).toBe('POST')
+    expect(seen.body).toEqual({
+      entity_id: 'e1',
+      document_id: 'd1',
+      document_type: 'credit_note',
+      original_invoice_id: 'o1',
+      invoice_number: 'CN-1',
+    })
+  })
+
+  it('omits an optional key it was not given, so a plain import is byte for byte today', async () => {
+    const seen = await bodyOf({ entityId: 'e1', documentId: 'd1' })
+    expect(Object.keys(seen.body as object).sort()).toEqual(['document_id', 'entity_id'])
+    const override = await bodyOf({ entityId: 'e1', documentId: 'd1', documentType: 'commercial_invoice' })
+    expect(Object.keys(override.body as object).sort()).toEqual(['document_id', 'document_type', 'entity_id'])
   })
 })

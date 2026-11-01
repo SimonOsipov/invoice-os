@@ -89,7 +89,7 @@ describe('invoiceFields', () => {
     expect([ok, bad]).toHaveLength(2)
   })
 
-  it('HEADER_FIELDS is the nineteen extraction header fields in order', () => {
+  it('HEADER_FIELDS is the twenty extraction header fields in order', () => {
     expect(HEADER_FIELDS).toStrictEqual([
       'invoice_number',
       'issue_date',
@@ -110,6 +110,7 @@ describe('invoiceFields', () => {
       'buyer_country',
       'buyer_state',
       'buyer_lga',
+      'original_invoice_number',
     ])
   })
 })

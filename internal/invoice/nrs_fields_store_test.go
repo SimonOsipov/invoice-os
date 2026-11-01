@@ -565,6 +565,22 @@ func TestStoreCreate_MalformedIssueTimeIsValidationAndWritesNothing(t *testing.T
 	}
 }
 
+func TestStoreCreate_AHeaderAmountBeyondTheColumnIsValidationAndWritesNothing(t *testing.T) {
+	f := newNRSFixture(t, "NRS-BIGHDR")
+	huge := strPtr("99999999999999.99") // numeric(14,2) holds 12 integer digits
+	for name, in := range map[string]CreateInput{
+		"subtotal": {Subtotal: huge}, "vat": {VAT: huge}, "total": {Total: huge},
+	} {
+		in.EntityID, in.InvoiceNumber = f.entityID, "NRS-BIGHDR-"+name
+		if _, err := f.store.Create(f.c, in); !errors.Is(err, ErrValidation) {
+			t.Errorf("%s: err = %v, want ErrValidation", name, err)
+		}
+	}
+	if n := mustCount(t, f.super, `SELECT count(*) FROM invoices WHERE entity_id = $1`, f.entityID); n != 0 {
+		t.Errorf("invoices for the entity = %d, want 0", n)
+	}
+}
+
 func TestStoreUpdate_OutOfRangeIssueTimeIsValidation(t *testing.T) {
 	f := newNRSFixture(t, "NRS-BADTIME2")
 	inv := f.create(t, "NRS-BADTIME2-1", CreateInput{IssueTime: strPtr("10:00:00")})

@@ -202,6 +202,25 @@ func TestDocumentCreateInput_SupplierFieldsNeverSetEvenWhenExtractionCarriesThem
 	}
 }
 
+func TestDocumentCreateInput_IgnoresTheOriginalNumber(t *testing.T) {
+	base := []extractedField{{Name: "invoice_number", Value: mpPtr("CN-1")}, {Name: "total", Value: mpPtr("100.00")}}
+	with := append(slices.Clone(base), extractedField{Name: "original_invoice_number", Value: mpPtr("INV-77")})
+
+	want, _ := documentCreateInput("e", "d", SettledExtraction{Fields: base})
+	got, rowErr := documentCreateInput("e", "d", SettledExtraction{Fields: with})
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v", rowErr)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("CreateInput with the original number = %+v, want %+v", got, want)
+	}
+	wantR, _ := readingCreateInput("e", "d", SettledExtraction{Fields: base})
+	gotR, _ := readingCreateInput("e", "d", SettledExtraction{Fields: with})
+	if !reflect.DeepEqual(gotR, wantR) {
+		t.Errorf("readingCreateInput with the original number = %+v, want %+v", gotR, wantR)
+	}
+}
+
 // --- MAP-04: unknown field names dropped -------------------------------------------------
 
 // invoice_date/total_amount are ILLUSTRATIVE off-vocabulary names, not the mock extractor's

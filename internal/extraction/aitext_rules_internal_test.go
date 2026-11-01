@@ -280,6 +280,8 @@ var aitInventedValues = map[string]string{
 	"buyer_country":     "Atlantis",
 	"buyer_state":       "Inventedstate",
 	"buyer_lga":         "Inventedlga",
+
+	"original_invoice_number": "INV-9998",
 }
 
 func TestAIText_EveryRuleRejectsAnInventedValue(t *testing.T) {

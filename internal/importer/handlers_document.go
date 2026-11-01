@@ -176,15 +176,18 @@ func SupplyNumberHandler(supply func(ctx context.Context, entityID, documentID, 
 
 // createDocumentRequest is the POST /v1/imports/document JSON body.
 type createDocumentRequest struct {
-	EntityID   string `json:"entity_id"`
-	DocumentID string `json:"document_id"`
+	EntityID          string `json:"entity_id"`
+	DocumentID        string `json:"document_id"`
+	DocumentType      string `json:"document_type"`
+	OriginalInvoiceID string `json:"original_invoice_id"`
+	InvoiceNumber     string `json:"invoice_number"`
 }
 
 // CreateDocumentHandler returns POST /v1/imports/document: identity-first-401 -> body cap
 // (413) -> json.Decode (400) -> entity_id/document_id presence+uuid guards (400) -> imp ->
 // statusForErr -> 201 importResponse (format "document", delimiter/encoding null).
 func CreateDocumentHandler(
-	imp func(ctx context.Context, entityID, documentID string) (BatchResult, error),
+	imp func(ctx context.Context, in DocumentImport) (BatchResult, error),
 	log *slog.Logger,
 ) http.HandlerFunc {
 	if log == nil {
@@ -227,9 +230,55 @@ func CreateDocumentHandler(
 			return
 		}
 
-		res, err := imp(r.Context(), req.EntityID, req.DocumentID)
+		isNote := req.DocumentType == "credit_note" || req.DocumentType == "debit_note"
+		switch {
+		case req.DocumentType != "" && !isNote && req.DocumentType != "commercial_invoice":
+			writeError(w, http.StatusBadRequest, "document_type must be credit_note, debit_note or commercial_invoice")
+			return
+		case req.OriginalInvoiceID != "" && !isNote:
+			writeError(w, http.StatusBadRequest, "original_invoice_id needs a credit_note or debit_note document_type")
+			return
+		}
+		if req.OriginalInvoiceID != "" {
+			if _, err := uuid.Parse(req.OriginalInvoiceID); err != nil {
+				writeError(w, http.StatusBadRequest, "original_invoice_id must be a well-formed uuid")
+				return
+			}
+		}
+		if isNote {
+			switch {
+			case req.OriginalInvoiceID == "":
+				writeError(w, http.StatusBadRequest, "original_invoice_id is required")
+				return
+			case strings.TrimSpace(req.InvoiceNumber) == "":
+				writeError(w, http.StatusBadRequest, "invoice_number is required")
+				return
+			}
+		}
+
+		res, err := imp(r.Context(), DocumentImport{
+			EntityID: req.EntityID, DocumentID: req.DocumentID, DocumentType: req.DocumentType,
+			OriginalInvoiceID: req.OriginalInvoiceID, InvoiceNumber: strings.TrimSpace(req.InvoiceNumber),
+		})
 		if err != nil {
 			status, msg := statusForErr(err)
+			switch {
+			case errors.Is(err, ErrDocumentAlreadyFiled):
+				status, msg = http.StatusConflict, documentAlreadyFiledReason
+			case errors.Is(err, ErrNoteTypeNotRead):
+				status, msg = http.StatusConflict, "This document was not read as that type of note."
+			case errors.Is(err, invoice.ErrDuplicateNumber):
+				status, msg = http.StatusConflict, invoice.NumberTakenReason
+			case errors.Is(err, invoice.ErrOriginalNotFound):
+				status, msg = http.StatusNotFound, "not found"
+			case errors.Is(err, invoice.ErrValidation):
+				status = http.StatusBadRequest
+				msg, _ = domainCreateErrorMessage(err)
+			default:
+				if m, ok := invoice.NoteRefusalMessage(err); ok {
+					status, msg = http.StatusConflict, m
+				}
+			}
 			if status == http.StatusInternalServerError {
 				log.ErrorContext(r.Context(), "importer: import document", slog.Any("err", err))
 			}

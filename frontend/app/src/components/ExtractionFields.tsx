@@ -45,8 +45,9 @@ const SUPPLIER_FIELDS = ['supplier_tin', 'supplier_name']
 // `extraction-field-*` against the header half of the wire, which is what this keeps true.
 const LINE_FIELD_RE = new RegExp(`^line_items(\\[[1-9][0-9]*\\]\\.(${LINE_WIRE_ROLES.join('|')}))?$`)
 
+// original_invoice_number has no cell: the note picker is its control.
 function isHeaderField(name: string): boolean {
-  return !LINE_FIELD_RE.test(name)
+  return name !== 'original_invoice_number' && !LINE_FIELD_RE.test(name)
 }
 
 // lockedField (extractionReview.ts) decides which of the three are locked, keyed on the WIRE

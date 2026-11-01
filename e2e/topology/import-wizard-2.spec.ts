@@ -720,7 +720,7 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
   // EXTR-13-07: the fields pane renders the header vocabulary only -- a line-item cell has its
   // own grid, LineItemGrid -- so every rendered-row count below is bounded to it.
   const wireNamesB = detail.fields.map((f) => f.name)
-  const headerNamesB = wireNamesB.filter((n) => !n.startsWith('line_items'))
+  const headerNamesB = wireNamesB.filter((n) => !n.startsWith('line_items') && n !== 'original_invoice_number')
   expect(headerNamesB.length, 'no header field on this document -- every measurement below is vacuous').toBeGreaterThan(0)
 
   const pane = page.getByTestId('extraction-fields')
@@ -1648,7 +1648,7 @@ test('EXTR13-LAYOUT-03: the grid takes the same left and right edges as the head
 
   // The sibling this aligns to, anchored by what it CONTAINS rather than by position alone: a
   // wrong ancestor resolves zero header cells and reds here instead of measuring the wrong box.
-  const headerNames = detail.fields.map((f) => f.name).filter((n) => !n.startsWith('line_items'))
+  const headerNames = detail.fields.map((f) => f.name).filter((n) => !n.startsWith('line_items') && n !== 'original_invoice_number')
   expect(headerNames.length, 'this document carries no header field -- there is no sibling to align to').toBeGreaterThan(0)
   const paneBody = fieldsPaneBody(page)
   const headerGrid = paneBody.locator('> div').first()

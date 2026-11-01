@@ -546,7 +546,7 @@ async function settleNote(tok: string, label: string): Promise<{ documentId: str
 
 // A fresh entity with its accepted original INV-ORIG-3401 and a settled fixture document.
 async function noteFixture(tok: string, label: string, small = false) {
-  const entity = await createEntity(tok, { name: `CRDDBTNOTE-05 ${label} ${freshTin()}`, tin: freshTin() })
+  const entity = await createEntity(tok, { name: `Zz CRDDBTNOTE-05 ${label} ${freshTin()}`, tin: freshTin() })
   const original = await acceptedOriginal(tok, entity.id, NOTE_READ.original, small)
   const { documentId, job } = await settleNote(tok, label)
   return { entity, original, documentId, job }
@@ -591,7 +591,7 @@ test.describe('note documents', () => {
   })
 
   test('note documents: the picker lists the accepted original first', async () => {
-    const entity = await createEntity(token, { name: `CRDDBTNOTE-05 picker ${freshTin()}`, tin: freshTin() })
+    const entity = await createEntity(token, { name: `Zz CRDDBTNOTE-05 picker ${freshTin()}`, tin: freshTin() })
     // The read original goes first, so newest-first alone would put the other one on top.
     const original = await acceptedOriginal(token, entity.id, NOTE_READ.original)
     const other = await acceptedOriginal(token, entity.id, `INV-OTHER-${freshTin()}`)
@@ -617,7 +617,7 @@ test.describe('note documents', () => {
   test('note documents: no original and a foreign original create nothing', async () => {
     const { entity, original, documentId } = await noteFixture(token, 'refusals')
     const tokenB = await login(PERSONAS.B)
-    const entityB = await createEntity(tokenB, { name: `CRDDBTNOTE-05 foreign ${freshTin()}`, tin: freshTin() })
+    const entityB = await createEntity(tokenB, { name: `Zz CRDDBTNOTE-05 foreign ${freshTin()}`, tin: freshTin() })
     const foreign = await createInvoice(tokenB, {
       entity_id: entityB.id,
       invoice_number: `INV-B-${freshTin()}`,
@@ -662,7 +662,7 @@ test.describe('note documents', () => {
 
   test('note documents: an original of another client is refused', async () => {
     const { entity, documentId } = await noteFixture(token, 'other-client')
-    const entityB = await createEntity(token, { name: `CRDDBTNOTE-05 client B ${freshTin()}`, tin: freshTin() })
+    const entityB = await createEntity(token, { name: `Zz CRDDBTNOTE-05 client B ${freshTin()}`, tin: freshTin() })
     const originalB = await acceptedOriginal(token, entityB.id, NOTE_READ.original)
 
     const res = await postImport(token, {

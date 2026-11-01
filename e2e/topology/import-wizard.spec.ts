@@ -3691,10 +3691,11 @@ test('EXTR11-E2E-02a (AC-1/AC-6): the panes never overlap, and no field row spil
   // measures nothing and passes vacuously.
   expect(detail.fields.length, 'no field on this document -- every spill comparison is vacuous').toBeGreaterThan(0)
 
+  // original_invoice_number has no cell (the note picker is its control).
   // EXTR-13-07: the fields pane renders the header vocabulary only -- a line-item cell has its
   // own grid, LineItemGrid -- so the row count below is bounded to it.
   const wireNamesA = detail.fields.map((f) => f.name)
-  const headerNamesA = wireNamesA.filter((n) => !n.startsWith('line_items'))
+  const headerNamesA = wireNamesA.filter((n) => !n.startsWith('line_items') && n !== 'original_invoice_number')
   expect(headerNamesA.length, 'no header field on this document -- every spill comparison is vacuous').toBeGreaterThan(0)
 
   // The trailing hyphen matters: `extraction-fields` is itself prefixed by `extraction-field`.

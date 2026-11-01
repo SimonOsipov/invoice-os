@@ -34,6 +34,7 @@ func (s *Service) ImportDocumentNote(ctx context.Context, in DocumentImport) (Ba
 	if verdict == "" || ex.DocumentType == nil || *ex.DocumentType != verdict {
 		return BatchResult{}, ErrNoteTypeNotRead
 	}
+	// ceiling: check-then-create race across two tabs; lock the document row if a second invoice is ever seen
 	filed, err := s.batch.DocumentHasInvoice(ctx, in.DocumentID)
 	if err != nil {
 		return BatchResult{}, err

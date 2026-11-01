@@ -998,6 +998,8 @@ func TestCreateDocumentHandler_NoteRefusalsMapToStatus(t *testing.T) {
 		{"document or entity absent", ErrNotFound, 404, "not found"},
 		{"reading is not a decimal", fmt.Errorf("%w: The total on this document reads \"abc\", which is not an amount.", ErrValidation), 400, `reads "abc"`},
 		{"workspace locked", db.ErrWorkspaceLocked, 403, db.WorkspaceLockedMessage},
+		{"the store refused a value", invoice.ErrValidation, 400, "one or more fields failed validation"},
+		{"the store refused a value, wrapped", fmt.Errorf("create note: %w", invoice.ErrValidation), 400, "one or more fields failed validation"},
 		{"operational", errors.New("boom"), 500, "internal server error"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

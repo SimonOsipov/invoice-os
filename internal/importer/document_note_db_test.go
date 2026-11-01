@@ -643,7 +643,8 @@ func TestImportDocumentNote_AnUnreadableIssueDateSentenceIsExact(t *testing.T) {
 	}
 }
 
-// Pinned surprise: an amount beyond the column's range is not refused up front; the batch ends failed.
+// An amount beyond the column's range is not refused up front: the store refuses it
+// (invoice.ErrValidation, which the handler answers 400) and the batch ends failed.
 func TestImportDocumentNote_AnAmountBeyondTheColumnFailsItsBatch(t *testing.T) {
 	v := dnReading()
 	v["total"] = sxPtr("-99999999999999999999999999.99")
@@ -651,8 +652,8 @@ func TestImportDocumentNote_AnAmountBeyondTheColumnFailsItsBatch(t *testing.T) {
 
 	_, err := f.run(f.in("credit_note", "CN-BIG"))
 
-	if err == nil || errors.Is(err, ErrValidation) {
-		t.Errorf("err = %v, want the database's overflow error, not ErrValidation", err)
+	if !errors.Is(err, invoice.ErrValidation) || errors.Is(err, ErrValidation) {
+		t.Errorf("err = %v, want invoice.ErrValidation from the overflow, not the importer's", err)
 	}
 	if b := dnBatches(t, f.super, f.doc); len(b) != 1 || b[0].Status != "failed" {
 		t.Errorf("batches = %+v, want one, failed", b)

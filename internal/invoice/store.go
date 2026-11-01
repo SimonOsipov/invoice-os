@@ -319,7 +319,7 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			switch pgCode(err) {
 			case "23505":
 				return ErrDuplicateNumber
-			case "23503", "22P02", "22007", "22008", "22021":
+			case "23503", "22P02", "22007", "22008", "22021", "22003":
 				return ErrValidation
 			}
 			return err

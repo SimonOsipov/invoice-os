@@ -271,6 +271,9 @@ func CreateDocumentHandler(
 				status, msg = http.StatusConflict, invoice.NumberTakenReason
 			case errors.Is(err, invoice.ErrOriginalNotFound):
 				status, msg = http.StatusNotFound, "not found"
+			case errors.Is(err, invoice.ErrValidation):
+				status = http.StatusBadRequest
+				msg, _ = domainCreateErrorMessage(err)
 			default:
 				if m, ok := invoice.NoteRefusalMessage(err); ok {
 					status, msg = http.StatusConflict, m

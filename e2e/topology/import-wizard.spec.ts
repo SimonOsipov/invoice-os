@@ -94,6 +94,7 @@ import {
   type Rect,
 } from './layout'
 import { signInAs } from '../personaSession'
+import { nightlyTarget, REAL_AI_COVERED } from '../targets'
 import { INHOUSE_PERSONA } from './targets'
 import {
   boxOf,
@@ -429,6 +430,7 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
 // so this runs ONLY when the deploy gate exercises this file against a live PR environment.
 // Stage 3/4 locally can only typecheck it (pnpm --filter @invoice-os/e2e typecheck).
 test('AIRL-01: a placement chip stays inside its column at every swept width', async ({ page }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(180_000)
   const errors = collectErrors(page)
 
@@ -503,6 +505,7 @@ test('AIRL-01: a placement chip stays inside its column at every swept width', a
 })
 
 test('AIR07-E2E-01: a steered suggestion opens the Map step placed and badged, and Continue imports it', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(240_000)
   const errors = collectErrors(page)
 
@@ -559,6 +562,7 @@ test('AIR07-E2E-01: a steered suggestion opens the Map step placed and badged, a
 })
 
 test('AIR07-E2E-03: a title-row file maps and imports from row 3', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(240_000)
   const errors = collectErrors(page)
 
@@ -625,6 +629,7 @@ test('AIR07-E2E-03: a title-row file maps and imports from row 3', async ({ page
 })
 
 test("AIR07-E2E-04: an unsteered file opens exactly today's Map step", async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(240_000)
   const errors = collectErrors(page)
 
@@ -745,6 +750,7 @@ const CHECK05_AUTOMATIC = ['buyer_tin', 'currency', 'invoice_number', 'issue_dat
 test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and imports once placed by hand, while the other group's placements are as they were", async ({
   page,
 }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 

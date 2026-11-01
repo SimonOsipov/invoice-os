@@ -4618,6 +4618,7 @@ test('CHECK04-E2E-01 (AC-4, AC-5, AC-8): a document read as a receipt shows the 
 })
 
 test('CRDDBTNOTE05: the note panel fits the review at every wide width', async ({ page }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Two accepted originals, one cold-sidecar extraction, then a four-width sweep.
   test.setTimeout(600_000)
   const errors = collectErrors(page)
@@ -4685,6 +4686,7 @@ test('CRDDBTNOTE05: the note panel fits the review at every wide width', async (
 
 
 test('CRDDBTNOTE05: a note PDF imports as a note on the review screen', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Two accepted originals, one cold-sidecar extraction, one import.
   test.setTimeout(600_000)
   const errors = collectErrors(page)
@@ -4718,6 +4720,7 @@ test('CRDDBTNOTE05: a note PDF imports as a note on the review screen', async ({
 })
 
 test('CRDDBTNOTE05: a held file in a two-file run keeps its way back', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(600_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)

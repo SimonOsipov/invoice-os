@@ -254,17 +254,27 @@ func CreateDocumentHandler(
 				writeError(w, http.StatusBadRequest, "invoice_number is required")
 				return
 			}
-			writeError(w, http.StatusBadRequest, "not supported")
-			return
 		}
 
 		res, err := imp(r.Context(), DocumentImport{
 			EntityID: req.EntityID, DocumentID: req.DocumentID, DocumentType: req.DocumentType,
+			OriginalInvoiceID: req.OriginalInvoiceID, InvoiceNumber: strings.TrimSpace(req.InvoiceNumber),
 		})
 		if err != nil {
 			status, msg := statusForErr(err)
-			if errors.Is(err, ErrDocumentAlreadyFiled) {
+			switch {
+			case errors.Is(err, ErrDocumentAlreadyFiled):
 				status, msg = http.StatusConflict, documentAlreadyFiledReason
+			case errors.Is(err, ErrNoteTypeNotRead):
+				status, msg = http.StatusConflict, "This document was not read as that type of note."
+			case errors.Is(err, invoice.ErrDuplicateNumber):
+				status, msg = http.StatusConflict, invoice.NumberTakenReason
+			case errors.Is(err, invoice.ErrOriginalNotFound):
+				status, msg = http.StatusNotFound, "not found"
+			default:
+				if m, ok := invoice.NoteRefusalMessage(err); ok {
+					status, msg = http.StatusConflict, m
+				}
 			}
 			if status == http.StatusInternalServerError {
 				log.ErrorContext(r.Context(), "importer: import document", slog.Any("err", err))

@@ -415,7 +415,7 @@ func (s *Service) ImportDocumentFor(ctx context.Context, in DocumentImport) (Bat
 	case "commercial_invoice":
 		return s.ImportDocumentAsInvoice(ctx, in.EntityID, in.DocumentID)
 	default:
-		return BatchResult{}, fmt.Errorf("%w: not supported", ErrValidation)
+		return s.ImportDocumentNote(ctx, in)
 	}
 }
 

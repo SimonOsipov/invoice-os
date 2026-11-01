@@ -61,11 +61,8 @@ func (s *Store) IssueNote(ctx context.Context, originalID string, in NoteInput) 
 		}
 	}
 
-	orig, err := s.Get(ctx, originalID)
+	orig, err := s.NoteOriginal(ctx, originalID)
 	if err != nil {
-		return Invoice{}, err
-	}
-	if err := noteRefusal(orig); err != nil {
 		return Invoice{}, err
 	}
 
@@ -108,20 +105,68 @@ func (s *Store) IssueNote(ctx context.Context, originalID string, in NoteInput) 
 		}
 	}
 
-	return s.Create(ctx, CreateInput{
-		EntityID: orig.EntityID, InvoiceNumber: in.InvoiceNumber, IssueDate: in.IssueDate,
+	return s.Create(ctx, noteHeader(orig, CreateInput{
+		InvoiceNumber: in.InvoiceNumber, IssueDate: in.IssueDate,
 		DocumentType: in.DocumentType, OriginalInvoiceID: &orig.ID,
-		BuyerTIN: orig.BuyerTIN, BuyerName: orig.BuyerName, Currency: orig.Currency,
-		TaxCurrencyCode: orig.TaxCurrencyCode, InvoiceKind: orig.InvoiceKind,
 		Subtotal: &amounts.Subtotal, VAT: &amounts.VAT, Total: &amounts.Total,
-		SupplierEmail: orig.SupplierEmail, SupplierTelephone: orig.SupplierTelephone, SupplierStreet: orig.SupplierStreet,
-		SupplierCity: orig.SupplierCity, SupplierPostalZone: orig.SupplierPostalZone, SupplierCountry: orig.SupplierCountry,
-		SupplierState: orig.SupplierState, SupplierLGA: orig.SupplierLGA,
-		BuyerEmail: orig.BuyerEmail, BuyerTelephone: orig.BuyerTelephone, BuyerStreet: orig.BuyerStreet,
-		BuyerCity: orig.BuyerCity, BuyerPostalZone: orig.BuyerPostalZone, BuyerCountry: orig.BuyerCountry,
-		BuyerState: orig.BuyerState, BuyerLGA: orig.BuyerLGA,
 		LineItems: items,
-	})
+	}))
+}
+
+// noteHeader copies what a note takes from its original; IssueNote and the document import share it.
+// The caller sets DocumentType and OriginalInvoiceID, and Currency when it read one.
+func noteHeader(orig Invoice, in CreateInput) CreateInput {
+	in.EntityID = orig.EntityID
+	if in.Currency == nil || strings.TrimSpace(*in.Currency) == "" {
+		in.Currency = orig.Currency
+	}
+	in.TaxCurrencyCode, in.InvoiceKind = orig.TaxCurrencyCode, orig.InvoiceKind
+	in.BuyerTIN, in.BuyerName = orig.BuyerTIN, orig.BuyerName
+	in.SupplierEmail, in.SupplierTelephone, in.SupplierStreet = orig.SupplierEmail, orig.SupplierTelephone, orig.SupplierStreet
+	in.SupplierCity, in.SupplierPostalZone, in.SupplierCountry = orig.SupplierCity, orig.SupplierPostalZone, orig.SupplierCountry
+	in.SupplierState, in.SupplierLGA = orig.SupplierState, orig.SupplierLGA
+	in.BuyerEmail, in.BuyerTelephone, in.BuyerStreet = orig.BuyerEmail, orig.BuyerTelephone, orig.BuyerStreet
+	in.BuyerCity, in.BuyerPostalZone, in.BuyerCountry = orig.BuyerCity, orig.BuyerPostalZone, orig.BuyerCountry
+	in.BuyerState, in.BuyerLGA = orig.BuyerState, orig.BuyerLGA
+	return in
+}
+
+// NoteOriginal reads originalID and applies noteRefusal.
+func (s *Store) NoteOriginal(ctx context.Context, originalID string) (Invoice, error) {
+	orig, err := s.Get(ctx, originalID)
+	if err != nil {
+		return Invoice{}, err
+	}
+	if err := noteRefusal(orig); err != nil {
+		return Invoice{}, err
+	}
+	return orig, nil
+}
+
+// CreateDocumentNote files in as a note of originalID. in.EntityID must be the original's entity.
+func (s *Store) CreateDocumentNote(ctx context.Context, originalID string, in CreateInput) (Invoice, error) {
+	orig, err := s.NoteOriginal(ctx, originalID)
+	if err != nil {
+		return Invoice{}, err
+	}
+	if !strings.EqualFold(orig.EntityID, in.EntityID) {
+		return Invoice{}, ErrOriginalOtherEntity
+	}
+	in.OriginalInvoiceID = &orig.ID
+	return s.Create(ctx, noteHeader(orig, in))
+}
+
+// NoteRefusalMessage is the one owner of the three 409 sentences.
+func NoteRefusalMessage(err error) (string, bool) {
+	switch {
+	case errors.Is(err, ErrOriginalIsANote):
+		return "a note cannot be the original of a note", true
+	case errors.Is(err, ErrOriginalOtherEntity):
+		return "the original belongs to another client", true
+	case errors.Is(err, ErrOriginalNotIssued):
+		return "a note needs an accepted invoice with an IRN", true
+	}
+	return "", false
 }
 
 type NoteSummary struct {

@@ -16,7 +16,7 @@ const V865_878: readonly [string, string, GlyphName][] = [
   ['Business profile', 'Multi-tenant setup, tax details, numbering, currency, branches.', 'building-2'],
   ['User access', 'Role-based access, team invites, accountant-client links.', 'users'],
   ['Customer / vendor', 'Buyer & seller database, TIN & company verification, duplicate detection.', 'contact'],
-  ['Invoice management', 'Drafts, line items, credit & debit notes, cancellations.', 'file-text'],
+  ['Invoice management', 'Drafts, line items, credit & debit notes.', 'file-text'],
   ['Validation engine', 'Rule-based checks for fields, tax logic, totals, numbering.', 'circle-check'],
   ['Approval workflow', 'Creator, reviewer, approver, rejection notes, status trail.', 'check'],
   ['Document generation', 'PDF, JSON, XML/UBL export, QR placeholder, versioning.', 'file-check'],

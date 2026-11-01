@@ -725,7 +725,7 @@ test('firm Approvals: the nav item opens the Approvals screen, not the Invoices 
 })
 
 // APPROVALS_GRID_COLUMNS is '24px minmax(110px, 210px) minmax(60px, 1fr) 130px 90px 180px 110px' (ApprovalsView.tsx):
-// seven tracks, one of them fluid. Track 1 is flat only across WIDE_WIDTHS; it floats under 1202px. The indices below name what the two layout claims are
+// seven tracks, one of them fluid. Track 1 is flat only across WIDE_WIDTHS; it floats under 1262px. The indices below name what the two layout claims are
 // about; neither claim ever asserts one of these px values.
 const APPROVALS_TRACKS = 7
 const BUYER_TRACK = 2

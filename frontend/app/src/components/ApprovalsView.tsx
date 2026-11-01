@@ -439,7 +439,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                     )}
                     {reason != null && <BlockedReason id={reasonId} reason={reason} />}
                   </span>
-                  <span data-testid="approval-buyer-cell" style={{ fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name}</span>
+                  <span data-testid="approval-buyer-cell" title={r.buyer_name ?? undefined} style={{ fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name}</span>
                   <span className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(signedAmount(r, r.total)) : '—'}</span>
                   <span className="mono" style={{ fontSize: 12, color: 'var(--fg-2)' }}>{av.stepLabel}</span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>

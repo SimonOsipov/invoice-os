@@ -1007,7 +1007,7 @@ test('AP-01 approvals queue: heading, card, bulk bar, pager relations', async ({
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-// No deployed route creates a note before CRDDBTNOTE-02 merges, so page.route turns the first queue row into one.
+// Fixture: page.route shapes a queue holding a credit note and a blocked debit note.
 test("(fixture check) AP: a note's type badge stays inside the approvals number cell", async ({ page }, testInfo) => {
   test.setTimeout(180_000)
   const errors = collectErrors(page)
@@ -1022,7 +1022,7 @@ test("(fixture check) AP: a note's type badge stays inside the approvals number 
     transform: (body) => {
       // Fixture: pad the queue to 3 rows so the 1180px buyer-width guard reads more than the two note rows.
       const invoices: Array<Record<string, unknown>> = [...body.invoices]
-      for (let n = 1; invoices.length < 3; n++) {
+      for (let n = 1; invoices.length > 0 && invoices.length < 3; n++) {
         invoices.push({ ...invoices[0], id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`, invoice_number: `INV-PAD-${n}`, buyer_name: `Pad Buyer ${n}` })
       }
       return {
@@ -1054,6 +1054,9 @@ test("(fixture check) AP: a note's type badge stays inside the approvals number 
   const d = parts(debit)
   const icon = debit.getByTestId('approval-blocked-icon')
   const dNumber = d.cell.locator(':scope > span').first()
+  const cNumber = c.cell.locator(':scope > span').first()
+  await expect(c.buyer).toHaveAttribute('title', buyerName)
+  await expect(d.buyer).toHaveAttribute('title', buyerName)
   await expect(c.badge).toHaveText('CREDIT')
   await expect(d.badge).toBeVisible()
 
@@ -1079,10 +1082,10 @@ test("(fixture check) AP: a note's type badge stays inside the approvals number 
       for (const [what, list] of [['head', headKids], ['credit row', creditKids], ['debit row', debitKids]] as const) {
         list.forEach((r, i) => problems.push(...within(k, r, `${what} child ${i} in the card`)))
       }
-      const [cb, cc, cy, db, dc, dy, di, dn] = await Promise.all([
+      const [cb, cc, cy, db, dc, dy, di, dn, cn] = await Promise.all([
         box(c.badge, 'credit badge'), box(c.cell, 'credit number cell'), box(c.buyer, 'credit buyer cell'),
         box(d.badge, 'debit badge'), box(d.cell, 'debit number cell'), box(d.buyer, 'debit buyer cell'),
-        box(icon, 'blocked icon'), box(dNumber, 'debit number'),
+        box(icon, 'blocked icon'), box(dNumber, 'debit number'), box(cNumber, 'credit number'),
       ])
       problems.push(
         ...within(cc, cb, 'credit badge in the number cell'),
@@ -1095,6 +1098,8 @@ test("(fixture check) AP: a note's type badge stays inside the approvals number 
         ...within(dc, dn, 'debit number in the number cell'),
         ...leftOf(dn, db, 'debit number vs badge'),
         ...leftOf(dn, di, 'debit number vs blocked icon'),
+        ...(dn.width > 0 ? [] : ['debit number has no width']),
+        ...(cn.width > 0 ? [] : ['credit number has no width']),
       )
       const rects: Record<string, unknown> = { k, cb, cc, cy, db, dc, dy, di, dn }
       if (page.viewportSize()?.width === 1180) {

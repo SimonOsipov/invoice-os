@@ -1940,11 +1940,22 @@ describe('CRDDBTNOTE-04-04: the queue shows the document type and the signed amo
     const rows = await renderRows([approvalRow({ id: 't-1', invoice_number: number })])
     expect(within(rows[0]).getByText(number).getAttribute('title')).toBe(number)
   })
+
+  it('approvalsBuyer_titleCarriesTheWholeName', async () => {
+    const name = 'Fixture Buyer Holdings Limited'
+    const rows = await renderRows([
+      approvalRow({ id: 'y-1', invoice_number: 'INV-Y1', buyer_name: name }),
+      approvalRow({ id: 'y-2', invoice_number: 'INV-Y2', buyer_name: null }),
+    ])
+    const [named, unnamed] = rows.map((r) => r.querySelector('[data-testid="approval-buyer-cell"]'))
+    expect(named?.getAttribute('title')).toBe(name)
+    expect(unnamed?.hasAttribute('title')).toBe(false)
+  })
 })
 
 describe('the Approvals grid keeps the buyer track', () => {
   it('approvalsGrid_headAndRowsShareTheBuyerFloorTrack', async () => {
-    const reason = 'Only a validated debit note can be approved.'
+    const reason = 'Only a validated invoice can be approved or rejected.'
     mockFetchSequence([
       listResponse(
         [

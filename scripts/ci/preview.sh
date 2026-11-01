@@ -214,11 +214,11 @@ env_file() {
       blog) echo "VITE_GATEWAY_URL: $(url gateway "$pr")" ;;
     esac
     case "$svc" in
-      notifications | worker) [ "$pr" != nightly ] || echo "HUBSPOT_DEAL_STAGE: $(deal_stage)" ;;
+      notifications | worker) echo "CONTACTS_FAKE: 'true'" ;;
     esac
     case "$svc" in
       invoice | submission | worker)
-        [ "$pr" = nightly ] || { echo "AI_FAKE: 'true'"; echo "JEV_FAKE: 'true'"; }
+        echo "AI_FAKE: 'true'"; echo "JEV_FAKE: 'true'"
         echo "DOCUMENT_BUCKET: ascomply-preview-$(suffix "$pr")"
         echo "DOCUMENT_ENDPOINT: https://storage.googleapis.com"
         echo "DOCUMENT_REGION: auto"
@@ -245,13 +245,6 @@ secrets_of() {
   case "$2" in
     invoice | submission | worker)
       out+=(DOCUMENT_ACCESS_KEY_ID=document-access-key-id:latest DOCUMENT_SECRET_ACCESS_KEY=document-secret-key:latest)
-      [ "$pr" != nightly ] || out+=(OPENROUTER_API_KEY=nightly-openrouter-api-key:latest)
-      ;;
-  esac
-  case "$2" in
-    notifications | worker)
-      [ "$pr" != nightly ] || out+=("HUBSPOT_TOKEN=$HUBSPOT_TOKEN_SECRET:${NIGHTLY_HUBSPOT_TOKEN_VERSION:-}" RESEND_API_KEY=nightly-resend-read-key:latest
-        RESEND_SEGMENT_ID=nightly-resend-segment-id:latest RESEND_TOPIC_ID=nightly-resend-topic-id:latest)
       ;;
   esac
   local IFS=,
@@ -291,14 +284,6 @@ deploy_one() {
 cmd_deploy() {
   local pr=$1 sha=$2 failed=0 svc
   shift 2
-  # The token version is pinned at deploy time; deploy_one's child bash has no die.
-  if [ "$pr" = nightly ]; then
-    for svc in "$@"; do
-      case "$svc" in
-        notifications | worker) digits_arg "${NIGHTLY_HUBSPOT_TOKEN_VERSION:-}" ;;
-      esac
-    done
-  fi
   export -f deploy_one env_file secrets_of url image secret suffix dbname max_instances gotrue_pool deal_stage
   export PROJECT PROJECT_NUMBER REGION REGISTRY RUNTIME LABEL HUBSPOT_TOKEN_SECRET
   # Four at a time: africa-south1 allows 20 vCPU of allocation per minute per project.

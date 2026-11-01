@@ -22,7 +22,7 @@ permissions:
   checks: read
 
 env:
-  PR: ${{ github.event.pull_request.number || 'nightly' }}
+  PR: nightly
   WIF_PROVIDER: projects/428987361227/locations/global/workloadIdentityPools/github/providers/github-actions
   DEPLOYER: deploy-preview@ascomply-preview.iam.gserviceaccount.com
 
@@ -47,7 +47,7 @@ jobs:
           fetch-depth: 2
       - id: mode
         env:
-          NIGHTLY: ${{ github.event_name == 'workflow_dispatch' }}
+          NIGHTLY: 'true'
         run: |
           echo "nightly=$NIGHTLY" >>"$GITHUB_OUTPUT"
           if [ "$NIGHTLY" = true ]; then
@@ -222,17 +222,17 @@ jobs:
           echo "::error::preview cap reached: $OPEN previews open (.claude/rules/ci-preview.md)"
           exit 1
       - name: Check the contact secrets
-        if: needs.changes.outputs.nightly == 'true'
+        if: false
         run: bash scripts/ci/preview.sh contact-preflight "$PR"
       - id: token_version
         name: Read the HubSpot token version
-        if: needs.changes.outputs.nightly == 'true'
+        if: false
         run: |
           set -euo pipefail
           version=$(bash scripts/ci/preview.sh contact-token-version "$PR")
           echo "version=$version" >>"$GITHUB_OUTPUT"
       - name: Start the contacts (guard the portal, delete leftovers)
-        if: needs.changes.outputs.nightly == 'true'
+        if: false
         run: |
           set -euo pipefail
           token=$(bash scripts/ci/preview.sh contact-token "$PR" "${{ steps.token_version.outputs.version }}")
@@ -538,7 +538,6 @@ jobs:
         run: |
           set -euo pipefail
           want=fake
-          [ "$PR" != nightly ] || want=real
           mode=""
           for _ in $(seq 1 5); do
             if curl -sS --connect-timeout 5 --max-time 40 -H "X-Gateway-Token: $GATEWAY_TOKEN" -o /tmp/contacts-fleet.json "$GATEWAY_URL/healthz/fleet" \

@@ -869,3 +869,78 @@ func TestNoteOriginals_EntityIsTheNewestBatch(t *testing.T) {
 		t.Errorf("entity_id after a newer batch in A = %q, want %q", got.EntityID, f.entity)
 	}
 }
+
+func TestNoteOriginals_NoteCountCountsEachOriginalsOwnNotesInEveryStatus(t *testing.T) {
+	f := dnNewFix(t, "NO-count", "credit note", nil)
+	csLinkBatch(t, f.super, f.tenant, f.entity, f.doc)
+	other := dnSeedOriginal(t, f.super, f.tenant, f.entity, "INV-ORIG-2")
+	noAge(t, f, f.orig, 2*time.Hour)
+	noAge(t, f, other, time.Hour)
+	for i, st := range []string{"draft", "rejected"} {
+		n := dnSeedOriginal(t, f.super, f.tenant, f.entity, fmt.Sprintf("CN-%s", st))
+		if _, err := f.super.Exec(context.Background(),
+			`UPDATE invoices SET document_type = 'credit_note', original_invoice_id = $2, status = $3, irn = NULL WHERE id = $1`, n, f.orig, st); err != nil {
+			t.Fatalf("note %d: %v", i, err)
+		}
+	}
+	n := dnSeedOriginal(t, f.super, f.tenant, f.entity, "DN-ONE")
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE invoices SET document_type = 'debit_note', original_invoice_id = $2, status = 'draft', irn = NULL WHERE id = $1`, n, other); err != nil {
+		t.Fatalf("debit note: %v", err)
+	}
+
+	rows := f.originals(t).Originals
+
+	if len(rows) != 2 || rows[0].ID != other || rows[1].ID != f.orig {
+		t.Fatalf("originals = %v, want [%s %s]", noIDs(rows), other, f.orig)
+	}
+	if rows[0].NoteCount != 1 || rows[1].NoteCount != 2 {
+		t.Errorf("note_count = %d, %d, want 1 (one debit note), 2 (credit notes in draft and rejected)", rows[0].NoteCount, rows[1].NoteCount)
+	}
+}
+
+func TestNoteOriginals_TheReadNumberComesFromTheNewestSucceededJob(t *testing.T) {
+	values := dnReading()
+	values["original_invoice_number"] = sxPtr("INV-ORIG-1")
+	f := dnNewFix(t, "NO-job", "credit note", values)
+	csLinkBatch(t, f.super, f.tenant, f.entity, f.doc)
+	other := dnSeedOriginal(t, f.super, f.tenant, f.entity, "INV-OTHER")
+	noAge(t, f, f.orig, 2*time.Hour)
+	noAge(t, f, other, time.Hour)
+
+	// A newer job that has not succeeded names another original: it must not steer the sort.
+	for _, state := range []string{"failed", "extracting"} {
+		job := seedExtractionJob(t, f.super, f.tenant, f.doc, state, time.Now().UTC().Add(time.Minute))
+		seedExtractionField(t, f.super, f.tenant, job, "original_invoice_number", sxPtr("INV-OTHER"), nil, 0, time.Now().UTC())
+	}
+	if ids := noIDs(f.originals(t).Originals); len(ids) != 2 || ids[0] != f.orig {
+		t.Fatalf("with a newer failed and extracting job: originals = %v, want the succeeded job's match %s first", ids, f.orig)
+	}
+
+	// A newer succeeded job replaces the reading, and a candidate_rank > 0 reading never steers it.
+	job := seedExtractionJob(t, f.super, f.tenant, f.doc, "succeeded", time.Now().UTC().Add(2*time.Minute))
+	seedExtractionField(t, f.super, f.tenant, job, "original_invoice_number", sxPtr("INV-OTHER"), nil, 0, time.Now().UTC())
+	seedExtractionField(t, f.super, f.tenant, job, "original_invoice_number", sxPtr("INV-ORIG-1"), nil, 1, time.Now().UTC())
+	if ids := noIDs(f.originals(t).Originals); len(ids) != 2 || ids[0] != other {
+		t.Errorf("with a newer succeeded job: originals = %v, want its rank-0 match %s first", ids, other)
+	}
+}
+
+func TestNoteOriginals_ADocumentOfAnotherTenantIsNotFound(t *testing.T) {
+	f := dnNewFix(t, "NO-xt", "credit note", nil)
+	csLinkBatch(t, f.super, f.tenant, f.entity, f.doc)
+	otherTenant, _ := rbTenant(t, f.super, "NO-xt-other")
+	ctx := sxIdentity(context.Background(), otherTenant)
+
+	got, err := f.svc.batch.NoteOriginals(ctx, f.doc)
+
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another tenant's document: err = %v, want ErrNotFound", err)
+	}
+	if got.Originals == nil || len(got.Originals) != 0 || got.EntityID != "" || got.FiledInvoiceID != nil {
+		t.Errorf("answer on refusal = %+v, want the empty value", got)
+	}
+	if _, err := f.svc.batch.NoteOriginals(f.ctx(), f.doc); err != nil {
+		t.Fatalf("control: the owner's read: %v", err)
+	}
+}

@@ -46,6 +46,33 @@ func (g *registerRig) invoice(t *testing.T, number, status, issueDate string) st
 
 func (g *registerRig) act(t *testing.T) { t.Helper(); actingAs(t, g.tx, g.tenant) }
 
+// setKept writes or clears the kept_as_is triple as the superuser; the caller re-enters act.
+func (g *registerRig) setKept(t *testing.T, id string, on bool) {
+	t.Helper()
+	q := `UPDATE invoices SET kept_as_is_at = NULL, kept_as_is_by = NULL, kept_as_is_reason = NULL WHERE id = $1`
+	if on {
+		q = `UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = 'qa-fixture', kept_as_is_reason = 'resolved outside' WHERE id = $1`
+	}
+	if _, err := g.tx.Exec(context.Background(), `RESET ROLE`); err != nil {
+		t.Fatalf("RESET ROLE: %v", err)
+	}
+	if _, err := g.tx.Exec(context.Background(), q, id); err != nil {
+		t.Fatalf("set kept_as_is (%v): %v", on, err)
+	}
+}
+
+// stampKept and clearKept run after act: write as the superuser, then act again.
+func (g *registerRig) stampKept(t *testing.T, id string) {
+	t.Helper()
+	g.setKept(t, id, true)
+	g.act(t)
+}
+func (g *registerRig) clearKept(t *testing.T, id string) {
+	t.Helper()
+	g.setKept(t, id, false)
+	g.act(t)
+}
+
 func (g *registerRig) build(t *testing.T, from, to string, maxInvoices int) (*excelize.File, string, error) {
 	t.Helper()
 	return buildRegister(context.Background(), g.tx, registerRequest(from, to).withEntity(g.entity), registerOpts{subject: "subject-1", maxInvoices: maxInvoices})
@@ -139,9 +166,9 @@ func (g *registerRig) doc(t *testing.T, number, docType, status, issueDate, orig
 // designFixture plants the story's invoice, credit note and debit note; the net is 750.00 / 56.25 / 806.25.
 func (g *registerRig) designFixture(t *testing.T) {
 	t.Helper()
-	inv := g.doc(t, "INV-1", "commercial_invoice", "validated", "2026-09-10", "", "1000.00", "75.00", "1075.00")
-	g.doc(t, "CN-1", "credit_note", "validated", "2026-09-11", inv, "300.00", "22.50", "322.50")
-	g.doc(t, "DN-1", "debit_note", "validated", "2026-09-12", inv, "50.00", "3.75", "53.75")
+	inv := g.doc(t, "INV-1", "commercial_invoice", "accepted", "2026-09-10", "", "1000.00", "75.00", "1075.00")
+	g.doc(t, "CN-1", "credit_note", "accepted", "2026-09-11", inv, "300.00", "22.50", "322.50")
+	g.doc(t, "DN-1", "debit_note", "accepted", "2026-09-12", inv, "50.00", "3.75", "53.75")
 }
 
 // wantFooter asserts the last row is the footer: Net total, the three sums, every other cell empty.
@@ -212,13 +239,13 @@ func TestRegister_SingleDayPeriod(t *testing.T) {
 func TestRegister_OtherClientOfTheSameTenantIsExcluded(t *testing.T) {
 	g := newRegisterRig(t)
 	other := mustCreateEntity(t, g.tx, g.tenant, "Other Co", "")
-	otherID := mustCreateInvoice(t, g.tx, invoiceFixture{tenantID: g.tenant, entityID: other, invoiceNumber: "INV-E2", status: "validated", issueDate: "2026-09-10"})
-	g.doc(t, "INV-E1", "commercial_invoice", "validated", "2026-09-10", "", "5.00", "0.50", "5.50")
+	otherID := mustCreateInvoice(t, g.tx, invoiceFixture{tenantID: g.tenant, entityID: other, invoiceNumber: "INV-E2", status: "accepted", issueDate: "2026-09-10"})
+	g.doc(t, "INV-E1", "commercial_invoice", "accepted", "2026-09-10", "", "5.00", "0.50", "5.50")
 	if _, err := g.tx.Exec(context.Background(), `UPDATE invoices SET subtotal = 9000, vat = 900, total = 9900 WHERE id = $1`, otherID); err != nil {
 		t.Fatalf("set other client amounts: %v", err)
 	}
 	tenantB := mustCreateTenant(t, g.tx, "archive-register-footer-foreign-"+uuid.NewString())
-	foreignID := mustCreateInvoice(t, g.tx, invoiceFixture{tenantID: tenantB, entityID: mustCreateEntity(t, g.tx, tenantB, "Foreign Co", ""), invoiceNumber: "INV-F1", status: "validated", issueDate: "2026-09-10"})
+	foreignID := mustCreateInvoice(t, g.tx, invoiceFixture{tenantID: tenantB, entityID: mustCreateEntity(t, g.tx, tenantB, "Foreign Co", ""), invoiceNumber: "INV-F1", status: "accepted", issueDate: "2026-09-10"})
 	if _, err := g.tx.Exec(context.Background(), `UPDATE invoices SET subtotal = 7000, vat = 700, total = 7700 WHERE id = $1`, foreignID); err != nil {
 		t.Fatalf("set foreign amounts: %v", err)
 	}
@@ -468,22 +495,99 @@ func TestRegister_FooterNetsNotesBySign(t *testing.T) {
 	wantFooter(t, rows, "750.00", "56.25", "806.25")
 }
 
-func TestRegister_FooterCoversOnlyTheRowsOnTheSheet(t *testing.T) {
+func TestRegister_FooterExcludesAFiledNoteOutsideThePeriod(t *testing.T) {
 	g := newRegisterRig(t)
-	inv := g.doc(t, "INV-A", "commercial_invoice", "accepted", "2026-09-10", "", "1000.00", "100.00", "1100.00")
-	g.doc(t, "INV-R", "commercial_invoice", "rejected", "2026-09-11", "", "200.00", "20.00", "220.00")
-	g.doc(t, "CN-R", "credit_note", "rejected", "2026-09-12", inv, "300.00", "30.00", "330.00")
-	g.doc(t, "CN-DRAFT", "credit_note", "draft", "2026-09-13", inv, "70.00", "7.00", "77.00")
-	g.doc(t, "CN-OUT", "credit_note", "validated", "2026-10-02", inv, "11.00", "1.10", "12.10")
+	inv := g.doc(t, "INV-A", "commercial_invoice", "accepted", "2026-09-10", "", "1000.00", "75.00", "1075.00")
+	g.doc(t, "CN-OUT", "credit_note", "accepted", "2026-10-02", inv, "11.00", "0.83", "11.83")
 	g.act(t)
 	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
-	wantFooter(t, rows, "900.00", "90.00", "990.00")
+	wantNumbers(t, rows, "INV-A")
+	wantFooter(t, rows, "1000.00", "75.00", "1075.00")
+}
+
+// Design § "Status matrix": VAT is a distinct power of two in cents, subtotal x10, total x11.
+func TestRegister_FooterCountsOnlyFiledDocuments(t *testing.T) {
+	g := newRegisterRig(t)
+	money := func(cents int) string { return fmt.Sprintf("%d.%02d", cents/100, cents%100) }
+	var inv string
+	for i, d := range []struct {
+		docType, status string
+		kept            bool
+		vat             int
+	}{
+		{"commercial_invoice", "accepted", false, 256},
+		{"commercial_invoice", "submitted", false, 512},
+		{"commercial_invoice", "failed", true, 1024},
+		{"commercial_invoice", "failed", false, 2048},
+		{"commercial_invoice", "rejected", false, 4096},
+		{"commercial_invoice", "queued", false, 8192},
+		{"commercial_invoice", "validated", false, 16384},
+		{"commercial_invoice", "draft", false, 32768},
+		{"commercial_invoice", "draft", true, 65536},
+		{"credit_note", "accepted", false, 1},
+		{"debit_note", "submitted", false, 2},
+		{"credit_note", "failed", true, 4},
+		{"credit_note", "failed", false, 8},
+		{"credit_note", "rejected", false, 16},
+		{"debit_note", "queued", false, 32},
+		{"credit_note", "validated", false, 64},
+		{"credit_note", "draft", false, 128},
+	} {
+		orig := inv
+		if d.docType == "commercial_invoice" {
+			orig = ""
+		}
+		id := g.doc(t, fmt.Sprintf("DOC-%02d", i), d.docType, d.status, "2026-09-10", orig, money(d.vat*10), money(d.vat), money(d.vat*11))
+		if i == 0 {
+			inv = id
+		}
+		if d.kept {
+			g.setKept(t, id, true)
+		}
+	}
+	g.act(t)
+	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 20)
+	if got := len(dataRows(rows)); got != 14 {
+		t.Errorf("%d data rows, want 14: every non-draft document stays listed", got)
+	}
+	wantFooter(t, rows, "178.90", "17.89", "196.79")
+	assertRegisterAudit(t, readRegisterAudit(t, g.tx), g.entity, 14)
+}
+
+func TestRegister_FooterFollowsResolveOutside(t *testing.T) {
+	g := newRegisterRig(t)
+	g.doc(t, "INV-OK", "commercial_invoice", "accepted", "2026-09-10", "", "10.00", "1.00", "11.00")
+	failed := g.doc(t, "INV-FAILED", "commercial_invoice", "failed", "2026-09-11", "", "100.00", "10.00", "110.00")
+	g.act(t)
+	check := func(step, sub, vat, total string) {
+		t.Helper()
+		rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
+		if got := len(dataRows(rows)); got != 2 {
+			t.Errorf("%s: %d data rows, want 2", step, got)
+		}
+		wantFooter(t, rows, sub, vat, total)
+	}
+	check("before", "10.00", "1.00", "11.00")
+	g.stampKept(t, failed)
+	check("resolved outside", "110.00", "11.00", "121.00")
+	g.clearKept(t, failed)
+	check("undone", "10.00", "1.00", "11.00")
+}
+
+func TestRegister_FooterIsZeroWhenNothingIsFiled(t *testing.T) {
+	g := newRegisterRig(t)
+	g.doc(t, "INV-REJ", "commercial_invoice", "rejected", "2026-09-10", "", "100.00", "7.50", "107.50")
+	g.doc(t, "INV-VAL", "commercial_invoice", "validated", "2026-09-11", "", "200.00", "15.00", "215.00")
+	g.act(t)
+	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
+	wantNumbers(t, rows, "INV-REJ", "INV-VAL")
+	wantFooter(t, rows, "0.00", "0.00", "0.00")
 }
 
 func TestRegister_FooterNullAmountAddsZero(t *testing.T) {
 	g := newRegisterRig(t)
-	inv := g.doc(t, "INV-1", "commercial_invoice", "validated", "2026-09-10", "", "100.00", "7.50", "107.50")
-	g.doc(t, "CN-NULL", "credit_note", "validated", "2026-09-11", inv, "", "", "")
+	inv := g.doc(t, "INV-1", "commercial_invoice", "accepted", "2026-09-10", "", "100.00", "7.50", "107.50")
+	g.doc(t, "CN-NULL", "credit_note", "accepted", "2026-09-11", inv, "", "", "")
 	g.act(t)
 	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
 	wantFooter(t, rows, "100.00", "7.50", "107.50")
@@ -499,8 +603,8 @@ func TestRegister_FooterNullAmountAddsZero(t *testing.T) {
 
 func TestRegister_FooterGoesNegative(t *testing.T) {
 	g := newRegisterRig(t)
-	inv := g.doc(t, "INV-1", "commercial_invoice", "validated", "2026-09-10", "", "100.00", "7.50", "107.50")
-	g.doc(t, "CN-1", "credit_note", "validated", "2026-09-11", inv, "300.00", "22.50", "322.50")
+	inv := g.doc(t, "INV-1", "commercial_invoice", "accepted", "2026-09-10", "", "100.00", "7.50", "107.50")
+	g.doc(t, "CN-1", "credit_note", "accepted", "2026-09-11", inv, "300.00", "22.50", "322.50")
 	g.act(t)
 	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
 	wantFooter(t, rows, "-200.00", "-15.00", "-215.00")
@@ -509,9 +613,9 @@ func TestRegister_FooterGoesNegative(t *testing.T) {
 // 0.1 + 0.2 - 0.05 is 0.25000000000000006 in float64.
 func TestRegister_FooterKeepsFullScale(t *testing.T) {
 	g := newRegisterRig(t)
-	g.doc(t, "INV-1", "commercial_invoice", "validated", "2026-09-10", "", "0.10", "0.01", "0.11")
-	inv2 := g.doc(t, "INV-2", "commercial_invoice", "validated", "2026-09-11", "", "0.20", "0.02", "0.22")
-	g.doc(t, "CN-1", "credit_note", "validated", "2026-09-12", inv2, "0.05", "0.01", "0.06")
+	g.doc(t, "INV-1", "commercial_invoice", "accepted", "2026-09-10", "", "0.10", "0.01", "0.11")
+	inv2 := g.doc(t, "INV-2", "commercial_invoice", "accepted", "2026-09-11", "", "0.20", "0.02", "0.22")
+	g.doc(t, "CN-1", "credit_note", "accepted", "2026-09-12", inv2, "0.05", "0.01", "0.06")
 	g.act(t)
 	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
 	wantFooter(t, rows, "0.25", "0.02", "0.27")
@@ -522,9 +626,9 @@ func TestRegister_FooterKeepsEveryCentOfALargeSum(t *testing.T) {
 	g := newRegisterRig(t)
 	var inv string
 	for i := 0; i < 120; i++ {
-		inv = g.doc(t, fmt.Sprintf("INV-%03d", i), "commercial_invoice", "validated", "2026-09-10", "", "999999999999.99", "999999999999.99", "999999999999.99")
+		inv = g.doc(t, fmt.Sprintf("INV-%03d", i), "commercial_invoice", "accepted", "2026-09-10", "", "999999999999.99", "999999999999.99", "999999999999.99")
 	}
-	g.doc(t, "CN-1", "credit_note", "validated", "2026-09-11", inv, "0.01", "0.01", "0.01")
+	g.doc(t, "CN-1", "credit_note", "accepted", "2026-09-11", inv, "0.01", "0.01", "0.01")
 	g.act(t)
 	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 200)
 	wantFooter(t, rows, "119999999999998.79", "119999999999998.79", "119999999999998.79")
@@ -557,8 +661,8 @@ func TestRegister_FooterOfASingleKindOfPeriod(t *testing.T) {
 			if tc.docType != "commercial_invoice" {
 				orig = g.doc(t, "INV-0", "commercial_invoice", "draft", "2026-09-09", "", "1.00", "0.10", "1.10")
 			}
-			g.doc(t, "N-1", tc.docType, "validated", "2026-09-10", orig, tc.sub, tc.vat, tc.total)
-			g.doc(t, "N-2", tc.docType, "rejected", "2026-09-11", orig, tc.sub, tc.vat, tc.total)
+			g.doc(t, "N-1", tc.docType, "accepted", "2026-09-10", orig, tc.sub, tc.vat, tc.total)
+			g.doc(t, "N-2", tc.docType, "submitted", "2026-09-11", orig, tc.sub, tc.vat, tc.total)
 			g.act(t)
 			rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
 			wantNumbers(t, rows, "N-1", "N-2")
@@ -567,22 +671,34 @@ func TestRegister_FooterOfASingleKindOfPeriod(t *testing.T) {
 	}
 }
 
-// Re-adding the sheet's own column with the type's sign gives the footer.
-func TestRegister_FooterEqualsTheSignedSumOfTheSheetColumn(t *testing.T) {
+// Re-adding the filed rows' own column with the type's sign gives the footer.
+func TestRegister_FooterEqualsTheSignedSumOfTheFiledRows(t *testing.T) {
 	g := newRegisterRig(t)
 	g.designFixture(t)
 	inv := g.doc(t, "INV-2", "commercial_invoice", "rejected", "2026-09-13", "", "123.45", "9.26", "132.71")
 	g.doc(t, "CN-2", "credit_note", "accepted", "2026-09-14", inv, "0.07", "0.01", "0.08")
-	g.doc(t, "CN-NULL", "credit_note", "validated", "2026-09-15", inv, "", "", "")
+	g.doc(t, "CN-V", "credit_note", "validated", "2026-09-15", inv, "0.40", "0.03", "0.43")
 	g.act(t)
 	rows := mustBuild(t, g, "2026-09-01", "2026-09-30", 10)
 	data := dataRows(rows)
 	if len(data) != 6 {
 		t.Fatalf("%d data rows, want 6", len(data))
 	}
+	filed := 0
+	for _, r := range data {
+		if s := r[headerIndex(t, "status")]; s == "accepted" || s == "submitted" {
+			filed++
+		}
+	}
+	if filed != 4 {
+		t.Fatalf("%d filed data rows, want 4 of 6", filed)
+	}
 	for _, col := range []string{"subtotal", "vat", "total"} {
 		sum := new(big.Rat)
 		for _, r := range data {
+			if s := r[headerIndex(t, "status")]; s != "accepted" && s != "submitted" {
+				continue
+			}
 			v := r[headerIndex(t, col)]
 			if v == "" {
 				continue

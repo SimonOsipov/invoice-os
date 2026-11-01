@@ -355,14 +355,62 @@ func TestImportDocumentNote_NegativeReadingsStorePositive(t *testing.T) {
 		}
 	})
 
-	for name, key := range map[string]string{"a non-decimal header total": "total", "a non-decimal line price": "line_items[1].unit_price"} {
+	// Each money field alone: a mutant that skips one field is red on that field only.
+	for _, key := range []string{"subtotal", "vat", "total", "line_items[1].quantity", "line_items[1].unit_price", "line_items[1].line_total", "line_items[1].line_tax",
+		"line_items[2].quantity", "line_items[2].unit_price", "line_items[2].line_total", "line_items[2].line_tax"} {
+		t.Run("only "+key+" negative", func(t *testing.T) {
+			v := dnReading()
+			if v[key] == nil {
+				t.Fatalf("seed: reading has no %s", key)
+			}
+			v[key] = sxPtr("-" + *v[key])
+			f := dnNewFix(t, "DN neg one", "credit note", v)
+			_, noteID := f.importOK(t, "credit_note", "CN-N2")
+			for col, want := range map[string]string{"subtotal": "500.00", "vat": "37.50", "total": "537.50"} {
+				dnWantMoney(t, col, dnCol(t, f.super, noteID, col), want)
+			}
+			lines := dnLines(t, f.super, noteID)
+			if len(lines) != 2 {
+				t.Fatalf("stored lines = %+v, want two", lines)
+			}
+			for i, want := range []dnLine{{"", "2", "100.00", "200.00", "15.00"}, {"", "3", "100.00", "300.00", "22.50"}} {
+				dnWantMoney(t, fmt.Sprintf("line %d quantity", i+1), lines[i].Qty, want.Qty)
+				dnWantMoney(t, fmt.Sprintf("line %d unit_price", i+1), lines[i].Price, want.Price)
+				dnWantMoney(t, fmt.Sprintf("line %d line_total", i+1), lines[i].Total, want.Total)
+				dnWantMoney(t, fmt.Sprintf("line %d line_tax", i+1), lines[i].Tax, want.Tax)
+			}
+		})
+	}
+
+	t.Run("scale is kept on a stored negative", func(t *testing.T) {
+		v := dnReading()
+		v["total"], v["line_items[1].unit_price"] = sxPtr("-537.50"), sxPtr("-100.10")
+		f := dnNewFix(t, "DN scale", "credit note", v)
+		_, noteID := f.importOK(t, "credit_note", "CN-SC")
+		dnWantCol(t, f.super, noteID, "total", "537.50")
+		if lines := dnLines(t, f.super, noteID); len(lines) != 2 || lines[0].Price != "100.10" {
+			t.Errorf("lines = %+v, want line 1 unit_price 100.10", lines)
+		}
+	})
+
+	// A value a person would read as an amount still refuses: the note path takes plain decimals only.
+	for name, tc := range map[string]struct{ key, val string }{
+		"a non-decimal header total":      {"total", "abc"},
+		"a non-decimal line price":        {"line_items[1].unit_price", "abc"},
+		"a thousands separator on total":  {"total", "1,500.00"},
+		"a negative thousands separator":  {"subtotal", "-1,500.00"},
+		"a currency mark on a line total": {"line_items[2].line_total", "\u20a6300.00"},
+		"a currency code on vat":          {"vat", "NGN 37.50"},
+		"a non-decimal line tax":          {"line_items[2].line_tax", "n/a"},
+		"a non-decimal quantity":          {"line_items[1].quantity", "two"},
+	} {
 		t.Run(name, func(t *testing.T) {
 			v := dnReading()
-			v[key] = sxPtr("abc")
+			v[tc.key] = sxPtr(tc.val)
 			f := dnNewFix(t, "DN abc", "credit note", v)
 			_, err := f.run(f.in("credit_note", "CN-ABC"))
-			if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "abc") {
-				t.Errorf("err = %v, want ErrValidation naming abc", err)
+			if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), tc.val) {
+				t.Errorf("err = %v, want ErrValidation naming %s", err, tc.val)
 			}
 			if n := len(dnBatches(t, f.super, f.doc)); n != 0 {
 				t.Errorf("batches = %d, want 0", n)
@@ -564,6 +612,49 @@ func TestImportDocumentNote_AnUnreadableIssueDateNamesTheNotePath(t *testing.T) 
 	}
 	if n := len(dnBatches(t, f.super, f.doc)); n != 0 {
 		t.Errorf("batches = %d, want 0", n)
+	}
+	if n := countInvoicesCitingDocument(t, f.super, f.doc); n != 0 {
+		t.Errorf("invoices citing the document = %d, want 0", n)
+	}
+}
+
+func TestImportDocumentNote_ABlankReadCurrencyTakesTheOriginals(t *testing.T) {
+	for name, cur := range map[string]*string{"spaces": sxPtr("   "), "a tab": sxPtr("\t")} {
+		t.Run(name, func(t *testing.T) {
+			v := dnReading()
+			v["currency"] = cur
+			f := dnNewFix(t, "DN blank currency", "credit note", v)
+			f.setOrig(t, "currency", "EUR")
+			_, noteID := f.importOK(t, "credit_note", "CN-BC")
+			dnWantCol(t, f.super, noteID, "currency", "EUR")
+		})
+	}
+}
+
+func TestImportDocumentNote_AnUnreadableIssueDateSentenceIsExact(t *testing.T) {
+	v := dnReading()
+	v["issue_date"] = sxPtr(" 19 March ")
+	f := dnNewFix(t, "DN issue date exact", "debit note", v)
+	_, err := f.run(f.in("debit_note", "DN-DATE"))
+	want := `The issue date on this document reads "19 March", which is not a date this importer can read. It accepts dates written as YYYY-MM-DD, such as 2026-03-01. Issue this note from its original invoice to carry on.`
+	if !errors.Is(err, ErrValidation) || !strings.HasSuffix(err.Error(), ": "+want) {
+		t.Errorf("err = %q, want ErrValidation ending with %q", err, want)
+	}
+}
+
+// Pinned surprise: an amount beyond the column's range is not refused up front; the batch ends failed.
+func TestImportDocumentNote_AnAmountBeyondTheColumnFailsItsBatch(t *testing.T) {
+	v := dnReading()
+	v["total"] = sxPtr("-99999999999999999999999999.99")
+	f := dnNewFix(t, "DN overflow", "credit note", v)
+
+	_, err := f.run(f.in("credit_note", "CN-BIG"))
+
+	if err == nil || errors.Is(err, ErrValidation) {
+		t.Errorf("err = %v, want the database's overflow error, not ErrValidation", err)
+	}
+	if b := dnBatches(t, f.super, f.doc); len(b) != 1 || b[0].Status != "failed" {
+		t.Errorf("batches = %+v, want one, failed", b)
 	}
 	if n := countInvoicesCitingDocument(t, f.super, f.doc); n != 0 {
 		t.Errorf("invoices citing the document = %d, want 0", n)

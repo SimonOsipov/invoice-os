@@ -1042,7 +1042,7 @@ test("(fixture check) AP: a note's type badge stays inside the approvals number 
   await expectVisibleRows(rows, 'the approvals queue is served from the firm register page (D-14), which must hold at least one invoice on the PR environment')
   expect(await rows.count(), 'the fixture pads the queue to at least 3 rows').toBeGreaterThanOrEqual(3)
   const card = page.getByTestId('approvals-list')
-  const head = page.locator('.pf-list-head')
+  const head = card.locator('.pf-list-head')
   const credit = rows.filter({ hasText: 'CN-INV-2026-0001-1' })
   const debit = rows.filter({ hasText: 'DN-INV-2026-0001-2' })
   const parts = (row: Locator) => ({
@@ -1064,6 +1064,7 @@ test("(fixture check) AP: a note's type badge stays inside the approvals number 
   }
   const childBoxes = async (parent: Locator, what: string): Promise<Rect[]> => {
     const kids = await parent.locator(':scope > *').all()
+    if (kids.length !== 7) throw new Error(`${what} has ${kids.length} children, want 7 (APPROVALS_GRID_COLUMNS tracks)`)
     return Promise.all(kids.map((k, i) => box(k, `${what} child ${i}`)))
   }
 

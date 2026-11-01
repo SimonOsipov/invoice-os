@@ -700,9 +700,6 @@ func TestRegister_FooterEqualsTheSignedSumOfTheFiledRows(t *testing.T) {
 				continue
 			}
 			v := r[headerIndex(t, col)]
-			if v == "" {
-				continue
-			}
 			x, ok := new(big.Rat).SetString(v)
 			if !ok || x.Sign() < 0 {
 				t.Fatalf("data row %v: %s cell %q, want a stored positive amount", r, col, v)

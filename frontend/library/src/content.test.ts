@@ -101,6 +101,7 @@ describe('content', () => {
     for (const f of shipped) expect(f.path, f.id).toBe(APP_PATHS[f.view])
     expect(byId('overview').path).toBe('/')
     expect(byId('import-files').path).toBe('/create')
+    expect(byId('credit-notes').path).toBe('/invoices')
     expect(byId('workflow-builder').path).toBe('/workflows')
     expect(byId('reports').path).toBe('/reports')
     expect(byId('contacts').path).toBe('/customers')
@@ -119,11 +120,9 @@ describe('content', () => {
 
   it('content_creditNotesWordsStopAtIssueCheckApproveRegister', () => {
     const f = byId('credit-notes')
-    const text = [f.title, f.short, f.desc, ...f.benefits, ...f.sc.steps.map((s) => s.cap)].join(' ')
-    expect(text).toMatch(/register/i)
-    expect(text).toMatch(/approval/i)
-    expect(text).toMatch(/checks/i)
-    expect(text).not.toMatch(/\b(send|sent|submit|submission|transmit|clear|clearance|NRS)\b/i)
+    const text = [f.title, f.short, f.desc, ...f.benefits, JSON.stringify(f.sc)].join(' ')
+    for (const w of [/issue/i, /register/i, /approval/i, /checks/i]) expect(f.desc).toMatch(w)
+    expect(text).not.toMatch(/\b(send\w*|sent|submi\w*|transmi\w*|clear\w*|NRS)\b/i)
   })
 
   it('content_usesExactlyTheTwelveAppViews', () => {

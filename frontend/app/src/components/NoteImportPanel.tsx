@@ -24,7 +24,7 @@ const NOTE_PANEL: CSSProperties = {
   display: 'flex',
   flexWrap: 'wrap',
   alignItems: 'center',
-  gap: 10,
+  gap: 9,
   minWidth: 0,
   padding: '9px 16px',
   background: 'var(--bg-3)',
@@ -96,7 +96,7 @@ export function NoteImportPanel({
     try {
       const report: ImportReport = await importDocument(ctx.authedFetch, base, body)
       const first = report.errors[0]
-      if (report.ready_invoices > 0 || first === undefined || first.rule_key !== undefined) {
+      if (report.ready_invoices > 0 || first === undefined) {
         onFiled()
       } else {
         setError(first.message)

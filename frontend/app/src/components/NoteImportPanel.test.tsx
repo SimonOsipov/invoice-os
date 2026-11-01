@@ -167,6 +167,24 @@ describe('NoteImportPanel', () => {
     expect(onFiled).not.toHaveBeenCalled()
   })
 
+  it('this is an invoice on a taken number stays on the panel and says why', async () => {
+    const message = 'An invoice with this number already exists for this entity.'
+    const { onFiled } = setup({
+      reply: async () => ({
+        id: 'b',
+        ready_invoices: 0,
+        quarantined_invoices: 1,
+        errors: [{ field: 'invoice_number', rule_key: 'no-duplicate-invoice-number', severity: 'error', invoice_id: 'other', message }],
+      }),
+    })
+
+    await click(screen.getByTestId('extraction-note-as-invoice'))
+
+    expect(onFiled, 'a quarantine read as filed').not.toHaveBeenCalled()
+    expect(screen.getByTestId('extraction-note-error').textContent).toBe(message)
+    expect(screen.getByTestId('extraction-note-enter-by-hand')).toBeTruthy()
+  })
+
   it('a double click posts once', async () => {
     let release!: () => void
     const gate = new Promise<void>((r) => (release = r))

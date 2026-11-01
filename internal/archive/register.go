@@ -28,12 +28,13 @@ const registerScope = "\n  FROM invoices WHERE entity_id = $1 AND issue_date >= 
 
 const selectRegisterSQL = "SELECT " + invoicesColumns + registerScope + " ORDER BY issue_date, invoice_number, id"
 
-// Net by sign over the sheet's own rows; numeric sums stay exact. Debit notes add.
+// Net by sign over the filed rows only, so the footer can differ from the sheet. Debit notes add.
 // ceiling: one currency assumed, split by currency when a register holds two
 const selectRegisterFooterSQL = `SELECT
   coalesce(sum(CASE document_type WHEN 'credit_note' THEN -subtotal ELSE subtotal END), 0)::numeric(20,2)::text,
   coalesce(sum(CASE document_type WHEN 'credit_note' THEN -vat ELSE vat END), 0)::numeric(20,2)::text,
-  coalesce(sum(CASE document_type WHEN 'credit_note' THEN -total ELSE total END), 0)::numeric(20,2)::text` + registerScope
+  coalesce(sum(CASE document_type WHEN 'credit_note' THEN -total ELSE total END), 0)::numeric(20,2)::text` + registerScope +
+	` AND (status IN ('submitted', 'accepted') OR (status = 'failed' AND kept_as_is_at IS NOT NULL))`
 
 const countRegisterSQL = "SELECT count(*)" + registerScope
 

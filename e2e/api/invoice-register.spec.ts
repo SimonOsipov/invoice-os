@@ -4,9 +4,11 @@
 // the spec, so exact row counts are deterministic.
 import { test, expect } from '@playwright/test'
 import { unzipSync } from 'fflate'
-import { apiBase, createEntity, createInvoice, getAuditLog, login, validateInvoice, PERSONAS } from './client'
+import {
+  apiBase, approveUntilClosed, createEntity, createInvoice, firmApproverTokens, getAuditLog, login, rawFetch, validateInvoice, PERSONAS,
+} from './client'
 import { freshTin } from './fixtures'
-import { assertErrorEnvelope, type RawResult } from './contract-helpers'
+import { assertErrorEnvelope, ensureFirmPolicyActive, type RawResult } from './contract-helpers'
 import { sheetRows } from '../xlsxRows'
 
 // internal/archive/invoices.go invoicesCSVHeader.
@@ -118,8 +120,8 @@ test.describe('invoice register (API E2E, over the deployed gateway)', () => {
     expect(footer[col('invoice_number')], 'footer label').toBe('Net total')
     expect(
       ['subtotal', 'vat', 'total'].map((c) => footer[col(c)]),
-      'footer nets the two invoices',
-    ).toEqual(['2000.00', '150.00', '2150.00'])
+      'no invoice in the period is filed',
+    ).toEqual(['0.00', '0.00', '0.00'])
     expect(footer.filter((v, i) => v !== '' && ![1, col('subtotal'), col('vat'), col('total')].includes(i)), 'every other footer cell is empty').toEqual([])
     expect(rows.map((r) => r[1]).sort(), 'the register holds exactly the two in-period, non-draft invoices').toEqual(
       [inFirst, inLast].sort(),
@@ -127,6 +129,35 @@ test.describe('invoice register (API E2E, over the deployed gateway)', () => {
     for (const r of rows) expect(r[2], `${r[1]} status`).not.toBe('draft')
     const numbers = rows.map((r) => r[1])
     for (const out of [outBefore, outAfter, draft]) expect(numbers, `${out} is outside the register`).not.toContain(out)
+  })
+
+  test('a failed invoice enters Net total when resolved outside and leaves when undone', async () => {
+    await ensureFirmPolicyActive(token)
+    const tin = freshTin()
+    const entity = await createEntity(token, { name: `Zz FIRMS-05 resolve ${tin}`, tin })
+    const created = await createInvoice(token, { entity_id: entity.id, ...invoiceFields(`INV-FIRMS-05-RES-${tin}`, '2025-03-15') })
+    await validateInvoice(token, created.id)
+    await approveUntilClosed(created.id, await firmApproverTokens())
+    const auth = { Authorization: `Bearer ${token}` }
+    for (const target of ['queued', 'failed']) {
+      const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}/transitions`, { method: 'POST', headers: auth, body: { target } })
+      expect(res.status, `setup: transition to ${target} should return 200`).toBe(200)
+    }
+    const col = (name: string) => HEADER.indexOf(name)
+    const netTotal = async () => {
+      const res = await registerFetch(token, { entity_id: entity.id, from: FROM, to: TO })
+      const [, ...sheet] = sheetRows(new Uint8Array(await res.arrayBuffer()))
+      return { rows: sheet.length - 1, footer: ['subtotal', 'vat', 'total'].map((c) => sheet[sheet.length - 1][col(c)]) }
+    }
+    const resolved = `/api/invoice/v1/invoices/${created.id}/resolved-outside`
+
+    expect(await netTotal(), 'an unresolved failed invoice is listed but not filed').toEqual({ rows: 1, footer: ['0.00', '0.00', '0.00'] })
+    const post = await rawFetch(resolved, { method: 'POST', headers: auth, body: { reason: `resolved ${tin}` } })
+    expect(post.status, 'resolving should return 200').toBe(200)
+    expect(await netTotal(), 'a resolved failed invoice is filed').toEqual({ rows: 1, footer: ['1000.00', '75.00', '1075.00'] })
+    const del = await rawFetch(resolved, { method: 'DELETE', headers: auth })
+    expect(del.status, 'un-resolving should return 200').toBe(200)
+    expect(await netTotal(), 'undoing removes it').toEqual({ rows: 1, footer: ['0.00', '0.00', '0.00'] })
   })
 
   test('the download is audited with the client, the period and the row count', async () => {

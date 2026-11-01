@@ -4002,7 +4002,7 @@ test('detail surface: a user issues a credit note on chosen lines', async ({ pag
 })
 
 test('notes: a credit note nets in the list, the Reports tiles and the register footer', async ({ page }) => {
-  test.setTimeout(180_000)
+  test.setTimeout(240_000)
   const errors = collectErrors(page)
   // Kobo-level fixture: 459.20 x 7.5% = 34.440, so vat-standard-rate passes.
   const { invoiceNumber } = await openAcceptedThreeLineInvoice(page, {
@@ -4062,10 +4062,14 @@ test('notes: a credit note nets in the list, the Reports tiles and the register 
   await expect(reportsKpiValue(page, 'WHT withheld · 5%')).toHaveText('~₦14')
   await expect(reportsKpiValue(page, 'Invoices in period')).toHaveText('2')
 
-  await page.getByTestId('register-period-from').fill('2026-01-01')
-  await page.getByTestId('register-period-to').fill('2026-01-31')
-  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /^Invoice register/ }).click()])
-  const [header, ...sheet] = sheetRows(new Uint8Array(readFileSync(await download.path())))
+  // The period inputs reset on the return to Reports, so each call fills them again.
+  const downloadRegister = async () => {
+    await page.getByTestId('register-period-from').fill('2026-01-01')
+    await page.getByTestId('register-period-to').fill('2026-01-31')
+    const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /^Invoice register/ }).click()])
+    return sheetRows(new Uint8Array(readFileSync(await download.path())))
+  }
+  const [header, ...sheet] = await downloadRegister()
   const col = (name: string) => {
     expect(header, 'the register header names the column').toContain(name)
     return header.indexOf(name)
@@ -4085,7 +4089,21 @@ test('notes: a credit note nets in the list, the Reports tiles and the register 
   expect(originalData![col('status')]).toBe('accepted')
   expect(originalData![col('irn')], 'the original carries its IRN').not.toBe('')
   expect(footer[col('invoice_number')]).toBe('Net total')
-  expect(['subtotal', 'vat', 'total'].map((c) => footer[col(c)])).toEqual(['277.32', '20.80', '298.12'])
+  // Only the accepted original is filed; the validated note is listed but not netted.
+  expect(['subtotal', 'vat', 'total'].map((c) => footer[col(c)])).toEqual(['459.20', '34.44', '493.64'])
+
+  // File the note: approve it, then submit it from the list.
+  const token = await login(PERSONAS.A)
+  const noteId = (await listInvoices(token, { q: noteNumber, limit: 1 })).invoices[0].id
+  await approveUntilClosed(noteId, await firmApproverTokens(SHARD.a.id))
+  await goToInvoices(page)
+  await invoiceRowByNumber(page, noteNumber).getByTestId('invoice-select').check()
+  await submitSelected(page)
+  await expect(invoiceRowByNumber(page, noteNumber).getByTestId('invoice-status-badge')).toContainText('ACCEPTED')
+  await goToReports(page)
+  const [, ...filedSheet] = await downloadRegister()
+  const filedFooter = filedSheet[filedSheet.length - 1]
+  expect(['subtotal', 'vat', 'total'].map((c) => filedFooter[col(c)])).toEqual(['277.32', '20.80', '298.12'])
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 

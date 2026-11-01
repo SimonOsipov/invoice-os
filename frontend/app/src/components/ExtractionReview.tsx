@@ -34,6 +34,8 @@ import { NoteImportPanel, SAVE_DISABLED } from './NoteImportPanel'
 const STILL_READING = 'This document is still being read.'
 const SAVE = 'Save what you settled'
 const SAVE_HELD = 'Import this document first. Corrections are saved onto its invoice or note.'
+const SAVE_CHECKING = 'Checking whether this document is imported.'
+const SAVE_CHECK_FAILED = 'We could not check whether this document is imported. Try again above.'
 const OPEN_INVOICE = 'Go to the invoice →'
 
 // River retries a `failed` job, so it is not terminal and takes the still-reading sentence.
@@ -159,6 +161,7 @@ export function ExtractionReview({
   const filedInvoiceId = originals.data?.filed_invoice_id ?? null
   // Held until a read says a document filed: an unread, failed or reloading read is still "not filed".
   const held = noteType !== null && onOpenInvoice === null && filedInvoiceId === null
+  const heldTitle = originals.data !== null ? SAVE_HELD : originals.status === 'error' ? SAVE_CHECK_FAILED : SAVE_CHECKING
   const openFiled = onOpenInvoice ?? (filedInvoiceId === null ? null : () => ctx.openImportedInvoice(filedInvoiceId))
 
   let content: ReactNode
@@ -393,7 +396,7 @@ export function ExtractionReview({
             data-testid="extraction-save"
             className="v2-btn v2-btn-primary pf-btn"
             disabled={writing || nothingToSave || held}
-            title={held ? SAVE_HELD : undefined}
+            title={held ? heldTitle : undefined}
             onClick={save}
             style={writing || nothingToSave || held ? SAVE_DISABLED : undefined}
           >

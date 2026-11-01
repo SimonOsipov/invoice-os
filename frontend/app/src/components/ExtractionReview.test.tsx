@@ -3254,6 +3254,8 @@ describe('the note panel', () => {
       ...o,
     })
   const HELD_TITLE = 'Import this document first. Corrections are saved onto its invoice or note.'
+  const CHECKING_TITLE = 'Checking whether this document is imported.'
+  const CHECK_FAILED_TITLE = 'We could not check whether this document is imported. Try again above.'
   const panel = () => screen.queryByTestId('extraction-note-panel')
   const originalsCalls = (w: Wire) => w.calls().filter((c) => c.url.includes('/note-originals'))
 
@@ -3344,6 +3346,8 @@ describe('the note panel', () => {
     expect(frames(), 'the canvas left with the failed read').toHaveLength(3)
     expect(fieldRows(), 'the fields left with the failed read').toHaveLength(2)
     expect(saveButton()!.disabled).toBe(true)
+    expect(saveButton()!.title).toBe(CHECK_FAILED_TITLE)
+    expect(saveButton()!.title).not.toBe(HELD_TITLE)
 
     fail = false
     await act(async () => {
@@ -3352,6 +3356,48 @@ describe('the note panel', () => {
     await flush()
     expect(panel(), 'the retry did not bring the panel').not.toBeNull()
     expect(frames()).toHaveLength(3)
+  })
+
+  it('save says it is checking while the read is loading', async () => {
+    const w = noteWire(NOTE_DETAIL(), () => new Promise(() => {}))
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    expect(saveButton()!.disabled).toBe(true)
+    expect(saveButton()!.title).toBe(CHECKING_TITLE)
+  })
+
+  it('a successful read with no filed document shows the import title', async () => {
+    const w = noteWire(NOTE_DETAIL(), async () => ({ ...NOTE_ORIGINALS, filed_invoice_id: null }))
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    expect(saveButton()!.disabled).toBe(true)
+    expect(saveButton()!.title).toBe(HELD_TITLE)
+  })
+
+  it('a filed note whose read fails then succeeds ends armed with the exit', async () => {
+    let fail = true
+    const w = noteWire(NOTE_DETAIL(), async () => {
+      if (fail) throw new ApiError('http', 'Boom', 500)
+      return { ...NOTE_ORIGINALS, filed_invoice_id: 'note-7' }
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+    expect(saveButton()!.disabled).toBe(true)
+    expect(saveButton()!.title).toBe(CHECK_FAILED_TITLE)
+    expect(exitButton()).toBeNull()
+
+    fail = false
+    await act(async () => {
+      fireEvent.click(screen.getByText(RETRY_LABEL))
+    })
+    await flush()
+    expect(exitButton(), 'no exit after the retry').not.toBeNull()
+    fireEvent.change(inputOf('vat') as HTMLElement, { target: { value: '9.00' } })
+    await flush()
+    expect(saveButton()!.disabled).toBe(false)
+    expect(saveButton()!.title).toBe('')
   })
 
   it('a filed note verdict asks nothing', async () => {

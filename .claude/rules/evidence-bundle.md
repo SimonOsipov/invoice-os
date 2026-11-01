@@ -41,3 +41,4 @@ paths:
 - After the first write to the client, audit a failed export as `workspace.export_failed` in its own short transaction. A failure before it answers a plain error and writes no row. Keep the original error when that write fails.
 - Stream documents and `audit_log.csv`. Buffer a company CSV as the bundle does.
 - Net the register footer by `document_type`. Keep stored amounts in every data row and every CSV.
+- Count only filed documents in the register footer: `submitted`, `accepted`, or `failed` with `kept_as_is_at` set. Filter no data row.

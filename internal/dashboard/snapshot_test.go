@@ -125,8 +125,8 @@ func TestSnapshot_WritesTheNetVATIncludingANegative(t *testing.T) {
 	entA := seedEntity(t, super, tenant, "Snap A")
 	entB := seedEntity(t, super, tenant, "Snap B")
 	seedDesignFixture(t, super, tenant, entA, "SNV-A")
-	invB := seedInvoiceWithVAT(t, super, tenant, entB, "SNV-B-INV", "10.00")
-	seedNote(t, super, tenant, entB, "SNV-B-CN", "credit_note", invB, "draft", "30.00")
+	invB := seedFiledInvoiceWithVAT(t, super, tenant, entB, "SNV-B-INV", "10.00")
+	seedNote(t, super, tenant, entB, "SNV-B-CN", "credit_note", invB, "accepted", "30.00")
 
 	snapRun(t, snapAt(time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC), tenant), app)
 
@@ -142,18 +142,33 @@ func TestSnapshot_WritesTheNetVATIncludingANegative(t *testing.T) {
 	}
 }
 
+func TestSnapshot_WritesOnlyFiledVAT(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "snapshot filed vat")
+	ent := seedEntity(t, super, tenant, "Snap A")
+	seedFiledInvoiceWithVAT(t, super, tenant, ent, "SOF-ACC", "1.00")
+	rej := seedInvoiceWithVAT(t, super, tenant, ent, "SOF-REJ", "16.00")
+	setStatus(t, super, rej, "rejected")
+
+	snapRun(t, snapAt(time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC), tenant), app)
+
+	if g := snapRows(t, super, tenant)[ent]["2026-10-20"]; g.VATKobo != 100 || g.Total != 2 {
+		t.Errorf("snapshot = %+v, want vat_kobo 100 and total 2", g)
+	}
+}
+
 func TestSnapshot_EarlierDayKeepsItsValueWhenANoteArrives(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenant := seedTenant(t, super, "snapshot earlier day")
 	ent := seedEntity(t, super, tenant, "Snap A")
-	inv := seedInvoiceWithVAT(t, super, tenant, ent, "SED-INV", "75.00")
+	inv := seedFiledInvoiceWithVAT(t, super, tenant, ent, "SED-INV", "75.00")
 
 	snapRun(t, snapAt(time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC), tenant), app)
 	if g := snapRows(t, super, tenant)[ent]["2026-10-20"]; g.VATKobo != 7500 {
 		t.Fatalf("day 1 vat_kobo = %d, want 7500", g.VATKobo)
 	}
 
-	seedNote(t, super, tenant, ent, "SED-CN", "credit_note", inv, "draft", "22.50")
+	seedNote(t, super, tenant, ent, "SED-CN", "credit_note", inv, "accepted", "22.50")
 	snapRun(t, snapAt(time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC), tenant), app)
 
 	days := snapRows(t, super, tenant)[ent]
@@ -169,14 +184,14 @@ func TestSnapshot_SameDayRerunReplacesTheValueWithTheNet(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenant := seedTenant(t, super, "snapshot same day")
 	ent := seedEntity(t, super, tenant, "Snap A")
-	inv := seedInvoiceWithVAT(t, super, tenant, ent, "SSD-INV", "10.00")
+	inv := seedFiledInvoiceWithVAT(t, super, tenant, ent, "SSD-INV", "10.00")
 
 	snapRun(t, snapAt(time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC), tenant), app)
 	if g := snapRows(t, super, tenant)[ent]["2026-10-20"]; g.VATKobo != 1000 {
 		t.Fatalf("first run vat_kobo = %d, want 1000", g.VATKobo)
 	}
 
-	seedNote(t, super, tenant, ent, "SSD-CN", "credit_note", inv, "draft", "30.00")
+	seedNote(t, super, tenant, ent, "SSD-CN", "credit_note", inv, "accepted", "30.00")
 	snapRun(t, snapAt(time.Date(2026, 10, 20, 15, 0, 0, 0, time.UTC), tenant), app)
 
 	got := snapRows(t, super, tenant)[ent]

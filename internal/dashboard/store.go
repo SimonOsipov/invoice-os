@@ -206,7 +206,9 @@ func queryClients(ctx context.Context, tx pgx.Tx) ([]Client, error) {
 		       count(*) FILTER (WHERE NOT i.is_never_validated AND NOT i.fails_field) AS bar_field_num,
 		       count(*) FILTER (WHERE NOT i.is_never_validated AND NOT i.fails_tax)   AS bar_tax_num,
 		       count(*) FILTER (WHERE NOT i.is_never_validated AND NOT i.fails_ident) AS bar_ident_num,
-		       coalesce(sum(round(i.vat * 100) * CASE i.document_type WHEN 'credit_note' THEN -1 ELSE 1 END), 0)::bigint AS vat_kobo
+		       -- vat_kobo counts filed documents only; every count above keeps all rows
+		       coalesce(sum(round(i.vat * 100) * CASE i.document_type WHEN 'credit_note' THEN -1 ELSE 1 END)
+		                FILTER (WHERE i.status IN ('submitted', 'accepted') OR (i.status = 'failed' AND i.kept_as_is_at IS NOT NULL)), 0)::bigint AS vat_kobo
 		FROM flagged i
 		GROUP BY i.entity_id, i.entity_name
 		ORDER BY needs_attention DESC, i.entity_name ASC, i.entity_id ASC`,

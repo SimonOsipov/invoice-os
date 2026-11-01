@@ -263,6 +263,8 @@ const TOPOLOGY_MANIFEST: ManifestEntry[] = [
   [INVOICE_SURFACES, 'test:DV-03 accepted invoice detail and the XML modal', 'click:batch-submit-confirm', 1],
   // The note layout specs need an accepted invoice of 3 lines, reached from the register.
   [INVOICE_SURFACES, 'helper:openAcceptedThreeLineInvoice', 'click:batch-submit-confirm', 1],
+  // The note test files its credit note from the register; the original's MOCK_TIN_ACCEPT answers.
+  [INVOICE_SURFACES, 'test:notes: a credit note nets in the list, the Reports tiles and the register footer', 'click:batch-submit-confirm', 1],
 ]
 
 // AC-14: can_submit / awaiting_approval needle matches are deliberately OUT of scope here --
@@ -304,16 +306,10 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
     // reach 9, not stop at 7). A floor below the measured population lets someone delete a
     // real submit site and stay green.
     //
-    // Re-measured 2026-08-26 (AUDIT-12-06): 13 = 7 submitSelected callers
-    // (batch-submit-confirm) + 1 detail-submit-confirm + 1 review-bulk-confirm + 4
-    // transitionInvoice(..., 'queued'). 14 -> 13 is D-9 dropping the un-membered-actor
-    // fixture's submit site (F-12): a sanctioned deletion, not a regression, so the floor
-    // moves with it. Manifesting a site and flooring it are two steps and the suite only
-    // enforces the first -- AUDIT-09-04 manifested its site and left the floor at 11 against
-    // a population of 12, so an "exact" floor sat a whole site slack until AUDIT-09-08
-    // corrected it.
-    it('floor: at least 13 submit-driving sites (measured population -- see the comment above, not AC-9\'s literal "7")', () => {
-      expect(topologyMatches.length, `found ${topologyMatches.length} submit-driving sites in e2e/topology/*.spec.ts, floor is 13`).toBeGreaterThanOrEqual(13)
+    // Floor = the manifest size (19). Adding a site means raising it: the suite enforces the
+    // manifest, not the floor.
+    it('floor: at least 19 submit-driving sites (measured population -- see the comment above, not AC-9\'s literal "7")', () => {
+      expect(topologyMatches.length, `found ${topologyMatches.length} submit-driving sites in e2e/topology/*.spec.ts, floor is 19`).toBeGreaterThanOrEqual(19)
     })
 
     it('every submit-driving call site is in the manifest', () => {

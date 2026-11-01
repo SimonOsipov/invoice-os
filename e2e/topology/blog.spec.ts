@@ -1,7 +1,7 @@
 // Blog shell layout, phone layout and cold deep links on the PR fork. Each case asserts a
 // relationship (side by side, containment, alignment, no overflow), never a raw dimension.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
-import { shoot } from '../argos'
+import { argosOn, shoot } from '../argos'
 import { resolveTarget } from '../targets'
 import { GATEWAY_URL } from './targets'
 import {
@@ -642,6 +642,20 @@ test.describe('blog routes', () => {
       await visit(page, path)
       await expect(crumbs(page).getByRole('button').first(), `${path}: first crumb`).toHaveText('Blog')
       await expect(aside(page).getByRole('button', { name: 'Subscribe' }), `${path}: the Subscribe button`).toBeVisible()
+      if (argosOn()) {
+        // Blank = still loading (App.tsx renders only the shell until the fetch settles); a failed fetch draws "The blog did not load." instead.
+        // On expiry the shot is skipped, so its name lands in `missing` rather than shipping blank.
+        const loaded = [
+          aside(page).getByRole('button', { name: 'Regulation & FIRS news' }),
+          ...(i === 2 ? [main(page).getByRole('heading', { name: 'Regulation & FIRS news' })] : []),
+          ...(i === 3 ? [main(page).getByText(WHAT_CHANGES).first()] : []),
+        ]
+        try {
+          for (const l of loaded) await expect(l, `${path}: blog content never loaded`).toBeVisible({ timeout: 15_000 })
+        } catch {
+          continue
+        }
+      }
       await shoot(page, 'blog', ['subscribe', 'confirm', 'category', 'post'][i], { mask: postLists(page) })
     }
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
@@ -671,7 +685,9 @@ test.describe('blog routes', () => {
     expect(response?.status(), 'status of an unknown slug').toBe(404)
     await expect(main(page), '#blog-main never rendered').toBeVisible()
     await expect(header(page), '#blog-header never rendered').toBeVisible()
-    await shoot(page, 'blog', 'not-found')
+    // NotFound renders only after the blog fetch settles; on expiry the shot is skipped, not taken blank.
+    const loaded = !argosOn() || (await expect(main(page).getByRole('heading', { name: 'This page is not on the blog.' })).toBeVisible({ timeout: 15_000 }).then(() => true, () => false))
+    if (loaded) await shoot(page, 'blog', 'not-found')
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 })

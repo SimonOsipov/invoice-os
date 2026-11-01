@@ -2069,11 +2069,12 @@ const SCREENS: Screen[] = [
   },
 ]
 
-// Rows and live values: the header, filters and labels stay in the shot. The shot is viewport-tall, so a longer list moves no height.
+// Rows and live values (Submissions: the relative-age cell): the header, filters and labels stay in the shot. The shot is viewport-tall, so a longer list moves no height.
 function liveMask(page: Page, nav: string): Locator[] {
   const mn = mainOf(page)
   const tile = mn.locator('[data-tile]')
   const byNav: Record<string, Locator[]> = {
+    Submissions: [mn.locator('[data-job-id] > span:nth-child(6)')],
     Tenants: [mn.locator('button[data-tenant-id]')],
     Audit: [mn.locator('button[data-audit-id]')],
     'AI usage': [mn.locator('div[data-call-id]'), mn.locator('div[data-total-key]')],
@@ -2096,6 +2097,8 @@ for (const s of SCREENS) {
       // Shots block nothing: a screen still loading at the cap is shot as it is.
       await expect(mainOf(page).getByText(/^Loading .+…$/)).toHaveCount(0, { timeout: 15_000 }).catch(() => {})
       await settle(page, mainOf(page))
+      // The sparkline svg is overflow:visible, so its stroke peeks past the svg's masked box.
+      if (s.nav === 'System health') await page.addStyleTag({ content: '[data-tile] svg { overflow: hidden !important }' })
     }
     await shoot(page, 'support', s.nav.toLowerCase().replace(/ /g, '-'), { mask: [mainOf(page).locator('table tbody'), page.locator('[data-panel]'), ...liveMask(page, s.nav)] })
     await s.reads(page, testInfo, armed)

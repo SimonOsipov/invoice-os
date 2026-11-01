@@ -2069,6 +2069,19 @@ const SCREENS: Screen[] = [
   },
 ]
 
+// Rows and live values: the header, filters and labels stay in the shot. The shot is viewport-tall, so a longer list moves no height.
+function liveMask(page: Page, nav: string): Locator[] {
+  const mn = mainOf(page)
+  const tile = mn.locator('[data-tile]')
+  const byNav: Record<string, Locator[]> = {
+    Tenants: [mn.locator('button[data-tenant-id]')],
+    Audit: [mn.locator('button[data-audit-id]')],
+    'AI usage': [mn.locator('div[data-call-id]'), mn.locator('div[data-total-key]')],
+    'System health': [mn.locator('[data-service]'), tile.locator('.money').locator('xpath=..'), tile.locator('[data-max], [data-worst], [data-word], svg'), tile.getByText(/^Down: /)],
+  }
+  return byNav[nav] ?? []
+}
+
 for (const s of SCREENS) {
   test(`SUP-03 ${s.nav}: v2 header, eyebrow clearances and screen reads`, async ({ page }, testInfo) => {
     test.setTimeout(s.nav === 'System health' ? 300_000 : 120_000)
@@ -2084,7 +2097,7 @@ for (const s of SCREENS) {
       await expect(mainOf(page).getByText(/^Loading .+…$/)).toHaveCount(0, { timeout: 15_000 }).catch(() => {})
       await settle(page, mainOf(page))
     }
-    await shoot(page, 'support', s.nav.toLowerCase().replace(/ /g, '-'), { mask: [mainOf(page).locator('table tbody'), page.locator('[data-panel]')] })
+    await shoot(page, 'support', s.nav.toLowerCase().replace(/ /g, '-'), { mask: [mainOf(page).locator('table tbody'), page.locator('[data-panel]'), ...liveMask(page, s.nav)] })
     await s.reads(page, testInfo, armed)
 
     await atWidths(page, `SUP-03 ${s.nav} title block`, () => titleBlockRead(page, s.h1))

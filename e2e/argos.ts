@@ -63,7 +63,7 @@ export async function shoot(
   page: Page,
   app: string,
   screen: string,
-  opts: { mask?: Locator[] } = {},
+  opts: { mask?: Locator[]; fullPage?: boolean } = {},
 ): Promise<void> {
   if (!argosOn()) return
   const [{ argosScreenshot }, { test }] = await Promise.all([
@@ -83,7 +83,7 @@ export async function shoot(
         await capped(
           argosScreenshot(page, name, {
             root: ARGOS_ROOT,
-            fullPage: true,
+            fullPage: opts.fullPage ?? true,
             mask: [moving(page), ...(opts.mask ?? [])],
           }),
           async () => {

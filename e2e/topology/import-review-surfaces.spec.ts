@@ -466,7 +466,7 @@ test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
 
     await startWizard(page, 'RESKIN2-04 upload')
     await expect(page.locator('label[for="pf-import-file"]'), 'dropzone renders').toBeVisible({ timeout: 30_000 })
-    await argosShoot(page, 'app', 'firm-create', { mask: [page.getByTestId('company-switcher'), page.locator('aside nav.pf-nav-list div.label')] })
+    await argosShoot(page, 'app', 'firm-create', { mask: [page.getByTestId('company-switcher'), page.locator('aside nav.pf-nav-list'), page.locator('span.card-title', { hasText: /^Import invoices/ }).locator('xpath=..')] })
 
     // One drop: the PDF sets the run kind, so both CSVs carry a kind note and the 16 MiB one carries the size cap too.
     await dropFiles(page, [
@@ -1014,7 +1014,7 @@ test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
     await extractOneDocument(page, 'RESKIN2-04 extraction flagged')
     const detail = await openExtractionReview(page)
     await expect(page.locator('main h1'), 'no h1 inside main on the extraction view').toHaveCount(0)
-    await argosShoot(page, 'app', 'firm-extraction', { mask: [page.getByTestId('company-switcher'), page.locator('aside nav.pf-nav-list div.label'), page.getByTestId('extraction-fields')] })
+    await argosShoot(page, 'app', 'firm-extraction', { mask: [page.getByTestId('company-switcher'), page.locator('aside nav.pf-nav-list'), page.getByTestId('extraction-fields')] })
 
     const flagged = detail.fields.filter((f) => f.reason !== '')
     expect(flagged.length, 'the default upload must read with flagged fields').toBeGreaterThan(0)

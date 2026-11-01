@@ -34,6 +34,7 @@ e2e/report-smoke/
 e2e/report-api/
 e2e/report-topology/
 e2e/blob-report/
+e2e/argos-shots/
 e2e/.playwright/
 
 # ---- Secrets / env ----

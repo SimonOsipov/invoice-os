@@ -580,6 +580,7 @@ jobs:
       SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}
       LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}
       BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}
+      ARGOS_SHOTS: ${{ needs.changes.outputs.nightly == 'true' && secrets.ARGOS_TOKEN != '' && '1' || '' }}
       E2E_TARGET: ${{ needs.changes.outputs.nightly == 'true' && 'nightly' || '' }}
     steps:
       # "Re-run failed jobs" keeps the deploy job's output from an earlier attempt.
@@ -689,6 +690,14 @@ jobs:
           path: nightly-results/
           if-no-files-found: ignore
           retention-days: 14
+      - name: Upload the Argos shots
+        if: always() && needs.changes.outputs.nightly == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: argos-shots-e2e
+          path: e2e/argos-shots/
+          if-no-files-found: ignore
+          retention-days: 14
 
   # Each topology unit runs on its own runner after smoke + api; the map is in e2e/topology/shards.ts.
   topology:
@@ -720,6 +729,7 @@ jobs:
       BAKED_LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}
       BAKED_LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}
       BAKED_BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}
+      ARGOS_SHOTS: ${{ needs.changes.outputs.nightly == 'true' && secrets.ARGOS_TOKEN != '' && '1' || '' }}
       E2E_TARGET: ${{ needs.changes.outputs.nightly == 'true' && 'nightly' || '' }}
     steps:
       - name: Refuse a re-run that skipped the deploy
@@ -805,6 +815,14 @@ jobs:
         with:
           name: results-topology-${{ matrix.shard }}
           path: nightly-results/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload the Argos shots
+        if: always() && needs.changes.outputs.nightly == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: argos-shots-topology-${{ matrix.shard }}
+          path: e2e/argos-shots/
           if-no-files-found: ignore
           retention-days: 14
 

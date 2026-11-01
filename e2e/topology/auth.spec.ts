@@ -1,6 +1,7 @@
 import { test, expect, type BrowserContext, type Frame, type Locator, type Page, type Request, type Response } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA } from './targets'
 import { shardPersonas } from './importWizardShared'
+import { shoot } from '../argos'
 import { expectedContactsMode, nightlyTarget, resolveTarget } from '../targets'
 import { DESTINATION_READY, VERIFIED, browserToken, collectErrors, expectInWorkspace, headerSignIn, isHandoffNavigation, passFrontDoor, sidebarRoster, signInAs, signInAtFrontDoor, signInDialog, submitSignIn } from '../personaSession'
 import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession, type ConsoleTarget } from '../staffSession'
@@ -2998,6 +2999,7 @@ test('deployed landing: the accept page names the workspace and role at every wi
   for (const width of widths) {
     await expectReadyView(page, width, ordinaryToken, workspace.name, ordinary)
     read.push(width)
+    if (width === widths[0]) await shoot(page, 'landing', 'invite', { mask: [page.getByText(workspace.name), page.getByText(ordinary)] })
   }
   expect(read, 'the widths the ordinary-address sweep read').toEqual(widths)
   // Copied before any click: the page has only loaded and previewed.

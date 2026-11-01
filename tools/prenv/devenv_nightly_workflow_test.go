@@ -20,6 +20,7 @@ const (
 	nlGroup     = "group: dev-preview-${{ github.event.pull_request.number || 'nightly' }}"
 	nlPRVar     = "PR: ${{ github.event.pull_request.number || 'nightly' }}"
 	nlFlakyStep = "Fail on a retry-pass in a spec this PR changed"
+	nlArgosFlag = "ARGOS_SHOTS: ${{ " + nlOn + " && secrets.ARGOS_TOKEN != '' && '1' || '' }}"
 )
 
 var regexpExpr = regexp.MustCompile(`\$\{\{\s*([A-Za-z0-9_.-]+)`)
@@ -193,6 +194,23 @@ func devEnvNightlyProblems(yml string) []string {
 			if !slices.Contains(raw, w) {
 				bad(j + " results upload lacks " + w)
 			}
+		}
+	}
+
+	for j, art := range map[string]string{"e2e": "argos-shots-e2e", "topology": "argos-shots-topology-${{ matrix.shard }}"} {
+		if !slices.Contains(blockLines(jobs[j].lines, 4, "env"), nlArgosFlag) {
+			bad(j + " env lacks the nightly-only ARGOS_SHOTS")
+		}
+		raw := nlRaw(jobs[j], "Upload the Argos shots")
+		for _, w := range []string{"if: always() && " + nlOn, "uses: actions/upload-artifact@v7", "name: " + art, "path: e2e/argos-shots/", "if-no-files-found: ignore", "retention-days: 14"} {
+			if !slices.Contains(raw, w) {
+				bad(j + " Argos upload lacks " + w)
+			}
+		}
+	}
+	for _, l := range top {
+		if strings.Contains(strings.ToLower(l), "argos_token") && strings.TrimSpace(l) != nlArgosFlag {
+			bad("dev-env.yml reads ARGOS_TOKEN outside the ARGOS_SHOTS compare: " + strings.TrimSpace(l))
 		}
 	}
 
@@ -935,6 +953,36 @@ printf '{"services":[{"name":"notifications","contacts":"%s"}]}' "$MODE" >"$out"
 				t.Errorf("PR %s with contacts=%s: pass = %v, want %v (%v)", c.pr, c.mode, got, c.pass, err)
 			}
 		})
+	}
+}
+
+func TestDevEnvNightly_ArgosFlagIsNightlyOnly(t *testing.T) {
+	t.Parallel()
+	flagless := strings.Replace(nlArgosFlag, nlOn+" && ", "", 1)
+	for job, tail := range map[string]string{"e2e": "\n    steps:\n      # \"Re-run", "topology": "\n    steps:\n      - name: Refuse a re-run"} {
+		requireDevEnvProblem(t, "      "+nlArgosFlag+"\n      "+nlTarget+tail, "      "+flagless+"\n      "+nlTarget+tail, job+" env lacks the nightly-only ARGOS_SHOTS")
+	}
+}
+
+func TestDevEnvNightly_ArgosUploadIsNightlyOnly(t *testing.T) {
+	t.Parallel()
+	for _, art := range []string{"argos-shots-e2e", "argos-shots-topology-${{ matrix.shard }}"} {
+		old := "        if: always() && " + nlOn + "\n        uses: actions/upload-artifact@v7\n        with:\n          name: " + art
+		requireDevEnvProblem(t, old, strings.Replace(old, " && "+nlOn, "", 1), "Argos upload lacks if: always() && "+nlOn)
+	}
+}
+
+func TestDevEnvNightly_NoArgosTokenInDevEnv(t *testing.T) {
+	t.Parallel()
+	requireDevEnvProblem(t, "      FLAKY_JSON_DIR: ${{ github.workspace }}/e2e/flaky-results\n      GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}\n      APP_URL: ${{ needs.prepare-env.outputs.app_url }}\n      LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}\n      OPS_CONSOLE_URL: ${{ needs.prepare-env.outputs.ops_console_url }}\n      SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}\n      LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}\n      BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}\n      "+nlArgosFlag+"\n      "+nlTarget+"\n    steps:\n      # \"Re-run",
+		"      FLAKY_JSON_DIR: ${{ github.workspace }}/e2e/flaky-results\n      GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}\n      APP_URL: ${{ needs.prepare-env.outputs.app_url }}\n      LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}\n      OPS_CONSOLE_URL: ${{ needs.prepare-env.outputs.ops_console_url }}\n      SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}\n      LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}\n      BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}\n      "+nlArgosFlag+"\n      ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}\n      "+nlTarget+"\n    steps:\n      # \"Re-run", "reads ARGOS_TOKEN")
+}
+
+func TestDevEnvNightly_NoArgosTokenInDevEnvAnyCase(t *testing.T) {
+	t.Parallel()
+	old := "      " + nlArgosFlag + "\n      " + nlTarget + "\n    steps:\n      # \"Re-run"
+	for _, read := range []string{"${{ secrets.argos_token }}", "${{ secrets['ARGOS_TOKEN'] }}"} {
+		requireDevEnvProblem(t, old, strings.Replace(old, "\n      "+nlTarget, "\n      X: "+read+"\n      "+nlTarget, 1), "reads ARGOS_TOKEN")
 	}
 }
 

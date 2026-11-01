@@ -81,6 +81,7 @@ import {
 } from '../api/client'
 import { ensureFirmPolicyActive, ensureInhousePolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
+import { argosOn, shoot } from '../argos'
 import {
   assertFillsColumn,
   assertPageDoesNotScrollSideways,
@@ -1411,6 +1412,9 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
   await expect(page.locator('label[for="pf-import-file"]'), 'in-house gets the dropzone too').toBeVisible({
     timeout: 30_000,
   })
+  // Header crumb shows "-" until the company initials load.
+  if (argosOn()) await expect(page.locator('header span.mono').first()).not.toHaveText('-', { timeout: 15_000 }).catch(() => {})
+  await shoot(page, 'app', 'inhouse-create', { mask: [page.locator('aside nav button.pf-nav span.mono'), page.getByTestId('company-chip'), page.locator('aside nav.pf-nav-list'), page.locator('span.card-title', { hasText: /^Import invoices/ }).locator('xpath=..')] })
 
   // Inverts the old test's positive assertion of this exact panel (AC-7/8:662-669): with
   // a real entity resolved, the amber refusal — and its in-house-only sentence,
@@ -1472,6 +1476,10 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
   // path gets (E2E-01 above), now available to in-house too.
   await expect(page.getByTestId('invoice-detail'), 'the import actually filed a real invoice, not a refusal').toBeVisible({ timeout: 30_000 })
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(invoiceNumber)
+  // A long file name wraps to 1 or 2 lines; pin one line so the page height holds.
+  const sourceName = page.getByTestId('source-document-card').locator(':scope > div').first().locator(':scope > div').nth(1).locator(':scope > div').first()
+  if (argosOn()) await page.addStyleTag({ content: '[data-testid="source-document-card"] [style*="break-all"] { white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important }' })
+  await shoot(page, 'app', 'inhouse-detail', { mask: [sourceName, page.getByTestId('invoice-detail').locator('tbody'), page.getByTestId('status-strip'), page.locator('aside nav button.pf-nav span.mono'), page.getByTestId('company-chip'), page.locator('aside nav.pf-nav-list')] })
 
   // And manual entry — the OTHER path [inhouse-can-start] proved was also a dead end
   // (:725-729). Re-opens the wizard fresh via the header CTA rather than navigating back

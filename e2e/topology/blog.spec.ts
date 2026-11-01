@@ -1,6 +1,7 @@
 // Blog shell layout, phone layout and cold deep links on the PR fork. Each case asserts a
 // relationship (side by side, containment, alignment, no overflow), never a raw dimension.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
+import { argosOn, shoot } from '../argos'
 import { resolveTarget } from '../targets'
 import { GATEWAY_URL } from './targets'
 import {
@@ -139,6 +140,8 @@ test.describe('blog layout at wide widths', () => {
 
 const WHAT_CHANGES = 'What structured e-invoicing changes for a Nigerian finance team'
 const GRID = 'div[style*="grid-template-columns"]'
+// SUP-BLOG-06 publishes and removes posts on the same preview, so the lists move.
+const postLists = (page: Page) => [main(page).locator(`${GRID} button`), main(page).locator('button.blog-row')]
 
 async function expectCardsInside(grid: Locator, label: string): Promise<string[]> {
   const g = await rectOf(grid, `${label} grid`)
@@ -210,6 +213,7 @@ test.describe('blog home, category and search at wide widths', () => {
       const input = field.getByRole('textbox')
       await input.fill('invoice')
       await expect(main(page).locator('h2')).toContainText(/match/)
+      if (width === 1440) await shoot(page, 'blog', 'search', { mask: postLists(page) })
       const rows = main(page).locator('button.blog-row')
       const n = await rows.count()
       expect(n, 'control: no result row').toBeGreaterThan(0)
@@ -616,6 +620,7 @@ test('blog home: live posts render', async ({ page }) => {
   await expect(main(page).locator(`section ${GRID} button`).first(), 'no band card rendered').toBeVisible()
   const titles = await main(page).locator(`section ${GRID} button > span:nth-child(2)`).allTextContents()
   expect(titles.some((t) => SEEDED_TITLES.includes(t)), `no band holds a seeded post; saw ${titles.join(' | ')}`).toBe(true)
+  await shoot(page, 'blog', 'home', { mask: postLists(page) })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
@@ -633,10 +638,25 @@ test.describe('blog routes', () => {
   test('blog routes: a cold deep link renders the shell', async ({ page }) => {
     const errors = collectErrors(page)
     await prepare(page)
-    for (const [path] of COLD) {
+    for (const [i, [path]] of COLD.entries()) {
       await visit(page, path)
       await expect(crumbs(page).getByRole('button').first(), `${path}: first crumb`).toHaveText('Blog')
       await expect(aside(page).getByRole('button', { name: 'Subscribe' }), `${path}: the Subscribe button`).toBeVisible()
+      if (argosOn()) {
+        // Blank = still loading (App.tsx renders only the shell until the fetch settles); a failed fetch draws "The blog did not load." instead.
+        // On expiry the shot is skipped, so its name lands in `missing` rather than shipping blank.
+        const loaded = [
+          aside(page).getByRole('button', { name: 'Regulation & FIRS news' }),
+          ...(i === 2 ? [main(page).getByRole('heading', { name: 'Regulation & FIRS news' })] : []),
+          ...(i === 3 ? [main(page).getByText(WHAT_CHANGES).first()] : []),
+        ]
+        try {
+          for (const l of loaded) await expect(l, `${path}: blog content never loaded`).toBeVisible({ timeout: 15_000 })
+        } catch {
+          continue
+        }
+      }
+      await shoot(page, 'blog', ['subscribe', 'confirm', 'category', 'post'][i], { mask: postLists(page) })
     }
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
@@ -665,6 +685,9 @@ test.describe('blog routes', () => {
     expect(response?.status(), 'status of an unknown slug').toBe(404)
     await expect(main(page), '#blog-main never rendered').toBeVisible()
     await expect(header(page), '#blog-header never rendered').toBeVisible()
+    // NotFound renders only after the blog fetch settles; on expiry the shot is skipped, not taken blank.
+    const loaded = !argosOn() || (await expect(main(page).getByRole('heading', { name: 'This page is not on the blog.' })).toBeVisible({ timeout: 15_000 }).then(() => true, () => false))
+    if (loaded) await shoot(page, 'blog', 'not-found')
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 })

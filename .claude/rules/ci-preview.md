@@ -19,6 +19,7 @@ paths:
 - `preview.sh` also takes the exact name `nightly`: `<svc>-nightly`, `migrate-nightly`, database `pr_0`, bucket `ascomply-preview-nightly`, secrets `nightly-<name>`, label `preview-pr=nightly`.
 - A dispatched `dev-env.yml` run creates the nightly preview and deletes it in `Delete the nightly preview`. The sweeper skips it.
 - Leave the `preview-pr` label off the user's `nightly-*` vendor secrets. Teardown deletes every labelled secret.
+- The nightly's `nightly-ai` job runs after `contacts` and before `email`.
 - The nightly's `email` job runs `preview.sh mail-on nightly` after E2E ends. It mounts `GOTRUE_SMTP_PASS` on `auth-nightly`, turns auto-confirm off there and mounts `RESEND_SENDING_KEY` on `tenancy-nightly`.
 - Finish every other nightly job before `email`. Only `nightly-teardown` and `contacts-cleanup` follow it, and `contacts-cleanup` needs `nightly-teardown`.
 - The nightly contact guard runs in `prepare-env` before `deploy`: `Check the contact secrets`, then `token_version`, then `nightlycontacts start`. A refusal deploys nothing.
@@ -27,7 +28,7 @@ paths:
 - Recreate `pr_<N>` on every deploy with the `preview-db` job. Cloud SQL refuses `session_replication_role`, so no reset runs in place.
 - Run the migrate job before GoTrue. Run it again with `preview.sh grant` after GoTrue is up: GoTrue creates `auth.users` on its first boot.
 - Generate each PR's tokens and GoTrue key in `preview.sh secrets`. Never copy a production value into preview.
-- Give no preview service an OpenRouter key or a Sentry DSN. The `Preview invariants` job fails on either.
+- Give no preview service a Sentry DSN, and no PR preview an OpenRouter key. The one exception is the `nightly` preview: `invoice`, `submission` and `worker` mount `nightly-openrouter-api-key` as `OPENROUTER_API_KEY` and set no `AI_FAKE` or `JEV_FAKE`. The `Preview invariants` job fails on any other OpenRouter secret or variable and on any Sentry one.
 - Probe the gateway at `/health` on run.app. Cloud Run's front end answers `/healthz` itself; `/healthz/fleet` passes through.
 - Print the library and blog addresses with their base paths from `preview.sh urls`. A preview has no load balancer.
 - Send `X-Gateway-Token` to `/healthz/fleet`. `preview.sh token <N>` prints the PR's token.

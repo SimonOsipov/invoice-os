@@ -218,8 +218,7 @@ env_file() {
     esac
     case "$svc" in
       invoice | submission | worker)
-        echo "AI_FAKE: 'true'"
-        echo "JEV_FAKE: 'true'"
+        [ "$pr" = nightly ] || { echo "AI_FAKE: 'true'"; echo "JEV_FAKE: 'true'"; }
         echo "DOCUMENT_BUCKET: ascomply-preview-$(suffix "$pr")"
         echo "DOCUMENT_ENDPOINT: https://storage.googleapis.com"
         echo "DOCUMENT_REGION: auto"
@@ -246,6 +245,7 @@ secrets_of() {
   case "$2" in
     invoice | submission | worker)
       out+=(DOCUMENT_ACCESS_KEY_ID=document-access-key-id:latest DOCUMENT_SECRET_ACCESS_KEY=document-secret-key:latest)
+      [ "$pr" != nightly ] || out+=(OPENROUTER_API_KEY=nightly-openrouter-api-key:latest)
       ;;
   esac
   case "$2" in
@@ -465,14 +465,18 @@ cmd_budget() {
 cmd_invariants() {
   local bad=0 names envs held token code
   names=$(gcloud secrets list --project "$PROJECT" --format 'value(name)')
-  if grep -Ei 'openrouter|sentry' <<<"$names"; then
-    echo "::error::ascomply-preview holds an OpenRouter or Sentry secret (listed above)."
+  if grep -Ei 'openrouter|sentry' <<<"$names" | grep -vx nightly-openrouter-api-key; then
+    echo "::error::ascomply-preview holds an OpenRouter or Sentry secret (listed above); only nightly-openrouter-api-key is allowed."
     bad=1
   fi
   envs=$(gcloud run services list "${gc[@]}" --format json |
-    jq -r '.[] | .metadata.name as $s | .spec.template.spec.containers[].env[]? | "\($s) \(.name)"')
-  if grep -E ' (OPENROUTER_API_KEY|SENTRY_DSN|VITE_SENTRY_DSN|SENTRY_AUTH_TOKEN)$' <<<"$envs"; then
-    echo "::error::a preview service sets an OpenRouter or Sentry variable (listed above)."
+    jq -r '.[] | .metadata.name as $s | .spec.template.spec |
+      ((.containers[].env[]? | "\($s) \(.name) \(.valueFrom.secretKeyRef.name // "plain")"),
+       (.volumes[]? | select(.secret) | "\($s) volume:\(.name) \(.secret.secretName)"))')
+  # The key secret may appear only as the nightly mount, under any variable or volume name.
+  if grep -E '^[^ ]+ (OPENROUTER_API_KEY|SENTRY_DSN|VITE_SENTRY_DSN|SENTRY_AUTH_TOKEN)( |$)| nightly-openrouter-api-key$' <<<"$envs" |
+    grep -vxE '(invoice|submission|worker)-nightly OPENROUTER_API_KEY nightly-openrouter-api-key'; then
+    echo "::error::a preview service sets an OpenRouter or Sentry variable (listed above); only the nightly invoice, submission and worker may set OPENROUTER_API_KEY, from nightly-openrouter-api-key."
     bad=1
   fi
   # testIamPermissions answers for any caller; preview's deployer must hold none of these in prod.
@@ -497,7 +501,7 @@ cmd_invariants() {
     bad=1
   fi
   [ "$bad" = 0 ] || exit 1
-  echo "Preview invariants hold: no OpenRouter or Sentry secret or variable, no role in ascomply-prod, no deploy trigger outside GitHub Actions."
+  echo "Preview invariants hold: no OpenRouter or Sentry secret or variable except the nightly OpenRouter key on invoice, submission and worker, no role in ascomply-prod, no deploy trigger outside GitHub Actions."
 }
 
 case "${1:-}" in

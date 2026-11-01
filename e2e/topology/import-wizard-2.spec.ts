@@ -29,6 +29,7 @@ import { freshTin } from '../api/fixtures'
 import { expectedStatusDropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
 import { signInAs } from '../personaSession'
+import { nightlyTarget, REAL_AI_COVERED } from '../targets'
 import {
   boxOf,
   collectErrors,
@@ -939,6 +940,7 @@ async function openLineGrid(page: Page, label: string): Promise<{ detail: Extrac
 test('EXTR13-E2E-01 (Core AC 1-7): the deployed grid reads, flags, sums, selects, remaps, grows, shrinks and saves', async ({
   page,
 }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -3664,6 +3666,7 @@ test('EXTR36-E2E-01 (AC-1/AC-2): a Chrome-shaped register anchors its printed la
 })
 
 test("AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lands beside the engine", async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
@@ -3752,6 +3755,7 @@ const AI_UNAVAILABLE_FIELD = 'document_ai_reading'
 test('AIR04-E2E-01 (AC-1, AC-3, AC-4, AC-5, AC-7): an unavailable AI sends the document to manual entry with no reading', async ({
   page,
 }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(600_000)
   const errors = collectErrors(page)
   const name = 'ai_unavailable_invoice.pdf'
@@ -3844,6 +3848,7 @@ const NO_REGION_NOTE = 'We have no region for this field, so there is nothing to
 test('AIR05-E2E-01 (AC-3, AC-4, AC-5, AC-8): a document with no text is read from its page images', async ({
   page,
 }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(600_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
@@ -3922,6 +3927,7 @@ function lineChipText(value: string, region: ExtractionRegion | null): string {
 test('AIR08-E2E-01/02/03/04 (Core AC 4, 5, 6, 8): the AI reads line items once, and a disagreement reaches the grid', async ({
   page,
 }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4018,6 +4024,7 @@ test('AIR08-E2E-01/02/03/04 (Core AC 4, 5, 6, 8): the AI reads line items once, 
 test('AIR08-LAYOUT-01: with the disagreement chip row rendered, the grid scrollbox stays inside the fields pane body at every width', async ({
   page,
 }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4131,6 +4138,7 @@ const HEADER_LABELS: Record<string, string> = {
 test('ENGI08-E2E-01/02/03 (AC-1, AC-2, AC-4, AC-6): the NRS fields reach the wire, the pane and the invoice', async ({
   page,
 }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
@@ -4252,6 +4260,7 @@ test('ENGI08-E2E-01/02/03 (AC-1, AC-2, AC-4, AC-6): the NRS fields reach the wir
 const JEV_DOUBT_READ = { invoice_number: 'JD-3310', supplier_name: 'Kaduna Textiles Limited', supplier_tin: '23456789-0001' }
 
 test('CHECK03-E2E-01 (AC-4, AC-5, AC-10): a value Jev doubts shows the pill, keeps its value, and files', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
@@ -4317,6 +4326,7 @@ test('CHECK03-E2E-01 (AC-4, AC-5, AC-10): a value Jev doubts shows the pill, kee
 })
 
 test("CHECK03-LAYOUT-01: the doubted invoice number's pill stays inside its cell at every width", async ({ page }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4429,6 +4439,7 @@ const RECEIPT_NOTICE =
   'This looks like a receipt, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'
 
 test('CHECK04-E2E-01 (AC-4, AC-5, AC-8): a document read as a receipt shows the banner, keeps its rows, and files; a plain upload shows none', async ({ page }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Two extractions on a possibly cold sidecar, then a four-width sweep.
   test.setTimeout(600_000)
   const errors = collectErrors(page)

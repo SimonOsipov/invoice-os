@@ -13,7 +13,8 @@
     "test:unit": "vitest run",
     "test:hooks": "vitest run --config vitest.hooks.config.ts",
     "typecheck": "tsc --noEmit",
-    "ctl": "node --import ./ctl/tsResolve.mjs ./ctl/main.ts"
+    "ctl": "node --import ./ctl/tsResolve.mjs ./ctl/main.ts",
+    "nightly-ai": "node --import ./ctl/tsResolve.mjs ./nightlyAi/main.ts"
   },
   "devDependencies": {
     "@argos-ci/core": "6.8.8",

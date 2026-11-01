@@ -932,6 +932,31 @@ func TestRun_SectionWithStepsIsCopiedByteForByte(t *testing.T) {
 	eq(t, string(r.obj["ai"]), body)
 }
 
+// The fixture is the bytes e2e/nightlyAi writes; the vitest test main.test.ts owns them.
+func TestRun_AISectionFromTheCheckIsAccepted(t *testing.T) {
+	want, err := os.ReadFile(filepath.Join("testdata", "ai", "ai.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := newEnv(t)
+	sec := filepath.Join(e.dir, "ai.json")
+	e.writeFile(sec, string(want))
+	r := e.run("-section", "ai="+sec)
+	eq(t, r.code, 0)
+	eq(t, string(r.obj["ai"]), strings.TrimSuffix(string(want), "\n"))
+
+	failed := strings.Replace(string(want), `"name":"explain","status":"passed"`, `"name":"explain","status":"failed"`, 1)
+	if failed == string(want) {
+		t.Fatal("the fixture has no passed explain step to fail")
+	}
+	e2 := newEnv(t)
+	sec2 := filepath.Join(e2.dir, "ai.json")
+	e2.writeFile(sec2, failed)
+	r2 := e2.run("-section", "ai="+sec2)
+	eq(t, r2.code, 1)
+	eq(t, r2.dec.Verdict, "red")
+}
+
 func TestRun_SectionWithoutStepsNeedsNoStepsForArgos(t *testing.T) {
 	e := newEnv(t)
 	sec := filepath.Join(e.dir, "argos.json")

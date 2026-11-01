@@ -14,5 +14,5 @@
     "noUnusedParameters": true,
     "types": ["@playwright/test", "node"]
   },
-  "include": ["smoke", "topology", "api", "rule-set.ts", "targets.ts", "targets.test.ts", "personas.ts", "personaSession.ts", "personas.test.ts", "realAccounts.ts", "realAccounts.test.ts", "envCopy.test.ts", "envCopyStrings.ts", "import-meta-env.d.ts", "playwright.config.ts", "playwright.topology.config.ts", "playwright.topology.config.test.ts", "playwright.api.config.ts", "ctl", "mail", "playwright.mail.config.ts", "inviteSession.ts", "fileFlakyBugs.ts", "fileFlakyBugs.test.ts", "argos.ts", "argos.test.ts", "argosBuild.ts", "argosBuild.test.ts"]
+  "include": ["smoke", "topology", "api", "rule-set.ts", "targets.ts", "targets.test.ts", "personas.ts", "personaSession.ts", "personas.test.ts", "realAccounts.ts", "realAccounts.test.ts", "envCopy.test.ts", "envCopyStrings.ts", "import-meta-env.d.ts", "playwright.config.ts", "playwright.topology.config.ts", "playwright.topology.config.test.ts", "playwright.api.config.ts", "ctl", "mail", "nightlyAi", "playwright.mail.config.ts", "inviteSession.ts", "fileFlakyBugs.ts", "fileFlakyBugs.test.ts", "argos.ts", "argos.test.ts", "argosBuild.ts", "argosBuild.test.ts"]
 }

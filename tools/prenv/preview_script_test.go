@@ -68,6 +68,19 @@ case "$1 $2 $3" in
 esac
 `
 
+// previewCurlShim answers the testIamPermissions call: HTTP 200 and an empty permission set, unless $D/curl-code says otherwise.
+func previewCurlShim(prefix string) string {
+	return prefix + `out=
+prev=
+for a in "$@"; do
+  [ "$prev" = -o ] && out=$a
+  prev=$a
+done
+[ -z "$out" ] || echo '{}' > "$out"
+cat "$D/curl-code" 2>/dev/null || printf 200
+`
+}
+
 type previewRun struct {
 	dir, stdout, stderr string
 	code                int
@@ -102,9 +115,10 @@ func runPreviewEnv(t *testing.T, env []string, setup func(dir string), args ...s
 	}
 	writeShim(t, filepath.Join(shims, "gcloud"), "D='"+dir+"'\n"+previewGcloudShim)
 	writeShim(t, filepath.Join(shims, "go"), "shift 2\nexec '"+binPath+"' \"$@\"\n")
+	writeShim(t, filepath.Join(shims, "curl"), previewCurlShim("D='"+dir+"'\n"))
 	cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "scripts/ci/preview.sh")}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = append(append(os.Environ(), env...), "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd.Env = append(append(os.Environ(), append([]string{"RUNNER_TEMP=" + dir}, env...)...), "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"))
 	stdout, stderr, err := runToFiles(t, cmd, false)
 	r := previewRun{dir: dir, stdout: stdout, stderr: stderr}
 	if ee, ok := err.(*exec.ExitError); ok {
@@ -464,6 +478,14 @@ func TestPreviewPRSevenIsByteIdenticalToItsGoldens(t *testing.T) {
 		if string(want) != body {
 			t.Errorf("%s differs from its golden:\n--- want\n%s\n--- got\n%s", name, want, body)
 		}
+		if strings.Contains(strings.ToUpper(body), "OPENROUTER") {
+			t.Errorf("PR 7 %s names OpenRouter", name)
+		}
+	}
+	for svc := range nlRealAI {
+		if env := got["env-"+svc]; !strings.Contains(env, nlFakes) {
+			t.Errorf("PR 7 env-%s lacks the fakes:\n%s", svc, env)
+		}
 	}
 }
 
@@ -516,7 +538,14 @@ func TestPreviewNightlyEnvFilesDifferOnlyByName(t *testing.T) {
 	t.Parallel()
 	got := nameGoldens(t, "nightly")
 	for _, svc := range prAll(t) {
-		if want := asNightly(prGolden(t, "env-"+svc)); strings.Replace(got["env-"+svc], nlDealStage, "", 1) != want {
+		want := asNightly(prGolden(t, "env-"+svc))
+		if nlRealAI[svc] {
+			if !strings.Contains(want, nlFakes) {
+				t.Fatalf("PR golden env-%s lacks the fakes", svc)
+			}
+			want = strings.Replace(want, nlFakes, "", 1)
+		}
+		if strings.Replace(got["env-"+svc], nlDealStage, "", 1) != want {
 			t.Errorf("env-%s:\n%s\nwant\n%s", svc, got["env-"+svc], want)
 		}
 	}
@@ -526,6 +555,14 @@ func TestPreviewNightlyEnvFilesDifferOnlyByName(t *testing.T) {
 }
 
 const nlDealStage = "HUBSPOT_DEAL_STAGE: appointmentscheduled\n"
+
+const (
+	nlFakes = "AI_FAKE: 'true'\nJEV_FAKE: 'true'\n"
+	nlKey   = "OPENROUTER_API_KEY=nightly-openrouter-api-key:latest"
+)
+
+// nlRealAI is the set of nightly services that answer with the real model.
+var nlRealAI = map[string]bool{"invoice": true, "submission": true, "worker": true}
 
 var nlContactKeys = []string{"HUBSPOT_TOKEN=nightly-hubspot-token:7", "RESEND_API_KEY=nightly-resend-read-key:latest",
 	"RESEND_SEGMENT_ID=nightly-resend-segment-id:latest", "RESEND_TOPIC_ID=nightly-resend-topic-id:latest"}
@@ -733,6 +770,9 @@ func TestPreviewNightlySetSecretsMirrorThePR(t *testing.T) {
 	pr, ni := argvBySvc(prGolden(t, "deploy-argv"), "pr-7"), argvBySvc(nameGoldens(t, "nightly")["deploy-argv"], "nightly")
 	for _, svc := range prAll(t) {
 		want := strings.ReplaceAll(flagValue(pr[svc], "--set-secrets"), "pr-7-", "nightly-")
+		if nlRealAI[svc] {
+			want += "," + nlKey
+		}
 		if svc == "notifications" || svc == "worker" {
 			want += "," + strings.Join(nlContactKeys, ",")
 		}
@@ -742,6 +782,38 @@ func TestPreviewNightlySetSecretsMirrorThePR(t *testing.T) {
 		if !strings.Contains(ni[svc], "--labels preview-pr=nightly ") {
 			t.Errorf("%s is not labelled preview-pr=nightly: %s", svc, ni[svc])
 		}
+	}
+}
+
+func TestPreviewNightlyRealAIOnThreeServices(t *testing.T) {
+	t.Parallel()
+	got := nameGoldens(t, "nightly")
+	ni := argvBySvc(got["deploy-argv"], "nightly")
+	real := 0
+	for _, svc := range prAll(t) {
+		env, secrets := got["env-"+svc], flagValue(ni[svc], "--set-secrets")
+		if strings.Contains(env, "AI_FAKE") || strings.Contains(env, "JEV_FAKE") {
+			t.Errorf("nightly env-%s sets a fake:\n%s", svc, env)
+		}
+		if strings.Contains(strings.ToUpper(env), "OPENROUTER") {
+			t.Errorf("nightly env-%s names the key in plain env:\n%s", svc, env)
+		}
+		has := strings.Contains(","+secrets+",", ","+nlKey+",")
+		if has != nlRealAI[svc] {
+			t.Errorf("%s mounts %s = %v, want %v: %s", svc, nlKey, has, nlRealAI[svc], secrets)
+		}
+		if n := strings.Count(ni[svc], "OPENROUTER"); n != map[bool]int{true: 1, false: 0}[nlRealAI[svc]] {
+			t.Errorf("%s argv names OPENROUTER %d times: %s", svc, n, ni[svc])
+		}
+		if nlRealAI[svc] {
+			real++
+			if !strings.Contains(env, "DOCUMENT_BUCKET: ascomply-preview-nightly\n") {
+				t.Errorf("nightly env-%s lost its document settings:\n%s", svc, env)
+			}
+		}
+	}
+	if real != 3 {
+		t.Fatalf("%d real-AI services seen, want 3", real)
 	}
 }
 
@@ -1036,6 +1108,192 @@ func TestPreviewMailPreflightPassesWithAllFour(t *testing.T) {
 	for i, n := range mailSecrets {
 		if !strings.Contains(calls[i], "--secret "+n+" ") {
 			t.Errorf("call %d = %q, want secret %s", i, calls[i], n)
+		}
+	}
+}
+
+// invVar is one env entry of a Cloud Run service: a plain value, or a reference to a secret.
+type invVar struct{ name, value, ref string }
+
+type invSvc struct {
+	name string
+	vars []invVar
+}
+
+const nlKeySecret = "nightly-openrouter-api-key"
+
+func nlKeyVar() invVar { return invVar{name: "OPENROUTER_API_KEY", ref: nlKeySecret} }
+
+// nlGoodSvcs are the three services that may hold the nightly key.
+func nlGoodSvcs() []invSvc {
+	return []invSvc{{"invoice-nightly", []invVar{nlKeyVar()}}, {"submission-nightly", []invVar{nlKeyVar()}}, {"worker-nightly", []invVar{nlKeyVar()}}}
+}
+
+// runInvariants runs `preview.sh invariants` over the listed secret names and services.
+func runInvariants(t *testing.T, secrets []string, svcs []invSvc) previewRun {
+	t.Helper()
+	var list []map[string]any
+	for _, s := range svcs {
+		env := []map[string]any{}
+		for _, v := range s.vars {
+			e := map[string]any{"name": v.name}
+			if v.ref != "" {
+				e["valueFrom"] = map[string]any{"secretKeyRef": map[string]any{"name": v.ref, "key": "latest"}}
+			} else {
+				e["value"] = v.value
+			}
+			env = append(env, e)
+		}
+		list = append(list, map[string]any{"metadata": map[string]any{"name": s.name},
+			"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{"env": env}}}}}})
+	}
+	b, err := json.Marshal(list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runPreview(t, func(dir string) {
+		writeIn(t, dir, "have", strings.Join(secrets, "\n")+"\n")
+		writeIn(t, dir, "list-services", string(b))
+	}, "invariants")
+}
+
+// invLine reports whether any output line starts with the service name and a space.
+func invLine(r previewRun, svc string) bool {
+	return regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(svc) + ` `).MatchString(r.stdout + "\n" + r.stderr)
+}
+
+func TestPreviewInvariantsAllowTheNightlyKey(t *testing.T) {
+	t.Parallel()
+	r := runInvariants(t, []string{nlKeySecret, "pr-7-gateway-token"}, nlGoodSvcs())
+	if r.code != 0 {
+		t.Fatalf("invariants exited %d:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if !strings.Contains(r.stdout, "Preview invariants hold") {
+		t.Errorf("no success line:\n%s", r.stdout)
+	}
+}
+
+func TestPreviewInvariantsPassWithNoKeyAtAll(t *testing.T) {
+	t.Parallel()
+	r := runInvariants(t, []string{"pr-7-gateway-token"}, []invSvc{{"invoice-pr-7", []invVar{{name: "AI_FAKE", value: "true"}}}, {"invoice-nightly", nil}})
+	if r.code != 0 || !strings.Contains(r.stdout, "Preview invariants hold") {
+		t.Fatalf("invariants exited %d:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+}
+
+func TestPreviewInvariantsRefuseAnotherOpenRouterSecret(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"openrouter-api-key", "nightly-openrouter-api-key-2", "pr-7-openrouter", "NIGHTLY-OPENROUTER-API-KEY", "xnightly-openrouter-api-key"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runInvariants(t, []string{nlKeySecret, name}, nlGoodSvcs())
+			if r.code != 1 {
+				t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+			}
+			if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + `$`).MatchString(r.stdout + "\n" + r.stderr) {
+				t.Errorf("output does not list %s:\n%s\n%s", name, r.stdout, r.stderr)
+			}
+		})
+	}
+}
+
+func TestPreviewInvariantsRefuseTheKeyOnAPRService(t *testing.T) {
+	t.Parallel()
+	r := runInvariants(t, []string{nlKeySecret}, append(nlGoodSvcs(), invSvc{"invoice-pr-7", []invVar{nlKeyVar()}}))
+	if r.code != 1 {
+		t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if !invLine(r, "invoice-pr-7") {
+		t.Errorf("no line names invoice-pr-7:\n%s\n%s", r.stdout, r.stderr)
+	}
+	for _, ok := range []string{"invoice-nightly", "submission-nightly", "worker-nightly"} {
+		if invLine(r, ok) {
+			t.Errorf("a line names the allowed %s:\n%s\n%s", ok, r.stdout, r.stderr)
+		}
+	}
+}
+
+func TestPreviewInvariantsRefuseTheKeyOnAnotherNightlyService(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"gateway-nightly", "nightly", "invoice-nightly-2", "xinvoice-nightly", "invoice-nightlyx", "tenancy-nightly"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runInvariants(t, []string{nlKeySecret}, append(nlGoodSvcs(), invSvc{name, []invVar{nlKeyVar()}}))
+			if r.code != 1 {
+				t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+			}
+			if !invLine(r, name) {
+				t.Errorf("no line names %s:\n%s\n%s", name, r.stdout, r.stderr)
+			}
+			for _, ok := range []string{"invoice-nightly", "submission-nightly", "worker-nightly"} {
+				if ok != name && invLine(r, ok) {
+					t.Errorf("a line names the allowed %s:\n%s\n%s", ok, r.stdout, r.stderr)
+				}
+			}
+		})
+	}
+}
+
+func TestPreviewInvariantsRefuseAPlainKeyOrAnotherSecret(t *testing.T) {
+	t.Parallel()
+	const plain = "sk-or-v1-notarealkey"
+	for name, v := range map[string]invVar{
+		"plain value":     {name: "OPENROUTER_API_KEY", value: plain},
+		"another secret":  {name: "OPENROUTER_API_KEY", ref: "other"},
+		"a pr secret":     {name: "OPENROUTER_API_KEY", ref: "pr-7-openrouter"},
+		"the key renamed": {name: "OPENROUTER_API_KEY", ref: "nightly-openrouter-api-key-2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runInvariants(t, []string{nlKeySecret}, []invSvc{{"submission-nightly", []invVar{nlKeyVar()}}, {"invoice-nightly", []invVar{v}}})
+			if r.code != 1 {
+				t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+			}
+			if !invLine(r, "invoice-nightly") {
+				t.Errorf("no line names invoice-nightly:\n%s\n%s", r.stdout, r.stderr)
+			}
+			if invLine(r, "submission-nightly") {
+				t.Errorf("a line names the allowed submission-nightly:\n%s\n%s", r.stdout, r.stderr)
+			}
+			if strings.Contains(r.stdout+r.stderr, plain) {
+				t.Errorf("output leaks the key value:\n%s\n%s", r.stdout, r.stderr)
+			}
+		})
+	}
+}
+
+func TestPreviewInvariantsRefuseSentryOnTheNightly(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"nightly-sentry-dsn", "pr-7-sentry", "SENTRY-DSN"} {
+		t.Run("secret "+name, func(t *testing.T) {
+			t.Parallel()
+			r := runInvariants(t, []string{nlKeySecret, name}, nlGoodSvcs())
+			if r.code != 1 {
+				t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+			}
+			if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + `$`).MatchString(r.stdout + "\n" + r.stderr) {
+				t.Errorf("output does not list %s:\n%s\n%s", name, r.stdout, r.stderr)
+			}
+		})
+	}
+	for _, svc := range []string{"gateway-nightly", "invoice-nightly", "worker-nightly", "gateway-pr-7"} {
+		for _, name := range []string{"SENTRY_DSN", "VITE_SENTRY_DSN", "SENTRY_AUTH_TOKEN"} {
+			for _, v := range []invVar{{name: name, value: "https://k@o.ingest.sentry.io/1"}, {name: name, ref: "nightly-sentry-dsn"}} {
+				t.Run(svc+" "+name, func(t *testing.T) {
+					t.Parallel()
+					vars := []invVar{v}
+					if nlRealAI[strings.TrimSuffix(svc, "-nightly")] {
+						vars = append(vars, nlKeyVar())
+					}
+					r := runInvariants(t, []string{nlKeySecret}, []invSvc{{"submission-nightly", []invVar{nlKeyVar()}}, {svc, vars}})
+					if r.code != 1 {
+						t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+					}
+					if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(svc) + ` ` + name + `( |$)`).MatchString(r.stdout + "\n" + r.stderr) {
+						t.Errorf("no line names %s %s:\n%s\n%s", svc, name, r.stdout, r.stderr)
+					}
+				})
+			}
 		}
 	}
 }

@@ -1,0 +1,24 @@
+{"Action":"start","Package":"example.com/gj/tmo"}
+{"Action":"run","Package":"example.com/gj/tmo","Test":"TestFast"}
+{"Action":"output","Package":"example.com/gj/tmo","Test":"TestFast","Output":"=== RUN   TestFast\n"}
+{"Action":"output","Package":"example.com/gj/tmo","Test":"TestFast","Output":"--- PASS: TestFast (0.00s)\n"}
+{"Action":"pass","Package":"example.com/gj/tmo","Test":"TestFast"}
+{"Action":"run","Package":"example.com/gj/tmo","Test":"TestSlow"}
+{"Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"=== RUN   TestSlow\n"}
+{"Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"panic: test timed out after 1s\n"}
+{"Action":"output","Package":"example.com/gj/tmo","Output":"FAIL\texample.com/gj/tmo\t1.934s\n"}
+{"Action":"fail","Package":"example.com/gj/tmo"}
+{"Action":"start","Package":"example.com/gj/tmo"}
+{"Action":"run","Package":"example.com/gj/tmo","Test":"TestFast"}
+{"Action":"output","Package":"example.com/gj/tmo","Test":"TestFast","Output":"=== RUN   TestFast\n"}
+{"Action":"output","Package":"example.com/gj/tmo","Test":"TestFast","Output":"--- PASS: TestFast (0.00s)\n"}
+{"Action":"pass","Package":"example.com/gj/tmo","Test":"TestFast"}
+{"Action":"run","Package":"example.com/gj/tmo","Test":"TestSlow"}
+{"Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"=== RUN   TestSlow\n"}
+{"Action":"output","Package":"example.com/gj/tmo","Test":"TestSlow","Output":"--- PASS: TestSlow (0.00s)\n"}
+{"Action":"pass","Package":"example.com/gj/tmo","Test":"TestSlow"}
+{"Action":"run","Package":"example.com/gj/tmo","Test":"TestAfter"}
+{"Action":"output","Package":"example.com/gj/tmo","Test":"TestAfter","Output":"=== RUN   TestAfter\n"}
+{"Action":"output","Package":"example.com/gj/tmo","Test":"TestAfter","Output":"--- PASS: TestAfter (0.00s)\n"}
+{"Action":"pass","Package":"example.com/gj/tmo","Test":"TestAfter"}
+{"Action":"pass","Package":"example.com/gj/tmo"}

@@ -1,0 +1,259 @@
+{
+  "config": {
+    "argv": [
+      "/usr/bin/node",
+      "/home/runner/work/invoice-os/invoice-os/e2e/node_modules/@playwright/test/cli.js",
+      "test",
+      "--config",
+      "playwright.config.ts",
+      "x.spec",
+      "--grep",
+      "passes|flaky one"
+    ],
+    "configFile": "/home/runner/work/invoice-os/invoice-os/playwright.config.ts",
+    "rootDir": "/home/runner/work/invoice-os/invoice-os/e2e",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/home/runner/work/invoice-os/invoice-os/test-results",
+        "repeatEach": 1,
+        "retries": 1,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "",
+        "name": "",
+        "testDir": "/home/runner/work/invoice-os/invoice-os/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "filteredProjects": [
+      {
+        "grep": {},
+        "grepInvert": null,
+        "outputDir": "/home/runner/work/invoice-os/invoice-os/test-results",
+        "repeatEach": 1,
+        "retries": 1,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "name": "",
+        "testDir": "/home/runner/work/invoice-os/invoice-os/e2e",
+        "snapshotDir": "/home/runner/work/invoice-os/invoice-os/e2e",
+        "testIgnore": [],
+        "testMatch": "**/*.@(spec|test).?(c|m)[jt]s?(x)",
+        "timeout": 30000,
+        "use": {},
+        "dependencies": [],
+        "ignoreSnapshots": false,
+        "__projectId": ""
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "json",
+        null
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "default",
+    "updateSourceMethod": "patch",
+    "version": "1.64.1",
+    "workers": 6,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "scratch/x.spec.ts",
+      "file": "scratch/x.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "passes",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 4,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-29T19:53:13.340Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "3150b2b15a46dc1d8ef0-8a3900494b3a724c1be9",
+          "file": "scratch/x.spec.ts",
+          "line": 2,
+          "column": 5
+        },
+        {
+          "title": "flaky one",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 2,
+                  "error": {
+                    "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m1\u001b[39m\nReceived: \u001b[31m0\u001b[39m",
+                    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m1\u001b[39m\nReceived: \u001b[31m0\u001b[39m\n    at /home/runner/work/invoice-os/invoice-os/e2e/scratch/x.spec.ts:3:68",
+                    "location": {
+                      "file": "/home/runner/work/invoice-os/invoice-os/e2e/scratch/x.spec.ts",
+                      "column": 68,
+                      "line": 3
+                    },
+                    "snippet": "  1 | import { test, expect } from '/home/runner/work/invoice-os/invoice-os/e2e/node_modules/@playwright/test';\n  2 | test('passes', async () => { expect(1).toBe(1); });\n> 3 | test('flaky one', async ({}, testInfo) => { expect(testInfo.retry).toBe(1); });\n    |                                                                    ^\n  4 | test.skip('skipped one', async () => {});\n  5 | test.describe('outer', () => {\n  6 |   test.describe('inner', () => {"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "/home/runner/work/invoice-os/invoice-os/e2e/scratch/x.spec.ts",
+                        "column": 68,
+                        "line": 3
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m1\u001b[39m\nReceived: \u001b[31m0\u001b[39m\n\n  1 | import { test, expect } from '/home/runner/work/invoice-os/invoice-os/e2e/node_modules/@playwright/test';\n  2 | test('passes', async () => { expect(1).toBe(1); });\n> 3 | test('flaky one', async ({}, testInfo) => { expect(testInfo.retry).toBe(1); });\n    |                                                                    ^\n  4 | test.skip('skipped one', async () => {});\n  5 | test.describe('outer', () => {\n  6 |   test.describe('inner', () => {\n    at /home/runner/work/invoice-os/invoice-os/e2e/scratch/x.spec.ts:3:68"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-29T19:53:13.365Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "/home/runner/work/invoice-os/invoice-os/test-results/scratch-x-flaky-one/error-context.md"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "/home/runner/work/invoice-os/invoice-os/e2e/scratch/x.spec.ts",
+                    "column": 68,
+                    "line": 3
+                  }
+                },
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 3,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 1,
+                  "startTime": "2026-10-29T19:53:13.663Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "flaky"
+            }
+          ],
+          "id": "3150b2b15a46dc1d8ef0-58bdf4369ae8d556db7e",
+          "file": "scratch/x.spec.ts",
+          "line": 3,
+          "column": 5
+        },
+        {
+          "title": "skipped one",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [
+                {
+                  "type": "skip"
+                }
+              ],
+              "expectedStatus": "skipped",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 0,
+                  "status": "skipped",
+                  "duration": 0,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-29T19:53:13.700Z",
+                  "annotations": [
+                    {
+                      "type": "skip"
+                    }
+                  ],
+                  "attachments": []
+                }
+              ],
+              "status": "skipped"
+            }
+          ],
+          "id": "3150b2b15a46dc1d8ef0-1c2d3e4f5a6b7c8d9e0f",
+          "file": "scratch/x.spec.ts",
+          "line": 4,
+          "column": 6
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-10-29T19:53:13.042Z",
+    "duration": 658.266,
+    "expected": 1,
+    "skipped": 1,
+    "unexpected": 0,
+    "flaky": 1
+  }
+}

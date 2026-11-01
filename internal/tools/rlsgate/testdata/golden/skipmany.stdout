@@ -1,0 +1,28 @@
+PASS  pkgA.TestOKB
+PASS  pkgA.TestOKC
+PASS  pkgA.TestOKD
+PASS  pkgA.TestOKE
+PASS  pkgA.TestOKF
+PASS  pkgA.TestOKG
+PASS  pkgA.TestOKH
+PASS  pkgA.TestOKI
+PASS  pkgA.TestOKJ
+PASS  pkgA.TestOKK
+PASS  pkgA.TestOKL
+PASS  pkgA.TestOKM
+PASS  pkgA.TestOKN
+PASS  pkgA.TestOKO
+PASS  pkgA.TestOKP
+PASS  pkgA.TestOKQ
+PASS  pkgA.TestOKR
+PASS  pkgA.TestOKS
+PASS  pkgA.TestOKT
+PASS  pkgA.TestOKU
+PASS  pkgA.TestOKV
+PASS  pkgA.TestOKW
+PASS  pkgA.TestOKX
+PASS  pkgA.TestOKY
+PASS  pkgA.TestOKZ
+SKIP  pkgA.TestRLS_Dominated
+rlsgate: 25 passed, 1 skipped, 0 failed (26 test-level results)
+::error::rlsgate: 1 DB-backed test(s) SKIPPED (DB env broke): TestRLS_Dominated

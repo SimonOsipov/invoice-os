@@ -9,10 +9,12 @@ name: Preview (deploy the PR's fleet to Google Cloud + E2E)
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  # The Nightly run dispatches this workflow: one preview named nightly, deleted by nightly-teardown.
+  workflow_dispatch:
 
 # Shared with dev-env-teardown.yml: a teardown waits for an in-flight deploy of the same PR.
 concurrency:
-  group: dev-preview-${{ github.event.pull_request.number }}
+  group: dev-preview-${{ github.event.pull_request.number || 'nightly' }}
   cancel-in-progress: false
 
 permissions:
@@ -20,7 +22,7 @@ permissions:
   checks: read
 
 env:
-  PR: ${{ github.event.pull_request.number }}
+  PR: ${{ github.event.pull_request.number || 'nightly' }}
   WIF_PROVIDER: projects/428987361227/locations/global/workloadIdentityPools/github/providers/github-actions
   DEPLOYER: deploy-preview@ascomply-preview.iam.gserviceaccount.com
 
@@ -35,13 +37,35 @@ jobs:
       pull-requests: read
       actions: read
     outputs:
-      e2e: ${{ steps.lane.outputs.e2e }}
+      e2e: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.lane.outputs.e2e }}
+      nightly: ${{ steps.mode.outputs.nightly }}
+      topology_after: ${{ steps.mode.outputs.topology_after }}
+      shards: ${{ steps.shards.outputs.shards }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
+      - id: mode
+        env:
+          NIGHTLY: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          echo "nightly=$NIGHTLY" >>"$GITHUB_OUTPUT"
+          if [ "$NIGHTLY" = true ]; then
+            echo "topology_after=success failure" >>"$GITHUB_OUTPUT"
+          else
+            echo "topology_after=success" >>"$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: List the topology shards
+        id: shards
+        run: |
+          shards="$(node e2e/topology/shards.ts)"
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
       - uses: dorny/paths-filter@v3
         id: filter
+        if: github.event_name == 'pull_request'
         with:
           filters: |
             e2e:
@@ -66,6 +90,7 @@ jobs:
               - 'pnpm-lock.yaml'
               - '.github/workflows/dev-env.yml'
       - id: lane
+        if: github.event_name == 'pull_request'
         env:
           FILTER_E2E: ${{ steps.filter.outputs.e2e }}
         run: bash scripts/ci/lane.sh pr-e2e
@@ -109,6 +134,7 @@ jobs:
       - uses: actions/checkout@v4
       - id: wait
         name: Wait for the CI check to succeed on this commit
+        if: needs.changes.outputs.nightly != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -158,6 +184,7 @@ jobs:
       support_console_url: ${{ steps.urls.outputs.support_console_url }}
       library_url: ${{ steps.urls.outputs.library_url }}
       blog_url: ${{ steps.urls.outputs.blog_url }}
+      hubspot_token_version: ${{ steps.token_version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       # `prenv jwk-es256` generates the PR's GoTrue key.
@@ -169,6 +196,62 @@ jobs:
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.DEPLOYER }}
+      - name: Delete a leftover nightly preview
+        if: needs.changes.outputs.nightly == 'true'
+        run: bash scripts/ci/preview.sh teardown "$PR"
+      - name: Prove no nightly preview is left
+        if: needs.changes.outputs.nightly == 'true'
+        run: |
+          prs=$(bash scripts/ci/preview.sh prs)
+          echo "$prs"
+          if grep -q '^nightly ' <<<"$prs"; then
+            echo "::error::a nightly preview is still listed after its teardown"
+            exit 1
+          fi
+      - name: Count the previews
+        id: count
+        if: needs.changes.outputs.nightly == 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/ci/preview.sh cap | tee -a "$GITHUB_OUTPUT"
+      - name: preview cap reached
+        if: needs.changes.outputs.nightly == 'true' && steps.count.outputs.full != 'false'
+        env:
+          OPEN: ${{ steps.count.outputs.open }}
+        run: |
+          echo "::error::preview cap reached: $OPEN previews open (.claude/rules/ci-preview.md)"
+          exit 1
+      - name: Check the contact secrets
+        if: needs.changes.outputs.nightly == 'true'
+        run: bash scripts/ci/preview.sh contact-preflight "$PR"
+      - id: token_version
+        name: Read the HubSpot token version
+        if: needs.changes.outputs.nightly == 'true'
+        run: |
+          set -euo pipefail
+          version=$(bash scripts/ci/preview.sh contact-token-version "$PR")
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+      - name: Start the contacts (guard the portal, delete leftovers)
+        if: needs.changes.outputs.nightly == 'true'
+        run: |
+          set -euo pipefail
+          token=$(bash scripts/ci/preview.sh contact-token "$PR" "${{ steps.token_version.outputs.version }}")
+          echo "::add-mask::$token"
+          key=$(bash scripts/ci/preview.sh mail-read-key "$PR")
+          echo "::add-mask::$key"
+          domain=$(bash scripts/ci/preview.sh mail-domain "$PR")
+          echo "::add-mask::$domain"
+          mkdir -p "$RUNNER_TEMP/contacts"
+          HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain HUBSPOT_DEAL_STAGE=$(bash scripts/ci/preview.sh deal-stage) \
+            go run ./internal/tools/nightlycontacts start -out "$RUNNER_TEMP/contacts/start.json"
+      - name: Upload the contacts start result
+        if: always() && needs.changes.outputs.nightly == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: contacts-start
+          path: ${{ runner.temp }}/contacts/start.json
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Create the PR's secrets (generated, never copied from production)
         run: bash scripts/ci/preview.sh secrets "$PR"
       - name: Create the PR's documents bucket
@@ -296,6 +379,8 @@ jobs:
       - name: Grant the account-state read on auth.users
         run: bash scripts/ci/preview.sh grant "$PR"
       - name: Deploy the backends
+        env:
+          NIGHTLY_HUBSPOT_TOKEN_VERSION: ${{ needs.prepare-env.outputs.hubspot_token_version }}
         run: bash scripts/ci/preview.sh deploy "$PR" "$SHA" gateway tenancy portfolio invoice validation dashboard submission notifications docling worker
       - name: Deploy the sites
         run: bash scripts/ci/preview.sh deploy "$PR" "$SHA" app landing library blog ops-console support-console
@@ -448,36 +533,40 @@ jobs:
           fi
           echo "Sentry $direction on $EXPECTED_BUILD for: $names (auth exempt)."
 
-      # A preview must deliver nothing to HubSpot or Resend.
+      # A PR preview must deliver nothing to HubSpot or Resend; the nightly delivers to its test vendors.
       - name: Gate on notifications' contacts delivery mode
         run: |
           set -euo pipefail
+          want=fake
+          [ "$PR" != nightly ] || want=real
           mode=""
           for _ in $(seq 1 5); do
             if curl -sS --connect-timeout 5 --max-time 40 -H "X-Gateway-Token: $GATEWAY_TOKEN" -o /tmp/contacts-fleet.json "$GATEWAY_URL/healthz/fleet" \
               && jq -e '.services | type == "array"' /tmp/contacts-fleet.json >/dev/null 2>&1; then
               mode=$(jq -r '[.services[] | select(.name == "notifications") | .contacts // "none"][0] // "absent"' /tmp/contacts-fleet.json)
-              if [ "$mode" = fake ]; then break; fi
+              if [ "$mode" = "$want" ]; then break; fi
             fi
             sleep 5
           done
-          if [ "$mode" != fake ]; then
-            echo "::error::notifications reports contacts='${mode:-unreachable}', want 'fake'. Anything else means the preview could write to HubSpot or Resend: check DEPLOY_ENV is pr-<N>."
+          if [ "$mode" != "$want" ]; then
+            echo "::error::notifications reports contacts='${mode:-unreachable}', want '$want'. On a PR, anything but fake means the preview could write to HubSpot or Resend: check DEPLOY_ENV is pr-<N>."
             exit 1
           fi
-          echo "notifications reports contacts=fake."
+          echo "notifications reports contacts=$want."
 
   # Smoke (landing, library, blog and both consoles render) and api (typed contract suite) here;
   # topology after it. The api suite writes data, so it runs only against a preview.
   e2e:
     name: E2E (smoke + api)
-    needs: [fleet-gate, health-gate, prepare-env, deploy, ci-watch]
+    needs: [changes, fleet-gate, health-gate, prepare-env, deploy, ci-watch]
     if: >-
       !cancelled() &&
       needs.fleet-gate.result == 'success' &&
       needs.health-gate.result == 'success' &&
       needs.ci-watch.result == 'success'
     runs-on: ubuntu-latest
+    # A PR keeps the 360-minute default; only the nightly gets a budget.
+    timeout-minutes: ${{ needs.changes.outputs.nightly == 'true' && 40 || 360 }}
     permissions:
       contents: read
       pull-requests: read   # flaky-spec gate lists the PR's changed files
@@ -491,8 +580,8 @@ jobs:
       SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}
       LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}
       BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}
-    outputs:
-      shards: ${{ steps.shards.outputs.shards }}
+      ARGOS_SHOTS: ${{ needs.changes.outputs.nightly == 'true' && secrets.ARGOS_TOKEN != '' && '1' || '' }}
+      E2E_TARGET: ${{ needs.changes.outputs.nightly == 'true' && 'nightly' || '' }}
     steps:
       # "Re-run failed jobs" keeps the deploy job's output from an earlier attempt.
       - name: Refuse a re-run that skipped the deploy
@@ -511,11 +600,6 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - name: List the topology shards
-        id: shards
-        run: |
-          shards="$(node e2e/topology/shards.ts)"
-          echo "shards=$shards" >> "$GITHUB_OUTPUT"
       - name: Install deps
         run: pnpm install --frozen-lockfile --ignore-scripts
       # After the install: the fleet specs send the PR's gateway token.
@@ -538,6 +622,8 @@ jobs:
         if: "!cancelled() && steps.attempt.outcome == 'success'"
         run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
       - name: Smoke (landing, library, blog and both consoles render)
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ needs.changes.outputs.nightly == 'true' && format('{0}/nightly-results/playwright-smoke.json', github.workspace) || '' }}
         run: pnpm --filter @invoice-os/e2e test:smoke
       # Both suites write to the SAME e2e/playwright-report/. Park each report the
       # moment its suite ends, before the next one overwrites it.
@@ -551,6 +637,8 @@ jobs:
         # !cancelled(): a red smoke step must not withhold the api verdict.
         if: "!cancelled() && steps.attempt.outcome == 'success'"
         # Finishes before the topology job starts (`needs: e2e`): it shares the database with topology.
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ needs.changes.outputs.nightly == 'true' && format('{0}/nightly-results/playwright-api.json', github.workspace) || '' }}
         run: pnpm --filter @invoice-os/e2e test:api
       - name: Park the API report
         if: always()
@@ -560,7 +648,7 @@ jobs:
           fi
       # A retry-pass elsewhere stays a summary warning; in a spec this PR changed it fails.
       - name: Fail on a retry-pass in a spec this PR changed
-        if: always() && steps.attempt.outcome == 'success'
+        if: always() && steps.attempt.outcome == 'success' && needs.changes.outputs.nightly != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_FILES_API: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files
@@ -594,19 +682,35 @@ jobs:
           path: e2e/flaky-results/
           if-no-files-found: ignore
           retention-days: 30
+      - name: Upload the nightly results
+        if: always() && needs.changes.outputs.nightly == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-e2e
+          path: nightly-results/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload the Argos shots
+        if: always() && needs.changes.outputs.nightly == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: argos-shots-e2e
+          path: e2e/argos-shots/
+          if-no-files-found: ignore
+          retention-days: 14
 
   # Each topology unit runs on its own runner after smoke + api; the map is in e2e/topology/shards.ts.
   topology:
     name: E2E topology (${{ matrix.shard }})
-    needs: [e2e, prepare-env, deploy]
-    if: "!cancelled() && needs.e2e.result == 'success'"
+    needs: [changes, commit-authors, e2e, prepare-env, deploy]
+    if: "!cancelled() && contains(needs.changes.outputs.topology_after, needs.e2e.result) && needs.commit-authors.outputs.dependabot_only == 'false'"
     runs-on: ubuntu-latest
     # ceiling: serial-lane is the longest shard, ~23 min on run.app (auth ~17); split it again (e2e/topology/shards.ts) above 25.
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(needs.e2e.outputs.shards) }}
+        shard: ${{ fromJSON(needs.changes.outputs.shards) }}
     permissions:
       contents: read
       pull-requests: read   # flaky-spec gate lists the PR's changed files
@@ -625,6 +729,8 @@ jobs:
       BAKED_LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}
       BAKED_LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}
       BAKED_BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}
+      ARGOS_SHOTS: ${{ needs.changes.outputs.nightly == 'true' && secrets.ARGOS_TOKEN != '' && '1' || '' }}
+      E2E_TARGET: ${{ needs.changes.outputs.nightly == 'true' && 'nightly' || '' }}
     steps:
       - name: Refuse a re-run that skipped the deploy
         id: attempt
@@ -669,6 +775,7 @@ jobs:
       - name: Topology (${{ matrix.shard }})
         env:
           SHARD: ${{ matrix.shard }}
+          PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ needs.changes.outputs.nightly == 'true' && format('{0}/nightly-results/playwright-topology-{1}.json', github.workspace, matrix.shard) || '' }}
         run: pnpm --filter @invoice-os/e2e test:topology --project="$SHARD"
       - name: Park the topology report
         if: always()
@@ -678,7 +785,7 @@ jobs:
           fi
       # A retry-pass elsewhere stays a summary warning; in a spec this PR changed it fails.
       - name: Fail on a retry-pass in a spec this PR changed
-        if: always() && steps.attempt.outcome == 'success' && steps.targets.outcome == 'success'
+        if: always() && steps.attempt.outcome == 'success' && steps.targets.outcome == 'success' && needs.changes.outputs.nightly != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_FILES_API: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files
@@ -702,12 +809,28 @@ jobs:
           path: e2e/flaky-results/
           if-no-files-found: ignore
           retention-days: 30
+      - name: Upload the nightly results
+        if: always() && needs.changes.outputs.nightly == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-topology-${{ matrix.shard }}
+          path: nightly-results/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload the Argos shots
+        if: always() && needs.changes.outputs.nightly == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: argos-shots-topology-${{ matrix.shard }}
+          path: e2e/argos-shots/
+          if-no-files-found: ignore
+          retention-days: 14
 
   # The required merge check: always reports on a PR, so a skipped E2E cannot read as a pass.
   e2e-gate:
     name: E2E gate
     needs: [changes, commit-authors, e2e, topology, ci-watch]
-    if: always()
+    if: always() && needs.changes.outputs.nightly != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -727,3 +850,293 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           COMMITS_ONLY_DEPENDABOT: ${{ needs.commit-authors.outputs.dependabot_only }}
           COMMIT_AUTHORS_RESULT: ${{ needs.commit-authors.result }}
+
+  # A real registration and demo request reach HubSpot and Resend; runs whether or not E2E passed.
+  contacts:
+    name: Real contact reaches HubSpot and Resend
+    needs: [changes, prepare-env, deploy, e2e, topology]
+    if: "!cancelled() && needs.changes.outputs.nightly == 'true' && needs.deploy.result == 'success'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
+      NIGHTLY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      # A re-run of failed jobs would hit a torn-down fleet; finish reports the missing check.
+      - name: Refuse a re-run that skipped the deploy
+        id: attempt
+        env:
+          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$DEPLOYED_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error::Re-run the whole workflow, not failed jobs — the fleet is torn down after each attempt. The deploy last ran in attempt '${DEPLOYED_ATTEMPT:-none}'; this is attempt $RUN_ATTEMPT."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      - name: Check the contacts
+        run: |
+          set -euo pipefail
+          token=$(bash scripts/ci/preview.sh contact-token "$PR" "${{ needs.prepare-env.outputs.hubspot_token_version }}")
+          echo "::add-mask::$token"
+          key=$(bash scripts/ci/preview.sh mail-read-key "$PR")
+          echo "::add-mask::$key"
+          domain=$(bash scripts/ci/preview.sh mail-domain "$PR")
+          echo "::add-mask::$domain"
+          mkdir -p "$RUNNER_TEMP/contacts"
+          HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain HUBSPOT_DEAL_STAGE=$(bash scripts/ci/preview.sh deal-stage) \
+            go run ./internal/tools/nightlycontacts check -out "$RUNNER_TEMP/contacts/check.json"
+      - name: Upload the contacts check result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: contacts-check
+          path: ${{ runner.temp }}/contacts/check.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Real AI features and extraction accuracy on the nightly fleet, before the mail phase.
+  nightly-ai:
+    name: AI features and accuracy
+    needs: [changes, commit-authors, prepare-env, deploy, health-gate, fleet-gate, e2e, topology, contacts]
+    if: >-
+      !cancelled() &&
+      needs.changes.outputs.nightly == 'true' &&
+      needs.commit-authors.outputs.dependabot_only == 'false' &&
+      needs.deploy.result == 'success' &&
+      needs.health-gate.result == 'success' &&
+      needs.fleet-gate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
+      APP_URL: ${{ needs.prepare-env.outputs.app_url }}
+      LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}
+      OPS_CONSOLE_URL: ${{ needs.prepare-env.outputs.ops_console_url }}
+      SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}
+      LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}
+      BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}
+    steps:
+      - name: Refuse a re-run that skipped the deploy
+        id: attempt
+        env:
+          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$DEPLOYED_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error::Re-run the whole workflow, not failed jobs — the database is recreated only when the deploy job runs. It last ran in attempt '${DEPLOYED_ATTEMPT:-none}'; this is attempt $RUN_ATTEMPT."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install the e2e dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Check the AI features and accuracy
+        run: pnpm --filter @invoice-os/e2e nightly-ai --out "$GITHUB_WORKSPACE/nightly-results/ai.json"
+      - name: Upload the nightly results
+        if: always() && needs.changes.outputs.nightly == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-ai-check
+          path: nightly-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Real invite and reset mail, after every E2E job: mail-on mounts the mail keys on the nightly fleet.
+  email:
+    name: Real invite and reset mail
+    needs: [changes, commit-authors, invariants, prepare-env, deploy, health-gate, fleet-gate, e2e, topology, contacts, nightly-ai]
+    if: >-
+      !cancelled() &&
+      needs.changes.outputs.nightly == 'true' &&
+      needs.commit-authors.outputs.dependabot_only == 'false' &&
+      needs.deploy.result == 'success' &&
+      needs.health-gate.result == 'success' &&
+      needs.fleet-gate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
+      APP_URL: ${{ needs.prepare-env.outputs.app_url }}
+      LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}
+      OPS_CONSOLE_URL: ${{ needs.prepare-env.outputs.ops_console_url }}
+      SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}
+      LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}
+      BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}
+      E2E_TARGET: nightly
+      NIGHTLY_RUN_ID: ${{ github.run_id }}
+      MAIL_SECTION_FILE: ${{ github.workspace }}/nightly-results/email.json
+    steps:
+      - name: Refuse a re-run that skipped the deploy
+        id: attempt
+        env:
+          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$DEPLOYED_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error::Re-run the whole workflow, not failed jobs — the database is recreated only when the deploy job runs. It last ran in attempt '${DEPLOYED_ATTEMPT:-none}'; this is attempt $RUN_ATTEMPT."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium
+        run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      - name: Check the nightly mail secrets
+        run: bash scripts/ci/preview.sh mail-preflight "$PR"
+      - name: Read the Resend read key and receiving domain
+        run: |
+          set -euo pipefail
+          key=$(bash scripts/ci/preview.sh mail-read-key "$PR")
+          echo "::add-mask::$key"
+          domain=$(bash scripts/ci/preview.sh mail-domain "$PR")
+          echo "::add-mask::$domain"
+          {
+            echo "RESEND_READ_KEY=$key"
+            echo "RESEND_RECEIVING_DOMAIN=$domain"
+            echo "MAIL_ACCOUNTS_FILE=$RUNNER_TEMP/mail-accounts.json"
+          } >>"$GITHUB_ENV"
+      - name: Read the run start
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_API: repos/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: echo "MAIL_WINDOW_START=$(gh api "$RUN_API" --jq .run_started_at)" >>"$GITHUB_ENV"
+      - name: Prepare the mail accounts
+        run: pnpm --filter @invoice-os/e2e test:mail prepare.spec.ts
+      - name: Turn real mail on
+        id: mailon
+        run: bash scripts/ci/preview.sh mail-on "$PR"
+      - name: Real invite and reset mail
+        timeout-minutes: 16
+        run: pnpm --filter @invoice-os/e2e test:mail real-mail.spec.ts
+      - name: Turn real mail off
+        if: always() && steps.mailon.outcome != 'skipped'
+        run: bash scripts/ci/preview.sh mail-off "$PR"
+      - name: Upload the nightly results
+        if: always() && needs.changes.outputs.nightly == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-email
+          path: nightly-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # The Nightly run's preview lives only for the run: delete it on success, failure and cancel.
+  nightly-teardown:
+    name: Delete the nightly preview
+    needs: [changes, commit-authors, prepare-env, build, deploy, health-gate, fleet-gate, e2e, topology, contacts, nightly-ai, email]
+    if: always() && needs.changes.outputs.nightly == 'true' && needs.commit-authors.outputs.dependabot_only == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      - name: Delete the nightly preview
+        run: bash scripts/ci/preview.sh teardown "$PR"
+      - name: Prove the nightly preview is gone
+        run: |
+          prs=$(bash scripts/ci/preview.sh prs)
+          echo "$prs"
+          {
+            echo "### Previews left"
+            echo '```'
+            echo "$prs"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          if grep -q '^nightly ' <<<"$prs"; then
+            echo "::error::the nightly preview is still listed after its teardown"
+            exit 1
+          fi
+
+  # Deletes the run's contacts once the fleet is gone, so no retry can re-create one.
+  contacts-cleanup:
+    name: Delete the run's contacts
+    needs: [changes, commit-authors, prepare-env, nightly-teardown]
+    if: always() && needs.changes.outputs.nightly == 'true' && needs.commit-authors.outputs.dependabot_only == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      # An API error must not skip the delete; finish reports a missing phase file.
+      - name: Download the contacts results
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: contacts-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/contacts
+      - name: Delete the contacts and prove none is left
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_API: repos/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          started=$(gh api "$RUN_API" --jq .run_started_at)
+          token=$(bash scripts/ci/preview.sh contact-token "$PR" "${{ needs.prepare-env.outputs.hubspot_token_version }}")
+          echo "::add-mask::$token"
+          key=$(bash scripts/ci/preview.sh mail-read-key "$PR")
+          echo "::add-mask::$key"
+          domain=$(bash scripts/ci/preview.sh mail-domain "$PR")
+          echo "::add-mask::$domain"
+          mkdir -p "$RUNNER_TEMP/contacts" nightly-results
+          HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain \
+            go run ./internal/tools/nightlycontacts finish -in "$RUNNER_TEMP/contacts" -started "$started" -out nightly-results/hubspot.json
+      - name: Upload the nightly results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-hubspot
+          path: nightly-results/
+          if-no-files-found: ignore
+          retention-days: 14

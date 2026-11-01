@@ -1,7 +1,8 @@
 import { test, expect, type BrowserContext, type Frame, type Locator, type Page, type Request, type Response } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA } from './targets'
 import { shardPersonas } from './importWizardShared'
-import { resolveTarget } from '../targets'
+import { shoot } from '../argos'
+import { expectedContactsMode, nightlyTarget, resolveTarget } from '../targets'
 import { DESTINATION_READY, VERIFIED, browserToken, collectErrors, expectInWorkspace, headerSignIn, isHandoffNavigation, passFrontDoor, sidebarRoster, signInAs, signInAtFrontDoor, signInDialog, submitSignIn } from '../personaSession'
 import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession, type ConsoleTarget } from '../staffSession'
 import { ensureMember } from '../realAccounts'
@@ -38,6 +39,7 @@ import {
 } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { seedConsent } from '../smoke/landingConsent'
+import { openInvite, readSessionIdentity, registerOnAcceptPage } from '../inviteSession'
 import { approvalRun404Dropper, consoleErrorsLine, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS } from './layout'
 
@@ -2431,8 +2433,8 @@ async function expectNoDialog(page: Page): Promise<void> {
 }
 
 test('deployed journey: a stranger registers through the landing and lands in a workspace of each kind', async ({ page, browser }) => {
-  // Two real sign-ins at the 180 s one-sign-in budget of the journeys above, plus three registrations and two 30 s contact polls.
-  test.setTimeout(360_000)
+  // Two real sign-ins at the 180 s one-sign-in budget of the journeys above, plus three registrations and two contact polls.
+  test.setTimeout(nightlyTarget() ? 540_000 : 360_000)
   // The free-mail refusal and the first sign-in's /me before provisioning are deliberate 4xx, which Chromium logs as console errors.
   const errors = gatedErrors(page, [
     expectedStatusDropper(page, 400, /\/auth\/register$/),
@@ -2508,7 +2510,13 @@ test('deployed journey: a stranger registers through the landing and lands in a 
       const row = (await contactsMe(session!.token!))!
       expect(row.marketing_eligible, `${kind}: marketing_eligible`).toBe(kind === 'firm')
       expect(row.tags, `${kind}: tags`).toEqual(['registered'])
-      expect(row.mode, `${kind}: contact mode`).toBe('fake')
+      // The row exists before any vendor call; mode is set only after delivery.
+      await expect
+        .poll(async () => (await contactsMe(session!.token!))?.mode, {
+          timeout: nightlyTarget() ? 120_000 : 30_000,
+          message: `${kind}: contact mode`,
+        })
+        .toBe(expectedContactsMode())
     })
 
     // The next kind starts signed out: a stored session would skip the front door.
@@ -2906,7 +2914,6 @@ test('deployed landing: "Forgot password?" sends a reset request, and a bogus re
 
 // The accept page of an invite link (frontend/landing/src/components/InvitePage.tsx).
 const INVITE_INVALID = 'This invite is no longer valid'
-const inviteUrl = (token: string) => `${LANDING_URL}/invite#token=${token}`
 
 // A fresh admin with a workspace of `workspaceName` (default: a short one; maxNameChars, internal/tenancy/tenancy.go, is 200).
 async function inviteWorkspace(workspaceName?: string, displayName = 'Invite E2E'): Promise<{ adminToken: string; tenantId: string; name: string }> {
@@ -2931,12 +2938,6 @@ async function expectAcceptStack(page: Page, width: number, heading: Locator, pa
   if (!box) throw new Error(`the accept card rendered no box at ${width}px`)
   expect(box.x, `the card starts left of the viewport at ${width}px`).toBeGreaterThanOrEqual(-1)
   expect(box.x + box.width, `the card ends right of the viewport at ${width}px`).toBeLessThanOrEqual(width + 1)
-}
-
-// A fragment-only goto is a same-document navigation: the page would keep its view and its address-bar fragment. Load afresh.
-async function openInvite(page: Page, token: string): Promise<void> {
-  await page.goto('about:blank')
-  await page.goto(inviteUrl(token))
 }
 
 // Opens the link at `width`, then asserts the ready view stacks and the address bar holds no fragment.
@@ -2998,6 +2999,7 @@ test('deployed landing: the accept page names the workspace and role at every wi
   for (const width of widths) {
     await expectReadyView(page, width, ordinaryToken, workspace.name, ordinary)
     read.push(width)
+    if (width === widths[0]) await shoot(page, 'landing', 'invite', { mask: [page.getByText(workspace.name), page.getByText(ordinary)] })
   }
   expect(read, 'the widths the ordinary-address sweep read').toEqual(widths)
   // Copied before any click: the page has only loaded and previewed.
@@ -3032,21 +3034,6 @@ test('deployed landing: the accept page names the workspace and role at every wi
     await context.close()
   }
 })
-
-// Registers the invitee on the accept page and ends on "Check your email".
-async function registerOnAcceptPage(page: Page, token: string): Promise<void> {
-  await seedConsent(page, false)
-  await openInvite(page, token)
-  await page.getByRole('button', { name: 'Create account', exact: true }).click()
-  await page.getByRole('button', { name: 'Create account →', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Check your email', exact: true })).toBeVisible({ timeout: 30_000 })
-}
-
-// Waits for the app to draw, then returns the browser session's /v1/me.
-async function readSessionIdentity(page: Page): Promise<Me> {
-  await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
-  return me(await browserToken(page))
-}
 
 // Sign in stays disabled until the accept page holds a name.
 async function signInFromAcceptPage(page: Page): Promise<void> {

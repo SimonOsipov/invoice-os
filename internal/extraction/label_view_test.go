@@ -332,6 +332,14 @@ var lsImageOnly = map[string]bool{
 	"pdfium:scanned_invoice.pdf":          true,
 	"pdfium:wild_scanned_no_number.pdf":   true,
 	"golden:scanned_invoice.docling.json": true,
+	"pdfium:nightly_scan_01.pdf":          true,
+	"pdfium:nightly_scan_02.pdf":          true,
+	"pdfium:nightly_scan_03.pdf":          true,
+	"pdfium:nightly_scan_04.pdf":          true,
+	"pdfium:nightly_scan_05.pdf":          true,
+	"pdfium:nightly_scan_06.pdf":          true,
+	"pdfium:nightly_scan_07.pdf":          true,
+	"pdfium:nightly_scan_08.pdf":          true,
 }
 
 // lsQualifying is every read's letter-spaced tokens, the ones LabelViewForTest actually moves.

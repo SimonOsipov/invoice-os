@@ -1,0 +1,6 @@
+{"Action":"run","Package":"example.com/x","Test":"TestA"}
+{"Action":"pass","Package":"example.com/x","Test":"TestA","Elapsed":0}
+{"Action":"run","Package":"example.com/x","Test":"TestB"}
+{"Action":"output","Package":"example.com/x","Test":"TestB","Output":"    b_test.go:9: boom\n"}
+{"Action":"fail","Package":"example.com/x","Test":"TestB","Elapsed":0}
+{"Action":"fail","Package":"example.com/x","Elapsed":0}

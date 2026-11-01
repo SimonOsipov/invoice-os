@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test'
+import { nightlyTarget } from './targets'
 
 // Smoke suite for the three deployed SPAs. There is no local web server — every
 // test hits a real deployed URL (see smoke/apps.ts), so this config has no
@@ -18,7 +19,12 @@ export default defineConfig({
   // on failure — so the retry-pass was invisible. Attached locally too: it prints
   // nothing when retries are off, and surfaces a flake under `--retries=1`.
   reporter: process.env.CI
-    ? [['list'], ['html', { open: 'never' }], ['./flakyReporter.ts', { label: 'smoke' }]]
+    ? [
+        ['list'],
+        ['html', { open: 'never' }],
+        ['./flakyReporter.ts', { label: 'smoke' }],
+        ...(nightlyTarget() ? [['json'] as const] : []),
+      ]
     : [['list'], ['./flakyReporter.ts', { label: 'smoke' }]],
   use: {
     headless: true,

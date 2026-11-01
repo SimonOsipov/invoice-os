@@ -1,0 +1,49 @@
+{
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "flips",
+          "status": "passed",
+          "title": "flips",
+          "duration": 4.114083999999991,
+          "failureMessages": [
+            "AssertionError: expected 1 to be 2 // Object.is equality"
+          ],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "always fails",
+          "status": "failed",
+          "title": "always fails",
+          "duration": 0.5448749999999905,
+          "failureMessages": [
+            "AssertionError: expected 1 to be 2 // Object.is equality",
+            "AssertionError: expected 1 to be 2 // Object.is equality"
+          ],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "passes",
+          "status": "passed",
+          "title": "passes",
+          "duration": 0.0828340000000054,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1793280079617,
+      "endTime": 1793280079621.545,
+      "status": "failed",
+      "message": "",
+      "name": "/home/runner/work/invoice-os/invoice-os/frontend/app/src/flake.test.ts"
+    }
+  ],
+  "success": false
+}

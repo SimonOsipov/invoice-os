@@ -1,0 +1,3 @@
+{"Action":"start","Package":"pkgEmpty"}
+{"Action":"output","Package":"pkgEmpty","Output":"?   \tpkgEmpty\t[no test files]\n"}
+{"Action":"skip","Package":"pkgEmpty","Elapsed":0}

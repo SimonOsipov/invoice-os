@@ -3,6 +3,7 @@ paths:
   - ".github/workflows/dev-env.yml"
   - ".github/workflows/dev-env-teardown.yml"
   - ".github/workflows/dev-env-sweeper.yml"
+  - ".github/workflows/nightly.yml"
   - "scripts/ci/preview.sh"
 ---
 # PR previews on Google Cloud
@@ -15,14 +16,24 @@ paths:
 - A Dependabot PR that was reopened or marked ready runs the full chain. Send `@dependabot recreate` to get the skip back.
 - Keep the shared preview resources in invoice-os-infra `preview.tf`. Create and delete the per-PR resources only with `preview.sh`.
 - Label every per-PR resource `preview-pr=<N>`. The sweeper finds a preview by that label.
+- `preview.sh` also takes the exact name `nightly`: `<svc>-nightly`, `migrate-nightly`, database `pr_0`, bucket `ascomply-preview-nightly`, secrets `nightly-<name>`, label `preview-pr=nightly`.
+- A dispatched `dev-env.yml` run creates the nightly preview and deletes it in `Delete the nightly preview`. The sweeper skips it.
+- Leave the `preview-pr` label off the user's `nightly-*` vendor secrets. Teardown deletes every labelled secret.
+- The nightly's `nightly-ai` job runs after `contacts` and before `email`.
+- The nightly's `email` job runs `preview.sh mail-on nightly` after E2E ends. It mounts `GOTRUE_SMTP_PASS` on `auth-nightly`, turns auto-confirm off there and mounts `RESEND_SENDING_KEY` on `tenancy-nightly`.
+- Finish every other nightly job before `email`. Only `nightly-teardown` and `contacts-cleanup` follow it, and `contacts-cleanup` needs `nightly-teardown`.
+- The nightly contact guard runs in `prepare-env` before `deploy`: `Check the contact secrets`, then `token_version`, then `nightlycontacts start`. A refusal deploys nothing.
+- `notifications-nightly` and `worker-nightly` mount `nightly-resend-read-key` as `RESEND_API_KEY`.
+- The `email` job needs four secrets: `nightly-gotrue-smtp-pass`, `nightly-resend-sending-key`, `nightly-resend-read-key`, `nightly-resend-receiving-domain`.
 - Recreate `pr_<N>` on every deploy with the `preview-db` job. Cloud SQL refuses `session_replication_role`, so no reset runs in place.
 - Run the migrate job before GoTrue. Run it again with `preview.sh grant` after GoTrue is up: GoTrue creates `auth.users` on its first boot.
 - Generate each PR's tokens and GoTrue key in `preview.sh secrets`. Never copy a production value into preview.
-- Give no preview service an OpenRouter key or a Sentry DSN. The `Preview invariants` job fails on either.
+- Give no preview service a Sentry DSN, and no PR preview an OpenRouter key. The one exception is the `nightly` preview: `invoice`, `submission` and `worker` mount `nightly-openrouter-api-key` as `OPENROUTER_API_KEY` and set no `AI_FAKE` or `JEV_FAKE`. The `Preview invariants` job fails on any other OpenRouter secret or variable and on any Sentry one.
 - Probe the gateway at `/health` on run.app. Cloud Run's front end answers `/healthz` itself; `/healthz/fleet` passes through.
 - Print the library and blog addresses with their base paths from `preview.sh urls`. A preview has no load balancer.
 - Send `X-Gateway-Token` to `/healthz/fleet`. `preview.sh token <N>` prints the PR's token.
 - Read cloud credentials only after `pnpm install` in a job that installs dependencies.
 - Re-run the whole workflow to retry an `E2E gate`, never "Re-run failed jobs". The database is recreated only when the `deploy` job runs.
 - Teardown deletes the PR's services, migrate job, database, bucket and secrets on close. The nightly sweep deletes a preview older than 24 h whose PR reads closed.
-- Keep a preview fleet at 30 database connections or fewer at peak (`preview.sh budget`) and open at most 3 previews: 3 x 30 fits the 95 usable slots of the `preview` instance's `max_connections` 100 (100 - 3 superuser-reserved - 2 `cloudsqladmin` = 95). Nothing enforces the cap; past it, any open preview's services can fail with 53300.
+- Keep a preview fleet at 30 database connections or fewer at peak (`preview.sh budget`) and open at most 3 previews: 3 x 30 fits the 95 usable slots of the `preview` instance's `max_connections` 100 (100 - 3 superuser-reserved - 2 `cloudsqladmin` = 95). Past the cap, any open preview's services can fail with 53300.
+- The nightly counts toward the cap. In a nightly run, `Prepare the preview` stops at `preview cap reached` when 3 previews are open (`TestDevEnvNightly_PrepareEnvStopsAtTheCap`). A PR run checks no cap.

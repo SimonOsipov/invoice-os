@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const savedCI = process.env.CI
 
-async function loadConfig(ci: string | undefined) {
+async function loadConfig(ci: string | undefined, target?: string) {
   if (ci === undefined) delete process.env.CI
   else process.env.CI = ci
+  if (target === undefined) delete process.env.E2E_TARGET
+  else process.env.E2E_TARGET = target
   vi.resetModules()
   return (await import('./playwright.topology.config')).default
 }
@@ -12,6 +14,7 @@ async function loadConfig(ci: string | undefined) {
 afterEach(() => {
   if (savedCI === undefined) delete process.env.CI
   else process.env.CI = savedCI
+  delete process.env.E2E_TARGET
 })
 
 describe('topology config', () => {
@@ -49,5 +52,18 @@ describe('topology config', () => {
     const config = await loadConfig('')
     expect(config.maxFailures).toBe(0)
     expect(config.retries).toBe(0)
+  })
+
+  it('stops at no failure on the nightly', async () => {
+    expect((await loadConfig('true', 'nightly')).maxFailures).toBe(0)
+  })
+
+  it('keeps one retry on the nightly', async () => {
+    expect((await loadConfig('true', 'nightly')).retries).toBe(1)
+  })
+
+  it('adds the json reporter on the nightly only', async () => {
+    expect((await loadConfig('true', 'nightly')).reporter).toContainEqual(['json'])
+    expect((await loadConfig('true')).reporter).not.toContainEqual(['json'])
   })
 })

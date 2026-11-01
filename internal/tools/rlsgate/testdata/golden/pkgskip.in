@@ -1,0 +1,6 @@
+{"Action":"start","Package":"pkgA"}
+{"Action":"run","Package":"pkgA","Test":"TestReal"}
+{"Action":"pass","Package":"pkgA","Test":"TestReal","Elapsed":0.01}
+{"Action":"pass","Package":"pkgA","Elapsed":0.02}
+{"Action":"output","Package":"pkgEmpty","Output":"?   \tpkgEmpty\t[no test files]\n"}
+{"Action":"skip","Package":"pkgEmpty","Elapsed":0}

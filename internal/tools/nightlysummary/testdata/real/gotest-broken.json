@@ -1,0 +1,6 @@
+{"ImportPath":"example.com/gj/broken [example.com/gj/broken.test]","Action":"build-output","Output":"# example.com/gj/broken [example.com/gj/broken.test]\n"}
+{"ImportPath":"example.com/gj/broken [example.com/gj/broken.test]","Action":"build-output","Output":"broken/b.go:3:9: syntax error: unexpected {, expected )\n"}
+{"ImportPath":"example.com/gj/broken [example.com/gj/broken.test]","Action":"build-fail"}
+{"Action":"start","Package":"example.com/gj/broken"}
+{"Action":"output","Package":"example.com/gj/broken","Output":"FAIL\texample.com/gj/broken [build failed]\n"}
+{"Action":"fail","Package":"example.com/gj/broken","FailedBuild":"example.com/gj/broken [example.com/gj/broken.test]"}

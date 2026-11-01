@@ -47,6 +47,7 @@ import { assertErrorEnvelope, type RawResult } from './contract-helpers'
 import { getInvoice, listInvoices, rawFetch } from './client'
 import { PERF_HEADER, PERF_MAPPING, nullImportKeys, steerMarker } from '../importFixtures'
 import { strToU8, zipSync } from 'fflate'
+import { nightlyTarget, REAL_AI_COVERED } from '../targets'
 
 // importFetch(): the multipart request seam, adapting fetch's Response into
 // RawResult. Never set Content-Type manually -- fetch derives the multipart
@@ -867,6 +868,7 @@ test.describe('suggest-mapping contract (API E2E, over the deployed gateway)', (
   })
 
   test('AIR07-API-01: the suggest endpoint answers the documented body on the deployed stack', async () => {
+    test.skip(nightlyTarget(), REAL_AI_COVERED)
     const entity = await createEntity(token, { name: `AIR-07 api ${freshTin()}`, tin: freshTin() })
     const documentId = await uploadDocument(token, air07SteeredCsv(`INV-AIR07API1-${freshTin()}`))
 
@@ -882,6 +884,7 @@ test.describe('suggest-mapping contract (API E2E, over the deployed gateway)', (
   })
 
   test('AIR07-API-02: a saved mapping outranks a live AI answer in the source field', async () => {
+    test.skip(nightlyTarget(), REAL_AI_COVERED)
     const entity = await createEntity(token, { name: `AIR-07 api ${freshTin()}`, tin: freshTin() })
 
     // Leg 1 (control): nothing saved yet for this entity/header, so the AI's own answer is
@@ -922,6 +925,7 @@ test.describe('check-mapping contract (API E2E, over the deployed gateway)', () 
   })
 
   test('CHECK05-API-01: the check endpoint answers the documented body on the deployed stack', async () => {
+    test.skip(nightlyTarget(), REAL_AI_COVERED)
     const plain = await uploadDocument(token, check05Csv(`INV-CHECK05API-P-${freshTin()}`, 'Notes'))
     const marked = await uploadDocument(token, check05Csv(`INV-CHECK05API-M-${freshTin()}`, 'Notes JEVFAKE-DOUBT'))
     const mapping = { invoice_number: 'Invoice No', vat: 'VAT' }

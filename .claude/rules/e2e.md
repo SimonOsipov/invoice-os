@@ -10,6 +10,7 @@ paths:
 - Keep the browser layer thin. Cover behaviour in Go tests and in the `e2e/api/` contract suite.
 - Assert DOM and state. Fail a journey on any `console.error` or `pageerror`.
 - Add no screenshot, pixel-diff or visual-snapshot gate.
+- Take an Argos shot only through `e2e/argos.ts`. The shots block nothing.
 - Carry a console-gate exception in `consoleGate.ts`, scoped by resource URL. Never change an API to satisfy the gate.
 - Run Chromium only. Keep `workers: 1` in the api and topology configs. The smoke config runs fully parallel.
 - Add each new topology spec file to a unit in `e2e/topology/shards.ts`. `shards.test.ts` fails on a spec in no unit.
@@ -18,11 +19,11 @@ paths:
 - Run `blog-subscribe.spec.ts` in the `blog` unit. It submits the newsletter form to the fork gateway and uses no tenant.
 - Keep a spec on `serial-lane` while it needs the seeded tenants 1111 and 2222. A shard gets its own tenant pair from `db/seed.e2e-shards.sql`.
 - Sign in an app session with `signInAs(page, id, { tenantId })` from `e2e/personaSession.ts`. It admits the e2e member through `ensureMember`.
-- Set an invitation token with `setInvitationToken`, or invite with `inviteWithToken`. A fork captures mail, so a spec cannot read a real token.
+- Set an invitation token with `setInvitationToken`, or invite with `inviteWithToken`. A fork captures mail, so a spec cannot read a real token. `e2e/mail/` is the one exception: it reads real mail on the nightly.
 - Set a deletion cancel-link token with `setDeletionLinkToken`.
 - A staff account is an active `reviewer` of the seeded house company `ASComply (dev)`. `provisionStaffAccount` grants it through `/auth/mock/member`.
 - Open a console with a staff session from `provisionStaffAccount` and `seedStaffSession`.
-- Serve `/auth/mock/member`, `/auth/mock/invitation-token` and `/auth/mock/deletion-link-token` only from the `mockissuer` build. Only `pull_request` stamps that tag.
+- Serve `/auth/mock/member`, `/auth/mock/invitation-token` and `/auth/mock/deletion-link-token` only from the `mockissuer` build.
 - Never assume an empty table. Smoke, api and topology run in that order against one deployment, with no reset between them.
 - Expect a Playwright retry to rerun a failed test against the rows its first attempt left.
 - Create per-run-unique data, such as fresh TINs and random UUIDs. Act only on rows the spec created.
@@ -55,7 +56,7 @@ paths:
 - Assert the sidebar marker `[title="Tenant verified via /v1/me"]` to prove a backend-resolved identity.
 - Prove cross-tenant isolation with mock-issuer tokens for two tenants and `GET /api/tenancy/v1/me`. Both tenants exist in the seed, so RLS is the filter.
 - Expect the fleet roll-up to report `sentry` `off` on a PR and `on` or `off` on the persistent environment. `auth` is exempt.
-- Expect `notifications` to report `contacts` `fake` on a PR and `real` or `off` on the persistent environment.
+- Expect `notifications` to report `contacts` `fake` on a PR and `real` on the nightly, through `expectedContactsMode()`.
 - Write the fork's URL variables, `WORKER_URL` and `GATEWAY_TOKEN`, the worker's `VALIDATION_URL` and `S2S_TOKEN`, and submission's `GATEWAY_URL` on each run. A fork never inherits them.
 - Write `VITE_LIBRARY_URL` and `VITE_BLOG_URL` on `landing` on each fork.
 - Write `VITE_LIBRARY_URL` and `VITE_BLOG_URL` on `app` on each fork.
@@ -64,4 +65,4 @@ paths:
 - Write `VITE_SUPPORT_URL` on `app` and `VITE_APP_URL` on `support-console` on each fork.
 - Expect `library` to get no `VITE_GATEWAY_URL` on a fork. The blog URL is a CORS origin; the library URL is not.
 - Expect a fork to accept registrations, send no mail and confirm at once. `fork-vars-before-urls` sets `GOTRUE_DISABLE_SIGNUP`, a blank SMTP host and `GOTRUE_MAILER_AUTOCONFIRM`.
-- Expect a CI topology shard to stop at its first failed test, retry included. The `list` reporter prints later tests as "did not run"; the html and json reports mark them `skipped`. A retry-pass does not stop it.
+- Expect a PR topology shard to stop at its first failed test, retry included. The `list` reporter prints later tests as "did not run"; the html and json reports mark them `skipped`. A retry-pass does not stop it.

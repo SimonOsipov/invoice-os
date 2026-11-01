@@ -3,6 +3,11 @@
 # Test: TestDependabotOnly_MissingEnvExits2.
 set -euo pipefail
 pr=${1:-}
+if [ "$pr" = nightly ]; then
+  echo "dependabot_only=false" >>"${GITHUB_OUTPUT:?dependabot-only: GITHUB_OUTPUT missing}"
+  echo "dependabot-only: nightly preview, not a PR"
+  exit 0
+fi
 for v in GH_TOKEN REPO PR_AUTHOR EVENT_SENDER EVENT_ACTION HEAD_SHA GITHUB_OUTPUT; do
   if [ -z "${!v:-}" ] && [ "$v" != EVENT_ACTION ]; then
     echo "dependabot-only: $v missing" >&2

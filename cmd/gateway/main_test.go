@@ -1245,6 +1245,7 @@ func TestInvitationResendHandler_EnforcementFollowsThePosture(t *testing.T) {
 	}{
 		{"pr-7", "pr-7", 11},
 		{"production", "production", gateway.ResendPerAddress},
+		{"nightly", "nightly", gateway.ResendPerAddress},
 		{"development", "development", gateway.ResendPerAddress},
 		{"empty", "", gateway.ResendPerAddress},
 		{"upper-case PR-7", "PR-7", gateway.ResendPerAddress},
@@ -1437,6 +1438,7 @@ func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 	}{
 		{"pr-7", "pr-7", 4, false},
 		{"production", "production", 3, true},
+		{"nightly", "nightly", 3, true},
 		{"development", "development", 3, true},
 		{"empty", "", 3, true},
 		{"bare pr-", "pr-", 3, true},

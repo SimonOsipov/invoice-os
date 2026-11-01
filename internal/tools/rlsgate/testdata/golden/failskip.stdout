@@ -1,0 +1,5 @@
+FAIL  pkgA.TestBad
+    bad_test.go:10: expected 42, got 7
+SKIP  pkgA.TestRLS_Skipped
+rlsgate: 0 passed, 1 skipped, 1 failed (2 test-level results)
+::error::rlsgate: 1 DB-backed test(s) SKIPPED (DB env broke): TestRLS_Skipped

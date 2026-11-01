@@ -1,0 +1,5 @@
+{"Action":"run","Package":"pkgA","Test":"TestBlank1"}
+
+{"Action":"pass","Package":"pkgA","Test":"TestBlank1"}
+   {"Action":"pass","Package":"pkgA","Test":"TestBlank2"}
+

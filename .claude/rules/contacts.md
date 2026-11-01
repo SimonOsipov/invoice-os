@@ -40,9 +40,14 @@ paths:
 - Pick the mode from the vendor keys and `CONTACTS_FAKE`: `real`, `fake` or `off`. In `off` the worker fetches no `contacts` job.
 - Refuse to boot when `CONTACTS_FAKE` is true and any key is set, or when only some keys are set.
 - Name variables in a boot error, never their values.
-- Run a preview environment in `fake` mode and discard its vendor keys.
+- Run a PR preview in `fake` mode and discard its vendor keys.
+- The nightly posture reads the contact keys like production.
+- Its newsletter is `fake`. Its blog and new-device mail is captured. Its invite mail is captured until `mail-on` mounts the key.
+- `scripts/ci/preview.sh` mounts the four contact keys on the nightly's `notifications` and `worker`, and no `CONTACTS_FAKE`. Contacts run `real` there. A PR preview gets no key.
+- `TestPreviewNightlyContactsAreReal` and `TestPreviewPRHasNoContactKeys` pin this.
 - Answer 404 to an intake request that carries `X-User-ID`. Require the gateway token on every intake route.
 - Answer 404 at the gateway for any `/api/<service>/internal/...` path, raw and cleaned.
+- Only the nightly sets `HUBSPOT_DEAL_STAGE`; production leaves it unset and deals open in `demoStage`.
 - Open one HubSpot deal per demo request and one per first registration.
 - Open no deal while the contact has an open one, decided by HubSpot `hs_is_closed`.
 - Retry a delivery with River's default policy. Any non-nil worker error retries.

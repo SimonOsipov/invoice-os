@@ -156,6 +156,9 @@ func TestBlogSubscribePreviewPostureAdmits(t *testing.T) {
 	if got := send("production", 5); got != 3 {
 		t.Fatalf("hosted posture forwarded %d of 5, want 3 (the cap enforces)", got)
 	}
+	if got := send("nightly", 5); got != 3 {
+		t.Errorf("nightly forwarded %d of 5, want 3 (the cap enforces)", got)
+	}
 	if got := send("ascomply-pr-1", 5); got != 5 {
 		t.Errorf("PR fork forwarded %d of 5, want 5 (the cap logs and admits)", got)
 	}

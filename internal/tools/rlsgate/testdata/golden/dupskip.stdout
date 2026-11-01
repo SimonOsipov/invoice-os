@@ -1,0 +1,4 @@
+SKIP  pkgA.TestRLS_Dup
+SKIP  pkgB.TestRLS_Dup
+rlsgate: 0 passed, 2 skipped, 0 failed (2 test-level results)
+::error::rlsgate: 2 DB-backed test(s) SKIPPED (DB env broke): TestRLS_Dup, TestRLS_Dup

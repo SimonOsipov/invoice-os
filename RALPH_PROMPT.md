@@ -2,7 +2,7 @@
 
 ## Overview
 
-`/ralph <STORY>` builds one story: plan once (Phase 0.6), then per subtask Test-Spec* → Execution → QA Verify (*Test-Spec only for `Test-first: yes`), then a story-level deploy gate (Phase 3.5). The deploy gate is the `dev-env.yml` run on the PR: it deploys the whole fleet to the PR's own preview on Google Cloud (`<svc>-pr-<N>` in `ascomply-preview`, with a fresh database `pr_<N>` that the `migrate` job bootstraps, migrates and seeds), checks fleet health, and runs smoke, api and topology E2E. Work runs in an isolated git worktree.
+`/ralph <STORY>` builds one story: plan once (Phase 0.6), then per subtask Test-Spec* → Execution (*Test-Spec only for `Test-first: yes`), then one QA Verify over the whole story, then a story-level deploy gate (Phase 3.5). The deploy gate is the `dev-env.yml` run on the PR: it deploys the whole fleet to the PR's own preview on Google Cloud (`<svc>-pr-<N>` in `ascomply-preview`, with a fresh database `pr_<N>` that the `migrate` job bootstraps, migrates and seeds), checks fleet health, and runs smoke, api and topology E2E. Work runs in an isolated git worktree.
 
 **One story = one branch = one PR.** RALPH splits it into subtasks (`<STORY>-01`, …) internally.
 
@@ -94,7 +94,7 @@ Harbourmaster keeps the story's subtasks. Ralph runs only as a Harbourmaster wor
 | Read the story's subtasks and their status | `hm subtask list <STORY>` |
 | Read one subtask whole | `hm subtask show <ID>` |
 | A stage of a subtask starts: Test-Spec, Execution or QA Verify | `hm subtask stage <ID> "<stage>"` |
-| QA Verify of the subtask passes | `hm subtask stage <ID> passed` |
+| The Stage 3 suites of the subtask pass, or the fix of a QA finding passes them | `hm subtask stage <ID> passed` |
 | QA finds a defect in the subtask | `hm subtask note <ID> "<the defect in one line>"` |
 | A fix starts on a subtask that is `done` | `hm subtask stage <ID> Execution` |
 
@@ -221,7 +221,7 @@ Tell the FIRST subtask's executor to put the story's `## Decisions` section and 
 
 ### Phase 1: Sequential subtask execution
 
-For each subtask in dependency order, run the stages below. Stage numbers start at 2.5 because code comments cite them. Run one stage agent at a time, and run no suite while a stage agent runs: agents in one worktree share its files and its dev Postgres.
+For each subtask in dependency order, run Stage 2.5 and Stage 3. After the FINAL subtask's Stage 3, run Stage 4 once over the whole story. Stage numbers start at 2.5 because code comments cite them. Run one stage agent at a time, and run no suite while a stage agent runs: agents in one worktree share its files and its dev Postgres.
 
 Before every spawn, run `hm subtask stage <ID> <stage>` in `$WORKTREE_PATH`. It sets the subtask's status, reports the stage, and prints `git status --short` and the last 3 commits. A report that says "committed" is not evidence; the log is. Commit orphaned work under its own subtask's message with explicit paths, never `git add -A`.
 
@@ -286,17 +286,21 @@ DEV_DB_PORT=<your DEV_DB_PORT> hm suite run scripts/dev/suites.sh
 - A subagent's report of a suite is not the suite's result.
 - **Checkpoint:** `EXECUTION_DONE`
 
-#### Stage 4: QA Verify
-A `trial` story runs this stage once over the whole story (QA trial).
+A subtask is `done` when its Execution commit exists and the Stage 3 suites exit 0. Then run `hm subtask stage <ID> passed`.
 
-Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the Definition of Done, the subtask's commit range with `git diff --stat` over it, and the Stage 3 suite summary lines. Pass these rules:
+Do not wait for `CI` between subtasks. Phase 3 waits for it on the FINAL head. Then take the next subtask.
+
+#### Stage 4: QA Verify
+Stage 4 runs once, after the FINAL subtask's Stage 3. Run `hm subtask stage <FINAL-ID> "QA Verify"` before the spawn.
+
+Spawn one `product-qa-spec` (Mode B). Give it the acceptance criteria of every subtask, the plan, the Definition of Done, the commit range `origin/<BASE>...HEAD` with `git diff --stat` over it, and the last Stage 3 suite summary lines. Pass `effort: high` when the story has a risky subtask. The report file is `.ralph/reports/<STORY>-QA-Verify.md`. Pass these rules:
 
 - **Scope:** read the changed files, their tests, and the code an AC names. Do not survey the rest of the code base.
 - **Suites:** the summary lines are the suite result. Run only the tests you add or change.
 - For `Test-first: yes`, confirm the Stage 2.5 tests are green and still meaningful, then add adversarial, edge and negative coverage, including a cross-tenant RLS refusal test for any new tenant-owned table.
-- **Prove every AC test can fail**, one row per item the AC lists (a value, a role, a state, an exit, an input class). For each item, break the production code the AC names and name the test that must go red. Never break a test helper. For a value AC, change the value; do not remove it. Append each row to `$WORKTREE_PATH/.ralph/mutations-<SUBTASK-ID>.jsonl`:
+- **Prove every AC test can fail**, one row per item the AC lists (a value, a role, a state, an exit, an input class). For each item, break the production code the AC names and name the test that must go red. Never break a test helper. For a value AC, change the value; do not remove it. Start each row's `ac` with its subtask id. Append each row to `$WORKTREE_PATH/.ralph/mutations-<STORY>.jsonl`:
   ```json
-  {"ac": "AC-2 / exit via back button", "file": "frontend/app/src/lib/route.ts", "find": "<exact text, once in the file>", "replace": "<broken text>", "test_file": "frontend/app/src/lib/route.test.ts", "test": "<full test title>"}
+  {"ac": "AUTH-18-02 AC-2 / exit via back button", "file": "frontend/app/src/lib/route.ts", "find": "<exact text, once in the file>", "replace": "<broken text>", "test_file": "frontend/app/src/lib/route.test.ts", "test": "<full test title>"}
   ```
   For an AC that states a rule, at least one row changes a comparison, a branch or a computation. A row that only edits a literal the test restates proves only a value AC.
   An AC item with no row is a QA failure. A Playwright spec cannot replay locally: cite its assertion for Phase 3.5 and write no row.
@@ -329,13 +333,17 @@ Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the Def
   - Never click a control that writes data on production.
   - On a PR environment, restore each member, role or membership that you change, in the same run.
 
-When QA returns, **replay the mutation rows yourself**, with no other agent running: `go run ./internal/tools/mutationreplay .ralph/mutations-<SUBTASK-ID>.jsonl`. It edits source in place and restores the exact bytes. Any `NOT-PROVEN` or `INVALID` row fails QA; send it back. Before you send it back, record each `NOT-PROVEN` row: `hm signal B6 <STORY> --subtask <SUBTASK-ID> "<ac>"`. A row is a claim; the replay is the evidence.
+When QA returns, **replay the mutation rows yourself**, with no other agent running: `go run ./internal/tools/mutationreplay .ralph/mutations-<STORY>.jsonl`. It edits source in place and restores the exact bytes. Any `NOT-PROVEN` or `INVALID` row fails QA; send it back. Before you send it back, record each `NOT-PROVEN` row: `hm signal B6 <STORY> --subtask <SUBTASK-ID> "<ac>"`. The subtask id starts the row's `ac`. A row is a claim; the replay is the evidence.
 
-If issues are found, spawn `product-executor` to fix, then re-verify. Record each QA finding with `hm subtask note`. Record each return to the executor with `hm signal B5 <STORY> --subtask <SUBTASK-ID> "<one line>"`.
-When QA passes, tick each acceptance criterion that QA proved: `hm subtask check <SUBTASK-ID> <n>`. Leave a criterion that QA did not prove unticked. hm records it at merge.
+When QA finds issues, send all findings of one round to one `product-executor` fix spawn, as one batch. For each finding, use the subtask that the finding names:
+1. Run `hm subtask stage <SUBTASK-ID> Execution` before the fix spawn.
+2. Run `hm subtask note <SUBTASK-ID> "<the defect in one line>"`.
+3. Run `hm signal B5 <STORY> --subtask <SUBTASK-ID> "<one line>"`.
+
+After a fix, run the Stage 3 suites. Run `hm subtask stage <SUBTASK-ID> passed` for each fixed subtask. Then verify again. A finding of QA Verify is a B5, not a V1.
+
+When QA passes, tick each acceptance criterion that QA proved, on every subtask: `hm subtask check <SUBTASK-ID> <n>`. Leave a criterion that QA did not prove unticked. hm records it at merge.
 - **Checkpoint:** `QA_VERIFIED`
-
-Do not wait for `CI` between subtasks. Phase 3 waits for it on the FINAL head. Then take the next subtask.
 
 #### A defect in a verified subtask
 A defect is wrong behaviour in product code or its tests. These are not defects:
@@ -344,11 +352,11 @@ A defect is wrong behaviour in product code or its tests. These are not defects:
 - a lint finding on a comment, for example the line-number citation check;
 - code that the story did not add or change.
 
-A defect escaped QA when a later finder finds it in a subtask that reached `QA_VERIFIED`. The finders are CI, a later subtask's QA Verify, the Phase 3 review and the Phase 3.5 gate.
+A defect escaped QA when a finder finds it after Stage 4 passed. The finders are CI, the Phase 3 review and the Phase 3.5 gate.
 
 1. Find the subtask whose commit added the faulty code: `git log -L` or `git blame` in `$WORKTREE_PATH`.
 2. Before the fix starts, record `hm signal V1 <STORY> --subtask <SUBTASK-ID> "<finder>: <one line>"`.
-3. `<finder>` is `ci`, `qa <SUBTASK-ID>`, `review` or `gate`.
+3. `<finder>` is `ci`, `review` or `gate`.
 4. When no single subtask added the faulty code, use the subtask that found it. Write `source unknown` in the line.
 5. Record one V1 per defect. A defect that several finders or subtasks show is still one V1.
 6. When the Phase 0.6b plan review found the defect and closed it by a conservative default, add `--defaulted <F-id>`. The signal then blames the plan.
@@ -364,7 +372,7 @@ The orchestrator never runs `git checkout -b` or `gh pr create`. Phase 3.5 step 
 
 ### Phase 3: CI
 
-After the FINAL subtask's QA, wait for the aggregate `CI` per the CI Monitoring Protocol. A red run caused by a defect is recorded per "A defect in a verified subtask" (Phase 1).
+After Stage 4 passes, wait for the aggregate `CI` per the CI Monitoring Protocol. A red run caused by a defect is recorded per "A defect in a verified subtask" (Phase 1).
 
 While it runs, review the whole diff: run `/code-review high <PR_NUMBER>`, never with `--fix`. Give `product-executor` every finding that would block the merge, in one batch: file and line, why it is wrong, how to show it fails. Add the other findings to the PR body as advisory (`gh pr edit`). Run one review cycle. No other automated review runs on this repo. A blocking finding that is a defect is recorded per "A defect in a verified subtask" (Phase 1).
 
@@ -420,34 +428,6 @@ Foreground `sleep` is blocked. Never end a turn on a wait you did not start.
 
 ---
 
-## QA trial
-
-The QA trial compares one QA Verify per story with one per subtask. hm puts each story in a group. The section "QA trial" of the worker's role file names the group.
-
-- A `control` story runs Phase 1 as written.
-- A story whose role file has no "QA trial" section runs Phase 1 as written.
-- A `trial` story runs Phase 1 with the changes below. Every other rule stays.
-
-1. Do not run Stage 4 per subtask. A subtask is `done` when its Execution commit exists and the Stage 3 suites exit 0. Then run `hm subtask stage <ID> passed`.
-2. After the FINAL subtask's Stage 3, run one Stage 4 over the whole story. Run `hm subtask stage <FINAL-ID> "QA Verify"` before the spawn.
-3. Spawn one `product-qa-spec` (Mode B). Give it the acceptance criteria of every subtask, the plan, the Definition of Done, the commit range `origin/<BASE>...HEAD` with `git diff --stat` over it, and the last Stage 3 suite summary lines.
-4. Pass `effort: high` when the story has a risky subtask.
-5. Pass every Stage 4 rule. The report file is `.ralph/reports/<STORY>-QA-Verify.md`.
-6. Each mutation row names its subtask: start its `ac` with the subtask id, for example `"ac": "AUTH-18-02 AC-2 / exit via back button"`.
-7. Write the rows of all subtasks to `.ralph/mutations-<STORY>.jsonl`. Replay them with `go run ./internal/tools/mutationreplay .ralph/mutations-<STORY>.jsonl`.
-8. Send all findings of one round to one `product-executor` fix spawn, as one batch.
-9. For each finding, use the subtask that the finding names:
-   - run `hm subtask stage <SUBTASK-ID> Execution` before the fix spawn;
-   - run `hm subtask note <SUBTASK-ID> "<the defect in one line>"`;
-   - run `hm signal B5 <STORY> --subtask <SUBTASK-ID> "<one line>"`.
-10. Record each `NOT-PROVEN` row with `hm signal B6 <STORY> --subtask <SUBTASK-ID> "<ac>"`. The subtask id starts the row's `ac`.
-11. After a fix, run the Stage 3 suites. Run `hm subtask stage <SUBTASK-ID> passed` for each fixed subtask. Then verify again.
-12. When QA passes, run `hm subtask check <SUBTASK-ID> <n>` for each acceptance criterion that QA proved, on every subtask.
-13. A defect escapes QA when a finder finds it after the story-level QA Verify passed. The finders are CI, the Phase 3 review and the Phase 3.5 gate. Record it as "A defect in a verified subtask" states.
-14. A finding of the story-level QA Verify is a B5, not a V1.
-
-Stage 2.5, Phase 0.6b, Phase 3 and Phase 3.5 run unchanged in both groups.
-
 ## Editing This File
 
 An agent parses these instructions with no one to ask. Write for that reader.
@@ -460,6 +440,6 @@ An agent parses these instructions with no one to ask. Write for that reader.
 ## Completion Rules
 
 1. Both gates green on the PR head (Core rule 3). Local tests green ≠ done.
-2. Subtask status: todo → doing (its first stage starts) → done (its QA Verify passes; in a `trial` story, its Stage 3 suites pass, per QA trial).
+2. Subtask status: todo → doing (its first stage starts) → done (its Stage 3 suites pass).
 3. Output `<promise>ALL_TASKS_COMPLETE</promise>` only after Phase 3.5 passes and every subtask is `done`.
 4. A story that changes a sign-up, invite, verify or reset flow owes one walk-through. It runs on the deployed build with a real mail client. The user runs it after the merge. It does not block `ALL_TASKS_COMPLETE`. Global `CLAUDE.md` rule 5, "Audit the Surface", defines done for surface work.

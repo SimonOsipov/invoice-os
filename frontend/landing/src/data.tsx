@@ -60,7 +60,7 @@ export const MODULES: Module[] = [
   { title: 'Business profile', body: 'Multi-tenant setup, tax details, numbering, currency, branches.', icon: 'building-2' },
   { title: 'User access', body: 'Role-based access, team invites, accountant-client links.', icon: 'users' },
   { title: 'Customer / vendor', body: 'Buyer & seller database, TIN & company verification, duplicate detection.', icon: 'contact' },
-  { title: 'Invoice management', body: 'Drafts, line items, credit & debit notes, cancellations.', icon: 'file-text' },
+  { title: 'Invoice management', body: 'Drafts, line items, credit & debit notes.', icon: 'file-text' },
   { title: 'Validation engine', body: 'Rule-based checks for fields, tax logic, totals, numbering.', icon: 'circle-check' },
   { title: 'Approval workflow', body: 'Creator, reviewer, approver, rejection notes, status trail.', icon: 'check' },
   { title: 'Document generation', body: 'PDF, JSON, XML/UBL export, QR placeholder, versioning.', icon: 'file-check' },

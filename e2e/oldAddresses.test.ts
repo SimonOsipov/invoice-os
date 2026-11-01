@@ -61,7 +61,7 @@ describe('oldAddresses', () => {
     const src = readFileSync(new URL('../frontend/library/src/content.ts', import.meta.url), 'utf8')
     const paths = libraryPathsOf(src)
     expect(paths.filter((p) => p.split('/').length === 2)).toHaveLength(11)
-    expect(paths.filter((p) => p.split('/').length === 3)).toHaveLength(28)
+    expect(paths.filter((p) => p.split('/').length === 3)).toHaveLength(29)
     expect(paths).toContain('/invoices/import-files')
     expect(paths).toContain('/members/delete-account')
     expect(paths).toContain('/members/delete-workspace')

@@ -7,6 +7,7 @@ import { unzipSync } from 'fflate'
 import { apiBase, createEntity, createInvoice, getAuditLog, login, validateInvoice, PERSONAS } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope, type RawResult } from './contract-helpers'
+import { sheetRows } from '../xlsxRows'
 
 // internal/archive/invoices.go invoicesCSVHeader.
 const HEADER = [
@@ -44,17 +45,6 @@ async function asRaw(res: Response): Promise<RawResult> {
     body = undefined
   }
   return { status: res.status, body }
-}
-
-const unescapeXml = (s: string) =>
-  s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
-
-// excelize's stream writer emits `<row>` of `<c t="inlineStr"><is><t>` cells.
-function sheetRows(xlsx: Uint8Array): string[][] {
-  const xml = new TextDecoder().decode(unzipSync(xlsx)['xl/worksheets/sheet1.xml'])
-  return [...xml.matchAll(/<row\b[^>]*>(.*?)<\/row>/gs)].map((row) =>
-    [...row[1].matchAll(/<c\b[^>]*>(?:<is><t[^>]*>(.*?)<\/t><\/is>)?<\/c>/gs)].map((c) => unescapeXml(c[1] ?? '')),
-  )
 }
 
 function invoiceFields(invoiceNumber: string, issueDate: string) {

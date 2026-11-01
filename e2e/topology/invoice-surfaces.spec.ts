@@ -3795,15 +3795,21 @@ test('detail surface: the armed decision block and approval card, plus their lay
 })
 
 // An accepted invoice of 3 lines, reached through the register's own submit path.
-async function openAcceptedThreeLineInvoice(page: Page): Promise<void> {
+// `over` replaces the lines and header amounts; no argument keeps 1000 / 75 / 1075.
+async function openAcceptedThreeLineInvoice(
+  page: Page,
+  over?: { lines: Record<string, string>[]; subtotal: string; vat: string; total: string },
+): Promise<{ invoiceNumber: string; entityName: string }> {
   const token = await login(PERSONAS.A)
   const stamp = Date.now()
   const entity = await createEntity(token, { name: `CRDDBTNOTE-02 ${stamp}`, tin: freshTin() })
   const invoiceNumber = `INV-CRDDBTNOTE-02-${stamp}`
+  const amounts = over ? { subtotal: over.subtotal, vat: over.vat, total: over.total } : {}
   const inv = await createInvoice(token, {
     entity_id: entity.id,
     ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_ACCEPT),
-    line_items: [
+    ...amounts,
+    line_items: over?.lines ?? [
       { description: 'Widget A', quantity: '4', unit_price: '100', line_total: '400' },
       { description: 'Widget B', quantity: '3', unit_price: '100', line_total: '300' },
       { description: 'Widget C', quantity: '3', unit_price: '100', line_total: '300' },
@@ -3821,6 +3827,7 @@ async function openAcceptedThreeLineInvoice(page: Page): Promise<void> {
   await expect(row.getByTestId('invoice-status-badge')).toContainText('ACCEPTED')
   await openInvoiceRow(page, invoiceNumber)
   await expect(page.getByTestId('issue-credit-note')).toBeEnabled()
+  return { invoiceNumber, entityName: entity.name }
 }
 
 test('detail surface: the note actions fit the action column', async ({ page }) => {
@@ -3991,6 +3998,94 @@ test('detail surface: a user issues a credit note on chosen lines', async ({ pag
   const noteRow = page.getByTestId('notes-card').getByTestId('note-row').filter({ hasText: number })
   await expect(noteRow).toBeVisible()
   await expect(noteRow.getByTestId('note-row-total')).toHaveText('-₦538')
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('notes: a credit note nets in the list, the Reports tiles and the register footer', async ({ page }) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  // Kobo-level fixture: 459.20 x 7.5% = 34.440, so vat-standard-rate passes.
+  const { invoiceNumber } = await openAcceptedThreeLineInvoice(page, {
+    lines: [
+      { description: 'Widget A', quantity: '4', unit_price: '52.30', line_total: '209.20' },
+      { description: 'Widget B', quantity: '3', unit_price: '40.40', line_total: '121.20' },
+      { description: 'Widget C', quantity: '5', unit_price: '25.76', line_total: '128.80' },
+    ],
+    subtotal: '459.20',
+    vat: '34.44',
+    total: '493.64',
+  })
+  await assertFiscalRecord(page, invoiceNumber)
+
+  // Note on A x2 + C x3. Dated 2026-01-15, before rule set v6 (2027-01-01): Re-validate runs the
+  // invoice rules and the cap check, not the billing-reference rules (rule_set_v6_test.go).
+  const noteNumber = `CN-NET-${Date.now()}`
+  await page.getByTestId('issue-credit-note').click()
+  await page.getByTestId('note-number').fill(noteNumber)
+  await page.getByTestId('note-issue-date').fill('2026-01-15')
+  const lines = page.getByTestId('note-line-row')
+  await lines.nth(0).getByTestId('note-line-check').check()
+  await lines.nth(0).getByTestId('note-line-qty').fill('2')
+  await lines.nth(2).getByTestId('note-line-check').check()
+  await lines.nth(2).getByTestId('note-line-qty').fill('3')
+  // 2 x 52.30 + 3 x 25.76 = 104.60 + 77.28 = 181.88
+  await expect(page.getByTestId('note-subtotal')).toHaveText('181.88')
+  // 181.88 x 7.5% = 13.641 -> 13.64
+  await expect(page.getByTestId('note-vat')).toHaveText('13.64')
+  // 181.88 + 13.64 = 195.52
+  await expect(page.getByTestId('note-total')).toHaveText('195.52')
+  await page.getByTestId('note-form-submit').click()
+
+  await expect(page.getByTestId('document-type-badge')).toHaveText('CREDIT')
+  await expect(page.getByTestId('invoice-status-badge')).toContainText('DRAFT')
+  // A draft note is outside the register.
+  await page.getByTestId('revalidate').click()
+  await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
+
+  await goToInvoices(page)
+  const noteRow = invoiceRowByNumber(page, noteNumber)
+  await expect(noteRow.getByTestId('invoice-type-badge')).toHaveText('CREDIT')
+  await expect(noteRow.getByTestId('invoice-amount')).toHaveText('-₦196')
+  await expect(noteRow.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
+  const originalRow = invoiceRowByNumber(page, invoiceNumber)
+  await expect(originalRow.getByTestId('invoice-amount')).toHaveText('₦494')
+  await expect(originalRow.getByTestId('invoice-status-badge')).toContainText('ACCEPTED')
+
+  await goToReports(page)
+  // 459.20 - 181.88 = 277.32
+  await expect(reportsKpiValue(page, 'Taxable value')).toHaveText('₦277')
+  // 34.44 - 13.64 = 20.80
+  await expect(reportsKpiValue(page, 'Output VAT')).toHaveText('₦21')
+  // 493.64 - 195.52 = 298.12
+  await expect(reportsKpiValue(page, 'Total invoiced')).toHaveText('₦298')
+  // 277.32 x 5% = 13.866
+  await expect(reportsKpiValue(page, 'WHT withheld · 5%')).toHaveText('~₦14')
+  await expect(reportsKpiValue(page, 'Invoices in period')).toHaveText('2')
+
+  await page.getByTestId('register-period-from').fill('2026-01-01')
+  await page.getByTestId('register-period-to').fill('2026-01-31')
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /^Invoice register/ }).click()])
+  const [header, ...sheet] = sheetRows(new Uint8Array(readFileSync(await download.path())))
+  const col = (name: string) => {
+    expect(header, 'the register header names the column').toContain(name)
+    return header.indexOf(name)
+  }
+  const footer = sheet[sheet.length - 1]
+  const data = sheet.slice(0, -1)
+  expect(data, 'the register holds the original and the note').toHaveLength(2)
+  const noteData = data.find((r) => r[col('invoice_number')] === noteNumber)
+  const originalData = data.find((r) => r[col('invoice_number')] === invoiceNumber)
+  expect(noteData, 'the note row').toBeTruthy()
+  expect(originalData, 'the original row').toBeTruthy()
+  // Stored positive; the footer subtracts it.
+  expect(['subtotal', 'vat', 'total'].map((c) => noteData![col(c)])).toEqual(['181.88', '13.64', '195.52'])
+  expect(noteData![col('document_type')]).toBe('credit_note')
+  expect(noteData![col('original_invoice_number')]).toBe(invoiceNumber)
+  expect(['subtotal', 'vat', 'total'].map((c) => originalData![col(c)])).toEqual(['459.20', '34.44', '493.64'])
+  expect(originalData![col('status')]).toBe('accepted')
+  expect(originalData![col('irn')], 'the original carries its IRN').not.toBe('')
+  expect(footer[col('invoice_number')]).toBe('Net total')
+  expect(['subtotal', 'vat', 'total'].map((c) => footer[col(c)])).toEqual(['277.32', '20.80', '298.12'])
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
@@ -5659,6 +5754,7 @@ test("detail surface: the UBL document card is the rail's last card, beneath Sou
 // spec by line, so a head insert would shift every citation. `readFileSync` is already
 // imported above and is not re-imported here.
 import { createHash } from 'node:crypto'
+import { sheetRows } from '../xlsxRows'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 

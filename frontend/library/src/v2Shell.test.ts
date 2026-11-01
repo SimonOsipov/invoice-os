@@ -195,7 +195,7 @@ describe('library shell primitives', () => {
     expect(style(only(ts, 'nav'))).toMatchObject({ padding: '12px 10px', gap: '2px', 'overflow-y': 'auto' })
     const ids = ts.filter((t) => attr(t, 'id')?.startsWith('nav-')).map((t) => attr(t, 'id'))
     expect(ids).toEqual(GROUPS.map((g) => `nav-${g.id}`))
-    expect(GROUPS.map((g) => g.feats.length)).toEqual([3, 3, 3, 2, 2, 2, 2, 3, 4, 2, 2])
+    expect(GROUPS.map((g) => g.feats.length)).toEqual([4, 3, 3, 2, 2, 2, 2, 3, 4, 2, 2])
     const rowStyle = { padding: '9px 10px', 'border-radius': '6px', 'font-size': '13.5px', gap: '11px' }
     const overview = ts.slice(0, ts.indexOf(withText(ts, 'Overview'))).reverse().find((t) => t.name === 'button')!
     expect(style(overview)).toMatchObject({ ...rowStyle, background: 'var(--surface-panel)' })

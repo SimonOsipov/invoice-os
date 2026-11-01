@@ -85,6 +85,9 @@ describe('shoot', () => {
     expect(isAbsolute(o.root)).toBe(true)
     expect(o.root.endsWith('e2e/argos-shots')).toBe(true)
     expect(o.fullPage).toBe(true)
+    argosScreenshot.mockClear()
+    await shoot(fakePage().page, 'app', 'firm-invoices', { fullPage: false })
+    expect(argosScreenshot.mock.calls.map((c) => c[2].fullPage)).toEqual([false, false])
   })
 
   it('a failed shot leaves the test running', async () => {

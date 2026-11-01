@@ -979,10 +979,15 @@ func TestReplaceLinesTx_AnOversizedLineAmountIsErrValidation(t *testing.T) {
 // ebsNote files a credit note on the fixture invoice from its own document, buyer taken from the original.
 func (f *ebsFix) note(t *testing.T) (docID, noteID string) {
 	t.Helper()
+	return f.noteOf(t, submission.CreditNote)
+}
+
+func (f *ebsFix) noteOf(t *testing.T, typ submission.DocumentType) (docID, noteID string) {
+	t.Helper()
 	docID = seedDocument(t, f.super, f.tenantID)
 	n, err := f.store.Create(f.ctx, CreateInput{
 		EntityID: f.entityID, InvoiceNumber: "EBS-NOTE", Total: strPtr("750.00"),
-		BuyerName: strPtr("Original Buyer"), DocumentType: submission.CreditNote,
+		BuyerName: strPtr("Original Buyer"), DocumentType: typ,
 		OriginalInvoiceID: &f.invoiceID, SourceDocumentID: &docID,
 	})
 	if err != nil {
@@ -1007,8 +1012,11 @@ func (f *ebsFix) col(t *testing.T, id, col string) string {
 func TestRLS_EditBySourceDocumentTxANoteStoresAmountsPositive(t *testing.T) {
 	f := ebsSeed(t, "EBS-NOTEPOS")
 	doc, id := f.note(t)
-	if _, err := f.edit(t, doc, EditInput{UpdateInput: UpdateInput{Total: strPtr("-900.00"), VAT: strPtr("-60.5")}}); err != nil {
+	if _, err := f.edit(t, doc, EditInput{UpdateInput: UpdateInput{Subtotal: strPtr("-839.50"), Total: strPtr("-900.00"), VAT: strPtr("-60.5")}}); err != nil {
 		t.Fatalf("edit: %v", err)
+	}
+	if got := f.col(t, id, "subtotal"); got != "839.50" {
+		t.Errorf("note subtotal = %s, want 839.50", got)
 	}
 	if got := f.col(t, id, "total"); got != "900.00" {
 		t.Errorf("note total = %s, want 900.00", got)
@@ -1086,5 +1094,94 @@ func TestRLS_EditBySourceDocumentTxAnUndoStillClearsAnInvoicesBuyer(t *testing.T
 	}
 	if got := f.col(t, f.invoiceID, "buyer_name"); got != "X" {
 		t.Errorf("commercial invoice buyer_name = %s, want X", got)
+	}
+}
+
+func (f *ebsFix) editCtx(t *testing.T, c context.Context, doc string, in EditInput) error {
+	t.Helper()
+	return db.WithinRequestTenantTx(c, f.app, func(tx pgx.Tx) error {
+		_, err := f.store.EditBySourceDocumentTx(c, tx, doc, in)
+		return err
+	})
+}
+
+// A note takes every party column from its original: an undo, which resets a field to the
+// extractor's (here null) reading, leaves each one as it was.
+func TestRLS_EditBySourceDocumentTxAnUndoLeavesEveryPartyColumnOfANote(t *testing.T) {
+	f := ebsSeed(t, "EBS-UNDO-ALL")
+	doc, id := f.note(t)
+	cols := map[string]func(*UpdateInput) **string{
+		"supplier_email": func(u *UpdateInput) **string { return &u.SupplierEmail }, "supplier_telephone": func(u *UpdateInput) **string { return &u.SupplierTelephone },
+		"supplier_street": func(u *UpdateInput) **string { return &u.SupplierStreet }, "supplier_city": func(u *UpdateInput) **string { return &u.SupplierCity },
+		"supplier_postal_zone": func(u *UpdateInput) **string { return &u.SupplierPostalZone }, "supplier_country": func(u *UpdateInput) **string { return &u.SupplierCountry },
+		"supplier_state": func(u *UpdateInput) **string { return &u.SupplierState }, "supplier_lga": func(u *UpdateInput) **string { return &u.SupplierLGA },
+		"buyer_tin": func(u *UpdateInput) **string { return &u.BuyerTIN }, "buyer_name": func(u *UpdateInput) **string { return &u.BuyerName },
+		"buyer_email": func(u *UpdateInput) **string { return &u.BuyerEmail }, "buyer_telephone": func(u *UpdateInput) **string { return &u.BuyerTelephone },
+		"buyer_street": func(u *UpdateInput) **string { return &u.BuyerStreet }, "buyer_city": func(u *UpdateInput) **string { return &u.BuyerCity },
+		"buyer_postal_zone": func(u *UpdateInput) **string { return &u.BuyerPostalZone }, "buyer_country": func(u *UpdateInput) **string { return &u.BuyerCountry },
+		"buyer_state": func(u *UpdateInput) **string { return &u.BuyerState }, "buyer_lga": func(u *UpdateInput) **string { return &u.BuyerLGA },
+	}
+	if len(cols) != 18 {
+		t.Fatalf("party columns = %d, want 18", len(cols))
+	}
+	for col, field := range cols {
+		for _, clear := range []bool{false, true} {
+			if _, err := f.super.Exec(context.Background(), `UPDATE invoices SET `+col+` = 'orig-'||$2 WHERE id = $1`, id, col); err != nil {
+				t.Fatalf("seed %s: %v", col, err)
+			}
+			var u UpdateInput
+			*field(&u) = strPtr("pdf-" + col)
+			if clear {
+				*field(&u) = ClearText
+			}
+			if err := f.editCtx(t, WithUndo(f.ctx), doc, EditInput{UpdateInput: u}); err != nil {
+				t.Fatalf("undo %s (clear=%v): %v", col, clear, err)
+			}
+			if got := f.col(t, id, col); got != "orig-"+col {
+				t.Errorf("note %s after an undo (clear=%v) = %s, want orig-%s", col, clear, got, col)
+			}
+		}
+	}
+}
+
+// Pinned surprise candidate: an undo does not revert a party the user typed on a note.
+func TestRLS_EditBySourceDocumentTxAnUndoDoesNotRevertATypedNoteParty(t *testing.T) {
+	f := ebsSeed(t, "EBS-UNDO-TYPED")
+	doc, id := f.note(t)
+	if err := f.editCtx(t, f.ctx, doc, EditInput{UpdateInput: UpdateInput{BuyerName: strPtr("Typed")}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.editCtx(t, WithUndo(f.ctx), doc, EditInput{UpdateInput: UpdateInput{BuyerName: strPtr("PDF Buyer")}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.col(t, id, "buyer_name"); got != "Typed" {
+		t.Errorf("note buyer_name after typed then undo = %s, want Typed (pinned)", got)
+	}
+}
+
+func TestRLS_EditBySourceDocumentTxADebitNoteStoresPositiveAndAGarbageAmountRefuses(t *testing.T) {
+	f := ebsSeed(t, "EBS-DEBIT")
+	doc, id := f.noteOf(t, submission.DebitNote)
+	lines := []LineItemInput{{Description: strPtr("L"), Quantity: strPtr("-1"), UnitPrice: strPtr("-5.00")}}
+	if _, err := f.edit(t, doc, EditInput{UpdateInput: UpdateInput{Total: strPtr("-5.00")}, LineItems: &lines}); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	if got := f.col(t, id, "total"); got != "5.00" {
+		t.Errorf("debit note total = %s, want 5.00", got)
+	}
+	if *lines[0].Quantity != "-1" {
+		t.Errorf("caller's line quantity = %s, want -1 (the edit must not rewrite its input)", *lines[0].Quantity)
+	}
+	for name, in := range map[string]EditInput{
+		"total":    {UpdateInput: UpdateInput{Total: strPtr("abc")}},
+		"line_tax": {LineItems: &[]LineItemInput{{Description: strPtr("L"), LineTax: strPtr("1,5x")}}},
+	} {
+		_, err := f.edit(t, doc, in)
+		if !errors.Is(err, ErrValidation) {
+			t.Errorf("garbage %s: err = %v, want ErrValidation", name, err)
+		}
+	}
+	if got := f.col(t, id, "total"); got != "5.00" {
+		t.Errorf("debit note total after refused edits = %s, want 5.00", got)
 	}
 }

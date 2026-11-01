@@ -664,6 +664,31 @@ func TestImportDocument_AnOversizedAmountQuarantinesRatherThanErroring(t *testin
 	}
 }
 
+// A header total beyond numeric(14,2) quarantines like an oversized line amount.
+func TestImportDocument_AnOversizedHeaderTotalQuarantinesRatherThanErroring(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "DOC-OVERFLOWH tenant")
+	entityID := seedEntity(t, super, tenantID, "DOC-OVERFLOWH entity")
+	documentID := seedDocument(t, super, tenantID)
+
+	values := docCleanValues("DOC-OVERFLOWH-INV")
+	values["total"] = sxPtr("99999999999999.99")
+	docSeedExtraction(t, super, tenantID, documentID, values)
+
+	res, err := newTestService(app).ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID)
+	if err != nil {
+		t.Fatalf("ImportDocument: want a nil error (a quarantined outcome, not a 500), got %v", err)
+	}
+	if res.Status != "completed" || res.RowsInvalid != 1 || len(res.Errors) == 0 {
+		t.Errorf("status/RowsInvalid/errors = %q/%d/%d, want completed/1/at least 1", res.Status, res.RowsInvalid, len(res.Errors))
+	}
+	if got := countInvoicesByNumber(t, super, entityID, "DOC-OVERFLOWH-INV"); got != 0 {
+		t.Errorf("invoices DOC-OVERFLOWH-INV = %d, want 0", got)
+	}
+}
+
 // TestImportDocument_AnOversizedAmountOnALaterLineAlsoQuarantines (QA, task-991 Mode B): the
 // spec above puts the oversized value on the first line, where a mapping that only guarded the
 // first iteration of Store.Create's loop would still pass. Here two good lines precede it, and

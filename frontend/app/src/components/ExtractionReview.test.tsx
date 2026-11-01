@@ -3457,4 +3457,33 @@ describe('the note panel', () => {
     expect(exitButton(), 'the old document’s late read filed the new one').toBeNull()
     expect(saveButton()!.title).toBe(HELD_TITLE)
   })
+
+  it('a retry in flight for the old document does not file the new one', async () => {
+    let release: (v: unknown) => void = () => {}
+    let asked = 0
+    const w = wire(async (id, url) => {
+      if (url.includes('/note-originals')) {
+        if (!url.includes(DOCUMENT_ID)) return { ...NOTE_ORIGINALS, filed_invoice_id: null }
+        if (asked++ === 0) throw new ApiError('http', 'Boom', 500)
+        return new Promise((r) => (release = r))
+      }
+      return id === JOB_ID ? NOTE_DETAIL() : NOTE_DETAIL({ id, document_id: OTHER_DOCUMENT_ID })
+    })
+    Object.assign(w.ctx, { openImportedInvoice: () => {}, enterByHand: () => {}, activeEntity: { id: 'ent' } })
+    const { rerender } = render(review({ ctx: w.ctx, jobId: JOB_ID }))
+    await flush()
+    await act(async () => {
+      fireEvent.click(screen.getByText(RETRY_LABEL))
+    })
+    expect(asked, 'the retry never reached the read: the floor is vacuous').toBe(2)
+
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    expect(panel(), 'the second note asks for its original: the floor is vacuous').not.toBeNull()
+
+    await act(async () => release({ ...NOTE_ORIGINALS, filed_invoice_id: 'note-7' }))
+    await flush()
+    expect(exitButton(), 'the old retry filed the new document').toBeNull()
+    expect(saveButton()!.title).toBe(HELD_TITLE)
+  })
 })

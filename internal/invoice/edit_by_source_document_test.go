@@ -1177,8 +1177,8 @@ func TestRLS_EditBySourceDocumentTxADebitNoteStoresPositiveAndAGarbageAmountRefu
 		"line_tax": {LineItems: &[]LineItemInput{{Description: strPtr("L"), LineTax: strPtr("1,5x")}}},
 	} {
 		_, err := f.edit(t, doc, in)
-		if !errors.Is(err, ErrValidation) {
-			t.Errorf("garbage %s: err = %v, want ErrValidation", name, err)
+		if !errors.Is(err, ErrValidation) || err == nil || !strings.Contains(err.Error(), "which is not an amount") {
+			t.Errorf("garbage %s: err = %v, want ErrValidation naming the amount", name, err)
 		}
 	}
 	if got := f.col(t, id, "total"); got != "5.00" {

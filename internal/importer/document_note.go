@@ -9,9 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
@@ -161,14 +165,102 @@ type NoteOriginals struct {
 	Originals      []NoteOriginalRow `json:"originals"`
 }
 
-// NoteOriginals is a compile stub that answers wrongly until CRDDBTNOTE-05-05 lands.
+// noteOriginalsCap bounds the picker's list.
+const noteOriginalsCap = 500
+
+// NoteOriginals reads the invoices the review can offer as the original of the document's note.
+// ceiling: LIMIT 500, the match sorted first; revisit when an entity passes 500 accepted invoices.
 func (s *Store) NoteOriginals(ctx context.Context, documentID string) (NoteOriginals, error) {
-	return NoteOriginals{}, nil
+	out := NoteOriginals{Originals: []NoteOriginalRow{}}
+	// Its own tx: SettledExtraction's SELECTs stay literal in that method (TestSettledExtraction_SaysWhyItIsNotCorrectionAware).
+	ex, err := s.SettledExtraction(ctx, documentID)
+	if err != nil {
+		return NoteOriginals{Originals: []NoteOriginalRow{}}, err
+	}
+	var read *string
+	for _, f := range ex.Fields {
+		if f.Name == "original_invoice_number" {
+			read = f.Value
+		}
+	}
+	err = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx,
+			`SELECT entity_id FROM import_batches WHERE document_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+			documentID).Scan(&out.EntityID); err != nil {
+			return err
+		}
+		var filed string
+		switch err := tx.QueryRow(ctx,
+			`SELECT id FROM invoices WHERE source_document_id = $1 ORDER BY created_at, id LIMIT 1`,
+			documentID).Scan(&filed); {
+		case err == nil:
+			out.FiledInvoiceID = &filed
+		case !errors.Is(err, pgx.ErrNoRows):
+			return err
+		}
+		rows, err := tx.Query(ctx,
+			`SELECT i.id, i.invoice_number, i.issue_date, i.currency, i.total::text, i.buyer_name,
+			        (SELECT count(*) FROM invoices n WHERE n.original_invoice_id = i.id)
+			   FROM invoices i
+			  WHERE i.entity_id = $1 AND i.status = 'accepted' AND i.irn IS NOT NULL
+			    AND i.document_type = 'commercial_invoice'
+			  ORDER BY coalesce(i.invoice_number = $2::text, false) DESC, i.created_at DESC, i.id DESC
+			  LIMIT $3`,
+			out.EntityID, read, noteOriginalsCap)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r NoteOriginalRow
+			if err := rows.Scan(&r.ID, &r.InvoiceNumber, &r.IssueDate, &r.Currency, &r.Total, &r.BuyerName, &r.NoteCount); err != nil {
+				return err
+			}
+			out.Originals = append(out.Originals, r)
+		}
+		return rows.Err()
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return NoteOriginals{Originals: []NoteOriginalRow{}}, ErrNotFound
+	}
+	if err != nil {
+		return NoteOriginals{Originals: []NoteOriginalRow{}}, err
+	}
+	return out, nil
 }
 
-// NoteOriginalsHandler is a compile stub that answers wrongly until CRDDBTNOTE-05-05 lands.
+// NoteOriginalsHandler answers GET /v1/imports/document/note-originals?document_id=<uuid>.
 func NoteOriginalsHandler(read func(ctx context.Context, documentID string) (NoteOriginals, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		documentID := r.URL.Query().Get("document_id")
+		if documentID == "" {
+			writeError(w, http.StatusBadRequest, "document_id is required")
+			return
+		}
+		parsed, err := uuid.Parse(documentID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "document_id must be a well-formed uuid")
+			return
+		}
+		got, err := read(r.Context(), parsed.String())
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "importer: read note originals", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		if got.Originals == nil {
+			got.Originals = []NoteOriginalRow{}
+		}
+		writeJSON(w, http.StatusOK, got)
 	}
 }

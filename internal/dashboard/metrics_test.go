@@ -54,6 +54,40 @@ func seedInvoiceWithVAT(t *testing.T, super *pgxpool.Pool, tenantID, entityID, n
 	return id
 }
 
+// seedFiledInvoiceWithVAT seeds an invoice with vat, then files it as accepted.
+func seedFiledInvoiceWithVAT(t *testing.T, super *pgxpool.Pool, tenantID, entityID, number, vat string) string {
+	t.Helper()
+	id := seedInvoiceWithVAT(t, super, tenantID, entityID, number, vat)
+	setStatus(t, super, id, "accepted")
+	return id
+}
+
+func setStatus(t *testing.T, super *pgxpool.Pool, invoiceID, status string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(), `UPDATE invoices SET status = $1 WHERE id = $2`, status, invoiceID); err != nil {
+		t.Fatalf("set status %s: %v", status, err)
+	}
+}
+
+// stampKept writes the resolved-outside triple, as Store.ResolveOutside does.
+func stampKept(t *testing.T, super *pgxpool.Pool, invoiceID string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET kept_as_is_at = now(), kept_as_is_by = 'qa-fixture', kept_as_is_reason = 'resolved outside' WHERE id = $1`, invoiceID,
+	); err != nil {
+		t.Fatalf("stamp kept_as_is: %v", err)
+	}
+}
+
+func clearKept(t *testing.T, super *pgxpool.Pool, invoiceID string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET kept_as_is_at = NULL, kept_as_is_by = NULL, kept_as_is_reason = NULL WHERE id = $1`, invoiceID,
+	); err != nil {
+		t.Fatalf("clear kept_as_is: %v", err)
+	}
+}
+
 // stampDocumentType makes an invoice a credit or debit note of originalID. No route
 // creates a note yet, so the fixture writes it as the superuser.
 func stampDocumentType(t *testing.T, super *pgxpool.Pool, invoiceID, documentType, originalID string) {
@@ -83,9 +117,9 @@ func seedNote(t *testing.T, super *pgxpool.Pool, tenantID, entityID, number, doc
 // debit note 3.75 of VAT. Net 56.25 = 5625 kobo.
 func seedDesignFixture(t *testing.T, super *pgxpool.Pool, tenantID, entityID, prefix string) {
 	t.Helper()
-	inv := seedInvoiceWithVAT(t, super, tenantID, entityID, prefix+"-INV", "75.00")
-	seedNote(t, super, tenantID, entityID, prefix+"-CN", "credit_note", inv, "draft", "22.50")
-	seedNote(t, super, tenantID, entityID, prefix+"-DN", "debit_note", inv, "draft", "3.75")
+	inv := seedFiledInvoiceWithVAT(t, super, tenantID, entityID, prefix+"-INV", "75.00")
+	seedNote(t, super, tenantID, entityID, prefix+"-CN", "credit_note", inv, "accepted", "22.50")
+	seedNote(t, super, tenantID, entityID, prefix+"-DN", "debit_note", inv, "accepted", "3.75")
 }
 
 func rollupFor(t *testing.T, app *pgxpool.Pool, tenantID string) Rollup {
@@ -435,11 +469,11 @@ func TestMetrics_VATTrackedSumsKoboIgnoringNullNumerator(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "MET-13 tenant")
 	entityID := seedEntity(t, super, tenantID, "MET-13 entity")
-	inv := seedInvoiceWithVAT(t, super, tenantID, entityID, "MET-13-1", "123.45")
-	seedInvoice(t, super, tenantID, entityID, "MET-13-2") // vat left NULL
-	seedNote(t, super, tenantID, entityID, "MET-13-CN1", "credit_note", inv, "draft", "20.00")
-	seedNote(t, super, tenantID, entityID, "MET-13-DN", "debit_note", inv, "draft", "5.50")
-	seedNote(t, super, tenantID, entityID, "MET-13-CN2", "credit_note", inv, "draft", "")
+	inv := seedFiledInvoiceWithVAT(t, super, tenantID, entityID, "MET-13-1", "123.45")
+	seedInvoiceAtStatus(t, super, tenantID, entityID, "MET-13-2", "accepted") // vat left NULL
+	seedNote(t, super, tenantID, entityID, "MET-13-CN1", "credit_note", inv, "accepted", "20.00")
+	seedNote(t, super, tenantID, entityID, "MET-13-DN", "debit_note", inv, "accepted", "5.50")
+	seedNote(t, super, tenantID, entityID, "MET-13-CN2", "credit_note", inv, "accepted", "")
 
 	got := rollupFor(t, app, tenantID)
 	want := Metric{Num: 10895, Den: 5}
@@ -465,22 +499,96 @@ func TestMetrics_VATTrackedNetsNotesBySign(t *testing.T) {
 	}
 }
 
-// A note takes the status scope of an invoice: every status adds, none is skipped.
-func TestMetrics_VATTrackedNotesFollowTheInvoiceStatusScope(t *testing.T) {
+// Distinct power-of-two VATs: a wrongly counted status gives a sum no other mistake gives.
+func TestMetrics_VATTrackedCountsOnlyFiledDocuments(t *testing.T) {
 	super, app := dbTestPools(t)
-	tenantID := seedTenant(t, super, "SCOPE tenant")
-	entityID := seedEntity(t, super, tenantID, "SCOPE entity")
-	inv := seedInvoiceAtStatus(t, super, tenantID, entityID, "SCOPE-INV", "accepted")
-	if _, err := super.Exec(context.Background(), `UPDATE invoices SET vat = 100.00 WHERE id = $1`, inv); err != nil {
-		t.Fatalf("stamp vat: %v", err)
+	tenantID := seedTenant(t, super, "FILED tenant")
+	entityID := seedEntity(t, super, tenantID, "FILED entity")
+	inv := seedFiledInvoiceWithVAT(t, super, tenantID, entityID, "FILED-I1", "2.56")
+	for _, d := range []struct {
+		num, status, vat string
+		kept             bool
+	}{
+		{"FILED-I2", "submitted", "5.12", false},
+		{"FILED-I3", "failed", "10.24", true},
+		{"FILED-I4", "failed", "20.48", false},
+		{"FILED-I5", "rejected", "40.96", false},
+		{"FILED-I6", "queued", "81.92", false},
+		{"FILED-I7", "validated", "163.84", false},
+		{"FILED-I8", "draft", "327.68", false},
+		{"FILED-I9", "draft", "655.36", true},
+	} {
+		id := seedInvoiceWithVAT(t, super, tenantID, entityID, d.num, d.vat)
+		setStatus(t, super, id, d.status)
+		if d.kept {
+			stampKept(t, super, id)
+		}
 	}
-	seedNote(t, super, tenantID, entityID, "SCOPE-CN-REJ", "credit_note", inv, "rejected", "30.00")
-	seedNote(t, super, tenantID, entityID, "SCOPE-CN-DRAFT", "credit_note", inv, "draft", "10.00")
-	seedNote(t, super, tenantID, entityID, "SCOPE-DN-FAIL", "debit_note", inv, "failed", "5.00")
+	seedNote(t, super, tenantID, entityID, "FILED-N1", "credit_note", inv, "accepted", "0.01")
+	seedNote(t, super, tenantID, entityID, "FILED-N2", "debit_note", inv, "submitted", "0.02")
+	stampKept(t, super, seedNote(t, super, tenantID, entityID, "FILED-N3", "credit_note", inv, "failed", "0.04"))
+	seedNote(t, super, tenantID, entityID, "FILED-N4", "credit_note", inv, "failed", "0.08")
+	seedNote(t, super, tenantID, entityID, "FILED-N5", "credit_note", inv, "rejected", "0.16")
+	seedNote(t, super, tenantID, entityID, "FILED-N6", "debit_note", inv, "queued", "0.32")
+	seedNote(t, super, tenantID, entityID, "FILED-N7", "credit_note", inv, "validated", "0.64")
+	seedNote(t, super, tenantID, entityID, "FILED-N8", "credit_note", inv, "draft", "1.28")
 
 	got := rollupFor(t, app, tenantID)
-	if m, want := got.Clients[0].Metrics["vat_tracked"], (Metric{Num: 6500, Den: 4}); m != want {
+	if len(got.Clients) != 1 {
+		t.Fatalf("Clients = %d rows, want 1", len(got.Clients))
+	}
+	row := got.Clients[0]
+	if m, want := row.Metrics["vat_tracked"], (Metric{Num: 1789, Den: 17}); m != want {
 		t.Errorf("vat_tracked = %+v, want %+v", m, want)
+	}
+	want := Counts{Draft: 3, Validated: 2, Queued: 2, Submitted: 2, Accepted: 2, Rejected: 2, Failed: 4}
+	if row.Counts != want {
+		t.Errorf("Counts = %+v, want %+v (the filter must not touch a count)", row.Counts, want)
+	}
+}
+
+// Resolving a failed document outside adds its VAT; undoing removes it.
+func TestMetrics_VATTrackedFollowsResolveOutside(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "RESOLVE tenant")
+	entityID := seedEntity(t, super, tenantID, "RESOLVE entity")
+	seedFiledInvoiceWithVAT(t, super, tenantID, entityID, "RESOLVE-ACC", "1.00")
+	failed := seedInvoiceWithVAT(t, super, tenantID, entityID, "RESOLVE-FAIL", "10.00")
+	setStatus(t, super, failed, "failed")
+
+	vat := func() Metric { return rollupFor(t, app, tenantID).Clients[0].Metrics["vat_tracked"] }
+	if m, want := vat(), (Metric{Num: 100, Den: 2}); m != want {
+		t.Errorf("unresolved: vat_tracked = %+v, want %+v", m, want)
+	}
+	stampKept(t, super, failed)
+	if m, want := vat(), (Metric{Num: 1100, Den: 2}); m != want {
+		t.Errorf("resolved outside: vat_tracked = %+v, want %+v", m, want)
+	}
+	clearKept(t, super, failed)
+	if m, want := vat(), (Metric{Num: 100, Den: 2}); m != want {
+		t.Errorf("undone: vat_tracked = %+v, want %+v", m, want)
+	}
+}
+
+// A client with documents but none filed reads num 0 and keeps den and its counts.
+func TestMetrics_VATTrackedIsZeroWhenNothingIsFiled(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "NOFILED tenant")
+	entityID := seedEntity(t, super, tenantID, "NOFILED entity")
+	rej := seedInvoiceWithVAT(t, super, tenantID, entityID, "NOFILED-REJ", "16.00")
+	setStatus(t, super, rej, "rejected")
+	seedInvoiceWithVAT(t, super, tenantID, entityID, "NOFILED-DRAFT", "32.00")
+
+	got := rollupFor(t, app, tenantID)
+	if len(got.Clients) != 1 {
+		t.Fatalf("Clients = %d rows, want 1 (the client row stays)", len(got.Clients))
+	}
+	row := got.Clients[0]
+	if m, want := row.Metrics["vat_tracked"], (Metric{Num: 0, Den: 2}); m != want {
+		t.Errorf("vat_tracked = %+v, want %+v", m, want)
+	}
+	if row.Counts.Rejected != 1 || row.Counts.Draft != 1 {
+		t.Errorf("Counts = %+v, want rejected 1 and draft 1", row.Counts)
 	}
 }
 
@@ -489,8 +597,8 @@ func TestMetrics_VATTrackedGoesNegativeWhenCreditsExceedInvoices(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "NEG tenant")
 	entityID := seedEntity(t, super, tenantID, "NEG entity")
-	inv := seedInvoiceWithVAT(t, super, tenantID, entityID, "NEG-INV", "10.00")
-	seedNote(t, super, tenantID, entityID, "NEG-CN", "credit_note", inv, "draft", "30.00")
+	inv := seedFiledInvoiceWithVAT(t, super, tenantID, entityID, "NEG-INV", "10.00")
+	seedNote(t, super, tenantID, entityID, "NEG-CN", "credit_note", inv, "accepted", "30.00")
 
 	got := rollupFor(t, app, tenantID)
 	if m, want := got.Clients[0].Metrics["vat_tracked"], (Metric{Num: -2000, Den: 2}); m != want {
@@ -503,9 +611,9 @@ func TestMetrics_TotalsAddSignedClientVAT(t *testing.T) {
 	tenantID := seedTenant(t, super, "TOT tenant")
 	a := seedEntity(t, super, tenantID, "TOT A")
 	b := seedEntity(t, super, tenantID, "TOT B")
-	inv := seedInvoiceWithVAT(t, super, tenantID, a, "TOT-A-INV", "10.00")
-	seedNote(t, super, tenantID, a, "TOT-A-CN", "credit_note", inv, "draft", "30.00")
-	seedInvoiceWithVAT(t, super, tenantID, b, "TOT-B-INV", "75.00")
+	inv := seedFiledInvoiceWithVAT(t, super, tenantID, a, "TOT-A-INV", "10.00")
+	seedNote(t, super, tenantID, a, "TOT-A-CN", "credit_note", inv, "accepted", "30.00")
+	seedFiledInvoiceWithVAT(t, super, tenantID, b, "TOT-B-INV", "75.00")
 
 	got := rollupFor(t, app, tenantID)
 	if len(got.Clients) != 2 {
@@ -549,8 +657,8 @@ func TestMetrics_VATTrackedANullVATCreditNoteAddsZero(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "NULLCN tenant")
 	entityID := seedEntity(t, super, tenantID, "NULLCN entity")
-	inv := seedInvoiceWithVAT(t, super, tenantID, entityID, "NULLCN-INV", "10.00")
-	seedNote(t, super, tenantID, entityID, "NULLCN-CN", "credit_note", inv, "draft", "")
+	inv := seedFiledInvoiceWithVAT(t, super, tenantID, entityID, "NULLCN-INV", "10.00")
+	seedNote(t, super, tenantID, entityID, "NULLCN-CN", "credit_note", inv, "accepted", "")
 
 	got := rollupFor(t, app, tenantID)
 	if m, want := got.Clients[0].Metrics["vat_tracked"], (Metric{Num: 1000, Den: 2}); m != want {

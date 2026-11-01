@@ -27,7 +27,7 @@ paths:
 - Recreate `pr_<N>` on every deploy with the `preview-db` job. Cloud SQL refuses `session_replication_role`, so no reset runs in place.
 - Run the migrate job before GoTrue. Run it again with `preview.sh grant` after GoTrue is up: GoTrue creates `auth.users` on its first boot.
 - Generate each PR's tokens and GoTrue key in `preview.sh secrets`. Never copy a production value into preview.
-- Give no preview service an OpenRouter key or a Sentry DSN. The `Preview invariants` job fails on either.
+- Give no preview service a Sentry DSN, and no PR preview an OpenRouter key. The one exception is the `nightly` preview: `invoice`, `submission` and `worker` mount `nightly-openrouter-api-key` as `OPENROUTER_API_KEY` and set no `AI_FAKE` or `JEV_FAKE`. The `Preview invariants` job fails on any other OpenRouter secret or variable and on any Sentry one.
 - Probe the gateway at `/health` on run.app. Cloud Run's front end answers `/healthz` itself; `/healthz/fleet` passes through.
 - Print the library and blog addresses with their base paths from `preview.sh urls`. A preview has no load balancer.
 - Send `X-Gateway-Token` to `/healthz/fleet`. `preview.sh token <N>` prints the PR's token.

@@ -4672,3 +4672,81 @@ test('CRDDBTNOTE05: the note panel fits the review at every wide width', async (
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+
+test('CRDDBTNOTE05: a note PDF imports as a note on the review screen', async ({ page }) => {
+  // Two accepted originals, one cold-sidecar extraction, one import.
+  test.setTimeout(600_000)
+  const errors = collectErrors(page)
+
+  // The read original goes first, so newest-first alone would not preselect it.
+  await extractHeldNote(page, 'Zz CRDDBTNOTE-05 import', { name: 'jev_credit_note.pdf', buffer: uniqueJevCreditNotePdfBytes() }, [
+    'INV-ORIG-3401',
+    `INV-OTHER-${freshTin()}`,
+  ])
+
+  await expect(page.getByTestId('extraction-open-invoice'), 'a held note has no invoice exit').toHaveCount(0)
+  await expect(page.getByTestId('extraction-document-type'), 'a note carries no document-type notice').toHaveCount(0)
+  await expect(page.getByText(/not a tax invoice/i)).toHaveCount(0)
+  await expect(page.getByTestId('extraction-note-original').locator('option:checked'), 'the read original is preselected').toContainText(
+    'INV-ORIG-3401',
+  )
+  await expect(page.getByTestId('extraction-note-number'), 'the read number is seeded').toHaveValue('CN-3401')
+
+  await page.getByTestId('extraction-note-import').click()
+  await expect(page.getByTestId('extraction-note-panel'), 'the panel goes once the note is filed').toHaveCount(0, { timeout: 60_000 })
+  await page.getByTestId('extraction-open-invoice').click()
+  await expect(page.getByTestId('invoice-detail')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('CN-3401')
+  await expect(page.getByTestId('document-type-badge')).toBeVisible()
+
+  await page.getByTestId('original-invoice-link').click()
+  await expect(page.getByRole('heading', { level: 1 }), 'the link opens the original').toHaveText('INV-ORIG-3401', { timeout: 60_000 })
+  await expect(page.getByTestId('notes-card').getByTestId('note-row-open'), 'the original lists the note').toHaveText('CN-3401')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('CRDDBTNOTE05: a held file in a two-file run keeps its way back', async ({ page }) => {
+  test.setTimeout(600_000)
+  const errors = collectErrors(page)
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `Zz CRDDBTNOTE-05 held ${Date.now()}`, tin: freshTin() })
+  await acceptedOriginal(token, entity.id, 'INV-ORIG-3401')
+
+  const noteName = 'jev_credit_note.pdf'
+  const denseName = 'dense_invoice.pdf'
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, entity.name)
+  await runDocumentsIn(page, token, [
+    { name: noteName, mimeType: 'application/pdf', buffer: uniqueJevCreditNotePdfBytes() },
+    { name: denseName, mimeType: 'application/pdf', buffer: uniqueDensePdfBytes() },
+  ])
+
+  await expect
+    .poll(() => new URL(page.url()).pathname, { message: 'a two-file run lands on Review', timeout: 180_000 })
+    .toMatch(/^\/imports\/[0-9a-fA-F-]{36},[0-9a-fA-F-]{36}\/review$/)
+  const runPath = new URL(page.url()).pathname
+
+  const tab = page.getByRole('button', { name: /^(Quarantined documents|Unreadable rows) \(/ })
+  await tab.click()
+  const rows = page.getByTestId('unreadable-row')
+  await expect(rows, 'the hold and the no-number document are both unreadable').toHaveCount(2)
+  await expect(rows.filter({ hasText: noteName })).toHaveCount(1)
+  await expect(rows.filter({ hasText: denseName })).toHaveCount(1)
+  await expect(page.getByTestId('unreadable-held-panel')).toContainText('Waiting for the original invoice: 1')
+
+  await rows.filter({ hasText: noteName }).getByTestId('unreadable-note-review').click()
+  await expect(page.getByTestId('extraction-note-panel'), 'Open its review opens the panel').toBeVisible({ timeout: 120_000 })
+  await page.getByTestId('extraction-note-import').click()
+  await expect(page.getByTestId('extraction-note-panel')).toHaveCount(0, { timeout: 60_000 })
+
+  await page.goBack()
+  await expect.poll(() => new URL(page.url()).pathname, { message: 'Back returns to the run' }).toBe(runPath)
+  const tabAfter = page.getByRole('button', { name: /^(Quarantined documents|Unreadable rows) \(/ })
+  await tabAfter.click()
+  await expect(page.getByTestId('unreadable-held-panel'), 'the hold is gone').toHaveCount(0)
+  await expect(rows.filter({ hasText: noteName }), 'the hold row is gone').toHaveCount(0)
+  await expect(rows.filter({ hasText: denseName }), 'the other row stays').toHaveCount(1)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

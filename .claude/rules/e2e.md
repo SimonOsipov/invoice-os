@@ -9,8 +9,8 @@ paths:
 - Run specs against a deployed environment only. Start no local server.
 - Keep the browser layer thin. Cover behaviour in Go tests and in the `e2e/api/` contract suite.
 - Assert DOM and state. Fail a journey on any `console.error` or `pageerror`.
-- Add no screenshot, pixel-diff or visual-snapshot gate.
-- Take an Argos shot only through `e2e/argos.ts`. The shots block nothing.
+- Run no screenshot, pixel-diff or visual-snapshot gate on a PR or on `main`.
+- Take an Argos shot only through `e2e/argos.ts`. The shots and the nightly Argos comparison are review-only and block nothing.
 - Carry a console-gate exception in `consoleGate.ts`, scoped by resource URL. Never change an API to satisfy the gate.
 - Run Chromium only. Keep `workers: 1` in the api and topology configs. The smoke config runs fully parallel.
 - Add each new topology spec file to a unit in `e2e/topology/shards.ts`. `shards.test.ts` fails on a spec in no unit.

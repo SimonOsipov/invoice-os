@@ -26,3 +26,8 @@ export function nightlyTarget(): boolean {
   if (raw === 'nightly') return true
   throw new Error(`E2E_TARGET must be unset or exactly "nightly", got "${raw}".`)
 }
+
+// The contacts delivery mode notifications reports: real on the nightly, fake on a PR preview.
+export function expectedContactsMode(): 'real' | 'fake' {
+  return nightlyTarget() ? 'real' : 'fake'
+}

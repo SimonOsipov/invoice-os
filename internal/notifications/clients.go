@@ -27,7 +27,11 @@ func DeliveryClients(getenv func(string) string, deployEnv string, transport htt
 		return mode, FakeHubSpot{}, FakeResend{}, nil
 	case ModeReal:
 		hc := NewHTTPClient(transport)
-		return mode, NewHubSpot(HubSpotBaseURL, keys, hc), NewResend(ResendBaseURL, keys, hc), nil
+		hs := NewHubSpot(HubSpotBaseURL, keys, hc)
+		if stage := getenv("HUBSPOT_DEAL_STAGE"); stage != "" {
+			hs.dealStage = stage
+		}
+		return mode, hs, NewResend(ResendBaseURL, keys, hc), nil
 	}
 	return mode, nil, nil, nil
 }

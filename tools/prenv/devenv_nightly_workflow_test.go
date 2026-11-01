@@ -3,6 +3,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -230,7 +231,7 @@ func devEnvNightlyProblems(yml string) []string {
 	if x, _ := jobKey(td, "name"); x != "Delete the nightly preview" {
 		bad("nightly-teardown name is " + x)
 	}
-	if !slices.Equal(needsOf(td), []string{"changes", "commit-authors", "prepare-env", "build", "deploy", "health-gate", "fleet-gate", "e2e", "topology", "email"}) {
+	if !slices.Equal(needsOf(td), []string{"changes", "commit-authors", "prepare-env", "build", "deploy", "health-gate", "fleet-gate", "e2e", "topology", "contacts", "email"}) {
 		bad("nightly-teardown needs are wrong")
 	}
 	if x, _ := foldedIf(td); x != nlTeardown {
@@ -263,11 +264,160 @@ func devEnvNightlyProblems(yml string) []string {
 	if g := unguardedOIDCJobs(yml); len(g) != 0 {
 		bad("unguarded OIDC jobs: " + strings.Join(g, ","))
 	}
+	p = append(p, contactProblems(jobs)...)
 	return append(p, emailProblems(jobs)...)
+}
+
+const (
+	nlTokenVersionStep = "${{ steps.token_version.outputs.version }}"
+	nlTokenVersionOut  = "${{ needs.prepare-env.outputs.hubspot_token_version }}"
+	nlContactsIf       = "!cancelled() && " + nlOn + " && needs.deploy.result == 'success'"
+)
+
+// contactProblems names each clause of the contacts, start and contacts-cleanup wiring that the text breaks.
+func contactProblems(jobs map[string]workflowJob) []string {
+	var p []string
+	bad := func(msg string) { p = append(p, msg) }
+
+	pe := jobs["prepare-env"]
+	if o := blockLines(pe.lines, 4, "outputs"); !slices.Contains(o, "hubspot_token_version: "+nlTokenVersionStep) {
+		bad("prepare-env output hubspot_token_version does not read steps.token_version")
+	}
+	idx := func(j workflowJob, name string) int {
+		for i, s := range j.steps() {
+			if s.keys["name"] == name {
+				return i
+			}
+		}
+		return -1
+	}
+	const (
+		pre   = "Check the contact secrets"
+		ver   = "Read the HubSpot token version"
+		start = "Start the contacts (guard the portal, delete leftovers)"
+		up    = "Upload the contacts start result"
+		sec   = "Create the PR's secrets (generated, never copied from production)"
+	)
+	if i := []int{idx(pe, pre), idx(pe, ver), idx(pe, start), idx(pe, up), idx(pe, sec)}; !slices.IsSorted(i) || i[0] < 0 {
+		bad("prepare-env contact steps are out of order or missing: preflight, token_version, start, upload, secrets")
+	}
+	for _, n := range []string{pre, ver, start} {
+		if s, ok := nlStep(pe, n); !ok || s.keys["if"] != nlOn {
+			bad("prepare-env step " + n + " is not nightly only")
+		}
+	}
+	if s, ok := nlStep(pe, pre); !ok || strings.TrimSpace(nlCode(s.keys["run"])) != `bash scripts/ci/preview.sh contact-preflight "$PR"` {
+		bad("prepare-env preflight step does not run contact-preflight")
+	}
+	if s, ok := nlStepByID(pe, "token_version"); !ok || !strings.Contains(nlCode(s.keys["run"]), `preview.sh contact-token-version "$PR"`) || !strings.Contains(nlCode(s.keys["run"]), "$GITHUB_OUTPUT") {
+		bad("prepare-env token_version step does not write contact-token-version to GITHUB_OUTPUT")
+	}
+	if s, ok := nlStep(pe, start); !ok || !strings.Contains(nlCode(s.keys["run"]), `preview.sh contact-token "$PR" "`+nlTokenVersionStep+`"`) {
+		bad("prepare-env start reads the token without steps.token_version.outputs.version")
+	}
+	if st, ok := nlStep(pe, up); !ok || st.keys["if"] != "always() && "+nlOn || !slices.Contains(nlRaw(pe, up), "name: contacts-start") {
+		bad("prepare-env contacts-start upload does not run if always() in nightly mode")
+	}
+
+	dep := jobs["deploy"]
+	if !slices.Contains(needsOf(dep), "prepare-env") {
+		bad("deploy does not need prepare-env")
+	}
+	if x, _ := foldedIf(dep); !strings.Contains(x, "needs.prepare-env.result == 'success'") {
+		bad("deploy if does not require prepare-env success")
+	}
+	if s, ok := nlStep(dep, "Deploy the backends"); !ok || s.env["NIGHTLY_HUBSPOT_TOKEN_VERSION"] != nlTokenVersionOut {
+		bad("deploy backends env NIGHTLY_HUBSPOT_TOKEN_VERSION is not " + nlTokenVersionOut)
+	}
+
+	co := jobs["contacts"]
+	if x, _ := jobKey(co, "name"); x != "Real contact reaches HubSpot and Resend" {
+		bad("contacts name is " + x)
+	}
+	if x, _ := jobKey(co, "timeout-minutes"); x != "15" {
+		bad("contacts timeout-minutes is not 15")
+	}
+	if !slices.Equal(needsOf(co), []string{"changes", "prepare-env", "deploy", "e2e", "topology"}) {
+		bad("contacts needs are wrong")
+	}
+	if x, _ := foldedIf(co); x != nlContactsIf {
+		bad("contacts if is not exactly " + nlContactsIf)
+	}
+	if !slices.Contains(blockLines(co.lines, 4, "env"), "NIGHTLY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}") {
+		bad("contacts NIGHTLY_RUN_ID is not run_id-run_attempt")
+	}
+	guard, gok := nlStep(co, "Refuse a re-run that skipped the deploy")
+	check, cok := nlStep(co, "Check the contacts")
+	if !gok || !cok || guard.index > check.index || guard.keys["id"] != "attempt" ||
+		guard.env["DEPLOYED_ATTEMPT"] != "${{ needs.deploy.outputs.attempt }}" || guard.env["RUN_ATTEMPT"] != "${{ github.run_attempt }}" ||
+		!strings.Contains(strings.Join(nlRaw(co, "Refuse a re-run that skipped the deploy"), "\n"), `[ "$DEPLOYED_ATTEMPT" != "$RUN_ATTEMPT" ]`) {
+		bad("contacts lacks the re-run guard before the check")
+	}
+	if g := jobs["e2e-gate"]; slices.Contains(needsOf(g), "contacts") || slices.Contains(needsOf(g), "contacts-cleanup") {
+		bad("e2e-gate needs a contacts job")
+	}
+	if !strings.Contains(nlCode(strings.Join(co.lines, "\n")), `preview.sh contact-token "$PR" "`+nlTokenVersionOut+`"`) {
+		bad("contacts reads the token without the prepare-env version")
+	}
+
+	cl := jobs["contacts-cleanup"]
+	if x, _ := jobKey(cl, "name"); x != "Delete the run's contacts" {
+		bad("contacts-cleanup name is " + x)
+	}
+	if x, _ := jobKey(cl, "timeout-minutes"); x != "20" {
+		bad("contacts-cleanup timeout-minutes is not 20")
+	}
+	if !slices.Equal(needsOf(cl), []string{"changes", "commit-authors", "prepare-env", "nightly-teardown"}) {
+		bad("contacts-cleanup needs are wrong")
+	}
+	if x, _ := foldedIf(cl); x != nlTeardown {
+		bad("contacts-cleanup if is not exactly " + nlTeardown)
+	}
+	if !slices.Equal(blockLines(cl.lines, 4, "permissions"), []string{"contents: read", "actions: read", "id-token: write"}) {
+		bad("contacts-cleanup permissions are wrong")
+	}
+	dl := strings.Join(nlRaw(cl, "Download the contacts results"), "\n")
+	if !strings.Contains(dl, "continue-on-error: true") {
+		bad("contacts-cleanup download can fail the job before the delete")
+	}
+	for _, w := range []string{"uses: actions/download-artifact@v4", "pattern: contacts-*", "merge-multiple: true"} {
+		if !strings.Contains(dl, w) {
+			bad("contacts-cleanup download lacks " + w)
+		}
+	}
+	if !strings.Contains(nlCode(strings.Join(cl.lines, "\n")), `preview.sh contact-token "$PR" "`+nlTokenVersionOut+`"`) {
+		bad("contacts-cleanup reads the token without the prepare-env version")
+	}
+	if !strings.Contains(strings.Join(cl.lines, "\n"), "run_started_at") {
+		bad("contacts-cleanup does not read run_started_at")
+	}
+	if strings.Count(strings.Join(cl.lines, "\n"), "::add-mask::") != 3 {
+		bad("contacts-cleanup does not mask the token, key and domain")
+	}
+	if !slices.Contains(nlRaw(cl, "Upload the nightly results"), "name: results-hubspot") {
+		bad("contacts-cleanup does not upload results-hubspot")
+	}
+	return p
 }
 
 const nlEmailIf = "!cancelled() && " + nlOn + " && " + authorCond +
 	" && needs.deploy.result == 'success' && needs.health-gate.result == 'success' && needs.fleet-gate.result == 'success'"
+
+// needsTeardown reports whether nightly-teardown is among a job's transitive needs: it starts after the mail phase.
+func needsTeardown(jobs map[string]workflowJob, id string) bool {
+	seen := map[string]bool{}
+	var walk func(string) bool
+	walk = func(id string) bool {
+		for _, n := range needsOf(jobs[id]) {
+			if n == "nightly-teardown" || (!seen[n] && walk(n)) {
+				return true
+			}
+			seen[n] = true
+		}
+		return false
+	}
+	return walk(id)
+}
 
 // emailProblems names each clause of the nightly-only email job that the text breaks.
 func emailProblems(jobs map[string]workflowJob) []string {
@@ -286,7 +436,7 @@ func emailProblems(jobs map[string]workflowJob) []string {
 	if x, _ := foldedIf(em); x != nlEmailIf {
 		bad("email if is not exactly " + nlEmailIf)
 	}
-	if !slices.Equal(needsOf(em), []string{"changes", "commit-authors", "invariants", "prepare-env", "deploy", "health-gate", "fleet-gate", "e2e", "topology"}) {
+	if !slices.Equal(needsOf(em), []string{"changes", "commit-authors", "invariants", "prepare-env", "deploy", "health-gate", "fleet-gate", "e2e", "topology", "contacts"}) {
 		bad("email needs are wrong")
 	}
 	for _, e := range blockLines(em.lines, 4, "env") {
@@ -318,7 +468,7 @@ func emailProblems(jobs map[string]workflowJob) []string {
 	}
 	walk("email")
 	for id, j := range jobs {
-		if id == "email" || id == "nightly-teardown" {
+		if id == "email" || id == "nightly-teardown" || needsTeardown(jobs, id) {
 			continue
 		}
 		if x, _ := foldedIf(j); !strings.Contains(x, nlOff) && !seen[id] {
@@ -423,6 +573,11 @@ func TestDevEnvNightly_PRExpressionsUnchanged(t *testing.T) {
 		}
 		if x, _ := foldedIf(j); x != g[1] {
 			t.Errorf("%s if = %q, want %q", name, x, g[1])
+		}
+	}
+	for _, n := range []string{"contacts", "contacts-cleanup"} {
+		if slices.Contains(needsOf(jobs["e2e-gate"]), n) {
+			t.Errorf("e2e-gate needs %s", n)
 		}
 	}
 }
@@ -640,10 +795,10 @@ func TestDevEnvNightly_TeardownAlwaysRunsInNightlyModeOnly(t *testing.T) {
 	t.Parallel()
 	yml := readWorkflow(t, "dev-env.yml")
 	for _, c := range []struct{ old, repl, want string }{
-		{"    if: " + nlTeardown + "\n", "    if: success() && " + nlOn + " && " + authorCond + "\n", "nightly-teardown if"},
-		{"    if: " + nlTeardown + "\n", "    if: always() && " + authorCond + "\n", "nightly-teardown if"},
-		{"    timeout-minutes: 20\n", "    timeout-minutes: 30\n", "timeout-minutes is not 20"},
-		{"needs: [changes, commit-authors, prepare-env, build, deploy, health-gate, fleet-gate, e2e, topology, email]", "needs: [changes, commit-authors, prepare-env, build, deploy]", "nightly-teardown needs"},
+		{"contacts, email]\n    if: " + nlTeardown + "\n", "contacts, email]\n    if: success() && " + nlOn + " && " + authorCond + "\n", "nightly-teardown if"},
+		{"contacts, email]\n    if: " + nlTeardown + "\n", "contacts, email]\n    if: always() && " + authorCond + "\n", "nightly-teardown if"},
+		{"    timeout-minutes: 20\n    permissions:\n      contents: read\n      id-token: write", "    timeout-minutes: 30\n    permissions:\n      contents: read\n      id-token: write", "timeout-minutes is not 20"},
+		{"needs: [changes, commit-authors, prepare-env, build, deploy, health-gate, fleet-gate, e2e, topology, contacts, email]", "needs: [changes, commit-authors, prepare-env, build, deploy]", "nightly-teardown needs"},
 		{"        run: bash scripts/ci/preview.sh teardown \"$PR\"\n      - name: Prove the nightly preview is gone", "        run: echo skip\n      - name: Prove the nightly preview is gone", "does not tear down"},
 	} {
 		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
@@ -675,35 +830,68 @@ func TestDevEnvNightly_EveryPreviewJobHasATimeout(t *testing.T) {
 	requireDevEnvProblem(t, "    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      gateway_url", "    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      gateway_url", "job prepare-env calls")
 }
 
-// The contacts step of fleet-gate at 7b01a4bf, trimmed per line.
+// The contacts step of fleet-gate, trimmed per line.
 var nlContactsGate = []string{
 	`name: Gate on notifications' contacts delivery mode`,
 	`run: |`,
 	`set -euo pipefail`,
+	`want=fake`,
+	`[ "$PR" != nightly ] || want=real`,
 	`mode=""`,
 	`for _ in $(seq 1 5); do`,
 	`if curl -sS --connect-timeout 5 --max-time 40 -H "X-Gateway-Token: $GATEWAY_TOKEN" -o /tmp/contacts-fleet.json "$GATEWAY_URL/healthz/fleet" \`,
 	`&& jq -e '.services | type == "array"' /tmp/contacts-fleet.json >/dev/null 2>&1; then`,
 	`mode=$(jq -r '[.services[] | select(.name == "notifications") | .contacts // "none"][0] // "absent"' /tmp/contacts-fleet.json)`,
-	`if [ "$mode" = fake ]; then break; fi`,
+	`if [ "$mode" = "$want" ]; then break; fi`,
 	`fi`,
 	`sleep 5`,
 	`done`,
-	`if [ "$mode" != fake ]; then`,
-	`echo "::error::notifications reports contacts='${mode:-unreachable}', want 'fake'. Anything else means the preview could write to HubSpot or Resend: check DEPLOY_ENV is pr-<N>."`,
+	`if [ "$mode" != "$want" ]; then`,
+	`echo "::error::notifications reports contacts='${mode:-unreachable}', want '$want'. On a PR, anything but fake means the preview could write to HubSpot or Resend: check DEPLOY_ENV is pr-<N>."`,
 	`exit 1`,
 	`fi`,
-	`echo "notifications reports contacts=fake."`,
+	`echo "notifications reports contacts=$want."`,
 }
 
-func TestDevEnvNightly_ContactsGateUnchanged(t *testing.T) {
+func TestDevEnvNightly_ContactsGatePinned(t *testing.T) {
 	t.Parallel()
 	got := nlRaw(devEnvJob(t, "fleet-gate"), "Gate on notifications' contacts delivery mode")
 	if !slices.Equal(got, nlContactsGate) {
 		t.Errorf("contacts gate changed:\n%s", strings.Join(got, "\n"))
 	}
-	if strings.Contains(strings.Join(got, "\n"), "nightly") {
-		t.Error("contacts gate names the nightly mode")
+}
+
+// Runs the step's script with a shim curl that serves a fleet roll-up reporting contacts=$mode.
+func TestDevEnvContactsGate_WantsTheModeOfTheRun(t *testing.T) {
+	t.Parallel()
+	raw := nlRaw(devEnvJob(t, "fleet-gate"), "Gate on notifications' contacts delivery mode")
+	i := slices.Index(raw, "run: |")
+	if i < 0 {
+		t.Fatal("contacts gate has no run block")
+	}
+	script := strings.Join(raw[i+1:], "\n")
+	for _, c := range []struct {
+		pr, mode string
+		pass     bool
+	}{
+		{"nightly", "real", true}, {"nightly", "fake", false}, {"7", "fake", true}, {"7", "real", false},
+	} {
+		c := c
+		t.Run(c.pr+"/"+c.mode, func(t *testing.T) {
+			t.Parallel()
+			shims := t.TempDir()
+			writeShim(t, filepath.Join(shims, "curl"), `while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done
+printf '{"services":[{"name":"notifications","contacts":"%s"}]}' "$MODE" >"$out"
+`)
+			writeShim(t, filepath.Join(shims, "sleep"), "exit 0\n")
+			// The step writes a fixed /tmp path; give each case its own.
+			cmd := exec.Command("bash", "-c", strings.ReplaceAll(script, "/tmp/contacts-fleet.json", filepath.Join(shims, "fleet.json")))
+			cmd.Env = append(os.Environ(), "PR="+c.pr, "MODE="+c.mode, "GATEWAY_URL=x", "GATEWAY_TOKEN=x", "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"))
+			_, _, err := runToFiles(t, cmd, false)
+			if got := err == nil; got != c.pass {
+				t.Errorf("PR %s with contacts=%s: pass = %v, want %v (%v)", c.pr, c.mode, got, c.pass, err)
+			}
+		})
 	}
 }
 
@@ -768,12 +956,122 @@ func TestDevEnvNightly_EmailJobEnvUsesAllowedContexts(t *testing.T) {
 
 func TestDevEnvNightly_MailOnWaitsForE2E(t *testing.T) {
 	t.Parallel()
-	n := "needs: [changes, commit-authors, invariants, prepare-env, deploy, health-gate, fleet-gate, e2e, topology]"
+	n := "needs: [changes, commit-authors, invariants, prepare-env, deploy, health-gate, fleet-gate, e2e, topology, contacts]"
 	requireEmailMutations(t, []struct{ old, repl, want string }{
 		{n, strings.Replace(n, "e2e, ", "", 1), "email needs"},
 		{n, strings.Replace(n, ", topology", "", 1), "email needs"},
-		{"fleet-gate, e2e, topology, email]", "fleet-gate, e2e, topology]", "nightly-teardown needs"},
+		{n, strings.Replace(n, ", contacts", "", 1), "email needs"},
+		{"fleet-gate, e2e, topology, contacts, email]", "fleet-gate, e2e, topology, contacts]", "nightly-teardown needs"},
+		{"fleet-gate, e2e, topology, contacts, email]", "fleet-gate, e2e, topology, email]", "nightly-teardown needs"},
 	})
+}
+
+func TestDevEnvNightly_GuardRunsBeforeAnyDeploy(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	pf := "      - name: Check the contact secrets\n        if: " + nlOn + "\n        run: bash scripts/ci/preview.sh contact-preflight \"$PR\"\n"
+	tv := "      - id: token_version\n        name: Read the HubSpot token version\n        if: " + nlOn + "\n"
+	for _, c := range []struct{ old, repl, want string }{
+		{pf + tv, tv + pf, "out of order"},
+		{"      - name: Check the contact secrets\n        if: " + nlOn + "\n", "      - name: Check the contact secrets\n", "Check the contact secrets is not nightly only"},
+		{"      - id: token_version\n        name: Read the HubSpot token version\n        if: " + nlOn + "\n", "      - id: token_version\n        name: Read the HubSpot token version\n", "Read the HubSpot token version is not nightly only"},
+		{"    needs: [prepare-env, build]\n", "    needs: [build]\n", "deploy does not need prepare-env"},
+		{"!cancelled() && needs.prepare-env.result == 'success' && needs.build.result == 'success'", "!cancelled() && needs.build.result == 'success'", "deploy if does not require"},
+		{"        if: always() && " + nlOn + "\n        uses: actions/upload-artifact@v7\n        with:\n          name: contacts-start", "        if: " + nlOn + "\n        uses: actions/upload-artifact@v7\n        with:\n          name: contacts-start", "contacts-start upload"},
+	} {
+		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
+			t.Errorf("mutation %q: problems %q lack %q", c.old, got, c.want)
+		}
+	}
+}
+
+func TestDevEnvNightly_GuardAndServicesUseOneTokenVersion(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	read := `preview.sh contact-token "$PR" "` + nlTokenVersionStep + `"`
+	for _, c := range []struct{ old, repl, want string }{
+		{read, `preview.sh contact-token "$PR"`, "start reads the token without"},
+		{"hubspot_token_version: " + nlTokenVersionStep, "hubspot_token_version: ${{ steps.urls.outputs.gateway_url }}", "output hubspot_token_version"},
+		{"NIGHTLY_HUBSPOT_TOKEN_VERSION: " + nlTokenVersionOut, "NIGHTLY_HUBSPOT_TOKEN_VERSION: latest", "NIGHTLY_HUBSPOT_TOKEN_VERSION is not"},
+	} {
+		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
+			t.Errorf("mutation %q: problems %q lack %q", c.old, got, c.want)
+		}
+	}
+	read2 := `preview.sh contact-token "$PR" "` + nlTokenVersionOut + `"`
+	first := strings.Index(yml, read2)
+	second := first + len(read2) + strings.Index(yml[first+len(read2):], read2)
+	for name, at := range map[string]int{"contacts": first, "contacts-cleanup": second} {
+		got := contactProblems(nlJobs(yml[:at] + `preview.sh contact-token "$PR"` + yml[at+len(read2):]))
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, name+" reads the token without") }) {
+			t.Errorf("%s: problems %q", name, got)
+		}
+	}
+}
+
+func TestDevEnvNightly_ContactsJobRunsWhenE2EFails(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	for _, c := range []struct{ old, repl, want string }{
+		{`if: "` + nlContactsIf + `"`, `if: "!cancelled() && needs.deploy.result == 'success'"`, "contacts if"},
+		{`if: "` + nlContactsIf + `"`, `if: "!cancelled() && ` + nlOn + ` && needs.e2e.result == 'success'"`, "contacts if"},
+		{"needs: [changes, prepare-env, deploy, e2e, topology]", "needs: [changes, prepare-env, deploy, e2e]", "contacts needs"},
+		{"NIGHTLY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}", "NIGHTLY_RUN_ID: ${{ github.run_id }}", "NIGHTLY_RUN_ID"},
+		{"    name: Real contact reaches HubSpot and Resend\n", "    name: Contacts\n", "contacts name"},
+	} {
+		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
+			t.Errorf("mutation %q: problems %q lack %q", c.old, got, c.want)
+		}
+	}
+}
+
+func TestDevEnvNightly_ContactsGuardsAndDownloadSurviveFailure(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	for _, c := range []struct{ old, repl, want string }{
+		{"        continue-on-error: true\n        uses: actions/download-artifact@v4\n        with:\n          pattern: contacts-*", "        uses: actions/download-artifact@v4\n        with:\n          pattern: contacts-*", "download can fail"},
+		{"          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}\n          RUN_ATTEMPT: ${{ github.run_attempt }}\n        run: |\n          if [ \"$DEPLOYED_ATTEMPT\" != \"$RUN_ATTEMPT\" ]; then\n            echo \"::error::Re-run the whole workflow, not failed jobs — the fleet", "          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}\n          RUN_ATTEMPT: ${{ github.run_attempt }}\n        run: |\n          if [ \"$DEPLOYED_ATTEMPT\" = \"$RUN_ATTEMPT\" ]; then\n            echo \"::error::Re-run the whole workflow, not failed jobs — the fleet", "re-run guard"},
+		{"      - name: Refuse a re-run that skipped the deploy\n        id: attempt\n        env:\n          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}\n          RUN_ATTEMPT: ${{ github.run_attempt }}\n        run: |\n          if [ \"$DEPLOYED_ATTEMPT\" != \"$RUN_ATTEMPT\" ]; then\n            echo \"::error::Re-run the whole workflow, not failed jobs — the fleet", "      - name: Refuse a re-run\n        id: attempt\n        env:\n          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}\n          RUN_ATTEMPT: ${{ github.run_attempt }}\n        run: |\n          if [ \"$DEPLOYED_ATTEMPT\" != \"$RUN_ATTEMPT\" ]; then\n            echo \"::error::Re-run the whole workflow, not failed jobs — the fleet", "re-run guard"},
+	} {
+		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
+			t.Errorf("mutation %q: problems %q lack %q", c.old, got, c.want)
+		}
+	}
+}
+
+func TestDevEnvNightly_CleanupRunsAfterTeardown(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	cn := "needs: [changes, commit-authors, prepare-env, nightly-teardown]"
+	cif := "    if: always() && " + nlOn + " && " + authorCond + "\n    runs-on: ubuntu-latest\n    timeout-minutes: 20\n    permissions:\n      contents: read\n      actions: read"
+	for _, c := range []struct{ old, repl, want string }{
+		{cn, "needs: [changes, commit-authors, prepare-env, e2e]", "contacts-cleanup needs"},
+		{cif, strings.Replace(cif, "always() && "+nlOn+" && ", "always() && ", 1), "contacts-cleanup if"},
+		{cif, strings.Replace(cif, "always()", "success()", 1), "contacts-cleanup if"},
+		{"pattern: contacts-*\n          merge-multiple: true", "pattern: contacts-*", "merge-multiple"},
+		{"    name: Delete the run's contacts\n", "    name: Cleanup\n", "contacts-cleanup name"},
+	} {
+		got := devEnvNightlyProblems(mutateOnce(t, yml, c.old, c.repl))
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, c.want) }) {
+			t.Errorf("mutation %q: problems %q lack %q", c.old, got, c.want)
+		}
+	}
+}
+
+func TestDevEnvNightly_CleanupFollowsTheMailPhase(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	if got := emailProblems(nlJobs(yml)); len(got) > 0 {
+		t.Fatalf("real file: %q", got)
+	}
+	got := emailProblems(nlJobs(mutateOnce(t, yml, "needs: [changes, commit-authors, prepare-env, nightly-teardown]", "needs: [changes, commit-authors, prepare-env]")))
+	if !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "job contacts-cleanup can run beside the mail phase") }) {
+		t.Errorf("problems %q", got)
+	}
 }
 
 func TestDevEnvNightly_EmailSkipsARedFleet(t *testing.T) {
@@ -798,7 +1096,7 @@ func TestDevEnvNightly_NothingRunsBesideTheMailPhase(t *testing.T) {
 	}
 	// A job that email needs is clean.
 	clean := mutateOnce(t, add("  extra:\n    runs-on: ubuntu-latest\n    needs: [deploy]\n    steps:\n      - run: echo\n"),
-		"fleet-gate, e2e, topology]\n    if: >-\n      !cancelled() &&\n      needs.changes.outputs.nightly == 'true' &&", "fleet-gate, e2e, topology, extra]\n    if: >-\n      !cancelled() &&\n      needs.changes.outputs.nightly == 'true' &&")
+		"fleet-gate, e2e, topology, contacts]\n    if: >-\n      !cancelled() &&\n      needs.changes.outputs.nightly == 'true' &&", "fleet-gate, e2e, topology, contacts, extra]\n    if: >-\n      !cancelled() &&\n      needs.changes.outputs.nightly == 'true' &&")
 	if got := emailProblems(nlJobs(clean)); slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "beside the mail phase") }) {
 		t.Errorf("a job in email's needs is a problem: %q", got)
 	}
@@ -830,7 +1128,7 @@ func TestDevEnvNightly_EmailStepOrder(t *testing.T) {
 	specStep := "      - name: Real invite and reset mail\n        timeout-minutes: 16\n" + cmd["spec"]
 	off := "      - name: Turn real mail off\n        if: always() && steps.mailon.outcome != 'skipped'\n        run: bash scripts/ci/preview.sh mail-off \"$PR\"\n"
 	requireEmailMutations(t, []struct{ old, repl, want string }{
-		{"          echo \"::add-mask::$domain\"\n", "", "masks the key and domain"},
+		{"          echo \"::add-mask::$domain\"\n          {\n            echo \"RESEND_READ_KEY", "          {\n            echo \"RESEND_READ_KEY", "masks the key and domain"},
 		{chrome + auth + pf, auth + chrome + pf, "installs Chromium after Google auth"},
 		{off, "", "mail-off is not between"},
 		{specStep + off, off + specStep, "mail-off is not between"},

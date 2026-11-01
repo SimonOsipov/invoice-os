@@ -2,7 +2,7 @@ import { test, expect, type BrowserContext, type Frame, type Locator, type Page,
 import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA } from './targets'
 import { shardPersonas } from './importWizardShared'
 import { shoot } from '../argos'
-import { resolveTarget } from '../targets'
+import { expectedContactsMode, nightlyTarget, resolveTarget } from '../targets'
 import { DESTINATION_READY, VERIFIED, browserToken, collectErrors, expectInWorkspace, headerSignIn, isHandoffNavigation, passFrontDoor, sidebarRoster, signInAs, signInAtFrontDoor, signInDialog, submitSignIn } from '../personaSession'
 import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession, type ConsoleTarget } from '../staffSession'
 import { ensureMember } from '../realAccounts'
@@ -2433,8 +2433,8 @@ async function expectNoDialog(page: Page): Promise<void> {
 }
 
 test('deployed journey: a stranger registers through the landing and lands in a workspace of each kind', async ({ page, browser }) => {
-  // Two real sign-ins at the 180 s one-sign-in budget of the journeys above, plus three registrations and two 30 s contact polls.
-  test.setTimeout(360_000)
+  // Two real sign-ins at the 180 s one-sign-in budget of the journeys above, plus three registrations and two contact polls.
+  test.setTimeout(nightlyTarget() ? 540_000 : 360_000)
   // The free-mail refusal and the first sign-in's /me before provisioning are deliberate 4xx, which Chromium logs as console errors.
   const errors = gatedErrors(page, [
     expectedStatusDropper(page, 400, /\/auth\/register$/),
@@ -2510,7 +2510,13 @@ test('deployed journey: a stranger registers through the landing and lands in a 
       const row = (await contactsMe(session!.token!))!
       expect(row.marketing_eligible, `${kind}: marketing_eligible`).toBe(kind === 'firm')
       expect(row.tags, `${kind}: tags`).toEqual(['registered'])
-      expect(row.mode, `${kind}: contact mode`).toBe('fake')
+      // The row exists before any vendor call; mode is set only after delivery.
+      await expect
+        .poll(async () => (await contactsMe(session!.token!))?.mode, {
+          timeout: nightlyTarget() ? 120_000 : 30_000,
+          message: `${kind}: contact mode`,
+        })
+        .toBe(expectedContactsMode())
     })
 
     // The next kind starts signed out: a stored session would skip the front door.

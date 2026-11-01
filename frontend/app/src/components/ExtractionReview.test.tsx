@@ -2948,6 +2948,31 @@ describe('the offered text never rides a Save (AIR-03-04, AC-5)', () => {
 
 // ==========================================================================================
 // The document-type strip
+// -- the note panel's wire ---------------------------------------------------------------------
+
+const NOTE_ORIGINALS = {
+  entity_id: 'e0e0e0e0-0000-4000-8000-000000000001',
+  filed_invoice_id: null as string | null,
+  originals: [
+    { id: 'o-1', invoice_number: 'INV-1', issue_date: '2026-02-01T00:00:00Z', currency: 'NGN', total: '1075.00', buyer_name: 'Honeywell', note_count: 1 },
+    { id: 'o-2', invoice_number: 'INV-2', issue_date: '2026-03-01T00:00:00Z', currency: 'NGN', total: '215.00', buyer_name: 'Dangote', note_count: 0 },
+  ],
+}
+
+/** The detail for every URL but note-originals, which answers `originals` (a function may reject). */
+function noteWire(
+  detail: ExtractionDetail,
+  originals: () => Promise<unknown> = async () => NOTE_ORIGINALS,
+  other?: (url: string, opts?: { method?: string; body?: unknown }) => Promise<unknown>,
+): Wire & { opened: string[] } {
+  const w = wire((_id, url, opts) =>
+    url.includes('/note-originals') ? originals() : url.includes('/imports/document') || url.includes('/corrections') ? (other as NonNullable<typeof other>)(url, opts) : Promise.resolve(detail),
+  )
+  const opened: string[] = []
+  Object.assign(w.ctx, { openImportedInvoice: (id: string) => opened.push(id), enterByHand: () => {}, activeEntity: { id: 'ent' } })
+  return Object.assign(w, { opened })
+}
+
 // ==========================================================================================
 
 describe('the document type', () => {
@@ -3002,7 +3027,7 @@ describe('the document type', () => {
 
   // A note verdict is the import's own business (the hold panel), not a strip.
   it.each(['credit note', 'debit note'] as const)('the document type: a note verdict shows no strip (%s)', async (t) => {
-    render(review({ ctx: serving(mkDetail({ document_type: t })).ctx }))
+    render(review({ ctx: noteWire(mkDetail({ document_type: t })).ctx }))
     await flush()
 
     expect(frames(), 'the document pane rendered no frame').toHaveLength(3)
@@ -3210,5 +3235,135 @@ describe('the document type, adversarial', () => {
     expect(spans[0].style.flex).toBe('0 0 auto')
     expect(spans[0].style.color).toBe('var(--fg-3)')
     expect(spans[1].textContent).toBe(RECEIPT)
+  })
+})
+
+// ==========================================================================================
+// The note panel: a held credit or debit note asks for its original
+// ==========================================================================================
+
+describe('the note panel', () => {
+  const NOTE_DETAIL = (o: Partial<ExtractionDetail> = {}) =>
+    mkDetail({
+      document_type: 'credit note',
+      fields: [
+        mkField({ name: 'invoice_number', value: 'CN-3401' }),
+        mkField({ name: 'original_invoice_number', value: 'INV-2' }),
+        mkField({ name: 'vat', value: '7.50' }),
+      ],
+      ...o,
+    })
+  const HELD_TITLE = 'Import this document first. Corrections are saved onto its invoice or note.'
+  const panel = () => screen.queryByTestId('extraction-note-panel')
+  const originalsCalls = (w: Wire) => w.calls().filter((c) => c.url.includes('/note-originals'))
+
+  it('a note verdict asks for the original; another verdict never reads', async () => {
+    for (const t of ['credit note', 'debit note'] as const) {
+      const w = noteWire(NOTE_DETAIL({ document_type: t }))
+      render(review({ ctx: w.ctx }))
+      await flush()
+      expect(panel(), `no panel for ${t}`).not.toBeNull()
+      expect(screen.queryByTestId('extraction-document-type'), `a notice beside the panel for ${t}`).toBeNull()
+      expect(originalsCalls(w)).toHaveLength(1)
+      expect(originalsCalls(w)[0].url).toContain(`document_id=${DOCUMENT_ID}`)
+      cleanup()
+    }
+    for (const t of ['receipt', null] as const) {
+      const w = noteWire(NOTE_DETAIL({ document_type: t }))
+      render(review({ ctx: w.ctx }))
+      await flush()
+      expect(panel(), `a panel for ${String(t)}`).toBeNull()
+      expect(originalsCalls(w), `an originals read for ${String(t)}`).toHaveLength(0)
+      cleanup()
+    }
+  })
+
+  it('save waits for the filing', async () => {
+    const w = noteWire(NOTE_DETAIL())
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    fireEvent.change(inputOf('vat') as HTMLElement, { target: { value: '9.00' } })
+    await flush()
+    expect(saveButton()!.disabled, 'Save armed while the note is held').toBe(true)
+    expect(saveButton()!.title).toBe(HELD_TITLE)
+    expect(inputOf('vat')!.value, 'typing was dropped while held').toBe('9.00')
+    expect(exitButton(), 'an exit while held').toBeNull()
+  })
+
+  it('a filing opens the exit and saves a kept draft', async () => {
+    let filed = false
+    const w = noteWire(
+      NOTE_DETAIL(),
+      async () => ({ ...NOTE_ORIGINALS, filed_invoice_id: filed ? 'note-9' : null }),
+      async (url) => {
+        if (url.includes('/imports/document')) {
+          filed = true
+          return { id: 'b', status: 'completed', ready_invoices: 1, errors: null }
+        }
+        return mkCorrectionResponse('vat', '9.00', 'typed')
+      },
+    )
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    fireEvent.change(inputOf('vat') as HTMLElement, { target: { value: '9.00' } })
+    await flush()
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('extraction-note-import'))
+    })
+    await flush()
+
+    expect(panel(), 'the panel survived the filing').toBeNull()
+    expect(frames(), 'the canvas unmounted on the re-read').toHaveLength(3)
+    expect(inputOf('vat')!.value, 'the draft was lost').toBe('9.00')
+    expect(saveButton()!.disabled, 'Save stayed held after the filing').toBe(false)
+    fireEvent.click(exitButton() as HTMLElement)
+    expect(w.opened).toEqual(['note-9'])
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+    const posted = w.calls().filter((c) => c.method === 'POST' && c.url.includes('/corrections'))
+    expect(posted).toHaveLength(1)
+    expect(posted[0].url).toContain('/fields/vat/corrections')
+  })
+
+  it('a failed read stays in the slot', async () => {
+    let fail = true
+    const w = noteWire(NOTE_DETAIL(), async () => {
+      if (fail) throw new ApiError('http', 'Boom', 500)
+      return NOTE_ORIGINALS
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    expect(screen.getByText(RETRY_LABEL), 'no retry in the slot').toBeTruthy()
+    expect(panel()).toBeNull()
+    expect(frames(), 'the canvas left with the failed read').toHaveLength(3)
+    expect(fieldRows(), 'the fields left with the failed read').toHaveLength(2)
+    expect(saveButton()!.disabled).toBe(true)
+
+    fail = false
+    await act(async () => {
+      fireEvent.click(screen.getByText(RETRY_LABEL))
+    })
+    await flush()
+    expect(panel(), 'the retry did not bring the panel').not.toBeNull()
+    expect(frames()).toHaveLength(3)
+  })
+
+  it('a filed note verdict asks nothing', async () => {
+    const w = noteWire(NOTE_DETAIL(), async () => ({ ...NOTE_ORIGINALS, filed_invoice_id: 'note-7' }))
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    expect(panel()).toBeNull()
+    expect(screen.queryByTestId('extraction-document-type')).toBeNull()
+    expect(exitButton(), 'no exit for a filed document').not.toBeNull()
+    expect(saveButton()!.title, 'Save still held').toBe('')
+    fireEvent.click(exitButton() as HTMLElement)
+    expect(w.opened).toEqual(['note-7'])
   })
 })

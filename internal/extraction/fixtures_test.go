@@ -116,6 +116,8 @@ var fxCorpus = []struct {
 	{fxJevDoubt, fxBuildJevDoubtInvoice},
 	// The document-type check's receipt fixture: outside every corpus_ ratchet.
 	{fxJevReceipt, fxBuildJevReceiptInvoice},
+	// CRDDBTNOTE-05's held-note fixture: outside every corpus_ ratchet.
+	{fxJevCreditNote, fxBuildJevCreditNoteInvoice},
 	// AIR-08-13's deployed line-items fixture: outside every corpus_ ratchet.
 	{fxAILines, fxBuildAILinesInvoice},
 	// CHECK-01-03's eight non-invoice types: the document-type check's negative half.
@@ -1979,6 +1981,69 @@ func fxBuildJevReceiptInvoice() []byte {
 	return fxTextPage(fxJevReceiptLines()...)
 }
 
+// fxJevCreditNote: a credit note the fake reads as one (JEVFAKE-CHOICE) whose AI header answer
+// carries only original_invoice_number. The engine decides the number and the three amounts; a
+// ruled 2-row table on fxBuildRichInvoice's recipe carries the lines.
+const fxJevCreditNote = "jev_credit_note.pdf"
+
+const fxJevCreditNoteMarker = "JEVFAKE-CHOICE-Y3JlZGl0IG5vdGU"
+
+const fxJevCreditNoteOriginal = "INV-ORIG-3401"
+
+var fxJevCreditNoteTableRowYs = [4]int{590, 566, 542, 518}
+
+// fxJevCreditNoteAIMarker is fxAISteeredMarker's recipe over one answer: every header key null
+// but original_invoice_number.
+func fxJevCreditNoteAIMarker() string {
+	answer := make(map[string]any, len(extraction.HeaderFields))
+	for _, f := range extraction.HeaderFields {
+		answer[f] = nil
+	}
+	answer["original_invoice_number"] = fxJevCreditNoteOriginal
+	raw, err := json.Marshal(answer)
+	if err != nil {
+		panic("fxJevCreditNoteAIMarker: marshal: " + err.Error())
+	}
+	return fxAISteeredMarkerPrefix + base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func fxJevCreditNoteLines() []fxLine {
+	lines := []fxLine{
+		{12, 72, 690, "Invoice Number: CN-3401"},
+		{12, 72, 672, "Original Invoice: " + fxJevCreditNoteOriginal},
+	}
+	lines = append(lines, fxTableRowText(578, fxTableHeader)...)
+	lines = append(lines, fxTableRowText(554, []string{"Widget", "1", "50.00", "50.00"})...)
+	lines = append(lines, fxTableRowText(530, []string{"Gadget", "1", "50.00", "50.00"})...)
+	lines = append(lines,
+		fxLine{12, 380, 470, "Subtotal"}, fxLine{12, 500, 470, "100.00"},
+		fxLine{12, 380, 452, "VAT"}, fxLine{12, 500, 452, "7.50"},
+		fxLine{12, 380, 434, "Total"}, fxLine{12, 500, 434, "107.50"},
+		fxLine{fxAISteeredMarkerPt, fxAISteeredMarkerX, 30, fxJevCreditNoteAIMarker()},
+		fxLine{3, 72, 38, fxJevCreditNoteMarker},
+	)
+	return lines
+}
+
+func fxBuildJevCreditNoteInvoice() []byte {
+	content := fxText(fxJevCreditNoteLines()...)
+	var rules bytes.Buffer
+	for _, y := range fxJevCreditNoteTableRowYs {
+		rules.WriteString(fxRuleH(y, fxTableColXs[0], fxTableColXs[len(fxTableColXs)-1]))
+	}
+	for _, x := range fxTableColXs {
+		rules.WriteString(fxRuleV(x, fxJevCreditNoteTableRowYs[len(fxJevCreditNoteTableRowYs)-1], fxJevCreditNoteTableRowYs[0]))
+	}
+	content = append(content, rules.Bytes()...)
+	return fxAssemble([]fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxFontRes(5), 4),
+		fxStream(content),
+		fxObject(fxHelvetica),
+	})
+}
+
 // fxLinesWithMarkerAt returns lines with its own last entry (the marker) moved to index i, the
 // others keeping their order -- TestFixtures_AISteeredOutcomeIgnoresTokenOrder's rotation.
 func fxLinesWithMarkerAt(lines []fxLine, i int) []fxLine {
@@ -2493,6 +2558,61 @@ func TestFixtures_JevReceiptE2ECopyIsTheBuildersBytes(t *testing.T) {
 	}
 	if want := fxBuildJevReceiptInvoice(); len(want) == 0 || !bytes.Equal(got, want) {
 		t.Errorf("%s/%s = %d byte(s), want the builder's %d", fxE2EDir, fxJevReceipt, len(got), len(want))
+	}
+}
+
+// TestFixtures_JevCreditNoteReadsAsDesigned: the fake reads a credit note, the engine decides the
+// number and the three amounts, and the AI header answer carries the original number alone.
+func TestFixtures_JevCreditNoteReadsAsDesigned(t *testing.T) {
+	client := fxJevFake(t)
+	pages := fxPagesFromBytes(t, fxBuildJevCreditNoteInvoice())
+	in := fxJevDecided(pages)
+
+	byName := make(map[string]extraction.FieldResult)
+	for _, r := range in {
+		byName[r.Name] = r
+	}
+	for name, want := range map[string]string{"invoice_number": "CN-3401", "subtotal": "100.00", "vat": "7.50", "total": "107.50"} {
+		r := byName[name]
+		if r.Reason != extraction.ReasonNone || r.Value == nil || *r.Value != want {
+			t.Errorf("%s = %+v, want decided %q", name, r, want)
+		}
+	}
+	if r := byName["original_invoice_number"]; r.Value != nil {
+		t.Errorf("original_invoice_number = %+v, want no engine value (AI only)", r)
+	}
+
+	if _, verdict := extraction.CheckDocumentForTest(t.Context(), client, pages, slices.Clone(in)); verdict != "credit note" {
+		t.Errorf("verdict = %q, want credit note", verdict)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(fxJevCreditNoteMarker, "JEVFAKE-CHOICE-"))
+	if err != nil || string(raw) != "credit note" {
+		t.Errorf("marker payload = %q (err %v), want credit note", raw, err)
+	}
+
+	answer := fxDecodeAISteeredMarker(t, fxJevCreditNoteAIMarker())
+	if !reflect.DeepEqual(answer, map[string]string{"original_invoice_number": fxJevCreditNoteOriginal}) {
+		t.Errorf("AI answer = %v, want original_invoice_number alone", answer)
+	}
+	merged := extraction.MergeAIForTest(slices.Clone(in), answer, pages, nil)
+	for _, r := range merged {
+		if r.Name == "original_invoice_number" && (r.Value == nil || *r.Value != fxJevCreditNoteOriginal) {
+			t.Errorf("merged original_invoice_number = %+v, want %q", r, fxJevCreditNoteOriginal)
+		}
+		if r.Name == "invoice_number" && (r.Value == nil || *r.Value != "CN-3401") {
+			t.Errorf("merged invoice_number = %+v, want CN-3401", r)
+		}
+	}
+}
+
+// TestFixtures_JevCreditNoteE2ECopyIsTheBuildersBytes: the deployed spec uploads this copy.
+func TestFixtures_JevCreditNoteE2ECopyIsTheBuildersBytes(t *testing.T) {
+	got, err := os.ReadFile(filepath.Join(fxE2EDir, fxJevCreditNote))
+	if err != nil {
+		t.Fatalf("read the e2e copy: %v", err)
+	}
+	if want := fxBuildJevCreditNoteInvoice(); len(want) == 0 || !bytes.Equal(got, want) {
+		t.Errorf("%s/%s = %d byte(s), want the builder's %d", fxE2EDir, fxJevCreditNote, len(got), len(want))
 	}
 }
 
@@ -3385,7 +3505,7 @@ const fxE2EDir = "../../e2e/fixtures/documents"
 // fxE2ECopies is the explicit table AC-2 requires: each name here must be byte-identical between
 // fxE2EDir and testdata/. Table-driven, not a directory walk, because fxE2EDir also holds
 // native_invoice_2p.pdf, which has no Go-side original of that name.
-var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAIUnavailable, fxAILines, fxAINRS, fxJevDoubt, fxJevReceipt}
+var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAIUnavailable, fxAILines, fxAINRS, fxJevDoubt, fxJevReceipt, fxJevCreditNote}
 
 // fxE2EExempt: native_invoice_2p.pdf has no Go-side original -- its closest analog, native_3page.pdf, is a different file.
 var fxE2EExempt = map[string]bool{"native_invoice_2p.pdf": true}

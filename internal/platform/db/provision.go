@@ -50,10 +50,11 @@ func (cfg ProvisionConfig) ResetWillRun() bool {
 		ResetEnabled(cfg.DeployEnv, cfg.ResetFlag)
 }
 
-// ShardsWillSeed reports whether Provision seeds the topology E2E shards: in a pr-<N> preview
-// that allows bootstrap. A GCP preview recreates its database instead of resetting it.
+// ShardsWillSeed reports whether Provision seeds the topology E2E shards: in a pr-<N> preview or the
+// nightly that allows bootstrap. A GCP preview recreates its database instead of resetting it.
 func (cfg ProvisionConfig) ShardsWillSeed() bool {
-	return BootstrapEnabled(cfg.Environment, cfg.BootstrapFlag) && resettableEnvironment(cfg.DeployEnv)
+	return BootstrapEnabled(cfg.Environment, cfg.BootstrapFlag) &&
+		(resettableEnvironment(cfg.DeployEnv) || cfg.DeployEnv == "nightly")
 }
 
 // unrenderedReference is the opening delimiter of an unrendered template reference.

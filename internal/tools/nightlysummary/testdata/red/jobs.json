@@ -1,0 +1,81 @@
+[
+  {
+    "name": "Go",
+    "conclusion": "failure",
+    "steps": [
+      {
+        "name": "Set up job",
+        "conclusion": "success",
+        "number": 1
+      },
+      {
+        "name": "Test",
+        "conclusion": "failure",
+        "number": 8
+      },
+      {
+        "name": "Upload the nightly results",
+        "conclusion": "success",
+        "number": 20
+      }
+    ]
+  },
+  {
+    "name": "Frontend",
+    "conclusion": "failure",
+    "steps": [
+      {
+        "name": "Set up job",
+        "conclusion": "success",
+        "number": 1
+      },
+      {
+        "name": "Test the app",
+        "conclusion": "failure",
+        "number": 9
+      },
+      {
+        "name": "Upload the nightly results",
+        "conclusion": "success",
+        "number": 20
+      }
+    ]
+  },
+  {
+    "name": "Docling image (test suite)",
+    "conclusion": "failure",
+    "steps": [
+      {
+        "name": "Set up job",
+        "conclusion": "success",
+        "number": 1
+      },
+      {
+        "name": "Run the test image",
+        "conclusion": "failure",
+        "number": 6
+      },
+      {
+        "name": "Upload the nightly results",
+        "conclusion": "success",
+        "number": 9
+      }
+    ]
+  },
+  {
+    "name": "Docker image (canary)",
+    "conclusion": "failure",
+    "steps": [
+      {
+        "name": "Set up job",
+        "conclusion": "success",
+        "number": 1
+      },
+      {
+        "name": "Build one plain service image (SERVICE=tenancy)",
+        "conclusion": "failure",
+        "number": 4
+      }
+    ]
+  }
+]

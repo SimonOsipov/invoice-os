@@ -3,18 +3,22 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "E2E suites against the deployed fleet: three Playwright projects (smoke = SPA render + console coverage + persona boundaries, api = typed HTTP contract suite over the gateway, topology = browser-verified gateway round trips) plus deployment-free vitest unit tests for this package's own seams, and test:hooks for the .claude/hooks git-history guard (the Claude hooks CI job). See e2e/README.md.",
+  "description": "E2E suites against the deployed fleet: three Playwright projects (smoke = SPA render + console coverage + persona boundaries, api = typed HTTP contract suite over the gateway, topology = browser-verified gateway round trips; the nightly's email job also runs test:mail, which sends real mail) plus deployment-free vitest unit tests for this package's own seams, and test:hooks for the .claude/hooks git-history guard (the Claude hooks CI job). See e2e/README.md.",
   "scripts": {
     "test": "playwright test",
     "test:smoke": "playwright test",
     "test:topology": "playwright test --config playwright.topology.config.ts",
     "test:api": "playwright test --config playwright.api.config.ts",
+    "test:mail": "playwright test --config playwright.mail.config.ts",
     "test:unit": "vitest run",
     "test:hooks": "vitest run --config vitest.hooks.config.ts",
     "typecheck": "tsc --noEmit",
-    "ctl": "node --import ./ctl/tsResolve.mjs ./ctl/main.ts"
+    "ctl": "node --import ./ctl/tsResolve.mjs ./ctl/main.ts",
+    "nightly-ai": "node --import ./ctl/tsResolve.mjs ./nightlyAi/main.ts"
   },
   "devDependencies": {
+    "@argos-ci/core": "6.8.8",
+    "@argos-ci/playwright": "7.8.0",
     "@invoice-os/api-client": "workspace:*",
     "@playwright/cli": "0.1.22",
     "@playwright/test": "^1.64.1",

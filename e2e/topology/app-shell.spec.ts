@@ -8,6 +8,7 @@ import { freshTin } from '../api/fixtures'
 import { collectErrors, signInAs } from '../personaSession'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { argosOn, shoot } from '../argos'
 import { resolveTarget } from '../targets'
 import { APP_URL, GATEWAY_URL, shardTenants } from './targets'
 
@@ -595,6 +596,36 @@ test('AS-06 every nav destination of both modes: no sideways scroll, no unresolv
         expect(s.badChips, `${where}: .pf-chip corners`).toEqual([])
         chipTotal += s.chips
         report.push({ where, scroll, scanned: s.scanned, buttons: s.buttons, chips: s.chips })
+        const audit = /^Audit/.test(label)
+        if (audit && argosOn()) {
+          // At <=860 px the document scrolls and the nav stacks above the page; bring the heading to the top of the 375 frame. No-op at 1440.
+          await page.evaluate(() => {
+            ;(window as unknown as { __argosAudit?: () => void }).__argosAudit = () => {
+              if (window.innerWidth <= 860) document.querySelector('main.pf-main .pf-scroll h1')?.scrollIntoView({ block: 'start', behavior: 'instant' })
+            }
+            window.addEventListener('resize', (window as unknown as { __argosAudit: () => void }).__argosAudit)
+          })
+        }
+        await shoot(page, 'app', `${persona}-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`, {
+          // Other specs of the shard write rows, company names and nav counts.
+          mask: [page.getByTestId('identity-card'), page.getByTestId('company-switcher'), page.locator('main.pf-main tbody'), page.getByTestId('audit-table').locator('xpath=..'), page.getByTestId('audit-immutability-strip'), page.getByTestId('audit-pager'), navButtons(page).locator('span.mono')],
+          // ceiling: the audit page grows with the shared tenant's event count at 375; viewport-tall until the log has a fixed-size fixture.
+          fullPage: !audit,
+        })
+        if (audit && argosOn()) {
+          await page.evaluate(() => window.removeEventListener('resize', (window as unknown as { __argosAudit: () => void }).__argosAudit))
+        }
+      }
+      if (argosOn()) {
+        // The shots block nothing: a failure here leaves the name in `missing` and the sweep goes on.
+        try {
+          await page.getByTestId('identity-card-account').click({ timeout: 5_000 })
+          await expect(page.getByRole('heading', { level: 1, name: 'Your account' })).toBeVisible({ timeout: 5_000 })
+          await shoot(page, 'app', `${persona}-account`, { mask: [page.getByTestId('identity-card'), page.getByTestId('company-switcher'), page.getByTestId('account-delete-body')] })
+        } catch {
+          // fall through to the nav
+        }
+        await navButtons(page).first().click({ timeout: 5_000 }).catch(() => {})
       }
     })
   }

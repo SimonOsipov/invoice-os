@@ -164,8 +164,8 @@ func idpJobProblems(ciYAML string) []string {
 	if len(changes) == 0 {
 		return []string{"no changes job"}
 	}
-	if !slices.Contains(changesOutputs(changes), "idp: ${{ steps.filter.outputs.idp }}") {
-		problems = append(problems, "changes.outputs has no `idp: ${{ steps.filter.outputs.idp }}`; the idp job's if: would read an empty output and never run")
+	if !slices.Contains(changesOutputs(changes), "idp: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.idp }}") {
+		problems = append(problems, "changes.outputs has no forced idp output; the idp job's if: would read an empty output and never run")
 	}
 	paths := filterPaths(changes, "idp")
 	for _, want := range []string{"sidecar/auth/**", "internal/platform/auth/**"} {
@@ -208,7 +208,7 @@ func readCIYAML(t *testing.T) string {
 }
 
 func TestCIAggregateAssertsIdPJob(t *testing.T) {
-	const changes = "jobs:\n  changes:\n    runs-on: ubuntu-latest\n    outputs:\n      go: ${{ steps.filter.outputs.go }}\n      idp: ${{ steps.filter.outputs.idp }}\n" +
+	const changes = "jobs:\n  changes:\n    runs-on: ubuntu-latest\n    outputs:\n      go: ${{ steps.filter.outputs.go }}\n      idp: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.idp }}\n" +
 		"    steps:\n      - uses: dorny/paths-filter@v3\n        id: filter\n        with:\n          filters: |\n" +
 		"            go:\n              - 'cmd/**'\n            idp:\n              - 'sidecar/auth/**'\n              - 'internal/platform/auth/**'\n              - 'Makefile'\n"
 	const idp = "  idp:\n    needs: changes\n    if: needs.changes.outputs.idp == 'true'\n    runs-on: ubuntu-latest\n    steps:\n" +
@@ -223,7 +223,7 @@ func TestCIAggregateAssertsIdPJob(t *testing.T) {
 		t.Fatalf("the good fixture reports %v; the scan is broken", p)
 	}
 	for _, c := range []struct{ name, yaml, want string }{
-		{"no idp output", strings.Replace(good, "      idp: ${{ steps.filter.outputs.idp }}\n", "", 1), "changes.outputs"},
+		{"no idp output", strings.Replace(good, "      idp: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.idp }}\n", "", 1), "changes.outputs"},
 		{"filter misses auth", strings.Replace(good, "              - 'internal/platform/auth/**'\n", "", 1), "internal/platform/auth/**"},
 		{"job reads the go output", strings.Replace(good, "outputs.idp == 'true'", "outputs.go == 'true'", 1), "if: reads"},
 		{"tests run without the gate", strings.Replace(good, "scripts/ci/rls-test-gate.sh -count=1", "go test -count=1", 1), "rls-test-gate.sh"},

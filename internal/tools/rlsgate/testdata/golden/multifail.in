@@ -1,0 +1,5 @@
+{"Action":"output","Package":"pkgA","Test":"TestA","Output":"boom A\n"}
+{"Action":"fail","Package":"pkgA","Test":"TestA"}
+{"Action":"output","Package":"pkgB","Test":"TestA","Output":"boom B\n"}
+{"Action":"fail","Package":"pkgB","Test":"TestA"}
+{"Action":"pass","Package":"pkgA","Test":"TestB"}

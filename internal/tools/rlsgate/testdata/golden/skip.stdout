@@ -1,0 +1,4 @@
+PASS  pkgA.TestOne
+SKIP  pkgA.TestRLS_Foo
+rlsgate: 1 passed, 1 skipped, 0 failed (2 test-level results)
+::error::rlsgate: 1 DB-backed test(s) SKIPPED (DB env broke): TestRLS_Foo

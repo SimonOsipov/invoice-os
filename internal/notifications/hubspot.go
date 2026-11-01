@@ -22,6 +22,8 @@ type HubSpot struct {
 	baseURL string
 	token   string
 	hc      *http.Client
+	// dealStage is demoStage unless DeliveryClients overrides it.
+	dealStage string
 }
 
 // NewHubSpot: a nil hc means http.Client{Timeout: 10s}.
@@ -29,7 +31,7 @@ func NewHubSpot(baseURL string, k Keys, hc *http.Client) *HubSpot {
 	if hc == nil {
 		hc = NewHTTPClient(nil)
 	}
-	return &HubSpot{baseURL: strings.TrimRight(baseURL, "/"), token: k.HubSpotToken, hc: hc}
+	return &HubSpot{baseURL: strings.TrimRight(baseURL, "/"), token: k.HubSpotToken, hc: hc, dealStage: demoStage}
 }
 
 // NewHTTPClient is the vendor client: 10 s timeout, and a 3xx is the response, never followed.
@@ -159,7 +161,7 @@ func (h *HubSpot) OpenDemoDeal(ctx context.Context, c Contact, dealName string) 
 		return err
 	}
 	status, err := doJSON(ctx, h.hc, http.MethodPost, h.baseURL+hubspotDeals, h.token, map[string]any{
-		"properties": map[string]string{"dealname": dealName, "pipeline": demoPipeline, "dealstage": demoStage},
+		"properties": map[string]string{"dealname": dealName, "pipeline": demoPipeline, "dealstage": h.dealStage},
 		"associations": []any{map[string]any{
 			"to":    map[string]string{"id": id},
 			"types": []any{map[string]any{"associationCategory": "HUBSPOT_DEFINED", "associationTypeId": dealToContactAssoc}},

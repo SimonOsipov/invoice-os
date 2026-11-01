@@ -1,0 +1,26 @@
+{"Action":"start","Package":"github.com/SimonOsipov/invoice-os/internal/basic"}
+{"Action":"run","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestOK"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestOK","Output":"=== RUN   TestOK\n"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestOK","Output":"--- PASS: TestOK (0.00s)\n"}
+{"Action":"pass","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestOK"}
+{"Action":"run","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestBad"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestBad","Output":"=== RUN   TestBad\n"}
+{"Action":"run","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestBad/sub"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestBad/sub","Output":"=== RUN   TestBad/sub\n"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestBad/sub","Output":"    a_test.go:7: want 1, got 2\n"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestBad/sub","Output":"--- FAIL: TestBad/sub (0.00s)\n"}
+{"Action":"fail","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestBad/sub"}
+{"Action":"run","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestBad/fine"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestBad/fine","Output":"=== RUN   TestBad/fine\n"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestBad/fine","Output":"--- PASS: TestBad/fine (0.00s)\n"}
+{"Action":"pass","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestBad/fine"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestBad","Output":"--- FAIL: TestBad (0.00s)\n"}
+{"Action":"fail","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestBad"}
+{"Action":"run","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestSkip"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestSkip","Output":"=== RUN   TestSkip\n"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestSkip","Output":"    a_test.go:10: no db\n"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestSkip","Output":"--- SKIP: TestSkip (0.00s)\n"}
+{"Action":"skip","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Test":"TestSkip"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Output":"FAIL\n"}
+{"Action":"output","Package":"github.com/SimonOsipov/invoice-os/internal/basic","Output":"FAIL\tgithub.com/SimonOsipov/invoice-os/internal/basic\t0.493s\n"}
+{"Action":"fail","Package":"github.com/SimonOsipov/invoice-os/internal/basic"}

@@ -188,6 +188,7 @@ func TestPurgeCheckEnabled_OnlyOnAPreviewBootstrapRun(t *testing.T) {
 		{"development", "true", "invoice-os-pr-x", false},
 		{"development", "true", "pr-12 ", false},
 		{"development", "true", "staging", false},
+		{"development", "true", "nightly", false},
 		{"", "true", "pr-12", false},
 	}
 	for _, c := range cases {

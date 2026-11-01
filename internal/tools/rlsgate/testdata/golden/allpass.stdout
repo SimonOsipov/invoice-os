@@ -1,0 +1,4 @@
+PASS  github.com/SimonOsipov/invoice-os/internal/tenancy.TestRLS_A
+PASS  github.com/SimonOsipov/invoice-os/internal/tenancy.TestRLS_B
+PASS  github.com/SimonOsipov/invoice-os/internal/tenancy.TestRLS_C
+rlsgate: 3 passed, 0 skipped, 0 failed (3 test-level results)

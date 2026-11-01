@@ -1,5 +1,4 @@
-// The E2E shard tenants db/seed.e2e-shards.sql creates in a
-// PR environment's reset-and-seed. Env-gated like reset_test.go.
+// The E2E shard tenants db/seed.e2e-shards.sql creates. Env-gated like reset_test.go.
 package db_test
 
 import (

@@ -50,6 +50,7 @@ import {
   type ExtractionJob,
 } from './client'
 import { freshTin } from './fixtures'
+import { nightlyTarget, REAL_AI_COVERED } from '../targets'
 import { assertErrorEnvelope, ensureFirmPolicyActive, type RawResult } from './contract-helpers'
 
 // e2e/ is ESM, so there is no __dirname, and a relative path would resolve against
@@ -558,6 +559,7 @@ async function entityInvoices(tok: string, entityId: string) {
 }
 
 test.describe('note documents', () => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.describe.configure({ timeout: 300_000 })
   let token: string
 

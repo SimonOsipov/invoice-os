@@ -49,6 +49,11 @@ The security reviewer reads this file before each review. Treat a break of a gua
 - Cloud Armor on the production load balancer throttles register, invitation register, resend, reset, invitation resend, `/contacts/demo-request` and `/blog/*` per client IP. Sign-in and refresh have no per-IP limit. Its rules are in the private repo invoice-os-infra, `terraform/armor.tf`.
 - On Cloud Run every service but the gateway and the static sites is ingress-internal and admits only a caller with a Google ID token. `platform.IDTokenTransport` adds it in `X-Serverless-Authorization`; `TraceTransport` includes it.
 
+## Postures
+
+- `platform.Posture` reads `DEPLOY_ENV`: empty is local, `pr-<N>` is preview, the exact name `nightly` is nightly, any other name is hosted.
+- Only a preview logs the gateway's per-address limits without refusing. A preview captures account mail.
+
 ## Untrusted entry points
 
 - `POST /v1/documents` (`extraction.UploadHandler`, submission): uploaded file bytes.

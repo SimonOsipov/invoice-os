@@ -1,0 +1,6 @@
+{"Action":"run","Package":"pkgA","Test":"TestOne"}
+{"Action":"pass","Package":"pkgA","Test":"TestOne","Elapsed":0.01}
+{"Action":"run","Package":"pkgA","Test":"TestRLS_Foo"}
+{"Action":"output","Package":"pkgA","Test":"TestRLS_Foo","Output":"    rls_test.go:42: skipping: DATABASE_URL not set\n"}
+{"Action":"skip","Package":"pkgA","Test":"TestRLS_Foo","Elapsed":0.00}
+{"Action":"pass","Package":"pkgA","Elapsed":0.05}

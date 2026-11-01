@@ -184,6 +184,19 @@ describe('NoteImportPanel', () => {
 
     await click(asInvoice())
     expect(sent, 'the lock never released').toHaveLength(2)
+    cleanup()
+
+    // One act batches the renders, so no click sees the busy state: only the ref can refuse.
+    let hold!: () => void
+    const held = new Promise<void>((r) => (hold = r))
+    const same = setup({ reply: async () => (await held, { id: 'b', ready_invoices: 1, errors: [] }) })
+    await act(async () => {
+      fireEvent.click(importBtn())
+      fireEvent.click(asInvoice())
+      fireEvent.click(importBtn())
+    })
+    expect(same.sent, 'clicks in one tick each posted').toHaveLength(1)
+    await act(async () => hold())
   })
 
   it('this is an invoice', async () => {

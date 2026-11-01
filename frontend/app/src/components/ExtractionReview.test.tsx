@@ -3276,6 +3276,9 @@ describe('the note panel', () => {
       await flush()
       expect(panel(), `a panel for ${String(t)}`).toBeNull()
       expect(originalsCalls(w), `an originals read for ${String(t)}`).toHaveLength(0)
+      fireEvent.change(inputOf('vat') as HTMLElement, { target: { value: '9.00' } })
+      await flush()
+      expect(saveButton()!.disabled, `Save held for ${String(t)}`).toBe(false)
       cleanup()
     }
   })

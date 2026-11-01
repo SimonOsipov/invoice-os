@@ -3436,6 +3436,62 @@ describe('the note panel', () => {
     expect(exitButton(), 'the other document carries the filed note’s exit').toBeNull()
   })
 
+  it('a filed note re-read as a receipt lends no exit', async () => {
+    const w = wire(async (id, url) => {
+      if (url.includes('/note-originals')) return { ...NOTE_ORIGINALS, filed_invoice_id: 'note-7' }
+      return id === JOB_ID ? NOTE_DETAIL() : mkDetail({ id, document_id: DOCUMENT_ID, document_type: 'receipt' })
+    })
+    Object.assign(w.ctx, { openImportedInvoice: () => {}, enterByHand: () => {}, activeEntity: { id: 'ent' } })
+    const { rerender } = render(review({ ctx: w.ctx, jobId: JOB_ID }))
+    await flush()
+    expect(exitButton(), 'the filed note has no exit: the floor is vacuous').not.toBeNull()
+
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    expect(exitButton(), 'the same document read as a receipt carries the note’s exit').toBeNull()
+  })
+
+  it('the next note never shows the filed note’s read, not even for one commit', async () => {
+    let release: (v: unknown) => void = () => {}
+    const w = wire(async (id, url) => {
+      if (url.includes('/note-originals')) {
+        if (url.includes(DOCUMENT_ID)) return { ...NOTE_ORIGINALS, filed_invoice_id: 'note-7' }
+        return new Promise((r) => (release = r))
+      }
+      return id === JOB_ID ? NOTE_DETAIL() : NOTE_DETAIL({ id, document_id: OTHER_DOCUMENT_ID })
+    })
+    Object.assign(w.ctx, { openImportedInvoice: () => {}, enterByHand: () => {}, activeEntity: { id: 'ent' } })
+    const { rerender } = render(review({ ctx: w.ctx, jobId: JOB_ID }))
+    await flush()
+    expect(exitButton(), 'the filed note has no exit: the floor is vacuous').not.toBeNull()
+
+    const seen: string[] = []
+    const watch = (rs: MutationRecord[]) =>
+      rs.forEach((r) => {
+        r.addedNodes.forEach((n) => {
+          if (!(n instanceof HTMLElement)) return
+          for (const id of ['extraction-open-invoice', 'extraction-note-panel']) {
+            if (n.dataset.testid === id || n.querySelector(`[data-testid="${id}"]`)) seen.push(id)
+          }
+        })
+        if (r.type === 'attributes' && r.attributeName === 'title') seen.push(`title:${r.oldValue}`)
+      })
+    const mo = new MutationObserver(watch)
+    mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['title'], attributeOldValue: true })
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    watch(mo.takeRecords())
+
+    expect(saveButton()!.title, 'the second note is still checking: the floor is vacuous').toBe(CHECKING_TITLE)
+    expect(seen.filter((x) => x !== `title:${CHECKING_TITLE}`), 'a commit showed the old note’s read').toEqual([])
+    seen.length = 0
+    await act(async () => release({ ...NOTE_ORIGINALS, filed_invoice_id: null }))
+    await flush()
+    watch(mo.takeRecords())
+    mo.disconnect()
+    expect(seen, 'the observer saw nothing: the control is vacuous').toContain('extraction-note-panel')
+  })
+
   it('a late read of the old document does not file the new one', async () => {
     let release: (v: unknown) => void = () => {}
     const w = wire(async (id, url) => {

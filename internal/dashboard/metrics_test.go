@@ -631,6 +631,34 @@ func TestMetrics_TotalsAddSignedClientVAT(t *testing.T) {
 	}
 }
 
+// The filed filter stays per client and per tenant: an unfiled client reads 0, another tenant's filed VAT never enters.
+func TestMetrics_VATTrackedFilterStaysPerClientAndTenant(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "FSCOPE tenant")
+	filed := seedEntity(t, super, tenantID, "FSCOPE filed")
+	unfiled := seedEntity(t, super, tenantID, "FSCOPE unfiled")
+	seedFiledInvoiceWithVAT(t, super, tenantID, filed, "FSCOPE-ACC", "5.00")
+	rej := seedInvoiceWithVAT(t, super, tenantID, unfiled, "FSCOPE-REJ", "9.00")
+	setStatus(t, super, rej, "rejected")
+	otherTenant := seedTenant(t, super, "FSCOPE other tenant")
+	seedFiledInvoiceWithVAT(t, super, otherTenant, seedEntity(t, super, otherTenant, "FSCOPE foreign"), "FSCOPE-FOREIGN", "700.00")
+
+	got := rollupFor(t, app, tenantID)
+	if len(got.Clients) != 2 {
+		t.Fatalf("Clients = %d rows, want 2", len(got.Clients))
+	}
+	byName := map[string]Metric{}
+	for _, c := range got.Clients {
+		byName[c.EntityName] = c.Metrics["vat_tracked"]
+	}
+	if byName["FSCOPE filed"] != (Metric{Num: 500, Den: 1}) || byName["FSCOPE unfiled"] != (Metric{Num: 0, Den: 1}) {
+		t.Errorf("client vat_tracked = %+v, want filed {500 1} and unfiled {0 1}", byName)
+	}
+	if m := got.Totals.Metrics["vat_tracked"]; m.Num != 500 {
+		t.Errorf("Totals vat_tracked.num = %d, want 500", m.Num)
+	}
+}
+
 // A note is one document in every count, whatever its type and status.
 func TestMetrics_ANoteCountsAsOneDocument(t *testing.T) {
 	super, app := dbTestPools(t)

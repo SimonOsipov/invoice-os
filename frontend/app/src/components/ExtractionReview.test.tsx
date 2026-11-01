@@ -3387,6 +3387,9 @@ describe('the note panel', () => {
     expect(saveButton()!.disabled).toBe(true)
     expect(saveButton()!.title).toBe(CHECK_FAILED_TITLE)
     expect(exitButton()).toBeNull()
+    fireEvent.change(inputOf('vat') as HTMLElement, { target: { value: '9.00' } })
+    await flush()
+    expect(inputOf('vat')!.value, 'typing dropped while the read had failed').toBe('9.00')
 
     fail = false
     await act(async () => {
@@ -3394,7 +3397,7 @@ describe('the note panel', () => {
     })
     await flush()
     expect(exitButton(), 'no exit after the retry').not.toBeNull()
-    fireEvent.change(inputOf('vat') as HTMLElement, { target: { value: '9.00' } })
+    expect(inputOf('vat')!.value, 'the draft was lost across the retry').toBe('9.00')
     await flush()
     expect(saveButton()!.disabled).toBe(false)
     expect(saveButton()!.title).toBe('')

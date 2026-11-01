@@ -15,6 +15,7 @@ import (
 )
 
 const previewGcloudShim = `echo "$*" >> "$D/calls"
+[ ! -e "$D/fail-$1-$2" ] || { echo "ERROR: gcloud $1 $2 failed" >&2; exit 1; }
 case "$1 $2 $3" in
 "run deploy "*)
   prev=
@@ -1237,15 +1238,21 @@ func TestPreviewInvariantsRefuseTheKeyOnAnotherNightlyService(t *testing.T) {
 func TestPreviewInvariantsRefuseAPlainKeyOrAnotherSecret(t *testing.T) {
 	t.Parallel()
 	const plain = "sk-or-v1-notarealkey"
-	for name, v := range map[string]invVar{
-		"plain value":     {name: "OPENROUTER_API_KEY", value: plain},
-		"another secret":  {name: "OPENROUTER_API_KEY", ref: "other"},
-		"a pr secret":     {name: "OPENROUTER_API_KEY", ref: "pr-7-openrouter"},
-		"the key renamed": {name: "OPENROUTER_API_KEY", ref: "nightly-openrouter-api-key-2"},
+	other := invVar{name: "OPENROUTER_API_KEY", ref: "other"}
+	plainKey := invVar{name: "OPENROUTER_API_KEY", value: plain}
+	for name, vars := range map[string][]invVar{
+		"plain value":                {plainKey},
+		"another secret":             {other},
+		"a pr secret":                {{name: "OPENROUTER_API_KEY", ref: "pr-7-openrouter"}},
+		"the key renamed":            {{name: "OPENROUTER_API_KEY", ref: "nightly-openrouter-api-key-2"}},
+		"plain value beside the ref": {nlKeyVar(), plainKey},
+		"another secret beside it":   {nlKeyVar(), other},
+		"plain value before the ref": {plainKey, nlKeyVar()},
+		"another secret before it":   {other, nlKeyVar()},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			r := runInvariants(t, []string{nlKeySecret}, []invSvc{{"submission-nightly", []invVar{nlKeyVar()}}, {"invoice-nightly", []invVar{v}}})
+			r := runInvariants(t, []string{nlKeySecret}, []invSvc{{"submission-nightly", []invVar{nlKeyVar()}}, {"invoice-nightly", vars}})
 			if r.code != 1 {
 				t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
 			}
@@ -1257,6 +1264,46 @@ func TestPreviewInvariantsRefuseAPlainKeyOrAnotherSecret(t *testing.T) {
 			}
 			if strings.Contains(r.stdout+r.stderr, plain) {
 				t.Errorf("output leaks the key value:\n%s\n%s", r.stdout, r.stderr)
+			}
+		})
+	}
+}
+
+func TestPreviewInvariantsRefuseTheKeySecretUnderAnotherVariableName(t *testing.T) {
+	t.Parallel()
+	for name, svc := range map[string]invSvc{
+		"a pr service":     {"invoice-pr-7", []invVar{{name: "OPENROUTER_KEY", ref: nlKeySecret}}},
+		"another nightly":  {"gateway-nightly", []invVar{{name: "AI_TOKEN", ref: nlKeySecret}}},
+		"beside the mount": {"invoice-nightly", []invVar{nlKeyVar(), {name: "SECOND_COPY", ref: nlKeySecret}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runInvariants(t, []string{nlKeySecret}, []invSvc{{"submission-nightly", []invVar{nlKeyVar()}}, svc})
+			if r.code != 1 {
+				t.Fatalf("invariants exited %d, want 1:\n%s\n%s", r.code, r.stdout, r.stderr)
+			}
+			if !invLine(r, svc.name) {
+				t.Errorf("no line names %s:\n%s\n%s", svc.name, r.stdout, r.stderr)
+			}
+		})
+	}
+}
+
+func TestPreviewInvariantsFailWhenAListingFails(t *testing.T) {
+	t.Parallel()
+	for _, fail := range []string{"fail-secrets-list", "fail-run-services"} {
+		t.Run(fail, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, func(dir string) {
+				writeIn(t, dir, "have", "pr-7-gateway-token\n")
+				writeIn(t, dir, "list-services", "[]")
+				writeIn(t, dir, fail, "")
+			}, "invariants")
+			if r.code == 0 || strings.Contains(r.stdout, "Preview invariants hold") {
+				t.Fatalf("a failed listing passed, exit %d:\n%s\n%s", r.code, r.stdout, r.stderr)
+			}
+			if !strings.Contains(r.stderr, "failed") {
+				t.Errorf("the failure is not the listing's:\n%s", r.stderr)
 			}
 		})
 	}

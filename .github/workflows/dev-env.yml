@@ -184,6 +184,7 @@ jobs:
       support_console_url: ${{ steps.urls.outputs.support_console_url }}
       library_url: ${{ steps.urls.outputs.library_url }}
       blog_url: ${{ steps.urls.outputs.blog_url }}
+      hubspot_token_version: ${{ steps.token_version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       # `prenv jwk-es256` generates the PR's GoTrue key.
@@ -220,6 +221,37 @@ jobs:
         run: |
           echo "::error::preview cap reached: $OPEN previews open (.claude/rules/ci-preview.md)"
           exit 1
+      - name: Check the contact secrets
+        if: needs.changes.outputs.nightly == 'true'
+        run: bash scripts/ci/preview.sh contact-preflight "$PR"
+      - id: token_version
+        name: Read the HubSpot token version
+        if: needs.changes.outputs.nightly == 'true'
+        run: |
+          set -euo pipefail
+          version=$(bash scripts/ci/preview.sh contact-token-version "$PR")
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+      - name: Start the contacts (guard the portal, delete leftovers)
+        if: needs.changes.outputs.nightly == 'true'
+        run: |
+          set -euo pipefail
+          token=$(bash scripts/ci/preview.sh contact-token "$PR" "${{ steps.token_version.outputs.version }}")
+          echo "::add-mask::$token"
+          key=$(bash scripts/ci/preview.sh mail-read-key "$PR")
+          echo "::add-mask::$key"
+          domain=$(bash scripts/ci/preview.sh mail-domain "$PR")
+          echo "::add-mask::$domain"
+          mkdir -p "$RUNNER_TEMP/contacts"
+          HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain HUBSPOT_DEAL_STAGE=$(bash scripts/ci/preview.sh deal-stage) \
+            go run ./internal/tools/nightlycontacts start -out "$RUNNER_TEMP/contacts/start.json"
+      - name: Upload the contacts start result
+        if: always() && needs.changes.outputs.nightly == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: contacts-start
+          path: ${{ runner.temp }}/contacts/start.json
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Create the PR's secrets (generated, never copied from production)
         run: bash scripts/ci/preview.sh secrets "$PR"
       - name: Create the PR's documents bucket
@@ -347,6 +379,8 @@ jobs:
       - name: Grant the account-state read on auth.users
         run: bash scripts/ci/preview.sh grant "$PR"
       - name: Deploy the backends
+        env:
+          NIGHTLY_HUBSPOT_TOKEN_VERSION: ${{ needs.prepare-env.outputs.hubspot_token_version }}
         run: bash scripts/ci/preview.sh deploy "$PR" "$SHA" gateway tenancy portfolio invoice validation dashboard submission notifications docling worker
       - name: Deploy the sites
         run: bash scripts/ci/preview.sh deploy "$PR" "$SHA" app landing library blog ops-console support-console
@@ -499,24 +533,26 @@ jobs:
           fi
           echo "Sentry $direction on $EXPECTED_BUILD for: $names (auth exempt)."
 
-      # A preview must deliver nothing to HubSpot or Resend.
+      # A PR preview must deliver nothing to HubSpot or Resend; the nightly delivers to its test vendors.
       - name: Gate on notifications' contacts delivery mode
         run: |
           set -euo pipefail
+          want=fake
+          [ "$PR" != nightly ] || want=real
           mode=""
           for _ in $(seq 1 5); do
             if curl -sS --connect-timeout 5 --max-time 40 -H "X-Gateway-Token: $GATEWAY_TOKEN" -o /tmp/contacts-fleet.json "$GATEWAY_URL/healthz/fleet" \
               && jq -e '.services | type == "array"' /tmp/contacts-fleet.json >/dev/null 2>&1; then
               mode=$(jq -r '[.services[] | select(.name == "notifications") | .contacts // "none"][0] // "absent"' /tmp/contacts-fleet.json)
-              if [ "$mode" = fake ]; then break; fi
+              if [ "$mode" = "$want" ]; then break; fi
             fi
             sleep 5
           done
-          if [ "$mode" != fake ]; then
-            echo "::error::notifications reports contacts='${mode:-unreachable}', want 'fake'. Anything else means the preview could write to HubSpot or Resend: check DEPLOY_ENV is pr-<N>."
+          if [ "$mode" != "$want" ]; then
+            echo "::error::notifications reports contacts='${mode:-unreachable}', want '$want'. On a PR, anything but fake means the preview could write to HubSpot or Resend: check DEPLOY_ENV is pr-<N>."
             exit 1
           fi
-          echo "notifications reports contacts=fake."
+          echo "notifications reports contacts=$want."
 
   # Smoke (landing, library, blog and both consoles render) and api (typed contract suite) here;
   # topology after it. The api suite writes data, so it runs only against a preview.
@@ -797,10 +833,65 @@ jobs:
           COMMITS_ONLY_DEPENDABOT: ${{ needs.commit-authors.outputs.dependabot_only }}
           COMMIT_AUTHORS_RESULT: ${{ needs.commit-authors.result }}
 
+  # A real registration and demo request reach HubSpot and Resend; runs whether or not E2E passed.
+  contacts:
+    name: Real contact reaches HubSpot and Resend
+    needs: [changes, prepare-env, deploy, e2e, topology]
+    if: "!cancelled() && needs.changes.outputs.nightly == 'true' && needs.deploy.result == 'success'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
+      NIGHTLY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      # A re-run of failed jobs would hit a torn-down fleet; finish reports the missing check.
+      - name: Refuse a re-run that skipped the deploy
+        id: attempt
+        env:
+          DEPLOYED_ATTEMPT: ${{ needs.deploy.outputs.attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$DEPLOYED_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error::Re-run the whole workflow, not failed jobs — the fleet is torn down after each attempt. The deploy last ran in attempt '${DEPLOYED_ATTEMPT:-none}'; this is attempt $RUN_ATTEMPT."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      - name: Check the contacts
+        run: |
+          set -euo pipefail
+          token=$(bash scripts/ci/preview.sh contact-token "$PR" "${{ needs.prepare-env.outputs.hubspot_token_version }}")
+          echo "::add-mask::$token"
+          key=$(bash scripts/ci/preview.sh mail-read-key "$PR")
+          echo "::add-mask::$key"
+          domain=$(bash scripts/ci/preview.sh mail-domain "$PR")
+          echo "::add-mask::$domain"
+          mkdir -p "$RUNNER_TEMP/contacts"
+          HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain HUBSPOT_DEAL_STAGE=$(bash scripts/ci/preview.sh deal-stage) \
+            go run ./internal/tools/nightlycontacts check -out "$RUNNER_TEMP/contacts/check.json"
+      - name: Upload the contacts check result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: contacts-check
+          path: ${{ runner.temp }}/contacts/check.json
+          if-no-files-found: ignore
+          retention-days: 14
+
   # Real invite and reset mail, after every E2E job: mail-on mounts the mail keys on the nightly fleet.
   email:
     name: Real invite and reset mail
-    needs: [changes, commit-authors, invariants, prepare-env, deploy, health-gate, fleet-gate, e2e, topology]
+    needs: [changes, commit-authors, invariants, prepare-env, deploy, health-gate, fleet-gate, e2e, topology, contacts]
     if: >-
       !cancelled() &&
       needs.changes.outputs.nightly == 'true' &&
@@ -895,7 +986,7 @@ jobs:
   # The Nightly run's preview lives only for the run: delete it on success, failure and cancel.
   nightly-teardown:
     name: Delete the nightly preview
-    needs: [changes, commit-authors, prepare-env, build, deploy, health-gate, fleet-gate, e2e, topology, email]
+    needs: [changes, commit-authors, prepare-env, build, deploy, health-gate, fleet-gate, e2e, topology, contacts, email]
     if: always() && needs.changes.outputs.nightly == 'true' && needs.commit-authors.outputs.dependabot_only == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -924,3 +1015,57 @@ jobs:
             echo "::error::the nightly preview is still listed after its teardown"
             exit 1
           fi
+
+  # Deletes the run's contacts once the fleet is gone, so no retry can re-create one.
+  contacts-cleanup:
+    name: Delete the run's contacts
+    needs: [changes, commit-authors, prepare-env, nightly-teardown]
+    if: always() && needs.changes.outputs.nightly == 'true' && needs.commit-authors.outputs.dependabot_only == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      # An API error must not skip the delete; finish reports a missing phase file.
+      - name: Download the contacts results
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: contacts-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/contacts
+      - name: Delete the contacts and prove none is left
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_API: repos/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          started=$(gh api "$RUN_API" --jq .run_started_at)
+          token=$(bash scripts/ci/preview.sh contact-token "$PR" "${{ needs.prepare-env.outputs.hubspot_token_version }}")
+          echo "::add-mask::$token"
+          key=$(bash scripts/ci/preview.sh mail-read-key "$PR")
+          echo "::add-mask::$key"
+          domain=$(bash scripts/ci/preview.sh mail-domain "$PR")
+          echo "::add-mask::$domain"
+          mkdir -p "$RUNNER_TEMP/contacts" nightly-results
+          HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain \
+            go run ./internal/tools/nightlycontacts finish -in "$RUNNER_TEMP/contacts" -started "$started" -out nightly-results/hubspot.json
+      - name: Upload the nightly results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-hubspot
+          path: nightly-results/
+          if-no-files-found: ignore
+          retention-days: 14

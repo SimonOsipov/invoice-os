@@ -2,7 +2,7 @@
 // topology/targets.ts, smoke/apps.ts and api/client.ts are pointed at it.
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { nightlyTarget, resolveTarget } from './targets'
+import { expectedContactsMode, nightlyTarget, resolveTarget } from './targets'
 
 const ENV_VAR = 'GATEWAY_URL'
 
@@ -43,5 +43,16 @@ describe('nightlyTarget', () => {
       process.env.E2E_TARGET = bad
       expect(() => nightlyTarget()).toThrow(/E2E_TARGET/)
     }
+  })
+})
+
+describe('expectedContactsMode', () => {
+  it('expectedContactsMode reads E2E_TARGET', () => {
+    delete process.env.E2E_TARGET
+    expect(expectedContactsMode()).toBe('fake')
+    process.env.E2E_TARGET = 'nightly'
+    expect(expectedContactsMode()).toBe('real')
+    process.env.E2E_TARGET = 'pr-7'
+    expect(() => expectedContactsMode()).toThrow(/E2E_TARGET/)
   })
 })

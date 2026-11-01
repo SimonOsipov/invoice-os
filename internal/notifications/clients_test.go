@@ -1,6 +1,7 @@
 package notifications
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -316,5 +317,64 @@ func TestNewsletterClients_NoSendingKeyIsDisabled(t *testing.T) {
 	w := clWiring(t, "production", clFourKeys("RESEND_BLOG_TOPIC_ID", "bt", "RESEND_BLOG_SEGMENT_ID", "bs"))
 	if w.Enabled || w.Mode != ModeReal || w.MailMode != accountmail.ModeOff {
 		t.Errorf("wiring = %+v, want real newsletter, mail off, disabled", w)
+	}
+}
+
+// clDealStage runs OpenDemoDeal through DeliveryClients on a stub HubSpot and returns the
+// dealstage of the deal create.
+func clDealStage(t *testing.T, env string, vars map[string]string) string {
+	t.Helper()
+	var stage string
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body := "{}"
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/associations/deals"):
+			body = `{"results":[]}`
+		case r.Method == http.MethodGet:
+			body = `{"id":"1"}`
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/deals"):
+			var in struct {
+				Properties map[string]string `json:"properties"`
+			}
+			b, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(b, &in); err != nil {
+				t.Errorf("deal create body: %v", err)
+			}
+			stage = in.Properties["dealstage"]
+		}
+		resp := clReply(r, http.StatusOK, nil)
+		resp.Body = io.NopCloser(strings.NewReader(body))
+		return resp, nil
+	})
+	mode, hs, _, err := DeliveryClients(clGetenv(vars), env, rt)
+	if err != nil || mode != ModeReal {
+		t.Fatalf("DeliveryClients = %q, %v, want real", mode, err)
+	}
+	if err := hs.OpenDemoDeal(t.Context(), clAda, "Deal"); err != nil {
+		t.Fatalf("OpenDemoDeal: %v", err)
+	}
+	return stage
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestDeliveryClients_DealStageVariableReachesTheDealCreate(t *testing.T) {
+	if got := clDealStage(t, "nightly", clFourKeys("HUBSPOT_DEAL_STAGE", "appointmentscheduled")); got != "appointmentscheduled" {
+		t.Errorf("dealstage = %q, want appointmentscheduled", got)
+	}
+}
+
+func TestDeliveryClients_NoDealStageVariableKeepsTheConstant(t *testing.T) {
+	if got := clDealStage(t, "production", clFourKeys()); got != "5716044996" {
+		t.Errorf("dealstage = %q, want 5716044996", got)
+	}
+}
+
+func TestDeliveryClients_DealStageAloneLeavesContactsOff(t *testing.T) {
+	mode, hs, rs, err := DeliveryClients(clGetenv(map[string]string{"HUBSPOT_DEAL_STAGE": "appointmentscheduled"}), "nightly", &clSpyTransport{})
+	if err != nil || mode != ModeOff || hs != nil || rs != nil {
+		t.Errorf("DeliveryClients = %q, %v, %v, %v, want off with nil clients", mode, hs, rs, err)
 	}
 }

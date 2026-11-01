@@ -52,6 +52,7 @@ case "$1 $2 $3" in
     [ "$prev" = --secret ] && name=$a
     prev=$a
   done
+  if [ -e "$D/describe-out" ]; then cat "$D/describe-out"; exit 0; fi
   if grep -qxF -- "$name" "$D/missing" 2>/dev/null; then echo "ERROR: NOT_FOUND: $name" >&2; exit 1; fi
   if grep -qxF -- "$name" "$D/denied" 2>/dev/null; then echo "ERROR: PERMISSION_DENIED: no access to $name" >&2; exit 1; fi
   if grep -qxF -- "$name" "$D/disabled" 2>/dev/null; then echo DISABLED; else echo ENABLED; fi ;;
@@ -89,6 +90,12 @@ func (r previewRun) exists(name string) bool {
 // runPreview runs preview.sh in a scratch dir with shim gcloud and go (go run ./tools/prenv -> the built prenv).
 func runPreview(t *testing.T, setup func(dir string), args ...string) previewRun {
 	t.Helper()
+	return runPreviewEnv(t, nil, setup, args...)
+}
+
+// runPreviewEnv is runPreview with extra KEY=value environment entries.
+func runPreviewEnv(t *testing.T, env []string, setup func(dir string), args ...string) previewRun {
+	t.Helper()
 	dir, shims := t.TempDir(), t.TempDir()
 	if setup != nil {
 		setup(dir)
@@ -97,7 +104,7 @@ func runPreview(t *testing.T, setup func(dir string), args ...string) previewRun
 	writeShim(t, filepath.Join(shims, "go"), "shift 2\nexec '"+binPath+"' \"$@\"\n")
 	cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "scripts/ci/preview.sh")}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd.Env = append(append(os.Environ(), env...), "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"))
 	stdout, stderr, err := runToFiles(t, cmd, false)
 	r := previewRun{dir: dir, stdout: stdout, stderr: stderr}
 	if ee, ok := err.(*exec.ExitError); ok {
@@ -379,7 +386,11 @@ func nameGoldens(t *testing.T, name string) map[string]string {
 	out["urls"] = urls.stdout
 	out["image"] = img.stdout
 
-	dep := runPreview(t, nil, append([]string{"deploy", name, "abc123"}, prAll(t)...)...)
+	var env []string
+	if name == "nightly" {
+		env = []string{"NIGHTLY_HUBSPOT_TOKEN_VERSION=7"}
+	}
+	dep := runPreviewEnv(t, env, nil, append([]string{"deploy", name, "abc123"}, prAll(t)...)...)
 	if dep.code != 0 {
 		t.Fatalf("deploy exited %d: %s", dep.code, dep.stderr)
 	}
@@ -505,7 +516,7 @@ func TestPreviewNightlyEnvFilesDifferOnlyByName(t *testing.T) {
 	t.Parallel()
 	got := nameGoldens(t, "nightly")
 	for _, svc := range prAll(t) {
-		if want := asNightly(prGolden(t, "env-"+svc)); strings.Replace(got["env-"+svc], nlContactsFake, "", 1) != want {
+		if want := asNightly(prGolden(t, "env-"+svc)); strings.Replace(got["env-"+svc], nlDealStage, "", 1) != want {
 			t.Errorf("env-%s:\n%s\nwant\n%s", svc, got["env-"+svc], want)
 		}
 	}
@@ -514,24 +525,182 @@ func TestPreviewNightlyEnvFilesDifferOnlyByName(t *testing.T) {
 	}
 }
 
-const nlContactsFake = "CONTACTS_FAKE: 'true'\n"
+const nlDealStage = "HUBSPOT_DEAL_STAGE: appointmentscheduled\n"
 
-func TestPreviewNightlyContactsAreFake(t *testing.T) {
+var nlContactKeys = []string{"HUBSPOT_TOKEN=nightly-hubspot-token:7", "RESEND_API_KEY=nightly-resend-read-key:latest",
+	"RESEND_SEGMENT_ID=nightly-resend-segment-id:latest", "RESEND_TOPIC_ID=nightly-resend-topic-id:latest"}
+
+func TestPreviewNightlyContactsAreReal(t *testing.T) {
 	t.Parallel()
 	got := nameGoldens(t, "nightly")
+	ni := argvBySvc(got["deploy-argv"], "nightly")
 	for _, svc := range prAll(t) {
-		fake := svc == "notifications" || svc == "worker"
-		if has := strings.Contains(got["env-"+svc], nlContactsFake); has != fake {
-			t.Errorf("env-%s has CONTACTS_FAKE = %v, want %v", svc, has, fake)
+		on := svc == "notifications" || svc == "worker"
+		env := got["env-"+svc]
+		if strings.Contains(env, "CONTACTS_FAKE") {
+			t.Errorf("env-%s has CONTACTS_FAKE", svc)
+		}
+		if has := strings.Contains(env, nlDealStage); has != on {
+			t.Errorf("env-%s has HUBSPOT_DEAL_STAGE = %v, want %v", svc, has, on)
+		}
+		secrets := flagValue(ni[svc], "--set-secrets")
+		for _, kv := range nlContactKeys {
+			if has := strings.Contains(secrets, kv); has != on {
+				t.Errorf("%s mounts %s = %v, want %v", svc, kv, has, on)
+			}
+		}
+		if !on && (strings.Contains(secrets, "HUBSPOT") || strings.Contains(secrets, "RESEND_")) {
+			t.Errorf("%s mounts a contact key: %s", svc, secrets)
 		}
 	}
-	for _, key := range []string{"HUBSPOT_TOKEN", "RESEND_"} {
-		if strings.Contains(got["deploy-argv"], key) {
-			t.Errorf("nightly deploy argv mounts %s", key)
+}
+
+func TestPreviewPRHasNoContactKeys(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"deploy-argv", "env-notifications", "env-worker"} {
+		g := prGolden(t, name)
+		for _, w := range []string{"HUBSPOT", "RESEND_", "CONTACTS"} {
+			if strings.Contains(g, w) {
+				t.Errorf("PR 7 %s names %s", name, w)
+			}
 		}
 	}
-	if strings.Contains(prGolden(t, "deploy-argv"), "CONTACTS") {
-		t.Error("PR 7 argv names CONTACTS")
+	got := nameGoldens(t, "7")
+	for _, name := range []string{"deploy-argv", "env-notifications", "env-worker"} {
+		if got[name] != prGolden(t, name) {
+			t.Errorf("PR 7 %s differs from its golden", name)
+		}
+	}
+}
+
+func TestPreviewNightlyDealStageReachesTheDeployChild(t *testing.T) {
+	t.Parallel()
+	r := runPreviewEnv(t, []string{"NIGHTLY_HUBSPOT_TOKEN_VERSION=7"}, nil, "deploy", "nightly", "abc123", "notifications", "worker")
+	if r.code != 0 {
+		t.Fatalf("deploy exited %d: %s", r.code, r.stderr)
+	}
+	for _, svc := range []string{"notifications", "worker"} {
+		if env := r.file(t, "env-"+svc+"-nightly"); !strings.Contains(env, nlDealStage) {
+			t.Errorf("env-%s lacks the deal stage:\n%s", svc, env)
+		}
+	}
+}
+
+func TestPreviewNightlyMountsThePinnedToken(t *testing.T) {
+	t.Parallel()
+	r := runPreviewEnv(t, []string{"NIGHTLY_HUBSPOT_TOKEN_VERSION=7"}, nil, "deploy", "nightly", "abc123", "notifications", "worker")
+	if r.code != 0 {
+		t.Fatalf("deploy exited %d: %s", r.code, r.stderr)
+	}
+	calls := argvBySvc(normCalls(r.file(t, "calls")), "nightly")
+	for _, svc := range []string{"notifications", "worker"} {
+		secrets := flagValue(calls[svc], "--set-secrets")
+		for _, kv := range nlContactKeys {
+			if !strings.Contains(","+secrets+",", ","+kv+",") {
+				t.Errorf("%s --set-secrets lacks %s: %s", svc, kv, secrets)
+			}
+		}
+	}
+}
+
+func TestPreviewNightlyRefusesAnUnpinnedToken(t *testing.T) {
+	t.Parallel()
+	for _, v := range []string{"", "latest", "7;x"} {
+		t.Run("version="+v, func(t *testing.T) {
+			t.Parallel()
+			r := runPreviewEnv(t, []string{"NIGHTLY_HUBSPOT_TOKEN_VERSION=" + v}, nil, "deploy", "nightly", "abc123", "notifications", "worker")
+			if r.code == 0 || r.exists("calls") {
+				t.Fatalf("exit %d, gcloud called %v", r.code, r.exists("calls"))
+			}
+		})
+	}
+	r := runPreviewEnv(t, []string{"NIGHTLY_HUBSPOT_TOKEN_VERSION="}, nil, "deploy", "nightly", "abc123", "app")
+	if r.code != 0 || len(nonBlankLines(r.file(t, "calls"))) != 1 {
+		t.Fatalf("app deploy exit %d: %s", r.code, r.stderr)
+	}
+}
+
+func TestPreviewContactCommandsRefuseAPR(t *testing.T) {
+	t.Parallel()
+	for _, cmd := range []string{"contact-preflight", "contact-token", "contact-token-version"} {
+		for _, bad := range []string{"7", ""} {
+			t.Run(cmd+"/"+bad, func(t *testing.T) {
+				t.Parallel()
+				r := runPreview(t, nil, cmd, bad)
+				if r.code == 0 || r.exists("calls") {
+					t.Fatalf("exit %d, gcloud called %v", r.code, r.exists("calls"))
+				}
+			})
+		}
+	}
+}
+
+func TestPreviewContactTokenVersion(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "describe-out", "7\n") }, "contact-token-version", "nightly")
+	if r.code != 0 || r.stdout != "7\n" || !strings.Contains(r.file(t, "calls"), "--secret nightly-hubspot-token ") {
+		t.Fatalf("exit %d, stdout %q, calls %q", r.code, r.stdout, r.file(t, "calls"))
+	}
+	for _, out := range []string{"latest\n", ""} {
+		if r := runPreview(t, func(dir string) { writeIn(t, dir, "describe-out", out) }, "contact-token-version", "nightly"); r.code == 0 {
+			t.Errorf("output %q: exit 0", out)
+		}
+	}
+}
+
+func TestPreviewContactTokenReadsTheNamedVersion(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"contact-token", "nightly", "7"}, "secrets versions access 7 --secret nightly-hubspot-token "},
+		{[]string{"contact-token", "nightly"}, "secrets versions access latest --secret nightly-hubspot-token "},
+		{[]string{"contact-token", "nightly", ""}, "secrets versions access latest --secret nightly-hubspot-token "},
+	} {
+		r := runPreview(t, nil, c.args...)
+		calls := nonBlankLines(r.file(t, "calls"))
+		if r.code != 0 || len(calls) != 1 || !strings.HasPrefix(calls[0], c.want) {
+			t.Errorf("%v: exit %d, calls %v", c.args, r.code, calls)
+		}
+	}
+	r := runPreview(t, nil, "contact-token", "nightly", "7;x")
+	if r.code != 1 || r.exists("calls") {
+		t.Errorf("7;x: exit %d, gcloud called %v", r.code, r.exists("calls"))
+	}
+}
+
+var contactSecrets = []string{"nightly-hubspot-token", "nightly-resend-read-key", "nightly-resend-receiving-domain", "nightly-resend-segment-id", "nightly-resend-topic-id"}
+
+func TestPreviewContactPreflightNamesEveryMissingSecret(t *testing.T) {
+	t.Parallel()
+	r := runPreview(t, func(dir string) { writeIn(t, dir, "missing", contactSecrets[0]+"\n"+contactSecrets[3]+"\n") }, "contact-preflight", "nightly")
+	if r.code != 1 {
+		t.Fatalf("exit %d, want 1", r.code)
+	}
+	for i, n := range contactSecrets {
+		if got, want := strings.Contains(r.stderr, n), i == 0 || i == 3; got != want {
+			t.Errorf("stderr names %s = %v, want %v:\n%s", n, got, want, r.stderr)
+		}
+	}
+	for i, n := range contactSecrets {
+		one := runPreview(t, func(dir string) { writeIn(t, dir, "missing", n+"\n") }, "contact-preflight", "nightly")
+		if one.code != 1 || !strings.Contains(one.stderr, n) {
+			t.Errorf("secret %d (%s) missing: exit %d, stderr %q", i, n, one.code, one.stderr)
+		}
+	}
+	d := runPreview(t, func(dir string) { writeIn(t, dir, "disabled", contactSecrets[4]+"\n") }, "contact-preflight", "nightly")
+	if d.code != 1 || !strings.Contains(d.stderr, contactSecrets[4]) || strings.Contains(d.stderr, contactSecrets[0]) {
+		t.Errorf("disabled: exit %d, stderr %q", d.code, d.stderr)
+	}
+	ok := runPreview(t, nil, "contact-preflight", "nightly")
+	if ok.code != 0 {
+		t.Errorf("all present: exit %d, stderr %q", ok.code, ok.stderr)
+	}
+	for _, rr := range []previewRun{r, d, ok} {
+		if strings.Contains(rr.file(t, "calls"), "versions access") {
+			t.Error("preflight read a secret value")
+		}
 	}
 }
 
@@ -564,6 +733,9 @@ func TestPreviewNightlySetSecretsMirrorThePR(t *testing.T) {
 	pr, ni := argvBySvc(prGolden(t, "deploy-argv"), "pr-7"), argvBySvc(nameGoldens(t, "nightly")["deploy-argv"], "nightly")
 	for _, svc := range prAll(t) {
 		want := strings.ReplaceAll(flagValue(pr[svc], "--set-secrets"), "pr-7-", "nightly-")
+		if svc == "notifications" || svc == "worker" {
+			want += "," + strings.Join(nlContactKeys, ",")
+		}
 		if got := flagValue(ni[svc], "--set-secrets"); got != want {
 			t.Errorf("%s --set-secrets = %q, want %q", svc, got, want)
 		}
@@ -659,7 +831,7 @@ func TestPreviewTeardownNightlyDeletesOnlyItsOwn(t *testing.T) {
 	t.Parallel()
 	r := runPreview(t, func(dir string) {
 		writeIn(t, dir, "exists", "gateway-nightly\ngateway-pr-7\nmigrate-nightly\nmigrate-pr-7\ngs://ascomply-preview-nightly\n")
-		writeIn(t, dir, "have-nightly", "nightly-gateway-token\nnightly-s2s-token\n")
+		writeIn(t, dir, "have-nightly", "nightly-gateway-token\nnightly-s2s-token\n") // labelled secrets only; nightly-hubspot-token has no label
 		writeIn(t, dir, "have-7", "pr-7-gateway-token\n")
 	}, "teardown", "nightly")
 	if r.code != 0 || r.stdout != "PR nightly: preview deleted\n" {
@@ -682,6 +854,9 @@ func TestPreviewTeardownNightlyDeletesOnlyItsOwn(t *testing.T) {
 		if !strings.Contains(c, w) {
 			t.Errorf("calls lack %q", w)
 		}
+	}
+	if strings.Contains(c, "secrets delete nightly-hubspot-token") {
+		t.Error("teardown deleted a secret without the preview-pr label")
 	}
 	if strings.Contains(c, "delete gateway-pr-7") || strings.Contains(c, "migrate-pr-7") || strings.Contains(c, "pr_7") {
 		t.Errorf("teardown reached a PR's resources:\n%s", c)

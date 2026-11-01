@@ -3418,4 +3418,43 @@ describe('the note panel', () => {
     fireEvent.click(exitButton() as HTMLElement)
     expect(w.opened).toEqual(['note-7'])
   })
+
+  const OTHER_DOCUMENT_ID = 'c3d4e5f6-a7b8-4c3d-8e4f-5a6b7c8d9e0f'
+
+  it('a filed note does not lend its exit to the next document', async () => {
+    const w = wire(async (id, url) => {
+      if (url.includes('/note-originals')) return { ...NOTE_ORIGINALS, filed_invoice_id: 'note-7' }
+      return id === JOB_ID ? NOTE_DETAIL() : mkDetail({ id, document_id: OTHER_DOCUMENT_ID, document_type: 'receipt' })
+    })
+    Object.assign(w.ctx, { openImportedInvoice: () => {}, enterByHand: () => {}, activeEntity: { id: 'ent' } })
+    const { rerender } = render(review({ ctx: w.ctx, jobId: JOB_ID }))
+    await flush()
+    expect(exitButton(), 'the filed note has no exit: the floor is vacuous').not.toBeNull()
+
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    expect(exitButton(), 'the other document carries the filed note’s exit').toBeNull()
+  })
+
+  it('a late read of the old document does not file the new one', async () => {
+    let release: (v: unknown) => void = () => {}
+    const w = wire(async (id, url) => {
+      if (url.includes('/note-originals')) {
+        if (url.includes(DOCUMENT_ID)) return new Promise((r) => (release = r))
+        return { ...NOTE_ORIGINALS, filed_invoice_id: null }
+      }
+      return id === JOB_ID ? NOTE_DETAIL() : NOTE_DETAIL({ id, document_id: OTHER_DOCUMENT_ID })
+    })
+    Object.assign(w.ctx, { openImportedInvoice: () => {}, enterByHand: () => {}, activeEntity: { id: 'ent' } })
+    const { rerender } = render(review({ ctx: w.ctx, jobId: JOB_ID }))
+    await flush()
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    expect(panel(), 'the second note asks for its original: the floor is vacuous').not.toBeNull()
+
+    await act(async () => release({ ...NOTE_ORIGINALS, filed_invoice_id: 'note-7' }))
+    await flush()
+    expect(exitButton(), 'the old document’s late read filed the new one').toBeNull()
+    expect(saveButton()!.title).toBe(HELD_TITLE)
+  })
 })

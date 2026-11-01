@@ -155,13 +155,18 @@ export function ExtractionReview({
   const noteType = noteTypeOfVerdict(data?.document_type ?? null)
   const noteDocumentId = data?.document_id ?? null
   const originals = useAsync(
-    () => (base && noteDocumentId ? getNoteOriginals(ctx.authedFetch, base, noteDocumentId) : Promise.reject(new Error('no gateway configured'))),
+    async () => {
+      if (!base || !noteDocumentId) throw new Error('no gateway configured')
+      return { documentId: noteDocumentId, read: await getNoteOriginals(ctx.authedFetch, base, noteDocumentId) }
+    },
     { isEmpty: () => false, immediate: !!base && noteType !== null && noteDocumentId !== null, deps: [noteDocumentId, noteType] },
   )
-  const filedInvoiceId = originals.data?.filed_invoice_id ?? null
+  // Tagged with its document, like the job-tagged state above: a read of another document is no read.
+  const originalsRead = noteType !== null && originals.data?.documentId === noteDocumentId ? originals.data.read : null
+  const filedInvoiceId = originalsRead?.filed_invoice_id ?? null
   // Held until a read says a document filed: an unread, failed or reloading read is still "not filed".
   const held = noteType !== null && onOpenInvoice === null && filedInvoiceId === null
-  const heldTitle = originals.data !== null ? SAVE_HELD : originals.status === 'error' ? SAVE_CHECK_FAILED : SAVE_CHECKING
+  const heldTitle = originalsRead !== null ? SAVE_HELD : originals.status === 'error' ? SAVE_CHECK_FAILED : SAVE_CHECKING
   const openFiled = onOpenInvoice ?? (filedInvoiceId === null ? null : () => ctx.openImportedInvoice(filedInvoiceId))
 
   let content: ReactNode
@@ -305,7 +310,7 @@ export function ExtractionReview({
             <ErrorState error={originals.error} onRetry={originals.run} />
           </div>
         )
-      } else if (base && originals.data !== null) {
+      } else if (base && originalsRead !== null) {
         slot = (
           <NoteImportPanel
             ctx={ctx}
@@ -313,7 +318,7 @@ export function ExtractionReview({
             documentId={data.document_id}
             noteType={noteType}
             fields={wire}
-            originals={originals.data}
+            originals={originalsRead}
             onFiled={originals.run}
           />
         )

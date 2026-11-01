@@ -263,6 +263,8 @@ const TOPOLOGY_MANIFEST: ManifestEntry[] = [
   [INVOICE_SURFACES, 'test:DV-03 accepted invoice detail and the XML modal', 'click:batch-submit-confirm', 1],
   // The note layout specs need an accepted invoice of 3 lines, reached from the register.
   [INVOICE_SURFACES, 'helper:openAcceptedThreeLineInvoice', 'click:batch-submit-confirm', 1],
+  // The note test files its credit note from the register; the original's MOCK_TIN_ACCEPT answers.
+  [INVOICE_SURFACES, 'test:notes: a credit note nets in the list, the Reports tiles and the register footer', 'click:batch-submit-confirm', 1],
 ]
 
 // AC-14: can_submit / awaiting_approval needle matches are deliberately OUT of scope here --

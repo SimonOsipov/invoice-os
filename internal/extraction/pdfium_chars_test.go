@@ -374,8 +374,8 @@ func TestCharsIn_ReproducesEveryRectTextOnAWordLevelPage(t *testing.T) {
 // fixture except the two Chrome ones: the loop is identical and covers the rest for free.
 func TestCharsIn_ReproducesEveryRectTextOnTheCorpus(t *testing.T) {
 	names := pdcNonChromeFixtures(t)
-	if len(names) != 70 {
-		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 70 (72 committed minus %s and %s)", len(names), chrRegister, chrRegisterTwin)
+	if len(names) != 72 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 72 (74 committed minus %s and %s)", len(names), chrRegister, chrRegisterTwin)
 	}
 
 	totalRects := 0
@@ -470,8 +470,8 @@ func TestCharsIn_ASlidingRunReadsOnce(t *testing.T) {
 // flip or by charsIn existing, so none of these rows may move.
 var pdcTextCharsGoldens = map[string]struct{ pages, withText, textChars int }{
 	"ai_lines_invoice.pdf":                  {1, 1, 1080},
-	"ai_nrs_invoice.pdf":                    {1, 1, 1697},
-	"ai_steered_invoice.pdf":                {1, 1, 717},
+	"ai_nrs_invoice.pdf":                    {1, 1, 1738},
+	"ai_steered_invoice.pdf":                {1, 1, 758},
 	"ai_unavailable_invoice.pdf":            {1, 1, 105},
 	"advisory_dense.pdf":                    {1, 1, 1766},
 	"advisory_register.pdf":                 {2, 2, 804},
@@ -486,6 +486,7 @@ var pdcTextCharsGoldens = map[string]struct{ pages, withText, textChars int }{
 	"corpus_two_column.pdf":                 {1, 1, 146},
 	"dense_invoice.pdf":                     {1, 0, 0},
 	"hybrid_invoice.pdf":                    {2, 1, 41},
+	"jev_credit_note.pdf":                   {1, 1, 712},
 	"jev_doubt_invoice.pdf":                 {1, 1, 85},
 	"jev_receipt_invoice.pdf":               {1, 1, 96},
 	"learned_two_party.pdf":                 {1, 1, 138},
@@ -494,6 +495,7 @@ var pdcTextCharsGoldens = map[string]struct{ pages, withText, textChars int }{
 	"native_3page.pdf":                      {3, 3, 96},
 	"native_invoice.pdf":                    {1, 1, 41},
 	"noninvoice_credit_note.pdf":            {1, 1, 219},
+	"noninvoice_debit_note.pdf":             {1, 1, 222},
 	"noninvoice_delivery_note.pdf":          {1, 1, 285},
 	"noninvoice_proforma.pdf":               {1, 1, 251},
 	"noninvoice_purchase_order.pdf":         {1, 1, 206},
@@ -581,8 +583,8 @@ func TestPDFiumReader_TextCharsGoldensCoverEveryCommittedFixture(t *testing.T) {
 // not against the other's.
 func TestPDFiumTokens_OneTokenPerRectOnEveryWordLevelFixture(t *testing.T) {
 	names := pdcNonChromeFixtures(t)
-	if len(names) != 70 {
-		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 70", len(names))
+	if len(names) != 72 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 72", len(names))
 	}
 
 	totalTokens := 0

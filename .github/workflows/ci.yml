@@ -253,7 +253,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Build one plain service image (SERVICE=tenancy)
         uses: docker/build-push-action@v6
         with:
@@ -320,7 +320,7 @@ jobs:
       DOCLING_CANARY_PORT: "8080"
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       # T-02-4 needs a non-"dev" build value baked in before the boot below.
       - name: Stamp a build sha
         run: ./scripts/ci/stamp-build-sha.sh "$GITHUB_SHA"
@@ -499,7 +499,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Build the docling test image
         uses: docker/build-push-action@v6
         with:

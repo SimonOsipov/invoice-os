@@ -2035,12 +2035,14 @@ func fxBuildJevCreditNoteInvoice() []byte {
 		rules.WriteString(fxRuleV(x, fxJevCreditNoteTableRowYs[len(fxJevCreditNoteTableRowYs)-1], fxJevCreditNoteTableRowYs[0]))
 	}
 	content = append(content, rules.Bytes()...)
+	// The AI marker draws in /F2 (fxMono); without it docling splits the payload.
 	return fxAssemble([]fxObject{
 		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
 		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
-		fxPage(fxFontRes(5), 4),
+		fxPage("<< /Font << /F1 5 0 R /F2 6 0 R >> >>", 4),
 		fxStream(content),
 		fxObject(fxHelvetica),
+		fxObject(fxCourier),
 	})
 }
 
@@ -4508,4 +4510,25 @@ func fxBuildNonInvoicePurchaseOrder() []byte {
 		fxLine{12, 72, 582, "Order value: NGN 3,600.00"},
 		fxLine{12, 72, 564, "Please supply the goods above and invoice on delivery."},
 	)
+}
+
+// TestFixtures_JevCreditNoteSurvivesTheDeployedReader: the docling golden keeps both markers
+// whole, so the AI header call decodes and the type check runs. pdfium reads a split marker
+// whole, so TestFixtures_JevCreditNoteReadsAsDesigned cannot see it.
+func TestFixtures_JevCreditNoteSurvivesTheDeployedReader(t *testing.T) {
+	_, pages, _ := dcServeGolden(t, dcReadNamedGolden(t, "jev_credit_note.docling.json"))
+	var texts []string
+	for _, p := range pages {
+		for _, tok := range p.Tokens {
+			texts = append(texts, tok.Text)
+		}
+	}
+	for _, want := range []string{fxJevCreditNoteAIMarker(), fxJevCreditNoteMarker} {
+		if !slices.Contains(texts, want) {
+			t.Errorf("no docling token equals the marker %q", want)
+		}
+	}
+	if _, verdict := extraction.CheckDocumentForTest(t.Context(), fxJevFake(t), pages, fxJevDecided(pages)); verdict != "credit note" {
+		t.Errorf("verdict = %q, want credit note", verdict)
+	}
 }

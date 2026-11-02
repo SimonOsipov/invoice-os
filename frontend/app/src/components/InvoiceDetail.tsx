@@ -515,7 +515,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     // (non-optimistic, AC-6) -> refetch trio -> catch surfaces the server's own sentence.
     const handleApprove = async () => {
       setDecisionError(null)
-      if (!inv.can_approve || approveRefused) return
+      if (!inv.can_approve) return
       if (!toApprovePhase({ type: 'confirm' })) return // no arm => no request
       if (approveInFlight.current) return
       approveInFlight.current = true

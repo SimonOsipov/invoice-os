@@ -1618,7 +1618,6 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       for (const k of ['can_approve', 'approve_blocked_reason', 'can_reject', 'reject_blocked_reason']) {
         expect(k in body, `GET should carry ${k}`).toBe(true)
       }
-      // ONE approvalGate call feeds both pairs, so they can never diverge on the wire.
       expect(body.can_approve, 'can_approve and can_reject must agree').toBe(body.can_reject)
       expect(body.approve_blocked_reason, 'both reasons must be the same sentence').toBe(body.reject_blocked_reason)
       return body
@@ -1962,9 +1961,8 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
         expect(approval, 'an armed invoice carries an approval object').not.toBeNull()
         expect(approval?.run_state, 'the newest run of an armed invoice is open').toBe('open')
 
-        // The deployed wire agrees with itself: ONE approvalGate call feeds both, so the
-        // same invoice read two ways cannot answer differently. An all-false pair would
-        // agree vacuously, so the allowed value is asserted too.
+        // The deployed wire agrees with itself. An all-false pair would agree vacuously, so
+        // the allowed value is asserted too.
         const detail = await approveFlags(invoiceId, token)
         expect(armedRow?.can_approve, 'list and detail must agree on can_approve').toBe(detail.can_approve)
         expect(armedRow?.approve_blocked_reason, 'list and detail must agree on the refusal').toBe(

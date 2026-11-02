@@ -131,6 +131,7 @@ const baseRow: InvoiceRecord = {
   rule_set_version: 2,
   can_approve: true,
   approve_blocked_reason: null,
+  approve_blocked_by_creator: false,
   can_submit: false,
   submit_blocked_reason: null,
   demotion: null,

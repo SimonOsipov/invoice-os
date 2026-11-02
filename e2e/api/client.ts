@@ -770,6 +770,7 @@ export interface InvoiceListItem extends Invoice {
   approval: InvoiceApproval | null
   can_approve: boolean
   approve_blocked_reason: string | null
+  approve_blocked_by_creator: boolean
   can_submit: boolean
   submit_blocked_reason: string | null
   demotion: Demotion | null
@@ -858,10 +859,11 @@ export interface GetInvoiceResult extends Invoice {
   can_resolve_outside: boolean
   resolve_outside_blocked_reason: string | null
   // CanApprove/ApproveBlockedReason/CanReject/RejectBlockedReason (APPR-08-06): same
-  // no-omitempty convention. One backend gate feeds both pairs, so can_approve always
-  // equals can_reject and the two reasons are the same string.
+  // no-omitempty convention. The pairs agree except at the creator rung: the creator
+  // may reject but not approve (approve_blocked_by_creator).
   can_approve: boolean
   approve_blocked_reason: string | null
+  approve_blocked_by_creator: boolean
   can_reject: boolean
   reject_blocked_reason: string | null
   // True only for a draft whose history never left draft/validated -- never status alone.

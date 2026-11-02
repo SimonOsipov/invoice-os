@@ -880,6 +880,20 @@ describe('wire mirror: Go Invoice, LineItem and TaxSubtotal <-> the e2e read typ
     }
   })
 
+  it('wire mirror: approve_blocked_by_creator on every leg', () => {
+    const handlers = repoFile('internal/invoice/handlers.go')
+    const legs = {
+      'Go getResponse': goStructKeys(handlers, 'getResponse'),
+      'Go listItem': goStructKeys(handlers, 'listItem'),
+      'SPA InvoiceRecord': tsInterfaceKeys(repoFile(SPA_INVOICES), 'InvoiceRecord'),
+      'e2e GetInvoiceResult': tsInterfaceKeys(repoFile(E2E_CLIENT), 'GetInvoiceResult'),
+      'e2e InvoiceListItem': tsInterfaceKeys(repoFile(E2E_CLIENT), 'InvoiceListItem'),
+    }
+    for (const [name, keys] of Object.entries(legs)) {
+      expect(keys, `${name} lacks approve_blocked_by_creator`).toContain('approve_blocked_by_creator')
+    }
+  })
+
   it('wire mirror: TaxSubtotal <-> InvoiceTaxSubtotal, and GetInvoiceResult carries tax_subtotals', () => {
     const go = goStructKeys(repoFile('internal/invoice/tax_subtotals.go'), 'TaxSubtotal')
     const e2e = tsInterfaceKeys(repoFile(E2E_CLIENT), 'InvoiceTaxSubtotal')

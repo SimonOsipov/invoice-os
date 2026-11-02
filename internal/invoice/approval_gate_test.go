@@ -4,8 +4,11 @@
 package invoice
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -15,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -216,6 +220,8 @@ type approveGateBody struct {
 	ApproveBlockedReason *string `json:"approve_blocked_reason"`
 	CanReject            bool    `json:"can_reject"`
 	RejectBlockedReason  *string `json:"reject_blocked_reason"`
+
+	ApproveBlockedByCreator bool `json:"approve_blocked_by_creator"`
 }
 
 func decodeApproveBody(t *testing.T, rec *httptest.ResponseRecorder) approveGateBody {
@@ -267,10 +273,10 @@ var approvalLadderRows = []struct {
 	{"every_rung_passes", StatusValidated, "admin", ApprovalFacts{RunState: "open", PendingStepOrd: ordPtr(0), CallerHoldsRole: true}, true, ""},
 }
 
-// TestApprovalGate_ApproveAndRejectNeverDiverge (AC #3): both pairs carry the
-// ladder's answer, and carry the SAME one. Two gate calls, or a reject arm that
-// grew a rung of its own, would show up here -- reject's extra rule is
-// DecideHandler's body check, never an availability rung.
+// TestApprovalGate_ApproveAndRejectNeverDiverge: on every non-creator row both pairs
+// carry the ladder's answer, and the SAME one. approveGate differs from approvalGate
+// only at the creator rung (TestApproveGate_CreatorRefused), so no row here sets
+// Creator. Reject's extra rule is DecideHandler's body check, never an availability rung.
 func TestApprovalGate_ApproveAndRejectNeverDiverge(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	for _, tt := range approvalLadderRows {
@@ -286,13 +292,119 @@ func TestApprovalGate_ApproveAndRejectNeverDiverge(t *testing.T) {
 			t.Run("reject", func(t *testing.T) {
 				assertApprovalGate(t, got.CanReject, got.RejectBlockedReason, tt.wantCan, tt.wantReason)
 			})
-			if got.CanApprove != got.CanReject {
-				t.Errorf("can_approve = %v but can_reject = %v, want identical -- ONE approvalGate call feeds both pairs", got.CanApprove, got.CanReject)
-			}
-			if !sameReason(got.ApproveBlockedReason, got.RejectBlockedReason) {
-				t.Errorf("approve_blocked_reason = %q but reject_blocked_reason = %q, want identical", derefReason(got.ApproveBlockedReason), derefReason(got.RejectBlockedReason))
+			if got.ApproveBlockedByCreator {
+				t.Errorf("approve_blocked_by_creator = true on a row with no creator standing")
 			}
 		})
+	}
+}
+
+// refusedCreator is a creator with another approver who holds the role.
+var refusedCreator = approval.CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: true}
+
+func TestApproveGate_CreatorRefused(t *testing.T) {
+	f := liveRunFacts()
+	f.Creator = refusedCreator
+	can, reason, byCreator := approveGate(StatusValidated, "admin", f)
+	assertApprovalGate(t, can, reason, false, approval.CreatorRefusedReason)
+	if !byCreator {
+		t.Error("byCreator = false, want true")
+	}
+	// The refusal precedes the role-holder rung, as in decideTx.
+	f.CallerHoldsRole = false
+	can, reason, byCreator = approveGate(StatusValidated, "admin", f)
+	assertApprovalGate(t, can, reason, false, approval.CreatorRefusedReason)
+	if !byCreator {
+		t.Error("byCreator = false without the role, want true")
+	}
+	// The reject gate ignores the creator.
+	canReject, rejectReason := approvalGate(StatusValidated, "admin", liveRunFacts())
+	assertApprovalGate(t, canReject, rejectReason, true, "")
+}
+
+func TestApproveGate_OnlyApprover(t *testing.T) {
+	f := liveRunFacts()
+	f.Creator = approval.CreatorStanding{IsCreator: true}
+	can, reason, byCreator := approveGate(StatusValidated, "admin", f)
+	assertApprovalGate(t, can, reason, true, "")
+	if byCreator {
+		t.Error("byCreator = true for an only approver with the role")
+	}
+	f.CallerHoldsRole = false
+	can, reason, byCreator = approveGate(StatusValidated, "admin", f)
+	assertApprovalGate(t, can, reason, false, wantApproveNotHolderReason)
+	if byCreator {
+		t.Error("byCreator = true for an only approver without the role")
+	}
+}
+
+func TestApproveGate_EarlierRungsWinOverTheCreatorRung(t *testing.T) {
+	open := func() ApprovalFacts { f := liveRunFacts(); f.Creator = refusedCreator; return f }
+	noRun := ApprovalFacts{Creator: refusedCreator}
+	closed := ApprovalFacts{RunState: "approved", Creator: refusedCreator}
+	for _, c := range []struct {
+		name   string
+		status Status
+		role   string
+		facts  ApprovalFacts
+		want   string
+	}{
+		{"not validated", StatusQueued, "admin", open(), wantApproveStatusReason},
+		{"no run", StatusValidated, "admin", noRun, wantApproveNoRunReason},
+		{"closed run", StatusValidated, "admin", closed, wantApproveClosedRunReason},
+		{"non approver", StatusValidated, "preparer", open(), wantApproveRoleReason},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			can, reason, byCreator := approveGate(c.status, c.role, c.facts)
+			assertApprovalGate(t, can, reason, false, c.want)
+			if byCreator {
+				t.Error("byCreator = true, want false: an earlier rung answers")
+			}
+		})
+	}
+}
+
+func TestGetHandler_CreatorMayRejectWhileApproveIsRefused(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	f := liveRunFacts()
+	f.Creator = refusedCreator
+	rec, _ := doInvoiceGetGated(t, invoiceAtStatusStub(StatusValidated), fixedRoleStub("admin", nil), factsStub(f), &id, uuid.NewString())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	got := decodeApproveBody(t, rec)
+	assertApprovalGate(t, got.CanApprove, got.ApproveBlockedReason, false, approval.CreatorRefusedReason)
+	assertApprovalGate(t, got.CanReject, got.RejectBlockedReason, true, "")
+	if !got.ApproveBlockedByCreator {
+		t.Error("approve_blocked_by_creator = false, want true")
+	}
+	if !strings.Contains(rec.Body.String(), `"reject_blocked_reason":null`) {
+		t.Errorf("body = %s, want an explicit null reject reason", rec.Body.String())
+	}
+}
+
+func TestGetHandler_CreatorReadErrorStaysEnabled(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	f := liveRunFacts()
+	f.Creator = refusedCreator
+	f.CreatorErr = errors.New("boom")
+	invID := uuid.NewString()
+	r := httptest.NewRequest(http.MethodGet, "/v1/invoices/"+invID, nil)
+	r.SetPathValue("id", invID)
+	r = r.WithContext(auth.WithIdentity(r.Context(), id))
+	var buf bytes.Buffer
+	rec := httptest.NewRecorder()
+	GetHandler(invoiceAtStatusStub(StatusValidated), fixedRoleStub("admin", nil), factsStub(f), slog.New(slog.NewTextHandler(&buf, nil))).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	got := decodeApproveBody(t, rec)
+	assertApprovalGate(t, got.CanApprove, got.ApproveBlockedReason, true, "")
+	if got.ApproveBlockedByCreator {
+		t.Error("approve_blocked_by_creator = true after a failed creator read")
+	}
+	if !strings.Contains(buf.String(), "creator standing") {
+		t.Errorf("log = %q, want a creator standing line", buf.String())
 	}
 }
 
@@ -366,8 +478,12 @@ func TestGetHandler_ApproveFlagsAreLastInWireOrder(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
 	got := topLevelKeyOrder(t, rec.Body.Bytes())
+	if last := got[len(got)-1]; last != "approve_blocked_by_creator" {
+		t.Fatalf("last wire key = %q, want approve_blocked_by_creator", last)
+	}
+	got = got[:len(got)-1]
 	if last := got[len(got)-1]; last != "verdict_stale" {
-		t.Fatalf("last wire key = %q, want verdict_stale", last)
+		t.Fatalf("last wire key before it = %q, want verdict_stale", last)
 	}
 	got = got[:len(got)-1]
 	if n := len(got); n < 2 || got[n-2] != "can_issue_note" || got[n-1] != "issue_note_blocked_reason" {
@@ -402,7 +518,7 @@ func TestGetHandler_ApproveKeysAppearExactlyOnce(t *testing.T) {
 				t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 			}
 			body := rec.Body.String()
-			for _, k := range []string{`"can_approve":`, `"approve_blocked_reason":`, `"can_reject":`, `"reject_blocked_reason":`} {
+			for _, k := range []string{`"can_approve":`, `"approve_blocked_reason":`, `"can_reject":`, `"reject_blocked_reason":`, `"approve_blocked_by_creator":`} {
 				if got := strings.Count(body, k); got != 1 {
 					t.Errorf("body has %d occurrences of %s, want exactly 1 (body=%s)", got, k, body)
 				}

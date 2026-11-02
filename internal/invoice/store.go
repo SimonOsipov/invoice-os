@@ -1913,6 +1913,9 @@ type ApprovalFacts struct {
 	RunState        string
 	PendingStepOrd  *int
 	CallerHoldsRole bool
+	// Creator is read in its own transaction; CreatorErr set means the rung is skipped.
+	Creator    approval.CreatorStanding
+	CreatorErr error
 }
 
 // ApprovalFacts reads id's approval standing for the caller inside ONE
@@ -1922,6 +1925,7 @@ type ApprovalFacts struct {
 // still fails closed.
 func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, error) {
 	var out ApprovalFacts
+	var roleKey *string
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		f, err := approval.GateFactsTx(ctx, tx, id, actorFromContext(ctx).Subject)
 		if err != nil {
@@ -1938,10 +1942,18 @@ func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, er
 			return err
 		}
 		out.RulePending = pending[id]
+		roleKey = f.PendingRoleKey
 		return nil
 	})
 	if err != nil {
 		return ApprovalFacts{}, err
+	}
+	if out.RunState == "open" && out.PendingStepOrd != nil {
+		out.CreatorErr = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+			standing, err := approval.CreatorStandingTx(ctx, tx, actorFromContext(ctx).Subject, []approval.CreatorProbe{{InvoiceID: id, RoleKey: roleKey}})
+			out.Creator = standing[id]
+			return err
+		})
 	}
 	return out, nil
 }
@@ -1957,6 +1969,10 @@ type ListGateFacts struct {
 	RulePending   map[string]bool
 	// Demotion is display copy for the list row, not a gate input.
 	Demotion map[string]Demotion
+	// Creator is the creator-rung standing per invoice, read in its own transaction;
+	// CreatorErr set means the rung is skipped for the page.
+	Creator    map[string]approval.CreatorStanding
+	CreatorErr error
 }
 
 // latestDemotionsTx maps each invoice whose latest history row carries a cause to that cause.
@@ -2059,6 +2075,17 @@ func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval
 	if err != nil {
 		return nil, ListGateFacts{}, err
 	}
+	var probes []approval.CreatorProbe
+	for id, f := range out {
+		if f.RunState == "open" && f.PendingOrd != nil {
+			probes = append(probes, approval.CreatorProbe{InvoiceID: id, RoleKey: f.PendingRoleKey})
+		}
+	}
+	gate.CreatorErr = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var err error
+		gate.Creator, err = approval.CreatorStandingTx(ctx, tx, actorFromContext(ctx).Subject, probes)
+		return err
+	})
 	return out, gate, nil
 }
 

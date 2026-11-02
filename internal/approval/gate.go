@@ -19,6 +19,7 @@ type GateFacts struct {
 	RunState        string // "" when the invoice has no run at all
 	PendingStepOrd  *int   // nil when no kind='approval' step is pending
 	CallerHoldsRole bool
+	PendingRoleKey  *string // the pending step's workflow role; nil when none
 }
 
 // RowFacts is one invoice row's approval standing, for the list.
@@ -140,6 +141,7 @@ func GateFactsTx(ctx context.Context, tx pgx.Tx, invoiceID, subject string) (Gat
 		return GateFacts{}, err
 	}
 	gf.PendingStepOrd = &stepOrd
+	gf.PendingRoleKey = roleKey
 
 	// AXIS 2, with decideTx's roleKey != nil guard, so the gate and the decision refuse on
 	// the same rung (TestGateFactsTx_NullRoleKeyOnThePendingStepIsNotHolding). AXIS 1 is

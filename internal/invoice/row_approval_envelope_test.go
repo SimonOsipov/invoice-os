@@ -279,15 +279,15 @@ func TestListItem_InvoiceKeysUnmovedAndUnrenamed(t *testing.T) {
 	bareKeys := jsonKeysInOrder(t, bare)
 	wrappedKeys := jsonKeysInOrder(t, wrapped)
 
-	if len(wrappedKeys) != len(bareKeys)+6 {
-		t.Fatalf("listItem has %d keys %v, want Invoice's %d %v plus exactly six (\"approval\", \"can_approve\", \"approve_blocked_reason\", \"can_submit\", \"submit_blocked_reason\", \"demotion\")",
+	if len(wrappedKeys) != len(bareKeys)+7 {
+		t.Fatalf("listItem has %d keys %v, want Invoice's %d %v plus exactly seven (\"approval\", \"can_approve\", \"approve_blocked_reason\", \"can_submit\", \"submit_blocked_reason\", \"demotion\", \"approve_blocked_by_creator\")",
 			len(wrappedKeys), wrappedKeys, len(bareKeys), bareKeys)
 	}
 	if !reflect.DeepEqual(wrappedKeys[:len(bareKeys)], bareKeys) {
 		t.Errorf("listItem's leading keys = %v, want Invoice's own order %v -- embedding must not move or rename a key",
 			wrappedKeys[:len(bareKeys)], bareKeys)
 	}
-	wantTail := []string{"approval", "can_approve", "approve_blocked_reason", "can_submit", "submit_blocked_reason", "demotion"}
+	wantTail := []string{"approval", "can_approve", "approve_blocked_reason", "can_submit", "submit_blocked_reason", "demotion", "approve_blocked_by_creator"}
 	if tail := wrappedKeys[len(bareKeys):]; !reflect.DeepEqual(tail, wantTail) {
 		t.Errorf("listItem's trailing keys = %v, want %v -- the siblings are appended in declaration order, never interleaved", tail, wantTail)
 	}

@@ -106,6 +106,7 @@ function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRec
     resolve_outside_blocked_reason: null,
     can_approve: false,
     approve_blocked_reason: null,
+    approve_blocked_by_creator: false,
     can_reject: false,
     reject_blocked_reason: null,
     can_correct_invoice_number: true,

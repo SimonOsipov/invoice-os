@@ -17,11 +17,16 @@
 package invoice
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -60,11 +65,13 @@ type listGateInputs struct {
 	facts            map[string]approval.RowFacts
 	callerRole       string
 	holdsPendingRole map[string]bool
+	creator          map[string]approval.CreatorStanding
+	creatorErr       error
 }
 
 func gateStub(in listGateInputs) func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
 	return func(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
-		return in.facts, ListGateFacts{CallerRole: in.callerRole, HoldsPendingRole: in.holdsPendingRole}, nil
+		return in.facts, ListGateFacts{CallerRole: in.callerRole, HoldsPendingRole: in.holdsPendingRole, Creator: in.creator, CreatorErr: in.creatorErr}, nil
 	}
 }
 
@@ -311,18 +318,20 @@ func TestListHandler_ApproveReasonsAreHandlersGoOwnCopy(t *testing.T) {
 // file and fails here on the first rung whose wording or order drifted (AC-2).
 func TestListAndDetail_ApproveGateCannotDisagree(t *testing.T) {
 	for _, c := range []struct {
-		name   string
-		status Status
-		role   string
-		facts  approval.RowFacts
-		holds  bool
+		name    string
+		status  Status
+		role    string
+		facts   approval.RowFacts
+		holds   bool
+		creator approval.CreatorStanding
 	}{
-		{"allowed", StatusValidated, "reviewer", openRunFacts(0), true},
-		{"not an approver", StatusValidated, "preparer", openRunFacts(0), true},
-		{"not validated", StatusDraft, "admin", openRunFacts(0), true},
-		{"no run", StatusValidated, "admin", approval.RowFacts{}, false},
-		{"run closed", StatusValidated, "admin", approval.RowFacts{RunState: "approved"}, false},
-		{"not the role holder", StatusValidated, "admin", openRunFacts(1), false},
+		{"allowed", StatusValidated, "reviewer", openRunFacts(0), true, approval.CreatorStanding{}},
+		{"refused creator", StatusValidated, "admin", openRunFacts(0), true, refusedCreator},
+		{"not an approver", StatusValidated, "preparer", openRunFacts(0), true, approval.CreatorStanding{}},
+		{"not validated", StatusDraft, "admin", openRunFacts(0), true, approval.CreatorStanding{}},
+		{"no run", StatusValidated, "admin", approval.RowFacts{}, false, approval.CreatorStanding{}},
+		{"run closed", StatusValidated, "admin", approval.RowFacts{RunState: "approved"}, false, approval.CreatorStanding{}},
+		{"not the role holder", StatusValidated, "admin", openRunFacts(1), false, approval.CreatorStanding{}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			id := listIdentity()
@@ -338,6 +347,7 @@ func TestListAndDetail_ApproveGateCannotDisagree(t *testing.T) {
 					RunState:        c.facts.RunState,
 					PendingStepOrd:  c.facts.PendingOrd,
 					CallerHoldsRole: c.holds,
+					Creator:         c.creator,
 				}, nil
 			}
 
@@ -362,6 +372,7 @@ func TestListAndDetail_ApproveGateCannotDisagree(t *testing.T) {
 				facts:            map[string]approval.RowFacts{invID: c.facts},
 				callerRole:       c.role,
 				holdsPendingRole: map[string]bool{invID: c.holds},
+				creator:          map[string]approval.CreatorStanding{invID: c.creator},
 			})
 			listRec := doInvoiceListWithFacts(t, list, listFacts, &id, "")
 			if listRec.Code != http.StatusOK {
@@ -373,6 +384,12 @@ func TestListAndDetail_ApproveGateCannotDisagree(t *testing.T) {
 			}
 			listCan, listReason := approveFlagsOf(t, rows[0], "the LIST row")
 
+			if l, d := string(rows[0]["approve_blocked_by_creator"]), string(detail["approve_blocked_by_creator"]); l != d {
+				t.Errorf("approve_blocked_by_creator: list = %s, detail = %s", l, d)
+			}
+			if want := c.name == "refused creator"; string(detail["approve_blocked_by_creator"]) != strconv.FormatBool(want) {
+				t.Errorf("approve_blocked_by_creator = %s on %q, want %v", detail["approve_blocked_by_creator"], c.name, want)
+			}
 			if listCan != detailCan {
 				t.Errorf("can_approve: list = %s, detail = %s -- ONE gate feeds both wires, so they cannot differ", listCan, detailCan)
 			}
@@ -495,5 +512,108 @@ func TestListHandler_RealStore_CrossTenantCannotApprove(t *testing.T) {
 	}
 	if want := jsonOf(t, reasonNotRoleHolder); crossReason != want {
 		t.Errorf("approve_blocked_reason = %s,\nwant %s\n-- rung 5 specifically: an earlier rung means the held-role read never ran, so this spec would prove nothing", crossReason, want)
+	}
+}
+
+func TestListHandler_CreatorReadErrorStaysEnabled(t *testing.T) {
+	id := listIdentity()
+	invID := uuid.NewString()
+	inv := Invoice{ID: invID, Status: StatusValidated}
+	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) { return []Invoice{inv}, 1, nil }
+	facts := gateStub(listGateInputs{
+		facts:            map[string]approval.RowFacts{invID: openRunFacts(0)},
+		callerRole:       "admin",
+		holdsPendingRole: map[string]bool{invID: true},
+		creator:          map[string]approval.CreatorStanding{invID: refusedCreator},
+		creatorErr:       errors.New("boom"),
+	})
+	var buf bytes.Buffer
+	r := httptest.NewRequest("GET", "/v1/invoices", nil)
+	r = r.WithContext(auth.WithIdentity(r.Context(), id))
+	rec := httptest.NewRecorder()
+	ListHandler(list, facts, slog.New(slog.NewTextHandler(&buf, nil))).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	rows := listRowsRaw(t, rec)
+	if can, _ := approveFlagsOf(t, rows[0], "the LIST row"); can != "true" {
+		t.Errorf("can_approve = %s, want true after a failed creator read", can)
+	}
+	if got := string(rows[0]["approve_blocked_by_creator"]); got != "false" {
+		t.Errorf("approve_blocked_by_creator = %s, want false", got)
+	}
+	if !strings.Contains(buf.String(), "creator standing") {
+		t.Errorf("log = %q, want a creator standing line", buf.String())
+	}
+}
+
+// TestStoreApprovalFacts_CreatorStandingRead: the creator of an armed invoice, with a
+// second reviewer on the client, reads a refused standing; the reviewer reads none.
+func TestStoreApprovalFacts_CreatorStandingRead(t *testing.T) {
+	super, app := dbTestPools(t)
+	fx := seedApprovalFactsFixture(t, super, "APPR-17-02-STANDING", true)
+	fx.armInvoice(t, super, app, "appr-17-02-standing")
+	other := uuid.NewString()
+	seedMembership(t, super, fx.tenantID, other, "reviewer")
+	store := NewStore(app)
+
+	got, err := store.ApprovalFacts(fx.ctx, fx.invID)
+	if err != nil {
+		t.Fatalf("ApprovalFacts: %v", err)
+	}
+	if got.CreatorErr != nil {
+		t.Fatalf("CreatorErr = %v", got.CreatorErr)
+	}
+	if reason, refused := got.Creator.Refusal(); !refused {
+		t.Errorf("creator standing = %+v, want refused", got.Creator)
+	} else if reason == "" {
+		t.Error("refused with an empty reason")
+	}
+
+	otherCtx := auth.WithIdentity(context.Background(), auth.Identity{Subject: other, Role: "authenticated", TenantID: fx.tenantID})
+	got, err = store.ApprovalFacts(otherCtx, fx.invID)
+	if err != nil {
+		t.Fatalf("ApprovalFacts (other): %v", err)
+	}
+	if got.Creator.IsCreator {
+		t.Errorf("a non-creator reads standing %+v", got.Creator)
+	}
+}
+
+func TestStoreRowFacts_CreatorReadIsConstantInPageSize(t *testing.T) {
+	super, app := dbTestPools(t)
+	fx := seedApprovalFactsFixture(t, super, "APPR-17-02-COUNT", true)
+	seedMembership(t, super, fx.tenantID, uuid.NewString(), "reviewer")
+	store := NewStore(app)
+	var ids []string
+	for i := 0; i < 20; i++ {
+		inv, err := store.Create(fx.ctx, CreateInput{EntityID: fx.entityID, InvoiceNumber: fmt.Sprintf("appr-17-02-count-%02d", i)})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if _, err := store.ApplyValidation(fx.ctx, inv.ID, []Violation{}, seedRuleSetVersionID(t, super), contentFingerprint(inv, inv.LineItems)); err != nil {
+			t.Fatalf("ApplyValidation: %v", err)
+		}
+		ids = append(ids, inv.ID)
+	}
+
+	tracedApp, rec := tracedAppPool(t)
+	traced := NewStore(tracedApp)
+	count := func(page []string) int {
+		rec.reset()
+		_, gate, err := traced.RowFacts(fx.ctx, page)
+		if err != nil || gate.CreatorErr != nil {
+			t.Fatalf("RowFacts(%d): err=%v creatorErr=%v", len(page), err, gate.CreatorErr)
+		}
+		for _, id := range page {
+			if !gate.Creator[id].IsCreator {
+				t.Fatalf("invoice %s: creator standing %+v, want IsCreator", id, gate.Creator[id])
+			}
+		}
+		return len(rec.mentioning(""))
+	}
+	n2, n20 := count(ids[:2]), count(ids)
+	if n2 != n20 {
+		t.Errorf("RowFacts issued %d statements for 2 creator rows and %d for 20", n2, n20)
 	}
 }

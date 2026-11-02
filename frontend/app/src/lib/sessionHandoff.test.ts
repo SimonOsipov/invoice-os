@@ -311,8 +311,7 @@ describe('redeemHandoff provisions the registered workspace', () => {
       const calls = stubChain({ exchange: { status: 200, body: { access_token: tokenWith(claims), refresh_token: 'R0' } }, me: [FORBIDDEN] })
       const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
       expect(trace(calls), name).toEqual(['POST /auth/exchange', 'GET /api/tenancy/v1/me', MINE])
-      expect(err, name).toBeInstanceOf(ApiError)
-      expect(err, name).toMatchObject({ status: 403 })
+      expect(err, name).toMatchObject({ kind: 'join', invites: [], answers: null, firstWorkspace: true })
     }
   })
 
@@ -570,12 +569,42 @@ describe('join offers', () => {
     expect(calls[2].signal).toBe(calls[0].signal)
   })
 
-  it('redeemHandoff_403WithNoInvitesKeepsTheNoWorkspaceError', async () => {
-    const calls = stub({ mine: { status: 200, body: { invitations: [] } } })
-    const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
-    expect(err).toBeInstanceOf(ApiError)
-    expect(err).toMatchObject({ status: 403 })
-    expect(paths(calls)).toEqual(['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine'])
+  it('redeemHandoff: no invites and no answers gets the first-workspace offer', async () => {
+    for (const body of [{ invitations: [] }, { invitations: [], removed: false }]) {
+      const calls = stub({ mine: { status: 200, body } })
+      const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
+      expect(s).toEqual({ kind: 'join', token: BARE, refreshToken: 'R0', invites: [], answers: null, firstWorkspace: true })
+      expect(paths(calls)).toEqual(['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine'])
+    }
+  })
+
+  it("a removed person's offer carries no firstWorkspace flag", async () => {
+    stub({ mine: { status: 200, body: { invitations: [], removed: true } } })
+    const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
+    expect(s).toMatchObject({ kind: 'join', invites: [], answers: null })
+    expect((s as JoinOffer).firstWorkspace).toBeUndefined()
+  })
+
+  it('createOwnWorkspace: a retry after a failed read answers 409 and reaches the workspace', async () => {
+    const calls = stub({
+      workspacesSeq: [{ status: 201, body: {} }, { status: 409, body: { error: 'this account already has a workspace' } }],
+      refreshSeq: [{ status: 200, body: { access_token: RENEWED, refresh_token: 'R1' } }, { status: 200, body: { access_token: RENEWED, refresh_token: 'R2' } }],
+      me: [{ status: 500 }, { status: 200, body: ME }],
+    })
+    const o = offer({ invites: [], firstWorkspace: true, refreshToken: 'R0' })
+    const body: ProvisionBody = { workspace_name: 'Acme', display_name: 'Ada', kind: 'firm' }
+    await expect(createOwnWorkspace(GATEWAY, o, body, 5000)).rejects.toBeInstanceOf(ApiError)
+    const s = await createOwnWorkspace(GATEWAY, o, body, 5000)
+    expect(s).toMatchObject({ token: RENEWED, renewal: { refreshToken: 'R2' } })
+    const refreshes = calls.filter((c) => c.url === '/auth/refresh')
+    expect(refreshes.map((c) => c.body)).toEqual([{ refresh_token: 'R0' }, { refresh_token: 'R1' }])
+    expect(calls.filter((c) => c.url === '/api/tenancy/v1/workspaces').map((c) => c.body)).toEqual([body, body])
+  })
+
+  it('createOwnWorkspace: a create after another tab created reaches the workspace', async () => {
+    stub({ workspaces: { status: 409, body: { error: 'this account already has a workspace' } }, me: [{ status: 200, body: ME }] })
+    const s = await createOwnWorkspace(GATEWAY, offer({ invites: [], firstWorkspace: true }), { workspace_name: 'Acme', display_name: 'Ada', kind: 'firm' }, 5000)
+    expect(s).toMatchObject({ token: RENEWED, me: ME, handoff: true })
   })
 
   // A failed lookup rejects with a non-403 error, which App maps to signin=failed.

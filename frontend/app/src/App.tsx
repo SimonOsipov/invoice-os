@@ -1964,6 +1964,7 @@ export default function App() {
   const [joinOffer, setJoinOffer] = useState<JoinOffer | null>(null)
   const [joining, setJoining] = useState<string | null>(null)
   const [joinNotice, setJoinNotice] = useState<string | null>(null)
+  const [createFailed, setCreateFailed] = useState(false)
   // Set in the click handler, before any re-render, so a second click in the same tick sends nothing.
   const joinStarted = useRef(false)
   // `?auth=start`: landing asks for a state. `?handoff=` wins over it.
@@ -2246,7 +2247,8 @@ export default function App() {
 
   // Join and Create my own workspace share one outcome: the workspace mounts, or the page leaves.
   // A refused invite 'invalid' with other invites left is dropped from the offer; the Join screen stays.
-  const resolveJoin = useCallback((attempt: Promise<Session>, inviteId?: string) => {
+  // `stayOnFailure` (first-workspace Create): a failure shows the inline error unless the session cannot renew.
+  const resolveJoin = useCallback((attempt: Promise<Session>, inviteId?: string, stayOnFailure = false) => {
     if (joinStarted.current) return
     joinStarted.current = true
     attempt.then(
@@ -2257,6 +2259,14 @@ export default function App() {
       },
       (err: unknown) => {
         console.warn('[app] joining failed:', err)
+        const refresh = joinOffer?.refreshToken
+        const cannotRenew = (err instanceof ApiError && err.status === 401) || typeof refresh !== 'string' || refresh === ''
+        if (stayOnFailure && !cannotRenew) {
+          setCreateFailed(true)
+          joinStarted.current = false
+          setJoining(null)
+          return
+        }
         if (err instanceof InviteRefusedError && err.outcome === 'invalid' && inviteId !== undefined && joinOffer) {
           const invites = joinOffer.invites.filter((i) => i.id !== inviteId)
           if (invites.length > 0) {
@@ -2290,13 +2300,14 @@ export default function App() {
     setJoining(CREATING_OWN)
     resolveJoin(createOwnWorkspace(base, joinOffer, joinOffer.answers))
   }
-  // The no-workspace screen: the person typed both names; the answers only lend the kind.
-  const onCreate = (workspace_name: string, display_name: string) => {
+  // The no-workspace screen: the person typed both names. A removed person's answers lend the kind; `firstWorkspace` sends the chosen one.
+  const onCreate = (workspace_name: string, display_name: string, chosen?: 'firm' | 'in_house') => {
     const base = gatewayBase()
     if (!joinOffer || !base || joinStarted.current) return
+    setCreateFailed(false)
     setJoining(CREATING_OWN)
-    const kind = joinOffer.answers?.kind
-    resolveJoin(createOwnWorkspace(base, joinOffer, { workspace_name, display_name, ...(kind ? { kind } : {}) }))
+    const kind = joinOffer.firstWorkspace ? chosen : joinOffer.answers?.kind
+    resolveJoin(createOwnWorkspace(base, joinOffer, { workspace_name, display_name, ...(kind ? { kind } : {}) }), undefined, joinOffer.firstWorkspace === true)
   }
   const onJoinSignOut = async () => {
     const base = gatewayBase()
@@ -2408,6 +2419,8 @@ export default function App() {
           invites={joinOffer.invites}
           joining={joining}
           notice={joinNotice}
+          firstWorkspace={joinOffer.firstWorkspace}
+          createFailed={createFailed}
           defaultName={joinOffer.answers?.display_name}
           defaultWorkspace={joinOffer.answers?.workspace_name}
           onJoin={onJoin}

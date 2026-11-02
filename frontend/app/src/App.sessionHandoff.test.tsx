@@ -750,7 +750,7 @@ describe('a failed redemption bounces to landing (AC-7, D23)', () => {
     }
   })
 
-  it('a workspace-less account reports no-workspace', async () => {
+  it('an account with no answers sees the form, not the landing', async () => {
     configure()
     ensureSignInState()
     meReply = fail(403, 'forbidden')
@@ -759,10 +759,12 @@ describe('a failed redemption bounces to landing (AC-7, D23)', () => {
     window.history.replaceState(null, '', `/?handoff=${CODE}`)
     const { hrefWrites } = interceptHref()
     await bootApp()
-    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=no-workspace`]))
+    expect(await screen.findByTestId('join-create')).toBeTruthy()
+    await settle()
+    expect(hrefWrites).toEqual([])
     expect(exchangeBodies).toHaveLength(1)
     expect(meAuth).toEqual([`Bearer ${T}`])
-    expect(workspacesCalls, 'a token without answers provisions nothing').toEqual([])
+    expect(workspacesCalls, 'nothing is provisioned before the click').toEqual([])
     expect(refreshBodies).toEqual([])
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
@@ -1991,6 +1993,38 @@ describe('a hung redemption times out', () => {
       expect(hrefWrites, 'still one navigation').toHaveLength(1)
     })
   }
+
+  it('App: a hung create times out onto the form', async () => {
+    configure()
+    ensureSignInState()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url === `${GATEWAY}/auth/exchange`) return ok({ access_token: T, refresh_token: 'R0' })()
+        if (url === `${GATEWAY}/api/tenancy/v1/me`) return fail(403, 'forbidden')()
+        if (url === `${GATEWAY}/api/tenancy/v1/invitations/mine`) return ok({ invitations: [] })()
+        return hang(init?.signal)
+      }),
+    )
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await tick(0)
+    fireEvent.change(screen.getByTestId('join-workspace-name'), { target: { value: 'Acme' } })
+    fireEvent.change(screen.getByTestId('join-name'), { target: { value: 'Ada' } })
+    fireEvent.click(screen.getByLabelText('For clients — an accounting or tax firm'))
+    fireEvent.click(screen.getByTestId('join-create'))
+    await tick(TIMEOUT_MS - 1)
+    expect(screen.queryByRole('alert')).toBeNull()
+    await tick(1)
+    expect(screen.getByRole('alert').textContent).toBe('We could not create your workspace. Try again.')
+    expect(hrefWrites).toEqual([])
+    expect((screen.getByTestId('join-workspace-name') as HTMLInputElement).disabled).toBe(true)
+    expect((screen.getByTestId('join-name') as HTMLInputElement).disabled).toBe(true)
+    expect((screen.getByTestId('join-create') as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: 'Sign out' }) as HTMLButtonElement).disabled).toBe(false)
+  })
 
   it('both redemption calls carry an abort signal', async () => {
     configure()

@@ -60,11 +60,10 @@ describe('redeemHandoff adversarial', () => {
     }
   })
 
-  it('a /me 403 rejects with status 403 after the exchange', async () => {
+  it('a /me 403 with no invites resolves a first-workspace offer after the exchange', async () => {
     const urls = stubFetch({ status: 200, body: { access_token: LIVE } }, { status: 403, body: { error: 'forbidden' } }, { status: 200, body: { invitations: [] } })
-    const err = await redeemHandoff(GATEWAY, CODE, STATE).catch((e: unknown) => e)
-    expect(err).toBeInstanceOf(ApiError)
-    expect((err as ApiError).status).toBe(403)
+    const offer = await redeemHandoff(GATEWAY, CODE, STATE)
+    expect(offer).toMatchObject({ kind: 'join', invites: [], answers: null, firstWorkspace: true })
     expect(urls).toEqual([`${GATEWAY}/auth/exchange`, `${GATEWAY}/api/tenancy/v1/me`, `${GATEWAY}/api/tenancy/v1/invitations/mine`])
   })
 

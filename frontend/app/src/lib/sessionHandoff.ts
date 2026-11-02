@@ -59,8 +59,8 @@ export interface PendingInvite {
   expires_at: string
 }
 
-// A tenant-less sign-in with invites waiting, or none for a removed person (invites empty); the Join screen resolves it (joinInvite, createOwnWorkspace).
-export type JoinOffer = { kind: 'join'; token: string; refreshToken: unknown; invites: PendingInvite[]; answers: ProvisionBody | null }
+// A tenant-less sign-in with invites waiting, or none (invites empty): a removed person, or `firstWorkspace` for an account with no answers. The Join screen resolves it (joinInvite, createOwnWorkspace).
+export type JoinOffer = { kind: 'join'; token: string; refreshToken: unknown; invites: PendingInvite[]; answers: ProvisionBody | null; firstWorkspace?: true }
 
 export function isPendingInvites(body: unknown): body is { invitations: PendingInvite[] } {
   const list = (body as { invitations?: unknown } | null | undefined)?.invitations
@@ -130,7 +130,7 @@ export async function redeemHandoff(base: string, code: string, state: string, n
       return { kind: 'join', token, refreshToken, invites: [], answers }
     }
     if (answers === null) {
-      throw err
+      return { kind: 'join', token, refreshToken, invites: [], answers: null, firstWorkspace: true }
     }
     return provisionAndRead(base, { token, refreshToken }, answers, now, signal)
   }

@@ -439,7 +439,7 @@ func TestAdversarial_FormsThatMustTrigger(t *testing.T) {
 		{"DROP  \n\t TABLE\n\nIF\nEXISTS\n t", []string{"t"}},
 		{"ALTER\nTABLE\n t\nDROP\nCOLUMN\n c", []string{"t.c"}},
 		{`ALTER TABLE "a b" RENAME TO c`, []string{"a b"}},
-		{`DROP TABLE "we.ird name"`, []string{"we.ird name"}},
+		{`DROP TABLE "we.ird name"`, []string{`"we.ird name"`}},
 		{`ALTER TABLE "a b" DROP "c d"`, []string{"a b.c d"}},
 		{"ALTER TABLE t DROP c, DROP d", []string{"t.c", "t.d"}},
 		{"ALTER TABLE t RENAME COLUMN a TO b, RENAME COLUMN c TO d", nil},
@@ -535,5 +535,46 @@ func TestAdversarial_StringLiteralsAreRead(t *testing.T) {
 	r := scanUp(t, "INSERT INTO audit_log VALUES ('DROP TABLE z');")
 	if got := objects(r); !slices.Equal(got, []string{"z"}) {
 		t.Fatalf("got %q, want [z]: a literal is read and needs a mark", got)
+	}
+}
+
+func TestTriggers_ApostropheInADefaultDoesNotHideALaterDrop(t *testing.T) {
+	for _, sql := range []string{
+		`ALTER TABLE t ADD COLUMN x text DEFAULT $$it's$$, DROP COLUMN y;`,
+		`ALTER TABLE t ADD COLUMN x text DEFAULT E'it\'s', DROP COLUMN y;`,
+		`ALTER TABLE t ADD COLUMN x text DEFAULT $tag$it's, $$ $tag$, DROP COLUMN y;`,
+	} {
+		if got := objects(scanUp(t, sql)); !slices.Equal(got, []string{"t.y"}) {
+			t.Errorf("%q: got %q", sql, got)
+		}
+	}
+}
+
+func TestTriggers_AlterTableInsideADollarBodyThenALaterStatement(t *testing.T) {
+	r := scanUp(t, `DO $$ BEGIN ALTER TABLE a ADD COLUMN x text DEFAULT 'it''s', DROP COLUMN y; END $$;
+ALTER TABLE b DROP COLUMN z;`)
+	if got := objects(r); !slices.Equal(got, []string{"a.y", "b.z"}) {
+		t.Fatalf("got %q", got)
+	}
+	r = scanUp(t, "DO $$ ALTER TABLE a DROP COLUMN y $$;\nALTER TABLE b DROP COLUMN z;")
+	if got := objects(r); !slices.Equal(got, []string{"a.y", "b.z"}) {
+		t.Fatalf("no semicolon in body: got %q", got)
+	}
+}
+
+func TestMarks_ObjectCopiedFromTheMessageWithADotInAQuotedNameReleases(t *testing.T) {
+	lines, failed := evalUp(t, `DROP TABLE "a.b";`)
+	if !failed || len(lines) != 1 {
+		t.Fatalf("want one failure, got %q", lines)
+	}
+	_, rest, _ := strings.Cut(lines[0], "-- contract-step ")
+	obj, _, _ := strings.Cut(rest, ": <why")
+	if obj == "" {
+		t.Fatalf("no object in %q", lines[0])
+	}
+	lines, failed = evalUp(t, `DROP TABLE "a.b"; -- contract-step `+obj+`: gone`)
+	wantLines(t, lines, []string{"Deliberate schema changes:", testFile + ": " + obj + ": gone"})
+	if failed {
+		t.Fatal("want pass")
 	}
 }

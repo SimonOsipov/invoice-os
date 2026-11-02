@@ -79,6 +79,38 @@ func dollarTag(s string) string {
 	return ""
 }
 
+// quoteEnd returns the index of the quote that closes the span opened at src[i],
+// or -1 when it is unterminated. A quote after E or e is an E-string: backslash escapes.
+func quoteEnd(src string, i int) int {
+	c := src[i]
+	esc := c == '\'' && i > 0 && src[i-1]|0x20 == 'e' && (i < 2 || !isIdent(src[i-2]))
+	for j := i + 1; j < len(src); j++ {
+		if esc && src[j] == '\\' {
+			j++
+			continue
+		}
+		if src[j] == c {
+			if j+1 < len(src) && src[j+1] == c {
+				j++
+				continue
+			}
+			return j
+		}
+	}
+	return -1
+}
+
+// dollarEnd returns the index after the dollar-quoted span opened at src[i],
+// or -1 when it is unterminated. The caller has checked dollarTag.
+func dollarEnd(src string, i int) int {
+	tag := dollarTag(src[i:])
+	end := strings.Index(src[i+len(tag):], tag)
+	if end < 0 {
+		return -1
+	}
+	return i + len(tag) + end + len(tag)
+}
+
 // lex splits Up text into code segments (comments removed, quoted and dollar-quoted
 // spans kept verbatim) and the text of its "--" comments.
 func lex(src string) (segs, comments []string, err error) {
@@ -119,34 +151,17 @@ func lex(src string) (segs, comments []string, err error) {
 			cur.WriteByte(' ')
 			i = j
 		case c == '\'' || c == '"':
-			esc := c == '\'' && i > 0 && src[i-1]|0x20 == 'e' && (i < 2 || !isIdent(src[i-2]))
-			j := i + 1
-			for {
-				if j >= len(src) {
-					return nil, nil, errors.New("Up section ends inside an unterminated quote")
-				}
-				if esc && src[j] == '\\' {
-					j += 2
-					continue
-				}
-				if src[j] == c {
-					if j+1 < len(src) && src[j+1] == c {
-						j += 2
-						continue
-					}
-					break
-				}
-				j++
+			j := quoteEnd(src, i)
+			if j < 0 {
+				return nil, nil, errors.New("Up section ends inside an unterminated quote")
 			}
 			cur.WriteString(src[i : j+1])
 			i = j + 1
 		case c == '$' && (i == 0 || !isIdent(src[i-1])) && dollarTag(src[i:]) != "":
-			tag := dollarTag(src[i:])
-			end := strings.Index(src[i+len(tag):], tag)
-			if end < 0 {
+			j := dollarEnd(src, i)
+			if j < 0 {
 				return nil, nil, errors.New("Up section ends inside an unterminated dollar quote")
 			}
-			j := i + len(tag) + end + len(tag)
 			cur.WriteString(src[i:j])
 			i = j
 		case c == ';':
@@ -256,12 +271,25 @@ func (c *cursor) args() string {
 
 var triggerStart = regexp.MustCompile(`(?i)\b(?:(DROP)\s+(TABLE|FUNCTION|TYPE)|(ALTER)\s+TABLE)\b`)
 
+// dotted joins name parts with dots, quoting a part that holds a dot so the
+// text reads back as the same parts in a mark.
+func dotted(parts []string) string {
+	q := make([]string, len(parts))
+	for i, p := range parts {
+		q[i] = p
+		if strings.Contains(p, ".") {
+			q[i] = `"` + p + `"`
+		}
+	}
+	return strings.Join(q, ".")
+}
+
 func newTrigger(stmt string, parts []string, n int) Trigger {
 	low := make([]string, len(parts))
 	for i, p := range parts {
 		low[i] = strings.ToLower(p)
 	}
-	return Trigger{Statement: stmt, Object: strings.Join(parts, "."), parts: low, n: n}
+	return Trigger{Statement: stmt, Object: dotted(parts), parts: low, n: n}
 }
 
 func findTriggers(seg string) []Trigger {
@@ -276,7 +304,7 @@ func findTriggers(seg string) []Trigger {
 				if parts == nil {
 					break
 				}
-				stmt := "DROP " + kind + " " + strings.Join(parts, ".")
+				stmt := "DROP " + kind + " " + dotted(parts)
 				if kind == "FUNCTION" && c.peek() == '(' {
 					stmt += "(" + strings.TrimSpace(c.args()) + ")"
 				}
@@ -310,11 +338,19 @@ scan:
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
 		case '\'', '"':
-			end := strings.IndexByte(s[i+1:], s[i])
-			if end < 0 {
+			j := quoteEnd(s, i)
+			if j < 0 {
 				break scan
 			}
-			i += end + 1
+			i = j
+		case '$':
+			if (i == 0 || !isIdent(s[i-1])) && dollarTag(s[i:]) != "" {
+				if j := dollarEnd(s, i); j >= 0 {
+					i = j - 1
+				} else {
+					break scan
+				}
+			}
 		case '(':
 			depth++
 		case ')':
@@ -337,7 +373,7 @@ scan:
 
 func actionTrigger(table []string, action string) []Trigger {
 	c := &cursor{s: action}
-	t := strings.Join(table, ".")
+	t := dotted(table)
 	col := func(name string) []string { return append(slices.Clone(table), name) }
 	switch {
 	case c.kw("DROP"):
@@ -350,9 +386,6 @@ func actionTrigger(table []string, action string) []Trigger {
 			return []Trigger{newTrigger("ALTER TABLE "+t+" DROP COLUMN "+name[0], col(name[0]), 2)}
 		}
 	case c.kw("RENAME"):
-		if c.kw("CONSTRAINT") {
-			return nil
-		}
 		if c.kw("TO") {
 			if u := c.name(); u != nil {
 				return []Trigger{newTrigger("ALTER TABLE "+t+" RENAME TO "+strings.Join(u, "."), table, 1)}

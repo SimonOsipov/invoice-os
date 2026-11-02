@@ -16,7 +16,11 @@ func TestCIContractStepJobIsGatedByTheRollup(t *testing.T) {
 	for _, s := range job.steps() {
 		jobRun += s.keys["run"] + "\n"
 	}
-	for _, want := range []string{"go run ./internal/tools/contractstep", "go test ./internal/tools/contractstep/"} {
+	for _, want := range []string{
+		"go run ./internal/tools/contractstep",
+		"go test ./internal/tools/contractstep/",
+		`if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then BASE=HEAD; fi`,
+	} {
 		if !strings.Contains(jobRun, want) {
 			t.Errorf("contract-step run lacks %q:\n%s", want, jobRun)
 		}

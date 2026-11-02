@@ -381,11 +381,21 @@ preflight() {
 cmd_mail_preflight() { preflight mail "${MAIL_SECRETS[@]}"; }
 cmd_contact_preflight() { preflight contact "${CONTACT_SECRETS[@]}"; }
 
+# read_secret <gcloud args>: 3 tries, 20 s apart, as nightly.yml. Prints the value only on success.
+read_secret() {
+  local out i
+  for i in 1 2 3; do
+    if out=$(gcloud secrets versions access "$@"); then printf '%s' "$out"; return 0; fi
+    [ "$i" = 3 ] || sleep 20
+  done
+  return 1
+}
+
 # contact-token [<n>]: the token at version n; an empty n reads latest.
 cmd_contact_token() {
   local v=${1:-}
   if [ -z "$v" ]; then v=latest; else digits_arg "$v"; fi
-  gcloud secrets versions access "$v" --secret "$HUBSPOT_TOKEN_SECRET" --project "$PROJECT"
+  read_secret "$v" --secret "$HUBSPOT_TOKEN_SECRET" --project "$PROJECT"
 }
 
 cmd_contact_token_version() {
@@ -518,8 +528,8 @@ case "${1:-}" in
   mail-preflight) mail_arg "${2:-}"; cmd_mail_preflight ;;
   mail-on) mail_arg "${2:-}"; cmd_mail_on ;;
   mail-off) mail_arg "${2:-}"; cmd_mail_off ;;
-  mail-read-key) mail_arg "${2:-}"; gcloud secrets versions access latest --secret nightly-resend-read-key --project "$PROJECT" ;;
-  mail-domain) mail_arg "${2:-}"; gcloud secrets versions access latest --secret nightly-resend-receiving-domain --project "$PROJECT" ;;
+  mail-read-key) mail_arg "${2:-}"; read_secret latest --secret nightly-resend-read-key --project "$PROJECT" ;;
+  mail-domain) mail_arg "${2:-}"; read_secret latest --secret nightly-resend-receiving-domain --project "$PROJECT" ;;
   contact-preflight) mail_arg "${2:-}"; cmd_contact_preflight ;;
   contact-token) mail_arg "${2:-}"; cmd_contact_token "${3:-}" ;;
   contact-token-version) mail_arg "${2:-}"; cmd_contact_token_version ;;

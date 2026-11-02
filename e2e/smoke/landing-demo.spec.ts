@@ -73,8 +73,8 @@ const BARE_SIZE_WORDS = ['Micro', 'Small', 'Medium', 'Large'] as const
 // box may take seconds, and failing that run would say nothing about indistinguishability.
 const STUB_DELAY_FLOOR_MS = 1200
 
-// One lead, used by every test. Nothing is created anywhere: the gate is closed, the route
-// guard aborts, and `.example` is a reserved TLD that cannot resolve.
+// One lead, used by every test. On the nightly it reaches real contacts (Resend); the
+// `.example` deletion rule in nightlycontacts removes it.
 const LEAD = {
   name: 'Ada Okafor',
   firstName: 'Ada',

@@ -7678,7 +7678,10 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     fireEvent.click(await screen.findByTestId('detail-approve'))
     fireEvent.click(screen.getByTestId('detail-approve-confirm'))
     expect((await screen.findByTestId('detail-decision-error')).textContent).toBe('step already decided')
-    await waitFor(() => expect(approveBtn().disabled).toBe(false))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(approveBtn().disabled).toBe(false)
+    expect(detailGets(), 'a 409 is not a refusal: no re-read').toBe(1)
+    expect(screen.getByTestId('detail-decision-error').textContent).toBe('step already decided')
   })
 
   it('detail_noApproveControlWhileLoading', () => {

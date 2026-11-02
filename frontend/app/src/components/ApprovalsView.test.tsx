@@ -2006,6 +2006,13 @@ describe('APPR-17-04: the creator rows in the queue', () => {
     expect((r.getByTestId('approval-select-row') as HTMLInputElement).checked).toBe(false)
   })
 
+  it('queue_selectAllLabel_namesWhatItSelects', async () => {
+    mockBulkFetch([listResponse([creator('inv-c', 'INV-C'), approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })], page(2))])
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-C')
+    expect(screen.getByLabelText('Select every selectable invoice on this page')).toBe(screen.getByTestId('approval-select-all'))
+  })
+
   it('queue_onlyCreatorSelected_noRequest', async () => {
     const { fetchMock, approvalCalls } = mockBulkFetch([listResponse([creator('inv-c1', 'INV-C1'), creator('inv-c2', 'INV-C2')], page(2))])
     render(<ApprovalsView ctx={approvalsCtx()} />)

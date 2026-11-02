@@ -3597,3 +3597,158 @@ test('a removed creator signs in to no-workspace and creates a workspace', async
   expect((await rosterRow(otherToken, creatorId)).status, 'the old workspace still shows the creator removed').toBe('removed')
   expect(errors, `console errors on the no-workspace journey:\n${errors.join('\n')}`).toEqual([])
 })
+
+const FIRST_WORKSPACE_TITLE = 'Create your workspace'
+const FIRST_WORKSPACE_LINE = 'This account has no workspace yet. Create one below to get started. If you were invited, open the invite link in your email.'
+const CREATE_FAILED = 'We could not create your workspace. Try again.'
+const WORKSPACES_URL = `${GATEWAY_URL}/api/tenancy/v1/workspaces`
+
+// Answers one POST to `url` with `status`; the CORS preflight and other methods pass through.
+async function fakePostStatus(page: Page, url: string, status: number): Promise<void> {
+  await page.route(url, (route) => {
+    if (route.request().method() !== 'POST') return route.fallback()
+    return route.fulfill({
+      status,
+      contentType: 'application/json',
+      headers: { 'access-control-allow-origin': new URL(APP_URL).origin },
+      body: JSON.stringify({ error: 'fixture' }),
+    })
+  })
+}
+
+function firstWorkspaceForm(page: Page) {
+  const card = page.getByTestId('join-screen')
+  return {
+    card,
+    workspace: page.getByTestId('join-workspace-name'),
+    name: page.getByTestId('join-name'),
+    firm: page.getByRole('radio', { name: KIND_LABEL.firm, exact: true }),
+    inHouse: page.getByRole('radio', { name: KIND_LABEL.in_house, exact: true }),
+    create: page.getByTestId('join-create'),
+    signOut: card.getByRole('button', { name: 'Sign out', exact: true }),
+  }
+}
+
+test('a bare account signs in to the form and creates its workspace', async ({ page }) => {
+  test.setTimeout(300_000)
+  const account = await registerFresh('bare-account')
+  const typed = { workspace: `Bare E2E ${crypto.randomUUID().slice(0, 8)}`, name: 'Bare Creator' }
+  const errors = gatedErrors(page, [
+    expectedStatusDropper(page, 403, /\/api\/tenancy\/v1\/me$/),
+    expectedStatusDropper(page, 500, /\/api\/tenancy\/v1\/workspaces$/),
+  ])
+  const urls = recordUrls(page)
+  let provisions = 0
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/tenancy/v1/workspaces')) provisions += 1
+  })
+  await seedConsent(page, false)
+  await passFrontDoor(page, account, '/')
+
+  await expect(page.getByRole('heading', { name: FIRST_WORKSPACE_TITLE, exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByText(FIRST_WORKSPACE_LINE, { exact: true })).toBeVisible()
+  const form = firstWorkspaceForm(page)
+  await expect(form.workspace).toHaveValue('')
+  await expect(form.name).toHaveValue('')
+  await expect(form.firm).not.toBeChecked()
+  await expect(form.inHouse).not.toBeChecked()
+  await expect(form.create).toBeDisabled()
+  expect(provisions, 'nothing is provisioned before the click').toBe(0)
+  expect(urls.filter((u) => u.includes('signin=no-workspace')), 'a navigation carried signin=no-workspace').toEqual([])
+
+  await form.workspace.fill(typed.workspace)
+  await form.name.fill(typed.name)
+  await expect(form.create, 'names without a kind').toBeDisabled()
+  await form.firm.check()
+  await expect(form.create).toBeEnabled()
+  await expectInsideAtEachWidth(
+    page,
+    form.card,
+    [
+      ['kind fieldset', form.card.getByRole('group')],
+      ['firm label', form.card.locator('label').filter({ has: form.firm })],
+      ['in-house label', form.card.locator('label').filter({ has: form.inHouse })],
+      ['join-create', form.create],
+    ],
+    [form.create, form.signOut, 'Create a workspace and Sign out'],
+  )
+
+  // Fixture check: the mocked 500 stands in for a backend failure the deployed gateway cannot be made to produce.
+  await fakePostStatus(page, WORKSPACES_URL, 500)
+  await form.create.click()
+  const error = page.getByTestId('join-create-error')
+  await expect(error).toHaveText(CREATE_FAILED)
+  await expect(form.workspace).toHaveValue(typed.workspace)
+  await expect(form.name).toHaveValue(typed.name)
+  await expect(form.firm).toBeChecked()
+  for (const frozen of [form.workspace, form.name, form.firm, form.inHouse]) await expect(frozen).toBeDisabled()
+  await expect(form.create).toBeEnabled()
+  await expect(form.signOut).toBeEnabled()
+  await expectInsideAtEachWidth(page, form.card, [['join-create-error', error]])
+
+  await page.unroute(WORKSPACES_URL)
+  await form.create.click()
+  const identity = await readSessionIdentity(page)
+  expect(identity.tenant.name, 'the typed workspace name').toBe(typed.workspace)
+  expect(identity.tenant.kind, 'the chosen kind, not the server default').toBe('firm')
+  expect(identity.user.display_name, 'the typed display name').toBe(typed.name)
+  expect(provisions, 'the mocked POST and the real one').toBe(2)
+  expect(urls.filter((u) => u.includes('signin=no-workspace')), 'a navigation carried signin=no-workspace').toEqual([])
+  expect(errors, `console errors on the bare-account journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('a session that cannot renew on Create leaves, and signing in again recovers (fixture check)', async ({ page }) => {
+  test.setTimeout(300_000)
+  const errors = gatedErrors(page, [
+    expectedStatusDropper(page, 403, /\/api\/tenancy\/v1\/me$/),
+    expectedStatusDropper(page, 401, /\/auth\/refresh$/),
+    expectedStatusDropper(page, 401, /\/api\/tenancy\/v1\/workspaces$/),
+  ])
+  const typed = { workspace: `Renew E2E ${crypto.randomUUID().slice(0, 8)}`, name: 'Renew Creator' }
+  await seedConsent(page, false)
+
+  const fillAndCreate = async () => {
+    const form = firstWorkspaceForm(page)
+    await expect(page.getByRole('heading', { name: FIRST_WORKSPACE_TITLE, exact: true })).toBeVisible({ timeout: 30_000 })
+    await form.workspace.fill(typed.workspace)
+    await form.name.fill(typed.name)
+    await form.firm.check()
+    await form.create.click()
+    await expect(signInDialog(page)).toContainText(HANDOFF_FAILED, { timeout: 30_000 })
+    await expect(page.getByTestId('join-create-error')).toHaveCount(0)
+  }
+
+  await test.step('refresh refused, the create lands: signing in again gives the workspace', async () => {
+    const first = await registerFresh('renew-landed')
+    await fakePostStatus(page, REFRESH_URL, 401)
+    await passFrontDoor(page, first, '/')
+    await fillAndCreate()
+    await page.unroute(REFRESH_URL)
+    await passFrontDoor(page, first, '/')
+    const identity = await readSessionIdentity(page)
+    expect(identity.tenant.name, 'the typed workspace name').toBe(typed.workspace)
+    expect(identity.tenant.kind).toBe('firm')
+    expect(identity.user.display_name, 'the typed display name').toBe(typed.name)
+  })
+
+  await test.step('create and refresh refused: signing in again gives the empty form', async () => {
+    const second = await registerFresh('renew-refused')
+    await fakePostStatus(page, REFRESH_URL, 401)
+    await fakePostStatus(page, WORKSPACES_URL, 401)
+    await passFrontDoor(page, second, '/')
+    await fillAndCreate()
+    await page.unroute(REFRESH_URL)
+    await page.unroute(WORKSPACES_URL)
+    await passFrontDoor(page, second, '/')
+    await expect(page.getByRole('heading', { name: FIRST_WORKSPACE_TITLE, exact: true })).toBeVisible({ timeout: 30_000 })
+    const form = firstWorkspaceForm(page)
+    for (const field of [form.workspace, form.name]) {
+      await expect(field).toHaveValue('')
+      await expect(field).toBeEnabled()
+    }
+    await expect(form.firm).not.toBeChecked()
+    await expect(form.inHouse).not.toBeChecked()
+  })
+
+  expect(errors, `console errors on the renewal journey:\n${errors.join('\n')}`).toEqual([])
+})

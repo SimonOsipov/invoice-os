@@ -578,3 +578,25 @@ func TestMarks_ObjectCopiedFromTheMessageWithADotInAQuotedNameReleases(t *testin
 		t.Fatal("want pass")
 	}
 }
+
+func TestAdversarial_QuoteFormsDoNotHideALaterDrop(t *testing.T) {
+	for _, d := range []string{
+		`x'it''s'`, `X'1F'`, `e'a\\'`, `e'a\'b'`, `U&'d\0061t\+000061'`, `u&'it''s'`,
+		`''`, `'a''b'`, `$a$ it's $a$`, `$$ " $$`, `$$$$`, `$t$ $$ ' $t$`, `'$$'`, `"a$b"`, `"$$"`,
+		`ne'a'`, `B'101'`, `'a'', DROP COLUMN z'`, `'a''b'`,
+	} {
+		sql := `ALTER TABLE t ADD COLUMN x text DEFAULT ` + d + `, DROP COLUMN y;`
+		if got := objects(scanUp(t, sql)); !slices.Equal(got, []string{"t.y"}) {
+			t.Errorf("%s: got %q, want [t.y]", d, got)
+		}
+	}
+	if got := objects(scanUp(t, `ALTER TABLE t DROP COLUMN "a$$b", DROP COLUMN z;`)); !slices.Equal(got, []string{"t.a$$b", "t.z"}) {
+		t.Errorf("dollar in quoted identifier: got %q", got)
+	}
+	if got := objects(scanUp(t, `ALTER TABLE t ADD COLUMN a$b$ int, DROP COLUMN y;`)); !slices.Equal(got, []string{"t.y"}) {
+		t.Errorf("dollar after an identifier char: got %q", got)
+	}
+	if got := objects(scanUp(t, `ALTER TABLE t ADD COLUMN x text DEFAULT 'a', DROP COLUMN y;`)); !slices.Equal(got, []string{"t.y"}) {
+		t.Errorf("plain default: got %q", got)
+	}
+}

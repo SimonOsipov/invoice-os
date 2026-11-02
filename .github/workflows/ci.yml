@@ -198,7 +198,7 @@ jobs:
     # builds/vets/tests the pure-Go units.
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           # No dependencies / go.sum yet — nothing to cache. Enable in M2.
@@ -339,7 +339,7 @@ jobs:
       # TestCommittedGatewayBuildTagsAreEmpty reads this file.
       - name: Restore the committed build.tags
         run: git checkout -- cmd/gateway/build.tags
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Scan both gateway binaries for the minting path
@@ -627,7 +627,7 @@ jobs:
       DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false
@@ -755,7 +755,7 @@ jobs:
       DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false
@@ -927,7 +927,7 @@ jobs:
       DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false
@@ -1003,7 +1003,7 @@ jobs:
       DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false
@@ -1116,7 +1116,7 @@ jobs:
       DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false
@@ -1305,7 +1305,7 @@ jobs:
             exit 1
           fi
       # Go from scratch — no module/build cache.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false
@@ -1345,7 +1345,7 @@ jobs:
           # The scan diffs against the merge base, so a shallow clone would make
           # it silently find nothing — the failure mode it is built to catch.
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       # Proves the detector still fires on its pinned known positives before its
@@ -1374,7 +1374,7 @@ jobs:
         with:
           # The check needs the merge base; a shallow clone has none.
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Prove the check fires (pinned PR #142 break)
@@ -1399,7 +1399,7 @@ jobs:
         with:
           # Diffs against the merge base; a shallow clone has none.
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Prove the detector fires (known positives)
@@ -1438,7 +1438,7 @@ jobs:
       pull-requests: read
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       # The gate asserts an ABSENCE, so it proves it can still decide before its
@@ -1463,7 +1463,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Scan for high or critical advisories
@@ -1475,7 +1475,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       # Pinned: a scanner release must not change the verdict between two runs.

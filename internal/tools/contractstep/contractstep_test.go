@@ -710,6 +710,12 @@ func TestMarks_QuotedMixedCaseNameIsAnotherObject(t *testing.T) {
 	}
 }
 
+func TestMarks_MarkIgnoresCaseOfAQuotedName(t *testing.T) {
+	if _, failed := evalUp(t, "-- contract-step foo: why\nDROP TABLE \"Foo\";"); failed {
+		t.Fatal("a mark for foo must release the drop of \"Foo\": mark matching ignores case")
+	}
+}
+
 func TestUpSection_ReadsGooseAnnotationsLikeGoose(t *testing.T) {
 	r, err := Scan(testFile, "-- +goose up\nSELECT 1;\n-- +goose down\nDROP TABLE t;\n")
 	if err != nil || len(r.Triggers) != 0 {

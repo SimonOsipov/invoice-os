@@ -15,7 +15,19 @@ type Trigger struct {
 	Object    string
 	kind      string
 	parts     []string
+	fold      []string
 	n         int
+}
+
+// ident is a name part as written and as Postgres folds it: quoted keeps case, bare goes lower.
+type ident struct{ text, fold string }
+
+func texts(ids []ident) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = id.text
+	}
+	return out
 }
 
 type Mark struct {
@@ -125,7 +137,7 @@ func dollarEnd(src string, i int) int {
 func skipSpan(src string, i int) (end int, what string) {
 	switch c := src[i]; {
 	case c == '-' && strings.HasPrefix(src[i:], "--"):
-		if n := strings.IndexByte(src[i:], '\n'); n >= 0 {
+		if n := strings.IndexAny(src[i:], "\r\n"); n >= 0 {
 			return i + n, "line comment"
 		}
 		return len(src), "line comment"
@@ -200,10 +212,10 @@ type cursor struct {
 	i int
 }
 
-// ws skips whitespace as the regexp \s does, and comments (a dollar-quoted body keeps its own).
+// ws skips the whitespace Postgres accepts, and comments (a dollar-quoted body keeps its own).
 func (c *cursor) ws() {
 	for c.i < len(c.s) {
-		if strings.IndexByte(" \t\r\n\f", c.s[c.i]) >= 0 {
+		if strings.IndexByte(" \t\r\n\f\v", c.s[c.i]) >= 0 {
 			c.i++
 		} else if end, what := skipSpan(c.s, c.i); strings.HasSuffix(what, "comment") {
 			if c.i = end; end < 0 {
@@ -242,15 +254,15 @@ func (c *cursor) peek() byte {
 }
 
 // part reads one identifier or "quoted identifier" (with "" escapes), quotes removed.
-func (c *cursor) part() string {
+func (c *cursor) part() ident {
 	if c.i < len(c.s) && c.s[c.i] == '"' {
 		end := quoteEnd(c.s, c.i)
 		if end < 0 {
-			return ""
+			return ident{}
 		}
 		p := strings.ReplaceAll(c.s[c.i+1:end], `""`, `"`)
 		c.i = end + 1
-		return p
+		return ident{p, p}
 	}
 	j := c.i
 	for j < len(c.s) && isIdent(c.s[j]) {
@@ -258,16 +270,16 @@ func (c *cursor) part() string {
 	}
 	p := c.s[c.i:j]
 	c.i = j
-	return p
+	return ident{p, strings.ToLower(p)}
 }
 
 // name reads a dotted name; nil when the text holds none (for example %I).
-func (c *cursor) name() []string {
+func (c *cursor) name() []ident {
 	c.ws()
-	var parts []string
+	var parts []ident
 	for {
 		p := c.part()
-		if p == "" {
+		if p.text == "" {
 			return nil
 		}
 		parts = append(parts, p)
@@ -315,16 +327,16 @@ func dotted(parts []string) string {
 	return strings.Join(q, ".")
 }
 
-func newTrigger(stmt, kind string, parts []string, n int) Trigger {
-	low := make([]string, len(parts))
-	for i, p := range parts {
-		low[i] = strings.ToLower(p)
+func newTrigger(stmt, kind string, ids []ident, n int) Trigger {
+	low, fold := make([]string, len(ids)), make([]string, len(ids))
+	for i, id := range ids {
+		low[i], fold[i] = strings.ToLower(id.text), id.fold
 	}
-	return Trigger{Statement: stmt, Object: dotted(parts), kind: kind, parts: low, n: n}
+	return Trigger{Statement: stmt, Object: dotted(texts(ids)), kind: kind, parts: low, fold: fold, n: n}
 }
 
-// key names the object a mark claims: its kind and its name as written.
-func (t Trigger) key() string { return t.kind + " " + strings.Join(t.parts, ".") }
+// key names the object a mark claims: its kind and its name as Postgres folds it.
+func (t Trigger) key() string { return t.kind + " " + strings.Join(t.fold, ".") }
 
 func findTriggers(seg string) []Trigger {
 	var out []Trigger
@@ -347,7 +359,7 @@ func findTriggers(seg string) []Trigger {
 				if parts == nil {
 					break
 				}
-				stmt := "DROP " + kind + " " + dotted(parts)
+				stmt := "DROP " + kind + " " + dotted(texts(parts))
 				if kind == "FUNCTION" && c.peek() == '(' {
 					stmt += "(" + strings.TrimSpace(c.args()) + ")"
 				}
@@ -425,10 +437,10 @@ func blank(s string) string {
 	return b.String()
 }
 
-func actionTrigger(table []string, action string) []Trigger {
+func actionTrigger(table []ident, action string) []Trigger {
 	c := &cursor{s: action}
-	t := dotted(table)
-	col := func(name string) []string { return append(slices.Clone(table), name) }
+	t := dotted(texts(table))
+	col := func(name ident) []ident { return append(slices.Clone(table), name) }
 	switch {
 	case c.kw("DROP"):
 		if c.kw("CONSTRAINT") {
@@ -437,7 +449,7 @@ func actionTrigger(table []string, action string) []Trigger {
 		c.kw("COLUMN")
 		c.kw("IF", "EXISTS")
 		if name := c.name(); len(name) == 1 {
-			return []Trigger{newTrigger("ALTER TABLE "+t+" DROP COLUMN "+name[0], "column", col(name[0]), 2)}
+			return []Trigger{newTrigger("ALTER TABLE "+t+" DROP COLUMN "+name[0].text, "column", col(name[0]), 2)}
 		}
 	case c.kw("RENAME"):
 		if c.kw("CONSTRAINT") {
@@ -445,14 +457,14 @@ func actionTrigger(table []string, action string) []Trigger {
 		}
 		if c.kw("TO") {
 			if u := c.name(); u != nil {
-				return []Trigger{newTrigger("ALTER TABLE "+t+" RENAME TO "+strings.Join(u, "."), "table", table, 1)}
+				return []Trigger{newTrigger("ALTER TABLE "+t+" RENAME TO "+strings.Join(texts(u), "."), "table", table, 1)}
 			}
 			return nil
 		}
 		c.kw("COLUMN")
 		if a := c.name(); len(a) == 1 && c.kw("TO") {
 			if b := c.name(); len(b) == 1 {
-				return []Trigger{newTrigger("ALTER TABLE "+t+" RENAME COLUMN "+a[0]+" TO "+b[0], "column", col(a[0]), 2)}
+				return []Trigger{newTrigger("ALTER TABLE "+t+" RENAME COLUMN "+a[0].text+" TO "+b[0].text, "column", col(a[0]), 2)}
 			}
 		}
 	case c.kw("ALTER"):

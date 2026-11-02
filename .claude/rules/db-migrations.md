@@ -69,6 +69,7 @@ paths:
 - Mark no DROP CONSTRAINT, INDEX, TRIGGER, DEFAULT, NOT NULL, SCHEMA, VIEW, MATERIALIZED VIEW, PROCEDURE, ROUTINE, AGGREGATE, DOMAIN or FOREIGN TABLE, and no SET SCHEMA. The check ignores them.
 - The `Schema deletion` job checks the migrations that a change adds. It fails an unmarked drop, a mark with no reason, and a mark that names no statement.
 - The job gets the base SHA of the PR, or the previous commit on a push. An empty or all-zero base fails the job.
+- A `workflow_dispatch` run passes `HEAD` as the base, so it checks nothing.
 - The job fails when it cannot run.
 - Run the check locally with `go run ./internal/tools/contractstep -base origin/<the PR's base branch>`.
 - Run migrations only in `cmd/migrate`, the job that runs before each deploy. No service migrates at boot.

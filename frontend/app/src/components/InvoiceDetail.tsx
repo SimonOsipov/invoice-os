@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 
-import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
+import { ApiError, EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
 import { closeGlyph, plusGlyph } from '../glyphs'
 import { actorLabel } from '../lib/actor'
@@ -326,6 +326,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   // Single-invoice approve machine (task-547), same reducer/ref shape as Submit above.
   const [approvePhase, setApprovePhase] = useState<BulkPhase>('idle')
   const approveInFlight = useRef(false)
+  // A 403 on confirm: the server refused this seat, so keep Approve off until the page reloads.
+  const [approveRefused, setApproveRefused] = useState(false)
 
   // Inline reject row (task-547) -- resolve-outside's state shape, plus its own in-flight
   // ref (submitInFlight's stronger precedent, not resolve-outside's state-only guard).
@@ -513,7 +515,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     // (non-optimistic, AC-6) -> refetch trio -> catch surfaces the server's own sentence.
     const handleApprove = async () => {
       setDecisionError(null)
-      if (!inv.can_approve) return
+      if (!inv.can_approve || approveRefused) return
       if (!toApprovePhase({ type: 'confirm' })) return // no arm => no request
       if (approveInFlight.current) return
       approveInFlight.current = true
@@ -525,6 +527,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         history.run()
         approval.run()
       } catch (err) {
+        if (err instanceof ApiError && err.status === 403) setApproveRefused(true)
         setDecisionError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
       } finally {
         // Functional setter -- see handleSubmit's own finally comment below; same stale-
@@ -707,12 +710,12 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         type="button"
                         data-testid="detail-approve"
                         onClick={() => toApprovePhase({ type: 'arm' })}
-                        disabled={!inv.can_approve}
+                        disabled={!inv.can_approve || approveRefused}
                         title={!inv.can_approve ? (inv.approve_blocked_reason ?? undefined) : undefined}
                         className="v2-btn v2-btn-primary pf-btn"
                         style={{
                           height: 34,
-                          ...(!inv.can_approve
+                          ...(!inv.can_approve || approveRefused
                             ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }
                             : null),
                         }}
@@ -764,6 +767,11 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       {DETAIL_DECISION_COPY.reject}
                     </button>
                   </div>
+                  {inv.approve_blocked_by_creator && inv.approve_blocked_reason != null && (
+                    <div data-testid="detail-approve-creator-reason" style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>{inv.approve_blocked_reason}</div>
+                    </div>
+                  )}
                   {/* Founder-pinned copy, verbatim (DETAIL_DECISION_COPY) -- same placement
                       and styling as detail-submit-confirm-prompt below. */}
                   {approvePhase !== 'idle' && (

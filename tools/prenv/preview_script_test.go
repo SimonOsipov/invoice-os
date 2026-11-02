@@ -16,6 +16,7 @@ import (
 
 const previewGcloudShim = `echo "$*" >> "$D/calls"
 [ ! -e "$D/fail-$1-$2" ] || { echo "ERROR: gcloud $1 $2 failed" >&2; exit 1; }
+[ ! -e "$D/failonce-$1-$2" ] || { rm "$D/failonce-$1-$2"; echo "ERROR: gcloud $1 $2 failed once" >&2; exit 1; }
 case "$1 $2 $3" in
 "run deploy "*)
   prev=
@@ -117,6 +118,7 @@ func runPreviewEnv(t *testing.T, env []string, setup func(dir string), args ...s
 	writeShim(t, filepath.Join(shims, "gcloud"), "D='"+dir+"'\n"+previewGcloudShim)
 	writeShim(t, filepath.Join(shims, "go"), "shift 2\nexec '"+binPath+"' \"$@\"\n")
 	writeShim(t, filepath.Join(shims, "curl"), previewCurlShim("D='"+dir+"'\n"))
+	writeShim(t, filepath.Join(shims, "sleep"), "exit 0\n") // a retry wait costs no time
 	cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "scripts/ci/preview.sh")}, args...)...)
 	cmd.Dir = dir
 	cmd.Env = append(append(os.Environ(), append([]string{"RUNNER_TEMP=" + dir}, env...)...), "PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -1028,6 +1030,45 @@ func TestPreviewMailReadCommandsReadOneSecret(t *testing.T) {
 			wantCall := "secrets versions access latest --secret " + name + " "
 			if r.code != 0 || r.stdout != shimOutput || len(calls) != 1 || !strings.HasPrefix(calls[0], wantCall) {
 				t.Fatalf("exit %d, stdout %q, calls %v", r.code, r.stdout, calls)
+			}
+		})
+	}
+}
+
+// secretReads are the three preview.sh subcommands that read one secret with gcloud.
+var secretReads = []struct{ cmd, secret string }{
+	{"contact-token", "nightly-hubspot-token"},
+	{"mail-read-key", "nightly-resend-read-key"},
+	{"mail-domain", "nightly-resend-receiving-domain"},
+}
+
+func TestPreviewSecretReadRetriesOneTransientFailure(t *testing.T) {
+	t.Parallel()
+	const value = "s3cret-value"
+	for _, c := range secretReads {
+		t.Run(c.cmd, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, func(dir string) {
+				writeIn(t, dir, "failonce-secrets-versions", "")
+				writeIn(t, dir, "access-"+c.secret, value)
+			}, c.cmd, "nightly")
+			calls := nonBlankLines(r.file(t, "calls"))
+			if r.code != 0 || r.stdout != value || strings.Contains(r.stderr, value) || len(calls) != 2 {
+				t.Fatalf("exit %d, stdout %q, stderr %q, calls %v", r.code, r.stdout, r.stderr, calls)
+			}
+		})
+	}
+}
+
+func TestPreviewSecretReadGivesUpAfterThreeTries(t *testing.T) {
+	t.Parallel()
+	for _, c := range secretReads {
+		t.Run(c.cmd, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, func(dir string) { writeIn(t, dir, "fail-secrets-versions", "") }, c.cmd, "nightly")
+			calls := nonBlankLines(r.file(t, "calls"))
+			if r.code == 0 || len(calls) != 3 || !strings.Contains(r.stderr, "ERROR: gcloud secrets versions failed") || r.stdout != "" {
+				t.Fatalf("exit %d, stdout %q, stderr %q, calls %v", r.code, r.stdout, r.stderr, calls)
 			}
 		})
 	}

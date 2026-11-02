@@ -949,7 +949,7 @@ func TestApprove_SatisfiedStepUpdateAffectsNoRowsAndWritesNoDecision(t *testing.
 		t.Helper()
 		err = db.WithinTenantTx(context.Background(), app, f.tenantID, func(tx pgx.Tx) error {
 			var callErr error
-			satisfied, callErr = commitDecisionTx(context.Background(), tx, f.invoiceID, number, f.tenantID, f.runID, f.stepID, 0, "approved", "commit-tx-actor", nil, nil)
+			satisfied, callErr = commitDecisionTx(context.Background(), tx, f.invoiceID, number, f.tenantID, f.runID, f.stepID, 0, "approved", "commit-tx-actor", nil, false, nil)
 			return callErr
 		})
 		return satisfied, err

@@ -223,7 +223,10 @@ func SetRoleMembersHandler(staff RoleStaffer, log *slog.Logger) http.HandlerFunc
 // axis (AXIS 1: not an approver at all; AXIS 2: an approver but not this step's role
 // holder) so the two stay distinguishable on the wire.
 func decisionStatusForErr(err error) (status int, msg string) {
+	var refused *creatorRefusal
 	switch {
+	case errors.As(err, &refused):
+		return http.StatusForbidden, refused.reason
 	case errors.Is(err, db.ErrNoTenant):
 		return http.StatusUnauthorized, "unauthorized"
 	case errors.Is(err, db.ErrNotActiveMember):

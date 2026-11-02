@@ -716,6 +716,28 @@ func TestMarks_MarkIgnoresCaseOfAQuotedName(t *testing.T) {
 	}
 }
 
+func TestMarks_PostgresFoldedSpellingsAreOneObject(t *testing.T) {
+	for _, drops := range []string{"DROP TABLE foo; DROP TABLE FOO;", "DROP TABLE \"foo\"; DROP TABLE foo;"} {
+		r := scanUp(t, "-- contract-step foo: why\n"+drops)
+		if len(r.Triggers) != 2 {
+			t.Fatalf("%q: want 2 triggers, got %d", drops, len(r.Triggers))
+		}
+		if lines, failed := Evaluate([]Result{r}); failed {
+			t.Errorf("%q: one mark must release both spellings of one table: %q", drops, lines)
+		}
+	}
+}
+
+func TestMarks_CRInAMarkReasonEndsTheCommentNotTheNextStatement(t *testing.T) {
+	r := scanUp(t, "-- contract-step foo: why\rDROP TABLE bar;")
+	if len(r.Marks) != 1 || r.Marks[0].Reason != "why" {
+		t.Fatalf("marks: %+v", r.Marks)
+	}
+	if lines, failed := Evaluate([]Result{r}); !failed || len(lines) == 0 {
+		t.Fatalf("drop of bar after a CR must stay unmarked: %q", lines)
+	}
+}
+
 func TestUpSection_ReadsGooseAnnotationsLikeGoose(t *testing.T) {
 	r, err := Scan(testFile, "-- +goose up\nSELECT 1;\n-- +goose down\nDROP TABLE t;\n")
 	if err != nil || len(r.Triggers) != 0 {

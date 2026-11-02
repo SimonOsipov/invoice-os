@@ -62,7 +62,7 @@ paths:
 - Drop or rename a column or table in a later deploy, after no running revision reads it.
 - Mark every DROP COLUMN, DROP TABLE, RENAME of a column or table, DROP FUNCTION and DROP TYPE in an Up section. The check reads each action of a multi-action ALTER TABLE.
 - Mark a deliberate deletion in the Up section: `-- contract-step <object>: <why no running revision reads it>`. Mark only when no running revision reads the object.
-- Name a column `table.column`, a rename by its old name, and a function without arguments. One mark releases one object: a kind and a name as written.
+- Name a column `table.column`, a rename by its old name, and a function without arguments. One mark releases one object: a kind and a name.
 - Write one mark for each object. A table and a function with one name need two marks. Overloads of one function are one object.
 - Mark a drop-and-recreate of a function.
 - Write the mark outside a dollar-quoted body. The check does not read inside one.

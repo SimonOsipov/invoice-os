@@ -109,6 +109,13 @@ describe('auditCsv', () => {
     expect(csv, 'raw JSON syntax ("{") leaked into the CSV').not.toContain('{')
   })
 
+  it('auditCsv_selfApprovedLabel: the label column reads Self-approved, the raw event stays, no payload value enters', () => {
+    const csv = auditCsv([makeEvent({ event: 'invoice.approval_approved', payload: { approved_as: 'self_approved' } })])
+    const line = csv.split('\n')[1]!
+    expect(line).toContain('Self-approved,invoice.approval_approved,')
+    expect(line).not.toContain('self_approved')
+  })
+
   it('auditCsv_whenIsAbsoluteIso: When is the created_at ISO string verbatim, never relative', () => {
     const event = makeEvent({ created_at: '2026-08-20T09:15:00Z' })
 

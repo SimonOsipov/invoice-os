@@ -1282,3 +1282,11 @@ describe('InvoiceActivityCard takes the v2 look (RESKIN2-03-02)', () => {
   })
 })
 
+describe('InvoiceActivityCard self-approved', () => {
+  it('activityCard_selfApprovedPrintsItsLabel', async () => {
+    mockFetch(logResponse({ events: [auditEvent({ event: APPROVALS_EVENT, payload: { id: INVOICE_ID, approved_as: 'self_approved' } })] }))
+    renderCard()
+    await loaded()
+    expect(screen.getByTestId('audit-what').textContent).toBe('Self-approved')
+  })
+})

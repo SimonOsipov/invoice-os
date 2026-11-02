@@ -68,7 +68,7 @@ export interface AuditRowProps {
 
 export function AuditRow({ event, expanded, onToggle, onFilterToInvoice, variant = 'audit' }: AuditRowProps) {
   const audit = variant === 'audit'
-  const view = auditEventView(event.event)
+  const view = auditEventView(event.event, event.payload)
   const inv = invoiceRef(event.payload)
   const payload = asRecord(event.payload)
   const keys = payload ? Object.keys(payload) : []

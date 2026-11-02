@@ -3112,3 +3112,15 @@ describe('ROUTE-04-06 AC-3/AC-4: a cold-seeded invoice filter renders honestly a
   })
 })
 
+describe('AuditView self-approved', () => {
+  it('auditRow_selfApprovedPrintsItsLabel', async () => {
+    const events = [
+      auditEvent({ id: 'evt-self', event: 'invoice.approval_approved', payload: { approved_as: 'self_approved' } }),
+      auditEvent({ id: 'evt-plain', event: 'invoice.approval_approved', payload: { approved_as: 'approver' } }),
+    ]
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(logResponse({ events, total: 2 }))))
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(screen.getAllByTestId('audit-what').length).toBe(2))
+    expect(screen.getAllByTestId('audit-what').map((e) => e.textContent)).toEqual(['Self-approved', 'Approved'])
+  })
+})

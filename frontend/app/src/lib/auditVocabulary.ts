@@ -129,8 +129,14 @@ export interface AuditEventView {
 
 // An unrecognised identifier still renders a readable label -- never the raw string as the
 // primary label -- and never takes a tone, because nothing proves it bears an outcome.
-export function auditEventView(event: string): AuditEventView {
+export function auditEventView(event: string, payload?: unknown): AuditEventView {
   const def = AUDIT_EVENTS[event]
+  if (
+    event === 'invoice.approval_approved' &&
+    (payload as { approved_as?: unknown } | null | undefined)?.approved_as === 'self_approved'
+  ) {
+    return { label: 'Self-approved', domain: def.domain, tone: TONE.good }
+  }
   if (!def) return { label: humanise(event), domain: null, tone: null }
   return { label: def.label, domain: def.domain, tone: def.outcome ? TONE[def.outcome] : null }
 }

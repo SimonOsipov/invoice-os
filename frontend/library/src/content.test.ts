@@ -87,6 +87,13 @@ describe('content', () => {
     for (const id of COMING_SOON_IDS) expect(FEATURES.map((f) => f.id)).toContain(id)
   })
 
+  it('content_approvalQueueStatesTheCreatorRule', () => {
+    const f = byId('approval-queue')
+    expect(f.desc).toContain('The creator of an invoice cannot approve it, unless they are the only approver of that client.')
+    expect(COMING_SOON_IDS).not.toContain('approval-queue')
+    expect(f.benefits).toHaveLength(3)
+  })
+
   it('content_marksTheOtherTwentyFourShipped', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped').map((f) => f.id)
     expect(shipped).toEqual(['import-files', 'create-invoice', 'invoice-status', 'credit-notes', 'read-documents', 'review-fields', 'learns',

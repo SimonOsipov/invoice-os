@@ -46,6 +46,8 @@ export type ApprovalPhase = 'idle' | 'armed' | 'submitting'
 // (A02-15; ApprovalPendingView's roleTitle repeats the same em-dash convention below).
 export interface ApprovalRowView {
   approvable: boolean
+  // Approvable, or refused only because the caller created the invoice: the checkbox stays on.
+  selectable: boolean
   pendingOrd: number | null
   // Human-facing step label (G4, APPR-12-03): pending_ord is 0-based on the wire
   // (gate_test.go:1086 pins Ord 0 as a legitimate pending step) and null on a row with
@@ -67,6 +69,8 @@ export interface ApprovalsBarView {
   notReady: number
   countLabel: string
   note: string | null
+  // One `<numbers>: <reason>` line per distinct reason among the selected creator-refused rows.
+  refused: string[]
   submitLabel: string
   confirmPrompt: string
   confirmDetail: string
@@ -105,31 +109,41 @@ export function approvableIds(rows: InvoiceRecord[]): string[] {
   return rows.filter((row) => isApprovableRow(row)).map((row) => row.id)
 }
 
-// A plain filter over approvableIds(rows), a new array every call -- no instance-identity
+// A creator-refused row stays selectable so bulk approve can report it by number.
+export function isSelectableRow(row: Pick<InvoiceRecord, 'can_approve' | 'approve_blocked_by_creator'>): boolean {
+  return isApprovableRow(row) || row.approve_blocked_by_creator === true
+}
+
+export function selectableIds(rows: InvoiceRecord[]): string[] {
+  return rows.filter((row) => isSelectableRow(row)).map((row) => row.id)
+}
+
+// A plain filter over selectableIds(rows), a new array every call -- no instance-identity
 // guarantee here; that lives in [APPR-12-04]'s component effect (Plan gap G1).
 export function pruneApprovalSelection(sel: string[], rows: InvoiceRecord[]): string[] {
-  const approvable = new Set(approvableIds(rows))
-  return sel.filter((id) => approvable.has(id))
+  const selectable = new Set(selectableIds(rows))
+  return sel.filter((id) => selectable.has(id))
 }
 
 // Mirrors invoices.ts's selectAllState -- `every()` over an empty array is vacuously
 // true, so the empty-set case is guarded explicitly rather than relying on it.
 export function approvalSelectAllState(selected: string[], rows: InvoiceRecord[]): 'none' | 'some' | 'all' {
-  const approvable = approvableIds(rows)
-  if (approvable.length === 0) return 'none'
+  const selectable = selectableIds(rows)
+  if (selectable.length === 0) return 'none'
   const selectedSet = new Set(selected)
-  const matched = approvable.filter((id) => selectedSet.has(id)).length
+  const matched = selectable.filter((id) => selectedSet.has(id)).length
   if (matched === 0) return 'none'
-  return matched === approvable.length ? 'all' : 'some'
+  return matched === selectable.length ? 'all' : 'some'
 }
 
 export function approvalRowView(
-  row: Pick<InvoiceRecord, 'can_approve' | 'approve_blocked_reason' | 'approval'>,
+  row: Pick<InvoiceRecord, 'can_approve' | 'approve_blocked_by_creator' | 'approve_blocked_reason' | 'approval'>,
 ): ApprovalRowView {
   const approval = row.approval
   const pendingOrd = approval?.pending_ord ?? null
   return {
     approvable: isApprovableRow(row),
+    selectable: isSelectableRow(row),
     pendingOrd,
     stepLabel: pendingOrd == null ? '—' : `Step ${pendingOrd + 1}`,
     roleLabel: approval?.pending_role_title ?? '—',
@@ -148,9 +162,19 @@ export function approvalsBarView(
 ): ApprovalsBarView {
   // CONSUMED, never re-derived: this exact array is what the confirm handler sends.
   const eligible = pruneApprovalSelection(selected, rows)
-  const pageEligible = approvableIds(rows).length
-  const notReady = rows.length - pageEligible
+  const notReady = rows.length - selectableIds(rows).length
   const n = eligible.length
+  const eligibleSet = new Set(eligible)
+  const selectedRows = rows.filter((row) => eligibleSet.has(row.id))
+  // Only these are approved; the rest of `eligible` is posted so the server can refuse it.
+  const approvable = selectedRows.filter((row) => isApprovableRow(row)).length
+  const byReason = new Map<string, string[]>()
+  for (const row of selectedRows) {
+    if (isApprovableRow(row) || !row.approve_blocked_by_creator) continue
+    const reason = row.approve_blocked_reason ?? ''
+    byReason.set(reason, [...(byReason.get(reason) ?? []), row.invoice_number])
+  }
+  const refused = [...byReason].map(([reason, numbers]) => (reason ? `${numbers.join(', ')}: ${reason}` : numbers.join(', ')))
   // ONE gate, shared by both actions: nothing may be sent while the page is being
   // replaced, and nothing may be sent twice.
   const open = !pageLoading && phase !== 'submitting'
@@ -165,14 +189,15 @@ export function approvalsBarView(
       notReady > 0
         ? `${notReady} of the ${rows.length} ${rows.length === 1 ? 'row' : 'rows'} on this page aren't eligible for approval.`
         : null,
-    submitLabel: `Approve ${n} on this page`,
+    refused,
+    submitLabel: `Approve ${approvable} on this page`,
     // Singular at one, so the prompt never reads "Approve 1 invoices".
-    confirmPrompt: `Approve ${n} ${n === 1 ? 'invoice' : 'invoices'}?`,
+    confirmPrompt: `Approve ${approvable} ${approvable === 1 ? 'invoice' : 'invoices'}?`,
     // Names the ACTION, never claims the OUTCOME: the page is a snapshot, and another
     // approver may act on one of these rows between this fetch and the confirm click.
     confirmDetail: `This can't be undone once you confirm, and another approver may have already acted on one of these rows.`,
-    confirmLabel: `Yes, approve ${n} now`,
-    canApprove: n > 0 && open,
+    confirmLabel: `Yes, approve ${approvable} now`,
+    canApprove: approvable > 0 && open,
   }
 }
 

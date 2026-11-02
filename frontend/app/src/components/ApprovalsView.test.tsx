@@ -1977,3 +1977,115 @@ describe('the Approvals grid keeps the buyer track', () => {
     for (const r of rows) expect(r.getAttribute('style')).toContain(tracks)
   })
 })
+
+describe('APPR-17-04: the creator rows in the queue', () => {
+  const CREATOR_REASON = 'You created this invoice, so another approver must approve it.'
+  const page = (n: number) => ({ limit: 50, offset: 0, total: n })
+  const creator = (id: string, num: string) =>
+    approvalRow({ id, invoice_number: num, can_approve: false, approve_blocked_by_creator: true, approve_blocked_reason: CREATOR_REASON })
+  const rowOf = (num: string) =>
+    within(screen.getByTestId('approvals-list')).getByText(num).closest('[data-testid="approval-row"]') as HTMLElement
+
+  it('queue_creatorRow_iconAndEnabledCheckbox', async () => {
+    const roleBlocked = approvalRow({ id: 'inv-r', invoice_number: 'INV-R', can_approve: false, approve_blocked_reason: 'No role.' })
+    mockBulkFetch([listResponse([creator('inv-c', 'INV-C'), roleBlocked, approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })], page(3))])
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-C')
+
+    const c = within(rowOf('INV-C'))
+    expect((c.getByTestId('approval-select-row') as HTMLInputElement).disabled).toBe(false)
+    expect(c.getByTestId('approval-blocked-icon')).toBeTruthy()
+    expect(c.getByTestId('approval-blocked-tip').textContent).toBe(CREATOR_REASON)
+    const r = within(rowOf('INV-R'))
+    expect((r.getByTestId('approval-select-row') as HTMLInputElement).disabled).toBe(true)
+    expect(r.getByTestId('approval-blocked-icon')).toBeTruthy()
+    expect(within(rowOf('INV-A')).queryByTestId('approval-blocked-icon')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    expect((c.getByTestId('approval-select-row') as HTMLInputElement).checked).toBe(true)
+    expect((r.getByTestId('approval-select-row') as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('queue_onlyCreatorSelected_noRequest', async () => {
+    const { fetchMock, approvalCalls } = mockBulkFetch([listResponse([creator('inv-c1', 'INV-C1'), creator('inv-c2', 'INV-C2')], page(2))])
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-C1')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+
+    expect((screen.getByTestId('approvals-bulk-submit') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTestId('approvals-bulk-refused-note').textContent).toBe(`INV-C1, INV-C2: ${CREATOR_REASON}`)
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    expect(screen.queryByTestId('approvals-bulk-confirm')).toBeNull()
+    expect(approvalCalls()).toHaveLength(0)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('queue_mixedSelection_reportsEachRefusalByNumber', async () => {
+    const ok = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    const own = creator('inv-c', 'INV-C')
+    const rows = [ok, own, approvalRow({ id: 'inv-r', invoice_number: 'INV-R', can_approve: false, approve_blocked_reason: 'No role.' })]
+    const { approvalCalls } = mockBulkFetch(
+      [listResponse(rows, page(3)), listResponse(rows, page(3))],
+      (id) => (id === 'inv-c' ? errorResponse(403, CREATOR_REASON) : approveOkResponse()),
+    )
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    expect(screen.getByTestId('approvals-bulk-refused-note').textContent).toBe(`INV-C: ${CREATOR_REASON}`)
+    expect(screen.getByTestId('approvals-bulk-bar').textContent).toContain('2 selected on this page')
+    expect(screen.getByTestId('approvals-bulk-submit').textContent).toBe('Approve 1 on this page')
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    expect(screen.getByTestId('approvals-bulk-confirm').textContent).toBe('Yes, approve 1 now')
+    fireEvent.click(screen.getByTestId('approvals-bulk-confirm'))
+
+    await waitFor(() => expect(approvalCalls()).toHaveLength(2))
+    const panel = await screen.findByTestId('approvals-results')
+    const resultRows = within(panel).getAllByTestId('approval-result-row')
+    expect(resultRows).toHaveLength(2)
+    const resA = within(resultRows.find((e) => e.textContent?.includes('INV-A')) as HTMLElement)
+    const resC = within(resultRows.find((e) => e.textContent?.includes('INV-C')) as HTMLElement)
+    expect(resA.getByText('Approved')).toBeTruthy()
+    expect(resC.getByText(CREATOR_REASON)).toBeTruthy()
+  })
+
+  it('queue_staleRow_reportsTheServersRefusal', async () => {
+    const stale = approvalRow({ id: 'inv-s', invoice_number: 'INV-S' })
+    const refused = creator('inv-s', 'INV-S')
+    mockBulkFetch(
+      [listResponse([stale], page(1)), listResponse([refused], page(1))],
+      () => errorResponse(403, CREATOR_REASON),
+    )
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-S')
+
+    fireEvent.click(screen.getByTestId('approval-select-row'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-confirm'))
+
+    const panel = await screen.findByTestId('approvals-results')
+    expect(within(panel).getByText(CREATOR_REASON)).toBeTruthy()
+    await waitFor(() => expect(within(rowOf('INV-S')).getByTestId('approval-blocked-icon')).toBeTruthy())
+    expect(within(rowOf('INV-S')).getByTestId('approval-blocked-tip').textContent).toBe(CREATOR_REASON)
+  })
+
+  it('queue_onlyOwnRows_areListed', async () => {
+    mockBulkFetch([listResponse([creator('inv-c1', 'INV-C1'), creator('inv-c2', 'INV-C2')], page(2))])
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-C1')
+
+    expect(screen.getAllByTestId('approval-row')).toHaveLength(2)
+    expect(screen.queryByTestId('approvals-empty')).toBeNull()
+    expect(screen.queryByTestId('approvals-empty-page')).toBeNull()
+  })
+
+  it('queue_noCheckboxWhileLoading', () => {
+    mockBulkFetch(['PENDING'])
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+
+    expect(screen.queryByTestId('approval-select-row')).toBeNull()
+    expect(screen.queryByTestId('approval-select-all')).toBeNull()
+    expect(screen.queryByTestId('approval-row')).toBeNull()
+  })
+})

@@ -22,7 +22,6 @@ import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice
 import { alertCircleGlyph } from '../glyphs'
 import {
   APPROVALS_COPY,
-  approvableIds,
   approvalOutcome,
   approvalProgressLabel,
   approvalRowView,
@@ -33,6 +32,7 @@ import {
   listAwaitingApproval,
   pruneApprovalSelection,
   reasonTipPosition,
+  selectableIds,
   type ApprovalPhase,
   type ApprovalResultRow,
 } from '../lib/approvals'
@@ -165,7 +165,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
   }
 
   function toggleAll() {
-    setSelected(allState === 'all' ? [] : approvableIds(rows))
+    setSelected(allState === 'all' ? [] : selectableIds(rows))
     disarm()
   }
 
@@ -323,6 +323,14 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
             </p>
           )}
 
+          {bar.refused.length > 0 && (
+            <p data-testid="approvals-bulk-refused-note" style={{ fontSize: 12, color: 'var(--fg-2)', margin: '8px 0 0', lineHeight: 1.55 }}>
+              {bar.refused.map((line) => (
+                <span key={line} style={{ display: 'block' }}>{line}</span>
+              ))}
+            </p>
+          )}
+
           {phase !== 'idle' && (
             <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--teal-200)' }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)', marginBottom: 2 }}>{bar.confirmPrompt}</div>
@@ -412,12 +420,12 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                       aria-label={approvalSelectRowLabel(r.invoice_number)}
                       checked={selected.includes(r.id)}
                       // The server's own answer, fail-closed -- no client-side conjunct.
-                      disabled={!av.approvable}
+                      disabled={!av.selectable}
                       title={reason ?? undefined}
                       aria-describedby={reason != null ? reasonId : undefined}
                       // Disabled-only: on an enabled control this would kill the legitimate
                       // hover affordance platform.css leaves unguarded.
-                      style={av.approvable ? CHECKBOX_STYLE : { ...CHECKBOX_STYLE, cursor: 'not-allowed', opacity: 0.5 }}
+                      style={av.selectable ? CHECKBOX_STYLE : { ...CHECKBOX_STYLE, cursor: 'not-allowed', opacity: 0.5 }}
                       onChange={() => {
                         setSelected((sel) => toggleSelection(sel, r.id))
                         disarm()

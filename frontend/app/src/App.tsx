@@ -2232,7 +2232,8 @@ export default function App() {
       },
       (err: unknown) => {
         console.warn('[app] hand-off redemption failed:', err)
-        // Exchange never answers 403. Without an invite a 403 is /me's: no workspace.
+        // Exchange never answers 403.
+        // Without an invite a 403 leaves for no-workspace: a live member with no tenant and no answers, a registered account blocked after a 409, or a tenancy without the field.
         // With one, only tenancy's three refusals carry a notice; every other failure is 'failed'.
         const dest =
           err instanceof InviteRefusedError

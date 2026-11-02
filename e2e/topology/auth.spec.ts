@@ -3647,7 +3647,7 @@ const FIRST_WORKSPACE_LINE =
 const CREATE_FAILED = 'We could not create your workspace. Try again.'
 const WORKSPACES_URL = `${GATEWAY_URL}/api/tenancy/v1/workspaces`
 
-// Answers one POST to `url` with `status`; the CORS preflight and other methods pass through.
+// Answers every POST to url with status until unrouted; the CORS preflight and other methods pass through.
 async function fakePostStatus(page: Page, url: string, status: number): Promise<void> {
   await page.route(url, (route) => {
     if (route.request().method() !== 'POST') return route.fallback()

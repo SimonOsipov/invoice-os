@@ -135,7 +135,11 @@ paths:
 - Keep the live stored session over a verify hand-off code. Show the confirmed notice and post no exchange.
 - Offer the invites from `GET /api/tenancy/v1/invitations/mine` when `/me` answers 403 and no invite is held.
 - Show a caller whose list is empty and whose `removed` is true the app's no-workspace screen. Provision for them only when they press Create a workspace.
-- Show a caller whose list is empty, whose `removed` is false and whose token holds no complete registration answers the first-workspace form. Provision only when they press Create a workspace; send them to `signin=failed` when their session cannot renew on that press.
+- Show the first-workspace form to a caller with an empty list, `removed` false, `live_membership` false and no complete answers.
+- Provision for that caller only when they press Create a workspace.
+- Send that caller to `signin=failed` on a 401 after the refresh attempt.
+- Send that caller to `signin=failed` when a Create fails with no refresh token.
+- Send a caller whose `live_membership` is not false, with no answers, to `signin=no-workspace`.
 - Set an invitee's password only after proof of the invited mailbox: the confirmation mail's set-password page.
 - Sign up an invite-link registration with a random password. Never store, log or return it.
 - Create no account on register for an address with a pending invite. Answer it as any other register.

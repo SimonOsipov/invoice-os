@@ -38,7 +38,7 @@ paths:
 - Install a trusted extension in a migration. Install an untrusted extension in `db/bootstrap.sql`.
 - Write `db/bootstrap.sql` so that Cloud SQL's `postgres` can run it: it is not a superuser. Set no SUPERUSER attribute; the guard refuses a superuser role.
 - Run `db/restore-check.sql` on Cloud SQL as `restore_auditor`: apply `db/restore-auditor.sql` once, then `SET ROLE restore_auditor`.
-- Grant `EXECUTE` on `public.invitation_by_token`, `public.pending_invites_for_email`, `public.identity_has_removed_membership`, the five-argument `public.accept_invitation`, the five-argument `public.accept_invitation_by_id`, `public.invitee_account_state` and `public.account_event_memberships` to `invoice_app` only.
+- Grant `EXECUTE` on `public.invitation_by_token`, `public.pending_invites_for_email`, `public.identity_has_removed_membership`, `public.identity_has_membership`, the five-argument `public.accept_invitation`, the five-argument `public.accept_invitation_by_id`, `public.invitee_account_state` and `public.account_event_memberships` to `invoice_app` only.
 - Give `invoice_app` SELECT and DELETE on `account_event_handoffs`, and SELECT, INSERT and DELETE on `account_known_devices`. Both are global: no RLS.
 - Grant `EXECUTE` on `public.purge_tenant` to `invoice_app` only. Call it inside `WithinTenantTx` for the tenant it purges, and commit right after it.
 - Expect `purge_tenant` to block every writer of `audit_log`, `approval_policy_versions` and `approval_policy_steps` until its transaction commits. It fails with `55P03` after 5 s behind another writer.

@@ -14,7 +14,7 @@ const WRAP = { overflowWrap: 'anywhere' } as const
 const INPUT = { width: '100%', boxSizing: 'border-box' } as const
 const LABEL = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, color: 'var(--fg-3)' } as const
 const NO_WORKSPACE_LINE = 'This account has no workspace yet. If you were invited, open the invite link in your email.'
-const FIRST_WORKSPACE_LINE = 'This account has no workspace yet. Create one below to get started. If you were invited, open the invite link in your email.'
+const FIRST_WORKSPACE_LINE = 'This account has no workspace yet. Create one below to get started. If you were invited, open the invite link in your email first. An account can belong to only one workspace, so creating one here blocks joining another.'
 const CREATE_FAILED = 'We could not create your workspace. Try again.'
 type Kind = 'firm' | 'in_house'
 // Labels match RegisterModal.tsx.

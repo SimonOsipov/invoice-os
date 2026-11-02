@@ -163,7 +163,7 @@ type MyPendingInvitationsFunc func(context.Context) (MyInvitations, error)
 // AcceptInvitationByIDFunc accepts invite id for the caller: tenant, subject, role.
 type AcceptInvitationByIDFunc func(context.Context, string, *string) (Tenant, string, string, error)
 
-// InvitationsMineHandler returns GET /v1/invitations/mine: 200 `{"invitations":[…],"removed":bool}`,
+// InvitationsMineHandler returns GET /v1/invitations/mine: 200 `{"invitations":[…],"removed":bool,"live_membership":bool}`,
 // the list never null. The store reads the caller's email from the identity header.
 func InvitationsMineHandler(list MyPendingInvitationsFunc, log *slog.Logger) http.HandlerFunc {
 	if log == nil {

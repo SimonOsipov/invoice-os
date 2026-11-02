@@ -3277,6 +3277,8 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AFailedAuditRollsTheJoinBack"},                                            // the invitee holds no membership before joining
 	{file: "internal/tenancy/staff_tenants_test.go", fn: "TestStoreStaffTenants_RefusesWithoutAStaffCaller"},                        // the control needs a UUID subject that reaches an unreachable pool; no database row is read
 	{file: "internal/tenancy/staff_tenants_test.go", fn: "TestStoreStaffTenant_MalformedIdOpensNoTransaction"},                      // the control needs a UUID subject that reaches an unreachable pool; no database row is read
+	{file: "internal/tenancy/join_test.go", fn: "TestMyPendingInvitations_LiveMembership"},                                          // the no-row cases need a caller with no membership
+	{file: "internal/tenancy/join_test.go", fn: "TestMyPendingInvitations_LiveMembershipReadsWithAnEmptyEmail"},                     // the control caller holds no membership
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TwoInvitesJoinOnceUnderRace"},                                             // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_SameInviteTwoConcurrentAcceptsJoinOnce"},                                  // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TokenLinkAfterJoinByIdIsNoLongerValid"},                                   // the invitee holds no membership before joining

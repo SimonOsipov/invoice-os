@@ -599,15 +599,17 @@ func joinCaller(ctx context.Context) (subject, email string, err error) {
 }
 
 // MyInvitations is the GET /v1/invitations/mine body: the live invites and
-// whether the caller holds a removed membership and no other.
+// whether the caller holds a removed membership and no other, and whether the
+// caller holds a live (non-removed) membership in any workspace.
 type MyInvitations struct {
-	Invitations []PendingInvite `json:"invitations"`
-	Removed     bool            `json:"removed"`
+	Invitations    []PendingInvite `json:"invitations"`
+	Removed        bool            `json:"removed"`
+	LiveMembership bool            `json:"live_membership"`
 }
 
 // MyPendingInvitations lists the live invites for the caller's email, soonest
 // expiry first, and says whether the caller was removed from a workspace and holds
-// no other membership. The removed flag is read by subject, so it also answers for an empty email.
+// no other membership. Both flags are read by subject, so they also answer for an empty email.
 func (s *Store) MyPendingInvitations(ctx context.Context) (MyInvitations, error) {
 	subject, email, err := joinCaller(ctx)
 	if err != nil {
@@ -616,7 +618,7 @@ func (s *Store) MyPendingInvitations(ctx context.Context) (MyInvitations, error)
 	out := MyInvitations{Invitations: []PendingInvite{}}
 	// The email filter and the function's membership filter are the guard.
 	err = db.WithinTenantTx(ctx, s.pool, uuid.Nil.String(), func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `SELECT public.identity_has_removed_membership($1)`, subject).Scan(&out.Removed); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT public.identity_has_removed_membership($1), public.identity_has_membership($1)`, subject).Scan(&out.Removed, &out.LiveMembership); err != nil {
 			return err
 		}
 		if email == "" {

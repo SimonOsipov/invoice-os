@@ -59,7 +59,7 @@ export interface PendingInvite {
   expires_at: string
 }
 
-// A tenant-less sign-in with invites waiting, or none (invites empty): a removed person, or `firstWorkspace` for an account with no answers. The Join screen resolves it (joinInvite, createOwnWorkspace).
+// A tenant-less sign-in with invites waiting, or none (invites empty): a removed person, or `firstWorkspace` for an account with no answers, no membership (`live_membership` false). The Join screen resolves it (joinInvite, createOwnWorkspace).
 export type JoinOffer = { kind: 'join'; token: string; refreshToken: unknown; invites: PendingInvite[]; answers: ProvisionBody | null; firstWorkspace?: true }
 
 export function isPendingInvites(body: unknown): body is { invitations: PendingInvite[] } {
@@ -91,6 +91,11 @@ function isEmptyInvites(body: unknown): boolean {
 // A missing or non-boolean key reads false (an old tenancy revision omits it).
 function isRemoved(body: unknown): boolean {
   return (body as { removed?: unknown } | null | undefined)?.removed === true
+}
+
+// Only an explicit false: a missing or non-boolean key reads as a live member, so no form.
+function hasNoLiveMembership(body: unknown): boolean {
+  return (body as { live_membership?: unknown } | null | undefined)?.live_membership === false
 }
 
 export function isJoinOffer(x: Session | JoinOffer): x is JoinOffer {
@@ -130,7 +135,10 @@ export async function redeemHandoff(base: string, code: string, state: string, n
       return { kind: 'join', token, refreshToken, invites: [], answers }
     }
     if (answers === null) {
-      return { kind: 'join', token, refreshToken, invites: [], answers: null, firstWorkspace: true }
+      if (hasNoLiveMembership(invites)) {
+        return { kind: 'join', token, refreshToken, invites: [], answers: null, firstWorkspace: true }
+      }
+      throw err
     }
     return provisionAndRead(base, { token, refreshToken }, answers, now, signal)
   }

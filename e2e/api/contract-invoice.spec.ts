@@ -154,6 +154,10 @@ const AWAITING_APPROVAL_REASON = 'This invoice is waiting on approval — it can
 // silent edit to the server cannot rewrite its own oracle. Deliberately distinct from
 // NOT_APPROVER_REASON above -- that one names the transmit door, this one the decision door.
 const APPROVE_NOT_APPROVER_REASON = 'Only an admin or a reviewer can approve or reject an invoice — ask an approver on your team.'
+// internal/approval/creator.go: CreatorRefusedReason, CreatorNoRoleHolderReason.
+const CREATOR_REFUSED_REASON = 'You created this invoice, so another approver must approve it.'
+const CREATOR_NO_ROLE_HOLDER_REASON =
+  'No other approver holds the role this step is waiting on. An admin must give one of them that role.'
 const APPROVE_NOT_VALIDATED_REASON = 'Only a validated invoice can be approved or rejected.'
 const APPROVE_RUN_CLOSED_REASON = "This invoice's approval run is already closed."
 const APPROVE_NOT_ROLE_HOLDER_REASON =
@@ -1460,13 +1464,15 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     // armedInvoice(): a fresh one-step policy naming roleKey, published, then a clean
     // invoice validated against it -- ApplyValidation's promotion arms exactly one open
     // run with one pending step (engine.go's ArmTx). Caller must delete policyId (D38).
-    async function armedInvoice(roleKey: string): Promise<{ invoiceId: string; policyId: string }> {
+    // The preparer creates by default, so `token` is no creator and may approve it.
+    async function armedInvoice(roleKey: string, createdBy?: string): Promise<{ invoiceId: string; policyId: string }> {
       const policy = await createApprovalPolicy(token, { name: freshPolicyName() })
       await putApprovalPolicyDraft(token, policy.id, { steps: [{ kind: 'approval', workflow_role_key: roleKey }] })
       await publishApprovalPolicy(token, policy.id)
 
       try {
-        const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-APPR-${freshTin()}`) })
+        const creator = createdBy ?? (await login({ ...PERSONAS.A, subject: PREPARER_SUBJECT }))
+        const created = await createInvoice(creator, { entity_id: entity.id, ...cleanInvoiceFields(`INV-APPR-${freshTin()}`) })
         const validated = await validateInvoice(token, created.id)
         expect(validated.status, 'the clean fixture should promote draft -> validated, arming a run').toBe('validated')
 
@@ -1491,6 +1497,50 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
         expect(res.status, "an admin staffed to the pending step's role can approve").toBe(200)
         const body = res.body as Record<string, unknown>
         expect(body.state, 'a single-step policy closes on its first decision').toBe('approved')
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('approve: the creator is refused with the sentence, and both wires say so', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo', token)
+      try {
+        // Only `token` holds cfo on tenant A, so the refusal also names the missing role holder.
+        const sentence = `${CREATOR_REFUSED_REASON} ${CREATOR_NO_ROLE_HOLDER_REASON}`
+        const res = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/approvals`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: { decision: 'approved' },
+        })
+        assertErrorEnvelope(res, 403, 'the creator approving their own invoice')
+        expect((res.body as Record<string, unknown>).error, 'the 403 carries the creator sentence verbatim').toBe(sentence)
+
+        const detail = await getInvoice(token, invoiceId)
+        expect(detail.approve_blocked_by_creator, 'the detail wire reads refused').toBe(true)
+        expect(detail.can_approve, 'a refused creator cannot approve').toBe(false)
+        expect(detail.approve_blocked_reason, 'the detail wire names the same sentence').toBe(sentence)
+        expect(detail.can_reject, 'the creator can still reject').toBe(true)
+
+        const list = await listInvoices(token, { entity_id: entity.id })
+        const row = list.invoices.find((i) => i.id === invoiceId)
+        expect(row, 'the fixture must appear in its own entity list').toBeDefined()
+        expect(row!.approve_blocked_by_creator, 'the list wire reads refused').toBe(true)
+        expect(row!.approve_blocked_reason, 'the list wire names the same sentence').toBe(sentence)
+      } finally {
+        await deleteApprovalPolicy(token, policyId)
+      }
+    })
+
+    test('reject: the creator can still reject', async () => {
+      const { invoiceId, policyId } = await armedInvoice('cfo', token)
+      try {
+        const res = await rawFetch(`/api/invoice/v1/invoices/${invoiceId}/approvals`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: { decision: 'rejected', reason: 'missing purchase order' },
+        })
+        expect(res.status, 'the creator rung refuses approve only').toBe(200)
+        expect((res.body as Record<string, unknown>).state, 'the reject closes the run').toBe('rejected')
       } finally {
         await deleteApprovalPolicy(token, policyId)
       }
@@ -1568,7 +1618,6 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       for (const k of ['can_approve', 'approve_blocked_reason', 'can_reject', 'reject_blocked_reason']) {
         expect(k in body, `GET should carry ${k}`).toBe(true)
       }
-      // ONE approvalGate call feeds both pairs, so they can never diverge on the wire.
       expect(body.can_approve, 'can_approve and can_reject must agree').toBe(body.can_reject)
       expect(body.approve_blocked_reason, 'both reasons must be the same sentence').toBe(body.reject_blocked_reason)
       return body
@@ -1912,9 +1961,8 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
         expect(approval, 'an armed invoice carries an approval object').not.toBeNull()
         expect(approval?.run_state, 'the newest run of an armed invoice is open').toBe('open')
 
-        // The deployed wire agrees with itself: ONE approvalGate call feeds both, so the
-        // same invoice read two ways cannot answer differently. An all-false pair would
-        // agree vacuously, so the allowed value is asserted too.
+        // The deployed wire agrees with itself. An all-false pair would agree vacuously, so
+        // the allowed value is asserted too.
         const detail = await approveFlags(invoiceId, token)
         expect(armedRow?.can_approve, 'list and detail must agree on can_approve').toBe(detail.can_approve)
         expect(armedRow?.approve_blocked_reason, 'list and detail must agree on the refusal').toBe(

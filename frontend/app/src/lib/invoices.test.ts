@@ -185,6 +185,7 @@ const draftInvoice: InvoiceRecord = {
   rule_set_version: null,
   can_approve: false,
   approve_blocked_reason: null,
+  approve_blocked_by_creator: false,
   can_submit: false,
   submit_blocked_reason: null,
   demotion: null,
@@ -3812,6 +3813,8 @@ describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regre
       // must NOT appear here.
       'can_approve',
       'approve_blocked_reason',
+      // +1 -- the creator rung's own flag, on both wires.
+      'approve_blocked_by_creator',
       // BUG-12: +2 -- the submit pair joins the list wire as a listItem sibling, from the
       // same submitGate call the detail wire already used.
       'can_submit',

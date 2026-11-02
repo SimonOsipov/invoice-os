@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -836,4 +837,28 @@ func TestApprovalRoutes_WrongMethodOnEitherSpellingIs405(t *testing.T) {
 			t.Errorf("Allow header = %q, want it to list POST", allow)
 		}
 	})
+}
+
+func TestDecisionStatusForErr_CreatorRefusalIs403WithItsSentence(t *testing.T) {
+	for _, reason := range []string{creatorSentence, creatorSentence + " " + noHolderSentence} {
+		err := fmt.Errorf("decide: %w", newCreatorRefused(reason))
+		if status, msg := decisionStatusForErr(err); status != http.StatusForbidden || msg != reason {
+			t.Errorf("decisionStatusForErr = %d %q, want 403 %q", status, msg, reason)
+		}
+
+		id := caller()
+		decide := func(context.Context, string, string, string) (Run, error) { return Run{}, err }
+		mux := http.NewServeMux()
+		mux.HandleFunc("POST /v1/invoices/{id}/approvals", DecideHandler(decide, nil))
+		req := httptest.NewRequest("POST", "/v1/invoices/"+runHandlerTestID+"/approvals", strings.NewReader(`{"decision":"approved"}`))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req.WithContext(auth.WithIdentity(req.Context(), id)))
+		if rec.Code != http.StatusForbidden || errorMessage(t, rec.Body.Bytes()) != reason {
+			t.Errorf("POST answered %d %s, want 403 with the sentence %q", rec.Code, rec.Body.String(), reason)
+		}
+	}
+	// Control: the role refusal keeps its own wording.
+	if status, msg := decisionStatusForErr(ErrNotRoleHolder); status != http.StatusForbidden || msg == creatorSentence {
+		t.Errorf("role refusal = %d %q, want 403 with its own message", status, msg)
+	}
 }

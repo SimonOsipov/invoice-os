@@ -416,4 +416,15 @@ describe('audit vocabulary', () => {
     expect(view.label.length).toBeGreaterThan(0)
     expect(view.tone).toBeNull()
   })
+
+  it('auditEventView_selfApprovedLabel', () => {
+    const self = auditEventView('invoice.approval_approved', { approved_as: 'self_approved' })
+    expect(self.label).toBe('Self-approved')
+    expect(self.tone).toBe('green')
+    expect(auditEventView('invoice.approval_approved', { approved_as: 'approver' }).label).toBe('Approved')
+    expect(auditEventView('invoice.approval_approved', {}).label).toBe('Approved')
+    expect(auditEventView('invoice.approval_approved', null).label).toBe('Approved')
+    expect(auditEventView('invoice.approval_approved').label).toBe('Approved')
+    expect(auditEventView('invoice.approval_rejected', { approved_as: 'self_approved' }).label).toBe('Rejected')
+  })
 })

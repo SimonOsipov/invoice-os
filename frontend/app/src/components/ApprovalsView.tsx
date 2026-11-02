@@ -22,7 +22,6 @@ import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice
 import { alertCircleGlyph } from '../glyphs'
 import {
   APPROVALS_COPY,
-  approvableIds,
   approvalOutcome,
   approvalProgressLabel,
   approvalRowView,
@@ -33,6 +32,7 @@ import {
   listAwaitingApproval,
   pruneApprovalSelection,
   reasonTipPosition,
+  selectableIds,
   type ApprovalPhase,
   type ApprovalResultRow,
 } from '../lib/approvals'
@@ -165,7 +165,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
   }
 
   function toggleAll() {
-    setSelected(allState === 'all' ? [] : approvableIds(rows))
+    setSelected(allState === 'all' ? [] : selectableIds(rows))
     disarm()
   }
 
@@ -173,9 +173,10 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
     // Reachable for the first time here: this is the only list.run() call site outside
     // the ErrorState retry path (G-04-H, InvoicesList.tsx:283's precedent).
     if (base == null) return
-    // `bar.eligible` is pruneApprovalSelection's output -- the ONLY thing that goes on
-    // the wire, never `selected`.
-    const ids = bar.eligible
+    // `bar.toSend` (selected rows loaded can_approve:true) is the ONLY thing that goes on
+    // the wire, never `selected`; creator-refused rows are reported locally.
+    const ids = bar.toSend
+    const localRefused = bar.localRefused
     if (ids.length === 0) return
     // Identity IS "do nothing": no arm ⇒ no request.
     if (!toPhase({ type: 'confirm' })) return
@@ -195,7 +196,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
         (_result, index) => setProgress({ done: index + 1, total: ids.length }),
         controller.signal,
       )
-      setResults(approvalOutcome(res, numbersById))
+      setResults([...localRefused, ...approvalOutcome(res, numbersById)])
     } finally {
       // Cleared deliberately, not inherited from useAsync nulling list.data (G-04-E):
       // the RESULTS PANEL carries the partial failure, not the selection.
@@ -323,6 +324,14 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
             </p>
           )}
 
+          {bar.refused.length > 0 && (
+            <p data-testid="approvals-bulk-refused-note" style={{ fontSize: 12, color: 'var(--fg-2)', margin: '8px 0 0', lineHeight: 1.55 }}>
+              {bar.refused.map((line) => (
+                <span key={line} style={{ display: 'block' }}>{line}</span>
+              ))}
+            </p>
+          )}
+
           {phase !== 'idle' && (
             <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--teal-200)' }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)', marginBottom: 2 }}>{bar.confirmPrompt}</div>
@@ -411,13 +420,13 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                       data-testid="approval-select-row"
                       aria-label={approvalSelectRowLabel(r.invoice_number)}
                       checked={selected.includes(r.id)}
-                      // The server's own answer, fail-closed -- no client-side conjunct.
-                      disabled={!av.approvable}
+                      // Creator-refused rows stay selectable so bulk approve can report them.
+                      disabled={!av.selectable}
                       title={reason ?? undefined}
                       aria-describedby={reason != null ? reasonId : undefined}
                       // Disabled-only: on an enabled control this would kill the legitimate
                       // hover affordance platform.css leaves unguarded.
-                      style={av.approvable ? CHECKBOX_STYLE : { ...CHECKBOX_STYLE, cursor: 'not-allowed', opacity: 0.5 }}
+                      style={av.selectable ? CHECKBOX_STYLE : { ...CHECKBOX_STYLE, cursor: 'not-allowed', opacity: 0.5 }}
                       onChange={() => {
                         setSelected((sel) => toggleSelection(sel, r.id))
                         disarm()

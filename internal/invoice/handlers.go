@@ -268,6 +268,8 @@ type listItem struct {
 	CanSubmit            bool               `json:"can_submit"`
 	SubmitBlockedReason  *string            `json:"submit_blocked_reason"`
 	Demotion             *Demotion          `json:"demotion"`
+	// ApproveBlockedByCreator is the creator rung's own answer, last so no key moves.
+	ApproveBlockedByCreator bool `json:"approve_blocked_by_creator"`
 }
 
 // --- handlers ----------------------------------------------------------------
@@ -438,8 +440,9 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 // appended last of all, and come from resolveOutsideGate below.
 //
 // CanApprove/ApproveBlockedReason/CanReject/RejectBlockedReason (APPR-08-06)
-// follow the same two rules, appended last of all, and come from ONE
-// approvalGate call -- approve and reject availability are identical.
+// follow the same two rules, appended last of all. The approve pair comes from
+// approveGate and the reject pair from approvalGate; they differ only at the
+// creator rung (TestApproveGate_CreatorRefused).
 //
 // CanCorrectInvoiceNumber/InvoiceNumberBlockedReason follow the same two rules,
 // appended last of all, from canCorrectNumber (store.go). The reason is non-null
@@ -470,6 +473,8 @@ type getResponse struct {
 	CanIssueNote                bool          `json:"can_issue_note"`
 	IssueNoteBlockedReason      *string       `json:"issue_note_blocked_reason"`
 	VerdictStale                bool          `json:"verdict_stale"`
+	// ApproveBlockedByCreator is last so no key moves.
+	ApproveBlockedByCreator bool `json:"approve_blocked_by_creator"`
 }
 
 // revalidateBlockedReason is the SINGLE, status-independent copy for a disabled
@@ -609,6 +614,25 @@ func approvalGate(s Status, role string, f ApprovalFacts) (bool, *string) {
 	return true, nil
 }
 
+// approveGate is approvalGate plus decideTx's creator rung, which sits after the run
+// rungs and before the role-holder rung. The third result is true only when the
+// creator rung refused. A CreatorErr skips the rung, so can_approve reads as the
+// other rungs answer.
+func approveGate(s Status, role string, f ApprovalFacts) (bool, *string, bool) {
+	probe := f
+	probe.CallerHoldsRole = true
+	if can, reason := approvalGate(s, role, probe); !can {
+		return false, reason, false
+	}
+	if f.CreatorErr == nil {
+		if reason, refused := f.Creator.Refusal(); refused {
+			return false, &reason, true
+		}
+	}
+	can, reason := approvalGate(s, role, f)
+	return can, reason, false
+}
+
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as
 // CreateHandler, reading r.PathValue("id"); 404 via ErrNotFound (covers both
 // a genuinely unknown id and a cross-tenant one, RLS-scoped 0-rows), 200 +
@@ -688,9 +712,11 @@ func GetHandler(
 
 		canResolveOutside, resolveOutsideReason := resolveOutsideGate(inv.Status, role)
 		canSubmitInv, submitReason := submitGate(inv.Status, role, facts.TransmitClear, facts.RulePending)
-		// ONE call feeds both pairs, so can_approve and can_reject cannot diverge
-		// (TestApprovalGate_ApproveAndRejectNeverDiverge).
-		canDecide, decideReason := approvalGate(inv.Status, role, facts)
+		if facts.CreatorErr != nil {
+			log.ErrorContext(r.Context(), "invoice: creator standing", slog.Any("err", facts.CreatorErr))
+		}
+		canReject, rejectReason := approvalGate(inv.Status, role, facts)
+		canApprove, approveReason, byCreator := approveGate(inv.Status, role, facts)
 
 		// Both action flags are read off the DERIVED predicates canEdit/
 		// canRevalidate (store.go), never a status switch here: a switch would be
@@ -719,10 +745,11 @@ func GetHandler(
 			UBLBlockedReason:            ublReason,
 			CanResolveOutside:           canResolveOutside,
 			ResolveOutsideBlockedReason: resolveOutsideReason,
-			CanApprove:                  canDecide,
-			ApproveBlockedReason:        decideReason,
-			CanReject:                   canDecide,
-			RejectBlockedReason:         decideReason,
+			CanApprove:                  canApprove,
+			ApproveBlockedReason:        approveReason,
+			CanReject:                   canReject,
+			RejectBlockedReason:         rejectReason,
+			ApproveBlockedByCreator:     byCreator,
 			CanCorrectInvoiceNumber:     canCorrectNumber(inv.Status, inv.EverSubmitted),
 			VerdictStale:                inv.VerdictStale,
 		}
@@ -1022,6 +1049,9 @@ func ListHandler(
 				writeError(w, http.StatusInternalServerError, "internal server error")
 				return
 			}
+			if gate.CreatorErr != nil {
+				log.ErrorContext(r.Context(), "invoice: list creator standing", slog.Any("err", gate.CreatorErr))
+			}
 		}
 
 		// make, not var: a nil []listItem marshals "invoices":null
@@ -1033,13 +1063,15 @@ func ListHandler(
 			if armed {
 				row.Approval = &f
 			}
-			// The SAME approvalGate GetHandler calls, so the two wires cannot
+			// The SAME approveGate GetHandler calls, so the two wires cannot
 			// disagree (TestListAndDetail_ApproveGateCannotDisagree). A pure
-			// call and two map lookups: no query enters this loop.
-			row.CanApprove, row.ApproveBlockedReason = approvalGate(inv.Status, gate.CallerRole, ApprovalFacts{
+			// call and map lookups: no query enters this loop.
+			row.CanApprove, row.ApproveBlockedReason, row.ApproveBlockedByCreator = approveGate(inv.Status, gate.CallerRole, ApprovalFacts{
 				RunState:        f.RunState,
 				PendingStepOrd:  f.PendingOrd,
 				CallerHoldsRole: gate.HoldsPendingRole[inv.ID],
+				Creator:         gate.Creator[inv.ID],
+				CreatorErr:      gate.CreatorErr,
 			})
 			// The SAME submitGate GetHandler calls.
 			// One map lookup: no query enters this loop.

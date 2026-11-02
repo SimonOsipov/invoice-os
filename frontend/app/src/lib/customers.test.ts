@@ -38,6 +38,7 @@ function invoiceRecord(overrides: Partial<InvoiceRecord> = {}): InvoiceRecord {
     rule_set_version: null,
     can_approve: false,
     approve_blocked_reason: null,
+    approve_blocked_by_creator: false,
     can_submit: false,
     submit_blocked_reason: null,
     demotion: null,

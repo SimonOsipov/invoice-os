@@ -31,6 +31,9 @@ paths:
 - Start every policy write with `requireActiveAdmin` inside its transaction.
 - Refuse a non-admin in portfolio `Store.Create` before the input check. A non-admin gets 403 whatever the input.
 - Decide a step on two axes. The caller is an active admin or reviewer, and holds the pending step's workflow role.
+- Refuse an approve by the invoice's creator before the second axis. Read the creator through `CreatorStandingTx` only.
+- Allow the creator when no other active admin or reviewer can reach the client. Write `approved_as = self_approved` in the audit payload.
+- Let the creator reject on the two axes.
 - Answer an unknown, cross-tenant, outside-the-client-set or malformed id with the same 404.
 - Accept only `All invoices` as a policy `scope`. The `CHECK` constraint enforces it.
 - Key approval policies by workspace, not by client company.

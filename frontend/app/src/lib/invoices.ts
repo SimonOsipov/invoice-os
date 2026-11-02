@@ -249,12 +249,14 @@ export interface InvoiceRecord {
   approval: InvoiceApproval | null
   // can_approve/approve_blocked_reason (APPR-12-09, U5) -- the ONE action pair the LIST
   // wire carries, so the queue can gate its Approve control per row without a fetch each.
-  // Go emits both on listItem AND on getResponse from the SAME approvalGate call
-  // (handlers.go), so InvoiceDetailRecord inherits these two rather than redeclaring
+  // Go emits both on listItem AND on getResponse from the SAME approveGate call
+  // (handlers.go), so InvoiceDetailRecord inherits these rather than redeclaring
   // them. REQUIRED, never `?`: an optional key lets a consumer read undefined and fail
   // OPEN. The REJECT pair stays detail-only (U5a) -- the queue has no reject action.
   can_approve: boolean
   approve_blocked_reason: string | null
+  // True only when the creator rung refused the approve; the reject pair ignores it.
+  approve_blocked_by_creator: boolean
   // can_submit/submit_blocked_reason -- the second such pair. Both wires carry them from
   // one submitGate call (handlers.go), so InvoiceDetailRecord inherits rather than
   // redeclares. REQUIRED, never `?`, for the same fail-open reason as can_approve.
@@ -305,7 +307,7 @@ export interface InvoiceApproval {
 // (APPR-08-06): all four are REQUIRED, never `?`.
 //
 // Two action pairs ride BOTH wires -- `can_approve`/`approve_blocked_reason` from one
-// approvalGate call, `can_submit`/`submit_blocked_reason` from one submitGate call -- so
+// approveGate call, `can_submit`/`submit_blocked_reason` from one submitGate call -- so
 // all four are declared on InvoiceRecord and INHERITED here, never redeclared, or the two
 // wires could drift. TestListHandler_NoActionFlagKeys asserts exactly those four present
 // and the rest absent; wireMirrors.test.ts's B12-9b pins the submit pair declared once.
@@ -325,10 +327,10 @@ export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval' | 'd
   // fail-closed convention as the four flags above.
   can_resolve_outside: boolean
   resolve_outside_blocked_reason: string | null
-  // can_reject/reject_blocked_reason (APPR-08-06) -- same convention again. Approve and
-  // reject availability are IDENTICAL (one backend gate feeds both), so these always
-  // agree with the inherited can_approve pair; they ship separately because the screen
-  // renders two buttons, each needing its own slot.
+  // can_reject/reject_blocked_reason (APPR-08-06) -- same convention again. They agree
+  // with the inherited can_approve pair except at the creator rung, where the creator
+  // may reject but not approve (approve_blocked_by_creator); the screen renders two
+  // buttons, each needing its own slot.
   can_reject: boolean
   reject_blocked_reason: string | null
   // Same convention; true only for a draft whose history never left draft/validated.
@@ -674,6 +676,7 @@ export function normaliseInvoiceRow(raw: InvoiceRecord): InvoiceRecord {
     approval,
     can_approve: raw.can_approve === true,
     approve_blocked_reason: raw.approve_blocked_reason ?? null,
+    approve_blocked_by_creator: raw.approve_blocked_by_creator === true,
     // Fail closed, same as getInvoice. tsc cannot force these two lines -- the body
     // spreads `...raw` -- so invoices.test.ts's B12-12 is their only oracle.
     can_submit: raw.can_submit === true,
@@ -762,6 +765,7 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     resolve_outside_blocked_reason: res.resolve_outside_blocked_reason ?? null,
     can_approve: res.can_approve === true,
     approve_blocked_reason: res.approve_blocked_reason ?? null,
+    approve_blocked_by_creator: res.approve_blocked_by_creator === true,
     can_reject: res.can_reject === true,
     reject_blocked_reason: res.reject_blocked_reason ?? null,
     can_correct_invoice_number: res.can_correct_invoice_number === true,

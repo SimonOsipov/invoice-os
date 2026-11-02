@@ -106,6 +106,7 @@ function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRec
     resolve_outside_blocked_reason: null,
     can_approve: false,
     approve_blocked_reason: null,
+    approve_blocked_by_creator: false,
     can_reject: false,
     reject_blocked_reason: null,
     can_correct_invoice_number: true,
@@ -3817,9 +3818,10 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
   // Row 14 only proves the AXIS-2 sentence renders exactly; it never checks the bar
   // recovers. Row "the error leg unsticks the bar" only proves recovery with a generic 500.
   // Neither pairs the two, and neither exercises AXIS-1 (ErrNotPermitted).
-  it('adversarial: a 403 (AXIS-1) unsticks the bar too, not just a generic 500', async () => {
+  it('adversarial: a 403 (AXIS-1) unsticks the bar, then APPR-17 holds Approve disabled', async () => {
     const sentence = 'only an approver can decide an approval step'
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }), [], {
+      detailSequence: [detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: false })],
       decideResponse: { ok: false, status: 403, json: () => Promise.resolve({ error: sentence }) },
     })
 
@@ -3828,7 +3830,7 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
     fireEvent.click(screen.getByTestId('detail-approve-confirm'))
 
     expect((await screen.findByTestId('detail-decision-error')).textContent).toBe(sentence)
-    expect((await screen.findByTestId('detail-approve') as unknown as HTMLButtonElement).disabled).toBe(false)
+    expect((await screen.findByTestId('detail-approve') as unknown as HTMLButtonElement).disabled).toBe(true)
   })
 
   // No row asserts the row actually CLOSES and the reason actually CLEARS on success --
@@ -4494,6 +4496,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
 
   // The edit form's invoice number cell.
   const EXTR_27_TESTIDS = ['edit-invoice-number']
+  const APPR_17_TESTIDS = ['detail-approve-creator-reason']
   const ENGI_17_TESTIDS = ['violation-explain']
   const ENGI_06_TESTIDS = ['buyer-type-note', 'line-nrs']
   const CRDDBTNOTE_02_TESTIDS = ['issue-credit-note', 'issue-debit-note', 'notes-card', 'notes-empty', 'still-creditable', 'note-row', 'note-row-open', 'note-row-type', 'note-row-status', 'note-row-total', 'document-type-badge', 'original-invoice-link']
@@ -4718,6 +4721,24 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
       },
     },
     {
+      name: 'the creator refused Approve',
+      mount: async () => {
+        mockDetailFetch(
+          detailRecord({
+            id: ID,
+            status: 'validated',
+            rule_set_version: 3,
+            can_approve: false,
+            approve_blocked_by_creator: true,
+            approve_blocked_reason: 'You created this invoice, so another approver must approve it.',
+            can_reject: true,
+          }),
+        )
+        render(<InvoiceDetail ctx={detailCtx(ID)} />)
+        await screen.findByTestId('detail-approve-creator-reason')
+      },
+    },
+    {
       name: 'an approval decision the server refused',
       mount: async () => {
         mockDetailFetch(detailRecord({ id: ID, status: 'validated', rule_set_version: 3, can_edit: true, can_approve: true }), [], {
@@ -4762,7 +4783,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
 
     // Closed-world, and deliberately so: "no card gained a testid" is half of AC-5. A new
     // element on this page must be declared, in one of the three lists above, by whoever adds it.
-    const declared = new Set([...UNTOUCHED_TESTIDS, ...AUDIT_09_TESTIDS, ...BUG_13_TESTIDS, ...EXTR_27_TESTIDS, ...ENGI_17_TESTIDS, ...ENGI_06_TESTIDS, ...BUG_18_TESTIDS, ...CRDDBTNOTE_02_TESTIDS])
+    const declared = new Set([...UNTOUCHED_TESTIDS, ...AUDIT_09_TESTIDS, ...BUG_13_TESTIDS, ...EXTR_27_TESTIDS, ...ENGI_17_TESTIDS, ...ENGI_06_TESTIDS, ...BUG_18_TESTIDS, ...CRDDBTNOTE_02_TESTIDS, ...APPR_17_TESTIDS])
     const undeclared = [...seen.keys()].filter((id) => !declared.has(id)).sort()
     expect(
       undeclared,
@@ -7489,5 +7510,214 @@ describe('InvoiceDetail: credit and debit note actions (CRDDBTNOTE-02-05)', () =
       expect(screen.queryByTestId('original-invoice-link'), JSON.stringify(over)).toBeNull()
       cleanup()
     }
+  })
+})
+
+describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
+  const ID = 'inv-appr17-1'
+  const SENTENCE = 'You created this invoice, so another approver must approve it.'
+  const approveBtn = () => screen.getByTestId('detail-approve') as HTMLButtonElement
+
+  it('detail_creatorRefused_printsTheServersReasonAndKeepsRejectEnabled', async () => {
+    mockDetailFetch(
+      detailRecord({ id: ID, status: 'validated', can_approve: false, approve_blocked_by_creator: true, approve_blocked_reason: SENTENCE, can_reject: true }),
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    expect((await screen.findByTestId('detail-approve-creator-reason')).textContent).toBe(SENTENCE)
+    expect(approveBtn().disabled).toBe(true)
+    expect(approveBtn().style.opacity).toBe('0.45')
+    expect(approveBtn().style.cursor).toBe('not-allowed')
+    expect((screen.getByTestId('detail-reject') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('detail_roleRefused_printsNoReason', async () => {
+    mockDetailFetch(
+      detailRecord({ id: ID, status: 'validated', can_approve: false, approve_blocked_by_creator: false, approve_blocked_reason: 'Only an approver can approve this invoice.' }),
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('detail-approve')
+    expect(screen.queryByTestId('detail-approve-creator-reason')).toBeNull()
+  })
+
+  it('detail_onlyApprover_seesTheNormalControl', async () => {
+    const { decideCalls } = mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: true, approve_blocked_by_creator: false }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    expect(screen.queryByTestId('detail-approve-creator-reason')).toBeNull()
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    await waitFor(() => expect(decideCalls).toHaveLength(1))
+    expect(decideCalls[0].body.decision).toBe('approved')
+  })
+
+  const refusedRead = () =>
+    detailRecord({ id: ID, status: 'validated', can_approve: false, approve_blocked_by_creator: true, approve_blocked_reason: SENTENCE, can_reject: true })
+
+  it('detail_serverRefusal_showsItsSentenceAndDisablesApprove', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: true }), [], {
+      detailSequence: [refusedRead()],
+      decideResponse: { ok: false, status: 403, json: () => Promise.resolve({ error: SENTENCE }) },
+    })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    expect((await screen.findByTestId('detail-decision-error')).textContent).toBe(SENTENCE)
+    await waitFor(() => expect(approveBtn().disabled).toBe(true))
+  })
+
+  it('detail_serverRefusal_keepsRejectEnabledAndApproveCannotBeRearmed', async () => {
+    const { decideCalls } = mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: true, can_reject: true }), [], {
+      detailSequence: [refusedRead()],
+      decideResponse: { ok: false, status: 403, json: () => Promise.resolve({ error: SENTENCE }) },
+    })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    await screen.findByTestId('detail-decision-error')
+    await waitFor(() => expect(approveBtn().disabled).toBe(true))
+
+    fireEvent.click(approveBtn())
+    expect(screen.queryByTestId('detail-approve-confirm')).toBeNull()
+    expect(decideCalls).toHaveLength(1)
+    expect((screen.getByTestId('detail-reject') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  // Approve answers 403 once `holdRefusal` settles; a successful reject then triggers an in-place
+  // refetch, whose GET waits on `holdRead`.
+  const refuseThenRefetch = (next: InvoiceDetailRecord | InvoiceDetailRecord[], holdRefusal?: Promise<void>, holdRead?: Promise<void>) => {
+    const first = detailRecord({ id: ID, status: 'validated', can_approve: true, can_reject: true })
+    const { fetchMock } = mockDetailFetch(first, [], { detailSequence: Array.isArray(next) ? next : [next] })
+    const inner = fetchMock.getMockImplementation()!
+    let gets = 0
+    const wrapped = vi.fn((url: string, init: RequestInit = {}) => {
+      if (init.method === 'POST' && url.endsWith('/approvals')) {
+        const body = JSON.parse(String(init.body)) as { decision: string }
+        if (body.decision === 'approved') {
+          const refused = () => ({ ok: false, status: 403, json: () => Promise.resolve({ error: SENTENCE }) })
+          return holdRefusal ? holdRefusal.then(refused) : Promise.resolve(refused())
+        }
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+      }
+      const isDetailGet = (init.method ?? 'GET') === 'GET' && /\/invoices\/[^/]+$/.test(url)
+      if (isDetailGet && ++gets === 2 && holdRead) return holdRead.then(() => inner(url, init))
+      return inner(url, init)
+    })
+    vi.stubGlobal('fetch', wrapped)
+  }
+  const refuse = async () => {
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    await screen.findByTestId('detail-decision-error')
+  }
+  const reject = async () => {
+    fireEvent.click(screen.getByTestId('detail-reject'))
+    fireEvent.change(await screen.findByTestId('detail-reject-reason'), { target: { value: 'no' } })
+    fireEvent.click(screen.getByTestId('detail-reject-confirm'))
+  }
+
+  it('detail_refusal_clearsWhenARefetchReadsCanApproveTrue', async () => {
+    refuseThenRefetch(detailRecord({ id: ID, status: 'validated', can_approve: true, can_reject: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await refuse()
+    await waitFor(() => expect(approveBtn().disabled).toBe(false))
+  })
+
+  const detailGets = () =>
+    (vi.mocked(fetch).mock.calls as [string, RequestInit?][]).filter(([u, i]) => (i?.method ?? 'GET') === 'GET' && /\/invoices\/[^/]+$/.test(u)).length
+
+  it('detail_serverRefusal_rereadsTheInvoiceOnce', async () => {
+    refuseThenRefetch(refusedRead())
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await refuse()
+    await waitFor(() => expect(approveBtn().disabled).toBe(true))
+    expect(detailGets()).toBe(2)
+  })
+
+  it('detail_serverRefusal_rereadFalseShowsTheCreatorReasonAfterTheErrorClears', async () => {
+    refuseThenRefetch(refusedRead())
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await refuse()
+    expect((await screen.findByTestId('detail-approve-creator-reason')).textContent).toBe(SENTENCE)
+    await reject()
+    await waitFor(() => expect(screen.queryByTestId('detail-decision-error')).toBeNull())
+    expect((await screen.findByTestId('detail-approve-creator-reason')).textContent).toBe(SENTENCE)
+    expect(approveBtn().disabled).toBe(true)
+  })
+
+  it('detail_refusal_staysWhenARefetchReadsCanApproveFalse', async () => {
+    refuseThenRefetch(detailRecord({ id: ID, status: 'validated', can_approve: false, can_reject: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await refuse()
+    await reject()
+    await waitFor(() => expect(screen.queryByTestId('detail-reject-reason')).toBeNull())
+    expect(approveBtn().disabled).toBe(true)
+  })
+
+  it('detail_refusal_ignoresAReadStartedBeforeTheRefusal', async () => {
+    let refuseNow!: () => void
+    let readNow!: () => void
+    const holdRefusal = new Promise<void>((r) => { refuseNow = r })
+    const holdRead = new Promise<void>((r) => { readNow = r })
+    refuseThenRefetch([refusedRead(), detailRecord({ id: ID, status: 'validated', can_approve: true, can_reject: true })], holdRefusal, holdRead)
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    await reject() // its refetch starts, and stays pending, before the 403 lands
+    await waitFor(() => expect(screen.queryByTestId('detail-reject-reason')).toBeNull())
+    refuseNow()
+    await new Promise((r) => setTimeout(r, 20))
+    readNow() // the stale read carries can_approve true
+    await screen.findByTestId('detail-decision-error')
+    await waitFor(() => expect(approveBtn().disabled).toBe(true))
+  })
+
+  it('detail_serverRefusal_pendingRereadKeepsTheMessageAndApproveDisabled', async () => {
+    let release!: () => void
+    const hold = new Promise<void>((r) => { release = r })
+    refuseThenRefetch(refusedRead(), undefined, hold)
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    await waitFor(() => expect(detailGets()).toBe(2))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(screen.queryByTestId('detail-decision-error')?.textContent ?? null, 'refusal visible while the re-read is pending').toBe(SENTENCE)
+    expect(screen.queryByTestId('detail-approve'), 'detail still rendered during the re-read').not.toBeNull()
+    expect(approveBtn().disabled, 'Approve is off while the re-read is pending').toBe(true)
+    release()
+  })
+
+  it('detail_serverRefusal_failedRereadKeepsTheMessageAndApproveDisabled', async () => {
+    let fail!: () => void
+    const hold = new Promise<void>((_, rej) => { fail = () => rej(new Error('blip')) })
+    hold.catch(() => {})
+    refuseThenRefetch(refusedRead(), undefined, hold)
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    await waitFor(() => expect(detailGets()).toBe(2))
+    fail()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.queryByTestId('detail-approve'), 'detail survives a failed re-read, as it does a failed poll tick').not.toBeNull()
+    expect(screen.queryByTestId('detail-decision-error')?.textContent ?? null).toBe(SENTENCE)
+    expect(approveBtn().disabled, 'Approve stays off after a failed re-read').toBe(true)
+  })
+
+  it('detail_conflictDoesNotDisableApprove', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: true }), [], {
+      decideResponse: { ok: false, status: 409, json: () => Promise.resolve({ error: 'step already decided' }) },
+    })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    expect((await screen.findByTestId('detail-decision-error')).textContent).toBe('step already decided')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(approveBtn().disabled).toBe(false)
+    expect(detailGets(), 'a 409 is not a refusal: no re-read').toBe(1)
+    expect(screen.getByTestId('detail-decision-error').textContent).toBe('step already decided')
+  })
+
+  it('detail_noApproveControlWhileLoading', () => {
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise(() => {})))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    expect(screen.queryByTestId('detail-approve')).toBeNull()
   })
 })

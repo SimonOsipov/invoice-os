@@ -1238,3 +1238,60 @@ test('in-house Approvals: the queue narrows, bulk approve settles per item, and 
   // A07-7
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
+
+// ---------------------------------------------------------------------------------------
+// The creator's own row. Declared after Test 7; it clicks no approve and leaves its
+// row open. The creator rung precedes the role rung, so it holds whatever the journey staffed.
+// ---------------------------------------------------------------------------------------
+// internal/approval/creator.go: CreatorRefusedReason.
+const CREATOR_REFUSED_REASON = 'You created this invoice, so another approver must approve it.'
+
+test("in-house Approvals: the creator's own invoice shows the refusal before any click", async ({ page }) => {
+  test.setTimeout(90_000)
+  const errors = collectErrors(page)
+  const approvalPosts: string[] = []
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && /\/approvals(\?|$)/.test(new URL(r.url()).pathname)) approvalPosts.push(r.url())
+  })
+
+  const member = await ensureMember(TENANTS.b.id, 'in_house')
+  const driverToken = (await signInSession(member.email, member.password)).access_token
+  const stamp = Date.now()
+  const entity = await createEntity(await login(PERSONAS.B), { name: `APPR-17 creator ${stamp}`, tin: freshTin() })
+  const number = `INV-A17-CREATOR-${stamp}`
+  const id = await createValidatedInvoice(driverToken, entity.id, number, approvableInvoiceFields(number))
+
+  const wire = await getInvoice(driverToken, id)
+  expect(wire.approve_blocked_by_creator, `${number} must read creator-refused for its creator`).toBe(true)
+  const reason = wire.approve_blocked_reason
+  expect(reason, 'the refusal must carry its sentence').toContain(CREATOR_REFUSED_REASON)
+
+  await signInAs(page, 'inhouse')
+  expect(subjectOf(await browserToken(page)), 'the browser must be the creator').toBe(subjectOf(driverToken))
+
+  // Detail, reached from the queue row.
+  await goTo(page, 'Approvals')
+  await approvalRowByNumber(page, number).locator('> *').nth(BUYER_TRACK).click()
+  await expect(page).toHaveURL(new RegExp(`/invoices/${id}$`))
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await expect(page.getByTestId('detail-approve'), 'Approve is off for the creator').toBeDisabled()
+  await expect(page.getByTestId('detail-approve-creator-reason')).toBeVisible()
+  await expect(page.getByTestId('detail-approve-creator-reason')).toContainText(CREATOR_REFUSED_REASON)
+
+  // Queue: the row keeps its checkbox, and ticking it arms nothing.
+  await page.goBack()
+  await expect(page).toHaveURL(/\/approvals$/)
+  const row = approvalRowByNumber(page, number)
+  await expect(row.getByTestId('approval-blocked-icon')).toBeVisible()
+  await expect(row.getByTestId('approval-select-row'), 'a creator-refused row stays selectable').toBeEnabled()
+  await row.getByLabel(selectRowLabel(number), { exact: true }).check()
+  const bar = page.getByTestId('approvals-bulk-bar')
+  await expect(bar).toBeVisible()
+  await expect(page.getByTestId('approvals-bulk-submit'), 'nothing is approvable, so submit is off').toBeDisabled()
+  const note = page.getByTestId('approvals-bulk-refused-note')
+  await expect(note).toContainText(number)
+  await expect(note).toContainText(CREATOR_REFUSED_REASON)
+
+  expect(approvalPosts, 'no decision was sent').toEqual([])
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

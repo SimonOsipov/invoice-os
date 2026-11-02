@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 
-import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
+import { ApiError, EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
 import { closeGlyph, plusGlyph } from '../glyphs'
 import { actorLabel } from '../lib/actor'
@@ -176,8 +176,14 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const base = gatewayBase()
   // Same `base ? … : …` narrowing as ClientsView ([A-e]/[A-m]) —
   // `immediate: shouldFetchInvoices(base)` keeps a no-gateway build at zero network.
+  // A 403 on confirm: the server refused this seat. Approve stays off until the re-read
+  // that follows resolves; a failed re-read leaves it off.
+  const [approveRefused, setApproveRefused] = useState(false)
   const detail = useAsync<InvoiceDetailRecord>(
-    () => (base ? getInvoice(ctx.authedFetch, base, invoiceId) : Promise.reject(new Error('no gateway configured'))),
+    async () => {
+      if (!base) throw new Error('no gateway configured')
+      return getInvoice(ctx.authedFetch, base, invoiceId)
+    },
     { immediate: shouldFetchInvoices(base), deps: [invoiceId] },
   )
   const history = useAsync<StatusChange[]>(
@@ -525,6 +531,19 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         history.run()
         approval.run()
       } catch (err) {
+        if (err instanceof ApiError && err.status === 403) {
+          setApproveRefused(true)
+          // Background re-read for the durable can_approve flag and reason: the page and
+          // message stay up, and a failed read leaves Approve disabled.
+          const g = ++gen.current
+          getInvoice(ctx.authedFetch, base, invoiceId)
+            .then((fresh) => {
+              if (g !== gen.current) return
+              setLive(fresh)
+              setApproveRefused(false)
+            })
+            .catch(() => {})
+        }
         setDecisionError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
       } finally {
         // Functional setter -- see handleSubmit's own finally comment below; same stale-
@@ -707,12 +726,12 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         type="button"
                         data-testid="detail-approve"
                         onClick={() => toApprovePhase({ type: 'arm' })}
-                        disabled={!inv.can_approve}
+                        disabled={!inv.can_approve || approveRefused}
                         title={!inv.can_approve ? (inv.approve_blocked_reason ?? undefined) : undefined}
                         className="v2-btn v2-btn-primary pf-btn"
                         style={{
                           height: 34,
-                          ...(!inv.can_approve
+                          ...(!inv.can_approve || approveRefused
                             ? { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }
                             : null),
                         }}
@@ -764,6 +783,11 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       {DETAIL_DECISION_COPY.reject}
                     </button>
                   </div>
+                  {inv.approve_blocked_by_creator && inv.approve_blocked_reason != null && (
+                    <div data-testid="detail-approve-creator-reason" style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>{inv.approve_blocked_reason}</div>
+                    </div>
+                  )}
                   {/* Founder-pinned copy, verbatim (DETAIL_DECISION_COPY) -- same placement
                       and styling as detail-submit-confirm-prompt below. */}
                   {approvePhase !== 'idle' && (

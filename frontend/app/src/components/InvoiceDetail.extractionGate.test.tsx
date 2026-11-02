@@ -72,7 +72,7 @@ function detailRecord(): InvoiceDetailRecord {
     line_items: [], rule_set_version: null, qr_png_base64: null, verdict_stale: false, can_edit: false, can_revalidate: false,
     revalidate_blocked_reason: null, can_submit: true, submit_blocked_reason: null, can_view_ubl: true,
     ubl_blocked_reason: null, can_resolve_outside: false, resolve_outside_blocked_reason: null,
-    can_approve: false, approve_blocked_reason: null, can_reject: false, reject_blocked_reason: null,
+    can_approve: false, approve_blocked_reason: null, approve_blocked_by_creator: false, can_reject: false, reject_blocked_reason: null,
     can_correct_invoice_number: false, invoice_number_blocked_reason: null, can_issue_note: false, issue_note_blocked_reason: null,
   } as InvoiceDetailRecord
 }

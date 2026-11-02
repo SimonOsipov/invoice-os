@@ -123,3 +123,10 @@ describe('activityRow account events', () => {
     }
   })
 })
+
+describe('activityRow self-approved', () => {
+  it('activityRow_selfApprovedStaysApproved', () => {
+    const row = activityRow(ev({ event: 'invoice.approval_approved', payload: { approved_as: 'self_approved' } }), NOW)
+    expect(row.label).toBe('Approved')
+  })
+})

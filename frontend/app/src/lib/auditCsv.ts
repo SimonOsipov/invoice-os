@@ -32,7 +32,7 @@ export function auditCsv(events: AuditEvent[], opts?: { truncated: boolean; cap:
       e.actor_name,
       e.actor_kind,
       e.actor,
-      auditEventView(e.event).label,
+      auditEventView(e.event, e.payload).label,
       e.event,
       csvCompany(e),
       e.company_scope,

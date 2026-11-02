@@ -36,6 +36,7 @@ import {
   pendingApprovalStep,
   pruneApprovalSelection,
   reasonTipPosition,
+  selectableIds,
   type ApprovalRun,
   type ApprovalRunStep,
   type ApproveResult,
@@ -131,6 +132,7 @@ const baseRow: InvoiceRecord = {
   rule_set_version: 2,
   can_approve: true,
   approve_blocked_reason: null,
+  approve_blocked_by_creator: false,
   can_submit: false,
   submit_blocked_reason: null,
   demotion: null,
@@ -1432,5 +1434,95 @@ describe('reasonTipPosition (AC-6)', () => {
     expect(right.left).toBe(972)
     const left = reasonTipPosition({ left: 2, top: 200, bottom: 214 }, { width: 300, height: 60 }, { width: 1280, height: 800 })
     expect(left.left).toBe(8)
+  })
+})
+
+const CREATOR_REASON = 'You created this invoice, so another approver must approve it.'
+
+function creatorRow(id: string, invoiceNumber = id): InvoiceRecord {
+  return {
+    ...baseRow,
+    id,
+    invoice_number: invoiceNumber,
+    can_approve: false,
+    approve_blocked_by_creator: true,
+    approve_blocked_reason: CREATOR_REASON,
+  }
+}
+
+describe('APPR-17-04: creator-refused rows stay selectable', () => {
+  it('approvalRowView_creatorRowIsSelectableNotApprovable', () => {
+    const view = approvalRowView(creatorRow('c1'))
+    expect(view.selectable).toBe(true)
+    expect(view.approvable).toBe(false)
+    expect(view.blockedReason).toBe(CREATOR_REASON)
+  })
+
+  it('approvalRowView_roleRefusedRowIsNotSelectable', () => {
+    const view = approvalRowView({ ...notApprovableRow('r1'), approve_blocked_by_creator: false })
+    expect(view.selectable).toBe(false)
+    expect(view.approvable).toBe(false)
+  })
+
+  it('approvalSelectAllState_countsCreatorRows', () => {
+    const rows = [approvableRow('a'), creatorRow('c'), notApprovableRow('r')]
+    expect(selectableIds(rows)).toEqual(['a', 'c'])
+    expect(approvalSelectAllState(['a'], rows)).toBe('some')
+    expect(approvalSelectAllState(['a', 'c'], rows)).toBe('all')
+    expect(approvalSelectAllState(['c'], rows)).toBe('some')
+    expect(pruneApprovalSelection(['a', 'c', 'r'], rows)).toEqual(['a', 'c'])
+  })
+
+  it('approvalsBarView_onlyCreatorRows_cannotApproveAndListsNumbers', () => {
+    const rows = [creatorRow('c1', 'INV-1'), creatorRow('c2', 'INV-2'), creatorRow('c3', 'INV-3')]
+    rows[2] = { ...rows[2], approve_blocked_reason: 'Waits for a role holder.' }
+    const view = approvalsBarView(['c1', 'c2', 'c3'], rows, 'idle', false)
+    expect(view.canApprove).toBe(false)
+    expect(view.visible).toBe(true)
+    expect(view.countLabel).toBe('3 selected on this page')
+    expect(view.refused).toEqual([`INV-1, INV-2: ${CREATOR_REASON}`, 'INV-3: Waits for a role holder.'])
+  })
+
+  it('approvalsBarView_countsWithCreatorRows', () => {
+    const rows = [creatorRow('c', 'INV-C'), approvableRow('a'), approvableRow('b'), notApprovableRow('r')]
+    const view = approvalsBarView(['c', 'a', 'b'], rows, 'idle', false)
+    expect(view.eligible).toEqual(['c', 'a', 'b'])
+    expect(view.countLabel).toBe('3 selected on this page')
+    expect(view.submitLabel).toBe('Approve 2 on this page')
+    expect(view.confirmPrompt).toBe('Approve 2 invoices?')
+    expect(view.confirmLabel).toBe('Yes, approve 2 now')
+    expect(view.canApprove).toBe(true)
+    expect(view.note).toContain('1 of the 4 rows')
+    expect(view.refused).toEqual([`INV-C: ${CREATOR_REASON}`])
+  })
+
+  it('approvalsBarView: one creator row and one approvable row read singular, and a loading page sends nothing', () => {
+    const rows = [creatorRow('c', 'INV-C'), approvableRow('a')]
+    const view = approvalsBarView(['c', 'a'], rows, 'idle', false)
+    expect(view.eligible).toEqual(['c', 'a'])
+    expect(view.submitLabel).toBe('Approve 1 on this page')
+    expect(view.confirmPrompt).toBe('Approve 1 invoice?')
+    expect(view.confirmLabel).toBe('Yes, approve 1 now')
+    expect(view.canApprove).toBe(true)
+    expect(approvalsBarView(['c', 'a'], rows, 'idle', true).canApprove).toBe(false)
+    expect(approvalsBarView(['c', 'a'], rows, 'submitting', false).canApprove).toBe(false)
+  })
+
+  it('approvalsBarView: only a row the server refused on creator grounds is listed as refused', () => {
+    // A contradictory row (can_approve true and the flag true) is approvable, never refused.
+    const contradictory = { ...creatorRow('x', 'INV-X'), can_approve: true }
+    const roleBlocked = { ...notApprovableRow('r'), invoice_number: 'INV-R' }
+    const view = approvalsBarView(['x', 'c'], [contradictory, creatorRow('c', 'INV-C'), roleBlocked], 'idle', false)
+    expect(view.refused).toEqual([`INV-C: ${CREATOR_REASON}`])
+    expect(view.eligible).toEqual(['x', 'c'])
+    expect(approvalsBarView(['r'], [roleBlocked], 'idle', false).eligible).toEqual([])
+  })
+
+  it('approvalsBarView with no creator row selected keeps every label and an empty refused list', () => {
+    const rows = [creatorRow('c'), approvableRow('a'), approvableRow('b')]
+    const view = approvalsBarView(['a', 'b'], rows, 'idle', false)
+    expect(view.countLabel).toBe('2 selected on this page')
+    expect(view.submitLabel).toBe('Approve 2 on this page')
+    expect(view.refused).toEqual([])
   })
 })

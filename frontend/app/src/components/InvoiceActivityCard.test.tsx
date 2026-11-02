@@ -783,14 +783,14 @@ function extractedPayloadKeys(): Record<string, string[]> {
 // Transcribed from the four map literals. activityFeed_goPayloadKeysAreTheOnesThisTableClaims
 // is what stops this rotting into a claim about keys the server no longer writes.
 const TRANSCRIBED_PAYLOAD_KEYS: Record<string, string[]> = {
-  'invoice.approval_approved': ['invoice_id', 'run_id', 'step_ord', 'reason', 'invoice_number'],
+  'invoice.approval_approved': ['invoice_id', 'run_id', 'step_ord', 'reason', 'invoice_number', 'approved_as'],
   'invoice.approval_rejected': ['invoice_id', 'run_id', 'step_ord', 'reason', 'invoice_number'],
   'invoice.approval_armed': ['id', 'run_id', 'policy_version_id', 'steps', 'invoice_number'],
   'invoice.approval_cancelled': ['id', 'run_id', 'invoice_number'],
 }
 
 const RETIRED_FIELD_KEYS = ['run_id', 'step_ord', 'reason']
-const KEYS_NOT_A_RETIRED_FIELD = ['invoice_id', 'id', 'policy_version_id', 'steps', 'invoice_number']
+const KEYS_NOT_A_RETIRED_FIELD = ['invoice_id', 'id', 'policy_version_id', 'steps', 'invoice_number', 'approved_as']
 
 const RUN_ID_SENTINEL = 'run-7f21-nothing-dropped'
 const STEP_ORD_SENTINEL = 7
@@ -1282,3 +1282,11 @@ describe('InvoiceActivityCard takes the v2 look (RESKIN2-03-02)', () => {
   })
 })
 
+describe('InvoiceActivityCard self-approved', () => {
+  it('activityCard_selfApprovedPrintsItsLabel', async () => {
+    mockFetch(logResponse({ events: [auditEvent({ event: APPROVALS_EVENT, payload: { id: INVOICE_ID, approved_as: 'self_approved' } })] }))
+    renderCard()
+    await loaded()
+    expect(screen.getByTestId('audit-what').textContent).toBe('Self-approved')
+  })
+})

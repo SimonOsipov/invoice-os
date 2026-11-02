@@ -27,6 +27,14 @@ func main() {
 	}
 	rowsFile := flag.Arg(0)
 
+	// Before Recover: Recover would undo a running replay's mutation.
+	lock, err := Lock(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mutationreplay: %v\n", err)
+		os.Exit(2)
+	}
+	defer lock.Close()
+
 	restored, err := Recover(".")
 	for _, p := range restored {
 		fmt.Fprintf(os.Stderr, "mutationreplay: WARNING restored %s from a backup left by an interrupted run\n", p)

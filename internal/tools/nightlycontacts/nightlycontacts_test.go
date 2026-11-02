@@ -22,21 +22,38 @@ func greenStart(t *testing.T, w *world) result {
 
 func TestIsRunContact(t *testing.T) {
 	for addr, want := range map[string]bool{
-		"x@example.com":                   true,
-		"X@EXAMPLE.COM":                   true,
-		"nightly-1-reg@x.resend.app":      true,
-		"NIGHTLY-1-REG@X.RESEND.APP":      true,
-		"nightly-ops@acme.com":            false,
-		"x@example.com.evil.ng":           false,
-		"x@sub.example.com":               false,
-		"sam@ascomply.com":                false,
-		"sam@x.resend.app":                false,
-		"nightly-1@other.resend.app":      false,
-		"nightly-1-reg@x.resend.app.evil": false,
-		"":                                false,
-		"x@example.com ":                  false,
-		"x@example.com.au":                false,
-		"n\u0130ghtly-1@x.resend.app":     false,
+		"x@example.com":                      true,
+		"X@EXAMPLE.COM":                      true,
+		"nightly-1-reg@x.resend.app":         true,
+		"NIGHTLY-1-REG@X.RESEND.APP":         true,
+		"nightly-ops@acme.com":               false,
+		"x@example.com.evil.ng":              false,
+		"x@sub.example.com":                  false,
+		"sam@ascomply.com":                   false,
+		"sam@x.resend.app":                   false,
+		"nightly-1@other.resend.app":         false,
+		"nightly-1-reg@x.resend.app.evil":    false,
+		"":                                   false,
+		"x@example.com ":                     false,
+		"x@example.com.au":                   false,
+		"n\u0130ghtly-1@x.resend.app":        false,
+		"ada.okafor@okafor-partners.example": true,
+		"X@CORP.EXAMPLE":                     true,
+		"x@example.evil":                     false,
+		"x.example@acme.com":                 false,
+		"x@corp.example ":                    false,
+		"x@corp.examples":                    false,
+		"x@notexample":                       false,
+		"corp.example":                       false,
+		"x@example":                          false,
+		"x@corp.example.ng":                  false,
+		"x@corp.example.":                    false,
+		"a@corp.example@gmail.com":           false,
+		`"a@corp.example"@gmail.com`:         false,
+		"a@gmail.com@corp.example":           true,
+		"x@corp.ex\u0430mple":                false,
+		"x@corp.EXAMPL\u0130":                false,
+		"x@corp.exampl\u212a":                false,
 	} {
 		if got := isRunContact(addr, "x.resend.app"); got != want {
 			t.Errorf("isRunContact(%q) = %v, want %v", addr, got, want)
@@ -138,13 +155,14 @@ func TestSweep_DeletesOnlyMatchesAcrossPages(t *testing.T) {
 		w.rsContacts = []rsContactRow{
 			{"r1", "nightly-ops@acme.com", old}, {"r2", "c@example.com", old}, {"r3", "x@example.com.evil.ng", old},
 			{"r4", "nightly-9-demo@x.resend.app", old}, {"r5", "sam@ascomply.com", old}, {"r6", "", old},
+			{"r7", "ada.okafor@okafor-partners.example", old}, {"r8", "x@corp.examples", old},
 		}
 		if phase == "start" {
 			greenStart(t, w)
 		} else {
 			finish(t, w, baseEnv())
 		}
-		want := []string{"hs:a@example.com", "hs:B@EXAMPLE.COM", "hs:nightly-1-reg@x.resend.app", "rs:c@example.com", "rs:nightly-9-demo@x.resend.app"}
+		want := []string{"hs:a@example.com", "hs:B@EXAMPLE.COM", "hs:nightly-1-reg@x.resend.app", "rs:c@example.com", "rs:nightly-9-demo@x.resend.app", "rs:ada.okafor@okafor-partners.example"}
 		got := slices.Clone(w.deleted)
 		slices.Sort(got)
 		slices.Sort(want)

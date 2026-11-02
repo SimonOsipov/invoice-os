@@ -47,8 +47,8 @@ var stepOrder = []string{stPortal, stConfigured, stLeftovers, stRegistered, stRe
 
 var domainPattern = regexp.MustCompile(`^[a-z0-9-]+\.resend\.app$`)
 
-// isRunContact is the one deletion rule, in both vendors: any @example.com address, and
-// nightly-*@<receiving domain>. Any other address is a person.
+// isRunContact is the one deletion rule, in both vendors: any @example.com address, any address on the
+// reserved .example TLD (RFC 6761), and nightly-*@<receiving domain>. Any other address is a person.
 // Folds ASCII only: strings.ToLower maps U+0130 to "i", so "nİghtly-" would match.
 func isRunContact(email, domain string) bool {
 	e := strings.Map(func(r rune) rune {
@@ -57,7 +57,9 @@ func isRunContact(email, domain string) bool {
 		}
 		return r
 	}, email)
-	return strings.HasSuffix(e, "@example.com") || (strings.HasPrefix(e, "nightly-") && strings.HasSuffix(e, "@"+domain))
+	at := strings.LastIndex(e, "@")
+	onExampleTLD := at >= 0 && strings.HasSuffix(e[at+1:], ".example")
+	return strings.HasSuffix(e, "@example.com") || onExampleTLD || (strings.HasPrefix(e, "nightly-") && strings.HasSuffix(e, "@"+domain))
 }
 
 // isRunDeal matches the names the deal worker writes, and the blanked name of an erase.

@@ -427,3 +427,106 @@ func TestEvaluate_PassWithMarksListsEachMark(t *testing.T) {
 		t.Fatal("want pass")
 	}
 }
+
+func TestAdversarial_FormsThatMustTrigger(t *testing.T) {
+	cases := []struct {
+		sql  string
+		objs []string
+	}{
+		{"ALTER TABLE t ALTER c DROP NOT NULL, DROP x", []string{"t.x"}},
+		{"ALTER TABLE t ALTER COLUMN c SET DEFAULT 'a,b', DROP x", []string{"t.x"}},
+		{"ALTER TABLE t DROP CONSTRAINT IF EXISTS c, DROP COLUMN y", []string{"t.y"}},
+		{"DROP  \n\t TABLE\n\nIF\nEXISTS\n t", []string{"t"}},
+		{"ALTER\nTABLE\n t\nDROP\nCOLUMN\n c", []string{"t.c"}},
+		{`ALTER TABLE "a b" RENAME TO c`, []string{"a b"}},
+		{`DROP TABLE "we.ird name"`, []string{"we.ird name"}},
+		{`ALTER TABLE "a b" DROP "c d"`, []string{"a b.c d"}},
+		{"ALTER TABLE t DROP c, DROP d", []string{"t.c", "t.d"}},
+		{"ALTER TABLE t RENAME COLUMN a TO b, RENAME COLUMN c TO d", nil},
+		{"DROP TABLE public.t, s.u CASCADE", []string{"public.t", "s.u"}},
+	}
+	for _, c := range cases {
+		if c.objs == nil {
+			continue
+		}
+		r := scanUp(t, c.sql+";")
+		if len(r.Triggers) == 0 || !slices.Equal(objects(r), c.objs) {
+			t.Errorf("%q: got %q, want %q", c.sql, objects(r), c.objs)
+		}
+	}
+}
+
+func TestAdversarial_WordsThatLookLikeTriggersGiveNone(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT 1 AS backdrop_table",
+		"SELECT backdrop table_x FROM z",
+		"CREATE TABLE my_drop_table (a int)",
+		"CREATE TABLE dropoff (drop_type int)",
+		"ALTER TABLE t ADD COLUMN drop_c int",
+		"ALTER TABLE t DROP CONSTRAINT IF EXISTS c",
+		"ALTER TABLE t ALTER c DROP NOT NULL",
+	} {
+		if r := scanUp(t, sql+";"); len(r.Triggers) != 0 {
+			t.Errorf("%q: got triggers %q", sql, objects(r))
+		}
+	}
+}
+
+func TestAdversarial_CRLFAndIndentedGooseLines(t *testing.T) {
+	sql := "  -- +goose Up\r\nDROP TABLE t; -- contract-step t: gone\r\n\t-- +goose Down\r\nDROP TABLE u;\r\n"
+	r, err := Scan(testFile, sql)
+	if err != nil || len(r.Triggers) != 1 || len(r.Marks) != 1 {
+		t.Fatalf("got %+v, %v", r, err)
+	}
+	if r.Marks[0].Reason != "gone" {
+		t.Errorf("reason = %q, want gone (no carriage return)", r.Marks[0].Reason)
+	}
+	lines, failed := Evaluate([]Result{r})
+	if failed || len(lines) != 2 {
+		t.Errorf("lines %q failed %v", lines, failed)
+	}
+	r, err = Scan(testFile, "-- +goose Up\r\nALTER TABLE t\r\n  DROP COLUMN c;\r\n")
+	if err != nil || !slices.Equal(objects(r), []string{"t.c"}) {
+		t.Errorf("CRLF alter: %+v, %v", r, err)
+	}
+}
+
+func TestAdversarial_MarkBeforeOrAfterItsStatementReleases(t *testing.T) {
+	for _, body := range []string{
+		"-- contract-step t: why\nDROP TABLE t;",
+		"DROP TABLE t;\n-- contract-step t: why",
+	} {
+		lines, failed := evalUp(t, body)
+		if failed || len(lines) != 2 || lines[0] != "Deliberate schema changes:" {
+			t.Errorf("%q: lines %q failed %v", body, lines, failed)
+		}
+	}
+}
+
+func TestAdversarial_MarkSpellings(t *testing.T) {
+	for _, c := range []struct {
+		comment string
+		marks   int
+	}{
+		{"-- contract-stepx t: why", 0},
+		{"--contract-step t: why", 1},
+		{"--   contract-step   t  :  why  ", 1},
+		{"-- Contract-Step t: why", 0},
+		{"-- contract-step\tt: why", 1},
+	} {
+		r := scanUp(t, "SELECT 1;\n"+c.comment)
+		if len(r.Marks) != c.marks {
+			t.Errorf("%q: %d marks, want %d", c.comment, len(r.Marks), c.marks)
+		}
+	}
+}
+
+func TestAdversarial_NestedCommentAndQuotedCommaDiscriminate(t *testing.T) {
+	if r := scanUp(t, "/* a /* b */ DROP TABLE t */ SELECT 1;"); len(r.Triggers) != 0 {
+		t.Errorf("nested comment: got %q", objects(r))
+	}
+	r := scanUp(t, "ALTER TABLE t ADD COLUMN n text DEFAULT 'a, DROP COLUMN z', DROP COLUMN y;")
+	if got := objects(r); !slices.Equal(got, []string{"t.y"}) {
+		t.Errorf("quoted comma: got %q, want [t.y]", got)
+	}
+}

@@ -60,6 +60,7 @@ paths:
 - Write a working Down in every migration. CI resets all migrations and applies them again.
 - Write expand-only migrations. The old revisions run against the new schema until traffic moves.
 - Drop or rename a column or table in a later deploy, after no running revision reads it.
+- Mark every DROP COLUMN, DROP TABLE, RENAME of a column or table, DROP FUNCTION and DROP TYPE in an Up section. The check reads each action of a multi-action ALTER TABLE.
 - Mark a deliberate deletion in the Up section: `-- contract-step <object>: <why no running revision reads it>`. Mark only when no running revision reads the object.
 - Name a column `table.column`, a rename by its old name, and a function without arguments. One mark releases one object.
 - Mark a drop-and-recreate of a function.

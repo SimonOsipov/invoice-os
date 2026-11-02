@@ -530,3 +530,10 @@ func TestAdversarial_NestedCommentAndQuotedCommaDiscriminate(t *testing.T) {
 		t.Errorf("quoted comma: got %q, want [t.y]", got)
 	}
 }
+
+func TestAdversarial_StringLiteralsAreRead(t *testing.T) {
+	r := scanUp(t, "INSERT INTO audit_log VALUES ('DROP TABLE z');")
+	if got := objects(r); !slices.Equal(got, []string{"z"}) {
+		t.Fatalf("got %q, want [z]: a literal is read and needs a mark", got)
+	}
+}

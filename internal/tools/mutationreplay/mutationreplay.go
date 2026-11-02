@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 // Row is one recorded mutation claim.
@@ -355,6 +356,27 @@ func (rc *Receipts) Update(root string, r Row, v Verdict) error {
 		return err
 	}
 	return os.WriteFile(rc.path, b, 0o644)
+}
+
+// LockFile holds the lock of the worktree's running replay.
+const LockFile = ".ralph/mutation-replay.lock"
+
+// Lock takes the worktree's replay lock. The kernel drops it when the process
+// ends, so a killed run leaves no stale lock. Keep the file open for the run.
+func Lock(root string) (*os.File, error) {
+	path := filepath.Join(root, LockFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("another replay is running in this worktree: %w", err)
+	}
+	return f, nil
 }
 
 // BackupDir holds the original bytes of any file currently mutated.

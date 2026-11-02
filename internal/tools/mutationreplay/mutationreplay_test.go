@@ -432,3 +432,26 @@ func TestReceipts(t *testing.T) {
 		}
 	})
 }
+
+func TestLock_RefusesASecondRunUntilTheFirstEnds(t *testing.T) {
+	root := t.TempDir()
+	first, err := Lock(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second, err := Lock(root); err == nil {
+		second.Close()
+		t.Fatal("second Lock succeeded while the first held it")
+	}
+	if other, err := Lock(t.TempDir()); err != nil {
+		t.Errorf("Lock in another worktree = %v, want nil", err)
+	} else {
+		other.Close()
+	}
+	first.Close()
+	again, err := Lock(root)
+	if err != nil {
+		t.Fatalf("Lock after release = %v", err)
+	}
+	again.Close()
+}

@@ -1389,6 +1389,27 @@ jobs:
           esac
           go run ./internal/tools/migrationorder -base "$BASE" -head HEAD
 
+  # Fails when an added migration drops schema without a deliberate mark.
+  # Unconditional: a skip would read as a clean check.
+  contract-step:
+    name: Schema deletion
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Prove the check fires, releases and stays silent
+        run: go test ./internal/tools/contractstep/ -count=1
+      - name: No added migration deletes schema without a mark
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE" ]; then BASE="${{ github.event.before }}"; fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then BASE=HEAD; fi
+          go run ./internal/tools/contractstep -base "$BASE" -head HEAD
+
   # Fails when an added comment cites code by file and line number; those go
   # stale silently. Unconditional, like stale-refs: the citation can be in any half.
   cite-refs:
@@ -1503,7 +1524,7 @@ jobs:
   # skips never leave a required check stuck pending.
   ci:
     name: ${{ github.event_name == 'workflow_dispatch' && 'CI (nightly)' || 'CI' }}
-    needs: [changes, go, frontend, library, blog, clean-clone, migrations, docker-canary, caddy-headers, docling-canary, docling-test, rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite, govulncheck, advisories]
+    needs: [changes, go, frontend, library, blog, clean-clone, migrations, docker-canary, caddy-headers, docling-canary, docling-test, rls, idp, queue, audit, stale-refs, migration-order, contract-step, cite-refs, history-rewrite, govulncheck, advisories]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1526,6 +1547,7 @@ jobs:
           echo "clean-clone:   ${{ needs.clean-clone.result }}"
           echo "stale-refs:    ${{ needs.stale-refs.result }}"
           echo "migration-order: ${{ needs.migration-order.result }}"
+          echo "contract-step: ${{ needs.contract-step.result }}"
           echo "cite-refs:     ${{ needs.cite-refs.result }}"
           echo "history-rewrite: ${{ needs.history-rewrite.result }}"
           echo "govulncheck:   ${{ needs.govulncheck.result }}"
@@ -1584,6 +1606,9 @@ jobs:
           fi
           if [ "${{ needs.migration-order.result }}" != "success" ]; then
             echo "::error::A new migration sorts before one already on the base branch"; exit 1
+          fi
+          if [ "${{ needs.contract-step.result }}" != "success" ]; then
+            echo "::error::A migration deletes schema without a deliberate mark, or the check could not run"; exit 1
           fi
           if [ "${{ needs.cite-refs.result }}" != "success" ]; then
             echo "::error::Line-number citation scan failed"; exit 1

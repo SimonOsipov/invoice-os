@@ -16,5 +16,6 @@ hooks=Claude hooks=results
 clean-clone=Clean-clone build
 stale-refs=Stale references
 migration-order=Migration order
+contract-step=Schema deletion
 cite-refs=Line-number citations
 caddy-headers=Caddyfile frame headers

@@ -74,7 +74,7 @@ Run `hm worker phase 1 "QA Verify"`. Spawn a new `product-qa-spec` (Mode B). It 
 - Re-read each comment and doc that the fix made false, per `RALPH_PROMPT.md` Stage 4.
 - For UI work, follow the "Frontend" rules of `RALPH_PROMPT.md` Stage 4.
 
-When QA returns, replay the mutation rows yourself: `go run ./internal/tools/mutationreplay .ralph/mutations-<BUG-ID>.jsonl`. A `NOT-PROVEN` or `INVALID` row fails QA. When QA fails, spawn `product-executor` to fix, then run QA Verify again. Cap: 2 cycles. After 2 cycles, send the coordinator the open findings as one question.
+When QA returns, replay the mutation rows yourself: `go run ./internal/tools/mutationreplay .ralph/mutations-<BUG-ID>.jsonl`. Run it without `--changed`. A `NOT-PROVEN` or `INVALID` row fails QA. When QA fails, spawn `product-executor` to fix, then run QA Verify again. Cap: 2 cycles. After 2 cycles, send the coordinator the open findings as one question.
 
 ### Phase 2: PR
 

@@ -5,12 +5,14 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -202,9 +204,31 @@ type Result struct {
 // Runner runs the row's named test against the tree as it currently is on disk.
 type Runner func(r Row, k Kind) (Outcome, error)
 
-// Replay proves one row. A non-nil error means a mutated file could not be
-// restored and the caller must stop.
-func Replay(root string, r Row, run Runner) (Result, error) {
+// OnceControl runs each test once on the unmutated tree. Replay restores the
+// exact bytes after every row, so a repeat would run the same code.
+// ceiling: a flaky test keeps its first control result; revisit if replays prove rows a flaky test should not
+func OnceControl(run Runner) Runner {
+	type key struct{ file, test string }
+	type result struct {
+		out Outcome
+		err error
+	}
+	seen := map[key]result{}
+	return func(r Row, k Kind) (Outcome, error) {
+		id := key{r.TestFile, r.Test}
+		if res, ok := seen[id]; ok {
+			return res.out, res.err
+		}
+		out, err := run(r, k)
+		seen[id] = result{out, err}
+		return out, err
+	}
+}
+
+// Replay proves one row: control runs the test on the unmutated tree, run on
+// the mutated one. A non-nil error means a mutated file could not be restored
+// and the caller must stop.
+func Replay(root string, r Row, control, run Runner) (Result, error) {
 	path := filepath.Join(root, r.File)
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -218,11 +242,11 @@ func Replay(root string, r Row, run Runner) (Result, error) {
 		return Result{Invalid, err.Error()}, nil
 	}
 
-	control, err := run(r, kind)
+	green, err := control(r, kind)
 	if err != nil {
 		return Result{Invalid, fmt.Sprintf("control run: %v", err)}, nil
 	}
-	switch control {
+	switch green {
 	case NotRun:
 		return Result{Invalid, "control not green: filter matched nothing"}, nil
 	case BuildFailed:
@@ -250,6 +274,87 @@ func Replay(root string, r Row, run Runner) (Result, error) {
 		return Result{NotProven, "test stayed green under mutation"}, nil
 	}
 	return Result{NotProven, "mutation broke the build, not the test"}, nil
+}
+
+// Receipts stores each proven row with a fingerprint of its folders.
+// ceiling: a change in another package does not reopen a row; the run without --changed replays every row
+type Receipts struct {
+	path   string
+	proven map[string]string
+}
+
+// LoadReceipts reads the receipts kept next to the rows file. A missing or
+// unreadable file means no row counts as proven.
+func LoadReceipts(rowsFile string) *Receipts {
+	rc := &Receipts{path: rowsFile + ".proven", proven: map[string]string{}}
+	if b, err := os.ReadFile(rc.path); err == nil {
+		if json.Unmarshal(b, &rc.proven) != nil || rc.proven == nil {
+			rc.proven = map[string]string{}
+		}
+	}
+	return rc
+}
+
+func rowKey(r Row) string {
+	b, _ := json.Marshal(r)
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// Fingerprint hashes every file directly in the folders of the row's file and test file.
+func Fingerprint(root string, r Row) (string, error) {
+	dirs := []string{filepath.Dir(r.File), filepath.Dir(r.TestFile)}
+	sort.Strings(dirs)
+	if dirs[0] == dirs[1] {
+		dirs = dirs[:1]
+	}
+	h := sha256.New()
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(filepath.Join(root, dir))
+		if err != nil {
+			return "", err
+		}
+		for _, e := range entries {
+			if !e.Type().IsRegular() {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(root, dir, e.Name()))
+			if err != nil {
+				return "", err
+			}
+			fmt.Fprintf(h, "%s/%s %d\n", dir, e.Name(), len(b))
+			h.Write(b)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// Unchanged reports whether the row was proven and its folders are as they were then.
+func (rc *Receipts) Unchanged(root string, r Row) bool {
+	want, ok := rc.proven[rowKey(r)]
+	if !ok {
+		return false
+	}
+	got, err := Fingerprint(root, r)
+	return err == nil && got == want
+}
+
+// Update records a proven row and forgets any other verdict. Call it with the
+// file restored. It writes at once, so a killed run keeps the rows it proved.
+func (rc *Receipts) Update(root string, r Row, v Verdict) error {
+	delete(rc.proven, rowKey(r))
+	if v == Proven {
+		fp, err := Fingerprint(root, r)
+		if err != nil {
+			return err
+		}
+		rc.proven[rowKey(r)] = fp
+	}
+	b, err := json.Marshal(rc.proven)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(rc.path, b, 0o644)
 }
 
 // BackupDir holds the original bytes of any file currently mutated.

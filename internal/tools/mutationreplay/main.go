@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,10 +16,16 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: go run ./internal/tools/mutationreplay <rows.jsonl>")
+	changed := flag.Bool("changed", false, "skip a row proven earlier when nothing changed in its folders")
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: go run ./internal/tools/mutationreplay [--changed] <rows.jsonl>")
+	}
+	flag.Parse()
+	if flag.NArg() != 1 {
+		flag.Usage()
 		os.Exit(2)
 	}
+	rowsFile := flag.Arg(0)
 
 	restored, err := Recover(".")
 	for _, p := range restored {
@@ -42,14 +49,16 @@ func main() {
 		os.Exit(130)
 	}()
 
-	data, err := os.ReadFile(os.Args[1])
+	data, err := os.ReadFile(rowsFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mutationreplay: %v\n", err)
 		os.Exit(2)
 	}
 
 	counts := map[Verdict]int{}
-	total := 0
+	total, unchanged := 0, 0
+	control := OnceControl(runTest)
+	receipts := LoadReceipts(rowsFile)
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for n := 1; sc.Scan(); n++ {
@@ -66,9 +75,15 @@ func main() {
 		var res Result
 		if err != nil {
 			res = Result{Invalid, fmt.Sprintf("line %d: %v", n, err)}
-		} else if res, err = Replay(".", row, runTest); err != nil {
+		} else if *changed && receipts.Unchanged(".", row) {
+			unchanged++
+			fmt.Printf("UNCHANGED %s — proven earlier, its folders are the same\n", label)
+			continue
+		} else if res, err = Replay(".", row, control, runTest); err != nil {
 			fmt.Fprintf(os.Stderr, "mutationreplay: FATAL %v\n", err)
 			os.Exit(3)
+		} else if err := receipts.Update(".", row, res.Verdict); err != nil {
+			fmt.Fprintf(os.Stderr, "mutationreplay: WARNING receipts not saved: %v\n", err)
 		}
 		counts[res.Verdict]++
 		fmt.Printf("%s %s — %s\n", res.Verdict, label, res.Reason)
@@ -78,9 +93,13 @@ func main() {
 		os.Exit(2)
 	}
 
-	fmt.Printf("%d rows: %d proven, %d not proven, %d invalid\n", total, counts[Proven], counts[NotProven], counts[Invalid])
+	summary := fmt.Sprintf("%d rows: %d proven, %d not proven, %d invalid", total, counts[Proven], counts[NotProven], counts[Invalid])
+	if *changed {
+		summary += fmt.Sprintf(", %d unchanged", unchanged)
+	}
+	fmt.Println(summary)
 	// Zero rows proves nothing, so it is not a pass.
-	if total == 0 || counts[Proven] != total {
+	if total == 0 || counts[Proven]+unchanged != total {
 		os.Exit(1)
 	}
 }

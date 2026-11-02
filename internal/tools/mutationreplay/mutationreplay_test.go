@@ -276,7 +276,8 @@ func TestReplay(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			root, row := setup(t)
-			res, err := Replay(root, row, runner(root, c.onOrig, c.onMutated))
+			r := runner(root, c.onOrig, c.onMutated)
+			res, err := Replay(root, row, r, r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -296,9 +297,138 @@ func TestReplay(t *testing.T) {
 		root, row := setup(t)
 		row.Find = "a * b"
 		ran := false
-		res, err := Replay(root, row, func(Row, Kind) (Outcome, error) { ran = true; return Passed, nil })
+		r := func(Row, Kind) (Outcome, error) { ran = true; return Passed, nil }
+		res, err := Replay(root, row, r, r)
 		if err != nil || res.Verdict != Invalid || ran {
 			t.Errorf("Replay = %+v, %v, ran=%v; want INVALID without a run", res, err, ran)
+		}
+	})
+}
+
+func TestOnceControl_RunsEachTestOnce(t *testing.T) {
+	runs := map[string]int{}
+	control := OnceControl(func(r Row, _ Kind) (Outcome, error) {
+		runs[r.TestFile+" "+r.Test]++
+		return Passed, nil
+	})
+	for _, r := range []Row{
+		{TestFile: "a_test.go", Test: "TestA"},
+		{TestFile: "a_test.go", Test: "TestA", Find: "other row"},
+		{TestFile: "a_test.go", Test: "TestB"},
+		{TestFile: "b_test.go", Test: "TestA"},
+	} {
+		if out, err := control(r, KindGo); out != Passed || err != nil {
+			t.Fatalf("control(%+v) = %v, %v", r, out, err)
+		}
+	}
+	want := map[string]int{"a_test.go TestA": 1, "a_test.go TestB": 1, "b_test.go TestA": 1}
+	if len(runs) != len(want) {
+		t.Fatalf("runs = %v, want %v", runs, want)
+	}
+	for k, n := range want {
+		if runs[k] != n {
+			t.Errorf("%s ran %d times, want %d", k, runs[k], n)
+		}
+	}
+}
+
+// Two rows on one test must still each run the mutated tree.
+func TestReplay_SharedControlStillRunsEachMutation(t *testing.T) {
+	root := t.TempDir()
+	for name, body := range map[string]string{"calc.go": "a + b; c + d\n", "calc_test.go": "package calc\n"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	controls, mutated := 0, 0
+	control := OnceControl(func(Row, Kind) (Outcome, error) { controls++; return Passed, nil })
+	run := func(Row, Kind) (Outcome, error) { mutated++; return Failed, nil }
+	for _, r := range []Row{
+		{File: "calc.go", Find: "a + b", Replace: "a - b", TestFile: "calc_test.go", Test: "TestAdd"},
+		{File: "calc.go", Find: "c + d", Replace: "c - d", TestFile: "calc_test.go", Test: "TestAdd"},
+	} {
+		res, err := Replay(root, r, control, run)
+		if err != nil || res.Verdict != Proven {
+			t.Fatalf("Replay = %+v, %v", res, err)
+		}
+	}
+	if controls != 1 || mutated != 2 {
+		t.Errorf("controls = %d, mutated runs = %d; want 1 and 2", controls, mutated)
+	}
+}
+
+func TestReceipts(t *testing.T) {
+	setup := func(t *testing.T) (string, Row, string) {
+		root := t.TempDir()
+		for _, d := range []string{"src", "tests"} {
+			if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for name, body := range map[string]string{"src/calc.go": "a + b\n", "src/helper.go": "h\n", "tests/calc_test.go": "t\n"} {
+			if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		row := Row{AC: "AC-1", File: "src/calc.go", Find: "a + b", Replace: "a - b", TestFile: "tests/calc_test.go", Test: "TestAdd"}
+		return root, row, filepath.Join(root, "rows.jsonl")
+	}
+	write := func(t *testing.T, root, name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("a proven row stays unchanged after a reload", func(t *testing.T) {
+		root, row, rows := setup(t)
+		if err := LoadReceipts(rows).Update(root, row, Proven); err != nil {
+			t.Fatal(err)
+		}
+		if !LoadReceipts(rows).Unchanged(root, row) {
+			t.Error("Unchanged = false, want true")
+		}
+	})
+	t.Run("an edit in either folder reopens the row", func(t *testing.T) {
+		for _, name := range []string{"src/calc.go", "src/helper.go", "tests/calc_test.go", "src/new.go"} {
+			root, row, rows := setup(t)
+			if err := LoadReceipts(rows).Update(root, row, Proven); err != nil {
+				t.Fatal(err)
+			}
+			write(t, root, name, "edited\n")
+			if LoadReceipts(rows).Unchanged(root, row) {
+				t.Errorf("edit of %s: Unchanged = true, want false", name)
+			}
+		}
+	})
+	t.Run("a changed row is a new row", func(t *testing.T) {
+		root, row, rows := setup(t)
+		if err := LoadReceipts(rows).Update(root, row, Proven); err != nil {
+			t.Fatal(err)
+		}
+		row.Replace = "a * b"
+		if LoadReceipts(rows).Unchanged(root, row) {
+			t.Error("Unchanged = true for an unproven row")
+		}
+	})
+	t.Run("a later failure forgets the proof", func(t *testing.T) {
+		root, row, rows := setup(t)
+		rc := LoadReceipts(rows)
+		if err := rc.Update(root, row, Proven); err != nil {
+			t.Fatal(err)
+		}
+		if err := rc.Update(root, row, NotProven); err != nil {
+			t.Fatal(err)
+		}
+		if LoadReceipts(rows).Unchanged(root, row) {
+			t.Error("Unchanged = true after NOT-PROVEN")
+		}
+	})
+	t.Run("a corrupt receipts file proves nothing", func(t *testing.T) {
+		root, row, rows := setup(t)
+		write(t, root, "rows.jsonl.proven", "{not json")
+		if LoadReceipts(rows).Unchanged(root, row) {
+			t.Error("Unchanged = true with corrupt receipts")
 		}
 	})
 }

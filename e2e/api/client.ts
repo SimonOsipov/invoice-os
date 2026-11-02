@@ -322,7 +322,7 @@ export interface PendingInvite {
   expires_at: string
 }
 
-// GET /api/tenancy/v1/invitations/mine, raw so a spec can assert the refusals. The body is {invitations, removed}.
+// GET /api/tenancy/v1/invitations/mine, raw so a spec can assert the refusals. The body is {invitations, removed, live_membership}.
 export function listMine(token: string): Promise<{ status: number; body: unknown }> {
   return rawFetch('/api/tenancy/v1/invitations/mine', { headers: { Authorization: `Bearer ${token}` } })
 }

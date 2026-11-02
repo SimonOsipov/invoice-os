@@ -117,6 +117,7 @@ let renewedMeReply: Reply = ok(ME)
 let mineReply: Reply = ok({ invitations: [] })
 let exchangeToken = T_FIRST
 let workspacesReply: Reply = ok({ tenant: ME.tenant })
+let exchangeRefresh: string | null = 'R0'
 
 const path = (c: Call) => c.url.replace(GATEWAY, '')
 const hits = (p: string) => calls.filter((c) => path(c) === p)
@@ -127,7 +128,7 @@ function routeFetch() {
     vi.fn((url: string, init?: { method?: string; headers?: Headers; body?: string }) => {
       const auth = init?.headers?.get('Authorization') ?? null
       calls.push({ url, method: init?.method ?? 'GET', auth, body: init?.body === undefined ? undefined : JSON.parse(init.body) })
-      if (url === `${GATEWAY}/auth/exchange`) return ok({ access_token: exchangeToken, refresh_token: 'R0' })()
+      if (url === `${GATEWAY}/auth/exchange`) return ok({ access_token: exchangeToken, ...(exchangeRefresh === null ? {} : { refresh_token: exchangeRefresh }) })()
       if (url === ACCEPT_URL) return acceptReply()
       if (url === `${GATEWAY}/auth/refresh`) return refreshReply()
       if (url === `${GATEWAY}/api/tenancy/v1/me`) return (auth === `Bearer ${exchangeToken}` ? fail(403, 'forbidden') : renewedMeReply)()
@@ -185,6 +186,7 @@ beforeEach(() => {
   mineReply = ok({ invitations: [] })
   exchangeToken = T_FIRST
   workspacesReply = ok({ tenant: ME.tenant })
+  exchangeRefresh = 'R0'
   routeFetch()
 })
 
@@ -610,5 +612,187 @@ describe('a tenant-less sign-in with no held invite', () => {
     expect(hrefWrites[0]).toMatch(/signin=failed$/)
     expect(hits('/api/tenancy/v1/workspaces')).toEqual([])
     expect(screen.queryByTestId('join-screen')).toBeNull()
+  })
+})
+
+describe('a first-workspace sign-in: no invites, no answers', () => {
+  const BARE = () => jwt(ME.user.id, nowSec() + 3600)
+  const FIRM = 'For clients — an accounting or tax firm'
+  const IN_HOUSE = 'For our own company — in-house'
+  const ERROR = 'We could not create your workspace. Try again.'
+  const WS = '/api/tenancy/v1/workspaces'
+  const seq = (replies: Reply[]): Reply => () => (replies.length > 1 ? replies.shift()! : replies[0])()
+  const control = (id: string) => screen.getByTestId(id) as HTMLButtonElement
+  const signOut = () => screen.getByRole('button', { name: 'Sign out' }) as HTMLButtonElement
+
+  async function form() {
+    exchangeToken = BARE()
+    renewedMeReply = ok(ME)
+    mineReply = ok({ invitations: [], removed: false, live_membership: false })
+    configure()
+    ensureSignInState()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await screen.findByTestId('join-create')
+    return hrefWrites
+  }
+  function fill(kindLabel: string) {
+    fireEvent.change(screen.getByTestId('join-workspace-name'), { target: { value: ' Acme ' } })
+    fireEvent.change(screen.getByTestId('join-name'), { target: { value: 'Ada' } })
+    fireEvent.click(screen.getByLabelText(kindLabel))
+  }
+  const frozen = (kindLabel: string) => {
+    expect((screen.getByTestId('join-workspace-name') as HTMLInputElement).value).toBe(' Acme ')
+    expect((screen.getByTestId('join-workspace-name') as HTMLInputElement).disabled).toBe(true)
+    expect((screen.getByTestId('join-name') as HTMLInputElement).value).toBe('Ada')
+    expect((screen.getByTestId('join-name') as HTMLInputElement).disabled).toBe(true)
+    const radio = screen.getByLabelText(kindLabel) as HTMLInputElement
+    expect(radio.checked).toBe(true)
+    expect(radio.matches(':disabled')).toBe(true)
+    expect(control('join-create').disabled).toBe(false)
+    expect(signOut().disabled).toBe(false)
+  }
+
+  it('App: first-workspace Create sends the typed names and the chosen kind', async () => {
+    await form()
+    fill(IN_HOUSE)
+    expect(hits(WS), 'nothing is provisioned before the click').toEqual([])
+    const create = control('join-create')
+    fireEvent.click(create)
+    fireEvent.click(create)
+    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
+    expect(hits(WS)).toHaveLength(1)
+    expect(hits(WS)[0].body).toEqual({ workspace_name: 'Acme', display_name: 'Ada', kind: 'in_house' })
+  })
+
+  it('App: two first-workspace Create clicks in one tick send one POST', async () => {
+    await form()
+    fill(FIRM)
+    const create = control('join-create')
+    await act(async () => {
+      fireEvent.click(create)
+      fireEvent.click(create)
+    })
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    expect(hits(WS)).toHaveLength(1)
+  })
+
+  it('App: first-workspace Create sends firm when firm is chosen', async () => {
+    await form()
+    fill(FIRM)
+    fireEvent.click(control('join-create'))
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    expect(hits(WS)[0].body).toEqual({ workspace_name: 'Acme', display_name: 'Ada', kind: 'firm' })
+  })
+
+  it('App: a failed first-workspace Create stays on the form and keeps the values', async () => {
+    workspacesReply = fail(500, 'boom')
+    const hrefWrites = await form()
+    fill(FIRM)
+    fireEvent.click(control('join-create'))
+    expect((await screen.findByRole('alert')).textContent).toBe(ERROR)
+    await settle()
+    expect(hrefWrites).toEqual([])
+    frozen(FIRM)
+  })
+
+  for (const [name, reply] of [['a network failure', networkDown], ['a 400', fail(400, 'bad request')]] as [string, Reply][]) {
+    it(`App: ${name} stays on the form too`, async () => {
+      workspacesReply = reply
+      const hrefWrites = await form()
+      fill(FIRM)
+      fireEvent.click(control('join-create'))
+      expect((await screen.findByRole('alert')).textContent).toBe(ERROR)
+      expect(hrefWrites).toEqual([])
+      frozen(FIRM)
+    })
+  }
+
+  it('App: a retry clears the error and reaches the workspace', async () => {
+    workspacesReply = seq([fail(500, 'boom'), ok({ tenant: ME.tenant })])
+    await form()
+    fill(FIRM)
+    fireEvent.click(control('join-create'))
+    await screen.findByRole('alert')
+    fireEvent.click(control('join-create'))
+    expect(screen.queryByRole('alert'), 'the retry clears the error').toBeNull()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    expect(hits(WS)).toHaveLength(2)
+    expect(hits(WS)[1].body).toEqual(hits(WS)[0].body)
+  })
+
+  it('App: a 409 whose re-read answers 403 stays on the form', async () => {
+    workspacesReply = fail(409, 'this account already has a workspace')
+    renewedMeReply = fail(403, 'forbidden')
+    const hrefWrites = await form()
+    fill(FIRM)
+    renewedMeReply = fail(403, 'forbidden')
+    fireEvent.click(control('join-create'))
+    expect((await screen.findByRole('alert')).textContent).toBe(ERROR)
+    expect(hrefWrites).toEqual([])
+    frozen(FIRM)
+  })
+
+  it('App: Create after another tab created lands with no error', async () => {
+    workspacesReply = fail(409, 'this account already has a workspace')
+    const hrefWrites = await form()
+    fill(FIRM)
+    fireEvent.click(control('join-create'))
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    expect(screen.queryByTestId('join-create-error')).toBeNull()
+    expect(hrefWrites).toEqual([])
+  })
+
+  const leaves: [string, () => void][] = [
+    ['POST 401 then refresh 401', () => { workspacesReply = fail(401, 'unauthorized'); refreshReply = fail(401, 'invalid or expired refresh token') }],
+    ['POST 201 then refresh 401', () => { refreshReply = fail(401, 'invalid or expired refresh token') }],
+    ['POST 401, refresh 200, POST 401', () => { workspacesReply = fail(401, 'unauthorized') }],
+  ]
+  for (const [name, arrange] of leaves) {
+    it(`App: a session that cannot renew leaves for the failed notice (${name})`, async () => {
+      const hrefWrites = await form()
+      arrange()
+      fill(FIRM)
+      fireEvent.click(control('join-create'))
+      await waitFor(() => expect(hrefWrites).toHaveLength(1))
+      expect(hrefWrites[0]).toMatch(/signin=failed$/)
+      expect(screen.queryByTestId('join-create-error')).toBeNull()
+      expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    })
+  }
+
+  for (const [name, reply] of [['POST 201', ok({ tenant: ME.tenant })], ['POST 401', fail(401, 'unauthorized')], ['POST 500', fail(500, 'boom')]] as [string, Reply][]) {
+    it(`App: a missing refresh token leaves for the failed notice (${name})`, async () => {
+      exchangeRefresh = null
+      workspacesReply = reply
+      const hrefWrites = await form()
+      fill(FIRM)
+      fireEvent.click(control('join-create'))
+      await waitFor(() => expect(hrefWrites).toHaveLength(1))
+      expect(hrefWrites[0]).toMatch(/signin=failed$/)
+      expect(screen.queryByTestId('join-create-error')).toBeNull()
+    })
+  }
+
+  it('App: an empty refresh token leaves for the failed notice', async () => {
+    exchangeRefresh = ''
+    const hrefWrites = await form()
+    fill(FIRM)
+    fireEvent.click(control('join-create'))
+    await waitFor(() => expect(hrefWrites).toHaveLength(1))
+    expect(hrefWrites[0]).toMatch(/signin=failed$/)
+    expect(screen.queryByTestId('join-create-error')).toBeNull()
+  })
+
+  it('App: a refresh that answers 500 stays on the form', async () => {
+    refreshReply = fail(500, 'boom')
+    const hrefWrites = await form()
+    fill(FIRM)
+    fireEvent.click(control('join-create'))
+    expect((await screen.findByRole('alert')).textContent).toBe(ERROR)
+    expect(hrefWrites).toEqual([])
+    frozen(FIRM)
   })
 })

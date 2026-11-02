@@ -13,6 +13,7 @@ import {
   registerFormAccount,
   registerFresh,
   removeMember,
+  setMembershipStatus,
   signInSession,
   subjectOf,
   type Membership,
@@ -144,7 +145,26 @@ test.describe.serial('membership removal (API E2E, over the deployed gateway)', 
     expect(tenantClaim(next), 'the next token carries no workspace').toBeUndefined()
     const res = await listMine(next)
     expect(res.status, JSON.stringify(res.body)).toBe(200)
-    expect(res.body).toEqual({ invitations: [], removed: true })
+    expect(res.body).toEqual({ invitations: [], removed: true, live_membership: false })
+  })
+
+  test('membership removal: the mine route answers live_membership', async () => {
+    const bare = await registerFresh('removal-bare')
+    const bareMine = await listMine((await signInSession(bare.email, bare.password)).access_token)
+    expect(bareMine.status, JSON.stringify(bareMine.body)).toBe(200)
+    expect(bareMine.body, 'a bare account has no membership').toEqual({ invitations: [], removed: false, live_membership: false })
+
+    const gone = await joined(first, 'reviewer', 'Gone')
+    await removeOk(first, gone.userId)
+    const goneMine = await listMine((await signInSession(gone.email, gone.password)).access_token)
+    expect(goneMine.body, 'a removed row is not a live membership').toEqual({ invitations: [], removed: true, live_membership: false })
+
+    const held = await joined(first, 'reviewer', 'Held')
+    const suspended = await setMembershipStatus(first.adminToken, held.userId, 'suspended')
+    expect(suspended.status, 'the roster row says suspended').toBe('suspended')
+    const heldMine = await listMine((await signInSession(held.email, held.password)).access_token)
+    expect(heldMine.status, JSON.stringify(heldMine.body)).toBe(200)
+    expect(heldMine.body, 'a suspended member is a live membership').toEqual({ invitations: [], removed: false, live_membership: true })
   })
 
   test('membership removal: a re-invite revives the same row with the new name', async () => {

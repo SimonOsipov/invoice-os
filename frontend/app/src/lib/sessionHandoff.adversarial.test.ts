@@ -60,14 +60,6 @@ describe('redeemHandoff adversarial', () => {
     }
   })
 
-  it('a /me 403 rejects with status 403 after the exchange', async () => {
-    const urls = stubFetch({ status: 200, body: { access_token: LIVE } }, { status: 403, body: { error: 'forbidden' } }, { status: 200, body: { invitations: [] } })
-    const err = await redeemHandoff(GATEWAY, CODE, STATE).catch((e: unknown) => e)
-    expect(err).toBeInstanceOf(ApiError)
-    expect((err as ApiError).status).toBe(403)
-    expect(urls).toEqual([`${GATEWAY}/auth/exchange`, `${GATEWAY}/api/tenancy/v1/me`, `${GATEWAY}/api/tenancy/v1/invitations/mine`])
-  })
-
   it('redeemHandoff: a non-boolean removed reads false', async () => {
     const b64 = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, '')
     const registration = { workspace_name: 'Acme', display_name: 'Ada' }

@@ -366,3 +366,121 @@ describe('JoinWorkspace', () => {
     expect(errText()).toBe('Enter your name.')
   })
 })
+
+describe('JoinWorkspace first workspace', () => {
+  const FIRM = 'For clients — an accounting or tax firm'
+  const IN_HOUSE = 'For our own company — in-house'
+  const LINE = 'This account has no workspace yet. Create one below to get started. If you were invited, open the invite link in your email first. An account can belong to only one workspace, so creating one here blocks joining another.'
+  const first = (over: Partial<Parameters<typeof JoinWorkspace>[0]> = {}) => show([], { firstWorkspace: true, defaultName: '', onCreate: vi.fn(), ...over })
+  const ws = () => screen.getByTestId('join-workspace-name') as HTMLInputElement
+  const nm = () => screen.getByTestId('join-name') as HTMLInputElement
+  const create = () => screen.getByTestId('join-create') as HTMLButtonElement
+  const signOut = () => screen.getByRole('button', { name: 'Sign out' }) as HTMLButtonElement
+  const radio = (label: string) => screen.getByLabelText(label) as HTMLInputElement
+  const type = (w: string, n: string) => {
+    fireEvent.change(ws(), { target: { value: w } })
+    fireEvent.change(nm(), { target: { value: n } })
+  }
+
+  it('JoinWorkspace: firstWorkspace shows the create copy', () => {
+    first()
+    expect(screen.getByRole('heading').textContent).toBe('Create your workspace')
+    expect(screen.getByText(LINE)).toBeTruthy()
+    expect(screen.queryByText('This account has no workspace yet. If you were invited, open the invite link in your email.')).toBeNull()
+  })
+
+  it('JoinWorkspace: firstWorkspace offers two unchecked kinds', () => {
+    first()
+    const radios = screen.getAllByRole('radio') as HTMLInputElement[]
+    expect(radios.map((r) => r.closest('label')?.textContent)).toEqual([FIRM, IN_HOUSE])
+    expect(radios.map((r) => r.checked)).toEqual([false, false])
+    expect([ws().value, nm().value]).toEqual(['', ''])
+  })
+
+  it('JoinWorkspace: no kind choice without firstWorkspace', () => {
+    const { onCreate } = show([], { onCreate: vi.fn() })
+    expect(screen.getByRole('heading').textContent).toBe('No workspace yet')
+    expect(screen.queryAllByRole('radio')).toHaveLength(0)
+    type('Acme', 'Ada')
+    expect(create().disabled).toBe(false)
+    fireEvent.click(create())
+    expect(onCreate).toHaveBeenCalledWith('Acme', 'Ada')
+  })
+
+  it('JoinWorkspace: Creating disables every control', () => {
+    first({ joining: CREATING_OWN, defaultName: 'Ada', defaultWorkspace: 'Acme' })
+    expect(create().textContent).toBe('Creating…')
+    expect(create().disabled).toBe(true)
+    expect(signOut().disabled).toBe(true)
+    expect(ws().disabled).toBe(true)
+    expect(nm().disabled).toBe(true)
+    expect(radio(FIRM).matches(':disabled')).toBe(true)
+    expect(radio(IN_HOUSE).matches(':disabled')).toBe(true)
+  })
+
+  it('JoinWorkspace: a complete form disables Create and Sign out while creating', () => {
+    const props = { invites: [], firstWorkspace: true, onCreate: vi.fn(), onSignOut: vi.fn(), onJoin: vi.fn() }
+    const { rerender } = render(<JoinWorkspace {...props} joining={null} />)
+    type('Acme', 'Ada')
+    fireEvent.click(radio(FIRM))
+    expect(create().disabled).toBe(false)
+    rerender(<JoinWorkspace {...props} joining={CREATING_OWN} />)
+    expect(create().textContent).toBe('Creating…')
+    expect(create().disabled).toBe(true)
+    expect(signOut().disabled).toBe(true)
+    expect(ws().disabled).toBe(true)
+    expect(radio(IN_HOUSE).matches(':disabled')).toBe(true)
+  })
+
+  it('JoinWorkspace: Create needs both names and a kind', () => {
+    first()
+    type('Acme', 'Ada')
+    expect(create().disabled, 'no kind').toBe(true)
+    fireEvent.click(radio(FIRM))
+    expect(create().disabled, 'both names and a kind').toBe(false)
+    for (const [w, n] of [['', 'Ada'], ['Acme', '   '], ['Acme', 'x'.repeat(201)]]) {
+      type(w, n)
+      expect(create().disabled, `${w.length}/${n.length}`).toBe(true)
+    }
+    type('Acme', 'Ada')
+    expect(create().disabled).toBe(false)
+  })
+
+  it('JoinWorkspace: createFailed shows the error', () => {
+    const { rerender } = render(<JoinWorkspace invites={[]} joining={null} firstWorkspace createFailed onSignOut={vi.fn()} onJoin={vi.fn()} />)
+    expect(screen.getByRole('alert').textContent).toBe('We could not create your workspace. Try again.')
+    expect(signOut().disabled).toBe(false)
+    rerender(<JoinWorkspace invites={[]} joining={null} firstWorkspace createFailed={false} onSignOut={vi.fn()} onJoin={vi.fn()} />)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('JoinWorkspace: names and kind freeze after a Create is sent', () => {
+    const onCreate = vi.fn()
+    const props = { invites: [], firstWorkspace: true, onCreate, onSignOut: vi.fn(), onJoin: vi.fn() }
+    const { rerender } = render(<JoinWorkspace {...props} joining={null} />)
+    type('Acme', 'Ada')
+    fireEvent.click(radio(IN_HOUSE))
+    fireEvent.click(create())
+    rerender(<JoinWorkspace {...props} joining={null} createFailed />)
+    expect(ws().disabled).toBe(true)
+    expect(nm().disabled).toBe(true)
+    expect(radio(FIRM).matches(':disabled')).toBe(true)
+    expect(radio(IN_HOUSE).matches(':disabled')).toBe(true)
+    expect([ws().value, nm().value, radio(IN_HOUSE).checked]).toEqual(['Acme', 'Ada', true])
+    expect(create().disabled).toBe(false)
+    expect(signOut().disabled).toBe(false)
+    fireEvent.click(create())
+    expect(onCreate).toHaveBeenCalledTimes(2)
+    expect(onCreate).toHaveBeenLastCalledWith('Acme', 'Ada', 'in_house')
+  })
+
+  it('JoinWorkspace: the removed form does not freeze', () => {
+    const props = { invites: [], onCreate: vi.fn(), onSignOut: vi.fn(), onJoin: vi.fn() }
+    const { rerender } = render(<JoinWorkspace {...props} joining={null} />)
+    type('Acme', 'Ada')
+    fireEvent.click(create())
+    rerender(<JoinWorkspace {...props} joining={null} />)
+    expect(ws().disabled).toBe(false)
+    expect(nm().disabled).toBe(false)
+  })
+})

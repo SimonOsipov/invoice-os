@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -43,8 +44,8 @@ func TestInvitationsMine_WireShape(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
 		t.Fatalf("body %q: %v", rec.Body, err)
 	}
-	if strings.Join(keysOf(raw), ",") != "invitations,removed" || raw["removed"] != false {
-		t.Fatalf("body = %s, want exactly {invitations, removed:false}", rec.Body)
+	if strings.Join(keysOf(raw), ",") != "invitations,live_membership,removed" || raw["removed"] != false || raw["live_membership"] != false {
+		t.Fatalf("body = %s, want exactly {invitations, live_membership:false, removed:false}", rec.Body)
 	}
 	var body struct {
 		Invitations []map[string]any `json:"invitations"`
@@ -74,8 +75,8 @@ func TestInvitationsMine_WireShape(t *testing.T) {
 	for name, empty := range map[string][]PendingInvite{"empty slice": {}} {
 		t.Run(name, func(t *testing.T) {
 			rec := apiDo(mineMux(func(context.Context) (MyInvitations, error) { return MyInvitations{Invitations: empty}, nil }), context.Background(), http.MethodGet, "/v1/invitations/mine", "")
-			if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"invitations":[],"removed":false}` {
-				t.Errorf("answer = %d %s, want 200 {\"invitations\":[],\"removed\":false}", rec.Code, rec.Body)
+			if rec.Code != http.StatusOK || !sameJSON(rec.Body.String(), `{"invitations":[],"live_membership":false,"removed":false}`) {
+				t.Errorf("answer = %d %s, want 200 {invitations:[], live_membership:false, removed:false}", rec.Code, rec.Body)
 			}
 		})
 	}
@@ -218,14 +219,14 @@ func TestInvitationsMineHandler_Shape(t *testing.T) {
 		in   MyInvitations
 		want string
 	}{
-		{"removed with no invites", MyInvitations{Invitations: []PendingInvite{}, Removed: true}, `{"invitations":[],"removed":true}`},
-		{"not removed with no invites", MyInvitations{Invitations: []PendingInvite{}}, `{"invitations":[],"removed":false}`},
+		{"removed with no invites", MyInvitations{Invitations: []PendingInvite{}, Removed: true}, `{"invitations":[],"live_membership":false,"removed":true}`},
+		{"not removed with no invites", MyInvitations{Invitations: []PendingInvite{}}, `{"invitations":[],"live_membership":false,"removed":false}`},
 		{"removed with an invite", MyInvitations{Invitations: []PendingInvite{item}, Removed: true},
-			`{"invitations":[{"id":"` + item.ID + `","workspace":"Eze Ltd","role":"preparer","inviter":null,"expires_at":"2026-10-14T09:30:00Z"}],"removed":true}`},
+			`{"invitations":[{"id":"` + item.ID + `","workspace":"Eze Ltd","role":"preparer","inviter":null,"expires_at":"2026-10-14T09:30:00Z"}],"live_membership":false,"removed":true}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rec := apiDo(mux(c.in), context.Background(), http.MethodGet, "/v1/invitations/mine", "")
-			if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != c.want {
+			if rec.Code != http.StatusOK || !sameJSON(rec.Body.String(), c.want) {
 				t.Errorf("answer = %d %s, want 200 %s", rec.Code, rec.Body, c.want)
 			}
 		})
@@ -239,4 +240,44 @@ func TestInvitationsMineHandler_Shape(t *testing.T) {
 		return h
 	}(), context.Background(), http.MethodGet, "/v1/invitations/mine", "")
 	assertErrorBody(t, rec, http.StatusConflict, "you already belong to a workspace")
+}
+
+// MyInvitations is built from JSON so the test compiles and fails on the body before the field exists.
+func TestInvitationsMineHandler_LiveMembershipBody(t *testing.T) {
+	for _, c := range []struct {
+		name, in      string
+		live, removed bool
+	}{
+		{"live", `{"invitations":[],"removed":false,"live_membership":true}`, true, false},
+		{"not live", `{"invitations":[],"removed":false,"live_membership":false}`, false, false},
+		{"removed, not live", `{"invitations":[],"removed":true,"live_membership":false}`, false, true},
+		{"field left unset", `{"invitations":[],"removed":false}`, false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var m MyInvitations
+			if err := json.Unmarshal([]byte(c.in), &m); err != nil {
+				t.Fatalf("decode %s: %v", c.in, err)
+			}
+			rec := apiDo(mineMux(func(context.Context) (MyInvitations, error) { return m, nil }), context.Background(), http.MethodGet, "/v1/invitations/mine", "")
+			var raw map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil || rec.Code != http.StatusOK {
+				t.Fatalf("answer = %d %s (%v), want 200 JSON", rec.Code, rec.Body, err)
+			}
+			if got := strings.Join(keysOf(raw), ","); got != "invitations,live_membership,removed" {
+				t.Errorf("body = %s, want exactly invitations, live_membership, removed", rec.Body)
+			}
+			if raw["live_membership"] != c.live || raw["removed"] != c.removed {
+				t.Errorf("body = %s, want live_membership %v and removed %v", rec.Body, c.live, c.removed)
+			}
+			if list, ok := raw["invitations"].([]any); !ok || len(list) != 0 {
+				t.Errorf("body = %s, want an empty invitations list", rec.Body)
+			}
+		})
+	}
+}
+
+// sameJSON compares decoded values, so the test does not pin the field order.
+func sameJSON(a, b string) bool {
+	var x, y any
+	return json.Unmarshal([]byte(a), &x) == nil && json.Unmarshal([]byte(b), &y) == nil && reflect.DeepEqual(x, y)
 }

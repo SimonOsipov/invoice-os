@@ -64,7 +64,7 @@ func approvalAuditSites() []approvalAuditSite {
 		{
 			label: "approval_approved", site: "decision.go:283 (commitDecisionTx)", event: "invoice.approval_approved",
 			idKey:    "invoice_id",
-			baseKeys: []string{"invoice_id", "run_id", "step_ord", "reason"},
+			baseKeys: []string{"invoice_id", "run_id", "step_ord", "reason", "approved_as"},
 			drive: func(t *testing.T, super, app *pgxpool.Pool, label string) (string, string) {
 				return driveApprovalDecision(t, super, app, label, "approved")
 			},

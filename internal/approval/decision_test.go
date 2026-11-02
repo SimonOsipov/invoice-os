@@ -808,10 +808,10 @@ func TestApprove_AuditPayloadShape(t *testing.T) {
 	if len(body) == 0 {
 		t.Fatal("payload is empty {} -- want invoice_id/run_id/step_ord/reason populated")
 	}
-	allowed := map[string]bool{"invoice_id": true, "run_id": true, "step_ord": true, "reason": true, "invoice_number": true}
+	allowed := map[string]bool{"invoice_id": true, "run_id": true, "step_ord": true, "reason": true, "invoice_number": true, "approved_as": true}
 	for k := range body {
 		if !allowed[k] {
-			t.Errorf("payload key %q is not in the allowlist {invoice_id, run_id, step_ord, reason, invoice_number} -- deliberately unlike ArmTx/CancelLiveRunTx's \"id\" key", k)
+			t.Errorf("payload key %q is not in the allowlist {invoice_id, run_id, step_ord, reason, invoice_number, approved_as} -- deliberately unlike ArmTx/CancelLiveRunTx's \"id\" key", k)
 		}
 	}
 	for k := range allowed {
@@ -830,6 +830,9 @@ func TestApprove_AuditPayloadShape(t *testing.T) {
 	}
 	if got, ok := body["reason"].(string); !ok || got != "all documentation verified" {
 		t.Errorf("payload reason = %v, want %q", body["reason"], "all documentation verified")
+	}
+	if got := body["approved_as"]; got != "approver" {
+		t.Errorf("payload approved_as = %v, want %q", got, "approver")
 	}
 }
 

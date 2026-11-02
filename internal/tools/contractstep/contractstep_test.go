@@ -442,13 +442,10 @@ func TestAdversarial_FormsThatMustTrigger(t *testing.T) {
 		{`DROP TABLE "we.ird name"`, []string{`"we.ird name"`}},
 		{`ALTER TABLE "a b" DROP "c d"`, []string{"a b.c d"}},
 		{"ALTER TABLE t DROP c, DROP d", []string{"t.c", "t.d"}},
-		{"ALTER TABLE t RENAME COLUMN a TO b, RENAME COLUMN c TO d", nil},
+		{"ALTER TABLE t RENAME COLUMN a TO b, RENAME COLUMN c TO d", []string{"t.a", "t.c"}},
 		{"DROP TABLE public.t, s.u CASCADE", []string{"public.t", "s.u"}},
 	}
 	for _, c := range cases {
-		if c.objs == nil {
-			continue
-		}
 		r := scanUp(t, c.sql+";")
 		if len(r.Triggers) == 0 || !slices.Equal(objects(r), c.objs) {
 			t.Errorf("%q: got %q, want %q", c.sql, objects(r), c.objs)
@@ -598,5 +595,106 @@ func TestAdversarial_QuoteFormsDoNotHideALaterDrop(t *testing.T) {
 	}
 	if got := objects(scanUp(t, `ALTER TABLE t ADD COLUMN x text DEFAULT 'a', DROP COLUMN y;`)); !slices.Equal(got, []string{"t.y"}) {
 		t.Errorf("plain default: got %q", got)
+	}
+}
+
+func TestTriggers_CommentsBetweenTokensDoNotHideADrop(t *testing.T) {
+	cases := []struct {
+		sql  string
+		objs []string
+	}{
+		{"ALTER TABLE t\n -- legacy\n DROP COLUMN x", []string{"t.x"}},
+		{"ALTER TABLE t ADD y int, -- add\n DROP COLUMN x", []string{"t.x"}},
+		{"DROP /*c*/ TABLE t", []string{"t"}},
+		{"ALTER TABLE t ADD y int -- don't\n , DROP COLUMN x", []string{"t.x"}},
+		{"ALTER TABLE t ADD y int /* a, b */, DROP COLUMN x", []string{"t.x"}},
+	}
+	for _, c := range cases {
+		for _, sql := range []string{c.sql + ";", "DO $$ BEGIN " + c.sql + "; END $$;"} {
+			if got := objects(scanUp(t, sql)); !slices.Equal(got, c.objs) {
+				t.Errorf("%q: got %q, want %q", sql, got, c.objs)
+			}
+		}
+	}
+}
+
+func TestTriggers_OddTokensDoNotHideADrop(t *testing.T) {
+	cases := []struct {
+		sql  string
+		objs []string
+	}{
+		{"ALTER TABLE t * DROP COLUMN x", []string{"t.x"}},
+		{"ALTER TABLE public . t DROP COLUMN x", []string{"public.t.x"}},
+		{`ALTER TABLE "a""b" DROP COLUMN x`, []string{`"a""b".x`}},
+		{"DROP TABLE\ffoo", []string{"foo"}},
+	}
+	for _, c := range cases {
+		if got := objects(scanUp(t, c.sql+";")); !slices.Equal(got, c.objs) {
+			t.Errorf("%q: got %q, want %q", c.sql, got, c.objs)
+		}
+	}
+}
+
+func TestMarks_QuotedNameWithADoubledQuoteReleases(t *testing.T) {
+	if lines, failed := evalUp(t, `-- contract-step "a""b".x: why`+"\n"+`ALTER TABLE "a""b" DROP COLUMN x;`); failed {
+		t.Fatalf("lines %q", lines)
+	}
+}
+
+func TestTriggers_UnplacedDropOrRenameWordInAlterTableFailsClosed(t *testing.T) {
+	for _, sql := range []string{
+		"ALTER TABLE t DROP COLUMN %I",
+		"ALTER TABLE t FROB DROP COLUMN x",
+		"ALTER TABLE t ADD y int, FROB RENAME x TO z",
+	} {
+		if got := objects(scanUp(t, sql+";")); !slices.Equal(got, []string{"t"}) {
+			t.Errorf("%q: got %q, want the table", sql, got)
+		}
+	}
+	for _, sql := range []string{
+		"ALTER TABLE t ADD y text DEFAULT 'drop it'",
+		"ALTER TABLE t ADD y int -- drop later\n",
+		"ALTER TABLE t ALTER COLUMN c DROP IDENTITY",
+	} {
+		if got := objects(scanUp(t, sql+";")); len(got) != 0 {
+			t.Errorf("%q: got %q, want none", sql, got)
+		}
+	}
+}
+
+func TestMarks_OneMarkClaimsOneObject(t *testing.T) {
+	cases := []struct {
+		name, sql string
+		want      []string
+	}{
+		{"kinds", "-- contract-step foo: why\nDROP TABLE foo; DROP FUNCTION foo;", []string{unmarkedLine(testFile, "DROP FUNCTION foo", "foo")}},
+		{"two marks", "-- contract-step foo: a\n-- contract-step foo: b\nDROP TABLE foo; DROP FUNCTION foo;", nil},
+		{"schemas", "-- contract-step foo: why\nDROP TABLE a.foo; DROP TABLE b.foo;", []string{unmarkedLine(testFile, "DROP TABLE b.foo", "b.foo")}},
+		{"column and table", "-- contract-step orders.legacy: why\nALTER TABLE orders DROP COLUMN legacy; DROP TABLE legacy;", []string{unmarkedLine(testFile, "DROP TABLE legacy", "legacy")}},
+	}
+	for _, c := range cases {
+		lines, failed := evalUp(t, c.sql)
+		if c.want == nil {
+			if failed || len(lines) != 3 || lines[0] != "Deliberate schema changes:" {
+				t.Errorf("%s: lines %q failed %v", c.name, lines, failed)
+			}
+			continue
+		}
+		if !failed || !slices.Equal(lines, c.want) {
+			t.Errorf("%s:\n got: %q\nwant: %q", c.name, lines, c.want)
+		}
+	}
+}
+
+func TestUpSection_ReadsGooseAnnotationsLikeGoose(t *testing.T) {
+	r, err := Scan(testFile, "-- +goose up\nSELECT 1;\n-- +goose down\nDROP TABLE t;\n")
+	if err != nil || len(r.Triggers) != 0 {
+		t.Fatalf("down section read: %+v, %v", r, err)
+	}
+	for _, up := range []string{"-- +goose up", "--+goose Up"} {
+		r, err := Scan(testFile, up+"\nDROP TABLE t;\n")
+		if err != nil || len(r.Triggers) != 1 {
+			t.Errorf("%q: %+v, %v", up, r, err)
+		}
 	}
 }

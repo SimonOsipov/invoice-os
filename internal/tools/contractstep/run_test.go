@@ -229,7 +229,7 @@ func TestScan_ParsesEveryShippedMigration(t *testing.T) {
 	}
 }
 
-// Expected objects read from the Up sections of these four files (lines named in INFRA-09 Decisions).
+// Expected objects read from the Up sections of these four files.
 func TestScan_FindsTheRealDropsInTheShippedMigrations(t *testing.T) {
 	want := map[string][]string{
 		"20260707193000_river_and_idempotency.sql":     {"river_job_notify", "river_migration", "river_migration_old", "river_client_queue", "river_client"},
@@ -249,5 +249,14 @@ func TestScan_FindsTheRealDropsInTheShippedMigrations(t *testing.T) {
 		if got := objects(r); !slices.Equal(got, objs) {
 			t.Errorf("%s\n got: %q\nwant: %q", name, got, objs)
 		}
+	}
+}
+
+func TestRun_NonASCIIMigrationPathIsChecked(t *testing.T) {
+	r := newRepo(t, baseFiles)
+	r.write("migrations/20260201000000_café.sql", mig("DROP TABLE t;"))
+	r.commit("add")
+	if code, out := r.runPR(); code != 1 || !strings.Contains(out, "migrations/20260201000000_café.sql: DROP TABLE t deletes") {
+		t.Fatalf("code %d, out %q", code, out)
 	}
 }

@@ -62,11 +62,15 @@ paths:
 - Drop or rename a column or table in a later deploy, after no running revision reads it.
 - Mark every DROP COLUMN, DROP TABLE, RENAME of a column or table, DROP FUNCTION and DROP TYPE in an Up section. The check reads each action of a multi-action ALTER TABLE.
 - Mark a deliberate deletion in the Up section: `-- contract-step <object>: <why no running revision reads it>`. Mark only when no running revision reads the object.
-- Name a column `table.column`, a rename by its old name, and a function without arguments. One mark releases one object.
+- Name a column `table.column`, a rename by its old name, and a function without arguments. One mark releases one object: a kind and a name as written.
+- Write one mark for each object. A table and a function with one name need two marks. Overloads of one function are one object.
 - Mark a drop-and-recreate of a function.
 - Write the mark outside a dollar-quoted body. The check does not read inside one.
-- Mark no DROP CONSTRAINT, INDEX, TRIGGER, DEFAULT, NOT NULL, SCHEMA, VIEW, MATERIALIZED VIEW, PROCEDURE, ROUTINE, AGGREGATE or DOMAIN. The check ignores them.
-- The `Schema deletion` job runs `go run ./internal/tools/contractstep -base origin/<the PR's base branch>`. It fails on an added migration with an unmarked drop, a mark with no reason, or a mark that names no statement. It fails when it cannot run.
+- Mark no DROP CONSTRAINT, INDEX, TRIGGER, DEFAULT, NOT NULL, SCHEMA, VIEW, MATERIALIZED VIEW, PROCEDURE, ROUTINE, AGGREGATE, DOMAIN or FOREIGN TABLE, and no SET SCHEMA. The check ignores them.
+- The `Schema deletion` job checks the migrations that a change adds. It fails an unmarked drop, a mark with no reason, and a mark that names no statement.
+- The job gets the base SHA of the PR, or the previous commit on a push. An empty or all-zero base fails the job.
+- The job fails when it cannot run.
+- Run the check locally with `go run ./internal/tools/contractstep -base origin/<the PR's base branch>`.
 - Run migrations only in `cmd/migrate`, the job that runs before each deploy. No service migrates at boot.
 - goose holds its session advisory lock while it migrates. `TestMigrateUpFromEmbedded` fails otherwise.
 - Never edit an applied migration.

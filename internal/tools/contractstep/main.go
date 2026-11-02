@@ -55,12 +55,13 @@ func scanAdded(repo string, args []string) ([]Result, error) {
 		return nil, err
 	}
 	// --no-renames: a renamed migration gets a new version and counts as added.
-	out, err := git(repo, "diff", "--no-renames", "--name-only", "--diff-filter=A", strings.TrimSpace(mergeBase), *head, "--", dir+"/")
+	// -z: git C-quotes a non-ASCII path otherwise.
+	out, err := git(repo, "diff", "--no-renames", "--name-only", "-z", "--diff-filter=A", strings.TrimSpace(mergeBase), *head, "--", dir+"/")
 	if err != nil {
 		return nil, err
 	}
 	var results []Result
-	for _, path := range strings.Split(out, "\n") {
+	for _, path := range strings.Split(out, "\x00") {
 		rest, ok := strings.CutPrefix(path, dir+"/")
 		if !ok || strings.Contains(rest, "/") || !strings.HasSuffix(rest, ".sql") {
 			continue

@@ -13,6 +13,7 @@ import (
 type Trigger struct {
 	Statement string
 	Object    string
+	kind      string
 	parts     []string
 	n         int
 }
@@ -50,14 +51,22 @@ func Scan(file, sql string) (Result, error) {
 	return r, nil
 }
 
+// gooseAnnotation returns the lower-cased "-- +goose <cmd>" command of a line, read as goose does.
+func gooseAnnotation(line string) string {
+	if !strings.HasPrefix(strings.TrimSpace(line), "--") || !strings.Contains(line, "+goose") {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(strings.Replace(strings.ReplaceAll(line, "--", ""), "+goose", "", 1)))
+}
+
 func upSection(sql string) (string, error) {
 	lines := strings.Split(sql, "\n")
-	start := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(strings.TrimSpace(l), "-- +goose Up") })
+	start := slices.IndexFunc(lines, func(l string) bool { return gooseAnnotation(l) == "up" })
 	if start < 0 {
 		return "", errors.New(`no "-- +goose Up" line`)
 	}
 	lines = lines[start+1:]
-	if end := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(strings.TrimSpace(l), "-- +goose Down") }); end >= 0 {
+	if end := slices.IndexFunc(lines, func(l string) bool { return gooseAnnotation(l) == "down" }); end >= 0 {
 		lines = lines[:end]
 	}
 	return strings.Join(lines, "\n"), nil
@@ -111,6 +120,43 @@ func dollarEnd(src string, i int) int {
 	return i + len(tag) + end + len(tag)
 }
 
+// skipSpan returns the index after the comment, quote or dollar-quoted span opened at
+// src[i] and what it is; what is "" when src[i] opens none. end is -1 when unterminated.
+func skipSpan(src string, i int) (end int, what string) {
+	switch c := src[i]; {
+	case c == '-' && strings.HasPrefix(src[i:], "--"):
+		if n := strings.IndexByte(src[i:], '\n'); n >= 0 {
+			return i + n, "line comment"
+		}
+		return len(src), "line comment"
+	case c == '/' && strings.HasPrefix(src[i:], "/*"):
+		depth, j := 1, i+2
+		for depth > 0 {
+			switch {
+			case strings.HasPrefix(src[j:], "/*"):
+				depth++
+				j += 2
+			case strings.HasPrefix(src[j:], "*/"):
+				depth--
+				j += 2
+			case j >= len(src):
+				return -1, "block comment"
+			default:
+				j++
+			}
+		}
+		return j, "block comment"
+	case c == '\'' || c == '"':
+		if j := quoteEnd(src, i); j >= 0 {
+			return j + 1, "quote"
+		}
+		return -1, "quote"
+	case c == '$' && (i == 0 || !isIdent(src[i-1])) && dollarTag(src[i:]) != "":
+		return dollarEnd(src, i), "dollar quote"
+	}
+	return i, ""
+}
+
 // lex splits Up text into code segments (comments removed, quoted and dollar-quoted
 // spans kept verbatim) and the text of its "--" comments.
 func lex(src string) (segs, comments []string, err error) {
@@ -122,53 +168,25 @@ func lex(src string) (segs, comments []string, err error) {
 		cur.Reset()
 	}
 	for i := 0; i < len(src); {
-		c := src[i]
-		switch {
-		case c == '-' && strings.HasPrefix(src[i:], "--"):
-			n := strings.IndexByte(src[i:], '\n')
-			if n < 0 {
-				n = len(src) - i
+		if end, what := skipSpan(src, i); what != "" {
+			if end < 0 {
+				return nil, nil, errors.New("Up section ends inside an unterminated " + what)
 			}
-			comments = append(comments, src[i+2:i+n])
-			cur.WriteByte(' ')
-			i += n
-		case c == '/' && strings.HasPrefix(src[i:], "/*"):
-			depth, j := 1, i+2
-			for depth > 0 {
-				switch {
-				case strings.HasPrefix(src[j:], "/*"):
-					depth++
-					j += 2
-				case strings.HasPrefix(src[j:], "*/"):
-					depth--
-					j += 2
-				case j >= len(src):
-					return nil, nil, errors.New("Up section ends inside an unterminated block comment")
-				default:
-					j++
-				}
+			switch src[i] {
+			case '-':
+				comments = append(comments, src[i+2:end])
+				cur.WriteByte(' ')
+			case '/':
+				cur.WriteByte(' ')
+			default:
+				cur.WriteString(src[i:end])
 			}
-			cur.WriteByte(' ')
-			i = j
-		case c == '\'' || c == '"':
-			j := quoteEnd(src, i)
-			if j < 0 {
-				return nil, nil, errors.New("Up section ends inside an unterminated quote")
-			}
-			cur.WriteString(src[i : j+1])
-			i = j + 1
-		case c == '$' && (i == 0 || !isIdent(src[i-1])) && dollarTag(src[i:]) != "":
-			j := dollarEnd(src, i)
-			if j < 0 {
-				return nil, nil, errors.New("Up section ends inside an unterminated dollar quote")
-			}
-			cur.WriteString(src[i:j])
-			i = j
-		case c == ';':
+			i = end
+		} else if src[i] == ';' {
 			flush()
 			i++
-		default:
-			cur.WriteByte(c)
+		} else {
+			cur.WriteByte(src[i])
 			i++
 		}
 	}
@@ -182,9 +200,18 @@ type cursor struct {
 	i int
 }
 
+// ws skips whitespace as the regexp \s does, and comments (a dollar-quoted body keeps its own).
 func (c *cursor) ws() {
-	for c.i < len(c.s) && strings.IndexByte(" \t\r\n", c.s[c.i]) >= 0 {
-		c.i++
+	for c.i < len(c.s) {
+		if strings.IndexByte(" \t\r\n\f", c.s[c.i]) >= 0 {
+			c.i++
+		} else if end, what := skipSpan(c.s, c.i); strings.HasSuffix(what, "comment") {
+			if c.i = end; end < 0 {
+				c.i = len(c.s)
+			}
+		} else {
+			return
+		}
 	}
 }
 
@@ -214,15 +241,15 @@ func (c *cursor) peek() byte {
 	return 0
 }
 
-// part reads one identifier or "quoted identifier", quotes removed.
+// part reads one identifier or "quoted identifier" (with "" escapes), quotes removed.
 func (c *cursor) part() string {
 	if c.i < len(c.s) && c.s[c.i] == '"' {
-		end := strings.IndexByte(c.s[c.i+1:], '"')
+		end := quoteEnd(c.s, c.i)
 		if end < 0 {
 			return ""
 		}
-		p := c.s[c.i+1 : c.i+1+end]
-		c.i += end + 2
+		p := strings.ReplaceAll(c.s[c.i+1:end], `""`, `"`)
+		c.i = end + 1
 		return p
 	}
 	j := c.i
@@ -244,8 +271,9 @@ func (c *cursor) name() []string {
 			return nil
 		}
 		parts = append(parts, p)
-		if c.i < len(c.s) && c.s[c.i] == '.' {
+		if c.peek() == '.' {
 			c.i++
+			c.ws()
 			continue
 		}
 		return parts
@@ -269,35 +297,50 @@ func (c *cursor) args() string {
 	return c.s[start:]
 }
 
-var triggerStart = regexp.MustCompile(`(?i)\b(?:(DROP)\s+(TABLE|FUNCTION|TYPE)|(ALTER)\s+TABLE)\b`)
+var (
+	triggerStart = regexp.MustCompile(`(?i)\b(?:DROP|ALTER)\b`)
+	dropWord     = regexp.MustCompile(`(?i)\b(?:DROP|RENAME)\b`)
+)
 
-// dotted joins name parts with dots, quoting a part that holds a dot so the
-// text reads back as the same parts in a mark.
+// dotted joins name parts with dots, quoting a part that holds a dot or a quote so
+// the text reads back as the same parts in a mark.
 func dotted(parts []string) string {
 	q := make([]string, len(parts))
 	for i, p := range parts {
 		q[i] = p
-		if strings.Contains(p, ".") {
-			q[i] = `"` + p + `"`
+		if strings.ContainsAny(p, `."`) {
+			q[i] = `"` + strings.ReplaceAll(p, `"`, `""`) + `"`
 		}
 	}
 	return strings.Join(q, ".")
 }
 
-func newTrigger(stmt string, parts []string, n int) Trigger {
+func newTrigger(stmt, kind string, parts []string, n int) Trigger {
 	low := make([]string, len(parts))
 	for i, p := range parts {
 		low[i] = strings.ToLower(p)
 	}
-	return Trigger{Statement: stmt, Object: dotted(parts), parts: low, n: n}
+	return Trigger{Statement: stmt, Object: dotted(parts), kind: kind, parts: low, n: n}
 }
+
+// key names the object a mark claims: its kind and its name as written.
+func (t Trigger) key() string { return t.kind + " " + strings.Join(t.parts, ".") }
 
 func findTriggers(seg string) []Trigger {
 	var out []Trigger
-	for _, m := range triggerStart.FindAllStringSubmatchIndex(seg, -1) {
+	for _, m := range triggerStart.FindAllStringIndex(seg, -1) {
 		c := &cursor{s: seg, i: m[1]}
-		if m[2] >= 0 {
-			kind := strings.ToUpper(seg[m[4]:m[5]])
+		if strings.EqualFold(seg[m[0]:m[1]], "DROP") {
+			kind := ""
+			for _, k := range []string{"TABLE", "FUNCTION", "TYPE"} {
+				if c.kw(k) {
+					kind = k
+					break
+				}
+			}
+			if kind == "" {
+				continue
+			}
 			c.kw("IF", "EXISTS")
 			for {
 				parts := c.name()
@@ -308,7 +351,7 @@ func findTriggers(seg string) []Trigger {
 				if kind == "FUNCTION" && c.peek() == '(' {
 					stmt += "(" + strings.TrimSpace(c.args()) + ")"
 				}
-				out = append(out, newTrigger(stmt, parts, 1))
+				out = append(out, newTrigger(stmt, strings.ToLower(kind), parts, 1))
 				if c.peek() != ',' {
 					break
 				}
@@ -316,11 +359,17 @@ func findTriggers(seg string) []Trigger {
 			}
 			continue
 		}
+		if !c.kw("TABLE") {
+			continue
+		}
 		c.kw("IF", "EXISTS")
 		c.kw("ONLY")
 		table := c.name()
 		if table == nil {
 			continue
+		}
+		if c.peek() == '*' {
+			c.i++
 		}
 		for _, action := range splitActions(seg[c.i:]) {
 			out = append(out, actionTrigger(table, action)...)
@@ -334,29 +383,20 @@ func findTriggers(seg string) []Trigger {
 func splitActions(s string) []string {
 	var out []string
 	depth, start := 0, 0
-scan:
 	for i := 0; i < len(s); i++ {
+		if end, what := skipSpan(s, i); what != "" {
+			if end < 0 {
+				break
+			}
+			i = end - 1
+			continue
+		}
 		switch s[i] {
-		case '\'', '"':
-			j := quoteEnd(s, i)
-			if j < 0 {
-				break scan
-			}
-			i = j
-		case '$':
-			if (i == 0 || !isIdent(s[i-1])) && dollarTag(s[i:]) != "" {
-				if j := dollarEnd(s, i); j >= 0 {
-					i = j - 1
-				} else {
-					break scan
-				}
-			}
 		case '(':
 			depth++
 		case ')':
 			if depth--; depth < 0 {
-				out = append(out, s[start:i])
-				return out
+				return append(out, s[start:i])
 			}
 		case ',':
 			if depth == 0 {
@@ -364,11 +404,25 @@ scan:
 				start = i + 1
 			}
 		case ';':
-			out = append(out, s[start:i])
-			return out
+			return append(out, s[start:i])
 		}
 	}
 	return append(out, s[start:])
+}
+
+// blank replaces comments, quoted and dollar-quoted spans with spaces.
+func blank(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if end, what := skipSpan(s, i); what != "" && end >= 0 {
+			b.WriteByte(' ')
+			i = end
+		} else {
+			b.WriteByte(s[i])
+			i++
+		}
+	}
+	return b.String()
 }
 
 func actionTrigger(table []string, action string) []Trigger {
@@ -383,21 +437,30 @@ func actionTrigger(table []string, action string) []Trigger {
 		c.kw("COLUMN")
 		c.kw("IF", "EXISTS")
 		if name := c.name(); len(name) == 1 {
-			return []Trigger{newTrigger("ALTER TABLE "+t+" DROP COLUMN "+name[0], col(name[0]), 2)}
+			return []Trigger{newTrigger("ALTER TABLE "+t+" DROP COLUMN "+name[0], "column", col(name[0]), 2)}
 		}
 	case c.kw("RENAME"):
+		if c.kw("CONSTRAINT") {
+			return nil
+		}
 		if c.kw("TO") {
 			if u := c.name(); u != nil {
-				return []Trigger{newTrigger("ALTER TABLE "+t+" RENAME TO "+strings.Join(u, "."), table, 1)}
+				return []Trigger{newTrigger("ALTER TABLE "+t+" RENAME TO "+strings.Join(u, "."), "table", table, 1)}
 			}
 			return nil
 		}
 		c.kw("COLUMN")
 		if a := c.name(); len(a) == 1 && c.kw("TO") {
 			if b := c.name(); len(b) == 1 {
-				return []Trigger{newTrigger("ALTER TABLE "+t+" RENAME COLUMN "+a[0]+" TO "+b[0], col(a[0]), 2)}
+				return []Trigger{newTrigger("ALTER TABLE "+t+" RENAME COLUMN "+a[0]+" TO "+b[0], "column", col(a[0]), 2)}
 			}
 		}
+	case c.kw("ALTER"):
+		return nil
+	}
+	// Fail closed: a DROP or RENAME word the parser cannot place still needs a mark on the table.
+	if text := strings.Join(strings.Fields(blank(action)), " "); dropWord.MatchString(text) {
+		return []Trigger{newTrigger("ALTER TABLE "+t+" "+text, "table", table, 1)}
 	}
 	return nil
 }
@@ -418,6 +481,9 @@ func splitName(s string) []string {
 	quoted := false
 	for i := 0; i < len(s); i++ {
 		switch {
+		case s[i] == '"' && quoted && i+1 < len(s) && s[i+1] == '"':
+			b.WriteByte('"')
+			i++
 		case s[i] == '"':
 			quoted = !quoted
 		case s[i] == '.' && !quoted:
@@ -453,14 +519,19 @@ func Evaluate(results []Result) (lines []string, failed bool) {
 	for _, r := range rs {
 		var unmarked, noReason, orphan []string
 		used := make([]bool, len(r.Marks))
+		released := map[string]bool{}
 		for _, t := range r.Triggers {
-			hit := false
+			if released[t.key()] {
+				continue
+			}
+			claimed := false
 			for k, m := range r.Marks {
-				if m.matches(t) {
-					used[k], hit = true, true
+				if !used[k] && m.matches(t) {
+					used[k], released[t.key()], claimed = true, true, true
+					break
 				}
 			}
-			if !hit {
+			if !claimed {
 				unmarked = append(unmarked, fmt.Sprintf("%s: %s deletes or renames schema that a running revision may read. Write it in a later deploy, or add to the Up section: -- contract-step %s: <why no running revision reads it>", r.File, t.Statement, t.Object))
 			}
 		}

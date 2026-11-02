@@ -7670,6 +7670,37 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     await waitFor(() => expect(approveBtn().disabled).toBe(true))
   })
 
+  it('detail_serverRefusal_pendingRereadKeepsTheMessageAndApproveDisabled', async () => {
+    let release!: () => void
+    const hold = new Promise<void>((r) => { release = r })
+    refuseThenRefetch(refusedRead(), undefined, hold)
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    await waitFor(() => expect(detailGets()).toBe(2))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(screen.queryByTestId('detail-decision-error')?.textContent ?? null, 'refusal visible while the re-read is pending').toBe(SENTENCE)
+    expect(screen.queryByTestId('detail-approve'), 'detail still rendered during the re-read').not.toBeNull()
+    expect(approveBtn().disabled, 'Approve is off while the re-read is pending').toBe(true)
+    release()
+  })
+
+  it('detail_serverRefusal_failedRereadKeepsTheMessageAndApproveDisabled', async () => {
+    let fail!: () => void
+    const hold = new Promise<void>((_, rej) => { fail = () => rej(new Error('blip')) })
+    hold.catch(() => {})
+    refuseThenRefetch(refusedRead(), undefined, hold)
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    await waitFor(() => expect(detailGets()).toBe(2))
+    fail()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.queryByTestId('detail-approve'), 'detail survives a failed re-read, as it does a failed poll tick').not.toBeNull()
+    expect(screen.queryByTestId('detail-decision-error')?.textContent ?? null).toBe(SENTENCE)
+    expect(approveBtn().disabled, 'Approve stays off after a failed re-read').toBe(true)
+  })
+
   it('detail_conflictDoesNotDisableApprove', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: true }), [], {
       decideResponse: { ok: false, status: 409, json: () => Promise.resolve({ error: 'step already decided' }) },

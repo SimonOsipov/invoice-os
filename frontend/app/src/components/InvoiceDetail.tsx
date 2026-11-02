@@ -176,21 +176,13 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const base = gatewayBase()
   // Same `base ? … : …` narrowing as ClientsView ([A-e]/[A-m]) —
   // `immediate: shouldFetchInvoices(base)` keeps a no-gateway build at zero network.
-  // A 403 on confirm: the server refused this seat. Approve stays off until a read that
-  // started after the 403 returns can_approve true (a read in flight at the 403 is stale).
+  // A 403 on confirm: the server refused this seat. Approve stays off until the re-read
+  // that follows resolves; a failed re-read leaves it off.
   const [approveRefused, setApproveRefused] = useState(false)
-  const readSeq = useRef(0)
-  const refusedAtSeq = useRef(0)
-  const noteRead = (seq: number, fresh: InvoiceDetailRecord) => {
-    if (fresh.can_approve && seq > refusedAtSeq.current) setApproveRefused(false)
-  }
   const detail = useAsync<InvoiceDetailRecord>(
     async () => {
       if (!base) throw new Error('no gateway configured')
-      const seq = ++readSeq.current
-      const fresh = await getInvoice(ctx.authedFetch, base, invoiceId)
-      noteRead(seq, fresh)
-      return fresh
+      return getInvoice(ctx.authedFetch, base, invoiceId)
     },
     { immediate: shouldFetchInvoices(base), deps: [invoiceId] },
   )
@@ -302,7 +294,6 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       if (tickInFlight.current) return // finding 4: previous tick's GET hasn't resolved yet
       tickInFlight.current = true
       const g = gen.current
-      const seq = ++readSeq.current
       getInvoice(ctx.authedFetch, base, invoiceId)
         .then((fresh) => {
           // CodeRabbit fix cycle 2, finding 1: the whole resolved body now lives inside
@@ -314,7 +305,6 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
           // discarded tick still calling history.run() and flashing the timeline card for
           // a transition the UI is about to discard anyway.
           if (g !== gen.current) return
-          noteRead(seq, fresh)
           setLive(fresh)
           if (shouldRefreshHistory(prevStatus.current, fresh.status)) history.run()
           prevStatus.current = fresh.status
@@ -542,12 +532,17 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         approval.run()
       } catch (err) {
         if (err instanceof ApiError && err.status === 403) {
-          refusedAtSeq.current = readSeq.current
           setApproveRefused(true)
-          // Re-read for the durable can_approve flag and reason.
-          gen.current++
-          setLive(null)
-          detail.run()
+          // Background re-read for the durable can_approve flag and reason: the page and
+          // message stay up, and a failed read leaves Approve disabled.
+          const g = ++gen.current
+          getInvoice(ctx.authedFetch, base, invoiceId)
+            .then((fresh) => {
+              if (g !== gen.current) return
+              setLive(fresh)
+              setApproveRefused(false)
+            })
+            .catch(() => {})
         }
         setDecisionError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
       } finally {

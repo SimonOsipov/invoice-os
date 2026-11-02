@@ -2081,11 +2081,13 @@ func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval
 			probes = append(probes, approval.CreatorProbe{InvoiceID: id, RoleKey: f.PendingRoleKey})
 		}
 	}
-	gate.CreatorErr = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		var err error
-		gate.Creator, err = approval.CreatorStandingTx(ctx, tx, actorFromContext(ctx).Subject, probes)
-		return err
-	})
+	if len(probes) > 0 {
+		gate.CreatorErr = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+			var err error
+			gate.Creator, err = approval.CreatorStandingTx(ctx, tx, actorFromContext(ctx).Subject, probes)
+			return err
+		})
+	}
 	return out, gate, nil
 }
 

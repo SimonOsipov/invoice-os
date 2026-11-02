@@ -176,8 +176,22 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const base = gatewayBase()
   // Same `base ? … : …` narrowing as ClientsView ([A-e]/[A-m]) —
   // `immediate: shouldFetchInvoices(base)` keeps a no-gateway build at zero network.
+  // A 403 on confirm: the server refused this seat. Approve stays off until a read that
+  // started after the 403 returns can_approve true (a read in flight at the 403 is stale).
+  const [approveRefused, setApproveRefused] = useState(false)
+  const readSeq = useRef(0)
+  const refusedAtSeq = useRef(0)
+  const noteRead = (seq: number, fresh: InvoiceDetailRecord) => {
+    if (fresh.can_approve && seq > refusedAtSeq.current) setApproveRefused(false)
+  }
   const detail = useAsync<InvoiceDetailRecord>(
-    () => (base ? getInvoice(ctx.authedFetch, base, invoiceId) : Promise.reject(new Error('no gateway configured'))),
+    async () => {
+      if (!base) throw new Error('no gateway configured')
+      const seq = ++readSeq.current
+      const fresh = await getInvoice(ctx.authedFetch, base, invoiceId)
+      noteRead(seq, fresh)
+      return fresh
+    },
     { immediate: shouldFetchInvoices(base), deps: [invoiceId] },
   )
   const history = useAsync<StatusChange[]>(
@@ -288,6 +302,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       if (tickInFlight.current) return // finding 4: previous tick's GET hasn't resolved yet
       tickInFlight.current = true
       const g = gen.current
+      const seq = ++readSeq.current
       getInvoice(ctx.authedFetch, base, invoiceId)
         .then((fresh) => {
           // CodeRabbit fix cycle 2, finding 1: the whole resolved body now lives inside
@@ -299,6 +314,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
           // discarded tick still calling history.run() and flashing the timeline card for
           // a transition the UI is about to discard anyway.
           if (g !== gen.current) return
+          noteRead(seq, fresh)
           setLive(fresh)
           if (shouldRefreshHistory(prevStatus.current, fresh.status)) history.run()
           prevStatus.current = fresh.status
@@ -326,8 +342,6 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   // Single-invoice approve machine (task-547), same reducer/ref shape as Submit above.
   const [approvePhase, setApprovePhase] = useState<BulkPhase>('idle')
   const approveInFlight = useRef(false)
-  // A 403 on confirm: the server refused this seat, so keep Approve off until the page reloads.
-  const [approveRefused, setApproveRefused] = useState(false)
 
   // Inline reject row (task-547) -- resolve-outside's state shape, plus its own in-flight
   // ref (submitInFlight's stronger precedent, not resolve-outside's state-only guard).
@@ -527,7 +541,10 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         history.run()
         approval.run()
       } catch (err) {
-        if (err instanceof ApiError && err.status === 403) setApproveRefused(true)
+        if (err instanceof ApiError && err.status === 403) {
+          refusedAtSeq.current = readSeq.current
+          setApproveRefused(true)
+        }
         setDecisionError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
       } finally {
         // Functional setter -- see handleSubmit's own finally comment below; same stale-

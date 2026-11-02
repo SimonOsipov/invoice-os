@@ -618,6 +618,23 @@ func TestStoreRowFacts_CreatorReadIsConstantInPageSize(t *testing.T) {
 	}
 }
 
+// No armed row, no creator read: RowFacts opens one request-seam transaction, not two.
+func TestStoreRowFacts_NoProbesOpensNoCreatorTransaction(t *testing.T) {
+	super, _ := dbTestPools(t)
+	fx := seedApprovalFactsFixture(t, super, "APPR-17-02-NOPROBE", true)
+	tracedApp, rec := tracedAppPool(t)
+	store := NewStore(tracedApp)
+
+	rec.reset()
+	_, gate, err := store.RowFacts(fx.ctx, []string{fx.invID})
+	if err != nil || gate.CreatorErr != nil {
+		t.Fatalf("RowFacts: err=%v creatorErr=%v", err, gate.CreatorErr)
+	}
+	if n := len(rec.seamMentioning("set_config('app.current_tenant'")); n != 1 {
+		t.Errorf("RowFacts opened %d request-seam transactions for a page with no armed row, want 1", n)
+	}
+}
+
 // Another tenant's approvers and invoices never enter the creator read of either wire.
 func TestStoreCreatorRead_DoesNotCrossTenants(t *testing.T) {
 	super, app := dbTestPools(t)

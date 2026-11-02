@@ -7575,6 +7575,75 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     expect((screen.getByTestId('detail-reject') as HTMLButtonElement).disabled).toBe(false)
   })
 
+  // Approve answers 403 once `holdRefusal` settles; a successful reject then triggers an in-place
+  // refetch, whose GET waits on `holdRead`.
+  const refuseThenRefetch = (next: InvoiceDetailRecord, holdRefusal?: Promise<void>, holdRead?: Promise<void>) => {
+    const first = detailRecord({ id: ID, status: 'validated', can_approve: true, can_reject: true })
+    const { fetchMock } = mockDetailFetch(first, [], { detailSequence: [next] })
+    const inner = fetchMock.getMockImplementation()!
+    let gets = 0
+    const wrapped = vi.fn((url: string, init: RequestInit = {}) => {
+      if (init.method === 'POST' && url.endsWith('/approvals')) {
+        const body = JSON.parse(String(init.body)) as { decision: string }
+        if (body.decision === 'approved') {
+          const refused = () => ({ ok: false, status: 403, json: () => Promise.resolve({ error: SENTENCE }) })
+          return holdRefusal ? holdRefusal.then(refused) : Promise.resolve(refused())
+        }
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+      }
+      const isDetailGet = (init.method ?? 'GET') === 'GET' && /\/invoices\/[^/]+$/.test(url)
+      if (isDetailGet && ++gets === 2 && holdRead) return holdRead.then(() => inner(url, init))
+      return inner(url, init)
+    })
+    vi.stubGlobal('fetch', wrapped)
+  }
+  const refuse = async () => {
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    await screen.findByTestId('detail-decision-error')
+  }
+  const reject = async () => {
+    fireEvent.click(screen.getByTestId('detail-reject'))
+    fireEvent.change(await screen.findByTestId('detail-reject-reason'), { target: { value: 'no' } })
+    fireEvent.click(screen.getByTestId('detail-reject-confirm'))
+  }
+
+  it('detail_refusal_clearsWhenARefetchReadsCanApproveTrue', async () => {
+    refuseThenRefetch(detailRecord({ id: ID, status: 'validated', can_approve: true, can_reject: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await refuse()
+    await waitFor(() => expect(approveBtn().disabled).toBe(true))
+    await reject()
+    await waitFor(() => expect(approveBtn().disabled).toBe(false))
+  })
+
+  it('detail_refusal_staysWhenARefetchReadsCanApproveFalse', async () => {
+    refuseThenRefetch(detailRecord({ id: ID, status: 'validated', can_approve: false, can_reject: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await refuse()
+    await reject()
+    await waitFor(() => expect(screen.queryByTestId('detail-reject-reason')).toBeNull())
+    expect(approveBtn().disabled).toBe(true)
+  })
+
+  it('detail_refusal_ignoresAReadStartedBeforeTheRefusal', async () => {
+    let refuseNow!: () => void
+    let readNow!: () => void
+    const holdRefusal = new Promise<void>((r) => { refuseNow = r })
+    const holdRead = new Promise<void>((r) => { readNow = r })
+    refuseThenRefetch(detailRecord({ id: ID, status: 'validated', can_approve: true, can_reject: true }), holdRefusal, holdRead)
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    await reject() // its refetch starts, and stays pending, before the 403 lands
+    await waitFor(() => expect(screen.queryByTestId('detail-reject-reason')).toBeNull())
+    refuseNow()
+    await new Promise((r) => setTimeout(r, 20))
+    readNow() // the stale read carries can_approve true
+    await screen.findByTestId('detail-decision-error')
+    await waitFor(() => expect(approveBtn().disabled).toBe(true))
+  })
+
   it('detail_conflictDoesNotDisableApprove', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: true }), [], {
       decideResponse: { ok: false, status: 409, json: () => Promise.resolve({ error: 'step already decided' }) },

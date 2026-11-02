@@ -757,6 +757,7 @@ test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
   })
 
   test('RK-04 (AC 8) + RV-01 + RV-02 + RV-03: the mixed import reads its v2 review values and fits at every width', async ({ page }, testInfo) => {
+    test.skip(nightlyTarget(), REAL_AI_COVERED)
     test.setTimeout(300_000)
     const errors = collectErrors(page)
 
@@ -913,6 +914,7 @@ test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
   })
 
   test('RK-05 (AC 6) + MP-01 + RV-03: the second import of the same text shows the already-imported tab', async ({ page }, testInfo) => {
+    test.skip(nightlyTarget(), REAL_AI_COVERED)
     test.setTimeout(300_000)
     const errors = collectErrors(page)
 
@@ -958,6 +960,7 @@ test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
   })
 
   test('RK-06 (AC 6) + RV-04: the all-rejected run keeps its tiles inside the card', async ({ page }, testInfo) => {
+    test.skip(nightlyTarget(), REAL_AI_COVERED)
     test.setTimeout(180_000)
     const errors = collectErrors(page)
 
@@ -1008,6 +1011,7 @@ test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
   test.use({ viewport: { width: 1440, height: 900 } })
 
   test('RX-01 (AC 8) + RX-03 (AC 5) + EX-01 + EX-02: the flagged reading reads its v2 values, selecting, and fits at every width', async ({ page }, testInfo) => {
+    test.skip(nightlyTarget(), REAL_AI_COVERED)
     test.setTimeout(420_000)
     const errors = collectErrors(page)
 

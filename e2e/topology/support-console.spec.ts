@@ -9,6 +9,7 @@ import { apiBase, fleetHeaders, getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, p
 import { argosOn, shoot } from '../argos'
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
+import { nightlyTarget, REAL_AI_COVERED } from '../targets'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { scopeStrays } from './metricsScope'
 
@@ -2085,6 +2086,7 @@ function liveMask(page: Page, nav: string): Locator[] {
 
 for (const s of SCREENS) {
   test(`SUP-03 ${s.nav}: v2 header, eyebrow clearances and screen reads`, async ({ page }, testInfo) => {
+    test.skip(nightlyTarget() && s.nav === 'AI usage', REAL_AI_COVERED)
     test.setTimeout(s.nav === 'System health' ? 300_000 : 120_000)
     const errors = await startSupport(page)
     const armed = s.arm?.(page)

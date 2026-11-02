@@ -400,6 +400,7 @@ const CHANGED_LABEL: Record<string, string> = {
 test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and the register and the audit log agree', async ({
   page,
 }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
@@ -1833,6 +1834,7 @@ const SPREADSHEET_READ_LINE = 'ROWS READ · SERVER VERDICT · RULE SET '
 const DOCUMENT_READ_LINE = 'DOCUMENTS READ · SERVER VERDICT · RULE SET '
 
 test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored and Row', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Two full CSV imports through the wizard on a fleet that may be cold. Neither enqueues an
   // extraction, so this is the cheapest of the EXTR-15 deployed cases.
   test.setTimeout(300_000)
@@ -1952,6 +1954,7 @@ test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored
 // Above the EXTR-15 marker: that span requires fresh bytes per upload, and all three imports
 // here must share one file so the saved mapping keys on the same header.
 test('EXTR37-E2E-01: the second import of a file for the same client opens mapped, and opens unmapped without the lookup', async ({ page }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -2590,6 +2593,7 @@ const EMPTY_DOCX_NAME = 'empty_container.docx'
 test('EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicked, not its sibling', async ({
   page,
 }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Two documents through a cold sidecar, then a filing and a detail load.
   test.setTimeout(600_000)
   const errors = collectErrors(page)
@@ -2675,6 +2679,7 @@ const SUPPLY_URL = /\/api\/invoice\/v1\/imports\/document\/invoice$/
 test('EXTR27-E2E-01: a read document with no number carries its reading into the hand-off, refuses a taken number, and files with the one supplied', async ({
   page,
 }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(600_000)
   const errors = collectErrors(page, expectedStatusDropper(page, 409, SUPPLY_URL))
 
@@ -3544,6 +3549,7 @@ test('EXTR18-E2E-02 (AC-8): a document with no recoverable text settles unreadab
 })
 
 test('EXTR18-E2E-03: an image-only page the OCR can read is NOT unreadable', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(600_000)
   const errors = collectErrors(page)
 

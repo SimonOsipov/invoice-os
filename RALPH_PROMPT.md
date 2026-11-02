@@ -304,6 +304,7 @@ Spawn one `product-qa-spec` (Mode B). Give it the acceptance criteria of every s
   ```
   For an AC that states a rule, at least one row changes a comparison, a branch or a computation. A row that only edits a literal the test restates proves only a value AC.
   An AC item with no row is a QA failure. A Playwright spec cannot replay locally: cite its assertion for Phase 3.5 and write no row.
+  Run your replay as `go run ./internal/tools/mutationreplay --changed .ralph/mutations-<STORY>.jsonl`. `--changed` skips a proven row when nothing changed in its folders.
 - **Assert a collection is non-empty** before asserting over its items.
 - **Source scans:** the QA agent's rules "A source scan is the last resort" and "Never test a test" apply. A source scan also needs a `## Decisions` entry that names the failure no runtime test can observe.
 - **Pinned surprise:** report each test that asserts behaviour a user would call wrong. Give its name, what the user does, what the user sees, and why the behaviour stays, in plain words. Put each one in your reply as one line, even on a PASS. A pinned surprise counts as a concern.
@@ -333,7 +334,7 @@ Spawn one `product-qa-spec` (Mode B). Give it the acceptance criteria of every s
   - Never click a control that writes data on production.
   - On a PR environment, restore each member, role or membership that you change, in the same run.
 
-When QA returns, **replay the mutation rows yourself**, with no other agent running: `go run ./internal/tools/mutationreplay .ralph/mutations-<STORY>.jsonl`. It edits source in place and restores the exact bytes. Any `NOT-PROVEN` or `INVALID` row fails QA; send it back. Before you send it back, record each `NOT-PROVEN` row: `hm signal B6 <STORY> --subtask <SUBTASK-ID> "<ac>"`. The subtask id starts the row's `ac`. A row is a claim; the replay is the evidence.
+When QA returns, **replay the mutation rows yourself**, with no other agent running: `go run ./internal/tools/mutationreplay .ralph/mutations-<STORY>.jsonl`. It edits source in place and restores the exact bytes. Run it without `--changed`. Any `NOT-PROVEN` or `INVALID` row fails QA; send it back. Before you send it back, record each `NOT-PROVEN` row: `hm signal B6 <STORY> --subtask <SUBTASK-ID> "<ac>"`. The subtask id starts the row's `ac`. A row is a claim; the replay is the evidence.
 
 When QA finds issues, send all findings of one round to one `product-executor` fix spawn, as one batch. For each finding, use the subtask that the finding names:
 1. Run `hm subtask stage <SUBTASK-ID> Execution` before the fix spawn.

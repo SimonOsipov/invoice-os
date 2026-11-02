@@ -666,6 +666,18 @@ describe('a first-workspace sign-in: no invites, no answers', () => {
     expect(hits(WS)[0].body).toEqual({ workspace_name: 'Acme', display_name: 'Ada', kind: 'in_house' })
   })
 
+  it('App: two first-workspace Create clicks in one tick send one POST', async () => {
+    await form()
+    fill(FIRM)
+    const create = control('join-create')
+    await act(async () => {
+      fireEvent.click(create)
+      fireEvent.click(create)
+    })
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    expect(hits(WS)).toHaveLength(1)
+  })
+
   it('App: first-workspace Create sends firm when firm is chosen', async () => {
     await form()
     fill(FIRM)
@@ -762,6 +774,16 @@ describe('a first-workspace sign-in: no invites, no answers', () => {
       expect(screen.queryByTestId('join-create-error')).toBeNull()
     })
   }
+
+  it('App: an empty refresh token leaves for the failed notice', async () => {
+    exchangeRefresh = ''
+    const hrefWrites = await form()
+    fill(FIRM)
+    fireEvent.click(control('join-create'))
+    await waitFor(() => expect(hrefWrites).toHaveLength(1))
+    expect(hrefWrites[0]).toMatch(/signin=failed$/)
+    expect(screen.queryByTestId('join-create-error')).toBeNull()
+  })
 
   it('App: a refresh that answers 500 stays on the form', async () => {
     refreshReply = fail(500, 'boom')

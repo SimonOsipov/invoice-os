@@ -418,6 +418,20 @@ describe('JoinWorkspace first workspace', () => {
     expect(radio(IN_HOUSE).matches(':disabled')).toBe(true)
   })
 
+  it('JoinWorkspace: a complete form disables Create and Sign out while creating', () => {
+    const props = { invites: [], firstWorkspace: true, onCreate: vi.fn(), onSignOut: vi.fn(), onJoin: vi.fn() }
+    const { rerender } = render(<JoinWorkspace {...props} joining={null} />)
+    type('Acme', 'Ada')
+    fireEvent.click(radio(FIRM))
+    expect(create().disabled).toBe(false)
+    rerender(<JoinWorkspace {...props} joining={CREATING_OWN} />)
+    expect(create().textContent).toBe('Creating…')
+    expect(create().disabled).toBe(true)
+    expect(signOut().disabled).toBe(true)
+    expect(ws().disabled).toBe(true)
+    expect(radio(IN_HOUSE).matches(':disabled')).toBe(true)
+  })
+
   it('JoinWorkspace: Create needs both names and a kind', () => {
     first()
     type('Acme', 'Ada')

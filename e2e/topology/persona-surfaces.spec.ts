@@ -1240,7 +1240,7 @@ test('in-house Approvals: the queue narrows, bulk approve settles per item, and 
 })
 
 // ---------------------------------------------------------------------------------------
-// The creator's own row (APPR-17). Declared after Test 7; it clicks no approve and leaves its
+// The creator's own row. Declared after Test 7; it clicks no approve and leaves its
 // row open. The creator rung precedes the role rung, so it holds whatever the journey staffed.
 // ---------------------------------------------------------------------------------------
 // internal/approval/creator.go: CreatorRefusedReason.

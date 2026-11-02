@@ -173,9 +173,10 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
     // Reachable for the first time here: this is the only list.run() call site outside
     // the ErrorState retry path (G-04-H, InvoicesList.tsx:283's precedent).
     if (base == null) return
-    // `bar.eligible` is pruneApprovalSelection's output -- the ONLY thing that goes on
-    // the wire, never `selected`.
-    const ids = bar.eligible
+    // `bar.toSend` (selected rows loaded can_approve:true) is the ONLY thing that goes on
+    // the wire, never `selected`; creator-refused rows are reported locally.
+    const ids = bar.toSend
+    const localRefused = bar.localRefused
     if (ids.length === 0) return
     // Identity IS "do nothing": no arm ⇒ no request.
     if (!toPhase({ type: 'confirm' })) return
@@ -195,7 +196,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
         (_result, index) => setProgress({ done: index + 1, total: ids.length }),
         controller.signal,
       )
-      setResults(approvalOutcome(res, numbersById))
+      setResults([...localRefused, ...approvalOutcome(res, numbersById)])
     } finally {
       // Cleared deliberately, not inherited from useAsync nulling list.data (G-04-E):
       // the RESULTS PANEL carries the partial failure, not the selection.
@@ -419,7 +420,7 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                       data-testid="approval-select-row"
                       aria-label={approvalSelectRowLabel(r.invoice_number)}
                       checked={selected.includes(r.id)}
-                      // The server's own answer, fail-closed -- no client-side conjunct.
+                      // Creator-refused rows stay selectable so bulk approve can report them.
                       disabled={!av.selectable}
                       title={reason ?? undefined}
                       aria-describedby={reason != null ? reasonId : undefined}

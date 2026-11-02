@@ -3821,6 +3821,7 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
   it('adversarial: a 403 (AXIS-1) unsticks the bar, then APPR-17 holds Approve disabled', async () => {
     const sentence = 'only an approver can decide an approval step'
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: true }), [], {
+      detailSequence: [detailRecord({ id: ID, status: 'validated', can_edit: true, can_approve: false })],
       decideResponse: { ok: false, status: 403, json: () => Promise.resolve({ error: sentence }) },
     })
 
@@ -7548,8 +7549,12 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     expect(decideCalls[0].body.decision).toBe('approved')
   })
 
+  const refusedRead = () =>
+    detailRecord({ id: ID, status: 'validated', can_approve: false, approve_blocked_by_creator: true, approve_blocked_reason: SENTENCE, can_reject: true })
+
   it('detail_serverRefusal_showsItsSentenceAndDisablesApprove', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: true }), [], {
+      detailSequence: [refusedRead()],
       decideResponse: { ok: false, status: 403, json: () => Promise.resolve({ error: SENTENCE }) },
     })
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
@@ -7561,6 +7566,7 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
 
   it('detail_serverRefusal_keepsRejectEnabledAndApproveCannotBeRearmed', async () => {
     const { decideCalls } = mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: true, can_reject: true }), [], {
+      detailSequence: [refusedRead()],
       decideResponse: { ok: false, status: 403, json: () => Promise.resolve({ error: SENTENCE }) },
     })
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
@@ -7577,9 +7583,9 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
 
   // Approve answers 403 once `holdRefusal` settles; a successful reject then triggers an in-place
   // refetch, whose GET waits on `holdRead`.
-  const refuseThenRefetch = (next: InvoiceDetailRecord, holdRefusal?: Promise<void>, holdRead?: Promise<void>) => {
+  const refuseThenRefetch = (next: InvoiceDetailRecord | InvoiceDetailRecord[], holdRefusal?: Promise<void>, holdRead?: Promise<void>) => {
     const first = detailRecord({ id: ID, status: 'validated', can_approve: true, can_reject: true })
-    const { fetchMock } = mockDetailFetch(first, [], { detailSequence: [next] })
+    const { fetchMock } = mockDetailFetch(first, [], { detailSequence: Array.isArray(next) ? next : [next] })
     const inner = fetchMock.getMockImplementation()!
     let gets = 0
     const wrapped = vi.fn((url: string, init: RequestInit = {}) => {
@@ -7612,9 +7618,29 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     refuseThenRefetch(detailRecord({ id: ID, status: 'validated', can_approve: true, can_reject: true }))
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await refuse()
-    await waitFor(() => expect(approveBtn().disabled).toBe(true))
-    await reject()
     await waitFor(() => expect(approveBtn().disabled).toBe(false))
+  })
+
+  const detailGets = () =>
+    (vi.mocked(fetch).mock.calls as [string, RequestInit?][]).filter(([u, i]) => (i?.method ?? 'GET') === 'GET' && /\/invoices\/[^/]+$/.test(u)).length
+
+  it('detail_serverRefusal_rereadsTheInvoiceOnce', async () => {
+    refuseThenRefetch(refusedRead())
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await refuse()
+    await waitFor(() => expect(approveBtn().disabled).toBe(true))
+    expect(detailGets()).toBe(2)
+  })
+
+  it('detail_serverRefusal_rereadFalseShowsTheCreatorReasonAfterTheErrorClears', async () => {
+    refuseThenRefetch(refusedRead())
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await refuse()
+    expect((await screen.findByTestId('detail-approve-creator-reason')).textContent).toBe(SENTENCE)
+    await reject()
+    await waitFor(() => expect(screen.queryByTestId('detail-decision-error')).toBeNull())
+    expect((await screen.findByTestId('detail-approve-creator-reason')).textContent).toBe(SENTENCE)
+    expect(approveBtn().disabled).toBe(true)
   })
 
   it('detail_refusal_staysWhenARefetchReadsCanApproveFalse', async () => {
@@ -7631,7 +7657,7 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     let readNow!: () => void
     const holdRefusal = new Promise<void>((r) => { refuseNow = r })
     const holdRead = new Promise<void>((r) => { readNow = r })
-    refuseThenRefetch(detailRecord({ id: ID, status: 'validated', can_approve: true, can_reject: true }), holdRefusal, holdRead)
+    refuseThenRefetch([refusedRead(), detailRecord({ id: ID, status: 'validated', can_approve: true, can_reject: true })], holdRefusal, holdRead)
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     fireEvent.click(await screen.findByTestId('detail-approve'))
     fireEvent.click(screen.getByTestId('detail-approve-confirm'))

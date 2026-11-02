@@ -544,6 +544,10 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         if (err instanceof ApiError && err.status === 403) {
           refusedAtSeq.current = readSeq.current
           setApproveRefused(true)
+          // Re-read for the durable can_approve flag and reason.
+          gen.current++
+          setLive(null)
+          detail.run()
         }
         setDecisionError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
       } finally {

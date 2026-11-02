@@ -66,6 +66,10 @@ export interface ApprovalRowView {
 export interface ApprovalsBarView {
   visible: boolean
   eligible: string[]
+  // The selected rows loaded can_approve:true -- the only ids confirm posts.
+  toSend: string[]
+  // The selected creator-refused rows, reported locally; never posted.
+  localRefused: ApprovalResultRow[]
   notReady: number
   countLabel: string
   note: string | null
@@ -162,8 +166,11 @@ export function approvalsBarView(
   const n = eligible.length
   const eligibleSet = new Set(eligible)
   const selectedRows = rows.filter((row) => eligibleSet.has(row.id))
-  // Only these are approved; the rest of `eligible` is posted so the server can refuse it.
-  const approvable = selectedRows.filter((row) => isApprovableRow(row)).length
+  const approvableRows = selectedRows.filter((row) => isApprovableRow(row))
+  const approvable = approvableRows.length
+  const localRefused: ApprovalResultRow[] = selectedRows
+    .filter((row) => !isApprovableRow(row))
+    .map((row) => ({ invoiceNumber: row.invoice_number, ok: false, label: 'Not approved', message: row.approve_blocked_reason ?? null }))
   const byReason = new Map<string, string[]>()
   for (const row of selectedRows) {
     if (isApprovableRow(row) || !row.approve_blocked_by_creator) continue
@@ -178,6 +185,8 @@ export function approvalsBarView(
   return {
     visible: n > 0,
     eligible,
+    toSend: approvableRows.map((row) => row.id),
+    localRefused,
     notReady,
     // The scope is IN the string -- "on this page", not a tenant-wide count.
     countLabel: `${n} selected on this page`,
@@ -280,7 +289,7 @@ export const APPROVALS_COPY = {
   // The subtitle's own fallback: it renders as copy, so it lives here rather than as an
   // inline `??` operand in the component (LIB-SCAN-A, A04-11).
   tenantFallback: 'Your workspace',
-  selectAllLabel: 'Select every invoice on this page you can approve',
+  selectAllLabel: 'Select every selectable invoice on this page',
   sending: 'Approving…',
   // D-25: states why the pager freezes during a fan-out (APPR-16-04).
   pagerReason: 'Paging is paused while approvals are sending.',

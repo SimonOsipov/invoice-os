@@ -2040,14 +2040,41 @@ describe('APPR-17-04: the creator rows in the queue', () => {
     expect(screen.getByTestId('approvals-bulk-confirm').textContent).toBe('Yes, approve 1 now')
     fireEvent.click(screen.getByTestId('approvals-bulk-confirm'))
 
-    await waitFor(() => expect(approvalCalls()).toHaveLength(2))
     const panel = await screen.findByTestId('approvals-results')
+    expect(approvalCalls().map(([u]) => u)).toEqual(['https://gw/api/invoice/v1/invoices/inv-a/approvals'])
     const resultRows = within(panel).getAllByTestId('approval-result-row')
     expect(resultRows).toHaveLength(2)
     const resA = within(resultRows.find((e) => e.textContent?.includes('INV-A')) as HTMLElement)
     const resC = within(resultRows.find((e) => e.textContent?.includes('INV-C')) as HTMLElement)
     expect(resA.getByText('Approved')).toBeTruthy()
+    expect(resC.getByText('Not approved')).toBeTruthy()
     expect(resC.getByText(CREATOR_REASON)).toBeTruthy()
+  })
+
+  it('queue_creatorRow_neverPosted_progressCountsWhatIsSent', async () => {
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    const own = creator('inv-c', 'INV-C')
+    const b = approvalRow({ id: 'inv-b', invoice_number: 'INV-B' })
+    const rows = [a, own, b]
+    let releaseA: (r: MockResponse) => void = () => {}
+    const { approvalCalls } = mockBulkFetch(
+      [listResponse(rows, page(3)), listResponse(rows, page(3))],
+      (id) => (id === 'inv-a' ? new Promise<MockResponse>((resolve) => { releaseA = resolve }) : approveOkResponse()),
+    )
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('approval-select-all'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-submit'))
+    fireEvent.click(screen.getByTestId('approvals-bulk-confirm'))
+
+    await waitFor(() => expect(screen.getByTestId('approvals-progress').textContent).toBe('0 of 2 sent…'))
+    releaseA(approveOkResponse())
+    const panel = await screen.findByTestId('approvals-results')
+    expect(approvalCalls().map(([u]) => u).some((u) => u.includes('inv-c'))).toBe(false)
+    expect(within(panel).getAllByTestId('approval-result-row').map((e) => e.textContent)).toEqual(
+      expect.arrayContaining([expect.stringContaining('INV-C')]),
+    )
   })
 
   it('queue_staleRow_reportsTheServersRefusal', async () => {

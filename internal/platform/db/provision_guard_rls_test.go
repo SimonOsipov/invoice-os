@@ -498,6 +498,13 @@ func TestRLS_ProvisionGuard_ConcurrentDifferentTenantIdsHaveOneWinner(t *testing
 
 const liveMembershipGlob = "*_invitations_mine_live_membership.sql"
 
+// useShippedLiveMembership rebuilds the function's ACL from the migration files: a guard test's
+// cleanup re-applies the live-membership Up last, so the grant read afterwards is the file's.
+func useShippedLiveMembership(t *testing.T) {
+	t.Helper()
+	t.Run("shipped migrations", func(t *testing.T) { useShippedGuard(t) })
+}
+
 // liveMembershipAsApp calls the function as invoice_app under the given tenant, like MyPendingInvitations.
 func liveMembershipAsApp(ctx context.Context, tenant, user any) (bool, error) {
 	tx, err := h.app.Begin(ctx)
@@ -516,6 +523,7 @@ func liveMembershipAsApp(ctx context.Context, tenant, user any) (bool, error) {
 func TestRLS_LiveMembershipGrant_AppAsksAboutAnIdentityOnly(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
+	useShippedLiveMembership(t)
 	requireGuardFunction(t)
 	member := uuid.NewString()
 	seedHookMembership(t, h.tenantB, member, "suspended")
@@ -551,6 +559,7 @@ func TestRLS_LiveMembershipGrant_AppAsksAboutAnIdentityOnly(t *testing.T) {
 func TestRLS_LiveMembershipGrant_IsNotPublic(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
+	useShippedLiveMembership(t)
 	requireGuardFunction(t)
 	member := uuid.NewString()
 	seedHookMembership(t, h.tenantA, member, "active")
@@ -583,6 +592,7 @@ func TestRLS_LiveMembershipGrant_IsNotPublic(t *testing.T) {
 func TestRLS_LiveMembershipGrant_DownRestoresRefusal(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
+	useShippedLiveMembership(t)
 	requireGuardFunction(t)
 	member := uuid.NewString()
 	seedHookMembership(t, h.tenantB, member, "active")
@@ -614,23 +624,5 @@ func TestRLS_LiveMembershipGrant_DownRestoresRefusal(t *testing.T) {
 	}
 	if got, err := liveMembershipAsApp(ctx, h.tenantA, member); err != nil || !got {
 		t.Errorf("after the re-apply, invoice_app = %v, %v; want true", got, err)
-	}
-}
-
-// A guard test rolls the newer migrations back and re-applies them in order; the grant must come back.
-func TestRLS_LiveMembershipGrant_SurvivesTheGuardTests(t *testing.T) {
-	h := requireHarness(t)
-	ctx := context.Background()
-	member := uuid.NewString()
-	seedHookMembership(t, h.tenantB, member, "active")
-
-	t.Run("a guard test", func(t *testing.T) { useShippedGuard(t) })
-
-	got, err := liveMembershipAsApp(ctx, h.tenantA, member)
-	if err != nil {
-		t.Fatalf("after a guard test's cleanup, invoice_app asks about a member: want true, got %v", err)
-	}
-	if !got {
-		t.Errorf("after a guard test's cleanup, identity_has_membership(member) = false, want true")
 	}
 }

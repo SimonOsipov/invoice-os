@@ -1555,6 +1555,7 @@ interface MixedImportResponse {
 test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-inline -> re-validate-to-green -> dashboard rollup updates', async ({
   page,
 }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Multiple live round trips on a possibly cold fleet -- the import wizard's own
   // preview+import, the detail fix loop's edit+revalidate, and TWO Dashboard/Clients
   // navigations each triggering their own live rollup fetch. Mirrors this file's own
@@ -3110,6 +3111,7 @@ test('reports-whole-set: top customers ranks over the whole set', async ({ page 
 test("invoice detail: the source-document card states the real range, and the modal opens on the whole file with this invoice's row marked", async ({
   page,
 }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(180_000)
   const errors = collectErrors(page, expectedStatusDropper(page, 500, SHEET_URL))
 
@@ -3234,6 +3236,7 @@ test("invoice detail: the source-document card states the real range, and the mo
 // viewport reads the full content height (~44,000px), every row renders, and the tab
 // hangs. buildPerfCsv is import-wizard.spec.ts's proven 500-invoice/1500-row fixture.
 test('invoice detail: a 1,500-row source file renders through the window, not all at once', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(240_000)
   const errors = collectErrors(page)
 

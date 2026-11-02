@@ -222,6 +222,7 @@ function buildAirl01SteeredCsv(num = 'INV-AIRL01-1'): string {
 }
 
 test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through the UI on deployed dev', async ({ page }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Sign-in, nav, ONE upload ([upload-once] -- preview stores the bytes and the
   // import that follows sends only the id), and render, on a possibly cold 11-service fleet.
   // import.spec.ts already spends 120s on the API-only path with a 60s budget; this
@@ -879,6 +880,7 @@ test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and impo
 test('E2E-04/09 (INVCR-01-09): the mixed fixture separates the two channels by TAB, the structural message is reachable only through Unreadable rows, and Finish leads to a live invoice detail', async ({
   page,
 }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.A)
@@ -1076,6 +1078,7 @@ test('E2E-04/09 (INVCR-01-09): the mixed fixture separates the two channels by T
 test('BUG08-E2E-1/2/3/4/5/7 (AC-1..6, task-408/409): a re-import splits genuine parse failures from already-imported rows', async ({
   page,
 }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // The config default is 60s and this drives the full wizard TWICE.
   test.setTimeout(180_000)
   const errors = collectErrors(page)
@@ -1402,6 +1405,7 @@ test('[import-upload-unify] LIVE: one real import surface, manual entry survives
 test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity and files an invoice, both by import and manually', async ({
   page,
 }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   const errors = collectErrors(page)
 
   await signInAs(page, 'inhouse', { tenantId: SHARD.b.id })
@@ -1560,6 +1564,7 @@ test.describe('INVCR-E2E-1 governs the firm tenant before submitting', () => {
 test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-validate -> select -> submit, badges from a re-fetch', async ({
   page,
 }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
@@ -1712,6 +1717,7 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
 // its own data-testid and status-strip, never by the review table's absence alone
 // ([E2E-must-not] #4).
 test('INVCR-E2E-2 firm: a single-invoice CSV lands on the real invoice detail, never a one-row review grid', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.A)
@@ -1757,6 +1763,7 @@ test('INVCR-E2E-2 firm: a single-invoice CSV lands on the real invoice detail, n
 // honestly -- §7.5's "Nothing was imported" with three zeroed tiles, and no Map-step
 // retry offered from the rejected screen (only re-upload or manual entry).
 test('INVCR-E2E-4 firm: a header-only file is refused honestly, with no Map-step retry offered', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.A)
@@ -1812,6 +1819,7 @@ test('INVCR-E2E-4 firm: a header-only file is refused honestly, with no Map-step
 // `/imports/<batchId>/review` restores it with BOTH channels re-derived from a fresh GET,
 // never from memory the tab already held.
 test('INVCR-E2E-6 the review screen survives a reload -- the deep link re-derives both channels', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.A)
@@ -1885,6 +1893,7 @@ test.describe('INVCR-E2E-7 governs the firm tenant before submitting', () => {
   })
 
 test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disabled, never absent', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.A)
@@ -2002,6 +2011,7 @@ test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disa
 test('BULK-E2E-01 (Core AC 1/2/3): shared-layout multi-file run -- select, cap-refuse, remove in order, map once, one review screen for both files', async ({
   page,
 }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
@@ -2118,6 +2128,7 @@ test('BULK-E2E-01 (Core AC 1/2/3): shared-layout multi-file run -- select, cap-r
 test('BULK-E2E-02 (Core AC 4): different-layout files map SEPARATELY, one column mapping does not silently cover the other, yet still land on one review screen', async ({
   page,
 }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
@@ -2200,6 +2211,7 @@ test('BULK-E2E-02 (Core AC 4): different-layout files map SEPARATELY, one column
 test('BULK-E2E-03 (Core AC 5, [sequential-not-parallel], spreadsheet path): a cross-file duplicate quarantines one file while the run keeps its earlier successes, named by reason not status', async ({
   page,
 }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
@@ -2304,6 +2316,7 @@ test('BULK-E2E-03 (Core AC 5, [sequential-not-parallel], spreadsheet path): a cr
 // only one in this file that reads a request body; every other spec matches on method
 // and path alone.
 test('DOC-E2E-01 (Core AC 5): the deployed wizard imports by document_id and never re-sends the file', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
@@ -2587,6 +2600,7 @@ test('EXTR09-E2E-01 / EXTR32-E2E-01: a PDF forks to the document path, extracts,
 })
 
 test('EXTR09-E2E-02 (AC-2): the spreadsheet journey is unchanged end to end', async ({ page }) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
@@ -2925,6 +2939,7 @@ test('EXTR09-E2E-05 (AC-5): the step strip follows the picked kind, picked or dr
 const DOCUMENT_STAGE_WORDS = new Set(['QUEUED', 'SENDING FILE', 'SERVER PROCESSING', 'READING', 'RETRYING'])
 
 test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and lands on review', async ({ page }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Upload + poll + import x2 concurrent files, on a fleet that may be cold -- matches
   // EXTR09-E2E-01's own cold-fleet budget for the same three calls.
   test.setTimeout(300_000)
@@ -3349,6 +3364,7 @@ test('EXTR11-E2E-03 (AC-4): the highlight lands where the region says, at every 
 // EXTR11-E2E-04 and -04b read the SAME 200, so they share one journey rather than paying for
 // two -- the file's own E2E-04/E2E-09 precedent, with labelled blocks.
 test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly the contract', async ({ page }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4085,6 +4101,7 @@ const COUNT_WORD: Record<number, string> = {
 }
 
 test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill', async ({ page }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4387,6 +4404,7 @@ test('EXTR12-E2E-03 (AC-7): the document toolbar no longer claims the screen is 
 })
 
 test('EXTR12-E2E-04 (AC-8): the chip row shares its column evenly at every WIDE_WIDTHS', async ({ page }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4510,6 +4528,7 @@ function ratioOf(box: Rect, frame: Rect): Ratio {
 test('EXTR12-E2E-05 (AC-2/AC-3/AC-6): a box drawn on page 2 is the box the screen reads back, at every zoom', async ({
   page,
 }, testInfo) => {
+  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 

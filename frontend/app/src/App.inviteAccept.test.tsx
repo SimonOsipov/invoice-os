@@ -628,6 +628,7 @@ describe('a first-workspace sign-in: no invites, no answers', () => {
   async function form() {
     exchangeToken = BARE()
     renewedMeReply = ok(ME)
+    mineReply = ok({ invitations: [], removed: false, live_membership: false })
     configure()
     ensureSignInState()
     vi.spyOn(console, 'warn').mockImplementation(() => {})

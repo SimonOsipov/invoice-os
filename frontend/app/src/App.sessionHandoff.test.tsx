@@ -754,7 +754,7 @@ describe('a failed redemption bounces to landing (AC-7, D23)', () => {
     configure()
     ensureSignInState()
     meReply = fail(403, 'forbidden')
-    mineReply = ok({ invitations: [] })
+    mineReply = ok({ invitations: [], removed: false, live_membership: false })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     window.history.replaceState(null, '', `/?handoff=${CODE}`)
     const { hrefWrites } = interceptHref()
@@ -768,6 +768,26 @@ describe('a failed redemption bounces to landing (AC-7, D23)', () => {
     expect(refreshBodies).toEqual([])
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
+
+  // true, a missing key, a string and null all fail closed; the same reply with false is the form above.
+  for (const [name, extra] of [['true', { live_membership: true }], ['missing', {}], ['string false', { live_membership: 'false' }], ['null', { live_membership: null }]] as const) {
+    it(`a live member with no answers reports no-workspace (live_membership ${name})`, async () => {
+      configure()
+      ensureSignInState()
+      meReply = fail(403, 'forbidden')
+      mineReply = ok({ invitations: [], removed: false, ...extra })
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      window.history.replaceState(null, '', `/?handoff=${CODE}`)
+      const { hrefWrites } = interceptHref()
+      await bootApp()
+      await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=no-workspace`]))
+      await settle()
+      expect(screen.queryByTestId('join-screen')).toBeNull()
+      expect(screen.queryByTestId('join-create')).toBeNull()
+      expect(workspacesCalls).toEqual([])
+      expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    })
+  }
 
   it('a join offer shows the Join screen, not the no-workspace path', async () => {
     configure()
@@ -2002,7 +2022,7 @@ describe('a hung redemption times out', () => {
       vi.fn((url: string, init?: RequestInit) => {
         if (url === `${GATEWAY}/auth/exchange`) return ok({ access_token: T, refresh_token: 'R0' })()
         if (url === `${GATEWAY}/api/tenancy/v1/me`) return fail(403, 'forbidden')()
-        if (url === `${GATEWAY}/api/tenancy/v1/invitations/mine`) return ok({ invitations: [] })()
+        if (url === `${GATEWAY}/api/tenancy/v1/invitations/mine`) return ok({ invitations: [], removed: false, live_membership: false })()
         return hang(init?.signal)
       }),
     )

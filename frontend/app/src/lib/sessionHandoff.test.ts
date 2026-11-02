@@ -308,7 +308,7 @@ describe('redeemHandoff provisions the registered workspace', () => {
       ['unknown kind', { user_metadata: { registration: { ...ANSWERS, kind: 'bogus' } } }],
     ]
     for (const [name, claims] of rows) {
-      const calls = stubChain({ exchange: { status: 200, body: { access_token: tokenWith(claims), refresh_token: 'R0' } }, me: [FORBIDDEN] })
+      const calls = stubChain({ exchange: { status: 200, body: { access_token: tokenWith(claims), refresh_token: 'R0' } }, me: [FORBIDDEN], mine: { status: 200, body: { invitations: [], removed: false, live_membership: false } } })
       const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
       expect(trace(calls), name).toEqual(['POST /auth/exchange', 'GET /api/tenancy/v1/me', MINE])
       expect(err, name).toMatchObject({ kind: 'join', invites: [], answers: null, firstWorkspace: true })
@@ -569,13 +569,48 @@ describe('join offers', () => {
     expect(calls[2].signal).toBe(calls[0].signal)
   })
 
-  it('redeemHandoff: no invites and no answers gets the first-workspace offer', async () => {
-    for (const body of [{ invitations: [] }, { invitations: [], removed: false }]) {
+  it('redeemHandoff: live_membership false gets the first-workspace offer', async () => {
+    for (const body of [
+      { invitations: [], live_membership: false },
+      { invitations: [], removed: false, live_membership: false },
+    ]) {
       const calls = stub({ mine: { status: 200, body } })
       const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
       expect(s).toEqual({ kind: 'join', token: BARE, refreshToken: 'R0', invites: [], answers: null, firstWorkspace: true })
       expect(paths(calls)).toEqual(['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine'])
     }
+  })
+
+  it('redeemHandoff: a live member with no answers keeps the no-workspace error', async () => {
+    const rows: [string, Record<string, unknown>][] = [
+      ['true', { live_membership: true }],
+      ['missing', {}],
+      ['string false', { live_membership: 'false' }],
+      ['null', { live_membership: null }],
+      ['number 0', { live_membership: 0 }],
+    ]
+    for (const [name, extra] of rows) {
+      const calls = stub({ mine: { status: 200, body: { invitations: [], removed: false, ...extra } } })
+      const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+      expect(err, name).toBeInstanceOf(ApiError)
+      expect(err, name).toMatchObject({ status: 403 })
+      expect(paths(calls), name).toEqual(['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine'])
+    }
+  })
+
+  it('redeemHandoff: a removed person, invites and answers ignore live_membership', async () => {
+    stub({ mine: { status: 200, body: { invitations: [], removed: true, live_membership: false } } })
+    const removed = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
+    expect(removed).toMatchObject({ kind: 'join', invites: [], answers: null })
+    expect((removed as JoinOffer).firstWorkspace).toBeUndefined()
+
+    stub({ mine: { status: 200, body: { invitations: THREE, removed: false, live_membership: true } } })
+    expect(await redeemHandoff(GATEWAY, CODE, STATE, 5000)).toMatchObject({ kind: 'join', invites: THREE })
+
+    const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } }, mine: { status: 200, body: { invitations: [], removed: false, live_membership: true } } })
+    const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
+    expect(paths(calls).filter((x) => x === '/api/tenancy/v1/workspaces')).toHaveLength(1)
+    expect(s).toMatchObject({ handoff: true, token: RENEWED })
   })
 
   it("a removed person's offer carries no firstWorkspace flag", async () => {

@@ -191,7 +191,7 @@ func TestRLS_ProvisionGuard_FunctionShape(t *testing.T) {
 	}
 }
 
-func TestRLS_ProvisionGuard_AppCannotAskAboutAnIdentity(t *testing.T) {
+func TestRLS_ProvisionGuard_AloneGrantsTheAppNothing(t *testing.T) {
 	h := requireHarness(t)
 	useShippedGuard(t)
 	ctx := context.Background()
@@ -494,4 +494,143 @@ func TestRLS_ProvisionGuard_ConcurrentDifferentTenantIdsHaveOneWinner(t *testing
 		t.Errorf("memberships for the user = %d, want 1", n)
 	}
 	assertNothingWritten(t, y)
+}
+
+const liveMembershipGlob = "*_invitations_mine_live_membership.sql"
+
+// liveMembershipAsApp calls the function as invoice_app under the given tenant, like MyPendingInvitations.
+func liveMembershipAsApp(ctx context.Context, tenant, user any) (bool, error) {
+	tx, err := h.app.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, tenant); err != nil {
+		return false, err
+	}
+	var got bool
+	err = tx.QueryRow(ctx, `SELECT public.identity_has_membership($1)`, user).Scan(&got)
+	return got, err
+}
+
+func TestRLS_LiveMembershipGrant_AppAsksAboutAnIdentityOnly(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+	requireGuardFunction(t)
+	member := uuid.NewString()
+	seedHookMembership(t, h.tenantB, member, "suspended")
+
+	got, err := liveMembershipAsApp(ctx, h.tenantA, member)
+	if err != nil {
+		t.Fatalf("invoice_app asks about a member of tenant B under tenant A: want true, got %v", err)
+	}
+	if !got {
+		t.Errorf("identity_has_membership(member of B) = false, want true")
+	}
+	if got, err := liveMembershipAsApp(ctx, h.tenantA, uuid.NewString()); err != nil || got {
+		t.Errorf("identity_has_membership(stranger) = %v, %v; want false", got, err)
+	}
+	if got, err := liveMembershipAsApp(ctx, h.tenantA, nil); err != nil || got {
+		t.Errorf("identity_has_membership(NULL) = %v, %v; want false", got, err)
+	}
+
+	// The grant opens the question, not the rows: under A the B row stays invisible.
+	tx, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, h.tenantA); err != nil {
+		t.Fatalf("bind tenant A: %v", err)
+	}
+	if n := mustCount(t, tx, `SELECT count(*) FROM memberships WHERE user_id = $1`, member); n != 0 {
+		t.Errorf("memberships rows of a tenant B member seen under tenant A = %d, want 0", n)
+	}
+}
+
+func TestRLS_LiveMembershipGrant_IsNotPublic(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+	requireGuardFunction(t)
+	member := uuid.NewString()
+	seedHookMembership(t, h.tenantA, member, "active")
+
+	var grantees []string
+	var publicAny bool
+	if err := h.super.QueryRow(ctx, `
+		SELECT coalesce((SELECT array_agg(pg_get_userbyid(a.grantee) || '=' || a.privilege_type ORDER BY 1)
+		                 FROM aclexplode(p.proacl) a WHERE a.grantee <> 0), '{}'),
+		       p.proacl IS NULL OR EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0)
+		FROM pg_proc p WHERE p.oid = to_regprocedure($1)`, guardSig).Scan(&grantees, &publicAny); err != nil {
+		t.Fatalf("read the ACL: %v", err)
+	}
+	sort.Strings(grantees)
+	want := []string{"auth_hook_reader=EXECUTE", "invoice_app=EXECUTE", "invoice_migrator=EXECUTE"}
+	if !reflect.DeepEqual(grantees, want) {
+		t.Errorf("ACL = %v, want exactly %v", grantees, want)
+	}
+	if publicAny {
+		t.Errorf("PUBLIC holds EXECUTE (or proacl is NULL), want revoked")
+	}
+
+	for name, pool := range map[string]querier{"invoice_tenant_reader": h.reader, "supabase_auth_admin": authAdminPool(t)} {
+		var got bool
+		err := pool.QueryRow(ctx, `SELECT public.identity_has_membership($1)`, member).Scan(&got)
+		assertPgRefusal(t, name+" executes identity_has_membership", err, "42501", "permission denied for function identity_has_membership")
+	}
+}
+
+func TestRLS_LiveMembershipGrant_DownRestoresRefusal(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+	requireGuardFunction(t)
+	member := uuid.NewString()
+	seedHookMembership(t, h.tenantB, member, "active")
+
+	if got, err := liveMembershipAsApp(ctx, h.tenantA, member); err != nil || !got {
+		t.Fatalf("before the Down, invoice_app asks about a member: got %v, %v; want true", got, err)
+	}
+	provider := staffMigrationProvider(t)
+	version := migrationVersion(t, liveMembershipGlob)
+	t.Cleanup(func() {
+		if _, err := provider.ApplyVersion(context.Background(), version, true); err != nil && !errors.Is(err, goose.ErrAlreadyApplied) {
+			t.Errorf("re-apply the live-membership migration: %v", err)
+		}
+	})
+
+	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
+		t.Fatalf("roll back the live-membership migration: %v", err)
+	}
+	requireGuardFunction(t)
+	_, err := liveMembershipAsApp(ctx, h.tenantA, member)
+	assertPgRefusal(t, "invoice_app after the Down", err, "42501", "permission denied for function identity_has_membership")
+	var got bool
+	if err := h.mig.QueryRow(ctx, `SELECT public.identity_has_membership($1)`, member).Scan(&got); err != nil || !got {
+		t.Errorf("invoice_migrator after the Down = %v, %v; want the guard intact (true)", got, err)
+	}
+
+	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
+		t.Fatalf("re-apply the live-membership migration: %v", err)
+	}
+	if got, err := liveMembershipAsApp(ctx, h.tenantA, member); err != nil || !got {
+		t.Errorf("after the re-apply, invoice_app = %v, %v; want true", got, err)
+	}
+}
+
+// A guard test rolls the newer migrations back and re-applies them in order; the grant must come back.
+func TestRLS_LiveMembershipGrant_SurvivesTheGuardTests(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+	member := uuid.NewString()
+	seedHookMembership(t, h.tenantB, member, "active")
+
+	t.Run("a guard test", func(t *testing.T) { useShippedGuard(t) })
+
+	got, err := liveMembershipAsApp(ctx, h.tenantA, member)
+	if err != nil {
+		t.Fatalf("after a guard test's cleanup, invoice_app asks about a member: want true, got %v", err)
+	}
+	if !got {
+		t.Errorf("after a guard test's cleanup, identity_has_membership(member) = false, want true")
+	}
 }

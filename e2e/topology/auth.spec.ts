@@ -24,6 +24,7 @@ import {
   registerFormAccount,
   removeMember,
   setMemberClients,
+  setMembershipStatus,
   me,
   mintSignInState,
   provisionRealAccount,
@@ -3598,8 +3599,51 @@ test('a removed creator signs in to no-workspace and creates a workspace', async
   expect(errors, `console errors on the no-workspace journey:\n${errors.join('\n')}`).toEqual([])
 })
 
+const NO_WORKSPACE_MESSAGE = 'This account has no workspace yet. If you were invited, open the invite link in your email.'
+
+test('a suspended member with no answers signs in to the no-workspace message, not the form', async ({ page }) => {
+  test.setTimeout(300_000)
+  const admin = await registerFormAccount('suspended-admin')
+  const tenantId = (await me(admin.token)).tenant.id
+  const member = await registerFresh('suspended-member')
+  await inviteWithToken(admin.token, tenantId, member.email)
+  const session = (await signInSession(member.email, member.password)).access_token
+  const invites = (await listMine(session)).body as { invitations: { id: string }[] }
+  const accepted = await acceptById(session, invites.invitations[0].id, 'Held Member')
+  expect(accepted.status, JSON.stringify(accepted.body)).toBe(200)
+  const suspended = await setMembershipStatus(admin.token, subjectOf(session), 'suspended')
+  expect(suspended.status, 'the roster row says suspended').toBe('suspended')
+
+  const errors = errorsAllowing403Me(page)
+  const urls = recordUrls(page)
+  let provisions = 0
+  let formSeen = false
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/tenancy/v1/workspaces')) provisions += 1
+  })
+  await page.exposeFunction('reportJoinScreen', () => {
+    formSeen = true
+  })
+  await page.addInitScript(() => {
+    const watch = () => {
+      if (document.querySelector('[data-testid="join-screen"]')) (window as unknown as { reportJoinScreen: () => void }).reportJoinScreen()
+    }
+    new MutationObserver(watch).observe(document, { childList: true, subtree: true })
+  })
+  await seedConsent(page, false)
+  await passFrontDoor(page, member, '/')
+
+  await expect(signInDialog(page)).toContainText(NO_WORKSPACE_MESSAGE, { timeout: 30_000 })
+  expect(urls.filter((u) => u.includes('signin=no-workspace')), 'a navigation carried signin=no-workspace').not.toEqual([])
+  await expect(page.getByTestId('join-screen')).toHaveCount(0)
+  expect(formSeen, 'the form was never visible').toBe(false)
+  expect(provisions, 'nothing is provisioned').toBe(0)
+  expect(errors, `console errors on the suspended journey:\n${errors.join('\n')}`).toEqual([])
+})
+
 const FIRST_WORKSPACE_TITLE = 'Create your workspace'
-const FIRST_WORKSPACE_LINE = 'This account has no workspace yet. Create one below to get started. If you were invited, open the invite link in your email.'
+const FIRST_WORKSPACE_LINE =
+  'This account has no workspace yet. Create one below to get started. If you were invited, open the invite link in your email first. An account can belong to only one workspace, so creating one here blocks joining another.'
 const CREATE_FAILED = 'We could not create your workspace. Try again.'
 const WORKSPACES_URL = `${GATEWAY_URL}/api/tenancy/v1/workspaces`
 
@@ -3665,6 +3709,7 @@ test('a bare account signs in to the form and creates its workspace', async ({ p
     page,
     form.card,
     [
+      ['first-workspace line', form.card.getByText(FIRST_WORKSPACE_LINE, { exact: true })],
       ['kind fieldset', form.card.getByRole('group')],
       ['firm label', form.card.locator('label').filter({ has: form.firm })],
       ['in-house label', form.card.locator('label').filter({ has: form.inHouse })],

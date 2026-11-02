@@ -370,7 +370,7 @@ describe('JoinWorkspace', () => {
 describe('JoinWorkspace first workspace', () => {
   const FIRM = 'For clients — an accounting or tax firm'
   const IN_HOUSE = 'For our own company — in-house'
-  const LINE = 'This account has no workspace yet. Create one below to get started. If you were invited, open the invite link in your email.'
+  const LINE = 'This account has no workspace yet. Create one below to get started. If you were invited, open the invite link in your email first. An account can belong to only one workspace, so creating one here blocks joining another.'
   const first = (over: Partial<Parameters<typeof JoinWorkspace>[0]> = {}) => show([], { firstWorkspace: true, defaultName: '', onCreate: vi.fn(), ...over })
   const ws = () => screen.getByTestId('join-workspace-name') as HTMLInputElement
   const nm = () => screen.getByTestId('join-name') as HTMLInputElement

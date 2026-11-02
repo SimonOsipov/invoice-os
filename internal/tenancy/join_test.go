@@ -716,7 +716,7 @@ func TestJoin_HandlersIgnoreBodyAndQueryAndRefuseAlike(t *testing.T) {
 	requireStatus(t, w, "pending")
 
 	rec := apiDo(mux, atk, http.MethodGet, "/v1/invitations/mine?email="+addr, "")
-	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"invitations":[],"removed":false}` {
+	if rec.Code != http.StatusOK || !sameJSON(rec.Body.String(), `{"invitations":[],"live_membership":false,"removed":false}`) {
 		t.Errorf("attacker list with a spoofed query = %d %s, want 200 empty, not removed", rec.Code, rec.Body)
 	}
 
@@ -1091,4 +1091,125 @@ func TestAcceptHandlers_ABadNameWritesNothingAndTheNamesAtTheBoundsAreStored(t *
 			}
 		})
 	}
+}
+
+// mineAnswer is the real mine route's decoded body; live is nil when the key is absent.
+type mineAnswer struct {
+	Invitations []PendingInvite
+	Removed     bool
+	Live        *bool
+	Body        string
+}
+
+func getMine(t *testing.T, mux http.Handler, ctx context.Context, target, body string) mineAnswer {
+	t.Helper()
+	rec := apiDo(mux, ctx, http.MethodGet, target, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET %s = %d %s, want 200", target, rec.Code, rec.Body)
+	}
+	var raw struct {
+		Invitations []PendingInvite `json:"invitations"`
+		Removed     bool            `json:"removed"`
+		Live        *bool           `json:"live_membership"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("body %q: %v", rec.Body, err)
+	}
+	return mineAnswer{raw.Invitations, raw.Removed, raw.Live, rec.Body.String()}
+}
+
+func requireLive(t *testing.T, got mineAnswer, want bool, what string) {
+	t.Helper()
+	if got.Live == nil || *got.Live != want {
+		t.Errorf("%s: body = %s, want live_membership %v", what, got.Body, want)
+	}
+}
+
+func TestMyPendingInvitations_LiveMembership(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	mux := realAcceptMux(w.store)
+	other := newInvWorld(t, "Elsewhere", "Chi Okoro")
+	for _, c := range []struct {
+		name        string
+		seed        func(user string)
+		live        bool
+		wantRemoved bool
+	}{
+		{"active", func(u string) {
+			seedIdentityMembership(t, other.super, other.tenant, u, "preparer", "active", strp("Ada"), nil)
+		}, true, false},
+		{"suspended", func(u string) {
+			seedIdentityMembership(t, other.super, other.tenant, u, "preparer", "suspended", strp("Ada"), nil)
+		}, true, false},
+		{"invited", func(u string) {
+			seedIdentityMembership(t, other.super, other.tenant, u, "preparer", "invited", strp("Ada"), nil)
+		}, true, false},
+		{"active in two tenants", func(u string) {
+			seedIdentityMembership(t, other.super, other.tenant, u, "preparer", "active", strp("Ada"), nil)
+			seedIdentityMembership(t, w.super, w.tenant, u, "preparer", "active", strp("Ada"), nil)
+		}, true, false},
+		{"no row", func(string) {}, false, false},
+		{"removed only", func(u string) { seedRemovedElsewhere(t, u) }, false, true},
+		{"removed here, active there", func(u string) {
+			seedRemovedElsewhere(t, u)
+			seedIdentityMembership(t, other.super, other.tenant, u, "preparer", "active", strp("Ada"), nil)
+		}, true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			user := uuid.NewString()
+			c.seed(user)
+			got := getMine(t, mux, tenantless(user, addr), "/v1/invitations/mine", "")
+			requireLive(t, got, c.live, c.name)
+			if got.Removed != c.wantRemoved {
+				t.Errorf("%s: body = %s, want removed %v", c.name, got.Body, c.wantRemoved)
+			}
+		})
+	}
+}
+
+func TestMyPendingInvitations_LiveMembershipReadsWithAnEmptyEmail(t *testing.T) {
+	w, _ := newJoinWorld(t, "reviewer")
+	mux := realAcceptMux(w.store)
+	other := newInvWorld(t, "Elsewhere", "Chi Okoro")
+	for _, email := range []string{"", "not an address"} {
+		t.Run("email "+email, func(t *testing.T) {
+			live, clean := uuid.NewString(), uuid.NewString()
+			seedIdentityMembership(t, other.super, other.tenant, live, "preparer", "suspended", strp("Ada"), nil)
+			got := getMine(t, mux, tenantless(live, email), "/v1/invitations/mine", "")
+			requireLive(t, got, true, "suspended member, email "+email)
+			if got.Invitations == nil || len(got.Invitations) != 0 {
+				t.Errorf("body = %s, want a non-nil empty invite list", got.Body)
+			}
+			// Control: the same empty email for a caller with no row reads false, so the true above is read.
+			requireLive(t, getMine(t, mux, tenantless(clean, email), "/v1/invitations/mine", ""), false, "clean caller, email "+email)
+		})
+	}
+}
+
+func TestInvitationsMine_LiveMembershipIgnoresClientInput(t *testing.T) {
+	w, addr := newJoinWorld(t, "reviewer")
+	mux := realAcceptMux(w.store)
+	other := newInvWorld(t, "Elsewhere", "Chi Okoro")
+	live, clean := uuid.NewString(), uuid.NewString()
+	seedIdentityMembership(t, other.super, other.tenant, live, "preparer", "active", strp("Ada"), nil)
+
+	get := func(subject, claimed, claim string) mineAnswer {
+		req := httptest.NewRequestWithContext(tenantless(subject, addr), http.MethodGet,
+			"/v1/invitations/mine?subject="+claimed+"&user_id="+claimed+"&live_membership="+claim,
+			strings.NewReader(`{"live_membership":`+claim+`,"subject":"`+claimed+`"}`))
+		req.Header.Set("X-User-Id", claimed)
+		req.Header.Set("X-User-Subject", claimed)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET = %d %s, want 200", rec.Code, rec.Body)
+		}
+		var b struct {
+			Live *bool `json:"live_membership"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &b)
+		return mineAnswer{Live: b.Live, Body: rec.Body.String()}
+	}
+	requireLive(t, get(clean, live, "true"), false, "clean caller naming the live member")
+	requireLive(t, get(live, clean, "false"), true, "live caller naming the clean one")
 }

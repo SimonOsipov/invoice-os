@@ -201,3 +201,67 @@ func TestCreatorStanding_NonCreatorStopsAfterOneStatement(t *testing.T) {
 		t.Errorf("statements mentioning memberships = %d, want exactly 1 for a page holding a creator row", n)
 	}
 }
+
+// One page, several clients and role keys: each invoice keeps its own client scope and role key.
+// The non-creator row comes first so a key list misaligned with the creator rows would show.
+func TestCreatorStanding_OnePageKeepsEachInvoiceOwnClientAndRole(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newStandingWorld(t, super, "APPR-17 page-scope")
+	seedWorkflowRole(t, super, w.tenantID, "unheld-role", "Unheld role")
+	seedMemberOf(t, super, w.tenantID, memberSpec{role: "reviewer", limited: true, entityIDs: []string{w.entA}, roleID: w.roleID})
+
+	other := seedMemberOf(t, super, w.tenantID, memberSpec{role: "reviewer"})
+	byOther := seedInvoice(t, super, w.tenantID, w.entA, "page-by-other")
+	seedHistory(t, super, w.tenantID, byOther, nil, other)
+	unheldOnA := seedInvoice(t, super, w.tenantID, w.entA, "page-unheld-on-a")
+	seedHistory(t, super, w.tenantID, unheldOnA, nil, w.creator)
+	onB := seedInvoice(t, super, w.tenantID, w.entB, "page-on-b")
+	seedHistory(t, super, w.tenantID, onB, nil, w.creator)
+	// The all-clients reviewer `other` reaches B, so drop it from the count by suspending it.
+	if _, err := super.Exec(context.Background(),
+		`UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id = $2`, w.tenantID, other); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+
+	held, unheld := ptr("standing-role"), ptr("unheld-role")
+	got := readStanding(t, app, w.tenantID, w.creator,
+		CreatorProbe{byOther, unheld}, CreatorProbe{w.invoice, held}, CreatorProbe{unheldOnA, unheld}, CreatorProbe{onB, held})
+	if len(got) != 3 {
+		t.Fatalf("standings = %d, want 3 (the creator's invoices only): %+v", len(got), got)
+	}
+	if got[byOther].IsCreator {
+		t.Error("an invoice created by someone else reads IsCreator")
+	}
+	if want := (CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: true}); got[w.invoice] != want {
+		t.Errorf("client A, key held by the limited reviewer = %+v, want %+v", got[w.invoice], want)
+	}
+	if want := (CreatorStanding{IsCreator: true, OtherApprover: true, OtherRoleHolder: false}); got[unheldOnA] != want {
+		t.Errorf("client A, key nobody holds = %+v, want %+v", got[unheldOnA], want)
+	}
+	if want := (CreatorStanding{IsCreator: true}); got[onB] != want {
+		t.Errorf("client B, only a reviewer limited to A = %+v, want %+v", got[onB], want)
+	}
+}
+
+// Another tenant's approvers and invoices stay invisible to the read, whoever they are.
+func TestCreatorStanding_AnotherTenantsApproversAndInvoicesStayInvisible(t *testing.T) {
+	super, app := dbTestPools(t)
+	w := newStandingWorld(t, super, "APPR-17 xt-home")
+	o := newStandingWorld(t, super, "APPR-17 xt-other")
+	seedMemberOf(t, super, o.tenantID, memberSpec{role: "reviewer", roleID: o.roleID})
+	seedMemberOf(t, super, o.tenantID, memberSpec{role: "admin", roleID: o.roleID})
+	// An invoice in the other tenant whose first row names the home creator.
+	foreign := seedInvoice(t, super, o.tenantID, o.entA, "xt-foreign")
+	seedHistory(t, super, o.tenantID, foreign, nil, w.creator)
+
+	got := readStanding(t, app, w.tenantID, w.creator, w.probe(), CreatorProbe{foreign, ptr("standing-role")})
+	if !got[w.invoice].IsCreator {
+		t.Fatalf("home invoice standing = %+v, want IsCreator", got[w.invoice])
+	}
+	if got[w.invoice].OtherApprover || got[w.invoice].OtherRoleHolder {
+		t.Errorf("home standing = %+v: the other tenant's approvers must not count", got[w.invoice])
+	}
+	if s, ok := got[foreign]; ok {
+		t.Errorf("a foreign tenant's invoice read as %+v, want absent", s)
+	}
+}

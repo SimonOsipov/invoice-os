@@ -1496,6 +1496,28 @@ describe('APPR-17-04: creator-refused rows stay selectable', () => {
     expect(view.refused).toEqual([`INV-C: ${CREATOR_REASON}`])
   })
 
+  it('approvalsBarView: one creator row and one approvable row read singular, and a loading page sends nothing', () => {
+    const rows = [creatorRow('c', 'INV-C'), approvableRow('a')]
+    const view = approvalsBarView(['c', 'a'], rows, 'idle', false)
+    expect(view.eligible).toEqual(['c', 'a'])
+    expect(view.submitLabel).toBe('Approve 1 on this page')
+    expect(view.confirmPrompt).toBe('Approve 1 invoice?')
+    expect(view.confirmLabel).toBe('Yes, approve 1 now')
+    expect(view.canApprove).toBe(true)
+    expect(approvalsBarView(['c', 'a'], rows, 'idle', true).canApprove).toBe(false)
+    expect(approvalsBarView(['c', 'a'], rows, 'submitting', false).canApprove).toBe(false)
+  })
+
+  it('approvalsBarView: only a row the server refused on creator grounds is listed as refused', () => {
+    // A contradictory row (can_approve true and the flag true) is approvable, never refused.
+    const contradictory = { ...creatorRow('x', 'INV-X'), can_approve: true }
+    const roleBlocked = { ...notApprovableRow('r'), invoice_number: 'INV-R' }
+    const view = approvalsBarView(['x', 'c'], [contradictory, creatorRow('c', 'INV-C'), roleBlocked], 'idle', false)
+    expect(view.refused).toEqual([`INV-C: ${CREATOR_REASON}`])
+    expect(view.eligible).toEqual(['x', 'c'])
+    expect(approvalsBarView(['r'], [roleBlocked], 'idle', false).eligible).toEqual([])
+  })
+
   it('approvalsBarView with no creator row selected keeps every label and an empty refused list', () => {
     const rows = [creatorRow('c'), approvableRow('a'), approvableRow('b')]
     const view = approvalsBarView(['a', 'b'], rows, 'idle', false)

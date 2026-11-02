@@ -7559,6 +7559,22 @@ describe('InvoiceDetail: the creator cannot approve (APPR-17-03)', () => {
     await waitFor(() => expect(approveBtn().disabled).toBe(true))
   })
 
+  it('detail_serverRefusal_keepsRejectEnabledAndApproveCannotBeRearmed', async () => {
+    const { decideCalls } = mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: true, can_reject: true }), [], {
+      decideResponse: { ok: false, status: 403, json: () => Promise.resolve({ error: SENTENCE }) },
+    })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-approve'))
+    fireEvent.click(screen.getByTestId('detail-approve-confirm'))
+    await screen.findByTestId('detail-decision-error')
+    await waitFor(() => expect(approveBtn().disabled).toBe(true))
+
+    fireEvent.click(approveBtn())
+    expect(screen.queryByTestId('detail-approve-confirm')).toBeNull()
+    expect(decideCalls).toHaveLength(1)
+    expect((screen.getByTestId('detail-reject') as HTMLButtonElement).disabled).toBe(false)
+  })
+
   it('detail_conflictDoesNotDisableApprove', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_approve: true }), [], {
       decideResponse: { ok: false, status: 409, json: () => Promise.resolve({ error: 'step already decided' }) },

@@ -105,10 +105,6 @@ export function isApprovableRow(row: Pick<InvoiceRecord, 'can_approve'>): boolea
   return row.can_approve === true
 }
 
-export function approvableIds(rows: InvoiceRecord[]): string[] {
-  return rows.filter((row) => isApprovableRow(row)).map((row) => row.id)
-}
-
 // A creator-refused row stays selectable so bulk approve can report it by number.
 export function isSelectableRow(row: Pick<InvoiceRecord, 'can_approve' | 'approve_blocked_by_creator'>): boolean {
   return isApprovableRow(row) || row.approve_blocked_by_creator === true

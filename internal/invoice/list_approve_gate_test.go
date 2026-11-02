@@ -617,3 +617,34 @@ func TestStoreRowFacts_CreatorReadIsConstantInPageSize(t *testing.T) {
 		t.Errorf("RowFacts issued %d statements for 2 creator rows and %d for 20", n2, n20)
 	}
 }
+
+// Another tenant's approvers and invoices never enter the creator read of either wire.
+func TestStoreCreatorRead_DoesNotCrossTenants(t *testing.T) {
+	super, app := dbTestPools(t)
+	home := seedApprovalFactsFixture(t, super, "APPR-17-02-XT-HOME", true)
+	home.armInvoice(t, super, app, "appr-17-02-xt-home")
+	foreign := seedApprovalFactsFixture(t, super, "APPR-17-02-XT-OTHER", true)
+	foreign.armInvoice(t, super, app, "appr-17-02-xt-other")
+	seedMembership(t, super, foreign.tenantID, uuid.NewString(), "reviewer")
+	seedMembership(t, super, foreign.tenantID, uuid.NewString(), "admin")
+	store := NewStore(app)
+
+	_, gate, err := store.RowFacts(home.ctx, []string{home.invID, foreign.invID})
+	if err != nil || gate.CreatorErr != nil {
+		t.Fatalf("RowFacts: err=%v creatorErr=%v", err, gate.CreatorErr)
+	}
+	if got := gate.Creator[home.invID]; !got.IsCreator || got.OtherApprover {
+		t.Errorf("home standing = %+v, want IsCreator and no other approver: the other tenant's approvers do not count", got)
+	}
+	if got, ok := gate.Creator[foreign.invID]; ok {
+		t.Errorf("a foreign invoice id read as %+v, want absent", got)
+	}
+
+	one, err := store.ApprovalFacts(home.ctx, home.invID)
+	if err != nil || one.CreatorErr != nil {
+		t.Fatalf("ApprovalFacts: err=%v creatorErr=%v", err, one.CreatorErr)
+	}
+	if one.Creator.OtherApprover || !one.Creator.IsCreator {
+		t.Errorf("detail standing = %+v, want IsCreator and no other approver", one.Creator)
+	}
+}

@@ -414,3 +414,25 @@ func TestDecide_CountTiming_SecondApproverEndsTheException(t *testing.T) {
 	wantRefused(t, err, creatorSentence+" "+noHolderSentence)
 	assertNothingWritten(t, super, f)
 }
+
+func TestDecide_CountTiming_TheOtherApproverLeavingReopensTheException(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newApproveFixture(t, super, app, "APPR-17 count-leaves", "creator-role")
+	creator := seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	other := seedMemberOf(t, super, f.tenantID, memberSpec{role: "reviewer", roleID: f.roleID})
+	seedHistory(t, super, f.tenantID, f.invoiceID, nil, creator)
+
+	_, err := approve(t, app, f.tenantID, creator, f.invoiceID, nil)
+	wantRefused(t, err, creatorSentence)
+	assertNothingWritten(t, super, f)
+
+	if _, err := super.Exec(context.Background(),
+		`UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id = $2`, f.tenantID, other); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+	run, err := approve(t, app, f.tenantID, creator, f.invoiceID, nil)
+	if err != nil || run.State != "approved" {
+		t.Fatalf("approve after the other approver left = %q, %v, want approved", run.State, err)
+	}
+	wantApprovedAs(t, super, f.tenantID, "self_approved")
+}

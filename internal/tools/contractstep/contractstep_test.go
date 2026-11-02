@@ -686,6 +686,30 @@ func TestMarks_OneMarkClaimsOneObject(t *testing.T) {
 	}
 }
 
+func TestTriggers_PostgresWhitespaceAndLineEndsHideNoDrop(t *testing.T) {
+	cases := []struct {
+		sql  string
+		objs []string
+	}{
+		{"DROP\vTABLE\vfoo", []string{"foo"}},
+		{"ALTER\vTABLE\vt\vDROP\vCOLUMN\vx", []string{"t.x"}},
+		{"SELECT 1; -- note\rDROP TABLE t", []string{"t"}},
+		{"ALTER TABLE t ADD y int -- note\r, DROP COLUMN x", []string{"t.x"}},
+	}
+	for _, c := range cases {
+		if got := objects(scanUp(t, c.sql+";")); !slices.Equal(got, c.objs) {
+			t.Errorf("%q: got %q, want %q", c.sql, got, c.objs)
+		}
+	}
+}
+
+func TestMarks_QuotedMixedCaseNameIsAnotherObject(t *testing.T) {
+	_, failed := evalUp(t, "-- contract-step foo: why\nDROP TABLE foo; DROP TABLE \"Foo\";")
+	if !failed {
+		t.Fatal("one mark for foo released the drop of \"Foo\", a different table")
+	}
+}
+
 func TestUpSection_ReadsGooseAnnotationsLikeGoose(t *testing.T) {
 	r, err := Scan(testFile, "-- +goose up\nSELECT 1;\n-- +goose down\nDROP TABLE t;\n")
 	if err != nil || len(r.Triggers) != 0 {

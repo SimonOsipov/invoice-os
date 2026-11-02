@@ -253,10 +253,13 @@ func TestScan_FindsTheRealDropsInTheShippedMigrations(t *testing.T) {
 }
 
 func TestRun_NonASCIIMigrationPathIsChecked(t *testing.T) {
-	r := newRepo(t, baseFiles)
-	r.write("migrations/20260201000000_café.sql", mig("DROP TABLE t;"))
-	r.commit("add")
-	if code, out := r.runPR(); code != 1 || !strings.Contains(out, "migrations/20260201000000_café.sql: DROP TABLE t deletes") {
-		t.Fatalf("code %d, out %q", code, out)
+	for _, name := range []string{"café", "a b", "a\nb"} {
+		file := "migrations/20260201000000_" + name + ".sql"
+		r := newRepo(t, baseFiles)
+		r.write(file, mig("DROP TABLE t;"))
+		r.commit("add")
+		if code, out := r.runPR(); code != 1 || !strings.Contains(out, file+": DROP TABLE t deletes") {
+			t.Errorf("%q: code %d, out %q", name, code, out)
+		}
 	}
 }

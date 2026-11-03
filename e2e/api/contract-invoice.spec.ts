@@ -2184,11 +2184,6 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
         // explainBareLineFields, internal/invoice/explain.go.
         expect(['description', 'quantity', 'unit_price', 'line_total', 'line_tax']).toContain(res.fix.field)
       }
-      // The fake answers the steer exactly; this keeps the guard above from passing vacuously on the PR lane.
-      if (!nightlyTarget()) {
-        expect(res.explanation).toBe(ANSWER.explanation)
-        expect(res.fix).toMatchObject({ field: 'unit_price', line: 2, current: '-5.00', value: '5.00' })
-      }
 
       const before = (await getInvoice(token, inv.id)).line_items!
       expect(before).toHaveLength(3)

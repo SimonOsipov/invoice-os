@@ -5741,6 +5741,25 @@ describe('InvoiceDetail failed card: Send again (RETRY-01-04)', () => {
     expect(document.getElementById(btn.getAttribute('aria-describedby') ?? '')).toBe(reason)
   })
 
+  it('send-again matches resolve-outside in classes and disabled inline style, and Resolved outside stays title-only', async () => {
+    const RESOLVE_REASON = 'Only an approver can mark this invoice resolved outside.'
+    mockDetailFetch(
+      failedRec({ can_send_again: false, send_again_blocked_reason: PREPARER_REASON, can_resolve_outside: false, resolve_outside_blocked_reason: RESOLVE_REASON }),
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const card = await screen.findByTestId('failed-dead-end')
+    const send = within(card).getByTestId('send-again') as HTMLButtonElement
+    const resolve = within(card).getByTestId('resolve-outside') as HTMLButtonElement
+    expect(send.disabled && resolve.disabled, 'both buttons are disabled').toBe(true)
+    expect(send.className).toBe(resolve.className)
+    for (const prop of ['height', 'fontSize', 'flexShrink', 'whiteSpace', 'background', 'color', 'cursor'] as const) {
+      expect(send.style[prop], `inline ${prop}`).not.toBe('')
+      expect(send.style[prop], `inline ${prop} matches resolve-outside`).toBe(resolve.style[prop])
+    }
+    expect(resolve.getAttribute('title')).toBe(RESOLVE_REASON)
+    expect(card.textContent).not.toContain(RESOLVE_REASON)
+  })
+
   it('a preparer sees the copy and the reason together, without the terminal sentence', async () => {
     mockDetailFetch(failedRec({ can_send_again: false, send_again_blocked_reason: PREPARER_REASON }))
     render(<InvoiceDetail ctx={detailCtx(ID)} />)

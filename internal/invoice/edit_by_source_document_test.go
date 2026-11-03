@@ -1173,8 +1173,10 @@ func TestRLS_EditBySourceDocumentTxADebitNoteStoresPositiveAndAGarbageAmountRefu
 		t.Errorf("caller's line quantity = %s, want -1 (the edit must not rewrite its input)", *lines[0].Quantity)
 	}
 	for name, in := range map[string]EditInput{
-		"total":    {UpdateInput: UpdateInput{Total: strPtr("abc")}},
-		"line_tax": {LineItems: &[]LineItemInput{{Description: strPtr("L"), LineTax: strPtr("1,5x")}}},
+		"total":                              {UpdateInput: UpdateInput{Total: strPtr("abc")}},
+		"line_tax":                           {LineItems: &[]LineItemInput{{Description: strPtr("L"), LineTax: strPtr("1,5x")}}},
+		"total with a unicode minus":         {UpdateInput: UpdateInput{Total: strPtr("\u22125.00")}},
+		"line quantity with a unicode minus": {LineItems: &[]LineItemInput{{Description: strPtr("L"), Quantity: strPtr("\u22121")}}},
 	} {
 		_, err := f.edit(t, doc, in)
 		if !errors.Is(err, ErrValidation) || err == nil || !strings.Contains(err.Error(), "which is not an amount") {

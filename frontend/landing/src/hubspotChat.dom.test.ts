@@ -45,8 +45,41 @@ describe('loadChat gate', () => {
     const scripts = document.head.querySelectorAll('script#hs-script-loader')
     expect(scripts.length).toBe(1)
     const script = scripts[0] as HTMLScriptElement
-    expect(script.src).toBe('https://js-eu1.hs-scripts.com/148915098.js')
+    expect(script.src).toBe('https://js-eu1.hs-scripts.com/1234567.js')
     expect(script.async).toBe(true)
+  })
+
+  it('the loader URL uses the trimmed portal id', async () => {
+    vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '  7654321  ')
+    const { loadChat } = await fresh()
+    expect(loadChat(WWW, GRANTED)).toBe(true)
+    expect((document.head.querySelector('script#hs-script-loader') as HTMLScriptElement).src).toBe(
+      'https://js-eu1.hs-scripts.com/7654321.js',
+    )
+  })
+
+  it('a build without the portal id loads no chat and throws nothing', async () => {
+    vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '')
+    const { loadChat } = await fresh()
+    expect(() => loadChat(WWW, GRANTED)).not.toThrow()
+    expect(loadChat(WWW, GRANTED)).toBe(false)
+    expect(loaderScripts().length).toBe(0)
+    expect(w._hsq).toBeUndefined()
+  })
+
+  it('a whitespace portal id counts as none', async () => {
+    vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '   ')
+    const { loadChat } = await fresh()
+    expect(loadChat(WWW, GRANTED)).toBe(false)
+    expect(loaderScripts().length).toBe(0)
+  })
+
+  it('bootChat without the portal id loads nothing even when granted', async () => {
+    vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '')
+    document.cookie = `asc_consent=${encodeURIComponent(JSON.stringify(GRANTED))}; path=/; domain=.ascomply.com`
+    const { bootChat } = await fresh()
+    expect(bootChat()).toBe(false)
+    expect(loaderScripts().length).toBe(0)
   })
 
   it('AC2: a production host with Reject injects nothing', async () => {
@@ -350,11 +383,12 @@ describe('HubSpot cookie cleanup', () => {
 })
 
 describe('adversarial', () => {
-  it('the exported constants hold the vendor values', async () => {
+  it('chatScriptUrl follows the build variable', async () => {
     const m = await fresh()
-    expect(m.HUBSPOT_PORTAL_ID).toBe('148915098')
+    expect(m.chatScriptUrl()).toBe('https://js-eu1.hs-scripts.com/1234567.js')
+    vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '')
+    expect(m.chatScriptUrl()).toBeNull()
     expect(m.CHAT_SCRIPT_HOST).toBe('js-eu1.hs-scripts.com')
-    expect(m.CHAT_SCRIPT_URL).toBe('https://js-eu1.hs-scripts.com/148915098.js')
     expect(m.CHAT_SCRIPT_ID).toBe('hs-script-loader')
     expect(m.HUBSPOT_COOKIE_NAMES).toEqual(COOKIES)
     expect(m.HUBSPOT_CHAT_DOMAINS.length).toBeGreaterThan(0)

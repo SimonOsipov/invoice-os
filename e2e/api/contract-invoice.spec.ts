@@ -67,8 +67,8 @@ import {
   type Entity,
 } from './client'
 import { freshTin, freshPolicyName } from './fixtures'
-import { EXPLAIN_UNAVAILABLE_MARKER, steerExplainMarker, steerMarker } from '../importFixtures'
-import { nightlyTarget, REAL_AI_COVERED } from '../targets'
+import { steerExplainMarker, steerMarker } from '../importFixtures'
+import { nightlyTarget } from '../targets'
 import { assertErrorEnvelope, ensureFirmPolicyActive } from './contract-helpers'
 
 // cleanInvoiceFields(): own copy (repo convention — no cross-suite imports
@@ -2316,12 +2316,24 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     }
 
     test('explain answers a steered line fix, and the fix PATCH keeps the other lines', async () => {
-      test.skip(nightlyTarget(), REAL_AI_COVERED)
       const inv = await validatedWith(steerExplainMarker(ANSWER))
       const res = await explainViolation(token, inv.id, { rule_key: RULE, path: PATH })
       expect(res.status).toBe('ok')
-      expect(res.explanation).toBe(ANSWER.explanation)
-      expect(res.fix).toMatchObject({ field: 'unit_price', line: 2, current: '-5.00', value: '5.00' })
+      expect(res.explanation?.trim(), 'the explanation is not empty').toBeTruthy()
+      // explainMaxRunes, internal/invoice/explain.go.
+      expect([...res.explanation!].length, 'the explanation fits the rune cap').toBeLessThanOrEqual(1200)
+      expect(res.explanation, 'the explanation carries no link').not.toMatch(/https?:\/\/|www\./i)
+      // [pr-fix-guard]: the fake answers a fix, so the leg below cannot pass with none on the PR lane.
+      if (!nightlyTarget()) expect(res.fix, 'the PR lane carries a fix').not.toBeNull()
+      if (!nightlyTarget()) {
+        expect(res.explanation).toBe(ANSWER.explanation)
+        expect(res.fix).toMatchObject({ field: 'unit_price', line: 2, current: '-5.00', value: '5.00' })
+      }
+      if (res.fix) {
+        expect(res.fix, 'a fix names line 2 and its stored value').toMatchObject({ line: 2, current: '-5.00' })
+        // explainBareLineFields, internal/invoice/explain.go.
+        expect(['description', 'quantity', 'unit_price', 'line_total', 'line_tax']).toContain(res.fix.field)
+      }
 
       const before = (await getInvoice(token, inv.id)).line_items!
       expect(before).toHaveLength(3)
@@ -2331,7 +2343,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
         id: l.id,
         description: l.description!,
         quantity: l.quantity!,
-        unit_price: l.line_no === 2 ? res.fix!.value : l.unit_price!,
+        unit_price: l.line_no === 2 ? '5.00' : l.unit_price!,
         line_total: l.line_total!,
         line_tax: l.line_tax as string,
       }))
@@ -2351,9 +2363,9 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(after.status).toBe('draft')
     })
 
-    test('explain says unavailable when the fake AI fails', async () => {
-      test.skip(nightlyTarget(), REAL_AI_COVERED)
-      const inv = await validatedWith(EXPLAIN_UNAVAILABLE_MARKER)
+    test('explain says unavailable when the AI call fails', async () => {
+      // 2,000,000 digits overflow the model's context so a real call is refused; the fake, given no marker, answers blank.
+      const inv = await validatedWith('7'.repeat(2_000_000))
       const res = await rawFetch(`/api/invoice/v1/invoices/${inv.id}/explain`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -2364,7 +2376,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     })
 
     test('an unscoped AI marker does not steer explain', async () => {
-      test.skip(nightlyTarget(), REAL_AI_COVERED)
+      test.skip(nightlyTarget(), 'S10: its subject is the fake\'s marker scoping; covered by Go TestExplain_ScopedMarkerSteersUnscopedDoesNot and TestFake_ScopedRequestIgnoresAnUnscopedMarker')
       const inv = await validatedWith(steerMarker(ANSWER))
       const res = await rawFetch(`/api/invoice/v1/invoices/${inv.id}/explain`, {
         method: 'POST',

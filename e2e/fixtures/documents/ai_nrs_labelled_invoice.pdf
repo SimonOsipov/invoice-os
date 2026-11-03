@@ -10,7 +10,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>
 endobj
 4 0 obj
-<< /Length 2465 >>
+<< /Length 3178 >>
 stream
 BT
 /F1 12 Tf
@@ -65,7 +65,7 @@ ET
 BT
 /F1 12 Tf
 72 510 Td
-(Buyer City: Lagos Island) Tj
+(Buyer City: Ikeja) Tj
 ET
 BT
 /F1 12 Tf
@@ -80,17 +80,7 @@ ET
 BT
 /F1 12 Tf
 72 456 Td
-(Buyer LGA: Lagos Island) Tj
-ET
-BT
-/F1 10 Tf
-72 420 Td
-(Laptop Computer 2 500.00 1000.00 8471.30 SKU-1001 EA Standard) Tj
-ET
-BT
-/F1 10 Tf
-72 402 Td
-(Software Support 3 250.00 750.00 6201 hours) Tj
+(Buyer LGA: Ikeja) Tj
 ET
 BT
 /F1 12 Tf
@@ -106,6 +96,121 @@ BT
 /F1 12 Tf
 72 336 Td
 (Total: 1881.25) Tj
+ET
+BT
+/F1 7 Tf
+40 420 Td
+(Description) Tj
+ET
+BT
+/F1 7 Tf
+135 420 Td
+(Qty) Tj
+ET
+BT
+/F1 7 Tf
+165 420 Td
+(Unit Price) Tj
+ET
+BT
+/F1 7 Tf
+210 420 Td
+(Line Total) Tj
+ET
+BT
+/F1 7 Tf
+262 420 Td
+(HSN Code) Tj
+ET
+BT
+/F1 7 Tf
+312 420 Td
+(ISIC Code) Tj
+ET
+BT
+/F1 7 Tf
+362 420 Td
+(SKU) Tj
+ET
+BT
+/F1 7 Tf
+420 420 Td
+(Unit) Tj
+ET
+BT
+/F1 7 Tf
+470 420 Td
+(Tax Category) Tj
+ET
+BT
+/F1 7 Tf
+40 402 Td
+(Laptop Computer) Tj
+ET
+BT
+/F1 7 Tf
+135 402 Td
+(2) Tj
+ET
+BT
+/F1 7 Tf
+165 402 Td
+(500.00) Tj
+ET
+BT
+/F1 7 Tf
+210 402 Td
+(1000.00) Tj
+ET
+BT
+/F1 7 Tf
+262 402 Td
+(8471.30) Tj
+ET
+BT
+/F1 7 Tf
+362 402 Td
+(SKU-1001) Tj
+ET
+BT
+/F1 7 Tf
+420 402 Td
+(EA) Tj
+ET
+BT
+/F1 7 Tf
+470 402 Td
+(Standard) Tj
+ET
+BT
+/F1 7 Tf
+40 384 Td
+(Software Support) Tj
+ET
+BT
+/F1 7 Tf
+135 384 Td
+(3) Tj
+ET
+BT
+/F1 7 Tf
+165 384 Td
+(250.00) Tj
+ET
+BT
+/F1 7 Tf
+210 384 Td
+(750.00) Tj
+ET
+BT
+/F1 7 Tf
+312 384 Td
+(6201) Tj
+ET
+BT
+/F1 7 Tf
+420 384 Td
+(hours) Tj
 ET
 BT
 /F2 1.4 Tf
@@ -133,10 +238,10 @@ xref
 0000000064 00000 n 
 0000000121 00000 n 
 0000000257 00000 n 
-0000002774 00000 n 
-0000002844 00000 n 
+0000003487 00000 n 
+0000003557 00000 n 
 trailer
 << /Size 7 /Root 1 0 R >>
 startxref
-2912
+3625
 %%EOF

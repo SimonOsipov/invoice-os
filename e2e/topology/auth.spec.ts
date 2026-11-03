@@ -1,8 +1,8 @@
 import { test, expect, type BrowserContext, type Frame, type Locator, type Page, type Request, type Response } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA } from './targets'
-import { shardPersonas } from './importWizardShared'
+import { setExactMapping, shardPersonas } from './importWizardShared'
 import { shoot } from '../argos'
-import { expectedContactsMode, nightlyTarget, REAL_AI_COVERED, resolveTarget } from '../targets'
+import { expectedContactsMode, nightlyTarget, resolveTarget } from '../targets'
 import { DESTINATION_READY, VERIFIED, browserToken, collectErrors, expectInWorkspace, headerSignIn, isHandoffNavigation, passFrontDoor, sidebarRoster, signInAs, signInAtFrontDoor, signInDialog, submitSignIn } from '../personaSession'
 import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession, type ConsoleTarget } from '../staffSession'
 import { ensureMember } from '../realAccounts'
@@ -1167,10 +1167,9 @@ async function openMapStep(page: Page, tag: string, amber: { title: string; show
   await expect(page.getByText('Map fields to columns ·', { exact: false })).toBeVisible({ timeout: 30_000 })
 }
 
-// Chip then column, no `exact: true` on the chip (import-wizard.spec.ts explains). Never clicks Import.
+// Never clicks Import.
 async function placeInvoiceNumberAndExpectImportEnabled(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
+  await setExactMapping(page, { invoice_number: 'Invoice No' })
   await expect(page.getByRole('button', { name: /^Import \d+ rows$/ })).toBeEnabled()
 }
 
@@ -1188,7 +1187,6 @@ async function expectOverviewActivity(page: Page, rows: Array<{ label: string; c
 }
 
 test('deployed app: a new in-house workspace lands on Add your company, and adding it opens the import', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(240_000)
   const account = await provisionRealAccount('add-co-inhouse', 'in_house')
   const errors = gatedErrors(page, [expectedStatusDropper(page, 400, /\/api\/portfolio\/v1\/entities$/)])
@@ -1276,7 +1274,6 @@ test('deployed app: a new in-house workspace lands on Add your company, and addi
 })
 
 test('deployed app: a new firm lands on Add your first client, and the import step it gates opens once a client is added', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(240_000)
   const account = await provisionRealAccount('add-co-firm', 'firm')
   const errors = collectErrors(page)

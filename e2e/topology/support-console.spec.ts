@@ -5,11 +5,12 @@ import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { unzipSync } from 'fflate'
-import { apiBase, fleetHeaders, getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, provisionStaffAccount, rawFetch, signInSession, type AuditEvent, type StaffAccount } from '../api/client'
+import { apiBase, createEntity, fleetHeaders, getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, provisionStaffAccount, rawFetch, signInSession, suggestMapping, type AuditEvent, type StaffAccount } from '../api/client'
+import { freshTin } from '../api/fixtures'
+import { buildOversizedCellCsv } from '../importFixtures'
 import { argosOn, shoot } from '../argos'
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
-import { nightlyTarget, REAL_AI_COVERED } from '../targets'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { scopeStrays } from './metricsScope'
 
@@ -1841,6 +1842,27 @@ async function liveAiRows<K extends string, R>(path: string, key: K, keyOf: (r: 
   return found
 }
 
+// One oversized suggest-mapping call: refused by the real AI, blank under the fake, a failed row on both. Returns once the row is listed.
+async function recordFailedAiCall(): Promise<void> {
+  const token = await login(PERSONAS.A)
+  const listed = async (): Promise<Set<string>> => {
+    const q = new URLSearchParams({ tenant: PERSONAS.A.tenantId, failed: 'true', limit: '100' })
+    const { calls } = await liveStaffGet<{ calls: { id: string; client: string; purpose: string }[] }>(`${STAFF_AI_CALLS}?${q}`)
+    return new Set(calls.filter((c) => c.client === 'ai' && c.purpose === 'spreadsheet').map((c) => c.id))
+  }
+  const known = await listed()
+  const tin = freshTin()
+  const entity = await createEntity(token, { name: `Zz SUP-03 failed ${tin}`, tin })
+  const form = new FormData()
+  form.set('file', new Blob([buildOversizedCellCsv()], { type: 'text/csv' }), 'oversized.csv')
+  const res = await fetch(`${apiBase()}/api/invoice/v1/imports/preview`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form })
+  expect(res.ok, `the oversized preview is accepted (status ${res.status})`).toBe(true)
+  const { document_id } = (await res.json()) as { document_id?: string }
+  expect(typeof document_id, `preview carries a document_id (status ${res.status})`).toBe('string')
+  await suggestMapping(token, { entity_id: entity.id, document_id: document_id as string })
+  await expect.poll(async () => [...(await listed())].some((id) => !known.has(id)), { message: "the oversized call's failed row is listed", timeout: 30_000 }).toBe(true)
+}
+
 // The screen is read-only: no switch or input beyond the five filters, and no button outside the allowlist.
 async function aiControlsRead(page: Page, what: string): Promise<void> {
   const mn = mainOf(page)
@@ -1873,8 +1895,13 @@ async function aiUsageReads(page: Page, testInfo: TestInfo): Promise<void> {
 
   await mn.getByRole('button', { name: 'FAILURES' }).click()
   await expect(mn.getByRole('button', { name: 'FAILURES' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(calls.first(), 'the failed calls have loaded').toBeVisible()
+  // The reload swaps the rows for a loading note, so wait for the failed list itself, not the stale CALLS rows.
+  await expect(mn.getByText('Loading AI calls…'), 'the failed calls have stopped loading').toHaveCount(0)
+  const outcomes = async (): Promise<string[]> => calls.evaluateAll((rows) => rows.map((r) => (r.children[10]?.textContent ?? '').trim()))
+  await expect.poll(async () => (await outcomes()).length, { message: 'the oversized call left a failed row on the screen' }).toBeGreaterThanOrEqual(1)
+  await expect.poll(async () => (await outcomes()).filter((o) => o === 'ok'), { message: 'the failed list holds no ok row' }).toEqual([])
   const failedRows = (await calls.all()).slice(0, ROW_CAP)
+  expect(failedRows.length, 'the oversized call left a failed row on the screen').toBeGreaterThanOrEqual(1)
   const failedIds = await Promise.all(failedRows.map((row) => row.getAttribute('data-call-id') as Promise<string>))
   const liveFailed = await liveAiRows<'calls', LiveAiCall>(STAFF_AI_CALLS, 'calls', (c) => c.id, failedIds, 'failed=true')
   for (const [i, row] of failedRows.entries()) {
@@ -2086,8 +2113,9 @@ function liveMask(page: Page, nav: string): Locator[] {
 
 for (const s of SCREENS) {
   test(`SUP-03 ${s.nav}: v2 header, eyebrow clearances and screen reads`, async ({ page }, testInfo) => {
-    test.skip(nightlyTarget() && s.nav === 'AI usage', REAL_AI_COVERED)
-    test.setTimeout(s.nav === 'System health' ? 300_000 : 120_000)
+    // AI usage adds the oversized call: 30s preview + 120s real-AI suggest + 30s poll = +180s
+    test.setTimeout(s.nav === 'System health' ? 300_000 : s.nav === 'AI usage' ? 300_000 : 120_000)
+    if (s.nav === 'AI usage') await recordFailedAiCall()
     const errors = await startSupport(page)
     const armed = s.arm?.(page)
     armed?.catch(() => {}) // a timeout surfaces where `reads` awaits it, not as an unhandled rejection

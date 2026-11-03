@@ -24,7 +24,7 @@
 // Cross-surface identity (AC2/AC3) is instead proven by directly comparing
 // the three response bodies to each other, so "identical" is demonstrated,
 // not assumed from a hard-coded string.
-// Read-only: no login, no token minting, no writes, no rules-table mutation.
+// Read-only: no writes, no rules-table mutation.
 import { createPrivateKey, generateKeyPairSync, randomUUID, sign, type KeyObject } from 'node:crypto'
 import { test, expect } from '@playwright/test'
 import { claimsOf, headerOf, login, me, PERSONAS, rawFetch } from './client'
@@ -101,7 +101,15 @@ test.describe('forged tokens (F-204)', () => {
 
   const getMe = (token: string) => rawFetch('/api/tenancy/v1/me', { headers: { Authorization: `Bearer ${token}` } })
   // Parsed lazily: a failed secret read must not fail the tests that do not need it.
-  const previewKey = (): KeyObject => createPrivateKey({ key: JSON.parse(previewSecret('mock-issuer-key'))[0], format: 'jwk' })
+  // Errors name the secret only: a parse error message can quote key bytes.
+  const previewKey = (): KeyObject => {
+    const raw = previewSecret('mock-issuer-key')
+    try {
+      return createPrivateKey({ key: JSON.parse(raw)[0], format: 'jwk' })
+    } catch {
+      throw new Error('mock-issuer-key: secret is not a JWK array holding a private key')
+    }
+  }
   const now = (): number => Math.floor(Date.now() / 1000)
 
   test("forged tokens: the mock login's own token is accepted", async () => {

@@ -8,7 +8,7 @@ paths:
 ---
 # PR previews on Google Cloud
 
-- `dev-env.yml` deploys each ready PR, except a Dependabot-only one, to `ascomply-preview` as `<svc>-pr-<N>` on run.app. `scripts/ci/preview.sh` does every gcloud call.
+- `dev-env.yml` deploys each ready PR, except a Dependabot-only one, to `ascomply-preview` as `<svc>-pr-<N>` on run.app. `scripts/ci/preview.sh` does every gcloud call of the workflows.
 - Authenticate as `deploy-preview`. Workload Identity admits it from `pull_request` runs and from `main`. It holds no role in `ascomply-prod`.
 - A PR opened by `dependabot[bot]` with every commit by `dependabot[bot]` and verified runs no preview job. `E2E gate` passes it by name.
 - A Dependabot PR with any other commit gets the full preview. Teardown still skips every PR opened by `dependabot[bot]`.

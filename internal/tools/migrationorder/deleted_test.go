@@ -155,3 +155,18 @@ func TestVacated_ReturnsOldOfEveryRenameSplitDoesNotExempt(t *testing.T) {
 	wantStrings(t, "vsBase", vsBase, []string{"migrations/20260211_a.sql", "migrations/20260212_y.sql", "migrations/20260214_new.sql"})
 	wantStrings(t, "vsMain", vsMain, []string{"migrations/20260210_x.sql"})
 }
+
+func TestParseChanges_ReadsADeletedLine(t *testing.T) {
+	raw := ":100644 000000 aaa 000 D\tmigrations/a.sql\n:000000 100644 000 bbb A\tmigrations/n.sql"
+	cs, del, err := parseChanges(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cs) != 1 || cs[0].New != "migrations/n.sql" {
+		t.Fatalf("changes = %+v", cs)
+	}
+	wantStrings(t, "deleted", del, []string{"migrations/a.sql"})
+	if _, _, err := parseChanges(":100644 000000 aaa 000 D\tmigrations/a.sql\tmigrations/b.sql"); err == nil {
+		t.Fatal("a D line with three fields must error")
+	}
+}

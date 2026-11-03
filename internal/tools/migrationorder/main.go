@@ -25,12 +25,12 @@ func main() {
 		os.Exit(2)
 	}
 	// -M finds renames; only equal blob ids are exempt, see Split. R100 ignores line order.
-	diff, err := git("diff", "-M", "--raw", "--no-abbrev", "--diff-filter=AR", mergeBase, *head, "--", Dir+"/")
+	diff, err := git("diff", "-M", "--raw", "--no-abbrev", "--diff-filter=ADR", mergeBase, *head, "--", Dir+"/")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migrationorder: git diff: %v\n", err)
 		os.Exit(2)
 	}
-	changes, err := parseChanges(diff)
+	changes, deleted, err := parseChanges(diff)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migrationorder: %v\n", err)
 		os.Exit(2)
@@ -62,6 +62,14 @@ func main() {
 		os.Exit(2)
 	}
 
+	deleted = DeletedOnBase(append(deleted, Vacated(changes, lines(onBase), lines(onMain), exempt)...), lines(onBase))
+	markDiff, err := git("diff", "--no-renames", "-U0", mergeBase, *head, "--", MarksFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migrationorder: git diff %s: %v\n", MarksFile, err)
+		os.Exit(2)
+	}
+	failures, released := EvaluateDeleted(deleted, ParseMarks(AddedLines(markDiff)))
+
 	vsBase, vsMain := Split(changes, lines(onBase), lines(onMain), exempt)
 	violations, err := Check(vsBase, lines(onBase))
 	if err != nil {
@@ -74,7 +82,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "migrationorder: %v\n", err)
 		os.Exit(2)
 	}
-	if len(violations)+len(more) == 0 {
+	if len(violations)+len(more)+len(failures) == 0 {
 		other := "every file"
 		if len(vsMain) > 0 {
 			other = "every other file"
@@ -82,6 +90,12 @@ func main() {
 		fmt.Printf("migrationorder: %s added under %s/ sorts after base's newest migration\n", other, Dir)
 		if len(vsMain) > 0 {
 			fmt.Printf("migrationorder: %d byte-identical rename(s) of base-only files sort after %s's newest migration instead\n", len(vsMain), *mainRef)
+		}
+		if len(released) > 0 {
+			fmt.Println("Deliberate migration deletions:")
+			for _, r := range released {
+				fmt.Println(r)
+			}
 		}
 		return
 	}
@@ -93,6 +107,9 @@ func main() {
 		fmt.Printf("::error file=%s::%s is a rename of a base-only file, so it must sort after %s's newest migration, %s. goose refuses it on any database that has applied %s. Rename it to a timestamp later than %d.\n",
 			v.File, v.File, *mainRef, v.NewestFile, v.NewestFile, v.Newest)
 	}
+	for _, f := range failures {
+		fmt.Println(f)
+	}
 	os.Exit(1)
 }
 
@@ -102,25 +119,27 @@ func git(args ...string) (string, error) {
 }
 
 // parseChanges reads `git diff --raw --no-abbrev` lines:
-// ":m1 m2 oldblob newblob A\tpath" or ":m1 m2 oldblob newblob R<score>\told\tnew".
-func parseChanges(out string) ([]Change, error) {
-	var cs []Change
+// ":m1 m2 oldblob newblob A\tpath", "... D\tpath" or "... R<score>\told\tnew".
+// deleted holds the D paths.
+func parseChanges(out string) (cs []Change, deleted []string, err error) {
 	for _, l := range lines(out) {
 		f := strings.Split(l, "\t")
 		meta := strings.Fields(f[0])
 		if len(meta) != 5 {
-			return nil, fmt.Errorf("unexpected git diff line %q", l)
+			return nil, nil, fmt.Errorf("unexpected git diff line %q", l)
 		}
 		switch status := meta[4]; {
 		case status == "A" && len(f) == 2:
 			cs = append(cs, Change{New: f[1]})
+		case status == "D" && len(f) == 2:
+			deleted = append(deleted, f[1])
 		case strings.HasPrefix(status, "R") && len(f) == 3:
 			cs = append(cs, Change{Old: f[1], New: f[2], Exact: meta[2] == meta[3]})
 		default:
-			return nil, fmt.Errorf("unexpected git diff line %q", l)
+			return nil, nil, fmt.Errorf("unexpected git diff line %q", l)
 		}
 	}
-	return cs, nil
+	return cs, deleted, nil
 }
 
 func lines(s string) []string {

@@ -10,6 +10,9 @@
 // that -base holds and -main does not is checked against -main's newest only: production has
 // not applied the old name. Exact means equal blob ids, not git's R100.
 //
+// A migration that -base holds and the change deletes, or renames away (other than that exempt
+// rename), fails unless the change adds "<file name>: <reason>" to migrations/deleted.txt.
+//
 // Usage:
 //
 //	go run ./internal/tools/migrationorder -base <rev> [-head HEAD] [-main origin/main]

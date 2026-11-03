@@ -325,20 +325,27 @@ func renameRepo(t *testing.T) (run func(args ...string) string, write func(name,
 	commit("epic")
 	run("checkout", "-qb", "pr")
 	exit = func(head string) int {
-		cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
-		cmd.Dir = repo
-		cmd.Env = append(os.Environ(), "MIGRATIONORDER_RUN_MAIN=4", "MO_BASE=epic", "MO_HEAD="+head, "MO_MAIN=main")
-		err := cmd.Run()
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			return ee.ExitCode()
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		return 0
+		code, _ := runMain(t, repo, "epic", head, "main")
+		return code
 	}
 	return run, write, exit
+}
+
+// runMain runs main() in a child process of the test binary and returns its exit code and combined output.
+func runMain(t *testing.T, repo, base, head, mainRef string) (int, string) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
+	cmd.Dir = repo
+	cmd.Env = append(os.Environ(), "MIGRATIONORDER_RUN_MAIN=4", "MO_BASE="+base, "MO_HEAD="+head, "MO_MAIN="+mainRef)
+	out, err := cmd.CombinedOutput()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode(), string(out)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return 0, string(out)
 }
 
 func renameOnPR(run func(args ...string) string, from, to string) {

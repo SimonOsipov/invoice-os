@@ -35,12 +35,14 @@ import {
   provisionRealAccount,
   signInSession,
   searchCodes,
+  type ExplainResult,
   type Persona,
 } from '../api/client'
 import { codeListsReady, ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshBuyerTin, freshTin } from '../api/fixtures'
 import { shoot } from '../argos'
-import { buildMixedCsv, buildPerfCsv, steerExplainMarker } from '../importFixtures'
+import { buildMixedCsv, buildPerfCsv, PR_LANE_MAPPING, steerExplainMarker } from '../importFixtures'
+import { setExactMapping } from './importWizardShared'
 import { approvalRun404Dropper, type Dropper, expectedStatusDropper, notFoundIdDropper } from './consoleGate'
 import {
   assertFillsColumn,
@@ -56,7 +58,7 @@ import {
 } from './layout'
 import { browserToken, signInAs, signInAtFrontDoor } from '../personaSession'
 import { e2eMember } from '../realAccounts'
-import { nightlyTarget, REAL_AI_COVERED } from '../targets'
+import { nightlyTarget } from '../targets'
 import { APP_URL, shardTenants, VALIDATION_EXPECTED } from './targets'
 
 // This file runs in its own shard, on its own tenants: PERSONAS shadows the api client's 1111 / 2222 pair.
@@ -1555,7 +1557,6 @@ interface MixedImportResponse {
 test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-inline -> re-validate-to-green -> dashboard rollup updates', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Multiple live round trips on a possibly cold fleet -- the import wizard's own
   // preview+import, the detail fix loop's edit+revalidate, and TWO Dashboard/Clients
   // navigations each triggering their own live rollup fetch. Mirrors this file's own
@@ -1595,10 +1596,7 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   await page.getByRole('button', { name: 'Read columns' }).click()
   await previewResp
 
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal' }).click()
-  await page.getByText('Subtotal', { exact: true }).click()
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   const importResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -3111,7 +3109,6 @@ test('reports-whole-set: top customers ranks over the whole set', async ({ page 
 test("invoice detail: the source-document card states the real range, and the modal opens on the whole file with this invoice's row marked", async ({
   page,
 }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(180_000)
   const errors = collectErrors(page, expectedStatusDropper(page, 500, SHEET_URL))
 
@@ -3135,10 +3132,7 @@ test("invoice detail: the source-document card states the real range, and the mo
   await page.getByRole('button', { name: 'Read columns' }).click()
   await previewResp
 
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal' }).click()
-  await page.getByText('Subtotal', { exact: true }).click()
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   const importResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -3236,7 +3230,6 @@ test("invoice detail: the source-document card states the real range, and the mo
 // viewport reads the full content height (~44,000px), every row renders, and the tab
 // hangs. buildPerfCsv is import-wizard.spec.ts's proven 500-invoice/1500-row fixture.
 test('invoice detail: a 1,500-row source file renders through the window, not all at once', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(240_000)
   const errors = collectErrors(page)
 
@@ -3258,11 +3251,7 @@ test('invoice detail: a 1,500-row source file renders through the window, not al
   await page.getByRole('button', { name: 'Read columns' }).click()
   await previewResp
 
-  // buildPerfCsv shares buildMixedCsv's PERF_HEADER, so the same two hand-maps apply.
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal' }).click()
-  await page.getByText('Subtotal', { exact: true }).click()
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   const importResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -6862,7 +6851,6 @@ test('ENGI-16 detail: Line 2 opens the editor on line 2', async ({ page }) => {
 
 // The answer's 300-character unbroken token must wrap inside the table (D23); the line fix is the model's to propose.
 test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(180_000)
   const errors = collectErrors(page)
 
@@ -6895,11 +6883,17 @@ test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({
   const row = violations.locator('tr').filter({ hasText: 'line-cost-non-negative' }).filter({ has: page.getByTestId('violation-explain') })
   const explain = row.getByTestId('violation-explain')
   await expect(explain).toBeVisible()
+  const explained = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/explain'),
+    { timeout: 60_000 },
+  )
   await explain.click()
 
   const panel = violations.getByTestId('explain-panel')
-  await expect(panel.getByTestId('explain-text')).toContainText('cannot be negative')
-  await expect(panel.getByTestId('explain-fix')).toHaveText('Line 2 · Unit price: -5.00 → 5.00')
+  await expect(panel.getByTestId('explain-text')).not.toBeEmpty()
+  const { fix } = (await (await explained).json()) as ExplainResult
+  // The steer marker makes the fake AI propose a fix; only the real AI may answer without one.
+  if (!nightlyTarget()) expect(fix, 'the PR lane steers a fix, so the explain answer must carry one').not.toBeNull()
 
   const entry = page.viewportSize()
   try {
@@ -6923,25 +6917,32 @@ test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({
     if (entry) await page.setViewportSize(entry)
   }
 
-  await panel.getByTestId('explain-accept').click()
-  await expect(page.getByTestId('stale-verdict')).toBeVisible()
+  if (fix) {
+    expect(fix.line, 'a line violation proposes a line fix').not.toBeNull()
+    await panel.getByTestId('explain-accept').click()
+    await expect(page.getByTestId('stale-verdict')).toBeVisible()
 
-  await expect
-    .poll(async () => (await getInvoice(token, inv.id)).line_items![1].unit_price, { message: 'line 2 unit_price saved' })
-    .toMatch(/^5(\.0+)?$/)
-  const after = (await getInvoice(token, inv.id)).line_items!
-  expect(after, 'still three lines').toHaveLength(3)
-  // Edit re-inserts the lines, so row ids change; every other field must survive.
-  const withoutId = <T extends { id?: string }>({ id: _id, ...rest }: T) => rest
-  expect(withoutId(after[0]), 'line 1 unchanged').toEqual(withoutId(before[0]))
-  expect(withoutId(after[2]), 'line 3 unchanged').toEqual(withoutId(before[2]))
+    const cell = async () => (await getInvoice(token, inv.id)).line_items![fix.line! - 1] as unknown as Record<string, string | null>
+    const sameValue = (stored: string | null) =>
+      stored === fix.value || (stored !== null && Number.isFinite(Number(stored)) && Number(stored) === Number(fix.value))
+    await expect
+      .poll(async () => sameValue((await cell())[fix.field]), { message: `line ${fix.line} ${fix.field} saved as ${fix.value}` })
+      .toBe(true)
+    const after = (await getInvoice(token, inv.id)).line_items!
+    expect(after, 'still three lines').toHaveLength(3)
+    // Edit re-inserts the lines, so row ids change; every other field must survive.
+    const withoutId = <T extends { id?: string }>({ id: _id, ...rest }: T) => rest
+    for (const i of [0, 1, 2].filter((i) => i !== fix.line! - 1)) {
+      expect(withoutId(after[i]), `line ${i + 1} unchanged`).toEqual(withoutId(before[i]))
+    }
 
-  await page.getByTestId('revalidate').click()
-  await expect(page.getByTestId('stale-verdict')).toBeHidden()
-  await expect
-    .poll(async () => (await getInvoice(token, inv.id)).violations.map((v) => v.rule_key), { message: 'the negative-line rule clears' })
-    .not.toContain('line-cost-non-negative')
-  await expect(page.getByTestId('violations-table')).not.toContainText('line-cost-non-negative')
+    await page.getByTestId('revalidate').click()
+    await expect(page.getByTestId('stale-verdict')).toBeHidden()
+    await expect
+      .poll(async () => (await getInvoice(token, inv.id)).violations.map((v) => v.rule_key), { message: 'the negative-line rule clears' })
+      .not.toContain('line-cost-non-negative')
+    await expect(page.getByTestId('violations-table')).not.toContainText('line-cost-non-negative')
+  }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

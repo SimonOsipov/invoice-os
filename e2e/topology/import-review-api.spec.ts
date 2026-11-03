@@ -167,4 +167,76 @@ test.describe('NCOV-01 import review table, API-minted batch', () => {
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })
+
+  test('review table: fix the VAT inline, save once, re-validate once, the verdict moves', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `NCOV-01 fix ${Date.now()}`, tin: freshTin() })
+    const batch = await createImportBatchFromCsv(token, entity.id, { csv: buildMixedCsv(), filename: 'review-mixed.csv', mapping: PERF_MAPPING })
+    const id = batch.id
+
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${id}/review` })
+
+    const [, firstResp] = await Promise.all([page.reload(), page.waitForResponse(tablePage(id))])
+    await expect(page.getByRole('heading', { level: 2, name: '2 invoices imported' })).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByTestId('review-table')).toBeVisible()
+
+    const rows = ((await firstResp.json()) as { invoices: { id: string; invoice_number: string }[] }).invoices
+    const invoiceId = rows.find((r) => r.invoice_number === 'INV-UI-MIX-VIOLATE')?.id
+    expect(invoiceId, 'the table page lists the VIOLATE invoice').toBeTruthy()
+    const detailPath = `${INVOICES}/${invoiceId}`
+
+    // Counters read after the follow-up re-fetches have landed, so a late duplicate shows.
+    let patches = 0
+    let validates = 0
+    const patchBodies: unknown[] = []
+    page.on('request', (r) => {
+      const path = new URL(r.url()).pathname
+      if (r.method() === 'PATCH' && path === detailPath) {
+        patches++
+        patchBodies.push(r.postDataJSON())
+      }
+      if (r.method() === 'POST' && path === `${detailPath}/validate`) validates++
+    })
+    const isDetailGet = (r: Response) => r.request().method() === 'GET' && new URL(r.url()).pathname === detailPath
+
+    // Stay on the All pill (D8): under the rule filter the fixed row would leave the view.
+    const violate = page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-VIOLATE' })
+    const fixCard = page.getByTestId('review-fix-card')
+    const fixInput = page.getByTestId('review-fix-input')
+    await expect(violate.getByTestId('review-verdict')).toContainText('RULES FAILED')
+    await violate.click()
+    await expect(fixCard).toContainText('vat-standard-rate')
+    await expect(fixInput).toHaveValue('0.00')
+
+    await fixInput.fill('75.00')
+    const [patched] = await Promise.all([
+      page.waitForResponse((r) => r.request().method() === 'PATCH' && new URL(r.url()).pathname === detailPath),
+      page.waitForResponse(isDetailGet),
+      page.getByTestId('review-fix-save').click(),
+    ])
+    expect(patched.ok(), 'the fix is stored').toBe(true)
+    // internal/invoice/invoice.go Invoice.VAT (json "vat").
+    expect(patchBodies).toHaveLength(1)
+    expect((patchBodies[0] as { vat?: string }).vat).toBe('75.00')
+    expect(((await patched.json()) as { vat: string | null }).vat).toBe('75.00')
+    await expect(fixInput, 'the re-fetched invoice shows the stored value').toHaveValue('75.00')
+    expect(patches, 'Save sends one PATCH').toBe(1)
+
+    const [validated] = await Promise.all([
+      page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === `${detailPath}/validate`),
+      page.waitForResponse(tablePage(id)),
+      page.getByTestId('review-revalidate').click(),
+    ])
+    expect(validated.ok(), 'Re-validate answers OK').toBe(true)
+    await expect(violate.getByTestId('review-verdict')).toContainText('VALIDATED')
+    await expect(violate.getByTestId('review-verdict')).not.toContainText('RULES FAILED')
+    await expect(page.getByTestId('review-row-passing')).toBeVisible()
+    expect(validates, 'Re-validate sends one POST').toBe(1)
+    expect(patches, 'Re-validate sends no further PATCH').toBe(1)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
 })

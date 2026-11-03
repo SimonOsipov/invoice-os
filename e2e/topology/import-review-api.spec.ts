@@ -239,4 +239,76 @@ test.describe('NCOV-01 import review table, API-minted batch', () => {
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })
+
+  test('review table: keep a failing invoice as-is, it leaves Needs a fix and stays disabled', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `NCOV-01 keep ${Date.now()}`, tin: freshTin() })
+    const batch = await createImportBatchFromCsv(token, entity.id, { csv: buildMixedCsv(), filename: 'review-mixed.csv', mapping: PERF_MAPPING })
+    const id = batch.id
+
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${id}/review` })
+
+    const [, firstResp] = await Promise.all([page.reload(), page.waitForResponse(tablePage(id))])
+    await expect(page.getByRole('heading', { level: 2, name: '2 invoices imported' })).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByTestId('review-table')).toBeVisible()
+
+    const rows = ((await firstResp.json()) as { invoices: { id: string; invoice_number: string }[] }).invoices
+    const invoiceId = rows.find((r) => r.invoice_number === 'INV-UI-MIX-VIOLATE')?.id
+    expect(invoiceId, 'the table page lists the VIOLATE invoice').toBeTruthy()
+    const keepPath = `${INVOICES}/${invoiceId}/keep-as-is`
+
+    // Counters read after the follow-up re-fetches have landed, so a late duplicate shows.
+    let keeps = 0
+    const keepBodies: unknown[] = []
+    page.on('request', (r) => {
+      if (r.method() === 'POST' && new URL(r.url()).pathname === keepPath) {
+        keeps++
+        keepBodies.push(r.postDataJSON())
+      }
+    })
+
+    const violate = page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-VIOLATE' })
+    const reasonInput = page.getByTestId('review-keep-reason')
+    const keep = page.getByTestId('review-keep')
+    await expect(violate.getByTestId('review-verdict')).toContainText('RULES FAILED')
+    await violate.click()
+    await expect(reasonInput).toBeVisible()
+
+    // Blank and whitespace-only reasons leave Keep disabled.
+    await expect(keep).toBeDisabled()
+    await reasonInput.fill('   ')
+    await expect(keep).toBeDisabled()
+    expect(keeps, 'no keep-as-is request for a blank reason').toBe(0)
+
+    // The SPA trims the reason before it sends it.
+    const reason = 'Approved by finance, one-off exception.'
+    await reasonInput.fill(`  ${reason}  `)
+    await expect(keep).toBeEnabled()
+    const [kept] = await Promise.all([
+      page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === keepPath),
+      page.waitForResponse(tablePage(id)),
+      keep.click(),
+    ])
+    expect(kept.ok(), 'Keep as-is answers OK').toBe(true)
+    // internal/invoice/handlers.go keepAsIsRequest (json "reason").
+    expect(keepBodies).toEqual([{ reason }])
+    await expect(page.getByTestId('review-kept-banner')).toContainText(reason)
+    await expect(violate.getByTestId('review-verdict')).toContainText('KEPT')
+    expect(keeps, 'Keep sends one POST').toBe(1)
+
+    // Kept leaves "Needs a fix" but stays in "All", unselectable.
+    await click(page, id, page.getByTestId('review-filter-pill').filter({ hasText: /^Needs a fix/ }), { needs_fix: 'true' })
+    await expect(violate).toHaveCount(0)
+    await click(page, id, page.getByTestId('review-filter-pill').filter({ hasText: /^All/ }), { needs_fix: null, status: null })
+    await expect(violate).toBeVisible()
+    const select = violate.getByTestId('review-select')
+    await expect(select).toBeVisible()
+    await expect(select).toBeDisabled()
+    expect(keeps, 'the filter changes sent no further keep-as-is').toBe(1)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
 })

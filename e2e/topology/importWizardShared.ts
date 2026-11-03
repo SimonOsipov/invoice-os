@@ -225,6 +225,7 @@ export async function setExactMapping(page: Page, placements: Record<string, str
     await expect(placed).toHaveCount(left - 1)
   }
   const mappable = columns.filter({ hasNotText: 'unnamed — not mappable' })
+  expect(await mappable.count(), 'control: the file has mappable columns, or the empty check below is vacuous').toBeGreaterThan(0)
   await expect(mappable.getByText('drop field', { exact: true })).toHaveCount(await mappable.count())
   const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   for (const [field, header] of Object.entries(placements)) {

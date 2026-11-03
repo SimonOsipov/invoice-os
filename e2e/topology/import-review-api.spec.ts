@@ -2,7 +2,7 @@
 import { test, expect, type Page, type Request, type Response } from '@playwright/test'
 import { login, createEntity, createImportBatchFromCsv } from '../api/client'
 import { freshTin } from '../api/fixtures'
-import { buildMixedCsv, PERF_MAPPING } from '../importFixtures'
+import { buildMixedCsv, buildPerfCsv, PERF_MAPPING } from '../importFixtures'
 import { signInAs } from '../personaSession'
 import { collectErrors, shardPersonas } from './importWizardShared'
 
@@ -14,6 +14,7 @@ test.beforeAll(async () => {
 
 const INVOICES = '/api/invoice/v1/invoices'
 const SUMMARY = '/api/invoice/v1/invoices/violation-summary'
+const PAGE_SIZE = 50 // REVIEW_PAGE_SIZE, frontend/app/src/lib/reviewBatch.ts
 
 // Params map to the exact value, or null for "absent". import_batch_id must be exactly the batch.
 function isRequest(req: Request, batchId: string, path: string, params: Record<string, string | null> = {}): boolean {
@@ -112,6 +113,57 @@ test.describe('NCOV-01 import review table, API-minted batch', () => {
     expect(summaryRequests, 'violation-summary fired once from the reload on').toBe(1)
     const summary = (await summaryResp.json()) as { rules: { rule_key: string; invoices: number }[] }
     expect(summary.rules).toContainEqual({ rule_key: 'vat-standard-rate', invoices: 1 })
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('review table: the pager reads the server total and Next asks for offset 50', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `NCOV-01 paging ${Date.now()}`, tin: freshTin() })
+    const batch = await createImportBatchFromCsv(token, entity.id, { csv: buildPerfCsv(), filename: 'review-perf.csv', mapping: PERF_MAPPING })
+    const id = batch.id
+
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${id}/review` })
+
+    const [, firstResp] = await Promise.all([page.reload(), page.waitForResponse(tablePage(id))])
+    await expect(page.getByRole('heading', { level: 2, name: /invoices imported/ })).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByTestId('review-table')).toBeVisible()
+
+    type PageBody = { invoices: { invoice_number: string }[]; pagination: { limit: number; offset: number; total: number } }
+    const first = (await firstResp.json()) as PageBody
+    const total = first.pagination.total
+    expect(total, 'the pager total is the mint count').toBe(batch.ready_invoices)
+    expect(total).toBeGreaterThanOrEqual(PAGE_SIZE + 1)
+    const pages = Math.ceil(total / PAGE_SIZE)
+
+    const pager = page.getByTestId('review-pager')
+    const prev = pager.getByRole('button', { name: '← Previous' })
+    const next = pager.getByRole('button', { name: 'Next →' })
+    await expect(pager).toContainText(`SHOWING 1–${PAGE_SIZE} OF ${total}`)
+    await expect(pager).toContainText(`PAGE 1 / ${pages}`)
+    await expect(prev).toBeDisabled()
+    await expect(next).toBeEnabled()
+    const rowNumbers = async () => (await page.getByTestId('review-row').allTextContents()).map((t) => /INV-UI-\d+/.exec(t)?.[0] ?? t)
+    const page1 = await rowNumbers()
+    expect(page1).toHaveLength(PAGE_SIZE)
+
+    const secondReq: string[] = []
+    page.on('request', (r) => {
+      if (isRequest(r, id, INVOICES, { limit: String(PAGE_SIZE), offset: String(PAGE_SIZE) })) secondReq.push(r.url())
+    })
+    const [secondResp] = await Promise.all([page.waitForResponse(tablePage(id, { offset: String(PAGE_SIZE) })), next.click()])
+    const second = (await secondResp.json()) as PageBody
+    expect(second.pagination.offset).toBe(PAGE_SIZE)
+    expect(secondReq, 'Next sends one offset=50 request').toHaveLength(1)
+
+    await expect(pager).toContainText(`SHOWING ${PAGE_SIZE + 1}–${Math.min(2 * PAGE_SIZE, total)} OF ${total}`)
+    await expect(pager).toContainText(`PAGE 2 / ${pages}`)
+    const page2 = await rowNumbers()
+    expect(page2.length).toBeGreaterThan(0)
+    expect(page2.filter((n) => page1.includes(n)), 'page 2 shares no invoice with page 1').toEqual([])
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

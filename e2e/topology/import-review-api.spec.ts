@@ -1,4 +1,5 @@
 // The import review table on a batch minted through the API, with no AI.
+import { readFileSync } from 'node:fs'
 import { test, expect, type Page, type Request, type Response } from '@playwright/test'
 import { login, createEntity, createImportBatchFromCsv, type ImportBatchResult } from '../api/client'
 import { freshTin } from '../api/fixtures'
@@ -301,6 +302,43 @@ test.describe('NCOV-01 import review table, API-minted batch', () => {
     await expect(select).toBeVisible()
     await expect(select).toBeDisabled()
     expect(keeps, 'the filter changes sent no further keep-as-is').toBe(1)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+})
+
+test.describe('NCOV-02 review channels, multi-file runs and the source card', () => {
+  test.use({ viewport: { width: 1440, height: 900 } })
+
+  test('review channels: the unreadable rows tab lists the structural rows and exports them as CSV', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const { id, batch } = await openReviewedBatch(page, 'unreadable', buildMixedCsv(), 'review-unreadable.csv')
+    // Fixture check: STRUCT's two rows are unreadable; VIOLATE and CLEAN become invoices.
+    expect(batch.ready_invoices, 'the fixture mints two invoices').toBe(2)
+
+    await page.getByRole('button', { name: 'Unreadable rows (2)' }).click()
+    const rows = page.getByTestId('unreadable-row')
+    await expect(rows).toHaveCount(2)
+    // internal/importer/service.go: STRUCT's error is rows [2,3], field issue_date.
+    for (const [i, row] of ['2', '3'].entries()) {
+      await expect(rows.nth(i)).toContainText('review-unreadable.csv')
+      await expect(rows.nth(i)).toContainText('issue_date')
+      await expect(rows.nth(i)).toContainText('rows disagree on issue_date')
+      await expect(rows.nth(i).getByText(row, { exact: true })).toBeVisible()
+    }
+
+    const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download this list (CSV)' }).click()])
+    expect(download.suggestedFilename()).toBe(`unreadable-rows-${id}.csv`)
+    const text = readFileSync(await download.path(), 'utf8')
+    // Leading U+FEFF, then header and one line per unreadable row (lib/reviewBatch.ts).
+    expect(text.charCodeAt(0), 'the file starts with a BOM').toBe(0xfeff)
+    expect(text.slice(1).split('\n')).toEqual([
+      'File,Row,Field,Why it could not be read',
+      'review-unreadable.csv,2,issue_date,rows disagree on issue_date',
+      'review-unreadable.csv,3,issue_date,rows disagree on issue_date',
+    ])
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

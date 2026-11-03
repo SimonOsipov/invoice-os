@@ -306,6 +306,7 @@ func main() {
 	}
 	submitter := invoice.NewSubmitter(store, q)
 	app.Mux.HandleFunc("POST /v1/invoices/submissions", invoice.BatchSubmitHandler(submitter.BatchSubmit, store.CallerRole, app.Logger))
+	app.Mux.HandleFunc("POST /v1/invoices/{id}/send-again", invoice.SendAgainHandler(submitter.SendAgain, store.CallerRole, app.Logger))
 
 	app.RequireGateway(gatewayToken)
 

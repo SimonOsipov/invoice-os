@@ -1887,9 +1887,45 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 
 func isNoteRefusal(err error) bool { _, ok := NoteRefusalMessage(err); return ok }
 
-// SendAgainHandler stub: the executor replaces it (RETRY-01-01).
+// SendAgainHandler serves POST /v1/invoices/{id}/send-again: approver only, checked before any read.
+// Its refusals are the 409 sentences of send_again.go; everything else goes through statusForErr.
 func SendAgainHandler(sendAgain func(ctx context.Context, id string) (Invoice, error), callerRole func(ctx context.Context) (string, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "send again not implemented")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		role, err := callerRole(r.Context())
+		if status, msg, refused := roleRefusal(role, err); refused {
+			writeError(w, status, msg)
+			return
+		}
+		inv, err := sendAgain(r.Context(), r.PathValue("id"))
+		if err != nil {
+			var se StatusError
+			switch {
+			case errors.As(err, &se):
+				writeError(w, http.StatusConflict, sendAgainNotFailedReason)
+			case errors.Is(err, ErrResolvedOutside):
+				writeError(w, http.StatusConflict, sendAgainResolvedReason)
+			case errors.Is(err, ErrNoteChecksFailed):
+				writeError(w, http.StatusConflict, sendAgainNoteChecksReason)
+			case errors.Is(err, ErrNotResendable):
+				writeError(w, http.StatusConflict, sendAgainNotResendableReason)
+			case errors.Is(err, ErrResendBusy):
+				writeError(w, http.StatusConflict, sendAgainBusyReason)
+			default:
+				status, msg := statusForErr(err)
+				if status == http.StatusInternalServerError {
+					log.ErrorContext(r.Context(), "invoice: send again", slog.Any("err", err))
+				}
+				writeError(w, status, msg)
+			}
+			return
+		}
+		writeJSON(w, http.StatusOK, inv)
 	}
 }

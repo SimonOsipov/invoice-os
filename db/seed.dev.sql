@@ -700,6 +700,20 @@ ON CONFLICT (tenant_id, idempotency_key) DO UPDATE SET
     attempts   = EXCLUDED.attempts,
     last_error = EXCLUDED.last_error;
 
+-- DEMO-2026-2004 (payload_not_built, demo tenant): the worker leaves a failed job at 0 attempts,
+-- and send again needs that row to reuse.
+INSERT INTO submission_jobs (
+    tenant_id, invoice_id, idempotency_key, adapter, adapter_version, state, attempts, last_error
+)
+SELECT i.tenant_id, i.id, 'demo-seed:' || i.invoice_number, 'mock', 'v1',
+       'failed', 0, 'submission: mock could not build the payload'
+FROM invoices i
+WHERE i.tenant_id = '11111111-1111-1111-1111-111111111111' AND i.invoice_number = 'DEMO-2026-2004'
+ON CONFLICT (tenant_id, idempotency_key) DO UPDATE SET
+    state      = EXCLUDED.state,
+    attempts   = EXCLUDED.attempts,
+    last_error = EXCLUDED.last_error;
+
 -- One app_exchange row per ATTEMPT against the APP, which is what makes the five outcomes
 -- distinguishable: invoices.status collapses -0004 and -0006 onto `failed`, and only the
 -- http_status here tells a 503 exhaustion from a timeout that never got a response at all.

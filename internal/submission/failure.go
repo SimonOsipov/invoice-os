@@ -23,5 +23,7 @@ func (k FailureKind) Valid() bool {
 	}
 }
 
-// Resendable stub: the executor replaces it (RETRY-01-01).
-func (k FailureKind) Resendable() bool { return false }
+// Resendable: the kinds where the customer may send the invoice again; acknowledged_no_verdict needs a check with NRS first.
+func (k FailureKind) Resendable() bool {
+	return k == FailurePayloadNotBuilt || k == FailureNeverAcknowledged
+}

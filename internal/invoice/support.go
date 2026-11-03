@@ -47,43 +47,47 @@ func lockStatusTx(ctx context.Context, tx pgx.Tx, id string) (Status, bool, erro
 // RequeueFailedTx moves a failed invoice back to queued as support. The edge is
 // outside legalTransitions, so the customer route still refuses it.
 func (s *Store) RequeueFailedTx(ctx context.Context, tx pgx.Tx, id, tenantID string) error {
-	status, kept, err := lockStatusTx(ctx, tx, id)
-	if err != nil {
-		return err
-	}
-	if status != StatusFailed {
-		return StatusError{Have: status}
-	}
-	if kept {
-		return ErrResolvedOutside
-	}
-	if err := s.requeueNoteChecksTx(ctx, tx, id); err != nil {
-		return err
-	}
-	_, err = applyTransitionTx(ctx, tx, id, StatusFailed, StatusQueued,
-		Actor{TenantID: tenantID, Subject: audit.SupportActor}, demotionCause{})
+	_, err := requeueFailedTx(ctx, tx, id, Actor{TenantID: tenantID, Subject: audit.SupportActor})
 	return err
 }
 
-// requeueNoteChecksTx re-runs the note checks on the locked row; lock order is note, then original.
-func (s *Store) requeueNoteChecksTx(ctx context.Context, tx pgx.Tx, id string) error {
+// requeueFailedTx is the Re-drive rule shared with customer send again; actor is recorded on the transition.
+func requeueFailedTx(ctx context.Context, tx pgx.Tx, id string, actor Actor) (Invoice, error) {
+	status, kept, err := lockStatusTx(ctx, tx, id)
+	if err != nil {
+		return Invoice{}, err
+	}
+	if status != StatusFailed {
+		return Invoice{}, StatusError{Have: status}
+	}
+	if kept {
+		return Invoice{}, ErrResolvedOutside
+	}
+	if blocked, err := noteChecksBlockedTx(ctx, tx, id, true); err != nil {
+		return Invoice{}, err
+	} else if blocked {
+		return Invoice{}, ErrNoteChecksFailed
+	}
+	return applyTransitionTx(ctx, tx, id, StatusFailed, StatusQueued, actor, demotionCause{})
+}
+
+// noteChecksBlockedTx re-runs the note checks on the locked row; lock order is note, then original.
+// lockOriginal false skips the original's lock (the caller holds it already or needs none).
+func noteChecksBlockedTx(ctx context.Context, tx pgx.Tx, id string, lockOriginal bool) (bool, error) {
 	inv := Invoice{ID: id}
 	if err := tx.QueryRow(ctx,
 		`SELECT document_type, original_invoice_id, total::text, currency FROM invoices WHERE id = $1`, id,
 	).Scan(&inv.DocumentType, &inv.OriginalInvoiceID, &inv.Total, &inv.Currency); err != nil {
-		return err
+		return false, err
 	}
 	if !isNote(inv) {
-		return nil
+		return false, nil
 	}
-	f, err := readOriginalFactsTx(ctx, tx, inv.OriginalInvoiceID, id, locksOriginal(inv))
+	f, err := readOriginalFactsTx(ctx, tx, inv.OriginalInvoiceID, id, lockOriginal && locksOriginal(inv))
 	if err != nil {
-		return err
+		return false, err
 	}
-	if hasBlockingViolation(noteViolations(inv, f)) {
-		return ErrNoteChecksFailed
-	}
-	return nil
+	return hasBlockingViolation(noteViolations(inv, f)), nil
 }
 
 // CancelQueuedTx moves a queued invoice to failed with no failure_kind.

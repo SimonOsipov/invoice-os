@@ -137,6 +137,15 @@ export function buildMixedCsv(): string {
   return lines.join('\n')
 }
 
+// buildCleanCsv(): `invoices` validated invoices on INV-UI-MIX-CLEAN's row shape; numbers are `${prefix}-${i}`.
+export function buildCleanCsv(prefix: string, invoices = 2): string {
+  const lines: string[] = [PERF_HEADER]
+  for (let i = 1; i <= invoices; i++) {
+    lines.push([`${prefix}-${i}`, '2026-01-15', '87654321-0002', 'M4-08 UI Mixed Co', 'NGN', '1000.00', '75.00', '1075.00', 'Perf line', '10', '100.00'].join(','))
+  }
+  return lines.join('\n')
+}
+
 // buildSingleInvoiceCsv(): INVCR-01-16 (task-292) AC-2's fixture -- ONE clean invoice, one
 // line item. `ready_invoices===1` on a real import (internal/importer/service.go's
 // ValidateBatch auto-promotes a zero-violation row to `validated`), which is exactly what

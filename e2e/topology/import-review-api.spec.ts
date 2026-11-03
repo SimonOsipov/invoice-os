@@ -3,8 +3,9 @@ import { readFileSync } from 'node:fs'
 import { test, expect, type Page, type Request, type Response } from '@playwright/test'
 import { login, createEntity, createImportBatchFromCsv, listInvoices, type ImportBatchResult } from '../api/client'
 import { freshTin } from '../api/fixtures'
-import { buildMixedCsv, buildPerfCsv, PERF_MAPPING } from '../importFixtures'
+import { buildCleanCsv, buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, PERF_MAPPING } from '../importFixtures'
 import { signInAs } from '../personaSession'
+import { resolveTarget } from '../targets'
 import { collectErrors, shardPersonas } from './importWizardShared'
 
 const { SHARD, PERSONAS } = shardPersonas('import-review-api.spec.ts')
@@ -392,6 +393,70 @@ test.describe('NCOV-02 review channels, multi-file runs and the source card', ()
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('INV-UI-MIX-VIOLATE')
     expect(new URL(page.url()).pathname).toMatch(new RegExp(`/invoices/${violateInvoiceId}$`))
     expect(gets, 'View invoice sends one GET').toBe(1)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('multi-file review: each row names its file and the rejected files say why', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `NCOV-02 multi ${Date.now()}`, tin: freshTin() })
+    const mint = (csv: string, filename: string) => createImportBatchFromCsv(token, entity.id, { csv, filename, mapping: PERF_MAPPING })
+    const a = await mint(buildCleanCsv('INV-NCOV02-A'), 'run-a.csv')
+    const b = await mint(buildCleanCsv('INV-NCOV02-B'), 'run-b.csv')
+    const c = await mint(buildHeaderOnlyCsv(), 'run-empty.csv')
+    // Fixture check: the clean files mint two validated invoices each; a header-only file mints none.
+    for (const batch of [a, b]) {
+      expect(batch.ready_invoices, 'a clean file mints two invoices').toBe(2)
+      expect(batch.invoices_clean, 'both are validated').toBe(2)
+    }
+    expect(c.id, 'a header-only mint still answers a batch id').toBeTruthy()
+    expect(c.ready_invoices, 'a header-only file mints no invoice').toBe(0)
+
+    const { firstPage } = await openReview(page, [a.id, b.id, c.id], 4)
+    expect(firstPage.pagination.total, 'the table total spans both good files').toBe(4)
+
+    const rows = page.getByTestId('review-row')
+    await expect(rows).toHaveCount(4)
+    for (const row of await rows.all()) await expect(row.getByTestId('review-row-source-file')).toHaveCount(1)
+    for (const [prefix, file] of [['INV-NCOV02-A', 'run-a.csv'], ['INV-NCOV02-B', 'run-b.csv']]) {
+      const own = rows.filter({ hasText: `${prefix}-` })
+      await expect(own).toHaveCount(2)
+      for (const row of await own.all()) await expect(row.getByTestId('review-row-source-file')).toHaveText(file)
+    }
+
+    // reviewBatch.ts batchReason: a file with no valid rows and no errors reads "0 of N rows produced an invoice".
+    const strip = page.getByTestId('review-files-strip-row')
+    await expect(page.getByTestId('review-files-strip')).toBeVisible()
+    await expect(strip).toHaveCount(3)
+    for (const file of ['run-a.csv', 'run-b.csv']) {
+      const row = strip.filter({ hasText: file })
+      await expect(row).toContainText('Imported')
+      await expect(row).not.toContainText('Rejected')
+    }
+    const empty = strip.filter({ hasText: 'run-empty.csv' })
+    await expect(empty).toContainText('Rejected')
+    await expect(empty).toContainText('0 of 0 rows produced an invoice')
+
+    // Every batch rejected: the run page lists each file and its reason (ReviewBatch.tsx RejectedRun).
+    const d = await mint(buildHeaderOnlyCsv(), 'run-empty-2.csv')
+    const e = await mint(buildHeaderOnlyCsv(), 'run-empty-3.csv')
+    expect(d.ready_invoices, 'a header-only file mints no invoice').toBe(0)
+    expect(e.ready_invoices, 'a header-only file mints no invoice').toBe(0)
+    await page.goto(`${resolveTarget('APP_URL')}/imports/${d.id},${e.id}/review`)
+    const run = page.getByTestId('review-rejected-run')
+    await expect(run).toBeVisible({ timeout: 60_000 })
+    await expect(run).toContainText('Nothing was imported')
+    const files = page.getByTestId('review-rejected-run-file')
+    await expect(files).toHaveCount(2)
+    for (const file of ['run-empty-2.csv', 'run-empty-3.csv']) {
+      const one = files.filter({ hasText: file })
+      await expect(one).toHaveCount(1)
+      await expect(one).toContainText('0 of 0 rows produced an invoice')
+    }
+    await expect(page.getByTestId('review-table')).toHaveCount(0)
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

@@ -229,7 +229,8 @@ export async function setExactMapping(page: Page, placements: Record<string, str
   await expect(mappable.getByText('drop field', { exact: true })).toHaveCount(await mappable.count())
   const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   for (const [field, header] of Object.entries(placements)) {
-    await page.getByRole('button', { name: new RegExp(`^${field}\\*?$`, 'i') }).click()
+    // chip accessible name is "<field> *": the required mark is a separate span
+    await page.getByRole('button', { name: new RegExp(`^${escape(field)}\\s*\\*?$`, 'i') }).click()
     await columns.filter({ has: page.locator('div.mono', { hasText: new RegExp(`^${escape(header)}$`) }) }).click()
   }
 }

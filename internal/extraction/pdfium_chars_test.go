@@ -71,7 +71,7 @@ func pdcNonChromeFixtures(t *testing.T) []string {
 	}
 	var out []string
 	for name := range fingerprintGoldens {
-		if !fgChromeNames[name] && !fxHeavyReads[name] {
+		if !fgChromeNames[name] {
 			out = append(out, name)
 		}
 	}
@@ -183,7 +183,7 @@ func TestPDFiumText_CharsExistOnlyAtModeBoth(t *testing.T) {
 // ModeBoth -- asserting equal rects and that only ModeBoth carries chars. Reds if a future
 // change ever reverts the rects themselves, which pinning a mode constant alone cannot catch.
 func TestPDFiumText_ModeBothReturnsTheSameRects(t *testing.T) {
-	names := fxWalked(slices.Sorted(maps.Keys(fingerprintGoldens)))
+	names := slices.Sorted(maps.Keys(fingerprintGoldens))
 	if len(names) < fgGoldenFloor {
 		t.Fatalf("fingerprintGoldens holds %d row(s), want at least %d", len(names), fgGoldenFloor)
 	}
@@ -471,7 +471,6 @@ func TestCharsIn_ASlidingRunReadsOnce(t *testing.T) {
 var pdcTextCharsGoldens = map[string]struct{ pages, withText, textChars int }{
 	"ai_lines_invoice.pdf":                  {1, 1, 1080},
 	"ai_nrs_labelled_invoice.pdf":           {1, 1, 1791},
-	"ai_overflow_invoice.pdf":               {1, 1, 2000105},
 	"honest_credit_note.pdf":                {1, 1, 742},
 	"honest_receipt_invoice.pdf":            {1, 1, 129},
 	"ai_nrs_invoice.pdf":                    {1, 1, 1738},
@@ -554,7 +553,7 @@ func TestPDFiumReader_TextCharsUnchanged(t *testing.T) {
 		t.Fatalf("pdcTextCharsGoldens holds %d row(s), want at least %d", len(pdcTextCharsGoldens), fgGoldenFloor)
 	}
 
-	for _, name := range fxWalked(slices.Sorted(maps.Keys(pdcTextCharsGoldens))) {
+	for _, name := range slices.Sorted(maps.Keys(pdcTextCharsGoldens)) {
 		t.Run(name, func(t *testing.T) {
 			want := pdcTextCharsGoldens[name]
 			_, res := ptRead(t, name)

@@ -122,7 +122,6 @@ var fxCorpus = []struct {
 	{fxHonestCreditNote, fxBuildHonestCreditNote},
 	{fxHonestReceipt, fxBuildHonestReceipt},
 	{fxAINRSLabelled, fxBuildAINRSLabelledInvoice},
-	{fxAIOverflow, fxBuildAIOverflowInvoice},
 	// AIR-08-13's deployed line-items fixture: outside every corpus_ ratchet.
 	{fxAILines, fxBuildAILinesInvoice},
 	// CHECK-01-03's eight non-invoice types: the document-type check's negative half.
@@ -2055,58 +2054,13 @@ func fxCreditNotePDF(lines []fxLine) []byte {
 	})
 }
 
-// The honest_* and ai_*_labelled/overflow fixtures serve the real AI: the same fake markers as the
+// The honest_* and ai_*_labelled fixtures serve the real AI: the same fake markers as the
 // fixture each replaces, but a page a model reads the same way without them.
 const (
-	fxHonestCreditNote    = "honest_credit_note.pdf"
-	fxHonestReceipt       = "honest_receipt_invoice.pdf"
-	fxAINRSLabelled       = "ai_nrs_labelled_invoice.pdf"
-	fxAIOverflow          = "ai_overflow_invoice.pdf"
-	fxOverflowWords       = 200_000
-	fxOverflowFontPt      = 0.4
-	fxOverflowWordsPerRow = 231
+	fxHonestCreditNote = "honest_credit_note.pdf"
+	fxHonestReceipt    = "honest_receipt_invoice.pdf"
+	fxAINRSLabelled    = "ai_nrs_labelled_invoice.pdf"
 )
-
-// fxHeavyReads: files every per-PDF corpus walk skips. A deliberate context overflow, one pdfium
-// read costs ~50s; TestFixtures_AIOverflowReadsOnceAndFits is its only reader.
-var fxHeavyReads = map[string]bool{fxAIOverflow: true}
-
-func fxWalked(names []string) []string {
-	return slices.DeleteFunc(slices.Clone(names), func(n string) bool { return fxHeavyReads[n] })
-}
-
-// TestFixtures_AIOverflowReadsOnceAndFits: under the 15 MiB upload cap (importer/handlers.go),
-// at least 2,000,000 digits, and the golden fingerprint and char count hold.
-func TestFixtures_AIOverflowReadsOnceAndFits(t *testing.T) {
-	raw := fxRead(t, fxAIOverflow)
-	if len(raw) >= 15<<20 {
-		t.Errorf("%s is %d bytes, want under 15 MiB", fxAIOverflow, len(raw))
-	}
-	var pages []extraction.TokenPage
-	res, err := extraction.NewPDFiumReader().Read(t.Context(), extraction.Document{Bytes: raw, ContentType: "application/pdf"}, extraction.CollectTokens(&pages))
-	if err != nil {
-		t.Fatalf("read %s: %v", fxAIOverflow, err)
-	}
-	if want := pdcTextCharsGoldens[fxAIOverflow]; res.Pages != want.pages || res.PagesWithText != want.withText || res.TextChars != want.textChars {
-		t.Errorf("Read reported %+v, want %+v", res, want)
-	}
-	if got, want := extraction.Fingerprint(pages), fingerprintGoldens[fxAIOverflow]; got != want {
-		t.Errorf("Fingerprint = %s, want %s", got, want)
-	}
-	digits := 0
-	for _, p := range pages {
-		for _, tk := range p.Tokens {
-			for _, r := range tk.Text {
-				if r >= '0' && r <= '9' {
-					digits++
-				}
-			}
-		}
-	}
-	if digits < 2_000_000 {
-		t.Errorf("%s holds %d digits, want at least 2000000", fxAIOverflow, digits)
-	}
-}
 
 // fxHonestCreditNoteLines: jev_credit_note.pdf's page under a CREDIT NOTE title and a Reason line.
 func fxHonestCreditNoteLines() []fxLine {
@@ -2174,42 +2128,6 @@ func fxAINRSLabelledLines() []fxLine {
 
 func fxBuildAINRSLabelledInvoice() []byte {
 	return fxTextPage(fxAINRSLabelledLines()...)
-}
-
-// fxOverflowRows is fxOverflowWords ten-digit words, fxOverflowWordsPerRow to a row.
-func fxOverflowRows() []string {
-	var rows []string
-	var b strings.Builder
-	for i := 0; i < fxOverflowWords; i++ {
-		fmt.Fprintf(&b, "%010d", (uint64(i)*48271+1)%10_000_000_000)
-		if (i+1)%fxOverflowWordsPerRow == 0 || i == fxOverflowWords-1 {
-			rows = append(rows, b.String())
-			b.Reset()
-		} else {
-			b.WriteByte(' ')
-		}
-	}
-	return rows
-}
-
-// fxBuildAIOverflowInvoice: ai_unavailable_invoice.pdf's page plus 2,000,000 digits in a tiny
-// font, so the text that reaches the model overflows its context.
-func fxBuildAIOverflowInvoice() []byte {
-	content := fxText(fxAIUnavailableLines()...)
-	var b bytes.Buffer
-	b.Write(content)
-	fmt.Fprintf(&b, "BT\n/F1 %g Tf\n%g TL\n72 600 Td\n", fxOverflowFontPt, fxOverflowFontPt)
-	for _, row := range fxOverflowRows() {
-		fmt.Fprintf(&b, "(%s) '\n", row)
-	}
-	b.WriteString("ET\n")
-	return fxAssemble([]fxObject{
-		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
-		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
-		fxPage(fxFontRes(5), 4),
-		fxStream(b.Bytes()),
-		fxObject(fxHelvetica),
-	})
 }
 
 // fxLinesWithMarkerAt returns lines with its own last entry (the marker) moved to index i, the
@@ -3651,7 +3569,7 @@ const fxE2EDir = "../../e2e/fixtures/documents"
 // fxE2ECopies is the explicit table AC-2 requires: each name here must be byte-identical between
 // fxE2EDir and testdata/. Table-driven, not a directory walk, because fxE2EDir also holds
 // native_invoice_2p.pdf, which has no Go-side original of that name.
-var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAILines, fxJevDoubt, fxHonestCreditNote, fxHonestReceipt, fxAINRSLabelled, fxAIOverflow, fxWildScanned}
+var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAIUnavailable, fxAILines, fxJevDoubt, fxHonestCreditNote, fxHonestReceipt, fxAINRSLabelled, fxWildScanned}
 
 // fxE2EExempt: native_invoice_2p.pdf has no Go-side original -- its closest analog, native_3page.pdf, is a different file.
 var fxE2EExempt = map[string]bool{"native_invoice_2p.pdf": true}

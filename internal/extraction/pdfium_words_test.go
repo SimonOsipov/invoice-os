@@ -439,7 +439,7 @@ func TestPDFiumWords_OnlyTheTwoChromeFixturesMove(t *testing.T) {
 	// (TestChromeRegister_TheContentStreamEmitsOneTjPerGlyph) hold these two numbers still.
 	chromeBefore := map[string]int{chrRegister: 802, chrRegisterTwin: 800}
 
-	names := fxWalked(slices.Sorted(maps.Keys(fingerprintGoldens)))
+	names := slices.Sorted(maps.Keys(fingerprintGoldens))
 	if len(names) < fgGoldenFloor {
 		t.Fatalf("fingerprintGoldens holds %d row(s), want at least %d", len(names), fgGoldenFloor)
 	}
@@ -508,7 +508,7 @@ func TestPDFiumWords_ALineOfOneRectEmitsThatRect(t *testing.T) {
 func TestPDFiumWords_NoTokenVanishes(t *testing.T) {
 	const groupFloor = 600
 
-	names := fxWalked(slices.Sorted(maps.Keys(fingerprintGoldens)))
+	names := slices.Sorted(maps.Keys(fingerprintGoldens))
 	if len(names) < fgGoldenFloor {
 		t.Fatalf("fingerprintGoldens holds %d row(s), want at least %d", len(names), fgGoldenFloor)
 	}

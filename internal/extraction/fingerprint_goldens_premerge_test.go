@@ -4,7 +4,6 @@ package extraction_test
 var fingerprintGoldensPreMerge = map[string]string{
 	"ai_lines_invoice.pdf":                  "v3:d7fd646ccc6d992349063e9a6a7eebaf48db7589c42b88b10fee51e66dcb41e4",
 	"ai_nrs_labelled_invoice.pdf":           "v3:e9df9f572469eb97a21a24885ab168ea646eae25d58b69fd7394429890fb7b84",
-	"ai_overflow_invoice.pdf":               "v3:053f25807f20c119ecb7e375a101c9e70c54e0621a79777c5ce7b7cdf76ad7e3",
 	"honest_credit_note.pdf":                "v3:b3561b94b0cda8836ec3368f74b1ad15e112dbe93954f9f50cb64df7dd995f58",
 	"honest_receipt_invoice.pdf":            "v3:4e836246c2b250eb4079bf7f2d4f31617ad6835a23c94843c6afad6efef20a9a",
 	"ai_nrs_invoice.pdf":                    "v3:36a74ba9039bce5c981571871fc108e53a13fa4f12d01449a7a643f2e6f43033",

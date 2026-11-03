@@ -303,7 +303,7 @@ test('landing nav: the hero Explore the platform button lands on Platform', asyn
   expectNoConsoleErrors(errors)
 })
 
-// The nav Library link carries the Library URL the preview build bakes as VITE_LIBRARY_URL (D7).
+// The nav Library link carries the Library URL the preview build bakes as VITE_LIBRARY_URL.
 // Default 1280 viewport is above the burger width, so the nav shows.
 test('landing nav: the Library link names the baked Library URL', async ({ page }) => {
   const { errors, nav } = await openLanding(page)

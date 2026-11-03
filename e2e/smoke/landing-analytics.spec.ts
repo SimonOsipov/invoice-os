@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { expect, test, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
+import { expectedStatusDropper, type Dropper } from '../topology/consoleGate'
 import { consentCookie, consentRecordOf, consoleGate, isStubbedHost, routeProductionHosts, STUB_HEADER } from './landingConsent'
 
 // GA4 events of the landing on the production hostname served from the fork. The stubbed tag
@@ -46,35 +47,46 @@ async function controlRouting(page: Page, request: APIRequestContext): Promise<v
   expect((await routed?.text())?.trim(), `routing, not analytics: ${WWW} does not serve the fork's build`).toBe(expected)
 }
 
-type Sinks = { errors: string[]; leaked: string[] }
+type Sinks = { errors: string[]; leaked: string[]; pending: Promise<void>[] }
 
 /** Granted consent, routing control, stub-leak sink and console gate; opens the routed landing. */
-async function openRoutedLanding(page: Page, request: APIRequestContext, extraCookies: Parameters<BrowserContext['addCookies']>[0] = []): Promise<Sinks> {
+async function openRoutedLanding(page: Page, request: APIRequestContext, extraCookies: Parameters<BrowserContext['addCookies']>[0] = [], expected?: Dropper): Promise<Sinks> {
   await page.context().addCookies([consentCookie(true), ...extraCookies])
   await controlRouting(page, request)
-  const errors = consoleGate(page)
+  const errors = consoleGate(page, expected)
   const leaked: string[] = []
-  page.on('requestfinished', async (r) => {
-    if (isStubbedHost(r.url()) && (await r.response())?.headers()[STUB_HEADER] !== '1') leaked.push(r.url())
+  const pending: Promise<void>[] = []
+  page.on('requestfinished', (r) => {
+    if (!isStubbedHost(r.url())) return
+    pending.push(
+      r.response().then((res) => {
+        if (res?.headers()[STUB_HEADER] !== '1') leaked.push(r.url())
+      }),
+    )
+  })
+  // the stub fulfils every stubbed-host request, so a failed one never reached it
+  page.on('requestfailed', (r) => {
+    if (isStubbedHost(r.url())) leaked.push(r.url())
   })
   await page.goto(`${WWW}/`)
   await expect(page.getByRole('heading', { level: 1, name: 'Africa moves. Compliance keeps up.' })).toBeVisible()
   await expect
     .poll(() => page.evaluate(() => ((window as unknown as { dataLayer?: ArrayLike<unknown>[] }).dataLayer ?? []).map((e) => e[0])), 'the tag never loaded on the routed host')
     .toContain('config')
-  return { errors, leaked }
+  return { errors, leaked, pending }
 }
 
-async function expectClean(page: Page, { errors, leaked }: Sinks): Promise<void> {
+async function expectClean(page: Page, { errors, leaked, pending }: Sinks): Promise<void> {
   await page.waitForLoadState('networkidle')
+  await Promise.all(pending)
   expect(leaked, 'a GA, Sentry or chat request was not answered by the stub').toEqual([])
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 }
 
 routedTest('landing analytics: the routed landing loads the tag and sends no event before a visitor acts', async ({ routed: page, request }) => {
   const sinks = await openRoutedLanding(page, request)
-  expect(await gaEvents(page)).toEqual([])
   await expectClean(page, sinks)
+  expect(await gaEvents(page)).toEqual([])
 })
 
 routedTest('landing analytics: opening the demo modal sends one demo_open from the nav', async ({ routed: page, request }) => {
@@ -87,7 +99,7 @@ routedTest('landing analytics: opening the demo modal sends one demo_open from t
 
 routedTest('landing analytics: scroll depth reports 25, 50, 75 and 100 once each', async ({ routed: page, request }) => {
   const sinks = await openRoutedLanding(page, request)
-  // D12: targets sit 10+ points from each milestone; top is read live at each step.
+  // targets sit 10+ points from each milestone; scrollHeight is read live at each step
   const scrollToFraction = (fraction: number) =>
     page.evaluate((f) => window.scrollTo({ top: (document.documentElement.scrollHeight - window.innerHeight) * f, behavior: 'instant' }), fraction)
   const steps: [number, number[]][] = [
@@ -142,19 +154,13 @@ async function submitDemoLead(page: Page, request: APIRequestContext, formsStatu
       headers: { [STUB_HEADER]: '1', 'access-control-allow-origin': '*' },
     })
   })
-  const formsStubbed: (string | undefined)[] = []
-  const formsConsoleUrls: string[] = []
   const gatewayPosts: string[] = []
-  page.on('response', (r) => {
-    if (isFormsHost(r.url()) && r.request().method() === 'POST') formsStubbed.push(r.headers()[STUB_HEADER])
-  })
-  page.on('console', (m) => {
-    if (m.type() === 'error') formsConsoleUrls.push(m.location().url)
-  })
   page.on('request', (r) => {
     if (r.method() === 'POST' && r.url() === `${GATEWAY_URL}/contacts/demo-request`) gatewayPosts.push(r.url())
   })
-  const sinks = await openRoutedLanding(page, request)
+  // Chromium logs a non-2xx Forms stub reply as a console error
+  const expected = formsStatus >= 400 ? expectedStatusDropper(page, formsStatus, /hsforms\.com/) : undefined
+  const sinks = await openRoutedLanding(page, request, [], expected)
 
   await page.getByRole('banner').getByRole('button', { name: 'Book a demo' }).click()
   const dialog = page.getByRole('dialog', { name: 'Book a demo' })
@@ -167,7 +173,7 @@ async function submitDemoLead(page: Page, request: APIRequestContext, formsStatu
     ? page.waitForResponse((r) => r.request().method() === 'POST' && r.url() === `${GATEWAY_URL}/contacts/demo-request`)
     : undefined
   await dialog.getByRole('button', { name: /^Book my demo/ }).click()
-  return { sinks, formsPosts, formsStubbed, formsConsoleUrls, gatewayPosts, gatewayReply, dialog }
+  return { sinks, formsPosts, gatewayPosts, gatewayReply, dialog }
 }
 
 routedTest('landing analytics: a submitted demo request sends one generate_lead', async ({ routed: page, request }) => {
@@ -175,7 +181,6 @@ routedTest('landing analytics: a submitted demo request sends one generate_lead'
   expect((await run.gatewayReply!).status()).toBe(202) // handler: internal/gateway/contacts.go
   await expect(run.dialog.locator('#dm-success')).toBeVisible()
   expect(run.formsPosts).toHaveLength(1)
-  expect(run.formsStubbed, 'the Forms POST was not answered by the stub').toEqual(['1'])
   const events = await gaEvents(page)
   expect(events.filter((e) => e.name === 'generate_lead')).toEqual([{ name: 'generate_lead', params: FORM_PARAMS }])
   expect(events.filter((e) => e.name === 'demo_submit_failed')).toEqual([])
@@ -187,15 +192,9 @@ routedTest('landing analytics: a refused demo request sends demo_submit_failed a
   await expect(run.dialog.getByRole('heading', { name: 'Something went wrong' })).toBeVisible()
   await expect(run.dialog.locator('#dm-error-retry')).toBeVisible()
   expect(run.formsPosts).toHaveLength(1)
-  expect(run.formsStubbed, 'the Forms POST was not answered by the stub').toEqual(['1'])
   const events = await gaEvents(page)
   expect(events.filter((e) => e.name === 'demo_submit_failed')).toEqual([{ name: 'demo_submit_failed', params: FORM_PARAMS }])
   expect(events.filter((e) => e.name === 'generate_lead')).toEqual([])
   expect(run.gatewayPosts, 'the form must stop before the gateway').toEqual([])
-  await page.waitForLoadState('networkidle')
-  expect(run.sinks.leaked).toEqual([])
-  // Chromium logs the Forms 400 as a console error; it is the only one allowed.
-  expect(run.sinks.errors, `console errors:\n${run.sinks.errors.join('\n')}`).toHaveLength(1)
-  expect(run.formsConsoleUrls).toHaveLength(1)
-  expect(isFormsHost(run.formsConsoleUrls[0])).toBe(true)
+  await expectClean(page, run.sinks)
 })

@@ -95,7 +95,7 @@ import {
   type Rect,
 } from './layout'
 import { signInAs } from '../personaSession'
-import { nightlyTarget, REAL_AI_COVERED } from '../targets'
+import { nightlyTarget } from '../targets'
 import { INHOUSE_PERSONA } from './targets'
 import {
   boxOf,
@@ -2871,7 +2871,6 @@ test('EXTR09-E2E-05 (AC-5): the step strip follows the picked kind, picked or dr
 const DOCUMENT_STAGE_WORDS = new Set(['QUEUED', 'SENDING FILE', 'SERVER PROCESSING', 'READING', 'RETRYING'])
 
 test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and lands on review', async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Upload + poll + import x2 concurrent files, on a fleet that may be cold -- matches
   // EXTR09-E2E-01's own cold-fleet budget for the same three calls.
   test.setTimeout(300_000)
@@ -2944,8 +2943,7 @@ test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and 
     }
   }
 
-  // Both arms stamp MOCK-INV-0001 (mock.go's `clean-invoice` fixture and `mockDefaultResult`)
-  // and collide by design -- with
+  // Both copies of rich_invoice.pdf read as invoice number ASC-2026-0918 and collide -- with
   // run.files.length===2, routeAfterRun can never take the single-file branch, so the
   // landing is always the review surface (Stage 1 Q5), never the real invoice detail.
   await expect
@@ -2957,7 +2955,7 @@ test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and 
         if (await page.getByRole('button', { name: 'Extract invoices' }).isVisible()) return 'back on the picker (the run failed)'
         return 'nothing yet'
       },
-      { message: 'a two-document run must land on the review surface (MOCK-INV-0001 forces both files into one batch)', timeout: 60_000 },
+      { message: 'a two-document run must land on the review surface (both copies collide on ASC-2026-0918 and land in one batch)', timeout: 60_000 },
     )
     .toBe('review batch surface')
 
@@ -3296,7 +3294,6 @@ test('EXTR11-E2E-03 (AC-4): the highlight lands where the region says, at every 
 // EXTR11-E2E-04 and -04b read the SAME 200, so they share one journey rather than paying for
 // two -- the file's own E2E-04/E2E-09 precedent, with labelled blocks.
 test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly the contract', async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -3421,7 +3418,7 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
   ]
   expect(
     [...detail.fields.map((f) => f.name)].sort(),
-    "the wire's field set drifted from mockDefaultResult -- a line the grid needs is missing, or a name changed shape",
+    "the wire's field set drifted from the rich_invoice.pdf reading -- a line the grid needs is missing, or a name changed shape",
   ).toEqual([...WIRE_FIELD_SET].sort())
 
   await testInfo.attach('extraction-wire.json', {
@@ -4033,7 +4030,6 @@ const COUNT_WORD: Record<number, string> = {
 }
 
 test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill', async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4046,17 +4042,18 @@ test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill
   // the rich fixture can carry at most missing/ambiguous/inconsistent. EXTR-18-07's spec covers
   // the fourth code on its own (unreadable) fixture.
   const flagged = detail.fields.filter((f) => f.reason !== '')
-  const codes = new Set(flagged.map((f) => f.reason))
-  expect(codes.size, `this document reported ${[...codes].join(', ')} -- fewer than the three reachable codes`).toBeGreaterThanOrEqual(3)
+  const subtotal = flagged.find((f) => f.name === 'subtotal')
+  expect(subtotal?.reason, 'subtotal must be reported inconsistent').toBe('inconsistent')
+  expect(
+    flagged.some((f) => f.reason === 'missing' || f.reason === 'unreadable'),
+    `no field was reported missing or unreadable (reported: ${[...new Set(flagged.map((f) => f.reason))].join(', ')})`,
+  ).toBe(true)
 
   // The pill loop is a header-pane claim -- a line-item cell has no header-pane home, since
   // EXTR-13-07 gave it LineItemGrid, so it is excluded here rather than left to fail the AC it
   // does not test.
   const headerFlagged = flagged.filter((f) => VOCABULARY.includes(f.name))
   expect(headerFlagged.length, 'no header-vocabulary field was flagged -- the loop below would examine nothing').toBeGreaterThan(0)
-
-  type AmbiguousMeasure = { name: string; alternatives: number; chips: number; word: string }
-  const ambiguousMeasured: AmbiguousMeasure[] = []
 
   for (const f of headerFlagged) {
     const cell = page.getByTestId(`extraction-field-${f.name}`)
@@ -4075,7 +4072,6 @@ test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill
         cell.getByText(`FOUND ${word} POSSIBLE VALUES`, { exact: true }),
         `${f.name} carries ${n} chips and renders no "FOUND ${word} POSSIBLE VALUES" pill`,
       ).toBeVisible()
-      ambiguousMeasured.push({ name: f.name, alternatives: f.alternatives.length, chips: n, word })
       continue
     }
 
@@ -4086,7 +4082,48 @@ test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill
     ).toBeVisible()
   }
 
-  const ambiguous = headerFlagged.filter((f) => f.reason === 'ambiguous')
+  // The code itself is machine vocabulary and never reaches the screen. `Object.keys(REASON_PILL)`
+  // lost `ambiguous` when the table dropped its fixed key, so every code is named
+  // explicitly -- the retype must not silently stop checking one of them.
+  const paneText = await page.getByTestId('extraction-fields').innerText()
+  expect(paneText.length, 'the fields pane rendered no text -- the absences below are vacuous').toBeGreaterThan(0)
+  for (const code of ['unreadable', 'ambiguous', 'inconsistent', 'missing', 'rule_break'] as const) {
+    expect(paneText, `the pane rendered the raw reason code "${code}"`).not.toContain(code)
+  }
+
+  await testInfo.attach('extraction-reason-pills.json', {
+    body: JSON.stringify(
+      { flagged: flagged.map((f) => ({ name: f.name, reason: f.reason })) },
+      null,
+      2,
+    ),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR12-E2E-01b (AC-7): the ambiguous pill fits at every width', async ({ page }, testInfo) => {
+  test.skip(nightlyTarget(), 'S11: needs an ambiguous header field; no fixture forces one on the real AI; covered by ExtractionFields.test.tsx')
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-12-06 pill widths')
+  const detail = await openExtractionReview(page)
+
+  type AmbiguousMeasure = { name: string; alternatives: number; chips: number; word: string }
+  const ambiguousMeasured: AmbiguousMeasure[] = []
+  const ambiguous = detail.fields.filter((f) => f.reason === 'ambiguous' && VOCABULARY.includes(f.name))
+  for (const f of ambiguous) {
+    const cell = page.getByTestId(`extraction-field-${f.name}`)
+    const chips = cell.locator(`[data-testid^="extraction-chip-${f.name}-"]`)
+    await expect(chips, `${f.name} rendered no chip row`).toHaveCount(1 + f.alternatives.length)
+    const n = await chips.count()
+    const word = COUNT_WORD[n]
+    expect(word, `${n} chips beside ${f.name} has no word in the transcribed table`).toBeTruthy()
+    ambiguousMeasured.push({ name: f.name, alternatives: f.alternatives.length, chips: n, word })
+  }
+
   expect(ambiguous.length, 'no ambiguous field was flagged -- the layout sweep below would examine nothing').toBeGreaterThan(0)
 
   // AC-7: every ambiguous pill's rect stays wholly inside its own cell, and its text never
@@ -4166,21 +4203,8 @@ test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill
     ...WIDE_WIDTHS,
   ])
 
-  // The code itself is machine vocabulary and never reaches the screen. `Object.keys(REASON_PILL)`
-  // lost `ambiguous` when the table dropped its fixed key, so every code is named
-  // explicitly -- the retype must not silently stop checking one of them.
-  const paneText = await page.getByTestId('extraction-fields').innerText()
-  expect(paneText.length, 'the fields pane rendered no text -- the absences below are vacuous').toBeGreaterThan(0)
-  for (const code of ['unreadable', 'ambiguous', 'inconsistent', 'missing', 'rule_break'] as const) {
-    expect(paneText, `the pane rendered the raw reason code "${code}"`).not.toContain(code)
-  }
-
-  await testInfo.attach('extraction-reason-pills.json', {
-    body: JSON.stringify(
-      { flagged: flagged.map((f) => ({ name: f.name, reason: f.reason })), ambiguous: ambiguousMeasured, measured },
-      null,
-      2,
-    ),
+  await testInfo.attach('extraction-ambiguous-pill-widths.json', {
+    body: JSON.stringify({ ambiguous: ambiguousMeasured, measured }, null, 2),
     contentType: 'application/json',
   })
 
@@ -4336,7 +4360,7 @@ test('EXTR12-E2E-03 (AC-7): the document toolbar no longer claims the screen is 
 })
 
 test('EXTR12-E2E-04 (AC-8): the chip row shares its column evenly at every WIDE_WIDTHS', async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
+  test.skip(nightlyTarget(), 'S3: measures the chip row of an ambiguous field; no fixture forces one on the real AI; covered by ExtractionFields.test.tsx')
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4358,10 +4382,8 @@ test('EXTR12-E2E-04 (AC-8): the chip row shares its column evenly at every WIDE_
   const cell = page.getByTestId(`extraction-field-${ambiguous!.name}`)
   const chips = page.locator(`[data-testid^="extraction-chip-${ambiguous!.name}-"]`)
   // The row's own container: a stretched flex item, so its width IS the cell's content width.
-  // The chips must fill it, and on this document they cannot be told apart any other way --
-  // 2026-01-01, 2026-01-10 and 2026-10-01 are anagrams and all three sub-labels read `page 1`,
-  // so three content-sized chips are ALSO within 1px of each other and clear the evenness
-  // clause below. Filling the row is what `flex: 1` buys and content sizing does not.
+  // The chips must fill it: equal-length chip texts make content-sized chips pass the evenness
+  // clause below too. Filling the row is what `flex: 1` buys and content sizing does not.
   const chipRow = chips.first().locator('xpath=..')
   await expect(cell, 'the ambiguous field rendered no cell').toBeVisible()
   // W-3: the decided reading is itself a chip, so the row carries N + 1.
@@ -4460,7 +4482,6 @@ function ratioOf(box: Rect, frame: Rect): Ratio {
 test('EXTR12-E2E-05 (AC-2/AC-3/AC-6): a box drawn on page 2 is the box the screen reads back, at every zoom', async ({
   page,
 }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4474,9 +4495,10 @@ test('EXTR12-E2E-05 (AC-2/AC-3/AC-6): a box drawn on page 2 is the box the scree
 
   // Off the wire the SPA itself consumed, never a literal out of mock.go.
   expect(detail.pages.map((p) => p.page), 'the two-page fixture must produce two stored pages').toEqual([1, 2])
-  const missing = detail.fields.find((f) => f.reason === 'missing')
-  expect(missing, 'no field on this document is missing -- there is nothing to point at').toBeTruthy()
-  const name = missing!.name
+  // buyer_tin by name: the TIN typed below is a TIN, whichever field sorts first.
+  const name = 'buyer_tin'
+  const missing = detail.fields.find((f) => f.name === name && f.reason === 'missing')
+  expect(missing, `${name} is not missing on this document -- there is nothing to point at`).toBeTruthy()
   expect(missing!.region, 'the missing field already carries a region, so a drawn box proves nothing').toBeNull()
 
   const button = page.getByTestId(`extraction-point-${name}`)

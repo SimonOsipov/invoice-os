@@ -310,10 +310,10 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
     // reach 9, not stop at 7). A floor below the measured population lets someone delete a
     // real submit site and stay green.
     //
-    // Floor = the manifest size (20). Adding a site means raising it: the suite enforces the
+    // Floor = the manifest size (21). Adding a site means raising it: the suite enforces the
     // manifest, not the floor.
-    it('floor: at least 20 submit-driving sites (measured population -- see the comment above, not AC-9\'s literal "7")', () => {
-      expect(topologyMatches.length, `found ${topologyMatches.length} submit-driving sites in e2e/topology/*.spec.ts, floor is 20`).toBeGreaterThanOrEqual(20)
+    it('floor: at least 21 submit-driving sites (measured population -- see the comment above, not AC-9\'s literal "7")', () => {
+      expect(topologyMatches.length, `found ${topologyMatches.length} submit-driving sites in e2e/topology/*.spec.ts, floor is 21`).toBeGreaterThanOrEqual(21)
     })
 
     it('every submit-driving call site is in the manifest', () => {

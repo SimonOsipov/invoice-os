@@ -393,3 +393,44 @@ func TestProdIDVars_GuardIsRequiredByTheRollUp(t *testing.T) {
 		t.Errorf("a roll-up that tolerates a skipped prod-ids was not reported: %v", got)
 	}
 }
+
+// guardJobProblems reports a prod-ids job whose steps do not run the known positives, then the self-check on both variables, then the scan.
+func guardJobProblems(yml string) []string {
+	j, ok := ciJobOf(yml, "prod-ids")
+	if !ok {
+		return []string{"ci.yml has no prod-ids job"}
+	}
+	steps := j.steps()
+	at := func(run string) int {
+		return slices.IndexFunc(steps, func(s workflowStep) bool { return s.keys["run"] == run })
+	}
+	positives, self, scan := at("go test ./internal/tools/prodidgate/ -count=1"), at("go run ./internal/tools/prodidgate -selfcheck"), at("go run ./internal/tools/prodidgate")
+	if positives < 0 || self < 0 || scan < 0 {
+		return []string{fmt.Sprintf("prod-ids steps missing: positives %d, selfcheck %d, scan %d", positives, self, scan)}
+	}
+	var p []string
+	if !(positives < self && self < scan) {
+		p = append(p, "prod-ids steps are not ordered positives, selfcheck, scan")
+	}
+	for _, n := range []string{"GCP_WIF_PROVIDER", "HUBSPOT_PORTAL_ID"} {
+		if steps[self].env[n] != "${{ vars."+n+" }}" {
+			p = append(p, fmt.Sprintf("the selfcheck does not map %s from vars", n))
+		}
+	}
+	if _, ok := steps[scan].keys["continue-on-error"]; ok {
+		p = append(p, "the scan has continue-on-error")
+	}
+	return p
+}
+
+func TestProdIDVars_GuardJobRunsItsSelfcheckBeforeTheScan(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "ci.yml")
+	if got := guardJobProblems(yml); len(got) != 0 {
+		t.Errorf("%v", got)
+	}
+	noSelf := mutateOnce(t, yml, "go run ./internal/tools/prodidgate -selfcheck", "true")
+	if got := guardJobProblems(noSelf); len(got) != 1 {
+		t.Errorf("a prod-ids job without the selfcheck was not reported: %v", got)
+	}
+}

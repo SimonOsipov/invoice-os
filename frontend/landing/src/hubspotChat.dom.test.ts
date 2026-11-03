@@ -74,6 +74,15 @@ describe('loadChat gate', () => {
     expect(loaderScripts().length).toBe(0)
   })
 
+  it('a build without the portal id pushes no doNotTrack even with the opt-out cookie present', async () => {
+    vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '')
+    seed('__hs_do_not_track')
+    const { loadChat } = await fresh()
+    expect(loadChat(WWW, GRANTED)).toBe(false)
+    expect(w._hsq).toBeUndefined()
+    expect(loaderScripts().length).toBe(0)
+  })
+
   it('bootChat without the portal id loads nothing even when granted', async () => {
     vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '')
     document.cookie = `asc_consent=${encodeURIComponent(JSON.stringify(GRANTED))}; path=/; domain=.ascomply.com`

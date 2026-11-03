@@ -18,7 +18,7 @@ func fakeNeedles() []needle {
 
 func TestScan_FindsTheValueAsASubstring(t *testing.T) {
 	t.Parallel()
-	for _, text := range []string{"x7654321x", "987654321", "7654321", "a\n7654321"} {
+	for _, text := range []string{"x7654321x", "987654321", "76543219", "7654321", "a\n7654321"} {
 		got := scan("f", []byte(text), fakeNeedles())
 		wantLine := 1 + strings.Count(text, "\n")
 		if len(got) != 1 || got[0].line != wantLine || got[0].kind != "test id" {
@@ -131,6 +131,27 @@ func TestRun_UnreadableTrackedFileIsAnError(t *testing.T) {
 	}
 }
 
+func TestRun_UnlistableOrUnopenableTreeIsAnError(t *testing.T) {
+	t.Parallel()
+	var out, errb bytes.Buffer
+	if code := run(t.TempDir(), fakeNeedles(), &out, &errb); code != 2 {
+		t.Errorf("not a git repo: exit %d, want 2", code)
+	}
+	if os.Geteuid() == 0 {
+		return
+	}
+	dir := gitRepo(t)
+	write(t, dir, "locked.txt", "x")
+	gitAdd(t, dir, "locked.txt")
+	if err := os.Chmod(filepath.Join(dir, "locked.txt"), 0); err != nil {
+		t.Fatal(err)
+	}
+	errb.Reset()
+	if code := run(dir, fakeNeedles(), &out, &errb); code != 2 || !strings.Contains(errb.String(), "locked.txt") {
+		t.Errorf("unreadable file: exit %d, stderr %q, want 2 naming the file", code, errb.String())
+	}
+}
+
 func selfNeedles() []needle {
 	return []needle{
 		{"GCP prod project number", 12, sum("111111111111")},
@@ -172,6 +193,10 @@ func TestSelfcheck_BadProviderAndEmptyVariables(t *testing.T) {
 	}
 	if n := strings.Count(out.String(), "self-check skipped"); n != 2 {
 		t.Errorf("got %d skip notices, want 2: %q", n, out.String())
+	}
+	out.Reset()
+	if code := selfcheck(env(map[string]string{"GCP_WIF_PROVIDER": "  ", "HUBSPOT_PORTAL_ID": "\t"}), selfNeedles(), &out, &errb); code != 0 || strings.Count(out.String(), "self-check skipped") != 2 {
+		t.Errorf("blank variables: exit %d, stdout %q, want 0 and two skip notices", code, out.String())
 	}
 }
 

@@ -32,9 +32,9 @@ ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
 # Operator test-event digest; empty leaves the trigger uninstalled.
 ARG VITE_SENTRY_TEST_DIGEST
 ENV VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST
-# The release fallback when no release is stamped.
 ARG VITE_HUBSPOT_PORTAL_ID
 ENV VITE_HUBSPOT_PORTAL_ID=$VITE_HUBSPOT_PORTAL_ID
+# The release fallback when no release is stamped.
 ARG BUILD_SHA
 ENV VITE_BUILD_SHA=${BUILD_SHA}
 # Build stage only, never ENV; empty skips the source-map upload.

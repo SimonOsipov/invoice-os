@@ -863,23 +863,29 @@ func TestLivePortalEnv_MissingRefusesToRun(t *testing.T) {
 }
 
 func TestLivePortalEnv_MalformedRefusesToRun(t *testing.T) {
-	for _, v := range []string{"abc", "0", "-1", "1.5", " 1234567"} {
-		t.Run(v, func(t *testing.T) {
-			w := newWorld()
-			env := baseEnv()
-			env["HUBSPOT_LIVE_PORTAL_ID"] = v
-			out := filepath.Join(t.TempDir(), "out.json")
-			res := runPhase(t, w, env, "start", "-out", out)
-			if res.code != 2 || !strings.Contains(res.stderr, "HUBSPOT_LIVE_PORTAL_ID is not a portal id") {
-				t.Fatalf("code %d, stderr %q", res.code, res.stderr)
-			}
-			if len(w.calls) != 0 {
-				t.Errorf("%d HTTP calls", len(w.calls))
-			}
-			if _, err := os.Stat(out); err == nil {
-				t.Error("out file written")
-			}
-		})
+	for _, phase := range []string{"start", "check", "finish"} {
+		for _, v := range []string{"abc", "0", "-1", "1.5", " 1234567", "99999999999999999999"} {
+			t.Run(phase+" "+v, func(t *testing.T) {
+				w := newWorld()
+				env := baseEnv()
+				env["HUBSPOT_LIVE_PORTAL_ID"] = v
+				out := filepath.Join(t.TempDir(), "out.json")
+				args := []string{phase, "-out", out}
+				if phase == "finish" {
+					args = append(args, "-in", t.TempDir(), "-started", startedAt)
+				}
+				res := runPhase(t, w, env, args...)
+				if res.code != 2 || !strings.Contains(res.stderr, "HUBSPOT_LIVE_PORTAL_ID is not a portal id") {
+					t.Fatalf("code %d, stderr %q", res.code, res.stderr)
+				}
+				if len(w.calls) != 0 {
+					t.Errorf("%d HTTP calls", len(w.calls))
+				}
+				if _, err := os.Stat(out); err == nil {
+					t.Error("out file written")
+				}
+			})
+		}
 	}
 }
 

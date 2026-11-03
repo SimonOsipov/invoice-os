@@ -2,11 +2,12 @@
 import { readFileSync } from 'node:fs'
 import { test, expect, type Page, type Request, type Response } from '@playwright/test'
 import { login, createEntity, createImportBatchFromCsv, listInvoices, type ImportBatchResult } from '../api/client'
+import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { buildCleanCsv, buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, PERF_MAPPING } from '../importFixtures'
 import { signInAs } from '../personaSession'
 import { resolveTarget } from '../targets'
-import { collectErrors, shardPersonas } from './importWizardShared'
+import { approveOpenRunsForEntity, collectErrors, shardPersonas } from './importWizardShared'
 
 const { SHARD, PERSONAS } = shardPersonas('import-review-api.spec.ts')
 
@@ -457,6 +458,66 @@ test.describe('NCOV-02 review channels, multi-file runs and the source card', ()
       await expect(one).toContainText('0 of 0 rows produced an invoice')
     }
     await expect(page.getByTestId('review-table')).toHaveCount(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+  test('bulk submit: select all, confirm once, one POST, a result per invoice', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    await ensureFirmPolicyActive(token)
+    const entity = await createEntity(token, { name: `NCOV-02 bulk ${Date.now()}`, tin: freshTin() })
+    const batch = await createImportBatchFromCsv(token, entity.id, { csv: buildCleanCsv('INV-NCOV02-BULK'), filename: 'review-bulk.csv', mapping: PERF_MAPPING })
+    // Fixture check: two validated invoices.
+    expect(batch.ready_invoices, 'the fixture mints two invoices').toBe(2)
+    expect(batch.invoices_clean, 'both are validated').toBe(2)
+
+    // The runs arm asynchronously; closing them before they are open would leave rows unselectable.
+    await expect
+      .poll(async () => (await listInvoices(token, { entity_id: entity.id })).invoices.filter((inv) => inv.approval?.run_state === 'open').length, {
+        message: 'both validated invoices arm an open approval run',
+        timeout: 60_000,
+      })
+      .toBe(batch.ready_invoices)
+    await approveOpenRunsForEntity(token, entity.id, SHARD.a.id)
+
+    let submissions = 0
+    page.on('request', (r) => {
+      if (r.method() === 'POST' && new URL(r.url()).pathname === `${INVOICES}/submissions`) submissions++
+    })
+    const { firstPage } = await openReview(page, [batch.id], 2)
+    // Fixture check: the closed runs make both rows submittable.
+    expect(firstPage.invoices, 'the first page lists both invoices').toHaveLength(2)
+    for (const inv of firstPage.invoices) expect(inv.can_submit, `${inv.invoice_number} can be submitted`).toBe(true)
+
+    await page.getByTestId('review-select-all').click()
+    await expect(page.getByTestId('review-bulk-submit')).toContainText('Submit 2 for transmission')
+    await page.getByTestId('review-bulk-submit').click()
+    await expect(page.getByTestId('review-bulk-confirm')).toContainText('Yes, send 2 now')
+    expect(submissions, 'arming the bar sends nothing').toBe(0)
+
+    const [submitResp] = await Promise.all([
+      page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === `${INVOICES}/submissions`, { timeout: 60_000 }),
+      page.waitForResponse(tablePage(batch.id), { timeout: 60_000 }),
+      page.getByTestId('review-bulk-confirm').click(),
+    ])
+    const sent = JSON.parse(submitResp.request().postData() ?? '{}') as { invoice_ids?: string[]; idempotency_key?: unknown }
+    expect([...(sent.invoice_ids ?? [])].sort(), 'the POST carries the two batch ids').toEqual(firstPage.invoices.map((i) => i.id).sort())
+    expect(typeof sent.idempotency_key, 'the POST carries an idempotency key').toBe('string')
+    expect(submitResp.ok(), 'the submission answers OK').toBe(true)
+    const { results } = (await submitResp.json()) as { results: { enqueued: boolean }[] }
+    expect(results, 'a result per invoice').toHaveLength(2)
+    for (const r of results) expect(r.enqueued, 'each invoice is enqueued').toBe(true)
+
+    // 'Queued' is the enqueued label (lib/reviewBatch.ts); the verdict pill is not asserted, the worker races it.
+    const panel = page.getByTestId('review-submit-results')
+    for (const inv of firstPage.invoices) {
+      const row = panel.getByText(inv.invoice_number, { exact: true })
+      await expect(row).toHaveCount(1)
+      await expect(row.locator('xpath=..')).toContainText('Queued')
+    }
+    expect(submissions, 'exactly one submissions POST').toBe(1)
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

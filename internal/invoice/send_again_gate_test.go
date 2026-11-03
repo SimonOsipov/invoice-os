@@ -146,3 +146,20 @@ func TestGetHandler_SendAgainFailsClosedOnANoteReadError(t *testing.T) {
 		t.Errorf("note read error not logged: %s", buf.String())
 	}
 }
+
+// A note read error leaves the other gates as they are: the note read is apart from approvalFacts.
+func TestGetHandler_NoteReadErrorKeepsTheOtherGates(t *testing.T) {
+	inv := Invoice{ID: "v", Status: StatusValidated}
+	facts := ApprovalFacts{TransmitClear: true}
+	boom := func(context.Context, Invoice) (bool, error) { return false, errors.New("boom") }
+	base := doGateGet(t, inv, facts, passNoteChecks, nil)
+	got := doGateGet(t, inv, facts, boom, nil)
+	if string(base["can_submit"]) != "true" {
+		t.Fatalf("control: can_submit = %s, want true", base["can_submit"])
+	}
+	for _, k := range []string{"can_submit", "can_approve", "can_reject", "submit_blocked_reason"} {
+		if string(got[k]) != string(base[k]) {
+			t.Errorf("%s = %s after a note read error, want %s", k, got[k], base[k])
+		}
+	}
+}

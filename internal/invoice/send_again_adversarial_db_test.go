@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // A double click: two sends race for one failed invoice; exactly one wins.
@@ -182,5 +183,32 @@ func TestSendAgain_TheKindGuardRefusesAResendableLookingJob(t *testing.T) {
 			r.job(t, inv, saJob{state: c.jobState, attempts: 8, riverState: "discarded"})
 			r.refuses(t, inv, ErrNotResendable)
 		})
+	}
+}
+
+// With the handler's pre-read bypassed, SendAgain itself refuses a suspended or absent member (the tenant
+// seam's ErrNotActiveMember), and an active reviewer still goes through.
+func TestSendAgain_SuspendedAndNonMemberAreRefusedWithoutTheHandler(t *testing.T) {
+	r := newSARig(t, "SA in-tx roles")
+	inv := r.failedInvoice(t, "SA-INTX", "never_acknowledged")
+	r.job(t, inv, saJob{state: "dead_lettered", attempts: 8, riverState: "discarded"})
+	suspended, stranger, reviewer := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	seedMembershipWithStatus(t, r.super, r.tenant, suspended, "reviewer", "suspended")
+	seedMembership(t, r.super, r.tenant, reviewer, "reviewer")
+	as := func(subject string) context.Context {
+		return auth.WithIdentity(context.Background(), auth.Identity{Subject: subject, Role: "authenticated", TenantID: r.tenant})
+	}
+
+	before := r.snap(t, inv)
+	for name, subject := range map[string]string{"suspended reviewer": suspended, "non-member": stranger} {
+		if _, err := r.sub.SendAgain(as(subject), inv); !errors.Is(err, db.ErrNotActiveMember) {
+			t.Errorf("%s: SendAgain = %v, want db.ErrNotActiveMember", name, err)
+		}
+	}
+	if after := r.snap(t, inv); after != before {
+		t.Errorf("a refused SendAgain wrote:\nbefore %+v\nafter  %+v", before, after)
+	}
+	if _, err := r.sub.SendAgain(as(reviewer), inv); err != nil {
+		t.Fatalf("SendAgain as an active reviewer = %v, want nil", err)
 	}
 }

@@ -35,8 +35,9 @@ A PR preview's URLs are `https://<svc>-pr-<N>-944095690109.africa-south1.run.app
 | blog            | `BLOG_URL`            | smoke, api, topology | site address, base path included    |
 | app             | `APP_URL`             | smoke, topology      |                                     |
 | gateway         | `GATEWAY_URL`         | smoke, api, topology |                                     |
+| HubSpot portal id | `HUBSPOT_PORTAL_ID` | smoke                | the portal id the deployed build bakes (`gh variable get HUBSPOT_PORTAL_ID`) |
 
-CI sets all seven for the whole `e2e` job, so this table matters mainly when running a
+CI sets all eight for the whole `e2e` job (the `dev-env.yml` workflow `env:` provides the portal id), so this table matters mainly when running a
 suite by hand. Most are resolved at module scope and throw during collection; a few
 resolve lazily and throw on the first test that needs them.
 
@@ -63,7 +64,7 @@ Covers five SPAs — `landing`, `ops-console`,
 
 ```bash
 pnpm --filter @invoice-os/e2e exec playwright install chromium   # first run only
-LANDING_URL=... OPS_CONSOLE_URL=... SUPPORT_CONSOLE_URL=... LIBRARY_URL=... BLOG_URL=... APP_URL=... GATEWAY_URL=... \
+LANDING_URL=... OPS_CONSOLE_URL=... SUPPORT_CONSOLE_URL=... LIBRARY_URL=... BLOG_URL=... APP_URL=... GATEWAY_URL=... HUBSPOT_PORTAL_ID=... \
   pnpm --filter @invoice-os/e2e test:smoke    # `test` is the same command
 ```
 

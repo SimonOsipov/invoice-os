@@ -369,7 +369,7 @@ test('landing analytics: the analytics-host classifier accepts GA hosts and noth
     'https://www.googletagmanager.com.attacker.example/gtag/js',
     'https://fake-google-analytics.com/g/collect',
     'https://evil.example/?x=googletagmanager.com',
-    'https://js.hsforms.net/forms/embed/v2/148915098.js',
+    'https://js.hsforms.net/forms/embed/v2/1234567.js',
     `${LANDING_URL}/assets/index.js`,
     'not-a-url',
     '',

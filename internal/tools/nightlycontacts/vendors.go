@@ -9,22 +9,26 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
+	"github.com/SimonOsipov/invoice-os/internal/tools/prodid"
 )
 
+// livePortalDigest is the pinned digest of the live portal id; a test overrides it.
+var livePortalDigest = prodid.PortalDigest
+
 const (
-	liveHubSpotPortal = 148915098
-	maxTries          = 5
-	retryWait         = 2 * time.Second
-	coldTries         = 3
-	coldWait          = 10 * time.Second
-	gatewayTimeout    = 40 * time.Second       // the fleet gate's per-call limit; a scaled-to-zero service answers late
-	erasePace         = 200 * time.Millisecond // 5 erases a second per vendor
-	maxPages          = 1000
-	maxBody           = 1 << 20
+	maxTries       = 5
+	retryWait      = 2 * time.Second
+	coldTries      = 3
+	coldWait       = 10 * time.Second
+	gatewayTimeout = 40 * time.Second       // the fleet gate's per-call limit; a scaled-to-zero service answers late
+	erasePace      = 200 * time.Millisecond // 5 erases a second per vendor
+	maxPages       = 1000
+	maxBody        = 1 << 20
 )
 
 // vendors makes every vendor read. It reads a body only on success, and no error text carries a
@@ -32,6 +36,7 @@ const (
 type vendors struct {
 	hc             *http.Client
 	hsToken, rsKey string
+	livePortal     int64
 	sleep          func(time.Duration)
 	hsErase        notifications.HubSpotEraser
 	rsErase        notifications.ResendEraser
@@ -142,7 +147,7 @@ func (v *vendors) portal() (ok bool, detail string) {
 	switch {
 	case d.PortalID == 0:
 		return false, "portal id is missing"
-	case d.PortalID == liveHubSpotPortal:
+	case d.PortalID == v.livePortal || prodid.Sum(strconv.FormatInt(d.PortalID, 10)) == livePortalDigest:
 		return false, "token belongs to the live portal"
 	}
 	return true, ""

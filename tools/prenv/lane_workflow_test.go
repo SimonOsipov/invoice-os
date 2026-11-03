@@ -199,7 +199,7 @@ func TestCIRollupRequiresTheLibraryJob(t *testing.T) {
 
 func TestCIStaticChecksStayUnconditional(t *testing.T) {
 	t.Parallel()
-	for _, id := range []string{"clean-clone", "stale-refs", "migration-order", "contract-step", "cite-refs"} {
+	for _, id := range []string{"clean-clone", "stale-refs", "migration-order", "contract-step", "cite-refs", "prod-ids"} {
 		if v, ok := jobKey(ciJob(t, id), "if"); ok {
 			t.Errorf("%s has if: %q, want none", id, v)
 		}

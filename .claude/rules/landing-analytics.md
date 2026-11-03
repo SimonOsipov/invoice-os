@@ -7,6 +7,7 @@ paths:
   - "frontend/landing/src/hubspot*"
   - "frontend/app/src/chat*"
   - "frontend/landing/Dockerfile"
+  - "frontend/app/Dockerfile"
   - "e2e/smoke/landing-*.spec.ts"
   - "frontend/library/**"
   - "e2e/smoke/library-consent.spec.ts"
@@ -54,7 +55,7 @@ paths:
 ## HubSpot chat
 
 - Load the HubSpot chat only through `loadChat` in `hubspotChat.ts`. It needs an allowlisted host and a record that allows analytics.
-- Read no `VITE_*` value in the chat code. `HUBSPOT_PORTAL_ID` is the only portal-id literal in landing source.
+- Read the portal id only through `hubspotPortalId()` in `hubspot.ts`. A build without `VITE_HUBSPOT_PORTAL_ID` loads no chat. Declare its `ARG` and `ENV` in every SPA Dockerfile whose source imports `hubspotChat.ts`.
 - Call `loadChat` and `removeChat` from `applyChoice` and `syncConsent` with no host list. Call `bootChat()` from landing `main.tsx` with no host list.
 - Run the chat on `PRODUCTION_HOSTNAMES`, `LIBRARY_HOSTNAMES`, `BLOG_HOSTNAMES` and `APP_HOSTNAMES` only.
 - Bind the library and blog chat in each site's `analytics.ts`: `chooseConsent` and `sync…Consent` call `loadChat` and `removeChat` with the site's list after `applyChoice` or `syncConsent`, and `main.tsx` calls `bootLibraryChat` or `bootBlogChat`.

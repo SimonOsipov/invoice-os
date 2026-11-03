@@ -31,7 +31,8 @@ env:
   PROJECT: ascomply-prod
   REGION: africa-south1
   REGISTRY: africa-south1-docker.pkg.dev/ascomply-preview/images
-  WIF_PROVIDER: projects/428987361227/locations/global/workloadIdentityPools/github/providers/github-actions
+  WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+  HUBSPOT_PORTAL_ID: ${{ vars.HUBSPOT_PORTAL_ID }}
   DEPLOYER: deploy-prod@ascomply-prod.iam.gserviceaccount.com
   LB_IP: 136.68.179.228
 
@@ -52,6 +53,11 @@ jobs:
         with:
           fetch-depth: 0
           filter: blob:none
+      - name: Check the Actions variables
+        env:
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          HUBSPOT_PORTAL_ID: ${{ vars.HUBSPOT_PORTAL_ID }}
+        run: bash scripts/ci/require-vars.sh GCP_WIF_PROVIDER HUBSPOT_PORTAL_ID
       - id: sha
         env:
           INPUT_SHA: ${{ inputs.sha }}
@@ -146,7 +152,7 @@ jobs:
               --build-arg VITE_OPS_URL=https://ops.ascomply.com
               --build-arg VITE_SUPPORT_URL=https://sup.ascomply.com
               --build-arg VITE_GA_MEASUREMENT_ID=G-E409H76XYY
-              --build-arg VITE_HUBSPOT_PORTAL_ID=148915098
+              --build-arg "VITE_HUBSPOT_PORTAL_ID=$HUBSPOT_PORTAL_ID"
               --build-arg VITE_HUBSPOT_FORM_GUID=8e9cf78f-e6a6-4128-9b3d-8c09d5710daf
               --build-arg VITE_REGISTRATION_OPEN=true
               --build-arg VITE_SENTRY_DSN=https://ec0e762d84725a6c2f7d6a167373607e@o4512131304980480.ingest.de.sentry.io/4512190354554960

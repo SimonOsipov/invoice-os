@@ -292,7 +292,7 @@ describe('what the landing SDK sends', () => {
       kind: 'http',
       status,
       method: 'POST',
-      url: 'https://api-eu1.hsforms.com/submissions/v3/integration/submit/148915098/abc-123-needle',
+      url: 'https://api-eu1.hsforms.com/submissions/v3/integration/submit/1234567/abc-123-needle',
       error: new Error(`hubspot ${status}`),
     })
     await Sentry.flush(1000)
@@ -301,7 +301,7 @@ describe('what the landing SDK sends', () => {
     expect(events[0].body.exception.values[0].value).toBe(`http ${status} POST /submissions/v3/integration/submit/:id/:id`)
     expect(events[0].body.tags['api.status']).toBe(String(status))
     const raw = sink.join('\n')
-    for (const needle of ['148915098', 'abc-123-needle', LEAD, COMPANY]) expect(raw, needle).not.toContain(needle)
+    for (const needle of ['1234567', 'abc-123-needle', LEAD, COMPANY]) expect(raw, needle).not.toContain(needle)
   })
 
   it('demoForm_urlQueryAndFragmentNeverLeave', async () => {

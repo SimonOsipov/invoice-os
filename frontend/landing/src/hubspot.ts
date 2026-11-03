@@ -29,11 +29,16 @@ export type HubSpotTarget = { portalId: string; formGuid: string }
 
 const normaliseHost = (hostname: string): string => hostname.trim().toLowerCase()
 
-/** Null when either var is unset or blank — mirrors auth.ts's resolveBase contract. */
-export function hubspotTarget(): HubSpotTarget | null {
+/** The trimmed portal id; '' when the build has none. The only reader of the variable. */
+export function hubspotPortalId(): string {
   // Read inside the body, never at module scope: a module-scope read is baked at
   // import time and cannot be driven by vi.stubEnv (auth.ts's appBase/opsBase/supportBase).
-  const portalId = (import.meta.env.VITE_HUBSPOT_PORTAL_ID ?? '').trim()
+  return (import.meta.env.VITE_HUBSPOT_PORTAL_ID ?? '').trim()
+}
+
+/** Null when either var is unset or blank — mirrors auth.ts's resolveBase contract. */
+export function hubspotTarget(): HubSpotTarget | null {
+  const portalId = hubspotPortalId()
   const formGuid = (import.meta.env.VITE_HUBSPOT_FORM_GUID ?? '').trim()
   if (!portalId || !formGuid) return null
   return { portalId, formGuid }

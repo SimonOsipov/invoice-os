@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CONSENT_STORAGE_KEY, CONSENT_VERSION, readConsent } from '../../landing/src/consent'
-import { CHAT_SCRIPT_URL } from '../../landing/src/hubspotChat'
+import { chatScriptUrl } from '../../landing/src/hubspotChat'
 import { SHARED_COOKIE_DOMAIN } from '../../landing/src/hubspot'
 import { COOKIES, container, installSdk, jarNames, resetJar, seed, w } from '../../landing/src/hubspotChat.test.util'
 
@@ -53,7 +53,7 @@ describe('bootAppChat', () => {
     setConsent(true)
     expect(bootAppChat(EMAIL)).toBe(true)
     expect(loaders().length).toBe(1)
-    expect((loaders()[0] as HTMLScriptElement).src).toBe(CHAT_SCRIPT_URL)
+    expect((loaders()[0] as HTMLScriptElement).src).toBe(chatScriptUrl())
   })
 
   it('identify, setPath and page view are queued before the loader', async () => {

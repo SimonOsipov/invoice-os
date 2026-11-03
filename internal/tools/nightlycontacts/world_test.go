@@ -358,6 +358,7 @@ func baseEnv() map[string]string {
 	return map[string]string{
 		"HUBSPOT_TOKEN": testToken, "RESEND_API_KEY": testKey, "RECEIVING_DOMAIN": testDomain,
 		"HUBSPOT_DEAL_STAGE": testStage, "GATEWAY_URL": "https://gw.test", "NIGHTLY_RUN_ID": "77-2",
+		"HUBSPOT_LIVE_PORTAL_ID": testLivePortal,
 	}
 }
 
@@ -407,6 +408,8 @@ func runPhase(t *testing.T, w *world, env map[string]string, args ...string) res
 	}
 	return res
 }
+
+const testLivePortal = "1234567"
 
 const startedAt = "2026-10-31T01:00:00Z"
 

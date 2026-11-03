@@ -68,7 +68,7 @@ async function mountAndFill(opts: { marketing?: boolean } = {}): Promise<void> {
 function openPreviewGate(): void {
   // Control: the hostname arm really is closed, so "no HubSpot call" cannot pass for the wrong reason.
   expect(isProductionHost(window.location.hostname)).toBe(false)
-  vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '148915098')
+  vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '1234567')
   vi.stubEnv('VITE_HUBSPOT_FORM_GUID', 'abc-123')
 }
 

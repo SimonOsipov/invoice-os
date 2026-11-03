@@ -2,11 +2,14 @@
 // `node`: `window` and `document` resolve at call time.
 import { analyticsAllowed, readConsent, type ConsentRecord } from './consent'
 import { expireCookies } from './gaCookies'
-import { isProductionHost, PRODUCTION_HOSTNAMES } from './hubspot'
+import { hubspotPortalId, isProductionHost, PRODUCTION_HOSTNAMES } from './hubspot'
 
-export const HUBSPOT_PORTAL_ID = '148915098'
 export const CHAT_SCRIPT_HOST = 'js-eu1.hs-scripts.com'
-export const CHAT_SCRIPT_URL = `https://${CHAT_SCRIPT_HOST}/${HUBSPOT_PORTAL_ID}.js`
+/** The loader URL, or null when the build has no portal id. */
+export function chatScriptUrl(): string | null {
+  const id = hubspotPortalId()
+  return id ? `https://${CHAT_SCRIPT_HOST}/${id}.js` : null
+}
 /** HubSpot's own snippet id: its analytics script looks for it and embeds the loader once. */
 export const CHAT_SCRIPT_ID = 'hs-script-loader'
 
@@ -72,6 +75,8 @@ function showWidget(w: ChatWindow): void {
 /** Idempotent. Returns whether the chat is loaded AFTER the call. */
 export function loadChat(hostname: string, record: ConsentRecord | null, hosts?: readonly string[]): boolean {
   if (state === 'loaded') return true
+  const src = chatScriptUrl()
+  if (!src) return false
   if (!shouldLoadChat(hostname, analyticsAllowed(record), hosts)) return false
 
   const w = window as ChatWindow
@@ -84,7 +89,7 @@ export function loadChat(hostname: string, record: ConsentRecord | null, hosts?:
     s.id = CHAT_SCRIPT_ID
     s.async = true
     s.defer = true
-    s.src = CHAT_SCRIPT_URL
+    s.src = src
     document.head.appendChild(s)
   } else {
     state = 'loaded'

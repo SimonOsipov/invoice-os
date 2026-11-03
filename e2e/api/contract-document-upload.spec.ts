@@ -50,7 +50,6 @@ import {
   type ExtractionJob,
 } from './client'
 import { freshTin } from './fixtures'
-import { nightlyTarget, REAL_AI_COVERED } from '../targets'
 import { assertErrorEnvelope, ensureFirmPolicyActive, type RawResult } from './contract-helpers'
 
 // e2e/ is ESM, so there is no __dirname, and a relative path would resolve against
@@ -60,7 +59,7 @@ const PDF_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/d
 const PDF_BYTES = new Uint8Array(readFileSync(PDF_FIXTURE))
 // Reads as a credit note of INV-ORIG-3401, number CN-3401, 100.00 / 7.50 / 107.50 over 2 lines.
 const NOTE_BYTES = new Uint8Array(
-  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents/jev_credit_note.pdf')),
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents/honest_credit_note.pdf')),
 )
 
 const UPLOAD_PATH = '/api/submission/v1/documents'
@@ -539,7 +538,7 @@ async function acceptedOriginal(tok: string, entityId: string, number: string, s
 
 // Unique fixture bytes -> upload -> settled. Returns the document and the job it settled on.
 async function settleNote(tok: string, label: string): Promise<{ documentId: string; job: ExtractionJob }> {
-  const res = await uploadFetch(tok, uniquePdf(NOTE_BYTES), 'jev_credit_note.pdf', 'application/pdf')
+  const res = await uploadFetch(tok, uniquePdf(NOTE_BYTES), 'honest_credit_note.pdf', 'application/pdf')
   expect(res.status, `${label}: the fixture uploads 201 (body ${JSON.stringify(res.body)})`).toBe(201)
   const documentId = (res.body as { document_id: string }).document_id
   return { documentId, job: await pollUntilSucceeded(tok, documentId, label) }
@@ -559,7 +558,6 @@ async function entityInvoices(tok: string, entityId: string) {
 }
 
 test.describe('note documents', () => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.describe.configure({ timeout: 300_000 })
   let token: string
 

@@ -158,6 +158,15 @@ test('landing privacy: the nav returns the visitor to the sales page', async ({ 
   expectNoConsoleErrors(errors)
 })
 
+// P6b — the monitoring disclosure says reports go out whatever the cookie choice (Privacy.tsx).
+test('landing privacy: the monitoring section says reports go out whatever the cookie choice', async ({ page }) => {
+  const { errors, prose } = await openPrivacy(page)
+  const heading = prose.getByRole('heading', { level: 2, name: 'Error and performance monitoring' })
+  await expect(heading).toHaveCount(1)
+  await expect(heading.locator('xpath=following-sibling::p[1]')).toContainText('whatever you chose on the cookie notice')
+  expectNoConsoleErrors(errors)
+})
+
 // P7 — gutter symmetry and containment. Widest first: a cap only strands what the
 // window gives it room to strand. No raw width bound — see topology/layout.ts header.
 test('landing privacy: the prose column stays centred in its container at every wide width', async ({

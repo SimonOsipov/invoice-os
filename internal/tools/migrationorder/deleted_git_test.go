@@ -216,3 +216,28 @@ func TestMain_PushToMainShapeFailsAnUnmarkedDeletion(t *testing.T) {
 	r.run("checkout", "-q", "pr")
 	r.want(1, "main", unmarked(pathOf(fileA), fileA))
 }
+
+func TestMain_DeletingTheMarksFileIsNotADeletionAndReleasesNothing(t *testing.T) {
+	r := newPRRepo(t)
+	r.write("deleted.txt", fileB+": old\n")
+	r.seedBase()
+	r.run("rm", "-q", Dir+"/deleted.txt")
+	r.rm(fileA)
+	r.commit("del marks file + a")
+	r.want(1, "pr", unmarked(pathOf(fileA), fileA))
+
+	r = newPRRepo(t)
+	r.write("deleted.txt", fileB+": old\n")
+	r.seedBase()
+	r.run("rm", "-q", Dir+"/deleted.txt")
+	r.commit("del marks file")
+	r.want(0, "pr")
+}
+
+func TestMain_MarkAddedAsANewFileWithCRLFReleasesTheDeletion(t *testing.T) {
+	r := newPRRepo(t)
+	r.rm(fileA)
+	r.write("deleted.txt", "\r\n"+fileA+": crlf reason\r\n")
+	r.commit("del+mark")
+	r.want(0, "pr", pathOf(fileA)+": crlf reason\n")
+}

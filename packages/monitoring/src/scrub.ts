@@ -2,7 +2,7 @@ import type { Breadcrumb, ErrorEvent, EventHint, SpanJSON, TransactionEvent } fr
 import { wasReported } from './reported'
 
 // ceiling: quoted text in a thrown message is not redacted, unlike Go's filter; revisit when an asc-frontend issue shows customer text in quotes
-const DROPPED_KEYS = new Set(['http.query', 'http.fragment'])
+const DROPPED_KEYS = new Set(['http.query', 'http.fragment', 'url.query', 'url.fragment'])
 const GLOBAL_HANDLERS = 'auto.browser.global_handlers'
 const TRANSPORT_DECIDED = new Set(['ApiError', 'AbortError', 'TimeoutError', 'SessionEndedError'])
 const CAPACITY_KEYS = ['effectiveConnectionType', 'connectionType', 'deviceMemory', 'hardwareConcurrency', 'connection.rtt']
@@ -50,6 +50,7 @@ function scrubSpanLike<T extends { description?: string; data?: unknown }>(span:
   if (out.data && typeof out.data === 'object') {
     const data = walk(out.data) as Bag
     delete data['client.address']
+    for (const k of Object.keys(data)) if (k.startsWith('user.')) delete data[k]
     dropCapacity(data)
     out.data = data
   }

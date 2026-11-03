@@ -32,7 +32,7 @@ import { freshTin } from '../api/fixtures'
 import { expectedStatusDropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
 import { signInAs } from '../personaSession'
-import { nightlyTarget, REAL_AI_COVERED } from '../targets'
+import { nightlyTarget } from '../targets'
 import {
   boxOf,
   collectErrors,
@@ -123,13 +123,6 @@ function uniqueAiSteeredPdfBytes(): Buffer {
   return Buffer.concat([AI_STEERED_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
-// AIR-04-04's deployed fixture (fxE2ECopies): AIFAKE-UNAVAILABLE makes the fake fleet's AI call fail.
-const AI_UNAVAILABLE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_unavailable_invoice.pdf'))
-
-function uniqueAiUnavailablePdfBytes(): Buffer {
-  return Buffer.concat([AI_UNAVAILABLE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
-}
-
 // fxJevDoubt (fxE2ECopies): JEVFAKE-DOUBT makes the fake Jev doubt the one checked field.
 const JEV_DOUBT_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'jev_doubt_invoice.pdf'))
 
@@ -137,19 +130,27 @@ function uniqueJevDoubtPdfBytes(): Buffer {
   return Buffer.concat([JEV_DOUBT_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
-// fxJevReceipt (fxE2ECopies): JEVFAKE-CHOICE-cmVjZWlwdA makes the fake Jev answer `receipt`.
-const JEV_RECEIPT_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'jev_receipt_invoice.pdf'))
+// Honest fixtures (fxE2ECopies): a printed credit note of INV-ORIG-3401, a printed receipt, an
+// NRS-labelled invoice, and a page the real model's context cannot hold. Same recipe.
+const HONEST_CREDIT_NOTE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'honest_credit_note.pdf'))
+const HONEST_RECEIPT_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'honest_receipt_invoice.pdf'))
+const AI_NRS_LABELLED_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_nrs_labelled_invoice.pdf'))
+const AI_OVERFLOW_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_overflow_invoice.pdf'))
 
-function uniqueJevReceiptPdfBytes(): Buffer {
-  return Buffer.concat([JEV_RECEIPT_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+function uniqueHonestCreditNotePdfBytes(): Buffer {
+  return Buffer.concat([HONEST_CREDIT_NOTE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
-// fxJevCreditNote (fxE2ECopies): reads as a credit note of INV-ORIG-3401 (JEVFAKE-CHOICE-Y3JlZGl0IG5vdGU
-// and an AIFAKE-ANSWER marker); the engine reads CN-3401, 100.00 / 7.50 / 107.50.
-const JEV_CREDIT_NOTE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'jev_credit_note.pdf'))
+function uniqueHonestReceiptPdfBytes(): Buffer {
+  return Buffer.concat([HONEST_RECEIPT_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
 
-function uniqueJevCreditNotePdfBytes(): Buffer {
-  return Buffer.concat([JEV_CREDIT_NOTE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+function uniqueAiNrsLabelledPdfBytes(): Buffer {
+  return Buffer.concat([AI_NRS_LABELLED_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
+function uniqueAiOverflowPdfBytes(): Buffer {
+  return Buffer.concat([AI_OVERFLOW_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
 // internal/submission/mock_script.go mockTINAccept: the scripted buyer TIN the mock adapter accepts.
@@ -217,13 +218,6 @@ const AI_LINES_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_lines_invoice.pdf'
 
 function uniqueAiLinesPdfBytes(): Buffer {
   return Buffer.concat([AI_LINES_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
-}
-
-// The NRS-fields deployed fixture (fxE2ECopies): header and lines AI markers on one page. Same recipe.
-const AI_NRS_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_nrs_invoice.pdf'))
-
-function uniqueAiNrsPdfBytes(): Buffer {
-  return Buffer.concat([AI_NRS_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
 // No new committed fixture: reuses SCANNED_INVOICE_PDF, uniqueScannedPdfBytes()'s recipe, plus a
@@ -1022,7 +1016,6 @@ async function openLineGrid(page: Page, label: string): Promise<{ detail: Extrac
 test('EXTR13-E2E-01 (Core AC 1-7): the deployed grid reads, flags, sums, selects, remaps, grows, shrinks and saves', async ({
   page,
 }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -1851,7 +1844,6 @@ const SPREADSHEET_READ_LINE = 'ROWS READ · SERVER VERDICT · RULE SET '
 const DOCUMENT_READ_LINE = 'DOCUMENTS READ · SERVER VERDICT · RULE SET '
 
 test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored and Row', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Two full CSV imports through the wizard on a fleet that may be cold. Neither enqueues an
   // extraction, so this is the cheapest of the EXTR-15 deployed cases.
   test.setTimeout(300_000)
@@ -1967,7 +1959,6 @@ test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored
 // Above the EXTR-15 marker: that span requires fresh bytes per upload, and all three imports
 // here must share one file so the saved mapping keys on the same header.
 test('EXTR37-E2E-01: the second import of a file for the same client opens mapped, and opens unmapped without the lookup', async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -3749,8 +3740,7 @@ test('EXTR36-E2E-01 (AC-1/AC-2): a Chrome-shaped register anchors its printed la
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-test("AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lands beside the engine", async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
+test("AIR03-E2E-02/04 (AC-9, AC-6, Q1): the AI's steered reading lands beside the engine", async ({ page }) => {
   test.setTimeout(300_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
@@ -3762,6 +3752,53 @@ test("AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lan
   const invoiceMatch = /^\/invoices\/([0-9a-fA-F-]{36})$/.exec(new URL(page.url()).pathname)
   expect(invoiceMatch, 'the steered document must land on the real invoice detail, not the quarantine').not.toBeNull()
   const invoiceId = invoiceMatch![1]
+
+  const detail = await openExtractionReview(page)
+  const wire = new Map(detail.fields.map((f) => [f.name, f]))
+
+  // AIR03-E2E-02 (AC-6, AC-9 b): the engine refuses the all-digit number as an amount; the AI's
+  // reading, checked against the "Invoice Number:" label, decides it -- unmarked (Q12).
+  const invoiceInput = page.getByTestId('extraction-input-invoice_number')
+  await expect(invoiceInput).toHaveValue('20417')
+  await expect(invoiceInput).toHaveJSProperty('readOnly', true)
+  await expect(page.getByTestId('extraction-field-invoice_number').locator('.mono'), 'a decided field renders no pill').toHaveCount(0)
+  const numberWire = wire.get('invoice_number')
+  expect({ value: numberWire?.value, reason: numberWire?.reason }).toEqual({ value: '20417', reason: '' })
+  expect(numberWire?.region, 'the AI-only number must still carry a region').not.toBeNull()
+
+  // AIR03-E2E-04 (Q1): the AI deciding invoice_number changes WHICH reading wins, never whether
+  // the field is correctable here -- an unflagged locked field still answers today's 422.
+  // lock note: INVOICE_NUMBER_LOCKED
+  await expect(page.getByTestId('extraction-lock-invoice_number')).toHaveText(
+    "The invoice number is this invoice's identity and cannot be changed here.",
+  )
+  const refusal = await rawFetch(`/api/submission/v1/extractions/${detail.id}/fields/invoice_number/corrections`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: { value: '99999', method: 'typed' },
+  })
+  expect(refusal.status, 'an unflagged locked field must still answer 422').toBe(422)
+  // 422 sentence: msgInvoiceNumberSet
+  expect(refusal.body).toEqual({ error: 'invoice_number identifies the invoice and is not corrected here' })
+
+  const invoice = await getInvoice(token, invoiceId)
+  expect({ invoice_number: invoice.invoice_number, buyer_tin: invoice.buyer_tin }).toEqual({
+    invoice_number: '20417',
+    buyer_tin: '12345678-0001',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test("AIR03-E2E-01/03 (AC-9, AC-5): a steered misread lands beside the engine", async ({ page }) => {
+  test.skip(nightlyTarget(), 'S14: needs the AI to misread a printed value; covered by Go TestMergeAI_Row2_ADisagreementIsAmbiguousWithBothChoices and TestRLS_EndToEndAFailedAIValueNeverReachesTheInvoice')
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  const token = await login(PERSONAS.A)
+
+  await extractOneDocument(page, 'AIR-03-05 steered misread', { name: 'ai_steered_invoice.pdf', buffer: uniqueAiSteeredPdfBytes() })
+  const invoiceMatch = /^\/invoices\/([0-9a-fA-F-]{36})$/.exec(new URL(page.url()).pathname)
+  expect(invoiceMatch, 'the steered document must land on the real invoice detail, not the quarantine').not.toBeNull()
 
   const detail = await openExtractionReview(page)
   const wire = new Map(detail.fields.map((f) => [f.name, f]))
@@ -3780,16 +3817,6 @@ test("AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lan
     alt: ['87654321-0002'],
   })
 
-  // AIR03-E2E-02 (AC-6, AC-9 b): the engine refuses the all-digit number as an amount; the AI's
-  // reading, checked against the "Invoice Number:" label, decides it -- unmarked (Q12).
-  const invoiceInput = page.getByTestId('extraction-input-invoice_number')
-  await expect(invoiceInput).toHaveValue('20417')
-  await expect(invoiceInput).toHaveJSProperty('readOnly', true)
-  await expect(page.getByTestId('extraction-field-invoice_number').locator('.mono'), 'a decided field renders no pill').toHaveCount(0)
-  const numberWire = wire.get('invoice_number')
-  expect({ value: numberWire?.value, reason: numberWire?.reason }).toEqual({ value: '20417', reason: '' })
-  expect(numberWire?.region, 'the AI-only number must still carry a region').not.toBeNull()
-
   // AIR03-E2E-03 (AC-5, AC-9 c): "Account Name:" fails check (c), so the missing field is
   // doubtful rather than silently filled -- the input offers the AI's text for correction.
   const nameCell = page.getByTestId('extraction-field-buyer_name')
@@ -3803,26 +3830,8 @@ test("AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lan
     alt: ['ZENITH HOLDINGS LIMITED'],
   })
 
-  // AIR03-E2E-04 (Q1): the AI deciding invoice_number changes WHICH reading wins, never whether
-  // the field is correctable here -- an unflagged locked field still answers today's 422.
-  // lock note: INVOICE_NUMBER_LOCKED
-  await expect(page.getByTestId('extraction-lock-invoice_number')).toHaveText(
-    "The invoice number is this invoice's identity and cannot be changed here.",
-  )
-  const refusal = await rawFetch(`/api/submission/v1/extractions/${detail.id}/fields/invoice_number/corrections`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: { value: '99999', method: 'typed' },
-  })
-  expect(refusal.status, 'an unflagged locked field must still answer 422').toBe(422)
-  // 422 sentence: msgInvoiceNumberSet
-  expect(refusal.body).toEqual({ error: 'invoice_number identifies the invoice and is not corrected here' })
-
-  const invoice = await getInvoice(token, invoiceId)
-  expect({ invoice_number: invoice.invoice_number, buyer_name: invoice.buyer_name }).toEqual({
-    invoice_number: '20417',
-    buyer_name: null,
-  })
+  const invoice = await getInvoice(token, invoiceMatch![1])
+  expect(invoice.buyer_name).toBeNull()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -3839,14 +3848,14 @@ const AI_UNAVAILABLE_FIELD = 'document_ai_reading'
 test('AIR04-E2E-01 (AC-1, AC-3, AC-4, AC-5, AC-7): an unavailable AI sends the document to manual entry with no reading', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(600_000)
   const errors = collectErrors(page)
-  const name = 'ai_unavailable_invoice.pdf'
+  const name = 'ai_overflow_invoice.pdf'
 
-  // (a) AC-1. Zz sorts this entity after the existing ones (entity-ordering trap).
+  // (a) AC-1. Zz sorts this entity after the existing ones (entity-ordering trap). The fake fails
+  // on the marker, the real AI on the overflow; the read itself costs ~50s of pdfium plus Docling.
   const { token, documentIds, jobs } = await runDocuments(page, 'Zz AIR-04 unavailable', [
-    { name, mimeType: 'application/pdf', buffer: uniqueAiUnavailablePdfBytes() },
+    { name, mimeType: 'application/pdf', buffer: uniqueAiOverflowPdfBytes() },
   ])
   const documentId = documentIds[name]!
   const job = jobs[name]!
@@ -3932,7 +3941,7 @@ const NO_REGION_NOTE = 'We have no region for this field, so there is nothing to
 test('AIR05-E2E-01 (AC-3, AC-4, AC-5, AC-8): a document with no text is read from its page images', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
+  test.skip(nightlyTarget(), 'S5: needs a page the OCR reads as empty but the vision model reads; none is measured; covered by Go TestAskAIPages_SendsOneImageCall and TestImageReading_*')
   test.setTimeout(600_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
@@ -4008,10 +4017,9 @@ function lineChipText(value: string, region: ExtractionRegion | null): string {
   return region === null ? value : `${value}page ${region.page}`
 }
 
-test('AIR08-E2E-01/02/03/04 (Core AC 4, 5, 6, 8): the AI reads line items once, and a disagreement reaches the grid', async ({
+test('AIR08-E2E-01/03/04 (Core AC 4, 5, 8): the AI reads line items once', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4023,36 +4031,70 @@ test('AIR08-E2E-01/02/03/04 (Core AC 4, 5, 6, 8): the AI reads line items once, 
 
   const detail = await openExtractionReview(page)
   const lines = wireLines(detail)
-  expect(
-    lines.map((l) => l.index),
-    'the extraction detail must carry three contiguous line indices',
-  ).toEqual([1, 2, 3])
   const fieldsByName = new Map(detail.fields.map((f) => [f.name, f]))
 
   await expect(page.getByTestId('line-item-grid'), 'the fields pane rendered no line-item grid').toBeVisible({
     timeout: 30_000,
   })
-  await expect(page.locator('[data-testid^="line-item-row-"]'), 'the grid did not render one row per wire line').toHaveCount(3)
 
-  // AIR08-E2E-02 (AC-5, agreeing row): row 1's four cells render the engine's own values in
+  // AIR08-E2E-02 (AC-5, agreeing row): the printed Widget row renders the engine's own values in
   // ordinary inputs, with no chip and no pill anywhere on that row.
-  const row1 = lines[0]
+  const row1 = lines.find((l) => l.cells.description?.value === 'Widget')
+  expect(row1, 'the printed Widget row is on the wire').toBeDefined()
+  const n1 = row1!.index
   const row1Want: Record<LineRoleName, string> = { description: 'Widget', quantity: '2', unit_price: '500.00', line_total: '1000.00' }
   for (const role of LINE_ROLE_NAMES) {
-    expect(row1.cells[role]?.value, `row 1's ${role} did not carry the engine's own reading on the wire`).toBe(row1Want[role])
-    expect(fieldsByName.get(row1.cells[role]?.name ?? '')?.reason, `row 1's ${role} is not decided on the wire`).toBe('')
+    expect(row1!.cells[role]?.value, `row 1's ${role} did not carry the printed value on the wire`).toBe(row1Want[role])
+    expect(fieldsByName.get(row1!.cells[role]?.name ?? '')?.reason, `row 1's ${role} is not decided on the wire`).toBe('')
     await expect(
-      page.getByTestId(`line-item-input-1-${role}`),
-      `row 1's ${role} input did not carry the engine's own reading`,
+      page.getByTestId(`line-item-input-${n1}-${role}`),
+      `row 1's ${role} input did not carry the printed value`,
     ).toHaveValue(row1Want[role])
   }
-  await expect(page.locator('[data-testid^="line-item-chip-1-"]'), 'the agreeing row renders a chip').toHaveCount(0)
-  await expect(page.getByTestId('line-item-ambiguous-1'), 'the agreeing row renders an ambiguous pill').toHaveCount(0)
-  await expect(page.getByTestId('line-item-flag-1'), 'the agreeing row renders an arithmetic pill').toHaveCount(0)
+  await expect(page.locator(`[data-testid^="line-item-chip-${n1}-"]`), 'the agreeing row renders a chip').toHaveCount(0)
+  await expect(page.getByTestId(`line-item-ambiguous-${n1}`), 'the agreeing row renders an ambiguous pill').toHaveCount(0)
+  await expect(page.getByTestId(`line-item-flag-${n1}`), 'the agreeing row renders an arithmetic pill').toHaveCount(0)
 
-  // AIR08-E2E-04 (Core AC 6, disagreement): row 2's unit_price renders two chips, chip 0 the
-  // engine's own value (with its wire region, if any), chip 1 the AI's with none; the other
-  // three cells of the same row stay ordinary inputs at the engine's own reading.
+  // AIR08-E2E-03 (Core AC 8, AI-only row): the Delivery row, printed outside the ruled table,
+  // renders in ordinary inputs, its wire cells carry reason '' and empty alternatives, and the
+  // row shows no pill -- UNMARKED (Q12).
+  const row3 = lines.find((l) => l.cells.description?.value === 'Delivery')
+  expect(row3, 'the printed Delivery row is on the wire').toBeDefined()
+  const n3 = row3!.index
+  const row3Want: Record<LineRoleName, string> = { description: 'Delivery', quantity: '1', unit_price: '90.00', line_total: '90.00' }
+  for (const role of LINE_ROLE_NAMES) {
+    const cell = row3!.cells[role] as WireLineCell
+    expect(cell.value, `row 3's ${role} did not carry the printed value on the wire`).toBe(row3Want[role])
+    expect(fieldsByName.get(cell.name)?.reason, `row 3's ${role} is not unmarked on the wire`).toBe('')
+    const alternatives: ExtractionCandidate[] = fieldsByName.get(cell.name)?.alternatives ?? []
+    expect(alternatives, `row 3's ${role} carries an alternative -- AI-only rows are unmarked`).toEqual([])
+    await expect(
+      page.getByTestId(`line-item-input-${n3}-${role}`),
+      `row 3's ${role} input did not carry the printed value`,
+    ).toHaveValue(row3Want[role])
+  }
+  await expect(page.locator(`[data-testid^="line-item-chip-${n3}-"]`), 'the AI-only row renders a chip').toHaveCount(0)
+  await expect(page.getByTestId(`line-item-ambiguous-${n3}`), 'the AI-only row renders an ambiguous pill').toHaveCount(0)
+  await expect(page.getByTestId(`line-item-flag-${n3}`), 'the AI-only row renders an arithmetic pill').toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('AIR08-E2E-02: a disagreement reaches the grid', async ({ page }) => {
+  test.skip(nightlyTarget(), 'S15: needs the AI to misread a printed unit price; covered by Go ailinesmerge_internal_test.go TestMergeAILines_*')
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'Zz AIR-08 disagreement', { name: 'ai_lines_invoice.pdf', buffer: uniqueAiLinesPdfBytes() })
+  const detail = await openExtractionReview(page)
+  const lines = wireLines(detail)
+  const fieldsByName = new Map(detail.fields.map((f) => [f.name, f]))
+  await expect(page.getByTestId('line-item-grid'), 'the fields pane rendered no line-item grid').toBeVisible({
+    timeout: 30_000,
+  })
+
+  // Row 2's unit_price renders two chips, chip 0 the engine's own value (with its wire region, if
+  // any), chip 1 the AI's with none; the other three cells stay ordinary inputs at the engine's reading.
   const row2 = lines[1]
   const upWire = row2.cells.unit_price as WireLineCell
   expect(
@@ -4082,33 +4124,13 @@ test('AIR08-E2E-01/02/03/04 (Core AC 4, 5, 6, 8): the AI reads line items once, 
     ).toHaveValue(row2OtherWant[role] as string)
   }
 
-  // AIR08-E2E-03 (Core AC 8, AI-only row): row 3 renders the AI's own values in ordinary
-  // inputs, its wire cells carry reason '' and empty alternatives, and the row shows no pill --
-  // UNMARKED (Q12).
-  const row3 = lines[2]
-  const row3Want: Record<LineRoleName, string> = { description: 'Delivery', quantity: '1', unit_price: '90.00', line_total: '90.00' }
-  for (const role of LINE_ROLE_NAMES) {
-    const cell = row3.cells[role] as WireLineCell
-    expect(cell.value, `row 3's ${role} did not carry the AI's own reading on the wire`).toBe(row3Want[role])
-    expect(fieldsByName.get(cell.name)?.reason, `row 3's ${role} is not unmarked on the wire`).toBe('')
-    const alternatives: ExtractionCandidate[] = fieldsByName.get(cell.name)?.alternatives ?? []
-    expect(alternatives, `row 3's ${role} carries an alternative -- AI-only rows are unmarked`).toEqual([])
-    await expect(
-      page.getByTestId(`line-item-input-3-${role}`),
-      `row 3's ${role} input did not carry the AI's own reading`,
-    ).toHaveValue(row3Want[role])
-  }
-  await expect(page.locator('[data-testid^="line-item-chip-3-"]'), 'the AI-only row renders a chip').toHaveCount(0)
-  await expect(page.getByTestId('line-item-ambiguous-3'), 'the AI-only row renders an ambiguous pill').toHaveCount(0)
-  await expect(page.getByTestId('line-item-flag-3'), 'the AI-only row renders an arithmetic pill').toHaveCount(0)
-
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
 test('AIR08-LAYOUT-01: with the disagreement chip row rendered, the grid scrollbox stays inside the fields pane body at every width', async ({
   page,
 }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
+  test.skip(nightlyTarget(), 'S6: measures the disagreement chip row; needs the AI to misread a printed unit price; E2E only')
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4182,11 +4204,12 @@ const NRS_HEADER_READ = {
   buyer_email: 'ap@honeywell.example',
   buyer_telephone: '+234 801 234 5678',
   buyer_street: '12 Broad Street',
-  buyer_city: 'Lagos Island',
   buyer_postal_zone: '101001',
   buyer_country: 'Nigeria',
-  buyer_lga: 'Lagos Island',
 }
+// The page prints Ikeja for both; the fake's markers say Lagos Island, which the page does not
+// print, so the PR lane files neither.
+const NRS_PLACE_PRINTED = 'Ikeja'
 const NRS_GOODS_READ = {
   description: 'Laptop Computer',
   hsn_code: '8471.30',
@@ -4222,12 +4245,11 @@ const HEADER_LABELS: Record<string, string> = {
 test('ENGI08-E2E-01/02/03 (AC-1, AC-2, AC-4, AC-6): the NRS fields reach the wire, the pane and the invoice', async ({
   page,
 }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
 
-  await extractOneDocument(page, 'Zz ENGI-08 nrs', { name: 'ai_nrs_invoice.pdf', buffer: uniqueAiNrsPdfBytes() })
+  await extractOneDocument(page, 'Zz ENGI-08 nrs', { name: 'ai_nrs_labelled_invoice.pdf', buffer: uniqueAiNrsLabelledPdfBytes() })
   const invoiceMatch = /^\/invoices\/([0-9a-fA-F-]{36})$/.exec(new URL(page.url()).pathname)
   expect(invoiceMatch, 'the steered document must land on the real invoice detail, not the quarantine').not.toBeNull()
   const invoice = await getInvoice(token, invoiceMatch![1])
@@ -4241,6 +4263,11 @@ test('ENGI08-E2E-01/02/03 (AC-1, AC-2, AC-4, AC-6): the NRS fields reach the wir
     expect({ value: wireValue(name), reason: wire.get(name)?.reason }, `${name} on the wire`).toEqual({ value, reason: '' })
     await expect(page.getByTestId(`extraction-input-${name}`), `${name} in the pane`).toHaveValue(value)
   }
+  // City and LGA hold on both lanes: printed on the nightly, refused as unprinted on the PR lane.
+  const placeWant = nightlyTarget() ? NRS_PLACE_PRINTED : null
+  for (const name of ['buyer_city', 'buyer_lga']) {
+    expect(wireValue(name), `${name} on the wire`).toBe(placeWant)
+  }
   for (const [role, value] of Object.entries(NRS_GOODS_READ)) {
     expect(wireValue(`line_items[1].${role}`), `row 1 ${role} on the wire`).toBe(value)
   }
@@ -4253,22 +4280,21 @@ test('ENGI08-E2E-01/02/03 (AC-1, AC-2, AC-4, AC-6): the NRS fields reach the wir
     buyer_email: invoice.buyer_email,
     buyer_telephone: invoice.buyer_telephone,
     buyer_street: invoice.buyer_street,
-    buyer_city: invoice.buyer_city,
     buyer_postal_zone: invoice.buyer_postal_zone,
     buyer_country: invoice.buyer_country,
-    buyer_lga: invoice.buyer_lga,
   }, 'the filed invoice header').toEqual({ ...NRS_HEADER_READ, due_date: '2026-08-13T00:00:00Z' })
+  expect({ buyer_city: invoice.buyer_city, buyer_lga: invoice.buyer_lga }, 'the filed city and LGA').toEqual({
+    buyer_city: placeWant,
+    buyer_lga: placeWant,
+  })
   const lines = [...(invoice.line_items ?? [])].sort((a, b) => a.line_no - b.line_no)
   expect(lines.map((l) => l.line_no), 'the filed invoice holds the two printed rows').toEqual([1, 2])
   expect(lines[0], 'the filed goods row').toMatchObject(NRS_GOODS_READ)
   expect(lines[1], 'the filed service row').toMatchObject(NRS_SERVICE_READ)
 
-  // ENGI08-E2E-02 (AC-6): the AI answered `Ogun` and `Exempt`, words the page never prints.
-  // reason `unreadable` is ReasonUnreadable (internal/extraction).
-  expect(
-    { value: wireValue('buyer_state'), reason: wire.get('buyer_state')?.reason },
-    'buyer_state is the AI-only word the page does not print',
-  ).toEqual({ value: null, reason: 'unreadable' })
+  // ENGI08-E2E-02 (AC-6): the page prints no state; the fake's `Ogun` and `Exempt` are not printed
+  // either, and the real AI answers null. Only the value holds on both lanes, never the reason.
+  expect(wireValue('buyer_state'), 'buyer_state is a word the page does not print').toBeNull()
   expect(invoice.buyer_state, 'the invoice must not store the unprinted state').toBeNull()
   expect(wire.has('line_items[2].tax_category'), 'row 2 carries no tax_category on the wire').toBe(false)
   expect(lines[1].tax_category, 'row 2 stores no tax_category').toBeNull()
@@ -4344,7 +4370,7 @@ test('ENGI08-E2E-01/02/03 (AC-1, AC-2, AC-4, AC-6): the NRS fields reach the wir
 const JEV_DOUBT_READ = { invoice_number: 'JD-3310', supplier_name: 'Kaduna Textiles Limited', supplier_tin: '23456789-0001' }
 
 test('CHECK03-E2E-01 (AC-4, AC-5, AC-10): a value Jev doubts shows the pill, keeps its value, and files', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
+  test.skip(nightlyTarget(), 'S7: needs real Jev to doubt a value the engine read correctly; covered by Go TestRLS_ExtractWorkerWritesADoubtAsUnreadableWithItsValue and jevcheck_internal_test.go')
   test.setTimeout(300_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
@@ -4410,7 +4436,7 @@ test('CHECK03-E2E-01 (AC-4, AC-5, AC-10): a value Jev doubts shows the pill, kee
 })
 
 test("CHECK03-LAYOUT-01: the doubted invoice number's pill stays inside its cell at every width", async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
+  test.skip(nightlyTarget(), 'S8: measures the doubt pill; needs real Jev to doubt a value the engine read correctly; E2E only')
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4516,21 +4542,20 @@ test("CHECK03-LAYOUT-01: the doubted invoice number's pill stays inside its cell
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// read: fxJevReceiptLines (internal/extraction/fixtures_test.go)
+// read: fxHonestReceiptLines (internal/extraction/fixtures_test.go)
 const JEV_RECEIPT_READ = { invoice_number: 'JR-4410', supplier_name: 'Owerri Traders Limited', supplier_tin: '34567890-0001' }
 // copy: DOCUMENT_TYPE_NOTICE.receipt (frontend/app/src/lib/extractionReview.ts)
 const RECEIPT_NOTICE =
   'This looks like a receipt, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'
 
 test('CHECK04-E2E-01 (AC-4, AC-5, AC-8): a document read as a receipt shows the banner, keeps its rows, and files; a plain upload shows none', async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Two extractions on a possibly cold sidecar, then a four-width sweep.
   test.setTimeout(600_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
 
   // -- receipt leg -- extractOneDocument already waited on invoice-detail: the receipt filed a draft.
-  await extractOneDocument(page, 'Zz CHECK-04 receipt', { name: 'jev_receipt_invoice.pdf', buffer: uniqueJevReceiptPdfBytes() })
+  await extractOneDocument(page, 'Zz CHECK-04 receipt', { name: 'honest_receipt_invoice.pdf', buffer: uniqueHonestReceiptPdfBytes() })
   const invoiceMatch = /^\/invoices\/([0-9a-fA-F-]{36})$/.exec(new URL(page.url()).pathname)
   expect(invoiceMatch, 'the receipt must land on the real invoice detail, not the quarantine').not.toBeNull()
   const invoiceId = invoiceMatch![1]
@@ -4622,7 +4647,7 @@ test('CHECK04-E2E-01 (AC-4, AC-5, AC-8): a document read as a receipt shows the 
     contentType: 'application/json',
   })
 
-  // -- plain leg -- the fake's default answer is a tax invoice, so no verdict and no strip.
+  // -- plain leg -- rich_invoice.pdf is a tax invoice, so no verdict and no strip.
   await extractOneDocument(page, 'Zz CHECK-04 plain')
   const plain = await openExtractionReview(page)
   expect(plain.document_type, 'a plain upload carries a verdict').toBeNull()
@@ -4632,14 +4657,13 @@ test('CHECK04-E2E-01 (AC-4, AC-5, AC-8): a document read as a receipt shows the 
 })
 
 test('CRDDBTNOTE05: the note panel fits the review at every wide width', async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Two accepted originals, one cold-sidecar extraction, then a four-width sweep.
   test.setTimeout(600_000)
   const errors = collectErrors(page)
   const longNumber = `INV-LONG-${'X'.repeat(31)}`
   expect(longNumber, 'the long original must be 40 characters').toHaveLength(40)
 
-  await extractHeldNote(page, 'Zz CRDDBTNOTE-05 layout', { name: 'jev_credit_note.pdf', buffer: uniqueJevCreditNotePdfBytes() }, [
+  await extractHeldNote(page, 'Zz CRDDBTNOTE-05 layout', { name: 'honest_credit_note.pdf', buffer: uniqueHonestCreditNotePdfBytes() }, [
     longNumber,
     'INV-ORIG-3401',
   ])
@@ -4700,13 +4724,12 @@ test('CRDDBTNOTE05: the note panel fits the review at every wide width', async (
 
 
 test('CRDDBTNOTE05: a note PDF imports as a note on the review screen', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Two accepted originals, one cold-sidecar extraction, one import.
   test.setTimeout(600_000)
   const errors = collectErrors(page)
 
   // The read original goes first, so newest-first alone would not preselect it.
-  await extractHeldNote(page, 'Zz CRDDBTNOTE-05 import', { name: 'jev_credit_note.pdf', buffer: uniqueJevCreditNotePdfBytes() }, [
+  await extractHeldNote(page, 'Zz CRDDBTNOTE-05 import', { name: 'honest_credit_note.pdf', buffer: uniqueHonestCreditNotePdfBytes() }, [
     'INV-ORIG-3401',
     `INV-OTHER-${freshTin()}`,
   ])
@@ -4734,20 +4757,19 @@ test('CRDDBTNOTE05: a note PDF imports as a note on the review screen', async ({
 })
 
 test('CRDDBTNOTE05: a held file in a two-file run keeps its way back', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(600_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `Zz CRDDBTNOTE-05 held ${Date.now()}`, tin: freshTin() })
   await acceptedOriginal(token, entity.id, 'INV-ORIG-3401')
 
-  const noteName = 'jev_credit_note.pdf'
-  const denseName = 'dense_invoice.pdf'
+  const noteName = 'honest_credit_note.pdf'
+  const denseName = 'wild_scanned_no_number.pdf'
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await runDocumentsIn(page, token, [
-    { name: noteName, mimeType: 'application/pdf', buffer: uniqueJevCreditNotePdfBytes() },
-    { name: denseName, mimeType: 'application/pdf', buffer: uniqueDensePdfBytes() },
+    { name: noteName, mimeType: 'application/pdf', buffer: uniqueHonestCreditNotePdfBytes() },
+    { name: denseName, mimeType: 'application/pdf', buffer: uniqueWildNoNumberPdfBytes() },
   ])
 
   await expect

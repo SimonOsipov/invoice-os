@@ -470,8 +470,13 @@ func TestSendAgain_WorkerSubmitsWithTheOriginalKey(t *testing.T) {
 	if s.RiverJobID == 0 {
 		t.Fatal("SendAgain left no river_job_id")
 	}
+	// The worker runs the args SendAgain inserted, not hand-made ones.
+	row, ok := r.readRiver(t, s.RiverJobID)
+	if !ok {
+		t.Fatalf("river row %d not found", s.RiverJobID)
+	}
 	adapter := &recordingAdapter{}
-	if err := r.work(t, adapter, job.args, s.RiverJobID); err != nil {
+	if err := r.work(t, adapter, row.Args, s.RiverJobID); err != nil {
 		t.Fatalf("Work on the sent-again job: %v", err)
 	}
 	if len(adapter.keys) != 1 || adapter.keys[0] != job.key {

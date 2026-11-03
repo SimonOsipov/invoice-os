@@ -5544,7 +5544,7 @@ describe('failureExplanation', () => {
     for (const kind of all) {
       const r = failureExplanation(kind)
       const joined = `${r.headline} ${r.detail} ${r.nextStep}`
-      expect(joined, `kind=${String(kind)}`).not.toMatch(/notified|alerted|our team|we've been|looking into|monitor/i)
+      expect(joined, `kind=${String(kind)}`).not.toMatch(/notif|alerted|our team|we've been|looking into|monitor/i)
     }
   })
 

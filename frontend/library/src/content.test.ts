@@ -142,7 +142,7 @@ describe('content', () => {
   it('content_sendAgainWordsCoverOnlyWhatShips', () => {
     const f = byId('send-again')
     const text = [f.title, f.short, f.desc, ...f.benefits, JSON.stringify(f.sc)].join(' ')
-    for (const w of [/prepared/, /did not reply/, /admin or a reviewer/, /not filed twice/]) expect(text).toMatch(w)
+    for (const w of [/prepared/, /did not reply/, /admin or a reviewer/, /not filed twice/]) expect(f.desc).toMatch(w)
     expect(text).not.toMatch(/notif|automatic|received|acknowledg|\bFIRS\b/i)
   })
 

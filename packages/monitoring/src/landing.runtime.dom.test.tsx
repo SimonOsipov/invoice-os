@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import * as Sentry from '@sentry/react'
-import { getRootSpan, serializeEnvelope, spanToJSON } from '@sentry/core'
+import { getRootSpan, serializeEnvelope, spanToStaticSpanJSON } from '@sentry/core'
 import type { Envelope, Span } from '@sentry/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sentryOptions, type MonitoringConfig, type Service } from './options'
 import { RELEASE } from './release'
+import { clearScope } from './sentryScope.testutil'
 import { captureApiFailure } from './report'
 
 // Own file: `navigationsWired` in options.ts is module-global, so an earlier `app` boot would patch history for landing.
@@ -81,9 +82,9 @@ async function reset(): Promise<void> {
   const open = Sentry.getActiveSpan()
   if (open) getRootSpan(open).end()
   await Sentry.close()
-  Sentry.getCurrentScope().clear()
-  Sentry.getIsolationScope().clear()
-  Sentry.getGlobalScope().clear()
+  clearScope(Sentry.getCurrentScope())
+  clearScope(Sentry.getIsolationScope())
+  clearScope(Sentry.getGlobalScope())
   Sentry.getCurrentScope().setClient(undefined)
 }
 
@@ -208,7 +209,7 @@ describe('landing tracing', () => {
     const sink: string[] = []
     boot(sink)
     const pageload = pageLoad()
-    expect(spanToJSON(pageload).op).toBe('pageload')
+    expect(spanToStaticSpanJSON(pageload).op).toBe('pageload')
 
     let popstates = 0
     const onPop = () => popstates++
@@ -225,7 +226,7 @@ describe('landing tracing', () => {
     expect(window.location.pathname + window.location.hash).toBe('/privacy#top')
 
     expect(pageLoad(), 'still the page-load span').toBe(pageload)
-    expect(spanToJSON(pageload).timestamp, 'page load not cut short').toBeUndefined()
+    expect(spanToStaticSpanJSON(pageload).timestamp, 'page load not cut short').toBeUndefined()
     pageload.end()
     await Sentry.flush(1000)
     const tx = items(sink, 'transaction')
@@ -429,9 +430,9 @@ describe('what the landing SDK sends', () => {
     root.end()
     await Sentry.flush(1000)
 
-    const spans = items(sink, 'span')
+    const spans = items(sink, 'span').flatMap((i) => i.body.items as any[])
     expect(spans.length, 'the standalone span').toBeGreaterThan(0)
-    expect(spans.some((s) => (s.body.description ?? s.body.name) === 'button[title="[redacted]"]')).toBe(true)
+    expect(spans.some((s) => s.name === 'button[title="[redacted]"]')).toBe(true)
     const tx = items(sink, 'transaction')
     expect(tx.length, 'the page-load transaction').toBe(1)
     expect(tx[0].body.contexts.trace.data['lcp.element']).toBe('img[alt="[redacted]"]')

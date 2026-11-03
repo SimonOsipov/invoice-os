@@ -141,7 +141,7 @@ describe('sentryOptions more', () => {
       expect(tx.request, `${service} beforeSendTransaction drops request`).toBeUndefined()
       expect(JSON.stringify(tx), service).not.toContain(M)
 
-      const span = o.beforeSendSpan!({ span_id: 's', description: `b[title="${M}"]`, data: {} } as unknown as SpanJSON)
+      const span = (o.beforeSendSpan as unknown as (s: SpanJSON) => SpanJSON)({ span_id: 's', description: `b[title="${M}"]`, data: {} } as unknown as SpanJSON)
       expect(JSON.stringify(span), service).not.toContain(M)
       expect((span as SpanJSON).description).toBe('b[title="[redacted]"]')
 

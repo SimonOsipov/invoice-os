@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import * as Sentry from '@sentry/react'
-import { getRootSpan, serializeEnvelope, spanToJSON } from '@sentry/core'
+import { getRootSpan, serializeEnvelope, spanToStaticSpanJSON } from '@sentry/core'
 import type { Envelope } from '@sentry/core'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -9,6 +9,7 @@ import { initMonitoring } from './init'
 import { sentryOptions, type MonitoringConfig, type Service } from './options'
 import { RecoveryScreen } from './RecoveryScreen'
 import { RELEASE } from './release'
+import { clearScope } from './sentryScope.testutil'
 import { markReported, wasReported } from './reported'
 import { captureApiFailure, type ApiFailureInput } from './report'
 
@@ -76,9 +77,9 @@ async function reset(): Promise<void> {
   const open = Sentry.getActiveSpan()
   if (open) getRootSpan(open).end()
   await Sentry.close()
-  Sentry.getCurrentScope().clear()
-  Sentry.getIsolationScope().clear()
-  Sentry.getGlobalScope().clear()
+  clearScope(Sentry.getCurrentScope())
+  clearScope(Sentry.getIsolationScope())
+  clearScope(Sentry.getGlobalScope())
   Sentry.getCurrentScope().setClient(undefined)
 }
 
@@ -570,7 +571,7 @@ describe('what the SDK sends', () => {
     await Sentry.flush(1000)
 
     expect(items(sink, 'event').length, 'the event').toBe(1)
-    expect(items(sink, 'span').length, 'the standalone span').toBeGreaterThan(0)
+    expect(items(sink, 'span').flatMap((i) => i.body.items as any[]).length, 'the standalone span').toBeGreaterThan(0)
     expect(items(sink, 'transaction').length, 'the transaction').toBe(1)
     const raw = sink.join('\n')
     for (const needle of ['USER-NEEDLE-1', 'user-needle@example.test', '203.0.113.9', 'client.address', '"user":']) expect(raw).not.toContain(needle)
@@ -690,24 +691,24 @@ describe('what the SDK sends', () => {
     const sink: string[] = []
     boot(sink, 'app', { routeName })
     const pageload = getRootSpan(Sentry.getActiveSpan()!)
-    expect(spanToJSON(pageload).op).toBe('pageload')
+    expect(spanToStaticSpanJSON(pageload).op).toBe('pageload')
 
     window.history.replaceState(null, '', '/settings/members')
     window.history.replaceState(null, '', `/settings/members?q=${TIN}`)
     expect(getRootSpan(Sentry.getActiveSpan()!), 'still the page-load span').toBe(pageload)
-    expect(spanToJSON(pageload).timestamp, 'page load not cut short').toBeUndefined()
+    expect(spanToStaticSpanJSON(pageload).timestamp, 'page load not cut short').toBeUndefined()
 
     window.history.pushState(null, '', `/invoices/${UUID}`)
     const nav = getRootSpan(Sentry.getActiveSpan()!)
-    expect(spanToJSON(nav).op).toBe('navigation')
-    expect(spanToJSON(pageload).timestamp, 'a real navigation ends the page load').toBeDefined()
+    expect(spanToStaticSpanJSON(nav).op).toBe('navigation')
+    expect(spanToStaticSpanJSON(pageload).timestamp, 'a real navigation ends the page load').toBeDefined()
     nav.end()
 
     window.history.replaceState(null, '', `/invoices/${UUID}?x=1`)
     const popped = new Promise((r) => window.addEventListener('popstate', r, { once: true }))
     window.history.back()
     await popped
-    expect(spanToJSON(getRootSpan(Sentry.getActiveSpan()!)).op, 'popstate is a navigation').toBe('navigation')
+    expect(spanToStaticSpanJSON(getRootSpan(Sentry.getActiveSpan()!)).op, 'popstate is a navigation').toBe('navigation')
     getRootSpan(Sentry.getActiveSpan()!).end()
     await Sentry.flush(1000)
     const ops = items(sink, 'transaction').map((i) => `${i.body.contexts.trace.op} ${i.body.transaction}`)
@@ -726,7 +727,7 @@ describe('what the SDK sends', () => {
 
     window.history.pushState({ n: 2 }, '', '/invoices')
     const nav = getRootSpan(Sentry.getActiveSpan()!)
-    expect(spanToJSON(nav).op, 'control: a push to a new URL navigates').toBe('navigation')
+    expect(spanToStaticSpanJSON(nav).op, 'control: a push to a new URL navigates').toBe('navigation')
 
     window.history.pushState({ n: 3 }, '', '/invoices')
     expect(getRootSpan(Sentry.getActiveSpan()!), 'push to the current URL').toBe(nav)
@@ -736,7 +737,7 @@ describe('what the SDK sends', () => {
     await popped
     expect(window.location.pathname).toBe('/invoices')
     expect(getRootSpan(Sentry.getActiveSpan()!), 'popstate onto the same URL').toBe(nav)
-    expect(spanToJSON(nav).timestamp).toBeUndefined()
+    expect(spanToStaticSpanJSON(nav).timestamp).toBeUndefined()
   })
 
   it('apiFailures_backToBackRepeatsAreDeduplicated', async () => {
@@ -770,9 +771,9 @@ describe('what the SDK sends', () => {
     root.end()
     await Sentry.flush(1000)
 
-    const spans = items(sink, 'span')
+    const spans = items(sink, 'span').flatMap((i) => i.body.items as any[])
     expect(spans.length, 'the standalone span').toBeGreaterThan(0)
-    expect(spans.some((s) => (s.body.description ?? s.body.name) === 'button[title="[redacted]"]')).toBe(true)
+    expect(spans.some((s) => s.name === 'button[title="[redacted]"]')).toBe(true)
     const tx = items(sink, 'transaction')
     expect(tx.length, 'the page-load transaction').toBe(1)
     expect(tx[0].body.contexts.trace.data['lcp.element']).toBe('img[alt="[redacted]"]')

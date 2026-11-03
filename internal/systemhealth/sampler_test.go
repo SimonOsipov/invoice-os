@@ -32,7 +32,8 @@ func fakeFleet(status string, down int, err error) FleetReader {
 
 func TestSampler_RecordsTheFleetAndTheSlot(t *testing.T) {
 	super, app := dbTestPools(t)
-	for _, tc := range []struct {
+	base := testSlot(t, super, 2004, 0)
+	for i, tc := range []struct {
 		name   string
 		fleet  FleetReader
 		status string
@@ -43,7 +44,15 @@ func TestSampler_RecordsTheFleetAndTheSlot(t *testing.T) {
 		{"degraded", fakeFleet("degraded", 2, nil), "degraded", intp(2), false},
 		{"error", fakeFleet("", 0, errors.New("gateway down")), "unknown", nil, true},
 	} {
-		slot := testSlot(t, super, 2004, 0)
+		// One base draw, one slot per case: independent draws can collide.
+		slot := base.Add(time.Duration(i) * SampleInterval)
+		t.Cleanup(func() {
+			_, _ = super.Exec(context.Background(), `DELETE FROM public.health_samples WHERE taken_at = $1`, slot)
+		})
+		// Record is DO NOTHING on a taken slot, so a held slot would make the row read below lie.
+		if _, held := readRow(t, super, slot); held {
+			t.Fatalf("%s: slot already holds a row from an earlier case", tc.name)
+		}
 		var logs bytes.Buffer
 		s := &Sampler{Store: &Store{Pool: app}, Fleet: tc.fleet, Logger: slog.New(slog.NewTextHandler(&logs, nil)),
 			Now: func() time.Time { return slot.Add(2*time.Minute + 13*time.Second) }}

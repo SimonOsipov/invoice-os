@@ -237,8 +237,9 @@ func TestMain_DeletingTheMarksFileIsNotADeletionAndReleasesNothing(t *testing.T)
 func TestMain_MarkAddedAsANewFileWithCRLFReleasesTheDeletion(t *testing.T) {
 	r := newPRRepo(t)
 	r.rm(fileA)
-	// a blank CRLF line follows: main trims the diff text, which would eat the last line's CR
-	r.write("deleted.txt", fileA+": crlf reason\r\n\r\n")
+	r.rm(fileB)
+	// a line follows the CRLF mark: main trims the file text, which would eat the last line's CR
+	r.write("deleted.txt", fileA+": crlf reason\r\n"+fileB+": b\n")
 	r.commit("del+mark")
 	r.want(0, "pr", pathOf(fileA)+": crlf reason\n")
 }

@@ -178,6 +178,7 @@ func TestParseChanges_RejectsMalformedRecords(t *testing.T) {
 		":100644 000000 aaa 000 D\x00",
 		":100644 100644 ccc ccc R100\x00migrations/o.sql\x00",
 		"migrations/a.sql\x00",
+		"100644 000000 aaa 000 D\x00migrations/a.sql\x00",
 	} {
 		if _, _, err := parseChanges(raw); err == nil {
 			t.Fatalf("parseChanges(%q) must error", raw)

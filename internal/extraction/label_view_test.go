@@ -310,6 +310,9 @@ func lsCorpusReads(t *testing.T) map[string][]extraction.TokenPage {
 	}
 	for _, p := range pdfs {
 		name := filepath.Base(p)
+		if fxHeavyReads[name] {
+			continue
+		}
 		reads["pdfium:"+name] = rvCorpusPages(t, name)
 	}
 

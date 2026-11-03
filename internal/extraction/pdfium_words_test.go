@@ -395,8 +395,8 @@ func TestPDFiumWords_SplitGapStaysInsideItsMeasuredWindow(t *testing.T) {
 // slice must be byte-identical to today's, index for index.
 func TestPDFiumWords_ASingleRectTokenIsUnchanged(t *testing.T) {
 	names := pdcNonChromeFixtures(t)
-	if len(names) != 76 {
-		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 76", len(names))
+	if len(names) != 75 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 75", len(names))
 	}
 
 	compared := 0
@@ -439,7 +439,7 @@ func TestPDFiumWords_OnlyTheTwoChromeFixturesMove(t *testing.T) {
 	// (TestChromeRegister_TheContentStreamEmitsOneTjPerGlyph) hold these two numbers still.
 	chromeBefore := map[string]int{chrRegister: 802, chrRegisterTwin: 800}
 
-	names := slices.Sorted(maps.Keys(fingerprintGoldens))
+	names := fxWalked(slices.Sorted(maps.Keys(fingerprintGoldens)))
 	if len(names) < fgGoldenFloor {
 		t.Fatalf("fingerprintGoldens holds %d row(s), want at least %d", len(names), fgGoldenFloor)
 	}
@@ -508,7 +508,7 @@ func TestPDFiumWords_ALineOfOneRectEmitsThatRect(t *testing.T) {
 func TestPDFiumWords_NoTokenVanishes(t *testing.T) {
 	const groupFloor = 600
 
-	names := slices.Sorted(maps.Keys(fingerprintGoldens))
+	names := fxWalked(slices.Sorted(maps.Keys(fingerprintGoldens)))
 	if len(names) < fgGoldenFloor {
 		t.Fatalf("fingerprintGoldens holds %d row(s), want at least %d", len(names), fgGoldenFloor)
 	}

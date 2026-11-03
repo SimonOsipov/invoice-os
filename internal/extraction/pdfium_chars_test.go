@@ -71,7 +71,7 @@ func pdcNonChromeFixtures(t *testing.T) []string {
 	}
 	var out []string
 	for name := range fingerprintGoldens {
-		if !fgChromeNames[name] {
+		if !fgChromeNames[name] && !fxHeavyReads[name] {
 			out = append(out, name)
 		}
 	}
@@ -183,7 +183,7 @@ func TestPDFiumText_CharsExistOnlyAtModeBoth(t *testing.T) {
 // ModeBoth -- asserting equal rects and that only ModeBoth carries chars. Reds if a future
 // change ever reverts the rects themselves, which pinning a mode constant alone cannot catch.
 func TestPDFiumText_ModeBothReturnsTheSameRects(t *testing.T) {
-	names := slices.Sorted(maps.Keys(fingerprintGoldens))
+	names := fxWalked(slices.Sorted(maps.Keys(fingerprintGoldens)))
 	if len(names) < fgGoldenFloor {
 		t.Fatalf("fingerprintGoldens holds %d row(s), want at least %d", len(names), fgGoldenFloor)
 	}
@@ -374,8 +374,8 @@ func TestCharsIn_ReproducesEveryRectTextOnAWordLevelPage(t *testing.T) {
 // fixture except the two Chrome ones: the loop is identical and covers the rest for free.
 func TestCharsIn_ReproducesEveryRectTextOnTheCorpus(t *testing.T) {
 	names := pdcNonChromeFixtures(t)
-	if len(names) != 76 {
-		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 76 (78 committed minus %s and %s)", len(names), chrRegister, chrRegisterTwin)
+	if len(names) != 75 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 75 (77 walked minus %s and %s)", len(names), chrRegister, chrRegisterTwin)
 	}
 
 	totalRects := 0
@@ -554,7 +554,7 @@ func TestPDFiumReader_TextCharsUnchanged(t *testing.T) {
 		t.Fatalf("pdcTextCharsGoldens holds %d row(s), want at least %d", len(pdcTextCharsGoldens), fgGoldenFloor)
 	}
 
-	for _, name := range slices.Sorted(maps.Keys(pdcTextCharsGoldens)) {
+	for _, name := range fxWalked(slices.Sorted(maps.Keys(pdcTextCharsGoldens))) {
 		t.Run(name, func(t *testing.T) {
 			want := pdcTextCharsGoldens[name]
 			_, res := ptRead(t, name)
@@ -587,8 +587,8 @@ func TestPDFiumReader_TextCharsGoldensCoverEveryCommittedFixture(t *testing.T) {
 // not against the other's.
 func TestPDFiumTokens_OneTokenPerRectOnEveryWordLevelFixture(t *testing.T) {
 	names := pdcNonChromeFixtures(t)
-	if len(names) != 76 {
-		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 76", len(names))
+	if len(names) != 75 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 75", len(names))
 	}
 
 	totalTokens := 0

@@ -2067,6 +2067,47 @@ const (
 	fxOverflowWordsPerRow = 231
 )
 
+// fxHeavyReads: files every per-PDF corpus walk skips. A deliberate context overflow, one pdfium
+// read costs ~50s; TestFixtures_AIOverflowReadsOnceAndFits is its only reader.
+var fxHeavyReads = map[string]bool{fxAIOverflow: true}
+
+func fxWalked(names []string) []string {
+	return slices.DeleteFunc(slices.Clone(names), func(n string) bool { return fxHeavyReads[n] })
+}
+
+// TestFixtures_AIOverflowReadsOnceAndFits: under the 15 MiB upload cap (importer/handlers.go),
+// at least 2,000,000 digits, and the golden fingerprint and char count hold.
+func TestFixtures_AIOverflowReadsOnceAndFits(t *testing.T) {
+	raw := fxRead(t, fxAIOverflow)
+	if len(raw) >= 15<<20 {
+		t.Errorf("%s is %d bytes, want under 15 MiB", fxAIOverflow, len(raw))
+	}
+	var pages []extraction.TokenPage
+	res, err := extraction.NewPDFiumReader().Read(t.Context(), extraction.Document{Bytes: raw, ContentType: "application/pdf"}, extraction.CollectTokens(&pages))
+	if err != nil {
+		t.Fatalf("read %s: %v", fxAIOverflow, err)
+	}
+	if want := pdcTextCharsGoldens[fxAIOverflow]; res.Pages != want.pages || res.PagesWithText != want.withText || res.TextChars != want.textChars {
+		t.Errorf("Read reported %+v, want %+v", res, want)
+	}
+	if got, want := extraction.Fingerprint(pages), fingerprintGoldens[fxAIOverflow]; got != want {
+		t.Errorf("Fingerprint = %s, want %s", got, want)
+	}
+	digits := 0
+	for _, p := range pages {
+		for _, tk := range p.Tokens {
+			for _, r := range tk.Text {
+				if r >= '0' && r <= '9' {
+					digits++
+				}
+			}
+		}
+	}
+	if digits < 2_000_000 {
+		t.Errorf("%s holds %d digits, want at least 2000000", fxAIOverflow, digits)
+	}
+}
+
 // fxHonestCreditNoteLines: jev_credit_note.pdf's page under a CREDIT NOTE title and a Reason line.
 func fxHonestCreditNoteLines() []fxLine {
 	return append([]fxLine{

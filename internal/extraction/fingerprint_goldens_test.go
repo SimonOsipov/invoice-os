@@ -109,7 +109,7 @@ func TestFingerprint_GoldensHoldForEveryCommittedFixture(t *testing.T) {
 		t.Fatalf("fingerprintGoldens holds %d row(s), want at least %d", len(fingerprintGoldens), fgGoldenFloor)
 	}
 
-	for _, name := range slices.Sorted(maps.Keys(fingerprintGoldens)) {
+	for _, name := range fxWalked(slices.Sorted(maps.Keys(fingerprintGoldens))) {
 		t.Run(name, func(t *testing.T) {
 			pages := rvCorpusPages(t, name)
 			if got, want := extraction.Fingerprint(pages), fingerprintGoldens[name]; got != want {

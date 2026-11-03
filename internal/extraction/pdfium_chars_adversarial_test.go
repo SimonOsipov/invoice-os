@@ -107,7 +107,7 @@ func TestCharsIn_IgnoresCharAngle(t *testing.T) {
 	}
 
 	rotated, scanned := 0, 0
-	for _, name := range slices.Sorted(maps.Keys(fingerprintGoldens)) {
+	for _, name := range fxWalked(slices.Sorted(maps.Keys(fingerprintGoldens))) {
 		pages, err := extraction.PDFiumStructuredTextForTest(t.Context(), ptDoc(t, name), "both")
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -140,7 +140,7 @@ const pdcMinTotalChars = 9000
 // interloper, measured. 03 merges rects geometrically, so this is the guard that reds if a merged
 // box ever spans stream-distant material. The gap detector is itself pinned below.
 func TestCharsIn_CollectsAContiguousStreamRun(t *testing.T) {
-	names := slices.Sorted(maps.Keys(fingerprintGoldens))
+	names := fxWalked(slices.Sorted(maps.Keys(fingerprintGoldens)))
 	if len(names) < fgGoldenFloor {
 		t.Fatalf("fingerprintGoldens holds %d row(s), want at least %d", len(names), fgGoldenFloor)
 	}
@@ -236,7 +236,7 @@ func TestCharsIn_IdenticalBoxesReadTheSameText(t *testing.T) {
 	}
 
 	dupes := 0
-	for _, name := range slices.Sorted(maps.Keys(fingerprintGoldens)) {
+	for _, name := range fxWalked(slices.Sorted(maps.Keys(fingerprintGoldens))) {
 		pages, err := extraction.PDFiumStructuredTextForTest(t.Context(), ptDoc(t, name), "both")
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)

@@ -74,9 +74,9 @@ func Split(changes []Change, onBase, onMain []string, exempt bool) (vsBase, vsMa
 	return vsBase, vsMain
 }
 
-// exemptRename reports an exact rename of a path on base and not on main, when exempt is true.
+// exemptRename reports an exact rename to a migration of a path on base and not on main, when exempt is true.
 func exemptRename(c Change, base, main map[string]bool, exempt bool) bool {
-	return exempt && c.Exact && c.Old != "" && base[c.Old] && !main[c.Old]
+	return exempt && c.Exact && c.Old != "" && isMigration(c.New) && base[c.Old] && !main[c.Old]
 }
 
 // Vacated returns the old name of every rename that Split does not exempt.

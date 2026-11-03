@@ -16,7 +16,7 @@ const (
 )
 
 func unmarked(path, name string) string {
-	return "::error file=" + path + "::" + path + " was deleted. Production has applied every migration on main, so its applied versions and the files now disagree. Restore it, or add to migrations/deleted.txt: " + name + ": <why the deletion is safe>"
+	return "::error file=" + path + "::" + path + " was deleted. It is on the base branch, so deleting it breaks the Down chain and disagrees with any database that applied it. Restore it, or add to migrations/deleted.txt: " + name + ": <why the deletion is safe>"
 }
 
 func orphanOf(name string) string { return strings.Replace(orphan, "%s", name, 1) }
@@ -84,20 +84,21 @@ func TestDeletedOnBase_KeepsOnlyMigrationSQLOnBase(t *testing.T) {
 	wantStrings(t, "DeletedOnBase", DeletedOnBase(deleted, onBase), []string{"migrations/a.sql"})
 }
 
-func TestAddedLines_ReadsContentAfterTheFirstHunk(t *testing.T) {
-	diff := "diff --git a/migrations/deleted.txt b/migrations/deleted.txt\nindex 1..2 100644\n--- a/migrations/deleted.txt\n+++ b/migrations/deleted.txt\n@@ -0,0 +1,2 @@\n+a.sql: r\n++odd\n"
-	wantStrings(t, "AddedLines", AddedLines(diff), []string{"a.sql: r", "+odd"})
-}
-
-func TestAddedLines_EmptyDiffGivesNothing(t *testing.T) {
-	if got := AddedLines(""); len(got) != 0 {
-		t.Fatalf("AddedLines(\"\") = %q", got)
+func TestNewMarks_SubtractsBaseMarksAfterTrimming(t *testing.T) {
+	head := []string{"b.sql: two\r", "a.sql: one", "  c.sql :  three  ", "a.sql: one", "d.sql: edited"}
+	base := []string{"a.sql: one ", "c.sql: three", "d.sql: old", ""}
+	got := NewMarks(head, base)
+	want := []Mark{{"b.sql", "two"}, {"a.sql", "one"}, {"d.sql", "edited"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("NewMarks = %+v, want %+v", got, want)
 	}
 }
 
-func TestAddedLines_IgnoresRemovedLinesAndNoNewlineMarker(t *testing.T) {
-	diff := "--- a/migrations/deleted.txt\n+++ b/migrations/deleted.txt\n@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new\n"
-	wantStrings(t, "AddedLines", AddedLines(diff), []string{"new"})
+func TestNewMarks_NoBaseKeepsEveryHeadMark(t *testing.T) {
+	got := NewMarks([]string{"a.sql: r"}, nil)
+	if !reflect.DeepEqual(got, []Mark{{"a.sql", "r"}}) {
+		t.Fatalf("NewMarks = %+v", got)
+	}
 }
 
 func TestParseMarks_BlankAndWhitespaceOnlyLinesAreSkipped(t *testing.T) {
@@ -156,17 +157,39 @@ func TestVacated_ReturnsOldOfEveryRenameSplitDoesNotExempt(t *testing.T) {
 	wantStrings(t, "vsMain", vsMain, []string{"migrations/20260210_x.sql"})
 }
 
-func TestParseChanges_ReadsADeletedLine(t *testing.T) {
-	raw := ":100644 000000 aaa 000 D\tmigrations/a.sql\n:000000 100644 000 bbb A\tmigrations/n.sql"
+func TestParseChanges_ReadsNULSeparatedRecords(t *testing.T) {
+	raw := ":100644 000000 aaa 000 D\x00migrations/a.sql\x00" +
+		":000000 100644 000 bbb A\x00migrations/n.sql\x00" +
+		":100644 100644 ccc ccc R100\x00migrations/o.sql\x00migrations/p.sql\x00" +
+		":100644 000000 ddd 000 D\x00migrations/caf\u00e9\ttab.sql\x00"
 	cs, del, err := parseChanges(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cs) != 1 || cs[0].New != "migrations/n.sql" {
-		t.Fatalf("changes = %+v", cs)
+	want := []Change{{New: "migrations/n.sql"}, {Old: "migrations/o.sql", New: "migrations/p.sql", Exact: true}}
+	if !reflect.DeepEqual(cs, want) {
+		t.Fatalf("changes = %+v, want %+v", cs, want)
 	}
-	wantStrings(t, "deleted", del, []string{"migrations/a.sql"})
-	if _, _, err := parseChanges(":100644 000000 aaa 000 D\tmigrations/a.sql\tmigrations/b.sql"); err == nil {
-		t.Fatal("a D line with three fields must error")
+	wantStrings(t, "deleted", del, []string{"migrations/a.sql", "migrations/caf\u00e9\ttab.sql"})
+}
+
+func TestParseChanges_RejectsMalformedRecords(t *testing.T) {
+	for _, raw := range []string{
+		":100644 000000 aaa 000 D\x00",
+		":100644 100644 ccc ccc R100\x00migrations/o.sql\x00",
+		"migrations/a.sql\x00",
+	} {
+		if _, _, err := parseChanges(raw); err == nil {
+			t.Fatalf("parseChanges(%q) must error", raw)
+		}
 	}
+}
+
+func TestVacated_RenameToANonMigrationPathIsVacated(t *testing.T) {
+	const x = "migrations/20260105_x.sql"
+	changes := []Change{{Old: x, New: "migrations/20260105_x.sql.bak", Exact: true}}
+	wantStrings(t, "Vacated", Vacated(changes, []string{x}, nil, true), []string{x})
+	vsBase, vsMain := Split(changes, []string{x}, nil, true)
+	wantStrings(t, "vsBase", vsBase, []string{"migrations/20260105_x.sql.bak"})
+	wantStrings(t, "vsMain", vsMain, nil)
 }

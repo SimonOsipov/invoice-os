@@ -24,8 +24,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "migrationorder: merge-base %s %s: %v\n", *base, *head, err)
 		os.Exit(2)
 	}
-	// -M finds renames; only equal blob ids are exempt, see Split. R100 ignores line order.
-	diff, err := git("diff", "-M", "--raw", "--no-abbrev", "--diff-filter=ADR", mergeBase, *head, "--", Dir+"/")
+	// -M finds renames; only equal blob ids are exempt, see Split. R100 ignores line order. -z: git C-quotes a non-ASCII path otherwise.
+	diff, err := git("diff", "-M", "--raw", "--no-abbrev", "-z", "--diff-filter=ADR", mergeBase, *head, "--", Dir+"/")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migrationorder: git diff: %v\n", err)
 		os.Exit(2)
@@ -37,13 +37,13 @@ func main() {
 	}
 	// The newest version comes from base itself, not the merge base: the break is a
 	// migration merged to base after this branch was cut.
-	onBase, err := git("ls-tree", "--name-only", *base, "--", Dir+"/")
+	onBase, err := git("ls-tree", "--name-only", "-z", *base, "--", Dir+"/")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migrationorder: git ls-tree %s: %v\n", *base, err)
 		os.Exit(2)
 	}
 
-	onMain, err := git("ls-tree", "--name-only", *mainRef, "--", Dir+"/")
+	onMain, err := git("ls-tree", "--name-only", "-z", *mainRef, "--", Dir+"/")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migrationorder: git ls-tree %s: %v\n", *mainRef, err)
 		os.Exit(2)
@@ -62,22 +62,27 @@ func main() {
 		os.Exit(2)
 	}
 
-	deleted = DeletedOnBase(append(deleted, Vacated(changes, lines(onBase), lines(onMain), exempt)...), lines(onBase))
-	markDiff, err := git("diff", "--no-renames", "-U0", mergeBase, *head, "--", MarksFile)
+	deleted = DeletedOnBase(append(deleted, Vacated(changes, nul(onBase), nul(onMain), exempt)...), nul(onBase))
+	headMarks, err := fileAt(*head, MarksFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "migrationorder: git diff %s: %v\n", MarksFile, err)
+		fmt.Fprintf(os.Stderr, "migrationorder: %v\n", err)
 		os.Exit(2)
 	}
-	failures, released := EvaluateDeleted(deleted, ParseMarks(AddedLines(markDiff)))
+	baseMarks, err := fileAt(mergeBase, MarksFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migrationorder: %v\n", err)
+		os.Exit(2)
+	}
+	failures, released := EvaluateDeleted(deleted, NewMarks(lines(headMarks), lines(baseMarks)))
 
-	vsBase, vsMain := Split(changes, lines(onBase), lines(onMain), exempt)
-	violations, err := Check(vsBase, lines(onBase))
+	vsBase, vsMain := Split(changes, nul(onBase), nul(onMain), exempt)
+	violations, err := Check(vsBase, nul(onBase))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migrationorder: %v\n", err)
 		os.Exit(2)
 	}
 	// Production has applied main's chain only, so main's newest bounds an exempt rename.
-	more, err := Check(vsMain, lines(onMain))
+	more, err := Check(vsMain, nul(onMain))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migrationorder: %v\n", err)
 		os.Exit(2)
@@ -118,28 +123,61 @@ func git(args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// parseChanges reads `git diff --raw --no-abbrev` lines:
-// ":m1 m2 oldblob newblob A\tpath", "... D\tpath" or "... R<score>\told\tnew".
+// fileAt returns path's content at rev, or "" when rev has no such file.
+func fileAt(rev, path string) (string, error) {
+	if exec.Command("git", "cat-file", "-e", rev+":"+path).Run() != nil {
+		return "", nil
+	}
+	out, err := git("show", rev+":"+path)
+	if err != nil {
+		return "", fmt.Errorf("git show %s:%s: %w", rev, path, err)
+	}
+	return out, nil
+}
+
+// parseChanges reads `git diff --raw --no-abbrev -z` records:
+// ":m1 m2 oldblob newblob A" NUL path, "... D" NUL path or "... R<score>" NUL old NUL new.
 // deleted holds the D paths.
 func parseChanges(out string) (cs []Change, deleted []string, err error) {
-	for _, l := range lines(out) {
-		f := strings.Split(l, "\t")
-		meta := strings.Fields(f[0])
-		if len(meta) != 5 {
-			return nil, nil, fmt.Errorf("unexpected git diff line %q", l)
+	toks := nul(out)
+	for i := 0; i < len(toks); {
+		meta := strings.Fields(toks[i])
+		if len(meta) != 5 || !strings.HasPrefix(meta[0], ":") {
+			return nil, nil, fmt.Errorf("unexpected git diff record %q", toks[i])
 		}
-		switch status := meta[4]; {
-		case status == "A" && len(f) == 2:
-			cs = append(cs, Change{New: f[1]})
-		case status == "D" && len(f) == 2:
-			deleted = append(deleted, f[1])
-		case strings.HasPrefix(status, "R") && len(f) == 3:
-			cs = append(cs, Change{Old: f[1], New: f[2], Exact: meta[2] == meta[3]})
+		status := meta[4]
+		n := 1
+		if strings.HasPrefix(status, "R") {
+			n = 2
+		}
+		if i+n >= len(toks) {
+			return nil, nil, fmt.Errorf("truncated git diff record %q", toks[i])
+		}
+		p := toks[i+1 : i+1+n]
+		switch {
+		case status == "A":
+			cs = append(cs, Change{New: p[0]})
+		case status == "D":
+			deleted = append(deleted, p[0])
+		case n == 2:
+			cs = append(cs, Change{Old: p[0], New: p[1], Exact: meta[2] == meta[3]})
 		default:
-			return nil, nil, fmt.Errorf("unexpected git diff line %q", l)
+			return nil, nil, fmt.Errorf("unexpected git diff record %q", toks[i])
 		}
+		i += 1 + n
 	}
 	return cs, deleted, nil
+}
+
+// nul splits NUL-separated git output into its records.
+func nul(s string) []string {
+	var out []string
+	for _, f := range strings.Split(s, "\x00") {
+		if f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func lines(s string) []string {

@@ -57,8 +57,8 @@ paths:
 - Refuse `accept_invitation_by_id` in this order: GUC mismatch `42501`, not valid `invitation_not_valid`, already a member `one_workspace_per_identity`.
 - Name a new migration with a current timestamp.
 - Check the order with `go run ./internal/tools/migrationorder -base origin/<the PR's base branch>`. CI passes the PR's base sha.
-- Delete or rename no migration that the base branch holds. The same check fails the old name of a rename as a deletion, unless the rename is byte-identical and the file exists only on the base branch.
-- Mark a deliberate deletion with a line in `migrations/deleted.txt`: `<deleted file name>: <why the deletion is safe>`. One line releases one file, by its bare file name. The check reads only the lines your change adds.
+- Delete or rename no migration that the base branch holds. The same check fails the old name of a rename as a deletion. One rename is exempt. The rename must be byte-identical. The file must exist only on the base branch. The new name must be a `migrations/*.sql` file.
+- Mark a deliberate deletion with a line in `migrations/deleted.txt`: `<deleted file name>: <why the deletion is safe>`. One line releases one file, by its bare file name. The check counts a line only when your change adds it. An edited line counts as new.
 - Write a working Down in every migration. CI resets all migrations and applies them again.
 - Write expand-only migrations. The old revisions run against the new schema until traffic moves.
 - Drop or rename a column or table in a later deploy, after no running revision reads it.

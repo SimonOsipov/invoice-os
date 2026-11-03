@@ -61,7 +61,7 @@ func TestMain_DeletePlusSimilarAddIsADeletion(t *testing.T) {
 	r.write("20260401_new.sql", sqlBody+"-- a\n-- n\n")
 	r.commit("del+add")
 	st := r.run("diff", "-M", "--name-status", "epic", "pr")
-	if !strings.Contains(st, "R0") && !strings.Contains(st, "R9") || strings.Contains(st, "D\t") {
+	if !(strings.Contains(st, "R0") || strings.Contains(st, "R100")) || strings.Contains(st, "D\t") {
 		t.Fatalf("setup: want an inexact R and no D:\n%s", st)
 	}
 	r.want(1, "pr", pathOf(fileA)+" was deleted.")
@@ -241,4 +241,46 @@ func TestMain_MarkAddedAsANewFileWithCRLFReleasesTheDeletion(t *testing.T) {
 	r.write("deleted.txt", fileA+": crlf reason\r\n\r\n")
 	r.commit("del+mark")
 	r.want(0, "pr", pathOf(fileA)+": crlf reason\n")
+}
+
+func TestMain_AppendToMarksFileWithoutFinalNewlinePasses(t *testing.T) {
+	r := newPRRepo(t)
+	r.write("deleted.txt", fileB+": old")
+	r.seedBase()
+	r.rm(fileA)
+	r.write("deleted.txt", fileB+": old\n"+fileA+": new\n")
+	r.commit("del+mark")
+	r.want(0, "pr", pathOf(fileA)+": new")
+}
+
+func TestMain_ReorderedAndNormalisedOldMarksAreNotOrphans(t *testing.T) {
+	r := newPRRepo(t)
+	r.write("deleted.txt", fileB+": old\r\n"+fileA+": older \r\n")
+	r.seedBase()
+	r.rm("20260105_x.sql")
+	r.write("deleted.txt", fileA+": older\n"+fileB+": old\n20260105_x.sql: new\n")
+	r.commit("del+reorder")
+	out := r.want(0, "pr", pathOf("20260105_x.sql")+": new")
+	if strings.Contains(out, ": old") {
+		t.Fatalf("old marks must not be listed:\n%s", out)
+	}
+}
+
+func TestMain_RenameToANonMigrationPathIsADeletion(t *testing.T) {
+	r := newPRRepo(t)
+	renameOnPR(r.run, "20260105_x.sql", "20260105_x.sql.bak")
+	r.want(1, "pr", pathOf("20260105_x.sql")+" was deleted.")
+}
+
+func TestMain_DeletedNonASCIINamedMigrationFails(t *testing.T) {
+	r := newPRRepo(t)
+	const name = "20260106_caf\u00e9.sql"
+	r.write(name, sqlBody+"-- cafe\n")
+	r.seedBase()
+	r.rm(name)
+	r.commit("del")
+	r.want(1, "pr", pathOf(name)+" was deleted.")
+	r.write("deleted.txt", name+": gone\n")
+	r.commit("mark")
+	r.want(0, "pr", pathOf(name)+": gone")
 }

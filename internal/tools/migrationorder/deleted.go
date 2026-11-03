@@ -15,12 +15,15 @@ type Mark struct {
 	Name, Reason string
 }
 
+// isMigration reports a migrations/<name>.sql direct child.
+func isMigration(f string) bool { return path.Dir(f) == Dir && strings.HasSuffix(f, ".sql") }
+
 // DeletedOnBase keeps the migrations/<name>.sql direct children of deleted that onBase holds.
 func DeletedOnBase(deleted, onBase []string) []string {
 	have := toSet(onBase)
 	var out []string
 	for _, f := range deleted {
-		if path.Dir(f) == Dir && strings.HasSuffix(f, ".sql") && have[f] {
+		if isMigration(f) && have[f] {
 			out = append(out, f)
 		}
 	}
@@ -28,17 +31,20 @@ func DeletedOnBase(deleted, onBase []string) []string {
 	return out
 }
 
-// AddedLines returns the content of the lines a -U0 diff adds. The +++ header comes before the first @@.
-func AddedLines(diff string) []string {
-	_, body, found := strings.Cut("\n"+diff, "\n@@")
-	if !found {
-		return nil
+// NewMarks returns the marks in head that base does not hold, compared after ParseMarks trimming.
+// Each base mark cancels one equal head mark; an edited line is a new mark.
+func NewMarks(head, base []string) []Mark {
+	have := map[Mark]int{}
+	for _, m := range ParseMarks(base) {
+		have[m]++
 	}
-	var out []string
-	for _, l := range strings.Split(body, "\n")[1:] {
-		if strings.HasPrefix(l, "+") {
-			out = append(out, l[1:])
+	var out []Mark
+	for _, m := range ParseMarks(head) {
+		if have[m] > 0 {
+			have[m]--
+			continue
 		}
+		out = append(out, m)
 	}
 	return out
 }
@@ -66,7 +72,7 @@ func EvaluateDeleted(deleted []string, marks []Mark) (failures, released []strin
 		i := claim(marks, used, name)
 		switch {
 		case i < 0:
-			unmarked = append(unmarked, fmt.Sprintf("::error file=%s::%s was deleted. Production has applied every migration on main, so its applied versions and the files now disagree. Restore it, or add to %s: %s: <why the deletion is safe>", d, d, MarksFile, name))
+			unmarked = append(unmarked, fmt.Sprintf("::error file=%s::%s was deleted. It is on the base branch, so deleting it breaks the Down chain and disagrees with any database that applied it. Restore it, or add to %s: %s: <why the deletion is safe>", d, d, MarksFile, name))
 		case marks[i].Reason == "":
 			noReason = append(noReason, fmt.Sprintf("::error file=%s::%s: the mark for %s has no reason. Write why the deletion is safe.", MarksFile, MarksFile, name))
 		default:

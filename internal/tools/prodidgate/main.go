@@ -3,7 +3,7 @@
 //	go run ./internal/tools/prodidgate             scan every tracked file
 //	go run ./internal/tools/prodidgate -selfcheck  prove the pinned digests match the Actions variables
 //
-// Exit 0 is clean, 1 is a finding or a mismatch, 2 is a listing or read error.
+// Exit 0 is clean, 1 is a finding or a mismatch, 2 is a listing error, a read error or an empty tree.
 package main
 
 import (

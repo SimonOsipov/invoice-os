@@ -2,8 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/SimonOsipov/invoice-os/internal/tools/prodid"
 )
 
 type needle struct {
@@ -25,10 +25,10 @@ type finding struct {
 	kind string
 }
 
-// pinned holds digests only: the guard must not contain the values it forbids.
+// pinned holds digests only; they are reversible, so the guard stops a value returning, not hides it.
 var pinned = []needle{
-	{"GCP prod project number", 12, "b7343bb721f376f80356cb2c71b30071c1d7ac138f5074d7523f03ea025e73df"},
-	{"HubSpot portal id", 9, "a884363b5d6a9f30a90516f54e984f9138d0cced9e9f5ad323975123302b4697"},
+	{"GCP prod project number", 12, prodid.ProjectDigest},
+	{"HubSpot portal id", 9, prodid.PortalDigest},
 }
 
 // envOf maps a needle kind to the Actions variable that holds its value.
@@ -39,10 +39,7 @@ var envOf = map[string]string{
 
 var providerProject = regexp.MustCompile(`^projects/([0-9]+)/`)
 
-func sum(s string) string {
-	h := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(h[:])
-}
+func sum(s string) string { return prodid.Sum(s) }
 
 func isDigit(b byte) bool { return b >= '0' && b <= '9' }
 

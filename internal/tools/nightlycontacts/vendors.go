@@ -9,11 +9,16 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
+	"github.com/SimonOsipov/invoice-os/internal/tools/prodid"
 )
+
+// livePortalDigest is the pinned digest of the live portal id; a test overrides it.
+var livePortalDigest = prodid.PortalDigest
 
 const (
 	maxTries       = 5
@@ -142,7 +147,7 @@ func (v *vendors) portal() (ok bool, detail string) {
 	switch {
 	case d.PortalID == 0:
 		return false, "portal id is missing"
-	case d.PortalID == v.livePortal:
+	case d.PortalID == v.livePortal || prodid.Sum(strconv.FormatInt(d.PortalID, 10)) == livePortalDigest:
 		return false, "token belongs to the live portal"
 	}
 	return true, ""

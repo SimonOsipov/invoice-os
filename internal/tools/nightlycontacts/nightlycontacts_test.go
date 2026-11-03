@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
+	"github.com/SimonOsipov/invoice-os/internal/tools/prodid"
 )
 
 func greenStart(t *testing.T, w *world) result {
@@ -900,5 +901,17 @@ func TestPortalGuard_RefusesTheConfiguredLivePortal(t *testing.T) {
 		if s.Status != want || (want == "failed" && !strings.Contains(s.Detail, "live portal")) {
 			t.Errorf("env %s: portal step %+v, want %s", env, s, want)
 		}
+	}
+}
+
+func TestPortalGuard_RefusesThePinnedDigestWhateverTheVariableSays(t *testing.T) {
+	old := livePortalDigest
+	livePortalDigest = prodid.Sum("7654321")
+	t.Cleanup(func() { livePortalDigest = old })
+	w := newWorld()
+	w.portalBody = `{"portalId":7654321}`
+	res := runPhase(t, w, baseEnv(), "start")
+	if s := res.step(stPortal); s.Status != "failed" || !strings.Contains(s.Detail, "live portal") {
+		t.Errorf("portal step %+v, want a refusal", s)
 	}
 }

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readConsentCookie } from '../../landing/src/consent'
 import { sliceCookieNoticeCss } from './cookieNoticeCss'
 import { COOKIES, container as hsContainer, installSdk, jarNames, resetJar, seed, w } from '../../landing/src/hubspotChat.test.util'
-import { CHAT_SCRIPT_URL } from '../../landing/src/hubspotChat'
+import { chatScriptUrl } from '../../landing/src/hubspotChat'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -347,7 +347,7 @@ describe('library chat', () => {
     click(byText('Cookie choices'))
     click(byText('Accept'))
     expect(loaders()).toHaveLength(1)
-    expect(loaders()[0].src).toBe(CHAT_SCRIPT_URL)
+    expect(loaders()[0].src).toBe(chatScriptUrl())
   })
 
   it('CH-02 Reject after Accept removes the chat in place', async () => {

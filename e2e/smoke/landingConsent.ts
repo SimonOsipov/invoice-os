@@ -1,16 +1,20 @@
 // The cookie answer a landing spec arrives with. Shared because more than one spec needs it
 // and the record has to be written before the first navigation.
 //
-// Imports only Playwright's types and ./sentryHost on purpose: test:unit runs with no deploy URLs, so
-// pulling in a module that resolves a target at import time would break it (e2e/README.md).
+// Imports only Playwright's types, ./sentryHost and ../targets on purpose: test:unit runs with no deploy URLs, so
+// nothing here may resolve a target at import time (e2e/README.md).
 import type { BrowserContext, Page, Response, Route } from '@playwright/test'
+import { resolveTarget } from '../targets'
 import { isProductionHost, isSentryHost } from './sentryHost'
 
 const CONSENT_KEY = 'asc_consent' // retyped from frontend/landing/src/consent.ts
 const LIBRARY_BASE = '/library' // frontend/landing/src/sitePaths.ts
 const BLOG_BASE = '/blog' // frontend/landing/src/sitePaths.ts
 export const STUB_HEADER = 'x-asc-stub'
-export const CHAT_LOADER_URL = 'https://js-eu1.hs-scripts.com/148915098.js' // CHAT_SCRIPT_URL in frontend/landing/src/hubspotChat.ts
+/** The loader URL the deployed build bakes; read at call time so importing needs no portal id. */
+export function chatLoaderUrl(): string {
+  return `https://js-eu1.hs-scripts.com/${resolveTarget('HUBSPOT_PORTAL_ID')}.js` // chatScriptUrl() in frontend/landing/src/hubspotChat.ts
+}
 // retyped from HUBSPOT_CHAT_DOMAINS in frontend/landing/src/hubspotChat.ts
 export const HUBSPOT_CHAT_DOMAINS = ['hs-scripts.com', 'hs-analytics.net', 'hs-banner.com', 'hscollectedforms.net', 'hsappstatic.net', 'usemessages.com', 'hubspot.com']
 
@@ -75,8 +79,9 @@ export function isHubSpotChatRequest(rawUrl: string): boolean {
 /** Collects the responses for the chat loader; attach before navigating. */
 export function watchChatLoader(page: Page): Response[] {
   const loaded: Response[] = []
+  const loaderUrl = chatLoaderUrl()
   page.on('response', (res) => {
-    if (res.url() === CHAT_LOADER_URL) loaded.push(res)
+    if (res.url() === loaderUrl) loaded.push(res)
   })
   return loaded
 }

@@ -114,11 +114,12 @@ describe('isProductionHost', () => {
 
 describe('hubspotTarget', () => {
   it('U14: returns null when both VITE_HUBSPOT_* vars are unset', () => {
+    vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '')
     expect(hubspotTarget()).toBeNull()
   })
 
   it('U15: a single blank variable closes the gate, in either direction', () => {
-    vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '148915098')
+    vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '1234567')
     vi.stubEnv('VITE_HUBSPOT_FORM_GUID', '   ')
     expect(hubspotTarget()).toBeNull()
 
@@ -128,31 +129,31 @@ describe('hubspotTarget', () => {
   })
 
   it('U16: both vars set with surrounding whitespace come back trimmed', () => {
-    vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '  148915098  ')
+    vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '  1234567  ')
     vi.stubEnv('VITE_HUBSPOT_FORM_GUID', '  abc-123  ')
-    expect(hubspotTarget()).toEqual({ portalId: '148915098', formGuid: 'abc-123' })
+    expect(hubspotTarget()).toEqual({ portalId: '1234567', formGuid: 'abc-123' })
   })
 })
 
 describe('resolveSubmitTarget', () => {
   it('U17: needs BOTH the build ids and a production hostname', () => {
-    vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '148915098')
+    vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '1234567')
     vi.stubEnv('VITE_HUBSPOT_FORM_GUID', 'abc-123')
     expect(resolveSubmitTarget('landing-pr-142-944095690109.africa-south1.run.app')).toBeNull()
 
     vi.unstubAllEnvs()
     expect(resolveSubmitTarget('www.ascomply.com')).toBeNull()
 
-    vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '148915098')
+    vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '1234567')
     vi.stubEnv('VITE_HUBSPOT_FORM_GUID', 'abc-123')
-    expect(resolveSubmitTarget('www.ascomply.com')).toEqual({ portalId: '148915098', formGuid: 'abc-123' })
+    expect(resolveSubmitTarget('www.ascomply.com')).toEqual({ portalId: '1234567', formGuid: 'abc-123' })
   })
 })
 
 describe('submissionUrl', () => {
   it('U18: builds the EU Forms submit URL from the target', () => {
-    expect(submissionUrl({ portalId: '148915098', formGuid: 'abc-123' })).toBe(
-      'https://api-eu1.hsforms.com/submissions/v3/integration/submit/148915098/abc-123',
+    expect(submissionUrl({ portalId: '1234567', formGuid: 'abc-123' })).toBe(
+      'https://api-eu1.hsforms.com/submissions/v3/integration/submit/1234567/abc-123',
     )
   })
 })
@@ -313,7 +314,7 @@ describe('buildSubmission', () => {
 })
 
 describe('submitDemoLead', () => {
-  const TARGET: HubSpotTarget = { portalId: '148915098', formGuid: 'abc-123' }
+  const TARGET: HubSpotTarget = { portalId: '1234567', formGuid: 'abc-123' }
 
   it('U25: a non-2xx response rejects with a status-only message, without logging, and carries no field value', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 400 }))
@@ -355,7 +356,7 @@ describe('submitDemoLead', () => {
     const call = fetchMock.mock.calls[0]
     const url = call?.[0] as string | undefined
     const init = call?.[1] as RequestInit | undefined
-    expect(url).toBe('https://api-eu1.hsforms.com/submissions/v3/integration/submit/148915098/abc-123')
+    expect(url).toBe('https://api-eu1.hsforms.com/submissions/v3/integration/submit/1234567/abc-123')
     expect(init?.method).toBe('POST')
     const headers = new Headers(init?.headers)
     expect(headers.get('Content-Type')).toBe('application/json')

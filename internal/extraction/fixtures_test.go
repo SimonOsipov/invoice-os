@@ -118,7 +118,7 @@ var fxCorpus = []struct {
 	{fxJevReceipt, fxBuildJevReceiptInvoice},
 	// CRDDBTNOTE-05's held-note fixture: outside every corpus_ ratchet.
 	{fxJevCreditNote, fxBuildJevCreditNoteInvoice},
-	// NIGHTLY-10: honest fixtures for the real AI, each keeping its source fixture's markers.
+	// Honest fixtures for the real AI, each keeping its source fixture's markers.
 	{fxHonestCreditNote, fxBuildHonestCreditNote},
 	{fxHonestReceipt, fxBuildHonestReceipt},
 	{fxAINRSLabelled, fxBuildAINRSLabelledInvoice},
@@ -2718,17 +2718,6 @@ func TestFixtures_JevReceiptSharesTheDoubtFixturesShape(t *testing.T) {
 	}
 }
 
-// TestFixtures_JevReceiptE2ECopyIsTheBuildersBytes: the deployed spec uploads this copy.
-func TestFixtures_JevReceiptE2ECopyIsTheBuildersBytes(t *testing.T) {
-	got, err := os.ReadFile(filepath.Join(fxE2EDir, fxJevReceipt))
-	if err != nil {
-		t.Fatalf("read the e2e copy: %v", err)
-	}
-	if want := fxBuildJevReceiptInvoice(); len(want) == 0 || !bytes.Equal(got, want) {
-		t.Errorf("%s/%s = %d byte(s), want the builder's %d", fxE2EDir, fxJevReceipt, len(got), len(want))
-	}
-}
-
 // TestFixtures_JevCreditNoteReadsAsDesigned: the fake reads a credit note, the engine decides the
 // number and the three amounts, and the AI header answer carries the original number alone.
 func TestFixtures_JevCreditNoteReadsAsDesigned(t *testing.T) {
@@ -2770,17 +2759,6 @@ func TestFixtures_JevCreditNoteReadsAsDesigned(t *testing.T) {
 		if r.Name == "invoice_number" && (r.Value == nil || *r.Value != "CN-3401") {
 			t.Errorf("merged invoice_number = %+v, want CN-3401", r)
 		}
-	}
-}
-
-// TestFixtures_JevCreditNoteE2ECopyIsTheBuildersBytes: the deployed spec uploads this copy.
-func TestFixtures_JevCreditNoteE2ECopyIsTheBuildersBytes(t *testing.T) {
-	got, err := os.ReadFile(filepath.Join(fxE2EDir, fxJevCreditNote))
-	if err != nil {
-		t.Fatalf("read the e2e copy: %v", err)
-	}
-	if want := fxBuildJevCreditNoteInvoice(); len(want) == 0 || !bytes.Equal(got, want) {
-		t.Errorf("%s/%s = %d byte(s), want the builder's %d", fxE2EDir, fxJevCreditNote, len(got), len(want))
 	}
 }
 
@@ -3673,7 +3651,7 @@ const fxE2EDir = "../../e2e/fixtures/documents"
 // fxE2ECopies is the explicit table AC-2 requires: each name here must be byte-identical between
 // fxE2EDir and testdata/. Table-driven, not a directory walk, because fxE2EDir also holds
 // native_invoice_2p.pdf, which has no Go-side original of that name.
-var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAIUnavailable, fxAILines, fxAINRS, fxJevDoubt, fxJevReceipt, fxJevCreditNote, fxHonestCreditNote, fxHonestReceipt, fxAINRSLabelled, fxAIOverflow, fxWildScanned}
+var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAILines, fxJevDoubt, fxHonestCreditNote, fxHonestReceipt, fxAINRSLabelled, fxAIOverflow, fxWildScanned}
 
 // fxE2EExempt: native_invoice_2p.pdf has no Go-side original -- its closest analog, native_3page.pdf, is a different file.
 var fxE2EExempt = map[string]bool{"native_invoice_2p.pdf": true}

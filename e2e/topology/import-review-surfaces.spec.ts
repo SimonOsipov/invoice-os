@@ -1328,7 +1328,9 @@ test.describe('ENGI-16 import review opens the editor at the line', () => {
       expect(after, 'still two lines').toHaveLength(2)
       // Edit re-inserts the lines, so row ids change; every other field must survive.
       const withoutId = <T extends { id?: string }>({ id: _id, ...rest }: T) => rest
-      expect(withoutId(after[0]), 'line 1 unchanged').toEqual(withoutId(before[0]))
+      for (const i of [0, 1].filter((i) => i !== fix.line! - 1)) {
+        expect(withoutId(after[i]), `line ${i + 1} unchanged`).toEqual(withoutId(before[i]))
+      }
     }
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

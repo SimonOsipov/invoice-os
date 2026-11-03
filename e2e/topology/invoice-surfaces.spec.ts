@@ -2457,6 +2457,9 @@ test('send again: a payload_not_built invoice goes back to queued, fails again, 
   await assertPageDoesNotScrollSideways(page, 'send-again failed detail')
 
   const userId = (await me(await browserToken(page))).user.id
+  const statusChange = page.getByTestId('invoice-activity').getByTestId('audit-row').filter({ hasText: 'Status changed' }).filter({ hasText: DRIVER })
+  await expect(statusChange.first(), 'the batch submit is already in the feed, so the count below is non-empty').toBeVisible()
+  const before = await statusChange.count()
   await sendAgain.click()
   await expect
     .poll(
@@ -2468,8 +2471,8 @@ test('send again: a payload_not_built invoice goes back to queued, fails again, 
   await expect(sendAgain).toBeEnabled()
 
   await page.reload()
-  const statusChange = page.getByTestId('invoice-activity').getByTestId('audit-row').filter({ hasText: 'Status changed' }).filter({ hasText: DRIVER })
-  await expect(statusChange.first(), 'the retry is in the activity feed, attributed to the persona').toBeVisible()
+  await expect(statusChange.first()).toBeVisible()
+  await expect(statusChange, 'the retry adds exactly one persona Status changed row').toHaveCount(before + 1)
 
   await page.getByTestId('resolve-outside-reason').fill('Settled directly with the buyer')
   await page.getByTestId('resolve-outside').click()

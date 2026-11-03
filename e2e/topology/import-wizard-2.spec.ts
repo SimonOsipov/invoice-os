@@ -3437,12 +3437,8 @@ test("EXTR18-E2E-01 (AC-5): the deployed reading is the document's own number", 
 
 // A document whose invoice_number never resolves mints a QUARANTINED batch, not an invoice
 // (documentCreateInput, internal/importer/document.go) -- so routeAfterRun's 'single' arm is unreachable and
-// extractOneDocument's landing wait can never settle. Both fixtures below are that
-// case by construction: the scan has no recoverable text at all. The verdict is therefore read off the deployed wire, which is
-// also exactly what EXTR-15's Core AC will consume. The review SCREEN cannot serve as the
-// oracle here: the review is reached from an import landing or from SourceDocumentCard, and
-// both need an invoice these documents never produce -- building a surface for these terminal
-// states is EXTR-15's.
+// extractOneDocument's landing wait can never settle. The verdict is therefore read off
+// the deployed wire, which is also exactly what EXTR-15's Core AC will consume.
 async function settleOneDocument(
   page: Page,
   label: string,

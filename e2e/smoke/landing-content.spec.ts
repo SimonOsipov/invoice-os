@@ -250,3 +250,134 @@ test('landing content: the retired positioning copy is replaced everywhere it sh
 
   expectNoConsoleErrors(sinks)
 })
+
+// Retyped from frontend/landing/src/data.tsx#MODULES, in render order.
+const MODULE_TITLES = [
+  'Business profile',
+  'User access',
+  'Customer / vendor',
+  'Invoice management',
+  'Validation engine',
+  'Approval workflow',
+  'Document generation',
+  'Integration / API',
+  'Archive & audit',
+  'Reporting & analytics',
+  'Partner portal',
+  'Platform admin',
+] as const
+
+// Retyped from frontend/landing/src/data.tsx#API_BULLETS, in render order.
+const API_BULLET_TEXTS = [
+  'REST API: create, validate, fetch status, fetch documents',
+  'Signed webhooks on status change and submission events',
+  'OAuth2 and scoped API keys, with per-tenant isolation',
+  'Sandbox MBS/NRS adapter. Production on accreditation.',
+] as const
+
+// Retyped from frontend/landing/src/data.tsx#FAQS (questions), in render order.
+const FAQ_QUESTIONS = [
+  'What does ASComply Africa do?',
+  'Do we need to replace our accounting system?',
+  'Are the integration partners already available?',
+  'How does AI-supported regulatory monitoring work?',
+  'Can accounting firms work with multiple clients?',
+] as const
+
+test('landing content: the solution grid lists the twelve modules in order', async ({ page }) => {
+  const sinks = await openLanding(page)
+
+  await expect(page.locator('#solution .mod-cell'), '#solution does not hold exactly 12 module cells').toHaveCount(
+    MODULE_TITLES.length,
+  )
+  await expect(page.locator('#solution .mod-cell h3')).toHaveText([...MODULE_TITLES])
+
+  expectNoConsoleErrors(sinks)
+})
+
+test('landing content: the API band lists its four surfaces and the validate sample', async ({ page }) => {
+  const sinks = await openLanding(page)
+
+  const api = page.locator('#api')
+  await expect(api, '#api did not resolve to exactly one element').toHaveCount(1)
+
+  // Every #api span in DOM order, filtered to the bullet texts: order and exactly-once in one assertion.
+  const spanTexts = await api.locator('span').allTextContents()
+  const bullets = spanTexts.map((t) => t.trim()).filter((t) => (API_BULLET_TEXTS as readonly string[]).includes(t))
+  expect(bullets, 'the #api bullets differ from the four retyped, in order and once each').toEqual([...API_BULLET_TEXTS])
+
+  const panel = page.locator('[data-api-panel]')
+  await expect(panel, '[data-api-panel] did not resolve to exactly one element').toHaveCount(1)
+  await expect(panel).toContainText('POST /v1/invoices/validate')
+  const sample = panel.locator('pre')
+  await expect(sample).toContainText('curl https://api.ascomply.africa/v1/invoices/validate')
+  await expect(sample).toContainText('"status": "validated"')
+
+  expectNoConsoleErrors(sinks)
+})
+
+test('landing content: Request API access opens the Book a demo dialog', async ({ page }) => {
+  const sinks = await openLanding(page)
+
+  const dialog = page.getByRole('dialog', { name: 'Book a demo' })
+  await expect(dialog, 'a Book a demo dialog was open before the click').toHaveCount(0)
+
+  await page.locator('#api').getByRole('button', { name: 'Request API access' }).click()
+  await expect(dialog).toBeVisible()
+
+  expectNoConsoleErrors(sinks)
+})
+
+test('landing content: every integration partner card says In progress', async ({ page }) => {
+  const sinks = await openLanding(page)
+
+  const cards = page.locator('[data-partner]')
+  await expect(cards, 'the page does not hold exactly 6 partner cards').toHaveCount(6)
+  for (let i = 0; i < 6; i++) {
+    const badge = cards.nth(i).locator('.ds-badge')
+    await expect(badge, `partner card ${i + 1} does not hold exactly one badge`).toHaveCount(1)
+    await expect(badge).toBeVisible()
+    await expect(badge).toHaveText('In progress')
+  }
+
+  expectNoConsoleErrors(sinks)
+})
+
+test('landing content: the FAQ opens the first answer and keeps one open at a time', async ({ page }) => {
+  const sinks = await openLanding(page)
+
+  const buttons = page.locator('#faq .ds-faq-btn')
+  const answers = page.locator('#faq .ds-faq-a')
+  await expect(buttons, '#faq does not hold exactly 5 questions').toHaveCount(FAQ_QUESTIONS.length)
+  await expect(buttons).toHaveText([...FAQ_QUESTIONS])
+  await expect(answers, '#faq does not hold exactly 5 answers').toHaveCount(FAQ_QUESTIONS.length)
+
+  const expanded = () => buttons.evaluateAll((els) => els.map((el) => el.getAttribute('aria-expanded')))
+
+  await expect.poll(expanded, 'on load, only the first question should be expanded').toEqual([
+    'true', 'false', 'false', 'false', 'false',
+  ])
+  await expect(answers.nth(0)).toBeVisible()
+  for (const i of [1, 2, 3, 4]) await expect(answers.nth(i), `answer ${i + 1} is visible on load`).toBeHidden()
+
+  await buttons.nth(2).click()
+  await expect.poll(expanded, 'after clicking question 3, only it should be expanded').toEqual([
+    'false', 'false', 'true', 'false', 'false',
+  ])
+  await expect(answers.nth(0)).toBeHidden()
+  await expect(answers.nth(2)).toBeVisible()
+
+  expectNoConsoleErrors(sinks)
+})
+
+test('landing content: the closing Book a demo opens the dialog', async ({ page }) => {
+  const sinks = await openLanding(page)
+
+  const dialog = page.getByRole('dialog', { name: 'Book a demo' })
+  await expect(dialog, 'a Book a demo dialog was open before the click').toHaveCount(0)
+
+  await page.locator('[data-closing]').getByRole('button', { name: 'Book a demo' }).click()
+  await expect(dialog).toBeVisible()
+
+  expectNoConsoleErrors(sinks)
+})

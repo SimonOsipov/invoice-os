@@ -55,9 +55,9 @@ export const PERF_MAPPING: Record<string, string> = {
 // "INV-UI-" prefix purely so a run's numbers are attributable to this file if ever
 // inspected in a report -- each test creates its own fresh entity, so no collision
 // with the API suite's fixture is possible either way.
-export function buildPerfCsv(): string {
+export function buildPerfCsv(invoices = 500): string {
   const lines: string[] = [PERF_HEADER]
-  for (let i = 1; i <= 500; i++) {
+  for (let i = 1; i <= invoices; i++) {
     const invNo = `INV-UI-${String(i).padStart(5, '0')}`
     for (let line = 1; line <= 3; line++) {
       lines.push(

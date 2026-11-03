@@ -1154,10 +1154,49 @@ export function createInvoice(token: string, body: InvoiceCreateInput): Promise<
   return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices`, { method: 'POST', body, token })
 }
 
-// createImportBatch(): mints a batch id the only way one exists -- two multipart POSTs
-// ([upload-once]: preview -> document_id, then import -> id). Raw fetch, not apiFetch --
-// apiFetch always JSON-serializes its body, which cannot carry a multipart file (mirrors
-// contract-import.spec.ts's own local previewFetch/importFetch pair).
+// POST /v1/imports answer; mirrors importResponse in internal/importer/handlers.go.
+export interface ImportBatchResult {
+  id: string
+  ready_invoices: number
+  invoices_clean: number
+  invoices_with_violations: number
+}
+
+// createImportBatchFromCsv(): mints a batch from any CSV with no AI -- two multipart POSTs
+// ([upload-once]: preview -> document_id, then import -> id). Raw fetch, not apiFetch, which
+// always JSON-serializes its body and cannot carry a multipart file.
+export async function createImportBatchFromCsv(
+  token: string,
+  entityId: string,
+  { csv, filename, mapping }: { csv: string; filename: string; mapping: Record<string, string> },
+): Promise<ImportBatchResult> {
+  const previewForm = new FormData()
+  previewForm.set('file', new Blob([csv], { type: 'text/csv' }), filename)
+  const preview = await fetch(`${apiBase()}/api/invoice/v1/imports/preview`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: previewForm,
+  })
+  if (!preview.ok) throw new Error(`createImportBatchFromCsv: preview failed (status ${preview.status}): ${(await preview.text()).slice(0, 200)}`)
+  const previewBody = (await preview.json()) as { document_id?: string }
+  if (typeof previewBody.document_id !== 'string') throw new Error('createImportBatchFromCsv: preview answered no document_id')
+
+  const form = new FormData()
+  form.set('entity_id', entityId)
+  form.set('mapping', JSON.stringify(mapping))
+  form.set('document_id', previewBody.document_id)
+  const res = await fetch(`${apiBase()}/api/invoice/v1/imports`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  })
+  if (!res.ok) throw new Error(`createImportBatchFromCsv: import failed (status ${res.status}): ${(await res.text()).slice(0, 200)}`)
+  const body = (await res.json()) as Partial<ImportBatchResult>
+  if (typeof body.id !== 'string') throw new Error('createImportBatchFromCsv: import answered no id')
+  return body as ImportBatchResult
+}
+
+// createImportBatch(): a one-invoice batch of fixed shape; the id only.
 export async function createImportBatch(
   token: string,
   entityId: string,
@@ -1182,33 +1221,12 @@ export async function createImportBatch(
     line_quantity: 'Qty',
     line_unit_price: 'Unit Price',
   }
-
-  const previewForm = new FormData()
-  previewForm.set('file', new Blob([`${csvHeader}\n${rows.join('\n')}`], { type: 'text/csv' }), 'import.csv')
-  const preview = await fetch(`${apiBase()}/api/invoice/v1/imports/preview`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: previewForm,
+  const { id } = await createImportBatchFromCsv(token, entityId, {
+    csv: `${csvHeader}\n${rows.join('\n')}`,
+    filename: 'import.csv',
+    mapping,
   })
-  const previewBody = (await preview.json()) as { document_id?: string }
-  if (!preview.ok || typeof previewBody.document_id !== 'string') {
-    throw new Error(`createImportBatch: preview failed (status ${preview.status})`)
-  }
-
-  const form = new FormData()
-  form.set('entity_id', entityId)
-  form.set('mapping', JSON.stringify(mapping))
-  form.set('document_id', previewBody.document_id)
-  const res = await fetch(`${apiBase()}/api/invoice/v1/imports`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: form,
-  })
-  const body = (await res.json()) as { id?: string }
-  if (!res.ok || typeof body.id !== 'string') {
-    throw new Error(`createImportBatch: import failed (status ${res.status})`)
-  }
-  return body.id
+  return id
 }
 
 // GET /v1/imports/document/reading and POST /v1/imports/document/invoice. Mirrors

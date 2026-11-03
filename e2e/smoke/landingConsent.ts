@@ -4,6 +4,7 @@
 // Imports only Playwright's types, ./sentryHost and ../targets on purpose: test:unit runs with no deploy URLs, so
 // nothing here may resolve a target at import time (e2e/README.md).
 import type { BrowserContext, Page, Response, Route } from '@playwright/test'
+import type { Dropper } from '../topology/consoleGate'
 import { resolveTarget } from '../targets'
 import { isProductionHost, isSentryHost } from './sentryHost'
 
@@ -42,10 +43,10 @@ export async function seedConsent(page: Page, analytics: boolean): Promise<void>
 }
 
 /** Attach before navigating; returns the sink to assert on. */
-export function consoleGate(page: Page): string[] {
+export function consoleGate(page: Page, expected?: Dropper): string[] {
   const errors: string[] = []
   page.on('console', (msg) => {
-    if (msg.type() === 'error') errors.push(msg.text())
+    if (msg.type() === 'error' && !expected?.(msg.text(), msg.location().url)) errors.push(msg.text())
   })
   page.on('pageerror', (err) => {
     errors.push(`pageerror: ${err.message}`)
@@ -118,6 +119,13 @@ export async function routeProductionHosts(
   // The fork gateway's CORS list lacks the production origin; answer with it.
   if (targets.gateway) {
     await context.route(`${targets.gateway}/blog/**`, async (route) => {
+      const res = await route.fetch()
+      await route.fulfill({
+        response: res,
+        headers: { ...res.headers(), 'access-control-allow-origin': 'https://www.ascomply.com' },
+      })
+    })
+    await context.route(`${targets.gateway}/contacts/demo-request`, async (route) => {
       const res = await route.fetch()
       await route.fulfill({
         response: res,

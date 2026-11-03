@@ -1157,40 +1157,6 @@ export interface ImportBatchResult {
   invoices_with_violations: number
 }
 
-// createImportBatchFromCsv(): mints a batch from any CSV with no AI -- two multipart POSTs
-// ([upload-once]: preview -> document_id, then import -> id). Raw fetch, not apiFetch, which
-// always JSON-serializes its body and cannot carry a multipart file.
-export async function createImportBatchFromCsv(
-  token: string,
-  entityId: string,
-  { csv, filename, mapping }: { csv: string; filename: string; mapping: Record<string, string> },
-): Promise<ImportBatchResult> {
-  const previewForm = new FormData()
-  previewForm.set('file', new Blob([csv], { type: 'text/csv' }), filename)
-  const preview = await fetch(`${apiBase()}/api/invoice/v1/imports/preview`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: previewForm,
-  })
-  if (!preview.ok) throw new Error(`createImportBatchFromCsv: preview failed (status ${preview.status}): ${(await preview.text()).slice(0, 200)}`)
-  const previewBody = (await preview.json()) as { document_id?: string }
-  if (typeof previewBody.document_id !== 'string') throw new Error('createImportBatchFromCsv: preview answered no document_id')
-
-  const form = new FormData()
-  form.set('entity_id', entityId)
-  form.set('mapping', JSON.stringify(mapping))
-  form.set('document_id', previewBody.document_id)
-  const res = await fetch(`${apiBase()}/api/invoice/v1/imports`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: form,
-  })
-  if (!res.ok) throw new Error(`createImportBatchFromCsv: import failed (status ${res.status}): ${(await res.text()).slice(0, 200)}`)
-  const body = (await res.json()) as Partial<ImportBatchResult>
-  if (typeof body.id !== 'string') throw new Error('createImportBatchFromCsv: import answered no id')
-  return body as ImportBatchResult
-}
-
 // createImportBatch(): a one-invoice batch of fixed shape; the id only.
 export async function createImportBatch(
   token: string,
@@ -1222,6 +1188,68 @@ export async function createImportBatch(
     mapping,
   })
   return id
+}
+
+// createImportBatchFromCsv(): mints a batch from any CSV with no AI: preview -> document_id,
+// then import -> id ([upload-once]).
+export async function createImportBatchFromCsv(
+  token: string,
+  entityId: string,
+  { csv, filename, mapping }: { csv: string; filename: string; mapping: Record<string, string> },
+): Promise<ImportBatchResult> {
+  const documentId = await uploadDocument(token, csv, filename)
+  const res = await importFetch(token, buildForm(entityId, documentId, mapping))
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`createImportBatchFromCsv: import failed (status ${res.status}): ${JSON.stringify(res.body).slice(0, 200)}`)
+  }
+  const body = res.body as Partial<ImportBatchResult> | undefined
+  if (typeof body?.id !== 'string') throw new Error('createImportBatchFromCsv: import answered no id')
+  return body as ImportBatchResult
+}
+
+// POST /v1/imports/preview: stores the CSV and returns its document_id. Raw fetch, since
+// apiFetch always JSON-serializes and cannot carry multipart.
+export async function uploadDocument(token: string, csv: string, filename = 'import.csv'): Promise<string> {
+  const form = new FormData()
+  form.set('file', new Blob([csv], { type: 'text/csv' }), filename)
+  const res = await fetch(`${apiBase()}/api/invoice/v1/imports/preview`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  })
+  let body: unknown
+  try {
+    body = await res.json()
+  } catch {
+    body = undefined
+  }
+  const id = (body as Record<string, unknown> | undefined)?.document_id
+  if (!res.ok || typeof id !== 'string') throw new Error(`uploadDocument: preview failed (status ${res.status})`)
+  return id
+}
+
+export function buildForm(entityId: string, documentId: string, mapping: Record<string, string>): FormData {
+  const f = new FormData()
+  f.set('entity_id', entityId)
+  f.set('mapping', JSON.stringify(mapping))
+  f.set('document_id', documentId)
+  return f
+}
+
+// POST /v1/imports; returns the status and parsed body, never throws on a status.
+export async function importFetch(token: string, form: FormData): Promise<{ status: number; body: unknown }> {
+  const res = await fetch(`${apiBase()}/api/invoice/v1/imports`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  })
+  let body: unknown
+  try {
+    body = await res.json()
+  } catch {
+    body = undefined
+  }
+  return { status: res.status, body }
 }
 
 // GET /v1/imports/document/reading and POST /v1/imports/document/invoice. Mirrors

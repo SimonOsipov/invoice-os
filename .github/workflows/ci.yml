@@ -1627,7 +1627,7 @@ jobs:
             echo "::error::Production id scan failed"; exit 1
           fi
           if [ "${{ needs.migration-order.result }}" != "success" ]; then
-            echo "::error::A new migration sorts before one already on the base branch"; exit 1
+            echo "::error::A new migration sorts before one already on the base branch, or a migration is deleted without a deliberate mark"; exit 1
           fi
           if [ "${{ needs.contract-step.result }}" != "success" ]; then
             echo "::error::A migration deletes schema without a deliberate mark, or the check could not run"; exit 1

@@ -25,9 +25,11 @@
 // the three response bodies to each other, so "identical" is demonstrated,
 // not assumed from a hard-coded string.
 // Read-only: no login, no token minting, no writes, no rules-table mutation.
+import { createPrivateKey, generateKeyPairSync, randomUUID, sign, type KeyObject } from 'node:crypto'
 import { test, expect } from '@playwright/test'
-import { rawFetch } from './client'
+import { claimsOf, headerOf, login, me, PERSONAS, rawFetch } from './client'
 import { assertUnauthorizedEnvelope } from './contract-helpers'
+import { previewSecret } from './preview'
 
 test.describe('auth-header contract (API E2E, over the deployed gateway)', () => {
   test.describe('AC1: three distinct auth-failure variants each reject 401 with the shared envelope', () => {
@@ -77,5 +79,52 @@ test.describe('auth-header contract (API E2E, over the deployed gateway)', () =>
     // service independently formatting its own 401.
     expect(portfolio.body, 'portfolio body should equal tenancy body').toEqual(tenancy.body)
     expect(validation.body, 'validation body should equal tenancy body').toEqual(tenancy.body)
+  })
+})
+
+function signEs256(header: object, claims: object, key: KeyObject): string {
+  const b64 = (o: object): string => Buffer.from(JSON.stringify(o)).toString('base64url')
+  const data = `${b64(header)}.${b64(claims)}`
+  return `${data}.${sign('sha256', Buffer.from(data), { key, dsaEncoding: 'ieee-p1363' }).toString('base64url')}`
+}
+
+test.describe('forged tokens (F-204)', () => {
+  let real: string
+  let header: Record<string, unknown>
+  let claims: Record<string, unknown>
+
+  test.beforeAll(async () => {
+    real = await login(PERSONAS.A)
+    header = headerOf(real)
+    claims = claimsOf(real)
+  })
+
+  const getMe = (token: string) => rawFetch('/api/tenancy/v1/me', { headers: { Authorization: `Bearer ${token}` } })
+  // Parsed lazily: a failed secret read must not fail the tests that do not need it.
+  const previewKey = (): KeyObject => createPrivateKey({ key: JSON.parse(previewSecret('mock-issuer-key'))[0], format: 'jwk' })
+  const now = (): number => Math.floor(Date.now() / 1000)
+
+  test("forged tokens: the mock login's own token is accepted", async () => {
+    expect((await me(real)).tenant.id).toBe(PERSONAS.A.tenantId)
+  })
+
+  test('forged tokens: a fresh key under a random kid is refused', async () => {
+    const fresh = generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey
+    assertUnauthorizedEnvelope(await getMe(signEs256({ ...header, kid: randomUUID() }, claims, fresh)), 'fresh key, random kid')
+  })
+
+  test('forged tokens: a fresh key under the published kid is refused', async () => {
+    const fresh = generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey
+    assertUnauthorizedEnvelope(await getMe(signEs256(header, claims, fresh)), 'fresh key, published kid')
+  })
+
+  test('forged tokens: the preview key signs an accepted unexpired token', async () => {
+    const token = signEs256(header, { ...claims, iat: now(), exp: now() + 300 }, previewKey())
+    expect((await me(token)).tenant.id).toBe(PERSONAS.A.tenantId)
+  })
+
+  test('forged tokens: an expired token under the published key is refused', async () => {
+    const token = signEs256(header, { ...claims, iat: now() - 7200, exp: now() - 3600 }, previewKey())
+    assertUnauthorizedEnvelope(await getMe(token), 'preview key, expired')
   })
 })

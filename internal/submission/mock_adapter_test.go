@@ -102,6 +102,7 @@
 package submission_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -3790,4 +3791,17 @@ func TestMockTransform_OtherTriggersStillBuild(t *testing.T) {
 			t.Errorf("Transform(%q) = (%d bytes, %v), want a wire and nil error", tin, len(w), err)
 		}
 	}
+}
+
+// TestMockSubmit_UnbuildableTINStillAccepts: RETRY-01-03 AC3. Transform fails for -0010, so a
+// wire carrying it is forged from an accepted one; Submit must treat it as the accept path.
+func TestMockSubmit_UnbuildableTINStillAccepts(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	base := maWire(t, a, maTINAccept)
+	forged := bytes.ReplaceAll(base, []byte(maTINAccept), []byte(maTINUnbuildable))
+	if bytes.Equal(forged, base) {
+		t.Fatalf("the wire carries no %s to swap for %s", maTINAccept, maTINUnbuildable)
+	}
+	r, _ := maSubmit(t, a, context.Background(), forged, "key-unbuildable")
+	maAccepted(t, "Submit with the -0010 TIN", r)
 }

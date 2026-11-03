@@ -1127,7 +1127,9 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(before.send_again_blocked_reason).toBeNull()
       const myId = (await me(token)).user.id
       const historyBefore = (await getInvoiceHistory(token, id)).length
-      const transitionedBefore = (await getAuditLog(token, { invoice_id: id, event: ['invoice.transitioned'] })).total
+      const auditBefore = new Set(
+        (await getAuditLog(token, { invoice_id: id, event: ['invoice.transitioned'], limit: 100 })).events.map((e) => e.id),
+      )
 
       const res = await post(token, id)
       expect(res.status, 'send-again by an approver').toBe(200)
@@ -1140,9 +1142,14 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(requeue, 'history gains failed -> queued').toBeDefined()
       expect(requeue!.actor).toBe(myId)
 
-      const audit = await getAuditLog(token, { invoice_id: id, event: ['invoice.transitioned'] })
-      expect(audit.total, 'audit log gains invoice.transitioned').toBeGreaterThan(transitionedBefore)
-      expect(audit.events.some((e) => e.actor === myId)).toBe(true)
+      // The approver also drove the earlier transitions, so match the new failed -> queued row itself.
+      const audit = await getAuditLog(token, { invoice_id: id, event: ['invoice.transitioned'], limit: 100 })
+      const requeued = audit.events.filter((e) => {
+        const p = e.payload as { from?: string; to?: string }
+        return !auditBefore.has(e.id) && p.from === 'failed' && p.to === 'queued'
+      })
+      expect(requeued, 'audit log gains one failed -> queued invoice.transitioned').toHaveLength(1)
+      expect(requeued[0]!.actor).toBe(myId)
 
       await expect
         .poll(

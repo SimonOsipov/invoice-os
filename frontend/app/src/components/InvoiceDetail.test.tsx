@@ -4761,6 +4761,27 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
         await screen.findByTestId('detail-decision-error')
       },
     },
+    {
+      name: 'a failed invoice a preparer may not send again',
+      mount: async () => {
+        mockDetailFetch(
+          detailRecord({ id: ID, status: 'failed', failure_kind: 'payload_not_built', rejection_reasons: [], can_send_again: false, send_again_blocked_reason: 'An approver can send this invoice again.' }),
+        )
+        render(<InvoiceDetail ctx={detailCtx(ID)} />)
+        await screen.findByTestId('send-again-blocked')
+      },
+    },
+    {
+      name: 'a send again the server refused',
+      mount: async () => {
+        mockDetailFetch(detailRecord({ id: ID, status: 'failed', failure_kind: 'payload_not_built', rejection_reasons: [], can_send_again: true }), [], {
+          sendAgainResponse: { ok: false, status: 409, json: () => Promise.resolve({ error: 'This invoice is no longer failed. Refresh to see its status.' }) },
+        })
+        render(<InvoiceDetail ctx={detailCtx(ID)} />)
+        fireEvent.click(await screen.findByTestId('send-again'))
+        await screen.findByTestId('send-again-error')
+      },
+    },
   ]
 
   // Also carries BUG-13-01's `invoiceDetail_retiredScrollTestidIsDeclaredRetired`: the
@@ -5766,6 +5787,21 @@ describe('InvoiceDetail failed card: Send again (RETRY-01-04)', () => {
     expect(detailGets(fetchMock).length).toBeGreaterThanOrEqual(2)
     expect(historyGets(fetchMock).length).toBeGreaterThanOrEqual(2)
   })
+
+  it(
+    'a sent-again invoice that polling sees fail again shows the new kind\'s copy and an enabled action',
+    async () => {
+      const queued = failedRec({ status: 'queued', failure_kind: null, can_send_again: false })
+      const failedAgain = failedRec({ failure_kind: 'never_acknowledged', can_send_again: true })
+      mockDetailFetch(queued, [], { detailSequence: [failedAgain] })
+      render(<InvoiceDetail ctx={detailCtx(ID)} />)
+      const btn = (await screen.findByTestId('send-again', {}, { timeout: LIVE_POLL_MS + 1500 })) as HTMLButtonElement
+      expect(btn.disabled).toBe(false)
+      expect(screen.getByTestId('failure-headline').textContent).toBe(failureExplanation('never_acknowledged').headline)
+      expect(screen.queryByTestId('failure-next-step')).toBeNull()
+    },
+    LIVE_POLL_MS + 5000,
+  )
 
   it('a refused send-again keeps the failed card, shows the sentence and re-reads nothing', async () => {
     const sentence = 'This invoice was marked resolved outside the system, so it cannot be sent again.'

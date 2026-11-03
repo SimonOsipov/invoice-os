@@ -137,7 +137,8 @@ func TestGetHandler_SendAgainKeysAlwaysPresent(t *testing.T) {
 func TestGetHandler_SendAgainFailsClosedOnANoteReadError(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, nil))
-	facts := ApprovalFacts{TransmitClear: true, NoteChecksErr: errors.New("boom")}
+	// NoteChecksPass true: the error alone must close the gate.
+	facts := ApprovalFacts{TransmitClear: true, NoteChecksPass: true, NoteChecksErr: errors.New("boom")}
 	raw := doGateGet(t, failedWith(kindPtr(submission.FailureNeverAcknowledged), submission.CreditNote), facts, log)
 	if string(raw["can_send_again"]) != "false" || string(raw["send_again_blocked_reason"]) != `"`+wantSendAgainNoteChecks+`"` {
 		t.Errorf("can_send_again=%s reason=%s, want false and the note sentence", raw["can_send_again"], raw["send_again_blocked_reason"])

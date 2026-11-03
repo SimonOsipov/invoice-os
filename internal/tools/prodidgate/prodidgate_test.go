@@ -117,8 +117,9 @@ func TestRun_ScansOnlyTrackedRegularFiles(t *testing.T) {
 func TestRun_UnreadableTrackedFileIsAnError(t *testing.T) {
 	t.Parallel()
 	dir := gitRepo(t)
+	write(t, dir, "ok.txt", "x") // a read file, so the empty-tree floor cannot answer for the error
 	write(t, dir, "gone.txt", "x")
-	gitAdd(t, dir, "gone.txt")
+	gitAdd(t, dir, "ok.txt", "gone.txt")
 	if err := os.Remove(filepath.Join(dir, "gone.txt")); err != nil {
 		t.Fatal(err)
 	}
@@ -141,8 +142,9 @@ func TestRun_UnlistableOrUnopenableTreeIsAnError(t *testing.T) {
 		return
 	}
 	dir := gitRepo(t)
+	write(t, dir, "ok.txt", "x") // a read file, so the empty-tree floor cannot answer for the error
 	write(t, dir, "locked.txt", "x")
-	gitAdd(t, dir, "locked.txt")
+	gitAdd(t, dir, "ok.txt", "locked.txt")
 	if err := os.Chmod(filepath.Join(dir, "locked.txt"), 0); err != nil {
 		t.Fatal(err)
 	}

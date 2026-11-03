@@ -1009,6 +1009,9 @@ func TestPolicy_ValidateCondAmountGrammarIsNarrowerThanPostgres(t *testing.T) {
 		{"250,000.00", true},       // group separators
 		{"₦250000.00", true},       // a currency mark from a paste
 		{"", true},                 //
+		{"\u2212250000.00", true},  // decimal 1.6.0 reads U+2212 as '-'; numeric rejects it (22P02, 500)
+		{"\u22120", true},          // ditto, signed zero
+		{"1e\u22120", true},        // ditto, in the exponent
 		{"2.5e-3", true},           // scale 4 once resolved — numeric would round it to 0.00
 		{"999999999999.999", true}, // scale 3 at the range boundary
 	}

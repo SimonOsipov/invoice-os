@@ -27,6 +27,12 @@ func TestNotePositive(t *testing.T) {
 		{"a currency code is no amount", sxPtr("NGN 500.00"), nil, "NGN 500.00"},
 		{"brackets are no amount", sxPtr("(750.00)"), nil, "(750.00)"},
 		{"a unicode minus is no amount", sxPtr("\u2212750.00"), nil, "\u2212750.00"},
+		{"a padded unicode minus is no amount", sxPtr(" \u2212750.00 "), nil, "\u2212750.00"},
+		{"a unicode minus on zero is no amount", sxPtr("\u22120"), nil, "\u22120"},
+		{"a unicode minus before the point is no amount", sxPtr("\u2212.5"), nil, "\u2212.5"},
+		{"a unicode minus in the exponent is no amount", sxPtr("1e\u22123"), nil, "1e\u22123"},
+		{"a unicode minus mid-string is no amount", sxPtr("750\u22122"), nil, "750\u22122"},
+		{"a lone unicode minus is no amount", sxPtr("\u2212"), nil, "\u2212"},
 		{"an empty string is no amount", sxPtr(""), nil, `""`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

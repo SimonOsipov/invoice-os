@@ -261,7 +261,7 @@ func hasNUL(p *string) bool { return p != nil && strings.IndexByte(*p, 0) >= 0 }
 // owns it, because the column is written whatever the kind.
 func validateStepFields(s stepInput) error {
 	// Kind is closed by policyStepKinds, cond_op by the vocabulary below and cond_amount by
-	// decimal.NewFromString, so the three here are every client string that can still reach
+	// validateCondAmount, so the three here are every client string that can still reach
 	// a text column.
 	for _, p := range []*string{s.WorkflowRoleKey, s.NotifyTarget, s.NotifyChannel} {
 		if hasNUL(p) {
@@ -307,7 +307,8 @@ func validateStepFields(s stepInput) error {
 // rather than rounded: 100.005 would store as 100.01, differing from what was sent.
 func validateCondAmount(amount string) error {
 	d, err := decimal.NewFromString(amount)
-	if err != nil {
+	// decimal 1.6.0 reads U+2212 as '-', but Postgres numeric does not.
+	if err != nil || strings.ContainsRune(amount, '\u2212') {
 		return ErrValidation
 	}
 	if d.Exponent() < -2 {

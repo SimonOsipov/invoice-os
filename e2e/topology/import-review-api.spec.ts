@@ -1,7 +1,7 @@
 // The import review table on a batch minted through the API, with no AI.
 import { readFileSync } from 'node:fs'
 import { test, expect, type Page, type Request, type Response } from '@playwright/test'
-import { login, createEntity, createImportBatchFromCsv, listInvoices, type ImportBatchResult } from '../api/client'
+import { login, createEntity, createImportBatchFromCsv, listInvoices, uploadDocument, buildForm, importFetch, type ImportBatchResult } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { buildCleanCsv, buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, PERF_MAPPING } from '../importFixtures'
@@ -518,6 +518,62 @@ test.describe('NCOV-02 review channels, multi-file runs and the source card', ()
       await expect(row.locator('xpath=..')).toContainText('Queued')
     }
     expect(submissions, 'exactly one submissions POST').toBe(1)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('source document: the card names row 4, the preview opens the sheet and marks row 4', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `NCOV-02 source ${Date.now()}`, tin: freshTin() })
+    const documentId = await uploadDocument(token, buildMixedCsv(), 'source-card-mixed.csv')
+    const imported = await importFetch(token, buildForm(entity.id, documentId, PERF_MAPPING))
+    // Fixture check: the import answers 201 and reports VIOLATE with its invoice id.
+    expect(imported.status, 'the mixed import answers 201').toBe(201)
+    const violations = (imported.body as { invoice_violations: { invoice_number: string; invoice_id?: unknown }[] }).invoice_violations
+    const invoiceId = violations.find((v) => v.invoice_number === 'INV-UI-MIX-VIOLATE')?.invoice_id
+    expect(typeof invoiceId, 'invoice_violations holds VIOLATE with a string invoice_id').toBe('string')
+
+    const sourcePath = `${INVOICES}/${invoiceId as string}/source-document`
+    const [, sourceResp] = await Promise.all([
+      signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/invoices/${invoiceId as string}` }),
+      page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === sourcePath, { timeout: 120_000 }),
+    ])
+    expect(sourceResp.status(), 'the source-document GET answers 200').toBe(200)
+    const source = (await sourceResp.json()) as { source_rows: number[]; document: { id: string } }
+    // buildMixedCsv: header, two unreadable rows, then VIOLATE, so VIOLATE is sheet row 4.
+    expect(source.source_rows, 'VIOLATE came from row 4').toEqual([4])
+    expect(source.document.id, 'the card points at the uploaded document').toBe(documentId)
+
+    const card = page.getByTestId('source-document-card')
+    await expect(card).toBeVisible({ timeout: 60_000 })
+    await expect(card).toContainText('source-card-mixed.csv')
+    // Singular copy from lib/sourceDocument.ts.
+    await expect(page.getByTestId('source-document-range')).toHaveText('Row 4 of this file became this invoice.')
+
+    const sheetPath = `/api/invoice/v1/documents/${documentId}/sheet`
+    const [sheetResp] = await Promise.all([
+      page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === sheetPath, { timeout: 60_000 }),
+      page.getByTestId('view-source-document').click(),
+    ])
+    expect(sheetResp.status(), 'the sheet GET answers 200').toBe(200)
+    await expect(page.getByTestId('source-document-modal')).toBeVisible()
+
+    // Middle dot as the escape, never typed.
+    await expect(page.getByTestId('sheet-scope-file')).toHaveText(/^Whole file · 4 rows$/)
+    const marked = page.getByTestId('sheet-row-marked')
+    await expect(marked).toHaveCount(1)
+    await expect(marked).toHaveAttribute('data-sheet-row', '4')
+    await expect(marked.getByTestId('sheet-row-number')).toHaveText('4')
+    await expect(marked).toContainText('INV-UI-MIX-VIOLATE')
+
+    await page.getByTestId('sheet-scope-invoice').click()
+    await expect(page.getByTestId('sheet-row')).toHaveCount(0)
+    await expect(marked).toHaveCount(1)
+    await expect(page.getByTestId('sheet-row-number')).toHaveCount(1)
+    await expect(marked.getByTestId('sheet-row-number')).toHaveText('4')
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

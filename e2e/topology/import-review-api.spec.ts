@@ -562,7 +562,7 @@ test.describe('NCOV-02 review channels, multi-file runs and the source card', ()
     await expect(page.getByTestId('source-document-modal')).toBeVisible()
 
     // Middle dot as the escape, never typed.
-    await expect(page.getByTestId('sheet-scope-file')).toHaveText(/^Whole file · 4 rows$/)
+    await expect(page.getByTestId('sheet-scope-file')).toHaveText(/^Whole file \u00b7 4 rows$/)
     const marked = page.getByTestId('sheet-row-marked')
     await expect(marked).toHaveCount(1)
     await expect(marked).toHaveAttribute('data-sheet-row', '4')

@@ -55,12 +55,13 @@ type Request struct {
 var ErrUnavailable = errors.New("ai: unavailable")
 
 type config struct {
-	key      string
-	endpoint string
-	fake     bool
-	budget   time.Duration
-	now      func() time.Time
-	sleep    func(ctx context.Context, d time.Duration) error
+	appURL, appName string // OpenRouter attribution; sent only when both are set
+	key             string
+	endpoint        string
+	fake            bool
+	budget          time.Duration
+	now             func() time.Time
+	sleep           func(ctx context.Context, d time.Duration) error
 }
 
 type Client struct {
@@ -272,6 +273,10 @@ func (c *Client) post(ctx context.Context, body []byte) (status int, respBody []
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.cfg.key)
 	httpReq.Header.Set("Content-Type", "application/json")
+	if c.cfg.appURL != "" && c.cfg.appName != "" {
+		httpReq.Header.Set("HTTP-Referer", c.cfg.appURL)
+		httpReq.Header.Set("X-OpenRouter-Title", c.cfg.appName)
+	}
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {

@@ -10,8 +10,10 @@ import (
 )
 
 const (
-	EnvKey  = "OPENROUTER_API_KEY" // shared with the AI client
-	EnvFake = "JEV_FAKE"
+	EnvKey     = "OPENROUTER_API_KEY" // shared with the AI client
+	EnvAppURL  = "OPENROUTER_APP_URL"
+	EnvAppName = "OPENROUTER_APP_NAME"
+	EnvFake    = "JEV_FAKE"
 )
 
 // FromEnv never exits the process. Neither variable is trimmed: a whitespace
@@ -31,6 +33,8 @@ func FromEnv(logger *slog.Logger) (*Client, error) {
 	}
 	return newClient(config{
 		key:       key,
+		appURL:    os.Getenv(EnvAppURL),
+		appName:   os.Getenv(EnvAppName),
 		endpoint:  endpoint,
 		fake:      fake,
 		budget:    budget,

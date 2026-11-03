@@ -254,7 +254,8 @@ func NotePositive(v *string) (*string, error) {
 		return nil, nil
 	}
 	d, err := decimal.NewFromString(strings.TrimSpace(*v))
-	if err != nil {
+	// decimal 1.6.0 reads U+2212 as '-'; a unicode minus is no amount.
+	if err != nil || strings.ContainsRune(*v, '\u2212') {
 		return nil, errors.New("reads " + fmt.Sprintf("%q", *v) + ", which is not an amount")
 	}
 	if !d.IsNegative() {

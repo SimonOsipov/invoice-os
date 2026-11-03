@@ -200,6 +200,7 @@ test.describe('cross-tenant isolation (API E2E, over the deployed gateway)', () 
     expect((await getEntity(tokenA, id)).id).toBe(id)
 
     await assertNotFoundAcrossTenant(() => getEntity(tokenB, id), 'B reads the entity written with forged headers')
+    expect((await listEntities(tokenA, { q: name, limit: 200 })).entities.map((e) => e.id)).toContain(id)
     const { entities } = await listEntities(tokenB, { q: name, limit: 200 })
     expect(entities.map((e) => e.id)).not.toContain(id)
   })

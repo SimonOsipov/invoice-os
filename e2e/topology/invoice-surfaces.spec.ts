@@ -2458,6 +2458,16 @@ test('send again: a payload_not_built invoice goes back to queued, fails again, 
 
   const userId = (await me(await browserToken(page))).user.id
   const statusChange = page.getByTestId('invoice-activity').getByTestId('audit-row').filter({ hasText: 'Status changed' }).filter({ hasText: DRIVER })
+  // The card shows ACTIVITY_REST_ROWS (5) rows until expanded; activityToggleCopy labels it 'Show all N events' / 'Show fewer'.
+  const expandActivity = async () => {
+    const toggle = page.getByTestId('activity-toggle')
+    await expect(toggle.or(page.getByTestId('audit-row').first())).toBeVisible()
+    if ((await toggle.count()) > 0 && /^Show all /.test((await toggle.textContent()) ?? '')) {
+      await toggle.click()
+      await expect(toggle, 'the card is expanded before any row is counted').toHaveText('Show fewer')
+    }
+  }
+  await expandActivity()
   await expect(statusChange.first(), 'the batch submit is already in the feed, so the count below is non-empty').toBeVisible()
   const before = await statusChange.count()
   await sendAgain.click()
@@ -2471,6 +2481,7 @@ test('send again: a payload_not_built invoice goes back to queued, fails again, 
   await expect(sendAgain).toBeEnabled()
 
   await page.reload()
+  await expandActivity()
   await expect(statusChange.first()).toBeVisible()
   await expect(statusChange, 'the retry adds exactly one persona Status changed row').toHaveCount(before + 1)
 

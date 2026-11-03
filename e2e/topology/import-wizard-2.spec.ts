@@ -416,11 +416,12 @@ test('EXTR12-E2E-06 (AC-3/AC-5): type and point settle their fields, and the reg
   // Every subject off the wire the SPA itself consumed. The fake AI always yields both a missing
   // field and an inconsistent subtotal; the real AI may read either one right, and that leg then
   // does not run. The choose leg is EXTR12-E2E-06b.
-  const missing = detail.fields.find((f) => f.reason === 'missing')
+  // buyer_tin by name, as EXTR12-E2E-05 does: the typed TIN fits only a TIN field.
+  const missing = detail.fields.find((f) => f.name === 'buyer_tin' && f.reason === 'missing')
   const subtotal = detail.fields.find((f) => f.name === 'subtotal')
   const typed = subtotal?.reason === 'inconsistent' ? subtotal : undefined
   if (!nightlyTarget()) {
-    expect(missing, 'the PR lane reported no missing field -- there is nothing to point at').toBeTruthy()
+    expect(missing, 'the PR lane reported no missing buyer_tin -- there is nothing to point at').toBeTruthy()
     expect(typed, 'the PR lane did not flag subtotal inconsistent -- there is nothing to type over').toBeTruthy()
   }
   expect(
@@ -3435,10 +3436,8 @@ test("EXTR18-E2E-01 (AC-5): the deployed reading is the document's own number", 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// A document whose invoice_number never resolves mints a QUARANTINED batch, not an invoice
-// (documentCreateInput, internal/importer/document.go) -- so routeAfterRun's 'single' arm is unreachable and
-// extractOneDocument's landing wait can never settle. The verdict is therefore read off
-// the deployed wire, which is also exactly what EXTR-15's Core AC will consume.
+// extractOneDocument's landing wait cannot settle for a quarantined batch, so the verdict is
+// read off the deployed wire, which is also what EXTR-15's Core AC consumes.
 async function settleOneDocument(
   page: Page,
   label: string,
@@ -3482,6 +3481,21 @@ async function settleOneDocument(
     .toBe('succeeded')
 
   return { token, jobId, detail: await getExtractionDetail(token, jobId) }
+}
+
+// The settled single document lands on a real destination under either AI, never the picker.
+async function expectSettledLanding(page: Page): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        if (await page.getByTestId('review-table').isVisible()) return 'landed'
+        if (await page.getByText(/^BATCH /).first().isVisible()) return 'landed'
+        if (await page.getByTestId('invoice-detail').isVisible()) return 'landed'
+        return 'nothing yet'
+      },
+      { message: 'the settled document must land on a review batch or its invoice', timeout: 120_000 },
+    )
+    .toBe('landed')
 }
 
 // The run's own landing: a quarantined single-document run still has a batch, so routeAfterRun
@@ -3551,6 +3565,7 @@ test('EXTR18-E2E-03: an image-only page the OCR can read is NOT unreadable', asy
     name: 'dense_invoice.pdf',
     buffer: uniqueDensePdfBytes(),
   })
+  await expectSettledLanding(page)
 
   // The OCR-succeeded half of the pair: no document_text_layer row at all.
   const textLayer = detail.fields.find((f) => f.name === 'document_text_layer')
@@ -3564,8 +3579,6 @@ test('EXTR18-E2E-03: an image-only page the OCR can read is NOT unreadable', asy
   expect(currency!.reason, 'currency must be decided').toBe('')
   expect(total!.value, 'total must carry a value').not.toBeNull()
   expect(currency!.value, 'currency must carry a value').not.toBeNull()
-
-  // Not asserted: invoice_number.
 
   const lines = wireLines(detail)
   expect(lines.length, 'the OCR read fewer than 2 line rows').toBeGreaterThanOrEqual(2)

@@ -1282,7 +1282,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     </div>
                   )}
                   {/* Resolve-outside (Core AC #1/#4/#5/#6) -- inline, never a modal
-                      ([no-modal]), the only affordance this diagnosis-only card carries.
+                      ([no-modal]).
                       Resolved and unresolved are mutually exclusive renders: the banner +
                       Undo replace the reason input + mark-resolved button entirely. */}
                   {resolvedMark ? (

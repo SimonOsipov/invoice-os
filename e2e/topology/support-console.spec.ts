@@ -1847,7 +1847,8 @@ async function recordFailedAiCall(): Promise<void> {
   const token = await login(PERSONAS.A)
   const listed = async (): Promise<Set<string>> => {
     const q = new URLSearchParams({ tenant: PERSONAS.A.tenantId, failed: 'true', limit: '100' })
-    return new Set((await liveStaffGet<{ calls: { id: string }[] }>(`${STAFF_AI_CALLS}?${q}`)).calls.map((c) => c.id))
+    const { calls } = await liveStaffGet<{ calls: { id: string; client: string; purpose: string }[] }>(`${STAFF_AI_CALLS}?${q}`)
+    return new Set(calls.filter((c) => c.client === 'ai' && c.purpose === 'spreadsheet').map((c) => c.id))
   }
   const known = await listed()
   const tin = freshTin()
@@ -1855,6 +1856,7 @@ async function recordFailedAiCall(): Promise<void> {
   const form = new FormData()
   form.set('file', new Blob([buildOversizedCellCsv()], { type: 'text/csv' }), 'oversized.csv')
   const res = await fetch(`${apiBase()}/api/invoice/v1/imports/preview`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form })
+  expect(res.ok, `the oversized preview is accepted (status ${res.status})`).toBe(true)
   const { document_id } = (await res.json()) as { document_id?: string }
   expect(typeof document_id, `preview carries a document_id (status ${res.status})`).toBe('string')
   await suggestMapping(token, { entity_id: entity.id, document_id: document_id as string })
@@ -2107,7 +2109,8 @@ function liveMask(page: Page, nav: string): Locator[] {
 
 for (const s of SCREENS) {
   test(`SUP-03 ${s.nav}: v2 header, eyebrow clearances and screen reads`, async ({ page }, testInfo) => {
-    test.setTimeout(s.nav === 'System health' ? 300_000 : 120_000)
+    // AI usage adds the oversized call: 30s preview + 120s real-AI suggest + 30s poll = +180s
+    test.setTimeout(s.nav === 'System health' ? 300_000 : s.nav === 'AI usage' ? 300_000 : 120_000)
     if (s.nav === 'AI usage') await recordFailedAiCall()
     const errors = await startSupport(page)
     const armed = s.arm?.(page)

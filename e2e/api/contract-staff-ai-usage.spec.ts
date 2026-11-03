@@ -182,6 +182,7 @@ test.describe('staff AI usage (API E2E, over the deployed gateway)', () => {
   })
 
   test('staff ai calls: failed=true keeps only failed calls', async () => {
+    test.setTimeout(240_000) // 30s list reads + 6MB preview + 120s real-AI suggest (as AIR07-E2E-04) + 30s poll = 180s, plus margin
     const list = (await calls({ ...forA(), limit: String(MAX_LIMIT) })).calls
     const failed = (await calls({ ...forA(), failed: 'true', limit: String(MAX_LIMIT) })).calls
     for (const c of failed) expect(c.outcome, `row ${c.id} under failed=true`).not.toBe('ok')

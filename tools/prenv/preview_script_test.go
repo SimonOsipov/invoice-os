@@ -548,7 +548,7 @@ func TestPreviewNightlyEnvFilesDifferOnlyByName(t *testing.T) {
 			if !strings.Contains(want, nlFakes) {
 				t.Fatalf("PR golden env-%s lacks the fakes", svc)
 			}
-			want = strings.Replace(want, nlFakes, "", 1)
+			want = strings.Replace(want, nlFakes, nlAttribution, 1)
 		}
 		if strings.Replace(got["env-"+svc], nlDealStage, "", 1) != want {
 			t.Errorf("env-%s:\n%s\nwant\n%s", svc, got["env-"+svc], want)
@@ -564,6 +564,8 @@ const nlDealStage = "HUBSPOT_DEAL_STAGE: appointmentscheduled\n"
 const (
 	nlFakes = "AI_FAKE: 'true'\nJEV_FAKE: 'true'\n"
 	nlKey   = "OPENROUTER_API_KEY=nightly-openrouter-api-key:latest"
+	// nlAttribution is what the nightly prints where a PR prints nlFakes.
+	nlAttribution = "OPENROUTER_APP_NAME: Nightly App\nOPENROUTER_APP_URL: https://app-nightly-944095690109.africa-south1.run.app\n"
 )
 
 // nlRealAI is the set of nightly services that answer with the real model.
@@ -800,8 +802,11 @@ func TestPreviewNightlyRealAIOnThreeServices(t *testing.T) {
 		if strings.Contains(env, "AI_FAKE") || strings.Contains(env, "JEV_FAKE") {
 			t.Errorf("nightly env-%s sets a fake:\n%s", svc, env)
 		}
-		if strings.Contains(strings.ToUpper(env), "OPENROUTER") {
+		if strings.Contains(env, "OPENROUTER_API_KEY") {
 			t.Errorf("nightly env-%s names the key in plain env:\n%s", svc, env)
+		}
+		if has := strings.Contains(env, nlAttribution); has != nlRealAI[svc] {
+			t.Errorf("nightly env-%s carries the attribution = %v, want %v:\n%s", svc, has, nlRealAI[svc], env)
 		}
 		has := strings.Contains(","+secrets+",", ","+nlKey+",")
 		if has != nlRealAI[svc] {

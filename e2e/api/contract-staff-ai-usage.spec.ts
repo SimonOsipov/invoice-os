@@ -4,7 +4,7 @@
 import { test, expect } from '@playwright/test'
 import { apiBase, checkMapping, createEntity, login, PERSONAS, provisionStaffAccount, rawFetch, signInSession, suggestMapping } from './client'
 import { freshTin } from './fixtures'
-import { nightlyTarget, REAL_AI_COVERED } from '../targets'
+import { buildOversizedCellCsv } from '../importFixtures'
 import { assertErrorEnvelope } from './contract-helpers'
 
 const STAFF_CALLS = '/api/invoice/v1/staff/ai-calls'
@@ -16,8 +16,6 @@ const AI_MODEL = 'google/gemini-3.5-flash-lite'
 const AI_PURPOSE = 'spreadsheet'
 // jev.PurposeMappingCheck, internal/platform/jev/client.go.
 const JEV_PURPOSE = 'mapping_check'
-// The fake clients' outcome, internal/platform/ai/fake.go and internal/platform/jev/fake.go.
-const FAKE_OUTCOME = 'fake'
 // parseFilter, internal/aicalls/staff_read.go.
 const INVALID_TENANT = 'invalid tenant'
 const LIMIT_MESSAGE = 'limit must be >= 1'
@@ -138,15 +136,20 @@ test.describe('staff AI usage (API E2E, over the deployed gateway)', () => {
   })
 
   test("staff ai calls: the spec's calls are listed with every field; filters and paging hold; refusals", async () => {
-    test.skip(nightlyTarget(), REAL_AI_COVERED)
     const list = (await calls({ ...forA(), limit: String(MAX_LIMIT) })).calls
     const ai = list.find((c) => c.id === aiId)
     const jev = list.find((c) => c.id === jevId)
     expect(ai, 'the ai row is listed').toBeDefined()
     expect(jev, 'the jev row is listed').toBeDefined()
-    // Fake clients report zero usage, so tokens are 0 and cost is "0".
-    expect(ai, 'the ai row').toMatchObject({ tenant_id: PERSONAS.A.tenantId, tenant_name: PERSONAS.A.name, client: 'ai', purpose: AI_PURPOSE, model: AI_MODEL, input_tokens: 0, output_tokens: 0, cost: '0', attempts: 1, outcome: FAKE_OUTCOME })
-    expect(jev, 'the jev row').toMatchObject({ tenant_id: PERSONAS.A.tenantId, tenant_name: PERSONAS.A.name, client: 'jev', purpose: JEV_PURPOSE, input_tokens: 0, output_tokens: 0, cost: '0', attempts: 1, outcome: FAKE_OUTCOME })
+    expect(ai, 'the ai row').toMatchObject({ tenant_id: PERSONAS.A.tenantId, tenant_name: PERSONAS.A.name, client: 'ai', purpose: AI_PURPOSE, model: AI_MODEL })
+    expect(jev, 'the jev row').toMatchObject({ tenant_id: PERSONAS.A.tenantId, tenant_name: PERSONAS.A.name, client: 'jev', purpose: JEV_PURPOSE })
+    // Usage differs between the fake and the real clients: assert shape, not values.
+    for (const c of [ai!, jev!]) {
+      expect(c.attempts, `row ${c.id} attempts`).toBeGreaterThanOrEqual(1)
+      expect(Number.isInteger(c.input_tokens) && c.input_tokens >= 0, `row ${c.id} input_tokens`).toBe(true)
+      expect(Number.isInteger(c.output_tokens) && c.output_tokens >= 0, `row ${c.id} output_tokens`).toBe(true)
+      expect(c.cost, `row ${c.id} cost`).toMatch(/^\d+(\.\d+)?$/)
+    }
     for (let i = 1; i < list.length; i++) {
       expect(Date.parse(list[i].created_at), `row ${i} is not newer than row ${i - 1}`).toBeLessThanOrEqual(Date.parse(list[i - 1].created_at))
     }
@@ -154,8 +157,9 @@ test.describe('staff AI usage (API E2E, over the deployed gateway)', () => {
     const byPurpose = (await calls({ ...forA(), purpose: JEV_PURPOSE, limit: String(MAX_LIMIT) })).calls
     expect(byPurpose.map((c) => c.id), 'the purpose filter holds the jev row').toContain(jevId)
     for (const c of byPurpose) expect([c.client, c.purpose], `row ${c.id} under purpose=${JEV_PURPOSE}`).toEqual(['jev', JEV_PURPOSE])
-    const byOutcome = (await calls({ ...forA(), outcome: FAKE_OUTCOME, limit: String(MAX_LIMIT) })).calls.map((c) => c.id)
-    expect(byOutcome, 'the outcome filter holds both rows').toEqual(expect.arrayContaining([aiId, jevId]))
+    const byOutcome = (await calls({ ...forA(), outcome: ai!.outcome, limit: String(MAX_LIMIT) })).calls
+    expect(byOutcome.map((c) => c.id), 'the outcome filter holds the ai row').toContain(aiId)
+    for (const c of byOutcome) expect(c.outcome, `row ${c.id} under outcome=${ai!.outcome}`).toBe(ai!.outcome)
 
     expect(list.length, 'two pages need two rows').toBeGreaterThanOrEqual(2)
     const one = await calls({ ...forA(), limit: '1' })
@@ -178,10 +182,29 @@ test.describe('staff AI usage (API E2E, over the deployed gateway)', () => {
   })
 
   test('staff ai calls: failed=true keeps only failed calls', async () => {
-    test.skip(nightlyTarget(), REAL_AI_COVERED)
+    test.setTimeout(240_000) // 30s list reads + 6MB preview + 120s real-AI suggest (as AIR07-E2E-04) + 30s poll = 180s, plus margin
+    const list = (await calls({ ...forA(), limit: String(MAX_LIMIT) })).calls
     const failed = (await calls({ ...forA(), failed: 'true', limit: String(MAX_LIMIT) })).calls
     for (const c of failed) expect(c.outcome, `row ${c.id} under failed=true`).not.toBe('ok')
-    expect(failed.map((c) => c.id), 'the fake rows are non-ok, so both are listed').toEqual(expect.arrayContaining([aiId, jevId]))
+    for (const id of [aiId, jevId]) {
+      const row = list.find((c) => c.id === id)!
+      expect(failed.map((c) => c.id).includes(id), `row ${id} is listed iff its outcome ${row.outcome} is not ok`).toBe(row.outcome !== 'ok')
+    }
+
+    // An oversized prompt is refused by the real AI and blank under the fake: a failed row on both. A fresh entity per call.
+    const tokenB = await login(PERSONAS.B)
+    const forB = { tenant: PERSONAS.B.tenantId, from: start, failed: 'true', limit: String(MAX_LIMIT) }
+    const known = new Set((await calls(forB)).calls.map((c) => c.id))
+    const tin = freshTin()
+    const entity = await createEntity(tokenB, { name: `Zz SUPP-10 failed ${tin}`, tin })
+    const documentId = await previewDocument(tokenB, buildOversizedCellCsv())
+    await suggestMapping(tokenB, { entity_id: entity.id, document_id: documentId })
+    await expect
+      .poll(async () => (await calls(forB)).calls.some((c) => !known.has(c.id) && c.client === 'ai' && c.purpose === AI_PURPOSE), {
+        message: "the oversized call's row is listed under failed=true",
+        timeout: 30_000,
+      })
+      .toBe(true)
   })
 
   test('staff ai totals equal the call list they summarise', async () => {

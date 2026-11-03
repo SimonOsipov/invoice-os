@@ -47,6 +47,17 @@ export const PERF_MAPPING: Record<string, string> = {
   line_unit_price: 'Unit Price',
 }
 
+// PR_LANE_MAPPING: PERF_MAPPING minus buyer_name and line_description, the nine fields the
+// PR lane (fake AI) ends with: 7 alias fields plus hand-placed invoice_number and subtotal.
+export const PR_LANE_MAPPING: Record<string, string> = Object.fromEntries(
+  Object.entries(PERF_MAPPING).filter(([field]) => field !== 'buyer_name' && field !== 'line_description'),
+)
+
+// The Item cell exceeds the model's context, so a real call is refused; no marker, so the fake answers blank.
+export function buildOversizedCellCsv(): string {
+  return `${PERF_HEADER}\nINV-OVR-1,2026-03-31,12345678-0001,Buyer,NGN,100,7.5,107.5,${'7'.repeat(6_000_000)},1,100\n`
+}
+
 // buildPerfCsv(): a 500-invoice / 1,500-row CSV for ONE entity -- 3 clean line rows
 // per invoice, header fields (issue_date/buyer_tin/buyer/currency/subtotal/vat/total)
 // identical within each invoice's group, ISO dates, distinct invoice numbers
@@ -247,9 +258,6 @@ export function nullExtractHeaderKeys(): Record<string, null> {
 export function steerExplainMarker(answer: unknown): string {
   return `AIFAKE-EXPLAIN-ANSWER-${Buffer.from(JSON.stringify(answer)).toString('base64url')}`
 }
-
-// fake.go's markerUnavailableFor("EXPLAIN"): makes the fake Explain call fail.
-export const EXPLAIN_UNAVAILABLE_MARKER = 'AIFAKE-EXPLAIN-UNAVAILABLE'
 
 // AIR07_ROW3_ANSWER: places invoice_number only, header at row 3 -- everything else null,
 // mirroring AIRL01_ANSWER's shape.

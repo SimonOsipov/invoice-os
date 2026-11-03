@@ -76,6 +76,7 @@ describe('[extr-15-12] every EXTR-15 fixture upload goes through a fresh-per-cal
   const FRESH_HELPERS = [
     'uniqueScannedPdfBytes()',
     'uniqueDensePdfBytes()',
+    'uniqueWildNoNumberPdfBytes()',
     'uniqueGarbageBytes()',
     'uniqueGoldenDocxBytes()',
     'uniqueEmptyDocxBytes()',

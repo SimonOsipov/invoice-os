@@ -32,7 +32,7 @@ import { freshTin } from '../api/fixtures'
 import { expectedStatusDropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
 import { signInAs } from '../personaSession'
-import { nightlyTarget, REAL_AI_COVERED } from '../targets'
+import { nightlyTarget } from '../targets'
 import {
   boxOf,
   collectErrors,
@@ -47,6 +47,7 @@ import {
   requestBody,
   sameRect,
   selectEntity,
+  setExactMapping,
   settledRead,
   shardPersonas,
   uniqueGarbageBytes,
@@ -58,6 +59,7 @@ import {
   buildMixedCsv,
   buildSingleInvoiceCsv,
   nullExtractHeaderKeys,
+  PR_LANE_MAPPING,
 } from '../importFixtures'
 
 const { SHARD, PERSONAS } = shardPersonas('import-wizard-2.spec.ts')
@@ -81,6 +83,14 @@ const DENSE_INVOICE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'dense_invoice.pd
 
 function uniqueDensePdfBytes(): Buffer {
   return Buffer.concat([DENSE_INVOICE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
+// Read by OCR but prints no invoice number, so it always quarantines "was read, but no invoice
+// number". Same recipe.
+const WILD_NO_NUMBER_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'wild_scanned_no_number.pdf'))
+
+function uniqueWildNoNumberPdfBytes(): Buffer {
+  return Buffer.concat([WILD_NO_NUMBER_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
 // A copy of internal/extraction/testdata/advisory_register.pdf (fxE2ECopies). Same recipe.
@@ -113,13 +123,6 @@ function uniqueAiSteeredPdfBytes(): Buffer {
   return Buffer.concat([AI_STEERED_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
-// AIR-04-04's deployed fixture (fxE2ECopies): AIFAKE-UNAVAILABLE makes the fake fleet's AI call fail.
-const AI_UNAVAILABLE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_unavailable_invoice.pdf'))
-
-function uniqueAiUnavailablePdfBytes(): Buffer {
-  return Buffer.concat([AI_UNAVAILABLE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
-}
-
 // fxJevDoubt (fxE2ECopies): JEVFAKE-DOUBT makes the fake Jev doubt the one checked field.
 const JEV_DOUBT_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'jev_doubt_invoice.pdf'))
 
@@ -127,19 +130,29 @@ function uniqueJevDoubtPdfBytes(): Buffer {
   return Buffer.concat([JEV_DOUBT_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
-// fxJevReceipt (fxE2ECopies): JEVFAKE-CHOICE-cmVjZWlwdA makes the fake Jev answer `receipt`.
-const JEV_RECEIPT_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'jev_receipt_invoice.pdf'))
+// AIR-04-04's deployed fixture (fxE2ECopies): AIFAKE-UNAVAILABLE makes the fake fleet's AI call fail.
+const AI_UNAVAILABLE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_unavailable_invoice.pdf'))
 
-function uniqueJevReceiptPdfBytes(): Buffer {
-  return Buffer.concat([JEV_RECEIPT_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+function uniqueAiUnavailablePdfBytes(): Buffer {
+  return Buffer.concat([AI_UNAVAILABLE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
-// fxJevCreditNote (fxE2ECopies): reads as a credit note of INV-ORIG-3401 (JEVFAKE-CHOICE-Y3JlZGl0IG5vdGU
-// and an AIFAKE-ANSWER marker); the engine reads CN-3401, 100.00 / 7.50 / 107.50.
-const JEV_CREDIT_NOTE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'jev_credit_note.pdf'))
+// Honest fixtures (fxE2ECopies): a printed credit note of INV-ORIG-3401, a printed receipt, and an
+// NRS-labelled invoice. Same recipe.
+const HONEST_CREDIT_NOTE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'honest_credit_note.pdf'))
+const HONEST_RECEIPT_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'honest_receipt_invoice.pdf'))
+const AI_NRS_LABELLED_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_nrs_labelled_invoice.pdf'))
 
-function uniqueJevCreditNotePdfBytes(): Buffer {
-  return Buffer.concat([JEV_CREDIT_NOTE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+function uniqueHonestCreditNotePdfBytes(): Buffer {
+  return Buffer.concat([HONEST_CREDIT_NOTE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
+function uniqueHonestReceiptPdfBytes(): Buffer {
+  return Buffer.concat([HONEST_RECEIPT_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
+function uniqueAiNrsLabelledPdfBytes(): Buffer {
+  return Buffer.concat([AI_NRS_LABELLED_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
 // internal/submission/mock_script.go mockTINAccept: the scripted buyer TIN the mock adapter accepts.
@@ -207,13 +220,6 @@ const AI_LINES_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_lines_invoice.pdf'
 
 function uniqueAiLinesPdfBytes(): Buffer {
   return Buffer.concat([AI_LINES_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
-}
-
-// The NRS-fields deployed fixture (fxE2ECopies): header and lines AI markers on one page. Same recipe.
-const AI_NRS_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_nrs_invoice.pdf'))
-
-function uniqueAiNrsPdfBytes(): Buffer {
-  return Buffer.concat([AI_NRS_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
 // No new committed fixture: reuses SCANNED_INVOICE_PDF, uniqueScannedPdfBytes()'s recipe, plus a
@@ -397,10 +403,9 @@ const CHANGED_LABEL: Record<string, string> = {
   chosen: 'YOU CHOSE THIS',
 }
 
-test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and the register and the audit log agree', async ({
+test('EXTR12-E2E-06 (AC-3/AC-5): type and point settle their fields, and the register and the audit log agree', async ({
   page,
 }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
@@ -410,120 +415,85 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   await extractOneDocument(page, 'EXTR-12-09 journey')
   const detail = await openExtractionReview(page)
 
-  // Every subject off the wire the SPA itself consumed, never mock.go, and every floor first: a
-  // fixture change that flattened the mock would otherwise leave this journey settling nothing
-  // and calling it three corrections.
-  const ambiguous = detail.fields.find((f) => f.reason === 'ambiguous')
-  expect(ambiguous, 'this document reported no ambiguous field -- there is no candidate to choose').toBeTruthy()
+  // Every subject off the wire the SPA itself consumed. The fake AI always yields both a missing
+  // field and an inconsistent subtotal; the real AI may read either one right, and that leg then
+  // does not run. The choose leg is EXTR12-E2E-06b.
+  // buyer_tin by name, as EXTR12-E2E-05 does: the typed TIN fits only a TIN field.
+  const missing = detail.fields.find((f) => f.name === 'buyer_tin' && f.reason === 'missing')
+  const subtotal = detail.fields.find((f) => f.name === 'subtotal')
+  const typed = subtotal?.reason === 'inconsistent' ? subtotal : undefined
+  if (!nightlyTarget()) {
+    expect(missing, 'the PR lane reported no missing buyer_tin -- there is nothing to point at').toBeTruthy()
+    expect(typed, 'the PR lane did not flag subtotal inconsistent -- there is nothing to type over').toBeTruthy()
+  }
   expect(
-    ambiguous!.alternatives.length,
-    `${ambiguous!.name} carries no alternative -- the chip this journey clicks does not exist`,
+    [missing, typed].filter(Boolean).length,
+    'the document reported neither a missing field nor an inconsistent subtotal -- there is nothing to settle',
   ).toBeGreaterThanOrEqual(1)
-  const chosenValue = ambiguous!.alternatives[0].value
-  expect(chosenValue, `${ambiguous!.name}'s first alternative carries no value`).toBeTruthy()
-  // Chip 1, never chip 0: chip 0 is the decided reading, whose value equals the wire, so
-  // choosing it exercises the keep-a-no-op arm and leaves the value unmoved. This journey needs
-  // the value to MOVE.
-  expect(
-    chosenValue,
-    'the first alternative reads the same as the decided one, so choosing it would move nothing',
-  ).not.toBe(ambiguous!.value)
+  if (missing) {
+    expect(missing.value, 'the missing field already carries a value').toBeNull()
+    expect(missing.region, 'the missing field already carries a region, so a drawn box proves nothing').toBeNull()
+  }
+  if (typed) {
+    expect(LOCKED_FIELDS, 'subtotal is locked now, so the correction this journey posts would be a 422').not.toContain(
+      typed.name,
+    )
+  }
 
-  const missing = detail.fields.find((f) => f.reason === 'missing')
-  expect(missing, 'this document reported no missing field -- there is nothing to point at').toBeTruthy()
-  expect(missing!.value, 'the missing field already carries a value').toBeNull()
-  expect(missing!.region, 'the missing field already carries a region, so a drawn box proves nothing').toBeNull()
-
-  // By NAME, the way EXTR12-E2E-02 picks `total` --
-  // never by position. The wire is ordered by field_name (created_at defaults to now() and
-  // writeFieldResultsTx writes a job's rows on ONE transaction, so reader.go's ORDER BY
-  // degenerates to the name), and EXTR-13-02's line cells sort ahead of `subtotal`: "the first
-  // writable inconsistent field" resolves to line_items[2].line_total, which has no header cell
-  // to type into and which refuseField would 422. `subtotal` sorts ahead of `total`, and since
-  // EXTR-23 put `total` in the doubt scope it renders a chooser rather than an input, so it
-  // offers nothing to type into either. The two properties that pick made implicit are asserted here
-  // instead of assumed, so a build that locked `subtotal` or stopped flagging it reds on the wire
-  // rather than at the POST. TestExtractionDetail_MockDefaultArrivesInFieldNameOrder pins the
-  // ordering from the Go side.
-  const typed = detail.fields.find((f) => f.name === 'subtotal')
-  expect(typed, 'the wire the screen read carries no `subtotal` -- there is nothing to type over').toBeTruthy()
-  expect(LOCKED_FIELDS, 'subtotal is locked now, so the correction this journey posts would be a 422').not.toContain(
-    typed!.name,
-  )
-  expect(
-    typed!.reason,
-    'subtotal is not flagged inconsistent, so this journey types over a field that never asked to be settled',
-  ).toBe('inconsistent')
-
-  const names = [ambiguous!.name, missing!.name, typed!.name]
-  expect(new Set(names).size, `two of the three subjects are the same field: ${names.join(', ')}`).toBe(3)
-  for (const name of names) expect(VOCABULARY, `${name} is outside the header vocabulary`).toContain(name)
-
+  // The typed field is picked by NAME, never by position: line cells sort ahead of `subtotal`.
   // What one Save owes, in the vocabulary's own order -- the order savableCorrections sorts into
   // so the append-only table's seq follows the order the person reads.
   const plan = [
-    { field: ambiguous!.name, method: 'chosen' },
-    { field: missing!.name, method: 'pointed' },
-    { field: typed!.name, method: 'typed' },
+    ...(missing ? [{ field: missing.name, method: 'pointed' }] : []),
+    ...(typed ? [{ field: typed.name, method: 'typed' }] : []),
   ].sort((a, b) => VOCABULARY.indexOf(a.field) - VOCABULARY.indexOf(b.field))
 
   const save = page.getByTestId('extraction-save')
 
-  // -- 1. CHOOSE ----------------------------------------------------------------------------
-  const chips = page.locator(`[data-testid^="extraction-chip-${ambiguous!.name}-"]`)
-  // W-3: the decided reading is itself a chip, so the row carries N + 1.
-  await expect(chips, 'the ambiguous field rendered no chip row').toHaveCount(ambiguous!.alternatives.length + 1)
-  await page.getByTestId(`extraction-chip-${ambiguous!.name}-1`).click()
-  await expect(
-    page.getByTestId(`extraction-chip-${ambiguous!.name}-1`),
-    'the clicked chip is not the current one',
-  ).toHaveAttribute('aria-current', 'true')
-  await expect(
-    page.getByTestId(`extraction-chip-${ambiguous!.name}-0`),
-    'the decided reading is still current after another candidate was chosen',
-  ).toHaveAttribute('aria-current', 'false')
-
-  // -- 2. TYPE ------------------------------------------------------------------------------
+  // -- TYPE ---------------------------------------------------------------------------------
   // Plain digits, no thousands separator: invoiceEditFor writes `$n::text::numeric` and
   // '2,468.00'::numeric raises 22P02 -> ErrValueRefused -> 400.
   const TYPED_VALUE = '2468.00'
-  await page.getByTestId(`extraction-input-${typed!.name}`).fill(TYPED_VALUE)
-  await expect(save, 'a chosen candidate and a typed value left Save disabled').toBeEnabled()
+  if (typed) {
+    await page.getByTestId(`extraction-input-${typed.name}`).fill(TYPED_VALUE)
+    await expect(save, 'a typed value left Save disabled').toBeEnabled()
+  }
 
-  // -- 3. POINT -----------------------------------------------------------------------------
-  const pointButton = page.getByTestId(`extraction-point-${missing!.name}`)
-  await expect(pointButton, `${missing!.name} offers no way to point at it`).toBeVisible({ timeout: 30_000 })
-  await pointButton.click()
-  await expect(pointButton, 'clicking the point button changed nothing the reader can see').toHaveText(POINT_ARMED, {
-    timeout: 15_000,
-  })
-
-  await expect(page.getByTestId('extraction-point-surface-1'), 'the armed field takes no drag').toBeVisible({
-    timeout: 15_000,
-  })
-  const s = await boxOf(page, 'extraction-point-surface-1')
-  // Comfortably over the 24x12 floor at every frame size in the band.
-  await page.mouse.move(s.x + 0.3 * s.width, s.y + 0.25 * s.height)
-  await page.mouse.down()
-  await page.mouse.move(s.x + 0.62 * s.width, s.y + 0.55 * s.height, { steps: 8 })
-  await page.mouse.up()
-
-  const highlight = page.getByTestId('extraction-highlight')
-  // applyDraft without its `pointed` arm renders NO highlight, because the missing field's wire
-  // region is null. That build reds here.
-  await expect(highlight, 'the drawn box highlights nothing').toHaveCount(1)
-  await expect(highlight, 'the highlight is not the box drawn on the missing field').toHaveAttribute(
-    'data-snip',
-    missing!.name,
-  )
-
-  // -- 4. FILL THE POINT --------------------------------------------------------------------
-  // Required, not decorative: savableCorrections drops a blank pointed entry
-  // (extractionReview.ts), so without this the box never reaches the wire.
+  // -- POINT --------------------------------------------------------------------------------
   const POINTED_VALUE = '31775208-0003'
-  await page.getByTestId(`extraction-input-${missing!.name}`).fill(POINTED_VALUE)
+  if (missing) {
+    const pointButton = page.getByTestId(`extraction-point-${missing.name}`)
+    await expect(pointButton, `${missing.name} offers no way to point at it`).toBeVisible({ timeout: 30_000 })
+    await pointButton.click()
+    await expect(pointButton, 'clicking the point button changed nothing the reader can see').toHaveText(POINT_ARMED, {
+      timeout: 15_000,
+    })
 
-  // -- 5. SAVE ------------------------------------------------------------------------------
+    await expect(page.getByTestId('extraction-point-surface-1'), 'the armed field takes no drag').toBeVisible({
+      timeout: 15_000,
+    })
+    const s = await boxOf(page, 'extraction-point-surface-1')
+    // Comfortably over the 24x12 floor at every frame size in the band.
+    await page.mouse.move(s.x + 0.3 * s.width, s.y + 0.25 * s.height)
+    await page.mouse.down()
+    await page.mouse.move(s.x + 0.62 * s.width, s.y + 0.55 * s.height, { steps: 8 })
+    await page.mouse.up()
+
+    const highlight = page.getByTestId('extraction-highlight')
+    // applyDraft without its `pointed` arm renders NO highlight, because the missing field's wire
+    // region is null. That build reds here.
+    await expect(highlight, 'the drawn box highlights nothing').toHaveCount(1)
+    await expect(highlight, 'the highlight is not the box drawn on the missing field').toHaveAttribute(
+      'data-snip',
+      missing.name,
+    )
+
+    // Required, not decorative: savableCorrections drops a blank pointed entry
+    // (extractionReview.ts), so without this the box never reaches the wire.
+    await page.getByTestId(`extraction-input-${missing.name}`).fill(POINTED_VALUE)
+  }
+
+  // -- SAVE -------------------------------------------------------------------------------
   // Registered BEFORE the click, and .json() called inside the handler so no body is read after
   // the fact.
   const corrections: {
@@ -565,32 +535,32 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   // event and the promise that resolves on it are dispatched independently. A fourth POST
   // arriving after this poll is still caught by the equality below.
   await expect
-    .poll(() => corrections.length, { message: 'the Save did not post three corrections', timeout: 15_000 })
-    .toBe(3)
+    .poll(() => corrections.length, { message: `the Save did not post ${plan.length} corrections`, timeout: 15_000 })
+    .toBe(plan.length)
 
-  // Exactly three POSTs, in vocabulary order, each 201. Firing them in parallel reds the order;
+  // Exactly one POST per settled field, in vocabulary order, each 201. Firing them in parallel reds the order;
   // two POSTs reds the count.
   expect(
     corrections.map((c) => c.field),
-    'the Save did not post the three settled fields in vocabulary order',
+    'the Save did not post the settled fields in vocabulary order',
   ).toEqual(plan.map((p) => p.field))
   expect(
     corrections.map((c) => c.method),
     'the methods did not follow the fields they were posted for',
   ).toEqual(plan.map((p) => p.method))
-  expect(corrections.map((c) => c.status), 'a correction was refused').toEqual([201, 201, 201])
+  expect(corrections.map((c) => c.status), 'a correction was refused').toEqual(plan.map(() => 201))
 
   // Only the pointed body carries a region: a chosen request with one is a 400
   // (msgRegionDisagrees), so this is the deployed half of that rule.
   expect(
     corrections.filter((c) => c.hasRegion).map((c) => c.field),
     'a correction other than the pointed one carried a region',
-  ).toEqual([missing!.name])
+  ).toEqual(missing ? [missing.name] : [])
 
   // The invoice comes off the 201 bodies (CorrectionResponse.invoice_id), never guessed.
   const bodies = await Promise.all(corrections.map((c) => c.body))
   const invoiceIds = new Set(bodies.map((b) => b?.invoice_id ?? ''))
-  expect(invoiceIds.size, 'the three corrections named different invoices').toBe(1)
+  expect(invoiceIds.size, 'the corrections named different invoices').toBe(1)
   const invoiceId = [...invoiceIds][0]
   expect(invoiceId, 'no correction body named an invoice, so the audit read below scopes to nothing').toMatch(
     /^[0-9a-fA-F-]{36}$/,
@@ -603,11 +573,11 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   await expect(
     page.locator('[data-testid^="extraction-marker-"]'),
     'the settled fields did not each take exactly one marker',
-  ).toHaveCount(3)
-  // And the namespace resolves to those three BY NAME. EXTR-13-02 put 15 line-item cells into
+  ).toHaveCount(plan.length)
+  // And the namespace resolves to those fields BY NAME. EXTR-13-02 put 15 line-item cells into
   // the pane's render, and a marker renders only over a correction, so this is the assertion
   // that the widened fixture left the `extraction-marker-` sweep where it was: a count alone
-  // would still read 3 if a line cell took a marker while a settled field lost its own.
+  // would still pass if a line cell took a marker while a settled field lost its own.
   const markerNames = (
     await page
       .locator('[data-testid^="extraction-marker-"]')
@@ -615,7 +585,7 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   )
     .map((id) => id.replace('extraction-marker-', ''))
     .sort()
-  expect(markerNames, 'the marker namespace resolved to fields other than the three that were settled').toEqual(
+  expect(markerNames, 'the marker namespace resolved to fields other than the ones that were settled').toEqual(
     plan.map((p) => p.field).sort(),
   )
   for (const p of plan) {
@@ -626,18 +596,9 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
     ).toBeVisible()
   }
 
-  // A settled field stops shouting: reader.go clears Reason and empties Alternatives on a
-  // corrected field, so the chip row goes and the input takes its place.
-  await expect(
-    page.locator(`[data-testid^="extraction-chip-${ambiguous!.name}-"]`),
-    'the settled ambiguous field still offers its chips',
-  ).toHaveCount(0)
-  await expect(
-    page.getByTestId(`extraction-input-${ambiguous!.name}`),
-    'the settled field holds a value other than the candidate that was chosen',
-  ).toHaveValue(chosenValue as string)
-  await expect(page.getByTestId(`extraction-input-${missing!.name}`)).toHaveValue(POINTED_VALUE)
-  await expect(page.getByTestId(`extraction-input-${typed!.name}`)).toHaveValue(TYPED_VALUE)
+  // A settled field stops shouting: the input takes the value just settled.
+  if (missing) await expect(page.getByTestId(`extraction-input-${missing.name}`)).toHaveValue(POINTED_VALUE)
+  if (typed) await expect(page.getByTestId(`extraction-input-${typed.name}`)).toHaveValue(TYPED_VALUE)
 
   // -- The audit rows -----------------------------------------------------------------------
   //
@@ -649,15 +610,15 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   const mine = scoped.events.filter((e) => (e.payload as { invoice_id?: string }).invoice_id === invoiceId)
   expect(
     mine.length,
-    `this invoice recorded ${mine.length} extraction.field_corrected events, not the three the Save posted`,
-  ).toBe(3)
+    `this invoice recorded ${mine.length} extraction.field_corrected events, not the ${plan.length} the Save posted`,
+  ).toBe(plan.length)
   expect(
     mine.map((e) => (e.payload as { field?: string }).field).sort(),
-    'the audit payloads name other fields than the three that were settled',
+    'the audit payloads name other fields than the ones that were settled',
   ).toEqual(plan.map((p) => p.field).sort())
   expect(
     mine.map((e) => (e.payload as { method?: string }).method).sort(),
-    'the audit payloads record other methods than the three that were used',
+    'the audit payloads record other methods than the ones that were used',
   ).toEqual(plan.map((p) => p.method).sort())
   // migrations/20260829195203_audit_log_entity_for_extraction.sql resolves these rows to a
   // company THROUGH the invoice they correct; a NULL entity_id is the workspace-level spelling
@@ -667,7 +628,7 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   }
 
   // The event filter's own non-vacuity control: the tenant-wide log must be strictly larger, or
-  // "exactly three" would also be true of a reader that returned everything it had.
+  // "exactly the Save's count" would also be true of a reader that returned everything it had.
   const wholeLog = await getAuditLog(token, { limit: 1 })
   expect(
     wholeLog.total,
@@ -691,20 +652,67 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
     body: JSON.stringify(
       {
         plan,
-        chosenValue,
         typedValue: TYPED_VALUE,
         pointedValue: POINTED_VALUE,
         invoiceId,
         posted: corrections.map((c) => ({ field: c.field, method: c.method, hasRegion: c.hasRegion, status: c.status })),
         audit: mine.map((e) => ({ id: e.id, event: e.event, entityId: e.entity_id, payload: e.payload })),
         auditTotals: { extractionEvents: scoped.total, wholeLog: wholeLog.total, invoiceScoped: byInvoice.events.length },
-        notCovered: ['Undo (method=undone)', 'a partial-failure Save', "AA-22b's chosen-no-op arm"],
+        notCovered: ['Undo (method=undone)', 'a partial-failure Save'],
       },
       null,
       2,
     ),
     contentType: 'application/json',
   })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR12-E2E-06b: choosing a candidate settles the field', async ({ page }) => {
+  test.skip(nightlyTarget(), 'S13: needs an ambiguous field to choose from; no fixture forces one on the real AI; covered by Go handlers_correction_db_test.go (method=chosen)')
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-12-09 choose')
+  const detail = await openExtractionReview(page)
+
+  const ambiguous = detail.fields.find((f) => f.reason === 'ambiguous')
+  expect(ambiguous, 'this document reported no ambiguous field -- there is no candidate to choose').toBeTruthy()
+  expect(
+    ambiguous!.alternatives.length,
+    `${ambiguous!.name} carries no alternative -- the chip this test clicks does not exist`,
+  ).toBeGreaterThanOrEqual(1)
+  const chosenValue = ambiguous!.alternatives[0].value
+  expect(chosenValue, `${ambiguous!.name}'s first alternative carries no value`).toBeTruthy()
+  // Chip 1, never chip 0: chip 0 is the decided reading, so choosing it moves nothing.
+  expect(chosenValue, 'the first alternative reads the same as the decided one').not.toBe(ambiguous!.value)
+
+  const chips = page.locator(`[data-testid^="extraction-chip-${ambiguous!.name}-"]`)
+  // The decided reading is itself a chip, so the row carries N + 1.
+  await expect(chips, 'the ambiguous field rendered no chip row').toHaveCount(ambiguous!.alternatives.length + 1)
+  await page.getByTestId(`extraction-chip-${ambiguous!.name}-1`).click()
+  await expect(page.getByTestId(`extraction-chip-${ambiguous!.name}-1`)).toHaveAttribute('aria-current', 'true')
+  await expect(page.getByTestId(`extraction-chip-${ambiguous!.name}-0`)).toHaveAttribute('aria-current', 'false')
+
+  const posted = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith(`/fields/${ambiguous!.name}/corrections`),
+    { timeout: 120_000 },
+  )
+  await page.getByTestId('extraction-save').click()
+  const resp = await posted
+  expect(resp.status(), 'the chosen correction was refused').toBe(201)
+  expect((resp.request().postDataJSON() as { method?: string }).method).toBe('chosen')
+
+  await expect(page.getByTestId(`extraction-marker-${ambiguous!.name}`)).toBeVisible()
+  await expect(
+    page.getByTestId(`extraction-field-${ambiguous!.name}`).getByText(CHANGED_LABEL.chosen, { exact: true }),
+  ).toBeVisible()
+  await expect(chips, 'the settled ambiguous field still offers its chips').toHaveCount(0)
+  await expect(
+    page.getByTestId(`extraction-input-${ambiguous!.name}`),
+    'the settled field holds a value other than the candidate that was chosen',
+  ).toHaveValue(chosenValue as string)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -1011,7 +1019,6 @@ async function openLineGrid(page: Page, label: string): Promise<{ detail: Extrac
 test('EXTR13-E2E-01 (Core AC 1-7): the deployed grid reads, flags, sums, selects, remaps, grows, shrinks and saves', async ({
   page,
 }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -1048,13 +1055,19 @@ test('EXTR13-E2E-01 (Core AC 1-7): the deployed grid reads, flags, sums, selects
     ).toHaveValue('')
   }
 
-  // AIR08-E2E's Core AC 7 leg, free on this document: rich_invoice.pdf carries no AIFAKE-LINES
-  // marker, so mergeAILines leaves every row untouched -- no chip and no ambiguous pill.
-  await expect(page.locator('[data-testid^="line-item-chip-"]'), 'an unsteered document renders a chip').toHaveCount(0)
+  // Chips follow the wire: one row of N+1 per ambiguous line cell, one pill per row holding one.
+  const ambiguousCells = detail.fields.filter(
+    (f) => LINE_CELL_RE.test(f.name) && f.reason === 'ambiguous' && f.alternatives.length > 0,
+  )
+  const ambiguousIndexes = new Set(ambiguousCells.map((f) => Number(LINE_CELL_RE.exec(f.name)![1])))
   await expect(
-    page.locator('[data-testid^="line-item-ambiguous-"]'),
-    'an unsteered document renders an ambiguous pill',
-  ).toHaveCount(0)
+    page.locator('[data-testid^="line-item-chip-"]:not([data-testid^="line-item-chip-where-"])'),
+    'the line chips rendered are not the candidates of the cells the wire marks ambiguous',
+  ).toHaveCount(ambiguousCells.reduce((n, f) => n + f.alternatives.length + 1, 0))
+  expect(
+    await lineOrdinals(page, 'line-item-ambiguous-'),
+    'the ambiguous pills are not on the rows whose cells the wire marks ambiguous',
+  ).toEqual(lines.flatMap((row, i) => (ambiguousIndexes.has(row.index) ? [i + 1] : [])))
 
   // -- 2. the flag is per row, and lands only where the wire's own numbers disagree ----------
   const states = lines.map((row, i) => ({ n: i + 1, state: wireRowState(row) }))
@@ -1834,7 +1847,6 @@ const SPREADSHEET_READ_LINE = 'ROWS READ · SERVER VERDICT · RULE SET '
 const DOCUMENT_READ_LINE = 'DOCUMENTS READ · SERVER VERDICT · RULE SET '
 
 test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored and Row', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Two full CSV imports through the wizard on a fleet that may be cold. Neither enqueues an
   // extraction, so this is the cheapest of the EXTR-15 deployed cases.
   test.setTimeout(300_000)
@@ -1859,11 +1871,7 @@ test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored
   await page.getByRole('button', { name: 'Read columns' }).click()
   await sweepPreview
 
-  // subtotal has no ALIAS entry, so auto-recognize never places it -- E2E-04's own reasoning.
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal' }).click()
-  await page.getByText('Subtotal', { exact: true }).click()
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   const sweepImport = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -1954,7 +1962,6 @@ test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored
 // Above the EXTR-15 marker: that span requires fresh bytes per upload, and all three imports
 // here must share one file so the saved mapping keys on the same header.
 test('EXTR37-E2E-01: the second import of a file for the same client opens mapped, and opens unmapped without the lookup', async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -2002,11 +2009,8 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
   await expect(notice).toHaveCount(0)
   await expect(badges).toHaveCount(0)
 
-  // --- import 1 lands: hand-placed, saved because remember_mapping defaults true ----------
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal' }).click()
-  await page.getByText('Subtotal', { exact: true }).click()
+  // --- import 1 lands: exact mapping, saved because remember_mapping defaults true -------
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   const import1Req = page.waitForRequest(
     (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -2593,27 +2597,24 @@ const EMPTY_DOCX_NAME = 'empty_container.docx'
 test('EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicked, not its sibling', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Two documents through a cold sidecar, then a filing and a detail load.
   test.setTimeout(600_000)
   const errors = collectErrors(page)
 
   const scannedName = 'scanned_invoice.pdf'
-  const denseName = 'dense_invoice.pdf'
-  // Both quarantine, for DIFFERENT measured reasons, and neither needs a new artifact: the
-  // scan settles document_text_layer = unreadable with no number at all, and the dense page's
-  // label OCRs as "INV0ICE NO:" so its invoice_number settles missing (D-33). They carry
-  // different filenames and different document ids, so the two rows are genuinely
+  const noNumberName = 'wild_scanned_no_number.pdf'
+  // Both quarantine, for DIFFERENT reasons: the scan settles document_text_layer = unreadable,
+  // and the wild scan is read but prints no invoice number. They carry different filenames and different document ids, so the two rows are genuinely
   // distinguishable — a pair whose items are naturally equal proves nothing.
   const { token, documentIds } = await runDocuments(page, 'EXTR-15-12 two documents', [
     { name: scannedName, mimeType: 'application/pdf', buffer: uniqueScannedPdfBytes() },
-    { name: denseName, mimeType: 'application/pdf', buffer: uniqueDensePdfBytes() },
+    { name: noNumberName, mimeType: 'application/pdf', buffer: uniqueWildNoNumberPdfBytes() },
   ])
 
   expect(
     documentIds[scannedName],
     'both files resolved to ONE stored document -- the pair cannot discriminate anything below',
-  ).not.toBe(documentIds[denseName])
+  ).not.toBe(documentIds[noNumberName])
 
   // (a) routeAfterRun cannot take the 'single' arm on a two-file run (lib/importRun.ts), so
   // the landing is the review surface carrying EVERY batch id. The path is where that id list
@@ -2638,24 +2639,24 @@ test('EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicke
   await expect(unreadableRows, 'both documents must render as their own rows').toHaveCount(2)
   const rowLabels = await unreadableRows.evaluateAll((els) => els.map((el) => el.textContent ?? ''))
   const scannedIdx = rowLabels.findIndex((t) => t.includes(scannedName))
-  const denseIdx = rowLabels.findIndex((t) => t.includes(denseName))
+  const noNumberIdx = rowLabels.findIndex((t) => t.includes(noNumberName))
   expect(scannedIdx, `no row names ${scannedName}: ${JSON.stringify(rowLabels)}`).toBeGreaterThanOrEqual(0)
-  expect(denseIdx, `no row names ${denseName}: ${JSON.stringify(rowLabels)}`).toBeGreaterThanOrEqual(0)
-  expect(scannedIdx, 'one row names both files -- the labels do not discriminate the rows').not.toBe(denseIdx)
+  expect(noNumberIdx, `no row names ${noNumberName}: ${JSON.stringify(rowLabels)}`).toBeGreaterThanOrEqual(0)
+  expect(scannedIdx, 'one row names both files -- the labels do not discriminate the rows').not.toBe(noNumberIdx)
 
   // Cross-discriminating pair: bare "scan" is vacuous (the row text also carries the
   // filename scanned_invoice.pdf), so "supplier" tells the two RowError messages apart.
   expect(rowLabels[scannedIdx], 'the scanned row must carry the scan-quality message').toContain('The scan of this document')
   expect(rowLabels[scannedIdx], 'the scanned row must carry the supplier ask').toContain('supplier')
-  expect(rowLabels[scannedIdx], "the scanned row leaked the dense row's message").not.toContain('was read')
+  expect(rowLabels[scannedIdx], "the scanned row leaked the no-number row's message").not.toContain('was read')
 
-  expect(rowLabels[denseIdx], 'the dense row must carry the no-invoice-number message').toContain(
+  expect(rowLabels[noNumberIdx], 'the no-number row must carry the no-invoice-number message').toContain(
     'was read, but no invoice number',
   )
-  expect(rowLabels[denseIdx], "the dense row leaked the scanned row's supplier ask").not.toContain('supplier')
+  expect(rowLabels[noNumberIdx], "the no-number row leaked the scanned row's supplier ask").not.toContain('supplier')
 
   // (c) the SCANNED row's own control, and the invoice it produces named by equality against
-  // the scanned document — never "is not null", which the dense document would satisfy too.
+  // the scanned document — never "is not null", which the no-number document would satisfy too.
   const scannedButton = unreadableRows.nth(scannedIdx).getByRole('button', { name: 'Enter it by hand' })
   await expect(scannedButton, 'a resolved entity must arm the hand-off on this row').toBeEnabled()
   await scannedButton.click()
@@ -2667,7 +2668,7 @@ test('EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicke
   const source = await readSourceDocument(token, invoiceId)
   expect(source.document, 'the filed invoice names no source document at all').not.toBeNull()
   expect(source.document!.id, "the hand-off attached the wrong row's document").toBe(documentIds[scannedName])
-  expect(source.document!.id, 'the hand-off attached the sibling document').not.toBe(documentIds[denseName])
+  expect(source.document!.id, 'the hand-off attached the sibling document').not.toBe(documentIds[noNumberName])
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -2679,20 +2680,19 @@ const SUPPLY_URL = /\/api\/invoice\/v1\/imports\/document\/invoice$/
 test('EXTR27-E2E-01: a read document with no number carries its reading into the hand-off, refuses a taken number, and files with the one supplied', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(600_000)
   const errors = collectErrors(page, expectedStatusDropper(page, 409, SUPPLY_URL))
 
-  const denseName = 'dense_invoice.pdf'
+  const noNumberName = 'wild_scanned_no_number.pdf'
   // Zz sorts this entity after "Okafor & Partners" (carry note) so later topology specs keep
   // their own ordering assumptions.
   const { token, entityId, documentIds, jobs } = await runDocuments(page, 'Zz EXTR-27 carried', [
-    { name: denseName, mimeType: 'application/pdf', buffer: uniqueDensePdfBytes() },
+    { name: noNumberName, mimeType: 'application/pdf', buffer: uniqueWildNoNumberPdfBytes() },
   ])
-  const documentId = documentIds[denseName]!
+  const documentId = documentIds[noNumberName]!
   expect(
-    jobs[denseName]!.state,
-    `the dense page did not settle succeeded (kind ${jobs[denseName]!.failure_kind}, error ${jobs[denseName]!.last_error})`,
+    jobs[noNumberName]!.state,
+    `the no-number page did not settle succeeded (kind ${jobs[noNumberName]!.failure_kind}, error ${jobs[noNumberName]!.last_error})`,
   ).toBe('succeeded')
 
   // 1. Landing (AC-1).
@@ -2706,7 +2706,7 @@ test('EXTR27-E2E-01: a read document with no number carries its reading into the
 
   const row = page.getByTestId('unreadable-row')
   await expect(row).toHaveCount(1)
-  await expect(row).toContainText(denseName)
+  await expect(row).toContainText(noNumberName)
   await expect(row).toContainText('was read, but no invoice number')
 
   // 2. Non-empty floor — the reading must carry something, or a carried and a blank form
@@ -3438,15 +3438,8 @@ test("EXTR18-E2E-01 (AC-5): the deployed reading is the document's own number", 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// A document whose invoice_number never resolves mints a QUARANTINED batch, not an invoice
-// (documentCreateInput, internal/importer/document.go) -- so routeAfterRun's 'single' arm is unreachable and
-// extractOneDocument's landing wait can never settle. Both fixtures below are that
-// case by construction: the scan has no recoverable text at all, and the dense page's label
-// OCRs as "INV0ICE NO:" (D-33). The verdict is therefore read off the deployed wire, which is
-// also exactly what EXTR-15's Core AC will consume. The review SCREEN cannot serve as the
-// oracle here: the review is reached from an import landing or from SourceDocumentCard, and
-// both need an invoice these documents never produce -- building a surface for these terminal
-// states is EXTR-15's.
+// extractOneDocument's landing wait cannot settle for a quarantined batch, so the verdict is
+// read off the deployed wire, which is also what EXTR-15's Core AC consumes.
 async function settleOneDocument(
   page: Page,
   label: string,
@@ -3489,8 +3482,27 @@ async function settleOneDocument(
     // (TestRLS_ScannedFixtureSettlesTheTextLayerUnreadable asserts the same state wired).
     .toBe('succeeded')
 
-  // The run's own landing, pinned because it is the terminal state EXTR-15 must surface: a
-  // quarantined batch still exists, so routeAfterRun returns 'review', never 'none'.
+  return { token, jobId, detail: await getExtractionDetail(token, jobId) }
+}
+
+// The settled single document lands on a real destination under either AI, never the picker.
+async function expectSettledLanding(page: Page): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        if (await page.getByTestId('review-table').isVisible()) return 'landed'
+        if (await page.getByText(/^BATCH /).first().isVisible()) return 'landed'
+        if (await page.getByTestId('invoice-detail').isVisible()) return 'landed'
+        return 'nothing yet'
+      },
+      { message: 'the settled document must land on a review batch or its invoice', timeout: 120_000 },
+    )
+    .toBe('landed')
+}
+
+// The run's own landing: a quarantined single-document run still has a batch, so routeAfterRun
+// returns 'review', never 'none'.
+async function expectReviewBatchLanding(page: Page): Promise<void> {
   await expect
     .poll(
       async () => {
@@ -3503,8 +3515,6 @@ async function settleOneDocument(
       { message: 'a quarantined single-document run must land on the review batch surface', timeout: 120_000 },
     )
     .toBe('review batch surface')
-
-  return { token, jobId, detail: await getExtractionDetail(token, jobId) }
 }
 
 test('EXTR18-E2E-02 (AC-8): a document with no recoverable text settles unreadable, and its pages still render', async ({
@@ -3517,6 +3527,7 @@ test('EXTR18-E2E-02 (AC-8): a document with no recoverable text settles unreadab
     name: 'scanned_invoice.pdf',
     buffer: uniqueScannedPdfBytes(),
   })
+  await expectReviewBatchLanding(page)
 
   const textLayer = detail.fields.find((f) => f.name === 'document_text_layer')
   expect(textLayer, 'no document_text_layer field on the wire').toBeTruthy()
@@ -3549,7 +3560,6 @@ test('EXTR18-E2E-02 (AC-8): a document with no recoverable text settles unreadab
 })
 
 test('EXTR18-E2E-03: an image-only page the OCR can read is NOT unreadable', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(600_000)
   const errors = collectErrors(page)
 
@@ -3557,6 +3567,7 @@ test('EXTR18-E2E-03: an image-only page the OCR can read is NOT unreadable', asy
     name: 'dense_invoice.pdf',
     buffer: uniqueDensePdfBytes(),
   })
+  await expectSettledLanding(page)
 
   // The OCR-succeeded half of the pair: no document_text_layer row at all.
   const textLayer = detail.fields.find((f) => f.name === 'document_text_layer')
@@ -3570,10 +3581,6 @@ test('EXTR18-E2E-03: an image-only page the OCR can read is NOT unreadable', asy
   expect(currency!.reason, 'currency must be decided').toBe('')
   expect(total!.value, 'total must carry a value').not.toBeNull()
   expect(currency!.value, 'currency must carry a value').not.toBeNull()
-
-  // Not asserted: invoice_number. OCR reads the label as "INV0ICE NO:" (digit zero for letter
-  // O), the Tier-1 anchor misses, and the field settles missing (D-33) -- which is why this
-  // document quarantines rather than filing, and why settleOneDocument exists.
 
   const lines = wireLines(detail)
   expect(lines.length, 'the OCR read fewer than 2 line rows').toBeGreaterThanOrEqual(2)
@@ -3741,8 +3748,7 @@ test('EXTR36-E2E-01 (AC-1/AC-2): a Chrome-shaped register anchors its printed la
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-test("AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lands beside the engine", async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
+test("AIR03-E2E-02/04 (AC-9, AC-6, Q1): the AI's steered reading lands beside the engine", async ({ page }) => {
   test.setTimeout(300_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
@@ -3754,6 +3760,53 @@ test("AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lan
   const invoiceMatch = /^\/invoices\/([0-9a-fA-F-]{36})$/.exec(new URL(page.url()).pathname)
   expect(invoiceMatch, 'the steered document must land on the real invoice detail, not the quarantine').not.toBeNull()
   const invoiceId = invoiceMatch![1]
+
+  const detail = await openExtractionReview(page)
+  const wire = new Map(detail.fields.map((f) => [f.name, f]))
+
+  // AIR03-E2E-02 (AC-6, AC-9 b): the engine refuses the all-digit number as an amount; the AI's
+  // reading, checked against the "Invoice Number:" label, decides it -- unmarked (Q12).
+  const invoiceInput = page.getByTestId('extraction-input-invoice_number')
+  await expect(invoiceInput).toHaveValue('20417')
+  await expect(invoiceInput).toHaveJSProperty('readOnly', true)
+  await expect(page.getByTestId('extraction-field-invoice_number').locator('.mono'), 'a decided field renders no pill').toHaveCount(0)
+  const numberWire = wire.get('invoice_number')
+  expect({ value: numberWire?.value, reason: numberWire?.reason }).toEqual({ value: '20417', reason: '' })
+  expect(numberWire?.region, 'the AI-only number must still carry a region').not.toBeNull()
+
+  // AIR03-E2E-04 (Q1): the AI deciding invoice_number changes WHICH reading wins, never whether
+  // the field is correctable here -- an unflagged locked field still answers today's 422.
+  // lock note: INVOICE_NUMBER_LOCKED
+  await expect(page.getByTestId('extraction-lock-invoice_number')).toHaveText(
+    "The invoice number is this invoice's identity and cannot be changed here.",
+  )
+  const refusal = await rawFetch(`/api/submission/v1/extractions/${detail.id}/fields/invoice_number/corrections`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: { value: '99999', method: 'typed' },
+  })
+  expect(refusal.status, 'an unflagged locked field must still answer 422').toBe(422)
+  // 422 sentence: msgInvoiceNumberSet
+  expect(refusal.body).toEqual({ error: 'invoice_number identifies the invoice and is not corrected here' })
+
+  const invoice = await getInvoice(token, invoiceId)
+  expect({ invoice_number: invoice.invoice_number, buyer_tin: invoice.buyer_tin }).toEqual({
+    invoice_number: '20417',
+    buyer_tin: '12345678-0001',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test("AIR03-E2E-01/03 (AC-9, AC-5): a steered misread lands beside the engine", async ({ page }) => {
+  test.skip(nightlyTarget(), 'S14: needs the AI to misread a printed value; covered by Go TestMergeAI_Row2_ADisagreementIsAmbiguousWithBothChoices and TestRLS_EndToEndAFailedAIValueNeverReachesTheInvoice')
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  const token = await login(PERSONAS.A)
+
+  await extractOneDocument(page, 'AIR-03-05 steered misread', { name: 'ai_steered_invoice.pdf', buffer: uniqueAiSteeredPdfBytes() })
+  const invoiceMatch = /^\/invoices\/([0-9a-fA-F-]{36})$/.exec(new URL(page.url()).pathname)
+  expect(invoiceMatch, 'the steered document must land on the real invoice detail, not the quarantine').not.toBeNull()
 
   const detail = await openExtractionReview(page)
   const wire = new Map(detail.fields.map((f) => [f.name, f]))
@@ -3772,16 +3825,6 @@ test("AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lan
     alt: ['87654321-0002'],
   })
 
-  // AIR03-E2E-02 (AC-6, AC-9 b): the engine refuses the all-digit number as an amount; the AI's
-  // reading, checked against the "Invoice Number:" label, decides it -- unmarked (Q12).
-  const invoiceInput = page.getByTestId('extraction-input-invoice_number')
-  await expect(invoiceInput).toHaveValue('20417')
-  await expect(invoiceInput).toHaveJSProperty('readOnly', true)
-  await expect(page.getByTestId('extraction-field-invoice_number').locator('.mono'), 'a decided field renders no pill').toHaveCount(0)
-  const numberWire = wire.get('invoice_number')
-  expect({ value: numberWire?.value, reason: numberWire?.reason }).toEqual({ value: '20417', reason: '' })
-  expect(numberWire?.region, 'the AI-only number must still carry a region').not.toBeNull()
-
   // AIR03-E2E-03 (AC-5, AC-9 c): "Account Name:" fails check (c), so the missing field is
   // doubtful rather than silently filled -- the input offers the AI's text for correction.
   const nameCell = page.getByTestId('extraction-field-buyer_name')
@@ -3795,26 +3838,8 @@ test("AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lan
     alt: ['ZENITH HOLDINGS LIMITED'],
   })
 
-  // AIR03-E2E-04 (Q1): the AI deciding invoice_number changes WHICH reading wins, never whether
-  // the field is correctable here -- an unflagged locked field still answers today's 422.
-  // lock note: INVOICE_NUMBER_LOCKED
-  await expect(page.getByTestId('extraction-lock-invoice_number')).toHaveText(
-    "The invoice number is this invoice's identity and cannot be changed here.",
-  )
-  const refusal = await rawFetch(`/api/submission/v1/extractions/${detail.id}/fields/invoice_number/corrections`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: { value: '99999', method: 'typed' },
-  })
-  expect(refusal.status, 'an unflagged locked field must still answer 422').toBe(422)
-  // 422 sentence: msgInvoiceNumberSet
-  expect(refusal.body).toEqual({ error: 'invoice_number identifies the invoice and is not corrected here' })
-
-  const invoice = await getInvoice(token, invoiceId)
-  expect({ invoice_number: invoice.invoice_number, buyer_name: invoice.buyer_name }).toEqual({
-    invoice_number: '20417',
-    buyer_name: null,
-  })
+  const invoice = await getInvoice(token, invoiceMatch![1])
+  expect(invoice.buyer_name).toBeNull()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -3831,7 +3856,7 @@ const AI_UNAVAILABLE_FIELD = 'document_ai_reading'
 test('AIR04-E2E-01 (AC-1, AC-3, AC-4, AC-5, AC-7): an unavailable AI sends the document to manual entry with no reading', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
+  test.skip(nightlyTarget(), 'S4: no deployable document overflows the real AI; a 2M-digit PDF never finishes extraction')
   test.setTimeout(600_000)
   const errors = collectErrors(page)
   const name = 'ai_unavailable_invoice.pdf'
@@ -3924,7 +3949,7 @@ const NO_REGION_NOTE = 'We have no region for this field, so there is nothing to
 test('AIR05-E2E-01 (AC-3, AC-4, AC-5, AC-8): a document with no text is read from its page images', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
+  test.skip(nightlyTarget(), 'S5: needs a page the OCR reads as empty but the vision model reads; none is measured; covered by Go TestAskAIPages_SendsOneImageCall and TestImageReading_*')
   test.setTimeout(600_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
@@ -4000,10 +4025,9 @@ function lineChipText(value: string, region: ExtractionRegion | null): string {
   return region === null ? value : `${value}page ${region.page}`
 }
 
-test('AIR08-E2E-01/02/03/04 (Core AC 4, 5, 6, 8): the AI reads line items once, and a disagreement reaches the grid', async ({
+test('AIR08-E2E-01/03/04 (Core AC 4, 5, 8): the AI reads line items once', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4015,36 +4039,70 @@ test('AIR08-E2E-01/02/03/04 (Core AC 4, 5, 6, 8): the AI reads line items once, 
 
   const detail = await openExtractionReview(page)
   const lines = wireLines(detail)
-  expect(
-    lines.map((l) => l.index),
-    'the extraction detail must carry three contiguous line indices',
-  ).toEqual([1, 2, 3])
   const fieldsByName = new Map(detail.fields.map((f) => [f.name, f]))
 
   await expect(page.getByTestId('line-item-grid'), 'the fields pane rendered no line-item grid').toBeVisible({
     timeout: 30_000,
   })
-  await expect(page.locator('[data-testid^="line-item-row-"]'), 'the grid did not render one row per wire line').toHaveCount(3)
 
-  // AIR08-E2E-02 (AC-5, agreeing row): row 1's four cells render the engine's own values in
+  // AIR08-E2E-02 (AC-5, agreeing row): the printed Widget row renders the engine's own values in
   // ordinary inputs, with no chip and no pill anywhere on that row.
-  const row1 = lines[0]
+  const row1 = lines.find((l) => l.cells.description?.value === 'Widget')
+  expect(row1, 'the printed Widget row is on the wire').toBeDefined()
+  const n1 = row1!.index
   const row1Want: Record<LineRoleName, string> = { description: 'Widget', quantity: '2', unit_price: '500.00', line_total: '1000.00' }
   for (const role of LINE_ROLE_NAMES) {
-    expect(row1.cells[role]?.value, `row 1's ${role} did not carry the engine's own reading on the wire`).toBe(row1Want[role])
-    expect(fieldsByName.get(row1.cells[role]?.name ?? '')?.reason, `row 1's ${role} is not decided on the wire`).toBe('')
+    expect(row1!.cells[role]?.value, `row 1's ${role} did not carry the printed value on the wire`).toBe(row1Want[role])
+    expect(fieldsByName.get(row1!.cells[role]?.name ?? '')?.reason, `row 1's ${role} is not decided on the wire`).toBe('')
     await expect(
-      page.getByTestId(`line-item-input-1-${role}`),
-      `row 1's ${role} input did not carry the engine's own reading`,
+      page.getByTestId(`line-item-input-${n1}-${role}`),
+      `row 1's ${role} input did not carry the printed value`,
     ).toHaveValue(row1Want[role])
   }
-  await expect(page.locator('[data-testid^="line-item-chip-1-"]'), 'the agreeing row renders a chip').toHaveCount(0)
-  await expect(page.getByTestId('line-item-ambiguous-1'), 'the agreeing row renders an ambiguous pill').toHaveCount(0)
-  await expect(page.getByTestId('line-item-flag-1'), 'the agreeing row renders an arithmetic pill').toHaveCount(0)
+  await expect(page.locator(`[data-testid^="line-item-chip-${n1}-"]`), 'the agreeing row renders a chip').toHaveCount(0)
+  await expect(page.getByTestId(`line-item-ambiguous-${n1}`), 'the agreeing row renders an ambiguous pill').toHaveCount(0)
+  await expect(page.getByTestId(`line-item-flag-${n1}`), 'the agreeing row renders an arithmetic pill').toHaveCount(0)
 
-  // AIR08-E2E-04 (Core AC 6, disagreement): row 2's unit_price renders two chips, chip 0 the
-  // engine's own value (with its wire region, if any), chip 1 the AI's with none; the other
-  // three cells of the same row stay ordinary inputs at the engine's own reading.
+  // AIR08-E2E-03 (Core AC 8, AI-only row): the Delivery row, printed outside the ruled table,
+  // renders in ordinary inputs, its wire cells carry reason '' and empty alternatives, and the
+  // row shows no pill -- UNMARKED (Q12).
+  const row3 = lines.find((l) => l.cells.description?.value === 'Delivery')
+  expect(row3, 'the printed Delivery row is on the wire').toBeDefined()
+  const n3 = row3!.index
+  const row3Want: Record<LineRoleName, string> = { description: 'Delivery', quantity: '1', unit_price: '90.00', line_total: '90.00' }
+  for (const role of LINE_ROLE_NAMES) {
+    const cell = row3!.cells[role] as WireLineCell
+    expect(cell.value, `row 3's ${role} did not carry the printed value on the wire`).toBe(row3Want[role])
+    expect(fieldsByName.get(cell.name)?.reason, `row 3's ${role} is not unmarked on the wire`).toBe('')
+    const alternatives: ExtractionCandidate[] = fieldsByName.get(cell.name)?.alternatives ?? []
+    expect(alternatives, `row 3's ${role} carries an alternative -- AI-only rows are unmarked`).toEqual([])
+    await expect(
+      page.getByTestId(`line-item-input-${n3}-${role}`),
+      `row 3's ${role} input did not carry the printed value`,
+    ).toHaveValue(row3Want[role])
+  }
+  await expect(page.locator(`[data-testid^="line-item-chip-${n3}-"]`), 'the AI-only row renders a chip').toHaveCount(0)
+  await expect(page.getByTestId(`line-item-ambiguous-${n3}`), 'the AI-only row renders an ambiguous pill').toHaveCount(0)
+  await expect(page.getByTestId(`line-item-flag-${n3}`), 'the AI-only row renders an arithmetic pill').toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('AIR08-E2E-02: a disagreement reaches the grid', async ({ page }) => {
+  test.skip(nightlyTarget(), 'S15: needs the AI to misread a printed unit price; covered by Go ailinesmerge_internal_test.go TestMergeAILines_*')
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'Zz AIR-08 disagreement', { name: 'ai_lines_invoice.pdf', buffer: uniqueAiLinesPdfBytes() })
+  const detail = await openExtractionReview(page)
+  const lines = wireLines(detail)
+  const fieldsByName = new Map(detail.fields.map((f) => [f.name, f]))
+  await expect(page.getByTestId('line-item-grid'), 'the fields pane rendered no line-item grid').toBeVisible({
+    timeout: 30_000,
+  })
+
+  // Row 2's unit_price renders two chips, chip 0 the engine's own value (with its wire region, if
+  // any), chip 1 the AI's with none; the other three cells stay ordinary inputs at the engine's reading.
   const row2 = lines[1]
   const upWire = row2.cells.unit_price as WireLineCell
   expect(
@@ -4074,33 +4132,13 @@ test('AIR08-E2E-01/02/03/04 (Core AC 4, 5, 6, 8): the AI reads line items once, 
     ).toHaveValue(row2OtherWant[role] as string)
   }
 
-  // AIR08-E2E-03 (Core AC 8, AI-only row): row 3 renders the AI's own values in ordinary
-  // inputs, its wire cells carry reason '' and empty alternatives, and the row shows no pill --
-  // UNMARKED (Q12).
-  const row3 = lines[2]
-  const row3Want: Record<LineRoleName, string> = { description: 'Delivery', quantity: '1', unit_price: '90.00', line_total: '90.00' }
-  for (const role of LINE_ROLE_NAMES) {
-    const cell = row3.cells[role] as WireLineCell
-    expect(cell.value, `row 3's ${role} did not carry the AI's own reading on the wire`).toBe(row3Want[role])
-    expect(fieldsByName.get(cell.name)?.reason, `row 3's ${role} is not unmarked on the wire`).toBe('')
-    const alternatives: ExtractionCandidate[] = fieldsByName.get(cell.name)?.alternatives ?? []
-    expect(alternatives, `row 3's ${role} carries an alternative -- AI-only rows are unmarked`).toEqual([])
-    await expect(
-      page.getByTestId(`line-item-input-3-${role}`),
-      `row 3's ${role} input did not carry the AI's own reading`,
-    ).toHaveValue(row3Want[role])
-  }
-  await expect(page.locator('[data-testid^="line-item-chip-3-"]'), 'the AI-only row renders a chip').toHaveCount(0)
-  await expect(page.getByTestId('line-item-ambiguous-3'), 'the AI-only row renders an ambiguous pill').toHaveCount(0)
-  await expect(page.getByTestId('line-item-flag-3'), 'the AI-only row renders an arithmetic pill').toHaveCount(0)
-
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
 test('AIR08-LAYOUT-01: with the disagreement chip row rendered, the grid scrollbox stays inside the fields pane body at every width', async ({
   page,
 }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
+  test.skip(nightlyTarget(), 'S6: measures the disagreement chip row; needs the AI to misread a printed unit price; E2E only')
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4174,11 +4212,11 @@ const NRS_HEADER_READ = {
   buyer_email: 'ap@honeywell.example',
   buyer_telephone: '+234 801 234 5678',
   buyer_street: '12 Broad Street',
-  buyer_city: 'Lagos Island',
   buyer_postal_zone: '101001',
   buyer_country: 'Nigeria',
-  buyer_lga: 'Lagos Island',
 }
+// The page prints Ikeja for both; the fake's markers say Lagos Island, which the page does not print.
+const NRS_PLACE_PRINTED = 'Ikeja'
 const NRS_GOODS_READ = {
   description: 'Laptop Computer',
   hsn_code: '8471.30',
@@ -4214,12 +4252,11 @@ const HEADER_LABELS: Record<string, string> = {
 test('ENGI08-E2E-01/02/03 (AC-1, AC-2, AC-4, AC-6): the NRS fields reach the wire, the pane and the invoice', async ({
   page,
 }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
 
-  await extractOneDocument(page, 'Zz ENGI-08 nrs', { name: 'ai_nrs_invoice.pdf', buffer: uniqueAiNrsPdfBytes() })
+  await extractOneDocument(page, 'Zz ENGI-08 nrs', { name: 'ai_nrs_labelled_invoice.pdf', buffer: uniqueAiNrsLabelledPdfBytes() })
   const invoiceMatch = /^\/invoices\/([0-9a-fA-F-]{36})$/.exec(new URL(page.url()).pathname)
   expect(invoiceMatch, 'the steered document must land on the real invoice detail, not the quarantine').not.toBeNull()
   const invoice = await getInvoice(token, invoiceMatch![1])
@@ -4233,6 +4270,10 @@ test('ENGI08-E2E-01/02/03 (AC-1, AC-2, AC-4, AC-6): the NRS fields reach the wir
     expect({ value: wireValue(name), reason: wire.get(name)?.reason }, `${name} on the wire`).toEqual({ value, reason: '' })
     await expect(page.getByTestId(`extraction-input-${name}`), `${name} in the pane`).toHaveValue(value)
   }
+  // City and LGA: a value the page prints or nothing, never the fake's unprinted marker value.
+  for (const name of ['buyer_city', 'buyer_lga']) {
+    expect([null, NRS_PLACE_PRINTED], `${name} on the wire is a printed value or null`).toContain(wireValue(name))
+  }
   for (const [role, value] of Object.entries(NRS_GOODS_READ)) {
     expect(wireValue(`line_items[1].${role}`), `row 1 ${role} on the wire`).toBe(value)
   }
@@ -4245,22 +4286,21 @@ test('ENGI08-E2E-01/02/03 (AC-1, AC-2, AC-4, AC-6): the NRS fields reach the wir
     buyer_email: invoice.buyer_email,
     buyer_telephone: invoice.buyer_telephone,
     buyer_street: invoice.buyer_street,
-    buyer_city: invoice.buyer_city,
     buyer_postal_zone: invoice.buyer_postal_zone,
     buyer_country: invoice.buyer_country,
-    buyer_lga: invoice.buyer_lga,
   }, 'the filed invoice header').toEqual({ ...NRS_HEADER_READ, due_date: '2026-08-13T00:00:00Z' })
+  expect({ buyer_city: invoice.buyer_city, buyer_lga: invoice.buyer_lga }, 'the filed city and LGA equal the wire').toEqual({
+    buyer_city: wireValue('buyer_city'),
+    buyer_lga: wireValue('buyer_lga'),
+  })
   const lines = [...(invoice.line_items ?? [])].sort((a, b) => a.line_no - b.line_no)
   expect(lines.map((l) => l.line_no), 'the filed invoice holds the two printed rows').toEqual([1, 2])
   expect(lines[0], 'the filed goods row').toMatchObject(NRS_GOODS_READ)
   expect(lines[1], 'the filed service row').toMatchObject(NRS_SERVICE_READ)
 
-  // ENGI08-E2E-02 (AC-6): the AI answered `Ogun` and `Exempt`, words the page never prints.
-  // reason `unreadable` is ReasonUnreadable (internal/extraction).
-  expect(
-    { value: wireValue('buyer_state'), reason: wire.get('buyer_state')?.reason },
-    'buyer_state is the AI-only word the page does not print',
-  ).toEqual({ value: null, reason: 'unreadable' })
+  // ENGI08-E2E-02 (AC-6): the page prints no state; the fake's `Ogun` and `Exempt` are not printed
+  // either, and the real AI answers null. Only the value holds on both lanes, never the reason.
+  expect(wireValue('buyer_state'), 'buyer_state is a word the page does not print').toBeNull()
   expect(invoice.buyer_state, 'the invoice must not store the unprinted state').toBeNull()
   expect(wire.has('line_items[2].tax_category'), 'row 2 carries no tax_category on the wire').toBe(false)
   expect(lines[1].tax_category, 'row 2 stores no tax_category').toBeNull()
@@ -4336,7 +4376,7 @@ test('ENGI08-E2E-01/02/03 (AC-1, AC-2, AC-4, AC-6): the NRS fields reach the wir
 const JEV_DOUBT_READ = { invoice_number: 'JD-3310', supplier_name: 'Kaduna Textiles Limited', supplier_tin: '23456789-0001' }
 
 test('CHECK03-E2E-01 (AC-4, AC-5, AC-10): a value Jev doubts shows the pill, keeps its value, and files', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
+  test.skip(nightlyTarget(), 'S7: needs real Jev to doubt a value the engine read correctly; covered by Go TestRLS_ExtractWorkerWritesADoubtAsUnreadableWithItsValue and jevcheck_internal_test.go')
   test.setTimeout(300_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
@@ -4402,7 +4442,7 @@ test('CHECK03-E2E-01 (AC-4, AC-5, AC-10): a value Jev doubts shows the pill, kee
 })
 
 test("CHECK03-LAYOUT-01: the doubted invoice number's pill stays inside its cell at every width", async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
+  test.skip(nightlyTarget(), 'S8: measures the doubt pill; needs real Jev to doubt a value the engine read correctly; E2E only')
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4508,21 +4548,20 @@ test("CHECK03-LAYOUT-01: the doubted invoice number's pill stays inside its cell
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// read: fxJevReceiptLines (internal/extraction/fixtures_test.go)
+// read: fxHonestReceiptLines (internal/extraction/fixtures_test.go)
 const JEV_RECEIPT_READ = { invoice_number: 'JR-4410', supplier_name: 'Owerri Traders Limited', supplier_tin: '34567890-0001' }
 // copy: DOCUMENT_TYPE_NOTICE.receipt (frontend/app/src/lib/extractionReview.ts)
 const RECEIPT_NOTICE =
   'This looks like a receipt, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'
 
 test('CHECK04-E2E-01 (AC-4, AC-5, AC-8): a document read as a receipt shows the banner, keeps its rows, and files; a plain upload shows none', async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Two extractions on a possibly cold sidecar, then a four-width sweep.
   test.setTimeout(600_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
 
   // -- receipt leg -- extractOneDocument already waited on invoice-detail: the receipt filed a draft.
-  await extractOneDocument(page, 'Zz CHECK-04 receipt', { name: 'jev_receipt_invoice.pdf', buffer: uniqueJevReceiptPdfBytes() })
+  await extractOneDocument(page, 'Zz CHECK-04 receipt', { name: 'honest_receipt_invoice.pdf', buffer: uniqueHonestReceiptPdfBytes() })
   const invoiceMatch = /^\/invoices\/([0-9a-fA-F-]{36})$/.exec(new URL(page.url()).pathname)
   expect(invoiceMatch, 'the receipt must land on the real invoice detail, not the quarantine').not.toBeNull()
   const invoiceId = invoiceMatch![1]
@@ -4614,7 +4653,7 @@ test('CHECK04-E2E-01 (AC-4, AC-5, AC-8): a document read as a receipt shows the 
     contentType: 'application/json',
   })
 
-  // -- plain leg -- the fake's default answer is a tax invoice, so no verdict and no strip.
+  // -- plain leg -- rich_invoice.pdf is a tax invoice, so no verdict and no strip.
   await extractOneDocument(page, 'Zz CHECK-04 plain')
   const plain = await openExtractionReview(page)
   expect(plain.document_type, 'a plain upload carries a verdict').toBeNull()
@@ -4624,14 +4663,13 @@ test('CHECK04-E2E-01 (AC-4, AC-5, AC-8): a document read as a receipt shows the 
 })
 
 test('CRDDBTNOTE05: the note panel fits the review at every wide width', async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Two accepted originals, one cold-sidecar extraction, then a four-width sweep.
   test.setTimeout(600_000)
   const errors = collectErrors(page)
   const longNumber = `INV-LONG-${'X'.repeat(31)}`
   expect(longNumber, 'the long original must be 40 characters').toHaveLength(40)
 
-  await extractHeldNote(page, 'Zz CRDDBTNOTE-05 layout', { name: 'jev_credit_note.pdf', buffer: uniqueJevCreditNotePdfBytes() }, [
+  await extractHeldNote(page, 'Zz CRDDBTNOTE-05 layout', { name: 'honest_credit_note.pdf', buffer: uniqueHonestCreditNotePdfBytes() }, [
     longNumber,
     'INV-ORIG-3401',
   ])
@@ -4692,13 +4730,12 @@ test('CRDDBTNOTE05: the note panel fits the review at every wide width', async (
 
 
 test('CRDDBTNOTE05: a note PDF imports as a note on the review screen', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Two accepted originals, one cold-sidecar extraction, one import.
   test.setTimeout(600_000)
   const errors = collectErrors(page)
 
   // The read original goes first, so newest-first alone would not preselect it.
-  await extractHeldNote(page, 'Zz CRDDBTNOTE-05 import', { name: 'jev_credit_note.pdf', buffer: uniqueJevCreditNotePdfBytes() }, [
+  await extractHeldNote(page, 'Zz CRDDBTNOTE-05 import', { name: 'honest_credit_note.pdf', buffer: uniqueHonestCreditNotePdfBytes() }, [
     'INV-ORIG-3401',
     `INV-OTHER-${freshTin()}`,
   ])
@@ -4726,20 +4763,19 @@ test('CRDDBTNOTE05: a note PDF imports as a note on the review screen', async ({
 })
 
 test('CRDDBTNOTE05: a held file in a two-file run keeps its way back', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(600_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `Zz CRDDBTNOTE-05 held ${Date.now()}`, tin: freshTin() })
   await acceptedOriginal(token, entity.id, 'INV-ORIG-3401')
 
-  const noteName = 'jev_credit_note.pdf'
-  const denseName = 'dense_invoice.pdf'
+  const noteName = 'honest_credit_note.pdf'
+  const denseName = 'wild_scanned_no_number.pdf'
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
   await runDocumentsIn(page, token, [
-    { name: noteName, mimeType: 'application/pdf', buffer: uniqueJevCreditNotePdfBytes() },
-    { name: denseName, mimeType: 'application/pdf', buffer: uniqueDensePdfBytes() },
+    { name: noteName, mimeType: 'application/pdf', buffer: uniqueHonestCreditNotePdfBytes() },
+    { name: denseName, mimeType: 'application/pdf', buffer: uniqueWildNoNumberPdfBytes() },
   ])
 
   await expect

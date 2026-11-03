@@ -95,7 +95,7 @@ import {
   type Rect,
 } from './layout'
 import { signInAs } from '../personaSession'
-import { nightlyTarget, REAL_AI_COVERED } from '../targets'
+import { nightlyTarget } from '../targets'
 import { INHOUSE_PERSONA } from './targets'
 import {
   boxOf,
@@ -111,6 +111,7 @@ import {
   requestBody,
   sameRect,
   selectEntity,
+  setExactMapping,
   settledRead,
   shardPersonas,
   uniqueGarbageBytes,
@@ -122,11 +123,13 @@ import {
   buildAir07UnsteeredCsv,
   buildHeaderOnlyCsv,
   buildMixedCsv,
+  buildOversizedCellCsv,
   buildPerfCsv,
   buildSingleInvoiceCsv,
   IMPORT_KEYS,
   nullImportKeys,
   PERF_HEADER,
+  PR_LANE_MAPPING,
   steerMarker,
 } from '../importFixtures'
 
@@ -222,7 +225,6 @@ function buildAirl01SteeredCsv(num = 'INV-AIRL01-1'): string {
 }
 
 test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through the UI on deployed dev', async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Sign-in, nav, ONE upload ([upload-once] -- preview stores the bytes and the
   // import that follows sends only the id), and render, on a possibly cold 11-service fleet.
   // import.spec.ts already spends 120s on the API-only path with a 60s budget; this
@@ -273,6 +275,10 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   // a hardcoded/browser-parsed list.
   const headerCells = page.locator('main div.mono')
   await expect(headerCells).toHaveText(PERF_HEADER.split(','))
+
+  // The 7 alias fields only: invoice_number stays unplaced for the arm oracle below.
+  const { invoice_number: _inv, subtotal: _sub, ...aliasFields } = PR_LANE_MAPPING
+  await setExactMapping(page, aliasFields)
 
   // Map invoice_number by click-to-place (D3 -- no <select>, drag is flaky under
   // Playwright): arm the chip, then click the target column.
@@ -427,12 +433,9 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
 })
 
 // AC-5: a placement chip must never overflow its column at any swept width, including the
-// SUGGESTED chip added as a third `flex: 'none'` child. Deployed-only -- there is
-// no way to reach a suggested Map step without the fake fleet's AI (see the file header),
-// so this runs ONLY when the deploy gate exercises this file against a live PR environment.
-// Stage 3/4 locally can only typecheck it (pnpm --filter @invoice-os/e2e typecheck).
+// SUGGESTED chip added as a third `flex: 'none'` child. The marker in the CSV makes the PR
+// lane's fake AI suggest a tag; the real AI and the alias place tags too.
 test('AIRL-01: a placement chip stays inside its column at every swept width', async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(180_000)
   const errors = collectErrors(page)
 
@@ -461,14 +464,10 @@ test('AIRL-01: a placement chip stays inside its column at every swept width', a
   expect(await columns.count(), 'control: at least one column must render, or the sweep below is vacuous').toBeGreaterThan(0)
   const anyChip = columns.locator('span[draggable]')
   expect(await anyChip.count(), 'control: at least one placed chip must render, or the sweep below is vacuous').toBeGreaterThan(0)
-
-  // Not a strict requirement of AC-5 itself, but proof this run reached the state AC-5
-  // targets: a badge-less suggested chip is a false-negative risk -- it would still pass a
-  // bare containment sweep -- so this is the positive control that the steered fixture worked.
-  await expect(
-    page.getByTestId('map-suggested-badge').first(),
-    'the steered suggestion must place at least one SUGGESTED badge, or this run never reached the state AC-5 targets',
-  ).toBeVisible()
+  // The PR lane's fake suggests a tag from the CSV marker; alias chips alone would not prove it.
+  if (!nightlyTarget()) {
+    await expect(page.getByTestId('map-suggested-badge').first(), 'the steered suggestion must place a SUGGESTED badge').toBeVisible()
+  }
 
   const entryViewport = page.viewportSize()
   const widthsMeasured: number[] = []
@@ -507,7 +506,7 @@ test('AIRL-01: a placement chip stays inside its column at every swept width', a
 })
 
 test('AIR07-E2E-01: a steered suggestion opens the Map step placed and badged, and Continue imports it', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
+  test.skip(nightlyTarget(), "S16: its subject is the AI's own placement of invoice_number; covered by AIR07-API-01 and vitest AIRA-04/06")
   test.setTimeout(240_000)
   const errors = collectErrors(page)
 
@@ -564,7 +563,7 @@ test('AIR07-E2E-01: a steered suggestion opens the Map step placed and badged, a
 })
 
 test('AIR07-E2E-03: a title-row file maps and imports from row 3', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
+  test.skip(nightlyTarget(), "S17: its subject is the AI's header-row answer (row 3); covered by Go TestSuggestHandler_TheGuardReadsTheReDecodedHeaderNotTheWindowRow")
   test.setTimeout(240_000)
   const errors = collectErrors(page)
 
@@ -630,14 +629,12 @@ test('AIR07-E2E-03: a title-row file maps and imports from row 3', async ({ page
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-test("AIR07-E2E-04: an unsteered file opens exactly today's Map step", async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
+test("AIR07-E2E-04: an oversized cell opens exactly today's Map step", async ({ page }) => {
   test.setTimeout(240_000)
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `AIR-07 unsteered ${Date.now()}`, tin: freshTin() })
-  const num = `INV-AIR07E04-${Date.now()}`
 
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await selectEntity(page, entity.name)
@@ -645,18 +642,17 @@ test("AIR07-E2E-04: an unsteered file opens exactly today's Map step", async ({ 
 
   const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
   const fileInput = page.locator('input[type="file"]#pf-import-file')
-  await fileInput.setInputFiles({ name: 'air07-unsteered.csv', mimeType: 'text/csv', buffer: Buffer.from(buildAir07UnsteeredCsv(num), 'utf8') })
+  await fileInput.setInputFiles({ name: 'air07-oversized.csv', mimeType: 'text/csv', buffer: Buffer.from(buildOversizedCellCsv(), 'utf8') })
   await expect(readColumnsBtn).toBeEnabled()
 
   const suggestResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/suggest-mapping'),
-    { timeout: 60_000 },
+    { timeout: 120_000 },
   )
   await readColumnsBtn.click()
   const suggestBody = (await (await suggestResp).json()) as { source: string; mapping: Record<string, string> }
-  // Control: proves the endpoint ran and answered blank, rather than this run never
-  // reaching the suggest call at all.
-  expect(suggestBody.source, 'control: a marker-less file must fall to the blank-answer path').toBe('none')
+  // Control: the fake answers blank, the real AI refuses the oversized cell; both give 'none'.
+  expect(suggestBody.source, 'control: an oversized-cell file must fall to the no-answer path').toBe('none')
   expect(Object.keys(suggestBody.mapping), 'control: a blank answer places nothing').toHaveLength(0)
 
   // Control: the screen is live with all 11 columns rendered, not merely empty.
@@ -675,7 +671,7 @@ test("AIR07-E2E-04: an unsteered file opens exactly today's Map step", async ({ 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// Opens the Map step of a file with no invoice_kind column; the fake AI places nothing.
+// Opens the Map step of a file with no invoice_kind column.
 async function openUnsteeredMapStep(page: Page, label: string): Promise<void> {
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `${label} ${freshTin()}`, tin: freshTin() })
@@ -691,7 +687,6 @@ async function openUnsteeredMapStep(page: Page, label: string): Promise<void> {
 }
 
 test('ENGI07-E2E-01: the buyer-type select sits in the palette card', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(180_000)
   const errors = collectErrors(page)
   await openUnsteeredMapStep(page, 'ENGI-07 select')
@@ -700,7 +695,7 @@ test('ENGI07-E2E-01: the buyer-type select sits in the palette card', async ({ p
   await expect(select, 'a file with no invoice_kind column offers the select').toBeVisible()
   // The innermost div holding the card title and the select is the palette card.
   const card = page.locator('div').filter({ has: page.getByText(/^Map fields to columns/) }).filter({ has: select }).last()
-  const chip = page.getByRole('button', { name: 'invoice_number' })
+  const chip = page.getByRole('button', { name: 'invoice_kind' })
 
   const entry = page.viewportSize()
   try {
@@ -739,21 +734,17 @@ test('ENGI07-E2E-02: placing invoice_kind hides the select', async ({ page }) =>
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// AIRL01's steered file plus a twelfth, unaliased column. A JEVFAKE-DOUBT header makes the
-// mapping-check fake doubt every placement of that file's layout group.
-function buildCheck05Csv(num: string, notesHeader: string): string {
-  const header = `Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price,${notesHeader}`
-  const row = [num, '2026-01-01', '12345678-0001', steerMarker(AIRL01_ANSWER), 'NGN', '1000.00', '75.00', '1075.00', 'Consulting', '1', '1000.00', '']
+// AIRL01's steered file plus an unaliased `Tax Amount` column and a Notes column. A free-text
+// VAT cell is a real doubt cause; a JEVFAKE-DOUBT Notes header makes the fake doubt that group.
+function buildCheck05Csv(num: string, notesHeader: string, vatCell: string): string {
+  const header = `Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price,Tax Amount,${notesHeader}`
+  const row = [num, '2026-01-01', '12345678-0001', steerMarker(AIRL01_ANSWER), 'NGN', '1000.00', vatCell, '1075.00', 'Consulting', '1', '1000.00', '75.00', '']
   return `${header}\n${row.join(',')}\n`
 }
-
-// The steered invoice_number plus the seven alias placements, sorted as the endpoint answers.
-const CHECK05_AUTOMATIC = ['buyer_tin', 'currency', 'invoice_number', 'issue_date', 'line_quantity', 'line_unit_price', 'total', 'vat']
 
 test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and imports once placed by hand, while the other group's placements are as they were", async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -762,8 +753,9 @@ test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and impo
   const stamp = Date.now()
   const numA = `INV-CHECK05A-${stamp}`
   const numB = `INV-CHECK05B-${stamp}`
-  const headersA = [...PERF_HEADER.split(','), 'Notes JEVFAKE-DOUBT']
-  const headersB = [...PERF_HEADER.split(','), 'Notes']
+  const baseHeaders = [...PERF_HEADER.split(','), 'Tax Amount']
+  const headersA = [...baseHeaders, 'Notes JEVFAKE-DOUBT']
+  const headersB = [...baseHeaders, 'Notes']
 
   const isPost = (r: Request, suffix: string) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith(suffix)
   const suggests: Promise<{ documentId: string; body: { source: string; columns: string[]; mapping: Record<string, string> } }>[] = []
@@ -792,8 +784,8 @@ test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and impo
 
   // File A first, so it is group 1.
   await page.locator('input[type="file"]#pf-import-file').setInputFiles([
-    { name: 'check05-doubted.csv', mimeType: 'text/csv', buffer: Buffer.from(buildCheck05Csv(numA, 'Notes JEVFAKE-DOUBT'), 'utf8') },
-    { name: 'check05-plain.csv', mimeType: 'text/csv', buffer: Buffer.from(buildCheck05Csv(numB, 'Notes'), 'utf8') },
+    { name: 'check05-doubted.csv', mimeType: 'text/csv', buffer: Buffer.from(buildCheck05Csv(numA, 'Notes JEVFAKE-DOUBT', 'Deliver to back gate'), 'utf8') },
+    { name: 'check05-plain.csv', mimeType: 'text/csv', buffer: Buffer.from(buildCheck05Csv(numB, 'Notes', '75.00'), 'utf8') },
   ])
   await page.getByRole('button', { name: 'Read columns' }).click()
   await expect(page.getByText('GROUP 1 OF 2', { exact: true })).toBeVisible({ timeout: 120_000 })
@@ -801,10 +793,6 @@ test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and impo
   // The Map step renders only after every check has answered.
   const suggestAnswers = await Promise.all(suggests)
   expect(suggestAnswers, 'one suggestion per group').toHaveLength(2)
-  for (const s of suggestAnswers) {
-    expect(s.body.source, 'control: each group must have reached the AI path').toBe('ai')
-    expect(s.body.mapping.invoice_number, 'control: the AI must have placed invoice_number').toBe('Invoice No')
-  }
   const docA = suggestAnswers.find((s) => s.body.columns.at(-1) === 'Notes JEVFAKE-DOUBT')?.documentId
   const docB = suggestAnswers.find((s) => s.body.columns.at(-1) === 'Notes')?.documentId
   expect(docA, "file A's stored document").toBeTruthy()
@@ -814,38 +802,52 @@ test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and impo
   const answers = await Promise.all(checkAnswers)
   expect(checkRequests.map((r) => r.document_id), 'exactly one check per group, in group order').toEqual([docA, docB])
   expect(answers.map((a) => a.status)).toEqual([200, 200])
-  expect(answers.find((a) => a.documentId === docA)?.body.doubted, "file A's check doubts every automatic placement").toEqual(CHECK05_AUTOMATIC)
-  expect(answers.find((a) => a.documentId === docB)?.body.doubted, "file B's check doubts nothing").toEqual([])
 
-  // Group 1: nothing placed, nothing added.
+  // Placements the Map step shows, read from the DOM as field -> header.
   const columns = page.getByTestId('map-column')
   const palette = page.locator('main button[draggable]')
-  const paletteKeys = async () => (await palette.allTextContents()).map((t) => t.replace('*', '').trim()).sort()
-  await expect(columns, 'control: group 1 renders its twelve columns').toHaveCount(12)
-  await expect(columns.locator('span[draggable]'), 'no placed chip in the doubted group').toHaveCount(0)
-  await expect(page.getByTestId('map-suggested-badge')).toHaveCount(0)
+  const paletteKeys = async () => (await palette.allTextContents()).map((t) => t.replace('*', '').trim().toLowerCase()).sort()
+  const shownPlacements = async () => {
+    const shown: Record<string, string> = {}
+    for (let i = 0; i < (await columns.count()); i++) {
+      const col = columns.nth(i)
+      const field = col.locator('span[draggable] .mono')
+      if ((await field.count()) === 0) continue
+      shown[((await field.first().textContent()) ?? '').trim().toLowerCase()] = ((await col.locator('div.mono').textContent()) ?? '').trim()
+    }
+    return shown
+  }
+  // Doubted fields open unplaced; every other placement is the one the check was asked about.
+  const expectOpensAsChecked = async (docId: string, group: string) => {
+    const checked = checkRequests.find((r) => r.document_id === docId)!.mapping
+    const doubted = answers.find((a) => a.documentId === docId)!.body.doubted
+    const shown = await shownPlacements()
+    for (const field of doubted) expect(shown[field], `${group}: doubted ${field} opens unplaced`).toBeUndefined()
+    expect(shown, `${group}: placements equal the check request minus its doubted set`).toEqual(
+      Object.fromEntries(Object.entries(checked).filter(([field]) => !doubted.includes(field))),
+    )
+    expect(await paletteKeys(), `${group}: the palette offers exactly the unplaced fields`).toEqual(
+      IMPORT_KEYS.filter((k) => !(k in shown)).sort(),
+    )
+    return { checked, doubted }
+  }
+
+  await expect(columns, 'control: group 1 renders its thirteen columns').toHaveCount(13)
   await expect(page.locator('main div.mono'), 'the header cells are exactly the file headers').toHaveText(headersA)
-  await expect(columns.locator('div.mono + *'), 'every placement cell reads only "drop field"').toHaveText(Array(12).fill('drop field'))
-  await expect(palette).toHaveCount(IMPORT_KEYS.length)
-  expect(await paletteKeys(), 'the palette offers every import field').toEqual([...IMPORT_KEYS].sort())
+  const groupA = await expectOpensAsChecked(docA!, 'group 1')
+  // Real Jev doubting a free-text VAT column is unconfirmed ([unconfirmed-jev]); a miss is a wrong read.
+  if (groupA.checked.vat === 'VAT') expect(groupA.doubted, 'a free-text VAT column is doubted').toContain('vat')
 
   const continueBtn = page.locator('main button', { hasText: /^(Map invoice number to continue|Continue to next file|Import \d+ rows)$/ })
-  await expect(continueBtn).toHaveText('Map invoice number to continue')
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
+  await setExactMapping(page, { ...PR_LANE_MAPPING, vat: 'Tax Amount' })
   await expect(continueBtn).toHaveText('Continue to next file')
   await continueBtn.click()
 
-  // Group 2: every automatic placement as it was.
+  // Group 2: its placements are as its check was asked.
   await expect(page.getByText('GROUP 2 OF 2', { exact: true })).toBeVisible()
   await expect(page.locator('main div.mono')).toHaveText(headersB)
-  const invoiceNoColumn = columns.filter({ has: page.locator('div.mono', { hasText: /^Invoice No$/ }) })
-  await expect(invoiceNoColumn.getByTestId('map-suggested-badge')).toHaveCount(1)
-  await expect(page.getByTestId('map-suggested-badge'), 'exactly one SUGGESTED badge on the page').toHaveCount(1)
-  await expect(columns.locator('div.mono + span[draggable]'), 'eight placed chips').toHaveCount(8)
-  await expect(columns.locator('div.mono + div'), 'four unplaced columns').toHaveText(Array(4).fill('drop field'))
-  await expect(palette).toHaveCount(IMPORT_KEYS.length - CHECK05_AUTOMATIC.length)
-  expect(await paletteKeys()).toEqual(IMPORT_KEYS.filter((k) => !CHECK05_AUTOMATIC.includes(k)).sort())
+  await expectOpensAsChecked(docB!, 'group 2')
+  await setExactMapping(page, PR_LANE_MAPPING)
   await expect(continueBtn).toHaveText('Import 1 rows')
 
   await continueBtn.click()
@@ -858,17 +860,8 @@ test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and impo
     expect(body, `a create request names ${docId}`).toBeTruthy()
     return /name="mapping"\r\n\r\n([^\r]*)\r\n/.exec(body!)?.[1]
   }
-  expect(mappingPart(docA!), 'file A imports with only the hand placement').toBe('{"invoice_number":"Invoice No"}')
-  expect(JSON.parse(mappingPart(docB!) ?? '{}'), 'file B imports with all eight automatic placements').toEqual({
-    invoice_number: 'Invoice No',
-    issue_date: 'Issue Date',
-    buyer_tin: 'Buyer TIN',
-    currency: 'Currency',
-    vat: 'VAT',
-    total: 'Total',
-    line_quantity: 'Qty',
-    line_unit_price: 'Unit Price',
-  })
+  expect(JSON.parse(mappingPart(docA!) ?? '{}'), 'file A imports with the exact set, vat on Tax Amount').toEqual({ ...PR_LANE_MAPPING, vat: 'Tax Amount' })
+  expect(JSON.parse(mappingPart(docB!) ?? '{}'), 'file B imports with the exact set').toEqual(PR_LANE_MAPPING)
 
   const { invoices } = await listInvoices(token, { entity_id: entity.id })
   expect(invoices.map((i) => i.invoice_number).sort()).toEqual([numA, numB].sort())
@@ -880,7 +873,6 @@ test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and impo
 test('E2E-04/09 (INVCR-01-09): the mixed fixture separates the two channels by TAB, the structural message is reachable only through Unreadable rows, and Finish leads to a live invoice detail', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.A)
@@ -909,15 +901,8 @@ test('E2E-04/09 (INVCR-01-09): the mixed fixture separates the two channels by T
   await page.getByRole('button', { name: 'Read columns' }).click()
   await previewResp
 
-  // Map invoice_number AND subtotal by click-to-place. subtotal has no entry in
-  // lib/mapping.ts's ALIAS table, so auto-recognize never places it -- and it MUST
-  // be mapped for this fixture's clean/violating split to be real rather than a
-  // uniform tax_math data-fault on every invoice (see importFixtures.ts's
-  // buildMixedCsv doc comment for the verified reasoning).
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal' }).click()
-  await page.getByText('Subtotal', { exact: true }).click()
+  // subtotal must be mapped for the clean/violating split to be real (see buildMixedCsv).
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   const importResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -1078,7 +1063,6 @@ test('E2E-04/09 (INVCR-01-09): the mixed fixture separates the two channels by T
 test('BUG08-E2E-1/2/3/4/5/7 (AC-1..6, task-408/409): a re-import splits genuine parse failures from already-imported rows', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // The config default is 60s and this drives the full wizard TWICE.
   test.setTimeout(180_000)
   const errors = collectErrors(page)
@@ -1104,12 +1088,7 @@ test('BUG08-E2E-1/2/3/4/5/7 (AC-1..6, task-408/409): a re-import splits genuine 
   await page.getByRole('button', { name: 'Read columns' }).click()
   await preview1
 
-  // subtotal has no ALIAS entry (lib/mapping.ts) so it must be click-mapped by hand,
-  // same as E2E-04 -- see buildMixedCsv's own doc comment for why this is load-bearing.
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal' }).click()
-  await page.getByText('Subtotal', { exact: true }).click()
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   const import1 = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -1405,7 +1384,6 @@ test('[import-upload-unify] LIVE: one real import surface, manual entry survives
 test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity and files an invoice, both by import and manually', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   const errors = collectErrors(page)
 
   await signInAs(page, 'inhouse', { tenantId: SHARD.b.id })
@@ -1462,8 +1440,7 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
     'the refusal is gone from the Map step — in-house has an entity now',
   ).toHaveCount(0)
 
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
+  await setExactMapping(page, { invoice_number: 'Invoice No' })
 
   const importBtn = page.getByRole('button', { name: /^Import \d+ rows$/ })
   await expect(importBtn, 'armed once invoice_number is placed — the SAME control that used to be the disabled refusal').toBeEnabled()
@@ -1564,7 +1541,6 @@ test.describe('INVCR-E2E-1 governs the firm tenant before submitting', () => {
 test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-validate -> select -> submit, badges from a re-fetch', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
@@ -1586,10 +1562,7 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
   await page.getByRole('button', { name: 'Read columns' }).click()
   await previewResp
 
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal' }).click()
-  await page.getByText('Subtotal', { exact: true }).click()
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   const importResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -1717,7 +1690,6 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
 // its own data-testid and status-strip, never by the review table's absence alone
 // ([E2E-must-not] #4).
 test('INVCR-E2E-2 firm: a single-invoice CSV lands on the real invoice detail, never a one-row review grid', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.A)
@@ -1739,10 +1711,7 @@ test('INVCR-E2E-2 firm: a single-invoice CSV lands on the real invoice detail, n
   await page.getByRole('button', { name: 'Read columns' }).click()
   await previewResp
 
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal' }).click()
-  await page.getByText('Subtotal', { exact: true }).click()
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   const importResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -1763,7 +1732,6 @@ test('INVCR-E2E-2 firm: a single-invoice CSV lands on the real invoice detail, n
 // honestly -- §7.5's "Nothing was imported" with three zeroed tiles, and no Map-step
 // retry offered from the rejected screen (only re-upload or manual entry).
 test('INVCR-E2E-4 firm: a header-only file is refused honestly, with no Map-step retry offered', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.A)
@@ -1786,8 +1754,8 @@ test('INVCR-E2E-4 firm: a header-only file is refused honestly, with no Map-step
 
   // A header-only file still echoes real columns (PRV-07) -- invoice_number is placed by
   // hand exactly as every other fixture in this file, at 0 rows.
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
+  const { subtotal: _subtotal, ...withoutSubtotal } = PR_LANE_MAPPING
+  await setExactMapping(page, withoutSubtotal)
   const importBtn = page.getByRole('button', { name: 'Import 0 rows' })
   await expect(importBtn).toBeEnabled()
 
@@ -1819,7 +1787,6 @@ test('INVCR-E2E-4 firm: a header-only file is refused honestly, with no Map-step
 // `/imports/<batchId>/review` restores it with BOTH channels re-derived from a fresh GET,
 // never from memory the tab already held.
 test('INVCR-E2E-6 the review screen survives a reload -- the deep link re-derives both channels', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.A)
@@ -1840,10 +1807,7 @@ test('INVCR-E2E-6 the review screen survives a reload -- the deep link re-derive
   await page.getByRole('button', { name: 'Read columns' }).click()
   await previewResp
 
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal' }).click()
-  await page.getByText('Subtotal', { exact: true }).click()
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   const importResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -1893,7 +1857,6 @@ test.describe('INVCR-E2E-7 governs the firm tenant before submitting', () => {
   })
 
 test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disabled, never absent', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.A)
@@ -1914,10 +1877,7 @@ test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disa
   await page.getByRole('button', { name: 'Read columns' }).click()
   await previewResp
 
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal' }).click()
-  await page.getByText('Subtotal', { exact: true }).click()
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   const importResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -1999,19 +1959,12 @@ test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disa
 // collecting these three tests is the whole local oracle. The first REAL run is the
 // deploy gate on this PR, once it leaves draft.
 //
-// Only `invoice_number` is ever click-mapped below, in every group, on every fixture --
-// it is the ONLY field canSubmitMapping (lib/mapping.ts) gates the commit on, and none of
-// the three shapes below asserts anything about rule violations or verdict pills, so
-// there is no reason to also hand-map `subtotal` the way E2E-04's buildMixedCsv fixture
-// needs to (that fixture's whole point is a clean/violating SPLIT this one does not
-// care about). Leaving every other canonical field unmapped is the documented,
-// non-blocking "optional fields unmapped" path (CreateMapping.tsx's own mapNote branch).
+// Each Map step is set with setExactMapping, so the mapping is the same under either AI.
 
 // BULK-E2E-01 (BULK-E2E-01a..01d/01e/01f): a shared-layout multi-file run.
 test('BULK-E2E-01 (Core AC 1/2/3): shared-layout multi-file run -- select, cap-refuse, remove in order, map once, one review screen for both files', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
@@ -2085,8 +2038,7 @@ test('BULK-E2E-01 (Core AC 1/2/3): shared-layout multi-file run -- select, cap-r
   ).toBeVisible()
   await expect(page.getByText(/^GROUP \d+ OF \d+$/), 'a single-group run renders no group pager').toHaveCount(0)
 
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   const importResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -2128,7 +2080,6 @@ test('BULK-E2E-01 (Core AC 1/2/3): shared-layout multi-file run -- select, cap-r
 test('BULK-E2E-02 (Core AC 4): different-layout files map SEPARATELY, one column mapping does not silently cover the other, yet still land on one review screen', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
@@ -2154,8 +2105,7 @@ test('BULK-E2E-02 (Core AC 4): different-layout files map SEPARATELY, one column
   await expect(page.getByText('This mapping applies to 1 file: layout-a-till.csv.', { exact: true })).toBeVisible()
   await expect(page.getByText('layout-b-terminal.csv', { exact: false }), "the OTHER file's name never leaks onto this group's screen").toHaveCount(0)
 
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
+  await setExactMapping(page, PR_LANE_MAPPING)
   // Not the last group -- continueMapping only advances groupIndex, no network call and
   // nothing imported yet (App.tsx's continueMapping).
   await page.getByRole('button', { name: 'Continue to next file' }).click()
@@ -2165,11 +2115,7 @@ test('BULK-E2E-02 (Core AC 4): different-layout files map SEPARATELY, one column
   await expect(page.getByText('This mapping applies to 1 file: layout-b-terminal.csv.', { exact: true })).toBeVisible()
   await expect(page.getByText('layout-a-till.csv', { exact: false }), "the FIRST file's name is gone from this group's screen").toHaveCount(0)
 
-  // invoice_number is never auto-recognized regardless of header spelling ("the invoice
-  // number is never matched by name" -- CreateMapping's own copy), so this group needs its
-  // own manual placement too, onto ITS OWN header's own column name ("Ref", not "Invoice No").
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Ref', { exact: true }).click()
+  await setExactMapping(page, { invoice_number: 'Ref', issue_date: 'Date', currency: 'CCY' })
 
   const importResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -2211,7 +2157,6 @@ test('BULK-E2E-02 (Core AC 4): different-layout files map SEPARATELY, one column
 test('BULK-E2E-03 (Core AC 5, [sequential-not-parallel], spreadsheet path): a cross-file duplicate quarantines one file while the run keeps its earlier successes, named by reason not status', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
@@ -2237,8 +2182,7 @@ test('BULK-E2E-03 (Core AC 5, [sequential-not-parallel], spreadsheet path): a cr
   await expect(page.locator('[data-testid="map-column"]').first()).toBeVisible()
   await expect(page.getByText(/^GROUP \d+ OF \d+$/)).toHaveCount(0)
 
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   // The FIRST of two sequential createImport calls this click triggers (partial-first.csv,
   // sent before partial-dupe.csv even starts) -- proves the gateway-prefixed URL
@@ -2316,7 +2260,6 @@ test('BULK-E2E-03 (Core AC 5, [sequential-not-parallel], spreadsheet path): a cr
 // only one in this file that reads a request body; every other spec matches on method
 // and path alone.
 test('DOC-E2E-01 (Core AC 5): the deployed wizard imports by document_id and never re-sends the file', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
@@ -2345,10 +2288,7 @@ test('DOC-E2E-01 (Core AC 5): the deployed wizard imports by document_id and nev
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
   )
 
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal' }).click()
-  await page.getByText('Subtotal', { exact: true }).click()
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   // endsWith, never includes(): '/v1/imports' is a PREFIX of '/v1/imports/preview', so
   // a relaxed matcher would resolve both of these on the preview request.
@@ -2600,7 +2540,6 @@ test('EXTR09-E2E-01 / EXTR32-E2E-01: a PDF forks to the document path, extracts,
 })
 
 test('EXTR09-E2E-02 (AC-2): the spreadsheet journey is unchanged end to end', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(120_000)
   const errors = collectErrors(page)
 
@@ -2641,10 +2580,7 @@ test('EXTR09-E2E-02 (AC-2): the spreadsheet journey is unchanged end to end', as
   await page.getByRole('button', { name: 'Read columns' }).click()
   await previewResp
 
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal' }).click()
-  await page.getByText('Subtotal', { exact: true }).click()
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   const importResp = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -2939,7 +2875,6 @@ test('EXTR09-E2E-05 (AC-5): the step strip follows the picked kind, picked or dr
 const DOCUMENT_STAGE_WORDS = new Set(['QUEUED', 'SENDING FILE', 'SERVER PROCESSING', 'READING', 'RETRYING'])
 
 test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and lands on review', async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Upload + poll + import x2 concurrent files, on a fleet that may be cold -- matches
   // EXTR09-E2E-01's own cold-fleet budget for the same three calls.
   test.setTimeout(300_000)
@@ -3012,8 +2947,7 @@ test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and 
     }
   }
 
-  // Both arms stamp MOCK-INV-0001 (mock.go's `clean-invoice` fixture and `mockDefaultResult`)
-  // and collide by design -- with
+  // Both copies of rich_invoice.pdf read as invoice number ASC-2026-0918 and collide -- with
   // run.files.length===2, routeAfterRun can never take the single-file branch, so the
   // landing is always the review surface (Stage 1 Q5), never the real invoice detail.
   await expect
@@ -3025,7 +2959,7 @@ test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and 
         if (await page.getByRole('button', { name: 'Extract invoices' }).isVisible()) return 'back on the picker (the run failed)'
         return 'nothing yet'
       },
-      { message: 'a two-document run must land on the review surface (MOCK-INV-0001 forces both files into one batch)', timeout: 60_000 },
+      { message: 'a two-document run must land on the review surface (both copies collide on ASC-2026-0918 and land in one batch)', timeout: 60_000 },
     )
     .toBe('review batch surface')
 
@@ -3364,7 +3298,6 @@ test('EXTR11-E2E-03 (AC-4): the highlight lands where the region says, at every 
 // EXTR11-E2E-04 and -04b read the SAME 200, so they share one journey rather than paying for
 // two -- the file's own E2E-04/E2E-09 precedent, with labelled blocks.
 test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly the contract', async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -3489,7 +3422,7 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
   ]
   expect(
     [...detail.fields.map((f) => f.name)].sort(),
-    "the wire's field set drifted from mockDefaultResult -- a line the grid needs is missing, or a name changed shape",
+    "the wire's field set drifted from the rich_invoice.pdf reading -- a line the grid needs is missing, or a name changed shape",
   ).toEqual([...WIRE_FIELD_SET].sort())
 
   await testInfo.attach('extraction-wire.json', {
@@ -4101,7 +4034,6 @@ const COUNT_WORD: Record<number, string> = {
 }
 
 test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill', async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4114,17 +4046,18 @@ test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill
   // the rich fixture can carry at most missing/ambiguous/inconsistent. EXTR-18-07's spec covers
   // the fourth code on its own (unreadable) fixture.
   const flagged = detail.fields.filter((f) => f.reason !== '')
-  const codes = new Set(flagged.map((f) => f.reason))
-  expect(codes.size, `this document reported ${[...codes].join(', ')} -- fewer than the three reachable codes`).toBeGreaterThanOrEqual(3)
+  const subtotal = flagged.find((f) => f.name === 'subtotal')
+  expect(subtotal?.reason, 'subtotal must be reported inconsistent').toBe('inconsistent')
+  expect(
+    flagged.some((f) => f.reason === 'missing' || f.reason === 'unreadable'),
+    `no field was reported missing or unreadable (reported: ${[...new Set(flagged.map((f) => f.reason))].join(', ')})`,
+  ).toBe(true)
 
   // The pill loop is a header-pane claim -- a line-item cell has no header-pane home, since
   // EXTR-13-07 gave it LineItemGrid, so it is excluded here rather than left to fail the AC it
   // does not test.
   const headerFlagged = flagged.filter((f) => VOCABULARY.includes(f.name))
   expect(headerFlagged.length, 'no header-vocabulary field was flagged -- the loop below would examine nothing').toBeGreaterThan(0)
-
-  type AmbiguousMeasure = { name: string; alternatives: number; chips: number; word: string }
-  const ambiguousMeasured: AmbiguousMeasure[] = []
 
   for (const f of headerFlagged) {
     const cell = page.getByTestId(`extraction-field-${f.name}`)
@@ -4143,7 +4076,6 @@ test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill
         cell.getByText(`FOUND ${word} POSSIBLE VALUES`, { exact: true }),
         `${f.name} carries ${n} chips and renders no "FOUND ${word} POSSIBLE VALUES" pill`,
       ).toBeVisible()
-      ambiguousMeasured.push({ name: f.name, alternatives: f.alternatives.length, chips: n, word })
       continue
     }
 
@@ -4154,7 +4086,48 @@ test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill
     ).toBeVisible()
   }
 
-  const ambiguous = headerFlagged.filter((f) => f.reason === 'ambiguous')
+  // The code itself is machine vocabulary and never reaches the screen. `Object.keys(REASON_PILL)`
+  // lost `ambiguous` when the table dropped its fixed key, so every code is named
+  // explicitly -- the retype must not silently stop checking one of them.
+  const paneText = await page.getByTestId('extraction-fields').innerText()
+  expect(paneText.length, 'the fields pane rendered no text -- the absences below are vacuous').toBeGreaterThan(0)
+  for (const code of ['unreadable', 'ambiguous', 'inconsistent', 'missing', 'rule_break'] as const) {
+    expect(paneText, `the pane rendered the raw reason code "${code}"`).not.toContain(code)
+  }
+
+  await testInfo.attach('extraction-reason-pills.json', {
+    body: JSON.stringify(
+      { flagged: flagged.map((f) => ({ name: f.name, reason: f.reason })) },
+      null,
+      2,
+    ),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR12-E2E-01b (AC-7): the ambiguous pill fits at every width', async ({ page }, testInfo) => {
+  test.skip(nightlyTarget(), 'S11: needs an ambiguous header field; no fixture forces one on the real AI; covered by ExtractionFields.test.tsx')
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-12-06 pill widths')
+  const detail = await openExtractionReview(page)
+
+  type AmbiguousMeasure = { name: string; alternatives: number; chips: number; word: string }
+  const ambiguousMeasured: AmbiguousMeasure[] = []
+  const ambiguous = detail.fields.filter((f) => f.reason === 'ambiguous' && VOCABULARY.includes(f.name))
+  for (const f of ambiguous) {
+    const cell = page.getByTestId(`extraction-field-${f.name}`)
+    const chips = cell.locator(`[data-testid^="extraction-chip-${f.name}-"]`)
+    await expect(chips, `${f.name} rendered no chip row`).toHaveCount(1 + f.alternatives.length)
+    const n = await chips.count()
+    const word = COUNT_WORD[n]
+    expect(word, `${n} chips beside ${f.name} has no word in the transcribed table`).toBeTruthy()
+    ambiguousMeasured.push({ name: f.name, alternatives: f.alternatives.length, chips: n, word })
+  }
+
   expect(ambiguous.length, 'no ambiguous field was flagged -- the layout sweep below would examine nothing').toBeGreaterThan(0)
 
   // AC-7: every ambiguous pill's rect stays wholly inside its own cell, and its text never
@@ -4234,21 +4207,8 @@ test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill
     ...WIDE_WIDTHS,
   ])
 
-  // The code itself is machine vocabulary and never reaches the screen. `Object.keys(REASON_PILL)`
-  // lost `ambiguous` when the table dropped its fixed key, so every code is named
-  // explicitly -- the retype must not silently stop checking one of them.
-  const paneText = await page.getByTestId('extraction-fields').innerText()
-  expect(paneText.length, 'the fields pane rendered no text -- the absences below are vacuous').toBeGreaterThan(0)
-  for (const code of ['unreadable', 'ambiguous', 'inconsistent', 'missing', 'rule_break'] as const) {
-    expect(paneText, `the pane rendered the raw reason code "${code}"`).not.toContain(code)
-  }
-
-  await testInfo.attach('extraction-reason-pills.json', {
-    body: JSON.stringify(
-      { flagged: flagged.map((f) => ({ name: f.name, reason: f.reason })), ambiguous: ambiguousMeasured, measured },
-      null,
-      2,
-    ),
+  await testInfo.attach('extraction-ambiguous-pill-widths.json', {
+    body: JSON.stringify({ ambiguous: ambiguousMeasured, measured }, null, 2),
     contentType: 'application/json',
   })
 
@@ -4404,7 +4364,7 @@ test('EXTR12-E2E-03 (AC-7): the document toolbar no longer claims the screen is 
 })
 
 test('EXTR12-E2E-04 (AC-8): the chip row shares its column evenly at every WIDE_WIDTHS', async ({ page }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
+  test.skip(nightlyTarget(), 'S3: measures the chip row of an ambiguous field; no fixture forces one on the real AI; covered by ExtractionFields.test.tsx')
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4426,10 +4386,8 @@ test('EXTR12-E2E-04 (AC-8): the chip row shares its column evenly at every WIDE_
   const cell = page.getByTestId(`extraction-field-${ambiguous!.name}`)
   const chips = page.locator(`[data-testid^="extraction-chip-${ambiguous!.name}-"]`)
   // The row's own container: a stretched flex item, so its width IS the cell's content width.
-  // The chips must fill it, and on this document they cannot be told apart any other way --
-  // 2026-01-01, 2026-01-10 and 2026-10-01 are anagrams and all three sub-labels read `page 1`,
-  // so three content-sized chips are ALSO within 1px of each other and clear the evenness
-  // clause below. Filling the row is what `flex: 1` buys and content sizing does not.
+  // The chips must fill it: equal-length chip texts make content-sized chips pass the evenness
+  // clause below too. Filling the row is what `flex: 1` buys and content sizing does not.
   const chipRow = chips.first().locator('xpath=..')
   await expect(cell, 'the ambiguous field rendered no cell').toBeVisible()
   // W-3: the decided reading is itself a chip, so the row carries N + 1.
@@ -4528,7 +4486,6 @@ function ratioOf(box: Rect, frame: Rect): Ratio {
 test('EXTR12-E2E-05 (AC-2/AC-3/AC-6): a box drawn on page 2 is the box the screen reads back, at every zoom', async ({
   page,
 }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4542,9 +4499,10 @@ test('EXTR12-E2E-05 (AC-2/AC-3/AC-6): a box drawn on page 2 is the box the scree
 
   // Off the wire the SPA itself consumed, never a literal out of mock.go.
   expect(detail.pages.map((p) => p.page), 'the two-page fixture must produce two stored pages').toEqual([1, 2])
-  const missing = detail.fields.find((f) => f.reason === 'missing')
-  expect(missing, 'no field on this document is missing -- there is nothing to point at').toBeTruthy()
-  const name = missing!.name
+  // buyer_tin by name: the TIN typed below is a TIN, whichever field sorts first.
+  const name = 'buyer_tin'
+  const missing = detail.fields.find((f) => f.name === name && f.reason === 'missing')
+  expect(missing, `${name} is not missing on this document -- there is nothing to point at`).toBeTruthy()
   expect(missing!.region, 'the missing field already carries a region, so a drawn box proves nothing').toBeNull()
 
   const button = page.getByTestId(`extraction-point-${name}`)

@@ -1895,7 +1895,11 @@ async function aiUsageReads(page: Page, testInfo: TestInfo): Promise<void> {
 
   await mn.getByRole('button', { name: 'FAILURES' }).click()
   await expect(mn.getByRole('button', { name: 'FAILURES' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(calls.first(), 'the failed calls have loaded').toBeVisible()
+  // The reload swaps the rows for a loading note, so wait for the failed list itself, not the stale CALLS rows.
+  await expect(mn.getByText('Loading AI calls…'), 'the failed calls have stopped loading').toHaveCount(0)
+  const outcomes = async (): Promise<string[]> => calls.evaluateAll((rows) => rows.map((r) => (r.children[10]?.textContent ?? '').trim()))
+  await expect.poll(async () => (await outcomes()).length, { message: 'the oversized call left a failed row on the screen' }).toBeGreaterThanOrEqual(1)
+  await expect.poll(async () => (await outcomes()).filter((o) => o === 'ok'), { message: 'the failed list holds no ok row' }).toEqual([])
   const failedRows = (await calls.all()).slice(0, ROW_CAP)
   expect(failedRows.length, 'the oversized call left a failed row on the screen').toBeGreaterThanOrEqual(1)
   const failedIds = await Promise.all(failedRows.map((row) => row.getAttribute('data-call-id') as Promise<string>))

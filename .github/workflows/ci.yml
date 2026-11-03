@@ -1363,6 +1363,24 @@ jobs:
           esac
           go run ./internal/tools/stalerefs -base "$BASE" -head HEAD
 
+  prod-ids:
+    name: Production ids
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Prove the guard fires (known positives)
+        run: go test ./internal/tools/prodidgate/ -count=1
+      - name: Prove the pinned digests match the Actions variables
+        env:
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          HUBSPOT_PORTAL_ID: ${{ vars.HUBSPOT_PORTAL_ID }}
+        run: go run ./internal/tools/prodidgate -selfcheck
+      - name: No tracked file holds a production id
+        run: go run ./internal/tools/prodidgate
+
   # goose refuses a migration numbered below the database's current version.
   # Per-PR environments migrate a fresh database, so only production sees it.
   # Unconditional for the stale-refs reason: a skip reads like a clean check.
@@ -1524,7 +1542,7 @@ jobs:
   # skips never leave a required check stuck pending.
   ci:
     name: ${{ github.event_name == 'workflow_dispatch' && 'CI (nightly)' || 'CI' }}
-    needs: [changes, go, frontend, library, blog, clean-clone, migrations, docker-canary, caddy-headers, docling-canary, docling-test, rls, idp, queue, audit, stale-refs, migration-order, contract-step, cite-refs, history-rewrite, govulncheck, advisories]
+    needs: [changes, go, frontend, library, blog, clean-clone, migrations, docker-canary, caddy-headers, docling-canary, docling-test, prod-ids, rls, idp, queue, audit, stale-refs, migration-order, contract-step, cite-refs, history-rewrite, govulncheck, advisories]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1536,6 +1554,7 @@ jobs:
           echo "caddy-headers: ${{ needs.caddy-headers.result }}"
           echo "docling-canary: ${{ needs.docling-canary.result }}"
           echo "docling-test:  ${{ needs.docling-test.result }}"
+          echo "prod-ids:      ${{ needs.prod-ids.result }}"
           echo "migrations:    ${{ needs.migrations.result }}"
           echo "rls:           ${{ needs.rls.result }}"
           echo "idp:           ${{ needs.idp.result }}"
@@ -1603,6 +1622,9 @@ jobs:
           # indistinguishable from a clean scan.
           if [ "${{ needs.stale-refs.result }}" != "success" ]; then
             echo "::error::Stale-reference scan failed"; exit 1
+          fi
+          if [ "${{ needs.prod-ids.result }}" != "success" ]; then
+            echo "::error::Production id scan failed"; exit 1
           fi
           if [ "${{ needs.migration-order.result }}" != "success" ]; then
             echo "::error::A new migration sorts before one already on the base branch"; exit 1

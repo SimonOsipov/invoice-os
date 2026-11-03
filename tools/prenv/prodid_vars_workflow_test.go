@@ -360,3 +360,36 @@ func TestProdIDVars_NightlyContactsGetTheLivePortal(t *testing.T) {
 		t.Errorf("a finish line without the prefix was not reported: %v", got)
 	}
 }
+
+// guardRollUpProblems reports a ci roll-up that does not require the prod-ids job.
+func guardRollUpProblems(yml string) []string {
+	j, ok := ciJobOf(yml, "ci")
+	if !ok {
+		return []string{"ci.yml has no ci job"}
+	}
+	var p []string
+	needs, _ := jobKey(j, "needs")
+	if !slices.Contains(strings.FieldsFunc(needs, func(r rune) bool { return strings.ContainsRune("[], ", r) }), "prod-ids") {
+		p = append(p, "ci needs lacks prod-ids")
+	}
+	if !strings.Contains(strings.Join(j.lines, "\n"), `needs.prod-ids.result }}" != "success"`) {
+		p = append(p, "ci run block does not require prod-ids to succeed")
+	}
+	return p
+}
+
+func TestProdIDVars_GuardIsRequiredByTheRollUp(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "ci.yml")
+	if got := guardRollUpProblems(yml); len(got) != 0 {
+		t.Errorf("%v", got)
+	}
+	noNeeds := mutateOnce(t, yml, "docling-test, prod-ids, rls", "docling-test, rls")
+	if got := guardRollUpProblems(noNeeds); len(got) != 1 {
+		t.Errorf("a roll-up without prod-ids in needs was not reported: %v", got)
+	}
+	noGate := mutateOnce(t, yml, `needs.prod-ids.result }}" != "success"`, `needs.prod-ids.result }}" = "failure"`)
+	if got := guardRollUpProblems(noGate); len(got) != 1 {
+		t.Errorf("a roll-up that tolerates a skipped prod-ids was not reported: %v", got)
+	}
+}

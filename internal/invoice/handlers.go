@@ -24,6 +24,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/qrcode"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 // --- wire request/response types --------------------------------------------
@@ -475,6 +476,9 @@ type getResponse struct {
 	VerdictStale                bool          `json:"verdict_stale"`
 	// ApproveBlockedByCreator is last so no key moves.
 	ApproveBlockedByCreator bool `json:"approve_blocked_by_creator"`
+	// The send-again pair comes from sendAgainGate, appended after it.
+	CanSendAgain           bool    `json:"can_send_again"`
+	SendAgainBlockedReason *string `json:"send_again_blocked_reason"`
 }
 
 // revalidateBlockedReason is the SINGLE, status-independent copy for a disabled
@@ -633,6 +637,31 @@ func approveGate(s Status, role string, f ApprovalFacts) (bool, *string, bool) {
 	return can, reason, false
 }
 
+// sendAgainGate offers POST /send-again; its refusal sentences are the ones the POST answers.
+// Rungs: status, kind, role, resolved outside, note. The first two have no honest sentence, so
+// the reason stays nil.
+func sendAgainGate(inv Invoice, role string, notePass bool) (bool, *string) {
+	if inv.Status != StatusFailed {
+		return false, nil
+	}
+	if inv.FailureKind == nil || !submission.FailureKind(*inv.FailureKind).Resendable() {
+		return false, nil
+	}
+	if !isApprover(role) {
+		r := sendAgainPreparerReason
+		return false, &r
+	}
+	if inv.KeptAsIsAt != nil {
+		r := sendAgainResolvedReason
+		return false, &r
+	}
+	if isNote(inv) && !notePass {
+		r := sendAgainNoteChecksReason
+		return false, &r
+	}
+	return true, nil
+}
+
 // GetHandler returns GET /v1/invoices/{id}. Same identity-first-401 order as
 // CreateHandler, reading r.PathValue("id"); 404 via ErrNotFound (covers both
 // a genuinely unknown id and a cross-tenant one, RLS-scoped 0-rows), 200 +
@@ -717,6 +746,10 @@ func GetHandler(
 		}
 		canReject, rejectReason := approvalGate(inv.Status, role, facts)
 		canApprove, approveReason, byCreator := approveGate(inv.Status, role, facts)
+		if facts.NoteChecksErr != nil {
+			log.ErrorContext(r.Context(), "invoice: note checks", slog.Any("err", facts.NoteChecksErr))
+		}
+		canSendAgain, sendAgainReason := sendAgainGate(inv, role, facts.NoteChecksPass && facts.NoteChecksErr == nil)
 
 		// Both action flags are read off the DERIVED predicates canEdit/
 		// canRevalidate (store.go), never a status switch here: a switch would be
@@ -752,6 +785,8 @@ func GetHandler(
 			ApproveBlockedByCreator:     byCreator,
 			CanCorrectInvoiceNumber:     canCorrectNumber(inv.Status, inv.EverSubmitted),
 			VerdictStale:                inv.VerdictStale,
+			CanSendAgain:                canSendAgain,
+			SendAgainBlockedReason:      sendAgainReason,
 		}
 		resp.CanIssueNote, resp.IssueNoteBlockedReason = issueNoteGate(inv)
 		if resp.CanEdit && !resp.CanRevalidate {

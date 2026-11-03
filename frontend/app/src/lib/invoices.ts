@@ -339,6 +339,9 @@ export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval' | 'd
   // True only for an accepted invoice with an IRN that is not itself a note.
   can_issue_note: boolean
   issue_note_blocked_reason: string | null
+  // A failed invoice an approver may send again; the reason is null unless the screen has a sentence for the refusal.
+  can_send_again: boolean
+  send_again_blocked_reason: string | null
 }
 
 // GET /v1/invoices response envelope (listResponse, handlers.go:110-113). Exactly two
@@ -772,6 +775,8 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     invoice_number_blocked_reason: res.invoice_number_blocked_reason ?? null,
     can_issue_note: res.can_issue_note === true,
     issue_note_blocked_reason: res.issue_note_blocked_reason ?? null,
+    can_send_again: res.can_send_again === true,
+    send_again_blocked_reason: res.send_again_blocked_reason ?? null,
   }
 }
 

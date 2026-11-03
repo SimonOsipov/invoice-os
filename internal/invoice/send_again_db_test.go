@@ -652,3 +652,69 @@ func TestSendAgain_FailsAgainThenSendsAgain(t *testing.T) {
 		t.Errorf("after the second SendAgain: invoice %q kind %q job %q jobs %d; want queued, NULL, queued, 1", s.Status, s.Kind, s.JobState, s.Jobs)
 	}
 }
+
+func (r *saRig) facts(t *testing.T, id string) ApprovalFacts {
+	t.Helper()
+	f, err := NewStore(r.app).ApprovalFacts(r.ctx, id)
+	if err != nil {
+		t.Fatalf("ApprovalFacts: %v", err)
+	}
+	return f
+}
+
+func swapReadNoteChecks(t *testing.T, fn func(context.Context, pgx.Tx, string, bool) (bool, error)) {
+	t.Helper()
+	old := readNoteChecks
+	readNoteChecks = fn
+	t.Cleanup(func() { readNoteChecks = old })
+}
+
+func TestApprovalFacts_NoteChecksPassReadsTheNote(t *testing.T) {
+	r := newSARig(t, "AF note")
+	o := seedInvoice(t, r.super, r.tenant, r.entity, "AF-O")
+	ncAccepted(t, r.super, o, "IRN-AF-O", "100.00")
+	over := csNote(t, r.super, r.tenant, r.entity, "AF-N1", "credit_note", o, "failed", csAmount("60.00"))
+	csNote(t, r.super, r.tenant, r.entity, "AF-S", "credit_note", o, "accepted", csAmount("60.00"))
+	fits := csNote(t, r.super, r.tenant, r.entity, "AF-N2", "credit_note", o, "failed", csAmount("40.00"))
+	plain := r.failedInvoice(t, "AF-C", "never_acknowledged")
+	for id, want := range map[string]bool{over: false, fits: true, plain: true} {
+		if got := r.facts(t, id); got.NoteChecksPass != want || got.NoteChecksErr != nil {
+			t.Errorf("invoice %s: NoteChecksPass=%v err=%v, want %v and nil", id, got.NoteChecksPass, got.NoteChecksErr, want)
+		}
+	}
+}
+
+func TestApprovalFacts_SkipsTheNoteReadOffAFailedNote(t *testing.T) {
+	r := newSARig(t, "AF skip")
+	o := seedInvoice(t, r.super, r.tenant, r.entity, "AF-O")
+	ncAccepted(t, r.super, o, "IRN-AF-O", "100.00")
+	validated := csNote(t, r.super, r.tenant, r.entity, "AF-V", "credit_note", o, "validated", csAmount("10.00"))
+	plain := r.failedInvoice(t, "AF-C", "never_acknowledged")
+	swapReadNoteChecks(t, func(context.Context, pgx.Tx, string, bool) (bool, error) {
+		t.Error("readNoteChecks called off a failed note")
+		return true, nil
+	})
+	for _, id := range []string{validated, plain} {
+		if got := r.facts(t, id); !got.NoteChecksPass || got.NoteChecksErr != nil {
+			t.Errorf("invoice %s: NoteChecksPass=%v err=%v, want true and nil", id, got.NoteChecksPass, got.NoteChecksErr)
+		}
+	}
+}
+
+func TestApprovalFacts_NoteReadErrorKeepsTransmitClear(t *testing.T) {
+	r := newSARig(t, "AF err")
+	o := seedInvoice(t, r.super, r.tenant, r.entity, "AF-O")
+	ncAccepted(t, r.super, o, "IRN-AF-O", "100.00")
+	n := csNote(t, r.super, r.tenant, r.entity, "AF-N", "credit_note", o, "failed", csAmount("40.00"))
+	base := r.facts(t, n)
+	swapReadNoteChecks(t, func(context.Context, pgx.Tx, string, bool) (bool, error) {
+		return false, errors.New("boom")
+	})
+	got := r.facts(t, n)
+	if got.NoteChecksErr == nil || got.NoteChecksPass {
+		t.Errorf("NoteChecksErr=%v NoteChecksPass=%v, want an error and false", got.NoteChecksErr, got.NoteChecksPass)
+	}
+	if got.TransmitClear != base.TransmitClear || got.RunState != base.RunState || got.CallerHoldsRole != base.CallerHoldsRole {
+		t.Errorf("facts moved on a note read error:\nbase %+v\ngot  %+v", base, got)
+	}
+}

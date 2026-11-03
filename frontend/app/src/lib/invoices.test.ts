@@ -1277,6 +1277,8 @@ describe('getInvoice', () => {
       invoice_number_blocked_reason: null,
       can_issue_note: false,
       issue_note_blocked_reason: null,
+      can_send_again: false,
+      send_again_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(fiscalInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -1315,6 +1317,8 @@ describe('getInvoice', () => {
       invoice_number_blocked_reason: null,
       can_issue_note: false,
       issue_note_blocked_reason: null,
+      can_send_again: false,
+      send_again_blocked_reason: null,
     }
     const { qr_png_base64: _omittedQr, ...withoutQrKey } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutQrKey) })
@@ -1349,6 +1353,8 @@ describe('getInvoice', () => {
       invoice_number_blocked_reason: null,
       can_issue_note: false,
       issue_note_blocked_reason: null,
+      can_send_again: false,
+      send_again_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(detailInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -1404,6 +1410,8 @@ describe('getInvoice', () => {
       invoice_number_blocked_reason: null,
       can_issue_note: false,
       issue_note_blocked_reason: null,
+      can_send_again: false,
+      send_again_blocked_reason: null,
     }
     const { can_submit: _omittedCanSubmit, ...withoutCanSubmit } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanSubmit) })
@@ -1595,6 +1603,8 @@ describe('getInvoice', () => {
       invoice_number_blocked_reason: null,
       can_issue_note: false,
       issue_note_blocked_reason: null,
+      can_send_again: false,
+      send_again_blocked_reason: null,
     }
     const { can_view_ubl: _omittedCanViewUbl, ...withoutCanViewUbl } = wire
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanViewUbl) })
@@ -1865,6 +1875,23 @@ describe('getInvoice', () => {
     const fixed = await getInvoice(af, base, 'inv-1')
     expect(fixed.can_correct_invoice_number).toBe(false)
     expect(fixed.invoice_number_blocked_reason).toBe(NUMBER_FIXED_REASON)
+  })
+})
+
+describe('getInvoice: the send-again gate', () => {
+  it('getInvoice normalises can_send_again and send_again_blocked_reason', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    const { can_send_again: _f, send_again_blocked_reason: _r, ...bare } = draftInvoice as unknown as Record<string, unknown>
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(bare) })
+    const absent = await getInvoice(af, base, 'inv-1')
+    expect(absent.can_send_again).toBe(false)
+    expect(absent.send_again_blocked_reason).toBeNull()
+    expect('send_again_blocked_reason' in absent).toBe(true)
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...bare, can_send_again: true, send_again_blocked_reason: 'x' }) })
+    const sent = await getInvoice(af, base, 'inv-1')
+    expect(sent.can_send_again).toBe(true)
+    expect(sent.send_again_blocked_reason).toBe('x')
   })
 })
 
@@ -2192,6 +2219,8 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
       invoice_number_blocked_reason: null,
       can_issue_note: false,
       issue_note_blocked_reason: null,
+      can_send_again: false,
+      send_again_blocked_reason: null,
     }
     const af = createAuthedFetch(() => 'tok', vi.fn())
 
@@ -2340,6 +2369,8 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
       invoice_number_blocked_reason: null,
       can_issue_note: false,
       issue_note_blocked_reason: null,
+      can_send_again: false,
+      send_again_blocked_reason: null,
     }
 
     const fromList = resolvedOutside(listRow)

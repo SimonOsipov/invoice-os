@@ -366,9 +366,10 @@ func TestGetHandler_TaxSubtotalsDerivedAfterTheInvoiceKeys(t *testing.T) {
 			}
 		}
 	}
-	if n := len(keys); keys[n-1] != "approve_blocked_by_creator" || keys[n-2] != "verdict_stale" || keys[n-6] != "can_correct_invoice_number" || keys[n-5] != "invoice_number_blocked_reason" ||
-		keys[n-4] != "can_issue_note" || keys[n-3] != "issue_note_blocked_reason" {
-		t.Errorf("last six keys = %v, want the invoice-number pair, the issue-note pair, verdict_stale, then approve_blocked_by_creator", keys[n-6:])
+	if n := len(keys); keys[n-1] != "send_again_blocked_reason" || keys[n-2] != "can_send_again" || keys[n-3] != "approve_blocked_by_creator" || keys[n-4] != "verdict_stale" ||
+		keys[n-8] != "can_correct_invoice_number" || keys[n-7] != "invoice_number_blocked_reason" ||
+		keys[n-6] != "can_issue_note" || keys[n-5] != "issue_note_blocked_reason" {
+		t.Errorf("last eight keys = %v, want the invoice-number pair, the issue-note pair, verdict_stale, approve_blocked_by_creator, then the send-again pair", keys[n-8:])
 	}
 	var resp struct {
 		TaxSubtotals []map[string]any `json:"tax_subtotals"`

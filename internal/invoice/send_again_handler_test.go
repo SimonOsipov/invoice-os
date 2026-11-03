@@ -25,6 +25,7 @@ const (
 	wantSendAgainNoteChecks    = "This note no longer passes its checks and cannot be sent again."
 	wantSendAgainNotResendable = "This invoice cannot be sent again from this screen. Ask ASComply support."
 	wantSendAgainBusy          = "This invoice is already being sent. Refresh to see its status."
+	wantSendAgainPreparer      = "An approver can send this invoice again."
 )
 
 type sendAgainFake struct {

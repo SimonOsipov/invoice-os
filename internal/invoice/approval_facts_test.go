@@ -178,7 +178,8 @@ func TestStoreApprovalFacts_UnstaffedCallerDoesNotHoldTheRole(t *testing.T) {
 // TestStoreApprovalFacts_OneTransaction: db.WithinTenantTx issues exactly one
 // set_config('app.current_tenant' per transaction, so the count of those statements
 // IS the transaction count. An invoice with an open pending step takes a second
-// transaction for the creator read, so its failure cannot roll the first back.
+// transaction for the creator read, and every invoice a third for the note read, so
+// neither failure can roll the first back.
 func TestStoreApprovalFacts_OneTransaction(t *testing.T) {
 	super, app := dbTestPools(t)
 	traced, rec := tracedAppPool(t)
@@ -194,8 +195,8 @@ func TestStoreApprovalFacts_OneTransaction(t *testing.T) {
 	}
 	// The request seam batches its set_config, which a QueryTracer alone cannot see —
 	// tenantTxCount() counts both routes (db.WithinRequestTenantTxOpts).
-	if n := rec.tenantTxCount(); n != 2 {
-		t.Errorf("ApprovalFacts opened %d tenant transactions, want 2 (facts, creator standing)", n)
+	if n := rec.tenantTxCount(); n != 3 {
+		t.Errorf("ApprovalFacts opened %d tenant transactions, want 3 (facts, creator standing, note checks)", n)
 	}
 }
 

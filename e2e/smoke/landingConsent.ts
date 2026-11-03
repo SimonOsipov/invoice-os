@@ -124,6 +124,13 @@ export async function routeProductionHosts(
         headers: { ...res.headers(), 'access-control-allow-origin': 'https://www.ascomply.com' },
       })
     })
+    await context.route(`${targets.gateway}/contacts/demo-request`, async (route) => {
+      const res = await route.fetch()
+      await route.fulfill({
+        response: res,
+        headers: { ...res.headers(), 'access-control-allow-origin': 'https://www.ascomply.com' },
+      })
+    })
   }
   // CORS headers: a cross-origin Sentry POST answered without them logs a console error.
   await context.route((url) => isStubbedHost(url.href), (route) =>

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { expect, test, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
 import { consentCookie, consentRecordOf, consoleGate, isStubbedHost, routeProductionHosts, STUB_HEADER } from './landingConsent'
@@ -121,4 +122,80 @@ routedTest('landing analytics: Reject on the landing deletes the _ga cookies', a
   await expect.poll(async () => (await gaCookies()).map((c) => c.name)).toEqual([])
   expect(JSON.parse((await consentRecordOf(page))!)).toMatchObject({ analytics: false })
   await expectClean(page, sinks)
+})
+
+const FORM_PARAMS = { form_name: 'book_a_demo' } // FORM_NAME in frontend/landing/src/analytics.ts
+const isFormsHost = (rawUrl: string) => {
+  const host = new URL(rawUrl).hostname.toLowerCase()
+  return host === 'hsforms.com' || host.endsWith('.hsforms.com')
+}
+
+/** Stubs HubSpot Forms with `formsStatus`, then submits a unique .example lead from the nav modal. */
+async function submitDemoLead(page: Page, request: APIRequestContext, formsStatus: number, expectGateway: boolean) {
+  const formsPosts: string[] = []
+  await page.context().route((url) => isFormsHost(url.href), (route) => {
+    if (route.request().method() === 'POST') formsPosts.push(route.request().url())
+    return route.fulfill({
+      status: formsStatus,
+      body: '{}',
+      contentType: 'application/json',
+      headers: { [STUB_HEADER]: '1', 'access-control-allow-origin': '*' },
+    })
+  })
+  const formsStubbed: (string | undefined)[] = []
+  const formsConsoleUrls: string[] = []
+  const gatewayPosts: string[] = []
+  page.on('response', (r) => {
+    if (isFormsHost(r.url()) && r.request().method() === 'POST') formsStubbed.push(r.headers()[STUB_HEADER])
+  })
+  page.on('console', (m) => {
+    if (m.type() === 'error') formsConsoleUrls.push(m.location().url)
+  })
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.url() === `${GATEWAY_URL}/contacts/demo-request`) gatewayPosts.push(r.url())
+  })
+  const sinks = await openRoutedLanding(page, request)
+
+  await page.getByRole('banner').getByRole('button', { name: 'Book a demo' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Book a demo' })
+  await expect(dialog).toBeVisible()
+  await dialog.locator('#dm-name').fill('Landing Analytics')
+  await dialog.locator('#dm-email').fill(`ncov08-${randomUUID().slice(0, 8)}@landing-analytics.example`) // .example: swept by the contact cleanup
+  await dialog.locator('#dm-company').fill('Landing Analytics Ltd')
+  await dialog.locator('#dm-consent').check()
+  const gatewayReply = expectGateway
+    ? page.waitForResponse((r) => r.request().method() === 'POST' && r.url() === `${GATEWAY_URL}/contacts/demo-request`)
+    : undefined
+  await dialog.getByRole('button', { name: /^Book my demo/ }).click()
+  return { sinks, formsPosts, formsStubbed, formsConsoleUrls, gatewayPosts, gatewayReply, dialog }
+}
+
+routedTest('landing analytics: a submitted demo request sends one generate_lead', async ({ routed: page, request }) => {
+  const run = await submitDemoLead(page, request, 200, true)
+  expect((await run.gatewayReply!).status()).toBe(202) // handler: internal/gateway/contacts.go
+  await expect(run.dialog.locator('#dm-success')).toBeVisible()
+  expect(run.formsPosts).toHaveLength(1)
+  expect(run.formsStubbed, 'the Forms POST was not answered by the stub').toEqual(['1'])
+  const events = await gaEvents(page)
+  expect(events.filter((e) => e.name === 'generate_lead')).toEqual([{ name: 'generate_lead', params: FORM_PARAMS }])
+  expect(events.filter((e) => e.name === 'demo_submit_failed')).toEqual([])
+  await expectClean(page, run.sinks)
+})
+
+routedTest('landing analytics: a refused demo request sends demo_submit_failed and no generate_lead', async ({ routed: page, request }) => {
+  const run = await submitDemoLead(page, request, 400, false)
+  await expect(run.dialog.getByRole('heading', { name: 'Something went wrong' })).toBeVisible()
+  await expect(run.dialog.locator('#dm-error-retry')).toBeVisible()
+  expect(run.formsPosts).toHaveLength(1)
+  expect(run.formsStubbed, 'the Forms POST was not answered by the stub').toEqual(['1'])
+  const events = await gaEvents(page)
+  expect(events.filter((e) => e.name === 'demo_submit_failed')).toEqual([{ name: 'demo_submit_failed', params: FORM_PARAMS }])
+  expect(events.filter((e) => e.name === 'generate_lead')).toEqual([])
+  expect(run.gatewayPosts, 'the form must stop before the gateway').toEqual([])
+  await page.waitForLoadState('networkidle')
+  expect(run.sinks.leaked).toEqual([])
+  // Chromium logs the Forms 400 as a console error; it is the only one allowed.
+  expect(run.sinks.errors, `console errors:\n${run.sinks.errors.join('\n')}`).toHaveLength(1)
+  expect(run.formsConsoleUrls).toHaveLength(1)
+  expect(isFormsHost(run.formsConsoleUrls[0])).toBe(true)
 })

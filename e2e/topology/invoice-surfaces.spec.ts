@@ -2461,7 +2461,7 @@ test('send again: a payload_not_built invoice goes back to queued, fails again, 
   // The card shows ACTIVITY_REST_ROWS (5) rows until expanded; activityToggleCopy labels it 'Show all N events' / 'Show fewer'.
   const expandActivity = async () => {
     const toggle = page.getByTestId('activity-toggle')
-    await expect(toggle.or(page.getByTestId('audit-row').first())).toBeVisible()
+    await expect(toggle.or(page.getByTestId('audit-row')).first()).toBeVisible()
     if ((await toggle.count()) > 0 && /^Show all /.test((await toggle.textContent()) ?? '')) {
       await toggle.click()
       await expect(toggle, 'the card is expanded before any row is counted').toHaveText('Show fewer')

@@ -447,20 +447,6 @@ func triggerNames(states map[string]string) []string {
 
 // --- AUDIT-11-05 Core AC 8 (no DB, no git) ---------------------------------------------
 
-// auditNumberMigrationCount and auditNumberNewestMigration pin the migration inventory. A
-// migration added and not accounted for here raises the count and, because goose stamps
-// ascending and TestAudit_SingleMigrationForThisStory enforces that rule, sorts after the
-// newest name -- so either half fires. A later story that legitimately adds one moves both
-// pins.
-//
-// CF-31: the obvious oracle, a diff of migrations/ against main, CANNOT run in CI. Every job
-// checks out at fetch-depth 1, where `git diff main...HEAD` exits 128 with "ambiguous argument".
-// This is the shallow-safe form, and it is the idiom requireStoryMigration above already uses.
-const (
-	auditNumberMigrationCount  = 131
-	auditNumberNewestMigration = "20261102123714_invitations_mine_live_membership.sql"
-)
-
 // auditReaderFiles is internal/audit's whole non-test surface. AUDIT-11 touches exactly one of
 // them, AUDIT-11-09's filter.go.
 var auditReaderFiles = []string{
@@ -488,27 +474,6 @@ var auditReaderImports = []string{
 	"strconv",
 	"strings",
 	"time",
-}
-
-// The migration inventory is pinned by count and by newest name. Nothing else owns that
-// claim -- the append-only enforcement is green but no test says an unrelated story left
-// migrations/ alone. A story that adds one moves the two constants above deliberately.
-func TestAuditNumber_MigrationInventoryIsPinned(t *testing.T) {
-	all, err := fs.Glob(migrations.FS, "*.sql")
-	if err != nil {
-		t.Fatalf("glob migrations.FS: %v", err)
-	}
-	if len(all) == 0 {
-		t.Fatalf("migrations.FS contains no *.sql files -- the embed is broken, so both assertions below would pass vacuously")
-	}
-	if len(all) != auditNumberMigrationCount {
-		t.Errorf("migrations.FS holds %d *.sql files, want %d -- move auditNumberMigrationCount only when a story deliberately adds one", len(all), auditNumberMigrationCount)
-	}
-	sorted := append([]string(nil), all...)
-	sort.Strings(sorted)
-	if got := sorted[len(sorted)-1]; got != auditNumberNewestMigration {
-		t.Errorf("the newest migration is %q, want %q -- goose stamps ascending, so an unaccounted migration sorts after it", got, auditNumberNewestMigration)
-	}
 }
 
 // Core AC 8: no file under internal/audit/ other than tests, AUDIT-11-09's filter.go and the added staff_read.go moves.

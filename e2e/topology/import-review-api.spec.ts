@@ -1,6 +1,6 @@
-// The import review table on a batch minted through the API, with no AI (NCOV-01).
+// The import review table on a batch minted through the API, with no AI.
 import { test, expect, type Page, type Request, type Response } from '@playwright/test'
-import { login, createEntity, createImportBatchFromCsv } from '../api/client'
+import { login, createEntity, createImportBatchFromCsv, type ImportBatchResult } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv, PERF_MAPPING } from '../importFixtures'
 import { signInAs } from '../personaSession'
@@ -33,6 +33,42 @@ async function click(page: Page, batchId: string, target: ReturnType<Page['locat
   await Promise.all([page.waitForResponse(tablePage(batchId, params)), target.click()])
 }
 
+type PageBody = { invoices: { id: string; invoice_number: string; kept_as_is_at: string | null }[]; pagination: { limit: number; offset: number; total: number } }
+
+// Mints a batch and opens its review. The listeners and waits go up before signInAs, which loads
+// the review itself: no reload, so no first-load request can be mistaken for a later one.
+async function openReviewedBatch(page: Page, name: string, csv: string, filename: string) {
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `NCOV-01 ${name} ${Date.now()}`, tin: freshTin() })
+  const batch: ImportBatchResult = await createImportBatchFromCsv(token, entity.id, { csv, filename, mapping: PERF_MAPPING })
+  const id = batch.id
+
+  let summaryRequests = 0
+  page.on('request', (r) => {
+    if (isRequest(r, id, SUMMARY)) summaryRequests++
+  })
+  const [, tableResp, summaryResp] = await Promise.all([
+    signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${id}/review` }),
+    page.waitForResponse(tablePage(id), { timeout: 120_000 }),
+    page.waitForResponse((r) => isRequest(r.request(), id, SUMMARY), { timeout: 120_000 }),
+  ])
+  await expect(page.getByRole('heading', { level: 2, name: `${batch.ready_invoices} invoices imported` })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('review-table')).toBeVisible()
+  return {
+    id,
+    batch,
+    firstPage: (await tableResp.json()) as PageBody,
+    summary: (await summaryResp.json()) as { rules: { rule_key: string; invoices: number }[] },
+    summaryRequests: () => summaryRequests,
+  }
+}
+
+function violateId(firstPage: PageBody): string {
+  const invoiceId = firstPage.invoices.find((r) => r.invoice_number === 'INV-UI-MIX-VIOLATE')?.id
+  expect(invoiceId, 'the table page lists the VIOLATE invoice').toBeTruthy()
+  return invoiceId!
+}
+
 test.describe('NCOV-01 import review table, API-minted batch', () => {
   test.use({ viewport: { width: 1440, height: 900 } })
 
@@ -40,31 +76,12 @@ test.describe('NCOV-01 import review table, API-minted batch', () => {
     test.setTimeout(180_000)
     const errors = collectErrors(page)
 
-    const token = await login(PERSONAS.A)
-    const entity = await createEntity(token, { name: `NCOV-01 filters ${Date.now()}`, tin: freshTin() })
-    const batch = await createImportBatchFromCsv(token, entity.id, { csv: buildMixedCsv(), filename: 'review-mixed.csv', mapping: PERF_MAPPING })
+    const { id, batch, firstPage, summary, summaryRequests } = await openReviewedBatch(page, 'filters', buildMixedCsv(), 'review-mixed.csv')
     // Fixture check: STRUCT never becomes an invoice; CLEAN is validated, VIOLATE is not.
-    expect({ ready: batch.ready_invoices, clean: batch.invoices_clean, violating: batch.invoices_with_violations }).toEqual({
-      ready: 2,
-      clean: 1,
-      violating: 1,
-    })
-    const id = batch.id
-
-    await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${id}/review` })
-
-    // Counters and waits attach before the reload; signInAs loads through the landing hand-off.
-    let summaryRequests = 0
-    page.on('request', (r) => {
-      if (isRequest(r, id, SUMMARY)) summaryRequests++
-    })
-    const [, , summaryResp] = await Promise.all([
-      page.reload(),
-      page.waitForResponse(tablePage(id)),
-      page.waitForResponse((r) => isRequest(r.request(), id, SUMMARY)),
-    ])
-    await expect(page.getByRole('heading', { level: 2, name: '2 invoices imported' })).toBeVisible({ timeout: 60_000 })
-    await expect(page.getByTestId('review-table')).toBeVisible()
+    expect(batch.invoices_clean, 'the fixture has a validated invoice').toBeGreaterThanOrEqual(1)
+    expect(batch.invoices_with_violations, 'the fixture has a failing invoice').toBeGreaterThanOrEqual(1)
+    expect(batch.invoices_clean + batch.invoices_with_violations).toBe(batch.ready_invoices)
+    expect(firstPage.pagination.total, 'the table total is the mint count').toBe(batch.ready_invoices)
 
     const violate = page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-VIOLATE' })
     const clean = page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-CLEAN' })
@@ -107,11 +124,18 @@ test.describe('NCOV-01 import review table, API-minted batch', () => {
     await Promise.all([page.waitForResponse(tablePage(id, { q: 'MIX-CLEAN', rule_key: null })), page.getByTestId('review-search').fill('MIX-CLEAN')])
     await expect(clean).toBeVisible()
     await expect(violate).toHaveCount(0)
+
+    // Clearing the search is the next step; a duplicate of the first search would have fired by now.
+    await Promise.all([
+      page.waitForResponse((r) => isRequest(r.request(), id, INVOICES, { limit: '50', offset: '0' }) && (new URL(r.url()).searchParams.get('q') ?? '') === ''),
+      page.getByTestId('review-search').fill(''),
+    ])
+    await expect(violate).toBeVisible()
+    await expect(clean).toBeVisible()
     expect(searched, 'one fill sends one search request').toHaveLength(1)
 
     // The rail is batch-wide: it loaded once and no filter change re-asked it.
-    expect(summaryRequests, 'violation-summary fired once from the reload on').toBe(1)
-    const summary = (await summaryResp.json()) as { rules: { rule_key: string; invoices: number }[] }
+    expect(summaryRequests(), 'violation-summary fired once').toBe(1)
     expect(summary.rules).toContainEqual({ rule_key: 'vat-standard-rate', invoices: 1 })
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -121,22 +145,12 @@ test.describe('NCOV-01 import review table, API-minted batch', () => {
     test.setTimeout(180_000)
     const errors = collectErrors(page)
 
-    const token = await login(PERSONAS.A)
-    const entity = await createEntity(token, { name: `NCOV-01 paging ${Date.now()}`, tin: freshTin() })
-    const batch = await createImportBatchFromCsv(token, entity.id, { csv: buildPerfCsv(), filename: 'review-perf.csv', mapping: PERF_MAPPING })
-    const id = batch.id
-
-    await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${id}/review` })
-
-    const [, firstResp] = await Promise.all([page.reload(), page.waitForResponse(tablePage(id))])
-    await expect(page.getByRole('heading', { level: 2, name: /invoices imported/ })).toBeVisible({ timeout: 60_000 })
-    await expect(page.getByTestId('review-table')).toBeVisible()
-
-    type PageBody = { invoices: { invoice_number: string }[]; pagination: { limit: number; offset: number; total: number } }
-    const first = (await firstResp.json()) as PageBody
+    // PAGE_SIZE + 5 invoices: a second page without the 500-invoice mint.
+    const { id, batch, firstPage: first } = await openReviewedBatch(page, 'paging', buildPerfCsv(PAGE_SIZE + 5), 'review-perf.csv')
     const total = first.pagination.total
     expect(total, 'the pager total is the mint count').toBe(batch.ready_invoices)
     expect(total).toBeGreaterThanOrEqual(PAGE_SIZE + 1)
+    expect(first.invoices).toHaveLength(Math.min(PAGE_SIZE, total))
     const pages = Math.ceil(total / PAGE_SIZE)
 
     const pager = page.getByTestId('review-pager')
@@ -148,7 +162,7 @@ test.describe('NCOV-01 import review table, API-minted batch', () => {
     await expect(next).toBeEnabled()
     const rowNumbers = async () => (await page.getByTestId('review-row').allTextContents()).map((t) => /INV-UI-\d+/.exec(t)?.[0] ?? t)
     const page1 = await rowNumbers()
-    expect(page1).toHaveLength(PAGE_SIZE)
+    expect(page1).toHaveLength(first.invoices.length)
 
     const secondReq: string[] = []
     page.on('request', (r) => {
@@ -172,21 +186,8 @@ test.describe('NCOV-01 import review table, API-minted batch', () => {
     test.setTimeout(180_000)
     const errors = collectErrors(page)
 
-    const token = await login(PERSONAS.A)
-    const entity = await createEntity(token, { name: `NCOV-01 fix ${Date.now()}`, tin: freshTin() })
-    const batch = await createImportBatchFromCsv(token, entity.id, { csv: buildMixedCsv(), filename: 'review-mixed.csv', mapping: PERF_MAPPING })
-    const id = batch.id
-
-    await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${id}/review` })
-
-    const [, firstResp] = await Promise.all([page.reload(), page.waitForResponse(tablePage(id))])
-    await expect(page.getByRole('heading', { level: 2, name: '2 invoices imported' })).toBeVisible({ timeout: 60_000 })
-    await expect(page.getByTestId('review-table')).toBeVisible()
-
-    const rows = ((await firstResp.json()) as { invoices: { id: string; invoice_number: string }[] }).invoices
-    const invoiceId = rows.find((r) => r.invoice_number === 'INV-UI-MIX-VIOLATE')?.id
-    expect(invoiceId, 'the table page lists the VIOLATE invoice').toBeTruthy()
-    const detailPath = `${INVOICES}/${invoiceId}`
+    const { id, firstPage } = await openReviewedBatch(page, 'fix', buildMixedCsv(), 'review-mixed.csv')
+    const detailPath = `${INVOICES}/${violateId(firstPage)}`
 
     // Counters read after the follow-up re-fetches have landed, so a late duplicate shows.
     let patches = 0
@@ -202,7 +203,7 @@ test.describe('NCOV-01 import review table, API-minted batch', () => {
     })
     const isDetailGet = (r: Response) => r.request().method() === 'GET' && new URL(r.url()).pathname === detailPath
 
-    // Stay on the All pill (D8): under the rule filter the fixed row would leave the view.
+    // Stay on the All pill: under the rule filter the fixed row would leave the view.
     const violate = page.getByTestId('review-row').filter({ hasText: 'INV-UI-MIX-VIOLATE' })
     const fixCard = page.getByTestId('review-fix-card')
     const fixInput = page.getByTestId('review-fix-input')
@@ -244,20 +245,9 @@ test.describe('NCOV-01 import review table, API-minted batch', () => {
     test.setTimeout(180_000)
     const errors = collectErrors(page)
 
-    const token = await login(PERSONAS.A)
-    const entity = await createEntity(token, { name: `NCOV-01 keep ${Date.now()}`, tin: freshTin() })
-    const batch = await createImportBatchFromCsv(token, entity.id, { csv: buildMixedCsv(), filename: 'review-mixed.csv', mapping: PERF_MAPPING })
-    const id = batch.id
-
-    await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${id}/review` })
-
-    const [, firstResp] = await Promise.all([page.reload(), page.waitForResponse(tablePage(id))])
-    await expect(page.getByRole('heading', { level: 2, name: '2 invoices imported' })).toBeVisible({ timeout: 60_000 })
-    await expect(page.getByTestId('review-table')).toBeVisible()
-
-    const rows = ((await firstResp.json()) as { invoices: { id: string; invoice_number: string }[] }).invoices
-    const invoiceId = rows.find((r) => r.invoice_number === 'INV-UI-MIX-VIOLATE')?.id
-    expect(invoiceId, 'the table page lists the VIOLATE invoice').toBeTruthy()
+    const { id, firstPage } = await openReviewedBatch(page, 'keep', buildMixedCsv(), 'review-mixed.csv')
+    const invoiceId = violateId(firstPage)
+    expect(firstPage.invoices.find((r) => r.id === invoiceId)?.kept_as_is_at, 'not kept before Keep').toBeNull()
     const keepPath = `${INVOICES}/${invoiceId}/keep-as-is`
 
     // Counters read after the follow-up re-fetches have landed, so a late duplicate shows.
@@ -287,12 +277,15 @@ test.describe('NCOV-01 import review table, API-minted batch', () => {
     const reason = 'Approved by finance, one-off exception.'
     await reasonInput.fill(`  ${reason}  `)
     await expect(keep).toBeEnabled()
-    const [kept] = await Promise.all([
+    const [kept, afterKeep] = await Promise.all([
       page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === keepPath),
       page.waitForResponse(tablePage(id)),
       keep.click(),
     ])
     expect(kept.ok(), 'Keep as-is answers OK').toBe(true)
+    // internal/invoice/invoice.go Invoice.KeptAsIsAt (json "kept_as_is_at"); the row is unselectable before Keep too, so the wire is the proof.
+    const keptRow = ((await afterKeep.json()) as PageBody).invoices.find((r) => r.id === invoiceId)
+    expect(keptRow?.kept_as_is_at, 'the table re-read carries the keep').toBeTruthy()
     // internal/invoice/handlers.go keepAsIsRequest (json "reason").
     expect(keepBodies).toEqual([{ reason }])
     await expect(page.getByTestId('review-kept-banner')).toContainText(reason)

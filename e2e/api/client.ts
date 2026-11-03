@@ -1172,10 +1172,9 @@ export async function createImportBatchFromCsv(
     headers: { Authorization: `Bearer ${token}` },
     body: previewForm,
   })
+  if (!preview.ok) throw new Error(`createImportBatchFromCsv: preview failed (status ${preview.status}): ${(await preview.text()).slice(0, 200)}`)
   const previewBody = (await preview.json()) as { document_id?: string }
-  if (!preview.ok || typeof previewBody.document_id !== 'string') {
-    throw new Error(`createImportBatchFromCsv: preview failed (status ${preview.status})`)
-  }
+  if (typeof previewBody.document_id !== 'string') throw new Error('createImportBatchFromCsv: preview answered no document_id')
 
   const form = new FormData()
   form.set('entity_id', entityId)
@@ -1186,10 +1185,9 @@ export async function createImportBatchFromCsv(
     headers: { Authorization: `Bearer ${token}` },
     body: form,
   })
+  if (!res.ok) throw new Error(`createImportBatchFromCsv: import failed (status ${res.status}): ${(await res.text()).slice(0, 200)}`)
   const body = (await res.json()) as Partial<ImportBatchResult>
-  if (!res.ok || typeof body.id !== 'string') {
-    throw new Error(`createImportBatchFromCsv: import failed (status ${res.status})`)
-  }
+  if (typeof body.id !== 'string') throw new Error('createImportBatchFromCsv: import answered no id')
   return body as ImportBatchResult
 }
 

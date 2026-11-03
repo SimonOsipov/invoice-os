@@ -22,3 +22,5 @@ paths:
 - Dispatch `ci.yml` only from `nightly.yml`. A dispatch is full mode: every job runs, and the roll-up is named `CI (nightly)`.
 - Dispatch `dev-env.yml` only from `nightly.yml`. A dispatch deploys the `nightly` preview, runs E2E without the flaky gate and the `E2E gate`, and deletes the preview.
 - Export `ARGOS_TOKEN` only in the `Send the screenshots to Argos` step of `nightly.yml`. `dev-env.yml` compares it with empty and exports nothing.
+- Read the Workload Identity provider from `vars.GCP_WIF_PROVIDER` and the HubSpot portal id from `vars.HUBSPOT_PORTAL_ID`. Write neither value in a tracked file.
+- Run `scripts/ci/require-vars.sh` with a job's variables after checkout and before the first Google auth step in each root GCP job. `dev-env-teardown.yml` inlines the check, because it checks out the PR head. `prodid_vars_workflow_test.go` pins the jobs.

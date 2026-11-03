@@ -5,7 +5,7 @@
 //	deploycheck <sha> <tag>
 //
 // RUN_HOST_SUFFIX is the part of a run.app host after the service name, such as
-// 428987361227.africa-south1.run.app. platform.Fatal names each target that failed.
+// <project-number>.africa-south1.run.app. platform.Fatal names each target that failed.
 package main
 
 import (

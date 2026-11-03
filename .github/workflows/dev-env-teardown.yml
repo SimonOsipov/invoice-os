@@ -21,13 +21,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Inline: the PR head may predate scripts/ci/require-vars.sh.
+      - name: Check the Actions variables
+        env:
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+        run: '[ -n "$GCP_WIF_PROVIDER" ] || { echo "::error::GCP_WIF_PROVIDER is not set. Add it under Settings → Secrets and variables → Actions → Variables."; exit 1; }'
       # The head SHA: GitHub deletes the merge ref when the PR closes.
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: projects/428987361227/locations/global/workloadIdentityPools/github/providers/github-actions
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: deploy-preview@ascomply-preview.iam.gserviceaccount.com
       - name: Delete the services, job, database, bucket and secrets
         env:

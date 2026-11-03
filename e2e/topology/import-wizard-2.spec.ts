@@ -47,6 +47,7 @@ import {
   requestBody,
   sameRect,
   selectEntity,
+  setExactMapping,
   settledRead,
   shardPersonas,
   uniqueGarbageBytes,
@@ -58,6 +59,7 @@ import {
   buildMixedCsv,
   buildSingleInvoiceCsv,
   nullExtractHeaderKeys,
+  PR_LANE_MAPPING,
 } from '../importFixtures'
 
 const { SHARD, PERSONAS } = shardPersonas('import-wizard-2.spec.ts')
@@ -81,6 +83,14 @@ const DENSE_INVOICE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'dense_invoice.pd
 
 function uniqueDensePdfBytes(): Buffer {
   return Buffer.concat([DENSE_INVOICE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
+// Read by OCR but prints no invoice number, so it always quarantines "was read, but no invoice
+// number". Same recipe.
+const WILD_NO_NUMBER_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'wild_scanned_no_number.pdf'))
+
+function uniqueWildNoNumberPdfBytes(): Buffer {
+  return Buffer.concat([WILD_NO_NUMBER_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
 // A copy of internal/extraction/testdata/advisory_register.pdf (fxE2ECopies). Same recipe.
@@ -397,10 +407,9 @@ const CHANGED_LABEL: Record<string, string> = {
   chosen: 'YOU CHOSE THIS',
 }
 
-test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and the register and the audit log agree', async ({
+test('EXTR12-E2E-06 (AC-3/AC-5): type and point settle their fields, and the register and the audit log agree', async ({
   page,
 }, testInfo) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(300_000)
   const errors = collectErrors(page)
   const token = await login(PERSONAS.A)
@@ -410,120 +419,84 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   await extractOneDocument(page, 'EXTR-12-09 journey')
   const detail = await openExtractionReview(page)
 
-  // Every subject off the wire the SPA itself consumed, never mock.go, and every floor first: a
-  // fixture change that flattened the mock would otherwise leave this journey settling nothing
-  // and calling it three corrections.
-  const ambiguous = detail.fields.find((f) => f.reason === 'ambiguous')
-  expect(ambiguous, 'this document reported no ambiguous field -- there is no candidate to choose').toBeTruthy()
-  expect(
-    ambiguous!.alternatives.length,
-    `${ambiguous!.name} carries no alternative -- the chip this journey clicks does not exist`,
-  ).toBeGreaterThanOrEqual(1)
-  const chosenValue = ambiguous!.alternatives[0].value
-  expect(chosenValue, `${ambiguous!.name}'s first alternative carries no value`).toBeTruthy()
-  // Chip 1, never chip 0: chip 0 is the decided reading, whose value equals the wire, so
-  // choosing it exercises the keep-a-no-op arm and leaves the value unmoved. This journey needs
-  // the value to MOVE.
-  expect(
-    chosenValue,
-    'the first alternative reads the same as the decided one, so choosing it would move nothing',
-  ).not.toBe(ambiguous!.value)
-
+  // Every subject off the wire the SPA itself consumed. The fake AI always yields both a missing
+  // field and an inconsistent subtotal; the real AI may read either one right, and that leg then
+  // does not run. The choose leg is EXTR12-E2E-06b.
   const missing = detail.fields.find((f) => f.reason === 'missing')
-  expect(missing, 'this document reported no missing field -- there is nothing to point at').toBeTruthy()
-  expect(missing!.value, 'the missing field already carries a value').toBeNull()
-  expect(missing!.region, 'the missing field already carries a region, so a drawn box proves nothing').toBeNull()
-
-  // By NAME, the way EXTR12-E2E-02 picks `total` --
-  // never by position. The wire is ordered by field_name (created_at defaults to now() and
-  // writeFieldResultsTx writes a job's rows on ONE transaction, so reader.go's ORDER BY
-  // degenerates to the name), and EXTR-13-02's line cells sort ahead of `subtotal`: "the first
-  // writable inconsistent field" resolves to line_items[2].line_total, which has no header cell
-  // to type into and which refuseField would 422. `subtotal` sorts ahead of `total`, and since
-  // EXTR-23 put `total` in the doubt scope it renders a chooser rather than an input, so it
-  // offers nothing to type into either. The two properties that pick made implicit are asserted here
-  // instead of assumed, so a build that locked `subtotal` or stopped flagging it reds on the wire
-  // rather than at the POST. TestExtractionDetail_MockDefaultArrivesInFieldNameOrder pins the
-  // ordering from the Go side.
-  const typed = detail.fields.find((f) => f.name === 'subtotal')
-  expect(typed, 'the wire the screen read carries no `subtotal` -- there is nothing to type over').toBeTruthy()
-  expect(LOCKED_FIELDS, 'subtotal is locked now, so the correction this journey posts would be a 422').not.toContain(
-    typed!.name,
-  )
+  const subtotal = detail.fields.find((f) => f.name === 'subtotal')
+  const typed = subtotal?.reason === 'inconsistent' ? subtotal : undefined
+  if (!nightlyTarget()) {
+    expect(missing, 'the PR lane reported no missing field -- there is nothing to point at').toBeTruthy()
+    expect(typed, 'the PR lane did not flag subtotal inconsistent -- there is nothing to type over').toBeTruthy()
+  }
   expect(
-    typed!.reason,
-    'subtotal is not flagged inconsistent, so this journey types over a field that never asked to be settled',
-  ).toBe('inconsistent')
+    [missing, typed].filter(Boolean).length,
+    'the document reported neither a missing field nor an inconsistent subtotal -- there is nothing to settle',
+  ).toBeGreaterThanOrEqual(1)
+  if (missing) {
+    expect(missing.value, 'the missing field already carries a value').toBeNull()
+    expect(missing.region, 'the missing field already carries a region, so a drawn box proves nothing').toBeNull()
+  }
+  if (typed) {
+    expect(LOCKED_FIELDS, 'subtotal is locked now, so the correction this journey posts would be a 422').not.toContain(
+      typed.name,
+    )
+  }
 
-  const names = [ambiguous!.name, missing!.name, typed!.name]
-  expect(new Set(names).size, `two of the three subjects are the same field: ${names.join(', ')}`).toBe(3)
-  for (const name of names) expect(VOCABULARY, `${name} is outside the header vocabulary`).toContain(name)
-
+  // The typed field is picked by NAME, never by position: line cells sort ahead of `subtotal`.
   // What one Save owes, in the vocabulary's own order -- the order savableCorrections sorts into
   // so the append-only table's seq follows the order the person reads.
   const plan = [
-    { field: ambiguous!.name, method: 'chosen' },
-    { field: missing!.name, method: 'pointed' },
-    { field: typed!.name, method: 'typed' },
+    ...(missing ? [{ field: missing.name, method: 'pointed' }] : []),
+    ...(typed ? [{ field: typed.name, method: 'typed' }] : []),
   ].sort((a, b) => VOCABULARY.indexOf(a.field) - VOCABULARY.indexOf(b.field))
 
   const save = page.getByTestId('extraction-save')
 
-  // -- 1. CHOOSE ----------------------------------------------------------------------------
-  const chips = page.locator(`[data-testid^="extraction-chip-${ambiguous!.name}-"]`)
-  // W-3: the decided reading is itself a chip, so the row carries N + 1.
-  await expect(chips, 'the ambiguous field rendered no chip row').toHaveCount(ambiguous!.alternatives.length + 1)
-  await page.getByTestId(`extraction-chip-${ambiguous!.name}-1`).click()
-  await expect(
-    page.getByTestId(`extraction-chip-${ambiguous!.name}-1`),
-    'the clicked chip is not the current one',
-  ).toHaveAttribute('aria-current', 'true')
-  await expect(
-    page.getByTestId(`extraction-chip-${ambiguous!.name}-0`),
-    'the decided reading is still current after another candidate was chosen',
-  ).toHaveAttribute('aria-current', 'false')
-
-  // -- 2. TYPE ------------------------------------------------------------------------------
+  // -- TYPE ---------------------------------------------------------------------------------
   // Plain digits, no thousands separator: invoiceEditFor writes `$n::text::numeric` and
   // '2,468.00'::numeric raises 22P02 -> ErrValueRefused -> 400.
   const TYPED_VALUE = '2468.00'
-  await page.getByTestId(`extraction-input-${typed!.name}`).fill(TYPED_VALUE)
-  await expect(save, 'a chosen candidate and a typed value left Save disabled').toBeEnabled()
+  if (typed) {
+    await page.getByTestId(`extraction-input-${typed.name}`).fill(TYPED_VALUE)
+    await expect(save, 'a typed value left Save disabled').toBeEnabled()
+  }
 
-  // -- 3. POINT -----------------------------------------------------------------------------
-  const pointButton = page.getByTestId(`extraction-point-${missing!.name}`)
-  await expect(pointButton, `${missing!.name} offers no way to point at it`).toBeVisible({ timeout: 30_000 })
-  await pointButton.click()
-  await expect(pointButton, 'clicking the point button changed nothing the reader can see').toHaveText(POINT_ARMED, {
-    timeout: 15_000,
-  })
-
-  await expect(page.getByTestId('extraction-point-surface-1'), 'the armed field takes no drag').toBeVisible({
-    timeout: 15_000,
-  })
-  const s = await boxOf(page, 'extraction-point-surface-1')
-  // Comfortably over the 24x12 floor at every frame size in the band.
-  await page.mouse.move(s.x + 0.3 * s.width, s.y + 0.25 * s.height)
-  await page.mouse.down()
-  await page.mouse.move(s.x + 0.62 * s.width, s.y + 0.55 * s.height, { steps: 8 })
-  await page.mouse.up()
-
-  const highlight = page.getByTestId('extraction-highlight')
-  // applyDraft without its `pointed` arm renders NO highlight, because the missing field's wire
-  // region is null. That build reds here.
-  await expect(highlight, 'the drawn box highlights nothing').toHaveCount(1)
-  await expect(highlight, 'the highlight is not the box drawn on the missing field').toHaveAttribute(
-    'data-snip',
-    missing!.name,
-  )
-
-  // -- 4. FILL THE POINT --------------------------------------------------------------------
-  // Required, not decorative: savableCorrections drops a blank pointed entry
-  // (extractionReview.ts), so without this the box never reaches the wire.
+  // -- POINT --------------------------------------------------------------------------------
   const POINTED_VALUE = '31775208-0003'
-  await page.getByTestId(`extraction-input-${missing!.name}`).fill(POINTED_VALUE)
+  if (missing) {
+    const pointButton = page.getByTestId(`extraction-point-${missing.name}`)
+    await expect(pointButton, `${missing.name} offers no way to point at it`).toBeVisible({ timeout: 30_000 })
+    await pointButton.click()
+    await expect(pointButton, 'clicking the point button changed nothing the reader can see').toHaveText(POINT_ARMED, {
+      timeout: 15_000,
+    })
 
-  // -- 5. SAVE ------------------------------------------------------------------------------
+    await expect(page.getByTestId('extraction-point-surface-1'), 'the armed field takes no drag').toBeVisible({
+      timeout: 15_000,
+    })
+    const s = await boxOf(page, 'extraction-point-surface-1')
+    // Comfortably over the 24x12 floor at every frame size in the band.
+    await page.mouse.move(s.x + 0.3 * s.width, s.y + 0.25 * s.height)
+    await page.mouse.down()
+    await page.mouse.move(s.x + 0.62 * s.width, s.y + 0.55 * s.height, { steps: 8 })
+    await page.mouse.up()
+
+    const highlight = page.getByTestId('extraction-highlight')
+    // applyDraft without its `pointed` arm renders NO highlight, because the missing field's wire
+    // region is null. That build reds here.
+    await expect(highlight, 'the drawn box highlights nothing').toHaveCount(1)
+    await expect(highlight, 'the highlight is not the box drawn on the missing field').toHaveAttribute(
+      'data-snip',
+      missing.name,
+    )
+
+    // Required, not decorative: savableCorrections drops a blank pointed entry
+    // (extractionReview.ts), so without this the box never reaches the wire.
+    await page.getByTestId(`extraction-input-${missing.name}`).fill(POINTED_VALUE)
+  }
+
+  // -- SAVE -------------------------------------------------------------------------------
   // Registered BEFORE the click, and .json() called inside the handler so no body is read after
   // the fact.
   const corrections: {
@@ -565,32 +538,32 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   // event and the promise that resolves on it are dispatched independently. A fourth POST
   // arriving after this poll is still caught by the equality below.
   await expect
-    .poll(() => corrections.length, { message: 'the Save did not post three corrections', timeout: 15_000 })
-    .toBe(3)
+    .poll(() => corrections.length, { message: `the Save did not post ${plan.length} corrections`, timeout: 15_000 })
+    .toBe(plan.length)
 
-  // Exactly three POSTs, in vocabulary order, each 201. Firing them in parallel reds the order;
+  // Exactly one POST per settled field, in vocabulary order, each 201. Firing them in parallel reds the order;
   // two POSTs reds the count.
   expect(
     corrections.map((c) => c.field),
-    'the Save did not post the three settled fields in vocabulary order',
+    'the Save did not post the settled fields in vocabulary order',
   ).toEqual(plan.map((p) => p.field))
   expect(
     corrections.map((c) => c.method),
     'the methods did not follow the fields they were posted for',
   ).toEqual(plan.map((p) => p.method))
-  expect(corrections.map((c) => c.status), 'a correction was refused').toEqual([201, 201, 201])
+  expect(corrections.map((c) => c.status), 'a correction was refused').toEqual(plan.map(() => 201))
 
   // Only the pointed body carries a region: a chosen request with one is a 400
   // (msgRegionDisagrees), so this is the deployed half of that rule.
   expect(
     corrections.filter((c) => c.hasRegion).map((c) => c.field),
     'a correction other than the pointed one carried a region',
-  ).toEqual([missing!.name])
+  ).toEqual(missing ? [missing.name] : [])
 
   // The invoice comes off the 201 bodies (CorrectionResponse.invoice_id), never guessed.
   const bodies = await Promise.all(corrections.map((c) => c.body))
   const invoiceIds = new Set(bodies.map((b) => b?.invoice_id ?? ''))
-  expect(invoiceIds.size, 'the three corrections named different invoices').toBe(1)
+  expect(invoiceIds.size, 'the corrections named different invoices').toBe(1)
   const invoiceId = [...invoiceIds][0]
   expect(invoiceId, 'no correction body named an invoice, so the audit read below scopes to nothing').toMatch(
     /^[0-9a-fA-F-]{36}$/,
@@ -603,11 +576,11 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   await expect(
     page.locator('[data-testid^="extraction-marker-"]'),
     'the settled fields did not each take exactly one marker',
-  ).toHaveCount(3)
-  // And the namespace resolves to those three BY NAME. EXTR-13-02 put 15 line-item cells into
+  ).toHaveCount(plan.length)
+  // And the namespace resolves to those fields BY NAME. EXTR-13-02 put 15 line-item cells into
   // the pane's render, and a marker renders only over a correction, so this is the assertion
   // that the widened fixture left the `extraction-marker-` sweep where it was: a count alone
-  // would still read 3 if a line cell took a marker while a settled field lost its own.
+  // would still pass if a line cell took a marker while a settled field lost its own.
   const markerNames = (
     await page
       .locator('[data-testid^="extraction-marker-"]')
@@ -615,7 +588,7 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   )
     .map((id) => id.replace('extraction-marker-', ''))
     .sort()
-  expect(markerNames, 'the marker namespace resolved to fields other than the three that were settled').toEqual(
+  expect(markerNames, 'the marker namespace resolved to fields other than the ones that were settled').toEqual(
     plan.map((p) => p.field).sort(),
   )
   for (const p of plan) {
@@ -626,18 +599,9 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
     ).toBeVisible()
   }
 
-  // A settled field stops shouting: reader.go clears Reason and empties Alternatives on a
-  // corrected field, so the chip row goes and the input takes its place.
-  await expect(
-    page.locator(`[data-testid^="extraction-chip-${ambiguous!.name}-"]`),
-    'the settled ambiguous field still offers its chips',
-  ).toHaveCount(0)
-  await expect(
-    page.getByTestId(`extraction-input-${ambiguous!.name}`),
-    'the settled field holds a value other than the candidate that was chosen',
-  ).toHaveValue(chosenValue as string)
-  await expect(page.getByTestId(`extraction-input-${missing!.name}`)).toHaveValue(POINTED_VALUE)
-  await expect(page.getByTestId(`extraction-input-${typed!.name}`)).toHaveValue(TYPED_VALUE)
+  // A settled field stops shouting: the input takes the value just settled.
+  if (missing) await expect(page.getByTestId(`extraction-input-${missing.name}`)).toHaveValue(POINTED_VALUE)
+  if (typed) await expect(page.getByTestId(`extraction-input-${typed.name}`)).toHaveValue(TYPED_VALUE)
 
   // -- The audit rows -----------------------------------------------------------------------
   //
@@ -649,15 +613,15 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   const mine = scoped.events.filter((e) => (e.payload as { invoice_id?: string }).invoice_id === invoiceId)
   expect(
     mine.length,
-    `this invoice recorded ${mine.length} extraction.field_corrected events, not the three the Save posted`,
-  ).toBe(3)
+    `this invoice recorded ${mine.length} extraction.field_corrected events, not the ${plan.length} the Save posted`,
+  ).toBe(plan.length)
   expect(
     mine.map((e) => (e.payload as { field?: string }).field).sort(),
-    'the audit payloads name other fields than the three that were settled',
+    'the audit payloads name other fields than the ones that were settled',
   ).toEqual(plan.map((p) => p.field).sort())
   expect(
     mine.map((e) => (e.payload as { method?: string }).method).sort(),
-    'the audit payloads record other methods than the three that were used',
+    'the audit payloads record other methods than the ones that were used',
   ).toEqual(plan.map((p) => p.method).sort())
   // migrations/20260829195203_audit_log_entity_for_extraction.sql resolves these rows to a
   // company THROUGH the invoice they correct; a NULL entity_id is the workspace-level spelling
@@ -667,7 +631,7 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   }
 
   // The event filter's own non-vacuity control: the tenant-wide log must be strictly larger, or
-  // "exactly three" would also be true of a reader that returned everything it had.
+  // "exactly the Save's count" would also be true of a reader that returned everything it had.
   const wholeLog = await getAuditLog(token, { limit: 1 })
   expect(
     wholeLog.total,
@@ -691,20 +655,67 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
     body: JSON.stringify(
       {
         plan,
-        chosenValue,
         typedValue: TYPED_VALUE,
         pointedValue: POINTED_VALUE,
         invoiceId,
         posted: corrections.map((c) => ({ field: c.field, method: c.method, hasRegion: c.hasRegion, status: c.status })),
         audit: mine.map((e) => ({ id: e.id, event: e.event, entityId: e.entity_id, payload: e.payload })),
         auditTotals: { extractionEvents: scoped.total, wholeLog: wholeLog.total, invoiceScoped: byInvoice.events.length },
-        notCovered: ['Undo (method=undone)', 'a partial-failure Save', "AA-22b's chosen-no-op arm"],
+        notCovered: ['Undo (method=undone)', 'a partial-failure Save'],
       },
       null,
       2,
     ),
     contentType: 'application/json',
   })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR12-E2E-06b: choosing a candidate settles the field', async ({ page }) => {
+  test.skip(nightlyTarget(), 'S13: needs an ambiguous field to choose from; no fixture forces one on the real AI; covered by Go handlers_correction_db_test.go (method=chosen)')
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-12-09 choose')
+  const detail = await openExtractionReview(page)
+
+  const ambiguous = detail.fields.find((f) => f.reason === 'ambiguous')
+  expect(ambiguous, 'this document reported no ambiguous field -- there is no candidate to choose').toBeTruthy()
+  expect(
+    ambiguous!.alternatives.length,
+    `${ambiguous!.name} carries no alternative -- the chip this test clicks does not exist`,
+  ).toBeGreaterThanOrEqual(1)
+  const chosenValue = ambiguous!.alternatives[0].value
+  expect(chosenValue, `${ambiguous!.name}'s first alternative carries no value`).toBeTruthy()
+  // Chip 1, never chip 0: chip 0 is the decided reading, so choosing it moves nothing.
+  expect(chosenValue, 'the first alternative reads the same as the decided one').not.toBe(ambiguous!.value)
+
+  const chips = page.locator(`[data-testid^="extraction-chip-${ambiguous!.name}-"]`)
+  // The decided reading is itself a chip, so the row carries N + 1.
+  await expect(chips, 'the ambiguous field rendered no chip row').toHaveCount(ambiguous!.alternatives.length + 1)
+  await page.getByTestId(`extraction-chip-${ambiguous!.name}-1`).click()
+  await expect(page.getByTestId(`extraction-chip-${ambiguous!.name}-1`)).toHaveAttribute('aria-current', 'true')
+  await expect(page.getByTestId(`extraction-chip-${ambiguous!.name}-0`)).toHaveAttribute('aria-current', 'false')
+
+  const posted = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith(`/fields/${ambiguous!.name}/corrections`),
+    { timeout: 120_000 },
+  )
+  await page.getByTestId('extraction-save').click()
+  const resp = await posted
+  expect(resp.status(), 'the chosen correction was refused').toBe(201)
+  expect((resp.request().postDataJSON() as { method?: string }).method).toBe('chosen')
+
+  await expect(page.getByTestId(`extraction-marker-${ambiguous!.name}`)).toBeVisible()
+  await expect(
+    page.getByTestId(`extraction-field-${ambiguous!.name}`).getByText(CHANGED_LABEL.chosen, { exact: true }),
+  ).toBeVisible()
+  await expect(chips, 'the settled ambiguous field still offers its chips').toHaveCount(0)
+  await expect(
+    page.getByTestId(`extraction-input-${ambiguous!.name}`),
+    'the settled field holds a value other than the candidate that was chosen',
+  ).toHaveValue(chosenValue as string)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -1048,13 +1059,19 @@ test('EXTR13-E2E-01 (Core AC 1-7): the deployed grid reads, flags, sums, selects
     ).toHaveValue('')
   }
 
-  // AIR08-E2E's Core AC 7 leg, free on this document: rich_invoice.pdf carries no AIFAKE-LINES
-  // marker, so mergeAILines leaves every row untouched -- no chip and no ambiguous pill.
-  await expect(page.locator('[data-testid^="line-item-chip-"]'), 'an unsteered document renders a chip').toHaveCount(0)
+  // Chips follow the wire: one row of N+1 per ambiguous line cell, one pill per row holding one.
+  const ambiguousCells = detail.fields.filter(
+    (f) => LINE_CELL_RE.test(f.name) && f.reason === 'ambiguous' && f.alternatives.length > 0,
+  )
+  const ambiguousIndexes = new Set(ambiguousCells.map((f) => Number(LINE_CELL_RE.exec(f.name)![1])))
   await expect(
-    page.locator('[data-testid^="line-item-ambiguous-"]'),
-    'an unsteered document renders an ambiguous pill',
-  ).toHaveCount(0)
+    page.locator('[data-testid^="line-item-chip-"]:not([data-testid^="line-item-chip-where-"])'),
+    'the line chips rendered are not the candidates of the cells the wire marks ambiguous',
+  ).toHaveCount(ambiguousCells.reduce((n, f) => n + f.alternatives.length + 1, 0))
+  expect(
+    await lineOrdinals(page, 'line-item-ambiguous-'),
+    'the ambiguous pills are not on the rows whose cells the wire marks ambiguous',
+  ).toEqual(lines.flatMap((row, i) => (ambiguousIndexes.has(row.index) ? [i + 1] : [])))
 
   // -- 2. the flag is per row, and lands only where the wire's own numbers disagree ----------
   const states = lines.map((row, i) => ({ n: i + 1, state: wireRowState(row) }))
@@ -1859,11 +1876,7 @@ test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored
   await page.getByRole('button', { name: 'Read columns' }).click()
   await sweepPreview
 
-  // subtotal has no ALIAS entry, so auto-recognize never places it -- E2E-04's own reasoning.
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal' }).click()
-  await page.getByText('Subtotal', { exact: true }).click()
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   const sweepImport = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -2002,11 +2015,8 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
   await expect(notice).toHaveCount(0)
   await expect(badges).toHaveCount(0)
 
-  // --- import 1 lands: hand-placed, saved because remember_mapping defaults true ----------
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal' }).click()
-  await page.getByText('Subtotal', { exact: true }).click()
+  // --- import 1 lands: exact mapping, saved because remember_mapping defaults true -------
+  await setExactMapping(page, PR_LANE_MAPPING)
 
   const import1Req = page.waitForRequest(
     (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -2593,27 +2603,24 @@ const EMPTY_DOCX_NAME = 'empty_container.docx'
 test('EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicked, not its sibling', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   // Two documents through a cold sidecar, then a filing and a detail load.
   test.setTimeout(600_000)
   const errors = collectErrors(page)
 
   const scannedName = 'scanned_invoice.pdf'
-  const denseName = 'dense_invoice.pdf'
-  // Both quarantine, for DIFFERENT measured reasons, and neither needs a new artifact: the
-  // scan settles document_text_layer = unreadable with no number at all, and the dense page's
-  // label OCRs as "INV0ICE NO:" so its invoice_number settles missing (D-33). They carry
-  // different filenames and different document ids, so the two rows are genuinely
+  const noNumberName = 'wild_scanned_no_number.pdf'
+  // Both quarantine, for DIFFERENT reasons: the scan settles document_text_layer = unreadable,
+  // and the wild scan is read but prints no invoice number. They carry different filenames and different document ids, so the two rows are genuinely
   // distinguishable — a pair whose items are naturally equal proves nothing.
   const { token, documentIds } = await runDocuments(page, 'EXTR-15-12 two documents', [
     { name: scannedName, mimeType: 'application/pdf', buffer: uniqueScannedPdfBytes() },
-    { name: denseName, mimeType: 'application/pdf', buffer: uniqueDensePdfBytes() },
+    { name: noNumberName, mimeType: 'application/pdf', buffer: uniqueWildNoNumberPdfBytes() },
   ])
 
   expect(
     documentIds[scannedName],
     'both files resolved to ONE stored document -- the pair cannot discriminate anything below',
-  ).not.toBe(documentIds[denseName])
+  ).not.toBe(documentIds[noNumberName])
 
   // (a) routeAfterRun cannot take the 'single' arm on a two-file run (lib/importRun.ts), so
   // the landing is the review surface carrying EVERY batch id. The path is where that id list
@@ -2638,24 +2645,24 @@ test('EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicke
   await expect(unreadableRows, 'both documents must render as their own rows').toHaveCount(2)
   const rowLabels = await unreadableRows.evaluateAll((els) => els.map((el) => el.textContent ?? ''))
   const scannedIdx = rowLabels.findIndex((t) => t.includes(scannedName))
-  const denseIdx = rowLabels.findIndex((t) => t.includes(denseName))
+  const noNumberIdx = rowLabels.findIndex((t) => t.includes(noNumberName))
   expect(scannedIdx, `no row names ${scannedName}: ${JSON.stringify(rowLabels)}`).toBeGreaterThanOrEqual(0)
-  expect(denseIdx, `no row names ${denseName}: ${JSON.stringify(rowLabels)}`).toBeGreaterThanOrEqual(0)
-  expect(scannedIdx, 'one row names both files -- the labels do not discriminate the rows').not.toBe(denseIdx)
+  expect(noNumberIdx, `no row names ${noNumberName}: ${JSON.stringify(rowLabels)}`).toBeGreaterThanOrEqual(0)
+  expect(scannedIdx, 'one row names both files -- the labels do not discriminate the rows').not.toBe(noNumberIdx)
 
   // Cross-discriminating pair: bare "scan" is vacuous (the row text also carries the
   // filename scanned_invoice.pdf), so "supplier" tells the two RowError messages apart.
   expect(rowLabels[scannedIdx], 'the scanned row must carry the scan-quality message').toContain('The scan of this document')
   expect(rowLabels[scannedIdx], 'the scanned row must carry the supplier ask').toContain('supplier')
-  expect(rowLabels[scannedIdx], "the scanned row leaked the dense row's message").not.toContain('was read')
+  expect(rowLabels[scannedIdx], "the scanned row leaked the no-number row's message").not.toContain('was read')
 
-  expect(rowLabels[denseIdx], 'the dense row must carry the no-invoice-number message').toContain(
+  expect(rowLabels[noNumberIdx], 'the no-number row must carry the no-invoice-number message').toContain(
     'was read, but no invoice number',
   )
-  expect(rowLabels[denseIdx], "the dense row leaked the scanned row's supplier ask").not.toContain('supplier')
+  expect(rowLabels[noNumberIdx], "the no-number row leaked the scanned row's supplier ask").not.toContain('supplier')
 
   // (c) the SCANNED row's own control, and the invoice it produces named by equality against
-  // the scanned document — never "is not null", which the dense document would satisfy too.
+  // the scanned document — never "is not null", which the no-number document would satisfy too.
   const scannedButton = unreadableRows.nth(scannedIdx).getByRole('button', { name: 'Enter it by hand' })
   await expect(scannedButton, 'a resolved entity must arm the hand-off on this row').toBeEnabled()
   await scannedButton.click()
@@ -2667,7 +2674,7 @@ test('EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicke
   const source = await readSourceDocument(token, invoiceId)
   expect(source.document, 'the filed invoice names no source document at all').not.toBeNull()
   expect(source.document!.id, "the hand-off attached the wrong row's document").toBe(documentIds[scannedName])
-  expect(source.document!.id, 'the hand-off attached the sibling document').not.toBe(documentIds[denseName])
+  expect(source.document!.id, 'the hand-off attached the sibling document').not.toBe(documentIds[noNumberName])
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -2679,20 +2686,19 @@ const SUPPLY_URL = /\/api\/invoice\/v1\/imports\/document\/invoice$/
 test('EXTR27-E2E-01: a read document with no number carries its reading into the hand-off, refuses a taken number, and files with the one supplied', async ({
   page,
 }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(600_000)
   const errors = collectErrors(page, expectedStatusDropper(page, 409, SUPPLY_URL))
 
-  const denseName = 'dense_invoice.pdf'
+  const noNumberName = 'wild_scanned_no_number.pdf'
   // Zz sorts this entity after "Okafor & Partners" (carry note) so later topology specs keep
   // their own ordering assumptions.
   const { token, entityId, documentIds, jobs } = await runDocuments(page, 'Zz EXTR-27 carried', [
-    { name: denseName, mimeType: 'application/pdf', buffer: uniqueDensePdfBytes() },
+    { name: noNumberName, mimeType: 'application/pdf', buffer: uniqueWildNoNumberPdfBytes() },
   ])
-  const documentId = documentIds[denseName]!
+  const documentId = documentIds[noNumberName]!
   expect(
-    jobs[denseName]!.state,
-    `the dense page did not settle succeeded (kind ${jobs[denseName]!.failure_kind}, error ${jobs[denseName]!.last_error})`,
+    jobs[noNumberName]!.state,
+    `the no-number page did not settle succeeded (kind ${jobs[noNumberName]!.failure_kind}, error ${jobs[noNumberName]!.last_error})`,
   ).toBe('succeeded')
 
   // 1. Landing (AC-1).
@@ -2706,7 +2712,7 @@ test('EXTR27-E2E-01: a read document with no number carries its reading into the
 
   const row = page.getByTestId('unreadable-row')
   await expect(row).toHaveCount(1)
-  await expect(row).toContainText(denseName)
+  await expect(row).toContainText(noNumberName)
   await expect(row).toContainText('was read, but no invoice number')
 
   // 2. Non-empty floor — the reading must carry something, or a carried and a blank form
@@ -3489,8 +3495,12 @@ async function settleOneDocument(
     // (TestRLS_ScannedFixtureSettlesTheTextLayerUnreadable asserts the same state wired).
     .toBe('succeeded')
 
-  // The run's own landing, pinned because it is the terminal state EXTR-15 must surface: a
-  // quarantined batch still exists, so routeAfterRun returns 'review', never 'none'.
+  return { token, jobId, detail: await getExtractionDetail(token, jobId) }
+}
+
+// The run's own landing: a quarantined single-document run still has a batch, so routeAfterRun
+// returns 'review', never 'none'.
+async function expectReviewBatchLanding(page: Page): Promise<void> {
   await expect
     .poll(
       async () => {
@@ -3503,8 +3513,6 @@ async function settleOneDocument(
       { message: 'a quarantined single-document run must land on the review batch surface', timeout: 120_000 },
     )
     .toBe('review batch surface')
-
-  return { token, jobId, detail: await getExtractionDetail(token, jobId) }
 }
 
 test('EXTR18-E2E-02 (AC-8): a document with no recoverable text settles unreadable, and its pages still render', async ({
@@ -3517,6 +3525,7 @@ test('EXTR18-E2E-02 (AC-8): a document with no recoverable text settles unreadab
     name: 'scanned_invoice.pdf',
     buffer: uniqueScannedPdfBytes(),
   })
+  await expectReviewBatchLanding(page)
 
   const textLayer = detail.fields.find((f) => f.name === 'document_text_layer')
   expect(textLayer, 'no document_text_layer field on the wire').toBeTruthy()
@@ -3549,7 +3558,6 @@ test('EXTR18-E2E-02 (AC-8): a document with no recoverable text settles unreadab
 })
 
 test('EXTR18-E2E-03: an image-only page the OCR can read is NOT unreadable', async ({ page }) => {
-  test.skip(nightlyTarget(), REAL_AI_COVERED)
   test.setTimeout(600_000)
   const errors = collectErrors(page)
 

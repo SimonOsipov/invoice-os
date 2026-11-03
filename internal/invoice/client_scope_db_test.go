@@ -238,7 +238,7 @@ func TestClientScope_InvoiceRoutesAnswerOneNotFoundForOutsideUnknownAndForeign(t
 		name, method, body string
 		h                  http.HandlerFunc
 	}{
-		{"GET /v1/invoices/{id}", "GET", "", GetHandler(f.store.Get, f.store.CallerRole, f.store.ApprovalFacts, nil)},
+		{"GET /v1/invoices/{id}", "GET", "", GetHandler(f.store.Get, f.store.CallerRole, f.store.ApprovalFacts, f.store.NoteChecks, nil)},
 		{"GET /v1/invoices/{id}/history", "GET", "", HistoryHandler(f.store.History, nil)},
 		{"GET /v1/invoices/{id}/source-document", "GET", "", SourceDocumentHandler(f.store.SourceDocument, nil)},
 		{"GET /v1/invoices/{id}/ubl", "GET", "", UBLHandler(f.store.Get, nil)},

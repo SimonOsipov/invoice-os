@@ -81,7 +81,7 @@ func main() {
 	// prefix is stripped upstream).
 	store := invoice.NewStore(pool)
 	app.Mux.HandleFunc("POST /v1/invoices", invoice.CreateHandler(store.Create, app.Logger))
-	app.Mux.HandleFunc("GET /v1/invoices/{id}", invoice.GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, app.Logger))
+	app.Mux.HandleFunc("GET /v1/invoices/{id}", invoice.GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, store.NoteChecks, app.Logger))
 	app.Mux.HandleFunc("POST /v1/invoices/{id}/notes", invoice.IssueNoteHandler(store.IssueNote, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/notes", invoice.NotesHandler(store.Notes, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/history", invoice.HistoryHandler(store.History, app.Logger))

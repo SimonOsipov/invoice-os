@@ -355,7 +355,7 @@ func TestListAndDetail_ApproveGateCannotDisagree(t *testing.T) {
 			r.SetPathValue("id", invID)
 			r = r.WithContext(auth.WithIdentity(r.Context(), id))
 			detailRec := httptest.NewRecorder()
-			GetHandler(get, callerRole, detailFacts, nil).ServeHTTP(detailRec, r)
+			GetHandler(get, callerRole, detailFacts, passNoteChecks, nil).ServeHTTP(detailRec, r)
 			if detailRec.Code != http.StatusOK {
 				t.Fatalf("GET status = %d, want 200 (body=%s)", detailRec.Code, detailRec.Body.String())
 			}

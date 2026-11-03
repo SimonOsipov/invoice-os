@@ -1916,14 +1916,28 @@ type ApprovalFacts struct {
 	// Creator is read in its own transaction; CreatorErr set means the rung is skipped.
 	Creator    approval.CreatorStanding
 	CreatorErr error
-	// NoteChecksPass is false only for a failed note whose checks fail or whose read failed.
-	// Only sendAgainGate reads these two.
-	NoteChecksPass bool
-	NoteChecksErr  error
 }
 
 // readNoteChecks is swapped by tests.
 var readNoteChecks = noteChecksBlockedTx
+
+// NoteChecks reports whether inv passes its note checks, for the send-again gate. Only a failed
+// note opens a transaction; any other invoice passes. An error reads as not passing.
+func (s *Store) NoteChecks(ctx context.Context, inv Invoice) (bool, error) {
+	if inv.Status != StatusFailed || !isNote(inv) {
+		return true, nil
+	}
+	pass := false
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		blocked, err := readNoteChecks(ctx, tx, inv.ID, false)
+		pass = !blocked
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	return pass, nil
+}
 
 // ApprovalFacts reads id's approval standing for the caller inside ONE
 // db.WithinRequestTenantTx -- CallerRole's wrapper above, for the same reason: a
@@ -1961,26 +1975,6 @@ func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, er
 			out.Creator = standing[id]
 			return err
 		})
-	}
-	out.NoteChecksPass = true
-	out.NoteChecksErr = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		var status Status
-		var docType submission.DocumentType
-		if err := tx.QueryRow(ctx, `SELECT status, document_type FROM invoices WHERE id = $1`, id).Scan(&status, &docType); err != nil {
-			return err
-		}
-		if status != StatusFailed || !isNote(Invoice{DocumentType: docType}) {
-			return nil
-		}
-		blocked, err := readNoteChecks(ctx, tx, id, false)
-		if err != nil {
-			return err
-		}
-		out.NoteChecksPass = !blocked
-		return nil
-	})
-	if out.NoteChecksErr != nil {
-		out.NoteChecksPass = false
 	}
 	return out, nil
 }

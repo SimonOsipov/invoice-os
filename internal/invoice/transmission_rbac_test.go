@@ -541,7 +541,7 @@ func doInvoiceGetAs(t *testing.T, get func(ctx context.Context, id string) (Invo
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	GetHandler(get, callerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
+	GetHandler(get, callerRole, clearApprovalStub, passNoteChecks, nil).ServeHTTP(rec, r)
 	var resp submitGateBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)

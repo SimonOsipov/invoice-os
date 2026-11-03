@@ -5469,7 +5469,7 @@ describe('failureExplanation', () => {
       expect(r, `kind=${k}`).not.toEqual(FAILURE_EXPLANATION_FALLBACK)
       expect(r.headline.trim().length, `kind=${k} headline`).toBeGreaterThan(0)
       expect(r.detail.trim().length, `kind=${k} detail`).toBeGreaterThan(0)
-      // never_acknowledged carries no next step (RETRY-01 [copy-split]).
+      // never_acknowledged carries no next step ([copy-split]).
       if (k !== 'never_acknowledged') expect(r.nextStep.trim().length, `kind=${k} nextStep`).toBeGreaterThan(0)
     }
   })

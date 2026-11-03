@@ -67,7 +67,7 @@ func (f crFixture) detailFlagsAs(t *testing.T, caller context.Context, id string
 	r := httptest.NewRequest(http.MethodGet, "/v1/invoices/"+id, nil).WithContext(caller)
 	r.SetPathValue("id", id)
 	rec := httptest.NewRecorder()
-	GetHandler(f.store.Get, f.store.CallerRole, f.store.ApprovalFacts, nil).ServeHTTP(rec, r)
+	GetHandler(f.store.Get, f.store.CallerRole, f.store.ApprovalFacts, f.store.NoteChecks, nil).ServeHTTP(rec, r)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("detail status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}

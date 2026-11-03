@@ -54,7 +54,7 @@ func detailSubmitPair(t *testing.T, store *Store, ctx context.Context, invID, la
 	r.SetPathValue("id", invID)
 	r = r.WithContext(ctx)
 	rec := httptest.NewRecorder()
-	GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, nil).ServeHTTP(rec, r)
+	GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, store.NoteChecks, nil).ServeHTTP(rec, r)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("%s: GET status = %d, want 200 (body=%s)", label, rec.Code, rec.Body.String())
 	}

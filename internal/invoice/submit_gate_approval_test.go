@@ -27,10 +27,10 @@ const wantAwaitingApprovalReason = "This invoice is waiting on approval — it c
 // approvalFacts seam, which the other three hardwire to clearApprovalStub.
 func doInvoiceGetGated(t *testing.T, get func(ctx context.Context, id string) (Invoice, error), callerRole func(ctx context.Context) (string, error), approvalFacts func(ctx context.Context, id string) (ApprovalFacts, error), id *auth.Identity, invoiceID string) (*httptest.ResponseRecorder, submitGateBody) {
 	t.Helper()
-	return doInvoiceGetGatedLog(t, get, callerRole, approvalFacts, id, invoiceID, nil)
+	return doInvoiceGetGatedLog(t, get, callerRole, approvalFacts, passNoteChecks, id, invoiceID, nil)
 }
 
-func doInvoiceGetGatedLog(t *testing.T, get func(ctx context.Context, id string) (Invoice, error), callerRole func(ctx context.Context) (string, error), approvalFacts func(ctx context.Context, id string) (ApprovalFacts, error), id *auth.Identity, invoiceID string, log *slog.Logger) (*httptest.ResponseRecorder, submitGateBody) {
+func doInvoiceGetGatedLog(t *testing.T, get func(ctx context.Context, id string) (Invoice, error), callerRole func(ctx context.Context) (string, error), approvalFacts func(ctx context.Context, id string) (ApprovalFacts, error), noteChecks func(ctx context.Context, inv Invoice) (bool, error), id *auth.Identity, invoiceID string, log *slog.Logger) (*httptest.ResponseRecorder, submitGateBody) {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodGet, "/v1/invoices/"+invoiceID, nil)
 	r.SetPathValue("id", invoiceID)
@@ -38,7 +38,7 @@ func doInvoiceGetGatedLog(t *testing.T, get func(ctx context.Context, id string)
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	GetHandler(get, callerRole, approvalFacts, log).ServeHTTP(rec, r)
+	GetHandler(get, callerRole, approvalFacts, noteChecks, log).ServeHTTP(rec, r)
 	var resp submitGateBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
@@ -198,6 +198,7 @@ func TestGetHandler_ApprovalFactsErrorFailsClosedNot500(t *testing.T) {
 		invoiceAtStatusStub(StatusValidated),
 		fixedRoleStub("admin", nil),
 		fixedApprovalStub(false, errors.New("approval read exploded")),
+		passNoteChecks,
 		logger,
 	).ServeHTTP(rec, r)
 

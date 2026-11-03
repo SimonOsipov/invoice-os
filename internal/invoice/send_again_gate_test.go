@@ -108,11 +108,11 @@ func TestSendAgainGate_ReasonsAreThePostSentences(t *testing.T) {
 	}
 }
 
-func doGateGet(t *testing.T, inv Invoice, facts ApprovalFacts, log *slog.Logger) map[string]json.RawMessage {
+func doGateGet(t *testing.T, inv Invoice, facts ApprovalFacts, noteChecks func(context.Context, Invoice) (bool, error), log *slog.Logger) map[string]json.RawMessage {
 	t.Helper()
 	id := &auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	get := func(context.Context, string) (Invoice, error) { return inv, nil }
-	rec, _ := doInvoiceGetGatedLog(t, get, fixedRoleStub("admin", nil), factsStub(facts), id, uuid.NewString(), log)
+	rec, _ := doInvoiceGetGatedLog(t, get, fixedRoleStub("admin", nil), factsStub(facts), noteChecks, id, uuid.NewString(), log)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
@@ -124,11 +124,11 @@ func doGateGet(t *testing.T, inv Invoice, facts ApprovalFacts, log *slog.Logger)
 }
 
 func TestGetHandler_SendAgainKeysAlwaysPresent(t *testing.T) {
-	raw := doGateGet(t, Invoice{ID: "d", Status: StatusDraft}, ApprovalFacts{NoteChecksPass: true}, nil)
+	raw := doGateGet(t, Invoice{ID: "d", Status: StatusDraft}, ApprovalFacts{}, passNoteChecks, nil)
 	if string(raw["can_send_again"]) != "false" || string(raw["send_again_blocked_reason"]) != "null" {
 		t.Errorf("draft: can_send_again=%s reason=%s, want false and null", raw["can_send_again"], raw["send_again_blocked_reason"])
 	}
-	raw = doGateGet(t, failedWith(kindPtr(submission.FailureNeverAcknowledged), submission.CommercialInvoice), ApprovalFacts{NoteChecksPass: true}, nil)
+	raw = doGateGet(t, failedWith(kindPtr(submission.FailureNeverAcknowledged), submission.CommercialInvoice), ApprovalFacts{}, passNoteChecks, nil)
 	if string(raw["can_send_again"]) != "true" || string(raw["send_again_blocked_reason"]) != "null" {
 		t.Errorf("failed: can_send_again=%s reason=%s, want true and null", raw["can_send_again"], raw["send_again_blocked_reason"])
 	}
@@ -137,9 +137,8 @@ func TestGetHandler_SendAgainKeysAlwaysPresent(t *testing.T) {
 func TestGetHandler_SendAgainFailsClosedOnANoteReadError(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, nil))
-	// NoteChecksPass true: the error alone must close the gate.
-	facts := ApprovalFacts{TransmitClear: true, NoteChecksPass: true, NoteChecksErr: errors.New("boom")}
-	raw := doGateGet(t, failedWith(kindPtr(submission.FailureNeverAcknowledged), submission.CreditNote), facts, log)
+	boom := func(context.Context, Invoice) (bool, error) { return true, errors.New("boom") }
+	raw := doGateGet(t, failedWith(kindPtr(submission.FailureNeverAcknowledged), submission.CreditNote), ApprovalFacts{TransmitClear: true}, boom, log)
 	if string(raw["can_send_again"]) != "false" || string(raw["send_again_blocked_reason"]) != `"`+wantSendAgainNoteChecks+`"` {
 		t.Errorf("can_send_again=%s reason=%s, want false and the note sentence", raw["can_send_again"], raw["send_again_blocked_reason"])
 	}

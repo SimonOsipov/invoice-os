@@ -33,6 +33,14 @@ func (s *Submitter) SendAgain(ctx context.Context, id string) (Invoice, error) {
 	actor := actorFromContext(ctx)
 	var out Invoice
 	err := db.WithinRequestTenantTx(ctx, s.store.pool, func(tx pgx.Tx) error {
+		// The handler's CallerRole read is a separate transaction; a demotion can land between.
+		role, err := callerRoleTx(ctx, tx, actor.Subject)
+		if err != nil {
+			return err
+		}
+		if !isApprover(role) {
+			return ErrNotPermitted
+		}
 		// Lock order: job, then invoice, then (inside requeueFailedTx) the original of a credit note.
 		var jobID, key, jobState string
 		var pollRef *string

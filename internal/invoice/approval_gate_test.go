@@ -394,7 +394,7 @@ func TestGetHandler_CreatorReadErrorStaysEnabled(t *testing.T) {
 	r = r.WithContext(auth.WithIdentity(r.Context(), id))
 	var buf bytes.Buffer
 	rec := httptest.NewRecorder()
-	GetHandler(invoiceAtStatusStub(StatusValidated), fixedRoleStub("admin", nil), factsStub(f), slog.New(slog.NewTextHandler(&buf, nil))).ServeHTTP(rec, r)
+	GetHandler(invoiceAtStatusStub(StatusValidated), fixedRoleStub("admin", nil), factsStub(f), passNoteChecks, slog.New(slog.NewTextHandler(&buf, nil))).ServeHTTP(rec, r)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -544,7 +544,7 @@ func TestGetHandler_ApproveFlagsOnTheRealStore(t *testing.T) {
 	r.SetPathValue("id", fx.invID)
 	r = r.WithContext(fx.ctx)
 	rec := httptest.NewRecorder()
-	GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, nil).ServeHTTP(rec, r)
+	GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, store.NoteChecks, nil).ServeHTTP(rec, r)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
@@ -39,6 +41,10 @@ func newSARig(t *testing.T, label string) *saRig {
 	r.tenant = seedTenant(t, super, label+" tenant")
 	r.entity = seedEntity(t, super, r.tenant, label+" entity")
 	r.ctx = tenantCtx(r.tenant)
+	// seedTenant seeds the caller as a preparer; send again is approver-only.
+	if _, err := super.Exec(context.Background(), `UPDATE memberships SET role = 'admin' WHERE tenant_id = $1 AND user_id = $2`, r.tenant, memberSubject); err != nil {
+		t.Fatalf("promote the caller: %v", err)
+	}
 	t.Cleanup(func() {
 		c := context.Background()
 		_, _ = super.Exec(c, `DELETE FROM app_exchange WHERE tenant_id = $1`, r.tenant)
@@ -658,13 +664,14 @@ func TestSendAgain_FailsAgainThenSendsAgain(t *testing.T) {
 	}
 }
 
-func (r *saRig) facts(t *testing.T, id string) ApprovalFacts {
+func (r *saRig) notePass(t *testing.T, id string) (bool, error) {
 	t.Helper()
-	f, err := NewStore(r.app).ApprovalFacts(r.ctx, id)
+	store := NewStore(r.app)
+	inv, err := store.Get(r.ctx, id)
 	if err != nil {
-		t.Fatalf("ApprovalFacts: %v", err)
+		t.Fatalf("Get: %v", err)
 	}
-	return f
+	return store.NoteChecks(r.ctx, inv)
 }
 
 func swapReadNoteChecks(t *testing.T, fn func(context.Context, pgx.Tx, string, bool) (bool, error)) {
@@ -674,52 +681,129 @@ func swapReadNoteChecks(t *testing.T, fn func(context.Context, pgx.Tx, string, b
 	t.Cleanup(func() { readNoteChecks = old })
 }
 
-func TestApprovalFacts_NoteChecksPassReadsTheNote(t *testing.T) {
-	r := newSARig(t, "AF note")
-	o := seedInvoice(t, r.super, r.tenant, r.entity, "AF-O")
-	ncAccepted(t, r.super, o, "IRN-AF-O", "100.00")
-	over := csNote(t, r.super, r.tenant, r.entity, "AF-N1", "credit_note", o, "failed", csAmount("60.00"))
-	csNote(t, r.super, r.tenant, r.entity, "AF-S", "credit_note", o, "accepted", csAmount("60.00"))
-	fits := csNote(t, r.super, r.tenant, r.entity, "AF-N2", "credit_note", o, "failed", csAmount("40.00"))
-	plain := r.failedInvoice(t, "AF-C", "never_acknowledged")
+func TestNoteChecks_ReadsTheNote(t *testing.T) {
+	r := newSARig(t, "NC note")
+	o := seedInvoice(t, r.super, r.tenant, r.entity, "NC-O")
+	ncAccepted(t, r.super, o, "IRN-NC-O", "100.00")
+	over := csNote(t, r.super, r.tenant, r.entity, "NC-N1", "credit_note", o, "failed", csAmount("60.00"))
+	csNote(t, r.super, r.tenant, r.entity, "NC-S", "credit_note", o, "accepted", csAmount("60.00"))
+	fits := csNote(t, r.super, r.tenant, r.entity, "NC-N2", "credit_note", o, "failed", csAmount("40.00"))
+	plain := r.failedInvoice(t, "NC-C", "never_acknowledged")
 	for id, want := range map[string]bool{over: false, fits: true, plain: true} {
-		if got := r.facts(t, id); got.NoteChecksPass != want || got.NoteChecksErr != nil {
-			t.Errorf("invoice %s: NoteChecksPass=%v err=%v, want %v and nil", id, got.NoteChecksPass, got.NoteChecksErr, want)
+		if got, err := r.notePass(t, id); got != want || err != nil {
+			t.Errorf("invoice %s: pass=%v err=%v, want %v and nil", id, got, err, want)
 		}
 	}
 }
 
-func TestApprovalFacts_SkipsTheNoteReadOffAFailedNote(t *testing.T) {
-	r := newSARig(t, "AF skip")
-	o := seedInvoice(t, r.super, r.tenant, r.entity, "AF-O")
-	ncAccepted(t, r.super, o, "IRN-AF-O", "100.00")
-	validated := csNote(t, r.super, r.tenant, r.entity, "AF-V", "credit_note", o, "validated", csAmount("10.00"))
-	plain := r.failedInvoice(t, "AF-C", "never_acknowledged")
+func TestNoteChecks_SkipsTheReadOffAFailedNote(t *testing.T) {
+	r := newSARig(t, "NC skip")
+	o := seedInvoice(t, r.super, r.tenant, r.entity, "NC-O")
+	ncAccepted(t, r.super, o, "IRN-NC-O", "100.00")
+	validated := csNote(t, r.super, r.tenant, r.entity, "NC-V", "credit_note", o, "validated", csAmount("10.00"))
+	plain := r.failedInvoice(t, "NC-C", "never_acknowledged")
 	swapReadNoteChecks(t, func(context.Context, pgx.Tx, string, bool) (bool, error) {
 		t.Error("readNoteChecks called off a failed note")
 		return true, nil
 	})
 	for _, id := range []string{validated, plain} {
-		if got := r.facts(t, id); !got.NoteChecksPass || got.NoteChecksErr != nil {
-			t.Errorf("invoice %s: NoteChecksPass=%v err=%v, want true and nil", id, got.NoteChecksPass, got.NoteChecksErr)
+		if got, err := r.notePass(t, id); !got || err != nil {
+			t.Errorf("invoice %s: pass=%v err=%v, want true and nil", id, got, err)
 		}
 	}
 }
 
-func TestApprovalFacts_NoteReadErrorKeepsTransmitClear(t *testing.T) {
-	r := newSARig(t, "AF err")
-	o := seedInvoice(t, r.super, r.tenant, r.entity, "AF-O")
-	ncAccepted(t, r.super, o, "IRN-AF-O", "100.00")
-	n := csNote(t, r.super, r.tenant, r.entity, "AF-N", "credit_note", o, "failed", csAmount("40.00"))
-	base := r.facts(t, n)
+// Only a failed note opens a transaction; polling any other invoice costs none.
+func TestNoteChecks_TransactionCount(t *testing.T) {
+	r := newSARig(t, "NC count")
+	traced, rec := tracedAppPool(t)
+	store := NewStore(traced)
+	o := seedInvoice(t, r.super, r.tenant, r.entity, "NC-O")
+	ncAccepted(t, r.super, o, "IRN-NC-O", "100.00")
+	note := csNote(t, r.super, r.tenant, r.entity, "NC-N", "credit_note", o, "failed", csAmount("40.00"))
+	plain := r.failedInvoice(t, "NC-C", "never_acknowledged")
+	for id, want := range map[string]int{note: 1, plain: 0} {
+		inv, err := NewStore(r.app).Get(r.ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec.reset()
+		if _, err := store.NoteChecks(r.ctx, inv); err != nil {
+			t.Fatal(err)
+		}
+		if n := rec.tenantTxCount(); n != want {
+			t.Errorf("invoice %s: NoteChecks opened %d tenant transactions, want %d", id, n, want)
+		}
+	}
+}
+
+func TestNoteChecks_ReadErrorIsNotPassing(t *testing.T) {
+	r := newSARig(t, "NC err")
+	o := seedInvoice(t, r.super, r.tenant, r.entity, "NC-O")
+	ncAccepted(t, r.super, o, "IRN-NC-O", "100.00")
+	n := csNote(t, r.super, r.tenant, r.entity, "NC-N", "credit_note", o, "failed", csAmount("40.00"))
 	swapReadNoteChecks(t, func(context.Context, pgx.Tx, string, bool) (bool, error) {
 		return false, errors.New("boom")
 	})
-	got := r.facts(t, n)
-	if got.NoteChecksErr == nil || got.NoteChecksPass {
-		t.Errorf("NoteChecksErr=%v NoteChecksPass=%v, want an error and false", got.NoteChecksErr, got.NoteChecksPass)
+	if got, err := r.notePass(t, n); got || err == nil {
+		t.Errorf("pass=%v err=%v, want false and an error", got, err)
 	}
-	if got.TransmitClear != base.TransmitClear || got.RunState != base.RunState || got.CallerHoldsRole != base.CallerHoldsRole {
-		t.Errorf("facts moved on a note read error:\nbase %+v\ngot  %+v", base, got)
+}
+
+// A failed first facts read must not fake a note-checks refusal for a note that passes.
+func TestGetHandler_FactsErrorDoesNotBlockSendAgainOfAPassingNote(t *testing.T) {
+	r := newSARig(t, "NC facts err")
+	o := seedInvoice(t, r.super, r.tenant, r.entity, "NC-O")
+	ncAccepted(t, r.super, o, "IRN-NC-O", "100.00")
+	n := csNote(t, r.super, r.tenant, r.entity, "NC-N", "credit_note", o, "failed", csAmount("40.00"))
+	if _, err := r.super.Exec(context.Background(), `UPDATE invoices SET failure_kind = 'never_acknowledged' WHERE id = $1`, n); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(r.app)
+	boom := func(context.Context, string) (ApprovalFacts, error) { return ApprovalFacts{}, errors.New("boom") }
+	req := httptest.NewRequest(http.MethodGet, "/v1/invoices/"+n, nil)
+	req.SetPathValue("id", n)
+	req = req.WithContext(r.ctx)
+	rec := httptest.NewRecorder()
+	GetHandler(store.Get, fixedRoleStub("admin", nil), boom, store.NoteChecks, nil).ServeHTTP(rec, req)
+	var got struct {
+		Can    bool    `json:"can_send_again"`
+		Reason *string `json:"send_again_blocked_reason"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("status %d err %v body %s", rec.Code, err, rec.Body.String())
+	}
+	if !got.Can || got.Reason != nil {
+		t.Errorf("can_send_again=%v reason=%v, want true and nil", got.Can, got.Reason)
+	}
+}
+
+func TestSendAgain_PreparerIsRefusedInsideTheTransaction(t *testing.T) {
+	r := newSARig(t, "SA preparer")
+	inv := r.failedInvoice(t, "SA-PREP", "never_acknowledged")
+	r.job(t, inv, saJob{state: "dead_lettered", attempts: 8, riverState: "discarded"})
+	before := r.snap(t, inv)
+
+	prep := uuid.NewString()
+	seedMembership(t, r.super, r.tenant, prep, "preparer")
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: prep, Role: "authenticated", TenantID: r.tenant})
+	if _, err := r.sub.SendAgain(ctx, inv); !errors.Is(err, ErrNotPermitted) {
+		t.Fatalf("SendAgain as a preparer = %v, want ErrNotPermitted", err)
+	}
+	if after := r.snap(t, inv); after != before {
+		t.Errorf("a refused SendAgain wrote:\nbefore %+v\nafter  %+v", before, after)
+	}
+
+	// The handler's pre-read already passed (stubbed approver); the store refusal must still be the 403 sentence.
+	req := httptest.NewRequest(http.MethodPost, "/v1/invoices/"+inv+"/send-again", nil)
+	req.SetPathValue("id", inv)
+	rec := httptest.NewRecorder()
+	SendAgainHandler(r.sub.SendAgain, fixedRoleStub("reviewer", nil), nil).ServeHTTP(rec, req.WithContext(ctx))
+	var body struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if rec.Code != http.StatusForbidden || body.Error != notApproverTransmitReason {
+		t.Errorf("POST = %d %q, want 403 %q", rec.Code, body.Error, notApproverTransmitReason)
 	}
 }

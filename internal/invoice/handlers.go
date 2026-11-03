@@ -681,6 +681,7 @@ func GetHandler(
 	get func(ctx context.Context, id string) (Invoice, error),
 	callerRole func(ctx context.Context) (string, error),
 	approvalFacts func(ctx context.Context, id string) (ApprovalFacts, error),
+	noteChecks func(ctx context.Context, inv Invoice) (bool, error),
 	log *slog.Logger,
 ) http.HandlerFunc {
 	if log == nil {
@@ -746,10 +747,13 @@ func GetHandler(
 		}
 		canReject, rejectReason := approvalGate(inv.Status, role, facts)
 		canApprove, approveReason, byCreator := approveGate(inv.Status, role, facts)
-		if facts.NoteChecksErr != nil {
-			log.ErrorContext(r.Context(), "invoice: note checks", slog.Any("err", facts.NoteChecksErr))
+		// Read apart from approvalFacts so a note error never zeroes can_submit/can_approve/can_reject.
+		notePass, noteErr := noteChecks(r.Context(), inv)
+		if noteErr != nil {
+			log.ErrorContext(r.Context(), "invoice: note checks", slog.Any("err", noteErr))
+			notePass = false
 		}
-		canSendAgain, sendAgainReason := sendAgainGate(inv, role, facts.NoteChecksPass && facts.NoteChecksErr == nil)
+		canSendAgain, sendAgainReason := sendAgainGate(inv, role, notePass)
 
 		// Both action flags are read off the DERIVED predicates canEdit/
 		// canRevalidate (store.go), never a status switch here: a switch would be
@@ -1952,6 +1956,8 @@ func SendAgainHandler(sendAgain func(ctx context.Context, id string) (Invoice, e
 				writeError(w, http.StatusConflict, sendAgainNotResendableReason)
 			case errors.Is(err, ErrResendBusy):
 				writeError(w, http.StatusConflict, sendAgainBusyReason)
+			case errors.Is(err, ErrNotPermitted):
+				writeError(w, http.StatusForbidden, notApproverTransmitReason)
 			default:
 				status, msg := statusForErr(err)
 				if status == http.StatusInternalServerError {

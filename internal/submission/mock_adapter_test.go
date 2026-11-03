@@ -3772,7 +3772,7 @@ func TestSelect_AdapterNameIsCaseSensitive(t *testing.T) {
 	}
 }
 
-// TestMockTransform_UnbuildableTriggerFails: RETRY-01-03 AC1.
+// TestMockTransform_UnbuildableTriggerFails: the -0010 buyer TIN fails Transform.
 func TestMockTransform_UnbuildableTriggerFails(t *testing.T) {
 	a := submission.NewMockAdapter(submission.MockConfig{})
 	w, err := a.Transform(context.Background(), maCanonical(maTINUnbuildable, "INV-MOCK-0001"))
@@ -3781,7 +3781,7 @@ func TestMockTransform_UnbuildableTriggerFails(t *testing.T) {
 	}
 }
 
-// TestMockTransform_OtherTriggersStillBuild: RETRY-01-03 AC1, the other allocated TINs build.
+// TestMockTransform_OtherTriggersStillBuild: the other allocated TINs build.
 func TestMockTransform_OtherTriggersStillBuild(t *testing.T) {
 	a := submission.NewMockAdapter(submission.MockConfig{})
 	for _, tin := range []string{maTINAccept, maTINReject, maTINPending, maTINUnavailable,
@@ -3793,7 +3793,7 @@ func TestMockTransform_OtherTriggersStillBuild(t *testing.T) {
 	}
 }
 
-// TestMockSubmit_UnbuildableTINStillAccepts: RETRY-01-03 AC3. Transform fails for -0010, so a
+// TestMockSubmit_UnbuildableTINStillAccepts: Transform fails for -0010, so a
 // wire carrying it is forged from an accepted one; Submit must treat it as the accept path.
 func TestMockSubmit_UnbuildableTINStillAccepts(t *testing.T) {
 	a := submission.NewMockAdapter(submission.MockConfig{})

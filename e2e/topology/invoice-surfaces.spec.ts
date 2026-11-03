@@ -6894,6 +6894,10 @@ test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({
   const { fix } = (await (await explained).json()) as ExplainResult
   // The steer marker makes the fake AI propose a fix; only the real AI may answer without one.
   if (!nightlyTarget()) expect(fix, 'the PR lane steers a fix, so the explain answer must carry one').not.toBeNull()
+  if (!nightlyTarget()) {
+    await expect(panel.getByTestId('explain-text')).toContainText('cannot be negative')
+    await expect(panel.getByTestId('explain-fix')).toHaveText('Line 2 · Unit price: -5.00 → 5.00')
+  }
 
   const entry = page.viewportSize()
   try {
@@ -6928,6 +6932,11 @@ test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({
     await expect
       .poll(async () => sameValue((await cell())[fix.field]), { message: `line ${fix.line} ${fix.field} saved as ${fix.value}` })
       .toBe(true)
+    if (!nightlyTarget()) {
+      await expect
+        .poll(async () => (await getInvoice(token, inv.id)).line_items![1].unit_price, { message: 'line 2 unit_price saved' })
+        .toMatch(/^5(\.0+)?$/)
+    }
     const after = (await getInvoice(token, inv.id)).line_items!
     expect(after, 'still three lines').toHaveLength(3)
     // Edit re-inserts the lines, so row ids change; every other field must survive.

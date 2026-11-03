@@ -2181,6 +2181,10 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(res.explanation, 'the explanation carries no link').not.toMatch(/https?:\/\/|www\./i)
       // [pr-fix-guard]: the fake answers a fix, so the leg below cannot pass with none on the PR lane.
       if (!nightlyTarget()) expect(res.fix, 'the PR lane carries a fix').not.toBeNull()
+      if (!nightlyTarget()) {
+        expect(res.explanation).toBe(ANSWER.explanation)
+        expect(res.fix).toMatchObject({ field: 'unit_price', line: 2, current: '-5.00', value: '5.00' })
+      }
       if (res.fix) {
         expect(res.fix, 'a fix names line 2 and its stored value').toMatchObject({ line: 2, current: '-5.00' })
         // explainBareLineFields, internal/invoice/explain.go.

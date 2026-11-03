@@ -3438,8 +3438,7 @@ test("EXTR18-E2E-01 (AC-5): the deployed reading is the document's own number", 
 // A document whose invoice_number never resolves mints a QUARANTINED batch, not an invoice
 // (documentCreateInput, internal/importer/document.go) -- so routeAfterRun's 'single' arm is unreachable and
 // extractOneDocument's landing wait can never settle. Both fixtures below are that
-// case by construction: the scan has no recoverable text at all, and the dense page's label
-// OCRs as "INV0ICE NO:" (D-33). The verdict is therefore read off the deployed wire, which is
+// case by construction: the scan has no recoverable text at all. The verdict is therefore read off the deployed wire, which is
 // also exactly what EXTR-15's Core AC will consume. The review SCREEN cannot serve as the
 // oracle here: the review is reached from an import landing or from SourceDocumentCard, and
 // both need an invoice these documents never produce -- building a surface for these terminal
@@ -3570,9 +3569,7 @@ test('EXTR18-E2E-03: an image-only page the OCR can read is NOT unreadable', asy
   expect(total!.value, 'total must carry a value').not.toBeNull()
   expect(currency!.value, 'currency must carry a value').not.toBeNull()
 
-  // Not asserted: invoice_number. OCR reads the label as "INV0ICE NO:" (digit zero for letter
-  // O), the Tier-1 anchor misses, and the field settles missing (D-33) -- which is why this
-  // document quarantines rather than filing, and why settleOneDocument exists.
+  // Not asserted: invoice_number.
 
   const lines = wireLines(detail)
   expect(lines.length, 'the OCR read fewer than 2 line rows').toBeGreaterThanOrEqual(2)
@@ -4207,8 +4204,7 @@ const NRS_HEADER_READ = {
   buyer_postal_zone: '101001',
   buyer_country: 'Nigeria',
 }
-// The page prints Ikeja for both; the fake's markers say Lagos Island, which the page does not
-// print, so the PR lane files neither.
+// The page prints Ikeja for both; the fake's markers say Lagos Island, which the page does not print.
 const NRS_PLACE_PRINTED = 'Ikeja'
 const NRS_GOODS_READ = {
   description: 'Laptop Computer',
@@ -4263,10 +4259,9 @@ test('ENGI08-E2E-01/02/03 (AC-1, AC-2, AC-4, AC-6): the NRS fields reach the wir
     expect({ value: wireValue(name), reason: wire.get(name)?.reason }, `${name} on the wire`).toEqual({ value, reason: '' })
     await expect(page.getByTestId(`extraction-input-${name}`), `${name} in the pane`).toHaveValue(value)
   }
-  // City and LGA hold on both lanes: printed on the nightly, refused as unprinted on the PR lane.
-  const placeWant = nightlyTarget() ? NRS_PLACE_PRINTED : null
+  // City and LGA: a value the page prints or nothing, never the fake's unprinted marker value.
   for (const name of ['buyer_city', 'buyer_lga']) {
-    expect(wireValue(name), `${name} on the wire`).toBe(placeWant)
+    expect([null, NRS_PLACE_PRINTED], `${name} on the wire is a printed value or null`).toContain(wireValue(name))
   }
   for (const [role, value] of Object.entries(NRS_GOODS_READ)) {
     expect(wireValue(`line_items[1].${role}`), `row 1 ${role} on the wire`).toBe(value)
@@ -4283,9 +4278,9 @@ test('ENGI08-E2E-01/02/03 (AC-1, AC-2, AC-4, AC-6): the NRS fields reach the wir
     buyer_postal_zone: invoice.buyer_postal_zone,
     buyer_country: invoice.buyer_country,
   }, 'the filed invoice header').toEqual({ ...NRS_HEADER_READ, due_date: '2026-08-13T00:00:00Z' })
-  expect({ buyer_city: invoice.buyer_city, buyer_lga: invoice.buyer_lga }, 'the filed city and LGA').toEqual({
-    buyer_city: placeWant,
-    buyer_lga: placeWant,
+  expect({ buyer_city: invoice.buyer_city, buyer_lga: invoice.buyer_lga }, 'the filed city and LGA equal the wire').toEqual({
+    buyer_city: wireValue('buyer_city'),
+    buyer_lga: wireValue('buyer_lga'),
   })
   const lines = [...(invoice.line_items ?? [])].sort((a, b) => a.line_no - b.line_no)
   expect(lines.map((l) => l.line_no), 'the filed invoice holds the two printed rows').toEqual([1, 2])

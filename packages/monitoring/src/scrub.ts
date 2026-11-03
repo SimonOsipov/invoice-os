@@ -44,13 +44,17 @@ function dropCapacity(bag: unknown): void {
   if (bag && typeof bag === 'object') for (const k of CAPACITY_KEYS) delete (bag as Bag)[k]
 }
 
+function dropIdentity(data: Bag): void {
+  delete data['client.address']
+  for (const k of Object.keys(data)) if (k.startsWith('user.')) delete data[k]
+}
+
 function scrubSpanLike<T extends { description?: string; data?: unknown }>(span: T): T {
   const out: T = { ...span }
   if (typeof out.description === 'string') out.description = clean(out.description)
   if (out.data && typeof out.data === 'object') {
     const data = walk(out.data) as Bag
-    delete data['client.address']
-    for (const k of Object.keys(data)) if (k.startsWith('user.')) delete data[k]
+    dropIdentity(data)
     dropCapacity(data)
     out.data = data
   }
@@ -97,7 +101,9 @@ export function scrubTransaction(event: TransactionEvent): TransactionEvent {
   delete out.request
   if (out.measurements) out.measurements = walk(out.measurements, true) as typeof out.measurements
   dropCapacity(out.measurements)
-  dropCapacity((out.contexts as { trace?: { data?: unknown } } | undefined)?.trace?.data)
+  const traceData = (out.contexts as { trace?: { data?: unknown } } | undefined)?.trace?.data
+  if (traceData && typeof traceData === 'object') dropIdentity(traceData as Bag)
+  dropCapacity(traceData)
   if (out.spans) out.spans = out.spans.map((s) => scrubSpanLike(s))
   return out
 }

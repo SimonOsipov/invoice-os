@@ -735,6 +735,23 @@ describe('scrub user and url attributes', () => {
     expect(out.spans![0].data).toEqual({ kept: 'K' })
   })
 
+  it('scrubTransaction_dropsIdentityFromTheRootTraceData', () => {
+    const out = scrubTransaction(as<TransactionEvent>({ type: 'transaction', contexts: { trace: { data: { 'user.id': M, 'client.address': M, 'url.fragment': M, kept: 'K' } } } }))
+    expect(out.contexts!.trace!.data).toEqual({ kept: 'K' })
+  })
+
+  it('scrubSpan_withoutDataAddsNone', () => {
+    const out = scrubSpan(as<SpanJSON>({ span_id: 's', description: 'x' }))
+    expect(out.description).toBe('x')
+    expect(out).not.toHaveProperty('data')
+  })
+
+  it('scrubTransaction_withoutRequestSpansOrContexts', () => {
+    const out = scrubTransaction(as<TransactionEvent>({ type: 'transaction', transaction: '/x' }))
+    expect(out.transaction).toBe('/x')
+    expect(out).not.toHaveProperty('request')
+  })
+
   it('scrubSpan_keepsAKeyThatOnlyStartsWithUser', () => {
     const out = scrubSpan(as<SpanJSON>({ span_id: 's', data: { username: 'x', 'user_agent.original': 'UA' } }))
     expect(out.data).toEqual({ username: 'x', 'user_agent.original': 'UA' })

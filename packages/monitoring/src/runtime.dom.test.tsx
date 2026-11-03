@@ -532,6 +532,28 @@ describe('what the SDK sends', () => {
     for (const needle of [CODE, TIN, SEL, 'USER-NEEDLE-1', '203.0.113.9', 'persona=', 'handoff=']) expect(raw).not.toContain(needle)
   })
 
+  it('navigation_carriesNoIdentityQueryOrRequest', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(performance.timeOrigin + 5000)
+    const sink: string[] = []
+    boot(sink, 'app', { routeName })
+    Sentry.setUser({ id: 'USER-NEEDLE-1', ip_address: '203.0.113.9' })
+    getRootSpan(Sentry.getActiveSpan()!).end()
+    window.history.pushState(null, '', `/invoices/${UUID}?q=${TIN}#${CODE}`)
+    Sentry.startSpan({ name: `button[title="${SEL}"]`, op: 'ui.click', attributes: { 'user.id': 'USER-NEEDLE-1', 'url.query': TIN } }, () => {})
+    const nav = getRootSpan(Sentry.getActiveSpan()!)
+    nav.setAttributes({ 'client.address': '203.0.113.9', 'user.email': 'USER-NEEDLE-1', 'kept.attr': 'K' })
+    nav.end()
+    await Sentry.flush(1000)
+    const tx = items(sink, 'transaction').filter((i) => i.body.contexts.trace.op === 'navigation')
+    expect(tx.length, 'the navigation transaction').toBe(1)
+    expect(tx[0].body.request, 'navigation request').toBeUndefined()
+    expect((tx[0].body.spans as any[]).map((s) => s.description), 'redacted child').toContain('button[title="[redacted]"]')
+    expect(tx[0].body.contexts.trace.data['kept.attr'], 'control: a kept key survives').toBe('K')
+    const raw = sink.join('\n')
+    for (const needle of [TIN, CODE, SEL, 'USER-NEEDLE-1', '203.0.113.9']) expect(raw, needle).not.toContain(needle)
+  })
+
   it('sessionSecrets_neverLeave', async () => {
     const sink: string[] = []
     const stored = JSON.stringify({ v: 1, token: JWT })

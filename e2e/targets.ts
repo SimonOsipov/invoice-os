@@ -31,6 +31,3 @@ export function nightlyTarget(): boolean {
 export function expectedContactsMode(): 'real' | 'fake' {
   return nightlyTarget() ? 'real' : 'fake'
 }
-
-// Skip reason for tests that steer the fake AI or rely on its answers; the nightly's real AI is covered by the AI check.
-export const REAL_AI_COVERED = 'steers or relies on the fake AI; real AI is covered by e2e/nightlyAi'

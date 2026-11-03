@@ -38,3 +38,21 @@ func TestFailureKind_ValidRejectsCaseVariant(t *testing.T) {
 		t.Error(`FailureKind("PAYLOAD_NOT_BUILT").Valid() = true, want false`)
 	}
 }
+
+func TestFailureKind_Resendable(t *testing.T) {
+	cases := []struct {
+		kind submission.FailureKind
+		want bool
+	}{
+		{submission.FailurePayloadNotBuilt, true},
+		{submission.FailureNeverAcknowledged, true},
+		{submission.FailureAcknowledgedNoVerdict, false},
+		{"", false},
+		{"NEVER_ACKNOWLEDGED", false},
+	}
+	for _, c := range cases {
+		if got := c.kind.Resendable(); got != c.want {
+			t.Errorf("%q.Resendable() = %v, want %v", c.kind, got, c.want)
+		}
+	}
+}

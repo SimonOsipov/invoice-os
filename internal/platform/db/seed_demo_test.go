@@ -1555,12 +1555,57 @@ func TestSeedSubmissionJobsAreTerminalAndLinkToSeededInvoices(t *testing.T) {
 		if !terminalJobStates[j.state] {
 			t.Errorf("%s: submission_jobs.state = %q, want a terminal state (terminalJobStates) -- a live queued/submitting/pending job polls forever", j.invoiceNumber, j.state)
 		}
-		if j.attempts < 1 {
+		if j.state != "failed" && j.attempts < 1 {
 			t.Errorf("%s: submission_jobs.attempts = %d, want >= 1 -- a terminal job made at least one real attempt", j.invoiceNumber, j.attempts)
 		}
 		if j.adapter != "mock" {
 			t.Errorf("%s: submission_jobs.adapter = %q, want %q -- the sandbox adapter is the only one wired for the demo environment", j.invoiceNumber, j.adapter, "mock")
 		}
+	}
+}
+
+// TestSeedDemoPayloadNotBuiltHasAFailedJob: the demo payload_not_built invoice carries the
+// one failed job a real transform failure leaves, so the customer can send it again.
+func TestSeedDemoPayloadNotBuiltHasAFailedJob(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+
+	resetBothDemoTenants(t, pool)
+
+	if err := db.Seed(context.Background(), superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+
+	type job struct {
+		state, key string
+		pollRef    *string
+	}
+	rows, err := pool.Query(context.Background(),
+		`SELECT j.state, j.idempotency_key, j.poll_ref
+		   FROM submission_jobs j
+		   JOIN invoices i ON i.tenant_id = j.tenant_id AND i.id = j.invoice_id
+		  WHERE j.tenant_id = ANY($1) AND i.invoice_number = 'DEMO-2026-2004'`,
+		[]string{demoTenantID, honeywellTenantID})
+	if err != nil {
+		t.Fatalf("query DEMO-2026-2004 jobs: %v", err)
+	}
+	defer rows.Close()
+	var jobs []job
+	for rows.Next() {
+		var j job
+		if err := rows.Scan(&j.state, &j.key, &j.pollRef); err != nil {
+			t.Fatal(err)
+		}
+		jobs = append(jobs, j)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("DEMO-2026-2004 has %d submission_jobs rows, want exactly 1", len(jobs))
+	}
+	if j := jobs[0]; j.state != "failed" || j.key != "demo-seed:DEMO-2026-2004" || j.pollRef != nil {
+		t.Errorf("DEMO-2026-2004 job = %+v, want state failed, key demo-seed:DEMO-2026-2004 and no poll_ref", j)
 	}
 }
 

@@ -22,3 +22,6 @@ func (k FailureKind) Valid() bool {
 		return false
 	}
 }
+
+// Resendable stub: the executor replaces it (RETRY-01-01).
+func (k FailureKind) Resendable() bool { return false }

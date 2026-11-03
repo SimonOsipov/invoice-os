@@ -1886,3 +1886,10 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 func isNoteRefusal(err error) bool { _, ok := NoteRefusalMessage(err); return ok }
+
+// SendAgainHandler stub: the executor replaces it (RETRY-01-01).
+func SendAgainHandler(sendAgain func(ctx context.Context, id string) (Invoice, error), callerRole func(ctx context.Context) (string, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "send again not implemented")
+	}
+}

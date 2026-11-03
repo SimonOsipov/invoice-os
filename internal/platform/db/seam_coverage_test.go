@@ -1199,6 +1199,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/invoices/{id}/keep-as-is":                      {verdict: scCovered},
 	"POST /v1/invoices/{id}/notes":                           {verdict: scCovered},
 	"POST /v1/invoices/{id}/resolved-outside":                {verdict: scCovered},
+	"POST /v1/invoices/{id}/send-again":                      {verdict: scCovered},
 	"POST /v1/invoices/{id}/transitions":                     {verdict: scCovered},
 	"POST /v1/invoices/{id}/validate":                        {verdict: scCovered},
 	"POST /v1/validate/batch":                                {verdict: scExempt, reason: "peer call with no caller identity by construction; the gateway strips any client-supplied X-S2S-Token"},

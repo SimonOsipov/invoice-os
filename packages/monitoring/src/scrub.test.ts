@@ -710,3 +710,33 @@ describe('apiRoute', () => {
     expect(apiRoute('https://u:p@gw.test/api/x?q=1')).toBe('/api/x')
   })
 })
+
+describe('scrub user and url attributes', () => {
+  const data = {
+    'user.id': M,
+    'user.email': M,
+    'user.ip_address': M,
+    'user.name': M,
+    'url.query': M,
+    'url.fragment': M,
+    'http.query': M,
+    'http.fragment': M,
+    'user_agent.original': 'UA',
+    'http.method': 'GET',
+  }
+
+  it('scrubSpan_dropsUserAndUrlAttributes', () => {
+    const out = scrubSpan(as<SpanJSON>({ span_id: 's', data }))
+    expect(Object.keys(out.data!).sort()).toEqual(['http.method', 'user_agent.original'])
+  })
+
+  it('scrubTransaction_dropsUserAndUrlAttributesInChildSpans', () => {
+    const out = scrubTransaction(as<TransactionEvent>({ type: 'transaction', spans: [{ span_id: 's', data: { 'user.id': M, 'url.fragment': M, kept: 'K' } }] }))
+    expect(out.spans![0].data).toEqual({ kept: 'K' })
+  })
+
+  it('scrubSpan_keepsAKeyThatOnlyStartsWithUser', () => {
+    const out = scrubSpan(as<SpanJSON>({ span_id: 's', data: { username: 'x', 'user_agent.original': 'UA' } }))
+    expect(out.data).toEqual({ username: 'x', 'user_agent.original': 'UA' })
+  })
+})

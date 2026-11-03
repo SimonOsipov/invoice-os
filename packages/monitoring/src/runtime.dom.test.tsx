@@ -505,15 +505,31 @@ describe('captureApiFailure, odd inputs', () => {
 describe('what the SDK sends', () => {
   it('pageload_isNamedByRouteAndCarriesNoQuery', async () => {
     const sink: string[] = []
-    await pageloadFlow(sink)
+    window.history.replaceState(null, '', `/invoices/${UUID}?persona=firm&handoff=${CODE}&q=${TIN}`)
+    boot(sink, 'app', { routeName })
+    Sentry.setUser({ id: 'USER-NEEDLE-1', ip_address: '203.0.113.9' })
+    Sentry.startSpan(
+      { name: `button[title="${SEL}"]`, op: 'ui.click', attributes: { 'url.fragment': CODE, 'client.address': '203.0.113.9' } },
+      () => {},
+    )
+    Sentry.captureException(new Error('on-page'))
+    const root = getRootSpan(Sentry.getActiveSpan()!)
+    root.setAttributes({ 'client.address': '203.0.113.9', 'url.fragment': CODE, 'user.id': 'USER-NEEDLE-1', 'kept.attr': 'K' })
+    root.end()
+    await Sentry.flush(1000)
     const tx = items(sink, 'transaction')
     expect(tx.length, 'the page-load transaction').toBe(1)
     expect(tx[0].body.transaction).toBe('/invoices/:id')
+    expect(tx[0].body.request, 'transaction request').toBeUndefined()
+    expect((tx[0].body.spans as any[]).map((s) => s.description), 'redacted child').toContain('button[title="[redacted]"]')
+    const data = tx[0].body.contexts.trace.data
+    for (const k of ['client.address', 'url.fragment', 'user.id']) expect(data, k).not.toHaveProperty(k)
+    expect(data['kept.attr'], 'control: a kept key survives').toBe('K')
     const ev = items(sink, 'event')
     expect(ev.length, 'the on-page error').toBe(1)
     expect(ev[0].body.request.url).not.toContain('?')
     const raw = sink.join('\n')
-    for (const needle of [CODE, TIN, 'persona=', 'handoff=']) expect(raw).not.toContain(needle)
+    for (const needle of [CODE, TIN, SEL, 'USER-NEEDLE-1', '203.0.113.9', 'persona=', 'handoff=']) expect(raw).not.toContain(needle)
   })
 
   it('sessionSecrets_neverLeave', async () => {

@@ -342,7 +342,7 @@ describe('what the landing SDK sends', () => {
     Sentry.captureException(new Error('after-url-edit'))
     pageLoad().end()
     await Sentry.flush(1000)
-    expect(preScrub.join('\n'), 'control: the SDK reads the referrer').toContain('REFERRER-NEEDLE')
+    expect(preScrub.join('\n'), 'control: the SDK collects a Referer header, filtered').toMatch(/"Referer":"\[Filtered\]"/)
     const events = items(sink, 'event')
     expect(events.length, 'the after-url-edit error').toBe(1)
     expect(events[0].body.request.url, 'control: the event carries a url').toContain('/privacy')

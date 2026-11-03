@@ -2,6 +2,7 @@ import { getDefaultIntegrations } from '@sentry/react'
 import type { BrowserOptions } from '@sentry/react'
 import { describe, expect, it } from 'vitest'
 import type { Breadcrumb, ErrorEvent, EventHint, SpanJSON, TransactionEvent } from '@sentry/core'
+import { scrubTransaction } from './scrub'
 import { nameRouteSpan, sentryOptions, type MonitoringConfig, type Service } from './options'
 import { markReported } from './reported'
 
@@ -31,7 +32,7 @@ function integrationNames(o: BrowserOptions): string[] {
   return apply(getDefaultIntegrations({})).map((i) => i.name)
 }
 
-const D2 = { userInfo: false, cookies: false, httpHeaders: false, httpBodies: [], urlQueryParams: false }
+const D2 = { userInfo: false, cookies: false, httpHeaders: { request: { allow: ['user-agent'] }, response: false }, httpBodies: [], urlQueryParams: false }
 
 describe('sentryOptions', () => {
   it('sentryOptions_emptyDsnIsOff', () => {
@@ -148,6 +149,16 @@ describe('sentryOptions more', () => {
       expect(o.beforeBreadcrumb!({ category: 'console', message: M } as Breadcrumb, {})).toBeNull()
       const crumb = o.beforeBreadcrumb!({ category: 'fetch', data: { url: `https://a.test/x?q=${M}` } } as Breadcrumb, {})
       expect(crumb?.data?.url).toBe('https://a.test/x')
+    }
+  })
+
+  it('sentryOptions_everyServiceUsesTheStaticLifecycle', () => {
+    for (const service of SERVICES) {
+      const o = build({ service })
+      expect(o.traceLifecycle, service).toBe('static')
+      expect(o.beforeSendTransaction, service).toBe(scrubTransaction)
+      const span = (o.beforeSendSpan as unknown as (s: SpanJSON) => SpanJSON)({ span_id: 's', description: 'b[title="M"]', data: {} } as unknown as SpanJSON)
+      expect(span.description, service).toBe('b[title="[redacted]"]')
     }
   })
 

@@ -464,6 +464,10 @@ test('AIRL-01: a placement chip stays inside its column at every swept width', a
   expect(await columns.count(), 'control: at least one column must render, or the sweep below is vacuous').toBeGreaterThan(0)
   const anyChip = columns.locator('span[draggable]')
   expect(await anyChip.count(), 'control: at least one placed chip must render, or the sweep below is vacuous').toBeGreaterThan(0)
+  // The PR lane's fake suggests a tag from the CSV marker; alias chips alone would not prove it.
+  if (!nightlyTarget()) {
+    await expect(page.getByTestId('map-suggested-badge').first(), 'the steered suggestion must place a SUGGESTED badge').toBeVisible()
+  }
 
   const entryViewport = page.viewportSize()
   const widthsMeasured: number[] = []
@@ -625,7 +629,7 @@ test('AIR07-E2E-03: a title-row file maps and imports from row 3', async ({ page
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-test("AIR07-E2E-04: an unsteered file opens exactly today's Map step", async ({ page }) => {
+test("AIR07-E2E-04: an oversized cell opens exactly today's Map step", async ({ page }) => {
   test.setTimeout(240_000)
   const errors = collectErrors(page)
 

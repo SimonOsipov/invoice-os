@@ -168,6 +168,41 @@ test.describe('cross-tenant isolation (API E2E, over the deployed gateway)', () 
     expect(afterAttack.name).toBe(entityA.name)
     expect(afterAttack.status).toBe('active')
   })
+
+  // The gateway overwrites X-Tenant-ID/X-User-ID/X-User-Role from the token (internal/gateway/gateway.go).
+  // B's role equals A's (admin), so only the tenant and user headers discriminate (story D11).
+  test('identity comes from the token: forged headers and tenant_id resolve and write to A', async () => {
+    const tokenA = await login(PERSONAS.A)
+    const tokenB = await login(PERSONAS.B)
+    const forged = {
+      Authorization: `Bearer ${tokenA}`,
+      'X-Tenant-ID': PERSONAS.B.tenantId,
+      'X-User-ID': PERSONAS.B.subject,
+      'X-User-Role': PERSONAS.B.role,
+    }
+
+    const meRes = await rawFetch(`/api/tenancy/v1/me?tenant_id=${PERSONAS.B.tenantId}`, { headers: forged })
+    expect(meRes.status).toBe(200)
+    const meBody = meRes.body as { tenant: { id: string }; user: { id: string } }
+    expect(meBody.tenant.id).toBe(PERSONAS.A.tenantId)
+    expect(meBody.user.id).toBe(PERSONAS.A.subject)
+
+    const tin = freshTin()
+    const name = `NCOV-03 forged identity ${tin}`
+    const created = await rawFetch(`/api/portfolio/v1/entities?tenant_id=${PERSONAS.B.tenantId}`, {
+      method: 'POST',
+      headers: forged,
+      body: { name, tin, tenant_id: PERSONAS.B.tenantId },
+    })
+    expect(created.status).toBe(201)
+    const id = (created.body as { id: string }).id
+
+    expect((await getEntity(tokenA, id)).id).toBe(id)
+
+    await assertNotFoundAcrossTenant(() => getEntity(tokenB, id), 'B reads the entity written with forged headers')
+    const { entities } = await listEntities(tokenB, { q: name, limit: 200 })
+    expect(entities.map((e) => e.id)).not.toContain(id)
+  })
 })
 
 // cleanInvoiceFields(): own copy of persona-inhouse.spec.ts's fixture (no cross-suite

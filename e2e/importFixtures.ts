@@ -47,6 +47,17 @@ export const PERF_MAPPING: Record<string, string> = {
   line_unit_price: 'Unit Price',
 }
 
+// PR_LANE_MAPPING: PERF_MAPPING minus buyer_name and line_description, the nine fields the
+// PR lane (fake AI) ends with: 7 alias fields plus hand-placed invoice_number and subtotal.
+export const PR_LANE_MAPPING: Record<string, string> = Object.fromEntries(
+  Object.entries(PERF_MAPPING).filter(([field]) => field !== 'buyer_name' && field !== 'line_description'),
+)
+
+// The Item cell exceeds the model's context, so a real call is refused; no marker, so the fake answers blank.
+export function buildOversizedCellCsv(): string {
+  return `${PERF_HEADER}\nINV-OVR-1,2026-03-31,12345678-0001,Buyer,NGN,100,7.5,107.5,${'7'.repeat(6_000_000)},1,100\n`
+}
+
 // buildPerfCsv(): a 500-invoice / 1,500-row CSV for ONE entity -- 3 clean line rows
 // per invoice, header fields (issue_date/buyer_tin/buyer/currency/subtotal/vat/total)
 // identical within each invoice's group, ISO dates, distinct invoice numbers

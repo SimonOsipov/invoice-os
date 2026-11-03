@@ -214,3 +214,21 @@ export function sameRect(a: Rect, b: Rect, slackPx = 1): boolean {
     Math.abs(a.height - b.height) <= slackPx
   )
 }
+
+// Map step with exactly `placements` ({field: header}), whatever the AI or alias placed first.
+export async function setExactMapping(page: Page, placements: Record<string, string>): Promise<void> {
+  await expect(page.getByText('Map fields to columns ·', { exact: false })).toBeVisible({ timeout: 30_000 })
+  const columns = page.getByTestId('map-column')
+  const placed = columns.locator('span[draggable="true"] > span:last-child')
+  for (let left = await placed.count(); left > 0; left = await placed.count()) {
+    await placed.first().click()
+    await expect(placed).toHaveCount(left - 1)
+  }
+  const mappable = columns.filter({ hasNotText: 'unnamed — not mappable' })
+  await expect(mappable.getByText('drop field', { exact: true })).toHaveCount(await mappable.count())
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  for (const [field, header] of Object.entries(placements)) {
+    await page.getByRole('button', { name: new RegExp(`^${field}\\*?$`, 'i') }).click()
+    await columns.filter({ has: page.locator('div.mono', { hasText: new RegExp(`^${escape(header)}$`) }) }).click()
+  }
+}

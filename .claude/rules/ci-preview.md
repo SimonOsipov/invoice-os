@@ -22,7 +22,7 @@ paths:
 - The nightly's `nightly-ai` job runs after `contacts` and before `email`.
 - The nightly's `email` job runs `preview.sh mail-on nightly` after E2E ends. It mounts `GOTRUE_SMTP_PASS` on `auth-nightly`, turns auto-confirm off there and mounts `RESEND_SENDING_KEY` on `tenancy-nightly`.
 - Finish every other nightly job before `email`. Only `nightly-teardown` and `contacts-cleanup` follow it, and `contacts-cleanup` needs `nightly-teardown`.
-- The nightly contact guard runs in `prepare-env` before `deploy`: `Check the contact secrets`, then `token_version`, then `nightlycontacts start`. A refusal deploys nothing.
+- The nightly contact guard runs in `prepare-env` before `deploy`: `Check the contact secrets`, then `token_version`, then `nightlycontacts start`. A refusal deploys nothing. `nightlycontacts` refuses the portal whose id is in `HUBSPOT_LIVE_PORTAL_ID`, and refuses to run without it.
 - `notifications-nightly` and `worker-nightly` mount `nightly-resend-read-key` as `RESEND_API_KEY`.
 - The `email` job needs four secrets: `nightly-gotrue-smtp-pass`, `nightly-resend-sending-key`, `nightly-resend-read-key`, `nightly-resend-receiving-domain`.
 - Recreate `pr_<N>` on every deploy with the `preview-db` job. Cloud SQL refuses `session_replication_role`, so no reset runs in place.

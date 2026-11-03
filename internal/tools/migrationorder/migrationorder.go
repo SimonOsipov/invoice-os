@@ -10,6 +10,9 @@
 // that -base holds and -main does not is checked against -main's newest only: production has
 // not applied the old name. Exact means equal blob ids, not git's R100.
 //
+// A migration that -base holds and the change deletes, or renames away (other than that exempt
+// rename), fails unless the change adds "<file name>: <reason>" to migrations/deleted.txt.
+//
 // Usage:
 //
 //	go run ./internal/tools/migrationorder -base <rev> [-head HEAD] [-main origin/main]
@@ -62,13 +65,30 @@ func Split(changes []Change, onBase, onMain []string, exempt bool) (vsBase, vsMa
 	for _, c := range changes {
 		switch {
 		case !kept[c.New]:
-		case exempt && c.Exact && c.Old != "" && base[c.Old] && !main[c.Old]:
+		case exemptRename(c, base, main, exempt):
 			vsMain = append(vsMain, c.New)
 		default:
 			vsBase = append(vsBase, c.New)
 		}
 	}
 	return vsBase, vsMain
+}
+
+// exemptRename reports an exact rename to a migration of a path on base and not on main, when exempt is true.
+func exemptRename(c Change, base, main map[string]bool, exempt bool) bool {
+	return exempt && c.Exact && c.Old != "" && isMigration(c.New) && base[c.Old] && !main[c.Old]
+}
+
+// Vacated returns the old name of every rename that Split does not exempt.
+func Vacated(changes []Change, onBase, onMain []string, exempt bool) []string {
+	base, main := toSet(onBase), toSet(onMain)
+	var out []string
+	for _, c := range changes {
+		if c.Old != "" && !exemptRename(c, base, main, exempt) {
+			out = append(out, c.Old)
+		}
+	}
+	return out
 }
 
 func toSet(s []string) map[string]bool {

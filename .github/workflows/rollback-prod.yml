@@ -26,9 +26,13 @@ jobs:
       REGION: africa-south1
     steps:
       - uses: actions/checkout@v4
+      - name: Check the Actions variables
+        env:
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+        run: bash scripts/ci/require-vars.sh GCP_WIF_PROVIDER
       - uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: projects/428987361227/locations/global/workloadIdentityPools/github/providers/github-actions
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: deploy-prod@ascomply-prod.iam.gserviceaccount.com
       - name: Move traffic to the rollback revisions
         run: bash scripts/ci/gcp-traffic.sh rollback moved.txt

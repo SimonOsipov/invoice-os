@@ -8,7 +8,7 @@ const h = vi.hoisted(() => ({ captureApiFailure: vi.fn() }))
 // Only the Sentry edge is mocked, so countsAsIssue runs for real.
 vi.mock('@invoice-os/monitoring/report', () => ({ captureApiFailure: h.captureApiFailure }))
 
-const TARGET: HubSpotTarget = { portalId: '148915098', formGuid: 'abc-123' }
+const TARGET: HubSpotTarget = { portalId: '1234567', formGuid: 'abc-123' }
 const FULL_LEAD: DemoLead = {
   name: 'Ada Okafor',
   email: 'ada@okafor.ng',

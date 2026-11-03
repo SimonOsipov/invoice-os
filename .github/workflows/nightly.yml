@@ -41,10 +41,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Check the Actions variables
+        env:
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+        run: bash scripts/ci/require-vars.sh GCP_WIF_PROVIDER
       - uses: google-github-actions/auth@v3
         continue-on-error: true
         with:
-          workload_identity_provider: projects/428987361227/locations/global/workloadIdentityPools/github/providers/github-actions
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: deploy-prod@ascomply-prod.iam.gserviceaccount.com
       - name: Read the gateway token and the auth image
         continue-on-error: true

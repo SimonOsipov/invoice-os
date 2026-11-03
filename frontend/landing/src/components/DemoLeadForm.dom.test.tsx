@@ -38,7 +38,7 @@ afterEach(async () => {
 })
 
 function openGate(): void {
-  vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '148915098')
+  vi.stubEnv('VITE_HUBSPOT_PORTAL_ID', '1234567')
   vi.stubEnv('VITE_HUBSPOT_FORM_GUID', 'abc-123')
 }
 

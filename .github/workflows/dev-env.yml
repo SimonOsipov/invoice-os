@@ -23,7 +23,8 @@ permissions:
 
 env:
   PR: ${{ github.event.pull_request.number || 'nightly' }}
-  WIF_PROVIDER: projects/428987361227/locations/global/workloadIdentityPools/github/providers/github-actions
+  WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+  HUBSPOT_PORTAL_ID: ${{ vars.HUBSPOT_PORTAL_ID }}
   DEPLOYER: deploy-preview@ascomply-preview.iam.gserviceaccount.com
 
 jobs:
@@ -160,6 +161,10 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+      - name: Check the Actions variables
+        env:
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+        run: bash scripts/ci/require-vars.sh GCP_WIF_PROVIDER
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
@@ -187,6 +192,11 @@ jobs:
       hubspot_token_version: ${{ steps.token_version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+      - name: Check the Actions variables
+        env:
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          HUBSPOT_PORTAL_ID: ${{ vars.HUBSPOT_PORTAL_ID }}
+        run: bash scripts/ci/require-vars.sh GCP_WIF_PROVIDER HUBSPOT_PORTAL_ID
       # `prenv jwk-es256` generates the PR's GoTrue key.
       - uses: actions/setup-go@v5
         with:
@@ -242,7 +252,7 @@ jobs:
           domain=$(bash scripts/ci/preview.sh mail-domain "$PR")
           echo "::add-mask::$domain"
           mkdir -p "$RUNNER_TEMP/contacts"
-          HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain HUBSPOT_DEAL_STAGE=$(bash scripts/ci/preview.sh deal-stage) \
+          HUBSPOT_LIVE_PORTAL_ID=$HUBSPOT_PORTAL_ID HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain HUBSPOT_DEAL_STAGE=$(bash scripts/ci/preview.sh deal-stage) \
             go run ./internal/tools/nightlycontacts start -out "$RUNNER_TEMP/contacts/start.json"
       - name: Upload the contacts start result
         if: always() && needs.changes.outputs.nightly == 'true'
@@ -296,6 +306,11 @@ jobs:
       SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
+      - name: Check the Actions variables
+        env:
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          HUBSPOT_PORTAL_ID: ${{ vars.HUBSPOT_PORTAL_ID }}
+        run: bash scripts/ci/require-vars.sh GCP_WIF_PROVIDER HUBSPOT_PORTAL_ID
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
@@ -340,7 +355,7 @@ jobs:
               --build-arg "VITE_OPS_URL=$ops_console_url"
               --build-arg "VITE_SUPPORT_URL=$support_console_url"
               --build-arg VITE_GA_MEASUREMENT_ID=G-E409H76XYY
-              --build-arg VITE_HUBSPOT_PORTAL_ID=148915098
+              --build-arg "VITE_HUBSPOT_PORTAL_ID=$HUBSPOT_PORTAL_ID"
               --build-arg VITE_HUBSPOT_FORM_GUID=8e9cf78f-e6a6-4128-9b3d-8c09d5710daf
               --build-arg VITE_REGISTRATION_OPEN=true
             )
@@ -895,7 +910,7 @@ jobs:
           domain=$(bash scripts/ci/preview.sh mail-domain "$PR")
           echo "::add-mask::$domain"
           mkdir -p "$RUNNER_TEMP/contacts"
-          HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain HUBSPOT_DEAL_STAGE=$(bash scripts/ci/preview.sh deal-stage) \
+          HUBSPOT_LIVE_PORTAL_ID=$HUBSPOT_PORTAL_ID HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain HUBSPOT_DEAL_STAGE=$(bash scripts/ci/preview.sh deal-stage) \
             go run ./internal/tools/nightlycontacts check -out "$RUNNER_TEMP/contacts/check.json"
       - name: Upload the contacts check result
         if: always()
@@ -1130,7 +1145,7 @@ jobs:
           domain=$(bash scripts/ci/preview.sh mail-domain "$PR")
           echo "::add-mask::$domain"
           mkdir -p "$RUNNER_TEMP/contacts" nightly-results
-          HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain \
+          HUBSPOT_LIVE_PORTAL_ID=$HUBSPOT_PORTAL_ID HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain \
             go run ./internal/tools/nightlycontacts finish -in "$RUNNER_TEMP/contacts" -started "$started" -out nightly-results/hubspot.json
       - name: Upload the nightly results
         if: always()

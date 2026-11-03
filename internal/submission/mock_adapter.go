@@ -90,6 +90,8 @@ var (
 	// ErrMockUnavailable accompanies the synthesized 503. A 503 is a transport verdict, not a
 	// validation one, so it is Retryable and never Rejected.
 	ErrMockUnavailable = errors.New("submission: mock APP is temporarily unavailable")
+	// ErrMockUnbuildable is Transform's failure for the unbuildable trigger: no payload exists.
+	ErrMockUnbuildable = errors.New("submission: mock APP cannot build the payload")
 )
 
 // MockConfig is the mock's entire configuration surface ([one-latency-knob]).
@@ -170,6 +172,9 @@ func (a *MockAdapter) Version() string { return mockAdapterVersion }
 // Transform is exactly mockWireFrom and nothing else, so there is only ever one marshal path
 // (mock_wire.go:204). ctx is unused on purpose: the projection is pure.
 func (a *MockAdapter) Transform(_ context.Context, c Canonical) (Wire, error) {
+	if c.Buyer.TIN != nil && mockTriggerFor(*c.Buyer.TIN) == mockTriggerUnbuildable {
+		return nil, ErrMockUnbuildable
+	}
 	return mockWireFrom(c)
 }
 

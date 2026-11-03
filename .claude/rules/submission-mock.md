@@ -18,6 +18,7 @@ paths:
 - Let an unallocated or absent buyer TIN take the accept path.
 - Use `99999999-0004` to exercise retry-and-give-up. It returns a retryable 503 on every attempt.
 - Use `99999999-0007` to exercise a failure before the wire. `ReachedWire` stays false and the connect phase waits nothing.
+- Use `99999999-0010` to exercise a failure before the payload is built. `Transform` fails, so the invoice fails as `payload_not_built`.
 - Keep `slow` and `timeout` separate. `slow` records a 200 after a long wait. `timeout` records no response and reports `ReachedWire` true.
 - Read no clock, no random source and no counter to decide an outcome or mint an identifier. The mock opens no socket.
 - Key the IRN on document identity: invoice number and issue date. Never hash the wire into it.

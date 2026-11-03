@@ -3085,6 +3085,7 @@ func TestSeedSeedsALineItemFreeDemoInvoice(t *testing.T) {
 		reserved := map[string]bool{
 			"99999999-0001": true, "99999999-0002": true, "99999999-0003": true, "99999999-0004": true,
 			"99999999-0005": true, "99999999-0006": true, "99999999-0007": true,
+			"99999999-0010": true,
 		}
 		if reserved[buyerTIN] {
 			t.Errorf("buyer_tin = %s, want an ordinary TIN -- not one of the reserved triggers (99999999-0001..0007)", buyerTIN)

@@ -140,6 +140,7 @@ const (
 	maTINSlow        = "99999999-0005"
 	maTINTimeout     = "99999999-0006"
 	maTINConnection  = "99999999-0007"
+	maTINUnbuildable = "99999999-0010" // mock_script.go mockTINUnbuildable
 
 	// maTINUnallocated is inside the reserved block but deliberately never given a trigger
 	// (mock_script.go:89-92 mockNeverAllocate) -- it must take the ordinary accept path
@@ -3767,5 +3768,26 @@ func TestSelect_AdapterNameIsCaseSensitive(t *testing.T) {
 				t.Errorf("Select(..., %q) adapter = %+v, want nil", name, a)
 			}
 		})
+	}
+}
+
+// TestMockTransform_UnbuildableTriggerFails: RETRY-01-03 AC1.
+func TestMockTransform_UnbuildableTriggerFails(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	w, err := a.Transform(context.Background(), maCanonical(maTINUnbuildable, "INV-MOCK-0001"))
+	if w != nil || !errors.Is(err, submission.ErrMockUnbuildable) {
+		t.Fatalf("Transform(%s) = (%v, %v), want (nil, ErrMockUnbuildable)", maTINUnbuildable, w, err)
+	}
+}
+
+// TestMockTransform_OtherTriggersStillBuild: RETRY-01-03 AC1, the other allocated TINs build.
+func TestMockTransform_OtherTriggersStillBuild(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	for _, tin := range []string{maTINAccept, maTINReject, maTINPending, maTINUnavailable,
+		maTINSlow, maTINTimeout, maTINConnection, maTINUnallocated, ""} {
+		w, err := a.Transform(context.Background(), maCanonical(tin, "INV-MOCK-0001"))
+		if err != nil || len(w) == 0 {
+			t.Errorf("Transform(%q) = (%d bytes, %v), want a wire and nil error", tin, len(w), err)
+		}
 	}
 }

@@ -200,9 +200,9 @@ func msLuhnValid(t *testing.T, tin string) bool {
 // existed.
 func msRequireAllocations(t *testing.T) {
 	t.Helper()
-	const want = 7
+	const want = 8
 	if len(mockAllocations) != want {
-		t.Fatalf("mockAllocations has %d entries, want %d (99999999-0001 .. -0007) -- every "+
+		t.Fatalf("mockAllocations has %d entries, want %d (99999999-0001 .. -0007, -0010) -- every "+
 			"per-allocation assertion below would otherwise pass vacuously", len(mockAllocations), want)
 	}
 }
@@ -269,6 +269,7 @@ func TestMockTriggerFor_AllocationTable(t *testing.T) {
 		{TIN: mockTINSlow, Trigger: mockTriggerSlow},
 		{TIN: mockTINTimeout, Trigger: mockTriggerTimeout},
 		{TIN: mockTINConnection, Trigger: mockTriggerConnection},
+		{TIN: mockTINUnbuildable, Trigger: mockTriggerUnbuildable},
 	}
 
 	t.Run("lookup", func(t *testing.T) {
@@ -1286,6 +1287,7 @@ var msKnownTINOutcomes = map[string]mockTrigger{
 	mockTINSlow:        mockTriggerSlow,
 	mockTINTimeout:     mockTriggerTimeout,
 	mockTINConnection:  mockTriggerConnection,
+	mockTINUnbuildable: mockTriggerUnbuildable,
 }
 
 // TestMockTriggerFor_SingleCharacterMutationsOfEachAllocatedTIN mutates every one of the 13

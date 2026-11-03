@@ -64,6 +64,7 @@ const (
 	mockTriggerSlow        mockTrigger = "slow"
 	mockTriggerTimeout     mockTrigger = "timeout"
 	mockTriggerConnection  mockTrigger = "connection"
+	mockTriggerUnbuildable mockTrigger = "unbuildable"
 )
 
 // The reserved block: 99999999-#### , all 10 000 values, reserved permanently. The 8-digit
@@ -80,6 +81,7 @@ const (
 	mockTINSlow        = "99999999-0005"
 	mockTINTimeout     = "99999999-0006"
 	mockTINConnection  = "99999999-0007"
+	mockTINUnbuildable = "99999999-0010"
 )
 
 // mockNeverAllocate lists reserved values that must NEVER be given a trigger.
@@ -97,7 +99,7 @@ type mockAllocation struct {
 	Trigger mockTrigger
 }
 
-// mockAllocations is an ordered SLICE, not a map: seven entries make a linear scan free,
+// mockAllocations is an ordered SLICE, not a map: eight entries make a linear scan free,
 // declaration order is stable for the specs, and a map would invite
 // nondeterministic range order into a package whose entire point is determinism.
 //
@@ -110,6 +112,7 @@ var mockAllocations = []mockAllocation{
 	{TIN: mockTINSlow, Trigger: mockTriggerSlow},
 	{TIN: mockTINTimeout, Trigger: mockTriggerTimeout},
 	{TIN: mockTINConnection, Trigger: mockTriggerConnection},
+	{TIN: mockTINUnbuildable, Trigger: mockTriggerUnbuildable},
 }
 
 // The APP's own response codes. Foreign-looking on purpose: nothing about them resembles our

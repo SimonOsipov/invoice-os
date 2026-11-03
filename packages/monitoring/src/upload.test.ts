@@ -94,7 +94,7 @@ describe('sourcemapUploadOptions', () => {
     const opts = sourcemapUploadOptions(appDir, {})
     expect(opts.url).toBe('https://de.sentry.io')
     expect(opts.project).toBe('asc-frontend')
-    expect('org' in opts).toBe(false)
+    expect(opts.org).toBe('as-comply')
     expect(opts.telemetry).toBe(false)
   })
 

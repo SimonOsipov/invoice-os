@@ -67,7 +67,7 @@ func TestPortalGuard_RefusesAndStops(t *testing.T) {
 		body   string
 		detail string
 	}{
-		"live portal": {200, `{"portalId":148915098}`, "live portal"},
+		"live portal": {200, `{"portalId":1234567}`, "live portal"},
 		"401":         {401, `{"portalId":999}`, "answered 401"},
 		"bad JSON":    {200, `not json`, "no usable answer"},
 		"id zero":     {200, `{"portalId":0}`, "portal id is missing"},
@@ -103,7 +103,7 @@ func TestPortalGuard_AcceptsATestPortal(t *testing.T) {
 
 func TestFinish_LivePortalDeletesNothingFromHubSpot(t *testing.T) {
 	w := newWorld()
-	w.portalBody = `{"portalId":148915098}`
+	w.portalBody = `{"portalId":1234567}`
 	w.hsContacts = []hsContactRow{{"1", "a@example.com", ""}}
 	w.rsContacts = []rsContactRow{{"r1", "a@example.com", "2026-01-01T00:00:00Z"}}
 	res := finish(t, w, baseEnv())
@@ -699,7 +699,7 @@ func TestSweep_DeletesARunDealWithNoContact(t *testing.T) {
 
 func TestSweep_LivePortalDeletesNoDeal(t *testing.T) {
 	w := newWorld()
-	w.portalBody = `{"portalId":148915098}`
+	w.portalBody = `{"portalId":1234567}`
 	w.hsDeals = []hsDealRow{{"d1", "Acme — sign-up", testStage, "none"}}
 	finish(t, w, baseEnv())
 	if len(w.hsDeals) != 1 || len(dealCalls(w, "GET"))+len(dealCalls(w, "DELETE")) != 0 {
@@ -829,5 +829,70 @@ func TestPost_RetriesAColdGatewayWithALongTimeout(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLivePortalEnv_MissingRefusesToRun(t *testing.T) {
+	for _, phase := range []string{"start", "check", "finish"} {
+		for name, set := range map[string]bool{"unset": false, "empty": true} {
+			t.Run(phase+" "+name, func(t *testing.T) {
+				w := newWorld()
+				env := baseEnv()
+				delete(env, "HUBSPOT_LIVE_PORTAL_ID")
+				if set {
+					env["HUBSPOT_LIVE_PORTAL_ID"] = ""
+				}
+				out := filepath.Join(t.TempDir(), "out.json")
+				args := []string{phase, "-out", out}
+				if phase == "finish" {
+					args = append(args, "-in", t.TempDir(), "-started", startedAt)
+				}
+				res := runPhase(t, w, env, args...)
+				if res.code != 2 || !strings.Contains(res.stderr, "nightlycontacts: HUBSPOT_LIVE_PORTAL_ID is not set") {
+					t.Fatalf("code %d, stderr %q", res.code, res.stderr)
+				}
+				if len(w.calls) != 0 {
+					t.Errorf("%d HTTP calls", len(w.calls))
+				}
+				if _, err := os.Stat(out); err == nil {
+					t.Error("out file written")
+				}
+			})
+		}
+	}
+}
+
+func TestLivePortalEnv_MalformedRefusesToRun(t *testing.T) {
+	for _, v := range []string{"abc", "0", "-1", "1.5", " 1234567"} {
+		t.Run(v, func(t *testing.T) {
+			w := newWorld()
+			env := baseEnv()
+			env["HUBSPOT_LIVE_PORTAL_ID"] = v
+			out := filepath.Join(t.TempDir(), "out.json")
+			res := runPhase(t, w, env, "start", "-out", out)
+			if res.code != 2 || !strings.Contains(res.stderr, "HUBSPOT_LIVE_PORTAL_ID is not a portal id") {
+				t.Fatalf("code %d, stderr %q", res.code, res.stderr)
+			}
+			if len(w.calls) != 0 {
+				t.Errorf("%d HTTP calls", len(w.calls))
+			}
+			if _, err := os.Stat(out); err == nil {
+				t.Error("out file written")
+			}
+		})
+	}
+}
+
+func TestPortalGuard_RefusesTheConfiguredLivePortal(t *testing.T) {
+	for env, want := range map[string]string{"999": "failed", testLivePortal: "passed"} {
+		w := newWorld()
+		w.portalBody = `{"portalId":999}`
+		e := baseEnv()
+		e["HUBSPOT_LIVE_PORTAL_ID"] = env
+		res := runPhase(t, w, e, "start")
+		s := res.step(stPortal)
+		if s.Status != want || (want == "failed" && !strings.Contains(s.Detail, "live portal")) {
+			t.Errorf("env %s: portal step %+v, want %s", env, s, want)
+		}
 	}
 }

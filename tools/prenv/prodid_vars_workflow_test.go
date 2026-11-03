@@ -323,3 +323,40 @@ func TestProdIDVars_SpaBuildsReadThePortalVariable(t *testing.T) {
 		}
 	}
 }
+
+const nightlyRun = "go run ./internal/tools/nightlycontacts"
+
+// nightlyLiveProblems reports each nightlycontacts command line whose own line or "\\"-continued predecessor lacks the live portal prefix.
+func nightlyLiveProblems(yml string) (problems []string, lines int) {
+	const prefix = "HUBSPOT_LIVE_PORTAL_ID=$HUBSPOT_PORTAL_ID"
+	all := strings.Split(yml, "\n")
+	for i, l := range all {
+		if !strings.Contains(l, nightlyRun) {
+			continue
+		}
+		lines++
+		if strings.Contains(l, prefix) || (i > 0 && strings.HasSuffix(strings.TrimSpace(all[i-1]), "\\") && strings.Contains(all[i-1], prefix)) {
+			continue
+		}
+		problems = append(problems, fmt.Sprintf("dev-env.yml:%d: nightlycontacts lacks %s", i+1, prefix))
+	}
+	return problems, lines
+}
+
+func TestProdIDVars_NightlyContactsGetTheLivePortal(t *testing.T) {
+	t.Parallel()
+	yml := readWorkflow(t, "dev-env.yml")
+	got, n := nightlyLiveProblems(yml)
+	if n != 3 {
+		t.Fatalf("%d nightlycontacts lines, want 3", n)
+	}
+	if len(got) != 0 {
+		t.Errorf("%v", got)
+	}
+	const prefix = "HUBSPOT_LIVE_PORTAL_ID=$HUBSPOT_PORTAL_ID "
+	idx := strings.LastIndex(yml, prefix)
+	mutated := yml[:idx] + yml[idx+len(prefix):]
+	if got, _ := nightlyLiveProblems(mutated); len(got) != 1 {
+		t.Errorf("a finish line without the prefix was not reported: %v", got)
+	}
+}

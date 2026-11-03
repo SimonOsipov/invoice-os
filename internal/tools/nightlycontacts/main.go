@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
@@ -46,9 +47,9 @@ func runWith(args []string, getenv func(string) string, transport http.RoundTrip
 		return usage("-out is required")
 	}
 	need := map[string][]string{
-		"start":  {"HUBSPOT_TOKEN", "RESEND_API_KEY", "HUBSPOT_DEAL_STAGE"},
-		"check":  {"HUBSPOT_TOKEN", "RESEND_API_KEY", "HUBSPOT_DEAL_STAGE", "GATEWAY_URL", "NIGHTLY_RUN_ID"},
-		"finish": {"HUBSPOT_TOKEN", "RESEND_API_KEY"},
+		"start":  {"HUBSPOT_TOKEN", "RESEND_API_KEY", "HUBSPOT_DEAL_STAGE", "HUBSPOT_LIVE_PORTAL_ID"},
+		"check":  {"HUBSPOT_TOKEN", "RESEND_API_KEY", "HUBSPOT_DEAL_STAGE", "GATEWAY_URL", "NIGHTLY_RUN_ID", "HUBSPOT_LIVE_PORTAL_ID"},
+		"finish": {"HUBSPOT_TOKEN", "RESEND_API_KEY", "HUBSPOT_LIVE_PORTAL_ID"},
 	}[phase]
 	if need == nil {
 		return usage("unknown phase %q", phase)
@@ -58,6 +59,10 @@ func runWith(args []string, getenv func(string) string, transport http.RoundTrip
 			return usage("%s is not set", name)
 		}
 	}
+	livePortal, err := strconv.ParseInt(getenv("HUBSPOT_LIVE_PORTAL_ID"), 10, 64)
+	if err != nil || livePortal <= 0 {
+		return usage("HUBSPOT_LIVE_PORTAL_ID is not a portal id")
+	}
 	if phase == "check" && !runIDPattern.MatchString(getenv("NIGHTLY_RUN_ID")) {
 		return usage("NIGHTLY_RUN_ID is not a run id")
 	}
@@ -66,7 +71,6 @@ func runWith(args []string, getenv func(string) string, transport http.RoundTrip
 		if *in == "" {
 			return usage("finish needs -in")
 		}
-		var err error
 		if started, err = time.Parse(time.RFC3339, *startedFlag); err != nil {
 			return usage("finish needs -started as RFC3339")
 		}
@@ -76,7 +80,7 @@ func runWith(args []string, getenv func(string) string, transport http.RoundTrip
 	keys := notifications.Keys{HubSpotToken: getenv("HUBSPOT_TOKEN"), ResendAPIKey: getenv("RESEND_API_KEY")}
 	r := &runner{
 		v: &vendors{
-			hc: hc, hsToken: keys.HubSpotToken, rsKey: keys.ResendAPIKey, sleep: sleep,
+			hc: hc, livePortal: livePortal, hsToken: keys.HubSpotToken, rsKey: keys.ResendAPIKey, sleep: sleep,
 			hsErase: notifications.NewHubSpot(notifications.HubSpotBaseURL, keys, hc),
 			rsErase: notifications.NewResend(notifications.ResendBaseURL, keys, hc),
 		},

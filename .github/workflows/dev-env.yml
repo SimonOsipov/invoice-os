@@ -252,7 +252,7 @@ jobs:
           domain=$(bash scripts/ci/preview.sh mail-domain "$PR")
           echo "::add-mask::$domain"
           mkdir -p "$RUNNER_TEMP/contacts"
-          HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain HUBSPOT_DEAL_STAGE=$(bash scripts/ci/preview.sh deal-stage) \
+          HUBSPOT_LIVE_PORTAL_ID=$HUBSPOT_PORTAL_ID HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain HUBSPOT_DEAL_STAGE=$(bash scripts/ci/preview.sh deal-stage) \
             go run ./internal/tools/nightlycontacts start -out "$RUNNER_TEMP/contacts/start.json"
       - name: Upload the contacts start result
         if: always() && needs.changes.outputs.nightly == 'true'
@@ -910,7 +910,7 @@ jobs:
           domain=$(bash scripts/ci/preview.sh mail-domain "$PR")
           echo "::add-mask::$domain"
           mkdir -p "$RUNNER_TEMP/contacts"
-          HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain HUBSPOT_DEAL_STAGE=$(bash scripts/ci/preview.sh deal-stage) \
+          HUBSPOT_LIVE_PORTAL_ID=$HUBSPOT_PORTAL_ID HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain HUBSPOT_DEAL_STAGE=$(bash scripts/ci/preview.sh deal-stage) \
             go run ./internal/tools/nightlycontacts check -out "$RUNNER_TEMP/contacts/check.json"
       - name: Upload the contacts check result
         if: always()
@@ -1145,7 +1145,7 @@ jobs:
           domain=$(bash scripts/ci/preview.sh mail-domain "$PR")
           echo "::add-mask::$domain"
           mkdir -p "$RUNNER_TEMP/contacts" nightly-results
-          HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain \
+          HUBSPOT_LIVE_PORTAL_ID=$HUBSPOT_PORTAL_ID HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain \
             go run ./internal/tools/nightlycontacts finish -in "$RUNNER_TEMP/contacts" -started "$started" -out nightly-results/hubspot.json
       - name: Upload the nightly results
         if: always()

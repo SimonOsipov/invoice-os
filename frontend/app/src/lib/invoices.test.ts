@@ -5469,15 +5469,17 @@ describe('failureExplanation', () => {
       expect(r, `kind=${k}`).not.toEqual(FAILURE_EXPLANATION_FALLBACK)
       expect(r.headline.trim().length, `kind=${k} headline`).toBeGreaterThan(0)
       expect(r.detail.trim().length, `kind=${k} detail`).toBeGreaterThan(0)
-      expect(r.nextStep.trim().length, `kind=${k} nextStep`).toBeGreaterThan(0)
+      // never_acknowledged carries no next step (RETRY-01 [copy-split]).
+      if (k !== 'never_acknowledged') expect(r.nextStep.trim().length, `kind=${k} nextStep`).toBeGreaterThan(0)
     }
   })
 
-  it('FK-3: every branch returns a non-empty nextStep', () => {
+  it('FK-3: every branch returns a non-empty nextStep, except never_acknowledged whose is empty', () => {
     const inputs: Array<string | null> = [...FAILURE_KINDS, null, 'wat']
     for (const kind of inputs) {
       const r = failureExplanation(kind)
-      expect(r.nextStep.trim().length, `kind=${String(kind)}`).toBeGreaterThan(0)
+      if (kind === 'never_acknowledged') expect(r.nextStep, `kind=${String(kind)}`).toBe('')
+      else expect(r.nextStep.trim().length, `kind=${String(kind)}`).toBeGreaterThan(0)
     }
   })
 
@@ -5496,8 +5498,8 @@ describe('failureExplanation', () => {
     expect(failureExplanation('app_rejected')).toEqual(failureExplanation(null))
   })
 
-  it('FK-6: no branch offers a retry, re-validate or edit', () => {
-    const all: Array<string | null> = [...FAILURE_KINDS, null, 'wat']
+  it('FK-6: no unretryable branch offers a retry, re-validate or edit', () => {
+    const all: Array<string | null> = ['acknowledged_no_verdict', null, 'wat']
     for (const kind of all) {
       const r = failureExplanation(kind)
       const joined = `${r.headline} ${r.detail} ${r.nextStep}`
@@ -5505,6 +5507,36 @@ describe('failureExplanation', () => {
         /\bedit|re-?validate|re-?submit|send it again|try again|retry|enter it again|enter this invoice again/i,
       )
     }
+  })
+
+  it('FK-15: the two resendable kinds carry the story copy', () => {
+    expect(failureExplanation('payload_not_built')).toEqual({
+      headline: 'We could not prepare this invoice for NRS.',
+      detail: 'Nothing was sent.',
+      nextStep: 'You can send it again. If it fails again, report it to ASComply support.',
+    })
+    expect(failureExplanation('never_acknowledged')).toEqual({
+      headline: 'The Access Point did not reply, so this invoice may or may not have arrived.',
+      detail: 'Sending it again reuses the same submission reference, so a repeat is recognised and not filed twice.',
+      nextStep: '',
+    })
+  })
+
+  // Literals copied from head e8cee06.
+  it('FK-16: acknowledged_no_verdict and the fallback are unchanged', () => {
+    expect(failureExplanation('acknowledged_no_verdict')).toEqual({
+      headline: 'This invoice was received for filing, but no result ever came back.',
+      detail:
+        'We know it arrived. We never learned whether it was accepted or rejected, so it may already have been filed — raising another invoice for the same transaction could file it twice.',
+      nextStep:
+        'Do not raise another invoice for the same transaction yet. Ask ASComply support to confirm with NRS whether this one has already been filed.',
+    })
+    expect(FAILURE_EXPLANATION_FALLBACK).toEqual({
+      headline: 'We do not have a recorded reason for this failure.',
+      detail:
+        'The reason was not recorded for this invoice, so we cannot tell you from this screen what went wrong — or whether it was filed.',
+      nextStep: 'Ask ASComply support to check what happened to this invoice before you raise another one for the same transaction.',
+    })
   })
 
   it('FK-7: no branch claims anyone has been notified', () => {

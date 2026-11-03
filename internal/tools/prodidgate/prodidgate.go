@@ -106,6 +106,10 @@ func run(dir string, needles []needle, stdout, stderr io.Writer) int {
 		read++
 		found = append(found, scan(path, data, needles)...)
 	}
+	if read == 0 {
+		fmt.Fprintln(stderr, "prodidgate: read 0 tracked files")
+		return 2
+	}
 	for _, f := range found {
 		fmt.Fprintf(stdout, "::error file=%s,line=%d::%s contains the %s\n", f.path, f.line, f.path, f.kind)
 	}

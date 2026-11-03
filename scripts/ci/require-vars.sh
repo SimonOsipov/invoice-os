@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fails when a named environment variable is empty; each step maps its names from `vars`.
+# Fails when a named environment variable is empty or blank; each step maps its names from `vars`.
 set -euo pipefail
 
 if [ "$#" -eq 0 ]; then
@@ -9,7 +9,8 @@ fi
 
 missing=0
 for name in "$@"; do
-  if [ -z "${!name:-}" ]; then
+  value="${!name:-}"
+  if [ -z "${value//[[:space:]]/}" ]; then
     echo "::error::${name} is not set. Add it under Settings → Secrets and variables → Actions → Variables."
     missing=1
   fi

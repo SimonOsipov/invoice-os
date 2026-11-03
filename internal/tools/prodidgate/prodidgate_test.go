@@ -220,3 +220,14 @@ func TestPinned_TwoNeedlesOfTheRightShape(t *testing.T) {
 		t.Error("the two digests are equal")
 	}
 }
+
+func TestRun_ReadingNoFilesIsAnError(t *testing.T) {
+	t.Parallel()
+	var out, errb bytes.Buffer
+	if code := run(gitRepo(t), fakeNeedles(), &out, &errb); code != 2 {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	if !strings.Contains(errb.String(), "read 0 tracked files") || out.Len() != 0 {
+		t.Errorf("stdout %q stderr %q, want the cause on stderr only", out.String(), errb.String())
+	}
+}

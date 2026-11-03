@@ -14,7 +14,7 @@ var prodIDWorkflows = []string{"deploy-prod.yml", "rollback-prod.yml", "nightly.
 const (
 	wifVar        = "${{ vars.GCP_WIF_PROVIDER }}"
 	portalVar     = "${{ vars.HUBSPOT_PORTAL_ID }}"
-	teardownCheck = `[ -n "$GCP_WIF_PROVIDER" ] || { echo "::error::GCP_WIF_PROVIDER is not set. Add it under Settings → Secrets and variables → Actions → Variables."; exit 1; }`
+	teardownCheck = `[ -n "${GCP_WIF_PROVIDER//[[:space:]]/}" ] || { echo "::error::GCP_WIF_PROVIDER is not set. Add it under Settings → Secrets and variables → Actions → Variables."; exit 1; }`
 )
 
 // checkRoots lists the root GCP jobs. Teardown inlines its check: it checks out the PR head.
@@ -157,7 +157,7 @@ func inlineProblems(label string, steps []workflowStep) []string {
 	if strings.Contains(run, "scripts/ci/") {
 		out = append(out, label+": the inline check names scripts/ci/")
 	}
-	if !strings.Contains(run, `[ -n "$GCP_WIF_PROVIDER" ]`) || !strings.Contains(run, teardownCheck) {
+	if !strings.Contains(run, `[ -n "${GCP_WIF_PROVIDER//[[:space:]]/}" ]`) || !strings.Contains(run, teardownCheck) {
 		out = append(out, label+": the inline check lacks the test or the copy")
 	}
 	if s.env["GCP_WIF_PROVIDER"] != wifVar {

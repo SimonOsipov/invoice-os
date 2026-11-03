@@ -62,3 +62,14 @@ func TestRequireVars_NoArgumentIsAWrongCall(t *testing.T) {
 		t.Errorf("code=%d stdout=%q stderr=%q, want 2, empty stdout, the usage line", code, stdout, stderr)
 	}
 }
+
+func TestRequireVars_WhitespaceOnlyIsMissing(t *testing.T) {
+	t.Parallel()
+	stdout, _, code := runRequireVars(t, []string{"A= \t "}, "A")
+	if code != 1 {
+		t.Errorf("code=%d, want 1", code)
+	}
+	if want := "::error::A" + missingVarCopy; stdout != want {
+		t.Errorf("stdout=%q, want %q", stdout, want)
+	}
+}

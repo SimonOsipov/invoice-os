@@ -25,7 +25,7 @@ jobs:
       - name: Check the Actions variables
         env:
           GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
-        run: '[ -n "$GCP_WIF_PROVIDER" ] || { echo "::error::GCP_WIF_PROVIDER is not set. Add it under Settings → Secrets and variables → Actions → Variables."; exit 1; }'
+        run: '[ -n "${GCP_WIF_PROVIDER//[[:space:]]/}" ] || { echo "::error::GCP_WIF_PROVIDER is not set. Add it under Settings → Secrets and variables → Actions → Variables."; exit 1; }'
       # The head SHA: GitHub deletes the merge ref when the PR closes.
       - uses: actions/checkout@v4
         with:

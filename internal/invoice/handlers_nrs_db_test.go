@@ -46,7 +46,7 @@ func (h nrsHTTP) patch(t *testing.T, ctx context.Context, id, body string) (int,
 
 func (h nrsHTTP) get(t *testing.T, id string) map[string]json.RawMessage {
 	t.Helper()
-	code, m := h.serve(t, h.f.c, http.MethodGet, "/v1/invoices/"+id, id, "", GetHandler(h.f.store.Get, h.f.store.CallerRole, h.f.store.ApprovalFacts, nil))
+	code, m := h.serve(t, h.f.c, http.MethodGet, "/v1/invoices/"+id, id, "", GetHandler(h.f.store.Get, h.f.store.CallerRole, h.f.store.ApprovalFacts, h.f.store.NoteChecks, nil))
 	if code != http.StatusOK {
 		t.Fatalf("GET %s = %d", id, code)
 	}

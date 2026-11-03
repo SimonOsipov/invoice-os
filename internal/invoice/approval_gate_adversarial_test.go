@@ -313,7 +313,7 @@ func TestGetHandler_RealStoreRealApprovalFacts_EndToEnd(t *testing.T) {
 		r.SetPathValue("id", fx.invID)
 		r = r.WithContext(fx.ctx)
 		rec := httptest.NewRecorder()
-		GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, nil).ServeHTTP(rec, r)
+		GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, store.NoteChecks, nil).ServeHTTP(rec, r)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 		}

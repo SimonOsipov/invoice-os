@@ -394,7 +394,7 @@ func TestGetHandler_CreatorReadErrorStaysEnabled(t *testing.T) {
 	r = r.WithContext(auth.WithIdentity(r.Context(), id))
 	var buf bytes.Buffer
 	rec := httptest.NewRecorder()
-	GetHandler(invoiceAtStatusStub(StatusValidated), fixedRoleStub("admin", nil), factsStub(f), slog.New(slog.NewTextHandler(&buf, nil))).ServeHTTP(rec, r)
+	GetHandler(invoiceAtStatusStub(StatusValidated), fixedRoleStub("admin", nil), factsStub(f), passNoteChecks, slog.New(slog.NewTextHandler(&buf, nil))).ServeHTTP(rec, r)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -478,10 +478,10 @@ func TestGetHandler_ApproveFlagsAreLastInWireOrder(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
 	got := topLevelKeyOrder(t, rec.Body.Bytes())
-	if last := got[len(got)-1]; last != "approve_blocked_by_creator" {
-		t.Fatalf("last wire key = %q, want approve_blocked_by_creator", last)
+	if n := len(got); n < 3 || got[n-1] != "send_again_blocked_reason" || got[n-2] != "can_send_again" || got[n-3] != "approve_blocked_by_creator" {
+		t.Fatalf("last wire keys = %v, want approve_blocked_by_creator, can_send_again, send_again_blocked_reason", got)
 	}
-	got = got[:len(got)-1]
+	got = got[:len(got)-3]
 	if last := got[len(got)-1]; last != "verdict_stale" {
 		t.Fatalf("last wire key before it = %q, want verdict_stale", last)
 	}
@@ -544,7 +544,7 @@ func TestGetHandler_ApproveFlagsOnTheRealStore(t *testing.T) {
 	r.SetPathValue("id", fx.invID)
 	r = r.WithContext(fx.ctx)
 	rec := httptest.NewRecorder()
-	GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, nil).ServeHTTP(rec, r)
+	GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, store.NoteChecks, nil).ServeHTTP(rec, r)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}

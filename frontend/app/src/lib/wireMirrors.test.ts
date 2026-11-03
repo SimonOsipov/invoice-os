@@ -880,6 +880,19 @@ describe('wire mirror: Go Invoice, LineItem and TaxSubtotal <-> the e2e read typ
     }
   })
 
+  it('wire mirror: can_send_again and send_again_blocked_reason on every leg', () => {
+    const legs = {
+      'Go getResponse': goStructKeys(repoFile('internal/invoice/handlers.go'), 'getResponse'),
+      'SPA InvoiceDetailRecord': tsInterfaceKeys(repoFile(SPA_INVOICES), 'InvoiceDetailRecord'),
+      'e2e GetInvoiceResult': tsInterfaceKeys(repoFile(E2E_CLIENT), 'GetInvoiceResult'),
+    }
+    expect(Object.keys(legs)).toHaveLength(3)
+    for (const [name, keys] of Object.entries(legs)) {
+      expect(keys, `${name} lacks can_send_again`).toContain('can_send_again')
+      expect(keys, `${name} lacks send_again_blocked_reason`).toContain('send_again_blocked_reason')
+    }
+  })
+
   it('wire mirror: approve_blocked_by_creator on every leg', () => {
     const handlers = repoFile('internal/invoice/handlers.go')
     const legs = {

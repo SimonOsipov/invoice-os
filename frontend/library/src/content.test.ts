@@ -11,11 +11,11 @@ const byId = (id: string) => {
 }
 
 describe('content', () => {
-  it('content_hasElevenGroupsTwentyNineFeaturesSixStagesSevenTourStops', () => {
-    expect([GROUPS.length, FEATURES.length, STAGES.length, TOUR.length]).toEqual([11, 29, 6, 7])
+  it('content_hasElevenGroupsThirtyFeaturesSixStagesSevenTourStops', () => {
+    expect([GROUPS.length, FEATURES.length, STAGES.length, TOUR.length]).toEqual([11, 30, 6, 7])
     expect(FEATURES).toEqual(GROUPS.flatMap((g) => g.feats))
     expect(GROUPS.map((g) => g.n)).toEqual(['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11'])
-    expect(GROUPS.map((g) => g.feats.length)).toEqual([4, 3, 3, 2, 2, 2, 2, 3, 4, 2, 2])
+    expect(GROUPS.map((g) => g.feats.length)).toEqual([5, 3, 3, 2, 2, 2, 2, 3, 4, 2, 2])
   })
 
   it('content_membersGroupEndsWithTheTwoDeletionFeatures', () => {
@@ -27,7 +27,7 @@ describe('content', () => {
     expect(FEATURES.length).toBeGreaterThan(0)
     const counts: Record<SceneKind, number> = { list: 0, form: 0, flow: 0, feed: 0, metrics: 0, toggles: 0 }
     for (const f of FEATURES) counts[f.sc.kind]++
-    expect(counts).toEqual({ list: 6, form: 11, flow: 5, feed: 2, metrics: 2, toggles: 3 })
+    expect(counts).toEqual({ list: 6, form: 11, flow: 6, feed: 2, metrics: 2, toggles: 3 })
     for (const f of FEATURES) {
       expect(f.sc.win).not.toBe('')
       expect(f.sc.steps.length).toBeGreaterThanOrEqual(3)
@@ -94,9 +94,9 @@ describe('content', () => {
     expect(f.benefits).toHaveLength(3)
   })
 
-  it('content_marksTheOtherTwentyFourShipped', () => {
+  it('content_marksTheOtherTwentyFiveShipped', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped').map((f) => f.id)
-    expect(shipped).toEqual(['import-files', 'create-invoice', 'invoice-status', 'credit-notes', 'read-documents', 'review-fields', 'learns',
+    expect(shipped).toEqual(['import-files', 'create-invoice', 'invoice-status', 'credit-notes', 'send-again', 'read-documents', 'review-fields', 'learns',
       'rule-library', 'validate', 'custom-rules', 'approval-queue', 'workflow-builder', 'overview', 'reports', 'audit-trail',
       'evidence-bundle', 'portfolio', 'onboard-client', 'contacts', 'invite-members', 'roles', 'delete-account', 'delete-workspace', 'company-profile'])
     for (const f of FEATURES) expect(['shipped', 'soon']).toContain(f.status)
@@ -104,7 +104,7 @@ describe('content', () => {
 
   it('content_shippedFeaturesHaveTheirViewsAppPath', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped')
-    expect(shipped).toHaveLength(24)
+    expect(shipped).toHaveLength(25)
     for (const f of shipped) expect(f.path, f.id).toBe(APP_PATHS[f.view])
     expect(byId('overview').path).toBe('/')
     expect(byId('import-files').path).toBe('/create')
@@ -130,6 +130,20 @@ describe('content', () => {
     const text = [f.title, f.short, f.desc, ...f.benefits, JSON.stringify(f.sc)].join(' ')
     for (const w of [/issue/i, /register/i, /approval/i, /checks/i]) expect(f.desc).toMatch(w)
     expect(text).not.toMatch(/\b(send\w*|sent|submi\w*|transmi\w*|clear\w*|NRS)\b/i)
+  })
+
+  it('content_sendAgainIsShippedOnInvoices', () => {
+    const f = byId('send-again')
+    expect([f.status, f.path, f.gid]).toEqual(['shipped', '/invoices', 'invoices'])
+    expect(COMING_SOON_IDS).not.toContain('send-again')
+    expect(COMING_SOON_IDS).toHaveLength(5)
+  })
+
+  it('content_sendAgainWordsCoverOnlyWhatShips', () => {
+    const f = byId('send-again')
+    const text = [f.title, f.short, f.desc, ...f.benefits, JSON.stringify(f.sc)].join(' ')
+    for (const w of [/prepared/, /did not reply/, /admin or a reviewer/, /not filed twice/]) expect(f.desc).toMatch(w)
+    expect(text).not.toMatch(/notif|automatic|received|acknowledg|\bFIRS\b/i)
   })
 
   it('content_usesExactlyTheTwelveAppViews', () => {

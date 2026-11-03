@@ -60,6 +60,7 @@ import {
   getInvoiceApproval,
   decideInvoiceApproval,
   getInvoiceHistory,
+  getAuditLog,
   approveUntilClosed,
   firmApproverTokens,
   PERSONAS,
@@ -166,6 +167,39 @@ const APPROVE_NOT_ROLE_HOLDER_REASON =
 // internal/submission/mock_script.go mockTINAccept and mockTINReject: the mock adapter's scripted buyer TINs.
 const MOCK_TIN_ACCEPT = '99999999-0001'
 const MOCK_TIN_REJECT = '99999999-0002'
+
+// internal/submission/mock_script.go mockTINUnbuildable: the mock adapter fails Transform for this buyer TIN.
+const MOCK_TIN_UNBUILDABLE = '99999999-0010'
+
+// internal/invoice/send_again.go refusal and gate sentences, byte for byte.
+const SEND_AGAIN_NOT_FAILED_REASON = 'This invoice is no longer failed. Refresh to see its status.' // sendAgainNotFailedReason
+const SEND_AGAIN_RESOLVED_REASON = 'This invoice is marked resolved outside ASComply and cannot be sent again.' // sendAgainResolvedReason
+const SEND_AGAIN_NOT_RESENDABLE_REASON = 'This invoice cannot be sent again from this screen. Ask ASComply support.' // sendAgainNotResendableReason
+const SEND_AGAIN_PREPARER_REASON = 'An approver can send this invoice again.' // sendAgainPreparerReason
+// The fifth sentence, the preparer's 403, is NOT_APPROVER_REASON (notApproverTransmitReason).
+
+// Fixture check: -0010 pins the mock adapter's payload_not_built script, not the send-again contract.
+async function unbuildableFailedInvoice(tok: string, entityId: string, number: string): Promise<string> {
+  const created = await createInvoice(tok, { entity_id: entityId, ...cleanInvoiceFields(number), buyer_tin: MOCK_TIN_UNBUILDABLE })
+  expect((await validateInvoice(tok, created.id)).status, 'the clean fixture validates').toBe('validated')
+  await approveUntilClosed(created.id, await firmApproverTokens())
+  const res = await rawFetch('/api/invoice/v1/invoices/submissions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tok}` },
+    body: { invoice_ids: [created.id], idempotency_key: crypto.randomUUID() },
+  })
+  expect(res.status, 'batch submit').toBe(200)
+  await expect
+    .poll(
+      async () => {
+        const inv = await getInvoice(tok, created.id)
+        return `${inv.status}/${inv.failure_kind}`
+      },
+      { timeout: 120_000, intervals: [1_000] },
+    )
+    .toBe('failed/payload_not_built')
+  return created.id
+}
 
 async function submitAndAwait(tok: string, id: string, want: 'accepted' | 'rejected') {
   const res = await rawFetch('/api/invoice/v1/invoices/submissions', {
@@ -1078,6 +1112,116 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       const afterHistory = await rawFetch(`/api/invoice/v1/invoices/${id}/history`, { headers: { Authorization: `Bearer ${token}` } })
       const afterCount = (afterHistory.body as Record<string, unknown>[]).length
       expect(afterCount, 'resolving must not add a history row').toBe(beforeCount)
+    })
+  })
+
+  test.describe('send-again', () => {
+    const auth = (tok: string) => ({ Authorization: `Bearer ${tok}` })
+    const post = (tok: string, id: string) =>
+      rawFetch(`/api/invoice/v1/invoices/${id}/send-again`, { method: 'POST', headers: auth(tok) })
+
+    test('POST send-again on a payload_not_built invoice -> 200 queued; history and audit name the approver; it fails again', async () => {
+      const id = await unbuildableFailedInvoice(token, entity.id, `INV-SA-${freshTin()}`)
+      const before = await getInvoice(token, id)
+      expect(before.can_send_again).toBe(true)
+      expect(before.send_again_blocked_reason).toBeNull()
+      const myId = (await me(token)).user.id
+      const historyBefore = (await getInvoiceHistory(token, id)).length
+      const auditBefore = new Set(
+        (await getAuditLog(token, { invoice_id: id, event: ['invoice.transitioned'], limit: 100 })).events.map((e) => e.id),
+      )
+
+      const res = await post(token, id)
+      expect(res.status, 'send-again by an approver').toBe(200)
+      const body = res.body as Record<string, unknown>
+      expect(body.status).toBe('queued')
+      expect(body.failure_kind ?? null).toBeNull()
+
+      const history = await getInvoiceHistory(token, id)
+      const requeue = history.slice(historyBefore).find((h) => h.from_status === 'failed' && h.to_status === 'queued')
+      expect(requeue, 'history gains failed -> queued').toBeDefined()
+      expect(requeue!.actor).toBe(myId)
+
+      // The approver also drove the earlier transitions, so match the new failed -> queued row itself.
+      const audit = await getAuditLog(token, { invoice_id: id, event: ['invoice.transitioned'], limit: 100 })
+      const requeued = audit.events.filter((e) => {
+        const p = e.payload as { from?: string; to?: string }
+        return !auditBefore.has(e.id) && p.from === 'failed' && p.to === 'queued'
+      })
+      expect(requeued, 'audit log gains one failed -> queued invoice.transitioned').toHaveLength(1)
+      expect(requeued[0]!.actor).toBe(myId)
+
+      await expect
+        .poll(
+          async () => {
+            const inv = await getInvoice(token, id)
+            return `${inv.status}/${inv.failure_kind}`
+          },
+          { timeout: 120_000, intervals: [1_000] },
+        )
+        .toBe('failed/payload_not_built')
+    })
+
+    test('GET send-again flags for an approver and a preparer', async () => {
+      const id = await unbuildableFailedInvoice(token, entity.id, `INV-SA-${freshTin()}`)
+      const asApprover = await getInvoice(token, id)
+      expect(asApprover.can_send_again).toBe(true)
+      expect(asApprover.send_again_blocked_reason).toBeNull()
+
+      const preparerToken = await login({ ...PERSONAS.A, subject: PREPARER_SUBJECT })
+      const asPreparer = await getInvoice(preparerToken, id)
+      expect(asPreparer.can_send_again).toBe(false)
+      expect(asPreparer.send_again_blocked_reason).toBe(SEND_AGAIN_PREPARER_REASON)
+    })
+
+    test('POST send-again as a preparer -> 403 with the transmit sentence, same for a random id', async () => {
+      const id = await unbuildableFailedInvoice(token, entity.id, `INV-SA-${freshTin()}`)
+      const preparerToken = await login({ ...PERSONAS.A, subject: PREPARER_SUBJECT })
+      const real = await post(preparerToken, id)
+      const random = await post(preparerToken, crypto.randomUUID())
+      assertErrorEnvelope(real, 403, 'preparer send-again on the fixture')
+      expect((real.body as { error: string }).error).toBe(NOT_APPROVER_REASON)
+      expect(random.status).toBe(403)
+      expect(random.body).toEqual(real.body)
+    })
+
+    test('POST send-again refusals -> 409 with their sentence; random id -> 404', async () => {
+      const nullKind = await createFailedInvoice(token, entity.id, `INV-SA-${freshTin()}`)
+      const nullGet = await getInvoice(token, nullKind)
+      expect(nullGet.can_send_again).toBe(false)
+      expect(nullGet.send_again_blocked_reason).toBeNull()
+      const nullPost = await post(token, nullKind)
+      assertErrorEnvelope(nullPost, 409, 'send-again on a NULL-kind failure')
+      expect((nullPost.body as { error: string }).error).toBe(SEND_AGAIN_NOT_RESENDABLE_REASON)
+
+      const draft = await createInvoice(token, { entity_id: entity.id, invoice_number: `INV-SA-${freshTin()}` })
+      const draftPost = await post(token, draft.id)
+      assertErrorEnvelope(draftPost, 409, 'send-again on a draft')
+      expect((draftPost.body as { error: string }).error).toBe(SEND_AGAIN_NOT_FAILED_REASON)
+
+      const resolved = await unbuildableFailedInvoice(token, entity.id, `INV-SA-${freshTin()}`)
+      const resolveRes = await rawFetch(`/api/invoice/v1/invoices/${resolved}/resolved-outside`, {
+        method: 'POST',
+        headers: auth(token),
+        body: { reason: `resolved ${freshTin()}` },
+      })
+      expect(resolveRes.status, 'setup: resolving').toBe(200)
+      expect((await getInvoice(token, resolved)).send_again_blocked_reason).toBe(SEND_AGAIN_RESOLVED_REASON)
+      const resolvedPost = await post(token, resolved)
+      assertErrorEnvelope(resolvedPost, 409, 'send-again on a resolved-outside failure')
+      expect((resolvedPost.body as { error: string }).error).toBe(SEND_AGAIN_RESOLVED_REASON)
+
+      assertErrorEnvelope(await post(token, crypto.randomUUID()), 404, 'send-again on a random id')
+    })
+
+    // Read-only: never POST to a seeded row.
+    test('GET seeded acknowledged_no_verdict DEMO-2026-1004 offers no send again', async () => {
+      const list = await listInvoices(token, { q: 'DEMO-2026-1004' })
+      const row = list.invoices.find((i) => i.invoice_number === 'DEMO-2026-1004')
+      expect(row, 'seeded DEMO-2026-1004 is in persona A tenant').toBeDefined()
+      const inv = await getInvoice(token, row!.id)
+      expect(inv.can_send_again).toBe(false)
+      expect(inv.send_again_blocked_reason).toBeNull()
     })
   })
 

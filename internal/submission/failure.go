@@ -22,3 +22,8 @@ func (k FailureKind) Valid() bool {
 		return false
 	}
 }
+
+// Resendable: the kinds where the customer may send the invoice again; acknowledged_no_verdict needs a check with NRS first.
+func (k FailureKind) Resendable() bool {
+	return k == FailurePayloadNotBuilt || k == FailureNeverAcknowledged
+}

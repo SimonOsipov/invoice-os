@@ -227,6 +227,9 @@ func clearApprovalStub(ctx context.Context, id string) (ApprovalFacts, error) {
 	return ApprovalFacts{TransmitClear: true}, nil
 }
 
+// passNoteChecks is the noteChecks stub for GetHandler call sites that do not exercise send-again.
+func passNoteChecks(context.Context, Invoice) (bool, error) { return true, nil }
+
 // emptyRowFactsStub is the shared rowFacts stub for ListHandler call sites that
 // do not exercise the row-approval envelope itself -- doInvoiceList hardwires it
 // exactly as doInvoiceGet hardwires adminRoleStub/clearApprovalStub, so all 47
@@ -254,7 +257,7 @@ func doInvoiceGet(t *testing.T, get func(ctx context.Context, id string) (Invoic
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	GetHandler(get, adminRoleStub, clearApprovalStub, nil).ServeHTTP(rec, r)
+	GetHandler(get, adminRoleStub, clearApprovalStub, passNoteChecks, nil).ServeHTTP(rec, r)
 	var resp invoiceBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
@@ -2728,7 +2731,7 @@ func TestGetHandler_UnrenderableQRPayloadIsLogged(t *testing.T) {
 	r.SetPathValue("id", invoiceID)
 	r = r.WithContext(auth.WithIdentity(r.Context(), id))
 	rec := httptest.NewRecorder()
-	GetHandler(get, adminRoleStub, clearApprovalStub, logger).ServeHTTP(rec, r)
+	GetHandler(get, adminRoleStub, clearApprovalStub, passNoteChecks, logger).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -4233,10 +4236,10 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 	// APPR-08-06 (task-504): can_approve/approve_blocked_reason/can_reject/
 	// reject_blocked_reason join the same additive set, 37 wire keys -> 41.
 	// EXTR-27-01: can_correct_invoice_number/invoice_number_blocked_reason join
-	// the same way, 41 -> 43. can_issue_note/issue_note_blocked_reason: 43 -> 45.
+	// the same way, 41 -> 43. can_issue_note/issue_note_blocked_reason: 43 -> 45. can_send_again/send_again_blocked_reason: 45 -> 47.
 	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason", "can_view_ubl", "ubl_blocked_reason", "can_resolve_outside", "resolve_outside_blocked_reason",
 		"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason",
-		"can_correct_invoice_number", "invoice_number_blocked_reason", "can_issue_note", "issue_note_blocked_reason", "verdict_stale", "approve_blocked_by_creator"}
+		"can_correct_invoice_number", "invoice_number_blocked_reason", "can_issue_note", "issue_note_blocked_reason", "verdict_stale", "approve_blocked_by_creator", "can_send_again", "send_again_blocked_reason"}
 
 	tests := []struct {
 		name              string
@@ -4412,6 +4415,8 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		"verdict_stale",
 		// APPR-17-02: appended last so no key moves.
 		"approve_blocked_by_creator",
+		// Appended after approve_blocked_by_creator.
+		"can_send_again", "send_again_blocked_reason",
 	}
 	if !reflect.DeepEqual(got, want2) {
 		t.Errorf("top-level key order =\n%v\nwant\n%v\n(body=%s)", got, want2, rec.Body.String())
@@ -4780,7 +4785,7 @@ func TestGetHandler_RealStore_DraftActionFlags(t *testing.T) {
 	r = r.WithContext(auth.WithIdentity(ctx, identity))
 	rec := httptest.NewRecorder()
 
-	GetHandler(store.Get, store.CallerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
+	GetHandler(store.Get, store.CallerRole, clearApprovalStub, passNoteChecks, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -4825,7 +4830,7 @@ func TestGetHandler_RealStore_ValidatedCanSubmit(t *testing.T) {
 		r.SetPathValue("id", invoiceID)
 		r = r.WithContext(c)
 		rec := httptest.NewRecorder()
-		GetHandler(store.Get, store.CallerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
+		GetHandler(store.Get, store.CallerRole, clearApprovalStub, passNoteChecks, nil).ServeHTTP(rec, r)
 		return rec
 	}
 
@@ -4955,7 +4960,7 @@ func TestGetHandler_RealStore_CanSubmitAcrossFullTransitionSequence(t *testing.T
 		r.SetPathValue("id", invoiceID)
 		r = r.WithContext(c)
 		rec := httptest.NewRecorder()
-		GetHandler(store.Get, store.CallerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
+		GetHandler(store.Get, store.CallerRole, clearApprovalStub, passNoteChecks, nil).ServeHTTP(rec, r)
 		return rec
 	}
 
@@ -5005,7 +5010,7 @@ func TestGetHandler_RealStore_CrossTenantCanSubmitNotLeaked(t *testing.T) {
 	r.SetPathValue("id", invoiceID)
 	r = r.WithContext(auth.WithIdentity(ctx, identityA))
 	rec := httptest.NewRecorder()
-	GetHandler(store.Get, store.CallerRole, clearApprovalStub, nil).ServeHTTP(rec, r)
+	GetHandler(store.Get, store.CallerRole, clearApprovalStub, passNoteChecks, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (tenant A must not see tenant B's invoice) (body=%s)", rec.Code, rec.Body.String())
@@ -5840,9 +5845,9 @@ func TestRoutes_BothResolveInBothDirections(t *testing.T) {
 		mux = http.NewServeMux()
 		if literalFirst {
 			mux.HandleFunc("GET /v1/invoices/violation-summary", ViolationSummaryHandler(summary, nil))
-			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, adminRoleStub, clearApprovalStub, nil))
+			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, adminRoleStub, clearApprovalStub, passNoteChecks, nil))
 		} else {
-			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, adminRoleStub, clearApprovalStub, nil))
+			mux.HandleFunc("GET /v1/invoices/{id}", GetHandler(get, adminRoleStub, clearApprovalStub, passNoteChecks, nil))
 			mux.HandleFunc("GET /v1/invoices/violation-summary", ViolationSummaryHandler(summary, nil))
 		}
 		return mux, getCalled, summaryCalled

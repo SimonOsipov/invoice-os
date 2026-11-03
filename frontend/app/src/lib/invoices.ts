@@ -339,6 +339,9 @@ export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval' | 'd
   // True only for an accepted invoice with an IRN that is not itself a note.
   can_issue_note: boolean
   issue_note_blocked_reason: string | null
+  // A failed invoice an approver may send again; the reason is null unless the screen has a sentence for the refusal.
+  can_send_again: boolean
+  send_again_blocked_reason: string | null
 }
 
 // GET /v1/invoices response envelope (listResponse, handlers.go:110-113). Exactly two
@@ -772,6 +775,8 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     invoice_number_blocked_reason: res.invoice_number_blocked_reason ?? null,
     can_issue_note: res.can_issue_note === true,
     issue_note_blocked_reason: res.issue_note_blocked_reason ?? null,
+    can_send_again: res.can_send_again === true,
+    send_again_blocked_reason: res.send_again_blocked_reason ?? null,
   }
 }
 
@@ -871,6 +876,11 @@ export async function resolveInvoiceOutside(
     method: 'POST',
     body: { reason },
   })
+}
+
+// POST /v1/invoices/{id}/send-again -- no body; the server owns the gate and answers with the requeued invoice.
+export async function sendInvoiceAgain(authedFetch: AuthedFetch, base: string, id: string): Promise<InvoiceRecord> {
+  return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}/send-again`, { method: 'POST' })
 }
 
 export async function unresolveInvoiceOutside(
@@ -1283,22 +1293,17 @@ export interface FailureExplanation {
   nextStep: string
 }
 
-// Must never promise notification (M5-08 is unbuilt) or offer recovery (no customer
-// action leaves `failed`) -- both are invisible from the code, so they earn this one comment.
+// Must never promise a notification; only the two resendable kinds offer Send again.
 const FAILURE_EXPLANATIONS = {
   payload_not_built: {
-    headline: 'We could not prepare this invoice for filing.',
-    detail:
-      'The submission stopped before anything left our system, so this invoice has not been filed. The fault is on our side, not in the invoice — nothing you change here will fix it.',
-    nextStep:
-      'Report this invoice to ASComply support. Nothing reaches us automatically, so it will not be looked at until you do.',
+    headline: 'We could not prepare this invoice for NRS.',
+    detail: 'Nothing was sent.',
+    nextStep: 'You can send it again. If it fails again, report it to ASComply support.',
   },
   never_acknowledged: {
-    headline: 'We never got confirmation that this invoice was received for filing.',
-    detail:
-      'We tried repeatedly for about an hour and never got an answer back. We cannot tell from here whether it arrived, so we cannot say whether it was filed or not.',
-    nextStep:
-      'Ask ASComply support to confirm the status of this invoice with NRS before you raise another invoice for the same transaction.',
+    headline: 'The Access Point did not reply, so this invoice may or may not have arrived.',
+    detail: 'Sending it again reuses the same submission reference, so a repeat is recognised and not filed twice.',
+    nextStep: '',
   },
   acknowledged_no_verdict: {
     headline: 'This invoice was received for filing, but no result ever came back.',
@@ -1329,6 +1334,12 @@ export const RESOLVE_OUTSIDE_COPY = {
   resolvedPrefix: 'Resolved outside the system — ',
   undoLabel: 'Undo',
 } as const
+
+export const SEND_AGAIN_COPY = { label: 'Send again', sending: 'Sending…' } as const
+
+export function sendAgainOffered(inv: Pick<InvoiceDetailRecord, 'can_send_again' | 'send_again_blocked_reason'>): boolean {
+  return inv.can_send_again || inv.send_again_blocked_reason != null
+}
 
 export function canResolveOutside(reason: string): boolean {
   return reason.trim() !== ''

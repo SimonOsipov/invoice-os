@@ -871,6 +871,9 @@ export interface GetInvoiceResult extends Invoice {
   invoice_number_blocked_reason: string | null
   can_issue_note: boolean
   issue_note_blocked_reason: string | null
+  can_send_again: boolean
+  send_again_blocked_reason: string | null
+  failure_kind: string | null
 }
 
 export function getInvoice(token: string, id: string): Promise<GetInvoiceResult> {

@@ -102,6 +102,7 @@
 package submission_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -140,6 +141,7 @@ const (
 	maTINSlow        = "99999999-0005"
 	maTINTimeout     = "99999999-0006"
 	maTINConnection  = "99999999-0007"
+	maTINUnbuildable = "99999999-0010" // mock_script.go mockTINUnbuildable
 
 	// maTINUnallocated is inside the reserved block but deliberately never given a trigger
 	// (mock_script.go:89-92 mockNeverAllocate) -- it must take the ordinary accept path
@@ -3768,4 +3770,38 @@ func TestSelect_AdapterNameIsCaseSensitive(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMockTransform_UnbuildableTriggerFails: the -0010 buyer TIN fails Transform.
+func TestMockTransform_UnbuildableTriggerFails(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	w, err := a.Transform(context.Background(), maCanonical(maTINUnbuildable, "INV-MOCK-0001"))
+	if w != nil || !errors.Is(err, submission.ErrMockUnbuildable) {
+		t.Fatalf("Transform(%s) = (%v, %v), want (nil, ErrMockUnbuildable)", maTINUnbuildable, w, err)
+	}
+}
+
+// TestMockTransform_OtherTriggersStillBuild: the other allocated TINs build.
+func TestMockTransform_OtherTriggersStillBuild(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	for _, tin := range []string{maTINAccept, maTINReject, maTINPending, maTINUnavailable,
+		maTINSlow, maTINTimeout, maTINConnection, maTINUnallocated, ""} {
+		w, err := a.Transform(context.Background(), maCanonical(tin, "INV-MOCK-0001"))
+		if err != nil || len(w) == 0 {
+			t.Errorf("Transform(%q) = (%d bytes, %v), want a wire and nil error", tin, len(w), err)
+		}
+	}
+}
+
+// TestMockSubmit_UnbuildableTINStillAccepts: Transform fails for -0010, so a
+// wire carrying it is forged from an accepted one; Submit must treat it as the accept path.
+func TestMockSubmit_UnbuildableTINStillAccepts(t *testing.T) {
+	a := submission.NewMockAdapter(submission.MockConfig{})
+	base := maWire(t, a, maTINAccept)
+	forged := bytes.ReplaceAll(base, []byte(maTINAccept), []byte(maTINUnbuildable))
+	if bytes.Equal(forged, base) {
+		t.Fatalf("the wire carries no %s to swap for %s", maTINAccept, maTINUnbuildable)
+	}
+	r, _ := maSubmit(t, a, context.Background(), forged, "key-unbuildable")
+	maAccepted(t, "Submit with the -0010 TIN", r)
 }

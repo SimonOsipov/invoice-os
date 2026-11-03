@@ -113,6 +113,8 @@ function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRec
     invoice_number_blocked_reason: null,
     can_issue_note: false,
     issue_note_blocked_reason: null,
+    can_send_again: false,
+    send_again_blocked_reason: null,
     ...over,
   }
 }
@@ -156,6 +158,8 @@ interface DetailFetchOptions {
   editResponse?: MockResponse
   revalidateResponse?: MockResponse
   resolveResponse?: MockResponse
+  // POST .../send-again; a Promise lets a test hold the request open.
+  sendAgainResponse?: MockResponse | Promise<MockResponse>
   unresolveResponse?: MockResponse
   // GET .../approval (APPR-13-03). Defaults to 404 inside the dispatcher below so no
   // pre-existing test's behaviour changes. Only the FIRST call reads this -- calls after
@@ -205,6 +209,7 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
   let approvalCalls = 0
   const submitCalls: SubmitCallBody[] = []
   const resolveCalls: ResolveCall[] = []
+  const sendAgainCalls: string[] = []
   const decideCalls: DecideCall[] = []
   const explainCalls: { rule_key: string; path: string }[] = []
   const patchCalls: unknown[] = []
@@ -219,6 +224,10 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
       if (call === 0 && opts.historyResponse) return Promise.resolve<MockResponse>(opts.historyResponse)
       const rows = call === 0 ? history : (opts.historySequence?.[call - 1] ?? opts.historySequence?.at(-1) ?? history)
       return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(rows) })
+    }
+    if (method === 'POST' && url.endsWith('/send-again')) {
+      sendAgainCalls.push(url)
+      return Promise.resolve(opts.sendAgainResponse ?? { ok: true, status: 200, json: () => Promise.resolve(detail) })
     }
     // resolveInvoiceOutside/unresolveInvoiceOutside (lib/invoices.ts:614/626) -- must be
     // dispatched before the GET fallback below, or a POST/DELETE here silently falls
@@ -371,7 +380,7 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
     return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(record) })
   })
   vi.stubGlobal('fetch', fetchMock)
-  return { fetchMock, submitCalls, resolveCalls, decideCalls, explainCalls, patchCalls }
+  return { fetchMock, submitCalls, resolveCalls, decideCalls, explainCalls, patchCalls, sendAgainCalls }
 }
 
 beforeEach(() => {
@@ -486,7 +495,7 @@ describe('InvoiceDetail failed-dead-end card (task-388, BUG-06-06, [failed-no-re
     const expected = failureExplanation('never_acknowledged')
     expect(screen.getByTestId('failure-headline').textContent).toBe(expected.headline)
     expect(screen.getByTestId('failure-detail').textContent).toBe(expected.detail)
-    expect(screen.getByTestId('failure-next-step').textContent).toBe(expected.nextStep)
+    expect(screen.queryByTestId('failure-next-step'), 'never_acknowledged has no next step').toBeNull()
     expect(await screen.findByTestId('rejection-reasons')).toBeDefined()
   })
 
@@ -519,7 +528,8 @@ describe('InvoiceDetail failed-dead-end card (task-388, BUG-06-06, [failed-no-re
     await screen.findByTestId('failed-dead-end')
     expect(screen.getByTestId('failure-headline').textContent).toBe(expected.headline)
     expect(screen.getByTestId('failure-detail').textContent).toBe(expected.detail)
-    expect(screen.getByTestId('failure-next-step').textContent).toBe(expected.nextStep)
+    if (kind === 'never_acknowledged') expect(screen.queryByTestId('failure-next-step')).toBeNull()
+    else expect(screen.getByTestId('failure-next-step').textContent).toBe(expected.nextStep)
   })
 
   // Forward-compatibility (AC-7's implication): a kind the SPA has never heard of --
@@ -4497,6 +4507,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
   // The edit form's invoice number cell.
   const EXTR_27_TESTIDS = ['edit-invoice-number']
   const APPR_17_TESTIDS = ['detail-approve-creator-reason']
+  const RETRY_01_TESTIDS = ['send-again', 'send-again-blocked', 'send-again-error']
   const ENGI_17_TESTIDS = ['violation-explain']
   const ENGI_06_TESTIDS = ['buyer-type-note', 'line-nrs']
   const CRDDBTNOTE_02_TESTIDS = ['issue-credit-note', 'issue-debit-note', 'notes-card', 'notes-empty', 'still-creditable', 'note-row', 'note-row-open', 'note-row-type', 'note-row-status', 'note-row-total', 'document-type-badge', 'original-invoice-link']
@@ -4750,6 +4761,27 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
         await screen.findByTestId('detail-decision-error')
       },
     },
+    {
+      name: 'a failed invoice a preparer may not send again',
+      mount: async () => {
+        mockDetailFetch(
+          detailRecord({ id: ID, status: 'failed', failure_kind: 'payload_not_built', rejection_reasons: [], can_send_again: false, send_again_blocked_reason: 'An approver can send this invoice again.' }),
+        )
+        render(<InvoiceDetail ctx={detailCtx(ID)} />)
+        await screen.findByTestId('send-again-blocked')
+      },
+    },
+    {
+      name: 'a send again the server refused',
+      mount: async () => {
+        mockDetailFetch(detailRecord({ id: ID, status: 'failed', failure_kind: 'payload_not_built', rejection_reasons: [], can_send_again: true }), [], {
+          sendAgainResponse: { ok: false, status: 409, json: () => Promise.resolve({ error: 'This invoice is no longer failed. Refresh to see its status.' }) },
+        })
+        render(<InvoiceDetail ctx={detailCtx(ID)} />)
+        fireEvent.click(await screen.findByTestId('send-again'))
+        await screen.findByTestId('send-again-error')
+      },
+    },
   ]
 
   // Also carries BUG-13-01's `invoiceDetail_retiredScrollTestidIsDeclaredRetired`: the
@@ -4783,11 +4815,11 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
 
     // Closed-world, and deliberately so: "no card gained a testid" is half of AC-5. A new
     // element on this page must be declared, in one of the three lists above, by whoever adds it.
-    const declared = new Set([...UNTOUCHED_TESTIDS, ...AUDIT_09_TESTIDS, ...BUG_13_TESTIDS, ...EXTR_27_TESTIDS, ...ENGI_17_TESTIDS, ...ENGI_06_TESTIDS, ...BUG_18_TESTIDS, ...CRDDBTNOTE_02_TESTIDS, ...APPR_17_TESTIDS])
+    const declared = new Set([...UNTOUCHED_TESTIDS, ...AUDIT_09_TESTIDS, ...BUG_13_TESTIDS, ...EXTR_27_TESTIDS, ...ENGI_17_TESTIDS, ...ENGI_06_TESTIDS, ...BUG_18_TESTIDS, ...CRDDBTNOTE_02_TESTIDS, ...APPR_17_TESTIDS, ...RETRY_01_TESTIDS])
     const undeclared = [...seen.keys()].filter((id) => !declared.has(id)).sort()
     expect(
       undeclared,
-      `undeclared testid(s) on the invoice detail page: ${undeclared.map((id) => `${id} (${seen.get(id)})`).join(', ')}. Add each to UNTOUCHED_TESTIDS, AUDIT_09_TESTIDS, BUG_13_TESTIDS, EXTR_27_TESTIDS, ENGI_06_TESTIDS or BUG_18_TESTIDS.`,
+      `undeclared testid(s) on the invoice detail page: ${undeclared.map((id) => `${id} (${seen.get(id)})`).join(', ')}. Add each to UNTOUCHED_TESTIDS, AUDIT_09_TESTIDS, BUG_13_TESTIDS, EXTR_27_TESTIDS, ENGI_06_TESTIDS, BUG_18_TESTIDS or RETRY_01_TESTIDS.`,
     ).toEqual([])
   })
 
@@ -5659,6 +5691,147 @@ describe('InvoiceDetail action cluster: `title` is gated on the wire, not just p
       expect(btn.getAttribute('title'), `${testid} carries its wire sentence`).toBe(expected[testid])
     }
     expect((within(card).getByTestId('resolve-outside') as HTMLButtonElement).getAttribute('title')).toBe(R.resolveOutside)
+  })
+})
+
+describe('InvoiceDetail failed card: Send again (RETRY-01-04)', () => {
+  const ID = 'inv-send-again-1'
+  const PREPARER_REASON = 'An approver can send this invoice again.'
+  const failedRec = (over: Partial<InvoiceDetailRecord> = {}) =>
+    detailRecord({ id: ID, status: 'failed', failure_kind: 'payload_not_built', can_send_again: true, rejection_reasons: [], ...over })
+  const detailGets = (fetchMock: ReturnType<typeof mockDetailFetch>['fetchMock']) =>
+    fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => (init?.method ?? 'GET') === 'GET' && String(url).endsWith(`/invoices/${ID}`))
+  const historyGets = (fetchMock: ReturnType<typeof mockDetailFetch>['fetchMock']) =>
+    fetchMock.mock.calls.filter(([url]: [string, RequestInit?]) => String(url).endsWith('/history'))
+
+  it('drops the terminal sentence when Send again is offered, keeps it when not', async () => {
+    mockDetailFetch(failedRec())
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const card = await screen.findByTestId('failed-dead-end')
+    expect(within(card).getByTestId('send-again')).toBeTruthy()
+    expect(card.textContent).not.toContain('cannot be re-driven')
+
+    cleanup()
+    mockDetailFetch(failedRec({ failure_kind: 'acknowledged_no_verdict', can_send_again: false, send_again_blocked_reason: null }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const card2 = await screen.findByTestId('failed-dead-end')
+    expect(card2.textContent).toContain('cannot be re-driven')
+    expect(screen.queryByTestId('send-again')).toBeNull()
+  })
+
+  it('never_acknowledged renders headline and detail but no next-step node', async () => {
+    mockDetailFetch(failedRec({ failure_kind: 'never_acknowledged' }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('failed-dead-end')
+    expect(screen.getByTestId('failure-headline').textContent).toBe(failureExplanation('never_acknowledged').headline)
+    expect(screen.getByTestId('failure-detail').textContent).toBe(failureExplanation('never_acknowledged').detail)
+    expect(screen.queryByTestId('failure-next-step')).toBeNull()
+  })
+
+  it('prints the blocked reason in the card, named by aria-describedby, with no title', async () => {
+    mockDetailFetch(failedRec({ can_send_again: false, send_again_blocked_reason: PREPARER_REASON }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const card = await screen.findByTestId('failed-dead-end')
+    const btn = within(card).getByTestId('send-again') as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    expect(btn.hasAttribute('title')).toBe(false)
+    expect(btn.className).toContain('v2-btn-ghost')
+    const reason = within(card).getByTestId('send-again-blocked')
+    expect(reason.textContent).toBe(PREPARER_REASON)
+    expect(document.getElementById(btn.getAttribute('aria-describedby') ?? '')).toBe(reason)
+  })
+
+  it('send-again matches resolve-outside in classes and disabled inline style, and Resolved outside stays title-only', async () => {
+    const RESOLVE_REASON = 'Only an approver can mark this invoice resolved outside.'
+    mockDetailFetch(
+      failedRec({ can_send_again: false, send_again_blocked_reason: PREPARER_REASON, can_resolve_outside: false, resolve_outside_blocked_reason: RESOLVE_REASON }),
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const card = await screen.findByTestId('failed-dead-end')
+    const send = within(card).getByTestId('send-again') as HTMLButtonElement
+    const resolve = within(card).getByTestId('resolve-outside') as HTMLButtonElement
+    expect(send.disabled && resolve.disabled, 'both buttons are disabled').toBe(true)
+    expect(send.className).toBe(resolve.className)
+    for (const prop of ['height', 'fontSize', 'flexShrink', 'whiteSpace', 'background', 'color', 'cursor'] as const) {
+      expect(send.style[prop], `inline ${prop}`).not.toBe('')
+      expect(send.style[prop], `inline ${prop} matches resolve-outside`).toBe(resolve.style[prop])
+    }
+    expect(resolve.getAttribute('title')).toBe(RESOLVE_REASON)
+    expect(card.textContent).not.toContain(RESOLVE_REASON)
+  })
+
+  it('a preparer sees the copy and the reason together, without the terminal sentence', async () => {
+    mockDetailFetch(failedRec({ can_send_again: false, send_again_blocked_reason: PREPARER_REASON }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const card = await screen.findByTestId('failed-dead-end')
+    expect(card.textContent).toContain('You can send it again.')
+    expect(card.textContent).toContain(PREPARER_REASON)
+    expect(card.textContent).not.toContain('cannot be re-driven')
+  })
+
+  it('send-again is absent when the wire offers nothing', async () => {
+    mockDetailFetch(failedRec({ failure_kind: null, can_send_again: false, send_again_blocked_reason: null }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('failed-dead-end')
+    expect(screen.queryByTestId('send-again')).toBeNull()
+    expect(screen.queryByTestId('send-again-blocked')).toBeNull()
+  })
+
+  it('reads Sending… and posts once', async () => {
+    let release!: (r: MockResponse) => void
+    const held = new Promise<MockResponse>((res) => (release = res))
+    const { sendAgainCalls } = mockDetailFetch(failedRec(), [], { sendAgainResponse: held })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const btn = (await screen.findByTestId('send-again')) as HTMLButtonElement
+    expect(btn.textContent).toBe('Send again')
+
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+    await waitFor(() => expect(btn.textContent).toBe('Sending…'))
+    expect(btn.disabled).toBe(true)
+    expect(sendAgainCalls).toHaveLength(1)
+    expect(sendAgainCalls[0]).toMatch(new RegExp(`/invoices/${ID}/send-again$`))
+
+    await act(async () => {
+      release({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+    await waitFor(() => expect((screen.getByTestId('send-again') as HTMLButtonElement).textContent).toBe('Send again'))
+  })
+
+  it('a sent-again invoice re-reads the detail and the history and shows queued', async () => {
+    const { fetchMock } = mockDetailFetch(failedRec(), [], { detailSequence: [failedRec({ status: 'queued', can_send_again: false })] })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('send-again'))
+    await waitFor(() => expect(screen.getByTestId('invoice-status-badge').textContent?.toLowerCase()).toContain('queued'))
+    expect(detailGets(fetchMock).length).toBeGreaterThanOrEqual(2)
+    expect(historyGets(fetchMock).length).toBeGreaterThanOrEqual(2)
+  })
+
+  it(
+    'a sent-again invoice that polling sees fail again shows the new kind\'s copy and an enabled action',
+    async () => {
+      const queued = failedRec({ status: 'queued', failure_kind: null, can_send_again: false })
+      const failedAgain = failedRec({ failure_kind: 'never_acknowledged', can_send_again: true })
+      mockDetailFetch(queued, [], { detailSequence: [failedAgain] })
+      render(<InvoiceDetail ctx={detailCtx(ID)} />)
+      const btn = (await screen.findByTestId('send-again', {}, { timeout: LIVE_POLL_MS + 1500 })) as HTMLButtonElement
+      expect(btn.disabled).toBe(false)
+      expect(screen.getByTestId('failure-headline').textContent).toBe(failureExplanation('never_acknowledged').headline)
+      expect(screen.queryByTestId('failure-next-step')).toBeNull()
+    },
+    LIVE_POLL_MS + 5000,
+  )
+
+  it('a refused send-again keeps the failed card, shows the sentence and re-reads nothing', async () => {
+    const sentence = 'This invoice was marked resolved outside the system, so it cannot be sent again.'
+    const { fetchMock } = mockDetailFetch(failedRec(), [], {
+      sendAgainResponse: { ok: false, status: 409, json: () => Promise.resolve({ error: sentence }) },
+    })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('send-again'))
+    expect((await screen.findByTestId('send-again-error')).textContent).toBe(sentence)
+    expect(screen.getByTestId('failed-dead-end')).toBeTruthy()
+    expect(detailGets(fetchMock)).toHaveLength(1)
   })
 })
 

@@ -265,6 +265,8 @@ const TOPOLOGY_MANIFEST: ManifestEntry[] = [
   [INVOICE_SURFACES, 'helper:openAcceptedThreeLineInvoice', 'click:batch-submit-confirm', 1],
   // The note test files its credit note from the register; the original's MOCK_TIN_ACCEPT answers.
   [INVOICE_SURFACES, 'test:notes: a credit note nets in the list, the Reports tiles and the register footer', 'click:batch-submit-confirm', 1],
+  // Submits a row it created from the register with MOCK_TIN_UNBUILDABLE, so the mock adapter fails it as payload_not_built.
+  [INVOICE_SURFACES, 'test:send again: a payload_not_built invoice goes back to queued, fails again, and the action fits its card', 'click:batch-submit-confirm', 1],
 ]
 
 // AC-14: can_submit / awaiting_approval needle matches are deliberately OUT of scope here --

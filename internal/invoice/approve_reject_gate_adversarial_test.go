@@ -205,7 +205,7 @@ func approveFlagsVia(t *testing.T, app *pgxpool.Pool, fx approvalFactsFixture) a
 	r.SetPathValue("id", fx.invID)
 	r = r.WithContext(fx.ctx)
 	rec := httptest.NewRecorder()
-	GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, nil).ServeHTTP(rec, r)
+	GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, store.NoteChecks, nil).ServeHTTP(rec, r)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
@@ -305,7 +305,7 @@ func TestGetHandler_ApproveFlagAgreesWithTheDecisionEndpoint(t *testing.T) {
 				r.SetPathValue("id", fx.invID)
 				r = r.WithContext(fx.ctx)
 				rec := httptest.NewRecorder()
-				GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, nil).ServeHTTP(rec, r)
+				GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, store.NoteChecks, nil).ServeHTTP(rec, r)
 				// The seam refuses the read, and the refusal reaches the wire as the
 				// 403 the mapper produces -- the same body every other handler gives.
 				assertNotActiveMember403(t, rec)

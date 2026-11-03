@@ -1277,6 +1277,8 @@ describe('getInvoice', () => {
       invoice_number_blocked_reason: null,
       can_issue_note: false,
       issue_note_blocked_reason: null,
+      can_send_again: false,
+      send_again_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(fiscalInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -1315,6 +1317,8 @@ describe('getInvoice', () => {
       invoice_number_blocked_reason: null,
       can_issue_note: false,
       issue_note_blocked_reason: null,
+      can_send_again: false,
+      send_again_blocked_reason: null,
     }
     const { qr_png_base64: _omittedQr, ...withoutQrKey } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutQrKey) })
@@ -1349,6 +1353,8 @@ describe('getInvoice', () => {
       invoice_number_blocked_reason: null,
       can_issue_note: false,
       issue_note_blocked_reason: null,
+      can_send_again: false,
+      send_again_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(detailInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -1404,6 +1410,8 @@ describe('getInvoice', () => {
       invoice_number_blocked_reason: null,
       can_issue_note: false,
       issue_note_blocked_reason: null,
+      can_send_again: false,
+      send_again_blocked_reason: null,
     }
     const { can_submit: _omittedCanSubmit, ...withoutCanSubmit } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanSubmit) })
@@ -1595,6 +1603,8 @@ describe('getInvoice', () => {
       invoice_number_blocked_reason: null,
       can_issue_note: false,
       issue_note_blocked_reason: null,
+      can_send_again: false,
+      send_again_blocked_reason: null,
     }
     const { can_view_ubl: _omittedCanViewUbl, ...withoutCanViewUbl } = wire
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanViewUbl) })
@@ -1865,6 +1875,23 @@ describe('getInvoice', () => {
     const fixed = await getInvoice(af, base, 'inv-1')
     expect(fixed.can_correct_invoice_number).toBe(false)
     expect(fixed.invoice_number_blocked_reason).toBe(NUMBER_FIXED_REASON)
+  })
+})
+
+describe('getInvoice: the send-again gate', () => {
+  it('getInvoice normalises can_send_again and send_again_blocked_reason', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+    const { can_send_again: _f, send_again_blocked_reason: _r, ...bare } = draftInvoice as unknown as Record<string, unknown>
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(bare) })
+    const absent = await getInvoice(af, base, 'inv-1')
+    expect(absent.can_send_again).toBe(false)
+    expect(absent.send_again_blocked_reason).toBeNull()
+    expect('send_again_blocked_reason' in absent).toBe(true)
+
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...bare, can_send_again: true, send_again_blocked_reason: 'x' }) })
+    const sent = await getInvoice(af, base, 'inv-1')
+    expect(sent.can_send_again).toBe(true)
+    expect(sent.send_again_blocked_reason).toBe('x')
   })
 })
 
@@ -2192,6 +2219,8 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
       invoice_number_blocked_reason: null,
       can_issue_note: false,
       issue_note_blocked_reason: null,
+      can_send_again: false,
+      send_again_blocked_reason: null,
     }
     const af = createAuthedFetch(() => 'tok', vi.fn())
 
@@ -2340,6 +2369,8 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
       invoice_number_blocked_reason: null,
       can_issue_note: false,
       issue_note_blocked_reason: null,
+      can_send_again: false,
+      send_again_blocked_reason: null,
     }
 
     const fromList = resolvedOutside(listRow)
@@ -5438,15 +5469,17 @@ describe('failureExplanation', () => {
       expect(r, `kind=${k}`).not.toEqual(FAILURE_EXPLANATION_FALLBACK)
       expect(r.headline.trim().length, `kind=${k} headline`).toBeGreaterThan(0)
       expect(r.detail.trim().length, `kind=${k} detail`).toBeGreaterThan(0)
-      expect(r.nextStep.trim().length, `kind=${k} nextStep`).toBeGreaterThan(0)
+      // never_acknowledged carries no next step ([copy-split]).
+      if (k !== 'never_acknowledged') expect(r.nextStep.trim().length, `kind=${k} nextStep`).toBeGreaterThan(0)
     }
   })
 
-  it('FK-3: every branch returns a non-empty nextStep', () => {
+  it('FK-3: every branch returns a non-empty nextStep, except never_acknowledged whose is empty', () => {
     const inputs: Array<string | null> = [...FAILURE_KINDS, null, 'wat']
     for (const kind of inputs) {
       const r = failureExplanation(kind)
-      expect(r.nextStep.trim().length, `kind=${String(kind)}`).toBeGreaterThan(0)
+      if (kind === 'never_acknowledged') expect(r.nextStep, `kind=${String(kind)}`).toBe('')
+      else expect(r.nextStep.trim().length, `kind=${String(kind)}`).toBeGreaterThan(0)
     }
   })
 
@@ -5465,8 +5498,8 @@ describe('failureExplanation', () => {
     expect(failureExplanation('app_rejected')).toEqual(failureExplanation(null))
   })
 
-  it('FK-6: no branch offers a retry, re-validate or edit', () => {
-    const all: Array<string | null> = [...FAILURE_KINDS, null, 'wat']
+  it('FK-6: no unretryable branch offers a retry, re-validate or edit', () => {
+    const all: Array<string | null> = ['acknowledged_no_verdict', null, 'wat']
     for (const kind of all) {
       const r = failureExplanation(kind)
       const joined = `${r.headline} ${r.detail} ${r.nextStep}`
@@ -5476,12 +5509,42 @@ describe('failureExplanation', () => {
     }
   })
 
+  it('FK-15: the two resendable kinds carry the story copy', () => {
+    expect(failureExplanation('payload_not_built')).toEqual({
+      headline: 'We could not prepare this invoice for NRS.',
+      detail: 'Nothing was sent.',
+      nextStep: 'You can send it again. If it fails again, report it to ASComply support.',
+    })
+    expect(failureExplanation('never_acknowledged')).toEqual({
+      headline: 'The Access Point did not reply, so this invoice may or may not have arrived.',
+      detail: 'Sending it again reuses the same submission reference, so a repeat is recognised and not filed twice.',
+      nextStep: '',
+    })
+  })
+
+  // Literals copied from head e8cee06.
+  it('FK-16: acknowledged_no_verdict and the fallback are unchanged', () => {
+    expect(failureExplanation('acknowledged_no_verdict')).toEqual({
+      headline: 'This invoice was received for filing, but no result ever came back.',
+      detail:
+        'We know it arrived. We never learned whether it was accepted or rejected, so it may already have been filed — raising another invoice for the same transaction could file it twice.',
+      nextStep:
+        'Do not raise another invoice for the same transaction yet. Ask ASComply support to confirm with NRS whether this one has already been filed.',
+    })
+    expect(FAILURE_EXPLANATION_FALLBACK).toEqual({
+      headline: 'We do not have a recorded reason for this failure.',
+      detail:
+        'The reason was not recorded for this invoice, so we cannot tell you from this screen what went wrong — or whether it was filed.',
+      nextStep: 'Ask ASComply support to check what happened to this invoice before you raise another one for the same transaction.',
+    })
+  })
+
   it('FK-7: no branch claims anyone has been notified', () => {
     const all: Array<string | null> = [...FAILURE_KINDS, null, 'wat']
     for (const kind of all) {
       const r = failureExplanation(kind)
       const joined = `${r.headline} ${r.detail} ${r.nextStep}`
-      expect(joined, `kind=${String(kind)}`).not.toMatch(/notified|alerted|our team|we've been|looking into|monitor/i)
+      expect(joined, `kind=${String(kind)}`).not.toMatch(/notif|alerted|our team|we've been|looking into|monitor/i)
     }
   })
 

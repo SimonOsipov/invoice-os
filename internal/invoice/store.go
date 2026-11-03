@@ -1918,6 +1918,27 @@ type ApprovalFacts struct {
 	CreatorErr error
 }
 
+// readNoteChecks is swapped by tests.
+var readNoteChecks = noteChecksBlockedTx
+
+// NoteChecks reports whether inv passes its note checks, for the send-again gate. Only a failed
+// note opens a transaction; any other invoice passes. An error reads as not passing.
+func (s *Store) NoteChecks(ctx context.Context, inv Invoice) (bool, error) {
+	if inv.Status != StatusFailed || !isNote(inv) {
+		return true, nil
+	}
+	pass := false
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		blocked, err := readNoteChecks(ctx, tx, inv.ID, false)
+		pass = !blocked
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	return pass, nil
+}
+
 // ApprovalFacts reads id's approval standing for the caller inside ONE
 // db.WithinRequestTenantTx -- CallerRole's wrapper above, for the same reason: a
 // read with no write needs no second transaction. An error returns the ZERO

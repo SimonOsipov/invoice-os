@@ -516,7 +516,7 @@ func TestGetHandler_HasNoDemotionKey(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/v1/invoices/"+id, nil).WithContext(f.admin)
 	r.SetPathValue("id", id)
 	rec := httptest.NewRecorder()
-	GetHandler(f.store.Get, f.store.CallerRole, f.store.ApprovalFacts, nil).ServeHTTP(rec, r)
+	GetHandler(f.store.Get, f.store.CallerRole, f.store.ApprovalFacts, f.store.NoteChecks, nil).ServeHTTP(rec, r)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("detail status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}

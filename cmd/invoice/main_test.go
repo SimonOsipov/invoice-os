@@ -366,9 +366,12 @@ func TestInvoiceMain_WiresApprovalFactsIntoGetHandler(t *testing.T) {
 		}
 		found = true
 
-		if len(call.Args) != 4 {
-			t.Errorf("invoice.GetHandler in cmd/invoice/main.go has %d argument(s), want 4 (get, callerRole, approvalFacts, logger)", len(call.Args))
+		if len(call.Args) != 5 {
+			t.Errorf("invoice.GetHandler in cmd/invoice/main.go has %d argument(s), want 5 (get, callerRole, approvalFacts, noteChecks, logger)", len(call.Args))
 			return false
+		}
+		if note, ok := call.Args[3].(*ast.SelectorExpr); !ok || note.Sel.Name != "NoteChecks" {
+			t.Errorf("invoice.GetHandler's fourth argument is not store.NoteChecks")
 		}
 		arg, ok := call.Args[2].(*ast.SelectorExpr)
 		if !ok {

@@ -59,6 +59,9 @@ import {
   RESOLVE_OUTSIDE_COPY,
   resolvedOutside,
   revalidateInvoice,
+  SEND_AGAIN_COPY,
+  sendAgainOffered,
+  sendInvoiceAgain,
   shouldFetchInvoices,
   shouldPollInvoice,
   shouldRefreshHistory,
@@ -348,6 +351,10 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const [resolving, setResolving] = useState(false)
   const [undoing, setUndoing] = useState(false)
   const [resolveOutsideError, setResolveOutsideError] = useState<string | null>(null)
+
+  const [sendingAgain, setSendingAgain] = useState(false)
+  const [sendAgainError, setSendAgainError] = useState<string | null>(null)
+  const sendAgainInFlight = useRef(false)
 
   // Inline edit mode ([edit-ux]/[edit-mode-in-body], INVED-01-07). The ONLY new state this
   // component gains: the editor itself is a child mounted only while true, seeding its own
@@ -640,6 +647,25 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         setResolveOutsideError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
       } finally {
         setResolving(false)
+      }
+    }
+
+    const handleSendAgain = async () => {
+      if (!inv.can_send_again || sendAgainInFlight.current) return
+      sendAgainInFlight.current = true
+      setSendingAgain(true)
+      setSendAgainError(null)
+      try {
+        await sendInvoiceAgain(ctx.authedFetch, base, invoiceId)
+        gen.current++
+        setLive(null)
+        detail.run()
+        history.run()
+      } catch (err) {
+        setSendAgainError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
+      } finally {
+        sendAgainInFlight.current = false
+        setSendingAgain(false)
       }
     }
 
@@ -1212,16 +1238,51 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   <span className="card-title" style={{ color: 'var(--status-red-text)' }}>Submission failed</span>
                 </div>
                 <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 9, fontSize: 12.5, lineHeight: 1.5 }}>
-                  <div style={{ color: 'var(--fg-2)' }}>
-                    This submission failed and is terminal — it cannot be re-driven from this screen.
-                  </div>
+                  {!sendAgainOffered(inv) && (
+                    <div style={{ color: 'var(--fg-2)' }}>
+                      This submission failed and is terminal — it cannot be re-driven from this screen.
+                    </div>
+                  )}
                   <div data-testid="failure-headline" style={{ fontWeight: 600 }}>{failure.headline}</div>
                   <div data-testid="failure-detail" style={{ color: 'var(--fg-2)' }}>{failure.detail}</div>
-                  <div data-testid="failure-next-step" style={{ color: 'var(--fg-2)' }}>
-                    {failure.nextStep}
-                  </div>
+                  {failure.nextStep !== '' && (
+                    <div data-testid="failure-next-step" style={{ color: 'var(--fg-2)' }}>
+                      {failure.nextStep}
+                    </div>
+                  )}
+                  {sendAgainOffered(inv) && (
+                    <div style={{ paddingTop: 10, borderTop: '1px solid var(--line-1)' }}>
+                      <button
+                        type="button"
+                        data-testid="send-again"
+                        onClick={() => void handleSendAgain()}
+                        disabled={!inv.can_send_again || sendingAgain}
+                        aria-describedby={!inv.can_send_again && inv.send_again_blocked_reason != null ? 'send-again-blocked-reason' : undefined}
+                        className="v2-btn v2-btn-ghost pf-btn"
+                        style={{
+                          height: 32,
+                          fontSize: 12.5,
+                          flexShrink: 0,
+                          whiteSpace: 'nowrap',
+                          ...(!inv.can_send_again || sendingAgain ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                        }}
+                      >
+                        {sendingAgain ? SEND_AGAIN_COPY.sending : SEND_AGAIN_COPY.label}
+                      </button>
+                      {!inv.can_send_again && inv.send_again_blocked_reason != null && (
+                        <div data-testid="send-again-blocked" id="send-again-blocked-reason" style={{ marginTop: 6, fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg-3)' }}>
+                          {inv.send_again_blocked_reason}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {sendAgainError && (
+                    <div data-testid="send-again-error" style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12, color: 'var(--status-red-text)' }}>
+                      {sendAgainError}
+                    </div>
+                  )}
                   {/* Resolve-outside (Core AC #1/#4/#5/#6) -- inline, never a modal
-                      ([no-modal]), the only affordance this diagnosis-only card carries.
+                      ([no-modal]).
                       Resolved and unresolved are mutually exclusive renders: the banner +
                       Undo replace the reason input + mark-resolved button entirely. */}
                   {resolvedMark ? (

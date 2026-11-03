@@ -31,6 +31,8 @@ import {
   getAuditLog,
   getInvoice,
   getInvoiceApproval,
+  getInvoiceHistory,
+  me,
   editInvoice,
   provisionRealAccount,
   signInSession,
@@ -235,6 +237,10 @@ const MOCK_TIN_REJECT = '99999999-0002'
 // needs. -0001/-0002 both converge synchronously (~800ms) and can't prove live refresh at
 // all -- see the reject/resubmit test below.
 const MOCK_TIN_PENDING = '99999999-0003'
+// internal/submission/mock_script.go mockTINUnbuildable: fails as payload_not_built, a resendable kind.
+const MOCK_TIN_UNBUILDABLE = '99999999-0010'
+// internal/invoice/send_again.go sendAgainResolvedReason, byte for byte.
+const SEND_AGAIN_RESOLVED_REASON = 'This invoice is marked resolved outside ASComply and cannot be sent again.'
 
 // internal/invoice/handlers.go's awaitingApprovalReason, byte for byte -- the detail
 // page's undecided-state reason (AC-4 below). Own copy, not a cross-spec import (repo
@@ -2389,6 +2395,115 @@ test('submission surface: a failed invoice with a recorded kind explains itself'
 
   await expect(page.getByTestId('failed-dead-end')).toBeVisible()
   await expect(page.getByTestId('failure-detail')).toContainText(/twice/i)
+  // acknowledged_no_verdict is not resendable: no action, and the terminal sentence stays.
+  await expect(page.getByTestId('send-again')).toHaveCount(0)
+  await expect(page.getByTestId('failed-dead-end')).toContainText('cannot be re-driven')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('send again: a payload_not_built invoice goes back to queued, fails again, and the action fits its card', async ({ page }) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `RETRY01 send again ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-RETRY01-${Date.now()}`
+  const inv = await createInvoice(token, { entity_id: entity.id, ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_UNBUILDABLE) })
+  await validateInvoice(token, inv.id)
+  await approveUntilClosed(inv.id, await firmApproverTokens(SHARD.a.id))
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  await invoiceRowByNumber(page, invoiceNumber).getByTestId('invoice-select').check()
+  await submitSelected(page)
+
+  const failedAs = async () => {
+    const w = await getInvoice(token, inv.id)
+    return `${w.status}/${w.failure_kind}`
+  }
+  await expect.poll(failedAs, { message: 'the -0010 trigger fails the invoice as payload_not_built', timeout: 60_000 }).toBe('failed/payload_not_built')
+
+  await openInvoiceRow(page, invoiceNumber)
+  const deadEnd = page.getByTestId('failed-dead-end')
+  const sendAgain = page.getByTestId('send-again')
+  await expect(sendAgain).toBeEnabled()
+  await expect(deadEnd).not.toContainText('cannot be re-driven')
+
+  const fitLocs = {
+    deadEnd,
+    send: sendAgain,
+    resolveBtn: page.getByTestId('resolve-outside'),
+    resolveReason: page.getByTestId('resolve-outside-reason'),
+  }
+  const sweep = await dvSweepWide(page, async () => {
+    const r = await dvRead(page, fitLocs)
+    const lines = await sendAgain.evaluate((el) => {
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      return new Set([...range.getClientRects()].map((q) => Math.round(q.top))).size
+    })
+    return { t: r.targets, lines }
+  })
+  for (const s of sweep) {
+    const at = `${s.width}px`
+    expect(enclosesRect(s.t.deadEnd.rect, s.t.send.rect, 1), `send-again lies inside failed-dead-end at ${at}`).toBe(true)
+    expect(rectsOverlap(s.t.send.rect, s.t.resolveBtn.rect), `send-again clears resolve-outside at ${at}`).toBe(false)
+    expect(rectsOverlap(s.t.send.rect, s.t.resolveReason.rect), `send-again clears resolve-outside-reason at ${at}`).toBe(false)
+    expect(s.t.send.scrollWidth, `send-again label fits at ${at}`).toBeLessThanOrEqual(s.t.send.clientWidth)
+    expect(s.lines, `send-again label is one line at ${at}`).toBe(1)
+  }
+  await assertPageDoesNotScrollSideways(page, 'send-again failed detail')
+
+  const userId = (await me(await browserToken(page))).user.id
+  const statusChange = page.getByTestId('invoice-activity').getByTestId('audit-row').filter({ hasText: 'Status changed' }).filter({ hasText: DRIVER })
+  // The card shows ACTIVITY_REST_ROWS (5) rows until expanded; activityToggleCopy labels it 'Show all N events' / 'Show fewer'.
+  const expandActivity = async () => {
+    const toggle = page.getByTestId('activity-toggle')
+    await expect(toggle.or(page.getByTestId('audit-row')).first()).toBeVisible()
+    if ((await toggle.count()) > 0 && /^Show all /.test((await toggle.textContent()) ?? '')) {
+      await toggle.click()
+      await expect(toggle, 'the card is expanded before any row is counted').toHaveText('Show fewer')
+    }
+  }
+  await expandActivity()
+  await expect(statusChange.first(), 'the batch submit is already in the feed, so the count below is non-empty').toBeVisible()
+  const before = await statusChange.count()
+  await sendAgain.click()
+  await expect
+    .poll(
+      async () => (await getInvoiceHistory(token, inv.id)).some((h) => h.from_status === 'failed' && h.to_status === 'queued' && h.actor === userId),
+      { message: 'history gains failed -> queued by the persona', timeout: 30_000 },
+    )
+    .toBe(true)
+  await expect.poll(failedAs, { message: 'it fails again as payload_not_built', timeout: 60_000 }).toBe('failed/payload_not_built')
+  await expect(sendAgain).toBeEnabled()
+
+  await page.reload()
+  await expandActivity()
+  await expect(statusChange.first()).toBeVisible()
+  await expect(statusChange, 'the retry adds exactly one persona Status changed row').toHaveCount(before + 1)
+
+  await page.getByTestId('resolve-outside-reason').fill('Settled directly with the buyer')
+  await page.getByTestId('resolve-outside').click()
+  await expect(page.getByTestId('detail-resolved-banner')).toBeVisible()
+  await expect(sendAgain).toBeDisabled()
+  const blocked = page.getByTestId('send-again-blocked')
+  await expect(blocked).toBeVisible()
+  await expect(blocked).toHaveText(SEND_AGAIN_RESOLVED_REASON)
+
+  const blockedSweep = await dvSweepWide(page, async () => {
+    const r = await dvRead(page, { deadEnd, send: sendAgain, blocked, banner: page.getByTestId('detail-resolved-banner') })
+    return { t: r.targets }
+  })
+  for (const s of blockedSweep) {
+    const at = `${s.width}px`
+    expect(enclosesRect(s.t.deadEnd.rect, s.t.blocked.rect, 1), `send-again-blocked lies inside failed-dead-end at ${at}`).toBe(true)
+    expect(rectsOverlap(s.t.blocked.rect, s.t.send.rect), `send-again-blocked clears send-again at ${at}`).toBe(false)
+    expect(rectsOverlap(s.t.blocked.rect, s.t.banner.rect), `send-again-blocked clears the resolved banner at ${at}`).toBe(false)
+  }
+  await assertPageDoesNotScrollSideways(page, 'send-again blocked detail')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

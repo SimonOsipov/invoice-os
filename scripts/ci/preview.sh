@@ -219,6 +219,8 @@ env_file() {
     case "$svc" in
       invoice | submission | worker)
         [ "$pr" = nightly ] || { echo "AI_FAKE: 'true'"; echo "JEV_FAKE: 'true'"; }
+        # OpenRouter groups usage by this referrer URL; the nightly's own app URL is stable across nights.
+        [ "$pr" != nightly ] || { echo "OPENROUTER_APP_NAME: Nightly App"; echo "OPENROUTER_APP_URL: $(url app "$pr")"; }
         echo "DOCUMENT_BUCKET: ascomply-preview-$(suffix "$pr")"
         echo "DOCUMENT_ENDPOINT: https://storage.googleapis.com"
         echo "DOCUMENT_REGION: auto"

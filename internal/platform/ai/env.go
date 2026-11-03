@@ -11,8 +11,10 @@ import (
 )
 
 const (
-	EnvKey  = "OPENROUTER_API_KEY"
-	EnvFake = "AI_FAKE"
+	EnvKey     = "OPENROUTER_API_KEY"
+	EnvAppURL  = "OPENROUTER_APP_URL"
+	EnvAppName = "OPENROUTER_APP_NAME"
+	EnvFake    = "AI_FAKE"
 )
 
 // ErrOff marks a call on a client with no key and no fake mode.
@@ -36,6 +38,8 @@ func FromEnv(logger *slog.Logger) (*Client, error) {
 	}
 	return newClient(config{
 		key:      os.Getenv(EnvKey),
+		appURL:   os.Getenv(EnvAppURL),
+		appName:  os.Getenv(EnvAppName),
 		endpoint: endpoint,
 		fake:     fake,
 		budget:   budget,

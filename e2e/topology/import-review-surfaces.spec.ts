@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { test, expect, type Locator, type Page, type Request, type Response, type TestInfo } from '@playwright/test'
-import { login, createEntity, createImportBatch, getInvoice, listInvoices, approveUntilClosed, firmApproverTokens, type ExtractionDetail, type Persona } from '../api/client'
+import { login, createEntity, createImportBatch, getInvoice, listInvoices, approveUntilClosed, firmApproverTokens, type ExtractionDetail, type ExplainResult, type Persona } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { shoot as argosShoot } from '../argos'
@@ -13,8 +13,9 @@ import { approvalRun404Dropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { GATEWAY_URL, shardTenants } from './targets'
 import { signInAs } from '../personaSession'
-import { nightlyTarget, REAL_AI_COVERED } from '../targets'
-import { buildAir07UnsteeredCsv, buildHeaderOnlyCsv, buildMixedCsv, steerExplainMarker } from '../importFixtures'
+import { nightlyTarget } from '../targets'
+import { buildAir07UnsteeredCsv, buildHeaderOnlyCsv, buildMixedCsv, PR_LANE_MAPPING, steerExplainMarker } from '../importFixtures'
+import { setExactMapping } from './importWizardShared'
 
 const SHARD = shardTenants('import-review-surfaces.spec.ts')
 const GATEWAY_ORIGIN = new URL(GATEWAY_URL).origin
@@ -277,14 +278,6 @@ async function pickAndRead(page: Page, name: string, csv: string): Promise<void>
   const preview = page.waitForResponse(isPreview, { timeout: 60_000 })
   await page.getByRole('button', { name: 'Read columns' }).click()
   await preview
-}
-
-// invoice_number and subtotal never auto-place on the mixed fixture, so they are click-placed.
-async function placeMixedColumns(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
-  await page.getByRole('button', { name: 'subtotal' }).click()
-  await page.getByText('Subtotal', { exact: true }).click()
 }
 
 async function clickImport(page: Page): Promise<void> {
@@ -757,13 +750,12 @@ test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
   })
 
   test('RK-04 (AC 8) + RV-01 + RV-02 + RV-03: the mixed import reads its v2 review values and fits at every width', async ({ page }, testInfo) => {
-    test.skip(nightlyTarget(), REAL_AI_COVERED)
     test.setTimeout(300_000)
     const errors = collectErrors(page)
 
     const { token, entityId } = await startWizard(page, 'RESKIN2-04 review')
     await pickAndRead(page, 'rk-04-mixed.csv', buildMixedCsv())
-    await placeMixedColumns(page)
+    await setExactMapping(page, PR_LANE_MAPPING)
     await clickImport(page)
 
     const heading = page.getByRole('heading', { level: 2, name: '2 invoices imported' })
@@ -914,14 +906,13 @@ test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
   })
 
   test('RK-05 (AC 6) + MP-01 + RV-03: the second import of the same text shows the already-imported tab', async ({ page }, testInfo) => {
-    test.skip(nightlyTarget(), REAL_AI_COVERED)
     test.setTimeout(300_000)
     const errors = collectErrors(page)
 
     await startWizard(page, 'RESKIN2-04 already imported')
     // Run 1 stores the mixed invoices and saves its mapping.
     await pickAndRead(page, 'rk-05-first.csv', buildMixedCsv())
-    await placeMixedColumns(page)
+    await setExactMapping(page, PR_LANE_MAPPING)
     await clickImport(page)
     await expect(page.getByRole('button', { name: /^Invoices \(\d+\)$/ })).toBeVisible({ timeout: 60_000 })
     await page.getByRole('button', { name: 'Finish · go to invoices' }).click()
@@ -960,14 +951,12 @@ test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
   })
 
   test('RK-06 (AC 6) + RV-04: the all-rejected run keeps its tiles inside the card', async ({ page }, testInfo) => {
-    test.skip(nightlyTarget(), REAL_AI_COVERED)
     test.setTimeout(180_000)
     const errors = collectErrors(page)
 
     await startWizard(page, 'RESKIN2-04 rejected')
     await pickAndRead(page, 'rk-06-header-only.csv', buildHeaderOnlyCsv())
-    await page.getByRole('button', { name: 'invoice_number' }).click()
-    await page.getByText('Invoice No', { exact: true }).click()
+    await setExactMapping(page, PR_LANE_MAPPING)
     await expect(page.getByRole('button', { name: 'Import 0 rows' })).toBeEnabled()
     await clickImport(page)
 
@@ -1011,7 +1000,6 @@ test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
   test.use({ viewport: { width: 1440, height: 900 } })
 
   test('RX-01 (AC 8) + RX-03 (AC 5) + EX-01 + EX-02: the flagged reading reads its v2 values, selecting, and fits at every width', async ({ page }, testInfo) => {
-    test.skip(nightlyTarget(), REAL_AI_COVERED)
     test.setTimeout(420_000)
     const errors = collectErrors(page)
 
@@ -1035,19 +1023,16 @@ test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
 
     const pillCell = page.locator('[data-testid^="extraction-field-"]').filter({ has: page.locator('span.mono') }).first()
     const pills = pillCell.locator('span.mono')
-    const chips = page.locator('button[data-testid^="extraction-chip-"]')
     const zoomSegments = page.locator('[data-testid^="extraction-zoom-"]')
     const zoomGroup = zoomSegments.first().locator('xpath=..')
     const frame = page.getByTestId('extraction-page-1')
     const lineScroll = page.getByTestId('line-item-scroll')
     await floor(pills, 1, 'a flagged header field must render a reason pill')
-    await floor(chips, 1, 'the ambiguous field must render at least one chip')
     await floor(zoomSegments, 1, 'the zoom group must render its segments')
     await floor(lineScroll, 1, 'the default upload must read with line items')
 
-    const read = await readAll(page, { pill: pills.first(), chip: chips, group: zoomGroup, segments: zoomSegments, frame, lineScroll })
+    const read = await readAll(page, { pill: pills.first(), group: zoomGroup, segments: zoomSegments, frame, lineScroll })
     expectCorners(read.reads.pill[0].style, '4px', 'reason pill')
-    for (const [i, chip] of read.reads.chip.entries()) expectCorners(chip.style, '6px', `chip ${i}`)
     expectCorners(read.reads.group[0].style, '6px', 'zoom group')
     expect(read.reads.segments.length, 'the zoom group holds at least one segment').toBeGreaterThan(0)
     for (const [i, seg] of read.reads.segments.entries()) expectCorners(seg.style, '4px', `zoom segment ${i}`)
@@ -1108,6 +1093,23 @@ test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
     await attachJson(testInfo, 'ex-01-ex-02-sweep', swept)
     const fit = await lineScroll.evaluate(edgesOf)
     await attachJson(testInfo, 'ex-02-scroll-edges', fit)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('RX-01b: the ambiguous chip sits inside its field corner', async ({ page }, testInfo) => {
+    test.skip(nightlyTarget(), 'S12: needs an ambiguous header field; no fixture forces one on the real AI')
+    test.setTimeout(420_000)
+    const errors = collectErrors(page)
+
+    await extractOneDocument(page, 'RESKIN2-04 extraction chip')
+    await openExtractionReview(page)
+
+    const chips = page.locator('button[data-testid^="extraction-chip-"]')
+    await floor(chips, 1, 'the ambiguous field must render at least one chip')
+    const read = await readAll(page, { chip: chips })
+    for (const [i, chip] of read.reads.chip.entries()) expectCorners(chip.style, '6px', `chip ${i}`)
+    await attachJson(testInfo, 'rx-01b-reads', read)
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })
@@ -1251,7 +1253,6 @@ test.describe('ENGI-16 import review opens the editor at the line', () => {
   })
 
   test('ENGI-17 review: Explain proposes a line fix and Accept saves it', async ({ page }) => {
-    test.skip(nightlyTarget(), REAL_AI_COVERED)
     test.setTimeout(180_000)
     const errors = collectErrors(page)
 
@@ -1277,9 +1278,20 @@ test.describe('ENGI-16 import review opens the editor at the line', () => {
     const card = page.getByTestId('review-fix-card').filter({ has: open })
     const explain = card.getByTestId('review-fix-explain')
     await expect(explain).toBeVisible()
+    const explained = page.waitForResponse(
+      (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/explain'),
+      { timeout: 60_000 },
+    )
     await explain.click()
     const panel = card.getByTestId('explain-panel')
-    await expect(panel.getByTestId('explain-text')).toContainText('cannot be negative')
+    await expect(panel.getByTestId('explain-text')).not.toBeEmpty()
+    const { fix } = (await (await explained).json()) as ExplainResult
+    // The steer marker makes the fake AI propose a fix; only the real AI may answer without one.
+    if (!nightlyTarget()) expect(fix, 'the PR lane steers a fix, so the explain answer must carry one').not.toBeNull()
+    if (!nightlyTarget()) {
+      await expect(panel.getByTestId('explain-text')).toContainText('cannot be negative')
+      expect(fix).toMatchObject({ field: 'unit_price', line: 2, current: '-5.00', value: '5.00' })
+    }
 
     const entry = page.viewportSize()
     try {
@@ -1302,19 +1314,33 @@ test.describe('ENGI-16 import review opens the editor at the line', () => {
       if (entry) await page.setViewportSize(entry)
     }
 
-    const found = (await listInvoices(token, { entity_id: entity.id })).invoices.find((i) => i.invoice_number === invoiceNumber)
-    expect(found, 'the import made the invoice').toBeDefined()
-    const before = (await getInvoice(token, found!.id)).line_items!
+    if (fix) {
+      expect(fix.line, 'a line violation proposes a line fix').not.toBeNull()
+      const found = (await listInvoices(token, { entity_id: entity.id })).invoices.find((i) => i.invoice_number === invoiceNumber)
+      expect(found, 'the import made the invoice').toBeDefined()
+      const before = (await getInvoice(token, found!.id)).line_items!
+      const cell = async () =>
+        (await getInvoice(token, found!.id)).line_items![fix.line! - 1] as unknown as Record<string, string | null>
+      const sameValue = (stored: string | null) =>
+        stored === fix.value || (stored !== null && Number.isFinite(Number(stored)) && Number(stored) === Number(fix.value))
 
-    await panel.getByTestId('explain-accept').click()
-    await expect
-      .poll(async () => (await getInvoice(token, found!.id)).line_items![1].unit_price, { message: 'line 2 unit_price saved' })
-      .toMatch(/^5(\.0+)?$/)
-    const after = (await getInvoice(token, found!.id)).line_items!
-    expect(after, 'still two lines').toHaveLength(2)
-    // Edit re-inserts the lines, so row ids change; every other field must survive.
-    const withoutId = <T extends { id?: string }>({ id: _id, ...rest }: T) => rest
-    expect(withoutId(after[0]), 'line 1 unchanged').toEqual(withoutId(before[0]))
+      await panel.getByTestId('explain-accept').click()
+      await expect
+        .poll(async () => sameValue((await cell())[fix.field]), { message: `line ${fix.line} ${fix.field} saved as ${fix.value}` })
+        .toBe(true)
+      if (!nightlyTarget()) {
+        await expect
+          .poll(async () => (await getInvoice(token, found!.id)).line_items![1].unit_price, { message: 'line 2 unit_price saved' })
+          .toMatch(/^5(\.0+)?$/)
+      }
+      const after = (await getInvoice(token, found!.id)).line_items!
+      expect(after, 'still two lines').toHaveLength(2)
+      // Edit re-inserts the lines, so row ids change; every other field must survive.
+      const withoutId = <T extends { id?: string }>({ id: _id, ...rest }: T) => rest
+      for (const i of [0, 1].filter((i) => i !== fix.line! - 1)) {
+        expect(withoutId(after[i]), `line ${i + 1} unchanged`).toEqual(withoutId(before[i]))
+      }
+    }
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

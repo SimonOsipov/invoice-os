@@ -118,6 +118,10 @@ var fxCorpus = []struct {
 	{fxJevReceipt, fxBuildJevReceiptInvoice},
 	// CRDDBTNOTE-05's held-note fixture: outside every corpus_ ratchet.
 	{fxJevCreditNote, fxBuildJevCreditNoteInvoice},
+	// Honest fixtures for the real AI, each keeping its source fixture's markers.
+	{fxHonestCreditNote, fxBuildHonestCreditNote},
+	{fxHonestReceipt, fxBuildHonestReceipt},
+	{fxAINRSLabelled, fxBuildAINRSLabelledInvoice},
 	// AIR-08-13's deployed line-items fixture: outside every corpus_ ratchet.
 	{fxAILines, fxBuildAILinesInvoice},
 	// CHECK-01-03's eight non-invoice types: the document-type check's negative half.
@@ -2026,7 +2030,11 @@ func fxJevCreditNoteLines() []fxLine {
 }
 
 func fxBuildJevCreditNoteInvoice() []byte {
-	content := fxText(fxJevCreditNoteLines()...)
+	return fxCreditNotePDF(fxJevCreditNoteLines())
+}
+
+func fxCreditNotePDF(lines []fxLine) []byte {
+	content := fxText(lines...)
 	var rules bytes.Buffer
 	for _, y := range fxJevCreditNoteTableRowYs {
 		rules.WriteString(fxRuleH(y, fxTableColXs[0], fxTableColXs[len(fxTableColXs)-1]))
@@ -2044,6 +2052,82 @@ func fxBuildJevCreditNoteInvoice() []byte {
 		fxObject(fxHelvetica),
 		fxObject(fxCourier),
 	})
+}
+
+// The honest_* and ai_*_labelled fixtures serve the real AI: the same fake markers as the
+// fixture each replaces, but a page a model reads the same way without them.
+const (
+	fxHonestCreditNote = "honest_credit_note.pdf"
+	fxHonestReceipt    = "honest_receipt_invoice.pdf"
+	fxAINRSLabelled    = "ai_nrs_labelled_invoice.pdf"
+)
+
+// fxHonestCreditNoteLines: jev_credit_note.pdf's page under a CREDIT NOTE title and a Reason line.
+func fxHonestCreditNoteLines() []fxLine {
+	return append([]fxLine{
+		{24, 72, 720, "CREDIT NOTE"},
+		{12, 72, 654, "Reason: goods returned"},
+	}, fxJevCreditNoteLines()...)
+}
+
+func fxBuildHonestCreditNote() []byte {
+	return fxCreditNotePDF(fxHonestCreditNoteLines())
+}
+
+// fxHonestReceiptLines: jev_receipt_invoice.pdf's labels under a RECEIPT title and a paid line,
+// no amounts. \xd0 is the em dash in Helvetica's StandardEncoding.
+func fxHonestReceiptLines() []fxLine {
+	return []fxLine{
+		{24, 72, 720, "RECEIPT"},
+		{12, 72, 690, "Invoice Number: JR-4410"},
+		{12, 72, 672, "From: Owerri Traders Limited"},
+		{12, 72, 654, "Supplier TIN: 34567890-0001"},
+		{12, 72, 630, "Payment received \xd0 PAID IN FULL"},
+		{3, 72, 38, fxJevReceiptMarker},
+	}
+}
+
+func fxBuildHonestReceipt() []byte {
+	return fxTextPage(fxHonestReceiptLines()...)
+}
+
+// fxAINRSLabelledColXs places the labelled line table's nine columns.
+var fxAINRSLabelledColXs = [9]int{40, 135, 165, 210, 262, 312, 362, 420, 470}
+
+// fxAINRSLabelledLines: ai_nrs_invoice.pdf with a labelled line table and a buyer city and LGA
+// that hold no state name. Both markers are fxAINRSLines' own.
+func fxAINRSLabelledLines() []fxLine {
+	lines := fxAINRSLines()
+	markers := lines[len(lines)-2:]
+	out := make([]fxLine, 0, len(lines)+18)
+	for _, l := range lines[:len(lines)-2] {
+		switch {
+		case strings.HasPrefix(l.text, "Buyer City: "):
+			l.text = "Buyer City: Ikeja"
+		case strings.HasPrefix(l.text, "Buyer LGA: "):
+			l.text = "Buyer LGA: Ikeja"
+		case l.y == 420 || l.y == 402:
+			continue
+		}
+		out = append(out, l)
+	}
+	table := [][9]string{
+		{"Description", "Qty", "Unit Price", "Line Total", "HSN Code", "ISIC Code", "SKU", "Unit", "Tax Category"},
+		{"Laptop Computer", "2", "500.00", "1000.00", "8471.30", "", "SKU-1001", "EA", "Standard"},
+		{"Software Support", "3", "250.00", "750.00", "", "6201", "", "hours", ""},
+	}
+	for i, row := range table {
+		for c, cell := range row {
+			if cell != "" {
+				out = append(out, fxLine{7, fxAINRSLabelledColXs[c], 420 - 18*i, cell})
+			}
+		}
+	}
+	return append(out, markers...)
+}
+
+func fxBuildAINRSLabelledInvoice() []byte {
+	return fxTextPage(fxAINRSLabelledLines()...)
 }
 
 // fxLinesWithMarkerAt returns lines with its own last entry (the marker) moved to index i, the
@@ -2552,17 +2636,6 @@ func TestFixtures_JevReceiptSharesTheDoubtFixturesShape(t *testing.T) {
 	}
 }
 
-// TestFixtures_JevReceiptE2ECopyIsTheBuildersBytes: the deployed spec uploads this copy.
-func TestFixtures_JevReceiptE2ECopyIsTheBuildersBytes(t *testing.T) {
-	got, err := os.ReadFile(filepath.Join(fxE2EDir, fxJevReceipt))
-	if err != nil {
-		t.Fatalf("read the e2e copy: %v", err)
-	}
-	if want := fxBuildJevReceiptInvoice(); len(want) == 0 || !bytes.Equal(got, want) {
-		t.Errorf("%s/%s = %d byte(s), want the builder's %d", fxE2EDir, fxJevReceipt, len(got), len(want))
-	}
-}
-
 // TestFixtures_JevCreditNoteReadsAsDesigned: the fake reads a credit note, the engine decides the
 // number and the three amounts, and the AI header answer carries the original number alone.
 func TestFixtures_JevCreditNoteReadsAsDesigned(t *testing.T) {
@@ -2604,17 +2677,6 @@ func TestFixtures_JevCreditNoteReadsAsDesigned(t *testing.T) {
 		if r.Name == "invoice_number" && (r.Value == nil || *r.Value != "CN-3401") {
 			t.Errorf("merged invoice_number = %+v, want CN-3401", r)
 		}
-	}
-}
-
-// TestFixtures_JevCreditNoteE2ECopyIsTheBuildersBytes: the deployed spec uploads this copy.
-func TestFixtures_JevCreditNoteE2ECopyIsTheBuildersBytes(t *testing.T) {
-	got, err := os.ReadFile(filepath.Join(fxE2EDir, fxJevCreditNote))
-	if err != nil {
-		t.Fatalf("read the e2e copy: %v", err)
-	}
-	if want := fxBuildJevCreditNoteInvoice(); len(want) == 0 || !bytes.Equal(got, want) {
-		t.Errorf("%s/%s = %d byte(s), want the builder's %d", fxE2EDir, fxJevCreditNote, len(got), len(want))
 	}
 }
 
@@ -3507,7 +3569,7 @@ const fxE2EDir = "../../e2e/fixtures/documents"
 // fxE2ECopies is the explicit table AC-2 requires: each name here must be byte-identical between
 // fxE2EDir and testdata/. Table-driven, not a directory walk, because fxE2EDir also holds
 // native_invoice_2p.pdf, which has no Go-side original of that name.
-var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAIUnavailable, fxAILines, fxAINRS, fxJevDoubt, fxJevReceipt, fxJevCreditNote}
+var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAIUnavailable, fxAILines, fxJevDoubt, fxHonestCreditNote, fxHonestReceipt, fxAINRSLabelled, fxWildScanned}
 
 // fxE2EExempt: native_invoice_2p.pdf has no Go-side original -- its closest analog, native_3page.pdf, is a different file.
 var fxE2EExempt = map[string]bool{"native_invoice_2p.pdf": true}

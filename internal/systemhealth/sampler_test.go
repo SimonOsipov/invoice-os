@@ -44,6 +44,10 @@ func TestSampler_RecordsTheFleetAndTheSlot(t *testing.T) {
 		{"error", fakeFleet("", 0, errors.New("gateway down")), "unknown", nil, true},
 	} {
 		slot := testSlot(t, super, 2004, 0)
+		// Record is DO NOTHING on a taken slot, so a held slot would make the row read below lie.
+		if _, held := readRow(t, super, slot); held {
+			t.Fatalf("%s: slot already holds a row from an earlier case", tc.name)
+		}
 		var logs bytes.Buffer
 		s := &Sampler{Store: &Store{Pool: app}, Fleet: tc.fleet, Logger: slog.New(slog.NewTextHandler(&logs, nil)),
 			Now: func() time.Time { return slot.Add(2*time.Minute + 13*time.Second) }}

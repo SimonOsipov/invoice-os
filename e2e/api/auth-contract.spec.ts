@@ -100,15 +100,18 @@ test.describe('forged tokens (F-204)', () => {
   })
 
   const getMe = (token: string) => rawFetch('/api/tenancy/v1/me', { headers: { Authorization: `Bearer ${token}` } })
-  // Parsed lazily: a failed secret read must not fail the tests that do not need it.
+  // Read and parsed once, lazily: a failed secret read must not fail the tests that do not need it.
   // Errors name the secret only: a parse error message can quote key bytes.
+  let memoKey: KeyObject | undefined
   const previewKey = (): KeyObject => {
+    if (memoKey) return memoKey
     const raw = previewSecret('mock-issuer-key')
     try {
-      return createPrivateKey({ key: JSON.parse(raw)[0], format: 'jwk' })
+      memoKey = createPrivateKey({ key: JSON.parse(raw)[0], format: 'jwk' })
     } catch {
       throw new Error('mock-issuer-key: secret is not a JWK array holding a private key')
     }
+    return memoKey
   }
   const now = (): number => Math.floor(Date.now() / 1000)
 
@@ -132,6 +135,9 @@ test.describe('forged tokens (F-204)', () => {
   })
 
   test('forged tokens: an expired token under the published key is refused', async () => {
+    // Control: the same key, kid and claims, unexpired, is accepted, so only exp can explain the 401.
+    const live = signEs256(header, { ...claims, iat: now(), exp: now() + 300 }, previewKey())
+    expect((await me(live)).tenant.id).toBe(PERSONAS.A.tenantId)
     const token = signEs256(header, { ...claims, iat: now() - 7200, exp: now() - 3600 }, previewKey())
     assertUnauthorizedEnvelope(await getMe(token), 'preview key, expired')
   })

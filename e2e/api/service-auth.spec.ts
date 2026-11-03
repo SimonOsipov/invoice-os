@@ -34,7 +34,15 @@ test.describe('a direct call to each guarded service', () => {
           ...(withToken ? fleetHeaders() : {}),
         },
       })
-      return { res, body: await res.json() }
+      const text = await res.text()
+      let body: unknown
+      try {
+        body = JSON.parse(text)
+      } catch {
+        // A Cloud Run HTML refusal lands here; keep its status visible.
+        body = `non-JSON body, status ${res.status}: ${text.slice(0, 200)}`
+      }
+      return { res, body }
     }
 
     test(`direct call: ${service} refuses a call without the gateway token`, async () => {

@@ -41,7 +41,23 @@ async function step(name: string, res: Response): Promise<Record<string, unknown
 
 // Google ID token for a Cloud Run audience. CI mints it from the federated credential
 // (gcloud cannot, and deploy-preview cannot sign its own); a laptop uses gcloud.
-export async function googleIdToken(audience: string): Promise<string> {
+const idTokens = new Map<string, Promise<string>>()
+
+export function googleIdToken(audience: string): Promise<string> {
+  let memo = idTokens.get(audience)
+  if (!memo) {
+    memo = mintIdToken(audience)
+    idTokens.set(audience, memo)
+    // A failed mint must not poison a retry.
+    const mint = memo
+    mint.catch(() => {
+      if (idTokens.get(audience) === mint) idTokens.delete(audience)
+    })
+  }
+  return memo
+}
+
+async function mintIdToken(audience: string): Promise<string> {
   const file = process.env.GOOGLE_APPLICATION_CREDENTIALS
   const cred = file ? (JSON.parse(readFileSync(file, 'utf8')) as Partial<ExternalAccount> & { type?: string }) : undefined
   if (!cred || cred.type !== 'external_account') {

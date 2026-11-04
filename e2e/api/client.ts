@@ -892,20 +892,31 @@ export async function submitAndAwait(
   want: 'accepted' | 'rejected',
   timeoutMs = 120_000,
 ): Promise<GetInvoiceResult> {
-  await apiFetch(`${apiBase()}/api/invoice/v1/invoices/submissions`, {
-    method: 'POST',
-    body: { invoice_ids: [id], idempotency_key: crypto.randomUUID() },
-    token,
-  })
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const inv = await getInvoice(token, id)
-    if (inv.status === want) return inv
-    if (Date.now() > deadline) {
-      throw new Error(`submitAndAwait: invoice ${id} is ${inv.status}, not ${want}, after ${timeoutMs} ms`)
-    }
-    await new Promise((r) => setTimeout(r, 1_000))
+  // Shape of internal/invoice/batch_submit.go's BatchSubmitResultItem; Reason is omitted when enqueued.
+  const { results } = await apiFetch<{ results: { invoice_id: string; enqueued: boolean; status: string; reason?: string }[] }>(
+    `${apiBase()}/api/invoice/v1/invoices/submissions`,
+    {
+      method: 'POST',
+      body: { invoice_ids: [id], idempotency_key: crypto.randomUUID() },
+      token,
+    },
+  )
+  if (!results[0]?.enqueued) {
+    throw new Error(`submitAndAwait: invoice ${id} was not enqueued: ${results[0]?.reason ?? 'no result'}`)
   }
+  // Dynamic import: ctl and nightly tools load this module outside the Playwright runner.
+  const { expect } = await import('@playwright/test')
+  let inv!: GetInvoiceResult
+  await expect
+    .poll(
+      async () => {
+        inv = await getInvoice(token, id)
+        return inv.status
+      },
+      { timeout: timeoutMs, intervals: [1_000], message: `submitAndAwait: invoice ${id} did not reach ${want}` },
+    )
+    .toBe(want)
+  return inv
 }
 
 // InvoiceEditInput mirrors internal/invoice/handlers.go's editReq exactly: the 9

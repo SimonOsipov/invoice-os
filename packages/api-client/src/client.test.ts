@@ -96,6 +96,40 @@ describe('apiFetch error envelope', () => {
     expect(apiErr.message).toContain('ECONNRESET')
   })
 
+  it('BUG-77: a network failure makes exactly one fetch call and keeps the cause in the message', async () => {
+    const cause = new Error('read ECONNRESET')
+    const fetchMock = mockFetchRejecting(new TypeError('fetch failed', { cause }))
+
+    const err = await captureRejection(() => apiFetch('/x', { method: 'POST', body: { a: 1 } }))
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect((err as ApiError).message).toBe('fetch failed: read ECONNRESET')
+  })
+
+  it.each([
+    ['no cause', new TypeError('fetch failed'), 'fetch failed'],
+    ['an empty-message cause', new TypeError('fetch failed', { cause: new Error('') }), 'fetch failed'],
+    ['a non-Error rejection', 'socket hang up', 'socket hang up'],
+    ['an AbortError without a cause', new DOMException('The operation was aborted.', 'AbortError'), 'The operation was aborted.'],
+  ])('BUG-77: network ApiError message is the bare message for %s', async (_label, rejection, want) => {
+    mockFetchRejecting(rejection)
+
+    const err = await captureRejection(() => apiFetch('/x'))
+
+    expect((err as ApiError).kind).toBe('network')
+    expect((err as ApiError).message).toBe(want)
+  })
+
+  it('BUG-77: network ApiError message appends only the first cause level', async () => {
+    const inner = new Error('inner')
+    const outer = new Error('read ECONNRESET', { cause: inner })
+    mockFetchRejecting(new TypeError('fetch failed', { cause: outer }))
+
+    const err = await captureRejection(() => apiFetch('/x'))
+
+    expect((err as ApiError).message).toBe('fetch failed: read ECONNRESET')
+  })
+
   it('C3: rejects ApiError{kind:"malformed"} when res.json() throws on a 2xx response', async () => {
     mockFetchOnce({
       ok: true,

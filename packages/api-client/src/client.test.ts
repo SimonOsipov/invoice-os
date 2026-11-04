@@ -83,6 +83,19 @@ describe('apiFetch error envelope', () => {
     expect(apiErr.status).toBeNull()
   })
 
+  it('BUG-77: network ApiError message keeps the fetch error cause (undici "fetch failed" + ECONNRESET)', async () => {
+    const cause = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })
+    mockFetchRejecting(new TypeError('fetch failed', { cause }))
+
+    const err = await captureRejection(() => apiFetch('/x'))
+
+    expect(err).toBeInstanceOf(ApiError)
+    const apiErr = err as ApiError
+    expect(apiErr.kind).toBe('network')
+    expect(apiErr.message).toContain('fetch failed')
+    expect(apiErr.message).toContain('ECONNRESET')
+  })
+
   it('C3: rejects ApiError{kind:"malformed"} when res.json() throws on a 2xx response', async () => {
     mockFetchOnce({
       ok: true,

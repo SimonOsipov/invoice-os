@@ -17,8 +17,7 @@
 //
 // Scrubbed request/response headers and verbatim body bytes (AC 8 and AC 9 of the parent
 // story) are proven ONLY in internal/archive/exchange_db_test.go. The first describe's
-// invoice is never submitted. The second describe submits one through the mock adapter and
-// proves only that its body files exist and the request body carries the invoice number.
+// invoice is never submitted; the second submits through the mock adapter.
 // Departure from .claude/rules/e2e.md (containment or live-read, never a literal count): each
 // describe's bundle is scoped to an entity it creates and nothing else ever touches, so
 // the counts are deterministic. The exact count is also STRICTLY STRONGER than containment
@@ -34,6 +33,7 @@ import {
   firmApproverTokens,
   getInvoice,
   getInvoiceHistory,
+  issueNote,
   login,
   rawFetch,
   validateInvoice,
@@ -238,6 +238,37 @@ async function submitAndAwait(tok: string, id: string, want: 'accepted' | 'rejec
     .poll(async () => (await getInvoice(tok, id)).status, { timeout: 120_000, intervals: [1_000] })
     .toBe(want)
   return getInvoice(tok, id)
+}
+
+// internal/submission/document_type.go InvoiceTypeCode
+const TYPE_CODE = { commercial_invoice: '381', credit_note: '380', debit_note: '384' }
+
+// A one-line original that reached accepted; steps of contract-invoice.spec.ts acceptedOriginal.
+async function acceptedOriginal(tok: string, entityId: string, number: string) {
+  const created = await createInvoice(tok, { entity_id: entityId, ...acceptInvoiceFields(number) })
+  expect((await validateInvoice(tok, created.id)).status, 'the clean fixture validates').toBe('validated')
+  await approveUntilClosed(created.id, await firmApproverTokens())
+  return submitAndAwait(tok, created.id, 'accepted')
+}
+
+interface SubmitWire {
+  ID: string
+  IssueDate?: string
+  InvoiceTypeCode: string
+  BillingReference?: { IRN?: string; IssueDate?: string }[]
+}
+
+// The invoice's last submit request body, parsed only once its row is not truncated (MaxBodyBytes).
+function submitWire(zip: Record<string, Uint8Array>, invoiceId: string): SubmitWire {
+  const rows = parseCsv(new TextDecoder().decode(zip['exchange.csv'])).filter(
+    (r) => r.invoice_id === invoiceId && r.operation === OP_SUBMIT,
+  )
+  expect(rows.length, `submit rows of ${invoiceId}`).toBeGreaterThan(0)
+  const row = rows[rows.length - 1]
+  expect(row.truncated, 'submit body is not truncated').toBe('false')
+  const body = zip[row.request_body_file]
+  expect(body, `${row.request_body_file} must be in the ZIP`).toBeDefined()
+  return JSON.parse(new TextDecoder().decode(body)) as SubmitWire
 }
 
 test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
@@ -471,6 +502,52 @@ test.describe('evidence bundle for a submitted invoice (API E2E)', () => {
     for (const a of attempts) {
       expect(a.latency_ms, 'latency_ms is numeric').toMatch(/^\d+$/)
       expect(a.outcome, 'outcome').toBe(OUTCOME_SENT)
+    }
+  })
+
+  test("a credit note and a debit note send the original's IRN, its issue date and their NRS type codes on the wire", async () => {
+    test.setTimeout(240_000)
+
+    const entity = await createEntity(token, { name: `Zz AUDIT-05 notes ${freshTin()}`, tin: freshTin() })
+    const original = await acceptedOriginal(token, entity.id, `INV-NCOV04-${freshTin()}`)
+    const lineId = original.line_items![0].id
+
+    const sendNote = async (document_type: 'credit_note' | 'debit_note', number: string) => {
+      const note = await issueNote(token, original.id, {
+        document_type,
+        invoice_number: number,
+        issue_date: '2026-02-01T00:00:00Z',
+        lines: [{ line_id: lineId, quantity: '4', unit_price: '100' }],
+      })
+      expect((await validateInvoice(token, note.id)).status, `${document_type} validates`).toBe('validated')
+      await approveUntilClosed(note.id, await firmApproverTokens())
+      await submitAndAwait(token, note.id, 'accepted')
+      return note.id
+    }
+    const creditNumber = `CN-NCOV04-${freshTin()}`
+    const debitNumber = `DN-NCOV04-${freshTin()}`
+    const creditId = await sendNote('credit_note', creditNumber)
+    const debitId = await sendNote('debit_note', debitNumber)
+
+    const { zip } = await fetchBundle(token, entity.id, period)
+    const originalWire = submitWire(zip, original.id)
+    const referenceDate = original.issue_date!.slice(0, 10)
+    expect(originalWire.ID, 'original ID').toBe(original.invoice_number)
+    expect(originalWire.IssueDate, 'original IssueDate').toBe(referenceDate)
+    expect(originalWire.InvoiceTypeCode, 'original type code').toBe(TYPE_CODE.commercial_invoice)
+    expect(originalWire.BillingReference, 'an original references nothing').toBeUndefined()
+
+    const notes = [
+      { wire: submitWire(zip, creditId), number: creditNumber, code: TYPE_CODE.credit_note },
+      { wire: submitWire(zip, debitId), number: debitNumber, code: TYPE_CODE.debit_note },
+    ]
+    for (const { wire, number, code } of notes) {
+      expect(wire.ID, `${number} ID`).toBe(number)
+      expect(wire.InvoiceTypeCode, `${number} type code`).toBe(code)
+      expect(wire.IssueDate, `${number} own IssueDate`).toBe('2026-02-01')
+      expect(wire.BillingReference, `${number} BillingReference`).toHaveLength(1)
+      expect(wire.BillingReference![0].IRN, `${number} references the original IRN`).toBe(original.irn)
+      expect(wire.BillingReference![0].IssueDate, `${number} references the original date`).toBe(referenceDate)
     }
   })
 })

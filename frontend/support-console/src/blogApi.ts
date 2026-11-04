@@ -113,7 +113,7 @@ async function coverFetch(id: string, init: RequestInit): Promise<Response> {
   try {
     res = await fetch(url, { ...init, headers: { ...(init.headers as Record<string, string>), Authorization: `Bearer ${token}` } })
   } catch (e) {
-    reportApiFailure(e, { method, url })
+    if (!(e instanceof DOMException && e.name === 'AbortError')) reportApiFailure(e, { method, url })
     throw e
   }
   if (!res.ok) {

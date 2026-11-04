@@ -159,17 +159,15 @@ test.describe('the wizard on the real AI', () => {
     const token = await login(PERSONAS.A)
     const entity = await createEntity(token, { name: `AI suggestion ${stamp}`, tin: freshTin() })
 
-    const suggestAnswers: { status: number; body: { source: string; columns: string[]; mapping: Record<string, string> } }[] = []
+    const isPost = (r: { request(): { method(): string }; url(): string }, suffix: string) =>
+      r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith(suffix)
+    const suggestRequests: string[] = []
     const checkRequests: { mapping: Record<string, string> }[] = []
-    const checkAnswers: { status: number; body: { doubted: unknown } }[] = []
     page.on('request', (r) => {
-      if (r.method() === 'POST' && new URL(r.url()).pathname.endsWith(POST_SUFFIX.check)) checkRequests.push(JSON.parse(r.postData() ?? '{}'))
-    })
-    page.on('response', async (r) => {
-      if (r.request().method() !== 'POST') return
       const path = new URL(r.url()).pathname
-      if (path.endsWith(POST_SUFFIX.suggest)) suggestAnswers.push({ status: r.status(), body: await r.json() })
-      if (path.endsWith(POST_SUFFIX.check)) checkAnswers.push({ status: r.status(), body: await r.json() })
+      if (r.method() !== 'POST') return
+      if (path.endsWith(POST_SUFFIX.suggest)) suggestRequests.push(path)
+      if (path.endsWith(POST_SUFFIX.check)) checkRequests.push(JSON.parse(r.postData() ?? '{}'))
     })
 
     await signInAs(page, 'firm', { tenantId: SHARD.a.id })
@@ -180,14 +178,22 @@ test.describe('the wizard on the real AI', () => {
       mimeType: 'text/csv',
       buffer: Buffer.from(oneInvoiceCsv(PERF_HEADER, `INV-AISUGGEST-${stamp}`)),
     })
+    // Registered before the click so neither answer can be missed.
+    const suggestResponse = page.waitForResponse((r) => isPost(r, POST_SUFFIX.suggest), { timeout: 120_000 })
+    const checkResponse = page.waitForResponse((r) => isPost(r, POST_SUFFIX.check), { timeout: 120_000 })
     await page.getByRole('button', { name: 'Read columns' }).click()
 
     // The Map step renders only after the check has answered.
     await expect(page.getByText('Map fields to columns ·', { exact: false })).toBeVisible({ timeout: 120_000 })
 
-    expect(suggestAnswers, 'one suggest-mapping answer').toHaveLength(1)
-    expect(suggestAnswers[0].status).toBe(200)
-    const suggest = suggestAnswers[0].body
+    const suggestRes = await suggestResponse
+    const checkRes = await checkResponse
+    const suggestBody = (await suggestRes.json()) as { source: string; columns: string[]; mapping: Record<string, string> }
+    const checkBody = (await checkRes.json()) as { doubted: unknown }
+
+    expect(suggestRequests, 'one suggest-mapping request').toHaveLength(1)
+    expect(suggestRes.status()).toBe(200)
+    const suggest = suggestBody
     // Lane control: the fake AI answers source "none".
     expect(suggest.source, 'control: this run must have reached the AI path').toBe('ai')
     const inv = suggest.mapping.invoice_number
@@ -195,9 +201,8 @@ test.describe('the wizard on the real AI', () => {
     expect(suggest.columns, 'the placed column is one of the answer columns').toContain(inv)
 
     expect(checkRequests, 'one check-mapping request').toHaveLength(1)
-    expect(checkAnswers, 'one check-mapping answer').toHaveLength(1)
-    expect(checkAnswers[0].status).toBe(200)
-    const doubtedRaw = checkAnswers[0].body.doubted
+    expect(checkRes.status()).toBe(200)
+    const doubtedRaw = checkBody.doubted
     expect(Array.isArray(doubtedRaw), 'doubted is an array').toBe(true)
     const doubted = doubtedRaw as unknown[]
     for (const d of doubted) expect(typeof d, 'each doubted entry is a string').toBe('string')

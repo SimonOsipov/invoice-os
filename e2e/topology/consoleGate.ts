@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test'
 
-// The console errors the topology gate may ignore: a deliberate, URL-scoped non-2xx.
+// The console errors the topology gate may ignore.
 //
 // The invoice detail page reads its approval run on mount, and that GET answers 404 for
 // an invoice with no run. Chromium logs every failed load as a console error, so without

@@ -4,6 +4,7 @@
 import { test, expect } from '@playwright/test'
 import { apiBase, checkMapping, createEntity, login, PERSONAS, provisionStaffAccount, rawFetch, signInSession, suggestMapping } from './client'
 import { freshTin } from './fixtures'
+import { nightlyTarget } from '../targets'
 import { buildOversizedCellCsv } from '../importFixtures'
 import { assertErrorEnvelope } from './contract-helpers'
 
@@ -16,6 +17,10 @@ const AI_MODEL = 'google/gemini-3.5-flash-lite'
 const AI_PURPOSE = 'spreadsheet'
 // jev.PurposeMappingCheck, internal/platform/jev/client.go.
 const JEV_PURPOSE = 'mapping_check'
+// result.outcome, internal/platform/ai/client.go, without "off" and "fake".
+const AI_OUTCOMES = ['ok', 'unavailable', 'refused']
+// result.outcome, internal/platform/jev/client.go, without "off" and "fake".
+const JEV_OUTCOMES = ['ok', 'skipped_unavailable', 'skipped_refused']
 // parseFilter, internal/aicalls/staff_read.go.
 const INVALID_TENANT = 'invalid tenant'
 const LIMIT_MESSAGE = 'limit must be >= 1'
@@ -150,6 +155,11 @@ test.describe('staff AI usage (API E2E, over the deployed gateway)', () => {
       expect(Number.isInteger(c.output_tokens) && c.output_tokens >= 0, `row ${c.id} output_tokens`).toBe(true)
       expect(c.cost, `row ${c.id} cost`).toMatch(/^\d+(\.\d+)?$/)
     }
+    // The nightly runs the real clients: an off or fake outcome there means the wiring is wrong.
+    if (nightlyTarget()) {
+      expect(AI_OUTCOMES, `ai row ${ai!.id} outcome ${ai!.outcome}`).toContain(ai!.outcome)
+      expect(JEV_OUTCOMES, `jev row ${jev!.id} outcome ${jev!.outcome}`).toContain(jev!.outcome)
+    }
     for (let i = 1; i < list.length; i++) {
       expect(Date.parse(list[i].created_at), `row ${i} is not newer than row ${i - 1}`).toBeLessThanOrEqual(Date.parse(list[i - 1].created_at))
     }
@@ -199,12 +209,17 @@ test.describe('staff AI usage (API E2E, over the deployed gateway)', () => {
     const entity = await createEntity(tokenB, { name: `Zz SUPP-10 failed ${tin}`, tin })
     const documentId = await previewDocument(tokenB, buildOversizedCellCsv())
     await suggestMapping(tokenB, { entity_id: entity.id, document_id: documentId })
+    let oversized: Call | undefined
     await expect
-      .poll(async () => (await calls(forB)).calls.some((c) => !known.has(c.id) && c.client === 'ai' && c.purpose === AI_PURPOSE), {
-        message: "the oversized call's row is listed under failed=true",
-        timeout: 30_000,
-      })
+      .poll(
+        async () => {
+          oversized = (await calls(forB)).calls.find((c) => !known.has(c.id) && c.client === 'ai' && c.purpose === AI_PURPOSE)
+          return oversized !== undefined
+        },
+        { message: "the oversized call's row is listed under failed=true", timeout: 30_000 },
+      )
       .toBe(true)
+    if (nightlyTarget()) expect(AI_OUTCOMES, `oversized ai row ${oversized!.id} outcome ${oversized!.outcome}`).toContain(oversized!.outcome)
   })
 
   test('staff ai totals equal the call list they summarise', async () => {

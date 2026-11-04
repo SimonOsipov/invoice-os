@@ -61,7 +61,7 @@ func NewsletterClients(getenv func(string) string, deployEnv string, contacts Mo
 	case ModeReal:
 		w.Resend = NewBlogResend(ResendBaseURL, getenv("RESEND_API_KEY"), keys, NewHTTPClient(transport))
 	}
-	if posture == platform.PostureNightly && mode == ModeReal {
+	if posture == platform.PostureNightly && (mode == ModeReal || mailMode == accountmail.ModeReal) {
 		if err := guardNightly(&w, getenv(envReceivingDomain)); err != nil {
 			return NewsletterWiring{}, err
 		}

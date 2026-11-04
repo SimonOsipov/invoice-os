@@ -306,12 +306,42 @@ func TestNewsletterClients_NightlyWithoutSendingKeyKeepsCaptureMail(t *testing.T
 }
 
 func TestNewsletterClients_NightlyWithoutBlogIdsIsFakeAndEnabled(t *testing.T) {
-	w := clWiring(t, "nightly", clFourKeys("RESEND_SENDING_KEY", "sk"))
+	w := clWiring(t, "nightly", clFourKeys("RESEND_SENDING_KEY", "sk", "RESEND_RECEIVING_DOMAIN", "x.resend.app"))
 	if w.Mode != ModeFake || !w.Enabled {
 		t.Errorf("wiring = %+v, want fake newsletter, enabled", w)
 	}
 	if _, ok := w.Resend.(FakeBlogResend); !ok {
 		t.Errorf("resend client = %T, want FakeBlogResend", w.Resend)
+	}
+}
+
+func TestNewsletterClients_NightlySendingKeyWithoutBlogIdsGuardsTheSender(t *testing.T) {
+	spy := &clSpyTransport{respond: func(_ int, r *http.Request) *http.Response { return clReply(r, http.StatusOK, nil) }}
+	vars := clFourKeys("RESEND_SENDING_KEY", "sk", "RESEND_RECEIVING_DOMAIN", "x.resend.app")
+	contacts, _, _, err := DeliveryClients(clGetenv(vars), "nightly", spy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := NewsletterClients(clGetenv(vars), "nightly", contacts, spy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Sender.Send(t.Context(), []accountmail.Message{{To: clAda.Email}}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if n := len(spy.seen()); n != 0 {
+		t.Errorf("a foreign address made %d real requests, want 0", n)
+	}
+}
+
+func TestNewsletterClients_NightlySendingKeyWithoutBlogIdsOrDomainFailsToBoot(t *testing.T) {
+	vars := clFourKeys("RESEND_SENDING_KEY", "sk")
+	contacts, _, _, err := DeliveryClients(clGetenv(vars), "nightly", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = NewsletterClients(clGetenv(vars), "nightly", contacts, nil); err == nil || !strings.Contains(err.Error(), "RESEND_RECEIVING_DOMAIN") {
+		t.Fatalf("err = %v, want a boot error naming RESEND_RECEIVING_DOMAIN", err)
 	}
 }
 
@@ -398,5 +428,24 @@ func TestDeliveryClients_DealStageAloneLeavesContactsOff(t *testing.T) {
 	mode, hs, rs, err := DeliveryClients(clGetenv(map[string]string{"HUBSPOT_DEAL_STAGE": "appointmentscheduled"}), "nightly", &clSpyTransport{})
 	if err != nil || mode != ModeOff || hs != nil || rs != nil {
 		t.Errorf("DeliveryClients = %q, %v, %v, %v, want off with nil clients", mode, hs, rs, err)
+	}
+}
+
+func TestNewsletterClients_NightlyReceivingDomainIsTrimmedAndChecked(t *testing.T) {
+	boot := func(domain string) (NewsletterWiring, error) {
+		vars := clNightlyVars("RESEND_SENDING_KEY", "sk", "RESEND_RECEIVING_DOMAIN", domain)
+		contacts, _, _, err := DeliveryClients(clGetenv(vars), "nightly", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return NewsletterClients(clGetenv(vars), "nightly", contacts, nil)
+	}
+	if _, err := boot("x.resend.app\n"); err != nil {
+		t.Errorf("newline-suffixed domain: %v", err)
+	}
+	for _, bad := range []string{"gmail.com", "ascomply.com", "evil.example", "x.resend.app.evil.example"} {
+		if _, err := boot(bad); err == nil || !strings.Contains(err.Error(), "RESEND_RECEIVING_DOMAIN") {
+			t.Errorf("domain %q: err = %v, want a boot error naming RESEND_RECEIVING_DOMAIN", bad, err)
+		}
 	}
 }

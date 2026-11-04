@@ -1222,14 +1222,15 @@ export async function uploadDocument(token: string, csv: string, filename = 'imp
     headers: { Authorization: `Bearer ${token}` },
     body: form,
   })
+  const text = await res.text()
   let body: unknown
   try {
-    body = await res.json()
+    body = JSON.parse(text)
   } catch {
     body = undefined
   }
   const id = (body as Record<string, unknown> | undefined)?.document_id
-  if (!res.ok || typeof id !== 'string') throw new Error(`uploadDocument: preview failed (status ${res.status})`)
+  if (!res.ok || typeof id !== 'string') throw new Error(`uploadDocument: preview failed (status ${res.status}): ${text.slice(0, 200)}`)
   return id
 }
 

@@ -6,8 +6,8 @@ import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { buildCleanCsv, buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, PERF_MAPPING } from '../importFixtures'
 import { signInAs } from '../personaSession'
-import { resolveTarget } from '../targets'
 import { approveOpenRunsForEntity, collectErrors, shardPersonas } from './importWizardShared'
+import { APP_URL } from './targets'
 
 const { SHARD, PERSONAS } = shardPersonas('import-review-api.spec.ts')
 
@@ -393,6 +393,8 @@ test.describe('NCOV-02 review channels, multi-file runs and the source card', ()
     await expect(page.getByTestId('invoice-detail')).toBeVisible()
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('INV-UI-MIX-VIOLATE')
     expect(new URL(page.url()).pathname).toMatch(new RegExp(`/invoices/${violateInvoiceId}$`))
+    // Let a late duplicate GET land before the count is read.
+    await page.waitForLoadState('networkidle')
     expect(gets, 'View invoice sends one GET').toBe(1)
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -446,7 +448,7 @@ test.describe('NCOV-02 review channels, multi-file runs and the source card', ()
     const e = await mint(buildHeaderOnlyCsv(), 'run-empty-3.csv')
     expect(d.ready_invoices, 'a header-only file mints no invoice').toBe(0)
     expect(e.ready_invoices, 'a header-only file mints no invoice').toBe(0)
-    await page.goto(`${resolveTarget('APP_URL')}/imports/${d.id},${e.id}/review`)
+    await page.goto(`${APP_URL}/imports/${d.id},${e.id}/review`)
     const run = page.getByTestId('review-rejected-run')
     await expect(run).toBeVisible({ timeout: 60_000 })
     await expect(run).toContainText('Nothing was imported')
@@ -513,9 +515,9 @@ test.describe('NCOV-02 review channels, multi-file runs and the source card', ()
     // 'Queued' is the enqueued label (lib/reviewBatch.ts); the verdict pill is not asserted, the worker races it.
     const panel = page.getByTestId('review-submit-results')
     for (const inv of firstPage.invoices) {
-      const row = panel.getByText(inv.invoice_number, { exact: true })
+      const row = panel.locator('div:has(> span)').filter({ hasText: inv.invoice_number })
       await expect(row).toHaveCount(1)
-      await expect(row.locator('xpath=..')).toContainText('Queued')
+      await expect(row).toContainText('Queued')
     }
     expect(submissions, 'exactly one submissions POST').toBe(1)
 

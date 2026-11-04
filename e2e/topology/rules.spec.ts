@@ -151,9 +151,8 @@ async function openEditor(page: Page): Promise<Locator> {
   return drawer
 }
 
-// Core AC 1: the screen shows the server's version and rows.
-test('the Rules screen reads the server', async ({ page }) => {
-  test.setTimeout(90_000)
+// Opens the screen, then compares it with the spec's own Node-side read of the golden set.
+async function expectScreenMatchesServer(page: Page): Promise<void> {
   const errors = collectErrors(page)
   await openRules(page)
 
@@ -166,6 +165,30 @@ test('the Rules screen reads the server', async ({ page }) => {
   await expect(page.getByText('Suggested for you')).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+}
+
+// Core AC 1: the screen shows the server's version and rows.
+test('the Rules screen reads the server', async ({ page }) => {
+  test.setTimeout(90_000)
+  await expectScreenMatchesServer(page)
+})
+
+// Fixture check: page.route drops one golden rule from the browser's read, as another shard
+// holds it off (SUP-05) while this spec's own read still sees it. BUG-96.
+test('(fixture check) the Rules screen reads the server while another shard holds a golden rule off', async ({ page }) => {
+  test.setTimeout(90_000)
+  const HELD_OFF = 'no-duplicate-line-items'
+  let dropped = false
+  await page.route(/\/api\/validation\/v1\/rules(\?.*)?$/, async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    const res = await route.fetch()
+    const body = await res.json()
+    const rest = (body.rules as { key: string }[]).filter((r) => r.key !== HELD_OFF)
+    dropped = rest.length < body.rules.length
+    await route.fulfill({ response: res, json: { ...body, rules: rest } })
+  })
+  await expectScreenMatchesServer(page)
+  expect(dropped, `the golden set has no rule ${HELD_OFF}: the fixture would pass vacuously`).toBe(true)
 })
 
 // Core AC 2-5, 7, 8. The 400 is the refusal under test.

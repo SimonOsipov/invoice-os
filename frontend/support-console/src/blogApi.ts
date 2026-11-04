@@ -113,7 +113,7 @@ async function coverFetch(id: string, init: RequestInit): Promise<Response> {
   try {
     res = await fetch(url, { ...init, headers: { ...(init.headers as Record<string, string>), Authorization: `Bearer ${token}` } })
   } catch (e) {
-    reportApiFailure(e, { method, url })
+    if (!(e instanceof DOMException && e.name === 'AbortError')) reportApiFailure(e, { method, url })
     throw e
   }
   if (!res.ok) {
@@ -137,8 +137,8 @@ export async function putCover(id: string, bytes: Uint8Array): Promise<Cover> {
   return readBody(() => res.json() as Promise<Cover>, { method: 'PUT', url: coverUrl(id) })
 }
 
-export async function fetchCoverUrl(id: string): Promise<{ url: string; release: () => void }> {
-  const res = await coverFetch(id, {})
+export async function fetchCoverUrl(id: string, signal?: AbortSignal): Promise<{ url: string; release: () => void }> {
+  const res = await coverFetch(id, { signal })
   const url = URL.createObjectURL(await readBody(() => res.blob(), { method: 'GET', url: coverUrl(id) }))
   let released = false
   return {

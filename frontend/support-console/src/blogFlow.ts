@@ -87,11 +87,12 @@ export async function pickCover(d: CoverPickDeps, file: Blob | null | undefined)
 
 export type CoverHandle = { url: string; release: () => void }
 
-// Fetches a saved cover; `onUrl(null)` on failure, `expire` on a 401 that survived the renewal. The returned stop releases the URL, also when the fetch lands late.
-export function trackCover(d: { fetchCoverUrl: (id: string) => Promise<CoverHandle>; expire: () => void }, id: string, onUrl: (url: string | null) => void): () => void {
+// Fetches a saved cover; `onUrl(null)` on failure, `expire` on a 401 that survived the renewal. The returned stop aborts the read and releases the URL, also when the fetch lands late.
+export function trackCover(d: { fetchCoverUrl: (id: string, signal: AbortSignal) => Promise<CoverHandle>; expire: () => void }, id: string, onUrl: (url: string | null) => void): () => void {
   let live = true
   let handle: CoverHandle | null = null
-  d.fetchCoverUrl(id).then(
+  const ctl = new AbortController()
+  d.fetchCoverUrl(id, ctl.signal).then(
     (h) => {
       if (!live) return h.release()
       handle = h
@@ -104,6 +105,7 @@ export function trackCover(d: { fetchCoverUrl: (id: string) => Promise<CoverHand
   )
   return () => {
     live = false
+    ctl.abort()
     handle?.release()
     handle = null
   }

@@ -32,7 +32,7 @@ func runWith(args []string, getenv func(string) string, transport http.RoundTrip
 		return 2
 	}
 	if len(args) == 0 {
-		return usage("usage: nightlycontacts start|check|finish -out <file> [-in <dir> -started <RFC3339>]")
+		return usage("usage: nightlycontacts start|check|finish -out <file> [-in <dir> -started <RFC3339> -prepare <result>]")
 	}
 	phase := args[0]
 	fs := flag.NewFlagSet("nightlycontacts "+phase, flag.ContinueOnError)
@@ -40,6 +40,7 @@ func runWith(args []string, getenv func(string) string, transport http.RoundTrip
 	out := fs.String("out", "", "section file to write (required)")
 	in := fs.String("in", "", "finish: directory holding start.json and check.json")
 	startedFlag := fs.String("started", "", "finish: run start as RFC3339")
+	prepare := fs.String("prepare", "", "finish: prepare-env result; a value other than success excuses missing phase files")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -94,7 +95,7 @@ func runWith(args []string, getenv func(string) string, transport http.RoundTrip
 	case "check":
 		steps = r.check()
 	default:
-		steps = r.finish(*in, started)
+		steps = r.finish(*in, started, *prepare)
 	}
 	return writeSection(*out, steps, stdout, stderr)
 }

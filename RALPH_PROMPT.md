@@ -410,7 +410,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
 
 ### Phase 4: Worktree cleanup
 
-After the PR merges (manually or via `/gh-merge-pr`), run `/post-merge-cleanup <STORY>`. It removes the worktree and branch and archives the story. The PM updates sysmap. A `/ralph-goal` loop advances only after this runs.
+After the PR merges (manually or via `/gh-merge-pr`), run `/post-merge-cleanup <STORY>`. A trial story of the merge trial runs the cleanup by "Merge trial". It removes the worktree and branch and archives the story. The PM updates sysmap. A `/ralph-goal` loop advances only after this runs.
 
 Teardown of the PR's preview is repo-side: `dev-env-teardown.yml` on PR close, `dev-env-sweeper.yml` daily for a missed close. See `.claude/rules/ci-preview.md`.
 
@@ -418,7 +418,7 @@ Teardown of the PR's preview is repo-side: `dev-env-teardown.yml` on PR close, `
 
 ## CI Monitoring Protocol
 
-Wait with `hm ci wait <PR>` for `CI` and `hm ci wait <PR> --gate` for the deploy gate. Run it through Bash with `run_in_background: true`. Its exit wakes you. Your Harbourmaster role file ("Waiting for CI and the deploy gate") names each verdict and what to do.
+Wait with `hm ci wait <PR>` for `CI` and `hm ci wait <PR> --gate` for the deploy gate. Run it through Bash with `run_in_background: true`. Its exit wakes you. Your Harbourmaster role file ("Waiting for CI and the deploy gate") names each verdict and what to do. A trial story of the merge trial reads the verdict by "Merge trial".
 
 The verdict line names a short SHA after `at`. If it is not the start of `git rev-parse HEAD`, push HEAD, then run the wait again.
 
@@ -428,6 +428,36 @@ Foreground `sleep` is blocked. Never end a turn on a wait you did not start.
    - **`failed`, `Deploy slot` failed, and no deploy job ran?** The cap stayed full until the deadline. Re-run the whole run: `gh run rerun <run id>`. Change no code.
 2. **`CI` passed?** → In Phase 3, go to Phase 3.5 once every blocking review fix is pushed. In any other phase, continue the step that waited.
 3. **The gate passed?** → Phase 3.5 step 4.
+
+---
+
+## Merge trial
+
+Your Harbourmaster role names the story's group: `trial` or `control`. A story without a group follows the control rules.
+
+### Control story
+
+Follow Phases 3 to 4 and the CI Monitoring Protocol as written.
+
+### Trial story
+
+Follow Phases 3 to 4 and the CI Monitoring Protocol with these changes.
+
+1. Push HEAD before you start each `hm ci wait`.
+2. Read the verdict from the exit code in the wake-up notice of `hm ci wait`.
+   - Exit code 0 is the verdict `passed`. Continue. Do not read the output file. Skip the Protocol's SHA comparison.
+   - Another exit code: read the last 40 lines of the output file once. Then act on the verdict.
+3. Use `hm ci wait` as the only source of CI and gate status. Do not run `gh pr checks`, `gh run list` or `gh run watch`.
+4. Run `gh run view` only to read the logs of a run with the verdict `failed`.
+5. Do not read whether the PR merged. The coordinator's `merged:` message says it.
+6. Do not read the state of the preview teardown. The repository runs it.
+7. Run the post-merge cleanup in a subagent. When the coordinator sends `merged:`, do these steps in this order:
+   1. Run `hm worker phase 4`.
+   2. Stop each of your background commands and subagents with `TaskStop`.
+   3. Start one `general-purpose` subagent with `model: sonnet`. Do not start it in the background.
+   4. Give it this brief: "Run the post-merge cleanup of <STORY>. Read `~/.claude/skills/post-merge-cleanup/SKILL.md`. Step 0 is done. Follow Steps 1 to 4. Run the Bash calls from the main checkout `<main checkout>`. Reply with the report of Step 4."
+   5. Send the coordinator the `merged:` message of your Harbourmaster role. Add the subagent's "rule that would have prevented" line.
+8. Do not run `/post-merge-cleanup` yourself.
 
 ---
 

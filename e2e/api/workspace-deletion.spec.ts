@@ -39,9 +39,12 @@ const NAME_MISMATCH = 'the workspace name does not match'
 const NOT_VALID = 'this invite is no longer valid'
 // internal/tenancy ErrCancelLinkNotValid, the cancel-by-link 403 text.
 const LINK_NOT_VALID = 'this cancel link is no longer valid'
-// internal/tenancy/workspace_deletion.go audit.Record event names.
+// internal/tenancy workspace_deletion.go and staff_deletion.go audit event names.
 const EVENT_SCHEDULED = 'workspace.deletion_scheduled'
 const EVENT_CANCELLED = 'workspace.deletion_cancelled'
+const EVENT_PURGE_STARTED = 'workspace.purge_started'
+// internal/workspacepurge purgeRows staff event.
+const EVENT_PURGED = 'workspace.purged'
 
 const PDF_BYTES = new Uint8Array(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents/native_invoice.pdf')))
 const DAY_MS = 86_400_000
@@ -326,13 +329,23 @@ const BEING_DELETED = 'this workspace is already being deleted'
 // internal/tenancy/staff_deletion.go staffDeletionStatus: purge now on an unscheduled workspace.
 const NOT_SCHEDULED = 'this workspace has no scheduled deletion; use Delete workspace first'
 const STAFF_TENANTS = '/api/tenancy/v1/staff/tenants'
+// StaffChange, internal/audit/staff_read.go.
+type StaffChange = { actor: string; event: string; tenant_id: string | null; payload: { reason?: string; due_at?: string; members?: number; objects?: number } | null }
 
 test.describe('staff workspace deletion (API E2E, over the deployed gateway)', () => {
   let staff: string
   let customer: string
+  let staffId: string
 
   const staffPost = (token: string, path: string, body: unknown): Promise<RawResult> => rawFetch(`${STAFF_TENANTS}/${path}`, { method: 'POST', headers: auth(token), body })
   const staffRead = (id: string): Promise<RawResult> => rawFetch(`${STAFF_TENANTS}/${id}`, { headers: auth(staff) })
+
+  // The route is unpaged and takes no filter (internal/audit StaffChanges): one read holds every row.
+  async function staffChangesOf(tenantId: string): Promise<StaffChange[]> {
+    const res = await rawFetch('/api/invoice/v1/staff/staff-audit-log', { headers: auth(staff) })
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    return (res.body as { changes: StaffChange[] }).changes.filter((c) => c.tenant_id === tenantId)
+  }
 
   async function fresh(prefix: string): Promise<{ adminToken: string; tenantId: string; workspaceName: string }> {
     const reg = await registerFormAccount(prefix)
@@ -341,6 +354,7 @@ test.describe('staff workspace deletion (API E2E, over the deployed gateway)', (
 
   test.beforeAll(async () => {
     const granted = await provisionStaffAccount('staff-deletion')
+    staffId = granted.userId
     staff = (await signInSession(granted.email, granted.password)).access_token
     customer = (await registerFormAccount('staff-deletion-customer')).token
   })
@@ -392,6 +406,15 @@ test.describe('staff workspace deletion (API E2E, over the deployed gateway)', (
     expect(cancel.status, JSON.stringify(cancel.body)).toBe(200)
     expect(cancel.body).toEqual({ deletion_due_at: null })
     expect((await me(ws.adminToken)).tenant.deletion_due_at, 'the admin reads no due date').toBeNull()
+
+    const rows = await staffChangesOf(ws.tenantId)
+    expect(rows.map((r) => r.event), 'newest first; the refused second start wrote no row').toEqual([EVENT_CANCELLED, EVENT_SCHEDULED])
+    expect(rows.map((r) => r.actor)).toEqual([staffId, staffId])
+    const [cancelled, scheduled] = rows
+    expect(cancelled.payload?.reason).toBe('e2e cancel')
+    expect(scheduled.payload?.reason).toBe('e2e start')
+    // The audit due_at is RFC3339 without the fraction.
+    expect(Math.abs(Date.parse(scheduled.payload?.due_at ?? '') - Date.parse(due))).toBeLessThanOrEqual(1_000)
   })
 
   test('staff purge now needs a scheduled deletion, then erases a fresh workspace', async () => {
@@ -424,5 +447,17 @@ test.describe('staff workspace deletion (API E2E, over the deployed gateway)', (
 
     // The first live run of purge now on the preview: files and GoTrue included.
     await expect.poll(async () => (await staffRead(ws.tenantId)).status, { intervals: [3_000], timeout: 90_000 }).toBe(404)
+
+    // Read after the 404: the log outlives the tenant, and the worker's purged row commits with purge_tenant.
+    const rows = await staffChangesOf(ws.tenantId)
+    expect(rows.map((r) => r.event), 'the refused purges wrote no row').toEqual([EVENT_PURGED, EVENT_PURGE_STARTED, EVENT_SCHEDULED])
+    const [purged, started, scheduled] = rows
+    expect(purged.actor, 'the purge worker writes the purged row').not.toBe(staffId)
+    expect([started.actor, scheduled.actor]).toEqual([staffId, staffId])
+    expect(started.payload?.reason).toBe('e2e purge')
+    expect(scheduled.payload?.reason).toBe('e2e start')
+    expect(Math.abs(Date.parse(purged.payload?.due_at ?? '') - Date.parse(dueOf(start)))).toBeLessThanOrEqual(1_000)
+    expect(Number.isInteger(purged.payload?.members) && (purged.payload?.members ?? -1) >= 0, 'members').toBe(true)
+    expect(Number.isInteger(purged.payload?.objects) && (purged.payload?.objects ?? -1) >= 0, 'objects').toBe(true)
   })
 })

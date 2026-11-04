@@ -68,7 +68,10 @@ export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<
       signal: opts?.signal,
     })
   } catch (e) {
-    return fail(new ApiError('network', e instanceof Error ? e.message : String(e), null))
+    // undici reports every socket error as "fetch failed"; the cause names it (ECONNRESET).
+    const cause = e instanceof Error && e.cause instanceof Error ? e.cause.message : ''
+    const msg = e instanceof Error ? e.message : String(e)
+    return fail(new ApiError('network', cause ? `${msg}: ${cause}` : msg, null))
   }
 
   if (!res.ok) {

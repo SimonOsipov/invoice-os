@@ -40,7 +40,6 @@ import {
   DOCUMENT_FIXTURES,
   edgesOf,
   extractOneDocument,
-  uniqueHonestReceiptPdfBytes,
   openExtractionReview,
   POINT_ARMED,
   RATIO_TOL_PX,
@@ -52,6 +51,7 @@ import {
   settledRead,
   shardPersonas,
   uniqueGarbageBytes,
+  uniqueHonestReceiptPdfBytes,
   uniquePdfBytes,
   VOCABULARY,
 } from './importWizardShared'

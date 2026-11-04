@@ -32,7 +32,7 @@ function oneInvoiceCsv(header: string, invoiceNumber: string): string {
 // copy: the keys of DOCUMENT_TYPE_NOTICE (frontend/app/src/lib/extractionReview.ts); transcribed, not imported.
 const NOTICE_TYPES = ['receipt', 'proforma', 'quotation', 'delivery note', 'statement', 'purchase order']
 
-// copy: CHANGED_LABEL.typed (extractionReview.ts); transcribed, not imported.
+// copy: the typed label of correctedMarker (frontend/app/src/lib/extractionReview.ts); transcribed, not imported.
 const TYPED_LABEL = 'YOU CHANGED THIS'
 const TYPEABLE_BUYER_FIELDS = ['buyer_name', 'buyer_street', 'buyer_city']
 
@@ -64,8 +64,9 @@ test.describe('the wizard on the real AI', () => {
     })
     page.on('response', async (r) => {
       if (r.request().method() !== 'POST' || !new URL(r.url()).pathname.endsWith(POST_SUFFIX.import)) return
-      const body = (await r.json()) as { id?: unknown }
-      importAnswers.push({ status: r.status(), id: body.id })
+      const answer: { status: number; id: unknown } = { status: r.status(), id: undefined }
+      importAnswers.push(answer)
+      answer.id = await r.json().then((b: { id?: unknown }) => b.id, () => undefined)
     })
 
     // Seed one saved mapping per layout, so the Map step restores both and asks no AI.
@@ -135,7 +136,8 @@ test.describe('the wizard on the real AI', () => {
 
     await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
     await expect(page.getByText('Importing 3 files', { exact: true })).toBeVisible({ timeout: 60_000 })
-    for (const name of ['run-x-1.csv', 'run-x-2.csv', 'run-y-1.csv']) await expect(page.getByText(name, { exact: true })).toBeVisible()
+    const progress = page.getByTestId('import-progress')
+    for (const name of ['run-x-1.csv', 'run-x-2.csv', 'run-y-1.csv']) await expect(progress.getByText(name, { exact: true })).toBeVisible()
 
     await expect(page.getByRole('heading', { name: '3 invoices imported' })).toBeVisible({ timeout: 60_000 })
     await expect.poll(() => importAnswers.length, { message: 'three import POSTs answered' }).toBe(3)
@@ -143,6 +145,7 @@ test.describe('the wizard on the real AI', () => {
     const answeredIds = importAnswers.map((a) => a.id)
     for (const id of answeredIds) expect(typeof id, 'each import answers an id').toBe('string')
 
+    await expect(page).toHaveURL(/\/imports\/[^/]+\/review$/)
     const match = new URL(page.url()).pathname.match(/^\/imports\/([^/]+)\/review$/)
     expect(match, `the page lands on the batch review: ${page.url()}`).not.toBeNull()
     expect(new Set(decodeURIComponent(match![1]).split(',')), 'the review URL holds the three answered ids').toEqual(new Set(answeredIds as string[]))
@@ -241,6 +244,16 @@ test.describe('the wizard on the real AI', () => {
       await expect(importBtn).toBeEnabled()
       test.info().annotations.push({ type: 'doubted-invoice-number', description: 'real Jev doubted invoice_number; placed by hand' })
     }
+
+    // An unplaced required field leaves the import with no ready invoice and the SPA on the batch review.
+    const doubtedByHand = doubtedFields.filter((f) => f !== 'invoice_number')
+    for (const field of doubtedByHand) {
+      const header = checkRequests[0].mapping[field]
+      await page.getByRole('button', { name: new RegExp(`^${escape(field)}\\s*\\*?$`, 'i') }).click()
+      await columnOf(header).click()
+      await expect(chipOf(columnOf(header), field), `${field} placed by hand`).toHaveCount(1)
+    }
+    if (doubtedByHand.length > 0) test.info().annotations.push({ type: 'doubted-fields', description: `real Jev doubted ${doubtedByHand.join(', ')}; placed by hand` })
 
     const importResp = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith(POST_SUFFIX.import), { timeout: 60_000 })
     await importBtn.click()

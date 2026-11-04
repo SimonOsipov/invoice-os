@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { CheckSteps, isFakeAddress, judgeSends, MAIL_STEPS, mailTextDiff, overBudget, readAccounts, requireEnv, scrub, writeAccounts, type Section } from './mailChecks'
+import { brandLayoutFacts, CheckSteps, isFakeAddress, judgeBrandLayout, judgeSends, MAIL_STEPS, mailTextDiff, overBudget, readAccounts, requireEnv, scrub, writeAccounts, type Section } from './mailChecks'
 
 const NOW = new Date('2026-10-30T13:00:00Z')
 const DOMAIN = 'inbox.mailbox.app'
@@ -17,8 +17,13 @@ const nightly = (n: number, created_at = TODAY) =>
 const prod = Array.from({ length: 5 }, (_, i) => send(`customer${i}@ascomply.com`))
 
 describe('overBudget', () => {
-  it("leaves room for the run's 3 mails", () => {
-    expect([22, 23, 25, 26].map((n) => overBudget([...nightly(n), ...prod], DOMAIN, NOW))).toEqual([false, true, true, true])
+  it("leaves room for the run's 5 mails", () => {
+    expect([20, 21, 25, 26].map((n) => overBudget([...nightly(n), ...prod], DOMAIN, NOW))).toEqual([false, true, true, true])
+  })
+
+  it('counts the signup and blog addresses', () => {
+    const sends = Array.from({ length: 21 }, (_, i) => send(`nightly-1-${i % 2 ? 'signup' : 'blog'}@${DOMAIN}`))
+    expect(overBudget(sends, DOMAIN, NOW)).toBe(true)
   })
 
   it("ignores another domain's nightly- name", () => {
@@ -37,24 +42,72 @@ describe('overBudget', () => {
 })
 
 describe('judgeSends', () => {
-  const inv = `nightly-1-invite@${DOMAIN}`
-  const rst = `nightly-1-reset@${DOMAIN}`
-  const base = [send(inv), send(inv), send(rst), send('buyer@ascomply.com')]
+  const want = {
+    invite: `nightly-1-invite@${DOMAIN}`,
+    reset: `nightly-1-reset@${DOMAIN}`,
+    signup: `nightly-1-signup@${DOMAIN}`,
+    blog: `nightly-1-blog@${DOMAIN}`,
+  }
+  const base = [
+    send(want.invite),
+    send(want.invite),
+    send(want.reset),
+    send(want.signup),
+    send(want.blog),
+    send('buyer@ascomply.com'),
+  ]
+  const without = (addr: string) => base.filter((s) => !s.to.includes(addr))
   const rows: [string, ReturnType<typeof send>[], boolean][] = [
-    ['2 + 1 + production', base, true],
-    ['1 invite', [send(inv), send(rst)], false],
-    ['3 invite', [...base, send(inv)], false],
-    ['0 reset', [send(inv), send(inv)], false],
-    ['2 reset', [...base, send(rst)], false],
+    ['2 + 1 + 1 + 1 + production', base, true],
+    ['1 invite', base.slice(1), false],
+    ['3 invite', [...base, send(want.invite)], false],
+    ['0 reset', without(want.reset), false],
+    ['2 reset', [...base, send(want.reset)], false],
+    ['0 signup', without(want.signup), false],
+    ['2 signup', [...base, send(want.signup)], false],
+    ['0 blog', without(want.blog), false],
+    ['2 blog', [...base, send(want.blog)], false],
     ['a fake address', [...base, send('someone@example.com')], false],
   ]
 
   it.each(rows)('%s', (_name, sends, ok) => {
-    expect(judgeSends(sends, inv, rst).ok).toBe(ok)
+    expect(judgeSends(sends, want).ok).toBe(ok)
   })
 
   it('detail holds no address', () => {
-    for (const [, sends, ok] of rows) if (!ok) expect(judgeSends(sends, inv, rst).detail).not.toContain('@')
+    for (const [, sends, ok] of rows) if (!ok) expect(judgeSends(sends, want).detail).not.toContain('@')
+  })
+})
+
+describe('judgeBrandLayout', () => {
+  const logo = (src: string) => `<img src="${src}" width="36" alt="ASComply">`
+  const good = `${logo('https://api.x.test/emails/mark.png')}<td bgcolor="#082f31"><h1>Hi</h1></td>${logo('https://api.x.test/emails/mark.png')}ASComply Africa · Lagos, Nigeria`
+
+  it('accepts the real layout', () => {
+    const html = readFileSync(join(__dirname, '../../internal/accountmail/layout.html'), 'utf8')
+    expect(judgeBrandLayout(brandLayoutFacts(html))).toBeNull()
+  })
+
+  it('accepts the good fixture', () => {
+    expect(judgeBrandLayout(brandLayoutFacts(good))).toBeNull()
+  })
+
+  it.each([
+    ['no logo', good.replaceAll('alt="ASComply"', 'alt="x"'), 'logo'],
+    ['src ends /other.png', good.replaceAll('mark.png', 'other.png'), 'src'],
+    ['one of two logos wrong', good.replace('mark.png', 'other.png'), 'src'],
+    ['hero without h1', good.replace('<h1>Hi</h1>', 'Hi'), 'heading'],
+    ['no band before the h1', good.replace('bgcolor="#082f31"', ''), 'heading'],
+    ['footer line missing', good.replace('ASComply Africa · Lagos, Nigeria', ''), 'footer'],
+  ])('names the missing part: %s', (_name, html, part) => {
+    expect(judgeBrandLayout(brandLayoutFacts(html))).toContain(part)
+  })
+
+  it('reason holds no mail text', () => {
+    const html = good.replace('ASComply Africa · Lagos, Nigeria', 'ada@x.test')
+    const reason = judgeBrandLayout(brandLayoutFacts(html)) ?? ''
+    expect(reason).not.toBe('')
+    expect(reason).not.toContain('@')
   })
 })
 
@@ -161,7 +214,7 @@ describe('CheckSteps', () => {
     for (const s of MAIL_STEPS.slice(1)) await cs.run(s.name, body)
     const s = cs.section()
     expect(body).not.toHaveBeenCalled()
-    expect(s.steps.filter((x) => x.status === 'skipped')).toHaveLength(12)
+    expect(s.steps.filter((x) => x.status === 'skipped')).toHaveLength(MAIL_STEPS.length - 1)
     expect(s.ok).toBe(false)
   })
 
@@ -191,12 +244,12 @@ describe('CheckSteps', () => {
   it('a killed check reads as not finished', async () => {
     const f = tmpFile()
     const cs = new CheckSteps(f)
-    expect(read(f).steps).toHaveLength(13)
+    expect(read(f).steps).toHaveLength(MAIL_STEPS.length)
     await cs.run('mail budget', () => {})
     await cs.run('invite mail arrives', () => {})
     const s = read(f)
     expect(s.steps.filter((x) => x.status === 'passed')).toHaveLength(2)
-    expect(s.steps.filter((x) => x.status === 'skipped')).toHaveLength(11)
+    expect(s.steps.filter((x) => x.status === 'skipped')).toHaveLength(MAIL_STEPS.length - 2)
     expect(s.ok).toBe(false)
     expect(s.failures).toEqual([
       { suite: 'email', test: 'check', file: 'e2e/mail/real-mail.spec.ts', message: 'check did not finish' },
@@ -219,8 +272,52 @@ describe('CheckSteps', () => {
     expect(readdirSync(join(f, '..'))).toEqual(['email.json'])
   })
 
-  it('names the 13 steps of the section', () => {
-    expect(MAIL_STEPS.map((s) => s.name)).toHaveLength(13)
+  it('names the steps of the section', () => {
+    expect(MAIL_STEPS.map((s) => s.name)).toEqual([
+      'mail budget',
+      'invite mail arrives',
+      'invite mail uses the brand layout',
+      'invite text matches',
+      'invite page registers the invitee',
+      'password mail arrives',
+      'password mail uses the brand layout',
+      'password mail text matches',
+      'password link opens the workspace',
+      'used invite link is refused',
+      'reset mail arrives',
+      'reset mail uses the brand layout',
+      'reset text matches',
+      'reset link sets the password',
+      'sign-in with the new password',
+      'signup mail arrives',
+      'signup mail uses the brand layout',
+      'signup link confirms the address',
+      'newsletter mail arrives',
+      'newsletter mail uses the brand layout',
+      'newsletter link confirms the subscription',
+      'subscriber is a Resend contact on the Blog topic',
+      'only these mails are real',
+    ])
+  })
+
+  it('every step needs only earlier steps', () => {
+    MAIL_STEPS.forEach((step, i) => {
+      for (const n of step.needs) expect(MAIL_STEPS.findIndex((x) => x.name === n)).toBeLessThan(i)
+    })
+  })
+
+  it('a failed signup mail skips only the signup steps', async () => {
+    const cs = new CheckSteps(tmpFile())
+    for (const s of MAIL_STEPS) {
+      if (s.name === 'signup mail arrives') await cs.run(s.name, () => { throw new Error('x') })
+      else await cs.run(s.name, () => {})
+    }
+    const status = (n: string) => cs.section().steps.find((x) => x.name === n)?.status
+    expect(status('signup mail uses the brand layout')).toBe('skipped')
+    expect(status('signup link confirms the address')).toBe('skipped')
+    for (const n of ['newsletter link confirms the subscription', 'reset link sets the password', 'only these mails are real']) {
+      expect(status(n)).toBe('passed')
+    }
   })
 })
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { listSent, parseCreatedAt, waitForMail, type Fetch } from './resendClient'
+import { contactTopics, getContact, listSent, parseCreatedAt, waitForMail, type Fetch } from './resendClient'
 
 const SINCE = new Date('2026-10-30T00:00:00Z')
 const NEW = '2026-10-30 12:00:00.000000+00'
@@ -173,5 +173,51 @@ describe('parseCreatedAt', () => {
     const stub = vi.fn(async () => json({ data: [item('bad', 'garbage')], has_more: true }))
     await expect(listSent('k', SINCE, stub as unknown as Fetch)).rejects.toThrow('created_at')
     expect(stub).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('getContact', () => {
+  it.each([[404], [200]])('returns %i', async (status) => {
+    const stub = vi.fn(async (_url: string, _init?: RequestInit) => json({}, status))
+    expect(await getContact('k', 'a@x.test', stub as unknown as Fetch)).toBe(status)
+  })
+
+  it('throws the status only on 500', async () => {
+    const stub = vi.fn(async () => json({ email: 'a@x.test' }, 500))
+    await expect(getContact('k', 'a@x.test', stub as unknown as Fetch)).rejects.toThrow(/^Resend answered 500$/)
+  })
+
+  it('path-escapes the address', async () => {
+    const stub = vi.fn(async (_url: string, _init?: RequestInit) => json({}))
+    await getContact('k', 'a+b@x.test', stub as unknown as Fetch)
+    expect(stub.mock.calls[0][0]).toBe('https://api.resend.com/contacts/a%2Bb%40x.test')
+  })
+})
+
+describe('contactTopics', () => {
+  const topic = (id: string, subscription = 'opt_in') => ({ id, name: 'Blog', subscription, created_at: 'c', description: 'd' })
+
+  it('lists id, name and subscription', async () => {
+    const stub = vi.fn(async (_url: string) => json({ data: [topic('t1')], has_more: false }))
+    expect(await contactTopics('k', 'a@x.test', stub as unknown as Fetch)).toEqual([
+      { id: 't1', name: 'Blog', subscription: 'opt_in' },
+    ])
+    expect(stub.mock.calls[0][0]).toContain('/contacts/a%40x.test/topics')
+  })
+
+  it('follows has_more', async () => {
+    const urls: string[] = []
+    const pages = [
+      { data: [topic('t1'), topic('t2', 'opt_out')], has_more: true },
+      { data: [topic('t3')], has_more: false },
+    ]
+    const stub = vi.fn(async (url: string) => {
+      urls.push(url)
+      return json(pages[urls.length - 1])
+    })
+    const got = await contactTopics('k', 'a@x.test', stub as unknown as Fetch)
+    expect(got.map((t) => t.id)).toEqual(['t1', 't2', 't3'])
+    expect(urls[0]).not.toContain('after=')
+    expect(urls[1]).toContain('after=t2')
   })
 })

@@ -243,7 +243,8 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   const entityB = await createEntity(token, { name: `PERSONA-01 sweep B ${stamp}`, tin: freshTin() })
   const validatedNumber = `INV-P01-SWEEP-V-${stamp}`
   const draftNumber = `INV-P01-SWEEP-D-${stamp}`
-  await createValidatedInvoice(token, entityA.id, validatedNumber)
+  // Above-threshold fixture: it waits for approval, so the awaiting_approval guards hold on this spec's own rows.
+  await createValidatedInvoice(token, entityA.id, validatedNumber, approvableInvoiceFields(validatedNumber))
   await createInvoice(token, { entity_id: entityB.id, ...cleanInvoiceFields(draftNumber) })
   // Number-only invoice: error-severity rules keep it draft, so needs_attention is above 0.
   const blocked = await createInvoice(token, { entity_id: entityB.id, invoice_number: `INV-P01-SWEEP-B-${stamp}` })
@@ -288,6 +289,7 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   expect(live.totals.counts.validated).toBeGreaterThan(0)
   expect(live.totals.awaiting_approval).toBeGreaterThan(0)
   expect(live.totals.awaiting_approval, 'awaiting_approval must differ from counts.validated').not.toBe(live.totals.counts.validated)
+  expect(live.totals.awaiting_approval, 'awaiting_approval must differ from counts.draft').not.toBe(live.totals.counts.draft)
   const kpiTile = (title: RegExp) =>
     page.locator('.pf-dash-row-a .pf-grid-2 > div').filter({ has: page.locator('.card-title', { hasText: title }) })
   await expect(kpiTile(/^Exceptions$/).locator('span.money')).toHaveText(String(live.totals.needs_attention))

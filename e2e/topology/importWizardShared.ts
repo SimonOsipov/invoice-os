@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { basename, dirname, join } from 'node:path'
 
 import { test, expect, type Page, type Request } from '@playwright/test'
-import { login, createEntity, type ExtractionDetail, type ExtractionReason, type Persona } from '../api/client'
+import { login, createEntity, listInvoices, approveUntilClosed, firmApproverTokens, type ExtractionDetail, type ExtractionReason, type Persona } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { signInAs } from '../personaSession'
 import { approvalRun404Dropper, type Dropper } from './consoleGate'
@@ -233,4 +233,14 @@ export async function setExactMapping(page: Page, placements: Record<string, str
     await page.getByRole('button', { name: new RegExp(`^${escape(field)}\\s*\\*?$`, 'i') }).click()
     await columns.filter({ has: page.locator('div.mono', { hasText: new RegExp(`^${escape(header)}$`) }) }).click()
   }
+}
+
+// Closes every open approval run of the entity, so validated rows become selectable. A kept-as-is row
+// is never validated and has no run, hence the run_state filter.
+export async function approveOpenRunsForEntity(token: string, entityId: string, tenantId: string): Promise<void> {
+  const { invoices } = await listInvoices(token, { entity_id: entityId })
+  const approverTokens = await firmApproverTokens(tenantId)
+  await Promise.all(
+    invoices.filter((inv) => inv.approval?.run_state === 'open').map((inv) => approveUntilClosed(inv.id, approverTokens)),
+  )
 }

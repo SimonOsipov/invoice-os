@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { test, expect, type Locator, type Page, type Request, type Response, type TestInfo } from '@playwright/test'
-import { login, createEntity, createImportBatch, getInvoice, listInvoices, approveUntilClosed, firmApproverTokens, type ExtractionDetail, type ExplainResult, type Persona } from '../api/client'
+import { login, createEntity, createImportBatch, getInvoice, listInvoices, type ExtractionDetail, type ExplainResult, type Persona } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { shoot as argosShoot } from '../argos'
@@ -15,7 +15,7 @@ import { GATEWAY_URL, shardTenants } from './targets'
 import { signInAs } from '../personaSession'
 import { nightlyTarget } from '../targets'
 import { buildAir07UnsteeredCsv, buildHeaderOnlyCsv, buildMixedCsv, PR_LANE_MAPPING, steerExplainMarker } from '../importFixtures'
-import { setExactMapping } from './importWizardShared'
+import { approveOpenRunsForEntity, setExactMapping } from './importWizardShared'
 
 const SHARD = shardTenants('import-review-surfaces.spec.ts')
 const GATEWAY_ORIGIN = new URL(GATEWAY_URL).origin
@@ -284,15 +284,6 @@ async function clickImport(page: Page): Promise<void> {
   const importResp = page.waitForResponse(isImport, { timeout: 60_000 })
   await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
   await importResp
-}
-
-// Closes every open approval run of the entity over the API, so the validated rows become selectable.
-async function approveOpenRunsForEntity(token: string, entityId: string): Promise<void> {
-  const { invoices } = await listInvoices(token, { entity_id: entityId })
-  const approverTokens = await firmApproverTokens(SHARD.a.id)
-  await Promise.all(
-    invoices.filter((inv) => inv.approval?.run_state === 'open').map((inv) => approveUntilClosed(inv.id, approverTokens)),
-  )
 }
 
 // Each header cell's left edge equals the cell below it in every data row, and no two cells of a row overlap.
@@ -767,7 +758,7 @@ test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
         timeout: 60_000,
       })
       .toBeGreaterThan(0)
-    await approveOpenRunsForEntity(token, entityId)
+    await approveOpenRunsForEntity(token, entityId, SHARD.a.id)
     await page.reload()
     await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
     await expect(heading, 'the review survives the reload').toBeVisible({ timeout: 60_000 })

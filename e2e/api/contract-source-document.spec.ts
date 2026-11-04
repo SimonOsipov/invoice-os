@@ -2,14 +2,9 @@
 // /v1/invoices/{id}/source-document and GET /v1/documents/{id}/sheet.
 //
 // A new file, not folded into contract-import.spec.ts, matching this package's
-// contract-<family>.spec.ts naming -- unlike that file's own GET /v1/documents/{id}
-// describe, which stays in-file because a document can only be minted through the
-// POST /v1/imports/preview seam and a sibling spec would need a second copy of it.
-// Paying that cost here deliberately: importFetch/previewFetch/uploadDocument/buildForm
-// below duplicate that seam rather than import it -- both files are *.spec.ts, and
-// importing one into another registers its tests twice.
+// contract-<family>.spec.ts naming.
 import { test, expect } from '@playwright/test'
-import { login, createEntity, createInvoice, listInvoices, apiBase, rawFetch, PERSONAS } from './client'
+import { login, createEntity, createInvoice, listInvoices, rawFetch, uploadDocument, buildForm, importFetch, PERSONAS } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope, type RawResult } from './contract-helpers'
 import { buildMixedCsv, PERF_MAPPING } from '../importFixtures'
@@ -17,56 +12,8 @@ import { buildMixedCsv, PERF_MAPPING } from '../importFixtures'
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const SHA256_RE = /^[0-9a-f]{64}$/
 
-async function previewFetch(token: string, csv: string, filename = 'import.csv'): Promise<RawResult> {
-  const form = new FormData()
-  form.set('file', new Blob([csv], { type: 'text/csv' }), filename)
-  const res = await fetch(`${apiBase()}/api/invoice/v1/imports/preview`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: form,
-  })
-  let body: unknown
-  try {
-    body = await res.json()
-  } catch {
-    body = undefined
-  }
-  return { status: res.status, body }
-}
-
-async function uploadDocument(token: string, csv: string, filename = 'import.csv'): Promise<string> {
-  const res = await previewFetch(token, csv, filename)
-  const id = (res.body as Record<string, unknown> | undefined)?.document_id
-  expect(typeof id, `preview should carry a document_id (status ${res.status})`).toBe('string')
-  return id as string
-}
-
-function buildForm(entityId: string, documentId: string): FormData {
-  const f = new FormData()
-  f.set('entity_id', entityId)
-  f.set('mapping', JSON.stringify(PERF_MAPPING))
-  f.set('document_id', documentId)
-  return f
-}
-
-async function importFetch(token: string, form: FormData): Promise<RawResult> {
-  const res = await fetch(`${apiBase()}/api/invoice/v1/imports`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: form,
-  })
-  let body: unknown
-  try {
-    body = await res.json()
-  } catch {
-    body = undefined
-  }
-  return { status: res.status, body }
-}
-
 // Both reads are plain JSON and need neither response headers nor bytes, so they go
-// through rawFetch like every other contract spec -- the hand-rolled seams above survive
-// only because rawFetch cannot produce multipart. token=null omits Authorization.
+// through rawFetch like every other contract spec. token=null omits Authorization.
 function authHeaders(token: string | null): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
@@ -89,7 +36,7 @@ test.describe('invoice source-document contract (API E2E, over the deployed gate
   test('source-document contract: imported invoice -> 200', async () => {
     const entity = await createEntity(token, { name: `DOC-02 src-doc ${freshTin()}`, tin: freshTin() })
     const documentId = await uploadDocument(token, buildMixedCsv(), 'doc02-mixed.csv')
-    const imported = await importFetch(token, buildForm(entity.id, documentId))
+    const imported = await importFetch(token, buildForm(entity.id, documentId, PERF_MAPPING))
     expect(imported.status, 'the mixed-batch import should return 201').toBe(201)
 
     const importedBody = imported.body as { invoice_violations: Array<{ invoice_number: string; invoice_id?: string }> }

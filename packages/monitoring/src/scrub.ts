@@ -2,7 +2,7 @@ import type { Breadcrumb, ErrorEvent, EventHint, SpanJSON, TransactionEvent } fr
 import { wasReported } from './reported'
 
 // ceiling: quoted text in a thrown message is not redacted, unlike Go's filter; revisit when an asc-frontend issue shows customer text in quotes
-const DROPPED_KEYS = new Set(['http.query', 'http.fragment'])
+const DROPPED_KEYS = new Set(['http.query', 'http.fragment', 'url.query', 'url.fragment'])
 const GLOBAL_HANDLERS = 'auto.browser.global_handlers'
 const TRANSPORT_DECIDED = new Set(['ApiError', 'AbortError', 'TimeoutError', 'SessionEndedError'])
 const CAPACITY_KEYS = ['effectiveConnectionType', 'connectionType', 'deviceMemory', 'hardwareConcurrency', 'connection.rtt']
@@ -44,12 +44,17 @@ function dropCapacity(bag: unknown): void {
   if (bag && typeof bag === 'object') for (const k of CAPACITY_KEYS) delete (bag as Bag)[k]
 }
 
+function dropIdentity(data: Bag): void {
+  delete data['client.address']
+  for (const k of Object.keys(data)) if (k.startsWith('user.')) delete data[k]
+}
+
 function scrubSpanLike<T extends { description?: string; data?: unknown }>(span: T): T {
   const out: T = { ...span }
   if (typeof out.description === 'string') out.description = clean(out.description)
   if (out.data && typeof out.data === 'object') {
     const data = walk(out.data) as Bag
-    delete data['client.address']
+    dropIdentity(data)
     dropCapacity(data)
     out.data = data
   }
@@ -96,7 +101,9 @@ export function scrubTransaction(event: TransactionEvent): TransactionEvent {
   delete out.request
   if (out.measurements) out.measurements = walk(out.measurements, true) as typeof out.measurements
   dropCapacity(out.measurements)
-  dropCapacity((out.contexts as { trace?: { data?: unknown } } | undefined)?.trace?.data)
+  const traceData = (out.contexts as { trace?: { data?: unknown } } | undefined)?.trace?.data
+  if (traceData && typeof traceData === 'object') dropIdentity(traceData as Bag)
+  dropCapacity(traceData)
   if (out.spans) out.spans = out.spans.map((s) => scrubSpanLike(s))
   return out
 }

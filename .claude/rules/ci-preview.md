@@ -38,4 +38,4 @@ paths:
 - Re-run the whole workflow to retry an `E2E gate`, never "Re-run failed jobs". The database is recreated only when the `deploy` job runs.
 - Teardown deletes the PR's services, migrate job, database, bucket and secrets on close. The nightly sweep deletes a preview older than 24 h whose PR reads closed.
 - Keep a preview fleet at 30 database connections or fewer at peak (`preview.sh budget`) and open at most 3 previews: 3 x 30 fits the 95 usable slots of the `preview` instance's `max_connections` 100 (100 - 3 superuser-reserved - 2 `cloudsqladmin` = 95). Past the cap, any open preview's services can fail with 53300.
-- The nightly counts toward the cap. In a nightly run, `Prepare the preview` stops at `preview cap reached` when 3 previews are open (`TestDevEnvNightly_PrepareEnvStopsAtTheCap`). A PR run checks no cap.
+- The nightly counts toward the cap. In a nightly run, `preview cap reached` polls `preview.sh cap` and fails only if 3 previews stay open (`TestDevEnvNightly_CapStepWaitsForASlot`). A PR run checks no cap.

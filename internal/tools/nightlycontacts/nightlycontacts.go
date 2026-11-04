@@ -330,8 +330,8 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-func (r *runner) finish(in string, started time.Time) []stepResult {
-	prior := loadPhases(in)
+func (r *runner) finish(in string, started time.Time, prepare string) []stepResult {
+	prior := loadPhases(in, prepare == "" || prepare == "success")
 	if r.refuseDomain() {
 		return mergeSteps(append(prior, r.steps...))
 	}
@@ -433,8 +433,8 @@ func deleteVerdict(deleted, failed int) (string, string) {
 }
 
 // loadPhases reads start.json and check.json from dir or one directory below it (an artifact download).
-// A phase that is missing or unreadable gives a failed step.
-func loadPhases(dir string) []stepResult {
+// A missing or unreadable phase gives a failed step, unless prepare-env stopped first (missingFails false).
+func loadPhases(dir string, missingFails bool) []stepResult {
 	var out []stepResult
 	for _, phase := range []string{"start", "check"} {
 		var sec sectionOut
@@ -450,6 +450,9 @@ func loadPhases(dir string) []stepResult {
 			}
 		}
 		if !found {
+			if !missingFails {
+				continue
+			}
 			out = append(out, stepResult{phase + " phase ran", "failed", 0, phase + ".json is missing or unreadable"})
 			continue
 		}

@@ -218,18 +218,21 @@ jobs:
             echo "::error::a nightly preview is still listed after its teardown"
             exit 1
           fi
-      - name: Count the previews
-        id: count
+      - name: preview cap reached
         if: needs.changes.outputs.nightly == 'true'
+        env:
+          CAP_TRIES: 15
+          CAP_SLEEP: 30
         run: |
           set -euo pipefail
-          bash scripts/ci/preview.sh cap | tee -a "$GITHUB_OUTPUT"
-      - name: preview cap reached
-        if: needs.changes.outputs.nightly == 'true' && steps.count.outputs.full != 'false'
-        env:
-          OPEN: ${{ steps.count.outputs.open }}
-        run: |
-          echo "::error::preview cap reached: $OPEN previews open (.claude/rules/ci-preview.md)"
+          for ((i = 1; i <= CAP_TRIES; i++)); do
+            out=$(bash scripts/ci/preview.sh cap)
+            echo "$out"
+            grep -q '^full=false$' <<<"$out" && exit 0
+            ((i < CAP_TRIES)) && sleep "$CAP_SLEEP"
+          done
+          open=$(sed -n 's/^open=//p' <<<"$out")
+          echo "::error::preview cap reached: $open previews open (.claude/rules/ci-preview.md)"
           exit 1
       - name: Check the contact secrets
         if: needs.changes.outputs.nightly == 'true'
@@ -1148,7 +1151,7 @@ jobs:
           echo "::add-mask::$domain"
           mkdir -p "$RUNNER_TEMP/contacts" nightly-results
           HUBSPOT_LIVE_PORTAL_ID=$HUBSPOT_PORTAL_ID HUBSPOT_TOKEN=$token RESEND_API_KEY=$key RECEIVING_DOMAIN=$domain \
-            go run ./internal/tools/nightlycontacts finish -in "$RUNNER_TEMP/contacts" -started "$started" -out nightly-results/hubspot.json
+            go run ./internal/tools/nightlycontacts finish -in "$RUNNER_TEMP/contacts" -started "$started" -prepare "${{ needs.prepare-env.result }}" -out nightly-results/hubspot.json
       - name: Upload the nightly results
         if: always()
         uses: actions/upload-artifact@v7

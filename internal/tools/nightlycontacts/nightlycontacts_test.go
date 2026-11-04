@@ -549,6 +549,33 @@ func TestFinish_PrepareResultDecidesWhetherAMissingPhaseFileFails(t *testing.T) 
 	})
 }
 
+func TestFinish_PrepareResultKinds(t *testing.T) {
+	for prepare, wantFail := range map[string]bool{"success": true, "": true, "failure": false, "skipped": false, "cancelled": false} {
+		w := newWorld()
+		res := runPhase(t, w, baseEnv(), "finish", "-in", t.TempDir(), "-started", startedAt, "-prepare", prepare)
+		failed := res.step("start phase ran").Status == "failed" && res.step("check phase ran").Status == "failed"
+		if failed != wantFail {
+			t.Errorf("-prepare %q: phase files missing fail = %v, want %v; steps %+v", prepare, failed, wantFail, res.sec.Steps)
+		}
+	}
+}
+
+func TestFinish_FailedPrepareStillReadsAPhaseFileThatExists(t *testing.T) {
+	w := newWorld()
+	dir := t.TempDir()
+	sec := `{"ok":false,"failures":[],"steps":[{"name":"` + stRegInHS + `","status":"failed","duration_ms":0,"detail":"x"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "check.json"), []byte(sec), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := runPhase(t, w, baseEnv(), "finish", "-in", dir, "-started", startedAt, "-prepare", "failure")
+	if res.code != 1 || res.step(stRegInHS).Status != "failed" {
+		t.Fatalf("code %d, steps %+v; the check.json failure was dropped", res.code, res.sec.Steps)
+	}
+	if s := res.step("start phase ran"); s.Status == "failed" {
+		t.Errorf("missing start.json failed after a failed prepare-env: %+v", s)
+	}
+}
+
 func TestOutput_HoldsNoAddressOrToken(t *testing.T) {
 	for name, set := range map[string]func(*world){
 		"bodies echo secrets":                    func(w *world) { w.failAll = true },

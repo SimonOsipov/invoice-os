@@ -739,6 +739,12 @@ func TestDevEnvNightly_PrepareEnvStopsAtTheCap(t *testing.T) {
 // nlRunCapStep runs the `preview cap reached` step with a stub whose cap prints the first output once, then rest. It returns the output, the exit code and the cap call count.
 func nlRunCapStep(t *testing.T, first, rest string, tries int) (string, int, int) {
 	t.Helper()
+	return nlRunCapStepN(t, first, rest, tries, 1)
+}
+
+// nlRunCapStepN prints first for the first firstCalls cap calls; a rest of nlCapFails makes later calls exit 1.
+func nlRunCapStepN(t *testing.T, first, rest string, tries, firstCalls int) (string, int, int) {
+	t.Helper()
 	s, ok := nlStep(devEnvJob(t, "prepare-env"), "preview cap reached")
 	if !ok {
 		t.Fatal("no step \"preview cap reached\" in prepare-env")
@@ -748,7 +754,7 @@ func nlRunCapStep(t *testing.T, first, rest string, tries int) (string, int, int
 		t.Fatal(err)
 	}
 	stub := "case \"$1\" in\nprs) echo 1 ;;\ncap)\necho x >>'" + filepath.Join(dir, "calls") + "'\n" +
-		"if [ \"$(wc -l <'" + filepath.Join(dir, "calls") + "')\" -le 1 ]; then printf '" + first + "'; else printf '" + rest + "'; fi ;;\nesac\n"
+		"if [ \"$(wc -l <'" + filepath.Join(dir, "calls") + "')\" -le " + strconv.Itoa(firstCalls) + " ]; then printf '" + first + "'; elif [ '" + rest + "' = '" + nlCapFails + "' ]; then exit 1; else printf '" + rest + "'; fi ;;\nesac\n"
 	writeIn(t, filepath.Join(dir, "scripts/ci"), "preview.sh", stub)
 	script := "cd '" + dir + "'\nexport CAP_TRIES=" + strconv.Itoa(tries) + " CAP_SLEEP=0 OPEN=3\nexport GITHUB_OUTPUT='" +
 		filepath.Join(dir, "out") + "' GITHUB_STEP_SUMMARY='" + filepath.Join(dir, "summary") + "'\n" + s.keys["run"]
@@ -778,6 +784,62 @@ func TestDevEnvNightly_CapStepWaitsForASlot(t *testing.T) {
 			t.Errorf("%d cap error lines, want 1; output %q", n, out)
 		}
 	})
+}
+
+func TestDevEnvNightly_CapStepEdges(t *testing.T) {
+	t.Parallel()
+	full, free := "open=3\\nfull=true", "open=2\\nfull=false"
+	t.Run("the slot frees on the last try", func(t *testing.T) {
+		out, code, calls := nlRunCapStepN(t, full, free, 3, 2)
+		if code != 0 || calls != 3 {
+			t.Errorf("exit %d after %d cap calls, want exit 0 after 3; output %q", code, calls, out)
+		}
+	})
+	t.Run("a cap call that exits non-zero mid-wait fails the step at once", func(t *testing.T) {
+		out, code, calls := nlRunCapStepN(t, full, nlCapFails, 5, 1)
+		if code == 0 || calls != 2 {
+			t.Errorf("exit %d after %d cap calls, want non-zero after 2; output %q", code, calls, out)
+		}
+	})
+	t.Run("no open= line still fails with one error", func(t *testing.T) {
+		out, code, _ := nlRunCapStepN(t, "full=true", "full=true", 2, 1)
+		if code != 1 || strings.Count(out, "::error::preview cap reached") != 1 {
+			t.Errorf("exit %d, output %q, want exit 1 with one cap error", code, out)
+		}
+	})
+}
+
+// The step waits CAP_TRIES-1 sleeps and makes CAP_TRIES cap calls (~8 s each on 11-04, run 41792650362); the rest of nightly prepare-env takes ~3 min. All of it must fit timeout-minutes.
+func TestDevEnvNightly_CapWaitFitsThePrepareEnvTimeout(t *testing.T) {
+	t.Parallel()
+	pe := devEnvJob(t, "prepare-env")
+	s, ok := nlStep(pe, "preview cap reached")
+	if !ok {
+		t.Fatal("no cap step")
+	}
+	tries, err1 := strconv.Atoi(s.env["CAP_TRIES"])
+	sleep, err2 := strconv.Atoi(s.env["CAP_SLEEP"])
+	limit, _ := jobKey(pe, "timeout-minutes")
+	mins, err4 := strconv.Atoi(limit)
+	if err1 != nil || err2 != nil || err4 != nil {
+		t.Fatalf("CAP_TRIES %q, CAP_SLEEP %q, timeout %q do not parse", s.env["CAP_TRIES"], s.env["CAP_SLEEP"], limit)
+	}
+	const capCall, restOfJob = 8, 180
+	if secs := (tries-1)*sleep + tries*capCall + restOfJob; secs > mins*60 {
+		t.Errorf("worst case %d s (%d tries, %d s sleep) exceeds the %d min prepare-env timeout", secs, tries, sleep, mins)
+	}
+}
+
+// The finish step needs Go, Google auth and vendor secrets, so no runtime test can drive it; the read is the last resort.
+func TestDevEnvNightly_ContactsCleanupPassesThePrepareResult(t *testing.T) {
+	t.Parallel()
+	s, ok := nlStep(devEnvJob(t, "contacts-cleanup"), "Delete the contacts and prove none is left")
+	if !ok {
+		t.Fatal("no delete step in contacts-cleanup")
+	}
+	if !strings.Contains(nlCode(s.keys["run"]), `nightlycontacts finish`) || !strings.Contains(nlCode(s.keys["run"]), `-prepare "${{ needs.prepare-env.result }}"`) {
+		t.Errorf("finish does not get -prepare from needs.prepare-env.result: %q", s.keys["run"])
+	}
 }
 
 // nlE2ETimeout: the nightly gets 40 minutes; a PR keeps GitHub's 360-minute default (Q1).

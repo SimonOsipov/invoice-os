@@ -31,6 +31,7 @@ const LONG_PREFIX = `ENGI-15 long ${RUN} `
 const LONG_MESSAGE = `${LONG_PREFIX}${'w'.repeat(150)} ${'word '.repeat(80)}`.slice(0, MESSAGE_MAX_RUNES)
 const SHORT_MESSAGE = `ENGI-15 fixture ${RUN}`
 // Long enough to wrap in the scope radio and the switcher.
+const CLIENT_RULE_MESSAGE = `NCOV-07 per-client ${RUN}`
 const ENTITY_NAME = `ENGI-15 Rules ${RUN} Consolidated Holdings and Trading Partnership of West Africa`
 
 let admin: string
@@ -55,7 +56,7 @@ test.beforeAll(async () => {
 
 // Every rule written for this spec's client is removed, whichever test wrote it.
 test.afterAll(async () => {
-  const mine = (await listCustomRules(admin)).filter((r: CustomRule) => r.entity_id === entity.id)
+  const mine = (await listCustomRules(admin)).filter((r: CustomRule) => r.entity_id === entity.id || r.message === CLIENT_RULE_MESSAGE)
   for (const r of mine) await deleteCustomRule(admin, r.id).catch(() => undefined)
 })
 
@@ -232,13 +233,13 @@ test('an admin writes, switches, edits and removes a custom rule', async ({ page
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// Core AC 4: a client rule shows on its own client only, across switches (D7).
+// A client-scoped rule appears under its own client only, however often the active client switches.
 test('a client rule shows on its own client and not on another, across client switches', async ({ page }) => {
   test.setTimeout(120_000)
   const errors = collectErrors(page)
   const a = await createEntity(admin, { name: `ENGI-15 Rules ${RUN} NCOV-07 A`, tin: freshTin() })
   const b = await createEntity(admin, { name: `ENGI-15 Rules ${RUN} NCOV-07 B`, tin: freshTin() })
-  const message = `NCOV-07 per-client ${RUN}`
+  const message = CLIENT_RULE_MESSAGE
   const rule = await createCustomRule(admin, {
     entity_id: a.id,
     type: 'required',
@@ -274,8 +275,8 @@ test('a client rule shows on its own client and not on another, across client sw
     await expect(ruleRow(page, message).getByText('CLIENT', { exact: true })).toBeVisible()
   } finally {
     await deleteCustomRule(admin, rule.id).catch(() => undefined)
-    expect((await listCustomRules(admin)).filter((r) => r.message === message)).toEqual([])
   }
+  expect((await listCustomRules(admin)).filter((r) => r.message === message)).toEqual([])
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

@@ -1232,13 +1232,18 @@ test('ST-10 the roster search and role filter narrow the members, and the Member
   expect(members.problems, 'members no-match placement').toEqual([])
   await attachShot(page, testInfo, 'members-no-match')
 
-  // Oracle is the live roster read, never a literal count.
+  // Oracle is the live roster read, taken just before a reload so the page and the oracle share one state.
   const live = (await memberships(await login(PERSONAS.A))).memberships
-  const nameOf = (m: (typeof live)[number]) => m.display_name ?? m.email ?? m.user_id
+  await page.reload()
+  await expect(tid(page, 'member-row').first(), 'the roster drew no rows after the reload').toBeVisible({ timeout: 20_000 })
+  await expect(page.getByText(/^Loading .+…$/), 'a loading label never went away').toHaveCount(0)
+  // Mirrors toMember in lib/members.ts: a removed row shows REMOVED_NAME and no email.
+  const nameOf = (m: (typeof live)[number]) => (m.status === 'removed' ? m.display_name || 'Deleted member' : (m.display_name ?? m.email ?? m.user_id))
+  const emailOf = (m: (typeof live)[number]) => (m.status === 'removed' ? '' : (m.email ?? ''))
   const target = live.find(
     (m) =>
       m.status === 'active' &&
-      !live.some((o) => o !== m && (nameOf(o).toLowerCase().includes(nameOf(m).toLowerCase()) || (o.email ?? '').toLowerCase().includes(nameOf(m).toLowerCase()))),
+      !live.some((o) => o !== m && (nameOf(o).toLowerCase().includes(nameOf(m).toLowerCase()) || emailOf(o).toLowerCase().includes(nameOf(m).toLowerCase()))),
   )
   const reviewers = live.filter((m) => m.role === 'reviewer' && (m.status === 'active' || m.status === 'suspended')).map(nameOf)
   expect(target, 'fixture check: no active membership has a name unique among the roster').toBeDefined()
@@ -1257,11 +1262,10 @@ test('ST-10 the roster search and role filter narrow the members, and the Member
   const roleFilter = page.locator('label[aria-label="Access role"] select')
   await roleFilter.selectOption('reviewer')
   await expect(rows, 'the Reviewer filter did not narrow the roster to the reviewers').toHaveCount(reviewers.length)
-  const filtered = await rows.evaluateAll((els) => els.map((el) => ({ person: el.children[0].textContent ?? '', access: el.children[1].firstElementChild?.textContent ?? '' })))
   for (const name of reviewers) {
-    expect(filtered.some((r) => r.person.includes(name)), `reviewer ${name} is missing under the Reviewer filter`).toBe(true)
+    await expect(rows.filter({ has: page.getByText(name, { exact: true }) }).first(), `reviewer ${name} is missing under the Reviewer filter`).toBeVisible()
   }
-  expect(filtered.map((r) => r.access), 'a filtered row does not read Reviewer').toEqual(filtered.map(() => 'Reviewer'))
+  await expect(rows.filter({ has: page.getByText('Reviewer', { exact: true }) }), 'a filtered row does not read Reviewer').toHaveCount(reviewers.length)
   await roleFilter.selectOption('all')
   await expect(rows, 'All roles did not restore the roster').toHaveCount(total)
 

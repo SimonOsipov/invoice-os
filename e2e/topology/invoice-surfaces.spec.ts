@@ -40,6 +40,7 @@ import {
   staffWorkflowRole,
   subjectOf,
   searchCodes,
+  type ApprovalRun,
   type ExplainResult,
   type Persona,
 } from '../api/client'
@@ -3907,10 +3908,18 @@ test('detail surface: the armed decision block and approval card, plus their lay
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// Seeded `compliance` holders, kept at module level so the file-level afterAll restores them even when the test dies.
+// Module level so afterEach cleans up even when the test dies, before the next test runs.
 let seededCompliance: string[] | null = null
-test.afterAll(async () => {
-  if (seededCompliance) await staffWorkflowRole(await login(PERSONAS.A), 'compliance', seededCompliance)
+let openRunInvoices: string[] = []
+test.afterEach(async () => {
+  if (seededCompliance) {
+    await staffWorkflowRole(await login(PERSONAS.A), 'compliance', seededCompliance)
+    seededCompliance = null
+  }
+  const ids = openRunInvoices
+  openRunInvoices = []
+  const approvers = ids.length ? await firmApproverTokens(SHARD.a.id) : {}
+  for (const id of ids) await approveUntilClosed(id, approvers).catch(() => undefined)
 })
 
 test('detail surface: a staffed approver approves one invoice and rejects another, and each run closes with that decision', async ({ page }) => {
@@ -3926,6 +3935,7 @@ test('detail surface: a staffed approver approves one invoice and rejects anothe
     await validateInvoice(token, invoice.id)
     await decideInvoiceApproval(finMgr, invoice.id, { decision: 'approved' })
     ids.push(invoice.id)
+    openRunInvoices.push(invoice.id)
   }
   const [approveId, rejectId, pendingId] = ids
   for (const id of ids) {
@@ -3940,7 +3950,6 @@ test('detail surface: a staffed approver approves one invoice and rejects anothe
   if (!role) throw new Error('no compliance workflow role on the firm tenant')
   // Without the filter a retry after a failed restore would record the driver as seeded.
   const seeded = role.members.filter((m) => m !== driver)
-  expect(seeded).not.toContain(driver)
   seededCompliance = seeded
 
   const posts: string[] = []
@@ -3953,7 +3962,7 @@ test('detail surface: a staffed approver approves one invoice and rejects anothe
       click(),
     ])
     expect(res.ok()).toBe(true)
-    return (await res.json()) as { state: string; decisions: Array<{ decision: string; actor: string; reason: string | null }> }
+    return (await res.json()) as ApprovalRun
   }
 
   try {
@@ -3998,7 +4007,13 @@ test('detail surface: a staffed approver approves one invoice and rejects anothe
     await expect(approve).toBeDisabled()
     await expect(reject).toBeDisabled()
   } finally {
-    await staffWorkflowRole(token, 'compliance', seeded)
+    // A failed restore must not replace the test's own failure; afterEach retries it.
+    await staffWorkflowRole(token, 'compliance', seeded).then(
+      () => {
+        seededCompliance = null
+      },
+      () => undefined,
+    )
   }
 
   expect(posts, 'one POST per decision').toHaveLength(2)

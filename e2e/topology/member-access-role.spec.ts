@@ -1,8 +1,9 @@
-// Settings › Members drawer: an admin changes a member's access role and reads it back after a reload.
+// Settings › Members drawer: an admin changes a member's access role or suspends them, and reads it back after a reload.
 // A fresh firm workspace, so the sole-admin and approver-gap states are this test's own.
 import { randomUUID } from 'node:crypto'
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { createWorkflowRole, grantMembership, me, memberships, provisionRealAccount, registerFresh, signInSession, staffWorkflowRole, subjectOf } from '../api/client'
+import { createWorkflowRole, grantMembership, me, memberships, provisionRealAccount, rawFetch, registerFresh, signInSession, staffWorkflowRole, subjectOf } from '../api/client'
+import { assertErrorEnvelope } from '../api/contract-helpers'
 import { collectErrors, signInAtFrontDoor } from '../personaSession'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 
@@ -130,6 +131,60 @@ test("firm Settings: an admin changes a member's access role in the drawer and i
   await memberRow(page, adminName).click()
   for (const id of ROLE_IDS) await expect(card(id).locator('input')).toBeDisabled()
   await expect(drawer).toContainText(PROTECTED_ADMIN_NOTE)
+
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+test("firm Settings: an admin suspends a member in the drawer, the roster shows it, and the member's next request is refused", async ({ page }) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  const run = randomUUID().slice(0, 8)
+  const memberName = `Suspend Member ${run}`
+
+  // A fresh workspace and a member made here, so the suspension touches no other test.
+  const admin = await provisionRealAccount('suspend', 'firm', `Suspend Admin ${run}`)
+  const adminToken = (await signInSession(admin.email, admin.password)).access_token
+  const adminTenant = (await me(adminToken)).tenant.id
+  const member = await registerFresh('suspend-member')
+  const memberId = subjectOf((await signInSession(member.email, member.password)).access_token)
+  await grantMembership({ user_id: memberId, tenant_id: adminTenant, role: 'reviewer', display_name: memberName, email: member.email })
+  // Minted after the grant, so it resolves the admin's workspace.
+  const memberToken = (await signInSession(member.email, member.password)).access_token
+  const readEntities = () => rawFetch('/api/portfolio/v1/entities', { headers: { Authorization: `Bearer ${memberToken}` } })
+
+  expect((await me(memberToken)).tenant.id).toBe(adminTenant)
+  expect((await readEntities()).status, 'control read before the suspension').toBe(200)
+
+  const patches: string[] = []
+  page.on('request', (req) => {
+    if (req.method() === 'PATCH' && req.url().includes('/memberships/')) patches.push(req.url())
+  })
+  const storedStatus = async () => (await memberships(adminToken)).memberships.find((m) => m.user_id === memberId)?.status
+
+  await signInAtFrontDoor(page, admin, '/settings/members')
+  await expect(memberRow(page, memberName)).toBeVisible()
+  await memberRow(page, memberName).click()
+  const suspend = page.getByTestId('member-suspend')
+  await expect(suspend).toHaveText('Suspend')
+  await expect(suspend).toBeEnabled()
+
+  const [res] = await Promise.all([
+    page.waitForResponse((r) => r.request().method() === 'PATCH' && r.url().endsWith(`/memberships/${memberId}`)),
+    suspend.click(),
+  ])
+  expect(res.status()).toBe(200)
+  expect(((await res.json()) as { status: string }).status).toBe('suspended')
+  expect(patches).toHaveLength(1)
+  await expect(suspend).toHaveText('Reactivate')
+  await expect(memberRow(page, memberName).getByText('SUSPENDED', { exact: true })).toBeVisible()
+
+  await page.reload()
+  await expect(memberRow(page, memberName).getByText('SUSPENDED', { exact: true })).toBeVisible()
+  expect(await storedStatus()).toBe('suspended')
+
+  const refused = await readEntities()
+  assertErrorEnvelope(refused, 403, 'suspended member reads the entity list')
+  expect(refused.body).toEqual({ error: 'your membership in this workspace is not active' })
 
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })

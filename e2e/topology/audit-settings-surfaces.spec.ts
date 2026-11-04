@@ -3,7 +3,7 @@
 // Layout claims assert a relationship; screenshots are attached for the reviewer and never asserted.
 // States the seed cannot reach are driven with page.route, each stub scoped to its own URL. No stub is a write.
 import { test, expect, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'
-import { archiveCustomer, createCustomer, createEntity, createInvoice, grantMembership, listCustomers, login, me, PERSONAS, provisionRealAccount, registerFresh, setMemberClients, signInSession, subjectOf, type RealAccount } from '../api/client'
+import { archiveCustomer, createCustomer, createEntity, createInvoice, grantMembership, listCustomers, login, me, memberships, PERSONAS, provisionRealAccount, registerFresh, setMemberClients, signInSession, subjectOf, type RealAccount } from '../api/client'
 import { freshBuyerTin, freshTin } from '../api/fixtures'
 import { signInAs, signInAtFrontDoor } from '../personaSession'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
@@ -1215,10 +1215,11 @@ test('ST-09 the role matrix collapses inside its card and opens to three equal t
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('ST-10 the Members and Roles no-match states sit inside their containers', async ({ page }, testInfo) => {
+test('ST-10 the roster search and role filter narrow the members, and the Members and Roles no-match states sit inside their containers', async ({ page }, testInfo) => {
   const errors = gatedErrors(page, [])
   await openMembers(page)
-  await page.getByLabel('Search members').fill(`no-match-${crypto.randomUUID()}`)
+  const search = page.getByLabel('Search members')
+  await search.fill(`no-match-${crypto.randomUUID()}`)
   const noMatch = tid(page, 'members-no-match')
   await expect(noMatch, 'a nonce search drew no members no-match row').toBeVisible()
   const table = tid(page, 'members-table')
@@ -1230,6 +1231,43 @@ test('ST-10 the Members and Roles no-match states sit inside their containers', 
   }
   expect(members.problems, 'members no-match placement').toEqual([])
   await attachShot(page, testInfo, 'members-no-match')
+
+  // Oracle is the live roster read, taken just before a reload so the page and the oracle share one state.
+  const live = (await memberships(await login(PERSONAS.A))).memberships
+  await page.reload()
+  await expect(tid(page, 'member-row').first(), 'the roster drew no rows after the reload').toBeVisible({ timeout: 20_000 })
+  await expect(page.getByText(/^Loading .+…$/), 'a loading label never went away').toHaveCount(0)
+  // Mirrors toMember in lib/members.ts: a removed row shows REMOVED_NAME and no email.
+  const nameOf = (m: (typeof live)[number]) => (m.status === 'removed' ? m.display_name || 'Deleted member' : (m.display_name ?? m.email ?? m.user_id))
+  const emailOf = (m: (typeof live)[number]) => (m.status === 'removed' ? '' : (m.email ?? ''))
+  const target = live.find(
+    (m) =>
+      m.status === 'active' &&
+      !live.some((o) => o !== m && (nameOf(o).toLowerCase().includes(nameOf(m).toLowerCase()) || emailOf(o).toLowerCase().includes(nameOf(m).toLowerCase()))),
+  )
+  const reviewers = live.filter((m) => m.role === 'reviewer' && (m.status === 'active' || m.status === 'suspended')).map(nameOf)
+  expect(target, 'fixture check: no active membership has a name unique among the roster').toBeDefined()
+  expect(reviewers.length, 'fixture check: no active or suspended reviewer in the roster').toBeGreaterThan(0)
+
+  const rows = tid(page, 'member-row')
+  await search.fill('')
+  await expect(noMatch, 'clearing the search kept the no-match row').toHaveCount(0)
+  const total = await rows.count()
+  await search.fill(nameOf(target!))
+  await expect(rows, 'the target name did not narrow the roster to one row').toHaveCount(1)
+  await expect(rows.first(), 'the one row is not the target').toContainText(nameOf(target!))
+  await search.fill('')
+  await expect(rows, 'clearing the search did not restore the roster').toHaveCount(total)
+
+  const roleFilter = page.locator('label[aria-label="Access role"] select')
+  await roleFilter.selectOption('reviewer')
+  await expect(rows, 'the Reviewer filter did not narrow the roster to the reviewers').toHaveCount(reviewers.length)
+  for (const name of reviewers) {
+    await expect(rows.filter({ has: page.getByText(name, { exact: true }) }).first(), `reviewer ${name} is missing under the Reviewer filter`).toBeVisible()
+  }
+  await expect(rows.filter({ has: page.getByText('Reviewer', { exact: true }) }), 'a filtered row does not read Reviewer').toHaveCount(reviewers.length)
+  await roleFilter.selectOption('all')
+  await expect(rows, 'All roles did not restore the roster').toHaveCount(total)
 
   await openTab(page, 'Roles', 'roles')
   await expect(tid(page, 'role-card').first(), 'the roles grid drew no cards').toBeVisible({ timeout: 20_000 })

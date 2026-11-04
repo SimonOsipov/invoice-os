@@ -61,6 +61,11 @@ describe('route', () => {
     expect(r.view === 'group' && r.group.id).toBe('invoices')
   })
 
+  it('parse_repeatedTrailingSlashIsTheGroup', () => {
+    const r = parseLibraryPath(`${LIBRARY_BASE}/invoices//`)
+    expect(r.view === 'group' && r.group.id).toBe('invoices')
+  })
+
   it('parse_malformedEscapeIsNotFoundAndDoesNotThrow', () => {
     const p = `${LIBRARY_BASE}/%E0%A4%A`
     expect(() => parseLibraryPath(p)).not.toThrow()

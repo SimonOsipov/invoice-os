@@ -20,10 +20,9 @@ describe('isPrivacyPath', () => {
     expect(isPrivacyPath('/privacy/')).toBe(true)
   })
 
-  it('a double trailing slash is not the same page', () => {
-    // Only ONE trailing slash is stripped, not greedily — a /\/+$/ implementation
-    // would still pass the single-slash row above and only fail here.
-    expect(isPrivacyPath('/privacy//')).toBe(false)
+  it('a double trailing slash or encoded trailing slash is the same page, as Caddy collapses it', () => {
+    expect(isPrivacyPath('/privacy//')).toBe(true)
+    expect(isPrivacyPath('/privacy%2F')).toBe(true)
   })
 
   it('the site root is not the privacy page', () => {
@@ -114,10 +113,10 @@ describe('isPrivacyPath', () => {
 describe('isInvitePath', () => {
   it('isInvitePath_followsIsPrivacyPathsRules', () => {
     for (const p of ['/invite', '/invite/', '/INVITE', ' /invite ', '/invite/ ']) expect(isInvitePath(p), p).toBe(true)
-    for (const p of ['//invite', '/%69nvite']) expect(isInvitePath(p), p).toBe(true)
+    for (const p of ['//invite', '/%69nvite', '/invite//']) expect(isInvitePath(p), p).toBe(true)
     // Control: the sibling rule still answers for its own page, not this one.
     expect(isInvitePath('/privacy')).toBe(false)
-    for (const p of ['/invite//', '/invite/x', '/invites', 'invite', '/', '', '/invite\u0000']) expect(isInvitePath(p), p).toBe(false)
+    for (const p of ['/invite/x', '/invites', 'invite', '/', '', '/invite\u0000']) expect(isInvitePath(p), p).toBe(false)
   })
 })
 
@@ -129,7 +128,7 @@ describe('landingRouteName', () => {
   })
 
   it('landingRouteName_everythingElseIsUnmatched', () => {
-    const unknown = ['/privacy//', '/invite//', '/invite/x', '/invites', '/pricing', '/wp-admin/setup.php', '/invoices/3f2c9a1e-4b7d-4c2a-8e51-9d0f6a7b1c33', '']
+    const unknown = ['/invite/x', '/invites', '/pricing', '/wp-admin/setup.php', '/invoices/3f2c9a1e-4b7d-4c2a-8e51-9d0f6a7b1c33', '']
     // Control: matched inputs, the invite page included, do not map to the unmatched name.
     expect(landingRouteName('/')).not.toBe('<unmatched>')
     expect(landingRouteName('/invite')).not.toBe('<unmatched>')

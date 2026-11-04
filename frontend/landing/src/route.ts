@@ -9,9 +9,9 @@ const decode = (s: string): string => {
   }
 }
 
-// Pure/total: trim, decode, lowercase, collapse leading/inner slash runs, strip one trailing slash, exact-match only.
+// Pure/total: trim, decode, lowercase, collapse every slash run, strip one trailing slash, exact-match only.
 const normalize = (pathname: string): string => {
-  const trimmed = decode(pathname.trim()).toLowerCase().replace(/\/{2,}(?=[^/])/g, '/')
+  const trimmed = decode(pathname.trim()).toLowerCase().replace(/\/{2,}/g, '/')
   return trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed
 }
 

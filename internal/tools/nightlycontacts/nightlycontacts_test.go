@@ -522,6 +522,60 @@ func TestFinish_MissingPhaseFileIsAFailedStep(t *testing.T) {
 	}
 }
 
+func TestFinish_PrepareResultDecidesWhetherAMissingPhaseFileFails(t *testing.T) {
+	t.Run("prepare-env failed: the phases never ran, no phase failure", func(t *testing.T) {
+		w := newWorld()
+		w.rsContacts = []rsContactRow{{"r1", "a@example.com", "2026-01-01T00:00:00Z"}}
+		res := runPhase(t, w, baseEnv(), "finish", "-in", t.TempDir(), "-started", startedAt, "-prepare", "failure")
+		if res.code != 0 {
+			t.Errorf("exit %d, want 0; stderr %q", res.code, res.stderr)
+		}
+		for _, n := range []string{"start phase ran", "check phase ran"} {
+			if res.step(n).Status == "failed" {
+				t.Errorf("step %q failed after a failed prepare-env", n)
+			}
+		}
+		if !slices.Equal(w.deleted, []string{"rs:a@example.com"}) {
+			t.Errorf("cleanup did not run: %v", w.deleted)
+		}
+	})
+	t.Run("prepare-env succeeded: a missing phase file stays a failure", func(t *testing.T) {
+		w := newWorld()
+		w.rsContacts = []rsContactRow{{"r1", "a@example.com", "2026-01-01T00:00:00Z"}}
+		res := runPhase(t, w, baseEnv(), "finish", "-in", t.TempDir(), "-started", startedAt, "-prepare", "success")
+		if res.code != 1 || res.step("check phase ran").Status != "failed" || res.step("start phase ran").Status != "failed" {
+			t.Fatalf("code %d, steps %+v", res.code, res.sec.Steps)
+		}
+	})
+}
+
+func TestFinish_PrepareResultKinds(t *testing.T) {
+	for prepare, wantFail := range map[string]bool{"success": true, "": true, "failure": false, "skipped": false, "cancelled": false} {
+		w := newWorld()
+		res := runPhase(t, w, baseEnv(), "finish", "-in", t.TempDir(), "-started", startedAt, "-prepare", prepare)
+		failed := res.step("start phase ran").Status == "failed" && res.step("check phase ran").Status == "failed"
+		if failed != wantFail {
+			t.Errorf("-prepare %q: phase files missing fail = %v, want %v; steps %+v", prepare, failed, wantFail, res.sec.Steps)
+		}
+	}
+}
+
+func TestFinish_FailedPrepareStillReadsAPhaseFileThatExists(t *testing.T) {
+	w := newWorld()
+	dir := t.TempDir()
+	sec := `{"ok":false,"failures":[],"steps":[{"name":"` + stRegInHS + `","status":"failed","duration_ms":0,"detail":"x"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "check.json"), []byte(sec), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := runPhase(t, w, baseEnv(), "finish", "-in", dir, "-started", startedAt, "-prepare", "failure")
+	if res.code != 1 || res.step(stRegInHS).Status != "failed" {
+		t.Fatalf("code %d, steps %+v; the check.json failure was dropped", res.code, res.sec.Steps)
+	}
+	if s := res.step("start phase ran"); s.Status == "failed" {
+		t.Errorf("missing start.json failed after a failed prepare-env: %+v", s)
+	}
+}
+
 func TestOutput_HoldsNoAddressOrToken(t *testing.T) {
 	for name, set := range map[string]func(*world){
 		"bodies echo secrets":                    func(w *world) { w.failAll = true },

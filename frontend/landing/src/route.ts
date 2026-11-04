@@ -1,3 +1,5 @@
+import { LIBRARY_BASE } from './sitePaths'
+
 // Pure/total: trim, lowercase, strip one trailing slash, exact-match only.
 const normalize = (pathname: string): string => {
   const trimmed = pathname.trim().toLowerCase()
@@ -9,6 +11,8 @@ export const INVITE_PATH = '/invite'
 export const NOT_FOUND_PAGE = 'not-found'
 
 export const isPrivacyPath = (pathname: string): boolean => normalize(pathname) === PRIVACY_PATH
+
+export const isLibraryPath = (p: string): boolean => p === LIBRARY_BASE || p.startsWith(LIBRARY_BASE + '/')
 
 export const isInvitePath = (pathname: string): boolean => normalize(pathname) === INVITE_PATH
 

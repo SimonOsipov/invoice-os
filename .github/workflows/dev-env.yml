@@ -221,7 +221,7 @@ jobs:
       - name: preview cap reached
         if: needs.changes.outputs.nightly == 'true'
         env:
-          CAP_TRIES: 20
+          CAP_TRIES: 15
           CAP_SLEEP: 30
         run: |
           set -euo pipefail

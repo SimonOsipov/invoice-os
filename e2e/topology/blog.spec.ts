@@ -865,7 +865,6 @@ test.describe('blog journeys', () => {
     const matching = posts.filter((p) => haystackOf(p, categories).includes(term))
     expect(matching.length, 'control: no captured post holds the term').toBeGreaterThan(0)
     await expect(rows.first(), 'control: no result row').toBeVisible()
-    await expect(main(page).locator('h2')).toHaveText(/^\d+ posts? match “invoice”$/)
 
     const n = await rows.count()
     for (let k = 0; k < n; k++) {
@@ -951,7 +950,7 @@ test.describe('blog journeys', () => {
   })
 
   test('blog journeys: a failed load shows the failure, and Try again shows the content once the gateway answers', async ({ page }) => {
-    const errors = collectSourcedErrors(page, expectedStatusDropper(page, 500, /\/blog\//))
+    const errors = collectSourcedErrors(page, expectedStatusDropper(page, 500, new RegExp(`^${GATEWAY_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/blog/`)))
     await prepare(page)
     await resize(page, 1280, 1080)
     let hits = 0

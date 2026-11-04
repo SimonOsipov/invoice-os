@@ -554,8 +554,7 @@ test('deployed app: every top-level path cold-boots to its own screen', async ({
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// NCOV-09 AC4: a signed-in click on the Library's Open in Platform lands on Invoices; a bounce
-// through the landing would mean the app did not honour the session.
+// A bounce through the landing would mean the app did not honour the signed-in session.
 test('deployed app: Open in Platform from the Library lands a signed-in firm member on Invoices', async ({ page }) => {
   const errors = collectErrors(page)
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })

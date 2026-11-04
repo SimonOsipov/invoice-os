@@ -314,6 +314,29 @@ describe('collectSourcedErrors', () => {
     f.response(200, 'https://gw.test/ok')
     expect(f.errors).toEqual([])
   })
+
+  describe('transport error for an app asset (BUG-76)', () => {
+    const ASSET = 'https://app-pr-598-944095690109.africa-south1.run.app/assets/mark-UgrtOohT.png'
+    const CLOSED = 'Failed to load resource: net::ERR_CONNECTION_CLOSED'
+
+    it('does not collect net::ERR_CONNECTION_CLOSED for an /assets/ url', () => {
+      const f = fake()
+      f.consoleMsg('error', CLOSED, ASSET)
+      expect(f.errors).toEqual([])
+    })
+
+    it('still collects a 404 for an /assets/ url', () => {
+      const f = fake()
+      f.consoleMsg('error', 'Failed to load resource: the server responded with a status of 404 ()', ASSET)
+      expect(f.errors).toHaveLength(1)
+    })
+
+    it('still collects net::ERR_CONNECTION_CLOSED for an /api/ url', () => {
+      const f = fake()
+      f.consoleMsg('error', CLOSED, 'https://app-pr-598-944095690109.africa-south1.run.app/api/invoice/v1/invoices')
+      expect(f.errors).toHaveLength(1)
+    })
+  })
 })
 
 describe('consoleErrorsLine', () => {

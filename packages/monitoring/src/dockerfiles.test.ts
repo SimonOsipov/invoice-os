@@ -7,9 +7,6 @@ import { FRONTEND, monitoredSpas } from './monitoredSpas.testutil'
 const codeLines = (dockerfile: string) =>
   dockerfile.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('#'))
 
-// Monitored SPAs that never call the gateway, so their image bakes no VITE_GATEWAY_URL.
-const NO_GATEWAY = ['library']
-
 describe('dockerfiles', () => {
   it('dockerfiles_everyMonitoredSpaBakesTheDsnAndReleaseFallback', () => {
     const monitored = monitoredSpas()
@@ -20,7 +17,6 @@ describe('dockerfiles', () => {
     expect(appLines.indexOf('ARG VITE_GATEWAY_URL')).toBeGreaterThan(-1)
 
     for (const name of monitored) {
-      const gateway = !NO_GATEWAY.includes(name)
       const lines = codeLines(readFileSync(join(FRONTEND, name, 'Dockerfile'), 'utf8'))
       const build = lines.findIndex((l) => /^RUN pnpm --filter/.test(l))
       expect(build, `${name}: no build RUN`).toBeGreaterThan(-1)
@@ -30,7 +26,7 @@ describe('dockerfiles', () => {
       for (const key of [
         'VITE_SENTRY_DSN=$VITE_SENTRY_DSN',
         'VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST',
-        ...(gateway ? ['VITE_GATEWAY_URL=$VITE_GATEWAY_URL'] : []),
+        'VITE_GATEWAY_URL=$VITE_GATEWAY_URL',
       ]) {
         const arg = lines.indexOf(`ARG ${key.split('=$')[1]}`)
         const env = lines.indexOf(`ENV ${key}`)
@@ -48,27 +44,32 @@ describe('dockerfiles', () => {
         'ENV VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST',
         'ARG BUILD_SHA',
         'ENV VITE_BUILD_SHA=${BUILD_SHA}',
-        ...(gateway ? ['ARG VITE_GATEWAY_URL', 'ENV VITE_GATEWAY_URL=$VITE_GATEWAY_URL'] : []),
+        'ARG VITE_GATEWAY_URL',
+        'ENV VITE_GATEWAY_URL=$VITE_GATEWAY_URL',
       ]) {
         const at = lines.indexOf(want)
         expect(at, `${name}/Dockerfile lacks "${want}" before its build RUN`).toBeGreaterThan(-1)
         expect(at, `${name}/Dockerfile has "${want}" after its build RUN`).toBeLessThan(build)
       }
     }
-  })
 
-  it('dockerfiles_theLibraryBakesNoGatewayUrl', () => {
-    const monitored = monitoredSpas()
-    for (const name of NO_GATEWAY) expect(monitored, `${name} is not a monitored SPA`).toContain(name)
-
-    // Control: the line finder sees a pre-existing app ARG.
-    const appLines = codeLines(readFileSync(join(FRONTEND, 'app/Dockerfile'), 'utf8'))
-    expect(appLines).toContain('ARG VITE_GATEWAY_URL')
-
-    for (const name of NO_GATEWAY) {
-      const lines = codeLines(readFileSync(join(FRONTEND, name, 'Dockerfile'), 'utf8'))
-      expect(lines.filter((l) => l.includes('VITE_GATEWAY_URL')), `${name} names VITE_GATEWAY_URL`).toEqual([])
+    // The library image builds the landing not-found page, so it bakes every VITE_* the landing does.
+    const landingLines = codeLines(readFileSync(join(FRONTEND, 'landing/Dockerfile'), 'utf8'))
+    const landingArgs = landingLines.filter((l) => /^ARG VITE_/.test(l)).map((l) => l.slice(4))
+    expect(landingArgs.length).toBeGreaterThanOrEqual(10)
+    const lib = codeLines(readFileSync(join(FRONTEND, 'library/Dockerfile'), 'utf8'))
+    const libFrom = lib.findIndex((l) => /^FROM /.test(l))
+    const libServe = lib.findIndex((l, i) => i > libFrom && /^FROM /.test(l))
+    const libBuild = lib.findIndex((l) => /^RUN pnpm --filter/.test(l))
+    for (const key of landingArgs) {
+      const arg = lib.indexOf(`ARG ${key}`)
+      expect(arg, `library: ARG ${key} is not inside the build stage`).toBeGreaterThan(libFrom)
+      expect(lib.indexOf(`ENV ${key}=$${key}`), `library: ENV ${key} is not after its ARG`).toBeGreaterThan(arg)
+      expect(arg, `library: ARG ${key} is after the first build RUN`).toBeLessThan(libBuild)
     }
+    expect(lib.some((l) => /^RUN pnpm --filter @invoice-os\/landing exec vite build --base=\/library\/_landing\//.test(l))).toBe(true)
+    const copy404 = lib.findIndex((l) => /^COPY --from=build \S*\/404\.html \/srv\/404\.html$/.test(l))
+    expect(copy404, 'library: no COPY of 404.html to /srv/404.html in the serve stage').toBeGreaterThan(libServe)
   })
 
   it('dockerfiles_theAuthTokenReachesOnlyTheBuildStage', () => {

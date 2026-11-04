@@ -39,7 +39,7 @@ paths:
 - Gate the library tag on `LIBRARY_HOSTNAMES` in `hubspot.ts`. A fork of the library sends nothing.
 - Gate the blog tag on `BLOG_HOSTNAMES` in `hubspot.ts`. A fork of the blog sends nothing.
 - Build `LIBRARY_HOSTNAMES` and `BLOG_HOSTNAMES` from `PRODUCTION_HOSTNAMES`. Each adds its own old host until the redirect to the new address is live.
-- Keep the library build in `/srv/library` in the library image. Keep `index.html` at `/srv/index.html` and `build.txt` in both directories.
+- Keep the library build in `/srv/library` in the library image. Keep `index.html` at `/srv/index.html`, `build.txt` in both directories, the landing-built not-found page at `/srv/404.html` and its files under `/srv/library/_landing/`.
 - Keep the library senders in `frontend/landing/src/analytics.ts`. `frontend/library/src/analytics.ts` binds them to the library host.
 - Keep the blog senders in `frontend/landing/src/analytics.ts`. `frontend/blog/src/analytics.ts` binds them to the blog host.
 - Store the consent choice in the `asc_consent` cookie on `SHARED_COOKIE_DOMAIN` on a production host. Keep it in `localStorage` on any other host. Move an older `localStorage` record into the cookie. Keep the record with the later `ts`.

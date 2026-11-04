@@ -2121,7 +2121,7 @@ func TestMembership_ConcurrentLastTwoAdmins(t *testing.T) {
 			switch {
 			case err == nil:
 				oks++
-			case errors.Is(err, ErrLastActiveAdmin), errors.Is(err, ErrNotPermitted):
+			case isRaceRefusal(err, ErrNotPermitted):
 			default:
 				t.Fatalf("round %d: errs[%d] = %v, want nil, ErrLastActiveAdmin or ErrNotPermitted (a deadlock or serialization failure is a defect)", round, i, err)
 			}
@@ -2140,6 +2140,40 @@ func TestMembership_ConcurrentLastTwoAdmins(t *testing.T) {
 		if suspended != 1 || active != 1 {
 			t.Fatalf("round %d: admins after the race = %d suspended / %d active, want exactly 1 / 1 -- errs = %v", round, suspended, active, errs)
 		}
+	}
+}
+
+// isRaceRefusal is the set of errors a concurrent last-two-admins loser may return.
+func isRaceRefusal(err, notPermitted error) bool {
+	return errors.Is(err, ErrLastActiveAdmin) || errors.Is(err, notPermitted)
+}
+
+// A loser whose caller was already deactivated is refused by the request seam
+// with db.ErrNotActiveMember, and no write happens.
+func TestMembership_ConcurrentLoserSeamRefusalIsARaceRefusal(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "BUG-100 suspend seam refusal")
+	x, y := uuid.NewString(), uuid.NewString()
+	seedMembership(t, super, tenantID, x, "admin", "active")
+	seedMembership(t, super, tenantID, y, "admin", "active")
+	cX := auth.WithIdentity(ctx, auth.Identity{Subject: x, Role: "authenticated", TenantID: tenantID})
+	cY := auth.WithIdentity(ctx, auth.Identity{Subject: y, Role: "authenticated", TenantID: tenantID})
+
+	if _, err := store.SetMembershipStatus(cY, x, "suspended"); err != nil {
+		t.Fatalf("Y suspends X: %v", err)
+	}
+	_, err := store.SetMembershipStatus(cX, y, "suspended")
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("suspended X suspends Y: err = %v, want db.ErrNotActiveMember", err)
+	}
+	if got := mustStatus(t, super, y); got != "active" {
+		t.Fatalf("Y status after the refused call = %q, want active", got)
+	}
+	if !isRaceRefusal(err, ErrNotPermitted) {
+		t.Fatalf("race-test refusal set rejects %v, a valid refusal", err)
 	}
 }
 

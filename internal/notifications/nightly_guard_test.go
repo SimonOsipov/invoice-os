@@ -53,6 +53,12 @@ func ngWiring(t *testing.T) (NewsletterWiring, *clSpyTransport, *ngBodies) {
 
 func TestNightlyGuard_OnlyRunAddressesAreMailed(t *testing.T) {
 	w, spy, bodies := ngWiring(t)
+	if err := w.Sender.Send(t.Context(), []accountmail.Message{{To: ngForeign}}); err != nil {
+		t.Fatalf("send foreign: %v", err)
+	}
+	if n := len(spy.seen()); n != 0 {
+		t.Fatalf("a foreign-only send made %d Resend requests, want 0", n)
+	}
 	msgs := []accountmail.Message{{To: ngRun1}, {To: ngForeign}, {To: ngRun2}}
 	if err := w.Sender.Send(t.Context(), msgs); err != nil {
 		t.Fatalf("send: %v", err)
@@ -77,8 +83,8 @@ func TestNightlyGuard_OnlyRunAddressesAreMailed(t *testing.T) {
 	if !ok {
 		t.Fatalf("sender = %T, want *guardSender", w.Sender)
 	}
-	if got := g.capture.Messages(); len(got) != 1 || got[0].To != ngForeign {
-		t.Errorf("capture = %+v, want only the foreign message", got)
+	if got := g.capture.Messages(); len(got) != 2 || got[0].To != ngForeign || got[1].To != ngForeign {
+		t.Errorf("capture = %+v, want only the two foreign messages", got)
 	}
 }
 
@@ -95,20 +101,27 @@ func TestNightlyGuard_ForeignSubscriberMakesNoResendCall(t *testing.T) {
 		t.Fatalf("foreign address made %d Resend requests, want 0", n)
 	}
 	_ = w.Resend.SyncBlog(ctx, BlogSubscriber{Email: ngRun1, CategoryIDs: []string{"c"}, Frequency: "weekly"})
-	if n := len(spy.seen()); n == 0 {
+	n := len(spy.seen())
+	if n == 0 {
 		t.Error("run address made no Resend request")
+	}
+	_, _ = w.Resend.ContactUnsubscribed(ctx, ngRun2)
+	if len(spy.seen()) <= n {
+		t.Error("ContactUnsubscribed for a run address made no Resend request")
 	}
 }
 
 func TestNightlyGuard_LookalikeAddressesAreForeign(t *testing.T) {
-	for _, e := range []string{"nightly-1@x.resend.app.evil.example", "xnightly-1@x.resend.app", "nightly-1@evil.example"} {
+	for _, e := range []string{"nightly-1@x.resend.app.evil.example", "xnightly-1@x.resend.app", "nightly-1@evil.example", "nightly-1@evilx.resend.app", ""} {
 		if isNightlyRunAddress(e, "x.resend.app") {
 			t.Errorf("%q allowed, want foreign", e)
 		}
 	}
 	for _, e := range []string{ngRun1, ngRun2} {
-		if !isNightlyRunAddress(e, "x.resend.app") {
-			t.Errorf("%q foreign, want allowed", e)
+		for _, d := range []string{"x.resend.app", "X.Resend.App"} {
+			if !isNightlyRunAddress(e, d) {
+				t.Errorf("%q on %q foreign, want allowed", e, d)
+			}
 		}
 	}
 }

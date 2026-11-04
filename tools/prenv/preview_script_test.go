@@ -1079,6 +1079,13 @@ func TestPreviewMailBlogIdsPrintsTheNamedIds(t *testing.T) {
 
 func TestPreviewMailBlogIdsFailsLoudly(t *testing.T) {
 	t.Parallel()
+	t.Run("no read key", func(t *testing.T) {
+		t.Parallel()
+		r := runPreview(t, nil, "mail-blog-ids", "nightly")
+		if r.code == 0 || !strings.Contains(r.stderr, "RESEND_READ_KEY") || r.exists("curl-calls") {
+			t.Fatalf("exit %d, stderr %q, curl called %v", r.code, r.stderr, r.exists("curl-calls"))
+		}
+	})
 	ok := blogListBody(blogItem("Blog", blogTopicID))
 	okSeg := blogListBody(blogItem("Blog", blogSegmentID))
 	for _, c := range []struct {
@@ -1089,7 +1096,7 @@ func TestPreviewMailBlogIdsFailsLoudly(t *testing.T) {
 	}{
 		{"no Blog topic", map[string]string{"curl-body-topics": blogListBody(blogItem("Marketing", blogTopicID)), "curl-body-segments": okSeg}, "/topics", ""},
 		{"two Blog segments", map[string]string{"curl-body-topics": ok, "curl-body-segments": blogListBody(blogItem("Blog", blogSegmentID), blogItem("Blog", blogTopicID))}, "/segments", ""},
-		{"HTTP 401", map[string]string{"curl-body-topics": `{"message":"body-secret"}`, "curl-code-topics": "401"}, "/topics", "401"},
+		{"HTTP 401", map[string]string{"curl-body-topics": `{"message":"body-secret","data":[` + blogItem("Blog", blogTopicID) + `]}`, "curl-code-topics": "401"}, "/topics", "401"},
 		{"has_more without Blog", map[string]string{"curl-body-topics": `{"data":[` + blogItem("Marketing", blogTopicID) + `],"has_more":true}`, "curl-body-segments": okSeg}, "/topics", ""},
 		{"id not a UUID", map[string]string{"curl-body-topics": ok, "curl-body-segments": blogListBody(blogItem("Blog", "not-a-uuid"))}, "/segments", ""},
 	} {
@@ -1114,7 +1121,7 @@ func TestPreviewMailCommandsRefuseAPR(t *testing.T) {
 		for _, bad := range []string{"7", ""} {
 			t.Run(cmd+"/"+bad, func(t *testing.T) {
 				t.Parallel()
-				r := runPreview(t, nil, cmd, bad)
+				r := runPreviewEnv(t, append([]string{"RESEND_READ_KEY=k"}, blogIDEnv...), nil, cmd, bad)
 				if r.code == 0 || r.exists("calls") || r.exists("curl-calls") {
 					t.Fatalf("exit %d, gcloud called %v, curl called %v", r.code, r.exists("calls"), r.exists("curl-calls"))
 				}

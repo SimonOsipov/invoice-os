@@ -217,6 +217,7 @@ describe('contactTopics', () => {
     })
     const got = await contactTopics('k', 'a@x.test', stub as unknown as Fetch)
     expect(got.map((t) => t.id)).toEqual(['t1', 't2', 't3'])
+    expect(got.map((t) => t.subscription)).toEqual(['opt_in', 'opt_out', 'opt_in'])
     expect(urls[0]).not.toContain('after=')
     expect(urls[1]).toContain('after=t2')
   })

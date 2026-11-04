@@ -306,6 +306,20 @@ describe('CheckSteps', () => {
     })
   })
 
+  it('a failed brand step skips nothing', async () => {
+    const brand = MAIL_STEPS.filter((s) => s.name.endsWith('uses the brand layout')).map((s) => s.name)
+    expect(brand).toHaveLength(5)
+    for (const failing of brand) {
+      const cs = new CheckSteps(tmpFile())
+      for (const s of MAIL_STEPS) {
+        if (s.name === failing) await cs.run(s.name, () => { throw new Error('x') })
+        else await cs.run(s.name, () => {})
+      }
+      const others = cs.section().steps.filter((x) => x.name !== failing)
+      expect(others.every((x) => x.status === 'passed')).toBe(true)
+    }
+  })
+
   it('a failed signup mail skips only the signup steps', async () => {
     const cs = new CheckSteps(tmpFile())
     for (const s of MAIL_STEPS) {

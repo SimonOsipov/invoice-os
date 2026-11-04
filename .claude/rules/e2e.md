@@ -49,7 +49,7 @@ paths:
 - `ctl login` passes `consent: 'none'`. It writes no consent record.
 - Stub every HubSpot chat host in `isStubbedHost`. A routed spec never reaches HubSpot.
 - Never publish a policy in a topology spec. A topology spec may restore the tenant's own seeded policy through `ensureFirmPolicyActive`.
-- Put the UI-driven approve and reject journey in `e2e/api/contract-invoice.spec.ts`, not in a topology spec.
+- Drive the approve and reject journey in a topology spec on the shard's restored firm policy. Staff the e2e member into the pending step's workflow role, and restore the seeded holders afterwards.
 - Treat the persona as an axis. Register personas, surfaces and coverage in `e2e/personas.ts`.
 - Grade coverage as `drives` or `nav-only`. Add no `pending` grade.
 - Downgrade a surface to `nav-only` only through `EXPECTED_NAV_ONLY` in `e2e/personas.test.ts`.

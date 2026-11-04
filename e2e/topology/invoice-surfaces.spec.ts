@@ -36,6 +36,9 @@ import {
   editInvoice,
   provisionRealAccount,
   signInSession,
+  listWorkflowRoles,
+  staffWorkflowRole,
+  subjectOf,
   searchCodes,
   type ExplainResult,
   type Persona,
@@ -59,7 +62,7 @@ import {
   type Rect,
 } from './layout'
 import { browserToken, signInAs, signInAtFrontDoor } from '../personaSession'
-import { e2eMember } from '../realAccounts'
+import { e2eMember, ensureMember } from '../realAccounts'
 import { nightlyTarget } from '../targets'
 import { APP_URL, shardTenants, VALIDATION_EXPECTED } from './targets'
 
@@ -3903,6 +3906,108 @@ test('detail surface: the armed decision block and approval card, plus their lay
   // approval-empty to the "submit one invoice from its own page" test's draft
   // leg above, the only site left where a detail page's approval GET still 404s.
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Seeded `compliance` holders, kept at module level so the file-level afterAll restores them even when the test dies.
+let seededCompliance: string[] | null = null
+test.afterAll(async () => {
+  if (seededCompliance) await staffWorkflowRole(await login(PERSONAS.A), 'compliance', seededCompliance)
+})
+
+test('detail surface: a staffed approver approves one invoice and rejects another, and each run closes with that decision', async ({ page }) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `NCOV-07 decide ${Date.now()}`, tin: freshTin() })
+  const finMgr = (await firmApproverTokens(SHARD.a.id)).fin_mgr
+  const ids: string[] = []
+  for (const tag of ['APP', 'REJ', 'PEND']) {
+    const invoice = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-NCOV07-${tag}-${Date.now()}`) })
+    await validateInvoice(token, invoice.id)
+    await decideInvoiceApproval(finMgr, invoice.id, { decision: 'approved' })
+    ids.push(invoice.id)
+  }
+  const [approveId, rejectId, pendingId] = ids
+  for (const id of ids) {
+    const run = await getInvoiceApproval(token, id)
+    expect(run.state, 'fixture check: the run is open after fin_mgr').toBe('open')
+    expect(run.steps.find((s) => s.state === 'pending')?.workflow_role_key, 'fixture check: compliance is pending').toBe('compliance')
+  }
+
+  const member = await ensureMember(SHARD.a.id, 'firm')
+  const driver = subjectOf((await signInSession(member.email, member.password)).access_token)
+  const role = (await listWorkflowRoles(token)).workflow_roles.find((r) => r.key === 'compliance')
+  if (!role) throw new Error('no compliance workflow role on the firm tenant')
+  // Without the filter a retry after a failed restore would record the driver as seeded.
+  const seeded = role.members.filter((m) => m !== driver)
+  expect(seeded).not.toContain(driver)
+  seededCompliance = seeded
+
+  const posts: string[] = []
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && /\/api\/invoice\/v1\/invoices\/[^/]+\/approvals$/.test(req.url())) posts.push(req.url())
+  })
+  const decide = async (id: string, click: () => Promise<void>) => {
+    const [res] = await Promise.all([
+      page.waitForResponse((r) => r.request().method() === 'POST' && r.url().endsWith(`/api/invoice/v1/invoices/${id}/approvals`)),
+      click(),
+    ])
+    expect(res.ok()).toBe(true)
+    return (await res.json()) as { state: string; decisions: Array<{ decision: string; actor: string; reason: string | null }> }
+  }
+
+  try {
+    await staffWorkflowRole(token, 'compliance', [...seeded, driver])
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/invoices/${approveId}` })
+    const browser = await browserToken(page)
+    for (const id of [approveId, rejectId]) {
+      const wire = await getInvoice(browser, id)
+      expect(wire.can_approve, 'fixture check: staffed approver can approve').toBe(true)
+      expect(wire.can_reject, 'fixture check: staffed approver can reject').toBe(true)
+    }
+
+    const approve = page.getByTestId('detail-approve')
+    const reject = page.getByTestId('detail-reject')
+    await expect(approve).toBeEnabled()
+    await approve.click()
+    const approveConfirm = page.getByTestId('detail-approve-confirm')
+    await expect(approveConfirm).toBeVisible()
+    const approved = await decide(approveId, () => approveConfirm.click())
+    expect(approved.state).toBe('approved')
+    expect(approved.decisions.at(-1)?.decision).toBe('approved')
+    expect(approved.decisions.at(-1)?.actor).toBe(driver)
+    await expect(page.getByTestId('approval-state')).toHaveText('Approved')
+    await expect(approve).toBeDisabled()
+    await expect(reject).toBeDisabled()
+
+    await page.goto(`${APP_URL}/invoices/${rejectId}`)
+    await expect(reject).toBeEnabled()
+    await reject.click()
+    const reasonInput = page.getByTestId('detail-reject-reason')
+    const rejectConfirm = page.getByTestId('detail-reject-confirm')
+    await expect(reasonInput).toBeVisible()
+    await expect(rejectConfirm).toBeDisabled()
+    const reason = `NCOV-07 reject ${Date.now()}`
+    await reasonInput.fill(reason)
+    await expect(rejectConfirm).toBeEnabled()
+    const rejected = await decide(rejectId, () => rejectConfirm.click())
+    expect(rejected.state).toBe('rejected')
+    expect(rejected.decisions.at(-1)?.decision).toBe('rejected')
+    expect(rejected.decisions.at(-1)?.reason).toBe(reason)
+    expect(rejected.decisions.at(-1)?.actor).toBe(driver)
+    await expect(approve).toBeDisabled()
+    await expect(reject).toBeDisabled()
+  } finally {
+    await staffWorkflowRole(token, 'compliance', seeded)
+  }
+
+  expect(posts, 'one POST per decision').toHaveLength(2)
+  const restored = (await listWorkflowRoles(token)).workflow_roles.find((r) => r.key === 'compliance')
+  expect([...(restored?.members ?? [])].sort()).toEqual([...seeded].sort())
+  // The restore reached the server: the same browser, unstaffed, cannot decide the pending run.
+  expect((await getInvoice(await browserToken(page), pendingId)).can_approve).toBe(false)
+  expect(errors).toEqual([])
 })
 
 // An accepted invoice of 3 lines, reached through the register's own submit path.

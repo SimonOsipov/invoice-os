@@ -522,6 +522,33 @@ func TestFinish_MissingPhaseFileIsAFailedStep(t *testing.T) {
 	}
 }
 
+func TestFinish_PrepareResultDecidesWhetherAMissingPhaseFileFails(t *testing.T) {
+	t.Run("prepare-env failed: the phases never ran, no phase failure", func(t *testing.T) {
+		w := newWorld()
+		w.rsContacts = []rsContactRow{{"r1", "a@example.com", "2026-01-01T00:00:00Z"}}
+		res := runPhase(t, w, baseEnv(), "finish", "-in", t.TempDir(), "-started", startedAt, "-prepare", "failure")
+		if res.code != 0 {
+			t.Errorf("exit %d, want 0; stderr %q", res.code, res.stderr)
+		}
+		for _, n := range []string{"start phase ran", "check phase ran"} {
+			if res.step(n).Status == "failed" {
+				t.Errorf("step %q failed after a failed prepare-env", n)
+			}
+		}
+		if !slices.Equal(w.deleted, []string{"rs:a@example.com"}) {
+			t.Errorf("cleanup did not run: %v", w.deleted)
+		}
+	})
+	t.Run("prepare-env succeeded: a missing phase file stays a failure", func(t *testing.T) {
+		w := newWorld()
+		w.rsContacts = []rsContactRow{{"r1", "a@example.com", "2026-01-01T00:00:00Z"}}
+		res := runPhase(t, w, baseEnv(), "finish", "-in", t.TempDir(), "-started", startedAt, "-prepare", "success")
+		if res.code != 1 || res.step("check phase ran").Status != "failed" || res.step("start phase ran").Status != "failed" {
+			t.Fatalf("code %d, steps %+v", res.code, res.sec.Steps)
+		}
+	})
+}
+
 func TestOutput_HoldsNoAddressOrToken(t *testing.T) {
 	for name, set := range map[string]func(*world){
 		"bodies echo secrets":                    func(w *world) { w.failAll = true },

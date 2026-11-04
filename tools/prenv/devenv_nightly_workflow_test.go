@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -731,6 +732,50 @@ func TestDevEnvNightly_PrepareEnvStopsAtTheCap(t *testing.T) {
 	if got := devEnvNightlyProblems(moved); !slices.ContainsFunc(got, func(g string) bool { return strings.Contains(g, "out of order") }) {
 		t.Errorf("a cap step after the secrets step went unnoticed: %q", got)
 	}
+}
+
+// nlRunCapStep runs the `preview cap reached` step with a stub whose cap prints the first output once, then rest. It returns the output, the exit code and the cap call count.
+func nlRunCapStep(t *testing.T, first, rest string, tries int) (string, int, int) {
+	t.Helper()
+	s, ok := nlStep(devEnvJob(t, "prepare-env"), "preview cap reached")
+	if !ok {
+		t.Fatal("no step \"preview cap reached\" in prepare-env")
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "scripts/ci"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stub := "case \"$1\" in\nprs) echo 1 ;;\ncap)\necho x >>'" + filepath.Join(dir, "calls") + "'\n" +
+		"if [ \"$(wc -l <'" + filepath.Join(dir, "calls") + "')\" -le 1 ]; then printf '" + first + "'; else printf '" + rest + "'; fi ;;\nesac\n"
+	writeIn(t, filepath.Join(dir, "scripts/ci"), "preview.sh", stub)
+	script := "cd '" + dir + "'\nexport CAP_TRIES=" + strconv.Itoa(tries) + " CAP_SLEEP=0 OPEN=3\nexport GITHUB_OUTPUT='" +
+		filepath.Join(dir, "out") + "' GITHUB_STEP_SUMMARY='" + filepath.Join(dir, "summary") + "'\n" + s.keys["run"]
+	stdout, stderr, code := runBashScript(t, script)
+	calls := 0
+	if b, err := os.ReadFile(filepath.Join(dir, "calls")); err == nil {
+		calls = strings.Count(string(b), "\n")
+	}
+	return stdout + stderr, code, calls
+}
+
+func TestDevEnvNightly_CapStepWaitsForASlot(t *testing.T) {
+	t.Parallel()
+	t.Run("a slot frees up", func(t *testing.T) {
+		out, code, calls := nlRunCapStep(t, "open=3\\nfull=true", "open=2\\nfull=false", 5)
+		if code != 0 || calls < 2 {
+			t.Errorf("exit %d after %d cap calls, want exit 0 after at least 2; output %q", code, calls, out)
+		}
+	})
+	t.Run("the cap never frees", func(t *testing.T) {
+		full := "open=3\\nfull=true"
+		out, code, calls := nlRunCapStep(t, full, full, 3)
+		if code != 1 || calls != 3 {
+			t.Errorf("exit %d after %d cap calls, want exit 1 after exactly 3; output %q", code, calls, out)
+		}
+		if n := strings.Count(out, "::error::preview cap reached: 3 previews open"); n != 1 {
+			t.Errorf("%d cap error lines, want 1; output %q", n, out)
+		}
+	})
 }
 
 // nlE2ETimeout: the nightly gets 40 minutes; a PR keeps GitHub's 360-minute default (Q1).

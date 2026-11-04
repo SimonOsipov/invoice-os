@@ -64,7 +64,7 @@ function expectSameText(want: string, got: string): void {
 
 test('real mail: the invite and the reset arrive, read right, and their links work', async ({ browser }) => {
   test.setTimeout(840_000)
-  const env = requireEnv('RESEND_READ_KEY', 'RESEND_RECEIVING_DOMAIN', 'NIGHTLY_RUN_ID', 'MAIL_WINDOW_START', 'MAIL_SECTION_FILE', 'MAIL_ACCOUNTS_FILE')
+  const env = requireEnv('RESEND_READ_KEY', 'RESEND_RECEIVING_DOMAIN', 'NIGHTLY_RUN_ID', 'MAIL_WINDOW_START', 'MAIL_SECTION_FILE', 'MAIL_ACCOUNTS_FILE', 'RESEND_BLOG_TOPIC_ID')
   const windowStart = new Date(env.MAIL_WINDOW_START)
   if (Number.isNaN(windowStart.getTime())) throw new Error('MAIL_WINDOW_START is not a date')
   const { admin, reset } = readAccounts(env.MAIL_ACCOUNTS_FILE)
@@ -298,8 +298,7 @@ test('real mail: the invite and the reset arrive, read right, and their links wo
     })
 
     await steps.run('subscriber is a Resend contact on the Blog topic', async () => {
-      const topicId = process.env.RESEND_BLOG_TOPIC_ID?.trim()
-      if (!topicId) throw new Error('not set: RESEND_BLOG_TOPIC_ID')
+      const topicId = env.RESEND_BLOG_TOPIC_ID
       const deadline = Date.now() + WAIT_MS
       let last = 'no Blog topic yet'
       for (;;) {

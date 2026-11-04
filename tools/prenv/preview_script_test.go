@@ -87,6 +87,11 @@ done
 if [ -n "$out" ]; then
   cp "$D/curl-body-$ep" "$out" 2>/dev/null || echo '{}' > "$out"
 fi
+if [ -s "$D/curl-seq-$ep" ]; then
+  head -n 1 "$D/curl-seq-$ep" | tr -d '\n'
+  sed -i.bak 1d "$D/curl-seq-$ep"
+  exit 0
+fi
 cat "$D/curl-code-$ep" 2>/dev/null || cat "$D/curl-code" 2>/dev/null || printf 200
 `
 }
@@ -1571,5 +1576,31 @@ func TestPreviewInvariantsRefuseSentryOnTheNightly(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func TestPreviewBlogIDRetriesA5xxButNotA401(t *testing.T) {
+	t.Parallel()
+	body := blogListBody(blogItem("Blog", blogTopicID))
+	ok := runPreviewEnv(t, []string{"RESEND_READ_KEY=k"}, func(dir string) {
+		writeIn(t, dir, "curl-body-topics", body)
+		writeIn(t, dir, "curl-body-segments", blogListBody(blogItem("Blog", blogSegmentID)))
+		writeIn(t, dir, "curl-seq-topics", "500\n200\n")
+	}, "mail-blog-ids", "nightly")
+	if ok.code != 0 || !strings.Contains(ok.stdout, "RESEND_BLOG_TOPIC_ID="+blogTopicID) {
+		t.Fatalf("500 then 200: exit %d, stdout %q, stderr %q", ok.code, ok.stdout, ok.stderr)
+	}
+	if n := strings.Count(ok.file(t, "curl-calls"), "/topics"); n != 2 {
+		t.Errorf("topics calls = %d, want 2", n)
+	}
+	bad := runPreviewEnv(t, []string{"RESEND_READ_KEY=k"}, func(dir string) {
+		writeIn(t, dir, "curl-body-topics", body)
+		writeIn(t, dir, "curl-seq-topics", "401\n200\n")
+	}, "mail-blog-ids", "nightly")
+	if bad.code == 0 || !strings.Contains(bad.stderr, "401") {
+		t.Fatalf("401: exit %d, stderr %q", bad.code, bad.stderr)
+	}
+	if n := strings.Count(bad.file(t, "curl-calls"), "/topics"); n != 1 {
+		t.Errorf("401 topics calls = %d, want 1", n)
 	}
 }

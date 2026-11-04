@@ -410,13 +410,17 @@ cmd_contact_token_version() {
 
 UUID_RE='^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
 
-# blog_id <topics|segments>: the id of the one item named Blog. The key goes to curl on stdin; errors name the endpoint and status only.
+# blog_id <topics|segments>: 3 tries on a transport error, 429 or 5xx. The id of the one item named Blog. The key goes to curl on stdin; errors name the endpoint and status only.
 blog_id() {
-  local ep=$1 f code n id
+  local ep=$1 f code n id i
   [ -n "${RESEND_READ_KEY:-}" ] || die "RESEND_READ_KEY is empty"
   f=$(mktemp)
-  code=$(printf 'Authorization: Bearer %s\n' "$RESEND_READ_KEY" | curl -sS -o "$f" -w '%{http_code}' -H @- "https://api.resend.com/$ep") ||
-    { rm -f "$f"; die "GET /$ep failed"; }
+  for i in 1 2 3; do
+    code=$(printf 'Authorization: Bearer %s\n' "$RESEND_READ_KEY" | curl -sS -o "$f" -w '%{http_code}' -H @- "https://api.resend.com/$ep") || code=000
+    case "$code" in 000 | 429 | 5??) [ "$i" = 3 ] || { sleep 5; continue; } ;; esac
+    break
+  done
+  [ "$code" != 000 ] || { rm -f "$f"; die "GET /$ep failed"; }
   [ "$code" = 200 ] || { rm -f "$f"; die "GET /$ep answered HTTP $code"; }
   n=$(jq '[.data[]? | select(.name == "Blog")] | length' "$f" 2>/dev/null) || n=-1
   [ "$n" = 1 ] || { rm -f "$f"; die "GET /$ep answered HTTP $code with $n items named Blog, want 1"; }

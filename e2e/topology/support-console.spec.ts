@@ -1907,6 +1907,9 @@ async function aiUsageReads(page: Page, testInfo: TestInfo): Promise<void> {
     expect(res.status(), 'FAILURES read status').toBe(200)
     await expect(mn.getByRole('button', { name: 'FAILURES' })).toHaveAttribute('aria-pressed', 'true')
     await expect(mn.getByText('Loading AI calls…'), 'the failed calls have stopped loading').toHaveCount(0)
+    // The response can land before the loading render commits: wait for the exact rows it carried.
+    const served = ((await res.json()) as { calls: { id: string }[] }).calls.map((c) => c.id)
+    await expect.poll(async () => calls.evaluateAll((rows) => rows.map((r) => r.getAttribute('data-call-id'))), { message: 'the rows on screen are the failed=true answer' }).toEqual(served)
     const outcomes = async (): Promise<string[]> => calls.evaluateAll((rows) => rows.map((r) => (r.children[10]?.textContent ?? '').trim()))
     await expect.poll(async () => (await outcomes()).length, { message: 'the oversized call left a failed row on the screen' }).toBeGreaterThanOrEqual(1)
     await expect.poll(async () => (await outcomes()).filter((o) => o === 'ok'), { message: 'the failed list holds no ok row' }).toEqual([])

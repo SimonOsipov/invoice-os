@@ -1,4 +1,4 @@
-// Blog shell layout, phone layout and cold deep links on the PR fork. Each case asserts a
+// Blog shell layout, phone layout, cold deep links and journeys on the PR fork. A layout case asserts a
 // relationship (side by side, containment, alignment, no overflow), never a raw dimension.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { argosOn, shoot } from '../argos'
@@ -13,6 +13,7 @@ import {
   WIDE_WIDTHS,
   type Rect,
 } from './layout'
+import { collectSourcedErrors, expectedStatusDropper } from './consoleGate'
 
 const BLOG_URL = resolveTarget('BLOG_URL')
 const SLACK_PX = 0.5 // sub-pixel rounding only
@@ -791,4 +792,186 @@ test.describe('blog demo at wide widths', () => {
       expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
     })
   }
+})
+
+type ApiCategory = { id: string; name: string; icon: string; post_count: number }
+type ApiBlock = { text?: string; title?: string; items?: string[] }
+type ApiPost = { title: string; summary: string; category_id: string; body: ApiBlock[] }
+
+// Loads `/` and returns the two gateway responses that this page load received. Other specs
+// (blog-editor) write categories and posts on the same preview, so a test never reads them separately.
+async function loadHome(page: Page): Promise<{ categories: ApiCategory[]; posts: ApiPost[] }> {
+  const read = (path: string) => (r: { url(): string }) => r.url().split('?')[0] === `${GATEWAY_URL}${path}`
+  const cats = page.waitForResponse(read('/blog/categories'))
+  const posts = page.waitForResponse(read('/blog/posts'))
+  await visit(page)
+  const categories = ((await (await cats).json()) as { categories: ApiCategory[] }).categories
+  const postList = ((await (await posts).json()) as { posts: ApiPost[] }).posts
+  return { categories, posts: postList }
+}
+
+// Mirrors frontend/blog/src/model.ts searchPosts (title, summary, category name, block text/title/items).
+function haystackOf(post: ApiPost, categories: ApiCategory[]): string {
+  const blocks = post.body.map((b) => `${b.text ?? ''} ${b.title ?? ''} ${(b.items ?? []).join(' ')}`)
+  const name = categories.find((c) => c.id === post.category_id)?.name ?? ''
+  return [post.title, post.summary, name, ...blocks].join(' ').toLowerCase()
+}
+
+test.describe('blog journeys', () => {
+  test('blog journeys: the sidebar lists every category of the API in order with its icon and post count, and a click opens it', async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await resize(page, 1280, 1080)
+    // The page counts posts from /blog/posts and the API counts post_count on its own read; a
+    // concurrent publish or delete can split them, so each pass reloads and recaptures.
+    await expect(async () => {
+      const { categories } = await loadHome(page)
+      expect(categories.length, 'control: the API returned no categories').toBeGreaterThan(0)
+      const rows = aside(page).locator('nav button.blog-nav:nth-of-type(n+2)')
+      await expect(rows, 'sidebar rows differ from the API categories').toHaveCount(categories.length, { timeout: 5_000 })
+      expect(await rows.locator('span:first-of-type').allTextContents(), 'row names, in API order').toEqual(categories.map((c) => c.name))
+      const counts = await rows.locator('span:nth-of-type(2)').allTextContents()
+      expect(counts.map(Number), 'row counts equal post_count').toEqual(categories.map((c) => c.post_count))
+
+      const paths = await rows.evaluateAll((els) => els.map((el) => [...el.querySelectorAll('svg path')].map((p) => p.getAttribute('d')).join('|')))
+      paths.forEach((d, i) => expect(d, `${categories[i].name}: icon has no path`).not.toBe(''))
+      // The svg carries no icon name, so check injectivity of path data over the API icon values.
+      const byIcon = new Map<string, string>()
+      categories.forEach((c, i) => {
+        expect(byIcon.get(c.icon) ?? paths[i], `icon ${c.icon} renders different paths`).toBe(paths[i])
+        byIcon.set(c.icon, paths[i])
+      })
+      expect(new Set(byIcon.values()).size, 'different icons render the same path data').toBe(byIcon.size)
+
+      for (const [i, c] of categories.entries()) {
+        await rows.nth(i).click()
+        await expect(page).toHaveURL(`${BLOG_URL}/category/${c.id}`, { timeout: 5_000 })
+        await expect(main(page).locator('h2'), `${c.name}: category heading`).toHaveText(c.name, { timeout: 5_000 })
+        await expect(rows.nth(i), `${c.name}: row not marked current`).toHaveAttribute('aria-current', 'true', { timeout: 5_000 })
+      }
+    }).toPass({ timeout: 90_000, intervals: [1_000, 2_000, 5_000] })
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('blog journeys: every search result holds the search term', async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await resize(page, 1280, 1080)
+    const { categories, posts } = await loadHome(page)
+    const term = 'invoice'
+    const input = header(page).locator('label').getByRole('textbox')
+    await input.fill(term)
+    const rows = main(page).locator('button.blog-row')
+    const matching = posts.filter((p) => haystackOf(p, categories).includes(term))
+    expect(matching.length, 'control: no captured post holds the term').toBeGreaterThan(0)
+    await expect(rows.first(), 'control: no result row').toBeVisible()
+
+    const n = await rows.count()
+    for (let k = 0; k < n; k++) {
+      const spans = rows.nth(k).locator(':scope > span').nth(1).locator(':scope > span')
+      const title = (await spans.nth(1).textContent()) ?? ''
+      const summary = (await spans.nth(2).textContent()) ?? ''
+      const same = posts.filter((p) => p.title === title && p.summary === summary)
+      expect(same.length, `row ${k} "${title}": no captured post`).toBeGreaterThan(0)
+      expect(same.some((p) => haystackOf(p, categories).includes(term)), `row ${k} "${title}": no match for ${term}`).toBe(true)
+    }
+    expect(n, 'row count equals the captured posts that hold the term').toBe(matching.length)
+    await expect(main(page).locator('h2')).toHaveText(`${matching.length} ${matching.length === 1 ? 'post matches' : 'posts match'} “${term}”`)
+
+    const nonsense = `zz-${crypto.randomUUID().slice(0, 8)}`
+    await input.fill(nonsense)
+    await expect(main(page).locator('h2')).toHaveText(`Nothing found for “${nonsense}”`)
+    await expect(rows).toHaveCount(0)
+    await expect(main(page).locator('button.blog-chip')).toHaveCount(categories.length)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('blog journeys: the active TOC entry follows the article scroll', async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await resize(page, 1280, 600)
+    await visit(page, '/what-changes')
+    const rows = main(page).locator('aside[aria-label="On this page"] button.blog-toc')
+    await expect(rows.nth(2), 'control: fewer than three TOC rows').toBeVisible()
+    // The active row is the one whose label (last span) is bold, as in app-shell.spec.ts.
+    const active = () => rows.evaluateAll((els) => els.flatMap((el, i) => (getComputedStyle(el.querySelector('span:last-child')!).fontWeight === '700' ? [i] : [])))
+    const scrollTop = () => main(page).evaluate((el) => el.scrollTop)
+    const scrollSection = async (id: string) => {
+      const before = await scrollTop()
+      await main(page).evaluate((el, sec) => {
+        const target = el.querySelector(`#${sec}`)!
+        el.scrollTop += target.getBoundingClientRect().top - el.getBoundingClientRect().top - 60
+      }, id)
+      await expect.poll(scrollTop, { message: `control: scrolling to #${id} did not move main` }).not.toBe(before)
+    }
+
+    await expect.poll(active, { message: 'entry 0 is not the only active entry at load' }).toEqual([0])
+    await scrollSection('sec-1')
+    await expect.poll(active, { message: 'entry 1 is not the only active entry at #sec-1' }).toEqual([1])
+    await scrollSection('sec-2')
+    await expect.poll(active, { message: 'entry 2 is not the only active entry at #sec-2' }).toEqual([2])
+    await main(page).evaluate((el) => {
+      el.scrollTop = 0
+    })
+    await expect.poll(scrollTop, { message: 'control: main did not return to the top' }).toBe(0)
+    await expect.poll(active, { message: 'entry 0 is not the only active entry at the top' }).toEqual([0])
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('blog journeys: Play or pause starts and stops the demo in a post', async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await resize(page, 1280, 1080)
+    await visit(page, '/csv-import')
+    const frame = main(page).getByTestId('blog-demo')
+    const label = frame.getByText(/^\d\d \/ \d\d$/)
+    const fill = frame.getByTestId('blog-demo-scrub').locator(':scope > div > div').first()
+    const width = async () => parseFloat(await fill.evaluate((el) => (el as HTMLElement).style.width))
+    const play = frame.getByRole('button', { name: 'Play or pause' })
+    await expect(label, 'the demo is not at step 1 at load').toHaveText('01 / 04')
+    const start = await width()
+    await page.waitForTimeout(800)
+    expect(await width(), 'the demo moved before Play').toBe(start)
+
+    await play.click()
+    await expect(label, 'the label never reached step 2').toHaveText('02 / 04')
+    await expect.poll(width, { message: 'the fill did not grow after Play' }).toBeGreaterThan(0)
+
+    await play.click()
+    const paused = await width()
+    const pausedLabel = await label.textContent()
+    await page.waitForTimeout(1_000)
+    expect(await width(), 'the fill moved while paused').toBe(paused)
+    expect(await label.textContent(), 'the label moved while paused').toBe(pausedLabel)
+
+    await play.click()
+    await expect.poll(width, { message: 'the fill did not grow after the third click' }).toBeGreaterThan(paused)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('blog journeys: a failed load shows the failure, and Try again shows the content once the gateway answers', async ({ page }) => {
+    const errors = collectSourcedErrors(page, expectedStatusDropper(page, 500, new RegExp(`^${GATEWAY_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/blog/`)))
+    await prepare(page)
+    await resize(page, 1280, 1080)
+    let hits = 0
+    const failing = `${GATEWAY_URL}/blog/**`
+    // The allow-origin header keeps Chromium reporting a 500 instead of a CORS error.
+    await page.route(failing, (route) => {
+      hits++
+      return route.fulfill({ status: 500, body: '{}', contentType: 'application/json', headers: { 'access-control-allow-origin': '*' } })
+    })
+    await page.goto(`${BLOG_URL}/`)
+    const failure = main(page).locator('h2', { hasText: 'The blog did not load.' })
+    const retry = main(page).getByRole('button', { name: 'Try again' })
+    await expect(failure, 'the failure heading never showed').toBeVisible()
+    await expect(retry).toBeVisible()
+    expect(hits, 'control: the 500 route was never hit').toBeGreaterThanOrEqual(1)
+
+    await page.unroute(failing)
+    await retry.click()
+    await expect(failure, 'the failure heading stayed').toHaveCount(0)
+    await expect(main(page).locator('h1'), 'the home h1 never showed').toBeVisible()
+    await expect(aside(page).locator('nav button.blog-nav:nth-of-type(n+2)').first(), 'no sidebar category after recovery').toBeVisible()
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
 })

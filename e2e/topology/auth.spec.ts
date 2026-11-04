@@ -2103,6 +2103,8 @@ test('deployed app: signing out on one device ends the session on every device',
       expect(errors, `console errors in ${name}:\n${errors.join('\n')}`).toEqual([])
     }
   } finally {
+    // A route callback that resumes into a closing context throws "Target closed" and would replace the test's own error.
+    await Promise.allSettled(contexts.flatMap((context) => context.pages()).map((page) => page.unrouteAll({ behavior: 'ignoreErrors' })))
     release()
     // allSettled: a close rejection must not replace the test's own error.
     await Promise.allSettled(contexts.map((context) => context.close()))

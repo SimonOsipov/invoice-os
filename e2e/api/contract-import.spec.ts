@@ -595,15 +595,29 @@ test.describe('document download contract (API E2E, over the deployed gateway)',
     assertErrorEnvelope(await asRawResult(await downloadFetch(tokenB, crypto.randomUUID())), 404, 'an unknown id')
   })
 
-  test('DOC-E2E-08: the document outlives the import that consumed it', async () => {
+  test('DOC-E2E-08: the document outlives the import that consumed it, and the imported invoice leads back to it', async () => {
     const entity = await createEntity(tokenA, { name: `DOC-01 evidence ${freshTin()}`, tin: freshTin() })
-    const csv = buildCleanCsv(`INV-${freshTin()}`)
+    const number = `INV-${freshTin()}`
+    const csv = buildCleanCsv(number)
     const documentId = await uploadDocument(tokenA, csv)
     const imported = await importFetch(tokenA, buildForm(entity.id, documentId))
     expect(imported.status, 'the consuming import should succeed').toBe(201)
     const res = await downloadFetch(tokenA, documentId)
     expect(res.status, 'the evidence is still retrievable after the import read it').toBe(200)
     expectBytes(await res.arrayBuffer(), csv, 'evidence after the import')
+
+    // A clean import returns no invoice id, so find the invoice in the list.
+    const listed = await listInvoices(tokenA, { entity_id: entity.id, limit: 50 })
+    const inv = listed.invoices.find((i) => i.invoice_number === number)
+    expect(inv, 'the imported invoice must be in the list').toBeTruthy()
+    const src = await rawFetch(`/api/invoice/v1/invoices/${inv!.id}/source-document`, { headers: { Authorization: `Bearer ${tokenA}` } })
+    expect(src.status, "the invoice's source-document read").toBe(200)
+    const doc = (src.body as { document: { id: string } | null }).document
+    expect(doc, 'the imported invoice carries its source document').not.toBeNull()
+    expect(doc!.id, 'the invoice leads to the uploaded document').toBe(documentId)
+    const viaInvoice = await downloadFetch(tokenA, doc!.id)
+    expect(viaInvoice.status, "the invoice's source document downloads").toBe(200)
+    expectBytes(await viaInvoice.arrayBuffer(), csv, "the imported invoice's source document")
   })
 
   test('DOC-E2E-09: identical bytes uploaded twice resolve to ONE document', async () => {

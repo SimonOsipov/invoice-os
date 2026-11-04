@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -42,6 +43,10 @@ type fakeProd struct {
 	bundles  map[string]string
 	bundleSt map[string]int
 	landingC int
+
+	// hsts and apex answer /hsts/<id> and /apex; a code of 0 drops the connection
+	hsts func(id string) (int, http.Header)
+	apex func() (int, http.Header)
 
 	// the probe: signIn and exchange get the decoded JSON body, reads gets the path
 	signIn   func(in map[string]string) (int, string)
@@ -114,6 +119,10 @@ func newFake(t *testing.T) *fakeProd {
 	}
 	f.fleet = func(int) (int, string) { return 200, fleetBody(nil) }
 	f.site = func(string) (int, string, http.Header) { return 200, good + "\n", nil }
+	f.hsts = func(string) (int, http.Header) { return 200, hstsHeader() }
+	f.apex = func() (int, http.Header) {
+		return 301, http.Header{"Location": {"https://ascomply.com:443/hsts-check?q=1"}}
+	}
 	f.signIn = func(in map[string]string) (int, string) {
 		if in["email"] != email || in["password"] != password || len(in["state"]) != 43 {
 			return 401, `{"error":"invalid email or password"}`
@@ -182,6 +191,10 @@ func (f *fakeProd) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(code)
 		_, _ = w.Write([]byte(body))
+	case strings.HasPrefix(r.URL.Path, "/hsts/"):
+		f.answer(w, func() (int, http.Header) { return f.hsts(strings.TrimPrefix(r.URL.Path, "/hsts/")) })
+	case r.URL.Path == "/apex":
+		f.answer(w, f.apex)
 	case r.URL.Path == "/":
 		if f.landingC != 0 {
 			w.WriteHeader(f.landingC)
@@ -198,6 +211,30 @@ func (f *fakeProd) serve(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	}
 }
+
+// answer writes the status and headers of call; code 0 drops the connection.
+func (f *fakeProd) answer(w http.ResponseWriter, call func() (int, http.Header)) {
+	code, h := call()
+	if code == 0 {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			// a bare close on a reused connection makes net/http resend the GET; garbage does not
+			_, _ = conn.Write([]byte("not http\r\n\r\n"))
+			_ = conn.Close()
+		}
+		return
+	}
+	for k, v := range h {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(code)
+}
+
+func hstsHeader() http.Header {
+	return http.Header{"Strict-Transport-Security": {hstsValue}}
+}
+
+func (f *fakeProd) hstsURL(i int) string { return f.srv.URL + "/hsts/" + strconv.Itoa(i) }
 
 func (f *fakeProd) count(path string) int {
 	f.mu.Lock()
@@ -243,11 +280,17 @@ func (f *fakeProd) run(t *testing.T, env map[string]string, args ...string) resu
 	if env == nil {
 		env = probeEnv()
 	}
+	var hsts []string
+	for i := range hstsURLs {
+		hsts = append(hsts, f.hstsURL(i))
+	}
 	cfg := config{
 		targets: targets{
+			hsts:      hsts,
 			api:       f.srv.URL,
 			landing:   f.srv.URL,
 			siteURL:   func(s string) string { return f.srv.URL + "/site/" + s + "/build.txt" },
+			apexHTTP:  f.srv.URL + "/apex",
 			retryWait: 0,
 		},
 		getenv: func(k string) string { return env[k] },
@@ -487,27 +530,27 @@ func TestSites_MismatchNamesTheSite(t *testing.T) {
 
 func TestGA_FoundInABundle(t *testing.T) {
 	f := newFake(t)
-	f.run(t, nil).want(t, 3, "passed", "")
+	f.run(t, nil).want(t, 4, "passed", "")
 }
 
 func TestGA_OtherIdFails(t *testing.T) {
 	f := newFake(t)
 	f.bundles["/assets/b.js"] = "G-AAAAAAAAAA"
-	f.run(t, nil).want(t, 3, "failed", "landing bundle lacks "+gaID)
+	f.run(t, nil).want(t, 4, "failed", "landing bundle lacks "+gaID)
 }
 
 func TestGA_NoScriptFails(t *testing.T) {
 	f := newFake(t)
 	f.landing = "<html>no scripts</html>"
-	f.run(t, nil).want(t, 3, "failed", "landing names no script")
+	f.run(t, nil).want(t, 4, "failed", "landing names no script")
 }
 
 func TestGA_BadScriptAddressFails(t *testing.T) {
 	f := newFake(t)
 	f.landing = `<html><script src="/assets/%zz.js"></script></html>`
 	r := f.run(t, nil)
-	r.want(t, 3, "failed", "landing names a bad script address")
-	r.want(t, 4, "passed", "")
+	r.want(t, 4, "failed", "landing names a bad script address")
+	r.want(t, 5, "passed", "")
 }
 
 func TestGA_LandingOrBundleUnreadableFails(t *testing.T) {
@@ -524,7 +567,7 @@ func TestGA_LandingOrBundleUnreadableFails(t *testing.T) {
 			f := newFake(t)
 			c.set(f)
 			r := f.run(t, nil)
-			r.want(t, 3, "failed", c.detail)
+			r.want(t, 4, "failed", c.detail)
 			assertAbsent(t, r, "nothing here", "<script")
 		})
 	}
@@ -574,7 +617,7 @@ func TestSection_ShapeAndOrder(t *testing.T) {
 	for _, s := range r.sec.Steps {
 		names = append(names, s.Name)
 	}
-	want := []string{"fleet is ready", "services run main's head", "sites serve main's head", "landing carries the production GA4 id", "probe signs in", "probe has no registration metadata", "probe loads its workspace"}
+	want := []string{"fleet is ready", "services run main's head", "sites serve main's head", "every host sends HSTS", "landing carries the production GA4 id", "probe signs in", "probe has no registration metadata", "probe loads its workspace"}
 	if strings.Join(names, "|") != strings.Join(want, "|") {
 		t.Errorf("steps %v", names)
 	}
@@ -731,6 +774,10 @@ func TestAllowedCalls_WholeRunListsEveryCall(t *testing.T) {
 	for _, site := range sites {
 		want["GET /site/"+site+"/build.txt"]++
 	}
+	for i := range hstsURLs {
+		want["GET /hsts/"+strconv.Itoa(i)]++
+	}
+	want["GET /apex"]++
 	got := map[string]int{}
 	for _, q := range f.requests {
 		got[q]++
@@ -756,7 +803,7 @@ func TestProbe_SignInThenExchangeBindsTheState(t *testing.T) {
 		return 200, `{"access_token":"` + f.access + `","refresh_token":"` + refresh + `"}`
 	}
 	r := f.run(t, nil)
-	r.want(t, 4, "passed", "")
+	r.want(t, 5, "passed", "")
 	if len(f.posts) != 1 || len(seen) != 2 {
 		t.Fatalf("posts %v seen %v", f.posts, seen)
 	}
@@ -793,9 +840,9 @@ func TestProbe_RefusalNamesTheStatusOnce(t *testing.T) {
 			}
 			f.exchange = func(map[string]string) (int, string) { return c.exCode, `{"error":"x"}` }
 			r := f.run(t, nil)
-			r.want(t, 4, "failed", c.want)
-			r.want(t, 5, "skipped", "")
+			r.want(t, 5, "failed", c.want)
 			r.want(t, 6, "skipped", "")
+			r.want(t, 7, "skipped", "")
 			wantPosts := 1
 			if c.signCode == 200 {
 				wantPosts = 2
@@ -830,9 +877,9 @@ func TestProbe_200WithoutTheCredentialFails(t *testing.T) {
 				f.exchange = c.exchange
 			}
 			r := f.run(t, nil)
-			r.want(t, 4, "failed", c.want)
-			r.want(t, 5, "skipped", "")
+			r.want(t, 5, "failed", c.want)
 			r.want(t, 6, "skipped", "")
+			r.want(t, 7, "skipped", "")
 		})
 	}
 }
@@ -852,8 +899,8 @@ func TestProbe_NoRegistrationPasses(t *testing.T) {
 			f := newFake(t)
 			withClaims(f, claims)
 			r := f.run(t, nil)
-			r.want(t, 5, "passed", "")
 			r.want(t, 6, "passed", "")
+			r.want(t, 7, "passed", "")
 		})
 	}
 }
@@ -865,8 +912,8 @@ func TestProbe_RegistrationSetFails(t *testing.T) {
 			f := newFake(t)
 			withClaims(f, map[string]any{"user_metadata": map[string]any{"registration": reg}})
 			r := f.run(t, nil)
-			r.want(t, 5, "failed", "user_metadata.registration is set")
-			r.want(t, 6, "passed", "")
+			r.want(t, 6, "failed", "user_metadata.registration is set")
+			r.want(t, 7, "passed", "")
 			if r.sec.OK {
 				t.Error("run is green")
 			}
@@ -878,8 +925,8 @@ func TestProbe_ClaimAbsentFails(t *testing.T) {
 	f := newFake(t)
 	withClaims(f, map[string]any{"sub": "u-1"})
 	r := f.run(t, nil)
-	r.want(t, 5, "failed", "token has no user_metadata claim")
-	r.want(t, 6, "passed", "")
+	r.want(t, 6, "failed", "token has no user_metadata claim")
+	r.want(t, 7, "passed", "")
 }
 
 func TestProbe_MalformedTokenFails(t *testing.T) {
@@ -894,9 +941,9 @@ func TestProbe_MalformedTokenFails(t *testing.T) {
 			f := newFake(t)
 			f.access = tok
 			r := f.run(t, nil)
-			r.want(t, 4, "passed", "")
-			r.want(t, 5, "failed", "token is not a JWT")
-			r.want(t, 6, "passed", "")
+			r.want(t, 5, "passed", "")
+			r.want(t, 6, "failed", "token is not a JWT")
+			r.want(t, 7, "passed", "")
 		})
 	}
 }
@@ -904,7 +951,7 @@ func TestProbe_MalformedTokenFails(t *testing.T) {
 func TestProbe_WorkspaceReadsCarryTheBearer(t *testing.T) {
 	f := newFake(t)
 	r := f.run(t, nil)
-	r.want(t, 6, "passed", "")
+	r.want(t, 7, "passed", "")
 	for _, p := range workspaceReads {
 		if f.auth[p] != "Bearer "+f.access {
 			t.Errorf("%s saw %q", p, f.auth[p])
@@ -929,8 +976,8 @@ func TestProbe_WorkspaceFailureNamesThePath(t *testing.T) {
 		return 200, `{}`
 	}
 	r := f.run(t, nil)
-	r.want(t, 6, "failed", "/api/dashboard/v1/rollup answered 500")
-	r.want(t, 6, "failed", "/me has no tenant")
+	r.want(t, 7, "failed", "/api/dashboard/v1/rollup answered 500")
+	r.want(t, 7, "failed", "/me has no tenant")
 	if f.count("/api/dashboard/v1/rollup") != 3 {
 		t.Errorf("rollup tries: %d", f.count("/api/dashboard/v1/rollup"))
 	}
@@ -942,7 +989,7 @@ func TestProbe_MeWithoutTenantFails(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFake(t)
 			f.reads = func(string) (int, string) { return 200, body }
-			f.run(t, nil).want(t, 6, "failed", "/me has no tenant")
+			f.run(t, nil).want(t, 7, "failed", "/me has no tenant")
 		})
 	}
 }
@@ -957,13 +1004,13 @@ func TestProbe_SecretsAbsent(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFake(t)
 			r := f.run(t, env)
-			r.want(t, 4, "failed", "secrets PROD_PROBE_EMAIL and PROD_PROBE_PASSWORD are not set")
-			r.want(t, 5, "skipped", "")
+			r.want(t, 5, "failed", "secrets PROD_PROBE_EMAIL and PROD_PROBE_PASSWORD are not set")
 			r.want(t, 6, "skipped", "")
-			if r.code != 0 || r.sec.OK || len(r.sec.Steps) != 7 {
+			r.want(t, 7, "skipped", "")
+			if r.code != 0 || r.sec.OK || len(r.sec.Steps) != 8 {
 				t.Errorf("code %d ok %v steps %d", r.code, r.sec.OK, len(r.sec.Steps))
 			}
-			for i := 0; i < 4; i++ {
+			for i := 0; i < 5; i++ {
 				r.want(t, i, "passed", "")
 			}
 			if len(f.posted()) != 0 {
@@ -1002,7 +1049,7 @@ func TestNoSecretInAnyOutput(t *testing.T) {
 	x.exchange = func(map[string]string) (int, string) { return 400, echo + " " + x.access }
 	r = x.run(t, nil)
 	assertAbsent(t, r, append(secrets, x.access)...)
-	r.want(t, 4, "failed", "exchange answered 400")
+	r.want(t, 5, "failed", "exchange answered 400")
 
 	// the tokens are bad: nothing of them reaches the section
 	h := newFake(t)
@@ -1010,4 +1057,259 @@ func TestNoSecretInAnyOutput(t *testing.T) {
 	h.reads = func(string) (int, string) { return 200, `{"tenant":{"id":"` + token + `"}}` }
 	r = h.run(t, nil)
 	assertAbsent(t, r, append(secrets, h.access)...)
+}
+
+func hstsStepOf(r result) stepResult { return r.sec.Steps[3] }
+
+func TestHSTS_AllHostsAndApexPass(t *testing.T) {
+	f := newFake(t)
+	r := f.run(t, nil)
+	if r.step(t, 3).Name != "every host sends HSTS" {
+		t.Errorf("step 3 is %q", r.step(t, 3).Name)
+	}
+	r.want(t, 3, "passed", "")
+	if d := hstsStepOf(r).Detail; d != "" {
+		t.Errorf("detail %q", d)
+	}
+}
+
+func TestHSTS_AnyStatusIsARead(t *testing.T) {
+	f := newFake(t)
+	f.hsts = func(id string) (int, http.Header) {
+		switch id {
+		case "5":
+			return 404, hstsHeader()
+		case "0":
+			return 301, hstsHeader()
+		}
+		return 200, hstsHeader()
+	}
+	f.run(t, nil).want(t, 3, "passed", "")
+}
+
+func TestHSTS_ApexLocationWithPortParses(t *testing.T) {
+	f := newFake(t)
+	f.apex = func() (int, http.Header) {
+		return 301, http.Header{"Location": {"https://ascomply.com:443/hsts-check?q=1"}}
+	}
+	f.run(t, nil).want(t, 3, "passed", "")
+}
+
+func TestHSTS_MissingHeaderNamesTheURL(t *testing.T) {
+	f := newFake(t)
+	f.hsts = func(id string) (int, http.Header) {
+		if id == "7" {
+			return 200, nil
+		}
+		return 200, hstsHeader()
+	}
+	r := f.run(t, nil)
+	r.want(t, 3, "failed", f.hstsURL(7)+" has no HSTS header")
+	assertAbsent(t, r, f.hstsURL(6)+" ", f.hstsURL(8)+" ")
+}
+
+func TestHSTS_WrongValueFails(t *testing.T) {
+	f := newFake(t)
+	f.hsts = func(id string) (int, http.Header) {
+		if id == "2" {
+			return 200, http.Header{"Strict-Transport-Security": {"max-age=31536000"}}
+		}
+		return 200, hstsHeader()
+	}
+	f.run(t, nil).want(t, 3, "failed", f.hstsURL(2)+` sends HSTS "max-age=31536000"`)
+}
+
+func TestHSTS_DuplicateHeaderFails(t *testing.T) {
+	f := newFake(t)
+	f.hsts = func(id string) (int, http.Header) {
+		if id == "3" {
+			return 200, http.Header{"Strict-Transport-Security": {hstsValue, hstsValue}}
+		}
+		return 200, hstsHeader()
+	}
+	f.run(t, nil).want(t, 3, "failed", f.hstsURL(3)+" sends 2 HSTS header(s)")
+}
+
+func TestHSTS_LongValueIsCut(t *testing.T) {
+	f := newFake(t)
+	long := strings.Repeat("x", 500)
+	f.hsts = func(id string) (int, http.Header) {
+		if id == "4" {
+			return 200, http.Header{"Strict-Transport-Security": {long}}
+		}
+		return 200, hstsHeader()
+	}
+	r := f.run(t, nil)
+	r.want(t, 3, "failed", f.hstsURL(4))
+	if strings.Contains(r.step(t, 3).Detail, strings.Repeat("x", 81)) {
+		t.Error("value is not cut at 80 characters")
+	}
+	assertAbsent(t, r, strings.Repeat("x", 81))
+}
+
+func TestHSTS_ApexWrongStatusOrLocationFails(t *testing.T) {
+	cases := map[string]func() (int, http.Header){
+		"status 200":    func() (int, http.Header) { return 200, nil },
+		"http location": func() (int, http.Header) { return 301, http.Header{"Location": {"http://ascomply.com/hsts-check?q=1"}} },
+		"www host": func() (int, http.Header) {
+			return 301, http.Header{"Location": {"https://www.ascomply.com/hsts-check?q=1"}}
+		},
+		"other path": func() (int, http.Header) { return 301, http.Header{"Location": {"https://ascomply.com/other?q=1"}} },
+		"other query": func() (int, http.Header) {
+			return 301, http.Header{"Location": {"https://ascomply.com/hsts-check?q=2"}}
+		},
+		"no location":  func() (int, http.Header) { return 301, nil },
+		"bad location": func() (int, http.Header) { return 301, http.Header{"Location": {"https://ascomply.com/%zz"}} },
+		"302 not 301": func() (int, http.Header) {
+			return 302, http.Header{"Location": {"https://ascomply.com/hsts-check?q=1"}}
+		},
+	}
+	for name, apex := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFake(t)
+			f.apex = apex
+			r := f.run(t, nil)
+			r.want(t, 3, "failed", "http apex ")
+			if d := r.step(t, 3).Detail; !strings.HasPrefix(d, "http apex ") {
+				t.Errorf("detail %q", d)
+			}
+		})
+	}
+}
+
+func TestHSTS_NoAnswerRetriesThreeTimes(t *testing.T) {
+	f := newFake(t)
+	f.hsts = func(id string) (int, http.Header) {
+		if id == "9" {
+			return 0, nil
+		}
+		return 200, hstsHeader()
+	}
+	f.run(t, nil).want(t, 3, "failed", f.hstsURL(9)+" did not answer")
+	for i := range hstsURLs {
+		want := 1
+		if i == 9 {
+			want = 3
+		}
+		if n := f.count("/hsts/" + strconv.Itoa(i)); n != want {
+			t.Errorf("/hsts/%d: %d requests, want %d", i, n, want)
+		}
+	}
+	if n := f.count("/apex"); n != 1 {
+		t.Errorf("/apex: %d requests", n)
+	}
+}
+
+func TestHSTS_ApexNoAnswerFails(t *testing.T) {
+	f := newFake(t)
+	f.apex = func() (int, http.Header) { return 0, nil }
+	f.run(t, nil).want(t, 3, "failed", "http apex did not answer")
+	if n := f.count("/apex"); n != 3 {
+		t.Errorf("/apex: %d requests", n)
+	}
+}
+
+func TestHSTS_Transient5xxIsRetried(t *testing.T) {
+	f := newFake(t)
+	var mu sync.Mutex
+	n := 0
+	f.hsts = func(id string) (int, http.Header) {
+		if id == "1" {
+			mu.Lock()
+			defer mu.Unlock()
+			if n++; n < 3 {
+				return 503, nil
+			}
+		}
+		return 200, hstsHeader()
+	}
+	f.run(t, nil).want(t, 3, "passed", "passed on try 3")
+	if c := f.count("/hsts/1"); c != 3 {
+		t.Errorf("/hsts/1: %d requests", c)
+	}
+}
+
+func TestHSTS_Persistent5xxFails(t *testing.T) {
+	f := newFake(t)
+	f.hsts = func(id string) (int, http.Header) {
+		if id == "6" {
+			return 502, nil
+		}
+		return 200, hstsHeader()
+	}
+	r := f.run(t, nil)
+	r.want(t, 3, "failed", f.hstsURL(6)+" answered 502")
+	if strings.Contains(r.step(t, 3).Detail, "no HSTS header") {
+		t.Errorf("detail %q", r.step(t, 3).Detail)
+	}
+	if c := f.count("/hsts/6"); c != 3 {
+		t.Errorf("/hsts/6: %d requests", c)
+	}
+}
+
+func TestHSTS_ApexTransient5xxIsRetried(t *testing.T) {
+	f := newFake(t)
+	var mu sync.Mutex
+	n := 0
+	f.apex = func() (int, http.Header) {
+		mu.Lock()
+		defer mu.Unlock()
+		if n++; n == 1 {
+			return 503, nil
+		}
+		return 301, http.Header{"Location": {"https://ascomply.com:443/hsts-check?q=1"}}
+	}
+	f.run(t, nil).want(t, 3, "passed", "passed on try 2")
+}
+
+func TestHSTS_HeaderNameCaseDoesNotMatter(t *testing.T) {
+	f := newFake(t)
+	f.hsts = func(string) (int, http.Header) {
+		return 200, http.Header{"strict-transport-security": {hstsValue}}
+	}
+	f.run(t, nil).want(t, 3, "passed", "")
+}
+
+func TestHSTS_AnswerEndsTheRetries(t *testing.T) {
+	f := newFake(t)
+	f.hsts = func(id string) (int, http.Header) {
+		if id == "10" {
+			return 404, http.Header{"Strict-Transport-Security": {"max-age=1"}}
+		}
+		return 200, hstsHeader()
+	}
+	f.run(t, nil).want(t, 3, "failed", f.hstsURL(10))
+	if c := f.count("/hsts/10"); c != 1 {
+		t.Errorf("/hsts/10: %d requests", c)
+	}
+}
+
+func TestHSTS_RedirectIsNotFollowed(t *testing.T) {
+	f := newFake(t)
+	f.apex = func() (int, http.Header) { return 301, http.Header{"Location": {"/landed"}} }
+	f.run(t, nil)
+	if c := f.count("/landed"); c != 0 {
+		t.Errorf("/landed requested %d times", c)
+	}
+}
+
+func TestHSTS_URLsMatchTheSpec(t *testing.T) {
+	spec := ghSource(t, "e2e/smoke/transport-security.spec.ts")
+	arr := regexp.MustCompile(`(?s)HTTPS_URLS = \[(.*?)\]`).FindStringSubmatch(spec)
+	if arr == nil {
+		t.Fatal("HTTPS_URLS not found in the spec")
+	}
+	var urls []string
+	for _, m := range regexp.MustCompile(`'([^']+)'`).FindAllStringSubmatch(arr[1], -1) {
+		urls = append(urls, m[1])
+	}
+	if got := prodConfig().targets.hsts; strings.Join(got, "\n") != strings.Join(urls, "\n") {
+		t.Errorf("hsts %v, spec %v", got, urls)
+	}
+	if m := regexp.MustCompile(`const HSTS = '([^']+)'`).FindStringSubmatch(spec); m == nil || m[1] != hstsValue {
+		t.Errorf("hstsValue %q, spec %v", hstsValue, m)
+	}
+	if m := regexp.MustCompile(`request\.get\('(http://[^']+)'`).FindStringSubmatch(spec); m == nil || m[1] != prodConfig().targets.apexHTTP {
+		t.Errorf("apexHTTP %q, spec %v", prodConfig().targets.apexHTTP, m)
+	}
 }

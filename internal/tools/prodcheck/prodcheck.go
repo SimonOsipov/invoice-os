@@ -23,6 +23,13 @@ const (
 	sectionSuite = "prod_check"
 	sectionFile  = ".github/workflows/nightly.yml"
 	secretsUnset = "secrets PROD_PROBE_EMAIL and PROD_PROBE_PASSWORD are not set"
+
+	// hstsValue, hstsURLs and the apex request mirror e2e/smoke/transport-security.spec.ts (TestHSTS_URLsMatchTheSpec).
+	hstsValue = "max-age=63072000; includeSubDomains; preload"
+	apexHTTP  = "http://ascomply.com/hsts-check?q=1"
+	apexHost  = "ascomply.com"
+	apexPath  = "/hsts-check"
+	apexQuery = "q=1"
 )
 
 // allowedPosts is every non-GET the run may send.
@@ -36,6 +43,22 @@ var (
 	sites        = []string{"app.ascomply.com", "www.ascomply.com", "www.ascomply.com/library", "www.ascomply.com/blog", "ops.ascomply.com", "sup.ascomply.com"}
 	sha40        = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	scriptSrc    = regexp.MustCompile(`src="(/assets/[^"]*\.js)"`)
+	hstsURLs     = []string{
+		"https://ascomply.com/",
+		"https://ascomply.com/blog/x?q=1",
+		"https://www.ascomply.com/",
+		"https://www.ascomply.com/blog/",
+		"https://www.ascomply.com/library/",
+		"https://api.ascomply.com/",
+		"https://api.ascomply.com/health",
+		"https://app.ascomply.com/",
+		"https://ops.ascomply.com/",
+		"https://sup.ascomply.com/",
+		"https://blog.ascomply.com/",
+		"https://blog.ascomply.com/x?q=1",
+		"https://library.ascomply.com/",
+		"https://library.ascomply.com/library/rules",
+	}
 )
 
 // targets holds every address and the retry pause, so a test points the tool at httptest.
@@ -43,6 +66,8 @@ type targets struct {
 	api       string
 	landing   string
 	siteURL   func(site string) string
+	hsts      []string
+	apexHTTP  string
 	retryWait time.Duration
 }
 
@@ -57,6 +82,8 @@ func prodConfig() config {
 			api:       "https://api.ascomply.com",
 			landing:   "https://www.ascomply.com",
 			siteURL:   func(s string) string { return "https://" + s + "/build.txt" },
+			hsts:      hstsURLs,
+			apexHTTP:  apexHTTP,
 			retryWait: 20 * time.Second,
 		},
 		getenv: os.Getenv,
@@ -142,6 +169,7 @@ func runWith(args []string, stdout, stderr io.Writer, cfg config) int {
 	c.step("fleet is ready", c.fleetStep)
 	c.step("services run main's head", c.buildsStep)
 	c.step("sites serve main's head", c.sitesStep)
+	c.step("every host sends HSTS", c.hstsStep)
 	c.step("landing carries the production GA4 id", c.gaStep)
 	c.step("probe signs in", c.signInStep)
 	c.step("probe has no registration metadata", c.registrationStep)
@@ -201,23 +229,43 @@ func (c *checker) get(u string, headers map[string]string) (code int, body []byt
 }
 
 func (c *checker) getOnce(u string, headers map[string]string) (int, []byte) {
+	code, _, body := c.readOnce(u, headers)
+	return code, body
+}
+
+// readOnce makes one GET; code is 0 when nothing answered.
+func (c *checker) readOnce(u string, headers map[string]string) (int, http.Header, []byte) {
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
-		return 0, nil
+		return 0, nil, nil
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return 0, nil
+		return 0, nil, nil
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
-		return 0, nil
+		return 0, nil, nil
 	}
-	return resp.StatusCode, body
+	return resp.StatusCode, resp.Header, body
+}
+
+// getAny reads u with up to three tries. Any status below 500 is an answer; only no answer or a 5xx is retried.
+func (c *checker) getAny(u string) (code int, hdr http.Header, try int) {
+	for try = 1; try <= attempts; try++ {
+		code, hdr, _ = c.readOnce(u, nil)
+		if code != 0 && code < 500 {
+			return code, hdr, try
+		}
+		if try < attempts {
+			time.Sleep(c.t.retryWait)
+		}
+	}
+	return code, hdr, attempts
 }
 
 func answered(code int) string {
@@ -365,6 +413,63 @@ func (c *checker) sitesStep() (string, string) {
 		return "failed", c.behind(behind)
 	}
 	return "passed", passedOn(worst)
+}
+
+func (c *checker) hstsStep() (string, string) {
+	var problems []string
+	worst := 1
+	for _, u := range c.t.hsts {
+		code, hdr, try := c.getAny(u)
+		worst = max(worst, try)
+		if code == 0 || code >= 500 {
+			problems = append(problems, u+" "+answered(code))
+			continue
+		}
+		switch got := hdr.Values("Strict-Transport-Security"); {
+		case len(got) == 0:
+			problems = append(problems, u+" has no HSTS header")
+		case len(got) > 1:
+			problems = append(problems, fmt.Sprintf("%s sends %d HSTS header(s)", u, len(got)))
+		case got[0] != hstsValue:
+			v := got[0]
+			if len(v) > 80 {
+				v = v[:80]
+			}
+			problems = append(problems, fmt.Sprintf("%s sends HSTS %q", u, v))
+		}
+	}
+	code, hdr, try := c.getAny(c.t.apexHTTP)
+	worst = max(worst, try)
+	if code != http.StatusMovedPermanently {
+		problems = append(problems, "http apex "+answered(code))
+	} else if bad := apexLocationProblem(hdr.Get("Location")); bad != "" {
+		problems = append(problems, "http apex Location is "+bad)
+	}
+	if len(problems) > 0 {
+		return "failed", strings.Join(problems, "; ")
+	}
+	return "passed", passedOn(worst)
+}
+
+// apexLocationProblem names what is wrong with the apex redirect target, or returns "".
+func apexLocationProblem(loc string) string {
+	if loc == "" {
+		return "missing"
+	}
+	l, err := url.Parse(loc)
+	switch {
+	case err != nil:
+		return "unparsable"
+	case l.Scheme != "https":
+		return "not https"
+	case l.Hostname() != apexHost:
+		return "not on " + apexHost
+	case l.Path != apexPath:
+		return "not on " + apexPath
+	case l.RawQuery != apexQuery:
+		return "not on ?" + apexQuery
+	}
+	return ""
 }
 
 func (c *checker) gaStep() (string, string) {

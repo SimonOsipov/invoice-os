@@ -27,6 +27,8 @@ func TestIsRunContact(t *testing.T) {
 		"X@EXAMPLE.COM":                      true,
 		"nightly-1-reg@x.resend.app":         true,
 		"NIGHTLY-1-REG@X.RESEND.APP":         true,
+		"nightly-1-signup@x.resend.app":      true,
+		"nightly-1-blog@x.resend.app":        true,
 		"nightly-ops@acme.com":               false,
 		"x@example.com.evil.ng":              false,
 		"x@sub.example.com":                  false,

@@ -65,6 +65,28 @@ export const listReceived = (key: string, since: Date, fetchFn: Fetch = fetch) =
 export const getReceived = (key: string, id: string, fetchFn: Fetch = fetch) =>
   getJson<ReceivedMail>(key, `/emails/receiving/${encodeURIComponent(id)}`, fetchFn)
 
+// Status only: 404 means no such contact. Any other non-2xx throws.
+export async function getContact(key: string, email: string, fetchFn: Fetch = fetch): Promise<number> {
+  const res = await fetchFn(`${API}/contacts/${encodeURIComponent(email)}`, { headers: { Authorization: `Bearer ${key}` } })
+  if (res.ok || res.status === 404) return res.status
+  throw new ResendError(`Resend answered ${res.status}`, res.status === 429 || res.status >= 500)
+}
+
+export type ContactTopic = { id: string; name: string; subscription: string }
+
+export async function contactTopics(key: string, email: string, fetchFn: Fetch = fetch): Promise<ContactTopic[]> {
+  const topics: ContactTopic[] = []
+  let after = ''
+  for (;;) {
+    const path = `/contacts/${encodeURIComponent(email)}/topics?limit=100${after && `&after=${after}`}`
+    const page = await getJson<{ data: ContactTopic[]; has_more: boolean }>(key, path, fetchFn)
+    for (const t of page.data) topics.push({ id: t.id, name: t.name, subscription: t.subscription })
+    const last = page.data[page.data.length - 1]
+    if (!page.has_more || !last) return topics
+    after = last.id
+  }
+}
+
 // A transient error inside the deadline is polled through; the deadline error names the last one.
 // Matches the exact recipient and subject: the invite address gets two mails.
 export async function waitForMail(

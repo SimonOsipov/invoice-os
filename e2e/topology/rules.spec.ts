@@ -31,6 +31,7 @@ const LONG_PREFIX = `ENGI-15 long ${RUN} `
 const LONG_MESSAGE = `${LONG_PREFIX}${'w'.repeat(150)} ${'word '.repeat(80)}`.slice(0, MESSAGE_MAX_RUNES)
 const SHORT_MESSAGE = `ENGI-15 fixture ${RUN}`
 // Long enough to wrap in the scope radio and the switcher.
+const CLIENT_RULE_MESSAGE = `NCOV-07 per-client ${RUN}`
 const ENTITY_NAME = `ENGI-15 Rules ${RUN} Consolidated Holdings and Trading Partnership of West Africa`
 
 let admin: string
@@ -55,7 +56,7 @@ test.beforeAll(async () => {
 
 // Every rule written for this spec's client is removed, whichever test wrote it.
 test.afterAll(async () => {
-  const mine = (await listCustomRules(admin)).filter((r: CustomRule) => r.entity_id === entity.id)
+  const mine = (await listCustomRules(admin)).filter((r: CustomRule) => r.entity_id === entity.id || r.message === CLIENT_RULE_MESSAGE)
   for (const r of mine) await deleteCustomRule(admin, r.id).catch(() => undefined)
 })
 
@@ -70,9 +71,13 @@ function collectErrors(page: Page, droppers: Dropper[] = []): string[] {
   return errors
 }
 
-async function selectEntity(page: Page): Promise<void> {
+async function selectEntity(page: Page, name = ENTITY_NAME): Promise<void> {
   await page.getByTestId('company-switcher').click()
-  await page.getByTestId('company-switcher-option').filter({ hasText: ENTITY_NAME }).click()
+  const option = page.getByTestId('company-switcher-option').filter({ hasText: name })
+  // the option sits below the menu's fold; toBeInViewport does not scroll
+  await option.scrollIntoViewIfNeeded()
+  await expect(option).toBeInViewport()
+  await option.click()
 }
 
 async function showRules(page: Page): Promise<void> {
@@ -257,6 +262,54 @@ test('an admin writes, switches, edits and removes a custom rule', async ({ page
     const mine = (await listCustomRules(admin)).filter((r) => r.message.startsWith(message))
     for (const r of mine) await deleteCustomRule(admin, r.id).catch(() => undefined)
   }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// A client-scoped rule appears under its own client only, however often the active client switches.
+test('a client rule shows on its own client and not on another, across client switches', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+  const a = await createEntity(admin, { name: `ENGI-15 Rules ${RUN} NCOV-07 A`, tin: freshTin() })
+  const b = await createEntity(admin, { name: `ENGI-15 Rules ${RUN} NCOV-07 B`, tin: freshTin() })
+  const message = CLIENT_RULE_MESSAGE
+  const rule = await createCustomRule(admin, {
+    entity_id: a.id,
+    type: 'required',
+    target: 'invoice_number',
+    params: {},
+    severity: 'warning',
+    message,
+    enabled: true,
+  })
+  expect(rule.entity_id).toBe(a.id)
+  // Header M counts firm-wide rules plus the active client's.
+  const expectHeaderCount = async (clientId: string) => {
+    const m = (await listCustomRules(admin)).filter((r) => r.entity_id === null || r.entity_id === clientId).length
+    await expect(page.getByText(new RegExp(`^GOLDEN v\\d+ \\+ ${m} CUSTOM$`))).toBeVisible()
+  }
+  try {
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+    await selectEntity(page, a.name)
+    await showRules(page)
+    await expect(ruleRow(page, message)).toHaveCount(1)
+    await expect(ruleRow(page, message).getByText('CLIENT', { exact: true })).toBeVisible()
+    await expectHeaderCount(a.id)
+
+    await selectEntity(page, b.name)
+    await expect(page.getByTestId('company-switcher')).toContainText(b.name)
+    await showRules(page)
+    await expect(ruleRow(page, message)).toHaveCount(0)
+    await expectHeaderCount(b.id)
+
+    await selectEntity(page, a.name)
+    await showRules(page)
+    await expect(ruleRow(page, message)).toHaveCount(1)
+    await expect(ruleRow(page, message).getByText('CLIENT', { exact: true })).toBeVisible()
+  } finally {
+    await deleteCustomRule(admin, rule.id).catch(() => undefined)
+  }
+  expect((await listCustomRules(admin)).filter((r) => r.message === message)).toEqual([])
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

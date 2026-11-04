@@ -17,8 +17,7 @@
 //
 // Scrubbed request/response headers and verbatim body bytes (AC 8 and AC 9 of the parent
 // story) are proven ONLY in internal/archive/exchange_db_test.go. The first describe's
-// invoice is never submitted. The second describe submits one through the mock adapter and
-// proves only that its body files exist and the request body carries the invoice number.
+// invoice is never submitted; the second submits through the mock adapter.
 // Departure from .claude/rules/e2e.md (containment or live-read, never a literal count): each
 // describe's bundle is scoped to an entity it creates and nothing else ever touches, so
 // the counts are deterministic. The exact count is also STRICTLY STRONGER than containment
@@ -33,8 +32,11 @@ import {
   createInvoice,
   firmApproverTokens,
   getInvoice,
+  getInvoiceHistory,
+  issueNote,
   login,
   rawFetch,
+  submitAndAwait,
   validateInvoice,
   PERSONAS,
 } from './client'
@@ -218,23 +220,84 @@ const OUTCOME_SENT = 'sent'
 const OP_SUBMIT = 'submit'
 // internal/submission mock_adapter.go MockAdapter.Submit: http.StatusOK on the accept branch.
 const MOCK_ACCEPT_HTTP_STATUS = '200'
+// internal/submission mock_script.go mockTINPending: submit answers 202, then two polls, the second 200.
+const MOCK_TIN_PENDING = '99999999-0003'
+// internal/submission exchange_bridge.go OpPoll.
+const OP_POLL = 'poll'
+// internal/submission mock_adapter.go Submit's pending case and Poll while polls remain: http.StatusAccepted.
+const MOCK_PENDING_HTTP_STATUS = '202'
+
+const POLL_CEILING_MS = 120_000
+
+// One batch of several invoices; waits until every one is accepted, within a single poll ceiling.
+async function submitBatchAndAwaitAccepted(tok: string, ids: string[]) {
+  const res = await rawFetch('/api/invoice/v1/invoices/submissions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tok}` },
+    body: { invoice_ids: ids, idempotency_key: crypto.randomUUID() },
+  })
+  expect(res.status, 'batch submit').toBe(200)
+  await expect
+    .poll(async () => (await Promise.all(ids.map((id) => getInvoice(tok, id)))).map((i) => i.status), {
+      timeout: POLL_CEILING_MS,
+      intervals: [1_000],
+    })
+    .toEqual(ids.map(() => 'accepted'))
+}
+
+// internal/submission/document_type.go InvoiceTypeCode
+const TYPE_CODE = { commercial_invoice: '381', credit_note: '380', debit_note: '384' }
+
+// A one-line original that reached accepted; steps of contract-invoice.spec.ts acceptedOriginal.
+async function acceptedOriginal(tok: string, entityId: string, number: string, buyerTin?: string) {
+  const created = await createInvoice(tok, {
+    entity_id: entityId,
+    ...acceptInvoiceFields(number),
+    ...(buyerTin ? { buyer_tin: buyerTin } : {}),
+  })
+  expect((await validateInvoice(tok, created.id)).status, 'the clean fixture validates').toBe('validated')
+  await approveUntilClosed(created.id, await firmApproverTokens())
+  return submitAndAwait(tok, created.id, 'accepted')
+}
+
+interface SubmitWire {
+  ID: string
+  IssueDate?: string
+  InvoiceTypeCode: string
+  BillingReference?: { IRN?: string; IssueDate?: string }[]
+}
+
+// The invoice's last submit request body, parsed only once its row is not truncated (MaxBodyBytes).
+function submitWire(zip: Record<string, Uint8Array>, invoiceId: string): SubmitWire {
+  const rows = parseCsv(new TextDecoder().decode(zip['exchange.csv'])).filter(
+    (r) => r.invoice_id === invoiceId && r.operation === OP_SUBMIT,
+  )
+  expect(rows.length, `submit rows of ${invoiceId}`).toBeGreaterThan(0)
+  const row = rows[rows.length - 1]
+  expect(row.truncated, 'submit body is not truncated').toBe('false')
+  const body = zip[row.request_body_file]
+  expect(body, `${row.request_body_file} must be in the ZIP`).toBeDefined()
+  return JSON.parse(new TextDecoder().decode(body)) as SubmitWire
+}
 
 test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
   let token: string
   let entityId: string
   let invoiceNumber: string
+  let invoiceId: string
 
   test.beforeAll(async () => {
     token = await login(PERSONAS.A)
     const entity = await createEntity(token, { name: `Zz AUDIT-05 ${freshTin()}`, tin: freshTin() })
     entityId = entity.id
     invoiceNumber = `INV-AUDIT-05-${freshTin()}`
-    await createInvoice(token, {
+    const created = await createInvoice(token, {
       entity_id: entityId,
       invoice_number: invoiceNumber,
       buyer_state: 'NG-LA',
       line_items: [{ description: 'Widget', quantity: '1', unit_price: '100', line_total: '100', tax_category: 'STANDARD_VAT', price_unit: 'KGM' }],
     })
+    invoiceId = created.id
   })
 
   test('download: zip, opens, carries the five CSVs + manifest; invoices.csv contains this invoice; the never-submitted invoice leaves submissions/exchange header-only', async () => {
@@ -260,8 +323,13 @@ test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
       'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga',
     ])
     expect(Object.keys(invoiceRows[0]).slice(-2), 'invoices.csv header ends with the type pair').toEqual(['document_type', 'original_invoice_number'])
-    expect(invoiceRows.find((r) => r.invoice_number === invoiceNumber)?.buyer_state, 'the invoice row carries buyer_state').toBe('NG-LA')
-    expect(invoiceRows.find((r) => r.invoice_number === invoiceNumber)?.document_type, 'the invoice row carries its type').toBe('commercial_invoice')
+    const row = invoiceRows.find((r) => r.invoice_number === invoiceNumber)
+    expect(row, 'invoices.csv carries the invoice this spec created').toBeDefined()
+    expect(row!.buyer_state, 'the invoice row carries buyer_state').toBe('NG-LA')
+    expect(row!.document_type, 'the invoice row carries its type').toBe('commercial_invoice')
+
+    expect(row!.qr_payload, 'never-submitted invoice row has an empty qr_payload').toBe('')
+    expect((await getInvoice(token, invoiceId)).qr_payload, 'GET qr_payload of a never-submitted invoice').toBeNull()
 
     const lineRows = parseCsv(decoder.decode(zip['line_items.csv']))
     expect(lineRows, 'line_items.csv holds the invoice\'s one line').toHaveLength(1)
@@ -365,6 +433,7 @@ test.describe('evidence bundle for a submitted invoice (API E2E)', () => {
     const invoice = await getInvoice(token, created.id)
     expect(invoice.irn, 'GET irn').toBeTruthy()
     expect(invoice.csid, 'GET csid').toBeTruthy()
+    expect(invoice.qr_payload, 'GET qr_payload').toBeTruthy()
 
     const { zip, manifest } = await fetchBundle(token, entity.id, period)
     const decoder = new TextDecoder()
@@ -374,6 +443,7 @@ test.describe('evidence bundle for a submitted invoice (API E2E)', () => {
     expect(invoiceRow!.status, 'invoices.csv status').toBe(invoice.status)
     expect(invoiceRow!.irn, "invoices.csv irn must equal the GET's").toBe(invoice.irn)
     expect(invoiceRow!.csid, "invoices.csv csid must equal the GET's").toBe(invoice.csid)
+    expect(invoiceRow!.qr_payload, "invoices.csv qr_payload must equal the GET's").toBe(invoice.qr_payload)
 
     const submissions = parseCsv(decoder.decode(zip['submissions.csv']))
     expect(submissions, 'submissions.csv must hold exactly one job row').toHaveLength(1)
@@ -394,5 +464,97 @@ test.describe('evidence bundle for a submitted invoice (API E2E)', () => {
 
     expect(manifest.counts.submissions, 'manifest submissions count').toBe(1)
     expect(manifest.counts.exchange_attempts, 'manifest exchange_attempts must equal the exchange.csv rows').toBe(exchange.length)
+  })
+
+  test('a pending-then-accepted invoice carries its status history and its submit and poll rows into the bundle', async () => {
+    test.setTimeout(240_000)
+
+    const entity = await createEntity(token, { name: `Zz AUDIT-05 pending ${freshTin()}`, tin: freshTin() })
+    const created = await acceptedOriginal(token, entity.id, `INV-AUDIT-05-P-${freshTin()}`, MOCK_TIN_PENDING)
+
+    const history = await getInvoiceHistory(token, created.id)
+    const { zip } = await fetchBundle(token, entity.id, period)
+    const decoder = new TextDecoder()
+
+    const rows = parseCsv(decoder.decode(zip['status_history.csv'])).filter((r) => r.invoice_id === created.id)
+    expect(rows.map((r) => r.to_status), 'history to_status path').toEqual(['draft', 'validated', 'queued', 'submitted', 'accepted'])
+    expect(rows.map((r) => r.from_status), 'history from_status path').toEqual(['', 'draft', 'validated', 'queued', 'submitted'])
+    expect(rows.map((r) => r.seq), 'history seq').toEqual(['1', '2', '3', '4', '5'])
+    const instants = rows.map((r) => Date.parse(r.changed_at))
+    instants.forEach((t, i) => {
+      expect(Number.isNaN(t), `row ${i} changed_at parses`).toBe(false)
+      if (i > 0) expect(t, `row ${i} changed_at must not precede row ${i - 1}`).toBeGreaterThanOrEqual(instants[i - 1])
+    })
+
+    expect(rows, 'CSV and GET history hold the same number of rows').toHaveLength(history.length)
+    rows.forEach((r, i) => {
+      expect(r.from_status, `row ${i} from_status`).toBe(history[i].from_status ?? '')
+      expect(r.to_status, `row ${i} to_status`).toBe(history[i].to_status)
+      expect(r.actor_name, `row ${i} actor_name`).toBe(history[i].actor_name)
+      expect(r.actor_kind, `row ${i} actor_kind`).toBe(history[i].actor_kind)
+      expect(Date.parse(r.changed_at), `row ${i} changed_at instant`).toBe(Date.parse(history[i].changed_at))
+    })
+
+    // fixture check: pins the mock's scripted 202/202/200 submit-poll-poll answers (mock_script.go), not the real NRS
+    const attempts = parseCsv(decoder.decode(zip['exchange.csv'])).filter((r) => r.invoice_id === created.id)
+    expect(attempts.map((r) => r.operation), 'exchange operations').toEqual([OP_SUBMIT, OP_POLL, OP_POLL])
+    expect(attempts.map((r) => r.attempt), 'exchange attempt numbers').toEqual(['1', '2', '3'])
+    expect(attempts.map((r) => r.http_status), 'exchange http statuses').toEqual([
+      MOCK_PENDING_HTTP_STATUS,
+      MOCK_PENDING_HTTP_STATUS,
+      MOCK_ACCEPT_HTTP_STATUS,
+    ])
+    for (const a of attempts) {
+      expect(a.latency_ms, 'latency_ms is numeric').toMatch(/^\d+$/)
+      expect(a.outcome, 'outcome').toBe(OUTCOME_SENT)
+    }
+  })
+
+  test("a credit note and a debit note send the original's IRN, its issue date and their NRS type codes on the wire", async () => {
+    // Two sequential polls (original, then both notes at once) plus margin for setup and the bundle fetch.
+    test.setTimeout(2 * POLL_CEILING_MS + 120_000)
+
+    const entity = await createEntity(token, { name: `Zz AUDIT-05 notes ${freshTin()}`, tin: freshTin() })
+    const original = await acceptedOriginal(token, entity.id, `INV-NCOV04-${freshTin()}`)
+    const lineId = original.line_items![0].id
+
+    const issueApprovedNote = async (document_type: 'credit_note' | 'debit_note', number: string) => {
+      const note = await issueNote(token, original.id, {
+        document_type,
+        invoice_number: number,
+        issue_date: '2026-02-01T00:00:00Z',
+        lines: [{ line_id: lineId, quantity: '4', unit_price: '100' }],
+      })
+      expect((await validateInvoice(token, note.id)).status, `${document_type} validates`).toBe('validated')
+      await approveUntilClosed(note.id, await firmApproverTokens())
+      return note.id
+    }
+    const creditNumber = `CN-NCOV04-${freshTin()}`
+    const debitNumber = `DN-NCOV04-${freshTin()}`
+    const creditId = await issueApprovedNote('credit_note', creditNumber)
+    const debitId = await issueApprovedNote('debit_note', debitNumber)
+    await submitBatchAndAwaitAccepted(token, [creditId, debitId])
+
+    const { zip } = await fetchBundle(token, entity.id, period)
+    // fixture check: pins the wire keys of the mock's recorded submit envelope (mock_wire.go mockEnvelope)
+    const originalWire = submitWire(zip, original.id)
+    const referenceDate = original.issue_date!.slice(0, 10)
+    expect(originalWire.ID, 'original ID').toBe(original.invoice_number)
+    expect(originalWire.IssueDate, 'original IssueDate').toBe(referenceDate)
+    expect(originalWire.InvoiceTypeCode, 'original type code').toBe(TYPE_CODE.commercial_invoice)
+    expect(originalWire.BillingReference, 'an original references nothing').toBeUndefined()
+
+    const notes = [
+      { wire: submitWire(zip, creditId), number: creditNumber, code: TYPE_CODE.credit_note },
+      { wire: submitWire(zip, debitId), number: debitNumber, code: TYPE_CODE.debit_note },
+    ]
+    for (const { wire, number, code } of notes) {
+      expect(wire.ID, `${number} ID`).toBe(number)
+      expect(wire.InvoiceTypeCode, `${number} type code`).toBe(code)
+      expect(wire.IssueDate, `${number} own IssueDate`).toBe('2026-02-01')
+      expect(wire.BillingReference, `${number} BillingReference`).toHaveLength(1)
+      expect(wire.BillingReference![0].IRN, `${number} references the original IRN`).toBe(original.irn)
+      expect(wire.BillingReference![0].IssueDate, `${number} references the original date`).toBe(referenceDate)
+    }
   })
 })

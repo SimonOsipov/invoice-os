@@ -10,18 +10,30 @@ import { openInvite, readSessionIdentity, registerOnAcceptPage } from '../invite
 import { seedConsent } from '../smoke/landingConsent'
 import { resolveTarget } from '../targets'
 import { collectSourcedErrors, expectedStatusDropper } from '../topology/consoleGate'
-import { CheckSteps, judgeSends, mailTextDiff, nightlySendsToday, overBudget, readAccounts, requireEnv } from './mailChecks'
-import { getReceived, listSent, waitForMail } from './resendClient'
+import { brandLayoutFacts, CheckSteps, judgeBrandLayout, judgeSends, mailTextDiff, nightlySendsToday, overBudget, readAccounts, requireEnv } from './mailChecks'
+import { contactTopics, getContact, getReceived, listSent, waitForMail } from './resendClient'
 
 // Copies of the Go values: accountmail.InviteSubject and InviteAcceptURL; the recovery and confirmation
 // subjects are GOTRUE_MAILER_SUBJECTS_* in scripts/ci/preview.sh mail-on.
 const INVITE_SUBJECT = 'You are invited to ASComply'
 const INVITE_LINK = 'https://www.ascomply.com/invite#token='
 const PASSWORD_SUBJECT = 'Confirm your ASComply account'
+// The signup mail has the same subject: GOTRUE_MAILER_SUBJECTS_CONFIRMATION.
+const SIGNUP_SUBJECT = PASSWORD_SUBJECT
+// accountmail.BlogConfirmSubject and BlogConfirmURL.
+const BLOG_SUBJECT = 'Confirm your ASComply blog subscription'
+const BLOG_LINK = 'https://www.ascomply.com/blog/subscribe/confirm?token='
+const BLOG_SUBSCRIBED = 'You are subscribed.'
 const RESET_SUBJECT = 'Reset your ASComply password'
 const RESET_LINK_FAILED = 'That reset link did not work. It may have expired or already been used.'
+// frontend/landing/src/components/VerifyNotice.tsx COPY.failed.
+const VERIFY_FAILED = 'This link is already used or expired. If you confirmed your email, sign in.'
 const INVITE_INVALID = 'This invite is no longer valid'
 const WAIT_MS = 3 * 60_000
+const DOWN_WAIT_MS = 30_000
+const TOPIC_POLL_MS = 5_000
+// Set by the first failed "... mail arrives" wait; later waits are short so a mail outage ends inside the test timeout.
+let mailDown = false
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 
 // The expected mail, rendered by the Go template with the received link; the secret goes on stdin, never argv.
@@ -40,6 +52,11 @@ async function linkOf(page: Page, label: string): Promise<string> {
   return href
 }
 
+function brandStep(html: string): void {
+  const reason = judgeBrandLayout(brandLayoutFacts(html))
+  if (reason) throw new Error(reason)
+}
+
 function expectSameText(want: string, got: string): void {
   const diff = mailTextDiff(want, got)
   if (diff) throw new Error(diff)
@@ -47,7 +64,7 @@ function expectSameText(want: string, got: string): void {
 
 test('real mail: the invite and the reset arrive, read right, and their links work', async ({ browser }) => {
   test.setTimeout(840_000)
-  const env = requireEnv('RESEND_READ_KEY', 'RESEND_RECEIVING_DOMAIN', 'NIGHTLY_RUN_ID', 'MAIL_WINDOW_START', 'MAIL_SECTION_FILE', 'MAIL_ACCOUNTS_FILE')
+  const env = requireEnv('RESEND_READ_KEY', 'RESEND_RECEIVING_DOMAIN', 'NIGHTLY_RUN_ID', 'MAIL_WINDOW_START', 'MAIL_SECTION_FILE', 'MAIL_ACCOUNTS_FILE', 'RESEND_BLOG_TOPIC_ID')
   const windowStart = new Date(env.MAIL_WINDOW_START)
   if (Number.isNaN(windowStart.getTime())) throw new Error('MAIL_WINDOW_START is not a date')
   const { admin, reset } = readAccounts(env.MAIL_ACCOUNTS_FILE)
@@ -68,11 +85,31 @@ test('real mail: the invite and the reset arrive, read right, and their links wo
   const newPassword = crypto.randomUUID().slice(0, 16)
   let tenantId = ''
   let inviteToken = ''
+  let inviteHtml = ''
   let inviteText = ''
   let passwordLink = ''
+  let passwordHtml = ''
   let passwordText = ''
   let resetLink = ''
+  let resetHtml = ''
   let resetText = ''
+  const signupAddr = `nightly-${env.NIGHTLY_RUN_ID}-signup@${env.RESEND_RECEIVING_DOMAIN}`
+  const blogAddr = `nightly-${env.NIGHTLY_RUN_ID}-blog@${env.RESEND_RECEIVING_DOMAIN}`
+  const signupPassword = crypto.randomUUID().slice(0, 16)
+  let signupHtml = ''
+  let signupLink = ''
+  let blogHtml = ''
+  let blogToken = ''
+
+  const arrival = async (to: string, subject: string): Promise<string> => {
+    try {
+      const mail = await waitForMail(key, to, subject, mailDown ? DOWN_WAIT_MS : WAIT_MS)
+      return (await getReceived(key, mail.id)).html ?? ''
+    } catch (e) {
+      mailDown = true
+      throw e
+    }
+  }
 
   try {
     await steps.run('mail budget', async () => {
@@ -92,12 +129,14 @@ test('real mail: the invite and the reset arrive, read right, and their links wo
         body: { emails: [inviteAddr], role: 'reviewer' },
       })
       if (res.status !== 200) throw new Error(`invite answered ${res.status}`)
-      const mail = await waitForMail(key, inviteAddr, INVITE_SUBJECT, WAIT_MS)
-      inviteText = await textOf(mailPage, (await getReceived(key, mail.id)).html ?? '')
+      inviteHtml = await arrival(inviteAddr, INVITE_SUBJECT)
+      inviteText = await textOf(mailPage, inviteHtml)
       const link = await linkOf(mailPage, 'Accept invite')
       if (!link.startsWith(INVITE_LINK)) throw new Error('the invite link does not start with the accept page')
       inviteToken = decodeURIComponent(link.slice(INVITE_LINK.length))
     })
+
+    await steps.run('invite mail uses the brand layout', () => brandStep(inviteHtml))
 
     await steps.run('invite text matches', async () => {
       const want = wantHtml(['invite', admin.workspaceName, admin.displayName, inviteAddr, 'reviewer'], inviteToken)
@@ -109,13 +148,15 @@ test('real mail: the invite and the reset arrive, read right, and their links wo
     })
 
     await steps.run('password mail arrives', async () => {
-      const mail = await waitForMail(key, inviteAddr, PASSWORD_SUBJECT, WAIT_MS)
-      passwordText = await textOf(mailPage, (await getReceived(key, mail.id)).html ?? '')
+      passwordHtml = await arrival(inviteAddr, PASSWORD_SUBJECT)
+      passwordText = await textOf(mailPage, passwordHtml)
       passwordLink = await linkOf(mailPage, 'Choose your password')
       if (!passwordLink.startsWith(`${gateway}/auth/verify?token=`)) throw new Error('the password link does not start at the gateway verify route')
       if (!passwordLink.includes('type=signup')) throw new Error('the password link has no type=signup')
       if (!passwordLink.endsWith('&invite=1')) throw new Error('the password link does not end with invite=1')
     })
+
+    await steps.run('password mail uses the brand layout', () => brandStep(passwordHtml))
 
     await steps.run('password mail text matches', async () => {
       // The template appends &invite=1 itself.
@@ -149,11 +190,13 @@ test('real mail: the invite and the reset arrive, read right, and their links wo
     await steps.run('reset mail arrives', async () => {
       const res = await requestPasswordReset({ email: reset.email })
       if (res.status !== 202) throw new Error(`reset request answered ${res.status}`)
-      const mail = await waitForMail(key, reset.email, RESET_SUBJECT, WAIT_MS)
-      resetText = await textOf(mailPage, (await getReceived(key, mail.id)).html ?? '')
+      resetHtml = await arrival(reset.email, RESET_SUBJECT)
+      resetText = await textOf(mailPage, resetHtml)
       resetLink = await linkOf(mailPage, 'Choose a new password')
       if (!resetLink.startsWith(`${gateway}/auth/reset-password?token=`)) throw new Error('the reset link does not start at the gateway reset route')
     })
+
+    await steps.run('reset mail uses the brand layout', () => brandStep(resetHtml))
 
     await steps.run('reset text matches', async () => {
       expectSameText(await textOf(mailPage, wantHtml(['recovery', reset.email], resetLink)), resetText)
@@ -176,8 +219,108 @@ test('real mail: the invite and the reset arrive, read right, and their links wo
       if (old.status !== 401) throw new Error(`the old password answered ${old.status}, want 401`)
     })
 
+    await steps.run('signup mail arrives', async () => {
+      // The body nightlycontacts sends to /auth/register.
+      const res = await rawFetch('/auth/register', {
+        method: 'POST',
+        body: {
+          email: signupAddr,
+          password: signupPassword,
+          workspace_name: 'Nightly mail signup',
+          display_name: 'Nightly Signup',
+          kind: 'firm',
+        },
+      })
+      if (res.status !== 202) throw new Error(`register answered ${res.status}`)
+      signupHtml = await arrival(signupAddr, SIGNUP_SUBJECT)
+      await mailPage.setContent(signupHtml, { waitUntil: 'domcontentloaded' })
+      signupLink = await linkOf(mailPage, 'Confirm email address')
+      if (!signupLink.startsWith(`${gateway}/auth/verify?token=`)) throw new Error('the signup link does not start at the gateway verify route')
+      if (!signupLink.includes('type=signup')) throw new Error('the signup link has no type=signup')
+      if (signupLink.includes('invite=1')) throw new Error('the signup link carries invite=1')
+    })
+
+    await steps.run('signup mail uses the brand layout', () => brandStep(signupHtml))
+
+    await steps.run('signup link confirms the address', async () => {
+      const before = await rawFetch('/auth/sign-in', {
+        method: 'POST',
+        body: {
+          email: signupAddr,
+          password: signupPassword,
+          state: mintSignInState(),
+        },
+      })
+      if (before.status !== 403) throw new Error(`sign-in before the link answered ${before.status}, want 403`)
+      const page = await freshPage()
+      await seedConsent(page, false)
+      await page.goto(signupLink, { waitUntil: 'commit' })
+      await page.waitForURL((u) => u.origin === new URL(gateway).origin && u.pathname === '/auth/verify' && u.searchParams.has('state'), {
+        timeout: 30_000,
+      })
+      await page.getByRole('button', { name: 'Confirm my email', exact: true }).click()
+      await page.waitForURL((u) => u.href.startsWith(landing), { timeout: 30_000 })
+      await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toHaveCount(0)
+      await signInSession(signupAddr, signupPassword)
+    })
+
+    await steps.run('newsletter mail arrives', async () => {
+      const cats = await rawFetch('/blog/categories')
+      const categoryId = (cats.body as { categories?: { id: string }[] } | undefined)?.categories?.[0]?.id
+      if (cats.status !== 200 || !categoryId) throw new Error(`categories answered ${cats.status} with no category`)
+      const sub = await rawFetch('/blog/subscriptions', {
+        method: 'POST',
+        body: {
+          email: blogAddr,
+          category_ids: [categoryId],
+          frequency: 'weekly',
+        },
+      })
+      if (sub.status !== 202) throw new Error(`subscribe answered ${sub.status}`)
+      blogHtml = await arrival(blogAddr, BLOG_SUBJECT)
+      await mailPage.setContent(blogHtml, { waitUntil: 'domcontentloaded' })
+      const link = await linkOf(mailPage, 'Confirm subscription')
+      if (!link.startsWith(BLOG_LINK)) throw new Error('the newsletter link does not start with the blog confirm page')
+      blogToken = decodeURIComponent(link.slice(BLOG_LINK.length))
+    })
+
+    await steps.run('newsletter mail uses the brand layout', () => brandStep(blogHtml))
+
+    await steps.run('newsletter link confirms the subscription', async () => {
+      const before = await getContact(key, blogAddr)
+      if (before !== 404) throw new Error(`Resend answered ${before} for the subscriber before the link, want 404`)
+      const page = await freshPage()
+      await page.goto(`${resolveTarget('BLOG_URL')}/subscribe/confirm?token=${encodeURIComponent(blogToken)}`)
+      await page.getByRole('button', { name: 'Confirm subscription', exact: true }).click()
+      await expect(page.getByText(BLOG_SUBSCRIBED)).toBeVisible({
+        timeout: 30_000,
+      })
+    })
+
+    await steps.run('subscriber is a Resend contact on the Blog topic', async () => {
+      const topicId = env.RESEND_BLOG_TOPIC_ID
+      const deadline = Date.now() + WAIT_MS
+      let last = 'no Blog topic yet'
+      for (;;) {
+        try {
+          const topic = (await contactTopics(key, blogAddr)).find((t) => t.id === topicId)
+          if (topic?.subscription === 'opt_in') return
+          last = topic ? `Blog topic subscription is ${topic.subscription}` : 'no Blog topic yet'
+        } catch (e) {
+          last = e instanceof Error ? e.message : String(e)
+        }
+        if (Date.now() >= deadline) throw new Error(`the subscriber is not opted in to the Blog topic after 3 minutes (${last})`)
+        await new Promise((resolve) => setTimeout(resolve, TOPIC_POLL_MS))
+      }
+    })
+
     await steps.run('only these mails are real', async () => {
-      const verdict = judgeSends(await listSent(key, windowStart), inviteAddr, reset.email)
+      const verdict = judgeSends(await listSent(key, windowStart), {
+        invite: inviteAddr,
+        reset: reset.email,
+        signup: signupAddr,
+        blog: blogAddr,
+      })
       if (!verdict.ok) throw new Error(verdict.detail)
     })
   } finally {

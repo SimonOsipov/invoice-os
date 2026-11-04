@@ -38,7 +38,7 @@ import {
   type RealAccount,
   type TenantKind,
 } from '../api/client'
-import { freshTin } from '../api/fixtures'
+import { canonicalTin, freshTin } from '../api/fixtures'
 import { seedConsent } from '../smoke/landingConsent'
 import { openInvite, readSessionIdentity, registerOnAcceptPage } from '../inviteSession'
 import { approvalRun404Dropper, consoleErrorsLine, expectedStatusDropper, type Dropper } from './consoleGate'
@@ -51,6 +51,7 @@ const { SHARD, PERSONAS: API_PERSONAS } = shardPersonas('auth.spec.ts')
 // only GATEWAY_URL/APP_URL/TENANTS/FIRM_PERSONA/VALIDATION_EXPECTED, so it has no
 // LANDING_URL. Pattern mirrors e2e/smoke/apps.ts:21 (Decision [signout-asserts-landing-redirect]).
 const LANDING_URL = resolveTarget('LANDING_URL')
+const LIBRARY_URL = resolveTarget('LIBRARY_URL')
 
 // The live browser round trip: a real sign-in through the landing form mints a session whose
 // /v1/me read resolves the tenant under RLS before the workspace renders.
@@ -551,6 +552,25 @@ test('deployed app: every top-level path cold-boots to its own screen', async ({
   }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// A bounce through the landing would mean the app did not honour the signed-in session.
+test('deployed app: Open in Platform from the Library lands a signed-in firm member on Invoices', async ({ page }) => {
+  const errors = collectErrors(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+
+  const navigations: string[] = []
+  page.on('request', (r) => {
+    if (r.isNavigationRequest() && r.frame() === page.mainFrame()) navigations.push(r.url())
+  })
+  await page.goto(`${LIBRARY_URL}/rules/validate`)
+  await page.getByRole('link', { name: 'Open in Platform' }).click()
+
+  await page.waitForURL((u) => u.origin === new URL(APP_URL).origin && u.pathname === '/invoices')
+  await expect(page.locator(VERIFIED)).toBeAttached()
+  await expect(page.getByRole('heading', { level: 1, name: 'Invoices', exact: true })).toBeVisible()
+  expect(navigations.filter((u) => u.startsWith(LANDING_URL)), 'the app bounced through the landing').toEqual([])
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
 // ROUTE-06-06 AC-2: the review path, using a batch id minted through
@@ -1270,6 +1290,67 @@ test('deployed app: a new in-house workspace lands on Add your company, and addi
   await placeInvoiceNumberAndExpectImportEnabled(page)
 
   expect(refused, 'refused POSTs the gate may drop').toBe(3)
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed app: an in-house admin adds the company in Settings › Company, edits its name, and both survive a reload', async ({ page }) => {
+  test.setTimeout(180_000)
+  const account = await provisionRealAccount('company-edit', 'in_house')
+  const errors = collectErrors(page)
+  const row = (label: string) => page.getByText(label, { exact: true }).locator('xpath=following-sibling::span')
+  const entitiesWrite = (method: string) => (r: Response) =>
+    r.request().method() === method && /\/api\/portfolio\/v1\/entities(\/[^/?]+)?$/.test(new URL(r.url()).pathname)
+
+  await signInAtFrontDoor(page, account, '/settings/company')
+  await expect(page.getByText('Your company', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add company' })).toBeEnabled()
+
+  const name = `NCOV07 Co ${Date.now()}`
+  const tin = freshTin()
+  await page.getByRole('button', { name: 'Add company' }).click()
+  const add = page.getByRole('dialog', { name: 'Add company' })
+  await add.getByRole('textbox').first().fill(name)
+  await add.getByPlaceholder('########-####').fill(tin)
+  const [created] = await Promise.all([
+    page.waitForResponse(entitiesWrite('POST')),
+    add.getByRole('button', { name: 'Add company' }).click(),
+  ])
+  expect(created.status(), 'POST /entities').toBe(201)
+  await expect(add).toHaveCount(0)
+  await expect(row('Name')).toHaveText(name)
+
+  await page.reload()
+  await expect(page).toHaveURL(/\/settings\/company$/)
+  await expect(row('Name')).toHaveText(name)
+  const token = await browserToken(page)
+  const added = (await listEntities(token)).entities.find((e) => e.name === name)
+  expect(added, `the new company ${name} is listed`).toBeDefined()
+  // The service stores and echoes the digits-only TIN.
+  expect(added!.tin, 'server TIN').toBe(canonicalTin(tin))
+  await expect(row('TIN')).toHaveText(canonicalTin(tin))
+  await expect(page.getByRole('button', { name: 'Edit company' })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Edit company' }).click()
+  const edit = page.getByRole('dialog', { name: 'Edit company' })
+  await expect(edit.getByRole('textbox').first()).toHaveValue(name)
+  const renamed = `${name} renamed`
+  await edit.getByRole('textbox').first().fill(renamed)
+  const [patched] = await Promise.all([
+    page.waitForResponse(entitiesWrite('PATCH')),
+    edit.getByRole('button', { name: 'Save changes' }).click(),
+  ])
+  expect(patched.ok(), 'PATCH /entities/<id>').toBe(true)
+  expect(new URL(patched.url()).pathname.endsWith(`/${added!.id}`), 'PATCH targets the added entity').toBe(true)
+  await expect(edit).toHaveCount(0)
+
+  await page.reload()
+  await expect(row('Name')).toHaveText(renamed)
+  await expect(page.getByText(name, { exact: true })).toHaveCount(0)
+
+  const mine = (await listEntities(token)).entities.filter((e) => e.id === added!.id)
+  expect(mine, 'one entity with that id').toHaveLength(1)
+  expect(mine[0].name).toBe(renamed)
+  expect(mine[0].tin).toBe(added!.tin)
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 

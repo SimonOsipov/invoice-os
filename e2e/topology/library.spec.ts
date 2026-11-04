@@ -1,4 +1,4 @@
-// Library layout, phone layout, tour and outbound links on the PR fork. Each case asserts a
+// Library layout, phone layout, tour, outbound links and journeys on the PR fork. A layout case asserts a
 // relationship (containment, side by side, alignment, no overflow), never a raw dimension, and
 // nothing is exempt. Groups and features are discovered from the DOM (`nav-<gid>`, `fc-<fid>`);
 // nothing is imported from frontend/.
@@ -657,6 +657,142 @@ test.describe('library at phone widths, 768 and the tour', () => {
       }
     }
     await attachJson(testInfo, 'library-tour', measured)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+})
+
+const COMING_SOON_IDS = ['fiscal-outcomes', 'submit-clear', 'alerts', 'channels', 'erp-connectors'] // frontend/library/src/content.ts COMING_SOON_IDS
+
+test.describe('library journeys', () => {
+  test('library journeys: every feature card has its title, copy and thumbnail, and a Coming soon pill or an Open in Platform link', async ({ page }, testInfo) => {
+    test.setTimeout(240_000)
+    const errors = collectErrors(page)
+    await prepare(page)
+    const pillFids = new Set<string>()
+    const measured: Record<string, unknown>[] = []
+    for (const { gid, fids } of GROUPS) {
+      await visit(page, `/${gid}`)
+      for (const fid of fids) {
+        const card = page.locator(`#fc-${fid}`)
+        const read = await card.evaluate((el) => {
+          const copy = el.querySelector('.t-body-sm')
+          return {
+            title: copy?.previousElementSibling?.textContent?.trim() ?? '',
+            copy: copy?.textContent?.trim() ?? '',
+            scene: el.querySelector('[data-testid="lib-thumb-scene"]')?.textContent?.trim() ?? '',
+            soon: (el.textContent ?? '').includes('Coming soon'),
+          }
+        })
+        measured.push({ gid, fid, ...read })
+        const at = `/${gid} #fc-${fid}`
+        expect.soft(read.title, `${at}: title`).not.toBe('')
+        expect.soft(read.copy, `${at}: copy`).not.toBe('')
+        expect.soft(read.scene, `${at}: thumbnail scene`).not.toBe('')
+        expect.soft(read.soon, `${at}: Coming soon pill iff fid is in COMING_SOON_IDS`).toBe(COMING_SOON_IDS.includes(fid))
+        if (read.soon) pillFids.add(fid)
+      }
+      for (const fid of fids) {
+        await visit(page, `/${gid}/${fid}`)
+        const open = page.getByRole('link', { name: 'Open in Platform' })
+        if (COMING_SOON_IDS.includes(fid)) {
+          await expect(open, `/${gid}/${fid}: a soon feature has no Open in Platform link`).toHaveCount(0)
+        } else {
+          await expect(open, `/${gid}/${fid}: exactly one Open in Platform link`).toHaveCount(1)
+          const href = (await open.getAttribute('href')) ?? ''
+          expect.soft(href.startsWith(BAKED_APP_URL), `/${gid}/${fid}: href ${href} starts with ${BAKED_APP_URL}`).toBe(true)
+          expect.soft(href.endsWith('?via=library'), `/${gid}/${fid}: href ${href} ends with ?via=library`).toBe(true)
+        }
+      }
+    }
+    expect.soft([...pillFids].sort(), 'fids with a Coming soon pill equal COMING_SOON_IDS').toEqual([...COMING_SOON_IDS].sort())
+    await attachJson(testInfo, 'library-cards-content', measured)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('library journeys: a click walks from home to each group and feature, and Back returns', async ({ page }, testInfo) => {
+    test.setTimeout(300_000)
+    const errors = collectErrors(page)
+    await prepare(page)
+    const measured: Record<string, unknown>[] = []
+    await visit(page, '/')
+    for (let k = 0; k < GROUPS.length; k++) {
+      const { gid, fids } = GROUPS[k]
+      await page.locator('#lib-main .lib-card').nth(k).click()
+      await expect(page, `home card ${k}: opens group ${gid}`).toHaveURL(`${LIBRARY_URL}/${gid}`)
+      await expect(page.locator('[id^="fc-"]').first(), `/${gid}: cards render`).toBeVisible()
+      const shown = await page.locator('[id^="fc-"]').evaluateAll((els) => els.map((e) => e.id.slice(3)))
+      expect.soft(shown, `/${gid}: card ids equal the discovered fids`).toEqual(fids)
+      for (const fid of fids) {
+        const card = page.locator(`#fc-${fid}`)
+        const title = (await card.evaluate((el) => el.querySelector('.t-body-sm')?.previousElementSibling?.textContent ?? '')).trim()
+        await card.click()
+        await expect(page, `#fc-${fid}: opens the feature`).toHaveURL(`${LIBRARY_URL}/${gid}/${fid}`)
+        await expect(page.getByTestId('lib-player'), `/${gid}/${fid}: player visible`).toBeVisible()
+        await expect(page.locator('h2'), `/${gid}/${fid}: h2 is the card title`).toHaveText(title)
+        measured.push({ gid, fid, title })
+        await page.goBack()
+        await expect(page, `/${gid}/${fid}: Back returns to the group`).toHaveURL(`${LIBRARY_URL}/${gid}`)
+        await expect(card, `/${gid}: card ${fid} visible after Back`).toBeVisible()
+      }
+      await page.goBack()
+      await expect(page, `/${gid}: Back returns home`).toHaveURL(`${LIBRARY_URL}/`)
+    }
+    await attachJson(testInfo, 'library-browse', measured)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('library journeys: each demo step shows its caption, and Replay at the last step returns to step 1', async ({ page }, testInfo) => {
+    test.setTimeout(240_000)
+    const errors = collectErrors(page)
+    await prepare(page)
+    await resize(page, 1280, 1080)
+    const measured: Record<string, unknown>[] = []
+    const pad = (k: number) => String(k).padStart(2, '0')
+    for (const { gid, fid } of FEATURES()) {
+      await visit(page, `/${gid}/${fid}`)
+      const label = page.getByTestId('lib-player').getByText(/^\d{2} \/ \d{2}$/)
+      await expect(label).toBeVisible()
+      const n = Number((await label.textContent())!.slice(5))
+      const scrub = page.locator('#lib-scrub')
+      const toggle = page.getByRole('button', { name: 'Play or pause' })
+      // same pause as the scene test: toggle only a playing clock, seek off an ended one
+      if ((await toggle.getAttribute('data-state')) === 'playing') await toggle.click()
+      if ((await toggle.getAttribute('data-state')) === 'ended') await scrub.click({ position: { x: 1, y: 3 } })
+      await expect(toggle, `${gid}/${fid}: the player is paused before seeking`).toHaveAttribute('data-state', 'paused')
+      const demo = page.locator('.t-eyebrow', { hasText: 'In this demo' }).locator('xpath=following-sibling::div[1]/button')
+      await expect(demo, `${gid}/${fid}: one "In this demo" entry per step`).toHaveCount(n)
+      for (let i = 0; i < n; i++) {
+        const bar = await rectOf(scrub, '#lib-scrub')
+        await scrub.click({ position: { x: ((i + 0.5) / n) * bar.width, y: bar.height / 2 } })
+        await expect(label, `${gid}/${fid}: seek to step ${i + 1}`).toHaveText(`${pad(i + 1)} / ${pad(n)}`)
+        const caption = ((await label.evaluate((el) => el.nextElementSibling?.textContent)) ?? '').trim()
+        const entry = (await demo.nth(i).locator('span').nth(1).textContent())?.trim() ?? ''
+        measured.push({ gid, fid, step: i + 1, steps: n, caption, entry })
+        expect.soft(caption, `${gid}/${fid} step ${i + 1}: caption is not empty`).not.toBe('')
+        expect.soft(caption, `${gid}/${fid} step ${i + 1}: player caption equals "In this demo" entry`).toBe(entry)
+        await expect.soft(demo.nth(i), `${gid}/${fid} step ${i + 1}: entry is the current step`).toHaveAttribute('aria-current', 'step')
+      }
+      // Replay is the ended Play or pause button; a click restarts at step 1
+      const bar = await rectOf(scrub, '#lib-scrub')
+      await scrub.click({ position: { x: 0.995 * bar.width, y: bar.height / 2 } })
+      await toggle.click()
+      await expect(toggle, `${gid}/${fid}: the demo ends`).toHaveAttribute('data-state', 'ended')
+      await expect.soft(label, `${gid}/${fid}: Replay starts from the last step`).toHaveText(`${pad(n)} / ${pad(n)}`)
+      await toggle.click()
+      await expect(toggle, `${gid}/${fid}: Replay plays`).toHaveAttribute('data-state', 'playing')
+      await expect.soft(label, `${gid}/${fid}: Replay returns to step 1`).toHaveText(`01 / ${pad(n)}`)
+    }
+    await attachJson(testInfo, 'library-captions', measured)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test("library journeys: Open in Platform signed out lands on the landing's Create an account dialog", async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await visit(page, '/rules/validate')
+    await page.getByRole('link', { name: 'Open in Platform' }).click()
+    await page.waitForURL((u) => u.href.startsWith(BAKED_LANDING_URL))
+    await expect(page.getByRole('dialog', { name: 'Create an account' }), 'landing opens registration').toBeVisible()
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 })

@@ -13,6 +13,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,6 +24,15 @@ const (
 	sectionSuite = "prod_check"
 	sectionFile  = ".github/workflows/nightly.yml"
 	secretsUnset = "secrets PROD_PROBE_EMAIL and PROD_PROBE_PASSWORD are not set"
+	// rawLocation holds a 3xx Location the guard hid from net/http, so a bad one cannot fail the read.
+	rawLocation = "X-Prodcheck-Location"
+
+	// hstsValue, hstsURLs and the apex request mirror e2e/smoke/transport-security.spec.ts (TestHSTS_URLsMatchTheSpec).
+	hstsValue = "max-age=63072000; includeSubDomains; preload"
+	apexHTTP  = "http://ascomply.com/hsts-check?q=1"
+	apexHost  = "ascomply.com"
+	apexPath  = "/hsts-check"
+	apexQuery = "q=1"
 )
 
 // allowedPosts is every non-GET the run may send.
@@ -35,7 +45,25 @@ var (
 	wantServices = []string{"gateway", "auth", "tenancy", "portfolio", "invoice", "validation", "dashboard", "submission", "notifications", "worker", "docling"}
 	sites        = []string{"app.ascomply.com", "www.ascomply.com", "www.ascomply.com/library", "www.ascomply.com/blog", "ops.ascomply.com", "sup.ascomply.com"}
 	sha40        = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	scriptSrc    = regexp.MustCompile(`src="(/assets/[^"]*\.js)"`)
+	scriptSrc    = regexp.MustCompile(`src="((?:/library|/blog)?/assets/[^"]*\.js)"`)
+	// ceiling: an unrelated quoted 64-hex string in a bundle fails the step, narrow the pattern then
+	digestLiteral = regexp.MustCompile(`["'` + "`" + `]\s*[0-9a-fA-F]{64}\s*["'` + "`" + `]`)
+	hstsURLs      = []string{
+		"https://ascomply.com/",
+		"https://ascomply.com/blog/x?q=1",
+		"https://www.ascomply.com/",
+		"https://www.ascomply.com/blog/",
+		"https://www.ascomply.com/library/",
+		"https://api.ascomply.com/",
+		"https://api.ascomply.com/health",
+		"https://app.ascomply.com/",
+		"https://ops.ascomply.com/",
+		"https://sup.ascomply.com/",
+		"https://blog.ascomply.com/",
+		"https://blog.ascomply.com/x?q=1",
+		"https://library.ascomply.com/",
+		"https://library.ascomply.com/library/rules",
+	}
 )
 
 // targets holds every address and the retry pause, so a test points the tool at httptest.
@@ -43,6 +71,8 @@ type targets struct {
 	api       string
 	landing   string
 	siteURL   func(site string) string
+	hsts      []string
+	apexHTTP  string
 	retryWait time.Duration
 }
 
@@ -57,6 +87,8 @@ func prodConfig() config {
 			api:       "https://api.ascomply.com",
 			landing:   "https://www.ascomply.com",
 			siteURL:   func(s string) string { return "https://" + s + "/build.txt" },
+			hsts:      hstsURLs,
+			apexHTTP:  apexHTTP,
 			retryWait: 20 * time.Second,
 		},
 		getenv: os.Getenv,
@@ -89,6 +121,7 @@ type serviceHealth struct {
 	Build    string   `json:"build"`
 	Ready    *bool    `json:"ready"`
 	NotReady []string `json:"not_ready"`
+	Sentry   string   `json:"sentry"`
 }
 
 // guard is the one choke point for what the run may send: GET, and POST to allowedPosts.
@@ -98,7 +131,27 @@ func (g guard) RoundTrip(r *http.Request) (*http.Response, error) {
 	if r.Method != http.MethodGet && !(r.Method == http.MethodPost && allowedPosts[r.URL.Path]) {
 		return nil, fmt.Errorf("prodcheck: %s %s is not an allowed call", r.Method, r.URL.Path)
 	}
-	return g.next.RoundTrip(r)
+	resp, err := g.next.RoundTrip(r)
+	if err == nil && resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		if loc := resp.Header.Get("Location"); loc != "" {
+			resp.Header.Set(rawLocation, loc)
+			resp.Header.Del("Location")
+		}
+	}
+	return resp, err
+}
+
+// inParallel runs fn(0..n-1) at once and waits; each fn writes only its own index.
+func inParallel(n int, fn func(i int)) {
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			fn(i)
+		}(i)
+	}
+	wg.Wait()
 }
 
 type checker struct {
@@ -113,9 +166,11 @@ type checker struct {
 }
 
 func newClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.MaxIdleConnsPerHost = 16 // the parallel reads keep their connections, so the tests do not exhaust ports
 	return &http.Client{
 		Timeout:       40 * time.Second,
-		Transport:     guard{http.DefaultTransport},
+		Transport:     guard{tr},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
@@ -142,7 +197,10 @@ func runWith(args []string, stdout, stderr io.Writer, cfg config) int {
 	c.step("fleet is ready", c.fleetStep)
 	c.step("services run main's head", c.buildsStep)
 	c.step("sites serve main's head", c.sitesStep)
+	c.step("every host sends HSTS", c.hstsStep)
+	c.step("every service reports Sentry on", c.sentryStep)
 	c.step("landing carries the production GA4 id", c.gaStep)
+	c.step("no production page ships the Sentry test digest", c.testHookStep)
 	c.step("probe signs in", c.signInStep)
 	c.step("probe has no registration metadata", c.registrationStep)
 	c.step("probe loads its workspace", c.workspaceStep)
@@ -201,23 +259,43 @@ func (c *checker) get(u string, headers map[string]string) (code int, body []byt
 }
 
 func (c *checker) getOnce(u string, headers map[string]string) (int, []byte) {
+	code, _, body := c.readOnce(u, headers)
+	return code, body
+}
+
+// readOnce makes one GET; code is 0 when nothing answered.
+func (c *checker) readOnce(u string, headers map[string]string) (int, http.Header, []byte) {
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
-		return 0, nil
+		return 0, nil, nil
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return 0, nil
+		return 0, nil, nil
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
-		return 0, nil
+		return 0, nil, nil
 	}
-	return resp.StatusCode, body
+	return resp.StatusCode, resp.Header, body
+}
+
+// getAny reads u with up to three tries. Any status below 500 is an answer; only no answer or a 5xx is retried.
+func (c *checker) getAny(u string) (code int, hdr http.Header, try int) {
+	for try = 1; try <= attempts; try++ {
+		code, hdr, _ = c.readOnce(u, nil)
+		if code != 0 && code < 500 {
+			return code, hdr, try
+		}
+		if try < attempts {
+			time.Sleep(c.t.retryWait)
+		}
+	}
+	return code, hdr, attempts
 }
 
 func answered(code int) string {
@@ -344,6 +422,43 @@ func (c *checker) buildsStep() (string, string) {
 	return "passed", ""
 }
 
+// sentryStep wants "on" from every service but auth, which reports no health fields. A service that is not up is the fleet step's to report.
+func (c *checker) sentryStep() (string, string) {
+	if len(c.fleet) == 0 {
+		return "skipped", "fleet not read"
+	}
+	var bad []string
+	for _, name := range wantServices {
+		if name == "auth" {
+			continue
+		}
+		state, down := "none", false
+		for _, s := range c.fleet {
+			if s.Name != name {
+				continue
+			}
+			if s.Status != "up" {
+				down = true
+				break
+			}
+			if s.Sentry == "on" || s.Sentry == "off" {
+				state = s.Sentry
+				break
+			}
+		}
+		if down {
+			continue
+		}
+		if state != "on" {
+			bad = append(bad, name+"="+state)
+		}
+	}
+	if len(bad) > 0 {
+		return "failed", "sentry is not on: " + strings.Join(bad, ", ")
+	}
+	return "passed", ""
+}
+
 func (c *checker) sitesStep() (string, string) {
 	if c.expected == "" {
 		return "failed", "main's head was not resolved"
@@ -367,6 +482,71 @@ func (c *checker) sitesStep() (string, string) {
 	return "passed", passedOn(worst)
 }
 
+func (c *checker) hstsStep() (string, string) {
+	n := len(c.t.hsts)
+	codes, hdrs, tries := make([]int, n+1), make([]http.Header, n+1), make([]int, n+1)
+	inParallel(n+1, func(i int) {
+		u := c.t.apexHTTP
+		if i < n {
+			u = c.t.hsts[i]
+		}
+		codes[i], hdrs[i], tries[i] = c.getAny(u)
+	})
+	var problems []string
+	worst := 1
+	for i, u := range c.t.hsts {
+		code, hdr := codes[i], hdrs[i]
+		worst = max(worst, tries[i])
+		if code == 0 || code >= 500 {
+			problems = append(problems, u+" "+answered(code))
+			continue
+		}
+		switch got := hdr.Values("Strict-Transport-Security"); {
+		case len(got) == 0:
+			problems = append(problems, u+" has no HSTS header")
+		case len(got) > 1:
+			problems = append(problems, fmt.Sprintf("%s sends %d HSTS header(s)", u, len(got)))
+		case got[0] != hstsValue:
+			v := got[0]
+			if len(v) > 80 {
+				v = v[:80]
+			}
+			problems = append(problems, fmt.Sprintf("%s sends HSTS %q", u, v))
+		}
+	}
+	worst = max(worst, tries[n])
+	if codes[n] != http.StatusMovedPermanently {
+		problems = append(problems, "http apex "+answered(codes[n]))
+	} else if bad := apexLocationProblem(hdrs[n].Get(rawLocation)); bad != "" {
+		problems = append(problems, "http apex Location is "+bad)
+	}
+	if len(problems) > 0 {
+		return "failed", strings.Join(problems, "; ")
+	}
+	return "passed", passedOn(worst)
+}
+
+// apexLocationProblem names what is wrong with the apex redirect target, or returns "".
+func apexLocationProblem(loc string) string {
+	if loc == "" {
+		return "missing"
+	}
+	l, err := url.Parse(loc)
+	switch {
+	case err != nil:
+		return "unparsable"
+	case l.Scheme != "https":
+		return "not https"
+	case l.Hostname() != apexHost:
+		return "not on " + apexHost
+	case l.Path != apexPath:
+		return "not on " + apexPath
+	case l.RawQuery != apexQuery:
+		return "not on ?" + apexQuery
+	}
+	return ""
+}
+
 func (c *checker) gaStep() (string, string) {
 	code, page, worst := c.get(c.t.landing+"/", nil)
 	if code != http.StatusOK {
@@ -376,14 +556,7 @@ func (c *checker) gaStep() (string, string) {
 	if err != nil {
 		return "failed", "landing address is invalid"
 	}
-	var srcs []string
-	seen := map[string]bool{}
-	for _, m := range scriptSrc.FindAllStringSubmatch(string(page), -1) {
-		if !seen[m[1]] && len(srcs) < 10 {
-			seen[m[1]] = true
-			srcs = append(srcs, m[1])
-		}
-	}
+	srcs := entryScripts(page)
 	if len(srcs) == 0 {
 		return "failed", "landing names no script"
 	}
@@ -402,6 +575,79 @@ func (c *checker) gaStep() (string, string) {
 		}
 	}
 	return "failed", "landing bundle lacks " + gaID
+}
+
+// entryScripts returns the distinct script paths a page names, capped at 10.
+func entryScripts(page []byte) []string {
+	var srcs []string
+	seen := map[string]bool{}
+	for _, m := range scriptSrc.FindAllStringSubmatch(string(page), -1) {
+		if !seen[m[1]] && len(srcs) < 10 {
+			seen[m[1]] = true
+			srcs = append(srcs, m[1])
+		}
+	}
+	return srcs
+}
+
+func (c *checker) testHookStep() (string, string) {
+	found, tries := make([][]string, len(sites)), make([]int, len(sites))
+	inParallel(len(sites), func(i int) { found[i], tries[i] = c.siteHook(sites[i]) })
+	var problems []string
+	worst := 1
+	for i := range sites {
+		problems = append(problems, found[i]...)
+		worst = max(worst, tries[i])
+	}
+	if len(problems) > 0 {
+		return "failed", strings.Join(problems, "; ")
+	}
+	return "passed", passedOn(worst)
+}
+
+// tooBig reports a body that reached maxBody, where readOnce cuts it.
+func tooBig(body []byte) bool { return len(body) >= maxBody }
+
+func (c *checker) siteHook(site string) (problems []string, worst int) {
+	worst = 1
+	tooBigText := fmt.Sprintf("larger than %d MiB", maxBody>>20)
+	pageURL := strings.TrimSuffix(c.t.siteURL(site), "build.txt")
+	code, page, try := c.get(pageURL, nil)
+	worst = max(worst, try)
+	if code != http.StatusOK {
+		return append(problems, site+" page "+answered(code)), worst
+	}
+	if tooBig(page) {
+		return append(problems, site+" page "+tooBigText), worst
+	}
+	base, err := url.Parse(pageURL)
+	srcs := entryScripts(page)
+	if err != nil || len(srcs) == 0 {
+		return append(problems, site+" names no script"), worst
+	}
+	held := false
+	for _, src := range srcs {
+		ref, err := url.Parse(src)
+		if err != nil {
+			problems = append(problems, site+" names a bad script address")
+			continue
+		}
+		code, js, try := c.get(base.ResolveReference(ref).String(), nil)
+		worst = max(worst, try)
+		if code != http.StatusOK {
+			problems = append(problems, site+" bundle "+answered(code))
+			continue
+		}
+		if tooBig(js) {
+			problems = append(problems, site+" bundle "+tooBigText)
+			continue
+		}
+		held = held || digestLiteral.Match(js)
+	}
+	if held {
+		problems = append(problems, site+" holds a test digest")
+	}
+	return problems, worst
 }
 
 // post sends one JSON POST with no retry; code is 0 when nothing answered.

@@ -51,6 +51,7 @@ import {
   settledRead,
   shardPersonas,
   uniqueGarbageBytes,
+  uniqueHonestReceiptPdfBytes,
   uniquePdfBytes,
   VOCABULARY,
 } from './importWizardShared'
@@ -137,18 +138,13 @@ function uniqueAiUnavailablePdfBytes(): Buffer {
   return Buffer.concat([AI_UNAVAILABLE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
-// Honest fixtures (fxE2ECopies): a printed credit note of INV-ORIG-3401, a printed receipt, and an
+// Honest fixtures (fxE2ECopies): a printed credit note of INV-ORIG-3401 and an
 // NRS-labelled invoice. Same recipe.
 const HONEST_CREDIT_NOTE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'honest_credit_note.pdf'))
-const HONEST_RECEIPT_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'honest_receipt_invoice.pdf'))
 const AI_NRS_LABELLED_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_nrs_labelled_invoice.pdf'))
 
 function uniqueHonestCreditNotePdfBytes(): Buffer {
   return Buffer.concat([HONEST_CREDIT_NOTE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
-}
-
-function uniqueHonestReceiptPdfBytes(): Buffer {
-  return Buffer.concat([HONEST_RECEIPT_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
 function uniqueAiNrsLabelledPdfBytes(): Buffer {

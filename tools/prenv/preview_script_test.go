@@ -73,15 +73,26 @@ esac
 `
 
 // previewCurlShim answers the testIamPermissions call: HTTP 200 and an empty permission set, unless $D/curl-code says otherwise.
+// It logs argv to $D/curl-calls and stdin to $D/curl-stdin; $D/curl-body-<last url part> and $D/curl-code-<same> answer one endpoint.
 func previewCurlShim(prefix string) string {
-	return prefix + `out=
+	return prefix + `echo "$*" >> "$D/curl-calls"
+case " $* " in *" -H @- "*) cat >> "$D/curl-stdin" ;; esac
+out=
 prev=
 for a in "$@"; do
   [ "$prev" = -o ] && out=$a
   prev=$a
+  ep=${a##*/}
 done
-[ -z "$out" ] || echo '{}' > "$out"
-cat "$D/curl-code" 2>/dev/null || printf 200
+if [ -n "$out" ]; then
+  cp "$D/curl-body-$ep" "$out" 2>/dev/null || echo '{}' > "$out"
+fi
+if [ -s "$D/curl-seq-$ep" ]; then
+  head -n 1 "$D/curl-seq-$ep" | tr -d '\n'
+  sed -i.bak 1d "$D/curl-seq-$ep"
+  exit 0
+fi
+cat "$D/curl-code-$ep" 2>/dev/null || cat "$D/curl-code" 2>/dev/null || printf 200
 `
 }
 
@@ -671,8 +682,8 @@ func TestPreviewContactCommandsRefuseAPR(t *testing.T) {
 			t.Run(cmd+"/"+bad, func(t *testing.T) {
 				t.Parallel()
 				r := runPreview(t, nil, cmd, bad)
-				if r.code == 0 || r.exists("calls") {
-					t.Fatalf("exit %d, gcloud called %v", r.code, r.exists("calls"))
+				if r.code == 0 || r.exists("calls") || r.exists("curl-calls") {
+					t.Fatalf("exit %d, gcloud called %v, curl called %v", r.code, r.exists("calls"), r.exists("curl-calls"))
 				}
 			})
 		}
@@ -983,15 +994,22 @@ func TestPreviewCapCountsEveryPreview(t *testing.T) {
 
 var mailSecrets = []string{"nightly-gotrue-smtp-pass", "nightly-resend-sending-key", "nightly-resend-read-key", "nightly-resend-receiving-domain"}
 
+const (
+	blogTopicID   = "11111111-aaaa-4bbb-8ccc-222222222222"
+	blogSegmentID = "33333333-aaaa-4bbb-8ccc-444444444444"
+)
+
+var blogIDEnv = []string{"RESEND_BLOG_TOPIC_ID=" + blogTopicID, "RESEND_BLOG_SEGMENT_ID=" + blogSegmentID}
+
 func TestPreviewMailOnMountsOnlyTheNightlysMail(t *testing.T) {
 	t.Parallel()
-	r := runPreview(t, nil, "mail-on", "nightly")
+	r := runPreviewEnv(t, blogIDEnv, nil, "mail-on", "nightly")
 	if r.code != 0 {
 		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
 	}
 	lines := nonBlankLines(r.file(t, "calls"))
-	if len(lines) != 2 {
-		t.Fatalf("calls = %v, want two service updates", lines)
+	if len(lines) != 4 {
+		t.Fatalf("calls = %v, want four service updates", lines)
 	}
 	gw := "https://gateway-nightly-944095690109.africa-south1.run.app"
 	for _, w := range []string{"run services update auth-nightly ", "--update-secrets GOTRUE_SMTP_PASS=nightly-gotrue-smtp-pass:latest",
@@ -1006,20 +1024,111 @@ func TestPreviewMailOnMountsOnlyTheNightlysMail(t *testing.T) {
 	if !strings.HasPrefix(lines[1], "run services update tenancy-nightly ") || !strings.Contains(lines[1], "--update-secrets RESEND_SENDING_KEY=nightly-resend-sending-key:latest") {
 		t.Errorf("tenancy update = %q", lines[1])
 	}
+	ids := "--update-env-vars RESEND_BLOG_TOPIC_ID=" + blogTopicID + ",RESEND_BLOG_SEGMENT_ID=" + blogSegmentID
+	if !strings.HasPrefix(lines[2], "run services update notifications-nightly ") ||
+		!strings.Contains(lines[2], "--update-secrets RESEND_SENDING_KEY=nightly-resend-sending-key:latest,RESEND_RECEIVING_DOMAIN=nightly-resend-receiving-domain:latest") ||
+		!strings.Contains(lines[2], ids) {
+		t.Errorf("notifications update = %q", lines[2])
+	}
+	if !strings.HasPrefix(lines[3], "run services update worker-nightly ") ||
+		!strings.Contains(lines[3], "--update-secrets RESEND_RECEIVING_DOMAIN=nightly-resend-receiving-domain:latest") ||
+		!strings.Contains(lines[3], ids) || strings.Contains(lines[3], "RESEND_SENDING_KEY") {
+		t.Errorf("worker update = %q", lines[3])
+	}
 	if strings.Contains(r.file(t, "calls"), "versions access") {
 		t.Error("mail-on read a secret value")
 	}
 }
 
+func TestPreviewMailOnRefusesMissingOrBadIds(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"RESEND_BLOG_TOPIC_ID", "RESEND_BLOG_SEGMENT_ID"} {
+		for _, bad := range []string{"", "x"} {
+			t.Run(name+"/"+bad, func(t *testing.T) {
+				t.Parallel()
+				env := []string{"RESEND_BLOG_TOPIC_ID=" + blogTopicID, "RESEND_BLOG_SEGMENT_ID=" + blogSegmentID, name + "=" + bad}
+				r := runPreviewEnv(t, env, nil, "mail-on", "nightly")
+				if r.code == 0 || !strings.Contains(r.stderr, name) || r.exists("calls") {
+					t.Fatalf("exit %d, stderr %q, gcloud called %v", r.code, r.stderr, r.exists("calls"))
+				}
+			})
+		}
+	}
+}
+
+func blogListBody(items ...string) string {
+	return `{"data":[` + strings.Join(items, ",") + `],"has_more":false}`
+}
+
+func blogItem(name, id string) string { return `{"id":"` + id + `","name":"` + name + `"}` }
+
+func TestPreviewMailBlogIdsPrintsTheNamedIds(t *testing.T) {
+	t.Parallel()
+	r := runPreviewEnv(t, []string{"RESEND_READ_KEY=k-secret"}, func(dir string) {
+		writeIn(t, dir, "curl-body-topics", blogListBody(blogItem("Marketing", "99999999-aaaa-4bbb-8ccc-000000000001"), blogItem("Blog", blogTopicID)))
+		writeIn(t, dir, "curl-body-segments", blogListBody(blogItem("Registered", "99999999-aaaa-4bbb-8ccc-000000000002"), blogItem("Blog", blogSegmentID)))
+	}, "mail-blog-ids", "nightly")
+	want := "RESEND_BLOG_TOPIC_ID=" + blogTopicID + "\nRESEND_BLOG_SEGMENT_ID=" + blogSegmentID + "\n"
+	if r.code != 0 || r.stdout != want {
+		t.Fatalf("exit %d, stdout %q, want %q, stderr %q", r.code, r.stdout, want, r.stderr)
+	}
+	calls := r.file(t, "curl-calls")
+	if strings.Contains(calls, "k-secret") || !strings.Contains(calls, "-H @-") ||
+		!strings.Contains(calls, "https://api.resend.com/topics") || !strings.Contains(calls, "https://api.resend.com/segments") {
+		t.Errorf("curl argv = %q", calls)
+	}
+	if !strings.Contains(r.file(t, "curl-stdin"), "Authorization: Bearer k-secret") {
+		t.Error("the key did not reach curl on stdin")
+	}
+}
+
+func TestPreviewMailBlogIdsFailsLoudly(t *testing.T) {
+	t.Parallel()
+	t.Run("no read key", func(t *testing.T) {
+		t.Parallel()
+		r := runPreview(t, nil, "mail-blog-ids", "nightly")
+		if r.code == 0 || !strings.Contains(r.stderr, "RESEND_READ_KEY") || r.exists("curl-calls") {
+			t.Fatalf("exit %d, stderr %q, curl called %v", r.code, r.stderr, r.exists("curl-calls"))
+		}
+	})
+	ok := blogListBody(blogItem("Blog", blogTopicID))
+	okSeg := blogListBody(blogItem("Blog", blogSegmentID))
+	for _, c := range []struct {
+		name         string
+		files        map[string]string
+		wantEndpoint string
+		wantStatus   string
+	}{
+		{"no Blog topic", map[string]string{"curl-body-topics": blogListBody(blogItem("Marketing", blogTopicID)), "curl-body-segments": okSeg}, "/topics", ""},
+		{"two Blog segments", map[string]string{"curl-body-topics": ok, "curl-body-segments": blogListBody(blogItem("Blog", blogSegmentID), blogItem("Blog", blogTopicID))}, "/segments", ""},
+		{"HTTP 401", map[string]string{"curl-body-topics": `{"message":"body-secret","data":[` + blogItem("Blog", blogTopicID) + `]}`, "curl-code-topics": "401"}, "/topics", "401"},
+		{"has_more without Blog", map[string]string{"curl-body-topics": `{"data":[` + blogItem("Marketing", blogTopicID) + `],"has_more":true}`, "curl-body-segments": okSeg}, "/topics", ""},
+		{"id not a UUID", map[string]string{"curl-body-topics": ok, "curl-body-segments": blogListBody(blogItem("Blog", "not-a-uuid"))}, "/segments", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := runPreviewEnv(t, []string{"RESEND_READ_KEY=k-secret"}, func(dir string) {
+				for n, b := range c.files {
+					writeIn(t, dir, n, b)
+				}
+			}, "mail-blog-ids", "nightly")
+			if r.code == 0 || !strings.Contains(r.stderr, c.wantEndpoint) || !strings.Contains(r.stderr, c.wantStatus) ||
+				strings.Contains(r.stderr, "k-secret") || strings.Contains(r.stderr, "body-secret") {
+				t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+			}
+		})
+	}
+}
+
 func TestPreviewMailCommandsRefuseAPR(t *testing.T) {
 	t.Parallel()
-	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-off", "mail-read-key", "mail-domain"} {
+	for _, cmd := range []string{"mail-preflight", "mail-on", "mail-off", "mail-read-key", "mail-domain", "mail-blog-ids"} {
 		for _, bad := range []string{"7", ""} {
 			t.Run(cmd+"/"+bad, func(t *testing.T) {
 				t.Parallel()
-				r := runPreview(t, nil, cmd, bad)
-				if r.code == 0 || r.exists("calls") {
-					t.Fatalf("exit %d, gcloud called %v", r.code, r.exists("calls"))
+				r := runPreviewEnv(t, append([]string{"RESEND_READ_KEY=k"}, blogIDEnv...), nil, cmd, bad)
+				if r.code == 0 || r.exists("calls") || r.exists("curl-calls") {
+					t.Fatalf("exit %d, gcloud called %v, curl called %v", r.code, r.exists("calls"), r.exists("curl-calls"))
 				}
 			})
 		}
@@ -1153,8 +1262,8 @@ func TestPreviewMailOffUnmountsAndTurnsAutoConfirmOn(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
 	}
 	lines := nonBlankLines(r.file(t, "calls"))
-	if len(lines) != 2 {
-		t.Fatalf("calls = %v, want two service updates", lines)
+	if len(lines) != 4 {
+		t.Fatalf("calls = %v, want four service updates", lines)
 	}
 	if !strings.HasPrefix(lines[0], "run services update auth-nightly ") || !strings.Contains(lines[0], "--remove-secrets GOTRUE_SMTP_PASS") || !strings.Contains(lines[0], "GOTRUE_MAILER_AUTOCONFIRM=true") {
 		t.Errorf("auth update = %q", lines[0])
@@ -1162,16 +1271,31 @@ func TestPreviewMailOffUnmountsAndTurnsAutoConfirmOn(t *testing.T) {
 	if !strings.HasPrefix(lines[1], "run services update tenancy-nightly ") || !strings.Contains(lines[1], "--remove-secrets RESEND_SENDING_KEY") {
 		t.Errorf("tenancy update = %q", lines[1])
 	}
+	ids := "--remove-env-vars RESEND_BLOG_TOPIC_ID,RESEND_BLOG_SEGMENT_ID"
+	if !strings.HasPrefix(lines[2], "run services update notifications-nightly ") || !strings.Contains(lines[2], "--remove-secrets RESEND_SENDING_KEY,RESEND_RECEIVING_DOMAIN") || !strings.Contains(lines[2], ids) {
+		t.Errorf("notifications update = %q", lines[2])
+	}
+	if !strings.HasPrefix(lines[3], "run services update worker-nightly ") || !strings.Contains(lines[3], "--remove-secrets RESEND_RECEIVING_DOMAIN ") || !strings.Contains(lines[3], ids) {
+		t.Errorf("worker update = %q", lines[3])
+	}
 }
 
-func TestPreviewMailOffTriesBothServicesAndFailsWhenOneFails(t *testing.T) {
+func TestPreviewMailOffTriesEveryServiceAndFailsWhenOneFails(t *testing.T) {
 	t.Parallel()
-	r := runPreview(t, func(dir string) { writeIn(t, dir, "failupdate", "auth-nightly\n") }, "mail-off", "nightly")
-	if r.code == 0 || !strings.Contains(r.stderr, "mail-off left real mail mounted") {
-		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
-	}
-	if !strings.Contains(r.file(t, "calls"), "run services update tenancy-nightly ") {
-		t.Errorf("tenancy was not tried after auth failed: %s", r.file(t, "calls"))
+	services := []string{"auth-nightly", "tenancy-nightly", "notifications-nightly", "worker-nightly"}
+	for _, failed := range services {
+		t.Run(failed, func(t *testing.T) {
+			t.Parallel()
+			r := runPreview(t, func(dir string) { writeIn(t, dir, "failupdate", failed+"\n") }, "mail-off", "nightly")
+			if r.code == 0 || !strings.Contains(r.stderr, "mail-off left real mail mounted") {
+				t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+			}
+			for _, svc := range services {
+				if !strings.Contains(r.file(t, "calls"), "run services update "+svc+" ") {
+					t.Errorf("%s was not tried after %s failed: %s", svc, failed, r.file(t, "calls"))
+				}
+			}
+		})
 	}
 }
 
@@ -1452,5 +1576,31 @@ func TestPreviewInvariantsRefuseSentryOnTheNightly(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func TestPreviewBlogIDRetriesA5xxButNotA401(t *testing.T) {
+	t.Parallel()
+	body := blogListBody(blogItem("Blog", blogTopicID))
+	ok := runPreviewEnv(t, []string{"RESEND_READ_KEY=k"}, func(dir string) {
+		writeIn(t, dir, "curl-body-topics", body)
+		writeIn(t, dir, "curl-body-segments", blogListBody(blogItem("Blog", blogSegmentID)))
+		writeIn(t, dir, "curl-seq-topics", "500\n200\n")
+	}, "mail-blog-ids", "nightly")
+	if ok.code != 0 || !strings.Contains(ok.stdout, "RESEND_BLOG_TOPIC_ID="+blogTopicID) {
+		t.Fatalf("500 then 200: exit %d, stdout %q, stderr %q", ok.code, ok.stdout, ok.stderr)
+	}
+	if n := strings.Count(ok.file(t, "curl-calls"), "/topics"); n != 2 {
+		t.Errorf("topics calls = %d, want 2", n)
+	}
+	bad := runPreviewEnv(t, []string{"RESEND_READ_KEY=k"}, func(dir string) {
+		writeIn(t, dir, "curl-body-topics", body)
+		writeIn(t, dir, "curl-seq-topics", "401\n200\n")
+	}, "mail-blog-ids", "nightly")
+	if bad.code == 0 || !strings.Contains(bad.stderr, "401") {
+		t.Fatalf("401: exit %d, stderr %q", bad.code, bad.stderr)
+	}
+	if n := strings.Count(bad.file(t, "curl-calls"), "/topics"); n != 1 {
+		t.Errorf("401 topics calls = %d, want 1", n)
 	}
 }

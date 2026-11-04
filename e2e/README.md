@@ -82,6 +82,8 @@ deployed database, so parallel workers would race — entity-namespace contentio
 (Decision A8). The suite is not read-only, which is why CI runs it against ephemeral PR
 environments only.
 
+The suite needs `GATEWAY_TOKEN` and, off CI, a signed-in `gcloud` that can read `ascomply-preview` (secrets and ID tokens).
+
 ```bash
 GATEWAY_URL=... pnpm --filter @invoice-os/e2e test:api
 ```

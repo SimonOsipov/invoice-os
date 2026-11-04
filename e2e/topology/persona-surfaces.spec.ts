@@ -243,8 +243,12 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   const entityB = await createEntity(token, { name: `PERSONA-01 sweep B ${stamp}`, tin: freshTin() })
   const validatedNumber = `INV-P01-SWEEP-V-${stamp}`
   const draftNumber = `INV-P01-SWEEP-D-${stamp}`
-  await createValidatedInvoice(token, entityA.id, validatedNumber)
+  // Above-threshold fixture: it waits for approval, so the awaiting_approval guards hold on this spec's own rows.
+  await createValidatedInvoice(token, entityA.id, validatedNumber, approvableInvoiceFields(validatedNumber))
   await createInvoice(token, { entity_id: entityB.id, ...cleanInvoiceFields(draftNumber) })
+  // Number-only invoice: error-severity rules keep it draft, so needs_attention is above 0.
+  const blocked = await createInvoice(token, { entity_id: entityB.id, invoice_number: `INV-P01-SWEEP-B-${stamp}` })
+  expect((await validateInvoice(token, blocked.id)).status, 'the blocked fixture must stay draft').toBe('draft')
 
   // Every fixture write is complete BEFORE sign-in: DashboardActive and Sidebar each fetch
   // the rollup once at mount (useAsync, `immediate`, no deps), so the numbers on screen are
@@ -278,6 +282,22 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
     .filter({ has: page.locator('.card-title', { hasText: /^Invoices$/ }) })
     .locator('span.money')
   await expect(invoicesKpiValue).toHaveText(String(invoiceTotal))
+
+  // Guards: a zero or a delta wired to counts.validated would pass without them.
+  expect(live.totals.needs_attention, 'the blocked draft must make needs_attention non-zero').toBeGreaterThan(0)
+  expect(live.totals.counts.draft).toBeGreaterThan(0)
+  expect(live.totals.counts.validated).toBeGreaterThan(0)
+  expect(live.totals.awaiting_approval).toBeGreaterThan(0)
+  expect(live.totals.awaiting_approval, 'awaiting_approval must differ from counts.validated').not.toBe(live.totals.counts.validated)
+  expect(live.totals.awaiting_approval, 'awaiting_approval must differ from counts.draft').not.toBe(live.totals.counts.draft)
+  const kpiTile = (title: RegExp) =>
+    page.locator('.pf-dash-row-a .pf-grid-2 > div').filter({ has: page.locator('.card-title', { hasText: title }) })
+  await expect(kpiTile(/^Exceptions$/).locator('span.money')).toHaveText(String(live.totals.needs_attention))
+  await expect(kpiTile(/^Exceptions$/).locator('span.mono')).toHaveText('to resolve')
+  await expect(kpiTile(/^Not yet submitted$/).locator('span.money')).toHaveText(
+    String(live.totals.counts.draft + live.totals.counts.validated),
+  )
+  await expect(kpiTile(/^Not yet submitted$/).locator('span.mono')).toHaveText(`${live.totals.awaiting_approval} awaiting approval`)
 
   // --- Invoices -------------------------------------------------------------------------
   await goTo(page, 'Invoices')

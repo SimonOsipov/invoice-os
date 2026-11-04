@@ -474,3 +474,18 @@ func TestConfirmHandler_LookupHasAThreeSecondDeadline(t *testing.T) {
 		t.Errorf("lookup deadlines = %v, want one within (0, 3s]", h.rs.remain)
 	}
 }
+
+func TestSubscribeHandler_ForeignAddressOnTheNightlyGuardIsAccepted(t *testing.T) {
+	w, spy, _ := ngWiring(t)
+	h := newNLHandlers(t)
+	h.n.Sender, h.n.Resend = w.Sender, w.Resend
+	h.rebuild()
+	ids := h.categories(t, 1)
+	rec := post(h.sub, subBody(ngForeign, ids, "weekly"), false)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", rec.Code)
+	}
+	if n := len(spy.seen()); n != 0 {
+		t.Errorf("foreign address made %d Resend requests, want 0", n)
+	}
+}

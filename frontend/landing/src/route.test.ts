@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { isInvitePath, isPrivacyPath, landingRouteName } from './route'
+import { INVITE_PATH, NOT_FOUND_PAGE, PRIVACY_PATH, isInvitePath, isPrivacyPath, landingRouteName } from './route'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROUTE_SRC = readFileSync(join(HERE, 'route.ts'), 'utf8')
@@ -124,5 +124,13 @@ describe('landingRouteName', () => {
       expect(landingRouteName(p), p).toBe('<unmatched>')
       expect(landingRouteName(p)).not.toBe(p)
     }
+  })
+})
+
+describe('route constants', () => {
+  it('route_constantsDriveTheMatchers', () => {
+    expect([PRIVACY_PATH, INVITE_PATH, NOT_FOUND_PAGE]).toEqual(['/privacy', '/invite', 'not-found'])
+    const got = ['/privacy', '/privacy/', '/PRIVACY', '/invite', '/x'].map((p) => isPrivacyPath(p) || isInvitePath(p))
+    expect(got).toEqual([true, true, true, true, false])
   })
 })

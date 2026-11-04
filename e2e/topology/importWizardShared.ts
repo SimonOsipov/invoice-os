@@ -63,6 +63,13 @@ export function uniquePdfBytes(): Buffer {
   return Buffer.concat([NATIVE_INVOICE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
+// The printed-receipt fixture (fxE2ECopies), fresh bytes per call for the same reason.
+const HONEST_RECEIPT_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'honest_receipt_invoice.pdf'))
+
+export function uniqueHonestReceiptPdfBytes(): Buffer {
+  return Buffer.concat([HONEST_RECEIPT_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
 // A *.pdf whose bytes are not a PDF: it uploads, then dead-letters in the worker.
 // Fresh bytes per call, for the same enqueue-key reason as uniquePdfBytes().
 export function uniqueGarbageBytes(): Buffer {

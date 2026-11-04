@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  type Dropper,
   approvalRun404Dropper,
   collectSourcedErrors,
   consoleErrorsLine,
@@ -241,12 +242,12 @@ describe('collectSourcedErrors', () => {
   const T401 = 'Failed to load resource: the server responded with a status of 401 ()'
   type Listener = (arg: unknown) => void
 
-  function fake() {
+  function fake(extra?: Dropper) {
     const listeners: Record<string, Listener[]> = {}
     const page = { on: (event: string, fn: Listener) => (listeners[event] ??= []).push(fn) }
     const emit = (event: string, arg: unknown) => listeners[event]?.forEach((fn) => fn(arg))
     return {
-      errors: collectSourcedErrors(page as unknown as Parameters<typeof collectSourcedErrors>[0]),
+      errors: collectSourcedErrors(page as unknown as Parameters<typeof collectSourcedErrors>[0], extra),
       response: (status: number, url: string) =>
         emit('response', { status: () => status, url: () => url, request: () => ({ method: () => 'GET' }) }),
       consoleMsg: (type: string, text: string, url = '') =>
@@ -313,6 +314,65 @@ describe('collectSourcedErrors', () => {
     const f = fake()
     f.response(200, 'https://gw.test/ok')
     expect(f.errors).toEqual([])
+  })
+
+  describe('transport error for an app asset (BUG-76)', () => {
+    const ASSET = 'https://app-pr-598-944095690109.africa-south1.run.app/assets/mark-UgrtOohT.png'
+    const CLOSED = 'Failed to load resource: net::ERR_CONNECTION_CLOSED'
+
+    it('does not collect net::ERR_CONNECTION_CLOSED for an /assets/ url', () => {
+      const f = fake()
+      f.consoleMsg('error', CLOSED, ASSET)
+      expect(f.errors).toEqual([])
+    })
+
+    it('still collects a 404 for an /assets/ url', () => {
+      const f = fake()
+      f.consoleMsg('error', 'Failed to load resource: the server responded with a status of 404 ()', ASSET)
+      expect(f.errors).toHaveLength(1)
+    })
+
+    it('still collects net::ERR_CONNECTION_CLOSED for an /api/ url', () => {
+      const f = fake()
+      f.consoleMsg('error', CLOSED, 'https://app-pr-598-944095690109.africa-south1.run.app/api/invoice/v1/invoices')
+      expect(f.errors).toHaveLength(1)
+    })
+
+    it('keeps a transport error whose url is empty or not under /assets/ at the path root', () => {
+      const urls = [
+        '',
+        'https://x.test/api/foo?next=/assets/a.png',
+        'https://x.test/v1/assets/a.png',
+        'https://x.test/assetsx/a.png',
+        'https://x.test/assets',
+        '/assets/a.png',
+      ]
+      const f = fake()
+      for (const u of urls) f.consoleMsg('error', CLOSED, u)
+      expect(f.errors).toHaveLength(urls.length)
+    })
+
+    it('keeps an /assets/ line that is not a net::ERR_ resource failure', () => {
+      const f = fake()
+      f.consoleMsg('error', 'Uncaught TypeError: net::ERR_CONNECTION_CLOSED', ASSET)
+      f.consoleMsg('error', 'Failed to load resource: the server responded with a status of 500 ()', ASSET)
+      expect(f.errors).toHaveLength(2)
+    })
+
+    it('drops the asset transport error with and without an extra dropper, and still runs extra for others', () => {
+      const never: Dropper = () => false
+      const only401: Dropper = (t) => t.includes('status of 401')
+      for (const extra of [undefined, never, only401]) {
+        const f = fake(extra)
+        f.consoleMsg('error', CLOSED, ASSET)
+        expect(f.errors, 'asset transport error dropped').toEqual([])
+      }
+      const f = fake(only401)
+      f.consoleMsg('error', 'Failed to load resource: the server responded with a status of 401 ()', 'https://gw.test/api/x')
+      f.consoleMsg('error', CLOSED, 'https://gw.test/api/x')
+      expect(f.errors).toHaveLength(1)
+      expect(f.errors[0]).toContain('ERR_CONNECTION_CLOSED')
+    })
   })
 })
 

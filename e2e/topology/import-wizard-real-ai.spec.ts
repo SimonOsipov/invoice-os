@@ -5,7 +5,7 @@ import { freshTin } from '../api/fixtures'
 import { PERF_HEADER, PERF_MAPPING } from '../importFixtures'
 import { signInAs } from '../personaSession'
 import { nightlyTarget } from '../targets'
-import { collectErrors, selectEntity, shardPersonas } from './importWizardShared'
+import { collectErrors, extractOneDocument, openExtractionReview, selectEntity, shardPersonas, uniqueHonestReceiptPdfBytes } from './importWizardShared'
 
 const { SHARD, PERSONAS } = shardPersonas('import-wizard-real-ai.spec.ts')
 
@@ -28,6 +28,9 @@ const LAYOUT_Y_MAPPING: Record<string, string> = {
 function oneInvoiceCsv(header: string, invoiceNumber: string): string {
   return `${header}\n${invoiceNumber},2026-01-15,87654321-0002,Run Buyer,NGN,1000.00,75.00,1075.00,Line item,10,100.00\n`
 }
+
+// copy: the keys of DOCUMENT_TYPE_NOTICE (frontend/app/src/lib/extractionReview.ts); transcribed, not imported.
+const NOTICE_TYPES = ['receipt', 'proforma', 'quotation', 'delivery note', 'statement', 'purchase order']
 
 const POST_SUFFIX = {
   suggest: '/api/invoice/v1/imports/suggest-mapping',
@@ -240,6 +243,27 @@ test.describe('the wizard on the real AI', () => {
     expect(invoices, 'the fresh entity holds exactly the one imported invoice').toHaveLength(1)
     await expect(page).toHaveURL(new RegExp(`/invoices/${invoices[0].id}$`), { timeout: 60_000 })
     await expect(page.getByTestId('invoice-detail')).toBeVisible()
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('not a tax invoice: a receipt is typed as a non-invoice, the banner names it, and it files', async ({ page }) => {
+    test.setTimeout(300_000)
+    const errors = collectErrors(page)
+
+    // extractOneDocument waits on invoice-detail: the import filed.
+    await extractOneDocument(page, 'not a tax invoice', { name: 'honest_receipt_invoice.pdf', buffer: uniqueHonestReceiptPdfBytes() })
+    await expect(page.getByTestId('invoice-detail')).toBeVisible()
+
+    const detail = await openExtractionReview(page)
+    const type = detail.document_type
+    expect(type, 'real Jev read the receipt as a tax invoice').not.toBeNull()
+    expect(NOTICE_TYPES, `the receipt was read as "${type}", not a non-invoice type that carries a notice`).toContain(type)
+
+    const banner = page.getByTestId('extraction-document-type')
+    await expect(banner).toBeVisible()
+    await expect(banner).toContainText(type as string)
+    await expect(banner).toContainText('not a tax invoice')
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

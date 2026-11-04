@@ -13,6 +13,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,6 +24,8 @@ const (
 	sectionSuite = "prod_check"
 	sectionFile  = ".github/workflows/nightly.yml"
 	secretsUnset = "secrets PROD_PROBE_EMAIL and PROD_PROBE_PASSWORD are not set"
+	// rawLocation holds a 3xx Location the guard hid from net/http, so a bad one cannot fail the read.
+	rawLocation = "X-Prodcheck-Location"
 
 	// hstsValue, hstsURLs and the apex request mirror e2e/smoke/transport-security.spec.ts (TestHSTS_URLsMatchTheSpec).
 	hstsValue = "max-age=63072000; includeSubDomains; preload"
@@ -128,7 +131,27 @@ func (g guard) RoundTrip(r *http.Request) (*http.Response, error) {
 	if r.Method != http.MethodGet && !(r.Method == http.MethodPost && allowedPosts[r.URL.Path]) {
 		return nil, fmt.Errorf("prodcheck: %s %s is not an allowed call", r.Method, r.URL.Path)
 	}
-	return g.next.RoundTrip(r)
+	resp, err := g.next.RoundTrip(r)
+	if err == nil && resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		if loc := resp.Header.Get("Location"); loc != "" {
+			resp.Header.Set(rawLocation, loc)
+			resp.Header.Del("Location")
+		}
+	}
+	return resp, err
+}
+
+// inParallel runs fn(0..n-1) at once and waits; each fn writes only its own index.
+func inParallel(n int, fn func(i int)) {
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			fn(i)
+		}(i)
+	}
+	wg.Wait()
 }
 
 type checker struct {
@@ -143,9 +166,11 @@ type checker struct {
 }
 
 func newClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.MaxIdleConnsPerHost = 16 // the parallel reads keep their connections, so the tests do not exhaust ports
 	return &http.Client{
 		Timeout:       40 * time.Second,
-		Transport:     guard{http.DefaultTransport},
+		Transport:     guard{tr},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
@@ -397,7 +422,7 @@ func (c *checker) buildsStep() (string, string) {
 	return "passed", ""
 }
 
-// sentryStep wants "on" from every service but auth, which reports no health fields (D5).
+// sentryStep wants "on" from every service but auth, which reports no health fields. A service that is not up is the fleet step's to report.
 func (c *checker) sentryStep() (string, string) {
 	if len(c.fleet) == 0 {
 		return "skipped", "fleet not read"
@@ -407,12 +432,22 @@ func (c *checker) sentryStep() (string, string) {
 		if name == "auth" {
 			continue
 		}
-		state := "none"
+		state, down := "none", false
 		for _, s := range c.fleet {
-			if s.Name == name && (s.Sentry == "on" || s.Sentry == "off") {
+			if s.Name != name {
+				continue
+			}
+			if s.Status != "up" {
+				down = true
+				break
+			}
+			if s.Sentry == "on" || s.Sentry == "off" {
 				state = s.Sentry
 				break
 			}
+		}
+		if down {
+			continue
 		}
 		if state != "on" {
 			bad = append(bad, name+"="+state)
@@ -448,11 +483,20 @@ func (c *checker) sitesStep() (string, string) {
 }
 
 func (c *checker) hstsStep() (string, string) {
+	n := len(c.t.hsts)
+	codes, hdrs, tries := make([]int, n+1), make([]http.Header, n+1), make([]int, n+1)
+	inParallel(n+1, func(i int) {
+		u := c.t.apexHTTP
+		if i < n {
+			u = c.t.hsts[i]
+		}
+		codes[i], hdrs[i], tries[i] = c.getAny(u)
+	})
 	var problems []string
 	worst := 1
-	for _, u := range c.t.hsts {
-		code, hdr, try := c.getAny(u)
-		worst = max(worst, try)
+	for i, u := range c.t.hsts {
+		code, hdr := codes[i], hdrs[i]
+		worst = max(worst, tries[i])
 		if code == 0 || code >= 500 {
 			problems = append(problems, u+" "+answered(code))
 			continue
@@ -470,11 +514,10 @@ func (c *checker) hstsStep() (string, string) {
 			problems = append(problems, fmt.Sprintf("%s sends HSTS %q", u, v))
 		}
 	}
-	code, hdr, try := c.getAny(c.t.apexHTTP)
-	worst = max(worst, try)
-	if code != http.StatusMovedPermanently {
-		problems = append(problems, "http apex "+answered(code))
-	} else if bad := apexLocationProblem(hdr.Get("Location")); bad != "" {
+	worst = max(worst, tries[n])
+	if codes[n] != http.StatusMovedPermanently {
+		problems = append(problems, "http apex "+answered(codes[n]))
+	} else if bad := apexLocationProblem(hdrs[n].Get(rawLocation)); bad != "" {
 		problems = append(problems, "http apex Location is "+bad)
 	}
 	if len(problems) > 0 {
@@ -548,45 +591,63 @@ func entryScripts(page []byte) []string {
 }
 
 func (c *checker) testHookStep() (string, string) {
+	found, tries := make([][]string, len(sites)), make([]int, len(sites))
+	inParallel(len(sites), func(i int) { found[i], tries[i] = c.siteHook(sites[i]) })
 	var problems []string
 	worst := 1
-	for _, site := range sites {
-		pageURL := strings.TrimSuffix(c.t.siteURL(site), "build.txt")
-		code, page, try := c.get(pageURL, nil)
-		worst = max(worst, try)
-		if code != http.StatusOK {
-			problems = append(problems, site+" page "+answered(code))
-			continue
-		}
-		base, err := url.Parse(pageURL)
-		srcs := entryScripts(page)
-		if err != nil || len(srcs) == 0 {
-			problems = append(problems, site+" names no script")
-			continue
-		}
-		held := false
-		for _, src := range srcs {
-			ref, err := url.Parse(src)
-			if err != nil {
-				problems = append(problems, site+" names a bad script address")
-				continue
-			}
-			code, js, try := c.get(base.ResolveReference(ref).String(), nil)
-			worst = max(worst, try)
-			if code != http.StatusOK {
-				problems = append(problems, site+" bundle "+answered(code))
-				continue
-			}
-			held = held || digestLiteral.Match(js)
-		}
-		if held {
-			problems = append(problems, site+" holds a test digest")
-		}
+	for i := range sites {
+		problems = append(problems, found[i]...)
+		worst = max(worst, tries[i])
 	}
 	if len(problems) > 0 {
 		return "failed", strings.Join(problems, "; ")
 	}
 	return "passed", passedOn(worst)
+}
+
+// tooBig reports a body that reached maxBody, where readOnce cuts it.
+func tooBig(body []byte) bool { return len(body) >= maxBody }
+
+func (c *checker) siteHook(site string) (problems []string, worst int) {
+	worst = 1
+	tooBigText := fmt.Sprintf("larger than %d MiB", maxBody>>20)
+	pageURL := strings.TrimSuffix(c.t.siteURL(site), "build.txt")
+	code, page, try := c.get(pageURL, nil)
+	worst = max(worst, try)
+	if code != http.StatusOK {
+		return append(problems, site+" page "+answered(code)), worst
+	}
+	if tooBig(page) {
+		return append(problems, site+" page "+tooBigText), worst
+	}
+	base, err := url.Parse(pageURL)
+	srcs := entryScripts(page)
+	if err != nil || len(srcs) == 0 {
+		return append(problems, site+" names no script"), worst
+	}
+	held := false
+	for _, src := range srcs {
+		ref, err := url.Parse(src)
+		if err != nil {
+			problems = append(problems, site+" names a bad script address")
+			continue
+		}
+		code, js, try := c.get(base.ResolveReference(ref).String(), nil)
+		worst = max(worst, try)
+		if code != http.StatusOK {
+			problems = append(problems, site+" bundle "+answered(code))
+			continue
+		}
+		if tooBig(js) {
+			problems = append(problems, site+" bundle "+tooBigText)
+			continue
+		}
+		held = held || digestLiteral.Match(js)
+	}
+	if held {
+		problems = append(problems, site+" holds a test digest")
+	}
+	return problems, worst
 }
 
 // post sends one JSON POST with no retry; code is 0 when nothing answered.

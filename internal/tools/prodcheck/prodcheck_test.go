@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -472,6 +473,17 @@ func TestSentry_DegradedFleetStillReadsSentry(t *testing.T) {
 	r := f.run(t, nil)
 	r.want(t, 0, "failed", "invoice down")
 	r.want(t, 4, "failed", "worker=off")
+	if d := r.step(t, 4).Detail; strings.Contains(d, "invoice") {
+		t.Errorf("sentry detail %q names the down service", d)
+	}
+}
+
+func TestSentry_DownServiceIsNotJudged(t *testing.T) {
+	f := newFake(t)
+	f.fleet = func(int) (int, string) { return 503, degradedFleet("invoice") }
+	r := f.run(t, nil)
+	r.want(t, 0, "failed", "invoice down")
+	r.want(t, 4, "passed", "")
 }
 
 func TestSentry_FleetNotReadSkips(t *testing.T) {
@@ -1269,7 +1281,7 @@ func TestHSTS_ApexWrongStatusOrLocationFails(t *testing.T) {
 		"other path":    {loc("https://ascomply.com/other?q=1"), "http apex Location is not on /hsts-check"},
 		"other query":   {loc("https://ascomply.com/hsts-check?q=2"), "http apex Location is not on ?q=1"},
 		"no location":   {func() (int, http.Header) { return 301, nil }, "http apex Location is missing"},
-		"bad location":  {loc("https://ascomply.com/%zz"), "http apex did not answer"},
+		"bad location":  {loc("https://ascomply.com/%zz"), "http apex Location is unparsable"},
 		"302 not 301": {func() (int, http.Header) {
 			return 302, http.Header{"Location": {"https://ascomply.com/hsts-check?q=1"}}
 		}, "http apex answered 302"},
@@ -1279,6 +1291,9 @@ func TestHSTS_ApexWrongStatusOrLocationFails(t *testing.T) {
 			f := newFake(t)
 			f.apex = c.apex
 			f.run(t, nil).want(t, 3, "failed", c.detail)
+			if name == "bad location" && f.count("/apex") != 1 {
+				t.Errorf("/apex: %d requests, want 1", f.count("/apex"))
+			}
 		})
 	}
 }
@@ -1560,4 +1575,104 @@ func TestTestHook_OnlyGETsAndOnePagePerSite(t *testing.T) {
 	if len(f.posted()) != 2 {
 		t.Errorf("non-GET calls %v", f.posted())
 	}
+}
+
+// barrier holds each caller until n are in flight; a serial caller times out and sets stuck.
+type barrier struct {
+	n     int
+	mu    sync.Mutex
+	in    int
+	stuck bool
+	open  chan struct{}
+}
+
+func newBarrier(n int) *barrier { return &barrier{n: n, open: make(chan struct{})} }
+
+func (b *barrier) pass() {
+	b.mu.Lock()
+	b.in++
+	if b.in == b.n {
+		close(b.open)
+	}
+	skip := b.stuck
+	b.mu.Unlock()
+	if skip {
+		return
+	}
+	select {
+	case <-b.open:
+	case <-time.After(2 * time.Second):
+		b.mu.Lock()
+		b.stuck = true
+		b.mu.Unlock()
+	}
+}
+
+func TestHSTS_ReadsOverlap(t *testing.T) {
+	f := newFake(t)
+	b := newBarrier(len(hstsURLs))
+	f.hsts = func(string) (int, http.Header) {
+		b.pass()
+		return 200, hstsHeader()
+	}
+	f.run(t, nil).want(t, 3, "passed", "")
+	if b.stuck {
+		t.Error("HSTS reads ran one at a time")
+	}
+}
+
+func TestHSTS_DetailKeepsURLOrderWhenReadsOverlap(t *testing.T) {
+	f := newFake(t)
+	f.hsts = func(id string) (int, http.Header) {
+		if id == "2" || id == "11" {
+			return 200, nil
+		}
+		return 200, hstsHeader()
+	}
+	f.run(t, nil).want(t, 3, "failed", f.hstsURL(2)+" has no HSTS header; "+f.hstsURL(11)+" has no HSTS header")
+}
+
+func TestTestHook_SiteReadsOverlap(t *testing.T) {
+	f := newFake(t)
+	b := newBarrier(len(sites))
+	f.page = func(string) (int, string) {
+		b.pass()
+		return 200, `<script src="/assets/entry.js"></script>`
+	}
+	f.run(t, nil).want(t, 6, "passed", "")
+	if b.stuck {
+		t.Error("site reads ran one at a time")
+	}
+}
+
+func TestTestHook_DetailKeepsSiteOrderWhenReadsOverlap(t *testing.T) {
+	f := newFake(t)
+	f.page = func(site string) (int, string) {
+		if site == "app.ascomply.com" || site == "sup.ascomply.com" {
+			return 500, ""
+		}
+		return 200, `<script src="/assets/entry.js"></script>`
+	}
+	f.run(t, nil).want(t, 6, "failed", "app.ascomply.com page answered 500; sup.ascomply.com page answered 500")
+}
+
+func TestTestHook_BodyAtTheLimitFails(t *testing.T) {
+	big := strings.Repeat("x", maxBody)
+	t.Run("bundle", func(t *testing.T) {
+		f := newFake(t)
+		f.bundles["/assets/entry.js"] = big + "Km(e,`" + digest64 + "`)"
+		r := f.run(t, nil)
+		r.want(t, 6, "failed", "app.ascomply.com bundle larger than 8 MiB")
+		assertAbsent(t, r, digest64)
+	})
+	t.Run("page", func(t *testing.T) {
+		f := newFake(t)
+		f.page = func(site string) (int, string) {
+			if site == "ops.ascomply.com" {
+				return 200, big
+			}
+			return 200, `<script src="/assets/entry.js"></script>`
+		}
+		f.run(t, nil).want(t, 6, "failed", "ops.ascomply.com page larger than 8 MiB")
+	})
 }

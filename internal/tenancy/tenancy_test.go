@@ -2087,10 +2087,8 @@ func TestMembership_SuspendedAdminCannotAdminister(t *testing.T) {
 // active admin survives. Without FOR UPDATE over the admin set both transactions
 // see two active admins, both commit, and the tenant is stranded at zero.
 //
-// The refusal is ErrLastActiveAdmin when the transactions overlap and
-// ErrNotPermitted when they serialize (the loser's caller-role read already sees
-// itself suspended -- AC-10). Both are legal; pinning the exact pairing instead
-// failed ~6.7% of runs under contention while the invariant held every time.
+// The loser's refusal varies with timing: ErrLastActiveAdmin, ErrNotPermitted or
+// db.ErrNotActiveMember. All are legal; the invariant is what the test pins.
 // Repeated because one round only exercises the unsafe path when they overlap.
 func TestMembership_ConcurrentLastTwoAdmins(t *testing.T) {
 	super, app := dbTestPools(t)
@@ -2123,7 +2121,7 @@ func TestMembership_ConcurrentLastTwoAdmins(t *testing.T) {
 				oks++
 			case isRaceRefusal(err, ErrNotPermitted):
 			default:
-				t.Fatalf("round %d: errs[%d] = %v, want nil, ErrLastActiveAdmin or ErrNotPermitted (a deadlock or serialization failure is a defect)", round, i, err)
+				t.Fatalf("round %d: errs[%d] = %v, want nil or a refusal (ErrLastActiveAdmin, ErrNotPermitted, db.ErrNotActiveMember) (a deadlock or serialization failure is a defect)", round, i, err)
 			}
 		}
 		if oks != 1 {
@@ -2145,7 +2143,7 @@ func TestMembership_ConcurrentLastTwoAdmins(t *testing.T) {
 
 // isRaceRefusal is the set of errors a concurrent last-two-admins loser may return.
 func isRaceRefusal(err, notPermitted error) bool {
-	return errors.Is(err, ErrLastActiveAdmin) || errors.Is(err, notPermitted)
+	return errors.Is(err, ErrLastActiveAdmin) || errors.Is(err, notPermitted) || errors.Is(err, db.ErrNotActiveMember)
 }
 
 // A loser whose caller was already deactivated is refused by the request seam

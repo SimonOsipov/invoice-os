@@ -335,7 +335,7 @@ func TestRemoveMember_ConcurrentLastTwoAdmins(t *testing.T) {
 				oks++
 			case isRaceRefusal(err, ErrRemoveNotPermitted):
 			default:
-				t.Fatalf("round %d: errs[%d] = %v, want nil or ErrLastActiveAdmin (a deadlock is a defect)", round, i, err)
+				t.Fatalf("round %d: errs[%d] = %v, want nil or a refusal (ErrLastActiveAdmin, ErrRemoveNotPermitted, db.ErrNotActiveMember) (a deadlock is a defect)", round, i, err)
 			}
 		}
 		if oks != 1 {

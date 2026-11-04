@@ -1039,9 +1039,11 @@ jobs:
           echo "::add-mask::$key"
           domain=$(bash scripts/ci/preview.sh mail-domain "$PR")
           echo "::add-mask::$domain"
+          ids=$(RESEND_READ_KEY="$key" bash scripts/ci/preview.sh mail-blog-ids "$PR")
           {
             echo "RESEND_READ_KEY=$key"
             echo "RESEND_RECEIVING_DOMAIN=$domain"
+            echo "$ids"
             echo "MAIL_ACCOUNTS_FILE=$RUNNER_TEMP/mail-accounts.json"
           } >>"$GITHUB_ENV"
       - name: Read the run start

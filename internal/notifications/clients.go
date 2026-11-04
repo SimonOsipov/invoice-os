@@ -52,13 +52,19 @@ func NewsletterClients(getenv func(string) string, deployEnv string, contacts Mo
 	if err != nil {
 		return NewsletterWiring{}, err
 	}
-	mailMode, mailKey := accountmail.ModeFromEnv(getenv, posture.Ephemeral())
+	capture := posture == platform.PosturePreview || (posture == platform.PostureNightly && getenv("RESEND_SENDING_KEY") == "")
+	mailMode, mailKey := accountmail.ModeFromEnv(getenv, capture)
 	w := NewsletterWiring{Mode: mode, MailMode: mailMode, Sender: accountmail.NewSender(mailMode, mailKey, transport)}
 	switch mode {
 	case ModeFake:
 		w.Resend = FakeBlogResend{}
 	case ModeReal:
 		w.Resend = NewBlogResend(ResendBaseURL, getenv("RESEND_API_KEY"), keys, NewHTTPClient(transport))
+	}
+	if posture == platform.PostureNightly && (mode == ModeReal || mailMode == accountmail.ModeReal) {
+		if err := guardNightly(&w, getenv(envReceivingDomain)); err != nil {
+			return NewsletterWiring{}, err
+		}
 	}
 	w.Enabled = mode != ModeOff && mailMode != accountmail.ModeOff
 	return w, nil

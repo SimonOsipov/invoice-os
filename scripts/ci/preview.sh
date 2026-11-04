@@ -17,6 +17,7 @@
 #   preview.sh mail-off nightly           unmount the mail secrets and turn auto-confirm back on
 #   preview.sh mail-read-key nightly      print the Resend read key
 #   preview.sh mail-domain nightly        print the Resend receiving domain
+#   preview.sh mail-blog-ids nightly      print RESEND_BLOG_TOPIC_ID and RESEND_BLOG_SEGMENT_ID (needs RESEND_READ_KEY)
 #   preview.sh contact-preflight nightly  fail when a nightly contact secret is missing or not enabled
 #   preview.sh contact-token nightly [<n>] print the HubSpot token at version <n> (latest when omitted)
 #   preview.sh contact-token-version nightly print the number of the token's latest version
@@ -407,15 +408,54 @@ cmd_contact_token_version() {
   echo "$v"
 }
 
-# mail-on: after E2E, mount the mail secrets. Only secret names go in argv.
+UUID_RE='^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
+
+# blog_id <topics|segments>: 3 tries on a transport error, 429 or 5xx. The id of the one item named Blog. The key goes to curl on stdin; errors name the endpoint and status only.
+blog_id() {
+  local ep=$1 f code n id i
+  [ -n "${RESEND_READ_KEY:-}" ] || die "RESEND_READ_KEY is empty"
+  f=$(mktemp)
+  for i in 1 2 3; do
+    code=$(printf 'Authorization: Bearer %s\n' "$RESEND_READ_KEY" | curl -sS -o "$f" -w '%{http_code}' -H @- "https://api.resend.com/$ep") || code=000
+    case "$code" in 000 | 429 | 5??) [ "$i" = 3 ] || { sleep 5; continue; } ;; esac
+    break
+  done
+  [ "$code" != 000 ] || { rm -f "$f"; die "GET /$ep failed"; }
+  [ "$code" = 200 ] || { rm -f "$f"; die "GET /$ep answered HTTP $code"; }
+  n=$(jq '[.data[]? | select(.name == "Blog")] | length' "$f" 2>/dev/null) || n=-1
+  [ "$n" = 1 ] || { rm -f "$f"; die "GET /$ep answered HTTP $code with $n items named Blog, want 1"; }
+  id=$(jq -r '.data[] | select(.name == "Blog") | .id' "$f")
+  rm -f "$f"
+  [[ "$id" =~ $UUID_RE ]] || die "GET /$ep: the Blog id is not a UUID"
+  echo "$id"
+}
+
+cmd_mail_blog_ids() {
+  local topic segment
+  topic=$(blog_id topics)
+  segment=$(blog_id segments)
+  echo "RESEND_BLOG_TOPIC_ID=$topic"
+  echo "RESEND_BLOG_SEGMENT_ID=$segment"
+}
+
+# mail-on: after E2E, mount the mail secrets. Only secret names and the public Blog ids go in argv.
 cmd_mail_on() {
-  local gw
+  local gw ids v
+  for v in RESEND_BLOG_TOPIC_ID RESEND_BLOG_SEGMENT_ID; do
+    [[ "${!v:-}" =~ $UUID_RE ]] || die "$v must be a UUID"
+  done
+  ids="RESEND_BLOG_TOPIC_ID=$RESEND_BLOG_TOPIC_ID,RESEND_BLOG_SEGMENT_ID=$RESEND_BLOG_SEGMENT_ID"
   gw=$(url gateway nightly)
   gcloud run services update auth-nightly "${gc[@]}" \
     --update-secrets GOTRUE_SMTP_PASS=nightly-gotrue-smtp-pass:latest \
     --update-env-vars "GOTRUE_MAILER_TEMPLATES_RECOVERY=$gw/emails/recovery.html,GOTRUE_MAILER_URLPATHS_RECOVERY=$gw/auth/reset-password,GOTRUE_MAILER_SUBJECTS_RECOVERY=Reset your ASComply password,GOTRUE_MAILER_TEMPLATES_CONFIRMATION=$gw/emails/confirmation.html,GOTRUE_MAILER_URLPATHS_CONFIRMATION=$gw/auth/verify,GOTRUE_MAILER_SUBJECTS_CONFIRMATION=Confirm your ASComply account,GOTRUE_MAILER_AUTOCONFIRM=false"
   gcloud run services update tenancy-nightly "${gc[@]}" \
     --update-secrets RESEND_SENDING_KEY=nightly-resend-sending-key:latest
+  gcloud run services update notifications-nightly "${gc[@]}" \
+    --update-secrets RESEND_SENDING_KEY=nightly-resend-sending-key:latest,RESEND_RECEIVING_DOMAIN=nightly-resend-receiving-domain:latest \
+    --update-env-vars "$ids"
+  gcloud run services update worker-nightly "${gc[@]}" \
+    --update-secrets RESEND_RECEIVING_DOMAIN=nightly-resend-receiving-domain:latest --update-env-vars "$ids"
 }
 
 # mail-off: unmount the mail secrets and turn auto-confirm back on. Runs after a failed run too.
@@ -425,6 +465,10 @@ cmd_mail_off() {
     --remove-secrets GOTRUE_SMTP_PASS --update-env-vars GOTRUE_MAILER_AUTOCONFIRM=true || failed=1
   gcloud run services update tenancy-nightly "${gc[@]}" \
     --remove-secrets RESEND_SENDING_KEY || failed=1
+  gcloud run services update notifications-nightly "${gc[@]}" \
+    --remove-secrets RESEND_SENDING_KEY,RESEND_RECEIVING_DOMAIN --remove-env-vars RESEND_BLOG_TOPIC_ID,RESEND_BLOG_SEGMENT_ID || failed=1
+  gcloud run services update worker-nightly "${gc[@]}" \
+    --remove-secrets RESEND_RECEIVING_DOMAIN --remove-env-vars RESEND_BLOG_TOPIC_ID,RESEND_BLOG_SEGMENT_ID || failed=1
   [ "$failed" = 0 ] || die "mail-off left real mail mounted on the nightly; the errors are above"
 }
 
@@ -532,6 +576,7 @@ case "${1:-}" in
   mail-off) mail_arg "${2:-}"; cmd_mail_off ;;
   mail-read-key) mail_arg "${2:-}"; read_secret latest --secret nightly-resend-read-key --project "$PROJECT" ;;
   mail-domain) mail_arg "${2:-}"; read_secret latest --secret nightly-resend-receiving-domain --project "$PROJECT" ;;
+  mail-blog-ids) mail_arg "${2:-}"; cmd_mail_blog_ids ;;
   contact-preflight) mail_arg "${2:-}"; cmd_contact_preflight ;;
   contact-token) mail_arg "${2:-}"; cmd_contact_token "${3:-}" ;;
   contact-token-version) mail_arg "${2:-}"; cmd_contact_token_version ;;
@@ -540,5 +585,5 @@ case "${1:-}" in
   cap) cmd_cap ;;
   invariants) cmd_invariants ;;
   budget) cmd_budget ;;
-  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|mail-read-key|mail-domain|contact-preflight|contact-token|contact-token-version|deal-stage|prs|cap|invariants|budget" ;;
+  *) die "usage: preview.sh urls|image|secrets|bucket|database|migrate|grant|deploy|token|teardown|mail-preflight|mail-on|mail-off|mail-read-key|mail-domain|mail-blog-ids|contact-preflight|contact-token|contact-token-version|deal-stage|prs|cap|invariants|budget" ;;
 esac

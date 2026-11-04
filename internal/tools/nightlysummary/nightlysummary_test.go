@@ -1606,9 +1606,31 @@ func TestRun_E2ESuiteOfOnlyFlakyTestsIsGreen(t *testing.T) {
 const emailSuites = "environment=Prepare the preview (secrets, bucket, URLs)\nemail=Real invite and reset mail\n"
 
 func TestRun_EmailSectionFromTheCheckIsCopied(t *testing.T) {
-	names := []string{"mail budget", "invite mail arrives", "invite text matches", "invite page registers the invitee", "password mail arrives",
-		"password mail text matches", "password link opens the workspace", "used invite link is refused", "reset mail arrives",
-		"reset text matches", "reset link sets the password", "sign-in with the new password", "only these mails are real"}
+	names := []string{
+		"mail budget",
+		"invite mail arrives",
+		"invite mail uses the brand layout",
+		"invite text matches",
+		"invite page registers the invitee",
+		"password mail arrives",
+		"password mail uses the brand layout",
+		"password mail text matches",
+		"password link opens the workspace",
+		"used invite link is refused",
+		"reset mail arrives",
+		"reset mail uses the brand layout",
+		"reset text matches",
+		"reset link sets the password",
+		"sign-in with the new password",
+		"signup mail arrives",
+		"signup mail uses the brand layout",
+		"signup link confirms the address",
+		"newsletter mail arrives",
+		"newsletter mail uses the brand layout",
+		"newsletter link confirms the subscription",
+		"subscriber is a Resend contact on the Blog topic",
+		"only these mails are real",
+	}
 	var parts []string
 	for _, n := range names {
 		parts = append(parts, `{"name":"`+n+`","status":"passed","duration_ms":3}`)

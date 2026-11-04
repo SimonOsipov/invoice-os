@@ -5,8 +5,8 @@ import { parseCreatedAt } from './resendClient'
 
 export type Sent = { to: string[]; created_at: string }
 
-// A run sends 3 mails and the day stops at 25.
-const BUDGET_BEFORE_RUN = 22
+// A run sends 5 mails and the day stops at 25.
+const BUDGET_BEFORE_RUN = 20
 const SPEC_FILE = 'e2e/mail/real-mail.spec.ts'
 
 export function nightlySendsToday(sends: Sent[], domain: string, now: Date = new Date()): number {
@@ -28,13 +28,41 @@ export function isFakeAddress(address: string): boolean {
   return domain === 'example.com' || ['.example.com', '.example', '.test'].some((t) => domain.endsWith(t))
 }
 
-export function judgeSends(sends: Sent[], inviteAddr: string, resetAddr: string): { ok: boolean; detail: string } {
+export type SendWant = { invite: string; reset: string; signup: string; blog: string }
+
+export function judgeSends(sends: Sent[], want: SendWant): { ok: boolean; detail: string } {
   const count = (addr: string) => sends.filter((s) => s.to.some((a) => a.toLowerCase() === addr.toLowerCase())).length
-  const invite = count(inviteAddr)
-  const reset = count(resetAddr)
+  const invite = count(want.invite)
+  const reset = count(want.reset)
+  const signup = count(want.signup)
+  const blog = count(want.blog)
   const fake = sends.filter((s) => s.to.some(isFakeAddress)).length
-  const detail = `invite sends ${invite} (want 2), reset sends ${reset} (want 1), fake-domain sends ${fake} (want 0), all sends ${sends.length}`
-  return { ok: invite === 2 && reset === 1 && fake === 0, detail }
+  const detail = `invite sends ${invite} (want 2), reset sends ${reset} (want 1), signup sends ${signup} (want 1), blog sends ${blog} (want 1), fake-domain sends ${fake} (want 0), all sends ${sends.length}`
+  return { ok: invite === 2 && reset === 1 && signup === 1 && blog === 1 && fake === 0, detail }
+}
+
+export type BrandFacts = { logoSrcs: string[]; heroHasHeading: boolean; footerText: string }
+
+const LOGO_PATH = '/emails/mark.png'
+const BAND = 'bgcolor="#082f31"'
+const FOOTER_LINE = 'ASComply Africa · Lagos, Nigeria'
+
+// ceiling: regex over our own generated layout; revisit if the layout nests a second #082f31 cell
+export function brandLayoutFacts(html: string): BrandFacts {
+  const logoSrcs = [...html.matchAll(/<img\b[^>]*>/gi)]
+    .filter((m) => /\balt="ASComply"/i.test(m[0]))
+    .map((m) => /\bsrc="([^"]*)"/i.exec(m[0])?.[1] ?? '')
+  const band = html.indexOf(BAND)
+  return { logoSrcs, heroHasHeading: band >= 0 && /<h1\b/i.test(html.slice(band)), footerText: html }
+}
+
+// The reason names the part, never the mail text.
+export function judgeBrandLayout(f: BrandFacts): string | null {
+  if (f.logoSrcs.length === 0) return 'the mail has no ASComply logo'
+  if (f.logoSrcs.some((src) => !src.endsWith(LOGO_PATH))) return `a logo src does not end ${LOGO_PATH}`
+  if (!f.heroHasHeading) return 'the hero band holds no heading'
+  if (!f.footerText.includes(FOOTER_LINE)) return 'the footer line is missing'
+  return null
 }
 
 export function scrub(s: string): string {
@@ -60,16 +88,26 @@ export type StepSpec = { name: string; needs: string[] }
 export const MAIL_STEPS: StepSpec[] = [
   { name: 'mail budget', needs: [] },
   { name: 'invite mail arrives', needs: ['mail budget'] },
+  { name: 'invite mail uses the brand layout', needs: ['invite mail arrives'] },
   { name: 'invite text matches', needs: ['invite mail arrives'] },
   { name: 'invite page registers the invitee', needs: ['invite mail arrives'] },
   { name: 'password mail arrives', needs: ['invite page registers the invitee'] },
+  { name: 'password mail uses the brand layout', needs: ['password mail arrives'] },
   { name: 'password mail text matches', needs: ['password mail arrives'] },
   { name: 'password link opens the workspace', needs: ['password mail arrives'] },
   { name: 'used invite link is refused', needs: ['password link opens the workspace'] },
   { name: 'reset mail arrives', needs: ['mail budget'] },
+  { name: 'reset mail uses the brand layout', needs: ['reset mail arrives'] },
   { name: 'reset text matches', needs: ['reset mail arrives'] },
   { name: 'reset link sets the password', needs: ['reset mail arrives'] },
   { name: 'sign-in with the new password', needs: ['reset link sets the password'] },
+  { name: 'signup mail arrives', needs: ['mail budget'] },
+  { name: 'signup mail uses the brand layout', needs: ['signup mail arrives'] },
+  { name: 'signup link confirms the address', needs: ['signup mail arrives'] },
+  { name: 'newsletter mail arrives', needs: ['mail budget'] },
+  { name: 'newsletter mail uses the brand layout', needs: ['newsletter mail arrives'] },
+  { name: 'newsletter link confirms the subscription', needs: ['newsletter mail arrives'] },
+  { name: 'subscriber is a Resend contact on the Blog topic', needs: ['newsletter link confirms the subscription'] },
   { name: 'only these mails are real', needs: ['mail budget'] },
 ]
 

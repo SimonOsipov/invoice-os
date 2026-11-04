@@ -574,6 +574,9 @@ func emailProblems(jobs map[string]workflowJob) []string {
 		if strings.Count(r, "::add-mask::") != 2 || strings.Index(r, "::add-mask::$key") > strings.Index(r, "GITHUB_ENV") || strings.Index(r, "::add-mask::$domain") > strings.Index(r, "GITHUB_ENV") {
 			bad("email masks the key and domain after writing GITHUB_ENV")
 		}
+		if ids := strings.Index(r, "preview.sh mail-blog-ids"); ids < 0 || ids > strings.Index(r, "GITHUB_ENV") || !strings.Contains(r, "RESEND_READ_KEY=\"$key\" bash") || !strings.Contains(r, "echo \"$ids\"") {
+			bad("email does not resolve the Blog ids before writing GITHUB_ENV")
+		}
 	} else {
 		bad("email lacks the key read step")
 	}
@@ -1190,7 +1193,9 @@ func TestDevEnvNightly_EmailStepOrder(t *testing.T) {
 	specStep := "      - name: Real invite and reset mail\n        timeout-minutes: 16\n" + cmd["spec"]
 	off := "      - name: Turn real mail off\n        if: always() && steps.mailon.outcome != 'skipped'\n        run: bash scripts/ci/preview.sh mail-off \"$PR\"\n"
 	requireEmailMutations(t, []struct{ old, repl, want string }{
-		{"          echo \"::add-mask::$domain\"\n          {\n            echo \"RESEND_READ_KEY", "          {\n            echo \"RESEND_READ_KEY", "masks the key and domain"},
+		{"          echo \"::add-mask::$domain\"\n          ids=", "          ids=", "masks the key and domain"},
+		{"          ids=$(RESEND_READ_KEY=\"$key\" bash scripts/ci/preview.sh mail-blog-ids \"$PR\")\n", "", "resolve the Blog ids"},
+		{"            echo \"$ids\"\n", "", "resolve the Blog ids"},
 		{chrome + auth + pf, auth + chrome + pf, "installs Chromium after Google auth"},
 		{off, "", "mail-off is not between"},
 		{specStep + off, off + specStep, "mail-off is not between"},

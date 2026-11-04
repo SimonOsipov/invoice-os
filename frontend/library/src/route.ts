@@ -6,6 +6,7 @@ export type Route =
   | { view: 'home' }
   | { view: 'group'; group: Group }
   | { view: 'feature'; group: Group; feature: Feature }
+  | { view: 'not-found'; path: string }
 
 const HOME: Route = { view: 'home' }
 
@@ -13,18 +14,21 @@ const HOME: Route = { view: 'home' }
 const stripBase = (p: string): string => (p === LIBRARY_BASE || p.startsWith(`${LIBRARY_BASE}/`) ? p.slice(LIBRARY_BASE.length) : p)
 
 export function parseLibraryPath(raw: string): Route {
-  const pathname = stripBase(raw)
+  const notFound: Route = { view: 'not-found', path: raw }
+  const pathname = stripBase(raw).replace(/\/{2,}/g, '/')
+  if (pathname === '' || pathname === '/') return HOME
   const m = /^\/([^/]+)(?:\/([^/]+))?\/?$/.exec(pathname)
-  if (!m) return HOME
+  if (!m) return notFound
   const group = GROUPS.find((g) => g.id === m[1])
-  if (!group) return HOME
+  if (!group) return notFound
   if (m[2] === undefined) return { view: 'group', group }
   const feature = group.feats.find((f) => f.id === m[2])
-  return feature ? { view: 'feature', group, feature } : HOME
+  return feature ? { view: 'feature', group, feature } : notFound
 }
 
 export function libraryPath(route: Route): string {
   if (route.view === 'home') return `${LIBRARY_BASE}/`
+  if (route.view === 'not-found') return route.path
   if (route.view === 'group') return `${LIBRARY_BASE}/${route.group.id}`
   return `${LIBRARY_BASE}/${route.group.id}/${route.feature.id}`
 }

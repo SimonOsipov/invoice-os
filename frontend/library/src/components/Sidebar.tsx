@@ -152,7 +152,7 @@ export function Sidebar({
           FEATURE GROUPS
         </div>
         {GROUPS.map((g) => {
-          const open = route.view !== 'home' && route.group.id === g.id
+          const open = (route.view === 'group' || route.view === 'feature') && route.group.id === g.id
           return (
             <div key={g.id} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <button

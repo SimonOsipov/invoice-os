@@ -5,10 +5,12 @@ import { sentryVitePlugin } from '@sentry/vite-plugin'
 import { sourcemapUploadOptions } from '../../packages/monitoring/src/upload'
 import { cookieNoticeDefine } from './src/cookieNoticeCss'
 import { LIBRARY_BASE } from '../landing/src/sitePaths'
+import { sitePages } from '../landing/src/sitePages'
+import { PAGE_PATHS } from './src/content'
 
 export default defineConfig({
   base: `${LIBRARY_BASE}/`,
-  plugins: [react(), sentryVitePlugin(sourcemapUploadOptions(fileURLToPath(new URL('.', import.meta.url))))],
+  plugins: [react(), sitePages(PAGE_PATHS, { notFound: false }), sentryVitePlugin(sourcemapUploadOptions(fileURLToPath(new URL('.', import.meta.url))))],
   define: cookieNoticeDefine(),
   // Maps go to Sentry, never to browsers.
   build: { sourcemap: 'hidden' },

@@ -1,4 +1,4 @@
-// Library layout, phone layout, tour and outbound links on the PR fork. Each case asserts a
+// Library layout, phone layout, tour, outbound links and journeys on the PR fork. A layout case asserts a
 // relationship (containment, side by side, alignment, no overflow), never a raw dimension, and
 // nothing is exempt. Groups and features are discovered from the DOM (`nav-<gid>`, `fc-<fid>`);
 // nothing is imported from frontend/.

@@ -1,4 +1,4 @@
-// Blog shell layout, phone layout and cold deep links on the PR fork. Each case asserts a
+// Blog shell layout, phone layout, cold deep links and journeys on the PR fork. A layout case asserts a
 // relationship (side by side, containment, alignment, no overflow), never a raw dimension.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { argosOn, shoot } from '../argos'
@@ -826,6 +826,7 @@ test.describe('blog journeys', () => {
     // concurrent publish or delete can split them, so each pass reloads and recaptures.
     await expect(async () => {
       const { categories } = await loadHome(page)
+      expect(categories.length, 'control: the API returned no categories').toBeGreaterThan(0)
       const rows = aside(page).locator('nav button.blog-nav:nth-of-type(n+2)')
       await expect(rows, 'sidebar rows differ from the API categories').toHaveCount(categories.length, { timeout: 5_000 })
       expect(await rows.locator('span:first-of-type').allTextContents(), 'row names, in API order').toEqual(categories.map((c) => c.name))

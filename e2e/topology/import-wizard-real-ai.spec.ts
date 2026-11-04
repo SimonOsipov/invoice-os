@@ -1,6 +1,6 @@
 // Wizard steps that only the real AI answers. Runs on the nightly only: PR previews run the fake AI.
 import { test, expect } from '@playwright/test'
-import { login, createEntity, createImportBatchFromCsv } from '../api/client'
+import { login, createEntity, createImportBatchFromCsv, listInvoices } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { PERF_HEADER, PERF_MAPPING } from '../importFixtures'
 import { signInAs } from '../personaSession'
@@ -141,6 +141,106 @@ test.describe('the wizard on the real AI', () => {
     expect(new Set(decodeURIComponent(match![1]).split(',')), 'the review URL holds the three answered ids').toEqual(new Set(answeredIds as string[]))
 
     expect(aiPosts, 'restored mappings ask neither suggest-mapping nor check-mapping').toEqual([])
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test("AI-suggested mapping: a first import opens with the AI's placements, the checked doubts unplaced, and Import files it", async ({ page }) => {
+    test.setTimeout(240_000)
+    const errors = collectErrors(page)
+    const stamp = Date.now()
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `AI suggestion ${stamp}`, tin: freshTin() })
+
+    const suggestAnswers: { status: number; body: { source: string; columns: string[]; mapping: Record<string, string> } }[] = []
+    const checkRequests: { mapping: Record<string, string> }[] = []
+    const checkAnswers: { status: number; body: { doubted: unknown } }[] = []
+    page.on('request', (r) => {
+      if (r.method() === 'POST' && new URL(r.url()).pathname.endsWith(POST_SUFFIX.check)) checkRequests.push(JSON.parse(r.postData() ?? '{}'))
+    })
+    page.on('response', async (r) => {
+      if (r.request().method() !== 'POST') return
+      const path = new URL(r.url()).pathname
+      if (path.endsWith(POST_SUFFIX.suggest)) suggestAnswers.push({ status: r.status(), body: await r.json() })
+      if (path.endsWith(POST_SUFFIX.check)) checkAnswers.push({ status: r.status(), body: await r.json() })
+    })
+
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+    await selectEntity(page, entity.name)
+    await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+    await page.locator('input[type="file"]#pf-import-file').setInputFiles({
+      name: 'ai-suggest.csv',
+      mimeType: 'text/csv',
+      buffer: Buffer.from(oneInvoiceCsv(PERF_HEADER, `INV-AISUGGEST-${stamp}`)),
+    })
+    await page.getByRole('button', { name: 'Read columns' }).click()
+
+    // The Map step renders only after the check has answered.
+    await expect(page.getByText('Map fields to columns ·', { exact: false })).toBeVisible({ timeout: 120_000 })
+
+    expect(suggestAnswers, 'one suggest-mapping answer').toHaveLength(1)
+    expect(suggestAnswers[0].status).toBe(200)
+    const suggest = suggestAnswers[0].body
+    // Lane control: the fake AI answers source "none".
+    expect(suggest.source, 'control: this run must have reached the AI path').toBe('ai')
+    const inv = suggest.mapping.invoice_number
+    expect(typeof inv, 'control: the AI placed invoice_number').toBe('string')
+    expect(suggest.columns, 'the placed column is one of the answer columns').toContain(inv)
+
+    expect(checkRequests, 'one check-mapping request').toHaveLength(1)
+    expect(checkAnswers, 'one check-mapping answer').toHaveLength(1)
+    expect(checkAnswers[0].status).toBe(200)
+    const doubtedRaw = checkAnswers[0].body.doubted
+    expect(Array.isArray(doubtedRaw), 'doubted is an array').toBe(true)
+    const doubted = doubtedRaw as unknown[]
+    for (const d of doubted) expect(typeof d, 'each doubted entry is a string').toBe('string')
+    const doubtedFields = doubted as string[]
+    if (doubtedFields.length === 0) test.info().annotations.push({ type: 'no-doubt', description: 'real Jev doubted no placement' })
+
+    const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const columns = page.getByTestId('map-column')
+    const columnOf = (header: string) => columns.filter({ has: page.locator('div.mono', { hasText: new RegExp(`^${escape(header)}$`) }) })
+    const chipOf = (scope: typeof columns, field: string) => scope.locator('span[draggable] .mono', { hasText: new RegExp(`^${escape(field)}$`, 'i') })
+
+    // Doubted fields open unplaced; every other checked field sits on its checked header.
+    for (const field of doubtedFields) await expect(chipOf(columns, field), `doubted ${field} opens unplaced`).toHaveCount(0)
+    for (const [field, header] of Object.entries(checkRequests[0].mapping)) {
+      if (doubtedFields.includes(field)) continue
+      await expect(chipOf(columnOf(header), field), `${field} opens placed on ${header}`).toHaveCount(1)
+    }
+
+    const invColumn = columnOf(inv)
+    const badge = invColumn.getByTestId('map-suggested-badge')
+    const importBtn = page.getByRole('button', { name: /^Import \d+ rows$/ })
+    if (!doubtedFields.includes('invoice_number')) {
+      await expect(chipOf(invColumn, 'invoice_number'), 'invoice_number opens placed').toHaveCount(1)
+      await expect(badge, 'one SUGGESTED badge on the column').toHaveCount(1)
+      await expect(badge).toHaveText('SUGGESTED')
+      await expect(importBtn, 'the suggestion alone arms Import').toBeEnabled()
+    } else {
+      await expect(chipOf(invColumn, 'invoice_number'), 'doubted invoice_number opens unplaced').toHaveCount(0)
+      await expect(badge).toHaveCount(0)
+      await expect(page.getByRole('button', { name: 'Map invoice number to continue' })).toBeVisible()
+      await page.getByRole('button', { name: /^invoice_number\s*\*?$/i }).click()
+      await invColumn.click()
+      await expect(chipOf(invColumn, 'invoice_number')).toHaveCount(1)
+      await expect(badge, 'the suggested snapshot returns the badge').toHaveCount(1)
+      await expect(badge).toHaveText('SUGGESTED')
+      await expect(importBtn).toBeEnabled()
+      test.info().annotations.push({ type: 'doubted-invoice-number', description: 'real Jev doubted invoice_number; placed by hand' })
+    }
+
+    const importResp = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith(POST_SUFFIX.import), { timeout: 60_000 })
+    await importBtn.click()
+    const imported = await importResp
+    expect(imported.status()).toBe(201)
+    expect(((await imported.json()) as { rows_total: number }).rows_total).toBe(1)
+
+    const { invoices } = await listInvoices(token, { entity_id: entity.id })
+    expect(invoices, 'the fresh entity holds exactly the one imported invoice').toHaveLength(1)
+    await expect(page).toHaveURL(new RegExp(`/invoices/${invoices[0].id}$`), { timeout: 60_000 })
+    await expect(page.getByTestId('invoice-detail')).toBeVisible()
+
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })
 })

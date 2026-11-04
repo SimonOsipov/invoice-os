@@ -1948,10 +1948,14 @@ const INVALID_REFRESH = 'invalid or expired refresh token'
 const isApiResponse = (r: Response) => isApi(r.request()) && r.request().method() !== 'OPTIONS'
 
 // The landing strips ?state= on mount, so the URL shows it only briefly; wait for the response instead.
-const frontDoor = (page: Page) =>
-  page.waitForResponse((r) => r.request().isNavigationRequest() && r.url().startsWith(LANDING_URL) && new URL(r.url()).searchParams.has('state'), {
+// The no-op catch keeps an early test failure from turning the timeout into an unhandled rejection; the later await still sees it.
+const frontDoor = (page: Page) => {
+  const response = page.waitForResponse((r) => r.request().isNavigationRequest() && r.url().startsWith(LANDING_URL) && new URL(r.url()).searchParams.has('state'), {
     timeout: 20_000,
   })
+  response.catch(() => {})
+  return response
+}
 
 // Two contexts are two devices: global sign-out ends both, and a record copied before it replays into nothing.
 test('deployed app: signing out on one device ends the session on every device', async ({ browser }) => {
@@ -1959,6 +1963,8 @@ test('deployed app: signing out on one device ends the session on every device',
   const account = await provisionRealAccount('sign-out-everywhere')
   const appOrigin = new URL(APP_URL).origin
   const contexts: BrowserContext[] = []
+  let release!: () => void
+  const released = new Promise<void>((resolve) => (release = resolve))
   const open = async () => {
     const context = await browser.newContext()
     contexts.push(context)
@@ -1970,8 +1976,19 @@ test('deployed app: signing out on one device ends the session on every device',
     const a = await open()
     const b = await open()
     await signInAtFrontDoor(a.page, account, '/')
+    // The sidebar's first rollup read is answered 200 now and delivered to B's page only when released.
+    const ROLLUP_URL = `${GATEWAY_URL}/api/dashboard/v1/rollup`
+    let heldStatus: number | undefined
+    await b.page.route(ROLLUP_URL, async (route) => {
+      if (heldStatus !== undefined || route.request().method() !== 'GET') return route.fallback()
+      const res = await route.fetch()
+      heldStatus = res.status()
+      await released
+      await route.fulfill({ response: res })
+    })
     await signInAtFrontDoor(b.page, account, '/audit')
     await expect(b.page, 'B did not settle on /audit').toHaveURL(/\/audit$/)
+    await expect.poll(() => heldStatus, { message: "B's first rollup read was not held" }).toBe(200)
     const copiedA = await storedSession(a.context)
     expect(copiedA, 'A stored no session').not.toBeNull()
     const recordA = JSON.parse(copiedA!) as StoredRenewal
@@ -2010,8 +2027,14 @@ test('deployed app: signing out on one device ends the session on every device',
     })
 
     await test.step("B's next request is refused and B returns to landing", async () => {
-      const refused = b.page.waitForResponse(isApiResponse)
+      // The held pre-sign-out rollup answers 200 once released; only a request sent from here counts.
+      const sentNow = new Set<Request>()
+      b.page.on('request', (r) => {
+        if (isApi(r) && r.method() !== 'OPTIONS') sentNow.add(r)
+      })
+      const refused = b.page.waitForResponse((r) => isApiResponse(r) && sentNow.has(r.request()))
       const bFrontDoor = frontDoor(b.page)
+      release()
       await b.page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Invoices' }).click()
       expect((await refused).status(), "B's first /api/ answer after the sign-out").toBe(401)
       expect((await bFrontDoor).status(), "B's front door answer").toBe(200)
@@ -2080,7 +2103,11 @@ test('deployed app: signing out on one device ends the session on every device',
       expect(errors, `console errors in ${name}:\n${errors.join('\n')}`).toEqual([])
     }
   } finally {
-    await Promise.all(contexts.map((context) => context.close()))
+    // A route callback that resumes into a closing context throws "Target closed" and would replace the test's own error.
+    await Promise.allSettled(contexts.flatMap((context) => context.pages()).map((page) => page.unrouteAll({ behavior: 'ignoreErrors' })))
+    release()
+    // allSettled: a close rejection must not replace the test's own error.
+    await Promise.allSettled(contexts.map((context) => context.close()))
   }
 })
 

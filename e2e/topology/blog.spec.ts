@@ -792,3 +792,96 @@ test.describe('blog demo at wide widths', () => {
     })
   }
 })
+
+type ApiCategory = { id: string; name: string; icon: string; post_count: number }
+type ApiBlock = { text?: string; title?: string; items?: string[] }
+type ApiPost = { title: string; summary: string; category_id: string; body: ApiBlock[] }
+
+// Loads `/` and returns the two gateway responses that this page load received. Other specs
+// (blog-editor) write categories and posts on the same preview, so a test never reads them separately.
+async function loadHome(page: Page): Promise<{ categories: ApiCategory[]; posts: ApiPost[] }> {
+  const read = (path: string) => (r: { url(): string }) => r.url().split('?')[0] === `${GATEWAY_URL}${path}`
+  const cats = page.waitForResponse(read('/blog/categories'))
+  const posts = page.waitForResponse(read('/blog/posts'))
+  await visit(page)
+  const categories = ((await (await cats).json()) as { categories: ApiCategory[] }).categories
+  const postList = ((await (await posts).json()) as { posts: ApiPost[] }).posts
+  return { categories, posts: postList }
+}
+
+// Mirrors frontend/blog/src/model.ts searchPosts (title, summary, category name, block text/title/items).
+function haystackOf(post: ApiPost, categories: ApiCategory[]): string {
+  const blocks = post.body.map((b) => `${b.text ?? ''} ${b.title ?? ''} ${(b.items ?? []).join(' ')}`)
+  const name = categories.find((c) => c.id === post.category_id)?.name ?? ''
+  return [post.title, post.summary, name, ...blocks].join(' ').toLowerCase()
+}
+
+test.describe('blog journeys', () => {
+  test('blog journeys: the sidebar lists every category of the API in order with its icon and post count, and a click opens it', async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await resize(page, 1280, 1080)
+    // The page counts posts from /blog/posts and the API counts post_count on its own read; a
+    // concurrent publish or delete can split them, so each pass reloads and recaptures.
+    await expect(async () => {
+      const { categories } = await loadHome(page)
+      const rows = aside(page).locator('nav button.blog-nav:nth-of-type(n+2)')
+      await expect(rows, 'sidebar rows differ from the API categories').toHaveCount(categories.length, { timeout: 5_000 })
+      expect(await rows.locator('span:first-of-type').allTextContents(), 'row names, in API order').toEqual(categories.map((c) => c.name))
+      const counts = await rows.locator('span:nth-of-type(2)').allTextContents()
+      expect(counts.map(Number), 'row counts equal post_count').toEqual(categories.map((c) => c.post_count))
+
+      const paths = await rows.evaluateAll((els) => els.map((el) => [...el.querySelectorAll('svg path')].map((p) => p.getAttribute('d')).join('|')))
+      paths.forEach((d, i) => expect(d, `${categories[i].name}: icon has no path`).not.toBe(''))
+      // The svg carries no icon name, so check injectivity of path data over the API icon values.
+      const byIcon = new Map<string, string>()
+      categories.forEach((c, i) => {
+        expect(byIcon.get(c.icon) ?? paths[i], `icon ${c.icon} renders different paths`).toBe(paths[i])
+        byIcon.set(c.icon, paths[i])
+      })
+      expect(new Set(byIcon.values()).size, 'different icons render the same path data').toBe(byIcon.size)
+
+      for (const [i, c] of categories.entries()) {
+        await rows.nth(i).click()
+        await expect(page).toHaveURL(`${BLOG_URL}/category/${c.id}`, { timeout: 5_000 })
+        await expect(main(page).locator('h2'), `${c.name}: category heading`).toHaveText(c.name, { timeout: 5_000 })
+        await expect(rows.nth(i), `${c.name}: row not marked current`).toHaveAttribute('aria-current', 'true', { timeout: 5_000 })
+      }
+    }).toPass({ timeout: 90_000, intervals: [1_000, 2_000, 5_000] })
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('blog journeys: every search result holds the search term', async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await resize(page, 1280, 1080)
+    const { categories, posts } = await loadHome(page)
+    const term = 'invoice'
+    const input = header(page).locator('label').getByRole('textbox')
+    await input.fill(term)
+    const rows = main(page).locator('button.blog-row')
+    const matching = posts.filter((p) => haystackOf(p, categories).includes(term))
+    expect(matching.length, 'control: no captured post holds the term').toBeGreaterThan(0)
+    await expect(rows.first(), 'control: no result row').toBeVisible()
+    await expect(main(page).locator('h2')).toHaveText(/^\d+ posts? match “invoice”$/)
+
+    const n = await rows.count()
+    for (let k = 0; k < n; k++) {
+      const spans = rows.nth(k).locator(':scope > span').nth(1).locator(':scope > span')
+      const title = (await spans.nth(1).textContent()) ?? ''
+      const summary = (await spans.nth(2).textContent()) ?? ''
+      const same = posts.filter((p) => p.title === title && p.summary === summary)
+      expect(same.length, `row ${k} "${title}": no captured post`).toBeGreaterThan(0)
+      expect(same.some((p) => haystackOf(p, categories).includes(term)), `row ${k} "${title}": no match for ${term}`).toBe(true)
+    }
+    expect(n, 'row count equals the captured posts that hold the term').toBe(matching.length)
+    await expect(main(page).locator('h2')).toHaveText(`${matching.length} ${matching.length === 1 ? 'post matches' : 'posts match'} “${term}”`)
+
+    const nonsense = `zz-${crypto.randomUUID().slice(0, 8)}`
+    await input.fill(nonsense)
+    await expect(main(page).locator('h2')).toHaveText(`Nothing found for “${nonsense}”`)
+    await expect(rows).toHaveCount(0)
+    await expect(main(page).locator('button.blog-chip')).toHaveCount(categories.length)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+})

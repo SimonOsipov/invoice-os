@@ -24,7 +24,7 @@ const decode = (s: string): string => {
 
 export function parseLibraryPath(raw: string): Route {
   const notFound: Route = { view: 'not-found', path: raw }
-  const pathname = decode(stripBase(raw)).replace(/\/{2,}/g, '/')
+  const pathname = stripBase(decode(raw)).replace(/\/{2,}/g, '/')
   if (pathname === '' || pathname === '/') return HOME
   const m = /^\/([^/]+)(?:\/([^/]+))?\/?$/.exec(pathname)
   if (!m) return notFound

@@ -61,6 +61,13 @@ describe('route', () => {
     expect(r.view === 'group' && r.group.id).toBe('invoices')
   })
 
+  it('parse_encodedBaseIsTheSamePage', () => {
+    for (const p of ['/library%2Finvoices', '/%6Cibrary/invoices']) {
+      const r = parseLibraryPath(p)
+      expect(r.view === 'group' && r.group.id, p).toBe('invoices')
+    }
+  })
+
   it('parse_repeatedTrailingSlashIsTheGroup', () => {
     const r = parseLibraryPath(`${LIBRARY_BASE}/invoices//`)
     expect(r.view === 'group' && r.group.id).toBe('invoices')

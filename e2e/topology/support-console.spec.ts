@@ -1898,9 +1898,14 @@ async function aiUsageReads(page: Page, testInfo: TestInfo): Promise<void> {
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 20 })
   let failedRows: Locator[]
   try {
-    await mn.getByRole('button', { name: 'FAILURES' }).click()
+    // The loading note renders after the click, so the stale CALLS rows can pass the wait below: wait for the failed=true answer first.
+    const failedRead = page.waitForResponse((r) => {
+      const u = new URL(r.url())
+      return r.request().method() === 'GET' && u.pathname === STAFF_AI_CALLS && u.searchParams.get('failed') === 'true'
+    }, { timeout: 15_000 })
+    const [res] = await Promise.all([failedRead, mn.getByRole('button', { name: 'FAILURES' }).click()])
+    expect(res.status(), 'FAILURES read status').toBe(200)
     await expect(mn.getByRole('button', { name: 'FAILURES' })).toHaveAttribute('aria-pressed', 'true')
-    // The reload swaps the rows for a loading note, so wait for the failed list itself, not the stale CALLS rows.
     await expect(mn.getByText('Loading AI calls…'), 'the failed calls have stopped loading').toHaveCount(0)
     const outcomes = async (): Promise<string[]> => calls.evaluateAll((rows) => rows.map((r) => (r.children[10]?.textContent ?? '').trim()))
     await expect.poll(async () => (await outcomes()).length, { message: 'the oversized call left a failed row on the screen' }).toBeGreaterThanOrEqual(1)

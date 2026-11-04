@@ -333,9 +333,9 @@ func TestRemoveMember_ConcurrentLastTwoAdmins(t *testing.T) {
 			switch {
 			case err == nil:
 				oks++
-			case errors.Is(err, ErrLastActiveAdmin), errors.Is(err, ErrRemoveNotPermitted):
+			case isRaceRefusal(err, ErrRemoveNotPermitted):
 			default:
-				t.Fatalf("round %d: errs[%d] = %v, want nil or ErrLastActiveAdmin (a deadlock is a defect)", round, i, err)
+				t.Fatalf("round %d: errs[%d] = %v, want nil or a refusal (ErrLastActiveAdmin, ErrRemoveNotPermitted, db.ErrNotActiveMember) (a deadlock is a defect)", round, i, err)
 			}
 		}
 		if oks != 1 {
@@ -350,6 +350,33 @@ func TestRemoveMember_ConcurrentLastTwoAdmins(t *testing.T) {
 		if removed != 1 || active != 1 {
 			t.Fatalf("round %d: admins = %d removed / %d active, want 1 / 1", round, removed, active)
 		}
+	}
+}
+
+func TestRemoveMember_ConcurrentLoserSeamRefusalIsARaceRefusal(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "BUG-100 remove seam refusal")
+	x, y := uuid.NewString(), uuid.NewString()
+	seedMembership(t, super, tenantID, x, "admin", "active")
+	seedMembership(t, super, tenantID, y, "admin", "active")
+	cX := auth.WithIdentity(ctx, auth.Identity{Subject: x, Role: "authenticated", TenantID: tenantID})
+	cY := auth.WithIdentity(ctx, auth.Identity{Subject: y, Role: "authenticated", TenantID: tenantID})
+
+	if _, err := store.RemoveMember(cY, x); err != nil {
+		t.Fatalf("Y removes X: %v", err)
+	}
+	_, err := store.RemoveMember(cX, y)
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("removed X removes Y: err = %v, want db.ErrNotActiveMember", err)
+	}
+	if got := mustStatus(t, super, y); got != "active" {
+		t.Fatalf("Y status after the refused call = %q, want active", got)
+	}
+	if !isRaceRefusal(err, ErrRemoveNotPermitted) {
+		t.Fatalf("race-test refusal set rejects %v, a valid refusal", err)
 	}
 }
 

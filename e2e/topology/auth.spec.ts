@@ -1948,10 +1948,14 @@ const INVALID_REFRESH = 'invalid or expired refresh token'
 const isApiResponse = (r: Response) => isApi(r.request()) && r.request().method() !== 'OPTIONS'
 
 // The landing strips ?state= on mount, so the URL shows it only briefly; wait for the response instead.
-const frontDoor = (page: Page) =>
-  page.waitForResponse((r) => r.request().isNavigationRequest() && r.url().startsWith(LANDING_URL) && new URL(r.url()).searchParams.has('state'), {
+// The no-op catch keeps an early test failure from turning the timeout into an unhandled rejection; the later await still sees it.
+const frontDoor = (page: Page) => {
+  const response = page.waitForResponse((r) => r.request().isNavigationRequest() && r.url().startsWith(LANDING_URL) && new URL(r.url()).searchParams.has('state'), {
     timeout: 20_000,
   })
+  response.catch(() => {})
+  return response
+}
 
 // Two contexts are two devices: global sign-out ends both, and a record copied before it replays into nothing.
 test('deployed app: signing out on one device ends the session on every device', async ({ browser }) => {
@@ -1959,6 +1963,8 @@ test('deployed app: signing out on one device ends the session on every device',
   const account = await provisionRealAccount('sign-out-everywhere')
   const appOrigin = new URL(APP_URL).origin
   const contexts: BrowserContext[] = []
+  let release!: () => void
+  const released = new Promise<void>((resolve) => (release = resolve))
   const open = async () => {
     const context = await browser.newContext()
     contexts.push(context)
@@ -1972,8 +1978,6 @@ test('deployed app: signing out on one device ends the session on every device',
     await signInAtFrontDoor(a.page, account, '/')
     // The sidebar's first rollup read is answered 200 now and delivered to B's page only when released.
     const ROLLUP_URL = `${GATEWAY_URL}/api/dashboard/v1/rollup`
-    let release!: () => void
-    const released = new Promise<void>((resolve) => (release = resolve))
     let heldStatus: number | undefined
     await b.page.route(ROLLUP_URL, async (route) => {
       if (heldStatus !== undefined || route.request().method() !== 'GET') return route.fallback()
@@ -2094,7 +2098,9 @@ test('deployed app: signing out on one device ends the session on every device',
       expect(errors, `console errors in ${name}:\n${errors.join('\n')}`).toEqual([])
     }
   } finally {
-    await Promise.all(contexts.map((context) => context.close()))
+    release()
+    // allSettled: a close rejection must not replace the test's own error.
+    await Promise.allSettled(contexts.map((context) => context.close()))
   }
 })
 

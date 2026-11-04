@@ -2,11 +2,17 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { sentryVitePlugin } from '@sentry/vite-plugin'
+import { PRIVACY_PATH, INVITE_PATH } from './src/route'
+import { sitePages } from './src/sitePages'
 import { sourcemapUploadOptions } from '../../packages/monitoring/src/upload'
 
 // LAND-01 — local-only landing showcase. No proxy/backend; all content is static.
 export default defineConfig({
-  plugins: [react(), sentryVitePlugin(sourcemapUploadOptions(fileURLToPath(new URL('.', import.meta.url))))],
+  plugins: [
+    react(),
+    sentryVitePlugin(sourcemapUploadOptions(fileURLToPath(new URL('.', import.meta.url)))),
+    sitePages([PRIVACY_PATH, INVITE_PATH], { notFound: true }),
+  ],
   // Maps go to Sentry, never to browsers.
   build: { sourcemap: 'hidden' },
   // Favicons come from the design-tokens package so all four apps serve identical

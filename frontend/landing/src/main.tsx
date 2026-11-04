@@ -21,13 +21,14 @@ import { bootChat } from './hubspotChat'
 import { BrandMark } from './icons'
 import { InvitePage } from './components/InvitePage'
 import { inviteToken } from './inviteLink'
-import { isInvitePath } from './route'
+import { NOT_FOUND_PAGE, isInvitePath } from './route'
 
 if (!forwarding) {
+  const notFound = document.documentElement.dataset.page === NOT_FOUND_PAGE
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <CrashBoundary brand={<BrandMark size={20} />}>
-        {isInvitePath(location.pathname) ? <InvitePage token={inviteToken()} /> : <App />}
+        {!notFound && isInvitePath(location.pathname) ? <InvitePage token={inviteToken()} /> : <App notFound={notFound} />}
       </CrashBoundary>
     </StrictMode>,
   )

@@ -885,6 +885,40 @@ export function getInvoice(token: string, id: string): Promise<GetInvoiceResult>
   return apiFetch<GetInvoiceResult>(`${apiBase()}/api/invoice/v1/invoices/${id}`, { token })
 }
 
+// Batch-submits one invoice, then polls GET until it reaches `want`.
+export async function submitAndAwait(
+  token: string,
+  id: string,
+  want: 'accepted' | 'rejected',
+  timeoutMs = 120_000,
+): Promise<GetInvoiceResult> {
+  // Shape of internal/invoice/batch_submit.go's BatchSubmitResultItem; Reason is omitted when enqueued.
+  const { results } = await apiFetch<{ results: { invoice_id: string; enqueued: boolean; status: string; reason?: string }[] }>(
+    `${apiBase()}/api/invoice/v1/invoices/submissions`,
+    {
+      method: 'POST',
+      body: { invoice_ids: [id], idempotency_key: crypto.randomUUID() },
+      token,
+    },
+  )
+  if (!results[0]?.enqueued) {
+    throw new Error(`submitAndAwait: invoice ${id} was not enqueued: ${results[0]?.reason ?? 'no result'}`)
+  }
+  // Dynamic import: ctl and nightly tools load this module outside the Playwright runner.
+  const { expect } = await import('@playwright/test')
+  let inv!: GetInvoiceResult
+  await expect
+    .poll(
+      async () => {
+        inv = await getInvoice(token, id)
+        return inv.status
+      },
+      { timeout: timeoutMs, intervals: [1_000], message: `submitAndAwait: invoice ${id} did not reach ${want}` },
+    )
+    .toBe(want)
+  return inv
+}
+
 // InvoiceEditInput mirrors internal/invoice/handlers.go's editReq exactly: the 9
 // optional header MBS-content fields PATCH /v1/invoices/{id} accepts (M4-05-03), plus
 // invoice_number, which renames a never-submitted draft (blank after trimming is a 400).

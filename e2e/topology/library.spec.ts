@@ -228,6 +228,59 @@ test.describe('library layout at wide widths', () => {
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 
+  test('library not-found: the in-app view sits inside #lib-main and aligns with a group page', async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    const errors = collectErrors(page)
+    await prepare(page)
+    const measured: Record<string, unknown>[] = []
+    await visit(page, `/${GROUPS[0].gid}`)
+    for (const width of WIDE_WIDTHS) {
+      await resize(page, width, 1080)
+      const h2 = await rectOf(main(page).locator('h2').first(), 'group h2')
+      await page.evaluate((p) => {
+        window.history.pushState(null, '', p)
+        window.dispatchEvent(new PopStateEvent('popstate'))
+      }, `/library/nope-${crypto.randomUUID()}`)
+      await expect(main(page).locator('h1'), `@${width}: not-found h1`).toHaveText('Page not found')
+      const section = await rectOf(main(page).locator('section'), 'not-found section')
+      const h1 = await rectOf(main(page).locator('h1'), 'not-found h1')
+      const m = await rectOf(main(page), '#lib-main')
+      measured.push({ width, h2, h1, section, main: m })
+      expect.soft(enclosesRect(m, section), `@${width}: #lib-main encloses the not-found section`).toBe(true)
+      expect.soft(Math.abs(h1.x - h2.x), `@${width}: h1 aligns with the group h2`).toBeLessThanOrEqual(1)
+      await page.goBack()
+      await expect(main(page).locator('h2').first(), `@${width}: back to the group page`).toBeVisible()
+    }
+    await attachJson(testInfo, 'library-not-found', measured)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('library not-found page: the heading aligns with the logo, the buttons and the footer stay apart', async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    const pageErrors: string[] = []
+    page.on('pageerror', (err) => pageErrors.push(err.message))
+    await prepare(page)
+    const measured: Record<string, unknown>[] = []
+    await page.goto(`${LIBRARY_URL}/nope-${crypto.randomUUID()}`)
+    const h1 = page.getByRole('heading', { level: 1, name: 'Page not found' })
+    await expect(h1).toBeVisible()
+    for (const width of WIDE_WIDTHS) {
+      await resize(page, width, 1080)
+      const logo = await rectOf(page.getByRole('banner').getByRole('link', { name: 'ASComply Africa', exact: true }), 'Nav logo')
+      const heading = await rectOf(h1, 'not-found h1')
+      const home = await rectOf(page.getByRole('link', { name: 'Back to home' }), 'home button')
+      const library = await rectOf(page.getByRole('link', { name: 'Browse the library' }), 'library button')
+      const section = await rectOf(page.locator('section').filter({ has: h1 }), 'not-found section')
+      const footer = await rectOf(page.getByRole('contentinfo'), 'footer')
+      measured.push({ width, logo, heading, home, library, section, footer })
+      expect.soft(Math.abs(heading.x - logo.x), `@${width}: h1 aligns with the Nav logo`).toBeLessThanOrEqual(1)
+      expect.soft(rectsOverlap(home, library), `@${width}: the two buttons do not overlap`).toBe(false)
+      expect.soft(section.y + section.height, `@${width}: the section ends above the footer`).toBeLessThanOrEqual(footer.y)
+    }
+    await attachJson(testInfo, 'library-not-found-page', measured)
+    expect(pageErrors, `page errors:\n${pageErrors.join('\n')}`).toEqual([])
+  })
+
   test('library player scene stays inside its 350px box at every step', async ({ page }, testInfo) => {
     test.setTimeout(480_000)
     const errors = collectErrors(page)

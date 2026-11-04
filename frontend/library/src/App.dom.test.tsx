@@ -113,12 +113,12 @@ describe('App', () => {
     expect(container.textContent).toContain('Feature library')
   })
 
-  it('boot_anUnknownPathShowsTheHomeAndKeepsTheUrl', () => {
+  it('boot_anUnknownPathShowsNotFoundAndKeepsTheUrl', () => {
     for (const path of ['/library/nope', '/library/invoices/learns']) {
       window.history.replaceState(null, '', path)
       const len = window.history.length
       mount(path)
-      expect(container.textContent).toContain('Feature library')
+      expect(main().querySelector('h1')!.textContent).toBe('Page not found')
       expect(window.location.pathname).toBe(path)
       expect(window.history.length).toBe(len)
       act(() => root.unmount())
@@ -165,7 +165,7 @@ describe('App', () => {
     mount('/library/nope')
     const l3 = window.history.length
     click(byText('aside button', 'Overview'))
-    expect(window.history.length).toBe(l3)
+    expect(window.history.length).toBe(l3 + 1)
     expect(window.location.pathname).toBe('/library/')
     act(() => root.unmount())
     container.remove()

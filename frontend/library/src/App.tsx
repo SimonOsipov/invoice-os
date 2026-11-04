@@ -4,6 +4,7 @@ import { Home } from './components/Home'
 import { FeaturePage } from './components/FeaturePage'
 import { GroupPage } from './components/GroupPage'
 import { JourneyStepper } from './components/JourneyStepper'
+import { NotFoundView } from './components/NotFoundView'
 import { Sidebar } from './components/Sidebar'
 import { TourOverlay } from './components/TourOverlay'
 import { chooseConsent, CookieNotice, readConsent, syncLibraryConsent, trackLibraryPageView, trackTourStart } from './analytics'
@@ -137,6 +138,7 @@ export function App() {
       <main id="lib-main" style={{ flex: 1, minWidth: 0, overflowY: 'auto', position: 'relative' }}>
         <JourneyStepper route={route} onGroup={goGroup} tourStage={tourOn ? tourStage(tour) : undefined} />
         {route.view === 'home' && <Home demoHref={demo} onGroup={goGroup} onTour={phone ? null : startTour} />}
+        {route.view === 'not-found' && <NotFoundView onHome={goHome} />}
         {route.view === 'group' && (
           <GroupPage
             group={route.group}

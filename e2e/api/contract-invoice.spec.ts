@@ -51,6 +51,7 @@ import {
   getInvoice,
   getInvoiceNotes,
   issueNote,
+  submitAndAwait,
   editInvoice,
   rollup,
   createApprovalPolicy,
@@ -168,6 +169,8 @@ const APPROVE_NOT_ROLE_HOLDER_REASON =
 const MOCK_TIN_ACCEPT = '99999999-0001'
 const MOCK_TIN_REJECT = '99999999-0002'
 
+const CREDIT_NOTE_OVER_CAP = 'credit-note-over-cap' // internal/invoice/note_checks.go ruleCreditNoteOverCap
+
 // internal/submission/mock_script.go mockTINUnbuildable: the mock adapter fails Transform for this buyer TIN.
 const MOCK_TIN_UNBUILDABLE = '99999999-0010'
 
@@ -199,19 +202,6 @@ async function unbuildableFailedInvoice(tok: string, entityId: string, number: s
     )
     .toBe('failed/payload_not_built')
   return created.id
-}
-
-async function submitAndAwait(tok: string, id: string, want: 'accepted' | 'rejected') {
-  const res = await rawFetch('/api/invoice/v1/invoices/submissions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${tok}` },
-    body: { invoice_ids: [id], idempotency_key: crypto.randomUUID() },
-  })
-  expect(res.status, 'batch submit').toBe(200)
-  await expect
-    .poll(async () => (await getInvoice(tok, id)).status, { timeout: 120_000, intervals: [1_000] })
-    .toBe(want)
-  return getInvoice(tok, id)
 }
 
 // A 2-line original that reached accepted through the mock adapter.
@@ -2519,6 +2509,32 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(after.notes.find((n) => n.id === note.id)?.status).toBe('accepted')
       expect(Number(after.credited_so_far) - Number(before.credited_so_far), 'credited_so_far rises by the note total').toBeCloseTo(Number(note.total), 2)
       expect(Number(before.still_creditable) - Number(after.still_creditable), 'still_creditable falls by the same').toBeCloseTo(Number(note.total), 2)
+    })
+
+    test('notes: a second credit note on a fully credited original fails credit-note-over-cap at validate', async () => {
+      const original = await acceptedOriginal(token, entity.id, `INV-N5-${freshTin()}`)
+      const lineOf = (n: number) => original.line_items!.find((l) => l.line_no === n)!
+      const full = await issueNote(token, original.id, {
+        document_type: 'credit_note',
+        invoice_number: `CN-N5A-${freshTin()}`,
+        issue_date: '2026-02-01T00:00:00Z',
+        lines: [
+          { line_id: lineOf(1).id, quantity: '2', unit_price: '250' },
+          { line_id: lineOf(2).id, quantity: '5', unit_price: '100' },
+        ],
+      })
+      expect(Number(full.total), 'fixture: the full note equals the cap').toBe(Number(original.total))
+      expect((await validateInvoice(token, full.id)).status, 'a note equal to the cap validates').toBe('validated')
+      await approveUntilClosed(full.id, await firmApproverTokens())
+      await submitAndAwait(token, full.id, 'accepted')
+
+      const second = await issueNote(token, original.id, noteBody(original, `CN-N5B-${freshTin()}`))
+      const verdict = await validateInvoice(token, second.id)
+      expect(verdict.status, 'the over-cap violation is error severity').toBe('draft')
+      const over = verdict.violations.find((v) => v.rule_key === CREDIT_NOTE_OVER_CAP)
+      expect(over, `violations: ${verdict.violations.map((v) => v.rule_key).join(', ')}`).toBeDefined()
+      expect(over!.message).toContain('exceeds the 0.00 still creditable')
+      expect(over!.path).toBe('total')
     })
   })
 })

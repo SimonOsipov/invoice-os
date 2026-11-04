@@ -33,7 +33,7 @@ paths:
 - Expect the app Rules screen to read the golden set and the custom rules from the server.
 - Never publish a rule-set version in a topology spec. The api contract spec publishes only with the start date `3001-01-01`.
 - Label a mock-backed assertion as a fixture check, in the spec. It pins a fixture, not a contract.
-- Test the `library` SPA for render, navigation, the demo player, Open in Platform and consent. It is static content with no backend.
+- Test the `library` SPA for render, navigation, the demo player, Open in Platform and consent. The SPA bundle is static content with no backend. The library image also serves the landing-built not-found page (`/srv/404.html`); only its assets and favicon sit under `/library/_landing/`.
 - Test the `blog` SPA for render, layout, navigation, search, the article contents list and demo, the load-failure state and consent. It reads published posts from the gateway's public blog routes and its newsletter form posts to the gateway's public subscribe routes.
 - Cover the blog's crawler HTML, sitemap and robots in `e2e/api/contract-blog-crawler.spec.ts`. Cover the `www` robots there too.
 - Set `LIBRARY_URL` and `BLOG_URL` to each site's home, base path included.

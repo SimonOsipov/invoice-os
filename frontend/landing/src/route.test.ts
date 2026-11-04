@@ -90,8 +90,20 @@ describe('isPrivacyPath', () => {
     expect(isPrivacyPath('/ｐrivacy')).toBe(false)
   })
 
-  it('a double leading slash is not a match', () => {
-    expect(isPrivacyPath('//privacy')).toBe(false)
+  it('a double leading slash is the same page, as Caddy collapses it', () => {
+    expect(isPrivacyPath('//privacy')).toBe(true)
+    expect(isPrivacyPath('///privacy/')).toBe(true)
+  })
+
+  it('a percent-encoded letter is the same page, as Caddy decodes it', () => {
+    expect(isPrivacyPath('/%70rivacy')).toBe(true)
+    expect(isPrivacyPath('/%70rivacy/')).toBe(true)
+  })
+
+  it('a malformed escape does not throw and is not a match', () => {
+    expect(() => isPrivacyPath('/%E0%A4%A')).not.toThrow()
+    expect(isPrivacyPath('/%E0%A4%A')).toBe(false)
+    expect(isInvitePath('/%E0%A4%A')).toBe(false)
   })
 
   it('a missing leading slash is not a match', () => {
@@ -102,9 +114,10 @@ describe('isPrivacyPath', () => {
 describe('isInvitePath', () => {
   it('isInvitePath_followsIsPrivacyPathsRules', () => {
     for (const p of ['/invite', '/invite/', '/INVITE', ' /invite ', '/invite/ ']) expect(isInvitePath(p), p).toBe(true)
+    for (const p of ['//invite', '/%69nvite']) expect(isInvitePath(p), p).toBe(true)
     // Control: the sibling rule still answers for its own page, not this one.
     expect(isInvitePath('/privacy')).toBe(false)
-    for (const p of ['/invite//', '/invite/x', '/invites', '//invite', 'invite', '/', '', '/invite\u0000']) expect(isInvitePath(p), p).toBe(false)
+    for (const p of ['/invite//', '/invite/x', '/invites', 'invite', '/', '', '/invite\u0000']) expect(isInvitePath(p), p).toBe(false)
   })
 })
 

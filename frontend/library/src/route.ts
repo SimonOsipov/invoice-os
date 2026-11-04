@@ -13,9 +13,18 @@ const HOME: Route = { view: 'home' }
 // A path outside the base reads as base-relative, so the old hosts keep serving until the old-host 301 is live.
 const stripBase = (p: string): string => (p === LIBRARY_BASE || p.startsWith(`${LIBRARY_BASE}/`) ? p.slice(LIBRARY_BASE.length) : p)
 
+// Caddy decodes the path before matching files; a malformed escape stays literal.
+const decode = (s: string): string => {
+  try {
+    return decodeURIComponent(s)
+  } catch {
+    return s
+  }
+}
+
 export function parseLibraryPath(raw: string): Route {
   const notFound: Route = { view: 'not-found', path: raw }
-  const pathname = stripBase(raw).replace(/\/{2,}/g, '/')
+  const pathname = decode(stripBase(raw)).replace(/\/{2,}/g, '/')
   if (pathname === '' || pathname === '/') return HOME
   const m = /^\/([^/]+)(?:\/([^/]+))?\/?$/.exec(pathname)
   if (!m) return notFound

@@ -1,8 +1,17 @@
 import { LIBRARY_BASE } from './sitePaths'
 
-// Pure/total: trim, lowercase, strip one trailing slash, exact-match only.
+// Caddy decodes and collapses the path before matching files; mirror it so a 200 never renders the home page.
+const decode = (s: string): string => {
+  try {
+    return decodeURIComponent(s)
+  } catch {
+    return s
+  }
+}
+
+// Pure/total: trim, decode, lowercase, collapse leading/inner slash runs, strip one trailing slash, exact-match only.
 const normalize = (pathname: string): string => {
-  const trimmed = pathname.trim().toLowerCase()
+  const trimmed = decode(pathname.trim()).toLowerCase().replace(/\/{2,}(?=[^/])/g, '/')
   return trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed
 }
 

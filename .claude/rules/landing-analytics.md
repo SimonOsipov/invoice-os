@@ -50,7 +50,7 @@ paths:
 - Send `demo_open` from the blog with `cta_location` `blog`.
 - Send `demo_open` from the library with `cta_location` `library`. Send `tour_start` with no parameter.
 - Send `open_in_platform` with `feature_id` or `group_id`. Both are content ids, never visitor input.
-- Send no HubSpot form and no `generate_lead` from the library. It has no forms.
+- Send no HubSpot form and no `generate_lead` from the library SPA bundle. It has no forms.
 
 ## HubSpot chat
 

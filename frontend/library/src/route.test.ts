@@ -55,6 +55,18 @@ describe('route', () => {
     }
   })
 
+  it('parse_percentEncodedLetterIsTheSamePage', () => {
+    const r = parseLibraryPath(`${LIBRARY_BASE}/%69nvoices`)
+    expect(r.view).toBe('group')
+    expect(r.view === 'group' && r.group.id).toBe('invoices')
+  })
+
+  it('parse_malformedEscapeIsNotFoundAndDoesNotThrow', () => {
+    const p = `${LIBRARY_BASE}/%E0%A4%A`
+    expect(() => parseLibraryPath(p)).not.toThrow()
+    expect(parseLibraryPath(p)).toEqual({ view: 'not-found', path: p })
+  })
+
   it('parse_homeStaysHome', () => {
     for (const p of ['', '/', '/library', '/library/']) expect(parseLibraryPath(p), p).toEqual({ view: 'home' })
   })

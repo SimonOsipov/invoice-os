@@ -12,7 +12,7 @@ const GATEWAY_URL = resolveTarget('GATEWAY_URL')
 const APP_URL = resolveTarget('APP_URL')
 const LIBRARY_CONTENT = readFileSync(new URL('../../frontend/library/src/content.ts', import.meta.url), 'utf8')
 const NOINDEX = '<meta name="robots" content="noindex"'
-const MARKER = 'data-page="not-found"' // NOT_FOUND_PAGE in frontend/landing/src/sitePages.ts
+const MARKER = 'data-page="not-found"' // NOT_FOUND_PAGE in frontend/landing/src/route.ts
 const wrong = (): string => `/nope-${crypto.randomUUID()}`
 
 function watchPageErrors(page: Page): string[] {

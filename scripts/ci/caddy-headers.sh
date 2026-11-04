@@ -83,6 +83,16 @@ for path in /.env /nope-xyz /Privacy /sitemap.xml /404.html /index.html /privacy
   row "$sport" "$path" 404 NOTFOUND-PAGE
 done
 row "$sport" /nope-xyz 404 NOTFOUND-PAGE -sI
+# The 404 sends no validators and answers conditionals with the full page.
+nfh=$(curl -s -o /dev/null -D - "http://127.0.0.1:$sport/nope-xyz" | tr -d '\r')
+printf '%s\n' "$nfh" | grep -qi '^etag:\|^last-modified:' && { echo "FAIL /nope-xyz: 404 carries a validator"; fail=1; }
+for cond in 'If-None-Match: *' 'If-Modified-Since: Fri, 01 Jan 2100 00:00:00 GMT'; do
+  cb=$(curl -s -H "$cond" -w '|%{http_code}' "http://127.0.0.1:$sport/nope-xyz")
+  { [ "${cb##*|}" = 404 ] && printf '%s' "$cb" | grep -q NOTFOUND-PAGE; } || { echo "FAIL /nope-xyz with $cond: want 404 with the not-found body"; fail=1; }
+done
+petag=$(curl -s -o /dev/null -D - "http://127.0.0.1:$sport/privacy" | tr -d '\r' | sed -n 's/^[Ee][Tt]ag: //p')
+cb=$(curl -s -H "If-None-Match: $petag" -w '|%{http_code}' "http://127.0.0.1:$sport/nope-xyz")
+{ [ "${cb##*|}" = 404 ] && printf '%s' "$cb" | grep -q NOTFOUND-PAGE; } || { echo "FAIL /nope-xyz with a page ETag: want 404 with the not-found body"; fail=1; }
 row "$sport" /library/index.html 404 NOTFOUND-PAGE -sI
 # Real addresses: 200 with their own body.
 for r in '/|STRICT-INDEX' '/?signin=ready|STRICT-INDEX' '/?verified=1|STRICT-INDEX' '/?verify=failed|STRICT-INDEX' \

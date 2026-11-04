@@ -296,6 +296,41 @@ describe('trackCover', () => {
     expect(h.release).toHaveBeenCalledTimes(1)
     expect(onUrl).not.toHaveBeenCalled()
   })
+
+  const abortable = (signal: AbortSignal) => new Promise<never>((_, rej) => signal.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))))
+
+  it('stop before the read lands: the AbortError reports no null and expires nothing', async () => {
+    const expire = vi.fn()
+    const onUrl = vi.fn()
+    const stop = trackCover({ fetchCoverUrl: (_id: string, signal: AbortSignal) => abortable(signal), expire }, 'p1', onUrl)
+    stop()
+    await new Promise((r) => setTimeout(r))
+    expect(onUrl).not.toHaveBeenCalled()
+    expect(expire).not.toHaveBeenCalled()
+  })
+
+  it('stop after the handle landed: released once, no further onUrl', async () => {
+    const h = handle()
+    const onUrl = vi.fn()
+    const stop = trackCover({ fetchCoverUrl: (_id: string, signal: AbortSignal) => (signal ? Promise.resolve(h) : Promise.reject(new Error('no signal'))), expire: vi.fn() }, 'p1', onUrl)
+    await Promise.resolve()
+    expect(onUrl).toHaveBeenCalledTimes(1)
+    stop()
+    await new Promise((r) => setTimeout(r))
+    expect(h.release).toHaveBeenCalledTimes(1)
+    expect(onUrl).toHaveBeenCalledTimes(1)
+  })
+
+  it('a live 401 still expires, with an unaborted signal', async () => {
+    const expire = vi.fn()
+    const onUrl = vi.fn()
+    let sig!: AbortSignal
+    trackCover({ fetchCoverUrl: (_id: string, signal: AbortSignal) => ((sig = signal), Promise.reject(new ApiError('http', 'Unauthorized', 401))), expire }, 'p1', onUrl)
+    await new Promise((r) => setTimeout(r))
+    expect(sig.aborted).toBe(false)
+    expect(expire).toHaveBeenCalledTimes(1)
+    expect(onUrl).toHaveBeenCalledWith(null)
+  })
 })
 
 const CAT1 = { id: 'c1' } as Category

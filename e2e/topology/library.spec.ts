@@ -687,4 +687,49 @@ test.describe('library journeys', () => {
     await attachJson(testInfo, 'library-browse', measured)
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
+
+  test('library journeys: each demo step shows its caption, and Replay at the last step returns to step 1', async ({ page }, testInfo) => {
+    test.setTimeout(240_000)
+    const errors = collectErrors(page)
+    await prepare(page)
+    await resize(page, 1280, 1080)
+    const measured: Record<string, unknown>[] = []
+    const pad = (k: number) => String(k).padStart(2, '0')
+    for (const { gid, fid } of FEATURES()) {
+      await visit(page, `/${gid}/${fid}`)
+      const label = page.getByTestId('lib-player').getByText(/^\d{2} \/ \d{2}$/)
+      await expect(label).toBeVisible()
+      const n = Number((await label.textContent())!.slice(5))
+      const scrub = page.locator('#lib-scrub')
+      const toggle = page.getByRole('button', { name: 'Play or pause' })
+      // same pause as the scene test: toggle only a playing clock, seek off an ended one
+      if ((await toggle.getAttribute('data-state')) === 'playing') await toggle.click()
+      if ((await toggle.getAttribute('data-state')) === 'ended') await scrub.click({ position: { x: 1, y: 3 } })
+      await expect(toggle, `${gid}/${fid}: the player is paused before seeking`).toHaveAttribute('data-state', 'paused')
+      const demo = page.locator('.t-eyebrow', { hasText: 'In this demo' }).locator('xpath=following-sibling::div[1]/button')
+      await expect(demo, `${gid}/${fid}: one "In this demo" entry per step`).toHaveCount(n)
+      for (let i = 0; i < n; i++) {
+        const bar = await rectOf(scrub, '#lib-scrub')
+        await scrub.click({ position: { x: ((i + 0.5) / n) * bar.width, y: bar.height / 2 } })
+        await expect(label, `${gid}/${fid}: seek to step ${i + 1}`).toHaveText(`${pad(i + 1)} / ${pad(n)}`)
+        const caption = ((await label.evaluate((el) => el.nextElementSibling?.textContent)) ?? '').trim()
+        const entry = (await demo.nth(i).locator('span').nth(1).textContent())?.trim() ?? ''
+        measured.push({ gid, fid, step: i + 1, steps: n, caption, entry })
+        expect.soft(caption, `${gid}/${fid} step ${i + 1}: caption is not empty`).not.toBe('')
+        expect.soft(caption, `${gid}/${fid} step ${i + 1}: player caption equals "In this demo" entry`).toBe(entry)
+        await expect.soft(demo.nth(i), `${gid}/${fid} step ${i + 1}: entry is the current step`).toHaveAttribute('aria-current', 'step')
+      }
+      // Replay is the ended Play or pause button; a click restarts at step 1
+      const bar = await rectOf(scrub, '#lib-scrub')
+      await scrub.click({ position: { x: 0.995 * bar.width, y: bar.height / 2 } })
+      await toggle.click()
+      await expect(toggle, `${gid}/${fid}: the demo ends`).toHaveAttribute('data-state', 'ended')
+      await expect.soft(label, `${gid}/${fid}: Replay starts from the last step`).toHaveText(`${pad(n)} / ${pad(n)}`)
+      await toggle.click()
+      await expect(toggle, `${gid}/${fid}: Replay plays`).toHaveAttribute('data-state', 'playing')
+      await expect.soft(label, `${gid}/${fid}: Replay returns to step 1`).toHaveText(`01 / ${pad(n)}`)
+    }
+    await attachJson(testInfo, 'library-captions', measured)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
 })

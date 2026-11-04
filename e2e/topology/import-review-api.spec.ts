@@ -1,10 +1,13 @@
 // The import review table on a batch minted through the API, with no AI.
+import { readFileSync } from 'node:fs'
 import { test, expect, type Page, type Request, type Response } from '@playwright/test'
-import { login, createEntity, createImportBatchFromCsv, type ImportBatchResult } from '../api/client'
+import { login, createEntity, createImportBatchFromCsv, listInvoices, uploadDocument, buildForm, importFetch, type ImportBatchResult } from '../api/client'
+import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
-import { buildMixedCsv, buildPerfCsv, PERF_MAPPING } from '../importFixtures'
+import { buildCleanCsv, buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, PERF_MAPPING } from '../importFixtures'
 import { signInAs } from '../personaSession'
-import { collectErrors, shardPersonas } from './importWizardShared'
+import { approveOpenRunsForEntity, collectErrors, shardPersonas } from './importWizardShared'
+import { APP_URL } from './targets'
 
 const { SHARD, PERSONAS } = shardPersonas('import-review-api.spec.ts')
 
@@ -33,34 +36,37 @@ async function click(page: Page, batchId: string, target: ReturnType<Page['locat
   await Promise.all([page.waitForResponse(tablePage(batchId, params)), target.click()])
 }
 
-type PageBody = { invoices: { id: string; invoice_number: string; kept_as_is_at: string | null }[]; pagination: { limit: number; offset: number; total: number } }
+type PageBody = { invoices: { id: string; invoice_number: string; kept_as_is_at: string | null; can_submit: boolean }[]; pagination: { limit: number; offset: number; total: number } }
 
-// Mints a batch and opens its review. The listeners and waits go up before signInAs, which loads
+// Opens the review of one or more batches. The listeners and waits go up before signInAs, which loads
 // the review itself: no reload, so no first-load request can be mistaken for a later one.
+async function openReview(page: Page, ids: string[], invoices: number) {
+  const key = ids.join(',')
+  let summaryRequests = 0
+  page.on('request', (r) => {
+    if (isRequest(r, key, SUMMARY)) summaryRequests++
+  })
+  const [, tableResp, summaryResp] = await Promise.all([
+    signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${key}/review` }),
+    page.waitForResponse(tablePage(key), { timeout: 120_000 }),
+    page.waitForResponse((r) => isRequest(r.request(), key, SUMMARY), { timeout: 120_000 }),
+  ])
+  await expect(page.getByRole('heading', { level: 2, name: `${invoices} invoices imported` })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('review-table')).toBeVisible()
+  return {
+    firstPage: (await tableResp.json()) as PageBody,
+    summary: (await summaryResp.json()) as { rules: { rule_key: string; invoices: number }[] },
+    summaryRequests: () => summaryRequests,
+  }
+}
+
+// Mints a batch and opens its review.
 async function openReviewedBatch(page: Page, name: string, csv: string, filename: string) {
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `NCOV-01 ${name} ${Date.now()}`, tin: freshTin() })
   const batch: ImportBatchResult = await createImportBatchFromCsv(token, entity.id, { csv, filename, mapping: PERF_MAPPING })
   const id = batch.id
-
-  let summaryRequests = 0
-  page.on('request', (r) => {
-    if (isRequest(r, id, SUMMARY)) summaryRequests++
-  })
-  const [, tableResp, summaryResp] = await Promise.all([
-    signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${id}/review` }),
-    page.waitForResponse(tablePage(id), { timeout: 120_000 }),
-    page.waitForResponse((r) => isRequest(r.request(), id, SUMMARY), { timeout: 120_000 }),
-  ])
-  await expect(page.getByRole('heading', { level: 2, name: `${batch.ready_invoices} invoices imported` })).toBeVisible({ timeout: 60_000 })
-  await expect(page.getByTestId('review-table')).toBeVisible()
-  return {
-    id,
-    batch,
-    firstPage: (await tableResp.json()) as PageBody,
-    summary: (await summaryResp.json()) as { rules: { rule_key: string; invoices: number }[] },
-    summaryRequests: () => summaryRequests,
-  }
+  return { id, batch, ...(await openReview(page, [id], batch.ready_invoices)) }
 }
 
 function violateId(firstPage: PageBody): string {
@@ -301,6 +307,276 @@ test.describe('NCOV-01 import review table, API-minted batch', () => {
     await expect(select).toBeVisible()
     await expect(select).toBeDisabled()
     expect(keeps, 'the filter changes sent no further keep-as-is').toBe(1)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+})
+
+test.describe('NCOV-02 review channels, multi-file runs and the source card', () => {
+  test.use({ viewport: { width: 1440, height: 900 } })
+
+  test('review channels: the unreadable rows tab lists the structural rows and exports them as CSV', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const { id, batch } = await openReviewedBatch(page, 'unreadable', buildMixedCsv(' unreadable'), 'review-unreadable.csv')
+    // Fixture check: STRUCT's two rows are unreadable; VIOLATE and CLEAN become invoices.
+    expect(batch.ready_invoices, 'the fixture mints two invoices').toBe(2)
+
+    await page.getByRole('button', { name: 'Unreadable rows (2)' }).click()
+    const rows = page.getByTestId('unreadable-row')
+    await expect(rows).toHaveCount(2)
+    // internal/importer/service.go: STRUCT's error is rows [2,3], field issue_date.
+    for (const [i, row] of ['2', '3'].entries()) {
+      await expect(rows.nth(i)).toContainText('review-unreadable.csv')
+      await expect(rows.nth(i)).toContainText('issue_date')
+      await expect(rows.nth(i)).toContainText('rows disagree on issue_date')
+      await expect(rows.nth(i).getByText(row, { exact: true })).toBeVisible()
+    }
+
+    const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download this list (CSV)' }).click()])
+    expect(download.suggestedFilename()).toBe(`unreadable-rows-${id}.csv`)
+    const text = readFileSync(await download.path(), 'utf8')
+    // Leading U+FEFF, then header and one line per unreadable row (lib/reviewBatch.ts).
+    expect(text.charCodeAt(0), 'the file starts with a BOM').toBe(0xfeff)
+    expect(text.slice(1).split('\n')).toEqual([
+      'File,Row,Field,Why it could not be read',
+      'review-unreadable.csv,2,issue_date,rows disagree on issue_date',
+      'review-unreadable.csv,3,issue_date,rows disagree on issue_date',
+    ])
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('review channels: a re-import lists the already-imported rows and View invoice opens the collided invoice', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `NCOV-02 already ${Date.now()}`, tin: freshTin() })
+    // Distinct bytes, same invoice numbers: the documents keep their own filenames and the second still collides.
+    const mint = (filename: string, salt: string) => createImportBatchFromCsv(token, entity.id, { csv: buildMixedCsv(salt), filename, mapping: PERF_MAPPING })
+    const first = await mint('review-already-1.csv', ' already-1')
+    const second = await mint('review-already-2.csv', ' already-2')
+    // Fixture check: the first mint makes VIOLATE and CLEAN; the second collides on both.
+    expect(first.ready_invoices, 'the first mint makes two invoices').toBe(2)
+    expect(second.ready_invoices, 'the second mint collides on both').toBe(0)
+    const violate = (await listInvoices(token, { entity_id: entity.id })).invoices.find((i) => i.invoice_number === 'INV-UI-MIX-VIOLATE')
+    expect(violate?.id, 'the first batch holds the VIOLATE invoice').toBeTruthy()
+    const violateInvoiceId = violate!.id
+
+    await openReview(page, [second.id], 0)
+    await expect(page.getByRole('button', { name: 'Unreadable rows (2)' })).toBeVisible()
+    const tabBtn = page.getByRole('button', { name: 'Already imported (2)' })
+    await expect(tabBtn).toBeVisible()
+    await tabBtn.click()
+
+    const tab = page.getByTestId('review-already-imported-tab')
+    await expect(tab).toBeVisible()
+    const views = tab.getByRole('button', { name: 'View invoice' })
+    await expect(views).toHaveCount(2)
+    await expect(views.nth(0)).toBeEnabled()
+    await expect(views.nth(1)).toBeEnabled()
+    await expect(tab.getByText('review-already-2.csv')).toHaveCount(2)
+    // Rows follow the server's row-scan order: VIOLATE (row 4), then CLEAN (row 5).
+    expect(await tab.innerText()).toMatch(/review-already-2\.csv\s+4\s+View invoice[\s\S]*review-already-2\.csv\s+5\s+View invoice/)
+
+    const detailPath = `${INVOICES}/${violateInvoiceId}`
+    let gets = 0
+    page.on('request', (r) => {
+      if (r.method() === 'GET' && new URL(r.url()).pathname === detailPath) gets++
+    })
+    const [detailResp] = await Promise.all([
+      page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === detailPath),
+      views.nth(0).click(),
+    ])
+    expect(detailResp.ok(), 'the collided invoice loads').toBe(true)
+    await expect(page.getByTestId('invoice-detail')).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('INV-UI-MIX-VIOLATE')
+    expect(new URL(page.url()).pathname).toMatch(new RegExp(`/invoices/${violateInvoiceId}$`))
+    // Let a late duplicate GET land before the count is read.
+    await page.waitForLoadState('networkidle')
+    expect(gets, 'View invoice sends one GET').toBe(1)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('multi-file review: each row names its file and the rejected files say why', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `NCOV-02 multi ${Date.now()}`, tin: freshTin() })
+    const mint = (csv: string, filename: string) => createImportBatchFromCsv(token, entity.id, { csv, filename, mapping: PERF_MAPPING })
+    const a = await mint(buildCleanCsv('INV-NCOV02-A'), 'run-a.csv')
+    const b = await mint(buildCleanCsv('INV-NCOV02-B'), 'run-b.csv')
+    const c = await mint(buildHeaderOnlyCsv(1), 'run-empty.csv')
+    // Fixture check: the clean files mint two validated invoices each; a header-only file mints none.
+    for (const batch of [a, b]) {
+      expect(batch.ready_invoices, 'a clean file mints two invoices').toBe(2)
+      expect(batch.invoices_clean, 'both are validated').toBe(2)
+    }
+    expect(c.id, 'a header-only mint still answers a batch id').toBeTruthy()
+    expect(c.ready_invoices, 'a header-only file mints no invoice').toBe(0)
+
+    const { firstPage } = await openReview(page, [a.id, b.id, c.id], 4)
+    expect(firstPage.pagination.total, 'the table total spans both good files').toBe(4)
+
+    const rows = page.getByTestId('review-row')
+    await expect(rows).toHaveCount(4)
+    for (const row of await rows.all()) await expect(row.getByTestId('review-row-source-file')).toHaveCount(1)
+    for (const [prefix, file] of [['INV-NCOV02-A', 'run-a.csv'], ['INV-NCOV02-B', 'run-b.csv']]) {
+      const own = rows.filter({ hasText: `${prefix}-` })
+      await expect(own).toHaveCount(2)
+      for (const row of await own.all()) await expect(row.getByTestId('review-row-source-file')).toHaveText(file)
+    }
+
+    // reviewBatch.ts batchReason: a file with no valid rows and no errors reads "0 of N rows produced an invoice".
+    const strip = page.getByTestId('review-files-strip-row')
+    await expect(page.getByTestId('review-files-strip')).toBeVisible()
+    await expect(strip).toHaveCount(3)
+    for (const file of ['run-a.csv', 'run-b.csv']) {
+      const row = strip.filter({ hasText: file })
+      await expect(row).toContainText('Imported')
+      await expect(row).not.toContainText('Rejected')
+    }
+    const empty = strip.filter({ hasText: 'run-empty.csv' })
+    await expect(empty).toContainText('Rejected')
+    await expect(empty).toContainText('0 of 0 rows produced an invoice')
+
+    // Every batch rejected: the run page lists each file and its reason (ReviewBatch.tsx RejectedRun).
+    const d = await mint(buildHeaderOnlyCsv(2), 'run-empty-2.csv')
+    const e = await mint(buildHeaderOnlyCsv(3), 'run-empty-3.csv')
+    expect(d.ready_invoices, 'a header-only file mints no invoice').toBe(0)
+    expect(e.ready_invoices, 'a header-only file mints no invoice').toBe(0)
+    await page.goto(`${APP_URL}/imports/${d.id},${e.id}/review`)
+    const run = page.getByTestId('review-rejected-run')
+    await expect(run).toBeVisible({ timeout: 60_000 })
+    await expect(run).toContainText('Nothing was imported')
+    const files = page.getByTestId('review-rejected-run-file')
+    await expect(files).toHaveCount(2)
+    for (const file of ['run-empty-2.csv', 'run-empty-3.csv']) {
+      const one = files.filter({ hasText: file })
+      await expect(one).toHaveCount(1)
+      await expect(one).toContainText('0 of 0 rows produced an invoice')
+    }
+    await expect(page.getByTestId('review-table')).toHaveCount(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+  test('bulk submit: select all, confirm once, one POST, a result per invoice', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    await ensureFirmPolicyActive(token)
+    const entity = await createEntity(token, { name: `NCOV-02 bulk ${Date.now()}`, tin: freshTin() })
+    const batch = await createImportBatchFromCsv(token, entity.id, { csv: buildCleanCsv('INV-NCOV02-BULK'), filename: 'review-bulk.csv', mapping: PERF_MAPPING })
+    // Fixture check: two validated invoices.
+    expect(batch.ready_invoices, 'the fixture mints two invoices').toBe(2)
+    expect(batch.invoices_clean, 'both are validated').toBe(2)
+
+    // The runs arm asynchronously; closing them before they are open would leave rows unselectable.
+    await expect
+      .poll(async () => (await listInvoices(token, { entity_id: entity.id })).invoices.filter((inv) => inv.approval?.run_state === 'open').length, {
+        message: 'both validated invoices arm an open approval run',
+        timeout: 60_000,
+      })
+      .toBe(batch.ready_invoices)
+    await approveOpenRunsForEntity(token, entity.id, SHARD.a.id)
+
+    let submissions = 0
+    page.on('request', (r) => {
+      if (r.method() === 'POST' && new URL(r.url()).pathname === `${INVOICES}/submissions`) submissions++
+    })
+    const { firstPage } = await openReview(page, [batch.id], 2)
+    // Fixture check: the closed runs make both rows submittable.
+    expect(firstPage.invoices, 'the first page lists both invoices').toHaveLength(2)
+    for (const inv of firstPage.invoices) expect(inv.can_submit, `${inv.invoice_number} can be submitted`).toBe(true)
+
+    await page.getByTestId('review-select-all').click()
+    await expect(page.getByTestId('review-bulk-submit')).toContainText('Submit 2 for transmission')
+    await page.getByTestId('review-bulk-submit').click()
+    await expect(page.getByTestId('review-bulk-confirm')).toContainText('Yes, send 2 now')
+    expect(submissions, 'arming the bar sends nothing').toBe(0)
+
+    const [submitResp] = await Promise.all([
+      page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === `${INVOICES}/submissions`, { timeout: 60_000 }),
+      page.waitForResponse(tablePage(batch.id), { timeout: 60_000 }),
+      page.getByTestId('review-bulk-confirm').click(),
+    ])
+    const sent = JSON.parse(submitResp.request().postData() ?? '{}') as { invoice_ids?: string[]; idempotency_key?: unknown }
+    expect([...(sent.invoice_ids ?? [])].sort(), 'the POST carries the two batch ids').toEqual(firstPage.invoices.map((i) => i.id).sort())
+    expect(typeof sent.idempotency_key, 'the POST carries an idempotency key').toBe('string')
+    expect(submitResp.ok(), 'the submission answers OK').toBe(true)
+    const { results } = (await submitResp.json()) as { results: { enqueued: boolean }[] }
+    expect(results, 'a result per invoice').toHaveLength(2)
+    for (const r of results) expect(r.enqueued, 'each invoice is enqueued').toBe(true)
+
+    // 'Queued' is the enqueued label (lib/reviewBatch.ts); the verdict pill is not asserted, the worker races it.
+    const panel = page.getByTestId('review-submit-results')
+    for (const inv of firstPage.invoices) {
+      const row = panel.locator('div:has(> span)').filter({ hasText: inv.invoice_number })
+      await expect(row).toHaveCount(1)
+      await expect(row).toContainText('Queued')
+    }
+    expect(submissions, 'exactly one submissions POST').toBe(1)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('source document: the card names row 4, the preview opens the sheet and marks row 4', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `NCOV-02 source ${Date.now()}`, tin: freshTin() })
+    const documentId = await uploadDocument(token, buildMixedCsv(' source-card'), 'source-card-mixed.csv')
+    const imported = await importFetch(token, buildForm(entity.id, documentId, PERF_MAPPING))
+    // Fixture check: the import answers 201 and reports VIOLATE with its invoice id.
+    expect(imported.status, 'the mixed import answers 201').toBe(201)
+    const violations = (imported.body as { invoice_violations: { invoice_number: string; invoice_id?: unknown }[] }).invoice_violations
+    const invoiceId = violations.find((v) => v.invoice_number === 'INV-UI-MIX-VIOLATE')?.invoice_id
+    expect(typeof invoiceId, 'invoice_violations holds VIOLATE with a string invoice_id').toBe('string')
+
+    const sourcePath = `${INVOICES}/${invoiceId as string}/source-document`
+    const [, sourceResp] = await Promise.all([
+      signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/invoices/${invoiceId as string}` }),
+      page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === sourcePath, { timeout: 120_000 }),
+    ])
+    expect(sourceResp.status(), 'the source-document GET answers 200').toBe(200)
+    const source = (await sourceResp.json()) as { source_rows: number[]; document: { id: string } }
+    // buildMixedCsv: header, two unreadable rows, then VIOLATE, so VIOLATE is sheet row 4.
+    expect(source.source_rows, 'VIOLATE came from row 4').toEqual([4])
+    expect(source.document.id, 'the card points at the uploaded document').toBe(documentId)
+
+    const card = page.getByTestId('source-document-card')
+    await expect(card).toBeVisible({ timeout: 60_000 })
+    await expect(card).toContainText('source-card-mixed.csv')
+    // Singular copy from lib/sourceDocument.ts.
+    await expect(page.getByTestId('source-document-range')).toHaveText('Row 4 of this file became this invoice.')
+
+    const sheetPath = `/api/invoice/v1/documents/${documentId}/sheet`
+    const [sheetResp] = await Promise.all([
+      page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === sheetPath, { timeout: 60_000 }),
+      page.getByTestId('view-source-document').click(),
+    ])
+    expect(sheetResp.status(), 'the sheet GET answers 200').toBe(200)
+    await expect(page.getByTestId('source-document-modal')).toBeVisible()
+
+    // Middle dot as the escape, never typed.
+    await expect(page.getByTestId('sheet-scope-file')).toHaveText(/^Whole file \u00b7 4 rows$/)
+    const marked = page.getByTestId('sheet-row-marked')
+    await expect(marked).toHaveCount(1)
+    await expect(marked).toHaveAttribute('data-sheet-row', '4')
+    await expect(marked.getByTestId('sheet-row-number')).toHaveText('4')
+    await expect(marked).toContainText('INV-UI-MIX-VIOLATE')
+
+    await page.getByTestId('sheet-scope-invoice').click()
+    await expect(page.getByTestId('sheet-row')).toHaveCount(0)
+    await expect(marked).toHaveCount(1)
+    await expect(page.getByTestId('sheet-row-number')).toHaveCount(1)
+    await expect(marked.getByTestId('sheet-row-number')).toHaveText('4')
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

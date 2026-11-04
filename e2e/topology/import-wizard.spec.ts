@@ -69,8 +69,6 @@ import {
   login,
   createEntity,
   listInvoices,
-  approveUntilClosed,
-  firmApproverTokens,
   getExtractions,
   postFieldCorrection,
   rawFetch,
@@ -98,6 +96,7 @@ import { signInAs } from '../personaSession'
 import { nightlyTarget } from '../targets'
 import { INHOUSE_PERSONA } from './targets'
 import {
+  approveOpenRunsForEntity,
   boxOf,
   collectErrors,
   DEAD_LETTER_NEEDLE,
@@ -185,20 +184,6 @@ test.beforeAll(async () => {
   await ensureFirmPolicyActive(await login(PERSONAS.A))
   await ensureInhousePolicyActive(await login(PERSONAS.B))
 })
-
-// approveOpenRunsForEntity(): both submitting tests below hold only invoice NUMBERS
-// (review-row locator text filters), never ids -- this recovers them via the entity_id
-// filter (the entity is fresh, so this can only return this run's own rows) and closes
-// every open run over the side channel. Filtered to run_state 'open' rather than
-// approving every row unconditionally: a kept-as-is row is never validated, so it has no
-// run at all, and approveUntilClosed has nothing to read for one.
-async function approveOpenRunsForEntity(token: string, entityId: string): Promise<void> {
-  const { invoices } = await listInvoices(token, { entity_id: entityId })
-  const approverTokens = await firmApproverTokens(SHARD.a.id)
-  await Promise.all(
-    invoices.filter((inv) => inv.approval?.run_state === 'open').map((inv) => approveUntilClosed(inv.id, approverTokens)),
-  )
-}
 
 // Shared CSV steering fixture: the fake AI fleet scans every AI request's
 // text for an AIFAKE-ANSWER-<base64url> marker (internal/platform/ai/fake.go's fakeMarker),
@@ -1641,7 +1626,7 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
   // and close their runs before select-all, or the server answers can_submit:false. The
   // rail-pill toggle below re-fetches the table server-side ([filters-are-server-side],
   // this file's own header), so no separate wait is needed to see the approvals land.
-  await approveOpenRunsForEntity(token, entity.id)
+  await approveOpenRunsForEntity(token, entity.id, SHARD.a.id)
 
   // Toggle the SAME rule filter back off -- the invoice no longer matches it, so this is
   // also what makes the moved verdict (and the still-expanded row's passing panel)
@@ -1905,7 +1890,7 @@ test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disa
   // violations); VIOLATE never validates at all (kept stays non-validated), so it has no
   // run to close. Close CLEAN's before select-all below, or select-all picks up nothing.
   // The two filter-pill toggles below already re-fetch the table server-side.
-  await approveOpenRunsForEntity(token, entity.id)
+  await approveOpenRunsForEntity(token, entity.id, SHARD.a.id)
 
   // It drops out of "Needs a fix" ...
   await page.getByTestId('review-filter-pill').filter({ hasText: 'Needs a fix' }).click()

@@ -74,6 +74,8 @@ function collectErrors(page: Page, droppers: Dropper[] = []): string[] {
 async function selectEntity(page: Page, name = ENTITY_NAME): Promise<void> {
   await page.getByTestId('company-switcher').click()
   const option = page.getByTestId('company-switcher-option').filter({ hasText: name })
+  // the option sits below the menu's fold; toBeInViewport does not scroll
+  await option.scrollIntoViewIfNeeded()
   await expect(option).toBeInViewport()
   await option.click()
 }

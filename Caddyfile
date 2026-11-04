@@ -45,8 +45,10 @@
 		redir https://www.ascomply.com/library{uri} 301
 	}
 
-	# Liveness endpoint, answered before the filesystem. Cloud Run reserves /healthz on run.app.
-	handle /health {
+	# Liveness, answered before the filesystem; /library/health is the library's under its base.
+	# Cloud Run reserves /healthz on run.app.
+	@health path /health /library/health
+	handle @health {
 		respond "OK" 200
 	}
 
@@ -54,6 +56,24 @@
 	@maps path *.map
 	handle @maps {
 		respond 404
+	}
+
+	# A site that ships /404.html serves only built addresses; the app and consoles keep the SPA fallback.
+	@strict file {
+		root /srv
+		try_files /404.html
+	}
+	handle @strict {
+		root * /srv
+		# A copy is reached by its page address, never as .../index.html.
+		@indexFile path */index.html
+		rewrite @indexFile /404.html
+		try_files {path} {path}/index.html /404.html
+		@notFound path /404.html
+		file_server @notFound {
+			status 404
+		}
+		file_server
 	}
 
 	# Static assets with history-API fallback so client-side routing and deep links work.

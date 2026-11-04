@@ -67,6 +67,10 @@ export function notFoundIdDropper(page: Page, ids: string[]): Dropper {
   return expected404Dropper(page, new RegExp(`/api/invoice/v1/invoices/(?:${alternation})(?:[/?]|$)`))
 }
 
+// A transient transport failure on a hashed SPA asset is not an app defect; a status line or any other path still fails.
+const assetTransportDropper: Dropper = (text, url) =>
+  /Failed to load resource: net::ERR_/.test(text) && url != null && /^https?:\/\/[^/]+\/assets\//.test(url)
+
 // Origin and path only: a URL's query or fragment can carry a token, and these strings reach CI logs.
 function originAndPath(url: string): string {
   return url.replace(/[?#].*$/, '').replace(/eyJ[\w.-]*/g, '<jwt>')
@@ -116,7 +120,7 @@ export function collectSourcedErrors(page: Page, extra?: Dropper): string[] {
     if (msg.type() !== 'error') return
     const text = msg.text()
     const url = msg.location().url
-    if (extra?.(text, url)) return
+    if (assetTransportDropper(text, url) || extra?.(text, url)) return
     const status = /status of (\d{3})/.exec(text)?.[1]
     if (status && !failed.some((f) => f.startsWith(`${status} `))) {
       unfilled.push({ index: errors.length, status, text, url })

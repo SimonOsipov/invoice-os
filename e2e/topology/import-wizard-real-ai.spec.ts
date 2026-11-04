@@ -32,6 +32,10 @@ function oneInvoiceCsv(header: string, invoiceNumber: string): string {
 // copy: the keys of DOCUMENT_TYPE_NOTICE (frontend/app/src/lib/extractionReview.ts); transcribed, not imported.
 const NOTICE_TYPES = ['receipt', 'proforma', 'quotation', 'delivery note', 'statement', 'purchase order']
 
+// copy: CHANGED_LABEL.typed (extractionReview.ts); transcribed, not imported.
+const TYPED_LABEL = 'YOU CHANGED THIS'
+const TYPEABLE_BUYER_FIELDS = ['buyer_name', 'buyer_street', 'buyer_city']
+
 const POST_SUFFIX = {
   suggest: '/api/invoice/v1/imports/suggest-mapping',
   check: '/api/invoice/v1/imports/check-mapping',
@@ -264,6 +268,56 @@ test.describe('the wizard on the real AI', () => {
     await expect(banner).toBeVisible()
     await expect(banner).toContainText(type as string)
     await expect(banner).toContainText('not a tax invoice')
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('typed correction: one POST, and the field shows YOU CHANGED THIS', async ({ page }) => {
+    test.setTimeout(300_000)
+    const errors = collectErrors(page)
+    const typedValue = `Typed buyer ${Date.now()}`
+
+    await extractOneDocument(page, 'typed correction')
+    const detail = await openExtractionReview(page)
+
+    // A field with alternatives renders chips, not an input; the real read decides which.
+    const field = TYPEABLE_BUYER_FIELDS.find((name) => {
+      const f = detail.fields.find((x) => x.name === name)
+      return f !== undefined && !(f.reason === 'ambiguous' && f.alternatives.length > 0)
+    })
+    expect(field, `precondition: none of ${TYPEABLE_BUYER_FIELDS.join(', ')} renders an input`).toBeDefined()
+    const name = field as string
+
+    const posts: { path: string; status: number; body: { method?: string; value?: string } }[] = []
+    page.on('response', (r) => {
+      const req = r.request()
+      if (req.method() !== 'POST') return
+      const path = new URL(r.url()).pathname
+      if (path.endsWith('/corrections')) posts.push({ path, status: r.status(), body: req.postDataJSON() ?? {} })
+    })
+
+    const input = page.getByTestId(`extraction-input-${name}`)
+    const save = page.getByTestId('extraction-save')
+    await input.fill(typedValue)
+    await expect(save, 'a typed value left Save disabled').toBeEnabled()
+
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.request().method() === 'GET' && /\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}$/.test(new URL(r.url()).pathname),
+        { timeout: 120_000 },
+      ),
+      save.click(),
+    ])
+
+    expect(posts, 'exactly one corrections POST, counted after the re-read').toHaveLength(1)
+    expect(posts[0].path).toMatch(new RegExp(`/api/submission/v1/extractions/[0-9a-fA-F-]{36}/fields/${name}/corrections$`))
+    expect(posts[0].status, 'the typed correction was refused').toBe(201)
+    expect(posts[0].body.method).toBe('typed')
+    expect(posts[0].body.value).toBe(typedValue)
+
+    await expect(page.getByTestId(`extraction-marker-${name}`)).toBeVisible()
+    await expect(page.getByTestId(`extraction-field-${name}`)).toContainText(TYPED_LABEL)
+    await expect(input, 'the settled field holds the typed value').toHaveValue(typedValue)
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

@@ -2027,7 +2027,12 @@ test('deployed app: signing out on one device ends the session on every device',
     })
 
     await test.step("B's next request is refused and B returns to landing", async () => {
-      const refused = b.page.waitForResponse(isApiResponse)
+      // The held pre-sign-out rollup answers 200 once released; only a request sent from here counts.
+      const sentNow = new Set<Request>()
+      b.page.on('request', (r) => {
+        if (isApi(r) && r.method() !== 'OPTIONS') sentNow.add(r)
+      })
+      const refused = b.page.waitForResponse((r) => isApiResponse(r) && sentNow.has(r.request()))
       const bFrontDoor = frontDoor(b.page)
       release()
       await b.page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Invoices' }).click()

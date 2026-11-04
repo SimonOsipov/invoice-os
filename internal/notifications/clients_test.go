@@ -287,9 +287,26 @@ func TestNewsletterClients_PreviewIsCaptureAndFake(t *testing.T) {
 	}
 }
 
-func TestNewsletterClients_NightlyIsFakeAndEnabled(t *testing.T) {
-	vars := clFourKeys("RESEND_BLOG_TOPIC_ID", "bt", "RESEND_BLOG_SEGMENT_ID", "bs", "RESEND_SENDING_KEY", "sk")
-	w := clWiring(t, "nightly", vars)
+func clNightlyVars(extra ...string) map[string]string {
+	return clFourKeys(append([]string{"RESEND_BLOG_TOPIC_ID", "bt", "RESEND_BLOG_SEGMENT_ID", "bs", "RESEND_RECEIVING_DOMAIN", "x.resend.app"}, extra...)...)
+}
+
+func TestNewsletterClients_NightlyWithKeysIsRealAndEnabled(t *testing.T) {
+	w := clWiring(t, "nightly", clNightlyVars("RESEND_SENDING_KEY", "sk"))
+	if w.MailMode != accountmail.ModeReal || w.Mode != ModeReal || !w.Enabled {
+		t.Errorf("wiring = %+v, want real mail, real newsletter, enabled", w)
+	}
+}
+
+func TestNewsletterClients_NightlyWithoutSendingKeyKeepsCaptureMail(t *testing.T) {
+	w := clWiring(t, "nightly", clNightlyVars())
+	if _, ok := w.Sender.(*accountmail.Capture); !ok || w.MailMode != accountmail.ModeCapture || w.Mode != ModeReal || !w.Enabled {
+		t.Errorf("wiring = %+v, want capture mail, real newsletter, enabled", w)
+	}
+}
+
+func TestNewsletterClients_NightlyWithoutBlogIdsIsFakeAndEnabled(t *testing.T) {
+	w := clWiring(t, "nightly", clFourKeys("RESEND_SENDING_KEY", "sk"))
 	if w.Mode != ModeFake || !w.Enabled {
 		t.Errorf("wiring = %+v, want fake newsletter, enabled", w)
 	}
@@ -298,11 +315,16 @@ func TestNewsletterClients_NightlyIsFakeAndEnabled(t *testing.T) {
 	}
 }
 
-func TestNewsletterClients_NightlyMailIsCaptureEvenWithASendingKey(t *testing.T) {
-	vars := clFourKeys("RESEND_BLOG_TOPIC_ID", "bt", "RESEND_BLOG_SEGMENT_ID", "bs", "RESEND_SENDING_KEY", "sk")
-	w := clWiring(t, "nightly", vars)
-	if _, ok := w.Sender.(*accountmail.Capture); !ok || w.MailMode != accountmail.ModeCapture {
-		t.Errorf("wiring = %+v, want capture mail", w)
+func TestNewsletterClients_NightlyRealWithoutDomainFailsToBoot(t *testing.T) {
+	vars := clNightlyVars("RESEND_SENDING_KEY", "sk")
+	delete(vars, "RESEND_RECEIVING_DOMAIN")
+	contacts, _, _, err := DeliveryClients(clGetenv(vars), "nightly", nil)
+	if err != nil {
+		t.Fatalf("deliveryClients: %v", err)
+	}
+	_, err = NewsletterClients(clGetenv(vars), "nightly", contacts, nil)
+	if err == nil || !strings.Contains(err.Error(), "RESEND_RECEIVING_DOMAIN") {
+		t.Fatalf("err = %v, want a boot error naming RESEND_RECEIVING_DOMAIN", err)
 	}
 }
 

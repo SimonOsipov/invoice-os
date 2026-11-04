@@ -18,7 +18,11 @@ func TestNewsletterMode_Table(t *testing.T) {
 		wantKeys BlogKeys
 	}{
 		{"preview ignores keys", platform.PosturePreview, ModeReal, both, ModeFake, BlogKeys{}},
-		{"nightly ignores keys", platform.PostureNightly, ModeReal, both, ModeFake, BlogKeys{}},
+		{"preview real with both", platform.PosturePreview, ModeReal, both, ModeFake, BlogKeys{}},
+		{"nightly real with both", platform.PostureNightly, ModeReal, both, ModeReal, BlogKeys{TopicID: "t-1", SegmentID: "s-1"}},
+		{"nightly real with none", platform.PostureNightly, ModeReal, nil, ModeFake, BlogKeys{}},
+		{"nightly contacts fake with both", platform.PostureNightly, ModeFake, both, ModeFake, BlogKeys{}},
+		{"nightly contacts off with both", platform.PostureNightly, ModeOff, both, ModeOff, BlogKeys{}},
 		{"contacts fake", platform.PostureHosted, ModeFake, both, ModeFake, BlogKeys{}},
 		{"contacts off with keys", platform.PostureHosted, ModeOff, both, ModeOff, BlogKeys{}},
 		{"real with both", platform.PostureHosted, ModeReal, both, ModeReal, BlogKeys{TopicID: "t-1", SegmentID: "s-1"}},
@@ -41,18 +45,20 @@ func TestNewsletterMode_PartialKeysNameTheMissingVariable(t *testing.T) {
 		{envBlogTopic, "t-secret", envBlogSegment},
 		{envBlogSegment, "s-secret", envBlogTopic},
 	}
-	for _, c := range cases {
-		t.Run(c.missing, func(t *testing.T) {
-			_, _, err := NewsletterModeFromEnv(getenvFrom(map[string]string{c.set: c.value}), platform.PostureHosted, ModeReal)
-			if err == nil {
-				t.Fatal("err = nil, want a boot error")
-			}
-			if !strings.Contains(err.Error(), "missing "+c.missing) {
-				t.Errorf("error %q does not say missing %s", err, c.missing)
-			}
-			if strings.Contains(err.Error(), c.value) {
-				t.Errorf("error %q carries the value of %s", err, c.set)
-			}
-		})
+	for _, posture := range []platform.PostureKind{platform.PostureHosted, platform.PostureNightly} {
+		for _, c := range cases {
+			t.Run(string(posture)+"/"+c.missing, func(t *testing.T) {
+				_, _, err := NewsletterModeFromEnv(getenvFrom(map[string]string{c.set: c.value}), posture, ModeReal)
+				if err == nil {
+					t.Fatal("err = nil, want a boot error")
+				}
+				if !strings.Contains(err.Error(), "missing "+c.missing) {
+					t.Errorf("error %q does not say missing %s", err, c.missing)
+				}
+				if strings.Contains(err.Error(), c.value) {
+					t.Errorf("error %q carries the value of %s", err, c.set)
+				}
+			})
+		}
 	}
 }

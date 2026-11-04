@@ -151,12 +151,17 @@ async function openEditor(page: Page): Promise<Locator> {
   return drawer
 }
 
-// Opens the screen, then compares it with the spec's own Node-side read of the golden set.
+// Opens the screen, then compares it with the golden read it rendered (RulesView fetches once on mount).
+// The spec's own read only pins the version: the rules can differ between shards, the version does not.
 async function expectScreenMatchesServer(page: Page): Promise<void> {
   const errors = collectErrors(page)
+  const rendered = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && /\/api\/validation\/v1\/rules(\?.*)?$/.test(r.url()),
+  )
   await openRules(page)
 
-  const golden = await getGoldenRules(await browserToken(page))
+  const golden = (await (await rendered).json()) as { version: number; rules: unknown[] }
+  expect(golden.version, "the screen's golden version is the server's").toBe((await getGoldenRules(await browserToken(page))).version)
   const version = page.getByText(`v${golden.version}`, { exact: true })
   await expect(version).toBeVisible()
   await expect(version.locator('xpath=following-sibling::span').getByText('IN USE', { exact: true })).toBeVisible()

@@ -1,5 +1,5 @@
 import type { ErrorEvent, Integration, StartSpanOptions } from '@sentry/core'
-import { browserTracingIntegration, getClient, startBrowserTracingNavigationSpan } from '@sentry/react'
+import { browserTracingIntegration, getClient, startBrowserTracingNavigationSpan, withStaticSpan } from '@sentry/react'
 import type { BrowserOptions } from '@sentry/react'
 import { dropEvent, keepBreadcrumb, scrubApiError, scrubEvent, scrubSpan, scrubTransaction } from './scrub'
 
@@ -98,13 +98,15 @@ export function sentryOptions(c: MonitoringConfig): BrowserOptions | null {
     environment: 'production',
     release: c.release,
     initialScope: { tags: { service: c.service } },
-    dataCollection: { userInfo: false, cookies: false, httpHeaders: false, httpBodies: [], urlQueryParams: false },
+    dataCollection: { userInfo: false, cookies: false, httpHeaders: { request: { allow: ['user-agent'] }, response: false }, httpBodies: [], urlQueryParams: false },
     enhanceFetchErrorMessages: false,
     integrations: (defaults) => [...defaults.filter((i) => i.name !== 'BrowserSession' && i.name !== 'CultureContext'), ...tracing],
     // ceiling: no allowUrls/denyUrls, so third-party gtag.js errors (loaded once analytics is allowed) spend quota; add denyUrls for googletagmanager.com if they show in asc-frontend
     beforeSend: (e, h) => (dropEvent(e, h) ? null : nameErrorTransaction(scrubEvent(scrubApiError(e, h)), c.routeName)),
+    // ceiling: SDK v12 drops the static lifecycle and beforeSendTransaction; port the scrubbers to StreamedSpanJSON first
+    traceLifecycle: 'static',
     beforeSendTransaction: scrubTransaction,
-    beforeSendSpan: scrubSpan,
+    beforeSendSpan: withStaticSpan(scrubSpan),
     beforeBreadcrumb: keepBreadcrumb,
     // ceiling: landing samples every page load (1.0), crawlers included; lower it if transaction quota passes a threshold, and reword the privacy sentence "Each page you open" (Privacy.claims.test.tsx)
     ...(app || landing ? { tracesSampleRate: 1 } : {}),

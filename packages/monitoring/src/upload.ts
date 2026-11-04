@@ -5,6 +5,7 @@ import { releaseName } from './release-name'
 
 export interface SourcemapUploadOptions {
   authToken: string
+  org: string
   project: string
   url: string
   telemetry: false
@@ -20,6 +21,7 @@ export function sourcemapUploadOptions(
   const stamp = readFileSync(join(appDir, '../../internal/platform/buildsha.txt'), 'utf8')
   return {
     authToken: (env.SENTRY_AUTH_TOKEN ?? '').trim(),
+    org: 'as-comply',
     project: 'asc-frontend',
     url: 'https://de.sentry.io',
     telemetry: false,

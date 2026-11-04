@@ -2,3 +2,7 @@ packages:
   - "frontend/*"
   - "packages/*"
   - "e2e"
+
+# ceiling: drop when @sentry/bundler-plugins needs glob >= 14.0.3 (alerts 46, 47)
+overrides:
+  "@sentry/bundler-plugins>glob": ^14.0.3

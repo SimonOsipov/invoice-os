@@ -58,7 +58,7 @@ function mockModules() {
 }
 
 // Browser globals for the node environment; replaceState moves the fake address bar as the real one does.
-function browse(url: string) {
+function browse(url: string, marker?: string) {
   const at = new URL(url, 'https://www.ascomply.com')
   const loc = { pathname: at.pathname, search: at.search, hash: at.hash }
   const history = {
@@ -69,7 +69,7 @@ function browse(url: string) {
   }
   const map = new Map<string, string>()
   const sessionStorage = { getItem: (k: string) => map.get(k) ?? null, setItem: (k: string, v: string) => void map.set(k, v) }
-  vi.stubGlobal('document', { getElementById: () => ({}) })
+  vi.stubGlobal('document', { getElementById: () => ({}), documentElement: { dataset: marker ? { page: marker } : {} } })
   vi.stubGlobal('location', loc)
   vi.stubGlobal('history', history)
   vi.stubGlobal('sessionStorage', sessionStorage)
@@ -77,12 +77,12 @@ function browse(url: string) {
 }
 
 // The mocks and BrandMark are re-evaluated by resetModules, so every comparison uses this run's instances.
-async function bootMain(url: string) {
+async function bootMain(url: string, marker?: string) {
   vi.clearAllMocks()
   for (const k of Object.keys(h.seen)) delete h.seen[k]
   vi.resetModules()
   mockModules()
-  const browser = browse(url)
+  const browser = browse(url, marker)
   await import('./main')
   return {
     ...browser,
@@ -93,7 +93,7 @@ async function bootMain(url: string) {
   }
 }
 
-type Root = ReactElement<{ children: ReactElement<{ brand: unknown; children: ReactElement<{ token?: string | null }> }> }>
+type Root = ReactElement<{ children: ReactElement<{ brand: unknown; children: ReactElement<{ token?: string | null; notFound?: boolean }> }> }>
 
 afterEach(() => {
   h.forwarding = false
@@ -171,6 +171,25 @@ describe('main', () => {
       expect(child.type, path).toBe(App)
       expect(child.type, path).not.toBe(InvitePage)
     }
+  })
+
+  it('main_markerRendersNotFoundApp', async () => {
+    for (const path of ['/invite', '/Privacy', '/nope']) {
+      const { App, InvitePage } = await bootMain(`${path}#token=${T}`, 'not-found')
+      const child = (h.render.mock.calls[0][0] as Root).props.children.props.children
+      expect(child.type, path).toBe(App)
+      expect(child.type, path).not.toBe(InvitePage)
+      expect(child.props.notFound, path).toBe(true)
+    }
+  })
+
+  it('main_noMarkerKeepsInvitePage', async () => {
+    const { InvitePage } = await bootMain(`/invite#token=${T}`)
+    expect((h.render.mock.calls[0][0] as Root).props.children.props.children.type).toBe(InvitePage)
+    const { App } = await bootMain('/')
+    const child = (h.render.mock.calls[0][0] as Root).props.children.props.children
+    expect(child.type).toBe(App)
+    expect(child.props.notFound).toBe(false)
   })
 
   it('main_givesInvitePageNoTokenWhenTheLinkHasNone', async () => {

@@ -18,6 +18,7 @@ import { Faq } from './components/Faq'
 import { ClosingCta } from './components/ClosingCta'
 import { Footer } from './components/Footer'
 import { Privacy } from './components/Privacy'
+import { NotFound } from './components/NotFound'
 import { CookieNotice } from './components/CookieNotice'
 import { isScrollable, scrollDepthPercent, trackDemoOpen, trackScrollDepth, type DemoCtaSource } from './analytics'
 import { blogBase, libraryBase } from './auth'
@@ -25,6 +26,7 @@ import { readConsent, type ConsentRecord } from './consent'
 import { applyChoice, syncConsent } from './consentActions'
 import { INVITE_PARAM, readInviteOutcome } from './invite'
 import { isPrivacyPath } from './route'
+import { isLibraryPath } from './route'
 import { readResetOutcome, RESET_PARAM } from './passwordReset'
 import { registrationOpen } from './register'
 import { bounceToStart, readSignInConsole, readSignInState, SIGN_IN_UNAVAILABLE, signInConfigured } from './signIn'
@@ -61,7 +63,7 @@ function readDeepLink(search: string, signInOpens: boolean): 'register' | 'demo'
 }
 
 // Tokens and utility classes (.v2-btn, .label, .mono) are global: v2 plus bridge.css.
-export default function App() {
+export default function App({ notFound = false }: { notFound?: boolean }) {
   // The state is held in memory only, never in storage.
   const [signInBoot] = useState(() => readSignInBoot(window.location.search))
   // A bfcache restore drops the state for good.
@@ -125,7 +127,7 @@ export default function App() {
         setRegisterOpen(true)
       }
     : undefined
-  const privacy = isPrivacyPath(window.location.pathname)
+  const privacy = !notFound && isPrivacyPath(window.location.pathname)
 
   useEffect(() => {
     const onVisible = () => {
@@ -195,7 +197,7 @@ export default function App() {
         overflowX: 'clip',
       }}
     >
-      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} hrefPrefix={privacy ? '/' : ''} libraryHref={libraryBase()} blogHref={blogBase()} />
+      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} hrefPrefix={privacy || notFound ? '/' : ''} libraryHref={libraryBase()} blogHref={blogBase()} />
       {notice && (
         <VerifyNotice
           outcome={notice}
@@ -204,7 +206,9 @@ export default function App() {
           onSignIn={onSignIn}
         />
       )}
-      {privacy ? (
+      {notFound ? (
+        <NotFound libraryHref={isLibraryPath(window.location.pathname) ? libraryBase() : null} />
+      ) : privacy ? (
         <Privacy />
       ) : (
         <>
@@ -222,7 +226,7 @@ export default function App() {
           <ClosingCta onBookDemo={book('closing')} />
         </>
       )}
-      <Footer onBookDemo={book('footer')} onSignIn={onSignIn} hrefPrefix={privacy ? '/' : ''} blogHref={blogBase()} onCookieChoices={() => {
+      <Footer onBookDemo={book('footer')} onSignIn={onSignIn} hrefPrefix={privacy || notFound ? '/' : ''} blogHref={blogBase()} onCookieChoices={() => {
         const next = syncConsent()
         if (next) setConsent(next)
         setReopened(true)

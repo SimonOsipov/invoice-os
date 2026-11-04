@@ -191,3 +191,5 @@ export const TOUR: TourStop[] = [
   { g: 'audit', f: 'audit-trail', stage: 5, t: 'Keep the evidence', d: 'Every action is recorded with who did it and when, ready for an auditor.' },
   { g: 'reports', f: 'overview', stage: -1, t: 'See readiness at a glance', d: 'Invoice totals, the readiness score and what needs attention, for one company at a time.' }
 ]
+
+export const PAGE_PATHS: readonly string[] = GROUPS.flatMap((g) => [`/${g.id}`, ...g.feats.map((f) => `/${g.id}/${f.id}`)])

@@ -47,7 +47,7 @@ ENV VITE_BUILD_SHA=${BUILD_SHA}
 ARG SENTRY_AUTH_TOKEN
 RUN pnpm --filter @invoice-os/landing build
 
-# ---- Serve: Caddy static server with SPA fallback + /health ----
+# ---- Serve: Caddy static server + /health; /srv/404.html makes it serve only built pages (404 otherwise) ----
 FROM caddy:2-alpine AS serve
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /repo/frontend/landing/dist /srv

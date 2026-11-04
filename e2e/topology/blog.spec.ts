@@ -13,6 +13,7 @@ import {
   WIDE_WIDTHS,
   type Rect,
 } from './layout'
+import { collectSourcedErrors, expectedStatusDropper } from './consoleGate'
 
 const BLOG_URL = resolveTarget('BLOG_URL')
 const SLACK_PX = 0.5 // sub-pixel rounding only
@@ -882,6 +883,95 @@ test.describe('blog journeys', () => {
     await expect(main(page).locator('h2')).toHaveText(`Nothing found for “${nonsense}”`)
     await expect(rows).toHaveCount(0)
     await expect(main(page).locator('button.blog-chip')).toHaveCount(categories.length)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('blog journeys: the active TOC entry follows the article scroll', async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await resize(page, 1280, 600)
+    await visit(page, '/what-changes')
+    const rows = main(page).locator('aside[aria-label="On this page"] button.blog-toc')
+    await expect(rows.nth(2), 'control: fewer than three TOC rows').toBeVisible()
+    // The active row is the one whose label (last span) is bold, as in app-shell.spec.ts.
+    const active = () => rows.evaluateAll((els) => els.flatMap((el, i) => (getComputedStyle(el.querySelector('span:last-child')!).fontWeight === '700' ? [i] : [])))
+    const scrollTop = () => main(page).evaluate((el) => el.scrollTop)
+    const scrollSection = async (id: string) => {
+      const before = await scrollTop()
+      await main(page).evaluate((el, sec) => {
+        const target = el.querySelector(`#${sec}`)!
+        el.scrollTop += target.getBoundingClientRect().top - el.getBoundingClientRect().top - 60
+      }, id)
+      await expect.poll(scrollTop, { message: `control: scrolling to #${id} did not move main` }).not.toBe(before)
+    }
+
+    await expect.poll(active, { message: 'entry 0 is not the only active entry at load' }).toEqual([0])
+    await scrollSection('sec-1')
+    await expect.poll(active, { message: 'entry 1 is not the only active entry at #sec-1' }).toEqual([1])
+    await scrollSection('sec-2')
+    await expect.poll(active, { message: 'entry 2 is not the only active entry at #sec-2' }).toEqual([2])
+    await main(page).evaluate((el) => {
+      el.scrollTop = 0
+    })
+    await expect.poll(scrollTop, { message: 'control: main did not return to the top' }).toBe(0)
+    await expect.poll(active, { message: 'entry 0 is not the only active entry at the top' }).toEqual([0])
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('blog journeys: Play or pause starts and stops the demo in a post', async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await resize(page, 1280, 1080)
+    await visit(page, '/csv-import')
+    const frame = main(page).getByTestId('blog-demo')
+    const label = frame.getByText(/^\d\d \/ \d\d$/)
+    const fill = frame.getByTestId('blog-demo-scrub').locator(':scope > div > div').first()
+    const width = async () => parseFloat(await fill.evaluate((el) => (el as HTMLElement).style.width))
+    const play = frame.getByRole('button', { name: 'Play or pause' })
+    await expect(label, 'the demo is not at step 1 at load').toHaveText('01 / 04')
+    const start = await width()
+    await page.waitForTimeout(800)
+    expect(await width(), 'the demo moved before Play').toBe(start)
+
+    await play.click()
+    await expect(label, 'the label never reached step 2').toHaveText('02 / 04')
+    await expect.poll(width, { message: 'the fill did not grow after Play' }).toBeGreaterThan(0)
+
+    await play.click()
+    const paused = await width()
+    const pausedLabel = await label.textContent()
+    await page.waitForTimeout(1_000)
+    expect(await width(), 'the fill moved while paused').toBe(paused)
+    expect(await label.textContent(), 'the label moved while paused').toBe(pausedLabel)
+
+    await play.click()
+    await expect.poll(width, { message: 'the fill did not grow after the third click' }).toBeGreaterThan(paused)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('blog journeys: a failed load shows the failure, and Try again shows the content once the gateway answers', async ({ page }) => {
+    const errors = collectSourcedErrors(page, expectedStatusDropper(page, 500, /\/blog\//))
+    await prepare(page)
+    await resize(page, 1280, 1080)
+    let hits = 0
+    const failing = `${GATEWAY_URL}/blog/**`
+    // The allow-origin header keeps Chromium reporting a 500 instead of a CORS error.
+    await page.route(failing, (route) => {
+      hits++
+      return route.fulfill({ status: 500, body: '{}', contentType: 'application/json', headers: { 'access-control-allow-origin': '*' } })
+    })
+    await page.goto(`${BLOG_URL}/`)
+    const failure = main(page).locator('h2', { hasText: 'The blog did not load.' })
+    const retry = main(page).getByRole('button', { name: 'Try again' })
+    await expect(failure, 'the failure heading never showed').toBeVisible()
+    await expect(retry).toBeVisible()
+    expect(hits, 'control: the 500 route was never hit').toBeGreaterThanOrEqual(1)
+
+    await page.unroute(failing)
+    await retry.click()
+    await expect(failure, 'the failure heading stayed').toHaveCount(0)
+    await expect(main(page).locator('h1'), 'the home h1 never showed').toBeVisible()
+    await expect(aside(page).locator('nav button.blog-nav:nth-of-type(n+2)').first(), 'no sidebar category after recovery').toBeVisible()
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 })

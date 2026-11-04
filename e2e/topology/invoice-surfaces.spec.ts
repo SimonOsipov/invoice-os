@@ -3716,8 +3716,7 @@ test("invoice detail: an incomplete invoice's UBL document card prints the serve
 // (APPR-13-06/task-548) this test originally covered is no longer reachable this way; its
 // empty-trail branch moved to a draft-detail test instead (still reachable there, since a
 // draft never arms anything). [topology-never-publishes] still holds: no
-// armedInvoice()-style helper, no policy call anywhere below -- this test only validates,
-// same as every other case in this file.
+// armedInvoice()-style helper, no policy call anywhere below -- this test only validates.
 test('detail surface: the armed decision block and approval card, plus their layout at every wide width', async ({ page }) => {
   test.setTimeout(120_000)
   const errors = collectErrors(page)

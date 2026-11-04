@@ -38,7 +38,7 @@ import {
   type RealAccount,
   type TenantKind,
 } from '../api/client'
-import { freshTin } from '../api/fixtures'
+import { canonicalTin, freshTin } from '../api/fixtures'
 import { seedConsent } from '../smoke/landingConsent'
 import { openInvite, readSessionIdentity, registerOnAcceptPage } from '../inviteSession'
 import { approvalRun404Dropper, consoleErrorsLine, expectedStatusDropper, type Dropper } from './consoleGate'
@@ -1305,8 +1305,9 @@ test('deployed app: an in-house admin adds the company in Settings › Company, 
   const token = await browserToken(page)
   const added = (await listEntities(token)).entities.find((e) => e.name === name)
   expect(added, `the new company ${name} is listed`).toBeDefined()
-  expect(added!.tin, 'server TIN').toBe(tin)
-  await expect(row('TIN')).toHaveText(tin)
+  // The service stores and echoes the digits-only TIN.
+  expect(added!.tin, 'server TIN').toBe(canonicalTin(tin))
+  await expect(row('TIN')).toHaveText(canonicalTin(tin))
   await expect(page.getByRole('button', { name: 'Edit company' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Edit company' }).click()

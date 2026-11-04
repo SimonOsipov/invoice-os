@@ -435,12 +435,13 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await page.getByLabel('Deadline').selectOption({ label: 'Within 72 hours' })
   await expect(page.getByLabel('Deadline')).toHaveValue('72')
 
+  // The palette click selects the new condition; a second click on its card would deselect it.
   await conditionChip(page).click()
-  await page.getByText('Amount greater than \u20a6100,000,000', { exact: true }).click()
   const threshold = page.getByLabel('Threshold amount in naira')
   await threshold.fill('250000000')
   await expect(threshold).toHaveValue('250,000,000')
-  await expect(page.getByText('Amount greater than \u20a6250,000,000', { exact: true })).toBeVisible()
+  // The inspector repeats the rule text while selected, so the canvas card is read through its Delete control.
+  await expect(page.getByRole('button', { name: 'Delete Amount greater than \u20a6250,000,000', exact: true })).toBeVisible()
 
   const tunePut = page.waitForResponse(
     (r) => r.request().method() === 'PUT' && r.url().endsWith(`/v1/approval-policies/${createdPolicyId}/draft`),

@@ -158,9 +158,12 @@ async function expectScreenMatchesServer(page: Page): Promise<void> {
   const rendered = page.waitForResponse(
     (r) => r.request().method() === 'GET' && /\/api\/validation\/v1\/rules(\?.*)?$/.test(r.url()),
   )
+  rendered.catch(() => undefined)
   await openRules(page)
 
-  const golden = (await (await rendered).json()) as { version: number; rules: unknown[] }
+  const response = await rendered
+  expect(response.ok(), `the golden read the screen rendered answered ${response.status()}`).toBe(true)
+  const golden = (await response.json()) as { version: number; rules: unknown[] }
   expect(golden.version, "the screen's golden version is the server's").toBe((await getGoldenRules(await browserToken(page))).version)
   const version = page.getByText(`v${golden.version}`, { exact: true })
   await expect(version).toBeVisible()

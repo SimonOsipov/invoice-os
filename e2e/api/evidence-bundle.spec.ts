@@ -223,18 +223,20 @@ test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
   let token: string
   let entityId: string
   let invoiceNumber: string
+  let invoiceId: string
 
   test.beforeAll(async () => {
     token = await login(PERSONAS.A)
     const entity = await createEntity(token, { name: `Zz AUDIT-05 ${freshTin()}`, tin: freshTin() })
     entityId = entity.id
     invoiceNumber = `INV-AUDIT-05-${freshTin()}`
-    await createInvoice(token, {
+    const created = await createInvoice(token, {
       entity_id: entityId,
       invoice_number: invoiceNumber,
       buyer_state: 'NG-LA',
       line_items: [{ description: 'Widget', quantity: '1', unit_price: '100', line_total: '100', tax_category: 'STANDARD_VAT', price_unit: 'KGM' }],
     })
+    invoiceId = created.id
   })
 
   test('download: zip, opens, carries the five CSVs + manifest; invoices.csv contains this invoice; the never-submitted invoice leaves submissions/exchange header-only', async () => {
@@ -262,6 +264,9 @@ test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
     expect(Object.keys(invoiceRows[0]).slice(-2), 'invoices.csv header ends with the type pair').toEqual(['document_type', 'original_invoice_number'])
     expect(invoiceRows.find((r) => r.invoice_number === invoiceNumber)?.buyer_state, 'the invoice row carries buyer_state').toBe('NG-LA')
     expect(invoiceRows.find((r) => r.invoice_number === invoiceNumber)?.document_type, 'the invoice row carries its type').toBe('commercial_invoice')
+
+    expect(invoiceRows.find((r) => r.invoice_number === invoiceNumber)?.qr_payload, 'never-submitted invoice row has an empty qr_payload').toBe('')
+    expect((await getInvoice(token, invoiceId)).qr_payload, 'GET qr_payload of a never-submitted invoice').toBeNull()
 
     const lineRows = parseCsv(decoder.decode(zip['line_items.csv']))
     expect(lineRows, 'line_items.csv holds the invoice\'s one line').toHaveLength(1)
@@ -365,6 +370,7 @@ test.describe('evidence bundle for a submitted invoice (API E2E)', () => {
     const invoice = await getInvoice(token, created.id)
     expect(invoice.irn, 'GET irn').toBeTruthy()
     expect(invoice.csid, 'GET csid').toBeTruthy()
+    expect(invoice.qr_payload, 'GET qr_payload').toBeTruthy()
 
     const { zip, manifest } = await fetchBundle(token, entity.id, period)
     const decoder = new TextDecoder()
@@ -374,6 +380,7 @@ test.describe('evidence bundle for a submitted invoice (API E2E)', () => {
     expect(invoiceRow!.status, 'invoices.csv status').toBe(invoice.status)
     expect(invoiceRow!.irn, "invoices.csv irn must equal the GET's").toBe(invoice.irn)
     expect(invoiceRow!.csid, "invoices.csv csid must equal the GET's").toBe(invoice.csid)
+    expect(invoiceRow!.qr_payload, "invoices.csv qr_payload must equal the GET's").toBe(invoice.qr_payload)
 
     const submissions = parseCsv(decoder.decode(zip['submissions.csv']))
     expect(submissions, 'submissions.csv must hold exactly one job row').toHaveLength(1)

@@ -319,7 +319,7 @@ test.describe('NCOV-02 review channels, multi-file runs and the source card', ()
     test.setTimeout(180_000)
     const errors = collectErrors(page)
 
-    const { id, batch } = await openReviewedBatch(page, 'unreadable', buildMixedCsv(), 'review-unreadable.csv')
+    const { id, batch } = await openReviewedBatch(page, 'unreadable', buildMixedCsv(' unreadable'), 'review-unreadable.csv')
     // Fixture check: STRUCT's two rows are unreadable; VIOLATE and CLEAN become invoices.
     expect(batch.ready_invoices, 'the fixture mints two invoices').toBe(2)
 
@@ -354,9 +354,10 @@ test.describe('NCOV-02 review channels, multi-file runs and the source card', ()
 
     const token = await login(PERSONAS.A)
     const entity = await createEntity(token, { name: `NCOV-02 already ${Date.now()}`, tin: freshTin() })
-    const mint = (filename: string) => createImportBatchFromCsv(token, entity.id, { csv: buildMixedCsv(), filename, mapping: PERF_MAPPING })
-    const first = await mint('review-already-1.csv')
-    const second = await mint('review-already-2.csv')
+    // Distinct bytes, same invoice numbers: the documents keep their own filenames and the second still collides.
+    const mint = (filename: string, salt: string) => createImportBatchFromCsv(token, entity.id, { csv: buildMixedCsv(salt), filename, mapping: PERF_MAPPING })
+    const first = await mint('review-already-1.csv', ' already-1')
+    const second = await mint('review-already-2.csv', ' already-2')
     // Fixture check: the first mint makes VIOLATE and CLEAN; the second collides on both.
     expect(first.ready_invoices, 'the first mint makes two invoices').toBe(2)
     expect(second.ready_invoices, 'the second mint collides on both').toBe(0)
@@ -409,7 +410,7 @@ test.describe('NCOV-02 review channels, multi-file runs and the source card', ()
     const mint = (csv: string, filename: string) => createImportBatchFromCsv(token, entity.id, { csv, filename, mapping: PERF_MAPPING })
     const a = await mint(buildCleanCsv('INV-NCOV02-A'), 'run-a.csv')
     const b = await mint(buildCleanCsv('INV-NCOV02-B'), 'run-b.csv')
-    const c = await mint(buildHeaderOnlyCsv(), 'run-empty.csv')
+    const c = await mint(buildHeaderOnlyCsv(1), 'run-empty.csv')
     // Fixture check: the clean files mint two validated invoices each; a header-only file mints none.
     for (const batch of [a, b]) {
       expect(batch.ready_invoices, 'a clean file mints two invoices').toBe(2)
@@ -444,8 +445,8 @@ test.describe('NCOV-02 review channels, multi-file runs and the source card', ()
     await expect(empty).toContainText('0 of 0 rows produced an invoice')
 
     // Every batch rejected: the run page lists each file and its reason (ReviewBatch.tsx RejectedRun).
-    const d = await mint(buildHeaderOnlyCsv(), 'run-empty-2.csv')
-    const e = await mint(buildHeaderOnlyCsv(), 'run-empty-3.csv')
+    const d = await mint(buildHeaderOnlyCsv(2), 'run-empty-2.csv')
+    const e = await mint(buildHeaderOnlyCsv(3), 'run-empty-3.csv')
     expect(d.ready_invoices, 'a header-only file mints no invoice').toBe(0)
     expect(e.ready_invoices, 'a header-only file mints no invoice').toBe(0)
     await page.goto(`${APP_URL}/imports/${d.id},${e.id}/review`)
@@ -530,7 +531,7 @@ test.describe('NCOV-02 review channels, multi-file runs and the source card', ()
 
     const token = await login(PERSONAS.A)
     const entity = await createEntity(token, { name: `NCOV-02 source ${Date.now()}`, tin: freshTin() })
-    const documentId = await uploadDocument(token, buildMixedCsv(), 'source-card-mixed.csv')
+    const documentId = await uploadDocument(token, buildMixedCsv(' source-card'), 'source-card-mixed.csv')
     const imported = await importFetch(token, buildForm(entity.id, documentId, PERF_MAPPING))
     // Fixture check: the import answers 201 and reports VIOLATE with its invoice id.
     expect(imported.status, 'the mixed import answers 201').toBe(201)

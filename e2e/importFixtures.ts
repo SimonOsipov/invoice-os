@@ -112,7 +112,8 @@ export function buildPerfCsv(invoices = 500): string {
 // destroying the clean/violating split this fixture exists to prove. Money values
 // avoid the F5 leading-zero trap (a bare "0.00" is fine; nothing else has a leading
 // zero), mirroring perf.spec.ts's own fixture hygiene note.
-export function buildMixedCsv(): string {
+// `salt` lands on the CLEAN row's buyer name, which no assertion reads: documents dedup by content hash per tenant.
+export function buildMixedCsv(salt = ''): string {
   const lines: string[] = [PERF_HEADER]
   lines.push(
     ['INV-UI-MIX-STRUCT', '2026-01-15', '87654321-0002', 'M4-08 UI Mixed Co', 'NGN', '1000.00', '75.00', '1075.00', 'Item 1', '1', '100.00'].join(
@@ -130,7 +131,7 @@ export function buildMixedCsv(): string {
     ),
   )
   lines.push(
-    ['INV-UI-MIX-CLEAN', '2026-01-15', '87654321-0002', 'M4-08 UI Mixed Co', 'NGN', '1000.00', '75.00', '1075.00', 'Perf line', '10', '100.00'].join(
+    ['INV-UI-MIX-CLEAN', '2026-01-15', '87654321-0002', `M4-08 UI Mixed Co${salt}`, 'NGN', '1000.00', '75.00', '1075.00', 'Perf line', '10', '100.00'].join(
       ',',
     ),
   )
@@ -180,8 +181,9 @@ export function buildSingleInvoiceCsv(invoiceNumber: string): string {
 // columns and zero rows, no error) -- the wizard's Map step still renders and
 // invoice_number is still placed by hand exactly like every other fixture in this file;
 // only the final Import response differs.
-export function buildHeaderOnlyCsv(): string {
-  return PERF_HEADER
+// `blankLines` trailing newlines vary the bytes (documents dedup by content hash); encoding/csv skips empty lines.
+export function buildHeaderOnlyCsv(blankLines = 0): string {
+  return PERF_HEADER + '\n'.repeat(blankLines)
 }
 
 // steerMarker(): the fake AI's steering marker (internal/platform/ai/fake.go's

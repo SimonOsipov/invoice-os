@@ -226,6 +226,8 @@ const OP_POLL = 'poll'
 // internal/submission mock_adapter.go Submit's pending case and Poll while polls remain: http.StatusAccepted.
 const MOCK_PENDING_HTTP_STATUS = '202'
 
+const POLL_CEILING_MS = 120_000
+
 // Copy of contract-invoice.spec.ts's submitAndAwait (no cross-suite imports).
 async function submitAndAwait(tok: string, id: string, want: 'accepted' | 'rejected') {
   const res = await rawFetch('/api/invoice/v1/invoices/submissions', {
@@ -235,17 +237,37 @@ async function submitAndAwait(tok: string, id: string, want: 'accepted' | 'rejec
   })
   expect(res.status, 'batch submit').toBe(200)
   await expect
-    .poll(async () => (await getInvoice(tok, id)).status, { timeout: 120_000, intervals: [1_000] })
+    .poll(async () => (await getInvoice(tok, id)).status, { timeout: POLL_CEILING_MS, intervals: [1_000] })
     .toBe(want)
   return getInvoice(tok, id)
+}
+
+// One batch of several invoices; waits until every one is accepted, within a single poll ceiling.
+async function submitBatchAndAwaitAccepted(tok: string, ids: string[]) {
+  const res = await rawFetch('/api/invoice/v1/invoices/submissions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tok}` },
+    body: { invoice_ids: ids, idempotency_key: crypto.randomUUID() },
+  })
+  expect(res.status, 'batch submit').toBe(200)
+  await expect
+    .poll(async () => (await Promise.all(ids.map((id) => getInvoice(tok, id)))).map((i) => i.status), {
+      timeout: POLL_CEILING_MS,
+      intervals: [1_000],
+    })
+    .toEqual(ids.map(() => 'accepted'))
 }
 
 // internal/submission/document_type.go InvoiceTypeCode
 const TYPE_CODE = { commercial_invoice: '381', credit_note: '380', debit_note: '384' }
 
 // A one-line original that reached accepted; steps of contract-invoice.spec.ts acceptedOriginal.
-async function acceptedOriginal(tok: string, entityId: string, number: string) {
-  const created = await createInvoice(tok, { entity_id: entityId, ...acceptInvoiceFields(number) })
+async function acceptedOriginal(tok: string, entityId: string, number: string, buyerTin?: string) {
+  const created = await createInvoice(tok, {
+    entity_id: entityId,
+    ...acceptInvoiceFields(number),
+    ...(buyerTin ? { buyer_tin: buyerTin } : {}),
+  })
   expect((await validateInvoice(tok, created.id)).status, 'the clean fixture validates').toBe('validated')
   await approveUntilClosed(created.id, await firmApproverTokens())
   return submitAndAwait(tok, created.id, 'accepted')
@@ -314,10 +336,12 @@ test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
       'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga',
     ])
     expect(Object.keys(invoiceRows[0]).slice(-2), 'invoices.csv header ends with the type pair').toEqual(['document_type', 'original_invoice_number'])
-    expect(invoiceRows.find((r) => r.invoice_number === invoiceNumber)?.buyer_state, 'the invoice row carries buyer_state').toBe('NG-LA')
-    expect(invoiceRows.find((r) => r.invoice_number === invoiceNumber)?.document_type, 'the invoice row carries its type').toBe('commercial_invoice')
+    const row = invoiceRows.find((r) => r.invoice_number === invoiceNumber)
+    expect(row, 'invoices.csv carries the invoice this spec created').toBeDefined()
+    expect(row!.buyer_state, 'the invoice row carries buyer_state').toBe('NG-LA')
+    expect(row!.document_type, 'the invoice row carries its type').toBe('commercial_invoice')
 
-    expect(invoiceRows.find((r) => r.invoice_number === invoiceNumber)?.qr_payload, 'never-submitted invoice row has an empty qr_payload').toBe('')
+    expect(row!.qr_payload, 'never-submitted invoice row has an empty qr_payload').toBe('')
     expect((await getInvoice(token, invoiceId)).qr_payload, 'GET qr_payload of a never-submitted invoice').toBeNull()
 
     const lineRows = parseCsv(decoder.decode(zip['line_items.csv']))
@@ -459,14 +483,7 @@ test.describe('evidence bundle for a submitted invoice (API E2E)', () => {
     test.setTimeout(240_000)
 
     const entity = await createEntity(token, { name: `Zz AUDIT-05 pending ${freshTin()}`, tin: freshTin() })
-    const created = await createInvoice(token, {
-      entity_id: entity.id,
-      ...acceptInvoiceFields(`INV-AUDIT-05-P-${freshTin()}`),
-      buyer_tin: MOCK_TIN_PENDING,
-    })
-    expect((await validateInvoice(token, created.id)).status, 'the clean fixture should promote draft -> validated').toBe('validated')
-    await approveUntilClosed(created.id, await firmApproverTokens())
-    await submitAndAwait(token, created.id, 'accepted')
+    const created = await acceptedOriginal(token, entity.id, `INV-AUDIT-05-P-${freshTin()}`, MOCK_TIN_PENDING)
 
     const history = await getInvoiceHistory(token, created.id)
     const { zip } = await fetchBundle(token, entity.id, period)
@@ -491,6 +508,7 @@ test.describe('evidence bundle for a submitted invoice (API E2E)', () => {
       expect(Date.parse(r.changed_at), `row ${i} changed_at instant`).toBe(Date.parse(history[i].changed_at))
     })
 
+    // fixture check: pins the mock's scripted 202/202/200 submit-poll-poll answers (mock_script.go), not the real NRS
     const attempts = parseCsv(decoder.decode(zip['exchange.csv'])).filter((r) => r.invoice_id === created.id)
     expect(attempts.map((r) => r.operation), 'exchange operations').toEqual([OP_SUBMIT, OP_POLL, OP_POLL])
     expect(attempts.map((r) => r.attempt), 'exchange attempt numbers').toEqual(['1', '2', '3'])
@@ -506,13 +524,14 @@ test.describe('evidence bundle for a submitted invoice (API E2E)', () => {
   })
 
   test("a credit note and a debit note send the original's IRN, its issue date and their NRS type codes on the wire", async () => {
-    test.setTimeout(240_000)
+    // Two sequential polls (original, then both notes at once) plus margin for setup and the bundle fetch.
+    test.setTimeout(2 * POLL_CEILING_MS + 120_000)
 
     const entity = await createEntity(token, { name: `Zz AUDIT-05 notes ${freshTin()}`, tin: freshTin() })
     const original = await acceptedOriginal(token, entity.id, `INV-NCOV04-${freshTin()}`)
     const lineId = original.line_items![0].id
 
-    const sendNote = async (document_type: 'credit_note' | 'debit_note', number: string) => {
+    const issueApprovedNote = async (document_type: 'credit_note' | 'debit_note', number: string) => {
       const note = await issueNote(token, original.id, {
         document_type,
         invoice_number: number,
@@ -521,15 +540,16 @@ test.describe('evidence bundle for a submitted invoice (API E2E)', () => {
       })
       expect((await validateInvoice(token, note.id)).status, `${document_type} validates`).toBe('validated')
       await approveUntilClosed(note.id, await firmApproverTokens())
-      await submitAndAwait(token, note.id, 'accepted')
       return note.id
     }
     const creditNumber = `CN-NCOV04-${freshTin()}`
     const debitNumber = `DN-NCOV04-${freshTin()}`
-    const creditId = await sendNote('credit_note', creditNumber)
-    const debitId = await sendNote('debit_note', debitNumber)
+    const creditId = await issueApprovedNote('credit_note', creditNumber)
+    const debitId = await issueApprovedNote('debit_note', debitNumber)
+    await submitBatchAndAwaitAccepted(token, [creditId, debitId])
 
     const { zip } = await fetchBundle(token, entity.id, period)
+    // fixture check: pins the wire keys of the mock's recorded submit envelope (mock_wire.go mockEnvelope)
     const originalWire = submitWire(zip, original.id)
     const referenceDate = original.issue_date!.slice(0, 10)
     expect(originalWire.ID, 'original ID').toBe(original.invoice_number)

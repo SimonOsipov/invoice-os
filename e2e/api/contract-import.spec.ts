@@ -185,6 +185,10 @@ function expectBytes(actual: ArrayBuffer, want: string, label: string): void {
   expect(got.equals(expected), `${label}: bytes differ from what was uploaded`).toBe(true)
 }
 
+function sourceDocumentFetch(tok: string, invoiceId: string): Promise<RawResult> {
+  return rawFetch(`/api/invoice/v1/invoices/${invoiceId}/source-document`, { headers: { Authorization: `Bearer ${tok}` } })
+}
+
 test.describe('import contract (API E2E, over the deployed gateway)', () => {
   let token: string
 
@@ -610,7 +614,7 @@ test.describe('document download contract (API E2E, over the deployed gateway)',
     const listed = await listInvoices(tokenA, { entity_id: entity.id, limit: 50 })
     const inv = listed.invoices.find((i) => i.invoice_number === number)
     expect(inv, 'the imported invoice must be in the list').toBeTruthy()
-    const src = await rawFetch(`/api/invoice/v1/invoices/${inv!.id}/source-document`, { headers: { Authorization: `Bearer ${tokenA}` } })
+    const src = await sourceDocumentFetch(tokenA, inv!.id)
     expect(src.status, "the invoice's source-document read").toBe(200)
     const doc = (src.body as { document: { id: string } | null }).document
     expect(doc, 'the imported invoice carries its source document').not.toBeNull()
@@ -719,10 +723,6 @@ test.describe('header row contract (API E2E, over the deployed gateway)', () => 
       },
       { level: 0 },
     )
-  }
-
-  function sourceDocumentFetch(tok: string, invoiceId: string): Promise<RawResult> {
-    return rawFetch(`/api/invoice/v1/invoices/${invoiceId}/source-document`, { headers: { Authorization: `Bearer ${tok}` } })
   }
 
   function sheetFetch(tok: string, documentId: string, query = ''): Promise<RawResult> {

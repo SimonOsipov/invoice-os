@@ -366,6 +366,39 @@ describe('fetchCoverUrl', () => {
     expect(revoke).toHaveBeenCalledWith('blob:cover-1')
   })
 
+  it('fetchCoverUrl: forwards the abort signal to fetch', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:cover-2')
+    fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1]), { status: 200, headers: { 'Content-Type': 'image/jpeg' } }))
+    const ctl = new AbortController()
+    await (fetchCoverUrl as (id: string, signal?: AbortSignal) => ReturnType<typeof fetchCoverUrl>)('p1', ctl.signal)
+    expect(lastCall().init.signal).toBe(ctl.signal)
+  })
+
+  it('fetchCoverUrl: an abort rejects with the AbortError and reports nothing', async () => {
+    const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:never')
+    fetchMock.mockRejectedValueOnce(new DOMException('aborted', 'AbortError'))
+    const ctl = new AbortController()
+    await expect(fetchCoverUrl('p1', ctl.signal)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(create).not.toHaveBeenCalled()
+    expect(captureApiFailure).not.toHaveBeenCalled()
+  })
+
+  it('fetchCoverUrl: a network failure that is not an abort is still reported', async () => {
+    const boom = new TypeError('Failed to fetch')
+    fetchMock.mockRejectedValueOnce(boom)
+    await expect(fetchCoverUrl('p1', new AbortController().signal)).rejects.toBe(boom)
+    expect(captureApiFailure).toHaveBeenCalledTimes(1)
+    expect(captureApiFailure).toHaveBeenCalledWith(expect.objectContaining({ kind: 'network', method: 'GET', error: boom }))
+  })
+
+  it('fetchCoverUrl: a body read aborted mid-flight reports nothing', async () => {
+    const res = new Response('x', { status: 200 })
+    vi.spyOn(res, 'blob').mockRejectedValue(new DOMException('aborted', 'AbortError'))
+    fetchMock.mockResolvedValueOnce(res)
+    await expect(fetchCoverUrl('p1', new AbortController().signal)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(captureApiFailure).not.toHaveBeenCalled()
+  })
+
   it('fetchCoverUrl: a 404 creates no URL', async () => {
     const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:never')
     fetchMock.mockResolvedValueOnce(json({ error: 'no such cover' }, 404))

@@ -202,19 +202,28 @@ export function Blog({ filters, onFilters, onToast }: Props) {
       if (a.expire) keep(cur ? a.editor : null)
     })
 
+  const stopCover = useRef<(() => void) | undefined>(undefined)
+  const startCover = (id: string) => {
+    stopCover.current?.()
+    setCoverUrl(null)
+    stopCover.current = trackCover({ fetchCoverUrl: (cid, signal) => withSession(() => fetchCoverUrl(cid, signal)), expire: keepOnExpire(keepDeps, () => editorRef.current) }, id, setCoverUrl)
+  }
   const onDelete = () =>
     flight(async () => {
       const sent = editorRef.current
       if (!sent) return
       const seq = openSeq.current
+      stopCover.current?.()
       const o = await removePost({ deletePost: (id) => withSession(() => deletePost(id)), fetchPosts: () => withSession(fetchPosts) }, sent.draft.id)
       if (!alive.current) return
       const open = seq === openSeq.current
       const a = applyRemove(open ? editorRef.current ?? sent : sent, o)
       setState((s) => (s.status === 'ready' ? { ...s, posts: postsAfterRemove(s.posts, sent.draft.id, o) } : s))
       if (open) {
-        if (a.editor) setEditor(a.editor)
-        else close()
+        if (a.editor) {
+          setEditor(a.editor)
+          if (a.editor.draft.cover.kind === 'saved') startCover(a.editor.draft.id)
+        } else close()
       }
       if (a.toast) onToast(a.toast, 'BLOG', a.tone)
       if (a.expire) keep(open ? a.editor : null)
@@ -228,7 +237,9 @@ export function Blog({ filters, onFilters, onToast }: Props) {
   const savedId = editor?.draft.cover.kind === 'saved' ? editor.draft.id : null
   useEffect(() => {
     setCoverUrl(null)
-    return savedId ? trackCover({ fetchCoverUrl: (id) => withSession(() => fetchCoverUrl(id)), expire: keepOnExpire(keepDeps, () => editorRef.current) }, savedId, setCoverUrl) : undefined
+    if (!savedId) return undefined
+    startCover(savedId)
+    return () => stopCover.current?.()
   }, [savedId])
 
   const onCover = async (file: File | null) => {

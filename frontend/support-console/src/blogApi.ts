@@ -137,8 +137,8 @@ export async function putCover(id: string, bytes: Uint8Array): Promise<Cover> {
   return readBody(() => res.json() as Promise<Cover>, { method: 'PUT', url: coverUrl(id) })
 }
 
-export async function fetchCoverUrl(id: string): Promise<{ url: string; release: () => void }> {
-  const res = await coverFetch(id, {})
+export async function fetchCoverUrl(id: string, signal?: AbortSignal): Promise<{ url: string; release: () => void }> {
+  const res = await coverFetch(id, { signal })
   const url = URL.createObjectURL(await readBody(() => res.blob(), { method: 'GET', url: coverUrl(id) }))
   let released = false
   return {

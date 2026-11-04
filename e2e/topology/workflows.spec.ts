@@ -89,16 +89,17 @@
 // :296 the unreachable re-check, :318 `const pending = drag ?? armed`, :450 the palette's
 // `onDragStart`; WorkflowCanvas.tsx:142 the render gate, :173 `Release to place`.
 //
-// The 18-step journey, in order: sign-in + firm MODE guard · h1 · eyebrow · firm-fork
+// The 19-step journey, in order: sign-in + firm MODE guard · h1 · eyebrow · firm-fork
 // subtitle · ladder settles and baseline captured · create opens the builder · rename
 // (with 8 interleaved) · Publish disabled while dirty · DRAG-1 · DRAG-2 · DRAG-4 places the
 // step · save persists · reload at `/workflows/<id>`: the builder reopens off the URL alone,
 // then row present, count baseline+1, DRAFT, Never published, step survives · DRAG-3a ·
-// DRAG-3b · client switch leaves the list unchanged · delete returns the count to baseline ·
+// DRAG-3b · client switch leaves the list unchanged · tune the saved policy (Deadline, a condition
+// threshold) and reload: both survive, delegation stays off · delete returns the count to baseline ·
 // console-error gate.
 import { test, expect, type Locator, type Page } from '@playwright/test'
 
-import { deleteApprovalPolicy, listApprovalPolicies, login, PERSONAS } from '../api/client'
+import { deleteApprovalPolicy, getApprovalPolicy, listApprovalPolicies, login, PERSONAS } from '../api/client'
 import { collectErrors, signInAs } from '../personaSession'
 import { assertFillsColumn, WIDE_WIDTHS } from './layout'
 import { APP_URL, FIRM_PERSONA } from './targets'
@@ -175,8 +176,8 @@ function dispatchDrag(target: Locator, kind: DragKind): Promise<boolean> {
 }
 
 test('firm Workflows, live: a policy built through the canvas survives a reload, stays keyed per TENANT, and the canvas refuses an illegal drop', async ({ page }, testInfo) => {
-  // One sign-in, one reload, five gateway writes and three list refetches.
-  test.setTimeout(120_000)
+  // One sign-in, two reloads, seven gateway writes and three list refetches.
+  test.setTimeout(180_000)
   const errors = collectErrors(page)
 
   // WorkflowsView's root div — data-screen-label="Workflow builder" is the ONLY occurrence of
@@ -312,8 +313,11 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
 
   // --- 12. save the placed step -------------------------------------------------------------
   await expect(page.getByTestId('publish-blocked-reason'), 'placing a step makes the tree dirty again').toBeVisible()
-  await page.getByRole('button', { name: 'Save draft', exact: true }).click()
+  const savePut = page.waitForRequest((r) => r.method() === 'PUT' && r.url().endsWith(`/v1/approval-policies/${createdPolicyId}/draft`))
+  await Promise.all([savePut, page.getByRole('button', { name: 'Save draft', exact: true }).click()])
   await expect(page.getByTestId('publish-blocked-reason'), 'the step reached the server').toHaveCount(0)
+  // The only scope assertion that can fail: the server defaults an absent scope to the same value.
+  expect((await savePut).postDataJSON().scope, 'Save draft sends the policy scope').toBe('All invoices')
 
   // --- 13. the reload IS the per-tenant proof, and now the ADDRESS's too ---------------------
   // lib/session.ts rehydrates the stored hand-off session on reload. `editingPolicyId` is no longer
@@ -328,6 +332,11 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await expect(page.getByLabel('Policy name'), 'the URL alone reopened the builder on this policy').toHaveValue(POLICY_NAME)
   await expect(page.getByText(PLACED_STEP, { exact: true }), 'with its saved step, off the gateway').toBeVisible()
   await expect(page, 'and the reload kept the policy address').toHaveURL(policyUrl)
+  await expect(page.locator('label[aria-label="Applies"] select'), 'Applies reads All invoices (fixture check)').toHaveValue('All invoices')
+  await expect(
+    page.getByTestId('scope-not-routed'),
+    'the scope sentence (fixture check)',
+  ).toHaveText('Per-scope routing is not yet available \u2014 every policy applies to all invoices.')
 
   // The sidebar closes the builder and returns the bare list address. Every count below is
   // still server-held: the fetch this reload forced is what drew the list.
@@ -339,6 +348,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await expect(row, 'a policy that has never been published').toContainText('DRAFT')
   await expect(row, 'policyStanding, off version 1 / draft / no active version').toContainText('Never published')
   await expect(row, 'and the dropped step survived the round trip').toContainText('1 approval')
+  await expect(row, 'the row prints the scope (fixture check)').toContainText('All invoices \u00b7 1 approval')
 
   // --- 14. DRAG-3a: branch lanes exist and ARE reachable -------------------------------------
   // The control. Without it, 3b below passes on a canvas rendering no lanes at all.
@@ -417,6 +427,53 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await expect(h1).toBeVisible()
   await expect(rows, 'a client switch does not re-key the policy set').toHaveCount(baseline + 1)
   await expect(row, 'and the policy this test created is still in it').toHaveCount(1)
+
+  // --- 16b. tune the saved policy: Deadline and a condition threshold survive Save and a reload -
+  await page.getByText(POLICY_NAME, { exact: true }).click()
+  await expect(page.getByLabel('Policy name'), 'the builder reopened on this policy').toHaveValue(POLICY_NAME)
+  await page.getByText(PLACED_STEP, { exact: true }).click()
+  await page.getByLabel('Deadline').selectOption({ label: 'Within 72 hours' })
+  await expect(page.getByLabel('Deadline')).toHaveValue('72')
+
+  await conditionChip(page).click()
+  await page.getByText('Amount greater than \u20a6100,000,000', { exact: true }).click()
+  const threshold = page.getByLabel('Threshold amount in naira')
+  await threshold.fill('250000000')
+  await expect(threshold).toHaveValue('250,000,000')
+  await expect(page.getByText('Amount greater than \u20a6250,000,000', { exact: true })).toBeVisible()
+
+  const tunePut = page.waitForResponse(
+    (r) => r.request().method() === 'PUT' && r.url().endsWith(`/v1/approval-policies/${createdPolicyId}/draft`),
+  )
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click()
+  expect((await tunePut).ok(), 'the tuned draft was accepted').toBeTruthy()
+  await expect(page.getByTestId('publish-blocked-reason'), 'the tuned steps reached the server').toHaveCount(0)
+
+  await page.reload()
+  await expect(page.getByLabel('Policy name'), 'the URL alone reopened the builder on this policy').toHaveValue(POLICY_NAME)
+  await page.getByText(PLACED_STEP, { exact: true }).click()
+  await expect(page.getByLabel('Deadline'), 'the deadline survived the reload').toHaveValue('72')
+  // Delegation is not stored (stepInput drops it), so this is a boundary, not a round-trip.
+  const delegate = page.getByRole('switch', { name: 'Allow delegation' })
+  await expect(delegate, 'delegate: not storable, not a round-trip').toBeDisabled()
+  await expect(delegate, 'delegate: not storable, not a round-trip').toHaveAttribute('aria-checked', 'false')
+  await expect(page.getByLabel('Delegate to'), 'delegate: not storable, not a round-trip').toBeDisabled()
+  const ruleCard = page.getByText('Amount greater than \u20a6250,000,000', { exact: true })
+  await expect(ruleCard, 'the threshold survived the reload').toBeVisible()
+  await ruleCard.click()
+  await expect(page.getByLabel('Threshold amount in naira')).toHaveValue('250,000,000')
+
+  const stored = await getApprovalPolicy(await login(PERSONAS.A), createdPolicyId!)
+  expect(stored.scope, 'scope (fixture check)').toBe('All invoices')
+  expect(stored.steps[0].kind).toBe('approval')
+  expect(stored.steps[0].sla_hours).toBe(72)
+  expect(stored.steps[1].kind).toBe('condition')
+  expect(stored.steps[1].cond_op).toBe('>')
+  expect(Number(stored.steps[1].cond_amount)).toBe(250000000)
+
+  await page.getByRole('button', { name: 'All policies' }).click()
+  await expect(h1).toBeVisible()
+  await expect(row, 'the row summarises the tuned policy').toContainText('All invoices \u00b7 1 approval \u00b7 1 condition')
 
   // --- 17. delete, through the UI ------------------------------------------------------------
   // The row's own control (WorkflowsView.tsx:203-215), reached by its aria-label. It

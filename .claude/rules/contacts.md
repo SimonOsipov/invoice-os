@@ -42,7 +42,8 @@ paths:
 - Name variables in a boot error, never their values.
 - Run a PR preview in `fake` mode and discard its vendor keys.
 - The nightly posture reads the contact keys like production.
-- Its newsletter is `fake`. Its blog and new-device mail is captured. Its invite mail is captured until `mail-on` mounts the key.
+- Its newsletter is `fake` until `mail-on` mounts the Blog ids. Then it is `real` for `nightly-*@<receiving domain>` only (`TestNightlyGuard_*`); a real newsletter without `RESEND_RECEIVING_DOMAIN` fails to boot.
+- Its blog mail is captured until `mail-on` mounts the sending key, then sent for run addresses only. Its new-device mail is captured. Its invite mail is captured until `mail-on` mounts the key.
 - `scripts/ci/preview.sh` mounts the four contact keys on the nightly's `notifications` and `worker`, and no `CONTACTS_FAKE`. Contacts run `real` there. A PR preview gets no key.
 - `TestPreviewNightlyContactsAreReal` and `TestPreviewPRHasNoContactKeys` pin this.
 - Answer 404 to an intake request that carries `X-User-ID`. Require the gateway token on every intake route.

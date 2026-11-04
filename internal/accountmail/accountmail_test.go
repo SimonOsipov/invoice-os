@@ -335,6 +335,26 @@ func TestTemplate_CarriesTheQ12Corrections(t *testing.T) {
 	}
 }
 
+func TestTemplate_EveryMailCarriesTheBrandFacts(t *testing.T) {
+	for _, name := range []string{"blog_confirm", "confirmation", "deletion_cancelled", "deletion_notice", "invite", "new_device", "recovery"} {
+		t.Run(name, func(t *testing.T) {
+			src, err := Template(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := string(src)
+			if !imgRe.MatchString(got) || !strings.Contains(got, `alt="ASComply"`) || !strings.Contains(got, "/emails/mark.png") {
+				t.Error("no ASComply logo img")
+			}
+			for _, want := range []string{`bgcolor="#082f31"`, "<h1", "ASComply Africa · Lagos, Nigeria"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("mail lacks %q", want)
+				}
+			}
+		})
+	}
+}
+
 func TestTemplate_LogoIsTheAbsolutePublicURL(t *testing.T) {
 	if !strings.HasPrefix(LogoURL, "https://") {
 		t.Fatalf("LogoURL = %q, want an absolute https URL", LogoURL)

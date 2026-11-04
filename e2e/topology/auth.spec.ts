@@ -51,6 +51,7 @@ const { SHARD, PERSONAS: API_PERSONAS } = shardPersonas('auth.spec.ts')
 // only GATEWAY_URL/APP_URL/TENANTS/FIRM_PERSONA/VALIDATION_EXPECTED, so it has no
 // LANDING_URL. Pattern mirrors e2e/smoke/apps.ts:21 (Decision [signout-asserts-landing-redirect]).
 const LANDING_URL = resolveTarget('LANDING_URL')
+const LIBRARY_URL = resolveTarget('LIBRARY_URL')
 
 // The live browser round trip: a real sign-in through the landing form mints a session whose
 // /v1/me read resolves the tenant under RLS before the workspace renders.
@@ -551,6 +552,26 @@ test('deployed app: every top-level path cold-boots to its own screen', async ({
   }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// NCOV-09 AC4: a signed-in click on the Library's Open in Platform lands on Invoices; a bounce
+// through the landing would mean the app did not honour the session.
+test('deployed app: Open in Platform from the Library lands a signed-in firm member on Invoices', async ({ page }) => {
+  const errors = collectErrors(page)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+
+  const navigations: string[] = []
+  page.on('request', (r) => {
+    if (r.isNavigationRequest() && r.frame() === page.mainFrame()) navigations.push(r.url())
+  })
+  await page.goto(`${LIBRARY_URL}/rules/validate`)
+  await page.getByRole('link', { name: 'Open in Platform' }).click()
+
+  await page.waitForURL((u) => u.origin === new URL(APP_URL).origin && u.pathname === '/invoices')
+  await expect(page.locator(VERIFIED)).toBeAttached()
+  await expect(page.getByRole('heading', { level: 1, name: 'Invoices', exact: true })).toBeVisible()
+  expect(navigations.filter((u) => u.startsWith(LANDING_URL)), 'the app bounced through the landing').toEqual([])
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
 // ROUTE-06-06 AC-2: the review path, using a batch id minted through

@@ -732,4 +732,14 @@ test.describe('library journeys', () => {
     await attachJson(testInfo, 'library-captions', measured)
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
+
+  test("library journeys: Open in Platform signed out lands on the landing's Create an account dialog", async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await visit(page, '/rules/validate')
+    await page.getByRole('link', { name: 'Open in Platform' }).click()
+    await page.waitForURL((u) => u.href.startsWith(BAKED_LANDING_URL))
+    await expect(page.getByRole('dialog', { name: 'Create an account' }), 'landing opens registration').toBeVisible()
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
 })

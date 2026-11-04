@@ -1256,31 +1256,29 @@ func TestHSTS_LongValueIsCut(t *testing.T) {
 }
 
 func TestHSTS_ApexWrongStatusOrLocationFails(t *testing.T) {
-	cases := map[string]func() (int, http.Header){
-		"status 200":    func() (int, http.Header) { return 200, nil },
-		"http location": func() (int, http.Header) { return 301, http.Header{"Location": {"http://ascomply.com/hsts-check?q=1"}} },
-		"www host": func() (int, http.Header) {
-			return 301, http.Header{"Location": {"https://www.ascomply.com/hsts-check?q=1"}}
-		},
-		"other path": func() (int, http.Header) { return 301, http.Header{"Location": {"https://ascomply.com/other?q=1"}} },
-		"other query": func() (int, http.Header) {
-			return 301, http.Header{"Location": {"https://ascomply.com/hsts-check?q=2"}}
-		},
-		"no location":  func() (int, http.Header) { return 301, nil },
-		"bad location": func() (int, http.Header) { return 301, http.Header{"Location": {"https://ascomply.com/%zz"}} },
-		"302 not 301": func() (int, http.Header) {
-			return 302, http.Header{"Location": {"https://ascomply.com/hsts-check?q=1"}}
-		},
+	loc := func(l string) func() (int, http.Header) {
+		return func() (int, http.Header) { return 301, http.Header{"Location": {l}} }
 	}
-	for name, apex := range cases {
+	cases := map[string]struct {
+		apex   func() (int, http.Header)
+		detail string
+	}{
+		"status 200":    {func() (int, http.Header) { return 200, nil }, "http apex answered 200"},
+		"http location": {loc("http://ascomply.com/hsts-check?q=1"), "http apex Location is not https"},
+		"www host":      {loc("https://www.ascomply.com/hsts-check?q=1"), "http apex Location is not on ascomply.com"},
+		"other path":    {loc("https://ascomply.com/other?q=1"), "http apex Location is not on /hsts-check"},
+		"other query":   {loc("https://ascomply.com/hsts-check?q=2"), "http apex Location is not on ?q=1"},
+		"no location":   {func() (int, http.Header) { return 301, nil }, "http apex Location is missing"},
+		"bad location":  {loc("https://ascomply.com/%zz"), "http apex did not answer"},
+		"302 not 301": {func() (int, http.Header) {
+			return 302, http.Header{"Location": {"https://ascomply.com/hsts-check?q=1"}}
+		}, "http apex answered 302"},
+	}
+	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			f := newFake(t)
-			f.apex = apex
-			r := f.run(t, nil)
-			r.want(t, 3, "failed", "http apex ")
-			if d := r.step(t, 3).Detail; !strings.HasPrefix(d, "http apex ") {
-				t.Errorf("detail %q", d)
-			}
+			f.apex = c.apex
+			f.run(t, nil).want(t, 3, "failed", c.detail)
 		})
 	}
 }
@@ -1510,6 +1508,15 @@ func TestScriptSrc_RealPagesMatch(t *testing.T) {
 			t.Errorf("%s: got %v, want %v", page, got, want)
 		}
 	}
+}
+
+func TestTestHook_DigestInFirstScriptOfTwo(t *testing.T) {
+	f := newFake(t)
+	f.page = func(string) (int, string) {
+		return 200, `<script src="/assets/first.js"></script><script src="/assets/entry.js"></script>`
+	}
+	f.bundles["/assets/first.js"] = "Km(e,`" + digest64 + "`)"
+	f.run(t, nil).want(t, 6, "failed", "holds a test digest")
 }
 
 func TestTestHook_SecondScriptIsRead(t *testing.T) {

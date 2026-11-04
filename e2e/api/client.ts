@@ -245,6 +245,11 @@ export function claimsOf(token: string): Record<string, unknown> {
   return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')) as Record<string, unknown>
 }
 
+// Unverified header of a JWT.
+export function headerOf(token: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString('utf8')) as Record<string, unknown>
+}
+
 export function subjectOf(token: string): string {
   return claimsOf(token).sub as string
 }

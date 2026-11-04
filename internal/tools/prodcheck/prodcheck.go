@@ -42,8 +42,10 @@ var (
 	wantServices = []string{"gateway", "auth", "tenancy", "portfolio", "invoice", "validation", "dashboard", "submission", "notifications", "worker", "docling"}
 	sites        = []string{"app.ascomply.com", "www.ascomply.com", "www.ascomply.com/library", "www.ascomply.com/blog", "ops.ascomply.com", "sup.ascomply.com"}
 	sha40        = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	scriptSrc    = regexp.MustCompile(`src="(/assets/[^"]*\.js)"`)
-	hstsURLs     = []string{
+	scriptSrc    = regexp.MustCompile(`src="((?:/library|/blog)?/assets/[^"]*\.js)"`)
+	// ceiling: an unrelated quoted 64-hex string in a bundle fails the step, narrow the pattern then
+	digestLiteral = regexp.MustCompile(`["'` + "`" + `]\s*[0-9a-fA-F]{64}\s*["'` + "`" + `]`)
+	hstsURLs      = []string{
 		"https://ascomply.com/",
 		"https://ascomply.com/blog/x?q=1",
 		"https://www.ascomply.com/",
@@ -173,6 +175,7 @@ func runWith(args []string, stdout, stderr io.Writer, cfg config) int {
 	c.step("every host sends HSTS", c.hstsStep)
 	c.step("every service reports Sentry on", c.sentryStep)
 	c.step("landing carries the production GA4 id", c.gaStep)
+	c.step("no production page ships the Sentry test digest", c.testHookStep)
 	c.step("probe signs in", c.signInStep)
 	c.step("probe has no registration metadata", c.registrationStep)
 	c.step("probe loads its workspace", c.workspaceStep)
@@ -510,14 +513,7 @@ func (c *checker) gaStep() (string, string) {
 	if err != nil {
 		return "failed", "landing address is invalid"
 	}
-	var srcs []string
-	seen := map[string]bool{}
-	for _, m := range scriptSrc.FindAllStringSubmatch(string(page), -1) {
-		if !seen[m[1]] && len(srcs) < 10 {
-			seen[m[1]] = true
-			srcs = append(srcs, m[1])
-		}
-	}
+	srcs := entryScripts(page)
 	if len(srcs) == 0 {
 		return "failed", "landing names no script"
 	}
@@ -536,6 +532,61 @@ func (c *checker) gaStep() (string, string) {
 		}
 	}
 	return "failed", "landing bundle lacks " + gaID
+}
+
+// entryScripts returns the distinct script paths a page names, capped at 10.
+func entryScripts(page []byte) []string {
+	var srcs []string
+	seen := map[string]bool{}
+	for _, m := range scriptSrc.FindAllStringSubmatch(string(page), -1) {
+		if !seen[m[1]] && len(srcs) < 10 {
+			seen[m[1]] = true
+			srcs = append(srcs, m[1])
+		}
+	}
+	return srcs
+}
+
+func (c *checker) testHookStep() (string, string) {
+	var problems []string
+	worst := 1
+	for _, site := range sites {
+		pageURL := strings.TrimSuffix(c.t.siteURL(site), "build.txt")
+		code, page, try := c.get(pageURL, nil)
+		worst = max(worst, try)
+		if code != http.StatusOK {
+			problems = append(problems, site+" page "+answered(code))
+			continue
+		}
+		base, err := url.Parse(pageURL)
+		srcs := entryScripts(page)
+		if err != nil || len(srcs) == 0 {
+			problems = append(problems, site+" names no script")
+			continue
+		}
+		held := false
+		for _, src := range srcs {
+			ref, err := url.Parse(src)
+			if err != nil {
+				problems = append(problems, site+" names a bad script address")
+				continue
+			}
+			code, js, try := c.get(base.ResolveReference(ref).String(), nil)
+			worst = max(worst, try)
+			if code != http.StatusOK {
+				problems = append(problems, site+" bundle "+answered(code))
+				continue
+			}
+			held = held || digestLiteral.Match(js)
+		}
+		if held {
+			problems = append(problems, site+" holds a test digest")
+		}
+	}
+	if len(problems) > 0 {
+		return "failed", strings.Join(problems, "; ")
+	}
+	return "passed", passedOn(worst)
 }
 
 // post sends one JSON POST with no retry; code is 0 when nothing answered.

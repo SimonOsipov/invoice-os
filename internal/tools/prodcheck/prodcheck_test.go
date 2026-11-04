@@ -39,6 +39,7 @@ type fakeProd struct {
 	fleet    func(n int) (int, string)
 	fleetN   int
 	site     func(site string) (int, string, http.Header)
+	page     func(site string) (int, string)
 	landing  string
 	bundles  map[string]string
 	bundleSt map[string]int
@@ -117,7 +118,17 @@ func newFake(t *testing.T) *fakeProd {
 		auth:    map[string]string{},
 		access:  jwtWith(map[string]any{"user_metadata": map[string]any{"email_verified": true}}),
 		landing: `<html><script type="module" crossorigin src="/assets/a.js"></script><script src="/assets/b.js"></script></html>`,
-		bundles: map[string]string{"/assets/a.js": "nothing here", "/assets/b.js": "x=\"" + gaID + "\""},
+		bundles: map[string]string{
+			"/assets/a.js": "nothing here", "/assets/b.js": "x=\"" + gaID + "\"",
+			"/assets/entry.js": "Km(e,``)", "/library/assets/entry.js": "Km(e,``)", "/blog/assets/entry.js": "Km(e,``)",
+		},
+	}
+	f.page = func(site string) (int, string) {
+		prefix := ""
+		if _, p, ok := strings.Cut(site, "/"); ok {
+			prefix = "/" + p
+		}
+		return 200, `<html><script type="module" crossorigin src="` + prefix + `/assets/entry.js"></script></html>`
 	}
 	f.fleet = func(int) (int, string) { return 200, fleetBody(nil) }
 	f.site = func(string) (int, string, http.Header) { return 200, good + "\n", nil }
@@ -185,6 +196,10 @@ func (f *fakeProd) serve(w http.ResponseWriter, r *http.Request) {
 		code, body := f.fleet(n)
 		w.WriteHeader(code)
 		_, _ = w.Write([]byte(body))
+	case strings.HasPrefix(r.URL.Path, "/site/") && !strings.HasSuffix(r.URL.Path, "/build.txt"):
+		code, body := f.page(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/site/"), "/"))
+		w.WriteHeader(code)
+		_, _ = w.Write([]byte(body))
 	case strings.HasPrefix(r.URL.Path, "/site/"):
 		site := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/site/"), "/build.txt")
 		code, body, h := f.site(site)
@@ -203,7 +218,7 @@ func (f *fakeProd) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = w.Write([]byte(f.landing))
-	case strings.HasPrefix(r.URL.Path, "/assets/"):
+	case strings.HasPrefix(r.URL.Path, "/assets/"), strings.HasPrefix(r.URL.Path, "/library/assets/"), strings.HasPrefix(r.URL.Path, "/blog/assets/"):
 		if c := f.bundleSt[r.URL.Path]; c != 0 {
 			w.WriteHeader(c)
 			return
@@ -622,7 +637,7 @@ func TestGA_BadScriptAddressFails(t *testing.T) {
 	f.landing = `<html><script src="/assets/%zz.js"></script></html>`
 	r := f.run(t, nil)
 	r.want(t, 5, "failed", "landing names a bad script address")
-	r.want(t, 6, "passed", "")
+	r.want(t, 7, "passed", "")
 }
 
 func TestGA_LandingOrBundleUnreadableFails(t *testing.T) {
@@ -689,7 +704,7 @@ func TestSection_ShapeAndOrder(t *testing.T) {
 	for _, s := range r.sec.Steps {
 		names = append(names, s.Name)
 	}
-	want := []string{"fleet is ready", "services run main's head", "sites serve main's head", "every host sends HSTS", "every service reports Sentry on", "landing carries the production GA4 id", "probe signs in", "probe has no registration metadata", "probe loads its workspace"}
+	want := []string{"fleet is ready", "services run main's head", "sites serve main's head", "every host sends HSTS", "every service reports Sentry on", "landing carries the production GA4 id", "no production page ships the Sentry test digest", "probe signs in", "probe has no registration metadata", "probe loads its workspace"}
 	if strings.Join(names, "|") != strings.Join(want, "|") {
 		t.Errorf("steps %v", names)
 	}
@@ -755,6 +770,21 @@ func TestSection_NightlysummaryReadsIt(t *testing.T) {
 	red := redF.run(t, nil)
 	if v := summarize(write("red.json", red.raw))["verdict"]; v != "red" {
 		t.Errorf("red section gave %v", v)
+	}
+
+	var names []string
+	for _, st := range summarize(greenPath)["prod_check"].(map[string]any)["steps"].([]any) {
+		names = append(names, st.(map[string]any)["name"].(string))
+	}
+	for _, n := range []string{"every host sends HSTS", "every service reports Sentry on", "no production page ships the Sentry test digest"} {
+		if !contains(names, n) {
+			t.Errorf("summary steps %v lack %q", names, n)
+		}
+	}
+	hookF := newFake(t)
+	hookF.bundles["/assets/entry.js"] = "Km(e,`" + digest64 + "`)"
+	if v := summarize(write("hook.json", hookF.run(t, nil).raw))["verdict"]; v != "red" {
+		t.Errorf("digest section gave %v", v)
 	}
 }
 
@@ -845,6 +875,12 @@ func TestAllowedCalls_WholeRunListsEveryCall(t *testing.T) {
 	}
 	for _, site := range sites {
 		want["GET /site/"+site+"/build.txt"]++
+		want["GET /site/"+site+"/"]++
+		prefix := ""
+		if _, p, ok := strings.Cut(site, "/"); ok {
+			prefix = "/" + p
+		}
+		want["GET "+prefix+"/assets/entry.js"]++
 	}
 	for i := range hstsURLs {
 		want["GET /hsts/"+strconv.Itoa(i)]++
@@ -875,7 +911,7 @@ func TestProbe_SignInThenExchangeBindsTheState(t *testing.T) {
 		return 200, `{"access_token":"` + f.access + `","refresh_token":"` + refresh + `"}`
 	}
 	r := f.run(t, nil)
-	r.want(t, 6, "passed", "")
+	r.want(t, 7, "passed", "")
 	if len(f.posts) != 1 || len(seen) != 2 {
 		t.Fatalf("posts %v seen %v", f.posts, seen)
 	}
@@ -912,9 +948,9 @@ func TestProbe_RefusalNamesTheStatusOnce(t *testing.T) {
 			}
 			f.exchange = func(map[string]string) (int, string) { return c.exCode, `{"error":"x"}` }
 			r := f.run(t, nil)
-			r.want(t, 6, "failed", c.want)
-			r.want(t, 7, "skipped", "")
+			r.want(t, 7, "failed", c.want)
 			r.want(t, 8, "skipped", "")
+			r.want(t, 9, "skipped", "")
 			wantPosts := 1
 			if c.signCode == 200 {
 				wantPosts = 2
@@ -949,9 +985,9 @@ func TestProbe_200WithoutTheCredentialFails(t *testing.T) {
 				f.exchange = c.exchange
 			}
 			r := f.run(t, nil)
-			r.want(t, 6, "failed", c.want)
-			r.want(t, 7, "skipped", "")
+			r.want(t, 7, "failed", c.want)
 			r.want(t, 8, "skipped", "")
+			r.want(t, 9, "skipped", "")
 		})
 	}
 }
@@ -971,8 +1007,8 @@ func TestProbe_NoRegistrationPasses(t *testing.T) {
 			f := newFake(t)
 			withClaims(f, claims)
 			r := f.run(t, nil)
-			r.want(t, 7, "passed", "")
 			r.want(t, 8, "passed", "")
+			r.want(t, 9, "passed", "")
 		})
 	}
 }
@@ -984,8 +1020,8 @@ func TestProbe_RegistrationSetFails(t *testing.T) {
 			f := newFake(t)
 			withClaims(f, map[string]any{"user_metadata": map[string]any{"registration": reg}})
 			r := f.run(t, nil)
-			r.want(t, 7, "failed", "user_metadata.registration is set")
-			r.want(t, 8, "passed", "")
+			r.want(t, 8, "failed", "user_metadata.registration is set")
+			r.want(t, 9, "passed", "")
 			if r.sec.OK {
 				t.Error("run is green")
 			}
@@ -997,8 +1033,8 @@ func TestProbe_ClaimAbsentFails(t *testing.T) {
 	f := newFake(t)
 	withClaims(f, map[string]any{"sub": "u-1"})
 	r := f.run(t, nil)
-	r.want(t, 7, "failed", "token has no user_metadata claim")
-	r.want(t, 8, "passed", "")
+	r.want(t, 8, "failed", "token has no user_metadata claim")
+	r.want(t, 9, "passed", "")
 }
 
 func TestProbe_MalformedTokenFails(t *testing.T) {
@@ -1013,9 +1049,9 @@ func TestProbe_MalformedTokenFails(t *testing.T) {
 			f := newFake(t)
 			f.access = tok
 			r := f.run(t, nil)
-			r.want(t, 6, "passed", "")
-			r.want(t, 7, "failed", "token is not a JWT")
-			r.want(t, 8, "passed", "")
+			r.want(t, 7, "passed", "")
+			r.want(t, 8, "failed", "token is not a JWT")
+			r.want(t, 9, "passed", "")
 		})
 	}
 }
@@ -1023,7 +1059,7 @@ func TestProbe_MalformedTokenFails(t *testing.T) {
 func TestProbe_WorkspaceReadsCarryTheBearer(t *testing.T) {
 	f := newFake(t)
 	r := f.run(t, nil)
-	r.want(t, 8, "passed", "")
+	r.want(t, 9, "passed", "")
 	for _, p := range workspaceReads {
 		if f.auth[p] != "Bearer "+f.access {
 			t.Errorf("%s saw %q", p, f.auth[p])
@@ -1048,8 +1084,8 @@ func TestProbe_WorkspaceFailureNamesThePath(t *testing.T) {
 		return 200, `{}`
 	}
 	r := f.run(t, nil)
-	r.want(t, 8, "failed", "/api/dashboard/v1/rollup answered 500")
-	r.want(t, 8, "failed", "/me has no tenant")
+	r.want(t, 9, "failed", "/api/dashboard/v1/rollup answered 500")
+	r.want(t, 9, "failed", "/me has no tenant")
 	if f.count("/api/dashboard/v1/rollup") != 3 {
 		t.Errorf("rollup tries: %d", f.count("/api/dashboard/v1/rollup"))
 	}
@@ -1061,7 +1097,7 @@ func TestProbe_MeWithoutTenantFails(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFake(t)
 			f.reads = func(string) (int, string) { return 200, body }
-			f.run(t, nil).want(t, 8, "failed", "/me has no tenant")
+			f.run(t, nil).want(t, 9, "failed", "/me has no tenant")
 		})
 	}
 }
@@ -1076,13 +1112,13 @@ func TestProbe_SecretsAbsent(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFake(t)
 			r := f.run(t, env)
-			r.want(t, 6, "failed", "secrets PROD_PROBE_EMAIL and PROD_PROBE_PASSWORD are not set")
-			r.want(t, 7, "skipped", "")
+			r.want(t, 7, "failed", "secrets PROD_PROBE_EMAIL and PROD_PROBE_PASSWORD are not set")
 			r.want(t, 8, "skipped", "")
-			if r.code != 0 || r.sec.OK || len(r.sec.Steps) != 9 {
+			r.want(t, 9, "skipped", "")
+			if r.code != 0 || r.sec.OK || len(r.sec.Steps) != 10 {
 				t.Errorf("code %d ok %v steps %d", r.code, r.sec.OK, len(r.sec.Steps))
 			}
-			for i := 0; i < 6; i++ {
+			for i := 0; i < 7; i++ {
 				r.want(t, i, "passed", "")
 			}
 			if len(f.posted()) != 0 {
@@ -1121,7 +1157,7 @@ func TestNoSecretInAnyOutput(t *testing.T) {
 	x.exchange = func(map[string]string) (int, string) { return 400, echo + " " + x.access }
 	r = x.run(t, nil)
 	assertAbsent(t, r, append(secrets, x.access)...)
-	r.want(t, 6, "failed", "exchange answered 400")
+	r.want(t, 7, "failed", "exchange answered 400")
 
 	// the tokens are bad: nothing of them reaches the section
 	h := newFake(t)
@@ -1383,5 +1419,138 @@ func TestHSTS_URLsMatchTheSpec(t *testing.T) {
 	}
 	if m := regexp.MustCompile(`request\.get\('(http://[^']+)'`).FindStringSubmatch(spec); m == nil || m[1] != prodConfig().targets.apexHTTP {
 		t.Errorf("apexHTTP %q, spec %v", prodConfig().targets.apexHTTP, m)
+	}
+}
+
+const digest64 = "1e089e3c5323ad80a90767bdd5907297b4138163f027097fd3bdbeab528d2d68"
+
+const hookName = "no production page ships the Sentry test digest"
+
+func TestTestHook_CleanBundlesPass(t *testing.T) {
+	f := newFake(t)
+	r := f.run(t, nil)
+	if s := r.step(t, 6); s.Name != hookName {
+		t.Fatalf("step 6 is %q", s.Name)
+	}
+	r.want(t, 6, "passed", "")
+	for _, site := range sites {
+		if f.count("/site/"+site+"/") != 1 {
+			t.Errorf("page of %s read %d times", site, f.count("/site/"+site+"/"))
+		}
+	}
+}
+
+func TestTestHook_DigestNamesTheSite(t *testing.T) {
+	f := newFake(t)
+	f.page = func(site string) (int, string) {
+		if site == "ops.ascomply.com" {
+			return 200, `<script src="/assets/ops.js"></script>`
+		}
+		return 200, `<script src="/assets/entry.js"></script>`
+	}
+	f.bundles["/assets/ops.js"] = "Km(e,`" + digest64 + "`)"
+	r := f.run(t, nil)
+	r.want(t, 6, "failed", "ops.ascomply.com holds a test digest")
+	assertAbsent(t, r, digest64)
+}
+
+func TestTestHook_QuotesAndCase(t *testing.T) {
+	h := digest64
+	for name, lit := range map[string]string{
+		"double": `"` + h + `"`, "single": `'` + h + `'`, "backtick": "`" + h + "`",
+		"upper": `"` + strings.ToUpper(h) + `"`, "spaces": `" ` + h + ` "`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFake(t)
+			f.bundles["/assets/entry.js"] = "Km(e," + lit + ")"
+			r := f.run(t, nil)
+			r.want(t, 6, "failed", "app.ascomply.com holds a test digest")
+			assertAbsent(t, r, h, strings.ToUpper(h))
+		})
+	}
+}
+
+func TestTestHook_NotAValidDigestPasses(t *testing.T) {
+	h := digest64
+	for name, lit := range map[string]string{
+		"63 hex": `"` + h[:63] + `"`, "65 hex": `"` + h + `a"`,
+		"inside a longer literal": `"sha256-` + h + `"`, "unquoted": "x=" + h,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFake(t)
+			f.bundles["/assets/entry.js"] = "Km(e," + lit + ")"
+			f.run(t, nil).want(t, 6, "passed", "")
+		})
+	}
+}
+
+func TestTestHook_LibraryAndBlogBundlesAreRead(t *testing.T) {
+	for path, site := range map[string]string{
+		"/library/assets/entry.js": "www.ascomply.com/library",
+		"/blog/assets/entry.js":    "www.ascomply.com/blog",
+	} {
+		t.Run(site, func(t *testing.T) {
+			f := newFake(t)
+			f.bundles[path] = "Km(e,`" + digest64 + "`)"
+			f.run(t, nil).want(t, 6, "failed", site+" holds a test digest")
+		})
+	}
+}
+
+func TestScriptSrc_RealPagesMatch(t *testing.T) {
+	cases := map[string][]string{
+		`<script type="module" crossorigin src="/assets/index-D0eqkpXs.js"></script>`:         {"/assets/index-D0eqkpXs.js"},
+		`<script type="module" crossorigin src="/library/assets/index-6g0SyIkK.js"></script>`: {"/library/assets/index-6g0SyIkK.js"},
+		`<script type="module" crossorigin src="/blog/assets/index-CkoPrfZs.js"></script>`:    {"/blog/assets/index-CkoPrfZs.js"},
+		`<script src="/static/x.js"></script>`:                                                nil,
+		`<script src="/other/assets/x.js"></script>`:                                          nil,
+	}
+	for page, want := range cases {
+		if got := entryScripts([]byte(page)); strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("%s: got %v, want %v", page, got, want)
+		}
+	}
+}
+
+func TestTestHook_SecondScriptIsRead(t *testing.T) {
+	f := newFake(t)
+	f.page = func(string) (int, string) {
+		return 200, `<script src="/assets/entry.js"></script><script src="/assets/second.js"></script>`
+	}
+	f.bundles["/assets/second.js"] = "Km(e,`" + digest64 + "`)"
+	f.run(t, nil).want(t, 6, "failed", "holds a test digest")
+}
+
+func TestTestHook_PageOrBundleUnreadableFails(t *testing.T) {
+	cases := map[string]struct {
+		set    func(f *fakeProd)
+		detail string
+	}{
+		"page 500":  {func(f *fakeProd) { f.page = func(string) (int, string) { return 500, "" } }, "page answered 500"},
+		"no script": {func(f *fakeProd) { f.page = func(string) (int, string) { return 200, "<html></html>" } }, "names no script"},
+		"outside /assets/": {func(f *fakeProd) {
+			f.page = func(string) (int, string) { return 200, `<script src="/static/x.js"></script>` }
+		}, "names no script"},
+		"bundle 404": {func(f *fakeProd) { f.bundleSt = map[string]int{"/assets/entry.js": 404} }, "bundle answered 404"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFake(t)
+			c.set(f)
+			f.run(t, nil).want(t, 6, "failed", c.detail)
+		})
+	}
+}
+
+func TestTestHook_OnlyGETsAndOnePagePerSite(t *testing.T) {
+	f := newFake(t)
+	f.run(t, nil)
+	for _, site := range sites {
+		if n := f.count("/site/" + site + "/"); n != 1 {
+			t.Errorf("%s: %d page GETs", site, n)
+		}
+	}
+	if len(f.posted()) != 2 {
+		t.Errorf("non-GET calls %v", f.posted())
 	}
 }

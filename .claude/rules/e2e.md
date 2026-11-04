@@ -41,7 +41,7 @@ paths:
 - Print the same site addresses from `ctl env` as `preview.sh urls` prints.
 - Run `old-addresses.spec.ts` and `transport-security.spec.ts` against production after a load-balancer change.
 - Keep `e2e/smoke/oldAddresses.ts` pure and unit-tested.
-- Cover the library consent notice, the stored answer, the privacy link, the production-host-only tag and the chat gate in `e2e/smoke/library-consent.spec.ts`.
+- Cover the library consent notice, the stored answer, the privacy link, the production-host-only tag, the GA4 events on the routed production host and the chat gate in `e2e/smoke/library-consent.spec.ts`.
 - Cover the blog consent and the blog chat gate in `e2e/smoke/blog-consent.spec.ts`.
 - Cover the landing chat gate in `e2e/smoke/landing-chat.spec.ts`. Its live arm runs only against `https://www.ascomply.com`.
 - Cover the app cookie notice, its layout, the PR-host chat gate and the sign-out cookie wipe in `e2e/topology/app-consent.spec.ts`.

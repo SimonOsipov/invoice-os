@@ -359,3 +359,70 @@ routedTest('library consent: a returning visitor gets the chat loader at boot', 
   await expect(notice(page)).toHaveCount(0)
   await expect.poll(() => loaded.length, 'a granted record did not request the chat loader').toBe(1)
 })
+
+type GaEvent = { name: string; params: Record<string, unknown> }
+
+// gtag pushes `arguments` objects: Array.from turns each into an array.
+async function gaEvents(page: Page): Promise<GaEvent[]> {
+  const entries = await page.evaluate(() =>
+    ((window as unknown as { dataLayer?: ArrayLike<unknown>[] }).dataLayer ?? []).map((e) => Array.from(e)),
+  )
+  return entries.filter((e) => e[0] === 'event').map((e) => ({ name: e[1] as string, params: e[2] as Record<string, unknown> }))
+}
+
+routedTest('library analytics: the routed production Library sends page views, Open in Platform, demo open and tour start', async ({ routed: page, request }) => {
+  test.setTimeout(60_000)
+  await page.context().addCookies([consentCookie(true)])
+  await controlRouting(page, request)
+  const errors = consoleGate(page)
+  const leaked: string[] = []
+  const pending: Promise<void>[] = []
+  page.on('requestfinished', (r) => {
+    if (!isStubbedHost(r.url())) return
+    pending.push(
+      r.response().then((res) => {
+        if (res?.headers()[STUB_HEADER] !== '1') leaked.push(r.url())
+      }),
+    )
+  })
+  page.on('requestfailed', (r) => {
+    if (isStubbedHost(r.url())) leaked.push(r.url())
+  })
+  // Runs after React's root listener, so each sender has fired; the cross-origin link never leaves the page.
+  await page.addInitScript(() => {
+    window.addEventListener('click', (e) => {
+      if (e.target instanceof Element && e.target.closest('a[href]')) e.preventDefault()
+    })
+  })
+
+  await openRoutedLibrary(page)
+  await expect
+    .poll(() => page.evaluate(() => ((window as unknown as { dataLayer?: ArrayLike<unknown>[] }).dataLayer ?? []).map((e) => e[0])), 'the tag never loaded on the routed Library')
+    .toContain('config')
+  expect(await gaEvents(page), 'an event fired before any click').toEqual([])
+
+  const aside = page.locator('aside')
+  const main = page.locator('#lib-main')
+  const expected: GaEvent[] = []
+  const step = async (click: () => Promise<void>, event: GaEvent): Promise<void> => {
+    await click()
+    expected.push(event)
+    await expect.poll(() => gaEvents(page), `no ${event.name} after the click`).toEqual(expected)
+  }
+  const bookDemo = aside.getByRole('link', { name: 'Book the Demo' })
+  await expect(bookDemo, 'control: the sidebar has no Book the Demo link').toHaveCount(1)
+
+  await step(() => aside.locator('#nav-rules').click(), { name: 'page_view', params: {} })
+  await step(() => main.getByRole('link', { name: 'Open in Platform' }).click(), { name: 'open_in_platform', params: { group_id: 'rules' } })
+  await step(() => page.locator('#fc-validate').click(), { name: 'page_view', params: {} })
+  await step(() => main.getByRole('link', { name: 'Open in Platform' }).click(), { name: 'open_in_platform', params: { feature_id: 'validate' } })
+  await step(() => bookDemo.click(), { name: 'demo_open', params: { cta_location: 'library' } })
+  await step(() => aside.getByRole('button', { name: 'Overview' }).click(), { name: 'page_view', params: {} })
+  await step(() => main.getByRole('button', { name: 'Take the tour' }).click(), { name: 'tour_start', params: {} })
+
+  expect(page.url(), 'a link click left the Library').toMatch(/^https:\/\/www\.ascomply\.com\/library\/?$/)
+  await page.waitForLoadState('networkidle')
+  await Promise.all(pending)
+  expect(leaked, 'a GA, Sentry or chat request was not answered by the stub').toEqual([])
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})

@@ -2528,7 +2528,6 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       await approveUntilClosed(full.id, await firmApproverTokens())
       await submitAndAwait(token, full.id, 'accepted')
 
-      // 430 is below the original total: only the accepted full note can trip the cap.
       const second = await issueNote(token, original.id, noteBody(original, `CN-N5B-${freshTin()}`))
       const verdict = await validateInvoice(token, second.id)
       expect(verdict.status, 'the over-cap violation is error severity').toBe('draft')

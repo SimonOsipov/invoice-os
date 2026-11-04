@@ -607,3 +607,84 @@ test.describe('library at phone widths, 768 and the tour', () => {
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 })
+
+const COMING_SOON_IDS = ['fiscal-outcomes', 'submit-clear', 'alerts', 'channels', 'erp-connectors'] // frontend/library/src/content.ts COMING_SOON_IDS
+
+test.describe('library journeys', () => {
+  test('library journeys: every feature card has its title, copy and thumbnail, and a Coming soon pill or an Open in Platform link', async ({ page }, testInfo) => {
+    test.setTimeout(240_000)
+    const errors = collectErrors(page)
+    await prepare(page)
+    const pillFids = new Set<string>()
+    const measured: Record<string, unknown>[] = []
+    for (const { gid, fids } of GROUPS) {
+      await visit(page, `/${gid}`)
+      for (const fid of fids) {
+        const card = page.locator(`#fc-${fid}`)
+        const read = await card.evaluate((el) => {
+          const copy = el.querySelector('.t-body-sm')
+          return {
+            title: copy?.previousElementSibling?.textContent?.trim() ?? '',
+            copy: copy?.textContent?.trim() ?? '',
+            scene: el.querySelector('[data-testid="lib-thumb-scene"]')?.textContent?.trim() ?? '',
+            soon: (el.textContent ?? '').includes('Coming soon'),
+          }
+        })
+        measured.push({ gid, fid, ...read })
+        const at = `/${gid} #fc-${fid}`
+        expect.soft(read.title, `${at}: title`).not.toBe('')
+        expect.soft(read.copy, `${at}: copy`).not.toBe('')
+        expect.soft(read.scene, `${at}: thumbnail scene`).not.toBe('')
+        expect.soft(read.soon, `${at}: Coming soon pill iff fid is in COMING_SOON_IDS`).toBe(COMING_SOON_IDS.includes(fid))
+        if (read.soon) pillFids.add(fid)
+      }
+      for (const fid of fids) {
+        await visit(page, `/${gid}/${fid}`)
+        const open = page.getByRole('link', { name: 'Open in Platform' })
+        if (COMING_SOON_IDS.includes(fid)) {
+          await expect(open, `/${gid}/${fid}: a soon feature has no Open in Platform link`).toHaveCount(0)
+        } else {
+          await expect(open, `/${gid}/${fid}: exactly one Open in Platform link`).toHaveCount(1)
+          const href = (await open.getAttribute('href')) ?? ''
+          expect.soft(href.startsWith(BAKED_APP_URL), `/${gid}/${fid}: href ${href} starts with ${BAKED_APP_URL}`).toBe(true)
+          expect.soft(href.endsWith('?via=library'), `/${gid}/${fid}: href ${href} ends with ?via=library`).toBe(true)
+        }
+      }
+    }
+    expect.soft([...pillFids].sort(), 'fids with a Coming soon pill equal COMING_SOON_IDS').toEqual([...COMING_SOON_IDS].sort())
+    await attachJson(testInfo, 'library-cards-content', measured)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('library journeys: a click walks from home to each group and feature, and Back returns', async ({ page }, testInfo) => {
+    test.setTimeout(300_000)
+    const errors = collectErrors(page)
+    await prepare(page)
+    const measured: Record<string, unknown>[] = []
+    await visit(page, '/')
+    for (let k = 0; k < GROUPS.length; k++) {
+      const { gid, fids } = GROUPS[k]
+      await page.locator('#lib-main .lib-card').nth(k).click()
+      await expect(page, `home card ${k}: opens group ${gid}`).toHaveURL(`${LIBRARY_URL}/${gid}`)
+      await expect(page.locator('[id^="fc-"]').first(), `/${gid}: cards render`).toBeVisible()
+      const shown = await page.locator('[id^="fc-"]').evaluateAll((els) => els.map((e) => e.id.slice(3)))
+      expect.soft(shown, `/${gid}: card ids equal the discovered fids`).toEqual(fids)
+      for (const fid of fids) {
+        const card = page.locator(`#fc-${fid}`)
+        const title = (await card.evaluate((el) => el.querySelector('.t-body-sm')?.previousElementSibling?.textContent ?? '')).trim()
+        await card.click()
+        await expect(page, `#fc-${fid}: opens the feature`).toHaveURL(`${LIBRARY_URL}/${gid}/${fid}`)
+        await expect(page.getByTestId('lib-player'), `/${gid}/${fid}: player visible`).toBeVisible()
+        await expect(page.locator('h2'), `/${gid}/${fid}: h2 is the card title`).toHaveText(title)
+        measured.push({ gid, fid, title })
+        await page.goBack()
+        await expect(page, `/${gid}/${fid}: Back returns to the group`).toHaveURL(`${LIBRARY_URL}/${gid}`)
+        await expect(card, `/${gid}: card ${fid} visible after Back`).toBeVisible()
+      }
+      await page.goBack()
+      await expect(page, `/${gid}: Back returns home`).toHaveURL(`${LIBRARY_URL}/`)
+    }
+    await attachJson(testInfo, 'library-browse', measured)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+})

@@ -266,7 +266,7 @@ test.describe('library layout at wide widths', () => {
     await expect(h1).toBeVisible()
     for (const width of WIDE_WIDTHS) {
       await resize(page, width, 1080)
-      const logo = await rectOf(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'ASComply Africa' }), 'Nav logo')
+      const logo = await rectOf(page.getByRole('banner').getByRole('link', { name: 'ASComply Africa', exact: true }), 'Nav logo')
       const heading = await rectOf(h1, 'not-found h1')
       const home = await rectOf(page.getByRole('link', { name: 'Back to home' }), 'home button')
       const library = await rectOf(page.getByRole('link', { name: 'Browse the library' }), 'library button')

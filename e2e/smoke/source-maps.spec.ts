@@ -33,7 +33,13 @@ for (const target of TARGETS) {
       expect(/\/\/[#@]\s*sourceMappingURL=/.test(await script.text()), `${path} still carries a sourceMappingURL comment`).toBe(false)
       const map = await request.get(`${new URL(path, `${base}/`).href}.map`)
       expect(map.status(), `${path}.map`).toBe(404)
-      if (['blog', 'landing', 'library'].includes(target.name)) expect(map.headers()['content-type'] ?? '', `${path}.map`).not.toContain('text/html')
+      // Caddy's .map rule sends an empty body; Cloud Run adds a text/html type to it, so landing and library are told by body.
+      if (target.name === 'blog') expect(map.headers()['content-type'] ?? '', `${path}.map`).not.toContain('text/html')
+      else if (['landing', 'library'].includes(target.name)) {
+        const mapBody = await map.text()
+        expect(mapBody === '', `${path}.map: body is not empty`).toBe(true)
+        expect(mapBody.includes('data-page="not-found"'), `${path}.map: answered with the not-found page`).toBe(false)
+      }
     }
 
     const entry = html.match(ENTRY_SRC)?.[1]
@@ -43,7 +49,7 @@ for (const target of TARGETS) {
     expect(entryBody.includes('sentry-dbid-'), `${entry} carries no Sentry debug id`).toBe(true)
 
     // Controls: the app and consoles fall back to index.html, so their 404s above come from the .map rule.
-    // The blog, landing and library answer an unknown path with their 404 page; the .map 404 has no text/html.
+    // The blog, landing and library answer an unknown path with their 404 page; the .map 404 is not that page.
     const fallback = await request.get(`${base}/assets/sentry08-no-such-file.js`)
     expect(fallback.status()).toBe(['blog', 'landing', 'library'].includes(target.name) ? 404 : 200)
     expect(fallback.headers()['content-type']).toContain('text/html')

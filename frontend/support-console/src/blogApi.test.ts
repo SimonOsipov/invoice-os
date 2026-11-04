@@ -366,6 +366,14 @@ describe('fetchCoverUrl', () => {
     expect(revoke).toHaveBeenCalledWith('blob:cover-1')
   })
 
+  it('fetchCoverUrl: forwards the abort signal to fetch', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:cover-2')
+    fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([1]), { status: 200, headers: { 'Content-Type': 'image/jpeg' } }))
+    const ctl = new AbortController()
+    await (fetchCoverUrl as (id: string, signal?: AbortSignal) => ReturnType<typeof fetchCoverUrl>)('p1', ctl.signal)
+    expect(lastCall().init.signal).toBe(ctl.signal)
+  })
+
   it('fetchCoverUrl: a 404 creates no URL', async () => {
     const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:never')
     fetchMock.mockResolvedValueOnce(json({ error: 'no such cover' }, 404))

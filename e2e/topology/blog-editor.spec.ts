@@ -719,6 +719,64 @@ test.describe('SUP-BLOG-06 blog writes', () => {
     expect(errors, errorsOf(errors)).toEqual([])
   })
 
+  test('SUP-BLOG-06 blog delete races the cover read: Delete aborts the held cover read and the console logs no 404', async ({ page }) => {
+    test.setTimeout(120_000)
+    const errors = blogErrors(page) // no dropper: a cover 404 must fail the test
+    const token = await staffToken()
+    const cat = (await rawFetch(`${BLOG}/categories`, { headers: bearer(token) })).body as { categories: { id: string }[] }
+    expect(cat.categories.length, 'the blog has no category to file the post under').toBeGreaterThan(0)
+    const title = `e2e blog cover race ${randomBytes(4).toString('hex')}`
+    const made = await rawFetch(`${BLOG}/posts`, { method: 'POST', headers: bearer(token), body: { title, category_id: cat.categories[0].id, status: 'draft', body: [] } })
+    expect(made.status, 'create the draft post').toBe(201)
+    const id = (made.body as { id: string }).id
+    created.id = id
+    try {
+      const jpeg = await page.evaluate(() => {
+        const c = document.createElement('canvas')
+        c.width = 64
+        c.height = 32
+        c.getContext('2d')!.fillRect(0, 0, 64, 32)
+        return c.toDataURL('image/jpeg').split(',')[1]
+      })
+      const put = await fetch(`${apiBase()}${BLOG}/posts/${id}/cover`, { method: 'PUT', headers: { ...bearer(token), 'Content-Type': 'image/jpeg' }, body: Buffer.from(jpeg, 'base64') })
+      expect(put.status, 'PUT cover').toBe(200)
+
+      // Hold the editor's cover read so the DELETE commits first.
+      let held!: Route
+      let coverHeld!: () => void
+      const coverRequested = new Promise<void>((r) => (coverHeld = r))
+      await page.route(new RegExp(`/posts/${id}/cover(?:[?]|$)`), async (route) => {
+        if (route.request().method() !== 'GET') return route.fallback()
+        held = route
+        coverHeld()
+      })
+
+      await signInSupport(page)
+      await navButton(page, /^Blog/).click()
+      await expect(page.locator('[data-blog-table]'), 'the Blog list never finished loading').toBeVisible({ timeout: 15_000 })
+      await page.getByLabel('Search posts').fill(title)
+      const row = page.locator('.ops-row').filter({ hasText: title })
+      await expect(row, 'the new post is not in the list').toHaveCount(1)
+      await row.click()
+      await coverRequested
+
+      await bar(page).getByRole('button', { name: 'Delete', exact: true }).click()
+      await expect(toastOf(page, 'Delete this post? It is removed from the blog.')).toBeVisible()
+      const deleted = page.waitForResponse((r) => r.request().method() === 'DELETE' && r.url().includes(`/posts/${id}`))
+      await bar(page).getByRole('button', { name: 'Delete post', exact: true }).click()
+      expect((await deleted).status(), 'DELETE post').toBe(204)
+
+      // Release the cover read after the commit; a request the page aborted throws here.
+      await held.continue().catch(() => {})
+      await expect(toastOf(page, 'Post deleted')).toBeVisible()
+      await page.waitForTimeout(1_000)
+      expect((await serverPosts(token)).some((p) => p.id === id), 'the server still holds the post').toBe(false)
+      expect(errors, errorsOf(errors)).toEqual([])
+    } finally {
+      await rawFetch(`${BLOG}/posts/${id}`, { method: 'DELETE', headers: bearer(token) })
+    }
+  })
+
   test('SUP-BLOG-06 blog renewed session: one 401 on save renews the session in place and the save completes', async ({ page }) => {
     const errors = blogErrors(page, expectedStatusDropper(page, 401, BLOG_POSTS))
     track(page)

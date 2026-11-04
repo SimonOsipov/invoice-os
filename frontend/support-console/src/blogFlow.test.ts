@@ -281,6 +281,21 @@ describe('trackCover', () => {
     expect(expire).toHaveBeenCalledTimes(1)
     expect(onUrl).not.toHaveBeenCalled()
   })
+
+  it('stop aborts the signal it handed to the cover read', async () => {
+    const h = handle()
+    const seen: unknown[] = []
+    const onUrl = vi.fn()
+    const stop = trackCover({ fetchCoverUrl: (_id: string, signal?: AbortSignal) => (seen.push(signal), new Promise((r) => setTimeout(() => r(h)))), expire: vi.fn() } as never, 'p1', onUrl)
+    const signal = seen[0] as AbortSignal
+    expect(signal).toBeInstanceOf(AbortSignal)
+    expect(signal.aborted).toBe(false)
+    stop()
+    expect(signal.aborted).toBe(true)
+    await new Promise((r) => setTimeout(r, 5))
+    expect(h.release).toHaveBeenCalledTimes(1)
+    expect(onUrl).not.toHaveBeenCalled()
+  })
 })
 
 const CAT1 = { id: 'c1' } as Category

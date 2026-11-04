@@ -90,6 +90,8 @@ func fleetBody(mut func(map[string]map[string]any)) string {
 		if n == "auth" {
 			delete(s, "build")
 			delete(s, "ready")
+		} else {
+			s["sentry"] = "on"
 		}
 		if n == "docling" {
 			delete(s, "ready")
@@ -399,6 +401,76 @@ func TestFleet_503NamesTheDownServiceAndBuildsStillReport(t *testing.T) {
 	r.want(t, 1, "failed", "invoice=none")
 }
 
+type fleetMut = func(map[string]map[string]any)
+
+func sentryRun(t *testing.T, mut fleetMut) result {
+	t.Helper()
+	f := newFake(t)
+	f.fleet = func(int) (int, string) { return 200, fleetBody(mut) }
+	return f.run(t, nil)
+}
+
+func TestSentry_RealShapePasses(t *testing.T) {
+	sentryRun(t, nil).want(t, 4, "passed", "")
+}
+
+func TestSentry_AuthIsExempt(t *testing.T) {
+	sentryRun(t, func(m map[string]map[string]any) { m["auth"]["sentry"] = "off" }).want(t, 4, "passed", "")
+}
+
+func TestSentry_OffNamesTheService(t *testing.T) {
+	sentryRun(t, func(m map[string]map[string]any) { m["tenancy"]["sentry"] = "off" }).
+		want(t, 4, "failed", "sentry is not on: tenancy=off")
+}
+
+func TestSentry_TwoServicesNamedInOrder(t *testing.T) {
+	sentryRun(t, func(m map[string]map[string]any) {
+		m["worker"]["sentry"] = "off"
+		delete(m["gateway"], "sentry")
+	}).want(t, 4, "failed", "sentry is not on: gateway=none, worker=off")
+}
+
+func TestSentry_ServiceMissingFromFleetFails(t *testing.T) {
+	r := sentryRun(t, func(m map[string]map[string]any) { delete(m, "docling") })
+	r.want(t, 0, "failed", "docling missing")
+	r.want(t, 4, "failed", "sentry is not on: docling=none")
+}
+
+func TestSentry_EmptyStringIsNone(t *testing.T) {
+	sentryRun(t, func(m map[string]map[string]any) { m["invoice"]["sentry"] = "" }).
+		want(t, 4, "failed", "sentry is not on: invoice=none")
+}
+
+func TestSentry_DegradedFleetStillReadsSentry(t *testing.T) {
+	f := newFake(t)
+	f.fleet = func(int) (int, string) {
+		var doc map[string]any
+		_ = json.Unmarshal([]byte(degradedFleet("invoice")), &doc)
+		for _, s := range doc["services"].([]any) {
+			if m := s.(map[string]any); m["name"] == "worker" {
+				m["sentry"] = "off"
+			}
+		}
+		raw, _ := json.Marshal(doc)
+		return 503, string(raw)
+	}
+	r := f.run(t, nil)
+	r.want(t, 0, "failed", "invoice down")
+	r.want(t, 4, "failed", "worker=off")
+}
+
+func TestSentry_FleetNotReadSkips(t *testing.T) {
+	r := newFake(t).run(t, map[string]string{})
+	r.want(t, 0, "failed", "gateway token is not set")
+	r.want(t, 4, "skipped", "fleet not read")
+}
+
+func TestSentry_ServiceTextStaysOut(t *testing.T) {
+	r := sentryRun(t, func(m map[string]map[string]any) { m["worker"]["sentry"] = "<script>x</script> secret-word" })
+	r.want(t, 4, "failed", "sentry is not on: worker=none")
+	assertAbsent(t, r, "secret-word", "<script>x")
+}
+
 func TestFleet_UnreadableBodyFails(t *testing.T) {
 	cases := map[string]struct{ body, detail string }{
 		"empty":         {"", "fleet body is unreadable"},
@@ -530,27 +602,27 @@ func TestSites_MismatchNamesTheSite(t *testing.T) {
 
 func TestGA_FoundInABundle(t *testing.T) {
 	f := newFake(t)
-	f.run(t, nil).want(t, 4, "passed", "")
+	f.run(t, nil).want(t, 5, "passed", "")
 }
 
 func TestGA_OtherIdFails(t *testing.T) {
 	f := newFake(t)
 	f.bundles["/assets/b.js"] = "G-AAAAAAAAAA"
-	f.run(t, nil).want(t, 4, "failed", "landing bundle lacks "+gaID)
+	f.run(t, nil).want(t, 5, "failed", "landing bundle lacks "+gaID)
 }
 
 func TestGA_NoScriptFails(t *testing.T) {
 	f := newFake(t)
 	f.landing = "<html>no scripts</html>"
-	f.run(t, nil).want(t, 4, "failed", "landing names no script")
+	f.run(t, nil).want(t, 5, "failed", "landing names no script")
 }
 
 func TestGA_BadScriptAddressFails(t *testing.T) {
 	f := newFake(t)
 	f.landing = `<html><script src="/assets/%zz.js"></script></html>`
 	r := f.run(t, nil)
-	r.want(t, 4, "failed", "landing names a bad script address")
-	r.want(t, 5, "passed", "")
+	r.want(t, 5, "failed", "landing names a bad script address")
+	r.want(t, 6, "passed", "")
 }
 
 func TestGA_LandingOrBundleUnreadableFails(t *testing.T) {
@@ -567,7 +639,7 @@ func TestGA_LandingOrBundleUnreadableFails(t *testing.T) {
 			f := newFake(t)
 			c.set(f)
 			r := f.run(t, nil)
-			r.want(t, 4, "failed", c.detail)
+			r.want(t, 5, "failed", c.detail)
 			assertAbsent(t, r, "nothing here", "<script")
 		})
 	}
@@ -617,7 +689,7 @@ func TestSection_ShapeAndOrder(t *testing.T) {
 	for _, s := range r.sec.Steps {
 		names = append(names, s.Name)
 	}
-	want := []string{"fleet is ready", "services run main's head", "sites serve main's head", "every host sends HSTS", "landing carries the production GA4 id", "probe signs in", "probe has no registration metadata", "probe loads its workspace"}
+	want := []string{"fleet is ready", "services run main's head", "sites serve main's head", "every host sends HSTS", "every service reports Sentry on", "landing carries the production GA4 id", "probe signs in", "probe has no registration metadata", "probe loads its workspace"}
 	if strings.Join(names, "|") != strings.Join(want, "|") {
 		t.Errorf("steps %v", names)
 	}
@@ -803,7 +875,7 @@ func TestProbe_SignInThenExchangeBindsTheState(t *testing.T) {
 		return 200, `{"access_token":"` + f.access + `","refresh_token":"` + refresh + `"}`
 	}
 	r := f.run(t, nil)
-	r.want(t, 5, "passed", "")
+	r.want(t, 6, "passed", "")
 	if len(f.posts) != 1 || len(seen) != 2 {
 		t.Fatalf("posts %v seen %v", f.posts, seen)
 	}
@@ -840,9 +912,9 @@ func TestProbe_RefusalNamesTheStatusOnce(t *testing.T) {
 			}
 			f.exchange = func(map[string]string) (int, string) { return c.exCode, `{"error":"x"}` }
 			r := f.run(t, nil)
-			r.want(t, 5, "failed", c.want)
-			r.want(t, 6, "skipped", "")
+			r.want(t, 6, "failed", c.want)
 			r.want(t, 7, "skipped", "")
+			r.want(t, 8, "skipped", "")
 			wantPosts := 1
 			if c.signCode == 200 {
 				wantPosts = 2
@@ -877,9 +949,9 @@ func TestProbe_200WithoutTheCredentialFails(t *testing.T) {
 				f.exchange = c.exchange
 			}
 			r := f.run(t, nil)
-			r.want(t, 5, "failed", c.want)
-			r.want(t, 6, "skipped", "")
+			r.want(t, 6, "failed", c.want)
 			r.want(t, 7, "skipped", "")
+			r.want(t, 8, "skipped", "")
 		})
 	}
 }
@@ -899,8 +971,8 @@ func TestProbe_NoRegistrationPasses(t *testing.T) {
 			f := newFake(t)
 			withClaims(f, claims)
 			r := f.run(t, nil)
-			r.want(t, 6, "passed", "")
 			r.want(t, 7, "passed", "")
+			r.want(t, 8, "passed", "")
 		})
 	}
 }
@@ -912,8 +984,8 @@ func TestProbe_RegistrationSetFails(t *testing.T) {
 			f := newFake(t)
 			withClaims(f, map[string]any{"user_metadata": map[string]any{"registration": reg}})
 			r := f.run(t, nil)
-			r.want(t, 6, "failed", "user_metadata.registration is set")
-			r.want(t, 7, "passed", "")
+			r.want(t, 7, "failed", "user_metadata.registration is set")
+			r.want(t, 8, "passed", "")
 			if r.sec.OK {
 				t.Error("run is green")
 			}
@@ -925,8 +997,8 @@ func TestProbe_ClaimAbsentFails(t *testing.T) {
 	f := newFake(t)
 	withClaims(f, map[string]any{"sub": "u-1"})
 	r := f.run(t, nil)
-	r.want(t, 6, "failed", "token has no user_metadata claim")
-	r.want(t, 7, "passed", "")
+	r.want(t, 7, "failed", "token has no user_metadata claim")
+	r.want(t, 8, "passed", "")
 }
 
 func TestProbe_MalformedTokenFails(t *testing.T) {
@@ -941,9 +1013,9 @@ func TestProbe_MalformedTokenFails(t *testing.T) {
 			f := newFake(t)
 			f.access = tok
 			r := f.run(t, nil)
-			r.want(t, 5, "passed", "")
-			r.want(t, 6, "failed", "token is not a JWT")
-			r.want(t, 7, "passed", "")
+			r.want(t, 6, "passed", "")
+			r.want(t, 7, "failed", "token is not a JWT")
+			r.want(t, 8, "passed", "")
 		})
 	}
 }
@@ -951,7 +1023,7 @@ func TestProbe_MalformedTokenFails(t *testing.T) {
 func TestProbe_WorkspaceReadsCarryTheBearer(t *testing.T) {
 	f := newFake(t)
 	r := f.run(t, nil)
-	r.want(t, 7, "passed", "")
+	r.want(t, 8, "passed", "")
 	for _, p := range workspaceReads {
 		if f.auth[p] != "Bearer "+f.access {
 			t.Errorf("%s saw %q", p, f.auth[p])
@@ -976,8 +1048,8 @@ func TestProbe_WorkspaceFailureNamesThePath(t *testing.T) {
 		return 200, `{}`
 	}
 	r := f.run(t, nil)
-	r.want(t, 7, "failed", "/api/dashboard/v1/rollup answered 500")
-	r.want(t, 7, "failed", "/me has no tenant")
+	r.want(t, 8, "failed", "/api/dashboard/v1/rollup answered 500")
+	r.want(t, 8, "failed", "/me has no tenant")
 	if f.count("/api/dashboard/v1/rollup") != 3 {
 		t.Errorf("rollup tries: %d", f.count("/api/dashboard/v1/rollup"))
 	}
@@ -989,7 +1061,7 @@ func TestProbe_MeWithoutTenantFails(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFake(t)
 			f.reads = func(string) (int, string) { return 200, body }
-			f.run(t, nil).want(t, 7, "failed", "/me has no tenant")
+			f.run(t, nil).want(t, 8, "failed", "/me has no tenant")
 		})
 	}
 }
@@ -1004,13 +1076,13 @@ func TestProbe_SecretsAbsent(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFake(t)
 			r := f.run(t, env)
-			r.want(t, 5, "failed", "secrets PROD_PROBE_EMAIL and PROD_PROBE_PASSWORD are not set")
-			r.want(t, 6, "skipped", "")
+			r.want(t, 6, "failed", "secrets PROD_PROBE_EMAIL and PROD_PROBE_PASSWORD are not set")
 			r.want(t, 7, "skipped", "")
-			if r.code != 0 || r.sec.OK || len(r.sec.Steps) != 8 {
+			r.want(t, 8, "skipped", "")
+			if r.code != 0 || r.sec.OK || len(r.sec.Steps) != 9 {
 				t.Errorf("code %d ok %v steps %d", r.code, r.sec.OK, len(r.sec.Steps))
 			}
-			for i := 0; i < 5; i++ {
+			for i := 0; i < 6; i++ {
 				r.want(t, i, "passed", "")
 			}
 			if len(f.posted()) != 0 {
@@ -1049,7 +1121,7 @@ func TestNoSecretInAnyOutput(t *testing.T) {
 	x.exchange = func(map[string]string) (int, string) { return 400, echo + " " + x.access }
 	r = x.run(t, nil)
 	assertAbsent(t, r, append(secrets, x.access)...)
-	r.want(t, 5, "failed", "exchange answered 400")
+	r.want(t, 6, "failed", "exchange answered 400")
 
 	// the tokens are bad: nothing of them reaches the section
 	h := newFake(t)

@@ -116,6 +116,7 @@ type serviceHealth struct {
 	Build    string   `json:"build"`
 	Ready    *bool    `json:"ready"`
 	NotReady []string `json:"not_ready"`
+	Sentry   string   `json:"sentry"`
 }
 
 // guard is the one choke point for what the run may send: GET, and POST to allowedPosts.
@@ -170,6 +171,7 @@ func runWith(args []string, stdout, stderr io.Writer, cfg config) int {
 	c.step("services run main's head", c.buildsStep)
 	c.step("sites serve main's head", c.sitesStep)
 	c.step("every host sends HSTS", c.hstsStep)
+	c.step("every service reports Sentry on", c.sentryStep)
 	c.step("landing carries the production GA4 id", c.gaStep)
 	c.step("probe signs in", c.signInStep)
 	c.step("probe has no registration metadata", c.registrationStep)
@@ -388,6 +390,33 @@ func (c *checker) buildsStep() (string, string) {
 	}
 	if c.head != "" && c.head != c.expected {
 		return "passed", fmt.Sprintf("main's head %s only changes *.md; deployed head %s", short(c.head), short(c.expected))
+	}
+	return "passed", ""
+}
+
+// sentryStep wants "on" from every service but auth, which reports no health fields (D5).
+func (c *checker) sentryStep() (string, string) {
+	if len(c.fleet) == 0 {
+		return "skipped", "fleet not read"
+	}
+	var bad []string
+	for _, name := range wantServices {
+		if name == "auth" {
+			continue
+		}
+		state := "none"
+		for _, s := range c.fleet {
+			if s.Name == name && (s.Sentry == "on" || s.Sentry == "off") {
+				state = s.Sentry
+				break
+			}
+		}
+		if state != "on" {
+			bad = append(bad, name+"="+state)
+		}
+	}
+	if len(bad) > 0 {
+		return "failed", "sentry is not on: " + strings.Join(bad, ", ")
 	}
 	return "passed", ""
 }

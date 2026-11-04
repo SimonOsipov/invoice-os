@@ -71,6 +71,14 @@ function cleanInvoiceFields(invoiceNumber: string) {
   }
 }
 
+// internal/dashboard/dashboard.go Metric* keys
+const METRIC = {
+  readiness: 'readiness',
+  field: 'bar_field_completeness',
+  tax: 'bar_tax_accuracy',
+  identifiers: 'bar_identifiers_format',
+}
+
 async function createFailedInvoice(tok: string, entityId: string, invoiceNumber: string): Promise<string> {
   const created = await createInvoice(tok, { entity_id: entityId, ...cleanInvoiceFields(invoiceNumber) })
   await validateInvoice(tok, created.id)
@@ -230,6 +238,59 @@ test.describe('dashboard rollup contract (API E2E, over the deployed gateway)', 
     // The isolation proof: neither tenant's rollup contains the other's entity_id.
     expect(bEntityIds.has(entityFewer.id), 'B must not see A entityFewer').toBe(false)
     expect(aEntityIds.has(entityB.id), 'A must not see B entityB').toBe(false)
+  })
+
+  test('DASH-54: readiness counts the clean validated invoice and not the blocked draft, and the draft lowers only its own bar', async () => {
+    const tin = freshTin()
+    const entity = await createEntity(tokenA, { name: `DASH-54 ${tin}`, tin })
+    const metricsOf = async () => {
+      const client = (await rollup(tokenA)).clients.find((c) => c.entity_id === entity.id)
+      expect(client, 'the fresh entity should have a rollup row').toBeDefined()
+      return client!.metrics
+    }
+    const blockedDraft = async (label: string, fields: Record<string, unknown>) => {
+      const created = await createInvoice(tokenA, { entity_id: entity.id, ...cleanInvoiceFields(`DASH54-${label}-${tin}`), ...fields })
+      const validated = await validateInvoice(tokenA, created.id)
+      expect(validated.status, 'a blocked draft stays draft after validate').toBe('draft')
+      const keys = validated.violations.filter((v) => v.severity === 'error').map((v) => v.rule_key)
+      expect(keys.length, 'the fixture should fire at least one severity:error rule').toBeGreaterThan(0)
+      return keys
+    }
+    const expectBars = (m: Awaited<ReturnType<typeof metricsOf>>, want: Record<string, { num: number; den: number }>, keys: string[]) => {
+      for (const [key, value] of Object.entries(want)) {
+        expect(m[key], `${key} (error rules fired: ${JSON.stringify(keys)})`).toEqual(value)
+      }
+    }
+
+    const clean = await createInvoice(tokenA, { entity_id: entity.id, ...cleanInvoiceFields(`DASH54-C-${tin}`) })
+    expect((await validateInvoice(tokenA, clean.id)).status, 'the clean invoice validates').toBe('validated')
+    const one = { num: 1, den: 1 }
+    expectBars(await metricsOf(), { [METRIC.readiness]: one, [METRIC.field]: one, [METRIC.tax]: one, [METRIC.identifiers]: one }, [])
+
+    // VAT 0 against subtotal 1000 breaks a tax-accuracy rule; the active rule key differs by version, so none is pinned.
+    const taxKeys = await blockedDraft('B', { vat: '0', total: '1000' })
+    expectBars(
+      await metricsOf(),
+      {
+        [METRIC.readiness]: { num: 1, den: 2 },
+        [METRIC.tax]: { num: 1, den: 2 },
+        [METRIC.field]: { num: 2, den: 2 },
+        [METRIC.identifiers]: { num: 2, den: 2 },
+      },
+      taxKeys,
+    )
+
+    const idKeys = await blockedDraft('I', { buyer_tin: '12345678' })
+    expectBars(
+      await metricsOf(),
+      {
+        [METRIC.readiness]: { num: 1, den: 3 },
+        [METRIC.tax]: { num: 2, den: 3 },
+        [METRIC.identifiers]: { num: 2, den: 3 },
+        [METRIC.field]: { num: 3, den: 3 },
+      },
+      idKeys,
+    )
   })
 
   test('DASH-45: unauthenticated request is refused at the gateway edge -- 401 shared envelope', async () => {

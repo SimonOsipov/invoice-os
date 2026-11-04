@@ -51,6 +51,7 @@ import {
   getInvoice,
   getInvoiceNotes,
   issueNote,
+  submitAndAwait,
   editInvoice,
   rollup,
   createApprovalPolicy,
@@ -199,19 +200,6 @@ async function unbuildableFailedInvoice(tok: string, entityId: string, number: s
     )
     .toBe('failed/payload_not_built')
   return created.id
-}
-
-async function submitAndAwait(tok: string, id: string, want: 'accepted' | 'rejected') {
-  const res = await rawFetch('/api/invoice/v1/invoices/submissions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${tok}` },
-    body: { invoice_ids: [id], idempotency_key: crypto.randomUUID() },
-  })
-  expect(res.status, 'batch submit').toBe(200)
-  await expect
-    .poll(async () => (await getInvoice(tok, id)).status, { timeout: 120_000, intervals: [1_000] })
-    .toBe(want)
-  return getInvoice(tok, id)
 }
 
 // A 2-line original that reached accepted through the mock adapter.

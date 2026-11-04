@@ -33,7 +33,9 @@ import {
   approveUntilClosed,
   firmApproverTokens,
   getEntity,
+  issueNote,
   rawFetch,
+  submitAndAwait,
   apiBase,
   PERSONAS,
   type Entity,
@@ -78,6 +80,9 @@ const METRIC = {
   tax: 'bar_tax_accuracy',
   identifiers: 'bar_identifiers_format',
 }
+
+// internal/submission/mock_script.go mockTINAccept
+const MOCK_TIN_ACCEPT = '99999999-0001'
 
 async function createFailedInvoice(tok: string, entityId: string, invoiceNumber: string): Promise<string> {
   const created = await createInvoice(tok, { entity_id: entityId, ...cleanInvoiceFields(invoiceNumber) })
@@ -438,6 +443,44 @@ test.describe('dashboard rollup history contract (API E2E, over the deployed gat
     const del = await rawFetch(resolved, { method: 'DELETE', headers: auth })
     expect(del.status, 'un-resolving should return 200').toBe(200)
     expect(await vatTracked(), 'undoing removes its VAT').toEqual({ num: 0, den: 2 })
+  })
+
+  test('DASH-55: vat_tracked nets an accepted credit note out and an accepted debit note in, in kobo', async () => {
+    test.setTimeout(240_000)
+    await ensureFirmPolicyActive(tokenA)
+    const tin = freshTin()
+    const entity = await createEntity(tokenA, { name: `DASH-55 ${tin}`, tin })
+    const file = async (id: string) => {
+      expect((await validateInvoice(tokenA, id)).status).toBe('validated')
+      await approveUntilClosed(id, await firmApproverTokens())
+      return submitAndAwait(tokenA, id, 'accepted')
+    }
+    const created = await createInvoice(tokenA, {
+      entity_id: entity.id,
+      ...cleanInvoiceFields(`DASH55-O-${tin}`),
+      buyer_tin: MOCK_TIN_ACCEPT,
+    })
+    const original = await file(created.id)
+    const lineId = original.line_items![0].id
+    const issue = (document_type: 'credit_note' | 'debit_note', prefix: string, quantity: string) =>
+      issueNote(tokenA, original.id, {
+        document_type,
+        invoice_number: `${prefix}-${tin}`,
+        issue_date: '2026-02-01T00:00:00Z',
+        lines: [{ line_id: lineId, quantity, unit_price: '100' }],
+      })
+    const credit = await file((await issue('credit_note', 'DASH55-CN', '4')).id)
+    const debit = await file((await issue('debit_note', 'DASH55-DN', '2')).id)
+    const kobo = (v: string | null) => Math.round(Number(v) * 100)
+
+    expect(credit.document_type).toBe('credit_note')
+    expect(debit.document_type).toBe('debit_note')
+    // equal note VATs would hide a sign error
+    expect(kobo(credit.vat), 'the note VATs should differ').not.toBe(kobo(debit.vat))
+    const client = (await rollup(tokenA)).clients.find((c) => c.entity_id === entity.id)
+    expect(client, 'the fresh entity should have a rollup row').toBeDefined()
+    expect(client!.metrics.vat_tracked).toEqual({ num: kobo(original.vat) - kobo(credit.vat) + kobo(debit.vat), den: 3 })
+    expect(client!.metrics.vat_tracked.num).toBe(6000)
   })
 
   test('DASH-52: unauthenticated request is refused at the gateway edge', async () => {

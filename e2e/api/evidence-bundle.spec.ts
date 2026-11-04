@@ -36,6 +36,7 @@ import {
   issueNote,
   login,
   rawFetch,
+  submitAndAwait,
   validateInvoice,
   PERSONAS,
 } from './client'
@@ -227,20 +228,6 @@ const OP_POLL = 'poll'
 const MOCK_PENDING_HTTP_STATUS = '202'
 
 const POLL_CEILING_MS = 120_000
-
-// Copy of contract-invoice.spec.ts's submitAndAwait (no cross-suite imports).
-async function submitAndAwait(tok: string, id: string, want: 'accepted' | 'rejected') {
-  const res = await rawFetch('/api/invoice/v1/invoices/submissions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${tok}` },
-    body: { invoice_ids: [id], idempotency_key: crypto.randomUUID() },
-  })
-  expect(res.status, 'batch submit').toBe(200)
-  await expect
-    .poll(async () => (await getInvoice(tok, id)).status, { timeout: POLL_CEILING_MS, intervals: [1_000] })
-    .toBe(want)
-  return getInvoice(tok, id)
-}
 
 // One batch of several invoices; waits until every one is accepted, within a single poll ceiling.
 async function submitBatchAndAwaitAccepted(tok: string, ids: string[]) {

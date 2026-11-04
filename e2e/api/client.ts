@@ -885,6 +885,29 @@ export function getInvoice(token: string, id: string): Promise<GetInvoiceResult>
   return apiFetch<GetInvoiceResult>(`${apiBase()}/api/invoice/v1/invoices/${id}`, { token })
 }
 
+// Batch-submits one invoice, then polls GET until it reaches `want`.
+export async function submitAndAwait(
+  token: string,
+  id: string,
+  want: 'accepted' | 'rejected',
+  timeoutMs = 120_000,
+): Promise<GetInvoiceResult> {
+  await apiFetch(`${apiBase()}/api/invoice/v1/invoices/submissions`, {
+    method: 'POST',
+    body: { invoice_ids: [id], idempotency_key: crypto.randomUUID() },
+    token,
+  })
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const inv = await getInvoice(token, id)
+    if (inv.status === want) return inv
+    if (Date.now() > deadline) {
+      throw new Error(`submitAndAwait: invoice ${id} is ${inv.status}, not ${want}, after ${timeoutMs} ms`)
+    }
+    await new Promise((r) => setTimeout(r, 1_000))
+  }
+}
+
 // InvoiceEditInput mirrors internal/invoice/handlers.go's editReq exactly: the 9
 // optional header MBS-content fields PATCH /v1/invoices/{id} accepts (M4-05-03), plus
 // invoice_number, which renames a never-submitted draft (blank after trimming is a 400).

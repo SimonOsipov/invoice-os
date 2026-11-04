@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { isInvitePath, isPrivacyPath, landingRouteName } from './route'
+import { INVITE_PATH, NOT_FOUND_PAGE, PRIVACY_PATH, isInvitePath, isLibraryPath, isPrivacyPath, landingRouteName } from './route'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROUTE_SRC = readFileSync(join(HERE, 'route.ts'), 'utf8')
@@ -20,10 +20,9 @@ describe('isPrivacyPath', () => {
     expect(isPrivacyPath('/privacy/')).toBe(true)
   })
 
-  it('a double trailing slash is not the same page', () => {
-    // Only ONE trailing slash is stripped, not greedily — a /\/+$/ implementation
-    // would still pass the single-slash row above and only fail here.
-    expect(isPrivacyPath('/privacy//')).toBe(false)
+  it('a double trailing slash or encoded trailing slash is the same page, as Caddy collapses it', () => {
+    expect(isPrivacyPath('/privacy//')).toBe(true)
+    expect(isPrivacyPath('/privacy%2F')).toBe(true)
   })
 
   it('the site root is not the privacy page', () => {
@@ -90,8 +89,20 @@ describe('isPrivacyPath', () => {
     expect(isPrivacyPath('/ｐrivacy')).toBe(false)
   })
 
-  it('a double leading slash is not a match', () => {
-    expect(isPrivacyPath('//privacy')).toBe(false)
+  it('a double leading slash is the same page, as Caddy collapses it', () => {
+    expect(isPrivacyPath('//privacy')).toBe(true)
+    expect(isPrivacyPath('///privacy/')).toBe(true)
+  })
+
+  it('a percent-encoded letter is the same page, as Caddy decodes it', () => {
+    expect(isPrivacyPath('/%70rivacy')).toBe(true)
+    expect(isPrivacyPath('/%70rivacy/')).toBe(true)
+  })
+
+  it('a malformed escape does not throw and is not a match', () => {
+    expect(() => isPrivacyPath('/%E0%A4%A')).not.toThrow()
+    expect(isPrivacyPath('/%E0%A4%A')).toBe(false)
+    expect(isInvitePath('/%E0%A4%A')).toBe(false)
   })
 
   it('a missing leading slash is not a match', () => {
@@ -102,9 +113,10 @@ describe('isPrivacyPath', () => {
 describe('isInvitePath', () => {
   it('isInvitePath_followsIsPrivacyPathsRules', () => {
     for (const p of ['/invite', '/invite/', '/INVITE', ' /invite ', '/invite/ ']) expect(isInvitePath(p), p).toBe(true)
+    for (const p of ['//invite', '/%69nvite', '/invite//']) expect(isInvitePath(p), p).toBe(true)
     // Control: the sibling rule still answers for its own page, not this one.
     expect(isInvitePath('/privacy')).toBe(false)
-    for (const p of ['/invite//', '/invite/x', '/invites', '//invite', 'invite', '/', '', '/invite\u0000']) expect(isInvitePath(p), p).toBe(false)
+    for (const p of ['/invite/x', '/invites', 'invite', '/', '', '/invite\u0000']) expect(isInvitePath(p), p).toBe(false)
   })
 })
 
@@ -116,7 +128,7 @@ describe('landingRouteName', () => {
   })
 
   it('landingRouteName_everythingElseIsUnmatched', () => {
-    const unknown = ['/privacy//', '/invite//', '/invite/x', '/invites', '/pricing', '/wp-admin/setup.php', '/invoices/3f2c9a1e-4b7d-4c2a-8e51-9d0f6a7b1c33', '']
+    const unknown = ['/invite/x', '/invites', '/pricing', '/wp-admin/setup.php', '/invoices/3f2c9a1e-4b7d-4c2a-8e51-9d0f6a7b1c33', '']
     // Control: matched inputs, the invite page included, do not map to the unmatched name.
     expect(landingRouteName('/')).not.toBe('<unmatched>')
     expect(landingRouteName('/invite')).not.toBe('<unmatched>')
@@ -124,5 +136,19 @@ describe('landingRouteName', () => {
       expect(landingRouteName(p), p).toBe('<unmatched>')
       expect(landingRouteName(p)).not.toBe(p)
     }
+  })
+})
+
+describe('route constants', () => {
+  it('route_constantsDriveTheMatchers', () => {
+    expect([PRIVACY_PATH, INVITE_PATH, NOT_FOUND_PAGE]).toEqual(['/privacy', '/invite', 'not-found'])
+    const got = ['/privacy', '/privacy/', '/PRIVACY', '/invite', '/x'].map((p) => isPrivacyPath(p) || isInvitePath(p))
+    expect(got).toEqual([true, true, true, true, false])
+  })
+})
+
+describe('isLibraryPath', () => {
+  it('route_isLibraryPath', () => {
+    expect(['/library', '/library/', '/library/x', '/libraryx', '/x/library'].map(isLibraryPath)).toEqual([true, true, true, false, false])
   })
 })

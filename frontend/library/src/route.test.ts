@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FEATURES, GROUPS } from './content.ts'
+import { FEATURES, GROUPS, PAGE_PATHS } from './content.ts'
 import { LIBRARY_BASE } from './analytics.ts'
 import { libraryPath, parseLibraryPath } from './route.ts'
 
@@ -43,22 +43,66 @@ describe('route', () => {
     if (r.view === 'feature') expect(r.feature).toBe(f)
   })
 
-  it('parse_aBaseLookalikeIsHome', () => {
-    for (const p of ['/libraryx', '/library/nope', '/Library/invoices', '/LIBRARY/rules', '/librarys/rules', '/library//rules', '/library/library/rules']) {
-      expect(parseLibraryPath(p), p).toEqual({ view: 'home' })
-    }
-  })
-
   it('parse_aPrefixedPathReadsTheSameAsItsBaseRelativeOne', () => {
     expect(FEATURES.length).toBeGreaterThan(0)
     for (const f of FEATURES) expect(parseLibraryPath(`${LIBRARY_BASE}/${f.gid}/${f.id}`)).toEqual(parseLibraryPath(`/${f.gid}/${f.id}`))
   })
 
-  it('parse_anUnknownPathIsHome', () => {
-    for (const p of ['', '/nope', '/Invoices', '/invoices/nope', '/invoices/learns', '/invoices/import-files/x',
-      '//invoices', '/invoices//', '/invoices?x=1']) {
-      expect(parseLibraryPath(p), p).toEqual({ view: 'home' })
+  it('parse_anUnknownPathIsNotFound', () => {
+    for (const p of ['/nope', '/Invoices', '/invoices/nope', '/invoices/learns', '/invoices/import-files/x', '/invoices?x=1',
+      '/libraryx', '/library/nope', '/Library/invoices', '/LIBRARY/rules', '/librarys/rules', '/library/library/rules']) {
+      expect(parseLibraryPath(p), p).toEqual({ view: 'not-found', path: p })
     }
+  })
+
+  it('parse_percentEncodedLetterIsTheSamePage', () => {
+    const r = parseLibraryPath(`${LIBRARY_BASE}/%69nvoices`)
+    expect(r.view).toBe('group')
+    expect(r.view === 'group' && r.group.id).toBe('invoices')
+  })
+
+  it('parse_encodedBaseIsTheSamePage', () => {
+    for (const p of ['/library%2Finvoices', '/%6Cibrary/invoices']) {
+      const r = parseLibraryPath(p)
+      expect(r.view === 'group' && r.group.id, p).toBe('invoices')
+    }
+  })
+
+  it('parse_repeatedTrailingSlashIsTheGroup', () => {
+    const r = parseLibraryPath(`${LIBRARY_BASE}/invoices//`)
+    expect(r.view === 'group' && r.group.id).toBe('invoices')
+  })
+
+  it('parse_malformedEscapeIsNotFoundAndDoesNotThrow', () => {
+    const p = `${LIBRARY_BASE}/%E0%A4%A`
+    expect(() => parseLibraryPath(p)).not.toThrow()
+    expect(parseLibraryPath(p)).toEqual({ view: 'not-found', path: p })
+  })
+
+  it('parse_homeStaysHome', () => {
+    for (const p of ['', '/', '/library', '/library/']) expect(parseLibraryPath(p), p).toEqual({ view: 'home' })
+  })
+
+  it('parse_repeatedSlashesCollapse', () => {
+    for (const [p, gid] of [['/library//invoices', 'invoices'], ['/library//rules', 'rules'], ['//invoices', 'invoices'],
+      ['/invoices//', 'invoices'], ['/library/invoices//', 'invoices']]) {
+      const r = parseLibraryPath(p)
+      expect(r.view, p).toBe('group')
+      if (r.view === 'group') expect(r.group.id).toBe(gid)
+    }
+  })
+
+  it('path_notFoundKeepsItsPath', () => {
+    expect(libraryPath({ view: 'not-found', path: '/library/nope' })).toBe('/library/nope')
+  })
+
+  it('content_pagePathsMatchEveryView', () => {
+    expect(GROUPS.length).toBeGreaterThan(0)
+    expect(FEATURES.length).toBeGreaterThan(0)
+    const want = [...GROUPS.map((g) => libraryPath({ view: 'group', group: g })), ...FEATURES.map((f) => `${LIBRARY_BASE}/${f.gid}/${f.id}`)]
+      .map((p) => p.slice(LIBRARY_BASE.length))
+    expect([...PAGE_PATHS].sort()).toEqual(want.sort())
+    expect(new Set(PAGE_PATHS).size).toBe(PAGE_PATHS.length)
   })
 
   it('path_everyViewIsUnderTheBase', () => {

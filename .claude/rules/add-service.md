@@ -38,6 +38,7 @@ paths:
 - Declare `ARG SENTRY_AUTH_TOKEN` in the SPA Dockerfile with no `ENV`. `packages/monitoring/src/dockerfiles.test.ts` pins both.
 - Add `sentryVitePlugin(sourcemapUploadOptions(appDir))` and `build.sourcemap: 'hidden'` to the SPA `vite.config.ts`.
 - Serve a `.map` file as 404 from the shared `Caddyfile`. A new SPA inherits it.
+- A site that ships `/srv/404.html` serves only its built pages, else `/404.html` with status 404. A new SPA without it keeps the `try_files {path} /index.html` fallback.
 - The blog serves `.map` as 404 from `internal/blogweb`, typed `text/plain`. Cloud Run labels a typeless response `text/html`.
 - Give a Python sidecar its own `sidecar/<svc>/Dockerfile`. Declare no `ARG SERVICE`.
 - Pin a third-party sidecar image by digest in the `FROM` line. `sidecar/auth/Dockerfile` is the example.

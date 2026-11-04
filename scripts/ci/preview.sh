@@ -187,7 +187,7 @@ env_file() {
         echo "AUTH_JWKS_URL: http://127.0.0.1:8080/.well-known/jwks.json"
         echo "AUTH_ADDITIONAL_ISSUERS: '$issuers'"
         echo "AUTH_SITE_URL: $(url landing "$pr")"
-        echo "CORS_ALLOWED_ORIGINS: $(url app "$pr"),$(url landing "$pr"),$(url ops-console "$pr"),$(url support-console "$pr"),$(url blog "$pr")"
+        echo "CORS_ALLOWED_ORIGINS: $(url app "$pr"),$(url landing "$pr"),$(url ops-console "$pr"),$(url support-console "$pr"),$(url blog "$pr"),$(url library "$pr")"
         for callee in tenancy portfolio invoice validation submission dashboard notifications docling auth worker; do
           echo "$(tr 'a-z-' 'A-Z_' <<<"$callee")_URL: $(url "$callee" "$pr")"
         done

@@ -32,7 +32,7 @@ export function JourneyStepper({ route, onGroup, tourStage }: JourneyStepperProp
           INVOICE JOURNEY
         </span>
         {STAGES.map(([label, gid], i) => {
-          const active = tourStage !== undefined ? i === tourStage : route.view !== 'home' && route.group.id === gid
+          const active = tourStage !== undefined ? i === tourStage : (route.view === 'group' || route.view === 'feature') && route.group.id === gid
           const group = GROUPS.find((g) => g.id === gid)
           return (
             <div key={gid} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>

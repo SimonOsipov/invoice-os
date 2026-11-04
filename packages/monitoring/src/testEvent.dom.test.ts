@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { initMonitoring } from './init'
 import type { Service } from './options'
 import { RELEASE } from './release'
+import { clearScope } from './sentryScope.testutil'
 
 const DSN = 'https://public@o1.ingest.de.sentry.io/1'
 const SERVICES: Service[] = ['app', 'blog', 'landing', 'library', 'ops-console', 'support-console']
@@ -48,9 +49,9 @@ async function sentEvents(): Promise<Item[]> {
 
 async function reset(): Promise<void> {
   await Sentry.close()
-  Sentry.getCurrentScope().clear()
-  Sentry.getIsolationScope().clear()
-  Sentry.getGlobalScope().clear()
+  clearScope(Sentry.getCurrentScope())
+  clearScope(Sentry.getIsolationScope())
+  clearScope(Sentry.getGlobalScope())
   Sentry.getCurrentScope().setClient(undefined)
 }
 

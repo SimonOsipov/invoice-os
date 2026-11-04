@@ -12,13 +12,14 @@ import {
   setExtra,
   setTag,
   setUser,
-  spanToJSON,
 } from '@sentry/react'
-import { htmlTreeAsString } from '@sentry/core'
+import { htmlTreeAsString } from '@sentry/browser-utils'
+import { spanToStaticSpanJSON } from '@sentry/core'
 import type { Envelope } from '@sentry/core'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { sentryOptions, type MonitoringConfig, type Service } from './options'
 import { scrubSpan } from './scrub'
+import { clearScope } from './sentryScope.testutil'
 
 const N = 'TIN-NEEDLE-4242'
 const DSN = 'https://public@o1.ingest.de.sentry.io/1'
@@ -55,8 +56,8 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  getCurrentScope().clear()
-  getIsolationScope().clear()
+  clearScope(getCurrentScope())
+  clearScope(getIsolationScope())
 })
 
 describe('real SDK pipeline with the shipped options', () => {
@@ -121,6 +122,7 @@ describe('real SDK pipeline with the shipped options', () => {
           trace_id: 'a'.repeat(32),
           span_id: 'c'.repeat(16),
           start_timestamp: 1,
+          status: 'ok',
           description: `button[title="${N}"]`,
           data: { 'url.full': `https://gw.test/api/x?q=${N}`, 'http.fragment': `#${N}`, 'client.address': '1.2.3.4' },
         },
@@ -149,7 +151,7 @@ describe('real SDK pipeline with the shipped options', () => {
     boot('app', { routeName: (p) => `ROUTE:${p}` })
     const span = getActiveSpan()
     expect(span, 'the app starts a page-load span at init').toBeDefined()
-    expect(spanToJSON(span!).description).toBe('ROUTE:/invoices')
+    expect(spanToStaticSpanJSON(span!).description).toBe('ROUTE:/invoices')
   })
 
   it('pipeline_errorEventTransactionCarriesTheRoutePattern', async () => {
@@ -161,7 +163,7 @@ describe('real SDK pipeline with the shipped options', () => {
 
   it('pipeline_pageLoadSpanWithoutAHookIsUnmatched', () => {
     boot('app')
-    expect(spanToJSON(getActiveSpan()!).description).toBe('<unmatched>')
+    expect(spanToStaticSpanJSON(getActiveSpan()!).description).toBe('<unmatched>')
   })
 
   it('pipeline_consolesStartNoPageLoadSpan', () => {

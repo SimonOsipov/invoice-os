@@ -33,6 +33,7 @@ import {
   createInvoice,
   firmApproverTokens,
   getInvoice,
+  getInvoiceHistory,
   login,
   rawFetch,
   validateInvoice,
@@ -218,6 +219,26 @@ const OUTCOME_SENT = 'sent'
 const OP_SUBMIT = 'submit'
 // internal/submission mock_adapter.go MockAdapter.Submit: http.StatusOK on the accept branch.
 const MOCK_ACCEPT_HTTP_STATUS = '200'
+// internal/submission mock_script.go mockTINPending: submit answers 202, then two polls, the second 200.
+const MOCK_TIN_PENDING = '99999999-0003'
+// internal/submission exchange_bridge.go OpPoll.
+const OP_POLL = 'poll'
+// internal/submission mock_adapter.go Submit's pending case and Poll while polls remain: http.StatusAccepted.
+const MOCK_PENDING_HTTP_STATUS = '202'
+
+// Copy of contract-invoice.spec.ts's submitAndAwait (no cross-suite imports).
+async function submitAndAwait(tok: string, id: string, want: 'accepted' | 'rejected') {
+  const res = await rawFetch('/api/invoice/v1/invoices/submissions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tok}` },
+    body: { invoice_ids: [id], idempotency_key: crypto.randomUUID() },
+  })
+  expect(res.status, 'batch submit').toBe(200)
+  await expect
+    .poll(async () => (await getInvoice(tok, id)).status, { timeout: 120_000, intervals: [1_000] })
+    .toBe(want)
+  return getInvoice(tok, id)
+}
 
 test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
   let token: string
@@ -401,5 +422,55 @@ test.describe('evidence bundle for a submitted invoice (API E2E)', () => {
 
     expect(manifest.counts.submissions, 'manifest submissions count').toBe(1)
     expect(manifest.counts.exchange_attempts, 'manifest exchange_attempts must equal the exchange.csv rows').toBe(exchange.length)
+  })
+
+  test('a pending-then-accepted invoice carries its status history and its submit and poll rows into the bundle', async () => {
+    test.setTimeout(240_000)
+
+    const entity = await createEntity(token, { name: `Zz AUDIT-05 pending ${freshTin()}`, tin: freshTin() })
+    const created = await createInvoice(token, {
+      entity_id: entity.id,
+      ...acceptInvoiceFields(`INV-AUDIT-05-P-${freshTin()}`),
+      buyer_tin: MOCK_TIN_PENDING,
+    })
+    expect((await validateInvoice(token, created.id)).status, 'the clean fixture should promote draft -> validated').toBe('validated')
+    await approveUntilClosed(created.id, await firmApproverTokens())
+    await submitAndAwait(token, created.id, 'accepted')
+
+    const history = await getInvoiceHistory(token, created.id)
+    const { zip } = await fetchBundle(token, entity.id, period)
+    const decoder = new TextDecoder()
+
+    const rows = parseCsv(decoder.decode(zip['status_history.csv'])).filter((r) => r.invoice_id === created.id)
+    expect(rows.map((r) => r.to_status), 'history to_status path').toEqual(['draft', 'validated', 'queued', 'submitted', 'accepted'])
+    expect(rows.map((r) => r.from_status), 'history from_status path').toEqual(['', 'draft', 'validated', 'queued', 'submitted'])
+    expect(rows.map((r) => r.seq), 'history seq').toEqual(['1', '2', '3', '4', '5'])
+    const instants = rows.map((r) => Date.parse(r.changed_at))
+    instants.forEach((t, i) => {
+      expect(Number.isNaN(t), `row ${i} changed_at parses`).toBe(false)
+      if (i > 0) expect(t, `row ${i} changed_at must not precede row ${i - 1}`).toBeGreaterThanOrEqual(instants[i - 1])
+    })
+
+    expect(rows, 'CSV and GET history hold the same number of rows').toHaveLength(history.length)
+    rows.forEach((r, i) => {
+      expect(r.from_status, `row ${i} from_status`).toBe(history[i].from_status ?? '')
+      expect(r.to_status, `row ${i} to_status`).toBe(history[i].to_status)
+      expect(r.actor_name, `row ${i} actor_name`).toBe(history[i].actor_name)
+      expect(r.actor_kind, `row ${i} actor_kind`).toBe(history[i].actor_kind)
+      expect(Date.parse(r.changed_at), `row ${i} changed_at instant`).toBe(Date.parse(history[i].changed_at))
+    })
+
+    const attempts = parseCsv(decoder.decode(zip['exchange.csv'])).filter((r) => r.invoice_id === created.id)
+    expect(attempts.map((r) => r.operation), 'exchange operations').toEqual([OP_SUBMIT, OP_POLL, OP_POLL])
+    expect(attempts.map((r) => r.attempt), 'exchange attempt numbers').toEqual(['1', '2', '3'])
+    expect(attempts.map((r) => r.http_status), 'exchange http statuses').toEqual([
+      MOCK_PENDING_HTTP_STATUS,
+      MOCK_PENDING_HTTP_STATUS,
+      MOCK_ACCEPT_HTTP_STATUS,
+    ])
+    for (const a of attempts) {
+      expect(a.latency_ms, 'latency_ms is numeric').toMatch(/^\d+$/)
+      expect(a.outcome, 'outcome').toBe(OUTCOME_SENT)
+    }
   })
 })

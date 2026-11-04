@@ -70,6 +70,8 @@ describe('dockerfiles', () => {
     expect(lib.some((l) => /^RUN pnpm --filter @invoice-os\/landing exec vite build --base=\/library\/_landing\//.test(l))).toBe(true)
     const copy404 = lib.findIndex((l) => /^COPY --from=build \S*\/404\.html \/srv\/404\.html$/.test(l))
     expect(copy404, 'library: no COPY of 404.html to /srv/404.html in the serve stage').toBeGreaterThan(libServe)
+    const copyAssets = lib.findIndex((l) => /^COPY --from=build \S*\/library-404\/assets \/srv\/library\/_landing\/assets$/.test(l))
+    expect(copyAssets, 'library: the 404 page assets are not copied to /srv/library/_landing/assets').toBeGreaterThan(libServe)
   })
 
   it('dockerfiles_theAuthTokenReachesOnlyTheBuildStage', () => {

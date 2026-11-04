@@ -39,6 +39,8 @@ describe('sitePages', () => {
   })
   it('sitePages_missingIndexThrows', () => {
     expect(() => run(['/privacy'], false, false)).toThrow(/index\.html/)
+    // No copy to make: only the guard can name the missing file.
+    expect(() => run([], false, false)).toThrow(/index\.html is missing/)
   })
 })
 

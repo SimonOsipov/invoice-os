@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
 import { resolveTarget } from '../targets'
 
-// Each deployed frontend serves the shared favicon; the SPA fallback would answer 200 with index.html.
+// Each deployed frontend serves the shared favicon.
 
 const TARGETS = [
   { name: 'landing', env: 'LANDING_URL' },

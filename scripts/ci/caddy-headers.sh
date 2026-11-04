@@ -78,10 +78,12 @@ for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$sport/health" &
 
 # Wrong addresses: 404 with the 404.html body, never the index.html one.
 for path in /.env /nope-xyz /Privacy /sitemap.xml /404.html /index.html /privacy/index.html /privacy/x \
-  /library/nope /library/invoices/nope /library/Invoices /library/index.html /library/invoices/index.html /library/_landing/; do
+  /library/nope /library/invoices/nope /library/Invoices /library/index.html /library/invoices/index.html /library/_landing/ \
+  /PRIVACY /INDEX.HTML '/404.html?x=1' /library/404.html /library/INVOICES /library/invoices/import-files/x /assets/; do
   row "$sport" "$path" 404 NOTFOUND-PAGE
 done
 row "$sport" /nope-xyz 404 NOTFOUND-PAGE -sI
+row "$sport" /library/index.html 404 NOTFOUND-PAGE -sI
 # Real addresses: 200 with their own body.
 for r in '/|STRICT-INDEX' '/?signin=ready|STRICT-INDEX' '/?verified=1|STRICT-INDEX' '/?verify=failed|STRICT-INDEX' \
   '/?reset=1|STRICT-INDEX' '/?confirm=1|STRICT-INDEX' '/?confirm=invite|STRICT-INDEX' '/?forgot|STRICT-INDEX' \
@@ -89,11 +91,14 @@ for r in '/|STRICT-INDEX' '/?signin=ready|STRICT-INDEX' '/?verified=1|STRICT-IND
   '/assets/index-abc123.js|console.log(1)' '/library/_landing/assets/index-abc123.js|console.log(2)' \
   '/library|LIBRARY-HOME' '/library/|LIBRARY-HOME' '/library/invoices|LIBRARY-GROUP' '/library/invoices/|LIBRARY-GROUP' \
   '/library/invoices/import-files|LIBRARY-FEATURE' '/library/invoices/import-files/|LIBRARY-FEATURE' \
-  '/library//invoices|LIBRARY-GROUP' '/health|^OK$' '/library/health|^OK$'; do
+  '/library//invoices|LIBRARY-GROUP' '//privacy|PRIVACY-PAGE' '/privacy?x=1|PRIVACY-PAGE' '/health|^OK$' '/library/health|^OK$'; do
   row "$sport" "${r%%|*}" 200 "${r#*|}"
 done
 row "$sport" /privacy 200 PRIVACY-PAGE -sI
+row "$sport" /library/invoices 200 LIBRARY-GROUP -sI
 row "$sport" /assets/index-abc123.js.map 404 -
+row "$sport" /library/_landing/assets/index-abc123.js.map 404 -
+row "$sport" /privacy.map 404 -
 curl -s -o /dev/null -w '%{content_type}' "http://127.0.0.1:$sport/library/_landing/assets/index-abc123.js" | grep -qi javascript \
   || { echo "FAIL: /library/_landing/assets js is not javascript"; fail=1; }
 

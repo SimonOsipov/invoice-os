@@ -30,7 +30,7 @@ paths:
 - Never send `page_view` by hand on the landing. `gtag('config', id)` sends it, and a manual event double-counts.
 - Push an `arguments` object to `dataLayer`, never an array. GA4 ignores an array.
 - Send fixed literals as event parameters: `cta_location`, `form_name`, `percent_scrolled`, `feature_id`, `group_id` and, in the app only, `page_location`. Never send form data. `page_location` is the bounded route pattern from `routeName`, never the live URL.
-- Send every event through `send`. It returns early when the tag is not loaded or the visitor has rejected.
+- Send every event through `send`. It returns early when the tag is not loaded or the visitor has rejected. `ensureTag` pushes the held queue after `config`; `hold_anEventBeforeAcceptIsSentAfterConfig` pins it.
 - Hold an event sent before the first Accept in memory. Send it after `config`, in event order. A Reject empties the queue. A stored Reject or a revoked flag drops the event.
 - Send `sign_up` through `trackSignUp` and `invoice_validated` through `trackInvoiceValidated`. Neither carries a parameter.
 - Send `invoice_validated` through `reportValidatedInvoice` from `createInvoice`, `revalidateInvoice` and `supplyInvoiceNumber` only.

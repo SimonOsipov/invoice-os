@@ -242,8 +242,7 @@ describe('Privacy SSR render (LAND-04-02)', () => {
 })
 
 // The signed-in product and its import closure (relative and @invoice-os/* workspace
-// imports) carry no Google Analytics; the consoles carry no GA and no chat.
-// The page publishes the consoles claim; the app scan records the measured code. Scans read code with comments stripped.
+// imports) load the Google tag; the consoles carry no GA and no chat. Scans read code with comments stripped.
 const GA_NEEDLES = ['gtag', 'googletagmanager', 'google-analytics', 'vite_ga_']
 const CHAT_NEEDLES = ['hs-scripts', '_hsq', 'hubspotconversations', 'hubspotchat']
 const RESOLVE_SUFFIXES = ['.ts', '.tsx', '/index.ts']

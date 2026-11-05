@@ -106,6 +106,70 @@ describe('held events', () => {
   })
 })
 
+describe('held events, edge cases', () => {
+  it('hold_aSecondAcceptDoesNotResendTheFlushedEvents', async () => {
+    const m = await load()
+    m.trackSignUp()
+    m.applyChoice('accept')
+    m.applyChoice('accept')
+    expect(names('sign_up')).toHaveLength(1)
+    expect(document.head.querySelectorAll('script[src*="googletagmanager"]')).toHaveLength(1)
+  })
+
+  it('hold_aRejectAfterTheFlushThenAnAcceptReplaysNothing', async () => {
+    const m = await load()
+    m.trackSignUp()
+    m.applyChoice('accept')
+    m.applyChoice('reject')
+    m.applyChoice('accept')
+    expect(names('sign_up'), 'control: the first Accept sent the event').toHaveLength(1)
+  })
+
+  it('hold_aRejectEmptiesOnlyWhatWasHeldBeforeIt', async () => {
+    const m = await load()
+    m.trackSignUp()
+    m.applyChoice('reject')
+    m.applyChoice('accept')
+    m.trackInvoiceValidated()
+    expect(names('sign_up')).toHaveLength(0)
+    expect(names('invoice_validated')).toHaveLength(1)
+  })
+
+  it('hold_aSentEventHasNoParameterAndAHeldOneKeepsEventOrder', async () => {
+    const m = await load()
+    m.trackInvoiceValidated()
+    m.trackSignUp()
+    m.trackInvoiceValidated()
+    m.applyChoice('accept')
+    const events = entries().filter((e) => e[0] === 'event')
+    expect(events).toEqual([
+      ['event', 'invoice_validated', {}],
+      ['event', 'sign_up', {}],
+      ['event', 'invoice_validated', {}],
+    ])
+  })
+
+  it('hold_aRevokedFlagDropsAnEventWithNoStoredRecord', async () => {
+    const m = await load()
+    m.setAnalyticsRevoked(true)
+    m.trackSignUp()
+    m.setAnalyticsRevoked(false)
+    m.applyChoice('accept')
+    expect(w.dataLayer?.length, 'control: the Accept loaded the tag').toBe(2)
+    expect(names('sign_up')).toHaveLength(0)
+  })
+
+  it('hold_aStoredRejectLoadsNoScriptAndPushesNothing', async () => {
+    const m = await load()
+    m.applyChoice('reject')
+    m.setAnalyticsRevoked(false)
+    m.trackSignUp()
+    m.trackInvoiceValidated()
+    expect(w.dataLayer).toBeUndefined()
+    expect(document.head.querySelector('script[src*="googletagmanager"]')).toBeNull()
+  })
+})
+
 describe('ensureTag config and app page view', () => {
   const GRANTED = { analytics: true, ts: '2026-01-01T00:00:00.000Z', v: 1 }
 

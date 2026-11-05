@@ -429,6 +429,21 @@ describe('App cookie notice and chat (CHAT-03-04)', () => {
       expect((window as Window & { dataLayer?: unknown }).dataLayer).toBeUndefined()
     })
 
+    it('app_aMemberSuspendedAfterMountWithAStoredAcceptSendsNoFurtherPageView', async () => {
+      vi.stubEnv('VITE_GA_MEASUREMENT_ID', 'G-TEST1234')
+      setConsent(true)
+      await mount(handoffRecord())
+      expect(tags().length, 'control: the stored Accept loaded the tag at mount').toBe(1)
+      await suspend()
+      expect(screen.getByTestId('suspended-notice')).toBeTruthy()
+      const before = pageViews().length
+      await act(async () => {
+        window.history.pushState({}, '', '/rules')
+        window.dispatchEvent(new PopStateEvent('popstate', { state: null }))
+      })
+      expect(pageViews().length).toBe(before)
+    })
+
     it('app_noPageViewWithoutTheChat', async () => {
       setConsent(false)
       await mount(handoffRecord())

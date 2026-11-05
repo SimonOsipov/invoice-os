@@ -142,13 +142,13 @@ export async function expectHandoffSession(page: Page, tenantId: string): Promis
   expect(session.me?.tenant?.id, `the session is bound to another tenant than ${tenantId}`).toBe(tenantId)
 }
 
-// The browser session's own access token, for live reads compared with what the page shows.
 export async function storedSession(page: Page): Promise<{ key: string; blob: string }> {
   const blob = await page.evaluate((key) => localStorage.getItem(key), SESSION_KEY)
   if (blob === null) throw new Error('storedSession: no stored session, sign in first')
   return { key: SESSION_KEY, blob }
 }
 
+// The browser session's own access token, for live reads compared with what the page shows.
 export async function browserToken(page: Page): Promise<string> {
   const raw = await page.evaluate((key) => localStorage.getItem(key), SESSION_KEY)
   const token = raw === null ? undefined : (JSON.parse(raw) as { token?: string }).token

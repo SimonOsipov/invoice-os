@@ -206,6 +206,102 @@ func TestTransmitClear_TruthTable(t *testing.T) {
 	}
 }
 
+// TestTransmitClearTx_TruthTableWithTwoPoliciesInForce: with A (credit notes) and B
+// (catch-all) active, only an approved run clears, whichever policy or version armed it;
+// a document no policy matched stays blocked; with every version off, all clear.
+func TestTransmitClearTx_TruthTableWithTwoPoliciesInForce(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-03-04 gate two policies")
+	entityID := seedBusinessEntity(t, super, tenantID, "Gate Two Corp")
+
+	policyA, versionA := seedScopedPolicy(t, super, tenantID, "A credit notes", 1, scopeSpec{DocTypes: []string{"credit_note"}}, "fin_mgr")
+	seedScopedPolicy(t, super, tenantID, "B catch-all", 2, scopeSpec{}, "cfo")
+
+	validated := func(id string) string { setInvoiceStatus(t, super, id, "validated"); return id }
+	armTo := func(id, wantState string) {
+		t.Helper()
+		res, err := arm(t, app, tenantID, id, "fp-"+id, "fixture-arm")
+		if err != nil || res.RunID == "" {
+			t.Fatalf("arm %s: run %q, err %v, want a run", id, res.RunID, err)
+		}
+		if wantState != "open" {
+			closeApprovalRunFor(t, super, res.RunID, wantState, "fixture-approver")
+		}
+	}
+
+	noRun := validated(seedInvoice(t, super, tenantID, entityID, "two-no-run"))
+	approvedA := validated(seedCreditNote(t, super, tenantID, entityID, "two-approved-a"))
+	armTo(approvedA, "approved")
+	approvedB := validated(seedInvoice(t, super, tenantID, entityID, "two-approved-b"))
+	armTo(approvedB, "approved")
+	openB := validated(seedInvoice(t, super, tenantID, entityID, "two-open-b"))
+	armTo(openB, "open")
+
+	want := map[string]bool{noRun: false, approvedA: true, approvedB: true, openB: false}
+	ids := []string{noRun, approvedA, approvedB, openB}
+	assertVerdicts := func(label string, policyActive bool, want map[string]bool) {
+		t.Helper()
+		clear := transmitClear(t, app, tenantID, ids)
+		for _, id := range ids {
+			if clear[id] != want[id] {
+				t.Errorf("%s: TransmitClearTx[%s] = %t, want %t", label, id, clear[id], want[id])
+			}
+			gf, err := gateFacts(t, app, tenantID, id, uuid.NewString())
+			if err != nil {
+				t.Fatalf("%s: GateFactsTx(%s): %v", label, id, err)
+			}
+			if gf.PolicyActive != policyActive {
+				t.Errorf("%s: GateFactsTx[%s].PolicyActive = %t, want %t", label, id, gf.PolicyActive, policyActive)
+			}
+			if got := TransmitClear(gf.PolicyActive, gf.ApprovedRun); got != want[id] {
+				t.Errorf("%s: gate verdict from GateFactsTx[%s] = %t, want %t", label, id, got, want[id])
+			}
+		}
+	}
+	assertVerdicts("both active", true, want)
+
+	// A's v1 is deactivated by a newer version; the run it armed still clears.
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_policy_versions SET is_active = false WHERE id = $1`, versionA); err != nil {
+		t.Fatalf("deactivate A v1: %v", err)
+	}
+	activateApprovalPolicyVersion(t, super, seedApprovalPolicyVersionN(t, super, tenantID, policyA, 2))
+	assertVerdicts("A v1 deactivated, A v2 active", true, want)
+
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_policy_versions SET is_active = false WHERE tenant_id = $1`, tenantID); err != nil {
+		t.Fatalf("deactivate every version: %v", err)
+	}
+	allClear := map[string]bool{noRun: true, approvedA: true, approvedB: true, openB: true}
+	assertVerdicts("every version deactivated", false, allClear)
+}
+
+// TestTransmitClearTx_UnmatchedDocumentIsBlockedWhileAPolicyIsInForce: a tenant whose only
+// policy is scoped to credit notes arms nothing for a commercial invoice, yet the gate blocks it.
+func TestTransmitClearTx_UnmatchedDocumentIsBlockedWhileAPolicyIsInForce(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-03-04 gate unmatched")
+	entityID := seedBusinessEntity(t, super, tenantID, "Gate Unmatched Corp")
+	seedScopedPolicy(t, super, tenantID, "A credit notes", 1, scopeSpec{DocTypes: []string{"credit_note"}}, "fin_mgr")
+
+	id := seedInvoice(t, super, tenantID, entityID, "unmatched-1")
+	setInvoiceStatus(t, super, id, "validated")
+	if res, err := arm(t, app, tenantID, id, "fp-unmatched", "fixture-arm"); err != nil || res.RunID != "" {
+		t.Fatalf("arm: run %q, err %v, want no run and no error", res.RunID, err)
+	}
+
+	if clear := transmitClear(t, app, tenantID, []string{id}); clear[id] {
+		t.Errorf("TransmitClearTx = true, want false -- a policy in force blocks a document it did not match")
+	}
+	gf, err := gateFacts(t, app, tenantID, id, uuid.NewString())
+	if err != nil {
+		t.Fatalf("GateFactsTx: %v", err)
+	}
+	if !gf.PolicyActive || gf.RunState != "" {
+		t.Errorf("GateFactsTx = {PolicyActive %t, RunState %q}, want {true, \"\"}", gf.PolicyActive, gf.RunState)
+	}
+}
+
 // --- AC-3: TransmitClearTx ---------------------------------------------------------
 
 // TestTransmitClearTx_NoActivePolicyClearsEveryInvoice: with no active version the

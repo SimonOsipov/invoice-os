@@ -35,6 +35,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // --- fixtures ---------------------------------------------------------------
@@ -844,6 +846,149 @@ func TestPublish_SweepArmsBacklog(t *testing.T) {
 	if n := auditCount(t, super, tenantID, "invoice.approval_armed"); n != 3 {
 		t.Errorf("invoice.approval_armed audit rows after the second publish = %d, want still 3", n)
 	}
+}
+
+// --- the sweep arms each invoice with its own first match -----------------------
+
+// sweepValidated seeds one validated invoice with no run.
+func sweepValidated(t *testing.T, super *pgxpool.Pool, tenantID, entityID, number string) string {
+	t.Helper()
+	id := seedInvoice(t, super, tenantID, entityID, number)
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET status = 'validated' WHERE id = $1`, id); err != nil {
+		t.Fatalf("validate invoice %s: %v", number, err)
+	}
+	return id
+}
+
+// staffedRoleKey creates a live workflow role with one active holder so a draft naming it publishes.
+func staffedRoleKey(t *testing.T, super *pgxpool.Pool, tenantID, key string) {
+	t.Helper()
+	member := uuid.NewString()
+	seedMembership(t, super, tenantID, member, "preparer", "active")
+	staffWorkflowRole(t, super, tenantID, seedWorkflowRole(t, super, tenantID, key, key), member, 0)
+}
+
+// TestPublish_SweepArmsEachInvoiceWithItsOwnFirstMatch: A (position 1, client E1) is active,
+// the catch-all B (position 2) is published; the E1 invoice stays on A, the E2 invoice takes B.
+func TestPublish_SweepArmsEachInvoiceWithItsOwnFirstMatch(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-03 sweep own first match")
+	c, _ := activeAdmin(t, super, tenantID)
+	staffedRoleKey(t, super, tenantID, "engagement-partner")
+
+	e1 := seedBusinessEntity(t, super, tenantID, "Sweep E1")
+	e2 := seedBusinessEntity(t, super, tenantID, "Sweep E2")
+	i1 := sweepValidated(t, super, tenantID, e1, "sweep-own-1")
+	i2 := sweepValidated(t, super, tenantID, e2, "sweep-own-2")
+
+	_, versionA := seedScopedPolicy(t, super, tenantID, "Client E1", 1, scopeSpec{EntityIDs: []string{e1}}, "engagement-partner")
+	policyB := seedApprovalPolicy(t, super, tenantID, "Catch-all")
+	versionB, _ := seedApprovalDraftNamingRole(t, super, tenantID, policyB, "engagement-partner")
+	if versionA == versionB {
+		t.Fatal("fixture: A and B share a version")
+	}
+
+	if _, err := NewStore(app, stubFingerprinter, nil).PublishPolicy(c, policyB); err != nil {
+		t.Fatalf("PublishPolicy(B): %v, want success", err)
+	}
+
+	if got := oneApprovalRun(t, super, i1).PolicyVersionID; got != versionA {
+		t.Errorf("E1 invoice armed on version %s, want policy A's %s: its own first match, not the published one", got, versionA)
+	}
+	if got := oneApprovalRun(t, super, i2).PolicyVersionID; got != versionB {
+		t.Errorf("E2 invoice armed on version %s, want the published catch-all's %s", got, versionB)
+	}
+	if n := auditCount(t, super, tenantID, "invoice.approval_armed"); n != 2 {
+		t.Errorf("invoice.approval_armed audit rows = %d, want 2", n)
+	}
+}
+
+// TestPublish_SweepLeavesAnUnmatchedInvoiceWithoutARun: the only policy in force is scoped to E1,
+// so an E2 invoice matches nothing; the sweep succeeds and the E1 control gets its run. The state
+// needs a scoped policy in force with no catch-all, which the publish guard refuses, so the
+// fixture writes it directly and the test calls the sweep PublishPolicy runs.
+func TestPublish_SweepLeavesAnUnmatchedInvoiceWithoutARun(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-03 sweep unmatched")
+	e1 := seedBusinessEntity(t, super, tenantID, "Unmatched E1")
+	e2 := seedBusinessEntity(t, super, tenantID, "Unmatched E2")
+	matched := sweepValidated(t, super, tenantID, e1, "sweep-unmatched-e1")
+	unmatched := sweepValidated(t, super, tenantID, e2, "sweep-unmatched-e2")
+	_, versionA := seedScopedPolicy(t, super, tenantID, "Client E1", 1, scopeSpec{EntityIDs: []string{e1}}, "engagement-partner")
+
+	store := NewStore(app, stubFingerprinter, nil)
+	if err := db.WithinTenantTx(context.Background(), app, tenantID, func(tx pgx.Tx) error {
+		return store.sweepValidatedBacklog(context.Background(), tx, tenantID, "test-actor")
+	}); err != nil {
+		t.Fatalf("sweepValidatedBacklog: %v, want success although an invoice matches no policy", err)
+	}
+
+	if got := oneApprovalRun(t, super, matched).PolicyVersionID; got != versionA {
+		t.Errorf("E1 invoice armed on version %s, want %s", got, versionA)
+	}
+	if n := approvalRunCountForInvoice(t, super, unmatched); n != 0 {
+		t.Errorf("approval_runs rows for the unmatched invoice = %d, want 0", n)
+	}
+	if n := auditCount(t, super, tenantID, "invoice.approval_armed"); n != 1 {
+		t.Errorf("invoice.approval_armed audit rows = %d, want 1 (the matched invoice only)", n)
+	}
+}
+
+// TestPublish_LeavesOpenRunsOnTheirVersion: an open run keeps its version when a policy is
+// published ahead of its own, and when its own policy publishes a new version; no publish
+// writes a run or an armed row for it.
+func TestPublish_LeavesOpenRunsOnTheirVersion(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-03-04 publish leaves open runs")
+	c, _ := activeAdmin(t, super, tenantID)
+	staffedRoleKey(t, super, tenantID, "engagement-partner")
+	entityID := seedBusinessEntity(t, super, tenantID, "Open Run Corp")
+	invoiceID := sweepValidated(t, super, tenantID, entityID, "open-run-1")
+
+	policyA, versionA := seedScopedPolicy(t, super, tenantID, "A catch-all", 1, scopeSpec{}, "engagement-partner")
+	if got := armedVersion(t, super, app, tenantID, invoiceID); got != versionA {
+		t.Fatalf("fixture: armed version = %s, want A's %s", got, versionA)
+	}
+	policyB := seedApprovalPolicy(t, super, tenantID, "B catch-all")
+	seedApprovalDraftNamingRole(t, super, tenantID, policyB, "engagement-partner")
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_policies SET position = CASE id WHEN $1 THEN 1 ELSE 2 END WHERE id IN ($1, $2)`,
+		policyB, policyA); err != nil {
+		t.Fatalf("move B ahead of A: %v", err)
+	}
+
+	assertUntouched := func(label string) {
+		t.Helper()
+		run := oneApprovalRun(t, super, invoiceID)
+		if run.PolicyVersionID != versionA || run.State != "open" {
+			t.Errorf("%s: run = {version %s, state %s}, want {A v1 %s, open}", label, run.PolicyVersionID, run.State, versionA)
+		}
+		if n := rowCount(t, super, "approval_runs", tenantID); n != 1 {
+			t.Errorf("%s: approval_runs rows = %d, want 1", label, n)
+		}
+		if n := auditCount(t, super, tenantID, "invoice.approval_armed"); n != 1 {
+			t.Errorf("%s: invoice.approval_armed rows = %d, want 1", label, n)
+		}
+	}
+
+	store := NewStore(app, stubFingerprinter, nil)
+	if _, err := store.PublishPolicy(c, policyB); err != nil {
+		t.Fatalf("PublishPolicy(B): %v, want success", err)
+	}
+	assertUntouched("after B published ahead")
+
+	a2 := seedApprovalPolicyVersionN(t, super, tenantID, policyA, 2)
+	seedApprovalPolicyStepInLane(t, super, tenantID, a2, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("engagement-partner"),
+	})
+	if _, err := store.PublishPolicy(c, policyA); err != nil {
+		t.Fatalf("PublishPolicy(A v2): %v, want success", err)
+	}
+	if v := versionRow(t, super, versionA); v.IsActive {
+		t.Errorf("A v1 = %+v, want deactivated by A v2", v)
+	}
+	assertUntouched("after A published v2")
 }
 
 // --- AC-3,4: the cap refuses the whole publish before arming anything ----------

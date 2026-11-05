@@ -231,3 +231,37 @@ routedTest('landing analytics: sign_up is held until Accept on the routed produc
   expect(leaked, 'a GA, Sentry or chat request was not answered by the stub').toEqual([])
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
+
+routedTest('landing analytics: email_verified is held until Accept on the routed production landing', async ({ routed: page, request }) => {
+  await controlRouting(page, request)
+  const errors = consoleGate(page)
+  const { leaked, pending } = watchStubLeaks(page)
+  const gaRequests: string[] = []
+  page.on('request', (r) => {
+    if (isGaRequest(r.url())) gaRequests.push(r.url())
+  })
+  const layer = () => page.evaluate(() => ((window as unknown as { dataLayer?: ArrayLike<unknown>[] }).dataLayer ?? []).map((e) => Array.from(e)))
+
+  await page.goto(`${WWW}/?verified=1`)
+  await expect(page.getByRole('status').filter({ hasText: 'Your email address is verified. Please sign in.' })).toBeVisible() // COPY.verified in VerifyNotice.tsx
+  expect(gaRequests, 'a GA request left before Accept').toEqual([])
+  expect(await page.evaluate(() => typeof (window as unknown as { dataLayer?: unknown }).dataLayer)).toBe('undefined')
+
+  await page.getByRole('region', { name: 'Cookie notice' }).getByRole('button', { name: 'Accept', exact: true }).click()
+  await expect.poll(async () => (await layer()).map((e) => e[0]), 'the tag never loaded after Accept').toContain('config')
+  const sent = await layer()
+  const kinds = sent.map((e) => e[0])
+  expect(kinds.indexOf('config')).toBeLessThan(kinds.indexOf('event'))
+  expect(sent.filter((e) => e[0] === 'event')).toEqual([['event', 'email_verified', {}]])
+
+  // a failed verification loads the tag and sends no email_verified
+  await page.goto(`${WWW}/?verify=failed`)
+  await expect(page.getByRole('status').filter({ hasText: 'This link is already used or expired.' })).toBeVisible() // COPY.failed in VerifyNotice.tsx
+  await expect.poll(async () => (await layer()).map((e) => e[0]), 'the tag never loaded on the failed page').toContain('config')
+  expect((await layer()).filter((e) => e[0] === 'event' && e[1] === 'email_verified')).toEqual([])
+
+  await page.waitForLoadState('networkidle')
+  await Promise.all(pending)
+  expect(leaked, 'a GA, Sentry or chat request was not answered by the stub').toEqual([])
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})

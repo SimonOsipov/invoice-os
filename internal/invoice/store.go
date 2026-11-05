@@ -2627,7 +2627,7 @@ func (s *Store) applyValidation(ctx context.Context, id string, vs []Violation, 
 				return err
 			}
 			// 5b. Armed inside the one !blocked gate so a second gate cannot drift.
-			// No active policy short-circuits in ArmTx; a 23505 here means a live run
+			// No policy in force, or no matching policy, short-circuits in ArmTx; a 23505 here means a live run
 			// survived a demotion (APPR-06-07 cancels), so it is not swallowed.
 			if _, err := approval.ArmTx(ctx, tx, callerID.TenantID, id, evaluatedFingerprint, callerID.Subject); err != nil {
 				return err

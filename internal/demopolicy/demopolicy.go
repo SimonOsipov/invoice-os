@@ -183,10 +183,10 @@ func planFor(tenantID string) *plan {
 
 // Result is what one Seed call did. BacklogFound and RunsArmed are separate
 // fields: equal means every candidate armed, a gap means ArmTx answered
-// RunID == "" — which happens only when no active version exists.
+// RunID == "" — which happens when no policy matches the invoice.
 type Result struct {
 	VersionCreated bool   // the policy/version/step statements ran on THIS call
-	VersionID      string // the tenant's active version, created now or found
+	VersionID      string // the seeded policy's active version, else the first foreign one in order
 	BacklogFound   int    // rows the anti-join returned, BEFORE arming
 	RunsArmed      int    // ArmTx calls that wrote a run
 	Note           string // which "did nothing, but why" cause applies
@@ -230,7 +230,7 @@ func seedTenant(ctx context.Context, pool *pgxpool.Pool, tenantID string) (Resul
 	return seedTenantPlan(ctx, pool, tenantID, planFor(tenantID))
 }
 
-// activeVersion is the tenant's governing version, whoever wrote it.
+// activeVersion is the version the seeder acts on, whoever wrote it: its own, else the first in position order.
 type activeVersion struct {
 	versionID   string
 	policyID    string
@@ -271,14 +271,14 @@ func seedTenantPlan(ctx context.Context, pool *pgxpool.Pool, tenantID string, p 
 			return nil
 		}
 
-		// ceiling: with several policies in force the one published last governs, as in ArmTx; revisit when arming matches scopes.
+		// The seeded policy's own active version first, else the first policy in position order.
 		var active activeVersion
 		err := tx.QueryRow(ctx,
 			`SELECT v.id::text, v.policy_id::text, p.name, coalesce(v.published_by, '')
 			   FROM approval_policy_versions v
 			   JOIN approval_policies p ON p.id = v.policy_id
 			  WHERE v.is_active
-			  ORDER BY v.published_at DESC NULLS LAST, v.id DESC LIMIT 1`).
+			  ORDER BY (p.name = $1 AND p.deleted_at IS NULL) DESC, p.position, p.id LIMIT 1`, p.policyName).
 			Scan(&active.versionID, &active.policyID, &active.policyName, &active.publishedBy)
 		governed := !errors.Is(err, pgx.ErrNoRows)
 		if err != nil && governed {

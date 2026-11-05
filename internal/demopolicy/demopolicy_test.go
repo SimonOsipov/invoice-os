@@ -341,7 +341,7 @@ func versionsOf(t *testing.T, super *pgxpool.Pool, tenantID string) []versionRow
 	return out
 }
 
-// activeVersionOf returns the governing version: the active one published last.
+// activeVersionOf returns the active version published last.
 func activeVersionOf(t *testing.T, super *pgxpool.Pool, tenantID string) versionRow {
 	t.Helper()
 	var v versionRow
@@ -628,71 +628,128 @@ func rowFactsOf(t *testing.T, app *pgxpool.Pool, tenantID string, ids []string) 
 
 // --- specs -------------------------------------------------------------------
 
-// TestSeed_GovernedByTheVersionPublishedLast: the seeder's own stale `system` version is
-// active at t1, a human policy's version at t2 > t1. The later one governs, so the seeder
-// supersedes nothing. The stale policy has the lower id and is inserted first, and the
-// precondition fails the test unless the pre-fix probe returns it.
-func TestSeed_GovernedByTheVersionPublishedLast(t *testing.T) {
+// foreignPolicySpec is one sealed, active, single-step policy written under a name the seeder
+// never uses. A nil bandLower is a catch-all.
+type foreignPolicySpec struct {
+	name, publishedAgo string
+	bandLower          *string // NGN, no upper bound
+}
+
+// publishForeignPolicyAt writes the policy at the next position and returns its ids.
+func publishForeignPolicyAt(t *testing.T, super *pgxpool.Pool, tenantID string, sp foreignPolicySpec) (policyID, versionID string) {
+	t.Helper()
+	ctx := context.Background()
+	var ccy *string
+	if sp.bandLower != nil {
+		ccy = ptr("NGN")
+	}
+	if err := super.QueryRow(ctx,
+		`INSERT INTO approval_policies (tenant_id, name) VALUES ($1, $2) RETURNING id::text`,
+		tenantID, sp.name).Scan(&policyID); err != nil {
+		t.Fatalf("foreign policy %q: %v", sp.name, err)
+	}
+	if err := super.QueryRow(ctx,
+		`INSERT INTO approval_policy_versions (tenant_id, policy_id, version, scope_amount_lower, scope_amount_currency)
+		 VALUES ($1, $2, 1, $3::text::numeric, $4) RETURNING id::text`,
+		tenantID, policyID, sp.bandLower, ccy).Scan(&versionID); err != nil {
+		t.Fatalf("foreign version of %q: %v", sp.name, err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO approval_policy_steps (tenant_id, version_id, ord, kind, workflow_role_key)
+		 VALUES ($1, $2, 0, 'approval', $3)`, tenantID, versionID, seededRoleKey); err != nil {
+		t.Fatalf("foreign step of %q: %v", sp.name, err)
+	}
+	if _, err := super.Exec(ctx,
+		`UPDATE approval_policy_versions
+		    SET sealed = true, is_active = true, published_at = now() - $2::interval, published_by = 'ngozi'
+		  WHERE id = $1`, versionID, sp.publishedAgo); err != nil {
+		t.Fatalf("seal foreign version of %q: %v", sp.name, err)
+	}
+	return policyID, versionID
+}
+
+// setPolicyPositions puts the named policies first, in the given order, and renumbers the
+// tenant's other live policies after them, in one UPDATE.
+func setPolicyPositions(t *testing.T, super *pgxpool.Pool, tenantID string, policyIDs ...string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_policies p SET position = r.n
+		   FROM (SELECT q.id, row_number() OVER (ORDER BY coalesce(o.n, 1000000 + q.position)) AS n
+		           FROM approval_policies q
+		           LEFT JOIN unnest($2::uuid[]) WITH ORDINALITY AS o(id, n) ON o.id = q.id
+		          WHERE q.tenant_id = $1 AND q.deleted_at IS NULL) r
+		  WHERE p.id = r.id`, tenantID, policyIDs); err != nil {
+		t.Fatalf("set policy positions: %v", err)
+	}
+}
+
+// TestSeed_SupersedesItsOwnStaleVersionBesideALaterHumanPolicy: the seeder's stale `system`
+// version is active at t1, a human policy's at t2 > t1, and the human policy sits at position 1.
+// The seeder still supersedes its own version and leaves the human one active.
+func TestSeed_SupersedesItsOwnStaleVersionBesideALaterHumanPolicy(t *testing.T) {
 	super, app := dbTestPools(t)
-	f := newFixture(t, super, app, "demopolicy governed by published last")
+	f := newFixture(t, super, app, "demopolicy supersedes own beside human")
 	ctx := context.Background()
 
-	stale := []approval.Step{
-		{Kind: "condition", CondOp: ptr(">"), CondAmount: ptr("100000.00"),
-			Then: []approval.Step{{Kind: "approval", WorkflowRoleKey: ptr(seededRoleKey)}},
-			Else: []approval.Step{{Kind: "autoapprove"}}},
+	humanPolicyID, humanVersionID := publishForeignPolicyAt(t, super, f.tenantID,
+		foreignPolicySpec{name: "Human published policy", publishedAgo: "1 hour"})
+	publishStaleOwnPolicy(t, app, f.tenantID)
+	var stalePolicyID, staleVersionID string
+	if err := super.QueryRow(ctx,
+		`SELECT p.id::text, v.id::text FROM approval_policy_versions v JOIN approval_policies p ON p.id = v.policy_id
+		  WHERE v.tenant_id = $1 AND p.name = $2`, f.tenantID, wantPolicyName).Scan(&stalePolicyID, &staleVersionID); err != nil {
+		t.Fatalf("read the stale seeded version: %v", err)
 	}
-	if shapeOf(stale) == shapeOf(inhousePlan.steps) {
-		t.Fatal("the stale fixture matches the current plan, so the seeder would not supersede it")
+	// Published 2 hours ago: older than the human version, so a published_at probe picks the human one.
+	if _, err := super.Exec(ctx,
+		`UPDATE approval_policy_versions SET published_at = now() - interval '2 hours' WHERE id = $1`, staleVersionID); err != nil {
+		t.Fatalf("age the stale version: %v", err)
 	}
+	setPolicyPositions(t, super, f.tenantID, humanPolicyID, stalePolicyID)
 
-	ids := []string{uuid.NewString(), uuid.NewString()}
-	slices.Sort(ids)
-	staleVersionID, humanVersionID := uuid.NewString(), uuid.NewString()
-	if err := db.WithinTenantTx(ctx, app, f.tenantID, func(tx pgx.Tx) error {
-		for i, c := range []struct{ name, versionID, by, age string }{
-			{wantPolicyName, staleVersionID, wantSeedActor, "2 hours"},
-			{"Human published policy", humanVersionID, "ngozi", "1 hour"},
-		} {
-			if _, err := tx.Exec(ctx,
-				`INSERT INTO approval_policies (id, tenant_id, name) VALUES ($1, $2, $3)`,
-				ids[i], f.tenantID, c.name); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(ctx,
-				`INSERT INTO approval_policy_versions (id, tenant_id, policy_id, version) VALUES ($1, $2, $3, 1)`,
-				c.versionID, f.tenantID, ids[i]); err != nil {
-				return err
-			}
-			if i == 0 {
-				if err := writeLane(ctx, tx, f.tenantID, c.versionID, nil, nil, stale); err != nil {
-					return err
-				}
-			}
-			if _, err := tx.Exec(ctx,
-				`UPDATE approval_policy_versions
-				    SET sealed = true, is_active = true, published_at = now() - $3::interval, published_by = $2
-				  WHERE id = $1`, c.versionID, c.by, c.age); err != nil {
-				return err
+	res, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("seedTenant: %v", err)
+	}
+	if res.Note != "policy superseded; backlog armed" {
+		t.Errorf("Note = %q, want %q", res.Note, "policy superseded; backlog armed")
+	}
+	if res.VersionID == staleVersionID || res.VersionID == humanVersionID {
+		t.Errorf("Result.VersionID = %s, want the new seeded version", res.VersionID)
+	}
+	active := map[string]bool{}
+	for _, v := range versionsOf(t, super, f.tenantID) {
+		active[v.ID] = v.IsActive
+	}
+	if active[staleVersionID] {
+		t.Error("the stale seeded version is still active, want it superseded")
+	}
+	if !active[res.VersionID] {
+		t.Errorf("the new version %s is not active", res.VersionID)
+	}
+	if !active[humanVersionID] {
+		t.Error("the human version is no longer active, want it left in force")
+	}
+}
+
+// TestSeed_ForeignPoliciesInForceNameTheFirstInOrder: no seeded policy; F1 at position 1 was
+// published before F2 at position 2. Result.VersionID is F1's, and nothing is published.
+func TestSeed_ForeignPoliciesInForceNameTheFirstInOrder(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy foreign first in order")
+	ctx := context.Background()
+
+	_, f1Version := publishForeignPolicyAt(t, super, f.tenantID, foreignPolicySpec{name: "Foreign F1", publishedAgo: "2 hours"})
+	_, f2Version := publishForeignPolicyAt(t, super, f.tenantID, foreignPolicySpec{name: "Foreign F2", publishedAgo: "1 hour"})
+	sealed := func() (n int) {
+		for _, v := range versionsOf(t, super, f.tenantID) {
+			if v.Sealed {
+				n++
 			}
 		}
-		return nil
-	}); err != nil {
-		t.Fatalf("seed two active versions: %v", err)
+		return n
 	}
-
-	var first string
-	if err := db.WithinTenantTx(ctx, app, f.tenantID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx,
-			`SELECT v.id::text FROM approval_policy_versions v
-			   JOIN approval_policies p ON p.id = v.policy_id
-			  WHERE v.is_active`).Scan(&first)
-	}); err != nil {
-		t.Fatalf("read the unordered active version: %v", err)
-	}
-	if first != staleVersionID {
-		t.Fatalf("fixture is non-discriminating: an unordered probe returns %s, want the stale system version %s", first, staleVersionID)
-	}
+	before := sealed()
 
 	res, err := seedTenant(ctx, app, f.tenantID)
 	if err != nil {
@@ -701,16 +758,61 @@ func TestSeed_GovernedByTheVersionPublishedLast(t *testing.T) {
 	if res.Note != "an active version this seeder did not write governs" {
 		t.Errorf("Note = %q, want %q", res.Note, "an active version this seeder did not write governs")
 	}
-	if res.VersionID != humanVersionID {
-		t.Errorf("Result.VersionID = %s, want the version published last, %s", res.VersionID, humanVersionID)
+	if res.VersionID != f1Version {
+		t.Errorf("Result.VersionID = %s, want F1's %s (first in position order), not F2's %s", res.VersionID, f1Version, f2Version)
 	}
-	var staleVersions int
+	if res.VersionCreated {
+		t.Error("VersionCreated = true, want no policy published")
+	}
+	for _, name := range policyNames(t, super, f.tenantID) {
+		if name == wantPolicyName {
+			t.Errorf("a %q policy was written beside the foreign ones", wantPolicyName)
+		}
+	}
+	if after := sealed(); after != before {
+		t.Errorf("sealed versions = %d, want unchanged %d (the seeder publishes nothing)", after, before)
+	}
+}
+
+// TestSeed_BacklogArmsEachInvoiceWithItsFirstMatch: a foreign policy for NGN from 200,000.00 sits
+// at position 1 above the seeded catch-all. The two big invoices go to it, the two small ones to
+// the seeded policy.
+func TestSeed_BacklogArmsEachInvoiceWithItsFirstMatch(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy backlog first match")
+	ctx := context.Background()
+
+	first, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("first seedTenant: %v", err)
+	}
+	seededVersion := first.VersionID
+	var seededPolicyID string
 	if err := super.QueryRow(ctx,
-		`SELECT count(*) FROM approval_policy_versions WHERE policy_id = $1`, ids[0]).Scan(&staleVersions); err != nil {
-		t.Fatalf("count the stale policy's versions: %v", err)
+		`SELECT policy_id::text FROM approval_policy_versions WHERE id = $1`, seededVersion).Scan(&seededPolicyID); err != nil {
+		t.Fatalf("read the seeded policy: %v", err)
 	}
-	if staleVersions != 1 {
-		t.Errorf("the stale policy carries %d version(s), want 1 — the seeder superseded a version that is not the governing one", staleVersions)
+	foreignPolicyID, foreignVersion := publishForeignPolicyAt(t, super, f.tenantID,
+		foreignPolicySpec{name: "Large invoices", publishedAgo: "1 hour", bandLower: ptr("200000.00")})
+	setPolicyPositions(t, super, f.tenantID, foreignPolicyID, seededPolicyID)
+
+	ids := f.addBacklog() // 258000.00, 210700.00, 180600.00, 94600.00
+	res, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("second seedTenant: %v", err)
+	}
+	if res.RunsArmed != 4 {
+		t.Errorf("RunsArmed = %d, want 4", res.RunsArmed)
+	}
+	for i, want := range []string{foreignVersion, foreignVersion, seededVersion, seededVersion} {
+		var got string
+		if err := super.QueryRow(ctx,
+			`SELECT policy_version_id::text FROM approval_runs WHERE invoice_id = $1`, ids[i]).Scan(&got); err != nil {
+			t.Fatalf("invoice %s (total %s): want exactly one run: %v", ids[i], backlogTotals[i], err)
+		}
+		if got != want {
+			t.Errorf("invoice %s (total %s) armed on %s, want %s", ids[i], backlogTotals[i], got, want)
+		}
 	}
 }
 

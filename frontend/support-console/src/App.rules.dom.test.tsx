@@ -211,7 +211,8 @@ describe('Console rules wiring', () => {
     reason('ok again')
     fireEvent.click(within(dialog()).getByRole('button', { name: 'Enable rule' }))
     await waitFor(() => expect(sw).toHaveBeenCalledWith('real.off', true, 'ok again'))
-    expect(await within(toast()).findByText('Re-enabled real.off')).toBeTruthy()
+    expect(await screen.findByText('Re-enabled real.off')).toBeTruthy()
+    expect(within(toast()).getByText('Re-enabled real.off')).toBeTruthy()
     expect(within(toast()).getByText('AUDITED')).toBeTruthy()
     expect(toast().innerHTML).not.toContain('var(--status-red-text)')
   })
@@ -579,8 +580,10 @@ describe('Console draft wiring', () => {
     expect(btn('Add rule')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /^v4/ }))
     await screen.findByRole('switch', { name: 'Disable real-on' })
-    expect(screen.queryByRole('button', { name: 'Add rule' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Test draft' })).toBeNull()
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Add rule' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Test draft' })).toBeNull()
+    })
   })
 
   it('Test draft is prefilled with the sample, gates bad JSON and shows both columns', async () => {
@@ -688,7 +691,8 @@ describe('Console draft wiring', () => {
     read.mockClear()
     fireEvent.click(modal.getByRole('button', { name: 'Publish v5' }))
     await waitFor(() => expect(publish).toHaveBeenCalledWith('3001-01-01'))
-    expect(await within(toast()).findByText('Published v5 · starts 3001-01-01')).toBeTruthy()
+    expect(await screen.findByText('Published v5 · starts 3001-01-01')).toBeTruthy()
+    expect(within(toast()).getByText('Published v5 · starts 3001-01-01')).toBeTruthy()
     expect(within(toast()).getByText('AUDITED')).toBeTruthy()
     await waitFor(() => expect(versionsRead).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())

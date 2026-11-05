@@ -13,6 +13,20 @@ import { PRODUCT_EMAIL_NOTICE } from './components/RegisterModal'
 import { captureNavigation } from './navigation.test.util'
 import { FREE_MAIL_REFUSED } from './register'
 
+// The spy calls the real sender only when h.real is set: the real held queue outlives vi.resetModules.
+const h = vi.hoisted(() => ({ spy: vi.fn(), throws: false, real: false }))
+vi.mock('./analytics', async (orig) => {
+  const real = await orig<typeof import('./analytics')>()
+  return {
+    ...real,
+    trackSignUp: () => {
+      h.spy()
+      if (h.throws) throw new Error('tracker down')
+      if (h.real) real.trackSignUp()
+    },
+  }
+})
+
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const LOGIN = 'Sign in'
@@ -44,6 +58,9 @@ beforeEach(() => {
   vi.stubEnv('VITE_APP_URL', 'https://app.x')
   vi.stubEnv('VITE_REGISTRATION_OPEN', 'true')
   vi.resetModules()
+  h.throws = false
+  h.real = false
+  h.spy.mockClear()
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -1232,5 +1249,116 @@ describe('the resend control on the check-your-email view', () => {
     expect(statusNotes(d)).toEqual([SENT])
     expect(d.textContent, 'the view stays').toContain('Check your email')
     expect(document.querySelectorAll(REGISTER_DIALOG).length).toBe(1)
+  })
+})
+
+describe('sign_up', () => {
+  const SENT_COPY = 'If this address can be registered'
+  const REFUSALS = ['Registration is unavailable right now', 'Registration is not open yet', 'Too many attempts', FREE_MAIL_REFUSED]
+  const gaWindow = window as Window & { dataLayer?: IArguments[] }
+
+  async function submitFilled(d: HTMLElement, over: Fill = {}): Promise<void> {
+    await fillForm(d, over)
+    await submit(d)
+  }
+
+  it('signUp_sentOnceOnA202', async () => {
+    stubFetch(() => json(202, { status: 'verification_pending' }))
+    await mountApp()
+    const d = await openRegistration()
+    await submitFilled(d)
+    expect(h.spy.mock.calls).toHaveLength(1)
+    expect(d.textContent).toContain(SENT_COPY)
+  })
+
+  it('signUp_notSentOnAValidationError', async () => {
+    const fetchMock = stubFetch(() => json(202, {}))
+    await mountApp()
+    const d = await openRegistration()
+    await submit(d)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(h.spy.mock.calls).toHaveLength(0)
+  })
+
+  it('signUp_notSentOnARefusal', async () => {
+    const cases: [string, () => Response | Promise<Response>, string][] = [
+      ['400 free mail', () => json(400, { error: FREE_MAIL_REFUSED }), FREE_MAIL_REFUSED],
+      ['400 other', () => json(400, { error: 'bad request' }), 'bad request'],
+      ['429', () => json(429, { error: 'rate limited' }), 'Too many attempts'],
+      ['503', () => json(503, { error: 'registration is closed' }), 'Registration is not open yet'],
+      ['network', () => Promise.reject(new TypeError('Failed to fetch')), 'Registration is unavailable right now'],
+    ]
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    for (const [name, make, copy] of cases) {
+      stubFetch(make)
+      await remountApp()
+      const d = await openRegistration()
+      await submitFilled(d)
+      expect(d.textContent, `${name}: the refusal renders`).toContain(copy)
+      expect(h.spy.mock.calls, name).toHaveLength(0)
+    }
+  })
+
+  it('signUp_doubleSubmitSendsOnce', async () => {
+    let release!: (r: Response) => void
+    const fetchMock = stubFetch(() => new Promise<Response>((resolve) => (release = resolve)))
+    await mountApp()
+    const d = await openRegistration()
+    await fillForm(d)
+    const form = d.querySelector('form')!
+    await act(async () => form.requestSubmit())
+    await act(async () => form.requestSubmit())
+    await act(async () => release(json(202, { status: 'verification_pending' })))
+    await settle()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(h.spy.mock.calls).toHaveLength(1)
+  })
+
+  it('signUp_heldUntilAcceptOnWww', async () => {
+    h.real = true
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', 'G-E409H76XYY')
+    delete gaWindow.dataLayer
+    stubFetch(() => json(202, { status: 'verification_pending' }))
+    await mountApp()
+    const d = await openRegistration()
+    await submitFilled(d)
+    expect(d.textContent).toContain(SENT_COPY)
+    expect(gaWindow.dataLayer, 'nothing sent before Accept').toBeUndefined()
+
+    await clickByText(d, 'Close')
+    await clickByText(document.querySelector<HTMLElement>(NOTICE)!, 'Accept')
+    const entries = (gaWindow.dataLayer ?? []).map((a) => Array.from(a))
+    expect(entries.map((e) => e[0])).toEqual(['js', 'config', 'event'])
+    expect(entries[2]).toEqual(['event', 'sign_up', {}])
+    delete gaWindow.dataLayer
+  })
+
+  it('signUp_aRepeatRegistrationCountsAgain', async () => {
+    stubFetch(() => json(202, { status: 'verification_pending' }))
+    await mountApp()
+    for (let i = 1; i <= 2; i++) {
+      if (i === 2) window.history.replaceState(null, '', `/?state=${STATE}&register`)
+      const d = i === 1 ? await openRegistration() : await (async () => {
+        await remountApp()
+        return document.querySelector<HTMLElement>(REGISTER_DIALOG)!
+      })()
+      await submitFilled(d)
+      expect(d.textContent, `submit ${i}`).toContain(SENT_COPY)
+      expect(h.spy.mock.calls, `submit ${i}`).toHaveLength(i)
+      if (i === 1) await clickByText(d, 'Close')
+    }
+  })
+
+  it('signUp_aThrowingTrackerStillShowsTheNeutralScreen', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    h.throws = true
+    stubFetch(() => json(202, { status: 'verification_pending' }))
+    await mountApp()
+    const d = await openRegistration()
+    await submitFilled(d)
+    expect(h.spy.mock.calls).toHaveLength(1)
+    expect(d.textContent).toContain(SENT_COPY)
+    for (const copy of REFUSALS) expect(document.body.textContent, copy).not.toContain(copy)
+    expect(alerts(d)).toEqual([])
   })
 })

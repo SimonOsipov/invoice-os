@@ -25,6 +25,16 @@ describe('app chat on a PR host', () => {
     expect(document.cookie).not.toContain(CONSENT_STORAGE_KEY)
   })
 
+  it('aPrAppHostLoadsNoGoogleTagAfterAccept', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', 'G-TEST1234')
+    const { chooseAppConsent } = await import('./chat')
+    chooseAppConsent('accept', 'ada@example.com')
+    expect(document.querySelectorAll('script[src*="googletagmanager"]').length).toBe(0)
+    const layer = (window as Window & { dataLayer?: IArguments[] }).dataLayer ?? []
+    expect(layer.filter((a) => a[0] === 'config')).toEqual([])
+    vi.unstubAllEnvs()
+  })
+
   it('endAppChat on a PR host deletes host cookies', async () => {
     const { endAppChat } = await import('./chat')
     document.cookie = '__hstc=v; path=/'

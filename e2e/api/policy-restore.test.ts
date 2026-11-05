@@ -120,6 +120,8 @@ function policy(opts: {
     id: opts.id,
     name: opts.name,
     scope: 'All invoices',
+    position: 1,
+    scopes: { document_types: [], entity_ids: [], workflow_role_keys: [], amount_band: null },
     status: 'published',
     version: opts.version,
     sealed: true,

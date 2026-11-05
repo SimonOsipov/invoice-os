@@ -52,6 +52,8 @@ const wire = (over: Partial<PolicyWire> = {}): PolicyWire => ({
   id: 'p1',
   name: 'Standard approval policy',
   scope: 'All invoices',
+  position: 1,
+  scopes: { document_types: [], entity_ids: [], workflow_role_keys: [], amount_band: null },
   status: 'draft',
   version: 1,
   sealed: false,
@@ -647,9 +649,6 @@ function mockFetchRejectingOnce(err: unknown) {
 
 describe('QA: putApprovalPolicyDraft forwards what the caller holds, and projects what comes back', () => {
   it("sends the policy's own scope, never a hardcoded default", async () => {
-    // scope is a *string on putDraftRequest (policy.go:104), so an absent key leaves the
-    // stored scope untouched while a present foreign one earns normalizeScope's 400. Both
-    // halves — presence AND the forwarded value — are the wrapper's job.
     for (const scope of ['All invoices', 'Capex & fixed assets']) {
       const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(wire({ id: 'p1' })) })
       await putApprovalPolicyDraft(authed(), wireBase, 'p1', policy({ id: 'p1', scope }))
@@ -816,7 +815,6 @@ describe('QA: the non-http failure kinds reach the caller unreshaped', () => {
 describe('AC-3 / AC-1 — the ctx write verbs', () => {
   async function harnessCreatePolicy(af: AuthedFetch, mirror: readonly Policy[], name: string) {
     const created = await createApprovalPolicy(af, wireBase, name)
-    // Append: the server answers ORDER BY created_at, id, so the new row belongs last.
     return { created, mirror: [...mirror, created] }
   }
 

@@ -600,9 +600,9 @@ type workspaceAuditSite struct {
 	drive func(t *testing.T, super, app *pgxpool.Pool) string // returns tenantID
 }
 
-// workspaceAuditSiteCount floors workspaceAuditSites: internal/approval holds twelve
-// audit.Record calls, four invoice-scoped and these eight.
-const workspaceAuditSiteCount = 8
+// workspaceAuditSiteCount floors workspaceAuditSites: internal/approval holds thirteen
+// audit.Record calls, four invoice-scoped and these nine.
+const workspaceAuditSiteCount = 9
 
 func workspaceAuditSites() []workspaceAuditSite {
 	return []workspaceAuditSite{
@@ -611,7 +611,7 @@ func workspaceAuditSites() []workspaceAuditSite {
 			drive: func(t *testing.T, super, app *pgxpool.Pool) string {
 				tenantID := policyTenant(t, super, "AUDIT-11-02 ws policy-created")
 				c, _ := activeAdmin(t, super, tenantID)
-				if _, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "AN workspace policy", ""); err != nil {
+				if _, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "AN workspace policy", nil); err != nil {
 					t.Fatalf("CreatePolicy: %v", err)
 				}
 				return tenantID
@@ -653,6 +653,24 @@ func workspaceAuditSites() []workspaceAuditSite {
 				seedVersionWithSteps(t, super, tenantID, policyID, 1, 1)
 				if _, err := NewStore(app, stubFingerprinter, nil).DeletePolicy(c, policyID); err != nil {
 					t.Fatalf("DeletePolicy: %v", err)
+				}
+				return tenantID
+			},
+		},
+		{
+			label: "policy_reordered", site: "policy_store.go (ReorderPolicies)", event: "approval_policy.reordered",
+			drive: func(t *testing.T, super, app *pgxpool.Pool) string {
+				tenantID := policyTenant(t, super, "AUDIT-11-02 ws policy-reordered")
+				c, _ := activeAdmin(t, super, tenantID)
+				ids := []string{
+					seedApprovalPolicy(t, super, tenantID, "AN workspace reorder A"),
+					seedApprovalPolicy(t, super, tenantID, "AN workspace reorder B"),
+				}
+				for _, id := range ids {
+					seedApprovalPolicyVersionN(t, super, tenantID, id, 1)
+				}
+				if _, err := NewStore(app, stubFingerprinter, nil).ReorderPolicies(c, []string{ids[1], ids[0]}); err != nil {
+					t.Fatalf("ReorderPolicies: %v", err)
 				}
 				return tenantID
 			},

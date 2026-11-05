@@ -94,7 +94,7 @@ export type Policy = {
   nodes: WfNode[]
 }
 
-/** The one scope value the editor offers; the server's `normalizeScope` is the lock. */
+/** The one scope value the editor offers. */
 export const WF_SCOPE_OPTIONS: readonly string[] = ['All invoices']
 
 // ---------------------------------------------------------------------------

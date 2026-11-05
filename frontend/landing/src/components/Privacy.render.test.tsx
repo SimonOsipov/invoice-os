@@ -242,8 +242,7 @@ describe('Privacy SSR render (LAND-04-02)', () => {
 })
 
 // The signed-in product and its import closure (relative and @invoice-os/* workspace
-// imports) carry no Google Analytics; the consoles carry no GA and no chat.
-// The page publishes the consoles claim; the app scan records the measured code. Scans read code with comments stripped.
+// imports) load the Google tag; the consoles carry no GA and no chat. Scans read code with comments stripped.
 const GA_NEEDLES = ['gtag', 'googletagmanager', 'google-analytics', 'vite_ga_']
 const CHAT_NEEDLES = ['hs-scripts', '_hsq', 'hubspotconversations', 'hubspotchat']
 const RESOLVE_SUFFIXES = ['.ts', '.tsx', '/index.ts']
@@ -289,8 +288,8 @@ function gaHits(files: string[]): string[] {
   return GA_NEEDLES.filter((n) => combined.includes(n))
 }
 
-describe('C2 code scan: the app and the consoles carry no Google Analytics (the consoles claim is on the page; the app scan records the measured code)', () => {
-  it('C2 code scan: the signed-in product and the files it imports carry no Google Analytics reference', () => {
+describe('C2 code scan: the app loads the Google tag and the consoles carry no Google Analytics', () => {
+  it('C2 code scan: the signed-in product loads the Google tag through analytics.ts', () => {
     const appFiles = sourceFiles(APP_SRC)
     expect(appFiles.length, 'scan found too few app files').toBeGreaterThanOrEqual(20)
     const files = [...importClosure(appFiles)]
@@ -299,10 +298,13 @@ describe('C2 code scan: the app and the consoles carry no Google Analytics (the 
     const names = files.map((f) => f.slice(f.lastIndexOf('/') + 1))
     expect(names, 'control: the closure reaches hubspotChat.ts').toContain('hubspotChat.ts')
     expect(names, 'control: the closure reaches consent.ts').toContain('consent.ts')
-    expect(names, 'control: the closure must not reach analytics.ts').not.toContain('analytics.ts')
+    expect(names, 'the closure reaches analytics.ts').toContain('analytics.ts')
     expect(files.some((f) => f.startsWith(join(PACKAGES_DIR, 'monitoring'))), 'control: the closure reaches @invoice-os/monitoring').toBe(true)
     expect(files.some((f) => f.startsWith(join(PACKAGES_DIR, 'api-client'))), 'control: the closure reaches @invoice-os/api-client').toBe(true)
-    expect(gaHits(files)).toEqual([])
+    expect(gaHits(files)).toContain('googletagmanager')
+    const chat = code(join(APP_SRC, 'chat.ts'))
+    expect(chat).toContain('ensureTag(')
+    expect(chat).toContain('APP_HOSTNAMES')
   })
 
   it('C2: a Google Analytics reference in a workspace package the app imports is found', () => {
@@ -958,8 +960,20 @@ describe('the Library shares the landing\'s choice', () => {
     const keys = new Set(Array.from(LANDING_ANALYTICS.matchAll(/send\('\w+', \{ (\w+):/g)).map((m) => m[1]))
     const target = LANDING_ANALYTICS.match(/trackOpenInPlatform\(target: ([^)]*)\)/)?.[1] ?? ''
     for (const m of target.matchAll(/(\w+): string/g)) keys.add(m[1])
-    expect([...keys].sort()).toEqual(['cta_location', 'feature_id', 'form_name', 'group_id', 'percent_scrolled'])
+    expect([...keys].sort()).toEqual(['cta_location', 'feature_id', 'form_name', 'group_id', 'page_location', 'percent_scrolled'])
     expect(text(html)).toContain('which feature or group you opened')
+  })
+
+  it('C-LAND07: the receives list names the sign-up and the validated invoice', () => {
+    const lis = Array.from(html.slice(html.indexOf('>What Google receives</h2>')).split('</ul>')[0].matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)).map((m) => text(m[1]))
+    expect(lis).toContain('that you sent the form to create an account')
+    expect(lis).toContain('each time an invoice is validated in the signed-in product')
+  })
+
+  it('C-LAND07: the never-receives paragraph says the app sends only the kind of page', () => {
+    const at = html.indexOf('>What Google never receives</h2>')
+    const para = text(html.slice(at, html.indexOf('</p>', at)))
+    expect(para).toContain('In the signed-in product we send only the kind of page you open, never an invoice number or a search you typed.')
   })
 
   it('PL-05 the section states the one choice, the reopen on either site and the shared deletion', () => {

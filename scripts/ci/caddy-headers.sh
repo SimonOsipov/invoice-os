@@ -4,7 +4,8 @@
 # /404.html serves only its built addresses. Needs docker and curl.
 set -uo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
-img=caddy:2-alpine # same tag as frontend/*/Dockerfile
+# ceiling: held at Caddy 2.11.7 (2.11.8 try_files matches a bare directory); move when a release passes this script.
+img=caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5 # pinned equal to frontend/*/Dockerfile by TestCaddyPins_RepoPinned
 name="caddy-headers-$$"
 sname="caddy-headers-strict-$$"
 site=$(mktemp -d)

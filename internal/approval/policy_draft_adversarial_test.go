@@ -150,7 +150,7 @@ func TestPutDraft_PermissionCheckedBeforeAnyPolicyRow(t *testing.T) {
 
 // --- copy, don't alias ----------------------------------------------------------
 
-// TestPutDraft_NormalizersLeaveTheCallersPointeesAlone: both normalizers reassign the
+// TestPutDraft_NormalizersLeaveTheCallersPointeesAlone: the name normalizer reassigns the
 // PARAMETER to a fresh local (UpdateRole's precedent), never write through the caller's
 // pointer. 07 decodes putDraftRequest and hands over &req.Name — a store that normalised
 // in place would silently rewrite the handler's own request struct, which is a
@@ -162,8 +162,8 @@ func TestPutDraft_NormalizersLeaveTheCallersPointeesAlone(t *testing.T) {
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
 	seedDraftWithSteps(t, super, tenantID, policyID, 1)
 
-	name, scope := "  Renamed  ", ""
-	if _, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, &name, &scope, approvalStep("engagement-partner")); err != nil {
+	name := "  Renamed  "
+	if _, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, &name, nil, approvalStep("engagement-partner")); err != nil {
 		t.Fatalf("PutDraft: %v", err)
 	}
 
@@ -172,15 +172,9 @@ func TestPutDraft_NormalizersLeaveTheCallersPointeesAlone(t *testing.T) {
 	if got := storedPolicyName(t, super, policyID); got != "Renamed" {
 		t.Fatalf("stored name = %q, want the trimmed %q", got, "Renamed")
 	}
-	if got := storedPolicyScope(t, super, policyID); got != scopeAllInvoices {
-		t.Fatalf("stored scope = %q, want %q", got, scopeAllInvoices)
-	}
 
 	if name != "  Renamed  " {
 		t.Errorf("the caller's name variable reads %q, want the untouched %q — the normalizer wrote through the pointer", name, "  Renamed  ")
-	}
-	if scope != "" {
-		t.Errorf("the caller's scope variable reads %q, want the untouched empty string — the normalizer wrote through the pointer", scope)
 	}
 }
 
@@ -362,7 +356,7 @@ func TestPutDraft_RenamesAndRewritesInOneCall(t *testing.T) {
 		{Kind: "notify", NotifyTarget: ptr("finance@example.com"), NotifyChannel: ptr("email")},
 	}
 
-	got, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, ptr("  Renamed in the same call  "), ptr(""), tree)
+	got, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, ptr("  Renamed in the same call  "), nil, tree)
 	if err != nil {
 		t.Fatalf("PutDraft: %v", err)
 	}

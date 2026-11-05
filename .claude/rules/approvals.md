@@ -13,7 +13,7 @@ paths:
 
 - Keep one active version per policy. A workspace can have several policies in force.
 - Publish deactivates only the published policy's previous version. The demo seeder follows the same rule. Delete deactivates only the deleted policy's version.
-- Take `LockTenantPublishTx` in `PublishPolicy` and in the demo seeder before any backlog sweep read. It serialises one tenant's publishes and sweeps.
+- Take `LockTenantPublishTx` right after `requireActiveAdmin` in every policy write. The demo seeder takes it before any backlog sweep read. It serialises one tenant's policy writes and sweeps.
 - Publish the one unsealed version. Resolve it with `NOT sealed`, never with `is_active`.
 - Run publish in one transaction: seal, then the backlog sweep, then the `approval_policy.published` audit row last.
 - Arm the sweep after the seal. `ArmTx` arms a document with the first policy in position order whose set scopes all match it (`TestArm_LowerPositionWinsOverThePolicyPublishedLast`). A policy counts when it is live and has an active version.
@@ -44,7 +44,15 @@ paths:
 - Write a scope edit to the draft. It takes effect at publish.
 - Seal a version's scopes with it. `approval_policy_versions_seal_guard` refuses a scope change on a sealed version.
 - Treat a version with no scope set as the catch-all.
-- Accept only `All invoices` in the legacy `scope` text on `approval_policies`. `normalizeScope` enforces it.
+- Write no value to the legacy `scope` text on `approval_policies`. The API reads no `scope` key.
+- Validate a scope in the store before the write. Refuse an unknown document type, a client company outside the workspace, a band without a currency or a bound or with lower above upper, a currency outside the NRS `currencies` list, and an unknown or deleted workflow role with 400.
+- Name a workflow role in a scope by its key on the wire. Store its id.
+- Keep the draft's scopes when a `PUT .../draft` sends no `scopes`. A fork copies the scopes of the policy's top version.
+- Keep the last live policy's top version and the last in-force policy's active version free of scopes. `requireCatchAllLastTx` refuses a write that breaks it with 409.
+- While any live policy has a scope, refuse with 409 a delete of the last live policy and a reorder that changes the last live policy.
+- Write no audit row for a reorder that keeps the current order.
+- Put a new policy directly above the workspace's last live policy.
+- Order the policies with `PUT /v1/approval-policies/order`. It writes one `approval_policy.reordered` audit row with the old and the new order.
 - Give each live policy a unique order position on `approval_policies`. The trigger `approval_policies_assign_position` assigns the next one on insert.
 - Key approval policies by workspace, not by client company.
 - Return the draft's steps from `GET /v1/approval-policies/{id}` once a draft exists. Never label them active.

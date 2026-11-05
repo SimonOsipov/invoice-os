@@ -29,6 +29,7 @@
 import { test, expect } from '@playwright/test'
 import {
   createApprovalPolicy,
+  createEntity,
   createWorkflowRole,
   deleteApprovalPolicy,
   deleteWorkflowRole,
@@ -36,16 +37,19 @@ import {
   listApprovalPolicies,
   listWorkflowRoles,
   login,
+  provisionRealAccount,
   publishApprovalPolicy,
   putApprovalPolicyDraft,
   rawFetch,
+  reorderApprovalPolicies,
+  signInSession,
   staffWorkflowRole,
   updateWorkflowRole,
   PERSONAS,
   type ApprovalPolicy,
 } from './client'
-import { assertErrorEnvelope, ensureFirmPolicyActive, type RawResult } from './contract-helpers'
-import { freshPolicyName, freshRoleTitle } from './fixtures'
+import { assertErrorEnvelope, codeListsReady, ensureFirmPolicyActive, type RawResult } from './contract-helpers'
+import { freshPolicyName, freshRoleTitle, freshTin } from './fixtures'
 
 // The four keys internal/approval's Role serializes, sorted. No omitempty on any field, so
 // the set stays four even when desc is "" and members is empty.
@@ -329,10 +333,10 @@ test.describe('workflow-role contract (API E2E, over the deployed gateway)', () 
 // would be green on CI and red at home), and published_at is never string-compared against
 // another API timestamp — every other one marshals in pgx's time.Local.
 
-// The eight keys internal/approval's Policy serializes, sorted, and the five and ten of its
+// The ten keys internal/approval's Policy serializes, sorted, and the five and ten of its
 // two nested shapes. No omitempty on any field, and Policy/Step both carry a value-receiver
 // MarshalJSON substituting [] for a nil lane, so every set is fixed whatever the content.
-const POLICY_KEYS = ['id', 'name', 'scope', 'sealed', 'status', 'steps', 'version', 'versions']
+const POLICY_KEYS = ['id', 'name', 'position', 'scope', 'scopes', 'sealed', 'status', 'steps', 'version', 'versions']
 const POLICY_VERSION_KEYS = ['is_active', 'published_at', 'published_by', 'sealed', 'version']
 const STEP_KEYS = [
   'cond_amount',
@@ -352,8 +356,17 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // and RFC3339Nano trims trailing zeros, so the width varies and must not be pinned.
 const PUBLISHED_AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/
 
-// A scope normalizeScope refuses (only 'All invoices' is accepted).
-const FOREIGN_SCOPE = 'Capex & fixed assets'
+// Wire messages, copied from policyStatusForErr (internal/approval/policy.go), sentinel beside each.
+const MSG_SCOPE_DOCUMENT_TYPE = 'a scope names an unknown document type' // ErrScopeDocumentType
+const MSG_SCOPE_ENTITY = 'a scope names a client company outside this workspace' // ErrScopeEntity
+const MSG_SCOPE_BAND = 'an amount band needs a currency, at least one bound, and a lower bound no higher than the upper' // ErrScopeBand
+const MSG_SCOPE_CURRENCY = 'an amount band names a currency outside the NRS currency list' // ErrScopeCurrency
+const MSG_SCOPE_ROLE = 'a scope names a workflow role that does not exist or was deleted' // ErrScopeRole
+const MSG_CATCH_ALL = 'a policy with no scopes must stay last while any policy has scopes' // ErrPolicyCatchAll
+const MSG_NOT_ADMIN = 'only an admin can change approval policies' // ErrNotPermitted
+const POLICY_SCOPES_KEYS = ['amount_band', 'document_types', 'entity_ids', 'workflow_role_keys']
+const AMOUNT_BAND_KEYS = ['currency', 'lower', 'upper']
+const ORDER_PATH = '/api/invoice/v1/approval-policies/order' // the PUT route of ReorderPoliciesHandler
 
 // Walks the tree, not just the roots: the ten-key claim has to hold at depth, which is
 // exactly what Step's MarshalJSON re-entering itself is for.
@@ -369,13 +382,22 @@ function expectStepShape(step: unknown, label: string): Record<string, unknown> 
   return s
 }
 
-// The shape all six routes answer. Checked on the PARSED body, which is enough at this
+// The shape every policy route answers. Checked on the PARSED body, which is enough at this
 // boundary: JS distinguishes [] from null, unlike Go's serializer test.
 function expectPolicyShape(policy: unknown, label: string): Record<string, unknown> {
   const p = policy as Record<string, unknown>
-  expect(Object.keys(p).sort(), `${label}: expected exactly the eight Policy keys`).toEqual(POLICY_KEYS)
+  expect(Object.keys(p).sort(), `${label}: expected exactly the ten Policy keys`).toEqual(POLICY_KEYS)
   expect(Array.isArray(p.steps), `${label}: steps should be an array, never null`).toBe(true)
   expect(Array.isArray(p.versions), `${label}: versions should be an array, never null`).toBe(true)
+  expect(typeof p.position, `${label}: position is a number`).toBe('number')
+  const sc = p.scopes as Record<string, unknown>
+  expect(Object.keys(sc).sort(), `${label}: expected exactly the four scopes keys`).toEqual(POLICY_SCOPES_KEYS)
+  for (const k of ['document_types', 'entity_ids', 'workflow_role_keys']) {
+    expect(Array.isArray(sc[k]), `${label}: scopes.${k} should be an array, never null`).toBe(true)
+  }
+  if (sc.amount_band !== null) {
+    expect(Object.keys(sc.amount_band as object).sort(), `${label}: expected exactly the three amount_band keys`).toEqual(AMOUNT_BAND_KEYS)
+  }
   const steps = p.steps as unknown[]
   for (let i = 0; i < steps.length; i++) expectStepShape(steps[i], `${label}.steps[${i}]`)
   const versions = p.versions as unknown[]
@@ -512,6 +534,13 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
       listed.approval_policies.find((p) => p.id === probe.id)?.name,
       'the typed list agrees with the raw one',
     ).toBe(probe.name)
+
+    // Positions are unique among live rows, so the list answers them strictly ascending.
+    const positions = policies.map((p) => p.position as number)
+    for (let i = 0; i < positions.length; i++) {
+      expect(typeof positions[i], `listed policy ${i}: position is a number`).toBe('number')
+      if (i > 0) expect(positions[i], `position ${i} follows position ${i - 1}`).toBeGreaterThan(positions[i - 1])
+    }
   })
 
   test('POST -> 201 + a draft policy scoped to All invoices, carrying an open version 1', async () => {
@@ -529,8 +558,14 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
     expect(res.status, 'create should return 201').toBe(201)
     const policy = expectPolicyShape(created, 'created policy')
 
-    // No scope sent: normalizeScope reads "" as "the default", not as a value.
-    expect(policy.scope, 'an unsent scope lands as the default').toBe('All invoices')
+    // The legacy `scope` key is read-only now: the column default, whatever the body says.
+    expect(policy.scope, 'the legacy scope reads its default').toBe('All invoices')
+    expect(policy.scopes, 'an unsent scopes is the catch-all').toEqual({
+      document_types: [],
+      entity_ids: [],
+      workflow_role_keys: [],
+      amount_band: null,
+    })
     expect(policy.status, 'a new policy is a draft').toBe('draft')
     expect(policy.sealed, 'a new policy is unsealed').toBe(false)
     expect(policy.steps, 'a new policy has no steps').toEqual([])
@@ -547,7 +582,7 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
     expect(versions[0].published_by, 'published_by is an explicit null before publish').toBeNull()
   })
 
-  test('policy shape: exactly the eight keys, and a populated tree keeps [] never null', async () => {
+  test('policy shape: exactly the ten keys, and a populated tree keeps [] never null', async () => {
     const probe = await createPolicyProbe()
     // A PUT before the GET is REQUIRED: a freshly created policy's draft is empty, so the
     // ten-key Step claim below would otherwise pass vacuously over nothing.
@@ -721,25 +756,83 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
     expect(top.is_active, 'and is put in force').toBe(true)
   })
 
-  test('400: a foreign scope on PUT draft', async () => {
+  test('400: a foreign document type on PUT draft', async () => {
     const probe = await createPolicyProbe()
     const res = await rawFetch(`/api/invoice/v1/approval-policies/${probe.id}/draft`, {
       method: 'PUT',
       headers: { Authorization: `Bearer ${token}` },
-      body: { scope: FOREIGN_SCOPE, steps: [] },
+      body: { steps: [], scopes: { document_types: ['capex'] } },
     })
-    assertWireError(res, 400, 'PUT a scope the column has no value for')
+    assertWireError(res, 400, 'PUT a document type the scope has no value for')
+    expect((res.body as Record<string, unknown>).error).toBe(MSG_SCOPE_DOCUMENT_TYPE)
   })
 
-  test('400: a foreign scope on POST', async () => {
-    // Pinned over the wire rather than through the typed seam, which rejects on 400 and 500
-    // alike: a 500 would be invisible to apiFetch, and is the reason this case exists.
+  test('400: a foreign document type on POST', async () => {
+    // rawFetch, not the typed seam: apiFetch rejects on 400 and 500 alike, and a 500 is the slip to catch.
     const res = await rawFetch('/api/invoice/v1/approval-policies', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
-      body: { name: freshPolicyName(), scope: FOREIGN_SCOPE },
+      body: { name: freshPolicyName(), scopes: { document_types: ['capex'] } },
     })
-    assertWireError(res, 400, 'POST a scope the column has no value for')
+    assertWireError(res, 400, 'POST a document type the scope has no value for')
+    expect((res.body as Record<string, unknown>).error).toBe(MSG_SCOPE_DOCUMENT_TYPE)
+  })
+
+  test('400: each scope refusal on PUT draft', async () => {
+    const probe = await createPolicyProbe()
+    const deletedRoleKey = await createRoleProbe()
+    await deleteWorkflowRole(token, deletedRoleKey)
+    const cases: Array<[string, Record<string, unknown>, string]> = [
+      ['an entity outside the workspace', { entity_ids: [crypto.randomUUID()] }, MSG_SCOPE_ENTITY],
+      ['a band with lower above upper', { amount_band: { lower: '6.00', upper: '5.00', currency: 'NGN' } }, MSG_SCOPE_BAND],
+      ['a band without a currency', { amount_band: { lower: '1.00', upper: null, currency: '' } }, MSG_SCOPE_BAND],
+      ['a currency off the list', { amount_band: { lower: '1.00', upper: null, currency: 'XYZ' } }, MSG_SCOPE_CURRENCY],
+      ['an unknown role key', { workflow_role_keys: ['no-such-role'] }, MSG_SCOPE_ROLE],
+      ['a deleted role key', { workflow_role_keys: [deletedRoleKey] }, MSG_SCOPE_ROLE],
+    ]
+    for (const [label, scopes, message] of cases) {
+      const res = await rawFetch(`/api/invoice/v1/approval-policies/${probe.id}/draft`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { steps: [], scopes },
+      })
+      assertWireError(res, 400, `PUT ${label}`)
+      expect((res.body as Record<string, unknown>).error, `${label}: its own message`).toBe(message)
+      const after = await getApprovalPolicy(token, probe.id)
+      expect(after.scopes, `${label}: the refused write left the catch-all`).toEqual({
+        document_types: [],
+        entity_ids: [],
+        workflow_role_keys: [],
+        amount_band: null,
+      })
+    }
+  })
+
+  test('400: each scope refusal on POST', async () => {
+    const res = await rawFetch('/api/invoice/v1/approval-policies', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { name: freshPolicyName(), scopes: { entity_ids: [crypto.randomUUID()] } },
+    })
+    assertWireError(res, 400, 'POST an entity outside the workspace')
+    expect((res.body as Record<string, unknown>).error).toBe(MSG_SCOPE_ENTITY)
+  })
+
+  test('403: a preparer cannot reorder', async () => {
+    const before = (await listApprovalPolicies(token)).approval_policies.map((p) => p.id)
+    expect(before.length, 'precondition: the seeded policy is listed').toBeGreaterThan(0)
+    const preparerToken = await login({ ...PERSONAS.A, subject: PREPARER_CALLER })
+
+    const res = await rawFetch(ORDER_PATH, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${preparerToken}` },
+      body: { policy_ids: before },
+    })
+    assertWireError(res, 403, 'a seeded preparer reordering the policies')
+    expect((res.body as Record<string, unknown>).error).toBe(MSG_NOT_ADMIN)
+
+    const after = (await listApprovalPolicies(token)).approval_policies.map((p) => p.id)
+    expect(after, 'a refused reorder leaves the order alone').toEqual(before)
   })
 
   test('400: steps null, checked BEFORE the path id', async () => {
@@ -887,5 +980,134 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
     const afterAttack = await getApprovalPolicy(token, probeA.id)
     expect(afterAttack.id, "A's row survives B's refused delete").toBe(probeA.id)
     expect(afterAttack.name, 'and is unchanged').toBe(probeA.name)
+  })
+})
+
+// Scoped policies, reorders and catch-all refusals run in a workspace of their own, one per
+// test: a guard regression in a shared tenant could delete or shadow its seeded policy.
+test.describe('approval-policy scopes and order (fresh workspace per test)', () => {
+  // The band test needs the NRS currencies; the worker syncs them before the lists polled here.
+  test.beforeAll(async () => {
+    const account = await provisionRealAccount('apsc-codes')
+    await codeListsReady((await signInSession(account.email, account.password)).access_token)
+  })
+
+  async function freshWorkspace(): Promise<string> {
+    const account = await provisionRealAccount('apsc-policy')
+    const { access_token } = await signInSession(account.email, account.password)
+    const listed = await listApprovalPolicies(access_token)
+    expect(listed.approval_policies, 'precondition: a fresh workspace has no policy').toEqual([])
+    return access_token
+  }
+
+  const authed = (t: string) => ({ Authorization: `Bearer ${t}` })
+  const ids = async (t: string) => (await listApprovalPolicies(t)).approval_policies.map((p) => p.id)
+  const CATCH_ALL = { document_types: [], entity_ids: [], workflow_role_keys: [], amount_band: null }
+
+  // C published, then S (credit notes) published above it.
+  async function catchAllAndScoped(t: string): Promise<{ c: ApprovalPolicy; s: ApprovalPolicy }> {
+    const c = await createApprovalPolicy(t, { name: freshPolicyName() })
+    await publishApprovalPolicy(t, c.id)
+    const s = await createApprovalPolicy(t, { name: freshPolicyName(), scopes: { document_types: ['credit_note'] } })
+    await publishApprovalPolicy(t, s.id)
+    expect(await ids(t), 'precondition: S sits above C').toEqual([s.id, c.id])
+    return { c, s }
+  }
+
+  test('scopes round-trip and survive a steps-only PUT and a fork', async () => {
+    const t = await freshWorkspace()
+    const entity = await createEntity(t, { name: `APSC entity ${freshPolicyName()}`, tin: freshTin() })
+    const role = await createWorkflowRole(t, { title: freshRoleTitle() })
+    const c = await createApprovalPolicy(t, { name: freshPolicyName() })
+    const scopes = {
+      document_types: ['credit_note'],
+      entity_ids: [entity.id],
+      workflow_role_keys: [role.key],
+      amount_band: { lower: '1000.00', upper: null, currency: 'NGN' },
+    }
+    const s = await createApprovalPolicy(t, { name: freshPolicyName(), scopes })
+    expect((await getApprovalPolicy(t, s.id)).scopes, 'GET reads the four scopes back').toEqual(scopes)
+
+    const kept = await putApprovalPolicyDraft(t, s.id, { steps: [] })
+    expect(kept.scopes, 'a steps-only PUT keeps the open draft scopes').toEqual(scopes)
+
+    await publishApprovalPolicy(t, c.id)
+    await publishApprovalPolicy(t, s.id)
+    const forked = await putApprovalPolicyDraft(t, s.id, { steps: [] })
+    expect(forked.version, 'the PUT forked version 2').toBe(2)
+    expect(forked.status, 'the fork is a draft').toBe('draft')
+    expect(forked.scopes, 'the fork keeps the previous version scopes').toEqual(scopes)
+  })
+
+  test('reorder -> 200 and the list follows', async () => {
+    const t = await freshWorkspace()
+    const c = await createApprovalPolicy(t, { name: freshPolicyName() })
+    const a = await createApprovalPolicy(t, { name: freshPolicyName() })
+    const b = await createApprovalPolicy(t, { name: freshPolicyName() })
+    expect(await ids(t), 'precondition: a new policy lands above the last').toEqual([a.id, b.id, c.id])
+
+    const res = await rawFetch(ORDER_PATH, { method: 'PUT', headers: authed(t), body: { policy_ids: [b.id, a.id, c.id] } })
+    expect(res.status, 'the reorder answers 200').toBe(200)
+    const body = res.body as { approval_policies: Array<{ id: string }> }
+    expect(body.approval_policies.map((p) => p.id), 'the answer is the new order').toEqual([b.id, a.id, c.id])
+    expect(await ids(t), 'a later GET agrees').toEqual([b.id, a.id, c.id])
+    // The typed seam reaches the same route.
+    expect((await reorderApprovalPolicies(t, [a.id, b.id, c.id])).approval_policies.map((p) => p.id)).toEqual([a.id, b.id, c.id])
+  })
+
+  test('409: deleting the last catch-all under a scoped policy', async () => {
+    const t = await freshWorkspace()
+    const { c } = await catchAllAndScoped(t)
+    const res = await rawFetch(`/api/invoice/v1/approval-policies/${c.id}`, { method: 'DELETE', headers: authed(t) })
+    assertWireError(res, 409, 'deleting the catch-all')
+    expect((res.body as Record<string, unknown>).error).toBe(MSG_CATCH_ALL)
+    const after = await getApprovalPolicy(t, c.id)
+    expect(after.versions.some((v) => v.is_active), 'the catch-all is still in force').toBe(true)
+  })
+
+  test('409: giving the last catch-all a scope', async () => {
+    const t = await freshWorkspace()
+    const { c } = await catchAllAndScoped(t)
+    const res = await rawFetch(`/api/invoice/v1/approval-policies/${c.id}/draft`, {
+      method: 'PUT',
+      headers: authed(t),
+      body: { steps: [], scopes: { document_types: ['debit_note'] } },
+    })
+    assertWireError(res, 409, 'scoping the catch-all')
+    expect((res.body as Record<string, unknown>).error).toBe(MSG_CATCH_ALL)
+    expect((await getApprovalPolicy(t, c.id)).scopes, 'the catch-all is unchanged').toEqual(CATCH_ALL)
+  })
+
+  test('409: moving a scoped policy below the catch-all', async () => {
+    const t = await freshWorkspace()
+    const { c, s } = await catchAllAndScoped(t)
+    const res = await rawFetch(ORDER_PATH, { method: 'PUT', headers: authed(t), body: { policy_ids: [c.id, s.id] } })
+    assertWireError(res, 409, 'reordering the catch-all above a scoped policy')
+    expect((res.body as Record<string, unknown>).error).toBe(MSG_CATCH_ALL)
+    expect(await ids(t), 'the order is unchanged').toEqual([s.id, c.id])
+  })
+
+  test('409: creating a scoped first policy', async () => {
+    const t = await freshWorkspace()
+    const res = await rawFetch('/api/invoice/v1/approval-policies', {
+      method: 'POST',
+      headers: authed(t),
+      body: { name: freshPolicyName(), scopes: { document_types: ['credit_note'] } },
+    })
+    assertWireError(res, 409, 'a scoped policy with no catch-all')
+    expect((res.body as Record<string, unknown>).error).toBe(MSG_CATCH_ALL)
+    expect(await ids(t), 'nothing was created').toEqual([])
+  })
+
+  test('409: publishing a scoped policy while no catch-all is in force', async () => {
+    const t = await freshWorkspace()
+    await createApprovalPolicy(t, { name: freshPolicyName() })
+    const s = await createApprovalPolicy(t, { name: freshPolicyName(), scopes: { document_types: ['credit_note'] } })
+    const res = await rawFetch(`/api/invoice/v1/approval-policies/${s.id}/publish`, { method: 'POST', headers: authed(t) })
+    assertWireError(res, 409, 'publishing S with the catch-all still a draft')
+    expect((res.body as Record<string, unknown>).error).toBe(MSG_CATCH_ALL)
+    const after = await getApprovalPolicy(t, s.id)
+    expect(after.sealed, 'S stays unsealed').toBe(false)
+    expect(after.versions.some((v) => v.is_active), 'S has no active version').toBe(false)
   })
 })

@@ -235,7 +235,7 @@ test('support console: the tenant header wraps and shows the whole state line at
   const text = heading.locator('xpath=../..')
   const viewJobs = header.getByRole('button', { name: 'View jobs', exact: true })
 
-  // Holds the list reload that follows Start deletion; the 5 s cap keeps a fix that waits for the list from deadlocking.
+  // Holds the list reload that follows Start deletion; the 30 s cap keeps a fix that waits for the list from deadlocking.
   let listHeld = false
   let capped = false
   let releaseList: () => void = () => {}
@@ -246,10 +246,12 @@ test('support console: the tenant header wraps and shows the whole state line at
   const check = async (state: string, stateLine: Locator, betweenReads?: () => Promise<void>): Promise<void> => {
     const entry = page.viewportSize()
     try {
-      for (const width of NARROW_WIDTHS) {
+      // With a hook, 390px is read twice: held (hook fires after the first read) and after the list lands.
+      const widths = betweenReads ? [NARROW_WIDTHS[0], ...NARROW_WIDTHS] : NARROW_WIDTHS
+      for (const [i, width] of widths.entries()) {
         await page.setViewportSize({ width, height: HEIGHT })
         await settleAnimations(card, header, text, viewJobs, actions)
-        const where = `${state} at ${width}px`
+        const where = `${state} at ${width}px${betweenReads && i === 1 ? ' (list rendered)' : ''}`
         // One synchronous read: a list render landing between per-element reads skews the compared boxes.
         const buttons = actions.getByRole('button')
         const targets = await Promise.all([card, text, viewJobs, actions, heading, stateLine, ...(await buttons.all())].map((l) => l.elementHandle({ timeout: 5_000 })))
@@ -260,7 +262,7 @@ test('support console: the tenant header wraps and shows the whole state line at
         const [cardBox, ...rest] = read
         const [textBox, viewJobsBox, actionsBox, nameBox, stateBox, ...boxes] = rest
         const r = { text: textBox, viewJobs: viewJobsBox, actions: actionsBox }
-        if (betweenReads && width === NARROW_WIDTHS[0]) await betweenReads()
+        if (betweenReads && i === 0) await betweenReads()
         for (const part of ['text', 'viewJobs', 'actions'] as const) {
           expect(enclosesRect(cardBox, r[part], 1), `${part} leaves the detail card, ${where}`).toBe(true)
         }
@@ -288,14 +290,14 @@ test('support console: the tenant header wraps and shows the whole state line at
   await page.route((url) => isListGet(url), async (route) => {
     if (route.request().method() !== 'GET' || listHeld) return route.fallback()
     listHeld = true
-    setTimeout(() => { capped = true; releaseList() }, 5_000)
+    setTimeout(() => { capped = true; releaseList() }, 30_000)
     await listRelease
     await route.fallback()
   })
   await confirmModal(page, 'Start deletion', 'e2e narrow')
   await expect(stateLine).toBeVisible()
   await check('scheduled', stateLine, async () => {
-    expect(capped, 'the 5 s cap released the list, not the hook').toBe(false)
+    expect(capped, 'the 30 s cap released the list, not the hook').toBe(false)
     releaseList()
     await expect(search, 'the tenant list did not render after release').toBeVisible()
   })

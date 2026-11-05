@@ -511,6 +511,13 @@ func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, st
 	return p, nil
 }
 
+// LockTenantPublishTx serialises publishes and demo-seeder backlog sweeps of one tenant
+// until the transaction ends. Each statement after it sees the earlier holder's commits.
+func LockTenantPublishTx(ctx context.Context, tx pgx.Tx, tenantID string) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, tenantID)
+	return err
+}
+
 // PublishPolicy seals a policy's open draft and makes it the policy's active version.
 //
 // Publishing a NEW version that names a dead role is refused at the door; a role deleted
@@ -536,6 +543,12 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 		caller, _ := auth.IdentityFromContext(ctx)
 
 		if err := requireActiveAdmin(ctx, tx, caller.Subject); err != nil {
+			return err
+		}
+
+		// Before any sweep read: two publishers of different policies would otherwise
+		// sweep the same invoices and arm two open runs (TestPublish_ConcurrentPublishesArmOneRun).
+		if err := LockTenantPublishTx(ctx, tx, caller.TenantID); err != nil {
 			return err
 		}
 
@@ -624,9 +637,10 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 			`UPDATE approval_policy_versions
 			    SET sealed = true, is_active = true, published_at = now(), published_by = $2
 			  WHERE id = $1`, versionID, caller.Subject); err != nil {
-			// A concurrent publish of this policy won the slot. By constraint name, so a 23505 on
-			// any other unique stays a 500, and never retried: a retry would publish a tree
-			// this caller did not re-validate.
+			// Backstop: every store writer of is_active holds the tenant publish lock, so only a
+			// writer outside it reaches this (TestPublish_LosingTheActiveSlotIsErrConflict).
+			// By constraint name, so a 23505 on any other unique stays a 500. Never retried: a
+			// retry would publish a tree this caller did not re-validate.
 			if uniqueViolationOn(err, "approval_policy_versions_one_active") {
 				return ErrConflict
 			}

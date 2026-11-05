@@ -13,6 +13,7 @@ paths:
 
 - Keep one active version per policy. A workspace can have several policies in force.
 - Publish deactivates only the published policy's previous version. The demo seeder follows the same rule. Delete deactivates only the deleted policy's version.
+- Take `LockTenantPublishTx` in `PublishPolicy` and in the demo seeder before any backlog sweep read. It serialises one tenant's publishes and sweeps.
 - Publish the one unsealed version. Resolve it with `NOT sealed`, never with `is_active`.
 - Run publish in one transaction: seal, then the backlog sweep, then the `approval_policy.published` audit row last.
 - Arm the sweep after the seal. `ArmTx` resolves the governing version as the active version with the latest `published_at`.

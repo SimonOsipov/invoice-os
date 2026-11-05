@@ -251,8 +251,9 @@ func seedTenantPlan(ctx context.Context, pool *pgxpool.Pool, tenantID string, p 
 		// One converger per tenant at a time. A boot that probed before a
 		// sibling committed would insert a SECOND policy of the same name --
 		// approval_policies has no unique index on name. Released on
-		// commit or rollback (TestSeed_ConcurrentBootsLeaveOneActiveVersion).
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, tenantID); err != nil {
+		// commit or rollback (TestSeed_ConcurrentBootsLeaveOneActiveVersion). Shared with PublishPolicy,
+		// so a human publish and the seeder's sweep never run together.
+		if err := approval.LockTenantPublishTx(ctx, tx, tenantID); err != nil {
 			res.Note = "tenant lock failed"
 			return err
 		}

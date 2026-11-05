@@ -9,6 +9,12 @@ const ID = 'G-E409H76XYY'
 const entries = () => (w.dataLayer ?? []).map((a) => Array.from(a))
 const names = (n: string) => entries().filter((e) => e[0] === 'event' && e[1] === n)
 
+const FUNNEL = [
+  ['trackEmailVerified', 'email_verified'],
+  ['trackWorkspaceCreated', 'workspace_created'],
+  ['trackClientAdded', 'client_added'],
+] as const
+
 async function load() {
   const analytics = await import('./analytics')
   const actions = await import('./consentActions')
@@ -47,16 +53,35 @@ describe('held events', () => {
     const m = await load()
     m.trackSignUp()
     m.trackInvoiceValidated()
+    m.trackEmailVerified()
+    m.trackWorkspaceCreated()
+    m.trackClientAdded()
     m.applyChoice('accept')
-    expect(entries().map((e) => e[0])).toEqual(['js', 'config', 'event', 'event'])
-    expect(entries().slice(2).map((e) => e[1])).toEqual(['sign_up', 'invoice_validated'])
+    expect(entries().map((e) => e[0])).toEqual(['js', 'config', 'event', 'event', 'event', 'event', 'event'])
+    expect(entries().slice(2).map((e) => e[1])).toEqual([
+      'sign_up',
+      'invoice_validated',
+      'email_verified',
+      'workspace_created',
+      'client_added',
+    ])
     expect(names('sign_up')).toHaveLength(1)
     expect(names('invoice_validated')).toHaveLength(1)
+    for (const [, name] of FUNNEL) {
+      expect(names(name)).toEqual([['event', name, {}]])
+    }
   })
 
   it('hold_beforeAcceptInjectsNothing', async () => {
     const m = await load()
     m.trackSignUp()
+    expect(w.dataLayer).toBeUndefined()
+    expect(document.head.querySelector('script[src*="googletagmanager"]')).toBeNull()
+  })
+
+  it.each(FUNNEL)('hold_beforeAcceptInjectsNothing: %s', async (sender) => {
+    const m = await load()
+    m[sender]()
     expect(w.dataLayer).toBeUndefined()
     expect(document.head.querySelector('script[src*="googletagmanager"]')).toBeNull()
   })
@@ -69,6 +94,14 @@ describe('held events', () => {
     expect(names('sign_up')).toHaveLength(0)
   })
 
+  it.each(FUNNEL)('hold_rejectEmptiesTheQueue: %s', async (sender, name) => {
+    const m = await load()
+    m[sender]()
+    m.applyChoice('reject')
+    m.applyChoice('accept')
+    expect(names(name)).toHaveLength(0)
+  })
+
   it('hold_aStoredRejectDropsTheEvent', async () => {
     const m = await load()
     m.applyChoice('reject')
@@ -78,12 +111,42 @@ describe('held events', () => {
     expect(names('invoice_validated')).toHaveLength(0)
   })
 
+  it.each(FUNNEL)('hold_aStoredRejectDropsTheEvent: %s', async (sender, name) => {
+    const m = await load()
+    m.applyChoice('reject')
+    m.setAnalyticsRevoked(false)
+    m[sender]()
+    m.applyChoice('accept')
+    expect(names(name)).toHaveLength(0)
+  })
+
   it('hold_aLoadedTagSendsAtOnce', async () => {
     const m = await load()
     m.applyChoice('accept')
     m.trackSignUp()
     expect(entries().at(-1)).toEqual(['event', 'sign_up', {}])
     expect(names('sign_up')).toHaveLength(1)
+  })
+
+  it.each(FUNNEL)('hold_aLoadedTagSendsAtOnce: %s', async (sender, name) => {
+    const m = await load()
+    m.applyChoice('accept')
+    m[sender]()
+    expect(entries().at(-1)).toEqual(['event', name, {}])
+    expect(names(name)).toHaveLength(1)
+  })
+
+  it('funnelSenders_withNoBakedIdSendNothingAndThrowNothing', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', '')
+    const m = await load()
+    expect(() => {
+      m.trackEmailVerified()
+      m.trackWorkspaceCreated()
+      m.trackClientAdded()
+      m.applyChoice('accept')
+    }).not.toThrow()
+    expect(document.head.querySelector('script[src*="googletagmanager"]')).toBeNull()
+    for (const [, name] of FUNNEL) expect(names(name)).toHaveLength(0)
   })
 
   it('hold_revokedDropsAndNeverReplays', async () => {
@@ -206,9 +269,13 @@ describe('ensureTag config and app page view', () => {
     const m = await load()
     m.trackSignUp()
     m.applyChoice('accept')
+    m.trackEmailVerified()
+    m.trackWorkspaceCreated()
+    m.trackClientAdded()
     m.trackInvoiceValidated()
     m.trackAppPageView('https://app.ascomply.com/invoices')
     expect(entries().some((e) => e[0] === 'set')).toBe(false)
     expect(JSON.stringify(entries())).not.toContain('user_id')
+    for (const [, name] of FUNNEL) expect(names(name)[0][2]).toEqual({})
   })
 })

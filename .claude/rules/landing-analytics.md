@@ -32,7 +32,7 @@ paths:
 - Send fixed literals as event parameters: `cta_location`, `form_name`, `percent_scrolled`, `feature_id`, `group_id` and, in the app only, `page_location`. Never send form data. `page_location` is the bounded route pattern from `routeName`, never the live URL.
 - Send every event through `send`. It returns early when the tag is not loaded or the visitor has rejected. `ensureTag` pushes the held queue after `config`; `hold_anEventBeforeAcceptIsSentAfterConfig` pins it.
 - Hold an event sent before the first Accept in memory. Send it after `config`, in event order. A Reject empties the queue. A stored Reject or a revoked flag drops the event.
-- Send `sign_up` through `trackSignUp` and `invoice_validated` through `trackInvoiceValidated`. Neither carries a parameter.
+- Send `sign_up` through `trackSignUp`, `invoice_validated` through `trackInvoiceValidated`, `email_verified` through `trackEmailVerified`, `workspace_created` through `trackWorkspaceCreated` and `client_added` through `trackClientAdded`. None carries a parameter.
 - Send `invoice_validated` through `reportValidatedInvoice` from `createInvoice`, `revalidateInvoice` and `supplyInvoiceNumber` only.
 - Send `sign_up` from `RegisterModal` only after `registerAccount` resolves. An invite registration on `InvitePage` sends none.
 - Keep the sender functions for `generate_lead` and `demo_submit_failed` module-private. Wrap only the HubSpot call in `trackedHubSpotSubmit`.

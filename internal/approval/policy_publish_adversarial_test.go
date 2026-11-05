@@ -240,28 +240,26 @@ func TestPublish_SamePolicyConcurrentPublishesSerialise(t *testing.T) {
 // --- the concurrent-publish loser ---------------------------------------------
 
 // TestPublish_LosingTheActiveSlotIsErrConflict drives the 23505 the design promises as a
-// 409. The competitor claims the tenant's one_active slot in an uncommitted transaction,
-// so the publish under test passes its own deactivation (which cannot see an uncommitted
-// row) and then waits on the unique index; committing the competitor turns that wait into
-// the constraint violation.
+// 409. The competitor activates another sealed version of the SAME policy in an uncommitted
+// transaction, so the publish's deactivation cannot see it and waits on the unique index.
+// Committing the competitor turns that wait into the violation.
 //
-// Mapping is by constraint NAME: uniqueViolationOn pointed at any other constraint leaves
-// the whole acceptance-criteria suite green and answers 500 here.
+// Mapping is by constraint NAME: uniqueViolationOn pointed at any other constraint answers 500.
 func TestPublish_LosingTheActiveSlotIsErrConflict(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 	tenantID := policyTenant(t, super, "APPR-05 publish-loses-the-slot")
 	c, _ := activeAdmin(t, super, tenantID)
 
-	competitorPolicy := seedApprovalPolicy(t, super, tenantID, "Competitor")
-	competitorVersion := seedApprovalDraft(t, super, tenantID, competitorPolicy)
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
-	versionID := seedApprovalDraft(t, super, tenantID, policyID)
+	competitorVersion := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	sealApprovalPolicyVersion(t, super, competitorVersion)
+	versionID := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 2)
 
 	blocker, holderPID := blockerTx(t, ctx, app, tenantID)
 	if _, err := blocker.Exec(ctx,
 		`UPDATE approval_policy_versions
-		    SET sealed = true, is_active = true, published_at = now(), published_by = $2
+		    SET is_active = true, published_at = now(), published_by = $2
 		  WHERE id = $1`, competitorVersion, "competing-publisher"); err != nil {
 		t.Fatalf("competitor claims the active slot: %v", err)
 	}

@@ -54,10 +54,8 @@ func versionRow(t *testing.T, super *pgxpool.Pool, versionID string) storedVersi
 	return v
 }
 
-// activeVersionIDs reads the tenant's active version ids. Tenant-scoped, never
-// policy-scoped: approval_policy_versions_one_active is ON (tenant_id), so "exactly one
-// active version" is a property of the TENANT and a per-policy read cannot see a second
-// policy holding the slot.
+// activeVersionIDs reads the tenant's active version ids. Tenant-scoped, so a second policy
+// holding an active version is visible.
 func activeVersionIDs(t *testing.T, super *pgxpool.Pool, tenantID string) []string {
 	t.Helper()
 	rows, err := super.Query(context.Background(),
@@ -430,12 +428,10 @@ func TestPublish_SealAndActivateAreOneStatement(t *testing.T) {
 	tenantID := policyTenant(t, super, "APPR-05 publish-seal-and-activate")
 	c, _ := activeAdmin(t, super, tenantID)
 
-	outgoingPolicy := seedApprovalPolicy(t, super, tenantID, "Outgoing")
-	outgoingVersion := seedApprovalPolicyVersionN(t, super, tenantID, outgoingPolicy, 1)
-	publishApprovalPolicyVersion(t, super, outgoingVersion, "earlier-publisher")
-
 	incomingPolicy := seedApprovalPolicy(t, super, tenantID, "Incoming")
-	incomingVersion := seedApprovalDraft(t, super, tenantID, incomingPolicy)
+	outgoingVersion := seedApprovalPolicyVersionN(t, super, tenantID, incomingPolicy, 1)
+	publishApprovalPolicyVersion(t, super, outgoingVersion, "earlier-publisher")
+	incomingVersion := seedApprovalPolicyVersionN(t, super, tenantID, incomingPolicy, 2)
 
 	// The two controls run in their own transaction, rolled back BEFORE the real publish:
 	// a savepoint rollback releases no row lock, so leaving this tx open would block the
@@ -452,7 +448,7 @@ func TestPublish_SealAndActivateAreOneStatement(t *testing.T) {
 		assertSQLState(t, attemptWithSavepoint(t, ctx, tx,
 			`UPDATE approval_policy_versions SET is_active = true WHERE id = $1`, incomingVersion), "23514")
 
-		// (ii) seal + activate while another version holds the tenant's slot.
+		// (ii) seal + activate while an earlier version of the same policy holds its slot.
 		opErr := attemptWithSavepoint(t, ctx, tx,
 			`UPDATE approval_policy_versions SET sealed = true, is_active = true WHERE id = $1`, incomingVersion)
 		assertSQLState(t, opErr, "23505")

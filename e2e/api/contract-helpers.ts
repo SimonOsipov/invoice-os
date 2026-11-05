@@ -1,5 +1,6 @@
 import { expect } from '@playwright/test'
 import {
+  deleteApprovalPolicy,
   listApprovalPolicies,
   publishApprovalPolicy,
   putApprovalPolicyDraft,
@@ -10,6 +11,7 @@ import {
   type ApprovalStep,
   type ApprovalStepInput,
 } from './client'
+import { PROBE_POLICY_PREFIX } from './fixtures'
 
 // internal/invoice/codes.go's codeSearchLists.
 export const CODE_LISTS = ['states', 'lgas', 'hs-codes', 'services-codes', 'invoice-quantity-codes', 'tax-categories']
@@ -59,6 +61,27 @@ interface ApprovalPolicyTransport {
   list: (token: string) => Promise<ApprovalPoliciesResponse>
   putDraft: (token: string, id: string, body: ApprovalPolicyDraftInput) => Promise<ApprovalPolicy>
   publish: (token: string, id: string) => Promise<ApprovalPolicy>
+  delete: (token: string, id: string) => Promise<ApprovalPolicy>
+}
+
+const defaultTransport: ApprovalPolicyTransport = {
+  list: listApprovalPolicies,
+  putDraft: putApprovalPolicyDraft,
+  publish: publishApprovalPolicy,
+  delete: deleteApprovalPolicy,
+}
+
+// A publish leaves other policies in force, so a crashed run's active probe must be deleted.
+// Delete errors are swallowed; the closing read decides.
+async function deleteActiveProbes(token: string, policies: ApprovalPolicy[], transport: ApprovalPolicyTransport): Promise<void> {
+  for (const p of policies) {
+    if (!p.name.startsWith(PROBE_POLICY_PREFIX) || !p.versions.some((v) => v.is_active)) continue
+    try {
+      await transport.delete(token, p.id)
+    } catch {
+      // the closing read decides
+    }
+  }
 }
 
 // mapApprovalSteps(): a GET response tree can't be PUT back unchanged -- ApprovalStep
@@ -86,8 +109,8 @@ function isGovernedTree(steps: ApprovalStep[]): boolean {
   return steps[0].workflow_role_key === 'fin_mgr' && steps[steps.length - 1].workflow_role_key === 'compliance'
 }
 
-// ensureFirmPolicyActive(): restores the firm tenant's seeded policy to the tenant's one
-// active slot. A bare re-publish 409s -- the seeded version is already sealed -- so this is
+// ensureFirmPolicyActive(): deletes any active probe policy, then restores the firm tenant's
+// seeded policy so it is the only one in force. A bare re-publish 409s -- the seeded version is already sealed -- so this is
 // PUT draft (of the seeded policy's OWN tree, read fresh, never hard-coded) then publish.
 //
 // Convergent and idempotent: safe to call from a crashed-run self-heal. The mutation half
@@ -97,7 +120,7 @@ function isGovernedTree(steps: ApprovalStep[]): boolean {
 // (possibly stale) response.
 export async function ensureFirmPolicyActive(
   token: string,
-  transport: ApprovalPolicyTransport = { list: listApprovalPolicies, putDraft: putApprovalPolicyDraft, publish: publishApprovalPolicy },
+  transport: ApprovalPolicyTransport = defaultTransport,
 ): Promise<ApprovalPolicy> {
   const { approval_policies: before } = await transport.list(token)
   const named = before.filter((p) => p.name === FIRM_POLICY_NAME)
@@ -114,6 +137,7 @@ export async function ensureFirmPolicyActive(
     )
   }
 
+  await deleteActiveProbes(token, before, transport)
   try {
     await transport.putDraft(token, source.id, { steps: mapApprovalSteps(source.steps) })
     await transport.publish(token, source.id)
@@ -143,17 +167,18 @@ export async function ensureFirmPolicyActive(
 const INHOUSE_POLICY_NAME = 'Company approval policy'
 
 // ensureInhousePolicyActive(): the in-house counterpart of ensureFirmPolicyActive, for a
-// shard whose seeded policy is an unpublished draft. Same PUT-then-publish; the verifying
-// read is the oracle.
+// shard whose seeded policy is an unpublished draft. Same probe delete and PUT-then-publish;
+// the verifying read is the oracle.
 export async function ensureInhousePolicyActive(
   token: string,
-  transport: ApprovalPolicyTransport = { list: listApprovalPolicies, putDraft: putApprovalPolicyDraft, publish: publishApprovalPolicy },
+  transport: ApprovalPolicyTransport = defaultTransport,
 ): Promise<ApprovalPolicy> {
   const { approval_policies: before } = await transport.list(token)
   const named = before.filter((p) => p.name === INHOUSE_POLICY_NAME)
   if (named.length !== 1 || named[0].steps.length === 0) {
     throw new Error(`ensureInhousePolicyActive: expected one non-empty live policy named "${INHOUSE_POLICY_NAME}", found ${named.length}`)
   }
+  await deleteActiveProbes(token, before, transport)
   try {
     await transport.putDraft(token, named[0].id, { steps: mapApprovalSteps(named[0].steps) })
     await transport.publish(token, named[0].id)

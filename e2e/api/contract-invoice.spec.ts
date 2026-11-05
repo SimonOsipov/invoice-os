@@ -1415,8 +1415,8 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
   // firm policy (internal/demopolicy, "Standard approval policy": fin_mgr@0, compliance@1
   // for every invoice under the firm's ~193,500 backlog ceiling -- both condition
   // thresholds are above it) rather than publishing their own. Placed ABOVE 'approval
-  // decision': that block's armedInvoice() deactivates the tenant's one active-policy slot
-  // per test, so anything relying on the seeded policy must run before it does.
+  // decision'. That block's probe policies are in force beside the seeded one; the probe
+  // published last governs, and each is deleted after its test.
   //
   // RESOLVED by APPR-14-05: contract-approvals.spec.ts strips the firm tenant's seeded
   // policy in its own tests but restores it in `afterAll`, and this file's own `beforeAll`
@@ -1467,9 +1467,8 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     // ?awaiting_approval=true list filter, and the transitions door that actually enforces
     // it are three copies of one predicate (internal/dashboard/store.go, internal/invoice/
     // store.go, internal/approval/gate.go's TransmitClearTx). This must run ABOVE :1154:
-    // below that boundary armedInvoice()'s own finally deletes the tenant's only active
-    // policy version between tests, so both reporting predicates' EXISTS(is_active) conjunct
-    // would read zero and the agreement would hold vacuously.
+    // below that boundary a probe policy may govern, and the agreement should be read
+    // against the seeded policy alone.
     //
     // Self-seeded, not leaned on the file's leftover backlog (task-575's own notes reject a
     // probe policy: NOT EXISTS(approved run) is satisfied vacuously by an invoice with ZERO
@@ -1587,13 +1586,9 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     })
   })
 
-  // APPR-07-08 (D38): db/seed.dev.sql has NO seeded approval policy (internal/demopolicy
-  // seeds one at invoice-service boot instead), and publishing takes the tenant's SINGLE
-  // active slot tenant-wide, arming every invoice this shared tenant
-  // validates. Every test below creates its own one-step policy and deletes it in a
-  // `finally`, so the tenant returns to zero active versions before the next spec runs.
-  // Boundary: above here the seeded firm policy governs (armed in this file's beforeAll);
-  // below, armedInvoice() owns the active slot per test, unarmed between them. `notes` re-arms the firm policy.
+  // internal/demopolicy seeds the firm policy at invoice-service boot. A publish leaves it in
+  // force, and the policy published last arms (ArmTx), so each test below creates its own
+  // one-step policy and deletes it in a `finally`. `notes` restores the firm policy.
   test.describe('approval decision', () => {
     // armedInvoice(): a fresh one-step policy naming roleKey, published, then a clean
     // invoice validated against it -- ApplyValidation's promotion arms exactly one open
@@ -1612,9 +1607,8 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
 
         return { invoiceId: created.id, policyId: policy.id }
       } catch (e) {
-        // A throw here happens before the caller's own try/finally starts, so it must
-        // free the tenant's single active-policy slot (D38) itself; best-effort so a
-        // delete failure can never mask the real setup error.
+        // A throw here happens before the caller's own try/finally starts, so delete the
+        // probe here; best-effort so a delete failure never masks the setup error.
         await deleteApprovalPolicy(token, policy.id).catch(() => {})
         throw e
       }
@@ -1996,25 +1990,18 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       }
     })
 
-    test('404: a validated invoice with no armed run answers 404, not an empty run', async () => {
-      // Distinct from :1227-1234 (a nonexistent invoice id on POST): this is a real,
-      // validated invoice reaching ErrRunNotFound through a real row lookup on the GET
-      // endpoint -- the contract the SPA's empty state depends on (isNoApprovalRun,
-      // APPR-13-01). Unarmed here not because the tenant lacks a policy (it has a seeded
-      // one, :1104-1109) but because every prior test in this describe deletes its own
-      // probe policy in a `finally` (:1161-1162) first. No policy of its own is created,
-      // so no finally is needed here.
+    test('404: an invoice with no armed run answers 404, not an empty run', async () => {
+      // The seeded policy stays in force, so a validated invoice is always armed; the validated case is
+      // TestRunHandler_ValidatedInvoiceWithNoRunOverRealHTTPLeaksNoExistence.
       const created = await createInvoice(token, {
         entity_id: entity.id,
         ...cleanInvoiceFields(`INV-APPR-NORUN-${freshTin()}`),
       })
-      const validated = await validateInvoice(token, created.id)
-      expect(validated.status, 'setup: with no active policy, validate does not arm a run').toBe('validated')
 
       const res = await rawFetch(`/api/invoice/v1/invoices/${created.id}/approval`, {
         headers: { Authorization: `Bearer ${token}` },
       })
-      assertErrorEnvelope(res, 404, 'validated invoice with no armed run')
+      assertErrorEnvelope(res, 404, 'invoice with no armed run')
     })
 
     // --- APPR-08-10: the always-visible surface ------------------------------
@@ -2119,10 +2106,8 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     test('contract: awaiting_approval filter answers 200 and finds the armed invoice', async () => {
       const { invoiceId, policyId } = await armedInvoice('cfo')
       try {
-        // INSIDE the try, deliberately: deleteApprovalPolicy in the finally deactivates
-        // the version, and the filter's own EXISTS(is_active) conjunct then matches ZERO
-        // rows for the whole tenant -- the same assertion after the finally is a
-        // guaranteed false.
+        // INSIDE the try, deliberately: the probe governs only while it is in force; the
+        // finally deletes it.
         const res = await listInvoices(token, { awaiting_approval: true, limit: 50 })
         expect(
           res.invoices.some((i) => i.id === invoiceId),
@@ -2418,7 +2403,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
 
   test.describe('notes', () => {
     test.describe.configure({ timeout: 240_000 })
-    // `approval decision` leaves no active policy; notes need one to arm a run.
+    // Restore the seeded firm policy, which notes need to arm a run.
     test.beforeAll(async () => {
       await ensureFirmPolicyActive(token)
     })

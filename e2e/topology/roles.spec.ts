@@ -842,8 +842,8 @@ const UNSAVED_POLICY_NAME = 'Untitled policy'
 // (lib/policies.ts).
 //
 // [topology-never-publishes] holds here as it does in workflows.spec.ts — create, save,
-// delete; NEVER publish. A publish seals a version permanently and takes the tenant's ONE
-// active slot on a deployment three suites share.
+// delete; NEVER publish. A publish seals a version permanently and puts the policy in force
+// on a deployment three suites share.
 test('in-house: a created role survives a reload, is selectable on a step this test builds, and blocks it once deleted', async ({
   page,
 }) => {
@@ -1082,7 +1082,7 @@ test('in-house: a created role survives a reload, is selectable on a step this t
 // its `APPR09 <stamp>`, and both run as tenant A.
 //
 // If even this sweep dies, the stray is a policy that was never published — Test 3 does not
-// publish at all — so it can never hold the tenant's one active slot, and Test 1/2's usage
+// publish at all — so it is never in force, and Test 1/2's usage
 // assertions are shape-matched (USAGE_SHAPE) precisely so a stray cannot turn them red.
 test.afterAll(async () => {
   const token = await login(PERSONAS.B)

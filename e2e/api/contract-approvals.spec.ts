@@ -297,10 +297,9 @@ test.describe('workflow-role contract (API E2E, over the deployed gateway)', () 
 // (approval_policies is excluded from db.Reset too, so nothing here may depend on a list
 // LENGTH or on a predicted id), plus four rules of its own:
 //
-//   - approval_policy_versions_one_active is ON (tenant_id), so EVERY publish in this file
-//     deactivates whatever the previous test published. No test may assert that a policy
-//     published by an EARLIER test is still active — only its own, off its own response
-//     body, never a follow-up GET.
+//   - a publish leaves the other policies in force (approval_policy_versions_one_active is
+//     ON (tenant_id, policy_id)). Probes published by earlier tests stay active until the
+//     afterAll sweep, so no test may assert a count of active policies.
 //   - `steps` is the policy's HIGHEST version's tree, which is not necessarily the sealed
 //     one: the moment a draft is opened it is an unpublished proposal, and there is no
 //     endpoint for the in-force tree at all (.claude/rules/approvals.md). Never described here
@@ -308,8 +307,8 @@ test.describe('workflow-role contract (API E2E, over the deployed gateway)', () 
 //   - every test mints its own policy inline, because a CI retry replays the whole test:
 //     a shared published policy would answer 409 the second time round.
 //   - the firm tenant carries a SEEDED active policy ("Standard approval policy",
-//     internal/demopolicy's firmPlan) at boot, which the four publishes above take turns
-//     deactivating. afterAll ends the file by restoring it through
+//     internal/demopolicy's firmPlan) at boot, which stays in force beside the probes.
+//     afterAll ends the file by restoring it through
 //     contract-helpers.ensureFirmPolicyActive — every LATER api spec file depends on the
 //     firm tenant reading governed, not on this file's own tests (D38).
 //
@@ -422,7 +421,7 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
   // purpose — hooks replay on retry (retries: 1 in CI), the dangling-role test already
   // deleted its own role, and a second policy delete is 404 (deleted_at IS NULL is the
   // existence predicate), so a throw here is expected and must never mask a real assertion
-  // failure. Deleting a policy also releases the tenant's active slot; the restore below is
+  // failure. Deleting a policy takes its active version out of force; the restore below is
   // what returns the firm tenant to governed before this file exits.
   test.afterAll(async () => {
     for (const id of createdPolicyIds) {
@@ -544,7 +543,7 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
     expect(versions.length, 'exactly the one version create minted').toBe(1)
     expect(versions[0].version, 'create mints version one').toBe(1)
     expect(versions[0].sealed, 'the minted version is open').toBe(false)
-    expect(versions[0].is_active, 'creating does not take the tenant active slot').toBe(false)
+    expect(versions[0].is_active, 'creating does not put the version in force').toBe(false)
     expect(versions[0].published_at, 'published_at is an explicit null before publish').toBeNull()
     expect(versions[0].published_by, 'published_by is an explicit null before publish').toBeNull()
   })
@@ -599,9 +598,14 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
       steps: [{ kind: 'approval', workflow_role_key: liveRoleKey, sla_hours: 48 }],
     })
 
-    // The window is taken around the call and read off THIS response. Never off a later
-    // GET: one_active is tenant-wide, so a subsequent publish anywhere in the tenant would
-    // have cleared is_active by then.
+    const listed = await listApprovalPolicies(token)
+    const seeded = listed.approval_policies.find((p) => p.name === 'Standard approval policy')
+    const seededActive = seeded?.versions.find((v) => v.is_active)
+    if (!seeded || !seededActive) {
+      throw new Error('precondition: the seeded "Standard approval policy" has no active version')
+    }
+
+    // The window is taken around the call and read off THIS response.
     const before = Date.now()
     const res = await publishRaw(probe.id)
     const after = Date.now()
@@ -614,7 +618,7 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
     const top = (policy.versions as Array<Record<string, unknown>>)[0]
     expect(top.version, 'versions come back newest first').toBe(policy.version)
     expect(top.sealed, 'publishing seals the version').toBe(true)
-    expect(top.is_active, 'publishing takes the tenant active slot').toBe(true)
+    expect(top.is_active, 'publishing puts the top version in force').toBe(true)
     expect(typeof top.published_at, 'published_at is a string once published').toBe('string')
     // Shape only — see this block's header: a UTC-TZ deployment cannot distinguish the
     // store's .UTC() from a plain marshal, so the Z suffix is the whole claim.
@@ -625,6 +629,16 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
     expect(stampedAt, 'published_at is not stamped before the call').toBeGreaterThanOrEqual(before - 60_000)
     expect(stampedAt, 'published_at is not stamped after the call').toBeLessThanOrEqual(after + 60_000)
     expect(top.published_by, 'published_by is the calling admin, taken server-side').toBe(PERSONAS.A.subject)
+
+    // The seeded policy stays in force across the publish (api/contract-approvals deployed publish rule).
+    const afterList = await listApprovalPolicies(token)
+    const seededAfter = afterList.approval_policies.find((p) => p.id === seeded.id)
+    expect(
+      seededAfter?.versions.find((v) => v.version === seededActive.version)?.is_active,
+      'the seeded policy stays in force across the probe publish',
+    ).toBe(true)
+    const probeAfter = afterList.approval_policies.find((p) => p.id === probe.id)
+    expect(probeAfter?.versions[0].is_active, "the probe's top version is in force").toBe(true)
   })
 
   test('409: re-publishing an already-sealed version', async () => {
@@ -661,9 +675,7 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
     expect(fetched.sealed).toBe(false)
     expect(fetched.versions[0].version, 'versions come back newest first').toBe(sealedVersion + 1)
     expect(fetched.versions[0].published_at, 'an open version carries no publish stamp').toBeNull()
-    // Both versions survive the fork. Deliberately no is_active claim on the sealed one:
-    // the active slot is tenant-wide, so any later publish — here or in a test inserted
-    // between these two calls — clears it.
+    // Both versions survive the fork. No is_active claim on the sealed one.
     const previous = fetched.versions.find((v) => v.version === sealedVersion)
     expect(previous, 'the sealed version survives the fork').toBeDefined()
     expect(previous?.sealed, 'sealing is permanent').toBe(true)
@@ -707,7 +719,7 @@ test.describe('approval-policy contract (API E2E, over the deployed gateway)', (
     expect(policy.steps, 'an empty tree stays []').toEqual([])
     const top = (policy.versions as Array<Record<string, unknown>>)[0]
     expect(top.sealed, 'the empty version is sealed').toBe(true)
-    expect(top.is_active, 'and takes the tenant active slot').toBe(true)
+    expect(top.is_active, 'and is put in force').toBe(true)
   })
 
   test('400: a foreign scope on PUT draft', async () => {

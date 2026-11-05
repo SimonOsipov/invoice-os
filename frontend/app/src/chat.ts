@@ -44,8 +44,8 @@ function loadAppTag(record: ConsentRecord | null): boolean {
 
 export function bootAppAnalytics(): boolean {
   const record = readConsent()
-  // A workspace that mounts again lifts endAppChat's stop; a Reject stays revoked.
-  if (record) setAnalyticsRevoked(!record.analytics)
+  // A remount lifts endAppChat's stop; no record holds events, a Reject stays revoked.
+  setAnalyticsRevoked(record ? !record.analytics : false)
   return loadAppTag(record)
 }
 

@@ -323,8 +323,7 @@ func (s *Store) CreatePolicy(ctx context.Context, name, scope string) (Policy, e
 		}
 
 		// sealed and is_active take their false DEFAULTs. Never set is_active here:
-		// approval_policy_versions_one_active spans the whole tenant, and publishing is
-		// its own seam.
+		// publishing is its own seam.
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO approval_policy_versions (tenant_id, policy_id, version)
 			 VALUES ($1, $2, 1)`,
@@ -351,8 +350,7 @@ func (s *Store) CreatePolicy(ctx context.Context, name, scope string) (Policy, e
 // numbered max+1 carrying only what was sent — a fork copies no steps.
 //
 // A sealed version is never reached: the resolution predicate is NOT sealed, never "the
-// active version", because approval_policy_versions_one_active spans the tenant and a
-// policy can hold sealed versions with no active one. approval_policy_steps_content_lock
+// active version", because a policy can hold sealed versions with no active one. approval_policy_steps_content_lock
 // would raise 23001 if the predicate ever broke, and that stays an honest 500 — it is a
 // plpgsql RAISE carrying no constraint name, so no mapper can catch it by accident.
 //
@@ -516,7 +514,7 @@ func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, st
 	return p, nil
 }
 
-// PublishPolicy seals a policy's open draft and makes it the tenant's active version.
+// PublishPolicy seals a policy's open draft and makes it the policy's active version.
 //
 // Publishing a NEW version that names a dead role is refused at the door; a role deleted
 // AFTER publish leaves the sealed version active and its step blocking.
@@ -561,8 +559,8 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 			return err
 		}
 
-		// NOT sealed, never "the active version": one_active spans the tenant, so a policy
-		// can hold sealed versions with no active one. one_draft caps this at one row.
+		// NOT sealed, never "the active version": a policy can hold sealed versions with
+		// no active one. one_draft caps this at one row.
 		var versionID string
 		var version int
 		if err := tx.QueryRow(ctx,
@@ -610,13 +608,11 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 			return err
 		}
 
-		// Its own statement, and TENANT-wide: one_active is ON (tenant_id) WHERE is_active,
-		// so publishing this policy deactivates whichever policy held the slot. No policy
-		// predicate — RLS is the tenant scope. Deactivation is not un-publishing; sealed,
-		// published_at and published_by are untouched
-		// (TestPublish_DeactivatesTheTenantsOtherPolicy).
+		// Only this policy's previous version leaves; other policies stay active
+		// (TestPublish_LeavesTheTenantsOtherPolicyActive).
 		if _, err := tx.Exec(ctx,
-			`UPDATE approval_policy_versions SET is_active = false WHERE is_active`); err != nil {
+			`UPDATE approval_policy_versions SET is_active = false WHERE policy_id = $1 AND is_active`,
+			p.ID); err != nil {
 			return err
 		}
 
@@ -631,7 +627,7 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 			`UPDATE approval_policy_versions
 			    SET sealed = true, is_active = true, published_at = now(), published_by = $2
 			  WHERE id = $1`, versionID, caller.Subject); err != nil {
-			// A concurrent publish won the tenant's slot. By constraint name, so a 23505 on
+			// A concurrent publish of this policy won the slot. By constraint name, so a 23505 on
 			// any other unique stays a 500, and never retried: a retry would publish a tree
 			// this caller did not re-validate.
 			if uniqueViolationOn(err, "approval_policy_versions_one_active") {
@@ -815,8 +811,7 @@ func (s *Store) DeletePolicy(ctx context.Context, id string) (Policy, error) {
 			return err
 		}
 
-		// Policy-scoped, unlike publish's tenant-wide deactivation: this policy is the one
-		// leaving. No RowsAffected guard — 0 rows is the never-published case
+		// Same policy scope as publish: this policy is the one leaving. No RowsAffected guard — 0 rows is the never-published case
 		// (TestDeletePolicy_UnpublishedPolicyKeepsItsDraft).
 		if _, err := tx.Exec(ctx,
 			`UPDATE approval_policy_versions

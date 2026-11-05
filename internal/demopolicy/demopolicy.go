@@ -248,10 +248,9 @@ type activeVersion struct {
 func seedTenantPlan(ctx context.Context, pool *pgxpool.Pool, tenantID string, p *plan) (Result, error) {
 	var res Result
 	err := db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
-		// One converger per tenant at a time. clearActive would otherwise let a
-		// boot that probed before a sibling committed deactivate that sibling and
-		// insert a SECOND policy of the same name -- approval_policies has no
-		// unique index on name, and one_active no longer refuses it. Released on
+		// One converger per tenant at a time. A boot that probed before a
+		// sibling committed would insert a SECOND policy of the same name --
+		// approval_policies has no unique index on name. Released on
 		// commit or rollback (TestSeed_ConcurrentBootsLeaveOneActiveVersion).
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, tenantID); err != nil {
 			res.Note = "tenant lock failed"
@@ -409,13 +408,13 @@ func seatProblem(ctx context.Context, tx pgx.Tx, keys []string) (string, error) 
 	return "", nil
 }
 
-// clearActive frees the tenant's one active slot, mirroring PublishPolicy's own
-// deactivation (policy_store.go:617-620). Issued immediately before EVERY
-// activation: one_active is a partial UNIQUE index, so activating over a held
-// slot raises 23505 and rolls the tenant back. No policy predicate -- RLS is the
-// tenant scope, and deactivation is not un-publishing.
-func clearActive(ctx context.Context, tx pgx.Tx) error {
-	_, err := tx.Exec(ctx, `UPDATE approval_policy_versions SET is_active = false WHERE is_active`)
+// clearActive deactivates the active version of versionID's policy, before every
+// activation: one_active is per policy, so activating over a held slot raises 23505.
+func clearActive(ctx context.Context, tx pgx.Tx, versionID string) error {
+	_, err := tx.Exec(ctx,
+		`UPDATE approval_policy_versions SET is_active = false
+		  WHERE is_active
+		    AND policy_id = (SELECT policy_id FROM approval_policy_versions WHERE id = $1)`, versionID)
 	return err
 }
 
@@ -438,11 +437,11 @@ func sealedVersionByName(ctx context.Context, tx pgx.Tx, name string) (string, e
 	return versionID, err
 }
 
-// reactivateSealedVersion puts an already-sealed version back in the tenant's
+// reactivateSealedVersion puts an already-sealed version back in its policy's
 // active slot. tenantID is not a predicate -- RLS is -- and is taken for
 // call-site symmetry with the other two activation paths.
 func reactivateSealedVersion(ctx context.Context, tx pgx.Tx, tenantID, versionID string) error {
-	if err := clearActive(ctx, tx); err != nil {
+	if err := clearActive(ctx, tx, versionID); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx,
@@ -479,7 +478,7 @@ func publishSeedPolicy(ctx context.Context, tx pgx.Tx, tenantID string, p *plan)
 		return "", err
 	}
 
-	if err := clearActive(ctx, tx); err != nil {
+	if err := clearActive(ctx, tx, versionID); err != nil {
 		return "", err
 	}
 	// One statement: is_active is never set on a row that is not simultaneously
@@ -533,7 +532,7 @@ func supersedeIfStale(ctx context.Context, tx pgx.Tx, tenantID string, p *plan, 
 	if err := writeLane(ctx, tx, tenantID, versionID, nil, nil, p.steps); err != nil {
 		return "", false, err
 	}
-	if err := clearActive(ctx, tx); err != nil {
+	if err := clearActive(ctx, tx, versionID); err != nil {
 		return "", false, err
 	}
 	if _, err := tx.Exec(ctx,

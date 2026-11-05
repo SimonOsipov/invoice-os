@@ -1,6 +1,6 @@
 // The app's cookie notice and HubSpot chat on the deployed PR app. The PR host is no chat host, so Accept loads no chat.
 import { randomUUID } from 'node:crypto'
-import { test, expect, type Page, type TestInfo } from '@playwright/test'
+import { test, expect, type Page, type Response, type Route, type TestInfo } from '@playwright/test'
 import { createEntity, createInvoice, rawFetch, signInForCode } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { browserToken, collectErrors, DESTINATION_READY, signInAs, storedSession } from '../personaSession'
@@ -129,27 +129,65 @@ test('AC-L the cookie notice overlaps no app control on every screen at 1280 and
 
   const entry = page.viewportSize()
   const measured: unknown[] = []
+  const isEntities = (u: URL) => u.pathname === '/api/portfolio/v1/entities'
+  const isTenantList = (r: Response) => {
+    const u = new URL(r.url())
+    return r.request().method() === 'GET' && u.pathname === '/api/invoice/v1/invoices' && !u.searchParams.has('entity_id')
+  }
+  const framesPaint = (): Promise<void> => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))))
+  const scrollAndMeasure = async (at: string, width: number): Promise<void> => {
+    await settleAnimations(notice(page))
+    await page.evaluate((wide) => {
+      if (wide) document.querySelector('main.pf-main .pf-scroll')?.scrollTo(0, 1e9)
+      else window.scrollTo(0, 1e9)
+    }, width > 860)
+    await settleAnimations(notice(page))
+    const read = await controlRects(page)
+    expect(read.notice, `${at}: the notice has no box`).not.toBeNull()
+    expect(read.controls.length, `${at}: no control was measured`).toBeGreaterThan(0)
+    const hit = read.controls.filter((c) => rectsOverlap(c.rect, read.notice!)).map((c) => c.label)
+    expect(hit, `${at}: controls under the notice`).toEqual([])
+    measured.push({ at, notice: read.notice, controls: read.controls.length })
+  }
   try {
     for (const { route, width, height } of cases) {
       const at = `${route} at ${width}x${height}`
-      await page.setViewportSize({ width, height })
-      await page.goto(`${APP_URL}${route}`)
-      await expect(notice(page), `${at}: no notice`).toBeVisible({ timeout: 30_000 })
-      // CreateFlow draws no h1; its step label is the landmark.
-      const ready = route === '/create' ? page.getByText('New invoice ·').first() : page.locator('main.pf-main .pf-scroll h1:visible').first()
-      await expect(ready, `${at}: the screen drew no landmark`).toBeVisible({ timeout: 30_000 })
-      await settleAnimations(notice(page))
-      await page.evaluate((wide) => {
-        if (wide) document.querySelector('main.pf-main .pf-scroll')?.scrollTo(0, 1e9)
-        else window.scrollTo(0, 1e9)
-      }, width > 860)
-      await settleAnimations(notice(page))
-      const read = await controlRects(page)
-      expect(read.notice, `${at}: the notice has no box`).not.toBeNull()
-      expect(read.controls.length, `${at}: no control was measured`).toBeGreaterThan(0)
-      const hit = read.controls.filter((c) => rectsOverlap(c.rect, read.notice!)).map((c) => c.label)
-      expect(hit, `${at}: controls under the notice`).toEqual([])
-      measured.push({ at, notice: read.notice, controls: read.controls.length })
+      // On /invoices the entities response is held until the tenant-wide list has arrived (BUG-82).
+      const list = route === '/invoices'
+      let release = (): void => {}
+      const gate = new Promise<void>((done) => { release = done })
+      const hold = async (r: Route): Promise<void> => {
+        if (r.request().method() !== 'GET') return r.fallback()
+        const res = await r.fetch()
+        await gate
+        await r.fulfill({ response: res }).catch(() => undefined)
+      }
+      const listed = list ? page.waitForResponse(isTenantList, { timeout: 30_000 }) : undefined
+      listed?.catch(() => undefined)
+      if (list) await page.route(isEntities, hold)
+      try {
+        await page.setViewportSize({ width, height })
+        await page.goto(`${APP_URL}${route}`)
+        await expect(notice(page), `${at}: no notice`).toBeVisible({ timeout: 30_000 })
+        // CreateFlow draws no h1; its step label is the landmark.
+        const ready = route === '/create' ? page.getByText('New invoice ·').first() : page.locator('main.pf-main .pf-scroll h1:visible').first()
+        await expect(ready, `${at}: the screen drew no landmark`).toBeVisible({ timeout: 30_000 })
+        if (listed) {
+          await listed.catch((e: Error) => { throw new Error(`${at}: the tenant-wide GET /api/invoice/v1/invoices never arrived: ${e.message}`) })
+          await framesPaint()
+          await scrollAndMeasure(`${at} entities held`, width)
+          release()
+          const settled = page.getByTestId('invoices-list').or(page.getByTestId('invoices-empty')).or(page.getByTestId('invoices-empty-page')).first()
+          await expect(settled, `${at}: the list never settled after the entities response`).toBeVisible({ timeout: 30_000 })
+          await framesPaint()
+          await scrollAndMeasure(`${at} settled`, width)
+        } else {
+          await scrollAndMeasure(at, width)
+        }
+      } finally {
+        release()
+        if (list) await page.unroute(isEntities, hold)
+      }
     }
   } finally {
     if (entry) await page.setViewportSize(entry)

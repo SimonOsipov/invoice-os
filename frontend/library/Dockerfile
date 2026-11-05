@@ -44,7 +44,7 @@ RUN pnpm --filter @invoice-os/library build
 RUN pnpm --filter @invoice-os/landing exec vite build --base=/library/_landing/ --outDir=dist/library-404
 
 # ---- Serve: Caddy static server + /health ----
-FROM caddy:2-alpine AS serve
+FROM caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5 AS serve
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /repo/frontend/library/dist /srv/library
 # Serves / on the library host; any other missing path gets /srv/404.html.

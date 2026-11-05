@@ -1,0 +1,140 @@
+{
+  "code": 200,
+  "data": [
+    {
+      "code": "STANDARD_GST",
+      "value": "Standard Goods and Services Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "REDUCED_GST",
+      "value": "Reduced Goods and Services Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "ZERO_GST",
+      "value": "Zero Goods and Services Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "STANDARD_VAT",
+      "value": "Standard Value-Added Tax",
+      "percent": "7.5"
+    },
+    {
+      "code": "REDUCED_VAT",
+      "value": "Reduced Value-Added Tax",
+      "percent": "7.5"
+    },
+    {
+      "code": "ZERO_VAT",
+      "value": "Zero Value-Added Tax",
+      "percent": "0.0"
+    },
+    {
+      "code": "STATE_SALES_TAX",
+      "value": "State Sales Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "LOCAL_SALES_TAX",
+      "value": "Local Sales Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "ALCOHOL_EXCISE_TAX",
+      "value": "Alcohol Excise Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "TOBACCO_EXCISE_TAX",
+      "value": "Tobacco Excise Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "FUEL_EXCISE_TAX",
+      "value": "Fuel Excise Tax",
+      "percent": ""
+    },
+    {
+      "code": "CORPORATE_INCOME_TAX",
+      "value": "Corporate Income Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "PERSONAL_INCOME_TAX",
+      "value": "Personal Income Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "SOCIAL_SECURITY_TAX",
+      "value": "Social Security Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "MEDICARE_TAX",
+      "value": "Medicare Tax",
+      "percent": ""
+    },
+    {
+      "code": "REAL_ESTATE_TAX",
+      "value": "Real Estate Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "PERSONAL_PROPERTY_TAX",
+      "value": "Personal Property Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "CARBON_TAX",
+      "value": "Carbon Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "PLASTIC_TAX",
+      "value": "Plastic Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "IMPORT_DUTY",
+      "value": "Import Duty",
+      "percent": "Not Available"
+    },
+    {
+      "code": "EXPORT_DUTY",
+      "value": "Export Duty",
+      "percent": "Not Available"
+    },
+    {
+      "code": "LUXURY_TAX",
+      "value": "Luxury Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "SERVICE_TAX",
+      "value": "Service Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "TOURISM_TAX",
+      "value": "Tourism Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "WITHHOLDING_TAX",
+      "value": "Withholding Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "STAMP_DUTY",
+      "value": "Stamp Duty",
+      "percent": "1.0"
+    },
+    {
+      "code": "EXEMPTED",
+      "value": "Tax Exemption",
+      "percent": "0.0"
+    }
+  ]
+}

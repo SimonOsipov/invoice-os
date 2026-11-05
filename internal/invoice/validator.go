@@ -22,8 +22,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -223,18 +225,27 @@ func (v *Validator) ValidateCustom(ctx context.Context, items []ValidateItem, se
 		return ValidateResult{}, fmt.Errorf("%w: marshal batch request: %v", ErrUpstream, err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, v.baseURL+"/v1/validate/batch", bytes.NewReader(body))
-	if err != nil {
-		return ValidateResult{}, fmt.Errorf("%w: build batch request: %v", ErrUpstream, err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(headerS2SToken, v.s2sToken)
+	// One retry: a reused keep-alive connection can be reset by 04 before the
+	// request lands. Not on a done ctx or a timeout (a retry would double the wait).
+	var resp *http.Response
+	for attempt := 1; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, v.baseURL+"/v1/validate/batch", bytes.NewReader(body))
+		if err != nil {
+			return ValidateResult{}, fmt.Errorf("%w: build batch request: %v", ErrUpstream, err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(headerS2SToken, v.s2sToken)
 
-	resp, err := v.hc.Do(req)
-	if err != nil {
-		// Transport: connection refused, closed connection, timeout, context
-		// cancellation. Never a verdict on the invoices. [AC#3]
-		return ValidateResult{}, fmt.Errorf("%w: post batch validate: %v", ErrUpstream, err)
+		resp, err = v.hc.Do(req)
+		if err == nil {
+			break
+		}
+		var ne net.Error
+		if attempt >= 2 || ctx.Err() != nil || (errors.As(err, &ne) && ne.Timeout()) {
+			// Transport: connection refused, closed connection, timeout, context
+			// cancellation. Never a verdict on the invoices. [AC#3]
+			return ValidateResult{}, fmt.Errorf("%w: post batch validate: %v", ErrUpstream, err)
+		}
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, resp.Body)

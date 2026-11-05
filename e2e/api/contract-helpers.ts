@@ -11,7 +11,7 @@ import {
   type ApprovalStep,
   type ApprovalStepInput,
 } from './client'
-import { PROBE_POLICY_PREFIX } from './fixtures'
+import { isE2ePolicyName } from './fixtures'
 
 // internal/invoice/codes.go's codeSearchLists.
 export const CODE_LISTS = ['states', 'lgas', 'hs-codes', 'services-codes', 'invoice-quantity-codes', 'tax-categories']
@@ -71,11 +71,11 @@ const defaultTransport: ApprovalPolicyTransport = {
   delete: deleteApprovalPolicy,
 }
 
-// A publish leaves other policies in force, so a crashed run's active probe must be deleted.
+// A publish leaves other policies in force, so a crashed run's active e2e-named policy must be deleted.
 // Delete errors are swallowed; the closing read decides.
-async function deleteActiveProbes(token: string, policies: ApprovalPolicy[], transport: ApprovalPolicyTransport): Promise<void> {
+async function deleteActiveStrays(token: string, policies: ApprovalPolicy[], transport: ApprovalPolicyTransport): Promise<void> {
   for (const p of policies) {
-    if (!p.name.startsWith(PROBE_POLICY_PREFIX) || !p.versions.some((v) => v.is_active)) continue
+    if (!isE2ePolicyName(p.name) || !p.versions.some((v) => v.is_active)) continue
     try {
       await transport.delete(token, p.id)
     } catch {
@@ -109,7 +109,7 @@ function isGovernedTree(steps: ApprovalStep[]): boolean {
   return steps[0].workflow_role_key === 'fin_mgr' && steps[steps.length - 1].workflow_role_key === 'compliance'
 }
 
-// ensureFirmPolicyActive(): deletes any active probe policy, then restores the firm tenant's
+// ensureFirmPolicyActive(): deletes any active e2e-named policy, then restores the firm tenant's
 // seeded policy so it is the only one in force. A bare re-publish 409s -- the seeded version is already sealed -- so this is
 // PUT draft (of the seeded policy's OWN tree, read fresh, never hard-coded) then publish.
 //
@@ -137,7 +137,7 @@ export async function ensureFirmPolicyActive(
     )
   }
 
-  await deleteActiveProbes(token, before, transport)
+  await deleteActiveStrays(token, before, transport)
   try {
     await transport.putDraft(token, source.id, { steps: mapApprovalSteps(source.steps) })
     await transport.publish(token, source.id)
@@ -178,7 +178,7 @@ export async function ensureInhousePolicyActive(
   if (named.length !== 1 || named[0].steps.length === 0) {
     throw new Error(`ensureInhousePolicyActive: expected one non-empty live policy named "${INHOUSE_POLICY_NAME}", found ${named.length}`)
   }
-  await deleteActiveProbes(token, before, transport)
+  await deleteActiveStrays(token, before, transport)
   try {
     await transport.putDraft(token, named[0].id, { steps: mapApprovalSteps(named[0].steps) })
     await transport.publish(token, named[0].id)

@@ -282,6 +282,55 @@ describe('ensureFirmPolicyActive', () => {
     expect(err.message).toContain('Capex policy')
   })
 
+  it('converges over an active workflows.spec stray (APPR09 <n>)', async () => {
+    const source = policy({ id: SEEDED_ID, name: POLICY_NAME, version: 1, steps: GOOD_TREE, versions: [version(1, false)] })
+    const stray = policy({ id: 'pol-appr09', name: 'APPR09 1730000000000', version: 1, steps: [], versions: [version(1, true)] })
+    const restored = policy({ id: SEEDED_ID, name: POLICY_NAME, version: 2, steps: GOOD_TREE, versions: [version(2, true)] })
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({ approval_policies: [stray, source] } satisfies ApprovalPoliciesResponse)
+      .mockResolvedValueOnce({ approval_policies: [restored] } satisfies ApprovalPoliciesResponse)
+    const del = vi.fn().mockResolvedValue(stray)
+
+    const result = await ensureFirmPolicyActive('tok', {
+      list,
+      putDraft: vi.fn().mockResolvedValue(source),
+      publish: vi.fn().mockResolvedValue(restored),
+      delete: del,
+    })
+
+    expect(result.id).toBe(SEEDED_ID)
+    expect(del).toHaveBeenCalledWith('tok', 'pol-appr09')
+  })
+
+  it.each(['Untitled policy', 'E2E policy 42'])('deletes an active %s stray', async (name) => {
+    const source = policy({ id: SEEDED_ID, name: POLICY_NAME, version: 2, steps: GOOD_TREE, versions: [version(2, true)] })
+    const stray = policy({ id: 'pol-s', name, version: 1, steps: [], versions: [version(1, true)] })
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({ approval_policies: [stray, source] } satisfies ApprovalPoliciesResponse)
+      .mockResolvedValueOnce({ approval_policies: [source] } satisfies ApprovalPoliciesResponse)
+    const del = vi.fn().mockResolvedValue(stray)
+
+    await ensureFirmPolicyActive('tok', { list, putDraft: vi.fn().mockResolvedValue(source), publish: vi.fn().mockResolvedValue(source), delete: del })
+
+    expect(del).toHaveBeenCalledWith('tok', 'pol-s')
+  })
+
+  it('does not delete an active name no e2e spec owns, even one that contains an owned name', async () => {
+    const source = policy({ id: SEEDED_ID, name: POLICY_NAME, version: 2, steps: GOOD_TREE, versions: [version(2, true)] })
+    const foreign = policy({ id: 'pol-f', name: 'My APPR09 123', version: 1, steps: [], versions: [version(1, true)] })
+    const list = vi.fn().mockResolvedValue({ approval_policies: [foreign, source] } satisfies ApprovalPoliciesResponse)
+    const del = vi.fn()
+
+    const err = await captureRejection(
+      ensureFirmPolicyActive('tok', { list, putDraft: vi.fn().mockResolvedValue(source), publish: vi.fn().mockResolvedValue(source), delete: del }),
+    )
+
+    expect(del).not.toHaveBeenCalled()
+    expect(err.message).toContain('My APPR09 123')
+  })
+
   it('a failed probe delete still converges', async () => {
     const source = policy({ id: SEEDED_ID, name: POLICY_NAME, version: 1, steps: GOOD_TREE, versions: [version(1, false)] })
     const probe = policy({ id: 'pol-p', name: 'Probe Policy 1-3', version: 1, steps: [], versions: [version(1, true)] })

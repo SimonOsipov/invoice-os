@@ -79,8 +79,14 @@ export function freshRoleTitle(): string {
   return `Probe Role ${tinRunSeed}-${tinCounter}`
 }
 
-// Every e2e-created policy name starts with this; the restore helpers delete active ones.
 export const PROBE_POLICY_PREFIX = 'Probe Policy '
+
+// Every policy name an e2e spec creates (api probes, workflows.spec, roles.spec, and the
+// UI's pre-rename name). The restore helpers delete an ACTIVE policy with one of these names.
+const E2E_POLICY_NAMES = [/^Probe Policy /, /^APPR09 \d+$/, /^E2E policy \d+$/, /^Untitled policy$/]
+export function isE2ePolicyName(name: string): boolean {
+  return E2E_POLICY_NAMES.some((re) => re.test(name))
+}
 
 // freshPolicyName(): a per-run-unique approval-policy name, on the same seed + counter as
 // freshRoleTitle above. Like a role title and unlike a TIN, a colliding name cannot fail

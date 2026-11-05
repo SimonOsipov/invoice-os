@@ -665,3 +665,31 @@ func TestPolicyWrites_TakeTheTenantLockAfterTheAdminCheck(t *testing.T) {
 		})
 	}
 }
+
+// Another tenant's scoped policy pins nothing here: the guards read through RLS.
+func TestCatchAll_AnotherTenantsScopedPolicyPinsNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantA := policyTenant(t, super, "APSC-02-03 guard-tenant-a")
+	tenantB := policyTenant(t, super, "APSC-02-03 guard-tenant-b")
+	c, _ := activeAdmin(t, super, tenantA)
+	seedPolicyShape(t, super, tenantB, "B scoped", true, true)
+	if scoped, found := lastInForceIsScoped(t, super, tenantB); !found || !scoped {
+		t.Fatalf("fixture: tenant B's last in force scoped = %v, found = %v, want scoped", scoped, found)
+	}
+	store := NewStore(app, stubFingerprinter, nil)
+	u, _ := seedPolicyShape(t, super, tenantA, "A upper", false, true)
+	last, _ := seedPolicyShape(t, super, tenantA, "A last", false, true)
+
+	if _, err := store.ReorderPolicies(c, []string{last, u}); err != nil {
+		t.Errorf("reorder in A with B scoped: err = %v, want success (check 3 reads A only)", err)
+	}
+	if _, err := store.DeletePolicy(c, last); err != nil {
+		t.Errorf("delete in A with B scoped: err = %v, want success", err)
+	}
+	if _, err := store.DeletePolicy(c, u); err != nil {
+		t.Errorf("delete of A's only policy with B scoped: err = %v, want success", err)
+	}
+	if _, err := store.CreatePolicy(c, "A scoped first", creditNoteScope()); !errors.Is(err, ErrPolicyCatchAll) {
+		t.Errorf("scoped create in an empty A: err = %v, want ErrPolicyCatchAll (B's policies are no catch-all of A)", err)
+	}
+}

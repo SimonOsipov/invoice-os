@@ -121,21 +121,21 @@ func TestPolicy_ScopesReadADeletedRolesKey(t *testing.T) {
 	tenantID := policyTenant(t, super, "APSC-02 deleted-role-key")
 	c, _ := activeAdmin(t, super, tenantID)
 
-	// Stored order is b, a ids-wise unrelated to key order: key order must follow storage.
+	// Stored order c, a, b is neither key order nor seeding order: keys must follow storage.
 	rb := seedWorkflowRole(t, super, tenantID, "r-b", "Role B")
 	ra := seedWorkflowRole(t, super, tenantID, "r-a", "Role A")
-	_ = rb
+	rc := seedWorkflowRole(t, super, tenantID, "r-c", "Role C")
 	softDeleteWorkflowRole(t, super, ra)
 
 	policyID := seedApprovalPolicy(t, super, tenantID, "Roles")
 	v := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
-	setVersionScopes(t, super, v, `scope_workflow_role_ids = ARRAY[$2, $3]::uuid[]`, ra, rb)
+	setVersionScopes(t, super, v, `scope_workflow_role_ids = ARRAY[$2, $3, $4]::uuid[]`, rc, ra, rb)
 
 	got, err := NewStore(app, stubFingerprinter, nil).GetPolicy(c, policyID)
 	if err != nil {
 		t.Fatalf("GetPolicy: %v", err)
 	}
-	if want := []string{"r-a", "r-b"}; !reflect.DeepEqual(got.Scopes.WorkflowRoleKeys, want) {
+	if want := []string{"r-c", "r-a", "r-b"}; !reflect.DeepEqual(got.Scopes.WorkflowRoleKeys, want) {
 		t.Errorf("workflow_role_keys = %v, want %v", got.Scopes.WorkflowRoleKeys, want)
 	}
 }
@@ -383,6 +383,39 @@ func TestPutDraft_ForkCopiesThePublishedVersionsScopes(t *testing.T) {
 	}
 	if before.Types == nil || len(before.Types) != 1 || before.Currency == nil || len(before.Entities) != 1 || len(before.RoleIDs) != 1 {
 		t.Fatalf("fixture v1 is not fully scoped: %+v — the copy assertions are vacuous", before)
+	}
+}
+
+// A fork copies the highest version's scopes, not an older sealed version's.
+func TestPutDraft_ForkCopiesTheTopVersionsScopesNotTheOldest(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-02-02 fork-top")
+	c, _ := activeAdmin(t, super, tenantID)
+	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
+	v1 := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	setVersionScopes(t, super, v1, `scope_document_types = '{credit_note}'`)
+	if _, err := super.Exec(context.Background(),
+		`UPDATE approval_policy_versions SET sealed = true, published_at = now(), published_by = 'fixture' WHERE id = $1`, v1); err != nil {
+		t.Fatalf("seal v1: %v", err)
+	}
+	v2 := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 2)
+	setVersionScopes(t, super, v2, `scope_document_types = '{debit_note}'`)
+	activateApprovalPolicyVersion(t, super, v2)
+	seedSealedActiveV1(t, super, tenantID, seedApprovalPolicy(t, super, tenantID, "Catch-all"))
+
+	got, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, nil, nil, approvalStep("engagement-partner"))
+	if err != nil {
+		t.Fatalf("PutDraft: %v", err)
+	}
+	if got.Version != 3 {
+		t.Fatalf("answer version = %d, want a v3 fork", got.Version)
+	}
+	want := []string{"debit_note"}
+	if got.Scopes.DocumentTypes == nil || !reflect.DeepEqual(got.Scopes.DocumentTypes, want) {
+		t.Errorf("fork answer document_types = %v, want v2's %v", got.Scopes.DocumentTypes, want)
+	}
+	if after := versionScopeColumns(t, super, openDraft(t, super, policyID).ID); !reflect.DeepEqual(after.Types, want) {
+		t.Errorf("fork stored document types = %v, want v2's %v", after.Types, want)
 	}
 }
 

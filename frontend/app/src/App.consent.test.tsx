@@ -153,6 +153,8 @@ beforeEach(() => {
   document.head.innerHTML = ''
   document.body.innerHTML = ''
   delete w._hsq
+  delete (window as { dataLayer?: unknown }).dataLayer
+  delete (window as { gtag?: unknown }).gtag
   delete w.HubSpotConversations
   delete w.hsConversationsSettings
   delete w.hsConversationsOnReady
@@ -392,6 +394,45 @@ describe('App cookie notice and chat (CHAT-03-04)', () => {
       expect(hsq().slice(n)).toEqual([['setPath', '/'], ['trackPageView']])
       expect(push).not.toHaveBeenCalled()
       expect(replace).not.toHaveBeenCalled()
+    })
+
+    const layer = () => [...((window as Window & { dataLayer?: IArguments[] }).dataLayer ?? [])].map((a) => [...a] as unknown[])
+    const tags = () => document.querySelectorAll('script[src*="googletagmanager"]')
+    const pageViews = () => layer().filter((e) => e[0] === 'event' && e[1] === 'page_view')
+
+    it('app_bootsTheTagAfterTheMountAlignment', async () => {
+      vi.stubEnv('VITE_GA_MEASUREMENT_ID', 'G-TEST1234')
+      setConsent(true)
+      captureDestination('/audit')
+      await mount(handoffRecord())
+      expect(tags().length).toBe(1)
+      expect(layer().filter((e) => e[0] === 'config')).toEqual([
+        ['config', 'G-TEST1234', { page_location: 'https://app.ascomply.com/audit' }],
+      ])
+    })
+
+    it('app_aSidebarNavigationSendsOnePageView', async () => {
+      vi.stubEnv('VITE_GA_MEASUREMENT_ID', 'G-TEST1234')
+      setConsent(true)
+      await mount(handoffRecord())
+      expect(pageViews().length).toBe(0)
+      await goInvoices()
+      expect(pageViews()).toEqual([['event', 'page_view', { page_location: 'https://app.ascomply.com/invoices' }]])
+    })
+
+    it('app_aMemberSuspendedAfterMountWithAStoredAcceptSendsNoFurtherPageView', async () => {
+      vi.stubEnv('VITE_GA_MEASUREMENT_ID', 'G-TEST1234')
+      setConsent(true)
+      await mount(handoffRecord())
+      expect(tags().length, 'control: the stored Accept loaded the tag at mount').toBe(1)
+      await suspend()
+      expect(screen.getByTestId('suspended-notice')).toBeTruthy()
+      const before = pageViews().length
+      await act(async () => {
+        window.history.pushState({}, '', '/rules')
+        window.dispatchEvent(new PopStateEvent('popstate', { state: null }))
+      })
+      expect(pageViews().length).toBe(before)
     })
 
     it('app_noPageViewWithoutTheChat', async () => {

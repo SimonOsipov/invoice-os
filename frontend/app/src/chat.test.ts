@@ -9,7 +9,12 @@ import { COOKIES, container, installSdk, jarNames, resetJar, seed, w } from '../
 
 type Chat = typeof import('./chat')
 
+type GaWindow = Window & { dataLayer?: IArguments[]; gtag?: unknown }
+
 const EMAIL = 'ada@example.com'
+const UUID = '1b4e28ba-2fa1-11d2-883f-0016d3cca427'
+const UUID2 = '6ba7b810-9dad-11d1-80b4-00c04fd430c8'
+const ORIGIN = 'https://app.ascomply.com'
 const IDENTIFY = ['identify', { email: EMAIL }]
 const LIFT = ['doNotTrack', { track: true }]
 
@@ -34,6 +39,8 @@ beforeEach(() => {
   document.head.innerHTML = ''
   document.body.innerHTML = ''
   delete w._hsq
+  delete (window as GaWindow).dataLayer
+  delete (window as GaWindow).gtag
   delete w.HubSpotConversations
   delete w.hsConversationsSettings
   delete w.hsConversationsOnReady
@@ -149,7 +156,7 @@ describe('chooseAppConsent', () => {
     expect(hsq().slice(n)).toEqual([LIFT, ['setPath', '/'], ['trackPageView']])
   })
 
-  it('the seam loads no Google tag', async () => {
+  it('with no baked id the seam loads no Google tag', async () => {
     const { chooseAppConsent } = await fresh()
     chooseAppConsent('accept', EMAIL)
     expect(document.querySelectorAll('script[src*="googletagmanager"]').length).toBe(0)
@@ -300,5 +307,323 @@ describe('privacy', () => {
     expect(privacyHref()).toBe('https://landing.example/privacy')
     vi.stubEnv('VITE_LANDING_URL', '')
     expect(privacyHref()).toBe('https://www.ascomply.com/privacy')
+  })
+})
+
+describe('Google tag', () => {
+  const layer = () => [...((window as GaWindow).dataLayer ?? [])].map((a) => [...a] as unknown[])
+  const pageViews = () => layer().filter((e) => e[0] === 'event' && e[1] === 'page_view')
+  const tags = () => document.querySelectorAll('script[src*="googletagmanager"]')
+  const stubId = () => vi.stubEnv('VITE_GA_MEASUREMENT_ID', 'G-TEST1234')
+
+  it('bootAppAnalytics_storedAcceptSendsTheBoundedLocation', async () => {
+    stubId()
+    const { bootAppAnalytics } = await fresh()
+    setConsent(true)
+    window.history.replaceState(null, '', `/invoices/${UUID}?q=12345678-0001`)
+    bootAppAnalytics()
+    expect(tags().length).toBe(1)
+    expect(layer().filter((e) => e[0] === 'config')).toEqual([['config', 'G-TEST1234', { page_location: `${ORIGIN}/invoices/:id` }]])
+    const text = JSON.stringify(layer())
+    for (const leak of ['1b4e28ba', '12345678', '?']) expect(text).not.toContain(leak)
+  })
+
+  it('bootAppAnalytics_noRecordRejectOrNoIdLoadsNothing', async () => {
+    stubId()
+    let chat = await fresh()
+    chat.bootAppAnalytics()
+    setConsent(false)
+    chat = await fresh()
+    chat.bootAppAnalytics()
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', '')
+    setConsent(true)
+    chat = await fresh()
+    chat.bootAppAnalytics()
+    expect(tags().length).toBe(0)
+    expect((window as GaWindow).dataLayer).toBeUndefined()
+  })
+
+  it('chooseAppConsent_acceptLoadsOnceAndRejectRevokes', async () => {
+    stubId()
+    const { chooseAppConsent, reportAppPage } = await fresh()
+    chooseAppConsent('accept', EMAIL)
+    chooseAppConsent('accept', EMAIL)
+    expect(tags().length).toBe(1)
+    reportAppPage()
+    expect(pageViews().length).toBe(1)
+    chooseAppConsent('reject', EMAIL)
+    reportAppPage()
+    expect(pageViews().length).toBe(1)
+  })
+
+  it('syncAppConsent_followsARejectAndAReGrant', async () => {
+    stubId()
+    const { chooseAppConsent, syncAppConsent, reportAppPage } = await fresh()
+    chooseAppConsent('accept', EMAIL)
+    seed('_ga')
+    setConsent(false)
+    syncAppConsent(EMAIL)
+    expect(jarNames()).not.toContain('_ga')
+    reportAppPage()
+    expect(pageViews().length).toBe(0)
+    setConsent(true)
+    syncAppConsent(EMAIL)
+    reportAppPage()
+    expect(pageViews().length).toBe(1)
+  })
+
+  it('endAppChat_aWorkspaceThatMountsAgainInThePageSendsPageViewsAgain', async () => {
+    stubId()
+    const { bootAppAnalytics, endAppChat, reportAppPage } = await fresh()
+    setConsent(true)
+    bootAppAnalytics()
+    endAppChat()
+    reportAppPage()
+    expect(pageViews().length, 'control: endAppChat stops the sending').toBe(0)
+    bootAppAnalytics()
+    reportAppPage()
+    expect(pageViews().length).toBe(1)
+  })
+
+  it('endAppChat_leavesTheConsentRecordAndDropsAHeldEvent', async () => {
+    stubId()
+    const { endAppChat, readConsent, reportValidatedInvoice, syncAppConsent } = await fresh()
+    setConsent(true)
+    reportValidatedInvoice({ status: 'validated' })
+    const before = JSON.stringify(readConsent())
+    endAppChat()
+    expect(JSON.stringify(readConsent())).toBe(before)
+    expect(document.cookie).toContain(CONSENT_STORAGE_KEY)
+    reportValidatedInvoice({ status: 'validated' })
+    syncAppConsent(EMAIL)
+    expect(tags().length, 'control: the tag loaded').toBe(1)
+    expect(layer().filter((e) => e[1] === 'invoice_validated')).toEqual([])
+  })
+
+  it('bootAppAnalytics_aRemountAfterARejectInThePageSendsNothingAndLoadsNoTag', async () => {
+    stubId()
+    const { bootAppAnalytics, chooseAppConsent, reportAppPage, reportValidatedInvoice } = await fresh()
+    chooseAppConsent('reject', EMAIL)
+    bootAppAnalytics()
+    reportAppPage()
+    reportValidatedInvoice({ status: 'validated' })
+    expect(tags().length).toBe(0)
+    expect((window as GaWindow).dataLayer).toBeUndefined()
+  })
+
+  it('bootAppAnalytics_aRemountAfterAnAcceptThenARejectInThePageSendsNothingMore', async () => {
+    stubId()
+    const { bootAppAnalytics, chooseAppConsent, reportAppPage, reportValidatedInvoice } = await fresh()
+    chooseAppConsent('accept', EMAIL)
+    chooseAppConsent('reject', EMAIL)
+    const before = layer().length
+    bootAppAnalytics()
+    reportAppPage()
+    reportValidatedInvoice({ status: 'validated' })
+    expect(before, 'control: the Accept loaded the tag').toBeGreaterThan(0)
+    expect(layer()).toHaveLength(before)
+  })
+
+  it('bootAppAnalytics_aRemountWithNoRecordThenAcceptLoadsTheTag', async () => {
+    stubId()
+    const { bootAppAnalytics, chooseAppConsent, endAppChat, reportAppPage } = await fresh()
+    endAppChat()
+    bootAppAnalytics()
+    expect(tags().length, 'no record, no tag').toBe(0)
+    chooseAppConsent('accept', EMAIL)
+    expect(tags().length).toBe(1)
+    reportAppPage()
+    expect(pageViews().length).toBe(1)
+  })
+
+  it('bootAppAnalytics_aBootWithNoRecordStillHoldsAValidationForTheAccept', async () => {
+    stubId()
+    const { bootAppAnalytics, chooseAppConsent, reportValidatedInvoice } = await fresh()
+    bootAppAnalytics()
+    reportValidatedInvoice({ status: 'validated' })
+    chooseAppConsent('accept', EMAIL)
+    expect(layer().filter((e) => e[1] === 'invoice_validated')).toEqual([['event', 'invoice_validated', {}]])
+  })
+
+  it('bootAppAnalytics_aValidationAfterARemountWithNoRecordIsHeldForTheAccept', async () => {
+    stubId()
+    const { bootAppAnalytics, chooseAppConsent, endAppChat, reportValidatedInvoice } = await fresh()
+    endAppChat()
+    bootAppAnalytics()
+    reportValidatedInvoice({ status: 'validated' })
+    chooseAppConsent('accept', EMAIL)
+    expect(layer().filter((e) => e[1] === 'invoice_validated')).toEqual([['event', 'invoice_validated', {}]])
+  })
+
+  it('syncAppConsent_anotherTabsAcceptLoadsTheTagOnce', async () => {
+    stubId()
+    const { syncAppConsent } = await fresh()
+    syncAppConsent(EMAIL)
+    expect(tags().length, 'no record, no tag').toBe(0)
+    setConsent(true)
+    syncAppConsent(EMAIL)
+    syncAppConsent(EMAIL)
+    expect(tags().length).toBe(1)
+    expect(layer().filter((e) => e[0] === 'config')).toHaveLength(1)
+  })
+
+  it('reportAppPage_sendsTheBoundedPatternPerCall', async () => {
+    stubId()
+    const { bootAppAnalytics, reportAppPage } = await fresh()
+    const { reviewPath } = await import('./lib/route')
+    setConsent(true)
+    bootAppAnalytics()
+    for (const path of ['/rules', '/invoices?q=12345678-0001', `/invoices/${UUID}`, reviewPath([UUID, UUID2]), '/no-such/12345678-0001']) {
+      window.history.replaceState(null, '', path)
+      reportAppPage()
+    }
+    expect(pageViews().map((e) => (e[2] as { page_location: string }).page_location)).toEqual(
+      ['/rules', '/invoices', '/invoices/:id', '/imports/:ids/review', '/<unmatched>'].map((p) => ORIGIN + p),
+    )
+    const text = JSON.stringify(layer())
+    for (const leak of ['1b4e28ba', '6ba7b810', '12345678', 'no-such', '?']) expect(text).not.toContain(leak)
+    expect(w._hsq).toBeUndefined()
+  })
+
+  it('reportValidatedInvoice_sendsOnlyForValidated', async () => {
+    stubId()
+    const { chooseAppConsent, reportValidatedInvoice } = await fresh()
+    chooseAppConsent('accept', EMAIL)
+    for (const status of ['validated', 'draft', 'rejected']) {
+      const inv = { status }
+      expect(reportValidatedInvoice(inv)).toBe(inv)
+    }
+    expect(layer().filter((e) => e[1] === 'invoice_validated')).toEqual([['event', 'invoice_validated', {}]])
+  })
+
+  it('reportValidatedInvoice_heldBeforeAccept', async () => {
+    stubId()
+    const { chooseAppConsent, reportValidatedInvoice } = await fresh()
+    reportValidatedInvoice({ status: 'validated' })
+    expect((window as GaWindow).dataLayer).toBeUndefined()
+    chooseAppConsent('accept', EMAIL)
+    const names = layer().map((e) => e[0] === 'event' ? e[1] : e[0])
+    expect(names.indexOf('invoice_validated')).toBeGreaterThan(names.indexOf('config'))
+  })
+
+  it('reportValidatedInvoice_aRejectEmptiesTheHoldAndAnAcceptSendsNone', async () => {
+    stubId()
+    const { chooseAppConsent, reportValidatedInvoice } = await fresh()
+    reportValidatedInvoice({ status: 'validated' })
+    chooseAppConsent('reject', EMAIL)
+    chooseAppConsent('accept', EMAIL)
+    expect(tags().length, 'control: the later Accept loads the tag').toBe(1)
+    expect(layer().filter((e) => e[0] === 'config')).toHaveLength(1)
+    expect(layer().filter((e) => e[1] === 'invoice_validated')).toEqual([])
+  })
+
+  it('reportValidatedInvoice_anotherTabsRejectEmptiesTheHold', async () => {
+    stubId()
+    const { syncAppConsent, reportValidatedInvoice } = await fresh()
+    reportValidatedInvoice({ status: 'validated' })
+    setConsent(false)
+    syncAppConsent(EMAIL)
+    setConsent(true)
+    syncAppConsent(EMAIL)
+    expect(tags().length, 'control: the later Accept loads the tag').toBe(1)
+    expect(layer().filter((e) => e[1] === 'invoice_validated')).toEqual([])
+  })
+
+  it('reportValidatedInvoice_aHeldEventIsSentOnceAfterAStoredAcceptBoots', async () => {
+    stubId()
+    const { bootAppAnalytics, chooseAppConsent, reportValidatedInvoice } = await fresh()
+    setConsent(true)
+    reportValidatedInvoice({ status: 'validated' })
+    expect((window as GaWindow).dataLayer, 'nothing before the tag').toBeUndefined()
+    bootAppAnalytics()
+    chooseAppConsent('accept', EMAIL)
+    bootAppAnalytics()
+    expect(layer().map((e) => e[0])).toEqual(['js', 'set', 'config', 'event', 'set'])
+    expect(layer()[3]).toEqual(['event', 'invoice_validated', {}])
+  })
+
+  it('reportValidatedInvoice_aStoredRejectDropsTheEvent', async () => {
+    stubId()
+    const { chooseAppConsent, reportValidatedInvoice } = await fresh()
+    setConsent(false)
+    reportValidatedInvoice({ status: 'validated' })
+    chooseAppConsent('accept', EMAIL)
+    expect(tags().length, 'control: the Accept loads the tag').toBe(1)
+    expect(layer().filter((e) => e[1] === 'invoice_validated')).toEqual([])
+  })
+
+  it('everyEventCarriesNoUserIdAndNoFragmentOrQuery', async () => {
+    stubId()
+    const { chooseAppConsent, reportAppPage, reportValidatedInvoice } = await fresh()
+    window.history.replaceState(null, '', `/invoices/${UUID}?q=secret-term#token=abc123`)
+    reportValidatedInvoice({ status: 'validated' })
+    chooseAppConsent('accept', EMAIL)
+    reportValidatedInvoice({ status: 'validated' })
+    reportAppPage()
+    expect(layer().length, 'control: the flows pushed entries').toBeGreaterThanOrEqual(5)
+    const text = JSON.stringify(layer())
+    for (const leak of ['user_id', 'secret-term', 'abc123', '#', '?', UUID, EMAIL, 'ada']) expect(text, leak).not.toContain(leak)
+    for (const e of layer().filter((x) => x[0] === 'event' && x[1] !== 'page_view')) expect(e[2]).toEqual({})
+  })
+  const sets = () => layer().filter((e) => e[0] === 'set')
+  const setReferrer = (value: string) => Object.defineProperty(document, 'referrer', { value, configurable: true })
+  afterEach(() => Reflect.deleteProperty(document, 'referrer'))
+
+  it('setPageFields_aValidationOnADetailRouteIsPrecededByTheBoundedSet', async () => {
+    stubId()
+    const { bootAppAnalytics, reportAppPage, reportValidatedInvoice } = await fresh()
+    setConsent(true)
+    bootAppAnalytics()
+    window.history.replaceState(null, '', `/invoices/${UUID}?q=12345678-0001`)
+    reportAppPage()
+    reportValidatedInvoice({ status: 'validated' })
+    const l = layer()
+    const ev = l.findIndex((e) => e[1] === 'invoice_validated')
+    const set = l.map((e, i) => (e[0] === 'set' ? i : -1)).filter((i) => i >= 0 && i < ev).pop()
+    expect(set, 'a set precedes the event').toBeDefined()
+    expect(l[set!][1]).toEqual({ page_location: `${ORIGIN}/invoices/:id` })
+    const text = JSON.stringify(l)
+    for (const leak of ['1b4e28ba', '12345678', '?']) expect(text).not.toContain(leak)
+  })
+
+  it('setPageFields_aSameOriginReferrerIsBoundedAndACrossOriginOneKeepsNoPath', async () => {
+    stubId()
+    setReferrer(`${ORIGIN}/invoices/${UUID}?q=12345678-0001#x`)
+    let chat = await fresh()
+    setConsent(true)
+    chat.bootAppAnalytics()
+    expect(sets()[0][1]).toEqual({ page_location: `${ORIGIN}/`, page_referrer: `${ORIGIN}/invoices/:id` })
+    expect(JSON.stringify(layer())).not.toContain(UUID)
+    document.head.innerHTML = ''
+    delete (window as GaWindow).dataLayer
+    setReferrer('https://www.google.com/search?q=tin-12345678')
+    chat = await fresh()
+    chat.bootAppAnalytics()
+    expect(sets()[0][1]).toMatchObject({ page_referrer: 'https://www.google.com' })
+    expect(JSON.stringify(layer())).not.toContain('12345678')
+  })
+
+  it('setPageFields_aHeldEventFlushedAtAcceptIsPrecededByTheSet', async () => {
+    stubId()
+    const { bootAppAnalytics, chooseAppConsent, reportValidatedInvoice } = await fresh()
+    bootAppAnalytics()
+    reportValidatedInvoice({ status: 'validated' })
+    chooseAppConsent('accept', EMAIL)
+    const names = layer().map((e) => e[0])
+    expect(names).toEqual(['js', 'set', 'config', 'event'])
+  })
+
+  it('setPageFields_revokedOrNotLoadedPushesNoSet', async () => {
+    stubId()
+    const { bootAppAnalytics, chooseAppConsent, reportAppPage } = await fresh()
+    bootAppAnalytics()
+    reportAppPage()
+    expect((window as GaWindow).dataLayer, 'not loaded').toBeUndefined()
+    chooseAppConsent('accept', EMAIL)
+    chooseAppConsent('reject', EMAIL)
+    const before = sets().length
+    reportAppPage()
+    expect(before, 'control: the Accept pushed a set').toBeGreaterThan(0)
+    expect(sets()).toHaveLength(before)
   })
 })

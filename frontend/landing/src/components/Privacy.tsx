@@ -103,6 +103,9 @@ export function Privacy() {
             <li style={ITEM}>when you opened the demo form</li>
             <li style={ITEM}>whether that form then succeeded or failed</li>
             <li style={ITEM}>that you sent the form to create an account</li>
+            <li style={ITEM}>that you confirmed your email address</li>
+            <li style={ITEM}>that you created a workspace in the signed-in product</li>
+            <li style={ITEM}>each time a client, or your own company, is added in the signed-in product</li>
             <li style={ITEM}>each time an invoice is validated in the signed-in product</li>
             <li style={ITEM}>your device, browser and operating system, your screen size and your language</li>
             <li style={ITEM}>a randomly generated identifier that lets Google recognise the same browser on a later visit</li>

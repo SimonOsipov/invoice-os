@@ -1667,8 +1667,7 @@ function Workspace({ session, onSignOut, onAccountDeleted, freshToken, onUnautho
 
   async function publishPolicy(id: string): Promise<Policy> {
     const published = await publishApprovalPolicy(authedFetch, base!, id)
-    // Refetch, not a one-row patch: the active slot is TENANT-wide, so publishing this
-    // policy deactivates whichever other one held it — a change this response cannot report.
+    // Refetch, not a one-row patch (policiesWiring.test.ts pins the call).
     policiesAsync.run()
     return published
   }

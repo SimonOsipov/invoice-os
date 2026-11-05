@@ -280,8 +280,7 @@ func sealedInactiveVersion(t *testing.T, super *pgxpool.Pool, tenantID, policyID
 }
 
 // TestPutDraft_ForksAboveTheNewestSealedWhenNoVersionIsActive: policy A holds v1 and v2,
-// both sealed and NEITHER active, because approval_policy_versions_one_active spans the
-// TENANT and policy B holds that slot. "The active version" of A does not exist; the
+// both sealed and NEITHER active (the fixture seeds A that way). "The active version" of A does not exist; the
 // newest sealed one is v2. The fork must number max(version)+1 = 3 — a store deriving the
 // number from the active version, or defaulting to 1, breaks only on this shape.
 func TestPutDraft_ForksAboveTheNewestSealedWhenNoVersionIsActive(t *testing.T) {
@@ -289,7 +288,7 @@ func TestPutDraft_ForksAboveTheNewestSealedWhenNoVersionIsActive(t *testing.T) {
 	tenantID := policyTenant(t, super, "APPR-05 put-d7-no-active")
 	c, _ := activeAdmin(t, super, tenantID)
 
-	holder := seedApprovalPolicy(t, super, tenantID, "Holds the tenant's active slot")
+	holder := seedApprovalPolicy(t, super, tenantID, "Holds an active version")
 	holderV1 := seedSealedActiveV1(t, super, tenantID, holder)
 
 	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
@@ -338,7 +337,7 @@ func TestPutDraft_ForksAboveTheNewestSealedWhenNoVersionIsActive(t *testing.T) {
 				untouched.label, len(got), untouched.steps, got)
 		}
 	}
-	// The tenant's one active slot is still policy B's.
+	// Policy B's active version is untouched.
 	for _, v := range versionRows(t, super, holder) {
 		if v.ID == holderV1 && !v.IsActive {
 			t.Errorf("policy B's active version was deactivated by a PUT against policy A: %+v", v)

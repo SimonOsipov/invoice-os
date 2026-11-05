@@ -83,7 +83,7 @@ func rowFacts(t *testing.T, pool *pgxpool.Pool, tenantID string, ids []string) m
 
 // gateTenant is newApproveFixture's policy half without an invoice: one sealed+active
 // version holding a single approval step on roleKey, so a spec can arm several invoices
-// off one version (approval_policy_versions_one_active caps a tenant at one).
+// off one version.
 type gateTenant struct {
 	tenantID, entityID, roleID, versionID string
 }

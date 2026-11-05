@@ -26,11 +26,9 @@
 // the half of this screen that is new.
 //
 // [topology-never-publishes] — create, save, delete; NEVER publish. Publishing on a
-// deployment this suite shares seals a version permanently, takes the tenant's ONE active
-// slot (approval_policy_versions_one_active is UNIQUE (tenant_id) WHERE is_active) with no
-// undo, and arms an approval run per validated invoice on an environment where
-// api/perf.spec.ts already created 500. Because the spec never publishes, it never contends
-// that index. Assertion 8 is the in-file proof that this is structural rather than a
+// deployment this suite shares seals a version permanently, puts the policy in force beside
+// the seeded one with no undo, and arms an approval run per validated invoice on an
+// environment where api/perf.spec.ts already created 500. Assertion 8 is the in-file proof that this is structural rather than a
 // promise: Publish is DISABLED while the tree is dirty.
 //
 // Assertion 8's ORDER is load-bearing and does not read left-to-right. `save()` assigns one

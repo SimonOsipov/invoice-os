@@ -68,7 +68,7 @@ describe('APPR-09-03 QA: each row states its VERSION standing, not an edit time'
     const rows = [
       policy({ id: 'polA', name: 'In force', status: 'published', version: 3, activeVersion: 3 }),
       policy({ id: 'polB', name: 'Edited draft', status: 'draft', version: 4, activeVersion: 3 }),
-      policy({ id: 'polC', name: 'Lost the slot', status: 'published', version: 2, activeVersion: null }),
+      policy({ id: 'polC', name: 'No active version', status: 'published', version: 2, activeVersion: null }),
       policy({ id: 'polD', name: 'Brand new', status: 'draft', version: 1, activeVersion: null }),
     ]
     render(<WorkflowsView ctx={listCtx(rows)} />)
@@ -195,7 +195,7 @@ describe('APPR-09-04 AC-4: the pill and the standing report different facts', ()
     expect(rows[1].textContent).toContain('DRAFT')
   })
 
-  it('a PUBLISHED policy that lost the slot carries both claims in one row without contradiction', () => {
+  it('a PUBLISHED policy with no active version carries both claims in one row without contradiction', () => {
     render(<WorkflowsView ctx={listCtx([policy({ id: 'polA', status: 'published', version: 2, activeVersion: null })])} />)
 
     const rows = Array.from(document.querySelectorAll('.pf-row'))

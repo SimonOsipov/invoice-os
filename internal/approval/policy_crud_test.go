@@ -382,8 +382,7 @@ func TestCreatePolicy_EmptyNameRejected(t *testing.T) {
 // TestCreatePolicy_EmptyScopeNormalizedBeforeSQL: an absent scope is written as the
 // default, not as "". Reading the stored COLUMN is the load-bearing part — a store
 // that echoes the normalized value while writing the raw one passes a response-only
-// assertion. An explicit "" reaching SQL raises 23514 approval_policies_scope_check,
-// so a Postgres error here IS the regression.
+// assertion. An explicit "" reaching SQL would store an invalid scope.
 func TestCreatePolicy_EmptyScopeNormalizedBeforeSQL(t *testing.T) {
 	super, app := dbTestPools(t)
 
@@ -394,8 +393,7 @@ func TestCreatePolicy_EmptyScopeNormalizedBeforeSQL(t *testing.T) {
 
 			created, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "Sign-off", in)
 			if err != nil {
-				t.Fatalf("CreatePolicy(scope %q): %v (SQLSTATE %q) — an unnormalized scope reaching SQL "+
-					"raises 23514 on approval_policies_scope_check", in, err, pgCode(err))
+				t.Fatalf("CreatePolicy(scope %q): %v (SQLSTATE %q) — an unnormalized scope reached SQL", in, err, pgCode(err))
 			}
 			if got := storedPolicyScope(t, super, created.ID); got != scopeAllInvoices {
 				t.Errorf("STORED scope column = %q, want %q", got, scopeAllInvoices)

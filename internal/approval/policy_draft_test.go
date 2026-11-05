@@ -505,8 +505,7 @@ func assertStoredStep(t *testing.T, label string, got, want storedStep) {
 //
 // The name is the Core AC's, kept over a fixture where "the active version" and "the
 // newest sealed version" coincide. The resolution predicate the store uses is NOT
-// sealed, because approval_policy_versions_one_active spans the tenant, so a policy can
-// hold sealed versions and no active one.
+// sealed, because a policy can hold sealed versions and no active one.
 func TestPutDraft_ForksFromActiveWhenNoDraft(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APPR-05 put-forks")
@@ -827,7 +826,7 @@ func TestPutDraft_ForeignScopeRejected(t *testing.T) {
 // TestPutDraft_EmptyScopePointerNormalized: a NON-NIL pointer to the empty string is
 // the asymmetry — it means "the default scope", not "no change". normalizeScope is the
 // sole producer of the stored value, so "" must reach SQL as the default; sent raw it
-// raises 23514 approval_policies_scope_check.
+// would store an invalid scope.
 //
 // The paired nil-pointer control asserts the stored COLUMN, not a statement count: the
 // coalesce($3, scope) form always issues a scope write, so "issues no scope write" is

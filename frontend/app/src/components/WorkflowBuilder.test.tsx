@@ -137,9 +137,9 @@ describe('APPR-04-06 QA: the error guard fires before any node-shape assumption'
 // ============================================================================
 // APPR-09-03 QA (task-507) — saving must not seal a version
 // ============================================================================
-// Publishing is now a separate server verb that SEALS a version and takes the tenant's
-// single active slot. Wiring it into the one existing button would re-publish on every
-// Save, silently overriding whichever policy is in force — [save-and-publish-are-two-verbs].
+// Publishing is now a separate server verb that SEALS a version and becomes its
+// policy's active version. Wiring it into the one existing button would re-publish on every
+// Save, silently re-publishing the policy — [save-and-publish-are-two-verbs].
 // Subtask 05 splits the control; until then the button must only save.
 //
 // Verified by mutation: `save()` changed to `void ctx.savePolicy(policy).then(() =>
@@ -203,7 +203,7 @@ function hintColor(el: HTMLElement): string {
   return el.style.color || (el.parentElement?.style.color ?? '')
 }
 
-/** A second policy on the tenant, holding the single active slot unless told otherwise. */
+/** A second policy on the tenant, published unless told otherwise. */
 function otherPolicy(over: Partial<Policy> = {}): Policy {
   return { id: 'p2', name: 'Legacy approvals', scope: 'All invoices', status: 'published', version: 3, activeVersion: 3, nodes: [], ...over }
 }
@@ -372,15 +372,16 @@ describe('APPR-09-05 AC-3: Publish is a separate verb, gated on a saved tree', (
 })
 
 describe('APPR-09-05 AC-4: Publish states its consequence before the click', () => {
-  it('Publish names the policy it is about to replace', () => {
+  it('Publish says the policies in force stay in force', () => {
     const self = policyWith('fin_mgr')
     render(<WorkflowBuilder ctx={builderCtx({ policies: [self, otherPolicy()] })} policy={self} />)
 
-    expect(screen.getByText('Publishing replaces «Legacy approvals», which is in force now. There is no undo.')).toBeTruthy()
+    expect(screen.getByText('Publishing puts this policy in force. The policies in force now stay in force. There is no undo.')).toBeTruthy()
+    expect(screen.queryByText(/Publishing replaces «Legacy approvals»/)).toBeNull()
     expect(screen.queryByText(NO_POLICY_IN_FORCE)).toBeNull()
   })
 
-  it("Publish says no policy is in force when the tenant's slot is empty", () => {
+  it('Publish says no policy is in force when no policy has an active version', () => {
     const self = policyWith('fin_mgr')
     render(<WorkflowBuilder ctx={builderCtx({ policies: [self, otherPolicy({ status: 'draft', activeVersion: null })] })} policy={self} />)
 
@@ -388,7 +389,7 @@ describe('APPR-09-05 AC-4: Publish states its consequence before the click', () 
     expect(screen.queryByText(/Legacy approvals/), 'the note named a policy that holds nothing').toBeNull()
   })
 
-  it('Publish names THIS policy when it holds the slot itself', () => {
+  it('Publish names THIS policy when it is the one in force', () => {
     // policyInForce excludes self by design (policies.ts:192-194), so with only the story's two
     // branches the policy that IS in force renders the false 'No policy is in force'.
     //
@@ -401,7 +402,7 @@ describe('APPR-09-05 AC-4: Publish states its consequence before the click', () 
 
     expect(publishButton().disabled, 'the branch under test is only reachable on a publishable policy').toBe(false)
     expect(screen.getByText('Publishing replaces v2 of this policy, which is in force now. There is no undo.')).toBeTruthy()
-    expect(screen.queryByText(NO_POLICY_IN_FORCE), 'the note claims nothing is in force while this policy holds the slot').toBeNull()
+    expect(screen.queryByText(NO_POLICY_IN_FORCE), 'the note claims nothing is in force while this policy is in force').toBeNull()
   })
 
   it('the note survives a ctx.policies that has not landed yet', () => {
@@ -453,14 +454,14 @@ describe('APPR-09-05 QA AC-3: a sealed version is the second thing that blocks P
     expect(screen.queryByText(NO_POLICY_IN_FORCE), 'the sealed policy reads as if nothing governed').toBeNull()
   })
 
-  it('a sealed policy that lost the tenant slot is still not publishable', () => {
+  it('a sealed policy with no version in force is still not publishable', () => {
     // The branch a `activeVersion !== null` gate would miss: sealed here, in force elsewhere.
     const sealed: Policy = { ...policyWith('fin_mgr'), status: 'published', version: 2, activeVersion: null }
     render(<WorkflowBuilder ctx={builderCtx({ policies: [sealed, otherPolicy()] })} policy={sealed} />)
 
     expect(publishButton().disabled).toBe(true)
     expect(screen.getByText(PUBLISH_SEALED_REASON)).toBeTruthy()
-    expect(screen.queryByText(/Publishing replaces «Legacy approvals»/), 'the note promises to displace a policy this control cannot displace').toBeNull()
+    expect(screen.queryByText(/The policies in force now stay in force/), 'the note promises a publish this control cannot run').toBeNull()
   })
 
   it('an unsaved edit outranks the seal, because saving clears both', () => {

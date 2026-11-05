@@ -89,20 +89,12 @@ export type Policy = {
   status: PolicyStatus
   /** The version `nodes` belongs to — the HIGHEST version, not necessarily the live one. */
   version: number
-  /**
-   * The version actually in force, or null when another policy holds the slot. The active
-   * slot is TENANT-wide (`approval_policy_versions_one_active ON (tenant_id)`), so at most
-   * one policy per tenant may carry a non-null value.
-   */
+  /** The version of this policy in force, or null when none is. Several policies may be in force. */
   activeVersion: number | null
   nodes: WfNode[]
 }
 
-/**
- * Scope options — the one value the server stores. `normalizeScope`
- * (`internal/approval/policy.go:372-379`) and the column's own CHECK refuse anything else,
- * so a longer list here would only offer routing the product cannot perform.
- */
+/** The one scope value the editor offers; the server's `normalizeScope` is the lock. */
 export const WF_SCOPE_OPTIONS: readonly string[] = ['All invoices']
 
 // ---------------------------------------------------------------------------

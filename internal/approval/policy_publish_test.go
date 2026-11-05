@@ -1,7 +1,7 @@
 package approval
 
-// Store.PublishPolicy under a real Postgres: the publish gate, the seal, the tenant-wide
-// deactivation and the audit. Adversarial coverage — the row lock, the admin gate, the
+// Store.PublishPolicy under a real Postgres: the publish gate, the seal, the deactivation of
+// the policy's own previous version and the audit. Adversarial coverage — the row lock, the admin gate, the
 // concurrent-publish loser — is in policy_publish_adversarial_test.go.
 //
 // TWO KNOWN UNTESTED OBLIGATIONS, both recorded rather than faked. Both were discharged by
@@ -40,8 +40,7 @@ import (
 // --- fixtures ---------------------------------------------------------------
 
 // versionRow reads one version row by id. versionRows reads a whole policy's, which
-// cannot address the outgoing version of a DIFFERENT policy the tenant-wide deactivation
-// touches.
+// cannot address the version of a DIFFERENT policy that must stay active.
 func versionRow(t *testing.T, super *pgxpool.Pool, versionID string) storedVersion {
 	t.Helper()
 	var v storedVersion
@@ -54,10 +53,8 @@ func versionRow(t *testing.T, super *pgxpool.Pool, versionID string) storedVersi
 	return v
 }
 
-// activeVersionIDs reads the tenant's active version ids. Tenant-scoped, never
-// policy-scoped: approval_policy_versions_one_active is ON (tenant_id), so "exactly one
-// active version" is a property of the TENANT and a per-policy read cannot see a second
-// policy holding the slot.
+// activeVersionIDs reads the tenant's active version ids. Tenant-scoped, so a second policy
+// holding an active version is visible.
 func activeVersionIDs(t *testing.T, super *pgxpool.Pool, tenantID string) []string {
 	t.Helper()
 	rows, err := super.Query(context.Background(),
@@ -361,22 +358,21 @@ func TestPublish_EmptyPolicyAllowed(t *testing.T) {
 	}
 }
 
-// --- AC-4: the deactivation is TENANT-wide ------------------------------------
+// --- AC-4: the deactivation is per policy ------------------------------------
 
-// TestPublish_DeactivatesTheTenantsOtherPolicy: approval_policy_versions_one_active is
-// ON (tenant_id) WHERE is_active, so publishing policy B deactivates policy A's version.
-// Deactivation is not un-publishing: A keeps sealed, published_at and published_by.
-func TestPublish_DeactivatesTheTenantsOtherPolicy(t *testing.T) {
+// TestPublish_LeavesTheTenantsOtherPolicyActive: publishing policy B leaves policy A's
+// active version active and sealed, with its published_at and published_by unchanged.
+func TestPublish_LeavesTheTenantsOtherPolicyActive(t *testing.T) {
 	super, app := dbTestPools(t)
-	tenantID := policyTenant(t, super, "APPR-05 publish-deactivates-other")
+	tenantID := policyTenant(t, super, "APSC-01 publish-leaves-other")
 	c, _ := activeAdmin(t, super, tenantID)
 
 	policyA := seedApprovalPolicy(t, super, tenantID, "A policy")
 	versionA := seedApprovalPolicyVersionN(t, super, tenantID, policyA, 1)
 	publishApprovalPolicyVersion(t, super, versionA, "earlier-publisher")
 	beforeA := versionRow(t, super, versionA)
-	if beforeA.PublishedAt == nil {
-		t.Fatal("fixture: A's published_at is NULL, so the retention assertion below would be vacuous")
+	if beforeA.PublishedAt == nil || !beforeA.IsActive {
+		t.Fatalf("fixture: A's version = %+v, want published and active", beforeA)
 	}
 
 	policyB := seedApprovalPolicy(t, super, tenantID, "B policy")
@@ -391,19 +387,57 @@ func TestPublish_DeactivatesTheTenantsOtherPolicy(t *testing.T) {
 		t.Errorf("B's version = %+v, want (sealed true, is_active true)", afterB)
 	}
 	afterA := versionRow(t, super, versionA)
-	if !afterA.Sealed || afterA.IsActive {
-		t.Errorf("A's version = %+v, want (sealed true, is_active false) — the deactivation statement "+
-			"carries no policy predicate", afterA)
+	if !afterA.Sealed || !afterA.IsActive {
+		t.Errorf("A's version = %+v, want (sealed true, is_active true): publishing B must not touch A", afterA)
 	}
 	if afterA.PublishedAt == nil || *afterA.PublishedAt != *beforeA.PublishedAt {
-		t.Errorf("A's published_at = %s, want the unchanged %s — deactivation is not un-publishing",
-			strOrNull(afterA.PublishedAt), strOrNull(beforeA.PublishedAt))
+		t.Errorf("A's published_at = %s, want the unchanged %s", strOrNull(afterA.PublishedAt), strOrNull(beforeA.PublishedAt))
 	}
 	if afterA.PublishedBy == nil || *afterA.PublishedBy != "earlier-publisher" {
 		t.Errorf("A's published_by = %s, want the unchanged %q", strOrNull(afterA.PublishedBy), "earlier-publisher")
 	}
-	if ids := activeVersionIDs(t, super, tenantID); !reflect.DeepEqual(ids, []string{versionB}) {
-		t.Errorf("active version ids = %v, want exactly [%s]", ids, versionB)
+	want := []string{versionA, versionB}
+	sort.Strings(want)
+	if ids := activeVersionIDs(t, super, tenantID); !reflect.DeepEqual(ids, want) {
+		t.Errorf("active version ids = %v, want both %v", ids, want)
+	}
+}
+
+// TestPublish_DeactivatesThePublishedPolicysPreviousVersion: publishing A v2 retires A v1
+// (sealed, published_at kept) and leaves B's active version alone.
+func TestPublish_DeactivatesThePublishedPolicysPreviousVersion(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-01 publish-deactivates-own-previous")
+	c, _ := activeAdmin(t, super, tenantID)
+
+	policyA := seedApprovalPolicy(t, super, tenantID, "A policy")
+	a1 := seedApprovalPolicyVersionN(t, super, tenantID, policyA, 1)
+	publishApprovalPolicyVersion(t, super, a1, "earlier-publisher")
+	a2 := seedApprovalPolicyVersionN(t, super, tenantID, policyA, 2)
+	policyB := seedApprovalPolicy(t, super, tenantID, "B policy")
+	b1 := seedApprovalPolicyVersionN(t, super, tenantID, policyB, 1)
+	publishApprovalPolicyVersion(t, super, b1, "other-publisher")
+	beforeA1 := versionRow(t, super, a1)
+	if beforeA1.PublishedAt == nil {
+		t.Fatal("fixture: A v1 published_at is NULL, so the retention assertion below would be vacuous")
+	}
+
+	if _, err := NewStore(app, stubFingerprinter, nil).PublishPolicy(c, policyA); err != nil {
+		t.Fatalf("PublishPolicy(A): %v, want success", err)
+	}
+
+	afterA1 := versionRow(t, super, a1)
+	if !afterA1.Sealed || afterA1.IsActive {
+		t.Errorf("A v1 = %+v, want (sealed true, is_active false)", afterA1)
+	}
+	if afterA1.PublishedAt == nil || *afterA1.PublishedAt != *beforeA1.PublishedAt {
+		t.Errorf("A v1 published_at = %s, want the unchanged %s", strOrNull(afterA1.PublishedAt), strOrNull(beforeA1.PublishedAt))
+	}
+	if v := versionRow(t, super, a2); !v.Sealed || !v.IsActive {
+		t.Errorf("A v2 = %+v, want (sealed true, is_active true)", v)
+	}
+	if v := versionRow(t, super, b1); !v.IsActive {
+		t.Errorf("B v1 = %+v, want still active: publishing A must not touch B", v)
 	}
 }
 
@@ -418,7 +452,7 @@ func TestPublish_DeactivatesTheTenantsOtherPolicy(t *testing.T) {
 //
 //	(1) is_active is never true on a row that is not already, or not simultaneously
 //	    becoming, sealed — neither 23514 nor 23505 is ever raised; and
-//	(2) the tenant's outgoing active version is deactivated in an EARLIER statement, so
+//	(2) the policy's outgoing active version is deactivated in an EARLIER statement, so
 //	    the end state is exactly one active row.
 //
 // The plan's stated reason — "any two-statement form of step 8 transiently violates a
@@ -430,12 +464,10 @@ func TestPublish_SealAndActivateAreOneStatement(t *testing.T) {
 	tenantID := policyTenant(t, super, "APPR-05 publish-seal-and-activate")
 	c, _ := activeAdmin(t, super, tenantID)
 
-	outgoingPolicy := seedApprovalPolicy(t, super, tenantID, "Outgoing")
-	outgoingVersion := seedApprovalPolicyVersionN(t, super, tenantID, outgoingPolicy, 1)
-	publishApprovalPolicyVersion(t, super, outgoingVersion, "earlier-publisher")
-
 	incomingPolicy := seedApprovalPolicy(t, super, tenantID, "Incoming")
-	incomingVersion := seedApprovalDraft(t, super, tenantID, incomingPolicy)
+	outgoingVersion := seedApprovalPolicyVersionN(t, super, tenantID, incomingPolicy, 1)
+	publishApprovalPolicyVersion(t, super, outgoingVersion, "earlier-publisher")
+	incomingVersion := seedApprovalPolicyVersionN(t, super, tenantID, incomingPolicy, 2)
 
 	// The two controls run in their own transaction, rolled back BEFORE the real publish:
 	// a savepoint rollback releases no row lock, so leaving this tx open would block the
@@ -452,7 +484,7 @@ func TestPublish_SealAndActivateAreOneStatement(t *testing.T) {
 		assertSQLState(t, attemptWithSavepoint(t, ctx, tx,
 			`UPDATE approval_policy_versions SET is_active = true WHERE id = $1`, incomingVersion), "23514")
 
-		// (ii) seal + activate while another version holds the tenant's slot.
+		// (ii) seal + activate while an earlier version of the same policy holds its slot.
 		opErr := attemptWithSavepoint(t, ctx, tx,
 			`UPDATE approval_policy_versions SET sealed = true, is_active = true WHERE id = $1`, incomingVersion)
 		assertSQLState(t, opErr, "23505")

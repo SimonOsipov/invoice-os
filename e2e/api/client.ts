@@ -1582,8 +1582,8 @@ export interface ApprovalStep {
 export interface ApprovalPolicyVersion {
   version: number
   sealed: boolean
-  // The active slot is TENANT-wide (approval_policy_versions_one_active ON (tenant_id)):
-  // publishing any policy clears it on whichever version held it.
+  // At most one active version per policy (approval_policy_versions_one_active ON
+  // (tenant_id, policy_id)); a publish leaves the other policies' versions active.
   is_active: boolean
   published_at: string | null // RFC3339Nano, always Z-suffixed; null until published
   published_by: string | null // the publisher's subject uuid

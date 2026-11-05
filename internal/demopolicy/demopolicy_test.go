@@ -341,14 +341,14 @@ func versionsOf(t *testing.T, super *pgxpool.Pool, tenantID string) []versionRow
 	return out
 }
 
-// activeVersionOf returns the tenant's one active version, deterministically
-// — where versionsOf is not once two policies both sit at version 1.
+// activeVersionOf returns the governing version: the active one published last.
 func activeVersionOf(t *testing.T, super *pgxpool.Pool, tenantID string) versionRow {
 	t.Helper()
 	var v versionRow
 	if err := super.QueryRow(context.Background(),
 		`SELECT id::text, sealed, is_active, published_by FROM approval_policy_versions
-		  WHERE tenant_id = $1 AND is_active`, tenantID).
+		  WHERE tenant_id = $1 AND is_active
+		  ORDER BY published_at DESC NULLS LAST, id DESC LIMIT 1`, tenantID).
 		Scan(&v.ID, &v.Sealed, &v.IsActive, &v.PublishedBy); err != nil {
 		t.Fatalf("read the active version for %s: %v", tenantID, err)
 	}
@@ -627,6 +627,146 @@ func rowFactsOf(t *testing.T, app *pgxpool.Pool, tenantID string, ids []string) 
 }
 
 // --- specs -------------------------------------------------------------------
+
+// TestSeed_GovernedByTheVersionPublishedLast: the seeder's own stale `system` version is
+// active at t1, a human policy's version at t2 > t1. The later one governs, so the seeder
+// supersedes nothing. The stale policy has the lower id and is inserted first, and the
+// precondition fails the test unless the pre-fix probe returns it.
+func TestSeed_GovernedByTheVersionPublishedLast(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy governed by published last")
+	ctx := context.Background()
+
+	stale := []approval.Step{
+		{Kind: "condition", CondOp: ptr(">"), CondAmount: ptr("100000.00"),
+			Then: []approval.Step{{Kind: "approval", WorkflowRoleKey: ptr(seededRoleKey)}},
+			Else: []approval.Step{{Kind: "autoapprove"}}},
+	}
+	if shapeOf(stale) == shapeOf(inhousePlan.steps) {
+		t.Fatal("the stale fixture matches the current plan, so the seeder would not supersede it")
+	}
+
+	ids := []string{uuid.NewString(), uuid.NewString()}
+	slices.Sort(ids)
+	staleVersionID, humanVersionID := uuid.NewString(), uuid.NewString()
+	if err := db.WithinTenantTx(ctx, app, f.tenantID, func(tx pgx.Tx) error {
+		for i, c := range []struct{ name, versionID, by, age string }{
+			{wantPolicyName, staleVersionID, wantSeedActor, "2 hours"},
+			{"Human published policy", humanVersionID, "ngozi", "1 hour"},
+		} {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO approval_policies (id, tenant_id, name) VALUES ($1, $2, $3)`,
+				ids[i], f.tenantID, c.name); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO approval_policy_versions (id, tenant_id, policy_id, version) VALUES ($1, $2, $3, 1)`,
+				c.versionID, f.tenantID, ids[i]); err != nil {
+				return err
+			}
+			if i == 0 {
+				if err := writeLane(ctx, tx, f.tenantID, c.versionID, nil, nil, stale); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.Exec(ctx,
+				`UPDATE approval_policy_versions
+				    SET sealed = true, is_active = true, published_at = now() - $3::interval, published_by = $2
+				  WHERE id = $1`, c.versionID, c.by, c.age); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed two active versions: %v", err)
+	}
+
+	var first string
+	if err := db.WithinTenantTx(ctx, app, f.tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT v.id::text FROM approval_policy_versions v
+			   JOIN approval_policies p ON p.id = v.policy_id
+			  WHERE v.is_active`).Scan(&first)
+	}); err != nil {
+		t.Fatalf("read the unordered active version: %v", err)
+	}
+	if first != staleVersionID {
+		t.Fatalf("fixture is non-discriminating: an unordered probe returns %s, want the stale system version %s", first, staleVersionID)
+	}
+
+	res, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("seedTenant: %v", err)
+	}
+	if res.Note != "an active version this seeder did not write governs" {
+		t.Errorf("Note = %q, want %q", res.Note, "an active version this seeder did not write governs")
+	}
+	if res.VersionID != humanVersionID {
+		t.Errorf("Result.VersionID = %s, want the version published last, %s", res.VersionID, humanVersionID)
+	}
+	var staleVersions int
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) FROM approval_policy_versions WHERE policy_id = $1`, ids[0]).Scan(&staleVersions); err != nil {
+		t.Fatalf("count the stale policy's versions: %v", err)
+	}
+	if staleVersions != 1 {
+		t.Errorf("the stale policy carries %d version(s), want 1 — the seeder superseded a version that is not the governing one", staleVersions)
+	}
+}
+
+// TestSeed_SupersedeLeavesAnotherPolicyActive: a human policy is active at t1 and the
+// seeder's stale `system` version at t2 > t1, so the stale one governs and is superseded.
+// The human policy's version stays active beside the new one.
+func TestSeed_SupersedeLeavesAnotherPolicyActive(t *testing.T) {
+	super, app := dbTestPools(t)
+	f := newFixture(t, super, app, "demopolicy supersede leaves other")
+	f.addBacklog()
+	ctx := context.Background()
+
+	publishForeignPolicy(t, super, f.tenantID)
+	publishStaleOwnPolicy(t, app, f.tenantID)
+	staleVersionID := activeVersionOf(t, super, f.tenantID).ID
+	var humanVersionID string
+	if err := super.QueryRow(ctx,
+		`SELECT v.id::text FROM approval_policy_versions v JOIN approval_policies p ON p.id = v.policy_id
+		  WHERE v.tenant_id = $1 AND p.name = 'Human published policy'`, f.tenantID).Scan(&humanVersionID); err != nil {
+		t.Fatalf("read the human version: %v", err)
+	}
+	if staleVersionID == humanVersionID {
+		t.Fatal("fixture: the human version governs, so the seeder would supersede nothing")
+	}
+
+	res, err := seedTenant(ctx, app, f.tenantID)
+	if err != nil {
+		t.Fatalf("seedTenant: %v", err)
+	}
+	if res.Note != "policy superseded; backlog armed" {
+		t.Fatalf("Note = %q, want %q", res.Note, "policy superseded; backlog armed")
+	}
+
+	var staleActive bool
+	if err := super.QueryRow(ctx,
+		`SELECT is_active FROM approval_policy_versions WHERE id = $1`, staleVersionID).Scan(&staleActive); err != nil {
+		t.Fatalf("read the stale version: %v", err)
+	}
+	if staleActive {
+		t.Error("the stale seeded version is still active, want it superseded")
+	}
+	if res.VersionID == staleVersionID || res.VersionID == humanVersionID {
+		t.Errorf("Result.VersionID = %s, want the new version", res.VersionID)
+	}
+	var newActive bool
+	if err := super.QueryRow(ctx,
+		`SELECT is_active FROM approval_policy_versions WHERE id = $1`, res.VersionID).Scan(&newActive); err != nil {
+		t.Fatalf("read the new version: %v", err)
+	}
+	if !newActive {
+		t.Error("the new seeded version is not active")
+	}
+	if !foreignVersionActive(t, super, f.tenantID) {
+		t.Error("the human policy's version is inactive, want it left active by the supersede")
+	}
+}
 
 // AC-1/AC-2/AC-9. DemoTenants is the safety boundary, not ENVIRONMENT, and it
 // is asserted by VALUE so widening the blast radius cannot be a silent diff.
@@ -1254,7 +1394,7 @@ func TestSeed_IsIdempotentAcrossBoots(t *testing.T) {
 		t.Fatalf("second seedTenant raised: %v", err)
 	}
 	if second.VersionCreated {
-		t.Error("the second boot created another version; one active version per tenant is a UNIQUE index")
+		t.Error("the second boot created another version; one active version per policy is a UNIQUE index")
 	}
 	if second.VersionID != first.VersionID {
 		t.Errorf("the second boot reports version %s, want the first boot's %s", second.VersionID, first.VersionID)

@@ -608,9 +608,8 @@ func TestApprovalPolicy_SoftDeleteIsTenantScoped(t *testing.T) {
 }
 
 // TestApprovalPolicy_OneDraftIsPerPolicyNotPerTenant: the index is keyed (tenant_id, policy_id),
-// unlike approval_policy_versions_one_active which is (tenant_id) alone. Draft resolution in the
-// CRUD path is per policy, so an index that borrowed the one_active shape would cap a whole
-// tenant at one draft and break it. The closing refusal stops this passing vacuously against a
+// like approval_policy_versions_one_active. A tenant-wide index would cap a whole
+// tenant at one draft and break per-policy draft resolution. The closing refusal stops this passing vacuously against a
 // database with no one_draft index at all.
 func TestApprovalPolicy_OneDraftIsPerPolicyNotPerTenant(t *testing.T) {
 	super, _ := dbTestPools(t)

@@ -1,7 +1,7 @@
 package approval
 
 // Store-adjacent specs for ArmTx: the tx-scoped write half of the arming engine —
-// resolve the tenant's one active sealed version, materialise it against one invoice,
+// resolve the governing (latest published) active version, materialise it against one invoice,
 // and write approval_runs + approval_run_steps + one audit row. Every spec here starts
 // RED against an undefined ArmTx/ArmResult (task-480's Test-first stage).
 //
@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -218,6 +219,126 @@ func TestArm_WritesOneRowPerMaterialisedStep(t *testing.T) {
 	}
 	if last.NotifyChannel == nil || *last.NotifyChannel != "In-app" {
 		t.Errorf("steps[3].NotifyChannel = %v, want \"In-app\"", last.NotifyChannel)
+	}
+}
+
+// --- APSC-01-02: several policies in force -----------------------------------------
+
+// seedTwoPoliciesInForce seeds policy A (step role roleA) and then policy B (roleB), both
+// sealed and active. publishedA/B may be nil (NULL published_at). A is built to be what
+// an unordered read returns: lower policy_id (the per-policy active index's order), and
+// inserted and activated first (heap order). The precondition below reads the
+// pre-fix ArmTx query under RLS and fails the test if it does not return A.
+func seedTwoPoliciesInForce(t *testing.T, super, app *pgxpool.Pool, tenantID, roleA, roleB string, publishedA, publishedB *time.Time) (versionA, versionB string) {
+	t.Helper()
+	ids := []string{uuid.NewString(), uuid.NewString()}
+	sort.Strings(ids)
+	versions := make([]string, 2)
+	for i, c := range []struct {
+		name, role string
+		at         *time.Time
+	}{{"Policy A (published first)", roleA, publishedA}, {"Policy B (published last)", roleB, publishedB}} {
+		if _, err := super.Exec(context.Background(),
+			`INSERT INTO approval_policies (id, tenant_id, name) VALUES ($1, $2, $3)`, ids[i], tenantID, c.name); err != nil {
+			t.Fatalf("seed approval_policies %q: %v", c.name, err)
+		}
+		versions[i] = seedApprovalPolicyVersionN(t, super, tenantID, ids[i], 1)
+		seedApprovalPolicyStepInLane(t, super, tenantID, versions[i], seedStepSpec{
+			Ord: 0, Kind: "approval", WorkflowRoleKey: ptr(c.role), SLAHours: ptr(24),
+		})
+		if _, err := super.Exec(context.Background(),
+			`UPDATE approval_policy_versions
+			    SET sealed = true, is_active = true, published_at = $2, published_by = 'fixture-publisher'
+			  WHERE id = $1`, versions[i], c.at); err != nil {
+			t.Fatalf("activate version of %q: %v", c.name, err)
+		}
+	}
+
+	var first string
+	if err := db.WithinTenantTx(context.Background(), app, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(), `SELECT id FROM approval_policy_versions WHERE is_active`).Scan(&first)
+	}); err != nil {
+		t.Fatalf("read the unordered active version: %v", err)
+	}
+	if first != versions[0] {
+		t.Fatalf("fixture is non-discriminating: an unordered read returns %s, want policy A's version %s", first, versions[0])
+	}
+	return versions[0], versions[1]
+}
+
+// TestArm_TwoPoliciesInForceArmTheOnePublishedLast: A (fin_mgr) is published at t1, B (cfo)
+// at t2 > t1, both active. The run arms B's version and writes B's one pending step.
+func TestArm_TwoPoliciesInForceArmTheOnePublishedLast(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-01-02 arm-published-last")
+	entityID := seedBusinessEntity(t, super, tenantID, "Arm Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "two-policies-invoice-1")
+
+	t1 := time.Now().Add(-2 * time.Hour)
+	t2 := time.Now().Add(-1 * time.Hour)
+	_, versionB := seedTwoPoliciesInForce(t, super, app, tenantID, "fin_mgr", "cfo", &t1, &t2)
+
+	if _, err := arm(t, app, tenantID, invoiceID, "fp-two-policies", "test-actor"); err != nil {
+		t.Fatalf("ArmTx: %v", err)
+	}
+	run := oneApprovalRun(t, super, invoiceID)
+	if run.PolicyVersionID != versionB {
+		t.Errorf("run.PolicyVersionID = %s, want %s (the version published last)", run.PolicyVersionID, versionB)
+	}
+	steps := runStepsOf(t, super, run.ID)
+	if len(steps) != 1 {
+		t.Fatalf("run steps = %d, want 1", len(steps))
+	}
+	role := "<nil>"
+	if steps[0].WorkflowRoleKey != nil {
+		role = *steps[0].WorkflowRoleKey
+	}
+	if steps[0].State != "pending" || role != "cfo" {
+		t.Errorf("step = state %q role %q, want pending cfo (policy B's step)", steps[0].State, role)
+	}
+}
+
+// TestArm_EqualPublishedAtArmsTheHigherVersionId: a tie on published_at is broken by id DESC,
+// so the governing version never depends on heap order. B has the higher policy id.
+func TestArm_EqualPublishedAtArmsTheHigherVersionId(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-01-02 arm-equal-published-at")
+	entityID := seedBusinessEntity(t, super, tenantID, "Arm Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "equal-published-at-invoice-1")
+
+	// The tie-break is on the version id, which is random: read both and expect the larger.
+	at := time.Now().Add(-1 * time.Hour)
+	versionA, versionB := seedTwoPoliciesInForce(t, super, app, tenantID, "fin_mgr", "cfo", &at, &at)
+	want := versionA
+	if versionB > versionA {
+		want = versionB
+	}
+
+	if _, err := arm(t, app, tenantID, invoiceID, "fp-equal-published-at", "test-actor"); err != nil {
+		t.Fatalf("ArmTx: %v", err)
+	}
+	if run := oneApprovalRun(t, super, invoiceID); run.PolicyVersionID != want {
+		t.Errorf("run.PolicyVersionID = %s, want %s (the higher version id of %s and %s)", run.PolicyVersionID, want, versionA, versionB)
+	}
+}
+
+// TestArm_NullPublishedAtDoesNotWin: A is active with NULL published_at, B with a
+// timestamp. B arms; DESC without NULLS LAST would put the NULL row first.
+func TestArm_NullPublishedAtDoesNotWin(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-01-02 arm-null-published-at")
+	entityID := seedBusinessEntity(t, super, tenantID, "Arm Corp")
+	invoiceID := seedInvoice(t, super, tenantID, entityID, "null-published-at-invoice-1")
+
+	t2 := time.Now().Add(-1 * time.Hour)
+	_, versionB := seedTwoPoliciesInForce(t, super, app, tenantID, "fin_mgr", "cfo", nil, &t2)
+
+	if _, err := arm(t, app, tenantID, invoiceID, "fp-null-published-at", "test-actor"); err != nil {
+		t.Fatalf("ArmTx: %v", err)
+	}
+	run := oneApprovalRun(t, super, invoiceID)
+	if run.PolicyVersionID != versionB {
+		t.Errorf("run.PolicyVersionID = %s, want %s (the version with a published_at)", run.PolicyVersionID, versionB)
 	}
 }
 
@@ -785,8 +906,7 @@ func TestArm_AutoApproveSettlesEveryStepAndClosesTheRun(t *testing.T) {
 
 // TestArm_ClosureIsOneRuleNotTwoBranches (D34) pins that the run's closed/approved
 // state comes from ONE predicate reading step states, never from a second branch keyed
-// on `auto` directly. Three legs, each its own tenant (approval_policy_versions_one_active
-// forbids two active versions sharing a tenant): (a) an autoapprove policy closes the
+// on `auto` directly. Three legs, each its own tenant (keeps the arming resolve to one active version): (a) an autoapprove policy closes the
 // run; (b) a notify-only policy closes it too, even though auto is false — an
 // `if auto { close }` implementation fails ONLY this leg; (c) one staffed approval step
 // leaves the run open — the control that rules out a `len(steps)==0` implementation,

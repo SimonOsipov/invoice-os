@@ -237,6 +237,7 @@ test('support console: the tenant header wraps and shows the whole state line at
 
   // Holds the list reload that follows Start deletion; the 5 s cap keeps a fix that waits for the list from deadlocking.
   let listHeld = false
+  let capped = false
   let releaseList: () => void = () => {}
   const listRelease = new Promise<void>((resolve) => { releaseList = resolve })
   const isListGet = (url: URL): boolean => url.pathname === STAFF_TENANTS
@@ -267,6 +268,7 @@ test('support console: the tenant header wraps and shows the whole state line at
           expect(rectsOverlap(r[a], r[b]), `${a} and ${b} overlap, ${where}`).toBe(false)
         }
         const count = boxes.length
+        expect(count, `no action buttons, ${where}`).toBeGreaterThan(0)
         for (let i = 0; i < count; i++) expect(enclosesRect(cardBox, boxes[i], 1), `action ${i} leaves the detail card, ${where}`).toBe(true)
         for (let i = 0; i < count; i++) for (let j = i + 1; j < count; j++) expect(rectsOverlap(boxes[i], boxes[j]), `actions ${i} and ${j} overlap, ${where}`).toBe(false)
         expect(nameBox.width, `the name is 0 wide, ${where}`).toBeGreaterThan(0)
@@ -286,14 +288,14 @@ test('support console: the tenant header wraps and shows the whole state line at
   await page.route((url) => isListGet(url), async (route) => {
     if (route.request().method() !== 'GET' || listHeld) return route.fallback()
     listHeld = true
-    setTimeout(releaseList, 5_000)
+    setTimeout(() => { capped = true; releaseList() }, 5_000)
     await listRelease
     await route.fallback()
   })
   await confirmModal(page, 'Start deletion', 'e2e narrow')
   await expect(stateLine).toBeVisible()
-  // The list lands above the card at 390px, after the text read and before the card read.
   await check('scheduled', stateLine, async () => {
+    expect(capped, 'the 5 s cap released the list, not the hook').toBe(false)
     releaseList()
     await expect(search, 'the tenant list did not render after release').toBeVisible()
   })

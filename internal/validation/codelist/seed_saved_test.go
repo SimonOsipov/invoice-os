@@ -162,18 +162,17 @@ func TestSyncAll_RealPullReplacesTheSeed(t *testing.T) {
 	}
 }
 
-func TestSyncAll_NullNRSSeedsNoCopylessList(t *testing.T) {
+func TestSyncAll_NullNRSSeedsEveryList(t *testing.T) {
 	f := newSeedFixture(t)
+
 	err := f.pull(t, nil)
+
 	if !errors.Is(err, ErrEmptyList) {
 		t.Errorf("SyncAll err = %v, want ErrEmptyList", err)
 	}
-	if n := len(f.rows(t, "states")); n < 1 {
-		t.Fatalf("states holds %d rows, want a seed", n)
-	}
-	for _, name := range []string{"countries", "currencies", "vat-exemptions"} {
-		if n := len(f.rows(t, name)); n != 0 {
-			t.Errorf("%s holds %d rows, want 0", name, n)
+	for _, l := range Lists {
+		if n := len(f.rows(t, l.Name)); n < 1 {
+			t.Errorf("%s holds %d rows after SyncAll with NRS data:null, want >= 1", l.Name, n)
 		}
 	}
 }
@@ -287,48 +286,29 @@ func TestSavedCopies_StandardVATIsSevenPointFive(t *testing.T) {
 	}
 }
 
-func TestSavedCopies_EverySearchableListHasEntries(t *testing.T) {
-	for _, name := range seededLists {
-		if _, n, ok, err := savedCopy(saved, listByName(t, name)); !ok || err != nil || n < 1 {
-			t.Errorf("%s: ok=%v err=%v entries=%d, want a non-empty saved copy", name, ok, err, n)
-		}
-	}
-}
-
 func mustJSONArray(es []json.RawMessage) []byte {
 	b, _ := json.Marshal(es)
 	return b
 }
 
-func TestSavedCopies_AreWellFormed(t *testing.T) {
+// The files are raw NRS bodies: no "source" key, and every list decodes by its CodeKey.
+func TestSavedCopies_AreRawNRSForEveryList(t *testing.T) {
 	entries, err := saved.ReadDir("saved")
-	if err != nil || len(entries) != 8 {
-		t.Fatalf("saved dir: %v, %d files, want 8", err, len(entries))
+	if err != nil || len(entries) != len(Lists) {
+		t.Fatalf("saved dir: %v, %d files, want %d", err, len(entries), len(Lists))
 	}
-	raw := map[string]bool{"invoice-types": true, "payment-means": true, "tax-categories": true}
 	for _, l := range Lists {
-		grouped, n, ok, err := savedCopy(saved, l)
-		if !ok {
-			if raw[l.Name] || l.Name == "states" {
-				t.Errorf("%s has no saved copy", l.Name)
-			}
-			continue
-		}
-		if err != nil || n < 1 || len(grouped) < 1 {
-			t.Errorf("%s: err=%v entries=%d", l.Name, err, n)
+		_, n, ok, err := savedCopy(saved, l)
+		if !ok || err != nil || n < 1 {
+			t.Errorf("%s: ok=%v err=%v entries=%d, want a non-empty saved copy", l.Name, ok, err, n)
 		}
 		body, _ := saved.ReadFile("saved/" + l.Name + ".json")
-		var env struct {
-			Source string `json:"source"`
-		}
+		var env map[string]json.RawMessage
 		if err := json.Unmarshal(body, &env); err != nil {
 			t.Fatal(err)
 		}
-		if raw[l.Name] && env.Source != "" {
-			t.Errorf("%s is raw NRS data but carries source %q", l.Name, env.Source)
-		}
-		if !raw[l.Name] && !strings.HasPrefix(env.Source, "hand-built, not NRS data") {
-			t.Errorf("%s source = %q, want hand-built marker", l.Name, env.Source)
+		if _, has := env["source"]; has {
+			t.Errorf("%s carries a source key, want the raw NRS body", l.Name)
 		}
 	}
 }

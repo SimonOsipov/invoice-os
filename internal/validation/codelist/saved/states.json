@@ -1,6 +1,5 @@
 {
   "code": 200,
-  "source": "hand-built, not NRS data: the 36 states and the FCT with ISO 3166-2:NG codes",
   "data": [
     {
       "name": "Abia",
@@ -23,16 +22,16 @@
       "code": "NG-BA"
     },
     {
-      "name": "Bayelsa",
-      "code": "NG-BY"
-    },
-    {
       "name": "Benue",
       "code": "NG-BE"
     },
     {
       "name": "Borno",
       "code": "NG-BO"
+    },
+    {
+      "name": "Bayelsa",
+      "code": "NG-BY"
     },
     {
       "name": "Cross River",
@@ -59,7 +58,7 @@
       "code": "NG-EN"
     },
     {
-      "name": "Federal Capital Territory",
+      "name": "Abuja Federal Capital Territory",
       "code": "NG-FC"
     },
     {
@@ -79,20 +78,20 @@
       "code": "NG-KD"
     },
     {
-      "name": "Kano",
-      "code": "NG-KN"
-    },
-    {
-      "name": "Katsina",
-      "code": "NG-KT"
-    },
-    {
       "name": "Kebbi",
       "code": "NG-KE"
     },
     {
+      "name": "Kano",
+      "code": "NG-KN"
+    },
+    {
       "name": "Kogi",
       "code": "NG-KO"
+    },
+    {
+      "name": "Katsina",
+      "code": "NG-KT"
     },
     {
       "name": "Kwara",

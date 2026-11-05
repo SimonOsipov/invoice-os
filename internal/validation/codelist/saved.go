@@ -6,7 +6,7 @@ import (
 	"io/fs"
 )
 
-// saved holds one NRS-envelope file per list; see each file's "source" key for hand-built ones.
+// saved holds the raw NRS body of each list, captured 2026-11-05T08:25Z from {DefaultBaseURL}/{list}.
 //
 //go:embed saved/*.json
 var saved embed.FS

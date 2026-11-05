@@ -965,6 +965,18 @@ describe('the Library shares the landing\'s choice', () => {
     expect(text(html)).toContain('which feature or group you opened')
   })
 
+  it('C-LAND07: the receives list names the sign-up and the validated invoice', () => {
+    const lis = Array.from(html.slice(html.indexOf('>What Google receives</h2>')).split('</ul>')[0].matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)).map((m) => text(m[1]))
+    expect(lis).toContain('that you sent the form to create an account')
+    expect(lis).toContain('each time an invoice is validated in the signed-in product')
+  })
+
+  it('C-LAND07: the never-receives paragraph says the app sends only the kind of page', () => {
+    const at = html.indexOf('>What Google never receives</h2>')
+    const para = text(html.slice(at, html.indexOf('</p>', at)))
+    expect(para).toContain('In the signed-in product we send only the kind of page you open, never an invoice number or a search you typed.')
+  })
+
   it('PL-05 the section states the one choice, the reopen on either site and the shared deletion', () => {
     const section = libraryParagraphs().join(' ')
     for (const needle of [

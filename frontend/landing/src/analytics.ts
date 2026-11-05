@@ -162,6 +162,18 @@ export function trackInvoiceValidated(): void {
   sendOrHold('invoice_validated')
 }
 
+export function trackEmailVerified(): void {
+  sendOrHold('email_verified')
+}
+
+export function trackWorkspaceCreated(): void {
+  sendOrHold('workspace_created')
+}
+
+export function trackClientAdded(): void {
+  sendOrHold('client_added')
+}
+
 // Bounded fields every later hit inherits. Kept until the tag loads, then replayed before `config`.
 let pageFields: Record<string, string> | null = null
 

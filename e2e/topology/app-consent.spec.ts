@@ -1,13 +1,15 @@
 // The app's cookie notice and HubSpot chat on the deployed PR app. The PR host is no chat host, so Accept loads no chat.
+import { randomUUID } from 'node:crypto'
 import { test, expect, type Page, type TestInfo } from '@playwright/test'
-import { createEntity, createInvoice } from '../api/client'
+import { createEntity, createInvoice, rawFetch, signInForCode } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { browserToken, collectErrors, DESTINATION_READY, signInAs, storedSession } from '../personaSession'
 import { HUBSPOT_CHAT_DOMAINS, routeAppHost, watchStubLeaks } from '../smoke/landingConsent'
 import { resolveTarget } from '../targets'
-import { approvalRun404Dropper, collectSourcedErrors } from './consoleGate'
+import { approvalRun404Dropper, collectSourcedErrors, expectedStatusDropper } from './consoleGate'
 import { rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { APP_URL, GATEWAY_URL, shardTenants } from './targets'
+import { isConfirmPage, STATE_43 } from './verifyLink'
 
 const SHARD = shardTenants('app-consent.spec.ts')
 test.beforeAll(() => { expect(test.info().project.name, 'app-consent.spec.ts belongs to the ui-surfaces shard').toBe('ui-surfaces') })
@@ -299,6 +301,90 @@ test('AC-GA the routed production app loads the Google tag and sends events only
     expect((await layer()).length, 'an event was sent after Reject').toBe(held)
 
     // stub and console gates
+    await Promise.all(pending)
+    expect(leaked, 'a GA, Sentry or chat request was not answered by the stub').toEqual([])
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  } finally {
+    await context.unrouteAll({ behavior: 'ignoreErrors' })
+    await context.close()
+  }
+})
+
+test('AC-FUNNEL the routed production app holds email_verified, workspace_created and client_added until Accept', async ({ browser, request }) => {
+  test.setTimeout(300_000)
+  const id = randomUUID()
+  const email = `land08-${id}@example.com`
+  const password = id.slice(0, 16)
+  const workspaceName = `Funnel Ws ${id.slice(0, 8)}`
+  const displayName = `Funnel User ${id.slice(0, 8)}`
+  const clientName = `Funnel Client ${id.slice(0, 8)}`
+  const tin = freshTin()
+
+  const context = await browser.newContext()
+  try {
+    await routeAppHost(context, { app: APP_URL, gateway: GATEWAY_URL })
+    const app = await context.newPage()
+    // the first sign-in probes /me before it provisions: a 403 is expected
+    const errors = collectSourcedErrors(app, expectedStatusDropper(app, 403, /\/api\/tenancy\/v1\/me$/))
+    const { leaked, pending } = watchStubLeaks(app)
+    const gaRequests: string[] = []
+    app.on('request', (r) => {
+      if (hostMatches(new URL(r.url()).hostname.toLowerCase(), TAG_HOSTS)) gaRequests.push(r.url())
+    })
+    const layer = () => app.evaluate(() => ((window as unknown as { dataLayer?: ArrayLike<unknown>[] }).dataLayer ?? []).map((e) => Array.from(e)))
+
+    // routing control: a mismatch means the routing failed, not the analytics
+    const served = await app.goto(`${PROD_APP}/build.txt`)
+    const direct = await request.get(`${APP_URL}/build.txt`)
+    expect(direct.ok(), `routing, not analytics: ${APP_URL}/build.txt did not answer 2xx`).toBeTruthy()
+    expect((await served?.text())?.trim(), `routing, not analytics: ${PROD_APP} does not serve the fork's build`).toBe((await direct.text()).trim())
+
+    // The registration answers ride the first sign-in. kind: 'firm' shows "Add your first client".
+    const registered = await rawFetch('/auth/register', { method: 'POST', body: { email, password, workspace_name: workspaceName, display_name: displayName, kind: 'firm' } })
+    expect(registered.status, JSON.stringify(registered.body)).toBe(202) // handler: internal/gateway/register.go
+
+    // The app holds the pending-verify marker, then opens the gateway confirm page with its state.
+    await app.goto(`${PROD_APP}/?auth=verify#token=bogus-${randomUUID()}`, { waitUntil: 'commit' })
+    await app.waitForURL((u) => isConfirmPage(u), { timeout: 30_000 })
+    const state = new URL(app.url()).searchParams.get('state') ?? ''
+    expect(state, 'the confirm page state').toMatch(STATE_43)
+    const code = await signInForCode(email, password, state)
+
+    await app.goto(`${PROD_APP}/?handoff=${code}`)
+    await expect(app.getByRole('heading', { level: 1, name: 'Add your first client', exact: true })).toBeVisible({ timeout: 60_000 })
+    await expect(notice(app)).toBeVisible()
+
+    // before Accept: all three events are held
+    await app.getByRole('button', { name: 'Add client', exact: true }).first().click()
+    const dialog = app.getByRole('dialog', { name: 'Add client' })
+    await dialog.getByRole('textbox').first().fill(clientName)
+    await dialog.getByPlaceholder('########-####').fill(tin)
+    const created = app.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/portfolio/v1/entities')
+    await dialog.getByRole('button', { name: 'Add client', exact: true }).click()
+    expect((await created).status()).toBe(201) // handler: internal/portfolio
+    await expect(dialog).toHaveCount(0)
+    expect(gaRequests, 'a GA request left before Accept').toEqual([])
+    expect(await app.evaluate(() => typeof (window as unknown as { dataLayer?: unknown }).dataLayer)).toBe('undefined')
+
+    // after Accept
+    await accept(app).click()
+    await expect(notice(app)).toBeHidden()
+    await expect.poll(() => gaRequests.some((u) => new URL(u).hostname === 'www.googletagmanager.com'), 'the tag was never requested').toBe(true)
+    await expect.poll(async () => (await layer()).map((e) => e[0]), 'the tag never loaded on the routed app').toContain('config')
+    const sent = await layer()
+    const kinds = sent.map((e) => e[0])
+    expect(sent.slice(kinds.indexOf('config') + 1).filter((e) => e[0] === 'event')).toEqual([
+      ['event', 'email_verified', {}],
+      ['event', 'workspace_created', {}],
+      ['event', 'client_added', {}],
+    ])
+
+    // no identifier reaches the dataLayer
+    const serialized = JSON.stringify(sent)
+    for (const secret of ['user_id', email, workspaceName, displayName, clientName, tin]) {
+      expect(serialized, `${secret} reached the dataLayer`).not.toContain(secret)
+    }
+
     await Promise.all(pending)
     expect(leaked, 'a GA, Sentry or chat request was not answered by the stub').toEqual([])
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])

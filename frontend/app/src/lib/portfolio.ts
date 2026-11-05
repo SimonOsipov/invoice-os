@@ -14,7 +14,7 @@
 // helpers receive authedFetch and know nothing about tokens or onUnauthorized:
 // - listEntities:  GET  `${base}/api/portfolio/v1/entities?limit=<n>[&status=<s>]`,
 //   resolves the whole `{entities,pagination}` envelope (no unwrapping).
-// - createEntity:  POST `${base}/api/portfolio/v1/entities`, full EntityInput body.
+// - createEntity:  POST `${base}/api/portfolio/v1/entities`, full EntityInput body; reports `client_added` on success.
 // - updateEntity:  PATCH `${base}/api/portfolio/v1/entities/{id}`, Partial<EntityInput> body.
 // Non-2xx responses reject with the underlying ApiError unchanged (apiFetch's own
 // contract, C1-C8 in packages/api-client/src/client.test.ts) — these helpers must not
@@ -38,6 +38,7 @@
 // stub's rationale, M3-07-02). Only the type-only imports below are referenced by this
 // stub's signatures.
 import type { ApiFetchOptions, AsyncState, AsyncStatus } from '@invoice-os/api-client'
+import { trackClientAdded } from '../chat'
 import type { StatusStyle } from '../types'
 
 export type EntityStatus = 'active' | 'archived'
@@ -121,7 +122,9 @@ export async function createEntity(
   base: string,
   input: EntityInput,
 ): Promise<Entity> {
-  return authedFetch<Entity>(`${base}/api/portfolio/v1/entities`, { method: 'POST', body: input })
+  const entity = await authedFetch<Entity>(`${base}/api/portfolio/v1/entities`, { method: 'POST', body: input })
+  trackClientAdded()
+  return entity
 }
 
 export async function updateEntity(

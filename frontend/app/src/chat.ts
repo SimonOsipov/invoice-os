@@ -26,6 +26,7 @@ import { routeName } from './lib/route'
 
 export { APP_NOTICE_BODY, CookieNotice, type ConsentChoice } from '../../landing/src/components/CookieNotice'
 export { readConsent, type ConsentRecord } from '../../landing/src/consent'
+export { trackClientAdded, trackEmailVerified, trackWorkspaceCreated } from '../../landing/src/analytics'
 
 export function privacyHref(): string {
   return `${landingBase() ?? `https://${PRODUCTION_HOSTNAMES[0]}`}/privacy`

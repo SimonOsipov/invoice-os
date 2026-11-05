@@ -24,7 +24,7 @@ const (
 	nightlyHubSpotSection = `-section hubspot="$RUNNER_TEMP/results/results-hubspot/hubspot.json"`
 	nightlyProdSection    = `-section prod_check="$RUNNER_TEMP/prod-check/prod_check.json"`
 	nightlySummaryIf      = `${{ !cancelled() && needs.main-only.result == 'success' }}`
-	nightlyPolls          = "600"
+	nightlyPolls          = "640"
 	nightlySummaryTimeout = "330"
 	nightlyPreviewDL      = `gh run download "$PREVIEW_RUN_ID" -R "$REPO" -p 'results-*' -D "$RUNNER_TEMP/results"`
 )

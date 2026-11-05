@@ -396,6 +396,7 @@ describe('Google tag', () => {
     expect(document.cookie).toContain(CONSENT_STORAGE_KEY)
     reportValidatedInvoice({ status: 'validated' })
     syncAppConsent(EMAIL)
+    expect(tags().length, 'control: the tag loaded').toBe(1)
     expect(layer().filter((e) => e[1] === 'invoice_validated')).toEqual([])
   })
 

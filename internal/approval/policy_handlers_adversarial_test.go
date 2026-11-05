@@ -1,6 +1,6 @@
 package approval
 
-// Adversarial coverage for the six approval-policy handlers: the decoder's real
+// Adversarial coverage for the seven approval-policy handlers: the decoder's real
 // behaviour on hostile bodies, what a client can and cannot smuggle past it, and
 // what the mux does with the path id and the verbs no route declares.
 // httptest only, no DB — same gate as policy_handlers_test.go.
@@ -542,6 +542,7 @@ func TestPolicyRoutes_HeadAndOptions(t *testing.T) {
 	writePaths := []string{
 		"/v1/approval-policies/" + policyHandlerTestID + "/draft",
 		"/v1/approval-policies/" + policyHandlerTestID + "/publish",
+		"/v1/approval-policies/order",
 	}
 
 	t.Run("HEAD on a GET route runs the handler with no body", func(t *testing.T) {
@@ -576,7 +577,7 @@ func TestPolicyRoutes_HeadAndOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("OPTIONS reaches no handler on any of the six", func(t *testing.T) {
+	t.Run("OPTIONS reaches no handler on any of the seven", func(t *testing.T) {
 		for _, p := range append(append([]string{}, getPaths...), writePaths...) {
 			r := httptest.NewRequest("OPTIONS", p, nil)
 			rec := httptest.NewRecorder()

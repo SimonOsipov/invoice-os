@@ -196,3 +196,10 @@ func DeletePolicyHandler(del PolicyDeleter, log *slog.Logger) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, policy)
 	}
 }
+
+// ReorderPoliciesHandler is a compile stub until APSC-02-04 implements it.
+func ReorderPoliciesHandler(reorder PolicyReorderer, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotImplemented)
+	}
+}

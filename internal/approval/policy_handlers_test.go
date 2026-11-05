@@ -1,6 +1,6 @@
 package approval
 
-// The six approval-policy HTTP handlers, driven through a real http.ServeMux with
+// The seven approval-policy HTTP handlers, driven through a real http.ServeMux with
 // injected function values. No DSN, no pool, no skip: this file must run in every
 // CI job and on a bare `go test ./...`.
 
@@ -27,7 +27,7 @@ import (
 
 const policyHandlerTestID = "8f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f"
 
-// policySeam bundles the six injected store functions. Every field of a
+// policySeam bundles the seven injected store functions. Every field of a
 // failClosedPolicySeam fails the test, so a handler reaching a seam the case did
 // not deliberately wire is a failure rather than a silent zero-value call.
 type policySeam struct {
@@ -37,6 +37,7 @@ type policySeam struct {
 	put     PolicyDrafter
 	publish PolicyPublisher
 	del     PolicyDeleter
+	reorder PolicyReorderer
 }
 
 func failClosedPolicySeam(t *testing.T) *policySeam {
@@ -66,10 +67,14 @@ func failClosedPolicySeam(t *testing.T) *policySeam {
 			t.Fatal("policy deleter must not run on a request the handler has to reject")
 			return Policy{}, nil
 		},
+		reorder: func(context.Context, []string) ([]Policy, error) {
+			t.Fatal("policy reorderer must not run on a request the handler has to reject")
+			return nil, nil
+		},
 	}
 }
 
-// policyErrSeam wires all six funcs to the same error, so one table drives every route.
+// policyErrSeam wires all seven funcs to the same error, so one table drives every route.
 func policyErrSeam(err error) *policySeam {
 	return &policySeam{
 		list:   func(context.Context) ([]Policy, error) { return nil, err },
@@ -80,10 +85,11 @@ func policyErrSeam(err error) *policySeam {
 		},
 		publish: func(context.Context, string) (Policy, error) { return Policy{}, err },
 		del:     func(context.Context, string) (Policy, error) { return Policy{}, err },
+		reorder: func(context.Context, []string) ([]Policy, error) { return nil, err },
 	}
 }
 
-// policyOkSeam wires all six funcs to the same successful Policy.
+// policyOkSeam wires all seven funcs to the same successful Policy.
 func policyOkSeam(p Policy) *policySeam {
 	return &policySeam{
 		list:   func(context.Context) ([]Policy, error) { return []Policy{p}, nil },
@@ -94,10 +100,11 @@ func policyOkSeam(p Policy) *policySeam {
 		},
 		publish: func(context.Context, string) (Policy, error) { return p, nil },
 		del:     func(context.Context, string) (Policy, error) { return p, nil },
+		reorder: func(context.Context, []string) ([]Policy, error) { return []Policy{p}, nil },
 	}
 }
 
-// policiesMux registers the six patterns cmd/invoice/main.go serves, so {id} is
+// policiesMux registers the seven patterns cmd/invoice/main.go serves, so {id} is
 // populated the way production populates it — a direct ServeHTTP leaves PathValue
 // empty. A deliberate copy of the patterns; the copy is pinned against the real
 // file by TestPolicyRoutes_RegisteredInCmdInvoiceMain.
@@ -109,6 +116,7 @@ func policiesMux(s *policySeam, log *slog.Logger) *http.ServeMux {
 	mux.HandleFunc("PUT /v1/approval-policies/{id}/draft", PutDraftHandler(s.put, log))
 	mux.HandleFunc("POST /v1/approval-policies/{id}/publish", PublishPolicyHandler(s.publish, log))
 	mux.HandleFunc("DELETE /v1/approval-policies/{id}", DeletePolicyHandler(s.del, log))
+	mux.HandleFunc("PUT /v1/approval-policies/order", ReorderPoliciesHandler(s.reorder, log))
 	return mux
 }
 
@@ -129,7 +137,7 @@ func servePolicy(t *testing.T, s *policySeam, log *slog.Logger, method, path, bo
 	return rec
 }
 
-// policyRoutes is the six routes with a body that WOULD reach the store, so a
+// policyRoutes is the seven routes with a body that WOULD reach the store, so a
 // missing guard shows up as a success rather than as a differently-shaped 400.
 var policyRoutes = []struct {
 	name       string
@@ -144,6 +152,7 @@ var policyRoutes = []struct {
 	{"draft", "PUT", "/v1/approval-policies/" + policyHandlerTestID + "/draft", `{"steps":[]}`, http.StatusOK},
 	{"publish", "POST", "/v1/approval-policies/" + policyHandlerTestID + "/publish", "", http.StatusOK},
 	{"delete", "DELETE", "/v1/approval-policies/" + policyHandlerTestID, "", http.StatusOK},
+	{"reorder", "PUT", "/v1/approval-policies/order", `{"policy_ids":[]}`, http.StatusOK},
 }
 
 // --- identity, before anything else ----------------------------------------
@@ -309,6 +318,7 @@ func TestPolicyHandlers_OversizeBodyIs400(t *testing.T) {
 		}{
 			{"create", "POST", "/v1/approval-policies", `{"name":"T","pad":"` + over + `"}`},
 			{"draft", "PUT", draftPath, `{"steps":[],"pad":"` + over + `"}`},
+			{"reorder", "PUT", "/v1/approval-policies/order", `{"policy_ids":[],"pad":"` + over + `"}`},
 		}
 		for _, c := range cases {
 			t.Run(c.name, func(t *testing.T) {
@@ -336,6 +346,7 @@ func TestPolicyHandlers_OversizeBodyIs400(t *testing.T) {
 		}{
 			{"create", "POST", "/v1/approval-policies", `{"name":"T","pad":"` + under + `"}`, http.StatusCreated},
 			{"draft", "PUT", draftPath, `{"steps":[],"pad":"` + under + `"}`, http.StatusOK},
+			{"reorder", "PUT", "/v1/approval-policies/order", `{"policy_ids":[],"pad":"` + under + `"}`, http.StatusOK},
 		}
 		for _, c := range cases {
 			t.Run(c.name, func(t *testing.T) {
@@ -347,6 +358,7 @@ func TestPolicyHandlers_OversizeBodyIs400(t *testing.T) {
 					ran = true
 					return newPolicy(), nil
 				}
+				s.reorder = func(context.Context, []string) ([]Policy, error) { ran = true; return nil, nil }
 				rec := servePolicy(t, s, nil, c.method, c.path, c.body, &id)
 				if !ran {
 					t.Fatalf("a %d-byte body did not reach the store; the cap is below maxPolicyBodyBytes: %d %s",
@@ -395,6 +407,7 @@ func TestPolicyHandlers_StatusCodes(t *testing.T) {
 		// AC-3 (task-484): the publish sweep's cap refusal.
 		{"sweep cap exceeded", ErrSweepCapExceeded, http.StatusConflict, "validated backlog exceeds the publish sweep cap"},
 		{"conflict", ErrConflict, http.StatusConflict, "another version was published first — reload the policy and try again"},
+		{"order stale", ErrPolicyOrderStale, http.StatusConflict, "the policy list changed — reload and try again"},
 		{"bare error", errors.New("boom"), http.StatusInternalServerError, "internal server error"},
 	}
 	for _, rt := range policyRoutes {
@@ -455,6 +468,7 @@ func TestPolicyHandlers_CatchAllRefusalIs409(t *testing.T) {
 		{"draft", "PUT", "/v1/approval-policies/" + policyHandlerTestID + "/draft", `{"steps":[]}`},
 		{"publish", "POST", "/v1/approval-policies/" + policyHandlerTestID + "/publish", ""},
 		{"delete", "DELETE", "/v1/approval-policies/" + policyHandlerTestID, ""},
+		{"reorder", "PUT", "/v1/approval-policies/order", `{"policy_ids":[]}`},
 	}
 	for _, rt := range routes {
 		t.Run(rt.name, func(t *testing.T) {
@@ -556,14 +570,107 @@ func TestPolicyHandlers_ListIsNeverNull(t *testing.T) {
 	}
 }
 
+// --- the reorder wire shape ---------------------------------------------------
+
+func TestReorderPoliciesHandler_WireShape(t *testing.T) {
+	const path = "/v1/approval-policies/order"
+
+	t.Run("no identity is 401 before the body is read", func(t *testing.T) {
+		body := &countingReader{r: strings.NewReader(`{`)}
+		rec := httptest.NewRecorder()
+		policiesMux(failClosedPolicySeam(t), nil).ServeHTTP(rec, httptest.NewRequest("PUT", path, body))
+		if rec.Code != http.StatusUnauthorized || body.read {
+			t.Errorf("status = %d, body read = %v, want 401 and an unread body", rec.Code, body.read)
+		}
+	})
+
+	t.Run("an undecodable body is 400", func(t *testing.T) {
+		id := caller()
+		rec := servePolicy(t, failClosedPolicySeam(t), nil, "PUT", path, `{`, &id)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+		}
+		if got := errorMessage(t, rec.Body.Bytes()); got != "invalid request body" {
+			t.Errorf("error = %q, want %q", got, "invalid request body")
+		}
+	})
+
+	t.Run("an absent or null policy_ids is 400 and the store does not run", func(t *testing.T) {
+		for _, body := range []string{`{}`, `{"policy_ids":null}`} {
+			id := caller()
+			rec := servePolicy(t, failClosedPolicySeam(t), nil, "PUT", path, body, &id)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s: status = %d, want 400: %s", body, rec.Code, rec.Body.String())
+			}
+			if got := errorMessage(t, rec.Body.Bytes()); got != "policy_ids must be an array of policy ids" {
+				t.Errorf("%s: error = %q, want the presence message", body, got)
+			}
+		}
+	})
+
+	t.Run("an ok seam answers 200 with the envelope and receives the ids", func(t *testing.T) {
+		id := caller()
+		var got []string
+		ran := false
+		s := failClosedPolicySeam(t)
+		s.reorder = func(_ context.Context, ids []string) ([]Policy, error) {
+			ran, got = true, ids
+			return []Policy{newPolicy()}, nil
+		}
+		rec := servePolicy(t, s, nil, "PUT", path, `{"policy_ids":["a","b"]}`, &id)
+		if !ran {
+			t.Fatalf("the store never ran: %d %s", rec.Code, rec.Body.String())
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+		}
+		if !reflect.DeepEqual(got, []string{"a", "b"}) {
+			t.Errorf("the store received %v, want [a b] verbatim (the store parses ids)", got)
+		}
+		if keys := keySet(t, rec.Body.Bytes()); strings.Join(keys, ",") != "approval_policies" {
+			t.Errorf("envelope keys = %v, want exactly [approval_policies]", keys)
+		}
+	})
+
+	t.Run("an empty array reaches the store as a non-nil slice", func(t *testing.T) {
+		id := caller()
+		var got []string
+		ran := false
+		s := failClosedPolicySeam(t)
+		s.reorder = func(_ context.Context, ids []string) ([]Policy, error) { ran, got = true, ids; return nil, nil }
+		rec := servePolicy(t, s, nil, "PUT", path, `{"policy_ids":[]}`, &id)
+		if !ran || rec.Code != http.StatusOK {
+			t.Fatalf("ran = %v, status = %d, want the store to run and 200: %s", ran, rec.Code, rec.Body.String())
+		}
+		if got == nil {
+			t.Error("the store received a nil slice, want an empty non-nil slice")
+		}
+		if raw := rawField(t, rec.Body.Bytes(), "approval_policies"); raw != "[]" {
+			t.Errorf("approval_policies raw JSON = %s, want [] (never null)", raw)
+		}
+	})
+
+	t.Run("a stale list is 409 with its message", func(t *testing.T) {
+		id := caller()
+		rec := servePolicy(t, policyErrSeam(ErrPolicyOrderStale), nil, "PUT", path, `{"policy_ids":[]}`, &id)
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("status = %d, want 409: %s", rec.Code, rec.Body.String())
+		}
+		if got := errorMessage(t, rec.Body.Bytes()); got != "the policy list changed — reload and try again" {
+			t.Errorf("error = %q", got)
+		}
+	})
+}
+
 // --- route resolution on a mux ---------------------------------------------
 
 func TestPolicyRoutes_RegisteredOnMux(t *testing.T) {
-	t.Run("the six resolve and carry their path id", func(t *testing.T) {
+	t.Run("the seven resolve and carry their path id", func(t *testing.T) {
 		wantID := map[string]string{
 			"list": "", "create": "",
 			"get": policyHandlerTestID, "draft": policyHandlerTestID,
 			"publish": policyHandlerTestID, "delete": policyHandlerTestID,
+			"reorder": "",
 		}
 		for _, rt := range policyRoutes {
 			t.Run(rt.name, func(t *testing.T) {
@@ -583,6 +690,7 @@ func TestPolicyRoutes_RegisteredOnMux(t *testing.T) {
 					},
 					publish: func(_ context.Context, pid string) (Policy, error) { return record(pid) },
 					del:     func(_ context.Context, pid string) (Policy, error) { return record(pid) },
+					reorder: func(context.Context, []string) ([]Policy, error) { ran = true; return nil, nil },
 				}
 				rec := servePolicy(t, s, nil, rt.method, rt.path, rt.body, &id)
 				if rec.Code == http.StatusNotFound || rec.Code == http.StatusMethodNotAllowed {
@@ -695,6 +803,7 @@ func TestPolicyRoutes_RegisteredInCmdInvoiceMain(t *testing.T) {
 		{"PUT /v1/approval-policies/{id}/draft", "approval.PutDraftHandler", "PutDraft"},
 		{"POST /v1/approval-policies/{id}/publish", "approval.PublishPolicyHandler", "PublishPolicy"},
 		{"DELETE /v1/approval-policies/{id}", "approval.DeletePolicyHandler", "DeletePolicy"},
+		{"PUT /v1/approval-policies/order", "approval.ReorderPoliciesHandler", "ReorderPolicies"},
 	}
 	for _, w := range want {
 		got, ok := found[w.pattern]

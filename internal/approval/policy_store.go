@@ -27,6 +27,7 @@ type (
 	PolicyDrafter   func(ctx context.Context, id string, name *string, scopes *scopeInput, steps []stepInput) (Policy, error)
 	PolicyPublisher func(ctx context.Context, id string) (Policy, error)
 	PolicyDeleter   func(ctx context.Context, id string) (Policy, error)
+	PolicyReorderer func(ctx context.Context, ids []string) ([]Policy, error)
 )
 
 var (
@@ -36,6 +37,7 @@ var (
 	_ PolicyDrafter   = new(Store).PutDraft
 	_ PolicyPublisher = new(Store).PublishPolicy
 	_ PolicyDeleter   = new(Store).DeletePolicy
+	_ PolicyReorderer = new(Store).ReorderPolicies
 )
 
 // newPolicy is what every read and the create start from: lanes and versions are []
@@ -1248,4 +1250,9 @@ func insertPolicySteps(ctx context.Context, tx pgx.Tx, tenantID, versionID strin
 		c.roleKeys, c.slaHours, c.condOps, c.condAmounts, c.notifyTargets, c.notifyChannels,
 	)
 	return err
+}
+
+// ReorderPolicies is a compile stub until APSC-02-04 implements it.
+func (s *Store) ReorderPolicies(ctx context.Context, ids []string) ([]Policy, error) {
+	return nil, errors.New("approval: ReorderPolicies not implemented")
 }

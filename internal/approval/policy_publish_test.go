@@ -35,6 +35,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // --- fixtures ---------------------------------------------------------------
@@ -902,26 +904,24 @@ func TestPublish_SweepArmsEachInvoiceWithItsOwnFirstMatch(t *testing.T) {
 	}
 }
 
-// TestPublish_SweepLeavesAnUnmatchedInvoiceWithoutARun: the only policy is scoped to E1, so an
-// E2 invoice matches nothing; publish still succeeds and the E1 control gets its run.
+// TestPublish_SweepLeavesAnUnmatchedInvoiceWithoutARun: the only policy in force is scoped to E1,
+// so an E2 invoice matches nothing; the sweep succeeds and the E1 control gets its run. The state
+// needs a scoped policy in force with no catch-all, which the publish guard refuses, so the
+// fixture writes it directly and the test calls the sweep PublishPolicy runs.
 func TestPublish_SweepLeavesAnUnmatchedInvoiceWithoutARun(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := policyTenant(t, super, "APSC-03 sweep unmatched")
-	c, _ := activeAdmin(t, super, tenantID)
-	staffedRoleKey(t, super, tenantID, "engagement-partner")
-
 	e1 := seedBusinessEntity(t, super, tenantID, "Unmatched E1")
 	e2 := seedBusinessEntity(t, super, tenantID, "Unmatched E2")
 	matched := sweepValidated(t, super, tenantID, e1, "sweep-unmatched-e1")
 	unmatched := sweepValidated(t, super, tenantID, e2, "sweep-unmatched-e2")
+	_, versionA := seedScopedPolicy(t, super, tenantID, "Client E1", 1, scopeSpec{EntityIDs: []string{e1}}, "engagement-partner")
 
-	policyA, versionA := seedScopedPolicyDraft(t, super, tenantID, "Client E1", 1, scopeSpec{EntityIDs: []string{e1}})
-	seedApprovalPolicyStepInLane(t, super, tenantID, versionA, seedStepSpec{
-		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("engagement-partner"),
-	})
-
-	if _, err := NewStore(app, stubFingerprinter, nil).PublishPolicy(c, policyA); err != nil {
-		t.Fatalf("PublishPolicy(A): %v, want success although an invoice matches no policy", err)
+	store := NewStore(app, stubFingerprinter, nil)
+	if err := db.WithinTenantTx(context.Background(), app, tenantID, func(tx pgx.Tx) error {
+		return store.sweepValidatedBacklog(context.Background(), tx, tenantID, "test-actor")
+	}); err != nil {
+		t.Fatalf("sweepValidatedBacklog: %v, want success although an invoice matches no policy", err)
 	}
 
 	if got := oneApprovalRun(t, super, matched).PolicyVersionID; got != versionA {

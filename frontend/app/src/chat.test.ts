@@ -372,6 +372,33 @@ describe('Google tag', () => {
     expect(pageViews().length).toBe(1)
   })
 
+  it('endAppChat_aWorkspaceThatMountsAgainInThePageSendsPageViewsAgain', async () => {
+    stubId()
+    const { bootAppAnalytics, endAppChat, reportAppPage } = await fresh()
+    setConsent(true)
+    bootAppAnalytics()
+    endAppChat()
+    reportAppPage()
+    expect(pageViews().length, 'control: endAppChat stops the sending').toBe(0)
+    bootAppAnalytics()
+    reportAppPage()
+    expect(pageViews().length).toBe(1)
+  })
+
+  it('endAppChat_leavesTheConsentRecordAndDropsAHeldEvent', async () => {
+    stubId()
+    const { endAppChat, readConsent, reportValidatedInvoice, syncAppConsent } = await fresh()
+    setConsent(true)
+    reportValidatedInvoice({ status: 'validated' })
+    const before = JSON.stringify(readConsent())
+    endAppChat()
+    expect(JSON.stringify(readConsent())).toBe(before)
+    expect(document.cookie).toContain(CONSENT_STORAGE_KEY)
+    reportValidatedInvoice({ status: 'validated' })
+    syncAppConsent(EMAIL)
+    expect(layer().filter((e) => e[1] === 'invoice_validated')).toEqual([])
+  })
+
   it('syncAppConsent_anotherTabsAcceptLoadsTheTagOnce', async () => {
     stubId()
     const { syncAppConsent } = await fresh()

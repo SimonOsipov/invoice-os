@@ -11,11 +11,11 @@ const byId = (id: string) => {
 }
 
 describe('content', () => {
-  it('content_hasElevenGroupsThirtyFeaturesSixStagesSevenTourStops', () => {
-    expect([GROUPS.length, FEATURES.length, STAGES.length, TOUR.length]).toEqual([11, 30, 6, 7])
+  it('content_hasElevenGroupsThirtyOneFeaturesSixStagesSevenTourStops', () => {
+    expect([GROUPS.length, FEATURES.length, STAGES.length, TOUR.length]).toEqual([11, 31, 6, 7])
     expect(FEATURES).toEqual(GROUPS.flatMap((g) => g.feats))
     expect(GROUPS.map((g) => g.n)).toEqual(['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11'])
-    expect(GROUPS.map((g) => g.feats.length)).toEqual([5, 3, 3, 2, 2, 2, 2, 3, 4, 2, 2])
+    expect(GROUPS.map((g) => g.feats.length)).toEqual([5, 3, 3, 2, 2, 2, 2, 3, 4, 2, 3])
   })
 
   it('content_membersGroupEndsWithTheTwoDeletionFeatures', () => {
@@ -27,7 +27,7 @@ describe('content', () => {
     expect(FEATURES.length).toBeGreaterThan(0)
     const counts: Record<SceneKind, number> = { list: 0, form: 0, flow: 0, feed: 0, metrics: 0, toggles: 0 }
     for (const f of FEATURES) counts[f.sc.kind]++
-    expect(counts).toEqual({ list: 6, form: 11, flow: 6, feed: 2, metrics: 2, toggles: 3 })
+    expect(counts).toEqual({ list: 6, form: 11, flow: 6, feed: 2, metrics: 2, toggles: 4 })
     for (const f of FEATURES) {
       expect(f.sc.win).not.toBe('')
       expect(f.sc.steps.length).toBeGreaterThanOrEqual(3)
@@ -94,17 +94,17 @@ describe('content', () => {
     expect(f.benefits).toHaveLength(3)
   })
 
-  it('content_marksTheOtherTwentyFiveShipped', () => {
+  it('content_marksTheOtherTwentySixShipped', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped').map((f) => f.id)
     expect(shipped).toEqual(['import-files', 'create-invoice', 'invoice-status', 'credit-notes', 'send-again', 'read-documents', 'review-fields', 'learns',
       'rule-library', 'validate', 'custom-rules', 'approval-queue', 'workflow-builder', 'overview', 'reports', 'audit-trail',
-      'evidence-bundle', 'portfolio', 'onboard-client', 'contacts', 'invite-members', 'roles', 'delete-account', 'delete-workspace', 'company-profile'])
+      'evidence-bundle', 'portfolio', 'onboard-client', 'contacts', 'invite-members', 'roles', 'delete-account', 'delete-workspace', 'company-profile', 'app-analytics'])
     for (const f of FEATURES) expect(['shipped', 'soon']).toContain(f.status)
   })
 
   it('content_shippedFeaturesHaveTheirViewsAppPath', () => {
     const shipped = FEATURES.filter((f) => f.status === 'shipped')
-    expect(shipped).toHaveLength(25)
+    expect(shipped).toHaveLength(26)
     for (const f of shipped) expect(f.path, f.id).toBe(APP_PATHS[f.view])
     expect(byId('overview').path).toBe('/')
     expect(byId('import-files').path).toBe('/create')
@@ -113,6 +113,7 @@ describe('content', () => {
     expect(byId('reports').path).toBe('/reports')
     expect(byId('contacts').path).toBe('/customers')
     expect(byId('company-profile').path).toBe('/settings')
+    expect(byId('app-analytics').path).toBe('/')
     expect(byId('delete-account').path).toBe('/account')
     expect(byId('delete-workspace').path).toBe('/settings')
   })

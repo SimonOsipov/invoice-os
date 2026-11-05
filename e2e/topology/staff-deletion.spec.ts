@@ -235,36 +235,46 @@ test('support console: the tenant header wraps and shows the whole state line at
   const text = heading.locator('xpath=../..')
   const viewJobs = header.getByRole('button', { name: 'View jobs', exact: true })
 
-  const check = async (state: string, stateLine: Locator): Promise<void> => {
+  // Holds the list reload that follows Start deletion; the 30 s cap keeps a fix that waits for the list from deadlocking.
+  let listHeld = false
+  let capped = false
+  let releaseList: () => void = () => {}
+  const listRelease = new Promise<void>((resolve) => { releaseList = resolve })
+  const isListGet = (url: URL): boolean => url.pathname === STAFF_TENANTS
+  const search = main(page).getByLabel('Search tenants')
+
+  const check = async (state: string, stateLine: Locator, betweenReads?: () => Promise<void>): Promise<void> => {
     const entry = page.viewportSize()
     try {
-      for (const width of NARROW_WIDTHS) {
+      // With a hook, 390px is read twice: held (hook fires after the first read) and after the list lands.
+      const widths = betweenReads ? [NARROW_WIDTHS[0], ...NARROW_WIDTHS] : NARROW_WIDTHS
+      for (const [i, width] of widths.entries()) {
         await page.setViewportSize({ width, height: HEIGHT })
         await settleAnimations(card, header, text, viewJobs, actions)
-        const where = `${state} at ${width}px`
-        const r = {
-          text: await rectOf('the text block', text, width),
-          viewJobs: await rectOf('View jobs', viewJobs, width),
-          actions: await rectOf('the action group', actions, width),
-        }
-        const cardBox = await rectOf('the detail card', card, width)
+        const where = `${state} at ${width}px${betweenReads && i === 1 ? ' (list rendered)' : ''}`
+        // One synchronous read: a list render landing between per-element reads skews the compared boxes.
+        const buttons = actions.getByRole('button')
+        const targets = await Promise.all([card, text, viewJobs, actions, heading, stateLine, ...(await buttons.all())].map((l) => l.elementHandle({ timeout: 5_000 })))
+        const read = await page.evaluate((els) => els.map((el) => {
+          const { x, y, width: w, height: h } = (el as Element).getBoundingClientRect()
+          return { x, y, width: w, height: h }
+        }), targets)
+        const [cardBox, ...rest] = read
+        const [textBox, viewJobsBox, actionsBox, nameBox, stateBox, ...boxes] = rest
+        const r = { text: textBox, viewJobs: viewJobsBox, actions: actionsBox }
+        if (betweenReads && i === 0) await betweenReads()
         for (const part of ['text', 'viewJobs', 'actions'] as const) {
           expect(enclosesRect(cardBox, r[part], 1), `${part} leaves the detail card, ${where}`).toBe(true)
         }
         for (const [a, b] of [['text', 'viewJobs'], ['text', 'actions'], ['viewJobs', 'actions']] as const) {
           expect(rectsOverlap(r[a], r[b]), `${a} and ${b} overlap, ${where}`).toBe(false)
         }
-        const buttons = actions.getByRole('button')
-        const count = await buttons.count()
-        const boxes: Rect[] = []
-        for (let i = 0; i < count; i++) {
-          const box = await rectOf(`action ${i}`, buttons.nth(i), width)
-          expect(enclosesRect(cardBox, box, 1), `action ${i} leaves the detail card, ${where}`).toBe(true)
-          boxes.push(box)
-        }
+        const count = boxes.length
+        expect(count, `no action buttons, ${where}`).toBeGreaterThan(0)
+        for (let i = 0; i < count; i++) expect(enclosesRect(cardBox, boxes[i], 1), `action ${i} leaves the detail card, ${where}`).toBe(true)
         for (let i = 0; i < count; i++) for (let j = i + 1; j < count; j++) expect(rectsOverlap(boxes[i], boxes[j]), `actions ${i} and ${j} overlap, ${where}`).toBe(false)
-        expect((await rectOf('the name', heading, width)).width, `the name is 0 wide, ${where}`).toBeGreaterThan(0)
-        expect((await rectOf('the state line', stateLine, width)).width, `the state line is 0 wide, ${where}`).toBeGreaterThan(0)
+        expect(nameBox.width, `the name is 0 wide, ${where}`).toBeGreaterThan(0)
+        expect(stateBox.width, `the state line is 0 wide, ${where}`).toBeGreaterThan(0)
         const fit = await stateLine.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
         expect(fit.scrollWidth, `the state line is truncated, ${where} (${JSON.stringify(fit)})`).toBeLessThanOrEqual(fit.clientWidth)
         await noSideways(page, `Tenants, ${where}`)
@@ -277,8 +287,20 @@ test('support console: the tenant header wraps and shows the whole state line at
   const stateLine = main(page).getByText(/Scheduled for deletion on/)
   await check('unscheduled', main(page).getByText('Not scheduled. Use Delete workspace first; Purge now follows.'))
   await actions.getByRole('button', { name: 'Delete workspace', exact: true }).click()
+  await page.route((url) => isListGet(url), async (route) => {
+    if (route.request().method() !== 'GET' || listHeld) return route.fallback()
+    listHeld = true
+    setTimeout(() => { capped = true; releaseList() }, 30_000)
+    await listRelease
+    await route.fallback()
+  })
   await confirmModal(page, 'Start deletion', 'e2e narrow')
   await expect(stateLine).toBeVisible()
-  await check('scheduled', stateLine)
+  await check('scheduled', stateLine, async () => {
+    expect(capped, 'the 30 s cap released the list, not the hook').toBe(false)
+    releaseList()
+    await expect(search, 'the tenant list did not render after release').toBeVisible()
+  })
+  expect(listHeld, 'the tenant list reload was never held').toBe(true)
   expect(errors, errors.join('\n')).toEqual([])
 })

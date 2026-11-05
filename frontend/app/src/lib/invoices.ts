@@ -116,6 +116,7 @@ import type { AuthedFetch } from './portfolio'
 import type { Violation } from './validationApi'
 import type { StatusStyle } from '../types'
 import type { AsyncState, AsyncStatus } from '@invoice-os/api-client'
+import { reportValidatedInvoice } from '../chat'
 import { toDateInputValue } from './format'
 import { INVOICE_FIELDS, labelOf, type EditFieldKey, type InvoiceField, type LineEditKey } from './invoiceFields'
 
@@ -822,7 +823,9 @@ export async function createInvoice(
   base: string,
   input: InvoiceCreateInput,
 ): Promise<InvoiceRecord> {
-  return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices`, { method: 'POST', body: input })
+  return reportValidatedInvoice(
+    await authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices`, { method: 'POST', body: input }),
+  )
 }
 
 export async function editInvoice(
@@ -839,7 +842,9 @@ export async function revalidateInvoice(
   base: string,
   id: string,
 ): Promise<InvoiceRecord> {
-  return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}/validate`, { method: 'POST' })
+  return reportValidatedInvoice(
+    await authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/invoices/${id}/validate`, { method: 'POST' }),
+  )
 }
 
 // POST /v1/invoices/{id}/keep-as-is (INVCR-01-15, D6, KeepAsIsHandler handlers.go) --

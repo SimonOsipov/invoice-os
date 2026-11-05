@@ -20,6 +20,7 @@ const h = vi.hoisted(() => {
     verifyLinkEvaluated: vi.fn(),
     forwarding: false,
     bootChat: vi.fn(),
+    trackEmailVerified: vi.fn(),
     bootAnalytics: vi.fn(() => {
       seen.atAnalytics = snapshot()
     }),
@@ -53,7 +54,7 @@ function mockModules() {
     h.inviteLinkEvaluated()
     return real
   })
-  vi.doMock('./analytics', () => ({ bootAnalytics: h.bootAnalytics }))
+  vi.doMock('./analytics', () => ({ bootAnalytics: h.bootAnalytics, trackEmailVerified: h.trackEmailVerified }))
   vi.doMock('./hubspotChat', () => ({ bootChat: h.bootChat }))
 }
 
@@ -216,5 +217,35 @@ describe('main', () => {
     expect(h.createRoot).not.toHaveBeenCalled()
     expect(h.bootAnalytics).not.toHaveBeenCalled()
     expect(h.bootChat).not.toHaveBeenCalled()
+  })
+
+  it('main_sendsEmailVerifiedOnAVerifiedReturn', async () => {
+    await bootMain('/?verified=1')
+
+    expect(h.trackEmailVerified).toHaveBeenCalledTimes(1)
+    expect(h.trackEmailVerified.mock.invocationCallOrder[0]).toBeLessThan(h.bootAnalytics.mock.invocationCallOrder[0])
+  })
+
+  it('main_sendsNothingWithoutAVerifiedOutcome', async () => {
+    for (const url of ['/?verify=failed', '/', '/?verified=1&verify=failed']) {
+      await bootMain(url)
+      expect(h.trackEmailVerified, url).not.toHaveBeenCalled()
+      expect(h.bootAnalytics, url).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('main_sendsNothingWhileForwarding', async () => {
+    h.forwarding = true
+    await bootMain(`/?verified=1&handoff=${T}`)
+
+    expect(h.verifyLinkEvaluated, 'control: the mocked module ran').toHaveBeenCalledTimes(1)
+    expect(h.trackEmailVerified).not.toHaveBeenCalled()
+  })
+
+  it('main_readsTheOutcomeBeforeRender', async () => {
+    h.render.mockImplementationOnce(() => history.replaceState(null, '', '/'))
+    await bootMain('/?verified=1')
+
+    expect(h.trackEmailVerified).toHaveBeenCalledTimes(1)
   })
 })

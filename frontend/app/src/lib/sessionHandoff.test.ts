@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client'
 
 import { APP_PERSONAS, type Me, type Session } from '../auth'
+import { trackWorkspaceCreated } from '../chat'
 import { HANDOFF_PARAM, HANDOFF_TTL_MS, InviteRefusedError, createOwnWorkspace, handoffPersona, joinInvite, type JoinOffer, type ProvisionBody, isLiveHandoffSession, readHandoffCode, redeemHandoff, registrationAnswers } from './sessionHandoff'
 
 const CODE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ'
@@ -33,7 +34,10 @@ const NON_ASCII = ['Soci\u00e9t\u00e9 G\u00e9n\u00e9rale', 'Ad\u00e9b\u00e1y\u1e
 const LIVE = jwt(NOW / 1000 + 3600)
 const EXPIRED = jwt(NOW / 1000 - 1)
 
+vi.mock('../chat', () => ({ trackWorkspaceCreated: vi.fn() }))
+
 afterEach(() => {
+  vi.mocked(trackWorkspaceCreated).mockClear()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -258,6 +262,58 @@ describe('redeemHandoff provisions the registered workspace', () => {
       await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
       expect.soft(utf8[3]?.body, text).toStrictEqual(sent)
     }
+  })
+
+  it('provision_a201SendsWorkspaceCreatedOnce', async () => {
+    const calls = stubChain({})
+    const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
+    expect(trace(calls)).toEqual(CHAIN)
+    expect(s).toMatchObject({ persona: handoffPersona(IN_HOUSE_ME), token: TOKEN2, me: IN_HOUSE_ME, renewal: { refreshToken: 'R1', receivedAt: 5000 } })
+    expect(trackWorkspaceCreated).toHaveBeenCalledTimes(1)
+  })
+
+  it('provision_a409SendsNothing', async () => {
+    stubChain({ workspaces: { status: 409, body: { error: 'already has a workspace' } } })
+    const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
+    expect(s).toMatchObject({ token: TOKEN2, handoff: true })
+    expect(trackWorkspaceCreated).not.toHaveBeenCalled()
+  })
+
+  it('provision_aRejectedPostSendsNothing', async () => {
+    const rows: [string, () => void, object][] = [
+      ['500', () => stubChain({ workspaces: { status: 500 } }), { status: 500 }],
+      [
+        'network TypeError',
+        () => {
+          stubChain({})
+          const inner = fetch
+          vi.stubGlobal('fetch', (url: string, init: never) => (url.endsWith('/workspaces') ? Promise.reject(new TypeError('Failed to fetch')) : inner(url, init)))
+        },
+        { kind: 'network', status: null },
+      ],
+    ]
+    for (const [name, arrange, want] of rows) {
+      arrange()
+      const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).then(() => null, (e: unknown) => e)
+      expect(err, name).toBeInstanceOf(ApiError)
+      expect(err, name).toMatchObject(want)
+      expect(trackWorkspaceCreated, name).not.toHaveBeenCalled()
+    }
+  })
+
+  it('provision_aFailedRefreshAfterA201SendsOnce', async () => {
+    const calls = stubChain({ refresh: { status: 400, body: { error: 'bad' } } })
+    const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).then(() => null, (e: unknown) => e)
+    expect(trace(calls)).toEqual(CHAIN.slice(0, 5))
+    expect(err).toBeInstanceOf(Error)
+    expect((err as { status?: number }).status).not.toBe(403)
+    expect(trackWorkspaceCreated).toHaveBeenCalledTimes(1)
+  })
+
+  it('join_sendsNoWorkspaceCreated: a redemption without answers', async () => {
+    stubChain({ exchange: { status: 200, body: { access_token: tokenWith({}), refresh_token: 'R0' } }, me: [FORBIDDEN], mine: { status: 200, body: { invitations: [], removed: false, live_membership: false } } })
+    await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+    expect(trackWorkspaceCreated).not.toHaveBeenCalled()
   })
 
   it('redeemHandoff keeps the refreshed tokens after provisioning', async () => {
@@ -834,6 +890,31 @@ describe('join offers', () => {
       expect(err).toMatchObject({ status: 401 })
       expect(paths(calls)).toEqual(['/api/tenancy/v1/invitations/a/accept'])
     }
+  })
+
+  it('createOwnWorkspace_a201SendsWorkspaceCreatedOnce', async () => {
+    stub({ me: [{ status: 200, body: IN_HOUSE_ME }] })
+    await createOwnWorkspace(GATEWAY, offer({ token: WITH_ANSWERS, answers: ANSWERS, firstWorkspace: true }), ANSWERS, 5000)
+    expect(trackWorkspaceCreated).toHaveBeenCalledTimes(1)
+  })
+
+  it('provision_a401RetrySendsOnce', async () => {
+    stub({
+      exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } },
+      mine: { status: 200, body: { invitations: [] } },
+      workspacesSeq: [UNAUTH, { status: 201, body: {} }],
+      me: [FORBIDDEN, { status: 200, body: IN_HOUSE_ME }],
+    })
+    await redeemHandoff(GATEWAY, CODE, STATE, 5000)
+    expect(trackWorkspaceCreated).toHaveBeenCalledTimes(1)
+  })
+
+  it('join_sendsNoWorkspaceCreated: joinInvite and a held invite', async () => {
+    stub({ me: [{ status: 200, body: ME }] })
+    await joinInvite(GATEWAY, offer(), 'a', 'Ada', 5000)
+    stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } }, me: [{ status: 200, body: ME }] })
+    await redeemHandoff(GATEWAY, CODE, STATE, 5000, { token: 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE', name: null })
+    expect(trackWorkspaceCreated).not.toHaveBeenCalled()
   })
 
   it('createOwnWorkspace_a401RenewsOnceAndRetries', async () => {

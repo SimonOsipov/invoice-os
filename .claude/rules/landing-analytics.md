@@ -2,10 +2,16 @@
 paths:
   - "frontend/landing/src/analytics*"
   - "frontend/landing/src/components/CookieNotice*"
+  - "frontend/landing/src/components/RegisterModal*"
   - "frontend/landing/src/consent*"
   - "frontend/landing/src/gaCookies*"
   - "frontend/landing/src/hubspot*"
+  - "frontend/landing/src/main.tsx"
   - "frontend/app/src/chat*"
+  - "frontend/app/src/lib/invoices.ts"
+  - "frontend/app/src/lib/sessionHandoff.ts"
+  - "frontend/app/src/lib/portfolio.ts"
+  - "frontend/app/src/lib/importApi.ts"
   - "frontend/landing/Dockerfile"
   - "frontend/app/Dockerfile"
   - "e2e/smoke/landing-*.spec.ts"
@@ -17,17 +23,24 @@ paths:
 ---
 # Landing analytics
 
-- Ship GA4 on the public landing page, the public Feature Library and the public blog. The app notice and the Privacy page say that the signed-in product (app.ascomply.com) runs Google Analytics too. Keep that copy. `privacy-page.md` records its backing. Add no Google tag to the app without a story. Never add GA to the consoles.
+- Ship GA4 on the public landing page, the public Feature Library, the public blog and the signed-in app. The app notice and the Privacy page say that the signed-in product (app.ascomply.com) runs Google Analytics too. Keep that copy. `privacy-page.md` records its backing. Never add GA to the consoles.
 - Load the `gtag.js` tag only when `shouldLoadTag` holds: a production hostname, granted analytics consent and a baked measurement id.
 - Match the landing hostname exactly against `PRODUCTION_HOSTNAMES` in `hubspot.ts`. That gate does not depend on the measurement id.
 - Keep `CONSENT_DEFAULT_ANALYTICS` false. A visitor with no stored record loads no tag.
-- Pass `VITE_GA_MEASUREMENT_ID` as a build arg of the `landing`, `library` and `blog` images in `deploy-prod.yml` and `dev-env.yml`. Previews carry the production id, so the hostname gate keeps them dark.
-- Declare `ARG` and `ENV` for every `VITE_*` variable in `frontend/landing/Dockerfile`, `frontend/library/Dockerfile` and `frontend/blog/Dockerfile`. Docker drops a build arg that has no `ARG`.
-- Rebuild the `landing`, `library` or `blog` image to change its `VITE_*` value. Vite bakes it at build time.
+- Pass `VITE_GA_MEASUREMENT_ID` as a build arg of the `landing`, `library`, `blog` and `app` images in `deploy-prod.yml` and `dev-env.yml`. Previews carry the production id, so the hostname gate keeps them dark.
+- Declare `ARG` and `ENV` for every `VITE_*` variable in `frontend/landing/Dockerfile`, `frontend/library/Dockerfile`, `frontend/blog/Dockerfile` and `frontend/app/Dockerfile`. Docker drops a build arg that has no `ARG`.
+- Rebuild the `landing`, `library`, `blog` or `app` image to change its `VITE_*` value. Vite bakes it at build time.
 - Never send `page_view` by hand on the landing. `gtag('config', id)` sends it, and a manual event double-counts.
 - Push an `arguments` object to `dataLayer`, never an array. GA4 ignores an array.
-- Send fixed literals as event parameters: `cta_location`, `form_name`, `percent_scrolled`, `feature_id` and `group_id`. Never send form data.
-- Send every event through `send`. It returns early when the tag is not loaded or the visitor has rejected.
+- Send fixed literals as event parameters: `cta_location`, `form_name`, `percent_scrolled`, `feature_id`, `group_id` and, in the app only, `page_location`. Never send form data. `page_location` is the bounded route pattern from `routeName`, never the live URL.
+- Send every event through `send`. It returns early when the tag is not loaded or the visitor has rejected. `ensureTag` pushes the held queue after `config`; `hold_anEventBeforeAcceptIsSentAfterConfig` pins it.
+- Hold an event sent before the first Accept in memory. Send it after `config`, in event order. A Reject empties the queue. A stored Reject or a revoked flag drops the event.
+- Send `sign_up` through `trackSignUp`, `invoice_validated` through `trackInvoiceValidated`, `email_verified` through `trackEmailVerified`, `workspace_created` through `trackWorkspaceCreated` and `client_added` through `trackClientAdded`. None carries a parameter.
+- Send `email_verified` from landing `main.tsx` when `readVerifyOutcome` reads `verified` and the page is not forwarding, and from the app's redeem effect when `holdsPendingVerify()` holds, before `redeemHandoff`.
+- Send `workspace_created` from `provisionAndRead` only, after the POST resolves. A 409 sends none. A join sends none.
+- Send `client_added` from `createEntity` only. An edit, offboard or onboard sends none.
+- Send `invoice_validated` through `reportValidatedInvoice` from `createInvoice`, `revalidateInvoice` and `supplyInvoiceNumber` only.
+- Send `sign_up` from `RegisterModal` only after `registerAccount` resolves. An invite registration on `InvitePage` sends none.
 - Keep the sender functions for `generate_lead` and `demo_submit_failed` module-private. Wrap only the HubSpot call in `trackedHubSpotSubmit`.
 - Report no event for a honeypot or closed-gate submission. Only a HubSpot outcome reports.
 - Add a new CTA source to `DEMO_CTA_SOURCES` and to its `book(source)` call site.
@@ -67,13 +80,15 @@ paths:
 - Clear the HubSpot cookies in `bootChat` when the stored record rejects analytics.
 - Put `data-hs-do-not-collect="true"` on every landing `<form>`. The HubSpot loader brings collected forms, and the portal has form capture on.
 - Load the app chat only through `frontend/app/src/chat.ts`. It calls `loadChat`, `removeChat` and `endChat` with `APP_HOSTNAMES`.
-- Import landing source into the app only in `chat.ts`. Never import `analytics.ts` or `consentActions.ts` into the app. `chatSeam.test.ts` enforces it.
+- Import landing source into the app only in `chat.ts`. `chat.ts` may import `analytics.ts`. Never import `consentActions.ts` into the app. `chatSeam.test.ts` enforces it.
 - Push `['identify', {email}]`, `['setPath', pathname]` and `['trackPageView']`, in that order, each time the app chat goes from not loaded to loaded.
 - Push them before the loader when `#hs-script-loader` is not in the page. Push them after `loadChat` lifts the opt-out when the loader is in the page.
 - Load no app chat for a suspended member. Call `endAppChat` when the member turns suspended.
 - Take the identify email from `session.me.user.email` of a verified session. Never read `user_metadata`. Push no identify for a blank email.
 - Send the path without its query in every app `setPath`.
-- Report an app route change through `reportAppPage`. It pushes nothing while `chatIsLoaded()` is false.
+- Report an app route change through `reportAppPage`. It sends a GA page view through `trackAppPageView` and pushes the HubSpot path only while `chatIsLoaded()`.
+- Pass `{ page_location: origin + routeName(path) }` to the app `gtag('config')` and to `trackAppPageView`.
+- Bound every app hit through `setPageFields` (`gtag('set', {page_location, page_referrer})`): `bootAppAnalytics` and `reportAppPage` call it, and `ensureTag` replays it before `config`. A same-origin referrer is `origin + routeName(path)`; a cross-origin one is its origin only; no referrer omits the field.
 - Call `endAppChat` in `leaveToLanding`, in `endRevokedSession` and in `expireSession`. In the first two, call it before the navigation. `endChat` pushes no `doNotTrack`. `App.chatSignOut.test.tsx` enforces it, `expireSession_endsTheChat` included.
 - On Reject in the app, expire the `_ga` cookies and the HubSpot cookies.
 - Put `data-hs-do-not-collect="true"` on every app `<form>`. `chatSeam.test.ts` enforces it.

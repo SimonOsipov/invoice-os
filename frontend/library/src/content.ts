@@ -176,7 +176,12 @@ const RAW_GROUPS: RawGroup[] = [
           { kind: 'form', win: 'Settings · Company', fields: [{ l: 'Name', v: 'Sahara Foods Distribution Ltd' }, { l: 'TIN', v: '19847720-0002' }, { l: 'Street', v: '14 Allen Avenue' }, { l: 'City', v: 'Lagos' }], steps: [
             { cap: 'Company details are kept in one place', reveal: 3, focus: 0 },
             { cap: 'Edit the address when it changes', reveal: 4, focus: 3 },
-            { cap: 'New invoices carry these details as the supplier', focus: -1, mark: { 0: 'ok', 1: 'ok', 2: 'ok', 3: 'ok' } }] })] }
+            { cap: 'New invoices carry these details as the supplier', focus: -1, mark: { 0: 'ok', 1: 'ok', 2: 'ok', 3: 'ok' } }] }),
+        F('app-analytics', 'Usage analytics you choose', 'Pages are counted only after you accept.', 'The cookie notice in the app asks before anything is measured. After Accept, Google Analytics counts the pages you open, that you confirmed your email and created your workspace, each time you add a client or your own company, and each invoice you validate. It never receives your name, email, company, TIN or invoice content. Reject, or change your answer under Cookie choices in the sidebar, and it stops.', ['Nothing is measured before you accept', 'No name, email, TIN or invoice content is sent', 'Cookie choices in the sidebar changes your answer'], ['Everyone'], 'dashboard', ['delete-account', 'company-profile'],
+          { kind: 'toggles', win: 'Cookie choices', rows: [['Essential', 'Sign-in and your cookie answer', true], ['Analytics', 'Google Analytics and the live chat', false]], steps: [
+            { cap: 'The notice asks before anything is measured', focus: 1 },
+            { cap: 'Accept turns analytics on', focus: 1, flip: { 1: true } },
+            { cap: 'Reject, or Cookie choices later, turns it off', focus: 1, flip: { 1: false } }] })] }
 ]
 
 export const GROUPS: Group[] = RAW_GROUPS.map((g) => ({ ...g, feats: g.feats.map((f): Feature => ({ ...f, gid: g.id })) }))

@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
 
 import { APP_PERSONAS, type Me, type Session } from './auth'
+import { trackEmailVerified, trackWorkspaceCreated } from './chat'
 import { captureDestination } from './lib/deepLink'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import { ensureSignInState, mintSignInState } from './lib/signInState'
@@ -39,6 +40,12 @@ const ANSWERS = { workspace_name: ME.tenant.name, display_name: ME.user.display_
 // A registered account's first token: no tenant, the answers in user_metadata.
 const T_ANSWERS = jwt(ME.user.id, nowSec() + 3600, { user_metadata: { registration: ANSWERS } })
 const T2 = jwt(ME.user.id, nowSec() + 7200, { iat: nowSec(), app_metadata: { tenant_id: ME.tenant.id } })
+
+vi.mock('./chat', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./chat')>()),
+  trackEmailVerified: vi.fn(),
+  trackWorkspaceCreated: vi.fn(),
+}))
 
 let capturedCtx: PlatformCtx | undefined
 let seenUsers: PlatformCtx['user'][] = []
@@ -208,6 +215,8 @@ function historyUrls(spies: { mock: { calls: unknown[][] } }[]): string[] {
 let originalLocation: PropertyDescriptor | undefined
 
 beforeEach(() => {
+  vi.mocked(trackEmailVerified).mockClear()
+  vi.mocked(trackWorkspaceCreated).mockClear()
   originalLocation = Object.getOwnPropertyDescriptor(window, 'location')
   vi.stubGlobal('localStorage', createMemoryStorage())
   vi.stubGlobal('sessionStorage', createMemoryStorage())
@@ -1047,6 +1056,12 @@ describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
     expect(window.location.search).toBe('')
   })
 
+  it('redeem_aConfirmOverALiveSessionSendsNothing', async () => {
+    await bootOverLive(A_ME)
+    await settle()
+    expect(trackEmailVerified).not.toHaveBeenCalled()
+  })
+
   it('a verify code with no session signs in as B', async () => {
     configure()
     const S = ensureSignInState()
@@ -1823,6 +1838,24 @@ describe('the first sign-in provisions the registered workspace', () => {
     // Refreshed just now, so not backdated by the hand-off TTL.
     expect(rec?.received_at).toBeGreaterThanOrEqual(before)
     expect(rec?.me).toEqual(ME)
+  })
+
+  it('redeem_aBoundMarkerSendsEmailVerifiedBeforeProvisioning', async () => {
+    registered()
+    holdPendingVerify()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(trackEmailVerified).toHaveBeenCalledTimes(1)
+    expect(trackWorkspaceCreated).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(trackEmailVerified).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(trackWorkspaceCreated).mock.invocationCallOrder[0])
+  })
+
+  it('redeem_noMarkerSendsNoEmailVerified', async () => {
+    registered()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(trackEmailVerified).not.toHaveBeenCalled()
+    expect(trackWorkspaceCreated).toHaveBeenCalledTimes(1)
   })
 
   it('a registered account whose workspace already exists lands after a 409', async () => {

@@ -592,7 +592,7 @@ describe('library scenes', () => {
         })
       })
     })
-    expect(FEATURES).toHaveLength(30)
+    expect(FEATURES).toHaveLength(31)
     expect([...kinds].sort()).toEqual(['feed', 'flow', 'form', 'list', 'metrics', 'toggles'])
   })
 

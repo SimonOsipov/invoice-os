@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { expect, test, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
 import { expectedStatusDropper, type Dropper } from '../topology/consoleGate'
-import { consentCookie, consentRecordOf, consoleGate, isStubbedHost, routeProductionHosts, STUB_HEADER } from './landingConsent'
+import { consentCookie, consentRecordOf, consoleGate, routeProductionHosts, STUB_HEADER, watchStubLeaks } from './landingConsent'
 
 // GA4 events of the landing on the production hostname served from the fork. The stubbed tag
 // writes no cookies and sends nothing; the events are read from window.dataLayer.
@@ -54,20 +54,7 @@ async function openRoutedLanding(page: Page, request: APIRequestContext, extraCo
   await page.context().addCookies([consentCookie(true), ...extraCookies])
   await controlRouting(page, request)
   const errors = consoleGate(page, expected)
-  const leaked: string[] = []
-  const pending: Promise<void>[] = []
-  page.on('requestfinished', (r) => {
-    if (!isStubbedHost(r.url())) return
-    pending.push(
-      r.response().then((res) => {
-        if (res?.headers()[STUB_HEADER] !== '1') leaked.push(r.url())
-      }),
-    )
-  })
-  // the stub fulfils every stubbed-host request, so a failed one never reached it
-  page.on('requestfailed', (r) => {
-    if (isStubbedHost(r.url())) leaked.push(r.url())
-  })
+  const { leaked, pending } = watchStubLeaks(page)
   await page.goto(`${WWW}/`)
   await expect(page.getByRole('heading', { level: 1, name: 'Africa moves. Compliance keeps up.' })).toBeVisible()
   await expect
@@ -197,4 +184,84 @@ routedTest('landing analytics: a refused demo request sends demo_submit_failed a
   expect(events.filter((e) => e.name === 'generate_lead')).toEqual([])
   expect(run.gatewayPosts, 'the form must stop before the gateway').toEqual([])
   await expectClean(page, run.sinks)
+})
+
+const GA_HOSTS = ['googletagmanager.com', 'google-analytics.com']
+const isGaRequest = (rawUrl: string) => {
+  const host = new URL(rawUrl).hostname.toLowerCase()
+  return GA_HOSTS.some((d) => host === d || host.endsWith(`.${d}`))
+}
+
+routedTest('landing analytics: sign_up is held until Accept on the routed production landing', async ({ routed: page, request }) => {
+  await controlRouting(page, request)
+  const errors = consoleGate(page)
+  const { leaked, pending } = watchStubLeaks(page)
+  const gaRequests: string[] = []
+  page.on('request', (r) => {
+    if (isGaRequest(r.url())) gaRequests.push(r.url())
+  })
+  const registerReply = page.waitForResponse((r) => r.request().method() === 'POST' && r.url() === `${GATEWAY_URL}/auth/register`)
+  await page.goto(`${WWW}/?register`)
+  const dialog = page.getByRole('dialog', { name: 'Create an account' })
+  await expect(dialog).toBeVisible()
+  const id = randomUUID()
+  await dialog.getByLabel('Work email', { exact: true }).fill(`land07-${id}@example.com`)
+  await dialog.getByLabel('Password', { exact: true }).fill(id.slice(0, 16))
+  await dialog.getByLabel('Your name', { exact: true }).fill('Landing Analytics')
+  await dialog.getByLabel('Workspace name', { exact: true }).fill(`Landing Analytics ${id.slice(0, 8)}`)
+  await dialog.getByRole('radio', { name: 'For our own company — in-house' }).check() // KINDS in frontend/landing/src/components/RegisterModal.tsx
+  await dialog.getByRole('button', { name: 'Create account →' }).click()
+  expect((await registerReply).status()).toBe(202) // handler: internal/gateway/register.go
+  await expect(dialog.getByRole('heading', { name: 'Check your email', exact: true })).toBeVisible()
+  expect(gaRequests, 'a GA request left before Accept').toEqual([])
+  expect(await page.evaluate(() => typeof (window as unknown as { dataLayer?: unknown }).dataLayer)).toBe('undefined')
+
+  await dialog.getByRole('button', { name: 'Close', exact: true }).last().click() // the header X is the first
+  await expect(dialog).toBeHidden()
+  await page.getByRole('region', { name: 'Cookie notice' }).getByRole('button', { name: 'Accept', exact: true }).click()
+  await expect
+    .poll(() => page.evaluate(() => ((window as unknown as { dataLayer?: ArrayLike<unknown>[] }).dataLayer ?? []).map((e) => e[0])), 'the tag never loaded after Accept')
+    .toContain('config')
+  const layer = await page.evaluate(() => ((window as unknown as { dataLayer?: ArrayLike<unknown>[] }).dataLayer ?? []).map((e) => Array.from(e)))
+  const kinds = layer.map((e) => e[0])
+  expect(kinds.indexOf('config')).toBeLessThan(kinds.indexOf('event'))
+  expect(layer.filter((e) => e[0] === 'event')).toEqual([['event', 'sign_up', {}]])
+  await page.waitForLoadState('networkidle')
+  await Promise.all(pending)
+  expect(leaked, 'a GA, Sentry or chat request was not answered by the stub').toEqual([])
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+routedTest('landing analytics: email_verified is held until Accept on the routed production landing', async ({ routed: page, request }) => {
+  await controlRouting(page, request)
+  const errors = consoleGate(page)
+  const { leaked, pending } = watchStubLeaks(page)
+  const gaRequests: string[] = []
+  page.on('request', (r) => {
+    if (isGaRequest(r.url())) gaRequests.push(r.url())
+  })
+  const layer = () => page.evaluate(() => ((window as unknown as { dataLayer?: ArrayLike<unknown>[] }).dataLayer ?? []).map((e) => Array.from(e)))
+
+  await page.goto(`${WWW}/?verified=1`)
+  await expect(page.getByRole('status').filter({ hasText: 'Your email address is verified. Please sign in.' })).toBeVisible() // COPY.verified in VerifyNotice.tsx
+  expect(gaRequests, 'a GA request left before Accept').toEqual([])
+  expect(await page.evaluate(() => typeof (window as unknown as { dataLayer?: unknown }).dataLayer)).toBe('undefined')
+
+  await page.getByRole('region', { name: 'Cookie notice' }).getByRole('button', { name: 'Accept', exact: true }).click()
+  await expect.poll(async () => (await layer()).map((e) => e[0]), 'the tag never loaded after Accept').toContain('config')
+  const sent = await layer()
+  const kinds = sent.map((e) => e[0])
+  expect(kinds.indexOf('config')).toBeLessThan(kinds.indexOf('event'))
+  expect(sent.filter((e) => e[0] === 'event')).toEqual([['event', 'email_verified', {}]])
+
+  // a failed verification loads the tag and sends no email_verified
+  await page.goto(`${WWW}/?verify=failed`)
+  await expect(page.getByRole('status').filter({ hasText: 'This link is already used or expired.' })).toBeVisible() // COPY.failed in VerifyNotice.tsx
+  await expect.poll(async () => (await layer()).map((e) => e[0]), 'the tag never loaded on the failed page').toContain('config')
+  expect((await layer()).filter((e) => e[0] === 'event' && e[1] === 'email_verified')).toEqual([])
+
+  await page.waitForLoadState('networkidle')
+  await Promise.all(pending)
+  expect(leaked, 'a GA, Sentry or chat request was not answered by the stub').toEqual([])
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })

@@ -81,7 +81,8 @@ paths:
 - Disclose each new browser network sender on the page. List the external hosts the landing contacts.
 - Treat an ungated flow as a page fact. Fonts and error reports load whatever the visitor chooses about analytics.
 - Scope each analytics sentence outside the Library section to the landing, the Feature Library, the Blog and the signed-in product. Never scope it to the landing alone. Keep the Blog section as pinned (`BLOG_SECTION`).
-- Back the sentence that the signed-in product runs Google Analytics with the operator's confirmation of the copy. The user gave it on 2026-10-23 (CHAT-04 Answers Q1). No app code backs it: the C2 code scan in `Privacy.render.test.tsx` finds none.
+- Back the sentence that the signed-in product runs Google Analytics with app code: `frontend/app/src/chat.ts` loads the tag through `ensureTag` with `APP_HOSTNAMES`. The C2 code scan in `Privacy.render.test.tsx` finds it.
+- List what the signed-in product sends Google: the kind of page viewed (its route pattern, never an id or a search), that a workspace was created, each client or own company added, and each validated invoice. List that the create-an-account form was sent and that the email address was confirmed.
 - Keep the Library section as pinned (`LIBRARY_SECTION`). It names the landing and the Library only.
 - Say in the Blog section that one analytics choice covers the landing, the Library and the Blog. A choice made on any of the three applies to all.
 - Name `asc_consent` in one paragraph only, the cookie-notice paragraph. Say there that it is our own cookie on `SHARED_COOKIE_DOMAIN`.

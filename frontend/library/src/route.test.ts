@@ -33,7 +33,7 @@ describe('route', () => {
         feats++
       }
     }
-    expect(feats).toBe(30)
+    expect(feats).toBe(31)
   })
 
   it('parse_aPathOutsideTheBaseIsBaseRelative', () => {
@@ -107,8 +107,8 @@ describe('route', () => {
 
   it('path_everyViewIsUnderTheBase', () => {
     const paths = [`${LIBRARY_BASE}/`, ...GROUPS.map((g) => `${LIBRARY_BASE}/${g.id}`), ...FEATURES.map((f) => `${LIBRARY_BASE}/${f.gid}/${f.id}`)]
-    expect(paths).toHaveLength(42)
-    expect(new Set(paths).size).toBe(42)
+    expect(paths).toHaveLength(43)
+    expect(new Set(paths).size).toBe(43)
     for (const p of paths) {
       expect(p.startsWith('/library/')).toBe(true)
       expect(p).not.toContain('/library/library')

@@ -538,7 +538,7 @@ describe('RESKIN2-05-03 WL: the Workflows list takes the v2 look', () => {
     for (const row of rows) {
       expect(row.style.borderRadius, 'the row corner is not the 6px token').toBe('var(--radius-md)')
       expect(row.style.boxShadow, 'the row carries a shadow').toBe('')
-      const tile = row.firstElementChild as HTMLElement
+      const tile = row.children[1] as HTMLElement
       expect(tile.style.borderRadius, 'the icon tile corner is not the 6px token').toBe('var(--radius-md)')
       expect(tile.style.boxShadow, 'the icon tile carries a shadow').toBe('')
     }
@@ -640,5 +640,183 @@ describe('RESKIN2-05-03 WL: the Workflows list takes the v2 look', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[1])
     expect(openPolicy, 'the Edit click did not open its own row, or bubbled and opened it twice').toHaveBeenCalledTimes(1)
     expect(openPolicy).toHaveBeenCalledWith('polB')
+  })
+})
+
+// ============================================================================
+// APSC-04-04 — rank, scope summary, Move up / down, the catch-all lock
+// ============================================================================
+
+describe('APSC-04-04: the ordered policy list', () => {
+  const NO_SCOPES = CATCH_ALL_SCOPES
+  const creditNotes = { ...CATCH_ALL_SCOPES, document_types: ['credit_note'] }
+  const four = (scoped: number[] = []) =>
+    ['a', 'b', 'c', 'd'].map((id, i) => policy({ id, name: id, position: i, scopes: scoped.includes(i) ? creditNotes : NO_SCOPES }))
+  const STALE = 'the policy list changed — reload and try again'
+  const CATCH_ALL_409 = 'a policy with no scopes must stay last while any policy has scopes'
+  const btn = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement
+  const rowOf = (name: string) => screen.getByText(name, { exact: true }).closest('.pf-row') as HTMLElement
+  const MOVES = ['a', 'b', 'c', 'd'].flatMap((n) => [`Move ${n} up`, `Move ${n} down`])
+
+  it('each row shows its rank and its scope summary', () => {
+    render(<WorkflowsView ctx={listCtx(four([1]))} />)
+    expect(screen.getAllByTestId('policy-position').map((e) => e.textContent)).toEqual(['1', '2', '3', '4'])
+    const lines = screen.getAllByTestId('policy-summary').map((e) => e.textContent)
+    expect(lines[1]).toBe('Credit notes · 1 approval')
+    for (const i of [0, 2, 3]) expect(lines[i]).toMatch(/^All invoices · /)
+  })
+
+  it('the summary line carries its full text in title', () => {
+    const all = { document_types: ['commercial_invoice', 'credit_note'], entity_ids: ['e1', 'e2'], amount_band: { lower: '1000', upper: '50000', currency: 'NGN' }, workflow_role_keys: ['r1'] }
+    render(<WorkflowsView ctx={listCtx([policy({ scopes: all })])} />)
+    const line = screen.getByTestId('policy-summary')
+    expect(line.title).toBe(line.textContent)
+    expect(line.title.length).toBeGreaterThan(40)
+  })
+
+  it('Move up sends the swapped order and the list follows the answer', async () => {
+    const [a, b, c, d] = four()
+    const ctx = listCtx([a, b, c, d])
+    const reorderPolicies = vi.fn(async () => {
+      ctx.policies = [a, c, b, d]
+    })
+    ;(ctx as unknown as { reorderPolicies: unknown }).reorderPolicies = reorderPolicies
+    const { rerender } = render(<WorkflowsView ctx={ctx} />)
+    fireEvent.click(btn('Move c up'))
+    await waitFor(() => expect(reorderPolicies).toHaveBeenCalledTimes(1))
+    expect(reorderPolicies).toHaveBeenCalledWith(['a', 'c', 'b', 'd'])
+    rerender(<WorkflowsView ctx={{ ...ctx }} />)
+    expect(Array.from(document.querySelectorAll('.pf-row')).map((r) => r.querySelector('button[aria-label^="Delete "]')?.getAttribute('aria-label')?.slice(7))).toEqual(['a', 'c', 'b', 'd'])
+  })
+
+  it('Move down sends the swapped order', async () => {
+    const reorderPolicies = vi.fn(async () => {})
+    render(<WorkflowsView ctx={listCtx(four(), { reorderPolicies })} />)
+    fireEvent.click(btn('Move b down'))
+    await waitFor(() => expect(reorderPolicies).toHaveBeenCalledWith(['a', 'c', 'b', 'd']))
+  })
+
+  it('the boundary moves are disabled without a reason', () => {
+    render(<WorkflowsView ctx={listCtx(four())} />)
+    for (const name of ['Move a up', 'Move d down']) {
+      expect(btn(name).disabled).toBe(true)
+      expect(btn(name).getAttribute('aria-describedby')).toBeNull()
+    }
+    expect(screen.queryByTestId('policy-catch-all-reason')).toBeNull()
+  })
+
+  it('while a policy is scoped the catch-all is pinned and the screen says why', () => {
+    render(<WorkflowsView ctx={listCtx(four([1]))} />)
+    const reason = screen.getByTestId('policy-catch-all-reason')
+    expect(rowOf('d').nextElementSibling).toBe(reason)
+    expect(reason.textContent).toBe('This policy decides every document no other policy matches. It stays last, and cannot be moved or deleted, while any policy has scopes.')
+    for (const name of ['Move d up', 'Delete d', 'Move c down']) {
+      expect(btn(name).disabled, name).toBe(true)
+      expect(btn(name).getAttribute('aria-describedby'), name).toBe(reason.id)
+      expect(btn(name).title, name).toBe(reason.textContent)
+    }
+    for (const name of ['Move c up', 'Delete c', 'Move b down']) expect(btn(name).disabled, name).toBe(false)
+  })
+
+  it('a disabled lock control takes no click', () => {
+    const deletePolicy = vi.fn(async () => {})
+    const reorderPolicies = vi.fn(async () => {})
+    const openPolicy = vi.fn()
+    render(<WorkflowsView ctx={listCtx(four([1]), { deletePolicy, reorderPolicies, openPolicy })} />)
+    fireEvent.click(btn('Delete d'))
+    fireEvent.click(btn('Move d up'))
+    expect(deletePolicy).not.toHaveBeenCalled()
+    expect(reorderPolicies).not.toHaveBeenCalled()
+    expect(openPolicy).not.toHaveBeenCalled()
+  })
+
+  it('with no scoped policy the last row moves and deletes', async () => {
+    const reorderPolicies = vi.fn(async () => {})
+    render(<WorkflowsView ctx={listCtx(four(), { reorderPolicies })} />)
+    expect(btn('Move d up').disabled).toBe(false)
+    expect(btn('Delete d').disabled).toBe(false)
+    fireEvent.click(btn('Move d up'))
+    await waitFor(() => expect(reorderPolicies).toHaveBeenCalledWith(['a', 'b', 'd', 'c']))
+  })
+
+  it('every Move button is locked while a reorder is in flight', async () => {
+    let done!: () => void
+    const reorderPolicies = vi.fn(() => new Promise<void>((r) => (done = r)))
+    render(<WorkflowsView ctx={listCtx(four(), { reorderPolicies })} />)
+    fireEvent.click(btn('Move c up'))
+    await waitFor(() => expect(MOVES.every((n) => btn(n).disabled)).toBe(true))
+    done()
+    await waitFor(() => expect(btn('Move c up').disabled).toBe(false))
+    expect(btn('Move a up').disabled).toBe(true)
+  })
+
+  it('a stale reorder shows the server sentence at its row and refreshes the list', async () => {
+    const reorderPolicies = vi.fn(async () => {
+      throw new ApiError('http', STALE, 409)
+    })
+    const refetchPolicies = vi.fn()
+    render(<WorkflowsView ctx={listCtx(four(), { reorderPolicies, refetchPolicies })} />)
+    fireEvent.click(btn('Move c up'))
+    const err = await screen.findByTestId('policy-reorder-error')
+    expect(err.textContent).toBe(STALE)
+    expect(rowOf('c').nextElementSibling).toBe(err)
+    expect(refetchPolicies).toHaveBeenCalledTimes(1)
+    expect(reorderPolicies).toHaveBeenCalledTimes(1)
+  })
+
+  it('a draft over an in-force version marks its summary', () => {
+    const rows = [
+      policy({ id: 'x', name: 'x', version: 2, activeVersion: 1 }),
+      policy({ id: 'y', name: 'y', version: 1, activeVersion: 1 }),
+      policy({ id: 'z', name: 'z', version: 1, activeVersion: null }),
+    ]
+    render(<WorkflowsView ctx={listCtx(rows)} />)
+    expect(screen.getAllByTestId('policy-summary').map((e) => e.textContent?.startsWith('Draft: '))).toEqual([true, false, false])
+  })
+
+  it('a catch-all reorder refusal and a 403 show their sentences', async () => {
+    const reorderPolicies = vi.fn()
+    reorderPolicies.mockRejectedValueOnce(new ApiError('http', CATCH_ALL_409, 409)).mockRejectedValueOnce(new ApiError('http', DELETE_REFUSAL, 403))
+    render(<WorkflowsView ctx={listCtx(four(), { reorderPolicies })} />)
+    fireEvent.click(btn('Move c up'))
+    expect((await screen.findByTestId('policy-reorder-error')).textContent).toBe(CATCH_ALL_409)
+    fireEvent.click(btn('Move c up'))
+    await waitFor(() => expect(screen.getByTestId('policy-reorder-error').textContent).toBe(DELETE_REFUSAL))
+  })
+
+  it('the next move clears the reorder reason, and the other slots survive', async () => {
+    const reorderPolicies = vi.fn()
+    reorderPolicies.mockRejectedValueOnce(new ApiError('http', STALE, 409)).mockResolvedValueOnce(undefined)
+    const deletePolicy = vi.fn(async () => {
+      throw new ApiError('http', DELETE_REFUSAL, 403)
+    })
+    render(<WorkflowsView ctx={listCtx(four(), { reorderPolicies, deletePolicy })} />)
+    fireEvent.click(btn('Delete a'))
+    await screen.findByTestId('policy-delete-error')
+    fireEvent.click(btn('Move c up'))
+    await screen.findByTestId('policy-reorder-error')
+    fireEvent.click(btn('Move b down'))
+    await waitFor(() => expect(screen.queryByTestId('policy-reorder-error')).toBeNull())
+    expect(rowOf('a').nextElementSibling).toBe(screen.getByTestId('policy-delete-error'))
+  })
+
+  it('a refused catch-all delete still shows at its row', async () => {
+    const deletePolicy = vi.fn(async () => {
+      throw new ApiError('http', CATCH_ALL_409, 409)
+    })
+    render(<WorkflowsView ctx={listCtx(four(), { deletePolicy })} />)
+    fireEvent.click(btn('Delete d'))
+    const err = await screen.findByTestId('policy-delete-error')
+    expect(err.textContent).toBe(CATCH_ALL_409)
+    expect(rowOf('d').nextElementSibling).toBe(err)
+  })
+
+  it('a click on a row button never opens the builder', () => {
+    const openPolicy = vi.fn()
+    render(<WorkflowsView ctx={listCtx(four([1]), { openPolicy })} />)
+    fireEvent.click(btn('Move b up'))
+    fireEvent.click(btn('Move d up'))
+    fireEvent.click(btn('Move b up').parentElement as HTMLElement)
+    expect(openPolicy).not.toHaveBeenCalled()
   })
 })

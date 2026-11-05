@@ -582,36 +582,73 @@ test('PW-06 Workflows list at 1440: heading, policy row, pill, standing, buttons
     expect(edge, `${name} ghost border`).toBe(GHOST_BORDER)
     buttons[name] = { corners, edge }
   }
+  for (const dir of ['up', 'down']) buttons[`move ${dir}`] = await expectCorners(row.getByRole('button', { name: new RegExp(`^Move .* ${dir}$`) }), '7px', `Move ${dir} button`)
+  // The first row cannot move up and the last cannot move down; both read DISABLED_GHOST.
+  const rows = screen(page).locator('.pf-row')
+  const rank = rows.first().getByTestId('policy-position')
+  const rankPaint = await styles(rank, ['color', 'font-family'])
+  expect(rankPaint.color, 'rank colour').toBe(FG_3)
+  expect(firstFamily(rankPaint['font-family']), 'rank first family').toBe('IBM Plex Mono')
+  for (const [name, btn] of [['first row Move up', rows.first().getByRole('button', { name: /^Move .* up$/ })], ['last row Move down', rows.last().getByRole('button', { name: /^Move .* down$/ })]] as const) {
+    await expect(btn, `${name} is enabled`).toBeDisabled()
+    // .pf-btn eases border-color, so poll the paint.
+    await expect.poll(async () => (await styles(btn, ['border-top-color', 'color']))['border-top-color'], { message: `${name} border` }).toBe(LINE_1)
+    expect((await styles(btn, ['color'])).color, `${name} colour`).toBe(FG_4)
+  }
   const scroll = await assertPageDoesNotScrollSideways(page, 'Workflows list')
 
-  await attachJson(testInfo, 'pw-06-measurements', { h1, rowCorners, pill, standing, buttons, scroll })
+  await attachJson(testInfo, 'pw-06-measurements', { h1, rowCorners, pill, standing, rankPaint, buttons, scroll })
   await attachShot(page, testInfo, 'workflows-list')
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('PW-07 Workflows list row and intro fit at every wide width', async ({ page }, testInfo) => {
+test('PW-07 Workflows list row and intro fit at every wide width and at 860px', async ({ page }, testInfo) => {
+  test.setTimeout(90_000)
   const errors = collectErrors(page)
   await openWorkflows(page)
   const row = policyRow(page)
   const named: Named = {
     row,
+    position: row.getByTestId('policy-position'),
+    summary: row.getByTestId('policy-summary'),
     standing: row.locator('xpath=./div[contains(@class,"mono")]'),
+    moveUp: row.getByRole('button', { name: /^Move .* up$/ }),
+    moveDown: row.getByRole('button', { name: /^Move .* down$/ }),
     edit: row.getByRole('button', { name: 'Edit', exact: true }),
     delete: row.getByRole('button', { name: /^Delete / }),
     count: screen(page).getByText(/^\d+ POLICIES$/),
     intro: screen(page).getByText(/^Each policy decides who signs off/),
   }
-  const parts = ['standing', 'edit', 'delete']
-  const measured = await sweepWide(page, 'Workflows list', async () => {
+  const parts = ['position', 'summary', 'standing', 'moveUp', 'moveDown', 'edit', 'delete']
+  const read = async () => {
     await settle(page, ...Object.values(named))
     const { rects, problems } = await boxes(named)
     inside(rects, 'row', parts, problems)
     noOverlap(rects, parts, problems)
+    if (rects.summary && rects.standing && rects.summary.x + rects.summary.width > rects.standing.x) problems.push('the summary runs into the standing')
+    return { rects, problems }
+  }
+  const measured = await sweepWide(page, 'Workflows list', async () => {
+    const { rects, problems } = await read()
     noOverlap(rects, ['count', 'intro'], problems)
     if (rects.count && rects.intro && Math.abs(centreY(rects.count) - centreY(rects.intro)) > 1) problems.push('the count and the intro do not share a vertical centre')
     return { problems, rects }
   })
-  await attachJson(testInfo, 'pw-07-measurements', measured)
+  const entry = page.viewportSize()
+  let narrow: Record<string, Rect> = {}
+  try {
+    await page.setViewportSize({ width: 860, height: 900 })
+    await expect
+      .poll(async () => {
+        const { rects, problems } = await read()
+        narrow = rects
+        return problems
+      }, { message: 'Workflows list row at 860px', timeout: 10_000 })
+      .toEqual([])
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  await attachJson(testInfo, 'pw-07-measurements', { wide: measured, narrow })
   await attachShot(page, testInfo, 'workflows-list-row')
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })

@@ -2,12 +2,12 @@
 import { test, expect, type Page, type TestInfo } from '@playwright/test'
 import { createEntity, createInvoice } from '../api/client'
 import { freshTin } from '../api/fixtures'
-import { browserToken, collectErrors, signInAs } from '../personaSession'
-import { HUBSPOT_CHAT_DOMAINS } from '../smoke/landingConsent'
+import { browserToken, collectErrors, DESTINATION_READY, signInAs, storedSession } from '../personaSession'
+import { HUBSPOT_CHAT_DOMAINS, routeAppHost, watchStubLeaks } from '../smoke/landingConsent'
 import { resolveTarget } from '../targets'
 import { approvalRun404Dropper, collectSourcedErrors } from './consoleGate'
 import { rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
-import { APP_URL, shardTenants } from './targets'
+import { APP_URL, GATEWAY_URL, shardTenants } from './targets'
 
 const SHARD = shardTenants('app-consent.spec.ts')
 test.beforeAll(() => { expect(test.info().project.name, 'app-consent.spec.ts belongs to the ui-surfaces shard').toBe('ui-surfaces') })
@@ -195,4 +195,115 @@ test('AC-L2 the band clears the notice, first visit and reopened, at 1280 and 39
   }
   await attachJson(testInfo, 'app-consent-band', measured)
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+const PROD_APP = 'https://app.ascomply.com'
+
+// Copy of cleanInvoiceFields in invoice-surfaces.spec.ts: a draft with no rule violation.
+function cleanInvoiceFields(invoiceNumber: string) {
+  return {
+    invoice_number: invoiceNumber,
+    issue_date: '2026-01-01T00:00:00Z',
+    supplier_tin: freshTin(),
+    supplier_name: 'Acme Nigeria Ltd',
+    buyer_tin: '87654321-0002',
+    buyer_name: 'Buyer Ltd',
+    currency: 'NGN',
+    subtotal: '1000',
+    vat: '75',
+    total: '1075',
+    line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+  }
+}
+
+test('AC-GA the routed production app loads the Google tag and sends events only after Accept', async ({ page, browser, request }) => {
+  test.setTimeout(300_000)
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id, consent: 'none' })
+  const token = await browserToken(page)
+  const session = await storedSession(page)
+  const entity = await createEntity(token, { name: `APP-GA ${Date.now()}`, tin: freshTin() })
+  const invoice = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-GA-${Date.now()}`) })
+
+  const context = await browser.newContext()
+  try {
+    await routeAppHost(context, { app: APP_URL, gateway: GATEWAY_URL })
+    // The routed origin starts empty: carry the fork session over, once.
+    await context.addInitScript(({ key, blob, origin }) => {
+      if (location.origin === origin && localStorage.getItem(key) === null) localStorage.setItem(key, blob)
+    }, { ...session, origin: PROD_APP })
+    const app = await context.newPage()
+    const errors = collectSourcedErrors(app, approvalRun404Dropper(app))
+    const { leaked, pending } = watchStubLeaks(app)
+    const gaRequests: string[] = []
+    app.on('request', (r) => {
+      if (hostMatches(new URL(r.url()).hostname.toLowerCase(), TAG_HOSTS)) gaRequests.push(r.url())
+    })
+    const layer = () => app.evaluate(() => ((window as unknown as { dataLayer?: ArrayLike<unknown>[] }).dataLayer ?? []).map((e) => Array.from(e)))
+    const pageViews = async () => (await layer()).filter((e) => e[0] === 'event' && e[1] === 'page_view')
+    const gaCookies = async () => (await context.cookies()).filter((c) => /^_ga(_|$)/.test(c.name))
+
+    // routing control: a mismatch means the routing failed, not the analytics
+    const served = await app.goto(`${PROD_APP}/build.txt`)
+    const direct = await request.get(`${APP_URL}/build.txt`)
+    expect(direct.ok(), `routing, not analytics: ${APP_URL}/build.txt did not answer 2xx`).toBeTruthy()
+    expect((await served?.text())?.trim(), `routing, not analytics: ${PROD_APP} does not serve the fork's build`).toBe((await direct.text()).trim())
+
+    await app.goto(`${PROD_APP}/invoices/${invoice.id}`)
+    await DESTINATION_READY.app(app, 30_000)
+    await expect(app.locator('aside.pf-sidebar')).toBeVisible()
+
+    // before Accept: a validation is held
+    await expect(notice(app)).toBeVisible()
+    await app.getByTestId('revalidate').click()
+    await expect(app.getByTestId('invoice-status-badge')).toContainText('VALIDATED', { timeout: 30_000 })
+    expect(gaRequests, 'a GA request left before Accept').toEqual([])
+    expect(await app.evaluate(() => typeof (window as unknown as { dataLayer?: unknown }).dataLayer)).toBe('undefined')
+
+    // after Accept
+    await accept(app).click()
+    await expect(notice(app)).toBeHidden()
+    await expect.poll(() => gaRequests.some((u) => new URL(u).hostname === 'www.googletagmanager.com'), 'the tag was never requested').toBe(true)
+    await expect.poll(async () => (await layer()).map((e) => e[0]), 'the tag never loaded on the routed app').toContain('config')
+    const first = await layer()
+    expect(first.map((e) => e[0])).toEqual(['js', 'set', 'config', 'event'])
+    expect(first[1][1]).toMatchObject({ page_location: `${PROD_APP}/invoices/:id` })
+    expect(first[2][2]).toEqual({ page_location: `${PROD_APP}/invoices/:id` })
+    expect(first[3].slice(1)).toEqual(['invoice_validated', {}])
+
+    // route changes send the bounded pattern
+    const before = (await pageViews()).length
+    await app.locator('aside').getByRole('button', { name: 'Invoices' }).click()
+    await expect.poll(async () => (await pageViews()).slice(before), 'the sidebar navigation sent no page_view').toEqual([['event', 'page_view', { page_location: `${PROD_APP}/invoices` }]])
+    const term = freshTin()
+    await app.getByPlaceholder('Search invoices, TINs…').fill(term)
+    await app.getByPlaceholder('Search invoices, TINs…').press('Enter')
+    await expect.poll(async () => (await pageViews()).slice(before + 1), 'the search sent no page_view').toEqual([['event', 'page_view', { page_location: `${PROD_APP}/invoices` }]])
+    const sent = JSON.stringify(await layer())
+    expect(sent, 'a query string reached the dataLayer').not.toContain('?')
+    expect(sent, 'the search term reached the dataLayer').not.toContain(term)
+    expect(sent, 'the invoice id reached the dataLayer').not.toContain(invoice.id)
+
+    // Reject stops sending and expires the _ga cookies
+    await context.addCookies([
+      { name: '_ga', value: 'GA1.1.1.1', domain: '.ascomply.com', path: '/', secure: true },
+      { name: '_ga_TEST', value: 'GS1.1.3', domain: '.ascomply.com', path: '/', secure: true },
+    ])
+    expect((await gaCookies()).map((c) => c.name).sort(), 'control: both _ga cookies must exist before Reject').toEqual(['_ga', '_ga_TEST'])
+    await app.locator('aside').getByRole('button', { name: 'Cookie choices' }).click()
+    await notice(app).getByRole('button', { name: 'Reject', exact: true }).click()
+    await expect.poll(async () => (await gaCookies()).map((c) => c.name)).toEqual([])
+    const held = (await layer()).length
+    await app.locator('aside').getByRole('button', { name: 'Rules', exact: true }).click()
+    await expect(app).toHaveURL(`${PROD_APP}/rules`)
+    await app.waitForLoadState('networkidle')
+    expect((await layer()).length, 'an event was sent after Reject').toBe(held)
+
+    // stub and console gates
+    await Promise.all(pending)
+    expect(leaked, 'a GA, Sentry or chat request was not answered by the stub').toEqual([])
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  } finally {
+    await context.unrouteAll({ behavior: 'ignoreErrors' })
+    await context.close()
+  }
 })

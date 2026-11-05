@@ -102,6 +102,8 @@ export function Privacy() {
             <li style={ITEM}>how far down a page you scrolled</li>
             <li style={ITEM}>when you opened the demo form</li>
             <li style={ITEM}>whether that form then succeeded or failed</li>
+            <li style={ITEM}>that you sent the form to create an account</li>
+            <li style={ITEM}>each time an invoice is validated in the signed-in product</li>
             <li style={ITEM}>your device, browser and operating system, your screen size and your language</li>
             <li style={ITEM}>a randomly generated identifier that lets Google recognise the same browser on a later visit</li>
           </ul>
@@ -110,7 +112,7 @@ export function Privacy() {
           <p style={P}>
             We never send Google your name, your email address, your company, or any answer you typed or chose in the
             demo form. The only details we attach ourselves are which button you used, which form it was, how far
-            down you scrolled, and on the Library which feature or group you opened — the rest of the list above is collected by Google's own code.
+            down you scrolled, and on the Library which feature or group you opened — the rest of the list above is collected by Google's own code. In the signed-in product we send only the kind of page you open, never an invoice number or a search you typed.
           </p>
 
           <h2 style={H2}>Cookies on your device</h2>

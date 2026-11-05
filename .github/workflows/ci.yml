@@ -110,6 +110,7 @@ jobs:
             caddy:
               - 'Caddyfile'
               - 'scripts/ci/caddy-headers.sh'
+              - 'frontend/*/Dockerfile'
               - '.github/workflows/ci.yml'
             hooks:
               - '.claude/hooks/**'

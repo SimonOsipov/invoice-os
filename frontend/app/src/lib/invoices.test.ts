@@ -23,10 +23,11 @@ import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError, asyncReducer, initialState, type AsyncState } from '@invoice-os/api-client'
 
+import { reportValidatedInvoice } from '../chat'
 import { createAuthedFetch } from './authedFetch'
 import type { AuthedFetch } from './portfolio'
 import {
@@ -152,6 +153,8 @@ async function tryCall(thunk: () => unknown): Promise<void> {
 afterEach(() => {
   vi.unstubAllGlobals()
 })
+
+vi.mock('../chat', () => ({ reportValidatedInvoice: vi.fn((r: unknown) => r) }))
 
 const base = 'https://gw'
 
@@ -5818,5 +5821,41 @@ describe('CRDDBTNOTE-04-01: document sign helpers', () => {
     expect(documentTypeBadge(doc('commercial_invoice'))).toBeNull()
     expect(documentTypeBadge(doc(undefined))).toBeNull()
     expect(documentTypeBadge(doc('something_new'))).toBeNull()
+  })
+})
+
+describe('invoice_validated reporting', () => {
+  const rejection = new ApiError('http', 'x', 409)
+  const resolving = (rec: unknown) => vi.fn().mockResolvedValue(rec) as unknown as AuthedFetch
+  const rejecting = () => vi.fn().mockRejectedValue(rejection) as unknown as AuthedFetch
+  const input = {} as InvoiceCreateInput
+
+  beforeEach(() => vi.mocked(reportValidatedInvoice).mockClear())
+
+  it('revalidateInvoice_reportsTheResolvedRecord', async () => {
+    const rec = { id: 'a', status: 'validated' }
+    expect(await revalidateInvoice(resolving(rec), base, 'a')).toBe(rec)
+    expect(reportValidatedInvoice).toHaveBeenCalledTimes(1)
+    expect(reportValidatedInvoice).toHaveBeenCalledWith(rec)
+  })
+
+  it('createInvoice_reportsTheResolvedRecord', async () => {
+    const rec = { status: 'draft' }
+    expect(await createInvoice(resolving(rec), base, input)).toBe(rec)
+    expect(reportValidatedInvoice).toHaveBeenCalledTimes(1)
+    expect(reportValidatedInvoice).toHaveBeenCalledWith(rec)
+  })
+
+  it('aRejectedRequestReportsNothing', async () => {
+    await expect(revalidateInvoice(rejecting(), base, 'a')).rejects.toBe(rejection)
+    await expect(createInvoice(rejecting(), base, input)).rejects.toBe(rejection)
+    expect(reportValidatedInvoice).not.toHaveBeenCalled()
+  })
+
+  it('editAndKeepAsIsReportNothing', async () => {
+    const rec = { status: 'validated' }
+    await editInvoice(resolving(rec), base, 'a', {} as InvoiceEditInput)
+    await keepInvoiceAsIs(resolving(rec), base, 'a', 'reason')
+    expect(reportValidatedInvoice).not.toHaveBeenCalled()
   })
 })

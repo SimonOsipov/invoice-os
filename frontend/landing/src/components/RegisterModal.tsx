@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
+import { trackSignUp } from '../analytics'
 import { registerAccount, registerOutcome, validateRegisterForm, type RegisterErrors, type RegisterKind, type RegisterValues } from '../register'
 import { DEMO_FORM_CSS } from './DemoLeadForm'
 import { Alert, FIELD_STYLE, ResendNotice } from './SignInForm'
@@ -62,6 +63,7 @@ export function RegisterModal({ onClose }: { onClose: () => void }) {
     try {
       await registerAccount(values)
       setSentTo(values.email.trim())
+      trackSignUp()
       return
     } catch (err) {
       const outcome = registerOutcome(err)

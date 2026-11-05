@@ -15,7 +15,7 @@ import { ErrorState, Loading, toApiError } from '@invoice-os/api-client'
 import { WorkflowCanvas } from './WorkflowCanvas'
 import { WorkflowInspector } from './WorkflowInspector'
 import { WorkflowSimulator } from './WorkflowSimulator'
-import { NodeGlyph, NODE_TONE, PolicyStatusPill, roleOptions, TARGET_OPTIONS, toOptions, WfSelect, wfBackGlyph, type WfPending, pendingNodeType } from './WorkflowParts'
+import { NodeGlyph, NODE_TONE, PolicyStatusPill, roleOptions, TARGET_OPTIONS, toOptions, wfBackGlyph, type WfPending, pendingNodeType } from './WorkflowParts'
 import { delegateCandidates, inhouseNotifyTargets } from '../lib/members'
 import { policyInForce } from '../lib/policies'
 import { inspectorResolve, resolve } from '../lib/roles'
@@ -30,10 +30,8 @@ import {
   newNode,
   parseLoc,
   renamePolicy,
-  rescopePolicy,
   updateNode,
   SIM_DEFAULT,
-  WF_SCOPE_OPTIONS,
   type Loc,
   type NodePatch,
   type NodeType,
@@ -50,8 +48,6 @@ const PALETTE: { type: NodeType; name: string; desc: string }[] = [
   { type: 'autoapprove', name: 'Auto-approve', desc: 'Clear without sign-off' },
 ]
 
-const SCOPE_OPTIONS = WF_SCOPE_OPTIONS.map((s) => ({ value: s, label: s }))
-
 // Publish seals the SAVED draft, so an unsaved tree is not publishable. `aria-describedby`
 // target, a module const rather than useId() — one builder renders at a time (the
 // InvoiceDetail.tsx:145-148 rationale).
@@ -62,9 +58,6 @@ const PUBLISH_BLOCKED_REASON = 'Save your changes first — Publish seals the la
 // sentence for it, plus the remedy the server does not state.
 const PUBLISH_SEALED_REASON = 'This policy has no unpublished changes — edit and save a draft to publish again.'
 const PUBLISH_BLOCKED_REASON_ID = 'publish-blocked-reason-text'
-// Why the Applies select offers one option. An explanation, not a disabled reason (D-A):
-// the control stores exactly what it offers, so there is nothing to paint shut.
-const SCOPE_NOT_ROUTED = 'Per-scope routing is not yet available — every policy applies to all invoices.'
 
 /**
  * The in-flight lock's wrapper. The canvas's drop and click-to-place handlers hang off divs,
@@ -369,22 +362,6 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
               style={{ flex: '0 0 auto', width: nameWidth(working.name), minWidth: 120, maxWidth: '100%', border: 0, borderBottom: '1.5px solid transparent', backgroundColor: 'transparent', color: 'var(--fg-1)', fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em', padding: '2px 0' }}
             />
             <PolicyStatusPill status={working.status} padding="3px 9px" />
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 9 }}>
-            <span className="label">Applies</span>
-            {/* `display: flex` keeps blockifying `WfSelect`'s inline-block root, which it got for
-                free as a direct flex item — a block container would give it a baseline and a
-                line-box descender, nudging the select off centre in this row. */}
-            <fieldset disabled={submitting} style={{ ...FIELDSET_RESET, display: 'flex' }}>
-              <WfSelect label="Applies" hideLabel value={working.scope} options={SCOPE_OPTIONS} onChange={(v) => applyEdit(rescopePolicy(working, v))} height={34} width={200} background="var(--bg-2)" />
-            </fieldset>
-          </div>
-          {/* A block sibling of the row, not a child of it: the row has no `flexWrap`, so
-              inside it this would sit beside the select. Carries its own marginTop — this
-              column supplies no `gap`. Unlabelled, or it would collide with getByLabelText('Applies'). */}
-          <div data-testid="scope-not-routed" style={{ marginTop: 6, fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>
-            {SCOPE_NOT_ROUTED}
           </div>
         </div>
 

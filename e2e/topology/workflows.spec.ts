@@ -314,8 +314,8 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   const savePut = page.waitForRequest((r) => r.method() === 'PUT' && r.url().endsWith(`/v1/approval-policies/${createdPolicyId}/draft`))
   await Promise.all([savePut, page.getByRole('button', { name: 'Save draft', exact: true }).click()])
   await expect(page.getByTestId('publish-blocked-reason'), 'the step reached the server').toHaveCount(0)
-  // The only scope assertion that can fail: the server defaults an absent scope to the same value.
-  expect((await savePut).postDataJSON().scope, 'Save draft sends the policy scope').toBe('All invoices')
+  // The builder edits no scope, so the save sends name and steps only and never the legacy scope.
+  expect(Object.keys((await savePut).postDataJSON()).sort(), 'Save draft sends no scope key').toEqual(['name', 'steps'])
 
   // --- 13. the reload IS the per-tenant proof, and now the ADDRESS's too ---------------------
   // lib/session.ts rehydrates the stored hand-off session on reload. `editingPolicyId` is no longer
@@ -330,11 +330,6 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await expect(page.getByLabel('Policy name'), 'the URL alone reopened the builder on this policy').toHaveValue(POLICY_NAME)
   await expect(page.getByText(PLACED_STEP, { exact: true }), 'with its saved step, off the gateway').toBeVisible()
   await expect(page, 'and the reload kept the policy address').toHaveURL(policyUrl)
-  await expect(page.locator('label[aria-label="Applies"] select'), 'Applies reads All invoices (fixture check)').toHaveValue('All invoices')
-  await expect(
-    page.getByTestId('scope-not-routed'),
-    'the scope sentence (fixture check)',
-  ).toHaveText('Per-scope routing is not yet available \u2014 every policy applies to all invoices.')
 
   // The sidebar closes the builder and returns the bare list address. Every count below is
   // still server-held: the fetch this reload forced is what drew the list.
@@ -463,7 +458,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await expect(page.getByLabel('Threshold amount in naira')).toHaveValue('250,000,000')
 
   const stored = await getApprovalPolicy(await login(PERSONAS.A), createdPolicyId!)
-  expect(stored.scope, 'scope (fixture check)').toBe('All invoices')
+  expect(stored.scopes, 'scopes (fixture check)').toEqual({ document_types: [], entity_ids: [], workflow_role_keys: [], amount_band: null })
   expect(stored.steps[0].kind).toBe('approval')
   expect(stored.steps[0].sla_hours).toBe(72)
   expect(stored.steps[1].kind).toBe('condition')

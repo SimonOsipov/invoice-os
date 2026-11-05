@@ -7,7 +7,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
-import type { Policy } from '../lib/workflows'
+import { CATCH_ALL_SCOPES, type Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 import { WorkflowsView } from './WorkflowsView'
 
@@ -15,7 +15,8 @@ function policy(over: Partial<Policy> = {}): Policy {
   return {
     id: 'p1',
     name: 'Standard approval policy',
-    scope: 'All invoices',
+    position: 0,
+    scopes: CATCH_ALL_SCOPES,
     status: 'draft',
     version: 1,
     activeVersion: null,
@@ -35,6 +36,10 @@ function listCtx(policies: Policy[], over: Record<string, unknown> = {}): Platfo
     policiesError: null,
     refetchPolicies: vi.fn(),
     refetchRoles: vi.fn(),
+    entities: [],
+    entitiesState: 'ready',
+    refetchEntities: vi.fn(),
+    reorderPolicies: vi.fn(),
     editingPolicyId: null,
     createPolicy: vi.fn(async () => {}),
     deletePolicy: vi.fn(async () => {}),

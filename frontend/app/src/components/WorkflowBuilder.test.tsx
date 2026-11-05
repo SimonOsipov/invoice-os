@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client'
 import type { Member } from '../lib/members'
 import type { Role } from '../lib/roles'
-import { SIM_DEFAULT, type NotifyNode, type Policy } from '../lib/workflows'
+import { CATCH_ALL_SCOPES, SIM_DEFAULT, type NotifyNode, type Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 import { WorkflowBuilder } from './WorkflowBuilder'
 // Rendered bare by the R15 oracle only — every other spec reaches them through the builder.
@@ -21,7 +21,8 @@ function policyWith(role: string): Policy {
   return {
     id: 'p1',
     name: 'Test policy',
-    scope: 'All invoices',
+    position: 0,
+    scopes: CATCH_ALL_SCOPES,
     status: 'draft',
     version: 1,
     activeVersion: null,
@@ -44,6 +45,10 @@ function builderCtx(over: Record<string, unknown> = {}): PlatformCtx {
     policiesState: 'ready',
     policiesError: null,
     refetchPolicies: vi.fn(),
+    entities: [],
+    entitiesState: 'ready',
+    refetchEntities: vi.fn(),
+    reorderPolicies: vi.fn(),
     savePolicy: vi.fn(async (p: Policy) => p),
     publishPolicy: vi.fn(async () => policyWith('fin_mgr')),
     closePolicy: vi.fn(),
@@ -118,7 +123,7 @@ describe('APPR-04-06 QA: the guard must not over-widen to the genuinely-landed-e
 
 describe('APPR-04-06 QA: the error guard fires before any node-shape assumption', () => {
   it('a policy with zero nodes still renders ErrorState, not a crash, when the roles fetch failed', () => {
-    const emptyPolicy: Policy = { id: 'p2', name: 'Empty policy', scope: 'All invoices', status: 'draft', version: 1, activeVersion: null, nodes: [] }
+    const emptyPolicy: Policy = { id: 'p2', name: 'Empty policy', position: 0, scopes: CATCH_ALL_SCOPES, status: 'draft', version: 1, activeVersion: null, nodes: [] }
 
     expect(() =>
       render(
@@ -205,7 +210,7 @@ function hintColor(el: HTMLElement): string {
 
 /** A second policy on the tenant, published unless told otherwise. */
 function otherPolicy(over: Partial<Policy> = {}): Policy {
-  return { id: 'p2', name: 'Legacy approvals', scope: 'All invoices', status: 'published', version: 3, activeVersion: 3, nodes: [], ...over }
+  return { id: 'p2', name: 'Legacy approvals', position: 0, scopes: CATCH_ALL_SCOPES, status: 'published', version: 3, activeVersion: 3, nodes: [], ...over }
 }
 
 describe('APPR-09-05 AC-1: an edit is local until a write verb is clicked', () => {
@@ -969,7 +974,7 @@ describe('APPR-10-04 QA AC-6: the fieldset count holds with a step SELECTED', ()
   // no-selection card and the approval panel is not in the document at all. A `<fieldset>`
   // added AROUND the delegation controls — the exact shortcut P28 exists to forbid — survives
   // it untouched. Measured: with no `disabled` on that wrapper, nothing in the suite failed.
-  it('selecting an approval step adds no wrapper — still three, still one flex', () => {
+  it('selecting an approval step adds no wrapper — still two, none flex', () => {
     render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
     fireEvent.click(screen.getByText('Engagement Manager must approve'))
 
@@ -977,8 +982,8 @@ describe('APPR-10-04 QA AC-6: the fieldset count holds with a step SELECTED', ()
     expect(screen.getByLabelText('Delegate to'), 'no approval panel is open, so this counts the wrong tree').toBeTruthy()
 
     const wrappers = Array.from(document.querySelectorAll('fieldset'))
-    expect(wrappers, 'the scope row, the canvas and the inspector — the delegation recipe adds none').toHaveLength(3)
-    expect(wrappers.filter((fs) => (fs as HTMLElement).style.display === 'flex'), 'exactly one wrapper blockifies its child').toHaveLength(1)
+    expect(wrappers, 'the canvas and the inspector — the delegation recipe adds none').toHaveLength(2)
+    expect(wrappers.filter((fs) => (fs as HTMLElement).style.display === 'flex'), 'no wrapper blockifies a child').toHaveLength(0)
     // AC-2's distinction, stated as a tree property rather than per control: nothing inside the
     // open inspector is shut by ancestry, so every `.disabled` above is the control's own.
     const inspectorFieldsets = wrappers.filter((fs) => fs.contains(screen.getByLabelText('Delegate to')) && fs.hasAttribute('disabled'))
@@ -1250,7 +1255,6 @@ describe('APPR-09-06 AC-5: the form is inert while a write is in flight', () => 
     // on a detached node answers null, which would read as a spurious failure.
     const targets: [string, () => Element][] = [
       ['the policy name', () => nameInput()],
-      ['the scope select', () => control(screen.getByLabelText('Applies'))],
       ['Clear steps', () => screen.getByRole('button', { name: 'Clear steps' })],
       ['the palette', () => paletteTile()],
       ['the canvas move handle', () => screen.getByRole('button', { name: 'Move Engagement Manager must approve' })],
@@ -1339,7 +1343,6 @@ describe('APPR-09-06 AC-5: the form is inert while a write is in flight', () => 
 
     await waitFor(() => expect(inert(nameInput()), 'the form stayed dead after the write landed').toBe(false))
     expect(nameInput().value, 'the re-seed never reached the field').toBe('Server name')
-    expect(inert(control(screen.getByLabelText('Applies'))), 'the scope select stayed dead after the write landed').toBe(false)
   })
 
   it('a REFUSED save re-opens the form over its error slot', async () => {
@@ -1467,12 +1470,12 @@ describe('APPR-09-06 AC-5: the form is inert while a write is in flight', () => 
   // gate. Verified statically alongside this: no `<legend>` and no anchor inside any of the
   // three subtrees (a disabled fieldset reaches neither), and no CSS in `frontend/app/src/styles`
   // or `packages/design-tokens` selects `fieldset` at all.
-  it('the three in-flight wrappers carry the shipped fieldset reset, and only the scope row is a flex box', () => {
+  it('the two in-flight wrappers carry the shipped fieldset reset, and neither is a flex box', () => {
     const self = policyWith('fin_mgr')
     render(<WorkflowBuilder ctx={builderCtx({ policies: [self], roles: FIRM_ROLES })} policy={self} />)
 
     const wrappers = Array.from(document.querySelectorAll('fieldset'))
-    expect(wrappers, 'the scope row, the canvas and the inspector').toHaveLength(3)
+    expect(wrappers, 'the canvas and the inspector').toHaveLength(2)
 
     for (const fs of wrappers) {
       const s = (fs as HTMLElement).style
@@ -1486,9 +1489,7 @@ describe('APPR-09-06 AC-5: the form is inert while a write is in flight', () => 
       expect(fs.querySelector('a[href]'), '`disabled` does not reach an anchor, so one inside would stay live').toBeNull()
     }
 
-    const flex = wrappers.filter((fs) => (fs as HTMLElement).style.display === 'flex')
-    expect(flex, 'exactly one wrapper blockifies its child').toHaveLength(1)
-    expect(flex[0].contains(screen.getByLabelText('Applies')), 'the flex wrapper is not the one around WfSelect').toBe(true)
+    expect(wrappers.filter((fs) => (fs as HTMLElement).style.display === 'flex'), 'no wrapper blockifies a child').toHaveLength(0)
   })
 })
 
@@ -1754,115 +1755,24 @@ describe('APPR-09-05: the builder carries exactly two write controls', () => {
 })
 
 // ----------------------------------------------------------------------------
-// APPR-10-01 — the Applies control offers only the scope the server stores
+// APSC-04-02 — the Applies select and the not-routed note are gone; the trigger reads the scope
 // ----------------------------------------------------------------------------
-// A LITERAL, per the same rule as the copy consts above: a test that imports the string
-// it checks would follow a typo into the product.
 
-const SCOPE_NOT_ROUTED = 'Per-scope routing is not yet available — every policy applies to all invoices.'
-
-/** The scope <select>, descended from the aria-labelled <label> wrapper `hideLabel` produces. */
-function scopeSelect(): HTMLSelectElement {
-  return control(screen.getByLabelText('Applies')) as HTMLSelectElement
-}
-
-describe('APPR-10-01 AC-1/AC-2: the scope select offers one option', () => {
-  it('renders exactly the one scope the server will store', () => {
+describe('APSC-04-02: the builder renders no scope-not-routed note and no Applies select', () => {
+  it('has neither node', () => {
     render(<WorkflowBuilder ctx={builderCtx()} policy={policyWith('fin_mgr')} />)
 
-    const sel = scopeSelect()
-    expect(sel.tagName, 'the handle resolved to the label wrapper, so the option count below is vacuous').toBe('SELECT')
-    expect(Array.from(sel.options).map((o) => o.value), 'the editor still offers scopes the server refuses').toEqual(['All invoices'])
+    expect(screen.queryByTestId('scope-not-routed')).toBeNull()
+    expect(screen.queryByLabelText('Applies')).toBeNull()
   })
-})
 
-describe('APPR-10-01 AC-3: the row says per-scope routing is not available', () => {
-  it('the sentence is on screen exactly once, in the hint register', () => {
+  it('the trigger reads the scope summary', () => {
+    const scoped: Policy = { ...policyWith('fin_mgr'), scopes: { ...CATCH_ALL_SCOPES, document_types: ['credit_note'] } }
+    const { unmount } = render(<WorkflowBuilder ctx={builderCtx()} policy={scoped} />)
+    expect(screen.getByTestId('canvas-trigger-line').textContent).toBe('TRIGGER · CREDIT NOTES')
+    unmount()
     render(<WorkflowBuilder ctx={builderCtx()} policy={policyWith('fin_mgr')} />)
-
-    // getByText never matches a title/aria attribute, so finding it IS the visible-node assertion.
-    const note = screen.getByText(SCOPE_NOT_ROUTED)
-    expect(screen.getAllByText(SCOPE_NOT_ROUTED), 'the sentence renders more than once').toHaveLength(1)
-    expect(hintColor(note), 'an explanation renders grey, not amber').toBe('var(--fg-3)')
-  })
-})
-
-describe('APPR-10-01 AC-11: the scope select stays enabled at rest', () => {
-  // KEEP-GREEN pin, green before the change: D-A takes one option plus copy, and rejects the
-  // four-layer disabled recipe on this control. The comment at :627 is APPR-10-04's, about
-  // the delegation toggle, and must not be read as licence to disable this one.
-  it('carries no disabled, on itself or on a wrapper', () => {
-    render(<WorkflowBuilder ctx={builderCtx()} policy={policyWith('fin_mgr')} />)
-
-    const sel = scopeSelect()
-    expect(sel.disabled, 'D-A: the scope select is explained, not disabled').toBe(false)
-    expect(inert(sel), 'D-A: a disabled fieldset ancestor disables it just as well').toBe(false)
-  })
-})
-
-// --- APPR-10-01 QA: adversarial cover over the four ACs above -----------------
-
-describe('APPR-10-01 QA AC-2: the one option is labelled, and it is the one on screen', () => {
-  it('carries a visible label and is the control’s current value', () => {
-    render(<WorkflowBuilder ctx={builderCtx()} policy={policyWith('fin_mgr')} />)
-
-    const opts = Array.from(scopeSelect().options)
-    // SCOPE_OPTIONS maps value AND label; a valued option with a blank label passes an
-    // option-value assertion while the dropdown renders empty.
-    expect(opts, 'no options rendered, so the label assertion below is vacuous').toHaveLength(1)
-    expect(opts[0].textContent, 'a valued option with no label renders a blank dropdown').toBe('All invoices')
-    expect(scopeSelect().value, 'the control does not show the scope it was handed').toBe('All invoices')
-  })
-})
-
-describe('APPR-10-01 QA AC-3/AC-11: the note is copy, not the disabled recipe (D-A)', () => {
-  it('no tooltip, no aria-describedby, no dead paint, no fieldset', () => {
-    render(<WorkflowBuilder ctx={builderCtx()} policy={policyWith('fin_mgr')} />)
-
-    const sel = scopeSelect()
-    const note = screen.getByText(SCOPE_NOT_ROUTED)
-    expect(sel.title, 'a tooltip is layer 2 of the disabled recipe, and this control is live').toBeFalsy()
-    expect(sel.getAttribute('aria-describedby'), 'D-A: the note explains the product, it does not describe a blocked control').toBeNull()
-    expect(note.getAttribute('title'), 'the sentence must be the visible node, never a tooltip carrying it').toBeNull()
-    expect(sel.style.cursor, 'not-allowed is disabled paint on a control D-A keeps live').not.toBe('not-allowed')
-    // Outside the in-flight wrapper, so the explanation does not grey out mid-write.
-    expect(note.closest('fieldset'), 'a fieldset ancestor also reds the 3-fieldset count at :974').toBeNull()
-  })
-
-  it('the note is not an Applies-labelled second match', () => {
-    render(<WorkflowBuilder ctx={builderCtx()} policy={policyWith('fin_mgr')} />)
-
-    // A second match makes getByLabelText('Applies') throw at :752, :841 and :990.
-    expect(screen.getAllByLabelText('Applies'), 'the new node introduced a second Applies handle').toHaveLength(1)
-  })
-})
-
-describe('APPR-10-01 QA AC-3: the explanation outlives a write', () => {
-  it('stays on screen, and stays live, inside a save round trip', () => {
-    const self = policyWith('fin_mgr')
-    const sav = deferred<Policy>()
-    render(<WorkflowBuilder ctx={builderCtx({ policies: [self], savePolicy: vi.fn(() => sav.promise) })} policy={self} />)
-
-    expect(screen.getAllByText(SCOPE_NOT_ROUTED), 'the sentence is missing before the write, so the check below is vacuous').toHaveLength(1)
-    fireEvent.click(saveButton())
-
-    // The select goes inert here (:771); the sentence explains the PRODUCT, not the write.
-    expect(screen.getAllByText(SCOPE_NOT_ROUTED), 'the explanation vanished mid-write').toHaveLength(1)
-    expect(inert(screen.getByText(SCOPE_NOT_ROUTED)), 'the explanation greys out with the control it explains').toBe(false)
-  })
-})
-
-describe('APPR-10-01 QA: a policy carrying a retired scope (the hazard D-B accepted)', () => {
-  // D-B declined a defensive `scopeOptions(current)` prepend because the column's birth
-  // CHECK makes this unreachable in production. Characterisation, not endorsement: if the
-  // prepend is ever added, this fails and forces the decision to be retaken.
-  it('renders the select blank rather than inventing an option for it', () => {
-    const stale: Policy = { ...policyWith('fin_mgr'), scope: 'Capex & fixed assets' }
-    render(<WorkflowBuilder ctx={builderCtx()} policy={stale} />)
-
-    const sel = scopeSelect()
-    expect(Array.from(sel.options).map((o) => o.value), 'the retired scope was prepended back into the list').toEqual(['All invoices'])
-    expect(sel.value, 'the control silently rewrote the policy’s stored scope').not.toBe('Capex & fixed assets')
+    expect(screen.getByTestId('canvas-trigger-line').textContent).toBe('TRIGGER · ALL INVOICES')
   })
 })
 
@@ -1897,7 +1807,8 @@ function conditionPolicy(): Policy {
   return {
     id: 'p1',
     name: 'Test policy',
-    scope: 'All invoices',
+    position: 0,
+    scopes: CATCH_ALL_SCOPES,
     status: 'draft',
     version: 1,
     activeVersion: null,
@@ -2593,13 +2504,10 @@ describe('RESKIN2-05-04 WB: the builder header, palette and canvas', () => {
     expect(err.style.borderRadius).toBe('var(--radius-md)')
   })
 
-  it('WB-17 only the Applies select is a 200px --bg-2 select', () => {
+  it('WB-17 only the inspector selects are on --bg-1', () => {
     render(<WorkflowBuilder ctx={builderCtx({ roles: FIRM_ROLES })} policy={policyWith('fin_mgr')} />)
     fireEvent.click(screen.getByText(SIMPLE_TITLE))
 
-    const applies = scopeSelect()
-    expect(applies.style.backgroundColor, 'the Applies select is not on --bg-2').toBe('var(--bg-2)')
-    expect(applies.closest('label')!.style.width, 'the Applies select is not 200px').toBe('200px')
     for (const name of ['Who must approve', 'Deadline']) {
       const select = control(screen.getByLabelText(name))
       expect(select.tagName, `${name} is not a select`).toBe('SELECT')

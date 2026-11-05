@@ -678,12 +678,6 @@ test('PW-08 builder at 1440: canvas, nodes, inspector, simulator, header control
   for (const tile of await tiles.all()) await expectCorners(tile, '6px', 'palette tile')
 
   // Header controls (the layout sweep is PW-09).
-  const left = page.getByLabel('Policy name').locator('xpath=../..')
-  const applies = left.locator('select.pf-select')
-  const appliesStyle = await styles(applies, ['background-color'])
-  expect(appliesStyle['background-color'], 'Applies select background').toBe(WHITE)
-  const appliesBox = await applies.boundingBox()
-  expect(appliesBox?.width, 'Applies select width (the builder passes width 200)').toBe(200)
   const publish = await expectCorners(page.getByRole('button', { name: 'Publish', exact: true }), '7px', 'Publish')
 
   // Inspector, approval step.
@@ -722,7 +716,7 @@ test('PW-08 builder at 1440: canvas, nodes, inspector, simulator, header control
   await expect(connectors, 'one connector between each pair of steps').toHaveCount((await dots.count()) - 1)
   for (const line of await connectors.all()) expect(await line.locator('*').count(), 'a connector carries an arrowhead element').toBe(0)
 
-  await attachJson(testInfo, 'pw-08-approval-measurements', { canvasStyle, triggerStyle, terminalStyle, probe, rest, lit, badge, move, appliesStyle, appliesWidth: appliesBox?.width, publish, title, remove, manage, trackRadius, simTitle })
+  await attachJson(testInfo, 'pw-08-approval-measurements', { canvasStyle, triggerStyle, terminalStyle, probe, rest, lit, badge, move, publish, title, remove, manage, trackRadius, simTitle })
   await attachShot(page, testInfo, 'builder-selected')
 
   // Condition step: the preset equal to the value is lit, the others rest.
@@ -768,7 +762,8 @@ test('PW-09 builder header fits at every wide width and at 860px', async ({ page
     left,
     nameRow: nameInput.locator('xpath=..'),
     pill: nameInput.locator('xpath=..').getByText(/^(PUBLISHED|DRAFT)$/),
-    applies: left.locator('select.pf-select'),
+    trigger: page.getByTestId('canvas-trigger'),
+    triggerLine: page.getByTestId('canvas-trigger-line'),
     right: publish.locator('xpath=../..'),
     publish,
     reason: page.getByTestId('publish-blocked-reason'),
@@ -779,7 +774,8 @@ test('PW-09 builder header fits at every wide width and at 860px', async ({ page
     const present = (await consequence.count()) > 0 // rendered only for an unsealed policy
     const { rects, problems } = await boxes(present ? { ...named, consequence } : named)
     noOverlap(rects, ['left', 'right'], problems)
-    inside(rects, 'left', ['pill', 'applies'], problems)
+    inside(rects, 'left', ['pill'], problems)
+    inside(rects, 'trigger', ['triggerLine'], problems)
     if (rects.publish && rects.nameRow && Math.abs(rects.publish.y - rects.nameRow.y) > 1) problems.push('Publish and the name row do not share a top')
     if (rects.left && rects.right) {
       if (rects.right.x < rects.left.x + rects.left.width - 1) problems.push('the right column is not beside the left column')
@@ -799,8 +795,9 @@ test('PW-09 builder header fits at every wide width and at 860px', async ({ page
     await expect
       .poll(async () => {
         await settle(page, left)
-        const { rects, problems } = await boxes({ back: named.back, left, right: named.right })
+        const { rects, problems } = await boxes({ back: named.back, left, right: named.right, trigger: named.trigger, triggerLine: named.triggerLine })
         noOverlap(rects, ['left', 'right', 'back'], problems)
+        inside(rects, 'trigger', ['triggerLine'], problems)
         narrow = rects
         return problems
       }, { message: 'builder header at 860px', timeout: 10_000 })

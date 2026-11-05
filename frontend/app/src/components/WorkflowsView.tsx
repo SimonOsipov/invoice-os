@@ -14,7 +14,7 @@ import { WorkflowBuilder } from './WorkflowBuilder'
 import { PolicyStatusPill, wfBranchGlyph, wfCrossGlyph, wfPlusGlyph } from './WorkflowParts'
 import { membersSurface } from '../lib/members'
 import { policyStanding } from '../lib/policies'
-import { policySummary, type Policy } from '../lib/workflows'
+import { policySummary, scopeSummary, type Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 
 const INTRO =
@@ -173,7 +173,7 @@ function PolicyRow({ policy, onEdit, onDelete }: { policy: Policy; onEdit: () =>
           <PolicyStatusPill status={policy.status} />
         </div>
         <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 4 }}>
-          {policy.scope} · {policySummary(policy)}
+          {scopeSummary(policy.scopes)} · {policySummary(policy)}
         </div>
       </div>
 

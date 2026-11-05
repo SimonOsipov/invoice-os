@@ -2,7 +2,7 @@
 // fetches the tenant's real policies. They stay as a fixture because the roles, members
 // and workflows specs are all written against these five trees.
 
-import type { ApprovalNode, AutoApproveNode, BranchNode, CondOp, ConditionNode, NotifyNode, Policy, RoleKey, Sla, WfNode } from './workflows'
+import { CATCH_ALL_SCOPES, type ApprovalNode, type AutoApproveNode, type BranchNode, type CondOp, type ConditionNode, type NotifyNode, type Policy, type RoleKey, type Sla, type WfNode } from './workflows'
 
 // Node ids are literal here rather than generated. The prototype's `id()` counter runs
 // across BOTH modes from one closure, and its condition children get lower ids than
@@ -26,7 +26,8 @@ export const SEED_FIRM_POLICIES: readonly Policy[] = [
   {
     id: 'polF1',
     name: 'Standard approval policy',
-    scope: 'All invoices',
+    position: 0,
+    scopes: CATCH_ALL_SCOPES,
     status: 'published',
     // Only polF1 and polH1 hold an active version — a second per store would model a tenant
     // the server cannot produce. Policy.activeVersion states the constraint.
@@ -42,7 +43,8 @@ export const SEED_FIRM_POLICIES: readonly Policy[] = [
   {
     id: 'polF2',
     name: 'Cross-border & FX',
-    scope: 'Foreign-currency invoices',
+    position: 1,
+    scopes: CATCH_ALL_SCOPES,
     status: 'published',
     version: 1,
     activeVersion: null,
@@ -51,7 +53,8 @@ export const SEED_FIRM_POLICIES: readonly Policy[] = [
   {
     id: 'polF3',
     name: 'Government supply (B2G)',
-    scope: 'Document type · B2G',
+    position: 2,
+    scopes: CATCH_ALL_SCOPES,
     status: 'draft',
     version: 1,
     activeVersion: null,
@@ -63,7 +66,8 @@ export const SEED_INHOUSE_POLICIES: readonly Policy[] = [
   {
     id: 'polH1',
     name: 'Company approval policy',
-    scope: 'All invoices',
+    position: 0,
+    scopes: CATCH_ALL_SCOPES,
     status: 'published',
     version: 1,
     activeVersion: 1,
@@ -78,7 +82,8 @@ export const SEED_INHOUSE_POLICIES: readonly Policy[] = [
   {
     id: 'polH2',
     name: 'Capital expenditure',
-    scope: 'Capex & fixed assets',
+    position: 1,
+    scopes: CATCH_ALL_SCOPES,
     status: 'draft',
     version: 1,
     activeVersion: null,

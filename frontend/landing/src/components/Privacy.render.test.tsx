@@ -958,7 +958,7 @@ describe('the Library shares the landing\'s choice', () => {
     const keys = new Set(Array.from(LANDING_ANALYTICS.matchAll(/send\('\w+', \{ (\w+):/g)).map((m) => m[1]))
     const target = LANDING_ANALYTICS.match(/trackOpenInPlatform\(target: ([^)]*)\)/)?.[1] ?? ''
     for (const m of target.matchAll(/(\w+): string/g)) keys.add(m[1])
-    expect([...keys].sort()).toEqual(['cta_location', 'feature_id', 'form_name', 'group_id', 'percent_scrolled'])
+    expect([...keys].sort()).toEqual(['cta_location', 'feature_id', 'form_name', 'group_id', 'page_location', 'percent_scrolled'])
     expect(text(html)).toContain('which feature or group you opened')
   })
 

@@ -217,6 +217,184 @@ func seedOneStepActivePolicyTenant(t *testing.T, super *pgxpool.Pool, label stri
 	return tenantID, entityID, versionID
 }
 
+// approvalScopeFor is the scope columns of a draft version; nil/empty leaves a scope unset.
+type approvalScopeFor struct {
+	EntityIDs                     []string
+	BandLower, BandUpper, BandCcy *string
+}
+
+// setApprovalVersionScopeFor writes scope columns; run it BEFORE activateApprovalPolicyVersionFor,
+// the seal refuses a scope change.
+func setApprovalVersionScopeFor(t *testing.T, super *pgxpool.Pool, versionID string, s approvalScopeFor) {
+	t.Helper()
+	entityIDs := s.EntityIDs
+	if entityIDs == nil {
+		entityIDs = []string{}
+	}
+	tag, err := super.Exec(context.Background(),
+		`UPDATE approval_policy_versions
+		    SET scope_entity_ids = $2::text[]::uuid[], scope_amount_lower = $3::text::numeric,
+		        scope_amount_upper = $4::text::numeric, scope_amount_currency = $5
+		  WHERE id = $1`, versionID, entityIDs, s.BandLower, s.BandUpper, s.BandCcy)
+	if err != nil {
+		t.Fatalf("set scope of version %s: %v", versionID, err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("set scope of version %s affected %d rows, want 1", versionID, tag.RowsAffected())
+	}
+}
+
+// setApprovalPolicyPositionsFor puts the policies at positions 1..n in the given order, in one
+// UPDATE (the position constraint is deferred to statement end).
+func setApprovalPolicyPositionsFor(t *testing.T, super *pgxpool.Pool, policyIDs ...string) {
+	t.Helper()
+	tag, err := super.Exec(context.Background(),
+		`UPDATE approval_policies p SET position = o.n
+		   FROM unnest($1::uuid[]) WITH ORDINALITY AS o(id, n) WHERE p.id = o.id`, policyIDs)
+	if err != nil {
+		t.Fatalf("set policy positions: %v", err)
+	}
+	if int(tag.RowsAffected()) != len(policyIDs) {
+		t.Fatalf("set policy positions affected %d rows, want %d", tag.RowsAffected(), len(policyIDs))
+	}
+}
+
+// seedFirstMatchTenant: tenant with entities E1 and E2 and two active policies. A (position 1)
+// is client {E1} + band NGN 0.00-10,000.00; B (position 2) is the catch-all. B is created
+// first and the positions swapped, so creation order and position disagree.
+func seedFirstMatchTenant(t *testing.T, super *pgxpool.Pool, label string) (tenantID, e1, e2, versionA, versionB string) {
+	t.Helper()
+	tenantID = seedTenant(t, super, label+" tenant")
+	e1 = seedEntity(t, super, tenantID, label+" E1")
+	e2 = seedEntity(t, super, tenantID, label+" E2")
+
+	policyB := seedApprovalPolicyFor(t, super, tenantID, label+" catch-all")
+	versionB = seedApprovalPolicyVersionFor(t, super, tenantID, policyB)
+	seedApprovalStepFor(t, super, tenantID, versionB, approvalStepSpecFor{Ord: 0, Kind: "approval", WorkflowRoleKey: strPtr("engagement-partner")})
+	activateApprovalPolicyVersionFor(t, super, versionB)
+
+	policyA := seedApprovalPolicyFor(t, super, tenantID, label+" client band")
+	versionA = seedApprovalPolicyVersionFor(t, super, tenantID, policyA)
+	seedApprovalStepFor(t, super, tenantID, versionA, approvalStepSpecFor{Ord: 0, Kind: "approval", WorkflowRoleKey: strPtr("finance-lead")})
+	setApprovalVersionScopeFor(t, super, versionA, approvalScopeFor{
+		EntityIDs: []string{e1}, BandLower: strPtr("0.00"), BandUpper: strPtr("10000.00"), BandCcy: strPtr("NGN"),
+	})
+	activateApprovalPolicyVersionFor(t, super, versionA)
+
+	setApprovalPolicyPositionsFor(t, super, policyA, policyB)
+	return tenantID, e1, e2, versionA, versionB
+}
+
+// createMoneyInvoice creates a draft and sets currency and total by superuser UPDATE, then
+// re-reads it so the fingerprint the caller computes matches the row.
+func createMoneyInvoice(t *testing.T, super *pgxpool.Pool, store *Store, c context.Context, entityID, number, currency, total string) Invoice {
+	t.Helper()
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: number})
+	if err != nil {
+		t.Fatalf("Create %s: %v", number, err)
+	}
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET currency = $2, total = $3::text::numeric WHERE id = $1`, inv.ID, currency, total); err != nil {
+		t.Fatalf("set money on %s: %v", number, err)
+	}
+	got, err := store.Get(c, inv.ID)
+	if err != nil {
+		t.Fatalf("Get %s: %v", number, err)
+	}
+	return got
+}
+
+// --- first match at validation ----------------------------------------------
+
+// TestApplyValidation_PromotionArmsTheFirstMatchingPolicy: the E1 / NGN 1,075.00 invoice lands
+// on A (client and band both match); the E2 invoice matches only the catch-all B.
+func TestApplyValidation_PromotionArmsTheFirstMatchingPolicy(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID, e1, e2, versionA, versionB := seedFirstMatchTenant(t, super, "FM-01")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+	ruleSetVersionID := seedRuleSetVersionID(t, super)
+
+	for _, tc := range []struct{ name, entity, number, wantVersion string }{
+		{"E1 invoice takes the client and band policy", e1, "FM-01-e1", versionA},
+		{"E2 invoice takes the catch-all", e2, "FM-01-e2", versionB},
+	} {
+		inv := createMoneyInvoice(t, super, store, c, tc.entity, tc.number, "NGN", "1075.00")
+		got, err := store.ApplyValidation(c, inv.ID, []Violation{}, ruleSetVersionID, contentFingerprint(inv, inv.LineItems))
+		if err != nil {
+			t.Fatalf("%s: ApplyValidation: %v", tc.name, err)
+		}
+		if got.Status != StatusValidated {
+			t.Fatalf("%s: status = %q, want validated", tc.name, got.Status)
+		}
+		var versionID string
+		if err := super.QueryRow(ctx,
+			`SELECT policy_version_id::text FROM approval_runs WHERE invoice_id = $1`, inv.ID).Scan(&versionID); err != nil {
+			t.Fatalf("%s: want exactly one run: %v", tc.name, err)
+		}
+		if versionID != tc.wantVersion {
+			t.Errorf("%s: run on version %s, want %s", tc.name, versionID, tc.wantVersion)
+		}
+	}
+}
+
+// TestApplyValidation_ReValidationAfterAnEditMatchesAgain: a currency edit NGN to USD demotes the
+// invoice and cancels run R1 on A; the next promotion no longer fits A's NGN band and arms B.
+func TestApplyValidation_ReValidationAfterAnEditMatchesAgain(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID, e1, _, versionA, versionB := seedFirstMatchTenant(t, super, "FM-02")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+	ruleSetVersionID := seedRuleSetVersionID(t, super)
+
+	inv := createMoneyInvoice(t, super, store, c, e1, "FM-02", "NGN", "1075.00")
+	if _, err := store.ApplyValidation(c, inv.ID, []Violation{}, ruleSetVersionID, contentFingerprint(inv, inv.LineItems)); err != nil {
+		t.Fatalf("first ApplyValidation: %v", err)
+	}
+	var r1 string
+	if err := super.QueryRow(ctx,
+		`SELECT id::text FROM approval_runs WHERE invoice_id = $1 AND policy_version_id = $2`, inv.ID, versionA).Scan(&r1); err != nil {
+		t.Fatalf("precondition: the first promotion must arm A: %v", err)
+	}
+
+	usd := "USD"
+	edited, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{Currency: &usd}})
+	if err != nil {
+		t.Fatalf("Edit currency: %v", err)
+	}
+	if edited.Status != StatusDraft {
+		t.Fatalf("edited status = %q, want draft", edited.Status)
+	}
+	var state, cancelledVersion string
+	if err := super.QueryRow(ctx,
+		`SELECT state, policy_version_id::text FROM approval_runs WHERE id = $1`, r1).Scan(&state, &cancelledVersion); err != nil {
+		t.Fatalf("read R1: %v", err)
+	}
+	if state != "cancelled" || cancelledVersion != versionA {
+		t.Errorf("R1 = state %q on version %s, want cancelled on A (%s)", state, cancelledVersion, versionA)
+	}
+
+	// The pre-edit fingerprint is stale and would return ErrStaleValidation.
+	fp2 := contentFingerprint(edited, edited.LineItems)
+	if _, err := store.ApplyValidation(c, inv.ID, []Violation{}, ruleSetVersionID, fp2); err != nil {
+		t.Fatalf("second ApplyValidation: %v", err)
+	}
+	var openRuns int
+	var openVersion, openFP string
+	if err := super.QueryRow(ctx,
+		`SELECT count(*) OVER (), policy_version_id::text, content_fingerprint
+		   FROM approval_runs WHERE invoice_id = $1 AND state = 'open'`, inv.ID).Scan(&openRuns, &openVersion, &openFP); err != nil {
+		t.Fatalf("want exactly one open run after re-validation: %v", err)
+	}
+	if openRuns != 1 || openVersion != versionB || openFP != fp2 {
+		t.Errorf("open run = %d on %s fp %s, want 1 on the catch-all B (%s) with fp %s", openRuns, openVersion, openFP, versionB, fp2)
+	}
+}
+
 // --- AC-1: a clean promotion arms a run -------------------------------------
 
 // TestApplyValidation_PromotionArmsARun: a tenant with an active sealed policy naming a

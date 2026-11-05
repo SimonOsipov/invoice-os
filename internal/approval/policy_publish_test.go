@@ -846,6 +846,95 @@ func TestPublish_SweepArmsBacklog(t *testing.T) {
 	}
 }
 
+// --- the sweep arms each invoice with its own first match -----------------------
+
+// sweepValidated seeds one validated invoice with no run.
+func sweepValidated(t *testing.T, super *pgxpool.Pool, tenantID, entityID, number string) string {
+	t.Helper()
+	id := seedInvoice(t, super, tenantID, entityID, number)
+	if _, err := super.Exec(context.Background(),
+		`UPDATE invoices SET status = 'validated' WHERE id = $1`, id); err != nil {
+		t.Fatalf("validate invoice %s: %v", number, err)
+	}
+	return id
+}
+
+// staffedRoleKey creates a live workflow role with one active holder so a draft naming it publishes.
+func staffedRoleKey(t *testing.T, super *pgxpool.Pool, tenantID, key string) {
+	t.Helper()
+	member := uuid.NewString()
+	seedMembership(t, super, tenantID, member, "preparer", "active")
+	staffWorkflowRole(t, super, tenantID, seedWorkflowRole(t, super, tenantID, key, key), member, 0)
+}
+
+// TestPublish_SweepArmsEachInvoiceWithItsOwnFirstMatch: A (position 1, client E1) is active,
+// the catch-all B (position 2) is published; the E1 invoice stays on A, the E2 invoice takes B.
+func TestPublish_SweepArmsEachInvoiceWithItsOwnFirstMatch(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-03 sweep own first match")
+	c, _ := activeAdmin(t, super, tenantID)
+	staffedRoleKey(t, super, tenantID, "engagement-partner")
+
+	e1 := seedBusinessEntity(t, super, tenantID, "Sweep E1")
+	e2 := seedBusinessEntity(t, super, tenantID, "Sweep E2")
+	i1 := sweepValidated(t, super, tenantID, e1, "sweep-own-1")
+	i2 := sweepValidated(t, super, tenantID, e2, "sweep-own-2")
+
+	_, versionA := seedScopedPolicy(t, super, tenantID, "Client E1", 1, scopeSpec{EntityIDs: []string{e1}}, "engagement-partner")
+	policyB := seedApprovalPolicy(t, super, tenantID, "Catch-all")
+	versionB, _ := seedApprovalDraftNamingRole(t, super, tenantID, policyB, "engagement-partner")
+	if versionA == versionB {
+		t.Fatal("fixture: A and B share a version")
+	}
+
+	if _, err := NewStore(app, stubFingerprinter, nil).PublishPolicy(c, policyB); err != nil {
+		t.Fatalf("PublishPolicy(B): %v, want success", err)
+	}
+
+	if got := oneApprovalRun(t, super, i1).PolicyVersionID; got != versionA {
+		t.Errorf("E1 invoice armed on version %s, want policy A's %s: its own first match, not the published one", got, versionA)
+	}
+	if got := oneApprovalRun(t, super, i2).PolicyVersionID; got != versionB {
+		t.Errorf("E2 invoice armed on version %s, want the published catch-all's %s", got, versionB)
+	}
+	if n := auditCount(t, super, tenantID, "invoice.approval_armed"); n != 2 {
+		t.Errorf("invoice.approval_armed audit rows = %d, want 2", n)
+	}
+}
+
+// TestPublish_SweepLeavesAnUnmatchedInvoiceWithoutARun: the only policy is scoped to E1, so an
+// E2 invoice matches nothing; publish still succeeds and the E1 control gets its run.
+func TestPublish_SweepLeavesAnUnmatchedInvoiceWithoutARun(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-03 sweep unmatched")
+	c, _ := activeAdmin(t, super, tenantID)
+	staffedRoleKey(t, super, tenantID, "engagement-partner")
+
+	e1 := seedBusinessEntity(t, super, tenantID, "Unmatched E1")
+	e2 := seedBusinessEntity(t, super, tenantID, "Unmatched E2")
+	matched := sweepValidated(t, super, tenantID, e1, "sweep-unmatched-e1")
+	unmatched := sweepValidated(t, super, tenantID, e2, "sweep-unmatched-e2")
+
+	policyA, versionA := seedScopedPolicyDraft(t, super, tenantID, "Client E1", 1, scopeSpec{EntityIDs: []string{e1}})
+	seedApprovalPolicyStepInLane(t, super, tenantID, versionA, seedStepSpec{
+		Ord: 0, Kind: "approval", WorkflowRoleKey: ptr("engagement-partner"),
+	})
+
+	if _, err := NewStore(app, stubFingerprinter, nil).PublishPolicy(c, policyA); err != nil {
+		t.Fatalf("PublishPolicy(A): %v, want success although an invoice matches no policy", err)
+	}
+
+	if got := oneApprovalRun(t, super, matched).PolicyVersionID; got != versionA {
+		t.Errorf("E1 invoice armed on version %s, want %s", got, versionA)
+	}
+	if n := approvalRunCountForInvoice(t, super, unmatched); n != 0 {
+		t.Errorf("approval_runs rows for the unmatched invoice = %d, want 0", n)
+	}
+	if n := auditCount(t, super, tenantID, "invoice.approval_armed"); n != 1 {
+		t.Errorf("invoice.approval_armed audit rows = %d, want 1 (the matched invoice only)", n)
+	}
+}
+
 // --- AC-3,4: the cap refuses the whole publish before arming anything ----------
 
 // TestPublish_SweepAboveCapReturns409: sweepCap+1 (5,001) validated invoices is one

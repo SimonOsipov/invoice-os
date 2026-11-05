@@ -1076,7 +1076,7 @@ func TestArm_SoftDeletedRoleStillArmsPending(t *testing.T) {
 	}
 }
 
-// --- APSC-03-01: ArmTx arms the first matching policy -------------------------------
+// --- ArmTx arms the first matching policy -------------------------------
 
 // scopeSpec is a version's scope columns; zero value is a catch-all. Band bounds are decimal text.
 type scopeSpec struct {
@@ -1582,7 +1582,7 @@ func TestArm_AuditCatchAllMatchNamesNoScope(t *testing.T) {
 	}
 }
 
-// --- APSC-03 QA: adversarial coverage ------------------------------------------------
+// --- adversarial coverage ------------------------------------------------
 
 func TestArm_DebitNoteArmsItsOwnDocumentTypePolicy(t *testing.T) {
 	super, app := dbTestPools(t)

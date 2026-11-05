@@ -18,7 +18,8 @@ paths:
 - Run publish in one transaction: seal, then the backlog sweep, then the `approval_policy.published` audit row last.
 - Arm the sweep after the seal. `ArmTx` arms a document with the first policy in position order whose set scopes all match it (`TestArm_LowerPositionWinsOverThePolicyPublishedLast`). A policy counts when it is live and has an active version.
 - Match the scopes in `firstMatch` only. A document type, a client or a creator role matches when the document's value is in the list. An amount band matches when the currency is equal and the total is within both bounds. An unset scope matches every document (`TestFirstMatch_*`).
-- Read the creator as the actor of the `from_status IS NULL` history row. A non-human actor matches no role. A deleted role matches nobody (`TestArm_CreatorRoleScopeMatchesTheCreatorsLiveRole`).
+- The creator is the actor of the `from_status IS NULL` history row of `invoice_status_history`. Both creator readers use that row.
+- A non-human actor matches no role. A deleted role matches nobody (`TestArm_CreatorRoleScopeMatchesTheCreatorsLiveRole`).
 - Cap the sweep at `sweepCap` invoices. Above the cap, publish returns 409 and writes nothing.
 - Never retry a publish 409 automatically.
 - Re-activate a sealed version by publishing its tree again as a new version. No API path re-activates a sealed version.
@@ -36,7 +37,7 @@ paths:
 - Start every policy write with `requireActiveAdmin` inside its transaction.
 - Refuse a non-admin in portfolio `Store.Create` before the input check. A non-admin gets 403 whatever the input.
 - Decide a step on two axes. The caller is an active admin or reviewer, and holds the pending step's workflow role.
-- Refuse an approve by the invoice's creator before the second axis. Read the creator through `CreatorStandingTx` only.
+- Refuse an approve by the invoice's creator before the second axis. Read the creator for this refusal through `CreatorStandingTx` only.
 - Allow the creator when no other active admin or reviewer can reach the client. Write `approved_as = self_approved` in the audit payload.
 - Let the creator reject on the two axes.
 - Answer an unknown, cross-tenant, outside-the-client-set or malformed id with the same 404.

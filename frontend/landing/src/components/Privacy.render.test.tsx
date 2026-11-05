@@ -289,8 +289,8 @@ function gaHits(files: string[]): string[] {
   return GA_NEEDLES.filter((n) => combined.includes(n))
 }
 
-describe('C2 code scan: the app and the consoles carry no Google Analytics (the consoles claim is on the page; the app scan records the measured code)', () => {
-  it('C2 code scan: the signed-in product and the files it imports carry no Google Analytics reference', () => {
+describe('C2 code scan: the app loads the Google tag and the consoles carry no Google Analytics', () => {
+  it('C2 code scan: the signed-in product loads the Google tag through analytics.ts', () => {
     const appFiles = sourceFiles(APP_SRC)
     expect(appFiles.length, 'scan found too few app files').toBeGreaterThanOrEqual(20)
     const files = [...importClosure(appFiles)]
@@ -299,10 +299,13 @@ describe('C2 code scan: the app and the consoles carry no Google Analytics (the 
     const names = files.map((f) => f.slice(f.lastIndexOf('/') + 1))
     expect(names, 'control: the closure reaches hubspotChat.ts').toContain('hubspotChat.ts')
     expect(names, 'control: the closure reaches consent.ts').toContain('consent.ts')
-    expect(names, 'control: the closure must not reach analytics.ts').not.toContain('analytics.ts')
+    expect(names, 'the closure reaches analytics.ts').toContain('analytics.ts')
     expect(files.some((f) => f.startsWith(join(PACKAGES_DIR, 'monitoring'))), 'control: the closure reaches @invoice-os/monitoring').toBe(true)
     expect(files.some((f) => f.startsWith(join(PACKAGES_DIR, 'api-client'))), 'control: the closure reaches @invoice-os/api-client').toBe(true)
-    expect(gaHits(files)).toEqual([])
+    expect(gaHits(files)).toContain('googletagmanager')
+    const chat = code(join(APP_SRC, 'chat.ts'))
+    expect(chat).toContain('ensureTag(')
+    expect(chat).toContain('APP_HOSTNAMES')
   })
 
   it('C2: a Google Analytics reference in a workspace package the app imports is found', () => {

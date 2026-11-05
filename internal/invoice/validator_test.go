@@ -38,11 +38,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -620,5 +622,58 @@ func TestValidate_NoStampAnywhereIsErrUpstream(t *testing.T) {
 		{"ref":"r1","violations":[]},{"ref":"r2","violations":[]}]}`, 0))
 	if _, err := v.Validate(context.Background(), twoRefs); !errors.Is(err, ErrUpstream) {
 		t.Errorf("err = %v, want ErrUpstream", err)
+	}
+}
+
+// A reset on a pooled keep-alive connection must be retried: Go's transport
+// does not retry a POST that was already written (BUG-107).
+func TestValidatorRetriesResetOnReusedConnection(t *testing.T) {
+	body := fmt.Sprintf(`{"rule_set_version": %d, "rule_set_version_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"results": [{"ref": "r1", "violations": [], "rule_set_version": %[1]d, "rule_set_version_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}]}`,
+		cannedRuleSetVersion)
+	var mu sync.Mutex
+	served := map[string]bool{} // conns that already answered one request
+	resets := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reused := served[r.RemoteAddr]
+		served[r.RemoteAddr] = true
+		doReset := reused && resets == 0
+		if doReset {
+			resets++
+		}
+		mu.Unlock()
+		if doReset {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Errorf("hijack: %v", err)
+				return
+			}
+			_ = conn.(*net.TCPConn).SetLinger(0) // close sends RST
+			_ = conn.Close()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+
+	v := NewValidator(srv.URL, "tok", nil)
+	items := []ValidateItem{{Ref: "r1", Invoice: map[string]any{}}}
+	if _, err := v.Validate(context.Background(), items); err != nil {
+		t.Fatalf("warm-up Validate: %v", err)
+	}
+	res, err := v.Validate(context.Background(), items)
+	mu.Lock()
+	gotResets := resets
+	mu.Unlock()
+	if gotResets != 1 {
+		t.Fatalf("setup: second call did not reuse the pooled connection (resets=%d, want 1)", gotResets)
+	}
+	if err != nil {
+		t.Fatalf("Validate after a reset on a reused connection: %v, want the result from a retry", err)
+	}
+	if _, ok := res.ByRef["r1"]; !ok {
+		t.Errorf("ByRef = %v, want key r1 from the retried response", res.ByRef)
 	}
 }

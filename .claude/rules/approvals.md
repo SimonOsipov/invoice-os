@@ -16,11 +16,15 @@ paths:
 - Take `LockTenantPublishTx` in `PublishPolicy` and in the demo seeder before any backlog sweep read. It serialises one tenant's publishes and sweeps.
 - Publish the one unsealed version. Resolve it with `NOT sealed`, never with `is_active`.
 - Run publish in one transaction: seal, then the backlog sweep, then the `approval_policy.published` audit row last.
-- Arm the sweep after the seal. `ArmTx` resolves the governing version as the active version with the latest `published_at`.
+- Arm the sweep after the seal. `ArmTx` arms a document with the first policy in position order whose set scopes all match it (`TestArm_LowerPositionWinsOverThePolicyPublishedLast`). A policy counts when it is live and has an active version.
+- Match the scopes in `firstMatch` only. A document type, a client or a creator role matches when the document's value is in the list. An amount band matches when the currency is equal and the total is within both bounds. An unset scope matches every document (`TestFirstMatch_*`).
+- Read the creator as the actor of the `from_status IS NULL` history row. A non-human actor matches no role. A deleted role matches nobody (`TestArm_CreatorRoleScopeMatchesTheCreatorsLiveRole`).
 - Cap the sweep at `sweepCap` invoices. Above the cap, publish returns 409 and writes nothing.
 - Never retry a publish 409 automatically.
 - Re-activate a sealed version by publishing its tree again as a new version. No API path re-activates a sealed version.
-- Arm a run for every invoice at `validated` while any version is active.
+- Arm a run for every document at `validated` that a policy in force matches. A document that no policy matches gets no run, and the gate blocks it (`TestPublish_SweepLeavesAnUnmatchedInvoiceWithoutARun`, `TestTransmitClearTx_UnmatchedDocumentIsBlockedWhileAPolicyIsInForce`).
+- Keep an open run on the version it was armed with. A publish or a reorder never re-arms it (`TestPublish_LeavesOpenRunsOnTheirVersion`).
+- Record `policy_id`, `position` and `matched_scopes` in `invoice.approval_armed`. Record scope names, never scope values (`TestArm_AuditNamesThePolicyItsPositionAndTheMatchedScopes`).
 - Write the run closed `approved` with `closed_by = 'system'` when no approval step is pending. Write no decision row.
 - Enforce the `TransmitClear` gate in `Store.Transition` and `Submitter.BatchSubmit` only.
 - Treat an unreadable approval standing as not clear. Both transmit doors fail closed.

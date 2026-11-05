@@ -74,9 +74,8 @@ func GetPolicyHandler(get PolicyGetter, log *slog.Logger) http.HandlerFunc {
 }
 
 // CreatePolicyHandler returns POST /v1/approval-policies: identity (401) -> capped
-// decode (400) -> create -> 201. Name and scope reach the store verbatim; the scope
-// vocabulary is normalizeScope's, so a foreign one is the store's 400, not this
-// layer's.
+// decode (400) -> create -> 201. Name and scopes reach the store verbatim; the store
+// validates them. A legacy "scope" key is ignored.
 func CreatePolicyHandler(create PolicyCreator, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -94,7 +93,7 @@ func CreatePolicyHandler(create PolicyCreator, log *slog.Logger) http.HandlerFun
 			return
 		}
 
-		policy, err := create(r.Context(), req.Name, req.Scope)
+		policy, err := create(r.Context(), req.Name, req.Scopes)
 		if err != nil {
 			status, msg := policyStatusForErr(err)
 			if status == http.StatusInternalServerError {
@@ -134,7 +133,7 @@ func PutDraftHandler(put PolicyDrafter, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		policy, err := put(r.Context(), r.PathValue("id"), req.Name, req.Scope, *req.Steps)
+		policy, err := put(r.Context(), r.PathValue("id"), req.Name, req.Scopes, *req.Steps)
 		if err != nil {
 			status, msg := policyStatusForErr(err)
 			if status == http.StatusInternalServerError {

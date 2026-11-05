@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -49,11 +50,11 @@ func failClosedPolicySeam(t *testing.T) *policySeam {
 			t.Fatal("policy getter must not run on a request the handler has to reject")
 			return Policy{}, nil
 		},
-		create: func(context.Context, string, string) (Policy, error) {
+		create: func(context.Context, string, *scopeInput) (Policy, error) {
 			t.Fatal("policy creator must not run on a request the handler has to reject")
 			return Policy{}, nil
 		},
-		put: func(context.Context, string, *string, *string, []stepInput) (Policy, error) {
+		put: func(context.Context, string, *string, *scopeInput, []stepInput) (Policy, error) {
 			t.Fatal("policy drafter must not run on a request the handler has to reject")
 			return Policy{}, nil
 		},
@@ -73,8 +74,8 @@ func policyErrSeam(err error) *policySeam {
 	return &policySeam{
 		list:   func(context.Context) ([]Policy, error) { return nil, err },
 		get:    func(context.Context, string) (Policy, error) { return Policy{}, err },
-		create: func(context.Context, string, string) (Policy, error) { return Policy{}, err },
-		put: func(context.Context, string, *string, *string, []stepInput) (Policy, error) {
+		create: func(context.Context, string, *scopeInput) (Policy, error) { return Policy{}, err },
+		put: func(context.Context, string, *string, *scopeInput, []stepInput) (Policy, error) {
 			return Policy{}, err
 		},
 		publish: func(context.Context, string) (Policy, error) { return Policy{}, err },
@@ -87,8 +88,8 @@ func policyOkSeam(p Policy) *policySeam {
 	return &policySeam{
 		list:   func(context.Context) ([]Policy, error) { return []Policy{p}, nil },
 		get:    func(context.Context, string) (Policy, error) { return p, nil },
-		create: func(context.Context, string, string) (Policy, error) { return p, nil },
-		put: func(context.Context, string, *string, *string, []stepInput) (Policy, error) {
+		create: func(context.Context, string, *scopeInput) (Policy, error) { return p, nil },
+		put: func(context.Context, string, *string, *scopeInput, []stepInput) (Policy, error) {
 			return p, nil
 		},
 		publish: func(context.Context, string) (Policy, error) { return p, nil },
@@ -196,7 +197,7 @@ func TestPutDraftHandler_StepsPresenceIsA400(t *testing.T) {
 		var got []stepInput
 		ran := false
 		s := failClosedPolicySeam(t)
-		s.put = func(_ context.Context, _ string, _, _ *string, steps []stepInput) (Policy, error) {
+		s.put = func(_ context.Context, _ string, _ *string, _ *scopeInput, steps []stepInput) (Policy, error) {
 			ran, got = true, steps
 			return newPolicy(), nil
 		}
@@ -233,7 +234,7 @@ func TestPutDraftHandler_BodyCheckedBeforePathId(t *testing.T) {
 			id := caller()
 			ran := false
 			s := failClosedPolicySeam(t)
-			s.put = func(context.Context, string, *string, *string, []stepInput) (Policy, error) {
+			s.put = func(context.Context, string, *string, *scopeInput, []stepInput) (Policy, error) {
 				ran = true
 				return Policy{}, ErrPolicyNotFound
 			}
@@ -341,8 +342,8 @@ func TestPolicyHandlers_OversizeBodyIs400(t *testing.T) {
 				id := caller()
 				ran := false
 				s := failClosedPolicySeam(t)
-				s.create = func(context.Context, string, string) (Policy, error) { ran = true; return newPolicy(), nil }
-				s.put = func(context.Context, string, *string, *string, []stepInput) (Policy, error) {
+				s.create = func(context.Context, string, *scopeInput) (Policy, error) { ran = true; return newPolicy(), nil }
+				s.put = func(context.Context, string, *string, *scopeInput, []stepInput) (Policy, error) {
 					ran = true
 					return newPolicy(), nil
 				}
@@ -416,48 +417,65 @@ func TestPolicyHandlers_StatusCodes(t *testing.T) {
 	}
 }
 
-// The scope vocabulary is the STORE's (normalizeScope), so both writers must forward
-// a foreign scope rather than judge it. One table over both doors, so a handler
-// wired to only one of them fails.
-func TestPolicyHandlers_ForeignScopeIs400OnBothWriters(t *testing.T) {
-	const foreign = "Capex & fixed assets"
-	cases := []struct{ name, method, path, body string }{
-		{"create", "POST", "/v1/approval-policies", `{"name":"x","scope":"` + foreign + `"}`},
-		{"draft", "PUT", "/v1/approval-policies/" + policyHandlerTestID + "/draft",
-			`{"steps":[],"scope":"` + foreign + `"}`},
+func TestPolicyHandlers_ScopeSentinelsMapTo400WithTheirMessages(t *testing.T) {
+	cases := []struct {
+		err error
+		msg string
+	}{
+		{ErrScopeDocumentType, "a scope names an unknown document type"},
+		{ErrScopeEntity, "a scope names a client company outside this workspace"},
+		{ErrScopeBand, "an amount band needs a currency, at least one bound, and a lower bound no higher than the upper"},
+		{ErrScopeCurrency, "an amount band names a currency outside the NRS currency list"},
+		{ErrScopeRole, "a scope names a workflow role that does not exist or was deleted"},
+		{ErrValidation, "invalid request"},
+	}
+	routes := []struct{ method, path, body string }{
+		{"POST", "/v1/approval-policies", `{"name":"x"}`},
+		{"PUT", "/v1/approval-policies/" + policyHandlerTestID + "/draft", `{"steps":[]}`},
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			id := caller()
-			ran := false
-			got := ""
-			s := failClosedPolicySeam(t)
-			s.create = func(_ context.Context, _, scope string) (Policy, error) {
-				ran, got = true, scope
-				return Policy{}, ErrValidation
-			}
-			s.put = func(_ context.Context, _ string, _, scope *string, _ []stepInput) (Policy, error) {
-				ran = true
-				if scope != nil {
-					got = *scope
+		for _, rt := range routes {
+			t.Run(rt.method+"/"+c.err.Error(), func(t *testing.T) {
+				id := caller()
+				rec := servePolicy(t, policyErrSeam(c.err), nil, rt.method, rt.path, rt.body, &id)
+				if rec.Code != http.StatusBadRequest {
+					t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
 				}
-				return Policy{}, ErrValidation
-			}
-			rec := servePolicy(t, s, nil, c.method, c.path, c.body, &id)
-			if !ran {
-				t.Fatalf("%s never reached the store; the scope vocabulary is the store's: %d %s",
-					c.name, rec.Code, rec.Body.String())
-			}
-			if got != foreign {
-				t.Errorf("the store received scope %q, want %q verbatim", got, foreign)
-			}
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
-			}
-			if msg := errorMessage(t, rec.Body.Bytes()); msg != "invalid request" {
-				t.Errorf("error = %q, want %q", msg, "invalid request")
-			}
-		})
+				if got := errorMessage(t, rec.Body.Bytes()); got != c.msg {
+					t.Errorf("error = %q, want %q", got, c.msg)
+				}
+			})
+		}
+	}
+}
+
+func TestPolicyHandlers_ForwardScopesAndIgnoreTheLegacyScope(t *testing.T) {
+	id := caller()
+	var created, put []*scopeInput
+	s := failClosedPolicySeam(t)
+	s.create = func(_ context.Context, _ string, sc *scopeInput) (Policy, error) {
+		created = append(created, sc)
+		return newPolicy(), nil
+	}
+	s.put = func(_ context.Context, _ string, _ *string, sc *scopeInput, _ []stepInput) (Policy, error) {
+		put = append(put, sc)
+		return newPolicy(), nil
+	}
+
+	rec := servePolicy(t, s, nil, "POST", "/v1/approval-policies",
+		`{"name":"N","scope":"Capex","scopes":{"document_types":["credit_note"]}}`, &id)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST status = %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+	rec = servePolicy(t, s, nil, "PUT", "/v1/approval-policies/"+policyHandlerTestID+"/draft", `{"steps":[]}`, &id)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if len(created) != 1 || created[0] == nil || !reflect.DeepEqual(created[0].DocumentTypes, []string{"credit_note"}) {
+		t.Errorf("create received %+v, want scopes with [credit_note]", created)
+	}
+	if len(put) != 1 || put[0] != nil {
+		t.Errorf("put received %+v, want nil scopes", put)
 	}
 }
 
@@ -535,10 +553,12 @@ func TestPolicyRoutes_RegisteredOnMux(t *testing.T) {
 					return newPolicy(), nil
 				}
 				s := &policySeam{
-					list:    func(context.Context) ([]Policy, error) { ran = true; return nil, nil },
-					create:  func(context.Context, string, string) (Policy, error) { ran = true; return newPolicy(), nil },
-					get:     func(_ context.Context, pid string) (Policy, error) { return record(pid) },
-					put:     func(_ context.Context, pid string, _, _ *string, _ []stepInput) (Policy, error) { return record(pid) },
+					list:   func(context.Context) ([]Policy, error) { ran = true; return nil, nil },
+					create: func(context.Context, string, *scopeInput) (Policy, error) { ran = true; return newPolicy(), nil },
+					get:    func(_ context.Context, pid string) (Policy, error) { return record(pid) },
+					put: func(_ context.Context, pid string, _ *string, _ *scopeInput, _ []stepInput) (Policy, error) {
+						return record(pid)
+					},
 					publish: func(_ context.Context, pid string) (Policy, error) { return record(pid) },
 					del:     func(_ context.Context, pid string) (Policy, error) { return record(pid) },
 				}

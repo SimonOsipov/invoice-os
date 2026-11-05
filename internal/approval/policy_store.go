@@ -23,8 +23,8 @@ import (
 type (
 	PolicyLister    func(ctx context.Context) ([]Policy, error)
 	PolicyGetter    func(ctx context.Context, id string) (Policy, error)
-	PolicyCreator   func(ctx context.Context, name, scope string) (Policy, error)
-	PolicyDrafter   func(ctx context.Context, id string, name, scope *string, steps []stepInput) (Policy, error)
+	PolicyCreator   func(ctx context.Context, name string, scopes *scopeInput) (Policy, error)
+	PolicyDrafter   func(ctx context.Context, id string, name *string, scopes *scopeInput, steps []stepInput) (Policy, error)
 	PolicyPublisher func(ctx context.Context, id string) (Policy, error)
 	PolicyDeleter   func(ctx context.Context, id string) (Policy, error)
 )
@@ -154,6 +154,80 @@ func readPolicyScopes(ctx context.Context, tx pgx.Tx, versionIDs []string) (map[
 		out[id] = sc
 	}
 	return out, rows.Err()
+}
+
+const scopeColumns = `scope_document_types, scope_entity_ids, scope_workflow_role_ids,
+	scope_amount_lower, scope_amount_upper, scope_amount_currency`
+
+// scopeRow is a scopeInput resolved to its stored form: arrays never nil, roles as ids.
+type scopeRow struct {
+	DocumentTypes, EntityIDs, RoleIDs []string
+	Lower, Upper, Currency            *string
+}
+
+// resolveScopesTx checks the scopes against the database: entities visible under RLS, live
+// roles, a currency on the NRS list. Run after requireActiveAdmin.
+func resolveScopesTx(ctx context.Context, tx pgx.Tx, in scopeInput) (scopeRow, error) {
+	row := scopeRow{
+		DocumentTypes: append([]string{}, in.DocumentTypes...),
+		EntityIDs:     make([]string, 0, len(in.EntityIDs)),
+		RoleIDs:       make([]string, 0, len(in.WorkflowRoleKeys)),
+	}
+	for _, e := range in.EntityIDs {
+		row.EntityIDs = append(row.EntityIDs, uuid.MustParse(e).String())
+	}
+	if len(row.EntityIDs) > 0 {
+		var n int
+		if err := tx.QueryRow(ctx,
+			`SELECT count(*) FROM business_entities WHERE id = ANY($1::text[]::uuid[])`,
+			row.EntityIDs).Scan(&n); err != nil {
+			return scopeRow{}, err
+		}
+		if n != len(row.EntityIDs) {
+			return scopeRow{}, ErrScopeEntity
+		}
+	}
+	if len(in.WorkflowRoleKeys) > 0 {
+		rows, err := tx.Query(ctx,
+			`SELECT key, id FROM workflow_roles WHERE key = ANY($1) AND deleted_at IS NULL`,
+			in.WorkflowRoleKeys)
+		if err != nil {
+			return scopeRow{}, err
+		}
+		ids := map[string]string{}
+		for rows.Next() {
+			var k, id string
+			if err := rows.Scan(&k, &id); err != nil {
+				rows.Close()
+				return scopeRow{}, err
+			}
+			ids[k] = id
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return scopeRow{}, err
+		}
+		for _, k := range in.WorkflowRoleKeys {
+			id, ok := ids[k]
+			if !ok {
+				return scopeRow{}, ErrScopeRole
+			}
+			row.RoleIDs = append(row.RoleIDs, id)
+		}
+	}
+	if b := in.AmountBand; b != nil {
+		var ok bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM nrs_codes WHERE list = 'currencies' AND code = $1)`,
+			b.Currency).Scan(&ok); err != nil {
+			return scopeRow{}, err
+		}
+		if !ok {
+			return scopeRow{}, ErrScopeCurrency
+		}
+		row.Lower, row.Upper, row.Currency = b.Lower, b.Upper, &b.Currency
+	}
+	return row, nil
 }
 
 // ListPolicies returns the tenant's live policies by position, each with its version list
@@ -320,24 +394,21 @@ func (s *Store) GetPolicy(ctx context.Context, id string) (Policy, error) {
 	return p, nil
 }
 
-// CreatePolicy inserts a policy and its empty draft version 1, auditing both in the same
-// transaction. Statement order is the security property, on two axes:
-//
-// Both normalizers run ABOVE the transaction and REPLACE their argument, so the caller's
-// raw string is unreachable from the INSERT (the CreateRole precedent, store.go:128-133).
-// That replacement is the whole mechanism: an unnormalized scope would be stored, not
-// refused with the 400 this seam promises (TestCreatePolicy_EmptyScopeNormalizedBeforeSQL).
-//
-// requireActiveAdmin is then the first statement in the closure, before any policy row is
-// read, so a suspended or non-admin caller is refused with nothing written
+// CreatePolicy inserts a policy and its draft version 1 carrying the scopes, auditing both
+// in the same transaction. The name and scopes are validated ABOVE the transaction
+// (TestCreatePolicy_RefusesEachBadScopeWithNothingWritten); requireActiveAdmin is the first
+// statement in the closure and the scope lookups follow it
 // (TestPolicy_CreatePermissionCheckedBeforeRowRead).
-func (s *Store) CreatePolicy(ctx context.Context, name, scope string) (Policy, error) {
+func (s *Store) CreatePolicy(ctx context.Context, name string, scopes *scopeInput) (Policy, error) {
 	name, err := normalizeName(name)
 	if err != nil {
 		return Policy{}, err
 	}
-	scope, err = normalizeScope(scope)
-	if err != nil {
+	in := scopeInput{}
+	if scopes != nil {
+		in = *scopes
+	}
+	if err := validateScopes(in); err != nil {
 		return Policy{}, err
 	}
 
@@ -352,25 +423,38 @@ func (s *Store) CreatePolicy(ctx context.Context, name, scope string) (Policy, e
 			return err
 		}
 
+		row, err := resolveScopesTx(ctx, tx, in)
+		if err != nil {
+			return err
+		}
+
 		// tenant_id is explicit: the column has no DEFAULT and the RLS WITH CHECK ties it
-		// to the GUC. scope is the normalized local, never the argument as received.
+		// to the GUC. The legacy scope column keeps its default.
 		if err := tx.QueryRow(ctx,
-			`INSERT INTO approval_policies (tenant_id, name, scope)
-			 VALUES ($1, $2, $3)
+			`INSERT INTO approval_policies (tenant_id, name)
+			 VALUES ($1, $2)
 			 RETURNING id, name, scope, position`,
-			caller.TenantID, name, scope,
+			caller.TenantID, name,
 		).Scan(&created.ID, &created.Name, &created.Scope, &created.Position); err != nil {
 			return err
 		}
 
 		// sealed and is_active take their false DEFAULTs. Never set is_active here:
 		// publishing is its own seam.
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO approval_policy_versions (tenant_id, policy_id, version)
-			 VALUES ($1, $2, 1)`,
-			caller.TenantID, created.ID); err != nil {
+		var versionID string
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO approval_policy_versions (tenant_id, policy_id, version, `+scopeColumns+`)
+			 VALUES ($1, $2, 1, $3::text[], $4::text[]::uuid[], $5::text[]::uuid[], $6::numeric, $7::numeric, $8::text)
+			 RETURNING id`,
+			caller.TenantID, created.ID, row.DocumentTypes, row.EntityIDs, row.RoleIDs,
+			row.Lower, row.Upper, row.Currency).Scan(&versionID); err != nil {
 			return err
 		}
+		scopesRead, err := readPolicyScopes(ctx, tx, []string{versionID})
+		if err != nil {
+			return err
+		}
+		created.Scopes = scopesRead[versionID]
 
 		// Last statement in the closure: a failing audit write rolls both inserts back
 		// (TestPolicy_CreateAuditsInSameTx). tenant_id comes from the GUC via the audit_log
@@ -395,12 +479,15 @@ func (s *Store) CreatePolicy(ctx context.Context, name, scope string) (Policy, e
 // would raise 23001 if the predicate ever broke, and that stays an honest 500 — it is a
 // plpgsql RAISE carrying no constraint name, so no mapper can catch it by accident.
 //
-// Statement order is the security property, as in CreatePolicy: the id is parsed and both
-// normalizers run ABOVE the transaction, so neither a malformed uuid (22P02) nor an
-// unnormalized scope (23514) reaches SQL — both carry no sentinel and would answer 500
-// where this seam promises 404 and 400. requireActiveAdmin is then the first statement in
-// the closure, before any policy row is read.
-func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, steps []stepInput) (Policy, error) {
+// A nil scopes keeps the open draft's scopes; a fork copies the previous top version's.
+// A non-nil scopes (even empty) replaces them.
+//
+// Statement order is the security property, as in CreatePolicy: the id is parsed and the
+// name, scopes and tree are validated ABOVE the transaction, so neither a malformed uuid
+// (22P02) nor a bad scope reaches SQL. requireActiveAdmin is then the first statement in
+// the closure, before any policy row is read; the scope lookups run after the row lock and
+// before the first write.
+func (s *Store) PutDraft(ctx context.Context, id string, name *string, scopes *scopeInput, steps []stepInput) (Policy, error) {
 	// GetPolicy's parse, and its choice of sentinel: 400 against 404 on a path resource
 	// would be an existence oracle.
 	u, err := uuid.Parse(id)
@@ -416,12 +503,10 @@ func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, st
 		}
 		name = &n
 	}
-	if scope != nil {
-		sc, err := normalizeScope(*scope)
-		if err != nil {
+	if scopes != nil {
+		if err := validateScopes(*scopes); err != nil {
 			return Policy{}, err
 		}
-		scope = &sc
 	}
 	if err := validateTree(steps); err != nil {
 		return Policy{}, err
@@ -455,13 +540,22 @@ func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, st
 			return err
 		}
 
+		var row scopeRow
+		if scopes != nil {
+			r, err := resolveScopesTx(ctx, tx, *scopes)
+			if err != nil {
+				return err
+			}
+			row = r
+		}
+
 		// coalesce rather than Go-merged values: only the fields that were sent appear in
-		// the effective write. $3 is the NORMALIZED local, never the argument as received.
+		// the effective write.
 		if err := tx.QueryRow(ctx,
 			`UPDATE approval_policies
-			    SET name = coalesce($2::text, name), scope = coalesce($3::text, scope)
+			    SET name = coalesce($2::text, name)
 			  WHERE id = $1
-			  RETURNING id, name, scope, position`, policyID, name, scope,
+			  RETURNING id, name, scope, position`, policyID, name,
 		).Scan(&p.ID, &p.Name, &p.Scope, &p.Position); err != nil {
 			return err
 		}
@@ -478,16 +572,34 @@ func (s *Store) PutDraft(ctx context.Context, id string, name, scope *string, st
 			// using it. tenant_id is explicit: the column has no DEFAULT. sealed and is_active
 			// take their false DEFAULTs — publishing is its own seam.
 			err = tx.QueryRow(ctx,
-				`INSERT INTO approval_policy_versions (tenant_id, policy_id, version)
-				 SELECT $1::uuid, $2::uuid, coalesce(max(version), 0) + 1
-				   FROM approval_policy_versions
-				  WHERE policy_id = $2
+				`INSERT INTO approval_policy_versions (tenant_id, policy_id, version, `+scopeColumns+`)
+				 SELECT $1::uuid, $2::uuid, coalesce(v.version, 0) + 1,
+				        coalesce(v.scope_document_types, '{}'), coalesce(v.scope_entity_ids, '{}'),
+				        coalesce(v.scope_workflow_role_ids, '{}'),
+				        v.scope_amount_lower, v.scope_amount_upper, v.scope_amount_currency
+				   FROM (SELECT 1) one
+				   LEFT JOIN approval_policy_versions v
+				     ON v.policy_id = $2
+				    AND v.version = (SELECT max(version) FROM approval_policy_versions WHERE policy_id = $2)
 				 RETURNING id, version`,
 				caller.TenantID, policyID,
 			).Scan(&versionID, &version)
 		}
 		if err != nil {
 			return err
+		}
+
+		if scopes != nil {
+			if _, err := tx.Exec(ctx,
+				`UPDATE approval_policy_versions
+				    SET scope_document_types = $2::text[], scope_entity_ids = $3::text[]::uuid[],
+				        scope_workflow_role_ids = $4::text[]::uuid[], scope_amount_lower = $5::numeric,
+				        scope_amount_upper = $6::numeric, scope_amount_currency = $7::text
+				  WHERE id = $1`,
+				versionID, row.DocumentTypes, row.EntityIDs, row.RoleIDs,
+				row.Lower, row.Upper, row.Currency); err != nil {
+				return err
+			}
 		}
 
 		// Whole-set delete then re-insert. The tuples this transaction deleted are already

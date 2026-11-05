@@ -26,11 +26,12 @@ import (
 func TestPolicyHandlers_UnknownFieldsAreIgnoredNotRejected(t *testing.T) {
 	t.Run("create", func(t *testing.T) {
 		id := caller()
-		var gotName, gotScope string
+		var gotName string
+		var gotScopes *scopeInput
 		ran := false
 		s := failClosedPolicySeam(t)
-		s.create = func(_ context.Context, name, scope string) (Policy, error) {
-			ran, gotName, gotScope = true, name, scope
+		s.create = func(_ context.Context, name string, scopes *scopeInput) (Policy, error) {
+			ran, gotName, gotScopes = true, name, scopes
 			return newPolicy(), nil
 		}
 		body := `{"name":"Standard","scope":"All invoices","id":"11111111-1111-1111-1111-111111111111",` +
@@ -43,8 +44,8 @@ func TestPolicyHandlers_UnknownFieldsAreIgnoredNotRejected(t *testing.T) {
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
 		}
-		if gotName != "Standard" || gotScope != "All invoices" {
-			t.Errorf("store received name %q scope %q, want the two declared fields only", gotName, gotScope)
+		if gotName != "Standard" || gotScopes != nil {
+			t.Errorf("store received name %q scopes %v, want the name only: the legacy scope key is ignored", gotName, gotScopes)
 		}
 	})
 
@@ -52,7 +53,7 @@ func TestPolicyHandlers_UnknownFieldsAreIgnoredNotRejected(t *testing.T) {
 		id := caller()
 		ran := false
 		s := failClosedPolicySeam(t)
-		s.put = func(context.Context, string, *string, *string, []stepInput) (Policy, error) {
+		s.put = func(context.Context, string, *string, *scopeInput, []stepInput) (Policy, error) {
 			ran = true
 			return newPolicy(), nil
 		}
@@ -90,7 +91,7 @@ func TestPutDraftHandler_ClientSuppliedStepIDIsDropped(t *testing.T) {
 		var got []stepInput
 		ran := false
 		s := failClosedPolicySeam(t)
-		s.put = func(_ context.Context, _ string, _, _ *string, steps []stepInput) (Policy, error) {
+		s.put = func(_ context.Context, _ string, _ *string, _ *scopeInput, steps []stepInput) (Policy, error) {
 			ran, got = true, steps
 			return newPolicy(), nil
 		}
@@ -120,7 +121,7 @@ func TestPolicyHandlers_DuplicateJSONKeysTakeTheLast(t *testing.T) {
 		id := caller()
 		got := ""
 		s := failClosedPolicySeam(t)
-		s.create = func(_ context.Context, name, _ string) (Policy, error) {
+		s.create = func(_ context.Context, name string, _ *scopeInput) (Policy, error) {
 			got = name
 			return newPolicy(), nil
 		}
@@ -145,7 +146,7 @@ func TestPolicyHandlers_DuplicateJSONKeysTakeTheLast(t *testing.T) {
 		var got []stepInput
 		ran := false
 		s := failClosedPolicySeam(t)
-		s.put = func(_ context.Context, _ string, _, _ *string, steps []stepInput) (Policy, error) {
+		s.put = func(_ context.Context, _ string, _ *string, _ *scopeInput, steps []stepInput) (Policy, error) {
 			ran, got = true, steps
 			return newPolicy(), nil
 		}
@@ -186,7 +187,7 @@ func TestPolicyHandlers_JSONEscapedNULReachesTheValidators(t *testing.T) {
 		id := caller()
 		got := "unset"
 		s := failClosedPolicySeam(t)
-		s.create = func(_ context.Context, name, _ string) (Policy, error) {
+		s.create = func(_ context.Context, name string, _ *scopeInput) (Policy, error) {
 			got = name
 			return Policy{}, ErrValidation
 		}
@@ -207,7 +208,7 @@ func TestPolicyHandlers_JSONEscapedNULReachesTheValidators(t *testing.T) {
 		id := caller()
 		var got []stepInput
 		s := failClosedPolicySeam(t)
-		s.put = func(_ context.Context, _ string, _, _ *string, steps []stepInput) (Policy, error) {
+		s.put = func(_ context.Context, _ string, _ *string, _ *scopeInput, steps []stepInput) (Policy, error) {
 			got = steps
 			return Policy{}, ErrValidation
 		}
@@ -270,7 +271,7 @@ func TestPolicyHandlers_EmptyAndWrongShapeBodiesAre400(t *testing.T) {
 				got := ""
 				ran := false
 				s := failClosedPolicySeam(t)
-				s.create = func(_ context.Context, name, _ string) (Policy, error) {
+				s.create = func(_ context.Context, name string, _ *scopeInput) (Policy, error) {
 					ran, got = true, name
 					return newPolicy(), nil
 				}
@@ -293,7 +294,7 @@ func TestPolicyHandlers_EmptyAndWrongShapeBodiesAre400(t *testing.T) {
 		ran := false
 		got := "unset"
 		s := failClosedPolicySeam(t)
-		s.create = func(_ context.Context, name, _ string) (Policy, error) {
+		s.create = func(_ context.Context, name string, _ *scopeInput) (Policy, error) {
 			ran, got = true, name
 			return Policy{}, ErrValidation
 		}
@@ -342,7 +343,7 @@ func TestPolicyHandlers_ContentTypeIsNotAGate(t *testing.T) {
 		for _, ct := range []string{"", "text/plain", "application/xml", "multipart/form-data; boundary=x"} {
 			ran := false
 			s := failClosedPolicySeam(t)
-			s.create = func(context.Context, string, string) (Policy, error) { ran = true; return newPolicy(), nil }
+			s.create = func(context.Context, string, *scopeInput) (Policy, error) { ran = true; return newPolicy(), nil }
 			rec := send(t, s, ct, `{"name":"Standard"}`)
 			if !ran || rec.Code != http.StatusCreated {
 				t.Errorf("Content-Type %q: ran=%v status=%d, want a 201 — content type is not a gate", ct, ran, rec.Code)

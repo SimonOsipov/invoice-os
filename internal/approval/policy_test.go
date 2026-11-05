@@ -36,17 +36,6 @@ import (
 // that asserts against the constant it is checking asserts nothing.
 const scopeAllInvoices = "All invoices"
 
-// removedScopes are the five RETIRED scope strings the server refuses. APPR-10 deleted
-// them from the editor, so this is a permanent refusal table with no live TS twin. The
-// B2G entry's separator is U+00B7 MIDDLE DOT, pinned by TestPolicy_NormalizeScopeTable.
-var removedScopes = []string{
-	"Foreign-currency invoices",
-	"Document type · B2G",
-	"Capex & fixed assets",
-	"Consumer invoices (B2C)",
-	"Credit notes & adjustments",
-}
-
 // stepWireKeys is Step's whole JSON key set, sorted.
 var stepWireKeys = []string{
 	"cond_amount", "cond_op", "else", "id", "kind",
@@ -483,44 +472,54 @@ func TestPolicy_ValidateTreeSlaHoursBounds(t *testing.T) {
 	}
 }
 
-// --- AC-6: normalizeScope ---------------------------------------------------
 
-func TestPolicy_NormalizeScopeTable(t *testing.T) {
-	// Byte-level pin: retyped with an ASCII dot or hyphen, the rejection row below
-	// would exercise a string the SPA never sends and assert nothing.
-	t.Run("the B2G scope carries U+00B7", func(t *testing.T) {
-		const want = "Document type · B2G"
-		if removedScopes[1] != want {
-			t.Fatalf("removedScopes[1] = %q (% x), want %q (% x)", removedScopes[1], removedScopes[1], want, want)
-		}
-		if !bytes.Contains([]byte(removedScopes[1]), []byte{0xc2, 0xb7}) {
-			t.Fatalf("removedScopes[1] = % x, want it to contain the U+00B7 bytes c2 b7", removedScopes[1])
-		}
-	})
+// --- validateScopes ---------------------------------------------------------
 
-	// Every one of these returns nil, and the property below is what stands between
-	// an empty scope and a 23514: the return is the STORED form, never the argument.
-	for _, in := range []string{"", "   ", "\t\n ", scopeAllInvoices, "  All invoices  "} {
-		t.Run("accepts "+strconv.Quote(in), func(t *testing.T) {
-			got, err := normalizeScope(in)
-			if err != nil {
-				t.Fatalf("err = %v, want nil", err)
-			}
-			if got != scopeAllInvoices {
-				t.Errorf("normalizeScope(%q) = %q, want %q — a normalizer that echoes its argument sends %q to a column whose CHECK refuses it",
-					in, got, scopeAllInvoices, in)
+func TestPolicy_ValidateScopesRefusesBadShapes(t *testing.T) {
+	ent := uuid.NewString()
+	cases := []struct {
+		name string
+		in   scopeInput
+		want error
+	}{
+		{"unknown document type", scopeInput{DocumentTypes: []string{"invoice"}}, ErrScopeDocumentType},
+		{"empty document type", scopeInput{DocumentTypes: []string{""}}, ErrScopeDocumentType},
+		{"duplicate document type", scopeInput{DocumentTypes: []string{"credit_note", "credit_note"}}, ErrValidation},
+		{"malformed entity", scopeInput{EntityIDs: []string{"not-a-uuid"}}, ErrScopeEntity},
+		{"duplicate entity", scopeInput{EntityIDs: []string{ent, ent}}, ErrValidation},
+		{"empty role key", scopeInput{WorkflowRoleKeys: []string{""}}, ErrScopeRole},
+		{"duplicate role key", scopeInput{WorkflowRoleKeys: []string{"a", "a"}}, ErrValidation},
+		{"NUL in role key", scopeInput{WorkflowRoleKeys: []string{"a\x00b"}}, ErrValidation},
+		{"lower above upper", scopeInput{AmountBand: &amountBandInput{Lower: ptr("6.00"), Upper: ptr("5.00"), Currency: "NGN"}}, ErrScopeBand},
+		{"no currency", scopeInput{AmountBand: &amountBandInput{Lower: ptr("1.00")}}, ErrScopeBand},
+		{"no bounds", scopeInput{AmountBand: &amountBandInput{Currency: "NGN"}}, ErrScopeBand},
+		{"lower with three decimals", scopeInput{AmountBand: &amountBandInput{Lower: ptr("1.005"), Currency: "NGN"}}, ErrScopeBand},
+		{"lower beyond numeric(14,2)", scopeInput{AmountBand: &amountBandInput{Lower: ptr("1e12"), Currency: "NGN"}}, ErrScopeBand},
+		{"NUL in currency", scopeInput{AmountBand: &amountBandInput{Lower: ptr("1.00"), Currency: "N\x00"}}, ErrValidation},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateScopes(tc.in); !errors.Is(err, tc.want) {
+				t.Errorf("err = %v, want %v", err, tc.want)
 			}
 		})
 	}
+}
 
-	for _, in := range removedScopes {
-		t.Run("rejects "+in, func(t *testing.T) {
-			got, err := normalizeScope(in)
-			if !errors.Is(err, ErrValidation) {
-				t.Errorf("err = %v, want ErrValidation", err)
-			}
-			if got != "" {
-				t.Errorf("value = %q, want the empty string alongside the error", got)
+func TestPolicy_ValidateScopesAcceptsBandBoundaries(t *testing.T) {
+	cases := []struct {
+		name string
+		in   scopeInput
+	}{
+		{"equal bounds", scopeInput{AmountBand: &amountBandInput{Lower: ptr("5.00"), Upper: ptr("5.00"), Currency: "NGN"}}},
+		{"lower only", scopeInput{AmountBand: &amountBandInput{Lower: ptr("5.00"), Currency: "NGN"}}},
+		{"upper only", scopeInput{AmountBand: &amountBandInput{Upper: ptr("5.00"), Currency: "NGN"}}},
+		{"empty scopes", scopeInput{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateScopes(tc.in); err != nil {
+				t.Errorf("err = %v, want nil", err)
 			}
 		})
 	}

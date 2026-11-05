@@ -611,7 +611,7 @@ func workspaceAuditSites() []workspaceAuditSite {
 			drive: func(t *testing.T, super, app *pgxpool.Pool) string {
 				tenantID := policyTenant(t, super, "AUDIT-11-02 ws policy-created")
 				c, _ := activeAdmin(t, super, tenantID)
-				if _, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "AN workspace policy", ""); err != nil {
+				if _, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "AN workspace policy", nil); err != nil {
 					t.Fatalf("CreatePolicy: %v", err)
 				}
 				return tenantID

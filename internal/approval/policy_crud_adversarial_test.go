@@ -539,7 +539,7 @@ func TestPolicy_NameWithSQLAndUnicodeRoundTripsByte(t *testing.T) {
 			tenantID := policyTenant(t, super, fmt.Sprintf("APPR-05 name-roundtrip %d", i))
 			c, _ := activeAdmin(t, super, tenantID)
 
-			created, err := store.CreatePolicy(c, name, "")
+			created, err := store.CreatePolicy(c, name, nil)
 			if err != nil {
 				t.Fatalf("CreatePolicy(%q): %v", name, err)
 			}
@@ -585,7 +585,7 @@ func TestPolicy_NameWithANULIsRefusedNotA500(t *testing.T) {
 			tenantID := policyTenant(t, super, fmt.Sprintf("APPR-05 name-nul %d", i))
 			c, _ := activeAdmin(t, super, tenantID)
 
-			_, err := store.CreatePolicy(c, name, "")
+			_, err := store.CreatePolicy(c, name, nil)
 			if !errors.Is(err, ErrValidation) {
 				t.Errorf("CreatePolicy(%q) err = %v, want ErrValidation", name, err)
 			}
@@ -608,7 +608,7 @@ func TestPolicy_NameWithANULIsRefusedNotA500(t *testing.T) {
 	t.Run("control: the same name without the NUL still writes", func(t *testing.T) {
 		tenantID := policyTenant(t, super, "APPR-05 name-nul-control")
 		c, _ := activeAdmin(t, super, tenantID)
-		if _, err := store.CreatePolicy(c, "Signoff", ""); err != nil {
+		if _, err := store.CreatePolicy(c, "Signoff", nil); err != nil {
 			t.Fatalf("CreatePolicy: %v — the refusals above are vacuous unless this succeeds", err)
 		}
 		if n := rowCount(t, super, "approval_policies", tenantID); n != 1 {
@@ -625,11 +625,11 @@ func TestPolicy_DuplicateNamesAreLegalAndBothAddressable(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	store := NewStore(app, stubFingerprinter, nil)
 
-	a, err := store.CreatePolicy(c, "Sign-off", "")
+	a, err := store.CreatePolicy(c, "Sign-off", nil)
 	if err != nil {
 		t.Fatalf("CreatePolicy (first): %v", err)
 	}
-	b, err := store.CreatePolicy(c, "Sign-off", "")
+	b, err := store.CreatePolicy(c, "Sign-off", nil)
 	if err != nil {
 		t.Fatalf("CreatePolicy (second): %v", err)
 	}
@@ -663,13 +663,13 @@ func TestPolicy_RecreatingASoftDeletedNameFindsOnlyTheLiveOne(t *testing.T) {
 	c, _ := activeAdmin(t, super, tenantID)
 	store := NewStore(app, stubFingerprinter, nil)
 
-	old, err := store.CreatePolicy(c, "Sign-off", "")
+	old, err := store.CreatePolicy(c, "Sign-off", nil)
 	if err != nil {
 		t.Fatalf("CreatePolicy (original): %v", err)
 	}
 	softDeleteApprovalPolicy(t, super, old.ID)
 
-	fresh, err := store.CreatePolicy(c, "Sign-off", "")
+	fresh, err := store.CreatePolicy(c, "Sign-off", nil)
 	if err != nil {
 		t.Fatalf("CreatePolicy (recreated): %v — a soft-deleted name must not block the reuse", err)
 	}
@@ -721,7 +721,7 @@ func TestPolicy_ConcurrentCreatesEachGetTheirOwnDraft(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			p, err := store.CreatePolicy(c, fmt.Sprintf("Concurrent %d", i), "")
+			p, err := store.CreatePolicy(c, fmt.Sprintf("Concurrent %d", i), nil)
 			ids[i], errs[i] = p.ID, err
 		}(i)
 	}

@@ -2,6 +2,7 @@ package approval
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -154,5 +155,308 @@ func TestPolicy_ListReadsScopesInOneStatement(t *testing.T) {
 	}
 	if sql := rec.mentioning("scope_document_types"); len(sql) != 1 {
 		t.Errorf("%d statements mention scope_document_types, want 1:\n%v", len(sql), sql)
+	}
+}
+
+// seedCurrencies inserts NGN and USD into nrs_codes; cleanup deletes only the rows it inserted.
+func seedCurrencies(t *testing.T, super *pgxpool.Pool) {
+	t.Helper()
+	var inserted []string
+	for _, code := range []string{"NGN", "USD"} {
+		tag, err := super.Exec(context.Background(),
+			`INSERT INTO nrs_codes (list, code, entries) VALUES ('currencies', $1, '[{}]') ON CONFLICT DO NOTHING`, code)
+		if err != nil {
+			t.Fatalf("seed nrs_codes currencies/%s: %v", code, err)
+		}
+		if tag.RowsAffected() == 1 {
+			inserted = append(inserted, code)
+		}
+	}
+	t.Cleanup(func() {
+		for _, code := range inserted {
+			_, _ = super.Exec(context.Background(), `DELETE FROM nrs_codes WHERE list = 'currencies' AND code = $1`, code)
+		}
+	})
+}
+
+// storedScopeColumns is a version's six scope columns as text, the role ids raw.
+type storedScopeColumns struct {
+	Types, Entities, RoleIDs []string
+	Lower, Upper, Currency   *string
+}
+
+func readScopeColumns(t *testing.T, super *pgxpool.Pool, where string, arg any) storedScopeColumns {
+	t.Helper()
+	var s storedScopeColumns
+	if err := super.QueryRow(context.Background(),
+		`SELECT scope_document_types, scope_entity_ids::text[], scope_workflow_role_ids::text[],
+		        scope_amount_lower::text, scope_amount_upper::text, scope_amount_currency
+		   FROM approval_policy_versions WHERE `+where, arg,
+	).Scan(&s.Types, &s.Entities, &s.RoleIDs, &s.Lower, &s.Upper, &s.Currency); err != nil {
+		t.Fatalf("read scope columns where %s: %v", where, err)
+	}
+	return s
+}
+
+func versionScopeColumns(t *testing.T, super *pgxpool.Pool, versionID string) storedScopeColumns {
+	return readScopeColumns(t, super, `id = $1`, versionID)
+}
+
+func TestCreatePolicy_WritesScopesToVersionOne(t *testing.T) {
+	super, app := dbTestPools(t)
+	seedCurrencies(t, super)
+	tenantID := policyTenant(t, super, "APSC-02-02 create-scopes")
+	c, _ := activeAdmin(t, super, tenantID)
+	entityID := seedBusinessEntity(t, super, tenantID, "Client A")
+	roleID := seedWorkflowRole(t, super, tenantID, "scope-role", "Scope role")
+
+	got, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "Scoped", &scopeInput{
+		DocumentTypes:    []string{"credit_note", "debit_note"},
+		EntityIDs:        []string{entityID},
+		WorkflowRoleKeys: []string{"scope-role"},
+		AmountBand:       &amountBandInput{Lower: ptr("5000000.00"), Upper: ptr("50000000.00"), Currency: "NGN"},
+	})
+	if err != nil {
+		t.Fatalf("CreatePolicy: %v", err)
+	}
+
+	stored := readScopeColumns(t, super, `policy_id = $1 AND version = 1`, got.ID)
+	want := storedScopeColumns{
+		Types: []string{"credit_note", "debit_note"}, Entities: []string{entityID}, RoleIDs: []string{roleID},
+		Lower: ptr("5000000.00"), Upper: ptr("50000000.00"), Currency: ptr("NGN"),
+	}
+	if !reflect.DeepEqual(stored, want) {
+		t.Errorf("version 1 columns = %+v, want %+v", stored, want)
+	}
+	wantWire := Scopes{
+		DocumentTypes: []string{"credit_note", "debit_note"}, EntityIDs: []string{entityID},
+		WorkflowRoleKeys: []string{"scope-role"},
+		AmountBand:       &AmountBand{Lower: ptr("5000000.00"), Upper: ptr("50000000.00"), Currency: "NGN"},
+	}
+	if !reflect.DeepEqual(got.Scopes, wantWire) {
+		t.Errorf("answer scopes = %+v, want %+v", got.Scopes, wantWire)
+	}
+}
+
+func TestPutDraft_WritesScopesToTheOpenDraft(t *testing.T) {
+	super, app := dbTestPools(t)
+	seedCurrencies(t, super)
+	tenantID := policyTenant(t, super, "APSC-02-02 put-scopes")
+	c, _ := activeAdmin(t, super, tenantID)
+	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
+	versionID := seedDraftWithSteps(t, super, tenantID, policyID, 1)
+
+	got, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, nil, &scopeInput{
+		DocumentTypes: []string{"commercial_invoice"},
+		AmountBand:    &amountBandInput{Upper: ptr("100.00"), Currency: "USD"},
+	}, approvalStep("engagement-partner"))
+	if err != nil {
+		t.Fatalf("PutDraft: %v", err)
+	}
+
+	want := storedScopeColumns{
+		Types: []string{"commercial_invoice"}, Entities: []string{}, RoleIDs: []string{},
+		Upper: ptr("100.00"), Currency: ptr("USD"),
+	}
+	if stored := versionScopeColumns(t, super, versionID); !reflect.DeepEqual(stored, want) {
+		t.Errorf("draft columns = %+v, want %+v", stored, want)
+	}
+	wantWire := Scopes{
+		DocumentTypes: []string{"commercial_invoice"}, EntityIDs: []string{}, WorkflowRoleKeys: []string{},
+		AmountBand: &AmountBand{Upper: ptr("100.00"), Currency: "USD"},
+	}
+	if !reflect.DeepEqual(got.Scopes, wantWire) {
+		t.Errorf("answer scopes = %+v, want %+v", got.Scopes, wantWire)
+	}
+}
+
+func TestCreatePolicy_RefusesEachBadScopeWithNothingWritten(t *testing.T) {
+	super, app := dbTestPools(t)
+	seedCurrencies(t, super)
+	tenantID := policyTenant(t, super, "APSC-02-02 refuse-create")
+	otherTenant := policyTenant(t, super, "APSC-02-02 refuse-create-other")
+	c, _ := activeAdmin(t, super, tenantID)
+	foreignEntity := seedBusinessEntity(t, super, otherTenant, "Their client")
+	seedWorkflowRole(t, super, tenantID, "live-role", "Live")
+	deleted := seedWorkflowRole(t, super, tenantID, "gone-role", "Gone")
+	softDeleteWorkflowRole(t, super, deleted)
+
+	cases := []struct {
+		name string
+		in   scopeInput
+		want error
+	}{
+		{"unknown entity", scopeInput{EntityIDs: []string{uuid.NewString()}}, ErrScopeEntity},
+		{"another tenant's entity", scopeInput{EntityIDs: []string{foreignEntity}}, ErrScopeEntity},
+		{"currency off the list", scopeInput{AmountBand: &amountBandInput{Lower: ptr("1.00"), Currency: "XYZ"}}, ErrScopeCurrency},
+		{"unknown role key", scopeInput{WorkflowRoleKeys: []string{"live-role", "no-such-role"}}, ErrScopeRole},
+		{"soft-deleted role key", scopeInput{WorkflowRoleKeys: []string{"gone-role"}}, ErrScopeRole},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := tc.in
+			_, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "Refused", &in)
+			if !errors.Is(err, tc.want) {
+				t.Errorf("err = %v, want %v", err, tc.want)
+			}
+			if n := rowCount(t, super, "approval_policies", tenantID); n != 0 {
+				t.Errorf("approval_policies rows = %d, want 0", n)
+			}
+			if n := auditCount(t, super, tenantID, "approval_policy.created"); n != 0 {
+				t.Errorf("approval_policy.created audit rows = %d, want 0", n)
+			}
+		})
+	}
+}
+
+func TestPutDraft_NonAdminRefusedBeforeScopeLookup(t *testing.T) {
+	super, _ := dbTestPools(t)
+	seedCurrencies(t, super)
+	tenantID := policyTenant(t, super, "APSC-02-02 nonadmin-scopes")
+	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
+	seedDraftWithSteps(t, super, tenantID, policyID, 1)
+	c, _ := callerCtx(t, super, tenantID, "preparer", "active")
+
+	traced, rec := tracedAppPool(t)
+	_, err := NewStore(traced, stubFingerprinter, nil).PutDraft(c, policyID, nil, &scopeInput{
+		AmountBand: &amountBandInput{Lower: ptr("1.00"), Currency: "XYZ"},
+	}, approvalStep("engagement-partner"))
+	if !errors.Is(err, ErrNotPermitted) {
+		t.Fatalf("err = %v, want ErrNotPermitted", err)
+	}
+	if got := rec.mentioning("nrs_codes"); len(got) != 0 {
+		t.Errorf("a refused non-admin ran %d nrs_codes statements: %v", len(got), got)
+	}
+}
+
+func TestPutDraft_OmittedScopesKeepTheDraftsScopes(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-02-02 omitted-keep")
+	c, _ := activeAdmin(t, super, tenantID)
+	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
+	versionID := seedDraftWithSteps(t, super, tenantID, policyID, 2)
+	setVersionScopes(t, super, versionID, `scope_document_types = '{credit_note}'`)
+
+	got, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, nil, nil, approvalStep("engagement-partner"))
+	if err != nil {
+		t.Fatalf("PutDraft: %v", err)
+	}
+	if want := []string{"credit_note"}; !reflect.DeepEqual(got.Scopes.DocumentTypes, want) {
+		t.Errorf("answer document_types = %v, want %v", got.Scopes.DocumentTypes, want)
+	}
+	if stored := versionScopeColumns(t, super, versionID); !reflect.DeepEqual(stored.Types, []string{"credit_note"}) {
+		t.Errorf("stored document_types = %v, want [credit_note]", stored.Types)
+	}
+	if steps := readStoredSteps(t, super, versionID); len(steps) != 1 || steps[0].Kind != "approval" {
+		t.Errorf("draft steps = %v, want the one new approval step", steps)
+	}
+}
+
+func TestPutDraft_ForkCopiesThePublishedVersionsScopes(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-02-02 fork-copies")
+	c, _ := activeAdmin(t, super, tenantID)
+	entityID := seedBusinessEntity(t, super, tenantID, "Client A")
+	roleID := seedWorkflowRole(t, super, tenantID, "fork-role", "Fork role")
+	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
+	v1 := seedSealedActiveV1Scoped(t, super, tenantID, policyID, entityID, roleID)
+	before := versionScopeColumns(t, super, v1)
+
+	got, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, nil, nil, approvalStep("engagement-partner"))
+	if err != nil {
+		t.Fatalf("PutDraft: %v", err)
+	}
+	if got.Version != 2 || got.Status != "draft" {
+		t.Fatalf("answer = version %d status %q, want a v2 draft", got.Version, got.Status)
+	}
+	draft := openDraft(t, super, policyID)
+	if after := versionScopeColumns(t, super, draft.ID); !reflect.DeepEqual(after, before) {
+		t.Errorf("fork columns = %+v, want v1's %+v", after, before)
+	}
+	if after := versionScopeColumns(t, super, v1); !reflect.DeepEqual(after, before) {
+		t.Errorf("v1 columns changed to %+v from %+v", after, before)
+	}
+	if before.Types == nil || len(before.Types) != 1 || before.Currency == nil || len(before.Entities) != 1 || len(before.RoleIDs) != 1 {
+		t.Fatalf("fixture v1 is not fully scoped: %+v — the copy assertions are vacuous", before)
+	}
+}
+
+// seedSealedActiveV1Scoped is a sealed, active v1 with all four scopes set.
+func seedSealedActiveV1Scoped(t *testing.T, super *pgxpool.Pool, tenantID, policyID, entityID, roleID string) string {
+	t.Helper()
+	v := seedApprovalPolicyVersionN(t, super, tenantID, policyID, 1)
+	setVersionScopes(t, super, v,
+		`scope_document_types = '{credit_note}', scope_entity_ids = ARRAY[$2]::uuid[],
+		 scope_workflow_role_ids = ARRAY[$3]::uuid[], scope_amount_lower = 1, scope_amount_upper = 10,
+		 scope_amount_currency = 'NGN'`, entityID, roleID)
+	activateApprovalPolicyVersion(t, super, v)
+	return v
+}
+
+func TestPutDraft_EmptyScopesObjectClearsToCatchAll(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-02-02 empty-clears")
+	c, _ := activeAdmin(t, super, tenantID)
+	policyID := seedApprovalPolicy(t, super, tenantID, "Sign-off")
+	versionID := seedDraftWithSteps(t, super, tenantID, policyID, 1)
+	setVersionScopes(t, super, versionID,
+		`scope_document_types = '{credit_note}', scope_amount_lower = 1, scope_amount_currency = 'NGN'`)
+
+	if _, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, nil, &scopeInput{}, approvalStep("engagement-partner")); err != nil {
+		t.Fatalf("PutDraft: %v", err)
+	}
+	want := storedScopeColumns{Types: []string{}, Entities: []string{}, RoleIDs: []string{}}
+	if stored := versionScopeColumns(t, super, versionID); !reflect.DeepEqual(stored, want) {
+		t.Errorf("columns = %+v, want the catch-all %+v", stored, want)
+	}
+}
+
+func TestPutDraft_RefusedScopeRollsBackTheWholeWrite(t *testing.T) {
+	super, app := dbTestPools(t)
+	seedCurrencies(t, super)
+	tenantID := policyTenant(t, super, "APSC-02-02 refused-rolls-back")
+	c, _ := activeAdmin(t, super, tenantID)
+	policyID := seedApprovalPolicy(t, super, tenantID, "A")
+	versionID := seedDraftWithSteps(t, super, tenantID, policyID, 1)
+	setVersionScopes(t, super, versionID, `scope_document_types = '{credit_note}'`)
+	stepsBefore := readStoredSteps(t, super, versionID)
+	scopesBefore := versionScopeColumns(t, super, versionID)
+	auditBefore := auditCount(t, super, tenantID, "approval_policy.updated")
+
+	_, err := NewStore(app, stubFingerprinter, nil).PutDraft(c, policyID, ptr("B"), &scopeInput{
+		AmountBand: &amountBandInput{Lower: ptr("1.00"), Currency: "XYZ"},
+	}, []stepInput{})
+	if !errors.Is(err, ErrScopeCurrency) {
+		t.Fatalf("err = %v, want ErrScopeCurrency", err)
+	}
+	if name := storedPolicyName(t, super, policyID); name != "A" {
+		t.Errorf("name = %q, want A", name)
+	}
+	if !reflect.DeepEqual(readStoredSteps(t, super, versionID), stepsBefore) {
+		t.Error("steps changed on a refused write")
+	}
+	if after := versionScopeColumns(t, super, versionID); !reflect.DeepEqual(after, scopesBefore) {
+		t.Errorf("scopes = %+v, want %+v", after, scopesBefore)
+	}
+	if n := auditCount(t, super, tenantID, "approval_policy.updated"); n != auditBefore {
+		t.Errorf("updated audit rows = %d, want %d", n, auditBefore)
+	}
+}
+
+func TestCreatePolicy_LegacyScopeColumnKeepsItsDefault(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := policyTenant(t, super, "APSC-02-02 legacy-scope")
+	c, _ := activeAdmin(t, super, tenantID)
+
+	got, err := NewStore(app, stubFingerprinter, nil).CreatePolicy(c, "Sign-off",
+		&scopeInput{DocumentTypes: []string{"credit_note"}})
+	if err != nil {
+		t.Fatalf("CreatePolicy: %v", err)
+	}
+	if stored := storedPolicyScope(t, super, got.ID); stored != scopeAllInvoices {
+		t.Errorf("stored scope column = %q, want %q", stored, scopeAllInvoices)
+	}
+	if got.Scope != scopeAllInvoices {
+		t.Errorf("answer scope = %q, want %q", got.Scope, scopeAllInvoices)
 	}
 }

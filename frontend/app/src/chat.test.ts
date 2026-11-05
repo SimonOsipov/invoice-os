@@ -400,6 +400,48 @@ describe('Google tag', () => {
     expect(layer().filter((e) => e[1] === 'invoice_validated')).toEqual([])
   })
 
+  it('bootAppAnalytics_aRemountAfterARejectInThePageSendsNothingAndLoadsNoTag', async () => {
+    stubId()
+    const { bootAppAnalytics, chooseAppConsent, reportAppPage, reportValidatedInvoice } = await fresh()
+    chooseAppConsent('reject', EMAIL)
+    bootAppAnalytics()
+    reportAppPage()
+    reportValidatedInvoice({ status: 'validated' })
+    expect(tags().length).toBe(0)
+    expect((window as GaWindow).dataLayer).toBeUndefined()
+  })
+
+  it('bootAppAnalytics_aRemountWithNoRecordThenAcceptLoadsTheTag', async () => {
+    stubId()
+    const { bootAppAnalytics, chooseAppConsent, endAppChat, reportAppPage } = await fresh()
+    endAppChat()
+    bootAppAnalytics()
+    expect(tags().length, 'no record, no tag').toBe(0)
+    chooseAppConsent('accept', EMAIL)
+    expect(tags().length).toBe(1)
+    reportAppPage()
+    expect(pageViews().length).toBe(1)
+  })
+
+  it('bootAppAnalytics_aBootWithNoRecordStillHoldsAValidationForTheAccept', async () => {
+    stubId()
+    const { bootAppAnalytics, chooseAppConsent, reportValidatedInvoice } = await fresh()
+    bootAppAnalytics()
+    reportValidatedInvoice({ status: 'validated' })
+    chooseAppConsent('accept', EMAIL)
+    expect(layer().filter((e) => e[1] === 'invoice_validated')).toEqual([['event', 'invoice_validated', {}]])
+  })
+
+  it('bootAppAnalytics_aValidationAfterARemountWithNoRecordIsHeldForTheAccept', async () => {
+    stubId()
+    const { bootAppAnalytics, chooseAppConsent, endAppChat, reportValidatedInvoice } = await fresh()
+    endAppChat()
+    bootAppAnalytics()
+    reportValidatedInvoice({ status: 'validated' })
+    chooseAppConsent('accept', EMAIL)
+    expect(layer().filter((e) => e[1] === 'invoice_validated')).toEqual([['event', 'invoice_validated', {}]])
+  })
+
   it('syncAppConsent_anotherTabsAcceptLoadsTheTagOnce', async () => {
     stubId()
     const { syncAppConsent } = await fresh()

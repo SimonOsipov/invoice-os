@@ -26,8 +26,10 @@ paths:
 - Rebuild the `landing`, `library` or `blog` image to change its `VITE_*` value. Vite bakes it at build time.
 - Never send `page_view` by hand on the landing. `gtag('config', id)` sends it, and a manual event double-counts.
 - Push an `arguments` object to `dataLayer`, never an array. GA4 ignores an array.
-- Send fixed literals as event parameters: `cta_location`, `form_name`, `percent_scrolled`, `feature_id` and `group_id`. Never send form data.
+- Send fixed literals as event parameters: `cta_location`, `form_name`, `percent_scrolled`, `feature_id`, `group_id` and, in the app only, `page_location`. Never send form data. `page_location` is the bounded route pattern from `routeName`, never the live URL.
 - Send every event through `send`. It returns early when the tag is not loaded or the visitor has rejected.
+- Hold an event sent before the first Accept in memory. Send it after `config`, in event order. A Reject empties the queue. A stored Reject or a revoked flag drops the event.
+- Send `sign_up` through `trackSignUp` and `invoice_validated` through `trackInvoiceValidated`. Neither carries a parameter.
 - Keep the sender functions for `generate_lead` and `demo_submit_failed` module-private. Wrap only the HubSpot call in `trackedHubSpotSubmit`.
 - Report no event for a honeypot or closed-gate submission. Only a HubSpot outcome reports.
 - Add a new CTA source to `DEMO_CTA_SOURCES` and to its `book(source)` call site.

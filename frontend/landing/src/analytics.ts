@@ -28,7 +28,12 @@ export function tagSrc(id: string): string {
 }
 
 /** Idempotent. Returns whether the tag is loaded AFTER the call, not whether this call injected it. */
-export function ensureTag(hostname: string, record: ConsentRecord | null, hosts?: readonly string[]): boolean {
+export function ensureTag(
+  hostname: string,
+  record: ConsentRecord | null,
+  hosts?: readonly string[],
+  config?: Record<string, string>,
+): boolean {
   if (loaded) return true
 
   const id = measurementId()
@@ -51,9 +56,11 @@ export function ensureTag(hostname: string, record: ConsentRecord | null, hosts?
   // `config` sends page_view itself and GA4 derives the traffic source from the
   // referrer and utm_*; a manual page_view would double-count.
   w.gtag('js', new Date())
-  w.gtag('config', id)
+  if (config) w.gtag('config', id, config)
+  else w.gtag('config', id)
 
   loaded = true
+  for (const name of held.splice(0)) w.gtag('event', name, {})
   return true
 }
 
@@ -134,6 +141,31 @@ export function trackScrollDepth(percent: number): void {
 // `revoked` before this runs only if a sender fires during module evaluation, and none can.
 let revoked = false
 
+// Events fired before the first Accept of this page load. Never persisted.
+const held: string[] = []
+
+// Sends now, holds while the visitor has not chosen, drops after a Reject.
+function sendOrHold(name: string): void {
+  if (loaded) return send(name, {})
+  if (revoked) return
+  const record = readConsent()
+  if (record && !analyticsAllowed(record)) return
+  held.push(name)
+}
+
+export function trackSignUp(): void {
+  sendOrHold('sign_up')
+}
+
+export function trackInvoiceValidated(): void {
+  sendOrHold('invoice_validated')
+}
+
+/** `pageLocation` is the bounded route pattern, never the live URL. */
+export function trackAppPageView(pageLocation: string): void {
+  send('page_view', { page_location: pageLocation })
+}
+
 export function tagIsLoaded(): boolean {
   return loaded
 }
@@ -141,6 +173,7 @@ export function tagIsLoaded(): boolean {
 /** Called on every choice, never only on injection — see consentActions.applyChoice. */
 export function setAnalyticsRevoked(v: boolean): void {
   revoked = v
+  if (v) held.length = 0
 }
 
 // Library senders: fixed keys; values are content ids, never visitor input.

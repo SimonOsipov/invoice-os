@@ -25,7 +25,7 @@ const (
 	nightlyProdSection    = `-section prod_check="$RUNNER_TEMP/prod-check/prod_check.json"`
 	nightlySummaryIf      = `${{ !cancelled() && needs.main-only.result == 'success' }}`
 	nightlyPolls          = "640"
-	nightlySummaryTimeout = "330"
+	nightlySummaryTimeout = "350"
 	nightlyPreviewDL      = `gh run download "$PREVIEW_RUN_ID" -R "$REPO" -p 'results-*' -D "$RUNNER_TEMP/results"`
 )
 
@@ -830,8 +830,17 @@ func TestNightly_PollBudgetCoversTheDevEnvPath(t *testing.T) {
 		t.Errorf("poll budget %d min (%d polls) is below the dev-env nightly path %d min", budget, polls, path)
 	}
 	v, _ := jobKey(summary, "timeout-minutes")
-	if timeout, _ := strconv.Atoi(v); timeout <= budget {
-		t.Errorf("Nightly summary timeout-minutes %d does not exceed the poll budget %d min", timeout, budget)
+	var argos int
+	for _, l := range nightlyStepLines(summary, nightlyArgosStep) {
+		if a, ok := strings.CutPrefix(l, "timeout-minutes: "); ok {
+			argos, _ = strconv.Atoi(a)
+		}
+	}
+	if argos == 0 {
+		t.Fatal("control: the Argos step has no timeout-minutes")
+	}
+	if timeout, _ := strconv.Atoi(v); timeout < budget+argos {
+		t.Errorf("Nightly summary timeout-minutes %d is below the poll budget %d min plus the Argos step timeout %d min", timeout, budget, argos)
 	}
 }
 

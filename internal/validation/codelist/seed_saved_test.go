@@ -76,13 +76,23 @@ func TestSyncAll_NullNRSOnEmptyDBSeedsFromSavedCopy(t *testing.T) {
 func TestSyncAll_NullNRSLeavesAHeldListUntouched(t *testing.T) {
 	super, app := dbTestPools(t)
 	emptyRealLists(t, super)
-	real := envelope(entry("NG-XX", "Xland"), entry("NG-YY", "Yland"))
+	// A subset of the saved states: the seed would only add NG-LA, so the shrink guard cannot mask a missing emptiness check.
+	grouped, _, _, _ := savedCopy(listByName(t, "states"))
+	var parts []string
+	for code, es := range grouped {
+		if code != "NG-LA" {
+			for _, e := range es {
+				parts = append(parts, string(e))
+			}
+		}
+	}
+	real := envelope(parts...)
 	ctx := context.Background()
 
 	_ = newSyncer(t, app, fakeNRS(t, map[string]string{"states": real}).URL).SyncAll(ctx)
 	before := listRows(t, super, "states")
-	if len(before) != 2 {
-		t.Fatalf("seed: states holds %d rows, want 2", len(before))
+	if len(before) < 36 || hasCode(before, "NG-LA") {
+		t.Fatalf("seed: states holds %d rows (NG-LA %v), want >= 36 without NG-LA", len(before), hasCode(before, "NG-LA"))
 	}
 
 	_ = newSyncer(t, app, fakeNRS(t, nil).URL).SyncAll(ctx)

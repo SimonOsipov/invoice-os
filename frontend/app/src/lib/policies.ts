@@ -51,7 +51,7 @@ export type PolicyWire = {
   id: string
   name: string
   scope: string
-  /** Ascending = the order the policies are tried. */
+  /** The list sorts by it, ascending. */
   position: number
   /** The TOP version's scopes; all empty = the catch-all. */
   scopes: PolicyScopesWire

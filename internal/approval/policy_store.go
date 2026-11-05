@@ -514,7 +514,7 @@ func (s *Store) CreatePolicy(ctx context.Context, name string, scopes *scopeInpu
 
 // PutDraft rewrites a policy's open draft wholesale: the submitted tree replaces that
 // version's whole step set. A policy holding no open draft is forked a fresh version
-// numbered max+1 carrying only what was sent — a fork copies no steps.
+// numbered max+1 — a fork copies no steps.
 //
 // A sealed version is never reached: the resolution predicate is NOT sealed, never "the
 // active version", because a policy can hold sealed versions with no active one. approval_policy_steps_content_lock
@@ -835,11 +835,8 @@ func (s *Store) PublishPolicy(ctx context.Context, id string) (Policy, error) {
 			return err
 		}
 
-		// THE lock, and the only one that matters. Publish writes approval_policy_versions
-		// and nothing else, so without this row lock a concurrent PutDraft holding it sails
-		// past, and its DELETE FROM approval_policy_steps then dies 23001 under the version
-		// this sealed. FOR UPDATE on the version row would not serialise them — PutDraft
-		// never locks that row. Must stay the first row-read, mirroring PutDraft above.
+		// Must stay the first row-read, mirroring PutDraft above. FOR UPDATE on the version
+		// row would not do: PutDraft never locks that row.
 		if err := tx.QueryRow(ctx,
 			`SELECT id, name, scope, position
 			   FROM approval_policies
@@ -1098,10 +1095,8 @@ func (s *Store) DeletePolicy(ctx context.Context, id string) (Policy, error) {
 			return err
 		}
 
-		// Must stay the first statement touching a policy row: the row-level exclusive lock it
-		// takes is what serialises this against PublishPolicy's FOR UPDATE, in that lock order
-		// (TestDeletePolicy_StampsThePolicyRowBeforeTheVersionWrite — the race spec passes
-		// against a later stamp too). deleted_at IS NULL is both the
+		// Must stay the first statement touching a policy row, as in PublishPolicy
+		// (TestDeletePolicy_StampsThePolicyRowBeforeTheVersionWrite). deleted_at IS NULL is both the
 		// existence predicate and the idempotency mechanism — under READ COMMITTED a second
 		// delete re-evaluates it, matches nothing, and is ErrPolicyNotFound rather than a
 		// re-stamp. now() is the transaction timestamp the audit row's created_at also takes.

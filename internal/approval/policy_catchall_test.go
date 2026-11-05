@@ -714,3 +714,71 @@ func TestCatchAll_AnotherTenantsScopedPolicyPinsNothing(t *testing.T) {
 		t.Errorf("scoped create in an empty A: err = %v, want ErrPolicyCatchAll (B's policies are no catch-all of A)", err)
 	}
 }
+
+// A policy write waits for another transaction that holds the tenant lock, then succeeds:
+// the lock, not luck, orders a reorder against a concurrent create or delete.
+func TestPolicyWrites_WaitForTheTenantLock(t *testing.T) {
+	cases := []struct {
+		name string
+		run  func(store *Store, c context.Context, ids []string) error
+	}{
+		{"CreatePolicy", func(s *Store, c context.Context, _ []string) error { _, err := s.CreatePolicy(c, "N", nil); return err }},
+		{"PutDraft", func(s *Store, c context.Context, ids []string) error {
+			_, err := s.PutDraft(c, ids[0], nil, nil, approvalStep("engagement-partner"))
+			return err
+		}},
+		{"PublishPolicy", func(s *Store, c context.Context, ids []string) error {
+			_, err := s.PublishPolicy(c, ids[0])
+			return err
+		}},
+		{"DeletePolicy", func(s *Store, c context.Context, ids []string) error { _, err := s.DeletePolicy(c, ids[0]); return err }},
+		{"ReorderPolicies", func(s *Store, c context.Context, ids []string) error {
+			_, err := s.ReorderPolicies(c, []string{ids[1], ids[0]})
+			return err
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			super, app := dbTestPools(t)
+			tenantID := policyTenant(t, super, "APSC-02-03 lock-wait "+tc.name)
+			c, _ := activeAdmin(t, super, tenantID)
+			a, _ := seedPolicyShape(t, super, tenantID, "A", false, false)
+			b, _ := seedPolicyShape(t, super, tenantID, "B", false, false)
+			store := NewStore(app, stubFingerprinter, nil)
+
+			holder, err := super.Begin(context.Background())
+			if err != nil {
+				t.Fatalf("begin the holder: %v", err)
+			}
+			released := false
+			defer func() {
+				if !released {
+					_ = holder.Rollback(context.Background())
+				}
+			}()
+			if _, err := holder.Exec(context.Background(), `SELECT pg_advisory_xact_lock(hashtext($1))`, tenantID); err != nil {
+				t.Fatalf("hold the tenant lock: %v", err)
+			}
+
+			done := make(chan error, 1)
+			go func() { done <- tc.run(store, c, []string{a, b}) }()
+			select {
+			case err := <-done:
+				t.Fatalf("%s finished (err = %v) while another transaction held the tenant lock", tc.name, err)
+			case <-time.After(400 * time.Millisecond):
+			}
+			if err := holder.Commit(context.Background()); err != nil {
+				t.Fatalf("release the tenant lock: %v", err)
+			}
+			released = true
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Errorf("%s after the lock was released: %v", tc.name, err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatalf("%s still blocked 10s after the tenant lock was released", tc.name)
+			}
+		})
+	}
+}

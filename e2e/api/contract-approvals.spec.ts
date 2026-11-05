@@ -382,7 +382,7 @@ function expectStepShape(step: unknown, label: string): Record<string, unknown> 
   return s
 }
 
-// The shape all six routes answer. Checked on the PARSED body, which is enough at this
+// The shape every policy route answers. Checked on the PARSED body, which is enough at this
 // boundary: JS distinguishes [] from null, unlike Go's serializer test.
 function expectPolicyShape(policy: unknown, label: string): Record<string, unknown> {
   const p = policy as Record<string, unknown>

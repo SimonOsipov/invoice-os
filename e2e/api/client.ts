@@ -1607,7 +1607,7 @@ export interface ApprovalPolicy {
   id: string
   name: string
   scope: string // legacy; always 'All invoices'
-  position: number // ascending = the order the policies are tried
+  position: number // the list sorts by it, ascending
   scopes: ApprovalPolicyScopes // the TOP version's scopes; all empty = the catch-all
   status: 'draft' | 'published' // derived from the TOP version's `sealed`
   version: number // the version `steps` belongs to = the HIGHEST version

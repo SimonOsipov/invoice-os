@@ -272,7 +272,7 @@ test('AC-GA the routed production app loads the Google tag and sends events only
 
     // route changes send the bounded pattern
     const before = (await pageViews()).length
-    await app.locator('aside').getByRole('button', { name: 'Invoices', exact: true }).click()
+    await app.locator('aside').getByRole('button', { name: 'Invoices' }).click()
     await expect.poll(async () => (await pageViews()).slice(before), 'the sidebar navigation sent no page_view').toEqual([['event', 'page_view', { page_location: `${PROD_APP}/invoices` }]])
     const term = freshTin()
     await app.getByPlaceholder('Search invoices, TINs…').fill(term)
